@@ -313,10 +313,14 @@ def analyze_symbol(symbol):
                 return None
 
         # --- 7. 小數凱利準則 ---
-        suggested_contracts = 0
         alloc_pct = 0.0
+        margin_per_contract = 0.0
         
-        if strategy in ["STO_PUT", "STO_CALL"] and aroc >= 15.0:        
+        if strategy in ["STO_PUT", "STO_CALL"] and aroc >= 15.0:
+            # 保證金近似 = 履約價 - 權利金收入
+            margin_required = strike_price - bid_price
+            if margin_required <= 0:
+                return None
             # 賠率 b = 預期獲利 / 最大承擔風險
             b = bid_price / margin_required
             # 勝率 p 近似於 (1 - Delta絕對值)
@@ -338,7 +342,7 @@ def analyze_symbol(symbol):
             "v_skew": vertical_skew, "v_skew_state": skew_state,
             "earnings_days": days_to_earnings, "mmm_pct": mmm_pct,
             "safe_lower": safe_lower, "safe_upper": safe_upper,
-            "strategy": strategy, "target_date": target_date, "dte": days_to_expiry, 
+            "strategy": strategy, "target_date": target_expiry_date, "dte": days_to_expiry, 
             "strike": strike_price, "bid": bid_price, "ask": best_contract['ask'], 
             "spread": spread, "spread_ratio": spread_ratio,
             "delta": best_contract['bs_delta'], "iv": best_contract['impliedVolatility'],
@@ -351,71 +355,66 @@ def analyze_symbol(symbol):
         return None
 
 def check_portfolio_status_logic(portfolio_rows):
-    """
-    盤後動態結算與 Greeks 風險防禦引擎。
-    
-    針對傳入的持倉列表，依據 Symbol 進行分組批次處理以減少 API 請求次數。
-
-    Args:
-        portfolio_rows (list): 持倉資料列表，格式為 [(symbol, opt_type, strike, expiry, entry_price, quantity), ...]
-
-    Returns:
-        list: 包含每筆持倉狀態報告的字串列表。
-    """
+    """盤後動態結算、Greeks 風險防禦，與投資組合 Beta 權重宏觀風險評估"""
     report_lines = []
     today = datetime.now().date()
 
-    # 1. 依 Symbol 分組整理持倉，減少重複建立 Ticker 物件與 API 呼叫
+    if not portfolio_rows:
+        return report_lines
+
+    # ==========================================
+    # 🔥 宏觀風險準備：取得 SPY 基準價格
+    # ==========================================
+    try:
+        spy_price = yf.Ticker("SPY").history(period="1d")['Close'].iloc[-1]
+    except Exception:
+        spy_price = 500.0  # 斷線時的防呆預設值
+
+    total_portfolio_beta_delta = 0.0
+
+    # 1. 依 Symbol 分組整理持倉
     positions_by_symbol = {}
     for row in portfolio_rows:
         symbol = row[0]
-        if symbol not in positions_by_symbol:
-            positions_by_symbol[symbol] = []
-        positions_by_symbol[symbol].append(row)
+        positions_by_symbol.setdefault(symbol, []).append(row)
 
     # 2. 逐一 Symbol 處理
     for symbol, rows in positions_by_symbol.items():
         try:
             ticker = yf.Ticker(symbol)
-            # 取得該標的最新收盤價 (只取一次)
             hist = ticker.history(period="1d")
-            if hist.empty:
-                print(f"無法取得 {symbol} 的歷史股價，跳過分析。")
-                continue
+            if hist.empty: continue
             current_stock_price = hist['Close'].iloc[-1]
             
-            # 快取 option chain 以避免重複請求同一到期日
+            # 取得該股票相對於大盤的 Beta 值
+            try:
+                beta = ticker.info.get('beta', 1.0)
+                if beta is None: beta = 1.0
+            except:
+                beta = 1.0
+                
             option_chains_cache = {}
 
             for row in rows:
-                # DB 欄位: symbol, opt_type, strike, expiry, entry_price, quantity
                 _, opt_type, strike, expiry, entry_price, quantity = row
                 
                 try:
-                    # 檢查快取
                     if expiry not in option_chains_cache:
                         option_chains_cache[expiry] = ticker.option_chain(expiry)
                     
                     opt_chain = option_chains_cache[expiry]
                     chain_data = opt_chain.calls if opt_type == "call" else opt_chain.puts
-                    
-                    # 定位持倉的特定履約價合約
                     contract = chain_data[chain_data['strike'] == strike]
-                    if contract.empty:
-                        report_lines.append(f"⚠️ 找不到合約數據: {symbol} {expiry} ${strike} {opt_type}")
-                        continue
+                    if contract.empty: continue
                     
                     current_price = contract['lastPrice'].iloc[0]
                     iv = contract['impliedVolatility'].iloc[0]
                     
-                    # 準備 Greeks 運算參數
                     exp_date = datetime.strptime(expiry, '%Y-%m-%d').date()
                     dte = (exp_date - today).days
                     t_years = max(dte, 1) / 365.0 
                     
-                    # ==========================================
-                    # Greeks 動態精算 (評估當下即時曝險)
-                    # ==========================================
+                    # 計算單一合約的 Delta
                     flag = 'c' if opt_type == 'call' else 'p'
                     try:
                         current_delta = delta(flag, current_stock_price, strike, t_years, RISK_FREE_RATE, iv)
@@ -423,30 +422,35 @@ def check_portfolio_status_logic(portfolio_rows):
                         current_delta = 0.0
 
                     # ==========================================
-                    # 動態防禦決策樹 (Dynamic Rolling Protocol)
+                    # 🔥 投資組合宏觀風險精算 (Beta-Weighted Delta)
                     # ==========================================
+                    # 1. 換算為部位總 Delta (留意賣方 quantity 為負數)
+                    position_delta = current_delta * quantity * 100
+                    
+                    # 2. Beta 與價格權重縮放
+                    beta_weight = beta * (current_stock_price / spy_price)
+                    
+                    # 3. 算出該部位等同於多少股 SPY 的 Delta
+                    spx_weighted_delta = position_delta * beta_weight
+                    total_portfolio_beta_delta += spx_weighted_delta
+
+                    # 動態防禦決策樹
                     status = "⏳ 繼續持有"
                     
                     if quantity < 0: 
-                        # 賣方防禦邏輯 (Short Premium)
                         pnl_pct = (entry_price - current_price) / entry_price
-                        
                         if pnl_pct >= 0.50:
                             status = "✅ 建議停利 (獲利達 50%) - Buy to Close"
                         elif pnl_pct <= -1.50:
                             status = "☠️ 黑天鵝警戒 (虧損達 150%) - 強制停損"
-                        # Delta 擴張防禦：防止 Gamma 爆炸
                         elif opt_type == 'put' and current_delta <= -0.40:
                             status = "🚨 動態轉倉 (Delta 擴張) - 執行 Roll Down and Out"
                         elif opt_type == 'call' and current_delta >= 0.40:
                             status = "🚨 動態轉倉 (Delta 擴張) - 執行 Roll Up and Out"
-                        # 靜態期限防禦
                         elif dte <= 14 and pnl_pct < 0:
                             status = "⚠️ 期限防禦 (DTE < 14) - 迴避 Gamma 爆發，建議轉倉"
                     else:
-                        # 買方防禦邏輯 (Long Premium)
                         pnl_pct = (current_price - entry_price) / entry_price
-                        
                         if pnl_pct >= 1.0:
                             status = "✅ 建議停利 (獲利達 100%) - Sell to Close"
                         elif dte <= 14:
@@ -454,18 +458,36 @@ def check_portfolio_status_logic(portfolio_rows):
                         elif pnl_pct <= -0.50:
                             status = "⚠️ 停損警戒 (本金回撤 50%)"
 
+                    # 報告中加入等效 SPY Delta 的顯示
                     line = (f"**{symbol}** {expiry} ${strike} {opt_type.upper()}\n"
                             f"└ 成本: `${entry_price:.2f}` | 現價: `${current_price:.2f}` | 損益: `{pnl_pct*100:+.1f}%`\n"
-                            f"└ DTE: `{dte}` 天 | 當前 Delta: `{current_delta:.3f}`\n"
+                            f"└ DTE: `{dte}` 天 | 原始 Delta: `{current_delta:.3f}` | SPY 等效 Delta: `{spx_weighted_delta:+.1f}`\n"
                             f"└ 動作: {status}")
                     report_lines.append(line)
 
                 except Exception as inner_e:
                     print(f"處理持倉 {symbol} {expiry} 錯誤: {inner_e}")
-                    report_lines.append(f"❌ 分析失敗: {symbol} {expiry} - {inner_e}")
         
         except Exception as e:
             print(f"處理 Symbol {symbol} 發生總體錯誤: {e}")
             continue
+
+    # ==========================================
+    # 🔥 宏觀風險診斷報告 (附加於列表最下方)
+    # ==========================================
+    if report_lines:
+        report_lines.append("") # 空行分隔
+        report_lines.append("🌐 **【宏觀系統性風險評估 (SPY Beta-Weighted)】**")
+        report_lines.append(f"└ 投資組合淨 Delta: **`{total_portfolio_beta_delta:+.2f}`** (等同持有大盤股數)")
+        
+        # 避險邏輯判定 (設定閥值為 ±50 股 SPY 曝險)
+        if total_portfolio_beta_delta > 50:
+            advice = "🚨 **多頭曝險過高**：大盤若發生回調，您的部位將受重創。建議建立 SPY 避險空單 (如 BTO Put) 中和。"
+        elif total_portfolio_beta_delta < -50:
+            advice = "🚨 **空頭曝險過高**：大盤若發生強勢軋空，您的部位將面臨風險。建議建立大盤避險多單。"
+        else:
+            advice = "✅ **風險中性 (Delta Neutral)**：您的帳戶對大盤漲跌免疫力佳，受到系統性風險影響較小。"
+            
+        report_lines.append(f"└ 經理人建議: {advice}")
 
     return report_lines
