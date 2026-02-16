@@ -132,45 +132,87 @@ def analyze_symbol(symbol):
         return None
 
 def check_portfolio_status_logic(portfolio_rows):
-    """結算盤後庫存損益狀態"""
+    """盤後動態結算與 Greeks 風險防禦引擎"""
     report_lines = []
     today = datetime.now().date()
-    
+
     for row in portfolio_rows:
-        trade_id, symbol, opt_type, strike, expiry, entry_price, quantity = row
+        # 資料庫傳入格式: (symbol, opt_type, strike, expiry, entry_price, quantity)
+        symbol, opt_type, strike, expiry, entry_price, quantity = row
+
         try:
-            exp_date = datetime.strptime(expiry, '%Y-%m-%d').date()
-            dte = (exp_date - today).days
-            
             ticker = yf.Ticker(symbol)
+            # 獲取標的現價
+            current_stock_price = ticker.history(period="1d")['Close'].iloc[-1]
+            
+            # 獲取特定到期日的選擇權報價表
             opt_chain = ticker.option_chain(expiry)
             chain_data = opt_chain.calls if opt_type == "call" else opt_chain.puts
+            
+            # 定位持倉合約
             contract = chain_data[chain_data['strike'] == strike]
-            
             if contract.empty:
-                report_lines.append(f"⚠️ `{symbol}`: 找不到 {expiry} 到期、履約價 {strike} 的合約。")
                 continue
-                
-            current_price = contract.iloc[0]['lastPrice']
             
-            if quantity < 0: # 賣方邏輯
-                profit_pct = (entry_price - current_price) / entry_price
-                action = "⏳ 繼續持有"
-                
-                if profit_pct >= 0.50:
-                    action = "✅ **建議停利 (獲利 50%)** - Buy to Close"
-                elif dte <= 14 and profit_pct < 0:
-                    action = "🚨 **建議轉倉 (防禦)** - DTE 過低且虧損"
-                elif current_price >= (entry_price * 2.5):
-                    action = "☠️ **建議停損 (虧損 150%)** - 防禦"
+            current_price = contract['lastPrice'].iloc[0]
+            iv = contract['impliedVolatility'].iloc[0]
+            
+            # 計算剩餘到期日 (DTE) 與年化時間
+            exp_date = datetime.strptime(expiry, '%Y-%m-%d').date()
+            dte = (exp_date - today).days
+            t_years = max(dte, 1) / 365.0 # 避免除以零
+            
+            # ==========================================
+            # Greeks 動態精算 (評估當下曝險)
+            # ==========================================
+            flag = 'c' if opt_type == 'call' else 'p'
+            try:
+                current_delta = delta(flag, current_stock_price, strike, t_years, RISK_FREE_RATE, iv)
+            except Exception:
+                current_delta = 0.0
 
-                sign = "+" if profit_pct > 0 else ""
-                report_lines.append(
-                    f"**{symbol}** {expiry} ${strike} {opt_type.upper()}\n"
-                    f"└ 成本: `${entry_price}` | 現價: `${current_price:.2f}` | 損益: `{sign}{profit_pct:.1%}`\n"
-                    f"└ DTE: `{dte}` 天 | 動作: {action}\n"
-                )
-        except Exception as e:
-            report_lines.append(f"❌ 分析 `{symbol}` 發生錯誤: {e}")
+            # ==========================================
+            # 動態防禦決策樹 (Dynamic Rolling Protocol)
+            # ==========================================
+            status = "⏳ 繼續持有"
             
+            if quantity < 0: 
+                # 賣方邏輯 (Short Premium)
+                pnl_pct = (entry_price - current_price) / entry_price
+                
+                if pnl_pct >= 0.50:
+                    status = "✅ 建議停利 (獲利達 50%) - Buy to Close"
+                elif pnl_pct <= -1.50:
+                    status = "☠️ 黑天鵝警戒 (虧損達 150%) - 強制停損"
+                # Delta 擴張防禦：針對 Sell Put
+                elif opt_type == 'put' and current_delta <= -0.40:
+                    status = "🚨 動態轉倉 (Delta 擴張) - 執行 Roll Down and Out 確保 Net Credit"
+                # Delta 擴張防禦：針對 Sell Call
+                elif opt_type == 'call' and current_delta >= 0.40:
+                    status = "🚨 動態轉倉 (Delta 擴張) - 執行 Roll Up and Out 確保 Net Credit"
+                # 靜態期限防禦
+                elif dte <= 14 and pnl_pct < 0:
+                    status = "⚠️ 期限防禦 (DTE 過低) - 迴避 Gamma 爆發，建議轉倉"
+            else:
+                # 買方邏輯 (Long Premium)
+                pnl_pct = (current_price - entry_price) / entry_price
+                
+                if pnl_pct >= 1.0:
+                    status = "✅ 建議停利 (獲利達 100%) - Sell to Close"
+                elif dte <= 14:
+                    status = "🚨 動能衰竭 (DTE 過低) - 建議平倉保留殘值"
+                elif pnl_pct <= -0.50:
+                    status = "⚠️ 停損警戒 (本金回撤 50%)"
+
+            # 生成報告 UI
+            line = (f"**{symbol}** {expiry} ${strike} {opt_type.upper()}\n"
+                    f"└ 成本: `${entry_price:.2f}` | 現價: `${current_price:.2f}` | 損益: `{pnl_pct*100:+.1f}%`\n"
+                    f"└ DTE: `{dte}` 天 | 當前 Delta: `{current_delta:.3f}`\n"
+                    f"└ 動作: {status}")
+            report_lines.append(line)
+
+        except Exception as e:
+            print(f"盤後結算 {symbol} 錯誤: {e}")
+            continue
+
     return report_lines
