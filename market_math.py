@@ -298,6 +298,19 @@ def analyze_symbol(symbol):
             print(f"[{symbol}] 剔除: 流動性極差 (價差 ${spread:.2f}, 佔比 {spread_ratio:.1f}%)")
             return None
 
+        # --- 量化運算 5.5: 波動率風險溢酬 (VRP) 濾網 ---
+        # hv_current 是我們在最前面算出的 20日歷史波動率 (Annualized)
+        iv_current = best_contract['impliedVolatility']
+        
+        # VRP = 當前合約隱含波動率 - 標的資產 20 日實現波動率
+        vrp = iv_current - hv_current
+        
+        if strategy in ["STO_PUT", "STO_CALL"]:
+            # 賣方嚴格濾網：拒絕在 IV 被低估 (VRP < 0) 時承擔無限風險
+            if vrp < 0:
+                print(f"[{symbol}] 剔除: VRP {vrp*100:.2f}% < 0 (IV 被低估，無風險溢酬)")
+                return None
+
         # --- 6. AROC 資金效率 ---
         bid_price = best_contract['bid']
         strike_price = best_contract['strike']
@@ -348,7 +361,8 @@ def analyze_symbol(symbol):
             "delta": best_contract['bs_delta'], "iv": best_contract['impliedVolatility'],
             "aroc": aroc,
             "alloc_pct": alloc_pct,                     # 輸出凱利建議資金佔比
-            "margin_per_contract": margin_per_contract  # 輸出單口保證金
+            "margin_per_contract": margin_per_contract, # 輸出單口保證金
+            "vrp": vrp
         }
     except Exception as e:
         print(f"分析 {symbol} 錯誤: {e}")

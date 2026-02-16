@@ -260,6 +260,15 @@ class TradingCog(commands.Cog):
         hvr_status = "🔥 高" if data['hv_rank'] >= 50 else ("⚡ 中" if data['hv_rank'] >= 30 else "🧊 低")
         embed.add_field(name="HV Rank (波動率位階)", value=f"`{data['hv_rank']:.1f}%` {hvr_status}")
 
+        # 展示 VRP (波動率風險溢酬)
+        vrp_pct = data.get('vrp', 0.0) * 100
+        # 賣方需要正溢酬，買方反而偏好負溢酬(買入便宜的波動率)
+        if "STO" in data['strategy']:
+            vrp_icon = "✅ 溢價 (具備數學優勢)" if vrp_pct > 0 else "⚠️ 折價 (期望值為負)"
+        else:
+            vrp_icon = "✅ 折價 (買方成本低估)" if vrp_pct < 0 else "⚠️ 溢價 (買方成本過高)"
+        embed.add_field(name="VRP (波動率風險溢酬)", value=f"`{vrp_pct:+.2f}%` {vrp_icon}")
+
         # 展示 IV 期限結構 (Term Structure)
         ts_ratio_str = f"`{data['ts_ratio']:.2f}`"
         # 若發生倒掛，給予強烈視覺提示
