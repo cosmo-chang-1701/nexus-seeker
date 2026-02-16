@@ -321,6 +321,25 @@ class TradingCog(commands.Cog):
             
         embed.add_field(name="精算合約", value=f"{data['target_date']} (${data['strike']})", inline=False)
 
+        # 預期波動區間 (Expected Move) 與 損益兩平防線
+        em = data.get('expected_move', 0.0)
+        em_lower = data.get('em_lower', 0.0)
+        em_upper = data.get('em_upper', 0.0)
+        
+        if "STO_PUT" in data['strategy']:
+            breakeven = data['strike'] - data['bid']
+            em_info = f"1σ 預期下緣: `${em_lower:.2f}` (預期最大跌幅 -${em:.2f})\n" \
+                      f"🛡️ 損益兩平點: **`${breakeven:.2f}`**\n" \
+                      f"✅ 防線已建構於預期暴跌區間外"
+            embed.add_field(name="🎯 機率圓錐 (1σ 預期波動)", value=em_info, inline=False)
+            
+        elif "STO_CALL" in data['strategy']:
+            breakeven = data['strike'] + data['bid']
+            em_info = f"1σ 預期上緣: `${em_upper:.2f}` (預期最大漲幅 +${em:.2f})\n" \
+                      f"🛡️ 損益兩平點: **`${breakeven:.2f}`**\n" \
+                      f"✅ 防線已建構於預期暴漲區間外"
+            embed.add_field(name="🎯 機率圓錐 (1σ 預期波動)", value=em_info, inline=False)
+
         # 報價與流動性分析 (Bid/Ask & Spread)
         spread_info = f"`Bid ${data['bid']:.2f}` / `Ask ${data['ask']:.2f}`\n" \
                       f"└ 價差: `${data['spread']:.2f}` ({data['spread_ratio']:.1f}%)"

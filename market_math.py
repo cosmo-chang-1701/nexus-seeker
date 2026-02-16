@@ -311,21 +311,39 @@ def analyze_symbol(symbol):
                 print(f"[{symbol}] 剔除: VRP {vrp*100:.2f}% < 0 (IV 被低估，無風險溢酬)")
                 return None
 
-        # --- 6. AROC 資金效率 ---
-        bid_price = best_contract['bid']
-        strike_price = best_contract['strike']
-        aroc = 0.0
+        # --- 6: 隱含預期波動區間 (1σ Expected Move) ---
+        # 預期波動公式: 現價 * IV * sqrt(DTE / 365)
+        expected_move = price * iv_current * math.sqrt(max(days_to_expiry, 1) / 365.0)
+        em_lower_bound = price - expected_move
+        em_upper_bound = price + expected_move
         
-        if "STO" in strategy:
-            # 賣方策略檢查
-            if bid_price <= 0 or (strike_price - bid_price) <= 0:
+        strike_price = best_contract['strike']
+        
+        if strategy == "STO_PUT":
+            # 精算損益兩平點
+            breakeven = strike_price - bid_price
+            # 濾網：損益兩平點不能高於預期跌幅的下緣 (必須在 1SD 安全區外)
+            if breakeven > em_lower_bound:
+                print(f"[{symbol}] 剔除: 損益兩平點 ${breakeven:.2f} 落入 1σ 預期跌幅內 (安全下緣 ${em_lower_bound:.2f})")
                 return None
-            # Annualized Return on Capital
-            aroc = (bid_price / (strike_price - bid_price)) * (365.0 / max(days_to_expiry, 1)) * 100
+
+        elif strategy == "STO_CALL":
+            breakeven = strike_price + bid_price
+            if breakeven < em_upper_bound:
+                print(f"[{symbol}] 剔除: 損益兩平點 ${breakeven:.2f} 落入 1σ 預期漲幅內 (安全上緣 ${em_upper_bound:.2f})")
+                return None
+
+        # --- 7. AROC 資金效率濾網 (僅賣方) ---
+        aroc = 0.0
+        if strategy in ["STO_PUT", "STO_CALL"]:
+            margin_required = strike_price - bid_price
+            if margin_required <= 0: return None
+            
+            aroc = (bid_price / margin_required) * (365.0 / max(days_to_expiry, 1)) * 100
             if aroc < 15.0:
                 return None
 
-        # --- 7. 小數凱利準則 ---
+        # --- 8. 小數凱利準則 ---
         alloc_pct = 0.0
         margin_per_contract = 0.0
         
@@ -355,6 +373,7 @@ def analyze_symbol(symbol):
             "v_skew": vertical_skew, "v_skew_state": skew_state,
             "earnings_days": days_to_earnings, "mmm_pct": mmm_pct,
             "safe_lower": safe_lower, "safe_upper": safe_upper,
+            "expected_move": expected_move, "em_lower": em_lower_bound, "em_upper": em_upper_bound,
             "strategy": strategy, "target_date": target_expiry_date, "dte": days_to_expiry, 
             "strike": strike_price, "bid": bid_price, "ask": best_contract['ask'], 
             "spread": spread, "spread_ratio": spread_ratio,
