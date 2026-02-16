@@ -119,13 +119,36 @@ def analyze_symbol(symbol):
         chain_data['delta_diff'] = abs(chain_data['bs_delta'] - target_delta)
         best_contract = chain_data.sort_values('delta_diff').iloc[0]
 
+        # ==========================================
+        # 量化運算 4: AROC 資金效率濾網 (僅限賣方)
+        # ==========================================
+        bid_price = best_contract['bid']
+        strike_price = best_contract['strike']
+        aroc = 0.0
+        
+        if strategy in ["STO_PUT", "STO_CALL"]:
+            if bid_price <= 0: return None
+            
+            # 計算資金佔用 (Cash-Secured 邏輯: 履約價 - 收取的權利金)
+            margin_required = strike_price - bid_price
+            if margin_required <= 0: return None
+            
+            # AROC 計算公式: (權利金 / 資金佔用) * (365 / 到期天數)
+            # 這裡使用保守的 Bid (買價) 來評估我們能收到的真實權利金
+            aroc = (bid_price / margin_required) * (365.0 / max(days_to_expiry, 1)) * 100
+            
+            # 🔥 AROC 硬性濾網: 年化報酬率低於 15% 直接刷掉 (視為無效訊號)
+            if aroc < 15.0:
+                print(f"[{symbol}] 剔除: AROC {aroc:.1f}% 過低 (門檻 15%)")
+                return None
+
         return {
             "symbol": symbol, "price": price, "rsi": rsi, "sma20": sma20,
-            "hv_rank": hv_rank,  # 輸出 HVR 給前端展示
-            "strategy": strategy, "target_date": target_date, "dte": days_to_expiry,
-            "strike": best_contract['strike'], "bid": best_contract['bid'], 
+            "hv_rank": hv_rank, "strategy": strategy, "target_date": target_date, 
+            "dte": days_to_expiry, "strike": strike_price, "bid": bid_price, 
             "ask": best_contract['ask'], "delta": best_contract['bs_delta'], 
-            "iv": best_contract['impliedVolatility']
+            "iv": best_contract['impliedVolatility'],
+            "aroc": aroc  # 新增 AROC 輸出至前端
         }
     except Exception as e:
         print(f"分析 {symbol} 錯誤: {e}")

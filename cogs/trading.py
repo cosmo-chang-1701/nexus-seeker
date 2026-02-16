@@ -236,18 +236,25 @@ class TradingCog(commands.Cog):
         colors = {"STO_PUT": discord.Color.green(), "STO_CALL": discord.Color.red(), "BTO_CALL": discord.Color.blue(), "BTO_PUT": discord.Color.orange()}
         titles = {"STO_PUT": "🟢 Sell To Open Put", "STO_CALL": "🔴 Sell To Open Call", "BTO_CALL": "🚀 Buy To Open Call", "BTO_PUT": "⚠️ Buy To Open Put"}
         embed = discord.Embed(title=f"{titles[data['strategy']]} - {data['symbol']}", color=colors.get(data['strategy'], discord.Color.default()))
+        
+        # 展示標的現價
         embed.add_field(name="標的現價", value=f"${data['price']:.2f}")
+        
+        # 展示 RSI/20MA
         embed.add_field(name="RSI/20MA", value=f"{data['rsi']:.2f} / ${data['sma20']:.2f}")
         
-        # 🔥 新增這行：展示歷史波動率位階
+        # 展示 HVR (波動率位階)
         hvr_status = "🔥 高" if data['hv_rank'] >= 50 else ("⚡ 中" if data['hv_rank'] >= 30 else "🧊 低")
         embed.add_field(name="HV Rank (波動率位階)", value=f"`{data['hv_rank']:.1f}%` {hvr_status}")
         
+        # 展示 AROC (年化報酬率)
+        if "STO" in data['strategy']:
+            embed.add_field(name="AROC (年化報酬率)", value=f"`{data['aroc']:.1f}%` 💰")
+            
         embed.add_field(name="精算合約", value=f"{data['target_date']} (${data['strike']})", inline=False)
         embed.add_field(name="報價 (Bid/Ask)", value=f"${data['bid']} / ${data['ask']}")
-        
-        # 將當下隱含波動率 (IV) 結合 Delta 呈現，提供更全面的定價資訊
         embed.add_field(name="Delta / 當前合約 IV", value=f"{data['delta']:.3f} / {data['iv']:.1%}")
+        
         return embed
 
 async def setup(bot):
