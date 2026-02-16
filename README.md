@@ -1,6 +1,6 @@
 # 🌌 Nexus Seeker
 
-**Multi-tenant Options Quantitative Trading Assistant — powered by Discord**
+**多租戶選擇權量化交易助手 — 由 Discord 驅動**
 
 [![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -8,242 +8,242 @@
 [![Deploy](https://github.com/cosmo-chang-1701/nexus-seeker/actions/workflows/deploy.yml/badge.svg)](https://github.com/cosmo-chang-1701/nexus-seeker/actions/workflows/deploy.yml)
 [![Architecture](https://img.shields.io/badge/architecture-multi--tenant-purple.svg)](#architecture)
 
-> A **multi-tenant options quantitative assistant** built with Python & Docker.
-> It combines technical analysis, the **Black-Scholes** pricing model, and a fully automated NYSE trading calendar to help traders execute high-probability options selling strategies (The Wheel / Credit Spreads).
+> 一個以 Python 與 Docker 建構的**多租戶選擇權量化助手**。
+> 結合技術分析、**Black-Scholes** 定價模型與全自動化 NYSE 交易日曆，協助交易者執行高勝率的選擇權賣方策略（The Wheel / 信用價差）。
 
 ---
 
-## Table of Contents
+## 目錄
 
-- [Key Features](#-key-features)
-- [Architecture](#-architecture)
-- [Tech Stack](#-tech-stack)
-- [Quick Start](#-quick-start)
-- [Discord Commands](#-discord-commands)
-- [Portfolio Workflow](#-portfolio-workflow)
-- [Strategy Logic](#-strategy-logic)
-- [Project Structure](#-project-structure)
-- [Testing](#-testing)
-- [Contributing](#-contributing)
-- [Roadmap](#-roadmap)
-- [License](#-license)
+- [核心功能](#-核心功能)
+- [架構](#-架構)
+- [技術棧](#-技術棧)
+- [快速開始](#-快速開始)
+- [Discord 指令](#️-discord-指令)
+- [投資組合工作流程](#-投資組合工作流程)
+- [策略邏輯](#-策略邏輯)
+- [專案結構](#-專案結構)
+- [測試](#-測試)
+- [貢獻](#-貢獻)
+- [路線圖](#-路線圖)
+- [授權條款](#-授權條款)
 
 ---
 
-## ✨ Key Features
+## ✨ 核心功能
 
-| Feature | Description |
+| 功能 | 說明 |
 |---|---|
-| 🔐 **Multi-tenant & Privacy** | All slash-command replies are **ephemeral** (visible only to the invoking user). Each user gets an isolated database namespace keyed by Discord User ID. |
-| 📨 **DM Dispatcher** | Background schedulers perform **API de-duplication** across all users, then route personalised quantitative reports to each user's DM. |
-| 🎯 **Delta Precision Scan** | Built-in Black-Scholes engine (`py_vollib`) auto-calculates the optimal strike for a target Delta (e.g. −0.20 ≈ 80 % win-rate). |
-| 📡 **NYSE Auto-Scheduler** | Integrates `pandas_market_calendars` with DST & holiday handling — 3 daily triggers at 09:00 / 09:45 / 16:15 ET. |
-| 📊 **Market Maker Move** | Computes ATM Straddle-based expected move (MMM) before earnings to flag "mine-field" strikes. |
-| ⚖️ **Quarter-Kelly Sizing** | Calculates position size with a ¼-Kelly criterion, capped at 5 % per symbol. |
-| 📈 **IV Term Structure** | Detects 30D/60D IV backwardation as a panic-selling signal. |
-| 💾 **Data Persistence** | SQLite backed by Docker Volume — zero data loss across container restarts. |
+| 🔐 **多租戶與隱私** | 所有斜線指令回覆皆為**臨時訊息**（僅觸發指令的使用者可見）。每位使用者依 Discord User ID 獲得獨立的資料庫命名空間。 |
+| 📨 **私訊分發器** | 背景排程器對所有使用者執行 **API 去重**，再將個人化的量化報告發送至各使用者的私訊。 |
+| 🎯 **Delta 精準掃描** | 內建 Black-Scholes 引擎（`py_vollib`）自動計算目標 Delta 的最佳履約價（例：−0.20 ≈ 80% 勝率）。 |
+| 📡 **NYSE 自動排程器** | 整合 `pandas_market_calendars` 並處理日光節約時間與假日 — 每日三次觸發：09:00 / 09:45 / 16:15 ET。 |
+| 📊 **造市商預期波動** | 計算基於 ATM 跨式組合的預期波動（MMM），在財報前標示「地雷區」履約價。 |
+| ⚖️ **四分之一 Kelly 倉位** | 以 ¼-Kelly 準則計算倉位大小，每檔標的上限 5%。 |
+| 📈 **IV 期限結構** | 偵測 30D/60D IV 逆價差作為恐慌性拋售訊號。 |
+| 💾 **資料持久化** | SQLite 搭配 Docker Volume — 容器重啟零資料遺失。 |
 
 ---
 
-## 🏗 Architecture
+## 🏗 架構
 
 ```
-Discord Users ──► Discord API ──► Nexus Seeker Bot
+Discord 使用者 ──► Discord API ──► Nexus Seeker Bot
                                        │
                      ┌─────────────────┼──────────────────┐
                      │                 │                  │
-              Slash Commands     DM Dispatcher     NYSE Scheduler
-              (ephemeral)       (background)       (3 daily tasks)
+              斜線指令           私訊分發器          NYSE 排程器
+              (臨時訊息)        (背景執行)         (每日三次任務)
                      │                 │                  │
                      └────────┬────────┘                  │
                               │                           │
                         ┌─────▼──────┐            ┌───────▼───────┐
                         │  database  │            │  market_math  │
-                        │  (SQLite)  │            │  (BS Model)   │
+                        │  (SQLite)  │            │  (BS 模型)    │
                         └────────────┘            └───────────────┘
 ```
 
-### Scheduled Tasks
+### 排程任務
 
-| Time (ET) | Task | Description |
+| 時間 (ET) | 任務 | 說明 |
 |---|---|---|
-| **09:00** | Pre-market Risk Monitor | Scans earnings calendar; DMs a ⚠️ IV-Crush alert if earnings ≤ 3 days away. |
-| **09:45** | Delta Neutral Scan | Runs technical + Greeks scan on each user's watchlist; DMs actionable signals. |
-| **16:15** | After-hours Report | Marks-to-market all positions; DMs P&L, stop-profit, and rolling defence suggestions. |
+| **09:00** | 盤前風險監控 | 掃描財報日曆；若財報 ≤ 3 天內，私訊 ⚠️ IV 崩跌警報。 |
+| **09:45** | Delta 中性掃描 | 對每位使用者的觀察清單執行技術面 + Greeks 掃描；私訊可操作訊號。 |
+| **16:15** | 盤後報告 | 標記所有持倉的市值；私訊損益、停利與滾倉防禦建議。 |
 
 ---
 
-## 🛠 Tech Stack
+## 🛠 技術棧
 
-| Layer | Technology |
+| 層級 | 技術 |
 |---|---|
-| **Language** | Python 3.12 |
-| **Discord** | `discord.py` ≥ 2.3 — Slash Commands, DM routing |
-| **Market Data** | `yfinance` (quotes), `pandas-ta` (indicators), `py_vollib` (Black-Scholes) |
-| **Scheduling** | `pandas_market_calendars`, `zoneinfo` |
-| **Database** | SQLite — composite unique keys per `user_id` |
-| **Infra** | Docker, Docker Compose, GitHub Actions CI/CD → DigitalOcean |
+| **語言** | Python 3.12 |
+| **Discord** | `discord.py` ≥ 2.3 — 斜線指令、私訊路由 |
+| **市場數據** | `yfinance`（報價）、`pandas-ta`（指標）、`py_vollib`（Black-Scholes） |
+| **排程** | `pandas_market_calendars`、`zoneinfo` |
+| **資料庫** | SQLite — 以 `user_id` 為複合唯一鍵 |
+| **基礎架構** | Docker、Docker Compose、GitHub Actions CI/CD → DigitalOcean |
 
 ---
 
-## 🚀 Quick Start
+## 🚀 快速開始
 
-### Prerequisites
+### 前置需求
 
 - [Docker](https://docs.docker.com/get-docker/) & [Docker Compose](https://docs.docker.com/compose/install/)
-- A [Discord Bot Token](https://discord.com/developers/applications)
+- 一組 [Discord Bot Token](https://discord.com/developers/applications)
 
-### 1. Clone & prepare
+### 1. 複製並準備
 
 ```bash
 git clone https://github.com/cosmo-chang-1701/nexus-seeker.git
 cd nexus-seeker
-mkdir -p data          # SQLite persistent volume mount
+mkdir -p data          # SQLite 持久化掛載目錄
 ```
 
-### 2. Configure environment
+### 2. 設定環境變數
 
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env` and fill in your token:
+編輯 `.env` 並填入你的 Token：
 
 ```env
 DISCORD_TOKEN=your_discord_bot_token_here
 ```
 
-### 3. Launch
+### 3. 啟動
 
 ```bash
 docker compose up -d --build
 ```
 
-Verify the bot is running:
+確認 Bot 正在運行：
 
 ```bash
 docker compose logs -f
 ```
 
-> **Upgrading from v1?** Delete old SQLite files in `data/` so the schema is rebuilt with the `user_id` column.
+> **從 v1 升級？** 請刪除 `data/` 中的舊 SQLite 檔案，以便使用包含 `user_id` 欄位的新 schema 重建資料庫。
 
 ---
 
-## ⌨️ Discord Commands
+## ⌨️ Discord 指令
 
-All commands use Discord native **Slash Commands** with built-in parameter validation.
-Responses are **ephemeral** — only the invoking user can see them.
+所有指令使用 Discord 原生**斜線指令**，內建參數驗證。
+回覆皆為**臨時訊息** — 僅觸發指令的使用者可見。
 
-### 📡 Watchlist
+### 📡 觀察清單
 
-| Command | Description | Example |
+| 指令 | 說明 | 範例 |
 |---|---|---|
-| `/add_watch` | Add a symbol to your watchlist | `symbol: TSLA` |
-| `/list_watch` | View all watched symbols | — |
-| `/remove_watch` | Remove a symbol | `symbol: ONDS` |
-| `/scan` | Manual Delta-neutral scan on a symbol | `symbol: SMR` |
+| `/add_watch` | 將標的加入觀察清單 | `symbol: TSLA` |
+| `/list_watch` | 檢視所有觀察中的標的 | — |
+| `/remove_watch` | 移除標的 | `symbol: ONDS` |
+| `/scan` | 手動對標的執行 Delta 中性掃描 | `symbol: SMR` |
 
-### 💼 Portfolio
+### 💼 投資組合
 
-| Command | Description | Example |
+| 指令 | 說明 | 範例 |
 |---|---|---|
-| `/add_trade` | Record a real trade for monitoring | See below |
-| `/list_trades` | View positions, P&L, and trade IDs | — |
-| `/remove_trade` | Remove a closed position by ID | `trade_id: 1` |
-| `/set_capital` | Set your total capital for Kelly sizing | `capital: 50000` |
+| `/add_trade` | 記錄實際交易以進行監控 | 見下方 |
+| `/list_trades` | 檢視持倉、損益與交易 ID | — |
+| `/remove_trade` | 依 ID 移除已平倉的持倉 | `trade_id: 1` |
+| `/set_capital` | 設定總資金以供 Kelly 倉位計算 | `capital: 50000` |
 
 <details>
-<summary><strong><code>/add_trade</code> Parameters</strong></summary>
+<summary><strong><code>/add_trade</code> 參數</strong></summary>
 
-| Parameter | Type | Description | Example |
+| 參數 | 類型 | 說明 | 範例 |
 |---|---|---|---|
-| `symbol` | string | Ticker symbol | `SOFI` |
-| `opt_type` | choice | `Put` or `Call` | `Put` |
-| `strike` | float | Strike price | `7.5` |
-| `expiry` | string | Expiration date (`YYYY-MM-DD`) | `2026-04-17` |
-| `entry_price` | float | Premium received/paid per contract | `0.55` |
-| `quantity` | int | Positive = Long, **Negative = Short** | `-5` |
+| `symbol` | string | 股票代號 | `SOFI` |
+| `opt_type` | choice | `Put` 或 `Call` | `Put` |
+| `strike` | float | 履約價 | `7.5` |
+| `expiry` | string | 到期日（`YYYY-MM-DD`） | `2026-04-17` |
+| `entry_price` | float | 每口合約收取/支付的權利金 | `0.55` |
+| `quantity` | int | 正值 = 買進，**負值 = 賣出** | `-5` |
 
 </details>
 
 ---
 
-## 🔄 Portfolio Workflow
+## 🔄 投資組合工作流程
 
 ```
 ┌───────────────┐     ┌────────────────┐     ┌─────────────────┐
-│  1. Signal    │────►│  2. Record     │────►│  3. Monitor     │
-│  Receive DM   │     │  /add_trade    │     │  Auto at 16:15  │
+│  1. 訊號      │────►│  2. 記錄       │────►│  3. 監控        │
+│  接收私訊     │     │  /add_trade    │     │  每日 16:15 自動│
 └───────────────┘     └────────────────┘     └────────┬────────┘
                                                       │
                                                       ▼
                                              ┌─────────────────┐
-                                             │  4. Decision    │
-                                             │  via DM alert   │
+                                             │  4. 決策        │
+                                             │  透過私訊警報   │
                                              └────────┬────────┘
                                                       │
                       ┌───────────────────────────────┼───────────────────────────┐
                       │                               │                           │
-               🟢 Profit ≥ 50%                 🔴 DTE < 14 & Loss        ⚫ Loss ≥ 150%
-               Buy to Close                    Roll Defence              Stop Loss
+               🟢 獲利 ≥ 50%                   🔴 DTE < 14 且虧損         ⚫ 虧損 ≥ 150%
+               買回平倉                        滾倉防禦                   停損出場
                       │                               │                           │
                       └───────────────────────────────┼───────────────────────────┘
                                                       │
                                                       ▼
                                              ┌─────────────────┐
-                                             │  5. Close       │
+                                             │  5. 平倉        │
                                              │  /remove_trade  │
                                              └─────────────────┘
 ```
 
 ---
 
-## 📈 Strategy Logic
+## 📈 策略邏輯
 
-The quantitative engine (`market_math.py`) implements four strategies, each gated by technical filters and refined by Black-Scholes Greeks.
+量化引擎（`market_math.py`）實作四種策略，每種皆以技術面篩選為門檻，並以 Black-Scholes Greeks 精煉。
 
-### 🟢 Sell To Open Put — *Oversold Income*
+### 🟢 賣出開倉 Put — *超賣收入*
 
-- **Trigger:** `RSI(14) < 35` + `HV Rank ≥ 30`
-- **Contract:** 30–45 DTE, Delta ≈ **−0.20** (~80 % OTM probability)
-- **Filter:** `AROC ≥ 15 %`, Kelly-sized
+- **觸發條件：** `RSI(14) < 35` + `HV Rank ≥ 30`
+- **合約：** 30–45 DTE，Delta ≈ **−0.20**（約 80% OTM 機率）
+- **篩選：** `AROC ≥ 15%`，Kelly 倉位
 
-### 🔴 Sell To Open Call — *Overbought Income*
+### 🔴 賣出開倉 Call — *超買收入*
 
-- **Trigger:** `RSI(14) > 65` + `HV Rank ≥ 30`
-- **Contract:** 30–45 DTE, Delta ≈ **+0.20**
-- **Filter:** `AROC ≥ 15 %`, Kelly-sized
+- **觸發條件：** `RSI(14) > 65` + `HV Rank ≥ 30`
+- **合約：** 30–45 DTE，Delta ≈ **+0.20**
+- **篩選：** `AROC ≥ 15%`，Kelly 倉位
 
-### 🚀 Buy To Open Call — *Momentum Breakout*
+### 🚀 買入開倉 Call — *動能突破*
 
-- **Trigger:** Price > `20 SMA` + `50 ≤ RSI(14) ≤ 65` + `MACD Histogram > 0`
-- **Contract:** 14–30 DTE, Delta ≈ **+0.50** (ATM)
+- **觸發條件：** 價格 > `20 SMA` + `50 ≤ RSI(14) ≤ 65` + `MACD 柱狀圖 > 0`
+- **合約：** 14–30 DTE，Delta ≈ **+0.50**（ATM）
 
-### ⚠️ Buy To Open Put — *Breakdown / Hedge*
+### ⚠️ 買入開倉 Put — *跌破 / 避險*
 
-- **Trigger:** Price < `20 SMA` + `35 ≤ RSI(14) ≤ 50` + `MACD Histogram < 0`
-- **Contract:** 14–30 DTE, Delta ≈ **−0.50** (ATM)
+- **觸發條件：** 價格 < `20 SMA` + `35 ≤ RSI(14) ≤ 50` + `MACD 柱狀圖 < 0`
+- **合約：** 14–30 DTE，Delta ≈ **−0.50**（ATM）
 
 ---
 
-## � Project Structure
+## 📁 專案結構
 
 ```
 nexus-seeker/
-├── main.py                  # Bot entry point & extension loader
-├── config.py                # Environment variables & model parameters
-├── database.py              # SQLite CRUD — multi-tenant (user_id keyed)
-├── market_math.py           # Quantitative engine (BS, Greeks, HVR, MMM, Kelly)
-├── market_time.py           # NYSE calendar & dynamic sleep scheduler
+├── main.py                  # Bot 進入點與擴充模組載入器
+├── config.py                # 環境變數與模型參數
+├── database.py              # SQLite CRUD — 多租戶（依 user_id 區分）
+├── market_math.py           # 量化引擎（BS、Greeks、HVR、MMM、Kelly）
+├── market_time.py           # NYSE 日曆與動態休眠排程器
 ├── cogs/
-│   └── trading.py           # Slash commands, DM dispatcher, scheduled tasks
+│   └── trading.py           # 斜線指令、私訊分發器、排程任務
 ├── tests/
 │   ├── __init__.py
 │   └── verify_market_functions.py
-├── data/                    # SQLite DB (Docker volume mount)
+├── data/                    # SQLite 資料庫（Docker Volume 掛載）
 ├── .github/
 │   └── workflows/
-│       └── deploy.yml       # CI/CD — Build → GHCR → DigitalOcean Swarm
+│       └── deploy.yml       # CI/CD — 建構 → GHCR → DigitalOcean Swarm
 ├── Dockerfile
 ├── docker-compose.yml
 ├── requirements.txt
@@ -254,9 +254,9 @@ nexus-seeker/
 
 ---
 
-## 🧪 Testing
+## 🧪 測試
 
-Tests are run inside a Docker container:
+測試在 Docker 容器中執行：
 
 ```bash
 docker compose run --rm nexus_seeker python -m pytest tests/ -v
@@ -264,34 +264,34 @@ docker compose run --rm nexus_seeker python -m pytest tests/ -v
 
 ---
 
-## 🤝 Contributing
+## 🤝 貢獻
 
-1. **Fork** this repository
-2. Create a feature branch: `git checkout -b feat/awesome-feature`
-3. Commit your changes: `git commit -m "feat: add awesome feature"`
-4. Push to the branch: `git push origin feat/awesome-feature`
-5. Open a **Pull Request**
+1. **Fork** 此儲存庫
+2. 建立功能分支：`git checkout -b feat/awesome-feature`
+3. 提交變更：`git commit -m "feat: add awesome feature"`
+4. 推送至分支：`git push origin feat/awesome-feature`
+5. 開啟一個 **Pull Request**
 
-Please follow [Conventional Commits](https://www.conventionalcommits.org/) for commit messages.
-
----
-
-## 🔮 Roadmap
-
-- [ ] **Argo Cortex** — Local LLM (vLLM + Qwen/Llama on NVIDIA 5070 Ti) for sentiment analysis; auto-veto signals on destructive fundamental news.
-- [ ] **MCP Server** — Package core quantitative modules as standard Model Context Protocol tools for external AI agents.
-- [ ] **Broker API Integration** — Interactive Brokers Gateway for fully automated order execution (signal → execution → close, zero human intervention).
+提交訊息請遵循 [Conventional Commits](https://www.conventionalcommits.org/) 規範。
 
 ---
 
-## 📄 License
+## 🔮 路線圖
 
-This project is licensed under the [MIT License](LICENSE).
+- [ ] **Argo Cortex** — 本地 LLM（vLLM + Qwen/Llama 於 NVIDIA 5070 Ti）用於情緒分析；自動否決具破壞性基本面新聞的訊號。
+- [ ] **MCP Server** — 將核心量化模組封裝為標準 Model Context Protocol 工具，供外部 AI 代理使用。
+- [ ] **券商 API 整合** — Interactive Brokers Gateway 實現全自動下單執行（訊號 → 執行 → 平倉，零人工介入）。
+
+---
+
+## 📄 授權條款
+
+本專案採用 [MIT 授權條款](LICENSE)。
 
 ---
 
 <div align="center">
 
-*Built with ❤️ by [Cosmo Chang](https://github.com/cosmo-chang-1701) for Quantitative Freedom.*
+*由 [Cosmo Chang](https://github.com/cosmo-chang-1701) 以 ❤️ 打造，追求量化自由。*
 
 </div>
