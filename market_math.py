@@ -277,7 +277,28 @@ def analyze_symbol(symbol):
         except Exception as e:
             print(f"[{symbol}] 垂直偏態運算錯誤: {e}")
 
-        # --- 5. AROC 資金效率 ---
+        # --- 5. 買賣價差與流動性濾網 (Slippage Filter) ---
+        bid_price = best_contract['bid']
+        ask_price = best_contract['ask']
+
+        # 基礎防呆：若報價為 0 或遺失，直接視為無效合約
+        if bid_price <= 0 or ask_price <= 0:
+            print(f"[{symbol}] 剔除: 報價異常 (Bid或Ask <= 0)")
+            return None
+
+        spread = ask_price - bid_price
+        mid_price = (ask_price + bid_price) / 2.0
+        
+        # 計算價差佔比 (%)
+        spread_ratio = (spread / mid_price) * 100 if mid_price > 0 else 999.0
+
+        # 硬性濾網：若絕對價差 > $0.20 且 價差比例 > 10%，判定為流動性陷阱
+        # (代表你要越過極大的鴻溝才能成交，期望值被嚴重侵蝕)
+        if spread > 0.20 and spread_ratio > 10.0:
+            print(f"[{symbol}] 剔除: 流動性極差 (價差 ${spread:.2f}, 佔比 {spread_ratio:.1f}%)")
+            return None
+
+        # --- 6. AROC 資金效率 ---
         bid_price = best_contract['bid']
         strike_price = best_contract['strike']
         aroc = 0.0
@@ -291,7 +312,7 @@ def analyze_symbol(symbol):
             if aroc < 15.0:
                 return None
 
-        # --- 6. 小數凱利準則 ---
+        # --- 7. 小數凱利準則 ---
         suggested_contracts = 0
         alloc_pct = 0.0
         
@@ -319,6 +340,7 @@ def analyze_symbol(symbol):
             "safe_lower": safe_lower, "safe_upper": safe_upper,
             "strategy": strategy, "target_date": target_date, "dte": days_to_expiry, 
             "strike": strike_price, "bid": bid_price, "ask": best_contract['ask'], 
+            "spread": spread, "spread_ratio": spread_ratio,
             "delta": best_contract['bs_delta'], "iv": best_contract['impliedVolatility'],
             "aroc": aroc,
             "alloc_pct": alloc_pct,                     # 輸出凱利建議資金佔比

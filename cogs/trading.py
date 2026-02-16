@@ -311,7 +311,17 @@ class TradingCog(commands.Cog):
             embed.add_field(name="📊 財報預期波動 (MMM)", value=f"`{mmm_str}`\n{bounds_str}\n{safety_icon}", inline=False)
             
         embed.add_field(name="精算合約", value=f"{data['target_date']} (${data['strike']})", inline=False)
-        embed.add_field(name="報價 (Bid/Ask)", value=f"${data['bid']} / ${data['ask']}")
+
+        # 報價與流動性分析 (Bid/Ask & Spread)
+        spread_info = f"`Bid ${data['bid']:.2f}` / `Ask ${data['ask']:.2f}`\n" \
+                      f"└ 價差: `${data['spread']:.2f}` ({data['spread_ratio']:.1f}%)"
+        # 如果雖然通過濾網，但流動性處於邊緣地帶，給予黃色警告
+        if data['spread'] > 0.15 and data['spread_ratio'] > 8.0:
+            spread_info += " ⚠️ 流動性偏低，建議掛限價單 (Limit Order)"
+        else:
+            spread_info += " 💧 流動性充沛"
+        embed.add_field(name="報價與流動性分析", value=spread_info, inline=False)
+
         embed.add_field(name="Delta / 當前合約 IV", value=f"{data['delta']:.3f} / {data['iv']:.1%}")
         
         return embed
