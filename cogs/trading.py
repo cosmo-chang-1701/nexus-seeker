@@ -246,6 +246,15 @@ class TradingCog(commands.Cog):
         # 展示 HVR (波動率位階)
         hvr_status = "🔥 高" if data['hv_rank'] >= 50 else ("⚡ 中" if data['hv_rank'] >= 30 else "🧊 低")
         embed.add_field(name="HV Rank (波動率位階)", value=f"`{data['hv_rank']:.1f}%` {hvr_status}")
+
+        # 展示 IV 期限結構 (Term Structure)
+        ts_ratio_str = f"`{data['ts_ratio']:.2f}`"
+        # 若發生倒掛，給予強烈視覺提示
+        if data['ts_ratio'] >= 1.05:
+            ts_ratio_str = f"**{ts_ratio_str}** {data['ts_state']} 🎯"
+        else:
+            ts_ratio_str = f"{ts_ratio_str} {data['ts_state']}"
+        embed.add_field(name="IV 期限結構 (30D/60D)", value=ts_ratio_str)
         
         # 展示 AROC (年化報酬率)
         if "STO" in data['strategy']:
