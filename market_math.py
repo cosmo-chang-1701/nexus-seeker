@@ -237,7 +237,45 @@ def analyze_symbol(symbol):
             return None
 
         # 選出 Delta 最接近目標值的合約
-        best_contract = chain_data.iloc[(chain_data['bs_delta'] - target_delta).abs().argsort()[:1]].iloc[0]
+        best_contract = chain_data.loc[(chain_data['bs_delta'] - target_delta).abs().idxmin()]
+
+        # --- 4.5: 垂直波動率偏態 (Vertical Skew) ---
+        vertical_skew = 1.0
+        skew_state = "⚖️ 中性 (Neutral)"
+        
+        try:
+            # 取得該到期日的完整 Call 與 Put 報價表
+            calls_skew = opt_chain.calls[opt_chain.calls['volume'] > 0].copy()
+            puts_skew = opt_chain.puts[opt_chain.puts['volume'] > 0].copy()
+            
+            if not calls_skew.empty and not puts_skew.empty:
+                # 分別計算整張報價表的 Delta
+                calls_skew['bs_delta'] = calls_skew.apply(lambda row: calculate_contract_delta(row, price, t_years, 'c'), axis=1)
+                puts_skew['bs_delta'] = puts_skew.apply(lambda row: calculate_contract_delta(row, price, t_years, 'p'), axis=1)
+                
+                # 尋找 25 Delta 的 OTM Call 與 -0.25 Delta 的 OTM Put
+                call_25 = calls_skew.iloc[(calls_skew['bs_delta'] - 0.25).abs().argsort()[:1]]
+                put_25 = puts_skew.iloc[(puts_skew['bs_delta'] - (-0.25)).abs().argsort()[:1]]
+                
+                if not call_25.empty and not put_25.empty:
+                    iv_call_25 = call_25['impliedVolatility'].values[0]
+                    iv_put_25 = put_25['impliedVolatility'].values[0]
+                    
+                    if iv_call_25 > 0.01:
+                        # 偏態比率 = 25 Delta Put IV / 25 Delta Call IV
+                        vertical_skew = iv_put_25 / iv_call_25
+                        
+                    # 偏態極端值判定與防禦機制
+                    if vertical_skew >= 1.30:
+                        skew_state = "⚠️ 嚴重左偏 (高尾部風險)"
+                        # 硬性濾網：當偏態過於極端，否決 STO_PUT 訊號，規避單邊崩盤風險
+                        if strategy == "STO_PUT" and vertical_skew >= 1.50:
+                            print(f"[{symbol}] 剔除: 垂直偏態比率 {vertical_skew:.2f} 過高，拒絕承接下行風險")
+                            return None
+                    elif vertical_skew <= 0.90:
+                        skew_state = "🚀 右偏 (看漲狂熱)"
+        except Exception as e:
+            print(f"[{symbol}] 垂直偏態運算錯誤: {e}")
 
         # --- 5. AROC 資金效率 ---
         bid_price = best_contract['bid']
@@ -275,7 +313,8 @@ def analyze_symbol(symbol):
 
         return {
             "symbol": symbol, "price": price, "rsi": rsi, "sma20": sma20,
-            "hv_rank": hv_rank, "ts_ratio": ts_ratio, "ts_state": ts_state, 
+            "hv_rank": hv_rank, "ts_ratio": ts_ratio, "ts_state": ts_state,
+            "v_skew": vertical_skew, "v_skew_state": skew_state,
             "earnings_days": days_to_earnings, "mmm_pct": mmm_pct,
             "safe_lower": safe_lower, "safe_upper": safe_upper,
             "strategy": strategy, "target_date": target_date, "dte": days_to_expiry, 

@@ -268,6 +268,12 @@ class TradingCog(commands.Cog):
         else:
             ts_ratio_str = f"{ts_ratio_str} {data['ts_state']}"
         embed.add_field(name="IV 期限結構 (30D/60D)", value=ts_ratio_str)
+
+        # 展示垂直波動率偏態 (Vertical Skew)
+        v_skew_str = f"`{data['v_skew']:.2f}` {data.get('v_skew_state', '')}"
+        if data.get('v_skew') >= 1.30:
+            v_skew_str = f"**{data['v_skew']:.2f}** {data.get('v_skew_state', '')}"
+        embed.add_field(name="垂直偏態 (Put/Call IV Ratio)", value=v_skew_str)
         
         # 展示 AROC (年化報酬率)
         if "STO" in data['strategy']:
