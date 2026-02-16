@@ -1,24 +1,44 @@
-import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
+import yfinance as yf
 from datetime import datetime
 from py_vollib.black_scholes.greeks.analytical import delta
 from config import RISK_FREE_RATE, TARGET_DELTAS
 
 def calculate_contract_delta(row, current_price, t_years, flag):
-    """計算單一選擇權合約的理論 Delta 值"""
+    """
+    計算單一選擇權合約的理論 Delta 值。
+
+    Args:
+        row (pd.Series): 包含 impliedVolatility 與 strike 的資料列。
+        current_price (float): 標的資產當前價格。
+        t_years (float): 距離到期日的年化時間。
+        flag (str): 選擇權類型 ('c' for Call, 'p' for Put)。
+
+    Returns:
+        float: 計算出的 Delta 值，若失敗或無效則回傳 0.0。
+    """
     iv = row['impliedVolatility']
-    if pd.isna(iv) or iv <= 0.01: return 0.0 
+    if pd.isna(iv) or iv <= 0.01:
+        return 0.0
     try:
         return delta(flag, current_price, row['strike'], t_years, RISK_FREE_RATE, iv)
     except Exception:
         return 0.0
 
-def get_next_earnings_date(symbol):
-    """取得下一次財報發布日期"""
+def get_next_earnings_date(ticker):
+    """
+    取得下一次財報發布日期。
+
+    Args:
+        ticker (yf.Ticker): yfinance Ticker 物件。
+
+    Returns:
+        datetime.date or None: 下一次財報日期，若無資料則回傳 None。
+    """
     try:
-        ticker = yf.Ticker(symbol)
+        # 避免重複建立 ticker 物件，直接使用傳入的實例
         cal = ticker.calendar
         if cal is not None and not cal.empty and 'Earnings Date' in cal:
             earning_dates = cal['Earnings Date']
@@ -30,31 +50,30 @@ def get_next_earnings_date(symbol):
     return None
 
 def analyze_symbol(symbol):
-    """掃描技術指標、波動率位階、期限結構，並過濾出最高期望值的選擇權合約"""
+    """
+    掃描技術指標、波動率位階、期限結構與造市商預期波動，並過濾最佳合約。
+
+    Args:
+        symbol (str): 股票代碼。
+
+    Returns:
+        dict or None: 分析結果字典，若無符合策略則回傳 None。
+    """
     try:
         ticker = yf.Ticker(symbol)
-        # 提取 1 年歷史資料以計算 252 交易日的波動率位階
         df = ticker.history(period="1y")
-        if df.empty or len(df) < 50: return None
+        if df.empty or len(df) < 50:
+            return None
 
-        # ==========================================
-        # 量化運算 1: 歷史波動率位階 (HV Rank)
-        # ==========================================
+        # --- 1. 歷史波動率位階 (HV Rank) ---
         df['Log_Ret'] = np.log(df['Close'] / df['Close'].shift(1))
         df['HV_20'] = df['Log_Ret'].rolling(window=20).std() * np.sqrt(252)
-        
         hv_min = df['HV_20'].min()
         hv_max = df['HV_20'].max()
         hv_current = df['HV_20'].iloc[-1]
-        
-        if hv_max > hv_min:
-            hv_rank = ((hv_current - hv_min) / (hv_max - hv_min)) * 100
-        else:
-            hv_rank = 0.0
+        hv_rank = ((hv_current - hv_min) / (hv_max - hv_min)) * 100 if hv_max > hv_min else 0.0
 
-        # ==========================================
-        # 量化運算 2: 價格技術指標
-        # ==========================================
+        # --- 2. 價格技術指標 ---
         df.ta.rsi(length=14, append=True)
         df.ta.sma(length=20, append=True)
         df.ta.macd(fast=12, slow=26, signal=9, append=True)
@@ -67,124 +86,193 @@ def analyze_symbol(symbol):
 
         strategy, opt_type, target_delta, min_dte, max_dte = None, None, 0, 0, 0
         
-        # ==========================================
-        # 策略決策樹 (結合 HVR 波動率濾網)
-        # ==========================================
+        # --- 策略決策樹 ---
         if rsi < 35 and hv_rank >= 30:
-            strategy, opt_type, target_delta, min_dte, max_dte = "STO_PUT", "put", TARGET_DELTAS["STO_PUT"], 30, 45
+            strategy = "STO_PUT"
+            opt_type = "put"
+            target_delta = TARGET_DELTAS["STO_PUT"]
+            min_dte, max_dte = 30, 45
         elif rsi > 65 and hv_rank >= 30:
-            strategy, opt_type, target_delta, min_dte, max_dte = "STO_CALL", "call", TARGET_DELTAS["STO_CALL"], 30, 45
+            strategy = "STO_CALL"
+            opt_type = "call"
+            target_delta = TARGET_DELTAS["STO_CALL"]
+            min_dte, max_dte = 30, 45
         elif price > sma20 and 50 <= rsi <= 65 and macd_hist > 0:
-            strategy, opt_type, target_delta, min_dte, max_dte = "BTO_CALL", "call", TARGET_DELTAS["BTO_CALL"], 14, 30
+            strategy = "BTO_CALL"
+            opt_type = "call"
+            target_delta = TARGET_DELTAS["BTO_CALL"]
+            min_dte, max_dte = 14, 30
         elif price < sma20 and 35 <= rsi <= 50 and macd_hist < 0:
-            strategy, opt_type, target_delta, min_dte, max_dte = "BTO_PUT", "put", TARGET_DELTAS["BTO_PUT"], 14, 30
+            strategy = "BTO_PUT"
+            opt_type = "put"
+            target_delta = TARGET_DELTAS["BTO_PUT"]
+            min_dte, max_dte = 14, 30
         else:
-            return None # 不符合嚴格的建倉條件
+            return None 
 
         expirations = ticker.options
-        if not expirations: return None
+        if not expirations:
+            return None
         today = datetime.now().date()
 
         # ==========================================
-        # 量化運算 3: 波動率期限結構 (Term Structure)
+        # 🔥 量化運算 2.5: 財報倒數與造市商預期波動 (MMM)
         # ==========================================
+        # 直接傳入 ticker 物件以節省 API 呼叫
+        earnings_date = get_next_earnings_date(ticker)
+        days_to_earnings = -1
+        mmm_pct, safe_lower, safe_upper = 0.0, 0.0, 0.0
+
+        if earnings_date:
+            if isinstance(earnings_date, datetime):
+                earnings_date = earnings_date.date()
+            days_to_earnings = (earnings_date - today).days
+            
+            # 若財報在 14 天內，系統啟動 MMM 精算機制
+            if 0 <= days_to_earnings <= 14:
+                # 尋找涵蓋財報日的「最近到期日」來計算 Straddle
+                target_exp_for_mmm = None
+                for exp in expirations:
+                    if datetime.strptime(exp, '%Y-%m-%d').date() >= earnings_date:
+                        target_exp_for_mmm = exp
+                        break
+                
+                if target_exp_for_mmm:
+                    try:
+                        chain_mmm = ticker.option_chain(target_exp_for_mmm)
+                        
+                        # 抓取 ATM Call
+                        calls_mmm = chain_mmm.calls
+                        atm_call_idx = (calls_mmm['strike'] - price).abs().argsort()[:1]
+                        if not atm_call_idx.empty:
+                            atm_call = calls_mmm.iloc[atm_call_idx]
+                            c_bid = atm_call['bid'].values[0]
+                            c_ask = atm_call['ask'].values[0]
+                            c_last = atm_call['lastPrice'].values[0]
+                            c_price = (c_bid + c_ask)/2 if (c_bid > 0 and c_ask > 0) else c_last
+                        else:
+                            c_price = 0
+
+                        # 抓取 ATM Put
+                        puts_mmm = chain_mmm.puts
+                        atm_put_idx = (puts_mmm['strike'] - price).abs().argsort()[:1]
+                        if not atm_put_idx.empty:
+                            atm_put = puts_mmm.iloc[atm_put_idx]
+                            p_bid = atm_put['bid'].values[0]
+                            p_ask = atm_put['ask'].values[0]
+                            p_last = atm_put['lastPrice'].values[0]
+                            p_price = (p_bid + p_ask)/2 if (p_bid > 0 and p_ask > 0) else p_last
+                        else:
+                            p_price = 0
+                        
+                        # MMM 數學公式: (ATM Straddle 價格 / 現價) * 100
+                        if price > 0:
+                            mmm_pct = ((c_price + p_price) / price) * 100
+                            safe_lower = price * (1 - mmm_pct / 100)
+                            safe_upper = price * (1 + mmm_pct / 100)
+                    except Exception as e:
+                        print(f"[{symbol}] MMM 運算失敗: {e}")
+
+        # --- 3. 波動率期限結構 (Term Structure) ---
         front_date, back_date = None, None
         front_diff, back_diff = 9999, 9999
-        
-        # 尋找最接近 30D 與 60D 的合約
         for exp in expirations:
-            exp_date = datetime.strptime(exp, '%Y-%m-%d').date()
-            dte = (exp_date - today).days
-            if abs(dte - 30) < front_diff:
-                front_diff = abs(dte - 30)
-                front_date = exp
-            if abs(dte - 60) < back_diff:
-                back_diff = abs(dte - 60)
-                back_date = exp
+            dte_val = (datetime.strptime(exp, '%Y-%m-%d').date() - today).days
+            if abs(dte_val - 30) < front_diff:
+                front_diff, front_date = abs(dte_val - 30), exp
+            if abs(dte_val - 60) < back_diff:
+                back_diff, back_date = abs(dte_val - 60), exp
                 
-        ts_ratio = 1.0
-        ts_state = "平滑 (Flat)"
-        
+        ts_ratio, ts_state = 1.0, "平滑 (Flat)"
         if front_date and back_date and front_date != back_date:
             try:
-                # 抓取 Put 報價表來評估市場下行恐慌情緒
                 front_chain = ticker.option_chain(front_date).puts
                 back_chain = ticker.option_chain(back_date).puts
                 
-                # 抓取最接近現價的價平 (ATM) 合約
-                front_atm = front_chain.iloc[(front_chain['strike'] - price).abs().argsort()[:1]]
-                back_atm = back_chain.iloc[(back_chain['strike'] - price).abs().argsort()[:1]]
+                # 簡單取最接近價平的 IV
+                front_iv_idx = (front_chain['strike'] - price).abs().argsort()[:1]
+                back_iv_idx = (back_chain['strike'] - price).abs().argsort()[:1]
                 
-                front_iv = front_atm['impliedVolatility'].values[0]
-                back_iv = back_atm['impliedVolatility'].values[0]
-                
-                if back_iv > 0.01:
-                    ts_ratio = front_iv / back_iv
+                if not front_iv_idx.empty and not back_iv_idx.empty:
+                    front_iv = front_chain.iloc[front_iv_idx]['impliedVolatility'].values[0]
+                    back_iv = back_chain.iloc[back_iv_idx]['impliedVolatility'].values[0]
                     
-                if ts_ratio >= 1.05:
-                    ts_state = "🚨 恐慌 (Backwardation)"
-                elif ts_ratio <= 0.95:
-                    ts_state = "🌊 正常 (Contango)"
+                    if back_iv > 0.01:
+                        ts_ratio = front_iv / back_iv
+                    
+                    if ts_ratio >= 1.05:
+                        ts_state = "🚨 恐慌 (Backwardation)"
+                    elif ts_ratio <= 0.95:
+                        ts_state = "🌊 正常 (Contango)"
             except Exception:
-                pass # 若報價表異常，則保持 Flat 預設值
+                pass
 
-        # ==========================================
-        # 量化運算 4: Greeks 精算與最佳合約尋標
-        # ==========================================
-        target_date = None
-        days_to_expiry = 0
+        # --- 4. Greeks 精算與尋標 ---
+        target_expiry_date = None
         for exp in expirations:
-            exp_date = datetime.strptime(exp, '%Y-%m-%d').date()
-            days_to_expiry = (exp_date - today).days
+            days_to_expiry = (datetime.strptime(exp, '%Y-%m-%d').date() - today).days
             if min_dte <= days_to_expiry <= max_dte:
-                target_date = exp
+                target_expiry_date = exp
                 break
-                
-        if not target_date: return None
-
-        opt_chain = ticker.option_chain(target_date)
-        chain_data = opt_chain.calls if opt_type == "call" else opt_chain.puts
-        chain_data = chain_data[chain_data['volume'] > 0].copy() # 過濾無流動性合約
-        if chain_data.empty: return None
-
-        flag = 'c' if opt_type == "call" else 'p'
-        t_years = max(days_to_expiry, 1) / 365.0
         
-        chain_data['bs_delta'] = chain_data.apply(lambda row: calculate_contract_delta(row, price, t_years, flag), axis=1)
+        if not target_expiry_date:
+            return None
+
+        opt_chain = ticker.option_chain(target_expiry_date)
+        chain_data = opt_chain.calls if opt_type == "call" else opt_chain.puts
+        chain_data = chain_data[chain_data['volume'] > 0].copy()
+        
+        if chain_data.empty:
+            return None
+
+        # 計算 Greeks
+        t_years = max(days_to_expiry, 1) / 365.0
+        chain_data['bs_delta'] = chain_data.apply(
+            lambda row: calculate_contract_delta(row, price, t_years, 'c' if opt_type=="call" else 'p'), 
+            axis=1
+        )
         chain_data = chain_data[chain_data['bs_delta'] != 0.0].copy()
-        if chain_data.empty: return None
+        
+        if chain_data.empty:
+            return None
 
-        # 找出 Delta 最接近目標值的合約
-        chain_data['delta_diff'] = abs(chain_data['bs_delta'] - target_delta)
-        best_contract = chain_data.sort_values('delta_diff').iloc[0]
+        # 選出 Delta 最接近目標值的合約
+        best_contract = chain_data.iloc[(chain_data['bs_delta'] - target_delta).abs().argsort()[:1]].iloc[0]
 
-        # ==========================================
-        # 量化運算 5: AROC 資金效率濾網 (僅賣方)
-        # ==========================================
+        # --- 5. AROC 資金效率 ---
         bid_price = best_contract['bid']
         strike_price = best_contract['strike']
         aroc = 0.0
         
-        if strategy in ["STO_PUT", "STO_CALL"]:
-            if bid_price <= 0: return None
-            
-            # Cash-Secured 資金佔用: 履約價 - 收取的權利金
-            margin_required = strike_price - bid_price
-            if margin_required <= 0: return None
-            
-            aroc = (bid_price / margin_required) * (365.0 / max(days_to_expiry, 1)) * 100
-            
-            # 拒絕資金效率低於 15% 的交易
+        if "STO" in strategy:
+            # 賣方策略檢查
+            if bid_price <= 0 or (strike_price - bid_price) <= 0:
+                return None
+            # Annualized Return on Capital
+            aroc = (bid_price / (strike_price - bid_price)) * (365.0 / max(days_to_expiry, 1)) * 100
             if aroc < 15.0:
-                print(f"[{symbol}] 剔除: AROC {aroc:.1f}% 過低 (門檻 15%)")
                 return None
 
         return {
-            "symbol": symbol, "price": price, "rsi": rsi, "sma20": sma20,
-            "hv_rank": hv_rank, "ts_ratio": ts_ratio, "ts_state": ts_state, 
-            "strategy": strategy, "target_date": target_date, "dte": days_to_expiry, 
-            "strike": strike_price, "bid": bid_price, "ask": best_contract['ask'], 
-            "delta": best_contract['bs_delta'], "iv": best_contract['impliedVolatility'],
+            "symbol": symbol,
+            "price": price,
+            "rsi": rsi,
+            "sma20": sma20,
+            "hv_rank": hv_rank,
+            "ts_ratio": ts_ratio,
+            "ts_state": ts_state, 
+            "earnings_days": days_to_earnings,
+            "mmm_pct": mmm_pct,
+            "safe_lower": safe_lower,
+            "safe_upper": safe_upper,
+            "strategy": strategy,
+            "target_date": target_expiry_date,
+            "dte": days_to_expiry, 
+            "strike": strike_price,
+            "bid": bid_price,
+            "ask": best_contract['ask'], 
+            "delta": best_contract['bs_delta'],
+            "iv": best_contract['impliedVolatility'],
             "aroc": aroc
         }
     except Exception as e:
@@ -192,85 +280,121 @@ def analyze_symbol(symbol):
         return None
 
 def check_portfolio_status_logic(portfolio_rows):
-    """盤後動態結算與 Greeks 風險防禦引擎"""
+    """
+    盤後動態結算與 Greeks 風險防禦引擎。
+    
+    針對傳入的持倉列表，依據 Symbol 進行分組批次處理以減少 API 請求次數。
+
+    Args:
+        portfolio_rows (list): 持倉資料列表，格式為 [(symbol, opt_type, strike, expiry, entry_price, quantity), ...]
+
+    Returns:
+        list: 包含每筆持倉狀態報告的字串列表。
+    """
     report_lines = []
     today = datetime.now().date()
 
+    # 1. 依 Symbol 分組整理持倉，減少重複建立 Ticker 物件與 API 呼叫
+    positions_by_symbol = {}
     for row in portfolio_rows:
-        # DB 傳入格式: (symbol, opt_type, strike, expiry, entry_price, quantity)
-        symbol, opt_type, strike, expiry, entry_price, quantity = row
+        symbol = row[0]
+        if symbol not in positions_by_symbol:
+            positions_by_symbol[symbol] = []
+        positions_by_symbol[symbol].append(row)
 
+    # 2. 逐一 Symbol 處理
+    for symbol, rows in positions_by_symbol.items():
         try:
             ticker = yf.Ticker(symbol)
-            # 獲取標的現價
-            current_stock_price = ticker.history(period="1d")['Close'].iloc[-1]
-            
-            # 獲取持倉到期日的選擇權報價表
-            opt_chain = ticker.option_chain(expiry)
-            chain_data = opt_chain.calls if opt_type == "call" else opt_chain.puts
-            
-            # 定位持倉的特定履約價合約
-            contract = chain_data[chain_data['strike'] == strike]
-            if contract.empty:
+            # 取得該標的最新收盤價 (只取一次)
+            hist = ticker.history(period="1d")
+            if hist.empty:
+                print(f"無法取得 {symbol} 的歷史股價，跳過分析。")
                 continue
+            current_stock_price = hist['Close'].iloc[-1]
             
-            current_price = contract['lastPrice'].iloc[0]
-            iv = contract['impliedVolatility'].iloc[0]
-            
-            # 準備 Greeks 運算參數
-            exp_date = datetime.strptime(expiry, '%Y-%m-%d').date()
-            dte = (exp_date - today).days
-            t_years = max(dte, 1) / 365.0 
-            
-            # ==========================================
-            # Greeks 動態精算 (評估當下即時曝險)
-            # ==========================================
-            flag = 'c' if opt_type == 'call' else 'p'
-            try:
-                current_delta = delta(flag, current_stock_price, strike, t_years, RISK_FREE_RATE, iv)
-            except Exception:
-                current_delta = 0.0
+            # 快取 option chain 以避免重複請求同一到期日
+            option_chains_cache = {}
 
-            # ==========================================
-            # 動態防禦決策樹 (Dynamic Rolling Protocol)
-            # ==========================================
-            status = "⏳ 繼續持有"
-            
-            if quantity < 0: 
-                # 賣方防禦邏輯 (Short Premium)
-                pnl_pct = (entry_price - current_price) / entry_price
+            for row in rows:
+                # DB 欄位: symbol, opt_type, strike, expiry, entry_price, quantity
+                _, opt_type, strike, expiry, entry_price, quantity = row
                 
-                if pnl_pct >= 0.50:
-                    status = "✅ 建議停利 (獲利達 50%) - Buy to Close"
-                elif pnl_pct <= -1.50:
-                    status = "☠️ 黑天鵝警戒 (虧損達 150%) - 強制停損"
-                # Delta 擴張防禦：防止 Gamma 爆炸
-                elif opt_type == 'put' and current_delta <= -0.40:
-                    status = "🚨 動態轉倉 (Delta 擴張) - 執行 Roll Down and Out"
-                elif opt_type == 'call' and current_delta >= 0.40:
-                    status = "🚨 動態轉倉 (Delta 擴張) - 執行 Roll Up and Out"
-                # 靜態期限防禦
-                elif dte <= 14 and pnl_pct < 0:
-                    status = "⚠️ 期限防禦 (DTE < 14) - 迴避 Gamma 爆發，建議轉倉"
-            else:
-                # 買方防禦邏輯 (Long Premium)
-                pnl_pct = (current_price - entry_price) / entry_price
-                
-                if pnl_pct >= 1.0:
-                    status = "✅ 建議停利 (獲利達 100%) - Sell to Close"
-                elif dte <= 14:
-                    status = "🚨 動能衰竭 (DTE < 14) - 建議平倉保留殘值"
-                elif pnl_pct <= -0.50:
-                    status = "⚠️ 停損警戒 (本金回撤 50%)"
+                try:
+                    # 檢查快取
+                    if expiry not in option_chains_cache:
+                        option_chains_cache[expiry] = ticker.option_chain(expiry)
+                    
+                    opt_chain = option_chains_cache[expiry]
+                    chain_data = opt_chain.calls if opt_type == "call" else opt_chain.puts
+                    
+                    # 定位持倉的特定履約價合約
+                    contract = chain_data[chain_data['strike'] == strike]
+                    if contract.empty:
+                        report_lines.append(f"⚠️ 找不到合約數據: {symbol} {expiry} ${strike} {opt_type}")
+                        continue
+                    
+                    current_price = contract['lastPrice'].iloc[0]
+                    iv = contract['impliedVolatility'].iloc[0]
+                    
+                    # 準備 Greeks 運算參數
+                    exp_date = datetime.strptime(expiry, '%Y-%m-%d').date()
+                    dte = (exp_date - today).days
+                    t_years = max(dte, 1) / 365.0 
+                    
+                    # ==========================================
+                    # Greeks 動態精算 (評估當下即時曝險)
+                    # ==========================================
+                    flag = 'c' if opt_type == 'call' else 'p'
+                    try:
+                        current_delta = delta(flag, current_stock_price, strike, t_years, RISK_FREE_RATE, iv)
+                    except Exception:
+                        current_delta = 0.0
 
-            line = (f"**{symbol}** {expiry} ${strike} {opt_type.upper()}\n"
-                    f"└ 成本: `${entry_price:.2f}` | 現價: `${current_price:.2f}` | 損益: `{pnl_pct*100:+.1f}%`\n"
-                    f"└ DTE: `{dte}` 天 | 當前 Delta: `{current_delta:.3f}`\n"
-                    f"└ 動作: {status}")
-            report_lines.append(line)
+                    # ==========================================
+                    # 動態防禦決策樹 (Dynamic Rolling Protocol)
+                    # ==========================================
+                    status = "⏳ 繼續持有"
+                    
+                    if quantity < 0: 
+                        # 賣方防禦邏輯 (Short Premium)
+                        pnl_pct = (entry_price - current_price) / entry_price
+                        
+                        if pnl_pct >= 0.50:
+                            status = "✅ 建議停利 (獲利達 50%) - Buy to Close"
+                        elif pnl_pct <= -1.50:
+                            status = "☠️ 黑天鵝警戒 (虧損達 150%) - 強制停損"
+                        # Delta 擴張防禦：防止 Gamma 爆炸
+                        elif opt_type == 'put' and current_delta <= -0.40:
+                            status = "🚨 動態轉倉 (Delta 擴張) - 執行 Roll Down and Out"
+                        elif opt_type == 'call' and current_delta >= 0.40:
+                            status = "🚨 動態轉倉 (Delta 擴張) - 執行 Roll Up and Out"
+                        # 靜態期限防禦
+                        elif dte <= 14 and pnl_pct < 0:
+                            status = "⚠️ 期限防禦 (DTE < 14) - 迴避 Gamma 爆發，建議轉倉"
+                    else:
+                        # 買方防禦邏輯 (Long Premium)
+                        pnl_pct = (current_price - entry_price) / entry_price
+                        
+                        if pnl_pct >= 1.0:
+                            status = "✅ 建議停利 (獲利達 100%) - Sell to Close"
+                        elif dte <= 14:
+                            status = "🚨 動能衰竭 (DTE < 14) - 建議平倉保留殘值"
+                        elif pnl_pct <= -0.50:
+                            status = "⚠️ 停損警戒 (本金回撤 50%)"
 
+                    line = (f"**{symbol}** {expiry} ${strike} {opt_type.upper()}\n"
+                            f"└ 成本: `${entry_price:.2f}` | 現價: `${current_price:.2f}` | 損益: `{pnl_pct*100:+.1f}%`\n"
+                            f"└ DTE: `{dte}` 天 | 當前 Delta: `{current_delta:.3f}`\n"
+                            f"└ 動作: {status}")
+                    report_lines.append(line)
+
+                except Exception as inner_e:
+                    print(f"處理持倉 {symbol} {expiry} 錯誤: {inner_e}")
+                    report_lines.append(f"❌ 分析失敗: {symbol} {expiry} - {inner_e}")
+        
         except Exception as e:
-            print(f"盤後結算 {symbol} 錯誤: {e}")
+            print(f"處理 Symbol {symbol} 發生總體錯誤: {e}")
             continue
 
     return report_lines

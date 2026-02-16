@@ -259,6 +259,23 @@ class TradingCog(commands.Cog):
         # 展示 AROC (年化報酬率)
         if "STO" in data['strategy']:
             embed.add_field(name="AROC (年化報酬率)", value=f"`{data['aroc']:.1f}%` 💰")
+
+        # 🔥 新增這區塊：財報預期波動與雷區判定
+        if 0 <= data.get('earnings_days', -1) <= 14:
+            mmm_str = f"±{data['mmm_pct']:.1f}% (倒數 {data['earnings_days']} 天)"
+            bounds_str = f"下緣 ${data['safe_lower']:.2f} / 上緣 ${data['safe_upper']:.2f}"
+            
+            # 判斷系統挑選的履約價 (strike) 是否落在安全帶之外
+            strike = data['strike']
+            strategy = data['strategy']
+            is_safe = False
+            if strategy == "STO_PUT" and strike <= data['safe_lower']:
+                is_safe = True
+            elif strategy == "STO_CALL" and strike >= data['safe_upper']:
+                is_safe = True
+                
+            safety_icon = "✅ 避開雷區 (適宜收租)" if is_safe else "💣 位於雷區 (高風險)"
+            embed.add_field(name="📊 財報預期波動 (MMM)", value=f"`{mmm_str}`\n{bounds_str}\n{safety_icon}", inline=False)
             
         embed.add_field(name="精算合約", value=f"{data['target_date']} (${data['strike']})", inline=False)
         embed.add_field(name="報價 (Bid/Ask)", value=f"${data['bid']} / ${data['ask']}")
