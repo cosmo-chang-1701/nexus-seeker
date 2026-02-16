@@ -45,6 +45,15 @@ class TradingCog(commands.Cog):
         except Exception as e:
             await interaction.response.send_message(f"❌ 寫入失敗: {e}", ephemeral=True)
 
+    @app_commands.command(name="set_capital", description="設定您的總資金規模，用於精算專屬的凱利建議倉位")
+    async def set_capital(self, interaction: discord.Interaction, capital: float):
+        if capital <= 0:
+            await interaction.response.send_message("❌ 資金必須大於 0。", ephemeral=True)
+            return
+        user_id = interaction.user.id
+        database.set_user_capital(user_id, capital)
+        await interaction.response.send_message(f"💰 已將您的專屬總資金設定為 `${capital:,.2f}`", ephemeral=True)
+
     @app_commands.command(name="list_trades", description="列出您目前資料庫中的所有持倉")
     async def list_trades(self, interaction: discord.Interaction):
         user_id = interaction.user.id
@@ -102,10 +111,12 @@ class TradingCog(commands.Cog):
 
     @app_commands.command(name="scan", description="手動對特定股票執行 Delta 中性掃描")
     async def manual_scan(self, interaction: discord.Interaction, symbol: str):
-        await interaction.response.defer(ephemeral=True) # 隱藏掃描結果，只讓指令發送者看到
+        await interaction.response.defer(ephemeral=True)
         result = await asyncio.to_thread(market_math.analyze_symbol, symbol.upper())
         if result:
-            embed = self._create_embed(result)
+            # 🔥 讀取該名使用者的專屬資金
+            user_capital = database.get_user_capital(interaction.user.id)
+            embed = self._create_embed(result, user_capital)
             await interaction.followup.send(embed=embed)
         else:
             await interaction.followup.send(f"📊 目前 `{symbol.upper()}` 無明確訊號或無合適合約。")
@@ -197,9 +208,11 @@ class TradingCog(commands.Cog):
             user = await self.bot.fetch_user(uid)
             if user:
                 try:
+                    # 🔥 讀取該名使用者的專屬資金
+                    user_capital = database.get_user_capital(uid)
                     await user.send(f"🕒 **美股已開盤 15 分鐘，為您精算出以下機會：**")
                     for data in alerts:
-                        await user.send(embed=self._create_embed(data))
+                        await user.send(embed=self._create_embed(data, user_capital))
                 except discord.Forbidden:
                     pass
 
@@ -232,7 +245,7 @@ class TradingCog(commands.Cog):
                     except discord.Forbidden:
                         pass
 
-    def _create_embed(self, data):
+    def _create_embed(self, data, user_capital=100000.0):
         colors = {"STO_PUT": discord.Color.green(), "STO_CALL": discord.Color.red(), "BTO_CALL": discord.Color.blue(), "BTO_PUT": discord.Color.orange()}
         titles = {"STO_PUT": "🟢 Sell To Open Put", "STO_CALL": "🔴 Sell To Open Call", "BTO_CALL": "🚀 Buy To Open Call", "BTO_PUT": "⚠️ Buy To Open Put"}
         embed = discord.Embed(title=f"{titles[data['strategy']]} - {data['symbol']}", color=colors.get(data['strategy'], discord.Color.default()))
@@ -259,6 +272,20 @@ class TradingCog(commands.Cog):
         # 展示 AROC (年化報酬率)
         if "STO" in data['strategy']:
             embed.add_field(name="AROC (年化報酬率)", value=f"`{data['aroc']:.1f}%` 💰")
+
+            # 凱利準則部位建議
+            alloc_pct = data.get('alloc_pct', 0.0)
+            margin_per_contract = data.get('margin_per_contract', 0.0)
+            suggested_contracts = 0
+
+            if alloc_pct > 0 and margin_per_contract > 0:
+                allocated_capital = user_capital * alloc_pct
+                suggested_contracts = int(allocated_capital // margin_per_contract)
+                
+            if suggested_contracts > 0:
+                embed.add_field(name="⚖️ 凱利準則建議倉位", value=f"`{suggested_contracts} 口` (佔總資金 {alloc_pct*100:.1f}%)")
+            else:
+                embed.add_field(name="⚖️ 凱利準則建議倉位", value=f"`本金門檻不足` (建議佔比 {alloc_pct*100:.1f}%)")
 
         # 🔥 新增這區塊：財報預期波動與雷區判定
         if 0 <= data.get('earnings_days', -1) <= 14:

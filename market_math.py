@@ -253,27 +253,37 @@ def analyze_symbol(symbol):
             if aroc < 15.0:
                 return None
 
+        # --- 6. 小數凱利準則 ---
+        suggested_contracts = 0
+        alloc_pct = 0.0
+        
+        if strategy in ["STO_PUT", "STO_CALL"] and aroc >= 15.0:        
+            # 賠率 b = 預期獲利 / 最大承擔風險
+            b = bid_price / margin_required
+            # 勝率 p 近似於 (1 - Delta絕對值)
+            p = 1.0 - abs(best_contract['bs_delta'])
+            
+            if b > 0:
+                # 傳統凱利公式
+                kelly_f = (p * (b + 1) - 1) / b
+                
+                # 採用 1/4 凱利 (Quarter Kelly)，並設定單一標的硬上限 5%
+                alloc_pct = min(max(kelly_f * 0.25, 0.0), 0.05)
+                
+                # 計算單口保證金 (合約乘數 100)
+                margin_per_contract = margin_required * 100
+
         return {
-            "symbol": symbol,
-            "price": price,
-            "rsi": rsi,
-            "sma20": sma20,
-            "hv_rank": hv_rank,
-            "ts_ratio": ts_ratio,
-            "ts_state": ts_state, 
-            "earnings_days": days_to_earnings,
-            "mmm_pct": mmm_pct,
-            "safe_lower": safe_lower,
-            "safe_upper": safe_upper,
-            "strategy": strategy,
-            "target_date": target_expiry_date,
-            "dte": days_to_expiry, 
-            "strike": strike_price,
-            "bid": bid_price,
-            "ask": best_contract['ask'], 
-            "delta": best_contract['bs_delta'],
-            "iv": best_contract['impliedVolatility'],
-            "aroc": aroc
+            "symbol": symbol, "price": price, "rsi": rsi, "sma20": sma20,
+            "hv_rank": hv_rank, "ts_ratio": ts_ratio, "ts_state": ts_state, 
+            "earnings_days": days_to_earnings, "mmm_pct": mmm_pct,
+            "safe_lower": safe_lower, "safe_upper": safe_upper,
+            "strategy": strategy, "target_date": target_date, "dte": days_to_expiry, 
+            "strike": strike_price, "bid": bid_price, "ask": best_contract['ask'], 
+            "delta": best_contract['bs_delta'], "iv": best_contract['impliedVolatility'],
+            "aroc": aroc,
+            "alloc_pct": alloc_pct,                     # 輸出凱利建議資金佔比
+            "margin_per_contract": margin_per_contract  # 輸出單口保證金
         }
     except Exception as e:
         print(f"分析 {symbol} 錯誤: {e}")
