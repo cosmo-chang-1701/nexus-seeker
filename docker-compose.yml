@@ -7,7 +7,6 @@ services:
       - .env
     volumes:
       - ./data:/app/data
-      - .:/app
     environment:
       - TZ=America/New_York
     logging:
