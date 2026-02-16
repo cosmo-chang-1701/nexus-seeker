@@ -487,7 +487,7 @@ def check_portfolio_status_logic(portfolio_rows):
             continue
 
     # ==========================================
-    # 🔥 宏觀風險診斷報告 (附加於列表最下方)
+    # 宏觀風險診斷報告 (附加於列表最下方)
     # ==========================================
     if report_lines:
         report_lines.append("") # 空行分隔
@@ -503,5 +503,51 @@ def check_portfolio_status_logic(portfolio_rows):
             advice = "✅ **風險中性 (Delta Neutral)**：您的帳戶對大盤漲跌免疫力佳，受到系統性風險影響較小。"
             
         report_lines.append(f"└ 經理人建議: {advice}")
+
+        # ==========================================
+        # 投資組合相關性矩陣 (Correlation Matrix Risk)
+        # ==========================================
+        symbols = list(positions_by_symbol.keys())
+        if len(symbols) > 1:
+            report_lines.append("") 
+            report_lines.append("🕸️ **【非系統性集中風險 (Idiosyncratic Concentration)】**")
+            try:
+                # 抓取 60 日歷史收盤價建立報酬率矩陣
+                hist_data = yf.download(symbols, period="60d", progress=False)['Close']
+                
+                # yf.download 單一標的防呆機制
+                if isinstance(hist_data, pd.Series):
+                    hist_data = hist_data.to_frame(name=symbols[0])
+                
+                # 計算日報酬率 (Percentage Change)
+                returns = hist_data.pct_change().dropna()
+                
+                # 建立 Pearson 相關係數矩陣
+                corr_matrix = returns.corr()
+
+                high_corr_pairs = []
+                # 遍歷對稱矩陣的上半部，尋找高度正相關配對
+                for i in range(len(corr_matrix.columns)):
+                    for j in range(i+1, len(corr_matrix.columns)):
+                        sym1 = corr_matrix.columns[i]
+                        sym2 = corr_matrix.columns[j]
+                        rho = corr_matrix.iloc[i, j]
+                        
+                        # 閥值設定：ρ > 0.75 視為具備高度板塊連動性
+                        if rho > 0.75:
+                            high_corr_pairs.append((sym1, sym2, rho))
+
+                report_lines.append(f"└ 掃描 {len(symbols)} 檔標的之 60 日 Pearson 相關係數")
+                
+                if high_corr_pairs:
+                    report_lines.append("🚨 **警告：發現高度正相關板塊重疊**")
+                    for sym1, sym2, rho in high_corr_pairs:
+                        report_lines.append(f"   ⚠️ `{sym1}` & `{sym2}`: 相關係數 `ρ = {rho:.2f}`")
+                    report_lines.append("   👉 經理人建議: 若板塊發生利空，此類部位將發生 Gamma 同步擴張，建議平倉或轉倉降載。")
+                else:
+                    report_lines.append("✅ **分散性良好**：未發現相關係數 ρ > 0.75 的重疊曝險，板塊防禦力佳。")
+
+            except Exception as e:
+                print(f"相關性矩陣運算失敗: {e}")
 
     return report_lines
