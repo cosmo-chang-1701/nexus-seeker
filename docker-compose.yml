@@ -1,0 +1,16 @@
+services:
+  nexus_seeker:
+    build: .
+    container_name: nexus_seeker_bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    environment:
+      - TZ=America/New_York
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
