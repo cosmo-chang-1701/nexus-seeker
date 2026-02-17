@@ -185,12 +185,25 @@ class TradingCog(commands.Cog):
         target_time = market_time.get_next_market_target_time(reference="open", offset_minutes=15)
         await asyncio.sleep(market_time.get_sleep_seconds(target_time))
         
+        await self._run_market_scan_logic(is_auto=True)
+
+    @app_commands.command(name="force_scan", description="[Admin] 立即手動執行全站掃描 (不論開盤時間)")
+    async def force_scan(self, interaction: discord.Interaction):
+        await interaction.response.send_message("🚀 強制啟動全站掃描中...", ephemeral=True)
+        # 用非同步背景執行，避免卡住指令回應
+        asyncio.create_task(self._run_market_scan_logic(is_auto=False, triggered_by=interaction.user))
+
+    async def _run_market_scan_logic(self, is_auto=True, triggered_by=None):
+        """共用的掃描核心邏輯"""
         all_watchlists = database.get_all_watchlist() # [(user_id, symbol), ...]
-        if not all_watchlists: return
+        if not all_watchlists: 
+            return
 
         # 1. 提取所有不重複的標的進行掃描
         unique_symbols = set(sym for uid, sym in all_watchlists)
         scan_results = {}
+        
+        # 如果是手動觸發，可以選擇是否要發送「開始」通知，這裡簡化處理
         
         for sym in unique_symbols:
             res = await asyncio.to_thread(market_math.analyze_symbol, sym)
@@ -210,7 +223,14 @@ class TradingCog(commands.Cog):
                 try:
                     # 🔥 讀取該名使用者的專屬資金
                     user_capital = database.get_user_capital(uid)
-                    await user.send(f"🕒 **美股已開盤 15 分鐘，為您精算出以下機會：**")
+                    
+                    if is_auto:
+                        header = "🕒 **美股已開盤 15 分鐘，為您精算出以下機會：**"
+                    else:
+                        trigger_name = triggered_by.display_name if triggered_by else "Admin"
+                        header = f"🔧 **管理員 {trigger_name} 手動觸發了即時掃描：**"
+
+                    await user.send(header)
                     for data in alerts:
                         await user.send(embed=self._create_embed(data, user_capital))
                 except discord.Forbidden:
