@@ -1,5 +1,5 @@
 import pandas_market_calendars as mcal
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 ny_tz = ZoneInfo("America/New_York")
@@ -10,7 +10,7 @@ def get_next_market_target_time(reference="open", offset_minutes=0):
     now = datetime.now(ny_tz)
     end_date = now.date() + timedelta(days=7)
     schedule = nyse_calendar.schedule(start_date=now.date(), end_date=end_date)
-    
+
     if schedule.empty:
         return None
 
@@ -19,6 +19,10 @@ def get_next_market_target_time(reference="open", offset_minutes=0):
             target_utc = row['market_open'].to_pydatetime()
         else:
             target_utc = row['market_close'].to_pydatetime()
+            
+        # Ensure target_utc is timezone-aware (UTC)
+        if target_utc.tzinfo is None:
+            target_utc = target_utc.replace(tzinfo=timezone.utc)
             
         target_ny = target_utc.astimezone(ny_tz) + timedelta(minutes=offset_minutes)
         
