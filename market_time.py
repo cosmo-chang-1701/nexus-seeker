@@ -34,4 +34,6 @@ def get_next_market_target_time(reference="open", offset_minutes=0):
 def get_sleep_seconds(target_time):
     if not target_time:
         return 3600
-    return (target_time - datetime.now(ny_tz)).total_seconds()
+
+    sleep_secs = (target_time - datetime.now(ny_tz)).total_seconds()
+    return max(0.0, sleep_secs)
