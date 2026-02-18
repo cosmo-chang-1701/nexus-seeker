@@ -4,12 +4,14 @@ from discord import app_commands
 import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
+import logging
 
 import database
 import market_math
 import market_time
 
 ny_tz = ZoneInfo("America/New_York")
+logger = logging.getLogger(__name__)
 
 class TradingCog(commands.Cog):
     def __init__(self, bot):
@@ -17,11 +19,13 @@ class TradingCog(commands.Cog):
         self.pre_market_risk_monitor.start()
         self.dynamic_market_scanner.start()
         self.dynamic_after_market_report.start()
+        logger.info("TradingCog loaded. Background tasks started.")
 
     def cog_unload(self):
         self.pre_market_risk_monitor.cancel()
         self.dynamic_market_scanner.cancel()
         self.dynamic_after_market_report.cancel()
+        logger.info("TradingCog unloaded. Background tasks cancelled.")
 
     # ==========================================
     # 持倉 (Portfolio) 管理指令 (綁定 user_id)
@@ -111,6 +115,7 @@ class TradingCog(commands.Cog):
 
     @app_commands.command(name="scan", description="手動對特定股票執行 Delta 中性掃描")
     async def manual_scan(self, interaction: discord.Interaction, symbol: str):
+        logger.info(f"User {interaction.user.id} triggered manual_scan for {symbol}")
         await interaction.response.defer(ephemeral=True)
         result = await asyncio.to_thread(market_math.analyze_symbol, symbol.upper())
         if result:
@@ -127,6 +132,7 @@ class TradingCog(commands.Cog):
     @tasks.loop()
     async def pre_market_risk_monitor(self):
         """09:00：盤前財報警報 (依使用者分發私訊)"""
+        logger.info("Starting pre_market_risk_monitor task.")
         target_time = market_time.get_next_market_target_time(reference="open", offset_minutes=-30)
         await asyncio.sleep(market_time.get_sleep_seconds(target_time))
         
@@ -182,6 +188,7 @@ class TradingCog(commands.Cog):
     @tasks.loop()
     async def dynamic_market_scanner(self):
         """09:45：盤中掃描機會 (依使用者分發私訊)"""
+        logger.info("Starting dynamic_market_scanner task.")
         target_time = market_time.get_next_market_target_time(reference="open", offset_minutes=15)
         await asyncio.sleep(market_time.get_sleep_seconds(target_time))
         
@@ -189,6 +196,7 @@ class TradingCog(commands.Cog):
 
     @app_commands.command(name="force_scan", description="[Admin] 立即手動執行全站掃描 (不論開盤時間)")
     async def force_scan(self, interaction: discord.Interaction):
+        logger.info(f"Admin {interaction.user.name} ({interaction.user.id}) triggered force_scan")
         await interaction.response.send_message("🚀 強制啟動全站掃描中...", ephemeral=True)
         # 用非同步背景執行，避免卡住指令回應
         asyncio.create_task(self._run_market_scan_logic(is_auto=False, triggered_by=interaction.user))
@@ -216,7 +224,7 @@ class TradingCog(commands.Cog):
                     res = await asyncio.to_thread(market_math.analyze_symbol, sym)
                     if res: scan_results[sym] = res
                 except Exception as e:
-                    print(f"Error scanning {sym}: {e}")
+                    logger.error(f"Error scanning {sym}: {e}")
                 await asyncio.sleep(0.5)
 
             # 若無任何結果且為手動觸發
@@ -263,6 +271,7 @@ class TradingCog(commands.Cog):
     @tasks.loop()
     async def dynamic_after_market_report(self):
         """16:15：持倉結算與防禦建議 (依使用者分發私訊)"""
+        logger.info("Starting dynamic_after_market_report task.")
         target_time = market_time.get_next_market_target_time(reference="close", offset_minutes=15)
         await asyncio.sleep(market_time.get_sleep_seconds(target_time))
 

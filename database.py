@@ -1,5 +1,8 @@
 import sqlite3
 from config import DB_NAME
+import logging
+
+logger = logging.getLogger(__name__)
 
 def init_db():
     conn = sqlite3.connect(DB_NAME)
@@ -36,6 +39,7 @@ def init_db():
     
     conn.commit()
     conn.close()
+    logger.info("Database initialized successfully.")
 
 # ==========================================
 # 交易持倉 (Portfolio) CRUD (綁定 user_id)

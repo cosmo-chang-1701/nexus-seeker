@@ -1,6 +1,9 @@
 import pandas_market_calendars as mcal
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
+import logging
+
+logger = logging.getLogger(__name__)
 
 ny_tz = ZoneInfo("America/New_York")
 nyse_calendar = mcal.get_calendar('NYSE')
@@ -27,6 +30,7 @@ def get_next_market_target_time(reference="open", offset_minutes=0):
         target_ny = target_utc.astimezone(ny_tz) + timedelta(minutes=offset_minutes)
         
         if now < target_ny:
+            logger.info(f"Next market {reference} target: {target_ny}")
             return target_ny
             
     return None
