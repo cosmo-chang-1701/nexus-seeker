@@ -1,7 +1,7 @@
 import yfinance as yf
 import pandas as pd
 from datetime import datetime
-from py_vollib.black_scholes.greeks.analytical import delta, theta, gamma
+from py_vollib.black_scholes_merton.greeks.analytical import delta, theta, gamma
 from config import RISK_FREE_RATE
 
 def _evaluate_defense_status(quantity, opt_type, pnl_pct, current_delta, dte):
@@ -27,10 +27,10 @@ def _evaluate_defense_status(quantity, opt_type, pnl_pct, current_delta, dte):
         # 買方防禦邏輯 (Long Premium)
         if pnl_pct >= 1.0:
             status = "✅ 建議停利 (獲利達 100%) - Sell to Close"
-        elif dte <= 21:
-            status = "🚨 動能衰竭 (DTE <= 21) - 建議平倉保留殘值"
         elif pnl_pct <= -0.50:
             status = "⚠️ 停損警戒 (本金回撤 50%)"
+        elif dte <= 21:
+            status = "🚨 動能衰竭 (DTE <= 21) - 建議平倉保留殘值"
             
     return status
 
@@ -150,6 +150,11 @@ def check_portfolio_status_logic(portfolio_rows, user_capital=50000.0):
             if hist.empty: continue
             current_stock_price = hist['Close'].iloc[-1]
             beta = ticker.info.get('beta', 1.0) or 1.0
+
+            # 🔥 抓取股息殖利率 q
+            dividend_yield = ticker.info.get('dividendYield', 0.0)
+            if dividend_yield is None: dividend_yield = 0.0
+
             option_chains_cache = {}
 
             for row in rows:
@@ -172,10 +177,9 @@ def check_portfolio_status_logic(portfolio_rows, user_capital=50000.0):
                 # 計算 Greeks
                 flag = 'c' if opt_type == 'call' else 'p'
                 try:
-                    current_delta = delta(flag, current_stock_price, strike, t_years, RISK_FREE_RATE, iv)
-                    daily_theta = theta(flag, current_stock_price, strike, t_years, RISK_FREE_RATE, iv) / 365.0
-                    # 🔥 精算單一合約的 Gamma
-                    current_gamma = gamma(flag, current_stock_price, strike, t_years, RISK_FREE_RATE, iv)
+                    current_delta = delta(flag, current_stock_price, strike, t_years, RISK_FREE_RATE, iv, dividend_yield)
+                    daily_theta = theta(flag, current_stock_price, strike, t_years, RISK_FREE_RATE, iv, dividend_yield) / 365.0
+                    current_gamma = gamma(flag, current_stock_price, strike, t_years, RISK_FREE_RATE, iv, dividend_yield)
                 except Exception:
                     current_delta, daily_theta, current_gamma = 0.0, 0.0, 0.0
 
@@ -194,7 +198,9 @@ def check_portfolio_status_logic(portfolio_rows, user_capital=50000.0):
                 
                 # 🔥 Gamma 累加：賣方 (quantity < 0) 會產生負 Gamma
                 position_gamma = current_gamma * quantity * 100
-                spx_weighted_gamma = position_gamma * beta * (current_stock_price / spy_price)
+                # 🔥 修正 Gamma 加權公式：Gamma 是二階導數，必須對 (Beta * S/S_spy) 進行平方加權
+                weighting_factor = beta * (current_stock_price / spy_price)
+                spx_weighted_gamma = position_gamma * (weighting_factor ** 2)
                 total_portfolio_gamma += spx_weighted_gamma
 
                 # 防禦決策樹判定

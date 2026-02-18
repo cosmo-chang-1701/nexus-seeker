@@ -160,6 +160,15 @@ def _find_target_expiry(expirations, today, min_dte, max_dte):
 def _get_best_contract_data(ticker, target_expiry_date, opt_type, target_delta, price, days_to_expiry):
     """取得最佳合約與 Greeks"""
     try:
+        # 抓取年化股息殖利率 (Annual Dividend Yield)
+        # 若為無配息股票 (如 TSLA)，yfinance 可能回傳 None，預設給 0.0
+        dividend_yield = ticker.info.get('dividendYield', 0.0)
+        if dividend_yield is None:
+            dividend_yield = 0.0
+    except:
+        dividend_yield = 0.0
+
+    try:
         opt_chain = ticker.option_chain(target_expiry_date)
         chain_data = opt_chain.calls if opt_type == "call" else opt_chain.puts
         chain_data = chain_data[chain_data['volume'] > 0].copy()
@@ -168,8 +177,9 @@ def _get_best_contract_data(ticker, target_expiry_date, opt_type, target_delta, 
             return None, None
 
         t_years = max(days_to_expiry, 1) / 365.0
+        flag = 'c' if opt_type == "call" else 'p'
         chain_data['bs_delta'] = chain_data.apply(
-            lambda row: calculate_contract_delta(row, price, t_years, 'c' if opt_type=="call" else 'p'), 
+            lambda row: calculate_contract_delta(row, price, t_years, flag, q=dividend_yield), 
             axis=1
         )
         chain_data = chain_data[chain_data['bs_delta'] != 0.0].copy()
