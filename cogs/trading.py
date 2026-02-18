@@ -286,12 +286,14 @@ class TradingCog(commands.Cog):
         for row in all_portfolios:
             uid = row[0]
             # row[1:] 取出 (trade_id, symbol, opt_type, strike, expiry, entry_price, quantity)
-            # 這樣 market_math.py 就完全不需要修改，無縫接軌！
             user_ports.setdefault(uid, []).append(row[1:])
 
         # 2. 分別計算損益並發送私訊
         for uid, rows in user_ports.items():
-            report_lines = await asyncio.to_thread(market_math.check_portfolio_status_logic, rows)
+            user_capital = database.get_user_capital(uid)
+
+            # 將資金參數傳遞給重構後的結算引擎
+            report_lines = await asyncio.to_thread(market_analysis.portfolio.check_portfolio_status_logic, rows, user_capital)            
             if report_lines:
                 user = await self.bot.fetch_user(uid)
                 if user:

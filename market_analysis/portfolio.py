@@ -1,189 +1,186 @@
 import yfinance as yf
+import pandas as pd
 from datetime import datetime
+from py_vollib.black_scholes.greeks.analytical import delta, theta
 from config import RISK_FREE_RATE
-from .greeks import calculate_contract_delta
-import pandas as pd # Needed for correlation matrix
 
-def check_portfolio_status_logic(portfolio_rows):
-    """盤後動態結算、Greeks 風險防禦，與投資組合 Beta 權重宏觀風險評估"""
+def _evaluate_defense_status(quantity, opt_type, pnl_pct, current_delta, dte):
+    """
+    動態防禦決策樹 (獨立負責判斷單一部位的生命週期與風險)
+    """
+    status = "⏳ 繼續持有"
+    
+    if quantity < 0: 
+        # 賣方防禦邏輯 (Short Premium)
+        if pnl_pct >= 0.50:
+            status = "✅ 建議停利 (獲利達 50%) - Buy to Close"
+        elif pnl_pct <= -1.50:
+            status = "☠️ 黑天鵝警戒 (虧損達 150%) - 強制停損"
+        elif opt_type == 'put' and current_delta <= -0.40:
+            status = "🚨 動態轉倉 (Delta 擴張) - 執行 Roll Down and Out"
+        elif opt_type == 'call' and current_delta >= 0.40:
+            status = "🚨 動態轉倉 (Delta 擴張) - 執行 Roll Up and Out"
+        # 🔥 新增：21 DTE Gamma 陷阱防禦 (取代原本的 14 天)
+        elif dte <= 21:
+            status = "⚠️ Gamma 陷阱 (DTE <= 21) - 迴避末期波動，建議平倉或轉倉"
+    else:
+        # 買方防禦邏輯 (Long Premium)
+        if pnl_pct >= 1.0:
+            status = "✅ 建議停利 (獲利達 100%) - Sell to Close"
+        elif dte <= 21:
+            status = "🚨 動能衰竭 (DTE <= 21) - 建議平倉保留殘值"
+        elif pnl_pct <= -0.50:
+            status = "⚠️ 停損警戒 (本金回撤 50%)"
+            
+    return status
+
+def _calculate_macro_risk(total_beta_delta, total_theta, user_capital):
+    """
+    計算投資組合的宏觀系統性風險 (SPY Beta-Weighted) 與 Theta 收益率
+    """
+    lines = ["", "🌐 **【宏觀系統性風險與現金流評估】**"]
+    
+    # 1. 系統性方向風險
+    lines.append(f"└ 投資組合淨 Delta: **`{total_beta_delta:+.2f}`** (等同持有 SPY 股數)")
+    if total_beta_delta > 50:
+        lines.append("   🚨 經理人警告：多頭曝險過高，建議建立 SPY 避險空單中和。")
+    elif total_beta_delta < -50:
+        lines.append("   🚨 經理人警告：空頭曝險過高，建議建立大盤避險多單。")
+    else:
+        lines.append("   ✅ 風險中性 (Delta Neutral)：受系統性崩盤影響較小。")
+
+    # 🔥 2. Theta 收益率精算
+    theta_yield = (total_theta / user_capital) * 100 if user_capital > 0 else 0
+    lines.append(f"└ 預估每日 Theta 現金流: **`${total_theta:+.2f}`** (佔總資金 `{theta_yield:.3f}%`)")
+    
+    if theta_yield < 0.05:
+        lines.append("   ⚠️ 資金利用率過低：Theta 收益率未達 0.05%，可尋找高 VRP 標的建倉。")
+    elif theta_yield > 0.30:
+        lines.append("   ⚠️ 時間價值曝險過度：Theta 收益率 > 0.3%，暗示承擔了極高的尾部風險。")
+    else:
+        lines.append("   ✅ 現金流健康：符合機構級 0.05% ~ 0.3% 之每日收租標準。")
+        
+    return lines
+
+def _analyze_correlation(positions_by_symbol):
+    """
+    計算板塊非系統性集中風險 (Correlation Matrix)
+    """
+    symbols = list(positions_by_symbol.keys())
+    if len(symbols) <= 1:
+        return []
+
+    lines = ["", "🕸️ **【非系統性集中風險 (板塊連動性)】**"]
+    try:
+        hist_data = yf.download(symbols, period="60d", progress=False)['Close']
+        if isinstance(hist_data, pd.Series):
+            hist_data = hist_data.to_frame(name=symbols[0])
+            
+        returns = hist_data.pct_change().dropna()
+        corr_matrix = returns.corr()
+
+        high_corr_pairs = []
+        for i in range(len(corr_matrix.columns)):
+            for j in range(i+1, len(corr_matrix.columns)):
+                rho = corr_matrix.iloc[i, j]
+                if rho > 0.75:
+                    high_corr_pairs.append((corr_matrix.columns[i], corr_matrix.columns[j], rho))
+
+        lines.append(f"└ 掃描 {len(symbols)} 檔標的之 60 日 Pearson 相關係數")
+        if high_corr_pairs:
+            lines.append("   🚨 **警告：發現高度正相關板塊重疊**")
+            for sym1, sym2, rho in high_corr_pairs:
+                lines.append(f"      ⚠️ `{sym1}` & `{sym2}` (ρ = {rho:.2f})")
+            lines.append("   👉 經理人建議：若板塊發生利空將引發 Gamma 同步擴張，建議降載。")
+        else:
+            lines.append("   ✅ 分散性良好：未發現 ρ > 0.75 的重疊曝險。")
+    except Exception as e:
+        print(f"相關性矩陣運算失敗: {e}")
+        
+    return lines
+
+def check_portfolio_status_logic(portfolio_rows, user_capital=50000.0):
+    """
+    [Facade] 盤後動態結算與風險管線編排者 (Orchestrator)
+    """
+    if not portfolio_rows:
+        return []
+
     report_lines = []
     today = datetime.now().date()
+    
+    total_portfolio_beta_delta = 0.0
+    total_portfolio_theta = 0.0  # 新增：紀錄投資組合總 Theta
 
-    if not portfolio_rows:
-        return report_lines
-
-    # ==========================================
-    # 🔥 宏觀風險準備：取得 SPY 基準價格
-    # ==========================================
     try:
         spy_price = yf.Ticker("SPY").history(period="1d")['Close'].iloc[-1]
-    except Exception:
-        spy_price = 500.0  # 斷線時的防呆預設值
+    except:
+        spy_price = 500.0 
 
-    total_portfolio_beta_delta = 0.0
-
-    # 1. 依 Symbol 分組整理持倉
     positions_by_symbol = {}
     for row in portfolio_rows:
-        symbol = row[0]
-        positions_by_symbol.setdefault(symbol, []).append(row)
+        positions_by_symbol.setdefault(row[0], []).append(row)
 
-    # 2. 逐一 Symbol 處理
     for symbol, rows in positions_by_symbol.items():
         try:
             ticker = yf.Ticker(symbol)
             hist = ticker.history(period="1d")
             if hist.empty: continue
             current_stock_price = hist['Close'].iloc[-1]
-            
-            # 取得該股票相對於大盤的 Beta 值
-            try:
-                beta = ticker.info.get('beta', 1.0)
-                if beta is None: beta = 1.0
-            except:
-                beta = 1.0
-                
+            beta = ticker.info.get('beta', 1.0) or 1.0
             option_chains_cache = {}
 
             for row in rows:
                 _, opt_type, strike, expiry, entry_price, quantity = row
                 
+                if expiry not in option_chains_cache:
+                    option_chains_cache[expiry] = ticker.option_chain(expiry)
+                
+                chain_data = option_chains_cache[expiry].calls if opt_type == "call" else option_chains_cache[expiry].puts
+                contract = chain_data[chain_data['strike'] == strike]
+                if contract.empty: continue
+                
+                current_price = contract['lastPrice'].iloc[0]
+                iv = contract['impliedVolatility'].iloc[0]
+                
+                exp_date = datetime.strptime(expiry, '%Y-%m-%d').date()
+                dte = (exp_date - today).days
+                t_years = max(dte, 1) / 365.0 
+                
+                # 計算 Greeks
+                flag = 'c' if opt_type == 'call' else 'p'
                 try:
-                    if expiry not in option_chains_cache:
-                        option_chains_cache[expiry] = ticker.option_chain(expiry)
-                    
-                    opt_chain = option_chains_cache[expiry]
-                    chain_data = opt_chain.calls if opt_type == "call" else opt_chain.puts
-                    contract = chain_data[chain_data['strike'] == strike]
-                    if contract.empty: continue
-                    
-                    current_price = contract['lastPrice'].iloc[0]
-                    iv = contract['impliedVolatility'].iloc[0]
-                    
-                    exp_date = datetime.strptime(expiry, '%Y-%m-%d').date()
-                    dte = (exp_date - today).days
-                    t_years = max(dte, 1) / 365.0 
-                    
-                    # 計算單一合約的 Delta
-                    flag = 'c' if opt_type == 'call' else 'p'
-                    try:
-                        current_delta = calculate_contract_delta({'impliedVolatility': iv, 'strike': strike}, current_stock_price, t_years, flag)
-                    except Exception:
-                        current_delta = 0.0
+                    current_delta = delta(flag, current_stock_price, strike, t_years, RISK_FREE_RATE, iv)
+                    # 🔥 計算年化 Theta，並除以 365 轉換為每日 Theta
+                    daily_theta = theta(flag, current_stock_price, strike, t_years, RISK_FREE_RATE, iv) / 365.0
+                except Exception:
+                    current_delta, daily_theta = 0.0, 0.0
 
-                    # ==========================================
-                    # 🔥 投資組合宏觀風險精算 (Beta-Weighted Delta)
-                    # ==========================================
-                    # 1. 換算為部位總 Delta (留意賣方 quantity 為負數)
-                    position_delta = current_delta * quantity * 100
-                    
-                    # 2. Beta 與價格權重縮放
-                    beta_weight = beta * (current_stock_price / spy_price)
-                    
-                    # 3. 算出該部位等同於多少股 SPY 的 Delta
-                    spx_weighted_delta = position_delta * beta_weight
-                    total_portfolio_beta_delta += spx_weighted_delta
+                # 宏觀數據累加
+                position_delta = current_delta * quantity * 100
+                spx_weighted_delta = position_delta * beta * (current_stock_price / spy_price)
+                total_portfolio_beta_delta += spx_weighted_delta
+                
+                # 買方 Theta 為負，賣方 quantity 為負，負負得正表示賣方收取代價
+                position_theta = daily_theta * quantity * 100
+                total_portfolio_theta += position_theta
 
-                    # 動態防禦決策樹
-                    status = "⏳ 繼續持有"
-                    
-                    if quantity < 0: 
-                        pnl_pct = (entry_price - current_price) / entry_price
-                        if pnl_pct >= 0.50:
-                            status = "✅ 建議停利 (獲利達 50%) - Buy to Close"
-                        elif pnl_pct <= -1.50:
-                            status = "☠️ 黑天鵝警戒 (虧損達 150%) - 強制停損"
-                        elif opt_type == 'put' and current_delta <= -0.40:
-                            status = "🚨 動態轉倉 (Delta 擴張) - 執行 Roll Down and Out"
-                        elif opt_type == 'call' and current_delta >= 0.40:
-                            status = "🚨 動態轉倉 (Delta 擴張) - 執行 Roll Up and Out"
-                        elif dte <= 14 and pnl_pct < 0:
-                            status = "⚠️ 期限防禦 (DTE < 14) - 迴避 Gamma 爆發，建議轉倉"
-                    else:
-                        pnl_pct = (current_price - entry_price) / entry_price
-                        if pnl_pct >= 1.0:
-                            status = "✅ 建議停利 (獲利達 100%) - Sell to Close"
-                        elif dte <= 14:
-                            status = "🚨 動能衰竭 (DTE < 14) - 建議平倉保留殘值"
-                        elif pnl_pct <= -0.50:
-                            status = "⚠️ 停損警戒 (本金回撤 50%)"
+                # 防禦決策樹判定
+                pnl_pct = (entry_price - current_price) / entry_price if quantity < 0 else (current_price - entry_price) / entry_price
+                status = _evaluate_defense_status(quantity, opt_type, pnl_pct, current_delta, dte)
 
-                    # 報告中加入等效 SPY Delta 的顯示
-                    line = (f"**{symbol}** {expiry} ${strike} {opt_type.upper()}\n"
-                            f"└ 成本: `${entry_price:.2f}` | 現價: `${current_price:.2f}` | 損益: `{pnl_pct*100:+.1f}%`\n"
-                            f"└ DTE: `{dte}` 天 | 原始 Delta: `{current_delta:.3f}` | SPY 等效 Delta: `{spx_weighted_delta:+.1f}`\n"
-                            f"└ 動作: {status}")
-                    report_lines.append(line)
-
-                except Exception as inner_e:
-                    print(f"處理持倉 {symbol} {expiry} 錯誤: {inner_e}")
-        
+                # 生成單筆報告
+                line = (f"**{symbol}** {expiry} ${strike} {opt_type.upper()}\n"
+                        f"└ 成本: `${entry_price:.2f}` | 現價: `${current_price:.2f}` | 損益: `{pnl_pct*100:+.1f}%`\n"
+                        f"└ DTE: `{dte}` 天 | SPY 等效 Delta: `{spx_weighted_delta:+.1f}` | 每日 Theta: `${position_theta:+.2f}`\n"
+                        f"└ 動作: {status}")
+                report_lines.append(line)
         except Exception as e:
-            print(f"處理 Symbol {symbol} 發生總體錯誤: {e}")
+            print(f"處理 Symbol {symbol} 發生錯誤: {e}")
             continue
 
-    # ==========================================
-    # 宏觀風險診斷報告 (附加於列表最下方)
-    # ==========================================
-    if report_lines:
-        report_lines.append("") # 空行分隔
-        report_lines.append("🌐 **【宏觀系統性風險評估 (SPY Beta-Weighted)】**")
-        report_lines.append(f"└ 投資組合淨 Delta: **`{total_portfolio_beta_delta:+.2f}`** (等同持有大盤股數)")
-        
-        # 避險邏輯判定 (設定閥值為 ±50 股 SPY 曝險)
-        if total_portfolio_beta_delta > 50:
-            advice = "🚨 **多頭曝險過高**：大盤若發生回調，您的部位將受重創。建議建立 SPY 避險空單 (如 BTO Put) 中和。"
-        elif total_portfolio_beta_delta < -50:
-            advice = "🚨 **空頭曝險過高**：大盤若發生強勢軋空，您的部位將面臨風險。建議建立大盤避險多單。"
-        else:
-            advice = "✅ **風險中性 (Delta Neutral)**：您的帳戶對大盤漲跌免疫力佳，受到系統性風險影響較小。"
-            
-        report_lines.append(f"└ 經理人建議: {advice}")
-
-        # ==========================================
-        # 投資組合相關性矩陣 (Correlation Matrix Risk)
-        # ==========================================
-        symbols = list(positions_by_symbol.keys())
-        if len(symbols) > 1:
-            report_lines.append("") 
-            report_lines.append("🕸️ **【非系統性集中風險 (Idiosyncratic Concentration)】**")
-            try:
-                # 抓取 60 日歷史收盤價建立報酬率矩陣
-                hist_data = yf.download(symbols, period="60d", progress=False)['Close']
-                
-                # yf.download 單一標的防呆機制
-                if isinstance(hist_data, pd.Series):
-                    hist_data = hist_data.to_frame(name=symbols[0])
-                
-                # 計算日報酬率 (Percentage Change)
-                returns = hist_data.pct_change().dropna()
-                
-                # 建立 Pearson 相關係數矩陣
-                corr_matrix = returns.corr()
-
-                high_corr_pairs = []
-                # 遍歷對稱矩陣的上半部，尋找高度正相關配對
-                for i in range(len(corr_matrix.columns)):
-                    for j in range(i+1, len(corr_matrix.columns)):
-                        sym1 = corr_matrix.columns[i]
-                        sym2 = corr_matrix.columns[j]
-                        rho = corr_matrix.iloc[i, j]
-                        
-                        # 閥值設定：ρ > 0.75 視為具備高度板塊連動性
-                        if rho > 0.75:
-                            high_corr_pairs.append((sym1, sym2, rho))
-
-                report_lines.append(f"└ 掃描 {len(symbols)} 檔標的之 60 日 Pearson 相關係數")
-                
-                if high_corr_pairs:
-                    report_lines.append("🚨 **警告：發現高度正相關板塊重疊**")
-                    for sym1, sym2, rho in high_corr_pairs:
-                        report_lines.append(f"   ⚠️ `{sym1}` & `{sym2}`: 相關係數 `ρ = {rho:.2f}`")
-                    report_lines.append("   👉 經理人建議: 若板塊發生利空，此類部位將發生 Gamma 同步擴張，建議平倉或轉倉降載。")
-                else:
-                    report_lines.append("✅ **分散性良好**：未發現相關係數 ρ > 0.75 的重疊曝險，板塊防禦力佳。")
-
-            except Exception as e:
-                print(f"相關性矩陣運算失敗: {e}")
+    # 組合尾部風險報告
+    report_lines.extend(_calculate_macro_risk(total_portfolio_beta_delta, total_portfolio_theta, user_capital))
+    report_lines.extend(_analyze_correlation(positions_by_symbol))
 
     return report_lines
