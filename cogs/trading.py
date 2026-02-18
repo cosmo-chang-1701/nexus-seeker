@@ -183,14 +183,17 @@ class TradingCog(commands.Cog):
                         status = "⚠️ **持倉高風險**" if sym in symbols_data['port'] else "👀 觀察清單"
                         alerts.append(f"**{sym}** ({status})\n└ 📅 財報日: `{e_date}` (倒數 **{days_left}** 天)")
 
-            if alerts:
-                user = await self.bot.fetch_user(uid)
-                if user:
+            user = await self.bot.fetch_user(uid)
+            if user:
+                if alerts:
                     embed = discord.Embed(title="🚨 【盤前財報季雷達預警】", description="\n\n".join(alerts), color=discord.Color.red())
-                    try:
-                        await user.send(embed=embed)
-                    except discord.Forbidden:
-                        pass # 使用者關閉了私訊功能
+                else:
+                    scanned_list = "、".join([f"`{s}`" for s in sorted(combined_symbols)])
+                    embed = discord.Embed(title="✅ 【盤前財報季雷達掃描完畢】", description=f"已掃描：{scanned_list}\n\n近 3 日內無財報風險，安全過關！", color=discord.Color.green())
+                try:
+                    await user.send(embed=embed)
+                except discord.Forbidden:
+                    pass # 使用者關閉了私訊功能
 
     @tasks.loop(minutes=30)
     async def dynamic_market_scanner(self):
