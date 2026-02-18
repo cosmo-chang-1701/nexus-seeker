@@ -233,7 +233,6 @@ class TradingCog(commands.Cog):
         logger.info("盤中動態巡邏機已掛載，將每 30 分鐘偵測一次開盤狀態。")
 
     @app_commands.command(name="force_scan", description="[Admin] 立即手動執行全站掃描 (不論開盤時間)")
-    @app_commands.checks.has_permissions(administrator=True)
     async def force_scan(self, interaction: discord.Interaction):
         logger.info(f"Admin {interaction.user.name} ({interaction.user.id}) triggered force_scan")
         await interaction.response.send_message("🚀 強制啟動全站掃描中...", ephemeral=True)
