@@ -19,6 +19,7 @@ class TradingCog(commands.Cog):
         self.pre_market_risk_monitor.start()
         self.dynamic_market_scanner.start()
         self.dynamic_after_market_report.start()
+        self.last_notified_target = None
         logger.info("TradingCog loaded. Background tasks started.")
 
     def cog_unload(self):
@@ -186,15 +187,36 @@ class TradingCog(commands.Cog):
                     except discord.Forbidden:
                         pass # 使用者關閉了私訊功能
 
-    @tasks.loop()
+    @tasks.loop(minutes=30)
     async def dynamic_market_scanner(self):
-        """09:45：盤中掃描機會 (依使用者分發私訊)"""
-        logger.info("Starting dynamic_market_scanner task.")
-        target_time = market_time.get_next_market_target_time(reference="open", offset_minutes=15)
-        await self._notify_next_schedule("盤中動態掃描", target_time)
-        await asyncio.sleep(market_time.get_sleep_seconds(target_time))
+        """盤中動態巡邏：每 30 分鐘心跳檢查，僅在盤中 (09:45後) 執行掃描"""
         
+        # 1. 計算下一次合法的「盤中掃描起點」(開盤 + 15分)
+        target_time = market_time.get_next_market_target_time(reference="open", offset_minutes=15)
+        
+        # 🔥 2. 推播通知邏輯：如果是「新的」目標時間，就發送通知並記錄下來
+        if target_time and target_time != self.last_notified_target:
+            await self._notify_next_schedule("盤中動態掃描", target_time)
+            self.last_notified_target = target_time  # 更新記憶，確保同一個日子只會通知一次
+
+        # 3. 狀態檢查：如果現在美股未開盤（含週末、國定假日、盤前盤後），直接略過
+        if not market_time.is_market_open():
+            return
+                
+        # 4. 避開剛開盤的極端洗盤期 (09:30 - 09:44)
+        now_ny = datetime.now(market_time.ny_tz)
+        if now_ny.hour == 9 and now_ny.minute < 45:
+            return
+
+        # 5. 執行核心掃描邏輯 (傳入 is_auto=True 讓系統套用 4 小時推播冷卻機制)
+        logger.info("🕒 [盤中掃描] 美股交易時段內，啟動動態雷達...")
         await self._run_market_scan_logic(is_auto=True)
+
+    @dynamic_market_scanner.before_loop
+    async def before_dynamic_market_scanner(self):
+        """確保機器人完全啟動後才開始執行迴圈"""
+        await self.bot.wait_until_ready()
+        logger.info("盤中動態巡邏機已掛載，將每 30 分鐘偵測一次開盤狀態。")
 
     @app_commands.command(name="force_scan", description="[Admin] 立即手動執行全站掃描 (不論開盤時間)")
     async def force_scan(self, interaction: discord.Interaction):

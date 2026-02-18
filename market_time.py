@@ -41,3 +41,26 @@ def get_sleep_seconds(target_time):
 
     sleep_secs = (target_time - datetime.now(ny_tz)).total_seconds()
     return max(0.0, sleep_secs)
+
+def is_market_open():
+    """
+    判斷當下這一秒，美股是否正在常規交易時間內。
+    (精準避開週末、國定假日，以及如感恩節前夕的提前收市)
+    """
+    # 1. 取得當下的美東時間
+    now_ny = datetime.now(ny_tz)
+    
+    # 2. 查詢「今天」的紐交所行事曆
+    schedule = nyse_calendar.schedule(start_date=now_ny.date(), end_date=now_ny.date())
+    
+    # 3. 如果回傳為空，代表今天是週末或國定假日休市
+    if schedule.empty:
+        return False 
+        
+    # 4. 取得今天的確切開盤與收盤時間，並強制轉換為美東時區
+    row = schedule.iloc[0]
+    market_open = row['market_open'].tz_convert(ny_tz).to_pydatetime()
+    market_close = row['market_close'].tz_convert(ny_tz).to_pydatetime()
+    
+    # 5. 判斷當下時間是否落在開盤與收盤之間
+    return market_open <= now_ny <= market_close
