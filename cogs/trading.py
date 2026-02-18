@@ -19,6 +19,11 @@ class TradingCog(commands.Cog):
         self.pre_market_risk_monitor.start()
         self.dynamic_market_scanner.start()
         self.dynamic_after_market_report.start()
+
+        # 4小時冷卻機制
+        self.signal_cooldowns = {}
+        self.COOLDOWN_HOURS = 4
+
         self.last_notified_target = None
         logger.info("TradingCog loaded. Background tasks started.")
 
@@ -263,34 +268,55 @@ class TradingCog(commands.Cog):
                 if sym in scan_results:
                     user_alerts.setdefault(uid, []).append(scan_results[sym])
 
+            now = datetime.now()
             # 3. 發送私訊
             for uid, alerts in user_alerts.items():
                 user = await self.bot.fetch_user(uid)
                 if user:
                     try:
-                        # 🔥 讀取該名使用者的專屬資金
+                        # 讀取該名使用者的專屬資金
                         user_capital = database.get_user_capital(uid)
-                        
-                        if is_auto:
-                            header = "🕒 **美股已開盤 15 分鐘，為您精算出以下機會：**"
-                        else:
-                            trigger_name = triggered_by.display_name if triggered_by else "Admin"
-                            header = f"🔧 **管理員 {trigger_name} 手動觸發了即時掃描：**"
 
-                        await user.send(header)
+                        # 取得或初始化該使用者的冷卻紀錄字典
+                        user_cooldowns = self.signal_cooldowns.setdefault(uid, {})
+
+                        # 用來存放「通過冷卻檢查」的最終發送清單
+                        valid_alerts = []
+
                         for data in alerts:
-                            await user.send(embed=self._create_embed(data, user_capital))
-                    except discord.Forbidden:
-                        pass
+                            sym = data['symbol']
                         
-            # 手動觸發完成通知
-            if not is_auto and triggered_by:
-                await triggered_by.send("✅ **掃描與分發完成。**")
+                            # 🛡️ 冷卻防護判定：只有「自動排程 (is_auto=True)」才需要檢查冷卻
+                            if is_auto:
+                                last_sent_time = user_cooldowns.get(sym)
+                                if last_sent_time:
+                                    # 計算距離上次發送過了幾秒
+                                    time_diff = (now - last_sent_time).total_seconds()
+                                    # 如果時間差小於設定的冷卻秒數 (4小時 * 3600秒)
+                                    if time_diff < (self.COOLDOWN_HOURS * 3600):
+                                        logger.info(f"[{sym}] 處於 {self.COOLDOWN_HOURS} 小時冷卻期內，略過重複推播。")
+                                        continue  # 觸發冷卻！直接跳過這個標的，不加入 valid_alerts
+                            # 通過冷卻檢查 (或是手動強制掃描 is_auto=False)，加入發送清單
+                            valid_alerts.append(data)
 
+                            # 🔄 更新大腦記憶：只有自動排程才更新冷卻時間
+                            # (這樣設計是為了避免您手動 /force_scan 時，意外重置了原本的冷卻計時器)
+                            if is_auto:
+                                user_cooldowns[sym] = now
+
+                        # 只有當 valid_alerts 裡面有東西時，才真正呼叫 Discord API 發送訊息
+                        if valid_alerts:
+                            try:
+                                title = "📡 **【盤中動態掃描】發現建倉機會：**" if is_auto else "⚡ **【管理員強制掃描】雷達結果：**"
+                                await user.send(title)
+                                for data in valid_alerts:
+                                    await user.send(embed=self._create_embed(data, user_capital))
+                            except Exception as e:
+                                logger.error(f"無法發送私訊給 User ID {uid}: {e}")
+                    except discord.Forbidden:
+                        pass  # 使用者關閉了私訊功能
         except Exception as e:
-            if not is_auto and triggered_by:
-                await triggered_by.send(f"❌ **掃描執行發生錯誤**: {str(e)}")
-            raise e
+            logger.error(f"掃描邏輯執行錯誤: {e}")
 
     @tasks.loop()
     async def dynamic_after_market_report(self):
