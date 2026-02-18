@@ -34,11 +34,11 @@ def _evaluate_defense_status(quantity, opt_type, pnl_pct, current_delta, dte):
             
     return status
 
-def _calculate_macro_risk(total_beta_delta, total_theta, user_capital):
+def _calculate_macro_risk(total_beta_delta, total_theta, total_margin_used, user_capital):
     """
-    計算投資組合的宏觀系統性風險 (SPY Beta-Weighted) 與 Theta 收益率
+    計算投資組合的宏觀系統性風險、Theta 收益率與資金熱度極限 (Portfolio Heat)
     """
-    lines = ["", "🌐 **【宏觀系統性風險與現金流評估】**"]
+    lines = ["", "🌐 **【宏觀系統性風險與資金水位評估】**"]
     
     # 1. 系統性方向風險
     lines.append(f"└ 投資組合淨 Delta: **`{total_beta_delta:+.2f}`** (等同持有 SPY 股數)")
@@ -49,16 +49,26 @@ def _calculate_macro_risk(total_beta_delta, total_theta, user_capital):
     else:
         lines.append("   ✅ 風險中性 (Delta Neutral)：受系統性崩盤影響較小。")
 
-    # 🔥 2. Theta 收益率精算
+    # 2. Theta 收益率精算
     theta_yield = (total_theta / user_capital) * 100 if user_capital > 0 else 0
     lines.append(f"└ 預估每日 Theta 現金流: **`${total_theta:+.2f}`** (佔總資金 `{theta_yield:.3f}%`)")
-    
     if theta_yield < 0.05:
         lines.append("   ⚠️ 資金利用率過低：Theta 收益率未達 0.05%，可尋找高 VRP 標的建倉。")
     elif theta_yield > 0.30:
         lines.append("   ⚠️ 時間價值曝險過度：Theta 收益率 > 0.3%，暗示承擔了極高的尾部風險。")
     else:
         lines.append("   ✅ 現金流健康：符合機構級 0.05% ~ 0.3% 之每日收租標準。")
+
+    # 🔥 3. 新增：資金熱度極限 (Portfolio Heat & Margin-to-Equity Ratio)
+    portfolio_heat = (total_margin_used / user_capital) * 100 if user_capital > 0 else 0
+    lines.append(f"└ 總保證金佔用 (Portfolio Heat): **`${total_margin_used:,.2f}`** (佔總資金 `{portfolio_heat:.1f}%`)")
+    
+    if portfolio_heat > 50.0:
+        lines.append("   🚨 **爆倉警戒：資金熱度 > 50%！強烈建議停止建倉，保留現金流動性以防波動率擴張 (Margin Call)。**")
+    elif portfolio_heat > 30.0:
+        lines.append("   ⚠️ **資金警戒：資金熱度 > 30%。已達常規機構滿水位，請嚴格審視新進場訊號。**")
+    else:
+        lines.append("   ✅ **資金水位健康：保留了充裕的流動性，可安全承擔新的高期望值部位。**")
         
     return lines
 
@@ -110,7 +120,8 @@ def check_portfolio_status_logic(portfolio_rows, user_capital=50000.0):
     today = datetime.now().date()
     
     total_portfolio_beta_delta = 0.0
-    total_portfolio_theta = 0.0  # 新增：紀錄投資組合總 Theta
+    total_portfolio_theta = 0.0
+    total_margin_used = 0.0  # 🔥 新增：追蹤投資組合總保證金佔用
 
     try:
         spy_price = yf.Ticker("SPY").history(period="1d")['Close'].iloc[-1]
@@ -151,17 +162,23 @@ def check_portfolio_status_logic(portfolio_rows, user_capital=50000.0):
                 flag = 'c' if opt_type == 'call' else 'p'
                 try:
                     current_delta = delta(flag, current_stock_price, strike, t_years, RISK_FREE_RATE, iv)
-                    # 🔥 計算年化 Theta，並除以 365 轉換為每日 Theta
                     daily_theta = theta(flag, current_stock_price, strike, t_years, RISK_FREE_RATE, iv) / 365.0
                 except Exception:
                     current_delta, daily_theta = 0.0, 0.0
 
-                # 宏觀數據累加
+                # 🔥 宏觀數據累加：計算保證金佔用 (Margin Required)
+                if quantity < 0:
+                    # 以最保守的 Cash-Secured Put / Covered Call 邏輯計算鎖定資金
+                    if opt_type == 'put':
+                        margin_locked = strike * 100 * abs(quantity)
+                    else:
+                        margin_locked = current_stock_price * 100 * abs(quantity)
+                    total_margin_used += margin_locked
+
                 position_delta = current_delta * quantity * 100
                 spx_weighted_delta = position_delta * beta * (current_stock_price / spy_price)
                 total_portfolio_beta_delta += spx_weighted_delta
                 
-                # 買方 Theta 為負，賣方 quantity 為負，負負得正表示賣方收取代價
                 position_theta = daily_theta * quantity * 100
                 total_portfolio_theta += position_theta
 
@@ -179,8 +196,8 @@ def check_portfolio_status_logic(portfolio_rows, user_capital=50000.0):
             print(f"處理 Symbol {symbol} 發生錯誤: {e}")
             continue
 
-    # 組合尾部風險報告
-    report_lines.extend(_calculate_macro_risk(total_portfolio_beta_delta, total_portfolio_theta, user_capital))
+    # 🔥 組合尾部風險報告 (將 total_margin_used 傳入)
+    report_lines.extend(_calculate_macro_risk(total_portfolio_beta_delta, total_portfolio_theta, total_margin_used, user_capital))
     report_lines.extend(_analyze_correlation(positions_by_symbol))
 
     return report_lines
