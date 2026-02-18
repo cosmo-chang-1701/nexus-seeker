@@ -152,3 +152,21 @@ def get_user_capital(user_id):
     row = cursor.fetchone()
     conn.close()
     return row[0] if row else 100000.0
+
+def get_all_user_ids():
+    """取得資料庫中所有出現過的使用者 ID"""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    
+    # 使用 UNION 此處會自動去重
+    cursor.execute('''
+        SELECT user_id FROM portfolio
+        UNION
+        SELECT user_id FROM watchlist
+        UNION
+        SELECT user_id FROM user_settings
+    ''')
+    
+    rows = cursor.fetchall()
+    conn.close()
+    return [row[0] for row in rows]
