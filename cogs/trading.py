@@ -9,6 +9,7 @@ import logging
 import database
 import market_math
 import market_time
+import market_analysis.portfolio
 
 ny_tz = ZoneInfo("America/New_York")
 logger = logging.getLogger(__name__)
@@ -135,7 +136,7 @@ class TradingCog(commands.Cog):
     # ==========================================
     # 動態排程任務 (私訊分發引擎)
     # ==========================================
-    @tasks.loop()
+    @tasks.loop(count=1)
     async def pre_market_risk_monitor(self):
         """09:00：盤前財報警報 (依使用者分發私訊)"""
         logger.info("Starting pre_market_risk_monitor task.")
@@ -195,6 +196,10 @@ class TradingCog(commands.Cog):
                 except discord.Forbidden:
                     pass # 使用者關閉了私訊功能
 
+    @pre_market_risk_monitor.before_loop
+    async def before_pre_market_risk_monitor(self):
+        await self.bot.wait_until_ready()
+
     @tasks.loop(minutes=30)
     async def dynamic_market_scanner(self):
         """盤中動態巡邏：每 30 分鐘心跳檢查，僅在盤中 (09:45後) 執行掃描"""
@@ -227,6 +232,7 @@ class TradingCog(commands.Cog):
         logger.info("盤中動態巡邏機已掛載，將每 30 分鐘偵測一次開盤狀態。")
 
     @app_commands.command(name="force_scan", description="[Admin] 立即手動執行全站掃描 (不論開盤時間)")
+    @app_commands.checks.has_permissions(administrator=True)
     async def force_scan(self, interaction: discord.Interaction):
         logger.info(f"Admin {interaction.user.name} ({interaction.user.id}) triggered force_scan")
         await interaction.response.send_message("🚀 強制啟動全站掃描中...", ephemeral=True)
@@ -271,7 +277,7 @@ class TradingCog(commands.Cog):
                 if sym in scan_results:
                     user_alerts.setdefault(uid, []).append(scan_results[sym])
 
-            now = datetime.now()
+            now = datetime.now(ny_tz)
             # 3. 發送私訊
             for uid, alerts in user_alerts.items():
                 user = await self.bot.fetch_user(uid)
@@ -321,7 +327,7 @@ class TradingCog(commands.Cog):
         except Exception as e:
             logger.error(f"掃描邏輯執行錯誤: {e}")
 
-    @tasks.loop()
+    @tasks.loop(count=1)
     async def dynamic_after_market_report(self):
         """16:15：持倉結算與防禦建議 (依使用者分發私訊)"""
         logger.info("Starting dynamic_after_market_report task.")
@@ -353,6 +359,10 @@ class TradingCog(commands.Cog):
                         await user.send("📊 **【盤後結算報告：部位損益與建議】**", embed=embed)
                     except discord.Forbidden:
                         pass
+
+    @dynamic_after_market_report.before_loop
+    async def before_dynamic_after_market_report(self):
+        await self.bot.wait_until_ready()
 
     def _create_embed(self, data, user_capital=100000.0):
         colors = {"STO_PUT": discord.Color.green(), "STO_CALL": discord.Color.red(), "BTO_CALL": discord.Color.blue(), "BTO_PUT": discord.Color.orange()}
@@ -437,16 +447,20 @@ class TradingCog(commands.Cog):
         
         if "STO_PUT" in data['strategy']:
             breakeven = data['strike'] - data['bid']
+            safe = breakeven < em_lower
+            safety_text = "✅ 防線已建構於預期暴跌區間外" if safe else "⚠️ 損益兩平點位於預期波動區間內，風險較高"
             em_info = f"1σ 預期下緣: `${em_lower:.2f}` (預期最大跌幅 -${em:.2f})\n" \
                       f"🛡️ 損益兩平點: **`${breakeven:.2f}`**\n" \
-                      f"✅ 防線已建構於預期暴跌區間外"
+                      f"{safety_text}"
             embed.add_field(name="🎯 機率圓錐 (1σ 預期波動)", value=em_info, inline=False)
             
         elif "STO_CALL" in data['strategy']:
             breakeven = data['strike'] + data['bid']
+            safe = breakeven > em_upper
+            safety_text = "✅ 防線已建構於預期暴漲區間外" if safe else "⚠️ 損益兩平點位於預期波動區間內，風險較高"
             em_info = f"1σ 預期上緣: `${em_upper:.2f}` (預期最大漲幅 +${em:.2f})\n" \
                       f"🛡️ 損益兩平點: **`${breakeven:.2f}`**\n" \
-                      f"✅ 防線已建構於預期暴漲區間外"
+                      f"{safety_text}"
             embed.add_field(name="🎯 機率圓錐 (1σ 預期波動)", value=em_info, inline=False)
 
         # 報價與流動性分析 (Bid/Ask & Spread)
