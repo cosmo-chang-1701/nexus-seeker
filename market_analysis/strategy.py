@@ -8,6 +8,8 @@ from config import TARGET_DELTAS
 from .greeks import calculate_contract_delta
 from .data import get_next_earnings_date
 
+import logging
+
 def _calculate_technical_indicators(df):
     """計算技術指標與波動率位階"""
     try:
@@ -171,10 +173,14 @@ def _find_target_expiry(expirations, today, min_dte, max_dte):
 
 def _get_best_contract_data(ticker, target_expiry_date, opt_type, target_delta, price, days_to_expiry):
     """取得最佳合約與 Greeks"""
+
+    # 強行靜音 yfinance 的 ETF 404 報錯洗版
+    logging.getLogger('yfinance').setLevel(logging.CRITICAL)
+
     try:
         # 抓取年化股息殖利率 (Annual Dividend Yield)
-        # 若為無配息股票 (如 TSLA)，yfinance 可能回傳 None，預設給 0.0
-        dividend_yield = ticker.info.get('dividendYield', 0.0)
+        info = ticker.info
+        dividend_yield = info.get('dividendYield', 0.0) if info else 0.0
         if dividend_yield is None:
             dividend_yield = 0.0
     except Exception:

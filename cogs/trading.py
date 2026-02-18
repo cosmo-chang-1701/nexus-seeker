@@ -216,9 +216,10 @@ class TradingCog(commands.Cog):
         if not market_time.is_market_open():
             return
                 
-        # 4. 避開剛開盤的極端洗盤期 (09:30 - 09:44)
+        # 4. 避開開盤初期的「造市商無報價期」(09:30 - 09:59)
+        # 確保在美東時間 10:00 之後，流動性最充沛時才開始掃描
         now_ny = datetime.now(market_time.ny_tz)
-        if now_ny.hour == 9 and now_ny.minute < 45:
+        if now_ny.hour == 9:
             return
 
         # 5. 執行核心掃描邏輯 (傳入 is_auto=True 讓系統套用 4 小時推播冷卻機制)
