@@ -134,6 +134,7 @@ class TradingCog(commands.Cog):
         """09:00：盤前財報警報 (依使用者分發私訊)"""
         logger.info("Starting pre_market_risk_monitor task.")
         target_time = market_time.get_next_market_target_time(reference="open", offset_minutes=-30)
+        await self._notify_next_schedule("盤前財報警報", target_time)
         await asyncio.sleep(market_time.get_sleep_seconds(target_time))
         
         today = datetime.now(ny_tz).date()
@@ -190,6 +191,7 @@ class TradingCog(commands.Cog):
         """09:45：盤中掃描機會 (依使用者分發私訊)"""
         logger.info("Starting dynamic_market_scanner task.")
         target_time = market_time.get_next_market_target_time(reference="open", offset_minutes=15)
+        await self._notify_next_schedule("盤中動態掃描", target_time)
         await asyncio.sleep(market_time.get_sleep_seconds(target_time))
         
         await self._run_market_scan_logic(is_auto=True)
@@ -273,6 +275,7 @@ class TradingCog(commands.Cog):
         """16:15：持倉結算與防禦建議 (依使用者分發私訊)"""
         logger.info("Starting dynamic_after_market_report task.")
         target_time = market_time.get_next_market_target_time(reference="close", offset_minutes=15)
+        await self._notify_next_schedule("盤後結算報告", target_time)
         await asyncio.sleep(market_time.get_sleep_seconds(target_time))
 
         all_portfolios = database.get_all_portfolio()
@@ -406,6 +409,19 @@ class TradingCog(commands.Cog):
         embed.add_field(name="Delta / 當前合約 IV", value=f"{data['delta']:.3f} / {data['iv']:.1%}")
         
         return embed
+
+    async def _notify_next_schedule(self, task_name, target_time):
+        """通知所有使用者下一次任務執行時間"""
+        if not target_time:
+            return
+        
+        # 使用 Discord Timestamp 讓時間自動轉換為使用者當地時區
+        unix_ts = int(target_time.timestamp())
+        msg = f"📅 **{task_name}** 下次執行時間: <t:{unix_ts}:F> (<t:{unix_ts}:R>)"
+        try:
+            await self.bot.notify_all_users(msg)
+        except Exception as e:
+            logger.warning(f"Failed to send schedule notification: {e}")
 
 async def setup(bot):
     await bot.add_cog(TradingCog(bot))
