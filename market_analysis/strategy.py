@@ -19,6 +19,8 @@ def _calculate_technical_indicators(df):
         hv_min = df['HV_20'].min()
         hv_max = df['HV_20'].max()
         hv_current = df['HV_20'].iloc[-1]
+        if pd.isna(hv_current):
+            return None
         hv_rank = ((hv_current - hv_min) / (hv_max - hv_min)) * 100 if hv_max > hv_min else 0.0
 
         df.ta.rsi(length=14, append=True)
@@ -49,14 +51,25 @@ def _determine_strategy_signal(indicators):
     # 確保 TARGET_DELTAS 存在，避免 import 失敗或 key error
     deltas = TARGET_DELTAS if TARGET_DELTAS else {}
 
+    # 1. 極端超賣/超買的反轉收租策略 (維持不變)
     if rsi < 35 and hv_rank >= 30:
-        return "STO_PUT", "put", deltas.get("STO_PUT", -0.16), 30, 45
+        return "STO_PUT", "put", deltas.get("STO_PUT", -0.20), 30, 45
     elif rsi > 65 and hv_rank >= 30:
-        return "STO_CALL", "call", deltas.get("STO_CALL", 0.16), 30, 45
+        return "STO_CALL", "call", deltas.get("STO_CALL", 0.20), 30, 45
+    # 2. 趨勢跟隨策略 (動態切換買賣方)
     elif price > sma20 and 50 <= rsi <= 65 and macd_hist > 0:
-        return "BTO_CALL", "call", deltas.get("BTO_CALL", 0.50), 14, 30
+        # 多頭趨勢：若波動率低，買 Call 以小博大；若波動率高，賣 Put 收租
+        if hv_rank < 50:
+            return "BTO_CALL", "call", deltas.get("BTO_CALL", 0.50), 14, 30
+        else:
+            return "STO_PUT", "put", deltas.get("STO_PUT", -0.20), 14, 30
     elif price < sma20 and 35 <= rsi <= 50 and macd_hist < 0:
-        return "BTO_PUT", "put", deltas.get("BTO_PUT", -0.50), 14, 30
+        # 空頭趨勢：若波動率低 (剛起跌)，買 Put 順勢；若波動率高 (已恐慌)，賣 Call 賺溢價
+        if hv_rank < 50:
+            return "BTO_PUT", "put", deltas.get("BTO_PUT", -0.50), 14, 30
+        else:
+            # 轉為賣方，賣出微 OTM 的 Call 來做空
+            return "STO_CALL", "call", deltas.get("STO_CALL", 0.20), 14, 30
     else:
         return None, None, 0, 0, 0
 
@@ -87,20 +100,20 @@ def _calculate_mmm(ticker, price, today, symbol):
                     
                     # Call Price
                     calls_mmm = chain_mmm.calls
-                    atm_call_idx = (calls_mmm['strike'] - price).abs().argsort()[:1]
                     c_price = 0
-                    if not atm_call_idx.empty:
-                        atm_call = calls_mmm.iloc[atm_call_idx]
-                        c_bid, c_ask, c_last = atm_call['bid'].values[0], atm_call['ask'].values[0], atm_call['lastPrice'].values[0]
+                    if not calls_mmm.empty:
+                        atm_call_idx = (calls_mmm['strike'] - price).abs().idxmin()
+                        atm_call = calls_mmm.loc[atm_call_idx]
+                        c_bid, c_ask, c_last = atm_call['bid'], atm_call['ask'], atm_call['lastPrice']
                         c_price = (c_bid + c_ask)/2 if (c_bid > 0 and c_ask > 0) else c_last
 
                     # Put Price
                     puts_mmm = chain_mmm.puts
-                    atm_put_idx = (puts_mmm['strike'] - price).abs().argsort()[:1]
                     p_price = 0
-                    if not atm_put_idx.empty:
-                        atm_put = puts_mmm.iloc[atm_put_idx]
-                        p_bid, p_ask, p_last = atm_put['bid'].values[0], atm_put['ask'].values[0], atm_put['lastPrice'].values[0]
+                    if not puts_mmm.empty:
+                        atm_put_idx = (puts_mmm['strike'] - price).abs().idxmin()
+                        atm_put = puts_mmm.loc[atm_put_idx]
+                        p_bid, p_ask, p_last = atm_put['bid'], atm_put['ask'], atm_put['lastPrice']
                         p_price = (p_bid + p_ask)/2 if (p_bid > 0 and p_ask > 0) else p_last
                     
                     if price > 0:
@@ -130,12 +143,11 @@ def _calculate_term_structure(ticker, expirations, price, today):
             front_chain = ticker.option_chain(front_date).puts
             back_chain = ticker.option_chain(back_date).puts
             
-            front_iv_idx = (front_chain['strike'] - price).abs().argsort()[:1]
-            back_iv_idx = (back_chain['strike'] - price).abs().argsort()[:1]
-            
-            if not front_iv_idx.empty and not back_iv_idx.empty:
-                front_iv = front_chain.iloc[front_iv_idx]['impliedVolatility'].values[0]
-                back_iv = back_chain.iloc[back_iv_idx]['impliedVolatility'].values[0]
+            if not front_chain.empty and not back_chain.empty:
+                front_iv_idx = (front_chain['strike'] - price).abs().idxmin()
+                back_iv_idx = (back_chain['strike'] - price).abs().idxmin()
+                front_iv = front_chain.loc[front_iv_idx, 'impliedVolatility']
+                back_iv = back_chain.loc[back_iv_idx, 'impliedVolatility']
                 
                 if back_iv > 0.01:
                     ts_ratio = front_iv / back_iv
@@ -165,7 +177,7 @@ def _get_best_contract_data(ticker, target_expiry_date, opt_type, target_delta, 
         dividend_yield = ticker.info.get('dividendYield', 0.0)
         if dividend_yield is None:
             dividend_yield = 0.0
-    except:
+    except Exception:
         dividend_yield = 0.0
 
     try:
@@ -206,8 +218,10 @@ def _calculate_vertical_skew(opt_chain, price, days_to_expiry, strategy, symbol)
             calls_skew['bs_delta'] = calls_skew.apply(lambda row: calculate_contract_delta(row, price, t_years, 'c'), axis=1)
             puts_skew['bs_delta'] = puts_skew.apply(lambda row: calculate_contract_delta(row, price, t_years, 'p'), axis=1)
             
-            call_25 = calls_skew.iloc[(calls_skew['bs_delta'] - 0.25).abs().argsort()[:1]]
-            put_25 = puts_skew.iloc[(puts_skew['bs_delta'] - (-0.25)).abs().argsort()[:1]]
+            call_25_idx = (calls_skew['bs_delta'] - 0.25).abs().idxmin()
+            put_25_idx = (puts_skew['bs_delta'] - (-0.25)).abs().idxmin()
+            call_25 = calls_skew.loc[[call_25_idx]]
+            put_25 = puts_skew.loc[[put_25_idx]]
             
             if not call_25.empty and not put_25.empty:
                 iv_call_25 = call_25['impliedVolatility'].values[0]
@@ -252,7 +266,13 @@ def _validate_risk_and_liquidity(strategy, best_contract, price, hv_current, day
     vrp = iv - hv_current
     if strategy in ["STO_PUT", "STO_CALL"]:
         if vrp < 0:
-            print(f"[{symbol}] 剔除: VRP {vrp*100:.2f}% < 0 (IV 被低估，無風險溢酬)")
+            print(f"[{symbol}] 剔除: 賣方策略但 VRP {vrp*100:.2f}% < 0 (IV 被低估，無風險溢酬)")
+            return None
+
+    elif strategy in ["BTO_PUT", "BTO_CALL"]:
+        # 買方遇到過高溢價 (例如 > 3%)，直接擋下！
+        if vrp > 0.03: 
+            print(f"[{symbol}] 剔除: 買方策略但 VRP 高達 {vrp*100:.2f}% (保費遭恐慌暴拉，拒絕建倉)")
             return None
 
     # 3. 預期波動 (Expected Move)
@@ -276,17 +296,19 @@ def _validate_risk_and_liquidity(strategy, best_contract, price, hv_current, day
         "vrp": vrp, "expected_move": expected_move, "em_lower": em_lower, "em_upper": em_upper
     }
 
-def _calculate_sizing(strategy, best_contract, days_to_expiry):
+def _calculate_sizing(strategy, best_contract, days_to_expiry, expected_move=0.0):
     """計算資金效率與倉位大小"""
     aroc = 0.0
     alloc_pct = 0.0
     margin_per_contract = 0.0
     
     bid = best_contract['bid']
+    ask = best_contract['ask']
     strike = best_contract['strike']
     delta = best_contract['bs_delta']
     
     if strategy in ["STO_PUT", "STO_CALL"]:
+        # 賣方：以保證金為成本基礎
         margin_required = strike - bid # 粗估
         if margin_required > 0:
             aroc = (bid / margin_required) * (365.0 / max(days_to_expiry, 1)) * 100
@@ -295,9 +317,29 @@ def _calculate_sizing(strategy, best_contract, days_to_expiry):
                 b = bid / margin_required
                 p = 1.0 - abs(delta)
                 if b > 0:
-                    kelly_f = (p * (b + 1) - 1) / b
+                    q = 1.0 - p
+                    kelly_f = (p * b - q) / b
                     alloc_pct = min(max(kelly_f * 0.25, 0.0), 0.05)
                     margin_per_contract = margin_required * 100
+
+    elif strategy in ["BTO_CALL", "BTO_PUT"]:
+        # 買方：以權利金 (ask) 為最大風險
+        premium = ask
+        if premium > 0 and expected_move > 0:
+            # 預期報酬 = 預期波動 - 已付權利金，年化後得 AROC
+            potential_profit = expected_move - premium
+            aroc = (potential_profit / premium) * (365.0 / max(days_to_expiry, 1)) * 100 if potential_profit > 0 else 0.0
+            
+            if aroc >= 30.0:
+                # 買方 Kelly：p = |delta| (到價機率), b = 預期報酬/權利金
+                p = abs(delta)
+                b = potential_profit / premium if potential_profit > 0 else 0.0
+                if b > 0:
+                    q = 1.0 - p
+                    kelly_f = (p * b - q) / b
+                    # 買方更保守：quarter-Kelly，上限 3%
+                    alloc_pct = min(max(kelly_f * 0.25, 0.0), 0.03)
+            margin_per_contract = premium * 100
                     
     return aroc, alloc_pct, margin_per_contract
 
@@ -345,8 +387,10 @@ def analyze_symbol(symbol):
         if not risk_metrics: return None
 
         # 7. 倉位計算
-        aroc, alloc_pct, margin_per_contract = _calculate_sizing(strategy, best_contract, days_to_expiry)
+        aroc, alloc_pct, margin_per_contract = _calculate_sizing(strategy, best_contract, days_to_expiry, expected_move=risk_metrics['expected_move'])
         if strategy in ["STO_PUT", "STO_CALL"] and aroc < 15.0:
+            return None
+        if strategy in ["BTO_CALL", "BTO_PUT"] and aroc < 30.0:
             return None
 
         # 8. 組合結果
