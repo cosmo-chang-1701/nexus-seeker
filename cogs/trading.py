@@ -195,46 +195,70 @@ class TradingCog(commands.Cog):
 
     async def _run_market_scan_logic(self, is_auto=True, triggered_by=None):
         """共用的掃描核心邏輯"""
-        all_watchlists = database.get_all_watchlist() # [(user_id, symbol), ...]
-        if not all_watchlists: 
-            return
+        try:
+            all_watchlists = database.get_all_watchlist() # [(user_id, symbol), ...]
+            
+            if not all_watchlists:
+                if not is_auto and triggered_by:
+                     await triggered_by.send("⚠️ **全站觀察清單為空，無法執行掃描。**")
+                return
 
-        # 1. 提取所有不重複的標的進行掃描
-        unique_symbols = set(sym for uid, sym in all_watchlists)
-        scan_results = {}
-        
-        # 如果是手動觸發，可以選擇是否要發送「開始」通知，這裡簡化處理
-        
-        for sym in unique_symbols:
-            res = await asyncio.to_thread(market_math.analyze_symbol, sym)
-            if res: scan_results[sym] = res
-            await asyncio.sleep(0.5)
-
-        # 2. 根據使用者的訂閱清單分發結果
-        user_alerts = {}
-        for uid, sym in all_watchlists:
-            if sym in scan_results:
-                user_alerts.setdefault(uid, []).append(scan_results[sym])
-
-        # 3. 發送私訊
-        for uid, alerts in user_alerts.items():
-            user = await self.bot.fetch_user(uid)
-            if user:
+            # 1. 提取所有不重複的標的進行掃描
+            unique_symbols = set(sym for uid, sym in all_watchlists)
+            scan_results = {}
+            
+            # 如果是手動觸發，傳送開始訊息
+            if not is_auto and triggered_by:
+                await triggered_by.send(f"🔍 **開始掃描 {len(unique_symbols)} 檔標的...**")
+            
+            for sym in unique_symbols:
                 try:
-                    # 🔥 讀取該名使用者的專屬資金
-                    user_capital = database.get_user_capital(uid)
-                    
-                    if is_auto:
-                        header = "🕒 **美股已開盤 15 分鐘，為您精算出以下機會：**"
-                    else:
-                        trigger_name = triggered_by.display_name if triggered_by else "Admin"
-                        header = f"🔧 **管理員 {trigger_name} 手動觸發了即時掃描：**"
+                    res = await asyncio.to_thread(market_math.analyze_symbol, sym)
+                    if res: scan_results[sym] = res
+                except Exception as e:
+                    print(f"Error scanning {sym}: {e}")
+                await asyncio.sleep(0.5)
 
-                    await user.send(header)
-                    for data in alerts:
-                        await user.send(embed=self._create_embed(data, user_capital))
-                except discord.Forbidden:
-                    pass
+            # 若無任何結果且為手動觸發
+            if not scan_results:
+                if not is_auto and triggered_by:
+                    await triggered_by.send("📭 **本次掃描未發現符合策略的交易機會。**")
+                return
+
+            # 2. 根據使用者的訂閱清單分發結果
+            user_alerts = {}
+            for uid, sym in all_watchlists:
+                if sym in scan_results:
+                    user_alerts.setdefault(uid, []).append(scan_results[sym])
+
+            # 3. 發送私訊
+            for uid, alerts in user_alerts.items():
+                user = await self.bot.fetch_user(uid)
+                if user:
+                    try:
+                        # 🔥 讀取該名使用者的專屬資金
+                        user_capital = database.get_user_capital(uid)
+                        
+                        if is_auto:
+                            header = "🕒 **美股已開盤 15 分鐘，為您精算出以下機會：**"
+                        else:
+                            trigger_name = triggered_by.display_name if triggered_by else "Admin"
+                            header = f"🔧 **管理員 {trigger_name} 手動觸發了即時掃描：**"
+
+                        await user.send(header)
+                        for data in alerts:
+                            await user.send(embed=self._create_embed(data, user_capital))
+                    except discord.Forbidden:
+                        pass
+                        
+            # 手動觸發完成通知
+            if not is_auto and triggered_by:
+                await triggered_by.send("✅ **掃描與分發完成。**")
+
+        except Exception as e:
+            if not is_auto and triggered_by:
+                await triggered_by.send(f"❌ **掃描執行發生錯誤**: {str(e)}")
+            raise e
 
     @tasks.loop()
     async def dynamic_after_market_report(self):
