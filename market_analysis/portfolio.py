@@ -116,6 +116,7 @@ def _analyze_correlation(positions_by_symbol):
             lines.append("   ✅ 分散性良好：未發現 ρ > 0.75 的重疊曝險。")
     except Exception as e:
         print(f"相關性矩陣運算失敗: {e}")
+        lines.append(f"   ⚠️ 相關性矩陣運算失敗: {e}")
         
     return lines
 
@@ -136,7 +137,7 @@ def check_portfolio_status_logic(portfolio_rows, user_capital=50000.0):
 
     try:
         spy_price = yf.Ticker("SPY").history(period="1d")['Close'].iloc[-1]
-    except:
+    except Exception:
         spy_price = 500.0 
 
     positions_by_symbol = {}
@@ -178,7 +179,7 @@ def check_portfolio_status_logic(portfolio_rows, user_capital=50000.0):
                 flag = 'c' if opt_type == 'call' else 'p'
                 try:
                     current_delta = delta(flag, current_stock_price, strike, t_years, RISK_FREE_RATE, iv, dividend_yield)
-                    daily_theta = theta(flag, current_stock_price, strike, t_years, RISK_FREE_RATE, iv, dividend_yield) / 365.0
+                    daily_theta = theta(flag, current_stock_price, strike, t_years, RISK_FREE_RATE, iv, dividend_yield)
                     current_gamma = gamma(flag, current_stock_price, strike, t_years, RISK_FREE_RATE, iv, dividend_yield)
                 except Exception:
                     current_delta, daily_theta, current_gamma = 0.0, 0.0, 0.0
@@ -204,7 +205,10 @@ def check_portfolio_status_logic(portfolio_rows, user_capital=50000.0):
                 total_portfolio_gamma += spx_weighted_gamma
 
                 # 防禦決策樹判定
-                pnl_pct = (entry_price - current_price) / entry_price if quantity < 0 else (current_price - entry_price) / entry_price
+                if entry_price > 0:
+                    pnl_pct = (entry_price - current_price) / entry_price if quantity < 0 else (current_price - entry_price) / entry_price
+                else:
+                    pnl_pct = 0.0
                 status = _evaluate_defense_status(quantity, opt_type, pnl_pct, current_delta, dte)
 
                 # 生成單筆報告
