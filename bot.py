@@ -12,6 +12,8 @@ class NexusBot(commands.Bot):
         super().__init__(command_prefix='!', intents=intents)
 
     async def setup_hook(self):
+        await self.load_extension("cogs.portfolio")
+        await self.load_extension("cogs.watchlist")
         await self.load_extension("cogs.trading")
         try:
             synced = await self.tree.sync()
