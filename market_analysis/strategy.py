@@ -248,24 +248,128 @@ def _calculate_vertical_skew(opt_chain, price, days_to_expiry, strategy, symbol)
         
     return vertical_skew, skew_state
 
+def _evaluate_option_liquidity(option_data: dict) -> dict:
+    """
+    評估期權報價的流動性與買賣價差，回傳適合放入 Discord Embed 的狀態與建議。
+    
+    預期 option_data 包含:
+    - bid (float): 買價
+    - ask (float): 賣價
+    - oi (int): 未平倉量
+    - volume (int): 當日成交量
+    - dte (int): 距離到期天數
+    - delta (float): Delta 值 (正負皆可)
+    """
+    bid = option_data.get('bid', 0.0)
+    ask = option_data.get('ask', 0.0)
+    oi = option_data.get('oi', 0)
+    volume = option_data.get('volume', 0)
+    dte = option_data.get('dte', 0)
+    delta = abs(option_data.get('delta', 0.5)) # 取絕對值方便判斷價內外
+
+    # 基本防呆與計算
+    if ask <= 0 or bid < 0 or ask <= bid:
+        return {"status": "🔴 異常", "embed_msg": "報價異常 (Ask 需大於 Bid 且大於 0)", "is_pass": False}
+
+    mid_price = (bid + ask) / 2
+    abs_spread = ask - bid
+    rel_spread = abs_spread / mid_price
+
+    # ==========================================
+    # 第一道防線：基礎流動性過濾 (OI & Volume)
+    # ==========================================
+    if oi < 100 or volume < 10:
+        return {
+            "status": "🔴 極差", 
+            "embed_msg": f"流動性枯竭 (OI: {oi}, Vol: {volume})，滑價風險極高", 
+            "is_pass": False
+        }
+
+    # ==========================================
+    # 第二道防線：動態閾值設定 (Dynamic Thresholds)
+    # ==========================================
+    # 基準相對價差容忍度設為 10%
+    max_rel_spread = 0.10 
+    
+    # 遠月合約 (DTE > 90) 造市商風險大，放寬 5%
+    if dte > 90:
+        max_rel_spread += 0.05 
+        
+    # 深價內 (ITM, Delta > 0.8) 或 深價外 (OTM, Delta < 0.15) 流動性自然較差，放寬 5%
+    if delta > 0.80 or delta < 0.15:
+        max_rel_spread += 0.05 
+
+    # ==========================================
+    # 第三道防線：雙軌價差評估 (絕對 vs 相對)
+    # ==========================================
+    is_spread_valid = True
+    
+    if ask < 1.00:
+        # 【絕對價差檢驗】期權極度便宜時，相對價差會失真，改看絕對價差是否 <= $0.10
+        if abs_spread > 0.10:
+            is_spread_valid = False
+    else:
+        # 【相對價差檢驗】一般期權使用動態相對價差閾值
+        if rel_spread > max_rel_spread:
+            is_spread_valid = False
+
+    if not is_spread_valid:
+        return {
+            "status": "🔴 警示", 
+            "embed_msg": f"價差過寬 (Spread: {rel_spread:.1%}, 絕對值: ${abs_spread:.2f})", 
+            "is_pass": False
+        }
+
+    # ==========================================
+    # 第四階段：分級與 Discord 呈現建議
+    # ==========================================
+    # 嚴格依照 Spread 比例劃分：< 5% 優良, 5~10% 尚可, > 10% 警告
+    if rel_spread < 0.05:
+        return {
+            "status": "🟢 優良", 
+            "embed_msg": f"流動性極佳 (Spread: {rel_spread:.1%}) | 建議：可嘗試掛 Mid-price 成交", 
+            "is_pass": True
+        }
+    elif rel_spread <= 0.10:
+        return {
+            "status": "🟡 尚可", 
+            "embed_msg": f"流動性普通 (Spread: {rel_spread:.1%}) | 建議：嚴格掛 Mid-price 等待成交", 
+            "is_pass": True
+        }
+    else:
+        # 當動態放寬規則（如遠月合約或深價外）讓 >10% 的合約通過時的保底提示
+        return {
+            "status": "🔴 警告", 
+            "embed_msg": f"流動性較差 (Spread: {rel_spread:.1%}) | 滑價風險高，務必堅守限價單", 
+            "is_pass": True 
+        }
+
+
 def _validate_risk_and_liquidity(strategy, best_contract, price, hv_current, days_to_expiry, symbol):
-    """驗證流動性、VRP 與 預期波動"""
+    """驗證流動性、VRP 與 預期波動 (整合動態流動性評估)"""
     bid = best_contract['bid']
     ask = best_contract['ask']
     strike = best_contract['strike']
     iv = best_contract['impliedVolatility']
+    delta = best_contract['bs_delta']
+
+    # yfinance 的未平倉量欄位為 'openInterest'，並確保處理 NaN
+    oi = best_contract.get('openInterest', 0)
+    oi = 0 if pd.isna(oi) else int(oi)
+    
+    volume = best_contract.get('volume', 0)
+    volume = 0 if pd.isna(volume) else int(volume)
     
     # 1. 流動性
-    if bid <= 0 or ask <= 0:
-        print(f"[{symbol}] 剔除: 報價異常 (Bid或Ask <= 0)")
-        return None
-        
-    spread = ask - bid
-    mid_price = (ask + bid) / 2.0
-    spread_ratio = (spread / mid_price) * 100 if mid_price > 0 else 999.0
+    option_data_for_liq = {
+        'bid': bid, 'ask': ask, 'oi': oi, 'volume': volume, 
+        'dte': days_to_expiry, 'delta': delta
+    }
     
-    if spread > 0.20 and spread_ratio > 10.0:
-        print(f"[{symbol}] 剔除: 流動性極差 (價差 ${spread:.2f}, 佔比 {spread_ratio:.1f}%)")
+    liq_eval = _evaluate_option_liquidity(option_data_for_liq)
+    
+    if not liq_eval['is_pass']:
+        print(f"[{symbol}] 剔除: {liq_eval['status']} - {liq_eval['embed_msg']}")
         return None
         
     # 2. VRP (僅賣方)
@@ -299,7 +403,9 @@ def _validate_risk_and_liquidity(strategy, best_contract, price, hv_current, day
 
     # 中間價計算
     mid_price = (ask + bid) / 2.0
-    
+    spread = ask - bid
+    spread_ratio = (spread / mid_price) * 100 if mid_price > 0 else 999.0
+
     # 計算建議的避險腳位 (Short Leg) 來組成垂直價差
     # 我們利用 1σ 預期波動的邊緣作為建議賣出的履約價
     suggested_hedge_strike = None
@@ -314,10 +420,12 @@ def _validate_risk_and_liquidity(strategy, best_contract, price, hv_current, day
         "bid": bid, "ask": ask, "spread": spread, "spread_ratio": spread_ratio,
         "vrp": vrp, "expected_move": expected_move, "em_lower": em_lower, "em_upper": em_upper,
         "mid_price": mid_price,
-        "suggested_hedge_strike": suggested_hedge_strike
+        "suggested_hedge_strike": suggested_hedge_strike,
+        "liq_status": liq_eval['status'],
+        "liq_msg": liq_eval['embed_msg']
     }
 
-def _calculate_sizing(strategy, best_contract, days_to_expiry, expected_move=0.0):
+def _calculate_sizing(strategy, best_contract, days_to_expiry, expected_move=0.0, price=0.0):
     """計算資金效率與倉位大小"""
     aroc = 0.0
     alloc_pct = 0.0
@@ -329,11 +437,21 @@ def _calculate_sizing(strategy, best_contract, days_to_expiry, expected_move=0.0
     delta = best_contract['bs_delta']
     
     if strategy in ["STO_PUT", "STO_CALL"]:
+        if strategy == "STO_PUT":
+            # 1. 現金擔保賣權 (Cash-Secured Put)
+            margin_required = strike - bid 
+        else:
+            # 2. 裸賣買權 (Naked Call) 
+            # 美股 Reg T 粗估：20% 標的現價 - 價外金額 + 權利金 (最低不低於 10% 現價)
+            if price > 0:
+                otm_amount = max(0, strike - price)
+                margin_required = max((0.20 * price) - otm_amount + bid, 0.10 * price + bid)
+            else:
+                margin_required = strike # 防呆後備方案
+
         # 賣方：以保證金為成本基礎
-        margin_required = strike - bid # 粗估
         if margin_required > 0:
             aroc = (bid / margin_required) * (365.0 / max(days_to_expiry, 1)) * 100
-            
             if aroc >= 15.0:
                 b = bid / margin_required
                 p = 1.0 - abs(delta)
@@ -408,7 +526,7 @@ def analyze_symbol(symbol):
         if not risk_metrics: return None
 
         # 7. 倉位計算
-        aroc, alloc_pct, margin_per_contract = _calculate_sizing(strategy, best_contract, days_to_expiry, expected_move=risk_metrics['expected_move'])
+        aroc, alloc_pct, margin_per_contract = _calculate_sizing(strategy, best_contract, days_to_expiry, expected_move=risk_metrics['expected_move'], price=price)
         if strategy in ["STO_PUT", "STO_CALL"] and aroc < 15.0:
             return None
         if strategy in ["BTO_CALL", "BTO_PUT"] and aroc < 30.0:
@@ -434,7 +552,9 @@ def analyze_symbol(symbol):
             "margin_per_contract": margin_per_contract,
             "vrp": risk_metrics['vrp'],
             "mid_price": risk_metrics['mid_price'],
-            "suggested_hedge_strike": risk_metrics['suggested_hedge_strike']
+            "suggested_hedge_strike": risk_metrics['suggested_hedge_strike'],
+            "liq_status": risk_metrics['liq_status'],
+            "liq_msg": risk_metrics['liq_msg']
         }
 
     except Exception as e:

@@ -139,14 +139,14 @@ def create_scan_embed(data, user_capital=100000.0):
 
     # 報價與流動性分析 (Bid/Ask & Spread)
     mid_price = data.get('mid_price', (data['bid'] + data['ask']) / 2)
+    liq_status = data.get('liq_status', 'N/A')
+    liq_msg = data.get('liq_msg', '')
+
     spread_info = (f"`Bid ${data['bid']:.2f}` / `Ask ${data['ask']:.2f}`\n"
                    f"└ 價差: `${data['spread']:.2f}` ({data['spread_ratio']:.1f}%)\n"
+                   f"└ 狀態: {liq_status}\n"
+                   f"└ 📝 {liq_msg}\n"
                    f"🎯 **建議掛單價 (Limit): `${mid_price:.2f}`**")
-    # 如果雖然通過濾網，但流動性處於邊緣地帶，給予黃色警告
-    if data['spread'] > 0.15 and data['spread_ratio'] > 8.0:
-        spread_info += " ⚠️ 流動性偏低，建議掛限價單 (Limit Order)"
-    else:
-        spread_info += " 💧 流動性充沛"
     embed.add_field(name="報價與流動性分析", value=spread_info, inline=False)
 
     # 策略升級提示
