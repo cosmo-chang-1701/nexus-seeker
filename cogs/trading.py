@@ -342,8 +342,8 @@ class TradingCog(commands.Cog):
         user_ports = {}
         for row in all_portfolios:
             uid = row[0]
-            # row[1:] 取出 (trade_id, symbol, opt_type, strike, expiry, entry_price, quantity)
-            user_ports.setdefault(uid, []).append(row[1:])
+            # row[2:] 取出 (symbol, opt_type, strike, expiry, entry_price, quantity)
+            user_ports.setdefault(uid, []).append(row[2:])
 
         # 2. 分別計算損益並發送私訊
         for uid, rows in user_ports.items():
