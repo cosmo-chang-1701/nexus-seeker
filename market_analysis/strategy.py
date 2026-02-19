@@ -62,13 +62,13 @@ def _determine_strategy_signal(indicators):
     elif price > sma20 and 50 <= rsi <= 65 and macd_hist > 0:
         # 多頭趨勢：若波動率低，買 Call 以小博大；若波動率高，賣 Put 收租
         if hv_rank < 50:
-            return "BTO_CALL", "call", deltas.get("BTO_CALL", 0.50), 14, 30
+            return "BTO_CALL", "call", deltas.get("BTO_CALL", 0.50), 30, 60
         else:
             return "STO_PUT", "put", deltas.get("STO_PUT", -0.20), 14, 30
     elif price < sma20 and 35 <= rsi <= 50 and macd_hist < 0:
         # 空頭趨勢：若波動率低 (剛起跌)，買 Put 順勢；若波動率高 (已恐慌)，賣 Call 賺溢價
         if hv_rank < 50:
-            return "BTO_PUT", "put", deltas.get("BTO_PUT", -0.50), 14, 30
+            return "BTO_PUT", "put", deltas.get("BTO_PUT", -0.50), 30, 60
         else:
             # 轉為賣方，賣出微 OTM 的 Call 來做空
             return "STO_CALL", "call", deltas.get("STO_CALL", 0.20), 14, 30
@@ -296,10 +296,25 @@ def _validate_risk_and_liquidity(strategy, best_contract, price, hv_current, day
         if breakeven < em_upper:
             print(f"[{symbol}] 剔除: 損益兩平點 ${breakeven:.2f} 落入 1σ 預期漲幅內 (安全上緣 ${em_upper:.2f})")
             return None
+
+    # 中間價計算
+    mid_price = (ask + bid) / 2.0
+    
+    # 計算建議的避險腳位 (Short Leg) 來組成垂直價差
+    # 我們利用 1σ 預期波動的邊緣作為建議賣出的履約價
+    suggested_hedge_strike = None
+    if strategy == "BTO_CALL":
+        # 買 Call 的同時，建議賣出預期漲幅上限 (em_upper) 附近的 Call
+        suggested_hedge_strike = em_upper
+    elif strategy == "BTO_PUT":
+        # 買 Put 的同時，建議賣出預期跌幅下限 (em_lower) 附近的 Put
+        suggested_hedge_strike = em_lower
             
     return {
         "bid": bid, "ask": ask, "spread": spread, "spread_ratio": spread_ratio,
-        "vrp": vrp, "expected_move": expected_move, "em_lower": em_lower, "em_upper": em_upper
+        "vrp": vrp, "expected_move": expected_move, "em_lower": em_lower, "em_upper": em_upper,
+        "mid_price": mid_price,
+        "suggested_hedge_strike": suggested_hedge_strike
     }
 
 def _calculate_sizing(strategy, best_contract, days_to_expiry, expected_move=0.0):
@@ -417,7 +432,9 @@ def analyze_symbol(symbol):
             "aroc": aroc,
             "alloc_pct": alloc_pct,
             "margin_per_contract": margin_per_contract,
-            "vrp": risk_metrics['vrp']
+            "vrp": risk_metrics['vrp'],
+            "mid_price": risk_metrics['mid_price'],
+            "suggested_hedge_strike": risk_metrics['suggested_hedge_strike']
         }
 
     except Exception as e:
