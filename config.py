@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-TARGET_CHANNEL_ID = int(os.getenv("TARGET_CHANNEL_ID", 0))
+DISCORD_ADMIN_USER_ID = int(os.getenv("DISCORD_ADMIN_USER_ID", 0))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "WARNING").upper()
 
 # 系統與模型參數
