@@ -27,17 +27,18 @@ class PortfolioCog(commands.Cog):
         expiry="到期日 (YYYY-MM-DD)",
         entry_price="成交價格 (權利金)",
         quantity="口數",
-        is_covered="是否為 Covered Call (需持有 100 股現股)"
+        stock_cost="預設 0。輸入您的持有現股平均成本 (將精確計算防禦區間)"
     )
-    async def add_trade(self, interaction: discord.Interaction, symbol: str, opt_type: app_commands.Choice[str], strike: float, expiry: str, entry_price: float, quantity: int, is_covered: bool):
+    async def add_trade(self, interaction: discord.Interaction, symbol: str, opt_type: app_commands.Choice[str], strike: float, expiry: str, entry_price: float, quantity: int, stock_cost: float = 0.0):
         symbol = symbol.upper()
         user_id = interaction.user.id
         try:
-            trade_id = database.add_portfolio_record(user_id, symbol, opt_type.value, strike, expiry, entry_price, quantity, is_covered)
+            trade_id = database.add_portfolio_record(user_id, symbol, opt_type.value, strike, expiry, entry_price, quantity, stock_cost)
             action_text = "賣出 (STO)" if quantity < 0 else "買入 (BTO)"
             # 私訊回覆使用者
+            cost_str = f" | 現股成本: ${stock_cost:.2f}" if stock_cost > 0.0 else ""
             await interaction.response.send_message(
-                f"✅ **新增成功 (ID: {trade_id})**: {action_text} {abs(quantity)} 口 `{symbol}` ${strike} {opt_type.value.upper()} ({expiry} 到期) | Covered: {'是' if is_covered else '否'}", 
+                f"✅ **新增成功 (ID: {trade_id})**: {action_text} {abs(quantity)} 口 `{symbol}` ${strike} {opt_type.value.upper()} ({expiry} 到期){cost_str}", 
                 ephemeral=True
             )
         except Exception as e:
@@ -61,9 +62,9 @@ class PortfolioCog(commands.Cog):
             return
         msg = "📊 **【您的專屬持倉清單】**\n"
         for row in rows:
-            trade_id, sym, o_type, strike, exp, price, qty, is_covered = row
+            trade_id, sym, o_type, strike, exp, price, qty, stock_cost = row
             action = "賣出 (STO)" if qty < 0 else "買入 (BTO)"
-            cov_str = " | Covered: 是" if is_covered else " | Covered: 否"
+            cov_str = f" | 現股成本: ${stock_cost:.2f}" if stock_cost > 0.0 else ""
             msg += f"`ID:{trade_id:02d}` | **{sym}** | {exp} 到期 | ${strike} {o_type.upper()} | {action} {abs(qty)}口 | 成本: ${price}{cov_str}\n"
         await interaction.response.send_message(msg, ephemeral=True)
 

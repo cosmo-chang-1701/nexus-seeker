@@ -23,12 +23,9 @@ mock_yf = MagicMock()
 mock_yf.__spec__ = None
 sys.modules.setdefault("yfinance", mock_yf)
 
+# Mock pandas_ta
 mock_pandas_ta = MagicMock()
 sys.modules.setdefault("pandas_ta", mock_pandas_ta)
-
-mock_strategy = MagicMock()
-mock_strategy.analyze_symbol = MagicMock()
-sys.modules.setdefault("market_analysis.strategy", mock_strategy)
 
 mock_greeks_mod = MagicMock()
 sys.modules.setdefault("market_analysis.greeks", mock_greeks_mod)
@@ -136,7 +133,7 @@ class TestCheckPortfolioStatusLogicNew(unittest.TestCase):
         _setup_common_mocks(mock_yf_mod, mock_dt, stock_price=180.0,
                             option_last_price=4.00, option_iv=0.30)
 
-        rows = [("TSLA", "call", 200.0, "2025-03-21", 5.00, -1, False)]
+        rows = [("TSLA", "call", 200.0, "2025-03-21", 5.00, -1, 0.0)]
         result = check_portfolio_status_logic(rows, user_capital=50000)
 
         report_text = "\n".join(result)
@@ -162,7 +159,7 @@ class TestCheckPortfolioStatusLogicNew(unittest.TestCase):
         """entry_price = 0 → 不應產生除零錯誤，且 pnl_pct 應為 0"""
         _setup_common_mocks(mock_yf_mod, mock_dt)
 
-        rows = [("AAPL", "put", 140.0, "2025-03-21", 0.0, -1, False)]
+        rows = [("AAPL", "put", 140.0, "2025-03-21", 0.0, -1, 0.0)]
         result = check_portfolio_status_logic(rows, user_capital=50000)
 
         report_text = "\n".join(result)
@@ -192,7 +189,7 @@ class TestCheckPortfolioStatusLogicNew(unittest.TestCase):
         _setup_common_mocks(mock_yf_mod, mock_dt,
                             now_date=datetime(2025, 4, 1))
 
-        rows = [("NVDA", "put", 800.0, "2025-03-21", 10.00, -1, False)]
+        rows = [("NVDA", "put", 800.0, "2025-03-21", 10.00, -1, 0.0)]
         result = check_portfolio_status_logic(rows, user_capital=100000)
 
         self.assertIsInstance(result, list)
@@ -221,7 +218,7 @@ class TestCheckPortfolioStatusLogicNew(unittest.TestCase):
 
         strike = 200.0
         qty = -3
-        rows = [("TSLA", "call", strike, "2025-03-21", 5.00, qty, True)]
+        rows = [("TSLA", "call", strike, "2025-03-21", 5.00, qty, stock_price)]
         check_portfolio_status_logic(rows, user_capital=100000)
 
         # Covered Call 保證金 = stock_price * 100 * abs(qty) = 180 * 100 * 3 = 54000

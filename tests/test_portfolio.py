@@ -148,9 +148,9 @@ class TestEvaluateDefenseStatus(unittest.TestCase):
         self.assertIn("Roll Down and Out", status)
 
     def test_short_call_delta_expansion(self):
-        """賣 Call Delta ≥ 0.40 → Roll Up and Out"""
+        """賣 Call Delta ≥ 0.40 → Roll Up & Out"""
         status = _evaluate_defense_status(-1, 'call', -0.30, 0.40, 45)
-        self.assertIn("Roll Up and Out", status)
+        self.assertIn("Roll Up & Out", status)
 
     def test_short_gamma_trap(self):
         """賣方 DTE ≤ 21 且無其他觸發 → Gamma 陷阱"""
@@ -379,8 +379,8 @@ class TestCheckPortfolioStatusLogic(unittest.TestCase):
 
         mock_yf_mod.Ticker.side_effect = ticker_factory
 
-        # Portfolio: (symbol, opt_type, strike, expiry, entry_price, quantity)
-        rows = [("AAPL", "put", 140.0, "2025-03-21", 3.50, -1)]
+        # Portfolio: (symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost)
+        rows = [("AAPL", "put", 140.0, "2025-03-21", 3.50, -1, 0.0)]
 
         result = check_portfolio_status_logic(rows, user_capital=50000)
 
@@ -451,7 +451,7 @@ class TestCheckPortfolioStatusLogic(unittest.TestCase):
 
         strike = 140.0
         qty = -2
-        rows = [("AAPL", "put", strike, "2025-03-21", 3.50, qty)]
+        rows = [("AAPL", "put", strike, "2025-03-21", 3.50, qty, 0.0)]
         check_portfolio_status_logic(rows, user_capital=50000)
 
         # margin for short put = strike * 100 * abs(qty) = 140 * 100 * 2 = 28000
@@ -518,8 +518,8 @@ class TestCheckPortfolioStatusLogic(unittest.TestCase):
         mock_yf_mod.Ticker.side_effect = ticker_factory
 
         rows = [
-            ("AAPL", "put", 140.0, "2025-03-21", 3.50, -1),
-            ("MSFT", "put", 300.0, "2025-03-21", 5.00, -1),
+            ("AAPL", "put", 140.0, "2025-03-21", 3.50, -1, 0.0),
+            ("MSFT", "put", 300.0, "2025-03-21", 5.00, -1, 0.0),
         ]
 
         result = check_portfolio_status_logic(rows, user_capital=50000)
@@ -590,7 +590,7 @@ class TestCheckPortfolioStatusLogic(unittest.TestCase):
 
         mock_yf_mod.Ticker.side_effect = ticker_factory
 
-        rows = [("AAPL", "call", 160.0, "2025-03-21", 3.00, 1)]
+        rows = [("AAPL", "call", 160.0, "2025-03-21", 3.00, 1, 0.0)]
         check_portfolio_status_logic(rows, user_capital=50000)
 
         # 買方部位的 margin 應為 0
@@ -659,7 +659,7 @@ class TestCheckPortfolioStatusLogic(unittest.TestCase):
         mock_theta.side_effect = ValueError("bad iv")
         mock_gamma.side_effect = ValueError("bad iv")
 
-        rows = [("AAPL", "put", 140.0, "2025-03-21", 3.50, -1)]
+        rows = [("AAPL", "put", 140.0, "2025-03-21", 3.50, -1, 0.0)]
 
         # 不應拋出異常
         result = check_portfolio_status_logic(rows, user_capital=50000)

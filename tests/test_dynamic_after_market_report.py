@@ -117,9 +117,9 @@ class TestDynamicAfterMarketReport(unittest.TestCase):
 
         # Mock: 全站持倉 (user_id, id, symbol, opt_type, strike, expiry, entry_price, quantity)
         mock_get_all.return_value = [
-            (1001, 1, "AAPL", "call", 200.0, "2025-07-18", 5.00, -1),
-            (1001, 2, "TSLA", "put",  250.0, "2025-07-18", 3.00, -2),
-            (2002, 3, "NVDA", "call", 900.0, "2025-08-15", 8.00,  1),
+            (1001, 1, "AAPL", "call", 200.0, "2025-07-18", 5.00, -1, 0.0),
+            (1001, 2, "TSLA", "put",  250.0, "2025-07-18", 3.00, -2, 0.0),
+            (2002, 3, "NVDA", "call", 900.0, "2025-08-15", 8.00,  1, 0.0),
         ]
 
         # Mock: 使用者資金
@@ -181,8 +181,8 @@ class TestDynamicAfterMarketReport(unittest.TestCase):
 
         # 兩位用戶各一筆持倉
         mock_get_all.return_value = [
-            (1001, 1, "AAPL", "put", 180.0, "2025-07-18", 4.00, -1),
-            (2002, 2, "MSFT", "call", 400.0, "2025-07-18", 6.00, 1),
+            (1001, 1, "AAPL", "put", 180.0, "2025-07-18", 4.00, -1, 0.0),
+            (2002, 2, "MSFT", "call", 400.0, "2025-07-18", 6.00, 1, 0.0),
         ]
         mock_get_capital.return_value = 50000.0
         mock_check_logic.return_value = ["報告行"]
@@ -226,7 +226,7 @@ class TestDynamicAfterMarketReport(unittest.TestCase):
         mock_target_time.return_value = datetime(2025, 6, 10, 16, 15, tzinfo=ny_tz)
 
         mock_get_all.return_value = [
-            (1001, 1, "AAPL", "call", 200.0, "2025-07-18", 5.00, -1),
+            (1001, 1, "AAPL", "call", 200.0, "2025-07-18", 5.00, -1, 0.0),
         ]
         mock_get_capital.return_value = 100000.0
 

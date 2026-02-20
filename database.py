@@ -39,10 +39,10 @@ def init_db():
     
     conn.commit()
 
-    # 動態檢查並新增 is_covered 欄位 (避免舊資料庫報錯)
+    # 動態檢查並新增 stock_cost 欄位 (避免舊資料庫報錯)
     try:
-        cursor.execute("ALTER TABLE portfolio ADD COLUMN is_covered BOOLEAN DEFAULT 0")
-        cursor.execute("ALTER TABLE watchlist ADD COLUMN is_covered BOOLEAN DEFAULT 0")
+        cursor.execute("ALTER TABLE portfolio ADD COLUMN stock_cost REAL DEFAULT 0.0")
+        cursor.execute("ALTER TABLE watchlist ADD COLUMN stock_cost REAL DEFAULT 0.0")
         conn.commit()
     except sqlite3.OperationalError:
         pass # 欄位已存在則忽略
@@ -53,13 +53,13 @@ def init_db():
 # ==========================================
 # 交易持倉 (Portfolio) CRUD (綁定 user_id)
 # ==========================================
-def add_portfolio_record(user_id, symbol, opt_type, strike, expiry, entry_price, quantity, is_covered):
+def add_portfolio_record(user_id, symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT INTO portfolio (user_id, symbol, opt_type, strike, expiry, entry_price, quantity, is_covered)
+        INSERT INTO portfolio (user_id, symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (user_id, symbol, opt_type, strike, expiry, entry_price, quantity, is_covered))
+    ''', (user_id, symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost))
     trade_id = cursor.lastrowid
     conn.commit()
     conn.close()
@@ -69,7 +69,7 @@ def get_user_portfolio(user_id):
     """取得特定使用者的持倉"""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute('SELECT id, symbol, opt_type, strike, expiry, entry_price, quantity, is_covered FROM portfolio WHERE user_id = ?', (user_id,))
+    cursor.execute('SELECT id, symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost FROM portfolio WHERE user_id = ?', (user_id,))
     rows = cursor.fetchall()
     conn.close()
     return rows
@@ -78,7 +78,7 @@ def get_all_portfolio():
     """取得全站所有持倉 (供背景排程使用)"""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute('SELECT user_id, id, symbol, opt_type, strike, expiry, entry_price, quantity, is_covered FROM portfolio')
+    cursor.execute('SELECT user_id, id, symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost FROM portfolio')
     rows = cursor.fetchall()
     conn.close()
     return rows
@@ -98,11 +98,11 @@ def delete_portfolio_record(user_id, trade_id):
 # ==========================================
 # 觀察清單 (Watchlist) CRUD (綁定 user_id)
 # ==========================================
-def add_watchlist_symbol(user_id, symbol, is_covered=False):
+def add_watchlist_symbol(user_id, symbol, stock_cost=0.0):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     try:
-        cursor.execute('INSERT INTO watchlist (user_id, symbol, is_covered) VALUES (?, ?, ?)', (user_id, symbol, is_covered))
+        cursor.execute('INSERT INTO watchlist (user_id, symbol, stock_cost) VALUES (?, ?, ?)', (user_id, symbol, stock_cost))
         conn.commit()
         success = True
     except sqlite3.IntegrityError:
@@ -114,7 +114,7 @@ def get_user_watchlist(user_id):
     """取得特定使用者的觀察清單"""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute('SELECT symbol, is_covered FROM watchlist WHERE user_id = ?', (user_id,))
+    cursor.execute('SELECT symbol, stock_cost FROM watchlist WHERE user_id = ?', (user_id,))
     rows = cursor.fetchall()
     conn.close()
     return rows
@@ -123,10 +123,10 @@ def get_all_watchlist():
     """取得全站所有觀察清單 (供背景排程使用)"""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute('SELECT user_id, symbol, is_covered FROM watchlist')
+    cursor.execute('SELECT user_id, symbol, stock_cost FROM watchlist')
     rows = cursor.fetchall()
     conn.close()
-    return rows # 格式: [(user_id, symbol, is_covered), ...]
+    return rows # 格式: [(user_id, symbol, stock_cost), ...]
 
 def delete_watchlist_symbol(user_id, symbol):
     conn = sqlite3.connect(DB_NAME)

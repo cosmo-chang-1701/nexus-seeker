@@ -148,27 +148,29 @@ class SchedulerCog(commands.Cog):
     async def _run_market_scan_logic(self, is_auto=True, triggered_by=None):
         """共用的掃描核心邏輯"""
         try:
-            all_watchlists = database.get_all_watchlist() # [(user_id, symbol, is_covered), ...]
+            all_watchlists = database.get_all_watchlist() # [(user_id, symbol, stock_cost), ...]
             
             if not all_watchlists:
                 if not is_auto and triggered_by:
                      await triggered_by.send("⚠️ **全站觀察清單為空，無法執行掃描。**")
                 return
 
-            # 1. 提取所有不重複的標的進行掃描
-            unique_symbols = set(sym for uid, sym, _ in all_watchlists)
+            # 1. 提取所有不重複的標的與成本對進行掃描
+            unique_targets = set((sym, stock_cost) for uid, sym, stock_cost in all_watchlists)
             scan_results = {}
             
             # 如果是手動觸發，傳送開始訊息
             if not is_auto and triggered_by:
+                # 算一下有幾檔獨立的股票
+                unique_symbols = set(sym for sym, _ in unique_targets)
                 await triggered_by.send(f"🔍 **開始掃描 {len(unique_symbols)} 檔標的...**")
             
-            for sym in unique_symbols:
+            for sym, stock_cost in unique_targets:
                 try:
-                    res = await asyncio.to_thread(market_math.analyze_symbol, sym, is_covered)
-                    if res: scan_results[sym] = res
+                    res = await asyncio.to_thread(market_math.analyze_symbol, sym, stock_cost)
+                    if res: scan_results[(sym, stock_cost)] = res
                 except Exception as e:
-                    logger.error(f"Error scanning {sym}: {e}")
+                    logger.error(f"Error scanning {sym} with cost {stock_cost}: {e}")
                 await asyncio.sleep(0.5)
 
             # 若無任何結果且為手動觸發
@@ -179,9 +181,9 @@ class SchedulerCog(commands.Cog):
 
             # 2. 根據使用者的訂閱清單分發結果
             user_alerts = {}
-            for uid, sym in all_watchlists:
-                if sym in scan_results:
-                    user_alerts.setdefault(uid, []).append(scan_results[sym])
+            for uid, sym, stock_cost in all_watchlists:
+                if (sym, stock_cost) in scan_results:
+                    user_alerts.setdefault(uid, []).append(scan_results[(sym, stock_cost)])
 
             now = datetime.now(ny_tz)
             # 3. 發送私訊
@@ -248,7 +250,7 @@ class SchedulerCog(commands.Cog):
         user_ports = {}
         for row in all_portfolios:
             uid = row[0]
-            # row[2:] 取出 (symbol, opt_type, strike, expiry, entry_price, quantity, is_covered)
+            # row[2:] 取出 (symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost)
             user_ports.setdefault(uid, []).append(row[2:])
 
         # 2. 分別計算損益並發送私訊

@@ -163,7 +163,7 @@ def check_portfolio_status_logic(portfolio_rows, user_capital=50000.0):
             option_chains_cache = {}
 
             for row in rows:
-                _, opt_type, strike, expiry, entry_price, quantity, is_covered = row
+                _, opt_type, strike, expiry, entry_price, quantity, stock_cost = row
                 
                 if expiry not in option_chains_cache:
                     option_chains_cache[expiry] = ticker.option_chain(expiry)
@@ -190,9 +190,9 @@ def check_portfolio_status_logic(portfolio_rows, user_capital=50000.0):
 
                 #保證金佔用累加 (區分 Naked Call 與 Covered Call)
                 if quantity < 0:
-                    if opt_type == 'call' and is_covered:
-                        # 掩護性買權 (Covered Call)：保證金 = 持有 100 股現股的市值
-                        margin_locked = current_stock_price * 100 * abs(quantity)
+                    if opt_type == 'call' and stock_cost > 0.0:
+                        # 掩護性買權 (Covered Call)：保證金 = 現股成本 
+                        margin_locked = stock_cost * 100 * abs(quantity)
                     elif opt_type == 'call':
                         # 裸賣買權 (Naked Call)：Reg T 粗估公式
                         otm_amount = max(0, strike - current_stock_price)
@@ -228,7 +228,7 @@ def check_portfolio_status_logic(portfolio_rows, user_capital=50000.0):
 
                 # 生成單筆報告
                 pnl_icon = "🟢" if pnl_pct > 0 else "🔴" if pnl_pct < 0 else "⚪"
-                cc_tag = " 🛡️(CC)" if (opt_type == 'call' and is_covered) else ""
+                cc_tag = " 🛡️(CC)" if (opt_type == 'call' and stock_cost > 0.0) else ""
                 line = (f"🔹 **{symbol}** ｜ `{expiry}` ｜ `${strike}` **{opt_type.upper()}**{cc_tag}\n"
                         f"├─ 💰 成本: `${entry_price:.2f}` ｜ 📈 現價: `${current_price:.2f}`\n"
                         f"├─ {pnl_icon} 損益: **{pnl_pct*100:+.2f}%**\n"

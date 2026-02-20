@@ -425,7 +425,7 @@ def _validate_risk_and_liquidity(strategy, best_contract, price, hv_current, day
         "liq_msg": liq_eval['embed_msg']
     }
 
-def _calculate_sizing(strategy, best_contract, days_to_expiry, expected_move=0.0, price=0.0, is_covered=False):
+def _calculate_sizing(strategy, best_contract, days_to_expiry, expected_move=0.0, price=0.0, stock_cost=0.0):
     """計算資金效率與倉位大小"""
     aroc = 0.0
     alloc_pct = 0.0
@@ -441,9 +441,9 @@ def _calculate_sizing(strategy, best_contract, days_to_expiry, expected_move=0.0
             # 1. 現金擔保賣權 (Cash-Secured Put)
             margin_required = strike - bid 
         else: # STO_CALL
-            if is_covered:
-                # 🛡️ 掩護性買權：保證金要求 = 標的現價 (100股成本)
-                margin_required = price
+            if stock_cost > 0.0:
+                # 🛡️ 掩護性買權：保證金要求 = 現股成本 (100股成本)
+                margin_required = stock_cost
             else:
                 # 2. 裸賣買權：Reg T 粗估公式
                 # 美股 Reg T 粗估：20% 標的現價 - 價外金額 + 權利金 (最低不低於 10% 現價)
@@ -486,7 +486,7 @@ def _calculate_sizing(strategy, best_contract, days_to_expiry, expected_move=0.0
                     
     return aroc, alloc_pct, margin_per_contract
 
-def analyze_symbol(symbol, is_covered=False):
+def analyze_symbol(symbol, stock_cost=0.0):
     """
     掃描技術指標、波動率位階、期限結構與造市商預期波動，並過濾最佳合約。
     """
@@ -536,7 +536,7 @@ def analyze_symbol(symbol, is_covered=False):
             days_to_expiry,
             expected_move=risk_metrics['expected_move'],
             price=price,
-            is_covered=is_covered
+            stock_cost=stock_cost
         )
         if strategy in ["STO_PUT", "STO_CALL"] and aroc < 15.0:
             return None
@@ -546,7 +546,7 @@ def analyze_symbol(symbol, is_covered=False):
         # 8. 組合結果
         return {
             "symbol": symbol, "price": price,
-            "is_covered": is_covered,
+            "stock_cost": stock_cost,
             "rsi": indicators['rsi'], "sma20": indicators['sma20'], "hv_rank": indicators['hv_rank'],
             "ts_ratio": ts_ratio, "ts_state": ts_state,
             "v_skew": vertical_skew, "v_skew_state": skew_state,

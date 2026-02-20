@@ -19,14 +19,6 @@ from types import ModuleType
 
 # --- MOCK DEPENDENCIES BEFORE IMPORTING STRATEGY ---
 
-# Mock pandas
-mock_pd = MagicMock()
-sys.modules["pandas"] = mock_pd
-
-# Mock pandas_ta
-mock_ta = MagicMock()
-sys.modules["pandas_ta"] = mock_ta
-
 # Mock numpy
 mock_np = MagicMock()
 sys.modules["numpy"] = mock_np

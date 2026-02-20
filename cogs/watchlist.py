@@ -21,14 +21,14 @@ class WatchlistCog(commands.Cog):
     @app_commands.command(name="add_watch", description="將股票代號加入您的雷達掃描清單")
     @app_commands.describe(
         symbol="股票代號 (如 TSLA)",
-        is_covered="是否持有 100 股現股？"
+        stock_cost="預設 0。輸入您的持有現股平均成本 (將精確計算防禦區間)"
     )
-    async def add_watch(self, interaction: discord.Interaction, symbol: str, is_covered: bool = False):
+    async def add_watch(self, interaction: discord.Interaction, symbol: str, stock_cost: float = 0.0):
         symbol = symbol.upper()
         user_id = interaction.user.id
-        success = database.add_watchlist_symbol(user_id, symbol, is_covered)
+        success = database.add_watchlist_symbol(user_id, symbol, stock_cost)
         if success:
-            cc_tag = " 🛡️(Covered)" if is_covered else ""
+            cc_tag = " 🛡️(Covered)" if stock_cost > 0.0 else ""
             await interaction.response.send_message(f"👁️ 已將 `{symbol} {cc_tag}` 加入您的觀察清單！開盤將自動私訊精算結果。", ephemeral=True)
         else:
             await interaction.response.send_message(f"⚠️ `{symbol}` 已經在您的觀察清單中了。", ephemeral=True)
