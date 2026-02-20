@@ -1,6 +1,6 @@
 ---
 trigger: model_decision
-description: When working on the test case.
+description: When working on all test case.
 ---
 
 # Testing Environment
