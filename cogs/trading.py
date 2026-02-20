@@ -148,7 +148,7 @@ class SchedulerCog(commands.Cog):
     async def _run_market_scan_logic(self, is_auto=True, triggered_by=None):
         """共用的掃描核心邏輯"""
         try:
-            all_watchlists = database.get_all_watchlist() # [(user_id, symbol), ...]
+            all_watchlists = database.get_all_watchlist() # [(user_id, symbol, is_covered), ...]
             
             if not all_watchlists:
                 if not is_auto and triggered_by:
@@ -156,7 +156,7 @@ class SchedulerCog(commands.Cog):
                 return
 
             # 1. 提取所有不重複的標的進行掃描
-            unique_symbols = set(sym for uid, sym in all_watchlists)
+            unique_symbols = set(sym for uid, sym, _ in all_watchlists)
             scan_results = {}
             
             # 如果是手動觸發，傳送開始訊息
@@ -165,7 +165,7 @@ class SchedulerCog(commands.Cog):
             
             for sym in unique_symbols:
                 try:
-                    res = await asyncio.to_thread(market_math.analyze_symbol, sym)
+                    res = await asyncio.to_thread(market_math.analyze_symbol, sym, is_covered)
                     if res: scan_results[sym] = res
                 except Exception as e:
                     logger.error(f"Error scanning {sym}: {e}")

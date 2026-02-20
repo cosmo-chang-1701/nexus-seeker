@@ -42,6 +42,7 @@ def init_db():
     # 動態檢查並新增 is_covered 欄位 (避免舊資料庫報錯)
     try:
         cursor.execute("ALTER TABLE portfolio ADD COLUMN is_covered BOOLEAN DEFAULT 0")
+        cursor.execute("ALTER TABLE watchlist ADD COLUMN is_covered BOOLEAN DEFAULT 0")
         conn.commit()
     except sqlite3.OperationalError:
         pass # 欄位已存在則忽略
@@ -97,11 +98,11 @@ def delete_portfolio_record(user_id, trade_id):
 # ==========================================
 # 觀察清單 (Watchlist) CRUD (綁定 user_id)
 # ==========================================
-def add_watchlist_symbol(user_id, symbol):
+def add_watchlist_symbol(user_id, symbol, is_covered=False):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     try:
-        cursor.execute('INSERT INTO watchlist (user_id, symbol) VALUES (?, ?)', (user_id, symbol))
+        cursor.execute('INSERT INTO watchlist (user_id, symbol, is_covered) VALUES (?, ?, ?)', (user_id, symbol, is_covered))
         conn.commit()
         success = True
     except sqlite3.IntegrityError:
@@ -113,19 +114,19 @@ def get_user_watchlist(user_id):
     """取得特定使用者的觀察清單"""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute('SELECT symbol FROM watchlist WHERE user_id = ?', (user_id,))
+    cursor.execute('SELECT symbol, is_covered FROM watchlist WHERE user_id = ?', (user_id,))
     rows = cursor.fetchall()
     conn.close()
-    return [row[0] for row in rows]
+    return rows
 
 def get_all_watchlist():
     """取得全站所有觀察清單 (供背景排程使用)"""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute('SELECT user_id, symbol FROM watchlist')
+    cursor.execute('SELECT user_id, symbol, is_covered FROM watchlist')
     rows = cursor.fetchall()
     conn.close()
-    return rows # 格式: [(user_id, symbol), ...]
+    return rows # 格式: [(user_id, symbol, is_covered), ...]
 
 def delete_watchlist_symbol(user_id, symbol):
     conn = sqlite3.connect(DB_NAME)

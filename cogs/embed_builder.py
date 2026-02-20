@@ -19,11 +19,19 @@ def create_scan_embed(data, user_capital=100000.0):
     colors = {"STO_PUT": discord.Color.green(), "STO_CALL": discord.Color.red(), "BTO_CALL": discord.Color.blue(), "BTO_PUT": discord.Color.orange()}
     titles = {"STO_PUT": "🟢 Sell To Open Put", "STO_CALL": "🔴 Sell To Open Call", "BTO_CALL": "🚀 Buy To Open Call", "BTO_PUT": "⚠️ Buy To Open Put"}
     
-    # 1. 將合約與到期日寫入 Description
+    strategy = data.get('strategy', 'UNKNOWN')
+    is_covered = data.get('is_covered', False)
+    
+    # 如果是 Covered Call，覆寫標題與顏色
+    if strategy == "STO_CALL" and is_covered:
+        titles["STO_CALL"] = "🛡️ Covered Call (掩護性買權)"
+        colors["STO_CALL"] = discord.Color.teal() # 使用特殊的藍綠色代表安全防護
+
+    # === 標題與描述 ===
     embed = discord.Embed(
-        title=f"{titles[data['strategy']]} - {data['symbol']}",
-        description=f"📅 **到期日:** `{data['target_date']}` ｜ 🎯 **履約價:** `${data['strike']}`\n\u200b",
-        color=colors.get(data['strategy'], discord.Color.default())
+        title=f"{titles.get(strategy, strategy)} | {data.get('symbol', 'UNKNOWN')}",
+        description=f"📅 **到期日:** `{data.get('target_date', 'UNKNOWN')}` ｜ 🎯 **履約價:** `${data.get('strike', 'UNKNOWN')}`\n\u200b",
+        color=colors.get(strategy, discord.Color.default())
     )
     
     # --- 第一排（當前概況） ---

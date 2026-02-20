@@ -51,8 +51,10 @@ class TestPreMarketRiskMonitor(unittest.IsolatedAsyncioTestCase):
 
     async def test_02_symbols_with_no_earnings_risk(self):
         """測試案例 2：有持倉及觀察清單，但財報日距離大於 3 天 (標的皆為安全)"""
-        fake_port = [(1, "dummy", "AAPL")]
-        fake_watch = [(1, "MSFT")]
+        # Update fake_port to match get_all_portfolio schema: (user_id, id, symbol, opt_type, strike, expiry, entry_price, quantity, is_covered)
+        fake_port = [(1, 1, "AAPL", "CALL", 150.0, "2026-03-20", 5.0, 1, False)]
+        # Update fake_watch to match get_all_watchlist schema: (user_id, symbol, is_covered)
+        fake_watch = [(1, "MSFT", False)]
         
         with patch('cogs.trading.database.get_all_portfolio', return_value=fake_port), \
              patch('cogs.trading.database.get_all_watchlist', return_value=fake_watch), \
@@ -77,8 +79,8 @@ class TestPreMarketRiskMonitor(unittest.IsolatedAsyncioTestCase):
         預期行為：機器人應發送紅色警告 Embed 給使用者，並標示倒數天數。
         """
         # 1. 準備假資料：模擬使用者 ID 為 2，持有 TSLA，觀察 NVDA
-        fake_port = [(2, "dummy", "TSLA")]
-        fake_watch = [(2, "NVDA")]
+        fake_port = [(2, 2, "TSLA", "PUT", 200.0, "2026-03-20", 10.0, 1, False)]
+        fake_watch = [(2, "NVDA", False)]
         
         # 2. Mock 掉外部依賴：資料庫與 YF API
         with patch('cogs.trading.database.get_all_portfolio', return_value=fake_port), \
@@ -113,7 +115,7 @@ class TestPreMarketRiskMonitor(unittest.IsolatedAsyncioTestCase):
 
     async def test_04_user_forbidden_dm(self):
         """測試案例 4：發送私訊時遇到 discord.Forbidden 錯誤 (應被安全捕捉)"""
-        fake_port = [(3, "dummy", "AMZN")]
+        fake_port = [(3, 3, "AMZN", "CALL", 100.0, "2026-03-20", 2.0, 1, False)]
         
         mock_resp = MagicMock()
         mock_resp.status = 403
