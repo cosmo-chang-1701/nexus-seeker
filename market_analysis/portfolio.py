@@ -163,7 +163,7 @@ def check_portfolio_status_logic(portfolio_rows, user_capital=50000.0):
             option_chains_cache = {}
 
             for row in rows:
-                _, opt_type, strike, expiry, entry_price, quantity = row
+                _, opt_type, strike, expiry, entry_price, quantity, is_covered = row
                 
                 if expiry not in option_chains_cache:
                     option_chains_cache[expiry] = ticker.option_chain(expiry)
@@ -188,9 +188,20 @@ def check_portfolio_status_logic(portfolio_rows, user_capital=50000.0):
                 except Exception:
                     current_delta, daily_theta, current_gamma = 0.0, 0.0, 0.0
 
-                # 保證金佔用累加
+                #保證金佔用累加 (區分 Naked Call 與 Covered Call)
                 if quantity < 0:
-                    margin_locked = strike * 100 * abs(quantity) if opt_type == 'put' else current_stock_price * 100 * abs(quantity)
+                    if opt_type == 'call' and is_covered:
+                        # 掩護性買權 (Covered Call)：保證金 = 持有 100 股現股的市值
+                        margin_locked = current_stock_price * 100 * abs(quantity)
+                    elif opt_type == 'call':
+                        # 裸賣買權 (Naked Call)：Reg T 粗估公式
+                        otm_amount = max(0, strike - current_stock_price)
+                        margin_per_contract = max((0.20 * current_stock_price) - otm_amount + current_price, 0.10 * current_stock_price + current_price)
+                        margin_locked = margin_per_contract * 100 * abs(quantity)
+                    else:
+                        # 現金擔保賣權 (Cash-Secured Put)
+                        margin_locked = strike * 100 * abs(quantity)
+                        
                     total_margin_used += margin_locked
 
                 # 宏觀數據 Beta-Weighting 縮放 (轉換為 SPY 等效股數)
@@ -217,7 +228,8 @@ def check_portfolio_status_logic(portfolio_rows, user_capital=50000.0):
 
                 # 生成單筆報告
                 pnl_icon = "🟢" if pnl_pct > 0 else "🔴" if pnl_pct < 0 else "⚪"
-                line = (f"🔹 **{symbol}** ｜ `{expiry}` ｜ `${strike}` **{opt_type.upper()}**\n"
+                cc_tag = " 🛡️(CC)" if (opt_type == 'call' and is_covered) else ""
+                line = (f"🔹 **{symbol}** ｜ `{expiry}` ｜ `${strike}` **{opt_type.upper()}**{cc_tag}\n"
                         f"├─ 💰 成本: `${entry_price:.2f}` ｜ 📈 現價: `${current_price:.2f}`\n"
                         f"├─ {pnl_icon} 損益: **{pnl_pct*100:+.2f}%**\n"
                         f"├─ ⏳ DTE: `{dte}` 天 ｜ ⚖️ SPY Δ: `{spx_weighted_delta:+.2f}`\n"

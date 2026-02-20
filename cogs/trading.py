@@ -248,7 +248,7 @@ class SchedulerCog(commands.Cog):
         user_ports = {}
         for row in all_portfolios:
             uid = row[0]
-            # row[2:] 取出 (symbol, opt_type, strike, expiry, entry_price, quantity)
+            # row[2:] 取出 (symbol, opt_type, strike, expiry, entry_price, quantity, is_covered)
             user_ports.setdefault(uid, []).append(row[2:])
 
         # 2. 分別計算損益並發送私訊

@@ -20,15 +20,24 @@ class PortfolioCog(commands.Cog):
         app_commands.Choice(name="Put (賣權)", value="put"),
         app_commands.Choice(name="Call (買權)", value="call")
     ])
-    async def add_trade(self, interaction: discord.Interaction, symbol: str, opt_type: app_commands.Choice[str], strike: float, expiry: str, entry_price: float, quantity: int):
+    @app_commands.describe(
+        symbol="股票代號 (如 TSLA)",
+        opt_type="買方或賣方策略",
+        strike="履約價",
+        expiry="到期日 (YYYY-MM-DD)",
+        entry_price="成交價格 (權利金)",
+        quantity="口數",
+        is_covered="是否為 Covered Call (需持有 100 股現股)"
+    )
+    async def add_trade(self, interaction: discord.Interaction, symbol: str, opt_type: app_commands.Choice[str], strike: float, expiry: str, entry_price: float, quantity: int, is_covered: bool):
         symbol = symbol.upper()
         user_id = interaction.user.id
         try:
-            trade_id = database.add_portfolio_record(user_id, symbol, opt_type.value, strike, expiry, entry_price, quantity)
+            trade_id = database.add_portfolio_record(user_id, symbol, opt_type.value, strike, expiry, entry_price, quantity, is_covered)
             action_text = "賣出 (STO)" if quantity < 0 else "買入 (BTO)"
             # 私訊回覆使用者
             await interaction.response.send_message(
-                f"✅ **新增成功 (ID: {trade_id})**: {action_text} {abs(quantity)} 口 `{symbol}` ${strike} {opt_type.value.upper()} ({expiry} 到期)", 
+                f"✅ **新增成功 (ID: {trade_id})**: {action_text} {abs(quantity)} 口 `{symbol}` ${strike} {opt_type.value.upper()} ({expiry} 到期) | Covered: {'是' if is_covered else '否'}", 
                 ephemeral=True
             )
         except Exception as e:
@@ -52,9 +61,10 @@ class PortfolioCog(commands.Cog):
             return
         msg = "📊 **【您的專屬持倉清單】**\n"
         for row in rows:
-            trade_id, sym, o_type, strike, exp, price, qty = row
+            trade_id, sym, o_type, strike, exp, price, qty, is_covered = row
             action = "賣出 (STO)" if qty < 0 else "買入 (BTO)"
-            msg += f"`ID:{trade_id:02d}` | **{sym}** | {exp} 到期 | ${strike} {o_type.upper()} | {action} {abs(qty)}口 | 成本: ${price}\n"
+            cov_str = " | Covered: 是" if is_covered else " | Covered: 否"
+            msg += f"`ID:{trade_id:02d}` | **{sym}** | {exp} 到期 | ${strike} {o_type.upper()} | {action} {abs(qty)}口 | 成本: ${price}{cov_str}\n"
         await interaction.response.send_message(msg, ephemeral=True)
 
     @app_commands.command(name="remove_trade", description="將部位從您的監控庫中移除")

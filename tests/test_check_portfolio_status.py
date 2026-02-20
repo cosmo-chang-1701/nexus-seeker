@@ -136,7 +136,7 @@ class TestCheckPortfolioStatusLogicNew(unittest.TestCase):
         _setup_common_mocks(mock_yf_mod, mock_dt, stock_price=180.0,
                             option_last_price=4.00, option_iv=0.30)
 
-        rows = [("TSLA", "call", 200.0, "2025-03-21", 5.00, -1)]
+        rows = [("TSLA", "call", 200.0, "2025-03-21", 5.00, -1, False)]
         result = check_portfolio_status_logic(rows, user_capital=50000)
 
         report_text = "\n".join(result)
@@ -162,13 +162,13 @@ class TestCheckPortfolioStatusLogicNew(unittest.TestCase):
         """entry_price = 0 → 不應產生除零錯誤，且 pnl_pct 應為 0"""
         _setup_common_mocks(mock_yf_mod, mock_dt)
 
-        rows = [("AAPL", "put", 140.0, "2025-03-21", 0.0, -1)]
+        rows = [("AAPL", "put", 140.0, "2025-03-21", 0.0, -1, False)]
         result = check_portfolio_status_logic(rows, user_capital=50000)
 
         report_text = "\n".join(result)
         self.assertIn("AAPL", report_text)
-        # pnl_pct = 0.0 → 損益應顯示 +0.0%
-        self.assertIn("+0.0%", report_text)
+        # pnl_pct = 0.0 → 損益應顯示 +0.00%
+        self.assertIn("+0.00%", report_text)
         # _evaluate_defense_status 應接收 pnl_pct = 0.0
         call_args = mock_defense.call_args[0]
         self.assertAlmostEqual(call_args[2], 0.0, places=5)
@@ -192,7 +192,7 @@ class TestCheckPortfolioStatusLogicNew(unittest.TestCase):
         _setup_common_mocks(mock_yf_mod, mock_dt,
                             now_date=datetime(2025, 4, 1))
 
-        rows = [("NVDA", "put", 800.0, "2025-03-21", 10.00, -1)]
+        rows = [("NVDA", "put", 800.0, "2025-03-21", 10.00, -1, False)]
         result = check_portfolio_status_logic(rows, user_capital=100000)
 
         self.assertIsInstance(result, list)
@@ -202,7 +202,7 @@ class TestCheckPortfolioStatusLogicNew(unittest.TestCase):
         mock_delta.assert_called_once()
 
     # ----------------------------------------------------------------
-    # Test 4: 賣 Call 的保證金應以股價計算 (不同於賣 Put)
+    # Test 4: Covered Call 的保證金應以持有現股的市值計算
     # ----------------------------------------------------------------
     @patch('market_analysis.portfolio._analyze_correlation', return_value=[])
     @patch('market_analysis.portfolio._calculate_macro_risk', return_value=["macro_line"])
@@ -212,19 +212,19 @@ class TestCheckPortfolioStatusLogicNew(unittest.TestCase):
     @patch('market_analysis.portfolio.delta', return_value=0.30)
     @patch('market_analysis.portfolio.datetime')
     @patch('market_analysis.portfolio.yf')
-    def test_short_call_margin_uses_stock_price(self, mock_yf_mod, mock_dt,
+    def test_covered_call_margin_uses_stock_price(self, mock_yf_mod, mock_dt,
                                                   mock_delta, mock_theta, mock_gamma,
                                                   mock_defense, mock_macro, mock_corr):
-        """賣 Call 的 margin = current_stock_price * 100 * abs(qty) (非 strike)"""
+        """Covered Call 的 margin = current_stock_price * 100 * abs(qty)"""
         stock_price = 180.0
         _setup_common_mocks(mock_yf_mod, mock_dt, stock_price=stock_price)
 
         strike = 200.0
         qty = -3
-        rows = [("TSLA", "call", strike, "2025-03-21", 5.00, qty)]
+        rows = [("TSLA", "call", strike, "2025-03-21", 5.00, qty, True)]
         check_portfolio_status_logic(rows, user_capital=100000)
 
-        # 賣 Call 保證金 = stock_price * 100 * abs(qty) = 180 * 100 * 3 = 54000
+        # Covered Call 保證金 = stock_price * 100 * abs(qty) = 180 * 100 * 3 = 54000
         expected_margin = stock_price * 100 * abs(qty)
         call_args = mock_macro.call_args[0]
         actual_margin = call_args[2]  # 第三個位置引數 = total_margin_used

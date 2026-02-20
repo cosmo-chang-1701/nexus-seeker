@@ -38,19 +38,27 @@ def init_db():
     ''')
     
     conn.commit()
+
+    # 動態檢查並新增 is_covered 欄位 (避免舊資料庫報錯)
+    try:
+        cursor.execute("ALTER TABLE portfolio ADD COLUMN is_covered BOOLEAN DEFAULT 0")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass # 欄位已存在則忽略
+
     conn.close()
     logger.info("Database initialized successfully.")
 
 # ==========================================
 # 交易持倉 (Portfolio) CRUD (綁定 user_id)
 # ==========================================
-def add_portfolio_record(user_id, symbol, opt_type, strike, expiry, entry_price, quantity):
+def add_portfolio_record(user_id, symbol, opt_type, strike, expiry, entry_price, quantity, is_covered):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT INTO portfolio (user_id, symbol, opt_type, strike, expiry, entry_price, quantity)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    ''', (user_id, symbol, opt_type, strike, expiry, entry_price, quantity))
+        INSERT INTO portfolio (user_id, symbol, opt_type, strike, expiry, entry_price, quantity, is_covered)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (user_id, symbol, opt_type, strike, expiry, entry_price, quantity, is_covered))
     trade_id = cursor.lastrowid
     conn.commit()
     conn.close()
@@ -60,7 +68,7 @@ def get_user_portfolio(user_id):
     """取得特定使用者的持倉"""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute('SELECT id, symbol, opt_type, strike, expiry, entry_price, quantity FROM portfolio WHERE user_id = ?', (user_id,))
+    cursor.execute('SELECT id, symbol, opt_type, strike, expiry, entry_price, quantity, is_covered FROM portfolio WHERE user_id = ?', (user_id,))
     rows = cursor.fetchall()
     conn.close()
     return rows
@@ -69,7 +77,7 @@ def get_all_portfolio():
     """取得全站所有持倉 (供背景排程使用)"""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute('SELECT user_id, id, symbol, opt_type, strike, expiry, entry_price, quantity FROM portfolio')
+    cursor.execute('SELECT user_id, id, symbol, opt_type, strike, expiry, entry_price, quantity, is_covered FROM portfolio')
     rows = cursor.fetchall()
     conn.close()
     return rows
