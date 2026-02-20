@@ -64,13 +64,13 @@ def create_scan_embed(data, user_capital=100000.0):
 
     if alloc_pct <= 0:
         # 凱利比例為負或零，代表數學期望值不足，不應建倉
-        embed.add_field(name="⚖️ 凱利準則建議倉位", value="`不建議建倉` (凱利比例為負，數學期望值不足)")
+        kelly_value = "`不建議建倉` (凱利比例為負，數學期望值不足)"
     elif not user_capital or user_capital <= 0:
         # 使用者尚未設定資金
-        embed.add_field(name="⚖️ 凱利準則建議倉位", value=f"`尚未設定資金` (請使用 /set_capital 設定，建議佔比 {alloc_pct*100:.1f}%)")
+        kelly_value = f"`尚未設定資金` (請使用 /set_capital 設定，建議佔比 {alloc_pct*100:.1f}%)"
     elif margin_per_contract <= 0:
         # 保證金資料異常
-        embed.add_field(name="⚖️ 凱利準則建議倉位", value="`保證金資料異常` (無法計算建議口數)")
+        kelly_value = "`保證金資料異常` (無法計算建議口數)"
     else:
         # 套用 Half-Kelly 上限，避免凱利公式在高勝率時建議過度集中
         capped_alloc_pct = min(alloc_pct, MAX_KELLY_ALLOC)
@@ -80,9 +80,11 @@ def create_scan_embed(data, user_capital=100000.0):
         if suggested_contracts > 0:
             total_margin = suggested_contracts * margin_per_contract
             cap_note = f" ⚠️ 已套用上限 {MAX_KELLY_ALLOC*100:.0f}%" if alloc_pct > MAX_KELLY_ALLOC else ""
-            embed.add_field(name="⚖️ 凱利準則建議倉位", value=f"`{suggested_contracts} 口` (佔總資金 {capped_alloc_pct*100:.1f}%, 約 ${total_margin:,.0f}){cap_note}")
+            kelly_value = f"`{suggested_contracts} 口` (佔總資金 {capped_alloc_pct*100:.1f}%, 約 ${total_margin:,.0f}){cap_note}"
         else:
-            embed.add_field(name="⚖️ 凱利準則建議倉位", value=f"`本金門檻不足` (建議佔比 {alloc_pct*100:.1f}%, 每口保證金 ${margin_per_contract:,.0f})")
+            kelly_value = f"`本金門檻不足` (建議佔比 {alloc_pct*100:.1f}%, 每口保證金 ${margin_per_contract:,.0f})"
+
+    embed.add_field(name="⚖️ 凱利準則建議倉位", value=kelly_value)
 
     # 財報預期波動與雷區判定
     if 0 <= data.get('earnings_days', -1) <= 14:
