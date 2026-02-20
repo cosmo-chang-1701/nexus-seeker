@@ -11,6 +11,7 @@ import market_math
 import market_time
 import market_analysis.portfolio
 from cogs.embed_builder import create_scan_embed
+import yfinance as yf
 
 ny_tz = ZoneInfo("America/New_York")
 logger = logging.getLogger(__name__)
@@ -70,7 +71,8 @@ class SchedulerCog(commands.Cog):
         # 2. 批次快取財報日期 (減少重複 API 請求)
         earnings_cache = {}
         for sym in unique_symbols:
-            e_date = await asyncio.to_thread(market_math.get_next_earnings_date, sym)
+            ticker = yf.Ticker(sym)
+            e_date = await asyncio.to_thread(market_math.get_next_earnings_date, ticker)
             if e_date:
                 if isinstance(e_date, datetime): e_date = e_date.date()
                 earnings_cache[sym] = e_date
