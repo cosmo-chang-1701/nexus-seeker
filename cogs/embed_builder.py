@@ -162,21 +162,31 @@ def create_scan_embed(data, user_capital=100000.0):
 
     return embed
 
-
 def create_watchlist_embed(page_data, current_page, total_pages, total_items):
-    """生成觀察清單的分頁 Embed"""
+    """生成觀察清單的分頁 Embed (使用等寬區塊排版)"""
+    
+    if not page_data:
+        description = "目前沒有追蹤任何項目"
+    else:
+        lines = ["```ansi"] # 使用 ansi 可支援文字變色，或純用 ``` 即可
+        lines.append(f"{'標的'.ljust(8)} | {'狀態/成本'.rjust(10)}")
+        lines.append("-" * 21)
+        
+        for sym, cost in page_data:
+            sym_fmt = sym.ljust(8)
+            cost_text = f"${cost}" if cost > 0 else "🔍 觀察中"
+            # 中文與 emoji 的對齊在程式碼區塊有時要抓一下寬度，這邊用 rjust 靠右對齊成本
+            cost_fmt = cost_text.rjust(10) 
+            lines.append(f"{sym_fmt} | {cost_fmt}")
+            
+        lines.append("```")
+        description = "\n".join(lines)
+
     embed = discord.Embed(
-        title=f"📡 【您的專屬觀察清單】 (第 {current_page}/{total_pages} 頁)",
+        title=f"📡 【您的專屬觀察清單】",
+        description=description,
         color=discord.Color.blurple()
     )
     
-    for index, (sym, cost) in enumerate(page_data):
-        cost_text = f"💸 成本: `{cost}`" if cost > 0 else "🔍 觀察中"
-        embed.add_field(name=f"📌 {sym}", value=cost_text, inline=True)
-        
-        # 強制換行技巧 (每兩個項目補一個空白)
-        if (index + 1) % 2 == 0:
-            embed.add_field(name="\u200b", value="\u200b", inline=True)
-
-    embed.set_footer(text=f"📊 總共追蹤了 {total_items} 個項目")
+    embed.set_footer(text=f"頁次: {current_page}/{total_pages} ｜ 📊 總項目: {total_items}")
     return embed

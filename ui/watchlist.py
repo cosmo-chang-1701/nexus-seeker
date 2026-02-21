@@ -7,7 +7,7 @@ class WatchlistPagination(discord.ui.View):
         super().__init__(timeout=180) # 3 分鐘後按鈕失效
         self.data = data
         self.current_page = 1
-        self.items_per_page = 16 # 每頁顯示數量 (維持 16 來達成完美兩欄)
+        self.items_per_page = 50 # 每頁顯示數量
         self.total_pages = math.ceil(len(data) / self.items_per_page) if data else 1
 
     # 生成當前頁面的 Embed
