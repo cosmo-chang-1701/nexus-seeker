@@ -92,6 +92,7 @@ class TestDynamicAfterMarketReport(unittest.TestCase):
         bot.wait_until_ready = AsyncMock()
         bot.fetch_user = AsyncMock()
         bot.notify_all_users = AsyncMock()
+        bot.queue_dm = AsyncMock()
         cog = object.__new__(SchedulerCog)
         cog.bot = bot
         return cog
@@ -139,8 +140,8 @@ class TestDynamicAfterMarketReport(unittest.TestCase):
         # 驗證
         self.assertEqual(mock_get_all.call_count, 1)
         self.assertEqual(mock_check_logic.call_count, 2)  # 兩位用戶各算一次
-        user_a.send.assert_called_once()
-        user_b.send.assert_called_once()
+        # 由於現在是透過 queue_dm 排入，檢查 queue_dm 是否被呼叫
+        self.assertEqual(cog.bot.queue_dm.call_count, 2)
 
     # ----------------------------------------------------------------
     # Scenario 2: 空持倉提前返回
@@ -187,26 +188,18 @@ class TestDynamicAfterMarketReport(unittest.TestCase):
         mock_get_capital.return_value = 50000.0
         mock_check_logic.return_value = ["報告行"]
 
-        # 用戶 A: 正常送達 / 用戶 B: 拋出 Forbidden
+        # mock users
         user_a = AsyncMock()
         user_b = AsyncMock()
-
-        # 取得正確的 Forbidden exception class
-        import discord as _discord
-        user_b.send.side_effect = _discord.Forbidden
-
         cog.bot.fetch_user = AsyncMock(side_effect=lambda uid: {1001: user_a, 2002: user_b}[uid])
 
-        # 不應拋出例外
         try:
             asyncio.run(SchedulerCog.dynamic_after_market_report(cog))
         except Exception as exc:
             self.fail(f"dynamic_after_market_report raised {type(exc).__name__}: {exc}")
 
-        # 用戶 A 正常收到
-        user_a.send.assert_called_once()
-        # 用戶 B 的 send 也被呼叫了 (但拋了 Forbidden)
-        user_b.send.assert_called_once()
+        # 用戶 A 和 B 皆嘗試 queue_dm，被拒絕是在 worker 那端，排程這邊會直接 put 進佇列
+        self.assertEqual(cog.bot.queue_dm.call_count, 2)
 
     # ----------------------------------------------------------------
     # Scenario 4: 空報告不發私訊

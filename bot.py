@@ -1,6 +1,7 @@
 import discord
 import logging
 from discord.ext import commands
+import asyncio
 import database
 
 logger = logging.getLogger(__name__)
@@ -10,11 +11,13 @@ class NexusBot(commands.Bot):
         intents = discord.Intents.default()
         intents.message_content = True
         super().__init__(command_prefix='!', intents=intents)
+        self.message_queue = asyncio.Queue()
 
     async def setup_hook(self):
         await self.load_extension("cogs.portfolio")
         await self.load_extension("cogs.watchlist")
         await self.load_extension("cogs.trading")
+        self.loop.create_task(self._message_worker())
         try:
             synced = await self.tree.sync()
             logger.info(f"✅ 成功同步 {len(synced)} 個 Slash Commands")
@@ -36,15 +39,33 @@ class NexusBot(commands.Bot):
             logger.error(f"發送關閉通知時發生錯誤: {e}")
         await super().close()
 
-    async def notify_all_users(self, message):
-        user_ids = database.get_all_user_ids()
-        count = 0
-        for user_id in user_ids:
+    async def _message_worker(self):
+        """專職負責發送訊息的工人，確保系統不會因為發送訊息卡住"""
+        await self.wait_until_ready()
+        while not self.is_closed():
+            # 1. 取得下一封要寄的信 (如果沒信會自動暫停在這裡，不耗效能)
+            user_id, message, embed = await self.message_queue.get()
+            
             try:
                 user = await self.fetch_user(user_id)
                 if user:
-                    await user.send(message)
-                    count += 1
+                    await user.send(content=message, embed=embed)
             except Exception as e:
-                logger.warning(f"無法發送訊息給用戶 {user_id}: {e}")
-        logger.info(f"已發送通知給 {count} 位用戶: {message}")
+                logger.error(f"發信失敗: {e}")
+            
+            # 2. 強制間隔 0.2 秒再寄下一封
+            await asyncio.sleep(0.2)
+            self.message_queue.task_done()
+            
+    async def queue_dm(self, user_id, message=None, embed=None):
+        """將私訊排入背景佇列"""
+        await self.message_queue.put((user_id, message, embed))
+
+    async def notify_all_users(self, message):
+        """一次將所有訊息排入背景寄發列隊"""
+        user_ids = database.get_all_user_ids()
+        count = 0
+        for user_id in user_ids:
+            await self.queue_dm(user_id, message=message)
+            count += 1
+        logger.info(f"已排程要發送通知給 {count} 位用戶: {message}")

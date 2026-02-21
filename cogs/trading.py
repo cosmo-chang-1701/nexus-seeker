@@ -98,7 +98,7 @@ class SchedulerCog(commands.Cog):
                     scanned_list = "、".join([f"`{s}`" for s in sorted(combined_symbols)])
                     embed = discord.Embed(title="✅ 【盤前財報季雷達掃描完畢】", description=f"已掃描：{scanned_list}\n\n近 3 日內無財報風險，安全過關！", color=discord.Color.green())
                 try:
-                    await user.send(embed=embed)
+                    await self.bot.queue_dm(uid, embed=embed)
                 except discord.Forbidden:
                     pass # 使用者關閉了私訊功能
 
@@ -225,9 +225,9 @@ class SchedulerCog(commands.Cog):
                         if valid_alerts:
                             try:
                                 title = "📡 **【盤中動態掃描】發現建倉機會：**" if is_auto else "⚡ **【管理員強制掃描】雷達結果：**"
-                                await user.send(title)
+                                await self.bot.queue_dm(uid, message=title)
                                 for data in valid_alerts:
-                                    await user.send(embed=create_scan_embed(data, user_capital))
+                                    await self.bot.queue_dm(uid, embed=create_scan_embed(data, user_capital))
                             except Exception as e:
                                 logger.error(f"無法發送私訊給 User ID {uid}: {e}")
                     except discord.Forbidden:
@@ -264,7 +264,7 @@ class SchedulerCog(commands.Cog):
                 if user:
                     embed = discord.Embed(title="📝 您的選擇權持倉健檢", description="\n".join(report_lines), color=discord.Color.gold())
                     try:
-                        await user.send("📊 **【盤後結算報告：部位損益與建議】**", embed=embed)
+                        await self.bot.queue_dm(uid, message="📊 **【盤後結算報告：部位損益與建議】**", embed=embed)
                     except discord.Forbidden:
                         pass
 

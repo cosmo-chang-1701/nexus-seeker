@@ -40,6 +40,7 @@ sys.modules["py_vollib.black_scholes_merton.greeks.analytical"] = mock_vollib
 # Mock config
 mock_config = ModuleType("config")
 mock_config.RISK_FREE_RATE = 0.042
+mock_config.DB_NAME = "test_nexus_data.db"
 sys.modules["config"] = mock_config
 
 # Now import portfolio
@@ -145,7 +146,7 @@ class TestEvaluateDefenseStatus(unittest.TestCase):
     def test_short_put_delta_expansion(self):
         """賣 Put Delta ≤ -0.40 → Roll Down and Out"""
         status = _evaluate_defense_status(-1, 'put', -0.30, -0.40, 45)
-        self.assertIn("Roll Down and Out", status)
+        self.assertIn("Roll Down & Out", status)
 
     def test_short_call_delta_expansion(self):
         """賣 Call Delta ≥ 0.40 → Roll Up & Out"""
