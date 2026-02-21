@@ -20,10 +20,10 @@ def get_user_watchlist(user_id):
     """取得特定使用者的觀察清單"""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute('SELECT symbol FROM watchlist WHERE user_id = ?', (user_id,))
+    cursor.execute('SELECT symbol, stock_cost FROM watchlist WHERE user_id = ?', (user_id,))
     rows = cursor.fetchall()
     conn.close()
-    return [row[0] for row in rows]
+    return rows
 
 def get_all_watchlist():
     """取得全站所有觀察清單 (供背景排程使用)"""
