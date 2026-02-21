@@ -22,6 +22,8 @@ class NexusBot(commands.Bot):
             logger.error(f"❌ 同步指令失敗: {e}")
 
     async def on_ready(self):
+        logger.info(f'初始化資料庫中...')
+        database.init_db()
         logger.info(f'🚀 Nexus Seeker 啟動成功！Bot ID: {self.user}')
         logger.info('等待美股排程觸發...')
         await self.notify_all_users("🚀 Nexus Seeker 機器人已啟動！")

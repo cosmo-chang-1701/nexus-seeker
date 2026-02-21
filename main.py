@@ -2,16 +2,12 @@ import logging
 import asyncio
 import signal
 import sys
-import database
 from config import DISCORD_TOKEN, LOG_LEVEL
 from bot import NexusBot
 
 # 0. 設定日誌
 logging.basicConfig(level=getattr(logging, LOG_LEVEL), format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')
 logger = logging.getLogger(__name__)
-
-# 1. 初始化資料庫
-database.init_db()
 
 async def main():
     if not DISCORD_TOKEN:
