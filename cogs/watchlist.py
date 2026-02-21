@@ -36,11 +36,17 @@ class WatchlistCog(commands.Cog):
     @app_commands.command(name="list_watch", description="列出您的雷達觀察清單")
     async def list_watch(self, interaction: discord.Interaction):
         user_id = interaction.user.id
-        symbols = database.get_user_watchlist(user_id)
-        if not symbols:
+        symbols_data = database.get_user_watchlist(user_id)
+        if not symbols_data:
             await interaction.response.send_message("📭 您的觀察清單是空的。", ephemeral=True)
             return
-        msg = "📡 **【您的專屬觀察清單】**\n" + "、".join([f"`{sym}`" for sym in symbols])
+
+        lines = []
+        for sym, cost in symbols_data:
+            cost_text = f" (💸 成本: `{cost}`)" if cost > 0 else " (🔍 觀察中)"
+            lines.append(f"• **{sym}**{cost_text}")
+        
+        msg = "📡 **【您的專屬觀察清單】**\n" + "\n".join(lines)
         await interaction.response.send_message(msg, ephemeral=True)
 
     @app_commands.command(name="remove_watch", description="將股票代號從您的觀察清單移除")
