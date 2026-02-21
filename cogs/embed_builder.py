@@ -161,3 +161,22 @@ def create_scan_embed(data, user_capital=100000.0):
             embed.add_field(name="💡 經理人策略升級建議", value=upgrade_text, inline=False)
 
     return embed
+
+
+def create_watchlist_embed(page_data, current_page, total_pages, total_items):
+    """生成觀察清單的分頁 Embed"""
+    embed = discord.Embed(
+        title=f"📡 【您的專屬觀察清單】 (第 {current_page}/{total_pages} 頁)",
+        color=discord.Color.blurple()
+    )
+    
+    for index, (sym, cost) in enumerate(page_data):
+        cost_text = f"💸 成本: `{cost}`" if cost > 0 else "🔍 觀察中"
+        embed.add_field(name=f"📌 {sym}", value=cost_text, inline=True)
+        
+        # 強制換行技巧 (每兩個項目補一個空白)
+        if (index + 1) % 2 == 0:
+            embed.add_field(name="\u200b", value="\u200b", inline=True)
+
+    embed.set_footer(text=f"📊 總共追蹤了 {total_items} 個項目")
+    return embed

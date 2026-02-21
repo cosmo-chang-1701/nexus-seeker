@@ -8,6 +8,10 @@ import database
 import market_math
 from cogs.embed_builder import create_scan_embed
 
+import math
+
+from ui.watchlist import WatchlistPagination
+
 logger = logging.getLogger(__name__)
 
 
@@ -41,13 +45,9 @@ class WatchlistCog(commands.Cog):
             await interaction.response.send_message("📭 您的觀察清單是空的。", ephemeral=True)
             return
 
-        lines = []
-        for sym, cost in symbols_data:
-            cost_text = f" (💸 成本: `{cost}`)" if cost > 0 else " (🔍 觀察中)"
-            lines.append(f"• **{sym}**{cost_text}")
-        
-        msg = "📡 **【您的專屬觀察清單】**\n" + "\n".join(lines)
-        await interaction.response.send_message(msg, ephemeral=True)
+        view = WatchlistPagination(symbols_data)
+        view.update_buttons()
+        await interaction.response.send_message(embed=view.create_embed(), view=view, ephemeral=True)
 
     @app_commands.command(name="remove_watch", description="將股票代號從您的觀察清單移除")
     async def remove_watch(self, interaction: discord.Interaction, symbol: str):
