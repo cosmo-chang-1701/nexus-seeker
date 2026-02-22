@@ -28,6 +28,9 @@ class SchedulerCog(commands.Cog):
         # 4小時冷卻機制
         self.signal_cooldowns = {}
         self.COOLDOWN_HOURS = 4
+        
+        # 財報風險預警天數設定
+        self.EARNINGS_WARNING_DAYS = 14
 
         self.last_notified_target = None
         logger.info("SchedulerCog loaded. Background tasks started.")
@@ -86,7 +89,7 @@ class SchedulerCog(commands.Cog):
                 e_date = earnings_cache.get(sym)
                 if e_date:
                     days_left = (e_date - today).days
-                    if 0 <= days_left <= 3:
+                    if 0 <= days_left <= self.EARNINGS_WARNING_DAYS:
                         status = "⚠️ **持倉高風險**" if sym in symbols_data['port'] else "👀 觀察清單"
                         alerts.append(f"**{sym}** ({status})\n└ 📅 財報日: `{e_date}` (倒數 **{days_left}** 天)")
 
@@ -96,7 +99,7 @@ class SchedulerCog(commands.Cog):
                     embed = discord.Embed(title="🚨 【盤前財報季雷達預警】", description="\n\n".join(alerts), color=discord.Color.red())
                 else:
                     scanned_list = "、".join([f"`{s}`" for s in sorted(combined_symbols)])
-                    embed = discord.Embed(title="✅ 【盤前財報季雷達掃描完畢】", description=f"已掃描：{scanned_list}\n\n近 3 日內無財報風險，安全過關！", color=discord.Color.green())
+                    embed = discord.Embed(title="✅ 【盤前財報季雷達掃描完畢】", description=f"已掃描：{scanned_list}\n\n近 {self.EARNINGS_WARNING_DAYS} 日內無財報風險，安全過關！", color=discord.Color.green())
                 try:
                     await self.bot.queue_dm(uid, embed=embed)
                 except discord.Forbidden:

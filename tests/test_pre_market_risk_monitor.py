@@ -46,11 +46,12 @@ class TestPreMarketRiskMonitor(unittest.IsolatedAsyncioTestCase):
             # 不 mock datetime，直接執行
             await self.cog.pre_market_risk_monitor.coro(self.cog)
             
+            
             self.bot.fetch_user.assert_not_called()
-            self.mock_user.send.assert_not_called()
+            self.bot.queue_dm.assert_not_called()
 
     async def test_02_symbols_with_no_earnings_risk(self):
-        """測試案例 2：有持倉及觀察清單，但財報日距離大於 3 天 (標的皆為安全)"""
+        """測試案例 2：有持倉及觀察清單，但財報日距離大於 14 天 (標的皆為安全)"""
         # Update fake_port to match get_all_portfolio schema: (user_id, id, symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost)
         fake_port = [(1, 1, "AAPL", "CALL", 150.0, "2026-03-20", 5.0, 1, 0.0)]
         # Update fake_watch to match get_all_watchlist schema: (user_id, symbol, stock_cost)
@@ -63,19 +64,19 @@ class TestPreMarketRiskMonitor(unittest.IsolatedAsyncioTestCase):
             
             # 💡 核心解法：直接用真實時間去推算 10 天後，讓代碼自己去算相對距離
             real_now = datetime.now(ny_tz)
-            mock_earnings.return_value = (real_now + timedelta(days=10)).date()
+            mock_earnings.return_value = (real_now + timedelta(days=20)).date()
             
             await self.cog.pre_market_risk_monitor.coro(self.cog)
             
             self.bot.fetch_user.assert_called_once_with(1)
-            self.mock_user.send.assert_called_once()
+            self.bot.queue_dm.assert_called_once()
             
-            embed = self.mock_user.send.call_args.kwargs.get('embed')
+            embed = self.bot.queue_dm.call_args.kwargs.get('embed')
             self.assertEqual(embed.color, discord.Color.green())
 
     async def test_03_symbols_with_earnings_risk(self):
         """
-        測試案例 3：有持倉及觀察清單，且財報日在 3 天以內 (標的具風險)
+        測試案例 3：有持倉及觀察清單，且財報日在 14 天以內 (標的具風險)
         預期行為：機器人應發送紅色警告 Embed 給使用者，並標示倒數天數。
         """
         # 1. 準備假資料：模擬使用者 ID 為 2，持有 TSLA，觀察 NVDA
@@ -98,10 +99,10 @@ class TestPreMarketRiskMonitor(unittest.IsolatedAsyncioTestCase):
             
             # 4. 驗證結果：確認是否有去抓取 User ID 2 並發送訊息
             self.bot.fetch_user.assert_called_once_with(2)
-            self.mock_user.send.assert_called_once()
+            self.bot.queue_dm.assert_called_once()
             
             # 5. 深入驗證 Embed 內容是否符合「高風險預警」的規格
-            embed = self.mock_user.send.call_args.kwargs.get('embed')
+            embed = self.bot.queue_dm.call_args.kwargs.get('embed')
             self.assertIsNotNone(embed, "必須發送 Embed 訊息")
             
             # 檢查標題與顏色 (應該要是紅色的警報)
@@ -129,7 +130,7 @@ class TestPreMarketRiskMonitor(unittest.IsolatedAsyncioTestCase):
             real_now = datetime.now(ny_tz)
             mock_earnings.return_value = (real_now + timedelta(days=2)).date()
             
-            self.mock_user.send.side_effect = discord.Forbidden(mock_resp, "Cannot send message")
+            self.bot.queue_dm.side_effect = discord.Forbidden(mock_resp, "Cannot send message")
             
             try:
                 await self.cog.pre_market_risk_monitor.coro(self.cog)
