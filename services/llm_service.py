@@ -27,8 +27,11 @@ class RiskAssessment(BaseModel):
     decision: Literal["APPROVE", "VETO"] = Field(
         description="風控裁決結果：APPROVE (批准) 或 VETO (否決)"
     )
+    tags: list[str] = Field(
+        description="萃取 2 到 3 個極度精簡的風控關鍵字標籤，例如：['常規雜音', 'Long Gamma', '無黑天鵝風險']"
+    )
     reasoning: str = Field(
-        description="用繁體中文簡要說明判斷理由 (50字以內)"
+        description="一句話的終極風控結論 (請控制在 30 字以內，極度冷靜客觀)"
     )
 
 async def evaluate_trade_risk(symbol: str, strategy: str, news_context: str) -> dict:
@@ -83,7 +86,12 @@ async def evaluate_trade_risk(symbol: str, strategy: str, news_context: str) -> 
         )
         
         result = response.output_parsed
-        return result.model_dump()
+        tags_str = " ".join([f"[{tag}]" for tag in result.tags])
+        formatted_reasoning = f"🏷️ 標籤：{tags_str}\n📝 理由：{result.reasoning}"
+        return {
+            "decision": result.decision,
+            "reasoning": formatted_reasoning
+        }
 
     except Exception as e:
         logger.error(f"[{symbol}] LLM 伺服器連線或推論失敗: {e}")

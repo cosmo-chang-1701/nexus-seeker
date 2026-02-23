@@ -145,7 +145,7 @@ def create_scan_embed(data, user_capital=100000.0):
 
     spread_info = (f"**Bid:** `{data.get('bid', 0):.2f}` ｜ **Ask:** `{data.get('ask', 0):.2f}` (價差 `{data.get('spread_ratio', 0):.1f}%`)\n"
                    f"**狀態:** {liq_status} {liq_msg}\n"
-                   f"🎯 **Limit (中價掛單建議):** `{mid_price:.2f}`")
+                   f"🎯 **Limit (中價掛單建議):** `{mid_price:.2f}`\n\u200b")
     embed.add_field(name="💱 報價與流動性分析", value=spread_info, inline=False)
 
     # === 策略升級提示 ===
@@ -157,7 +157,7 @@ def create_scan_embed(data, user_capital=100000.0):
             
             upgrade_text = (f"為抵銷 Theta (時間價值) 衰減並降低建倉成本，\n"
                             f"建議在買入本合約的同時，賣出更價外的 **${hedge_strike:.0f} {hedge_type}**\n"
-                            f"👉 組合為: **{spread_type}**")
+                            f"👉 組合為: **{spread_type}**\n\u200b")
             embed.add_field(name="💡 經理人策略升級建議", value=upgrade_text, inline=False)
 
     ai_decision = data.get('ai_decision')
