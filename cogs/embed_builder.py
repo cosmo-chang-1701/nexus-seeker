@@ -160,6 +160,27 @@ def create_scan_embed(data, user_capital=100000.0):
                             f"👉 組合為: **{spread_type}**")
             embed.add_field(name="💡 經理人策略升級建議", value=upgrade_text, inline=False)
 
+    ai_decision = data.get('ai_decision')
+    ai_reasoning = data.get('ai_reasoning')
+
+    if ai_decision:
+        if ai_decision == "APPROVE":
+            ai_title = "🤖 Argo Cortex: ✅ 交易批准 (APPROVE)"
+            # 正常放行，使用一般灰底程式碼區塊
+            ai_value = f"```\n{ai_reasoning}\n```"
+        elif ai_decision == "VETO":
+            ai_title = "🤖 Argo Cortex: ⛔ 否決交易 (VETO 黑天鵝警告)"
+            # 觸發黑天鵝警報，使用 diff 語法呈現紅字，並強制覆寫左側飾條顏色為深紅色
+            ai_value = f"```diff\n- 警告: {ai_reasoning}\n```"
+            embed.color = discord.Color.dark_red()
+        elif ai_decision == "SKIP":
+            ai_title = "🤖 Argo Cortex: ⚠️ 未啟用 (SKIP)"
+            # 未啟用，使用一般灰底程式碼區塊
+            ai_value = f"```\n{ai_reasoning}\n```"
+            embed.color = discord.Color.blue()
+            
+        embed.add_field(name=ai_title, value=ai_value, inline=False)
+
     return embed
 
 def create_watchlist_embed(page_data, current_page, total_pages, total_items):
@@ -169,15 +190,33 @@ def create_watchlist_embed(page_data, current_page, total_pages, total_items):
         description = "目前沒有追蹤任何項目"
     else:
         lines = ["```ansi"] # 使用 ansi 可支援文字變色，或純用 ``` 即可
-        lines.append(f"{'標的'.ljust(8)} | {'狀態/成本'.rjust(10)}")
-        lines.append("-" * 21)
         
-        for sym, cost in page_data:
+        # 1. 標頭修改為四欄
+        header = f"{'標的'.ljust(8)} | {'狀態'.ljust(7)} | {'成本'.rjust(8)} | {'LLM'.rjust(3)}"
+        lines.append(header)
+        
+        # 2. 分隔線配合四欄總長度加長
+        lines.append("-" * 37) 
+        
+        for sym, cost, use_llm in page_data:
             sym_fmt = sym.ljust(8)
-            cost_text = f"${cost}" if cost > 0 else "🔍 觀察中"
-            # 中文與 emoji 的對齊在程式碼區塊有時要抓一下寬度，這邊用 rjust 靠右對齊成本
-            cost_fmt = cost_text.rjust(10) 
-            lines.append(f"{sym_fmt} | {cost_fmt}")
+            
+            # 3. 將狀態與成本拆分為獨立變數
+            if cost > 0:
+                status_text = "📦 持倉"
+                cost_text = f"${cost:.2f}"
+            else:
+                status_text = "🔍 觀察"
+                cost_text = "-"
+                
+            status_fmt = status_text.ljust(7)
+            cost_fmt = cost_text.rjust(8) 
+            
+            llm_icon = "🤖" if use_llm else "⚪"
+            llm_fmt = llm_icon.rjust(3)
+            
+            # 4. 組合四欄輸出
+            lines.append(f"{sym_fmt} | {status_fmt} | {cost_fmt} | {llm_fmt}")
             
         lines.append("```")
         description = "\n".join(lines)

@@ -25,9 +25,9 @@ sys.modules["yfinance"] = mock_yf
 # Mock py_vollib and submodules
 mock_vollib = MagicMock()
 sys.modules["py_vollib"] = mock_vollib
-sys.modules["py_vollib.black_scholes"] = mock_vollib
-sys.modules["py_vollib.black_scholes.greeks"] = mock_vollib
-sys.modules["py_vollib.black_scholes.greeks.analytical"] = mock_vollib
+sys.modules["py_vollib.black_scholes_merton"] = mock_vollib
+sys.modules["py_vollib.black_scholes_merton.greeks"] = mock_vollib
+sys.modules["py_vollib.black_scholes_merton.greeks.analytical"] = mock_vollib
 
 # Mock config
 mock_config = ModuleType("config")
@@ -102,8 +102,9 @@ class TestMarketStrategy(unittest.TestCase):
         
         # 7. Validation
         mock_validate.return_value = {
-             'bid': 2.0, 'ask': 2.1, 'spread': 0.1, 'spread_ratio': 5.0,
-             'vrp': 0.05, 'expected_move': 10.0, 'em_lower': 140.0, 'em_upper': 160.0
+             'bid': 2.0, 'ask': 2.1, 'mid_price': 2.05, 'spread': 0.1, 'spread_ratio': 5.0,
+             'vrp': 0.05, 'expected_move': 10.0, 'em_lower': 140.0, 'em_upper': 160.0,
+             'suggested_hedge_strike': 130.0, 'liq_status': 'Passed', 'liq_msg': ''
         }
         
         # 8. Sizing

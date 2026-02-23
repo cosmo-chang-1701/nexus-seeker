@@ -41,6 +41,7 @@ sys.modules.setdefault("py_vollib.black_scholes_merton.greeks.analytical", mock_
 if "config" not in sys.modules:
     mock_config = ModuleType("config")
     mock_config.RISK_FREE_RATE = 0.042
+    mock_config.TARGET_DELTAS = {"STO_PUT": -0.16, "STO_CALL": 0.16}
     sys.modules["config"] = mock_config
 
 import os

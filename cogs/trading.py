@@ -151,7 +151,7 @@ class SchedulerCog(commands.Cog):
     async def _run_market_scan_logic(self, is_auto=True, triggered_by=None):
         """共用的掃描核心邏輯"""
         try:
-            all_watchlists = database.get_all_watchlist() # [(user_id, symbol, stock_cost), ...]
+            all_watchlists = database.get_all_watchlist() # [(user_id, symbol, stock_cost, use_llm), ...]
             
             if not all_watchlists:
                 if not is_auto and triggered_by:
@@ -159,19 +159,30 @@ class SchedulerCog(commands.Cog):
                 return
 
             # 1. 提取所有不重複的標的與成本對進行掃描
-            unique_targets = set((sym, stock_cost) for uid, sym, stock_cost in all_watchlists)
+            unique_targets = set((sym, stock_cost, use_llm) for uid, sym, stock_cost, use_llm in all_watchlists)
             scan_results = {}
             
             # 如果是手動觸發，傳送開始訊息
             if not is_auto and triggered_by:
                 # 算一下有幾檔獨立的股票
-                unique_symbols = set(sym for sym, _ in unique_targets)
+                unique_symbols = set(sym for sym, _, _ in unique_targets)
                 await triggered_by.send(f"🔍 **開始掃描 {len(unique_symbols)} 檔標的...**")
             
-            for sym, stock_cost in unique_targets:
+            for sym, stock_cost, use_llm in unique_targets:
+                logger.info(f"User {triggered_by.id} triggered manual_scan for {sym}")
                 try:
                     res = await asyncio.to_thread(market_math.analyze_symbol, sym, stock_cost)
-                    if res: scan_results[(sym, stock_cost)] = res
+                    if res:
+                        if use_llm:
+                            from services import llm_service, news_service
+                            news_text = await news_service.fetch_recent_news(sym)
+                            ai_verdict = await llm_service.evaluate_trade_risk(sym, res['strategy'], news_text)
+                            res['ai_decision'] = ai_verdict.get('decision', 'APPROVE')
+                            res['ai_reasoning'] = ai_verdict.get('reasoning', '無資料')
+                        else:
+                            res['ai_decision'] = 'SKIP'
+                            res['ai_reasoning'] = '未啟用 LLM 語意風控'
+                        scan_results[(sym, stock_cost, use_llm)] = res
                 except Exception as e:
                     logger.error(f"Error scanning {sym} with cost {stock_cost}: {e}")
                 await asyncio.sleep(0.5)
@@ -184,9 +195,9 @@ class SchedulerCog(commands.Cog):
 
             # 2. 根據使用者的訂閱清單分發結果
             user_alerts = {}
-            for uid, sym, stock_cost in all_watchlists:
-                if (sym, stock_cost) in scan_results:
-                    user_alerts.setdefault(uid, []).append(scan_results[(sym, stock_cost)])
+            for uid, sym, stock_cost, use_llm in all_watchlists:
+                if (sym, stock_cost, use_llm) in scan_results:
+                    user_alerts.setdefault(uid, []).append(scan_results[(sym, stock_cost, use_llm)])
 
             now = datetime.now(ny_tz)
             # 3. 發送私訊

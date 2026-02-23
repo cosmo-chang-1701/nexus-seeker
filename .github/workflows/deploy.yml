@@ -85,20 +85,25 @@ jobs:
       # 步驟 1: 使用 SSH 連線到你的 Droplet 並執行部署腳本
       - name: Deploy to Droplet via SSH
         uses: appleboy/ssh-action@v1.2.0
+        env:
+          SERVICE_NAME: ${{ env.SERVICE_NAME }}
+          IMAGE_WITH_TAG: ${{ env.IMAGE_NAME }}:${{ needs.build-and-push.outputs.version }}
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          DISCORD_ADMIN_USER_ID: ${{ secrets.DISCORD_ADMIN_USER_ID }}
+          LLM_API_BASE: ${{ secrets.LLM_API_BASE }}
+          LLM_MODEL_NAME: ${{ secrets.LLM_MODEL_NAME }}
+          API_KEY: ${{ secrets.API_KEY }}
+          TZ: "America/New_York"
         with:
           host: ${{ secrets.DIGITALOCEAN_HOST }}
           username: ${{ secrets.DIGITALOCEAN_USERNAME }}
           key: ${{ secrets.DIGITALOCEAN_SSH_KEY }}
+          envs: SERVICE_NAME,IMAGE_WITH_TAG,DISCORD_TOKEN,DISCORD_ADMIN_USER_ID,LLM_API_BASE,LLM_MODEL_NAME,API_KEY,TZ
           script: |
             # 初始化 Docker Swarm (如果尚未初始化的話)
             if ! docker info | grep -q "Swarm: active"; then
               docker swarm init
             fi
-
-            # 從 GitHub Actions 的 env context 接收變數
-            SERVICE_NAME="${{ env.SERVICE_NAME }}"
-            IMAGE_WITH_TAG="${{ env.IMAGE_NAME }}:${{ needs.build-and-push.outputs.version }}"
-
 
             # 登入 GHCR
             echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
@@ -106,25 +111,36 @@ jobs:
             # 拉取最新的 Docker 映像
             docker pull $IMAGE_WITH_TAG
 
-            # --- 移除舊服務 ---
-            echo "--- Removing existing service to unlock secrets... ---"
-            docker service rm $SERVICE_NAME || true
-
-            # --- 建立全新的服務 ---
-            echo "--- Creating new service with updated image and secrets... ---"
-            
             # 確保資料卷存在
             docker volume create nexus-data || true
 
-            docker service create \
-              --name $SERVICE_NAME \
-              --replicas 1 \
-              --restart-condition on-failure \
-              --mount type=volume,source=nexus-data,target=/app/data \
-              --env TZ="America/New_York" \
-              --env DISCORD_TOKEN="${{ secrets.DISCORD_TOKEN }}" \
-              --with-registry-auth \
-              $IMAGE_WITH_TAG
+            # --- 使用 Docker Stack 部署以實現滾動更新 ---
+            echo "--- Deploying stack $SERVICE_NAME... ---"
+            
+            docker stack deploy --with-registry-auth -c - $SERVICE_NAME <<EOF
+            version: '3.8'
+            services:
+              bot:
+                image: $IMAGE_WITH_TAG
+                deploy:
+                  replicas: 1
+                  restart_policy:
+                    condition: on-failure
+                  update_config:
+                    order: start-first
+                volumes:
+                  - nexus-data:/app/data
+                environment:
+                  - TZ=\$TZ
+                  - DISCORD_TOKEN=\$DISCORD_TOKEN
+                  - DISCORD_ADMIN_USER_ID=\$DISCORD_ADMIN_USER_ID
+                  - LLM_API_BASE=\$LLM_API_BASE
+                  - LLM_MODEL_NAME=\$LLM_MODEL_NAME
+                  - API_KEY=\$API_KEY
+            volumes:
+              nexus-data:
+                external: true
+            EOF
 
             # 清理所有未使用的映像檔，以釋放空間
             docker image prune -f

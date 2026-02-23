@@ -19,13 +19,15 @@ from types import ModuleType
 
 # --- MOCK DEPENDENCIES BEFORE IMPORTING STRATEGY ---
 
-# Mock numpy
-mock_np = MagicMock()
-sys.modules["numpy"] = mock_np
+# (Removed numpy/pandas mocks to allow real pandas to load without crashing)
 
 # Mock yfinance
 mock_yf = MagicMock()
 sys.modules["yfinance"] = mock_yf
+
+# Mock pandas_ta
+mock_pandas_ta = MagicMock()
+sys.modules.setdefault("pandas_ta", mock_pandas_ta)
 
 # Mock py_vollib and submodules
 mock_vollib = MagicMock()
@@ -40,8 +42,8 @@ sys.modules["py_vollib.black_scholes_merton.greeks.analytical"] = mock_vollib
 # Mock config
 mock_config = ModuleType("config")
 mock_config.TARGET_DELTAS = {
-    "STO_PUT": -0.20,
-    "STO_CALL": 0.20,
+    "STO_PUT": -0.16,
+    "STO_CALL": 0.16,
     "BTO_CALL": 0.50,
     "BTO_PUT": -0.50,
 }
@@ -91,10 +93,10 @@ def _assert_embed_valid(test_case, embed, expected_strategy, expected_symbol):
     # Title 應包含策略名稱和標的代號
     test_case.assertIn(expected_symbol, embed.title)
     # 應有多個 field
-    test_case.assertGreater(len(embed.fields), 0)
-    # 第一個 field 應是「標的現價」
-    test_case.assertEqual(embed.fields[0].name, "標的現價")
-    # 應有 AROC field
+    test_case.assertTrue(len(embed.fields) >= 6)
+    test_case.assertEqual(embed.fields[0].name, "🏷️ 標的現價⠀⠀⠀⠀")
+
+    # 驗證必要欄位存在 (這些是 create_scan_embed 中的常數)
     aroc_fields = [f for f in embed.fields if "AROC" in f.name]
     test_case.assertTrue(len(aroc_fields) > 0, "Embed 應包含 AROC 欄位")
     # 應有 Delta / IV field
@@ -463,7 +465,7 @@ class TestDetermineStrategySignalAllBranches(unittest.TestCase):
         strat, opt, delta, min_d, max_d = strategy._determine_strategy_signal(ind)
         self.assertEqual(strat, "STO_PUT")
         self.assertEqual(opt, "put")
-        self.assertAlmostEqual(delta, -0.20)
+        self.assertAlmostEqual(delta, -0.16)
         self.assertEqual(min_d, 30)
         self.assertEqual(max_d, 45)
 
@@ -473,7 +475,7 @@ class TestDetermineStrategySignalAllBranches(unittest.TestCase):
         strat, opt, delta, min_d, max_d = strategy._determine_strategy_signal(ind)
         self.assertEqual(strat, "STO_CALL")
         self.assertEqual(opt, "call")
-        self.assertAlmostEqual(delta, 0.20)
+        self.assertAlmostEqual(delta, 0.16)
         self.assertEqual(min_d, 30)
         self.assertEqual(max_d, 45)
 

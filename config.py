@@ -11,6 +11,9 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "WARNING").upper()
 # 系統與模型參數
 RISK_FREE_RATE = 0.042
 DB_NAME = "data/nexus_data.db"
+LLM_API_BASE = os.getenv("LLM_API_BASE", None)
+LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", None)
+API_KEY = os.getenv("API_KEY", None)
 
 # 策略目標 Delta 參數
 TARGET_DELTAS = {
