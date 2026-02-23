@@ -92,7 +92,7 @@ def create_scan_embed(data, user_capital=100000.0):
             
         embed.add_field(name="📊 財報預期波動 (MMM)", value=f"`{mmm_str}`\n{bounds_str}\n{safety_icon}\n\u200b", inline=False)
 
-    # === 🛡️ 新增：Covered Call 專屬真實防線 ===
+    # === Covered Call 專屬真實防線 ===
     if is_covered:
         bid = data.get('bid', 0)
         true_breakeven = stock_cost - bid
@@ -160,9 +160,16 @@ def create_scan_embed(data, user_capital=100000.0):
                             f"👉 組合為: **{spread_type}**\n\u200b")
             embed.add_field(name="💡 經理人策略升級建議", value=upgrade_text, inline=False)
 
+    # === 個股新聞 ===
+    if data.get('news_text'):
+        news_text = data.get('news_text')
+        if news_text:
+            news_context = f"```{news_text}\n\u200b```"
+            embed.add_field(name="📰 最新新聞", value=news_context, inline=False)
+
+    # === AI 驗證 ===
     ai_decision = data.get('ai_decision')
     ai_reasoning = data.get('ai_reasoning')
-
     if ai_decision:
         if ai_decision == "APPROVE":
             ai_title = "🤖 Argo Cortex: ✅ 交易批准 (APPROVE)"

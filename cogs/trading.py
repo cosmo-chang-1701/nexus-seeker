@@ -12,6 +12,7 @@ import market_time
 import market_analysis.portfolio
 from cogs.embed_builder import create_scan_embed
 import yfinance as yf
+from services import news_service, llm_service
 
 ny_tz = ZoneInfo("America/New_York")
 logger = logging.getLogger(__name__)
@@ -161,27 +162,33 @@ class SchedulerCog(commands.Cog):
             # 1. 提取所有不重複的標的與成本對進行掃描
             unique_targets = set((sym, stock_cost, use_llm) for uid, sym, stock_cost, use_llm in all_watchlists)
             scan_results = {}
+            news_cache = {} # 單次掃描內的新聞快取
             
             # 如果是手動觸發，傳送開始訊息
             if not is_auto and triggered_by:
-                # 算一下有幾檔獨立的股票
                 unique_symbols = set(sym for sym, _, _ in unique_targets)
                 await triggered_by.send(f"🔍 **開始掃描 {len(unique_symbols)} 檔標的...**")
             
             for sym, stock_cost, use_llm in unique_targets:
-                logger.info(f"User {triggered_by.id} triggered manual_scan for {sym}")
+                trigger_name = f"User {triggered_by.id}" if triggered_by else "System Auto"
+                logger.info(f"{trigger_name} scanning {sym} (Cost: {stock_cost}, LLM: {use_llm})")
                 try:
                     res = await asyncio.to_thread(market_math.analyze_symbol, sym, stock_cost)
                     if res:
+                        # 優先從快取取得新聞
+                        if sym not in news_cache:
+                            news_cache[sym] = await news_service.fetch_recent_news(sym)
+                        
+                        news_text = news_cache[sym]
+                        
                         if use_llm:
-                            from services import llm_service, news_service
-                            news_text = await news_service.fetch_recent_news(sym)
                             ai_verdict = await llm_service.evaluate_trade_risk(sym, res['strategy'], news_text)
                             res['ai_decision'] = ai_verdict.get('decision', 'APPROVE')
                             res['ai_reasoning'] = ai_verdict.get('reasoning', '無資料')
                         else:
                             res['ai_decision'] = 'SKIP'
                             res['ai_reasoning'] = '未啟用 LLM 語意風控'
+                        res['news_text'] = news_text
                         scan_results[(sym, stock_cost, use_llm)] = res
                 except Exception as e:
                     logger.error(f"Error scanning {sym} with cost {stock_cost}: {e}")

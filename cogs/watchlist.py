@@ -126,6 +126,8 @@ class WatchlistCog(commands.Cog):
             from services import llm_service, news_service
             news_text = await news_service.fetch_recent_news(symbol)
             ai_verdict = await llm_service.evaluate_trade_risk(symbol, result['strategy'], news_text)
+
+            result['news_text'] = news_text
             result['ai_decision'] = ai_verdict.get('decision', 'APPROVE')
             result['ai_reasoning'] = ai_verdict.get('reasoning', '無資料')
 
@@ -134,7 +136,6 @@ class WatchlistCog(commands.Cog):
             await interaction.followup.send(embed=embed)
         else:
             await interaction.followup.send(f"📊 目前 `{symbol.upper()}` 無明確訊號或無合適合約。")
-
 
 async def setup(bot):
     await bot.add_cog(WatchlistCog(bot))
