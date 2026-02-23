@@ -41,15 +41,17 @@ class WatchlistCog(commands.Cog):
 
     @app_commands.command(name="list_watch", description="列出您的雷達觀察清單")
     async def list_watch(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
         user_id = interaction.user.id
         symbols_data = database.get_user_watchlist(user_id)
         if not symbols_data:
-            await interaction.response.send_message("📭 您的觀察清單是空的。", ephemeral=True)
+            await interaction.followup.send("📭 您的觀察清單是空的。", ephemeral=True)
             return
 
         view = WatchlistPagination(symbols_data)
         view.update_buttons()
-        await interaction.response.send_message(embed=view.create_embed(), view=view, ephemeral=True)
+        await interaction.followup.send(embed=view.create_embed(), view=view, ephemeral=True)
 
     @app_commands.command(name="edit_watch", description="編輯觀察清單中的標的設定")
     @app_commands.describe(
