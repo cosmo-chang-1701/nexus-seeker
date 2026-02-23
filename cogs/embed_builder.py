@@ -168,10 +168,10 @@ def create_scan_embed(data, user_capital=100000.0):
             embed.add_field(name="📰 最新新聞", value=news_context, inline=False)
 
     # === Reddit 討論 ===
-    if data.get('reddit_context'):
-        reddit_context = data.get('reddit_context')
-        if reddit_context:
-            reddit_context = f"```{reddit_context}\n\u200b```"
+    if data.get('reddit_text'):
+        reddit_text = data.get('reddit_text')
+        if reddit_text:
+            reddit_context = f"```{reddit_text}\n\u200b```"
             embed.add_field(name="📰 Reddit 討論", value=reddit_context, inline=False)
 
     # === AI 驗證 ===
