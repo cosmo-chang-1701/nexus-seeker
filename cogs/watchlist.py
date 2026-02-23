@@ -123,11 +123,13 @@ class WatchlistCog(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         result = await asyncio.to_thread(market_math.analyze_symbol, symbol)
         if result:
-            from services import llm_service, news_service
+            from services import llm_service, news_service, reddit_service
             news_text = await news_service.fetch_recent_news(symbol)
-            ai_verdict = await llm_service.evaluate_trade_risk(symbol, result['strategy'], news_text)
+            reddit_text = await reddit_service.get_reddit_context(symbol)
+            ai_verdict = await llm_service.evaluate_trade_risk(symbol, result['strategy'], news_text, reddit_text)
 
             result['news_text'] = news_text
+            result['reddit_text'] = reddit_text
             result['ai_decision'] = ai_verdict.get('decision', 'APPROVE')
             result['ai_reasoning'] = ai_verdict.get('reasoning', '無資料')
 

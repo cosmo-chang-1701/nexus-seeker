@@ -34,42 +34,41 @@ class RiskAssessment(BaseModel):
         description="一句話的終極風控結論 (請控制在 30 字以內，極度冷靜客觀)"
     )
 
-async def evaluate_trade_risk(symbol: str, strategy: str, news_context: str) -> dict:
+async def evaluate_trade_risk(symbol: str, strategy: str, news_context: str, reddit_context: str) -> dict:
     """
     呼叫 LLM 進行 NLP 新聞毒性分析與風控審查
     """
     system_prompt = """
-    ## Role
-    You are the Chief Risk Officer (CRO) of a premier Wall Street quantitative hedge fund. Your expertise lies in identifying "Structural Breaks" and "Tail Risks" that traditional statistical models fail to capture.
+    ## Role & Objective
+    You are a Quant Hedge Fund CRO. Evaluate option proposals by cross-referencing official news and Reddit sentiment (titles + consensus scores) to prevent tail risks.
 
-    ## Objective
-    Review option position proposals submitted by quantitative models. Your primary task is to determine if the current news environment renders the model’s historical volatility assumptions invalid.
-
-    ## Risk Decision Logic
-    1.  **VETO (Immediate Rejection)**:
-        * **Trigger**: Non-linear "Black Swan" events. This includes accounting fraud, SEC investigations, bankruptcy/default risks, major litigation, or the abrupt resignation of key executives (CEO/CFO).
-        * **Logic**: These events cause price gaps and extreme volatility spikes that invalidate historical statistical distributions. The model's risk parameters are likely compromised.
-
-    2.  **APPROVE (Permission to Trade)**:
-        * **Trigger**: Standard market noise. This includes macro data releases (CPI, Non-farm Payrolls), routine product launches, general industry competition, or standard analyst rating changes.
-        * **Logic**: These risks are considered "priced-in" or within the model's expected volatility regime.
-
-    3.  **Strategy-Specific Sensitivity**:
-        * **Buyer (BTO/Long Gamma)**: Higher tolerance for volatility. Veto only if the event poses a fundamental threat to the company’s existence or market liquidity.
-        * **Seller (STO/Short Gamma)**: Extreme sensitivity to tail risk. Veto if there is any sign of unpredictable non-linear volatility.
+    ## Decision Logic
+    1. **VETO (Reject)**:
+       - **Black Swans**: Fraud, SEC probes, bankruptcy, or executive departures.
+       - **Retail Mania**: High Reddit consensus scores indicating FOMO or Short Squeezes. Strictly VETO Seller strategies (STO/Short Gamma) due to explosive IV risk.
+    2. **APPROVE (Pass)**:
+       - **Market Noise**: Macro data, routine product news, analyst ratings.
+       - **Buyer Strategies (BTO/Long Gamma)**: Can tolerate or benefit from high Reddit volatility.
 
     ## Output Constraints
-    - You must strictly adhere to the provided JSON schema.
-    - **Field `reasoning` must be written in Traditional Chinese (繁體中文)** and limited to 50 words, focusing on the core risk factor.
+    - Strictly follow the JSON schema.
+    - `reasoning` MUST be in Traditional Chinese (繁體中文), max 50 words. Focus strictly on core risks.
+    - Use Taiwan options terminology: Call = "買權", Put = "賣權" (Never use 認購/認沽).
     """
 
     user_prompt = f"""
     ### Trade Proposal for Review
     - **Underlying**: {symbol}
     - **Strategy**: {strategy}
-    - **Market Context / Recent News**:
     ---
+
+    - **Recent News**:
     {news_context}
+
+    ---
+
+    - **Reddit Context**:
+    {reddit_context}
     ---
 
     **Instruction**: Perform a risk audit based on the CRO guidelines and return the adjudication in the required structural format.

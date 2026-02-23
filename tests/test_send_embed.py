@@ -65,9 +65,9 @@ async def main():
         # 6. 無財報週期影響 (earnings_days > 14) 或波動率正常
         # 7. Edge cases 例如 alloc_pct <= 0 等 (附加測試)
         scenarios = [
-            {"strategy": "STO_PUT", "symbol": "AAPL-STO_P", "strike": 150.0, **base_data},
-            {"strategy": "STO_CALL", "symbol": "AAPL-STO_C", "strike": 170.0, **base_data},
-            {"strategy": "STO_CALL", "symbol": "AAPL-CC", "strike": 170.0, "stock_cost": 155.0, **base_data},
+            {"strategy": "STO_PUT", "symbol": "AAPL-STO_P", "strike": 150.0, **base_data, "ai_decision": "APPROVE", "ai_reasoning": "技術面與基本面良好，建議執行交易。", "news_text": "Apple 推出新產品，市場反應熱烈。", "reddit_context": "r/options: Apple STO_PUT is free money."},
+            {"strategy": "STO_CALL", "symbol": "AAPL-STO_C", "strike": 170.0, **base_data, "ai_decision": "VETO", "ai_reasoning": "財報即將公布，波動率過高，不建議裸賣 Call。"},
+            {"strategy": "STO_CALL", "symbol": "AAPL-CC", "strike": 170.0, "stock_cost": 155.0, **base_data, "ai_decision": "SKIP", "ai_reasoning": "未啟用 AI 驗證。"},
             {"strategy": "BTO_CALL", "symbol": "AAPL-BTO_C", "strike": 165.0, "suggested_hedge_strike": 175.0, **base_data},
             {"strategy": "BTO_PUT", "symbol": "AAPL-BTO_P", "strike": 155.0, "suggested_hedge_strike": 145.0, **base_data},
             {"strategy": "STO_PUT", "symbol": "AAPL-NoEarn", "strike": 150.0, **{**base_data, "earnings_days": 20, "ts_ratio": 1.0, "v_skew": 1.1}},

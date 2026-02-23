@@ -16,7 +16,7 @@ async def fetch_recent_news(symbol: str) -> str:
             # 使用列表推導式與 join 優化效能，並修正字典存取方式
             lines = [
                 f"▪️ {item.get('content', {}).get('title', 'No Title')}"
-                for item in news_items[:10]
+                for item in news_items[:5]
             ]
             return "\n".join(lines)
         

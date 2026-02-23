@@ -12,7 +12,7 @@ import market_time
 import market_analysis.portfolio
 from cogs.embed_builder import create_scan_embed
 import yfinance as yf
-from services import news_service, llm_service
+from services import news_service, llm_service, reddit_service
 
 ny_tz = ZoneInfo("America/New_York")
 logger = logging.getLogger(__name__)
@@ -163,6 +163,7 @@ class SchedulerCog(commands.Cog):
             unique_targets = set((sym, stock_cost, use_llm) for uid, sym, stock_cost, use_llm in all_watchlists)
             scan_results = {}
             news_cache = {} # 單次掃描內的新聞快取
+            reddit_cache = {} # 單次掃描內的 Reddit 討論快取
             
             # 如果是手動觸發，傳送開始訊息
             if not is_auto and triggered_by:
@@ -179,16 +180,22 @@ class SchedulerCog(commands.Cog):
                         if sym not in news_cache:
                             news_cache[sym] = await news_service.fetch_recent_news(sym)
                         
+                        # 優先從快取取得 Reddit 討論
+                        if sym not in reddit_cache:
+                            reddit_cache[sym] = await reddit_service.get_reddit_context(sym)
+                        
                         news_text = news_cache[sym]
+                        reddit_text = reddit_cache[sym]
                         
                         if use_llm:
-                            ai_verdict = await llm_service.evaluate_trade_risk(sym, res['strategy'], news_text)
+                            ai_verdict = await llm_service.evaluate_trade_risk(sym, res['strategy'], news_text, reddit_text)
                             res['ai_decision'] = ai_verdict.get('decision', 'APPROVE')
                             res['ai_reasoning'] = ai_verdict.get('reasoning', '無資料')
                         else:
                             res['ai_decision'] = 'SKIP'
                             res['ai_reasoning'] = '未啟用 LLM 語意風控'
                         res['news_text'] = news_text
+                        res['reddit_text'] = reddit_text
                         scan_results[(sym, stock_cost, use_llm)] = res
                 except Exception as e:
                     logger.error(f"Error scanning {sym} with cost {stock_cost}: {e}")
