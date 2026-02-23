@@ -1,3 +1,4 @@
+# 工作流程的名稱
 name: Build and Deploy to DigitalOcean
 
 on:
@@ -5,20 +6,25 @@ on:
     branches:
       - main
 
+# 避免同時執行多個部署
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
-  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}
+  # 這裡先定義基礎名稱，後續在步驟中會處理大小寫問題
+  RAW_IMAGE_NAME: ghcr.io/${{ github.repository }}
   SERVICE_NAME: nexus-seeker-bot
 
 jobs:
+  # --- 第一個任務：建置並推送 Docker 映像 ---
   build-and-push:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.meta.outputs.version }}
+      # 重要：將產出的唯一版本號（SHA）傳遞給下一個 Job
+      version: ${{ steps.vars.outputs.sha_short }}
+
     permissions:
       contents: read
       packages: write
@@ -26,6 +32,13 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      # 步驟 1: 產生短 SHA 變數並處理映像檔名稱小寫
+      - name: Set outputs
+        id: vars
+        run: |
+          echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "image_lower=$(echo ${{ env.RAW_IMAGE_NAME }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -37,38 +50,44 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # 步驟 2: 提取中繼資料，這裡我們會同時打上 sha 和 latest 標籤
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.IMAGE_NAME }}
+          images: ${{ steps.vars.outputs.image_lower }}
           tags: |
-            # 使用 short SHA 作為主要部署標籤，這樣每次 push 都會有唯一 ID
-            type=sha,format=short,prefix=sha-,priority=1000
-            type=edge,branch=main
+            type=sha,format=short,prefix=,suffix=
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
 
-      - name: Build and push
+      - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
+          # 這裡會同時推送到 :sha-xxxx 和 :latest
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  # --- 第二個任務：部署到 DigitalOcean VM ---
   deploy:
     name: Deploy to DigitalOcean
     needs: build-and-push
     environment: production
     runs-on: ubuntu-latest
+
     steps:
       - name: Deploy to Droplet via SSH
         uses: appleboy/ssh-action@v1.2.0
         env:
           SERVICE_NAME: ${{ env.SERVICE_NAME }}
+          # 關鍵：使用 build-and-push job 傳過來的唯一 SHA 標籤
+          IMAGE_TAG: ${{ needs.build-and-push.outputs.version }}
+          # 再次確保映像檔路徑為小寫
           IMAGE_BASE: ghcr.io/${{ github.repository }}
-          DEPLOY_TAG: ${{ needs.build-and-push.outputs.version }}
+          # 注入環境變數供容器使用
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
           DISCORD_ADMIN_USER_ID: ${{ secrets.DISCORD_ADMIN_USER_ID }}
           LLM_API_BASE: ${{ secrets.LLM_API_BASE }}
@@ -79,26 +98,29 @@ jobs:
           host: ${{ secrets.DIGITALOCEAN_HOST }}
           username: ${{ secrets.DIGITALOCEAN_USERNAME }}
           key: ${{ secrets.DIGITALOCEAN_SSH_KEY }}
-          envs: SERVICE_NAME,IMAGE_BASE,DEPLOY_TAG,DISCORD_TOKEN,DISCORD_ADMIN_USER_ID,LLM_API_BASE,LLM_MODEL_NAME,API_KEY,TZ
+          envs: SERVICE_NAME,IMAGE_TAG,IMAGE_BASE,DISCORD_TOKEN,DISCORD_ADMIN_USER_ID,LLM_API_BASE,LLM_MODEL_NAME,API_KEY,TZ
           script: |
-            # 轉換為小寫
-            LOWER_IMAGE_NAME=$(echo "$IMAGE_BASE" | tr '[:upper:]' '[:lower:]')
-            FULL_IMAGE_URL="$LOWER_IMAGE_NAME:$DEPLOY_TAG"
+            # 1. 處理小寫映像檔名稱與完整 URL
+            LOWER_REPO=$(echo "$IMAGE_BASE" | tr '[:upper:]' '[:lower:]')
+            FULL_IMAGE_URL="$LOWER_REPO:$IMAGE_TAG"
+            
+            echo "Deploying version: $FULL_IMAGE_URL"
 
+            # 2. 初始化 Swarm (如果尚未啟動)
             if ! docker info | grep -q "Swarm: active"; then
               docker swarm init
             fi
 
+            # 3. 登入 Registry
             echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
-            # 拉取特定 SHA 版本的映像檔
+            # 4. 預先拉取新映像檔 (確保節點已有此唯一 Tag)
             docker pull $FULL_IMAGE_URL
 
+            # 5. 確保 Volume 存在
             docker volume create nexus-data || true
 
-            echo "--- Deploying stack $SERVICE_NAME with image $FULL_IMAGE_URL ---"
-            
-            # 修正 5: 加上 --with-registry-auth 並確保 image 標籤是唯一的 SHA
+            # 6. 使用 Docker Stack 部署 (因為 Image Tag 變了，Swarm 會觸發更新)
             docker stack deploy --with-registry-auth -c - $SERVICE_NAME <<EOF
             version: '3.8'
             services:
@@ -111,7 +133,7 @@ jobs:
                   update_config:
                     order: start-first
                     failure_action: rollback
-                    delay: 5s
+                    delay: 2s
                 volumes:
                   - nexus-data:/app/data
                 environment:
@@ -126,4 +148,5 @@ jobs:
                 external: true
             EOF
 
+            # 7. 清理舊的、未標記的映像檔，釋放空間
             docker image prune -af
