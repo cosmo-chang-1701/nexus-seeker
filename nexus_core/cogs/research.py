@@ -27,11 +27,11 @@ class Research(commands.Cog):
             news_text = await news_service.fetch_recent_news(symbol, limit)
             
             embed = embed_builder.create_news_scan_embed(symbol, news_text)
-            await interaction.followup.send(embed=embed)
+            await interaction.followup.send(embed=embed, ephemeral=True)
             
         except Exception as e:
             logger.error(f"[{symbol}] 新聞掃描失敗: {e}")
-            await interaction.followup.send(f"❌ 獲取 {symbol} 新聞時發生錯誤。")
+            await interaction.followup.send(f"❌ 獲取 {symbol} 新聞時發生錯誤。", ephemeral=True)
 
     @app_commands.command(name="scan_reddit", description="掃描特定標的之 Reddit 散戶情緒 (過去 24 小時)")
     @app_commands.describe(
@@ -46,11 +46,11 @@ class Research(commands.Cog):
             reddit_text = await reddit_service.get_reddit_context(symbol, limit)
             
             embed = embed_builder.create_reddit_scan_embed(symbol, reddit_text)
-            await interaction.followup.send(embed=embed)
+            await interaction.followup.send(embed=embed, ephemeral=True)
             
         except Exception as e:
             logger.error(f"[{symbol}] Reddit 掃描失敗: {e}")
-            await interaction.followup.send(f"❌ 獲取 {symbol} Reddit 情緒時發生錯誤。")
+            await interaction.followup.send(f"❌ 獲取 {symbol} Reddit 情緒時發生錯誤。", ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(Research(bot))
