@@ -53,8 +53,8 @@ async def get_reddit_context(symbol: str, limit: int = 5) -> str:
             # 這確保了頁面已經載入完成，不是空白頁
             # old.reddit 的搜尋結果都包在 div.search-result-link 裡面
             try:
-                # 等待第一個結果出現，最多等 5 秒。如果沒出現代表可能沒資料。
-                await page.wait_for_selector("div.search-result-link", timeout=5000)
+                # 等待第一個結果出現，最多等 10 秒。如果沒出現代表可能沒資料。
+                await page.wait_for_selector("div.search-result-link", timeout=10000)
             except PlaywrightTimeoutError:
                 logger.warning(f"[{symbol}] 頁面載入完成，但在超時內未發現搜尋結果元素。可能無資料。")
                 return "Reddit 目前無相關即時討論。"
