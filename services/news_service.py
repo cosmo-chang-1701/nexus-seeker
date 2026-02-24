@@ -4,7 +4,7 @@ import yfinance as yf
 
 logger = logging.getLogger(__name__)
 
-async def fetch_recent_news(symbol: str) -> str:
+async def fetch_recent_news(symbol: str, limit: int = 5) -> str:
     """非同步獲取標的近期的 Yahoo Finance 新聞標題與摘要"""
     try:
         def _get_news():
@@ -16,7 +16,7 @@ async def fetch_recent_news(symbol: str) -> str:
             # 使用列表推導式與 join 優化效能，並修正字典存取方式
             lines = [
                 f"▪️ {item.get('content', {}).get('title', 'No Title')}"
-                for item in news_items[:5]
+                for item in news_items[:limit]
             ]
             return "\n".join(lines)
         

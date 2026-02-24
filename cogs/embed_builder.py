@@ -3,6 +3,23 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+def add_news_field(embed, news_text):
+    """為 Embed 加入新聞欄位"""
+    if news_text:
+        # Discord field value limit is 1024. Code blocks add chars. Truncate to be safe.
+        if len(news_text) > 1000:
+            news_text = news_text[:997] + "..."
+        news_context = f"```{news_text}\n\u200b```"
+        embed.add_field(name="📰 最新新聞", value=news_context, inline=False)
+
+def add_reddit_field(embed, reddit_text):
+    """為 Embed 加入 Reddit 討論欄位"""
+    if reddit_text:
+        if len(reddit_text) > 1000:
+            reddit_text = reddit_text[:997] + "..."
+        reddit_context = f"```{reddit_text}\n\u200b```"
+        embed.add_field(name="📰 Reddit 討論", value=reddit_context, inline=False)
+
 def create_scan_embed(data, user_capital=100000.0):
     """根據掃描結果資料建構 Discord Embed 訊息。"""
     colors = {"STO_PUT": discord.Color.green(), "STO_CALL": discord.Color.red(), "BTO_CALL": discord.Color.blue(), "BTO_PUT": discord.Color.orange()}
@@ -123,7 +140,7 @@ def create_scan_embed(data, user_capital=100000.0):
         if is_covered:
             safety_text = "✅ 若漲破此價位，將以最高獲利出場 (股票被 Call 走)"
         else:
-            safety_text = "✅ 防線已建構於預期暴漲區間外" if safe else "⚠️ 損益兩平點位於預期波動區間內，風險較高"
+            safety_text = "✅ 防線已建構於預期暴漲區聯外" if safe else "⚠️ 損益兩平點位於預期波動區間內，風險較高"
             
         em_info = f"1σ 預期上緣: `${em_upper:.2f}` (預期最大漲幅 +${em:.2f})\n🛡️ 合約兩平點: **`${breakeven:.2f}`**\n{safety_text}\n\u200b"
         embed.add_field(name="🎯 機率圓錐 (1σ 預期波動)", value=em_info, inline=False)
@@ -161,18 +178,10 @@ def create_scan_embed(data, user_capital=100000.0):
             embed.add_field(name="💡 經理人策略升級建議", value=upgrade_text, inline=False)
 
     # === 個股新聞 ===
-    if data.get('news_text'):
-        news_text = data.get('news_text')
-        if news_text:
-            news_context = f"```{news_text}\n\u200b```"
-            embed.add_field(name="📰 最新新聞", value=news_context, inline=False)
+    add_news_field(embed, data.get('news_text'))
 
     # === Reddit 討論 ===
-    if data.get('reddit_text'):
-        reddit_text = data.get('reddit_text')
-        if reddit_text:
-            reddit_context = f"```{reddit_text}\n\u200b```"
-            embed.add_field(name="📰 Reddit 討論", value=reddit_context, inline=False)
+    add_reddit_field(embed, data.get('reddit_text'))
 
     # === AI 驗證 ===
     ai_decision = data.get('ai_decision')
@@ -196,6 +205,27 @@ def create_scan_embed(data, user_capital=100000.0):
         embed.add_field(name=ai_title, value=ai_value, inline=False)
 
     return embed
+
+def create_news_scan_embed(symbol, news_text):
+    """建構新聞掃描結果的 Embed"""
+    embed = discord.Embed(
+        title=f"📰 {symbol} 官方新聞掃描", 
+        color=discord.Color.blue()
+    )
+    add_news_field(embed, news_text)
+    embed.set_footer(text="Nexus Seeker 研報系統 • 資料來源: Yahoo Finance")
+    return embed
+
+def create_reddit_scan_embed(symbol, reddit_text):
+    """建構 Reddit 情緒掃描結果的 Embed"""
+    embed = discord.Embed(
+        title=f"🔥 {symbol} 散戶情緒掃描", 
+        color=discord.Color.orange()
+    )
+    add_reddit_field(embed, reddit_text)
+    embed.set_footer(text="Nexus Seeker 研報系統 • 資料來源: Reddit (WSB/Stocks/Options)")
+    return embed
+
 
 def create_watchlist_embed(page_data, current_page, total_pages, total_items):
     """生成觀察清單的分頁 Embed (使用等寬區塊排版)"""

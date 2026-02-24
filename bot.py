@@ -17,6 +17,7 @@ class NexusBot(commands.Bot):
         await self.load_extension("cogs.portfolio")
         await self.load_extension("cogs.watchlist")
         await self.load_extension("cogs.trading")
+        await self.load_extension("cogs.research")
         self.loop.create_task(self._message_worker())
         try:
             synced = await self.tree.sync()
