@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 @app.get("/scrape/reddit/{symbol}")
 async def scrape_reddit(symbol: str, limit: int = Query(5, description="回傳的貼文數量上限")):
     symbol_clean = symbol.replace("$", "")
-    url = f"https://old.reddit.com/r/wallstreetbets+stocks+options/search?q=title%3A{symbol_clean}&restrict_sr=on&sort=hot"
+    url = f"https://old.reddit.com/r/wallstreetbets+stocks+options/search?q={symbol_clean}&restrict_sr=on&sort=hot"
     
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
