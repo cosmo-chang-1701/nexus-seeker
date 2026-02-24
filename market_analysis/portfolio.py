@@ -191,8 +191,8 @@ def check_portfolio_status_logic(portfolio_rows, user_capital=50000.0):
                 #保證金佔用累加 (區分 Naked Call 與 Covered Call)
                 if quantity < 0:
                     if opt_type == 'call' and stock_cost > 0.0:
-                        # 掩護性買權 (Covered Call)：保證金 = 現股成本 
-                        margin_locked = stock_cost * 100 * abs(quantity)
+                        # 掩護性買權 (Covered Call)：現股完全擔保，期權端 BPR 為 $0
+                        margin_locked = 0.0
                     elif opt_type == 'call':
                         # 裸賣買權 (Naked Call)：Reg T 粗估公式
                         otm_amount = max(0, strike - current_stock_price)
