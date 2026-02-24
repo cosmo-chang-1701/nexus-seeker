@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Query
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 from bs4 import BeautifulSoup
 import logging
 
@@ -24,17 +24,25 @@ async def scrape_reddit(symbol: str, limit: int = Query(5, description="回傳�
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
                 java_script_enabled=False
             )
-            # 實作網路請求攔截以優化 DOM 渲染效能
+            
             await context.route("**/*", lambda route: route.abort() if route.request.resource_type in ["image", "stylesheet", "font", "script"] else route.continue_())
             
             page = await context.new_page()
             await page.goto(url, wait_until="domcontentloaded", timeout=15000)
-            await page.wait_for_selector("div.search-result-link", timeout=5000)
             
+            try:
+                await page.wait_for_selector("div.search-result-link", timeout=5000)
+            except PlaywrightTimeoutError:
+                page_title = await page.title()
+                if "Blocked" in page_title:
+                    logger.warning(f"[{symbol}] 被 Reddit 阻擋 (IP Blocked)")
+                    return {"status": "error", "data": "被 Reddit 防火牆攔截 (Blocked)"}
+                
+                logger.info(f"[{symbol}] 搜尋完成，過去 24 小時無相關討論。")
+                return {"status": "success", "data": "過去 24 小時內無相關討論。"}
+
             html_content = await page.content()
             soup = BeautifulSoup(html_content, "lxml")
-            
-            # 套用 limit 參數進行資料截斷
             results = soup.select("div.search-result-link")[:limit]
 
             posts_text = ""
@@ -51,10 +59,10 @@ async def scrape_reddit(symbol: str, limit: int = Query(5, description="回傳�
                 
                 posts_text += f"[{sub} | 共識分數:{score if score else 0}] {title}\n"
             
-            return {"status": "success", "data": posts_text if posts_text else "無相關討論。"}
+            return {"status": "success", "data": posts_text}
             
         except Exception as e:
-            logger.error(f"Playwright 執行例外: {e}")
-            return {"status": "error", "data": str(e)}
+            logger.error(f"Playwright 執行嚴重例外: {str(e)}")
+            return {"status": "error", "data": f"本地端執行例外: {str(e)}"}
         finally:
             await browser.close()
