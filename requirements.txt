@@ -9,6 +9,4 @@ tzdata>=2023.3
 numpy>=1.24.0
 pydantic>=2.12.5
 openai>=2.21.0
-playwright
-beautifulsoup4
-lxml
+httpx
