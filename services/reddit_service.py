@@ -4,14 +4,14 @@ import config
 
 logger = logging.getLogger(__name__)
 
-async def get_reddit_context(symbol: str) -> str:
+async def get_reddit_context(symbol: str, limit: int = 5) -> str:
     """透過 Cloudflare Tunnel 呼叫本地端爬取 Reddit"""
     try:
         logger.info(f"[{symbol}] 啟動邊緣運算呼叫，透過 Tunnel 要求本地端爬取 Reddit...")
         
         # 設定 25 秒超時，給予本地端足夠的渲染時間
         async with httpx.AsyncClient(timeout=25.0) as client:
-            res = await client.get(f"{config.TUNNEL_URL}{symbol}")
+            res = await client.get(f"{config.TUNNEL_URL}{symbol}?limit={limit}")
             res.raise_for_status()
             
             # 解析本地端回傳的 JSON
