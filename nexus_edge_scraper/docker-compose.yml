@@ -1,0 +1,21 @@
+services:
+  # 服務 1：FastAPI 爬蟲微服務
+  scraper-api:
+    build: .
+    container_name: nexus-edge-api
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+
+  # 服務 2：Cloudflare Tunnel (Sidecar Pattern)
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: nexus-tunnel
+    restart: unless-stopped
+    environment:
+      - TUNNEL_TOKEN=${CF_TUNNEL_TOKEN}
+    command: tunnel run
+    depends_on:
+      - scraper-api

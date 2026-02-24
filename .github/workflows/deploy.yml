@@ -1,9 +1,12 @@
-name: Build and Deploy to DigitalOcean
+name: Build and Deploy Nexus Core to DigitalOcean
 
 on:
   push:
     branches:
       - main
+    paths:
+      - 'nexus_core/**'
+      - '.github/workflows/**'
 
 # 避免同時執行多個部署，若有新 Push 則取消舊的部署任務
 concurrency:
@@ -59,7 +62,8 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
-          context: .
+          context: ./nexus_core
+          file: ./nexus_core/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -122,7 +126,6 @@ jobs:
                   restart_policy:
                     condition: any
                   update_config:
-                    # 核心改動：先停掉舊的，再開新的，避免 Bot Token 衝突
                     order: stop-first
                     failure_action: rollback
                     delay: 10s
@@ -135,11 +138,3 @@ jobs:
                   - LLM_API_BASE=\$LLM_API_BASE
                   - LLM_MODEL_NAME=\$LLM_MODEL_NAME
                   - API_KEY=\$API_KEY
-                  - TUNNEL_URL=\$TUNNEL_URL
-            volumes:
-              nexus-data:
-                external: true
-            EOF
-
-            # 6. 清理過期映像檔
-            docker image prune -af

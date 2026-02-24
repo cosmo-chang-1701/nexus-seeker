@@ -1,5 +1,9 @@
 ---
 trigger: always_on
+---
+
+---
+trigger: always_on
 description: When working on all test case.
 ---
 

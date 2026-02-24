@@ -11,7 +11,7 @@ async def get_reddit_context(symbol: str, limit: int = 5) -> str:
         
         # 設定 25 秒超時，給予本地端足夠的渲染時間
         async with httpx.AsyncClient(timeout=25.0) as client:
-            res = await client.get(f"{config.TUNNEL_URL}{symbol}?limit={limit}")
+            res = await client.get(f"{config.TUNNEL_URL}/scrape/reddit/{symbol}?limit={limit}")
             res.raise_for_status()
             
             # 解析本地端回傳的 JSON
