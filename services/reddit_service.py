@@ -56,8 +56,13 @@ async def get_reddit_context(symbol: str, limit: int = 5) -> str:
                 # 等待第一個結果出現，最多等 10 秒。如果沒出現代表可能沒資料。
                 await page.wait_for_selector("div.search-result-link", timeout=10000)
             except PlaywrightTimeoutError:
-                logger.warning(f"[{symbol}] 頁面載入完成，但在超時內未發現搜尋結果元素。可能無資料。")
-                return "Reddit 目前無相關即時討論。"
+                # 取得當前頁面的真實狀態
+                page_title = await page.title()
+                current_url = page.url
+                logger.error(f"[{symbol}] 元素等待超時。")
+                logger.error(f"[{symbol}] 瀏覽器最終停留在 URL: {current_url}")
+                logger.error(f"[{symbol}] 網頁標題為: {page_title}")
+                return "Reddit 頁面載入超時或被防火牆攔截。"
 
             # 取得渲染完成的 HTML 原碼
             html_content = await page.content()
