@@ -6,9 +6,8 @@ on:
       - main
     paths:
       - 'nexus_core/**'
-      - '.github/workflows/**'
+      - '.github/workflows/deploy.yml'
 
-# 避免同時執行多個部署，若有新 Push 則取消舊的部署任務
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -18,7 +17,7 @@ env:
   SERVICE_NAME: nexus-seeker-service
 
 jobs:
-  # --- 第一個任務：建置並推送 Docker 映像 ---
+  # --- 第一階段：建置與推送 Docker 映像檔 ---
   build-and-push:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
@@ -70,7 +69,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # --- 第二個任務：部署到 DigitalOcean VM ---
+  # --- 第二階段：遠端部署至 DigitalOcean ---
   deploy:
     name: Deploy to DigitalOcean
     needs: build-and-push
@@ -84,7 +83,6 @@ jobs:
           SERVICE_NAME: ${{ env.SERVICE_NAME }}
           IMAGE_TAG: ${{ needs.build-and-push.outputs.version }}
           IMAGE_LOWER: ${{ needs.build-and-push.outputs.image_lower }}
-          # 注入環境變數
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
           DISCORD_ADMIN_USER_ID: ${{ secrets.DISCORD_ADMIN_USER_ID }}
           LLM_API_BASE: ${{ secrets.LLM_API_BASE }}
@@ -101,21 +99,21 @@ jobs:
             FULL_IMAGE_URL="$IMAGE_LOWER:$IMAGE_TAG"
             echo "Deploying version: $FULL_IMAGE_URL"
 
-            # 1. 初始化 Swarm (如果尚未啟動)
+            # 1. 初始化 Docker Swarm (確保環境就緒)
             if ! docker info | grep -q "Swarm: active"; then
               docker swarm init
             fi
 
-            # 2. 登入 Registry
+            # 2. 登入 GitHub Container Registry
             echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
-            # 3. 預先拉取新映像檔
+            # 3. 預先拉取新映像檔以縮短停機時間
             docker pull $FULL_IMAGE_URL
 
-            # 4. 確保 Volume 存在
+            # 4. 確保持久化數據 Volume 存在
             docker volume create nexus-data || true
 
-            # 5. 使用 Docker Stack 部署
+            # 5. 執行 Stack 部署 (使用 heredoc 餵入 docker-compose 配置)
             docker stack deploy --with-registry-auth -c - $SERVICE_NAME <<EOF
             version: '3.8'
             services:
@@ -138,3 +136,11 @@ jobs:
                   - LLM_API_BASE=\$LLM_API_BASE
                   - LLM_MODEL_NAME=\$LLM_MODEL_NAME
                   - API_KEY=\$API_KEY
+                  - TUNNEL_URL=\$TUNNEL_URL
+            volumes:
+              nexus-data:
+                external: true
+            EOF
+
+            # 6. 清理舊版映像檔釋放磁碟空間
+            docker image prune -af
