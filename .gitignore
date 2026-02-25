@@ -63,5 +63,5 @@ Thumbs.db
 desktop.ini
 
 # Project Specific
-data/*.db
+*.db
 *.log
