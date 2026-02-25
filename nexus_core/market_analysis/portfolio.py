@@ -1,8 +1,13 @@
 import yfinance as yf
+import numpy as np
 import pandas as pd
 from datetime import datetime
 from py_vollib.black_scholes_merton.greeks.analytical import delta, theta, gamma
 from config import RISK_FREE_RATE
+import logging
+
+# 設定 Logger
+logger = logging.getLogger(__name__)
 
 def _evaluate_defense_status(quantity, opt_type, pnl_pct, current_delta, dte):
     """
@@ -32,56 +37,83 @@ def _evaluate_defense_status(quantity, opt_type, pnl_pct, current_delta, dte):
             
     return "⏳ **繼續持有** ｜ 未達防禦觸發條件"
 
-def _calculate_macro_risk(total_beta_delta, total_theta, total_margin_used, total_gamma, user_capital):
+def _calculate_macro_risk(total_beta_delta, total_theta, total_margin_used, total_gamma, user_capital, spy_price=500.0):
     """
-    計算投資組合的宏觀系統性風險、Theta 收益率、資金熱度極限 與 淨 Gamma 脆性
-    """
-    lines = ["", "🌐 **【宏觀系統性風險與資金水位評估】**", ""]
+    計算投資組合的宏觀系統性風險，改用資金權重比例 (Exposure %) 判定。
     
-    # 1. 系統性方向風險 (Delta)
-    lines.append(f"🔹 **投資組合淨 Delta:** `{total_beta_delta:+.2f}` (等同持有 SPY 股數)")
-    if total_beta_delta > 50:
-        lines.append("   🚨 **多頭曝險過高:** 建議建立 SPY 避險空單中和。")
-    elif total_beta_delta < -50:
-        lines.append("   🚨 **空頭曝險過高:** 建議建立大盤避險多單。")
+    參數:
+    - total_beta_delta: 總加權 Delta (等效 SPY 股數)
+    - spy_price: 當前 SPY 價格 (用於計算總美元曝險)
+    """
+    lines = ["", "🌐 **【宏觀風險與資金水位報告】**", ""]
+    
+    # --- 1. 系統性方向風險 (Delta Exposure %) ---
+    # 計算總美元曝險：等效股數 * SPY 單價
+    net_exposure_dollars = total_beta_delta * spy_price
+    
+    # 計算曝險佔總資金比例
+    exposure_pct = (net_exposure_dollars / user_capital) * 100 if user_capital > 0 else 0
+    
+    # 定義門檻 (例如：超過總資金的 15% 即視為過度曝險)
+    DELTA_THRESHOLD_PCT = 15.0 
+    
+    if exposure_pct > DELTA_THRESHOLD_PCT:
+        delta_status = f"🚨 **多頭曝險過高** (`{exposure_pct:.1f}%` > {DELTA_THRESHOLD_PCT}%)"
+        advice = "   👉 建議：買入 SPY Put 或賣出 Call 對沖。"
+    elif exposure_pct < -DELTA_THRESHOLD_PCT:
+        delta_status = f"🚨 **空頭曝險過高** (`{abs(exposure_pct):.1f}%` > {DELTA_THRESHOLD_PCT}%)"
+        advice = "   👉 建議：平倉空單或買入標普多單對沖。"
     else:
-        lines.append("   ✅ **風險中性 (Delta Neutral):** 受系統性崩盤影響較小。")
+        delta_status = f"✅ **風險中性** (`{abs(exposure_pct):.1f}%` 內)"
+        advice = "   👉 目前系統性風險受控。"
+
+    lines.append(f"🔹 **淨 SPY Delta 曝險:** `${net_exposure_dollars:,.0f}` (等效 `{total_beta_delta:+.1f}` 股)")
+    lines.append(f" └─ {delta_status}\n{advice}")
     lines.append("")
 
-    # 🔥 2. 新增：非線性加速度與脆性評估 (Gamma)
-    # 這裡的 Gamma 代表當 SPY 變動 $1 時，您的 Delta 會變動多少
-    lines.append(f"🔹 **投資組合淨 Gamma:** `{total_gamma:+.2f}` (Delta 加速度 / 脆性指標)")
-    if total_gamma < -20.0:
-        lines.append("   🚨 **脆性警告 (High Fragility):** 淨 Gamma 極度偏負！")
-        lines.append("      黑天鵝發生時 Delta 將瞬間失控。建議買入遠期 OTM 選擇權注入正 Gamma 緩衝。")
-    elif total_gamma > 20.0:
-        lines.append("   🛡️ **反脆弱 (Antifragile):** 淨 Gamma 偏正。大盤波動越劇烈，Delta 變化越有利。")
+    # --- 2. 淨 Gamma 脆性評估 (同樣參數化) ---
+    # Gamma 門檻：建議每 $10,000 資金容忍 2.0 單位 Gamma
+    gamma_threshold = (user_capital / 10000.0) * 2.0
+    
+    if total_gamma < -gamma_threshold:
+        gamma_status = "🚨 **脆性警告 (Fragile)**"
+        g_msg = "   👉 下行加速度風險極大，建議注入正 Gamma。"
+    elif total_gamma > gamma_threshold:
+        gamma_status = "🛡️ **反脆弱 (Antifragile)**"
+        g_msg = "   👉 波動越劇烈對帳戶越有利。"
     else:
-        lines.append("   ✅ **Gamma 中性:** 非線性加速度受控，帳戶淨值曲線平滑。")
+        gamma_status = "✅ **Gamma 中性**"
+        g_msg = "   👉 非線性風險受控。"
+
+    lines.append(f"🔹 **組合淨 Gamma:** `{total_gamma:+.2f}`")
+    lines.append(f" └─ {gamma_status}\n{g_msg}")
     lines.append("")
 
-    # 3. Theta 收益率精算
+    # --- 3. Theta 收益率精算 (收租效率) ---
     theta_yield = (total_theta / user_capital) * 100 if user_capital > 0 else 0
-    lines.append(f"🔹 **預估每日 Theta 現金流:** `${total_theta:+.2f}` (佔總資金 `{theta_yield:.3f}%`)")
+    theta_status = "✅ 現金流健康"
     if theta_yield < 0.05:
-        lines.append("   ⚠️ **資金利用率過低:** Theta 收益率未達 0.05%，可尋找高 VRP 標的建倉。")
+        theta_status = "⚠️ **收益率過低** (資金閒置中，建議尋找高 VRP 標的)"
     elif theta_yield > 0.30:
-        lines.append("   ⚠️ **時間價值曝險過度:** Theta 收益率 > 0.30%，暗示承擔了極高的尾部風險。")
-    else:
-        lines.append("   ✅ **現金流健康:** 符合機構級 0.05% ~ 0.30% 之每日收租標準。")
+        theta_status = "🔥 **過度收租** (小心爆倉！您正在承受極高的尾部風險)"
+    
+    lines.append(f"🔹 **每日預期 Theta:** `${total_theta:+.2f}` (`{theta_yield:.3f}%`)")
+    lines.append(f" └─ {theta_status}")
     lines.append("")
 
-    # 4. 資金熱度極限 (Portfolio Heat)
+    # --- 4. 資金熱度極限 (Portfolio Heat) ---
     portfolio_heat = (total_margin_used / user_capital) * 100 if user_capital > 0 else 0
-    lines.append(f"🔹 **總保證金佔用 (Heat):** `${total_margin_used:,.2f}` (佔總資金 `{portfolio_heat:.1f}%`)")
+    heat_status = "✅ 水位正常"
     if portfolio_heat > 50.0:
-        lines.append("   🚨 **爆倉警戒:** 資金熱度 > 50%！強烈建議停止建倉，保留現金防禦波動率擴張。")
+        heat_status = "🆘 **強制停止建倉** (隨時可能觸發保證金追繳)"
     elif portfolio_heat > 30.0:
-        lines.append("   ⚠️ **資金警戒:** 資金熱度 > 30%。已達常規滿水位，請嚴格審視新進場部位。")
-    else:
-        lines.append("   ✅ **資金水位健康:** 保留了充裕的流動性，可安全承擔新的高期望值部位。")
+        heat_status = "⚠️ **水位警戒** (已達常規上限，請嚴格執行止損)"
+        
+    lines.append(f"🔹 **資金熱度 (Heat):** `${total_margin_used:,.2f}` (`{portfolio_heat:.1f}%`)")
+    lines.append(f" └─ {heat_status}")
         
     return lines
+
 
 def _analyze_correlation(positions_by_symbol):
     """
@@ -124,9 +156,36 @@ def _analyze_correlation(positions_by_symbol):
         
     return lines
 
+def calculate_beta(df_stock, df_spy):
+    """
+    計算標的與基準 (SPY) 的相關性係數 (Beta)。
+    公式: \beta = \frac{Cov(R_i, R_m)}{Var(R_m)}
+    """
+    try:
+        # 對齊日期並清理缺失值
+        combined = pd.concat([df_stock['Close'], df_spy['Close']], axis=1, keys=['stock', 'spy']).dropna()
+        
+        # 樣本數過少則回傳 1.0 (中性風險)
+        if len(combined) < 60:
+            return 1.0
+            
+        # 計算日收益率 (Daily Returns)
+        returns = combined.pct_change().dropna()
+        
+        # 計算協方差矩陣 (Covariance Matrix)
+        cov_matrix = np.cov(returns['stock'], returns['spy'])
+        covariance = cov_matrix[0, 1]
+        variance = cov_matrix[1, 1]
+        
+        beta = covariance / variance
+        return round(float(beta), 2)
+    except Exception:
+        return 1.0
+
 def check_portfolio_status_logic(portfolio_rows, user_capital=50000.0):
     """
     [Facade] 盤後動態結算與風險管線編排者 (Orchestrator)
+    整合了 ETF 404 防護、Beta-Weighted Greeks 與二階風險評估。
     """
     if not portfolio_rows:
         return []
@@ -137,13 +196,34 @@ def check_portfolio_status_logic(portfolio_rows, user_capital=50000.0):
     total_portfolio_beta_delta = 0.0
     total_portfolio_theta = 0.0
     total_margin_used = 0.0  
-    total_portfolio_gamma = 0.0 # 🔥 新增：追蹤投資組合總 Gamma
+    total_portfolio_gamma = 0.0 
 
+    # 🚀 優化 1：批次下載歷史資料 (提高 Beta 計算精確度與速度)
+    unique_symbols = sorted(list(set([row[0] for row in portfolio_rows])))
+    all_targets = unique_symbols + ["SPY"]
+    
+    spy_hist = pd.DataFrame()
+    spy_price = 500.0
+    stock_hist_map = {}
+    
     try:
-        spy_price = yf.Ticker("SPY").history(period="1d")['Close'].iloc[-1]
-    except Exception:
-        spy_price = 500.0 
+        # 下載 90 天資料以供 Beta 計算 (僅取 Close 價格以節省流量)
+        hists = yf.download(all_targets, period="90d", progress=False)
+        if not hists.empty:
+            # 取得 SPY 基準
+            if "SPY" in hists['Close']:
+                spy_series = hists['Close']['SPY']
+                spy_hist = pd.DataFrame({'Close': spy_series})
+                spy_price = spy_series.iloc[-1]
+            
+            # 將其他標的存入 Map
+            for sym in unique_symbols:
+                if sym in hists['Close']:
+                    stock_hist_map[sym] = pd.DataFrame({'Close': hists['Close'][sym]})
+    except Exception as e:
+        logger.warning(f"批次歷史資料下載失敗: {e}")
 
+    # 依照標的分群處理
     positions_by_symbol = {}
     for row in portfolio_rows:
         positions_by_symbol.setdefault(row[0], []).append(row)
@@ -151,20 +231,33 @@ def check_portfolio_status_logic(portfolio_rows, user_capital=50000.0):
     for symbol, rows in positions_by_symbol.items():
         try:
             ticker = yf.Ticker(symbol)
-            hist = ticker.history(period="1d")
-            if hist.empty: continue
-            current_stock_price = hist['Close'].iloc[-1]
-            beta = ticker.info.get('beta', 1.0) or 1.0
+            stock_hist = stock_hist_map.get(symbol, pd.DataFrame())
 
-            # 🔥 抓取股息殖利率 q
-            dividend_yield = ticker.info.get('dividendYield', 0.0)
-            if dividend_yield is None: dividend_yield = 0.0
+            # 🚀 優化 2：使用 fast_info 避開 ETF Fundamentals 404 報錯
+            try:
+                f_info = ticker.fast_info
+                current_stock_price = f_info.get('last_price') or (stock_hist['Close'].iloc[-1] if not stock_hist.empty else ticker.history(period="1d")['Close'].iloc[-1])
+                is_etf = f_info.get('quoteType') == 'ETF'
+                
+                # 取得股息率 q (BSM 引擎校正用)
+                dividend_yield = 0.015 if is_etf else (f_info.get('dividendYield', 0.0) or 0.0)
+                
+                # 精確計算 Beta (取代 ticker.info 靜態值)
+                if not spy_hist.empty and not stock_hist.empty:
+                    beta = calculate_beta(stock_hist, spy_hist)
+                else:
+                    beta = ticker.info.get('beta', 1.0) if not is_etf else 1.0
+            except:
+                # Fallback 邏輯
+                current_stock_price = stock_hist['Close'].iloc[-1] if not stock_hist.empty else ticker.history(period="1d")['Close'].iloc[-1]
+                dividend_yield, beta = 0.0, 1.0
 
             option_chains_cache = {}
 
             for row in rows:
                 _, opt_type, strike, expiry, entry_price, quantity, stock_cost = row
                 
+                # 避免重複拉取同標的、同到期日的 Chain
                 if expiry not in option_chains_cache:
                     option_chains_cache[expiry] = ticker.option_chain(expiry)
                 
@@ -179,68 +272,62 @@ def check_portfolio_status_logic(portfolio_rows, user_capital=50000.0):
                 dte = (exp_date - today).days
                 t_years = max(dte, 1) / 365.0 
                 
-                # 計算 Greeks
+                # 計算 Greeks (調用您現有的 BSM 模組)
                 flag = 'c' if opt_type == 'call' else 'p'
                 try:
-                    current_delta = delta(flag, current_stock_price, strike, t_years, RISK_FREE_RATE, iv, dividend_yield)
-                    daily_theta = theta(flag, current_stock_price, strike, t_years, RISK_FREE_RATE, iv, dividend_yield)
-                    current_gamma = gamma(flag, current_stock_price, strike, t_years, RISK_FREE_RATE, iv, dividend_yield)
-                except Exception:
-                    current_delta, daily_theta, current_gamma = 0.0, 0.0, 0.0
+                    curr_delta = delta(flag, current_stock_price, strike, t_years, RISK_FREE_RATE, iv, dividend_yield)
+                    curr_theta = theta(flag, current_stock_price, strike, t_years, RISK_FREE_RATE, iv, dividend_yield)
+                    curr_gamma = gamma(flag, current_stock_price, strike, t_years, RISK_FREE_RATE, iv, dividend_yield)
+                except:
+                    curr_delta, curr_theta, curr_gamma = 0.0, 0.0, 0.0
 
-                #保證金佔用累加 (區分 Naked Call 與 Covered Call)
+                # --- 保證金計算 ---
                 if quantity < 0:
                     if opt_type == 'call' and stock_cost > 0.0:
-                        # 掩護性買權 (Covered Call)：現股完全擔保，期權端 BPR 為 $0
-                        margin_locked = 0.0
+                        margin_locked = 0.0 # Covered Call
                     elif opt_type == 'call':
-                        # 裸賣買權 (Naked Call)：Reg T 粗估公式
-                        otm_amount = max(0, strike - current_stock_price)
-                        margin_per_contract = max((0.20 * current_stock_price) - otm_amount + current_price, 0.10 * current_stock_price + current_price)
-                        margin_locked = margin_per_contract * 100 * abs(quantity)
+                        otm = max(0, strike - current_stock_price)
+                        margin_locked = max((0.20 * current_stock_price) - otm + current_price, 0.10 * current_stock_price + current_price) * 100 * abs(quantity)
                     else:
-                        # 現金擔保賣權 (Cash-Secured Put)
-                        margin_locked = strike * 100 * abs(quantity)
-                        
+                        margin_locked = strike * 100 * abs(quantity) # CSP
                     total_margin_used += margin_locked
 
-                # 宏觀數據 Beta-Weighting 縮放 (轉換為 SPY 等效股數)
-                position_delta = current_delta * quantity * 100
-                spx_weighted_delta = position_delta * beta * (current_stock_price / spy_price)
+                # --- 🚀 宏觀風險聚合 (Beta-Weighting) ---
+                weight_factor = beta * (current_stock_price / spy_price)
+                
+                # Delta 加權 (一階風險)
+                pos_delta = curr_delta * quantity * 100
+                spx_weighted_delta = pos_delta * weight_factor
                 total_portfolio_beta_delta += spx_weighted_delta
                 
-                position_theta = daily_theta * quantity * 100
-                total_portfolio_theta += position_theta
+                # Theta 累加 (時間價值收益)
+                total_portfolio_theta += curr_theta * quantity * 100
                 
-                # 🔥 Gamma 累加：賣方 (quantity < 0) 會產生負 Gamma
-                position_gamma = current_gamma * quantity * 100
-                # 🔥 修正 Gamma 加權公式：Gamma 是二階導數，必須對 (Beta * S/S_spy) 進行平方加權
-                weighting_factor = beta * (current_stock_price / spy_price)
-                spx_weighted_gamma = position_gamma * (weighting_factor ** 2)
+                # Gamma 加權 (二階風險：平方加權確保非線性路徑一致)
+                pos_gamma = curr_gamma * quantity * 100
+                spx_weighted_gamma = pos_gamma * (weight_factor ** 2)
                 total_portfolio_gamma += spx_weighted_gamma
 
-                # 防禦決策樹判定
-                if entry_price > 0:
-                    pnl_pct = (entry_price - current_price) / entry_price if quantity < 0 else (current_price - entry_price) / entry_price
-                else:
-                    pnl_pct = 0.0
-                status = _evaluate_defense_status(quantity, opt_type, pnl_pct, current_delta, dte)
-
-                # 生成單筆報告
+                # --- 生成單筆報告內容 ---
+                pnl_pct = (entry_price - current_price) / entry_price if quantity < 0 else (current_price - entry_price) / entry_price
+                status = _evaluate_defense_status(quantity, opt_type, pnl_pct, curr_delta, dte)
+                
                 pnl_icon = "🟢" if pnl_pct > 0 else "🔴" if pnl_pct < 0 else "⚪"
                 cc_tag = " 🛡️(CC)" if (opt_type == 'call' and stock_cost > 0.0) else ""
-                line = (f"🔹 **{symbol}** ｜ `{expiry}` ｜ `${strike}` **{opt_type.upper()}**{cc_tag}\n"
-                        f"├─ 💰 成本: `${entry_price:.2f}` ｜ 📈 現價: `${current_price:.2f}`\n"
-                        f"├─ {pnl_icon} 損益: **{pnl_pct*100:+.2f}%**\n"
-                        f"├─ ⏳ DTE: `{dte}` 天 ｜ ⚖️ SPY Δ: `{spx_weighted_delta:+.2f}`\n"
-                        f"└─ 🎯 動作: {status}\n")
-                report_lines.append(line)
+                
+                report_lines.append(
+                    f"🔹 **{symbol}** ｜ `{expiry}` ｜ `${strike}` **{opt_type.upper()}**{cc_tag}\n"
+                    f"├─ 💰 成本: `${entry_price:.2f}` ｜ 📈 現價: `${current_price:.2f}`\n"
+                    f"├─ {pnl_icon} 損益: **{pnl_pct*100:+.2f}%**\n"
+                    f"├─ ⏳ DTE: `{dte}` 天 ｜ ⚖️ SPY Δ: `{spx_weighted_delta:+.2f}`\n"
+                    f"└─ 🎯 動作: {status}\n"
+                )
         except Exception as e:
-            print(f"處理 Symbol {symbol} 發生錯誤: {e}")
+            logger.error(f"Symbol {symbol} 處理失敗: {e}")
             continue
 
-    # 組合尾部風險報告 (將 total_portfolio_gamma 傳入)
-    report_lines.extend(_calculate_macro_risk(total_portfolio_beta_delta, total_portfolio_theta, total_margin_used, total_portfolio_gamma, user_capital))
+    # 🚀 整合最後的宏觀風險報告
+    report_lines.extend(_calculate_macro_risk(total_portfolio_beta_delta, total_portfolio_theta, total_margin_used, total_portfolio_gamma, user_capital, spy_price))
     report_lines.extend(_analyze_correlation(positions_by_symbol))
 
     return report_lines

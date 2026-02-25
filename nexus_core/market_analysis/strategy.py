@@ -8,6 +8,8 @@ from config import TARGET_DELTAS
 from .greeks import calculate_contract_delta
 from .data import get_next_earnings_date
 
+from .portfolio import calculate_beta
+
 import logging
 
 def _calculate_technical_indicators(df):
@@ -75,9 +77,10 @@ def _determine_strategy_signal(indicators):
     else:
         return None, None, 0, 0, 0
 
-def _calculate_mmm(ticker, price, today, symbol):
+def _calculate_mmm(ticker, price, today, symbol, is_etf):
     """計算財報日 MMM (Market Maker Move)"""
-    earnings_date = get_next_earnings_date(ticker)
+    earnings_date = None if is_etf else get_next_earnings_date(ticker)
+
     days_to_earnings = -1
     mmm_pct, safe_lower, safe_upper = 0.0, 0.0, 0.0
 
@@ -171,20 +174,15 @@ def _find_target_expiry(expirations, today, min_dte, max_dte):
             return exp, days_to_expiry
     return None, 0
 
-def _get_best_contract_data(ticker, target_expiry_date, opt_type, target_delta, price, days_to_expiry):
-    """取得最佳合約與 Greeks"""
+def _get_best_contract_data(ticker, target_expiry_date, opt_type, target_delta, price, days_to_expiry, dividend_yield=0.0):
+    """取得最佳合約與 Greeks
+    
+    Args:
+        dividend_yield (float): 年化股息殖利率，由外部傳入以確保一致性。
+    """
 
     # 強行靜音 yfinance 的 ETF 404 報錯洗版
     logging.getLogger('yfinance').setLevel(logging.CRITICAL)
-
-    try:
-        # 抓取年化股息殖利率 (Annual Dividend Yield)
-        info = ticker.info
-        dividend_yield = info.get('dividendYield', 0.0) if info else 0.0
-        if dividend_yield is None:
-            dividend_yield = 0.0
-    except Exception:
-        dividend_yield = 0.0
 
     try:
         opt_chain = ticker.option_chain(target_expiry_date)
@@ -210,7 +208,7 @@ def _get_best_contract_data(ticker, target_expiry_date, opt_type, target_delta, 
     except Exception:
         return None, None
 
-def _calculate_vertical_skew(opt_chain, price, days_to_expiry, strategy, symbol):
+def _calculate_vertical_skew(opt_chain, price, days_to_expiry, strategy, symbol, dividend_yield=0.0):
     """計算垂直波動率偏態"""
     vertical_skew = 1.0
     skew_state = "⚖️ 中性 (Neutral)"
@@ -221,8 +219,8 @@ def _calculate_vertical_skew(opt_chain, price, days_to_expiry, strategy, symbol)
         puts_skew = opt_chain.puts[opt_chain.puts['volume'] > 0].copy()
         
         if not calls_skew.empty and not puts_skew.empty:
-            calls_skew['bs_delta'] = calls_skew.apply(lambda row: calculate_contract_delta(row, price, t_years, 'c'), axis=1)
-            puts_skew['bs_delta'] = puts_skew.apply(lambda row: calculate_contract_delta(row, price, t_years, 'p'), axis=1)
+            calls_skew['bs_delta'] = calls_skew.apply(lambda row: calculate_contract_delta(row, price, t_years, 'c', q=dividend_yield), axis=1)
+            puts_skew['bs_delta'] = puts_skew.apply(lambda row: calculate_contract_delta(row, price, t_years, 'p', q=dividend_yield), axis=1)
             
             call_25_idx = (calls_skew['bs_delta'] - 0.25).abs().idxmin()
             put_25_idx = (puts_skew['bs_delta'] - (-0.25)).abs().idxmin()
@@ -486,20 +484,56 @@ def _calculate_sizing(strategy, best_contract, days_to_expiry, expected_move=0.0
                     
     return aroc, alloc_pct, margin_per_contract
 
-def analyze_symbol(symbol, stock_cost=0.0):
+def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None):
     """
-    掃描技術指標、波動率位階、期限結構與造市商預期波動，並過濾最佳合約。
+    掃描技術指標、波動率位階、期限結構、Beta 風險與加權 Delta。
+
+    Args:
+        df_spy (pd.DataFrame, optional): SPY 的歷史資料，批次掃描時由外部傳入以避免重複請求。
+        spy_price (float, optional): SPY 當前價格，與 df_spy 配套使用。
     """
     try:
         ticker = yf.Ticker(symbol)
+        try:
+            # 使用 fast_info 避開 404 報錯
+            is_etf = ticker.fast_info.get('quoteType') == 'ETF'
+        except:
+            is_etf = False
+
+        # 計算年化股息殖利率 (統一在此層級計算，確保所有子函式使用一致的值)
+        if is_etf:
+            dividend_yield = 0.015  # ETF 平均估計值
+        else:
+            try:
+                dividend_yield = ticker.fast_info.get('dividendYield', 0.0)
+                if dividend_yield is None or pd.isna(dividend_yield):
+                    dividend_yield = 0.0
+            except Exception:
+                dividend_yield = 0.0
+
+        # 取得標的與基準 (SPY) 歷史資料
         df = ticker.history(period="1y")
-        
-        # 1. 技術指標
+        if df.empty: return None
+
+        # 抓取基準 SPY 用於 Beta 與加權 Delta 計算
+        # 若外部已傳入 df_spy / spy_price 則直接使用，避免批次掃描時重複請求
+        if df_spy is None:
+            spy_ticker = yf.Ticker("SPY")
+            df_spy = spy_ticker.history(period="1y")
+        if df_spy.empty:
+            spy_price = 1.0
+            beta = 1.0
+        else:
+            if spy_price is None:
+                spy_price = df_spy['Close'].iloc[-1]
+            beta = calculate_beta(df, df_spy) if symbol != "SPY" else 1.0
+
+        # 技術指標
         indicators = _calculate_technical_indicators(df)
         if not indicators: return None
         price = indicators['price']
 
-        # 2. 策略訊號
+        # 策略訊號
         strategy, opt_type, target_delta, min_dte, max_dte = _determine_strategy_signal(indicators)
         if not strategy: return None
 
@@ -507,29 +541,29 @@ def analyze_symbol(symbol, stock_cost=0.0):
         if not expirations: return None
         today = datetime.now().date()
 
-        # 3. 進階市場分析 (MMM, Term Structure)
-        mmm_pct, safe_lower, safe_upper, days_to_earnings = _calculate_mmm(ticker, price, today, symbol)
+        # 進階市場分析 (MMM, Term Structure)
+        mmm_pct, safe_lower, safe_upper, days_to_earnings = _calculate_mmm(ticker, price, today, symbol, is_etf)
         ts_ratio, ts_state = _calculate_term_structure(ticker, expirations, price, today)
 
-        # 4. 合約篩選
+        # 合約篩選
         target_expiry_date, days_to_expiry = _find_target_expiry(expirations, today, min_dte, max_dte)
         if not target_expiry_date: return None
 
-        best_contract, opt_chain = _get_best_contract_data(ticker, target_expiry_date, opt_type, target_delta, price, days_to_expiry)
+        best_contract, opt_chain = _get_best_contract_data(ticker, target_expiry_date, opt_type, target_delta, price, days_to_expiry, dividend_yield)
         if best_contract is None: return None
 
-        # 5. 垂直偏態分析
+        # 垂直偏態分析
         if opt_chain:
-            vertical_skew, skew_state = _calculate_vertical_skew(opt_chain, price, days_to_expiry, strategy, symbol)
-            if vertical_skew is None: return None # Skew check failed (e.g. too risky)
+            vertical_skew, skew_state = _calculate_vertical_skew(opt_chain, price, days_to_expiry, strategy, symbol, dividend_yield)
+            if vertical_skew is None: return None
         else:
-             vertical_skew, skew_state = 1.0, "N/A"
+            vertical_skew, skew_state = 1.0, "N/A"
 
-        # 6. 風險與流動性驗證
+        # 風險與流動性驗證
         risk_metrics = _validate_risk_and_liquidity(strategy, best_contract, price, indicators['hv_current'], days_to_expiry, symbol)
         if not risk_metrics: return None
 
-        # 7. 倉位計算
+        # 倉位計算
         aroc, alloc_pct, margin_per_contract = _calculate_sizing(
             strategy,
             best_contract,
@@ -538,14 +572,23 @@ def analyze_symbol(symbol, stock_cost=0.0):
             price=price,
             stock_cost=stock_cost
         )
-        if strategy in ["STO_PUT", "STO_CALL"] and aroc < 15.0:
-            return None
-        if strategy in ["BTO_CALL", "BTO_PUT"] and aroc < 30.0:
-            return None
+        
+        # 門檻過濾
+        if strategy in ["STO_PUT", "STO_CALL"] and aroc < 15.0: return None
+        if strategy in ["BTO_CALL", "BTO_PUT"] and aroc < 30.0: return None
 
-        # 8. 組合結果
+        # 計算加權 Delta (SPY Equivalent Delta)
+        # 公式: Delta * Beta * (Stock Price / SPY Price) * 100
+        raw_delta = best_contract['bs_delta']
+        if spy_price is None or spy_price <= 0:
+            spy_price = 1.0  # 防禦性預設值，避免除零錯誤
+        weighted_delta = round(raw_delta * beta * (price / spy_price) * 100, 2)
+
+        # 9. 組合結果
         return {
             "symbol": symbol, "price": price,
+            "beta": beta, # 🚀 輸出 Beta
+            "weighted_delta": weighted_delta, # 🚀 輸出加權 Delta
             "stock_cost": stock_cost,
             "rsi": indicators['rsi'], "sma20": indicators['sma20'], "hv_rank": indicators['hv_rank'],
             "ts_ratio": ts_ratio, "ts_state": ts_state,
@@ -558,7 +601,7 @@ def analyze_symbol(symbol, stock_cost=0.0):
             "strike": best_contract['strike'], 
             "bid": risk_metrics['bid'], "ask": risk_metrics['ask'], 
             "spread": risk_metrics['spread'], "spread_ratio": risk_metrics['spread_ratio'],
-            "delta": best_contract['bs_delta'], "iv": best_contract['impliedVolatility'],
+            "delta": raw_delta, "iv": best_contract['impliedVolatility'],
             "aroc": aroc,
             "alloc_pct": alloc_pct,
             "margin_per_contract": margin_per_contract,

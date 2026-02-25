@@ -1,5 +1,8 @@
 import discord
 import logging
+import yfinance as yf
+from datetime import datetime
+from market_analysis.portfolio import calculate_beta
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +45,10 @@ def create_scan_embed(data, user_capital=100000.0):
     )
     
     # --- 第一排（當前概況） ---
-    embed.add_field(name="🏷️ 標的現價\u2800\u2800\u2800\u2800", value=f"${data['price']:.2f}\n\u200b", inline=True)
+    beta = data.get('beta', 1.0)
+    embed.add_field(name="🏷️ 標價 / Beta\u2800\u2800", value=f"${data['price']:.2f} / `{beta:.2f}`\n\u200b", inline=True)
     embed.add_field(name="📈 RSI / 20MA\u2800\u2800\u2800", value=f"{data['rsi']:.2f} / ${data['sma20']:.2f}\n\u200b", inline=True)
+
     
     hvr_status = "🔥 高" if data['hv_rank'] >= 50 else ("⚡ 中" if data['hv_rank'] >= 30 else "🧊 低")
     embed.add_field(name="🔥 HV Rank\u2800\u2800\u2800\u2800", value=f"`{data['hv_rank']:.1f}%` {hvr_status}\n\u200b", inline=True)
@@ -69,8 +74,10 @@ def create_scan_embed(data, user_capital=100000.0):
     embed.add_field(name="📉 垂直偏態\u2800\u2800\u2800\u2800", value=f"{v_skew_str}\n\u200b", inline=True)
     
     # --- 第三排（績效與風控） ---
-    embed.add_field(name="🧩 Delta / IV\u2800\u2800\u2800", value=f"{data['delta']:.3f} / {data['iv']:.1%}\n\u200b", inline=True)
-    embed.add_field(name="💰 AROC\u2800\u2800\u2800\u2800\u2800", value=f"`{data['aroc']:.1f}%` 💰\n\u200b", inline=True)
+    weighted_delta = data.get('weighted_delta', 0.0)
+    embed.add_field(name="🧩 Delta (加權)\u2800\u2800", value=f"{data['delta']:.3f} (`{weighted_delta:+.2f}`)\n\u200b", inline=True)
+    embed.add_field(name="💰 AROC / IV\u2800\u2800\u2800\u2800", value=f"`{data['aroc']:.1f}%` / {data['iv']:.1%}\n\u200b", inline=True)
+
 
     alloc_pct = data.get('alloc_pct', 0.0)
     margin_per_contract = data.get('margin_per_contract', 0.0)
@@ -273,3 +280,124 @@ def create_watchlist_embed(page_data, current_page, total_pages, total_items):
     
     embed.set_footer(text=f"頁次: {current_page}/{total_pages} ｜ 📊 總項目: {total_items}")
     return embed
+
+def analyze_symbol(symbol, stock_cost=0.0):
+    """
+    掃描技術指標、波動率位階、期限結構、Beta 風險與加權 Delta。
+    註：此處呼叫的 _calculate_technical_indicators 等私有函數需從 market_analysis.strategy 引入或在此處定義。
+    目前此函數主要作為代碼整合參考。
+    """
+    from market_analysis.strategy import (
+        _calculate_technical_indicators, _determine_strategy_signal, 
+        _calculate_mmm, _calculate_term_structure, _find_target_expiry,
+        _get_best_contract_data, _calculate_vertical_skew, _validate_risk_and_liquidity,
+        _calculate_sizing
+    )
+
+    try:
+        ticker = yf.Ticker(symbol)
+        try:
+            # 使用 fast_info 避開 404 報錯
+            is_etf = ticker.fast_info.get('quoteType') == 'ETF'
+        except:
+            is_etf = False
+
+        # 1. 取得標的與基準 (SPY) 歷史資料
+        df = ticker.history(period="1y")
+        if df.empty: return None
+
+        # 🚀 整合：抓取基準 SPY 用於 Beta 與加權 Delta 計算
+        spy_ticker = yf.Ticker("SPY")
+        df_spy = spy_ticker.history(period="1y")
+        if df_spy.empty:
+            spy_price = 1.0
+            beta = 1.0
+        else:
+            spy_price = df_spy['Close'].iloc[-1]
+            beta = calculate_beta(df, df_spy) if symbol != "SPY" else 1.0
+
+        # 2. 技術指標
+        indicators = _calculate_technical_indicators(df)
+        if not indicators: return None
+        price = indicators['price']
+
+        # 3. 策略訊號
+        strategy, opt_type, target_delta, min_dte, max_dte = _determine_strategy_signal(indicators)
+        if not strategy: return None
+
+        expirations = ticker.options
+        if not expirations: return None
+        today = datetime.now().date()
+
+        # 4. 進階市場分析 (MMM, Term Structure)
+        mmm_pct, safe_lower, safe_upper, days_to_earnings = _calculate_mmm(ticker, price, today, symbol, is_etf)
+        ts_ratio, ts_state = _calculate_term_structure(ticker, expirations, price, today)
+
+        # 5. 合約篩選
+        target_expiry_date, days_to_expiry = _find_target_expiry(expirations, today, min_dte, max_dte)
+        if not target_expiry_date: return None
+
+        best_contract, opt_chain = _get_best_contract_data(ticker, target_expiry_date, opt_type, target_delta, price, days_to_expiry)
+        if best_contract is None: return None
+
+        # 6. 垂直偏態分析
+        if opt_chain:
+            vertical_skew, skew_state = _calculate_vertical_skew(opt_chain, price, days_to_expiry, strategy, symbol)
+            if vertical_skew is None: return None
+        else:
+            vertical_skew, skew_state = 1.0, "N/A"
+
+        # 7. 風險與流動性驗證
+        risk_metrics = _validate_risk_and_liquidity(strategy, best_contract, price, indicators['hv_current'], days_to_expiry, symbol)
+        if not risk_metrics: return None
+
+        # 8. 倉位計算
+        aroc, alloc_pct, margin_per_contract = _calculate_sizing(
+            strategy,
+            best_contract,
+            days_to_expiry,
+            expected_move=risk_metrics['expected_move'],
+            price=price,
+            stock_cost=stock_cost
+        )
+        
+        # 門檻過濾
+        if strategy in ["STO_PUT", "STO_CALL"] and aroc < 15.0: return None
+        if strategy in ["BTO_CALL", "BTO_PUT"] and aroc < 30.0: return None
+
+        # 🚀 整合：計算加權 Delta (SPY Equivalent Delta)
+        # 公式: Delta * Beta * (Stock Price / SPY Price) * 100
+        raw_delta = best_contract['bs_delta']
+        weighted_delta = round(raw_delta * beta * (price / spy_price) * 100, 2)
+
+        # 9. 組合結果
+        return {
+            "symbol": symbol, "price": price,
+            "beta": beta, # 🚀 輸出 Beta
+            "weighted_delta": weighted_delta, # 🚀 輸出加權 Delta
+            "stock_cost": stock_cost,
+            "rsi": indicators['rsi'], "sma20": indicators['sma20'], "hv_rank": indicators['hv_rank'],
+            "ts_ratio": ts_ratio, "ts_state": ts_state,
+            "v_skew": vertical_skew, "v_skew_state": skew_state,
+            "earnings_days": days_to_earnings, "mmm_pct": mmm_pct,
+            "safe_lower": safe_lower, "safe_upper": safe_upper,
+            "expected_move": risk_metrics['expected_move'], 
+            "em_lower": risk_metrics['em_lower'], "em_upper": risk_metrics['em_upper'],
+            "strategy": strategy, "target_date": target_expiry_date, "dte": days_to_expiry, 
+            "strike": best_contract['strike'], 
+            "bid": risk_metrics['bid'], "ask": risk_metrics['ask'], 
+            "spread": risk_metrics['spread'], "spread_ratio": risk_metrics['spread_ratio'],
+            "delta": raw_delta, "iv": best_contract['impliedVolatility'],
+            "aroc": aroc,
+            "alloc_pct": alloc_pct,
+            "margin_per_contract": margin_per_contract,
+            "vrp": risk_metrics['vrp'],
+            "mid_price": risk_metrics['mid_price'],
+            "suggested_hedge_strike": risk_metrics['suggested_hedge_strike'],
+            "liq_status": risk_metrics['liq_status'],
+            "liq_msg": risk_metrics['liq_msg']
+        }
+
+    except Exception as e:
+        print(f"分析 {symbol} 錯誤: {e}")
+        return None
