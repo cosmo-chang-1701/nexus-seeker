@@ -33,24 +33,24 @@ def _calculate_technical_indicators(df):
         
         latest = df.iloc[-1]
         return {
-            'price': latest['Close'],
-            'rsi': latest['RSI_14'],
-            'sma20': latest['SMA_20'],
-            'macd_hist': latest['MACDh_12_26_9'],
+            'price': latest.get('Close'),
+            'rsi': latest.get('RSI_14'),
+            'sma20': latest.get('SMA_20'),
+            'macd_hist': latest.get('MACDh_12_26_9'),
             'hv_current': hv_current,
             'hv_rank': hv_rank
         }
     except Exception as e:
-        print(f"指標計算錯誤: {e}")
+        logging.error(f"指標計算錯誤: {e}")
         return None
 
 def _determine_strategy_signal(indicators):
     """根據技術指標決定策略"""
-    price = indicators['price']
-    rsi = indicators['rsi']
-    hv_rank = indicators['hv_rank']
-    sma20 = indicators['sma20']
-    macd_hist = indicators['macd_hist']
+    price = indicators.get('price', 0.0)
+    rsi = indicators.get('rsi', 50.0)
+    hv_rank = indicators.get('hv_rank', 0.0)
+    sma20 = indicators.get('sma20', 0.0)
+    macd_hist = indicators.get('macd_hist', 0.0)
 
     # 確保 TARGET_DELTAS 存在，避免 import 失敗或 key error
     deltas = TARGET_DELTAS if TARGET_DELTAS else {}
@@ -109,7 +109,7 @@ def _calculate_mmm(ticker, price, today, symbol, is_etf):
                     if not calls_mmm.empty:
                         atm_call_idx = (calls_mmm['strike'] - price).abs().idxmin()
                         atm_call = calls_mmm.loc[atm_call_idx]
-                        c_bid, c_ask, c_last = atm_call['bid'], atm_call['ask'], atm_call['lastPrice']
+                        c_bid, c_ask, c_last = atm_call.get('bid', 0.0), atm_call.get('ask', 0.0), atm_call.get('lastPrice', 0.0)
                         c_price = (c_bid + c_ask)/2 if (c_bid > 0 and c_ask > 0) else c_last
 
                     # Put Price
@@ -118,7 +118,7 @@ def _calculate_mmm(ticker, price, today, symbol, is_etf):
                     if not puts_mmm.empty:
                         atm_put_idx = (puts_mmm['strike'] - price).abs().idxmin()
                         atm_put = puts_mmm.loc[atm_put_idx]
-                        p_bid, p_ask, p_last = atm_put['bid'], atm_put['ask'], atm_put['lastPrice']
+                        p_bid, p_ask, p_last = atm_put.get('bid', 0.0), atm_put.get('ask', 0.0), atm_put.get('lastPrice', 0.0)
                         p_price = (p_bid + p_ask)/2 if (p_bid > 0 and p_ask > 0) else p_last
                     
                     if price > 0:
@@ -151,8 +151,8 @@ def _calculate_term_structure(ticker, expirations, price, today):
             if not front_chain.empty and not back_chain.empty:
                 front_iv_idx = (front_chain['strike'] - price).abs().idxmin()
                 back_iv_idx = (back_chain['strike'] - price).abs().idxmin()
-                front_iv = front_chain.loc[front_iv_idx, 'impliedVolatility']
-                back_iv = back_chain.loc[back_iv_idx, 'impliedVolatility']
+                front_iv = front_chain.loc[front_iv_idx].get('impliedVolatility', 0.0)
+                back_iv = back_chain.loc[back_iv_idx].get('impliedVolatility', 0.0)
                 
                 if back_iv > 0.01:
                     ts_ratio = front_iv / back_iv
@@ -228,8 +228,8 @@ def _calculate_vertical_skew(opt_chain, price, days_to_expiry, strategy, symbol,
             put_25 = puts_skew.loc[[put_25_idx]]
             
             if not call_25.empty and not put_25.empty:
-                iv_call_25 = call_25['impliedVolatility'].values[0]
-                iv_put_25 = put_25['impliedVolatility'].values[0]
+                iv_call_25 = call_25.iloc[0].get('impliedVolatility', 0.0)
+                iv_put_25 = put_25.iloc[0].get('impliedVolatility', 0.0)
                 
                 if iv_call_25 > 0.01:
                     vertical_skew = iv_put_25 / iv_call_25
@@ -345,11 +345,11 @@ def _evaluate_option_liquidity(option_data: dict) -> dict:
 
 def _validate_risk_and_liquidity(strategy, best_contract, price, hv_current, days_to_expiry, symbol):
     """驗證流動性、VRP 與 預期波動 (整合動態流動性評估)"""
-    bid = best_contract['bid']
-    ask = best_contract['ask']
-    strike = best_contract['strike']
-    iv = best_contract['impliedVolatility']
-    delta = best_contract['bs_delta']
+    bid = best_contract.get('bid', 0.0)
+    ask = best_contract.get('ask', 0.0)
+    strike = best_contract.get('strike', 0.0)
+    iv = best_contract.get('impliedVolatility', 0.0)
+    delta = best_contract.get('bs_delta', 0.0)
 
     # yfinance 的未平倉量欄位為 'openInterest'，並確保處理 NaN
     oi = best_contract.get('openInterest', 0)
@@ -429,10 +429,10 @@ def _calculate_sizing(strategy, best_contract, days_to_expiry, expected_move=0.0
     alloc_pct = 0.0
     margin_per_contract = 0.0
     
-    bid = best_contract['bid']
-    ask = best_contract['ask']
-    strike = best_contract['strike']
-    delta = best_contract['bs_delta']
+    bid = best_contract.get('bid', 0.0)
+    ask = best_contract.get('ask', 0.0)
+    strike = best_contract.get('strike', 0.0)
+    delta = best_contract.get('bs_delta', 0.0)
     
     if strategy in ["STO_PUT", "STO_CALL"]:
         if strategy == "STO_PUT":
@@ -538,7 +538,9 @@ def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None):
 
         # 5. 技術指標計算
         indicators = _calculate_technical_indicators(df)
-        if not indicators: return None
+        if indicators is None:
+            logging.warning(f"跳過 {symbol}: 無法計算技術指標")
+            return None
         # 更新為最新的歷史現價
         price = indicators['price'] 
 
@@ -558,7 +560,9 @@ def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None):
         if not target_expiry_date: return None
 
         best_contract, opt_chain = _get_best_contract_data(ticker, target_expiry_date, opt_type, target_delta, price, days_to_expiry, dividend_yield)
-        if best_contract is None: return None
+        if best_contract is None:
+            logging.warning(f"跳過 {symbol}: 找不到符合條件的期權合約")
+            return None
 
         # 8. 風控與規模計算
         if opt_chain is not None:
@@ -567,12 +571,12 @@ def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None):
         else:
             vertical_skew, skew_state = 1.0, "N/A"
 
-        risk_metrics = _validate_risk_and_liquidity(strategy, best_contract, price, indicators['hv_current'], days_to_expiry, symbol)
+        risk_metrics = _validate_risk_and_liquidity(strategy, best_contract, price, indicators.get('hv_current', 0.0), days_to_expiry, symbol)
         if not risk_metrics: return None
 
         aroc, alloc_pct, margin_per_contract = _calculate_sizing(
             strategy, best_contract, days_to_expiry, 
-            expected_move=risk_metrics['expected_move'], 
+            expected_move=risk_metrics.get('expected_move', 0.0), 
             price=price, stock_cost=stock_cost
         )
         
@@ -581,24 +585,24 @@ def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None):
         if strategy in ["BTO_CALL", "BTO_PUT"] and aroc < 30.0: return None
 
         # 🚀 9. 加權 Delta 計算 (NRO 核心數據)
-        raw_delta = best_contract['bs_delta']
+        raw_delta = best_contract.get('bs_delta', 0.0)
         safe_spy_price = spy_price_val if spy_price_val > 0 else 1.0
         weighted_delta = round(raw_delta * beta * (price / safe_spy_price) * 100, 2)
 
         return {
             "symbol": symbol, "price": price, "beta": beta, "weighted_delta": weighted_delta,
-            "stock_cost": stock_cost, "rsi": indicators['rsi'], "sma20": indicators['sma20'],
-            "hv_rank": indicators['hv_rank'], "ts_ratio": ts_ratio, "ts_state": ts_state,
+            "stock_cost": stock_cost, "rsi": indicators.get('rsi', 0.0), "sma20": indicators.get('sma20', 0.0),
+            "hv_rank": indicators.get('hv_rank', 0.0), "ts_ratio": ts_ratio, "ts_state": ts_state,
             "v_skew": vertical_skew, "v_skew_state": skew_state, "earnings_days": days_to_earnings,
             "mmm_pct": mmm_pct, "safe_lower": safe_lower, "safe_upper": safe_upper,
-            "expected_move": risk_metrics['expected_move'], "em_lower": risk_metrics['em_lower'],
-            "em_upper": risk_metrics['em_upper'], "strategy": strategy, "target_date": target_expiry_date,
-            "dte": days_to_expiry, "strike": best_contract['strike'], "bid": risk_metrics['bid'],
-            "ask": risk_metrics['ask'], "spread": risk_metrics['spread'], "delta": raw_delta,
-            "iv": best_contract['impliedVolatility'], "aroc": aroc, "alloc_pct": alloc_pct,
-            "margin_per_contract": margin_per_contract, "vrp": risk_metrics['vrp'],
-            "mid_price": risk_metrics['mid_price'], "suggested_hedge_strike": risk_metrics['suggested_hedge_strike'],
-            "liq_status": risk_metrics['liq_status'], "liq_msg": risk_metrics['liq_msg'], "spy_price": safe_spy_price
+            "expected_move": risk_metrics.get('expected_move', 0.0), "em_lower": risk_metrics.get('em_lower', 0.0),
+            "em_upper": risk_metrics.get('em_upper', 0.0), "strategy": strategy, "target_date": target_expiry_date,
+            "dte": days_to_expiry, "strike": best_contract.get('strike', 0.0), "bid": risk_metrics.get('bid', 0.0),
+            "ask": risk_metrics.get('ask', 0.0), "spread": risk_metrics.get('spread', 0.0), "delta": raw_delta,
+            "iv": best_contract.get('impliedVolatility', 0.0), "aroc": aroc, "alloc_pct": alloc_pct,
+            "margin_per_contract": margin_per_contract, "vrp": risk_metrics.get('vrp', 0.0),
+            "mid_price": risk_metrics.get('mid_price', 0.0), "suggested_hedge_strike": risk_metrics.get('suggested_hedge_strike'),
+            "liq_status": risk_metrics.get('liq_status', 'N/A'), "liq_msg": risk_metrics.get('liq_msg', ''), "spy_price": safe_spy_price
         }
 
     except Exception as e:
