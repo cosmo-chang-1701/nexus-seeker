@@ -1,7 +1,7 @@
 import discord
 import logging
 import yfinance as yf
-from datetime import datetime
+from datetime import datetime, timezone
 from market_analysis.portfolio import calculate_beta
 
 logger = logging.getLogger(__name__)
@@ -219,7 +219,7 @@ def _add_risk_optimization_fields(embed, data, user_capital=None):
             f"```"
         )
     
-    embed.add_field(name=f"🛡️ What-if 曝險模擬 | {sim_status}", value=sim_block, inline=False)
+    embed.add_field(name=f"🛡️ What-if 曝險模擬 | {sim_status}\n\u200b", value=sim_block, inline=False)
 
     # 2. Nexus Risk Optimizer 自動優化建議
     if suggested > safe_qty:
@@ -238,7 +238,7 @@ def _add_risk_optimization_fields(embed, data, user_capital=None):
             # 格式化對沖股數，避免出現 22.2222222
             actions.append(f"🛡️ 建議對沖: {direction} {abs(hedge_spy):.1f} 股 SPY (@${spy_p:.1f})")
         
-        opt_block = "```diff\n" + "\n".join(actions) + "\n```"
+        opt_block = "```diff\n" + "\n".join(actions) + "\n\u200b```"
         embed.add_field(name=opt_title, value=opt_block, inline=False)
 
 def _add_ai_verification_fields(embed, data):
@@ -370,7 +370,10 @@ def create_portfolio_report_embed(report_lines):
             break
 
     # 2. 處理持倉細節 (Positions)
-    positions_text = "".join(report_lines[:macro_index])
+    # 使用 \n\u200b\n 作為持倉 block 之間的分隔符，增加閱讀舒適度
+    # 這裡的 \u200b 防止 Discord 壓縮連續換行
+    separator = "\n\u200b\n"
+    positions_text = separator.join([line.strip() for line in report_lines[:macro_index]])
     if not positions_text.strip():
         positions_text = "目前無持倉部位。"
     
@@ -387,7 +390,7 @@ def create_portfolio_report_embed(report_lines):
     embed = discord.Embed(
         title="📊 Nexus Seeker 盤後風險結算報告",
         color=embed_color,
-        timestamp=datetime.utcnow()
+        timestamp=datetime.now(timezone.utc)
     )
 
     # 🚀 欄位一：個別持倉細節

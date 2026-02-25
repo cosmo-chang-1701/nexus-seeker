@@ -1,10 +1,14 @@
 from typing import List, Dict, Any
 
+# Discord/Telegram 排版優化常數
+ZWS = "\u200b"  # 零寬空格
+EMPTY_LINE = f"{ZWS}\n"
+
 def format_macro_risk_report(metrics: Dict[str, Any], spy_price: float) -> List[str]:
     """
     將宏觀風險指標格式化為文字報告。
     """
-    lines = ["", "🌐 **【宏觀風險與資金水位報告】**", ""]
+    lines = [EMPTY_LINE, "🌐 **【宏觀風險與資金水位報告】**\n", EMPTY_LINE]
     
     exposure_pct = metrics["exposure_pct"]
     net_exposure_dollars = metrics["net_exposure_dollars"]
@@ -26,9 +30,9 @@ def format_macro_risk_report(metrics: Dict[str, Any], spy_price: float) -> List[
         delta_status = f"✅ **風險中性** (`{abs(exposure_pct):.1f}%` 內)"
         advice = "   👉 目前系統性曝險在安全範圍，無需執行對沖。"
 
-    lines.append(f"🔹 **淨 SPY Delta 曝險:** `${net_exposure_dollars:,.0f}` (等效 `{total_beta_delta:+.1f}` 股)")
-    lines.append(f" └─ {delta_status}\n{advice}")
-    lines.append("")
+    lines.append(f"🔹 **淨 SPY Delta 曝險:** `${net_exposure_dollars:,.0f}` (等效 `{total_beta_delta:+.1f}` 股)\n")
+    lines.append(f" └─ {delta_status}\n{EMPTY_LINE}{advice}\n")
+    lines.append(EMPTY_LINE)
 
     # Gamma
     total_gamma = metrics["total_gamma"]
@@ -43,9 +47,9 @@ def format_macro_risk_report(metrics: Dict[str, Any], spy_price: float) -> List[
         gamma_status = "✅ **Gamma 中性**"
         g_msg = "   👉 非線性風險受控，帳戶淨值曲線變動平滑。"
 
-    lines.append(f"🔹 **組合淨 Gamma:** `{total_gamma:+.2f}`")
-    lines.append(f" └─ {gamma_status}\n{g_msg}")
-    lines.append("")
+    lines.append(f"🔹 **組合淨 Gamma:** `{total_gamma:+.2f}`\n")
+    lines.append(f" └─ {gamma_status}\n{EMPTY_LINE}{g_msg}\n")
+    lines.append(EMPTY_LINE)
 
     # Theta
     theta_yield = metrics["theta_yield"]
@@ -56,9 +60,9 @@ def format_macro_risk_report(metrics: Dict[str, Any], spy_price: float) -> List[
     elif theta_yield > 0.30:
         theta_status = "🔥 **過度收租** (暗示承擔了極高的尾部風險)"
     
-    lines.append(f"🔹 **每日預期 Theta:** `${total_theta:+.2f}` (`{theta_yield:.3f}%`)")
-    lines.append(f" └─ {theta_status}")
-    lines.append("")
+    lines.append(f"🔹 **每日預期 Theta:** `${total_theta:+.2f}` (`{theta_yield:.3f}%`)\n")
+    lines.append(f" └─ {theta_status}\n")
+    lines.append(EMPTY_LINE)
 
     # Heat
     portfolio_heat = metrics["portfolio_heat"]
@@ -69,8 +73,8 @@ def format_macro_risk_report(metrics: Dict[str, Any], spy_price: float) -> List[
     elif portfolio_heat > 30.0:
         heat_status = "⚠️ **水位警戒** (已達常規滿水位，停止新進場部位)"
         
-    lines.append(f"🔹 **資金熱度 (Heat):** `${total_margin_used:,.2f}` (`{portfolio_heat:.1f}%`)")
-    lines.append(f" └─ {heat_status}")
+    lines.append(f"🔹 **資金熱度 (Heat):** `${total_margin_used:,.2f}` (`{portfolio_heat:.1f}%`)\n")
+    lines.append(f" └─ {heat_status}\n")
     
     return lines
 
@@ -78,17 +82,17 @@ def format_correlation_report(high_corr_pairs: List[tuple], symbol_count: int) -
     """
     格式化相關性報告。
     """
-    lines = ["", "🕸️ **【非系統性集中風險 (板塊連動性)】**", ""]
-    lines.append(f"🔹 **板塊相關性掃描:** 目標 `{symbol_count}` 檔 (60 日 Pearson 係數)")
+    lines = [EMPTY_LINE, "🕸️ **【非系統性集中風險 (板塊連動性)】**\n", EMPTY_LINE]
+    lines.append(f"🔹 **板塊相關性掃描:** 目標 `{symbol_count}` 檔 (60 日 Pearson 係數)\n")
     
     if high_corr_pairs:
-        lines.append("   🚨 **高度正相關警告:** 發現板塊重疊曝險！")
+        lines.append("   🚨 **高度正相關警告:** 發現板塊重疊曝險！\n")
         for sym1, sym2, rho in high_corr_pairs:
-            lines.append(f"      ⚠️ `{sym1}` & `{sym2}` (ρ = {rho:.2f})")
-        lines.append("   👉 **經理人建議:** 若發生整體利空，將引發 Gamma 同步擴張，建議適度降載。")
+            lines.append(f"      ⚠️ `{sym1}` & `{sym2}` (ρ = {rho:.2f})\n")
+        lines.append("   👉 **經理人建議:** 若發生整體利空，將引發 Gamma 同步擴張，建議適度降載。\n")
     else:
-        lines.append("   ✅ **分散性良好:** 未發現 ρ > 0.75 的重疊曝險，非系統性風險受控。")
-    lines.append("")
+        lines.append("   ✅ **分散性良好:** 未發現 ρ > 0.75 的重疊曝險，非系統性風險受控。\n")
+    lines.append(EMPTY_LINE)
     return lines
 
 def format_position_report(symbol: str, expiry: str, strike: float, opt_type: str, cc_tag: str, 
