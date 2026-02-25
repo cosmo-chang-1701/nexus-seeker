@@ -39,31 +39,54 @@ def evaluate_defense_status(quantity: float, opt_type: str, pnl_pct: float, curr
 def calculate_beta(df_stock: pd.DataFrame, df_spy: pd.DataFrame) -> float:
     """
     計算標的與基準 (SPY) 的相關性係數 (Beta)。
-    公式: \beta = \frac{Cov(R_i, R_m)}{Var(R_m)}
+    公式: $$\beta = \frac{\text{Cov}(R_i, R_m)}{\text{Var}(R_m)}$$
     """
     try:
-        if df_stock.empty or df_spy.empty:
+        if df_stock is None or df_spy is None or df_stock.empty or df_spy.empty:
             return 1.0
             
-        # 對齊日期並清理缺失值
-        combined = pd.concat([df_stock['Close'], df_spy['Close']], axis=1, keys=['stock', 'spy']).dropna()
+        # 1. 確保 Index 為 Datetime 格式以便對齊
+        # 2. 僅取 Close 價格並進行 Inner Join 對齊日期
+        combined = pd.merge(
+            df_stock['Close'], 
+            df_spy['Close'], 
+            left_index=True, 
+            right_index=True, 
+            how='inner', 
+            suffixes=('_stock', '_spy')
+        ).dropna()
         
-        # 樣本數過少則回傳 1.0 (中性風險)
+        # 樣本數過少 (少於一個季度 60 個交易日) 則回傳 1.0 預設值
         if len(combined) < 60:
             return 1.0
             
-        # 計算日收益率 (Daily Returns)
-        returns = combined.pct_change().dropna()
+        # 3. 計算 Simple Returns 並清理非數值 (inf/-inf)
+        returns = combined.pct_change().replace([np.inf, -np.inf], np.nan).dropna()
         
-        # 計算協方差矩陣 (Covariance Matrix)
-        cov_matrix = np.cov(returns['stock'], returns['spy'])
+        # 4. 再次檢查清理後的樣本數
+        if len(returns) < 50:
+            return 1.0
+            
+        # 5. 使用 Numpy 計算協方差矩陣
+        # rowvar=False 表示每列代表一個變量
+        cov_matrix = np.cov(returns['Close_stock'], returns['Close_spy'])
         covariance = cov_matrix[0, 1]
         variance = cov_matrix[1, 1]
         
+        # 6. 防禦性檢查：避免除以極小變異數 (例如 SPY 停牌或數據錯誤)
+        if variance < 1e-9:
+            return 1.0
+            
         beta = covariance / variance
+        
+        # 7. 限制 Beta 的極端範圍 (例如防止數據異常導致噴出 Beta > 20)
+        beta = np.clip(beta, -5.0, 5.0)
+        
         return round(float(beta), 2)
+        
     except Exception as e:
-        logger.debug(f"Beta 計算失敗: {e}")
+        # 在 Production 環境建議使用 logger.error
+        print(f"Beta 計算失敗: {e}")
         return 1.0
 
 def analyze_sector_correlation(symbols: List[str]) -> List[Tuple[str, str, float]]:

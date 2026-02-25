@@ -487,53 +487,62 @@ def _calculate_sizing(strategy, best_contract, days_to_expiry, expected_move=0.0
 def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None):
     """
     掃描技術指標、波動率位階、期限結構、Beta 風險與加權 Delta。
-
-    Args:
-        df_spy (pd.DataFrame, optional): SPY 的歷史資料，批次掃描時由外部傳入以避免重複請求。
-        spy_price (float, optional): SPY 當前價格，與 df_spy 配套使用。
+    [404-Shield] 針對 ETF 進行了路徑優化，避開無效的基本面請求。
     """
     try:
         ticker = yf.Ticker(symbol)
+        
+        # 🚀 1. 使用快取或最輕量方式取得標的資訊
         try:
-            # 使用 fast_info 避開 404 報錯
-            is_etf = ticker.fast_info.get('quoteType') == 'ETF'
+            # 只取 fast_info，絕對不觸碰 ticker.info
+            f_info = ticker.fast_info
+            quote_type = f_info.get('quoteType')
+            is_etf = quote_type == 'ETF'
+            price = f_info.get('last_price')
         except:
             is_etf = False
+            price = None
 
-        # 計算年化股息殖利率 (統一在此層級計算，確保所有子函式使用一致的值)
-        if is_etf:
-            dividend_yield = 0.015  # ETF 平均估計值
-        else:
-            try:
-                dividend_yield = ticker.fast_info.get('dividendYield', 0.0)
-                if dividend_yield is None or pd.isna(dividend_yield):
-                    dividend_yield = 0.0
-            except Exception:
-                dividend_yield = 0.0
-
-        # 取得標的與基準 (SPY) 歷史資料
+        # 🚀 2. 獲取歷史資料 (這是獲取現價最穩定的方法)
         df = ticker.history(period="1y")
         if df.empty: return None
+        
+        # 如果 fast_info 沒抓到價格，從歷史資料補抓
+        if price is None:
+            price = df['Close'].iloc[-1]
 
-        # 抓取基準 SPY 用於 Beta 與加權 Delta 計算
-        # 若外部已傳入 df_spy / spy_price 則直接使用，避免批次掃描時重複請求
+        # 🚀 3. 處理股息率 (避開 Fundamentals 請求)
+        if is_etf:
+            dividend_yield = 0.015  # ETF 預設值，省去抓取時間
+        else:
+            try:
+                # 僅從 fast_info 嘗試抓取，若無則為 0
+                dividend_yield = ticker.fast_info.get('dividendYield', 0.0) or 0.0
+            except:
+                dividend_yield = 0.0
+
+        # 🚀 4. 處理基準 SPY 與 Beta
+        # 若是批次掃描，外部傳入的 df_spy 是效能關鍵
         if df_spy is None:
+            # 只有在單獨掃描時才請求 SPY
             spy_ticker = yf.Ticker("SPY")
             df_spy = spy_ticker.history(period="1y")
+        
         if df_spy.empty:
-            spy_price = 1.0
-            beta = 1.0
+            logging.error(f"無法取得 SPY 基準資料，跳過 {symbol}")
+            return None
         else:
-            if spy_price is None:
-                spy_price = df_spy['Close'].iloc[-1]
+            spy_price_val = spy_price if spy_price is not None else df_spy['Close'].iloc[-1]
+            # 使用自定義函數計算 Beta
             beta = calculate_beta(df, df_spy) if symbol != "SPY" else 1.0
 
-        # 技術指標
+        # 5. 技術指標計算
         indicators = _calculate_technical_indicators(df)
         if not indicators: return None
-        price = indicators['price']
+        # 更新為最新的歷史現價
+        price = indicators['price'] 
 
-        # 策略訊號
+        # 6. 策略與合約篩選
         strategy, opt_type, target_delta, min_dte, max_dte = _determine_strategy_signal(indicators)
         if not strategy: return None
 
@@ -541,77 +550,58 @@ def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None):
         if not expirations: return None
         today = datetime.now().date()
 
-        # 進階市場分析 (MMM, Term Structure)
+        # 🚀 7. 進階分析 (請確保這些子函數內部也不要呼叫 .info)
         mmm_pct, safe_lower, safe_upper, days_to_earnings = _calculate_mmm(ticker, price, today, symbol, is_etf)
         ts_ratio, ts_state = _calculate_term_structure(ticker, expirations, price, today)
 
-        # 合約篩選
         target_expiry_date, days_to_expiry = _find_target_expiry(expirations, today, min_dte, max_dte)
         if not target_expiry_date: return None
 
         best_contract, opt_chain = _get_best_contract_data(ticker, target_expiry_date, opt_type, target_delta, price, days_to_expiry, dividend_yield)
         if best_contract is None: return None
 
-        # 垂直偏態分析
-        if opt_chain:
+        # 8. 風控與規模計算
+        if opt_chain is not None:
             vertical_skew, skew_state = _calculate_vertical_skew(opt_chain, price, days_to_expiry, strategy, symbol, dividend_yield)
-            if vertical_skew is None: return None
+            if vertical_skew is None: return None # 處理偏態過高時的早期退出
         else:
             vertical_skew, skew_state = 1.0, "N/A"
 
-        # 風險與流動性驗證
         risk_metrics = _validate_risk_and_liquidity(strategy, best_contract, price, indicators['hv_current'], days_to_expiry, symbol)
         if not risk_metrics: return None
 
-        # 倉位計算
         aroc, alloc_pct, margin_per_contract = _calculate_sizing(
-            strategy,
-            best_contract,
-            days_to_expiry,
-            expected_move=risk_metrics['expected_move'],
-            price=price,
-            stock_cost=stock_cost
+            strategy, best_contract, days_to_expiry, 
+            expected_move=risk_metrics['expected_move'], 
+            price=price, stock_cost=stock_cost
         )
         
         # 門檻過濾
         if strategy in ["STO_PUT", "STO_CALL"] and aroc < 15.0: return None
         if strategy in ["BTO_CALL", "BTO_PUT"] and aroc < 30.0: return None
 
-        # 計算加權 Delta (SPY Equivalent Delta)
-        # 公式: Delta * Beta * (Stock Price / SPY Price) * 100
+        # 🚀 9. 加權 Delta 計算 (NRO 核心數據)
         raw_delta = best_contract['bs_delta']
-        if spy_price is None or spy_price <= 0:
-            spy_price = 1.0  # 防禦性預設值，避免除零錯誤
-        weighted_delta = round(raw_delta * beta * (price / spy_price) * 100, 2)
+        safe_spy_price = spy_price_val if spy_price_val > 0 else 1.0
+        weighted_delta = round(raw_delta * beta * (price / safe_spy_price) * 100, 2)
 
-        # 9. 組合結果
         return {
-            "symbol": symbol, "price": price,
-            "beta": beta, # 🚀 輸出 Beta
-            "weighted_delta": weighted_delta, # 🚀 輸出加權 Delta
-            "stock_cost": stock_cost,
-            "rsi": indicators['rsi'], "sma20": indicators['sma20'], "hv_rank": indicators['hv_rank'],
-            "ts_ratio": ts_ratio, "ts_state": ts_state,
-            "v_skew": vertical_skew, "v_skew_state": skew_state,
-            "earnings_days": days_to_earnings, "mmm_pct": mmm_pct,
-            "safe_lower": safe_lower, "safe_upper": safe_upper,
-            "expected_move": risk_metrics['expected_move'], 
-            "em_lower": risk_metrics['em_lower'], "em_upper": risk_metrics['em_upper'],
-            "strategy": strategy, "target_date": target_expiry_date, "dte": days_to_expiry, 
-            "strike": best_contract['strike'], 
-            "bid": risk_metrics['bid'], "ask": risk_metrics['ask'], 
-            "spread": risk_metrics['spread'], "spread_ratio": risk_metrics['spread_ratio'],
-            "delta": raw_delta, "iv": best_contract['impliedVolatility'],
-            "aroc": aroc,
-            "alloc_pct": alloc_pct,
-            "margin_per_contract": margin_per_contract,
-            "vrp": risk_metrics['vrp'],
-            "mid_price": risk_metrics['mid_price'],
-            "suggested_hedge_strike": risk_metrics['suggested_hedge_strike'],
-            "liq_status": risk_metrics['liq_status'],
-            "liq_msg": risk_metrics['liq_msg']
+            "symbol": symbol, "price": price, "beta": beta, "weighted_delta": weighted_delta,
+            "stock_cost": stock_cost, "rsi": indicators['rsi'], "sma20": indicators['sma20'],
+            "hv_rank": indicators['hv_rank'], "ts_ratio": ts_ratio, "ts_state": ts_state,
+            "v_skew": vertical_skew, "v_skew_state": skew_state, "earnings_days": days_to_earnings,
+            "mmm_pct": mmm_pct, "safe_lower": safe_lower, "safe_upper": safe_upper,
+            "expected_move": risk_metrics['expected_move'], "em_lower": risk_metrics['em_lower'],
+            "em_upper": risk_metrics['em_upper'], "strategy": strategy, "target_date": target_expiry_date,
+            "dte": days_to_expiry, "strike": best_contract['strike'], "bid": risk_metrics['bid'],
+            "ask": risk_metrics['ask'], "spread": risk_metrics['spread'], "delta": raw_delta,
+            "iv": best_contract['impliedVolatility'], "aroc": aroc, "alloc_pct": alloc_pct,
+            "margin_per_contract": margin_per_contract, "vrp": risk_metrics['vrp'],
+            "mid_price": risk_metrics['mid_price'], "suggested_hedge_strike": risk_metrics['suggested_hedge_strike'],
+            "liq_status": risk_metrics['liq_status'], "liq_msg": risk_metrics['liq_msg']
         }
 
     except Exception as e:
-        print(f"分析 {symbol} 錯誤: {e}")
+        # 使用 logger 取代 print，方便在 Pi 5 上追蹤
+        logging.error(f"分析 {symbol} 錯誤: {e}")
         return None

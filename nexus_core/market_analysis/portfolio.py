@@ -159,21 +159,47 @@ class PortfolioStatusOrchestrator:
             logger.error(f"Symbol {symbol} 處理失敗: {e}", exc_info=True)
 
     def _get_stock_info(self, ticker, stock_hist):
-        """獲取標的價格、Beta 與股息率。"""
+        """
+        獲取標的價格、Beta 與股息率。
+        排除 ticker.info 以防範 ETF 觸發 HTTP 404 錯誤。
+        """
+        import logging
+        # 抑制 yfinance 內部拋出的 404 噪音
+        logging.getLogger('yfinance').setLevel(logging.CRITICAL)
+
         try:
             f_info = ticker.fast_info
-            price = f_info.get('last_price') or (stock_hist['Close'].iloc[-1] if not stock_hist.empty else ticker.history(period="1d")['Close'].iloc[-1])
-            is_etf = f_info.get('quoteType') == 'ETF'
-            dividend_yield = 0.015 if is_etf else (f_info.get('dividendYield', 0.0) or 0.0)
             
+            # 1. 價格取得邏輯 (優先級: fast_info > history_cache > history_api)
+            price = f_info.get('last_price')
+            if price is None or pd.isna(price):
+                if not stock_hist.empty:
+                    price = stock_hist['Close'].iloc[-1]
+                else:
+                    price = ticker.history(period="1d")['Close'].iloc[-1]
+            
+            # 2. 標的類型判斷與股息率估算
+            is_etf = f_info.get('quoteType') == 'ETF'
+            # ETF 避開 dividendYield 請求，直接賦予預設值或從 fast_info 讀取
+            if is_etf:
+                dividend_yield = 0.015 
+            else:
+                dividend_yield = f_info.get('dividendYield', 0.0) or 0.0
+            
+            # 3. Beta 值計算邏輯
+            # 優先使用動態回歸計算 (Regression Beta)
             if not self.spy_hist.empty and not stock_hist.empty:
                 beta_val = calculate_beta(stock_hist, self.spy_hist)
             else:
-                beta_val = ticker.info.get('beta', 1.0) if not is_etf else 1.0
-        except:
-            price = stock_hist['Close'].iloc[-1] if not stock_hist.empty else ticker.history(period="1d")['Close'].iloc[-1]
+                # 🚀 修正點：移除 ticker.info.get('beta')
+                # 若無歷史資料則回傳 1.0 (Market Neutral)，避開 quoteSummary 404 報錯
+                beta_val = 1.0
+                
+        except Exception as e:
+            # 發生異常時的 Fallback 處理
+            price = stock_hist['Close'].iloc[-1] if not stock_hist.empty else 0.0
             dividend_yield, beta_val = 0.0, 1.0
-            
+        
         return {'price': price, 'dividend_yield': dividend_yield, 'beta': beta_val}
 
     def _calculate_greeks(self, opt_type, stock_price, strike, t_years, iv, q):
