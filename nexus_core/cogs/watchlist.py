@@ -7,7 +7,7 @@ import logging
 import database
 import market_math
 from cogs.embed_builder import create_scan_embed
-
+import yfinance as yf
 import math
 
 from ui.watchlist import WatchlistPagination
