@@ -179,43 +179,64 @@ def _add_strategy_upgrade_fields(embed, data, strategy):
                             f"👉 組合為: **{spread_type}**\n\u200b")
             embed.add_field(name="💡 經理人策略升級建議", value=upgrade_text, inline=False)
 
-def _add_risk_optimization_fields(embed, data):
-    """添加事前曝險模擬與自動風控優化建議"""
-    projected_pct = data.get('projected_exposure_pct', 0.0)
+def _add_risk_optimization_fields(embed, data, user_capital=None):
+    """
+    添加事前曝險模擬與自動風控優化建議
+    🚀 強化版：增加閾值動態化與基準價校驗
+    """
+    projected_pct = data.get('projected_exposure_pct')
+    # 若無數據則不顯示 (注意：不要用 if projected_pct == 0)
+    if projected_pct is None:
+        return
+
     safe_qty = data.get('safe_qty', 0)
     hedge_spy = data.get('hedge_spy', 0.0)
     suggested = data.get('suggested_contracts', 0)
     
-    if projected_pct == 0:
-        return
-
+    # 🚀 修正點 1：風險閾值應從數據中取得，或設為全局變數
+    # 避免後台改了 10% 這裡還在顯示 15%
+    RISK_THRESHOLD = data.get('risk_limit_pct', 15.0) 
+    
     # 1. 曝險現況區塊
-    THRESHOLD = 15.0
-    if abs(projected_pct) > THRESHOLD:
+    is_overloaded = abs(projected_pct) > RISK_THRESHOLD
+    
+    if is_overloaded:
         sim_status = "🚨 警告：曝險過載"
-        sim_block = f"```diff\n- 成交後預期總曝險: {projected_pct:+.1f}%\n- 超過 15% 宏觀紅線\n```"
+        # 使用 diff 語法渲染紅色背景
+        sim_block = (
+            f"```diff\n"
+            f"- 成交後預期總曝險: {projected_pct:+.1f}%\n"
+            f"- 超過 {RISK_THRESHOLD}% 宏觀紅線\n"
+            f"```"
+        )
     else:
         sim_status = "✅ 狀態：風險受控"
-        sim_block = f"```yaml\n成交後預期總曝險: {projected_pct:+.1f}%\n符合資產組合平衡標準\n```"
+        # 使用 yaml 語法渲染綠色背景
+        sim_block = (
+            f"```yaml\n"
+            f"成交後預期總曝險: {projected_pct:+.1f}%\n"
+            f"符合資產組合平衡標準\n"
+            f"```"
+        )
     
     embed.add_field(name=f"🛡️ What-if 曝險模擬 | {sim_status}", value=sim_block, inline=False)
 
-    # 2. 自動減量與對沖指令區塊 (僅在需要優化時顯示)
+    # 2. Nexus Risk Optimizer 自動優化建議
     if suggested > safe_qty:
         opt_title = "⚖️ Nexus Risk Optimizer (自動優化建議)"
         
-        # 建立行動清單
+        # 🚀 修正點 2：加入基準 SPY 價格的動態提示 (讓對沖建議更可信)
+        spy_p = data.get('spy_price', 690.0)
+        
         actions = [f"--- 偵測到風險超標，執行自動降規 ---"]
         actions.append(f"❌ 原始建議: {suggested} 口")
         actions.append(f"✅ 安全成交: {safe_qty} 口 (符合風控)")
         
-        # 對沖指令
         if safe_qty == 0 and hedge_spy != 0:
             actions.append(f"\n⚠️ 警告: 即使下 1 口也過載")
-            if hedge_spy > 0:
-                actions.append(f"🛡️ 建議對沖: 賣出 {hedge_spy} 股 SPY 以平衡")
-            else:
-                actions.append(f"🛡️ 建議對沖: 買入 {abs(hedge_spy)} 股 SPY 以平衡")
+            direction = "賣出" if hedge_spy > 0 else "買入"
+            # 格式化對沖股數，避免出現 22.2222222
+            actions.append(f"🛡️ 建議對沖: {direction} {abs(hedge_spy):.1f} 股 SPY (@${spy_p:.1f})")
         
         opt_block = "```diff\n" + "\n".join(actions) + "\n```"
         embed.add_field(name=opt_title, value=opt_block, inline=False)
@@ -259,7 +280,7 @@ def create_scan_embed(data, user_capital=100000.0):
     _add_strategy_upgrade_fields(embed, data, strategy)
     
     # 🚀 執行優化回饋顯示
-    _add_risk_optimization_fields(embed, data)
+    _add_risk_optimization_fields(embed, data, user_capital)
     
     add_news_field(embed, data.get('news_text'))
     add_reddit_field(embed, data.get('reddit_text'))

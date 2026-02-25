@@ -598,7 +598,7 @@ def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None):
             "iv": best_contract['impliedVolatility'], "aroc": aroc, "alloc_pct": alloc_pct,
             "margin_per_contract": margin_per_contract, "vrp": risk_metrics['vrp'],
             "mid_price": risk_metrics['mid_price'], "suggested_hedge_strike": risk_metrics['suggested_hedge_strike'],
-            "liq_status": risk_metrics['liq_status'], "liq_msg": risk_metrics['liq_msg']
+            "liq_status": risk_metrics['liq_status'], "liq_msg": risk_metrics['liq_msg'], "spy_price": safe_spy_price
         }
 
     except Exception as e:
