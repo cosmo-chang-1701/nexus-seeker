@@ -370,11 +370,10 @@ def create_portfolio_report_embed(report_lines):
             break
 
     # 2. 處理持倉細節 (Positions)
-    # 使用 \n\u200b\n 作為持倉 block 之間的分隔符，增加閱讀舒適度
-    # 這裡的 \u200b 防止 Discord 壓縮連續換行
-    separator = "\n\u200b\n"
-    positions_text = separator.join([line.strip() for line in report_lines[:macro_index]])
-    if not positions_text.strip():
+    positions_list = [line.strip() for line in report_lines[:macro_index] if line.strip()]
+    # 使用 \n\n 分隔部位，並在總結尾加上 \n\u200b 來拉開與下一個 Field 標題的距離
+    positions_text = "\n\n".join(positions_list) + "\n\u200b"
+    if not [p for p in positions_list if p.strip()]:
         positions_text = "目前無持倉部位。"
     
     # 3. 處理宏觀風險與對沖建議 (Macro Risk)

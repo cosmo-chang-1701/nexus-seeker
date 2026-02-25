@@ -8,7 +8,7 @@ def format_macro_risk_report(metrics: Dict[str, Any], spy_price: float) -> List[
     """
     將宏觀風險指標格式化為文字報告。
     """
-    lines = [EMPTY_LINE, "🌐 **【宏觀風險與資金水位報告】**\n", EMPTY_LINE]
+    lines = ["🌐 **【宏觀風險與資金水位報告】**", EMPTY_LINE]
     
     exposure_pct = metrics["exposure_pct"]
     net_exposure_dollars = metrics["net_exposure_dollars"]
@@ -31,7 +31,7 @@ def format_macro_risk_report(metrics: Dict[str, Any], spy_price: float) -> List[
         advice = "   👉 目前系統性曝險在安全範圍，無需執行對沖。"
 
     lines.append(f"🔹 **淨 SPY Delta 曝險:** `${net_exposure_dollars:,.0f}` (等效 `{total_beta_delta:+.1f}` 股)\n")
-    lines.append(f" └─ {delta_status}\n{EMPTY_LINE}{advice}\n")
+    lines.append(f" └─ {delta_status}\n{advice}\n")
     lines.append(EMPTY_LINE)
 
     # Gamma
@@ -48,7 +48,7 @@ def format_macro_risk_report(metrics: Dict[str, Any], spy_price: float) -> List[
         g_msg = "   👉 非線性風險受控，帳戶淨值曲線變動平滑。"
 
     lines.append(f"🔹 **組合淨 Gamma:** `{total_gamma:+.2f}`\n")
-    lines.append(f" └─ {gamma_status}\n{EMPTY_LINE}{g_msg}\n")
+    lines.append(f" └─ {gamma_status}\n{g_msg}\n")
     lines.append(EMPTY_LINE)
 
     # Theta
@@ -82,7 +82,7 @@ def format_correlation_report(high_corr_pairs: List[tuple], symbol_count: int) -
     """
     格式化相關性報告。
     """
-    lines = [EMPTY_LINE, "🕸️ **【非系統性集中風險 (板塊連動性)】**\n", EMPTY_LINE]
+    lines = ["🕸️ **【非系統性集中風險 (板塊連動性)】**", EMPTY_LINE]
     lines.append(f"🔹 **板塊相關性掃描:** 目標 `{symbol_count}` 檔 (60 日 Pearson 係數)\n")
     
     if high_corr_pairs:
