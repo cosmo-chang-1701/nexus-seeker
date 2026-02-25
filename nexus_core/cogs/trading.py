@@ -219,7 +219,9 @@ class SchedulerCog(commands.Cog):
 
             # 🚀 效能優化：在分發前先抓一次基準 SPY 價格，避免在迴圈內反覆請求
             try:
-                spy_price = yf.Ticker("SPY").fast_info.get('last_price', 500.0)
+                spy_ticker = yf.Ticker("SPY")
+                df_spy = spy_ticker.history(period="1d")
+                spy_price = df_spy['Close'].iloc[-1] if not df_spy.empty else 500.0
             except:
                 spy_price = 500.0
 

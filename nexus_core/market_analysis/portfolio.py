@@ -171,7 +171,7 @@ class PortfolioStatusOrchestrator:
             f_info = ticker.fast_info
             
             # 1. 價格取得邏輯 (優先級: fast_info > history_cache > history_api)
-            price = f_info.get('last_price')
+            price = getattr(f_info, 'lastPrice', getattr(f_info, 'last_price', None))
             if price is None or pd.isna(price):
                 if not stock_hist.empty:
                     price = stock_hist['Close'].iloc[-1]
@@ -179,12 +179,13 @@ class PortfolioStatusOrchestrator:
                     price = ticker.history(period="1d")['Close'].iloc[-1]
             
             # 2. 標的類型判斷與股息率估算
-            is_etf = f_info.get('quoteType') == 'ETF'
+            quote_type = getattr(f_info, 'quoteType', getattr(f_info, 'quote_type', ''))
+            is_etf = quote_type == 'ETF'
             # ETF 避開 dividendYield 請求，直接賦予預設值或從 fast_info 讀取
             if is_etf:
                 dividend_yield = 0.015 
             else:
-                dividend_yield = f_info.get('dividendYield', 0.0) or 0.0
+                dividend_yield = getattr(f_info, 'dividendYield', getattr(f_info, 'dividend_yield', 0.0)) or 0.0
             
             # 3. Beta 值計算邏輯
             # 優先使用動態回歸計算 (Regression Beta)

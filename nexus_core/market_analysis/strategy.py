@@ -496,9 +496,9 @@ def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None):
         try:
             # 只取 fast_info，絕對不觸碰 ticker.info
             f_info = ticker.fast_info
-            quote_type = f_info.get('quoteType')
+            quote_type = getattr(f_info, 'quoteType', getattr(f_info, 'quote_type', ''))
             is_etf = quote_type == 'ETF'
-            price = f_info.get('last_price')
+            price = getattr(f_info, 'lastPrice', getattr(f_info, 'last_price', None))
         except:
             is_etf = False
             price = None
@@ -517,7 +517,7 @@ def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None):
         else:
             try:
                 # 僅從 fast_info 嘗試抓取，若無則為 0
-                dividend_yield = ticker.fast_info.get('dividendYield', 0.0) or 0.0
+                dividend_yield = getattr(ticker.fast_info, 'dividendYield', getattr(ticker.fast_info, 'dividend_yield', 0.0)) or 0.0
             except:
                 dividend_yield = 0.0
 
