@@ -390,8 +390,7 @@ nexus-seeker/                        # Monorepo 根目錄
 │   ├── Dockerfile
 │   ├── docker-compose.yml
 │   ├── requirements.txt
-│   ├── .env.example
-│   └── README.md                    # ← 本文件
+│   └── .env.example
 │
 ├── nexus_edge_scraper/              # 邊緣爬蟲服務 (本地端獨立部署)
 │   ├── local_api.py                 # FastAPI + Playwright — Reddit 頁面渲染與結構化爬取
@@ -404,6 +403,7 @@ nexus-seeker/                        # Monorepo 根目錄
 │   └── workflows/
 │       └── deploy.yml               # CI/CD — 建構 → GHCR → DigitalOcean Swarm
 ├── .gitignore
+├── README.md                        # ← 本文件
 └── LICENSE
 ```
 
