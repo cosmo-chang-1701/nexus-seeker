@@ -50,6 +50,8 @@ from market_analysis.portfolio import (
     check_portfolio_status_logic,
     _evaluate_defense_status,
     _calculate_macro_risk,
+    simulate_exposure_impact,
+    optimize_position_risk
 )
 
 
@@ -665,6 +667,67 @@ class TestCheckPortfolioStatusLogic(unittest.TestCase):
         # 不應拋出異常
         result = check_portfolio_status_logic(rows, user_capital=50000)
         self.assertIsInstance(result, list)
+
+
+# ====================================================================
+# Tests for Risk Optimization
+# ====================================================================
+class TestRiskOptimization(unittest.TestCase):
+    """測試風險紅線最佳化及與預期曝險的相關邏輯"""
+
+    def test_simulate_exposure_impact_sto(self):
+        """測試 STO 策略下的部位衝擊方向反轉 (Side Multiplier)"""
+        current_delta = 10.0
+        # 賣出 Put，合約 Delta = -5.0，STO 應轉為正向衝擊 +5.0
+        trade_data = {'strategy': 'STO_PUT', 'weighted_delta': -5.0}
+        # 總資金 50000, spy 500 -> 1 delta = $500
+        new_delta, exposure_pct = simulate_exposure_impact(current_delta, trade_data, 50000, 500.0, suggested_contracts=2)
+        # 衝擊 = -5.0 * -1 * 2 = 10.0
+        self.assertEqual(new_delta, 20.0)
+        self.assertEqual(exposure_pct, 20.0) # (20 * 500) / 50000 = 0.2 -> 20%
+
+    def test_simulate_exposure_impact_bto(self):
+        """測試 BTO 策略下的部位衝擊方向不變"""
+        current_delta = 10.0
+        # 買入 Put，合約 Delta = -5.0，BTO 維持負向衝擊
+        trade_data = {'strategy': 'BTO_PUT', 'weighted_delta': -5.0}
+        new_delta, exposure_pct = simulate_exposure_impact(current_delta, trade_data, 50000, 500.0, suggested_contracts=2)
+        # 衝擊 = -5.0 * 1 * 2 = -10.0
+        self.assertEqual(new_delta, 0.0)
+        self.assertEqual(exposure_pct, 0.0)
+
+    def test_optimize_position_risk_long_limit(self):
+        """測試超越做多紅線的限制與對沖"""
+        # Capital=50000, SPY=500, limit=15% -> max_safe_shares = 15.0
+        # 已經持有 10.0 Delta, 剩餘空間 +5.0
+        # 擬新增 STO_PUT (看多), 單口衝擊 -2.5 * -1 = +2.5
+        qty, hedge = optimize_position_risk(current_delta=10.0, unit_weighted_delta=-2.5, user_capital=50000, spy_price=500, risk_limit_pct=15.0, strategy='STO_PUT')
+        self.assertEqual(qty, 2) # 可以買2口剛好爆滿
+        self.assertEqual(hedge, 0.0)
+
+    def test_optimize_position_risk_long_overload(self):
+        """測試連1口都無法買的超出紅線對沖 (Hedge SPY > 0)"""
+        # 已經持有 14.0 Delta, 剩餘 +1.0 空間
+        # 擬新增單口衝擊 +2.5 的做多部位，1口都不行
+        qty, hedge = optimize_position_risk(14.0, 2.5, 50000, 500, 15.0, 'BTO_CALL')
+        self.assertEqual(qty, 0)
+        # Projected = 16.5, Max = 15.0 -> 建議對沖 = 16.5 - 15.0 = 1.5 股 SPY
+        self.assertEqual(hedge, 1.5)
+
+    def test_optimize_position_risk_short_limit(self):
+        """測試超越做空紅線的限制"""
+        # 已經持有 -10.0 Delta (看空), 空方極限為 -15.0，剩餘空間 -5.0
+        # 擬新增單口衝擊 -2.0 的空單
+        qty, hedge = optimize_position_risk(-10.0, -2.0, 50000, 500, 15.0, 'BTO_PUT')
+        self.assertEqual(qty, 2) # 可進 2 口空單，到達 -14.0
+        self.assertEqual(hedge, 0.0)
+
+    def test_optimize_position_risk_short_overload(self):
+        """測試連1口都會導致嚴重做空的對沖 (Hedge SPY < 0)"""
+        qty, hedge = optimize_position_risk(-14.0, -2.5, 50000, 500, 15.0, 'STO_CALL')
+        self.assertEqual(qty, 0)
+        # Projected = -16.5, 極限 = -15.0 -> 建議買入 SPY 對沖 (-1.5)
+        self.assertEqual(hedge, -1.5)
 
 
 if __name__ == '__main__':

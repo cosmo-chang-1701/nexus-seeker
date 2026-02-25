@@ -118,26 +118,97 @@ class WatchlistCog(commands.Cog):
         else:
             await interaction.response.send_message(f"❌ 找不到 `{symbol}`。", ephemeral=True)
 
-    @app_commands.command(name="scan", description="手動對特定股票執行 Delta 中性掃描")
+    @app_commands.command(name="scan", description="執行量化掃描、What-if 模擬與自動風控優化")
     async def manual_scan(self, interaction: discord.Interaction, symbol: str):
         await interaction.response.defer(ephemeral=True)
-        result = await asyncio.to_thread(market_math.analyze_symbol, symbol)
+        user_id = interaction.user.id
+        symbol = symbol.upper()
+
+        # 🚀 1. 效能優化：抓取基準 SPY 資料
+        try:
+            spy_ticker = yf.Ticker("SPY")
+            df_spy = spy_ticker.history(period="1y")
+            spy_price = df_spy['Close'].iloc[-1]
+        except Exception as e:
+            logger.warning(f"無法獲取 SPY 基準資料，使用預設值: {e}")
+            df_spy, spy_price = None, 500.0
+
+        # 2. 執行核心量化掃描
+        result = await asyncio.to_thread(
+            market_math.analyze_symbol, 
+            symbol, 
+            0.0, 
+            df_spy, 
+            spy_price
+        )
+        
         if result:
             from services import llm_service, news_service, reddit_service
+            from market_analysis.portfolio import optimize_position_risk
+            
+            # 3. 獲取外部情緒與 AI 風控
             news_text = await news_service.fetch_recent_news(symbol)
             reddit_text = await reddit_service.get_reddit_context(symbol)
             ai_verdict = await llm_service.evaluate_trade_risk(symbol, result['strategy'], news_text, reddit_text)
 
-            result['news_text'] = news_text
-            result['reddit_text'] = reddit_text
-            result['ai_decision'] = ai_verdict.get('decision', 'APPROVE')
-            result['ai_reasoning'] = ai_verdict.get('reasoning', '無資料')
+            result.update({
+                'news_text': news_text,
+                'reddit_text': reddit_text,
+                'ai_decision': ai_verdict.get('decision', 'APPROVE'),
+                'ai_reasoning': ai_verdict.get('reasoning', '無資料')
+            })
 
-            user_capital = database.get_user_capital(interaction.user.id)
+            # 4. 🚀 核心更新：執行成交後曝險模擬與自動減量建議
+            user_capital = database.get_user_capital(user_id)
+            current_stats = database.get_user_portfolio_stats(user_id)
+            current_total_delta = current_stats.get('total_weighted_delta', 0.0)
+            
+            # --- 方向校正因子 (Side Multiplier) ---
+            # 賣方策略 (STO) 會反轉 Delta 的方向感
+            strategy = result.get('strategy', '')
+            side_multiplier = -1 if "STO" in strategy else 1
+
+            # A. 計算原始凱利建議口數
+            alloc_pct = result.get('alloc_pct', 0.0)
+            margin_per_contract = result.get('margin_per_contract', 0.0)
+            suggested_contracts = 0
+            if user_capital > 0 and margin_per_contract > 0:
+                capped_alloc = min(alloc_pct, 0.25)
+                suggested_contracts = int((user_capital * capped_alloc) // margin_per_contract)
+
+            # B. 🚀 執行風控優化計算
+            # 注意：這裡傳入原始 weighted_delta，優化函數內部應處理 side_multiplier
+            safe_qty, hedge_spy = optimize_position_risk(
+                current_total_delta,
+                result.get('weighted_delta', 0.0),
+                user_capital,
+                spy_price,
+                risk_limit_pct=15.0,
+                strategy=strategy # 傳入策略以利內部判斷方向
+            )
+
+            # C. 模擬原始建議口數的真實衝擊 (Position Delta Impact)
+            # 公式: 原始加權 Delta * 方向乘數 * 口數
+            new_trade_delta_impact = result.get('weighted_delta', 0.0) * side_multiplier * suggested_contracts
+            projected_total_delta = current_total_delta + new_trade_delta_impact
+            
+            # 換算為預期總曝險百分比
+            projected_exposure_pct = (projected_total_delta * spy_price / user_capital) * 100 if user_capital > 0 else 0
+            
+            # 5. 回填所有資料給 Embed Builder
+            result.update({
+                'projected_exposure_pct': projected_exposure_pct,
+                'suggested_contracts': suggested_contracts,
+                'safe_qty': safe_qty,
+                'hedge_spy': hedge_spy,
+                'spy_price': spy_price
+            })
+
             embed = create_scan_embed(result, user_capital)
             await interaction.followup.send(embed=embed)
+            
         else:
-            await interaction.followup.send(f"📊 目前 `{symbol.upper()}` 無明確訊號或無合適合約。")
+            await interaction.followup.send(f"📊 目前 `{symbol}` 無明確訊號或無合適合約。")
 
 async def setup(bot):
     await bot.add_cog(WatchlistCog(bot))

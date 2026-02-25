@@ -7,101 +7,94 @@ from market_analysis.portfolio import calculate_beta
 logger = logging.getLogger(__name__)
 
 def add_news_field(embed, news_text):
-    """為 Embed 加入新聞欄位"""
     if news_text:
-        # Discord field value limit is 1024. Code blocks add chars. Truncate to be safe.
         if len(news_text) > 1000:
             news_text = news_text[:997] + "..."
         news_context = f"```{news_text}\n\u200b```"
         embed.add_field(name="📰 最新新聞", value=news_context, inline=False)
 
 def add_reddit_field(embed, reddit_text):
-    """為 Embed 加入 Reddit 討論欄位"""
     if reddit_text:
         if len(reddit_text) > 1000:
             reddit_text = reddit_text[:997] + "..."
         reddit_context = f"```{reddit_text}\n\u200b```"
         embed.add_field(name="📰 Reddit 討論", value=reddit_context, inline=False)
 
-def create_scan_embed(data, user_capital=100000.0):
-    """根據掃描結果資料建構 Discord Embed 訊息。"""
+def _build_embed_base(data, strategy, stock_cost):
     colors = {"STO_PUT": discord.Color.green(), "STO_CALL": discord.Color.red(), "BTO_CALL": discord.Color.blue(), "BTO_PUT": discord.Color.orange()}
     titles = {"STO_PUT": "🟢 Sell To Open Put", "STO_CALL": "🔴 Sell To Open Call", "BTO_CALL": "🚀 Buy To Open Call", "BTO_PUT": "⚠️ Buy To Open Put"}
-    
-    strategy = data.get('strategy', 'UNKNOWN')
-    stock_cost = data.get('stock_cost', 0.0)
-    
-    # 🛡️ 如果是 Covered Call，覆寫標題與顏色
+
     is_covered = (strategy == "STO_CALL" and stock_cost > 0.0)
     if is_covered:
         titles["STO_CALL"] = "🛡️ Covered Call (掩護性買權)"
-        colors["STO_CALL"] = discord.Color.teal() # 使用特殊的藍綠色代表安全防護
+        colors["STO_CALL"] = discord.Color.teal()
 
-    # === 標題與描述 ===
     embed = discord.Embed(
         title=f"{titles.get(strategy, strategy)} | {data.get('symbol', 'UNKNOWN')}",
         description=f"📅 **到期日:** `{data.get('target_date', 'UNKNOWN')}` ｜ 🎯 **履約價:** `${data.get('strike', 'UNKNOWN')}`\n\u200b",
         color=colors.get(strategy, discord.Color.default())
     )
-    
-    # --- 第一排（當前概況） ---
-    beta = data.get('beta', 1.0)
-    embed.add_field(name="🏷️ 標價 / Beta\u2800\u2800", value=f"${data['price']:.2f} / `{beta:.2f}`\n\u200b", inline=True)
-    embed.add_field(name="📈 RSI / 20MA\u2800\u2800\u2800", value=f"{data['rsi']:.2f} / ${data['sma20']:.2f}\n\u200b", inline=True)
+    return embed, is_covered
 
-    
+def _add_market_overview_fields(embed, data):
+    beta = data.get('beta', 1.0)
+    beta_status = "🚀" if beta > 1.3 else ("⚖️" if beta >= 0.8 else "🧊")
+    embed.add_field(name="🏷️ 標價 / Beta\u2800\u2800", value=f"${data['price']:.2f} / `{beta:.2f}` {beta_status}\n\u200b", inline=True)
+    embed.add_field(name="📈 RSI / 20MA\u2800\u2800\u2800", value=f"{data['rsi']:.2f} / ${data['sma20']:.2f}\n\u200b", inline=True)
     hvr_status = "🔥 高" if data['hv_rank'] >= 50 else ("⚡ 中" if data['hv_rank'] >= 30 else "🧊 低")
     embed.add_field(name="🔥 HV Rank\u2800\u2800\u2800\u2800", value=f"`{data['hv_rank']:.1f}%` {hvr_status}\n\u200b", inline=True)
 
-    # --- 第二排（進階波動率） ---
+def _add_volatility_fields(embed, data, strategy):
     vrp_pct = data.get('vrp', 0.0) * 100
-    if "STO" in data['strategy']:
-        vrp_icon = "✅ 溢價" if vrp_pct > 0 else "⚠️ 折價"
-    else:
-        vrp_icon = "✅ 折價" if vrp_pct < 0 else "⚠️ 溢價"
+    vrp_icon = "✅" if (("STO" in strategy and vrp_pct > 0) or ("BTO" in strategy and vrp_pct < 0)) else "⚠️"
     embed.add_field(name="⚖️ VRP 溢酬\u2800\u2800\u2800\u2800", value=f"`{vrp_pct:+.2f}%` {vrp_icon}\n\u200b", inline=True)
-
-    ts_ratio_str = f"`{data['ts_ratio']:.2f}`"
-    if data['ts_ratio'] >= 1.05:
-        ts_ratio_str = f"**{ts_ratio_str}** {data['ts_state']} 🎯"
-    else:
-        ts_ratio_str = f"{ts_ratio_str} {data['ts_state']}"
+    ts_ratio_str = f"`{data['ts_ratio']:.2f}` {data['ts_state']}"
     embed.add_field(name="⏳ IV 期限結構\u2800\u2800\u2800", value=f"{ts_ratio_str}\n\u200b", inline=True)
-
     v_skew_str = f"`{data['v_skew']:.2f}` {data.get('v_skew_state', '')}"
-    if data.get('v_skew') >= 1.30:
-        v_skew_str = f"**{data['v_skew']:.2f}** {data.get('v_skew_state', '')}"
     embed.add_field(name="📉 垂直偏態\u2800\u2800\u2800\u2800", value=f"{v_skew_str}\n\u200b", inline=True)
-    
-    # --- 第三排（績效與風控） ---
+
+def _add_performance_and_kelly_fields(embed, data, user_capital):
+    """添加績效與風控（含凱利倉位計算）欄位，並校正部位方向"""
+    strategy = data.get('strategy', '')
+    raw_delta = data.get('delta', 0.0)
     weighted_delta = data.get('weighted_delta', 0.0)
-    embed.add_field(name="🧩 Delta (加權)\u2800\u2800", value=f"{data['delta']:.3f} (`{weighted_delta:+.2f}`)\n\u200b", inline=True)
-    embed.add_field(name="💰 AROC / IV\u2800\u2800\u2800\u2800", value=f"`{data['aroc']:.1f}%` / {data['iv']:.1%}\n\u200b", inline=True)
 
+    # 🚀 方向校正邏輯：
+    # 若是賣方 (STO)，部位方向 = 合約方向 * -1 (賣出負 Delta 是看多，賣出正 Delta 是看空)
+    # 若是買方 (BTO)，部位方向 = 合約方向 (買入什麼就是什麼)
+    pos_multiplier = -1 if "STO" in strategy else 1
+    pos_weighted_shares = weighted_delta * pos_multiplier
 
+    # 1. 希臘字母與部位方向
+    embed.add_field(
+        name="🧩 Delta (部位加權)\u2800\u2800", 
+        value=f"{raw_delta:.3f} (`{pos_weighted_shares:+.1f}`股)\n\u200b", 
+        inline=True
+    )
+    
+    # 2. 獲利效率與隱含波動率
+    embed.add_field(
+        name="💰 AROC / IV\u2800\u2800\u2800\u2800", 
+        value=f"`{data['aroc']:.1f}%` / {data['iv']:.1%}\n\u200b", 
+        inline=True
+    )
+
+    # 3. 凱利建議邏輯
     alloc_pct = data.get('alloc_pct', 0.0)
-    margin_per_contract = data.get('margin_per_contract', 0.0)
-    MAX_KELLY_ALLOC = 0.25
-
+    suggested = data.get('suggested_contracts', 0)
+    
     if alloc_pct <= 0:
         kelly_value = "`不建議建倉`"
     elif not user_capital or user_capital <= 0:
-        kelly_value = f"`尚未設定資金` ({alloc_pct*100:.1f}%)"
-    elif margin_per_contract <= 0:
-        kelly_value = "`資料異常`"
+        kelly_value = f"`未設資金` ({alloc_pct*100:.1f}%)"
     else:
-        capped_alloc_pct = min(alloc_pct, MAX_KELLY_ALLOC)
-        allocated_capital = user_capital * capped_alloc_pct
-        suggested_contracts = int(allocated_capital // margin_per_contract)
+        # 使用與主邏輯同步的 25% Kelly 上限顯示
+        kelly_value = f"`{suggested} 口` ({min(alloc_pct, 0.25)*100:.1f}%)" if suggested > 0 else "`本金不足`"
+    
+    embed.add_field(name="🧮 凱利原始建議\u2800\u2800", value=f"{kelly_value}\n\u200b", inline=True)
 
-        if suggested_contracts > 0:
-            kelly_value = f"`{suggested_contracts} 口` (佔總資金 {capped_alloc_pct*100:.1f}%)"
-        else:
-            kelly_value = f"`本金門檻不足` ({alloc_pct*100:.1f}%)"
-
-    embed.add_field(name="🧮 凱利建議倉位\u2800\u2800", value=f"{kelly_value}\n\u200b", inline=True)
-
-    # --- 單行特別資訊 ---
+def _add_earnings_fields(embed, data, strategy):
+    """添加財報預期波動欄位"""
     if 0 <= data.get('earnings_days', -1) <= 14:
         mmm_str = f"±{data['mmm_pct']:.1f}% (倒數 {data['earnings_days']} 天)"
         bounds_str = f"🛡️ 安全區間: **`${data['safe_lower']:.2f}`** ~ **`${data['safe_upper']:.2f}`**"
@@ -116,19 +109,20 @@ def create_scan_embed(data, user_capital=100000.0):
             
         embed.add_field(name="📊 財報預期波動 (MMM)", value=f"`{mmm_str}`\n{bounds_str}\n{safety_icon}\n\u200b", inline=False)
 
-    # === Covered Call 專屬真實防線 ===
-    if is_covered:
-        bid = data.get('bid', 0)
-        true_breakeven = stock_cost - bid
-        yoc = (bid / stock_cost) * 100 if stock_cost > 0 else 0
-        
-        cc_info = (f"📦 **真實現股成本:** `${stock_cost:.2f}`\n"
-                   f"🛡️ **真實下檔防線:** `${true_breakeven:.2f}`\n"
-                   f"💸 **單次收租殖利率 (Yield on Cost):** `{yoc:.2f}%`\n"
-                   f"👉 *您的持倉成本已透過收租進一步降低！*\n\u200b")
-        embed.add_field(name="🛡️ Covered Call 專屬防護", value=cc_info, inline=False)
+def _add_covered_call_fields(embed, data, stock_cost):
+    """添加 Covered Call 專屬防護欄位"""
+    bid = data.get('bid', 0)
+    true_breakeven = stock_cost - bid
+    yoc = (bid / stock_cost) * 100 if stock_cost > 0 else 0
+    
+    cc_info = (f"📦 **真實現股成本:** `${stock_cost:.2f}`\n"
+               f"🛡️ **真實下檔防線:** `${true_breakeven:.2f}`\n"
+               f"💸 **單次收租殖利率 (Yield on Cost):** `{yoc:.2f}%`\n"
+               f"👉 *您的持倉成本已透過收租進一步降低！*\n\u200b")
+    embed.add_field(name="🛡️ Covered Call 專屬防護", value=cc_info, inline=False)
 
-    # === 預期波動區間 (Expected Move) 與 損益兩平防線 ===
+def _add_expected_move_fields(embed, data, strategy, is_covered):
+    """添加預期波動區間與損益兩平防線欄位"""
     em = data.get('expected_move', 0.0)
     em_lower = data.get('em_lower', 0.0)
     em_upper = data.get('em_upper', 0.0)
@@ -143,7 +137,6 @@ def create_scan_embed(data, user_capital=100000.0):
     elif "STO_CALL" in strategy:
         breakeven = data['strike'] + data.get('bid', 0)
         safe = breakeven > em_upper
-        # 🔥 如果是 CC，突破上方不是風險，而是獲利出場
         if is_covered:
             safety_text = "✅ 若漲破此價位，將以最高獲利出場 (股票被 Call 走)"
         else:
@@ -162,7 +155,8 @@ def create_scan_embed(data, user_capital=100000.0):
         em_info = f"1σ 預期上緣: `${em_upper:.2f}` (預期最大漲幅 +${em:.2f})\n🛡️ 損益兩平點: **`${breakeven:.2f}`**\n✅ 目標突破此防線即開始獲利\n\u200b"
         embed.add_field(name="🎯 機率圓錐 (1σ 預期波動)", value=em_info, inline=False)
 
-    # === 報價與流動性分析 ===
+def _add_liquidity_fields(embed, data):
+    """添加報價與流動性分析欄位"""
     mid_price = data.get('mid_price', (data.get('bid', 0) + data.get('ask', 0)) / 2)
     liq_status = data.get('liq_status', 'N/A')
     liq_msg = data.get('liq_msg', '')
@@ -172,7 +166,8 @@ def create_scan_embed(data, user_capital=100000.0):
                    f"🎯 **Limit (中價掛單建議):** `{mid_price:.2f}`\n\u200b")
     embed.add_field(name="💱 報價與流動性分析", value=spread_info, inline=False)
 
-    # === 策略升級提示 ===
+def _add_strategy_upgrade_fields(embed, data, strategy):
+    """添加策略升級提示欄位"""
     if strategy in ["BTO_CALL", "BTO_PUT"]:
         hedge_strike = data.get('suggested_hedge_strike')
         if hedge_strike:
@@ -184,33 +179,93 @@ def create_scan_embed(data, user_capital=100000.0):
                             f"👉 組合為: **{spread_type}**\n\u200b")
             embed.add_field(name="💡 經理人策略升級建議", value=upgrade_text, inline=False)
 
-    # === 個股新聞 ===
-    add_news_field(embed, data.get('news_text'))
+def _add_risk_optimization_fields(embed, data):
+    """添加事前曝險模擬與自動風控優化建議"""
+    projected_pct = data.get('projected_exposure_pct', 0.0)
+    safe_qty = data.get('safe_qty', 0)
+    hedge_spy = data.get('hedge_spy', 0.0)
+    suggested = data.get('suggested_contracts', 0)
+    
+    if projected_pct == 0:
+        return
 
-    # === Reddit 討論 ===
-    add_reddit_field(embed, data.get('reddit_text'))
+    # 1. 曝險現況區塊
+    THRESHOLD = 15.0
+    if abs(projected_pct) > THRESHOLD:
+        sim_status = "🚨 警告：曝險過載"
+        sim_block = f"```diff\n- 成交後預期總曝險: {projected_pct:+.1f}%\n- 超過 15% 宏觀紅線\n```"
+    else:
+        sim_status = "✅ 狀態：風險受控"
+        sim_block = f"```yaml\n成交後預期總曝險: {projected_pct:+.1f}%\n符合資產組合平衡標準\n```"
+    
+    embed.add_field(name=f"🛡️ What-if 曝險模擬 | {sim_status}", value=sim_block, inline=False)
 
-    # === AI 驗證 ===
+    # 2. 自動減量與對沖指令區塊 (僅在需要優化時顯示)
+    if suggested > safe_qty:
+        opt_title = "⚖️ Nexus Risk Optimizer (自動優化建議)"
+        
+        # 建立行動清單
+        actions = [f"--- 偵測到風險超標，執行自動降規 ---"]
+        actions.append(f"❌ 原始建議: {suggested} 口")
+        actions.append(f"✅ 安全成交: {safe_qty} 口 (符合風控)")
+        
+        # 對沖指令
+        if safe_qty == 0 and hedge_spy != 0:
+            actions.append(f"\n⚠️ 警告: 即使下 1 口也過載")
+            if hedge_spy > 0:
+                actions.append(f"🛡️ 建議對沖: 賣出 {hedge_spy} 股 SPY 以平衡")
+            else:
+                actions.append(f"🛡️ 建議對沖: 買入 {abs(hedge_spy)} 股 SPY 以平衡")
+        
+        opt_block = "```diff\n" + "\n".join(actions) + "\n```"
+        embed.add_field(name=opt_title, value=opt_block, inline=False)
+
+def _add_ai_verification_fields(embed, data):
+    """添加 AI 驗證決策欄位"""
     ai_decision = data.get('ai_decision')
     ai_reasoning = data.get('ai_reasoning')
     if ai_decision:
         if ai_decision == "APPROVE":
             ai_title = "🤖 Argo Cortex: ✅ 交易批准 (APPROVE)"
-            # 正常放行，使用一般灰底程式碼區塊
             ai_value = f"```\n{ai_reasoning}\n```"
         elif ai_decision == "VETO":
             ai_title = "🤖 Argo Cortex: ⛔ 否決交易 (VETO 黑天鵝警告)"
-            # 觸發黑天鵝警報，使用 diff 語法呈現紅字，並強制覆寫左側飾條顏色為深紅色
             ai_value = f"```diff\n- 警告: {ai_reasoning}\n```"
             embed.color = discord.Color.dark_red()
         elif ai_decision == "SKIP":
             ai_title = "🤖 Argo Cortex: ⚠️ 未啟用 (SKIP)"
-            # 未啟用，使用一般灰底程式碼區塊
             ai_value = f"```\n{ai_reasoning}\n```"
             embed.color = discord.Color.blue()
             
         embed.add_field(name=ai_title, value=ai_value, inline=False)
 
+def create_scan_embed(data, user_capital=100000.0):
+    strategy = data.get('strategy', 'UNKNOWN')
+    stock_cost = data.get('stock_cost', 0.0)
+    
+    embed, is_covered = _build_embed_base(data, strategy, stock_cost)
+    
+    # 依序渲染 UI
+    _add_market_overview_fields(embed, data)
+    _add_volatility_fields(embed, data, strategy)
+    _add_performance_and_kelly_fields(embed, data, user_capital)
+    _add_earnings_fields(embed, data, strategy)
+    
+    if is_covered:
+        _add_covered_call_fields(embed, data, stock_cost)
+        
+    _add_expected_move_fields(embed, data, strategy, is_covered)
+    _add_liquidity_fields(embed, data)
+    _add_strategy_upgrade_fields(embed, data, strategy)
+    
+    # 🚀 執行優化回饋顯示
+    _add_risk_optimization_fields(embed, data)
+    
+    add_news_field(embed, data.get('news_text'))
+    add_reddit_field(embed, data.get('reddit_text'))
+    _add_ai_verification_fields(embed, data)
+
+    embed.set_footer(text=f"Nexus Seeker 風控引擎 • 基準 SPY: ${data.get('spy_price', 500):.1f}")
     return embed
 
 def create_news_scan_embed(symbol, news_text):
@@ -280,124 +335,3 @@ def create_watchlist_embed(page_data, current_page, total_pages, total_items):
     
     embed.set_footer(text=f"頁次: {current_page}/{total_pages} ｜ 📊 總項目: {total_items}")
     return embed
-
-def analyze_symbol(symbol, stock_cost=0.0):
-    """
-    掃描技術指標、波動率位階、期限結構、Beta 風險與加權 Delta。
-    註：此處呼叫的 _calculate_technical_indicators 等私有函數需從 market_analysis.strategy 引入或在此處定義。
-    目前此函數主要作為代碼整合參考。
-    """
-    from market_analysis.strategy import (
-        _calculate_technical_indicators, _determine_strategy_signal, 
-        _calculate_mmm, _calculate_term_structure, _find_target_expiry,
-        _get_best_contract_data, _calculate_vertical_skew, _validate_risk_and_liquidity,
-        _calculate_sizing
-    )
-
-    try:
-        ticker = yf.Ticker(symbol)
-        try:
-            # 使用 fast_info 避開 404 報錯
-            is_etf = ticker.fast_info.get('quoteType') == 'ETF'
-        except:
-            is_etf = False
-
-        # 1. 取得標的與基準 (SPY) 歷史資料
-        df = ticker.history(period="1y")
-        if df.empty: return None
-
-        # 🚀 整合：抓取基準 SPY 用於 Beta 與加權 Delta 計算
-        spy_ticker = yf.Ticker("SPY")
-        df_spy = spy_ticker.history(period="1y")
-        if df_spy.empty:
-            spy_price = 1.0
-            beta = 1.0
-        else:
-            spy_price = df_spy['Close'].iloc[-1]
-            beta = calculate_beta(df, df_spy) if symbol != "SPY" else 1.0
-
-        # 2. 技術指標
-        indicators = _calculate_technical_indicators(df)
-        if not indicators: return None
-        price = indicators['price']
-
-        # 3. 策略訊號
-        strategy, opt_type, target_delta, min_dte, max_dte = _determine_strategy_signal(indicators)
-        if not strategy: return None
-
-        expirations = ticker.options
-        if not expirations: return None
-        today = datetime.now().date()
-
-        # 4. 進階市場分析 (MMM, Term Structure)
-        mmm_pct, safe_lower, safe_upper, days_to_earnings = _calculate_mmm(ticker, price, today, symbol, is_etf)
-        ts_ratio, ts_state = _calculate_term_structure(ticker, expirations, price, today)
-
-        # 5. 合約篩選
-        target_expiry_date, days_to_expiry = _find_target_expiry(expirations, today, min_dte, max_dte)
-        if not target_expiry_date: return None
-
-        best_contract, opt_chain = _get_best_contract_data(ticker, target_expiry_date, opt_type, target_delta, price, days_to_expiry)
-        if best_contract is None: return None
-
-        # 6. 垂直偏態分析
-        if opt_chain:
-            vertical_skew, skew_state = _calculate_vertical_skew(opt_chain, price, days_to_expiry, strategy, symbol)
-            if vertical_skew is None: return None
-        else:
-            vertical_skew, skew_state = 1.0, "N/A"
-
-        # 7. 風險與流動性驗證
-        risk_metrics = _validate_risk_and_liquidity(strategy, best_contract, price, indicators['hv_current'], days_to_expiry, symbol)
-        if not risk_metrics: return None
-
-        # 8. 倉位計算
-        aroc, alloc_pct, margin_per_contract = _calculate_sizing(
-            strategy,
-            best_contract,
-            days_to_expiry,
-            expected_move=risk_metrics['expected_move'],
-            price=price,
-            stock_cost=stock_cost
-        )
-        
-        # 門檻過濾
-        if strategy in ["STO_PUT", "STO_CALL"] and aroc < 15.0: return None
-        if strategy in ["BTO_CALL", "BTO_PUT"] and aroc < 30.0: return None
-
-        # 🚀 整合：計算加權 Delta (SPY Equivalent Delta)
-        # 公式: Delta * Beta * (Stock Price / SPY Price) * 100
-        raw_delta = best_contract['bs_delta']
-        weighted_delta = round(raw_delta * beta * (price / spy_price) * 100, 2)
-
-        # 9. 組合結果
-        return {
-            "symbol": symbol, "price": price,
-            "beta": beta, # 🚀 輸出 Beta
-            "weighted_delta": weighted_delta, # 🚀 輸出加權 Delta
-            "stock_cost": stock_cost,
-            "rsi": indicators['rsi'], "sma20": indicators['sma20'], "hv_rank": indicators['hv_rank'],
-            "ts_ratio": ts_ratio, "ts_state": ts_state,
-            "v_skew": vertical_skew, "v_skew_state": skew_state,
-            "earnings_days": days_to_earnings, "mmm_pct": mmm_pct,
-            "safe_lower": safe_lower, "safe_upper": safe_upper,
-            "expected_move": risk_metrics['expected_move'], 
-            "em_lower": risk_metrics['em_lower'], "em_upper": risk_metrics['em_upper'],
-            "strategy": strategy, "target_date": target_expiry_date, "dte": days_to_expiry, 
-            "strike": best_contract['strike'], 
-            "bid": risk_metrics['bid'], "ask": risk_metrics['ask'], 
-            "spread": risk_metrics['spread'], "spread_ratio": risk_metrics['spread_ratio'],
-            "delta": raw_delta, "iv": best_contract['impliedVolatility'],
-            "aroc": aroc,
-            "alloc_pct": alloc_pct,
-            "margin_per_contract": margin_per_contract,
-            "vrp": risk_metrics['vrp'],
-            "mid_price": risk_metrics['mid_price'],
-            "suggested_hedge_strike": risk_metrics['suggested_hedge_strike'],
-            "liq_status": risk_metrics['liq_status'],
-            "liq_msg": risk_metrics['liq_msg']
-        }
-
-    except Exception as e:
-        print(f"分析 {symbol} 錯誤: {e}")
-        return None

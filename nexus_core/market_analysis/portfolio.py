@@ -5,6 +5,7 @@ from datetime import datetime
 from py_vollib.black_scholes_merton.greeks.analytical import delta, theta, gamma
 from config import RISK_FREE_RATE
 import logging
+import math
 
 # 設定 Logger
 logger = logging.getLogger(__name__)
@@ -155,6 +156,25 @@ def _analyze_correlation(positions_by_symbol):
         lines.append("")
         
     return lines
+
+def simulate_exposure_impact(current_total_delta, new_trade_data, user_capital, spy_price, suggested_contracts=1):
+    """
+    模擬成交後的總曝險變化。
+    """
+    # 1. 計算新交易帶來的總加權 Delta
+    # 注意：analyze_symbol 回傳的 weighted_delta 是單口合約的 SPY 等效股數
+    strategy = new_trade_data.get('strategy', '')
+    side_multiplier = -1 if "STO" in strategy else 1
+    new_trade_weighted_delta = new_trade_data.get('weighted_delta', 0.0) * side_multiplier * suggested_contracts
+    
+    # 2. 計算成交後的預期總 Delta
+    projected_total_delta = current_total_delta + new_trade_weighted_delta
+    
+    # 3. 換算為預期美元曝險與百分比
+    projected_exposure_dollars = projected_total_delta * spy_price
+    projected_exposure_pct = (projected_exposure_dollars / user_capital) * 100 if user_capital > 0 else 0
+    
+    return projected_total_delta, projected_exposure_pct
 
 def calculate_beta(df_stock, df_spy):
     """
@@ -331,3 +351,36 @@ def check_portfolio_status_logic(portfolio_rows, user_capital=50000.0):
     report_lines.extend(_analyze_correlation(positions_by_symbol))
 
     return report_lines
+
+def optimize_position_risk(current_delta, unit_weighted_delta, user_capital, spy_price, risk_limit_pct=15.0, strategy=""):
+    """
+    計算符合風險紅線的安全成交口數與對沖建議。
+    """
+    # 1. 計算總資金允許的最大 SPY 等效股數絕對值 (Max Safe Shares)
+    max_safe_shares = (user_capital * (risk_limit_pct / 100)) / spy_price
+    
+    # 2. 單口對帳戶部位的實質衝擊 (考慮策略方向)
+    side_multiplier = -1 if "STO" in strategy else 1
+    pos_impact_per_unit = unit_weighted_delta * side_multiplier
+    
+    # 3. 計算理論安全口數 (向下取整)
+    safe_qty = 0
+    if pos_impact_per_unit > 0:
+        room = max_safe_shares - current_delta
+        safe_qty = math.floor(room / pos_impact_per_unit) if room > 0 else 0
+    elif pos_impact_per_unit < 0:
+        room = -max_safe_shares - current_delta
+        safe_qty = math.floor(room / pos_impact_per_unit) if room < 0 else 0
+
+    safe_qty = max(0, safe_qty)
+    
+    # 4. 如果連 1 口都過不了，計算建議對沖股數
+    suggested_hedge_spy = 0.0
+    if safe_qty == 0:
+        projected_delta = current_delta + pos_impact_per_unit
+        if projected_delta > max_safe_shares:
+            suggested_hedge_spy = projected_delta - max_safe_shares
+        elif projected_delta < -max_safe_shares:
+            suggested_hedge_spy = projected_delta - (-max_safe_shares) # 負值，代表需要買入 SPY 進行對沖
+        
+    return safe_qty, round(suggested_hedge_spy, 1)
