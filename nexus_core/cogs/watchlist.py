@@ -144,7 +144,7 @@ class WatchlistCog(commands.Cog):
         
         if result:
             from services import llm_service, news_service, reddit_service
-            from market_analysis.portfolio import optimize_position_risk
+            from market_analysis.risk_engine import optimize_position_risk
             
             # 3. 獲取外部情緒與 AI 風控
             news_text = await news_service.fetch_recent_news(symbol)

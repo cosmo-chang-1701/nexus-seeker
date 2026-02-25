@@ -274,27 +274,37 @@ class SchedulerCog(commands.Cog):
         all_portfolios = database.get_all_portfolio()
         if not all_portfolios: return
         
-        # 1. 將全站持倉依 user_id 分群
         user_ports = {}
         for row in all_portfolios:
             uid = row[0]
             # row[2:] 取出 (symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost)
             user_ports.setdefault(uid, []).append(row[2:])
 
-        # 2. 分別計算損益並發送私訊
+        from cogs.embed_builder import create_portfolio_report_embed
+
         for uid, rows in user_ports.items():
             user_capital = database.get_user_capital(uid)
 
-            # 將資金參數傳遞給重構後的結算引擎
-            report_lines = await asyncio.to_thread(market_analysis.portfolio.check_portfolio_status_logic, rows, user_capital)            
+            # 執行重構後的結算引擎 (回傳 list of strings)
+            report_lines = await asyncio.to_thread(
+                market_analysis.portfolio.check_portfolio_status_logic, 
+                rows, 
+                user_capital
+            )            
+            
             if report_lines:
                 user = await self.bot.fetch_user(uid)
                 if user:
-                    embed = discord.Embed(title="📝 您的選擇權持倉健檢", description="\n".join(report_lines), color=discord.Color.gold())
+                    embed = create_portfolio_report_embed(report_lines)
+                    
                     try:
-                        await self.bot.queue_dm(uid, message="📊 **【盤後結算報告：部位損益與建議】**", embed=embed)
+                        await self.bot.queue_dm(
+                            uid, 
+                            message="📊 **【Nexus Seeker 盤後結算系統】**", 
+                            embed=embed
+                        )
                     except discord.Forbidden:
-                        pass
+                        logger.warning(f"無法發送私訊給用戶 {uid}，請檢查權限設定。")
 
     @dynamic_after_market_report.before_loop
     async def before_dynamic_after_market_report(self):

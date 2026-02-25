@@ -335,3 +335,51 @@ def create_watchlist_embed(page_data, current_page, total_pages, total_items):
     
     embed.set_footer(text=f"頁次: {current_page}/{total_pages} ｜ 📊 總項目: {total_items}")
     return embed
+
+def create_portfolio_report_embed(report_lines):
+    """
+    將 check_portfolio_status_logic 產出的 report_lines 轉換為漂亮的 Discord Embed
+    """
+    # 1. 分割資料：將個別持倉與宏觀報告分開
+    # 尋找分割點：🌐 【宏觀風險與資金水位報告】
+    macro_index = -1
+    for i, line in enumerate(report_lines):
+        if "🌐 **【宏觀風險" in line:
+            macro_index = i
+            break
+
+    # 2. 處理持倉細節 (Positions)
+    positions_text = "".join(report_lines[:macro_index])
+    if not positions_text.strip():
+        positions_text = "目前無持倉部位。"
+    
+    # 3. 處理宏觀風險與對沖建議 (Macro Risk)
+    macro_text = "".join(report_lines[macro_index:])
+
+    # 4. 判斷顏色：如果有任何 "🚨" 或 "🆘"，就用紅色，否則用藍色
+    embed_color = discord.Color.blue()
+    if "🚨" in macro_text or "🆘" in macro_text:
+        embed_color = discord.Color.red()
+    elif "⚠️" in macro_text:
+        embed_color = discord.Color.orange()
+
+    embed = discord.Embed(
+        title="📊 Nexus Seeker 盤後風險結算報告",
+        color=embed_color,
+        timestamp=datetime.utcnow()
+    )
+
+    # 🚀 欄位一：個別持倉細節
+    # 如果內容太長，Discord 會報錯，這裡做截斷處理
+    if len(positions_text) > 1024:
+        positions_text = positions_text[:1020] + "..."
+    embed.add_field(name="📦 當前持倉明細", value=positions_text, inline=False)
+
+    # 🚀 欄位二：全帳戶宏觀風險與對沖指令 (核心！)
+    if len(macro_text) > 1024:
+        macro_text = macro_text[:1020] + "..."
+    embed.add_field(name="🛡️ 風控管線評估與對沖決策", value=macro_text, inline=False)
+
+    embed.set_footer(text="Argo Risk Engine v2.5 | 基準標的: SPY")
+    
+    return embed

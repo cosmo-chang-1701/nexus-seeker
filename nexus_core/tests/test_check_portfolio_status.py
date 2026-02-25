@@ -119,9 +119,9 @@ class TestCheckPortfolioStatusLogicNew(unittest.TestCase):
     # ----------------------------------------------------------------
     # Test 1: 賣 Call 部位應產生包含標的名稱的報告
     # ----------------------------------------------------------------
-    @patch('market_analysis.portfolio._analyze_correlation', return_value=[])
-    @patch('market_analysis.portfolio._calculate_macro_risk', return_value=["macro_line"])
-    @patch('market_analysis.portfolio._evaluate_defense_status', return_value="⏳ 繼續持有")
+    @patch('market_analysis.portfolio.analyze_correlation', return_value=[])
+    @patch('market_analysis.portfolio.calculate_macro_risk', return_value=["macro_line"])
+    @patch('market_analysis.portfolio.evaluate_defense_status', return_value="⏳ 繼續持有")
     @patch('market_analysis.portfolio.gamma', return_value=0.03)
     @patch('market_analysis.portfolio.theta', return_value=-0.01)
     @patch('market_analysis.portfolio.delta', return_value=0.30)
@@ -146,9 +146,9 @@ class TestCheckPortfolioStatusLogicNew(unittest.TestCase):
     # ----------------------------------------------------------------
     # Test 2: entry_price = 0 時 pnl_pct 應為 0 (不應 ZeroDivisionError)
     # ----------------------------------------------------------------
-    @patch('market_analysis.portfolio._analyze_correlation', return_value=[])
-    @patch('market_analysis.portfolio._calculate_macro_risk', return_value=["macro_line"])
-    @patch('market_analysis.portfolio._evaluate_defense_status', return_value="⏳ 繼續持有")
+    @patch('market_analysis.portfolio.analyze_correlation', return_value=[])
+    @patch('market_analysis.portfolio.calculate_macro_risk', return_value=["macro_line"])
+    @patch('market_analysis.portfolio.evaluate_defense_status', return_value="⏳ 繼續持有")
     @patch('market_analysis.portfolio.gamma', return_value=0.05)
     @patch('market_analysis.portfolio.theta', return_value=-0.02)
     @patch('market_analysis.portfolio.delta', return_value=-0.15)
@@ -174,9 +174,9 @@ class TestCheckPortfolioStatusLogicNew(unittest.TestCase):
     # ----------------------------------------------------------------
     # Test 3: 已到期合約 (DTE ≤ 0) 不應崩潰
     # ----------------------------------------------------------------
-    @patch('market_analysis.portfolio._analyze_correlation', return_value=[])
-    @patch('market_analysis.portfolio._calculate_macro_risk', return_value=["macro_line"])
-    @patch('market_analysis.portfolio._evaluate_defense_status', return_value="⏳ 繼續持有")
+    @patch('market_analysis.portfolio.analyze_correlation', return_value=[])
+    @patch('market_analysis.portfolio.calculate_macro_risk', return_value=["macro_line"])
+    @patch('market_analysis.portfolio.evaluate_defense_status', return_value="⏳ 繼續持有")
     @patch('market_analysis.portfolio.gamma', return_value=0.05)
     @patch('market_analysis.portfolio.theta', return_value=-0.02)
     @patch('market_analysis.portfolio.delta', return_value=-0.15)
@@ -202,9 +202,9 @@ class TestCheckPortfolioStatusLogicNew(unittest.TestCase):
     # ----------------------------------------------------------------
     # Test 4: Covered Call 的保證金應以持有現股的市值計算
     # ----------------------------------------------------------------
-    @patch('market_analysis.portfolio._analyze_correlation', return_value=[])
-    @patch('market_analysis.portfolio._calculate_macro_risk', return_value=["macro_line"])
-    @patch('market_analysis.portfolio._evaluate_defense_status', return_value="⏳ 繼續持有")
+    @patch('market_analysis.portfolio.analyze_correlation', return_value=[])
+    @patch('market_analysis.portfolio.calculate_macro_risk', return_value=["macro_line"])
+    @patch('market_analysis.portfolio.evaluate_defense_status', return_value="⏳ 繼續持有")
     @patch('market_analysis.portfolio.gamma', return_value=0.03)
     @patch('market_analysis.portfolio.theta', return_value=-0.01)
     @patch('market_analysis.portfolio.delta', return_value=0.30)

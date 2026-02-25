@@ -8,7 +8,7 @@ from config import TARGET_DELTAS
 from .greeks import calculate_contract_delta
 from .data import get_next_earnings_date
 
-from .portfolio import calculate_beta
+from .risk_engine import calculate_beta
 
 import logging
 
