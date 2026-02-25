@@ -214,52 +214,84 @@ class SchedulerCog(commands.Cog):
                     user_alerts.setdefault(uid, []).append(scan_results[(sym, stock_cost, use_llm)])
 
             now = datetime.now(ny_tz)
-            # 3. 發送私訊
+            # 3. 發送私訊 (整合 NRO 風控引擎)
+            from market_analysis.portfolio import optimize_position_risk
+
+            # 🚀 效能優化：在分發前先抓一次基準 SPY 價格，避免在迴圈內反覆請求
+            try:
+                spy_price = yf.Ticker("SPY").fast_info.get('last_price', 500.0)
+            except:
+                spy_price = 500.0
+
             for uid, alerts in user_alerts.items():
                 user = await self.bot.fetch_user(uid)
-                if user:
-                    try:
-                        # 讀取該名使用者的專屬資金
-                        user_capital = database.get_user_capital(uid)
+                if not user:
+                    continue
 
-                        # 取得或初始化該使用者的冷卻紀錄字典
-                        user_cooldowns = self.signal_cooldowns.setdefault(uid, {})
+                try:
+                    # A. 取得該使用者的資金與現有曝險狀況
+                    user_capital = database.get_user_capital(uid) or 50000.0
+                    current_stats = database.get_user_portfolio_stats(uid)
+                    current_total_delta = current_stats.get('total_weighted_delta', 0.0)
 
-                        # 用來存放「通過冷卻檢查」的最終發送清單
-                        valid_alerts = []
+                    user_cooldowns = self.signal_cooldowns.setdefault(uid, {})
+                    valid_alerts = []
 
-                        for data in alerts:
-                            sym = data['symbol']
+                    for data in alerts:
+                        sym = data['symbol']
                         
-                            # 🛡️ 冷卻防護判定：只有「自動排程 (is_auto=True)」才需要檢查冷卻
-                            if is_auto:
-                                last_sent_time = user_cooldowns.get(sym)
-                                if last_sent_time:
-                                    # 計算距離上次發送過了幾秒
-                                    time_diff = (now - last_sent_time).total_seconds()
-                                    # 如果時間差小於設定的冷卻秒數 (4小時 * 3600秒)
-                                    if time_diff < (self.COOLDOWN_HOURS * 3600):
-                                        logger.info(f"[{sym}] 處於 {self.COOLDOWN_HOURS} 小時冷卻期內，略過重複推播。")
-                                        continue  # 觸發冷卻！直接跳過這個標的，不加入 valid_alerts
-                            # 通過冷卻檢查 (或是手動強制掃描 is_auto=False)，加入發送清單
-                            valid_alerts.append(data)
+                        # B. 冷卻檢查 (維持原樣)
+                        if is_auto:
+                            last_sent_time = user_cooldowns.get(sym)
+                            if last_sent_time:
+                                time_diff = (now - last_sent_time).total_seconds()
+                                if time_diff < (self.COOLDOWN_HOURS * 3600):
+                                    continue 
+                        
+                        # 🚀 C. 核心整合：針對該使用者進行 NRO 運算
+                        strategy = data.get('strategy', '')
+                        unit_weighted_delta = data.get('weighted_delta', 0.0)
+                        
+                        # 1. 計算安全口數與對沖建議
+                        safe_qty, hedge_spy = optimize_position_risk(
+                            current_delta=current_total_delta,
+                            unit_weighted_delta=unit_weighted_delta,
+                            user_capital=user_capital,
+                            spy_price=spy_price,
+                            strategy=strategy,
+                            risk_limit_pct=15.0
+                        )
 
-                            # 🔄 更新大腦記憶：只有自動排程才更新冷卻時間
-                            # (這樣設計是為了避免您手動 /force_scan 時，意外重置了原本的冷卻計時器)
-                            if is_auto:
-                                user_cooldowns[sym] = now
+                        # 2. 計算成交 1 口後的預期總曝險 (What-if)
+                        # 使用 side_multiplier 校正部位方向
+                        side_multiplier = -1 if "STO" in strategy else 1
+                        new_trade_impact = unit_weighted_delta * side_multiplier
+                        projected_total_delta = current_total_delta + new_trade_impact
+                        projected_exposure_pct = (projected_total_delta * spy_price / user_capital) * 100
 
-                        # 只有當 valid_alerts 裡面有東西時，才真正呼叫 Discord API 發送訊息
-                        if valid_alerts:
-                            try:
-                                title = "📡 **【盤中動態掃描】發現建倉機會：**" if is_auto else "⚡ **【管理員強制掃描】雷達結果：**"
-                                await self.bot.queue_dm(uid, message=title)
-                                for data in valid_alerts:
-                                    await self.bot.queue_dm(uid, embed=create_scan_embed(data, user_capital))
-                            except Exception as e:
-                                logger.error(f"無法發送私訊給 User ID {uid}: {e}")
-                    except discord.Forbidden:
-                        pass  # 使用者關閉了私訊功能
+                        # 3. 回填 NRO 數據至 data 字典，供 create_scan_embed 使用
+                        data.update({
+                            'safe_qty': safe_qty,
+                            'hedge_spy': hedge_spy,
+                            'projected_exposure_pct': projected_exposure_pct,
+                            'spy_price': spy_price,
+                            'suggested_contracts': data.get('suggested_contracts', 1) # 預設至少1口以供對比
+                        })
+
+                        valid_alerts.append(data)
+                        if is_auto:
+                            user_cooldowns[sym] = now
+
+                    # D. 發送經過風控過濾的 Embed
+                    if valid_alerts:
+                        title = "📡 **【盤中動態掃描】NRO 風控已介入判定：**" if is_auto else "⚡ **【管理員強制掃描】風險模擬結果：**"
+                        await self.bot.queue_dm(uid, message=title)
+                        for data in valid_alerts:
+                            # 這裡傳入的 data 已經包含了該使用者的客製化風控數據
+                            await self.bot.queue_dm(uid, embed=create_scan_embed(data, user_capital))
+
+                except Exception as e:
+                    logger.error(f"無法發送私訊或計算風險給 User ID {uid}: {e}")
         except Exception as e:
             logger.error(f"掃描邏輯執行錯誤: {e}")
 
