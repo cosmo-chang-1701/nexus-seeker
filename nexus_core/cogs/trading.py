@@ -9,7 +9,8 @@ import logging
 import database
 import market_math
 import market_time
-import market_analysis.portfolio
+from market_analysis import portfolio
+from market_analysis.ghost_trader import GhostTrader
 from cogs.embed_builder import create_scan_embed
 from services import market_data_service
 from services import news_service, llm_service, reddit_service
@@ -25,6 +26,9 @@ class SchedulerCog(commands.Cog):
         self.pre_market_risk_monitor.start()
         self.dynamic_market_scanner.start()
         self.dynamic_after_market_report.start()
+        
+        self.vtr_engine = GhostTrader()
+        self.monitor_vtr_task.start()
 
         # 4小時冷卻機制
         self.signal_cooldowns = {}
@@ -40,6 +44,7 @@ class SchedulerCog(commands.Cog):
         self.pre_market_risk_monitor.cancel()
         self.dynamic_market_scanner.cancel()
         self.dynamic_after_market_report.cancel()
+        self.monitor_vtr_task.cancel()
         logger.info("SchedulerCog unloaded. Background tasks cancelled.")
 
     # ==========================================
@@ -281,6 +286,23 @@ class SchedulerCog(commands.Cog):
                         valid_alerts.append(data)
                         if is_auto:
                             user_cooldowns[sym] = now
+                            
+                            # --- VTR GhostTrader Entry ---
+                            if safe_qty > 0:
+                                try:
+                                    opt_t = 'put' if 'PUT' in strategy else 'call'
+                                    qty = -safe_qty if 'STO' in strategy else safe_qty
+                                    self.vtr_engine.record_virtual_entry(
+                                        user_id=uid,
+                                        symbol=sym,
+                                        opt_type=opt_t,
+                                        strike=data['strike'],
+                                        expiry=data['target_date'],
+                                        quantity=qty,
+                                        tags=["auto_scan"]
+                                    )
+                                except Exception as e:
+                                    logger.error(f"VTR Entry failed: {e}")
 
                     # D. 發送經過風控過濾的 Embed
                     if valid_alerts:
@@ -340,6 +362,28 @@ class SchedulerCog(commands.Cog):
 
     @dynamic_after_market_report.before_loop
     async def before_dynamic_after_market_report(self):
+        await self.bot.wait_until_ready()
+
+    @tasks.loop(minutes=30)
+    async def monitor_vtr_task(self):
+        """每 30 分鐘執行一次 VTR 結算與轉倉"""
+        if not market_time.is_market_open():
+            return
+            
+        logger.info("👻 [GhostTrader] 開始掃描並管理 VTR 持倉...")
+        try:
+            # 1. 執行自動平倉
+            await asyncio.to_thread(self.vtr_engine.manage_virtual_positions)
+            # 2. 執行轉倉與風控檢查
+            from database.virtual_trading import get_all_open_virtual_trades
+            open_trades = await asyncio.to_thread(get_all_open_virtual_trades)
+            for trade in open_trades:
+                await self.vtr_engine.check_and_execute_rolling(trade['id'])
+        except Exception as e:
+            logger.error(f"VTR 管理任務發生錯誤: {e}")
+            
+    @monitor_vtr_task.before_loop
+    async def before_monitor_vtr_task(self):
         await self.bot.wait_until_ready()
 
     async def _notify_next_schedule(self, task_name, target_time):

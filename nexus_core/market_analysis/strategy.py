@@ -601,3 +601,67 @@ def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None):
         # 使用 logger 取代 print，方便在 Pi 5 上追蹤
         logging.error(f"分析 {symbol} 錯誤: {e}")
         return None
+
+import asyncio
+
+async def get_option_metrics(symbol, opt_type, strike, expiry):
+    return await asyncio.to_thread(_get_option_metrics_sync, symbol, opt_type, strike, expiry)
+
+def _get_option_metrics_sync(symbol, opt_type, strike, expiry):
+    ticker = yf.Ticker(symbol)
+    today = datetime.now().date()
+    try:
+        opt_chain = ticker.option_chain(expiry)
+        chain_data = opt_chain.calls if opt_type == "call" else opt_chain.puts
+        contract = chain_data[chain_data['strike'] == strike]
+        if contract.empty:
+            return {'delta': 0.0, 'dte': 0, 'mid': 0.0}
+        
+        c = contract.iloc[0]
+        days_to_expiry = (datetime.strptime(expiry, '%Y-%m-%d').date() - today).days
+        
+        quote = market_data_service.get_quote(symbol)
+        price = quote.get('c', 0.0) if quote else 0.0
+        
+        t_years = max(days_to_expiry, 1) / 365.0
+        flag = 'c' if opt_type == "call" else 'p'
+        delta_val = calculate_contract_delta(c, price, t_years, flag)
+        
+        bid = c.get('bid', 0.0)
+        ask = c.get('ask', 0.0)
+        mid = (bid + ask) / 2.0 if bid > 0 and ask > 0 else c.get('lastPrice', 0.0)
+        return {'delta': delta_val, 'dte': days_to_expiry, 'mid': mid}
+    except Exception as e:
+        logging.error(f"get_option_metrics error for {symbol}: {e}")
+        return {'delta': 0.0, 'dte': 0, 'mid': 0.0}
+
+async def find_best_contract(symbol, strategy_type, target_delta, min_dte, max_dte):
+    return await asyncio.to_thread(_find_best_contract_sync, symbol, strategy_type, target_delta, min_dte, max_dte)
+
+def _find_best_contract_sync(symbol, strategy_type, target_delta, min_dte, max_dte):
+    try:
+        ticker = yf.Ticker(symbol)
+        expirations = ticker.options
+        today = datetime.now().date()
+        target_expiry_date, days_to_expiry = _find_target_expiry(expirations, today, min_dte, max_dte)
+        if not target_expiry_date:
+            return None
+            
+        quote = market_data_service.get_quote(symbol)
+        price = quote.get('c', 0.0) if quote else 0.0
+        
+        opt_type = "call" if "CALL" in strategy_type else "put"
+        best_contract, _ = _get_best_contract_data(ticker, target_expiry_date, opt_type, target_delta, price, days_to_expiry)
+        if best_contract is None: return None
+        
+        bid = best_contract.get('bid', 0.0)
+        ask = best_contract.get('ask', 0.0)
+        mid = (bid + ask) / 2.0 if bid > 0 and ask > 0 else best_contract.get('lastPrice', 0.0)
+        return {
+            'strike': float(best_contract.get('strike', 0.0)),
+            'expiry': target_expiry_date,
+            'mid': mid
+        }
+    except Exception as e:
+        logging.error(f"find_best_contract error for {symbol}: {e}")
+        return None

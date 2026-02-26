@@ -406,3 +406,41 @@ def create_portfolio_report_embed(report_lines):
     embed.set_footer(text="Argo Risk Engine v2.5 | 基準標的: SPY")
     
     return embed
+
+def build_vtr_stats_embed(user_name: str, stats: dict) -> discord.Embed:
+    """
+    建構 VTR 績效統計 Embed 面板
+    """
+    # 根據勝率決定顏色
+    win_rate = stats['win_rate']
+    if win_rate >= 60:
+        color = 0x2ecc71  # 綠色 (Success)
+        status_icon = "🟢"
+    elif win_rate >= 40:
+        color = 0xf1c40f  # 黃色 (Warning)
+        status_icon = "🟡"
+    else:
+        color = 0xe74c3c  # 紅色 (Danger)
+        status_icon = "🔴"
+
+    embed = discord.Embed(
+        title=f"📈 Nexus Seeker | 虛擬交易室 (VTR) 績效週報",
+        description=f"使用者: **{user_name}** 的自動化回測數據",
+        color=color,
+        timestamp=datetime.now()
+    )
+
+    # 核心指標
+    embed.add_field(name="總結算次數", value=f"`{stats['total_trades']}`", inline=True)
+    embed.add_field(name="勝率", value=f"{status_icon} `{win_rate}%`", inline=True)
+    
+    # 損益指標 (使用 LaTeX 格式強調數值)
+    pnl = stats['total_pnl']
+    pnl_str = f"+${pnl:,}" if pnl >= 0 else f"-${abs(pnl):,}"
+    embed.add_field(name="累計總損益", value=f"**{pnl_str}**", inline=True)
+    embed.add_field(name="平均單筆損益", value=f"`${stats['avg_pnl']}`", inline=True)
+
+    # 腳註與提示
+    embed.set_footer(text="數據包含已平倉 (CLOSED) 與 已轉倉 (ROLLED) 之合約")
+    
+    return embed
