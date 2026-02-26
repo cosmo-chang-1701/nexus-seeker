@@ -2,7 +2,7 @@ import discord
 from discord.ext import tasks, commands
 from discord import app_commands
 import asyncio
-from datetime import datetime
+from datetime import datetime, time  # 🚀 新增 time 導入
 from zoneinfo import ZoneInfo
 import logging
 
@@ -11,7 +11,7 @@ import market_math
 import market_time
 from market_analysis import portfolio
 from market_analysis.ghost_trader import GhostTrader
-from cogs.embed_builder import create_scan_embed
+from cogs.embed_builder import create_scan_embed, build_vtr_stats_embed # 🚀 確保導入週報 UI
 from services import market_data_service
 from services import news_service, llm_service, reddit_service
 
@@ -29,6 +29,7 @@ class SchedulerCog(commands.Cog):
         
         self.vtr_engine = GhostTrader()
         self.monitor_vtr_task.start()
+        self.weekly_vtr_report_task.start() # 🚀 1. 啟動週報排程
 
         # 4小時冷卻機制
         self.signal_cooldowns = {}
@@ -45,7 +46,36 @@ class SchedulerCog(commands.Cog):
         self.dynamic_market_scanner.cancel()
         self.dynamic_after_market_report.cancel()
         self.monitor_vtr_task.cancel()
+        self.weekly_vtr_report_task.cancel() # 🚀 2. 卸載週報排程
         logger.info("SchedulerCog unloaded. Background tasks cancelled.")
+
+    # ==========================================
+    # 🚀 新增：每週 VTR 績效週報 (美東週五 17:05)
+    # ==========================================
+    @tasks.loop(time=time(hour=17, minute=5, tzinfo=ny_tz))
+    async def weekly_vtr_report_task(self):
+        """每週五收盤後：自動推送 VTR 績效週報"""
+        now = datetime.now(ny_tz)
+        if now.weekday() != 4: # 4 代表 Friday
+            return
+
+        logger.info("📅 [Weekly Report] 偵測到週五收盤，開始產生績效週報...")
+        
+        # 取得所有有觀察清單的使用者 (或是直接從資料庫抓有 VTR 紀錄的人)
+        all_watchlists = database.get_all_watchlist()
+        unique_users = set(row[0] for row in all_watchlists)
+
+        for uid in unique_users:
+            try:
+                # 獲取績效數據
+                stats = GhostTrader.get_vtr_performance_stats(uid)
+                if stats['total_trades'] > 0:
+                    user = await self.bot.fetch_user(uid)
+                    embed = build_vtr_stats_embed(user.display_name, stats)
+                    await self.bot.queue_dm(uid, message="📊 **本週虛擬交易室 (VTR) 績效週報已送達！**", embed=embed)
+                    logger.info(f"✅ 週報已發送給用戶 {uid}")
+            except Exception as e:
+                logger.error(f"發送週報給 {uid} 失敗: {e}")
 
     # ==========================================
     # 動態排程任務 (私訊分發引擎)
@@ -364,21 +394,52 @@ class SchedulerCog(commands.Cog):
     async def before_dynamic_after_market_report(self):
         await self.bot.wait_until_ready()
 
+    # ==========================================
+    # 🚀 強化：VTR 監控與風險即時預警
+    # ==========================================
     @tasks.loop(minutes=30)
     async def monitor_vtr_task(self):
-        """每 30 分鐘執行一次 VTR 結算與轉倉"""
+        """每 30 分鐘檢查 VTR，並在轉倉/平倉時即時通知"""
         if not market_time.is_market_open():
             return
             
-        logger.info("👻 [GhostTrader] 開始掃描並管理 VTR 持倉...")
+        logger.info("👻 [GhostTrader] 開始掃描 VTR 持倉與風險檢查...")
         try:
-            # 1. 執行自動平倉
-            await asyncio.to_thread(self.vtr_engine.manage_virtual_positions)
-            # 2. 執行轉倉與風控檢查
+            # 取得「操作前」的開放部位列表，用來比對是否有部位消失（平倉或轉倉）
             from database.virtual_trading import get_all_open_virtual_trades
-            open_trades = await asyncio.to_thread(get_all_open_virtual_trades)
-            for trade in open_trades:
-                await self.vtr_engine.check_and_execute_rolling(trade['id'])
+            before_trades = await asyncio.to_thread(get_all_open_virtual_trades)
+            before_ids = {t['id'] for t in before_trades}
+
+            # 1. 執行核心管理邏輯 (同步轉非同步執行)
+            await asyncio.to_thread(self.vtr_engine.manage_virtual_positions)
+            
+            # 2. 執行轉倉與風控檢查
+            for trade_id in before_ids:
+                await self.vtr_engine.check_and_execute_rolling(trade_id)
+
+            # 🚀 3. 風險預警：檢查剛才是否有部位被關閉或轉向
+            after_trades = await asyncio.to_thread(get_all_open_virtual_trades)
+            after_ids = {t['id'] for t in after_trades}
+            
+            # 找出消失的 ID (代表已結算或已轉倉)
+            closed_ids = before_ids - after_ids
+            if closed_ids:
+                from database.virtual_trading import get_all_virtual_trades
+                all_history = await asyncio.to_thread(database.get_all_virtual_trades, None) # 獲取全站最近紀錄
+                
+                for tid in closed_ids:
+                    # 找到該筆結算紀錄
+                    trade_info = next((t for t in all_history if t['id'] == tid), None)
+                    if trade_info:
+                        uid = trade_info['user_id']
+                        status = trade_info['status']
+                        pnl = trade_info['pnl']
+                        icon = "🔄 [轉倉預警]" if status == 'ROLLED' else "🔴 [自動平倉]"
+                        msg = f"{icon} **{trade_info['symbol']}** {trade_info['opt_type'].upper()}已結算\n" \
+                              f"└ 狀態: `{status}` | 損益: `${pnl}`\n" \
+                              f"請登入終端確認防禦部位狀態。"
+                        await self.bot.queue_dm(uid, message=msg)
+
         except Exception as e:
             logger.error(f"VTR 管理任務發生錯誤: {e}")
             
