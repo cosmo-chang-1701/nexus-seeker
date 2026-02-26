@@ -130,7 +130,10 @@ class GhostTrader:
         slippage_factor = 0.99 if trade['quantity'] > 0 else 1.01
         actual_exit_price = exit_price * slippage_factor
         
-        success = close_virtual_trade(trade['id'], actual_exit_price, status=status)
+        # 計算 PnL (關注點分離: 移至業務邏輯層)
+        pnl = (actual_exit_price - trade['entry_price']) * trade['quantity'] * 100
+        
+        success = close_virtual_trade(trade['id'], actual_exit_price, status=status, pnl=pnl)
         if success:
             logger.info(f"🔴 VTR 自動平倉 [{trade['id']}] {trade['symbol']} {trade['opt_type']} {trade['strike']} 原因:{reason} Exit:{actual_exit_price:.2f}")
 

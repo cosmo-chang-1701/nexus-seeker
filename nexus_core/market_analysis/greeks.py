@@ -1,7 +1,7 @@
 import logging
 
 import pandas as pd
-from py_vollib.black_scholes_merton.greeks.analytical import delta
+from py_vollib.black_scholes_merton.greeks.analytical import delta, theta, gamma
 
 from config import RISK_FREE_RATE
 
@@ -38,3 +38,15 @@ def calculate_contract_delta(row, current_price, t_years, flag, q=0.0):
     except Exception as e:
         logger.debug("Delta 計算失敗 (strike=%.2f, iv=%.4f): %s", row['strike'], iv, e)
         return 0.0
+
+def calculate_greeks(opt_type, stock_price, strike, t_years, iv, q):
+    """計算單一選擇權的 Greeks (Delta, Theta, Gamma)。"""
+    flag = 'c' if opt_type == 'call' else 'p'
+    try:
+        return {
+            'delta': delta(flag, stock_price, strike, t_years, RISK_FREE_RATE, iv, q),
+            'theta': theta(flag, stock_price, strike, t_years, RISK_FREE_RATE, iv, q),
+            'gamma': gamma(flag, stock_price, strike, t_years, RISK_FREE_RATE, iv, q)
+        }
+    except:
+        return {'delta': 0.0, 'theta': 0.0, 'gamma': 0.0}

@@ -58,6 +58,8 @@
 | 🔥 **資金熱度極限** | 計算投資組合保證金佔總資金比例（Portfolio Heat），> 30% 警戒、> 50% 爆倉預警，防止過度槓桿。 |
 | � **What-if 曝險模擬** | 掃描期權機會時，Nexus Risk Optimizer (NRO) 預先模擬建倉後對整體投資組合的 Delta 衝擊，動態防範曝險破表風險。 |
 | 🛡️ **自動對沖指令** | 當 NRO 偵測建倉計畫超標時，將反向下達精準的基準與數量避險指示（例：建議賣出 2.5 股 SPY），提供全盤化應對方案。 |
+| 👻 **虛擬交易室 (VTR)** | 內建 GhostTrader 引擎，自動根據量化訊號建倉，並自動追蹤合約部位。達停利/停損條件會自動平倉，Delta 擴張時自動轉倉。 |
+| 📊 **VTR 績效週報** | 每週五收盤後 (17:05 ET)，自動彙整個人專屬的 VTR 實測交易績效並透過私訊推送週報。 |
 | ⚡ **Finnhub 高效報價** | 無縫整合 Finnhub 高效服務，取代不穩定的 Yahoo Finance，徹底排除 ETF 資料請求 404 問題，並大幅提昇股息與財報日的資料準確度。 |
 | �💹 **Theta 現金流精算** | 每日 Theta 收益率精算，對照機構級 0.05%–0.3% 標準，確保時間價值曝險合理。 |
 | 🕸️ **相關性矩陣風險** | 下載 60 日收盤價建立 Pearson 相關係數矩陣，偵測 ρ > 0.75 的高度重疊板塊並提示集中風險。 |
@@ -116,8 +118,10 @@ Discord 使用者 ──► Discord API ──► NexusBot (bot.py)
 | 排程模式 | 任務 | 說明 |
 |---|---|---|
 | **動態睡眠** → 開盤前 30 分 (≈ 09:00 ET) | 盤前風險監控 | 掃描持倉與觀察清單的財報日曆；若財報 ≤ 3 天內，私訊 ⚠️ IV 崩跌警報（區分持倉高風險 vs 觀察清單標的）。 |
-| **每 30 分鐘心跳** (10:00 ET – 收盤) | 盤中動態掃描 | 每 30 分鐘偵測開盤狀態，僅在常規交易時段內執行：跳過非交易日/盤前盤後/開盤初期造市商無報價期 (09:30–09:59)。對每位使用者的觀察清單執行全方位掃描（含 LLM 風控審查）；訊號推播套用 **4 小時冷卻機制**（同一使用者 × 同一標的在冷卻期內不重複推播）。 |
+| **每 30 分鐘心跳** (10:00 ET – 收盤) | 盤中動態掃描 | 每 30 分鐘偵測開盤狀態，僅在常規交易時段內執行：跳過非交易日/盤前盤後/開盤初期造市商無報價期 (09:30–09:59)。對每位使用者的觀察清單執行全方位掃描（含 LLM 風控審查）；訊號推播套用 **4 小時冷卻機制**。 |
+| **每 30 分鐘心跳** (盤中) | VTR 監控與對沖 | 盤中掃描虛擬交易室 (VTR) 持倉，並在觸發自動轉倉/平倉時即時通知，同時依據系統目標 Delta (Target Delta) 提供部位對沖建議。 |
 | **動態睡眠** → 收盤後 15 分 (≈ 16:15 ET) | 盤後報告 | 動態結算損益、Delta 擴張轉倉建議、Gamma 脆性防禦；附帶 SPY Beta-Weighted 宏觀風險評估、Theta 收益率、資金熱度極限與 Pearson 相關性矩陣。 |
+| **每週五定時** (17:05 ET) | VTR 績效週報 | 收盤後彙總該週虛擬交易室 (VTR) 的勝率、總損益與盈虧比，透過私訊推播個人化績效報表。 |
 
 ---
 
@@ -215,6 +219,8 @@ docker compose logs -f
 | `/list_trades` | 檢視持倉、損益與交易 ID | — |
 | `/remove_trade` | 依 ID 移除已平倉的持倉 | `trade_id: 1` |
 | `/set_capital` | 設定總資金以供 Kelly 倉位計算 | `capital: 50000` |
+| `/vtr_list` | 列出虛擬交易室 (VTR) 開啟中的所有持倉 | — |
+| `/vtr_stats` | 檢視虛擬交易室 (VTR) 的績效統計 (勝率、損益、盈虧比) | — |
 
 ### 🔬 研究
 
@@ -351,9 +357,11 @@ nexus-seeker/                        # Monorepo 根目錄
 │   ├── market_time.py               # NYSE 日曆、動態睡眠排程器與開盤狀態偵測
 │   ├── market_analysis/             # 核心量化引擎 (Python Package)
 │   │   ├── __init__.py              # 公開 API 匯出
-│   │   ├── data.py                  # 財報日期查詢 (Finnhub)
+│   │   ├── data.py                  # 財報日期查詢與選擇權價格獲取 (Finnhub & yfinance)
 │   │   ├── margin.py                # 投資組合保證金耗能核算模組
-│   │   ├── greeks.py                # Black-Scholes-Merton Delta 計算 (含股息率 q)
+│   │   ├── greeks.py                # Black-Scholes-Merton Delta 與 Greeks 計算引擎
+│   │   ├── hedging.py               # 投資組合避險邏輯與 Delta 中性計算
+│   │   ├── ghost_trader.py          # GhostTrader — VTR 自動建倉、平倉、轉倉核心邏輯
 │   │   ├── risk_engine.py           # NRO 投資組合防禦管線、What-if 新增風險模擬與避險對沖計算
 │   │   ├── report_formatter.py      # 將量化數值格式化為 Discord Embed 文字流
 │   │   ├── strategy.py              # 技術面掃描 + 多道量化濾網管線 + NRO 合約篩選
@@ -364,6 +372,7 @@ nexus-seeker/                        # Monorepo 根目錄
 │   │   ├── portfolio.py             # 投資組合 CRUD
 │   │   ├── watchlist.py             # 觀察清單 CRUD
 │   │   ├── user_settings.py         # 使用者設定 CRUD (資金規模、總體加權曝險查詢)
+│   │   ├── virtual_trading.py       # 虛擬交易室 (VTR) 歷史與即時數據 CRUD
 │   │   └── migrations/              # 版本遷移腳本目錄
 │   │       ├── v001_init.py         # 初始 Schema — portfolio、watchlist、user_settings
 │   │       ├── v002_add_stock_cost.py  # 新增現股成本欄位
@@ -375,9 +384,9 @@ nexus-seeker/                        # Monorepo 根目錄
 │   │   ├── news_service.py          # Finnhub 歷史 / 突發新聞擷取
 │   │   └── reddit_service.py        # Reddit 情緒 — 透過 Cloudflare Tunnel 呼叫本地爬蟲
 │   ├── cogs/                        # Discord 擴充模組 (Cog 分層)
-│   │   ├── trading.py               # 背景排程任務 — 盤前風控、盤中 NRO 巡邏、盤後動態結算、冷卻機制
+│   │   ├── trading.py               # 背景排程任務 — 盤前風控、盤中掃描、VTR監控、盤後結算與每週週報
 │   │   ├── watchlist.py             # 觀察清單斜線指令 — CRUD + NRO 手動掃描與 What-if 展示
-│   │   ├── portfolio.py             # 投資組合斜線指令 — 新增/列出/移除持倉、設定專屬凱利資金
+│   │   ├── portfolio.py             # 投資組合與 VTR 斜線指令 — 實單與虛擬交易追蹤、資金設定
 │   │   ├── research.py              # 研究斜線指令 — 新聞掃描、Reddit 情緒掃描
 │   │   ├── debug.py                 # 開發者除錯與健康檢測工具 (Latency 診斷)
 │   │   └── embed_builder.py         # Discord UI/UX 生成器 — 渲染圖文並茂的量化戰情面板
@@ -451,6 +460,7 @@ docker compose run --rm -v "$(pwd):/app" nexus_seeker python -m unittest discove
 - [x] **資料庫遷移引擎** — 自動版本控管與 Schema 遷移，告別手動重建資料庫。
 - [x] **Nexus Risk Optimizer (NRO)** — What-if 建倉模擬與部位重組，自動計算 SPY 避險對沖口數。
 - [x] **Finnhub 行情升級** — 告別 yfinance 頻繁 404，全改接穩定金融級 API，含即時報價、股息率與財報日程。
+- [x] **虛擬交易室 (VTR)** — 內建 GhostTrader，支援策略自動回測與實時虛盤模擬紀錄，並提供每週績效週報。
 - [ ] **MCP Server** — 將核心量化模組封裝為標準 Model Context Protocol 工具，供外部 AI 代理使用。
 - [ ] **券商 API 整合** — Interactive Brokers Gateway 實現全自動下單執行（訊號 → 執行 → 平倉，零人工介入）。
 

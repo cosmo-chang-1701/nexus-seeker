@@ -161,6 +161,61 @@ def get_history_df(symbol: str, period: str = "1y") -> pd.DataFrame:
         return pd.DataFrame()
 
 # ---------------------------------------------------------------------------
+# 記憶體快取設定
+# ---------------------------------------------------------------------------
+_sma_cache = {} 
+_SMA_CACHE_TTL = 28800  # 快取存活時間：8 小時 (秒)
+
+def get_sma(symbol: str, window: int = 200) -> Optional[float]:
+    """
+    計算簡單移動平均線 (Simple Moving Average)。
+    數學定義: $$SMA = \frac{1}{n} \sum_{i=1}^{n} P_i$$
+    記憶體快取機制，減少對 yfinance 的重複請求。
+    """
+    global _sma_cache
+    current_time = time.time()
+    cache_key = (symbol, window)
+
+    # 檢查快取是否存在且未過期
+    if cache_key in _sma_cache:
+        cached_val, expiry = _sma_cache[cache_key]
+        if current_time < expiry:
+            logger.info(f"⚡ [Cache Hit] {symbol} SMA{window}: {cached_val}")
+            return cached_val
+
+    try:
+        logger.info(f"🌐 [Cache Miss] 正在從 yfinance 抓取 {symbol} 歷史數據計算 SMA{window}...")
+        # 對於 SMA 200，建議抓取 1y 或 2y 以確保有足夠的 Trading Days
+        period = "1y" if window <= 200 else "2y"
+        df = get_history_df(symbol, period=period)
+
+        if df.empty or len(df) < window:
+            logger.warning(f"[{symbol}] 樣本數不足 ({len(df)} < {window})，無法計算 SMA")
+            return None
+
+        # 計算 Rolling Mean 並取得最新觀測值
+        sma_series = df['Close'].rolling(window=window).mean()
+        current_sma = round(float(sma_series.iloc[-1]), 4)
+
+        if pd.isna(current_sma):
+            return None
+
+        # 寫入快取
+        _sma_cache[cache_key] = (current_sma, current_time + _SMA_CACHE_TTL)
+        
+        return current_sma
+
+    except Exception as e:
+        logger.error(f"[{symbol}] 計算 SMA{window} 失敗: {e}")
+        return None
+
+def clear_sma_cache():
+    """手動清除快取 (例如在開盤前執行)"""
+    global _sma_cache
+    _sma_cache.clear()
+    logger.info("🧹 SMA 快取已清空")
+
+# ---------------------------------------------------------------------------
 # Basic Financials (基本面指標)
 # ---------------------------------------------------------------------------
 def get_basic_financials(symbol: str) -> Dict[str, Any]:

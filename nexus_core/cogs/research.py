@@ -2,8 +2,9 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import logging
+from datetime import datetime
 
-from services import reddit_service, news_service
+from services import reddit_service, news_service, market_data_service
 from . import embed_builder
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,30 @@ class Research(commands.Cog):
         except Exception as e:
             logger.error(f"[{symbol}] Reddit 掃描失敗: {e}")
             await interaction.followup.send(f"❌ 獲取 {symbol} Reddit 情緒時發生錯誤。", ephemeral=True)
+
+    @app_commands.command(name="quote", description="獲取標的即時報價 (Finnhub)")
+    @app_commands.describe(symbol="股票代碼 (例如: AAPL, TSLA, SPY)")
+    async def quote(self, interaction: discord.Interaction, symbol: str):
+        symbol = symbol.upper()
+        await interaction.response.defer(ephemeral=True)
+        
+        data = market_data_service.get_quote(symbol)
+        if not data:
+            return await interaction.followup.send(f"❌ 無法取得 `{symbol}` 的報價，請檢查代碼是否正確。", ephemeral=True)
+
+        embed = discord.Embed(
+            title=f"💹 {symbol} Real-time Quote",
+            color=discord.Color.blue() if data['dp'] >= 0 else discord.Color.red(),
+            timestamp=datetime.now()
+        )
+        
+        # 這裡顯示 Finnhub 標準欄位
+        embed.add_field(name="現價 (Current)", value=f"**${data['c']}**", inline=True)
+        embed.add_field(name="漲跌幅 (%)", value=f"{data['dp']}%")
+        embed.add_field(name="今日高/低", value=f"H: {data['h']} / L: {data['l']}", inline=False)
+        embed.add_field(name="前收盤 (PC)", value=f"${data['pc']}", inline=True)
+        
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(Research(bot))

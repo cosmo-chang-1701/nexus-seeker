@@ -1,13 +1,12 @@
-import yfinance as yf  # 僅保留用於 option_chain()
 from services import market_data_service
+from .data import get_option_chain
 import pandas as pd
 import numpy as np
 import logging
 import math
 from datetime import datetime
-from py_vollib.black_scholes_merton.greeks.analytical import delta, theta, gamma
+from .greeks import calculate_greeks
 
-from config import RISK_FREE_RATE
 from .risk_engine import (
     evaluate_defense_status as evaluate_defense_status_core, 
     calculate_beta, 
@@ -93,7 +92,6 @@ class PortfolioStatusOrchestrator:
     def _process_symbol_positions(self, symbol, rows):
         """處理單一標下的所有持倉。"""
         try:
-            ticker = yf.Ticker(symbol)  # 僅用於 option_chain()
             stock_hist = self.stock_hist_map.get(symbol, pd.DataFrame())
             
             # 獲取標的資訊 (透過 Finnhub)
@@ -109,9 +107,12 @@ class PortfolioStatusOrchestrator:
                 
                 # 獲取選擇權資料
                 if expiry not in option_chains_cache:
-                    option_chains_cache[expiry] = ticker.option_chain(expiry)
+                    option_chains_cache[expiry] = get_option_chain(symbol, expiry)
                 
-                chain_data = option_chains_cache[expiry].calls if opt_type == "call" else option_chains_cache[expiry].puts
+                calls, puts = option_chains_cache[expiry]
+                chain_data = calls if opt_type == "call" else puts
+                
+                if chain_data.empty: continue
                 contract = chain_data[chain_data['strike'] == strike]
                 if contract.empty: continue
                 
@@ -124,7 +125,7 @@ class PortfolioStatusOrchestrator:
                 t_years = max(dte, 1) / 365.0 
                 
                 # 計算 Greeks
-                greeks = self._calculate_greeks(opt_type, current_stock_price, strike, t_years, iv, dividend_yield)
+                greeks = calculate_greeks(opt_type, current_stock_price, strike, t_years, iv, dividend_yield)
                 
                 # 計算保證金
                 margin = calculate_option_margin(opt_type, strike, current_stock_price, current_price, quantity, stock_cost)
@@ -192,17 +193,6 @@ class PortfolioStatusOrchestrator:
         
         return {'price': price, 'dividend_yield': dividend_yield, 'beta': beta_val}
 
-    def _calculate_greeks(self, opt_type, stock_price, strike, t_years, iv, q):
-        """計算單一選擇權的 Greeks。"""
-        flag = 'c' if opt_type == 'call' else 'p'
-        try:
-            return {
-                'delta': delta(flag, stock_price, strike, t_years, RISK_FREE_RATE, iv, q),
-                'theta': theta(flag, stock_price, strike, t_years, RISK_FREE_RATE, iv, q),
-                'gamma': gamma(flag, stock_price, strike, t_years, RISK_FREE_RATE, iv, q)
-            }
-        except:
-            return {'delta': 0.0, 'theta': 0.0, 'gamma': 0.0}
 
     def _append_final_reports(self, positions_by_symbol):
         """追加宏觀風險與相關性報告。"""
