@@ -1,4 +1,5 @@
-import yfinance as yf
+import yfinance as yf  # 僅保留用於 option_chain()
+from services import market_data_service
 import pandas as pd
 import numpy as np
 import logging
@@ -72,34 +73,31 @@ class PortfolioStatusOrchestrator:
         return self.report_lines
 
     def _prepare_market_data(self, portfolio_rows):
-        """下載所有必要的行情資料。"""
+        """透過 Finnhub 下載所有必要的行情資料。"""
         unique_symbols = sorted(list(set([row[0] for row in portfolio_rows])))
         all_targets = unique_symbols + ["SPY"]
         
         try:
-            hists = yf.download(all_targets, period="90d", progress=False)
-            if not hists.empty:
-                # 取得 SPY 基準
-                if "SPY" in hists['Close']:
-                    spy_series = hists['Close']['SPY']
-                    self.spy_hist = pd.DataFrame({'Close': spy_series})
-                    self.spy_price = spy_series.iloc[-1]
-                
-                # 將其他標的存入 Map
-                for sym in unique_symbols:
-                    if sym in hists['Close']:
-                        self.stock_hist_map[sym] = pd.DataFrame({'Close': hists['Close'][sym]})
+            for sym in all_targets:
+                df = market_data_service.get_history_df(sym, "90d")
+                if df.empty:
+                    continue
+                if sym == "SPY":
+                    self.spy_hist = df
+                    self.spy_price = df['Close'].iloc[-1]
+                else:
+                    self.stock_hist_map[sym] = df
         except Exception as e:
             logger.warning(f"批次歷史資料下載失敗: {e}")
 
     def _process_symbol_positions(self, symbol, rows):
         """處理單一標下的所有持倉。"""
         try:
-            ticker = yf.Ticker(symbol)
+            ticker = yf.Ticker(symbol)  # 僅用於 option_chain()
             stock_hist = self.stock_hist_map.get(symbol, pd.DataFrame())
             
-            # 獲取標的資訊 (ETF 防護)
-            stock_info = self._get_stock_info(ticker, stock_hist)
+            # 獲取標的資訊 (透過 Finnhub)
+            stock_info = self._get_stock_info(symbol, stock_hist)
             current_stock_price = stock_info['price']
             dividend_yield = stock_info['dividend_yield']
             beta = stock_info['beta']
@@ -158,42 +156,33 @@ class PortfolioStatusOrchestrator:
         except Exception as e:
             logger.error(f"Symbol {symbol} 處理失敗: {e}", exc_info=True)
 
-    def _get_stock_info(self, ticker, stock_hist):
+    def _get_stock_info(self, symbol: str, stock_hist):
         """
-        獲取標的價格、Beta 與股息率。
-        排除 ticker.info 以防範 ETF 觸發 HTTP 404 錯誤。
+        透過 Finnhub 獲取標的價格、Beta 與股息率。
+        不再依賴 yfinance 的 fast_info / info，避免 ETF 404 問題。
         """
-        import logging
-        # 抑制 yfinance 內部拋出的 404 噪音
-        logging.getLogger('yfinance').setLevel(logging.CRITICAL)
-
         try:
-            f_info = ticker.fast_info
-            
-            # 1. 價格取得邏輯 (優先級: fast_info > history_cache > history_api)
-            price = getattr(f_info, 'lastPrice', getattr(f_info, 'last_price', None))
-            if price is None or pd.isna(price):
+            # 1. 價格取得邏輯 (優先級: Finnhub quote > history_cache)
+            quote = market_data_service.get_quote(symbol)
+            price = quote.get('c', 0.0) if quote else 0.0
+            if price is None or price <= 0:
                 if not stock_hist.empty:
                     price = stock_hist['Close'].iloc[-1]
                 else:
-                    price = ticker.history(period="1d")['Close'].iloc[-1]
+                    price = 0.0
             
-            # 2. 標的類型判斷與股息率估算
-            quote_type = getattr(f_info, 'quoteType', getattr(f_info, 'quote_type', ''))
-            is_etf = quote_type == 'ETF'
-            # ETF 避開 dividendYield 請求，直接賦予預設值或從 fast_info 讀取
-            if is_etf:
-                dividend_yield = 0.015 
+            # 2. 股息率估算 (透過 Finnhub basic financials)
+            is_etf_flag = market_data_service.is_etf(symbol)
+            if is_etf_flag:
+                dividend_yield = 0.015  # ETF 預設值
             else:
-                dividend_yield = getattr(f_info, 'dividendYield', getattr(f_info, 'dividend_yield', 0.0)) or 0.0
+                dividend_yield = market_data_service.get_dividend_yield(symbol)
             
             # 3. Beta 值計算邏輯
             # 優先使用動態回歸計算 (Regression Beta)
             if not self.spy_hist.empty and not stock_hist.empty:
                 beta_val = calculate_beta(stock_hist, self.spy_hist)
             else:
-                # 🚀 修正點：移除 ticker.info.get('beta')
-                # 若無歷史資料則回傳 1.0 (Market Neutral)，避開 quoteSummary 404 報錯
                 beta_val = 1.0
                 
         except Exception as e:

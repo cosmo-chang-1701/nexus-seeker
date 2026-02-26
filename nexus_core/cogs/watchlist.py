@@ -7,7 +7,7 @@ import logging
 import database
 import market_math
 from cogs.embed_builder import create_scan_embed
-import yfinance as yf
+from services import market_data_service
 import math
 
 from ui.watchlist import WatchlistPagination
@@ -124,11 +124,10 @@ class WatchlistCog(commands.Cog):
         user_id = interaction.user.id
         symbol = symbol.upper()
 
-        # 🚀 1. 效能優化：抓取基準 SPY 資料
+        # 🚀 1. 效能優化：透過 Finnhub 抓取基準 SPY 資料
         try:
-            spy_ticker = yf.Ticker("SPY")
-            df_spy = spy_ticker.history(period="1y")
-            spy_price = df_spy['Close'].iloc[-1]
+            df_spy = await asyncio.to_thread(market_data_service.get_history_df, "SPY", "1y")
+            spy_price = df_spy['Close'].iloc[-1] if not df_spy.empty else 500.0
         except Exception as e:
             logger.warning(f"無法獲取 SPY 基準資料，使用預設值: {e}")
             df_spy, spy_price = None, 500.0

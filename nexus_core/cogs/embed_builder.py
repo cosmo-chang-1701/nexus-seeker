@@ -1,6 +1,6 @@
 import discord
 import logging
-import yfinance as yf
+
 from datetime import datetime, timezone
 from market_analysis.portfolio import calculate_beta
 

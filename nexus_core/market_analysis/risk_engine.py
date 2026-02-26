@@ -2,7 +2,7 @@ import math
 import logging
 import numpy as np
 import pandas as pd
-import yfinance as yf
+from services import market_data_service
 from datetime import datetime
 from typing import Dict, List, Tuple, Any
 
@@ -98,9 +98,17 @@ def analyze_sector_correlation(symbols: List[str]) -> List[Tuple[str, str, float
         return []
 
     try:
-        hist_data = yf.download(symbols, period="60d", progress=False)['Close']
-        if isinstance(hist_data, pd.Series):
-            hist_data = hist_data.to_frame(name=symbols[0])
+        # 透過 Finnhub 取得各標的的歷史 Close 價格
+        dfs = {}
+        for sym in symbols:
+            df = market_data_service.get_history_df(sym, "60d")
+            if not df.empty:
+                dfs[sym] = df['Close']
+        
+        if len(dfs) <= 1:
+            return []
+        
+        hist_data = pd.DataFrame(dfs)
             
         returns = hist_data.pct_change().dropna()
         corr_matrix = returns.corr()

@@ -15,6 +15,7 @@ LLM_API_BASE = os.getenv("LLM_API_BASE", None)
 LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", None)
 API_KEY = os.getenv("API_KEY", None)
 TUNNEL_URL = os.getenv("TUNNEL_URL", "")
+FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")
 
 # 策略目標 Delta 參數
 TARGET_DELTAS = {

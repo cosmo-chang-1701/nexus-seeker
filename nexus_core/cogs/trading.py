@@ -11,7 +11,7 @@ import market_math
 import market_time
 import market_analysis.portfolio
 from cogs.embed_builder import create_scan_embed
-import yfinance as yf
+from services import market_data_service
 from services import news_service, llm_service, reddit_service
 
 ny_tz = ZoneInfo("America/New_York")
@@ -75,8 +75,7 @@ class SchedulerCog(commands.Cog):
         # 2. 批次快取財報日期 (減少重複 API 請求)
         earnings_cache = {}
         for sym in unique_symbols:
-            ticker = yf.Ticker(sym)
-            e_date = await asyncio.to_thread(market_math.get_next_earnings_date, ticker)
+            e_date = await asyncio.to_thread(market_math.get_next_earnings_date, sym)
             if e_date:
                 if isinstance(e_date, datetime): e_date = e_date.date()
                 earnings_cache[sym] = e_date
@@ -217,11 +216,10 @@ class SchedulerCog(commands.Cog):
             # 3. 發送私訊 (整合 NRO 風控引擎)
             from market_analysis.portfolio import optimize_position_risk
 
-            # 🚀 效能優化：在分發前先抓一次基準 SPY 價格，避免在迴圈內反覆請求
+            # 🚀 效能優化：在分發前先透過 Finnhub 抓一次基準 SPY 價格
             try:
-                spy_ticker = yf.Ticker("SPY")
-                df_spy = spy_ticker.history(period="1d")
-                spy_price = df_spy['Close'].iloc[-1] if not df_spy.empty else 500.0
+                spy_quote = market_data_service.get_quote("SPY")
+                spy_price = spy_quote.get('c', 500.0) if spy_quote else 500.0
             except:
                 spy_price = 500.0
 

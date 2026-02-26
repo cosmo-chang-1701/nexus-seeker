@@ -2,7 +2,8 @@ import math
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
-import yfinance as yf
+import yfinance as yf  # 僅保留用於 option_chain() / options
+from services import market_data_service
 from datetime import datetime
 from config import TARGET_DELTAS
 from .greeks import calculate_contract_delta
@@ -79,7 +80,7 @@ def _determine_strategy_signal(indicators):
 
 def _calculate_mmm(ticker, price, today, symbol, is_etf):
     """計算財報日 MMM (Market Maker Move)"""
-    earnings_date = None if is_etf else get_next_earnings_date(ticker)
+    earnings_date = None if is_etf else get_next_earnings_date(symbol)
 
     days_to_earnings = -1
     mmm_pct, safe_lower, safe_upper = 0.0, 0.0, 0.0
@@ -181,7 +182,7 @@ def _get_best_contract_data(ticker, target_expiry_date, opt_type, target_delta, 
         dividend_yield (float): 年化股息殖利率，由外部傳入以確保一致性。
     """
 
-    # 強行靜音 yfinance 的 ETF 404 報錯洗版
+    # 透過 Finnhub service 取得標的價格，避開 yfinance 404 報錯
     logging.getLogger('yfinance').setLevel(logging.CRITICAL)
 
     try:
@@ -490,43 +491,34 @@ def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None):
     [404-Shield] 針對 ETF 進行了路徑優化，避開無效的基本面請求。
     """
     try:
-        ticker = yf.Ticker(symbol)
+        ticker = yf.Ticker(symbol)  # 僅用於 option_chain() / options
         
-        # 🚀 1. 使用快取或最輕量方式取得標的資訊
-        try:
-            # 只取 fast_info，絕對不觸碰 ticker.info
-            f_info = ticker.fast_info
-            quote_type = getattr(f_info, 'quoteType', getattr(f_info, 'quote_type', ''))
-            is_etf = quote_type == 'ETF'
-            price = getattr(f_info, 'lastPrice', getattr(f_info, 'last_price', None))
-        except:
-            is_etf = False
-            price = None
+        # 🚀 1. 透過 Finnhub 取得即時報價與標的資訊
+        quote = market_data_service.get_quote(symbol)
+        price = quote.get('c', 0.0) if quote else None
+        
+        # 判斷是否為 ETF
+        is_etf = market_data_service.is_etf(symbol)
 
-        # 🚀 2. 獲取歷史資料 (這是獲取現價最穩定的方法)
-        df = ticker.history(period="1y")
+        # 🚀 2. 獲取歷史資料 (用於技術指標計算)
+        df = market_data_service.get_history_df(symbol, "1y")
         if df.empty: return None
         
-        # 如果 fast_info 沒抓到價格，從歷史資料補抓
-        if price is None:
+        # 如果 Finnhub quote 沒抓到價格，從歷史資料補抓
+        if price is None or price <= 0:
             price = df['Close'].iloc[-1]
 
-        # 🚀 3. 處理股息率 (避開 Fundamentals 請求)
+        # 🚀 3. 處理股息率 (透過 Finnhub basic financials)
         if is_etf:
-            dividend_yield = 0.015  # ETF 預設值，省去抓取時間
+            dividend_yield = 0.015  # ETF 預設值
         else:
-            try:
-                # 僅從 fast_info 嘗試抓取，若無則為 0
-                dividend_yield = getattr(ticker.fast_info, 'dividendYield', getattr(ticker.fast_info, 'dividend_yield', 0.0)) or 0.0
-            except:
-                dividend_yield = 0.0
+            dividend_yield = market_data_service.get_dividend_yield(symbol)
 
         # 🚀 4. 處理基準 SPY 與 Beta
         # 若是批次掃描，外部傳入的 df_spy 是效能關鍵
         if df_spy is None:
             # 只有在單獨掃描時才請求 SPY
-            spy_ticker = yf.Ticker("SPY")
-            df_spy = spy_ticker.history(period="1y")
+            df_spy = market_data_service.get_history_df("SPY", "1y")
         
         if df_spy.empty:
             logging.error(f"無法取得 SPY 基準資料，跳過 {symbol}")

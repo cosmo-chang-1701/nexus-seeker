@@ -42,7 +42,20 @@ if "config" not in sys.modules:
     mock_config = ModuleType("config")
     mock_config.RISK_FREE_RATE = 0.042
     mock_config.TARGET_DELTAS = {"STO_PUT": -0.16, "STO_CALL": 0.16}
+    mock_config.FINNHUB_API_KEY = "test_key"
     sys.modules["config"] = mock_config
+
+# Mock services.market_data_service (needed by portfolio.py's Finnhub integration)
+mock_finnhub_svc = MagicMock()
+mock_finnhub_svc.get_quote.return_value = {'c': 150.0, 'd': 1.0, 'dp': 0.67}
+mock_finnhub_svc.get_history_df.return_value = MagicMock(empty=True)
+mock_finnhub_svc.is_etf.return_value = False
+mock_finnhub_svc.get_dividend_yield.return_value = 0.01
+mock_services_mod = MagicMock()
+mock_services_mod.market_data_service = mock_finnhub_svc
+sys.modules.setdefault("services", mock_services_mod)
+sys.modules.setdefault("services.market_data_service", mock_finnhub_svc)
+sys.modules.setdefault("finnhub", MagicMock())
 
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -54,12 +67,27 @@ from market_analysis.portfolio import check_portfolio_status_logic
 # ====================================================================
 def _setup_common_mocks(mock_yf_mod, mock_dt, stock_price=150.0,
                         option_last_price=2.50, option_iv=0.25,
-                        spy_price=500.0, now_date=None):
-    """建構 yf.Ticker 與 datetime 的通用 mock 設定"""
+                        spy_price=500.0, now_date=None, mock_fh=None):
+    """建構 yf.Ticker、datetime 與 market_data_service 的通用 mock 設定"""
     if now_date is None:
         now_date = datetime(2025, 1, 15)
     mock_dt.now.return_value = now_date
     mock_dt.strptime = datetime.strptime
+
+    # 配置 market_data_service mock
+    if mock_fh is not None:
+        mock_fh.get_quote.return_value = {'c': stock_price, 'd': 1.0, 'dp': 0.67}
+        mock_fh.is_etf.return_value = False
+        mock_fh.get_dividend_yield.return_value = 0.01
+        def mock_history(symbol, period="1y"):
+            price = spy_price if symbol == "SPY" else stock_price
+            df = MagicMock()
+            df.empty = False
+            close_series = MagicMock()
+            close_series.iloc.__getitem__ = MagicMock(return_value=price)
+            df.__getitem__ = MagicMock(return_value=close_series)
+            return df
+        mock_fh.get_history_df.side_effect = mock_history
 
     # SPY ticker
     spy_hist = MagicMock()
@@ -127,12 +155,13 @@ class TestCheckPortfolioStatusLogicNew(unittest.TestCase):
     @patch('market_analysis.portfolio.delta', return_value=0.30)
     @patch('market_analysis.portfolio.datetime')
     @patch('market_analysis.portfolio.yf')
-    def test_short_call_generates_report(self, mock_yf_mod, mock_dt,
+    @patch('market_analysis.portfolio.market_data_service')
+    def test_short_call_generates_report(self, mock_fh, mock_yf_mod, mock_dt,
                                           mock_delta, mock_theta, mock_gamma,
                                           mock_defense, mock_macro, mock_corr):
         """賣 Call 部位 → 報告行中應包含該標的名稱與 CALL 字樣"""
         _setup_common_mocks(mock_yf_mod, mock_dt, stock_price=180.0,
-                            option_last_price=4.00, option_iv=0.30)
+                            option_last_price=4.00, option_iv=0.30, mock_fh=mock_fh)
 
         rows = [("TSLA", "call", 200.0, "2025-03-21", 5.00, -1, 0.0)]
         result = check_portfolio_status_logic(rows, user_capital=50000)
@@ -154,11 +183,12 @@ class TestCheckPortfolioStatusLogicNew(unittest.TestCase):
     @patch('market_analysis.portfolio.delta', return_value=-0.15)
     @patch('market_analysis.portfolio.datetime')
     @patch('market_analysis.portfolio.yf')
-    def test_zero_entry_price_pnl_is_zero(self, mock_yf_mod, mock_dt,
+    @patch('market_analysis.portfolio.market_data_service')
+    def test_zero_entry_price_pnl_is_zero(self, mock_fh, mock_yf_mod, mock_dt,
                                            mock_delta, mock_theta, mock_gamma,
                                            mock_defense, mock_macro, mock_corr):
         """entry_price = 0 → 不應產生除零錯誤，且 pnl_pct 應為 0"""
-        _setup_common_mocks(mock_yf_mod, mock_dt)
+        _setup_common_mocks(mock_yf_mod, mock_dt, mock_fh=mock_fh)
 
         rows = [("AAPL", "put", 140.0, "2025-03-21", 0.0, -1, 0.0)]
         result = check_portfolio_status_logic(rows, user_capital=50000)
@@ -182,13 +212,14 @@ class TestCheckPortfolioStatusLogicNew(unittest.TestCase):
     @patch('market_analysis.portfolio.delta', return_value=-0.15)
     @patch('market_analysis.portfolio.datetime')
     @patch('market_analysis.portfolio.yf')
-    def test_expired_option_no_crash(self, mock_yf_mod, mock_dt,
+    @patch('market_analysis.portfolio.market_data_service')
+    def test_expired_option_no_crash(self, mock_fh, mock_yf_mod, mock_dt,
                                       mock_delta, mock_theta, mock_gamma,
                                       mock_defense, mock_macro, mock_corr):
         """到期日已過 (DTE ≤ 0) → 不應拋出異常，且 t_years 被 max(dte,1) 保護"""
         # 設定 now = 2025-04-01，但合約到期 = 2025-03-21 → DTE 為負
         _setup_common_mocks(mock_yf_mod, mock_dt,
-                            now_date=datetime(2025, 4, 1))
+                            now_date=datetime(2025, 4, 1), mock_fh=mock_fh)
 
         rows = [("NVDA", "put", 800.0, "2025-03-21", 10.00, -1, 0.0)]
         result = check_portfolio_status_logic(rows, user_capital=100000)
@@ -210,12 +241,13 @@ class TestCheckPortfolioStatusLogicNew(unittest.TestCase):
     @patch('market_analysis.portfolio.delta', return_value=0.30)
     @patch('market_analysis.portfolio.datetime')
     @patch('market_analysis.portfolio.yf')
-    def test_covered_call_margin_uses_stock_price(self, mock_yf_mod, mock_dt,
+    @patch('market_analysis.portfolio.market_data_service')
+    def test_covered_call_margin_uses_stock_price(self, mock_fh, mock_yf_mod, mock_dt,
                                                   mock_delta, mock_theta, mock_gamma,
                                                   mock_defense, mock_macro, mock_corr):
         """Covered Call 的 margin = current_stock_price * 100 * abs(qty)"""
         stock_price = 180.0
-        _setup_common_mocks(mock_yf_mod, mock_dt, stock_price=stock_price)
+        _setup_common_mocks(mock_yf_mod, mock_dt, stock_price=stock_price, mock_fh=mock_fh)
 
         strike = 200.0
         qty = -3

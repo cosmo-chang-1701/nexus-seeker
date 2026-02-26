@@ -1,22 +1,26 @@
+"""
+新聞服務 — 透過 Finnhub Company News API 取得標的近期新聞。
+"""
+
 import asyncio
 import logging
-import yfinance as yf
+
+from services import market_data_service
 
 logger = logging.getLogger(__name__)
 
+
 async def fetch_recent_news(symbol: str, limit: int = 5) -> str:
-    """非同步獲取標的近期的 Yahoo Finance 新聞標題與摘要"""
+    """非同步獲取標的近期的新聞標題 (透過 Finnhub)"""
     try:
         def _get_news():
-            ticker = yf.Ticker(symbol)
-            news_items = ticker.news
+            news_items = market_data_service.get_company_news(symbol, limit=limit)
             if not news_items:
                 return "近期無重大新聞。"
             
-            # 使用列表推導式與 join 優化效能，並修正字典存取方式
             lines = [
-                f"▪️ {item.get('content', {}).get('title', 'No Title')}"
-                for item in news_items[:limit]
+                f"▪️ {item.get('headline', 'No Title')}"
+                for item in news_items
             ]
             return "\n".join(lines)
         
