@@ -165,6 +165,11 @@ class SchedulerCog(commands.Cog):
 
                 for data in alerts_data:
                     sym = data['symbol']
+                    ai_decision = data.get('ai_decision', 'APPROVE')
+
+                    # 攔截邏輯：VETO 絕對不建倉
+                    if ai_decision == "VETO":
+                        continue 
                     
                     # 冷卻檢查 (僅在自動模式下)
                     if is_auto:
