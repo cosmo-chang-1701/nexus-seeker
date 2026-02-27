@@ -1,5 +1,0 @@
-fastapi
-uvicorn[standard]
-playwright
-beautifulsoup4
-lxml
