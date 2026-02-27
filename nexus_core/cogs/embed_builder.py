@@ -219,7 +219,7 @@ def _add_risk_optimization_fields(embed, data, user_capital=None):
             f"```"
         )
     
-    embed.add_field(name=f"🛡️ What-if 曝險模擬 | {sim_status}\n\u200b", value=sim_block, inline=False)
+    embed.add_field(name=f"🛡️ What-if 曝險模擬 | {sim_status}", value=f"{sim_block}\n\u200b", inline=False)
 
     # 2. Nexus Risk Optimizer 自動優化建議
     if suggested > safe_qty:
@@ -238,8 +238,8 @@ def _add_risk_optimization_fields(embed, data, user_capital=None):
             # 格式化對沖股數，避免出現 22.2222222
             actions.append(f"🛡️ 建議對沖: {direction} {abs(hedge_spy):.1f} 股 SPY (@${spy_p:.1f})")
         
-        opt_block = "```diff\n" + "\n".join(actions) + "\n\u200b```"
-        embed.add_field(name=opt_title, value=opt_block, inline=False)
+        opt_block = "```diff\n" + "\n".join(actions) + "\n```"
+        embed.add_field(name=opt_title, value=f"{opt_block}\n\u200b", inline=False)
 
 def _add_ai_verification_fields(embed, data):
     """添加 AI 驗證決策欄位"""
