@@ -590,7 +590,7 @@ def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None):
             "expected_move": risk_metrics.get('expected_move', 0.0), "em_lower": risk_metrics.get('em_lower', 0.0),
             "em_upper": risk_metrics.get('em_upper', 0.0), "strategy": strategy, "target_date": target_expiry_date,
             "dte": days_to_expiry, "strike": best_contract.get('strike', 0.0), "bid": risk_metrics.get('bid', 0.0),
-            "ask": risk_metrics.get('ask', 0.0), "spread": risk_metrics.get('spread', 0.0), "delta": raw_delta,
+            "ask": risk_metrics.get('ask', 0.0), "spread": risk_metrics.get('spread', 0.0), "spread_ratio": risk_metrics.get('spread_ratio', 0.0), "delta": raw_delta,
             "iv": best_contract.get('impliedVolatility', 0.0), "aroc": aroc, "alloc_pct": alloc_pct,
             "margin_per_contract": margin_per_contract, "vrp": risk_metrics.get('vrp', 0.0),
             "mid_price": risk_metrics.get('mid_price', 0.0), "suggested_hedge_strike": risk_metrics.get('suggested_hedge_strike'),
