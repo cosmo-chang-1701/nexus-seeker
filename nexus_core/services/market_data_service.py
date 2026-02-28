@@ -167,7 +167,7 @@ _sma_cache = {}
 _SMA_CACHE_TTL = 28800  # 快取存活時間：8 小時 (秒)
 
 def get_sma(symbol: str, window: int = 200) -> Optional[float]:
-    """
+    r"""
     計算簡單移動平均線 (Simple Moving Average)。
     數學定義: $$SMA = \frac{1}{n} \sum_{i=1}^{n} P_i$$
     記憶體快取機制，減少對 yfinance 的重複請求。
@@ -350,7 +350,40 @@ def get_company_news(
             from_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
 
         data = client.company_news(symbol, _from=from_date, to=to_date)
-        return data[:limit] if data else []
+        if not data:
+            return []
+
+        import re
+        cleaned_news = []
+        seen_headlines = set()
+        
+        # 建立精確匹配 symbol 的正則表達式 (忽略大小寫，邊界匹配)
+        # 避免像是代號 "T" 去匹配到文字中的字母 't'
+        symbol_pattern = re.compile(rf'\b{re.escape(symbol)}\b', re.IGNORECASE)
+        
+        for item in data:
+            headline = item.get('headline', '').strip()
+            summary = item.get('summary', '').strip()
+            
+            # 1. 基礎清洗：過濾無標題的新聞
+            if not headline:
+                continue
+                
+            # 2. 去重複：同一事件常被多個新聞來源發布，透過轉小寫後的標題去重
+            hl_lower = headline.lower()
+            if hl_lower in seen_headlines:
+                continue
+                
+            # 3. 相關性清洗：檢查標題或摘要是否確實包含標的代號
+            # 避免收集到如「本日市場 50 檔焦點股」這種大雜燴且資訊稀疏的文章
+            content_text = f"{headline} {summary}"
+            if not symbol_pattern.search(content_text):
+                continue
+                
+            seen_headlines.add(hl_lower)
+            cleaned_news.append(item)
+
+        return cleaned_news[:limit]
     except Exception as e:
         logger.error(f"[{symbol}] Finnhub company news 失敗: {e}")
         return []

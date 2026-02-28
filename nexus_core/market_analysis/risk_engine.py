@@ -37,7 +37,7 @@ def evaluate_defense_status(quantity: float, opt_type: str, pnl_pct: float, curr
     return "⏳ **繼續持有** ｜ 未達防禦觸發條件"
 
 def calculate_beta(df_stock: pd.DataFrame, df_spy: pd.DataFrame) -> float:
-    """
+    r"""
     計算標的與基準 (SPY) 的相關性係數 (Beta)。
     公式: $$\beta = \frac{\text{Cov}(R_i, R_m)}{\text{Var}(R_m)}$$
     """
