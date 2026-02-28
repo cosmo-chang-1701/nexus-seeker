@@ -339,7 +339,7 @@ def create_watchlist_embed(page_data, current_page, total_pages, total_items):
             status_fmt = status_text.ljust(7)
             cost_fmt = cost_text.rjust(8) 
             
-            llm_icon = "🤖" if use_llm else "⚪"
+            llm_icon = "🟢" if use_llm else "🔴"
             llm_fmt = llm_icon.rjust(3)
             
             # 4. 組合四欄輸出
