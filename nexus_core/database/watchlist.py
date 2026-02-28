@@ -4,7 +4,7 @@ from config import DB_NAME
 # ==========================================
 # 觀察清單 (Watchlist) CRUD (綁定 user_id)
 # ==========================================
-def add_watchlist_symbol(user_id, symbol, stock_cost=0.0, use_llm=False):
+def add_watchlist_symbol(user_id, symbol, stock_cost=0.0, use_llm=True):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
 

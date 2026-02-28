@@ -26,9 +26,9 @@ class WatchlistCog(commands.Cog):
     @app_commands.describe(
         symbol="股票代號 (如 TSLA)",
         stock_cost="預設 0。輸入您的持有現股平均成本 (將精確計算防禦區間)",
-        use_llm="預設 False。是否啟用 LLM 語意風控 (會消耗 Token)"
+        use_llm="預設 True。是否啟用 LLM 語意風控 (會消耗 Token)"
     )
-    async def add_watch(self, interaction: discord.Interaction, symbol: str, stock_cost: float = 0.0, use_llm: bool = False):
+    async def add_watch(self, interaction: discord.Interaction, symbol: str, stock_cost: float = 0.0, use_llm: bool = True):
         symbol = symbol.upper()
         user_id = interaction.user.id
         success = database.add_watchlist_symbol(user_id, symbol, stock_cost, use_llm)
