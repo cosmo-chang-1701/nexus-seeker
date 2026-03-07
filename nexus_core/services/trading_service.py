@@ -151,6 +151,8 @@ class TradingService:
                         unit_weighted_delta=unit_weighted_delta,
                         user_capital=user_capital,
                         spy_price=spy_price,
+                        stock_iv=data.get('iv', 0.15),
+                        spy_iv=0.15,
                         strategy=strategy,
                         risk_limit_pct=15.0
                     )

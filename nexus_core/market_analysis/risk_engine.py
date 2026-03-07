@@ -136,31 +136,53 @@ def simulate_exposure_impact(current_total_delta: float, new_trade_data: Dict[st
     
     return projected_total_delta, projected_exposure_pct
 
-def optimize_position_risk(current_delta: float, unit_weighted_delta: float, user_capital: float, spy_price: float, risk_limit_pct: float = 15.0, strategy: str = "") -> Tuple[int, float]:
+def optimize_position_risk(
+    current_delta: float, 
+    unit_weighted_delta: float, 
+    user_capital: float, 
+    spy_price: float, 
+    stock_iv: float,
+    spy_iv: float,  # 通常使用 VIX 或 SPY 30D IV
+    risk_limit_pct: float = 15.0, 
+    strategy: str = ""
+) -> Tuple[int, float]:
     """
-    計算符合風險紅線的安全成交口數與對沖建議。
+    計算「波動率校正後」的安全成交口數與對沖建議。
     """
+    # 1. 計算基本的風險空間 (基於資金規模)
     max_safe_shares = (user_capital * (risk_limit_pct / 100)) / spy_price
     side_multiplier = -1 if "STO" in strategy else 1
-    pos_impact_per_unit = unit_weighted_delta * side_multiplier
     
+    # 2. 引入【波動率調節因子 (Vol Multiplier)】
+    # 如果標的 IV 高於 SPY IV，則放大該部位的風險權重，採取更保守的對沖
+    # 公式：IV_Adjustment = Stock_IV / SPY_IV
+    iv_adjustment_ratio = stock_iv / spy_iv if spy_iv > 0 else 1.0
+    
+    # 校正後的單位加權 Delta (Forward-looking Delta)
+    # 這讓高 IV 標的在系統中看起來比實際上「更重」
+    vol_adjusted_unit_delta = unit_weighted_delta * iv_adjustment_ratio * side_multiplier
+    
+    # 3. 計算安全口數 (以校正後的曝險計算)
     safe_qty = 0
-    if pos_impact_per_unit > 0:
+    if vol_adjusted_unit_delta > 0:
         room = max_safe_shares - current_delta
-        safe_qty = math.floor(room / pos_impact_per_unit) if room > 0 else 0
-    elif pos_impact_per_unit < 0:
+        safe_qty = math.floor(room / vol_adjusted_unit_delta) if room > 0 else 0
+    elif vol_adjusted_unit_delta < 0:
         room = -max_safe_shares - current_delta
-        safe_qty = math.floor(room / pos_impact_per_unit) if room < 0 else 0
+        safe_qty = math.floor(room / vol_adjusted_unit_delta) if room < 0 else 0
 
     safe_qty = max(0, safe_qty)
     
+    # 4. 精算【SPY 對沖建議】
+    # 這裡的建議會更具「前瞻性」，防禦 IV 飆升導致的 Delta 爆炸
     suggested_hedge_spy = 0.0
-    if safe_qty == 0:
-        projected_delta = current_delta + pos_impact_per_unit
-        if projected_delta > max_safe_shares:
-            suggested_hedge_spy = projected_delta - max_safe_shares
-        elif projected_delta < -max_safe_shares:
-            suggested_hedge_spy = projected_delta - (-max_safe_shares)
+    projected_delta = current_delta + (unit_weighted_delta * side_multiplier * max(1, safe_qty))
+    
+    # 根據波動率係數進一步強化對沖力道
+    if projected_delta > max_safe_shares:
+        suggested_hedge_spy = (projected_delta - max_safe_shares) * iv_adjustment_ratio
+    elif projected_delta < -max_safe_shares:
+        suggested_hedge_spy = (projected_delta - (-max_safe_shares)) * iv_adjustment_ratio
         
     return safe_qty, round(float(suggested_hedge_spy), 1)
 

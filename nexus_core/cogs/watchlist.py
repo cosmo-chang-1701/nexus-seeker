@@ -178,11 +178,13 @@ class WatchlistCog(commands.Cog):
             # B. 🚀 執行風控優化計算
             # 注意：這裡傳入原始 weighted_delta，優化函數內部應處理 side_multiplier
             safe_qty, hedge_spy = optimize_position_risk(
-                current_total_delta,
-                result.get('weighted_delta', 0.0),
-                user_capital,
-                spy_price,
-                risk_limit_pct=15.0,
+                current_delta=current_total_delta,
+                unit_weighted_delta=result.get('weighted_delta', 0.0),
+                user_capital=user_capital,
+                spy_price=spy_price,
+                stock_iv=result.get('iv', 0.15), # TODO: 獲取 SPY IV
+                spy_iv=0.15, # TODO: 獲取 VIX
+                risk_limit_pct=15.0, # TODO: 根據用戶風險偏好調整
                 strategy=strategy # 傳入策略以利內部判斷方向
             )
 
