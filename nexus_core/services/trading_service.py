@@ -229,6 +229,8 @@ class TradingService:
                     if now_ts - user_context.last_rehedge_alert_time > 3600:
                         rehedge_advice = hedging.evaluate_rehedge_necessity(user_context, data)
                         if rehedge_advice:
+                            # 🚀 應用 STHE 動態 Tau 校正
+                            rehedge_advice = hedging.get_tuned_risk_advice(uid, rehedge_advice)
                             data['rehedge_info'] = rehedge_advice
                             # 更新資料庫中的 last_rehedge_alert_time 以防止重複發送
                             database.upsert_user_config(uid, last_rehedge_alert_time=now_ts)
@@ -366,6 +368,15 @@ class TradingService:
             )
             
             if report_lines:
+                # 🚀 執行 STHE 每日自動優化排程
+                # 1. 結算今日有效性
+                await asyncio.to_thread(hedging.calculate_daily_effectiveness, uid)
+                # 2. 滾動更新 Tau 係數
+                new_tau = await asyncio.to_thread(hedging.calculate_dynamic_tau, uid)
+                
+                # 將 Tau 注入分析字典
+                hedge_analysis['dynamic_tau'] = new_tau
+                
                 results[uid] = {
                     "report_lines": report_lines,
                     "hedge_analysis": hedge_analysis

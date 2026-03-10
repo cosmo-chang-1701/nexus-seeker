@@ -74,3 +74,34 @@ def update_portfolio_greeks(trade_id: int, weighted_delta: float, theta: float, 
     conn.commit()
     conn.close()
     return True
+
+# ==========================================
+# 對沖歷史紀錄 (Hedge History)
+# ==========================================
+def add_hedge_history(user_id, date, alpha_pnl, hedge_pnl, effectiveness, tau_applied):
+    """紀錄每日對沖績效與使用的 Tau 係數"""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO hedge_history (user_id, date, alpha_pnl, hedge_pnl, effectiveness, tau_applied)
+        VALUES (?, ?, ?, ?, ?, ?)
+    ''', (user_id, date, alpha_pnl, hedge_pnl, effectiveness, tau_applied))
+    conn.commit()
+    conn.close()
+
+def get_hedge_history(user_id, limit=7):
+    """獲取過去 N 天的對沖績效紀錄"""
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT date, alpha_pnl, hedge_pnl, effectiveness, tau_applied 
+        FROM hedge_history 
+        WHERE user_id = ? 
+        ORDER BY date DESC 
+        LIMIT ?
+    ''', (user_id, limit))
+    rows = cursor.fetchall()
+    conn.close()
+    # 返回時按日期升序 (從舊到新)，利於後續移動平均計算
+    return [dict(row) for row in rows][::-1]

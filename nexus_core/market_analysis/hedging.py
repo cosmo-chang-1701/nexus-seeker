@@ -262,13 +262,110 @@ def analyze_hedge_performance(user_id: int) -> Dict[str, Any]:
     # 反映對沖部位抵銷了多少比例的系統性曝險
     hedge_ratio = abs(hedge_delta / alpha_delta) if alpha_delta != 0 else 0.0
     
-    # 3. 淨損益與歸因
-    net_pnl = alpha_pnl + hedge_pnl
-    
+    # 3. 計算對沖有效性 (Effectiveness Score)
+    # 定義：1 - abs(Net_PnL / Alpha_PnL) -> 越接近 1 代表對沖越精準（抵銷了 Beta 但保留了 Alpha）
+    effectiveness = 0.0
+    if abs(alpha_pnl) > 0:
+        effectiveness = 1.0 - (abs(net_pnl) / abs(alpha_pnl))
+        effectiveness = max(0.0, min(1.0, effectiveness)) # 限制在 0~1
+
+    # 4. 淨損益與歸因
     return {
         "net_pnl": round(net_pnl, 2),
         "alpha_contribution": round(alpha_pnl, 2),
         "hedge_contribution": round(hedge_pnl, 2),
         "hedge_ratio": round(hedge_ratio, 4),
+        "effectiveness": round(effectiveness, 4),
         "status": "OVER_HEDGED" if hedge_ratio > 1.1 else "UNDER_HEDGED" if hedge_ratio < 0.8 else "OPTIMAL"
     }
+
+# ==========================================
+# Self-Tuning Hedge Engine (STHE)
+# ==========================================
+
+import numpy as np
+from datetime import datetime
+
+def calculate_daily_effectiveness(user_id: int):
+    """
+    每日收盤後執行：計算今日對沖有效性並存入歷史紀錄。
+    """
+    perf = analyze_hedge_performance(user_id)
+    u_ctx = database.get_full_user_context(user_id)
+    
+    today_str = datetime.now().strftime('%Y-%m-%d')
+    
+    database.add_hedge_history(
+        user_id=user_id,
+        date=today_str,
+        alpha_pnl=perf['alpha_contribution'],
+        hedge_pnl=perf['hedge_contribution'],
+        effectiveness=perf['effectiveness'],
+        tau_applied=u_ctx.dynamic_tau
+    )
+    
+    logger.info(f"成功紀錄 User {user_id} 今日對沖績效: Effectiveness={perf['effectiveness']:.2f}")
+    return perf
+
+def calculate_dynamic_tau(user_id: int, lookback_days: int = 7) -> float:
+    """
+    基於過去 N 天的對沖有效性數據，計算自動優化後的 Tau 係數。
+    """
+    # 1. 從資料庫獲取歷史有效性紀錄
+    history = database.get_hedge_history(user_id, limit=lookback_days)
+    if not history or len(history) < 3:
+        return 1.0 # 數據不足時保持基準值
+
+    # 2. 提取有效性分數 (Effectiveness) 與 PnL 分布
+    scores = [h['effectiveness'] for h in history]
+    alpha_pnls = [h['alpha_pnl'] for h in history]
+    hedge_pnls = [h['hedge_pnl'] for h in history]
+
+    # 使用加權移動平均 (越近期的數據權重越高)
+    weights = np.linspace(0.5, 1.0, len(scores))
+    avg_effectiveness = np.average(scores, weights=weights)
+    
+    # 取得目前的 Tau
+    u_ctx = database.get_full_user_context(user_id)
+    current_tau = u_ctx.dynamic_tau
+    
+    # 3. 執行邏輯判定
+    new_tau = current_tau
+    
+    # 情境 A：Alpha 極強但對沖嚴重拖累 (Hedge Drag)
+    if avg_effectiveness < 0.5 and sum(alpha_pnls) > 0 and sum(hedge_pnls) < 0:
+        new_tau -= 0.05
+        logger.info(f"User {user_id} 偵測到對沖拖累 (Hedge Drag)，Tau 下調 0.05")
+        
+    # 情境 B：淨損益為負且對沖力道不足以抵銷回撤 (Under-hedged)
+    elif sum(alpha_pnls) + sum(hedge_pnls) < 0 and avg_effectiveness < 0.7:
+        new_tau += 0.10
+        logger.info(f"User {user_id} 偵測到對沖不足 (Under-hedged)，Tau 上調 0.10")
+
+    # 4. 安全限制 (防止 Tau 暴走)
+    final_tau = float(np.clip(new_tau, 0.5, 1.5))
+    
+    # 更新資料庫
+    if final_tau != current_tau:
+        database.upsert_user_config(user_id, dynamic_tau=final_tau)
+        
+    return final_tau
+
+def get_tuned_risk_advice(user_id: int, raw_advice: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    將 NRO 原始建議經過動態 Tau 修正。
+    """
+    u_ctx = database.get_full_user_context(user_id)
+    tau = u_ctx.dynamic_tau
+    
+    if not raw_advice or raw_advice.get('action') != 'RE_HEDGE':
+        return raw_advice
+        
+    # 修正對沖口數
+    original_qty = raw_advice.get('suggested_spy_qty', 0)
+    tuned_qty = original_qty * tau
+    
+    raw_advice['suggested_spy_qty'] = round(tuned_qty, 2)
+    raw_advice['reason'] += f" (由 STHE 引擎自動校正係數: {tau:.2f})"
+    
+    return raw_advice

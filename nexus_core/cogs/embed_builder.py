@@ -503,6 +503,11 @@ def create_portfolio_report_embed(report_lines, hedge_analysis=None):
     # 🚀 欄位三：對沖有效性分析 (新增)
     if hedge_analysis:
         build_hedge_analysis_field(embed, hedge_analysis)
+        
+        # 如果有 Tau 係數更新資訊，則額外提示
+        dynamic_tau = getattr(embed, 'dynamic_tau', None) or (hedge_analysis.get('dynamic_tau') if isinstance(hedge_analysis, dict) else None)
+        if dynamic_tau:
+            embed.add_field(name="🧬 STHE 自動優化狀態", value=f"目前對沖調教因子 $\\tau$: `{dynamic_tau:.2f}`", inline=False)
 
     embed.set_footer(text="Argo Risk Engine v2.5 | 基準標的: SPY")
     
@@ -618,12 +623,19 @@ def build_hedge_analysis_field(embed, analysis):
     在 embed 中加入對沖分析區塊。
     """
     status_emoji = "✅" if analysis['status'] == "OPTIMAL" else "⚠️"
+    effectiveness = analysis.get('effectiveness', 0.0)
     
+    # 決定有效性評價
+    if effectiveness >= 0.8: eff_text = "🎯 精準"
+    elif effectiveness >= 0.6: eff_text = "⚖️ 適中"
+    else: eff_text = "🌪️ 偏差"
+
     content = (
         f"🔹 **個股 Alpha 損益**: `${analysis['alpha_contribution']:,.2f}`\n"
         f"🔸 **對沖 Beta 損益**: `${analysis['hedge_contribution']:,.2f}`\n"
         f"📊 **對沖比率 (HR)**: `{analysis['hedge_ratio']:.2%}` {status_emoji}\n"
-        f"🏁 **最終淨損益**: `${analysis['net_pnl']:,.2f}`"
+        f"🧩 **對沖有效性 (ES)**: `{effectiveness:.2%}` ({eff_text})\n"
+        f"🏁 **最終淨損益**: **`${analysis['net_pnl']:,.2f}`**"
     )
     
     embed.add_field(name="🛡️ 對沖有效性診斷", value=content, inline=False)
