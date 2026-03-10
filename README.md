@@ -40,7 +40,7 @@
 | 📅 **排程推播** | 每項排程任務觸發前，自動以 Discord Timestamp 私訊通知所有使用者下次執行時間（自動轉換為使用者當地時區）。 |
 | 🤖 **LLM NLP 風控** | 整合 OpenAI-compatible 推論引擎（支援自架 Inference Server），以 Structured Output（Pydantic Schema）對新聞與 Reddit 情緒進行毒性分析，黑天鵝事件或散戶狂熱時自動否決賣方訊號。 |
 | 🕸️ **Reddit 邊緣爬蟲** | 透過 Cloudflare Tunnel 呼叫本地端 `nexus_edge_scraper`（Playwright + BeautifulSoup），即時爬取 Reddit 散戶情緒與共識分數。 |
-| 📰 **新聞聚合** | 透過 Yahoo Finance API 即時擷取標的近期官方新聞標題，作為 LLM 風控審查的輸入源。 |
+| 📰 **新聞聚合** | 透過 Finnhub Company News API 即時擷取標的近期官方新聞標題，作為 LLM 風控審查的輸入源。 |
 | 🎯 **Delta 精準掃描** | 內建 Black-Scholes-Merton 引擎（`py_vollib`，含股息率 `q` 校正）自動計算目標 Delta 的最佳履約價（例：−0.20 ≈ 80% 勝率）。 |
 | 📡 **NYSE 自動排程器** | 整合 `pandas_market_calendars` 並處理日光節約時間與假日 — 動態睡眠至下一個交易日目標時刻。 |
 | 🔄 **30 分鐘動態巡邏** | 盤中掃描器以 30 分鐘心跳循環運作，僅在 NYSE 常規交易時段（10:00 ET 後）執行掃描，避開開盤初期造市商無報價期。 |
@@ -56,14 +56,18 @@
 | 🌐 **Beta 加權宏觀風險** | 盤後報告計算投資組合等效 SPY Delta（Beta-Weighted），當淨曝險超過 ±50 股時觸發避險建議。 |
 | 📉 **Gamma 脆性評估** | 以二階 Beta-Weighted 平方加權追蹤投資組合淨 Gamma，偵測非線性加速度風險；淨 Gamma < −20 時觸發脆性警告，建議注入正 Gamma 緩衝。 |
 | 🔥 **資金熱度極限** | 計算投資組合保證金佔總資金比例（Portfolio Heat），> 30% 警戒、> 50% 爆倉預警，防止過度槓桿。 |
-| � **What-if 曝險模擬** | 掃描期權機會時，Nexus Risk Optimizer (NRO) 預先模擬建倉後對整體投資組合的 Delta 衝擊，動態防範曝險破表風險。 |
+| 🛡️ **What-if 曝險模擬** | 掃描期權機會時，Nexus Risk Optimizer (NRO) 預先模擬建倉後對整體投資組合的 Delta 衝擊，動態防範曝險破表風險。 |
 | 🛡️ **自動對沖指令** | 當 NRO 偵測建倉計畫超標時，將反向下達精準的基準與數量避險指示（例：建議賣出 2.5 股 SPY），提供全盤化應對方案。 |
 | 👻 **虛擬交易室 (VTR)** | 內建 GhostTrader 引擎，自動根據量化訊號建倉，並自動追蹤合約部位。達停利/停損條件會自動平倉，Delta 擴張時自動轉倉。 |
 | 📊 **VTR 績效週報** | 每週五收盤後 (17:05 ET)，自動彙整個人專屬的 VTR 實測交易績效並透過私訊推送週報。 |
 | ⚡ **Finnhub 高效報價** | 無縫整合 Finnhub 高效服務，取代不穩定的 Yahoo Finance，徹底排除 ETF 資料請求 404 問題，並大幅提昇股息與財報日的資料準確度。 |
-| �💹 **Theta 現金流精算** | 每日 Theta 收益率精算，對照機構級 0.05%–0.3% 標準，確保時間價值曝險合理。 |
+| 💹 **Theta 現金流精算** | 每日 Theta 收益率精算，對照機構級 0.05%–0.3% 標準，確保時間價值曝險合理。 |
 | 🕸️ **相關性矩陣風險** | 下載 60 日收盤價建立 Pearson 相關係數矩陣，偵測 ρ > 0.75 的高度重疊板塊並提示集中風險。 |
 | 💾 **資料持久化** | SQLite 搭配 Docker Volume — 容器重啟零資料遺失。內建版本遷移引擎（Migration Engine），Schema 變更全自動化。 |
+| 🧮 **Greeks 持久化與匯總** | 持倉的 Greeks（Weighted Delta、Theta、Gamma）持久化至資料庫，`UserContext` 一次性匯總真實持倉與虛擬交易的 Greeks 指標，極大化 I/O 效率。 |
+| ⚙️ **個人化風險上限** | 每位使用者可自訂風險限制（Risk Limit %），預設 15%，範圍 1%–50%，由 NRO 引擎動態調控。 |
+| 💹 **即時報價查詢** | `/quote` 指令透過 Finnhub 即時取得標的報價（含現價、漲跌幅、今日高低與前收盤價）。 |
+| 🏗️ **Service Layer 分治** | `TradingService` 集中式業務邏輯層，將 Discord UI 層與核心計算徹底解耦，職責分明。 |
 
 ---
 
@@ -82,24 +86,30 @@ Discord 使用者 ──► Discord API ──► NexusBot (bot.py)
                      └────────┬────────┘                  │
                               │                           │
                      ┌────────▼────────┐          ┌───────▼───────┐
-                     │    database/    │          │  market_time  │ ← NYSE 日曆
-                     │  (SQLite PKG)   │          │  (動態排程)   │
-                     │ ┌─────────────┐ │          └───────────────┘
+                     │  TradingService │          │  market_time  │ ← NYSE 日曆
+                     │ (業務邏輯中樞)  │          │  (動態排程)   │
+                     └────────┬────────┘          └───────────────┘
+                              │                           │
+                     ┌────────▼────────┐          ┌───────▼───────┐
+                     │    database/    │          │  market_math  │ ← Facade
+                     │  (SQLite PKG)   │          │  (re-export)  │
+                     │ ┌─────────────┐ │          └───────┬───────┘
                      │ │ migrations/ │ │                  │
                      │ └─────────────┘ │          ┌───────▼───────┐
-                     └────────────────┘          │  market_math  │ ← Facade
-                                                  │  (re-export)  │
-                              │                   └───────┬───────┘
-                              │                           │
-                     ┌────────▼────────┐        ┌─────────▼─────────┐
-                     │   services/     │        │  market_analysis  │
-                     │ ┌─────────────┐ │        │  (Python Package) │
-                     │ │ llm_service │ │        ├───────────────────┤
-                     │ │ news_service│ │        │  strategy.py      │
-                     │ │reddit_serv. │─│─ ─ ─ ► │  portfolio.py     │
-                     │ └─────────────┘ │  feed  │  greeks.py        │
-                     └────────────────┘        │  data.py          │
-                              │                 └───────────────────┘
+                     └────────────────┘          │market_analysis │
+                                                  │ (Python PKG)  │
+                              │                   ├───────────────┤
+                     ┌────────▼────────┐          │  strategy.py  │
+                     │   services/     │          │  portfolio.py │
+                     │ ┌─────────────┐ │          │  greeks.py    │
+                     │ │trading_serv.│ │          │  risk_engine  │
+                     │ │ llm_service │ │          │  ghost_trader │
+                     │ │market_data  │ │          │  hedging.py   │
+                     │ │ news_service│ │   feed   │  margin.py    │
+                     │ │reddit_serv. │─│─ ─ ─ ►   │  data.py      │
+                     │ └─────────────┘ │          │  report_fmt   │
+                     └────────────────┘          └───────────────┘
+                              │
                    Cloudflare Tunnel
                               │
                      ┌────────▼────────┐
@@ -137,8 +147,9 @@ Discord 使用者 ──► Discord API ──► NexusBot (bot.py)
 | **邊緣爬蟲** | `playwright`（Headless Chromium 渲染）、`beautifulsoup4` + `lxml`（HTML 解析）、`fastapi`（本地 API） |
 | **網路** | `httpx`（非同步 HTTP 客戶端）、Cloudflare Tunnel（安全互連） |
 | **排程** | `pandas_market_calendars`、`zoneinfo` |
-| **資料庫** | SQLite — 以 `user_id` 為複合唯一鍵，內建版本遷移引擎 |
+| **資料庫** | SQLite — 以 `user_id` 為複合唯一鍵，內建版本遷移引擎（8 版遷移） |
 | **基礎架構** | Docker、Docker Compose、GitHub Actions CI/CD → DigitalOcean |
+| **套件管理** | `pyproject.toml`（PEP 621 標準） |
 
 ---
 
@@ -148,6 +159,7 @@ Discord 使用者 ──► Discord API ──► NexusBot (bot.py)
 
 - [Docker](https://docs.docker.com/get-docker/) & [Docker Compose](https://docs.docker.com/compose/install/)
 - 一組 [Discord Bot Token](https://discord.com/developers/applications)
+- 一組 [Finnhub API Key](https://finnhub.io/)（必填：即時行情與基本面數據）
 - （可選）OpenAI-compatible LLM 推論端點（用於 NLP 風控）
 - （可選）Cloudflare Tunnel（用於 Reddit 邊緣爬蟲互連）
 
@@ -226,14 +238,21 @@ docker compose logs -f
 
 | 指令 | 說明 | 範例 |
 |---|---|---|
-| `/scan_news` | 快速掃描標的的 Yahoo Finance 官方新聞 | `symbol: TSLA` `limit: 5` |
+| `/scan_news` | 快速掃描標的的 Finnhub 官方新聞 | `symbol: TSLA` `limit: 5` |
 | `/scan_reddit` | 即時爬取標的的 Reddit 散戶情緒（過去 24 小時） | `symbol: PLTR` `limit: 5` |
+| `/quote` | 透過 Finnhub 獲取即時報價（現價、漲跌幅、今日高低、前收盤） | `symbol: AAPL` |
 
 ### 🛠️ 管理員
 
 | 指令 | 說明 |
 |---|---|
 | `/force_scan` | 立即手動執行全站掃描（不論開盤時間），結果私訊分發給所有使用者（繞過 4 小時冷卻機制） |
+
+### 🔧 開發者
+
+| 指令 | 說明 |
+|---|---|
+| `/test_risk_ui` | 模擬高風險標的掃描資料，驗證 Beta、加權股數與風險 UI 渲染邏輯 |
 
 <details>
 <summary><strong><code>/add_trade</code> 參數</strong></summary>
@@ -360,9 +379,9 @@ nexus-seeker/                        # Monorepo 根目錄
 │   │   ├── data.py                  # 財報日期查詢與選擇權價格獲取 (Finnhub & yfinance)
 │   │   ├── margin.py                # 投資組合保證金耗能核算模組
 │   │   ├── greeks.py                # Black-Scholes-Merton Delta 與 Greeks 計算引擎
-│   │   ├── hedging.py               # 投資組合避險邏輯與 Delta 中性計算
+│   │   ├── hedging.py               # 投資組合避險邏輯、Delta 中性計算與市場位階感知對沖
 │   │   ├── ghost_trader.py          # GhostTrader — VTR 自動建倉、平倉、轉倉核心邏輯
-│   │   ├── risk_engine.py           # NRO 投資組合防禦管線、What-if 新增風險模擬與避險對沖計算
+│   │   ├── risk_engine.py           # NRO 投資組合防禦管線、What-if 新增風險模擬與宏觀修正矩陣
 │   │   ├── report_formatter.py      # 將量化數值格式化為 Discord Embed 文字流
 │   │   ├── strategy.py              # 技術面掃描 + 多道量化濾網管線 + NRO 合約篩選
 │   │   └── portfolio.py             # 盤後結算引擎流程編排 (Orchestrator)、宏觀風險評估
@@ -371,50 +390,45 @@ nexus-seeker/                        # Monorepo 根目錄
 │   │   ├── core.py                  # 版本遷移引擎 (Migration Engine) — 自動掃描 & 套用 Schema 變更
 │   │   ├── portfolio.py             # 投資組合 CRUD
 │   │   ├── watchlist.py             # 觀察清單 CRUD
-│   │   ├── user_settings.py         # 使用者設定 CRUD (資金規模、總體加權曝險查詢)
+│   │   ├── user_settings.py         # 使用者設定 CRUD (資金、風險上限、UserContext 匯總)
 │   │   ├── virtual_trading.py       # 虛擬交易室 (VTR) 歷史與即時數據 CRUD
 │   │   └── migrations/              # 版本遷移腳本目錄
 │   │       ├── v001_init.py         # 初始 Schema — portfolio、watchlist、user_settings
 │   │       ├── v002_add_stock_cost.py  # 新增現股成本欄位
 │   │       ├── v003_remove_is_covered.py  # 移除 is_covered 欄位
-│   │       └── v004_add_use_llm.py  # 新增 LLM 開關欄位
-│   ├── services/                    # 外部服務整合層
-│   │   ├── market_data_service.py   # Finnhub 報價基礎服務 (避免 yfinance 404 問題)
+│   │       ├── v004_add_use_llm.py  # 新增 LLM 開關欄位
+│   │       ├── v005_virtual_trading.py  # 建立 virtual_trades 表 (VTR)
+│   │       ├── v006_update_watchlist_llm_default.py  # 將 watchlist.use_llm 預設值改為啟用
+│   │       ├── v007_add_risk_limit.py  # 新增使用者風險限制欄位 (risk_limit_pct)
+│   │       └── v008_add_greeks_to_trades.py  # 為 portfolio/virtual_trades 新增 Greeks 欄位
+│   ├── services/                    # 外部服務整合與業務邏輯層
+│   │   ├── trading_service.py       # TradingService — 集中式業務邏輯 (掃描、VTR、盤後報告)
+│   │   ├── market_data_service.py   # Finnhub 報價服務 (含 SMA/EMA 快取、Rate Limiting)
 │   │   ├── llm_service.py           # LLM NLP 風控審查 — Structured Output (Pydantic Schema)
 │   │   ├── news_service.py          # Finnhub 歷史 / 突發新聞擷取
 │   │   └── reddit_service.py        # Reddit 情緒 — 透過 Cloudflare Tunnel 呼叫本地爬蟲
 │   ├── cogs/                        # Discord 擴充模組 (Cog 分層)
-│   │   ├── trading.py               # 背景排程任務 — 盤前風控、盤中掃描、VTR監控、盤後結算與每週週報
+│   │   ├── trading.py               # 背景排程任務 — 盤前風控、盤中掃描、VTR 監控、盤後結算與每週週報
 │   │   ├── watchlist.py             # 觀察清單斜線指令 — CRUD + NRO 手動掃描與 What-if 展示
-│   │   ├── portfolio.py             # 投資組合與 VTR 斜線指令 — 實單與虛擬交易追蹤、資金設定
-│   │   ├── research.py              # 研究斜線指令 — 新聞掃描、Reddit 情緒掃描
-│   │   ├── debug.py                 # 開發者除錯與健康檢測工具 (Latency 診斷)
+│   │   ├── portfolio.py             # 投資組合與 VTR 斜線指令 — 實單與虛擬交易追蹤、資金與風險設定
+│   │   ├── research.py              # 研究斜線指令 — 新聞掃描、Reddit 情緒掃描、即時報價查詢
+│   │   ├── debug.py                 # 開發者除錯與風險 UI 視覺驗證工具
 │   │   └── embed_builder.py         # Discord UI/UX 生成器 — 渲染圖文並茂的量化戰情面板
 │   ├── ui/                          # Discord UI 元件
 │   │   └── watchlist.py             # 觀察清單分頁瀏覽 (Pagination View)
 │   ├── tests/                       # 測試套件
-│   │   ├── test_strategy.py         # 策略模組單元測試
-│   │   ├── test_portfolio.py        # 盤後結算引擎單元測試
-│   │   ├── test_market_time.py      # 排程時間計算測試
-│   │   ├── test_database.py         # 資料庫 CRUD 測試
-│   │   ├── test_news_service.py     # 新聞服務單元測試
-│   │   ├── test_send_embed.py       # Embed 建構測試
-│   │   ├── test_check_portfolio_status.py        # 持倉狀態檢查測試
-│   │   ├── test_dynamic_after_market_report.py   # 盤後報告整合測試
-│   │   ├── test_four_scenarios.py                # 四大策略場景測試
-│   │   ├── test_pre_market_risk_monitor.py       # 盤前風控監控測試
-│   │   └── verify_market_functions.py            # 量化函數整合驗證
+│   │   └── final_system_check.py    # SMA 快取、自主對沖位階與 Delta Gap 整合驗證
 │   ├── data/                        # SQLite 資料庫 (Docker Volume 掛載)
 │   ├── Dockerfile
 │   ├── docker-compose.yml
-│   ├── requirements.txt
+│   ├── pyproject.toml               # PEP 621 套件定義與依賴管理
 │   └── .env.example
 │
 ├── nexus_edge_scraper/              # 邊緣爬蟲服務 (本地端獨立部署)
 │   ├── local_api.py                 # FastAPI + Playwright — Reddit 頁面渲染與結構化爬取
 │   ├── Dockerfile
 │   ├── docker-compose.yml
-│   ├── requirements.txt
+│   ├── pyproject.toml               # PEP 621 套件定義與依賴管理
 │   └── .env.example
 │
 ├── .github/
@@ -432,8 +446,8 @@ nexus-seeker/                        # Monorepo 根目錄
 測試使用 Python `unittest` 框架，在 Docker 容器中執行：
 
 ```bash
-# 執行單一測試模組
-docker compose run --rm -v "$(pwd):/app" nexus_seeker python -m unittest tests.test_strategy
+# 執行系統整合驗證 (SMA 快取、對沖位階、Delta Gap)
+docker compose run --rm -v "$(pwd):/app" nexus_seeker python -m unittest tests.final_system_check
 
 # 執行所有測試
 docker compose run --rm -v "$(pwd):/app" nexus_seeker python -m unittest discover -s tests -v
@@ -461,6 +475,10 @@ docker compose run --rm -v "$(pwd):/app" nexus_seeker python -m unittest discove
 - [x] **Nexus Risk Optimizer (NRO)** — What-if 建倉模擬與部位重組，自動計算 SPY 避險對沖口數。
 - [x] **Finnhub 行情升級** — 告別 yfinance 頻繁 404，全改接穩定金融級 API，含即時報價、股息率與財報日程。
 - [x] **虛擬交易室 (VTR)** — 內建 GhostTrader，支援策略自動回測與實時虛盤模擬紀錄，並提供每週績效週報。
+- [x] **Greeks 持久化** — 持倉 Greeks (Delta/Theta/Gamma) 寫入資料庫，UserContext 一站式匯總真實與虛擬交易指標。
+- [x] **個人化風險上限** — 使用者可透過 `/settings` 自訂風險限制 (1%–50%)，NRO 動態調控。
+- [x] **即時報價指令** — `/quote` 透過 Finnhub 即時查詢標的報價。
+- [x] **Service Layer 重構** — `TradingService` 將 Discord UI 與業務邏輯徹底解耦。
 - [ ] **MCP Server** — 將核心量化模組封裝為標準 Model Context Protocol 工具，供外部 AI 代理使用。
 - [ ] **券商 API 整合** — Interactive Brokers Gateway 實現全自動下單執行（訊號 → 執行 → 平倉，零人工介入）。
 
