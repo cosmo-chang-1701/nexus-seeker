@@ -242,6 +242,32 @@ def _add_risk_optimization_fields(embed, data, user_capital=None):
         opt_block = "```diff\n" + "\n".join(actions) + "\n```"
         embed.add_field(name=opt_title, value=f"{opt_block}\n\u200b", inline=False)
 
+def _add_hedge_unlock_fields(embed, data):
+    """添加對沖解除建議欄位 (Hedge Unlocking)"""
+    unlock = data.get('hedge_unlock')
+    if not unlock:
+        return
+
+    symbol = data.get('symbol', 'N/A')
+    suggested_qty = unlock.get('reduce_spy_qty', 0)
+    new_delta = unlock.get('new_delta', 0.0)
+    reason = unlock.get('reason', '')
+    risk_note = unlock.get('risk_note', '')
+
+    # 依照使用者要求的文案格式
+    unlock_text = (
+        f"偵測到 **{symbol}** 強勢突破。目前您的 SPY 對沖正在產生 Hedge Drag。\n\n"
+        f"✅ **建議動作：** 買回/平倉 `{suggested_qty}` 股 SPY。\n"
+        f"🚀 **預計效應：** 釋放 Beta 動能，預計提升總組合 Delta 至 `{new_delta:+.1f}`。\n"
+        f"🛡️ **防禦補償：** {risk_note}\n\u200b"
+    )
+    
+    embed.add_field(
+        name=f"🔓 對沖優化建議 ({reason})",
+        value=unlock_text,
+        inline=False
+    )
+
 def _add_ai_verification_fields(embed, data):
     """添加 AI 驗證決策欄位"""
     ai_decision = data.get('ai_decision')
@@ -341,6 +367,7 @@ def create_scan_embed(data, user_capital=100000.0):
     
     # 🚀 執行優化回饋顯示
     _add_risk_optimization_fields(embed, data, user_capital)
+    _add_hedge_unlock_fields(embed, data)
     
     add_news_field(embed, data.get('news_text'))
     add_reddit_field(embed, data.get('reddit_text'))

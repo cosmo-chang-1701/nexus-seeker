@@ -1,5 +1,7 @@
-import logging
+from typing import Dict, Any, Optional
 from services import market_data_service
+from database.user_settings import UserContext
+from services.alert_filter import TrendState, MTFResult
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +68,58 @@ def calculate_autonomous_hedge(current_delta: float, target_delta: float, spy_pr
     qty = round(abs(delta_gap) / 50) 
     action = "BTO PUT" if delta_gap < 0 else "BTO CALL"
     
+
+def suggest_hedge_unlock(u_ctx: UserContext, result: Dict[str, Any], mtf: MTFResult) -> Optional[Dict[str, Any]]:
+    """
+    評估是否建議解除 SPY 對沖 (Hedge Unlocking)。
+    
+    觸發條件矩陣：
+    1. 趨勢共振 (MTF Aligned): 日線與小時線皆處於多頭排列。
+    2. 動能強度: Price 脫離 EMA 8 比例 > 1.5%。
+    3. 環境穩定: VIX < 18 且目前處於低波環境。
+    4. 部位安全性: 個人 Beta-Delta > 0 (獲利貢獻者)。
+    """
+    # 1. 基礎條件：必須是多頭共振
+    if not mtf.is_aligned or mtf.confirmed_direction != TrendState.BULLISH:
+        return None
+    
+    # 2. 環境穩定性檢查 (VIX)
+    # result 預期包含 macro_vix 與 macro_vix_change (來自 trading_service)
+    current_vix = result.get('macro_vix', 18.0)
+    vix_change = result.get('macro_vix_change', 0.0)
+    
+    # 矩陣條件：VIX < 18 且 ΔVIX < 0 (波動率收縮)
+    if current_vix >= 18 or vix_change >= 0:
+        return None
+
+    # 3. 動能強度檢查 (Distance from EMA 8)
+    # analyze_symbol 回傳的 ema_8 與 price
+    price = result.get('price', 0.0)
+    ema_8 = result.get('ema_8', 0.0)
+    if ema_8 > 0:
+        dist_ema8_pct = (price - ema_8) / ema_8
+        if dist_ema8_pct < 0.015: # 門檻 1.5%
+            return None
+    else:
+        return None
+
+    # 4. 位元安全性檢查 (Individual Beta-Delta > 0)
+    # 這裡指該標的的加權 Delta 是否為正 (多頭部位)
+    if result.get('weighted_delta', 0.0) <= 0:
+        return None
+
+    # 5. 帳戶是否處於淨避險狀態 (Delta < 0)
+    if u_ctx.total_weighted_delta >= 0:
+        return None
+    
+    # 6. 計算建議解除的 Delta 規模 (釋放 Beta 動能)
+    potential_delta_shift = abs(u_ctx.total_weighted_delta)
+    
     return {
-        'gap': round(delta_gap, 2),
-        'action': f"{action} {qty} 口 SPY" if qty > 0 else None
+        "action": "UNLOCK_HEDGE",
+        "symbol": result.get('symbol'),
+        "reason": "MTF 多頭共振 + VIX 低位 + 強勢動能突破",
+        "reduce_spy_qty": round(potential_delta_shift, 2),
+        "new_delta": round(u_ctx.total_weighted_delta + potential_delta_shift, 2),
+        "risk_note": "解除對沖將增加系統化曝險，建議設定 EMA 8 作為移動停利線"
     }

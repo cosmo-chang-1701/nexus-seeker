@@ -14,6 +14,7 @@ class MacroContext:
     """宏觀環境容器"""
     vix: float        # 波動率指數
     oil_price: float  # WTI 原油價格
+    vix_change: float # VIX 變動百分比
 
 def evaluate_defense_status(quantity: float, opt_type: str, pnl_pct: float, current_delta: float, dte: int) -> str:
     """

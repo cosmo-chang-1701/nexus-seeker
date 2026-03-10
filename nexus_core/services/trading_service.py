@@ -95,11 +95,12 @@ class TradingService:
             spy_price = df_spy['Close'].iloc[-1] if not df_spy.empty else 670.0
             macro_data = MacroContext(
                 vix=macro_raw.get('vix', 18.0),
-                oil_price=macro_raw.get('oil', 75.0)
+                oil_price=macro_raw.get('oil', 75.0),
+                vix_change=macro_raw.get('vix_change', 0.0)
             )
         except Exception as e:
             logger.error(f"全域基準資料獲取失敗: {e}")
-            df_spy, spy_price, macro_data = None, 670.0, MacroContext(vix=20.0, oil_price=85.0)
+            df_spy, spy_price, macro_data = None, 670.0, MacroContext(vix=20.0, oil_price=85.0, vix_change=0.0)
 
         # 2. 提取不重複標的進行「併行批次掃描」
         unique_targets = list(set((sym, stock_cost, use_llm) for uid, sym, stock_cost, use_llm in all_watchlists))
@@ -201,9 +202,22 @@ class TradingService:
                         'projected_exposure_pct': round(projected_exposure_pct, 2),
                         'spy_price': spy_price,
                         'macro_vix': macro_data.vix,
+                        'macro_vix_change': macro_data.vix_change,
                         'macro_oil': macro_data.oil_price,
                         'uid': uid
                     })
+
+                    # 🚀 新增：對沖解除建議 (Hedge Unlocking)
+                    # 只有在偵測到 EMA CROSSOVER 且為多頭時才評估
+                    ema_signals = data.get('ema_signals', [])
+                    for sig in ema_signals:
+                        if sig.get('type') == 'CROSSOVER' and sig.get('direction') == 'BULLISH':
+                            from services.alert_filter import validate_mtf_trend
+                            mtf = await asyncio.to_thread(validate_mtf_trend, sym, sig)
+                            unlock_advice = hedging.suggest_hedge_unlock(user_context, data, mtf)
+                            if unlock_advice:
+                                data['hedge_unlock'] = unlock_advice
+                            break
                     
                     valid_user_alerts.append(data)
             
