@@ -4,11 +4,13 @@ from discord import app_commands
 import asyncio
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
+from typing import Dict
 import logging
 
 import database
 import market_time
 from services.trading_service import TradingService
+from services.alert_filter import should_send_priority_alert
 from cogs.embed_builder import create_scan_embed, build_vtr_stats_embed, create_portfolio_report_embed
 
 ny_tz = ZoneInfo("America/New_York")
@@ -36,6 +38,9 @@ class SchedulerCog(commands.Cog):
         self.COOLDOWN_HOURS = 4
         self.EARNINGS_WARNING_DAYS = 14
         self.last_notified_target = None
+
+        # 🚀 宏觀環境快照：用於 AlertFilter 比對 VIX 變動幅度
+        self.prev_macro_state: Dict[str, float] = {}
         
         logger.info("SchedulerCog loaded. Background tasks started.")
 
@@ -178,6 +183,17 @@ class SchedulerCog(commands.Cog):
                             time_diff = (now - last_sent_time).total_seconds()
                             if time_diff < (self.COOLDOWN_HOURS * 3600):
                                 continue 
+
+                    # 🚀 條件式過濾 (AlertFilter 訊號降噪)
+                    is_priority, reason = should_send_priority_alert(data, self.prev_macro_state)
+
+                    if is_auto and not is_priority:
+                        logger.info(f"⏭️ 標的 {sym} 未達優先通知門檻，已過濾。")
+                        continue
+
+                    # 將推播理由注入 data，供 Embed 顯示
+                    if reason:
+                        data['alert_reason'] = reason
                     
                     valid_alerts.append(data)
                     if is_auto:
@@ -192,8 +208,24 @@ class SchedulerCog(commands.Cog):
                     for data in valid_alerts:
                         await self.bot.queue_dm(uid, embed=create_scan_embed(data, user_capital))
 
+            # 🚀 掃描結束後更新宏觀環境快照，供下一輪 AlertFilter 比對
+            self._update_macro_state(user_results)
+
         except Exception as e:
             logger.error(f"掃描邏輯執行錯誤: {e}")
+
+    def _update_macro_state(self, user_results: Dict[int, list]):
+        """
+        從本輪掃描結果中提取宏觀環境快照 (VIX)，
+        存入 prev_macro_state 供下一輪 AlertFilter 比對變動幅度。
+        """
+        for alerts_data in user_results.values():
+            for data in alerts_data:
+                vix = data.get('macro_vix')
+                if vix is not None:
+                    self.prev_macro_state['vix'] = vix
+                    logger.debug(f"[MacroState] 快照已更新: VIX={vix:.2f}")
+                    return  # VIX 是全域值，取到一筆即可
 
     @tasks.loop(count=1)
     async def dynamic_after_market_report(self):

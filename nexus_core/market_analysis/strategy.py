@@ -1,4 +1,5 @@
 import math
+from typing import Optional, Dict, Any
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
@@ -513,6 +514,49 @@ def evaluate_ema_trend(symbol: str, current_price: float) -> dict:
         "ema_21": ema21,
         "distance_from_21": round(distance_pct * 100, 2)
     }
+
+def detect_ema_signals(df: pd.DataFrame, window: int = 21, threshold: float = 0.005) -> Optional[Dict[str, Any]]:
+    """
+    偵測價格對 EMA 的穿透 (Crossover) 與支撐/壓力測試 (Test)。
+    """
+    if df.empty or len(df) < window + 2:
+        return None
+
+    # 計算 EMA 序列
+    ema_series = df['Close'].ewm(span=window, adjust=False).mean()
+    
+    p_curr = df['Close'].iloc[-1]
+    p_prev = df['Close'].iloc[-2]
+    ema_curr = ema_series.iloc[-1]
+    ema_prev = ema_series.iloc[-2]
+
+    signal_type = None
+    direction = None
+
+    # 1. 穿透偵測 (Crossover)
+    if p_prev < ema_prev and p_curr >= ema_curr:
+        signal_type = "CROSSOVER"
+        direction = "BULLISH" # 金叉/突破
+    elif p_prev > ema_prev and p_curr <= ema_curr:
+        signal_type = "CROSSOVER"
+        direction = "BEARISH" # 死叉/跌破
+
+    # 2. 緩衝區觸碰偵測 (Proximity Test)
+    if not signal_type:
+        dist_pct = abs(p_curr - ema_curr) / ema_curr
+        if dist_pct <= threshold:
+            signal_type = "TEST"
+            direction = "SUPPORT" if p_curr > ema_curr else "RESISTANCE"
+
+    if signal_type:
+        return {
+            "window": window,
+            "type": signal_type,
+            "direction": direction,
+            "ema_val": round(ema_curr, 2),
+            "distance_pct": round((p_curr - ema_curr) / ema_curr * 100, 2)
+        }
+    return None
 
 def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None):
     """

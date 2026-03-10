@@ -112,6 +112,20 @@ class TradingService:
                 if not res:
                     return target, None
 
+                # 🚀 新增 EMA 訊號偵測 (Crossover & Test)
+                # 為確保 EMA 準確性，獲取至少 60 天歷史數據
+                df_hist = await asyncio.to_thread(market_data_service.get_history_df, sym, "60d")
+                if not df_hist.empty:
+                    ema_8_sig = market_math.detect_ema_signals(df_hist, window=8)
+                    ema_21_sig = market_math.detect_ema_signals(df_hist, window=21)
+                    
+                    # 整合訊號至結果字典
+                    res['ema_signals'] = [sig for sig in [ema_8_sig, ema_21_sig] if sig]
+                    
+                    # 如果有 EMA 訊號，強制標註為「高價值追蹤」
+                    if res['ema_signals']:
+                        res['is_priority_alert'] = True
+
                 # 併行獲取新聞與 Reddit
                 news_task = news_service.fetch_recent_news(sym)
                 reddit_task = reddit_service.get_reddit_context(sym)

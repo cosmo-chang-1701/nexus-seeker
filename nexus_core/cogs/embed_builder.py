@@ -3,6 +3,7 @@ import logging
 
 from datetime import datetime, timezone
 from market_analysis.portfolio import calculate_beta
+from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -214,7 +215,7 @@ def _add_risk_optimization_fields(embed, data, user_capital=None):
         # 使用 yaml 語法渲染綠色背景
         sim_block = (
             f"```yaml\n"
-            f"成交後預期總曝險: {projected_pct:+.1f}%\n"
+            f"成交後的預期總曝險: {projected_pct:+.1f}%\n"
             f"符合資產組合平衡標準\n"
             f"```"
         )
@@ -260,6 +261,34 @@ def _add_ai_verification_fields(embed, data):
             
         embed.add_field(name=ai_title, value=ai_value, inline=False)
 
+def get_ema_signal_ui(ema_signals: List[Dict[str, Any]]) -> str:
+    """
+    將 EMA 訊號清單轉化為 Discord 友善的文字流。
+    """
+    if not ema_signals:
+        return "⚪ *暫無關鍵 EMA 觸碰訊號*"
+
+    ui_lines = []
+    for sig in ema_signals:
+        window = sig['window']
+        sig_type = sig['type']
+        direction = sig['direction']
+        dist = sig['distance_pct']
+        
+        # 1. 決定圖示與標題
+        if sig_type == "CROSSOVER":
+            icon = "🚀" if direction == "BULLISH" else "💀"
+            action = "強勢突破" if direction == "BULLISH" else "失守跌破"
+        else: # TEST
+            icon = "🛡️" if direction == "SUPPORT" else "🛑"
+            action = "回測支撐" if direction == "SUPPORT" else "觸碰壓力"
+
+        # 2. 格式化輸出
+        line = f"{icon} **EMA {window} {action}** (偏離: `{dist}%`)"
+        ui_lines.append(line)
+
+    return "\n".join(ui_lines)
+
 def _add_trend_and_support_fields(embed, data):
     """添加 EMA 狀態圖形化燈號欄位"""
     trend = data.get('trend', 'UNKNOWN')
@@ -285,8 +314,10 @@ def _add_trend_and_support_fields(embed, data):
 
     support_str = f"EMA 21 at ${ema21:.2f} (Gap: {distance:+.1f}%)"
 
-    trend_info = f"**Trend:** {trend_str}\n**Support:** {support_str}\n**Risk:** {risk_str}\n\u200b"
-    embed.add_field(name="🧭 趨勢與支撐 (EMA 8/21)", value=trend_info, inline=False)
+    trend_info = f"**Trend:** {trend_str}\n**Support:** {support_str}\n**Risk:** {risk_str}\n"
+    trend_info += get_ema_signal_ui(data.get('ema_signals', []))
+
+    embed.add_field(name="🧭 趨勢與支撐 (EMA 8/21)", value=trend_info + "\n\u200b", inline=False)
 
 def create_scan_embed(data, user_capital=100000.0):
     strategy = data.get('strategy', 'UNKNOWN')
@@ -315,6 +346,15 @@ def create_scan_embed(data, user_capital=100000.0):
     add_reddit_field(embed, data.get('reddit_text'))
     _add_ai_verification_fields(embed, data)
 
+    # 🚀 AlertFilter 推播理由 (僅在條件式過濾觸發時顯示)
+    alert_reason = data.get('alert_reason')
+    if alert_reason:
+        embed.add_field(
+            name="📢 推播觸發條件",
+            value=f"```\n{alert_reason}\n```",
+            inline=False,
+        )
+
     embed.set_footer(text=f"Nexus Seeker 風控引擎 • 基準 SPY: ${data.get('spy_price', 500):.1f}")
     return embed
 
@@ -334,7 +374,8 @@ def create_reddit_scan_embed(symbol, reddit_text):
         title=f"🔥 {symbol} 散戶情緒掃描", 
         color=discord.Color.orange()
     )
-    add_reddit_field(embed, reddit_text)
+    add_reddit_text = reddit_text
+    add_reddit_field(embed, add_reddit_text)
     embed.set_footer(text="Nexus Seeker 研報系統 • 資料來源: Reddit (WSB/Stocks/Options)")
     return embed
 
@@ -376,7 +417,7 @@ def create_watchlist_embed(page_data, current_page, total_pages, total_items):
             
         lines.append("```")
         description = "\n".join(lines)
-
+        
     embed = discord.Embed(
         title=f"📡 【您的專屬觀察清單】",
         description=description,
@@ -471,5 +512,45 @@ def build_vtr_stats_embed(user_name: str, stats: dict) -> discord.Embed:
 
     # 腳註與提示
     embed.set_footer(text="數據包含已平倉 (CLOSED) 與 已轉倉 (ROLLED) 之合約")
+    
+    return embed
+
+def build_scan_report(result: Dict[str, Any]):
+    """
+    量化掃描報告Embed，整合 Greeks, NRO 與 EMA 訊號。
+    """
+    ai_decision = result.get('ai_decision', 'SKIP')
+    color = 0x2ecc71 if ai_decision == 'APPROVE' else (0xe74c3c if ai_decision == 'VETO' else 0x3498db)
+    
+    embed = discord.Embed(
+        title=f"📡 量化掃描報告: {result['symbol']}",
+        description=f"策略: `{result.get('strategy', 'N/A')}` | 履約價: `${result.get('strike', 'N/A')}` | 到期日: `{result.get('target_date', 'N/A')}`",
+        color=color
+    )
+
+    # 1. Greeks 區塊 (從 result 中提取)
+    greeks_info = (f"Delta: `{result.get('delta', 0):.3f}` ｜ Theta: `{result.get('theta', 0):.4f}`\n"
+                  f"Gamma: `{result.get('gamma', 0):.6f}` ｜ IV: `{result.get('iv', 0):.1%}`")
+    embed.add_field(name="🧬 Greeks 希臘字母", value=greeks_info, inline=False)
+
+    # 2. NRO 風控區塊
+    nro_info = (f"建議口數: `{result.get('safe_qty', 0)}` 口\n"
+               f"預期總曝險: `{result.get('projected_exposure_pct', 0):+.1f}%` / `{result.get('risk_limit_pct', 15.0)}%` (紅線)")
+    embed.add_field(name="🛡️ NRO 風控判定", value=nro_info, inline=False)
+
+    # 3. 🚀 整合 EMA 訊號區塊
+    ema_ui = get_ema_signal_ui(result.get('ema_signals', []))
+    embed.add_field(
+        name="📈 趨勢與指標動態",
+        value=ema_ui,
+        inline=False
+    )
+
+    # 4. 加上宏觀背景燈號 (VIX/Oil)
+    vix = result.get('macro_vix', result.get('vix', 0))
+    oil = result.get('macro_oil', result.get('oil', 0))
+    vix_status = "🔴" if vix > 25 else "🟢"
+    
+    embed.set_footer(text=f"環境感知: VIX {vix} {vix_status} | WTI ${oil} | 基準 SPY: ${result.get('spy_price', 0):.1f}")
     
     return embed
