@@ -13,12 +13,9 @@ import logging
 import finnhub
 import pandas as pd
 import numpy as np
+import yfinance as yf
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
-
-import yfinance as yf
-import pandas as pd
-import logging
 
 from config import FINNHUB_API_KEY
 
@@ -161,7 +158,7 @@ def get_history_df(symbol: str, period: str = "1y") -> pd.DataFrame:
         return pd.DataFrame()
 
 # ---------------------------------------------------------------------------
-# 記憶體快取設定
+# SMA 記憶體快取設定
 # ---------------------------------------------------------------------------
 _sma_cache = {} 
 _SMA_CACHE_TTL = 28800  # 快取存活時間：8 小時 (秒)
@@ -214,6 +211,62 @@ def clear_sma_cache():
     global _sma_cache
     _sma_cache.clear()
     logger.info("🧹 SMA 快取已清空")
+
+# ---------------------------------------------------------------------------
+# EMA 記憶體快取設定
+# ---------------------------------------------------------------------------
+_ema_cache = {} 
+_EMA_CACHE_TTL = 28800  # 8 小時 (與 SMA 同步)
+
+def get_ema(symbol: str, window: int = 21) -> Optional[float]:
+    """
+    計算指數移動平均線 (Exponential Moving Average)。
+    公式: $$EMA_t = [P_t \times \alpha] + [EMA_{t-1} \times (1 - \alpha)]$$
+    其中 \alpha = 2 / (window + 1)
+    """
+    global _ema_cache
+    now = time.time()
+    cache_key = (symbol, window)
+
+    # 1. 檢查快取
+    if cache_key in _ema_cache:
+        val, expiry = _ema_cache[cache_key]
+        if now < expiry:
+            logger.info(f"⚡ [EMA Cache Hit] {symbol} EMA{window}: {val}")
+            return val
+
+    # 2. 實體計算
+    try:
+        logger.info(f"🌐 [EMA Cache Miss] 正在計算 {symbol} EMA{window}...")
+        # 為確保 EMA 準確性，抓取長度建議為 window 的 3 倍以上
+        period = "1mo" if window <= 21 else "1y"
+        df = get_history_df(symbol, period=period)
+
+        if df.empty or len(df) < window:
+            logger.warning(f"[{symbol}] 樣本數不足，無法計算 EMA{window}")
+            return None
+
+        # 使用 pandas ewm (Exponential Weighted Moving Average)
+        # span 參數對應 window，adjust=False 確保使用遞歸定義
+        ema_series = df['Close'].ewm(span=window, adjust=False).mean()
+        current_ema = round(float(ema_series.iloc[-1]), 4)
+
+        if np.isnan(current_ema):
+            return None
+
+        # 3. 寫入快取
+        _ema_cache[cache_key] = (current_ema, now + _EMA_CACHE_TTL)
+        return current_ema
+
+    except Exception as e:
+        logger.error(f"[{symbol}] EMA{window} 計算失敗: {e}")
+        return None
+
+def clear_ema_cache():
+    """手動清空 EMA 快取"""
+    global _ema_cache
+    _ema_cache.clear()
+    logger.info("🧹 EMA 快取已清空")
 
 # ---------------------------------------------------------------------------
 # Basic Financials (基本面指標)
@@ -387,3 +440,28 @@ def get_company_news(
     except Exception as e:
         logger.error(f"[{symbol}] Finnhub company news 失敗: {e}")
         return []
+
+
+# ---------------------------------------------------------------------------
+# Macro Environment (宏觀環境指標)
+# ---------------------------------------------------------------------------
+def get_macro_environment() -> Dict[str, float]:
+    """
+    獲取宏觀環境參數：VIX 與 原油
+    """
+    try:
+        vix_df = get_history_df("^VIX", period="5d")
+        oil_df = get_history_df("CL=F", period="5d")
+        
+        if vix_df.empty or oil_df.empty:
+            logger.warning("宏觀數據 (VIX/Oil) 抓取結果為空，使用預設值")
+            return {"vix": 18.0, "oil": 75.0, "vix_change": 0.0}
+
+        return {
+            "vix": round(float(vix_df['Close'].iloc[-1]), 2),
+            "oil": round(float(oil_df['Close'].iloc[-1]), 2),
+            "vix_change": round(float(vix_df['Close'].pct_change().iloc[-1]), 4)
+        }
+    except Exception as e:
+        logger.error(f"獲取宏觀環境參數失敗: {e}")
+        return {"vix": 18.0, "oil": 75.0, "vix_change": 0.0}

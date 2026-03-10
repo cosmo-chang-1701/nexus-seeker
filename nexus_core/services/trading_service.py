@@ -77,13 +77,31 @@ class TradingService:
 
     async def run_market_scan(self, is_auto: bool = True, triggered_by_id: Optional[int] = None) -> Dict[int, List[Dict[str, Any]]]:
         """
-        執行全站市場掃描，並返回按使用者分組的結果。
+        執行全站市場掃描 (整合 EMA, Macro Stress Matrix 與 VIX/Oil 監控)
         """
         all_watchlists = database.get_all_watchlist()
         if not all_watchlists:
             return {}
 
-        # 1. 提取所有不重複的標的與成本對進行掃描
+        from market_analysis.risk_engine import MacroContext
+
+        # 1. 🚀 獲取全域基準資料 (僅抓取一次，減少 API 消耗)
+        try:
+            spy_task = asyncio.to_thread(market_data_service.get_history_df, "SPY", "1y")
+            macro_task = asyncio.to_thread(market_data_service.get_macro_environment)
+            
+            df_spy, macro_raw = await asyncio.gather(spy_task, macro_task)
+            
+            spy_price = df_spy['Close'].iloc[-1] if not df_spy.empty else 670.0
+            macro_data = MacroContext(
+                vix=macro_raw.get('vix', 18.0),
+                oil_price=macro_raw.get('oil', 75.0)
+            )
+        except Exception as e:
+            logger.error(f"全域基準資料獲取失敗: {e}")
+            df_spy, spy_price, macro_data = None, 670.0, MacroContext(vix=20.0, oil_price=85.0)
+
+        # 2. 提取不重複標的進行「批次掃描」
         unique_targets = set((sym, stock_cost, use_llm) for uid, sym, stock_cost, use_llm in all_watchlists)
         scan_results = {}
         news_cache = {}
@@ -91,8 +109,11 @@ class TradingService:
 
         for sym, stock_cost, use_llm in unique_targets:
             try:
-                res = await asyncio.to_thread(market_math.analyze_symbol, sym, stock_cost)
+                # 使用 to_thread 確保 EMA/SMA 計算不阻塞主線程
+                res = await asyncio.to_thread(market_math.analyze_symbol, sym, stock_cost, 0.0, df_spy, spy_price)
+                
                 if res:
+                    # 併行獲取新聞與 Reddit (活用快取)
                     if sym not in news_cache:
                         news_cache[sym] = await news_service.fetch_recent_news(sym)
                     if sym not in reddit_cache:
@@ -101,6 +122,7 @@ class TradingService:
                     news_text = news_cache[sym]
                     reddit_text = reddit_cache[sym]
 
+                    # 語意風控判定
                     if use_llm:
                         ai_verdict = await llm_service.evaluate_trade_risk(sym, res['strategy'], news_text, reddit_text)
                         res['ai_decision'] = ai_verdict.get('decision', 'APPROVE')
@@ -109,32 +131,30 @@ class TradingService:
                         res['ai_decision'] = 'SKIP'
                         res['ai_reasoning'] = '未啟用 LLM 語意風控'
                     
-                    res['news_text'] = news_text
-                    res['reddit_text'] = reddit_text
+                    res.update({'news_text': news_text, 'reddit_text': reddit_text})
                     scan_results[(sym, stock_cost, use_llm)] = res
+                    
             except Exception as e:
-                logger.error(f"Error scanning {sym} with cost {stock_cost}: {e}")
-            await asyncio.sleep(0.5)
+                logger.error(f"掃描標的 {sym} 失敗: {e}")
+            
+            # 短暫休眠防止速率限制 (Rate Limit)
+            await asyncio.sleep(0.1)
 
         if not scan_results:
             return {}
 
-        # 2. 準備使用者分發
+        # 3. 準備使用者分發與「個人化 NRO 優化」
         user_alerts_results = {}
         user_watchlists = {}
         for uid, sym, stock_cost, use_llm in all_watchlists:
             user_watchlists.setdefault(uid, []).append((sym, stock_cost, use_llm))
 
-        # 獲取基準 SPY 價格
-        try:
-            spy_quote = market_data_service.get_quote("SPY")
-            spy_price = spy_quote.get('c', 500.0) if spy_quote else 500.0
-        except:
-            spy_price = 500.0
-
         for uid, watchlist_items in user_watchlists.items():
             valid_user_alerts = []
+            
+            # 獲取該使用者的動態風險參數
             user_capital = database.get_user_capital(uid) or 50000.0
+            user_risk_pref = database.get_user_risk_limit(uid) or 15.0
             current_stats = database.get_user_portfolio_stats(uid)
             current_total_delta = current_stats.get('total_weighted_delta', 0.0)
 
@@ -142,33 +162,34 @@ class TradingService:
                 if (sym, stock_cost, use_llm) in scan_results:
                     data = scan_results[(sym, stock_cost, use_llm)].copy()
                     
-                    # 核心整合：針對該使用者進行 NRO 運算
+                    # 🚀 整合核心：注入宏觀背景進行風險優化
                     strategy = data.get('strategy', '')
-                    unit_weighted_delta = data.get('weighted_delta', 0.0)
-                    
                     safe_qty, hedge_spy = portfolio.optimize_position_risk(
                         current_delta=current_total_delta,
-                        unit_weighted_delta=unit_weighted_delta,
+                        unit_weighted_delta=data.get('weighted_delta', 0.0),
                         user_capital=user_capital,
                         spy_price=spy_price,
                         stock_iv=data.get('iv', 0.15),
-                        spy_iv=0.15,
                         strategy=strategy,
-                        risk_limit_pct=15.0
+                        macro_data=macro_data, # 注入全域宏觀數據
+                        base_risk_limit_pct=user_risk_pref
                     )
 
+                    # 模擬成交後的衝擊
                     side_multiplier = -1 if "STO" in strategy else 1
-                    new_trade_impact = unit_weighted_delta * side_multiplier
+                    # 這裡使用 safe_qty 進行模擬，反映系統真實建議
+                    new_trade_impact = data.get('weighted_delta', 0.0) * side_multiplier * safe_qty
                     projected_total_delta = current_total_delta + new_trade_impact
                     projected_exposure_pct = (projected_total_delta * spy_price / user_capital) * 100
 
                     data.update({
                         'safe_qty': safe_qty,
                         'hedge_spy': hedge_spy,
-                        'projected_exposure_pct': projected_exposure_pct,
+                        'projected_exposure_pct': round(projected_exposure_pct, 2),
                         'spy_price': spy_price,
-                        'suggested_contracts': data.get('suggested_contracts', 1),
-                        'uid': uid # 方便後續追蹤
+                        'macro_vix': macro_data.vix,
+                        'macro_oil': macro_data.oil_price,
+                        'uid': uid
                     })
                     
                     valid_user_alerts.append(data)

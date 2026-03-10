@@ -2,11 +2,18 @@ import math
 import logging
 import numpy as np
 import pandas as pd
+from dataclasses import dataclass
 from services import market_data_service
 from datetime import datetime
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Tuple, Any, Optional
 
 logger = logging.getLogger(__name__)
+
+@dataclass
+class MacroContext:
+    """宏觀環境容器"""
+    vix: float        # 波動率指數
+    oil_price: float  # WTI 原油價格
 
 def evaluate_defense_status(quantity: float, opt_type: str, pnl_pct: float, current_delta: float, dte: int) -> str:
     """
@@ -38,53 +45,25 @@ def evaluate_defense_status(quantity: float, opt_type: str, pnl_pct: float, curr
 
 def calculate_beta(df_stock: pd.DataFrame, df_spy: pd.DataFrame) -> float:
     r"""
-    使用對數收益率計算標的與基準 (SPY) 的 Beta 係數。
-    公式: 
-    1. Log Returns: r_t = ln(P_t / P_{t-1})
-    2. Beta: \beta = \frac{Cov(r_i, r_m)}{Var(r_m)}
+    使用對數收益率 (Log Returns) 計算 Beta。
+    公式: $$\beta = \frac{\text{Cov}(\ln(P_i), \ln(P_m))}{\text{Var}(\ln(P_m))}$$
     """
     try:
-        if df_stock is None or df_spy is None or df_stock.empty or df_spy.empty:
-            return 1.0
-            
-        # 1. 對齊日期並僅取 Close 價格
         combined = pd.merge(
-            df_stock['Close'], 
-            df_spy['Close'], 
-            left_index=True, 
-            right_index=True, 
-            how='inner', 
-            suffixes=('_stock', '_spy')
+            df_stock['Close'], df_spy['Close'], 
+            left_index=True, right_index=True, how='inner'
         ).dropna()
         
-        # 樣本數門檻 (60 交易日)
-        if len(combined) < 60:
-            return 1.0
+        if len(combined) < 60: return 1.0
             
-        # 2. 計算對數收益率 (Log Returns)
-        # log(P_t / P_{t-1}) 等同於 log(P_t) - log(P_{t-1})
-        log_returns = np.log(combined / combined.shift(1)).replace([np.inf, -np.inf], np.nan).dropna()
+        # 計算 Log Returns
+        log_returns = np.log(combined / combined.shift(1)).dropna()
         
-        if len(log_returns) < 50:
-            return 1.0
-            
-        # 3. 計算協方差與方差
-        # 使用 numpy.cov 提取協方差矩陣中的關鍵值
-        cov_matrix = np.cov(log_returns['Close_stock'], log_returns['Close_spy'])
-        covariance = cov_matrix[0, 1]
-        variance = cov_matrix[1, 1]
+        cov_matrix = np.cov(log_returns.iloc[:, 0], log_returns.iloc[:, 1])
+        beta = cov_matrix[0, 1] / cov_matrix[1, 1]
         
-        if variance < 1e-9:
-            return 1.0
-            
-        # 4. 產出 Beta 並套用限制器
-        beta = covariance / variance
-        beta = np.clip(beta, -5.0, 5.0)
-        
-        return round(float(beta), 2)
-        
-    except Exception as e:
-        logger.error(f"Log Return Beta 計算失敗: {e}")
+        return round(float(np.clip(beta, -5.0, 5.0)), 2)
+    except Exception:
         return 1.0
 
 def analyze_sector_correlation(symbols: List[str]) -> List[Tuple[str, str, float]]:
@@ -136,55 +115,76 @@ def simulate_exposure_impact(current_total_delta: float, new_trade_data: Dict[st
     
     return projected_total_delta, projected_exposure_pct
 
+def get_macro_modifiers(macro: MacroContext) -> Tuple[float, float]:
+    """執行宏觀風險修正矩陣邏輯"""
+    # VIX 修正係數 (omega_vix)
+    if macro.vix < 15: w_vix = 1.2
+    elif macro.vix < 20: w_vix = 1.0
+    elif macro.vix < 25: w_vix = 0.8
+    elif macro.vix < 35: w_vix = 0.6
+    else: w_vix = 0.4
+    
+    # 原油修正係數 (omega_oil)
+    if macro.oil_price < 75: w_oil = 1.0
+    elif macro.oil_price < 85: w_oil = 0.9
+    elif macro.oil_price < 95: w_oil = 0.7
+    else: w_oil = 0.5
+    
+    return w_vix, w_oil
+
 def optimize_position_risk(
-    current_delta: float, 
-    unit_weighted_delta: float, 
-    user_capital: float, 
-    spy_price: float, 
+    current_delta: float,
+    unit_weighted_delta: float,
+    user_capital: float,
+    spy_price: float,
     stock_iv: float,
-    spy_iv: float,  # 通常使用 VIX 或 SPY 30D IV
-    risk_limit_pct: float = 15.0, 
-    strategy: str = ""
+    strategy: str,
+    macro_data: Optional[MacroContext] = None,
+    base_risk_limit_pct: float = 15.0
 ) -> Tuple[int, float]:
     """
-    計算「波動率校正後」的安全成交口數與對沖建議。
+    量化風險優化引擎 - 整合 IV 校正與宏觀修正
     """
-    # 1. 計算基本的風險空間 (基於資金規模)
+    # 預設基準
+    spy_iv = 0.16 
+    risk_limit_pct = base_risk_limit_pct
+
+    # 1. 宏觀注入與參數修正
+    if macro_data:
+        spy_iv = macro_data.vix / 100.0
+        w_vix, w_oil = get_macro_modifiers(macro_data)
+        risk_limit_pct = base_risk_limit_pct * w_vix * w_oil
+
+    # 2. 前瞻性波動率校正 (IV Scaling)
+    iv_adjustment_ratio = stock_iv / max(spy_iv, 0.01)
+    
+    # 3. 計算動態風險紅線 (以股數為單位)
     max_safe_shares = (user_capital * (risk_limit_pct / 100)) / spy_price
+    
+    # 4. 判定部位方向並計算校正後 Delta
     side_multiplier = -1 if "STO" in strategy else 1
-    
-    # 2. 引入【波動率調節因子 (Vol Multiplier)】
-    # 如果標的 IV 高於 SPY IV，則放大該部位的風險權重，採取更保守的對沖
-    # 公式：IV_Adjustment = Stock_IV / SPY_IV
-    iv_adjustment_ratio = stock_iv / spy_iv if spy_iv > 0 else 1.0
-    
-    # 校正後的單位加權 Delta (Forward-looking Delta)
-    # 這讓高 IV 標的在系統中看起來比實際上「更重」
+    # 讓高波標的在計算中佔用更多「虛擬曝險額度」
     vol_adjusted_unit_delta = unit_weighted_delta * iv_adjustment_ratio * side_multiplier
     
-    # 3. 計算安全口數 (以校正後的曝險計算)
+    # 5. 安全成交口數計算 (Safe Quantity)
     safe_qty = 0
     if vol_adjusted_unit_delta > 0:
         room = max_safe_shares - current_delta
-        safe_qty = math.floor(room / vol_adjusted_unit_delta) if room > 0 else 0
+        safe_qty = int(room // vol_adjusted_unit_delta) if room > 0 else 0
     elif vol_adjusted_unit_delta < 0:
         room = -max_safe_shares - current_delta
-        safe_qty = math.floor(room / vol_adjusted_unit_delta) if room < 0 else 0
-
-    safe_qty = max(0, safe_qty)
+        safe_qty = int(room // vol_adjusted_unit_delta) if room < 0 else 0
     
-    # 4. 精算【SPY 對沖建議】
-    # 這裡的建議會更具「前瞻性」，防禦 IV 飆升導致的 Delta 爆炸
+    # 6. 對沖建議精算 (Hedge Suggestion)
+    projected_delta = current_delta + (vol_adjusted_unit_delta * max(0, safe_qty))
     suggested_hedge_spy = 0.0
-    projected_delta = current_delta + (unit_weighted_delta * side_multiplier * max(1, safe_qty))
     
-    # 根據波動率係數進一步強化對沖力道
     if projected_delta > max_safe_shares:
-        suggested_hedge_spy = (projected_delta - max_safe_shares) * iv_adjustment_ratio
+        suggested_hedge_spy = projected_delta - max_safe_shares
     elif projected_delta < -max_safe_shares:
-        suggested_hedge_spy = (projected_delta - (-max_safe_shares)) * iv_adjustment_ratio
+        suggested_hedge_spy = projected_delta + max_safe_shares
         
-    return safe_qty, round(float(suggested_hedge_spy), 1)
+    return max(0, safe_qty), round(float(suggested_hedge_spy), 2)
 
 def get_macro_risk_metrics(total_beta_delta: float, total_theta: float, total_margin_used: float, total_gamma: float, user_capital: float, spy_price: float) -> Dict[str, Any]:
     """

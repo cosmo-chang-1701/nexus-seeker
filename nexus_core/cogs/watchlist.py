@@ -124,15 +124,27 @@ class WatchlistCog(commands.Cog):
         user_id = interaction.user.id
         symbol = symbol.upper()
 
-        # 🚀 1. 效能優化：透過 Finnhub 抓取基準 SPY 資料
+        # 🚀 1. 併行抓取基準資料 (SPY 歷史與宏觀指標)
         try:
-            df_spy = await asyncio.to_thread(market_data_service.get_history_df, "SPY", "1y")
-            spy_price = df_spy['Close'].iloc[-1] if not df_spy.empty else 500.0
+            # 同步發出請求，減少等待時間
+            spy_task = asyncio.to_thread(market_data_service.get_history_df, "SPY", "1y")
+            macro_task = asyncio.to_thread(market_data_service.get_macro_environment)
+            
+            df_spy, macro_raw = await asyncio.gather(spy_task, macro_task)
+            
+            spy_price = df_spy['Close'].iloc[-1] if not df_spy.empty else 670.0
+            
+            from market_analysis.risk_engine import MacroContext
+            macro_data = MacroContext(
+                vix=macro_raw.get('vix', 18.0),
+                oil_price=macro_raw.get('oil', 75.0)
+            )
         except Exception as e:
-            logger.warning(f"無法獲取 SPY 基準資料，使用預設值: {e}")
-            df_spy, spy_price = None, 500.0
+            logger.warning(f"基準資料抓取異常，切換至保守模式: {e}")
+            df_spy, spy_price = None, 670.0
+            macro_data = MacroContext(vix=22.0, oil_price=85.0)
 
-        # 2. 執行核心量化掃描
+        # 2. 執行核心量化運算 (包含 Log-Return Beta)
         result = await asyncio.to_thread(
             market_math.analyze_symbol, 
             symbol, 
@@ -145,63 +157,68 @@ class WatchlistCog(commands.Cog):
             from services import llm_service, news_service, reddit_service
             from market_analysis.risk_engine import optimize_position_risk
             
-            # 3. 獲取外部情緒與 AI 風控
-            news_text = await news_service.fetch_recent_news(symbol)
-            reddit_text = await reddit_service.get_reddit_context(symbol)
-            ai_verdict = await llm_service.evaluate_trade_risk(symbol, result['strategy'], news_text, reddit_text)
+            # 3. 併行抓取外部情報與 AI 審核
+            news_task = news_service.fetch_recent_news(symbol)
+            reddit_task = reddit_service.get_reddit_context(symbol)
+            
+            news_text, reddit_text = await asyncio.gather(news_task, reddit_task)
+            
+            # AI 根據新聞與 Reddit 進行最終裁決
+            ai_verdict = await llm_service.evaluate_trade_risk(
+                symbol, result['strategy'], news_text, reddit_text
+            )
 
             result.update({
                 'news_text': news_text,
                 'reddit_text': reddit_text,
                 'ai_decision': ai_verdict.get('decision', 'APPROVE'),
-                'ai_reasoning': ai_verdict.get('reasoning', '無資料')
+                'ai_reasoning': ai_verdict.get('reasoning', '無資料'),
+                'vix': macro_data.vix,
+                'oil': macro_data.oil_price
             })
 
-            # 4. 🚀 核心更新：執行成交後曝險模擬與自動減量建議
+            # 4. 🚀 核心更新：執行成交後曝險模擬與自動風控
             user_capital = database.get_user_capital(user_id)
             current_stats = database.get_user_portfolio_stats(user_id)
             current_total_delta = current_stats.get('total_weighted_delta', 0.0)
             
-            # --- 方向校正因子 (Side Multiplier) ---
-            # 賣方策略 (STO) 會反轉 Delta 的方向感
             strategy = result.get('strategy', '')
             side_multiplier = -1 if "STO" in strategy else 1
 
-            # A. 計算原始凱利建議口數
-            alloc_pct = result.get('alloc_pct', 0.0)
-            margin_per_contract = result.get('margin_per_contract', 0.0)
-            suggested_contracts = 0
-            if user_capital > 0 and margin_per_contract > 0:
-                capped_alloc = min(alloc_pct, 0.25)
-                suggested_contracts = int((user_capital * capped_alloc) // margin_per_contract)
+            # A. 取得用戶自定義風險上限 (預設 15.0%)
+            user_risk_limit = database.get_user_risk_limit(user_id) or 15.0
 
-            # B. 🚀 執行風控優化計算
-            # 注意：這裡傳入原始 weighted_delta，優化函數內部應處理 side_multiplier
+            # B. 執行「波動率校正」與「宏觀修正」後的風險精算
             safe_qty, hedge_spy = optimize_position_risk(
                 current_delta=current_total_delta,
                 unit_weighted_delta=result.get('weighted_delta', 0.0),
                 user_capital=user_capital,
                 spy_price=spy_price,
-                stock_iv=result.get('iv', 0.15), # TODO: 獲取 SPY IV
-                spy_iv=0.15, # TODO: 獲取 VIX
-                risk_limit_pct=15.0, # TODO: 根據用戶風險偏好調整
-                strategy=strategy # 傳入策略以利內部判斷方向
+                stock_iv=result.get('iv', 0.15),
+                strategy=strategy,
+                macro_data=macro_data,
+                base_risk_limit_pct=user_risk_limit
             )
 
-            # C. 模擬原始建議口數的真實衝擊 (Position Delta Impact)
-            # 公式: 原始加權 Delta * 方向乘數 * 口數
-            new_trade_delta_impact = result.get('weighted_delta', 0.0) * side_multiplier * suggested_contracts
+            # C. 計算原始凱利建議 (作為對照)
+            alloc_pct = result.get('alloc_pct', 0.0)
+            margin_per_contract = result.get('margin_per_contract', 0.0)
+            suggested_contracts = 0
+            if user_capital > 0 and margin_per_contract > 0:
+                suggested_contracts = int((user_capital * min(alloc_pct, 0.25)) // margin_per_contract)
+
+            # D. 模擬預期曝險衝擊 (Projected Exposure)
+            # 使用 side_multiplier 確保 STO 與 BTO 的 Delta 方向正確
+            new_trade_delta_impact = result.get('weighted_delta', 0.0) * side_multiplier * safe_qty
             projected_total_delta = current_total_delta + new_trade_delta_impact
-            
-            # 換算為預期總曝險百分比
             projected_exposure_pct = (projected_total_delta * spy_price / user_capital) * 100 if user_capital > 0 else 0
             
-            # 5. 回填所有資料給 Embed Builder
+            # 5. 回填結果並渲染 Embed
             result.update({
-                'projected_exposure_pct': projected_exposure_pct,
-                'suggested_contracts': suggested_contracts,
-                'safe_qty': safe_qty,
-                'hedge_spy': hedge_spy,
+                'projected_exposure_pct': round(projected_exposure_pct, 2),
+                'suggested_contracts': suggested_contracts, # 凱利建議
+                'safe_qty': safe_qty,                       # 風控修正建議
+                'hedge_spy': hedge_spy,                     # SPY 對沖需求
                 'spy_price': spy_price
             })
 
@@ -209,7 +226,7 @@ class WatchlistCog(commands.Cog):
             await interaction.followup.send(embed=embed)
             
         else:
-            await interaction.followup.send(f"📊 目前 `{symbol}` 無明確訊號或無合適合約。")
+            await interaction.followup.send(f"📊 目前 `{symbol}` 查無有效訊號，建議維持觀望。")
 
 async def setup(bot):
     await bot.add_cog(WatchlistCog(bot))
