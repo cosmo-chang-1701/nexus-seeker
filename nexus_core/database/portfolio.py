@@ -4,13 +4,13 @@ from config import DB_NAME
 # ==========================================
 # 交易持倉 (Portfolio) CRUD (綁定 user_id)
 # ==========================================
-def add_portfolio_record(user_id, symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost, weighted_delta: float = 0.0, theta: float = 0.0, gamma: float = 0.0):
+def add_portfolio_record(user_id, symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost, weighted_delta: float = 0.0, theta: float = 0.0, gamma: float = 0.0, trade_category: str = 'SPECULATIVE'):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT INTO portfolio (user_id, symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost, weighted_delta, theta, gamma)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (user_id, symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost, weighted_delta, theta, gamma))
+        INSERT INTO portfolio (user_id, symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost, weighted_delta, theta, gamma, trade_category)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (user_id, symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost, weighted_delta, theta, gamma, trade_category))
     trade_id = cursor.lastrowid
     conn.commit()
     conn.close()
@@ -20,7 +20,7 @@ def get_user_portfolio(user_id):
     """取得特定使用者的持倉"""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute('SELECT id, symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost FROM portfolio WHERE user_id = ?', (user_id,))
+    cursor.execute('SELECT id, symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost, weighted_delta, theta, gamma, trade_category FROM portfolio WHERE user_id = ?', (user_id,))
     rows = cursor.fetchall()
     conn.close()
     return rows
@@ -29,7 +29,7 @@ def get_all_portfolio():
     """取得全站所有持倉 (供背景排程使用)"""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute('SELECT user_id, id, symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost FROM portfolio')
+    cursor.execute('SELECT user_id, id, symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost, weighted_delta, theta, gamma, trade_category FROM portfolio')
     rows = cursor.fetchall()
     conn.close()
     return rows
@@ -62,3 +62,15 @@ def delete_portfolio_record(user_id, trade_id):
         conn.commit()
     conn.close()
     return record
+def update_portfolio_greeks(trade_id: int, weighted_delta: float, theta: float, gamma: float):
+    """更新持倉紀錄的希臘字母數據"""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('''
+        UPDATE portfolio 
+        SET weighted_delta = ?, theta = ?, gamma = ?
+        WHERE id = ?
+    ''', (weighted_delta, theta, gamma, trade_id))
+    conn.commit()
+    conn.close()
+    return True

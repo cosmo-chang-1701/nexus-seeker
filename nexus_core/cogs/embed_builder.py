@@ -454,7 +454,7 @@ def create_watchlist_embed(page_data, current_page, total_pages, total_items):
     embed.set_footer(text=f"頁次: {current_page}/{total_pages} ｜ 📊 總項目: {total_items}")
     return embed
 
-def create_portfolio_report_embed(report_lines):
+def create_portfolio_report_embed(report_lines, hedge_analysis=None):
     """
     將 check_portfolio_status_logic 產出的 report_lines 轉換為漂亮的 Discord Embed
     """
@@ -499,6 +499,10 @@ def create_portfolio_report_embed(report_lines):
     if len(macro_text) > 1024:
         macro_text = macro_text[:1020] + "..."
     embed.add_field(name="🛡️ 風控管線評估與對沖決策", value=macro_text, inline=False)
+
+    # 🚀 欄位三：對沖有效性分析 (新增)
+    if hedge_analysis:
+        build_hedge_analysis_field(embed, hedge_analysis)
 
     embed.set_footer(text="Argo Risk Engine v2.5 | 基準標的: SPY")
     
@@ -581,3 +585,45 @@ def build_scan_report(result: Dict[str, Any]):
     embed.set_footer(text=f"環境感知: VIX {vix} {vix_status} | WTI ${oil} | 基準 SPY: ${result.get('spy_price', 0):.1f}")
     
     return embed
+
+def create_rehedge_embed(rehedge_info: Dict[str, Any]) -> discord.Embed:
+    """
+    建構「自動避險回補建議」的 Discord Embed 面板。
+    """
+    priority = rehedge_info.get('priority', 'NORMAL')
+    color = 0xf1c40f if priority == "NORMAL" else 0xe74c3c # 黃色或紅色
+    
+    symbol = rehedge_info.get('symbol', 'SPY')
+    suggested_qty = rehedge_info.get('suggested_spy_qty', 0)
+    reason = rehedge_info.get('reason', '偵測到曝險異常或市場轉弱')
+
+    embed = discord.Embed(
+        title="🛡️ 防禦啟動：自動避險回補建議", 
+        color=color,
+        description=f"標的: **{symbol}**"
+    )
+    
+    embed.add_field(name="觸發原因", value=f"```\n{reason}\n```", inline=False)
+    
+    action_val = f"賣出 (Short) `{suggested_qty}` 股 SPY" if suggested_qty > 0 else f"買入 (Long) `{abs(suggested_qty)}` 股 SPY"
+    embed.add_field(name="建議動作", value=action_val, inline=True)
+    
+    embed.set_footer(text="提示：當前趨勢已走弱，掛回避險可鎖定現有獲利。")
+    embed.timestamp = datetime.now(timezone.utc)
+    
+    return embed
+
+def build_hedge_analysis_field(embed, analysis):
+    """
+    在 embed 中加入對沖分析區塊。
+    """
+    status_emoji = "✅" if analysis['status'] == "OPTIMAL" else "⚠️"
+    
+    content = (
+        f"🔹 **個股 Alpha 損益**: `${analysis['alpha_contribution']:,.2f}`\n"
+        f"🔸 **對沖 Beta 損益**: `${analysis['hedge_contribution']:,.2f}`\n"
+        f"📊 **對沖比率 (HR)**: `{analysis['hedge_ratio']:.2%}` {status_emoji}\n"
+        f"🏁 **最終淨損益**: `${analysis['net_pnl']:,.2f}`"
+    )
+    
+    embed.add_field(name="🛡️ 對沖有效性診斷", value=content, inline=False)

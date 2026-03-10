@@ -7,15 +7,15 @@ from config import DB_NAME
 # 虛擬交易室 (Virtual Trading Room) CRUD
 # ==========================================
 
-def add_virtual_trade(user_id: int, symbol: str, opt_type: str, strike: float, expiry: str, entry_price: float, quantity: int, weighted_delta: float = 0.0, theta: float = 0.0, gamma: float = 0.0, tags: list = None, parent_trade_id: int = None):
+def add_virtual_trade(user_id: int, symbol: str, opt_type: str, strike: float, expiry: str, entry_price: float, quantity: int, weighted_delta: float = 0.0, theta: float = 0.0, gamma: float = 0.0, tags: list = None, parent_trade_id: int = None, trade_category: str = 'SPECULATIVE'):
     tags_str = json.dumps(tags) if tags else None
     
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT INTO virtual_trades (user_id, symbol, opt_type, strike, expiry, entry_price, quantity, weighted_delta, theta, gamma, status, parent_trade_id, tags)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?)
-    ''', (user_id, symbol, opt_type, strike, expiry, entry_price, quantity, weighted_delta, theta, gamma, parent_trade_id, tags_str))
+        INSERT INTO virtual_trades (user_id, symbol, opt_type, strike, expiry, entry_price, quantity, weighted_delta, theta, gamma, status, parent_trade_id, tags, trade_category)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?)
+    ''', (user_id, symbol, opt_type, strike, expiry, entry_price, quantity, weighted_delta, theta, gamma, parent_trade_id, tags_str, trade_category))
     
     trade_id = cursor.lastrowid
     conn.commit()
@@ -133,6 +133,19 @@ def get_open_virtual_trades(user_id: int = None):
     cursor.execute(query, params)
     columns = [column[0] for column in cursor.description]
     return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+def update_virtual_trade_greeks(trade_id: int, weighted_delta: float, theta: float, gamma: float):
+    """更新虛擬交易紀錄的希臘字母數據"""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('''
+        UPDATE virtual_trades
+        SET weighted_delta = ?, theta = ?, gamma = ?
+        WHERE id = ?
+    ''', (weighted_delta, theta, gamma, trade_id))
+    conn.commit()
+    conn.close()
+    return True
 
 def get_all_virtual_trades(user_id: int):
     """

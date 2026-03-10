@@ -42,7 +42,7 @@ class GhostTrader:
             logger.error(f"GhostTrader 獲取 {symbol} 期權價格失敗: {e}")
             return None, None
 
-    def record_virtual_entry(self, user_id: int, symbol: str, opt_type: str, strike: float, expiry: str, quantity: int, weighted_delta: float = 0.0, theta: float = 0.0, gamma: float = 0.0, tags: list = None, parent_trade_id: int = None):
+    def record_virtual_entry(self, user_id: int, symbol: str, opt_type: str, strike: float, expiry: str, quantity: int, weighted_delta: float = 0.0, theta: float = 0.0, gamma: float = 0.0, tags: list = None, parent_trade_id: int = None, trade_category: str = 'SPECULATIVE'):
         """自動建倉：以當前 Mid 價格（考慮 1% 滑點）寫入 virtual_trades"""
         mid, _ = self.get_option_mid_price(symbol, opt_type, strike, expiry)
         if mid is None:
@@ -66,7 +66,8 @@ class GhostTrader:
             theta=theta,
             gamma=gamma,
             tags=tags,
-            parent_trade_id=parent_trade_id
+            parent_trade_id=parent_trade_id,
+            trade_category=trade_category
         )
         logger.info(f"🟢 VTR 自動建倉成功 [{trade_id}]: {symbol} {opt_type} {strike} {expiry} QTY:{quantity} Entry:{entry_price:.2f}")
         return trade_id

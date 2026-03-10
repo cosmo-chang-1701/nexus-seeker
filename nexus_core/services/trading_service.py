@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Dict, List, Any, Optional
@@ -167,6 +168,9 @@ class TradingService:
             valid_user_alerts = []
             
             # 獲取該使用者的動態風險參數與目前持倉統計
+            # 🚀 [Resource Isolation] 確保 Greeks 數據最新，避免使用舊 Delta 判斷避險
+            await asyncio.to_thread(portfolio.refresh_portfolio_greeks, uid)
+            
             user_context = database.get_full_user_context(uid)
             user_capital = user_context.capital
             user_risk_pref = user_context.risk_limit_base
@@ -219,6 +223,19 @@ class TradingService:
                                 data['hedge_unlock'] = unlock_advice
                             break
                     
+                    # 🚀 3. 新增：自動回補避險 (Auto Re-Hedging)
+                    # 條件：任一維度觸發 (技術/宏觀/曝險) 且符合 State Lock (1hr)
+                    now_ts = int(time.time())
+                    if now_ts - user_context.last_rehedge_alert_time > 3600:
+                        rehedge_advice = hedging.evaluate_rehedge_necessity(user_context, data)
+                        if rehedge_advice:
+                            data['rehedge_info'] = rehedge_advice
+                            # 更新資料庫中的 last_rehedge_alert_time 以防止重複發送
+                            database.upsert_user_config(uid, last_rehedge_alert_time=now_ts)
+                            # 為了讓同一次 Scan 中的其他 Symbol 不重複觸發，
+                            # 手動更新 user_context 的值 (雖然下一個 UserLoop 會重新抓，但同一個 UserLoop 會繼續跑剩餘 symbol)
+                            user_context.last_rehedge_alert_time = now_ts
+                    
                     valid_user_alerts.append(data)
             
             if valid_user_alerts:
@@ -239,6 +256,13 @@ class TradingService:
             try:
                 opt_t = 'put' if 'PUT' in strategy else 'call'
                 qty = -safe_qty if 'STO' in strategy else safe_qty
+                
+                # 自動判定類別：Short SPY 或 BTO SPY Put 為 HEDGE
+                trade_category = 'SPECULATIVE'
+                if sym == 'SPY':
+                    if qty < 0 or (opt_t == 'put' and qty > 0):
+                        trade_category = 'HEDGE'
+                        
                 await asyncio.to_thread(
                     self.vtr_engine.record_virtual_entry,
                     user_id=uid,
@@ -250,7 +274,8 @@ class TradingService:
                     weighted_delta=data.get('weighted_delta', 0.0),
                     theta=data.get('theta', 0.0),
                     gamma=data.get('gamma', 0.0),
-                    tags=["auto_scan"]
+                    tags=["auto_scan"],
+                    trade_category=trade_category
                 )
             except Exception as e:
                 logger.error(f"VTR Entry failed: {e}")
@@ -309,7 +334,7 @@ class TradingService:
         
         return results
 
-    async def get_after_market_report_data(self) -> Dict[int, List[str]]:
+    async def get_after_market_report_data(self) -> Dict[int, Dict[str, Any]]:
         """
         取得盤後結算報告數據。
         """
@@ -324,12 +349,25 @@ class TradingService:
 
         results = {}
         for uid, rows in user_ports.items():
-            user_capital = database.get_full_user_context(uid).capital
+            user_ctx = database.get_full_user_context(uid)
+            user_capital = user_ctx.capital
+            
+            # 1. 執行標準持倉報告邏輯
             report_lines = await asyncio.to_thread(
                 portfolio.check_portfolio_status_logic, 
                 rows, 
                 user_capital
             )
+            
+            # 2. 執行對沖績效分析
+            hedge_analysis = await asyncio.to_thread(
+                hedging.analyze_hedge_performance,
+                uid
+            )
+            
             if report_lines:
-                results[uid] = report_lines
+                results[uid] = {
+                    "report_lines": report_lines,
+                    "hedge_analysis": hedge_analysis
+                }
         return results

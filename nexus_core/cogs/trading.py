@@ -12,7 +12,7 @@ import database
 import market_time
 from services.trading_service import TradingService
 from services.alert_filter import should_send_priority_alert, is_whipsaw_noise
-from cogs.embed_builder import create_scan_embed, build_vtr_stats_embed, create_portfolio_report_embed
+from cogs.embed_builder import create_scan_embed, build_vtr_stats_embed, create_portfolio_report_embed, create_rehedge_embed
 
 ny_tz = ZoneInfo("America/New_York")
 logger = logging.getLogger(__name__)
@@ -223,6 +223,11 @@ class SchedulerCog(commands.Cog):
                     user_capital = database.get_user_capital(uid) or 50000.0
                     for data in valid_alerts:
                         await self.bot.queue_dm(uid, embed=create_scan_embed(data, user_capital))
+                        
+                        # 🛡️ 檢查是否有自動回補避險建議
+                        rehedge_info = data.get('rehedge_info')
+                        if rehedge_info:
+                            await self.bot.queue_dm(uid, embed=create_rehedge_embed(rehedge_info))
 
             # 🚀 掃描結束後更新宏觀環境快照，供下一輪 AlertFilter 比對
             self._update_macro_state(user_results)
@@ -253,10 +258,13 @@ class SchedulerCog(commands.Cog):
 
         user_reports = await self.trading_service.get_after_market_report_data()
 
-        for uid, report_lines in user_reports.items():
+        for uid, data in user_reports.items():
             user = await self.bot.fetch_user(uid)
             if user:
-                embed = create_portfolio_report_embed(report_lines)
+                report_lines = data.get("report_lines", [])
+                hedge_analysis = data.get("hedge_analysis")
+                
+                embed = create_portfolio_report_embed(report_lines, hedge_analysis)
                 try:
                     await self.bot.queue_dm(uid, message="📊 **【Nexus Seeker 盤後結算系統】**", embed=embed)
                 except discord.Forbidden:

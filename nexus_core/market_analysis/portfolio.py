@@ -224,3 +224,120 @@ def analyze_correlation(positions_by_symbol):
 def evaluate_defense_status(quantity, opt_type, pnl_pct, current_delta, dte):
     """回溯相容封裝。"""
     return evaluate_defense_status_core(quantity, opt_type, pnl_pct, current_delta, dte)
+def refresh_portfolio_greeks(user_id: int = None):
+    """
+    [Worker] 重新整理投資組合的希臘字母數據並寫回資料庫。
+    若 user_id 為 None，則處理全站所有使用者。
+    """
+    try:
+        from database.portfolio import get_all_portfolio, get_user_portfolio, update_portfolio_greeks
+        from database.virtual_trading import get_all_open_virtual_trades, get_open_virtual_trades, update_virtual_trade_greeks
+        
+        # 1. 取得持倉資料
+        if user_id:
+            real_positions = get_user_portfolio(user_id)
+            virtual_positions = get_open_virtual_trades(user_id)
+        else:
+            real_positions = get_all_portfolio()
+            virtual_positions = get_all_open_virtual_trades()
+
+        # 2. 準備市場資料批次下載
+        symbols = set()
+        for row in real_positions:
+            # get_all_portfolio 回傳 [uid, id, sym, ...] 
+            # get_user_portfolio 回傳 [id, sym, ...]
+            # 這裡需要小心索引，或者是統一回傳格式。
+            # 觀察 database/portfolio.py:
+            # get_user_portfolio: SELECT id, symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost
+            # get_all_portfolio: SELECT user_id, id, symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost
+            sym = row[2] if len(row) > 8 else row[1]
+            symbols.add(sym)
+        for row in virtual_positions:
+            symbols.add(row['symbol'])
+        
+        if not symbols:
+            return
+            
+        spy_df = market_data_service.get_history_df("SPY", "5d")
+        spy_price = spy_df['Close'].iloc[-1] if not spy_df.empty else 670.0
+        
+        stock_data = {}
+        for sym in symbols:
+            df = market_data_service.get_history_df(sym, "5d")
+            quote = market_data_service.get_quote(sym)
+            stock_data[sym] = {
+                'price': quote.get('c', df['Close'].iloc[-1] if not df.empty else 0.0),
+                'beta': calculate_beta(df, spy_df) if not df.empty and not spy_df.empty else 1.0,
+                'div_yield': market_data_service.get_dividend_yield(sym)
+            }
+
+        # 3. 更新真實持倉
+        for row in real_positions:
+            # 索引偏移處理
+            offset = 1 if len(row) > 8 else 0
+            trade_id = row[offset]
+            sym = row[offset+1]
+            opt_type = row[offset+2]
+            strike = row[offset+3]
+            expiry = row[offset+4]
+            qty = row[offset+6]
+            
+            s_info = stock_data.get(sym)
+            if not s_info or s_info['price'] <= 0: continue
+            
+            # 計算 Greeks (簡化 iv 獲取)
+            mid, iv = get_option_chain_mid_iv(sym, expiry, strike, opt_type)
+            if iv <= 0: continue
+            
+            exp_date = datetime.strptime(expiry, '%Y-%m-%d').date()
+            t_years = max((exp_date - datetime.now().date()).days, 1) / 365.0
+            
+            greeks = calculate_greeks(opt_type, s_info['price'], strike, t_years, iv, s_info['div_yield'])
+            
+            # Beta-Weighting
+            weight_factor = s_info['beta'] * (s_info['price'] / spy_price)
+            weighted_delta = greeks['delta'] * qty * 100 * weight_factor
+            
+            update_portfolio_greeks(trade_id, round(weighted_delta, 4), round(greeks['theta'] * qty * 100, 4), round(greeks['gamma'] * qty * 100 * (weight_factor**2), 6))
+
+        # 4. 更新虛擬持倉
+        for row in virtual_positions:
+            trade_id = row['id']
+            sym = row['symbol']
+            opt_type = row['opt_type']
+            strike = row['strike']
+            expiry = row['expiry']
+            qty = row['quantity']
+            
+            s_info = stock_data.get(sym)
+            if not s_info or s_info['price'] <= 0: continue
+            
+            mid, iv = get_option_chain_mid_iv(sym, expiry, strike, opt_type)
+            if iv <= 0: continue
+            
+            exp_date = datetime.strptime(expiry, '%Y-%m-%d').date()
+            t_years = max((exp_date - datetime.now().date()).days, 1) / 365.0
+            
+            greeks = calculate_greeks(opt_type, s_info['price'], strike, t_years, iv, s_info['div_yield'])
+            
+            weight_factor = s_info['beta'] * (s_info['price'] / spy_price)
+            weighted_delta = greeks['delta'] * qty * 100 * weight_factor
+            
+            update_virtual_trade_greeks(trade_id, round(weighted_delta, 4), round(greeks['theta'] * qty * 100, 4), round(greeks['gamma'] * qty * 100 * (weight_factor**2), 6))
+
+    except Exception as e:
+        logger.error(f"refresh_portfolio_greeks 失敗: {e}", exc_info=True)
+
+def get_option_chain_mid_iv(symbol, expiry, strike, opt_type):
+    """內部輔助：獲取合約的 Mid 價格與 IV"""
+    try:
+        calls, puts = get_option_chain(symbol, expiry)
+        chain = calls if opt_type == 'call' else puts
+        contract = chain[chain['strike'] == strike]
+        if not contract.empty:
+            mid = (contract['bid'].iloc[0] + contract['ask'].iloc[0]) / 2
+            iv = contract['impliedVolatility'].iloc[0]
+            return mid, iv
+    except:
+        pass
+    return 0.0, 0.0

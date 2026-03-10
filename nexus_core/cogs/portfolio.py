@@ -32,13 +32,28 @@ class PortfolioCog(commands.Cog):
         expiry="到期日 (YYYY-MM-DD)",
         entry_price="成交價格 (權利金)",
         quantity="口數",
-        stock_cost="預設 0。輸入您的持有現股平均成本 (將精確計算防禦區間)"
+        stock_cost="預設 0。輸入您的持有現股平均成本 (將精確計算防禦區間)",
+        category="部位類別 (SPECULATIVE/HEDGE)，預設為 SPECULATIVE"
     )
-    async def add_trade(self, interaction: discord.Interaction, symbol: str, opt_type: app_commands.Choice[str], strike: float, expiry: str, entry_price: float, quantity: int, stock_cost: float = 0.0):
+    @app_commands.choices(category=[
+        app_commands.Choice(name="SPECULATIVE (投機部位)", value="SPECULATIVE"),
+        app_commands.Choice(name="HEDGE (對沖部位)", value="HEDGE")
+    ])
+    async def add_trade(self, interaction: discord.Interaction, symbol: str, opt_type: app_commands.Choice[str], strike: float, expiry: str, entry_price: float, quantity: int, stock_cost: float = 0.0, category: app_commands.Choice[str] = None):
         symbol = symbol.upper()
         user_id = interaction.user.id
+        trade_category = category.value if category else "SPECULATIVE"
+        
+        # 自動優化：通常 SPY Short Call/Put 或 BTO Put 可能是對沖
+        if not category and symbol == "SPY":
+            if quantity < 0 or (opt_type.value == "put" and quantity > 0):
+                trade_category = "HEDGE"
+
         try:
-            trade_id = database.add_portfolio_record(user_id, symbol, opt_type.value, strike, expiry, entry_price, quantity, stock_cost)
+            trade_id = database.add_portfolio_record(
+                user_id, symbol, opt_type.value, strike, expiry, entry_price, quantity, stock_cost,
+                trade_category=trade_category
+            )
             action_text = "賣出 (STO)" if quantity < 0 else "買入 (BTO)"
             # 私訊回覆使用者
             cost_str = f" | 現股成本: ${stock_cost:.2f}" if stock_cost > 0.0 else ""
@@ -99,10 +114,16 @@ class PortfolioCog(commands.Cog):
             return
         msg = "📊 **【您的專屬持倉清單】**\n"
         for row in rows:
-            trade_id, sym, o_type, strike, exp, price, qty, stock_cost = row
+            # 根據 portfolio.py 的 get_user_portfolio 回傳的欄位
+            # id(0), symbol(1), opt_type(2), strike(3), expiry(4), entry_price(5), quantity(6), stock_cost(7), 
+            # weighted_delta(8), theta(9), gamma(10), trade_category(11)
+            trade_id, sym, o_type, strike, exp, price, qty, stock_cost = row[:8]
+            category = row[11] if len(row) > 11 else "SPEC"
+            cat_tag = f" | `{category}`"
+            
             action = "賣出 (STO)" if qty < 0 else "買入 (BTO)"
             cov_str = f" | 現股成本: ${stock_cost:.2f}" if stock_cost > 0.0 else ""
-            msg += f"`ID:{trade_id:02d}` | **{sym}** | {exp} 到期 | ${strike} {o_type.upper()} | {action} {abs(qty)}口 | 成本: ${price}{cov_str}\n"
+            msg += f"`ID:{trade_id:02d}` | **{sym}** | {exp} 到期 | ${strike} {o_type.upper()} | {action} {abs(qty)}口 | 成本: ${price}{cov_str}{cat_tag}\n"
         await interaction.response.send_message(msg, ephemeral=True)
 
     @app_commands.command(name="remove_trade", description="將部位從您的監控庫中移除")

@@ -14,6 +14,7 @@ class UserContext:
     total_weighted_delta: float # 組合總加權 Delta (目前持倉)
     total_theta: float          # 組合總每日 Theta (目前持倉)
     total_gamma: float          # 組合總 Gamma (目前持倉)
+    last_rehedge_alert_time: int = 0 # 上次發送回補警報的時間 (Unix Timestamp)
 
 
 # ==========================================
@@ -44,7 +45,7 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:
                 kwargs['portfolio_value'] = kwargs.pop('capital')
             
             # 3. 動態構建 SQL SET 子句 (白名單防護)
-            allowed_keys = {'portfolio_value', 'risk_limit_pct'}
+            allowed_keys = {'portfolio_value', 'risk_limit_pct', 'last_rehedge_alert_time'}
             update_pairs = []
             values = []
             
@@ -126,7 +127,7 @@ def get_full_user_context(user_id: int) -> UserContext:
             
             # 1. 查詢使用者基本設定
             cursor.execute("""
-                SELECT portfolio_value, risk_limit_pct 
+                SELECT portfolio_value, risk_limit_pct, last_rehedge_alert_time
                 FROM user_settings 
                 WHERE user_id = ?
             """, (user_id,))
@@ -159,6 +160,7 @@ def get_full_user_context(user_id: int) -> UserContext:
             # 3. 處理空值並封裝回傳
             capital = float(user_row['portfolio_value']) if user_row and user_row['portfolio_value'] is not None else 100000.0
             risk_limit = float(user_row['risk_limit_pct']) if user_row and user_row['risk_limit_pct'] is not None else 15.0
+            last_rehedge = int(user_row['last_rehedge_alert_time']) if user_row and 'last_rehedge_alert_time' in user_row.keys() and user_row['last_rehedge_alert_time'] is not None else 0
             
             return UserContext(
                 user_id=user_id,
@@ -166,7 +168,8 @@ def get_full_user_context(user_id: int) -> UserContext:
                 risk_limit_base=risk_limit,
                 total_weighted_delta=sum_delta,
                 total_theta=sum_theta,
-                total_gamma=sum_gamma
+                total_gamma=sum_gamma,
+                last_rehedge_alert_time=last_rehedge
             )
             
     except Exception as e:

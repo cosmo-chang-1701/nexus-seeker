@@ -1,9 +1,75 @@
+import logging
+import time
 from typing import Dict, Any, Optional
 from services import market_data_service
 from database.user_settings import UserContext
 from services.alert_filter import TrendState, MTFResult
+import database
 
 logger = logging.getLogger(__name__)
+
+def evaluate_rehedge_necessity(u_ctx: UserContext, result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    評估是否需要重新掛回 SPY 避險。
+    
+    監控維度：
+    1. 技術面破位: Price < EMA 8 或 EMA 21
+    2. 宏觀恐慌: VIX > 20 或 VIX 單日變動 > 10%
+    3. 曝險超標: Portfolio Delta / Capital > User Risk Limit
+    """
+    # 1. 獲取當前市場狀態 (優先使用 result 中的數據，若無則給予預設值)
+    current_price = result.get('price') or result.get('current_price', 0.0)
+    ema_8 = result.get('ema_8', 0.0)
+    ema_21 = result.get('ema_21', 0.0)
+    
+    # 宏觀數據 (VIX)
+    current_vix = result.get('macro_vix') or result.get('vix', 18.0)
+    vix_change = result.get('macro_vix_change', 0.0)
+    
+    # 基準 SPY 價格 (計算曝險用)
+    spy_price = result.get('spy_price', 670.0)
+    
+    rehedge_reason = None
+
+    # 2. 條件判定：技術面失守
+    # 只有在有數據的情況下才判斷
+    if current_price > 0 and ema_8 > 0 and current_price < ema_8:
+        rehedge_reason = "📉 價格跌破 EMA 8 (動能轉弱)"
+    if current_price > 0 and ema_21 > 0 and current_price < ema_21:
+        rehedge_reason = "⚠️ 價格跌破 EMA 21 (趨勢反轉)"
+
+    # 3. 條件判定：環境惡化 (宏觀恐慌)
+    if current_vix > 20:
+        rehedge_reason = f"🌪️ VIX 突破 20 ({current_vix:.1f} 市場進入恐慌區)"
+    if vix_change > 0.10: # 單日變動 > 10%
+        rehedge_reason = f"⚡ VIX 單日大幅飆升 ({vix_change*100:+.1f}%)"
+
+    # 4. 條件判定：Delta 曝險過度
+    # 公式: (Total Delta * SPY Price) / Capital * 100
+    if u_ctx.capital > 0:
+        current_exposure_pct = (u_ctx.total_weighted_delta * spy_price) / u_ctx.capital * 100
+        if current_exposure_pct > u_ctx.risk_limit_base:
+            rehedge_reason = f"🔥 總曝險 ({current_exposure_pct:.1f}%) 已超過個人風險上限 ({u_ctx.risk_limit_base}%)"
+
+    if rehedge_reason:
+        # 狀態鎖定 (State Lock) 邏輯移至外層調用者 (TradingService) 處理，
+        # 此處僅負責邏輯判斷。
+        
+        # 計算回補建議：將 Delta 回調至中性或安全區所需的 SPY 股數
+        # needed_spy_hedge = u_ctx.total_weighted_delta # 假設回歸 Delta 中性
+        # 如果當前是 正 Delta (曝險)，回補應該是賣出 (Short) SPY
+        # 股數建議為當前加權 Delta (因為 1 單位的 Weighted Delta = 1 股 SPY 曝險)
+        needed_spy_qty = u_ctx.total_weighted_delta
+        
+        return {
+            "action": "RE_HEDGE",
+            "symbol": result.get('symbol', 'SPY'),
+            "reason": rehedge_reason,
+            "suggested_spy_qty": round(needed_spy_qty, 2),
+            "priority": "HIGH" if (current_price < ema_21 or current_vix > 25) else "NORMAL"
+        }
+    
+    return None
 
 def calculate_hedge_requirement(total_weighted_delta: float, spy_price: float, target_delta: float = 0.0) -> dict:
     """
@@ -122,4 +188,87 @@ def suggest_hedge_unlock(u_ctx: UserContext, result: Dict[str, Any], mtf: MTFRes
         "reduce_spy_qty": round(potential_delta_shift, 2),
         "new_delta": round(u_ctx.total_weighted_delta + potential_delta_shift, 2),
         "risk_note": "解除對沖將增加系統化曝險，建議設定 EMA 8 作為移動停利線"
+    }
+
+def analyze_hedge_performance(user_id: int) -> Dict[str, Any]:
+    """
+    分析投資組合的對沖有效性與績效歸因。
+    """
+    from database.portfolio import get_user_portfolio
+    from database.virtual_trading import get_open_virtual_trades
+    from market_analysis.portfolio import get_option_chain_mid_iv
+    
+    # 1. 獲取所有 OPEN 部位
+    real_trades = get_user_portfolio(user_id)
+    virtual_trades = get_open_virtual_trades(user_id)
+    
+    all_trades_normalized = []
+    
+    # Real trades index mapping: 
+    # id(0), symbol(1), opt_type(2), strike(3), expiry(4), entry_price(5), quantity(6), stock_cost(7), 
+    # weighted_delta(8), theta(9), gamma(10), trade_category(11)
+    for t in real_trades:
+        all_trades_normalized.append({
+            'symbol': t[1],
+            'opt_type': t[2],
+            'strike': t[3],
+            'expiry': t[4],
+            'entry_price': t[5],
+            'quantity': t[6],
+            'weighted_delta': t[8] if len(t) > 8 else 0.0,
+            'trade_category': t[11] if len(t) > 11 else 'SPECULATIVE'
+        })
+        
+    for t in virtual_trades:
+        all_trades_normalized.append({
+            'symbol': t['symbol'],
+            'opt_type': t['opt_type'],
+            'strike': t['strike'],
+            'expiry': t['expiry'],
+            'entry_price': t['entry_price'],
+            'quantity': t['quantity'],
+            'weighted_delta': t.get('weighted_delta', 0.0),
+            'trade_category': t.get('trade_category', 'SPECULATIVE')
+        })
+
+    alpha_pnl = 0.0  # 個股策略損益
+    hedge_pnl = 0.0  # 對沖部位損益
+    
+    alpha_delta = 0.0
+    hedge_delta = 0.0
+
+    for t in all_trades_normalized:
+        # 獲取當前價格以計算 PnL
+        current_price, _ = get_option_chain_mid_iv(t['symbol'], t['expiry'], t['strike'], t['opt_type'])
+        
+        if current_price > 0:
+            # PnL = (Current - Entry) * Qty * 100
+            # 注意：這裡假設 quantity 正值代表 Long，負值代表 Short
+            # PnL = (current - entry) * qty * 100
+            pnl = (current_price - t['entry_price']) * t['quantity'] * 100
+        else:
+            pnl = 0.0
+            
+        delta = t['weighted_delta']
+        
+        if t['trade_category'] == 'HEDGE':
+            hedge_pnl += pnl
+            hedge_delta += delta
+        else:
+            alpha_pnl += pnl
+            alpha_delta += delta
+
+    # 2. 計算對沖比率 (Hedge Ratio)
+    # 反映對沖部位抵銷了多少比例的系統性曝險
+    hedge_ratio = abs(hedge_delta / alpha_delta) if alpha_delta != 0 else 0.0
+    
+    # 3. 淨損益與歸因
+    net_pnl = alpha_pnl + hedge_pnl
+    
+    return {
+        "net_pnl": round(net_pnl, 2),
+        "alpha_contribution": round(alpha_pnl, 2),
+        "hedge_contribution": round(hedge_pnl, 2),
+        "hedge_ratio": round(hedge_ratio, 4),
+        "status": "OVER_HEDGED" if hedge_ratio > 1.1 else "UNDER_HEDGED" if hedge_ratio < 0.8 else "OPTIMAL"
     }
