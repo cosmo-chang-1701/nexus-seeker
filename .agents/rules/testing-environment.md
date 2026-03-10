@@ -1,11 +1,6 @@
 ---
-trigger: model_decision
-description: when test case neede
----
-
----
 trigger: always_on
-description: When working on all test case.
+description: when test case neede
 ---
 
 # Testing Environment & Standards

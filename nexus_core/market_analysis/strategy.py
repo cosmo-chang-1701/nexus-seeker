@@ -485,6 +485,35 @@ def _calculate_sizing(strategy, best_contract, days_to_expiry, expected_move=0.0
                     
     return aroc, alloc_pct, margin_per_contract
 
+def evaluate_ema_trend(symbol: str, current_price: float) -> dict:
+    """
+    評估 EMA 8/21 趨勢狀態，提供動態趨勢濾網功能。
+    """
+    ema8 = market_data_service.get_ema(symbol, 8)
+    ema21 = market_data_service.get_ema(symbol, 21)
+    
+    if not ema8 or not ema21:
+        return {"trend": "UNKNOWN", "score": 0, "ema_8": 0.0, "ema_21": 0.0, "distance_from_21": 0.0}
+
+    # 計算偏離度 (Distance)
+    distance_pct = (current_price - ema21) / ema21
+    
+    if current_price > ema8 > ema21:
+        state = "BULLISH_STRONG"  # 多頭強勢
+    elif ema8 > ema21 and current_price <= ema21:
+        state = "BULLISH_CORRECTION" # 多頭回測
+    elif current_price < ema8 < ema21:
+        state = "BEARISH_STRONG" # 空頭強勢
+    else:
+        state = "NEUTRAL"
+
+    return {
+        "trend": state,
+        "ema_8": ema8,
+        "ema_21": ema21,
+        "distance_from_21": round(distance_pct * 100, 2)
+    }
+
 def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None):
     """
     掃描技術指標、波動率位階、期限結構、Beta 風險與加權 Delta。
@@ -540,6 +569,24 @@ def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None):
         strategy, opt_type, target_delta, min_dte, max_dte = _determine_strategy_signal(indicators)
         if not strategy: return None
 
+        # 🚀 6.1 EMA 動態趨勢濾網 (Strategy Filtering)
+        # 對於 DTE > 90 的標的，EMA 的短期參考價值下降趨近於 0，跳過計算以節省 CPU 週期
+        if days_to_expiry <= 90:
+            ema_eval = evaluate_ema_trend(symbol, price)
+            trend_state = ema_eval.get("trend")
+            
+            # 趨勢反轉 (Trend Reversal)：Price < EMA_8 < EMA_21。系統應自動禁止所有多頭建倉。
+            if trend_state == "BEARISH_STRONG" and strategy in ["BTO_CALL", "STO_PUT"]:
+                logging.info(f"[{symbol}] 剔除: 動態趨勢濾網偵測到空頭強勢 (Price < EMA8 < EMA21)，禁止多頭建倉 ({strategy})")
+                return None
+            
+            ema_8 = ema_eval.get("ema_8", 0.0)
+            ema_21 = ema_eval.get("ema_21", 0.0)
+            dist_21 = ema_eval.get("distance_from_21", 0.0)
+        else:
+            trend_state = "LONG_TERM"
+            ema_8, ema_21, dist_21 = 0.0, 0.0, 0.0
+
         expirations = ticker.options
         if not expirations: return None
         today = datetime.now().date()
@@ -547,14 +594,6 @@ def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None):
         # 🚀 7. 進階分析 (請確保這些子函數內部也不要呼叫 .info)
         mmm_pct, safe_lower, safe_upper, days_to_earnings = _calculate_mmm(ticker, price, today, symbol, is_etf)
         ts_ratio, ts_state = _calculate_term_structure(ticker, expirations, price, today)
-
-        target_expiry_date, days_to_expiry = _find_target_expiry(expirations, today, min_dte, max_dte)
-        if not target_expiry_date: return None
-
-        best_contract, opt_chain = _get_best_contract_data(ticker, target_expiry_date, opt_type, target_delta, price, days_to_expiry, dividend_yield)
-        if best_contract is None:
-            logging.warning(f"跳過 {symbol}: 找不到符合條件的期權合約")
-            return None
 
         # 8. 風控與規模計算
         if opt_chain is not None:
@@ -604,7 +643,9 @@ def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None):
             "margin_per_contract": margin_per_contract, "vrp": risk_metrics.get('vrp', 0.0),
             "theta": theta_val, "gamma": gamma_val,
             "mid_price": risk_metrics.get('mid_price', 0.0), "suggested_hedge_strike": risk_metrics.get('suggested_hedge_strike'),
-            "liq_status": risk_metrics.get('liq_status', 'N/A'), "liq_msg": risk_metrics.get('liq_msg', ''), "spy_price": safe_spy_price
+            "liq_status": risk_metrics.get('liq_status', 'N/A'), "liq_msg": risk_metrics.get('liq_msg', ''), "spy_price": safe_spy_price,
+            "ema_8": ema_8, "ema_21": ema_21, "trend": trend_state,
+            "distance_from_21": dist_21
         }
 
     except Exception as e:

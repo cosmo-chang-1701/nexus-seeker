@@ -112,6 +112,20 @@ class GhostTrader:
                 self._close_position(trade, "Seller Stop Loss (>=150%)", mid)
                 
         elif quantity > 0:
+            # --- 監控層：動能衰竭預警 (Exit Management) ---
+            # 利用 EMA 作為動態停損/平倉依據，對買方 (BTO) 的時間價值損耗防禦至關重要
+            ema21 = market_data_service.get_ema(symbol, 21)
+            quote = market_data_service.get_quote(symbol)
+            current_price = quote.get('c') if quote else None
+            
+            if ema21 is not None and current_price is not None:
+                if opt_type == 'call' and current_price < ema21:
+                    self._close_position(trade, "🚨 動能平倉警報 ｜ 價格跌破 EMA 21 (趨勢轉弱)", mid)
+                    return
+                elif opt_type == 'put' and current_price > ema21:
+                    self._close_position(trade, "🚨 動能平倉警報 ｜ 價格突破 EMA 21 (空頭止損)", mid)
+                    return
+
             # 買方：獲利為正值，虧損為負值。(例如買入2.0，現價4.0，獲利 2/2 = 100%)
             # (current - entry) / entry
             pnl_pct = (mid - entry_price) / entry_price

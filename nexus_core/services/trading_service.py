@@ -101,44 +101,43 @@ class TradingService:
             logger.error(f"全域基準資料獲取失敗: {e}")
             df_spy, spy_price, macro_data = None, 670.0, MacroContext(vix=20.0, oil_price=85.0)
 
-        # 2. 提取不重複標的進行「批次掃描」
-        unique_targets = set((sym, stock_cost, use_llm) for uid, sym, stock_cost, use_llm in all_watchlists)
-        scan_results = {}
-        news_cache = {}
-        reddit_cache = {}
-
-        for sym, stock_cost, use_llm in unique_targets:
+        # 2. 提取不重複標的進行「併行批次掃描」
+        unique_targets = list(set((sym, stock_cost, use_llm) for uid, sym, stock_cost, use_llm in all_watchlists))
+        
+        async def _scan_single_target(target):
+            sym, stock_cost, use_llm = target
             try:
                 # 使用 to_thread 確保 EMA/SMA 計算不阻塞主線程
                 res = await asyncio.to_thread(market_math.analyze_symbol, sym, stock_cost, 0.0, df_spy, spy_price)
+                if not res:
+                    return target, None
+
+                # 併行獲取新聞與 Reddit
+                news_task = news_service.fetch_recent_news(sym)
+                reddit_task = reddit_service.get_reddit_context(sym)
+                news_text, reddit_text = await asyncio.gather(news_task, reddit_task)
+
+                # 語意風控判定
+                if use_llm:
+                    ai_verdict = await llm_service.evaluate_trade_risk(sym, res['strategy'], news_text, reddit_text)
+                    res['ai_decision'] = ai_verdict.get('decision', 'APPROVE')
+                    res['ai_reasoning'] = ai_verdict.get('reasoning', '無資料')
+                else:
+                    res['ai_decision'] = 'SKIP'
+                    res['ai_reasoning'] = '未啟用 LLM 語意風控'
                 
-                if res:
-                    # 併行獲取新聞與 Reddit (活用快取)
-                    if sym not in news_cache:
-                        news_cache[sym] = await news_service.fetch_recent_news(sym)
-                    if sym not in reddit_cache:
-                        reddit_cache[sym] = await reddit_service.get_reddit_context(sym)
-
-                    news_text = news_cache[sym]
-                    reddit_text = reddit_cache[sym]
-
-                    # 語意風控判定
-                    if use_llm:
-                        ai_verdict = await llm_service.evaluate_trade_risk(sym, res['strategy'], news_text, reddit_text)
-                        res['ai_decision'] = ai_verdict.get('decision', 'APPROVE')
-                        res['ai_reasoning'] = ai_verdict.get('reasoning', '無資料')
-                    else:
-                        res['ai_decision'] = 'SKIP'
-                        res['ai_reasoning'] = '未啟用 LLM 語意風控'
-                    
-                    res.update({'news_text': news_text, 'reddit_text': reddit_text})
-                    scan_results[(sym, stock_cost, use_llm)] = res
-                    
+                res.update({'news_text': news_text, 'reddit_text': reddit_text})
+                return target, res
             except Exception as e:
                 logger.error(f"掃描標的 {sym} 失敗: {e}")
-            
-            # 短暫休眠防止速率限制 (Rate Limit)
-            await asyncio.sleep(0.1)
+                return target, None
+
+        # 🚀 併行執行所有標的分量
+        # 注意：若 unique_targets 很大，可考慮分批 (Chunking) 以防觸發外部 API Rate Limit
+        tasks = [_scan_single_target(t) for t in unique_targets]
+        results_list = await asyncio.gather(*tasks)
+        
+        scan_results = {target: res for target, res in results_list if res is not None}
 
         if not scan_results:
             return {}

@@ -260,6 +260,34 @@ def _add_ai_verification_fields(embed, data):
             
         embed.add_field(name=ai_title, value=ai_value, inline=False)
 
+def _add_trend_and_support_fields(embed, data):
+    """添加 EMA 狀態圖形化燈號欄位"""
+    trend = data.get('trend', 'UNKNOWN')
+    ema21 = data.get('ema_21', 0.0)
+    distance = data.get('distance_from_21', 0.0)
+
+    if trend == "BULLISH_STRONG":
+        trend_str = "📈 Strong Bullish (Price > 8 > 21)"
+    elif trend == "BULLISH_CORRECTION":
+        trend_str = "📉 Bullish Correction (EMA 8 > 21 ≥ Price)"
+    elif trend == "BEARISH_STRONG":
+        trend_str = "🐻 Strong Bearish (Price < 8 < 21)"
+    else:
+        trend_str = "⚖️ Neutral Trend"
+
+    # Risk 判定
+    if distance > 10.0:
+        risk_str = "⚠️ Overextended (Gap > 10%)"
+    elif distance < -10.0:
+        risk_str = "⚠️ Oversold (Gap < -10%)"
+    else:
+        risk_str = "✅ Stable Zone"
+
+    support_str = f"EMA 21 at ${ema21:.2f} (Gap: {distance:+.1f}%)"
+
+    trend_info = f"**Trend:** {trend_str}\n**Support:** {support_str}\n**Risk:** {risk_str}\n\u200b"
+    embed.add_field(name="🧭 趨勢與支撐 (EMA 8/21)", value=trend_info, inline=False)
+
 def create_scan_embed(data, user_capital=100000.0):
     strategy = data.get('strategy', 'UNKNOWN')
     stock_cost = data.get('stock_cost', 0.0)
@@ -269,6 +297,7 @@ def create_scan_embed(data, user_capital=100000.0):
     # 依序渲染 UI
     _add_market_overview_fields(embed, data)
     _add_volatility_fields(embed, data, strategy)
+    _add_trend_and_support_fields(embed, data)
     _add_performance_and_kelly_fields(embed, data, user_capital)
     _add_earnings_fields(embed, data, strategy)
     
