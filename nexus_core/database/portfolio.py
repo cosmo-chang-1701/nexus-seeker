@@ -4,13 +4,13 @@ from config import DB_NAME
 # ==========================================
 # 交易持倉 (Portfolio) CRUD (綁定 user_id)
 # ==========================================
-def add_portfolio_record(user_id, symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost):
+def add_portfolio_record(user_id, symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost, weighted_delta: float = 0.0, theta: float = 0.0, gamma: float = 0.0):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT INTO portfolio (user_id, symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (user_id, symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost))
+        INSERT INTO portfolio (user_id, symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost, weighted_delta, theta, gamma)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (user_id, symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost, weighted_delta, theta, gamma))
     trade_id = cursor.lastrowid
     conn.commit()
     conn.close()

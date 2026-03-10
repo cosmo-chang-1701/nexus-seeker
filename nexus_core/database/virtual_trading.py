@@ -7,15 +7,15 @@ from config import DB_NAME
 # 虛擬交易室 (Virtual Trading Room) CRUD
 # ==========================================
 
-def add_virtual_trade(user_id: int, symbol: str, opt_type: str, strike: float, expiry: str, entry_price: float, quantity: int, tags: list = None, parent_trade_id: int = None):
+def add_virtual_trade(user_id: int, symbol: str, opt_type: str, strike: float, expiry: str, entry_price: float, quantity: int, weighted_delta: float = 0.0, theta: float = 0.0, gamma: float = 0.0, tags: list = None, parent_trade_id: int = None):
     tags_str = json.dumps(tags) if tags else None
     
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT INTO virtual_trades (user_id, symbol, opt_type, strike, expiry, entry_price, quantity, status, parent_trade_id, tags)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?)
-    ''', (user_id, symbol, opt_type, strike, expiry, entry_price, quantity, parent_trade_id, tags_str))
+        INSERT INTO virtual_trades (user_id, symbol, opt_type, strike, expiry, entry_price, quantity, weighted_delta, theta, gamma, status, parent_trade_id, tags)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?)
+    ''', (user_id, symbol, opt_type, strike, expiry, entry_price, quantity, weighted_delta, theta, gamma, parent_trade_id, tags_str))
     
     trade_id = cursor.lastrowid
     conn.commit()

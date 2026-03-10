@@ -152,11 +152,11 @@ class TradingService:
         for uid, watchlist_items in user_watchlists.items():
             valid_user_alerts = []
             
-            # 獲取該使用者的動態風險參數
-            user_capital = database.get_user_capital(uid) or 50000.0
-            user_risk_pref = database.get_user_risk_limit(uid) or 15.0
-            current_stats = database.get_user_portfolio_stats(uid)
-            current_total_delta = current_stats.get('total_weighted_delta', 0.0)
+            # 獲取該使用者的動態風險參數與目前持倉統計
+            user_context = database.get_full_user_context(uid)
+            user_capital = user_context.capital
+            user_risk_pref = user_context.risk_limit_base
+            current_total_delta = user_context.total_weighted_delta
 
             for sym, stock_cost, use_llm in watchlist_items:
                 if (sym, stock_cost, use_llm) in scan_results:
@@ -220,6 +220,9 @@ class TradingService:
                     strike=data['strike'],
                     expiry=data['target_date'],
                     quantity=qty,
+                    weighted_delta=data.get('weighted_delta', 0.0),
+                    theta=data.get('theta', 0.0),
+                    gamma=data.get('gamma', 0.0),
                     tags=["auto_scan"]
                 )
             except Exception as e:
@@ -256,9 +259,9 @@ class TradingService:
                     if not trade_info: continue
                     
                     uid = trade_info['user_id']
-                    current_stats = database.get_user_portfolio_stats(uid)
-                    current_total_delta = current_stats.get('total_weighted_delta', 0.0)
-                    user_capital = database.get_user_capital(uid) or 50000.0
+                    user_context = database.get_full_user_context(uid)
+                    current_total_delta = user_context.total_weighted_delta
+                    user_capital = user_context.capital
 
                     # 位階判斷
                     target_delta, regime = hedging.get_market_regime_target(spy_price, user_capital)
@@ -294,7 +297,7 @@ class TradingService:
 
         results = {}
         for uid, rows in user_ports.items():
-            user_capital = database.get_user_capital(uid)
+            user_capital = database.get_full_user_context(uid).capital
             report_lines = await asyncio.to_thread(
                 portfolio.check_portfolio_status_logic, 
                 rows, 

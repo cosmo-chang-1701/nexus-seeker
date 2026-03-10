@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import logging
+from typing import Optional
 
 from market_analysis.ghost_trader import GhostTrader
 from cogs.embed_builder import build_vtr_stats_embed
@@ -48,15 +49,47 @@ class PortfolioCog(commands.Cog):
         except Exception as e:
             await interaction.response.send_message(f"❌ 寫入失敗: {e}", ephemeral=True)
 
-    @app_commands.command(name="set_capital", description="設定您的總資金規模，用於精算專屬的凱利建議倉位")
-    async def set_capital(self, interaction: discord.Interaction, capital: float):
-        if capital <= 0:
-            await interaction.response.send_message("❌ 資金必須大於 0。", ephemeral=True)
-            return
+    @app_commands.command(name="settings", description="配置帳戶全域參數 (資金與風險限制)")
+    @app_commands.describe(
+        capital="更新帳戶總資金 (USD)",
+        risk_limit="更新基準風險上限 % (1.0 - 50.0)"
+    )
+    async def update_settings(
+        self, 
+        interaction: discord.Interaction, 
+        capital: Optional[float] = None, 
+        risk_limit: Optional[float] = None
+    ):
         user_id = interaction.user.id
-        database.set_user_capital(user_id, capital)
-        await interaction.response.send_message(f"💰 已將您的專屬總資金設定為 `${capital:,.2f}`", ephemeral=True)
+        updates = []
+        kwargs = {}
 
+        # 1. 驗證並準備更新資金
+        if capital is not None:
+            if capital > 0:
+                kwargs['capital'] = capital
+                updates.append(f"💰 總資金: `${capital:,.2f}`")
+            else:
+                return await interaction.response.send_message("❌ 資金必須大於 0", ephemeral=True)
+
+        # 2. 驗證並準備更新風險限制
+        if risk_limit is not None:
+            if 1.0 <= risk_limit <= 50.0:
+                kwargs['risk_limit_pct'] = risk_limit
+                updates.append(f"🛡️ 風險限制: `{risk_limit}%`")
+            else:
+                return await interaction.response.send_message("❌ 風險限制需介於 1.0% 至 50.0% 之間", ephemeral=True)
+
+        # 3. 執行資料庫更新
+        if not kwargs:
+            return await interaction.response.send_message("請至少輸入一個要修改的參數。", ephemeral=True)
+
+        success = database.upsert_user_config(user_id, **kwargs)
+        if not success:
+            return await interaction.response.send_message("❌ 設定失敗，請稍後再試。", ephemeral=True)
+
+        msg = "✅ **帳戶設定已更新**：\n" + "\n".join(updates)
+        await interaction.response.send_message(msg, ephemeral=True)
     @app_commands.command(name="list_trades", description="列出您目前資料庫中的所有持倉")
     async def list_trades(self, interaction: discord.Interaction):
         user_id = interaction.user.id

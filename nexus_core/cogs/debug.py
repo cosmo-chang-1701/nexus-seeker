@@ -69,7 +69,7 @@ class DebugCog(commands.Cog):
         })
 
         # 3. 獲取用戶資金並渲染
-        user_capital = database.get_user_capital(interaction.user.id) or 50000.0
+        user_capital = database.get_full_user_context(interaction.user.id).capital
         embed = create_scan_embed(mock_data, user_capital)
         
         await interaction.followup.send(

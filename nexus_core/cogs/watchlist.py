@@ -178,15 +178,15 @@ class WatchlistCog(commands.Cog):
             })
 
             # 4. 🚀 核心更新：執行成交後曝險模擬與自動風控
-            user_capital = database.get_user_capital(user_id)
-            current_stats = database.get_user_portfolio_stats(user_id)
-            current_total_delta = current_stats.get('total_weighted_delta', 0.0)
+            user_context = database.get_full_user_context(user_id)
+            user_capital = user_context.capital
+            current_total_delta = user_context.total_weighted_delta
             
             strategy = result.get('strategy', '')
             side_multiplier = -1 if "STO" in strategy else 1
 
             # A. 取得用戶自定義風險上限 (預設 15.0%)
-            user_risk_limit = database.get_user_risk_limit(user_id) or 15.0
+            user_risk_limit = user_context.risk_limit_base
 
             # B. 執行「波動率校正」與「宏觀修正」後的風險精算
             safe_qty, hedge_spy = optimize_position_risk(

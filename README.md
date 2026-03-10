@@ -218,7 +218,7 @@ docker compose logs -f
 | `/add_trade` | 記錄實際交易以進行監控 | 見下方 |
 | `/list_trades` | 檢視持倉、損益與交易 ID | — |
 | `/remove_trade` | 依 ID 移除已平倉的持倉 | `trade_id: 1` |
-| `/set_capital` | 設定總資金以供 Kelly 倉位計算 | `capital: 50000` |
+| `/settings` | 配置帳戶全域參數 (例如：總資金與風險上限) | `capital: 50000 risk_limit: 15` |
 | `/vtr_list` | 列出虛擬交易室 (VTR) 開啟中的所有持倉 | — |
 | `/vtr_stats` | 檢視虛擬交易室 (VTR) 的績效統計 (勝率、損益、盈虧比) | — |
 

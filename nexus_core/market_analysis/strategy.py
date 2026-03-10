@@ -6,7 +6,7 @@ import yfinance as yf  # 僅保留用於 option_chain() / options
 from services import market_data_service
 from datetime import datetime
 from config import TARGET_DELTAS
-from .greeks import calculate_contract_delta
+from .greeks import calculate_contract_delta, calculate_greeks
 from .data import get_next_earnings_date
 
 from .risk_engine import calculate_beta
@@ -576,10 +576,19 @@ def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None):
         if strategy in ["STO_PUT", "STO_CALL"] and aroc < 15.0: return None
         if strategy in ["BTO_CALL", "BTO_PUT"] and aroc < 30.0: return None
 
-        # 🚀 9. 加權 Delta 計算 (NRO 核心數據)
+        # 🚀 9. 希臘字母計算 (Greeks Analysis)
         raw_delta = best_contract.get('bs_delta', 0.0)
         safe_spy_price = spy_price_val if spy_price_val > 0 else 1.0
         weighted_delta = round(raw_delta * beta * (price / safe_spy_price) * 100, 2)
+
+        # 計算 Theta 與 Gamma
+        iv_val = best_contract.get('impliedVolatility', 0.0)
+        t_years = max(days_to_expiry, 1) / 365.0
+        strike_val = best_contract.get('strike', 0.0)
+        greeks = calculate_greeks(opt_type, price, strike_val, t_years, iv_val, dividend_yield)
+        
+        theta_val = round(greeks.get('theta', 0.0), 4)
+        gamma_val = round(greeks.get('gamma', 0.0), 6)
 
         return {
             "symbol": symbol, "price": price, "beta": beta, "weighted_delta": weighted_delta,
@@ -593,6 +602,7 @@ def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None):
             "ask": risk_metrics.get('ask', 0.0), "spread": risk_metrics.get('spread', 0.0), "spread_ratio": risk_metrics.get('spread_ratio', 0.0), "delta": raw_delta,
             "iv": best_contract.get('impliedVolatility', 0.0), "aroc": aroc, "alloc_pct": alloc_pct,
             "margin_per_contract": margin_per_contract, "vrp": risk_metrics.get('vrp', 0.0),
+            "theta": theta_val, "gamma": gamma_val,
             "mid_price": risk_metrics.get('mid_price', 0.0), "suggested_hedge_strike": risk_metrics.get('suggested_hedge_strike'),
             "liq_status": risk_metrics.get('liq_status', 'N/A'), "liq_msg": risk_metrics.get('liq_msg', ''), "spy_price": safe_spy_price
         }
