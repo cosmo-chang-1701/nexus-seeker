@@ -2,6 +2,7 @@ import discord
 from discord.ext import tasks, commands
 from discord import app_commands
 import asyncio
+import time as _time
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 from typing import Dict
@@ -10,7 +11,7 @@ import logging
 import database
 import market_time
 from services.trading_service import TradingService
-from services.alert_filter import should_send_priority_alert
+from services.alert_filter import should_send_priority_alert, is_whipsaw_noise
 from cogs.embed_builder import create_scan_embed, build_vtr_stats_embed, create_portfolio_report_embed
 
 ny_tz = ZoneInfo("America/New_York")
@@ -184,12 +185,27 @@ class SchedulerCog(commands.Cog):
                             if time_diff < (self.COOLDOWN_HOURS * 3600):
                                 continue 
 
-                    # 🚀 條件式過濾 (AlertFilter 訊號降噪)
-                    is_priority, reason = should_send_priority_alert(data, self.prev_macro_state)
+                    # 🚀 條件式過濾 (AlertFilter 訊號降噪 + 防騙線)
+                    # 從資料庫取得上次 CROSSOVER 觸發狀態，傳入 AlertFilter
+                    last_alert_state = database.get_watchlist_alert_state(uid, sym)
+                    is_priority, reason = should_send_priority_alert(
+                        data, self.prev_macro_state, last_alert_state
+                    )
 
                     if is_auto and not is_priority:
                         logger.info(f"⏭️ 標的 {sym} 未達優先通知門檻，已過濾。")
                         continue
+
+                    # 🛡️ 若通過過濾且包含 CROSSOVER 訊號，更新資料庫狀態
+                    for sig in data.get('ema_signals', []):
+                        if sig.get('type') == 'CROSSOVER':
+                            database.update_watchlist_alert_state(
+                                uid, sym,
+                                direction=sig['direction'],
+                                price=data.get('price', 0.0),
+                                timestamp=int(_time.time()),
+                            )
+                            break  # 每次掃描只記錄第一個通過的 CROSSOVER
 
                     # 將推播理由注入 data，供 Embed 顯示
                     if reason:

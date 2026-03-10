@@ -87,3 +87,57 @@ def delete_watchlist_symbol(user_id, symbol):
     conn.commit()
     conn.close()
     return changes > 0
+
+
+# ==========================================
+# 訊號追蹤 (Anti-Whipsaw State) CRUD
+# ==========================================
+def get_watchlist_alert_state(user_id, symbol):
+    """
+    取得特定標的上一次觸發 CROSSOVER 訊號的狀態快照。
+
+    Returns:
+        dict | None: 包含 last_cross_dir, last_cross_price, last_cross_time 的字典。
+                     若該標的從未觸發過訊號，回傳 None。
+    """
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute(
+        'SELECT last_cross_dir, last_cross_price, last_cross_time '
+        'FROM watchlist WHERE user_id = ? AND symbol = ?',
+        (user_id, symbol)
+    )
+    row = cursor.fetchone()
+    conn.close()
+
+    if row is None or row[0] is None:
+        return None
+
+    return {
+        'last_cross_dir': row[0],
+        'last_cross_price': row[1],
+        'last_cross_time': row[2],
+    }
+
+
+def update_watchlist_alert_state(user_id, symbol, direction, price, timestamp):
+    """
+    記錄本次觸發的 CROSSOVER 訊號狀態，供下一輪防騙線比對使用。
+
+    Args:
+        user_id: Discord 使用者 ID。
+        symbol: 標的代號。
+        direction: 穿透方向 ("BULLISH" 或 "BEARISH")。
+        price: 觸發當下的現價。
+        timestamp: Unix Timestamp (int)。
+    """
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute(
+        'UPDATE watchlist '
+        'SET last_cross_dir = ?, last_cross_price = ?, last_cross_time = ? '
+        'WHERE user_id = ? AND symbol = ?',
+        (direction, price, timestamp, user_id, symbol)
+    )
+    conn.commit()
+    conn.close()

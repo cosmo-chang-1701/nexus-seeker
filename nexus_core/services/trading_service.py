@@ -113,11 +113,11 @@ class TradingService:
                     return target, None
 
                 # 🚀 新增 EMA 訊號偵測 (Crossover & Test)
-                # 為確保 EMA 準確性，獲取至少 60 天歷史數據
-                df_hist = await asyncio.to_thread(market_data_service.get_history_df, sym, "60d")
-                if not df_hist.empty:
-                    ema_8_sig = market_math.detect_ema_signals(df_hist, window=8)
-                    ema_21_sig = market_math.detect_ema_signals(df_hist, window=21)
+                # 為確保 EMA 準確性，獲取至少 60 天歷史數據 (1-Hour 時框作為小週期觸發)
+                df_hist_1h = await asyncio.to_thread(market_data_service.get_history_df, sym, period="60d", interval="1h")
+                if not df_hist_1h.empty:
+                    ema_8_sig = market_math.detect_ema_signals(df_hist_1h, window=8)
+                    ema_21_sig = market_math.detect_ema_signals(df_hist_1h, window=21)
                     
                     # 整合訊號至結果字典
                     res['ema_signals'] = [sig for sig in [ema_8_sig, ema_21_sig] if sig]

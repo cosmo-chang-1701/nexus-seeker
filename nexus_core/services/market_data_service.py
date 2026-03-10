@@ -121,7 +121,7 @@ def _period_to_timestamps(period: str) -> tuple[int, int]:
     from_ts = int((datetime.now() - delta).timestamp())
     return from_ts, to_ts
 
-def get_history_df(symbol: str, period: str = "1y") -> pd.DataFrame:
+def get_history_df(symbol: str, period: str = "1y", interval: str = "1d") -> pd.DataFrame:
     """
     [High-CP Path] 放棄 Finnhub Candles，回歸 yfinance 抓取歷史 K 線。
     
@@ -133,10 +133,10 @@ def get_history_df(symbol: str, period: str = "1y") -> pd.DataFrame:
     try:
         # 🚀 僅使用 yfinance 抓取歷史 DataFrame
         ticker = yf.Ticker(symbol)
-        df = ticker.history(period=period)
+        df = ticker.history(period=period, interval=interval)
 
         if df.empty:
-            logger.warning(f"[{symbol}] yfinance 歷史數據為空")
+            logger.warning(f"[{symbol}] yfinance 歷史數據為空 (period={period}, interval={interval})")
             return pd.DataFrame()
 
         # 🚀 格式標準化 (Standardization)
