@@ -65,3 +65,4 @@ desktop.ini
 # Project Specific
 *.db
 *.log
+nexus_core/data/yfinance_cache/
