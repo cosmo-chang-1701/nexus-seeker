@@ -264,12 +264,6 @@ class SchedulerCog(commands.Cog):
     async def dynamic_after_market_report(self):
         """16:15：持倉結算與防禦建議 (依使用者分發私訊)"""
         logger.info("Starting dynamic_after_market_report task.")
-        now_ny = datetime.now(market_time.ny_tz)
-        target_time = market_time.get_next_market_target_time(reference="close", offset_minutes=15)
-
-        # 非交易日會拿到下一個交易日的 target，當天直接略過。
-        if not target_time or target_time.date() != now_ny.date():
-            return
 
         # 盤後順帶清理過舊財務快取，維持資料庫體積與查詢效率
         try:
@@ -292,12 +286,27 @@ class SchedulerCog(commands.Cog):
                 except discord.Forbidden:
                     logger.warning(f"無法發送私訊給用戶 {uid}")
 
+        # 每輪結束後依交易日行事曆重新對齊下一次執行時間。
+        await self._reschedule_after_market_report()
+
+    async def _reschedule_after_market_report(self):
+        target_time = market_time.get_next_market_target_time(reference="close", offset_minutes=15)
+        if not target_time:
+            logger.warning("找不到下一個盤後目標時間，1 小時後重試排程。")
+            self.dynamic_after_market_report.change_interval(hours=1)
+            return None
+
+        await self._notify_next_schedule("盤後結算報告", target_time)
+        sleep_seconds = market_time.get_sleep_seconds(target_time)
+        self.dynamic_after_market_report.change_interval(seconds=max(30.0, sleep_seconds))
+        return target_time
+
     @dynamic_after_market_report.before_loop
     async def before_dynamic_after_market_report(self):
         await self.bot.wait_until_ready()
-        target_time = market_time.get_next_market_target_time(reference="close", offset_minutes=15)
-        await self._notify_next_schedule("盤後結算報告", target_time)
-        await asyncio.sleep(market_time.get_sleep_seconds(target_time))
+        target_time = await self._reschedule_after_market_report()
+        if target_time:
+            await asyncio.sleep(market_time.get_sleep_seconds(target_time))
 
     # ==========================================
     # 🚀 VTR 監控與風險即時預警
