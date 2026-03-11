@@ -66,7 +66,7 @@ class PortfolioStatusOrchestrator:
             await self._process_symbol_positions(symbol, rows)
             
         # 4. 生成宏觀與相關性報告
-        self._append_final_reports(positions_by_symbol)
+        await self._append_final_reports(positions_by_symbol)
         
         return self.report_lines
 
@@ -166,7 +166,7 @@ class PortfolioStatusOrchestrator:
         
         return {'price': price, 'dividend_yield': dividend_yield, 'beta': beta_val}
 
-    def _append_final_reports(self, positions_by_symbol):
+    async def _append_final_reports(self, positions_by_symbol):
         """追加宏觀風險與相關性報告。"""
         metrics = get_macro_risk_metrics_core(
             self.total_beta_delta, self.total_theta, self.total_margin_used, 
@@ -175,7 +175,7 @@ class PortfolioStatusOrchestrator:
         self.report_lines.extend(format_macro_risk_report_core(metrics, self.spy_price))
         
         symbols = list(positions_by_symbol.keys())
-        high_corr_pairs = analyze_sector_correlation_core(symbols)
+        high_corr_pairs = await analyze_sector_correlation_core(symbols)
         self.report_lines.extend(format_correlation_report_core(high_corr_pairs, len(symbols)))
 
 async def refresh_portfolio_greeks(user_id: int = None):
@@ -216,8 +216,14 @@ async def refresh_portfolio_greeks(user_id: int = None):
             }
 
         for row in real_positions:
-            offset = 1 if len(row) > 8 else 0
-            trade_id, sym, opt_type, strike, expiry, _, qty, _ = row[offset:offset+7]
+            # get_all_portfolio: (user_id, id, symbol, ...)
+            # get_user_portfolio: (id, symbol, ...)
+            if len(row) >= 13:
+                trade_id, sym, opt_type, strike, expiry, _, qty, _ = row[1:9]
+            elif len(row) >= 12:
+                trade_id, sym, opt_type, strike, expiry, _, qty, _ = row[0:8]
+            else:
+                continue
             
             s_info = stock_data.get(sym)
             if not s_info or s_info['price'] <= 0: continue
