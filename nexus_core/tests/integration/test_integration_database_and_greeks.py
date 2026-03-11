@@ -37,6 +37,11 @@ class DbIsolatedTestCase(unittest.TestCase):
 
 
 class TestUserContextAggregation(DbIsolatedTestCase):
+    def test_upsert_user_config_rejects_zero_capital(self):
+        upsert_user_config(3001, capital=0.0)
+        ctx = get_full_user_context(3001)
+        self.assertGreater(ctx.capital, 0.0)
+
     def test_context_aggregates_real_and_virtual_greeks(self):
         upsert_user_config(1001, capital=50000.0, risk_limit_pct=99.0)
         upsert_user_config(1002, capital=120000.0, risk_limit_pct=10.0)

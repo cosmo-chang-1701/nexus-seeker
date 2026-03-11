@@ -85,13 +85,16 @@ class SchedulerCog(commands.Cog):
     # ==========================================
     # 動態排程任務 (私訊分發引擎)
     # ==========================================
-    @tasks.loop(count=1)
+    @tasks.loop(hours=24)
     async def pre_market_risk_monitor(self):
         """09:00：盤前財報警報 (依使用者分發私訊)"""
         logger.info("Starting pre_market_risk_monitor task.")
+        now_ny = datetime.now(market_time.ny_tz)
         target_time = market_time.get_next_market_target_time(reference="open", offset_minutes=-30)
-        await self._notify_next_schedule("盤前財報警報", target_time)
-        await asyncio.sleep(market_time.get_sleep_seconds(target_time))
+
+        # 非交易日會拿到下一個交易日的 target，當天直接略過。
+        if not target_time or target_time.date() != now_ny.date():
+            return
         
         results = await self.trading_service.get_pre_market_alerts_data(self.EARNINGS_WARNING_DAYS)
         
@@ -117,6 +120,9 @@ class SchedulerCog(commands.Cog):
     @pre_market_risk_monitor.before_loop
     async def before_pre_market_risk_monitor(self):
         await self.bot.wait_until_ready()
+        target_time = market_time.get_next_market_target_time(reference="open", offset_minutes=-30)
+        await self._notify_next_schedule("盤前財報警報", target_time)
+        await asyncio.sleep(market_time.get_sleep_seconds(target_time))
 
     @tasks.loop(minutes=30)
     async def dynamic_market_scanner(self):
@@ -254,13 +260,16 @@ class SchedulerCog(commands.Cog):
                     logger.debug(f"[MacroState] 快照已更新: VIX={vix:.2f}")
                     return  # VIX 是全域值，取到一筆即可
 
-    @tasks.loop(count=1)
+    @tasks.loop(hours=24)
     async def dynamic_after_market_report(self):
         """16:15：持倉結算與防禦建議 (依使用者分發私訊)"""
         logger.info("Starting dynamic_after_market_report task.")
+        now_ny = datetime.now(market_time.ny_tz)
         target_time = market_time.get_next_market_target_time(reference="close", offset_minutes=15)
-        await self._notify_next_schedule("盤後結算報告", target_time)
-        await asyncio.sleep(market_time.get_sleep_seconds(target_time))
+
+        # 非交易日會拿到下一個交易日的 target，當天直接略過。
+        if not target_time or target_time.date() != now_ny.date():
+            return
 
         # 盤後順帶清理過舊財務快取，維持資料庫體積與查詢效率
         try:
@@ -286,6 +295,9 @@ class SchedulerCog(commands.Cog):
     @dynamic_after_market_report.before_loop
     async def before_dynamic_after_market_report(self):
         await self.bot.wait_until_ready()
+        target_time = market_time.get_next_market_target_time(reference="close", offset_minutes=15)
+        await self._notify_next_schedule("盤後結算報告", target_time)
+        await asyncio.sleep(market_time.get_sleep_seconds(target_time))
 
     # ==========================================
     # 🚀 VTR 監控與風險即時預警

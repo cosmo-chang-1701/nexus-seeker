@@ -76,6 +76,9 @@ def get_macro_modifiers(macro: MacroContext) -> Tuple[float, float]:
     return w_vix, w_oil
 
 def optimize_position_risk(current_delta: float, unit_weighted_delta: float, user_capital: float, spy_price: float, stock_iv: float, strategy: str, macro_data: Optional[MacroContext] = None, base_risk_limit_pct: float = 15.0) -> Tuple[int, float]:
+    if spy_price <= 0:
+        return 0, 0.0
+
     spy_iv, risk_limit_pct = 0.16, base_risk_limit_pct
     if macro_data: d_vix, d_oil = get_macro_modifiers(macro_data); risk_limit_pct = base_risk_limit_pct * d_vix * d_oil; spy_iv = macro_data.vix / 100.0
     val_adj_unit_delta = unit_weighted_delta * (stock_iv / max(spy_iv, 0.01)) * (-1 if "STO" in strategy else 1)

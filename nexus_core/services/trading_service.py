@@ -204,7 +204,7 @@ class TradingService:
                     # 這裡使用 safe_qty 進行模擬，反映系統真實建議
                     new_trade_impact = data.get('weighted_delta', 0.0) * side_multiplier * safe_qty
                     projected_total_delta = current_total_delta + new_trade_impact
-                    projected_exposure_pct = (projected_total_delta * spy_price / user_capital) * 100
+                    projected_exposure_pct = (projected_total_delta * spy_price / user_capital) * 100 if user_capital > 0 else 0.0
 
                     data.update({
                         'safe_qty': safe_qty,

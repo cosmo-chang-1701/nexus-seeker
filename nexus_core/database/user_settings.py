@@ -52,6 +52,8 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:
             
             for key, value in kwargs.items():
                 if key in allowed_keys and value is not None:
+                    if key == 'portfolio_value':
+                        value = max(float(value), 1.0)
                     # 針對風險限制做數值防護
                     if key == 'risk_limit_pct':
                         value = max(1.0, min(value, 50.0))
@@ -159,7 +161,8 @@ def get_full_user_context(user_id: int) -> UserContext:
                 pass
             
             # 3. 處理空值並封裝回傳
-            capital = float(user_row['portfolio_value']) if user_row and user_row['portfolio_value'] is not None else 100000.0
+            capital_raw = float(user_row['portfolio_value']) if user_row and user_row['portfolio_value'] is not None else 100000.0
+            capital = capital_raw if capital_raw > 0 else 100000.0
             risk_limit = float(user_row['risk_limit_pct']) if user_row and user_row['risk_limit_pct'] is not None else 15.0
             last_rehedge = int(user_row['last_rehedge_alert_time']) if user_row and 'last_rehedge_alert_time' in user_row.keys() and user_row['last_rehedge_alert_time'] is not None else 0
             dynamic_tau = float(user_row['dynamic_tau']) if user_row and 'dynamic_tau' in user_row.keys() and user_row['dynamic_tau'] is not None else 1.0
