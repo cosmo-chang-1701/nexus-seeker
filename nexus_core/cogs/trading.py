@@ -10,6 +10,7 @@ import logging
 
 import database
 import market_time
+from config import DISCORD_ADMIN_USER_ID
 from services.trading_service import TradingService
 from services.alert_filter import should_send_priority_alert, is_whipsaw_noise
 from cogs.embed_builder import create_scan_embed, build_vtr_stats_embed, create_portfolio_report_embed, create_rehedge_embed
@@ -143,6 +144,11 @@ class SchedulerCog(commands.Cog):
 
     @app_commands.command(name="force_scan", description="[Admin] 立即手動執行全站掃描 (不論開盤時間)")
     async def force_scan(self, interaction: discord.Interaction):
+        if interaction.user.id != DISCORD_ADMIN_USER_ID:
+            await interaction.response.send_message("⛔ 權限不足：此指令僅限管理員使用。", ephemeral=True)
+            logger.warning(f"Unauthorized force_scan attempt by {interaction.user.name} ({interaction.user.id})")
+            return
+
         logger.info(f"Admin {interaction.user.name} ({interaction.user.id}) triggered force_scan")
         await interaction.response.send_message("🚀 強制啟動全站掃描中...", ephemeral=True)
         asyncio.create_task(self._run_market_scan_logic(is_auto=False, triggered_by=interaction.user))
@@ -255,6 +261,13 @@ class SchedulerCog(commands.Cog):
         target_time = market_time.get_next_market_target_time(reference="close", offset_minutes=15)
         await self._notify_next_schedule("盤後結算報告", target_time)
         await asyncio.sleep(market_time.get_sleep_seconds(target_time))
+
+        # 盤後順帶清理過舊財務快取，維持資料庫體積與查詢效率
+        try:
+            purged_rows = database.purge_old_cache(days=30)
+            logger.info(f"🧹 financials_cache 清理完成，刪除 {purged_rows} 筆 30 天前資料")
+        except Exception as e:
+            logger.warning(f"financials_cache 清理失敗，略過不影響盤後報告: {e}")
 
         user_reports = await self.trading_service.get_after_market_report_data()
 

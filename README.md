@@ -4,7 +4,7 @@
 
 [![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Docker](https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
+[![Docker](https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white)](nexus_core/docker-compose.yml)
 [![Deploy](https://github.com/cosmo-chang-1701/nexus-seeker/actions/workflows/deploy.yml/badge.svg)](https://github.com/cosmo-chang-1701/nexus-seeker/actions/workflows/deploy.yml)
 [![Architecture](https://img.shields.io/badge/architecture-multi--tenant-purple.svg)](#architecture)
 
@@ -127,7 +127,7 @@ Discord 使用者 ──► Discord API ──► NexusBot (bot.py)
 
 | 排程模式 | 任務 | 說明 |
 |---|---|---|
-| **動態睡眠** → 開盤前 30 分 (≈ 09:00 ET) | 盤前風險監控 | 掃描持倉與觀察清單的財報日曆；若財報 ≤ 3 天內，私訊 ⚠️ IV 崩跌警報（區分持倉高風險 vs 觀察清單標的）。 |
+| **動態睡眠** → 開盤前 30 分 (≈ 09:00 ET) | 盤前風險監控 | 掃描持倉與觀察清單的財報日曆；若財報 ≤ 14 天內，私訊 ⚠️ 風險預警（區分持倉高風險 vs 觀察清單標的）。 |
 | **每 30 分鐘心跳** (10:00 ET – 收盤) | 盤中動態掃描 | 每 30 分鐘偵測開盤狀態，僅在常規交易時段內執行：跳過非交易日/盤前盤後/開盤初期造市商無報價期 (09:30–09:59)。對每位使用者的觀察清單執行全方位掃描（含 LLM 風控審查）；訊號推播套用 **4 小時冷卻機制**。 |
 | **每 30 分鐘心跳** (盤中) | VTR 監控與對沖 | 盤中掃描虛擬交易室 (VTR) 持倉，並在觸發自動轉倉/平倉時即時通知，同時依據系統目標 Delta (Target Delta) 提供部位對沖建議。 |
 | **動態睡眠** → 收盤後 15 分 (≈ 16:15 ET) | 盤後報告 | 動態結算損益、Delta 擴張轉倉建議、Gamma 脆性防禦；附帶 SPY Beta-Weighted 宏觀風險評估、Theta 收益率、資金熱度極限與 Pearson 相關性矩陣。 |
@@ -147,7 +147,7 @@ Discord 使用者 ──► Discord API ──► NexusBot (bot.py)
 | **邊緣爬蟲** | `playwright`（Headless Chromium 渲染）、`beautifulsoup4` + `lxml`（HTML 解析）、`fastapi`（本地 API） |
 | **網路** | `httpx`（非同步 HTTP 客戶端）、Cloudflare Tunnel（安全互連） |
 | **排程** | `pandas_market_calendars`、`zoneinfo` |
-| **資料庫** | SQLite — 以 `user_id` 為複合唯一鍵，內建版本遷移引擎（8 版遷移） |
+| **資料庫** | SQLite — 以 `user_id` 為複合唯一鍵，內建版本遷移引擎（目前至 `v014`） |
 | **基礎架構** | Docker、Docker Compose、GitHub Actions CI/CD → DigitalOcean |
 | **套件管理** | `pyproject.toml`（PEP 621 標準） |
 
@@ -169,15 +169,16 @@ Discord 使用者 ──► Discord API ──► NexusBot (bot.py)
 git clone https://github.com/cosmo-chang-1701/nexus-seeker.git
 cd nexus-seeker
 mkdir -p nexus_core/data          # SQLite 持久化掛載目錄
+cd nexus_core                     # 目前 docker-compose.yml 位於此目錄
 ```
 
 ### 2. 設定環境變數
 
 ```bash
-cp nexus_core/.env.example nexus_core/.env
+cp .env.example .env
 ```
 
-編輯 `nexus_core/.env` 並填入你的 Token：
+編輯 `.env` 並填入你的 Token：
 
 ```env
 DISCORD_TOKEN=your_discord_bot_token_here
@@ -202,6 +203,14 @@ docker compose up -d --build
 
 ```bash
 docker compose logs -f
+```
+
+如需啟動邊緣爬蟲服務（本地端）：
+
+```bash
+cd ../nexus_edge_scraper
+cp .env.example .env
+docker compose up -d --build
 ```
 
 > **從 v1 升級？** 資料庫現已內建版本遷移引擎（Migration Engine），啟動時自動偵測並套用 Schema 變更，無須手動刪除舊資料庫。
@@ -246,7 +255,7 @@ docker compose logs -f
 
 | 指令 | 說明 |
 |---|---|
-| `/force_scan` | 立即手動執行全站掃描（不論開盤時間），結果私訊分發給所有使用者（繞過 4 小時冷卻機制） |
+| `/force_scan` | 立即手動執行全站掃描（不論開盤時間），結果私訊分發給所有使用者（繞過 4 小時冷卻機制）。僅限 `DISCORD_ADMIN_USER_ID` 使用。 |
 
 ### 🔧 開發者
 
@@ -266,6 +275,7 @@ docker compose logs -f
 | `entry_price` | float | 每口合約收取/支付的權利金 | `0.55` |
 | `quantity` | int | 正值 = 買進，**負值 = 賣出** | `-5` |
 | `stock_cost` | float | （可選）持有現股平均成本，用於 Covered Call 計算 | `250.0` |
+| `category` | choice | （可選）`SPECULATIVE` 或 `HEDGE`，預設 `SPECULATIVE` | `HEDGE` |
 
 </details>
 
@@ -351,16 +361,16 @@ docker compose logs -f
 ### 🚀 買入開倉 Call — *動能突破*
 
 - **觸發條件：** 價格 > `20 SMA` + `50 ≤ RSI(14) ≤ 65` + `MACD 柱狀圖 > 0` + `HV Rank < 50`
-- **合約：** 14–30 DTE，Delta ≈ **+0.50**（ATM）
+- **合約：** 30–60 DTE，Delta ≈ **+0.50**（ATM）
 - **篩選：** 流動性通過、VRP ≤ 3%、`AROC ≥ 30%`、¼ Kelly（上限 3%）
-- **動態切換：** 若 HV Rank ≥ 50（高波動），自動切換為 **STO Put**（30–45 DTE，Delta −0.20）賺取高溢價
+- **動態切換：** 若 HV Rank ≥ 50（高波動），自動切換為 **STO Put**（14–30 DTE，Delta −0.20）賺取高溢價
 
 ### ⚠️ 買入開倉 Put — *跌破 / 避險*
 
 - **觸發條件：** 價格 < `20 SMA` + `35 ≤ RSI(14) ≤ 50` + `MACD 柱狀圖 < 0` + `HV Rank < 50`
-- **合約：** 14–30 DTE，Delta ≈ **−0.50**（ATM）
+- **合約：** 30–60 DTE，Delta ≈ **−0.50**（ATM）
 - **篩選：** 流動性通過、VRP ≤ 3%、`AROC ≥ 30%`、¼ Kelly（上限 3%）
-- **動態切換：** 若 HV Rank ≥ 50（高波動），自動切換為 **STO Call**（30–45 DTE，Delta +0.20）做空賺溢價
+- **動態切換：** 若 HV Rank ≥ 50（高波動），自動切換為 **STO Call**（14–30 DTE，Delta +0.20）做空賺溢價
 
 ---
 
@@ -400,7 +410,13 @@ nexus-seeker/                        # Monorepo 根目錄
 │   │       ├── v005_virtual_trading.py  # 建立 virtual_trades 表 (VTR)
 │   │       ├── v006_update_watchlist_llm_default.py  # 將 watchlist.use_llm 預設值改為啟用
 │   │       ├── v007_add_risk_limit.py  # 新增使用者風險限制欄位 (risk_limit_pct)
-│   │       └── v008_add_greeks_to_trades.py  # 為 portfolio/virtual_trades 新增 Greeks 欄位
+│   │       ├── v008_add_greeks_to_trades.py  # 為 portfolio/virtual_trades 新增 Greeks 欄位
+│   │       ├── v009_add_cross_tracking.py  # 新增 EMA CROSSOVER 追蹤狀態
+│   │       ├── v010_add_rehedge_tracking.py  # 新增自動回補警示鎖定欄位
+│   │       ├── v011_add_trade_category.py  # 新增部位類別 (SPECULATIVE/HEDGE)
+│   │       ├── v012_add_self_tuning_hedge.py  # 新增 STHE 動態 Tau 欄位
+│   │       ├── v013_add_financials_cache.py  # 新增財報/財務快取表
+│   │       └── v014_financials_cache_schema_compat.py  # financials_cache schema 相容修補
 │   ├── services/                    # 外部服務整合與業務邏輯層
 │   │   ├── trading_service.py       # TradingService — 集中式業務邏輯 (掃描、VTR、盤後報告)
 │   │   ├── market_data_service.py   # Finnhub 報價服務 (含 SMA/EMA 快取、Rate Limiting)
@@ -416,8 +432,7 @@ nexus-seeker/                        # Monorepo 根目錄
 │   │   └── embed_builder.py         # Discord UI/UX 生成器 — 渲染圖文並茂的量化戰情面板
 │   ├── ui/                          # Discord UI 元件
 │   │   └── watchlist.py             # 觀察清單分頁瀏覽 (Pagination View)
-│   ├── tests/                       # 測試套件
-│   │   └── final_system_check.py    # SMA 快取、自主對沖位階與 Delta Gap 整合驗證
+│   ├── tests/                       # 測試套件（目前保留目錄，待補單元/整合測試）
 │   ├── data/                        # SQLite 資料庫 (Docker Volume 掛載)
 │   ├── Dockerfile
 │   ├── docker-compose.yml
@@ -443,14 +458,12 @@ nexus-seeker/                        # Monorepo 根目錄
 
 ## 🧪 測試
 
-測試使用 Python `unittest` 框架，在 Docker 容器中執行：
+目前 `nexus_core/tests/` 僅保留測試目錄骨架，尚未放入可執行測試案例。
+可先使用下列命令確認測試探索流程正常：
 
 ```bash
-# 執行系統整合驗證 (SMA 快取、對沖位階、Delta Gap)
-docker compose run --rm -v "$(pwd):/app" nexus_seeker python -m unittest tests.final_system_check
-
-# 執行所有測試
-docker compose run --rm -v "$(pwd):/app" nexus_seeker python -m unittest discover -s tests -v
+# 在 nexus_core 目錄執行
+docker compose run --rm nexus_seeker python -m unittest discover -s tests -v
 ```
 
 ---

@@ -150,55 +150,6 @@ class PortfolioCog(commands.Cog):
             
         await interaction.response.send_message(msg, ephemeral=True)
 
-    @app_commands.command(name="vtr_stats", description="顯示虛擬交易室 (VTR) 的績效統計")
-    async def vtr_stats(self, interaction: discord.Interaction):
-        user_id = interaction.user.id
-        rows = vtr_db.get_virtual_trades(user_id=user_id, status='CLOSED')
-        rolled_rows = vtr_db.get_virtual_trades(user_id=user_id, status='ROLLED')
-        all_closed = rows + rolled_rows
-        
-        if not all_closed:
-            await interaction.response.send_message("📊 目前虛擬交易室尚無已平倉紀錄可供統計。", ephemeral=True)
-            return
-            
-        total_pnl = 0.0
-        wins = 0
-        losses = 0
-        total_win_pnl = 0.0
-        total_loss_pnl = 0.0
-        
-        for trade in all_closed:
-            pnl = trade['pnl'] if trade['pnl'] is not None else 0.0
-            total_pnl += pnl
-            if pnl > 0:
-                wins += 1
-                total_win_pnl += pnl
-            elif pnl < 0:
-                losses += 1
-                total_loss_pnl += abs(pnl)
-                
-        total_trades = wins + losses
-        win_rate = (wins / total_trades * 100) if total_trades > 0 else 0.0
-        
-        avg_win = total_win_pnl / wins if wins > 0 else 0.0
-        avg_loss = total_loss_pnl / losses if losses > 0 else 0.0
-        profit_factor = (total_win_pnl / total_loss_pnl) if total_loss_pnl > 0 else float('inf')
-        
-        open_count = len(vtr_db.get_virtual_trades(user_id=user_id, status='OPEN'))
-        
-        embed = discord.Embed(title="📈 虛擬交易室 (VTR) 績效統計", color=discord.Color.blurple())
-        embed.add_field(name="總平倉筆數", value=f"{len(all_closed)}", inline=True)
-        embed.add_field(name="勝率", value=f"{win_rate:.1f}% ({wins}W / {losses}L)", inline=True)
-        embed.add_field(name="總 PnL", value=f"${total_pnl:,.2f}", inline=True)
-        
-        embed.add_field(name="盈虧比 (PF)", value=f"{profit_factor:.2f}" if profit_factor != float('inf') else "∞", inline=True)
-        embed.add_field(name="平均獲利", value=f"${avg_win:,.2f}", inline=True)
-        embed.add_field(name="平均虧損", value=f"${avg_loss:,.2f}", inline=True)
-        
-        embed.add_field(name="目前開啟中部位", value=f"{open_count} 筆", inline=False)
-        
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
     @app_commands.command(name="vtr_stats", description="檢視虛擬交易室的績效統計")
     async def vtr_stats(self, interaction: discord.Interaction):
         # 1. 延遲回覆 (Defer)，因為計算績效需要 Database I/O
@@ -206,13 +157,13 @@ class PortfolioCog(commands.Cog):
         
         try:
             # 2. 呼叫 GhostTrader 統計引擎
-            stats = GhostTrader.get_vtr_performance_stats(interaction.user.id)
+            stats = await GhostTrader.get_vtr_performance_stats(interaction.user.id)
             
             # 3. 渲染 UI
             embed = build_vtr_stats_embed(interaction.user.display_name, stats)
             
             # 4. 回傳臨時訊息
-            await interaction.followup.send(embed=embed)
+            await interaction.followup.send(embed=embed, ephemeral=True)
             
         except Exception as e:
             logger.error(f"執行 /vtr_stats 失敗: {e}")

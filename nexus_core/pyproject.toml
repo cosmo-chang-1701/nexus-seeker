@@ -21,4 +21,5 @@ dependencies = [
     "openai>=2.21.0",
     "httpx",
     "finnhub-python>=2.4.20",
+    "aiolimiter>=1.1.0",
 ]

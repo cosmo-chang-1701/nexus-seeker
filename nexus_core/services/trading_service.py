@@ -48,7 +48,7 @@ class TradingService:
         # 批次快取財報日期
         earnings_cache = {}
         for sym in unique_symbols:
-            e_date = await asyncio.to_thread(market_math.get_next_earnings_date, sym)
+            e_date = await market_math.get_next_earnings_date(sym)
             if e_date:
                 if isinstance(e_date, datetime): e_date = e_date.date()
                 earnings_cache[sym] = e_date
@@ -88,8 +88,8 @@ class TradingService:
 
         # 1. 🚀 獲取全域基準資料 (僅抓取一次，減少 API 消耗)
         try:
-            spy_task = asyncio.to_thread(market_data_service.get_history_df, "SPY", "1y")
-            macro_task = asyncio.to_thread(market_data_service.get_macro_environment)
+            spy_task = market_data_service.get_history_df("SPY", "1y")
+            macro_task = market_data_service.get_macro_environment()
             
             df_spy, macro_raw = await asyncio.gather(spy_task, macro_task)
             
@@ -109,14 +109,14 @@ class TradingService:
         async def _scan_single_target(target):
             sym, stock_cost, use_llm = target
             try:
-                # 使用 to_thread 確保 EMA/SMA 計算不阻塞主線程
-                res = await asyncio.to_thread(market_math.analyze_symbol, sym, stock_cost, 0.0, df_spy, spy_price)
+                # analyze_symbol 已經是 async
+                res = await market_math.analyze_symbol(sym, stock_cost, df_spy, spy_price)
                 if not res:
                     return target, None
 
                 # 🚀 新增 EMA 訊號偵測 (Crossover & Test)
                 # 為確保 EMA 準確性，獲取至少 60 天歷史數據 (1-Hour 時框作為小週期觸發)
-                df_hist_1h = await asyncio.to_thread(market_data_service.get_history_df, sym, period="60d", interval="1h")
+                df_hist_1h = await market_data_service.get_history_df(sym, period="60d", interval="1h")
                 if not df_hist_1h.empty:
                     ema_8_sig = market_math.detect_ema_signals(df_hist_1h, window=8)
                     ema_21_sig = market_math.detect_ema_signals(df_hist_1h, window=21)
@@ -148,10 +148,16 @@ class TradingService:
                 logger.error(f"掃描標的 {sym} 失敗: {e}")
                 return target, None
 
-        # 🚀 併行執行所有標的分量
-        # 注意：若 unique_targets 很大，可考慮分批 (Chunking) 以防觸發外部 API Rate Limit
-        tasks = [_scan_single_target(t) for t in unique_targets]
-        results_list = await asyncio.gather(*tasks)
+        # 🚀 併行執行所有標的分量 (分批執行以防止觸發 API Rate Limit)
+        results_list = []
+        batch_size = 10
+        for i in range(0, len(unique_targets), batch_size):
+            chunk = unique_targets[i:i + batch_size]
+            tasks = [_scan_single_target(t) for t in chunk]
+            batch_results = await asyncio.gather(*tasks)
+            results_list.extend(batch_results)
+            if i + batch_size < len(unique_targets):
+                await asyncio.sleep(0.5)  # 給 API 一點緩衝，並釋放池空間
         
         scan_results = {target: res for target, res in results_list if res is not None}
 
@@ -303,9 +309,9 @@ class TradingService:
             closed_ids = before_ids - after_ids
 
             if closed_ids:
-                # 獲取全站最近紀錄 (修正原代碼傳 None 的問題，改用 get_virtual_trades)
+                # 獲獲取全站最近紀錄
                 all_history = await asyncio.to_thread(get_virtual_trades, user_id=None)
-                spy_quote = market_data_service.get_quote("SPY")
+                spy_quote = await market_data_service.get_quote("SPY")
                 spy_price = spy_quote.get('c', 500.0) if spy_quote else 500.0
 
                 for tid in closed_ids:

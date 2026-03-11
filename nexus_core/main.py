@@ -2,12 +2,29 @@ import logging
 import asyncio
 import signal
 import sys
+import os
+import yfinance as yf
 from config import DISCORD_TOKEN, LOG_LEVEL
 from bot import NexusBot
 
 # 0. 設定日誌
 logging.basicConfig(level=getattr(logging, LOG_LEVEL), format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')
 logger = logging.getLogger(__name__)
+
+# --- yfinance 快取初始化 ---
+# 1. 確保快取目錄存在 (在 Docker 內建議指向 /tmp 或持久化目錄)
+cache_path = "/tmp/yfinance_cache"
+if not os.path.exists(cache_path):
+    os.makedirs(cache_path, exist_ok=True)
+
+# 2. 顯式設定 yfinance 的時區快取路徑
+try:
+    yf.set_tz_cache_location(cache_path)
+    logger.info(f"✅ yfinance 快取路徑設定成功: {cache_path}")
+except Exception as e:
+    # 預防某些版本不支援此方法
+    logger.warning(f"⚠️ 無法設定 yfinance 快取路徑: {e}")
+# --------------------------
 
 async def main():
     if not DISCORD_TOKEN:
