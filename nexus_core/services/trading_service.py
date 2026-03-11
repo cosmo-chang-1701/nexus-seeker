@@ -223,7 +223,7 @@ class TradingService:
                     for sig in ema_signals:
                         if sig.get('type') == 'CROSSOVER' and sig.get('direction') == 'BULLISH':
                             from services.alert_filter import validate_mtf_trend
-                            mtf = await asyncio.to_thread(validate_mtf_trend, sym, sig)
+                            mtf = await validate_mtf_trend(sym, sig)
                             unlock_advice = hedging.suggest_hedge_unlock(user_context, data, mtf)
                             if unlock_advice:
                                 data['hedge_unlock'] = unlock_advice
@@ -368,17 +368,14 @@ class TradingService:
             )
             
             # 2. 執行對沖績效分析
-            hedge_analysis = await asyncio.to_thread(
-                hedging.analyze_hedge_performance,
-                uid
-            )
+            hedge_analysis = await hedging.analyze_hedge_performance(uid)
             
             if report_lines:
                 # 🚀 執行 STHE 每日自動優化排程
                 # 1. 結算今日有效性
-                await asyncio.to_thread(hedging.calculate_daily_effectiveness, uid)
+                await hedging.calculate_daily_effectiveness(uid)
                 # 2. 滾動更新 Tau 係數
-                new_tau = await asyncio.to_thread(hedging.calculate_dynamic_tau, uid)
+                new_tau = await hedging.calculate_dynamic_tau(uid)
                 
                 # 將 Tau 注入分析字典
                 hedge_analysis['dynamic_tau'] = new_tau

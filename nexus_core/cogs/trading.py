@@ -200,7 +200,7 @@ class SchedulerCog(commands.Cog):
                     # 🚀 條件式過濾 (AlertFilter 訊號降噪 + 防騙線)
                     # 從資料庫取得上次 CROSSOVER 觸發狀態，傳入 AlertFilter
                     last_alert_state = database.get_watchlist_alert_state(uid, sym)
-                    is_priority, reason = should_send_priority_alert(
+                    is_priority, reason = await should_send_priority_alert(
                         data, self.prev_macro_state, last_alert_state
                     )
 
