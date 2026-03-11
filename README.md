@@ -432,7 +432,7 @@ nexus-seeker/                        # Monorepo 根目錄
 │   │   └── embed_builder.py         # Discord UI/UX 生成器 — 渲染圖文並茂的量化戰情面板
 │   ├── ui/                          # Discord UI 元件
 │   │   └── watchlist.py             # 觀察清單分頁瀏覽 (Pagination View)
-│   ├── tests/                       # 測試套件（目前保留目錄，待補單元/整合測試）
+│   ├── tests/                       # 測試套件（含 integration 整合測試）
 │   ├── data/                        # SQLite 資料庫 (Docker Volume 掛載)
 │   ├── Dockerfile
 │   ├── docker-compose.yml
@@ -458,13 +458,41 @@ nexus-seeker/                        # Monorepo 根目錄
 
 ## 🧪 測試
 
-目前 `nexus_core/tests/` 僅保留測試目錄骨架，尚未放入可執行測試案例。
-可先使用下列命令確認測試探索流程正常：
+目前已新增可執行的整合測試，位於 `nexus_core/tests/integration/`：
+
+- `test_integration_database_and_greeks.py`
+- `test_integration_trading_flows.py`
+- `test_integration_llm_and_risk.py`
+
+### 使用 Docker 執行單一測試檔
+
+```bash
+# 在 nexus_core 目錄執行
+docker compose run --rm -v "$(pwd):/app" nexus_seeker python -m unittest tests.integration.test_integration_database_and_greeks
+docker compose run --rm -v "$(pwd):/app" nexus_seeker python -m unittest tests.integration.test_integration_trading_flows
+docker compose run --rm -v "$(pwd):/app" nexus_seeker python -m unittest tests.integration.test_integration_llm_and_risk
+```
+
+### 一次執行全部新增整合測試
+
+```bash
+# 在 nexus_core 目錄執行
+docker compose run --rm -v "$(pwd):/app" nexus_seeker python -m unittest \
+       tests.integration.test_integration_database_and_greeks \
+       tests.integration.test_integration_trading_flows \
+       tests.integration.test_integration_llm_and_risk
+```
+
+預期結果：`Ran 7 tests ... OK`
+
+### 使用 discover 執行整個 tests 目錄
 
 ```bash
 # 在 nexus_core 目錄執行
 docker compose run --rm nexus_seeker python -m unittest discover -s tests -v
 ```
+
+> 備註：若看到 migration 警告如 `V3 no such column: is_covered`、`V14 duplicate column name: data`，這是遷移相容性保護機制的容錯訊息（已標記為可繼續），不會阻斷測試流程。
 
 ---
 
