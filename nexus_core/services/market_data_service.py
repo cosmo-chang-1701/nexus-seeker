@@ -65,15 +65,19 @@ async def _execute_api_call(func, *args, **kwargs) -> Any:
                 return await asyncio.to_thread(func, *args, **kwargs)
             except Exception as e:
                 error_msg = str(e).lower()
-                if "429" in error_msg or "limit reached" in error_msg:
+                is_rate_limit = "429" in error_msg or "limit reached" in error_msg
+                is_conn_error = "connection aborted" in error_msg or "timeout" in error_msg or "remotedisconnected" in error_msg
+                if is_rate_limit or is_conn_error:
                     if attempt < max_retries:
                         # 指數退避，加入 jitter 避免同時重試
                         delay = base_delay * (2 ** attempt) + random.uniform(1, 3)
-                        logger.warning(f"🚨 觸發 Finnhub 429 頻率限制。將於 {delay:.1f} 秒後重試 (次數: {attempt + 1}/{max_retries})...")
+                        reason = "429 頻率限制" if is_rate_limit else "連線錯誤/超時"
+                        logger.warning(f"🚨 觸發 Finnhub {reason}。將於 {delay:.1f} 秒後重試 (次數: {attempt + 1}/{max_retries})...")
                         await asyncio.sleep(delay)
                         continue
                     else:
-                        logger.error("🚨 觸發 Finnhub 429 頻率限制。已達最大重試次數，放棄呼叫。")
+                        reason = "429 頻率限制" if is_rate_limit else "連線錯誤/超時"
+                        logger.error(f"🚨 觸發 Finnhub {reason}。已達最大重試次數，放棄呼叫。")
                         raise e
                 raise e
 

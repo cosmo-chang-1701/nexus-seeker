@@ -458,6 +458,17 @@ def create_portfolio_report_embed(report_lines, hedge_analysis=None):
     """
     將 check_portfolio_status_logic 產出的 report_lines 轉換為漂亮的 Discord Embed
     """
+    # 處理完全為空的狀況
+    if not report_lines:
+        embed = discord.Embed(
+            title="📊 Nexus Seeker 盤後風險結算報告",
+            description="目前無持倉部位，亦無風險數據。\n\u200b",
+            color=discord.Color.blue(),
+            timestamp=datetime.now(timezone.utc)
+        )
+        embed.set_footer(text="Argo Risk Engine v2.5 | 基準標的: SPY")
+        return embed
+
     # 1. 分割資料：將個別持倉與宏觀報告分開
     # 尋找分割點：🌐 【宏觀風險與資金水位報告】
     macro_index = -1
@@ -466,15 +477,27 @@ def create_portfolio_report_embed(report_lines, hedge_analysis=None):
             macro_index = i
             break
 
-    # 2. 處理持倉細節 (Positions)
-    positions_list = [line.strip() for line in report_lines[:macro_index] if line.strip()]
+    # 2. 處理持倉細節與宏觀報告區隔
+    if macro_index != -1:
+        positions_list = [line.strip() for line in report_lines[:macro_index] if line.strip()]
+        macro_text = "".join(report_lines[macro_index:]).strip()
+    else:
+        # 如果找不到宏觀報告區塊，將所有內容視為持倉明細
+        positions_list = [line.strip() for line in report_lines if line.strip()]
+        macro_text = "目前無宏觀風險數據。"
+
     # 使用 \n\n 分隔部位，並在總結尾加上 \n\u200b 來拉開與下一個 Field 標題的距離
-    positions_text = "\n\n".join(positions_list) + "\n\u200b"
-    if not [p for p in positions_list if p.strip()]:
-        positions_text = "目前無持倉部位。"
+    if positions_list:
+        positions_text = "\n\n".join(positions_list) + "\n\u200b"
+    else:
+        positions_text = "目前無持倉部位。\n\u200b"
     
-    # 3. 處理宏觀風險與對沖建議 (Macro Risk)
-    macro_text = "".join(report_lines[macro_index:])
+    # 二次確認，防止 macro_text 全空或只包含空白，Discord Embed value 必須為非空字串
+    if not macro_text:
+        macro_text = "無宏觀風險數據。\n\u200b"
+    else:
+        # 為了美觀與避免排版問題，補上空行
+        macro_text += "\n\u200b"
 
     # 4. 判斷顏色：如果有任何 "🚨" 或 "🆘"，就用紅色，否則用藍色
     embed_color = discord.Color.blue()

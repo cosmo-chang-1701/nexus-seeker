@@ -175,7 +175,7 @@ class TradingService:
             
             # 獲取該使用者的動態風險參數與目前持倉統計
             # 🚀 [Resource Isolation] 確保 Greeks 數據最新，避免使用舊 Delta 判斷避險
-            await asyncio.to_thread(portfolio.refresh_portfolio_greeks, uid)
+            await portfolio.refresh_portfolio_greeks(uid)
             
             user_context = database.get_full_user_context(uid)
             user_capital = user_context.capital
@@ -271,8 +271,7 @@ class TradingService:
                     if qty < 0 or (opt_t == 'put' and qty > 0):
                         trade_category = 'HEDGE'
                         
-                await asyncio.to_thread(
-                    self.vtr_engine.record_virtual_entry,
+                await self.vtr_engine.record_virtual_entry(
                     user_id=uid,
                     symbol=sym,
                     opt_type=opt_t,
@@ -300,8 +299,8 @@ class TradingService:
             before_ids = {t['id'] for t in before_trades}
 
             # 執行管理與轉倉
-            await asyncio.to_thread(self.vtr_engine.manage_virtual_positions)
-            await asyncio.to_thread(self.vtr_engine.execute_virtual_roll)
+            await self.vtr_engine.manage_virtual_positions()
+            await self.vtr_engine.execute_virtual_roll()
             
             # 重新檢查交易列表
             after_trades = await asyncio.to_thread(get_all_open_virtual_trades)

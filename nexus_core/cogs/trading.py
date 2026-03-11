@@ -232,7 +232,7 @@ class SchedulerCog(commands.Cog):
                 if valid_alerts:
                     title = "📡 **【盤中動態掃描】NRO 風控已介入判定：**" if is_auto else "⚡ **【管理員強制掃描】風險模擬結果：**"
                     await self.bot.queue_dm(uid, message=title)
-                    user_capital = database.get_user_capital(uid) or 50000.0
+                    user_capital = database.get_full_user_context(uid).capital
                     for data in valid_alerts:
                         await self.bot.queue_dm(uid, embed=create_scan_embed(data, user_capital))
                         
