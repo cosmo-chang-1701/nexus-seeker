@@ -109,6 +109,17 @@ async def get_history_df(symbol: str, period: str = "1y", interval: str = "1d") 
         logger.error(f"[{symbol}] yfinance 抓取失敗: {e}")
         return pd.DataFrame()
 
+async def get_spy_history_df(period: str = "1y", interval: str = "1d", retries: int = 3) -> pd.DataFrame:
+    """取得 SPY 基準歷史資料，針對暫時性鎖衝突進行重試。"""
+    for attempt in range(retries):
+        df = await get_history_df("SPY", period=period, interval=interval)
+        if not df.empty:
+            return df
+        await asyncio.sleep(0.4 * (attempt + 1))
+
+    logger.error(f"[SPY] 重試 {retries} 次後仍無法取得歷史資料")
+    return pd.DataFrame()
+
 # ---------------------------------------------------------------------------
 # SMA 記憶體快取設定
 # ---------------------------------------------------------------------------

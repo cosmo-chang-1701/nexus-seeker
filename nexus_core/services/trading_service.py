@@ -88,7 +88,7 @@ class TradingService:
 
         # 1. 🚀 獲取全域基準資料 (僅抓取一次，減少 API 消耗)
         try:
-            spy_task = market_data_service.get_history_df("SPY", "1y")
+            spy_task = market_data_service.get_spy_history_df("1y")
             macro_task = market_data_service.get_macro_environment()
             
             df_spy, macro_raw = await asyncio.gather(spy_task, macro_task)

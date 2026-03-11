@@ -69,7 +69,7 @@ class WatchlistCog(commands.Cog):
         user_id, symbol = interaction.user.id, symbol.upper()
 
         try:
-            spy_task = market_data_service.get_history_df("SPY", "1y")
+            spy_task = market_data_service.get_spy_history_df("1y")
             macro_task = market_data_service.get_macro_environment()
             df_spy, macro_raw = await asyncio.gather(spy_task, macro_task)
             spy_price = df_spy['Close'].iloc[-1] if not df_spy.empty else 670.0

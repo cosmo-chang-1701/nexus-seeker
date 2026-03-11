@@ -425,8 +425,9 @@ async def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None):
         if df_spy is None: df_spy = await market_data_service.get_history_df("SPY", "1y")
         
         if df_spy.empty:
-            logger.error(f"無法取得 SPY 基準資料，跳過 {symbol}")
-            return None
+            logger.warning(f"無法取得 SPY 基準資料，{symbol} 改用 beta=1.0 fallback")
+            spy_price_val = spy_price if spy_price is not None and spy_price > 0 else price
+            beta = 1.0
         else:
             spy_price_val = spy_price if spy_price is not None else df_spy['Close'].iloc[-1]
             beta = calculate_beta(df, df_spy) if symbol != "SPY" else 1.0
