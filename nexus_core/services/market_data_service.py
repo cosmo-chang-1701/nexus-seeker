@@ -12,6 +12,7 @@ import asyncio
 import logging
 import time
 import json
+import random
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 
@@ -52,15 +53,29 @@ async def _execute_api_call(func, *args, **kwargs) -> Any:
     """
     執行 Finnhub API 呼叫的異步封裝。
     使用 aiolimiter 進行流量管制，並透過 asyncio.to_thread 避免阻塞事件循環。
+    加入 Exponential Backoff 以自動處理 429 頻率限制。
     """
-    async with _limiter:
-        try:
-            # Finnhub SDK 為同步阻塞 I/O，必須在獨立線程中執行
-            return await asyncio.to_thread(func, *args, **kwargs)
-        except Exception as e:
-            if "429" in str(e):
-                logger.error("🚨 觸發 Finnhub 429 頻率限制。")
-            raise e
+    max_retries = 3
+    base_delay = 10.0
+
+    for attempt in range(max_retries + 1):
+        async with _limiter:
+            try:
+                # Finnhub SDK 為同步阻塞 I/O，必須在獨立線程中執行
+                return await asyncio.to_thread(func, *args, **kwargs)
+            except Exception as e:
+                error_msg = str(e).lower()
+                if "429" in error_msg or "limit reached" in error_msg:
+                    if attempt < max_retries:
+                        # 指數退避，加入 jitter 避免同時重試
+                        delay = base_delay * (2 ** attempt) + random.uniform(1, 3)
+                        logger.warning(f"🚨 觸發 Finnhub 429 頻率限制。將於 {delay:.1f} 秒後重試 (次數: {attempt + 1}/{max_retries})...")
+                        await asyncio.sleep(delay)
+                        continue
+                    else:
+                        logger.error("🚨 觸發 Finnhub 429 頻率限制。已達最大重試次數，放棄呼叫。")
+                        raise e
+                raise e
 
 # ---------------------------------------------------------------------------
 # Quote (即時報價)
