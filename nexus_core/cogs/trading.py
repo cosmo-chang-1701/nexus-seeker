@@ -159,6 +159,131 @@ class SchedulerCog(commands.Cog):
         await interaction.response.send_message("🚀 強制啟動全站掃描中...", ephemeral=True)
         asyncio.create_task(self._run_market_scan_logic(is_auto=False, triggered_by=interaction.user))
 
+    @app_commands.command(name="force_after_report", description="[Admin] 立即手動執行盤後結算報告 (可選 dry-run)")
+    @app_commands.describe(dry_run="true=只做計算與建構，不發送 DM")
+    async def force_after_report(self, interaction: discord.Interaction, dry_run: bool = True):
+        if interaction.user.id != DISCORD_ADMIN_USER_ID:
+            await interaction.response.send_message("⛔ 權限不足：此指令僅限管理員使用。", ephemeral=True)
+            logger.warning(f"Unauthorized force_after_report attempt by {interaction.user.name} ({interaction.user.id})")
+            return
+
+        mode = "DRY-RUN" if dry_run else "SEND"
+        logger.info(f"Admin {interaction.user.name} ({interaction.user.id}) triggered force_after_report mode={mode}")
+        await interaction.response.send_message(
+            f"🧪 盤後結算報告手動執行中 (`{mode}`)...",
+            ephemeral=True,
+        )
+
+        stats = await self._run_after_market_report_pipeline(dry_run=dry_run, triggered_by=interaction.user)
+        await interaction.followup.send(
+            (
+                "✅ 盤後結算流程完成\n"
+                f"mode: `{mode}`\n"
+                f"users_total: `{stats['users_total']}`\n"
+                f"users_queued: `{stats['users_queued']}`\n"
+                f"users_skipped: `{stats['users_skipped']}`\n"
+                f"users_failed: `{stats['users_failed']}`"
+            ),
+            ephemeral=True,
+        )
+
+    async def _run_after_market_report_pipeline(self, dry_run: bool = False, triggered_by=None):
+        """共用盤後報告流程：支援排程與手動 dry-run。"""
+        mode = "DRY-RUN" if dry_run else "SEND"
+        stats = {
+            "users_total": 0,
+            "users_queued": 0,
+            "users_skipped": 0,
+            "users_failed": 0,
+            "errors": [],
+        }
+
+        logger.info(f"[AfterMarketReport] Start pipeline mode={mode}")
+        try:
+            user_reports = await self.trading_service.get_after_market_report_data()
+        except Exception:
+            logger.exception("盤後報告資料彙整失敗，本輪略過發送。")
+            return stats
+
+        stats["users_total"] = len(user_reports)
+        logger.info(f"[AfterMarketReport] mode={mode}, users_total={stats['users_total']}")
+
+        for uid, data in user_reports.items():
+            report_lines = data.get("report_lines", [])
+            hedge_analysis = data.get("hedge_analysis")
+
+            try:
+                embed = create_portfolio_report_embed(report_lines, hedge_analysis)
+            except Exception:
+                stats["users_failed"] += 1
+                err = f"embed_build_failed: uid={uid}"
+                stats["errors"].append(err)
+                logger.exception(f"建立盤後報告 Embed 失敗，uid={uid}")
+                continue
+
+            position_chars = len(embed.fields[0].value) if len(embed.fields) >= 1 else 0
+            macro_chars = len(embed.fields[1].value) if len(embed.fields) >= 2 else 0
+            hedge_chars = len(embed.fields[2].value) if len(embed.fields) >= 3 else 0
+            logger.info(
+                f"[AfterMarketReport] uid={uid}, mode={mode}, lines={len(report_lines)}, "
+                f"fields={len(embed.fields)}, chars=({position_chars},{macro_chars},{hedge_chars})"
+            )
+
+            if dry_run:
+                stats["users_skipped"] += 1
+                continue
+
+            try:
+                user = await self.bot.fetch_user(uid)
+            except discord.NotFound:
+                stats["users_skipped"] += 1
+                logger.warning(f"盤後報告略過：找不到用戶 uid={uid}")
+                continue
+            except discord.Forbidden:
+                stats["users_skipped"] += 1
+                logger.warning(f"盤後報告略過：無權限讀取用戶 uid={uid}")
+                continue
+            except Exception:
+                stats["users_failed"] += 1
+                err = f"fetch_user_failed: uid={uid}"
+                stats["errors"].append(err)
+                logger.exception(f"盤後報告 fetch_user 失敗，uid={uid}")
+                continue
+
+            if not user:
+                stats["users_skipped"] += 1
+                logger.warning(f"盤後報告略過：fetch_user 回傳空值，uid={uid}")
+                continue
+
+            try:
+                await self.bot.queue_dm(uid, message="📊 **【Nexus Seeker 盤後結算系統】**", embed=embed)
+                stats["users_queued"] += 1
+                logger.info(f"盤後報告已排入 DM 佇列，uid={uid}，fields={len(embed.fields)}")
+            except discord.Forbidden:
+                stats["users_skipped"] += 1
+                logger.warning(f"無法發送私訊給用戶 {uid}")
+            except Exception:
+                stats["users_failed"] += 1
+                err = f"queue_dm_failed: uid={uid}"
+                stats["errors"].append(err)
+                logger.exception(f"盤後報告排入 DM 佇列失敗，uid={uid}")
+
+        if stats["errors"]:
+            logger.warning(f"[AfterMarketReport] mode={mode}, errors={stats['errors'][:10]}")
+
+        logger.info(
+            f"[AfterMarketReport] Finished mode={mode}, "
+            f"users_total={stats['users_total']}, users_queued={stats['users_queued']}, "
+            f"users_skipped={stats['users_skipped']}, users_failed={stats['users_failed']}"
+        )
+
+        if triggered_by and stats["errors"]:
+            await triggered_by.send(
+                "⚠️ force_after_report 已完成，但有錯誤。\n"
+                f"錯誤摘要: `{'; '.join(stats['errors'][:5])}`"
+            )
+        return stats
+
     async def _run_market_scan_logic(self, is_auto=True, triggered_by=None):
         """共用的掃描核心邏輯，協調 Service 計算與 Discord 訊息發送。"""
         try:
@@ -264,30 +389,21 @@ class SchedulerCog(commands.Cog):
     async def dynamic_after_market_report(self):
         """16:15：持倉結算與防禦建議 (依使用者分發私訊)"""
         logger.info("Starting dynamic_after_market_report task.")
-
-        # 盤後順帶清理過舊財務快取，維持資料庫體積與查詢效率
         try:
-            purged_rows = database.purge_old_cache(days=30)
-            logger.info(f"🧹 financials_cache 清理完成，刪除 {purged_rows} 筆 30 天前資料")
-        except Exception as e:
-            logger.warning(f"financials_cache 清理失敗，略過不影響盤後報告: {e}")
+            # 盤後順帶清理過舊財務快取，維持資料庫體積與查詢效率
+            try:
+                purged_rows = database.purge_old_cache(days=30)
+                logger.info(f"🧹 financials_cache 清理完成，刪除 {purged_rows} 筆 30 天前資料")
+            except Exception as e:
+                logger.warning(f"financials_cache 清理失敗，略過不影響盤後報告: {e}")
 
-        user_reports = await self.trading_service.get_after_market_report_data()
-
-        for uid, data in user_reports.items():
-            user = await self.bot.fetch_user(uid)
-            if user:
-                report_lines = data.get("report_lines", [])
-                hedge_analysis = data.get("hedge_analysis")
-                
-                embed = create_portfolio_report_embed(report_lines, hedge_analysis)
-                try:
-                    await self.bot.queue_dm(uid, message="📊 **【Nexus Seeker 盤後結算系統】**", embed=embed)
-                except discord.Forbidden:
-                    logger.warning(f"無法發送私訊給用戶 {uid}")
-
-        # 每輪結束後依交易日行事曆重新對齊下一次執行時間。
-        await self._reschedule_after_market_report()
+            await self._run_after_market_report_pipeline(dry_run=False)
+        finally:
+            # 每輪結束後依交易日行事曆重新對齊下一次執行時間。
+            try:
+                await self._reschedule_after_market_report()
+            except Exception:
+                logger.exception("盤後報告重排程失敗。")
 
     async def _reschedule_after_market_report(self):
         target_time = market_time.get_next_market_target_time(reference="close", offset_minutes=15)

@@ -7,6 +7,55 @@ from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
+def _is_macro_report_marker(line: str) -> bool:
+    """較穩健地辨識宏觀風險段落起始行。"""
+    if not line:
+        return False
+    normalized = line.strip()
+    if not normalized.startswith("🌐"):
+        return False
+    return ("宏觀風險" in normalized) or ("資金水位報告" in normalized)
+
+def _truncate_with_boundary(text: str, max_len: int) -> str:
+    """優先在換行或句點邊界截斷，避免硬切造成可讀性差。"""
+    if len(text) <= max_len:
+        return text
+
+    reserved = 3
+    safe_len = max(1, max_len - reserved)
+    candidate = text[:safe_len]
+
+    boundary_candidates = [candidate.rfind("\n\n"), candidate.rfind("\n"), candidate.rfind("。")]
+    boundary = max(boundary_candidates)
+    if boundary > int(max_len * 0.6):
+        candidate = candidate[:boundary]
+
+    return candidate.rstrip() + "..."
+
+def _safe_embed_field_value(text: str, fallback: str, max_len: int = 1024) -> str:
+    """確保欄位值非空且符合 Discord 長度上限。"""
+    value = (text or "").strip()
+    if not value:
+        value = fallback
+
+    # 保留尾端間距，讓下一個欄位視覺更乾淨。
+    suffix = "\n\u200b"
+    room = max(1, max_len - len(suffix))
+    value = _truncate_with_boundary(value, room)
+    value = value + suffix
+
+    if len(value) > max_len:
+        value = _truncate_with_boundary(value, max_len)
+    if not value.strip():
+        value = fallback + suffix
+    return value
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
 def add_news_field(embed, news_text):
     if news_text:
         if len(news_text) > 1000:
@@ -473,31 +522,28 @@ def create_portfolio_report_embed(report_lines, hedge_analysis=None):
     # 尋找分割點：🌐 【宏觀風險與資金水位報告】
     macro_index = -1
     for i, line in enumerate(report_lines):
-        if "🌐 **【宏觀風險" in line:
+        if _is_macro_report_marker(line):
             macro_index = i
             break
 
     # 2. 處理持倉細節與宏觀報告區隔
     if macro_index != -1:
         positions_list = [line.strip() for line in report_lines[:macro_index] if line.strip()]
-        macro_text = "".join(report_lines[macro_index:]).strip()
+        macro_text = "\n".join(line.strip() for line in report_lines[macro_index:] if line.strip())
     else:
         # 如果找不到宏觀報告區塊，將所有內容視為持倉明細
         positions_list = [line.strip() for line in report_lines if line.strip()]
         macro_text = "目前無宏觀風險數據。"
 
-    # 使用 \n\n 分隔部位，並在總結尾加上 \n\u200b 來拉開與下一個 Field 標題的距離
+    # 使用 \n\n 分隔部位
     if positions_list:
-        positions_text = "\n\n".join(positions_list) + "\n\u200b"
+        positions_text = "\n\n".join(positions_list)
     else:
-        positions_text = "目前無持倉部位。\n\u200b"
+        positions_text = "目前無持倉部位。"
     
     # 二次確認，防止 macro_text 全空或只包含空白，Discord Embed value 必須為非空字串
     if not macro_text:
-        macro_text = "無宏觀風險數據。\n\u200b"
-    else:
-        # 為了美觀與避免排版問題，補上空行
-        macro_text += "\n\u200b"
+        macro_text = "無宏觀風險數據。"
 
     # 4. 判斷顏色：如果有任何 "🚨" 或 "🆘"，就用紅色，否則用藍色
     embed_color = discord.Color.blue()
@@ -513,14 +559,11 @@ def create_portfolio_report_embed(report_lines, hedge_analysis=None):
     )
 
     # 🚀 欄位一：個別持倉細節
-    # 如果內容太長，Discord 會報錯，這裡做截斷處理
-    if len(positions_text) > 1024:
-        positions_text = positions_text[:1020] + "..."
+    positions_text = _safe_embed_field_value(positions_text, "目前無持倉部位。")
     embed.add_field(name="📦 當前持倉明細", value=positions_text, inline=False)
 
     # 🚀 欄位二：全帳戶宏觀風險與對沖指令 (核心！)
-    if len(macro_text) > 1024:
-        macro_text = macro_text[:1020] + "..."
+    macro_text = _safe_embed_field_value(macro_text, "無宏觀風險數據。")
     embed.add_field(name="🛡️ 風控管線評估與對沖決策", value=macro_text, inline=False)
 
     # 🚀 欄位三：對沖有效性分析 (新增)
@@ -529,8 +572,9 @@ def create_portfolio_report_embed(report_lines, hedge_analysis=None):
         
         # 如果有 Tau 係數更新資訊，則額外提示
         dynamic_tau = getattr(embed, 'dynamic_tau', None) or (hedge_analysis.get('dynamic_tau') if isinstance(hedge_analysis, dict) else None)
-        if dynamic_tau:
-            embed.add_field(name="🧬 STHE 自動優化狀態", value=f"目前對沖調教因子 $\\tau$: `{dynamic_tau:.2f}`", inline=False)
+        if dynamic_tau is not None:
+            dynamic_tau = _safe_float(dynamic_tau, 1.0)
+            embed.add_field(name="🧬 STHE 自動優化狀態", value=f"目前對沖調教因子 τ: `{dynamic_tau:.2f}`", inline=False)
 
     embed.set_footer(text="Argo Risk Engine v2.5 | 基準標的: SPY")
     
@@ -645,8 +689,21 @@ def build_hedge_analysis_field(embed, analysis):
     """
     在 embed 中加入對沖分析區塊。
     """
-    status_emoji = "✅" if analysis['status'] == "OPTIMAL" else "⚠️"
-    effectiveness = analysis.get('effectiveness', 0.0)
+    if not isinstance(analysis, dict):
+        embed.add_field(
+            name="🛡️ 對沖有效性診斷",
+            value=_safe_embed_field_value("目前無法取得對沖分析資料。", "目前無法取得對沖分析資料。"),
+            inline=False,
+        )
+        return
+
+    status = str(analysis.get('status', 'UNKNOWN'))
+    status_emoji = "✅" if status == "OPTIMAL" else "⚠️"
+    effectiveness = _safe_float(analysis.get('effectiveness', 0.0), 0.0)
+    alpha_contribution = _safe_float(analysis.get('alpha_contribution', 0.0), 0.0)
+    hedge_contribution = _safe_float(analysis.get('hedge_contribution', 0.0), 0.0)
+    hedge_ratio = _safe_float(analysis.get('hedge_ratio', 0.0), 0.0)
+    net_pnl = _safe_float(analysis.get('net_pnl', 0.0), 0.0)
     
     # 決定有效性評價
     if effectiveness >= 0.8: eff_text = "🎯 精準"
@@ -654,11 +711,11 @@ def build_hedge_analysis_field(embed, analysis):
     else: eff_text = "🌪️ 偏差"
 
     content = (
-        f"🔹 **個股 Alpha 損益**: `${analysis['alpha_contribution']:,.2f}`\n"
-        f"🔸 **對沖 Beta 損益**: `${analysis['hedge_contribution']:,.2f}`\n"
-        f"📊 **對沖比率 (HR)**: `{analysis['hedge_ratio']:.2%}` {status_emoji}\n"
+        f"🔹 **個股 Alpha 損益**: `${alpha_contribution:,.2f}`\n"
+        f"🔸 **對沖 Beta 損益**: `${hedge_contribution:,.2f}`\n"
+        f"📊 **對沖比率 (HR)**: `{hedge_ratio:.2%}` {status_emoji}\n"
         f"🧩 **對沖有效性 (ES)**: `{effectiveness:.2%}` ({eff_text})\n"
-        f"🏁 **最終淨損益**: **`${analysis['net_pnl']:,.2f}`**"
+        f"🏁 **最終淨損益**: **`${net_pnl:,.2f}`**"
     )
     
-    embed.add_field(name="🛡️ 對沖有效性診斷", value=content, inline=False)
+    embed.add_field(name="🛡️ 對沖有效性診斷", value=_safe_embed_field_value(content, "對沖分析資料不足。"), inline=False)

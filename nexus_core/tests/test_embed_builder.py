@@ -42,5 +42,31 @@ class TestEmbedBuilder(unittest.TestCase):
         self.assertTrue(embed.fields[1].value.startswith("🌐 **"))
         self.assertIn("Risk metrics here", embed.fields[1].value)
 
+    def test_positions_field_truncates_to_discord_limit(self):
+        long_line = "Position A " + ("x" * 250)
+        lines = [long_line for _ in range(10)]
+
+        embed = create_portfolio_report_embed(lines)
+
+        self.assertLessEqual(len(embed.fields[0].value), 1024)
+        self.assertIn("...", embed.fields[0].value)
+
+    def test_hedge_analysis_missing_keys_fallback(self):
+        lines = [
+            "Position 1: AAPL 150C",
+            "🌐 **【宏觀風險與資金水位報告】**",
+            "Risk metrics here"
+        ]
+        hedge_analysis = {
+            "status": "OPTIMAL"
+        }
+
+        embed = create_portfolio_report_embed(lines, hedge_analysis)
+
+        self.assertGreaterEqual(len(embed.fields), 3)
+        self.assertEqual(embed.fields[2].name, "🛡️ 對沖有效性診斷")
+        self.assertIn("對沖比率", embed.fields[2].value)
+        self.assertLessEqual(len(embed.fields[2].value), 1024)
+
 if __name__ == '__main__':
     unittest.main()

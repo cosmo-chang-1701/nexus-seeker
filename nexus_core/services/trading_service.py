@@ -323,7 +323,7 @@ class TradingService:
                     user_capital = user_context.capital
 
                     # 位階判斷
-                    target_delta, regime = hedging.get_market_regime_target(spy_price, user_capital)
+                    target_delta, regime = await hedging.get_market_regime_target(spy_price, user_capital)
                     hedge = hedging.calculate_autonomous_hedge(current_total_delta, target_delta, spy_price)
 
                     results.append({
@@ -347,6 +347,7 @@ class TradingService:
         """
         all_portfolios = database.get_all_portfolio()
         if not all_portfolios:
+            logger.info("盤後報告略過：無任何持倉資料。")
             return {}
         
         user_ports = {}
@@ -356,31 +357,53 @@ class TradingService:
 
         results = {}
         for uid, rows in user_ports.items():
-            user_ctx = database.get_full_user_context(uid)
-            user_capital = user_ctx.capital
-            
-            # 1. 執行標準持倉報告邏輯
-            report_lines = await asyncio.to_thread(
-                portfolio.check_portfolio_status_logic, 
-                rows, 
-                user_capital
-            )
-            
-            # 2. 執行對沖績效分析
-            hedge_analysis = await hedging.analyze_hedge_performance(uid)
-            
-            if report_lines:
-                # 🚀 執行 STHE 每日自動優化排程
-                # 1. 結算今日有效性
+            try:
+                user_ctx = database.get_full_user_context(uid)
+                user_capital = user_ctx.capital
+            except Exception:
+                logger.exception(f"盤後報告略過：讀取使用者資產設定失敗，uid={uid}")
+                continue
+
+            try:
+                # 1. 執行標準持倉報告邏輯
+                report_lines = await asyncio.to_thread(
+                    portfolio.check_portfolio_status_logic,
+                    rows,
+                    user_capital
+                )
+            except Exception:
+                logger.exception(f"盤後報告略過：持倉報告計算失敗，uid={uid}")
+                continue
+
+            if not report_lines:
+                logger.info(f"盤後報告略過：report_lines 為空，uid={uid}")
+                continue
+
+            try:
+                # 2. 執行對沖績效分析
+                hedge_analysis = await hedging.analyze_hedge_performance(uid)
+            except Exception:
+                logger.exception(f"盤後報告警告：對沖績效分析失敗，uid={uid}")
+                hedge_analysis = {}
+
+            if not isinstance(hedge_analysis, dict):
+                logger.warning(f"盤後報告警告：hedge_analysis 不是 dict，uid={uid}")
+                hedge_analysis = {}
+
+            # STHE 自動優化屬於加值資訊，失敗不應中斷報告。
+            try:
                 await hedging.calculate_daily_effectiveness(uid)
-                # 2. 滾動更新 Tau 係數
+            except Exception:
+                logger.exception(f"盤後報告警告：calculate_daily_effectiveness 失敗，uid={uid}")
+
+            try:
                 new_tau = await hedging.calculate_dynamic_tau(uid)
-                
-                # 將 Tau 注入分析字典
                 hedge_analysis['dynamic_tau'] = new_tau
-                
-                results[uid] = {
-                    "report_lines": report_lines,
-                    "hedge_analysis": hedge_analysis
-                }
+            except Exception:
+                logger.exception(f"盤後報告警告：calculate_dynamic_tau 失敗，uid={uid}")
+
+            results[uid] = {
+                "report_lines": report_lines,
+                "hedge_analysis": hedge_analysis
+            }
         return results

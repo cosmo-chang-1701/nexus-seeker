@@ -47,13 +47,21 @@ class NexusBot(commands.Bot):
         while not self.is_closed():
             # 1. 取得下一封要寄的信 (如果沒信會自動暫停在這裡，不耗效能)
             user_id, message, embed = await self.message_queue.get()
+            has_embed = embed is not None
+            field_count = len(embed.fields) if has_embed else 0
             
             try:
                 user = await self.fetch_user(user_id)
                 if user:
                     await user.send(content=message, embed=embed)
+            except discord.Forbidden as e:
+                logger.warning(f"發信失敗(Forbidden): uid={user_id}, has_embed={has_embed}, fields={field_count}, err={e}")
+            except discord.NotFound as e:
+                logger.warning(f"發信失敗(NotFound): uid={user_id}, has_embed={has_embed}, fields={field_count}, err={e}")
+            except discord.HTTPException as e:
+                logger.error(f"發信失敗(HTTPException): uid={user_id}, has_embed={has_embed}, fields={field_count}, status={e.status}, err={e}")
             except Exception as e:
-                logger.error(f"發信失敗: {e}")
+                logger.error(f"發信失敗(Unexpected): uid={user_id}, has_embed={has_embed}, fields={field_count}, err={e}")
             
             # 2. 強制間隔 0.2 秒再寄下一封
             await asyncio.sleep(0.2)
