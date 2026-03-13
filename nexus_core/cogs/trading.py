@@ -89,40 +89,58 @@ class SchedulerCog(commands.Cog):
     async def pre_market_risk_monitor(self):
         """09:00：盤前財報警報 (依使用者分發私訊)"""
         logger.info("Starting pre_market_risk_monitor task.")
-        now_ny = datetime.now(market_time.ny_tz)
+        try:
+            now_ny = datetime.now(market_time.ny_tz)
+            target_time = market_time.get_next_market_target_time(reference="open", offset_minutes=-30)
+
+            # 非交易日會拿到下一個交易日的 target，當天直接略過。
+            if not target_time or target_time.date() != now_ny.date():
+                return
+            
+            results = await self.trading_service.get_pre_market_alerts_data(self.EARNINGS_WARNING_DAYS)
+            
+            for uid, data in results.items():
+                alerts = []
+                for item in data['alerts']:
+                    status = "⚠️ **持倉高風險**" if item['is_portfolio'] else "👀 觀察清單"
+                    alerts.append(f"**{item['symbol']}** ({status})\n└ 📅 財報日: `{item['earnings_date']}` (倒數 **{item['days_left']}** 天)")
+
+                user = await self.bot.fetch_user(uid)
+                if user:
+                    if alerts:
+                        embed = discord.Embed(title="🚨 【盤前財報季雷達預警】", description="\n\n".join(alerts), color=discord.Color.red())
+                    else:
+                        scanned_list = "、".join([f"`{s}`" for s in data['scanned_symbols']])
+                        embed = discord.Embed(title="✅ 【盤前財報季雷達掃描完畢】", description=f"已掃描：{scanned_list}\n\n近 {self.EARNINGS_WARNING_DAYS} 日內無財報風險，安全過關！", color=discord.Color.green())
+                    
+                    try:
+                        await self.bot.queue_dm(uid, embed=embed)
+                    except discord.Forbidden:
+                        pass
+        finally:
+            # 每輪結束後依交易日行事曆重新對齊下一次執行時間。
+            try:
+                await self._reschedule_pre_market_risk()
+            except Exception:
+                logger.exception("盤前警報重排程失敗。")
+
+    async def _reschedule_pre_market_risk(self):
+        """計算下一個盤前目標時間並動態調整排程間隔。"""
         target_time = market_time.get_next_market_target_time(reference="open", offset_minutes=-30)
+        if not target_time:
+            logger.warning("找不到下一個盤前目標時間，1 小時後重試排程。")
+            self.pre_market_risk_monitor.change_interval(hours=1)
+            return None
 
-        # 非交易日會拿到下一個交易日的 target，當天直接略過。
-        if not target_time or target_time.date() != now_ny.date():
-            return
-        
-        results = await self.trading_service.get_pre_market_alerts_data(self.EARNINGS_WARNING_DAYS)
-        
-        for uid, data in results.items():
-            alerts = []
-            for item in data['alerts']:
-                status = "⚠️ **持倉高風險**" if item['is_portfolio'] else "👀 觀察清單"
-                alerts.append(f"**{item['symbol']}** ({status})\n└ 📅 財報日: `{item['earnings_date']}` (倒數 **{item['days_left']}** 天)")
-
-            user = await self.bot.fetch_user(uid)
-            if user:
-                if alerts:
-                    embed = discord.Embed(title="🚨 【盤前財報季雷達預警】", description="\n\n".join(alerts), color=discord.Color.red())
-                else:
-                    scanned_list = "、".join([f"`{s}`" for s in data['scanned_symbols']])
-                    embed = discord.Embed(title="✅ 【盤前財報季雷達掃描完畢】", description=f"已掃描：{scanned_list}\n\n近 {self.EARNINGS_WARNING_DAYS} 日內無財報風險，安全過關！", color=discord.Color.green())
-                
-                try:
-                    await self.bot.queue_dm(uid, embed=embed)
-                except discord.Forbidden:
-                    pass
+        await self._notify_next_schedule("盤前財報警報", target_time)
+        sleep_seconds = market_time.get_sleep_seconds(target_time)
+        self.pre_market_risk_monitor.change_interval(seconds=max(30.0, sleep_seconds))
+        return target_time
 
     @pre_market_risk_monitor.before_loop
     async def before_pre_market_risk_monitor(self):
         await self.bot.wait_until_ready()
-        target_time = market_time.get_next_market_target_time(reference="open", offset_minutes=-30)
-        await self._notify_next_schedule("盤前財報警報", target_time)
-        await asyncio.sleep(market_time.get_sleep_seconds(target_time))
+        await self._reschedule_pre_market_risk()
 
     @tasks.loop(minutes=30)
     async def dynamic_market_scanner(self):
@@ -420,9 +438,7 @@ class SchedulerCog(commands.Cog):
     @dynamic_after_market_report.before_loop
     async def before_dynamic_after_market_report(self):
         await self.bot.wait_until_ready()
-        target_time = await self._reschedule_after_market_report()
-        if target_time:
-            await asyncio.sleep(market_time.get_sleep_seconds(target_time))
+        await self._reschedule_after_market_report()
 
     # ==========================================
     # 🚀 VTR 監控與風險即時預警
