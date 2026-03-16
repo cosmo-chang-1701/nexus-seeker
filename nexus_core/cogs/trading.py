@@ -41,6 +41,11 @@ class SchedulerCog(commands.Cog):
         self.EARNINGS_WARNING_DAYS = 14
         self.last_notified_target = None
 
+        # 防重複旗標：記錄每個動態排程任務最後一次成功執行的日期，
+        # 避免 change_interval 與 tasks.loop 內部計時器競爭導致同一天觸發兩次。
+        self._pre_market_last_run_date = None
+        self._after_market_last_run_date = None
+
         # 🚀 宏觀環境快照：用於 AlertFilter 比對 VIX 變動幅度
         self.prev_macro_state: Dict[str, float] = {}
         
@@ -91,11 +96,20 @@ class SchedulerCog(commands.Cog):
         logger.info("Starting pre_market_risk_monitor task.")
         try:
             now_ny = datetime.now(market_time.ny_tz)
+            today = now_ny.date()
+
+            # 防重複：同一日期只執行一次，避免 change_interval 競爭導致重複觸發
+            if self._pre_market_last_run_date == today:
+                logger.info("pre_market_risk_monitor already ran today, skipping.")
+                return
+
             target_time = market_time.get_next_market_target_time(reference="open", offset_minutes=-30)
 
             # 非交易日會拿到下一個交易日的 target，當天直接略過。
-            if not target_time or target_time.date() != now_ny.date():
+            if not target_time or target_time.date() != today:
                 return
+
+            self._pre_market_last_run_date = today
             
             results = await self.trading_service.get_pre_market_alerts_data(self.EARNINGS_WARNING_DAYS)
             
@@ -408,6 +422,16 @@ class SchedulerCog(commands.Cog):
         """16:15：持倉結算與防禦建議 (依使用者分發私訊)"""
         logger.info("Starting dynamic_after_market_report task.")
         try:
+            now_ny = datetime.now(market_time.ny_tz)
+            today = now_ny.date()
+
+            # 防重複：同一日期只執行一次，避免 change_interval 競爭導致重複觸發
+            if self._after_market_last_run_date == today:
+                logger.info("dynamic_after_market_report already ran today, skipping.")
+                return
+
+            self._after_market_last_run_date = today
+
             # 盤後順帶清理過舊財務快取，維持資料庫體積與查詢效率
             try:
                 purged_rows = database.purge_old_cache(days=30)
