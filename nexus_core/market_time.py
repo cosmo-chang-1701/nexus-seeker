@@ -8,11 +8,14 @@ logger = logging.getLogger(__name__)
 ny_tz = ZoneInfo("America/New_York")
 nyse_calendar = mcal.get_calendar('NYSE')
 
-def get_next_market_target_time(reference="open", offset_minutes=0):
+def get_next_market_target_time(reference="open", offset_minutes=0, skip_today=False):
     """獲取下一個市場的目標時間"""
     now = datetime.now(ny_tz)
-    end_date = now.date() + timedelta(days=7)
-    schedule = nyse_calendar.schedule(start_date=now.date(), end_date=end_date)
+
+    # 如果指定跳過今天，則從明天開始找
+    start_search = now.date() + timedelta(days=1) if skip_today else now.date()
+    end_date = now.date() + timedelta(days=14)
+    schedule = nyse_calendar.schedule(start_date=start_search, end_date=end_date)
 
     if schedule.empty:
         return None
@@ -29,10 +32,10 @@ def get_next_market_target_time(reference="open", offset_minutes=0):
             
         target_ny = target_utc.astimezone(ny_tz) + timedelta(minutes=offset_minutes)
         
-        if now < target_ny:
+        if target_ny > (now - timedelta(seconds=1)):
             logger.info(f"Next market {reference} target: {target_ny}")
             return target_ny
-            
+
     return None
 
 def get_sleep_seconds(target_time):

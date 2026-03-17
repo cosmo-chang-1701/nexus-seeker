@@ -132,13 +132,13 @@ class SchedulerCog(commands.Cog):
                     except discord.Forbidden:
                         pass
         finally:
-            # 每輪結束後依交易日行事曆重新對齊下一次執行時間。
+            # 任務結束後，進行「帶有通知」的重排程
             try:
-                await self._reschedule_pre_market_risk()
+                await self._reschedule_pre_market_risk(send_notify=True)
             except Exception:
                 logger.exception("盤前警報重排程失敗。")
 
-    async def _reschedule_pre_market_risk(self):
+    async def _reschedule_pre_market_risk(self, send_notify: bool = True):
         """計算下一個盤前目標時間並動態調整排程間隔。"""
         target_time = market_time.get_next_market_target_time(reference="open", offset_minutes=-30)
         if not target_time:
@@ -146,7 +146,10 @@ class SchedulerCog(commands.Cog):
             self.pre_market_risk_monitor.change_interval(hours=1)
             return None
 
-        await self._notify_next_schedule("盤前財報警報", target_time)
+        # 只有在非啟動初始化時才發送通知
+        if send_notify:
+            await self._notify_next_schedule("盤前財報警報", target_time)
+
         sleep_seconds = market_time.get_sleep_seconds(target_time)
         self.pre_market_risk_monitor.change_interval(seconds=max(30.0, sleep_seconds))
         return target_time
@@ -154,7 +157,7 @@ class SchedulerCog(commands.Cog):
     @pre_market_risk_monitor.before_loop
     async def before_pre_market_risk_monitor(self):
         await self.bot.wait_until_ready()
-        await self._reschedule_pre_market_risk()
+        await self._reschedule_pre_market_risk(send_notify=False)
 
     @tasks.loop(minutes=30)
     async def dynamic_market_scanner(self):
@@ -443,18 +446,21 @@ class SchedulerCog(commands.Cog):
         finally:
             # 每輪結束後依交易日行事曆重新對齊下一次執行時間。
             try:
-                await self._reschedule_after_market_report()
+                await self._reschedule_after_market_report(send_notify=True)
             except Exception:
                 logger.exception("盤後報告重排程失敗。")
 
-    async def _reschedule_after_market_report(self):
+    async def _reschedule_after_market_report(self, send_notify: bool = True):
         target_time = market_time.get_next_market_target_time(reference="close", offset_minutes=15)
         if not target_time:
             logger.warning("找不到下一個盤後目標時間，1 小時後重試排程。")
             self.dynamic_after_market_report.change_interval(hours=1)
             return None
 
-        await self._notify_next_schedule("盤後結算報告", target_time)
+        # 僅在非初始化狀態下發送通知
+        if send_notify:
+            await self._notify_next_schedule("盤後結算報告", target_time)
+
         sleep_seconds = market_time.get_sleep_seconds(target_time)
         self.dynamic_after_market_report.change_interval(seconds=max(30.0, sleep_seconds))
         return target_time
@@ -462,7 +468,7 @@ class SchedulerCog(commands.Cog):
     @dynamic_after_market_report.before_loop
     async def before_dynamic_after_market_report(self):
         await self.bot.wait_until_ready()
-        await self._reschedule_after_market_report()
+        await self._reschedule_after_market_report(send_notify=False)
 
     # ==========================================
     # 🚀 VTR 監控與風險即時預警
