@@ -14,6 +14,7 @@ from config import DISCORD_ADMIN_USER_ID
 from services.trading_service import TradingService
 from services.alert_filter import should_send_priority_alert, is_whipsaw_noise
 from cogs.embed_builder import create_scan_embed, build_vtr_stats_embed, create_portfolio_report_embed, create_rehedge_embed
+from market_analysis.ghost_trader import GhostTrader
 
 ny_tz = ZoneInfo("America/New_York")
 logger = logging.getLogger(__name__)
@@ -77,8 +78,7 @@ class SchedulerCog(commands.Cog):
 
         for uid in unique_users:
             try:
-                from market_analysis.ghost_trader import GhostTrader
-                stats = GhostTrader.get_vtr_performance_stats(uid)
+                stats = await GhostTrader.get_vtr_performance_stats(uid)
                 if stats['total_trades'] > 0:
                     user = await self.bot.fetch_user(uid)
                     embed = build_vtr_stats_embed(user.display_name, stats)

@@ -366,11 +366,7 @@ class TradingService:
 
             try:
                 # 1. 執行標準持倉報告邏輯
-                report_lines = await asyncio.to_thread(
-                    portfolio.check_portfolio_status_logic,
-                    rows,
-                    user_capital
-                )
+                report_lines = await portfolio.check_portfolio_status_logic(rows, user_capital)
             except Exception:
                 logger.exception(f"盤後報告略過：持倉報告計算失敗，uid={uid}")
                 continue

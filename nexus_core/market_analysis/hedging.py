@@ -6,6 +6,7 @@ from services import market_data_service
 from database.user_settings import UserContext
 from services.alert_filter import TrendState, MTFResult
 import database
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
