@@ -40,12 +40,6 @@ class SchedulerCog(commands.Cog):
         self.signal_cooldowns = {}
         self.COOLDOWN_HOURS = 4
         self.EARNINGS_WARNING_DAYS = 14
-        self.last_notified_target = None
-
-        # 防重複旗標：記錄每個動態排程任務最後一次成功執行的日期，
-        # 避免 change_interval 與 tasks.loop 內部計時器競爭導致同一天觸發兩次。
-        self._pre_market_last_run_date = None
-        self._after_market_last_run_date = None
 
         # 🚀 宏觀環境快照：用於 AlertFilter 比對 VIX 變動幅度
         self.prev_macro_state: Dict[str, float] = {}
@@ -90,27 +84,19 @@ class SchedulerCog(commands.Cog):
     # ==========================================
     # 動態排程任務 (私訊分發引擎)
     # ==========================================
-    @tasks.loop(hours=24)
+    @tasks.loop(time=time(hour=9, minute=0, tzinfo=ny_tz))
     async def pre_market_risk_monitor(self):
         """09:00：盤前財報警報 (依使用者分發私訊)"""
+        now_ny = datetime.now(ny_tz)
+        today = now_ny.date()
+        
+        # 檢查今天是否為交易日
+        schedule = market_time.nyse_calendar.schedule(start_date=today, end_date=today)
+        if schedule.empty:
+            return
+
         logger.info("Starting pre_market_risk_monitor task.")
         try:
-            now_ny = datetime.now(market_time.ny_tz)
-            today = now_ny.date()
-
-            # 防重複：同一日期只執行一次，避免 change_interval 競爭導致重複觸發
-            if self._pre_market_last_run_date == today:
-                logger.info("pre_market_risk_monitor already ran today, skipping.")
-                return
-
-            target_time = market_time.get_next_market_target_time(reference="open", offset_minutes=-30)
-
-            # 非交易日會拿到下一個交易日的 target，當天直接略過。
-            if not target_time or target_time.date() != today:
-                return
-
-            self._pre_market_last_run_date = today
-            
             results = await self.trading_service.get_pre_market_alerts_data(self.EARNINGS_WARNING_DAYS)
             
             for uid, data in results.items():
@@ -131,43 +117,16 @@ class SchedulerCog(commands.Cog):
                         await self.bot.queue_dm(uid, embed=embed)
                     except discord.Forbidden:
                         pass
-        finally:
-            # 任務結束後，進行「帶有通知」的重排程
-            try:
-                await self._reschedule_pre_market_risk(send_notify=True)
-            except Exception:
-                logger.exception("盤前警報重排程失敗。")
-
-    async def _reschedule_pre_market_risk(self, send_notify: bool = True):
-        """計算下一個盤前目標時間並動態調整排程間隔。"""
-        target_time = market_time.get_next_market_target_time(reference="open", offset_minutes=-30)
-        if not target_time:
-            logger.warning("找不到下一個盤前目標時間，1 小時後重試排程。")
-            self.pre_market_risk_monitor.change_interval(hours=1)
-            return None
-
-        # 只有在非啟動初始化時才發送通知
-        if send_notify:
-            await self._notify_next_schedule("盤前財報警報", target_time)
-
-        sleep_seconds = market_time.get_sleep_seconds(target_time)
-        self.pre_market_risk_monitor.change_interval(seconds=max(30.0, sleep_seconds))
-        return target_time
+        except Exception as e:
+            logger.error(f"盤前掃描執行錯誤: {e}")
 
     @pre_market_risk_monitor.before_loop
     async def before_pre_market_risk_monitor(self):
         await self.bot.wait_until_ready()
-        await self._reschedule_pre_market_risk(send_notify=False)
 
     @tasks.loop(minutes=30)
     async def dynamic_market_scanner(self):
         """盤中動態巡邏：每 30 分鐘心跳檢查，僅在盤中 (09:45後) 執行掃描"""
-        target_time = market_time.get_next_market_target_time(reference="open", offset_minutes=15)
-        
-        if target_time and target_time != self.last_notified_target:
-            await self._notify_next_schedule("盤中動態掃描", target_time)
-            self.last_notified_target = target_time
-
         if not market_time.is_market_open():
             return
                 
@@ -420,55 +379,31 @@ class SchedulerCog(commands.Cog):
                     logger.debug(f"[MacroState] 快照已更新: VIX={vix:.2f}")
                     return  # VIX 是全域值，取到一筆即可
 
-    @tasks.loop(hours=24)
+    @tasks.loop(time=time(hour=16, minute=15, tzinfo=ny_tz))
     async def dynamic_after_market_report(self):
         """16:15：持倉結算與防禦建議 (依使用者分發私訊)"""
+        now_ny = datetime.now(ny_tz)
+        today = now_ny.date()
+        
+        # 檢查今天是否為交易日
+        schedule = market_time.nyse_calendar.schedule(start_date=today, end_date=today)
+        if schedule.empty:
+            return
+
         logger.info("Starting dynamic_after_market_report task.")
+
+        # 盤後順帶清理過舊財務快取，維持資料庫體積與查詢效率
         try:
-            now_ny = datetime.now(market_time.ny_tz)
-            today = now_ny.date()
+            purged_rows = database.purge_old_cache(days=30)
+            logger.info(f"🧹 financials_cache 清理完成，刪除 {purged_rows} 筆 30 天前資料")
+        except Exception as e:
+            logger.warning(f"financials_cache 清理失敗，略過不影響盤後報告: {e}")
 
-            # 防重複：同一日期只執行一次，避免 change_interval 競爭導致重複觸發
-            if self._after_market_last_run_date == today:
-                logger.info("dynamic_after_market_report already ran today, skipping.")
-                return
-
-            self._after_market_last_run_date = today
-
-            # 盤後順帶清理過舊財務快取，維持資料庫體積與查詢效率
-            try:
-                purged_rows = database.purge_old_cache(days=30)
-                logger.info(f"🧹 financials_cache 清理完成，刪除 {purged_rows} 筆 30 天前資料")
-            except Exception as e:
-                logger.warning(f"financials_cache 清理失敗，略過不影響盤後報告: {e}")
-
-            await self._run_after_market_report_pipeline(dry_run=False)
-        finally:
-            # 每輪結束後依交易日行事曆重新對齊下一次執行時間。
-            try:
-                await self._reschedule_after_market_report(send_notify=True)
-            except Exception:
-                logger.exception("盤後報告重排程失敗。")
-
-    async def _reschedule_after_market_report(self, send_notify: bool = True):
-        target_time = market_time.get_next_market_target_time(reference="close", offset_minutes=15)
-        if not target_time:
-            logger.warning("找不到下一個盤後目標時間，1 小時後重試排程。")
-            self.dynamic_after_market_report.change_interval(hours=1)
-            return None
-
-        # 僅在非初始化狀態下發送通知
-        if send_notify:
-            await self._notify_next_schedule("盤後結算報告", target_time)
-
-        sleep_seconds = market_time.get_sleep_seconds(target_time)
-        self.dynamic_after_market_report.change_interval(seconds=max(30.0, sleep_seconds))
-        return target_time
+        await self._run_after_market_report_pipeline(dry_run=False)
 
     @dynamic_after_market_report.before_loop
     async def before_dynamic_after_market_report(self):
         await self.bot.wait_until_ready()
-        await self._reschedule_after_market_report(send_notify=False)
 
     # ==========================================
     # 🚀 VTR 監控與風險即時預警
@@ -511,17 +446,6 @@ class SchedulerCog(commands.Cog):
     @monitor_vtr_task.before_loop
     async def before_monitor_vtr_task(self):
         await self.bot.wait_until_ready()
-
-    async def _notify_next_schedule(self, task_name, target_time):
-        """通知所有使用者下一次任務執行時間"""
-        if not target_time:
-            return
-        unix_ts = int(target_time.timestamp())
-        msg = f"📅 **{task_name}** 下次執行時間: <t:{unix_ts}:F> (<t:{unix_ts}:R>)"
-        try:
-            await self.bot.notify_all_users(msg)
-        except Exception as e:
-            logger.warning(f"Failed to send schedule notification: {e}")
 
 async def setup(bot):
     await bot.add_cog(SchedulerCog(bot))
