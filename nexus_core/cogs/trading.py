@@ -47,11 +47,6 @@ class SchedulerCog(commands.Cog):
         self._pre_market_last_run_date = None
         self._after_market_last_run_date = None
 
-        # 通知去重：記錄各排程任務上次已通知的目標時間，
-        # 防止 change_interval 重置計時器導致 _notify_next_schedule 被重複呼叫。
-        self._last_notified_pre_market_target = None
-        self._last_notified_after_market_target = None
-
         # 🚀 宏觀環境快照：用於 AlertFilter 比對 VIX 變動幅度
         self.prev_macro_state: Dict[str, float] = {}
         
@@ -151,11 +146,9 @@ class SchedulerCog(commands.Cog):
             self.pre_market_risk_monitor.change_interval(hours=1)
             return None
 
-        # 只有在非啟動初始化時、且目標時間確實改變時才發送通知，
-        # 防止 change_interval 重置計時器導致 loop 重複觸發而連續發送相同通知。
-        if send_notify and target_time != self._last_notified_pre_market_target:
+        # 只有在非啟動初始化時才發送通知
+        if send_notify:
             await self._notify_next_schedule("盤前財報警報", target_time)
-            self._last_notified_pre_market_target = target_time
 
         sleep_seconds = market_time.get_sleep_seconds(target_time)
         self.pre_market_risk_monitor.change_interval(seconds=max(30.0, sleep_seconds))
@@ -464,11 +457,9 @@ class SchedulerCog(commands.Cog):
             self.dynamic_after_market_report.change_interval(hours=1)
             return None
 
-        # 僅在非初始化狀態下、且目標時間確實改變時才發送通知，
-        # 防止 change_interval 重置計時器導致 loop 重複觸發而連續發送相同通知。
-        if send_notify and target_time != self._last_notified_after_market_target:
+        # 僅在非初始化狀態下發送通知
+        if send_notify:
             await self._notify_next_schedule("盤後結算報告", target_time)
-            self._last_notified_after_market_target = target_time
 
         sleep_seconds = market_time.get_sleep_seconds(target_time)
         self.dynamic_after_market_report.change_interval(seconds=max(30.0, sleep_seconds))
