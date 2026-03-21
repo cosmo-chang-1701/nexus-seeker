@@ -84,16 +84,60 @@ async def _execute_api_call(func, *args, **kwargs) -> Any:
 # ---------------------------------------------------------------------------
 # Quote (即時報價)
 # ---------------------------------------------------------------------------
+async def get_yfinance_quote(symbol: str) -> Dict[str, Any]:
+    """使用 yfinance 取得即時報價，並轉換格式與 Finnhub 相容。"""
+    yf_symbol = symbol if not symbol == "VIX" else "^VIX"
+    try:
+        ticker = yf.Ticker(yf_symbol)
+        # 抓取最近 2 天資料以計算昨日收盤 (pc)
+        df = await asyncio.to_thread(ticker.history, period="2d")
+        if df.empty:
+            logger.warning(f"[{yf_symbol}] yfinance quote 回傳資料為空")
+            return {}
+        
+        latest = df.iloc[-1]
+        prev_close = df.iloc[-2]['Close'] if len(df) > 1 else latest['Open']
+        current_price = latest['Close']
+        
+        change = current_price - prev_close
+        pct_change = (change / prev_close) * 100 if prev_close != 0 else 0.0
+        
+        return {
+            'c': round(float(current_price), 2),
+            'd': round(float(change), 2),
+            'dp': round(float(pct_change), 4),
+            'h': round(float(latest['High']), 2),
+            'l': round(float(latest['Low']), 2),
+            'o': round(float(latest['Open']), 2),
+            'pc': round(float(prev_close), 2),
+            't': int(df.index[-1].timestamp())
+        }
+    except Exception as e:
+        logger.error(f"[{yf_symbol}] yfinance quote 失敗: {e}")
+        return {}
+
 async def get_quote(symbol: str) -> Dict[str, Any]:
-    """取得即時報價 (非同步)。"""
+    """取得即時報價 (非同步)。對於指數型標的，強制轉向 yfinance。"""
+    if symbol.startswith('^') or symbol == 'VIX':
+        return await get_yfinance_quote(symbol)
+
     client = _get_client()
     try:
         data = await _execute_api_call(client.quote, symbol)
         if data and data.get('c', 0) > 0:
             return data
-        logger.warning(f"[{symbol}] Finnhub quote 回傳無效資料: {data}")
-        return {}
+        
+        # 若 Finnhub 回傳無效或報權限錯誤 (c=0 有可能是權限問題或標的不存在)
+        # 嘗試作為 fallback 轉向 yfinance
+        logger.warning(f"[{symbol}] Finnhub quote 無效，嘗試 yfinance fallback")
+        return await get_yfinance_quote(symbol)
     except Exception as e:
+        # 如果是明確的權限錯誤，也轉向 yfinance
+        error_msg = str(e).lower()
+        if 'subscription required' in error_msg or 'market data' in error_msg:
+             logger.info(f"[{symbol}] Finnhub 權限受限，強制轉向 yfinance")
+             return await get_yfinance_quote(symbol)
+
         logger.error(f"[{symbol}] Finnhub quote 失敗: {e}")
         return {}
 

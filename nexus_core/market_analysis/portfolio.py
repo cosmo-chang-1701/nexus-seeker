@@ -98,7 +98,7 @@ class PortfolioStatusOrchestrator:
             option_chains_cache = {}
 
             for row in rows:
-                _, opt_type, strike, expiry, entry_price, quantity, stock_cost = row
+                _, opt_type, strike, expiry, entry_price, quantity, stock_cost, *_ = row
                 
                 if expiry not in option_chains_cache:
                     option_chains_cache[expiry] = await asyncio.to_thread(get_option_chain, symbol, expiry)
