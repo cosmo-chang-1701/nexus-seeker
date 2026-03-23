@@ -1,5 +1,9 @@
 # 🌌 Nexus Seeker
 
+<div align="center">
+  <img src="assets/hero.png" alt="Nexus Seeker Hero Image" width="800" />
+</div>
+
 **多租戶選擇權量化交易助手 — 由 Discord 驅動**
 
 [![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
