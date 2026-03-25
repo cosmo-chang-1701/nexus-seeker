@@ -15,6 +15,7 @@ concurrency:
 env:
   RAW_IMAGE_NAME: ghcr.io/${{ github.repository }}
   SERVICE_NAME: nexus-seeker-service
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   # --- 第一階段：建置與推送 Docker 映像檔 ---
@@ -31,7 +32,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set outputs
         id: vars
@@ -40,10 +41,10 @@ jobs:
           echo "image_lower=$(echo ${{ env.RAW_IMAGE_NAME }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -51,7 +52,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ steps.vars.outputs.image_lower }}
           tags: |
@@ -59,7 +60,7 @@ jobs:
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: ./nexus_core
           file: ./nexus_core/Dockerfile
@@ -78,7 +79,7 @@ jobs:
 
     steps:
       - name: Deploy to Droplet via SSH
-        uses: appleboy/ssh-action@v1.2.0
+        uses: appleboy/ssh-action@v1.2.5
         env:
           SERVICE_NAME: ${{ env.SERVICE_NAME }}
           IMAGE_TAG: ${{ needs.build-and-push.outputs.version }}
