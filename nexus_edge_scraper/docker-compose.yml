@@ -1,8 +1,8 @@
 services:
   # 服務 1：FastAPI 爬蟲微服務
-  scraper-api:
+  nexus-seeker:
     build: .
-    container_name: nexus-edge-api
+    container_name: nexus-seeker-edge-api
     ports:
       - "8000:8000"
     restart: unless-stopped
@@ -18,4 +18,4 @@ services:
       - TUNNEL_TOKEN=${CF_TUNNEL_TOKEN}
     command: tunnel run
     depends_on:
-      - scraper-api
+      - nexus-seeker
