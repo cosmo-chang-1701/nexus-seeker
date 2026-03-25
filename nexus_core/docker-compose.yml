@@ -6,8 +6,8 @@ services:
     env_file:
       - .env
     volumes:
-      - ./data:/app/data
-      - ./data/yfinance_cache:/tmp/yfinance_cache
+      - nexus_data:/app/data
+      - nexus_yfinance_cache:/tmp/yfinance_cache
     environment:
       - TZ=America/New_York
     logging:
@@ -15,3 +15,7 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+volumes:
+  nexus_data:
+  nexus_yfinance_cache:
