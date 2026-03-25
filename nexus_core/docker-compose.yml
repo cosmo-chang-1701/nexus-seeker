@@ -1,7 +1,7 @@
 services:
-  nexus_seeker:
+  nexus-seeker:
     build: .
-    container_name: nexus_seeker_bot
+    container_name: nexus-seeker-discord-bot
     restart: unless-stopped
     env_file:
       - .env
