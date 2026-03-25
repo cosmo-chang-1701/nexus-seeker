@@ -20,6 +20,7 @@ class NexusBot(commands.Bot):
         await self.load_extension("cogs.research")
         await self.load_extension("cogs.debug")
         self.loop.create_task(self._message_worker())
+        self.loop.create_task(self._health_worker())
         try:
             synced = await self.tree.sync()
             logger.info(f"✅ 成功同步 {len(synced)} 個 Slash Commands")
@@ -40,6 +41,19 @@ class NexusBot(commands.Bot):
         except Exception as e:
             logger.error(f"發送關閉通知時發生錯誤: {e}")
         await super().close()
+
+    async def _health_worker(self):
+        """定期更新健康狀態檔案，讓 Docker 能夠識別機器人的健康度。"""
+        await self.wait_until_ready()
+        import time
+        while not self.is_closed():
+            try:
+                # 寫入 /tmp 資料夾以更新時間戳記
+                with open("/tmp/bot_healthy", "w") as f:
+                    f.write(str(time.time()))
+            except Exception as e:
+                logger.error(f"寫入 bot_healthy 檔案失敗: {e}")
+            await asyncio.sleep(60)
 
     async def _message_worker(self):
         """專職負責發送訊息的工人，確保系統不會因為發送訊息卡住"""
