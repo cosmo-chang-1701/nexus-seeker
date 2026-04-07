@@ -99,9 +99,21 @@ def _add_volatility_fields(embed, data, strategy):
     vrp_icon = "✅" if (("STO" in strategy and vrp_pct > 0) or ("BTO" in strategy and vrp_pct < 0)) else "⚠️"
     embed.add_field(name="⚖️ VRP 溢酬\u2800\u2800\u2800\u2800", value=f"`{vrp_pct:+.2f}%` {vrp_icon}\n\u200b", inline=True)
     ts_ratio_str = f"`{data['ts_ratio']:.2f}` {data['ts_state']}"
-    embed.add_field(name="⏳ IV 期限結構\u2800\u2800\u2800", value=f"{ts_ratio_str}\n\u200b", inline=True)
+    embed.add_field(name="⏳ 個股 IV 期限結構\u2800\u2800", value=f"{ts_ratio_str}\n\u200b", inline=True)
     v_skew_str = f"`{data['v_skew']:.2f}` {data.get('v_skew_state', '')}"
     embed.add_field(name="📉 垂直偏態\u2800\u2800\u2800\u2800", value=f"{v_skew_str}\n\u200b", inline=True)
+
+    # ---------------- VIX 306 Volatility Metrics ----------------
+    vts_str = f"`{data.get('vix_vts_ratio', 1.0):.2f}` {data.get('vix_regime', '')}"
+    embed.add_field(name="🌐 大盤 VIX 期限結構\u2800", value=f"{vts_str}\n\u200b", inline=True)
+    
+    z30 = data.get('vix_z30', 0.0)
+    z60 = data.get('vix_z60', 0.0)
+    z_icon = "📈 擴張" if z30 > 0.5 and z60 > 0 else "📉 收斂"
+    embed.add_field(name="🔥 VIX 30/60 Z-Score", value=f"Z30:`{z30:.1f}` Z60:`{z60:.1f}` {z_icon}\n\u200b", inline=True)
+
+    tail_risk = "🚨 觸發降規 (1/4 Kelly)" if data.get('is_high_tail_risk', False) else "✅ 正常 (1/2 Kelly)"
+    embed.add_field(name="🛡️ 尾部風險管理\u2800\u2800\u2800", value=f"{tail_risk}\n\u200b", inline=True)
 
 def _add_performance_and_kelly_fields(embed, data, user_capital):
     """添加績效與風控（含凱利倉位計算）欄位，並校正部位方向"""

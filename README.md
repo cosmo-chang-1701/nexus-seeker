@@ -51,8 +51,10 @@
 | 🧊 **4 小時推播冷卻** | 自動排程掃描結果依「使用者 × 標的」維度套用 4 小時冷卻機制，避免重複推播同一訊號；手動 `/force_scan` 不受冷卻限制且不重置計時器。 |
 | 📊 **造市商預期波動** | 計算基於 ATM 跨式組合的預期波動（MMM），在財報前標示「地雷區」履約價。 |
 | ⚖️ **四分之一 Kelly 倉位** | 以 ¼-Kelly 準則計算倉位大小，每檔標的上限 5%。 |
-| 📈 **IV 期限結構** | 偵測 30D/60D IV 逆價差作為恐慌性拋售訊號。 |
+| 📉 **個股 IV 期限結構** | 偵測 30D/60D IV 逆價差作為恐慌性拋售訊號。 |
+| 🌐 **大盤 VIX 結構** | 即時追蹤 VIX 期限結構 (VTS) 與 30/60日 Z-Score 動能，遇逆價差或波動性暴增時觸發系統性防禦機制。 |
 | 📐 **垂直偏態濾網** | 分析 25-Delta Put/Call IV 比率，≥ 1.30 標示警告，≥ 1.50 時硬性否決 STO Put 訊號，規避尾部崩盤風險。 |
+| 🛡️ **尾部風險防護** | 結合 VIX 數據與偏態指數，當偵測出黑天鵝尾部風險時，動態將曝險斬半 (1/4 Kelly) 並縮減 NRO 保證金上限。 |
 | 💧 **流動性濾網** | 自動檢測買賣價差（Bid-Ask Spread），絕對價差 > $0.20 且佔比 > 10% 時剔除流動性陷阱。 |
 | 🧪 **波動率風險溢酬 (VRP)** | 比較隱含波動率與歷史波動率，當 VRP < 0（IV 被低估）時拒絕賣方策略，確保風險溢酬為正。 |
 | 🎯 **隱含預期波動區間** | 以 `現價 × IV × √(DTE/365)` 計算 1σ 預期波動幅度，確認賣方損益兩平點建構於機率圓錐外，否則硬性剔除。 |
@@ -347,16 +349,19 @@ docker compose up -d --build
 | # | 濾網 | 規則 | 適用策略 |
 |---|---|---|---|
 | 1 | HV Rank | 波動率位階 ≥ 30（一年內相對百分位）— 作為賣方門檻 | STO Put / STO Call |
-| 2 | IV 期限結構 | 30D/60D IV 比率偵測逆價差（Backwardation ≥ 1.05） | 全部 |
-| 3 | 垂直偏態 | 25Δ Put/Call IV 比率 ≥ 1.50 → 硬性否決 STO Put | STO Put |
-| 4 | 流動性 | Bid-Ask 絕對價差 > $0.20 **且**佔比 > 10% → 剔除 | 全部 |
-| 5 | VRP（賣方） | 隱含波動率 < 歷史波動率（VRP < 0）→ 拒絕賣方 | STO Put / STO Call |
-| 6 | VRP（買方） | VRP > 3%（保費遭恐慌暴拉）→ 拒絕買方建倉 | BTO Call / BTO Put |
-| 7 | 隱含預期波動區間 | `現價 × IV × √(DTE/365)` 算出 1σ 預期波動幅度；STO Put 損益兩平 `(Strike − Bid)` 必須 ≤ 預期下緣，STO Call 損益兩平 `(Strike + Bid)` 必須 ≥ 預期上緣 — 落入圓錐內即剔除 | STO Put / STO Call |
-| 8 | AROC（賣方） | 年化資本回報率 `(Bid / 保證金) × (365 / DTE)` < 15% → 剔除；保證金 = `Strike − Bid` | STO Put / STO Call |
-| 9 | AROC（買方） | 年化資本回報率 `((預期波動 − Ask) / Ask) × (365 / DTE)` < 30% → 剔除 | BTO Call / BTO Put |
-| 10 | ¼ Kelly（賣方） | 凱利倉位上限 **5%**，單口保證金 = 履約價 − 權利金 | STO Put / STO Call |
-| 11 | ¼ Kelly（買方） | 凱利倉位上限 **3%**（更保守），單口成本 = 權利金 × 100 | BTO Call / BTO Put |
+| 2 | 個股 IV 期限結構 | 30D/60D IV 比率偵測逆價差（Backwardation ≥ 1.05） | 全部 |
+| 3 | 大盤 VIX 期限結構 | VIX vs VIX3M 結構為逆價差 (VTS ≥ 1.0) → 觸發全域尾部防禦 (NRO 上限減半)、拒絕 STO Put | 全部 |
+| 4 | VIX 動態 Z-Score | 偵測 Z30 > 0.5 且 Z60 > 0 (波動向北擴張) → 拒絕做多位階 (BTO Call / STO Put) | BTO Call / STO Put |
+| 5 | 大盤 SPY 位階 | SPY 跌破 20MA 宣告空基調 → 拒絕做多位階 (BTO Call / STO Put) | BTO Call / STO Put |
+| 6 | 垂直偏態 | 25Δ Put/Call IV 比率 ≥ 1.50 → 硬性否決 STO Put 或觸發 1/4 Kelly 尾部降規防護 | STO Put |
+| 7 | 流動性 | Bid-Ask 絕對價差 > $0.20 **且**佔比 > 10% → 剔除 | 全部 |
+| 8 | VRP（賣方） | 隱含波動率 < 歷史波動率（VRP < 0）→ 拒絕賣方 | STO Put / STO Call |
+| 9 | VRP（買方） | VRP > 3%（保費遭恐慌暴拉）→ 拒絕買方建倉 | BTO Call / BTO Put |
+| 10 | 隱含預期波動區間 | `現價 × IV × √(DTE/365)` 算出 1σ 預期波動幅度；STO Put 損益兩平 `(Strike − Bid)` 必須 ≤ 預期下緣，STO Call 損益兩平 `(Strike + Bid)` 必須 ≥ 預期上緣 — 落入圓錐內即剔除 | STO Put / STO Call |
+| 11 | AROC（賣方） | 年化資本回報率 `(Bid / 保證金) × (365 / DTE)` < 15% → 剔除；保證金 = `Strike − Bid` | STO Put / STO Call |
+| 12 | AROC（買方） | 年化資本回報率 `((預期波動 − Ask) / Ask) × (365 / DTE)` < 30% → 剔除 | BTO Call / BTO Put |
+| 13 | ¼ Kelly（賣方） | 遭遇高尾部風險時，凱利最大倉位斬半。上限 5% (高危險 2.5%) | STO Put / STO Call |
+| 14 | ¼ Kelly（買方） | 買方凱利倉位上限 3% | BTO Call / BTO Put |
 
 ### 🟢 賣出開倉 Put — *超賣收入*
 
@@ -428,8 +433,10 @@ nexus-seeker/                        # Monorepo 根目錄
 │   │       ├── v011_add_trade_category.py  # 新增部位類別 (SPECULATIVE/HEDGE)
 │   │       ├── v012_add_self_tuning_hedge.py  # 新增 STHE 動態 Tau 欄位
 │   │       ├── v013_add_financials_cache.py  # 新增財報/財務快取表
-│   │       └── v014_financials_cache_schema_compat.py  # financials_cache schema 相容修補
+│   │       ├── v014_financials_cache_schema_compat.py  # financials_cache schema 相容修補
+│   │       └── v015_add_vix_metrics.py  # 新增 VIX 結構與波動率動能指標狀態表
 │   ├── services/                    # 外部服務整合與業務邏輯層
+│   │   ├── alert_filter.py          # AlertFilter — 動態降噪過濾、多週期共振與防雙巴機制
 │   │   ├── trading_service.py       # TradingService — 集中式業務邏輯 (掃描、VTR、盤後報告)
 │   │   ├── market_data_service.py   # Finnhub 報價服務 (含 SMA/EMA 快取、Rate Limiting)
 │   │   ├── llm_service.py           # LLM NLP 風控審查 — Structured Output (Pydantic Schema)
@@ -532,6 +539,7 @@ docker compose run --rm nexus_seeker python -m unittest discover -s tests -v
 - [x] **個人化風險上限** — 使用者可透過 `/settings` 自訂風險限制 (1%–50%)，NRO 動態調控。
 - [x] **即時報價指令** — `/quote` 透過 Finnhub 即時查詢標的報價。
 - [x] **Service Layer 重構** — `TradingService` 將 Discord UI 與業務邏輯徹底解耦。
+- [x] **VIX 領域分析 (VIX306)** — 結合 VTS 期限結構與 30/60 日 Z-Score，偵測股市黑天鵝前兆與波動率擴張軌跡，動態觸發 1/4 Kelly 自動降規。
 - [ ] **MCP Server** — 將核心量化模組封裝為標準 Model Context Protocol 工具，供外部 AI 代理使用。
 - [ ] **券商 API 整合** — Interactive Brokers Gateway 實現全自動下單執行（訊號 → 執行 → 平倉，零人工介入）。
 

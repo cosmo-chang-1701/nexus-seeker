@@ -15,6 +15,8 @@ class MacroContext:
     vix: float
     oil_price: float
     vix_change: float
+    vts_ratio: float = 1.0
+    vix_trend_up: bool = False
 
 def evaluate_defense_status(quantity: float, opt_type: str, pnl_pct: float, current_delta: float, dte: int) -> str:
     if quantity < 0: 
@@ -70,17 +72,25 @@ def simulate_exposure_impact(current_total_delta: float, new_trade_data: Dict[st
     projected_exposure_pct = (projected_total_delta * spy_price) / user_capital * 100 if user_capital > 0 else 0
     return projected_total_delta, projected_exposure_pct
 
-def get_macro_modifiers(macro: MacroContext) -> Tuple[float, float]:
+def get_macro_modifiers(macro: MacroContext) -> Tuple[float, float, float]:
     w_vix = 1.2 if macro.vix < 15 else 1.0 if macro.vix < 20 else 0.8 if macro.vix < 25 else 0.6 if macro.vix < 35 else 0.4
     w_oil = 1.0 if macro.oil_price < 75 else 0.9 if macro.oil_price < 85 else 0.7 if macro.oil_price < 95 else 0.5
-    return w_vix, w_oil
+    w_regime = 0.6 if (macro.vts_ratio >= 1.0 or macro.vix_trend_up) else 1.0
+    return w_vix, w_oil, w_regime
 
-def optimize_position_risk(current_delta: float, unit_weighted_delta: float, user_capital: float, spy_price: float, stock_iv: float, strategy: str, macro_data: Optional[MacroContext] = None, base_risk_limit_pct: float = 15.0) -> Tuple[int, float]:
+def optimize_position_risk(current_delta: float, unit_weighted_delta: float, user_capital: float, spy_price: float, stock_iv: float, strategy: str, macro_data: Optional[MacroContext] = None, base_risk_limit_pct: float = 15.0, is_high_tail_risk: bool = False) -> Tuple[int, float]:
     if spy_price <= 0:
         return 0, 0.0
 
     spy_iv, risk_limit_pct = 0.16, base_risk_limit_pct
-    if macro_data: d_vix, d_oil = get_macro_modifiers(macro_data); risk_limit_pct = base_risk_limit_pct * d_vix * d_oil; spy_iv = macro_data.vix / 100.0
+    if macro_data: 
+        d_vix, d_oil, d_regime = get_macro_modifiers(macro_data)
+        risk_limit_pct = base_risk_limit_pct * d_vix * d_oil * d_regime
+        spy_iv = macro_data.vix / 100.0
+        
+    if is_high_tail_risk:
+        risk_limit_pct *= 0.5 # Tail risk haircut
+
     val_adj_unit_delta = unit_weighted_delta * (stock_iv / max(spy_iv, 0.01)) * (-1 if "STO" in strategy else 1)
     max_safe_shares = (user_capital * (risk_limit_pct / 100)) / spy_price
     safe_qty = int((max_safe_shares - current_delta) // val_adj_unit_delta) if val_adj_unit_delta > 0 else int((-max_safe_shares - current_delta) // val_adj_unit_delta) if val_adj_unit_delta < 0 else 0

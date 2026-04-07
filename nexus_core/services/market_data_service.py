@@ -417,3 +417,52 @@ async def get_macro_environment() -> Dict[str, float]:
     except Exception as e:
         logger.error(f"宏觀環境參數獲取失敗: {e}")
         return {"vix": 18.0, "oil": 75.0, "vix_change": 0.0}
+
+async def get_vix_term_structure() -> Dict[str, Any]:
+    """取得 VIX 期限結構 (以 ^VIX / ^VIX3M 為代理)。"""
+    try:
+        vix_task = get_history_df("^VIX", period="5d")
+        vix3m_task = get_history_df("^VIX3M", period="5d")
+        vix_df, vix3m_df = await asyncio.gather(vix_task, vix3m_task)
+        
+        if vix_df.empty or vix3m_df.empty:
+            return {"vts_ratio": 1.0, "vts_state": "UNKNOWN"}
+            
+        vix_close = float(vix_df['Close'].iloc[-1])
+        vix3m_close = float(vix3m_df['Close'].iloc[-1])
+        
+        if vix3m_close > 0:
+            vts_ratio = round(vix_close / vix3m_close, 3)
+        else:
+            vts_ratio = 1.0
+            
+        state = "Backwardation" if vts_ratio >= 1.0 else "Contango"
+        return {"vts_ratio": vts_ratio, "vts_state": state, "vix_front": vix_close, "vix_back": vix3m_close}
+    except Exception as e:
+        logger.error(f"VIX 期限結構計算失敗: {e}")
+        return {"vts_ratio": 1.0, "vts_state": "UNKNOWN"}
+
+async def get_vix_zscores() -> Dict[str, float]:
+    """取得 VIX 30天與60天 Z-Score"""
+    try:
+        # 取得至少 60 天以上的營業日，約需 90 個真實日曆天
+        df = await get_history_df("^VIX", period="6mo")
+        if df.empty or len(df) < 60:
+            return {"zscore_30": 0.0, "zscore_60": 0.0}
+            
+        current_vix = float(df['Close'].iloc[-1])
+        
+        # 30 day z-score
+        mean_30 = float(df['Close'].tail(30).mean())
+        std_30 = float(df['Close'].tail(30).std())
+        z_30 = (current_vix - mean_30) / std_30 if std_30 > 0.01 else 0.0
+        
+        # 60 day z-score
+        mean_60 = float(df['Close'].tail(60).mean())
+        std_60 = float(df['Close'].tail(60).std())
+        z_60 = (current_vix - mean_60) / std_60 if std_60 > 0.01 else 0.0
+        
+        return {"zscore_30": round(z_30, 2), "zscore_60": round(z_60, 2)}
+    except Exception as e:
+        logger.error(f"VIX Z-score 計算失敗: {e}")
+        return {"zscore_30": 0.0, "zscore_60": 0.0}

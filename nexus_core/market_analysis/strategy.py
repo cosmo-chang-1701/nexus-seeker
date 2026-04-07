@@ -200,6 +200,7 @@ def _calculate_vertical_skew(opt_chain, price, days_to_expiry, strategy, symbol,
     vertical_skew = 1.0
     skew_state = "⚖️ 中性 (Neutral)"
     t_years = max(days_to_expiry, 1) / 365.0
+    is_high_tail_risk = False
     
     try:
         calls_skew = opt_chain.calls[opt_chain.calls['volume'] > 0].copy()
@@ -223,15 +224,15 @@ def _calculate_vertical_skew(opt_chain, price, days_to_expiry, strategy, symbol,
                     
                 if vertical_skew >= 1.30:
                     skew_state = "⚠️ 嚴重左偏 (高尾部風險)"
-                    if strategy == "STO_PUT" and vertical_skew >= 1.50:
-                        logger.info(f"[{symbol}] 剔除: 垂直偏態比率 {vertical_skew:.2f} 過高，拒絕承接下行風險")
-                        return None, None
+                    if vertical_skew >= 1.50:
+                        skew_state = "🚨 極端左偏 (觸發尾部風險降規)"
+                        is_high_tail_risk = True
                 elif vertical_skew <= 0.90:
                     skew_state = "🚀 右偏 (看漲狂熱)"
     except Exception as e:
         logger.error(f"[{symbol}] 垂直偏態運算錯誤: {e}")
         
-    return vertical_skew, skew_state
+    return vertical_skew, skew_state, is_high_tail_risk
 
 def _evaluate_option_liquidity(option_data: dict) -> dict:
     """評估期權報價的流動性與買賣價差。"""
@@ -338,7 +339,7 @@ def _validate_risk_and_liquidity(strategy, best_contract, price, hv_current, day
         "liq_status": liq_eval['status'], "liq_msg": liq_eval['embed_msg']
     }
 
-def _calculate_sizing(strategy, best_contract, days_to_expiry, expected_move=0.0, price=0.0, stock_cost=0.0):
+def _calculate_sizing(strategy, best_contract, days_to_expiry, expected_move=0.0, price=0.0, stock_cost=0.0, kelly_fraction=0.5):
     """計算資金效率與倉位大小"""
     aroc, alloc_pct, margin_per_contract = 0.0, 0.0, 0.0
     
@@ -356,7 +357,7 @@ def _calculate_sizing(strategy, best_contract, days_to_expiry, expected_move=0.0
                 b = bid / margin_required
                 if b > 0:
                     kelly_f = (p * b - (1.0 - p)) / b
-                    alloc_pct = min(max(kelly_f * 0.25, 0.0), 0.05)
+                    alloc_pct = min(max(kelly_f * kelly_fraction, 0.0), 0.05)
                     margin_per_contract = margin_required * 100
     elif strategy in ["BTO_CALL", "BTO_PUT"]:
         premium = ask
@@ -368,7 +369,7 @@ def _calculate_sizing(strategy, best_contract, days_to_expiry, expected_move=0.0
                 b = potential_profit / premium
                 if b > 0:
                     kelly_f = (p * b - (1.0 - p)) / b
-                    alloc_pct = min(max(kelly_f * 0.25, 0.0), 0.03)
+                    alloc_pct = min(max(kelly_f * kelly_fraction, 0.0), 0.03)
             margin_per_contract = premium * 100
                     
     return aroc, alloc_pct, margin_per_contract
@@ -463,15 +464,51 @@ async def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None):
         mmm_pct, safe_lower, safe_upper, days_to_earnings = await _calculate_mmm(ticker, price, today, symbol, is_etf)
         ts_ratio, ts_state = await asyncio.to_thread(_calculate_term_structure, ticker, expirations, price, today)
 
+        # ------------------ VIX306 Advanced Volatility Filters ------------------
+        vix_vts_data = await market_data_service.get_vix_term_structure()
+        vix_zscores = await market_data_service.get_vix_zscores()
+        
+        vts_ratio = vix_vts_data.get('vts_ratio', 1.0)
+        z30 = vix_zscores.get('zscore_30', 0.0)
+        z60 = vix_zscores.get('zscore_60', 0.0)
+        
+        # Filter #12: VTS Filter
+        if strategy == "STO_PUT" and vts_ratio >= 1.0:
+            logger.info(f"[{symbol}] 剔除: VIX 目前處於逆價差 Backwardation (VTS >= 1.0)，市場風險極高")
+            return None
+            
+        # Filter #14: Regime Alignment
+        vix_trending_up = (z30 > 0.5 and z60 > 0.0)
+        is_bullish_strategy = strategy in ["BTO_CALL", "STO_PUT"]
+        if vix_trending_up and is_bullish_strategy:
+            logger.info(f"[{symbol}] 剔除: VIX 30/60 雙重指標看漲中(波動率放大)，拒絕作多")
+            return None
+            
+        # Filter: SPX/NDX Alignment
+        if is_bullish_strategy:
+            spy_sma20 = await market_data_service.get_sma("SPY", 20)
+            if spy_sma20 and spy_price_val < spy_sma20:
+                logger.info(f"[{symbol}] 剔除: SPY 跌破 20MA，大盤弱勢拒絕作多")
+                return None
+        # -------------------------------------------------------------------------
+
         if opt_chain is not None:
-            vertical_skew, skew_state = _calculate_vertical_skew(opt_chain, price, days_to_expiry, strategy, symbol, dividend_yield)
+            vertical_skew, skew_state, is_high_tail_risk = _calculate_vertical_skew(opt_chain, price, days_to_expiry, strategy, symbol, dividend_yield)
             if vertical_skew is None: return None
-        else: vertical_skew, skew_state = 1.0, "N/A"
+        else: 
+            vertical_skew, skew_state, is_high_tail_risk = 1.0, "N/A", False
 
         risk_metrics = _validate_risk_and_liquidity(strategy, best_contract, price, indicators.get('hv_current', 0.0), days_to_expiry, symbol)
         if not risk_metrics: return None
 
-        aroc, alloc_pct, margin_per_contract = _calculate_sizing(strategy, best_contract, days_to_expiry, expected_move=risk_metrics.get('expected_move', 0.0), price=price, stock_cost=stock_cost)
+        # Filter #13: Tail Risk Filter (1/4-Kelly Adjustment)
+        kelly_fraction = 0.25 if is_high_tail_risk else 0.50
+
+        aroc, alloc_pct, margin_per_contract = _calculate_sizing(
+            strategy, best_contract, days_to_expiry, 
+            expected_move=risk_metrics.get('expected_move', 0.0), 
+            price=price, stock_cost=stock_cost, kelly_fraction=kelly_fraction
+        )
         if (strategy in ["STO_PUT", "STO_CALL"] and aroc < 15.0) or (strategy in ["BTO_CALL", "BTO_PUT"] and aroc < 30.0): return None
 
         raw_delta = best_contract.get('bs_delta', 0.0)
@@ -484,6 +521,8 @@ async def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None):
             "symbol": symbol, "price": price, "beta": beta, "weighted_delta": weighted_delta, "stock_cost": stock_cost,
             "rsi": indicators.get('rsi', 0.0), "sma20": indicators.get('sma20', 0.0), "hv_rank": indicators.get('hv_rank', 0.0),
             "ts_ratio": ts_ratio, "ts_state": ts_state, "v_skew": vertical_skew, "v_skew_state": skew_state,
+            "vix_vts_ratio": vts_ratio, "vix_regime": vix_vts_data.get('vts_state', 'UNKNOWN'),
+            "vix_z30": z30, "vix_z60": z60, "is_high_tail_risk": is_high_tail_risk,
             "earnings_days": days_to_earnings, "mmm_pct": mmm_pct, "safe_lower": safe_lower, "safe_upper": safe_upper,
             "expected_move": risk_metrics.get('expected_move', 0.0), "em_lower": risk_metrics.get('em_lower', 0.0),
             "em_upper": risk_metrics.get('em_upper', 0.0), "strategy": strategy, "target_date": target_expiry_date,
