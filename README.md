@@ -154,7 +154,7 @@ Discord 使用者 ──► Discord API ──► NexusBot (bot.py)
 | **邊緣爬蟲** | `playwright`（Headless Chromium 渲染）、`beautifulsoup4` + `lxml`（HTML 解析）、`fastapi`（本地 API） |
 | **網路** | `httpx`（非同步 HTTP 客戶端）、Cloudflare Tunnel（安全互連） |
 | **排程** | `pandas_market_calendars`、`zoneinfo` |
-| **資料庫** | SQLite — 以 `user_id` 為複合唯一鍵，內建版本遷移引擎（目前至 `v014`） |
+| **資料庫** | SQLite — 以 `user_id` 為複合唯一鍵，內建版本遷移引擎（目前至 `v016`） |
 | **基礎架構** | Docker、Docker Compose、GitHub Actions CI/CD → DigitalOcean |
 | **套件管理** | `pyproject.toml`（PEP 621 標準） |
 
@@ -399,9 +399,11 @@ nexus-seeker/                        # Monorepo 根目錄
 ├── nexus_core/                      # 核心 Discord Bot 服務
 │   ├── main.py                      # 進入點 — 初始化資料庫、註冊訊號處理、啟動 Bot
 │   ├── bot.py                       # NexusBot 類別 — 擴充模組載入、啟停通知、非同步訊息佇列
+│   ├── bot_healthy.py               # Docker HEALTHCHECK 探針 — 檢測心跳檔案存活狀態
 │   ├── config.py                    # 環境變數 — Token、LLM 端點、Tunnel URL、策略 Delta 參數
 │   ├── market_math.py               # Facade — 統一 re-export market_analysis 子模組
 │   ├── market_time.py               # NYSE 日曆、動態睡眠排程器與開盤狀態偵測
+│   ├── entrypoint.sh                # Docker entrypoint — 權限修正與 gosu 降權啟動
 │   ├── market_analysis/             # 核心量化引擎 (Python Package)
 │   │   ├── __init__.py              # 公開 API 匯出
 │   │   ├── data.py                  # 財報日期查詢與選擇權價格獲取 (Finnhub & yfinance)
@@ -409,6 +411,7 @@ nexus-seeker/                        # Monorepo 根目錄
 │   │   ├── greeks.py                # Black-Scholes-Merton Delta 與 Greeks 計算引擎
 │   │   ├── hedging.py               # 投資組合避險邏輯、Delta 中性計算與市場位階感知對沖
 │   │   ├── ghost_trader.py          # GhostTrader — VTR 自動建倉、平倉、轉倉核心邏輯
+│   │   ├── psq_engine.py            # PowerSqueeze 引擎 — BB/KC 壓縮偵測、動能線性回歸與擠壓釋放訊號
 │   │   ├── risk_engine.py           # NRO 投資組合防禦管線、What-if 新增風險模擬與宏觀修正矩陣
 │   │   ├── report_formatter.py      # 將量化數值格式化為 Discord Embed 文字流
 │   │   ├── strategy.py              # 技術面掃描 + 多道量化濾網管線 + NRO 合約篩選
@@ -418,8 +421,10 @@ nexus-seeker/                        # Monorepo 根目錄
 │   │   ├── core.py                  # 版本遷移引擎 (Migration Engine) — 自動掃描 & 套用 Schema 變更
 │   │   ├── portfolio.py             # 投資組合 CRUD
 │   │   ├── watchlist.py             # 觀察清單 CRUD
-│   │   ├── user_settings.py         # 使用者設定 CRUD (資金、風險上限、UserContext 匯總)
+│   │   ├── user_settings.py         # 使用者設定 CRUD (資金、風險上限、偏好開關、UserContext 匯總)
 │   │   ├── virtual_trading.py       # 虛擬交易室 (VTR) 歷史與即時數據 CRUD
+│   │   ├── financials.py            # 財務指標快取 CRUD (TTL 過期清理)
+│   │   ├── cache.py                 # 快取模組 re-export Facade
 │   │   └── migrations/              # 版本遷移腳本目錄
 │   │       ├── v001_init.py         # 初始 Schema — portfolio、watchlist、user_settings
 │   │       ├── v002_add_stock_cost.py  # 新增現股成本欄位
@@ -435,7 +440,8 @@ nexus-seeker/                        # Monorepo 根目錄
 │   │       ├── v012_add_self_tuning_hedge.py  # 新增 STHE 動態 Tau 欄位
 │   │       ├── v013_add_financials_cache.py  # 新增財報/財務快取表
 │   │       ├── v014_financials_cache_schema_compat.py  # financials_cache schema 相容修補
-│   │       └── v015_add_vix_metrics.py  # 新增 VIX 結構與波動率動能指標狀態表
+│   │       ├── v015_add_vix_metrics.py  # 新增 VIX 結構與波動率動能指標狀態表
+│   │       └── v016_add_preference_flags.py  # 新增使用者偏好開關 (Option/VTR/PSQ)
 │   ├── services/                    # 外部服務整合與業務邏輯層
 │   │   ├── alert_filter.py          # AlertFilter — 動態降噪過濾、多週期共振與防雙巴機制
 │   │   ├── trading_service.py       # TradingService — 集中式業務邏輯 (掃描、VTR、盤後報告)
@@ -452,8 +458,19 @@ nexus-seeker/                        # Monorepo 根目錄
 │   │   └── embed_builder.py         # Discord UI/UX 生成器 — 渲染圖文並茂的量化戰情面板
 │   ├── ui/                          # Discord UI 元件
 │   │   └── watchlist.py             # 觀察清單分頁瀏覽 (Pagination View)
-│   ├── tests/                       # 測試套件（含 integration 整合測試）
+│   ├── tests/                       # 測試套件
+│   │   ├── test_embed_builder.py    # Embed 生成器單元測試
+│   │   ├── integration/             # 整合測試 (資料庫、交易流程、LLM/Risk)
+│   │   │   ├── test_integration_database_and_greeks.py
+│   │   │   ├── test_integration_trading_flows.py
+│   │   │   └── test_integration_llm_and_risk.py
+│   │   └── unit/                    # 單元測試
+│   │       ├── test_market_data_service.py  # MarketDataService 單元測試
+│   │       ├── test_market_data_vix306.py   # VIX 306 期限結構測試
+│   │       ├── test_risk_engine_vix306.py   # VIX 風險引擎單元測試
+│   │       └── test_scheduler_reschedule.py # 排程器動態重排測試
 │   ├── data/                        # SQLite 資料庫 (Docker Volume 掛載)
+│   ├── .dockerignore
 │   ├── Dockerfile
 │   ├── docker-compose.yml
 │   ├── pyproject.toml               # PEP 621 套件定義與依賴管理
@@ -461,14 +478,18 @@ nexus-seeker/                        # Monorepo 根目錄
 │
 ├── nexus_edge_scraper/              # 邊緣爬蟲服務 (本地端獨立部署)
 │   ├── local_api.py                 # FastAPI + Playwright — Reddit 頁面渲染與結構化爬取
+│   ├── .dockerignore
 │   ├── Dockerfile
 │   ├── docker-compose.yml
 │   ├── pyproject.toml               # PEP 621 套件定義與依賴管理
 │   └── .env.example
 │
+├── assets/
+│   └── hero.png                     # README Hero Image
 ├── .github/
 │   └── workflows/
 │       └── deploy.yml               # CI/CD — 建構 → GHCR → DigitalOcean Swarm
+├── GEMINI.md                        # AI Agent 開發上下文規約
 ├── .gitignore
 ├── README.md                        # ← 本文件
 └── LICENSE
@@ -478,38 +499,53 @@ nexus-seeker/                        # Monorepo 根目錄
 
 ## 🧪 測試
 
-目前已新增可執行的整合測試，位於 `nexus_core/tests/integration/`：
+測試架構分為 **整合測試** 與 **單元測試** 兩層，全數於 Docker 容器內執行以確保環境一致性。
 
-- `test_integration_database_and_greeks.py`
-- `test_integration_trading_flows.py`
-- `test_integration_llm_and_risk.py`
+### 整合測試 (`tests/integration/`)
+
+- `test_integration_database_and_greeks.py` — 資料庫遷移與 Greeks 持久化驗證
+- `test_integration_trading_flows.py` — 完整交易流程（建倉→監控→平倉）端到端驗證
+- `test_integration_llm_and_risk.py` — LLM 風控審查與 NRO 風險引擎整合驗證
+
+### 單元測試 (`tests/unit/`)
+
+- `test_market_data_service.py` — MarketDataService 報價與快取邏輯
+- `test_market_data_vix306.py` — VIX 期限結構 (VTS) 與 Z-Score 計算
+- `test_risk_engine_vix306.py` — VIX 306 風險引擎防禦管線觸發條件
+- `test_scheduler_reschedule.py` — NYSE 排程器動態重排與邊界條件
+
+### 其他測試
+
+- `test_embed_builder.py` — Discord Embed 報告生成器欄位截斷與格式化
 
 ### 使用 Docker 執行單一測試檔
 
 ```bash
 # 在 nexus_core 目錄執行
 docker compose run --rm -v "$(pwd):/app" nexus_seeker python -m unittest tests.integration.test_integration_database_and_greeks
-docker compose run --rm -v "$(pwd):/app" nexus_seeker python -m unittest tests.integration.test_integration_trading_flows
-docker compose run --rm -v "$(pwd):/app" nexus_seeker python -m unittest tests.integration.test_integration_llm_and_risk
+docker compose run --rm -v "$(pwd):/app" nexus_seeker python -m unittest tests.unit.test_risk_engine_vix306
 ```
 
-### 一次執行全部新增整合測試
+### 一次執行全部測試
 
 ```bash
 # 在 nexus_core 目錄執行
 docker compose run --rm -v "$(pwd):/app" nexus_seeker python -m unittest \
        tests.integration.test_integration_database_and_greeks \
        tests.integration.test_integration_trading_flows \
-       tests.integration.test_integration_llm_and_risk
+       tests.integration.test_integration_llm_and_risk \
+       tests.unit.test_market_data_service \
+       tests.unit.test_market_data_vix306 \
+       tests.unit.test_risk_engine_vix306 \
+       tests.unit.test_scheduler_reschedule \
+       tests.test_embed_builder
 ```
-
-預期結果：`Ran 7 tests ... OK`
 
 ### 使用 discover 執行整個 tests 目錄
 
 ```bash
 # 在 nexus_core 目錄執行
-docker compose run --rm nexus_seeker python -m unittest discover -s tests -v
+docker compose run --rm -v "$(pwd):/app" nexus_seeker python -m unittest discover -s tests -v
 ```
 
 > 備註：若看到 migration 警告如 `V3 no such column: is_covered`、`V14 duplicate column name: data`，這是遷移相容性保護機制的容錯訊息（已標記為可繼續），不會阻斷測試流程。

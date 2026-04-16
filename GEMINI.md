@@ -21,10 +21,11 @@ The system is divided into two main services:
 2.  **`nexus_edge_scraper`**: A specialized service (intended to run locally or via tunnel) that uses Playwright to scrape Reddit sentiment and consensus scores without triggering bot detection on cloud IPs.
 
 ### Core Modules (`nexus_core`)
-- **`market_analysis/`**: The quant engine. Contains strategy logic, Greek calculations, hedging simulations, and margin analysis.
+- **`market_analysis/`**: The quant engine. Contains strategy logic, Greek calculations, PowerSqueeze (PSQ) scoring, hedging simulations, and margin analysis.
 - **`database/`**: Persistent storage layer with an automated migration engine (`database/core.py`) that scans `database/migrations/` on startup.
-- **`services/`**: Business logic layer (TradingService, LLMService, MarketDataService) that decouples the Discord UI from core computations.
+- **`services/`**: Business logic layer (TradingService, LLMService, MarketDataService, NewsService, RedditService) that decouples the Discord UI from core computations.
 - **`cogs/`**: Discord extensions implementing slash commands and background tasks (Market Scanning, VTR monitoring, Daily Reports).
+- **`ui/`**: Reusable Discord UI components and views for interactive commands.
 
 ---
 
@@ -67,7 +68,7 @@ Tests are located in `nexus_core/tests/`.
 
 ### 1. Database Migrations
 Never modify the database schema manually. Use the migration engine:
-- Create a new file in `nexus_core/database/migrations/` (e.g., `v016_new_feature.py`).
+- Create a new file in `nexus_core/database/migrations/` (e.g., `v017_new_feature.py`).
 - Export `version` (int), `description` (str), and `sql` (str).
 - The bot will automatically apply it on the next startup.
 
@@ -80,19 +81,23 @@ New commands should be added as **Slash Commands** within a Cog in `nexus_core/c
 ### 3. Market Analysis & Strategy
 - Core logic belongs in `nexus_core/market_analysis/strategy.py`.
 - Use the `AlertFilter` in `services/alert_filter.py` to implement noise reduction (e.g., EMA crossovers, multi-timeframe alignment).
-- All new strategies must pass through the `risk_engine.py` pipeline.
+- `GhostTrader` (`market_analysis/ghost_trader.py`) handles the Virtual Trading Room (VTR) logic, simulating entries and tracking virtual performance.
+- `PSQ Engine` (`market_analysis/psq_engine.py`) provides the PowerSqueeze momentum indicator.
 
 ### 4. Code Style
 - **Type Hinting:** Strictly define types for all functions and class members.
 - **Logging:** Use the project-wide logger (`logging.getLogger(__name__)`).
-- **Async/Await:** Ensure all I/O bound operations (API calls, DB queries) are non-blocking.
+- **Async/Await:** Ensure all I/O bound operations (API calls, DB queries) are non-blocking. Use `asyncio.to_thread` for blocking yfinance calls.
 
 ---
 
 ## Key Files Summary
 - `nexus_core/main.py`: Application entry point.
 - `nexus_core/bot.py`: Main Bot class and background worker initialization.
+- `nexus_core/market_time.py`: NYSE market calendar and timezone-aware scheduling.
 - `nexus_core/services/trading_service.py`: Centralized business logic orchestrator.
 - `nexus_core/market_analysis/strategy.py`: Quant scanning and filtering pipeline.
+- `nexus_core/market_analysis/psq_engine.py`: PowerSqueeze momentum calculation engine.
+- `nexus_core/market_analysis/ghost_trader.py`: Virtual Trade Replicator and VTR logic.
 - `nexus_core/database/core.py`: SQLite migration engine core logic.
 - `nexus_edge_scraper/local_api.py`: Playwright-based scraping endpoint.
