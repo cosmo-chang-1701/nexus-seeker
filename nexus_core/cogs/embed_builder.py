@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, timezone
 from market_analysis.portfolio import calculate_beta
 from typing import List, Dict, Any, Optional
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -445,6 +446,49 @@ def create_scan_embed(data, user_capital=100000.0):
 
     embed.set_footer(text=f"Nexus Seeker 風控引擎 • 基準 SPY: ${data.get('spy_price', 500):.1f}")
     return embed
+
+def create_psq_embed(data: dict) -> discord.Embed:
+    """建構獨立的 PowerSqueeze (PSQ) 戰情報告 Embed"""
+    sym = data.get('symbol', 'UNKNOWN')
+    psq = data.get('psq_result')
+    
+    if not psq: # fallback
+        return discord.Embed(title=f"⚡ PowerSqueeze 戰情報告 | {sym}", description="無可用數據", color=discord.Color.dark_grey())
+        
+    color = discord.Color.purple() if psq.is_squeeze else discord.Color.dark_teal()
+    if psq.is_breakout_high:
+        color = discord.Color.green()
+    elif psq.is_breakout_low:
+        color = discord.Color.red()
+        
+    embed = discord.Embed(
+        title=f"⚡ PowerSqueeze 戰情報告 | {sym}",
+        description=f"💰 最新股價: `${data.get('price', 0.0):.2f}`\n\u200b",
+        color=color,
+        timestamp=datetime.now(timezone.utc)
+    )
+    
+    # 壓縮狀態指示
+    squeeze_val = "🔴 **壓縮中 (Squeeze On)**" if psq.is_squeeze else "⚪ **無壓縮 (Squeeze Off)**"
+    energy_str = "🔥 動能向上爆發" if psq.is_breakout_high else ("💀 動能向下崩潰" if psq.is_breakout_low else "⚡ 蓄力中")
+    
+    embed.add_field(name="🔋 能量壓縮狀態", value=f"{squeeze_val}\n狀態: {energy_str}\n\u200b", inline=True)
+    
+    # 動能趨勢
+    trend_val = "🟢 多方控盤 (Long)" if psq.momentum_value > 0 else "🔴 空方控盤 (Short)"
+    embed.add_field(name="🚀 線性動能 (Momentum)", value=f"`{psq.momentum_value:+.2f}`\n趨勢: {trend_val}\n\u200b", inline=True)
+    
+    # 支撐區間
+    support_val = f"✅ 靠近 20SMA (距離: `{psq.distance_to_sma20_pct:.2f}%`)\n" if psq.is_near_support else f"⚠️ 偏離 20SMA (距離: `{psq.distance_to_sma20_pct:.2f}%`)\n"
+    support_val += f"📉 20SMA: `${psq.sma_20:.2f}`\n\u200b"
+    embed.add_field(name="🧭 均線支撐 (Daily)", value=support_val, inline=False)
+        
+    # 最新新聞
+    add_news_field(embed, data.get('news_text'))
+    
+    embed.set_footer(text="Nexus Seeker • PowerSqueeze 日K量化引擎")
+    return embed
+
 
 def create_news_scan_embed(symbol, news_text):
     """建構新聞掃描結果的 Embed"""

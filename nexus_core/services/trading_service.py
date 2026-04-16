@@ -109,10 +109,13 @@ class TradingService:
         async def _scan_single_target(target):
             sym, stock_cost, use_llm = target
             try:
-                # analyze_symbol 已經是 async
+                # analyze_symbol 已經是 async，若沒有 Option 訊號，res 會是 None
                 res = await market_math.analyze_symbol(sym, stock_cost, df_spy, spy_price)
+                is_option_valid = bool(res)
                 if not res:
-                    return target, None
+                    res = {'symbol': sym, 'stock_cost': stock_cost, 'strategy': ''}
+
+                res['is_option_valid'] = is_option_valid
 
                 # 🚀 新增 EMA 訊號偵測 (Crossover & Test)
                 # 為確保 EMA 準確性，獲取至少 60 天歷史數據 (1-Hour 時框作為小週期觸發)
@@ -128,21 +131,35 @@ class TradingService:
                     if res['ema_signals']:
                         res['is_priority_alert'] = True
 
-                # 併行獲取新聞與 Reddit
-                news_task = news_service.fetch_recent_news(sym)
-                reddit_task = reddit_service.get_reddit_context(sym)
-                news_text, reddit_text = await asyncio.gather(news_task, reddit_task)
+                # 🚀 新增 PowerSqueeze 掃描 (使用日 K)
+                df_hist_1d = await market_data_service.get_history_df(sym, period="1y", interval="1d")
+                from market_analysis.psq_engine import analyze_psq
+                psq_result = analyze_psq(df_hist_1d)
+                if psq_result:
+                    res['psq_result'] = psq_result
 
-                # 語意風控判定
-                if use_llm:
-                    ai_verdict = await llm_service.evaluate_trade_risk(sym, res['strategy'], news_text, reddit_text)
-                    res['ai_decision'] = ai_verdict.get('decision', 'APPROVE')
-                    res['ai_reasoning'] = ai_verdict.get('reasoning', '無資料')
-                else:
-                    res['ai_decision'] = 'SKIP'
-                    res['ai_reasoning'] = '未啟用 LLM 語意風控'
+                has_psq_signal = False
+                if psq_result and (psq_result.is_breakout_high or psq_result.is_near_support):
+                    has_psq_signal = True
+
+                # 語意風控判定: 只在有任何訊號觸發時執行以節省成本
+                if is_option_valid or has_psq_signal:
+                    # 併行獲取新聞與 Reddit
+                    news_task = news_service.fetch_recent_news(sym)
+                    reddit_task = reddit_service.get_reddit_context(sym)
+                    news_text, reddit_text = await asyncio.gather(news_task, reddit_task)
+
+                    if use_llm:
+                        strategy_text = res.get('strategy', 'PowerSqueeze Trigger')
+                        ai_verdict = await llm_service.evaluate_trade_risk(sym, strategy_text, news_text, reddit_text)
+                        res['ai_decision'] = ai_verdict.get('decision', 'APPROVE')
+                        res['ai_reasoning'] = ai_verdict.get('reasoning', '無資料')
+                    else:
+                        res['ai_decision'] = 'SKIP'
+                        res['ai_reasoning'] = '未啟用 LLM 語意風控'
+                    
+                    res.update({'news_text': news_text, 'reddit_text': reddit_text})
                 
-                res.update({'news_text': news_text, 'reddit_text': reddit_text})
                 return target, res
             except Exception as e:
                 logger.error(f"掃描標的 {sym} 失敗: {e}")
@@ -184,67 +201,78 @@ class TradingService:
 
             for sym, stock_cost, use_llm in watchlist_items:
                 if (sym, stock_cost, use_llm) in scan_results:
-                    data = scan_results[(sym, stock_cost, use_llm)].copy()
+                    base_data = scan_results[(sym, stock_cost, use_llm)].copy()
+                    base_data['uid'] = uid
+                    base_data['spy_price'] = spy_price
+                    base_data['macro_vix'] = macro_data.vix
+                    base_data['macro_vix_change'] = macro_data.vix_change
+                    base_data['macro_oil'] = macro_data.oil_price
                     
-                    # 🚀 整合核心：注入宏觀背景進行風險優化
-                    strategy = data.get('strategy', '')
-                    safe_qty, hedge_spy = portfolio.optimize_position_risk(
-                        current_delta=current_total_delta,
-                        unit_weighted_delta=data.get('weighted_delta', 0.0),
-                        user_capital=user_capital,
-                        spy_price=spy_price,
-                        stock_iv=data.get('iv', 0.15),
-                        strategy=strategy,
-                        macro_data=macro_data, # 注入全域宏觀數據
-                        base_risk_limit_pct=user_risk_pref
-                    )
-
-                    # 模擬成交後的衝擊
-                    side_multiplier = -1 if "STO" in strategy else 1
-                    # 這裡使用 safe_qty 進行模擬，反映系統真實建議
-                    new_trade_impact = data.get('weighted_delta', 0.0) * side_multiplier * safe_qty
-                    projected_total_delta = current_total_delta + new_trade_impact
-                    projected_exposure_pct = (projected_total_delta * spy_price / user_capital) * 100 if user_capital > 0 else 0.0
-
-                    data.update({
-                        'safe_qty': safe_qty,
-                        'hedge_spy': hedge_spy,
-                        'projected_exposure_pct': round(projected_exposure_pct, 2),
-                        'spy_price': spy_price,
-                        'macro_vix': macro_data.vix,
-                        'macro_vix_change': macro_data.vix_change,
-                        'macro_oil': macro_data.oil_price,
-                        'uid': uid
-                    })
-
-                    # 🚀 新增：對沖解除建議 (Hedge Unlocking)
-                    # 只有在偵測到 EMA CROSSOVER 且為多頭時才評估
-                    ema_signals = data.get('ema_signals', [])
-                    for sig in ema_signals:
-                        if sig.get('type') == 'CROSSOVER' and sig.get('direction') == 'BULLISH':
-                            from services.alert_filter import validate_mtf_trend
-                            mtf = await validate_mtf_trend(sym, sig)
-                            unlock_advice = hedging.suggest_hedge_unlock(user_context, data, mtf)
-                            if unlock_advice:
-                                data['hedge_unlock'] = unlock_advice
-                            break
+                    is_option_valid = base_data.get('is_option_valid', False)
+                    psq_result = base_data.get('psq_result')
+                    has_psq_signal = psq_result and (psq_result.is_breakout_high or psq_result.is_near_support)
                     
-                    # 🚀 3. 新增：自動回補避險 (Auto Re-Hedging)
-                    # 條件：任一維度觸發 (技術/宏觀/曝險) 且符合 State Lock (1hr)
-                    now_ts = int(time.time())
-                    if now_ts - user_context.last_rehedge_alert_time > 3600:
-                        rehedge_advice = hedging.evaluate_rehedge_necessity(user_context, data)
-                        if rehedge_advice:
-                            # 🚀 應用 STHE 動態 Tau 校正
-                            rehedge_advice = hedging.get_tuned_risk_advice(uid, rehedge_advice)
-                            data['rehedge_info'] = rehedge_advice
-                            # 更新資料庫中的 last_rehedge_alert_time 以防止重複發送
-                            database.upsert_user_config(uid, last_rehedge_alert_time=now_ts)
-                            # 為了讓同一次 Scan 中的其他 Symbol 不重複觸發，
-                            # 手動更新 user_context 的值 (雖然下一個 UserLoop 會重新抓，但同一個 UserLoop 會繼續跑剩餘 symbol)
-                            user_context.last_rehedge_alert_time = now_ts
+                    if not is_option_valid and not has_psq_signal:
+                        continue # 此標的沒有任何觸發訊號
                     
-                    valid_user_alerts.append(data)
+                    # === 1. 選擇權策略分支 ===
+                    if user_context.enable_option_alerts and is_option_valid:
+                        opt_data = base_data.copy()
+                        opt_data['alert_type'] = 'OPTION'
+                        
+                        # 🚀 整合核心：注入宏觀背景進行風險優化
+                        strategy = opt_data.get('strategy', '')
+                        safe_qty, hedge_spy = portfolio.optimize_position_risk(
+                            current_delta=current_total_delta,
+                            unit_weighted_delta=opt_data.get('weighted_delta', 0.0),
+                            user_capital=user_capital,
+                            spy_price=spy_price,
+                            stock_iv=opt_data.get('iv', 0.15),
+                            strategy=strategy,
+                            macro_data=macro_data,
+                            base_risk_limit_pct=user_risk_pref
+                        )
+
+                        # 模擬成交後的衝擊
+                        side_multiplier = -1 if "STO" in strategy else 1
+                        new_trade_impact = opt_data.get('weighted_delta', 0.0) * side_multiplier * safe_qty
+                        projected_total_delta = current_total_delta + new_trade_impact
+                        projected_exposure_pct = (projected_total_delta * spy_price / user_capital) * 100 if user_capital > 0 else 0.0
+
+                        opt_data.update({
+                            'safe_qty': safe_qty,
+                            'hedge_spy': hedge_spy,
+                            'projected_exposure_pct': round(projected_exposure_pct, 2)
+                        })
+
+                        # 🚀 對沖解除建議 (Hedge Unlocking)
+                        ema_signals = opt_data.get('ema_signals', [])
+                        for sig in ema_signals:
+                            if sig.get('type') == 'CROSSOVER' and sig.get('direction') == 'BULLISH':
+                                from services.alert_filter import validate_mtf_trend
+                                mtf = await validate_mtf_trend(sym, sig)
+                                unlock_advice = hedging.suggest_hedge_unlock(user_context, opt_data, mtf)
+                                if unlock_advice:
+                                    opt_data['hedge_unlock'] = unlock_advice
+                                break
+                        
+                        # 🚀 自動回補避險 (Auto Re-Hedging)
+                        now_ts = int(time.time())
+                        if now_ts - user_context.last_rehedge_alert_time > 3600:
+                            rehedge_advice = hedging.evaluate_rehedge_necessity(user_context, opt_data)
+                            if rehedge_advice:
+                                rehedge_advice = hedging.get_tuned_risk_advice(uid, rehedge_advice)
+                                opt_data['rehedge_info'] = rehedge_advice
+                                database.upsert_user_config(uid, last_rehedge_alert_time=now_ts)
+                                user_context.last_rehedge_alert_time = now_ts
+
+                        valid_user_alerts.append(opt_data)
+
+                    # === 2. PSQ 戰情分支 ===
+                    if user_context.enable_psq_watchlist and has_psq_signal:
+                        psq_data = base_data.copy()
+                        psq_data['alert_type'] = 'PSQ'
+                        valid_user_alerts.append(psq_data)
             
             if valid_user_alerts:
                 user_alerts_results[uid] = valid_user_alerts

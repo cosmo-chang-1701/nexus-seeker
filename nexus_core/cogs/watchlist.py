@@ -81,13 +81,27 @@ class WatchlistCog(commands.Cog):
 
         # analyze_symbol 已經是 async
         result = await market_math.analyze_symbol(symbol, 0.0, df_spy, spy_price)
-        if result:
+        is_option_valid = bool(result)
+        if not result:
+            result = {'symbol': symbol, 'stock_cost': 0.0}
+
+        # 🚀 新增 PowerSqueeze 掃描 (使用日 K)
+        df_hist_1d = await market_data_service.get_history_df(symbol, period="1y", interval="1d")
+        from market_analysis.psq_engine import analyze_psq
+        from cogs.embed_builder import create_psq_embed
+        psq_result = analyze_psq(df_hist_1d)
+        if psq_result:
+            result['psq_result'] = psq_result
+
+        embeds_to_send = []
+
+        if is_option_valid:
             from services import llm_service, news_service, reddit_service
             from market_analysis.risk_engine import optimize_position_risk
             
             news_task, reddit_task = news_service.fetch_recent_news(symbol), reddit_service.get_reddit_context(symbol)
             news_text, reddit_text = await asyncio.gather(news_task, reddit_task)
-            ai_verdict = await llm_service.evaluate_trade_risk(symbol, result['strategy'], news_text, reddit_text)
+            ai_verdict = await llm_service.evaluate_trade_risk(symbol, result.get('strategy', ''), news_text, reddit_text)
 
             result.update({'news_text': news_text, 'reddit_text': reddit_text, 'ai_decision': ai_verdict.get('decision', 'APPROVE'), 'ai_reasoning': ai_verdict.get('reasoning', '無資料'), 'vix': macro_data.vix, 'oil': macro_data.oil_price})
 
@@ -104,7 +118,14 @@ class WatchlistCog(commands.Cog):
             projected_exposure_pct = (projected_total_delta * spy_price / user_capital) * 100 if user_capital > 0 else 0
             
             result.update({'projected_exposure_pct': round(projected_exposure_pct, 2), 'suggested_contracts': suggested_contracts, 'safe_qty': safe_qty, 'hedge_spy': hedge_spy, 'spy_price': spy_price})
-            await interaction.followup.send(embed=create_scan_embed(result, user_capital))
+            embeds_to_send.append(create_scan_embed(result, user_capital))
+
+        if psq_result:
+            result['price'] = df_hist_1d['Close'].iloc[-1] if not df_hist_1d.empty else 0.0
+            embeds_to_send.append(create_psq_embed(result))
+            
+        if embeds_to_send:
+            await interaction.followup.send(embeds=embeds_to_send)
         else:
             await interaction.followup.send(f"📊 目前 `{symbol}` 查無有效訊號，建議維持觀望。")
 

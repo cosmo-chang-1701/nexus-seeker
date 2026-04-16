@@ -67,13 +67,19 @@ class PortfolioCog(commands.Cog):
     @app_commands.command(name="settings", description="配置帳戶全域參數 (資金與風險限制)")
     @app_commands.describe(
         capital="更新帳戶總資金 (USD)",
-        risk_limit="更新基準風險上限 % (1.0 - 50.0)"
+        risk_limit="更新基準風險上限 % (1.0 - 50.0)",
+        enable_option_alerts="是否接收選項策略推播",
+        enable_vtr="是否啟用虛擬交易室 GhostTrader 自動建倉",
+        enable_psq_watchlist="是否對 watchlist 開啟 PowerSqueeze 戰情追蹤"
     )
     async def update_settings(
         self, 
         interaction: discord.Interaction, 
         capital: Optional[float] = None, 
-        risk_limit: Optional[float] = None
+        risk_limit: Optional[float] = None,
+        enable_option_alerts: Optional[bool] = None,
+        enable_vtr: Optional[bool] = None,
+        enable_psq_watchlist: Optional[bool] = None
     ):
         user_id = interaction.user.id
         updates = []
@@ -95,9 +101,22 @@ class PortfolioCog(commands.Cog):
             else:
                 return await interaction.response.send_message("❌ 風險限制需介於 1.0% 至 50.0% 之間", ephemeral=True)
 
-        # 3. 執行資料庫更新
+        # 3. 設定切換
+        if enable_option_alerts is not None:
+            kwargs['enable_option_alerts'] = enable_option_alerts
+            updates.append(f"🔔 選項策略推播: `{'開啟' if enable_option_alerts else '關閉'}`")
+            
+        if enable_vtr is not None:
+            kwargs['enable_vtr'] = enable_vtr
+            updates.append(f"👻 虛擬交易室 (VTR): `{'開啟' if enable_vtr else '關閉'}`")
+
+        if enable_psq_watchlist is not None:
+            kwargs['enable_psq_watchlist'] = enable_psq_watchlist
+            updates.append(f"⚡ PowerSqueeze 追蹤: `{'開啟' if enable_psq_watchlist else '關閉'}`")
+
+        # 4. 執行資料庫更新
         if not kwargs:
-            return await interaction.response.send_message("請至少輸入一個要修改的參數。", ephemeral=True)
+            return await interaction.response.send_message("請至少選擇並輸入一個要修改的參數。", ephemeral=True)
 
         success = database.upsert_user_config(user_id, **kwargs)
         if not success:

@@ -63,7 +63,7 @@ class TestRiskEngineIntegration(unittest.TestCase):
             stock_iv=0.30,
             strategy="STO_PUT",
             macro_data=calm,
-            base_risk_limit_pct=15.0,
+            base_risk_limit_pct=50.0,
         )
         stressed_qty, _ = optimize_position_risk(
             current_delta=5.0,
@@ -73,7 +73,7 @@ class TestRiskEngineIntegration(unittest.TestCase):
             stock_iv=0.30,
             strategy="STO_PUT",
             macro_data=stressed,
-            base_risk_limit_pct=15.0,
+            base_risk_limit_pct=50.0,
         )
 
         self.assertGreaterEqual(calm_qty, stressed_qty)

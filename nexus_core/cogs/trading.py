@@ -300,9 +300,12 @@ class SchedulerCog(commands.Cog):
                 user_cooldowns = self.signal_cooldowns.setdefault(uid, {})
                 valid_alerts = []
 
+                user_context = database.get_full_user_context(uid)
                 for data in alerts_data:
                     sym = data['symbol']
                     ai_decision = data.get('ai_decision', 'APPROVE')
+                    alert_type = data.get('alert_type', 'OPTION')
+                    cooldown_key = f"{sym}_{alert_type}"
 
                     # 攔截邏輯：VETO 絕對不建倉
                     if ai_decision == "VETO":
@@ -310,55 +313,66 @@ class SchedulerCog(commands.Cog):
                     
                     # 冷卻檢查 (僅在自動模式下)
                     if is_auto:
-                        last_sent_time = user_cooldowns.get(sym)
+                        last_sent_time = user_cooldowns.get(cooldown_key)
                         if last_sent_time:
                             time_diff = (now - last_sent_time).total_seconds()
                             if time_diff < (self.COOLDOWN_HOURS * 3600):
                                 continue 
 
-                    # 🚀 條件式過濾 (AlertFilter 訊號降噪 + 防騙線)
-                    # 從資料庫取得上次 CROSSOVER 觸發狀態，傳入 AlertFilter
-                    last_alert_state = database.get_watchlist_alert_state(uid, sym)
-                    is_priority, reason = await should_send_priority_alert(
-                        data, self.prev_macro_state, last_alert_state
-                    )
+                    if alert_type == 'OPTION':
+                        # 🚀 條件式過濾 (AlertFilter 訊號降噪 + 防騙線)
+                        # 從資料庫取得上次 CROSSOVER 觸發狀態，傳入 AlertFilter
+                        last_alert_state = database.get_watchlist_alert_state(uid, sym)
+                        is_priority, reason = await should_send_priority_alert(
+                            data, self.prev_macro_state, last_alert_state
+                        )
 
-                    if is_auto and not is_priority:
-                        logger.info(f"⏭️ 標的 {sym} 未達優先通知門檻，已過濾。")
-                        continue
+                        if is_auto and not is_priority:
+                            logger.info(f"⏭️ 標的 {sym} 未達優先通知門檻，已過濾。")
+                            continue
 
-                    # 🛡️ 若通過過濾且包含 CROSSOVER 訊號，更新資料庫狀態
-                    for sig in data.get('ema_signals', []):
-                        if sig.get('type') == 'CROSSOVER':
-                            database.update_watchlist_alert_state(
-                                uid, sym,
-                                direction=sig['direction'],
-                                price=data.get('price', 0.0),
-                                timestamp=int(_time.time()),
-                            )
-                            break  # 每次掃描只記錄第一個通過的 CROSSOVER
+                        # 🛡️ 若通過過濾且包含 CROSSOVER 訊號，更新資料庫狀態
+                        for sig in data.get('ema_signals', []):
+                            if sig.get('type') == 'CROSSOVER':
+                                database.update_watchlist_alert_state(
+                                    uid, sym,
+                                    direction=sig['direction'],
+                                    price=data.get('price', 0.0),
+                                    timestamp=int(_time.time()),
+                                )
+                                break  # 每次掃描只記錄第一個通過的 CROSSOVER
 
-                    # 將推播理由注入 data，供 Embed 顯示
-                    if reason:
-                        data['alert_reason'] = reason
-                    
-                    valid_alerts.append(data)
-                    if is_auto:
-                        user_cooldowns[sym] = now
-                        # 執行 VTR 自動建倉
-                        await self.trading_service.execute_vtr_auto_entry(data)
+                        # 將推播理由注入 data，供 Embed 顯示
+                        if reason:
+                            data['alert_reason'] = reason
+                        
+                        valid_alerts.append(data)
+                        if is_auto:
+                            user_cooldowns[cooldown_key] = now
+                            # 執行 VTR 自動建倉
+                            if user_context.enable_vtr:
+                                await self.trading_service.execute_vtr_auto_entry(data)
+                                
+                    elif alert_type == 'PSQ':
+                        valid_alerts.append(data)
+                        if is_auto:
+                            user_cooldowns[cooldown_key] = now
 
                 if valid_alerts:
                     title = "📡 **【盤中動態掃描】NRO 風控已介入判定：**" if is_auto else "⚡ **【管理員強制掃描】風險模擬結果：**"
                     await self.bot.queue_dm(uid, message=title)
-                    user_capital = database.get_full_user_context(uid).capital
+                    user_capital = user_context.capital
                     for data in valid_alerts:
-                        await self.bot.queue_dm(uid, embed=create_scan_embed(data, user_capital))
-                        
-                        # 🛡️ 檢查是否有自動回補避險建議
-                        rehedge_info = data.get('rehedge_info')
-                        if rehedge_info:
-                            await self.bot.queue_dm(uid, embed=create_rehedge_embed(rehedge_info))
+                        if data.get('alert_type') == 'PSQ':
+                            from cogs.embed_builder import create_psq_embed
+                            await self.bot.queue_dm(uid, embed=create_psq_embed(data))
+                        else:
+                            await self.bot.queue_dm(uid, embed=create_scan_embed(data, user_capital))
+                            
+                            # 🛡️ 檢查是否有自動回補避險建議
+                            rehedge_info = data.get('rehedge_info')
+                            if rehedge_info:
+                                await self.bot.queue_dm(uid, embed=create_rehedge_embed(rehedge_info))
 
             # 🚀 掃描結束後更新宏觀環境快照，供下一輪 AlertFilter 比對
             self._update_macro_state(user_results)

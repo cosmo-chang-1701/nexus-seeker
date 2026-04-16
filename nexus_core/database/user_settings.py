@@ -16,6 +16,9 @@ class UserContext:
     total_gamma: float          # 組合總 Gamma (目前持倉)
     last_rehedge_alert_time: int = 0 # 上次發送回補警報的時間 (Unix Timestamp)
     dynamic_tau: float = 1.0        # 自動優化對沖係數
+    enable_option_alerts: bool = True # 是否接收選項策略推播
+    enable_vtr: bool = True           # 是否啟用虛擬交易室 (GhostTrader) 自動跟單
+    enable_psq_watchlist: bool = False # 是否對 add_watch 標的執行 PowerSqueeze 追蹤
 
 
 # ==========================================
@@ -46,7 +49,7 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:
                 kwargs['portfolio_value'] = kwargs.pop('capital')
             
             # 3. 動態構建 SQL SET 子句 (白名單防護)
-            allowed_keys = {'portfolio_value', 'risk_limit_pct', 'last_rehedge_alert_time', 'dynamic_tau'}
+            allowed_keys = {'portfolio_value', 'risk_limit_pct', 'last_rehedge_alert_time', 'dynamic_tau', 'enable_option_alerts', 'enable_vtr', 'enable_psq_watchlist'}
             update_pairs = []
             values = []
             
@@ -130,7 +133,8 @@ def get_full_user_context(user_id: int) -> UserContext:
             
             # 1. 查詢使用者基本設定
             cursor.execute("""
-                SELECT portfolio_value, risk_limit_pct, last_rehedge_alert_time
+                SELECT portfolio_value, risk_limit_pct, last_rehedge_alert_time, dynamic_tau,
+                       enable_option_alerts, enable_vtr, enable_psq_watchlist
                 FROM user_settings 
                 WHERE user_id = ?
             """, (user_id,))
@@ -167,6 +171,12 @@ def get_full_user_context(user_id: int) -> UserContext:
             last_rehedge = int(user_row['last_rehedge_alert_time']) if user_row and 'last_rehedge_alert_time' in user_row.keys() and user_row['last_rehedge_alert_time'] is not None else 0
             dynamic_tau = float(user_row['dynamic_tau']) if user_row and 'dynamic_tau' in user_row.keys() and user_row['dynamic_tau'] is not None else 1.0
             
+            # Helper for booleans
+            def _get_bool(key: str, default: bool) -> bool:
+                if user_row and key in user_row.keys() and user_row[key] is not None:
+                    return bool(user_row[key])
+                return default
+
             return UserContext(
                 user_id=user_id,
                 capital=capital,
@@ -175,7 +185,10 @@ def get_full_user_context(user_id: int) -> UserContext:
                 total_theta=sum_theta,
                 total_gamma=sum_gamma,
                 last_rehedge_alert_time=last_rehedge,
-                dynamic_tau=dynamic_tau
+                dynamic_tau=dynamic_tau,
+                enable_option_alerts=_get_bool('enable_option_alerts', True),
+                enable_vtr=_get_bool('enable_vtr', True),
+                enable_psq_watchlist=_get_bool('enable_psq_watchlist', False)
             )
             
     except Exception as e:
