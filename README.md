@@ -71,7 +71,8 @@
 | 🕸️ **相關性矩陣風險** | 下載 60 日收盤價建立 Pearson 相關係數矩陣，偵測 ρ > 0.75 的高度重疊板塊並提示集中風險。 |
 | 💾 **資料持久化** | SQLite 搭配 Docker Volume — 容器重啟零資料遺失。內建版本遷移引擎（Migration Engine），Schema 變更全自動化。 |
 | 🧮 **Greeks 持久化與匯總** | 持倉的 Greeks（Weighted Delta、Theta、Gamma）持久化至資料庫，`UserContext` 一次性匯總真實持倉與虛擬交易的 Greeks 指標，極大化 I/O 效率。 |
-| ⚙️ **個人化風險上限** | 每位使用者可自訂風險限制（Risk Limit %），預設 15%，範圍 1%–50%，由 NRO 引擎動態調控。 |
+| ⚙️ **個人化風險與推播** | 每位使用者可自訂風險限制（1%–50%），及切換 Option 推播、VTR 自動建倉與 PowerSqueeze 等專屬追蹤頻道。 |
+| ⚡ **PowerSqueeze 動能追蹤** | 內建向量化 PSQ 數學模組，抓取盤基壓縮突破與能量擴張訊號，可作為獨立風向標並行於原有 Option 訊號。 |
 | 💹 **即時報價查詢** | `/quote` 指令透過 Finnhub 即時取得標的報價（含現價、漲跌幅、今日高低與前收盤價）。 |
 | 🏗️ **Service Layer 分治** | `TradingService` 集中式業務邏輯層，將 Discord UI 層與核心計算徹底解耦，職責分明。 |
 
@@ -245,7 +246,7 @@ docker compose up -d --build
 | `/add_trade` | 記錄實際交易以進行監控 | 見下方 |
 | `/list_trades` | 檢視持倉、損益與交易 ID | — |
 | `/remove_trade` | 依 ID 移除已平倉的持倉 | `trade_id: 1` |
-| `/settings` | 配置帳戶全域參數 (例如：總資金與風險上限) | `capital: 50000 risk_limit: 15` |
+| `/settings` | 配置帳戶全域參數 (資金、風險與 PSQ/VTR 等個人化推播開關) | `capital: 50000 risk_limit: 15 enable_psq_watchlist: True` |
 | `/vtr_list` | 列出虛擬交易室 (VTR) 開啟中的所有持倉 | — |
 | `/vtr_stats` | 檢視虛擬交易室 (VTR) 的績效統計 (勝率、損益、盈虧比) | — |
 
@@ -540,6 +541,7 @@ docker compose run --rm nexus_seeker python -m unittest discover -s tests -v
 - [x] **即時報價指令** — `/quote` 透過 Finnhub 即時查詢標的報價。
 - [x] **Service Layer 重構** — `TradingService` 將 Discord UI 與業務邏輯徹底解耦。
 - [x] **VIX 領域分析 (VIX306)** — 結合 VTS 期限結構與 30/60 日 Z-Score，偵測股市黑天鵝前兆與波動率擴張軌跡，動態觸發 1/4 Kelly 自動降規。
+- [x] **PowerSqueeze 模組 (PSQ)** — 雙路徑解耦量化掃描，獨立於 Option 訊號提供基於 Squeeze 能量突破的即時戰情，支援 `/settings` 獨立開關。
 - [ ] **MCP Server** — 將核心量化模組封裝為標準 Model Context Protocol 工具，供外部 AI 代理使用。
 - [ ] **券商 API 整合** — Interactive Brokers Gateway 實現全自動下單執行（訊號 → 執行 → 平倉，零人工介入）。
 

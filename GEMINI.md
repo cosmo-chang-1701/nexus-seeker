@@ -57,7 +57,7 @@ The system is divided into two main services:
 Tests are located in `nexus_core/tests/`.
 - **Run all tests:**
   ```bash
-  docker compose run --rm nexus_seeker python -m unittest discover -s tests -v
+  docker compose run --rm nexus-seeker python -m unittest discover -s tests -v
   ```
 - **Integration Tests:** Focused on database migrations, trading flows, and LLM/Risk engine integration.
 
