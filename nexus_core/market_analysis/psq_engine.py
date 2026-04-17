@@ -6,16 +6,19 @@ from typing import Optional
 
 @dataclass
 class PSQResult:
-    is_squeezing: bool
+    squeeze_level: str     # "High" (Red), "Mid" (Orange), "Normal" (Pink), "Release" (Gray)
+    is_squeezing: bool     # 是否處於任何形式的擠壓狀態
     momentum_value: float
+    momentum_color: str    # "LightBlue", "DarkBlue", "Red", "Golden", "Neutral"
     signal_direction: str  # "Long", "Short", "Neutral"
     is_near_support: bool
-    is_breakout_high: bool
+    is_breakout_long: bool # 多頭能量釋放突破
+    is_breakout_short: bool# 空頭能量釋放突破
     sma_distance_pct: float
 
 def analyze_psq(df: pd.DataFrame, length: int = 20, bb_mult: float = 2.0, kc_mults: list = [1.0, 1.5, 2.0], near_pct: float = 1.5) -> Optional[PSQResult]:
     """
-    計算 PowerSqueeze (PSQ) 量化指標。
+    計算 PowerSqueeze (PSQ) 量化指標 (Ultimate Edition v2)。
     輸入資料為包含 'Open', 'High', 'Low', 'Close' 的 DataFrame。
     """
     if df is None or df.empty or len(df) < length * 2:
@@ -28,9 +31,11 @@ def analyze_psq(df: pd.DataFrame, length: int = 20, bb_mult: float = 2.0, kc_mul
         # 1. Bollinger Bands (20, 2)
         bb = ta.bbands(df['Close'], length=length, std=bb_mult)
         if bb is None: return None
-        bb_lower = bb[f'BBL_{length}_{bb_mult}']
-        bb_upper = bb[f'BBU_{length}_{bb_mult}']
-        basis = bb[f'BBM_{length}_{bb_mult}'] # 20 SMA
+        
+        # 避開 pandas-ta 版本導致的動態欄位名稱變更，改用語意固定的位置索引
+        bb_lower = bb.iloc[:, 0] # Lower Band
+        basis = bb.iloc[:, 1]    # Middle Band (SMA)
+        bb_upper = bb.iloc[:, 2] # Upper Band
         
         # 2. Keltner Channels (using default True Range)
         kc1 = ta.kc(df['High'], df['Low'], df['Close'], length=length, scalar=kc_mults[0])
@@ -39,34 +44,63 @@ def analyze_psq(df: pd.DataFrame, length: int = 20, bb_mult: float = 2.0, kc_mul
         
         if kc1 is None or kc2 is None or kc3 is None: return None
         
-        # Usually squeeze is when BB is completely inside KC. We check against KC multiplier 2.0
-        kc_widest_lower = kc3[f'KCLs_{length}_{kc_mults[2]}']
-        kc_widest_upper = kc3[f'KCUs_{length}_{kc_mults[2]}']
+        # 區分不同強度的擠壓通道 (KC回傳格式依序為 Lower, Basis, Upper)
+        kc1_lower = kc1.iloc[:, 0]
+        kc1_upper = kc1.iloc[:, 2]
+        kc2_lower = kc2.iloc[:, 0]
+        kc2_upper = kc2.iloc[:, 2]
+        kc3_lower = kc3.iloc[:, 0]
+        kc3_upper = kc3.iloc[:, 2]
         
-        is_squeezing = (bb_lower > kc_widest_lower) & (bb_upper < kc_widest_upper)
+        # 判定各級別的擠壓狀態
+        sqz_high = (bb_lower > kc1_lower) & (bb_upper < kc1_upper)    # 高強度 (紅)
+        sqz_mid = (bb_lower > kc2_lower) & (bb_upper < kc2_upper)     # 中強度 (橘)
+        sqz_normal = (bb_lower > kc3_lower) & (bb_upper < kc3_upper)  # 一般強度 (粉)
         
-        # 3. Momentum
-        # avg_price = (highest_high + lowest_low) / 2
+        is_squeezing = sqz_normal # 只要 BB 縮入最寬的 2.0 KC 內，即屬擠壓狀態
+        
+        # 3. Momentum (線性回歸動能)
         high_max = df['High'].rolling(length).max()
         low_min = df['Low'].rolling(length).min()
         avg_price = (high_max + low_min) / 2.0
         
         momentum_source = df['Close'] - (avg_price + basis) / 2.0
-        # pandas_ta linear regression length=20
         momentum_value = ta.linreg(momentum_source, length=length)
         
         if momentum_value is None or momentum_value.isna().all():
             return None
 
+        mom_diff = momentum_value.diff()
+
         # 4. 回調支撐判定
-        # 價格與 20 SMA (basis) 的百分比距離
+        # 價格與 20 SMA 的百分比距離
         sma_distance_pct = ((df['Close'] - basis) / basis) * 100
         is_near_support = sma_distance_pct.abs() <= near_pct
         
-        # 判斷訊號方向
+        # 取得最後一筆與前一筆狀態作判斷
         curr_mom = momentum_value.iloc[-1]
         prev_mom = momentum_value.iloc[-2] if len(momentum_value) > 1 else 0
+        curr_diff = mom_diff.iloc[-1]
         
+        # 判斷動能柱體顏色 (Momentum Histogram)
+        if curr_mom > 0:
+            mom_color = "LightBlue" if curr_diff > 0 else "DarkBlue"
+        elif curr_mom < 0:
+            mom_color = "Red" if curr_diff < 0 else "Golden"
+        else:
+            mom_color = "Neutral"
+
+        # 判斷當前擠壓層級 (Squeeze Level)
+        if sqz_high.iloc[-1]:
+            squeeze_level = "High"
+        elif sqz_mid.iloc[-1]:
+            squeeze_level = "Mid"
+        elif sqz_normal.iloc[-1]:
+            squeeze_level = "Normal"
+        else:
+            squeeze_level = "Release"
+            
+        # 判斷基本訊號 (轉強/轉弱)
         if curr_mom > 0 and curr_mom > prev_mom:
             signal = "Long"
         elif curr_mom < 0 and curr_mom < prev_mom:
@@ -74,21 +108,27 @@ def analyze_psq(df: pd.DataFrame, length: int = 20, bb_mult: float = 2.0, kc_mul
         else:
             signal = "Neutral"
             
-        # 判斷是否為「擠壓釋放」(Breakout High)
-        # 上一根 K 線處於 squeeze，目前 K 線解除 squeeze，且動能為正
-        curr_sqz = is_squeezing.iloc[-1]
-        prev_sqz = is_squeezing.iloc[-2] if len(is_squeezing) > 1 else False
-        is_breakout_high = (not curr_sqz) and prev_sqz and (curr_mom > 0)
+        # 判斷是否為「擠壓突破」(Breakout)
+        # 前段期間處於「高強度擠壓(Red)」，當前 K 線完全解除擠壓 (Release)
+        prev_sqz_high = sqz_high.iloc[-2] if len(sqz_high) > 1 else False
+        curr_sqz_any = is_squeezing.iloc[-1]
+        
+        is_breakout_long = bool(prev_sqz_high and (not curr_sqz_any) and (curr_mom > 0))
+        is_breakout_short = bool(prev_sqz_high and (not curr_sqz_any) and (curr_mom < 0))
         
         return PSQResult(
-            is_squeezing=bool(curr_sqz),
+            squeeze_level=squeeze_level,
+            is_squeezing=bool(curr_sqz_any),
             momentum_value=float(curr_mom),
+            momentum_color=mom_color,
             signal_direction=signal,
             is_near_support=bool(is_near_support.iloc[-1]),
-            is_breakout_high=bool(is_breakout_high),
+            is_breakout_long=is_breakout_long,
+            is_breakout_short=is_breakout_short,
             sma_distance_pct=float(sma_distance_pct.iloc[-1])
         )
     except Exception as e:
         import logging
         logging.getLogger(__name__).error(f"PSQ 計算發生錯誤: {e}")
         return None
+
