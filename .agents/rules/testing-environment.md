@@ -11,7 +11,7 @@ description: when test case neede
   - **Root Directory**: `/app` (mapped from host `$(pwd)`)
   - **Command Pattern**: 
     ```bash
-    docker compose run --rm -v "$(pwd):/app" nexus_seeker python -m unittest tests.{file_name}
+    docker compose run --rm -v "$(pwd):/app" nexus-seeker python -m unittest tests.{file_name}
     ```
 - **Requirements**:
   - Ensure all dependencies are resolved via the `nexus_seeker` service definition.

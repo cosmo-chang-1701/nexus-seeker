@@ -1,7 +1,7 @@
 # 🌌 Nexus Seeker - GEMINI.md
 
 ## Project Overview
-Nexus Seeker is a multi-tenant **Options Quant Trading Assistant** driven by Discord. It combines technical analysis, Black-Scholes-Merton pricing models, LLM-based NLP risk sentiment analysis, and a custom **Nexus Risk Optimizer (NRO)** for portfolio exposure精算. The project is structured as a dual-service architecture to handle complex market data processing and edge-scraping tasks efficiently.
+Nexus Seeker is a multi-tenant **Options Quant Risk-Control & Trading Operations Platform** driven by Discord. It combines technical analysis, Black-Scholes-Merton pricing models, LLM-based NLP risk sentiment analysis, and a custom **Nexus Risk Optimizer (NRO)** for portfolio exposure精算. The project is structured as a dual-service architecture to handle complex market data processing and edge-scraping tasks efficiently.
 
 ### Key Technologies
 - **Language:** Python 3.12

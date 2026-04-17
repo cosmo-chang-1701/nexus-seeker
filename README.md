@@ -4,7 +4,7 @@
   <img src="assets/hero.png" alt="Nexus Seeker Hero Image" width="800" />
 </div>
 
-**多租戶選擇權量化交易助手 — 由 Discord 驅動**
+**多租戶選擇權量化風控作戰平台 — 由 Discord 驅動**
 
 [![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -12,8 +12,8 @@
 [![Deploy](https://github.com/cosmo-chang-1701/nexus-seeker/actions/workflows/deploy.yml/badge.svg)](https://github.com/cosmo-chang-1701/nexus-seeker/actions/workflows/deploy.yml)
 [![Architecture](https://img.shields.io/badge/architecture-multi--tenant-purple.svg)](#architecture)
 
-> 一個以 Python 與 Docker 建構的**多租戶選擇權量化助手**。
-> 結合技術分析、**Black-Scholes-Merton** 定價模型（含股息率校正）、LLM NLP 風控審查、**Nexus Risk Optimizer (NRO)** 曝險精算，以及全自動化 NYSE 交易日曆，協助交易者執行高勝率的選擇權方向策略與建構防禦組合。
+> 一個以 Python 與 Docker 建構的**多租戶選擇權量化風控作戰平台**。
+> 結合技術分析、**Black-Scholes-Merton** 定價模型（含股息率校正）、LLM NLP 風控審查、**Nexus Risk Optimizer (NRO)** 曝險精算、虛擬交易室 (VTR) 自動化回測、PowerSqueeze 動能追蹤，以及全自動化 NYSE 交易日曆 — 從訊號掃描、風險精算、自動建倉到避險對沖，提供端到端的選擇權交易決策支援。
 
 ---
 
@@ -511,6 +511,7 @@ nexus-seeker/                        # Monorepo 根目錄
 
 - `test_market_data_service.py` — MarketDataService 報價與快取邏輯
 - `test_market_data_vix306.py` — VIX 期限結構 (VTS) 與 Z-Score 計算
+- `test_psq_engine.py` — PowerSqueeze 核心邏輯單元測試 (含擠壓強度、動能顏色與突破判定)
 - `test_risk_engine_vix306.py` — VIX 306 風險引擎防禦管線觸發條件
 - `test_scheduler_reschedule.py` — NYSE 排程器動態重排與邊界條件
 
@@ -536,6 +537,7 @@ docker compose run --rm -v "$(pwd):/app" nexus_seeker python -m unittest \
        tests.integration.test_integration_llm_and_risk \
        tests.unit.test_market_data_service \
        tests.unit.test_market_data_vix306 \
+       tests.unit.test_psq_engine \
        tests.unit.test_risk_engine_vix306 \
        tests.unit.test_scheduler_reschedule \
        tests.test_embed_builder
@@ -577,7 +579,7 @@ docker compose run --rm -v "$(pwd):/app" nexus_seeker python -m unittest discove
 - [x] **即時報價指令** — `/quote` 透過 Finnhub 即時查詢標的報價。
 - [x] **Service Layer 重構** — `TradingService` 將 Discord UI 與業務邏輯徹底解耦。
 - [x] **VIX 領域分析 (VIX306)** — 結合 VTS 期限結構與 30/60 日 Z-Score，偵測股市黑天鵝前兆與波動率擴張軌跡，動態觸發 1/4 Kelly 自動降規。
-- [x] **PowerSqueeze 模組 (PSQ)** — 雙路徑解耦量化掃描，獨立於 Option 訊號提供基於 Squeeze 能量突破的即時戰情，支援 `/settings` 獨立開關。
+- [x] **PowerSqueeze 模組 (PSQ)** — 雙路徑解耦量化掃描，獨立於 Option 訊號提供基於 Squeeze 能量突破的即時戰情 (完全對應 TradingView v2 Ultimate Edition 規格)，支援 `/settings` 獨立開關。
 - [ ] **MCP Server** — 將核心量化模組封裝為標準 Model Context Protocol 工具，供外部 AI 代理使用。
 - [ ] **券商 API 整合** — Interactive Brokers Gateway 實現全自動下單執行（訊號 → 執行 → 平倉，零人工介入）。
 
