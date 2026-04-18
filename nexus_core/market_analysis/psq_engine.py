@@ -15,11 +15,18 @@ class PSQResult:
     is_breakout_long: bool # 多頭能量釋放突破
     is_breakout_short: bool# 空頭能量釋放突破
     sma_distance_pct: float
+    # VIX 戰情標記
+    vix_momentum_label: str = "NORMAL"   # "NORMAL", "OVEREXTENDED_RISK", "HIGH_CONVICTION_RECOVERY"
+    vix_timeframe_note: str = ""         # 低 VIX 時建議使用的時間框架
 
-def analyze_psq(df: pd.DataFrame, length: int = 20, bb_mult: float = 2.0, kc_mults: list = [1.0, 1.5, 2.0], near_pct: float = 1.5) -> Optional[PSQResult]:
+def analyze_psq(df: pd.DataFrame, length: int = 20, bb_mult: float = 2.0, kc_mults: list = [1.0, 1.5, 2.0], near_pct: float = 1.5, vix_spot: float = None) -> Optional[PSQResult]:
     """
     計算 PowerSqueeze (PSQ) 量化指標 (Ultimate Edition v2)。
     輸入資料為包含 'Open', 'High', 'Low', 'Close' 的 DataFrame。
+    
+    Args:
+        vix_spot: VIX 即時價格。用於動能標記（OVEREXTENDED_RISK / HIGH_CONVICTION_RECOVERY）
+                  以及低波環境時間框架建議。
     """
     if df is None or df.empty or len(df) < length * 2:
         return None
@@ -115,6 +122,28 @@ def analyze_psq(df: pd.DataFrame, length: int = 20, bb_mult: float = 2.0, kc_mul
         
         is_breakout_long = bool(prev_sqz_high and (not curr_sqz_any) and (curr_mom > 0))
         is_breakout_short = bool(prev_sqz_high and (not curr_sqz_any) and (curr_mom < 0))
+
+        # ---------- VIX 動能標記 (VIX Momentum Labeling) ----------
+        vix_momentum_label = "NORMAL"
+        vix_timeframe_note = ""
+
+        if vix_spot is not None:
+            # 匯入分位數邊界
+            from config import VIX_QUANTILE_BOUNDS
+            upper_3 = VIX_QUANTILE_BOUNDS.get('upper_3', 24.6)
+
+            # 休兵期間的多頭訊號 → 過度延伸風險
+            if vix_spot < 15.0 and signal == "Long":
+                vix_momentum_label = "OVEREXTENDED_RISK"
+
+            # 高波動期間的 Golden 柱體（空頭減速）→ 高確信反彈
+            elif vix_spot > upper_3 and mom_color == "Golden":
+                vix_momentum_label = "HIGH_CONVICTION_RECOVERY"
+
+            # 低波環境時間框架建議
+            if vix_spot < 18.0:
+                vix_timeframe_note = "低波期，建議以日K/4H為主，忽略30m雜訊"
+        # -----------------------------------------------------------
         
         return PSQResult(
             squeeze_level=squeeze_level,
@@ -125,7 +154,9 @@ def analyze_psq(df: pd.DataFrame, length: int = 20, bb_mult: float = 2.0, kc_mul
             is_near_support=bool(is_near_support.iloc[-1]),
             is_breakout_long=is_breakout_long,
             is_breakout_short=is_breakout_short,
-            sma_distance_pct=float(sma_distance_pct.iloc[-1])
+            sma_distance_pct=float(sma_distance_pct.iloc[-1]),
+            vix_momentum_label=vix_momentum_label,
+            vix_timeframe_note=vix_timeframe_note,
         )
     except Exception as e:
         import logging

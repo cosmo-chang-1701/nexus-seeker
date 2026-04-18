@@ -87,6 +87,32 @@ def _build_embed_base(data, strategy, stock_cost):
     )
     return embed, is_covered
 
+def _add_vix_battle_status_field(embed, data):
+    """Add VIX Battle Ladder status indicator (highest priority field)."""
+    vix_status = data.get('vix_battle_status') or {}
+    vix_spot = vix_status.get('vix_spot') or data.get('vix_spot')
+    tier_name = vix_status.get('name') or data.get('vix_tier_name', 'N/A')
+    tier_emoji = vix_status.get('emoji') or data.get('vix_tier_emoji', '')
+    delta_cap = vix_status.get('sto_delta_cap') or data.get('vix_sto_delta_cap', 0.0)
+    sizing_mult = vix_status.get('sizing_multiplier') or data.get('vix_sizing_multiplier', 1.0)
+    
+    if vix_spot is None:
+        return
+    
+    status_line = f"{tier_emoji} **{tier_name}** | VIX: `{vix_spot:.1f}`"
+    details = []
+    if delta_cap != 0.0:
+        details.append(f"Delta Cap: `{delta_cap:.2f}`")
+    if sizing_mult != 1.0:
+        details.append(f"\u5009\u4f4d\u4e58\u6578: `{sizing_mult:.1f}x`")
+    
+    value = status_line
+    if details:
+        value += "\n" + " | ".join(details)
+    value += "\n\u200b"
+    
+    embed.add_field(name="\ud83c\udfc5 VIX \u6230\u60c5\u968e\u68af", value=value, inline=False)
+
 def _add_market_overview_fields(embed, data):
     beta = data.get('beta', 1.0)
     beta_status = "🚀" if beta > 1.3 else ("⚖️" if beta >= 0.8 else "🧊")
@@ -413,7 +439,13 @@ def create_scan_embed(data, user_capital=100000.0):
     
     embed, is_covered = _build_embed_base(data, strategy, stock_cost)
     
-    # 依序渲染 UI
+    # VIX tier color override
+    vix_color = data.get('vix_tier_color') or (data.get('vix_battle_status', {}).get('color_hex'))
+    if vix_color:
+        embed.color = discord.Color(vix_color)
+    
+    # Render UI fields (VIX Battle Status first)
+    _add_vix_battle_status_field(embed, data)
     _add_market_overview_fields(embed, data)
     _add_volatility_fields(embed, data, strategy)
     _add_trend_and_support_fields(embed, data)
@@ -444,7 +476,11 @@ def create_scan_embed(data, user_capital=100000.0):
             inline=False,
         )
 
-    embed.set_footer(text=f"Nexus Seeker 風控引擎 • 基準 SPY: ${data.get('spy_price', 500):.1f}")
+    vix_spot = data.get('vix_spot') or (data.get('vix_battle_status', {}).get('vix_spot'))
+    vix_emoji = data.get('vix_tier_emoji') or (data.get('vix_battle_status', {}).get('emoji', ''))
+    vix_name = data.get('vix_tier_name') or (data.get('vix_battle_status', {}).get('name', ''))
+    vix_footer = f" | VIX: {vix_spot:.1f} {vix_emoji} {vix_name}" if vix_spot else ""
+    embed.set_footer(text=f"Nexus Seeker 風控引擎 • 基準 SPY: ${data.get('spy_price', 500):.1f}{vix_footer}")
     return embed
 
 def create_psq_embed(data: dict) -> discord.Embed:
@@ -482,11 +518,31 @@ def create_psq_embed(data: dict) -> discord.Embed:
     support_val = f"✅ 靠近 20SMA (距離: `{psq.distance_to_sma20_pct:.2f}%`)\n" if psq.is_near_support else f"⚠️ 偏離 20SMA (距離: `{psq.distance_to_sma20_pct:.2f}%`)\n"
     support_val += f"📉 20SMA: `${psq.sma_20:.2f}`\n\u200b"
     embed.add_field(name="🧭 均線支撐 (Daily)", value=support_val, inline=False)
+
+    # VIX momentum label
+    vix_label = psq.vix_momentum_label if hasattr(psq, 'vix_momentum_label') else 'NORMAL'
+    vix_tf_note = psq.vix_timeframe_note if hasattr(psq, 'vix_timeframe_note') else ''
+    
+    if vix_label != 'NORMAL':
+        label_map = {
+            'OVEREXTENDED_RISK': '⚠️ **過度延伸風險** | 低 VIX 環境多頭訊號可能是牛陷阱',
+            'HIGH_CONVICTION_RECOVERY': '🚀 **高確信反彈** | 高 VIX + 空頭減速 = 反轉機會',
+        }
+        label_text = label_map.get(vix_label, vix_label)
+        embed.add_field(name="🏅 VIX 動能判定", value=f"{label_text}\n\u200b", inline=False)
+    
+    if vix_tf_note:
+        embed.add_field(name="⏱️ 時間框架建議", value=f"`{vix_tf_note}`\n\u200b", inline=False)
         
     # 最新新聞
     add_news_field(embed, data.get('news_text'))
     
-    embed.set_footer(text="Nexus Seeker • PowerSqueeze 日K量化引擎")
+    # VIX tier info in footer
+    vix_spot_val = data.get('vix_spot') or (data.get('vix_battle_status', {}).get('vix_spot'))
+    vix_emoji_val = data.get('vix_battle_status', {}).get('emoji', '')
+    vix_name_val = data.get('vix_battle_status', {}).get('name', '')
+    vix_footer = f" | VIX: {vix_spot_val:.1f} {vix_emoji_val} {vix_name_val}" if vix_spot_val else ""
+    embed.set_footer(text=f"Nexus Seeker • PowerSqueeze 日K量化引擎{vix_footer}")
     return embed
 
 

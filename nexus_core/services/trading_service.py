@@ -8,6 +8,7 @@ from typing import Dict, List, Any, Optional
 import database
 import market_math
 import market_time
+from config import get_vix_tier
 from market_analysis import portfolio, hedging
 from market_analysis.ghost_trader import GhostTrader
 from services import market_data_service, news_service, llm_service, reddit_service
@@ -94,14 +95,20 @@ class TradingService:
             df_spy, macro_raw = await asyncio.gather(spy_task, macro_task)
             
             spy_price = df_spy['Close'].iloc[-1] if not df_spy.empty else 670.0
+            vix_spot = macro_raw.get('vix', 18.0)
             macro_data = MacroContext(
-                vix=macro_raw.get('vix', 18.0),
+                vix=vix_spot,
                 oil_price=macro_raw.get('oil', 75.0),
                 vix_change=macro_raw.get('vix_change', 0.0)
             )
         except Exception as e:
             logger.error(f"全域基準資料獲取失敗: {e}")
-            df_spy, spy_price, macro_data = None, 670.0, MacroContext(vix=20.0, oil_price=85.0, vix_change=0.0)
+            df_spy, spy_price = None, 670.0
+            vix_spot = 18.0
+            macro_data = MacroContext(vix=vix_spot, oil_price=85.0, vix_change=0.0)
+
+        # 取得 VIX 戰情階梯
+        vix_tier = get_vix_tier(vix_spot)
 
         # 2. 提取不重複標的進行「併行批次掃描」
         unique_targets = list(set((sym, stock_cost, use_llm) for uid, sym, stock_cost, use_llm in all_watchlists))
@@ -110,7 +117,7 @@ class TradingService:
             sym, stock_cost, use_llm = target
             try:
                 # analyze_symbol 已經是 async，若沒有 Option 訊號，res 會是 None
-                res = await market_math.analyze_symbol(sym, stock_cost, df_spy, spy_price)
+                res = await market_math.analyze_symbol(sym, stock_cost, df_spy, spy_price, vix_spot=vix_spot)
                 is_option_valid = bool(res)
                 if not res:
                     res = {'symbol': sym, 'stock_cost': stock_cost, 'strategy': ''}
@@ -134,7 +141,7 @@ class TradingService:
                 # 🚀 新增 PowerSqueeze 掃描 (使用日 K)
                 df_hist_1d = await market_data_service.get_history_df(sym, period="1y", interval="1d")
                 from market_analysis.psq_engine import analyze_psq
-                psq_result = analyze_psq(df_hist_1d)
+                psq_result = analyze_psq(df_hist_1d, vix_spot=vix_spot)
                 if psq_result:
                     res['psq_result'] = psq_result
 
@@ -207,6 +214,16 @@ class TradingService:
                     base_data['macro_vix'] = macro_data.vix
                     base_data['macro_vix_change'] = macro_data.vix_change
                     base_data['macro_oil'] = macro_data.oil_price
+                    # VIX 戰情階梯狀態注入 (供 UI 層渲染)
+                    base_data['vix_spot'] = vix_spot
+                    base_data['vix_battle_status'] = {
+                        'name': vix_tier.get('name', 'N/A'),
+                        'emoji': vix_tier.get('emoji', ''),
+                        'color_hex': vix_tier.get('color_hex', 0x808080),
+                        'vix_spot': vix_spot,
+                        'sto_delta_cap': vix_tier.get('sto_delta_cap', 0.0),
+                        'sizing_multiplier': vix_tier.get('sizing_multiplier', 1.0),
+                    }
                     
                     is_option_valid = base_data.get('is_option_valid', False)
                     psq_result = base_data.get('psq_result')
@@ -287,6 +304,13 @@ class TradingService:
         sym = data['symbol']
         strategy = data.get('strategy', '')
         safe_qty = data.get('safe_qty', 0)
+        
+        # VIX 戰情階梯 VTR 建倉閘門
+        vix_spot_val = data.get('vix_spot')
+        current_vix_tier = get_vix_tier(vix_spot_val)
+        if not current_vix_tier.get('vtr_entry_allowed', True):
+            logger.info(f"[VTR] 建倉已被 VIX 階梯 '{current_vix_tier['name']}' 放行禁止，略過 {sym}")
+            return
         
         if safe_qty > 0:
             try:

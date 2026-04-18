@@ -53,6 +53,7 @@
 | ⚖️ **四分之一 Kelly 倉位** | 以 ¼-Kelly 準則計算倉位大小，每檔標的上限 5%。 |
 | 📉 **個股 IV 期限結構** | 偵測 30D/60D IV 逆價差作為恐慌性拋售訊號。 |
 | 🌐 **大盤 VIX 結構** | 即時追蹤 VIX 期限結構 (VTS) 與 30/60日 Z-Score 動能，遇逆價差或波動性暴增時觸發系統性防禦機制。 |
+| 🏅 **VIX 戰情階梯 (Battle Ladder)** | 6 階段 VIX 回應系統（休兵→少買→摩拳擦掌→大買→重砲進場→All-in），依即時 VIX 動態調控 STO Delta 上限、倉位乘數、Kelly 比例與 VTR 建倉許可。VIX < 15 硬性拒絕所有賣方訊號；VIX > 35 啟用 All-in 旁路，繞過油價/VTS 抑制直接放大風險額度。 |
 | 📐 **垂直偏態濾網** | 分析 25-Delta Put/Call IV 比率，≥ 1.30 標示警告，≥ 1.50 時硬性否決 STO Put 訊號，規避尾部崩盤風險。 |
 | 🛡️ **尾部風險防護** | 結合 VIX 數據與偏態指數，當偵測出黑天鵝尾部風險時，動態將曝險斬半 (1/4 Kelly) 並縮減 NRO 保證金上限。 |
 | 💧 **流動性濾網** | 自動檢測買賣價差（Bid-Ask Spread），絕對價差 > $0.20 且佔比 > 10% 時剔除流動性陷阱。 |
@@ -72,7 +73,7 @@
 | 💾 **資料持久化** | SQLite 搭配 Docker Volume — 容器重啟零資料遺失。內建版本遷移引擎（Migration Engine），Schema 變更全自動化。 |
 | 🧮 **Greeks 持久化與匯總** | 持倉的 Greeks（Weighted Delta、Theta、Gamma）持久化至資料庫，`UserContext` 一次性匯總真實持倉與虛擬交易的 Greeks 指標，極大化 I/O 效率。 |
 | ⚙️ **個人化風險與推播** | 每位使用者可自訂風險限制（1%–50%），及切換 Option 推播、VTR 自動建倉與 PowerSqueeze 等專屬追蹤頻道。 |
-| ⚡ **PowerSqueeze 動能追蹤** | 內建向量化 PSQ 數學模組，抓取盤基壓縮突破與能量擴張訊號，可作為獨立風向標並行於原有 Option 訊號。 |
+| ⚡ **PowerSqueeze 動能追蹤** | 內建向量化 PSQ 數學模組，抓取盤基壓縮突破與能量擴張訊號，可作為獨立風向標並行於原有 Option 訊號。VIX 感知動能標記可識別低 VIX 牛陷阱 (`OVEREXTENDED_RISK`) 與高 VIX 反彈機會 (`HIGH_CONVICTION_RECOVERY`)。 |
 | 💹 **即時報價查詢** | `/quote` 指令透過 Finnhub 即時取得標的報價（含現價、漲跌幅、今日高低與前收盤價）。 |
 | 🏗️ **Service Layer 分治** | `TradingService` 集中式業務邏輯層，將 Discord UI 層與核心計算徹底解耦，職責分明。 |
 
@@ -363,6 +364,7 @@ docker compose up -d --build
 | 12 | AROC（買方） | 年化資本回報率 `((預期波動 − Ask) / Ask) × (365 / DTE)` < 30% → 剔除 | BTO Call / BTO Put |
 | 13 | ¼ Kelly（賣方） | 遭遇高尾部風險時，凱利最大倉位斬半。上限 5% (高危險 2.5%) | STO Put / STO Call |
 | 14 | ¼ Kelly（買方） | 買方凱利倉位上限 3% | BTO Call / BTO Put |
+| 15 | VIX 戰情階梯 | VIX < 15 硬性閘門拒絕所有 STO 訊號與 VTR 建倉；VIX 15-18 Cap Delta 至 -0.12 並縮減 50% 倉位；VIX > 24 放大為攻勢倉位 (1.2x-2.0x)；VIX > 35 All-in 旁路繞過宏觀抑制 | 全部 |
 
 ### 🟢 賣出開倉 Put — *超賣收入*
 
@@ -390,6 +392,23 @@ docker compose up -d --build
 - **篩選：** 流動性通過、VRP ≤ 3%、`AROC ≥ 30%`、¼ Kelly（上限 3%）
 - **動態切換：** 若 HV Rank ≥ 50（高波動），自動切換為 **STO Call**（14–30 DTE，Delta +0.20）做空賺溢價
 
+### 🏅 VIX 戰情階梯 (VIX Battle Ladder)
+
+依即時 VIX 值動態調控策略引擎、NRO 風險額度與 VTR 建倉許可。核心邏輯為**攻守互換**：高 VIX = 高 IV 溢酬 = 賣方黃金期，系統主動放大風險額度。
+
+| VIX 區間 | 階梯名稱 | STO Delta 上限 | 倉位乘數 | Kelly 覆寫 | VTR 建倉 | NRO 行為 |
+|---|---|---|---|---|---|---|
+| < 15.0 | 🧊 休兵 (Dormant) | — | 0.0x | — | ❌ 禁止 | 風險權重 = 0.0，硬性閘門拒絕所有 STO 訊號 |
+| 15.0 – 18.0 | ⚠️ 少買 (Caution) | -0.12 | 0.5x | — | ✅ 允許 | 風險權重 = 0.5，保守進場 |
+| 18.0 – 24.0 | 🟡 摩拳擦掌 (Ready) | -0.20 | 1.0x | — | ✅ 允許 | 風險權重 = 1.0，標準模式 |
+| 24.0 – 30.0 | 🟠 大買 (Aggressive) | -0.20 | 1.2x | — | ✅ 允許 | 風險權重 = 1.2，攻勢倉位 |
+| 30.0 – 35.0 | 🔴 重砲進場 (Heavy) | -0.25 | 1.5x | — | ✅ 允許 | 風險權重 = 1.5，動態 Kelly 放大至 1/3 Kelly |
+| ≥ 35.0 | ⚫ All-in (Extreme) | -0.35 | 2.0x | 1/2 Kelly | ✅ 允許 | 風險權重 = 2.0，All-in 旁路繞過油價/VTS 抑制 |
+
+**PSQ 動能標記：**
+- VIX < 15 + 多頭突破 → `OVEREXTENDED_RISK`（低 VIX 環境多頭訊號可能是牛陷阱）
+- VIX > 24.6 + Golden 直方圖 → `HIGH_CONVICTION_RECOVERY`（高 VIX + 空頭減速 = 反轉機會）
+
 ---
 
 ## 📁 專案結構
@@ -400,7 +419,7 @@ nexus-seeker/                        # Monorepo 根目錄
 │   ├── main.py                      # 進入點 — 初始化資料庫、註冊訊號處理、啟動 Bot
 │   ├── bot.py                       # NexusBot 類別 — 擴充模組載入、啟停通知、非同步訊息佇列
 │   ├── bot_healthy.py               # Docker HEALTHCHECK 探針 — 檢測心跳檔案存活狀態
-│   ├── config.py                    # 環境變數 — Token、LLM 端點、Tunnel URL、策略 Delta 參數
+│   ├── config.py                    # 環境變數 — Token、LLM 端點、Tunnel URL、策略 Delta 參數、VIX 戰情階梯配置
 │   ├── market_math.py               # Facade — 統一 re-export market_analysis 子模組
 │   ├── market_time.py               # NYSE 日曆、動態睡眠排程器與開盤狀態偵測
 │   ├── entrypoint.sh                # Docker entrypoint — 權限修正與 gosu 降權啟動
@@ -411,8 +430,8 @@ nexus-seeker/                        # Monorepo 根目錄
 │   │   ├── greeks.py                # Black-Scholes-Merton Delta 與 Greeks 計算引擎
 │   │   ├── hedging.py               # 投資組合避險邏輯、Delta 中性計算與市場位階感知對沖
 │   │   ├── ghost_trader.py          # GhostTrader — VTR 自動建倉、平倉、轉倉核心邏輯
-│   │   ├── psq_engine.py            # PowerSqueeze 引擎 — BB/KC 壓縮偵測、動能線性回歸與擠壓釋放訊號
-│   │   ├── risk_engine.py           # NRO 投資組合防禦管線、What-if 新增風險模擬與宏觀修正矩陣
+│   │   ├── psq_engine.py            # PowerSqueeze 引擎 — BB/KC 壓縮偵測、動能線性回歸與擠壓釋放訊號、VIX 動能標記
+│   │   ├── risk_engine.py           # NRO 投資組合防禦管線、What-if 新增風險模擬、宏觀修正矩陣與 VIX 動態 Kelly 放大
 │   │   ├── report_formatter.py      # 將量化數值格式化為 Discord Embed 文字流
 │   │   ├── strategy.py              # 技術面掃描 + 多道量化濾網管線 + NRO 合約篩選
 │   │   └── portfolio.py             # 盤後結算引擎流程編排 (Orchestrator)、宏觀風險評估
@@ -467,8 +486,9 @@ nexus-seeker/                        # Monorepo 根目錄
 │   │   └── unit/                    # 單元測試
 │   │       ├── test_market_data_service.py  # MarketDataService 單元測試
 │   │       ├── test_market_data_vix306.py   # VIX 306 期限結構測試
+│   │       ├── test_psq_engine.py           # PowerSqueeze 核心邏輯單元測試
 │   │       ├── test_risk_engine_vix306.py   # VIX 風險引擎單元測試
-│   │       └── test_scheduler_reschedule.py # 排程器動態重排測試
+│   │       └── test_vix_ladder.py           # VIX 戰情階梯完整測試 (34 cases)
 │   ├── data/                        # SQLite 資料庫 (Docker Volume 掛載)
 │   ├── .dockerignore
 │   ├── Dockerfile
@@ -513,7 +533,7 @@ nexus-seeker/                        # Monorepo 根目錄
 - `test_market_data_vix306.py` — VIX 期限結構 (VTS) 與 Z-Score 計算
 - `test_psq_engine.py` — PowerSqueeze 核心邏輯單元測試 (含擠壓強度、動能顏色與突破判定)
 - `test_risk_engine_vix306.py` — VIX 306 風險引擎防禦管線觸發條件
-- `test_scheduler_reschedule.py` — NYSE 排程器動態重排與邊界條件
+- `test_vix_ladder.py` — VIX 戰情階梯完整測試 (Tier 邊界、Delta Cap、PSQ 動能標記、NRO Kelly 放大與 All-in 旁路，共 34 cases)
 
 ### 其他測試
 
@@ -531,16 +551,7 @@ docker compose run --rm -v "$(pwd):/app" nexus_seeker python -m unittest tests.u
 
 ```bash
 # 在 nexus_core 目錄執行
-docker compose run --rm -v "$(pwd):/app" nexus_seeker python -m unittest \
-       tests.integration.test_integration_database_and_greeks \
-       tests.integration.test_integration_trading_flows \
-       tests.integration.test_integration_llm_and_risk \
-       tests.unit.test_market_data_service \
-       tests.unit.test_market_data_vix306 \
-       tests.unit.test_psq_engine \
-       tests.unit.test_risk_engine_vix306 \
-       tests.unit.test_scheduler_reschedule \
-       tests.test_embed_builder
+docker compose run --rm -v "$(pwd):/app" nexus-seeker python -m unittest discover -s tests -v
 ```
 
 ### 使用 discover 執行整個 tests 目錄
@@ -580,6 +591,7 @@ docker compose run --rm -v "$(pwd):/app" nexus_seeker python -m unittest discove
 - [x] **Service Layer 重構** — `TradingService` 將 Discord UI 與業務邏輯徹底解耦。
 - [x] **VIX 領域分析 (VIX306)** — 結合 VTS 期限結構與 30/60 日 Z-Score，偵測股市黑天鵝前兆與波動率擴張軌跡，動態觸發 1/4 Kelly 自動降規。
 - [x] **PowerSqueeze 模組 (PSQ)** — 雙路徑解耦量化掃描，獨立於 Option 訊號提供基於 Squeeze 能量突破的即時戰情 (完全對應 TradingView v2 Ultimate Edition 規格)，支援 `/settings` 獨立開關。
+- [x] **VIX 戰情階梯 (Battle Ladder)** — 6 階段 VIX 攻守互換系統，動態調控 Delta 上限、倉位乘數、Kelly 比例與 VTR 建倉許可。NRO 攻勢放大 (高 VIX → w_vix 升至 2.0x)、All-in 旁路繞過宏觀抑制、PSQ 動能標記 (`OVEREXTENDED_RISK` / `HIGH_CONVICTION_RECOVERY`)。
 - [ ] **MCP Server** — 將核心量化模組封裝為標準 Model Context Protocol 工具，供外部 AI 代理使用。
 - [ ] **券商 API 整合** — Interactive Brokers Gateway 實現全自動下單執行（訊號 → 執行 → 平倉，零人工介入）。
 

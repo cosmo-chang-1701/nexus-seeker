@@ -6,7 +6,7 @@ import numpy as np
 import yfinance as yf  # 僅保留用於 option_chain() / options
 from services import market_data_service
 from datetime import datetime
-from config import TARGET_DELTAS
+from config import TARGET_DELTAS, get_vix_tier
 from .greeks import calculate_contract_delta, calculate_greeks
 from .data import get_next_earnings_date
 
@@ -339,8 +339,26 @@ def _validate_risk_and_liquidity(strategy, best_contract, price, hv_current, day
         "liq_status": liq_eval['status'], "liq_msg": liq_eval['embed_msg']
     }
 
-def _calculate_sizing(strategy, best_contract, days_to_expiry, expected_move=0.0, price=0.0, stock_cost=0.0, kelly_fraction=0.5):
-    """計算資金效率與倉位大小"""
+def apply_vix_ladder(vix_spot: float) -> dict:
+    """根據 VIX 即時水位回傳對應的戰情階梯配置。
+
+    回傳值為 tier dict，包含：
+    - allow_signal: 是否允許 STO 訊號
+    - sto_delta_cap: STO Delta 上限 (負數)
+    - sizing_multiplier: 倉位大小乘數
+    - kelly_fraction_override: 可選的 Kelly 分數覆寫
+    - vtr_entry_allowed: 是否允許 VTR 自動建倉
+    """
+    return get_vix_tier(vix_spot)
+
+
+def _calculate_sizing(strategy, best_contract, days_to_expiry, expected_move=0.0, price=0.0, stock_cost=0.0, kelly_fraction=0.5, kelly_fraction_override: Optional[float] = None):
+    """計算資金效率與倉位大小
+    
+    Args:
+        kelly_fraction_override: 若非 None，則覆寫 kelly_fraction（用於 VIX All-in 階梯）。
+    """
+    effective_kelly = kelly_fraction_override if kelly_fraction_override is not None else kelly_fraction
     aroc, alloc_pct, margin_per_contract = 0.0, 0.0, 0.0
     
     bid = best_contract.get('bid', 0.0)
@@ -357,7 +375,7 @@ def _calculate_sizing(strategy, best_contract, days_to_expiry, expected_move=0.0
                 b = bid / margin_required
                 if b > 0:
                     kelly_f = (p * b - (1.0 - p)) / b
-                    alloc_pct = min(max(kelly_f * kelly_fraction, 0.0), 0.05)
+                    alloc_pct = min(max(kelly_f * effective_kelly, 0.0), 0.05)
                     margin_per_contract = margin_required * 100
     elif strategy in ["BTO_CALL", "BTO_PUT"]:
         premium = ask
@@ -369,7 +387,7 @@ def _calculate_sizing(strategy, best_contract, days_to_expiry, expected_move=0.0
                 b = potential_profit / premium
                 if b > 0:
                     kelly_f = (p * b - (1.0 - p)) / b
-                    alloc_pct = min(max(kelly_f * kelly_fraction, 0.0), 0.03)
+                    alloc_pct = min(max(kelly_f * effective_kelly, 0.0), 0.03)
             margin_per_contract = premium * 100
                     
     return aroc, alloc_pct, margin_per_contract
@@ -408,8 +426,12 @@ def detect_ema_signals(df: pd.DataFrame, window: int = 21, threshold: float = 0.
         return {"window": window, "type": signal_type, "direction": direction, "ema_val": round(ema_curr, 2), "distance_pct": round((p_curr - ema_curr) / ema_curr * 100, 2)}
     return None
 
-async def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None):
-    """掃描技術指標、波動率、偏態、Greeks 等進行核心分析。"""
+async def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None, vix_spot: Optional[float] = None):
+    """掃描技術指標、波動率、偏態、Greeks 等進行核心分析。
+    
+    Args:
+        vix_spot: VIX 即時價格。用於 VIX 戰情階梯判定（Delta 上限、倉位縮放、訊號閘門）。
+    """
     try:
         ticker = yf.Ticker(symbol)
         quote = await market_data_service.get_quote(symbol)
@@ -439,6 +461,26 @@ async def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None):
 
         strategy, opt_type, target_delta, min_dte, max_dte = _determine_strategy_signal(indicators)
         if not strategy: return None
+
+        # ---------- VIX 戰情階梯閘門 (VIX Battle Ladder Gate) ----------
+        vix_tier = apply_vix_ladder(vix_spot)
+        vix_sizing_multiplier = vix_tier.get('sizing_multiplier', 1.0)
+        vix_kelly_override = vix_tier.get('kelly_fraction_override')
+
+        if strategy in ["STO_PUT", "STO_CALL"]:
+            if not vix_tier.get('allow_signal', True):
+                logger.info(f"[{symbol}] 剔除: VIX {vix_spot:.1f} 處於 '{vix_tier['name']}' 階梯，硬拒所有 STO 訊號")
+                return None
+
+            # Delta 上限鉗制：sto_delta_cap 為負數，max() 取較小絕對值（更保守）
+            sto_cap = vix_tier.get('sto_delta_cap', -0.20)
+            if sto_cap != 0.0 and strategy == "STO_PUT" and target_delta < sto_cap:
+                logger.info(f"[{symbol}] VIX 階梯 Delta 鉗制: {target_delta:.2f} -> {sto_cap:.2f}")
+                target_delta = sto_cap
+            elif sto_cap != 0.0 and strategy == "STO_CALL" and target_delta > abs(sto_cap):
+                logger.info(f"[{symbol}] VIX 階梯 Delta 鉗制: {target_delta:.2f} -> {abs(sto_cap):.2f}")
+                target_delta = abs(sto_cap)
+        # ----------------------------------------------------------------
 
         expirations = await asyncio.to_thread(lambda: ticker.options)
         if not expirations: return None
@@ -507,8 +549,13 @@ async def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None):
         aroc, alloc_pct, margin_per_contract = _calculate_sizing(
             strategy, best_contract, days_to_expiry, 
             expected_move=risk_metrics.get('expected_move', 0.0), 
-            price=price, stock_cost=stock_cost, kelly_fraction=kelly_fraction
+            price=price, stock_cost=stock_cost, kelly_fraction=kelly_fraction,
+            kelly_fraction_override=vix_kelly_override
         )
+
+        # VIX 倉位縮放：將階梯乘數套用至 alloc_pct
+        if vix_sizing_multiplier != 1.0:
+            alloc_pct *= vix_sizing_multiplier
         if (strategy in ["STO_PUT", "STO_CALL"] and aroc < 15.0) or (strategy in ["BTO_CALL", "BTO_PUT"] and aroc < 30.0): return None
 
         raw_delta = best_contract.get('bs_delta', 0.0)
@@ -532,7 +579,11 @@ async def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None):
             "vrp": risk_metrics.get('vrp', 0.0), "theta": round(greeks.get('theta', 0.0), 4), "gamma": round(greeks.get('gamma', 0.0), 6),
             "mid_price": risk_metrics.get('mid_price', 0.0), "suggested_hedge_strike": risk_metrics.get('suggested_hedge_strike'),
             "liq_status": risk_metrics.get('liq_status', 'N/A'), "liq_msg": risk_metrics.get('liq_msg', ''), "spy_price": safe_spy_price,
-            "ema_8": ema_8, "ema_21": ema_21, "trend": trend_state, "distance_from_21": dist_21
+            "ema_8": ema_8, "ema_21": ema_21, "trend": trend_state, "distance_from_21": dist_21,
+            # VIX 戰情階梯元資料
+            "vix_spot": vix_spot, "vix_tier_name": vix_tier.get('name', 'N/A'),
+            "vix_tier_emoji": vix_tier.get('emoji', ''), "vix_tier_color": vix_tier.get('color_hex', 0x808080),
+            "vix_sizing_multiplier": vix_sizing_multiplier, "vix_sto_delta_cap": vix_tier.get('sto_delta_cap', 0.0),
         }
     except Exception as e:
         logger.error(f"分析 {symbol} 錯誤: {e}")

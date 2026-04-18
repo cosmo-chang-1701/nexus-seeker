@@ -51,29 +51,37 @@ class TestLlmRiskIntegration(unittest.TestCase):
 
 
 class TestRiskEngineIntegration(unittest.TestCase):
-    def test_macro_stress_reduces_position_size(self):
-        calm = MacroContext(vix=16.0, oil_price=70.0, vix_change=0.0)
-        stressed = MacroContext(vix=36.0, oil_price=100.0, vix_change=0.2)
+    def test_high_vix_increases_position_capacity(self):
+        """VIX 戰情階梯攻守互換：高 VIX = 高 IV 溢酬，NRO 放大風險額度。
 
-        calm_qty, _ = optimize_position_risk(
+        VIX=16 (Caution, w_vix=0.5) 應產生 *較少* 口數；
+        VIX=36 (All-in,  w_vix=2.0) 應產生 *較多* 口數。
+        """
+        caution = MacroContext(vix=16.0, oil_price=70.0, vix_change=0.0)
+        allin = MacroContext(vix=36.0, oil_price=70.0, vix_change=0.0)
+
+        caution_qty, _ = optimize_position_risk(
             current_delta=5.0,
             unit_weighted_delta=8.0,
             user_capital=50000.0,
             spy_price=500.0,
             stock_iv=0.30,
             strategy="STO_PUT",
-            macro_data=calm,
+            macro_data=caution,
             base_risk_limit_pct=50.0,
+            vix_spot=16.0,
         )
-        stressed_qty, _ = optimize_position_risk(
+        allin_qty, _ = optimize_position_risk(
             current_delta=5.0,
             unit_weighted_delta=8.0,
             user_capital=50000.0,
             spy_price=500.0,
             stock_iv=0.30,
             strategy="STO_PUT",
-            macro_data=stressed,
+            macro_data=allin,
             base_risk_limit_pct=50.0,
+            vix_spot=36.0,
         )
 
-        self.assertGreaterEqual(calm_qty, stressed_qty)
+        # All-in tier should allow MORE contracts than Caution tier
+        self.assertGreater(allin_qty, caution_qty)
