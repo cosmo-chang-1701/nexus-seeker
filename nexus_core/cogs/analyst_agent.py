@@ -10,6 +10,8 @@ from database.user_settings import get_full_user_context
 from database.watchlist import get_all_watchlist
 from services.market_data_service import get_quote, get_history_df, get_earnings_calendar
 from services.llm_service import generate_analyst_report
+from services.news_service import fetch_recent_news
+from services.reddit_service import get_reddit_context
 from market_analysis.psq_engine import analyze_psq
 from market_analysis.hedging import analyze_hedge_performance
 from config import get_vix_tier
@@ -143,9 +145,26 @@ class AnalystAgent(commands.Cog):
                 if calendar:
                     earnings_data[sym] = calendar[:1] # 只取最近一次
             
+            # 並行獲取即將發布財報標的之新聞與 Reddit 情緒 (最多取前 2 個)
+            upcoming_symbols = list(earnings_data.keys())[:2]
+            sentiment_data = {}
+            if upcoming_symbols:
+                news_tasks = [fetch_recent_news(sym, limit=3) for sym in upcoming_symbols]
+                reddit_tasks = [get_reddit_context(sym, limit=3) for sym in upcoming_symbols]
+                
+                news_results = await asyncio.gather(*news_tasks, return_exceptions=True)
+                reddit_results = await asyncio.gather(*reddit_tasks, return_exceptions=True)
+                
+                for i, sym in enumerate(upcoming_symbols):
+                    sentiment_data[sym] = {
+                        "news": news_results[i] if not isinstance(news_results[i], Exception) else "無法獲取",
+                        "reddit_sentiment": reddit_results[i] if not isinstance(reddit_results[i], Exception) else "無法獲取"
+                    }
+            
             raw_data = {
                 "analyzed_symbols": len(symbols),
                 "upcoming_earnings": earnings_data,
+                "earnings_sentiment_scan": sentiment_data,
                 "note": "IV and VRP are evaluated dynamically based on recent price action."
             }
             
@@ -189,11 +208,29 @@ class AnalystAgent(commands.Cog):
             # 總經板塊分析
             sectors = {"Semiconductors": "SMH", "Technology": "XLK", "Financials": "XLF"}
             research_data = {}
-            for name, sym in sectors.items():
-                df = await get_history_df(sym, period="3mo")
-                if not df.empty:
+            
+            # 並行獲取價格歷史、新聞與 Reddit 資訊
+            hist_tasks = [get_history_df(sym, period="3mo") for sym in sectors.values()]
+            news_tasks = [fetch_recent_news(sym, limit=2) for sym in sectors.values()]
+            reddit_tasks = [get_reddit_context(sym, limit=2) for sym in sectors.values()]
+            
+            hist_results = await asyncio.gather(*hist_tasks, return_exceptions=True)
+            news_results = await asyncio.gather(*news_tasks, return_exceptions=True)
+            reddit_results = await asyncio.gather(*reddit_tasks, return_exceptions=True)
+            
+            for i, (name, sym) in enumerate(sectors.items()):
+                df = hist_results[i]
+                if not isinstance(df, Exception) and not df.empty:
                     pct_change = (df['Close'].iloc[-1] - df['Close'].iloc[0]) / df['Close'].iloc[0] * 100
-                    research_data[name] = {"symbol": sym, "quarterly_performance_pct": round(pct_change, 2)}
+                else:
+                    pct_change = 0.0
+                
+                research_data[name] = {
+                    "symbol": sym, 
+                    "quarterly_performance_pct": round(pct_change, 2),
+                    "news": news_results[i] if not isinstance(news_results[i], Exception) else "無法獲取",
+                    "reddit_sentiment": reddit_results[i] if not isinstance(reddit_results[i], Exception) else "無法獲取"
+                }
                     
             raw_data = {
                 "sector_analysis": research_data,

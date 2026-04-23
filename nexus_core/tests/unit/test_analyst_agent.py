@@ -53,19 +53,23 @@ class TestAnalystAgent(unittest.IsolatedAsyncioTestCase):
         context = user_settings.get_full_user_context(user_id)
         self.assertFalse(context.enable_analyst_agent, "Context should have enable_analyst_agent=False")
 
+    @patch('cogs.analyst_agent.get_reddit_context')
+    @patch('cogs.analyst_agent.fetch_recent_news')
     @patch('cogs.analyst_agent.generate_analyst_report')
     @patch('cogs.analyst_agent.get_earnings_calendar')
     @patch('cogs.analyst_agent.get_history_df')
     @patch('cogs.analyst_agent.analyze_hedge_performance')
     @patch('cogs.analyst_agent.get_all_watchlist')
     @patch.object(AnalystAgent, '_fetch_macro_data')
-    async def test_analyst_agent_reports(self, mock_fetch, mock_watchlist, mock_hedge, mock_history, mock_earnings, mock_llm):
+    async def test_analyst_agent_reports(self, mock_fetch, mock_watchlist, mock_hedge, mock_history, mock_earnings, mock_llm, mock_news, mock_reddit):
         # Mocking yfinance fetch
         mock_fetch.return_value = (18.5, 105.2, 4.2)
         
         # Mock dependencies
         mock_watchlist.return_value = [(999, 'AAPL'), (999, 'TSLA')]
         mock_earnings.return_value = [{"date": "2026-05-01", "time": "AMC"}]
+        mock_news.return_value = "Mocked News Headline"
+        mock_reddit.return_value = '{"score": 8.5, "sentiment": "Bullish"}'
         
         import pandas as pd
         mock_df = pd.DataFrame({'Close': [100.0, 105.0], 'Volume': [1000, 2000]})
