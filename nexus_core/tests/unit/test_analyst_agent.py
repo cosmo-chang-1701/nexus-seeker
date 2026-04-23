@@ -129,5 +129,82 @@ class TestAnalystAgent(unittest.IsolatedAsyncioTestCase):
         self.assertIn("開盤與流動性執行監控", report7)
         self.assertIn("Mocked NLP Analysis", report7)
 
+    @patch.object(AnalystAgent, '_fetch_macro_data')
+    async def test_run_macro_scan_alerts(self, mock_fetch):
+        bot_mock = MagicMock()
+        agent = AnalystAgent(bot_mock)
+        agent.analyst_task.cancel()
+        
+        # Test 1: All clear (Safe state)
+        mock_fetch.return_value = {
+            'vix': 15.0, 'vix_change': 0.5,
+            'dxy': 100.0,
+            'tnx': 4.0, 'tnx_change_bps': 2.0,
+            'us2y': 3.9 # spread 0.1
+        }
+        report = await agent.run_macro_scan()
+        self.assertIn("✅ **巨觀狀態：**", report)
+        self.assertNotIn("🚨 **風險警示：**", report)
+
+        # Test 2: Inverted Yield Curve (spread < -0.2)
+        mock_fetch.return_value = {
+            'vix': 15.0, 'vix_change': 0.5,
+            'dxy': 100.0,
+            'tnx': 4.0, 'tnx_change_bps': 2.0,
+            'us2y': 4.3 # spread -0.3
+        }
+        report = await agent.run_macro_scan()
+        self.assertIn("🚨 **風險警示：**", report)
+        self.assertIn("殖利率曲線深度倒掛", report)
+        
+        # Test 3: Steepening (-0.1 <= spread <= 0.2 and tnx_change_bps < 0)
+        mock_fetch.return_value = {
+            'vix': 15.0, 'vix_change': 0.5,
+            'dxy': 100.0,
+            'tnx': 4.0, 'tnx_change_bps': -5.0,
+            'us2y': 3.9 # spread 0.1
+        }
+        report = await agent.run_macro_scan()
+        self.assertIn("🚨 **風險警示：**", report)
+        self.assertIn("殖利率曲線接近解除倒掛", report)
+        
+        # Test 4: Rate alert (tnx > 4.5 and tnx_change_bps > 8)
+        mock_fetch.return_value = {
+            'vix': 15.0, 'vix_change': 0.5,
+            'dxy': 100.0,
+            'tnx': 4.6, 'tnx_change_bps': 10.0,
+            'us2y': 4.5 # spread 0.1
+        }
+        report = await agent.run_macro_scan()
+        self.assertIn("10 年期殖利率突破 4.5% 且短期急升", report)
+        
+        # Test 5: Volatility alert (vix > 20 and vix_change > 2.0)
+        mock_fetch.return_value = {
+            'vix': 25.0, 'vix_change': 3.0,
+            'dxy': 100.0,
+            'tnx': 4.0, 'tnx_change_bps': 1.0,
+            'us2y': 3.9 
+        }
+        report = await agent.run_macro_scan()
+        self.assertIn("恐慌指數急遽上升", report)
+        
+        # Test 6: Currency alert (dxy > 105)
+        mock_fetch.return_value = {
+            'vix': 15.0, 'vix_change': 0.5,
+            'dxy': 106.0,
+            'tnx': 4.0, 'tnx_change_bps': 1.0,
+            'us2y': 3.9 
+        }
+        report = await agent.run_macro_scan()
+        self.assertIn("美元指數處於強勢區間", report)
+        
+        # Test 7: Formatting checks
+        self.assertIn("106.00", report) # dxy:.2f
+        self.assertIn("4.00%", report) # tnx:.2f
+        self.assertIn("3.90%", report) # us2y:.2f
+        self.assertIn("+1.0 bps", report) # tnx_change_bps:+.1f
+        self.assertIn("+0.10%", report) # spread:+.2f
+
+
 if __name__ == '__main__':
     unittest.main()

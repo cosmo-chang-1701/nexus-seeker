@@ -1,6 +1,6 @@
 import discord
 from discord.ext import commands, tasks
-from datetime import time, timezone, datetime
+from datetime import time, timezone, datetime, timedelta
 import logging
 import asyncio
 import yfinance as yf
@@ -118,19 +118,60 @@ class AnalystAgent(commands.Cog):
         return 0.0, 0.0, 0.0
 
     async def run_macro_scan(self):
-        vix, dxy, tnx = await self._fetch_macro_data()
-        report = (
-            "**[17:00 UTC+8] 巨觀環境與隔夜市場掃描**\n"
-            "--------------------------------------------------\n"
-            f"**美元指數 (DXY):** {dxy:.2f}\n"
-            f"**10 年期公債殖利率 (TNX):** {tnx:.2f}%\n"
-            f"**恐慌指數 (VIX):** {vix:.2f}\n\n"
-        )
-        if tnx > 4.5:
-            report += "🚨 **風險警示：** 10 年期實質殖利率急升。準備在盤中交易降低對高 Beta 成長股的曝險。"
+        macro_data = await self._fetch_macro_data()
+        
+        # 處理資料格式兼容 (若為舊版 tuple 則轉為新版 dict 預設值)
+        if isinstance(macro_data, tuple):
+            vix, dxy, tnx = macro_data
+            macro_data = {'vix': vix, 'vix_change': 0.0, 'dxy': dxy, 'tnx': tnx, 'tnx_change_bps': 0.0, 'us2y': tnx - 0.2}
+
+        vix = macro_data.get('vix', 0.0)
+        vix_change = macro_data.get('vix_change', 0.0)
+        dxy = macro_data.get('dxy', 0.0)
+        tnx = macro_data.get('tnx', 0.0)
+        tnx_change_bps = macro_data.get('tnx_change_bps', 0.0)
+        us2y = macro_data.get('us2y', 0.0)
+        
+        # 1. 計算利差
+        spread = tnx - us2y
+        
+        # 動態生成台灣時間 (UTC+8) 的當下時間
+        now_tw = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
+        time_str = now_tw.strftime("[%H:%M UTC+8]")
+        
+        # 2. 多因子告警判定
+        alerts = []
+        if spread < -0.2:
+            alerts.append("殖利率曲線深度倒掛。市場反映中長期經濟衰退預期，建議關注防禦型資產")
+        if -0.1 <= spread <= 0.2 and tnx_change_bps < 0:
+            alerts.append("殖利率曲線接近解除倒掛 (陡峭化)。歷史經驗顯示，倒掛解除初期往往伴隨市場波動加劇，請留意衰退交易發酵")
+        if tnx > 4.5 and tnx_change_bps > 8:
+            alerts.append("10 年期殖利率突破 4.5% 且短期急升。建議盤中降低對高 Beta / 估值敏感型成長股的曝險")
+        if vix > 20 and vix_change > 2.0:
+            alerts.append("恐慌指數急遽上升，市場避險情緒發酵，注意流動性風險")
+        if dxy > 105:
+            alerts.append("美元指數處於強勢區間，可能壓抑跨國企業獲利與大宗商品表現")
+            
+        # 3. 組合報告內容
+        report_lines = []
+        report_lines.append(f"**{time_str} 巨觀環境與隔夜市場掃描**")
+        report_lines.append("--------------------------------------------------")
+        report_lines.append(f"**美元指數 (DXY):** {dxy:.2f}")
+        report_lines.append(f"**10 年期公債殖利率 (TNX):** {tnx:.2f}% (單日變化: {tnx_change_bps:+.1f} bps)")
+        report_lines.append(f"**2 年期公債殖利率 (US2Y):** {us2y:.2f}%")
+        report_lines.append(f"**2Y-10Y 利差:** {spread:+.2f}%")
+        report_lines.append(f"**恐慌指數 (VIX):** {vix:.2f} (單日變化: {vix_change:+.2f})")
+        report_lines.append("")
+        
+        # 結論區塊
+        if alerts:
+            report_lines.append("🚨 **風險警示：**")
+            for alert in alerts:
+                report_lines.append(f"- {alert}")
         else:
-            report += "✅ **巨觀狀態：** 信用利差與殖利率目前穩定。維持標準市場部位。"
-        return report
+            report_lines.append("✅ **巨觀狀態：** 殖利率曲線、匯率與波動率未見極端異常。維持標準市場部位。")
+            
+        return "\n".join(report_lines)
 
     async def run_premarket_earnings(self):
         try:
@@ -301,7 +342,8 @@ class AnalystAgent(commands.Cog):
             return f"**[04:00 UTC+8] 盤後交易與每日總結**\n--------------------------------------------------\n系統分析發生錯誤: {e}"
 
     async def run_next_day_strategy(self):
-        vix, _, _ = await self._fetch_macro_data()
+        macro_data = await self._fetch_macro_data()
+        vix = macro_data.get('vix', 0.0) if isinstance(macro_data, dict) else macro_data[0]
         tier = get_vix_tier(vix)
         report = (
             "**[08:00 UTC+8] 次日策略制定**\n"
