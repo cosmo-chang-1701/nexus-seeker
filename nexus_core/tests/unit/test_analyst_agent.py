@@ -53,10 +53,36 @@ class TestAnalystAgent(unittest.IsolatedAsyncioTestCase):
         context = user_settings.get_full_user_context(user_id)
         self.assertFalse(context.enable_analyst_agent, "Context should have enable_analyst_agent=False")
 
+    @patch('cogs.analyst_agent.generate_analyst_report')
+    @patch('cogs.analyst_agent.get_earnings_calendar')
+    @patch('cogs.analyst_agent.get_history_df')
+    @patch('cogs.analyst_agent.analyze_hedge_performance')
+    @patch('cogs.analyst_agent.get_all_watchlist')
     @patch.object(AnalystAgent, '_fetch_macro_data')
-    async def test_analyst_agent_reports(self, mock_fetch):
+    async def test_analyst_agent_reports(self, mock_fetch, mock_watchlist, mock_hedge, mock_history, mock_earnings, mock_llm):
         # Mocking yfinance fetch
         mock_fetch.return_value = (18.5, 105.2, 4.2)
+        
+        # Mock dependencies
+        mock_watchlist.return_value = [(999, 'AAPL'), (999, 'TSLA')]
+        mock_earnings.return_value = [{"date": "2026-05-01", "time": "AMC"}]
+        
+        import pandas as pd
+        mock_df = pd.DataFrame({'Close': [100.0, 105.0], 'Volume': [1000, 2000]})
+        mock_history.return_value = mock_df
+        
+        mock_hedge.return_value = {
+            "net_pnl": 100.0,
+            "alpha_contribution": 80.0,
+            "hedge_contribution": 20.0,
+            "hedge_ratio": 0.5,
+            "effectiveness": 0.8
+        }
+        
+        # Simulate LLM behavior
+        async def fake_llm(report_type, raw_data):
+            return f"**{report_type}**\nMocked NLP Analysis"
+        mock_llm.side_effect = fake_llm
 
         bot_mock = MagicMock()
         agent = AnalystAgent(bot_mock)
@@ -66,17 +92,38 @@ class TestAnalystAgent(unittest.IsolatedAsyncioTestCase):
 
         # Test macro scan report
         report1 = await agent.run_macro_scan()
-        self.assertIn("Global Macro Environment", report1)
+        self.assertIn("巨觀環境與隔夜市場掃描", report1)
         self.assertIn("105.2", report1) # Checks DXY
 
         # Test premarket earnings
         report2 = await agent.run_premarket_earnings()
-        self.assertIn("Pre-Market Earnings Reports", report2)
+        self.assertIn("盤前財報與估值調整", report2)
+        self.assertIn("Mocked NLP Analysis", report2)
 
         # Test next-day strategy
         report3 = await agent.run_next_day_strategy()
-        self.assertIn("Next-Day Strategy Formulation", report3)
+        self.assertIn("次日策略制定", report3)
         self.assertIn("18.5", report3) # Checks VIX
+
+        # Test deep research
+        report4 = await agent.run_deep_research()
+        self.assertIn("深度研究與特定板塊分析", report4)
+        self.assertIn("Mocked NLP Analysis", report4)
+
+        # Test portfolio hedging
+        report5 = await agent.run_portfolio_hedging()
+        self.assertIn("投資組合再平衡與避險策略", report5)
+        self.assertIn("Mocked NLP Analysis", report5)
+
+        # Test postmarket summary
+        report6 = await agent.run_postmarket_summary()
+        self.assertIn("盤後交易與每日總結", report6)
+        self.assertIn("Mocked NLP Analysis", report6)
+
+        # Test market open liquidity
+        report7 = await agent.run_market_open_liquidity()
+        self.assertIn("開盤與流動性執行監控", report7)
+        self.assertIn("Mocked NLP Analysis", report7)
 
 if __name__ == '__main__':
     unittest.main()

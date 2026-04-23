@@ -80,8 +80,6 @@ async def evaluate_trade_risk(symbol: str, strategy: str, news_context: str, red
             instructions=system_prompt, 
             input=user_prompt,
             text_format=RiskAssessment
-            # 備註：若您使用的 vLLM 版本較舊，未完整支援新版 API 或 json_schema，
-            # 則需改用 vLLM 特有的 extra_body 參數
         )
         
         result = response.output_parsed
@@ -96,3 +94,32 @@ async def evaluate_trade_risk(symbol: str, strategy: str, news_context: str, red
         logger.error(f"[{symbol}] LLM 伺服器連線或推論失敗: {e}")
         # Fail-Open 策略
         return {"decision": "APPROVE", "reasoning": f"AI 伺服器離線或異常，預設放行: {str(e)}"}
+
+class AnalystReport(BaseModel):
+    report_content: str = Field(description="完整的分析報告內容 (Markdown 格式)，必須維持原本的標題與分隔線")
+
+async def generate_analyst_report(report_type: str, raw_data: dict) -> str:
+    """
+    將量化資料餵給 LLM，生成口語化且專業的分析報告。
+    """
+    system_prompt = """
+    You are a Wall Street Quantitative Analyst Agent for Nexus Seeker.
+    Your task is to take raw quantitative data and output a concise, professional, and insightful market report in Traditional Chinese (繁體中文).
+    The report should be formatted in Markdown, strictly keeping the specified header format for the given report type.
+    Do not invent numbers, only use the provided raw_data.
+    Keep the tone extremely cold, objective, and analytical.
+    """
+    
+    user_prompt = f"Report Type: {report_type}\nRaw Data: {json.dumps(raw_data, ensure_ascii=False)}\nGenerate the report."
+    
+    try:
+        response = await client.responses.parse(
+            model=LLM_MODEL_NAME,
+            instructions=system_prompt,
+            input=user_prompt,
+            text_format=AnalystReport
+        )
+        return response.output_parsed.report_content
+    except Exception as e:
+        logger.error(f"Failed to generate analyst report: {e}")
+        return f"**{report_type}**\n--------------------------------------------------\n⚠️ LLM 生成失敗或伺服器離線: {str(e)}"
