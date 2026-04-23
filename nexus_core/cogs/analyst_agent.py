@@ -117,6 +117,11 @@ class AnalystAgent(commands.Cog):
             logger.warning(f"Failed to fetch macro proxies: {e}")
         return 0.0, 0.0, 0.0
 
+    def _get_tw_time_str(self) -> str:
+        """動態生成台灣時間 (UTC+8) 的當下時間標籤"""
+        now_tw = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
+        return now_tw.strftime("[%H:%M UTC+8]")
+
     async def run_macro_scan(self):
         macro_data = await self._fetch_macro_data()
         
@@ -136,8 +141,7 @@ class AnalystAgent(commands.Cog):
         spread = tnx - us2y
         
         # 動態生成台灣時間 (UTC+8) 的當下時間
-        now_tw = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
-        time_str = now_tw.strftime("[%H:%M UTC+8]")
+        time_str = self._get_tw_time_str()
         
         # 2. 多因子告警判定
         alerts = []
@@ -174,6 +178,7 @@ class AnalystAgent(commands.Cog):
         return "\n".join(report_lines)
 
     async def run_premarket_earnings(self):
+        time_str = self._get_tw_time_str()
         try:
             # 獲取所有觀察名單標的
             watchlist = get_all_watchlist()
@@ -209,14 +214,15 @@ class AnalystAgent(commands.Cog):
                 "note": "IV and VRP are evaluated dynamically based on recent price action."
             }
             
-            report_type = "[19:30 UTC+8] 盤前財報與估值調整"
+            report_type = f"{time_str} 盤前財報與估值調整"
             report = await generate_analyst_report(report_type, raw_data)
             return report
         except Exception as e:
             logger.error(f"run_premarket_earnings error: {e}")
-            return f"**[19:30 UTC+8] 盤前財報與估值調整**\n--------------------------------------------------\n系統分析發生錯誤: {e}"
+            return f"**{time_str} 盤前財報與估值調整**\n--------------------------------------------------\n系統分析發生錯誤: {e}"
 
     async def run_market_open_liquidity(self):
+        time_str = self._get_tw_time_str()
         try:
             # 選擇一些高 Beta 指標或大盤
             symbols = ["SPY", "QQQ", "IWM"]
@@ -237,14 +243,15 @@ class AnalystAgent(commands.Cog):
                 "liquidity_filter_active": True
             }
             
-            report_type = "[21:30 UTC+8] 開盤與流動性執行監控"
+            report_type = f"{time_str} 開盤與流動性執行監控"
             report = await generate_analyst_report(report_type, raw_data)
             return report
         except Exception as e:
             logger.error(f"run_market_open_liquidity error: {e}")
-            return f"**[21:30 UTC+8] 開盤與流動性執行監控**\n--------------------------------------------------\n系統分析發生錯誤: {e}"
+            return f"**{time_str} 開盤與流動性執行監控**\n--------------------------------------------------\n系統分析發生錯誤: {e}"
 
     async def run_deep_research(self):
+        time_str = self._get_tw_time_str()
         try:
             # 總經板塊分析
             sectors = {"Semiconductors": "SMH", "Technology": "XLK", "Financials": "XLF"}
@@ -278,14 +285,15 @@ class AnalystAgent(commands.Cog):
                 "capex_and_dso_status": "No cyclic oversupply detected based on price momentum proxy."
             }
             
-            report_type = "[00:00 UTC+8] 深度研究與特定板塊分析"
+            report_type = f"{time_str} 深度研究與特定板塊分析"
             report = await generate_analyst_report(report_type, raw_data)
             return report
         except Exception as e:
             logger.error(f"run_deep_research error: {e}")
-            return f"**[00:00 UTC+8] 深度研究與特定板塊分析**\n--------------------------------------------------\n系統分析發生錯誤: {e}"
+            return f"**{time_str} 深度研究與特定板塊分析**\n--------------------------------------------------\n系統分析發生錯誤: {e}"
 
     async def run_portfolio_hedging(self):
+        time_str = self._get_tw_time_str()
         try:
             user_ids = database.get_all_user_ids()
             system_hedge_status = []
@@ -304,14 +312,15 @@ class AnalystAgent(commands.Cog):
                 "note": "Gamma levels and SPY Delta hedge requirements evaluated."
             }
             
-            report_type = "[02:00 UTC+8] 投資組合再平衡與避險策略"
+            report_type = f"{time_str} 投資組合再平衡與避險策略"
             report = await generate_analyst_report(report_type, raw_data)
             return report
         except Exception as e:
             logger.error(f"run_portfolio_hedging error: {e}")
-            return f"**[02:00 UTC+8] 投資組合再平衡與避險策略**\n--------------------------------------------------\n系統分析發生錯誤: {e}"
+            return f"**{time_str} 投資組合再平衡與避險策略**\n--------------------------------------------------\n系統分析發生錯誤: {e}"
 
     async def run_postmarket_summary(self):
+        time_str = self._get_tw_time_str()
         try:
             # 簡單加總當日 PnL
             user_ids = database.get_all_user_ids()
@@ -334,19 +343,20 @@ class AnalystAgent(commands.Cog):
                 "sector_correlation": "Stable"
             }
             
-            report_type = "[04:00 UTC+8] 盤後交易與每日總結"
+            report_type = f"{time_str} 盤後交易與每日總結"
             report = await generate_analyst_report(report_type, raw_data)
             return report
         except Exception as e:
             logger.error(f"run_postmarket_summary error: {e}")
-            return f"**[04:00 UTC+8] 盤後交易與每日總結**\n--------------------------------------------------\n系統分析發生錯誤: {e}"
+            return f"**{time_str} 盤後交易與每日總結**\n--------------------------------------------------\n系統分析發生錯誤: {e}"
 
     async def run_next_day_strategy(self):
+        time_str = self._get_tw_time_str()
         macro_data = await self._fetch_macro_data()
         vix = macro_data.get('vix', 0.0) if isinstance(macro_data, dict) else macro_data[0]
         tier = get_vix_tier(vix)
         report = (
-            "**[08:00 UTC+8] 次日策略制定**\n"
+            f"**{time_str} 次日策略制定**\n"
             "--------------------------------------------------\n"
             f"**當前 VIX:** {vix:.2f} -> **戰鬥階級 (Tier):** {tier}\n"
             "正在分析 VIX 期限結構與偏態指數 (Skew Index)...\n\n"
