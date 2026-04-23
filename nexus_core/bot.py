@@ -19,6 +19,7 @@ class NexusBot(commands.Bot):
         await self.load_extension("cogs.trading")
         await self.load_extension("cogs.research")
         await self.load_extension("cogs.debug")
+        await self.load_extension("cogs.analyst_agent")
         self.loop.create_task(self._message_worker())
         self.loop.create_task(self._health_worker())
         try:

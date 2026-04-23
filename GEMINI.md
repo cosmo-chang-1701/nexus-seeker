@@ -25,7 +25,7 @@ The system is divided into two main services:
 - **`market_analysis/`**: The quant engine. Contains strategy logic (with VIX ladder gating and delta capping), Greek calculations, PowerSqueeze (PSQ) scoring (with VIX-aware momentum labeling), hedging simulations, NRO risk optimization (with dynamic Kelly scaling and All-in bypass), and margin analysis.
 - **`database/`**: Persistent storage layer with an automated migration engine (`database/core.py`) that scans `database/migrations/` on startup.
 - **`services/`**: Business logic layer (TradingService, LLMService, MarketDataService, NewsService, RedditService) that decouples the Discord UI from core computations.
-- **`cogs/`**: Discord extensions implementing slash commands and background tasks (Market Scanning, VTR monitoring, Daily Reports).
+- **`cogs/`**: Discord extensions implementing slash commands and background tasks (Market Scanning, VTR monitoring, Daily Reports, Analyst Agent).
 - **`ui/`**: Reusable Discord UI components and views for interactive commands.
 
 ---
@@ -123,5 +123,6 @@ When modifying VIX ladder behavior:
 - `nexus_core/market_analysis/risk_engine.py`: NRO risk optimizer — inverted VIX macro weights, dynamic Kelly scaling, All-in bypass.
 - `nexus_core/market_analysis/ghost_trader.py`: Virtual Trade Replicator and VTR logic.
 - `nexus_core/cogs/embed_builder.py`: Discord UI/UX generator — renders VIX Battle Status field, momentum labels, and tier-colored embeds.
+- **`nexus_core/cogs/analyst_agent.py`**: Scheduled Wall Street Quantitative Analyst Agent that pushes macro and quantitative reports based on UTC+8 timeslots.
 - `nexus_core/database/core.py`: SQLite migration engine core logic.
 - `nexus_edge_scraper/local_api.py`: Playwright-based scraping endpoint.

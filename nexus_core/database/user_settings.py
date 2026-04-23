@@ -19,6 +19,7 @@ class UserContext:
     enable_option_alerts: bool = True # 是否接收選項策略推播
     enable_vtr: bool = True           # 是否啟用虛擬交易室 (GhostTrader) 自動跟單
     enable_psq_watchlist: bool = False # 是否對 add_watch 標的執行 PowerSqueeze 追蹤
+    enable_analyst_agent: bool = False # 是否啟用 Wall Street Analyst Agent 每日推播
 
 
 # ==========================================
@@ -49,7 +50,7 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:
                 kwargs['portfolio_value'] = kwargs.pop('capital')
             
             # 3. 動態構建 SQL SET 子句 (白名單防護)
-            allowed_keys = {'portfolio_value', 'risk_limit_pct', 'last_rehedge_alert_time', 'dynamic_tau', 'enable_option_alerts', 'enable_vtr', 'enable_psq_watchlist'}
+            allowed_keys = {'portfolio_value', 'risk_limit_pct', 'last_rehedge_alert_time', 'dynamic_tau', 'enable_option_alerts', 'enable_vtr', 'enable_psq_watchlist', 'enable_analyst_agent'}
             update_pairs = []
             values = []
             
@@ -134,7 +135,7 @@ def get_full_user_context(user_id: int) -> UserContext:
             # 1. 查詢使用者基本設定
             cursor.execute("""
                 SELECT portfolio_value, risk_limit_pct, last_rehedge_alert_time, dynamic_tau,
-                       enable_option_alerts, enable_vtr, enable_psq_watchlist
+                       enable_option_alerts, enable_vtr, enable_psq_watchlist, enable_analyst_agent
                 FROM user_settings 
                 WHERE user_id = ?
             """, (user_id,))
@@ -188,7 +189,8 @@ def get_full_user_context(user_id: int) -> UserContext:
                 dynamic_tau=dynamic_tau,
                 enable_option_alerts=_get_bool('enable_option_alerts', True),
                 enable_vtr=_get_bool('enable_vtr', True),
-                enable_psq_watchlist=_get_bool('enable_psq_watchlist', False)
+                enable_psq_watchlist=_get_bool('enable_psq_watchlist', False),
+                enable_analyst_agent=_get_bool('enable_analyst_agent', False)
             )
             
     except Exception as e:

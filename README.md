@@ -140,6 +140,7 @@ Discord 使用者 ──► Discord API ──► NexusBot (bot.py)
 | **每 30 分鐘心跳** (盤中) | VTR 監控與對沖 | 盤中掃描虛擬交易室 (VTR) 持倉，當觸發獲利/停損/Delta 擴表條件時自動平倉或轉倉並即時通知；依據目標 Delta (Target Delta) 提供部位精準對沖建議。 |
 | **動態睡眠** → 收盤後 15 分 (≈ 16:15 ET) | 盤後報告 | 動態結算實單與虛盤損益、Gamma 脆性防禦、計算 SPY Beta-Weighted 宏觀曝險，提出跨板塊相關性警告。同時執行背景快取清理維護資料庫效能。 |
 | **每週五定時** (17:05 ET) | VTR 績效週報 | 收盤後彙總該週虛擬交易室 (VTR) 的勝率、總損益與盈虧比，發送專屬績效報表。 |
+| **每日多時段** (UTC+8 排程) | Analyst Agent | 基於 UTC+8 時區，全自動執行七大模組（涵蓋 17:00 盤前總覽、盤中流動性至 08:00 次日策略），產出量化報告並推播。 |
 
 ---
 
@@ -247,7 +248,7 @@ docker compose up -d --build
 | `/add_trade` | 記錄實際交易以進行監控 | 見下方 |
 | `/list_trades` | 檢視持倉、損益與交易 ID | — |
 | `/remove_trade` | 依 ID 移除已平倉的持倉 | `trade_id: 1` |
-| `/settings` | 配置帳戶全域參數 (資金、風險與 PSQ/VTR 等個人化推播開關) | `capital: 50000 risk_limit: 15 enable_psq_watchlist: True` |
+| `/settings` | 配置帳戶全域參數 (資金、風險與 PSQ/VTR/Analyst Agent 等個人化推播開關) | `capital: 50000 risk_limit: 15 enable_analyst_agent: True` |
 | `/vtr_list` | 列出虛擬交易室 (VTR) 開啟中的所有持倉 | — |
 | `/vtr_stats` | 檢視虛擬交易室 (VTR) 的績效統計 (勝率、損益、盈虧比) | — |
 
@@ -592,6 +593,7 @@ docker compose run --rm -v "$(pwd):/app" nexus_seeker python -m unittest discove
 - [x] **VIX 領域分析 (VIX306)** — 結合 VTS 期限結構與 30/60 日 Z-Score，偵測股市黑天鵝前兆與波動率擴張軌跡，動態觸發 1/4 Kelly 自動降規。
 - [x] **PowerSqueeze 模組 (PSQ)** — 雙路徑解耦量化掃描，獨立於 Option 訊號提供基於 Squeeze 能量突破的即時戰情 (完全對應 TradingView v2 Ultimate Edition 規格)，支援 `/settings` 獨立開關。
 - [x] **VIX 戰情階梯 (Battle Ladder)** — 6 階段 VIX 攻守互換系統，動態調控 Delta 上限、倉位乘數、Kelly 比例與 VTR 建倉許可。NRO 攻勢放大 (高 VIX → w_vix 升至 2.0x)、All-in 旁路繞過宏觀抑制、PSQ 動能標記 (`OVEREXTENDED_RISK` / `HIGH_CONVICTION_RECOVERY`)。
+- [x] **Analyst Agent (量化分析師代理)** — 全自動化 UTC+8 排程引擎，涵蓋盤前宏觀掃描、財報分析、流動性監測與盤後策略規劃，自動將量化報告推播至已訂閱使用者。
 - [ ] **MCP Server** — 將核心量化模組封裝為標準 Model Context Protocol 工具，供外部 AI 代理使用。
 - [ ] **券商 API 整合** — Interactive Brokers Gateway 實現全自動下單執行（訊號 → 執行 → 平倉，零人工介入）。
 

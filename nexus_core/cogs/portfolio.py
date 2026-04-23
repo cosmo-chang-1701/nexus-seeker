@@ -70,7 +70,8 @@ class PortfolioCog(commands.Cog):
         risk_limit="更新基準風險上限 % (1.0 - 50.0)",
         enable_option_alerts="是否接收選項策略推播",
         enable_vtr="是否啟用虛擬交易室 GhostTrader 自動建倉",
-        enable_psq_watchlist="是否對 watchlist 開啟 PowerSqueeze 戰情追蹤"
+        enable_psq_watchlist="是否對 watchlist 開啟 PowerSqueeze 戰情追蹤",
+        enable_analyst_agent="是否啟用 Wall Street Analyst Agent 每日推播"
     )
     async def update_settings(
         self, 
@@ -79,7 +80,8 @@ class PortfolioCog(commands.Cog):
         risk_limit: Optional[float] = None,
         enable_option_alerts: Optional[bool] = None,
         enable_vtr: Optional[bool] = None,
-        enable_psq_watchlist: Optional[bool] = None
+        enable_psq_watchlist: Optional[bool] = None,
+        enable_analyst_agent: Optional[bool] = None
     ):
         user_id = interaction.user.id
         updates = []
@@ -113,6 +115,10 @@ class PortfolioCog(commands.Cog):
         if enable_psq_watchlist is not None:
             kwargs['enable_psq_watchlist'] = enable_psq_watchlist
             updates.append(f"⚡ PowerSqueeze 追蹤: `{'開啟' if enable_psq_watchlist else '關閉'}`")
+
+        if enable_analyst_agent is not None:
+            kwargs['enable_analyst_agent'] = enable_analyst_agent
+            updates.append(f"🤖 Analyst Agent 每日推播: `{'開啟' if enable_analyst_agent else '關閉'}`")
 
         # 4. 執行資料庫更新
         if not kwargs:
