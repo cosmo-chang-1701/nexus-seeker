@@ -109,9 +109,9 @@ class AnalystAgent(commands.Cog):
         try:
             hist = await asyncio.to_thread(fetch)
             if not hist.empty:
-                vix = hist['Close']['^VIX'].iloc[-1] if '^VIX' in hist['Close'] else 0.0
-                dxy = hist['Close']['DX-Y.NYB'].iloc[-1] if 'DX-Y.NYB' in hist['Close'] else 0.0
-                tnx = hist['Close']['^TNX'].iloc[-1] if '^TNX' in hist['Close'] else 0.0
+                vix = float(hist['Close']['^VIX'].dropna().iloc[-1]) if '^VIX' in hist['Close'] and not hist['Close']['^VIX'].dropna().empty else 0.0
+                dxy = float(hist['Close']['DX-Y.NYB'].dropna().iloc[-1]) if 'DX-Y.NYB' in hist['Close'] and not hist['Close']['DX-Y.NYB'].dropna().empty else 0.0
+                tnx = float(hist['Close']['^TNX'].dropna().iloc[-1]) if '^TNX' in hist['Close'] and not hist['Close']['^TNX'].dropna().empty else 0.0
                 return vix, dxy, tnx
         except Exception as e:
             logger.warning(f"Failed to fetch macro proxies: {e}")
