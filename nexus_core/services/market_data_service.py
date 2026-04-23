@@ -343,7 +343,9 @@ async def get_earnings_calendar(
             to=to_date,
             symbol=symbol
         )
-        return data.get('earningsCalendar', []) if data else []
+        earnings = data.get('earningsCalendar', []) if data else []
+        earnings.sort(key=lambda x: x.get('date', ''))
+        return earnings
     except Exception as e:
         logger.error(f"[{symbol}] Finnhub earnings calendar 失敗: {e}")
         return []
