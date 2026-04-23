@@ -593,7 +593,7 @@ docker compose run --rm -v "$(pwd):/app" nexus_seeker python -m unittest discove
 - [x] **VIX 領域分析 (VIX306)** — 結合 VTS 期限結構與 30/60 日 Z-Score，偵測股市黑天鵝前兆與波動率擴張軌跡，動態觸發 1/4 Kelly 自動降規。
 - [x] **PowerSqueeze 模組 (PSQ)** — 雙路徑解耦量化掃描，獨立於 Option 訊號提供基於 Squeeze 能量突破的即時戰情 (完全對應 TradingView v2 Ultimate Edition 規格)，支援 `/settings` 獨立開關。
 - [x] **VIX 戰情階梯 (Battle Ladder)** — 6 階段 VIX 攻守互換系統，動態調控 Delta 上限、倉位乘數、Kelly 比例與 VTR 建倉許可。NRO 攻勢放大 (高 VIX → w_vix 升至 2.0x)、All-in 旁路繞過宏觀抑制、PSQ 動能標記 (`OVEREXTENDED_RISK` / `HIGH_CONVICTION_RECOVERY`)。
-- [x] **Analyst Agent (量化分析師代理)** — 全自動化 UTC+8 排程引擎，涵蓋盤前宏觀掃描、財報分析、流動性監測與盤後策略規劃，自動將量化報告推播至已訂閱使用者。
+- [x] **Analyst Agent (量化分析師代理)** — 全自動化 UTC+8 排程引擎，涵蓋盤前宏觀掃描（具備多因子警示如殖利率倒掛、DXY與VIX急升）、財報分析、流動性監測與盤後策略規劃，自動將量化報告推播至已訂閱使用者。
 - [ ] **MCP Server** — 將核心量化模組封裝為標準 Model Context Protocol 工具，供外部 AI 代理使用。
 - [ ] **券商 API 整合** — Interactive Brokers Gateway 實現全自動下單執行（訊號 → 執行 → 平倉，零人工介入）。
 
