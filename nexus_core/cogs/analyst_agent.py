@@ -195,8 +195,8 @@ class AnalystAgent(commands.Cog):
             upcoming_symbols = list(earnings_data.keys())[:2]
             sentiment_data = {}
             if upcoming_symbols:
-                news_tasks = [fetch_recent_news(sym, limit=3) for sym in upcoming_symbols]
-                reddit_tasks = [get_reddit_context(sym, limit=3) for sym in upcoming_symbols]
+                news_tasks = [fetch_recent_news(sym) for sym in upcoming_symbols]
+                reddit_tasks = [get_reddit_context(sym) for sym in upcoming_symbols]
                 
                 news_results = await asyncio.gather(*news_tasks, return_exceptions=True)
                 reddit_results = await asyncio.gather(*reddit_tasks, return_exceptions=True)
@@ -259,8 +259,8 @@ class AnalystAgent(commands.Cog):
             
             # 並行獲取價格歷史、新聞與 Reddit 資訊
             hist_tasks = [get_history_df(sym, period="3mo") for sym in sectors.values()]
-            news_tasks = [fetch_recent_news(sym, limit=2) for sym in sectors.values()]
-            reddit_tasks = [get_reddit_context(sym, limit=2) for sym in sectors.values()]
+            news_tasks = [fetch_recent_news(sym) for sym in sectors.values()]
+            reddit_tasks = [get_reddit_context(sym) for sym in sectors.values()]
             
             hist_results = await asyncio.gather(*hist_tasks, return_exceptions=True)
             news_results = await asyncio.gather(*news_tasks, return_exceptions=True)
