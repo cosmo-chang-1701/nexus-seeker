@@ -355,10 +355,11 @@ class AnalystAgent(commands.Cog):
         macro_data = await self._fetch_macro_data()
         vix = macro_data.get('vix', 0.0) if isinstance(macro_data, dict) else macro_data[0]
         tier = get_vix_tier(vix)
+        tier_display = f"{tier.get('emoji', '')} {tier.get('name', 'Unknown')}"
         report = (
             f"**{time_str} 次日策略制定**\n"
             "--------------------------------------------------\n"
-            f"**當前 VIX:** {vix:.2f} -> **戰鬥階級 (Tier):** {tier}\n"
+            f"**當前 VIX:** {vix:.2f} -> **戰鬥階級 (Tier):** {tier_display}\n"
             "正在分析 VIX 期限結構與偏態指數 (Skew Index)...\n\n"
             "**戰術建議：**\n"
         )
