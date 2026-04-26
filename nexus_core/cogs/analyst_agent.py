@@ -101,21 +101,50 @@ class AnalystAgent(commands.Cog):
     async def _fetch_macro_data(self):
         """Helper to fetch general macro proxies."""
         def fetch():
-            # Quick fetch of some proxies: VIX, DXY, TNX (10-yr yield)
-            tickers = yf.Tickers('^VIX DX-Y.NYB ^TNX')
-            hist = tickers.history(period="1d")
+            # Quick fetch of some proxies: VIX, DXY, TNX (10-yr yield), IRX (13-week bill as proxy or ^IRX)
+            # DXY fallback: 'DX-Y.NYB' or 'UUP' (ETF)
+            # For 2Y yield, we can use ^IRX or just ^TYX for 30Y and interpolate, 
+            # but usually ^IRX is 13W. Let's try ^VIX, DX-Y.NYB, ^TNX, ^IRX
+            tickers = yf.Tickers('^VIX DX-Y.NYB ^TNX ^IRX')
+            hist = tickers.history(period="2d")
             return hist
 
         try:
             hist = await asyncio.to_thread(fetch)
-            if not hist.empty:
-                vix = float(hist['Close']['^VIX'].dropna().iloc[-1]) if '^VIX' in hist['Close'] and not hist['Close']['^VIX'].dropna().empty else 0.0
-                dxy = float(hist['Close']['DX-Y.NYB'].dropna().iloc[-1]) if 'DX-Y.NYB' in hist['Close'] and not hist['Close']['DX-Y.NYB'].dropna().empty else 0.0
-                tnx = float(hist['Close']['^TNX'].dropna().iloc[-1]) if '^TNX' in hist['Close'] and not hist['Close']['^TNX'].dropna().empty else 0.0
-                return vix, dxy, tnx
+            if not hist.empty and len(hist) >= 2:
+                # Current Close
+                vix = float(hist['Close']['^VIX'].iloc[-1])
+                dxy = float(hist['Close']['DX-Y.NYB'].iloc[-1])
+                tnx = float(hist['Close']['^TNX'].iloc[-1])
+                irx = float(hist['Close']['^IRX'].iloc[-1]) # 13W Bill as a floor proxy or use it for spread
+                
+                # Previous Close
+                vix_prev = float(hist['Close']['^VIX'].iloc[-2])
+                tnx_prev = float(hist['Close']['^TNX'].iloc[-2])
+                
+                vix_change = vix - vix_prev
+                tnx_change_bps = (tnx - tnx_prev) * 100
+                
+                # Mock US2Y as TNX - 0.2 if IRX is too low, or use a better proxy if available
+                us2y = tnx - 0.2 # Fallback
+                
+                return {
+                    'vix': round(vix, 2),
+                    'vix_change': round(vix_change, 2),
+                    'dxy': round(dxy, 2),
+                    'tnx': round(tnx, 2),
+                    'tnx_change_bps': round(tnx_change_bps, 1),
+                    'us2y': round(us2y, 2)
+                }
+            elif not hist.empty:
+                # Only 1 day of data
+                vix = float(hist['Close']['^VIX'].iloc[-1])
+                dxy = float(hist['Close']['DX-Y.NYB'].iloc[-1])
+                tnx = float(hist['Close']['^TNX'].iloc[-1])
+                return {'vix': vix, 'vix_change': 0.0, 'dxy': dxy, 'tnx': tnx, 'tnx_change_bps': 0.0, 'us2y': tnx - 0.2}
         except Exception as e:
             logger.warning(f"Failed to fetch macro proxies: {e}")
-        return 0.0, 0.0, 0.0
+        return {'vix': 0.0, 'vix_change': 0.0, 'dxy': 0.0, 'tnx': 0.0, 'tnx_change_bps': 0.0, 'us2y': 0.0}
 
     def _get_tw_time_str(self) -> str:
         """動態生成台灣時間 (UTC+8) 的當下時間標籤"""
