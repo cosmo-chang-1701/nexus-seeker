@@ -21,7 +21,7 @@ The system is divided into two main services:
 2.  **`nexus_edge_scraper`**: A specialized service (intended to run locally or via tunnel) that uses Playwright to scrape Reddit sentiment and consensus scores without triggering bot detection on cloud IPs.
 
 ### Core Modules (`nexus_core`)
-- **`config.py`**: Global configuration constants including `VIX_LADDER_CONFIG` (6-tier system: Dormant/Caution/Ready/Aggressive/Heavy/All-in), `VIX_QUANTILE_BOUNDS`, and the `get_vix_tier()` helper function.
+- **`config.py`**: Global configuration constants including `VIX_LADDER_CONFIG` (6-tier system: Dormant/Caution/Ready/Aggressive/Heavy/All-in), `VIX_QUANTILE_BOUNDS`, and the `get_vix_tier()` helper function (includes NaN/None robustness with "Ready" fallback).
 - **`market_analysis/`**: The quant engine. Contains strategy logic (with VIX ladder gating and delta capping), Greek calculations, PowerSqueeze (PSQ) scoring (with VIX-aware momentum labeling), hedging simulations, NRO risk optimization (with dynamic Kelly scaling and All-in bypass), and margin analysis.
 - **`database/`**: Persistent storage layer with an automated migration engine (`database/core.py`) that scans `database/migrations/` on startup.
 - **`services/`**: Business logic layer (TradingService, LLMService, MarketDataService, NewsService, RedditService) that decouples the Discord UI from core computations.
@@ -95,7 +95,7 @@ The VIX Battle Ladder is a 6-tier system defined in `config.py` (`VIX_LADDER_CON
 - **Heavy** (30-35): Sizing 1.5x, dynamic Kelly scaling. `w_vix = 1.5`.
 - **All-in** (>= 35): Sizing 2.0x, 1/2 Kelly override, bypass oil/regime dampening. `w_vix = 2.0`.
 
-VIX spot is fetched once per scan cycle in `TradingService.run_market_scan()` and propagated to `analyze_symbol()`, `analyze_psq()`, and VTR entry gating. The `vix_battle_status` dict is injected into result data for UI rendering via `embed_builder.py`.
+VIX spot is fetched once per scan cycle in `TradingService.run_market_scan()` and propagated to `analyze_symbol()`, `analyze_psq()`, and VTR entry gating. The `vix_battle_status` dict is injected into result data for UI rendering via `embed_builder.py`. The `get_vix_tier()` helper ensures system resilience by defaulting to the "Ready" tier if input is `None` or `NaN`.
 
 When modifying VIX ladder behavior:
 - Tier definitions: Edit `VIX_LADDER_CONFIG` in `config.py`.
@@ -115,7 +115,7 @@ When modifying VIX ladder behavior:
 ## Key Files Summary
 - `nexus_core/main.py`: Application entry point.
 - `nexus_core/bot.py`: Main Bot class and background worker initialization.
-- `nexus_core/config.py`: Global configuration — env vars, strategy Delta params, **VIX Battle Ladder** tier definitions (`VIX_LADDER_CONFIG`), and `get_vix_tier()` helper.
+- `nexus_core/config.py`: Global configuration — env vars, strategy Delta params, **VIX Battle Ladder** tier definitions (`VIX_LADDER_CONFIG`), and `get_vix_tier()` helper (with NaN robustness).
 - `nexus_core/market_time.py`: NYSE market calendar and timezone-aware scheduling.
 - `nexus_core/services/trading_service.py`: Centralized business logic orchestrator. Propagates `vix_spot` through scan pipeline, gates VTR entry by tier.
 - `nexus_core/market_analysis/strategy.py`: Quant scanning and filtering pipeline. VIX ladder gating (`apply_vix_ladder()`), delta capping, and sizing multiplier.
@@ -123,6 +123,6 @@ When modifying VIX ladder behavior:
 - `nexus_core/market_analysis/risk_engine.py`: NRO risk optimizer — inverted VIX macro weights, dynamic Kelly scaling, All-in bypass.
 - `nexus_core/market_analysis/ghost_trader.py`: Virtual Trade Replicator and VTR logic.
 - `nexus_core/cogs/embed_builder.py`: Discord UI/UX generator — renders VIX Battle Status field, momentum labels, and tier-colored embeds.
-- **`nexus_core/cogs/analyst_agent.py`**: Scheduled Wall Street Quantitative Analyst Agent that pushes macro and quantitative reports based on UTC+8 timeslots. Features multi-factor macro alerts (Yield Curve Spread, DXY, VIX).
+- **`nexus_core/cogs/analyst_agent.py`**: Scheduled Wall Street Quantitative Analyst Agent that pushes macro and quantitative reports based on UTC+8 timeslots (e.g., Next-Day Strategy at 01:00 UTC / 09:00 UTC+8). Features multi-factor macro alerts (Yield Curve Spread, DXY, VIX).
 - `nexus_core/database/core.py`: SQLite migration engine core logic.
 - `nexus_edge_scraper/local_api.py`: Playwright-based scraping endpoint.
