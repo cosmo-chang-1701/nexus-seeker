@@ -13,6 +13,7 @@ import logging
 import time
 import json
 import random
+import math
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 
@@ -411,10 +412,14 @@ async def get_macro_environment() -> Dict[str, float]:
             logger.warning("宏觀數據 (VIX/Oil) 抓取結果為空，使用預設值")
             return {"vix": 18.0, "oil": 75.0, "vix_change": 0.0}
 
+        vix_val = float(vix_df['Close'].iloc[-1])
+        oil_val = float(oil_df['Close'].iloc[-1])
+        vix_change_val = float(vix_df['Close'].pct_change().iloc[-1])
+
         return {
-            "vix": round(float(vix_df['Close'].iloc[-1]), 2),
-            "oil": round(float(oil_df['Close'].iloc[-1]), 2),
-            "vix_change": round(float(vix_df['Close'].pct_change().iloc[-1]), 4)
+            "vix": round(vix_val, 2) if not math.isnan(vix_val) else 18.0,
+            "oil": round(oil_val, 2) if not math.isnan(oil_val) else 75.0,
+            "vix_change": round(vix_change_val, 4) if not math.isnan(vix_change_val) else 0.0
         }
     except Exception as e:
         logger.error(f"宏觀環境參數獲取失敗: {e}")

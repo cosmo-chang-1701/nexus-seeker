@@ -208,3 +208,45 @@ class TestAnalystAgent(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class TestAnalystAgentVixNaN(unittest.IsolatedAsyncioTestCase):
+    async def test_run_next_day_strategy_handles_nan(self):
+        """Verify that AnalystAgent handles NaN VIX gracefully in strategy reports."""
+        bot_mock = MagicMock()
+        agent = AnalystAgent(bot_mock)
+        agent.analyst_task.cancel()
+
+        # Mock _fetch_macro_data to return NaN
+        async def mock_fetch():
+            return {'vix': float('nan'), 'vix_change': 0.0, 'dxy': 0.0, 'tnx': 0.0, 'tnx_change_bps': 0.0, 'us2y': 0.0}
+        
+        with patch.object(AnalystAgent, '_fetch_macro_data', side_effect=mock_fetch):
+            report = await agent.run_next_day_strategy()
+            # Should display N/A and still map to a tier (Ready)
+            self.assertIn("N/A (Using Default)", report)
+            self.assertIn("摩拳擦掌 (Ready)", report)
+
+class TestAnalystAgentTimeRouting(unittest.IsolatedAsyncioTestCase):
+    @patch('cogs.analyst_agent.datetime')
+    @patch.object(AnalystAgent, 'dispatch_report')
+    @patch.object(AnalystAgent, 'run_next_day_strategy')
+    async def test_analyst_task_routes_at_0100_utc(self, mock_strategy, mock_dispatch, mock_datetime):
+        """Verify that the task triggers the strategy report at 01:00 UTC."""
+        # Setup mock time to 01:00 UTC
+        mock_now = MagicMock()
+        mock_now.hour = 1
+        mock_now.minute = 0
+        # Mock datetime.now(timezone.utc)
+        mock_datetime.now.return_value = mock_now
+        
+        bot_mock = MagicMock()
+        agent = AnalystAgent(bot_mock)
+        agent.analyst_task.cancel()
+        
+        mock_strategy.return_value = "Mock Strategy Report"
+        
+        # Manually trigger the task logic
+        await agent.analyst_task()
+        
+        mock_strategy.assert_called_once()
+        mock_dispatch.assert_called_once_with("Mock Strategy Report")

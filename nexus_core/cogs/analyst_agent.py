@@ -3,6 +3,7 @@ from discord.ext import commands, tasks
 from datetime import time, timezone, datetime, timedelta
 import logging
 import asyncio
+import math
 import yfinance as yf
 
 import database
@@ -65,10 +66,9 @@ class AnalystAgent(commands.Cog):
             elif hour == 18 and minute == 0:
                 report = await self.run_portfolio_hedging()
             elif hour == 20 and minute == 0:
-                report = await self.run_postmarket_summary()
-            elif hour == 0 and minute == 0:
-                report = await self.run_next_day_strategy()
-            
+               report = await self.run_postmarket_summary()
+            elif hour == 1 and minute == 0:
+               report = await self.run_next_day_strategy()
             if report:
                 await self.dispatch_report(report)
         except Exception as e:
@@ -122,17 +122,23 @@ class AnalystAgent(commands.Cog):
                 vix_prev = float(hist['Close']['^VIX'].iloc[-2])
                 tnx_prev = float(hist['Close']['^TNX'].iloc[-2])
                 
-                vix_change = vix - vix_prev
-                tnx_change_bps = (tnx - tnx_prev) * 100
+                # Check for NaN and fallback
+                if math.isnan(vix):
+                    vix = float('nan')
+                if math.isnan(vix_prev):
+                    vix_prev = vix
+                
+                vix_change = vix - vix_prev if not math.isnan(vix) and not math.isnan(vix_prev) else 0.0
+                tnx_change_bps = (tnx - tnx_prev) * 100 if not (math.isnan(tnx) or math.isnan(tnx_prev)) else 0.0
                 
                 # Mock US2Y as TNX - 0.2 if IRX is too low, or use a better proxy if available
-                us2y = tnx - 0.2 # Fallback
+                us2y = tnx - 0.2 if not math.isnan(tnx) else 0.0 # Fallback
                 
                 return {
                     'vix': round(vix, 2),
                     'vix_change': round(vix_change, 2),
-                    'dxy': round(dxy, 2),
-                    'tnx': round(tnx, 2),
+                    'dxy': round(dxy, 2) if not math.isnan(dxy) else 0.0,
+                    'tnx': round(tnx, 2) if not math.isnan(tnx) else 0.0,
                     'tnx_change_bps': round(tnx_change_bps, 1),
                     'us2y': round(us2y, 2)
                 }
@@ -141,6 +147,11 @@ class AnalystAgent(commands.Cog):
                 vix = float(hist['Close']['^VIX'].iloc[-1])
                 dxy = float(hist['Close']['DX-Y.NYB'].iloc[-1])
                 tnx = float(hist['Close']['^TNX'].iloc[-1])
+                
+                vix = float('nan') if math.isnan(vix) else vix
+                dxy = 0.0 if math.isnan(dxy) else dxy
+                tnx = 0.0 if math.isnan(tnx) else tnx
+                
                 return {'vix': vix, 'vix_change': 0.0, 'dxy': dxy, 'tnx': tnx, 'tnx_change_bps': 0.0, 'us2y': tnx - 0.2}
         except Exception as e:
             logger.warning(f"Failed to fetch macro proxies: {e}")
@@ -385,10 +396,13 @@ class AnalystAgent(commands.Cog):
         vix = macro_data.get('vix', 0.0) if isinstance(macro_data, dict) else macro_data[0]
         tier = get_vix_tier(vix)
         tier_display = f"{tier.get('emoji', '')} {tier.get('name', 'Unknown')}"
+        
+        vix_display = f"{vix:.2f}" if not math.isnan(vix) else "N/A (Using Default)"
+        
         report = (
             f"**{time_str} 次日策略制定**\n"
             "--------------------------------------------------\n"
-            f"**當前 VIX:** {vix:.2f} -> **戰鬥階級 (Tier):** {tier_display}\n"
+            f"**當前 VIX:** {vix_display} -> **戰鬥階級 (Tier):** {tier_display}\n"
             "正在分析 VIX 期限結構與偏態指數 (Skew Index)...\n\n"
             "**戰術建議：**\n"
         )

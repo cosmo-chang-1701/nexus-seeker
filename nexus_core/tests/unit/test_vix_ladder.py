@@ -96,8 +96,14 @@ class TestGetVixTier(unittest.TestCase):
 
     def test_none_vix_defaults_to_ready(self):
         """None VIX should fallback to Ready tier (safe default)."""
-        tier = get_vix_tier(None)
-        self.assertEqual(tier["name"], "摩拳擦掌 (Ready)")
+        res = get_vix_tier(None)
+        self.assertEqual(res["name"], "摩拳擦掌 (Ready)")
+
+    def test_nan_vix_defaults_to_ready(self):
+        """NaN VIX should fallback to Ready tier (safe default)."""
+        res = get_vix_tier(float('nan'))
+        self.assertEqual(res["name"], "摩拳擦掌 (Ready)")
+
 
     def test_negative_vix_defaults_to_ready(self):
         tier = get_vix_tier(-5.0)

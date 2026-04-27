@@ -116,12 +116,15 @@ VIX_QUANTILE_BOUNDS = {
 }
 
 
+import math
+
+
 def get_vix_tier(vix_spot: float) -> dict:
     """根據 VIX 即時價格回傳對應的戰情階梯 tier 配置。
 
-    若 vix_spot 為 None 或無效值，回傳 Ready 階梯作為安全預設值。
+    若 vix_spot 為 None、NaN 或無效值，回傳 Ready 階梯作為安全預設值。
     """
-    if vix_spot is None or vix_spot < 0:
+    if vix_spot is None or math.isnan(vix_spot) or vix_spot < 0:
         # 預設回傳 Ready 階梯 (index=2)，避免因資料遺失而硬拒所有訊號
         return VIX_LADDER_CONFIG[2]
 
