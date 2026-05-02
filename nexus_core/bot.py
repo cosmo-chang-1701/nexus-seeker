@@ -20,8 +20,19 @@ class NexusBot(commands.Bot):
         await self.load_extension("cogs.research")
         await self.load_extension("cogs.debug")
         await self.load_extension("cogs.analyst_agent")
+        
+        # 啟動背景任務與服務
         self.loop.create_task(self._message_worker())
         self.loop.create_task(self._health_worker())
+        
+        # 啟動 Polymarket 巨鯨監控服務
+        try:
+            from services.polymarket_service import PolymarketService
+            self.polymarket_service = PolymarketService(self)
+            self.polymarket_service.start()
+        except Exception as e:
+            logger.error(f"❌ 啟動 Polymarket 服務失敗: {e}")
+
         try:
             synced = await self.tree.sync()
             logger.info(f"✅ 成功同步 {len(synced)} 個 Slash Commands")
@@ -37,6 +48,14 @@ class NexusBot(commands.Bot):
 
     async def close(self):
         logger.info("🛑 Nexus Seeker 正在關閉...")
+        
+        # 停止 Polymarket 服務
+        if hasattr(self, 'polymarket_service'):
+            try:
+                self.polymarket_service.stop()
+            except Exception as e:
+                logger.error(f"停止 Polymarket 服務時出錯: {e}")
+
         try:
             await self.notify_all_users("🛑 Nexus Seeker 機器人正在關閉，請稍候...")
         except Exception as e:

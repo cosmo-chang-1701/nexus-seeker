@@ -109,9 +109,9 @@ async def generate_analyst_report(report_type: str, raw_data: dict) -> str:
     Do not invent numbers, only use the provided raw_data.
     Keep the tone extremely cold, objective, and analytical.
     """
-    
+
     user_prompt = f"Report Type: {report_type}\nRaw Data: {json.dumps(raw_data, ensure_ascii=False)}\nGenerate the report."
-    
+
     try:
         response = await client.responses.parse(
             model=LLM_MODEL_NAME,
@@ -123,3 +123,41 @@ async def generate_analyst_report(report_type: str, raw_data: dict) -> str:
     except Exception as e:
         logger.error(f"Failed to generate analyst report: {e}")
         return f"**{report_type}**\n--------------------------------------------------\n⚠️ LLM 生成失敗或伺服器離線: {str(e)}"
+
+async def generate_polymarket_summary(market_info: dict, trade_data: dict, usd_value: float) -> str:
+    """
+    針對 Polymarket 巨鯨交易生成背景總結與情緒分析。
+    """
+    system_prompt = """
+    你是一位專業的預測市場分析師。請針對 Polymarket 的大額交易（巨鯨交易）提供簡短、專業的背景總結與市場情緒分析。
+    請使用繁體中文 (Traditional Chinese)。
+    報告應包含：
+    1. 事件背景簡述。
+    2. 此筆大額交易可能的動機或市場意義。
+    3. 當前的市場情緒評估。
+    總字數請控制在 150 字以內，語氣專業且客觀。
+    """
+
+    user_prompt = f"""
+    ### Polymarket Trade Detected
+    - **Market Question**: {market_info.get('question', 'Unknown')}
+    - **Market Description**: {market_info.get('description', 'No description available')}
+    - **Trade Side**: {trade_data.get('side', 'Unknown')}
+    - **Trade Size**: {trade_data.get('size', 0)}
+    - **Trade Price**: {trade_data.get('price', 0)}
+    - **Total USD Value**: ${usd_value:,.2f}
+    ---
+    請根據以上資訊生成分析報告。
+    """
+
+    try:
+        response = await client.responses.parse(
+            model=LLM_MODEL_NAME,
+            instructions=system_prompt,
+            input=user_prompt,
+            text_format=AnalystReport
+        )
+        return response.output_parsed.report_content
+    except Exception as e:
+        logger.error(f"Failed to generate polymarket summary: {e}")
+        return "⚠️ 無法生成 AI 總結，請參考原始交易數據。"

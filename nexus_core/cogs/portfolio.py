@@ -71,7 +71,8 @@ class PortfolioCog(commands.Cog):
         enable_option_alerts="是否接收選項策略推播",
         enable_vtr="是否啟用虛擬交易室 GhostTrader 自動建倉",
         enable_psq_watchlist="是否對 watchlist 開啟 PowerSqueeze 戰情追蹤",
-        enable_analyst_agent="是否啟用 Wall Street Analyst Agent 每日推播"
+        enable_analyst_agent="是否啟用 Wall Street Analyst Agent 每日推播",
+        polymarket_threshold="Polymarket 巨鯨監控門檻 (USD, 0=關閉)"
     )
     async def update_settings(
         self, 
@@ -81,7 +82,8 @@ class PortfolioCog(commands.Cog):
         enable_option_alerts: Optional[bool] = None,
         enable_vtr: Optional[bool] = None,
         enable_psq_watchlist: Optional[bool] = None,
-        enable_analyst_agent: Optional[bool] = None
+        enable_analyst_agent: Optional[bool] = None,
+        polymarket_threshold: Optional[float] = None
     ):
         user_id = interaction.user.id
         updates = []
@@ -119,6 +121,11 @@ class PortfolioCog(commands.Cog):
         if enable_analyst_agent is not None:
             kwargs['enable_analyst_agent'] = enable_analyst_agent
             updates.append(f"🤖 Analyst Agent 每日推播: `{'開啟' if enable_analyst_agent else '關閉'}`")
+
+        if polymarket_threshold is not None:
+            kwargs['polymarket_threshold'] = polymarket_threshold
+            status = f"`${polymarket_threshold:,.0f}`" if polymarket_threshold > 0 else "`關閉`"
+            updates.append(f"🐋 Polymarket 監控: {status}")
 
         # 4. 執行資料庫更新
         if not kwargs:

@@ -20,6 +20,7 @@ class UserContext:
     enable_vtr: bool = True           # 是否啟用虛擬交易室 (GhostTrader) 自動跟單
     enable_psq_watchlist: bool = False # 是否對 add_watch 標的執行 PowerSqueeze 追蹤
     enable_analyst_agent: bool = False # 是否啟用 Wall Street Analyst Agent 每日推播
+    polymarket_threshold: float = 10000.0 # Polymarket 巨鯨監控門檻 (USD, 0=關閉)
 
 
 # ==========================================
@@ -30,7 +31,7 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:
     """
     單一更新路徑 (Single Update Path)：
     根據傳入的關鍵字參數動態更新 user_settings 表中的欄位。
-    支援欄位：capital / portfolio_value, risk_limit_pct
+    支援欄位：capital / portfolio_value, risk_limit_pct, polymarket_threshold ...
     """
     if not kwargs:
         return False
@@ -50,7 +51,9 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:
                 kwargs['portfolio_value'] = kwargs.pop('capital')
             
             # 3. 動態構建 SQL SET 子句 (白名單防護)
-            allowed_keys = {'portfolio_value', 'risk_limit_pct', 'last_rehedge_alert_time', 'dynamic_tau', 'enable_option_alerts', 'enable_vtr', 'enable_psq_watchlist', 'enable_analyst_agent'}
+            allowed_keys = {'portfolio_value', 'risk_limit_pct', 'last_rehedge_alert_time', 'dynamic_tau', 
+                            'enable_option_alerts', 'enable_vtr', 'enable_psq_watchlist', 'enable_analyst_agent',
+                            'polymarket_threshold'}
             update_pairs = []
             values = []
             
@@ -61,6 +64,10 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:
                     # 針對風險限制做數值防護
                     if key == 'risk_limit_pct':
                         value = max(1.0, min(value, 50.0))
+                    # Polymarket 門檻防護
+                    if key == 'polymarket_threshold':
+                        value = max(0.0, float(value))
+                        
                     update_pairs.append(f"{key} = ?")
                     values.append(value)
             
@@ -135,7 +142,8 @@ def get_full_user_context(user_id: int) -> UserContext:
             # 1. 查詢使用者基本設定
             cursor.execute("""
                 SELECT portfolio_value, risk_limit_pct, last_rehedge_alert_time, dynamic_tau,
-                       enable_option_alerts, enable_vtr, enable_psq_watchlist, enable_analyst_agent
+                       enable_option_alerts, enable_vtr, enable_psq_watchlist, enable_analyst_agent,
+                       polymarket_threshold
                 FROM user_settings 
                 WHERE user_id = ?
             """, (user_id,))
@@ -171,6 +179,7 @@ def get_full_user_context(user_id: int) -> UserContext:
             risk_limit = float(user_row['risk_limit_pct']) if user_row and user_row['risk_limit_pct'] is not None else 15.0
             last_rehedge = int(user_row['last_rehedge_alert_time']) if user_row and 'last_rehedge_alert_time' in user_row.keys() and user_row['last_rehedge_alert_time'] is not None else 0
             dynamic_tau = float(user_row['dynamic_tau']) if user_row and 'dynamic_tau' in user_row.keys() and user_row['dynamic_tau'] is not None else 1.0
+            poly_threshold = float(user_row['polymarket_threshold']) if user_row and 'polymarket_threshold' in user_row.keys() and user_row['polymarket_threshold'] is not None else 10000.0
             
             # Helper for booleans
             def _get_bool(key: str, default: bool) -> bool:
@@ -190,7 +199,8 @@ def get_full_user_context(user_id: int) -> UserContext:
                 enable_option_alerts=_get_bool('enable_option_alerts', True),
                 enable_vtr=_get_bool('enable_vtr', True),
                 enable_psq_watchlist=_get_bool('enable_psq_watchlist', False),
-                enable_analyst_agent=_get_bool('enable_analyst_agent', False)
+                enable_analyst_agent=_get_bool('enable_analyst_agent', False),
+                polymarket_threshold=poly_threshold
             )
             
     except Exception as e:

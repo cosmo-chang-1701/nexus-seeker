@@ -77,5 +77,44 @@ class DebugCog(commands.Cog):
             embed=embed
         )
 
+    @app_commands.command(name="test_poly_whale", description="🛠️ [開發者] 模擬 Polymarket 巨鯨交易推播")
+    @app_commands.describe(usd_value="模擬成交金額 (USD)", side="交易方向 (BUY/SELL)")
+    async def test_poly_whale(self, interaction: discord.Interaction, usd_value: float = 50000.0, side: str = "BUY"):
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            from services.polymarket_service import PolymarketService
+            from services.llm_service import generate_polymarket_summary
+            
+            # 1. 準備 Mock Data
+            mock_trade = {
+                "asset_id": "0xTEST",
+                "price": 0.5,
+                "size": usd_value / 0.5,
+                "side": side.upper(),
+                "event_type": "trade"
+            }
+            
+            mock_market = {
+                "question": "Will Bitcoin reach $100,000 by end of 2026?",
+                "description": "This market resolves to Yes if BTC hits $100k according to CoinGecko by Dec 31, 2026.",
+                "outcome": "Yes" if side.upper() == "BUY" else "No"
+            }
+            
+            # 2. 獲取 LLM 總結
+            summary = await generate_polymarket_summary(mock_market, mock_trade, usd_value)
+            
+            # 3. 使用 PolymarketService 的私訊推播邏輯 (或直接模擬)
+            if hasattr(self.bot, 'polymarket_service'):
+                await self.bot.polymarket_service._push_notification(
+                    interaction.user.id, summary, mock_market, mock_trade, usd_value
+                )
+                await interaction.followup.send(f"✅ 已成功模擬並發送巨鯨交易通知 (${usd_value:,.2f}) 到您的私訊。", ephemeral=True)
+            else:
+                await interaction.followup.send("❌ Polymarket 服務未啟動。", ephemeral=True)
+                
+        except Exception as e:
+            await interaction.followup.send(f"❌ 模擬失敗: {e}", ephemeral=True)
+
 async def setup(bot):
     await bot.add_cog(DebugCog(bot))

@@ -24,7 +24,7 @@ The system is divided into two main services:
 - **`config.py`**: Global configuration constants including `VIX_LADDER_CONFIG` (6-tier system: Dormant/Caution/Ready/Aggressive/Heavy/All-in), `VIX_QUANTILE_BOUNDS`, and the `get_vix_tier()` helper function (includes NaN/None robustness with "Ready" fallback).
 - **`market_analysis/`**: The quant engine. Contains strategy logic (with VIX ladder gating and delta capping), Greek calculations, PowerSqueeze (PSQ) scoring (with VIX-aware momentum labeling), hedging simulations, NRO risk optimization (with dynamic Kelly scaling and All-in bypass), and margin analysis.
 - **`database/`**: Persistent storage layer with an automated migration engine (`database/core.py`) that scans `database/migrations/` on startup.
-- **`services/`**: Business logic layer (TradingService, LLMService, MarketDataService, NewsService, RedditService) that decouples the Discord UI from core computations.
+- **`services/`**: Business logic layer (TradingService, LLMService, PolymarketService, MarketDataService, NewsService, RedditService) that decouples the Discord UI from core computations.
 - **`cogs/`**: Discord extensions implementing slash commands and background tasks (Market Scanning, VTR monitoring, Daily Reports, Analyst Agent).
 - **`ui/`**: Reusable Discord UI components and views for interactive commands.
 
@@ -118,6 +118,7 @@ When modifying VIX ladder behavior:
 - `nexus_core/config.py`: Global configuration — env vars, strategy Delta params, **VIX Battle Ladder** tier definitions (`VIX_LADDER_CONFIG`), and `get_vix_tier()` helper (with NaN robustness).
 - `nexus_core/market_time.py`: NYSE market calendar and timezone-aware scheduling.
 - `nexus_core/services/trading_service.py`: Centralized business logic orchestrator. Propagates `vix_spot` through scan pipeline, gates VTR entry by tier.
+- `nexus_core/services/polymarket_service.py`: Real-time Polymarket whale monitoring service via WebSocket. Handles filtering, market metadata fetching, and LLM integration.
 - `nexus_core/market_analysis/strategy.py`: Quant scanning and filtering pipeline. VIX ladder gating (`apply_vix_ladder()`), delta capping, and sizing multiplier.
 - `nexus_core/market_analysis/psq_engine.py`: PowerSqueeze momentum calculation engine with VIX-aware labeling.
 - `nexus_core/market_analysis/risk_engine.py`: NRO risk optimizer — inverted VIX macro weights, dynamic Kelly scaling, All-in bypass.
