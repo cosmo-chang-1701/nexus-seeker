@@ -7,6 +7,8 @@ import math
 import yfinance as yf
 
 import database
+import market_time
+from market_time import ny_tz, get_next_market_target_time, get_sleep_seconds, is_market_open
 from database.user_settings import get_full_user_context
 from database.watchlist import get_all_watchlist
 from services.market_data_service import get_quote, get_history_df, get_earnings_calendar
@@ -19,64 +21,110 @@ from config import get_vix_tier
 
 logger = logging.getLogger(__name__)
 
-# Schedule times defined in UTC (UTC = UTC+8 - 8 hours)
-# 17:00 UTC+8 -> 09:00 UTC
-# 19:30 UTC+8 -> 11:30 UTC
-# 21:30 UTC+8 -> 13:30 UTC
-# 00:00 UTC+8 -> 16:00 UTC
-# 02:00 UTC+8 -> 18:00 UTC
-# 04:00 UTC+8 -> 20:00 UTC
-# 08:00 UTC+8 -> 00:00 UTC
-SCHEDULED_TIMES = [
-    time(hour=9, minute=0, tzinfo=timezone.utc),
-    time(hour=11, minute=30, tzinfo=timezone.utc),
-    time(hour=13, minute=30, tzinfo=timezone.utc),
-    time(hour=16, minute=0, tzinfo=timezone.utc),
-    time(hour=18, minute=0, tzinfo=timezone.utc),
-    time(hour=20, minute=0, tzinfo=timezone.utc),
-    time(hour=0, minute=0, tzinfo=timezone.utc),
-]
-
 class AnalystAgent(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.analyst_task.start()
+        # 啟動三大動態排程任務
+        self.pre_market_loop.start()
+        self.intra_day_loop.start()
+        self.post_market_loop.start()
 
     def cog_unload(self):
-        self.analyst_task.cancel()
+        self.pre_market_loop.cancel()
+        self.intra_day_loop.cancel()
+        self.post_market_loop.cancel()
 
-    @tasks.loop(time=SCHEDULED_TIMES)
-    async def analyst_task(self):
-        logger.info("🤖 Nexus Seeker Analyst Agent: Starting scheduled routine.")
-        now_utc = datetime.now(timezone.utc)
-        hour = now_utc.hour
-        minute = now_utc.minute
-
-        try:
-            # Route to the specific task based on the current UTC time
-            report = None
-            if hour == 9 and minute == 0:
-                report = await self.run_macro_scan()
-            elif hour == 11 and minute == 30:
-                report = await self.run_premarket_earnings()
-            elif hour == 13 and minute == 30:
-                report = await self.run_market_open_liquidity()
-            elif hour == 16 and minute == 0:
-                report = await self.run_deep_research()
-            elif hour == 18 and minute == 0:
-                report = await self.run_portfolio_hedging()
-            elif hour == 20 and minute == 0:
-               report = await self.run_postmarket_summary()
-            elif hour == 1 and minute == 0:
-               report = await self.run_next_day_strategy()
-            if report:
-                await self.dispatch_report(report)
-        except Exception as e:
-            logger.error(f"Analyst Agent encountered an error: {e}")
-
-    @analyst_task.before_loop
-    async def before_analyst_task(self):
+    # ==========================================
+    # 🚀 1. 盤前總覽：開盤前 30 分鐘啟動
+    # ==========================================
+    @tasks.loop(count=1)
+    async def pre_market_loop(self):
         await self.bot.wait_until_ready()
+        while True:
+            target = get_next_market_target_time("open", offset_minutes=-30)
+            sleep_secs = get_sleep_seconds(target)
+            
+            logger.info(f"🤖 [Analyst Pre-Market] 下次執行時間: {target} (倒數 {sleep_secs/3600:.2f} 小時)")
+            await asyncio.sleep(sleep_secs)
+            
+            try:
+                logger.info("🤖 [Analyst Pre-Market] 啟動盤前巨觀與財報掃描...")
+                macro_report = await self.run_macro_scan()
+                if macro_report:
+                    await self.dispatch_report(macro_report)
+                
+                earnings_report = await self.run_premarket_earnings()
+                if earnings_report:
+                    await self.dispatch_report(earnings_report)
+            except Exception as e:
+                logger.error(f"Analyst Pre-Market loop error: {e}")
+            
+            await asyncio.sleep(60) # 避免在同一秒重複觸發
+
+    # ==========================================
+    # 🚀 2. 盤中監測：每 30 分鐘心跳掃描 (僅開盤時)
+    # ==========================================
+    @tasks.loop(count=1)
+    async def intra_day_loop(self):
+        await self.bot.wait_until_ready()
+        while True:
+            if is_market_open():
+                logger.info("🤖 [Analyst Intra-Day] 偵測到開盤，執行 30 分鐘心跳掃描...")
+                try:
+                    report = await self.run_intraday_intelligence()
+                    if report:
+                        await self.dispatch_report(report)
+                except Exception as e:
+                    logger.error(f"Analyst Intra-Day loop error: {e}")
+                
+                await asyncio.sleep(30 * 60)
+            else:
+                target = get_next_market_target_time("open", offset_minutes=0)
+                sleep_secs = get_sleep_seconds(target)
+                logger.info(f"🤖 [Analyst Intra-Day] 市場休市。下次開盤心跳: {target} (倒數 {sleep_secs/3600:.2f} 小時)")
+                await asyncio.sleep(min(sleep_secs, 3600)) # 最多睡一小時再檢查一次
+
+    # ==========================================
+    # 🚀 3. 盤後策略：收盤後 15 分鐘啟動
+    # ==========================================
+    @tasks.loop(count=1)
+    async def post_market_loop(self):
+        await self.bot.wait_until_ready()
+        while True:
+            target = get_next_market_target_time("close", offset_minutes=15)
+            sleep_secs = get_sleep_seconds(target)
+            
+            logger.info(f"🤖 [Analyst Post-Market] 下次執行時間: {target} (倒數 {sleep_secs/3600:.2f} 小時)")
+            await asyncio.sleep(sleep_secs)
+            
+            try:
+                logger.info("🤖 [Analyst Post-Market] 啟動盤後總結與次日策略規劃...")
+                summary_report = await self.run_postmarket_summary()
+                if summary_report:
+                    await self.dispatch_report(summary_report)
+                
+                next_day_report = await self.run_next_day_strategy()
+                if next_day_report:
+                    await self.dispatch_report(next_day_report)
+            except Exception as e:
+                logger.error(f"Analyst Post-Market loop error: {e}")
+            
+            await asyncio.sleep(60)
+
+    async def run_intraday_intelligence(self):
+        """根據盤中時段動態調整分析重點"""
+        now_ny = datetime.now(ny_tz)
+        hour = now_ny.hour
+        
+        # 09:30 - 11:30 Focus: Liquidity & Open Vol
+        if hour < 11:
+            return await self.run_market_open_liquidity()
+        # 11:30 - 14:00 Focus: Sector Research
+        elif 11 <= hour < 14:
+            return await self.run_deep_research()
+        # 14:00 - 16:00 Focus: Portfolio Hedging
+        else:
+            return await self.run_portfolio_hedging()
 
     async def dispatch_report(self, report_md: str):
         """Dispatch the markdown report to all users who have opted in."""
