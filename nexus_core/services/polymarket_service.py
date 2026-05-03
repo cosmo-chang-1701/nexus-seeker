@@ -336,25 +336,22 @@ class PolymarketService:
         
         return None
 
-    async def _push_notification(self, user_id: int, summary: str, market_info: Dict[str, Any], trade: Dict[str, Any], usd_value: float):
+    def _resolve_trade_details(self, trade: Dict[str, Any], market_info: Dict[str, Any]) -> Dict[str, Any]:
         """
-        封裝 Discord Embed 並排入私訊佇列
+        核心規格化引擎：根據 API 回傳值、Token 類型與交易方向，解析出最直觀的顯示資訊。
         """
-        import discord
-        import json
-        
-        # 取得原始數據
         side_raw = trade.get("side", "BUY")
         asset_id = trade.get("asset_id")
         base_price = float(trade.get("price", 0))
         
-        # 1. 嘗試解析該 Token 的正確選項名稱 (Outcome)
+        # 1. 解析原始選項名稱 (Outcome)
         base_outcome = market_info.get("outcome")
         if not base_outcome:
-            # 如果是從 API 直接抓取的 Market 對象，需手動對應 Token ID 與 Outcomes 列表
             try:
+                # 若快取缺失，從市場元數據中嘗試比對 Token ID
                 clob_tokens = market_info.get("clobTokenIds", [])
                 if isinstance(clob_tokens, str):
+                    import json
                     clob_tokens = json.loads(clob_tokens)
                 
                 if asset_id in clob_tokens:
@@ -362,58 +359,67 @@ class PolymarketService:
                     outcomes_list = market_info.get("outcomes", [])
                     if idx < len(outcomes_list):
                         base_outcome = outcomes_list[idx]
-            except Exception as e:
-                logger.debug(f"解析動態市場選項失敗: {e}")
+            except Exception:
+                pass
         
-        # 終極退路
-        if not base_outcome or str(base_outcome).strip() == "":
-            base_outcome = "Yes"
+        # 字串清洗：移除引號與前後空白
+        clean_outcome = str(base_outcome or "Yes").strip().strip('"').strip("'")
+        outcome_lower = clean_outcome.lower()
 
-        # 2. 邏輯轉換：確保顯示的價格與「買入」的方向一致
-        action_text = "買入"
-        final_outcome = ""
+        # 2. 執行邏輯轉換 (核心要求：都視為買入)
+        # 邏輯：(Yes + BUY -> Yes), (Yes + SELL -> No), (No + BUY -> No), (No + SELL -> Yes)
+        final_outcome = "Yes"
         final_price = base_price
         
-        # 處理標準二元市場 (Yes/No)
-        if str(base_outcome).lower() == "yes":
+        if outcome_lower == "yes":
             if side_raw == "BUY":
                 final_outcome = "Yes"
                 final_price = base_price
             else:
                 final_outcome = "No"
                 final_price = 1 - base_price
-        elif str(base_outcome).lower() == "no":
+        elif outcome_lower == "no":
             if side_raw == "BUY":
                 final_outcome = "No"
                 final_price = base_price
             else:
                 final_outcome = "Yes"
                 final_price = 1 - base_price
-        # 處理命名市場
         else:
+            # 命名市場 (例如：Trump)
             if side_raw == "BUY":
-                final_outcome = base_outcome
+                final_outcome = clean_outcome
                 final_price = base_price
             else:
-                # 買入「非該選項」
-                final_outcome = f"非 {base_outcome}"
+                final_outcome = f"非 {clean_outcome}"
                 final_price = 1 - base_price
 
-        # 再次檢查確保 final_outcome 不為空 (防止 "非 " 狀況)
-        if not final_outcome or str(final_outcome).strip() in ["", "非"]:
-            final_outcome = "No" if side_raw == "SELL" else "Yes"
-
-        side_emoji = "🟢" if "yes" in str(final_outcome).lower() else "🔴"
-        # 針對「非 XXX」的狀況，如果是看淡 Yes 則用紅色
-        if "非" in str(final_outcome) and str(base_outcome).lower() == "yes":
-            side_emoji = "🔴"
+        # 3. 確保文字顯示邏輯一致
+        # 如果最後解析出的 final_outcome 包含 "no" 或 "非"，則視為看淡
+        is_bullish = True
+        if "no" in final_outcome.lower() or "非" in final_outcome:
+            is_bullish = False
             
-        direction_text = f"{action_text} {final_outcome}"
+        return {
+            "direction_text": f"買入 {final_outcome}",
+            "price": final_price,
+            "emoji": "🟢" if is_bullish else "🔴",
+            "is_yes": "yes" in final_outcome.lower()
+        }
+
+    async def _push_notification(self, user_id: int, summary: str, market_info: Dict[str, Any], trade: Dict[str, Any], usd_value: float):
+        """
+        封裝 Discord Embed 並排入私訊佇列
+        """
+        import discord
+        
+        # 使用規格化引擎獲取顯示細節
+        details = self._resolve_trade_details(trade, market_info)
         
         embed = discord.Embed(
-            title=f"🐋 Polymarket 巨鯨交易偵測 ({direction_text})",
+            title=f"🐋 Polymarket 巨鯨交易偵測 ({details['direction_text']})",
             description=summary,
-            color=discord.Color.blue() if "yes" in str(final_outcome).lower() else discord.Color.red(),
+            color=discord.Color.blue() if details['is_yes'] else discord.Color.red(),
             timestamp=discord.utils.utcnow()
         )
         
@@ -431,8 +437,8 @@ class PolymarketService:
             embed.add_field(name="🔗 市場連結", value=f"[點擊前往 Polymarket (市場頁)]({market_url})", inline=False)
         
         embed.add_field(name="💰 成交金額", value=f"`${usd_value:,.2f}`", inline=True)
-        embed.add_field(name="📊 成交價格", value=f"`{final_price:.3f}`", inline=True)
-        embed.add_field(name="🎲 押注方向", value=f"{side_emoji} {direction_text}", inline=True)
+        embed.add_field(name="📊 成交價格", value=f"`{details['price']:.3f}`", inline=True)
+        embed.add_field(name="🎲 押注方向", value=f"{details['emoji']} {details['direction_text']}", inline=True)
         
         embed.set_footer(text="Nexus Seeker 巨鯨監測系統 | Powered by Polymarket CLOB")
         
