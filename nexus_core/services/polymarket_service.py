@@ -11,7 +11,7 @@ from services.llm_service import generate_polymarket_summary
 
 logger = logging.getLogger(__name__)
 
-POLY_WS_URL = "wss://clob.polymarket.com/ws/market"
+POLY_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 POLY_API_BASE = "https://clob.polymarket.com"
 
 class PolymarketService:
@@ -20,6 +20,7 @@ class PolymarketService:
         self.running = False
         self._market_cache = {}
         self._monitor_task = None
+        self._ping_task = None
         
         # 狀態追蹤
         self.last_message_at = None
@@ -29,7 +30,6 @@ class PolymarketService:
 
     def get_status(self) -> Dict[str, Any]:
         """獲取目前服務狀態摘要"""
-        import datetime
         last_msg = self.last_message_at.strftime("%Y-%m-%d %H:%M:%S") if self.last_message_at else "從未收到"
         return {
             "running": self.running,
@@ -51,6 +51,8 @@ class PolymarketService:
         self.is_connected = False
         if self._monitor_task:
             self._monitor_task.cancel()
+        if self._ping_task:
+            self._ping_task.cancel()
         logger.info("🛑 Polymarket Whale Monitor Service stopped.")
 
     async def _monitor_loop(self):
@@ -69,14 +71,16 @@ class PolymarketService:
 
                 async with websockets.connect(POLY_WS_URL) as ws:
                     self.is_connected = True
-                    # Subscribe to trades for all active assets
+                    # Subscribe to trades (MARKET channel)
                     sub_msg = {
-                        "type": "subscribe",
-                        "assets_ids": asset_ids,
-                        "channels": ["trades"]
+                        "type": "market",
+                        "assets_ids": asset_ids
                     }
                     await ws.send(json.dumps(sub_msg))
-                    logger.info(f"Successfully subscribed to Polymarket 'trades' channel for {len(asset_ids)} assets.")
+                    logger.info(f"Successfully subscribed to Polymarket 'market' channel for {len(asset_ids)} assets.")
+
+                    # 啟動 PING 任務
+                    self._ping_task = asyncio.create_task(self._ping_loop(ws))
 
                     async for message in ws:
                         if not self.running:
@@ -90,9 +94,9 @@ class PolymarketService:
                             # 處理訊息
                             if isinstance(data, list):
                                 for item in data:
-                                    if item.get("event_type") == "trade":
+                                    if item.get("event_type") in ["trade", "last_trade_price"]:
                                         await self._handle_trade(item)
-                            elif data.get("event_type") == "trade":
+                            elif data.get("event_type") in ["trade", "last_trade_price"]:
                                 await self._handle_trade(data)
                             elif data.get("type") == "error":
                                 self.error_count += 1
@@ -110,9 +114,21 @@ class PolymarketService:
                 self.is_connected = False
                 self.error_count += 1
                 logger.error(f"Polymarket WS monitor loop encountered error: {e}")
+            finally:
+                if self._ping_task:
+                    self._ping_task.cancel()
             
             if self.running:
                 await asyncio.sleep(10)  # Wait before reconnecting
+
+    async def _ping_loop(self, ws):
+        """保持 WebSocket 連線的心跳"""
+        try:
+            while self.running and self.is_connected:
+                await ws.send("PING")
+                await asyncio.sleep(20)
+        except Exception:
+            pass
 
     async def _fetch_all_active_asset_ids(self) -> List[str]:
         """
@@ -123,14 +139,21 @@ class PolymarketService:
                 # 獲取所有活躍市場
                 resp = await client.get(f"{POLY_API_BASE}/markets")
                 if resp.status_code == 200:
-                    markets = resp.json()
+                    raw_data = resp.json()
+                    # API 回傳結構為 {"data": [...]} 或直接為 [...]
+                    markets = raw_data.get("data", []) if isinstance(raw_data, dict) else raw_data
+                    
                     asset_ids = []
                     for m in markets:
-                        if "tokens" in m:
-                            for token in m["tokens"]:
-                                if "token_id" in token:
-                                    asset_ids.append(token["token_id"])
-                    return asset_ids
+                        # 僅訂閱活躍且未關閉的市場
+                        if m.get("active") and not m.get("closed"):
+                            if "tokens" in m:
+                                for token in m["tokens"]:
+                                    if "token_id" in token:
+                                        asset_ids.append(token["token_id"])
+                    
+                    # 確保不重複
+                    return list(set(asset_ids))
         except Exception as e:
             logger.error(f"Failed to fetch active asset IDs: {e}")
         return []
