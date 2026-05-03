@@ -114,26 +114,18 @@ class PolymarketService:
                         try:
                             data = json.loads(message)
                             
-                            # 處理多種格式的訊息
-                            # 1. 直接是交易物件 (舊版格式)
+                            # 處理多種格式的訊息 (嚴格限制在真正的成交事件)
+                            # 1. 直接是交易物件 (由 event_type 識別)
                             if isinstance(data, dict) and data.get("event_type") in ["trade", "last_trade_price"]:
                                 await self._handle_trade(data)
                             
-                            # 2. 包含 price_changes 的新版格式
-                            elif isinstance(data, dict) and "price_changes" in data:
-                                for pc in data["price_changes"]:
-                                    if pc.get("side") in ["BUY", "SELL"]:
-                                        # 注入 condition_id (從市場欄位) 方便處理
-                                        pc["condition_id"] = data.get("market")
-                                        await self._handle_trade(pc)
-                            
-                            # 3. 陣列格式
+                            # 2. 陣列格式 (處理批次訊息)
                             elif isinstance(data, list):
                                 for item in data:
                                     if item.get("event_type") in ["trade", "last_trade_price"]:
                                         await self._handle_trade(item)
                             
-                            # 4. 錯誤訊息
+                            # 3. 錯誤訊息
                             elif isinstance(data, dict) and data.get("type") == "error":
                                 self.error_count += 1
                                 logger.error(f"Polymarket WS error message: {data.get('message')}")
