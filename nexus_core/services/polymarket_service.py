@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 POLY_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 POLY_API_BASE = "https://clob.polymarket.com"
 
+
 class PolymarketService:
     def __init__(self, bot):
         self.bot = bot
@@ -69,7 +70,16 @@ class PolymarketService:
 
                 self.asset_count = len(asset_ids)
 
-                async with websockets.connect(POLY_WS_URL) as ws:
+                # 修正：websockets.connect 不直接支援 timeout 參數，使用 asyncio.wait_for
+                try:
+                    ws = await asyncio.wait_for(websockets.connect(POLY_WS_URL), timeout=10)
+                except asyncio.TimeoutError:
+                    logger.error("Polymarket WS connection timed out.")
+                    self.error_count += 1
+                    await asyncio.sleep(10)
+                    continue
+
+                async with ws:
                     self.is_connected = True
                     # Subscribe to trades (MARKET channel)
                     sub_msg = {
@@ -125,6 +135,7 @@ class PolymarketService:
         """保持 WebSocket 連線的心跳"""
         try:
             while self.running and self.is_connected:
+                # 發送 PING 或是簡單的字串，視伺服器要求
                 await ws.send("PING")
                 await asyncio.sleep(20)
         except Exception:
@@ -134,26 +145,41 @@ class PolymarketService:
         """
         透過 API 獲取所有活躍市場的資產 ID
         """
+        asset_ids = []
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                # 獲取所有活躍市場
-                resp = await client.get(f"{POLY_API_BASE}/markets")
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                # 嘗試多抓幾頁或增加 limit 以確保抓到活躍市場
+                # Polymarket API 可能回傳大量歷史市場，我們需要找未關閉的
+                url = f"{POLY_API_BASE}/markets?active=true&closed=false&limit=100"
+                resp = await client.get(url)
+                
                 if resp.status_code == 200:
                     raw_data = resp.json()
-                    # API 回傳結構為 {"data": [...]} 或直接為 [...]
                     markets = raw_data.get("data", []) if isinstance(raw_data, dict) else raw_data
                     
-                    asset_ids = []
                     for m in markets:
-                        # 僅訂閱活躍且未關閉的市場
+                        # 再次驗證狀態
                         if m.get("active") and not m.get("closed"):
                             if "tokens" in m:
                                 for token in m["tokens"]:
                                     if "token_id" in token:
                                         asset_ids.append(token["token_id"])
-                    
-                    # 確保不重複
-                    return list(set(asset_ids))
+                
+                # 如果還是沒抓到，嘗試不帶過濾條件抓取最新的市場
+                if not asset_ids:
+                    resp = await client.get(f"{POLY_API_BASE}/markets?limit=100")
+                    if resp.status_code == 200:
+                        raw_data = resp.json()
+                        markets = raw_data.get("data", []) if isinstance(raw_data, dict) else raw_data
+                        for m in markets:
+                            # 寬鬆過濾：只要沒關閉或是剛建立的
+                            if not m.get("closed"):
+                                for token in m.get("tokens", []):
+                                    if "token_id" in token:
+                                        asset_ids.append(token["token_id"])
+
+            # 確保不重複
+            return list(set(asset_ids))
         except Exception as e:
             logger.error(f"Failed to fetch active asset IDs: {e}")
         return []
