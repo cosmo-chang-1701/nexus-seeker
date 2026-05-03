@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 POLY_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 POLY_API_BASE = "https://clob.polymarket.com"
+GAMMA_API_BASE = "https://gamma-api.polymarket.com"
 
 
 class PolymarketService:
@@ -94,7 +95,8 @@ class PolymarketService:
                     # Subscribe to trades (MARKET channel)
                     sub_msg = {
                         "type": "market",
-                        "assets_ids": asset_ids
+                        "assets_ids": asset_ids,
+                        "custom_feature_enabled": True  # 文件建議啟用以獲得更完整的資訊
                     }
                     await ws.send(json.dumps(sub_msg))
                     logger.info(f"Successfully subscribed to Polymarket 'market' channel for {len(asset_ids)} assets.")
@@ -111,16 +113,31 @@ class PolymarketService:
                         
                         try:
                             data = json.loads(message)
-                            # 處理訊息
-                            if isinstance(data, list):
+                            
+                            # 處理多種格式的訊息
+                            # 1. 直接是交易物件 (舊版格式)
+                            if isinstance(data, dict) and data.get("event_type") in ["trade", "last_trade_price"]:
+                                await self._handle_trade(data)
+                            
+                            # 2. 包含 price_changes 的新版格式
+                            elif isinstance(data, dict) and "price_changes" in data:
+                                for pc in data["price_changes"]:
+                                    if pc.get("side") in ["BUY", "SELL"]:
+                                        # 注入 condition_id (從市場欄位) 方便處理
+                                        pc["condition_id"] = data.get("market")
+                                        await self._handle_trade(pc)
+                            
+                            # 3. 陣列格式
+                            elif isinstance(data, list):
                                 for item in data:
                                     if item.get("event_type") in ["trade", "last_trade_price"]:
                                         await self._handle_trade(item)
-                            elif data.get("event_type") in ["trade", "last_trade_price"]:
-                                await self._handle_trade(data)
-                            elif data.get("type") == "error":
+                            
+                            # 4. 錯誤訊息
+                            elif isinstance(data, dict) and data.get("type") == "error":
                                 self.error_count += 1
                                 logger.error(f"Polymarket WS error message: {data.get('message')}")
+                                
                         except json.JSONDecodeError:
                             continue
                         except Exception as e:
@@ -142,67 +159,84 @@ class PolymarketService:
                 await asyncio.sleep(10)  # Wait before reconnecting
 
     async def _ping_loop(self, ws):
-        """保持 WebSocket 連線的心跳"""
+        """保持 WebSocket 連線的心跳 (Polymarket 要求每 10 秒發送 PING)"""
         try:
             while self.running and self.is_connected:
-                # 發送 PING 或是簡單的字串，視伺服器要求
                 await ws.send("PING")
-                await asyncio.sleep(20)
+                await asyncio.sleep(10)
         except Exception:
             pass
 
     async def _fetch_all_active_asset_ids(self) -> List[str]:
         """
-        透過 API 獲取最新的活躍市場資產 ID，並儲存市場資訊。
-        採用寬鬆且可靠的過濾邏輯。
+        透過 Gamma API 獲取目前的活躍市場資產 ID，並預熱快取。
         """
         asset_ids = []
         active_markets_data = []
         
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                # 抓取最新的 100 個市場，這通常包含目前最活躍的交易對
-                # 不使用嚴格的 active/closed 過濾，因為 API 可能回傳歷史數據
-                url = f"{POLY_API_BASE}/markets?limit=100"
-                resp = await client.get(url)
+                # 抓取 Gamma API 的活躍市場 (active=true, closed=false)
+                # 這比 CLOB API 的過濾更準確
+                params = {
+                    "active": "true",
+                    "closed": "false",
+                    "limit": 100
+                }
+                resp = await client.get(f"{GAMMA_API_BASE}/markets", params=params)
                 
                 if resp.status_code == 200:
-                    raw_data = resp.json()
-                    markets = raw_data.get("data", []) if isinstance(raw_data, dict) else raw_data
-                    
+                    markets = resp.json()
                     for m in markets:
-                        # 基礎過濾：必須是 active 且未 closed
-                        # 我們不再過度依賴 end_date_iso，因為 API 欄位不穩定
-                        is_active = m.get("active") is True
-                        is_closed = m.get("closed") is True
-                        
-                        if is_active and not is_closed:
+                        q = m.get("question")
+                        # 獲取 CLOB Token IDs
+                        clob_tokens_raw = m.get("clobTokenIds")
+                        if not clob_tokens_raw:
+                            continue
+                            
+                        try:
+                            # clobTokenIds 有時是字串化的 JSON 陣列
+                            if isinstance(clob_tokens_raw, str):
+                                t_ids = json.loads(clob_tokens_raw)
+                            else:
+                                t_ids = clob_tokens_raw
+                            
+                            if not t_ids:
+                                continue
+                                
                             current_market_tokens = []
-                            has_clob_tokens = False
-                            
-                            if "tokens" in m:
-                                for token in m["tokens"]:
-                                    t_id = token.get("token_id")
-                                    # 只有具有有效 token_id 的才是我們要監控的 CLOB 資產
-                                    if t_id:
-                                        asset_ids.append(t_id)
-                                        current_market_tokens.append(token)
-                                        has_clob_tokens = True
-                            
-                            if has_clob_tokens:
-                                active_markets_data.append({
-                                    "question": m.get("question"),
+                            for tid in t_ids:
+                                asset_ids.append(tid)
+                                # 預熱快取：將 asset_id 對應到市場資訊
+                                self._market_cache[tid] = {
+                                    "question": q,
                                     "description": m.get("description"),
-                                    "end_date": m.get("end_date_iso"),
-                                    "tokens": current_market_tokens
-                                })
+                                    "end_date": m.get("endDate"),
+                                    "condition_id": m.get("conditionId")
+                                }
+                                current_market_tokens.append({"token_id": tid})
+                            
+                            active_markets_data.append({
+                                "question": q,
+                                "description": m.get("description"),
+                                "end_date": m.get("endDate"),
+                                "tokens": current_market_tokens
+                            })
+                            
+                            # 同時也用 conditionId 快取
+                            cond_id = m.get("conditionId")
+                            if cond_id:
+                                self._market_cache[cond_id] = self._market_cache[t_ids[0]]
+                                
+                        except Exception as e:
+                            logger.error(f"Error parsing tokens for market '{q}': {e}")
 
-            # 儲存活躍市場資訊
+            # 儲存活躍市場資訊供 UI 顯示
             self._active_markets = active_markets_data
             # 確保不重複
             return list(set(asset_ids))
         except Exception as e:
-            logger.error(f"Failed to fetch active asset IDs: {e}")
+            logger.error(f"Failed to fetch active asset IDs via Gamma API: {e}")
         return []
 
     async def _handle_trade(self, trade: Dict[str, Any]):
@@ -233,7 +267,7 @@ class PolymarketService:
             logger.info(f"🐋 Whale trade detected: {trade.get('side')} ${usd_value:,.2f} on asset {asset_id}")
 
             # 2. 獲取市場背景資訊
-            market_info = await self._get_market_info(asset_id)
+            market_info = await self._get_market_info(asset_id, trade.get("condition_id"))
             if not market_info:
                 market_info = {"question": "未知市場", "description": "無法獲取市場詳細資訊"}
 
@@ -247,25 +281,35 @@ class PolymarketService:
         except Exception as e:
             logger.error(f"Failed to handle Polymarket trade: {e}")
 
-    async def _get_market_info(self, asset_id: str) -> Dict[str, Any]:
+    async def _get_market_info(self, asset_id: str, condition_id: str = None) -> Dict[str, Any]:
         """
-        透過 API 獲取市場元數據，並快取以減少請求
+        透過快取或 API 獲取市場元數據。
         """
+        # 1. 優先從快取獲取
         if asset_id in self._market_cache:
             return self._market_cache[asset_id]
+        if condition_id and condition_id in self._market_cache:
+            return self._market_cache[condition_id]
 
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                # 獲取單一資產/市場的詳細資訊
-                resp = await client.get(f"{POLY_API_BASE}/markets/{asset_id}")
-                if resp.status_code == 200:
-                    data = resp.json()
-                    self._market_cache[asset_id] = data
-                    return data
-                else:
-                    logger.warning(f"Failed to fetch market info for {asset_id}, status: {resp.status_code}")
+                # 如果有 condition_id，直接查 Gamma API
+                if condition_id:
+                    resp = await client.get(f"{GAMMA_API_BASE}/markets", params={"condition_id": condition_id})
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        market = data[0] if isinstance(data, list) and data else data
+                        if market:
+                            self._market_cache[condition_id] = market
+                            return market
+
+                # 如果只有 asset_id (token_id)，嘗試透過 Gamma API 搜尋
+                # 注意：Gamma API 可能不直接支援以 token_id 查詢單一市場，
+                # 但我們可以在 _fetch 時盡可能抓取更多
+                pass
+
         except Exception as e:
-            logger.error(f"Error fetching market info for {asset_id}: {e}")
+            logger.error(f"Error fetching market info for {asset_id}/{condition_id}: {e}")
         
         return None
 
