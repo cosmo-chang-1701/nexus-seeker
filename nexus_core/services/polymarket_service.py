@@ -512,34 +512,34 @@ class PolymarketService:
         
         if outcome == "YES":
             if side_raw == "BUY":
-                intent = "[Aggressive Long] (主動買入 YES)"
+                intent = "[強力看多] (主動買入 YES)"
                 p_yes = base_price
                 p_no = 1 - base_price
                 is_bullish = True
             else:
-                intent = "[Yes Profit Taking] (主動賣出 YES / 平倉)"
+                intent = "[獲利了結] (主動賣出 YES / 平倉)"
                 p_yes = base_price
                 p_no = 1 - base_price
                 is_bullish = False
         elif outcome == "NO":
             if side_raw == "BUY":
-                intent = "[Aggressive Short] (主動買入 NO)"
+                intent = "[強力看空] (主動買入 NO)"
                 p_no = base_price
                 p_yes = 1 - base_price
                 is_bullish = False
             else:
-                intent = "[No Profit Taking] (主動賣出 NO / 平倉)"
+                intent = "[獲利了結] (主動賣出 NO / 平倉)"
                 p_no = base_price
                 p_yes = 1 - base_price
                 is_bullish = True
         else:
             if side_raw == "BUY":
-                intent = f"[Aggressive Selection] (主動買入 {outcome})"
+                intent = f"[主動選取] (主動買入 {outcome})"
                 p_yes = base_price
                 p_no = 1 - base_price
                 is_bullish = True
             else:
-                intent = f"[{outcome} Profit Taking] (主動賣出 {outcome} / 平倉)"
+                intent = f"[獲利了結] (主動賣出 {outcome} / 平倉)"
                 p_yes = base_price
                 p_no = 1 - base_price
                 is_bullish = False
