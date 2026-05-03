@@ -338,73 +338,28 @@ class PolymarketService:
 
     def _resolve_trade_details(self, trade: Dict[str, Any], market_info: Dict[str, Any]) -> Dict[str, Any]:
         """
-        核心規格化引擎：根據 API 回傳值、Token 類型與交易方向，解析出最直觀的顯示資訊。
+        極簡化規格化引擎：嚴格遵循使用者要求的 Buy Yes / Buy No 邏輯。
         """
         side_raw = trade.get("side", "BUY")
-        asset_id = trade.get("asset_id")
         base_price = float(trade.get("price", 0))
         
-        # 1. 解析原始選項名稱 (Outcome)
-        base_outcome = market_info.get("outcome")
-        if not base_outcome:
-            try:
-                # 若快取缺失，從市場元數據中嘗試比對 Token ID
-                clob_tokens = market_info.get("clobTokenIds", [])
-                if isinstance(clob_tokens, str):
-                    import json
-                    clob_tokens = json.loads(clob_tokens)
-                
-                if asset_id in clob_tokens:
-                    idx = clob_tokens.index(asset_id)
-                    outcomes_list = market_info.get("outcomes", [])
-                    if idx < len(outcomes_list):
-                        base_outcome = outcomes_list[idx]
-            except Exception:
-                pass
-        
-        # 字串清洗：移除引號與前後空白
-        clean_outcome = str(base_outcome or "Yes").strip().strip('"').strip("'")
-        outcome_lower = clean_outcome.lower()
-
-        # 2. 執行邏輯轉換 (核心要求：都視為買入)
-        # 邏輯：(Yes + BUY -> Yes), (Yes + SELL -> No), (No + BUY -> No), (No + SELL -> Yes)
-        final_outcome = "Yes"
-        final_price = base_price
-        
-        if outcome_lower == "yes":
-            if side_raw == "BUY":
-                final_outcome = "Yes"
-                final_price = base_price
-            else:
-                final_outcome = "No"
-                final_price = 1 - base_price
-        elif outcome_lower == "no":
-            if side_raw == "BUY":
-                final_outcome = "No"
-                final_price = base_price
-            else:
-                final_outcome = "Yes"
-                final_price = 1 - base_price
+        # 1. 執行絕對轉換 (忽略 Token 原始名稱，僅根據交易 Side 決定)
+        if side_raw == "BUY":
+            # BUY = Buy Yes
+            final_outcome_label = "Buy Yes"
+            final_price = base_price
+            is_bullish = True
         else:
-            # 命名市場 (例如：Trump)
-            if side_raw == "BUY":
-                final_outcome = clean_outcome
-                final_price = base_price
-            else:
-                final_outcome = f"非 {clean_outcome}"
-                final_price = 1 - base_price
-
-        # 3. 確保文字顯示邏輯一致
-        # 如果最後解析出的 final_outcome 包含 "no" 或 "非"，則視為看淡
-        is_bullish = True
-        if "no" in final_outcome.lower() or "非" in final_outcome:
+            # SELL = Buy No
+            final_outcome_label = "Buy No"
+            final_price = 1 - base_price
             is_bullish = False
             
         return {
-            "direction_text": f"買入 {final_outcome}",
+            "direction_text": final_outcome_label,
             "price": final_price,
             "emoji": "🟢" if is_bullish else "🔴",
-            "is_yes": "yes" in final_outcome.lower()
+            "is_yes": is_bullish
         }
 
     async def _push_notification(self, user_id: int, summary: str, market_info: Dict[str, Any], trade: Dict[str, Any], usd_value: float):
