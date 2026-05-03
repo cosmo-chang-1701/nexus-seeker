@@ -153,14 +153,17 @@ class PolymarketService:
 
     async def _fetch_all_active_asset_ids(self) -> List[str]:
         """
-        透過 API 獲取所有活躍市場的資產 ID，並儲存市場資訊
+        透過 API 獲取最新的活躍市場資產 ID，並儲存市場資訊。
+        採用寬鬆且可靠的過濾邏輯。
         """
         asset_ids = []
         active_markets_data = []
+        
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                # 嘗試多抓幾頁或增加 limit 以確保抓到活躍市場
-                url = f"{POLY_API_BASE}/markets?active=true&closed=false&limit=500"
+                # 抓取最新的 100 個市場，這通常包含目前最活躍的交易對
+                # 不使用嚴格的 active/closed 過濾，因為 API 可能回傳歷史數據
+                url = f"{POLY_API_BASE}/markets?limit=100"
                 resp = await client.get(url)
                 
                 if resp.status_code == 200:
@@ -168,16 +171,21 @@ class PolymarketService:
                     markets = raw_data.get("data", []) if isinstance(raw_data, dict) else raw_data
                     
                     for m in markets:
-                        # 再次驗證狀態
-                        if m.get("active") and not m.get("closed"):
-                            # 只有具有 token_id 的 CLOB 市場才能被 WebSocket 監控
+                        # 基礎過濾：必須是 active 且未 closed
+                        # 我們不再過度依賴 end_date_iso，因為 API 欄位不穩定
+                        is_active = m.get("active") is True
+                        is_closed = m.get("closed") is True
+                        
+                        if is_active and not is_closed:
                             current_market_tokens = []
                             has_clob_tokens = False
                             
                             if "tokens" in m:
                                 for token in m["tokens"]:
-                                    if token.get("token_id"):  # 確保 token_id 存在且非空字串
-                                        asset_ids.append(token["token_id"])
+                                    t_id = token.get("token_id")
+                                    # 只有具有有效 token_id 的才是我們要監控的 CLOB 資產
+                                    if t_id:
+                                        asset_ids.append(t_id)
                                         current_market_tokens.append(token)
                                         has_clob_tokens = True
                             
@@ -188,30 +196,6 @@ class PolymarketService:
                                     "end_date": m.get("end_date_iso"),
                                     "tokens": current_market_tokens
                                 })
-                
-                # 如果還是沒抓到，嘗試不帶過濾條件抓取最新的市場
-                if not asset_ids:
-                    resp = await client.get(f"{POLY_API_BASE}/markets?limit=500")
-                    if resp.status_code == 200:
-                        raw_data = resp.json()
-                        markets = raw_data.get("data", []) if isinstance(raw_data, dict) else raw_data
-                        for m in markets:
-                            if not m.get("closed"):
-                                current_market_tokens = []
-                                has_clob_tokens = False
-                                for token in m.get("tokens", []):
-                                    if token.get("token_id"):  # 確保 token_id 存在且非空字串
-                                        asset_ids.append(token["token_id"])
-                                        current_market_tokens.append(token)
-                                        has_clob_tokens = True
-                                
-                                if has_clob_tokens:
-                                    active_markets_data.append({
-                                        "question": m.get("question"),
-                                        "description": m.get("description"),
-                                        "end_date": m.get("end_date_iso"),
-                                        "tokens": current_market_tokens
-                                    })
 
             # 儲存活躍市場資訊
             self._active_markets = active_markets_data
