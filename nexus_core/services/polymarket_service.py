@@ -197,9 +197,28 @@ class PolymarketService:
                                 continue
                                 
                             # 獲取 Outcome 列表 (例如 ["Yes", "No"]) 與價格
-                            outcomes = m.get("outcomes", [])
-                            outcome_prices = m.get("outcomePrices", [])
+                            outcomes_raw = m.get("outcomes", [])
+                            prices_raw = m.get("outcomePrices", [])
                             
+                            # 處理可能的字串化 JSON
+                            try:
+                                if isinstance(outcomes_raw, str):
+                                    outcomes = json.loads(outcomes_raw)
+                                else:
+                                    outcomes = outcomes_raw
+                                
+                                if isinstance(prices_raw, str):
+                                    outcome_prices = json.loads(prices_raw)
+                                else:
+                                    outcome_prices = prices_raw
+                                    
+                                # 確保是列表
+                                outcomes = outcomes if isinstance(outcomes, list) else []
+                                outcome_prices = outcome_prices if isinstance(outcome_prices, list) else []
+                            except Exception:
+                                outcomes = []
+                                outcome_prices = []
+
                             current_market_tokens = []
                             for i, tid in enumerate(t_ids):
                                 asset_ids.append(tid)
@@ -212,7 +231,7 @@ class PolymarketService:
                                     event_slug = m["event"].get("slug")
 
                                 # 獲取該 Token 對應的 Outcome
-                                outcome_name = outcomes[i] if i < len(outcomes) else "未知選項"
+                                outcome_name = str(outcomes[i]).strip().strip('"') if i < len(outcomes) else "未知選項"
                                 # 獲取該 Token 對應的價格
                                 current_price = outcome_prices[i] if i < len(outcome_prices) else 0
 

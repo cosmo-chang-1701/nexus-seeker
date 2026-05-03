@@ -594,18 +594,30 @@ def create_polymarket_list_embed(markets: List[Dict[str, Any]]):
             # 顯示前兩個 outcome 的價格
             p_list = []
             for t in tokens[:2]:
-                outcome = t.get('outcome', '')
+                outcome = str(t.get('outcome', '')).strip()
                 price = t.get('price', 0)
+                
+                # 排除單字元的雜訊 (例如 [ or " )
+                if len(outcome) <= 1 and outcome not in ["?", "是", "否"]:
+                    continue
+                    
                 # 簡單格式化價格 (0-1)
                 try:
                     price_val = float(price)
                     price_str = f"{price_val:.2f}"
                 except:
                     price_str = str(price)
-                p_list.append(f"{outcome}: `{price_str}`")
-            price_info = " | ".join(p_list)
+                
+                if outcome:
+                    p_list.append(f"{outcome}: `{price_str}`")
             
-        line = f"**{i}.** {question}\n   └ {price_info}\n"
+            if p_list:
+                price_info = " | ".join(p_list)
+                line = f"**{i}.** {question}\n   └ {price_info}\n"
+            else:
+                line = f"**{i}.** {question}\n"
+        else:
+            line = f"**{i}.** {question}\n"
         
         # 檢查總長度，避免超過 Discord 限制
         if len(description) + len(line) > 3900:
