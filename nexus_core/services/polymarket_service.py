@@ -335,11 +335,12 @@ class PolymarketService:
         
         # 計算 Whale Multiplier (交易金額是動態門檻的幾倍)
         whale_multiplier = usd_value / dynamic_threshold if dynamic_threshold > 0 else 1.0
+        multiplier_str = f"{whale_multiplier:.2f}x" if whale_multiplier >= 0.01 else ("< 0.01x" if whale_multiplier > 0 else "0.00x")
         
         # 估計價格衝擊 (Price Impact)
-        # 根據該使用者的 slippage 設定來計算衝擊
         user_slip = context.polymarket_slippage
         price_impact = (usd_value / dynamic_threshold) * user_slip if dynamic_threshold > 0 else 0.0
+        impact_str = f"{price_impact:.2f}%" if price_impact >= 0.01 else ("< 0.01%" if price_impact > 0 else "0.00%")
             
         embed = discord.Embed(
             title=f"{details['emoji']} 巨鯨買入：{details['intent'].split(']')[0][1:]}",
@@ -351,8 +352,8 @@ class PolymarketService:
             "---",
             f"**市場問題：** **{market_info.get('question', '未知市場')}**",
             f"**交易金額：** `${usd_value:,.2f}`",
-            f"**流動性倍數：** `{whale_multiplier:.2f}x` (相對於 2% 滑價深度)",
-            f"**估計價格衝擊：** `{price_impact:.2f}%`",
+            f"**流動性倍數：** `{multiplier_str}` (相對於 {user_slip}% 滑價深度)",
+            f"**估計價格衝擊：** `{impact_str}`",
             f"**當前勝率：** {win_rate:.1f}% (Yes: {details['p_yes']:.3f} | No: {details['p_no']:.3f})",
             "**交易屬性：** 主動買入 (Market Taker)"
         ]
