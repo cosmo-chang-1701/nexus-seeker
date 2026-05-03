@@ -176,7 +176,7 @@ class PolymarketService:
                             
                             if "tokens" in m:
                                 for token in m["tokens"]:
-                                    if "token_id" in token:
+                                    if token.get("token_id"):  # 確保 token_id 存在且非空字串
                                         asset_ids.append(token["token_id"])
                                         current_market_tokens.append(token)
                                         has_clob_tokens = True
@@ -200,7 +200,7 @@ class PolymarketService:
                                 current_market_tokens = []
                                 has_clob_tokens = False
                                 for token in m.get("tokens", []):
-                                    if "token_id" in token:
+                                    if token.get("token_id"):  # 確保 token_id 存在且非空字串
                                         asset_ids.append(token["token_id"])
                                         current_market_tokens.append(token)
                                         has_clob_tokens = True
