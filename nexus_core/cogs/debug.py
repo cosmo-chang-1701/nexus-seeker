@@ -136,7 +136,7 @@ class DebugCog(commands.Cog):
         embed.add_field(name="服務狀態", value=running_emoji, inline=True)
         embed.add_field(name="連線狀態", value=status_emoji, inline=True)
         embed.add_field(name="訂閱資產數", value=f"`{status['asset_count']}`", inline=True)
-        embed.add_field(name="最後訊息時間", value=f"`{status['last_message']}`", inline=False)
+        embed.add_field(name="最後訊息時間", value=status['last_message'], inline=False)
         embed.add_field(name="異常次數", value=f"`{status['errors']}`", inline=True)
         
         embed.set_footer(text="Nexus Seeker | Polymarket Monitor")

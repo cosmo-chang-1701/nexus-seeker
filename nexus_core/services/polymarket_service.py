@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import datetime
 import websockets
 import httpx
 from typing import Dict, Any, List
@@ -31,7 +32,12 @@ class PolymarketService:
 
     def get_status(self) -> Dict[str, Any]:
         """獲取目前服務狀態摘要"""
-        last_msg = self.last_message_at.strftime("%Y-%m-%d %H:%M:%S") if self.last_message_at else "從未收到"
+        if self.last_message_at:
+            ts = int(self.last_message_at.timestamp())
+            last_msg = f"<t:{ts}:F> (<t:{ts}:R>)"
+        else:
+            last_msg = "從未收到"
+
         return {
             "running": self.running,
             "connected": self.is_connected,
@@ -57,7 +63,6 @@ class PolymarketService:
         logger.info("🛑 Polymarket Whale Monitor Service stopped.")
 
     async def _monitor_loop(self):
-        import datetime
         while self.running:
             try:
                 # 1. 獲取所有活躍市場以取得 asset_id 列表
@@ -96,8 +101,8 @@ class PolymarketService:
                         if not self.running:
                             break
                         
-                        # 記錄最後收到訊息的時間
-                        self.last_message_at = datetime.datetime.now()
+                        # 記錄最後收到訊息的時間 (UTC)
+                        self.last_message_at = datetime.datetime.now(datetime.timezone.utc)
                         
                         try:
                             data = json.loads(message)
