@@ -415,43 +415,59 @@ class PolymarketService:
 
     async def _push_notification(self, user_id: int, summary: str, market_info: Dict[str, Any], trade: Dict[str, Any], usd_value: float):
         """
-        封裝 Discord Embed 並排入私訊佇列
+        封裝 Discord Embed (專業分析師格式) 並排入私訊佇列
         """
         import discord
         
         # 使用進階規格化引擎
         details = self._resolve_trade_details(trade, market_info)
         size = float(trade.get("size", 0))
+        win_rate = details['p_yes'] * 100
         
+        # 根據分析師邏輯判定方向名稱
+        if details['is_bullish']:
+            direction_label = "YES (看多)"
+            icon = "🟢"
+        else:
+            direction_label = "NO (看空)"
+            icon = "🔴"
+            
         embed = discord.Embed(
-            title=f"🐋 Polymarket 巨鯨交易偵測",
+            title=f"{icon} 巨鯨買入：{direction_label}",
             color=discord.Color.blue() if details['is_bullish'] else discord.Color.red(),
             timestamp=discord.utils.utcnow()
         )
         
-        # 核心欄位：比照專業格式
-        embed.add_field(name="🎯 市場問題", value=f"**{market_info.get('question', '未知市場')}**", inline=False)
-        embed.add_field(name="⚡ 交易行動", value=f"{details['emoji']} **{details['intent']}**", inline=False)
-        embed.add_field(name="💰 成交價值", value=f"`${usd_value:,.2f}` (`{size:,.0f}` shares)", inline=True)
-        embed.add_field(name="📊 價格細節", value=f"`No: {details['p_no']:.3f} | Yes: {details['p_yes']:.3f}`", inline=True)
+        # 建立內容描述 (依據嚴格格式)
+        content = [
+            "---",
+            f"**市場問題：** **{market_info.get('question', '未知市場')}**",
+            f"**交易金額：** `${usd_value:,.2f}` ({size:,.0f} shares)",
+            f"**當前勝率：** {win_rate:.1f}% (Yes: {details['p_yes']:.3f} | No: {details['p_no']:.3f})",
+            "**交易屬性：** 主動買入 (Market Taker)"
+        ]
         
-        # AI 總結 (如果有)
+        # 加入 AI 總結分析 (如果有)
         if summary and summary != "（未啟用 AI 分析）":
-            embed.add_field(name="🤖 AI 總結分析", value=summary, inline=False)
-
-        # 建立交易連結
+            content.append("---")
+            content.append(f"**🤖 AI 總結分析**\n{summary}")
+            
+        content.append("---")
+        
+        # 建立連結
         event_slug = market_info.get("event_slug")
         market_slug = market_info.get("slug")
         if event_slug:
             market_url = f"https://polymarket.com/event/{event_slug}"
-            embed.add_field(name="🔗 市場連結", value=f"[點擊前往 Polymarket (活動頁)]({market_url})", inline=False)
         elif market_slug:
             market_url = f"https://polymarket.com/market/{market_slug}"
-            embed.add_field(name="🔗 市場連結", value=f"[點擊前往 Polymarket (市場頁)]({market_url})", inline=False)
+        else:
+            market_url = "https://polymarket.com"
+            
+        content.append(f"[🔗 點擊前往 Polymarket 市場]({market_url})")
         
-        embed.add_field(name="👤 交易角色", value="Identified as **Taker** (Market Aggressor)", inline=False)
-        
-        embed.set_footer(text="Nexus Seeker 巨鯨監測系統 | Powered by Polymarket CLOB")
+        embed.description = "\n".join(content)
+        embed.set_footer(text=f"Nexus Seeker 監測系統 | {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}")
         
         # 使用 bot 的佇列發送私訊
         await self.bot.queue_dm(user_id, embed=embed)
