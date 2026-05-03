@@ -150,7 +150,7 @@ class PolymarketService:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 # 嘗試多抓幾頁或增加 limit 以確保抓到活躍市場
                 # Polymarket API 可能回傳大量歷史市場，我們需要找未關閉的
-                url = f"{POLY_API_BASE}/markets?active=true&closed=false&limit=100"
+                url = f"{POLY_API_BASE}/markets?active=true&closed=false&limit=500"
                 resp = await client.get(url)
                 
                 if resp.status_code == 200:
@@ -167,7 +167,7 @@ class PolymarketService:
                 
                 # 如果還是沒抓到，嘗試不帶過濾條件抓取最新的市場
                 if not asset_ids:
-                    resp = await client.get(f"{POLY_API_BASE}/markets?limit=100")
+                    resp = await client.get(f"{POLY_API_BASE}/markets?limit=500")
                     if resp.status_code == 200:
                         raw_data = resp.json()
                         markets = raw_data.get("data", []) if isinstance(raw_data, dict) else raw_data
