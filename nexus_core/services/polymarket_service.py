@@ -349,32 +349,41 @@ class PolymarketService:
         
         # 邏輯轉換：確保顯示的價格與「買入」的方向一致
         action_text = "買入"
-        if base_outcome == "Yes":
+        
+        # 1. 處理標準二元市場 (Yes/No)
+        if base_outcome.lower() == "yes":
             if side_raw == "BUY":
                 final_outcome = "Yes"
                 final_price = base_price
             else:
-                # 賣出 Yes = 買入 No
                 final_outcome = "No"
                 final_price = 1 - base_price
-        elif base_outcome == "No":
+        elif base_outcome.lower() == "no":
             if side_raw == "BUY":
                 final_outcome = "No"
                 final_price = base_price
             else:
-                # 賣出 No = 買入 Yes
                 final_outcome = "Yes"
                 final_price = 1 - base_price
+        # 2. 處理命名市場 (例如候選人姓名)
         else:
-            # 非二元市場 (例如候選人姓名)
             if side_raw == "BUY":
                 final_outcome = base_outcome
                 final_price = base_price
             else:
+                # 買入「非該選項」
                 final_outcome = f"非 {base_outcome}"
                 final_price = 1 - base_price
 
-        side_emoji = "🟢" if final_outcome == "Yes" else "🔴"
+        # 確保 final_outcome 不為空
+        if not final_outcome or final_outcome.strip() == "":
+            final_outcome = "未知方向"
+
+        side_emoji = "🟢" if "yes" in final_outcome.lower() else "🔴"
+        # 針對「非 XXX」的狀況，如果是看淡 Yes 則用紅色，否則根據 outcome 決定
+        if "非" in final_outcome and base_outcome.lower() == "yes":
+            side_emoji = "🔴"
+            
         direction_text = f"{action_text} {final_outcome}"
         
         embed = discord.Embed(
