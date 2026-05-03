@@ -196,8 +196,11 @@ class PolymarketService:
                             if not t_ids:
                                 continue
                                 
+                            # 獲取 Outcome 列表 (例如 ["Yes", "No"])
+                            outcomes = m.get("outcomes", [])
+                            
                             current_market_tokens = []
-                            for tid in t_ids:
+                            for i, tid in enumerate(t_ids):
                                 asset_ids.append(tid)
                                 
                                 # 嘗試獲取 Event Slug (用於正確的 URL)
@@ -207,6 +210,9 @@ class PolymarketService:
                                 elif "event" in m and m["event"]:
                                     event_slug = m["event"].get("slug")
 
+                                # 獲取該 Token 對應的 Outcome
+                                outcome_name = outcomes[i] if i < len(outcomes) else "未知選項"
+
                                 # 預熱快取：將 asset_id 對應到市場資訊
                                 self._market_cache[tid] = {
                                     "question": q,
@@ -214,7 +220,8 @@ class PolymarketService:
                                     "end_date": m.get("endDate"),
                                     "condition_id": m.get("conditionId"),
                                     "slug": m.get("slug"),
-                                    "event_slug": event_slug
+                                    "event_slug": event_slug,
+                                    "outcome": outcome_name
                                 }
                                 current_market_tokens.append({"token_id": tid})
                             
@@ -329,10 +336,14 @@ class PolymarketService:
         import discord
         
         side_emoji = "🟢" if trade.get("side") == "BUY" else "🔴"
-        side_text = "買入 (BUY)" if trade.get("side") == "BUY" else "賣出 (SELL)"
+        side_text = "買入" if trade.get("side") == "BUY" else "賣出"
+        outcome_name = market_info.get("outcome", "")
+        
+        # 組合更直觀的方向，例如 "買入 Yes" 或 "賣出 No"
+        direction_text = f"{side_text} {outcome_name}"
         
         embed = discord.Embed(
-            title=f"🐋 Polymarket 巨鯨交易偵測 ({side_text})",
+            title=f"🐋 Polymarket 巨鯨交易偵測 ({direction_text})",
             description=summary,
             color=discord.Color.blue() if trade.get("side") == "BUY" else discord.Color.red(),
             timestamp=discord.utils.utcnow()
@@ -355,7 +366,7 @@ class PolymarketService:
         
         embed.add_field(name="💰 成交金額", value=f"`${usd_value:,.2f}`", inline=True)
         embed.add_field(name="📊 成交價格", value=f"`{trade.get('price')}`", inline=True)
-        embed.add_field(name="🎲 押注方向", value=f"{side_emoji} {trade.get('side')}", inline=True)
+        embed.add_field(name="🎲 押注方向", value=f"{side_emoji} {direction_text}", inline=True)
         
         embed.set_footer(text="Nexus Seeker 巨鯨監測系統 | Powered by Polymarket CLOB")
         
