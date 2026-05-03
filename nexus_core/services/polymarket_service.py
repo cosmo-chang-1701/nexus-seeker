@@ -301,13 +301,23 @@ class PolymarketService:
             summary_cache = None
             for uid in target_users:
                 context = get_full_user_context(uid)
+                
+                # 重新為該使用者計算其偏好的動態門檻 (如果滑價設定不同)
+                user_dynamic_threshold = dynamic_threshold
+                if context.polymarket_slippage != 2.0 and ob:
+                    user_dynamic_threshold = ob.calculate_slippage_threshold(target_percent=context.polymarket_slippage / 100.0)
+                
+                # 再次確認是否符合該使用者的門檻
+                if usd_value < user_dynamic_threshold and (context.polymarket_threshold <= 0 or usd_value < context.polymarket_threshold):
+                    continue
+
                 current_summary = "（未啟用 AI 分析）"
                 if context.polymarket_use_llm:
                     if summary_cache is None:
                         summary_cache = await generate_polymarket_summary(market_info, trade, usd_value)
                     current_summary = summary_cache
                 
-                await self._push_notification(uid, current_summary, market_info, trade, usd_value, dynamic_threshold)
+                await self._push_notification(uid, current_summary, market_info, trade, usd_value, user_dynamic_threshold)
 
         except Exception as e:
             logger.error(f"Failed to handle Polymarket trade: {e}")
@@ -318,6 +328,7 @@ class PolymarketService:
         """
         import discord
         
+        context = get_full_user_context(user_id)
         details = self._resolve_trade_details(trade, market_info)
         size = float(trade.get("size", 0))
         win_rate = details['p_yes'] * 100
@@ -326,8 +337,9 @@ class PolymarketService:
         whale_multiplier = usd_value / dynamic_threshold if dynamic_threshold > 0 else 1.0
         
         # 估計價格衝擊 (Price Impact)
-        # 簡單線性估計：2% 滑價對應 dynamic_threshold，則此筆交易約為 (usd_value/dynamic_threshold)*2%
-        price_impact = (usd_value / dynamic_threshold) * 2.0 if dynamic_threshold > 0 else 0.0
+        # 根據該使用者的 slippage 設定來計算衝擊
+        user_slip = context.polymarket_slippage
+        price_impact = (usd_value / dynamic_threshold) * user_slip if dynamic_threshold > 0 else 0.0
             
         embed = discord.Embed(
             title=f"{details['emoji']} 巨鯨買入：{details['intent'].split(']')[0][1:]}",

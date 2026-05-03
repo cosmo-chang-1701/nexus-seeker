@@ -22,6 +22,7 @@ class UserContext:
     enable_analyst_agent: bool = False # 是否啟用 Wall Street Analyst Agent 每日推播
     polymarket_threshold: float = 10000.0 # Polymarket 巨鯨監控門檻 (USD, 0=關閉)
     polymarket_use_llm: bool = True       # 是否使用 LLM 進行 Polymarket 交易分析
+    polymarket_slippage: float = 2.0      # Polymarket 巨鯨判定目標滑價百分比 (預設 2.0%)
 
 
 # ==========================================
@@ -54,7 +55,7 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:
             # 3. 動態構建 SQL SET 子句 (白名單防護)
             allowed_keys = {'portfolio_value', 'risk_limit_pct', 'last_rehedge_alert_time', 'dynamic_tau', 
                             'enable_option_alerts', 'enable_vtr', 'enable_psq_watchlist', 'enable_analyst_agent',
-                            'polymarket_threshold', 'polymarket_use_llm'}
+                            'polymarket_threshold', 'polymarket_use_llm', 'polymarket_slippage'}
             update_pairs = []
             values = []
             
@@ -68,6 +69,9 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:
                     # Polymarket 門檻防護
                     if key == 'polymarket_threshold':
                         value = max(0.0, float(value))
+                    # Polymarket 滑價防護 (0.1% ~ 10%)
+                    if key == 'polymarket_slippage':
+                        value = max(0.1, min(float(value), 10.0))
                         
                     update_pairs.append(f"{key} = ?")
                     values.append(value)
@@ -144,7 +148,7 @@ def get_full_user_context(user_id: int) -> UserContext:
             cursor.execute("""
                 SELECT portfolio_value, risk_limit_pct, last_rehedge_alert_time, dynamic_tau,
                        enable_option_alerts, enable_vtr, enable_psq_watchlist, enable_analyst_agent,
-                       polymarket_threshold, polymarket_use_llm
+                       polymarket_threshold, polymarket_use_llm, polymarket_slippage
                 FROM user_settings 
                 WHERE user_id = ?
             """, (user_id,))
@@ -181,6 +185,7 @@ def get_full_user_context(user_id: int) -> UserContext:
             last_rehedge = int(user_row['last_rehedge_alert_time']) if user_row and 'last_rehedge_alert_time' in user_row.keys() and user_row['last_rehedge_alert_time'] is not None else 0
             dynamic_tau = float(user_row['dynamic_tau']) if user_row and 'dynamic_tau' in user_row.keys() and user_row['dynamic_tau'] is not None else 1.0
             poly_threshold = float(user_row['polymarket_threshold']) if user_row and 'polymarket_threshold' in user_row.keys() and user_row['polymarket_threshold'] is not None else 10000.0
+            poly_slippage = float(user_row['polymarket_slippage']) if user_row and 'polymarket_slippage' in user_row.keys() and user_row['polymarket_slippage'] is not None else 2.0
             
             # Helper for booleans
             def _get_bool(key: str, default: bool) -> bool:
@@ -202,7 +207,8 @@ def get_full_user_context(user_id: int) -> UserContext:
                 enable_psq_watchlist=_get_bool('enable_psq_watchlist', False),
                 enable_analyst_agent=_get_bool('enable_analyst_agent', False),
                 polymarket_threshold=poly_threshold,
-                polymarket_use_llm=_get_bool('polymarket_use_llm', True)
+                polymarket_use_llm=_get_bool('polymarket_use_llm', True),
+                polymarket_slippage=poly_slippage
             )
             
     except Exception as e:

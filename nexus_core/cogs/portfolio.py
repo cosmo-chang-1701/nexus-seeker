@@ -73,7 +73,8 @@ class PortfolioCog(commands.Cog):
         enable_psq_watchlist="是否對 watchlist 開啟 PowerSqueeze 戰情追蹤",
         enable_analyst_agent="是否啟用 Wall Street Analyst Agent 每日推播",
         polymarket_threshold="Polymarket 巨鯨監控門檻 (USD, 0=關閉)",
-        polymarket_use_llm="Polymarket 交易是否使用 AI 分析總結"
+        polymarket_use_llm="Polymarket 交易是否使用 AI 分析總結",
+        polymarket_slippage="Polymarket 巨鯨判定目標滑價百分比 (0.1% - 10.0%)"
     )
     async def update_settings(
         self, 
@@ -85,7 +86,8 @@ class PortfolioCog(commands.Cog):
         enable_psq_watchlist: Optional[bool] = None,
         enable_analyst_agent: Optional[bool] = None,
         polymarket_threshold: Optional[float] = None,
-        polymarket_use_llm: Optional[bool] = None
+        polymarket_use_llm: Optional[bool] = None,
+        polymarket_slippage: Optional[float] = None
     ):
         user_id = interaction.user.id
         updates = []
@@ -132,6 +134,13 @@ class PortfolioCog(commands.Cog):
         if polymarket_use_llm is not None:
             kwargs['polymarket_use_llm'] = polymarket_use_llm
             updates.append(f"🧠 Polymarket AI 分析: `{'開啟' if polymarket_use_llm else '關閉'}`")
+
+        if polymarket_slippage is not None:
+            if 0.1 <= polymarket_slippage <= 10.0:
+                kwargs['polymarket_slippage'] = polymarket_slippage
+                updates.append(f"🌊 Polymarket 滑價門檻: `{polymarket_slippage}%`")
+            else:
+                return await interaction.response.send_message("❌ 滑價門檻需介於 0.1% 至 10.0% 之間", ephemeral=True)
 
         # 4. 執行資料庫更新
         if not kwargs:
