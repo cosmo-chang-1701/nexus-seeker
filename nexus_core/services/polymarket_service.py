@@ -34,7 +34,7 @@ class PolymarketService:
         """獲取目前服務狀態摘要"""
         if self.last_message_at:
             ts = int(self.last_message_at.timestamp())
-            last_msg = f"<t:{ts}:F> (<t:{ts}:R>)"
+            last_msg = f"<t:{ts}:F>"
         else:
             last_msg = "從未收到"
 
