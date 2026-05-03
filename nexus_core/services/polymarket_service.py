@@ -299,6 +299,9 @@ class PolymarketService:
 
             # 4. 推播通知
             summary_cache = None
+            # 獲取基礎交易詳情用於快取
+            base_details = self._resolve_trade_details(trade, market_info)
+            
             for uid in target_users:
                 context = get_full_user_context(uid)
                 
@@ -314,7 +317,7 @@ class PolymarketService:
                 current_summary = "（未啟用 AI 分析）"
                 if context.polymarket_use_llm:
                     if summary_cache is None:
-                        summary_cache = await generate_polymarket_summary(market_info, trade, usd_value)
+                        summary_cache = await generate_polymarket_summary(market_info, trade, usd_value, base_details)
                     current_summary = summary_cache
                 
                 await self._push_notification(uid, current_summary, market_info, trade, usd_value, user_dynamic_threshold)

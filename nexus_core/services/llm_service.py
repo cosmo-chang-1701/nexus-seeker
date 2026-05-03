@@ -124,13 +124,22 @@ async def generate_analyst_report(report_type: str, raw_data: dict) -> str:
         logger.error(f"Failed to generate analyst report: {e}")
         return f"**{report_type}**\n--------------------------------------------------\n⚠️ LLM 生成失敗或伺服器離線: {str(e)}"
 
-async def generate_polymarket_summary(market_info: dict, trade_data: dict, usd_value: float) -> str:
+async def generate_polymarket_summary(market_info: dict, trade_data: dict, usd_value: float, trade_details: dict = None) -> str:
     """
     針對 Polymarket 巨鯨交易生成背景總結與情緒分析。
     """
-    system_prompt = """
+    intent_desc = trade_details.get('intent', '未知意圖') if trade_details else '未知意圖'
+    sentiment_tag = "看多 (Bullish)" if (trade_details and trade_details.get('is_bullish')) else "看空 (Bearish)"
+    
+    system_prompt = f"""
     你是一位專業的預測市場分析師。請針對 Polymarket 的大額交易（巨鯨交易）提供簡短、專業的背景總結與市場情緒分析。
     請使用繁體中文 (Traditional Chinese)。
+    
+    **重要規則：**
+    1. 預測市場的邏輯與一般股市不同：買入 "NO" 代幣代表押注該事件「不會發生」，因此是「看空」該事件。
+    2. 價格越接近 1.0 代表該選項發生的機率越高。
+    3. 此筆交易的量化判定為：{intent_desc}，市場情緒：{sentiment_tag}。請務必基於此判定進行分析。
+    
     報告應包含：
     1. 事件背景簡述。
     2. 此筆大額交易可能的動機或市場意義。
@@ -142,12 +151,12 @@ async def generate_polymarket_summary(market_info: dict, trade_data: dict, usd_v
     ### Polymarket Trade Detected
     - **Market Question**: {market_info.get('question', 'Unknown')}
     - **Market Description**: {market_info.get('description', 'No description available')}
-    - **Trade Side**: {trade_data.get('side', 'Unknown')}
-    - **Trade Size**: {trade_data.get('size', 0)}
-    - **Trade Price**: {trade_data.get('price', 0)}
+    - **Trade Side**: {trade_data.get('side', 'Unknown')} (已對應至選項: {market_info.get('outcome', 'YES/NO')})
+    - **Trade Price**: {trade_data.get('price', 0)} (代表該選項發生的市場機率)
     - **Total USD Value**: ${usd_value:,.2f}
+    - **Quant Engine Intent**: {intent_desc}
     ---
-    請根據以上資訊生成分析報告。
+    請根據以上資訊生成分析報告，請確保分析內容與量化引擎判定的「{sentiment_tag}」方向一致。
     """
 
     try:
