@@ -338,28 +338,60 @@ class PolymarketService:
 
     def _resolve_trade_details(self, trade: Dict[str, Any], market_info: Dict[str, Any]) -> Dict[str, Any]:
         """
-        極簡化規格化引擎：嚴格遵循使用者要求的 Buy Yes / Buy No 邏輯。
+        進階規格化引擎：解析 Taker 意圖、校準 Yes/No 價格。
         """
         side_raw = trade.get("side", "BUY")
         base_price = float(trade.get("price", 0))
+        # 獲取選項名稱，預設為 Yes
+        outcome = str(market_info.get("outcome", "Yes")).upper()
         
-        # 1. 執行絕對轉換 (忽略 Token 原始名稱，僅根據交易 Side 決定)
-        if side_raw == "BUY":
-            # BUY = Buy Yes
-            final_outcome_label = "Buy Yes"
-            final_price = base_price
-            is_bullish = True
+        # 1. Taker 意圖映射
+        # IF BUY + NO -> [Aggressive Short] (主動買入 NO)
+        # IF SELL + NO -> [No Profit Taking] (主動賣出 NO / 平倉)
+        # IF BUY + YES -> [Aggressive Long] (主動買入 YES)
+        # IF SELL + YES -> [Yes Profit Taking] (主動賣出 YES / 平倉)
+        
+        if outcome == "YES":
+            if side_raw == "BUY":
+                intent = "[Aggressive Long] (主動買入 YES)"
+                p_yes = base_price
+                p_no = 1 - base_price
+                is_bullish = True
+            else:
+                intent = "[Yes Profit Taking] (主動賣出 YES / 平倉)"
+                p_yes = base_price
+                p_no = 1 - base_price
+                is_bullish = False
+        elif outcome == "NO":
+            if side_raw == "BUY":
+                intent = "[Aggressive Short] (主動買入 NO)"
+                p_no = base_price
+                p_yes = 1 - base_price
+                is_bullish = False
+            else:
+                intent = "[No Profit Taking] (主動賣出 NO / 平倉)"
+                p_no = base_price
+                p_yes = 1 - base_price
+                is_bullish = True
         else:
-            # SELL = Buy No
-            final_outcome_label = "Buy No"
-            final_price = 1 - base_price
-            is_bullish = False
-            
+            # 非二元市場 (例如候選人名稱)
+            if side_raw == "BUY":
+                intent = f"[Aggressive Selection] (主動買入 {outcome})"
+                p_yes = base_price
+                p_no = 1 - base_price
+                is_bullish = True
+            else:
+                intent = f"[{outcome} Profit Taking] (主動賣出 {outcome} / 平倉)"
+                p_yes = base_price
+                p_no = 1 - base_price
+                is_bullish = False
+
         return {
-            "direction_text": final_outcome_label,
-            "price": final_price,
+            "intent": intent,
+            "p_yes": p_yes,
+            "p_no": p_no,
             "emoji": "🟢" if is_bullish else "🔴",
-            "is_yes": is_bullish
+            "is_bullish": is_bullish
         }
 
     async def _push_notification(self, user_id: int, summary: str, market_info: Dict[str, Any], trade: Dict[str, Any], usd_value: float):
@@ -368,22 +400,29 @@ class PolymarketService:
         """
         import discord
         
-        # 使用規格化引擎獲取顯示細節
+        # 使用進階規格化引擎
         details = self._resolve_trade_details(trade, market_info)
+        size = float(trade.get("size", 0))
         
         embed = discord.Embed(
-            title=f"🐋 Polymarket 巨鯨交易偵測 ({details['direction_text']})",
-            description=summary,
-            color=discord.Color.blue() if details['is_yes'] else discord.Color.red(),
+            title=f"🐋 Polymarket 巨鯨交易偵測",
+            color=discord.Color.blue() if details['is_bullish'] else discord.Color.red(),
             timestamp=discord.utils.utcnow()
         )
         
-        embed.add_field(name="🎯 市場問題", value=market_info.get("question", "未知"), inline=False)
+        # 核心欄位：比照專業格式
+        embed.add_field(name="🎯 市場問題", value=f"**{market_info.get('question', '未知市場')}**", inline=False)
+        embed.add_field(name="⚡ 交易行動", value=f"{details['emoji']} **{details['intent']}**", inline=False)
+        embed.add_field(name="💰 成交價值", value=f"`${usd_value:,.2f}` (`{size:,.0f}` shares)", inline=True)
+        embed.add_field(name="📊 價格細節", value=f"`No: {details['p_no']:.3f} | Yes: {details['p_yes']:.3f}`", inline=True)
         
+        # AI 總結 (如果有)
+        if summary and summary != "（未啟用 AI 分析）":
+            embed.add_field(name="🤖 AI 總結分析", value=summary, inline=False)
+
         # 建立交易連結
         event_slug = market_info.get("event_slug")
         market_slug = market_info.get("slug")
-        
         if event_slug:
             market_url = f"https://polymarket.com/event/{event_slug}"
             embed.add_field(name="🔗 市場連結", value=f"[點擊前往 Polymarket (活動頁)]({market_url})", inline=False)
@@ -391,9 +430,7 @@ class PolymarketService:
             market_url = f"https://polymarket.com/market/{market_slug}"
             embed.add_field(name="🔗 市場連結", value=f"[點擊前往 Polymarket (市場頁)]({market_url})", inline=False)
         
-        embed.add_field(name="💰 成交金額", value=f"`${usd_value:,.2f}`", inline=True)
-        embed.add_field(name="📊 成交價格", value=f"`{details['price']:.3f}`", inline=True)
-        embed.add_field(name="🎲 押注方向", value=f"{details['emoji']} {details['direction_text']}", inline=True)
+        embed.add_field(name="👤 交易角色", value="Identified as **Taker** (Market Aggressor)", inline=False)
         
         embed.set_footer(text="Nexus Seeker 巨鯨監測系統 | Powered by Polymarket CLOB")
         
