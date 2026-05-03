@@ -207,13 +207,22 @@ class PolymarketService:
                             current_market_tokens = []
                             for tid in t_ids:
                                 asset_ids.append(tid)
+                                
+                                # 嘗試獲取 Event Slug (用於正確的 URL)
+                                event_slug = None
+                                if "events" in m and m["events"] and isinstance(m["events"], list):
+                                    event_slug = m["events"][0].get("slug")
+                                elif "event" in m and m["event"]:
+                                    event_slug = m["event"].get("slug")
+
                                 # 預熱快取：將 asset_id 對應到市場資訊
                                 self._market_cache[tid] = {
                                     "question": q,
                                     "description": m.get("description"),
                                     "end_date": m.get("endDate"),
                                     "condition_id": m.get("conditionId"),
-                                    "slug": m.get("slug")
+                                    "slug": m.get("slug"),
+                                    "event_slug": event_slug
                                 }
                                 current_market_tokens.append({"token_id": tid})
                             
@@ -340,10 +349,17 @@ class PolymarketService:
         embed.add_field(name="🎯 市場問題", value=market_info.get("question", "未知"), inline=False)
         
         # 建立交易連結
-        slug = market_info.get("slug")
-        if slug:
-            market_url = f"https://polymarket.com/event/{slug}"
-            embed.add_field(name="🔗 市場連結", value=f"[點擊前往 Polymarket]({market_url})", inline=False)
+        event_slug = market_info.get("event_slug")
+        market_slug = market_info.get("slug")
+        
+        if event_slug:
+            # 優先使用 Event 連結，這通常是使用者預期的組合頁面
+            market_url = f"https://polymarket.com/event/{event_slug}"
+            embed.add_field(name="🔗 市場連結", value=f"[點擊前往 Polymarket (活動頁)]({market_url})", inline=False)
+        elif market_slug:
+            # 退而求其次使用單一市場連結
+            market_url = f"https://polymarket.com/market/{market_slug}"
+            embed.add_field(name="🔗 市場連結", value=f"[點擊前往 Polymarket (市場頁)]({market_url})", inline=False)
         
         embed.add_field(name="💰 成交金額", value=f"`${usd_value:,.2f}`", inline=True)
         embed.add_field(name="📊 成交價格", value=f"`{trade.get('price')}`", inline=True)
