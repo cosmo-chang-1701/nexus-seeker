@@ -335,17 +335,18 @@ class PolymarketService:
         """
         import discord
         
-        side_emoji = "🟢" if trade.get("side") == "BUY" else "🔴"
-        side_text = "買入" if trade.get("side") == "BUY" else "賣出"
-        outcome_name = market_info.get("outcome", "")
+        # 根據使用者要求簡化方向邏輯：都視為買入，BUY 為 Yes，SELL 為 No
+        side_raw = trade.get("side", "BUY")
+        side_emoji = "🟢" if side_raw == "BUY" else "🔴"
+        action_text = "買入"
+        outcome_fixed = "Yes" if side_raw == "BUY" else "No"
         
-        # 組合更直觀的方向，例如 "買入 Yes" 或 "賣出 No"
-        direction_text = f"{side_text} {outcome_name}"
+        direction_text = f"{action_text} {outcome_fixed}"
         
         embed = discord.Embed(
             title=f"🐋 Polymarket 巨鯨交易偵測 ({direction_text})",
             description=summary,
-            color=discord.Color.blue() if trade.get("side") == "BUY" else discord.Color.red(),
+            color=discord.Color.blue() if side_raw == "BUY" else discord.Color.red(),
             timestamp=discord.utils.utcnow()
         )
         
