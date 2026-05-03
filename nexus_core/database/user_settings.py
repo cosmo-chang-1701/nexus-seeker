@@ -21,6 +21,7 @@ class UserContext:
     enable_psq_watchlist: bool = False # 是否對 add_watch 標的執行 PowerSqueeze 追蹤
     enable_analyst_agent: bool = False # 是否啟用 Wall Street Analyst Agent 每日推播
     polymarket_threshold: float = 10000.0 # Polymarket 巨鯨監控門檻 (USD, 0=關閉)
+    polymarket_use_llm: bool = True       # 是否使用 LLM 進行 Polymarket 交易分析
 
 
 # ==========================================
@@ -53,7 +54,7 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:
             # 3. 動態構建 SQL SET 子句 (白名單防護)
             allowed_keys = {'portfolio_value', 'risk_limit_pct', 'last_rehedge_alert_time', 'dynamic_tau', 
                             'enable_option_alerts', 'enable_vtr', 'enable_psq_watchlist', 'enable_analyst_agent',
-                            'polymarket_threshold'}
+                            'polymarket_threshold', 'polymarket_use_llm'}
             update_pairs = []
             values = []
             
@@ -143,7 +144,7 @@ def get_full_user_context(user_id: int) -> UserContext:
             cursor.execute("""
                 SELECT portfolio_value, risk_limit_pct, last_rehedge_alert_time, dynamic_tau,
                        enable_option_alerts, enable_vtr, enable_psq_watchlist, enable_analyst_agent,
-                       polymarket_threshold
+                       polymarket_threshold, polymarket_use_llm
                 FROM user_settings 
                 WHERE user_id = ?
             """, (user_id,))
@@ -200,7 +201,8 @@ def get_full_user_context(user_id: int) -> UserContext:
                 enable_vtr=_get_bool('enable_vtr', True),
                 enable_psq_watchlist=_get_bool('enable_psq_watchlist', False),
                 enable_analyst_agent=_get_bool('enable_analyst_agent', False),
-                polymarket_threshold=poly_threshold
+                polymarket_threshold=poly_threshold,
+                polymarket_use_llm=_get_bool('polymarket_use_llm', True)
             )
             
     except Exception as e:

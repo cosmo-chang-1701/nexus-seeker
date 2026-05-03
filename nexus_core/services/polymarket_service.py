@@ -212,7 +212,8 @@ class PolymarketService:
                                     "question": q,
                                     "description": m.get("description"),
                                     "end_date": m.get("endDate"),
-                                    "condition_id": m.get("conditionId")
+                                    "condition_id": m.get("conditionId"),
+                                    "slug": m.get("slug")
                                 }
                                 current_market_tokens.append({"token_id": tid})
                             
@@ -271,12 +272,19 @@ class PolymarketService:
             if not market_info:
                 market_info = {"question": "未知市場", "description": "無法獲取市場詳細資訊"}
 
-            # 3. LLM 總結分析
-            summary = await generate_polymarket_summary(market_info, trade, usd_value)
-
-            # 4. 推播通知
+            # 3. 推播通知 (針對每個使用者個別處理)
+            summary_cache = None
+            
             for uid in target_users:
-                await self._push_notification(uid, summary, market_info, trade, usd_value)
+                context = get_full_user_context(uid)
+                
+                current_summary = "（未啟用 AI 分析）"
+                if context.polymarket_use_llm:
+                    if summary_cache is None:
+                        summary_cache = await generate_polymarket_summary(market_info, trade, usd_value)
+                    current_summary = summary_cache
+                
+                await self._push_notification(uid, current_summary, market_info, trade, usd_value)
 
         except Exception as e:
             logger.error(f"Failed to handle Polymarket trade: {e}")
@@ -330,6 +338,13 @@ class PolymarketService:
         )
         
         embed.add_field(name="🎯 市場問題", value=market_info.get("question", "未知"), inline=False)
+        
+        # 建立交易連結
+        slug = market_info.get("slug")
+        if slug:
+            market_url = f"https://polymarket.com/event/{slug}"
+            embed.add_field(name="🔗 市場連結", value=f"[點擊前往 Polymarket]({market_url})", inline=False)
+        
         embed.add_field(name="💰 成交金額", value=f"`${usd_value:,.2f}`", inline=True)
         embed.add_field(name="📊 成交價格", value=f"`{trade.get('price')}`", inline=True)
         embed.add_field(name="🎲 押注方向", value=f"{side_emoji} {trade.get('side')}", inline=True)
