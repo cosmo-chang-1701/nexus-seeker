@@ -279,12 +279,12 @@ class PolymarketService:
             target_users = []
             for uid in user_ids:
                 context = get_full_user_context(uid)
-                # 如果使用者設定了手動門檻，則取兩者較小值（更靈敏）或使用者設定值？
-                # 這裡採用的邏輯是：如果交易金額大於動態門檻，即視為巨鯨交易
-                if usd_value >= dynamic_threshold:
-                    target_users.append(uid)
-                # 或者：如果交易金額大於使用者設定的靜態門檻，也推播 (保留原本功能)
-                elif context.polymarket_threshold > 0 and usd_value >= context.polymarket_threshold:
+                # 修改為 AND 邏輯：必須同時滿足動態門檻與使用者設定的靜態門檻
+                # 如果使用者未設定靜態門檻 (<= 0)，則只看動態門檻
+                meets_dynamic = usd_value >= dynamic_threshold
+                meets_static = (context.polymarket_threshold <= 0 or usd_value >= context.polymarket_threshold)
+                
+                if meets_dynamic and meets_static:
                     target_users.append(uid)
             
             if not target_users:
@@ -310,8 +310,11 @@ class PolymarketService:
                 if context.polymarket_slippage != 2.0 and ob:
                     user_dynamic_threshold = ob.calculate_slippage_threshold(target_percent=context.polymarket_slippage / 100.0)
                 
-                # 再次確認是否符合該使用者的門檻
-                if usd_value < user_dynamic_threshold and (context.polymarket_threshold <= 0 or usd_value < context.polymarket_threshold):
+                # 再次確認是否符合該使用者的門檻 (AND 邏輯)
+                meets_dynamic = usd_value >= user_dynamic_threshold
+                meets_static = (context.polymarket_threshold <= 0 or usd_value >= context.polymarket_threshold)
+                
+                if not (meets_dynamic and meets_static):
                     continue
 
                 current_summary = "（未啟用 AI 分析）"
