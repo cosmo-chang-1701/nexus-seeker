@@ -170,16 +170,24 @@ class PolymarketService:
                     for m in markets:
                         # 再次驗證狀態
                         if m.get("active") and not m.get("closed"):
-                            active_markets_data.append({
-                                "question": m.get("question"),
-                                "description": m.get("description"),
-                                "end_date": m.get("end_date_iso"),
-                                "tokens": m.get("tokens", [])
-                            })
+                            # 只有具有 token_id 的 CLOB 市場才能被 WebSocket 監控
+                            current_market_tokens = []
+                            has_clob_tokens = False
+                            
                             if "tokens" in m:
                                 for token in m["tokens"]:
                                     if "token_id" in token:
                                         asset_ids.append(token["token_id"])
+                                        current_market_tokens.append(token)
+                                        has_clob_tokens = True
+                            
+                            if has_clob_tokens:
+                                active_markets_data.append({
+                                    "question": m.get("question"),
+                                    "description": m.get("description"),
+                                    "end_date": m.get("end_date_iso"),
+                                    "tokens": current_market_tokens
+                                })
                 
                 # 如果還是沒抓到，嘗試不帶過濾條件抓取最新的市場
                 if not asset_ids:
@@ -189,15 +197,21 @@ class PolymarketService:
                         markets = raw_data.get("data", []) if isinstance(raw_data, dict) else raw_data
                         for m in markets:
                             if not m.get("closed"):
-                                active_markets_data.append({
-                                    "question": m.get("question"),
-                                    "description": m.get("description"),
-                                    "end_date": m.get("end_date_iso"),
-                                    "tokens": m.get("tokens", [])
-                                })
+                                current_market_tokens = []
+                                has_clob_tokens = False
                                 for token in m.get("tokens", []):
                                     if "token_id" in token:
                                         asset_ids.append(token["token_id"])
+                                        current_market_tokens.append(token)
+                                        has_clob_tokens = True
+                                
+                                if has_clob_tokens:
+                                    active_markets_data.append({
+                                        "question": m.get("question"),
+                                        "description": m.get("description"),
+                                        "end_date": m.get("end_date_iso"),
+                                        "tokens": current_market_tokens
+                                    })
 
             # 儲存活躍市場資訊
             self._active_markets = active_markets_data
