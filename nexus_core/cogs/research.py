@@ -51,5 +51,19 @@ class Research(commands.Cog):
         embed.add_field(name="前收盤 (PC)", value=f"${data['pc']}", inline=True)
         await interaction.followup.send(embed=embed, ephemeral=True)
 
+    @app_commands.command(name="poly_list", description="顯示目前監控中的 Polymarket 活躍市場清單")
+    async def poly_list(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            if not hasattr(self.bot, 'polymarket_service'):
+                return await interaction.followup.send("❌ Polymarket 服務未初始化。", ephemeral=True)
+                
+            markets = self.bot.polymarket_service.get_active_markets(limit=20)
+            embed = embed_builder.create_polymarket_list_embed(markets)
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        except Exception as e:
+            logger.error(f"獲取 Polymarket 清單失敗: {e}")
+            await interaction.followup.send(f"❌ 獲取 Polymarket 資訊時發生錯誤。", ephemeral=True)
+
 async def setup(bot):
     await bot.add_cog(Research(bot))

@@ -568,6 +568,55 @@ def create_reddit_scan_embed(symbol, reddit_text):
     return embed
 
 
+def create_polymarket_list_embed(markets: List[Dict[str, Any]]):
+    """建構 Polymarket 監控中的熱門市場 Embed"""
+    embed = discord.Embed(
+        title="🐋 Polymarket 監控中的活躍市場",
+        color=discord.Color.blue(),
+        timestamp=datetime.now(timezone.utc)
+    )
+    
+    if not markets:
+        embed.description = "目前沒有監控中的市場。"
+        return embed
+
+    description = ""
+    for i, m in enumerate(markets, 1):
+        question = m.get("question", "未知市場")
+        # 截斷過長的標題
+        if len(question) > 70:
+            question = question[:67] + "..."
+        
+        # 取得 token 價格資訊 (如果有的話)
+        tokens = m.get("tokens", [])
+        price_info = ""
+        if tokens:
+            # 顯示前兩個 outcome 的價格
+            p_list = []
+            for t in tokens[:2]:
+                outcome = t.get('outcome', '')
+                price = t.get('price', 0)
+                # 簡單格式化價格 (0-1)
+                try:
+                    price_val = float(price)
+                    price_str = f"{price_val:.2f}"
+                except:
+                    price_str = str(price)
+                p_list.append(f"{outcome}: `{price_str}`")
+            price_info = " | ".join(p_list)
+            
+        line = f"**{i}.** {question}\n   └ {price_info}\n"
+        
+        # 檢查總長度，避免超過 Discord 限制
+        if len(description) + len(line) > 3900:
+            break
+        description += line
+        
+    embed.description = description
+    embed.set_footer(text="Nexus Seeker | Polymarket Monitor (Top 20 Active Markets)")
+    return embed
+
+
 def create_watchlist_embed(page_data, current_page, total_pages, total_items):
     """生成觀察清單的分頁 Embed (使用等寬區塊排版)"""
     

@@ -261,6 +261,7 @@ docker compose up -d --build
 | `/scan_news` | 快速掃描標的的 Finnhub 官方新聞 | `symbol: TSLA` `limit: 5` |
 | `/scan_reddit` | 即時爬取標的的 Reddit 散戶情緒（過去 24 小時） | `symbol: PLTR` `limit: 5` |
 | `/quote` | 透過 Finnhub 獲取即時報價（現價、漲跌幅、今日高低、前收盤） | `symbol: AAPL` |
+| `/poly_list` | 顯示目前監控中的 Polymarket 活躍市場清單 | — |
 
 ### 🛠️ 管理員
 

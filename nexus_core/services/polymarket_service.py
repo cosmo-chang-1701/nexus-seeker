@@ -21,6 +21,7 @@ class PolymarketService:
         self.bot = bot
         self.running = False
         self._market_cache = {}
+        self._active_markets = []  # 儲存目前活躍市場的詳細資訊
         self._monitor_task = None
         self._ping_task = None
         
@@ -31,7 +32,7 @@ class PolymarketService:
         self.is_connected = False
 
     def get_status(self) -> Dict[str, Any]:
-        """獲取目前服務狀態摘要"""
+        """獲獲目前服務狀態摘要"""
         if self.last_message_at:
             ts = int(self.last_message_at.timestamp())
             last_msg = f"<t:{ts}:F>"
@@ -45,6 +46,10 @@ class PolymarketService:
             "last_message": last_msg,
             "errors": self.error_count
         }
+
+    def get_active_markets(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """獲取目前監控中的活躍市場清單"""
+        return self._active_markets[:limit]
 
     def start(self):
         if self.running:
@@ -148,13 +153,13 @@ class PolymarketService:
 
     async def _fetch_all_active_asset_ids(self) -> List[str]:
         """
-        透過 API 獲取所有活躍市場的資產 ID
+        透過 API 獲取所有活躍市場的資產 ID，並儲存市場資訊
         """
         asset_ids = []
+        active_markets_data = []
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 # 嘗試多抓幾頁或增加 limit 以確保抓到活躍市場
-                # Polymarket API 可能回傳大量歷史市場，我們需要找未關閉的
                 url = f"{POLY_API_BASE}/markets?active=true&closed=false&limit=500"
                 resp = await client.get(url)
                 
@@ -165,6 +170,12 @@ class PolymarketService:
                     for m in markets:
                         # 再次驗證狀態
                         if m.get("active") and not m.get("closed"):
+                            active_markets_data.append({
+                                "question": m.get("question"),
+                                "description": m.get("description"),
+                                "end_date": m.get("end_date_iso"),
+                                "tokens": m.get("tokens", [])
+                            })
                             if "tokens" in m:
                                 for token in m["tokens"]:
                                     if "token_id" in token:
@@ -177,12 +188,19 @@ class PolymarketService:
                         raw_data = resp.json()
                         markets = raw_data.get("data", []) if isinstance(raw_data, dict) else raw_data
                         for m in markets:
-                            # 寬鬆過濾：只要沒關閉或是剛建立的
                             if not m.get("closed"):
+                                active_markets_data.append({
+                                    "question": m.get("question"),
+                                    "description": m.get("description"),
+                                    "end_date": m.get("end_date_iso"),
+                                    "tokens": m.get("tokens", [])
+                                })
                                 for token in m.get("tokens", []):
                                     if "token_id" in token:
                                         asset_ids.append(token["token_id"])
 
+            # 儲存活躍市場資訊
+            self._active_markets = active_markets_data
             # 確保不重複
             return list(set(asset_ids))
         except Exception as e:

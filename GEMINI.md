@@ -118,7 +118,7 @@ When modifying VIX ladder behavior:
 - `nexus_core/config.py`: Global configuration — env vars, strategy Delta params, **VIX Battle Ladder** tier definitions (`VIX_LADDER_CONFIG`), and `get_vix_tier()` helper (with NaN robustness).
 - `nexus_core/market_time.py`: NYSE market calendar and timezone-aware scheduling.
 - `nexus_core/services/trading_service.py`: Centralized business logic orchestrator. Propagates `vix_spot` through scan pipeline, gates VTR entry by tier.
-- **`services/polymarket_service.py`**: Real-time Polymarket whale monitoring service via WebSocket. Handles filtering, market metadata fetching, and LLM integration. **Includes connection status tracking and health monitoring.**
+- **`services/polymarket_service.py`**: Real-time Polymarket whale monitoring service via WebSocket. Handles filtering, market metadata fetching, and LLM integration. **Includes connection status tracking, active market metadata storage, and health monitoring.**
 
 - `nexus_core/market_analysis/strategy.py`: Quant scanning and filtering pipeline. VIX ladder gating (`apply_vix_ladder()`), delta capping, and sizing multiplier.
 - `nexus_core/market_analysis/psq_engine.py`: PowerSqueeze momentum calculation engine with VIX-aware labeling.
