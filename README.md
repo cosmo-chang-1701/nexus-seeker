@@ -75,7 +75,7 @@
 | ⚙️ **個人化風險與推播** | 每位使用者可自訂風險限制（1%–50%），及切換 Option 推播、VTR 自動建倉與 PowerSqueeze 等專屬追蹤頻道。 |
 | ⚡ **PowerSqueeze 動能追蹤** | 內建向量化 PSQ 數學模組，抓取盤基壓縮突破與能量擴張訊號，可作為獨立風向標並行於原有 Option 訊號。VIX 感知動能標記可識別低 VIX 牛陷阱 (`OVEREXTENDED_RISK`) 與高 VIX 反彈機會 (`HIGH_CONVICTION_RECOVERY`)。 |
 | 💹 **即時報價查詢** | `/quote` 指令透過 Finnhub 即時取得標的報價（含現價、漲跌幅、今日高低與前收盤價）。 |
-| 🐋 **Polymarket 巨鯨監控** | 整合 Polymarket CLOB WebSocket，即時監控預測市場大額交易（巨鯨）。結合 LLM 自動生成事件背景總結與情緒分析，並依使用者設定之 USD 門檻進行私訊推播。 |
+| 🐋 **Polymarket 巨鯨監控** | 整合 Polymarket CLOB WebSocket，即時監控預測市場大額交易（巨鯨）。結合 LLM 自動生成事件背景總結與情緒分析，並依使用者設定之 USD 門檻進行私訊推播。**具備即時連線狀態追蹤與 `/poly_status` 指令監測連線健康度。** |
 | 🏗️ **Service Layer 分治** | `TradingService` 集中式業務邏輯層，將 Discord UI 層與核心計算徹底解耦，職責分明。 |
 
 ---
@@ -274,6 +274,7 @@ docker compose up -d --build
 |---|---|
 | `/test_risk_ui` | 模擬高風險標的掃描資料，驗證 Beta、加權股數與風險 UI 渲染邏輯 |
 | `/test_poly_whale` | 模擬 Polymarket 巨鯨交易推播，驗證 WebSocket 監控與 LLM 總結邏輯 |
+| `/poly_status` | 查看 Polymarket WebSocket 連線狀態、訂閱資產數與最後訊息時間 |
 
 <details>
 <summary><strong><code>/add_trade</code> 參數</strong></summary>

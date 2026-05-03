@@ -116,5 +116,32 @@ class DebugCog(commands.Cog):
         except Exception as e:
             await interaction.followup.send(f"❌ 模擬失敗: {e}", ephemeral=True)
 
+    @app_commands.command(name="poly_status", description="🛠️ [開發者] 查看 Polymarket WebSocket 連線狀態")
+    async def poly_status(self, interaction: discord.Interaction):
+        if not hasattr(self.bot, 'polymarket_service'):
+            await interaction.response.send_message("❌ Polymarket 服務未初始化。", ephemeral=True)
+            return
+            
+        status = self.bot.polymarket_service.get_status()
+        
+        embed = discord.Embed(
+            title="🐋 Polymarket 服務狀態",
+            color=discord.Color.green() if status["connected"] else discord.Color.red(),
+            timestamp=discord.utils.utcnow()
+        )
+        
+        status_emoji = "🟢 已連線" if status["connected"] else "🔴 斷線中"
+        running_emoji = "✅ 運行中" if status["running"] else "🛑 已停止"
+        
+        embed.add_field(name="服務狀態", value=running_emoji, inline=True)
+        embed.add_field(name="連線狀態", value=status_emoji, inline=True)
+        embed.add_field(name="訂閱資產數", value=f"`{status['asset_count']}`", inline=True)
+        embed.add_field(name="最後訊息時間", value=f"`{status['last_message']}`", inline=False)
+        embed.add_field(name="異常次數", value=f"`{status['errors']}`", inline=True)
+        
+        embed.set_footer(text="Nexus Seeker | Polymarket Monitor")
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
 async def setup(bot):
     await bot.add_cog(DebugCog(bot))

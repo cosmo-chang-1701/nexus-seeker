@@ -20,6 +20,24 @@ class PolymarketService:
         self.running = False
         self._market_cache = {}
         self._monitor_task = None
+        
+        # 狀態追蹤
+        self.last_message_at = None
+        self.asset_count = 0
+        self.error_count = 0
+        self.is_connected = False
+
+    def get_status(self) -> Dict[str, Any]:
+        """獲取目前服務狀態摘要"""
+        import datetime
+        last_msg = self.last_message_at.strftime("%Y-%m-%d %H:%M:%S") if self.last_message_at else "從未收到"
+        return {
+            "running": self.running,
+            "connected": self.is_connected,
+            "asset_count": self.asset_count,
+            "last_message": last_msg,
+            "errors": self.error_count
+        }
 
     def start(self):
         if self.running:
@@ -30,21 +48,27 @@ class PolymarketService:
 
     def stop(self):
         self.running = False
+        self.is_connected = False
         if self._monitor_task:
             self._monitor_task.cancel()
         logger.info("🛑 Polymarket Whale Monitor Service stopped.")
 
     async def _monitor_loop(self):
+        import datetime
         while self.running:
             try:
                 # 1. 獲取所有活躍市場以取得 asset_id 列表
                 asset_ids = await self._fetch_all_active_asset_ids()
                 if not asset_ids:
                     logger.warning("No active asset IDs found. Retrying in 30s...")
+                    self.error_count += 1
                     await asyncio.sleep(30)
                     continue
 
+                self.asset_count = len(asset_ids)
+
                 async with websockets.connect(POLY_WS_URL) as ws:
+                    self.is_connected = True
                     # Subscribe to trades for all active assets
                     sub_msg = {
                         "type": "subscribe",
@@ -57,22 +81,34 @@ class PolymarketService:
                     async for message in ws:
                         if not self.running:
                             break
+                        
+                        # 記錄最後收到訊息的時間
+                        self.last_message_at = datetime.datetime.now()
+                        
                         try:
                             data = json.loads(message)
+                            # 處理訊息
                             if isinstance(data, list):
                                 for item in data:
                                     if item.get("event_type") == "trade":
                                         await self._handle_trade(item)
                             elif data.get("event_type") == "trade":
                                 await self._handle_trade(data)
+                            elif data.get("type") == "error":
+                                self.error_count += 1
+                                logger.error(f"Polymarket WS error message: {data.get('message')}")
                         except json.JSONDecodeError:
                             continue
                         except Exception as e:
+                            self.error_count += 1
                             logger.error(f"Error processing Polymarket WS message: {e}")
 
             except websockets.exceptions.ConnectionClosed:
+                self.is_connected = False
                 logger.warning("Polymarket WS connection closed. Reconnecting...")
             except Exception as e:
+                self.is_connected = False
+                self.error_count += 1
                 logger.error(f"Polymarket WS monitor loop encountered error: {e}")
             
             if self.running:
