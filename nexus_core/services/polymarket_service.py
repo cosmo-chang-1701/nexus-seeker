@@ -11,7 +11,7 @@ from services.llm_service import generate_polymarket_summary
 
 logger = logging.getLogger(__name__)
 
-POLY_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+POLY_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/"
 POLY_API_BASE = "https://clob.polymarket.com"
 
 class PolymarketService:
