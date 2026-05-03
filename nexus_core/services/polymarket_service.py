@@ -196,8 +196,9 @@ class PolymarketService:
                             if not t_ids:
                                 continue
                                 
-                            # 獲取 Outcome 列表 (例如 ["Yes", "No"])
+                            # 獲取 Outcome 列表 (例如 ["Yes", "No"]) 與價格
                             outcomes = m.get("outcomes", [])
+                            outcome_prices = m.get("outcomePrices", [])
                             
                             current_market_tokens = []
                             for i, tid in enumerate(t_ids):
@@ -212,6 +213,8 @@ class PolymarketService:
 
                                 # 獲取該 Token 對應的 Outcome
                                 outcome_name = outcomes[i] if i < len(outcomes) else "未知選項"
+                                # 獲取該 Token 對應的價格
+                                current_price = outcome_prices[i] if i < len(outcome_prices) else 0
 
                                 # 預熱快取：將 asset_id 對應到市場資訊
                                 self._market_cache[tid] = {
@@ -223,7 +226,11 @@ class PolymarketService:
                                     "event_slug": event_slug,
                                     "outcome": outcome_name
                                 }
-                                current_market_tokens.append({"token_id": tid})
+                                current_market_tokens.append({
+                                    "token_id": tid,
+                                    "outcome": outcome_name,
+                                    "price": current_price
+                                })
                             
                             active_markets_data.append({
                                 "question": q,
