@@ -342,18 +342,45 @@ class PolymarketService:
         """
         import discord
         
-        # 根據使用者要求簡化方向邏輯：都視為買入，BUY 為 Yes，SELL 為 No
+        # 根據使用者要求規格化方向：都視為買入，並顯示對應方向的價格
         side_raw = trade.get("side", "BUY")
-        side_emoji = "🟢" if side_raw == "BUY" else "🔴"
-        action_text = "買入"
-        outcome_fixed = "Yes" if side_raw == "BUY" else "No"
+        base_price = float(trade.get("price", 0))
+        base_outcome = market_info.get("outcome", "Yes") # 該 Token 的原始定義 (Yes 或 No)
         
-        direction_text = f"{action_text} {outcome_fixed}"
+        # 邏輯轉換：確保顯示的價格與「買入」的方向一致
+        action_text = "買入"
+        if base_outcome == "Yes":
+            if side_raw == "BUY":
+                final_outcome = "Yes"
+                final_price = base_price
+            else:
+                # 賣出 Yes = 買入 No
+                final_outcome = "No"
+                final_price = 1 - base_price
+        elif base_outcome == "No":
+            if side_raw == "BUY":
+                final_outcome = "No"
+                final_price = base_price
+            else:
+                # 賣出 No = 買入 Yes
+                final_outcome = "Yes"
+                final_price = 1 - base_price
+        else:
+            # 非二元市場 (例如候選人姓名)
+            if side_raw == "BUY":
+                final_outcome = base_outcome
+                final_price = base_price
+            else:
+                final_outcome = f"非 {base_outcome}"
+                final_price = 1 - base_price
+
+        side_emoji = "🟢" if final_outcome == "Yes" else "🔴"
+        direction_text = f"{action_text} {final_outcome}"
         
         embed = discord.Embed(
             title=f"🐋 Polymarket 巨鯨交易偵測 ({direction_text})",
             description=summary,
-            color=discord.Color.blue() if side_raw == "BUY" else discord.Color.red(),
+            color=discord.Color.blue() if final_outcome == "Yes" else discord.Color.red(),
             timestamp=discord.utils.utcnow()
         )
         
@@ -364,16 +391,14 @@ class PolymarketService:
         market_slug = market_info.get("slug")
         
         if event_slug:
-            # 優先使用 Event 連結，這通常是使用者預期的組合頁面
             market_url = f"https://polymarket.com/event/{event_slug}"
             embed.add_field(name="🔗 市場連結", value=f"[點擊前往 Polymarket (活動頁)]({market_url})", inline=False)
         elif market_slug:
-            # 退而求其次使用單一市場連結
             market_url = f"https://polymarket.com/market/{market_slug}"
             embed.add_field(name="🔗 市場連結", value=f"[點擊前往 Polymarket (市場頁)]({market_url})", inline=False)
         
         embed.add_field(name="💰 成交金額", value=f"`${usd_value:,.2f}`", inline=True)
-        embed.add_field(name="📊 成交價格", value=f"`{trade.get('price')}`", inline=True)
+        embed.add_field(name="📊 成交價格", value=f"`{final_price:.3f}`", inline=True)
         embed.add_field(name="🎲 押注方向", value=f"{side_emoji} {direction_text}", inline=True)
         
         embed.set_footer(text="Nexus Seeker 巨鯨監測系統 | Powered by Polymarket CLOB")
