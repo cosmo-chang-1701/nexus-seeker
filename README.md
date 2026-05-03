@@ -75,7 +75,8 @@
 | ⚙️ **個人化風險與推播** | 每位使用者可自訂風險限制（1%–50%），及切換 Option 推播、VTR 自動建倉與 PowerSqueeze 等專屬追蹤頻道。 |
 | ⚡ **PowerSqueeze 動能追蹤** | 內建向量化 PSQ 數學模組，抓取盤基壓縮突破與能量擴張訊號，可作為獨立風向標並行於原有 Option 訊號。VIX 感知動能標記可識別低 VIX 牛陷阱 (`OVEREXTENDED_RISK`) 與高 VIX 反彈機會 (`HIGH_CONVICTION_RECOVERY`)。 |
 | 💹 **即時報價查詢** | `/quote` 指令透過 Finnhub 即時取得標的報價（含現價、漲跌幅、今日高低與前收盤價）。 |
-| 🐋 **Polymarket 巨鯨監控** | 整合 Polymarket CLOB WebSocket，即時監控預測市場大額交易（巨鯨）。結合 LLM 自動生成事件背景總結與情緒分析，並依使用者設定之 USD 門檻進行私訊推播。**具備即時連線狀態追蹤與 `/poly_status` 指令監測連線健康度。** |
+| 🐋 **Polymarket 巨鯨監控** | 整合 Polymarket CLOB WebSocket，即時監控預測市場大額交易（巨鯨）。具備 **Taker 意圖映射** (Aggressive Long/Short) 與 **Yes/No 雙向價格校準**，並結合 LLM 自動生成事件背景總結。支援使用者自訂 USD 門檻、AI 開關與即時連線健康度監測 (`/poly_status`)。 |
+
 | 🏗️ **Service Layer 分治** | `TradingService` 集中式業務邏輯層，將 Discord UI 層與核心計算徹底解耦，職責分明。 |
 
 ---
@@ -141,7 +142,7 @@ Discord 使用者 ──► Discord API ──► NexusBot (bot.py)
 | **每 30 分鐘心跳** (盤中) | VTR 監控與對沖 | 盤中掃描虛擬交易室 (VTR) 持倉，當觸發獲利/停損/Delta 擴表條件時自動平倉或轉倉並即時通知；依據目標 Delta (Target Delta) 提供部位精準對沖建議。 |
 | **動態睡眠** → 收盤後 15 分 (≈ 16:15 ET) | 盤後報告 | 動態結算實單與虛盤損益、Gamma 脆性防禦、計算 SPY Beta-Weighted 宏觀曝險，提出跨板塊相關性警告。同時執行背景快取清理維護資料庫效能。 |
 | **每週五定時** (17:05 ET) | VTR 績效週報 | 收盤後彙總該週虛擬交易室 (VTR) 的勝率、總損益與盈虧比，發送專屬績效報表。 |
-| **即時監聽 (WebSocket)** | Polymarket 巨鯨監控 | 全天候監聽 Polymarket CLOB 交易流，當單筆成交額 > 使用者門檻時，呼叫 LLM 產出分析報告並即時推播。 |
+| **即時監聽 (WebSocket)** | Polymarket 巨鯨監控 | 全天候監聽 Polymarket CLOB 交易流。具備 **Taker 意圖解析** 與 **Yes/No 雙向價格校準**，當單筆成交額超過門檻時，結合 LLM 產出深度分析報告並即時推播。 |
 | **NYSE 動態排程** | Analyst Agent | 基於 NYSE 市場時鐘，全自動執行盤前、盤中與盤後量化分析模組，提供宏觀掃描（殖利率、DXY、VIX）、財報預警與次日策略規劃。 |
 
 ---
@@ -600,7 +601,7 @@ docker compose run --rm -v "$(pwd):/app" nexus_seeker python -m unittest discove
 - [x] **PowerSqueeze 模組 (PSQ)** — 雙路徑解耦量化掃描，獨立於 Option 訊號提供基於 Squeeze 能量突破的即時戰情 (完全對應 TradingView v2 Ultimate Edition 規格)，支援 `/settings` 獨立開關。
 - [x] **VIX 戰情階梯 (Battle Ladder)** — 6 階段 VIX 攻守互換系統，動態調控 Delta 上限、倉位乘數、Kelly 比例與 VTR 建倉許可。NRO 攻勢放大 (高 VIX → w_vix 升至 2.0x)、All-in 旁路繞過宏觀抑制、PSQ 動能標記 (`OVEREXTENDED_RISK` / `HIGH_CONVICTION_RECOVERY`)。
 - [x] **Analyst Agent (量化分析師代理)** — 全自動化 NYSE 動態排程引擎，精準對齊交易時段執行盤前宏觀掃描、盤中流動性監測與盤後策略規劃，自動將量化報告推播至已訂閱使用者。
-- [x] **Polymarket 巨鯨監控** — 整合 WebSocket 即時監聽預測市場大額交易，結合 LLM 自動生成事件背景分析與市場情緒總結，實現精準趨勢捕捉。
+- [x] **Polymarket 巨鯨監控** — 整合 WebSocket 即時監聽預測市場大額交易，具備 **Taker 意圖解析** 與 **Yes/No 雙向價格校準**，並結合 LLM 自動生成事件背景分析與市場情緒總結，實現精準趨勢捕捉。
 - [ ] **MCP Server** — 將核心量化模組封裝為標準 Model Context Protocol 工具，供外部 AI 代理使用。
 - [ ] **券商 API 整合** — Interactive Brokers Gateway 實現全自動下單執行（訊號 → 執行 → 平倉，零人工介入）。
 
