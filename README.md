@@ -75,7 +75,7 @@
 | ⚙️ **個人化風險與推播** | 每位使用者可自訂風險限制（1%–50%），及切換 Option 推播、VTR 自動建倉與 PowerSqueeze 等專屬追蹤頻道。 |
 | ⚡ **PowerSqueeze 動能追蹤** | 內建向量化 PSQ 數學模組，抓取盤基壓縮突破與能量擴張訊號，可作為獨立風向標並行於原有 Option 訊號。VIX 感知動能標記可識別低 VIX 牛陷阱 (`OVEREXTENDED_RISK`) 與高 VIX 反彈機會 (`HIGH_CONVICTION_RECOVERY`)。 |
 | 💹 **即時報價查詢** | `/quote` 指令透過 Finnhub 即時取得標的報價（含現價、漲跌幅、今日高低與前收盤價）。 |
-| 🐋 Polymarket 巨鯨監控 | 整合 Polymarket CLOB WebSocket 與 L2 訂單簿同步，即時監控預測市場巨鯨交易。具備 **動態滑價門檻引擎**（基於 2% 滑價深度自動調整門檻）、**Taker 意圖映射** (Aggressive Long/Short) 與 **Yes/No 雙向價格校準**。警報包含 **流動性倍數** 與 **預期價格衝擊** 評估。支援 AI 背景分析、自訂門檻與 WebSocket 指數退避重連。 |
+| 🐋 Polymarket 巨鯨監控 | 整合 Polymarket CLOB WebSocket 與 L2 訂單簿同步，即時監控預測市場巨鯨交易。具備 **動態滑價門檻引擎**（基於 2% 滑價深度自動調整門檻）、**Taker 意圖映射** (Aggressive Long/Short) 與 **Yes/No 雙向價格校準**。採用 **AND 雙重過濾邏輯**（必須同時超過動態與靜態門檻），警報包含 **流動性倍數** 與 **預期價格衝擊** 評估。支援 AI 背景分析、自訂門檻與 WebSocket 指數退避重連。 |
 
 | 🏗️ **Service Layer 分治** | `TradingService` 集中式業務邏輯層，將 Discord UI 層與核心計算徹底解耦，職責分明。 |
 
