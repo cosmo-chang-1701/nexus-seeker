@@ -349,26 +349,26 @@ class PolymarketService:
         impact_str = f"{price_impact:.2f}%" if price_impact >= 0.01 else ("< 0.01%" if price_impact > 0 else "0.00%")
             
         embed = discord.Embed(
-            title=f"{details['emoji']} 巨鯨買入：{details['intent'].split(']')[0][1:]}",
+            title="【 🐋 Polymarket 巨鯨戰報 】",
             color=discord.Color.blue() if details['is_bullish'] else discord.Color.red(),
             timestamp=discord.utils.utcnow()
         )
         
         content = [
+            f"## {details['emoji']} {details['intent'].split(']')[0][1:]}",
             "---",
             f"**市場問題：** **{market_info.get('question', '未知市場')}**",
             f"**交易金額：** `${usd_value:,.2f}`",
             f"**流動性倍數：** `{multiplier_str}` (相對於 {user_slip}% 滑價深度)",
             f"**估計價格衝擊：** `{impact_str}`",
             f"**當前勝率：** {win_rate:.1f}% (Yes: {details['p_yes']:.3f} | No: {details['p_no']:.3f})",
-            "**交易屬性：** 主動買入 (Market Taker)"
+            "**交易屬性：** 主動買入 (Market Taker)",
+            "---"
         ]
         
         if summary and summary != "（未啟用 AI 分析）":
-            content.append("---")
             content.append(f"**🤖 AI 總結分析**\n{summary}")
-            
-        content.append("---")
+            content.append("---")
         
         # 連結處理
         event_slug = market_info.get("event_slug")
