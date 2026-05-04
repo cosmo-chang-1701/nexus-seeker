@@ -34,6 +34,15 @@ class RiskAssessment(BaseModel):
         description="一句話的終極風控結論 (請控制在 30 字以內，極度冷靜客觀)"
     )
 
+class AnalystReport(BaseModel):
+    report_content: str = Field(description="完整的分析報告內容 (Markdown 格式)，必須維持原本的標題與分隔線")
+
+class PolymarketAnalysis(BaseModel):
+    event_background: str = Field(description="簡短的事件背景，說明該預測市場在賭什麼")
+    whale_logic: str = Field(description="分析此筆大額交易可能的動機、對沖行為或內線情報推測")
+    market_sentiment: str = Field(description="目前市場的整體情緒、賠率分布與預期偏差")
+    one_line_verdict: str = Field(description="一句話的核心總結，必須包含看多/看空的方向性結論")
+
 async def evaluate_trade_risk(symbol: str, strategy: str, news_context: str, reddit_context: str) -> dict:
     """
     呼叫 LLM 進行 NLP 新聞毒性分析與風控審查
@@ -95,9 +104,6 @@ async def evaluate_trade_risk(symbol: str, strategy: str, news_context: str, red
         # Fail-Open 策略
         return {"decision": "APPROVE", "reasoning": f"AI 伺服器離線或異常，預設放行: {str(e)}"}
 
-class AnalystReport(BaseModel):
-    report_content: str = Field(description="完整的分析報告內容 (Markdown 格式)，必須維持原本的標題與分隔線")
-
 async def generate_analyst_report(report_type: str, raw_data: dict) -> str:
     """
     將量化資料餵給 LLM，生成口語化且專業的分析報告。
@@ -130,7 +136,7 @@ async def generate_polymarket_summary(market_info: dict, trade_data: dict, usd_v
     """
     intent_desc = trade_details.get('intent', '未知意圖') if trade_details else '未知意圖'
     sentiment_tag = "看多 (Bullish)" if (trade_details and trade_details.get('is_bullish')) else "看空 (Bearish)"
-
+    
     system_prompt = f"""
     你是一位華爾街頂尖預測市場策略師。
     請針對 Polymarket 的大額交易提供深度、結構化的 Markdown 分析。
@@ -164,7 +170,7 @@ async def generate_polymarket_summary(market_info: dict, trade_data: dict, usd_v
             input=user_prompt,
             text_format=PolymarketAnalysis
         )
-
+        
         # 使用 Markdown 優化輸出格式
         res = response.output_parsed
         formatted_md = (
@@ -177,9 +183,4 @@ async def generate_polymarket_summary(market_info: dict, trade_data: dict, usd_v
 
     except Exception as e:
         logger.error(f"Failed to generate structured polymarket summary: {e}")
-        return "⚠️ 無法生成 AI 結構化總結，請參考原始交易數據。"t=AnalystReport
-        )
-        return response.output_parsed.report_content
-    except Exception as e:
-        logger.error(f"Failed to generate polymarket summary: {e}")
-        return "⚠️ 無法生成 AI 總結，請參考原始交易數據。"
+        return "⚠️ 無法生成 AI 結構化總結，請參考原始交易數據。"

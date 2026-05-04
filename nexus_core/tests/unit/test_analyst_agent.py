@@ -1,7 +1,7 @@
 import unittest
 import sqlite3
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, AsyncMock
 
 import database
 from database import core as db_core
@@ -89,10 +89,13 @@ class TestAnalystAgent(unittest.IsolatedAsyncioTestCase):
         mock_llm.side_effect = fake_llm
 
         bot_mock = MagicMock()
-        agent = AnalystAgent(bot_mock)
+        bot_mock.wait_until_ready = AsyncMock()
         
-        # Stop the background task from actually running in test
-        agent.analyst_task.cancel()
+        agent = AnalystAgent(bot_mock)
+        # Stop background tasks
+        agent.pre_market_loop.cancel()
+        agent.intra_day_loop.cancel()
+        agent.post_market_loop.cancel()
 
         # Test macro scan report
         report1 = await agent.run_macro_scan()
@@ -132,8 +135,11 @@ class TestAnalystAgent(unittest.IsolatedAsyncioTestCase):
     @patch.object(AnalystAgent, '_fetch_macro_data')
     async def test_run_macro_scan_alerts(self, mock_fetch):
         bot_mock = MagicMock()
+        bot_mock.wait_until_ready = AsyncMock()
         agent = AnalystAgent(bot_mock)
-        agent.analyst_task.cancel()
+        agent.pre_market_loop.cancel()
+        agent.intra_day_loop.cancel()
+        agent.post_market_loop.cancel()
         
         # Test 1: All clear (Safe state)
         mock_fetch.return_value = {
@@ -206,15 +212,15 @@ class TestAnalystAgent(unittest.IsolatedAsyncioTestCase):
         self.assertIn("+0.10%", report) # spread:+.2f
 
 
-if __name__ == '__main__':
-    unittest.main()
-
 class TestAnalystAgentVixNaN(unittest.IsolatedAsyncioTestCase):
     async def test_run_next_day_strategy_handles_nan(self):
         """Verify that AnalystAgent handles NaN VIX gracefully in strategy reports."""
         bot_mock = MagicMock()
+        bot_mock.wait_until_ready = AsyncMock()
         agent = AnalystAgent(bot_mock)
-        agent.analyst_task.cancel()
+        agent.pre_market_loop.cancel()
+        agent.intra_day_loop.cancel()
+        agent.post_market_loop.cancel()
 
         # Mock _fetch_macro_data to return NaN
         async def mock_fetch():
@@ -226,27 +232,5 @@ class TestAnalystAgentVixNaN(unittest.IsolatedAsyncioTestCase):
             self.assertIn("N/A (Using Default)", report)
             self.assertIn("摩拳擦掌 (Ready)", report)
 
-class TestAnalystAgentTimeRouting(unittest.IsolatedAsyncioTestCase):
-    @patch('cogs.analyst_agent.datetime')
-    @patch.object(AnalystAgent, 'dispatch_report')
-    @patch.object(AnalystAgent, 'run_next_day_strategy')
-    async def test_analyst_task_routes_at_0100_utc(self, mock_strategy, mock_dispatch, mock_datetime):
-        """Verify that the task triggers the strategy report at 01:00 UTC."""
-        # Setup mock time to 01:00 UTC
-        mock_now = MagicMock()
-        mock_now.hour = 1
-        mock_now.minute = 0
-        # Mock datetime.now(timezone.utc)
-        mock_datetime.now.return_value = mock_now
-        
-        bot_mock = MagicMock()
-        agent = AnalystAgent(bot_mock)
-        agent.analyst_task.cancel()
-        
-        mock_strategy.return_value = "Mock Strategy Report"
-        
-        # Manually trigger the task logic
-        await agent.analyst_task()
-        
-        mock_strategy.assert_called_once()
-        mock_dispatch.assert_called_once_with("Mock Strategy Report")
+if __name__ == '__main__':
+    unittest.main()
