@@ -126,37 +126,35 @@ async def generate_analyst_report(report_type: str, raw_data: dict) -> str:
 
 async def generate_polymarket_summary(market_info: dict, trade_data: dict, usd_value: float, trade_details: dict = None) -> str:
     """
-    針對 Polymarket 巨鯨交易生成背景總結與情緒分析。
+    針對 Polymarket 巨鯨交易生成高度結構化的 Markdown 分析報告。
     """
     intent_desc = trade_details.get('intent', '未知意圖') if trade_details else '未知意圖'
     sentiment_tag = "看多 (Bullish)" if (trade_details and trade_details.get('is_bullish')) else "看空 (Bearish)"
-    
+
     system_prompt = f"""
-    你是一位專業的預測市場分析師。請針對 Polymarket 的大額交易（巨鯨交易）提供簡短、專業的背景總結與市場情緒分析。
-    請使用繁體中文 (Traditional Chinese)。
-    
-    **重要規則：**
-    1. 預測市場的邏輯與一般股市不同：買入 "NO" 代幣代表押注該事件「不會發生」，因此是「看空」該事件。
-    2. 價格越接近 1.0 代表該選項發生的機率越高。
-    3. 此筆交易的量化判定為：{intent_desc}，市場情緒：{sentiment_tag}。請務必基於此判定進行分析。
-    
-    報告應包含：
-    1. 事件背景簡述。
-    2. 此筆大額交易可能的動機或市場意義。
-    3. 當前的市場情緒評估。
-    總字數請控制在 150 字以內，語氣專業且客觀。
+    你是一位華爾街頂尖預測市場策略師。
+    請針對 Polymarket 的大額交易提供深度、結構化的 Markdown 分析。
+
+    ## 核心邏輯架構：
+    1. **背景 (Background)**：用一句話點出該事件的當前核心矛盾。
+    2. **巨鯨邏輯 (Logic)**：分析該資金是在「下注方向」還是在「套利/對沖」。大額買入 "NO" 代表該巨鯨認為事件「極高機率不會發生」。
+    3. **情緒與偏離 (Sentiment)**：目前的市場價格是否過度樂觀或悲觀？
+    4. **結論 (Verdict)**：給出明確的方向性定論。
+
+    ## 寫作風格：
+    - 使用**繁體中文 (Traditional Chinese)**。
+    - 語氣必須冷靜、專業、避免廢話。
+    - **嚴格遵守量化引擎判定**：此筆交易判定為「{sentiment_tag}」，你的分析必須支持此結論。
     """
 
     user_prompt = f"""
-    ### Polymarket Trade Detected
-    - **Market Question**: {market_info.get('question', 'Unknown')}
-    - **Market Description**: {market_info.get('description', 'No description available')}
-    - **Trade Side**: {trade_data.get('side', 'Unknown')} (已對應至選項: {market_info.get('outcome', 'YES/NO')})
-    - **Trade Price**: {trade_data.get('price', 0)} (代表該選項發生的市場機率)
-    - **Total USD Value**: ${usd_value:,.2f}
-    - **Quant Engine Intent**: {intent_desc}
-    ---
-    請根據以上資訊生成分析報告，請確保分析內容與量化引擎判定的「{sentiment_tag}」方向一致。
+    ### 原始交易數據
+    - **事件標題**: {market_info.get('question', 'Unknown')}
+    - **事件描述**: {market_info.get('description', 'No description available')}
+    - **交易動作**: {trade_data.get('side', 'Unknown')} {market_info.get('outcome', 'YES/NO')}
+    - **成交價格**: {trade_data.get('price', 0)} (隱含機率)
+    - **交易總值**: ${usd_value:,.2f}
+    - **量化意圖**: {intent_desc}
     """
 
     try:
@@ -164,7 +162,22 @@ async def generate_polymarket_summary(market_info: dict, trade_data: dict, usd_v
             model=LLM_MODEL_NAME,
             instructions=system_prompt,
             input=user_prompt,
-            text_format=AnalystReport
+            text_format=PolymarketAnalysis
+        )
+
+        # 使用 Markdown 優化輸出格式
+        res = response.output_parsed
+        formatted_md = (
+            f"> **背景摘要**\n> {res.event_background}\n\n"
+            f"💡 **巨鯨動機分析**\n- {res.whale_logic}\n\n"
+            f"📊 **市場情緒評估**\n- {res.market_sentiment}\n\n"
+            f"📌 **核心結論**\n**{res.one_line_verdict}**"
+        )
+        return formatted_md
+
+    except Exception as e:
+        logger.error(f"Failed to generate structured polymarket summary: {e}")
+        return "⚠️ 無法生成 AI 結構化總結，請參考原始交易數據。"t=AnalystReport
         )
         return response.output_parsed.report_content
     except Exception as e:

@@ -124,6 +124,7 @@ When modifying VIX ladder behavior:
 - `nexus_core/market_time.py`: NYSE market calendar and timezone-aware scheduling.
 - `nexus_core/services/trading_service.py`: Centralized business logic orchestrator. Propagates `vix_spot` through scan pipeline, gates VTR entry by tier.
 - **`services/polymarket_service.py`**: Real-time Polymarket whale monitoring service with **L2 Order Book Sync**. Features **Dynamic Slippage-based Thresholds** (automatically adapts whale detection to market liquidity depth), **Taker Intent Mapping** (Aggressive Long/Short), and **Price Impact Estimation**. Implements **AND Logic Filtering** (trade must exceed both dynamic slippage and user USD thresholds). Provides exponential backoff for WS robustness and detailed connection health via `/poly_status`.
+- **LLM Structured Output**: Integration with OpenAI-compatible APIs using `pydantic` schemas to ensure stable, JSON-formatted responses for Risk Assessment and Polymarket Analysis. Analysis results are further post-processed with **Markdown Optimization** (blockquotes, bolding, lists) for high-impact Discord UI rendering.
 
 - `nexus_core/market_analysis/strategy.py`: Quant scanning and filtering pipeline. VIX ladder gating (`apply_vix_ladder()`), delta capping, and sizing multiplier.
 - `nexus_core/market_analysis/psq_engine.py`: PowerSqueeze momentum calculation engine with VIX-aware labeling.
