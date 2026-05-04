@@ -106,8 +106,10 @@ class DebugCog(commands.Cog):
             
             # 3. 使用 PolymarketService 的私訊推播邏輯 (或直接模擬)
             if hasattr(self.bot, 'polymarket_service'):
+                # 模擬動態門檻，預設為 $10,000 以便計算倍數
+                mock_threshold = 10000.0
                 await self.bot.polymarket_service._push_notification(
-                    interaction.user.id, summary, mock_market, mock_trade, usd_value
+                    interaction.user.id, summary, mock_market, mock_trade, usd_value, mock_threshold
                 )
                 await interaction.followup.send(f"✅ 已成功模擬並發送巨鯨交易通知 (${usd_value:,.2f}) 到您的私訊。", ephemeral=True)
             else:
