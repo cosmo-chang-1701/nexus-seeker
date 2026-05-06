@@ -23,6 +23,9 @@ class UserContext:
     polymarket_threshold: float = 10000.0 # Polymarket 巨鯨監控門檻 (USD, 0=關閉)
     polymarket_use_llm: bool = True       # 是否使用 LLM 進行 Polymarket 交易分析
     polymarket_slippage: float = 2.0      # Polymarket 巨鯨判定目標滑價百分比 (預設 2.0%)
+    is_professional_mode: bool = False    # 專業投資者模式
+    monthly_expense: float = 0.0          # 每月支出預算
+    tax_reserve_rate: float = 0.20        # 稅務預留比例 (預設 20%)
 
 
 # ==========================================
@@ -53,9 +56,12 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:
                 kwargs['portfolio_value'] = kwargs.pop('capital')
             
             # 3. 動態構建 SQL SET 子句 (白名單防護)
-            allowed_keys = {'portfolio_value', 'risk_limit_pct', 'last_rehedge_alert_time', 'dynamic_tau', 
-                            'enable_option_alerts', 'enable_vtr', 'enable_psq_watchlist', 'enable_analyst_agent',
-                            'polymarket_threshold', 'polymarket_use_llm', 'polymarket_slippage'}
+            allowed_keys = {
+                'portfolio_value', 'risk_limit_pct', 'last_rehedge_alert_time', 'dynamic_tau', 
+                'enable_option_alerts', 'enable_vtr', 'enable_psq_watchlist', 'enable_analyst_agent',
+                'polymarket_threshold', 'polymarket_use_llm', 'polymarket_slippage',
+                'is_professional_mode', 'monthly_expense', 'tax_reserve_rate'
+            }
             update_pairs = []
             values = []
             
@@ -63,15 +69,18 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:
                 if key in allowed_keys and value is not None:
                     if key == 'portfolio_value':
                         value = max(float(value), 1.0)
-                    # 針對風險限制做數值防護
-                    if key == 'risk_limit_pct':
+                    elif key == 'risk_limit_pct':
                         value = max(1.0, min(value, 50.0))
-                    # Polymarket 門檻防護
-                    if key == 'polymarket_threshold':
+                    elif key == 'polymarket_threshold':
                         value = max(0.0, float(value))
-                    # Polymarket 滑價防護 (0.1% ~ 10%)
-                    if key == 'polymarket_slippage':
+                    elif key == 'polymarket_slippage':
                         value = max(0.1, min(float(value), 10.0))
+                    elif key == 'monthly_expense':
+                        value = max(0.0, float(value))
+                    elif key == 'tax_reserve_rate':
+                        value = max(0.0, min(float(value), 1.0))
+                    elif key == 'is_professional_mode':
+                        value = 1 if value else 0
                         
                     update_pairs.append(f"{key} = ?")
                     values.append(value)
@@ -148,7 +157,8 @@ def get_full_user_context(user_id: int) -> UserContext:
             cursor.execute("""
                 SELECT portfolio_value, risk_limit_pct, last_rehedge_alert_time, dynamic_tau,
                        enable_option_alerts, enable_vtr, enable_psq_watchlist, enable_analyst_agent,
-                       polymarket_threshold, polymarket_use_llm, polymarket_slippage
+                       polymarket_threshold, polymarket_use_llm, polymarket_slippage,
+                       is_professional_mode, monthly_expense, tax_reserve_rate
                 FROM user_settings 
                 WHERE user_id = ?
             """, (user_id,))
@@ -187,6 +197,10 @@ def get_full_user_context(user_id: int) -> UserContext:
             poly_threshold = float(user_row['polymarket_threshold']) if user_row and 'polymarket_threshold' in user_row.keys() and user_row['polymarket_threshold'] is not None else 10000.0
             poly_slippage = float(user_row['polymarket_slippage']) if user_row and 'polymarket_slippage' in user_row.keys() and user_row['polymarket_slippage'] is not None else 2.0
             
+            is_pro = bool(user_row['is_professional_mode']) if user_row and 'is_professional_mode' in user_row.keys() and user_row['is_professional_mode'] is not None else False
+            monthly_exp = float(user_row['monthly_expense']) if user_row and 'monthly_expense' in user_row.keys() and user_row['monthly_expense'] is not None else 0.0
+            tax_rate = float(user_row['tax_reserve_rate']) if user_row and 'tax_reserve_rate' in user_row.keys() and user_row['tax_reserve_rate'] is not None else 0.20
+
             # Helper for booleans
             def _get_bool(key: str, default: bool) -> bool:
                 if user_row and key in user_row.keys() and user_row[key] is not None:
@@ -208,11 +222,13 @@ def get_full_user_context(user_id: int) -> UserContext:
                 enable_analyst_agent=_get_bool('enable_analyst_agent', False),
                 polymarket_threshold=poly_threshold,
                 polymarket_use_llm=_get_bool('polymarket_use_llm', True),
-                polymarket_slippage=poly_slippage
+                polymarket_slippage=poly_slippage,
+                is_professional_mode=is_pro,
+                monthly_expense=monthly_exp,
+                tax_reserve_rate=tax_rate
             )
             
     except Exception as e:
         logger.error(f"獲取 UserContext 失敗 (UID: {user_id}): {e}")
         # 發生異常時回傳保守的預設物件
         return UserContext(user_id, 100000.0, 15.0, 0.0, 0.0, 0.0)
-

@@ -74,8 +74,12 @@
 | 🧮 **Greeks 持久化與匯總** | 持倉的 Greeks（Weighted Delta、Theta、Gamma）持久化至資料庫，`UserContext` 一次性匯總真實持倉與虛擬交易的 Greeks 指標，極大化 I/O 效率。 |
 | ⚙️ **個人化風險與推播** | 每位使用者可自訂風險限制（1%–50%），及切換 Option 推播、VTR 自動建倉與 PowerSqueeze 等專屬追蹤頻道。 |
 | ⚡ **PowerSqueeze 動能追蹤** | 內建向量化 PSQ 數學模組，抓取盤基壓縮突破與能量擴張訊號，可作為獨立風向標並行於原有 Option 訊號。VIX 感知動能標記可識別低 VIX 牛陷阱 (`OVEREXTENDED_RISK`) 與高 VIX 反彈機會 (`HIGH_CONVICTION_RECOVERY`)。 |
-| 💹 **即時報價查詢** | `/quote` 指令透過 Finnhub 即時取得標的報價（含現價、漲跌幅、今日高低與前收盤價）。 |
+| 💹 即時報價查詢 | `/quote` 指令透過 Finnhub 即時取得標的報價（含現價、漲跌幅、今日高低與前收盤價）。 |
+| 💼 專業投資者模式 | 針對全職交易者設計，支援每月支出與稅務預留比例設定，提供自動化財務跑道 (Runway) 分析。 |
+| 📈 Gap & Fill 監控 | 量化 Gap 分析模組，即時追蹤跳空幅度、類型與回補進度，輔助開盤策略判定。 |
+| 🔄 倉位演進引擎 | 模擬合成多頭 (Synthetic Long) 轉向現股持倉與 Covered Call 的演進過程，精算資本調整成本與 AROC。 |
 | 🐋 Polymarket 巨鯨監控 | 整合 Polymarket CLOB WebSocket 與 L2 訂單簿同步，即時監控預測市場巨鯨交易。具備 **動態滑價門檻引擎**（基於 2% 滑價深度自動調整門檻）、**Taker 意圖映射** (Aggressive Long/Short) 與 **Yes/No 雙向價格校準**。採用 **LLM 結構化輸出 (JSON Schema)** 進行深度背景分析，產出經 **Markdown 優化** 的專業戰報（含背景、動機、情緒與定論）。支援自訂門檻與 WebSocket 指數退避重連。 |
+
 
 | 🏗️ **Service Layer 分治** | `TradingService` 集中式業務邏輯層，將 Discord UI 層與核心計算徹底解耦，職責分明。 |
 
@@ -254,6 +258,8 @@ docker compose up -d --build
 | `/settings` | 配置帳戶全域參數 (資金、風險與 PSQ/VTR/Polymarket 等個人化推播開關) | `capital: 50000 risk_limit: 15 polymarket_threshold: 10000` |
 | `/vtr_list` | 列出虛擬交易室 (VTR) 開啟中的所有持倉 | — |
 | `/vtr_stats` | 檢視虛擬交易室 (VTR) 的績效統計 (勝率、損益、盈虧比) | — |
+| `/transition_sim` | 模擬合成多頭 (Synthetic Long) 轉向現股與 Covered Call 的演進模擬 | `symbol: AAPL` `target_price: 180` `cc_strike: 190` |
+| `/runway_check` | 根據組合 Theta 與個人支出計算財務跑道 (Runway) | — |
 
 ### 🔬 研究
 
@@ -436,6 +442,8 @@ nexus-seeker/                        # Monorepo 根目錄
 │   │   ├── margin.py                # 投資組合保證金耗能核算模組
 │   │   ├── greeks.py                # Black-Scholes-Merton Delta 與 Greeks 計算引擎
 │   │   ├── hedging.py               # 投資組合避險邏輯、Delta 中性計算與市場位階感知對沖
+│   │   ├── gap_analysis.py          # Gap & Fill 引擎 — 跳空偵測與回補進度量化分析
+│   │   ├── pro_management.py        # 專業管理引擎 — 倉位演進模擬與 Synthetic 轉向轉軌
 │   │   ├── ghost_trader.py          # GhostTrader — VTR 自動建倉、平倉、轉倉核心邏輯
 │   │   ├── psq_engine.py            # PowerSqueeze 引擎 — BB/KC 壓縮偵測、動能線性回歸與擠壓釋放訊號、VIX 動能標記
 │   │   ├── risk_engine.py           # NRO 投資組合防禦管線、What-if 新增風險模擬、宏觀修正矩陣與 VIX 動態 Kelly 放大
@@ -481,6 +489,7 @@ nexus-seeker/                        # Monorepo 根目錄
 │   │   ├── watchlist.py             # 觀察清單斜線指令 — CRUD + NRO 手動掃描與 What-if 展示
 │   │   ├── portfolio.py             # 投資組合與 VTR 斜線指令 — 實單與虛擬交易追蹤、資金與風險設定
 │   │   ├── research.py              # 研究斜線指令 — 新聞掃描、Reddit 情緒掃描、即時報價查詢
+│   │   ├── pro_investor.py          # 專業投資者指令 — 倉位演進模擬、財務跑道 (Runway) 分析
 │   │   ├── debug.py                 # 開發者除錯與風險 UI 視覺驗證工具
 │   │   └── embed_builder.py         # Discord UI/UX 生成器 — 渲染圖文並茂的量化戰情面板
 │   ├── ui/                          # Discord UI 元件
@@ -602,6 +611,7 @@ docker compose run --rm -v "$(pwd):/app" nexus_seeker python -m unittest discove
 - [x] **VIX 戰情階梯 (Battle Ladder)** — 6 階段 VIX 攻守互換系統，動態調控 Delta 上限、倉位乘數、Kelly 比例與 VTR 建倉許可。NRO 攻勢放大 (高 VIX → w_vix 升至 2.0x)、All-in 旁路繞過宏觀抑制、PSQ 動能標記 (`OVEREXTENDED_RISK` / `HIGH_CONVICTION_RECOVERY`)。
 - [x] **Analyst Agent (量化分析師代理)** — 全自動化 NYSE 動態排程引擎，精準對齊交易時段執行盤前宏觀掃描、盤中流動性監測與盤後策略規劃，自動將量化報告推播至已訂閱使用者。
 - [x] **Polymarket 巨鯨監控** — 整合 WebSocket 即時監聽預測市場大額交易，具備 **Taker 意圖解析** 與 **Yes/No 雙向價格校準**，並結合 LLM 自動生成事件背景分析與市場情緒總結，實現精準趨勢捕捉。
+- [x] **專業投資者升級** — 整合 Gap & Fill 監控、倉位演進引擎 (Transition Simulator) 與個人化財務分析模組。
 - [ ] **MCP Server** — 將核心量化模組封裝為標準 Model Context Protocol 工具，供外部 AI 代理使用。
 - [ ] **券商 API 整合** — Interactive Brokers Gateway 實現全自動下單執行（訊號 → 執行 → 平倉，零人工介入）。
 
