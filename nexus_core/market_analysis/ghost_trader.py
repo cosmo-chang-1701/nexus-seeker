@@ -9,6 +9,7 @@ from py_vollib.black_scholes_merton.greeks.analytical import delta
 from config import RISK_FREE_RATE
 from services import market_data_service
 from database.virtual_trading import add_virtual_trade, get_all_open_virtual_trades, close_virtual_trade, get_all_virtual_trades
+from market_analysis.risk_engine import evaluate_ditm_defense, DITMDefenseAction
 
 logger = logging.getLogger(__name__)
 
@@ -65,11 +66,43 @@ class GhostTrader:
         dte = (exp_date - self.today).days
         
         if dte <= 21:
-            await self._close_position(trade, "DTE <= 21")
-            return
+            # 基本 DTE 檢查，如果是賣方則強制平倉，買方則由下方的 DITM 邏輯進一步判斷或在此平倉
+            if quantity < 0:
+                await self._close_position(trade, "DTE <= 21")
+                return
 
-        mid, _ = await self.get_option_mid_price(symbol, opt_type, strike, expiry)
+        mid, iv = await self.get_option_mid_price(symbol, opt_type, strike, expiry)
         if mid is None: return
+
+        # 🚀 DITM 防禦檢查 (僅針對買方)
+        if quantity > 0:
+            quote = await market_data_service.get_quote(symbol)
+            current_stock_price = quote.get('c') if quote else None
+            
+            if current_stock_price and iv and iv > 0:
+                t_years = max(dte, 1) / 365.0
+                try:
+                    current_delta = delta(('c' if opt_type == 'call' else 'p'), current_stock_price, strike, t_years, RISK_FREE_RATE, iv, 0.0)
+                    pnl_pct = (mid - entry_price) / entry_price
+                    
+                    ditm_action = evaluate_ditm_defense(quantity, current_delta, dte, pnl_pct)
+                    
+                    if ditm_action == DITMDefenseAction.DEFENSIVE_CLOSE:
+                        await self._close_position(trade, f"🚨 DITM 喪失凸性防禦 ｜ Delta:{current_delta:.2f}, PnL:{pnl_pct*100:.1f}%", mid)
+                        return
+                    elif ditm_action == DITMDefenseAction.ROLL_UP_OUT:
+                        logger.info(f"🔄 DITM 觸發自動轉倉防禦 [{trade_id}] {symbol} Delta: {current_delta:.2f}")
+                        # 執行轉倉：平掉舊的，開新的 (Delta ~0.50, DTE 30-45)
+                        await self._close_position(trade, f"🔄 DITM 轉倉防禦 ｜ Delta:{current_delta:.2f}, PnL:{pnl_pct*100:.1f}%", mid, status='ROLLED')
+                        new_contract = await self._find_target_contract(symbol, opt_type, current_stock_price, target_dte=(30, 45), target_delta=0.50)
+                        if new_contract:
+                            await self.record_virtual_entry(
+                                user_id=trade['user_id'], symbol=symbol, opt_type=opt_type, strike=new_contract['strike'], expiry=new_contract['expiry'], 
+                                quantity=quantity, tags=["ditm_roll", f"from:{trade_id}"], parent_trade_id=trade_id
+                            )
+                        return
+                except Exception as e:
+                    logger.error(f"DITM 檢查失敗 {symbol}: {e}")
             
         if quantity < 0:
             pnl_pct = (entry_price - mid) / entry_price
@@ -97,9 +130,53 @@ class GhostTrader:
                 
         actual_exit_price = exit_price * (0.99 if trade['quantity'] > 0 else 1.01)
         pnl = (actual_exit_price - trade['entry_price']) * trade['quantity'] * 100
+        
+        # 紀錄原因至 tags
+        updated_tags = trade.get('tags', [])
+        if not isinstance(updated_tags, list):
+            updated_tags = []
+        updated_tags.append(f"exit_reason:{reason}")
+        
+        # 這裡我們需要更新 tags，但 close_virtual_trade 目前不支援更新 tags
+        # 我們可以直接手動更新或修改 close_virtual_trade
         success = await asyncio.to_thread(close_virtual_trade, trade['id'], actual_exit_price, status=status, pnl=pnl)
+        
+        # 由於 database.virtual_trading.close_virtual_trade 不支援 tags 更新，
+        # 我們在平倉後額外更新一次 tags (這有點不理想，但為了不大幅改動 DB 結構先這樣做)
         if success:
+            import json
+            import sqlite3
+            from config import DB_NAME
+            conn = sqlite3.connect(DB_NAME)
+            cursor = conn.cursor()
+            cursor.execute("UPDATE virtual_trades SET tags = ? WHERE id = ?", (json.dumps(updated_tags), trade['id']))
+            conn.commit()
+            conn.close()
             logger.info(f"🔴 VTR 自動平倉 [{trade['id']}] {trade['symbol']} {trade['opt_type']} {trade['strike']} 原因:{reason} Exit:{actual_exit_price:.2f}")
+
+    async def get_transition_candidates(self):
+        """
+        找出適合從投機部位演進至現股/Covered Call 的候選交易。
+        候選條件：SPECULATIVE 類別、買方部位、獲利率 > 30%
+        """
+        open_trades = await asyncio.to_thread(get_all_open_virtual_trades)
+        candidates = []
+        for trade in open_trades:
+            if trade.get('trade_category') != 'SPECULATIVE' or trade['quantity'] <= 0:
+                continue
+            
+            mid, _ = await self.get_option_mid_price(trade['symbol'], trade['opt_type'], trade['strike'], trade['expiry'])
+            if mid is None: continue
+            
+            pnl_pct = (mid - trade['entry_price']) / trade['entry_price']
+            if pnl_pct >= 0.30: # 30% 獲利門檻
+                candidates.append({
+                    'trade': trade,
+                    'current_mid': mid,
+                    'pnl_pct': pnl_pct,
+                    'pnl_usd': (mid - trade['entry_price']) * trade['quantity'] * 100
+                })
+        return candidates
 
     async def execute_virtual_roll(self):
         """自動轉倉邏輯 (Async)"""

@@ -436,23 +436,50 @@ class SchedulerCog(commands.Cog):
                 trade_info = res['trade_info']
                 hedge = res['hedge']
                 uid = res['uid']
+                tags = trade_info.get('tags', [])
                 
-                status_icon = "🔄 [轉倉完成]" if trade_info['status'] == 'ROLLED' else "🔴 [自動平倉]"
-                exposure_pct = (res['current_total_delta'] * res['spy_price'] / res['user_capital']) * 100
+                # 偵測是否為 DITM 防禦事件
+                is_ditm = any("DITM" in str(tag) for tag in tags)
                 
-                msg = (
-                    f"{status_icon} **{trade_info['symbol']}** 結算通知\n"
-                    f"└ 損益: `${trade_info['pnl']}` | 目前總曝險: `{exposure_pct:.2f}%` \n"
-                )
-
-                if hedge:
-                    msg += (
-                        f"\n🧠 **系統自主位階判定：** `{res['regime']}`\n"
-                        f"└ 理想總曝險目標：`{res['target_delta']:.1f} Delta`\n"
-                        f"🛡️ **自動對沖決策：** {hedge['action']} (缺口: `{hedge['gap']}`)"
+                if is_ditm:
+                    exit_reason = next((tag.split(":", 1)[1] for tag in tags if tag.startswith("exit_reason:")), "N/A")
+                    action_taken = "已平倉 (Closed)" if trade_info['status'] == 'CLOSED' else "已自動轉倉 (Rolled Up & Out)"
+                    
+                    embed = discord.Embed(
+                        title="🚨 NRO 系統介入：DITM 喪失凸性防禦啟動",
+                        description=f"偵測到標的 **{trade_info['symbol']}** 已進入深價內 (DITM)，凸性消失且風險報酬比惡化。",
+                        color=discord.Color.gold()
                     )
-                
-                await self.bot.queue_dm(uid, message=msg)
+                    embed.add_field(name="觸發指標", value=f"```\n{exit_reason}\n```", inline=False)
+                    embed.add_field(name="執行動作", value=f"✅ **{action_taken}**", inline=True)
+                    embed.add_field(name="鎖定利潤", value=f"💰 `${trade_info['pnl']:.2f}`", inline=True)
+                    
+                    exposure_pct = (res['current_total_delta'] * res['spy_price'] / res['user_capital']) * 100
+                    embed.add_field(name="帳戶目前總曝險", value=f"`{exposure_pct:.2f}%` (Beta-Weighted Delta)", inline=False)
+                    
+                    if hedge:
+                        embed.add_field(name="🛡️ NRO 對沖建議", value=f"{hedge['action']} (缺口: `{hedge['gap']}`)", inline=False)
+                    
+                    embed.set_footer(text="Quantitative Defense Pipeline | Nexus Risk Optimizer")
+                    embed.timestamp = datetime.now(ny_tz)
+                    await self.bot.queue_dm(uid, embed=embed)
+                else:
+                    status_icon = "🔄 [轉倉完成]" if trade_info['status'] == 'ROLLED' else "🔴 [自動平倉]"
+                    exposure_pct = (res['current_total_delta'] * res['spy_price'] / res['user_capital']) * 100
+                    
+                    msg = (
+                        f"{status_icon} **{trade_info['symbol']}** 結算通知\n"
+                        f"└ 損益: `${trade_info['pnl']:.2f}` | 目前總曝險: `{exposure_pct:.2f}%` \n"
+                    )
+
+                    if hedge:
+                        msg += (
+                            f"\n🧠 **系統自主位階判定：** `{res['regime']}`\n"
+                            f"└ 理想總曝險目標：`{res['target_delta']:.1f} Delta`\n"
+                            f"🛡️ **自動對沖決策：** {hedge['action']} (缺口: `{hedge['gap']}`)"
+                        )
+                    
+                    await self.bot.queue_dm(uid, message=msg)
 
         except Exception as e:
             logger.error(f"VTR 對沖連動任務錯誤: {e}")

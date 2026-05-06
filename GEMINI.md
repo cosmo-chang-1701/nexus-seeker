@@ -128,8 +128,8 @@ When modifying VIX ladder behavior:
 
 - `nexus_core/market_analysis/strategy.py`: Quant scanning and filtering pipeline. VIX ladder gating (`apply_vix_ladder()`), delta capping, and sizing multiplier.
 - `nexus_core/market_analysis/psq_engine.py`: PowerSqueeze momentum calculation engine with VIX-aware labeling.
-- `nexus_core/market_analysis/risk_engine.py`: NRO risk optimizer — inverted VIX macro weights, dynamic Kelly scaling, All-in bypass.
-- `nexus_core/market_analysis/ghost_trader.py`: Virtual Trade Replicator and VTR logic.
+- `nexus_core/market_analysis/risk_engine.py`: NRO risk optimizer — inverted VIX macro weights, dynamic Kelly scaling, All-in bypass, and **DITM (Deep In-The-Money) detection logic** for convexity protection.
+- `nexus_core/market_analysis/ghost_trader.py`: Virtual Trade Replicator and VTR logic. Implements **autonomous DITM defensive actions** (Close/Roll).
 - `nexus_core/cogs/embed_builder.py`: Discord UI/UX generator — renders VIX Battle Status field, momentum labels, and tier-colored embeds.
 - **`nexus_core/cogs/analyst_agent.py`**: Scheduled Wall Street Quantitative Analyst Agent that pushes macro and quantitative reports using NYSE dynamic scheduling (Pre-market, Intra-day heartbeat, Post-market). Features multi-factor macro alerts (Yield Curve Spread, DXY, VIX).
 - `nexus_core/database/core.py`: SQLite migration engine core logic.

@@ -6,10 +6,16 @@ import pandas as pd
 from dataclasses import dataclass
 from services import market_data_service
 from datetime import datetime
+from enum import Enum
 from typing import Dict, List, Tuple, Any, Optional
 from config import get_vix_tier, VIX_QUANTILE_BOUNDS
 
 logger = logging.getLogger(__name__)
+
+class DITMDefenseAction(Enum):
+    DEFENSIVE_CLOSE = "DEFENSIVE_CLOSE"
+    ROLL_UP_OUT = "ROLL_UP_OUT"
+    HOLD = "HOLD"
 
 @dataclass
 class MacroContext:
@@ -18,6 +24,33 @@ class MacroContext:
     vix_change: float
     vts_ratio: float = 1.0
     vix_trend_up: bool = False
+
+def evaluate_ditm_defense(quantity: float, current_delta: float, dte: int, pnl_pct: float) -> DITMDefenseAction:
+    """
+    評估 Deep In-The-Money (DITM) 防禦策略。
+    
+    當長部位進入 DITM 時，其凸性 (Convexity) 消失，Delta 接近 1.0，
+    此時風險報酬比惡化（變成類現股但有時間價值損耗），系統應介入獲利了結或轉倉。
+    
+    Trigger Conditions:
+    1. 買方部位 (quantity > 0)
+    2. 絕對 Delta >= 0.85
+    3. 未實現損益 > 150% (pnl_pct > 1.5)
+    4. 距離到期日 <= 21 天
+    """
+    if quantity <= 0:
+        return DITMDefenseAction.HOLD
+
+    abs_delta = abs(current_delta)
+    
+    if abs_delta >= 0.85 and pnl_pct > 1.5 and dte <= 21:
+        # 剩餘天數較短且獲利豐厚，若 Delta 極高則建議轉倉以回收資金並重新獲得槓桿/凸性
+        # 如果 DTE 真的非常短 (例如 < 7)，建議直接關閉以規避 Gamma 風險
+        if dte <= 7:
+            return DITMDefenseAction.DEFENSIVE_CLOSE
+        return DITMDefenseAction.ROLL_UP_OUT
+        
+    return DITMDefenseAction.HOLD
 
 def evaluate_defense_status(quantity: float, opt_type: str, pnl_pct: float, current_delta: float, dte: int) -> str:
     if quantity < 0: 

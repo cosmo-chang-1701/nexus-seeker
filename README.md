@@ -77,6 +77,7 @@
 | 💹 即時報價查詢 | `/quote` 指令透過 Finnhub 即時取得標的報價（含現價、漲跌幅、今日高低與前收盤價）。 |
 | 💼 專業投資者模式 | 針對全職交易者設計，支援每月支出與稅務預留比例設定，提供自動化財務跑道 (Runway) 分析。 |
 | 📈 Gap & Fill 監控 | 量化 Gap 分析模組，即時追蹤跳空幅度、類型與回補進度，輔助開盤策略判定。 |
+| 🛡️ **DITM 喪失凸性防禦** | 自動監控買方部位，當 Delta ≥ 0.85、獲利 > 150% 且 DTE ≤ 21 時，觸發防禦性平倉或轉倉，規避 Gamma 陷阱並回收資金。 |
 | 🔄 倉位演進引擎 | 模擬合成多頭 (Synthetic Long) 轉向現股持倉與 Covered Call 的演進過程，精算資本調整成本與 AROC。 |
 | 🐋 Polymarket 巨鯨監控 | 整合 Polymarket CLOB WebSocket 與 L2 訂單簿同步，即時監控預測市場巨鯨交易。具備 **動態滑價門檻引擎**（基於 2% 滑價深度自動調整門檻）、**Taker 意圖映射** (Aggressive Long/Short) 與 **Yes/No 雙向價格校準**。採用 **LLM 結構化輸出 (JSON Schema)** 進行深度背景分析，產出經 **Markdown 優化** 的專業戰報（含背景、動機、情緒與定論）。支援自訂門檻與 WebSocket 指數退避重連。 |
 
@@ -318,9 +319,9 @@ docker compose up -d --build
                                                       │
               ┌───────────────┬───────────────┬───────┴───────┬───────────────┐
               │               │               │               │               │
-       🟢 獲利 ≥ 50%  🚨 Delta 擴張    ⚠️ DTE ≤ 21      ⚫ 虧損 ≥ 150%  🌐 宏觀風險
-       買回平倉        Roll Down/Up     迴避 Gamma       強制停損        SPY 避險
-              │           and Out        陷阱 (轉倉)          │               │
+       🟢 獲利 ≥ 50%  🚨 Delta 擴張    ⚠️ DTE ≤ 21      ⚫ 虧損 ≥ 150%  🛡️ DITM 防禦
+       買回平倉        Roll Down/Up     迴避 Gamma       強制停損        Delta ≥ 0.85
+              │           and Out        陷阱 (轉倉)          │           (獲利鎖定)
               └───────────────┴───────────────┴───────────────┴───────────────┘
                                               │
                                               ▼
@@ -340,6 +341,7 @@ docker compose up -d --build
 | **賣方** | DTE ≤ 21 | ⚠️ 迴避 Gamma 陷阱，建議平倉或轉倉 |
 | **賣方** | 虧損 ≥ 150% | ☠️ 黑天鵝警戒，強制停損 |
 | **買方** | 獲利 ≥ 100% | ✅ Sell to Close 停利 |
+| **買方** | Delta ≥ 0.85 & PnL > 150% | 🚨 **DITM 凸性防禦** (平倉或轉倉) |
 | **買方** | DTE ≤ 21 | 🚨 動能衰竭，建議平倉保留殘值 |
 | **買方** | 本金回撤 ≥ 50% | ⚠️ 停損警戒 |
 
@@ -611,6 +613,7 @@ docker compose run --rm -v "$(pwd):/app" nexus_seeker python -m unittest discove
 - [x] **VIX 戰情階梯 (Battle Ladder)** — 6 階段 VIX 攻守互換系統，動態調控 Delta 上限、倉位乘數、Kelly 比例與 VTR 建倉許可。NRO 攻勢放大 (高 VIX → w_vix 升至 2.0x)、All-in 旁路繞過宏觀抑制、PSQ 動能標記 (`OVEREXTENDED_RISK` / `HIGH_CONVICTION_RECOVERY`)。
 - [x] **Analyst Agent (量化分析師代理)** — 全自動化 NYSE 動態排程引擎，精準對齊交易時段執行盤前宏觀掃描、盤中流動性監測與盤後策略規劃，自動將量化報告推播至已訂閱使用者。
 - [x] **Polymarket 巨鯨監控** — 整合 WebSocket 即時監聽預測市場大額交易，具備 **Taker 意圖解析** 與 **Yes/No 雙向價格校準**，並結合 LLM 自動生成事件背景分析與市場情緒總結，實現精準趨勢捕捉。
+- [x] **DITM 喪失凸性防禦** — 針對深價內買方部位，自動偵測 Delta 與 PnL 臨界點並觸發 NRO 自主介入（平倉或轉倉）。
 - [x] **專業投資者升級** — 整合 Gap & Fill 監控、倉位演進引擎 (Transition Simulator) 與個人化財務分析模組。
 - [ ] **MCP Server** — 將核心量化模組封裝為標準 Model Context Protocol 工具，供外部 AI 代理使用。
 - [ ] **券商 API 整合** — Interactive Brokers Gateway 實現全自動下單執行（訊號 → 執行 → 平倉，零人工介入）。

@@ -10,6 +10,8 @@ import market_math
 import market_time
 from config import get_vix_tier
 from market_analysis import portfolio, hedging
+from market_analysis.gap_analysis import GapAnalyzer
+from market_analysis.pro_management import simulate_cc_transition
 from market_analysis.ghost_trader import GhostTrader
 from services import market_data_service, news_service, llm_service, reddit_service
 
@@ -123,6 +125,16 @@ class TradingService:
                     res = {'symbol': sym, 'stock_cost': stock_cost, 'strategy': ''}
 
                 res['is_option_valid'] = is_option_valid
+
+                # 🚀 新增 Gap & Fill 跳空分析 (僅在開盤初期 2 小時內執行更精確，但這裡常態掃描)
+                try:
+                    df_gap = await market_data_service.get_history_df(sym, period="5d", interval="1d")
+                    if not df_gap.empty and len(df_gap) >= 2:
+                        gap_status = GapAnalyzer.analyze_gap(df_gap)
+                        if gap_status:
+                            res['gap_status'] = gap_status
+                except Exception as gap_e:
+                    logger.warning(f"Gap 分析失敗 for {sym}: {gap_e}")
 
                 # 🚀 新增 EMA 訊號偵測 (Crossover & Test)
                 # 為確保 EMA 準確性，獲取至少 60 天歷史數據 (1-Hour 時框作為小週期觸發)
@@ -358,6 +370,39 @@ class TradingService:
             after_trades = await asyncio.to_thread(get_all_open_virtual_trades)
             after_ids = {t['id'] for t in after_trades}
             closed_ids = before_ids - after_ids
+
+            # 3. 找出演進候選部位 (Synthetic -> Core Equity)
+            transition_candidates = await self.vtr_engine.get_transition_candidates()
+            for cand in transition_candidates:
+                trade = cand['trade']
+                uid = trade['user_id']
+                sym = trade['symbol']
+                
+                quote = await market_data_service.get_quote(sym)
+                stock_price = quote.get('c', 0.0) if quote else 0.0
+                if stock_price == 0.0: continue
+                
+                # 模擬演進邏輯
+                # 假設目標 CC Strike 為 5% OTM，權利金為 2%
+                target_cc_strike = round(stock_price * 1.05, 1)
+                est_premium = round(stock_price * 0.02, 2)
+                
+                trans_result = simulate_cc_transition(
+                    current_option_pnl=cand['pnl_usd'],
+                    current_stock_price=stock_price,
+                    target_cc_strike=target_cc_strike,
+                    target_cc_premium=est_premium
+                )
+                
+                results.append({
+                    'uid': uid,
+                    'type': 'TRANSITION_SUGGESTION',
+                    'symbol': sym,
+                    'pnl_pct': cand['pnl_pct'],
+                    'pnl_usd': cand['pnl_usd'],
+                    'transition_result': trans_result,
+                    'stock_price': stock_price
+                })
 
             if closed_ids:
                 # 獲獲取全站最近紀錄

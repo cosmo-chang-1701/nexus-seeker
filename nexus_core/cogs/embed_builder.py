@@ -446,6 +446,16 @@ def create_scan_embed(data, user_capital=100000.0):
     
     # Render UI fields (VIX Battle Status first)
     _add_vix_battle_status_field(embed, data)
+    
+    # 🚀 整合 Gap & Fill 狀態
+    gap = data.get('gap_status')
+    if gap and gap.gap_type.value != "NONE":
+        gap_color = "🟢" if gap.gap_type.value == "UPWARD" else "🔴"
+        fill_icon = "✅" if gap.is_filled else "⏳"
+        gap_info = (f"{gap_color} **{gap.gap_type.value} GAP**: `{gap.gap_percentage:+.2f}%` (${gap.gap_size:+.2f})\n"
+                    f"{fill_icon} **狀態:** {gap.fill_status.value} (回補 `{gap.fill_percentage:.1f}%`)\n\u200b")
+        embed.add_field(name="📈 Gap & Fill 跳空監控", value=gap_info, inline=False)
+
     _add_market_overview_fields(embed, data)
     _add_volatility_fields(embed, data, strategy)
     _add_trend_and_support_fields(embed, data)
@@ -751,6 +761,49 @@ def create_portfolio_report_embed(report_lines, hedge_analysis=None):
 
     embed.set_footer(text="Argo Risk Engine v2.5 | 基準標的: SPY")
     
+    return embed
+
+def create_transition_suggestion_embed(data: Dict[str, Any]) -> discord.Embed:
+    """建構倉位演進建議 (Transition Suggestion) 的 Discord Embed"""
+    sym = data['symbol']
+    pnl_pct = data['pnl_pct'] * 100
+    pnl_usd = data['pnl_usd']
+    res = data['transition_result']
+    stock_p = data['stock_price']
+    
+    embed = discord.Embed(
+        title=f"🔄 倉位演進建議 | {sym}",
+        description=f"偵測到投機部位獲利豐厚，建議轉向「收租模式」以鎖定長期收益。",
+        color=discord.Color.gold(),
+        timestamp=datetime.now(timezone.utc)
+    )
+    
+    # 目前獲利狀況
+    embed.add_field(
+        name="📈 目前獲利狀況", 
+        value=f"獲利率: `{pnl_pct:+.1f}%` / `${pnl_usd:,.2f}`\n\u200b", 
+        inline=True
+    )
+    
+    # 演進後效益
+    embed.add_field(
+        name="🧬 演進後預期效益",
+        value=(f"調整後持股成本: **`${res.adjusted_cost_basis:.2f}`**\n"
+               f"相對現價折讓: `{res.capital_efficiency_gain:.1f}%` (現價: `${stock_p:.2f}`)\n"
+               f"預期 CC 年化報酬 (AROC): `{res.projected_aroc:.1f}%` (@${res.cc_strike})\n\u200b"),
+        inline=False
+    )
+    
+    # 操作指令建議
+    embed.add_field(
+        name="🛠️ 建議操作路徑",
+        value=(f"1. **Synthetic Exit**: 獲利平倉目前 Option 部位。\n"
+               f"2. **Core Equity**: 使用獲利抵扣，購入 100 股現股。\n"
+               f"3. **Covered Call**: 賣出 `${res.cc_strike}` Call 啟動收租。\n\u200b"),
+        inline=False
+    )
+    
+    embed.set_footer(text="Nexus Position Evolution Engine | 專業投資者建議")
     return embed
 
 def build_vtr_stats_embed(user_name: str, stats: dict) -> discord.Embed:
