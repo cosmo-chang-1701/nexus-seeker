@@ -20,6 +20,7 @@ class NexusBot(commands.Bot):
         await self.load_extension("cogs.research")
         await self.load_extension("cogs.debug")
         await self.load_extension("cogs.analyst_agent")
+        await self.load_extension("cogs.pro_investor")
         
         # 啟動背景任務與服務
         self.loop.create_task(self._message_worker())
