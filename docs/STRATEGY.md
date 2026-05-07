@@ -1,90 +1,71 @@
-# 📈 Nexus Seeker Quantitative Strategy & Workflow
+# 📈 Nexus Seeker: Quantitative Strategy & Risk Mathematics
 
-This document provides a detailed breakdown of the quantitative filters, the **VIX Battle Ladder** risk system, and the professional contract lifecycle managed by the Nexus Seeker terminal.
-
----
-
-## 🔄 Contract Lifecycle & Portfolio Workflow
-
-The terminal manages the entire lifecycle of an options contract, from initial signal detection to automated defense and closing.
-
-```mermaid
-stateDiagram-v2
-    [*] --> SIGNAL: Scanning (NYSE Dynamic)
-    SIGNAL --> AUDIT: Risk/AROC Audit
-    AUDIT --> VTR: VTR/Live Execution (if passed)
-    VTR --> MONITOR: Real-time Delta/DTE Tracking
-    MONITOR --> DEFENSE: DITM Convexity/Gamma Alert
-    MONITOR --> HEDGE: Delta Exposure > ±50
-    DEFENSE --> CLOSE: Profit Lock / Roll
-    HEDGE --> ADJUST: Automated SPY Hedging
-    ADJUST --> MONITOR
-    MONITOR --> EXIT: Target PnL / Stop Loss
-    EXIT --> [*]
-```
-
-### Decision Matrix (Seller vs. Buyer)
-
-| Role | Trigger Condition | Action Required |
-|---|---|---|
-| **Seller** | Profit ≥ 50% | ✅ **Buy to Close** (Take Profit) |
-| **Seller** | Put Delta ≤ −0.40 | 🚨 **Roll Down and Out** |
-| **Seller** | Call Delta ≥ +0.40 | 🚨 **Roll Up and Out** |
-| **Seller** | DTE ≤ 21 | ⚠️ **Gamma Risk Mitigation** (Close or Roll) |
-| **Seller** | Loss ≥ 150% | ☠️ **Systemic Failure** (Hard Stop Loss) |
-| **Buyer** | Profit ≥ 100% | ✅ **Sell to Close** (Take Profit) |
-| **Buyer** | Delta ≥ 0.85 & PnL > 150% | 🚨 **Profit Lock (DITM Defense)** (Close or Roll) |
-| **Buyer** | DTE ≤ 21 | 🚨 **Momentum Decay** (Harvest Residual Value) |
-| **Buyer** | Principal Drawdown ≥ 50% | ⚠️ **Stop Loss Warning** |
+This document defines the mathematical foundations of the **Nexus Risk Optimizer (NRO)**, the **VIX Battle Ladder**, and the **Gamma Fragility Assessment** protocols. 
 
 ---
 
-## 📈 Quantitative Filter Pipeline
+## 1. Portfolio Risk Aggregation (Beta-Weighting)
 
-Every signal detected by the strategy engine must pass through a multi-stage rigorous quantitative audit before being presented to the user or entered into the VTR.
+To maintain a unified view of systemic risk, all positions are normalized to **SPY-equivalent units** using historical correlation (Beta).
 
-### Core Noise Reduction (Alert Filter)
-To prevent signal fatigue, the following filters are applied at the service layer:
-*   **Dynamic Trend Filter (EMA 8/21)**: Active rejection of BTO Call / STO Put during strong bearish regimes.
-*   **Multi-Timeframe Alignment (MTF)**: EMA crossovers must be confirmed by the Daily (D1) EMA 21 trend.
-*   **Anti-Whipsaw Mechanism**: 4-hour cooldown on directional signals and rejection of low-volatility price action (< 1.5% swings).
+### 1.1 Systemic Delta Exposure ($\Delta_{\beta}$)
+The portfolio's net directional bias relative to the S&P 500:
+$$\Delta_{\beta} = \sum_{i=1}^{n} \left( \delta_i \times Q_i \times 100 \times \beta_i \times \frac{P_i}{P_{SPY}} \right)$$
+*   $\delta_i$: Local contract Delta.
+*   $Q_i$: Quantity (Negative for STO).
+*   $\beta_i$: 60-day historical Beta relative to SPY.
+*   $P_i / P_{SPY}$: Price ratio for dollar-neutral normalization.
 
-### Global Quantitative Audit
-| # | Filter | Professional Rule | Applied To |
+### 1.2 Gamma Fragility Assessment ($\Gamma_{\beta}$)
+Gamma measures the acceleration of Delta. Negative Gamma ($Net\ \Gamma < 0$) indicates **convexity risk**, where losses accelerate as the market moves against the position.
+$$\Gamma_{\beta} = \sum_{i=1}^{n} \left( \gamma_i \times Q_i \times 100 \times \beta_i^2 \times \left(\frac{P_i}{P_{SPY}}\right)^2 \right)$$
+*   **Threshold:** If $\Gamma_{\beta} < -20.0$, the terminal declares a **Fragile State**, triggering a priority alert to inject positive Gamma or reduce margin heat.
+
+---
+
+## 2. VIX Battle Ladder: Adaptive Scaling Logic
+
+The terminal utilizes a 6-stage response matrix to dynamically adjust risk appetite based on implied volatility (VIX).
+
+### 2.1 Environmental Risk Modifiers
+The effective risk limit is computed as:
+$$Risk_{adj} = Risk_{base} \times w_{vix} \times w_{oil} \times w_{regime}$$
+
+| VIX Tier | $w_{vix}$ (Weight) | STO Delta Cap | Behavior Mode |
 |---|---|---|---|
-| 1 | **HV Rank** | HV Rank ≥ 30 (Trailing 1-year) | STO Put / STO Call |
-| 2 | **Term Structure** | Ratio 30D/60D IV ≥ 1.05 (Backwardation) | All |
-| 3 | **VIX Regime** | VTS (VIX/VIX3M) ≥ 1.0 → Global Defensive Mode | All |
-| 4 | **VIX Z-Score** | Z30 > 0.5 & Z60 > 0 (Vol Expansion) → Reject Long Bias | BTO Call / STO Put |
-| 5 | **SPY Alignment** | Price < SMA 20 → Bearish Regime Declared | BTO Call / STO Put |
-| 6 | **Vertical Skew** | 25Δ Put/Call IV Ratio ≥ 1.50 → Reject STO Put | STO Put |
-| 7 | **Liquidity** | Abs Spread > $0.20 **AND** % Spread > 10% → REJECT | All |
-| 8 | **VRP (Seller)** | IV < HV (VRP < 0) → REJECT | STO Put / STO Call |
-| 9 | **VRP (Buyer)** | VRP > 3% (Overpriced Premium) → REJECT | BTO Call / BTO Put |
-| 10 | **Prob. Cone** | Breakeven must be outside 1σ Expected Move | STO Put / STO Call |
-| 11 | **AROC (Seller)** | Annualized Return on Capital < 15% → REJECT | STO Put / STO Call |
-| 12 | **AROC (Buyer)** | Annualized Return on Capital < 30% → REJECT | BTO Call / BTO Put |
-| 13 | **¼ Kelly** | Tail Risk detected → Max Position 2.5% | STO Put / STO Call |
-| 14 | **VIX Ladder** | VIX < 15 → Hard Reject all STO signals | All |
+| **Dormant** (< 15) | 0.0 | N/A | Total Signal Rejection |
+| **Caution** (15-18) | 0.5 | -0.12 | Conservative Sizing |
+| **Ready** (18-24) | 1.0 | -0.20 | Standard Operations |
+| **Aggressive** (24-30) | 1.2 | -0.20 | Tactical Expansion |
+| **Heavy** (30-35) | 1.5 | -0.25 | Offensive Posture |
+| **Extreme** (≥ 35) | 2.0 | -0.35 | All-in (Bypass Modifiers) |
+
+### 2.2 Dynamic Kelly Criterion Scaling
+The terminal utilizes a fractional Kelly Criterion to optimize position sizing while avoiding ruin.
+$$f^* = \text{Fraction} \times \frac{p \cdot b - q}{b}$$
+*   **Standard Mode:** Uses **1/4 Kelly** (Fraction = 0.25).
+*   **High Volatility Insertion:** When $VIX > 29.5$, the terminal linearly interpolates between **1/4 Kelly** and **1/2 Kelly**, reaching max intensity at $VIX = 45$.
 
 ---
 
-## 🏅 VIX Battle Ladder
+## 3. Decision Logic & Pipeline Thresholds
 
-The VIX Battle Ladder is a 6-stage adaptive system that governs risk appetite based on realized and implied market volatility.
+### 3.1 Capital Efficiency (AROC)
+Minimum yield required to justify margin utilization:
+$$AROC = \frac{\text{Premium}}{\text{Margin}} \times \frac{365}{DTE} \times 100$$
+*   **STO Requirement:** $\ge 15\%$
+*   **BTO Requirement:** $\ge 30\%$ (Expected Move vs. Premium)
 
-| VIX Range | Tier Name | STO Delta Cap | Sizing Multiplier | Kelly Override | VTR Entry |
-|---|---|---|---|---|---|
-| < 15.0 | 🧊 **Dormant** | — | 0.0x | — | ❌ Forbidden |
-| 15.0 – 18.0 | ⚠️ **Caution** | -0.12 | 0.5x | — | ✅ Allowed |
-| 18.0 – 24.0 | 🟡 **Ready** | -0.20 | 1.0x | — | ✅ Allowed |
-| 24.0 – 30.0 | 🟠 **Aggressive** | -0.20 | 1.2x | — | ✅ Allowed |
-| 30.0 – 35.0 | 🔴 **Heavy** | -0.25 | 1.5x | 1/3 Kelly | ✅ Allowed |
-| ≥ 35.0 | ⚫ **Extreme** | -0.35 | 2.0x | 1/2 Kelly | ✅ Allowed |
+### 3.2 DITM Convexity Guard (Profit Lock)
+The **Profit Lock** mechanism monitors the loss of convexity in Long Options (BTO). When an option enters Deep-In-The-Money (DITM) territory, it effectively becomes a "Synthetic Underlying" but retains extrinsic decay.
+*   **Trigger:** $\Delta \ge 0.85$ **AND** $PnL > 150\%$ **AND** $DTE \le 21$.
+*   **Logic:** At $\Delta = 0.85$, the position has minimal remaining leverage (Gamma) relative to capital at risk. The terminal mandates a **Convexity Reset** (Roll or Close).
 
 ---
 
-## ⚡ PowerSqueeze (PSQ) Labels
-Independent of option signals, the PSQ engine provides momentum context:
-*   `OVEREXTENDED_RISK`: Bullish breakout in a low VIX (< 15) environment. Likely a bull trap.
-*   `HIGH_CONVICTION_RECOVERY`: Bearish deceleration in a high VIX (> 24.6) environment. Potential reversal opportunity.
+## 4. Financial Runway Analytics
+
+Survival assessment for professional traders:
+$$Runway\ (Days) = \frac{\text{Cash Reserve}}{\text{Monthly Expenses} - (\text{Daily Portfolio Theta} \times 30)} \times 30$$
+*   **Daily Theta ($\Theta$):** The total dollar amount of time value harvested by the portfolio every 24 hours.
+*   **Net Burn Rate:** Monthly expenses offset by Theta cash flow. If $\Theta_{monthly} > Expenses$, $Runway = \infty$.
