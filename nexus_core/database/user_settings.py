@@ -23,7 +23,6 @@ class UserContext:
     polymarket_threshold: float = 10000.0 # Polymarket 巨鯨監控門檻 (USD, 0=關閉)
     polymarket_use_llm: bool = True       # 是否使用 LLM 進行 Polymarket 交易分析
     polymarket_slippage: float = 2.0      # Polymarket 巨鯨判定目標滑價百分比 (預設 2.0%)
-    is_professional_mode: bool = False    # 專業投資者模式
     monthly_expense: float = 0.0          # 每月支出預算
     tax_reserve_rate: float = 0.20        # 稅務預留比例 (預設 20%)
     cash_reserve: float = 0.0             # 現金儲備 (用於生存天數計算)
@@ -60,7 +59,7 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:
                 'portfolio_value', 'risk_limit_pct', 'last_rehedge_alert_time', 'dynamic_tau', 
                 'enable_option_alerts', 'enable_vtr', 'enable_psq_watchlist', 'enable_analyst_agent',
                 'polymarket_threshold', 'polymarket_use_llm', 'polymarket_slippage',
-                'is_professional_mode', 'monthly_expense', 'tax_reserve_rate', 'cash_reserve'
+                'monthly_expense', 'tax_reserve_rate', 'cash_reserve'
             }
             update_pairs = []
             values = []
@@ -77,8 +76,6 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:
                         value = max(0.1, min(float(value), 10.0))
                     elif key == 'tax_reserve_rate':
                         value = max(0.0, min(float(value), 1.0))
-                    elif key == 'is_professional_mode':
-                        value = 1 if value else 0
                         
                     update_pairs.append(f"{key} = ?")
                     values.append(value)
@@ -213,7 +210,6 @@ def get_full_user_context(user_id: int) -> UserContext:
                 polymarket_threshold=_get_val('polymarket_threshold', 10000.0),
                 polymarket_use_llm=bool(_get_val('polymarket_use_llm', True)),
                 polymarket_slippage=_get_val('polymarket_slippage', 2.0),
-                is_professional_mode=bool(_get_val('is_professional_mode', False)),
                 monthly_expense=_get_val('monthly_expense', 0.0),
                 tax_reserve_rate=_get_val('tax_reserve_rate', 0.20),
                 cash_reserve=_get_val('cash_reserve', 0.0)

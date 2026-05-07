@@ -22,7 +22,7 @@
 | **量化定價引擎** | Black-Scholes-Merton (via `py_vollib`, 含股息率校正) |
 | **風險精算核心** | Nexus Risk Optimizer (NRO) - 二階 Beta-Weighted 曝險模型 |
 | **數據源 (Feeds)** | Finnhub (Real-time), yfinance (Chain), Polymarket (WS L2), Reddit (Edge) |
-| **持久化層** | SQLite 搭配自動化 Migration Engine (v022+) |
+| **持久化層** | SQLite 搭配自動化 Migration Engine (v023+) |
 | **智能層** | Structured LLM Output (Pydantic Schema) via OpenAI-compatible API |
 | **訊息傳遞** | Discord.py (非同步訊息佇列，支援多租戶隔離) |
 
@@ -38,7 +38,7 @@ graph TD
         Bot[NexusBot Core]
         TS[TradingService - Business Logic]
         RE[Risk Engine - NRO]
-        DB[(SQLite DB v022)]
+        DB[(SQLite DB v023)]
         S[Services - LLM/Polymarket]
     end
 

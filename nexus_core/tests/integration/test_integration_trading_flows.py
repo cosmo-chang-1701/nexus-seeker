@@ -18,10 +18,17 @@ class DbIsolatedTestCase(unittest.TestCase):
         self._tmpdir = tempfile.TemporaryDirectory()
         self.db_path = str(Path(self._tmpdir.name) / "integration_test.db")
 
+        import sqlite3
+        real_connect = sqlite3.connect
+        # Patch DB_NAME in all modules that use it
         self._db_patchers = [
             patch("database.core.DB_NAME", self.db_path),
             patch("database.virtual_trading.DB_NAME", self.db_path),
             patch("database.portfolio.DB_NAME", self.db_path),
+            patch("database.user_settings.DB_NAME", self.db_path),
+            patch("database.watchlist.DB_NAME", self.db_path),
+            patch("database.financials.DB_NAME", self.db_path),
+            patch("market_analysis.ghost_trader.sqlite3.connect", side_effect=lambda db: real_connect(self.db_path)),
         ]
         for patcher in self._db_patchers:
             patcher.start()

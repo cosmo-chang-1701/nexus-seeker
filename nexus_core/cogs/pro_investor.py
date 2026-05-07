@@ -84,13 +84,6 @@ class ProInvestorCog(commands.Cog):
         user_id = interaction.user.id
         ctx = get_full_user_context(user_id)
         
-        if not ctx.is_professional_mode:
-            await interaction.followup.send(
-                "⚠️ Professional Mode is not enabled. Use `/settings` to upgrade your profile.", 
-                ephemeral=True
-            )
-            return
-
         if ctx.monthly_expense <= 0:
             await interaction.followup.send(
                 "❌ Monthly expense not set. Update your profile in `/settings`.", 

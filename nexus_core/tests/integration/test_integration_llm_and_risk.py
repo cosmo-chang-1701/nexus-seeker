@@ -1,7 +1,7 @@
 import asyncio
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, patch, MagicMock
 
 from market_analysis.risk_engine import MacroContext, optimize_position_risk
 from services.llm_service import RiskAssessment, evaluate_trade_risk
@@ -14,12 +14,13 @@ class TestLlmRiskIntegration(unittest.TestCase):
             tags=["Black Swan Risk", "Retail Mania"],
             reasoning="疑似黑天鵝事件，否決賣方策略。",
         )
-        response = SimpleNamespace(output_parsed=parsed)
+        # 建立完整的模擬 client 與 responses 物件
+        mock_client = AsyncMock()
+        mock_response = MagicMock()
+        mock_response.output_parsed = parsed
+        mock_client.responses.parse = AsyncMock(return_value=mock_response)
 
-        with patch(
-            "services.llm_service.client.responses.parse",
-            new=AsyncMock(return_value=response),
-        ):
+        with patch("services.llm_service.client", mock_client):
             result = asyncio.run(
                 evaluate_trade_risk(
                     symbol="TSLA",
@@ -33,10 +34,10 @@ class TestLlmRiskIntegration(unittest.TestCase):
         self.assertIn("Black Swan Risk", result["reasoning"])
 
     def test_fail_open_when_llm_is_unavailable(self):
-        with patch(
-            "services.llm_service.client.responses.parse",
-            new=AsyncMock(side_effect=RuntimeError("network down")),
-        ):
+        mock_client = AsyncMock()
+        mock_client.responses.parse = AsyncMock(side_effect=RuntimeError("network down"))
+
+        with patch("services.llm_service.client", mock_client):
             result = asyncio.run(
                 evaluate_trade_risk(
                     symbol="MSFT",

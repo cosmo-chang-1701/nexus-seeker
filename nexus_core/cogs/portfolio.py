@@ -64,7 +64,7 @@ class PortfolioCog(commands.Cog):
         except Exception as e:
             await interaction.response.send_message(f"❌ 寫入失敗: {e}", ephemeral=True)
 
-    @app_commands.command(name="settings", description="配置帳戶全域參數 (資金、風險與專業投資者設定)")
+    @app_commands.command(name="settings", description="配置帳戶全域參數 (資金、風險與專業營運指標)")
     @app_commands.describe(
         capital="更新帳戶總資金 (USD)",
         risk_limit="更新基準風險上限 % (1.0 - 50.0)",
@@ -75,8 +75,7 @@ class PortfolioCog(commands.Cog):
         polymarket_threshold="Polymarket 巨鯨監控門檻 (USD, 0=關閉)",
         polymarket_use_llm="Polymarket 交易是否使用 AI 分析總結",
         polymarket_slippage="Polymarket 巨鯨判定目標滑價百分比 (0.1% - 10.0%)",
-        is_professional_mode="啟用專業投資者模式 (開啟財務跑道分析)",
-        monthly_expense="每月生存支出預算 (USD)",
+        monthly_expense="每月生存支出預算 (USD, 用於財務跑道分析)",
         tax_reserve_rate="稅務預留比例 (0.0 - 1.0)",
         cash_reserve="現金儲備金額 (USD, 用於生存天數計算)"
     )
@@ -92,7 +91,6 @@ class PortfolioCog(commands.Cog):
         polymarket_threshold: Optional[float] = None,
         polymarket_use_llm: Optional[bool] = None,
         polymarket_slippage: Optional[float] = None,
-        is_professional_mode: Optional[bool] = None,
         monthly_expense: Optional[float] = None,
         tax_reserve_rate: Optional[float] = None,
         cash_reserve: Optional[float] = None
@@ -150,11 +148,7 @@ class PortfolioCog(commands.Cog):
             else:
                 return await interaction.response.send_message("❌ 滑價門檻需介於 0.1% 至 10.0% 之間", ephemeral=True)
 
-        # 🚀 [Professional Mode] 專業投資者參數
-        if is_professional_mode is not None:
-            kwargs['is_professional_mode'] = is_professional_mode
-            updates.append(f"💼 專業投資模式: `{'開啟' if is_professional_mode else '關閉'}`")
-        
+        # 🚀 [Professional Metrics]
         if monthly_expense is not None:
             if monthly_expense >= 0:
                 kwargs['monthly_expense'] = monthly_expense

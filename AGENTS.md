@@ -25,7 +25,8 @@ The system is divided into two main services:
 - **`market_analysis/`**: The quant engine. Contains strategy logic (with VIX ladder gating and delta capping), Greek calculations, PowerSqueeze (PSQ) scoring (with VIX-aware momentum labeling), hedging simulations, NRO risk optimization (with dynamic Kelly scaling and All-in bypass), and margin analysis.
 - **`database/`**: Persistent storage layer with an automated migration engine (`database/core.py`) that scans `database/migrations/` on startup. Includes aggregated Greeks tracking across real and virtual portfolios.
 - **`services/`**: Business logic layer (`TradingService`, `LLMService`, `PolymarketService`, `MarketDataService`, `NewsService`, `RedditService`) that decouples the Discord UI from core computations.
-- **`cogs/`**: Discord extensions implementing slash commands and background tasks (Market Scanning, VTR monitoring, Daily Reports, Analyst Agent, Pro Investor metrics).
+- `cogs/`: Discord extensions implementing slash commands and background tasks (Market Scanning, VTR monitoring, Daily Reports, Analyst Agent, Financial Analytics).
+
 - **`ui/`**: Reusable Discord UI components and views for interactive commands.
 
 ---
@@ -74,7 +75,7 @@ Tests are located in `nexus_core/tests/`.
 
 ### 1. Database Migrations
 Never modify the database schema manually. Use the migration engine:
-- Create a new file in `nexus_core/database/migrations/` (e.g., `v022_add_cash_reserve.py`).
+- Create a new file in `nexus_core/database/migrations/` (e.g., `v023_set_pro_mode_default.py`).
 - Export `version` (int), `description` (str), and `sql` (str).
 - The bot will automatically apply it on the next startup.
 
@@ -90,7 +91,7 @@ New commands should be added as **Slash Commands** within a Cog in `nexus_core/c
 - `GhostTrader` (`market_analysis/ghost_trader.py`) handles the Virtual Trading Room (VTR) logic, simulating entries and tracking virtual performance. VTR auto-entry is gated by VIX tier permissions (`vtr_entry_allowed`). Implements autonomous **DITM Profit Lock** defense.
 - `PSQ Engine` (`market_analysis/psq_engine.py`) provides the PowerSqueeze momentum indicator with VIX-aware labeling (`OVEREXTENDED_RISK`, `HIGH_CONVICTION_RECOVERY`).
 - `NRO Risk Engine` (`market_analysis/risk_engine.py`) provides portfolio risk optimization with inverted VIX weights (high VIX = offensive posture), dynamic Kelly scaling (1/4 to 1/2 Kelly), and All-in bypass for VIX > 35. Enforces **Dormant Tier (VIX < 15)** STO rejection.
-- `Pro Management` (`market_analysis/pro_management.py`) handles professional metrics like **Financial Survival Runway** and **Position Evolution (Transition) Simulations**.
+- `Financial Analytics` (`market_analysis/pro_management.py`) handles professional metrics like **Financial Survival Runway** and **Position Evolution (Transition) Simulations**.
 
 ### 4. Service Layer & Decision Pipeline
 - `TradingService` (`services/trading_service.py`) implements a **4-stage validation pipeline**: **Macro -> Alpha -> Risk -> Financials**.

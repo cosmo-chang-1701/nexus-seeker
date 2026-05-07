@@ -102,10 +102,9 @@ class TradingService:
             return False, "RISK_REJECT: NRO optimization determined zero safe quantity (Risk budget exceeded)."
             
         # --- Stage 4: Financials (Runway & Survival) ---
-        if user_context.is_professional_mode:
-            # Placeholder for survival logic: If runway < 180 days, reject any non-hedging trades that increase margin
-            # (Actual implementation will use the runway helper in Phase 4)
-            pass
+        # If runway < 180 days, reject any non-hedging trades that increase margin
+        # (Actual implementation will use the runway helper in Phase 4)
+        pass
             
         return True, "APPROVED"
 
@@ -509,15 +508,13 @@ class TradingService:
                 logger.info(f"盤後報告略過：report_lines 為空，uid={uid}")
                 continue
 
-            # 🚀 [Pro Investor] 生存天數計算 (Runway Calculation)
-            survival_runway = None
-            if user_ctx.is_professional_mode:
-                from market_analysis.pro_management import calculate_survival_runway
-                survival_runway = calculate_survival_runway(
-                    cash_reserve=user_ctx.cash_reserve,
-                    monthly_expenses=user_ctx.monthly_expense,
-                    daily_theta=user_ctx.total_theta
-                )
+            # 🚀 [Pro Investor] 生存天數計算 (Runway Calculation) - 預設執行
+            from market_analysis.pro_management import calculate_survival_runway
+            survival_runway = calculate_survival_runway(
+                cash_reserve=user_ctx.cash_reserve,
+                monthly_expenses=user_ctx.monthly_expense,
+                daily_theta=user_ctx.total_theta
+            )
 
             try:
                 # 2. 執行對沖績效分析

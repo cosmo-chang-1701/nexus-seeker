@@ -1,9 +1,11 @@
+import sqlite3
 import logging
 import math
 import datetime
 import yfinance as yf
 import pandas as pd
 import asyncio
+import json
 from py_vollib.black_scholes_merton.greeks.analytical import delta
 
 from config import RISK_FREE_RATE
@@ -137,21 +139,20 @@ class GhostTrader:
             updated_tags = []
         updated_tags.append(f"exit_reason:{reason}")
         
-        # 這裡我們需要更新 tags，但 close_virtual_trade 目前不支援更新 tags
-        # 我們可以直接手動更新或修改 close_virtual_trade
+        # 執行主平倉邏輯
         success = await asyncio.to_thread(close_virtual_trade, trade['id'], actual_exit_price, status=status, pnl=pnl)
         
-        # 由於 database.virtual_trading.close_virtual_trade 不支援 tags 更新，
-        # 我們在平倉後額外更新一次 tags (這有點不理想，但為了不大幅改動 DB 結構先這樣做)
+        # 由於 close_virtual_trade 不支援 tags 更新，此處手動補償
         if success:
-            import json
-            import sqlite3
-            from config import DB_NAME
-            conn = sqlite3.connect(DB_NAME)
-            cursor = conn.cursor()
-            cursor.execute("UPDATE virtual_trades SET tags = ? WHERE id = ?", (json.dumps(updated_tags), trade['id']))
-            conn.commit()
-            conn.close()
+            from database.virtual_trading import DB_NAME as _VT_DB_NAME
+            try:
+                with sqlite3.connect(_VT_DB_NAME) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("UPDATE virtual_trades SET tags = ? WHERE id = ?", (json.dumps(updated_tags), trade['id']))
+                    conn.commit()
+            except Exception as e:
+                logger.error(f"VTR 更新 tags 失敗: {e}")
+                
             logger.info(f"🔴 VTR 自動平倉 [{trade['id']}] {trade['symbol']} {trade['opt_type']} {trade['strike']} 原因:{reason} Exit:{actual_exit_price:.2f}")
 
     async def get_transition_candidates(self):
