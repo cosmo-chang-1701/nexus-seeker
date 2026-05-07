@@ -111,7 +111,7 @@ def _add_vix_battle_status_field(embed, data):
         value += "\n" + " | ".join(details)
     value += "\n\u200b"
     
-    embed.add_field(name="\ud83c\udfc5 VIX \u6230\u60c5\u968e\u68af", value=value, inline=False)
+    embed.add_field(name="🛡️ VIX 戰情階梯狀態", value=value, inline=False)
 
 def _add_market_overview_fields(embed, data):
     beta = data.get('beta', 1.0)
@@ -447,13 +447,25 @@ def create_scan_embed(data, user_capital=100000.0):
     # Render UI fields (VIX Battle Status first)
     _add_vix_battle_status_field(embed, data)
     
-    # 🚀 整合 Gap & Fill 狀態
+    # 🚀 整合 Gap & Fill 狀態 (New Engine)
     gap = data.get('gap_status')
-    if gap and gap.gap_type.value != "NONE":
-        gap_color = "🟢" if gap.gap_type.value == "UPWARD" else "🔴"
-        fill_icon = "✅" if gap.is_filled else "⏳"
-        gap_info = (f"{gap_color} **{gap.gap_type.value} GAP**: `{gap.gap_percentage:+.2f}%` (${gap.gap_size:+.2f})\n"
-                    f"{fill_icon} **狀態:** {gap.fill_status.value} (回補 `{gap.fill_percentage:.1f}%`)\n\u200b")
+    if gap:
+        from market_analysis.gap_analysis import GapStatus
+        status_emoji = {
+            GapStatus.GAP_HOLDING: "🟢 Holding",
+            GapStatus.PARTIAL_FILL: "🟡 Filling",
+            GapStatus.FULL_FILL: "🔴 Filled",
+            GapStatus.NO_GAP: "⚪ None"
+        }.get(gap.current_fill_status, "⚪ N/A")
+        
+        support_tag = " | 🛡️ Support Confirmed" if gap.is_support_confirmed else ""
+        gap_color = "🟢" if gap.gap_size > 0 else "🔴"
+        
+        gap_info = (
+            f"{gap_color} **{'UP-GAP' if gap.gap_size > 0 else 'DOWN-GAP'}**: `{gap.gap_pct:+.2f}%` (${gap.gap_size:+.2f})\n"
+            f"**狀態:** {status_emoji}{support_tag}\n"
+            f"**區間:** `${gap.gap_zone[0]:.2f}` - `${gap.gap_zone[1]:.2f}`\n\u200b"
+        )
         embed.add_field(name="📈 Gap & Fill 跳空監控", value=gap_info, inline=False)
 
     _add_market_overview_fields(embed, data)
@@ -569,7 +581,7 @@ def create_news_scan_embed(symbol, news_text):
 def create_reddit_scan_embed(symbol, reddit_text):
     """建構 Reddit 情緒掃描結果的 Embed"""
     embed = discord.Embed(
-        title=f"🔥 {symbol} 散戶情緒掃描", 
+        title=f"🔥 {symbol} 散戶情緒優勢 (Reddit 同步)", 
         color=discord.Color.orange()
     )
     add_reddit_text = reddit_text
@@ -581,7 +593,7 @@ def create_reddit_scan_embed(symbol, reddit_text):
 def create_polymarket_list_embed(markets: List[Dict[str, Any]]):
     """建構 Polymarket 監控中的熱門市場 Embed"""
     embed = discord.Embed(
-        title="🐋 Polymarket 監控中的活躍市場",
+        title="🐋 Polymarket 巨鯨意圖圖譜",
         color=discord.Color.blue(),
         timestamp=datetime.now(timezone.utc)
     )

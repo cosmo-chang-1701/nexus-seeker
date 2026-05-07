@@ -1,115 +1,95 @@
-import pandas as pd
-from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+from typing import Optional, List
+from pydantic import BaseModel, Field
+import pandas as pd
+import logging
 
-class GapType(Enum):
-    UPWARD = "UPWARD"
-    DOWNWARD = "DOWNWARD"
-    NONE = "NONE"
+logger = logging.getLogger(__name__)
 
-class FillStatus(Enum):
-    FULL = "FULL"
-    PARTIAL = "PARTIAL"
-    HOLDING = "HOLDING"
-    NONE = "NONE"
+class GapStatus(str, Enum):
+    GAP_HOLDING = "GAP_HOLDING"
+    PARTIAL_FILL = "PARTIAL_FILL"
+    FULL_FILL = "FULL_FILL"
+    NO_GAP = "NO_GAP"
 
-@dataclass
-class GapStatus:
-    """
-    Data structure representing the quantitative gap analysis result.
-    """
-    gap_type: GapType
-    gap_size: float
-    gap_percentage: float
-    fill_status: FillStatus
-    fill_percentage: float
-    is_filled: bool
+class GapMetrics(BaseModel):
+    symbol: str
+    gap_size: float = Field(description="Today's Open - Yesterday's Close")
+    gap_pct: float = Field(description="Gap size as a percentage of previous close")
+    gap_zone: tuple[float, float] = Field(description="(Lower Bound, Upper Bound) of the gap")
+    current_fill_status: GapStatus
+    is_support_confirmed: bool = Field(default=False, description="True if price entered zone but rebounded strongly")
+    intraday_low: float
+    prev_close: float
 
 class GapAnalyzer:
     """
-    Quantitative engine for Gap & Fill analysis.
-    Evaluates overnight price discontinuities and subsequent intraday mean reversion.
+    量化跳空分析引擎 (Gap & Fill Monitor Engine)：
+    監控盤中價格與跳空區間 (Gap Zone) 的互動，驗證技術支撐與阻力。
     """
-
+    
     @staticmethod
-    def analyze_gap(df: pd.DataFrame) -> Optional[GapStatus]:
+    def analyze_gap(df: pd.DataFrame) -> Optional[GapMetrics]:
         """
-        Ingests OHLCV data to determine gap metrics.
-        
-        Args:
-            df (pd.DataFrame): DataFrame containing 'Open', 'High', 'Low', 'Close' columns.
-                               Must have at least two rows (Previous Day, Current Day).
-        
-        Returns:
-            Optional[GapStatus]: Structured gap metrics or None if insufficient data.
+        分析 OHLCV 數據以計算跳空指標。
+        df 必須包含至少兩天的數據，最後一列為當前交易日。
         """
         if df is None or len(df) < 2:
             return None
-
-        # Extract relevant price points
-        prev_close = float(df['Close'].iloc[-2])
-        curr_open = float(df['Open'].iloc[-1])
-        curr_high = float(df['High'].iloc[-1])
-        curr_low = float(df['Low'].iloc[-1])
-        curr_close = float(df['Close'].iloc[-1])
-
-        gap_size = curr_open - prev_close
-        gap_percentage = (gap_size / prev_close) * 100
-        
-        if abs(gap_size) < 1e-6:
-            return GapStatus(
-                gap_type=GapType.NONE,
-                gap_size=0.0,
-                gap_percentage=0.0,
-                fill_status=FillStatus.NONE,
-                fill_percentage=0.0,
-                is_filled=True
+            
+        try:
+            prev_day = df.iloc[-2]
+            curr_day = df.iloc[-1]
+            
+            prev_close = float(prev_day['Close'])
+            curr_open = float(curr_day['Open'])
+            curr_low = float(curr_day['Low'])
+            curr_high = float(curr_day['High'])
+            curr_price = float(curr_day['Close'])
+            
+            gap_size = curr_open - prev_close
+            gap_pct = (gap_size / prev_close) * 100
+            
+            # 門檻判定：若跳空幅度小於 0.3%，視為無跳空以過濾雜訊
+            if abs(gap_pct) < 0.3:
+                return None
+                
+            # 定義跳空區間 (Gap Zone)
+            gap_zone = (min(prev_close, curr_open), max(prev_close, curr_open))
+            
+            # 判定填補狀態 (以向上跳空為例)
+            status = GapStatus.GAP_HOLDING
+            is_support_confirmed = False
+            
+            if gap_size > 0: # Up-Gap
+                if curr_low <= prev_close:
+                    status = GapStatus.FULL_FILL
+                elif curr_low < curr_open:
+                    status = GapStatus.PARTIAL_FILL
+                    # 支撐確認邏輯：若最低價進入區間但收盤價回升至區間上方，且留有下影線
+                    if curr_price > curr_open and (curr_price - curr_low) > (curr_open - prev_close) * 0.5:
+                        is_support_confirmed = True
+                else:
+                    status = GapStatus.GAP_HOLDING
+            else: # Down-Gap
+                if curr_high >= prev_close:
+                    status = GapStatus.FULL_FILL
+                elif curr_high > curr_open:
+                    status = GapStatus.PARTIAL_FILL
+                else:
+                    status = GapStatus.GAP_HOLDING
+                    
+            return GapMetrics(
+                symbol=str(df.index.name or "UNKNOWN"),
+                gap_size=round(gap_size, 2),
+                gap_pct=round(gap_pct, 2),
+                gap_zone=gap_zone,
+                current_fill_status=status,
+                is_support_confirmed=is_support_confirmed,
+                intraday_low=curr_low,
+                prev_close=prev_close
             )
-
-        gap_type = GapType.UPWARD if gap_size > 0 else GapType.DOWNWARD
-        
-        # Calculate Fill Status
-        # Upward Gap Fill: Price moves down to previous close
-        # Downward Gap Fill: Price moves up to previous close
-        
-        fill_percentage = 0.0
-        is_filled = False
-        fill_status = FillStatus.HOLDING
-
-        if gap_type == GapType.UPWARD:
-            # Low must reach or break previous close for a full fill
-            if curr_low <= prev_close:
-                fill_percentage = 100.0
-                is_filled = True
-                fill_status = FillStatus.FULL
-            else:
-                # Partial fill calculation based on how much of the gap zone was entered
-                # Gap zone is [prev_close, curr_open]
-                movement_into_gap = curr_open - curr_low
-                if movement_into_gap > 0:
-                    fill_percentage = (movement_into_gap / gap_size) * 100
-                    fill_status = FillStatus.PARTIAL
-        
-        elif gap_type == GapType.DOWNWARD:
-            # High must reach or break previous close for a full fill
-            if curr_high >= prev_close:
-                fill_percentage = 100.0
-                is_filled = True
-                fill_status = FillStatus.FULL
-            else:
-                # Partial fill calculation
-                # Gap zone is [curr_open, prev_close] (gap_size is negative)
-                movement_into_gap = curr_high - curr_open
-                if movement_into_gap > 0:
-                    fill_percentage = (movement_into_gap / abs(gap_size)) * 100
-                    fill_status = FillStatus.PARTIAL
-
-        return GapStatus(
-            gap_type=gap_type,
-            gap_size=gap_size,
-            gap_percentage=gap_percentage,
-            fill_status=fill_status,
-            fill_percentage=min(max(fill_percentage, 0.0), 100.0),
-            is_filled=is_filled
-        )
+            
+        except Exception as e:
+            logger.error(f"Gap 分析失敗: {e}")
+            return None

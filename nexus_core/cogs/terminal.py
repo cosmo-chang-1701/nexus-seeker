@@ -161,19 +161,19 @@ class TerminalCog(commands.Cog):
         daily_expense = ctx.monthly_expense / 30.0
         
         embed = discord.Embed(
-            title="🏁 Financial Runway & Survival Analysis",
+            title="🏁 財務生存與跑道分析",
             color=discord.Color.green() if income_ratio >= 1 or runway_days >= 365 else discord.Color.orange()
         )
-        embed.add_field(name="Daily Theta Income", value=f"`${daily_theta:,.2f}`", inline=True)
-        embed.add_field(name="Daily Budgeted Expense", value=f"`${daily_expense:,.2f}`", inline=True)
-        embed.add_field(name="Cash Reserve", value=f"`${ctx.cash_reserve:,.2f}`", inline=False)
+        embed.add_field(name="每日 Theta 收租額", value=f"`${daily_theta:,.2f}`", inline=True)
+        embed.add_field(name="每日預算支出", value=f"`${daily_expense:,.2f}`", inline=True)
+        embed.add_field(name="現金儲備健康度", value=f"`${ctx.cash_reserve:,.2f}`", inline=False)
         
-        status_text = "Sustainable" if income_ratio >= 1.0 else "Deficit"
-        embed.add_field(name="Income/Expense Ratio", value=f"{income_ratio:.2f} ({status_text})", inline=True)
+        status_text = "可持續" if income_ratio >= 1.0 else "入不敷出"
+        embed.add_field(name="收益支出比", value=f"{income_ratio:.2f} ({status_text})", inline=True)
         
         runway_val = "♾️ 無限 (收益覆蓋支出)" if runway_days >= 9999 else f"{runway_days:,.1f} 天"
-        embed.add_field(name="Survival Runway", value=f"`{runway_val}`", inline=True)
-        embed.set_footer(text="Theta-based yield projection. Accounts for cash reserves and tax estimates.")
+        embed.add_field(name="預估生存天數", value=f"`{runway_val}`", inline=True)
+        embed.set_footer(text="基於 Theta 的收益預測。已計入現金儲備與稅務估計。")
         
         await interaction.followup.send(embed=embed)
 
@@ -231,6 +231,17 @@ class TerminalCog(commands.Cog):
         result = await market_math.analyze_symbol(symbol, 0.0, df_spy, spy_price, vix_spot=macro_data.vix)
         is_option_valid = bool(result)
         if not result: result = {'symbol': symbol, 'stock_cost': 0.0}
+
+        # 🚀 執行 Gap & Fill 跳空分析 (New)
+        try:
+            from market_analysis.gap_analysis import GapAnalyzer
+            df_gap = await market_data_service.get_history_df(symbol, period="5d", interval="1d")
+            if not df_gap.empty and len(df_gap) >= 2:
+                gap_metrics = GapAnalyzer.analyze_gap(df_gap)
+                if gap_metrics:
+                    result['gap_status'] = gap_metrics
+        except Exception as gap_e:
+            logger.warning(f"手動掃描 Gap 分析失敗 for {symbol}: {gap_e}")
 
         df_hist_1d = await market_data_service.get_history_df(symbol, period="1y", interval="1d")
         from market_analysis.psq_engine import analyze_psq
@@ -303,6 +314,72 @@ class TerminalCog(commands.Cog):
             await interaction.response.send_message(f"🗑️ **已刪除紀錄 (ID: {trade_id})**: `{record[0]}` 已移除。", ephemeral=True)
         else:
             await interaction.response.send_message(f"❌ 找不到 ID `{trade_id}`。", ephemeral=True)
+
+    @app_commands.command(name="transition_sim", description="模擬投機部位向 Core Equity/Covered Call 演進")
+    @app_commands.describe(
+        symbol="標的代號",
+        current_option_pnl="目前該部位累計未實現損益 (USD)",
+        target_cc_strike="預計轉換後的 Covered Call 履約價",
+        target_cc_premium="預計單次收租權利金 (USD)"
+    )
+    async def transition_sim(
+        self, 
+        interaction: discord.Interaction, 
+        symbol: str, 
+        current_option_pnl: float, 
+        target_cc_strike: float, 
+        target_cc_premium: float
+    ):
+        await interaction.response.defer(ephemeral=True)
+        symbol = symbol.upper()
+        
+        try:
+            quote = await market_data_service.get_quote(symbol)
+            current_price = quote.get('c', 0.0) if quote else 0.0
+            
+            if current_price <= 0:
+                return await interaction.followup.send(f"❌ 無法獲取 `{symbol}` 即時報價。", ephemeral=True)
+
+            from market_analysis.pro_management import simulate_pro_transition
+            res = simulate_pro_transition(
+                current_option_pnl=current_option_pnl,
+                current_stock_price=current_price,
+                target_cc_strike=target_cc_strike,
+                target_cc_premium=target_cc_premium
+            )
+
+            embed = discord.Embed(
+                title=f"🔄 戰略轉軌模擬 (演進) | {symbol}",
+                description=f"模擬將 `{symbol}` 投機期權部位演進為 **核心現股 + 備兌買權 (Covered Call)** 模型。",
+                color=discord.Color.blue(),
+                timestamp=discord.utils.utcnow()
+            )
+            
+            embed.add_field(name="現價 (Price)", value=f"`${current_price:.2f}`", inline=True)
+            embed.add_field(name="期權獲利 (Option PnL)", value=f"`${res.initial_pnl:,.2f}`", inline=True)
+            
+            roadmap = (
+                f"1. **執行動作**：平倉現有 DITM 部位，回收收益。\n"
+                f"2. **購入現股**：以 `${current_price:.2f}` 購入 100 股。\n"
+                f"3. **追加資本**：需額外投入 **`${res.additional_capital_required:,.2f}`**。\n"
+                f"4. **成本調整**：調整後每股成本為 **`${res.adjusted_cost_basis:.2f}`**。\n"
+                f"5. **建立 CC**：賣出 `${target_cc_strike}` Call，收取 `${target_cc_premium:.2f}` 權利金。"
+            )
+            embed.add_field(name="🚀 資本重分配路線圖 (Roadmap)", value=roadmap, inline=False)
+            
+            efficiency = (
+                f"• **預期年化回報 (AROC)**：`{res.projected_aroc:.1f}%` "
+                f"{'✅ 符合 15% 門檻' if res.projected_aroc >= 15 else '⚠️ 低於效率門檻'}\n"
+                f"• **單次收租殖利率**：`{res.capital_efficiency_gain:.2f}%`"
+            )
+            embed.add_field(name="📊 資本效率評估", value=efficiency, inline=False)
+            
+            embed.set_footer(text="戰略轉軌引擎 v1.0 | 專業營運模式")
+            await interaction.followup.send(embed=embed)
+            
+        except Exception as e:
+            logger.error(f"Transition Simulation failed: {e}")
+            await interaction.followup.send("❌ 模擬執行失敗，請檢查輸入數據。", ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(TerminalCog(bot))

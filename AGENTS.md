@@ -116,7 +116,15 @@ The VIX Battle Ladder is a 6-tier system defined in `config.py` (`VIX_LADDER_CON
 
 VIX spot is fetched once per scan cycle in `TradingService.run_market_scan()` and propagated to `analyze_symbol()`, `analyze_psq()`, and VTR entry gating. The `vix_battle_status` dict is injected into result data for UI rendering via `embed_builder.py`. The `get_vix_tier()` helper ensures system resilience by defaulting to the "Ready" tier if input is `None` or `NaN`.
 
-### 6. Code Style
+### 6. Localization & Copywriting
+The terminal's Discord output is localized to **Professional Traditional Chinese (Taiwan)** to maintain a "Mission Critical" tone.
+- **Tone:** Imperative, high-signal, and authoritative. Avoid conversational prose.
+- **Standards:** 
+  - Preserve Greek letters and professional acronyms (Delta, Gamma, Theta, Vega, AROC, DTE, STO, DITM, VIX, NRO) in English.
+  - Standard Taiwan Financial Terminology: Margin -> 保證金, Portfolio -> 投資組合 / 部位, Hedge -> 對沖 / 避險, Convexity -> 凸性, Liquidity -> 流動性, Exposure -> 曝險.
+  - High-signal keywords: "攔截成功" (Intercepted), "審計完成" (Audit Complete), "執行指令" (Execution Command).
+
+### 7. Code Style
 - **Type Hinting:** Strictly define types for all functions and class members.
 - **Logging:** Use the project-wide logger (`logging.getLogger(__name__)`).
 - **Async/Await:** Ensure all I/O bound operations (API calls, DB queries) are non-blocking. Use `asyncio.to_thread` for blocking yfinance calls.

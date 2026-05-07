@@ -103,12 +103,12 @@ class SchedulerCog(commands.Cog):
                 uid = event['uid']
                 if event['type'] == 'PROFIT_LOCK':
                     embed = discord.Embed(
-                        title="🚨 NRO 優先指令：Profit Lock (DITM 凸性防禦)",
+                        title="🚨 DITM 凸性防護：獲利鎖定已觸發",
                         description=f"偵測到標的 **{event['symbol']}** 已進入深價內 (DITM)，凸性消失且風險報酬比惡化。",
                         color=discord.Color.gold()
                     )
                     embed.add_field(name="觸發指標", value=f"```\n未實現損益: {event['pnl_pct']}% | DTE: {event['dte']}\n```", inline=False)
-                    embed.add_field(name="建議行動", value=f"✅ **獲利鎖定 (Profit Lock)**", inline=True)
+                    embed.add_field(name="執行指令", value=f"✅ **獲利鎖定 (Profit Lock)**", inline=True)
                     embed.add_field(name="核心邏輯", value=event['reason'], inline=False)
                     embed.set_footer(text="Mission-Critical Risk Environment | Nexus Seeker")
                     embed.timestamp = datetime.now(ny_tz)
@@ -116,7 +116,7 @@ class SchedulerCog(commands.Cog):
                     
                 elif event['type'] == 'GAMMA_FRAGILITY':
                     embed = discord.Embed(
-                        title="🆘 NRO 緊急警報：Gamma Fragility (組合脆性預警)",
+                        title="🆘 Gamma 脆弱性警告 (Net Gamma < -20)",
                         description="偵測到投資組合淨 Gamma 已跌破臨界點，曝險加速度呈非線性擴張。",
                         color=discord.Color.dark_red()
                     )

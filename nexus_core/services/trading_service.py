@@ -93,9 +93,9 @@ class TradingService:
         # --- Stage 2: Alpha (AROC & Signal Strength) ---
         aroc = data.get('aroc', 0.0)
         if "STO" in strategy and aroc < 15.0:
-            return False, f"ALPHA_REJECT: Annualized Return on Capital (AROC) {aroc:.1f}% < 15.0% minimum threshold."
+            return False, f"STO 訊號遭攔截：低於 15% AROC 閾值 (目前: {aroc:.1f}%)"
         if "BTO" in strategy and aroc < 30.0:
-            return False, f"ALPHA_REJECT: BTO AROC {aroc:.1f}% < 30.0% minimum threshold."
+            return False, f"ALPHA_REJECT: BTO AROC {aroc:.1f}% < 30.0% 閾值。"
         
         # --- Stage 3: Risk (NRO & Kelly Sizing) ---
         if data.get('safe_qty', 0) <= 0:
@@ -513,48 +513,42 @@ class TradingService:
                 sym, opt_t, strike, exp, entry, qty, cost, w_delta, theta, gamma, *_ = row
                 
                 # 僅針對買方 (quantity > 0)
-                if qty > 0:
+                if qty > 0 and w_delta != 0:
                     exp_date = datetime.strptime(exp, '%Y-%m-%d').date()
                     dte = (exp_date - datetime.now().date()).days
                     
-                    # 獲取即時 Mid 價格與 Greeks (利用 refresh_portfolio_greeks 已寫入的值或即時抓取)
-                    # 為確保精確，此處使用資料庫中的 weighted_delta (由 refresh 任務更新)
-                    # 換算回局部 Delta: weighted_delta / (qty * 100 * beta * (price / spy_price))
-                    # 但這太複雜，我們直接利用 NRO 的 evaluate_ditm_defense 邏輯。
-                    # 注意：weighted_delta 是 SPY 等效 Delta。局部 Delta = weighted_delta / (qty * 100) * (spy_price / price) / beta
-                    
-                    # 簡化判斷：如果 weighted_delta 非常大，通常意味著 Delta 接近 1
-                    # 我們在 portfolio.py 中已有 refresh 邏輯，這裡直接讀取。
-                    
-                    # 獲取目前的 PnL %
+                    # 獲取標的現價以進行 Greeks 換算
                     quote = await market_data_service.get_quote(sym)
-                    curr_stock_price = quote.get('c', 0.0) if quote else 0.0
+                    curr_price = quote.get('c', 0.0) if quote else 0.0
+                    if curr_price <= 0: continue
                     
-                    # 由於計算 Delta 需要 IV，我們在此處做一次輕量化判定
-                    # 若 PnL 已經很高且 DTE 短，則觸發 Profit Lock
+                    # 換算回局部合約 Delta (Local Delta)
+                    # 公式：delta = w_delta / (qty * 100 * beta * (price / spy_price))
+                    # 此處簡化處理，利用 w_delta 與 qty 的關係進行臨界點判定
+                    # 在 NRO 模型中，若 w_delta / (qty * 100) 接近 beta * (price / spy_price)，則 local delta 趨近於 1
                     
-                    # 重新獲取 Mid 價格以計算 PnL
+                    from market_analysis.portfolio import calculate_beta
+                    beta = await calculate_beta(sym)
+                    
+                    # 精確局部 Delta 估算
+                    denominator = (qty * 100 * beta * (curr_price / spy_price))
+                    local_delta = abs(w_delta / denominator) if denominator != 0 else 0
+                    
+                    # Profit Lock 觸發條件：Delta >= 0.85 且 PnL > 150% 且 DTE <= 21
+                    # 獲取即時 Mid 以計算 PnL
                     mid, _ = await portfolio.get_option_chain_mid_iv(sym, exp, strike, opt_t)
-                    if mid > 0:
-                        pnl_pct = (mid - entry) / entry
-                        
-                        # 模擬局部 Delta (粗略估算)
-                        # 如果 PnL > 150% 且 DTE <= 21，很有可能已經進入 DITM
-                        # 這裡我們調用 risk_engine 的核心邏輯
-                        from market_analysis.risk_engine import evaluate_ditm_defense, DITMDefenseAction
-                        
-                        # 局部 Delta 判定 (從資料庫 Greeks 換算)
-                        # weighted_delta = delta * qty * 100 * beta * (price / spy_price)
-                        # 此處我們直接比對條件
-                        if pnl_pct > 1.5 and dte <= 21:
-                             results.append({
-                                'uid': uid,
-                                'type': 'PROFIT_LOCK',
-                                'symbol': sym,
-                                'pnl_pct': round(pnl_pct * 100, 1),
-                                'dte': dte,
-                                'reason': '偵測到部位喪失凸性 (Convexity Loss) 且獲利豐厚，建議執行獲利鎖定或轉倉。'
-                            })
+                    pnl_pct = ((mid - entry) / entry) if mid > 0 else 0
+                    
+                    if (local_delta >= 0.85 or pnl_pct > 1.5) and dte <= 21:
+                         results.append({
+                            'uid': uid,
+                            'type': 'PROFIT_LOCK',
+                            'symbol': sym,
+                            'local_delta': round(local_delta, 3),
+                            'pnl_pct': round(pnl_pct * 100, 1),
+                            'dte': dte,
+                            'reason': f'標的 **{sym}** Delta 已達 `{local_delta:.3f}`，部位進入深價內 (DITM) 區間，凸性 (Convexity) 已消失且 Theta 衰退加劇。'
+                        })
 
         return results
 

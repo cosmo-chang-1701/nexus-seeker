@@ -62,38 +62,38 @@ graph TD
 
 針對全職投資者量身打造的生存與效率指標：
 
-*   **Financial Survival & Runway (財務生存跑道)**：
-    系統自動對照使用者的 **Cash Reserve (現金儲備)** 與 **Monthly Expenses (每月支出)**，利用投資組合的 **Total Theta (每日時間價值收益)** 動態估算「財務生存天數」。透過 `/runway_check` 隨時掌握現金流健康度。
+*   **財務生存與跑道分析 (Financial Survival & Runway)**：
+    系統自動對照使用者的 **Cash Reserve (現金儲備)** 與 **Monthly Expenses (每月支出)**，利用投資組合的 **Total Theta (每日總 Theta 收租額)** 動態估算「財務生存天數」。透過 `/runway_check` 隨時掌握現金流健康度。
 *   **Capital Efficiency (AROC 門檻)**：
-    嚴格執行 **15% Annualized Return on Capital (AROC)** 准入制度。所有 **STO (Sell-to-Open)** 訊號若年化回報率低於 15%，將被系統過濾器直接攔截，確保保證金利用率極大化。
+    嚴格執行 **15% Annualized Return on Capital (AROC)** 准入制度。所有 **STO (Sell-to-Open)** 訊號若年化回報率低於 15%，將被系統過濾器直接攔截 (Blocked)，確保保證金利用率極大化。
 
 ---
 
 ## 🛡️ Functional Pillars
 
 ### 1. Risk Integrity (NRO 引擎)
-*   **Gamma Fragility Assessment (Gamma 脆性評估)**：
-    利用二階 Beta-Weighted 平方加權監控投資組合的淨 Gamma。當偵測到非線性風險加速時（淨 Gamma < −20），自動發出脆性警告。
-*   **DITM Convexity Guard (Profit Lock)**：
-    針對買方部位，當 **Delta ≥ 0.85** 且獲利豐厚時，偵測到部位喪失 **Convexity (凸性)** 並轉化為合成現股。系統會發出 **"Profit Lock"** 優先指令，強制執行資本回收。
-*   **VIX Battle Ladder (戰情階梯)**：
+*   **Gamma Fragility Warning (Gamma 脆弱性警告)**：
+    利用二階 Beta-Weighted 平方加權監控投資組合的淨 Gamma。當偵測到非線性風險加速時（淨 Gamma < −20），自動發出脆弱性警告。
+*   **DITM Convexity Guard (獲利鎖定)**：
+    針對買方部位，當 **Delta ≥ 0.85** 且獲利豐厚時，偵測到部位喪失 **Convexity (凸性)** 並轉化為合成現股。系統會發出 **"Profit Lock" (獲利鎖定)** 優先指令，強制執行資本回收。
+*   **VIX 戰情階梯 (Battle Ladder)**：
     6 階段自適應風險調控系統，根據即時波動率動態縮放 **Kelly Criterion (凱利準則)** 比例與 **Target Delta (目標曝險)**。
 
 ### 2. Market Intelligence (邊緣偵測)
-*   **Polymarket Whale Tracking**：
-    透過 WebSocket 即時監控預測市場 **L2 Order Book**。結合 LLM 進行 **Taker Intent Mapping (主動意圖映射)**，識別機構級巨鯨建倉動機。
+*   **Polymarket 巨鯨意圖圖譜 (Whale Intent Mapping)**：
+    透過 WebSocket 即時監控預測市場 **L2 Order Book**。結合 LLM 進行 **吃單者意圖映射 (Taker Intent Mapping)**，識別機構級巨鯨建倉動機。
 *   **Asynchronous Reddit Intelligence**：
-    Reddit 散戶共識指標改為每日定時非同步抓取並快取，確保盤中掃描不受爬蟲延遲影響，同時降低 Tunnel 負載。
+    Reddit 散戶情緒優勢改為每日定時非同步抓取並快取，確保盤中掃描不受爬蟲延遲影響，同時降低 Tunnel 負載。
 
 ### 3. Execution Automation
-*   **NYSE Dynamic Scheduler**：
-    精準對齊交易所交易時鐘，以 30 分鐘為心跳進行全自動化掃描，避開造市商無報價時段。
-*   **Intra-day Risk Audit**：
-    每 30 分鐘自動審計投資組合，執行 **Profit Lock (DITM 防禦)** 與 **Gamma Fragility (脆性偵測)**。
+*   **NYSE 動態調度器 (Dynamic Scheduler)**：
+    精準對齊交易所交易時鐘，以 30 分鐘為心跳 (Heartbeat) 進行全自動化掃描，避開造市商無報價時段。
+*   **日內風險審計 (Intra-day Risk Audit)**：
+    每 30 分鐘自動審計投資組合，執行 **獲利鎖定 (DITM 防禦)** 與 **Gamma 脆弱性偵測**。
 *   **GhostTrader (VTR)**：
     全功能虛擬交易室，支援自動化策略回測與實時績效歸因，提供每週勝率、損益比專業報表。
-*   **Zero-Downtime Deployment**：
-    採用 Docker Swarm `start-first` 藍綠部屬策略，確保新版本 Bot 成功連線 Discord 並通過健康檢查後，才移除舊版本執行個體，維持服務 24/7 不中斷。
+*   **零停機部署 (Zero-Downtime Deployment)**：
+    採用 Docker Swarm `start-first` 藍綠部屬策略，確保節點健康 (Node Healthy) 並成功連線 Discord 後才移除舊版本，維持服務 24/7 不中斷。
 
 ---
 
