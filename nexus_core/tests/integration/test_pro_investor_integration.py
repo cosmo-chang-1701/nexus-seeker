@@ -1,13 +1,4 @@
 import unittest
-import sys
-from unittest.mock import MagicMock
-
-# Mock py_vollib
-sys.modules["py_vollib"] = MagicMock()
-sys.modules["py_vollib.black_scholes_merton"] = MagicMock()
-sys.modules["py_vollib.black_scholes_merton.greeks"] = MagicMock()
-sys.modules["py_vollib.black_scholes_merton.greeks.analytical"] = MagicMock()
-
 import sqlite3
 import os
 import config

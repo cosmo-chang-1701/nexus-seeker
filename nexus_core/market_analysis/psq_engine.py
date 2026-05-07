@@ -15,6 +15,7 @@ class PSQResult:
     is_breakout_long: bool # 多頭能量釋放突破
     is_breakout_short: bool# 空頭能量釋放突破
     sma_distance_pct: float
+    sma_20: float          # 20SMA 價格
     # VIX 戰情標記
     vix_momentum_label: str = "NORMAL"   # "NORMAL", "OVEREXTENDED_RISK", "HIGH_CONVICTION_RECOVERY"
     vix_timeframe_note: str = ""         # 低 VIX 時建議使用的時間框架
@@ -155,6 +156,7 @@ def analyze_psq(df: pd.DataFrame, length: int = 20, bb_mult: float = 2.0, kc_mul
             is_breakout_long=is_breakout_long,
             is_breakout_short=is_breakout_short,
             sma_distance_pct=float(sma_distance_pct.iloc[-1]),
+            sma_20=float(basis.iloc[-1]),
             vix_momentum_label=vix_momentum_label,
             vix_timeframe_note=vix_timeframe_note,
         )

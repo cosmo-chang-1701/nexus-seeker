@@ -1,84 +1,71 @@
 import unittest
-import sys
-from unittest.mock import MagicMock
-
-# Mock dependencies before importing market_analysis
-sys.modules["py_vollib"] = MagicMock()
-sys.modules["py_vollib.black_scholes_merton"] = MagicMock()
-sys.modules["py_vollib.black_scholes_merton.greeks"] = MagicMock()
-sys.modules["py_vollib.black_scholes_merton.greeks.analytical"] = MagicMock()
-sys.modules["yfinance"] = MagicMock()
-sys.modules["finnhub"] = MagicMock()
-sys.modules["pandas_ta"] = MagicMock()
-sys.modules["py_vollib_vectorized"] = MagicMock()
-sys.modules["aiolimiter"] = MagicMock()
-sys.modules["discord"] = MagicMock()
-sys.modules["discord.ext"] = MagicMock()
-sys.modules["openai"] = MagicMock()
-sys.modules["pydantic"] = MagicMock()
-sys.modules["pandas_market_calendars"] = MagicMock()
-
 import pandas as pd
-from market_analysis.gap_analysis import GapAnalyzer, GapType, FillStatus
+from market_analysis.gap_analysis import GapAnalyzer, GapStatus
 
 class TestGapAnalysis(unittest.TestCase):
-    def test_upward_gap_full_fill(self):
-        data = {
-            'Open': [100.0, 105.0],
-            'High': [102.0, 106.0],
-            'Low': [99.0, 99.0],
-            'Close': [101.0, 103.0]
-        }
-        df = pd.DataFrame(data)
-        status = GapAnalyzer.analyze_gap(df)
+    def test_up_gap_holding(self):
+        # Prev close 100, Open 105, Low 105 (no fill)
+        df = pd.DataFrame({
+            'Open': [90, 105],
+            'High': [100, 110],
+            'Low': [80, 105],
+            'Close': [100, 108]
+        }, index=pd.to_datetime(['2024-01-01', '2024-01-02']))
+        df.index.name = "TSLA"
         
-        self.assertEqual(status.gap_type, GapType.UPWARD)
-        self.assertAlmostEqual(status.gap_size, 4.0)  # 105 - 101
-        self.assertEqual(status.fill_status, FillStatus.FULL)
-        self.assertTrue(status.is_filled)
-        self.assertEqual(status.fill_percentage, 100.0)
+        result = GapAnalyzer.analyze_gap(df)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.gap_size, 5.0)
+        self.assertEqual(result.current_fill_status, GapStatus.GAP_HOLDING)
 
-    def test_upward_gap_partial_fill(self):
-        data = {
-            'Open': [100.0, 110.0],
-            'High': [102.0, 112.0],
-            'Low': [99.0, 105.0],
-            'Close': [101.0, 108.0]
-        }
-        df = pd.DataFrame(data)
-        status = GapAnalyzer.analyze_gap(df)
+    def test_up_gap_partial_fill(self):
+        # Prev close 100, Open 105, Low 101
+        df = pd.DataFrame({
+            'Open': [90, 105],
+            'High': [100, 110],
+            'Low': [80, 101],
+            'Close': [100, 102]
+        }, index=pd.to_datetime(['2024-01-01', '2024-01-02']))
         
-        self.assertEqual(status.gap_type, GapType.UPWARD)
-        self.assertEqual(status.fill_status, FillStatus.PARTIAL)
-        self.assertFalse(status.is_filled)
-        # Gap zone: [101, 110], size 9. Low 105. Fill: 110-105 = 5. 5/9 = 55.55%
-        self.assertAlmostEqual(status.fill_percentage, (5/9)*100, places=2)
+        result = GapAnalyzer.analyze_gap(df)
+        self.assertEqual(result.current_fill_status, GapStatus.PARTIAL_FILL)
 
-    def test_downward_gap_holding(self):
-        data = {
-            'Open': [100.0, 95.0],
-            'High': [101.0, 96.0],
-            'Low': [98.0, 94.0],
-            'Close': [99.0, 95.5]
-        }
-        df = pd.DataFrame(data)
-        status = GapAnalyzer.analyze_gap(df)
+    def test_up_gap_full_fill(self):
+        # Prev close 100, Open 105, Low 99
+        df = pd.DataFrame({
+            'Open': [90, 105],
+            'High': [100, 110],
+            'Low': [80, 99],
+            'Close': [100, 100]
+        }, index=pd.to_datetime(['2024-01-01', '2024-01-02']))
         
-        self.assertEqual(status.gap_type, GapType.DOWNWARD)
-        self.assertAlmostEqual(status.gap_size, -4.0) # 95 - 99
-        self.assertEqual(status.fill_status, FillStatus.PARTIAL) # High 96 > Open 95
-        self.assertFalse(status.is_filled)
+        result = GapAnalyzer.analyze_gap(df)
+        self.assertEqual(result.current_fill_status, GapStatus.FULL_FILL)
 
-    def test_no_gap(self):
-        data = {
-            'Open': [100.0, 100.0],
-            'High': [101.0, 101.0],
-            'Low': [99.0, 99.0],
-            'Close': [100.0, 100.0]
-        }
-        df = pd.DataFrame(data)
-        status = GapAnalyzer.analyze_gap(df)
-        self.assertEqual(status.gap_type, GapType.NONE)
+    def test_down_gap_holding(self):
+        # Prev close 100, Open 95, High 95 (no fill)
+        df = pd.DataFrame({
+            'Open': [110, 95],
+            'High': [120, 95],
+            'Low': [100, 90],
+            'Close': [100, 92]
+        }, index=pd.to_datetime(['2024-01-01', '2024-01-02']))
+        
+        result = GapAnalyzer.analyze_gap(df)
+        self.assertEqual(result.gap_size, -5.0)
+        self.assertEqual(result.current_fill_status, GapStatus.GAP_HOLDING)
+
+    def test_no_gap_filter(self):
+        # Tiny gap < 0.3%
+        df = pd.DataFrame({
+            'Open': [100, 100.1],
+            'High': [101, 101.1],
+            'Low': [99, 99.1],
+            'Close': [100, 100.1]
+        }, index=pd.to_datetime(['2024-01-01', '2024-01-02']))
+        
+        result = GapAnalyzer.analyze_gap(df)
+        self.assertIsNone(result)
 
 if __name__ == '__main__':
     unittest.main()

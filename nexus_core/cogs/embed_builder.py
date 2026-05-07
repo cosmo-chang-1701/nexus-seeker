@@ -513,10 +513,10 @@ def create_psq_embed(data: dict) -> discord.Embed:
     if not psq: # fallback
         return discord.Embed(title=f"⚡ PowerSqueeze 戰情報告 | {sym}", description="無可用數據", color=discord.Color.dark_grey())
         
-    color = discord.Color.purple() if psq.is_squeeze else discord.Color.dark_teal()
-    if psq.is_breakout_high:
+    color = discord.Color.purple() if psq.is_squeezing else discord.Color.dark_teal()
+    if psq.is_breakout_long:
         color = discord.Color.green()
-    elif psq.is_breakout_low:
+    elif psq.is_breakout_short:
         color = discord.Color.red()
         
     embed = discord.Embed(
@@ -527,8 +527,8 @@ def create_psq_embed(data: dict) -> discord.Embed:
     )
     
     # 壓縮狀態指示
-    squeeze_val = "🔴 **壓縮中 (Squeeze On)**" if psq.is_squeeze else "⚪ **無壓縮 (Squeeze Off)**"
-    energy_str = "🔥 動能向上爆發" if psq.is_breakout_high else ("💀 動能向下崩潰" if psq.is_breakout_low else "⚡ 蓄力中")
+    squeeze_val = "🔴 **壓縮中 (Squeeze On)**" if psq.is_squeezing else "⚪ **無壓縮 (Squeeze Off)**"
+    energy_str = "🔥 動能向上爆發" if psq.is_breakout_long else ("💀 動能向下崩潰" if psq.is_breakout_short else "⚡ 蓄力中")
     
     embed.add_field(name="🔋 能量壓縮狀態", value=f"{squeeze_val}\n狀態: {energy_str}\n\u200b", inline=True)
     
@@ -537,7 +537,7 @@ def create_psq_embed(data: dict) -> discord.Embed:
     embed.add_field(name="🚀 線性動能 (Momentum)", value=f"`{psq.momentum_value:+.2f}`\n趨勢: {trend_val}\n\u200b", inline=True)
     
     # 支撐區間
-    support_val = f"✅ 靠近 20SMA (距離: `{psq.distance_to_sma20_pct:.2f}%`)\n" if psq.is_near_support else f"⚠️ 偏離 20SMA (距離: `{psq.distance_to_sma20_pct:.2f}%`)\n"
+    support_val = f"✅ 靠近 20SMA (距離: `{psq.sma_distance_pct:.2f}%`)\n" if psq.is_near_support else f"⚠️ 偏離 20SMA (距離: `{psq.sma_distance_pct:.2f}%`)\n"
     support_val += f"📉 20SMA: `${psq.sma_20:.2f}`\n\u200b"
     embed.add_field(name="🧭 均線支撐 (Daily)", value=support_val, inline=False)
 

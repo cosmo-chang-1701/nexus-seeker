@@ -33,7 +33,7 @@ class TestValidationPipeline(unittest.TestCase):
         }
         approved, reason = self.ts._validate_trade_pipeline(self.user_ctx, data)
         self.assertFalse(approved)
-        self.assertIn("ALPHA_REJECT", reason)
+        self.assertIn("STO 訊號遭攔截", reason)
 
     def test_alpha_reject_low_aroc_bto(self):
         data = {
