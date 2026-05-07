@@ -467,11 +467,9 @@ async def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None, vi
         vix_sizing_multiplier = vix_tier.get('sizing_multiplier', 1.0)
         vix_kelly_override = vix_tier.get('kelly_fraction_override')
 
+        # VIX 戰情階梯資訊注入，供 Service 層進行 Macro 階段判定
+        vix_allow_signal = vix_tier.get('allow_signal', True)
         if strategy in ["STO_PUT", "STO_CALL"]:
-            if not vix_tier.get('allow_signal', True):
-                logger.info(f"[{symbol}] 剔除: VIX {vix_spot:.1f} 處於 '{vix_tier['name']}' 階梯，硬拒所有 STO 訊號")
-                return None
-
             # Delta 上限鉗制：sto_delta_cap 為負數，max() 取較小絕對值（更保守）
             sto_cap = vix_tier.get('sto_delta_cap', -0.20)
             if sto_cap != 0.0 and strategy == "STO_PUT" and target_delta < sto_cap:
@@ -556,7 +554,9 @@ async def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None, vi
         # VIX 倉位縮放：將階梯乘數套用至 alloc_pct
         if vix_sizing_multiplier != 1.0:
             alloc_pct *= vix_sizing_multiplier
-        if (strategy in ["STO_PUT", "STO_CALL"] and aroc < 15.0) or (strategy in ["BTO_CALL", "BTO_PUT"] and aroc < 30.0): return None
+        
+        # AROC 驗證邏輯移交給 TradingService 驗證管線 (Validation Pipeline) 處理
+        # 此處僅保留基礎數據計算
 
         raw_delta = best_contract.get('bs_delta', 0.0)
         safe_spy_price = spy_price_val if spy_price_val > 0 else 1.0
@@ -584,6 +584,7 @@ async def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None, vi
             "vix_spot": vix_spot, "vix_tier_name": vix_tier.get('name', 'N/A'),
             "vix_tier_emoji": vix_tier.get('emoji', ''), "vix_tier_color": vix_tier.get('color_hex', 0x808080),
             "vix_sizing_multiplier": vix_sizing_multiplier, "vix_sto_delta_cap": vix_tier.get('sto_delta_cap', 0.0),
+            "vix_allow_signal": vix_allow_signal,
         }
     except Exception as e:
         logger.error(f"分析 {symbol} 錯誤: {e}")

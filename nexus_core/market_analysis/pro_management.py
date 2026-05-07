@@ -15,6 +15,23 @@ class TransitionResult:
     projected_aroc: float
     capital_efficiency_gain: float
 
+def calculate_survival_runway(cash_reserve: float, monthly_expenses: float, daily_theta: float) -> float:
+    """
+    生存天數計算 (Survival Runway):
+    Runway (Days) = Cash Reserve / (Monthly Expenses - (Daily Portfolio Theta * 30)) * 30
+    
+    此公式衡量在不考慮本金增值的情況下，現有現金儲備配合 Theta 現金流能維持多久的生存。
+    """
+    # 每月淨支出 = 每月預算 - 每月預期 Theta 收益 (假設每月 30 天)
+    net_monthly_burn = monthly_expenses - (daily_theta * 30)
+    
+    # 如果 Theta 收益已經超過每月支出，則生存天數視為無限 (Infinity Fallback)
+    if net_monthly_burn <= 0:
+        return 9999.0
+        
+    runway_months = cash_reserve / net_monthly_burn
+    return round(runway_months * 30, 1)
+
 def simulate_cc_transition(
     current_option_pnl: float,
     current_stock_price: float,

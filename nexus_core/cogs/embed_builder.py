@@ -686,7 +686,7 @@ def create_watchlist_embed(page_data, current_page, total_pages, total_items):
     embed.set_footer(text=f"頁次: {current_page}/{total_pages} ｜ 📊 總項目: {total_items}")
     return embed
 
-def create_portfolio_report_embed(report_lines, hedge_analysis=None):
+def create_portfolio_report_embed(report_lines, hedge_analysis=None, survival_runway=None):
     """
     將 check_portfolio_status_logic 產出的 report_lines 轉換為漂亮的 Discord Embed
     """
@@ -740,6 +740,16 @@ def create_portfolio_report_embed(report_lines, hedge_analysis=None):
         color=embed_color,
         timestamp=datetime.now(timezone.utc)
     )
+
+    # 🚀 [Professional Investor] 財務生存跑道 (Priority Header)
+    if survival_runway is not None:
+        runway_icon = "♾️" if survival_runway >= 9999 else "⌛"
+        runway_text = "無限 (收益已覆蓋支出)" if survival_runway >= 9999 else f"`{survival_runway:,.1f}` 天"
+        embed.add_field(
+            name="🏁 財務生存跑道 (Financial Runway)",
+            value=f"```yaml\n預估剩餘天數: {runway_text}\n(基於現有現金儲備與 Theta 收益)\n```\n\u200b",
+            inline=False
+        )
 
     # 🚀 欄位一：個別持倉細節
     positions_text = _safe_embed_field_value(positions_text, "目前無持倉部位。")

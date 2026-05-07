@@ -26,6 +26,7 @@ class UserContext:
     is_professional_mode: bool = False    # 專業投資者模式
     monthly_expense: float = 0.0          # 每月支出預算
     tax_reserve_rate: float = 0.20        # 稅務預留比例 (預設 20%)
+    cash_reserve: float = 0.0             # 現金儲備 (用於生存天數計算)
 
 
 # ==========================================
@@ -36,7 +37,6 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:
     """
     單一更新路徑 (Single Update Path)：
     根據傳入的關鍵字參數動態更新 user_settings 表中的欄位。
-    支援欄位：capital / portfolio_value, risk_limit_pct, polymarket_threshold ...
     """
     if not kwargs:
         return False
@@ -45,13 +45,13 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:
         with sqlite3.connect(DB_NAME) as conn:
             cursor = conn.cursor()
             
-            # 1. 確保使用者紀錄存在 (如果不存在則初始化，給予預設值以符合 NOT NULL 限制)
+            # 1. 確保使用者紀錄存在
             cursor.execute('''
                 INSERT OR IGNORE INTO user_settings (user_id, portfolio_value, risk_limit_pct) 
                 VALUES (?, 100000.0, 15.0)
             ''', (user_id,))
             
-            # 2. 轉譯 capital 為 portfolio_value以符合真實 Schema
+            # 2. 轉譯 capital 為 portfolio_value
             if 'capital' in kwargs and kwargs['capital'] is not None:
                 kwargs['portfolio_value'] = kwargs.pop('capital')
             
@@ -60,7 +60,7 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:
                 'portfolio_value', 'risk_limit_pct', 'last_rehedge_alert_time', 'dynamic_tau', 
                 'enable_option_alerts', 'enable_vtr', 'enable_psq_watchlist', 'enable_analyst_agent',
                 'polymarket_threshold', 'polymarket_use_llm', 'polymarket_slippage',
-                'is_professional_mode', 'monthly_expense', 'tax_reserve_rate'
+                'is_professional_mode', 'monthly_expense', 'tax_reserve_rate', 'cash_reserve'
             }
             update_pairs = []
             values = []
@@ -71,12 +71,10 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:
                         value = max(float(value), 1.0)
                     elif key == 'risk_limit_pct':
                         value = max(1.0, min(value, 50.0))
-                    elif key == 'polymarket_threshold':
+                    elif key in ['polymarket_threshold', 'monthly_expense', 'cash_reserve']:
                         value = max(0.0, float(value))
                     elif key == 'polymarket_slippage':
                         value = max(0.1, min(float(value), 10.0))
-                    elif key == 'monthly_expense':
-                        value = max(0.0, float(value))
                     elif key == 'tax_reserve_rate':
                         value = max(0.0, min(float(value), 1.0))
                     elif key == 'is_professional_mode':
@@ -147,64 +145,56 @@ def get_full_user_context(user_id: int) -> UserContext:
     """
     帳戶上下文提供者 (User Context Provider)：
     一次性獲取帳戶設定與組合希臘字母指標，極大化 I/O 效率。
+    使用單一 SQL 查詢同時聚合設定與 Greeks。
     """
     try:
         with sqlite3.connect(DB_NAME) as conn:
-            conn.row_factory = sqlite3.Row  # 允許透過欄位名稱存取
+            conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             
-            # 1. 查詢使用者基本設定
-            cursor.execute("""
-                SELECT portfolio_value, risk_limit_pct, last_rehedge_alert_time, dynamic_tau,
-                       enable_option_alerts, enable_vtr, enable_psq_watchlist, enable_analyst_agent,
-                       polymarket_threshold, polymarket_use_llm, polymarket_slippage,
-                       is_professional_mode, monthly_expense, tax_reserve_rate
-                FROM user_settings 
-                WHERE user_id = ?
-            """, (user_id,))
-            user_row = cursor.fetchone()
-            
-            # 2. 查詢使用者目前的投資組合統計 (整合真實持倉與虛擬交易)
-            sum_delta, sum_theta, sum_gamma = 0.0, 0.0, 0.0
-            try:
-                # 使用 UNION ALL 將 portfolio 與 virtual_trades 的 Greeks 指標匯總
-                cursor.execute("""
+            # 使用 LEFT JOIN 將使用者設定與聚合後的 Greeks 連結
+            # Greeks 由 portfolio 與 virtual_trades (OPEN) 的 UNION ALL 構成
+            sql = """
+                SELECT 
+                    u.*,
+                    g.sum_delta, g.sum_theta, g.sum_gamma
+                FROM user_settings u
+                LEFT JOIN (
                     SELECT 
+                        user_id,
                         SUM(weighted_delta) as sum_delta, 
                         SUM(theta) as sum_theta,
                         SUM(gamma) as sum_gamma
                     FROM (
-                        SELECT weighted_delta, theta, gamma FROM portfolio WHERE user_id = ?
+                        SELECT user_id, weighted_delta, theta, gamma FROM portfolio
                         UNION ALL
-                        SELECT weighted_delta, theta, gamma FROM virtual_trades WHERE user_id = ? AND status = 'OPEN'
+                        SELECT user_id, weighted_delta, theta, gamma FROM virtual_trades WHERE status = 'OPEN'
                     )
-                """, (user_id, user_id))
-                stats_row = cursor.fetchone()
-                if stats_row:
-                    sum_delta = stats_row['sum_delta'] or 0.0
-                    sum_theta = stats_row['sum_theta'] or 0.0
-                    sum_gamma = stats_row['sum_gamma'] or 0.0
-            except sqlite3.OperationalError as e:
-                logger.warning(f"Greeks 統計查詢失敗 (可能尚未完成 Migration): {e}")
-                pass
+                    GROUP BY user_id
+                ) g ON u.user_id = g.user_id
+                WHERE u.user_id = ?
+            """
+            cursor.execute(sql, (user_id,))
+            user_row = cursor.fetchone()
             
-            # 3. 處理空值並封裝回傳
-            capital_raw = float(user_row['portfolio_value']) if user_row and user_row['portfolio_value'] is not None else 100000.0
-            capital = capital_raw if capital_raw > 0 else 100000.0
-            risk_limit = float(user_row['risk_limit_pct']) if user_row and user_row['risk_limit_pct'] is not None else 15.0
-            last_rehedge = int(user_row['last_rehedge_alert_time']) if user_row and 'last_rehedge_alert_time' in user_row.keys() and user_row['last_rehedge_alert_time'] is not None else 0
-            dynamic_tau = float(user_row['dynamic_tau']) if user_row and 'dynamic_tau' in user_row.keys() and user_row['dynamic_tau'] is not None else 1.0
-            poly_threshold = float(user_row['polymarket_threshold']) if user_row and 'polymarket_threshold' in user_row.keys() and user_row['polymarket_threshold'] is not None else 10000.0
-            poly_slippage = float(user_row['polymarket_slippage']) if user_row and 'polymarket_slippage' in user_row.keys() and user_row['polymarket_slippage'] is not None else 2.0
-            
-            is_pro = bool(user_row['is_professional_mode']) if user_row and 'is_professional_mode' in user_row.keys() and user_row['is_professional_mode'] is not None else False
-            monthly_exp = float(user_row['monthly_expense']) if user_row and 'monthly_expense' in user_row.keys() and user_row['monthly_expense'] is not None else 0.0
-            tax_rate = float(user_row['tax_reserve_rate']) if user_row and 'tax_reserve_rate' in user_row.keys() and user_row['tax_reserve_rate'] is not None else 0.20
+            if not user_row:
+                # 若找不到使用者設定，回傳預設物件 (這通常不應發生，因為 upsert 會初始化)
+                return UserContext(user_id, 100000.0, 15.0, 0.0, 0.0, 0.0)
 
-            # Helper for booleans
-            def _get_bool(key: str, default: bool) -> bool:
-                if user_row and key in user_row.keys() and user_row[key] is not None:
-                    return bool(user_row[key])
+            # 提取 Greeks
+            sum_delta = user_row['sum_delta'] or 0.0
+            sum_theta = user_row['sum_theta'] or 0.0
+            sum_gamma = user_row['sum_gamma'] or 0.0
+            
+            # 處理基本設定與空值
+            capital_raw = float(user_row['portfolio_value']) if user_row['portfolio_value'] is not None else 100000.0
+            capital = max(capital_raw, 1.0)
+            risk_limit = float(user_row['risk_limit_pct']) if user_row['risk_limit_pct'] is not None else 15.0
+            
+            # Helper for booleans and defaults
+            def _get_val(key: str, default: Any) -> Any:
+                if key in user_row.keys() and user_row[key] is not None:
+                    return user_row[key]
                 return default
 
             return UserContext(
@@ -214,21 +204,21 @@ def get_full_user_context(user_id: int) -> UserContext:
                 total_weighted_delta=sum_delta,
                 total_theta=sum_theta,
                 total_gamma=sum_gamma,
-                last_rehedge_alert_time=last_rehedge,
-                dynamic_tau=dynamic_tau,
-                enable_option_alerts=_get_bool('enable_option_alerts', True),
-                enable_vtr=_get_bool('enable_vtr', True),
-                enable_psq_watchlist=_get_bool('enable_psq_watchlist', False),
-                enable_analyst_agent=_get_bool('enable_analyst_agent', False),
-                polymarket_threshold=poly_threshold,
-                polymarket_use_llm=_get_bool('polymarket_use_llm', True),
-                polymarket_slippage=poly_slippage,
-                is_professional_mode=is_pro,
-                monthly_expense=monthly_exp,
-                tax_reserve_rate=tax_rate
+                last_rehedge_alert_time=_get_val('last_rehedge_alert_time', 0),
+                dynamic_tau=_get_val('dynamic_tau', 1.0),
+                enable_option_alerts=bool(_get_val('enable_option_alerts', True)),
+                enable_vtr=bool(_get_val('enable_vtr', True)),
+                enable_psq_watchlist=bool(_get_val('enable_psq_watchlist', False)),
+                enable_analyst_agent=bool(_get_val('enable_analyst_agent', False)),
+                polymarket_threshold=_get_val('polymarket_threshold', 10000.0),
+                polymarket_use_llm=bool(_get_val('polymarket_use_llm', True)),
+                polymarket_slippage=_get_val('polymarket_slippage', 2.0),
+                is_professional_mode=bool(_get_val('is_professional_mode', False)),
+                monthly_expense=_get_val('monthly_expense', 0.0),
+                tax_reserve_rate=_get_val('tax_reserve_rate', 0.20),
+                cash_reserve=_get_val('cash_reserve', 0.0)
             )
             
     except Exception as e:
         logger.error(f"獲取 UserContext 失敗 (UID: {user_id}): {e}")
-        # 發生異常時回傳保守的預設物件
         return UserContext(user_id, 100000.0, 15.0, 0.0, 0.0, 0.0)

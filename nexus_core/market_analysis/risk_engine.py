@@ -145,6 +145,12 @@ def optimize_position_risk(current_delta: float, unit_weighted_delta: float, use
 
     spy_iv, risk_limit_pct = 0.16, base_risk_limit_pct
     if macro_data: 
+        # ---------- VIX < 15.0 Dormant Tier Enforcement ----------
+        if macro_data.vix < 15.0 and "STO" in strategy:
+            logger.info(f"NRO Reject: VIX {macro_data.vix:.1f} is in Dormant tier. STO entry forbidden.")
+            return 0, 0.0
+        # --------------------------------------------------------
+        
         d_vix, d_oil, d_regime = get_macro_modifiers(macro_data)
         
         # All-in 模式 (VIX > 35): 繞過宏觀修正因子的衰減效應，

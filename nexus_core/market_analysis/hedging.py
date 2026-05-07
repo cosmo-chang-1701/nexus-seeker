@@ -46,6 +46,34 @@ def evaluate_rehedge_necessity(u_ctx: UserContext, result: Dict[str, Any]) -> Op
         }
     return None
 
+def get_portfolio_exposure_status(u_ctx: UserContext, spy_price: float, delta_threshold: float = 50.0) -> Dict[str, Any]:
+    """
+    計算投資組合整體的 SPY 等效 Beta-Weighted Delta 曝險與對沖指令。
+    當曝險超過使用者定義的門檻 (預設 ±50 Delta) 時，生成具體行動建議。
+    """
+    total_delta = u_ctx.total_weighted_delta
+    
+    directive = "HOLD"
+    instruction = "曝險處於安全區間內。"
+    
+    if total_delta > delta_threshold:
+        directive = "REDUCE_EXPOSURE"
+        # 賣出 SPY 現貨以對沖正 Delta 曝險
+        shares_to_sell = total_delta
+        instruction = f"建議：賣出 {abs(shares_to_sell):.1f} 股 SPY 以中和 Delta 曝險。"
+    elif total_delta < -delta_threshold:
+        directive = "INCREASE_EXPOSURE"
+        # 買入 SPY 現貨以對沖負 Delta 曝險
+        shares_to_buy = abs(total_delta)
+        instruction = f"建議：買入 {abs(shares_to_buy):.1f} 股 SPY 以中和 Delta 曝險。"
+        
+    return {
+        "total_beta_delta": round(total_delta, 2),
+        "directive": directive,
+        "instruction": instruction,
+        "threshold": delta_threshold
+    }
+
 def calculate_hedge_requirement(total_weighted_delta: float, spy_price: float, target_delta: float = 0.0) -> dict:
     delta_gap = target_delta - total_weighted_delta
     spy_options_qty = round(delta_gap / (0.50 * 100))

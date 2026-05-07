@@ -1,4 +1,4 @@
-# 🌌 Nexus Seeker - GEMINI.md
+# 🌌 Nexus Seeker - AGENTS.md
 
 ## Project Overview
 Nexus Seeker is a multi-tenant **Options Quant Risk-Control & Trading Operations Platform** driven by Discord. It combines technical analysis, Black-Scholes-Merton pricing models, LLM-based NLP risk sentiment analysis, a custom **Nexus Risk Optimizer (NRO)** for portfolio exposure精算, and a **6-tier VIX Battle Ladder** system for dynamic risk appetite scaling. The project is structured as a dual-service architecture to handle complex market data processing and edge-scraping tasks efficiently.
@@ -23,9 +23,9 @@ The system is divided into two main services:
 ### Core Modules (`nexus_core`)
 - **`config.py`**: Global configuration constants including `VIX_LADDER_CONFIG` (6-tier system: Dormant/Caution/Ready/Aggressive/Heavy/All-in), `VIX_QUANTILE_BOUNDS`, and the `get_vix_tier()` helper function (includes NaN/None robustness with "Ready" fallback).
 - **`market_analysis/`**: The quant engine. Contains strategy logic (with VIX ladder gating and delta capping), Greek calculations, PowerSqueeze (PSQ) scoring (with VIX-aware momentum labeling), hedging simulations, NRO risk optimization (with dynamic Kelly scaling and All-in bypass), and margin analysis.
-- **`database/`**: Persistent storage layer with an automated migration engine (`database/core.py`) that scans `database/migrations/` on startup.
-- **`services/`**: Business logic layer (TradingService, LLMService, PolymarketService, MarketDataService, NewsService, RedditService) that decouples the Discord UI from core computations.
-- **`cogs/`**: Discord extensions implementing slash commands and background tasks (Market Scanning, VTR monitoring, Daily Reports, Analyst Agent).
+- **`database/`**: Persistent storage layer with an automated migration engine (`database/core.py`) that scans `database/migrations/` on startup. Includes aggregated Greeks tracking across real and virtual portfolios.
+- **`services/`**: Business logic layer (`TradingService`, `LLMService`, `PolymarketService`, `MarketDataService`, `NewsService`, `RedditService`) that decouples the Discord UI from core computations.
+- **`cogs/`**: Discord extensions implementing slash commands and background tasks (Market Scanning, VTR monitoring, Daily Reports, Analyst Agent, Pro Investor metrics).
 - **`ui/`**: Reusable Discord UI components and views for interactive commands.
 
 ---
@@ -74,7 +74,7 @@ Tests are located in `nexus_core/tests/`.
 
 ### 1. Database Migrations
 Never modify the database schema manually. Use the migration engine:
-- Create a new file in `nexus_core/database/migrations/` (e.g., `v017_new_feature.py`).
+- Create a new file in `nexus_core/database/migrations/` (e.g., `v022_add_cash_reserve.py`).
 - Export `version` (int), `description` (str), and `sql` (str).
 - The bot will automatically apply it on the next startup.
 
@@ -87,9 +87,15 @@ New commands should be added as **Slash Commands** within a Cog in `nexus_core/c
 ### 3. Market Analysis & Strategy
 - Core logic belongs in `nexus_core/market_analysis/strategy.py`.
 - Use the `AlertFilter` in `services/alert_filter.py` to implement noise reduction (e.g., EMA crossovers, multi-timeframe alignment).
-- `GhostTrader` (`market_analysis/ghost_trader.py`) handles the Virtual Trading Room (VTR) logic, simulating entries and tracking virtual performance. VTR auto-entry is gated by VIX tier permissions (`vtr_entry_allowed`).
+- `GhostTrader` (`market_analysis/ghost_trader.py`) handles the Virtual Trading Room (VTR) logic, simulating entries and tracking virtual performance. VTR auto-entry is gated by VIX tier permissions (`vtr_entry_allowed`). Implements autonomous **DITM Profit Lock** defense.
 - `PSQ Engine` (`market_analysis/psq_engine.py`) provides the PowerSqueeze momentum indicator with VIX-aware labeling (`OVEREXTENDED_RISK`, `HIGH_CONVICTION_RECOVERY`).
-- `NRO Risk Engine` (`market_analysis/risk_engine.py`) provides portfolio risk optimization with inverted VIX weights (high VIX = offensive posture), dynamic Kelly scaling (1/4 to 1/2 Kelly), and All-in bypass for VIX > 35.
+- `NRO Risk Engine` (`market_analysis/risk_engine.py`) provides portfolio risk optimization with inverted VIX weights (high VIX = offensive posture), dynamic Kelly scaling (1/4 to 1/2 Kelly), and All-in bypass for VIX > 35. Enforces **Dormant Tier (VIX < 15)** STO rejection.
+- `Pro Management` (`market_analysis/pro_management.py`) handles professional metrics like **Financial Survival Runway** and **Position Evolution (Transition) Simulations**.
+
+### 4. Service Layer & Decision Pipeline
+- `TradingService` (`services/trading_service.py`) implements a **4-stage validation pipeline**: **Macro -> Alpha -> Risk -> Financials**.
+- **Alpha Filtering**: Enforces 15% minimum AROC for STO signals.
+- **Exposure Monitoring**: Generates actionable SPY hedge directives (e.g., "Sell 4 shares of SPY") when portfolio Delta exceeds ±50.
 
 ### 5. VIX Battle Ladder
 The VIX Battle Ladder is a 6-tier system defined in `config.py` (`VIX_LADDER_CONFIG`) that dynamically governs risk appetite across all analysis modules:
@@ -102,15 +108,7 @@ The VIX Battle Ladder is a 6-tier system defined in `config.py` (`VIX_LADDER_CON
 
 VIX spot is fetched once per scan cycle in `TradingService.run_market_scan()` and propagated to `analyze_symbol()`, `analyze_psq()`, and VTR entry gating. The `vix_battle_status` dict is injected into result data for UI rendering via `embed_builder.py`. The `get_vix_tier()` helper ensures system resilience by defaulting to the "Ready" tier if input is `None` or `NaN`.
 
-When modifying VIX ladder behavior:
-- Tier definitions: Edit `VIX_LADDER_CONFIG` in `config.py`.
-- Strategy gating: See `apply_vix_ladder()` in `strategy.py`.
-- Risk scaling: See `optimize_position_risk()` in `risk_engine.py`.
-- PSQ labeling: See `analyze_psq()` in `psq_engine.py`.
-- UI rendering: See `_add_vix_battle_status_field()` in `embed_builder.py`.
-- Tests: `tests/unit/test_vix_ladder.py` (34 cases).
-
-### 4. Code Style
+### 6. Code Style
 - **Type Hinting:** Strictly define types for all functions and class members.
 - **Logging:** Use the project-wide logger (`logging.getLogger(__name__)`).
 - **Async/Await:** Ensure all I/O bound operations (API calls, DB queries) are non-blocking. Use `asyncio.to_thread` for blocking yfinance calls.
@@ -120,17 +118,17 @@ When modifying VIX ladder behavior:
 ## Key Files Summary
 - `nexus_core/main.py`: Application entry point.
 - `nexus_core/bot.py`: Main Bot class and background worker initialization.
-- `nexus_core/config.py`: Global configuration — env vars, strategy Delta params, **VIX Battle Ladder** tier definitions (`VIX_LADDER_CONFIG`), and `get_vix_tier()` helper (with NaN robustness).
+- `nexus_core/config.py`: Global configuration — env vars, strategy Delta params, **VIX Battle Ladder** tier definitions (`VIX_LADDER_CONFIG`), and `get_vix_tier()` helper.
 - `nexus_core/market_time.py`: NYSE market calendar and timezone-aware scheduling.
-- `nexus_core/services/trading_service.py`: Centralized business logic orchestrator. Propagates `vix_spot` through scan pipeline, gates VTR entry by tier.
-- **`services/polymarket_service.py`**: Real-time Polymarket whale monitoring service with **L2 Order Book Sync**. Features **Dynamic Slippage-based Thresholds** (automatically adapts whale detection to market liquidity depth), **Taker Intent Mapping** (Aggressive Long/Short), and **Price Impact Estimation**. Implements **AND Logic Filtering** (trade must exceed both dynamic slippage and user USD thresholds). Provides exponential backoff for WS robustness and detailed connection health via `/poly_status`.
-- **LLM Structured Output**: Integration with OpenAI-compatible APIs using `pydantic` schemas to ensure stable, JSON-formatted responses for Risk Assessment and Polymarket Analysis. Analysis results are further post-processed with **Markdown Optimization** (blockquotes, bolding, lists) for high-impact Discord UI rendering.
-
-- `nexus_core/market_analysis/strategy.py`: Quant scanning and filtering pipeline. VIX ladder gating (`apply_vix_ladder()`), delta capping, and sizing multiplier.
+- `nexus_core/services/trading_service.py`: Centralized business logic orchestrator. Implements the **4-stage validation pipeline** and manages VIX propagation.
+- **`services/polymarket_service.py`**: Real-time Polymarket whale monitoring service with **L2 Order Book Sync**. Features **Dynamic Slippage-based Thresholds** and **LLM Structured Output** for background analysis.
+- `nexus_core/market_analysis/strategy.py`: Quant scanning and filtering pipeline. VIX ladder gating, delta capping, and **AROC yield calculation**.
 - `nexus_core/market_analysis/psq_engine.py`: PowerSqueeze momentum calculation engine with VIX-aware labeling.
-- `nexus_core/market_analysis/risk_engine.py`: NRO risk optimizer — inverted VIX macro weights, dynamic Kelly scaling, All-in bypass, and **DITM (Deep In-The-Money) detection logic** for convexity protection.
-- `nexus_core/market_analysis/ghost_trader.py`: Virtual Trade Replicator and VTR logic. Implements **autonomous DITM defensive actions** (Close/Roll).
-- `nexus_core/cogs/embed_builder.py`: Discord UI/UX generator — renders VIX Battle Status field, momentum labels, and tier-colored embeds.
-- **`nexus_core/cogs/analyst_agent.py`**: Scheduled Wall Street Quantitative Analyst Agent that pushes macro and quantitative reports using NYSE dynamic scheduling (Pre-market, Intra-day heartbeat, Post-market). Features multi-factor macro alerts (Yield Curve Spread, DXY, VIX).
+- `nexus_core/market_analysis/risk_engine.py`: NRO risk optimizer — inverted VIX macro weights, dynamic Kelly scaling, and **Dormant tier enforcement**.
+- `nexus_core/market_analysis/hedging.py`: Portfolio Beta-Weighted Delta tracking and **actionable hedge directives**.
+- `nexus_core/market_analysis/ghost_trader.py`: Virtual Trade Replicator and VTR logic. Implements **Profit Lock (DITM)** defensive actions.
+- `nexus_core/market_analysis/pro_management.py`: Quantitative survival analysis (**Financial Runway**) and **Position Evolution** simulations.
+- `nexus_core/cogs/embed_builder.py`: Discord UI/UX generator — renders VIX Battle Status, momentum labels, **Runway metrics**, and **Hedge directives**.
+- **`nexus_core/cogs/analyst_agent.py`**: Scheduled Wall Street Quantitative Analyst Agent.
 - `nexus_core/database/core.py`: SQLite migration engine core logic.
 - `nexus_edge_scraper/local_api.py`: Playwright-based scraping endpoint.

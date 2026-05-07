@@ -205,9 +205,10 @@ class SchedulerCog(commands.Cog):
         for uid, data in user_reports.items():
             report_lines = data.get("report_lines", [])
             hedge_analysis = data.get("hedge_analysis")
+            survival_runway = data.get("survival_runway")
 
             try:
-                embed = create_portfolio_report_embed(report_lines, hedge_analysis)
+                embed = create_portfolio_report_embed(report_lines, hedge_analysis, survival_runway)
             except Exception:
                 stats["users_failed"] += 1
                 err = f"embed_build_failed: uid={uid}"
@@ -446,7 +447,7 @@ class SchedulerCog(commands.Cog):
                     action_taken = "已平倉 (Closed)" if trade_info['status'] == 'CLOSED' else "已自動轉倉 (Rolled Up & Out)"
                     
                     embed = discord.Embed(
-                        title="🚨 NRO 系統介入：DITM 喪失凸性防禦啟動",
+                        title="🚨 NRO 優先指令：Profit Lock (DITM 凸性防禦)",
                         description=f"偵測到標的 **{trade_info['symbol']}** 已進入深價內 (DITM)，凸性消失且風險報酬比惡化。",
                         color=discord.Color.gold()
                     )

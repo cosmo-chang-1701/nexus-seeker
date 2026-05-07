@@ -74,10 +74,10 @@ class ProInvestorCog(commands.Cog):
             logger.error(f"Transition simulation failed for {symbol}: {e}")
             await interaction.followup.send(f"❌ Simulation failed: {str(e)}", ephemeral=True)
 
-    @app_commands.command(name="runway_check", description="Calculate financial runway based on portfolio yield")
+    @app_commands.command(name="runway_check", description="Calculate financial runway based on portfolio yield and cash reserves")
     async def runway_check(self, interaction: discord.Interaction):
         """
-        Calculates the user's financial runway in months based on options income.
+        Calculates the user's financial runway in months and days based on options income and cash reserves.
         """
         await interaction.response.defer(ephemeral=True)
         
@@ -98,28 +98,37 @@ class ProInvestorCog(commands.Cog):
             )
             return
 
-        # Monthly Yield calculation: 
-        # total_theta is daily. convert to monthly.
-        # Apply tax reserve.
+        # 1. Sustainable Income Ratio (Monthly Yield / Expenses)
         gross_monthly_yield = ctx.total_theta * 30
         net_monthly_yield = gross_monthly_yield * (1 - ctx.tax_reserve_rate)
+        income_ratio = net_monthly_yield / ctx.monthly_expense if ctx.monthly_expense > 0 else 0
         
-        runway_months = net_monthly_yield / ctx.monthly_expense if ctx.monthly_expense > 0 else 0
+        # 2. Survival Runway (Days) - Incorporating Cash Reserves
+        from market_analysis.pro_management import calculate_survival_runway
+        runway_days = calculate_survival_runway(
+            cash_reserve=ctx.cash_reserve,
+            monthly_expenses=ctx.monthly_expense,
+            daily_theta=ctx.total_theta
+        )
         
         embed = discord.Embed(
-            title="🏁 Financial Runway Analysis",
-            color=discord.Color.green() if runway_months >= 1 else discord.Color.orange()
+            title="🏁 Financial Runway & Survival Analysis",
+            color=discord.Color.green() if income_ratio >= 1 or runway_days >= 365 else discord.Color.orange()
         )
         
         embed.add_field(name="Monthly Expense", value=f"${ctx.monthly_expense:,.2f}", inline=True)
-        embed.add_field(name="Tax Reserve Rate", value=f"{ctx.tax_reserve_rate*100:.0f}%", inline=True)
+        embed.add_field(name="Cash Reserve", value=f"${ctx.cash_reserve:,.2f}", inline=True)
         embed.add_field(name="Daily Theta (Portfolio)", value=f"${ctx.total_theta:,.2f}", inline=False)
-        embed.add_field(name="Est. Net Monthly Income", value=f"${net_monthly_yield:,.2f}", inline=True)
         
-        status_text = "Sustainable" if runway_months >= 1.0 else "Deficit"
-        embed.add_field(name="Runway (Months)", value=f"{runway_months:.2f} ({status_text})", inline=True)
+        # Income sustainability
+        status_text = "Sustainable" if income_ratio >= 1.0 else "Deficit"
+        embed.add_field(name="Income/Expense Ratio", value=f"{income_ratio:.2f} ({status_text})", inline=True)
         
-        embed.set_footer(text="Theta-based yield projection. Does not account for capital gains/losses.")
+        # Survival days
+        runway_val = "♾️ 無限 (收益覆蓋支出)" if runway_days >= 9999 else f"{runway_days:,.1f} 天"
+        embed.add_field(name="Survival Runway", value=f"`{runway_val}`", inline=True)
+        
+        embed.set_footer(text="Theta-based yield projection. Accounts for cash reserves and tax estimates.")
         
         await interaction.followup.send(embed=embed)
 

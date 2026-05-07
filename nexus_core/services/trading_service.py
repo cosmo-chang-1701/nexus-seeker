@@ -3,7 +3,7 @@ import logging
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 
 import database
 import market_math
@@ -78,6 +78,36 @@ class TradingService:
                 'scanned_symbols': sorted(combined_symbols)
             }
         return results
+
+    def _validate_trade_pipeline(self, user_context: Any, data: Dict[str, Any]) -> Tuple[bool, str]:
+        """
+        4-Stage Validation Pipeline: Macro -> Alpha -> Risk -> Financials.
+        """
+        strategy = data.get('strategy', '')
+        
+        # --- Stage 1: Macro (VIX Battle Ladder & Regime) ---
+        vix_allow = data.get('vix_allow_signal', True)
+        if "STO" in strategy and not vix_allow:
+            return False, f"MACRO_REJECT: VIX {data.get('vix_spot'):.1f} tier '{data.get('vix_tier_name')}' restricts STO entry."
+        
+        # --- Stage 2: Alpha (AROC & Signal Strength) ---
+        aroc = data.get('aroc', 0.0)
+        if "STO" in strategy and aroc < 15.0:
+            return False, f"ALPHA_REJECT: Annualized Return on Capital (AROC) {aroc:.1f}% < 15.0% minimum threshold."
+        if "BTO" in strategy and aroc < 30.0:
+            return False, f"ALPHA_REJECT: BTO AROC {aroc:.1f}% < 30.0% minimum threshold."
+        
+        # --- Stage 3: Risk (NRO & Kelly Sizing) ---
+        if data.get('safe_qty', 0) <= 0:
+            return False, "RISK_REJECT: NRO optimization determined zero safe quantity (Risk budget exceeded)."
+            
+        # --- Stage 4: Financials (Runway & Survival) ---
+        if user_context.is_professional_mode:
+            # Placeholder for survival logic: If runway < 180 days, reject any non-hedging trades that increase margin
+            # (Actual implementation will use the runway helper in Phase 4)
+            pass
+            
+        return True, "APPROVED"
 
     async def run_market_scan(self, is_auto: bool = True, triggered_by_id: Optional[int] = None) -> Dict[int, List[Dict[str, Any]]]:
         """
@@ -259,7 +289,8 @@ class TradingService:
                             stock_iv=opt_data.get('iv', 0.15),
                             strategy=strategy,
                             macro_data=macro_data,
-                            base_risk_limit_pct=user_risk_pref
+                            base_risk_limit_pct=user_risk_pref,
+                            vix_spot=vix_spot
                         )
 
                         # 模擬成交後的衝擊
@@ -273,6 +304,12 @@ class TradingService:
                             'hedge_spy': hedge_spy,
                             'projected_exposure_pct': round(projected_exposure_pct, 2)
                         })
+
+                        # 🚀 執行集中化決策管線 (Stage 1-4)
+                        is_approved, reason = self._validate_trade_pipeline(user_context, opt_data)
+                        if not is_approved:
+                            logger.info(f"🚫 [Pipeline Reject] {sym} {strategy}: {reason}")
+                            continue
 
                         # 🚀 對沖解除建議 (Hedge Unlocking)
                         ema_signals = opt_data.get('ema_signals', [])
@@ -472,6 +509,16 @@ class TradingService:
                 logger.info(f"盤後報告略過：report_lines 為空，uid={uid}")
                 continue
 
+            # 🚀 [Pro Investor] 生存天數計算 (Runway Calculation)
+            survival_runway = None
+            if user_ctx.is_professional_mode:
+                from market_analysis.pro_management import calculate_survival_runway
+                survival_runway = calculate_survival_runway(
+                    cash_reserve=user_ctx.cash_reserve,
+                    monthly_expenses=user_ctx.monthly_expense,
+                    daily_theta=user_ctx.total_theta
+                )
+
             try:
                 # 2. 執行對沖績效分析
                 hedge_analysis = await hedging.analyze_hedge_performance(uid)
@@ -497,6 +544,7 @@ class TradingService:
 
             results[uid] = {
                 "report_lines": report_lines,
-                "hedge_analysis": hedge_analysis
+                "hedge_analysis": hedge_analysis,
+                "survival_runway": survival_runway
             }
         return results
