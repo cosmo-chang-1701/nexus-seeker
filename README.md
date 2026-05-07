@@ -1,405 +1,151 @@
-# 🌌 Nexus Seeker
+# 🌌 Nexus Seeker: Professional Liquidity & Risk Management Terminal
 
 <div align="center">
-  <img src="assets/hero.png" alt="Nexus Seeker Hero Image" width="800" />
+  <img src="assets/hero.png" alt="Nexus Seeker Terminal Hero" width="800" />
 </div>
 
-**多租戶選擇權量化風控作戰平台 — 由 Discord 驅動**
+**針對全職投資者打造的關鍵任務執行環境 — 專注於資產保護與系統性風險對沖**
 
 [![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Docker](https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white)](nexus_core/docker-compose.yml)
-[![Deploy](https://github.com/cosmo-chang-1701/nexus-seeker/actions/workflows/deploy.yml/badge.svg)](https://github.com/cosmo-chang-1701/nexus-seeker/actions/workflows/deploy.yml)
-[![Architecture](https://img.shields.io/badge/architecture-multi--tenant-purple.svg)](#architecture)
+[![Architecture](https://img.shields.io/badge/architecture-dual--service-purple.svg)](#architecture)
 
-> 一個以 Python 與 Docker 建構的**多租戶選擇權量化風控作戰平台**。
-> 結合技術分析、**Black-Scholes-Merton** 定價模型（含股息率校正）、LLM NLP 風控審查、**Nexus Risk Optimizer (NRO)** 曝險精算、虛擬交易室 (VTR) 自動化回測、PowerSqueeze 動能追蹤，以及全自動化 NYSE 交易日曆 — 從訊號掃描、風險精算、自動建倉到避險對沖，提供端到端的選擇權交易決策支援。
+> **Nexus Seeker** 是一款專為專業選擇權交易者設計的高效能終端，核心設計圍繞 **Financial Runway (財務跑道)**、**Gamma Integrity (Gamma 完整性)** 與 **Cross-Market Edge Detection (跨市場邊緣偵測)**。透過 **Black-Scholes-Merton** 精算與 **Nexus Risk Optimizer (NRO)**，本系統提供從信號偵測到自動化對沖的完整風控管線。
 
 ---
 
-## 目錄
+## 🛠 Technical Specifications
 
-- [核心功能](#-核心功能)
-- [架構](#-架構)
-- [技術棧](#-技術棧)
-- [快速開始](#-快速開始)
-- [Discord 指令](#️-discord-指令)
-- [投資組合工作流程](#-投資組合工作流程)
-- [策略邏輯](#-策略邏輯)
-- [專案結構](#-專案結構)
-- [測試](#-測試)
-- [貢獻](#-貢獻)
-- [路線圖](#-路線圖)
-- [授權條款](#-授權條款)
-
----
-
-## ✨ 核心功能
-
-| 功能 | 說明 |
+| 類別 | 技術規格 (Specifications) |
 |---|---|
-| 🔐 **多租戶與隱私** | 所有斜線指令回覆皆為**臨時訊息**（僅觸發指令的使用者可見）。每位使用者依 Discord User ID 獲得獨立的資料庫命名空間。 |
-| 📨 **私訊分發器** | 背景排程器對所有使用者執行 **API 去重**，再將個人化的量化報告發送至各使用者的私訊。非同步訊息佇列確保高流量下不阻塞主迴圈。 |
-| 🔔 **啟停通知** | Bot 啟動與關閉時自動私訊通知所有已註冊使用者，確保服務可視性。 |
-| 📅 **排程推播** | 每項排程任務觸發前，自動以 Discord Timestamp 私訊通知所有使用者下次執行時間（自動轉換為使用者當地時區）。 |
-| 🤖 **LLM NLP 風控** | 整合 OpenAI-compatible 推論引擎（支援自架 Inference Server），以 Structured Output（Pydantic Schema）對新聞與 Reddit 情緒進行毒性分析，黑天鵝事件或散戶狂熱時自動否決賣方訊號。 |
-| 🕸️ **Reddit 邊緣爬蟲** | 透過 Cloudflare Tunnel 呼叫本地端 `nexus_edge_scraper`（Playwright + BeautifulSoup），即時爬取 Reddit 散戶情緒與共識分數。 |
-| 📰 **新聞聚合** | 透過 Finnhub Company News API 即時擷取標的近期官方新聞標題，作為 LLM 風控審查的輸入源。 |
-| 🎯 **Delta 精準掃描** | 內建 Black-Scholes-Merton 引擎（`py_vollib`，含股息率 `q` 校正）自動計算目標 Delta 的最佳履約價（例：−0.20 ≈ 80% 勝率）。 |
-| 📡 **NYSE 自動排程器** | 整合 `pandas_market_calendars` 並處理日光節約時間與假日 — 動態睡眠至下一個交易日目標時刻。 |
-| 🔄 **30 分鐘動態巡邏** | 盤中掃描器以 30 分鐘心跳循環運作，僅在 NYSE 常規交易時段（10:00 ET 後）執行掃描，避開開盤初期造市商無報價期。 |
-| 🧊 **4 小時推播冷卻** | 自動排程掃描結果依「使用者 × 標的」維度套用 4 小時冷卻機制，避免重複推播同一訊號；手動 `/force_scan` 不受冷卻限制且不重置計時器。 |
-| 📊 **造市商預期波動** | 計算基於 ATM 跨式組合的預期波動（MMM），在財報前標示「地雷區」履約價。 |
-| ⚖️ **四分之一 Kelly 倉位** | 以 ¼-Kelly 準則計算倉位大小，每檔標的上限 5%。 |
-| 📉 **個股 IV 期限結構** | 偵測 30D/60D IV 逆價差作為恐慌性拋售訊號。 |
-| 🌐 **大盤 VIX 結構** | 即時追蹤 VIX 期限結構 (VTS) 與 30/60日 Z-Score 動能，遇逆價差或波動性暴增時觸發系統性防禦機制。 |
-| 🏅 VIX 戰情階梯 (Battle Ladder) | 6 階段 VIX 回應系統（休兵→少買→摩拳擦掌→大買→重砲進場→All-in），依即時 VIX 動態調控 STO Delta 上限、倉位乘數、Kelly 比例與 VTR 建倉許可。具備無效數據 (NaN/None) 容錯機制，自動回退至安全預設值。VIX < 15 硬性拒絕所有賣方訊號；VIX > 35 啟用 All-in 旁路，繞過油價/VTS 抑制直接放大風險額度。 |
-| 📐 **垂直偏態濾網** | 分析 25-Delta Put/Call IV 比率，≥ 1.30 標示警告，≥ 1.50 時硬性否決 STO Put 訊號，規避尾部崩盤風險。 |
-| 🛡️ **尾部風險防護** | 結合 VIX 數據與偏態指數，當偵測出黑天鵝尾部風險時，動態將曝險斬半 (1/4 Kelly) 並縮減 NRO 保證金上限。 |
-| 💧 **流動性濾網** | 自動檢測買賣價差（Bid-Ask Spread），絕對價差 > $0.20 且佔比 > 10% 時剔除流動性陷阱。 |
-| 🧪 **波動率風險溢酬 (VRP)** | 比較隱含波動率與歷史波動率，當 VRP < 0（IV 被低估）時拒絕賣方策略，確保風險溢酬為正。 |
-| 🎯 **隱含預期波動區間** | 以 `現價 × IV × √(DTE/365)` 計算 1σ 預期波動幅度，確認賣方損益兩平點建構於機率圓錐外，否則硬性剔除。 |
-| 💰 **AROC 資金效率濾網** | 計算賣方合約的年化資本回報率 `(權利金 / 保證金) × (365 / DTE)`，低於 15% 的標的自動剔除，僅保留資金效率達標的收租機會。 |
-| 🌐 **Beta 加權宏觀風險** | 盤後報告計算投資組合等效 SPY Delta（Beta-Weighted），當淨曝險超過 ±50 股時觸發避險建議。 |
-| 📉 **Gamma 脆性評估** | 以二階 Beta-Weighted 平方加權追蹤投資組合淨 Gamma，偵測非線性加速度風險；淨 Gamma < −20 時觸發脆性警告，建議注入正 Gamma 緩衝。 |
-| 🔥 **資金熱度極限** | 計算投資組合保證金佔總資金比例（Portfolio Heat），> 30% 警戒、> 50% 爆倉預警，防止過度槓桿。 |
-| 🛡️ **What-if 曝險模擬** | 掃描期權機會時，Nexus Risk Optimizer (NRO) 預先模擬建倉後對整體投資組合的 Delta 衝擊，動態防範曝險破表風險。 |
-| 🛡️ **自動對沖指令** | 當 NRO 偵測建倉計畫超標時，將反向下達精準的基準與數量避險指示（例：建議賣出 2.5 股 SPY），提供全盤化應對方案。 |
-| 👻 **虛擬交易室 (VTR)** | 內建 GhostTrader 引擎，自動根據量化訊號建倉，並自動追蹤合約部位。達停利/停損條件會自動平倉，Delta 擴張時自動轉倉。 |
-| 📊 **VTR 績效週報** | 每週五收盤後 (17:05 ET)，自動彙整個人專屬的 VTR 實測交易績效並透過私訊推送週報。 |
-| ⚡ **Finnhub 高效報價** | 無縫整合 Finnhub 高效服務，取代不穩定的 Yahoo Finance，徹底排除 ETF 資料請求 404 問題，並大幅提昇股息與財報日的資料準確度。 |
-| 💹 **Theta 現金流精算** | 每日 Theta 收益率精算，對照機構級 0.05%–0.3% 標準，確保時間價值曝險合理。 |
-| 🕸️ **相關性矩陣風險** | 下載 60 日收盤價建立 Pearson 相關係數矩陣，偵測 ρ > 0.75 的高度重疊板塊並提示集中風險。 |
-| 💾 **資料持久化** | SQLite 搭配 Docker Volume — 容器重啟零資料遺失。內建版本遷移引擎（Migration Engine），Schema 變更全自動化。 |
-| 🧮 **Greeks 持久化與匯總** | 持倉的 Greeks（Weighted Delta、Theta、Gamma）持久化至資料庫，`UserContext` 一次性匯總真實持倉與虛擬交易的 Greeks 指標，極大化 I/O 效率。 |
-| ⚙️ **個人化風險與推播** | 每位使用者可自訂風險限制（1%–50%），及切換 Option 推播、VTR 自動建倉與 PowerSqueeze 等專屬追蹤頻道。 |
-| ⚡ **PowerSqueeze 動能追蹤** | 內建向量化 PSQ 數學模組，抓取盤基壓縮突破與能量擴張訊號，可作為獨立風向標並行於原有 Option 訊號。VIX 感知動能標記可識別低 VIX 牛陷阱 (`OVEREXTENDED_RISK`) 與高 VIX 反彈機會 (`HIGH_CONVICTION_RECOVERY`)。 |
-| 💹 即時報價查詢 | `/quote` 指令透過 Finnhub 即時取得標的報價（含現價、漲跌幅、今日高低與前收盤價）。 |
-| 💼 專業投資者模式 | 針對全職交易者設計，支援每月支出與稅務預留比例設定，提供自動化財務跑道 (Runway) 分析。 |
-| 🏁 **財務生存跑道** | 根據現金儲備與投資組合 Theta 收益，精算「財務生存天數」指標，顯示於盤後報告並可透過 `/runway_check` 查詢。 |
-| 📈 Gap & Fill 監控 | 量化 Gap 分析模組，即時追蹤跳空幅度、類型與回補進度，輔助開盤策略判定。 |
-| 🛡️ **DITM 喪失凸性防禦** | 自動監控買方部位，當 Delta ≥ 0.85、獲利 > 150% 且 DTE ≤ 21 時，觸發防禦性平倉或轉倉，規避 Gamma 陷阱並回收資金。 |
-| 🔄 倉位演進引擎 | 模擬合成多頭 (Synthetic Long) 轉向現股持倉與 Covered Call 的演進過程，精算資本調整成本與 AROC。 |
-| 🐋 Polymarket 巨鯨監控 | 整合 Polymarket CLOB WebSocket 與 L2 訂單簿同步，即時監控預測市場巨鯨交易。具備 **動態滑價門檻引擎**（基於 2% 滑價深度自動調整門檻）、**Taker 意圖映射** (Aggressive Long/Short) 與 **Yes/No 雙向價格校準**。採用 **LLM 結構化輸出 (JSON Schema)** 進行深度背景分析，產出經 **Markdown 優化** 的專業戰報（含背景、動機、情緒與定論）。支援自訂門檻與 WebSocket 指數退避重連。 |
-| 🏗️ **四階段驗證管線** | `TradingService` 內建 **Macro -> Alpha -> Risk -> Financials** 四階段嚴格驗證管線，STO 訊號必須通過 AROC 15% 門檻與 VIX 階梯閘門方可放行。 |
-| 🛡️ **獲利鎖定 (Profit Lock)** | DITM 優先警報系統，當長部位凸性消失時，即時推播「Profit Lock」優先指令，強制執行資本回收。 |
-| 🛠️ **精準避險指令** | 曝險超過 ±50 Delta 時，系統自動計算並下達「賣出/買入 X 股 SPY」之具體行動指令，實現專業化對沖管理。 |
+| **Runtime 環境** | Python 3.12 (WSL2 / Windows 11 最佳化) |
+| **量化定價引擎** | Black-Scholes-Merton (via `py_vollib`, 含股息率校正) |
+| **風險精算核心** | Nexus Risk Optimizer (NRO) - 二階 Beta-Weighted 曝險模型 |
+| **數據源 (Feeds)** | Finnhub (Real-time), yfinance (Chain), Polymarket (WS L2), Reddit (Edge) |
+| **持久化層** | SQLite 搭配自動化 Migration Engine (v022+) |
+| **智能層** | Structured LLM Output (Pydantic Schema) via OpenAI-compatible API |
+| **訊息傳遞** | Discord.py (非同步訊息佇列，支援多租戶隔離) |
 
 ---
 
-## 🏗 架構
+## 🏗 System Architecture
 
-本專案採用**雙服務架構**：`nexus_core`（雲端 Discord Bot）與 `nexus_edge_scraper`（本地端邊緣爬蟲），透過 Cloudflare Tunnel 安全互連。
+系統採用分散式雙服務架構，確保雲端執行效率與邊緣爬蟲的隱私性。
 
-```
-Discord 使用者 ──► Discord API ──► NexusBot (bot.py)
-                                       │
-                     ┌─────────────────┼──────────────────┐
-                     │                 │                  │
-              斜線指令           私訊分發器          NYSE 排程器
-              (臨時訊息)        (背景佇列)         (動態睡眠排程)
-                     │                 │                  │
-                     └────────┬────────┘                  │
-                              │                           │
-                     ┌────────▼────────┐          ┌───────▼───────┐
-                     │  TradingService │          │  market_time  │ ← NYSE 日曆
-                     │ (業務邏輯中樞)  │          │  (動態排程)   │
-                     └────────┬────────┘          └───────────────┘
-                              │                           │
-                     ┌────────▼────────┐          ┌───────▼───────┐
-                     │    database/    │          │  market_math  │ ← Facade
-                     │  (SQLite PKG)   │          │  (re-export)  │
-                     │ ┌─────────────┐ │          └───────┬───────┘
-                     │ │ migrations/ │ │                  │
-                     │ └─────────────┘ │          ┌───────▼───────┐
-                     └────────────────┘          │market_analysis │
-                                                  │ (Python PKG)  │
-                              │                   ├───────────────┤
-                     ┌────────▼────────┐          │  strategy.py  │
-                     │   services/     │          │  portfolio.py │
-                     │ ┌─────────────┐ │          │  greeks.py    │
-                     │ │trading_serv.│ │          │  risk_engine  │
-                     │ │ llm_service │ │          │  ghost_trader │
-                     │ │market_data  │ │          │  hedging.py   │
-                     │ │ news_service│ │   feed   │  margin.py    │
-                     │ │reddit_serv. │─│─ ─ ─ ►   │  data.py      │
-                     │ └─────────────┘ │          │  report_fmt   │
-                     └────────────────┘          └───────────────┘
-                              │
-                   Cloudflare Tunnel
-                              │
-                     ┌────────▼────────┐
-                     │ nexus_edge_     │  (本地端，獨立容器)
-                     │ scraper/        │
-                     │ ┌─────────────┐ │
-                     │ │ local_api   │ │  FastAPI + Playwright
-                     │ └─────────────┘ │
-                     └────────────────┘
-```
+```mermaid
+graph TD
+    subgraph Cloud_Environment [Cloud / Discord Service]
+        Bot[NexusBot Core]
+        TS[TradingService - Business Logic]
+        RE[Risk Engine - NRO]
+        DB[(SQLite DB v022)]
+        S[Services - LLM/Polymarket]
+    end
 
-### 排程任務
+    subgraph Edge_Environment [Local / Edge Scraper]
+        ES[Nexus Edge Scraper - Playwright]
+    end
 
-排程器採用**動態睡眠**架構 — 透過 `pandas_market_calendars` 精準算出下一個 NYSE 交易日的目標時刻，睡眠至該時刻再執行。每項任務觸發前，自動以 **Discord Timestamp** 私訊通知所有使用者。
-
-| 排程模式 | 任務 | 說明 |
-|---|---|---|
-| **動態睡眠** → 開盤前 30 分 (≈ 09:00 ET) | 盤前風險監控 | 掃描持倉與觀察清單的財報日曆；若財報 ≤ 14 天內，私訊 ⚠️ 風險預警（區分持倉高風險 vs 觀察清單標的）。 |
-| **每 30 分鐘心跳** (10:00 ET – 收盤) | 盤中動態掃描 | 每 30 分鐘偵測開盤狀態，僅在常規交易時段內執行（跳過 09:30–09:59 造市商無報價期）。執行策略掃描與 LLM 風險審查，經過 **AlertFilter 條件降噪 (防雙巴與多週期共振)** 後，將優質訊號推播並套用 4 小時冷卻，同時自動送入 VTR 建倉。 |
-| **每 30 分鐘心跳** (盤中) | VTR 監控與對沖 | 盤中掃描虛擬交易室 (VTR) 持倉，當觸發獲利/停損/Delta 擴表條件時自動平倉或轉倉並即時通知；依據目標 Delta (Target Delta) 提供部位精準對沖建議。 |
-| **動態睡眠** → 收盤後 15 分 (≈ 16:15 ET) | 盤後報告 | 動態結算實單與虛盤損益、Gamma 脆性防禦、計算 SPY Beta-Weighted 宏觀曝險，提出跨板塊相關性警告。同時執行背景快取清理維護資料庫效能。 |
-| **每週五定時** (17:05 ET) | VTR 績效週報 | 收盤後彙總該週虛擬交易室 (VTR) 的勝率、總損益與盈虧比，發送專屬績效報表。 |
-| **即時監聽 (WebSocket)** | Polymarket 巨鯨監控 | 全天候監聽 Polymarket CLOB 交易流。具備 **Taker 意圖解析** 與 **Yes/No 雙向價格校準**，當單筆成交額超過門檻時，結合 LLM 產出深度分析報告並即時推播。 |
-| **NYSE 動態排程** | Analyst Agent | 基於 NYSE 市場時鐘，全自動執行盤前、盤中與盤後量化分析模組，提供宏觀掃描（殖利率、DXY、VIX）、財報預警與次日策略規劃。 |
-
----
-
-## 🛠 技術棧
-
-| 層級 | 技術 |
-|---|---|
-| **語言** | Python 3.12 |
-| **Discord** | `discord.py` ≥ 2.3 — 斜線指令、私訊路由、非同步訊息佇列 |
-| **市場數據** | `finnhub-python`（即時報價、股息率與財報）、`yfinance`（選擇權鏈擷取）、`pandas-ta`（指標）、`py_vollib`（定價模型與 Greeks） |
-| **數值計算** | `numpy`（對數報酬率、波動率）、`pandas`（數據處理） |
-| **LLM 推論** | `openai` SDK（OpenAI-compatible API）、`pydantic`（Structured Output Schema） |
-| **邊緣爬蟲** | `playwright`（Headless Chromium 渲染）、`beautifulsoup4` + `lxml`（HTML 解析）、`fastapi`（本地 API） |
-| **網路** | `httpx`（非同步 HTTP 客戶端）、Cloudflare Tunnel（安全互連） |
-| **排程** | `pandas_market_calendars`、`zoneinfo` |
-| **資料庫** | SQLite — 以 `user_id` 為複合唯一鍵，內建版本遷移引擎（目前至 `v022`） |
-| **基礎架構** | Docker、Docker Compose、GitHub Actions CI/CD → DigitalOcean |
-| **套件管理** | `pyproject.toml`（PEP 621 標準） |
-
----
-
-## 🚀 快速開始
-
-### 前置需求
-
-- [Docker](https://docs.docker.com/get-docker/) & [Docker Compose](https://docs.docker.com/compose/install/)
-- 一組 [Discord Bot Token](https://discord.com/developers/applications)
-- 一組 [Finnhub API Key](https://finnhub.io/)（必填：即時行情與基本面數據）
-- （可選）OpenAI-compatible LLM 推論端點（用於 NLP 風控）
-- （可選）Cloudflare Tunnel（用於 Reddit 邊緣爬蟲互連）
-
-### 1. 複製並準備
-
-```bash
-git clone https://github.com/cosmo-chang-1701/nexus-seeker.git
-cd nexus-seeker
-mkdir -p nexus_core/data          # SQLite 持久化掛載目錄
-cd nexus_core                     # 目前 docker-compose.yml 位於此目錄
-```
-
-### 2. 設定環境變數
-
-```bash
-cp .env.example .env
-```
-
-編輯 `.env` 並填入你的 Token：
-
-```env
-DISCORD_TOKEN=your_discord_bot_token_here
-DISCORD_ADMIN_USER_ID=your_discord_admin_user_id_here
-
-LLM_API_BASE=your_llm_api_base_here        # 可選：自架 Inference Server URL
-LLM_MODEL_NAME=your_llm_model_name_here      # 可選：模型名稱
-API_KEY=your_api_key_here                    # 可選：LLM API Key
-TUNNEL_URL=your_tunnel_url_here              # 可選：Cloudflare Tunnel URL
-FINNHUB_API_KEY=your_finnhub_api_key_here    # 必填：Finnhub 即時行情 API Key
-
-LOG_LEVEL=WARNING          # 可選：DEBUG / INFO / WARNING (預設)
-```
-
-### 3. 啟動
-
-```bash
-docker compose up -d --build
-```
-
-確認 Bot 正在運行：
-
-```bash
-docker compose logs -f
-```
-
-如需啟動邊緣爬蟲服務（本地端）：
-
-```bash
-cd ../nexus_edge_scraper
-cp .env.example .env
-docker compose up -d --build
+    User((Professional Trader)) -- Slash Commands --> Bot
+    Bot --> TS
+    TS --> RE
+    TS --> DB
+    TS --> S
+    S -- Cloudflare Tunnel --> ES
+    TS -- Async Notify --> User
 ```
 
 ---
 
-## ⌨️ Discord 指令
+## 🏁 Financial Intelligence
 
-所有指令使用 Discord 原生**斜線指令**，內建參數驗碼。
-回覆皆為**臨時訊息** — 僅觸發指令的使用者可見。
+針對全職投資者量身打造的生存與效率指標：
 
-### 📡 觀察清單
+*   **Financial Survival & Runway (財務生存跑道)**：
+    系統自動對照使用者的 **Cash Reserve (現金儲備)** 與 **Monthly Expenses (每月支出)**，利用投資組合的 **Total Theta (每日時間價值收益)** 動態估算「財務生存天數」。透過 `/runway_check` 隨時掌握現金流健康度。
+*   **Capital Efficiency (AROC 門檻)**：
+    嚴格執行 **15% Annualized Return on Capital (AROC)** 准入制度。所有 **STO (Sell-to-Open)** 訊號若年化回報率低於 15%，將被系統過濾器直接攔截，確保保證金利用率極大化。
 
-| 指令 | 說明 | 範例 |
-|---|---|---|
-| `/add_watch` | 將標的加入觀察清單（支援 Covered Call 模式與 LLM 開關） | `symbol: TSLA` `stock_cost: 250.0` `use_llm: True` |
-| `/list_watch` | 檢視所有觀察中的標的（含分頁瀏覽） | — |
-| `/edit_watch` | 編輯標的設定（修改現股成本或切換 LLM 審查） | `symbol: TSLA` `stock_cost: 0` |
-| `/remove_watch` | 移除標的 | `symbol: ONDS` |
-| `/scan` | 手動執行量化掃描、What-if 模型模擬成交後曝險與防呆對沖建議 | `symbol: SMR` |
+---
 
-### 💼 投資組合
+## 🛡️ Functional Pillars
 
-| 指令 | 說明 | 範例 |
-|---|---|---|
-| `/add_trade` | 記錄實際交易以進行監控 | 見下方 |
-| `/list_trades` | 檢視持倉、損益與交易 ID | — |
-| `/remove_trade` | 依 ID 移除已平倉的持倉 | `trade_id: 1` |
-| `/settings` | 配置帳戶全域參數 (資金、風險與 PSQ/VTR/Polymarket 等個人化推播開關) | `capital: 50000 risk_limit: 15 polymarket_threshold: 10000` |
-| `/vtr_list` | 列出虛擬交易室 (VTR) 開啟中的所有持倉 | — |
-| `/vtr_stats` | 檢視虛擬交易室 (VTR) 的績效統計 (勝率、損益、盈虧比) | — |
-| `/transition_sim` | 模擬合成多頭 (Synthetic Long) 轉向現股與 Covered Call 的演進模擬 | `symbol: AAPL` `target_price: 180` `cc_strike: 190` |
-| `/runway_check` | 根據組合 Theta 與個人支出計算財務跑道 (Runway) | — |
+### 1. Risk Integrity (NRO 引擎)
+*   **Gamma Fragility Assessment (Gamma 脆性評估)**：
+    利用二階 Beta-Weighted 平方加權監控投資組合的淨 Gamma。當偵測到非線性風險加速時（淨 Gamma < −20），自動發出脆性警告。
+*   **DITM Convexity Guard (Profit Lock)**：
+    針對買方部位，當 **Delta ≥ 0.85** 且獲利豐厚時，偵測到部位喪失 **Convexity (凸性)** 並轉化為合成現股。系統會發出 **"Profit Lock"** 優先指令，強制執行資本回收。
+*   **VIX Battle Ladder (戰情階梯)**：
+    6 階段自適應風險調控系統，根據即時波動率動態縮放 **Kelly Criterion (凱利準則)** 比例與 **Target Delta (目標曝險)**。
 
-### 🔬 研究
+### 2. Market Intelligence (邊緣偵測)
+*   **Polymarket Whale Tracking**：
+    透過 WebSocket 即時監控預測市場 **L2 Order Book**。結合 LLM 進行 **Taker Intent Mapping (主動意圖映射)**，識別機構級巨鯨建倉動機。
+*   **Reddit Edge Scraper**：
+    透過 Cloudflare Tunnel 於本地端擷取散戶共識指標，精準識別 **Retail Sentiment Shift (散戶情緒轉向)**。
 
-| 指令 | 說明 | 範例 |
-|---|---|---|
-| `/scan_news` | 快速掃描標的的 Finnhub 官方新聞 | `symbol: TSLA` `limit: 5` |
-| `/scan_reddit` | 即時爬取標的的 Reddit 散戶情緒（過去 24 小時） | `symbol: PLTR` `limit: 5` |
-| `/quote` | 透過 Finnhub 獲取即時報價（現價、漲跌幅、今日高低、前收盤） | `symbol: AAPL` |
-| `/poly_list` | 顯示目前監控中的 Polymarket 活躍市場清單 | — |
+### 3. Execution Automation
+*   **NYSE Dynamic Scheduler**：
+    精準對齊交易所交易時鐘，以 30 分鐘為心跳進行全自動化掃描，避開造市商無報價時段。
+*   **GhostTrader (VTR)**：
+    全功能虛擬交易室，支援自動化策略回測與實時績效歸因，提供每週勝率、損益比專業報表。
 
-### 🛠️ 管理員
+---
 
-| 指令 | 說明 |
-|---|---|
-| `/force_scan` | 立即手動執行全站掃描（不論開盤時間），結果私訊分發給所有使用者（繞過 4 小時冷卻機制）。僅限 `DISCORD_ADMIN_USER_ID` 使用。 |
+## 🔄 Contract Lifecycle
 
-### 🔧 開發者
+系統管理期權合約從「偵測」到「對沖結算」的完整專業流程：
 
-| 指令 | 說明 |
-|---|---|
-| `/test_risk_ui` | 模擬高風險標的掃描資料，驗證 Beta、加權股數與風險 UI 渲染邏輯 |
-| `/test_poly_whale` | 模擬 Polymarket 巨鯨交易推播，驗證 WebSocket 監控與 LLM 總結邏輯 |
-| `/poly_status` | 查看 Polymarket WebSocket 連線狀態、訂閱資產數與最後訊息時間 |
+```mermaid
+stateDiagram-v2
+    [*] --> Detection: Signal Detection (EMA/PSQ)
+    Detection --> Audit: Risk/AROC Audit (15% Threshold)
+    Audit --> Execution: VTR / Live Execution
+    Execution --> Monitoring: Real-time Delta/DTE/Gamma Tracking
+    Monitoring --> Defense: DITM Convexity Loss / Gamma Trap
+    Monitoring --> Hedging: Net Delta > ±50 Exposure
+    Defense --> ProfitLock: Automated Closing / Roll
+    Hedging --> Adjust: Automated SPY Hedge Instructions
+    Adjust --> Monitoring
+    Monitoring --> Exit: Target PnL (50%/100%) / Hard Stop
+    Exit --> [*]
+```
 
-<details>
-<summary><strong><code>/add_trade</code> 參數</strong></summary>
+---
 
-| 參數 | 類型 | 說明 | 範例 |
+## ⌨️ Command Matrix (CLI)
+
+| Command | Description | Input Schema (Summary) | Level |
 |---|---|---|---|
-| `symbol` | string | 股票代號 | `SOFI` |
-| `opt_type` | choice | `Put` 或 `Call` | `Put` |
-| `strike` | float | 履約價 | `7.5` |
-| `expiry` | string | 到期日（`YYYY-MM-DD`） | `2026-04-17` |
-| `entry_price` | float | 每口合約收取/支付的權利金 | `0.55` |
-| `quantity` | int | 正值 = 買進，**負值 = 賣出** | `-5` |
-| `stock_cost` | float | （可選）持有現股平均成本，用於 Covered Call 計算 | `250.0` |
-| `category` | choice | （可選）`SPECULATIVE` 或 `HEDGE`，預設 `SPECULATIVE` | `HEDGE` |
+| `/settings` | 配置全域資產、風險、生存支出與推播開關 | `capital`, `risk_limit`, `expense`, `cash_reserve` | User |
+| `/runway_check` | 執行財務生存跑道與 Theta 收益分析 | — | User |
+| `/add_trade` | 登錄實單部位至 NRO 監控管線 | `symbol`, `opt_type`, `strike`, `qty`, `cost` | User |
+| `/scan` | 手動執行量化掃描與 What-if 曝險模擬 | `symbol` | User |
+| `/vtr_stats` | 檢視虛擬交易室勝率與盈虧歸因週報 | — | User |
+| `/transition_sim` | 模擬投機部位向 Core Equity/Covered Call 演進 | `symbol`, `target_price`, `realized_pnl` | User |
+| `/force_scan` | [Admin] 立即驅動全站同步掃描與私訊分發 | — | Admin |
+| `/poly_list` | 檢視 Polymarket 巨鯨監控中的活躍市場 | — | User |
 
-</details>
-
----
-
-## 🔄 投資組合工作流程
-
-```
-┌───────────────┐     ┌────────────────┐     ┌─────────────────┐
-│  1. 訊號      │────►│  2. 記錄       │────►│  3. 監控        │
-│  接收私訊     │     │  /add_trade    │     │  每日盤後自動   │
-└───────────────┘     └────────────────┘     └────────┬────────┘
-                                                      │
-                                                      ▼
-                                             ┌─────────────────┐
-                                             │  4. 決策        │
-                                             │  透過私訊警報   │
-                                             └────────┬────────┘
-                                                      │
-              ┌───────────────┬───────────────┬───────┴───────┬───────────────┐
-              │               │               │               │               │
-       🟢 獲利 ≥ 50%  🚨 Delta 擴張    ⚠️ DTE ≤ 21      ⚫ 虧損 ≥ 150%  🛡️ Profit Lock
-       買回平倉        Roll Down/Up     迴避 Gamma       強制停損        Delta ≥ 0.85
-              │           and Out        陷阱 (轉倉)          │           (獲利鎖定)
-              └───────────────┴───────────────┴───────────────┴───────────────┘
-                                              │
-                                              ▼
-                                     ┌─────────────────┐
-                                     │  5. 平倉        │
-                                     │  /remove_trade  │
-                                     └─────────────────┘
-```
-
-### 決策樹（賣方 vs 買方）
-
-| 角色 | 條件 | 動作 |
-|---|---|---|
-| **賣方** | 獲利 ≥ 50% | ✅ Buy to Close 停利 |
-| **賣方** | Put Delta ≤ −0.40 | 🚨 Roll Down and Out |
-| **賣方** | Call Delta ≥ +0.40 | 🚨 Roll Up and Out |
-| **賣方** | DTE ≤ 21 | ⚠️ 迴避 Gamma 陷阱，建議平倉或轉倉 |
-| **賣方** | 虧損 ≥ 150% | ☠️ 黑天鵝警戒，強制停損 |
-| **買方** | 獲利 ≥ 100% | ✅ Sell to Close 停利 |
-| **買方** | Delta ≥ 0.85 & PnL > 150% | 🚨 **Profit Lock (DITM 防禦)** (平倉或轉倉) |
-| **買方** | DTE ≤ 21 | 🚨 動能衰竭，建議平倉保留殘值 |
-| **買方** | 本金回撤 ≥ 50% | ⚠️ 停損警戒 |
+> **策略邏輯與 VIX 戰情細節：** 關於詳細的量化濾網規則與 VIX 階梯係數，請參閱 [docs/STRATEGY.md](docs/STRATEGY.md)。
 
 ---
 
-## 📈 策略邏輯
+## 🚀 Getting Started
 
-量化引擎（`market_analysis/strategy.py`）以技術面篩選為門檻，並結合 `services/alert_filter.py` 的**動態降噪過濾**（多週期共振與防雙巴機制），經過疊加的**多道極端量化濾網**精煉出高勝率機會。
+### Prerequisites
+*   Docker & Docker Compose
+*   Finnhub API Key (Mission Critical)
+*   Discord Bot Token
 
-### 核心降噪過濾 (Alert Filter)
-
-為解決頻繁警報帶來的疲勞，系統於推播發送前強制執行降噪判定：
-- **動態趨勢濾網 (EMA 8/21)**：短天期合約若遭遇盤面強烈空頭，主動拒絕 BTO Call 與 STO Put 建倉。
-- **多週期共振確認 (MTF Alignment)**：觸發 EMA 交叉時，強制要求大週期（日線 EMA 21）亦呈同向趨勢，方可視為有效突破。
-- **Anti-Whipsaw 防雙巴機制**：針對連續 4 小時內之重複同向訊號，以及價格擺幅過小（< 1.5%）的無效糾纏，直接攔截降噪。
-- **高勝率優先推播**：僅當 VIX 波動爆發（≥ 10%）、時框共振確認，或 VRP 溢酬高達 5% 以上，才打破靜默進行全域優先警報。
-
-### 共用濾網管線
-
-所有通過策略觸發與降噪條件的合約皆須依序通過以下濾網：
-
-| # | 濾網 | 規則 | 適用策略 |
-|---|---|---|---|
-| 1 | HV Rank | 波動率位階 ≥ 30（一年內相對百分位）— 作為賣方門檻 | STO Put / STO Call |
-| 2 | 個股 IV 期限結構 | 30D/60D IV 比率偵測逆價差（Backwardation ≥ 1.05） | 全部 |
-| 3 | 大盤 VIX 期限結構 | VIX vs VIX3M 結構為逆價差 (VTS ≥ 1.0) → 觸發全域尾部防禦 (NRO 上限減半)、拒絕 STO Put | 全部 |
-| 4 | VIX 動態 Z-Score | 偵測 Z30 > 0.5 且 Z60 > 0 (波動向北擴張) → 拒絕做多位階 (BTO Call / STO Put) | BTO Call / STO Put |
-| 5 | 大盤 SPY 位階 | SPY 跌破 20MA 宣告空基調 → 拒絕做多位階 (BTO Call / STO Put) | BTO Call / STO Put |
-| 6 | 垂直偏態 | 25Δ Put/Call IV 比率 ≥ 1.50 → 硬性否決 STO Put 或觸發 1/4 Kelly 尾部降規防護 | STO Put |
-| 7 | 流動性 | Bid-Ask 絕對價差 > $0.20 **且**佔比 > 10% → 剔除 | 全部 |
-| 8 | VRP（賣方） | 隱含波動率 < 歷史波動率（VRP < 0）→ 拒絕賣方 | STO Put / STO Call |
-| 9 | VRP（買方） | VRP > 3%（保費遭恐慌暴拉）→ 拒絕買方建倉 | BTO Call / BTO Put |
-| 10 | 隱含預期波動區間 | `現價 × IV × √(DTE/365)` 算出 1σ 預期波動幅度；STO Put 損益兩平 `(Strike − Bid)` 必須 ≤ 預期下緣，STO Call 損益兩平 `(Strike + Bid)` 必須 ≥ 預期上緣 — 落入圓錐內即剔除 | STO Put / STO Call |
-| 11 | AROC（賣方） | 年化資本回報率 `(Bid / 保證金) × (365 / DTE)` < 15% → 剔除；保證金 = `Strike − Bid` | STO Put / STO Call |
-| 12 | AROC（買方） | 年化資本回報率 `((預期波動 − Ask) / Ask) × (365 / DTE)` < 30% → 剔除 | BTO Call / BTO Put |
-| 13 | ¼ Kelly（賣方） | 遭遇高尾部風險時，凱利最大倉位斬半。上限 5% (高危險 2.5%) | STO Put / STO Call |
-| 14 | ¼ Kelly（買方） | 買方凱利倉位上限 3% | BTO Call / BTO Put |
-| 15 | VIX 戰情階梯 | VIX < 15 硬性閘門拒絕所有 STO 訊號與 VTR 建倉；VIX 15-18 Cap Delta 至 -0.12 並縮減 50% 倉位；VIX > 24 放大為攻勢倉位 (1.2x-2.0x)；VIX > 35 All-in 旁路繞過宏觀抑制 | 全部 |
-
-### 🏅 VIX 戰情階梯 (VIX Battle Ladder)
-
-依即時 VIX 值動態調控策略引擎、NRO 風險額度與 VTR 建倉許可。核心邏輯為**攻守互換**：高 VIX = 高 IV 溢酬 = 賣方黃金期，系統主動放大風險額度。
-
-| VIX 區間 | 階梯名稱 | STO Delta 上限 | 倉位乘數 | Kelly 覆寫 | VTR 建倉 | NRO 行為 |
-|---|---|---|---|---|---|---|
-| < 15.0 | 🧊 休兵 (Dormant) | — | 0.0x | — | ❌ 禁止 | 風險權重 = 0.0，硬性閘門拒絕所有 STO 訊號 |
-| 15.0 – 18.0 | ⚠️ 少買 (Caution) | -0.12 | 0.5x | — | ✅ 允許 | 風險權重 = 0.5，保守進場 |
-| 18.0 – 24.0 | 🟡 摩拳擦掌 (Ready) | -0.20 | 1.0x | — | ✅ 允許 | 風險權重 = 1.0，標準模式 |
-| 24.0 – 30.0 | 🟠 大買 (Aggressive) | -0.20 | 1.2x | — | ✅ 允許 | 風險權重 = 1.2，攻勢倉位 |
-| 30.0 – 35.0 | 🔴 重砲進場 (Heavy) | -0.25 | 1.5x | — | ✅ 允許 | 風險權重 = 1.5，動態 Kelly 放大至 1/3 Kelly |
-| ≥ 35.0 | ⚫ All-in (Extreme) | -0.35 | 2.0x | 1/2 Kelly | ✅ 允許 | 風險權重 = 2.0，All-in 旁路繞過油價/VTS 抑制 |
+### Quick Deployment
+1.  `cp .env.example .env` (填寫 API Keys)
+2.  `docker compose up -d --build`
+3.  進入 Discord 使用 `/settings` 初始化您的交易配置。
 
 ---
 
-## 📄 授權條款
-
+## 📄 License
 本專案採用 [MIT 授權條款](LICENSE)。
-
----
 
 <div align="center">
 
