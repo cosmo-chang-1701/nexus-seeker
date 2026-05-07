@@ -56,6 +56,13 @@ The system is divided into two main services:
     docker compose up -d --build
     ```
 
+### Deployment Strategy
+The system utilizes **Docker Swarm** with a `start-first` update configuration to achieve a Blue-Green style handoff:
+1.  **Green (New)** instance is launched.
+2.  The `bot_healthy.py` healthcheck verifies that the new instance has successfully established a WebSocket connection to Discord.
+3.  Only after the new instance is confirmed healthy is the **Blue (Old)** instance terminated.
+4.  Automatic **Rollback** is triggered if the new instance fails to connect.
+
 ### Testing
 Tests are located in `nexus_core/tests/`.
 - **Mandate:** All tests and debug scripts MUST be executed within the Docker container environment to ensure dependency and configuration consistency.

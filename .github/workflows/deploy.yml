@@ -126,8 +126,14 @@ jobs:
                   restart_policy:
                     condition: any
                   update_config:
-                    order: stop-first
+                    order: start-first
                     failure_action: rollback
+                    delay: 10s
+                    monitor: 30s
+                    max_failure_ratio: 0.1
+                  rollback_config:
+                    order: stop-first
+                    failure_action: pause
                     delay: 10s
                 volumes:
                   - nexus-data:/app/data

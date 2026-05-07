@@ -92,6 +92,8 @@ graph TD
     每 30 分鐘自動審計投資組合，執行 **Profit Lock (DITM 防禦)** 與 **Gamma Fragility (脆性偵測)**。
 *   **GhostTrader (VTR)**：
     全功能虛擬交易室，支援自動化策略回測與實時績效歸因，提供每週勝率、損益比專業報表。
+*   **Zero-Downtime Deployment**：
+    採用 Docker Swarm `start-first` 藍綠部屬策略，確保新版本 Bot 成功連線 Discord 並通過健康檢查後，才移除舊版本執行個體，維持服務 24/7 不中斷。
 
 ---
 
