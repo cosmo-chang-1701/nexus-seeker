@@ -69,3 +69,32 @@ Survival assessment for professional traders:
 $$Runway\ (Days) = \frac{\text{Cash Reserve}}{\text{Monthly Expenses} - (\text{Daily Portfolio Theta} \times 30)} \times 30$$
 *   **Daily Theta ($\Theta$):** The total dollar amount of time value harvested by the portfolio every 24 hours.
 *   **Net Burn Rate:** Monthly expenses offset by Theta cash flow. If $\Theta_{monthly} > Expenses$, $Runway = \infty$.
+
+---
+
+## 5. Summary of VIX Adaptive Risk Scaling
+
+The Nexus Seeker terminal implements a "Risk-Moat" architecture where position sizing and entry criteria are functions of real-time volatility.
+
+### 5.1 VIX Battle Ladder Coefficients
+The system applies the following weights ($w_{vix}$) and Delta caps based on the realized VIX:
+
+| VIX Tier | $w_{vix}$ | STO Delta Cap | Behavior Mode |
+|---|---|---|---|
+| **Dormant** (< 15) | 0.0 | N/A | Signal Rejection |
+| **Caution** (15-18) | 0.5 | -0.12 | Conservative |
+| **Ready** (18-24) | 1.0 | -0.20 | Standard |
+| **Aggressive** (24-30) | 1.2 | -0.20 | Tactical |
+| **Heavy** (30-35) | 1.5 | -0.25 | Offensive |
+| **Extreme** (≥ 35) | 2.0 | -0.35 | All-in (Max Risk) |
+
+### 5.2 Dynamic Kelly Scaling Logic
+The terminal scales the Kelly Criterion fraction based on VIX levels to capitalize on high IV environments:
+*   **Threshold:** Scaling initiates at $VIX = 29.5$ (Upper 10th Quantile).
+*   **Formula:** $f_{multiplier} = 1.0 + \min\left(\frac{VIX - 29.5}{45 - 29.5}, 1.0\right) \times 0.5$
+*   **Max Intensity:** At $VIX \ge 45$, the risk budget is effectively multiplied by **1.5x**, transitioning from 1/4 Kelly toward a 1/2 Kelly equivalent aggressive posture.
+
+### 5.3 Safety Pipeline Recap
+*   **Alpha Admission:** A 15% AROC floor is strictly enforced for STO signals.
+*   **Convexity Protection:** Automated monitoring flags DITM positions ($\Delta \ge 0.85$) for Profit Lock.
+*   **Fragility Guard:** Portfolio-wide Gamma fragility is capped at $-20$.

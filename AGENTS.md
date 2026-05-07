@@ -75,7 +75,7 @@ Tests are located in `nexus_core/tests/`.
 
 ### 1. Database Migrations
 Never modify the database schema manually. Use the migration engine:
-- Create a new file in `nexus_core/database/migrations/` (e.g., `v023_set_pro_mode_default.py`).
+- Create a new file in `nexus_core/database/migrations/` (e.g., `v024_add_kv_cache.py`).
 - Export `version` (int), `description` (str), and `sql` (str).
 - The bot will automatically apply it on the next startup.
 

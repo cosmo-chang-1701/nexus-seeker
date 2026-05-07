@@ -14,13 +14,9 @@ class NexusBot(commands.Bot):
         self.message_queue = asyncio.Queue()
 
     async def setup_hook(self):
-        await self.load_extension("cogs.portfolio")
-        await self.load_extension("cogs.watchlist")
+        await self.load_extension("cogs.terminal")
         await self.load_extension("cogs.trading")
-        await self.load_extension("cogs.research")
-        await self.load_extension("cogs.debug")
         await self.load_extension("cogs.analyst_agent")
-        await self.load_extension("cogs.pro_investor")
         
         # 啟動背景任務與服務
         self.loop.create_task(self._message_worker())

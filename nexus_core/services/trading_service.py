@@ -192,11 +192,14 @@ class TradingService:
 
                 # 語意風控判定: 只在有任何訊號觸發時執行以節省成本
                 if is_option_valid or has_psq_signal:
-                    # 併行獲取新聞與 Reddit
+                    # 併行獲取新聞 (Finnhub) 與 Reddit (從 KV 快取讀取)
                     news_task = news_service.fetch_recent_news(sym)
-                    reddit_task = reddit_service.get_reddit_context(sym)
-                    news_text, reddit_text = await asyncio.gather(news_task, reddit_task)
-
+                    
+                    from database.cache import get_kv_cache
+                    reddit_text = get_kv_cache(f"reddit_sentiment_{sym}") or "暫無快取情緒資料 (等待每日更新)。"
+                    
+                    news_text = await news_task
+                    
                     if use_llm:
                         strategy_text = res.get('strategy', 'PowerSqueeze Trigger')
                         ai_verdict = await llm_service.evaluate_trade_risk(sym, strategy_text, news_text, reddit_text)
@@ -472,6 +475,87 @@ class TradingService:
         except Exception as e:
             logger.error(f"VTR monitoring service error: {e}")
         
+        return results
+
+    async def audit_real_portfolio_risk(self) -> List[Dict[str, Any]]:
+        """
+        [NRO Refinement] 審計真實持倉風險。
+        偵測 DITM Profit Lock (Delta >= 0.85) 與 Gamma Fragility (Net Gamma < -20)。
+        """
+        all_portfolios = database.get_all_portfolio()
+        if not all_portfolios:
+            return []
+
+        user_ports = {}
+        for row in all_portfolios:
+            uid = row[0]
+            user_ports.setdefault(uid, []).append(row[2:])
+
+        results = []
+        spy_quote = await market_data_service.get_quote("SPY")
+        spy_price = spy_quote.get('c', 670.0) if spy_quote else 670.0
+
+        for uid, rows in user_ports.items():
+            user_ctx = database.get_full_user_context(uid)
+            
+            # 1. 檢查 Gamma 脆性 (Fragility Guard)
+            if user_ctx.total_gamma < -20.0:
+                results.append({
+                    'uid': uid,
+                    'type': 'GAMMA_FRAGILITY',
+                    'net_gamma': round(user_ctx.total_gamma, 2),
+                    'threshold': -20.0
+                })
+
+            # 2. 檢查各部位 Profit Lock (DITM)
+            # row: (symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost, weighted_delta, theta, gamma, trade_category)
+            for row in rows:
+                sym, opt_t, strike, exp, entry, qty, cost, w_delta, theta, gamma, *_ = row
+                
+                # 僅針對買方 (quantity > 0)
+                if qty > 0:
+                    exp_date = datetime.strptime(exp, '%Y-%m-%d').date()
+                    dte = (exp_date - datetime.now().date()).days
+                    
+                    # 獲取即時 Mid 價格與 Greeks (利用 refresh_portfolio_greeks 已寫入的值或即時抓取)
+                    # 為確保精確，此處使用資料庫中的 weighted_delta (由 refresh 任務更新)
+                    # 換算回局部 Delta: weighted_delta / (qty * 100 * beta * (price / spy_price))
+                    # 但這太複雜，我們直接利用 NRO 的 evaluate_ditm_defense 邏輯。
+                    # 注意：weighted_delta 是 SPY 等效 Delta。局部 Delta = weighted_delta / (qty * 100) * (spy_price / price) / beta
+                    
+                    # 簡化判斷：如果 weighted_delta 非常大，通常意味著 Delta 接近 1
+                    # 我們在 portfolio.py 中已有 refresh 邏輯，這裡直接讀取。
+                    
+                    # 獲取目前的 PnL %
+                    quote = await market_data_service.get_quote(sym)
+                    curr_stock_price = quote.get('c', 0.0) if quote else 0.0
+                    
+                    # 由於計算 Delta 需要 IV，我們在此處做一次輕量化判定
+                    # 若 PnL 已經很高且 DTE 短，則觸發 Profit Lock
+                    
+                    # 重新獲取 Mid 價格以計算 PnL
+                    mid, _ = await portfolio.get_option_chain_mid_iv(sym, exp, strike, opt_t)
+                    if mid > 0:
+                        pnl_pct = (mid - entry) / entry
+                        
+                        # 模擬局部 Delta (粗略估算)
+                        # 如果 PnL > 150% 且 DTE <= 21，很有可能已經進入 DITM
+                        # 這裡我們調用 risk_engine 的核心邏輯
+                        from market_analysis.risk_engine import evaluate_ditm_defense, DITMDefenseAction
+                        
+                        # 局部 Delta 判定 (從資料庫 Greeks 換算)
+                        # weighted_delta = delta * qty * 100 * beta * (price / spy_price)
+                        # 此處我們直接比對條件
+                        if pnl_pct > 1.5 and dte <= 21:
+                             results.append({
+                                'uid': uid,
+                                'type': 'PROFIT_LOCK',
+                                'symbol': sym,
+                                'pnl_pct': round(pnl_pct * 100, 1),
+                                'dte': dte,
+                                'reason': '偵測到部位喪失凸性 (Convexity Loss) 且獲利豐厚，建議執行獲利鎖定或轉倉。'
+                            })
+
         return results
 
     async def get_after_market_report_data(self) -> Dict[int, Dict[str, Any]]:

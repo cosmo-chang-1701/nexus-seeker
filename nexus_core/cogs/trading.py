@@ -34,6 +34,8 @@ class SchedulerCog(commands.Cog):
         self.dynamic_market_scanner.start()
         self.dynamic_after_market_report.start()
         self.monitor_vtr_task.start()
+        self.monitor_real_portfolio_task.start()
+        self.daily_reddit_update.start()
         self.weekly_vtr_report_task.start()
 
         # 狀態與設定 (由 Cog 維護，與 Discord 狀態相關)
@@ -52,8 +54,85 @@ class SchedulerCog(commands.Cog):
         self.dynamic_market_scanner.cancel()
         self.dynamic_after_market_report.cancel()
         self.monitor_vtr_task.cancel()
+        self.monitor_real_portfolio_task.cancel()
+        self.daily_reddit_update.cancel()
         self.weekly_vtr_report_task.cancel()
         logger.info("SchedulerCog unloaded. Background tasks cancelled.")
+
+    # ==========================================
+    # 🚀 Reddit 散戶情緒每日非同步更新 (08:30 ET)
+    # ==========================================
+    @tasks.loop(time=time(hour=8, minute=30, tzinfo=ny_tz))
+    async def daily_reddit_update(self):
+        """08:30：每日更新 Reddit 散戶情緒快取 (低頻率任務)"""
+        logger.info("🕸️ [Daily Update] 開始非同步抓取 Reddit 情緒快取...")
+        all_watchlists = database.get_all_watchlist()
+        symbols = sorted(list(set(row[1] for row in all_watchlists)))
+        
+        from services.reddit_service import get_reddit_context
+        from database.cache import save_kv_cache
+        
+        for sym in symbols:
+            try:
+                # 抓取情緒並存入 KV 快取 (key: reddit_sentiment_{symbol})
+                sentiment = await get_reddit_context(sym, limit=5)
+                save_kv_cache(f"reddit_sentiment_{sym}", sentiment)
+                logger.info(f"✅ [{sym}] Reddit 情緒快取已更新。")
+                await asyncio.sleep(2) # 減少 Tunnel 壓力
+            except Exception as e:
+                logger.error(f"[{sym}] 每日 Reddit 更新失敗: {e}")
+
+    @daily_reddit_update.before_loop
+    async def before_daily_reddit_update(self):
+        await self.bot.wait_until_ready()
+
+    # ==========================================
+    # 🚀 真實持倉風險動態審計
+    # ==========================================
+    @tasks.loop(minutes=30)
+    async def monitor_real_portfolio_task(self):
+        """每 30 分鐘審計真實持倉風險 (DITM & Gamma Fragility)"""
+        if not market_time.is_market_open():
+            return
+            
+        logger.info("🛡️ [NRO] 開始執行真實持倉風險審計...")
+        try:
+            risk_events = await self.trading_service.audit_real_portfolio_risk()
+
+            for event in risk_events:
+                uid = event['uid']
+                if event['type'] == 'PROFIT_LOCK':
+                    embed = discord.Embed(
+                        title="🚨 NRO 優先指令：Profit Lock (DITM 凸性防禦)",
+                        description=f"偵測到標的 **{event['symbol']}** 已進入深價內 (DITM)，凸性消失且風險報酬比惡化。",
+                        color=discord.Color.gold()
+                    )
+                    embed.add_field(name="觸發指標", value=f"```\n未實現損益: {event['pnl_pct']}% | DTE: {event['dte']}\n```", inline=False)
+                    embed.add_field(name="建議行動", value=f"✅ **獲利鎖定 (Profit Lock)**", inline=True)
+                    embed.add_field(name="核心邏輯", value=event['reason'], inline=False)
+                    embed.set_footer(text="Mission-Critical Risk Environment | Nexus Seeker")
+                    embed.timestamp = datetime.now(ny_tz)
+                    await self.bot.queue_dm(uid, embed=embed)
+                    
+                elif event['type'] == 'GAMMA_FRAGILITY':
+                    embed = discord.Embed(
+                        title="🆘 NRO 緊急警報：Gamma Fragility (組合脆性預警)",
+                        description="偵測到投資組合淨 Gamma 已跌破臨界點，曝險加速度呈非線性擴張。",
+                        color=discord.Color.dark_red()
+                    )
+                    embed.add_field(name="目前淨 Gamma", value=f"`{event['net_gamma']}`", inline=True)
+                    embed.add_field(name="安全臨界點", value=f"`{event['threshold']}`", inline=True)
+                    embed.add_field(name="優先指令", value="🛡️ **注入正 Gamma 緩衝 (買入近月 ATM 期權) 或 立即減倉**", inline=False)
+                    embed.set_footer(text="Fragility Guard Engine v2.0 | Nexus Seeker")
+                    embed.timestamp = datetime.now(ny_tz)
+                    await self.bot.queue_dm(uid, embed=embed)
+
+        except Exception as e:
+            logger.error(f"真實持倉風險審計錯誤: {e}")
+
+    @monitor_real_portfolio_task.before_loop
+    async def before_monitor_real_portfolio_task(self):
+        await self.bot.wait_until_ready()
 
     # ==========================================
     # 🚀 每週 VTR 績效週報 (美東週五 17:05)

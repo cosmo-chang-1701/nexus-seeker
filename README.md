@@ -22,7 +22,7 @@
 | **量化定價引擎** | Black-Scholes-Merton (via `py_vollib`, 含股息率校正) |
 | **風險精算核心** | Nexus Risk Optimizer (NRO) - 二階 Beta-Weighted 曝險模型 |
 | **數據源 (Feeds)** | Finnhub (Real-time), yfinance (Chain), Polymarket (WS L2), Reddit (Edge) |
-| **持久化層** | SQLite 搭配自動化 Migration Engine (v023+) |
+| **持久化層** | SQLite 搭配自動化 Migration Engine (v024+) |
 | **智能層** | Structured LLM Output (Pydantic Schema) via OpenAI-compatible API |
 | **訊息傳遞** | Discord.py (非同步訊息佇列，支援多租戶隔離) |
 
@@ -30,7 +30,7 @@
 
 ## 🏗 System Architecture
 
-系統採用分散式雙服務架構，確保雲端執行效率與邊緣爬蟲的隱私性。
+系統採用分散式雙服務架構，確保雲端執行效率與邊緣爬蟲的隱私性。Reddit 數據現在以每日非同步方式抓取並快取，極大化掃描響應速度。
 
 ```mermaid
 graph TD
@@ -38,8 +38,9 @@ graph TD
         Bot[NexusBot Core]
         TS[TradingService - Business Logic]
         RE[Risk Engine - NRO]
-        DB[(SQLite DB v023)]
+        DB[(SQLite DB v024)]
         S[Services - LLM/Polymarket]
+        C[KV Cache - Reddit]
     end
 
     subgraph Edge_Environment [Local / Edge Scraper]
@@ -81,12 +82,14 @@ graph TD
 ### 2. Market Intelligence (邊緣偵測)
 *   **Polymarket Whale Tracking**：
     透過 WebSocket 即時監控預測市場 **L2 Order Book**。結合 LLM 進行 **Taker Intent Mapping (主動意圖映射)**，識別機構級巨鯨建倉動機。
-*   **Reddit Edge Scraper**：
-    透過 Cloudflare Tunnel 於本地端擷取散戶共識指標，精準識別 **Retail Sentiment Shift (散戶情緒轉向)**。
+*   **Asynchronous Reddit Intelligence**：
+    Reddit 散戶共識指標改為每日定時非同步抓取並快取，確保盤中掃描不受爬蟲延遲影響，同時降低 Tunnel 負載。
 
 ### 3. Execution Automation
 *   **NYSE Dynamic Scheduler**：
     精準對齊交易所交易時鐘，以 30 分鐘為心跳進行全自動化掃描，避開造市商無報價時段。
+*   **Intra-day Risk Audit**：
+    每 30 分鐘自動審計投資組合，執行 **Profit Lock (DITM 防禦)** 與 **Gamma Fragility (脆性偵測)**。
 *   **GhostTrader (VTR)**：
     全功能虛擬交易室，支援自動化策略回測與實時績效歸因，提供每週勝率、損益比專業報表。
 
@@ -122,9 +125,9 @@ stateDiagram-v2
 | `/add_trade` | 登錄實單部位至 NRO 監控管線 | `symbol`, `opt_type`, `strike`, `qty`, `cost` | User |
 | `/scan` | 手動執行量化掃描與 What-if 曝險模擬 | `symbol` | User |
 | `/vtr_stats` | 檢視虛擬交易室勝率與盈虧歸因週報 | — | User |
-| `/transition_sim` | 模擬投機部位向 Core Equity/Covered Call 演進 | `symbol`, `target_price`, `realized_pnl` | User |
+| `/list_trades` | 列出目前資料庫中的所有實單持倉 | — | User |
+| `/remove_trade` | 將部位從監控管線中移除 | `trade_id` | User |
 | `/force_scan` | [Admin] 立即驅動全站同步掃描與私訊分發 | — | Admin |
-| `/poly_list` | 檢視 Polymarket 巨鯨監控中的活躍市場 | — | User |
 
 > **策略邏輯與 VIX 戰情細節：** 關於詳細的量化濾網規則與 VIX 階梯係數，請參閱 [docs/STRATEGY.md](docs/STRATEGY.md)。
 
