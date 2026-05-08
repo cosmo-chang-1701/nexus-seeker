@@ -115,7 +115,7 @@ class ProInvestorCog(commands.Cog):
         
         # Income sustainability
         status_text = "Sustainable" if income_ratio >= 1.0 else "Deficit"
-        embed.add_field(name="Income/Expense Ratio", value=f"{income_ratio:.2f} ({status_text})", inline=True)
+        embed.add_field(name="Income/Expense Ratio", value=f"`{income_ratio:.2%}` ({status_text})", inline=True)
         
         # Survival days
         runway_val = "♾️ 無限 (收益覆蓋支出)" if runway_days >= 9999 else f"{runway_days:,.1f} 天"

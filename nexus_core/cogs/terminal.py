@@ -174,7 +174,7 @@ class TerminalCog(commands.Cog):
         embed.add_field(name="現金儲備健康度", value=f"`${ctx.cash_reserve:,.2f}`", inline=False)
         
         status_text = "可持續" if income_ratio >= 1.0 else "入不敷出"
-        embed.add_field(name="收益支出比", value=f"{income_ratio:.2f} ({status_text})", inline=True)
+        embed.add_field(name="收益支出比", value=f"`{income_ratio:.2%}` ({status_text})", inline=True)
         
         runway_val = "♾️ 無限 (收益覆蓋支出)" if runway_days >= 9999 else f"{runway_days:,.1f} 天"
         embed.add_field(name="預估生存天數", value=f"`{runway_val}`", inline=True)
