@@ -128,6 +128,10 @@ stateDiagram-v2
 | `/add_trade` | 登錄實單部位至 NRO 監控管線 (含 YYYY-MM-DD 驗證) | `symbol`, `opt_type`, `strike`, `qty`, `expiry`, `cost` | User |
 | `/scan` | 手動執行量化掃描與 What-if 曝險模擬 | `symbol` | User |
 | `/vtr_stats` | 檢視虛擬交易室勝率與盈虧歸因週報 | — | User |
+| `/vtr_list` | 列出虛擬交易室中的所有持倉與歷史紀錄 | — | User |
+| `/add_watch` | 將標的加入自動化量化監控清單 | `symbol`, `stock_cost`, `use_llm` | User |
+| `/edit_watch` | 修改觀察清單中的標的參數 | `symbol`, `stock_cost`, `use_llm` | User |
+| `/remove_watch` | 將標的從觀察清單中移除 | `symbol` | User |
 | `/list_trades` | 列出目前資料庫中的所有實單持倉 | — | User |
 | `/remove_trade` | 將部位從監控管線中移除 | `trade_id` | User |
 | `/poly_list` | 顯示 Polymarket 活躍市場清單與巨鯨意圖 | — | User |

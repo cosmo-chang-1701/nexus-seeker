@@ -309,6 +309,57 @@ class TerminalCog(commands.Cog):
         except Exception:
             await interaction.followup.send("❌ 無法獲取績效數據。", ephemeral=True)
 
+    @app_commands.command(name="vtr_list", description="列出虛擬交易室中的所有持倉與歷史紀錄")
+    async def vtr_list(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        from database.virtual_trading import get_all_virtual_trades
+        rows = get_all_virtual_trades(interaction.user.id)
+        if not rows:
+            return await interaction.followup.send("📭 虛擬交易室目前無任何紀錄。", ephemeral=True)
+        
+        msg = "👻 **【虛擬交易室 (VTR) 紀錄清單】**\n"
+        for row in rows[:20]: # 限制顯示最近 20 筆
+            status_emoji = "🟢" if row['status'] == 'OPEN' else "⚪"
+            pnl_str = f" | PnL: `{row['pnl']:+.2f}`" if row['status'] != 'OPEN' else ""
+            msg += f"{status_emoji} `ID:{row['id']:02d}` | **{row['symbol']}** | ${row['strike']} {row['opt_type'].upper()} | {row['status']}{pnl_str}\n"
+        
+        if len(rows) > 20:
+            msg += f"\n*(僅顯示最近 20 筆，總計 {len(rows)} 筆)*"
+            
+        await interaction.followup.send(msg, ephemeral=True)
+
+    @app_commands.command(name="add_watch", description="將標的加入自動化量化監控清單")
+    @app_commands.describe(symbol="股票代號 (如 TSLA)", stock_cost="持股成本 (選填)", use_llm="是否啟用 AI 輔助分析")
+    async def add_watch(self, interaction: discord.Interaction, symbol: str, stock_cost: float = 0.0, use_llm: bool = True):
+        symbol = symbol.upper()
+        from database.watchlist import add_watchlist_symbol
+        success = add_watchlist_symbol(interaction.user.id, symbol, stock_cost, use_llm)
+        if success:
+            await interaction.response.send_message(f"✅ **已加入觀察清單**: `{symbol}` (AI 分析: `{'開啟' if use_llm else '關閉'}`)", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"⚠️ `{symbol}` 已在您的觀察清單中。", ephemeral=True)
+
+    @app_commands.command(name="edit_watch", description="修改觀察清單中的標的參數")
+    @app_commands.describe(symbol="要修改的股票代號", stock_cost="更新持股成本 (選填)", use_llm="更新 AI 輔助分析開關 (選填)")
+    async def edit_watch(self, interaction: discord.Interaction, symbol: str, stock_cost: Optional[float] = None, use_llm: Optional[bool] = None):
+        symbol = symbol.upper()
+        from database.watchlist import update_user_watchlist
+        success = update_user_watchlist(interaction.user.id, symbol, stock_cost, use_llm)
+        if success:
+            await interaction.response.send_message(f"✅ **已更新觀察設定**: `{symbol}`", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"❌ 找不到標的 `{symbol}` 或未提供任何修改參數。", ephemeral=True)
+
+    @app_commands.command(name="remove_watch", description="將標的從觀察清單中移除")
+    async def remove_watch(self, interaction: discord.Interaction, symbol: str):
+        symbol = symbol.upper()
+        from database.watchlist import delete_watchlist_symbol
+        success = delete_watchlist_symbol(interaction.user.id, symbol)
+        if success:
+            await interaction.response.send_message(f"🗑️ **已移除觀察標的**: `{symbol}`", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"❌ 您的觀察清單中找不到 `{symbol}`。", ephemeral=True)
+
     @app_commands.command(name="list_trades", description="列出目前資料庫中的所有實單持倉")
     async def list_trades(self, interaction: discord.Interaction):
         user_id = interaction.user.id
