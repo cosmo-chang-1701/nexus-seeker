@@ -44,6 +44,20 @@ class PortfolioCog(commands.Cog):
         user_id = interaction.user.id
         trade_category = category.value if category else "SPECULATIVE"
         
+        # 🛡️ Defensive Programming: Validate Expiry Date Format
+        from datetime import datetime
+        try:
+            # Only capture the first 10 characters (YYYY-MM-DD) to prevent trailing argument capture
+            expiry_clean = expiry.split(' ')[0]
+            datetime.strptime(expiry_clean, '%Y-%m-%d')
+            expiry = expiry_clean # Standardized format
+        except Exception:
+            await interaction.response.send_message(
+                f"❌ **日期格式錯誤**: `{expiry}`。請確保為 `YYYY-MM-DD` 格式。", 
+                ephemeral=True
+            )
+            return
+
         # 自動優化：通常 SPY Short Call/Put 或 BTO Put 可能是對沖
         if not category and symbol == "SPY":
             if quantity < 0 or (opt_type.value == "put" and quantity > 0):
