@@ -25,7 +25,11 @@ The system is divided into two main services:
 - **`market_analysis/`**: The quant engine. Contains strategy logic (with VIX ladder gating and delta capping), Greek calculations, PowerSqueeze (PSQ) scoring (with VIX-aware momentum labeling), hedging simulations, NRO risk optimization (with dynamic Kelly scaling and All-in bypass), and margin analysis.
 - **`database/`**: Persistent storage layer with an automated migration engine (`database/core.py`) that scans `database/migrations/` on startup. Includes aggregated Greeks tracking across real and virtual portfolios.
 - **`services/`**: Business logic layer (`TradingService`, `LLMService`, `PolymarketService`, `MarketDataService`, `NewsService`, `RedditService`) that decouples the Discord UI from core computations.
-- `cogs/`: Discord extensions implementing slash commands and background tasks (Market Scanning, VTR monitoring, Daily Reports, Analyst Agent, Financial Analytics).
+- `cogs/`: Discord extensions implementing slash commands and background tasks.
+  - **`terminal.py`**: High-impact professional terminal commands (`/runway_check`, `/scan`, `/settings`).
+  - **`intelligence.py`**: Market intelligence and edge detection terminal (`/poly_list`, `/scan_news`, `/scan_reddit`, `/quote`).
+  - **`trading.py`**: Automated market scanning and background risk auditing.
+  - **`analyst_agent.py`**: Scheduled Wall Street Quantitative Analyst Agent.
 
 - **`ui/`**: Reusable Discord UI components and views for interactive commands.
 

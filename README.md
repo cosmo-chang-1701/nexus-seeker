@@ -125,12 +125,17 @@ stateDiagram-v2
 |---|---|---|---|
 | `/settings` | 配置全域資產、風險、生存支出與推播開關 | `capital`, `risk_limit`, `expense`, `cash_reserve` | User |
 | `/runway_check` | 執行財務生存跑道與 Theta 收益分析 | — | User |
-| `/add_trade` | 登錄實單部位至 NRO 監控管線 | `symbol`, `opt_type`, `strike`, `qty`, `cost` | User |
+| `/add_trade` | 登錄實單部位至 NRO 監控管線 (含 YYYY-MM-DD 驗證) | `symbol`, `opt_type`, `strike`, `qty`, `expiry`, `cost` | User |
 | `/scan` | 手動執行量化掃描與 What-if 曝險模擬 | `symbol` | User |
 | `/vtr_stats` | 檢視虛擬交易室勝率與盈虧歸因週報 | — | User |
 | `/list_trades` | 列出目前資料庫中的所有實單持倉 | — | User |
 | `/remove_trade` | 將部位從監控管線中移除 | `trade_id` | User |
+| `/poly_list` | 顯示 Polymarket 活躍市場清單與巨鯨意圖 | — | User |
+| `/quote` | 獲取標的之即時報價與漲跌資訊 | `symbol` | User |
+| `/scan_news` | 掃描特定標的之最新官方新聞 | `symbol` | User |
+| `/scan_reddit` | 掃描特定標的之 Reddit 散戶情緒 | `symbol` | User |
 | `/force_scan` | [Admin] 立即驅動全站同步掃描與私訊分發 | — | Admin |
+| `/poly_status` | [Admin] 查看 Polymarket WebSocket 連線狀態 | — | Admin |
 
 > **策略邏輯與 VIX 戰情細節：** 關於詳細的量化濾網規則與 VIX 階梯係數，請參閱 [docs/STRATEGY.md](docs/STRATEGY.md)。
 
