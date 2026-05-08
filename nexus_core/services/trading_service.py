@@ -73,6 +73,10 @@ class TradingService:
                             'days_left': days_left
                         }
                         alerts.append(item)
+            
+            # 🚀 根據距離財報天數升冪排序 (0天優先)
+            alerts.sort(key=lambda x: x['days_left'])
+            
             results[uid] = {
                 'alerts': alerts,
                 'scanned_symbols': sorted(combined_symbols)
