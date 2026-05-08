@@ -64,6 +64,7 @@ graph TD
 
 *   **財務生存與跑道分析 (Financial Survival & Runway)**：
     系統自動對照使用者的 **Cash Reserve (現金儲備)** 與 **Monthly Expenses (每月支出)**，利用投資組合的 **Total Theta (每日總 Theta 收租額)** 動態估算「財務生存天數」。透過 `/runway_check` 隨時掌握現金流健康度。
+    *   **收益支出比 (Income/Expense Ratio)**：採用百分比格式渲染（如 `0.48%`），精確追蹤微小現金流貢獻。
 *   **Capital Efficiency (AROC 門檻)**：
     嚴格執行 **15% Annualized Return on Capital (AROC)** 准入制度。所有 **STO (Sell-to-Open)** 訊號若年化回報率低於 15%，將被系統過濾器直接攔截 (Blocked)，確保保證金利用率極大化。
 
@@ -74,7 +75,7 @@ graph TD
 ### 1. Risk Integrity (NRO 引擎)
 *   **Gamma Fragility Warning (Gamma 脆弱性警告)**：
     利用二階 Beta-Weighted 平方加權監控投資組合的淨 Gamma。當偵測到非線性風險加速時（淨 Gamma < −20），自動發出脆弱性警告。
-*   **DITM Convexity Guard (獲利鎖定)**：
+*   **DITM 凸性防護 (Convexity Guard)**：
     針對買方部位，當 **Delta ≥ 0.85** 且獲利豐厚時，偵測到部位喪失 **Convexity (凸性)** 並轉化為合成現股。系統會發出 **"Profit Lock" (獲利鎖定)** 優先指令，強制執行資本回收。
 *   **VIX 戰情階梯 (Battle Ladder)**：
     6 階段自適應風險調控系統，根據即時波動率動態縮放 **Kelly Criterion (凱利準則)** 比例與 **Target Delta (目標曝險)**。

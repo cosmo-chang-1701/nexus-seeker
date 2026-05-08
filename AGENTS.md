@@ -96,14 +96,16 @@ New commands should be added as **Slash Commands** within a Cog in `nexus_core/c
 - Core logic belongs in `nexus_core/market_analysis/strategy.py`.
 - Use the `AlertFilter` in `services/alert_filter.py` to implement noise reduction (e.g., EMA crossovers, multi-timeframe alignment).
 - `GhostTrader` (`market_analysis/ghost_trader.py`) handles the Virtual Trading Room (VTR) logic, simulating entries and tracking virtual performance. VTR auto-entry is gated by VIX tier permissions (`vtr_entry_allowed`). Implements autonomous **DITM Profit Lock** defense.
-- `PSQ Engine` (`market_analysis/psq_engine.py`) provides the PowerSqueeze momentum indicator with VIX-aware labeling (`OVEREXTENDED_RISK`, `HIGH_CONVICTION_RECOVERY`).
+- `PSQ Engine` (`market_analysis/psq_engine.py`) provides the PowerSqueeze momentum indicator with VIX-aware labeling (`OVEREXTENDED_RISK`, `HIGH_CONVICTION_RECOVERY`). Supports legacy aliases (`is_breakout_high`) for stability.
 - `NRO Risk Engine` (`market_analysis/risk_engine.py`) provides portfolio risk optimization with inverted VIX weights (high VIX = offensive posture), dynamic Kelly scaling (1/4 to 1/2 Kelly), and All-in bypass for VIX > 35. Enforces **Dormant Tier (VIX < 15)** STO rejection.
+- `Portfolio Management` (`market_analysis/portfolio.py`) handles Greeks refresh with **Implied Volatility (IV) back-solving** from market price (Mid/Last) if data feeds are missing.
 - `Financial Analytics` (`market_analysis/pro_management.py`) handles professional metrics like **Financial Survival Runway** and **Position Evolution (Transition) Simulations**.
 
 ### 4. Service Layer & Decision Pipeline
 - `TradingService` (`services/trading_service.py`) implements a **4-stage validation pipeline**: **Macro -> Alpha -> Risk -> Financials**.
 - **Alpha Filtering**: Enforces 15% minimum AROC for STO signals.
 - **Exposure Monitoring**: Generates actionable SPY hedge directives (e.g., "Sell 4 shares of SPY") when portfolio Delta exceeds ±50.
+- **Unit Standardization**: The system stores **Annual Greeks** (BSM standard) in the DB but aggregates and displays **Daily Theta** in the UI and `UserContext`.
 
 ### 5. VIX Battle Ladder
 The VIX Battle Ladder is a 6-tier system defined in `config.py` (`VIX_LADDER_CONFIG`) that dynamically governs risk appetite across all analysis modules:
@@ -122,7 +124,7 @@ The terminal's Discord output is localized to **Professional Traditional Chinese
 - **Standards:** 
   - Preserve Greek letters and professional acronyms (Delta, Gamma, Theta, Vega, AROC, DTE, STO, DITM, VIX, NRO) in English.
   - Standard Taiwan Financial Terminology: Margin -> 保證金, Portfolio -> 投資組合 / 部位, Hedge -> 對沖 / 避險, Convexity -> 凸性, Liquidity -> 流動性, Exposure -> 曝險.
-  - High-signal keywords: "攔截成功" (Intercepted), "審計完成" (Audit Complete), "執行指令" (Execution Command).
+  - High-signal keywords: "攔截成功" (Intercepted), "審計完成" (Audit Complete), "執行指令" (Execution Command), "DITM 凸性防護" (Convexity Guard).
 
 ### 7. Code Style
 - **Type Hinting:** Strictly define types for all functions and class members.
@@ -143,7 +145,9 @@ The terminal's Discord output is localized to **Professional Traditional Chinese
 - `nexus_core/market_analysis/risk_engine.py`: NRO risk optimizer — inverted VIX macro weights, dynamic Kelly scaling, and **Dormant tier enforcement**.
 - `nexus_core/market_analysis/hedging.py`: Portfolio Beta-Weighted Delta tracking and **actionable hedge directives**.
 - `nexus_core/market_analysis/ghost_trader.py`: Virtual Trade Replicator and VTR logic. Implements **Profit Lock (DITM)** defensive actions.
+- `nexus_core/market_analysis/portfolio.py`: Handles portfolio Greeks refresh with **IV back-solving** and standardized DB updates.
 - `nexus_core/market_analysis/pro_management.py`: Quantitative survival analysis (**Financial Runway**) and **Position Evolution** simulations.
+- `nexus_core/database/user_settings.py`: User profile management and **robust SQL aggregation** (converts Annual to Daily Theta).
 - `nexus_core/cogs/embed_builder.py`: Discord UI/UX generator — renders VIX Battle Status, momentum labels, **Runway metrics**, and **Hedge directives**.
 - **`nexus_core/cogs/analyst_agent.py`**: Scheduled Wall Street Quantitative Analyst Agent.
 - `nexus_core/database/core.py`: SQLite migration engine core logic.
