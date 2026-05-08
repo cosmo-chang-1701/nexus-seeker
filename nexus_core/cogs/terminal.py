@@ -140,6 +140,11 @@ class TerminalCog(commands.Cog):
     async def runway_check(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         user_id = interaction.user.id
+        
+        # 🚀 執行即時 Greeks 刷新，確保數據最新
+        from market_analysis.portfolio import refresh_portfolio_greeks
+        await refresh_portfolio_greeks(user_id)
+        
         ctx = get_full_user_context(user_id)
         
         if ctx.monthly_expense <= 0:

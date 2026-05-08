@@ -123,7 +123,10 @@ class PortfolioStatusOrchestrator:
                 weight_factor = beta * (current_stock_price / self.spy_price)
                 spx_weighted_delta = greeks['delta'] * quantity * 100 * weight_factor
                 self.total_beta_delta += spx_weighted_delta
-                self.total_theta += greeks['theta'] * quantity * 100
+                
+                # py_vollib theta is Annual. Convert to Daily.
+                daily_theta = (greeks['theta'] * quantity * 100) / 365.0
+                self.total_theta += daily_theta
                 
                 pos_gamma = greeks['gamma'] * quantity * 100
                 spx_weighted_gamma = pos_gamma * (weight_factor ** 2)

@@ -43,10 +43,14 @@ def calculate_greeks(opt_type, stock_price, strike, t_years, iv, q):
     """計算單一選擇權的 Greeks (Delta, Theta, Gamma)。"""
     flag = 'c' if opt_type == 'call' else 'p'
     try:
+        if iv <= 0:
+            return {'delta': 0.0, 'theta': 0.0, 'gamma': 0.0}
+        
         return {
             'delta': delta(flag, stock_price, strike, t_years, RISK_FREE_RATE, iv, q),
             'theta': theta(flag, stock_price, strike, t_years, RISK_FREE_RATE, iv, q),
             'gamma': gamma(flag, stock_price, strike, t_years, RISK_FREE_RATE, iv, q)
         }
-    except:
+    except Exception as e:
+        logger.error(f"Greeks 計算發生異常 ({opt_type}, strike={strike}, iv={iv}): {e}")
         return {'delta': 0.0, 'theta': 0.0, 'gamma': 0.0}
