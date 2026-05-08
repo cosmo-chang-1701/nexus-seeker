@@ -142,7 +142,7 @@ The terminal's Discord output is localized to **Professional Traditional Chinese
 - `nexus_core/bot.py`: Main Bot class and background worker initialization.
 - `nexus_core/config.py`: Global configuration — env vars, strategy Delta params, **VIX Battle Ladder** tier definitions (`VIX_LADDER_CONFIG`), and `get_vix_tier()` helper.
 - `nexus_core/market_time.py`: NYSE market calendar and timezone-aware scheduling.
-- `nexus_core/services/trading_service.py`: Centralized business logic orchestrator. Implements the **4-stage validation pipeline** and manages VIX propagation.
+- `nexus_core/services/trading_service.py`: Centralized business logic orchestrator. Implements the **4-stage validation pipeline** and manages VIX propagation, as well as sorted pre-market earnings alerts.
 - **`services/polymarket_service.py`**: Real-time Polymarket whale monitoring service with **L2 Order Book Sync**. Features **Dynamic Slippage-based Thresholds** and **LLM Structured Output** for background analysis.
 - `nexus_core/market_analysis/strategy.py`: Quant scanning and filtering pipeline. VIX ladder gating, delta capping, and **AROC yield calculation**.
 - `nexus_core/market_analysis/psq_engine.py`: PowerSqueeze momentum calculation engine with VIX-aware labeling.

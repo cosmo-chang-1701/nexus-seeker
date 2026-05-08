@@ -89,6 +89,8 @@ graph TD
 ### 3. Execution Automation
 *   **NYSE 動態調度器 (Dynamic Scheduler)**：
     精準對齊交易所交易時鐘，以 30 分鐘為心跳 (Heartbeat) 進行全自動化掃描，避開造市商無報價時段。
+*   **盤前財報雷達 (Pre-market Earnings Radar)**：
+    每日 09:00 自動掃描持倉與觀察清單，依據距離財報天數**升冪排序**（0天優先），提供即時風險預警。
 *   **日內風險審計 (Intra-day Risk Audit)**：
     每 30 分鐘自動審計投資組合，執行 **獲利鎖定 (DITM 防禦)** 與 **Gamma 脆弱性偵測**。
 *   **GhostTrader (VTR)**：
