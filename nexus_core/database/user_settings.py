@@ -159,9 +159,9 @@ def get_full_user_context(user_id: int) -> UserContext:
                 LEFT JOIN (
                     SELECT 
                         user_id,
-                        SUM(weighted_delta) as sum_delta, 
-                        SUM(theta) as sum_theta,
-                        SUM(gamma) as sum_gamma
+                        SUM(COALESCE(weighted_delta, 0.0)) as sum_delta, 
+                        SUM(COALESCE(theta, 0.0)) as sum_theta,
+                        SUM(COALESCE(gamma, 0.0)) as sum_gamma
                     FROM (
                         SELECT user_id, weighted_delta, theta, gamma FROM portfolio
                         UNION ALL
@@ -175,13 +175,13 @@ def get_full_user_context(user_id: int) -> UserContext:
             user_row = cursor.fetchone()
             
             if not user_row:
-                # 若找不到使用者設定，回傳預設物件 (這通常不應發生，因為 upsert 會初始化)
                 return UserContext(user_id, 100000.0, 15.0, 0.0, 0.0, 0.0)
 
             # 提取 Greeks (Annual from DB -> Daily for Context)
-            sum_delta = user_row['sum_delta'] or 0.0
-            sum_theta = (user_row['sum_theta'] or 0.0) / 365.0
-            sum_gamma = user_row['sum_gamma'] or 0.0
+            # COALESCE ensures we don't get None here even if the JOIN failed to find trades
+            sum_delta = user_row['sum_delta'] if user_row['sum_delta'] is not None else 0.0
+            sum_theta = (user_row['sum_theta'] if user_row['sum_theta'] is not None else 0.0) / 365.0
+            sum_gamma = user_row['sum_gamma'] if user_row['sum_gamma'] is not None else 0.0
             
             # 處理基本設定與空值
             capital_raw = float(user_row['portfolio_value']) if user_row['portfolio_value'] is not None else 100000.0

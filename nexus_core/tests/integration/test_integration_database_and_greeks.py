@@ -92,7 +92,8 @@ class TestUserContextAggregation(DbIsolatedTestCase):
         self.assertEqual(ctx.capital, 50000.0)
         self.assertEqual(ctx.risk_limit_base, 50.0)
         self.assertAlmostEqual(ctx.total_weighted_delta, 15.0)
-        self.assertAlmostEqual(ctx.total_theta, -3.0)
+        # Context returns DAILY Theta (Annual / 365)
+        self.assertAlmostEqual(ctx.total_theta, -3.0 / 365.0)
         self.assertAlmostEqual(ctx.total_gamma, 0.3)
 
 

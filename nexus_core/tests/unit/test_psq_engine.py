@@ -129,5 +129,27 @@ class TestPSQEngine(unittest.TestCase):
         res2 = analyze_psq(self.df, length=20)
         self.assertEqual(res2.momentum_color, "Golden")
 
+    def test_psq_result_aliases(self):
+        """測試 PSQResult 的屬性別名是否運作正常 (Hotfix 驗證)"""
+        res = PSQResult(
+            squeeze_level="High",
+            is_squeezing=True,
+            momentum_value=1.5,
+            momentum_color="LightBlue",
+            signal_direction="Long",
+            is_near_support=False,
+            is_breakout_long=True,
+            is_breakout_short=False,
+            sma_distance_pct=1.0,
+            sma_20=100.0
+        )
+        self.assertTrue(res.is_breakout_high)
+        self.assertFalse(res.is_breakout_low)
+        
+        res.is_breakout_long = False
+        res.is_breakout_short = True
+        self.assertFalse(res.is_breakout_high)
+        self.assertTrue(res.is_breakout_low)
+
 if __name__ == '__main__':
     unittest.main()

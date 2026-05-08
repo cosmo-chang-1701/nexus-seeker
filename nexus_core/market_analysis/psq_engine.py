@@ -20,6 +20,14 @@ class PSQResult:
     vix_momentum_label: str = "NORMAL"   # "NORMAL", "OVEREXTENDED_RISK", "HIGH_CONVICTION_RECOVERY"
     vix_timeframe_note: str = ""         # 低 VIX 時建議使用的時間框架
 
+    @property
+    def is_breakout_high(self) -> bool:
+        return self.is_breakout_long
+
+    @property
+    def is_breakout_low(self) -> bool:
+        return self.is_breakout_short
+
 def analyze_psq(df: pd.DataFrame, length: int = 20, bb_mult: float = 2.0, kc_mults: list = [1.0, 1.5, 2.0], near_pct: float = 1.5, vix_spot: float = None) -> Optional[PSQResult]:
     """
     計算 PowerSqueeze (PSQ) 量化指標 (Ultimate Edition v2)。

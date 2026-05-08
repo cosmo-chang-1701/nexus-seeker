@@ -187,7 +187,7 @@ class TradingService:
                     res['psq_result'] = psq_result
 
                 has_psq_signal = False
-                if psq_result and (psq_result.is_breakout_high or psq_result.is_near_support):
+                if psq_result and (getattr(psq_result, 'is_breakout_long', False) or psq_result.is_near_support):
                     has_psq_signal = True
 
                 # 語意風控判定: 只在有任何訊號觸發時執行以節省成本
@@ -271,7 +271,7 @@ class TradingService:
                     
                     is_option_valid = base_data.get('is_option_valid', False)
                     psq_result = base_data.get('psq_result')
-                    has_psq_signal = psq_result and (psq_result.is_breakout_high or psq_result.is_near_support)
+                    has_psq_signal = psq_result and (getattr(psq_result, 'is_breakout_long', False) or psq_result.is_near_support)
                     
                     if not is_option_valid and not has_psq_signal:
                         continue # 此標的沒有任何觸發訊號

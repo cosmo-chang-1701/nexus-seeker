@@ -188,6 +188,7 @@ async def refresh_portfolio_greeks(user_id: int = None):
     try:
         from database.portfolio import get_all_portfolio, get_user_portfolio, update_portfolio_greeks
         from database.virtual_trading import get_all_open_virtual_trades, get_open_virtual_trades, update_virtual_trade_greeks
+        from py_vollib.black_scholes_merton.implied_volatility import implied_volatility
         
         if user_id:
             real_positions = await asyncio.to_thread(get_user_portfolio, user_id)
@@ -198,8 +199,8 @@ async def refresh_portfolio_greeks(user_id: int = None):
 
         symbols = set()
         for row in real_positions:
-            sym = row[2] if len(row) > 8 else row[1]
-            symbols.add(sym)
+            # Indices: 0(id), 1(symbol)...
+            symbols.add(row[1])
         for row in virtual_positions:
             symbols.add(row['symbol'])
         
@@ -218,25 +219,31 @@ async def refresh_portfolio_greeks(user_id: int = None):
                 'div_yield': await market_data_service.get_dividend_yield(sym)
             }
 
-        for row in real_positions:
-            # get_all_portfolio: (user_id, id, symbol, ...)
-            # get_user_portfolio: (id, symbol, ...)
-            if len(row) >= 13:
-                trade_id, sym, opt_type, strike, expiry, _, qty, _ = row[1:9]
-            elif len(row) >= 12:
-                trade_id, sym, opt_type, strike, expiry, _, qty, _ = row[0:8]
-            else:
-                continue
-            
+        async def _update_row_greeks(trade_id, sym, opt_type, strike, expiry, qty, is_virtual=False):
             s_info = stock_data.get(sym)
             if not s_info or s_info['price'] <= 0:
                 logger.warning(f"跳過 Greeks 更新: {sym} 無價格資訊")
-                continue
+                return
+
+            mid, iv_raw = await asyncio.to_thread(get_option_chain_mid_iv, sym, expiry, strike, opt_type)
             
-            mid, iv = await asyncio.to_thread(get_option_chain_mid_iv, sym, expiry, strike, opt_type)
+            # 🚀 [Data Layer Enhancement] 若 IV 為 0 但有市場價，嘗試反推 IV
+            iv = iv_raw
+            if iv <= 0.001 and mid > 0:
+                try:
+                    exp_date = datetime.strptime(expiry, '%Y-%m-%d').date()
+                    t_years = max((exp_date - datetime.now().date()).days, 1) / 365.0
+                    from config import RISK_FREE_RATE
+                    # implied_volatility(price, S, K, t, r, flag)
+                    iv = implied_volatility(mid, s_info['price'], strike, t_years, RISK_FREE_RATE, opt_type[0])
+                    logger.info(f"🔄 [{sym}] 已從市場價 ${mid:.2f} 反推 IV: {iv:.2%}")
+                except Exception as e:
+                    logger.debug(f"反推 IV 失敗 ({sym}): {e}")
+                    iv = iv_raw # fallback to original
+
             if iv <= 0:
-                logger.warning(f"跳過 Greeks 更新: {sym} {expiry} ${strike} {opt_type} 無 IV 資訊")
-                continue
+                logger.warning(f"跳過 Greeks 更新: {sym} {expiry} ${strike} {opt_type} 無 IV 資訊且無法反推")
+                return
             
             exp_date = datetime.strptime(expiry, '%Y-%m-%d').date()
             t_years = max((exp_date - datetime.now().date()).days, 1) / 365.0
@@ -245,28 +252,23 @@ async def refresh_portfolio_greeks(user_id: int = None):
             weight_factor = s_info['beta'] * (s_info['price'] / spy_price)
             weighted_delta = greeks['delta'] * qty * 100 * weight_factor
             
-            await asyncio.to_thread(update_portfolio_greeks, trade_id, round(weighted_delta, 4), round(greeks['theta'] * qty * 100, 4), round(greeks['gamma'] * qty * 100 * (weight_factor**2), 6))
+            # Annual Dollar Greeks
+            annual_theta = greeks['theta'] * qty * 100
+            annual_gamma = greeks['gamma'] * qty * 100 * (weight_factor**2)
+            
+            if is_virtual:
+                await asyncio.to_thread(update_virtual_trade_greeks, trade_id, round(weighted_delta, 4), round(annual_theta, 4), round(annual_gamma, 6))
+            else:
+                await asyncio.to_thread(update_portfolio_greeks, trade_id, round(weighted_delta, 4), round(annual_theta, 4), round(annual_gamma, 6))
+
+        # 執行更新
+        for row in real_positions:
+            if len(row) >= 8:
+                # get_user_portfolio: (id, symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost, ...)
+                await _update_row_greeks(row[0], row[1], row[2], row[3], row[4], row[6], is_virtual=False)
 
         for row in virtual_positions:
-            trade_id, sym, opt_type, strike, expiry, qty = row['id'], row['symbol'], row['opt_type'], row['strike'], row['expiry'], row['quantity']
-            s_info = stock_data.get(sym)
-            if not s_info or s_info['price'] <= 0:
-                logger.warning(f"跳過 Greeks 更新: {sym} 無價格資訊")
-                continue
-            
-            mid, iv = await asyncio.to_thread(get_option_chain_mid_iv, sym, expiry, strike, opt_type)
-            if iv <= 0:
-                logger.warning(f"跳過 Greeks 更新: {sym} {expiry} ${strike} {opt_type} 無 IV 資訊")
-                continue
-            
-            exp_date = datetime.strptime(expiry, '%Y-%m-%d').date()
-            t_years = max((exp_date - datetime.now().date()).days, 1) / 365.0
-            greeks = calculate_greeks(opt_type, s_info['price'], strike, t_years, iv, s_info['div_yield'])
-            
-            weight_factor = s_info['beta'] * (s_info['price'] / spy_price)
-            weighted_delta = greeks['delta'] * qty * 100 * weight_factor
-            
-            await asyncio.to_thread(update_virtual_trade_greeks, trade_id, round(weighted_delta, 4), round(greeks['theta'] * qty * 100, 4), round(greeks['gamma'] * qty * 100 * (weight_factor**2), 6))
+            await _update_row_greeks(row['id'], row['symbol'], row['opt_type'], row['strike'], row['expiry'], row['quantity'], is_virtual=True)
 
     except Exception as e:
         logger.error(f"refresh_portfolio_greeks 失敗: {e}", exc_info=True)
@@ -275,11 +277,19 @@ def get_option_chain_mid_iv(symbol, expiry, strike, opt_type):
     try:
         calls, puts = get_option_chain(symbol, expiry)
         chain = calls if opt_type == 'call' else puts
-        contract = chain[chain['strike'] == strike]
+        # 彈性匹配：尋找最接近的履約價 (防止浮點數誤差)
+        contract = chain[(chain['strike'] - strike).abs() < 0.01]
+        
         if not contract.empty:
-            mid = (contract['bid'].iloc[0] + contract['ask'].iloc[0]) / 2
-            iv = contract['impliedVolatility'].iloc[0]
+            c = contract.iloc[0]
+            bid = c.get('bid', 0.0)
+            ask = c.get('ask', 0.0)
+            last = c.get('lastPrice', 0.0)
+            
+            # 優先使用 Mid，若無報價使用 Last
+            mid = (bid + ask) / 2 if (bid > 0 and ask > 0) else last
+            iv = c.get('impliedVolatility', 0.0)
             return mid, iv
-    except:
-        pass
+    except Exception as e:
+        logger.debug(f"get_option_chain_mid_iv 異常: {e}")
     return 0.0, 0.0
