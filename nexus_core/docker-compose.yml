@@ -7,7 +7,6 @@ services:
       - .env
     volumes:
       - nexus_data:/app/data
-      - nexus_yfinance_cache:/tmp/yfinance_cache
     environment:
       - TZ=America/New_York
     logging:
@@ -18,4 +17,3 @@ services:
 
 volumes:
   nexus_data:
-  nexus_yfinance_cache:

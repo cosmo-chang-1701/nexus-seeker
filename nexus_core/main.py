@@ -12,8 +12,8 @@ logging.basicConfig(level=getattr(logging, LOG_LEVEL), format='%(asctime)s [%(le
 logger = logging.getLogger(__name__)
 
 # --- yfinance 快取初始化 ---
-# 1. 確保快取目錄存在 (在 Docker 內建議指向 /tmp 或持久化目錄)
-cache_path = "/tmp/yfinance_cache"
+# 1. 確保快取目錄存在 (在 Docker 內建議指向持久化目錄 /app/data)
+cache_path = os.path.join(os.getcwd(), "data", "yfinance_cache")
 if not os.path.exists(cache_path):
     os.makedirs(cache_path, exist_ok=True)
 
