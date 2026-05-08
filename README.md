@@ -132,6 +132,7 @@ stateDiagram-v2
 | `/add_watch` | 將標的加入自動化量化監控清單 | `symbol`, `stock_cost`, `use_llm` | User |
 | `/edit_watch` | 修改觀察清單中的標的參數 | `symbol`, `stock_cost`, `use_llm` | User |
 | `/remove_watch` | 將標的從觀察清單中移除 | `symbol` | User |
+| `/list_watch` | 列出您的雷達觀察清單 | — | User |
 | `/list_trades` | 列出目前資料庫中的所有實單持倉 | — | User |
 | `/remove_trade` | 將部位從監控管線中移除 | `trade_id` | User |
 | `/poly_list` | 顯示 Polymarket 活躍市場清單與巨鯨意圖 | — | User |

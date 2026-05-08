@@ -26,7 +26,7 @@ The system is divided into two main services:
 - **`database/`**: Persistent storage layer with an automated migration engine (`database/core.py`) that scans `database/migrations/` on startup. Includes aggregated Greeks tracking across real and virtual portfolios.
 - **`services/`**: Business logic layer (`TradingService`, `LLMService`, `PolymarketService`, `MarketDataService`, `NewsService`, `RedditService`) that decouples the Discord UI from core computations.
 - `cogs/`: Discord extensions implementing slash commands and background tasks.
-  - **`terminal.py`**: High-impact professional terminal commands (`/runway_check`, `/scan`, `/settings`, `/vtr_list`, `/add_watch`, `/edit_watch`, `/remove_watch`).
+  - **`terminal.py`**: High-impact professional terminal commands (`/runway_check`, `/scan`, `/settings`, `/vtr_list`, `/add_watch`, `/edit_watch`, `/remove_watch`, `/list_watch`).
   - **`intelligence.py`**: Market intelligence and edge detection terminal (`/poly_list`, `/scan_news`, `/scan_reddit`, `/quote`).
   - **`trading.py`**: Automated market scanning and background risk auditing.
   - **`analyst_agent.py`**: Scheduled Wall Street Quantitative Analyst Agent.

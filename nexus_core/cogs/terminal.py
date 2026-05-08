@@ -360,6 +360,20 @@ class TerminalCog(commands.Cog):
         else:
             await interaction.response.send_message(f"❌ 您的觀察清單中找不到 `{symbol}`。", ephemeral=True)
 
+    @app_commands.command(name="list_watch", description="列出您的雷達觀察清單")
+    async def list_watch(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        from database.watchlist import get_user_watchlist
+        symbols_data = get_user_watchlist(interaction.user.id)
+        if not symbols_data:
+            await interaction.followup.send("📭 您的觀察清單是空的。", ephemeral=True)
+            return
+        
+        from ui.watchlist import WatchlistPagination
+        view = WatchlistPagination(symbols_data)
+        view.update_buttons()
+        await interaction.followup.send(embed=view.create_embed(), view=view, ephemeral=True)
+
     @app_commands.command(name="list_trades", description="列出目前資料庫中的所有實單持倉")
     async def list_trades(self, interaction: discord.Interaction):
         user_id = interaction.user.id
