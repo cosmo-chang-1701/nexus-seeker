@@ -185,6 +185,9 @@ class TradingService:
                 psq_result = analyze_psq(df_hist_1d, vix_spot=vix_spot)
                 if psq_result:
                     res['psq_result'] = psq_result
+                    # Ensure price is available for PSQ reports
+                    if not res.get('price') or res.get('price') <= 0:
+                        res['price'] = df_hist_1d['Close'].iloc[-1] if not df_hist_1d.empty else 0.0
 
                 has_psq_signal = False
                 if psq_result and (getattr(psq_result, 'is_breakout_long', False) or psq_result.is_near_support):
