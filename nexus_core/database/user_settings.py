@@ -178,9 +178,9 @@ def get_full_user_context(user_id: int) -> UserContext:
                 # 若找不到使用者設定，回傳預設物件 (這通常不應發生，因為 upsert 會初始化)
                 return UserContext(user_id, 100000.0, 15.0, 0.0, 0.0, 0.0)
 
-            # 提取 Greeks
+            # 提取 Greeks (Annual from DB -> Daily for Context)
             sum_delta = user_row['sum_delta'] or 0.0
-            sum_theta = user_row['sum_theta'] or 0.0
+            sum_theta = (user_row['sum_theta'] or 0.0) / 365.0
             sum_gamma = user_row['sum_gamma'] or 0.0
             
             # 處理基本設定與空值

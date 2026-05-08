@@ -226,10 +226,14 @@ async def refresh_portfolio_greeks(user_id: int = None):
                 continue
             
             s_info = stock_data.get(sym)
-            if not s_info or s_info['price'] <= 0: continue
+            if not s_info or s_info['price'] <= 0:
+                logger.warning(f"跳過 Greeks 更新: {sym} 無價格資訊")
+                continue
             
             mid, iv = await asyncio.to_thread(get_option_chain_mid_iv, sym, expiry, strike, opt_type)
-            if iv <= 0: continue
+            if iv <= 0:
+                logger.warning(f"跳過 Greeks 更新: {sym} {expiry} ${strike} {opt_type} 無 IV 資訊")
+                continue
             
             exp_date = datetime.strptime(expiry, '%Y-%m-%d').date()
             t_years = max((exp_date - datetime.now().date()).days, 1) / 365.0
@@ -243,10 +247,14 @@ async def refresh_portfolio_greeks(user_id: int = None):
         for row in virtual_positions:
             trade_id, sym, opt_type, strike, expiry, qty = row['id'], row['symbol'], row['opt_type'], row['strike'], row['expiry'], row['quantity']
             s_info = stock_data.get(sym)
-            if not s_info or s_info['price'] <= 0: continue
+            if not s_info or s_info['price'] <= 0:
+                logger.warning(f"跳過 Greeks 更新: {sym} 無價格資訊")
+                continue
             
             mid, iv = await asyncio.to_thread(get_option_chain_mid_iv, sym, expiry, strike, opt_type)
-            if iv <= 0: continue
+            if iv <= 0:
+                logger.warning(f"跳過 Greeks 更新: {sym} {expiry} ${strike} {opt_type} 無 IV 資訊")
+                continue
             
             exp_date = datetime.strptime(expiry, '%Y-%m-%d').date()
             t_years = max((exp_date - datetime.now().date()).days, 1) / 365.0
