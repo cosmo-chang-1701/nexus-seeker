@@ -22,9 +22,9 @@
 | **量化定價引擎** | Black-Scholes-Merton (via `py_vollib`, 含股息率校正) |
 | **風險精算核心** | Nexus Risk Optimizer (NRO) - 二階 Beta-Weighted 曝險模型 |
 | **數據源 (Feeds)** | Finnhub (Real-time), yfinance (Chain), Polymarket (WS L2), Reddit (Edge) |
-| **持久化層** | SQLite 搭配自動化 Migration Engine (v025+) |
+| **持久化層** | SQLite 搭配自動化 Migration Engine (v026+) |
 | **智能層** | Structured LLM Output (Pydantic Schema) via OpenAI-compatible API |
-| **訊息傳遞** | Discord.py (非同步訊息佇列，支援多租戶隔離) |
+| **訊息傳遞** | Discord.py (持久化非同步訊息佇列，支援多租戶隔離) |
 
 ---
 
@@ -38,7 +38,7 @@ graph TD
         Bot[NexusBot Core]
         TS[TradingService - Business Logic]
         RE[Risk Engine - NRO]
-        DB[(SQLite DB v025)]
+        DB[(SQLite DB v026)]
         S[Services - LLM/Polymarket]
         C[KV Cache - Reddit]
     end
@@ -84,7 +84,7 @@ graph TD
 *   **Davis Double Play (戴維斯雙擊引擎)**：
     量化偵測盈餘增長與估值擴張的共振機會。要求 YoY EPS 成長 > 15% 且 P/E 處於 3 年歷史低位 (25th Percentile)，並經由營收加速狀態確認。
 *   **Polymarket 巨鯨意圖圖譜 (Whale Intent Mapping)**：
-    透過 WebSocket 即時監控預測市場 **L2 Order Book**。結合 LLM 進行 **吃單者意圖映射 (Taker Intent Mapping)**，識別機構級巨鯨建倉動機。
+    透過 WebSocket 即時監控預測市場 **L2 Order Book**。結合 LLM 進行 **吃單者意圖映射 (Taker Intent Mapping)**識別機構級巨鯨建倉動機。
 *   **Asynchronous Reddit Intelligence**：
     Reddit 散戶情緒優勢改為每日定時非同步抓取並快取，確保盤中掃描不受爬蟲延遲影響，同時降低 Tunnel 負載。
 
@@ -93,6 +93,8 @@ graph TD
     精準對齊交易所交易時鐘，以 30 分鐘為心跳 (Heartbeat) 進行全自動化掃描，避開造市商無報價時段。
 *   **盤前財報雷達 (Pre-market Earnings Radar)**：
     每日 09:00 自動掃描持倉與觀察清單，依據距離財報天數**升冪排序**（0天優先），提供即時風險預警。
+*   **優雅關閉與持久化私訊佇列 (Graceful Handoff)**：
+    部署新版本時，系統會自動將未送出的警報存入 SQLite 佇列，並由新實例在啟動後接力補發。透過 `stop_grace_period` 確保舊實例有足夠時間跑完剩餘精算任務。
 *   **日內風險審計 (Intra-day Risk Audit)**：
     每 30 分鐘自動審計投資組合，執行 **獲利鎖定 (DITM 防禦)** 與 **Gamma 脆弱性偵測**。
 *   **GhostTrader (VTR)**：

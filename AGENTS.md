@@ -28,7 +28,7 @@ The system is divided into two main services:
   - **`psq_engine.py`**: PowerSqueeze (PSQ) scoring with VIX-aware momentum labeling.
   - **`risk_engine.py`**: NRO risk optimization with dynamic Kelly scaling.
   - **`ghost_trader.py`**: Virtual Trading Room (VTR) and autonomous DITM defense.
-- **`database/`**: Persistent storage layer with an automated migration engine. Includes aggregate Greeks tracking and the **`ddp_signals`** table for Davis Double Play tracking (v025+).
+- **`database/`**: Persistent storage layer with an automated migration engine. Includes aggregate Greeks tracking, DDP signals, and the **`pending_notifications`** table for cross-deployment message reliability (v026+).
 - **`services/`**: Business logic layer (`TradingService`, `LLMService`, `PolymarketService`, `MarketDataService`, `NewsService`, `RedditService`) that decouples the Discord UI from core computations.
 - `cogs/`: Discord extensions implementing slash commands and background tasks.
   - **`terminal.py`**: High-impact professional terminal commands (`/runway_check`, `/scan`, `/ddp_scan`, `/settings`, `/vtr_list`).
@@ -67,9 +67,9 @@ The system is divided into two main services:
 
 ### Deployment Strategy
 The system utilizes **Docker Swarm** with a `start-first` update configuration to achieve a Blue-Green style handoff:
-1.  **Green (New)** instance is launched.
-2.  The `bot_healthy.py` healthcheck verifies that the new instance has successfully established a WebSocket connection to Discord.
-3.  Only after the new instance is confirmed healthy is the **Blue (Old)** instance terminated.
+1.  **Green (New)** instance is launched and verifies health.
+2.  **Graceful Handoff**: The old instance receives `SIGTERM` and enters a 60-second `stop_grace_period`. It drains its persistent notification queue and completes ongoing quant scans before terminating.
+3.  **Persistence**: Unsent messages are stored in SQLite and automatically picked up by the new instance upon startup, ensuring zero message loss during version transitions.
 4.  Automatic **Rollback** is triggered if the new instance fails to connect.
 
 ### Testing
@@ -88,7 +88,7 @@ Tests are located in `nexus_core/tests/`.
 
 ### 1. Database Migrations
 Never modify the database schema manually. Use the migration engine:
-- Create a new file in `nexus_core/database/migrations/` (e.g., `v025_add_ddp_signals.py`).
+- Create a new file in `nexus_core/database/migrations/` (e.g., `v026_add_pending_notifications.py`).
 - Export `version` (int), `description` (str), and `sql` (str).
 - The bot will automatically apply it on the next startup.
 
@@ -154,8 +154,9 @@ The terminal's Discord output is localized to **Professional Traditional Chinese
 - `nexus_core/market_analysis/ghost_trader.py`: Virtual Trade Replicator and VTR logic. Implements **Profit Lock (DITM)** defensive actions.
 - `nexus_core/market_analysis/portfolio.py`: Handles portfolio Greeks refresh with **IV back-solving** and standardized DB updates.
 - `nexus_core/market_analysis/pro_management.py`: Quantitative survival analysis (**Financial Runway**) and **Position Evolution** simulations.
-- `nexus_core/database/user_settings.py`: User profile management and **robust SQL aggregation** (converts Annual to Daily Theta).
-- `nexus_core/cogs/embed_builder.py`: Discord UI/UX generator — renders VIX Battle Status, momentum labels, **Runway metrics**, and **Hedge directives**.
+- `nexus_core/database/user_settings.py`: User profile management and **robust SQL aggregation**.
+- `nexus_core/database/notifications.py`: Persistent notification queue logic for **Graceful Handoff**.
+- `nexus_core/cogs/embed_builder.py`: Discord UI/UX generator.
 - **`nexus_core/cogs/analyst_agent.py`**: Scheduled Wall Street Quantitative Analyst Agent.
 - `nexus_core/database/core.py`: SQLite migration engine core logic.
 - `nexus_edge_scraper/local_api.py`: Playwright-based scraping endpoint.
