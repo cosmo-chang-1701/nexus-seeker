@@ -15,6 +15,7 @@ from market_analysis.pro_management import simulate_cc_transition
 from market_analysis.ghost_trader import GhostTrader
 from services import market_data_service, news_service, llm_service, reddit_service
 from market_analysis.ddp_inspector import DDPInspector
+from market_analysis.volatility_inspector import VolatilityInspector
 
 logger = logging.getLogger(__name__)
 ny_tz = ZoneInfo("America/New_York")
@@ -28,10 +29,15 @@ class TradingService:
         self.bot = bot
         self.vtr_engine = GhostTrader()
         self.ddp_inspector = DDPInspector(bot)
+        self.vol_inspector = VolatilityInspector(bot)
 
     async def run_ddp_scan(self, symbols: List[str]) -> List[Dict[str, Any]]:
         """執行 Davis Double Play (DDP) 掃描"""
         return await self.ddp_inspector.run_scan(symbols)
+
+    async def run_iv_opportunity_scan(self, symbols: List[str], user_id: int) -> List[Dict[str, Any]]:
+        """執行波動率優勢掃描 (IV Opportunity)"""
+        return await self.vol_inspector.run_scan(symbols, user_id)
 
     async def get_pre_market_alerts_data(self, warning_days: int) -> Dict[int, Dict[str, Any]]:
         """

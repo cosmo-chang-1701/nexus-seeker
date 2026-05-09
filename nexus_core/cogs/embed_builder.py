@@ -972,6 +972,53 @@ def create_ddp_embed(report: Dict[str, Any]) -> discord.Embed:
     embed.set_footer(text="Nexus Quantitative Research | 戴維斯雙擊引擎 v1.0")
     return embed
 
+def create_volatility_embed(report: Dict[str, Any]) -> discord.Embed:
+    """建構波動率優勢偵測 (Cheap Volatility) 預警 Embed"""
+    sym = report['symbol']
+    price = report['price']
+    iv = report['iv']
+    iv_p = report['iv_p']
+    hv = report['hv']
+    status = report['status']
+    strategy = report['strategy']
+    trigger_logic = report['trigger_logic']
+    days_to_earnings = report['days_to_earnings']
+    stop_loss = report['stop_loss']
+    daily_theta = report['daily_theta']
+    runway_impact = report['runway_impact']
+    
+    # 決定顏色 (Buy Signal = Green, Watchlist Alert = Yellow)
+    color = 0x00ff00 if status == "波動率極低" else 0xffff00
+    
+    embed = discord.Embed(
+        title="📊 Nexus Seeker | 波動率優勢偵測",
+        color=color,
+        timestamp=datetime.now(timezone.utc)
+    )
+    
+    # Field 1: [Symbol] 戰略評估
+    val1 = (f"當前價格 (Current Price): `${price:.2f}`\n"
+            f"IV / IV Percentile: `{iv}% ({iv_p}%)`\n"
+            f"HV (252-day): `{hv}%`\n"
+            f"狀態: **{status}**\n\u200b")
+    embed.add_field(name=f"🔍 {sym} 戰略評估", value=val1, inline=False)
+    
+    # Field 2: 買入時機分析
+    catalyst = f"距離財報 {days_to_earnings} 天" if days_to_earnings <= 90 else "無近期財報"
+    val2 = (f"建議策略 (Recommended Strategy): **{strategy}**\n"
+            f"觸發邏輯 (Trigger Logic): {trigger_logic}\n"
+            f"催化劑 (Catalysts): {catalyst}\n\u200b")
+    embed.add_field(name="🎯 買入時機分析", value=val2, inline=False)
+    
+    # Field 3: 風險管理 (NRO)
+    val3 = (f"建議停損 (Suggested Stop Loss): `${stop_loss:.2f}`\n"
+            f"Theta 每日損耗 (Daily Theta Decay): `-${daily_theta:.2f}/day`\n"
+            f"跑道影響 (Runway Impact): 預計影響生存跑道 `{runway_impact}` 天\n\u200b")
+    embed.add_field(name="🛡️ 風險管理 (NRO)", value=val3, inline=False)
+    
+    embed.set_footer(text="Nexus Volatility Strategist Agent v1.0 | 專注廉價波動率偵測")
+    return embed
+
 def build_hedge_analysis_field(embed, analysis):
     """
     在 embed 中加入對沖分析區塊。

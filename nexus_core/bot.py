@@ -3,6 +3,7 @@ import logging
 from discord.ext import commands
 import asyncio
 import database
+from database.notifications import add_pending_notification, get_pending_notifications, delete_notification, get_pending_count
 
 logger = logging.getLogger(__name__)
 
@@ -11,7 +12,16 @@ class NexusBot(commands.Bot):
         intents = discord.Intents.default()
         intents.message_content = True
         super().__init__(command_prefix='!', intents=intents)
-        self.message_queue = asyncio.Queue()
+        # 仍然保留一個訊號訊號量，用於喚醒工人
+        self.message_signal = asyncio.Event()
+
+    async def queue_dm(self, user_id: int, message: str = None, embed: discord.Embed = None):
+        """將私訊任務加入持久化佇列，並喚醒發送工人"""
+        embed_dict = embed.to_dict() if embed else None
+        # 1. 存入資料庫 (持久化)
+        await asyncio.to_thread(add_pending_notification, user_id, message, embed_dict)
+        # 2. 喚醒發送工人
+        self.message_signal.set()
 
     async def setup_hook(self):
         await self.load_extension("cogs.terminal")
@@ -41,6 +51,12 @@ class NexusBot(commands.Bot):
         logger.info(f'初始化資料庫中...')
         database.init_db()
         logger.info(f'🚀 Nexus Seeker 啟動成功！Bot ID: {self.user}')
+        
+        # 啟動後檢查有無遺留通知並喚醒工人
+        if await asyncio.to_thread(get_pending_count) > 0:
+            logger.info("發現遺留的待發送通知，啟動補發流程...")
+            self.message_signal.set()
+
         logger.info('等待美股排程觸發...')
         await self.notify_all_users("🚀 Nexus Seeker 機器人已啟動！")
 
@@ -54,10 +70,20 @@ class NexusBot(commands.Bot):
             except Exception as e:
                 logger.error(f"停止 Polymarket 服務時出錯: {e}")
 
+        # 發送關閉通知
         try:
             await self.notify_all_users("🛑 Nexus Seeker 機器人正在關閉，請稍候...")
         except Exception as e:
             logger.error(f"發送關閉通知時發生錯誤: {e}")
+
+        # ⏳ 核心改進：等待所有持久化訊息送出 (或直到 Docker 強制終止)
+        wait_time = 0
+        while await asyncio.to_thread(get_pending_count) > 0 and wait_time < 30:
+            if wait_time % 5 == 0:
+                logger.info(f"正在等待訊息佇列清空 (剩餘 {await asyncio.to_thread(get_pending_count)} 條)...")
+            await asyncio.sleep(1)
+            wait_time += 1
+
         await super().close()
 
     async def _health_worker(self):
@@ -74,34 +100,49 @@ class NexusBot(commands.Bot):
             await asyncio.sleep(60)
 
     async def _message_worker(self):
-        """專職負責發送訊息的工人，確保系統不會因為發送訊息卡住"""
+        """專職負責發送訊息的工人，從資料庫讀取待發送清單"""
         await self.wait_until_ready()
+        
         while not self.is_closed():
-            # 1. 取得下一封要寄的信 (如果沒信會自動暫停在這裡，不耗效能)
-            user_id, message, embed = await self.message_queue.get()
-            has_embed = embed is not None
-            field_count = len(embed.fields) if has_embed else 0
+            # 1. 取得下一批待發送通知
+            pending = await asyncio.to_thread(get_pending_notifications, limit=10)
             
-            try:
-                user = await self.fetch_user(user_id)
-                if user:
-                    await user.send(content=message, embed=embed)
-            except discord.Forbidden as e:
-                logger.warning(f"發信失敗(Forbidden): uid={user_id}, has_embed={has_embed}, fields={field_count}, err={e}")
-            except discord.NotFound as e:
-                logger.warning(f"發信失敗(NotFound): uid={user_id}, has_embed={has_embed}, fields={field_count}, err={e}")
-            except discord.HTTPException as e:
-                logger.error(f"發信失敗(HTTPException): uid={user_id}, has_embed={has_embed}, fields={field_count}, status={e.status}, err={e}")
-            except Exception as e:
-                logger.error(f"發信失敗(Unexpected): uid={user_id}, has_embed={has_embed}, fields={field_count}, err={e}")
-            
-            # 2. 強制間隔 0.2 秒再寄下一封
-            await asyncio.sleep(0.2)
-            self.message_queue.task_done()
-            
-    async def queue_dm(self, user_id, message=None, embed=None):
-        """將私訊排入背景佇列"""
-        await self.message_queue.put((user_id, message, embed))
+            if not pending:
+                # 如果沒信，進入等待狀態
+                self.message_signal.clear()
+                try:
+                    await asyncio.wait_for(self.message_signal.wait(), timeout=60)
+                except asyncio.TimeoutError:
+                    pass
+                continue
+
+            # 2. 逐一處理通知
+            for notif_id, user_id, message, embed_dict in pending:
+                if self.is_closed(): break
+                
+                embed = discord.Embed.from_dict(embed_dict) if embed_dict else None
+                
+                try:
+                    user = await self.fetch_user(user_id)
+                    if user:
+                        await user.send(content=message, embed=embed)
+                        # 發送成功才從資料庫刪除
+                        await asyncio.to_thread(delete_notification, notif_id)
+                except discord.Forbidden as e:
+                    logger.warning(f"發信失敗(Forbidden): uid={user_id}, err={e}")
+                    await asyncio.to_thread(delete_notification, notif_id) # 無權限直接放棄
+                except discord.NotFound as e:
+                    logger.warning(f"發信失敗(NotFound): uid={user_id}, err={e}")
+                    await asyncio.to_thread(delete_notification, notif_id)
+                except discord.HTTPException as e:
+                    logger.error(f"發信失敗(HTTPException): uid={user_id}, status={e.status}, err={e}")
+                    # 429 或 5xx 可能需要重試，這裡簡單間隔後繼續
+                    await asyncio.sleep(2)
+                except Exception as e:
+                    logger.error(f"發信失敗(Unexpected): uid={user_id}, err={e}")
+                
+                # 間隔 0.2 秒再寄下一封，避免觸發速率限制
+                await asyncio.sleep(0.2)
 
     async def notify_all_users(self, message):
         """一次將所有訊息排入背景寄發列隊"""

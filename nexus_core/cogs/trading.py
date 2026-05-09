@@ -380,6 +380,34 @@ class SchedulerCog(commands.Cog):
             # 同時存入資料庫
             self.trading_service.ddp_inspector.record_signal(report)
 
+    @app_commands.command(name="iv_scan", description="立即對觀察清單執行波動率優勢 (Cheap IV) 偵測")
+    async def iv_scan(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=False)
+        all_watchlists = database.get_all_watchlist()
+        # 為每個用戶獨立掃描 (因為 Runway Impact 不同)
+        uids = sorted(list(set(row[0] for row in all_watchlists)))
+        
+        if not uids:
+            await interaction.followup.send("📭 觀察清單為空，無法執行 IV 掃描。")
+            return
+
+        found_any = False
+        for uid in uids:
+            user_watch = [row[1] for row in all_watchlists if row[0] == uid]
+            results = await self.trading_service.run_iv_opportunity_scan(user_watch, uid)
+            
+            for report in results:
+                from cogs.embed_builder import create_volatility_embed
+                embed = create_volatility_embed(report)
+                if interaction.user.id == uid:
+                    await interaction.followup.send(embed=embed)
+                else:
+                    await self.bot.queue_dm(uid, embed=embed)
+                found_any = True
+
+        if not found_any:
+            await interaction.followup.send("🔎 掃描完成，目前沒有符合波動率優勢 (Cheap IV) 條件的標的。")
+
     async def _run_market_scan_logic(self, is_auto=True, triggered_by=None):
         """共用的掃描核心邏輯，協調 Service 計算與 Discord 訊息發送。"""
         try:
@@ -388,20 +416,28 @@ class SchedulerCog(commands.Cog):
 
             # 🚀 1. 執行 DDP 掃描 (Davis Double Play)
             all_watchlists = database.get_all_watchlist()
-            symbols = sorted(list(set(row[1] for row in all_watchlists)))
-            if symbols:
-                ddp_results = await self.trading_service.run_ddp_scan(symbols)
+            symbols_all = sorted(list(set(row[1] for row in all_watchlists)))
+            if symbols_all:
+                ddp_results = await self.trading_service.run_ddp_scan(symbols_all)
                 for report in ddp_results:
                     from cogs.embed_builder import create_ddp_embed
                     embed = create_ddp_embed(report)
-                    # 通知所有關注此標的使用者，或全體通知 (依據需求，這裡採通知全體有在關注的人)
-                    # 簡單起見，發送給管理員或全體
                     user_ids = database.get_all_user_ids()
                     for uid in user_ids:
                         await self.bot.queue_dm(uid, embed=embed)
                     self.trading_service.ddp_inspector.record_signal(report)
 
-            # 🚀 2. 執行標準 NRO 掃描
+            # 🚀 2. 執行 IV 優勢掃描 (Volatility Strategist)
+            uids = sorted(list(set(row[0] for row in all_watchlists)))
+            for uid in uids:
+                user_watch = [row[1] for row in all_watchlists if row[0] == uid]
+                vol_results = await self.trading_service.run_iv_opportunity_scan(user_watch, uid)
+                for report in vol_results:
+                    from cogs.embed_builder import create_volatility_embed
+                    embed = create_volatility_embed(report)
+                    await self.bot.queue_dm(uid, embed=embed)
+
+            # 🚀 3. 執行標準 NRO 掃描
             user_results = await self.trading_service.run_market_scan(
                 is_auto=is_auto, 
                 triggered_by_id=triggered_by.id if triggered_by else None
