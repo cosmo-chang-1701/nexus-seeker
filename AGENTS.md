@@ -22,13 +22,18 @@ The system is divided into two main services:
 
 ### Core Modules (`nexus_core`)
 - **`config.py`**: Global configuration constants including `VIX_LADDER_CONFIG` (6-tier system: Dormant/Caution/Ready/Aggressive/Heavy/All-in), `VIX_QUANTILE_BOUNDS`, and the `get_vix_tier()` helper function (includes NaN/None robustness with "Ready" fallback).
-- **`market_analysis/`**: The quant engine. Contains strategy logic (with VIX ladder gating and delta capping), Greek calculations, PowerSqueeze (PSQ) scoring (with VIX-aware momentum labeling), hedging simulations, NRO risk optimization (with dynamic Kelly scaling and All-in bypass), and margin analysis.
-- **`database/`**: Persistent storage layer with an automated migration engine (`database/core.py`) that scans `database/migrations/` on startup. Includes aggregated Greeks tracking across real and virtual portfolios.
+- **`market_analysis/`**: The quant engine.
+  - **`strategy.py`**: Core strategy logic with VIX ladder gating and delta capping.
+  - **`ddp_inspector.py`**: **Davis Double Play (DDP)** detection engine. Implements EPS momentum (>15% YoY), P/E historical range analysis (bottom 25th percentile), and revenue acceleration checks.
+  - **`psq_engine.py`**: PowerSqueeze (PSQ) scoring with VIX-aware momentum labeling.
+  - **`risk_engine.py`**: NRO risk optimization with dynamic Kelly scaling.
+  - **`ghost_trader.py`**: Virtual Trading Room (VTR) and autonomous DITM defense.
+- **`database/`**: Persistent storage layer with an automated migration engine. Includes aggregate Greeks tracking and the **`ddp_signals`** table for Davis Double Play tracking (v025+).
 - **`services/`**: Business logic layer (`TradingService`, `LLMService`, `PolymarketService`, `MarketDataService`, `NewsService`, `RedditService`) that decouples the Discord UI from core computations.
 - `cogs/`: Discord extensions implementing slash commands and background tasks.
-  - **`terminal.py`**: High-impact professional terminal commands (`/runway_check`, `/scan`, `/settings`, `/vtr_list`, `/add_watch`, `/edit_watch`, `/remove_watch`, `/list_watch`).
+  - **`terminal.py`**: High-impact professional terminal commands (`/runway_check`, `/scan`, `/ddp_scan`, `/settings`, `/vtr_list`).
   - **`intelligence.py`**: Market intelligence and edge detection terminal (`/poly_list`, `/scan_news`, `/scan_reddit`, `/quote`).
-  - **`trading.py`**: Automated market scanning and background risk auditing.
+  - **`trading.py`**: Automated market scanning (NRO + DDP) and background risk auditing.
   - **`analyst_agent.py`**: Scheduled Wall Street Quantitative Analyst Agent.
 
 - **`ui/`**: Reusable Discord UI components and views for interactive commands.
@@ -69,16 +74,13 @@ The system utilizes **Docker Swarm** with a `start-first` update configuration t
 
 ### Testing
 Tests are located in `nexus_core/tests/`.
-- **Mandate:** All tests and debug scripts MUST be executed within the Docker container environment to ensure dependency and configuration consistency.
+- **Mandate:** All tests and debug scripts MUST be executed within the Docker container environment.
 - **Run all tests:**
   ```bash
   docker compose run --rm nexus-seeker python -m unittest discover -s tests -v
   ```
-- **Run a specific script:**
-  ```bash
-  docker compose run --rm -v /home/cosmo_chang/Projects/nexus-seeker/nexus_core:/app nexus-seeker python your_script.py
-  ```
-- **Integration Tests:** Focused on database migrations, trading flows, and LLM/Risk engine integration.
+- **Integration Tests:** Focused on database migrations, trading flows, Polymarket whale monitoring (`test_polymarket_integration.py`), and LLM/Risk engine integration.
+- **Unit Tests:** Covers core logic for Greeks, PSQ, and the **DDP Inspector** (`test_ddp_inspector.py`).
 
 ---
 
@@ -86,7 +88,7 @@ Tests are located in `nexus_core/tests/`.
 
 ### 1. Database Migrations
 Never modify the database schema manually. Use the migration engine:
-- Create a new file in `nexus_core/database/migrations/` (e.g., `v024_add_kv_cache.py`).
+- Create a new file in `nexus_core/database/migrations/` (e.g., `v025_add_ddp_signals.py`).
 - Export `version` (int), `description` (str), and `sql` (str).
 - The bot will automatically apply it on the next startup.
 
@@ -98,6 +100,7 @@ New commands should be added as **Slash Commands** within a Cog in `nexus_core/c
 
 ### 3. Market Analysis & Strategy
 - Core logic belongs in `nexus_core/market_analysis/strategy.py`.
+- **Davis Double Play (DDP)**: Implemented in `ddp_inspector.py`. Identifies stocks with simultaneous EPS growth (>15%) and P/E expansion potential (current P/E < 25th percentile of 3Y range). Validates via revenue acceleration and forward P/E alignment.
 - Use the `AlertFilter` in `services/alert_filter.py` to implement noise reduction (e.g., EMA crossovers, multi-timeframe alignment).
 - `GhostTrader` (`market_analysis/ghost_trader.py`) handles the Virtual Trading Room (VTR) logic, simulating entries and tracking virtual performance. VTR auto-entry is gated by VIX tier permissions (`vtr_entry_allowed`). Implements autonomous **DITM Profit Lock** defense.
 - `PSQ Engine` (`market_analysis/psq_engine.py`) provides the PowerSqueeze momentum indicator with VIX-aware labeling (`OVEREXTENDED_RISK`, `HIGH_CONVICTION_RECOVERY`). Supports legacy aliases (`is_breakout_high`) for stability.

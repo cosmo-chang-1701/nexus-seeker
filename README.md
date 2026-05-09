@@ -22,7 +22,7 @@
 | **量化定價引擎** | Black-Scholes-Merton (via `py_vollib`, 含股息率校正) |
 | **風險精算核心** | Nexus Risk Optimizer (NRO) - 二階 Beta-Weighted 曝險模型 |
 | **數據源 (Feeds)** | Finnhub (Real-time), yfinance (Chain), Polymarket (WS L2), Reddit (Edge) |
-| **持久化層** | SQLite 搭配自動化 Migration Engine (v024+) |
+| **持久化層** | SQLite 搭配自動化 Migration Engine (v025+) |
 | **智能層** | Structured LLM Output (Pydantic Schema) via OpenAI-compatible API |
 | **訊息傳遞** | Discord.py (非同步訊息佇列，支援多租戶隔離) |
 
@@ -38,7 +38,7 @@ graph TD
         Bot[NexusBot Core]
         TS[TradingService - Business Logic]
         RE[Risk Engine - NRO]
-        DB[(SQLite DB v024)]
+        DB[(SQLite DB v025)]
         S[Services - LLM/Polymarket]
         C[KV Cache - Reddit]
     end
@@ -81,6 +81,8 @@ graph TD
     6 階段自適應風險調控系統，根據即時波動率動態縮放 **Kelly Criterion (凱利準則)** 比例與 **Target Delta (目標曝險)**。
 
 ### 2. Market Intelligence (邊緣偵測)
+*   **Davis Double Play (戴維斯雙擊引擎)**：
+    量化偵測盈餘增長與估值擴張的共振機會。要求 YoY EPS 成長 > 15% 且 P/E 處於 3 年歷史低位 (25th Percentile)，並經由營收加速狀態確認。
 *   **Polymarket 巨鯨意圖圖譜 (Whale Intent Mapping)**：
     透過 WebSocket 即時監控預測市場 **L2 Order Book**。結合 LLM 進行 **吃單者意圖映射 (Taker Intent Mapping)**，識別機構級巨鯨建倉動機。
 *   **Asynchronous Reddit Intelligence**：
@@ -96,7 +98,7 @@ graph TD
 *   **GhostTrader (VTR)**：
     全功能虛擬交易室，支援自動化策略回測與實時績效歸因，提供每週勝率、損益比專業報表。
 *   **零停機部署 (Zero-Downtime Deployment)**：
-    採用 Docker Swarm `start-first` 藍綠部屬策略，確保節點健康 (Node Healthy) 並成功連線 Discord 後才移除舊版本，維持服務 24/7 不中斷。
+    採用 Docker Swarm `start-first` 藍綠部屬策略，確保節節點健康 (Node Healthy) 並成功連線 Discord 後才移除舊版本，維持服務 24/7 不中斷。
 
 ---
 
@@ -106,7 +108,7 @@ graph TD
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Detection: Signal Detection (EMA/PSQ)
+    [*] --> Detection: Signal Detection (EMA/PSQ/DDP)
     Detection --> Audit: Risk/AROC Audit (15% Threshold)
     Audit --> Execution: VTR / Live Execution
     Execution --> Monitoring: Real-time Delta/DTE/Gamma Tracking
@@ -127,6 +129,7 @@ stateDiagram-v2
 |---|---|---|---|
 | `/settings` | 配置全域資產、風險、生存支出與推播開關 | `capital`, `risk_limit`, `expense`, `cash_reserve` | User |
 | `/runway_check` | 執行財務生存跑道與 Theta 收益分析 | — | User |
+| `/ddp_scan` | 立即對觀察清單執行 Davis Double Play (DDP) 深度掃描 | — | User |
 | `/add_trade` | 登錄實單部位至 NRO 監控管線 (含 YYYY-MM-DD 驗證) | `symbol`, `opt_type`, `strike`, `qty`, `expiry`, `cost` | User |
 | `/scan` | 手動執行量化掃描與 What-if 曝險模擬 | `symbol` | User |
 | `/vtr_stats` | 檢視虛擬交易室勝率與盈虧歸因週報 | — | User |
