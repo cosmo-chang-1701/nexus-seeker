@@ -32,7 +32,7 @@ The system is divided into two main services:
 - **`database/`**: Persistent storage layer with an automated migration engine. Includes aggregate Greeks tracking, DDP signals, and the **`holdings`** table for independent equity asset accounting (v027+).
 - **`services/`**: Business logic layer (`TradingService`, `LLMService`, `PolymarketService`, `MarketDataService`, `NewsService`, `RedditService`) that decouples the Discord UI from core computations.
 - `cogs/`: Discord extensions implementing slash commands and background tasks.
-  - **`terminal.py`**: High-impact professional terminal commands (`/runway_check`, `/scan`, `/ddp_scan`, `/iv_scan`, `/add_holding`, `/list_holdings`, `/remove_holding`, `/add_watch`, `/edit_watch`, `/remove_watch`, `/list_watch`, `/settings`, `/vtr_list`).
+  - **`terminal.py`**: High-impact professional terminal commands (`/runway_check`, `/scan`, `/ddp_scan`, `/iv_scan`, `/add_holding`, `/list_holdings`, `/remove_holding`, `/add_trade`, `/list_trades`, `/remove_trade`, `/add_watch`, `/edit_watch`, `/remove_watch`, `/list_watch`, `/settings`, `/vtr_list`).
   - **`intelligence.py`**: Market intelligence and edge detection terminal (`/poly_list`, `/scan_news`, `/scan_reddit`, `/quote`).
   - **`trading.py`**: Automated market scanning (NRO + DDP + Volatility) and background risk auditing.
   - **`analyst_agent.py`**: Scheduled Wall Street Quantitative Analyst Agent.
@@ -85,15 +85,34 @@ Tests are located in `nexus_core/tests/`.
 
 ---
 
-## Development Workflow
-To ensure system stability and consistency, all contributors must follow this mandatory workflow:
-1.  **Code Modification**: Implement features or fixes following the established architecture.
-2.  **Containerized Testing**: All tests MUST be executed within the Docker environment to ensure dependency alignment.
-    ```bash
-    docker compose run --rm nexus-seeker python -m unittest discover -s tests -v
-    ```
-3.  **Documentation Update**: Upon successful testing, update `README.md` and `AGENTS.md` to reflect changes in architecture, commands, or database schemas.
-4.  **Remote Sync**: Push verified code and updated documentation to the remote repository.
+## 🛠 Mandatory Development Pipeline (PROTOCOL)
+**Every single task** is considered INCOMPLETE and a failure of protocol unless the following sequence is executed in full. There are no exceptions for "simple" or "UI-only" changes.
+
+### 1. [PHASE: IMPLEMENT] Code Modification
+- Implement features/fixes following the established architecture.
+- **Localization**: All user-facing strings MUST be Traditional Chinese (zh-tw).
+- **Standards**: Adhere to SOLID, KISS, and DRY principles as defined in `GEMINI.md`.
+
+### 2. [PHASE: VALIDATE] Containerized Testing (MANDATORY)
+- **Rule**: You are PROHIBITED from declaring a task finished without running tests.
+- **Action**: Execute the mandatory test suite inside the Docker environment:
+  ```bash
+  cd nexus_core && docker compose run --rm nexus-seeker python -m unittest discover -s tests -v
+  ```
+- **Fallback**: If Docker is unavailable, you MUST explicitly state the reason, create a new unit test for your change, and attempt a local verification before proceeding.
+
+### 3. [PHASE: DOCUMENT] Documentation Sync
+- **README.md**: Update the Command Table if any slash command behavior or parameters changed.
+- **AGENTS.md**: Update "Key Files Summary" or "Architecture" if logic moved or new modules were added.
+- **Memory**: Ensure the project index/memory reflects the current system state.
+
+### 4. [DEFINITION OF DONE]
+A task is only "Done" when:
+1. [ ] Code is implemented, linted, and syntax-checked.
+2. [ ] Mandatory test suite passes (or fallback logic is documented).
+3. [ ] README.md reflects the new command/feature state.
+4. [ ] AGENTS.md reflects any architectural shifts.
+**Failure to check all 4 boxes is a protocol violation.**
 
 ---
 

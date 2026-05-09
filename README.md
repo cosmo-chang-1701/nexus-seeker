@@ -144,7 +144,7 @@ stateDiagram-v2
 | `/edit_watch` | 修改觀察清單中的標的參數 | `symbol`, `use_llm` | User |
 | `/remove_watch` | 將標的從觀察清單中移除 | `symbol` | User |
 | `/list_watch` | 列出您的雷達觀察清單 | — | User |
-| `/list_trades` | 列出目前資料庫中的所有實單持倉 | — | User |
+| `/list_trades` | 列出目前實單持倉、即時 ITM/OTM 狀態與權利金成本估計 | — | User |
 | `/remove_trade` | 將部位從監控管線中移除 | `trade_id` | User |
 | `/poly_list` | 顯示 Polymarket 活躍市場清單與巨鯨意圖 | — | User |
 | `/quote` | 獲取標的之即時報價與漲跌資訊 | `symbol` | User |

@@ -243,42 +243,43 @@ class TerminalCog(commands.Cog):
         if not category and symbol == "SPY":
             if quantity < 0 or (opt_type.value == "put" and quantity > 0):
                 trade_category = "HEDGE"
-try:
-    from services.asset_manager import AssetManager
-    from models.asset import Asset, ContextType
-    manager = AssetManager()
 
-    trade_details = {
-        "opt_type": opt_type.value,
-        "strike": strike,
-        "expiry": expiry,
-        "entry_price": entry_price,
-        "quantity": quantity,
-        "category": trade_category
-    }
+        try:
+            from services.asset_manager import AssetManager
+            from models.asset import Asset, ContextType
+            manager = AssetManager()
 
-    asset = Asset(
-        user_id=user_id,
-        symbol=symbol,
-        context_type=ContextType.TRADE,
-        metadata=trade_details
-    )
+            trade_details = {
+                "opt_type": opt_type.value,
+                "strike": strike,
+                "expiry": expiry,
+                "entry_price": entry_price,
+                "quantity": quantity,
+                "category": trade_category
+            }
 
-    success = manager.add_asset(asset)
-    if success:
-        from market_analysis.portfolio import refresh_portfolio_greeks
-        await refresh_portfolio_greeks(user_id)
-        action_text = "賣出 (STO)" if quantity < 0 else "買入 (BTO)"
-        await interaction.response.send_message(
-            f"✅ **新增交易成功**: {action_text} {abs(quantity)} 口 `{symbol}` ${strike} {opt_type.value.upper()}", 
-            ephemeral=True
-        )
-    else:
-        await interaction.response.send_message("❌ 新增交易失敗，請稍後再試。", ephemeral=True)
+            asset = Asset(
+                user_id=user_id,
+                symbol=symbol,
+                context_type=ContextType.TRADE,
+                metadata=trade_details
+            )
 
-except Exception as e:
-    logger.error(f"Add trade failed: {e}")
-    await interaction.response.send_message(f"❌ **發生錯誤**: {e}", ephemeral=True)
+            success = manager.add_asset(asset)
+            if success:
+                from market_analysis.portfolio import refresh_portfolio_greeks
+                await refresh_portfolio_greeks(user_id)
+                action_text = "賣出 (STO)" if quantity < 0 else "買入 (BTO)"
+                await interaction.response.send_message(
+                    f"✅ **新增交易成功**: {action_text} {abs(quantity)} 口 `{symbol}` ${strike} {opt_type.value.upper()}", 
+                    ephemeral=True
+                )
+            else:
+                await interaction.response.send_message("❌ 新增交易失敗，請稍後再試。", ephemeral=True)
+
+        except Exception as e:
+            logger.error(f"Add trade failed: {e}")
+            await interaction.response.send_message(f"❌ **發生錯誤**: {e}", ephemeral=True)
 
 
     @app_commands.command(name="scan", description="手動執行量化掃描與 What-if 曝險模擬")
@@ -554,19 +555,25 @@ except Exception as e:
 
     @app_commands.command(name="list_trades", description="列出目前資料庫中的所有實單持倉")
     async def list_trades(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         user_id = interaction.user.id
         rows = database.get_user_portfolio(user_id)
         if not rows:
-            await interaction.response.send_message("📭 您目前無持倉紀錄。", ephemeral=True)
+            await interaction.followup.send("📭 您目前無持倉紀錄。", ephemeral=True)
             return
-        msg = "📊 **【您的實單持倉清單】**\n"
-        for row in rows:
-            trade_id, sym, o_type, strike, exp, price, qty, stock_cost = row[:8]
-            category = row[11] if len(row) > 11 else "SPEC"
-            cat_tag = f" | `{category}`"
-            action = "賣出 (STO)" if qty < 0 else "買入 (BTO)"
-            msg += f"`ID:{trade_id:02d}` | **{sym}** | {exp} | ${strike} {o_type.upper()} | {action} {abs(qty)}口 | ${price}{cat_tag}\n"
-        await interaction.response.send_message(msg, ephemeral=True)
+            
+        # 獲取標的現價以判定 ITM/OTM
+        unique_symbols = sorted(list(set([row[1] for row in rows])))
+        stock_quotes = {}
+        for sym in unique_symbols:
+            quote = await market_data_service.get_quote(sym)
+            if quote:
+                stock_quotes[sym] = quote.get('c', 0.0)
+
+        ctx = get_full_user_context(user_id)
+        from cogs.embed_builder import create_trades_embed
+        embed = create_trades_embed(rows, stock_quotes, ctx.capital)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="remove_trade", description="將部位從監控管線中移除")
     async def remove_trade(self, interaction: discord.Interaction, trade_id: int):
