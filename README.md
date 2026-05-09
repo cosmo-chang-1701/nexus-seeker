@@ -22,7 +22,7 @@
 | **量化定價引擎** | Black-Scholes-Merton (via `py_vollib`, 含股息率校正) |
 | **風險精算核心** | Nexus Risk Optimizer (NRO) - 二階 Beta-Weighted 曝險模型 |
 | **數據源 (Feeds)** | Finnhub (Real-time), yfinance (Chain), Polymarket (WS L2), Reddit (Edge) |
-| **持久化層** | SQLite 搭配自動化 Migration Engine (v027+) |
+| **持久化層** | SQLite 搭配自動化 Migration Engine (v028+) |
 | **智能層** | Structured LLM Output (Pydantic Schema) via OpenAI-compatible API |
 | **訊息傳遞** | Discord.py (持久化非同步訊息佇列，支援多租戶隔離) |
 
@@ -128,8 +128,10 @@ stateDiagram-v2
 | Command | Description | Input Schema (Summary) | Level |
 |---|---|---|---|
 | `/settings` | 配置全域資產、風險、生存支出與推播開關 | `capital`, `risk_limit`, `expense`, `cash_reserve` | User |
-| `/runway_check` | 執行財務生存跑道與 Theta 收益分析 | — | User |
-| `/add_holding` | 登錄實際現貨持倉 (用於資產會計與 Delta 曝險精算) | `symbol`, `quantity`, `avg_cost` | User |
+| `/runway_check` | 執行財務生存跑道分析 (含 HOLDING 資產備用流動性) | — | User |
+| `/promote_watch` | 將觀察標的提升為實單交易 (WATCH -> TRADE) | `symbol`, `details` | User |
+| `/settle_trade` | 將實單交易結算為現貨持倉 (TRADE -> HOLDING) | `asset_id`, `price` | User |
+| `/add_holding` | 登錄實際現貨持倉 (HOLDING) | `symbol`, `quantity`, `avg_cost` | User |
 | `/list_holdings` | 列出目前所有現貨持倉、分配比例與即時損益估計 | — | User |
 | `/remove_holding` | 從資產清單中移除特定的現貨紀錄 | `symbol` | User |
 | `/add_trade` | 登錄實單部位至 NRO 監控管線 (含 YYYY-MM-DD 驗證) | `symbol`, `opt_type`, `strike`, `qty`, `expiry`, `cost` | User |

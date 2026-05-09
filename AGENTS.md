@@ -81,7 +81,19 @@ Tests are located in `nexus_core/tests/`.
   docker compose run --rm nexus-seeker python -m unittest discover -s tests -v
   ```
 - **Integration Tests:** Focused on database migrations, trading flows, Polymarket whale monitoring (`test_polymarket_integration.py`), and LLM/Risk engine integration.
-- **Unit Tests:** Covers core logic for Greeks, PSQ, **DDP Inspector** (`test_ddp_inspector.py`), and **Volatility Inspector** (`test_volatility_inspector.py`).
+- **Unit Tests:** Covers core logic for Greeks, PSQ, **DDP Inspector** (`test_ddp_inspector.py`), **Volatility Inspector** (`test_volatility_inspector.py`), and **Unified Assets** (`test_unified_assets.py`).
+
+---
+
+## Development Workflow
+To ensure system stability and consistency, all contributors must follow this mandatory workflow:
+1.  **Code Modification**: Implement features or fixes following the established architecture.
+2.  **Containerized Testing**: All tests MUST be executed within the Docker environment to ensure dependency alignment.
+    ```bash
+    docker compose run --rm nexus-seeker python -m unittest discover -s tests -v
+    ```
+3.  **Documentation Update**: Upon successful testing, update `README.md` and `AGENTS.md` to reflect changes in architecture, commands, or database schemas.
+4.  **Remote Sync**: Push verified code and updated documentation to the remote repository.
 
 ---
 
@@ -89,9 +101,10 @@ Tests are located in `nexus_core/tests/`.
 
 ### 1. Database Migrations
 Never modify the database schema manually. Use the migration engine:
-- Create a new file in `nexus_core/database/migrations/` (e.g., `v027_refactor_watchlist_add_holdings.py`).
+- Create a new file in `nexus_core/database/migrations/` (e.g., `v028_unified_assets.py`).
 - Export `version` (int), `description` (str), and `sql` (str).
-- The bot will automatically apply it on the next startup.
+- **Advanced**: Export a `migrate_data(conn: sqlite3.Connection)` function for complex data transformations or JSON metadata handling that pure SQL cannot perform.
+- The bot will automatically apply SQL and then execute `migrate_data` on the next startup.
 
 ### 2. Discord Commands (Cogs)
 New commands should be added as **Slash Commands** within a Cog in `nexus_core/cogs/`.
@@ -101,7 +114,11 @@ New commands should be added as **Slash Commands** within a Cog in `nexus_core/c
 
 ### 3. Market Analysis & Strategy
 - Core logic belongs in `nexus_core/market_analysis/strategy.py`.
-- **Holdings Management**: Equity assets are tracked independently in `holdings.py`. These positions contribute to the total portfolio Delta but have 0 Theta/Gamma. Refreshed via `refresh_portfolio_greeks()`.
+- **Unified Asset Lifecycle**: Assets transition through a state machine: **WATCH -> TRADE -> HOLDING**.
+  - **WATCH**: Monitored tickers via `/add_watch`.
+  - **TRADE**: Active option positions via `/promote_watch` or `/add_trade`. Includes real-time Greek tracking.
+  - **HOLDING**: Settled equity assets via `/settle_trade` or `/add_holding`.
+- **Holdings Management**: Equity assets contribute to the total portfolio Beta-Weighted Delta but have 0 Theta/Gamma. Refreshed via `refresh_portfolio_greeks()`.
 - **Davis Double Play (DDP)**: Implemented in `ddp_inspector.py`. Identifies stocks with simultaneous EPS growth (>15%) and P/E expansion potential.
 - **Volatility Strategist (IV)**: Implemented in `volatility_inspector.py`. Detects undervalued options (IVP < 25%, IV < HV) with technical momentum alignment.
 - Use the `AlertFilter` in `services/alert_filter.py` to implement noise reduction.
