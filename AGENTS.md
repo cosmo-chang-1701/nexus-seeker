@@ -32,7 +32,7 @@ The system is divided into two main services:
 - **`database/`**: Persistent storage layer with an automated migration engine. Includes aggregate Greeks tracking, DDP signals, and the **`holdings`** table for independent equity asset accounting (v027+).
 - **`services/`**: Business logic layer (`TradingService`, `LLMService`, `PolymarketService`, `MarketDataService`, `NewsService`, `RedditService`) that decouples the Discord UI from core computations.
 - `cogs/`: Discord extensions implementing slash commands and background tasks.
-  - **`terminal.py`**: High-impact professional terminal commands (`/runway_check`, `/scan`, `/ddp_scan`, `/iv_scan`, `/add_holding`, `/list_holdings`, `/settings`, `/vtr_list`).
+  - **`terminal.py`**: High-impact professional terminal commands (`/runway_check`, `/scan`, `/ddp_scan`, `/iv_scan`, `/add_holding`, `/list_holdings`, `/remove_holding`, `/add_watch`, `/edit_watch`, `/remove_watch`, `/list_watch`, `/settings`, `/vtr_list`).
   - **`intelligence.py`**: Market intelligence and edge detection terminal (`/poly_list`, `/scan_news`, `/scan_reddit`, `/quote`).
   - **`trading.py`**: Automated market scanning (NRO + DDP + Volatility) and background risk auditing.
   - **`analyst_agent.py`**: Scheduled Wall Street Quantitative Analyst Agent.
