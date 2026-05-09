@@ -933,6 +933,45 @@ def create_rehedge_embed(rehedge_info: Dict[str, Any]) -> discord.Embed:
     
     return embed
 
+def create_ddp_embed(report: Dict[str, Any]) -> discord.Embed:
+    """建構 Davis Double Play (DDP) 預警 Embed"""
+    sym = report['symbol']
+    curr_pe = report['current_pe']
+    pe_mean = report['pe_mean_3y']
+    eps_growth = report['eps_growth'] * 100
+    rev_accel = "加速 (Accelerating)" if report['rev_accel'] else "穩定 (Stable)"
+    score = report['confidence_score']
+    
+    # 計算 P/E 均值回歸空間 (預期漲幅)
+    pe_upside = (pe_mean / curr_pe - 1) * 100 if curr_pe > 0 else 0
+    
+    embed = discord.Embed(
+        title=f"🌌 Nexus 戴維斯雙擊預警: {sym}",
+        description=f"偵測到標的符合 **Davis Double Play (DDP)** 條件：盈餘增長與估值擴張的雙重共振。",
+        color=0x00FF7F, # SpringGreen
+        timestamp=datetime.now(timezone.utc)
+    )
+    
+    embed.add_field(name="目前本益比 (Current P/E)", value=f"`{curr_pe:.2f}`", inline=True)
+    embed.add_field(name="3 年本益比均值 (3Y P/E Mean)", value=f"`{pe_mean:.2f}`", inline=True)
+    embed.add_field(name="預估本益比回歸空間", value=f"`+{pe_upside:.1f}%`", inline=True)
+    
+    embed.add_field(name="預估 EPS 成長率 (Proj. EPS Growth)", value=f"`{eps_growth:+.1f}%`", inline=True)
+    embed.add_field(name="營收加速狀態 (Revenue Acceleration)", value=f"`{rev_accel}`", inline=True)
+    embed.add_field(name="DDP 信心評分 (Confidence Score)", value=f"`{score:.0f}/100`", inline=True)
+    
+    # 邏輯解釋
+    logic_text = (
+        f"1. **盈餘動能**: YoY 成長率 `{eps_growth:.1f}%` 超過 15% 門檻。\n"
+        f"2. **估值壓縮**: 目前 P/E 處於 3 年歷史低位 (25% 分位數以下)。\n"
+        f"3. **前瞻預期**: Forward P/E `{report['forward_pe']:.2f}` 低於目前 TTM P/E。\n"
+        f"4. **動能確認**: 營收成長較前一週期加速。"
+    )
+    embed.add_field(name="🧐 量化篩選邏輯", value=logic_text, inline=False)
+    
+    embed.set_footer(text="Nexus Quantitative Research | 戴維斯雙擊引擎 v1.0")
+    return embed
+
 def build_hedge_analysis_field(embed, analysis):
     """
     在 embed 中加入對沖分析區塊。

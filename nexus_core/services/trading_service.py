@@ -14,6 +14,7 @@ from market_analysis.gap_analysis import GapAnalyzer
 from market_analysis.pro_management import simulate_cc_transition
 from market_analysis.ghost_trader import GhostTrader
 from services import market_data_service, news_service, llm_service, reddit_service
+from market_analysis.ddp_inspector import DDPInspector
 
 logger = logging.getLogger(__name__)
 ny_tz = ZoneInfo("America/New_York")
@@ -26,6 +27,11 @@ class TradingService:
     def __init__(self, bot):
         self.bot = bot
         self.vtr_engine = GhostTrader()
+        self.ddp_inspector = DDPInspector(bot)
+
+    async def run_ddp_scan(self, symbols: List[str]) -> List[Dict[str, Any]]:
+        """執行 Davis Double Play (DDP) 掃描"""
+        return await self.ddp_inspector.run_scan(symbols)
 
     async def get_pre_market_alerts_data(self, warning_days: int) -> Dict[int, Dict[str, Any]]:
         """

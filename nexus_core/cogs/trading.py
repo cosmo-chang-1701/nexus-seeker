@@ -358,13 +358,50 @@ class SchedulerCog(commands.Cog):
             )
         return stats
 
+    @app_commands.command(name="ddp_scan", description="立即對觀察清單執行 Davis Double Play (DDP) 掃描")
+    async def ddp_scan(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=False)
+        all_watchlists = database.get_all_watchlist()
+        symbols = sorted(list(set(row[1] for row in all_watchlists)))
+        
+        if not symbols:
+            await interaction.followup.send("📭 觀察清單為空，無法執行 DDP 掃描。")
+            return
+
+        results = await self.trading_service.run_ddp_scan(symbols)
+        if not results:
+            await interaction.followup.send("🔎 掃描完成，目前沒有符合 Davis Double Play (DDP) 條件的標的。")
+            return
+
+        for report in results:
+            from cogs.embed_builder import create_ddp_embed
+            embed = create_ddp_embed(report)
+            await interaction.followup.send(embed=embed)
+            # 同時存入資料庫
+            self.trading_service.ddp_inspector.record_signal(report)
+
     async def _run_market_scan_logic(self, is_auto=True, triggered_by=None):
         """共用的掃描核心邏輯，協調 Service 計算與 Discord 訊息發送。"""
         try:
             if not is_auto and triggered_by:
                 await triggered_by.send("🔍 **開始掃描標的...**")
 
-            # 呼叫 Service 執行核心計算
+            # 🚀 1. 執行 DDP 掃描 (Davis Double Play)
+            all_watchlists = database.get_all_watchlist()
+            symbols = sorted(list(set(row[1] for row in all_watchlists)))
+            if symbols:
+                ddp_results = await self.trading_service.run_ddp_scan(symbols)
+                for report in ddp_results:
+                    from cogs.embed_builder import create_ddp_embed
+                    embed = create_ddp_embed(report)
+                    # 通知所有關注此標的使用者，或全體通知 (依據需求，這裡採通知全體有在關注的人)
+                    # 簡單起見，發送給管理員或全體
+                    user_ids = database.get_all_user_ids()
+                    for uid in user_ids:
+                        await self.bot.queue_dm(uid, embed=embed)
+                    self.trading_service.ddp_inspector.record_signal(report)
+
+            # 🚀 2. 執行標準 NRO 掃描
             user_results = await self.trading_service.run_market_scan(
                 is_auto=is_auto, 
                 triggered_by_id=triggered_by.id if triggered_by else None
