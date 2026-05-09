@@ -81,10 +81,12 @@ graph TD
     6 階段自適應風險調控系統，根據即時波動率動態縮放 **Kelly Criterion (凱利準則)** 比例與 **Target Delta (目標曝險)**。
 
 ### 2. Market Intelligence (邊緣偵測)
+*   **Volatility Strategist (波動率優勢偵測)**：
+    偵測「廉價波動率」機會。當 IV 處於 252 日歷史低位 (IVP < 25%) 且低於歷史波動率 (IV < HV)，結合價格動能發出 BTO 或牛市價差建議，規避財報 Crush 風險。
 *   **Davis Double Play (戴維斯雙擊引擎)**：
     量化偵測盈餘增長與估值擴張的共振機會。要求 YoY EPS 成長 > 15% 且 P/E 處於 3 年歷史低位 (25th Percentile)，並經由營收加速狀態確認。
 *   **Polymarket 巨鯨意圖圖譜 (Whale Intent Mapping)**：
-    透過 WebSocket 即時監控預測市場 **L2 Order Book**。結合 LLM 進行 **吃單者意圖映射 (Taker Intent Mapping)**識別機構級巨鯨建倉動機。
+    透過 WebSocket 即時監控預測市場 **L2 Order Book**。結合 LLM 進行 **吃單者意圖映射 (Taker Intent Mapping)** 識別機構級巨鯨建倉動機。
 *   **Asynchronous Reddit Intelligence**：
     Reddit 散戶情緒優勢改為每日定時非同步抓取並快取，確保盤中掃描不受爬蟲延遲影響，同時降低 Tunnel 負載。
 
@@ -100,7 +102,7 @@ graph TD
 *   **GhostTrader (VTR)**：
     全功能虛擬交易室，支援自動化策略回測與實時績效歸因，提供每週勝率、損益比專業報表。
 *   **零停機部署 (Zero-Downtime Deployment)**：
-    採用 Docker Swarm `start-first` 藍綠部屬策略，確保節節點健康 (Node Healthy) 並成功連線 Discord 後才移除舊版本，維持服務 24/7 不中斷。
+    採用 Docker Swarm `start-first` 藍綠部屬策略，維持服務 24/7 不中斷。
 
 ---
 
@@ -110,7 +112,7 @@ graph TD
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Detection: Signal Detection (EMA/PSQ/DDP)
+    [*] --> Detection: Signal Detection (EMA/PSQ/DDP/IV)
     Detection --> Audit: Risk/AROC Audit (15% Threshold)
     Audit --> Execution: VTR / Live Execution
     Execution --> Monitoring: Real-time Delta/DTE/Gamma Tracking
@@ -132,6 +134,7 @@ stateDiagram-v2
 | `/settings` | 配置全域資產、風險、生存支出與推播開關 | `capital`, `risk_limit`, `expense`, `cash_reserve` | User |
 | `/runway_check` | 執行財務生存跑道與 Theta 收益分析 | — | User |
 | `/ddp_scan` | 立即對觀察清單執行 Davis Double Play (DDP) 深度掃描 | — | User |
+| `/iv_scan` | 立即對觀察清單執行波動率優勢 (Cheap IV) 偵測 | — | User |
 | `/add_trade` | 登錄實單部位至 NRO 監控管線 (含 YYYY-MM-DD 驗證) | `symbol`, `opt_type`, `strike`, `qty`, `expiry`, `cost` | User |
 | `/scan` | 手動執行量化掃描與 What-if 曝險模擬 | `symbol` | User |
 | `/vtr_stats` | 檢視虛擬交易室勝率與盈虧歸因週報 | — | User |
