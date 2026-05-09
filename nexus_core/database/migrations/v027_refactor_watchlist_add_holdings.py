@@ -32,7 +32,7 @@ CREATE TABLE watchlist_new (
 );
 
 INSERT INTO watchlist_new (user_id, symbol, use_llm, last_cross_dir, last_cross_price, last_cross_time)
-SELECT id, user_id, symbol, use_llm, last_cross_dir, last_cross_price, last_cross_time 
+SELECT user_id, symbol, COALESCE(use_llm, 1), last_cross_dir, last_cross_price, last_cross_time 
 FROM watchlist;
 
 DROP TABLE watchlist;

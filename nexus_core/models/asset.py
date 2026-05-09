@@ -1,0 +1,48 @@
+from enum import Enum
+from typing import Optional, Dict, Any
+from pydantic import BaseModel, Field
+from datetime import datetime
+
+class ContextType(str, Enum):
+    WATCH = "WATCH"
+    TRADE = "TRADE"
+    HOLDING = "HOLDING"
+
+class WatchMetadata(BaseModel):
+    use_llm: bool = True
+
+class TradeMetadata(BaseModel):
+    opt_type: str # 'call' or 'put'
+    strike: float
+    expiry: str # YYYY-MM-DD
+    entry_price: float
+    quantity: int
+    weighted_delta: float = 0.0
+    theta: float = 0.0
+    gamma: float = 0.0
+    category: str = "SPEC"
+
+class HoldingMetadata(BaseModel):
+    quantity: float
+    avg_cost: float
+    weighted_delta: float = 0.0
+
+class Asset(BaseModel):
+    id: Optional[int] = None
+    user_id: int
+    symbol: str
+    context_type: ContextType
+    risk_weight: float = 1.0 # Beta
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    last_scan_id: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    def get_metadata_model(self):
+        if self.context_type == ContextType.WATCH:
+            return WatchMetadata(**self.metadata)
+        elif self.context_type == ContextType.TRADE:
+            return TradeMetadata(**self.metadata)
+        elif self.context_type == ContextType.HOLDING:
+            return HoldingMetadata(**self.metadata)
+        return None

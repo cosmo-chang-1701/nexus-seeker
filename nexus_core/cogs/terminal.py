@@ -136,7 +136,7 @@ class TerminalCog(commands.Cog):
         msg = "✅ **帳戶設定已更新**：\n" + "\n".join(updates)
         await interaction.response.send_message(msg, ephemeral=True)
 
-    @app_commands.command(name="runway_check", description="根據投資組合收益與現金儲備計算財務跑道")
+    @app_commands.command(name="runway_check", description="執行財務生存跑道與 Theta 收益分析")
     async def runway_check(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         user_id = interaction.user.id
@@ -148,39 +148,64 @@ class TerminalCog(commands.Cog):
         ctx = get_full_user_context(user_id)
         
         if ctx.monthly_expense <= 0:
-            await interaction.followup.send("❌ 每月支出未設定。請於 `/settings` 中更新。", ephemeral=True)
-            return
+            return await interaction.followup.send("⚠️ 請先使用 `/settings` 配置您的每月支出 (expense)，才能計算跑道。", ephemeral=True)
 
-        gross_monthly_yield = ctx.total_theta * 30
-        net_monthly_yield = gross_monthly_yield * (1 - ctx.tax_reserve_rate)
-        income_ratio = net_monthly_yield / ctx.monthly_expense if ctx.monthly_expense > 0 else 0
-        
-        from market_analysis.pro_management import calculate_survival_runway
-        runway_days = calculate_survival_runway(
+        from market_analysis.pro_management import calculate_financial_runway
+        runway_days = calculate_financial_runway(
             cash_reserve=ctx.cash_reserve,
             monthly_expenses=ctx.monthly_expense,
             daily_theta=ctx.total_theta
         )
         
-        daily_theta = ctx.total_theta
-        daily_expense = ctx.monthly_expense / 30.0
+        # 🚀 [Unified Asset Lifecycle] 計算 HOLDING 資產的備用流動性 (含 20% Haircut)
+        from services.asset_manager import AssetManager
+        from models.asset import ContextType, HoldingMetadata
+        manager = AssetManager()
+        holdings = manager.get_assets(user_id, ContextType.HOLDING)
         
-        embed = discord.Embed(
-            title="🏁 財務生存與跑道分析",
-            color=discord.Color.green() if income_ratio >= 1 or runway_days >= 365 else discord.Color.orange()
+        total_holding_value = 0.0
+        for h in holdings:
+            meta = HoldingMetadata(**h.metadata)
+            quote = await market_data_service.get_quote(h.symbol)
+            price = quote.get('c', 0.0) if quote else 0.0
+            total_holding_value += (price * meta.quantity)
+            
+        backup_liquidity = total_holding_value * 0.8 # 20% Haircut
+        
+        # 計算含備用流動性的跑道
+        extended_runway = calculate_financial_runway(
+            cash_reserve=ctx.cash_reserve + backup_liquidity,
+            monthly_expenses=ctx.monthly_expense,
+            daily_theta=ctx.total_theta
         )
-        embed.add_field(name="每日 Theta 收租額", value=f"`${daily_theta:,.2f}`", inline=True)
-        embed.add_field(name="每日預算支出", value=f"`${daily_expense:,.2f}`", inline=True)
-        embed.add_field(name="現金儲備健康度", value=f"`${ctx.cash_reserve:,.2f}`", inline=False)
+
+        embed = discord.Embed(
+            title="🏁 財務生存跑道分析 (zh-tw)",
+            color=discord.Color.green() if runway_days > 180 else discord.Color.orange(),
+            timestamp=datetime.now(timezone.utc)
+        )
         
-        status_text = "可持續" if income_ratio >= 1.0 else "入不敷出"
-        embed.add_field(name="收益支出比", value=f"`{income_ratio:.2%}` ({status_text})", inline=True)
+        runway_str = f"`{runway_days:,.1f}` 天" if runway_days < 9999 else "♾️ 無限 (收益已覆蓋支出)"
+        ext_runway_str = f"`{extended_runway:,.1f}` 天" if extended_runway < 9999 else "♾️ 無限"
+
+        embed.add_field(name="💰 現金儲備 (Cash)", value=f"`${ctx.cash_reserve:,.2f}`", inline=True)
+        embed.add_field(name="📉 每月支出", value=f"`${ctx.monthly_expense:,.2f}`", inline=True)
+        embed.add_field(name="💸 每日 Theta 收益", value=f"`+${ctx.total_theta:,.2f}/day`", inline=True)
         
-        runway_val = "♾️ 無限 (收益覆蓋支出)" if runway_days >= 9999 else f"{runway_days:,.1f} 天"
-        embed.add_field(name="預估生存天數", value=f"`{runway_val}`", inline=True)
-        embed.set_footer(text="基於 Theta 的收益預測。已計入現金儲備與稅務估計。")
+        embed.add_field(name="⌛ 核心生存跑道", value=f"**{runway_str}**", inline=False)
         
-        await interaction.followup.send(embed=embed)
+        if backup_liquidity > 0:
+            embed.add_field(
+                name="🛡️ 備用流動性 (HOLDING 淨值)", 
+                value=f"`${total_holding_value:,.2f}` (折價後: `${backup_liquidity:,.2f}`)\n預計可將跑道延長至: **{ext_runway_str}**", 
+                inline=False
+            )
+            
+        ratio = (ctx.total_theta * 30) / ctx.monthly_expense if ctx.monthly_expense > 0 else 0
+        embed.add_field(name="📊 收益支出比 (Theta/Expense)", value=f"`{ratio:.2%}`", inline=True)
+        
+        embed.set_footer(text="Nexus Risk Engine | 跑道計算含 20% 流動性折價")
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="add_trade", description="將新的選擇權部位加入監控管線")
     @app_commands.choices(opt_type=[
@@ -218,19 +243,43 @@ class TerminalCog(commands.Cog):
         if not category and symbol == "SPY":
             if quantity < 0 or (opt_type.value == "put" and quantity > 0):
                 trade_category = "HEDGE"
+try:
+    from services.asset_manager import AssetManager
+    from models.asset import Asset, ContextType
+    manager = AssetManager()
 
-        try:
-            trade_id = database.add_portfolio_record(
-                user_id, symbol, opt_type.value, strike, expiry, entry_price, quantity, stock_cost,
-                trade_category=trade_category
-            )
-            action_text = "賣出 (STO)" if quantity < 0 else "買入 (BTO)"
-            await interaction.response.send_message(
-                f"✅ **新增成功 (ID: {trade_id})**: {action_text} {abs(quantity)} 口 `{symbol}` ${strike} {opt_type.value.upper()}", 
-                ephemeral=True
-            )
-        except Exception as e:
-            await interaction.response.send_message(f"❌ 寫入失敗: {e}", ephemeral=True)
+    trade_details = {
+        "opt_type": opt_type.value,
+        "strike": strike,
+        "expiry": expiry,
+        "entry_price": entry_price,
+        "quantity": quantity,
+        "category": trade_category
+    }
+
+    asset = Asset(
+        user_id=user_id,
+        symbol=symbol,
+        context_type=ContextType.TRADE,
+        metadata=trade_details
+    )
+
+    success = manager.add_asset(asset)
+    if success:
+        from market_analysis.portfolio import refresh_portfolio_greeks
+        await refresh_portfolio_greeks(user_id)
+        action_text = "賣出 (STO)" if quantity < 0 else "買入 (BTO)"
+        await interaction.response.send_message(
+            f"✅ **新增交易成功**: {action_text} {abs(quantity)} 口 `{symbol}` ${strike} {opt_type.value.upper()}", 
+            ephemeral=True
+        )
+    else:
+        await interaction.response.send_message("❌ 新增交易失敗，請稍後再試。", ephemeral=True)
+
+except Exception as e:
+    logger.error(f"Add trade failed: {e}")
+    await interaction.response.send_message(f"❌ **發生錯誤**: {e}", ephemeral=True)
+
 
     @app_commands.command(name="scan", description="手動執行量化掃描與 What-if 曝險模擬")
     async def manual_scan(self, interaction: discord.Interaction, symbol: str):
@@ -333,16 +382,75 @@ class TerminalCog(commands.Cog):
             
         await interaction.followup.send(msg, ephemeral=True)
 
-    @app_commands.command(name="add_watch", description="將標的加入自動化量化監控清單")
+    @app_commands.command(name="promote_watch", description="將觀察標的提升為實單交易 (WATCH -> TRADE)")
+    @app_commands.describe(symbol="股票代號", opt_type="期權類型 (call/put)", strike="履約價", expiry="到期日 (YYYY-MM-DD)", price="成交價格", qty="口數")
+    async def promote_watch(self, interaction: discord.Interaction, symbol: str, opt_type: str, strike: float, expiry: str, price: float, qty: int):
+        await interaction.response.defer(ephemeral=True)
+        symbol = symbol.upper()
+        from services.asset_manager import AssetManager
+        manager = AssetManager()
+        
+        trade_details = {
+            "opt_type": opt_type.lower(),
+            "strike": strike,
+            "expiry": expiry,
+            "entry_price": price,
+            "quantity": qty,
+            "category": "SPEC"
+        }
+        
+        success = manager.promote_to_trade(interaction.user.id, symbol, trade_details)
+        if success:
+            from market_analysis.portfolio import refresh_portfolio_greeks
+            await refresh_portfolio_greeks(interaction.user.id)
+            
+            embed = discord.Embed(
+                title=f"🌌 Nexus | 資產晉升成功",
+                description=f"標的 **{symbol}** 已從「觀察」提升為「實單交易」。",
+                color=0x00FF7F
+            )
+            embed.add_field(name="合約細節", value=f"`{expiry}` ${strike} {opt_type.upper()}\n數量: `{qty}` 口 | 價格: `${price}`")
+            embed.set_footer(text="Unified Asset Lifecycle v1.0")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        else:
+            await interaction.followup.send(f"❌ 提升失敗。請確認 `{symbol}` 是否在您的觀察清單中，且參數格式正確。", ephemeral=True)
+
+    @app_commands.command(name="settle_trade", description="將實單交易結算為現貨持倉 (TRADE -> HOLDING)")
+    @app_commands.describe(asset_id="資產 ID (從 /list_trades 獲取)", execution_price="最終執行價格 (用於計算平均成本)")
+    async def settle_trade(self, interaction: discord.Interaction, asset_id: int, execution_price: float):
+        await interaction.response.defer(ephemeral=True)
+        from services.asset_manager import AssetManager
+        manager = AssetManager()
+        
+        success = manager.settle_to_holding(interaction.user.id, asset_id, execution_price)
+        if success:
+            from market_analysis.portfolio import refresh_portfolio_greeks
+            await refresh_portfolio_greeks(interaction.user.id)
+            
+            await interaction.followup.send(f"✅ **交易結算完成**：資產 ID `{asset_id}` 已轉換為「現貨持倉」。平均成本已更新為 `${execution_price:.2f}`。", ephemeral=True)
+        else:
+            await interaction.followup.send(f"❌ 結算失敗。請檢查資產 ID 是否正確且屬於「實單交易」狀態。", ephemeral=True)
+
+    @app_commands.command(name="add_watch", description="將標的加入自動化量化監控清單 (WATCH)")
     @app_commands.describe(symbol="股票代號 (如 TSLA)", use_llm="是否啟用 AI 輔助分析")
     async def add_watch(self, interaction: discord.Interaction, symbol: str, use_llm: bool = True):
         symbol = symbol.upper()
-        from database.watchlist import add_watchlist_symbol
-        success = add_watchlist_symbol(interaction.user.id, symbol, use_llm)
+        from services.asset_manager import AssetManager
+        from models.asset import Asset, ContextType
+        manager = AssetManager()
+        
+        asset = Asset(
+            user_id=interaction.user.id,
+            symbol=symbol,
+            context_type=ContextType.WATCH,
+            metadata={"use_llm": use_llm}
+        )
+        
+        success = manager.add_asset(asset)
         if success:
             await interaction.response.send_message(f"✅ **已加入觀察清單**: `{symbol}` (AI 分析: `{'開啟' if use_llm else '關閉'}`)", ephemeral=True)
         else:
-            await interaction.response.send_message(f"⚠️ `{symbol}` 已在您的觀察清單中。", ephemeral=True)
+            await interaction.response.send_message(f"⚠️ `{symbol}` 已在您的資產清單中或發生錯誤。", ephemeral=True)
 
     @app_commands.command(name="edit_watch", description="修改觀察清單中的標的參數")
     @app_commands.describe(symbol="要修改的股票代號", use_llm="更新 AI 輔助分析開關 (選填)")
@@ -355,7 +463,7 @@ class TerminalCog(commands.Cog):
         else:
             await interaction.response.send_message(f"❌ 找不到標的 `{symbol}` 或未提供任何修改參數。", ephemeral=True)
 
-    @app_commands.command(name="add_holding", description="登錄實際現貨持倉 (用於資產會計與 Delta 曝險精算)")
+    @app_commands.command(name="add_holding", description="登錄實際現貨持倉 (HOLDING)")
     @app_commands.describe(symbol="股票代號", quantity="持有股數", avg_cost="平均買入成本 (USD)")
     async def add_holding(self, interaction: discord.Interaction, symbol: str, quantity: float, avg_cost: float):
         symbol = symbol.upper()
@@ -364,11 +472,19 @@ class TerminalCog(commands.Cog):
         if quantity <= 0 or avg_cost < 0:
             return await interaction.response.send_message("❌ 數量必須大於 0 且成本不能為負數。", ephemeral=True)
             
-        from database.holdings import add_holding as db_add_holding
-        success = db_add_holding(user_id, symbol, quantity, avg_cost)
+        from services.asset_manager import AssetManager
+        from models.asset import Asset, ContextType
+        manager = AssetManager()
         
+        asset = Asset(
+            user_id=user_id,
+            symbol=symbol,
+            context_type=ContextType.HOLDING,
+            metadata={"quantity": quantity, "avg_cost": avg_cost}
+        )
+        
+        success = manager.add_asset(asset)
         if success:
-            # 🚀 立即刷新 Greeks 以確保曝險精算同步
             from market_analysis.portfolio import refresh_portfolio_greeks
             await refresh_portfolio_greeks(user_id)
             await interaction.response.send_message(f"✅ **現貨持倉已登錄**: `{symbol}` | `{quantity:,.0f}` 股 | 成本 `${avg_cost:,.2f}`", ephemeral=True)

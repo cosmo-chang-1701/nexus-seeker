@@ -183,39 +183,44 @@ class PortfolioStatusOrchestrator:
 
 async def refresh_portfolio_greeks(user_id: int = None):
     """
-    重新整理投資組合的希臘字母數據並寫回資料庫。
-    包含：期權實單 (portfolio)、虛擬交易 (virtual_trades) 與現貨持倉 (holdings)。
+    [Unified Asset Lifecycle] 重新整理 Assets 表中所有資產的希臘字母數據。
+    包含：TRADE (期權) 與 HOLDING (現貨)。
     """
     try:
-        from database.portfolio import get_all_portfolio, get_user_portfolio, update_portfolio_greeks
-        from database.virtual_trading import get_all_open_virtual_trades, get_open_virtual_trades, update_virtual_trade_greeks
-        from database.holdings import get_all_holdings, get_user_holdings, update_holding_greeks
+        from services.asset_manager import AssetManager
+        from models.asset import ContextType, TradeMetadata, HoldingMetadata
         from py_vollib.black_scholes_merton.implied_volatility import implied_volatility
+        import json
         
+        manager = AssetManager()
+        # 取得所有非 WATCH 的資產
+        query = "SELECT * FROM assets WHERE context_type IN ('TRADE', 'HOLDING')"
+        params = []
         if user_id:
-            real_positions = await asyncio.to_thread(get_user_portfolio, user_id)
-            virtual_positions = await asyncio.to_thread(get_open_virtual_trades, user_id)
-            stock_holdings = await asyncio.to_thread(get_user_holdings, user_id)
-        else:
-            real_positions = await asyncio.to_thread(get_all_portfolio)
-            virtual_positions = await asyncio.to_thread(get_all_open_virtual_trades)
-            stock_holdings = await asyncio.to_thread(get_all_holdings)
-
-        symbols = set()
-        for row in real_positions:
-            symbols.add(row[1])
-        for row in virtual_positions:
-            symbols.add(row['symbol'])
-        for row in stock_holdings:
-            symbols.add(row['symbol'])
+            query += " AND user_id = ?"
+            params.append(user_id)
+            
+        assets_to_update = []
+        unique_symbols = set()
         
-        if not symbols: return
+        with manager._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            for row in cursor.fetchall():
+                data = dict(row)
+                data['metadata'] = json.loads(data['metadata']) if data['metadata'] else {}
+                from models.asset import Asset
+                asset = Asset(**data)
+                assets_to_update.append(asset)
+                unique_symbols.add(asset.symbol)
+        
+        if not unique_symbols: return
             
         spy_df = await market_data_service.get_history_df("SPY", "5d")
         spy_price = spy_df['Close'].iloc[-1] if not spy_df.empty else 670.0
         
         stock_data = {}
-        for sym in symbols:
+        for sym in unique_symbols:
             df = await market_data_service.get_history_df(sym, "5d")
             quote = await market_data_service.get_quote(sym)
             stock_data[sym] = {
@@ -224,56 +229,45 @@ async def refresh_portfolio_greeks(user_id: int = None):
                 'div_yield': await market_data_service.get_dividend_yield(sym)
             }
 
-        async def _update_row_greeks(trade_id, sym, opt_type, strike, expiry, qty, is_virtual=False):
-            # ... (unchanged core logic for options)
-            s_info = stock_data.get(sym)
-            if not s_info or s_info['price'] <= 0: return
+        with manager._get_conn() as conn:
+            cursor = conn.cursor()
+            for asset in assets_to_update:
+                s_info = stock_data.get(asset.symbol)
+                if not s_info or s_info['price'] <= 0: continue
 
-            mid, iv_raw = await asyncio.to_thread(get_option_chain_mid_iv, sym, expiry, strike, opt_type)
-            iv = iv_raw
-            if iv <= 0.001 and mid > 0:
-                try:
-                    exp_date = datetime.strptime(expiry, '%Y-%m-%d').date()
-                    t_years = max((exp_date - datetime.now().date()).days, 1) / 365.0
-                    from config import RISK_FREE_RATE
-                    iv = implied_volatility(mid, s_info['price'], strike, t_years, RISK_FREE_RATE, opt_type[0])
-                except Exception: iv = iv_raw
+                weight_factor = s_info['beta'] * (s_info['price'] / spy_price)
+                
+                if asset.context_type == ContextType.TRADE:
+                    meta = TradeMetadata(**asset.metadata)
+                    mid, iv_raw = await asyncio.to_thread(get_option_chain_mid_iv, asset.symbol, meta.expiry, meta.strike, meta.opt_type)
+                    
+                    iv = iv_raw
+                    if iv <= 0.001 and mid > 0:
+                        try:
+                            exp_date = datetime.strptime(meta.expiry, '%Y-%m-%d').date()
+                            t_years = max((exp_date - datetime.now().date()).days, 1) / 365.0
+                            from config import RISK_FREE_RATE
+                            iv = implied_volatility(mid, s_info['price'], meta.strike, t_years, RISK_FREE_RATE, meta.opt_type[0])
+                        except Exception: iv = iv_raw
 
-            if iv <= 0: return
+                    if iv <= 0: continue
+                    
+                    t_years = max((datetime.strptime(meta.expiry, '%Y-%m-%d').date() - datetime.now().date()).days, 1) / 365.0
+                    greeks = calculate_greeks(meta.opt_type, s_info['price'], meta.strike, t_years, iv, s_info['div_yield'])
+                    
+                    meta.weighted_delta = round(greeks['delta'] * meta.quantity * 100 * weight_factor, 4)
+                    meta.theta = round(greeks['theta'] * meta.quantity * 100, 4)
+                    meta.gamma = round(greeks['gamma'] * meta.quantity * 100 * (weight_factor**2), 6)
+                    
+                    cursor.execute("UPDATE assets SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (meta.model_dump_json(), asset.id))
+
+                elif asset.context_type == ContextType.HOLDING:
+                    meta = HoldingMetadata(**asset.metadata)
+                    # 現貨 Delta 為 1.0
+                    meta.weighted_delta = round(1.0 * meta.quantity * weight_factor, 4)
+                    cursor.execute("UPDATE assets SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (meta.model_dump_json(), asset.id))
             
-            exp_date = datetime.strptime(expiry, '%Y-%m-%d').date()
-            t_years = max((exp_date - datetime.now().date()).days, 1) / 365.0
-            greeks = calculate_greeks(opt_type, s_info['price'], strike, t_years, iv, s_info['div_yield'])
-            
-            weight_factor = s_info['beta'] * (s_info['price'] / spy_price)
-            weighted_delta = greeks['delta'] * qty * 100 * weight_factor
-            annual_theta = greeks['theta'] * qty * 100
-            annual_gamma = greeks['gamma'] * qty * 100 * (weight_factor**2)
-            
-            if is_virtual:
-                await asyncio.to_thread(update_virtual_trade_greeks, trade_id, round(weighted_delta, 4), round(annual_theta, 4), round(annual_gamma, 6))
-            else:
-                await asyncio.to_thread(update_portfolio_greeks, trade_id, round(weighted_delta, 4), round(annual_theta, 4), round(annual_gamma, 6))
-
-        async def _update_holding_delta(holding_id, sym, qty):
-            s_info = stock_data.get(sym)
-            if not s_info or s_info['price'] <= 0: return
-            
-            weight_factor = s_info['beta'] * (s_info['price'] / spy_price)
-            # 現貨 Delta 就是 1.0 (相對於標的)
-            weighted_delta = 1.0 * qty * weight_factor
-            await asyncio.to_thread(update_holding_greeks, holding_id, round(weighted_delta, 4))
-
-        # 執行更新
-        for row in real_positions:
-            if len(row) >= 8:
-                await _update_row_greeks(row[0], row[1], row[2], row[3], row[4], row[6], is_virtual=False)
-
-        for row in virtual_positions:
-            await _update_row_greeks(row['id'], row['symbol'], row['opt_type'], row['strike'], row['expiry'], row['quantity'], is_virtual=True)
-
-        for row in stock_holdings:
-            await _update_holding_delta(row['id'], row['symbol'], row['quantity'])
+            conn.commit()
 
     except Exception as e:
         logger.error(f"refresh_portfolio_greeks 失敗: {e}", exc_info=True)

@@ -21,7 +21,8 @@ def get_migrations():
             migration_list.append({
                 "version": mod.version,
                 "description": mod.description,
-                "sql": mod.sql
+                "sql": mod.sql,
+                "module": mod # 🚀 儲存模組參考
             })
     migration_list.sort(key=lambda x: x["version"])
     return migration_list
@@ -54,9 +55,15 @@ def run_migrations():
         if v > current_version:
             logger.info(f"🚀 正在執行資料庫遷移至 V{v}: {migration['description']}")
             try:
-                # 使用 executescript 支援執行多行 SQL 語句
+                # 執行 SQL 遷移
                 cursor.executescript(migration["sql"])
                 
+                # 🚀 執行選配的 Python 資料遷移函式
+                mod = migration["module"]
+                if hasattr(mod, "migrate_data"):
+                    logger.info(f"⚙️ 執行 V{v} 額外資料遷移邏輯 (Python)...")
+                    mod.migrate_data(conn)
+
                 # 紀錄該版本已套用
                 cursor.execute('INSERT INTO schema_versions (version) VALUES (?)', (v,))
                 conn.commit()

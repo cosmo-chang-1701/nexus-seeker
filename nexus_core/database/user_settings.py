@@ -149,8 +149,7 @@ def get_full_user_context(user_id: int) -> UserContext:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             
-            # 使用 LEFT JOIN 將使用者設定與聚合後的 Greeks 連結
-            # Greeks 由 portfolio, virtual_trades (OPEN) 與 holdings 的 UNION ALL 構成
+            # 🚀 [Unified Asset Lifecycle] 從新的 assets 表聚合 Greeks
             sql = """
                 SELECT 
                     u.*,
@@ -159,16 +158,11 @@ def get_full_user_context(user_id: int) -> UserContext:
                 LEFT JOIN (
                     SELECT 
                         user_id,
-                        SUM(COALESCE(weighted_delta, 0.0)) as sum_delta, 
-                        SUM(COALESCE(theta, 0.0)) as sum_theta,
-                        SUM(COALESCE(gamma, 0.0)) as sum_gamma
-                    FROM (
-                        SELECT user_id, weighted_delta, theta, gamma FROM portfolio
-                        UNION ALL
-                        SELECT user_id, weighted_delta, theta, gamma FROM virtual_trades WHERE status = 'OPEN'
-                        UNION ALL
-                        SELECT user_id, weighted_delta, 0.0 as theta, 0.0 as gamma FROM holdings
-                    )
+                        SUM(COALESCE(CAST(json_extract(metadata, '$.weighted_delta') AS REAL), 0.0)) as sum_delta,
+                        SUM(COALESCE(CAST(json_extract(metadata, '$.theta') AS REAL), 0.0)) as sum_theta,
+                        SUM(COALESCE(CAST(json_extract(metadata, '$.gamma') AS REAL), 0.0)) as sum_gamma
+                    FROM assets
+                    WHERE context_type IN ('TRADE', 'HOLDING')
                     GROUP BY user_id
                 ) g ON u.user_id = g.user_id
                 WHERE u.user_id = ?
