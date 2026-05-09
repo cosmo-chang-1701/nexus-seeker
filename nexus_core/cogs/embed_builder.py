@@ -73,11 +73,11 @@ def add_reddit_field(embed, reddit_text):
 
 def _build_embed_base(data, strategy, stock_cost):
     colors = {"STO_PUT": discord.Color.green(), "STO_CALL": discord.Color.red(), "BTO_CALL": discord.Color.blue(), "BTO_PUT": discord.Color.orange()}
-    titles = {"STO_PUT": "🟢 Sell To Open Put", "STO_CALL": "🔴 Sell To Open Call", "BTO_CALL": "🚀 Buy To Open Call", "BTO_PUT": "⚠️ Buy To Open Put"}
+    titles = {"STO_PUT": "🟢 賣出賣權 (STO Put)", "STO_CALL": "🔴 賣出買權 (STO Call)", "BTO_CALL": "🚀 買入買權 (BTO Call)", "BTO_PUT": "⚠️ 買入賣權 (BTO Put)"}
 
     is_covered = (strategy == "STO_CALL" and stock_cost > 0.0)
     if is_covered:
-        titles["STO_CALL"] = "🛡️ Covered Call (掩護性買權)"
+        titles["STO_CALL"] = "🛡️ 掩護性買權 (Covered Call)"
         colors["STO_CALL"] = discord.Color.teal()
 
     embed = discord.Embed(
@@ -410,25 +410,25 @@ def _add_trend_and_support_fields(embed, data):
     distance = data.get('distance_from_21', 0.0)
 
     if trend == "BULLISH_STRONG":
-        trend_str = "📈 Strong Bullish (Price > 8 > 21)"
+        trend_str = "📈 強勢多頭 (現價 > 8 > 21)"
     elif trend == "BULLISH_CORRECTION":
-        trend_str = "📉 Bullish Correction (EMA 8 > 21 ≥ Price)"
+        trend_str = "📉 多頭回檔 (EMA 8 > 21 ≥ 現價)"
     elif trend == "BEARISH_STRONG":
-        trend_str = "🐻 Strong Bearish (Price < 8 < 21)"
+        trend_str = "🐻 強勢空頭 (現價 < 8 < 21)"
     else:
-        trend_str = "⚖️ Neutral Trend"
+        trend_str = "⚖️ 趨勢中性"
 
     # Risk 判定
     if distance > 10.0:
-        risk_str = "⚠️ Overextended (Gap > 10%)"
+        risk_str = "⚠️ 過度擴張 (乖離率 > 10%)"
     elif distance < -10.0:
-        risk_str = "⚠️ Oversold (Gap < -10%)"
+        risk_str = "⚠️ 超跌區間 (乖離率 < -10%)"
     else:
-        risk_str = "✅ Stable Zone"
+        risk_str = "✅ 穩定區間"
 
-    support_str = f"EMA 21 at ${ema21:.2f} (Gap: {distance:+.1f}%)"
+    support_str = f"EMA 21 位於 `${ema21:.2f}` (乖離: {distance:+.1f}%)"
 
-    trend_info = f"**Trend:** {trend_str}\n**Support:** {support_str}\n**Risk:** {risk_str}\n"
+    trend_info = f"**目前趨勢:** {trend_str}\n**支撐參考:** {support_str}\n**風險評估:** {risk_str}\n"
     trend_info += get_ema_signal_ui(data.get('ema_signals', []))
 
     embed.add_field(name="🧭 趨勢與支撐 (EMA 8/21)", value=trend_info + "\n\u200b", inline=False)
@@ -452,17 +452,17 @@ def create_scan_embed(data, user_capital=100000.0):
     if gap:
         from market_analysis.gap_analysis import GapStatus
         status_emoji = {
-            GapStatus.GAP_HOLDING: "🟢 Holding",
-            GapStatus.PARTIAL_FILL: "🟡 Filling",
-            GapStatus.FULL_FILL: "🔴 Filled",
-            GapStatus.NO_GAP: "⚪ None"
+            GapStatus.GAP_HOLDING: "🟢 持續跳空 (Holding)",
+            GapStatus.PARTIAL_FILL: "🟡 部分回補 (Filling)",
+            GapStatus.FULL_FILL: "🔴 完全回補 (Filled)",
+            GapStatus.NO_GAP: "⚪ 無跳空"
         }.get(gap.current_fill_status, "⚪ N/A")
         
-        support_tag = " | 🛡️ Support Confirmed" if gap.is_support_confirmed else ""
+        support_tag = " | 🛡️ 支撐已確認" if gap.is_support_confirmed else ""
         gap_color = "🟢" if gap.gap_size > 0 else "🔴"
         
         gap_info = (
-            f"{gap_color} **{'UP-GAP' if gap.gap_size > 0 else 'DOWN-GAP'}**: `{gap.gap_pct:+.2f}%` (${gap.gap_size:+.2f})\n"
+            f"{gap_color} **{'向上跳空 (UP-GAP)' if gap.gap_size > 0 else '向下跳空 (DOWN-GAP)'}**: `{gap.gap_pct:+.2f}%` (${gap.gap_size:+.2f})\n"
             f"**狀態:** {status_emoji}{support_tag}\n"
             f"**區間:** `${gap.gap_zone[0]:.2f}` - `${gap.gap_zone[1]:.2f}`\n\u200b"
         )
@@ -533,7 +533,7 @@ def create_psq_embed(data: dict) -> discord.Embed:
     embed.add_field(name="🔋 能量壓縮狀態", value=f"{squeeze_val}\n狀態: {energy_str}\n\u200b", inline=True)
     
     # 動能趨勢
-    trend_val = "🟢 多方控盤 (Long)" if psq.momentum_value > 0 else "🔴 空方控盤 (Short)"
+    trend_val = "🟢 多方主導" if psq.momentum_value > 0 else "🔴 空方主導"
     embed.add_field(name="🚀 線性動能 (Momentum)", value=f"`{psq.momentum_value:+.2f}`\n趨勢: {trend_val}\n\u200b", inline=True)
     
     # 支撐區間
@@ -651,47 +651,82 @@ def create_polymarket_list_embed(markets: List[Dict[str, Any]]):
     return embed
 
 
+def create_holdings_embed(holdings_data: List[Dict[str, Any]], total_capital: float) -> discord.Embed:
+    """建構現貨持倉 (Holdings) 狀態報告 Embed"""
+    embed = discord.Embed(
+        title="📊 Nexus Seeker | 現貨持倉清單",
+        description="追蹤您的長期股權資產與成本分佈。\n\u200b",
+        color=discord.Color.blue(),
+        timestamp=datetime.now(timezone.utc)
+    )
+    
+    if not holdings_data:
+        embed.description = "📭 目前無現貨持倉紀錄。請使用 `/add_holding` 進行登錄。"
+        return embed
+
+    total_value = 0.0
+    total_pnl = 0.0
+    
+    lines = ["```ansi"]
+    header = f"{'標的'.ljust(8)} | {'數量'.rjust(8)} | {'平均成本'.rjust(10)} | {'當前損益'.rjust(10)}"
+    lines.append(header)
+    lines.append("-" * 43)
+
+    for h in holdings_data:
+        sym = h['symbol'].ljust(8)
+        qty = f"{h['quantity']:,.0f}".rjust(8)
+        cost = f"${h['avg_cost']:,.2f}".rjust(10)
+        
+        curr_p = h.get('current_price', 0.0)
+        pnl = (curr_p - h['avg_cost']) * h['quantity'] if curr_p > 0 else 0.0
+        pnl_pct = (curr_p / h['avg_cost'] - 1) if h['avg_cost'] > 0 and curr_p > 0 else 0.0
+        
+        total_pnl += pnl
+        total_value += (curr_p * h['quantity'])
+        
+        # 使用 ANSI 顏色：綠色表示正損益，紅色表示負損益
+        color_start = "[0;32m" if pnl >= 0 else "[0;31m"
+        pnl_fmt = f"{color_start}{pnl_pct:+.1%}[0m".rjust(18) 
+        
+        lines.append(f"{sym} | {qty} | {cost} | {pnl_fmt}")
+
+    lines.append("```")
+    embed.add_field(name="📦 持倉明細", value="\n".join(lines), inline=False)
+    
+    summary = (f"💰 **持倉總市值**: `${total_value:,.2f}`\n"
+               f"📈 **累計未實現損益**: `${total_pnl:,.2f}`\n"
+               f"⚖️ **佔總預算比例**: `{ (total_value / total_capital * 100) if total_capital > 0 else 0:.1f}%`")
+    embed.add_field(name="🏁 財務摘要", value=summary, inline=False)
+    
+    embed.set_footer(text="Nexus Accounting Engine | 專業股權追蹤")
+    return embed
+
 def create_watchlist_embed(page_data, current_page, total_pages, total_items):
-    """生成觀察清單的分頁 Embed (使用等寬區塊排版)"""
+    """生成觀察清單的分頁 Embed (移除成本欄位)"""
     
     if not page_data:
         description = "目前沒有追蹤任何項目"
     else:
-        lines = ["```ansi"] # 使用 ansi 可支援文字變色，或純用 ``` 即可
-        
-        # 1. 標頭修改為四欄
-        header = f"{'標的'.ljust(8)} | {'狀態'.ljust(7)} | {'成本'.rjust(8)} | {'LLM'.rjust(3)}"
+        lines = ["```ansi"]
+        # 1. 標頭修改為兩欄
+        header = f"{'標的'.ljust(12)} | {'AI 分析 (LLM)'.rjust(12)}"
         lines.append(header)
         
-        # 2. 分隔線配合四欄總長度加長
-        lines.append("-" * 37) 
+        # 2. 分隔線
+        lines.append("-" * 28) 
         
-        for sym, cost, use_llm in page_data:
-            sym_fmt = sym.ljust(8)
-            
-            # 3. 將狀態與成本拆分為獨立變數
-            if cost > 0:
-                status_text = "📦 持倉"
-                cost_text = f"${cost:.2f}"
-            else:
-                status_text = "🔍 觀察"
-                cost_text = "-"
-                
-            status_fmt = status_text.ljust(7)
-            cost_fmt = cost_text.rjust(8) 
-            
-            llm_icon = "🟢" if use_llm else "🔴"
-            llm_fmt = llm_icon.rjust(3)
-            
-            # 4. 組合四欄輸出
-            lines.append(f"{sym_fmt} | {status_fmt} | {cost_fmt} | {llm_fmt}")
+        for sym, use_llm in page_data:
+            sym_fmt = sym.ljust(12)
+            llm_text = "開啟 (ON)" if use_llm else "關閉 (OFF)"
+            llm_fmt = llm_text.rjust(12)
+            lines.append(f"{sym_fmt} | {llm_fmt}")
             
         lines.append("```")
         description = "\n".join(lines)
         
     embed = discord.Embed(
         title=f"📡 【您的專屬觀察清單】",
-        description=description,
+        description=f"目前監控中的標的清單。系統將每 30 分鐘自動執行量化掃描。\n\n{description}",
         color=discord.Color.blurple()
     )
     

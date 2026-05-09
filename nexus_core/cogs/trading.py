@@ -596,7 +596,7 @@ class SchedulerCog(commands.Cog):
                 
                 if is_ditm:
                     exit_reason = next((tag.split(":", 1)[1] for tag in tags if tag.startswith("exit_reason:")), "N/A")
-                    action_taken = "已平倉 (Closed)" if trade_info['status'] == 'CLOSED' else "已自動轉倉 (Rolled Up & Out)"
+                    action_taken = "已平倉 (Closed)" if trade_info['status'] == 'CLOSED' else "已自動轉倉 (向上/向後轉倉)"
                     
                     embed = discord.Embed(
                         title="🚨 NRO 優先指令：Profit Lock (DITM 凸性防禦)",

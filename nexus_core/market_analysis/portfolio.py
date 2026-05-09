@@ -184,24 +184,29 @@ class PortfolioStatusOrchestrator:
 async def refresh_portfolio_greeks(user_id: int = None):
     """
     重新整理投資組合的希臘字母數據並寫回資料庫。
+    包含：期權實單 (portfolio)、虛擬交易 (virtual_trades) 與現貨持倉 (holdings)。
     """
     try:
         from database.portfolio import get_all_portfolio, get_user_portfolio, update_portfolio_greeks
         from database.virtual_trading import get_all_open_virtual_trades, get_open_virtual_trades, update_virtual_trade_greeks
+        from database.holdings import get_all_holdings, get_user_holdings, update_holding_greeks
         from py_vollib.black_scholes_merton.implied_volatility import implied_volatility
         
         if user_id:
             real_positions = await asyncio.to_thread(get_user_portfolio, user_id)
             virtual_positions = await asyncio.to_thread(get_open_virtual_trades, user_id)
+            stock_holdings = await asyncio.to_thread(get_user_holdings, user_id)
         else:
             real_positions = await asyncio.to_thread(get_all_portfolio)
             virtual_positions = await asyncio.to_thread(get_all_open_virtual_trades)
+            stock_holdings = await asyncio.to_thread(get_all_holdings)
 
         symbols = set()
         for row in real_positions:
-            # Indices: 0(id), 1(symbol)...
             symbols.add(row[1])
         for row in virtual_positions:
+            symbols.add(row['symbol'])
+        for row in stock_holdings:
             symbols.add(row['symbol'])
         
         if not symbols: return
@@ -220,30 +225,21 @@ async def refresh_portfolio_greeks(user_id: int = None):
             }
 
         async def _update_row_greeks(trade_id, sym, opt_type, strike, expiry, qty, is_virtual=False):
+            # ... (unchanged core logic for options)
             s_info = stock_data.get(sym)
-            if not s_info or s_info['price'] <= 0:
-                logger.warning(f"跳過 Greeks 更新: {sym} 無價格資訊")
-                return
+            if not s_info or s_info['price'] <= 0: return
 
             mid, iv_raw = await asyncio.to_thread(get_option_chain_mid_iv, sym, expiry, strike, opt_type)
-            
-            # 🚀 [Data Layer Enhancement] 若 IV 為 0 但有市場價，嘗試反推 IV
             iv = iv_raw
             if iv <= 0.001 and mid > 0:
                 try:
                     exp_date = datetime.strptime(expiry, '%Y-%m-%d').date()
                     t_years = max((exp_date - datetime.now().date()).days, 1) / 365.0
                     from config import RISK_FREE_RATE
-                    # implied_volatility(price, S, K, t, r, flag)
                     iv = implied_volatility(mid, s_info['price'], strike, t_years, RISK_FREE_RATE, opt_type[0])
-                    logger.info(f"🔄 [{sym}] 已從市場價 ${mid:.2f} 反推 IV: {iv:.2%}")
-                except Exception as e:
-                    logger.debug(f"反推 IV 失敗 ({sym}): {e}")
-                    iv = iv_raw # fallback to original
+                except Exception: iv = iv_raw
 
-            if iv <= 0:
-                logger.warning(f"跳過 Greeks 更新: {sym} {expiry} ${strike} {opt_type} 無 IV 資訊且無法反推")
-                return
+            if iv <= 0: return
             
             exp_date = datetime.strptime(expiry, '%Y-%m-%d').date()
             t_years = max((exp_date - datetime.now().date()).days, 1) / 365.0
@@ -251,8 +247,6 @@ async def refresh_portfolio_greeks(user_id: int = None):
             
             weight_factor = s_info['beta'] * (s_info['price'] / spy_price)
             weighted_delta = greeks['delta'] * qty * 100 * weight_factor
-            
-            # Annual Dollar Greeks
             annual_theta = greeks['theta'] * qty * 100
             annual_gamma = greeks['gamma'] * qty * 100 * (weight_factor**2)
             
@@ -261,14 +255,25 @@ async def refresh_portfolio_greeks(user_id: int = None):
             else:
                 await asyncio.to_thread(update_portfolio_greeks, trade_id, round(weighted_delta, 4), round(annual_theta, 4), round(annual_gamma, 6))
 
+        async def _update_holding_delta(holding_id, sym, qty):
+            s_info = stock_data.get(sym)
+            if not s_info or s_info['price'] <= 0: return
+            
+            weight_factor = s_info['beta'] * (s_info['price'] / spy_price)
+            # 現貨 Delta 就是 1.0 (相對於標的)
+            weighted_delta = 1.0 * qty * weight_factor
+            await asyncio.to_thread(update_holding_greeks, holding_id, round(weighted_delta, 4))
+
         # 執行更新
         for row in real_positions:
             if len(row) >= 8:
-                # get_user_portfolio: (id, symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost, ...)
                 await _update_row_greeks(row[0], row[1], row[2], row[3], row[4], row[6], is_virtual=False)
 
         for row in virtual_positions:
             await _update_row_greeks(row['id'], row['symbol'], row['opt_type'], row['strike'], row['expiry'], row['quantity'], is_virtual=True)
+
+        for row in stock_holdings:
+            await _update_holding_delta(row['id'], row['symbol'], row['quantity'])
 
     except Exception as e:
         logger.error(f"refresh_portfolio_greeks 失敗: {e}", exc_info=True)

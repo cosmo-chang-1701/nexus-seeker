@@ -22,7 +22,7 @@
 | **量化定價引擎** | Black-Scholes-Merton (via `py_vollib`, 含股息率校正) |
 | **風險精算核心** | Nexus Risk Optimizer (NRO) - 二階 Beta-Weighted 曝險模型 |
 | **數據源 (Feeds)** | Finnhub (Real-time), yfinance (Chain), Polymarket (WS L2), Reddit (Edge) |
-| **持久化層** | SQLite 搭配自動化 Migration Engine (v026+) |
+| **持久化層** | SQLite 搭配自動化 Migration Engine (v027+) |
 | **智能層** | Structured LLM Output (Pydantic Schema) via OpenAI-compatible API |
 | **訊息傳遞** | Discord.py (持久化非同步訊息佇列，支援多租戶隔離) |
 
@@ -38,7 +38,7 @@ graph TD
         Bot[NexusBot Core]
         TS[TradingService - Business Logic]
         RE[Risk Engine - NRO]
-        DB[(SQLite DB v026)]
+        DB[(SQLite DB v027)]
         S[Services - LLM/Polymarket]
         C[KV Cache - Reddit]
     end
@@ -82,13 +82,11 @@ graph TD
 
 ### 2. Market Intelligence (邊緣偵測)
 *   **Volatility Strategist (波動率優勢偵測)**：
-    偵測「廉價波動率」機會。當 IV 處於 252 日歷史低位 (IVP < 25%) 且低於歷史波動率 (IV < HV)，結合價格動能發出 BTO 或牛市價差建議，規避財報 Crush 風險。
+    偵測「廉價波動率」機會。當 IV 處於 252 日歷史低位 (IVP < 25%) 且低於歷史波動率 (IV < HV)，結合價格動能發出 BTO 或牛市價差建議。
 *   **Davis Double Play (戴維斯雙擊引擎)**：
     量化偵測盈餘增長與估值擴張的共振機會。要求 YoY EPS 成長 > 15% 且 P/E 處於 3 年歷史低位 (25th Percentile)，並經由營收加速狀態確認。
 *   **Polymarket 巨鯨意圖圖譜 (Whale Intent Mapping)**：
     透過 WebSocket 即時監控預測市場 **L2 Order Book**。結合 LLM 進行 **吃單者意圖映射 (Taker Intent Mapping)** 識別機構級巨鯨建倉動機。
-*   **Asynchronous Reddit Intelligence**：
-    Reddit 散戶情緒優勢改為每日定時非同步抓取並快取，確保盤中掃描不受爬蟲延遲影響，同時降低 Tunnel 負載。
 
 ### 3. Execution Automation
 *   **NYSE 動態調度器 (Dynamic Scheduler)**：
@@ -96,11 +94,9 @@ graph TD
 *   **盤前財報雷達 (Pre-market Earnings Radar)**：
     每日 09:00 自動掃描持倉與觀察清單，依據距離財報天數**升冪排序**（0天優先），提供即時風險預警。
 *   **優雅關閉與持久化私訊佇列 (Graceful Handoff)**：
-    部署新版本時，系統會自動將未送出的警報存入 SQLite 佇列，並由新實例在啟動後接力補發。透過 `stop_grace_period` 確保舊實例有足夠時間跑完剩餘精算任務。
-*   **日內風險審計 (Intra-day Risk Audit)**：
-    每 30 分鐘自動審計投資組合，執行 **獲利鎖定 (DITM 防禦)** 與 **Gamma 脆弱性偵測**。
-*   **GhostTrader (VTR)**：
-    全功能虛擬交易室，支援自動化策略回測與實時績效歸因，提供每週勝率、損益比專業報表。
+    部署新版本時，系統會自動將未送出的警報存入 SQLite 佇列，並由新實例在啟動後接力補發。
+*   **獨立現貨持倉系統 (Independent Holdings System)**：
+    解耦觀察清單與實際資產會計。透過 `/add_holding` 獨立管理長期股權，並將其 Beta-Weighted Delta 自動納入 NRO 全局風險精算。
 *   **零停機部署 (Zero-Downtime Deployment)**：
     採用 Docker Swarm `start-first` 藍綠部屬策略，維持服務 24/7 不中斷。
 
@@ -133,14 +129,17 @@ stateDiagram-v2
 |---|---|---|---|
 | `/settings` | 配置全域資產、風險、生存支出與推播開關 | `capital`, `risk_limit`, `expense`, `cash_reserve` | User |
 | `/runway_check` | 執行財務生存跑道與 Theta 收益分析 | — | User |
-| `/ddp_scan` | 立即對觀察清單執行 Davis Double Play (DDP) 深度掃描 | — | User |
-| `/iv_scan` | 立即對觀察清單執行波動率優勢 (Cheap IV) 偵測 | — | User |
+| `/add_holding` | 登錄實際現貨持倉 (用於資產會計與 Delta 曝險精算) | `symbol`, `quantity`, `avg_cost` | User |
+| `/list_holdings` | 列出目前所有現貨持倉、分配比例與即時損益估計 | — | User |
+| `/remove_holding` | 從資產清單中移除特定的現貨紀錄 | `symbol` | User |
 | `/add_trade` | 登錄實單部位至 NRO 監控管線 (含 YYYY-MM-DD 驗證) | `symbol`, `opt_type`, `strike`, `qty`, `expiry`, `cost` | User |
 | `/scan` | 手動執行量化掃描與 What-if 曝險模擬 | `symbol` | User |
+| `/ddp_scan` | 立即對觀察清單執行 Davis Double Play (DDP) 深度掃描 | — | User |
+| `/iv_scan` | 立即對觀察清單執行波動率優勢 (Cheap IV) 偵測 | — | User |
 | `/vtr_stats` | 檢視虛擬交易室勝率與盈虧歸因週報 | — | User |
 | `/vtr_list` | 列出虛擬交易室中的所有持倉與歷史紀錄 | — | User |
-| `/add_watch` | 將標的加入自動化量化監控清單 | `symbol`, `stock_cost`, `use_llm` | User |
-| `/edit_watch` | 修改觀察清單中的標的參數 | `symbol`, `stock_cost`, `use_llm` | User |
+| `/add_watch` | 將標的加入自動化量化監控清單 | `symbol`, `use_llm` | User |
+| `/edit_watch` | 修改觀察清單中的標的參數 | `symbol`, `use_llm` | User |
 | `/remove_watch` | 將標的從觀察清單中移除 | `symbol` | User |
 | `/list_watch` | 列出您的雷達觀察清單 | — | User |
 | `/list_trades` | 列出目前資料庫中的所有實單持倉 | — | User |

@@ -29,10 +29,10 @@ The system is divided into two main services:
   - **`psq_engine.py`**: PowerSqueeze (PSQ) scoring with VIX-aware momentum labeling.
   - **`risk_engine.py`**: NRO risk optimization with dynamic Kelly scaling.
   - **`ghost_trader.py`**: Virtual Trading Room (VTR) and autonomous DITM defense.
-- **`database/`**: Persistent storage layer with an automated migration engine. Includes aggregate Greeks tracking, DDP signals, and the **`pending_notifications`** table for cross-deployment message reliability (v026+).
+- **`database/`**: Persistent storage layer with an automated migration engine. Includes aggregate Greeks tracking, DDP signals, and the **`holdings`** table for independent equity asset accounting (v027+).
 - **`services/`**: Business logic layer (`TradingService`, `LLMService`, `PolymarketService`, `MarketDataService`, `NewsService`, `RedditService`) that decouples the Discord UI from core computations.
 - `cogs/`: Discord extensions implementing slash commands and background tasks.
-  - **`terminal.py`**: High-impact professional terminal commands (`/runway_check`, `/scan`, `/ddp_scan`, `/iv_scan`, `/settings`, `/vtr_list`).
+  - **`terminal.py`**: High-impact professional terminal commands (`/runway_check`, `/scan`, `/ddp_scan`, `/iv_scan`, `/add_holding`, `/list_holdings`, `/settings`, `/vtr_list`).
   - **`intelligence.py`**: Market intelligence and edge detection terminal (`/poly_list`, `/scan_news`, `/scan_reddit`, `/quote`).
   - **`trading.py`**: Automated market scanning (NRO + DDP + Volatility) and background risk auditing.
   - **`analyst_agent.py`**: Scheduled Wall Street Quantitative Analyst Agent.
@@ -89,7 +89,7 @@ Tests are located in `nexus_core/tests/`.
 
 ### 1. Database Migrations
 Never modify the database schema manually. Use the migration engine:
-- Create a new file in `nexus_core/database/migrations/` (e.g., `v026_add_pending_notifications.py`).
+- Create a new file in `nexus_core/database/migrations/` (e.g., `v027_refactor_watchlist_add_holdings.py`).
 - Export `version` (int), `description` (str), and `sql` (str).
 - The bot will automatically apply it on the next startup.
 
@@ -101,6 +101,7 @@ New commands should be added as **Slash Commands** within a Cog in `nexus_core/c
 
 ### 3. Market Analysis & Strategy
 - Core logic belongs in `nexus_core/market_analysis/strategy.py`.
+- **Holdings Management**: Equity assets are tracked independently in `holdings.py`. These positions contribute to the total portfolio Delta but have 0 Theta/Gamma. Refreshed via `refresh_portfolio_greeks()`.
 - **Davis Double Play (DDP)**: Implemented in `ddp_inspector.py`. Identifies stocks with simultaneous EPS growth (>15%) and P/E expansion potential.
 - **Volatility Strategist (IV)**: Implemented in `volatility_inspector.py`. Detects undervalued options (IVP < 25%, IV < HV) with technical momentum alignment.
 - Use the `AlertFilter` in `services/alert_filter.py` to implement noise reduction.
@@ -119,7 +120,7 @@ New commands should be added as **Slash Commands** within a Cog in `nexus_core/c
 The VIX Battle Ladder is a 6-tier system defined in `config.py` (`VIX_LADDER_CONFIG`) that dynamically governs risk appetite.
 
 ### 6. Localization & Copywriting
-The terminal's Discord output is localized to **Professional Traditional Chinese (Taiwan)**.
+The terminal's Discord output is localized to **Professional Traditional Chinese (Taiwan)**. All user-facing Embed content, command descriptions, and error messages strictly follow Traditional Chinese standards.
 
 ### 7. Code Style
 - **Type Hinting:** Strictly define types for all functions and class members.
@@ -145,6 +146,7 @@ The terminal's Discord output is localized to **Professional Traditional Chinese
 - `nexus_core/market_analysis/pro_management.py`: Financial Runway analysis.
 - `nexus_core/database/user_settings.py`: User profile and context management.
 - `nexus_core/database/notifications.py`: Persistent notification queue.
+- `nexus_core/database/holdings.py`: Independent equity asset accounting.
 - `nexus_core/cogs/embed_builder.py`: Discord UI/UX generator.
 - **`nexus_core/cogs/analyst_agent.py`**: Wall Street Analyst Agent.
 - `nexus_core/database/core.py`: SQLite migration engine.

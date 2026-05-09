@@ -132,36 +132,39 @@ class TradingService:
         if not all_watchlists:
             return {}
 
+        # 🚀 獲取所有用戶的現貨持倉，用於動態帶入成本
+        from database.holdings import get_all_holdings
+        all_holdings = await asyncio.to_thread(get_all_holdings)
+        holding_map = {(h['user_id'], h['symbol']): h['avg_cost'] for h in all_holdings}
+
         from market_analysis.risk_engine import MacroContext
 
-        # 1. 🚀 獲取全域基準資料 (僅抓取一次，減少 API 消耗)
+        # 1. 🚀 獲取全域基準資料
         try:
             spy_task = market_data_service.get_spy_history_df("1y")
             macro_task = market_data_service.get_macro_environment()
-            
             df_spy, macro_raw = await asyncio.gather(spy_task, macro_task)
-            
             spy_price = df_spy['Close'].iloc[-1] if not df_spy.empty else 670.0
             vix_spot = macro_raw.get('vix', 18.0)
-            macro_data = MacroContext(
-                vix=vix_spot,
-                oil_price=macro_raw.get('oil', 75.0),
-                vix_change=macro_raw.get('vix_change', 0.0)
-            )
-        except Exception as e:
-            logger.error(f"全域基準資料獲取失敗: {e}")
+            macro_data = MacroContext(vix=vix_spot, oil_price=macro_raw.get('oil', 75.0), vix_change=macro_raw.get('vix_change', 0.0))
+        except Exception:
             df_spy, spy_price = None, 670.0
-            vix_spot = 18.0
-            macro_data = MacroContext(vix=vix_spot, oil_price=85.0, vix_change=0.0)
+            vix_spot, macro_data = 18.0, MacroContext(vix=18.0, oil_price=85.0, vix_change=0.0)
 
-        # 取得 VIX 戰情階梯
         vix_tier = get_vix_tier(vix_spot)
 
         # 2. 提取不重複標的進行「併行批次掃描」
-        unique_targets = list(set((sym, stock_cost, use_llm) for uid, sym, stock_cost, use_llm in all_watchlists))
+        # 標的聚合鍵：(代號, 成本, 是否用LLM)
+        scan_targets = []
+        for uid, sym, use_llm in all_watchlists:
+            cost = holding_map.get((uid, sym), 0.0)
+            scan_targets.append((sym, cost, use_llm))
+            
+        unique_targets = list(set(scan_targets))
         
         async def _scan_single_target(target):
             sym, stock_cost, use_llm = target
+            # ... (rest of scan logic)
             try:
                 # analyze_symbol 已經是 async，若沒有 Option 訊號，res 會是 None
                 res = await market_math.analyze_symbol(sym, stock_cost, df_spy, spy_price, vix_spot=vix_spot)

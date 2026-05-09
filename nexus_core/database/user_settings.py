@@ -150,7 +150,7 @@ def get_full_user_context(user_id: int) -> UserContext:
             cursor = conn.cursor()
             
             # 使用 LEFT JOIN 將使用者設定與聚合後的 Greeks 連結
-            # Greeks 由 portfolio 與 virtual_trades (OPEN) 的 UNION ALL 構成
+            # Greeks 由 portfolio, virtual_trades (OPEN) 與 holdings 的 UNION ALL 構成
             sql = """
                 SELECT 
                     u.*,
@@ -166,6 +166,8 @@ def get_full_user_context(user_id: int) -> UserContext:
                         SELECT user_id, weighted_delta, theta, gamma FROM portfolio
                         UNION ALL
                         SELECT user_id, weighted_delta, theta, gamma FROM virtual_trades WHERE status = 'OPEN'
+                        UNION ALL
+                        SELECT user_id, weighted_delta, 0.0 as theta, 0.0 as gamma FROM holdings
                     )
                     GROUP BY user_id
                 ) g ON u.user_id = g.user_id

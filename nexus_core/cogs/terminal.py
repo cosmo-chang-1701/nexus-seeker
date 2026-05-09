@@ -237,6 +237,11 @@ class TerminalCog(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         user_id, symbol = interaction.user.id, symbol.upper()
 
+        # 🚀 獲取用戶現貨成本 (如果有)
+        from database.holdings import get_user_holdings
+        holdings = await asyncio.to_thread(get_user_holdings, user_id)
+        stock_cost = next((h['avg_cost'] for h in holdings if h['symbol'] == symbol), 0.0)
+
         try:
             spy_task = market_data_service.get_spy_history_df("1y")
             macro_task = market_data_service.get_macro_environment()
@@ -247,9 +252,9 @@ class TerminalCog(commands.Cog):
         except Exception:
             df_spy, spy_price, macro_data = None, 670.0, MacroContext(vix=22.0, oil_price=85.0, vix_change=0.0)
 
-        result = await market_math.analyze_symbol(symbol, 0.0, df_spy, spy_price, vix_spot=macro_data.vix)
+        result = await market_math.analyze_symbol(symbol, stock_cost, df_spy, spy_price, vix_spot=macro_data.vix)
         is_option_valid = bool(result)
-        if not result: result = {'symbol': symbol, 'stock_cost': 0.0}
+        if not result: result = {'symbol': symbol, 'stock_cost': stock_cost}
 
         # 🚀 執行 Gap & Fill 跳空分析 (New)
         try:
@@ -329,26 +334,83 @@ class TerminalCog(commands.Cog):
         await interaction.followup.send(msg, ephemeral=True)
 
     @app_commands.command(name="add_watch", description="將標的加入自動化量化監控清單")
-    @app_commands.describe(symbol="股票代號 (如 TSLA)", stock_cost="持股成本 (選填)", use_llm="是否啟用 AI 輔助分析")
-    async def add_watch(self, interaction: discord.Interaction, symbol: str, stock_cost: float = 0.0, use_llm: bool = True):
+    @app_commands.describe(symbol="股票代號 (如 TSLA)", use_llm="是否啟用 AI 輔助分析")
+    async def add_watch(self, interaction: discord.Interaction, symbol: str, use_llm: bool = True):
         symbol = symbol.upper()
         from database.watchlist import add_watchlist_symbol
-        success = add_watchlist_symbol(interaction.user.id, symbol, stock_cost, use_llm)
+        success = add_watchlist_symbol(interaction.user.id, symbol, use_llm)
         if success:
             await interaction.response.send_message(f"✅ **已加入觀察清單**: `{symbol}` (AI 分析: `{'開啟' if use_llm else '關閉'}`)", ephemeral=True)
         else:
             await interaction.response.send_message(f"⚠️ `{symbol}` 已在您的觀察清單中。", ephemeral=True)
 
     @app_commands.command(name="edit_watch", description="修改觀察清單中的標的參數")
-    @app_commands.describe(symbol="要修改的股票代號", stock_cost="更新持股成本 (選填)", use_llm="更新 AI 輔助分析開關 (選填)")
-    async def edit_watch(self, interaction: discord.Interaction, symbol: str, stock_cost: Optional[float] = None, use_llm: Optional[bool] = None):
+    @app_commands.describe(symbol="要修改的股票代號", use_llm="更新 AI 輔助分析開關 (選填)")
+    async def edit_watch(self, interaction: discord.Interaction, symbol: str, use_llm: Optional[bool] = None):
         symbol = symbol.upper()
         from database.watchlist import update_user_watchlist
-        success = update_user_watchlist(interaction.user.id, symbol, stock_cost, use_llm)
+        success = update_user_watchlist(interaction.user.id, symbol, use_llm)
         if success:
             await interaction.response.send_message(f"✅ **已更新觀察設定**: `{symbol}`", ephemeral=True)
         else:
             await interaction.response.send_message(f"❌ 找不到標的 `{symbol}` 或未提供任何修改參數。", ephemeral=True)
+
+    @app_commands.command(name="add_holding", description="登錄實際現貨持倉 (用於資產會計與 Delta 曝險精算)")
+    @app_commands.describe(symbol="股票代號", quantity="持有股數", avg_cost="平均買入成本 (USD)")
+    async def add_holding(self, interaction: discord.Interaction, symbol: str, quantity: float, avg_cost: float):
+        symbol = symbol.upper()
+        user_id = interaction.user.id
+        
+        if quantity <= 0 or avg_cost < 0:
+            return await interaction.response.send_message("❌ 數量必須大於 0 且成本不能為負數。", ephemeral=True)
+            
+        from database.holdings import add_holding as db_add_holding
+        success = db_add_holding(user_id, symbol, quantity, avg_cost)
+        
+        if success:
+            # 🚀 立即刷新 Greeks 以確保曝險精算同步
+            from market_analysis.portfolio import refresh_portfolio_greeks
+            await refresh_portfolio_greeks(user_id)
+            await interaction.response.send_message(f"✅ **現貨持倉已登錄**: `{symbol}` | `{quantity:,.0f}` 股 | 成本 `${avg_cost:,.2f}`", ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ 登錄失敗，請檢查輸入數據或稍後再試。", ephemeral=True)
+
+    @app_commands.command(name="list_holdings", description="列出目前所有現貨持倉、分配比例與即時損益估計")
+    async def list_holdings(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        user_id = interaction.user.id
+        
+        from database.holdings import get_user_holdings
+        holdings = get_user_holdings(user_id)
+        
+        if not holdings:
+            return await interaction.followup.send("📭 您目前無現貨持倉紀錄。請使用 `/add_holding` 進行登錄。", ephemeral=True)
+            
+        # 獲取即時價格以計算損益
+        for h in holdings:
+            sym = h['symbol']
+            quote = await market_data_service.get_quote(sym)
+            h['current_price'] = quote.get('c', 0.0) if quote else 0.0
+            
+        ctx = get_full_user_context(user_id)
+        from cogs.embed_builder import create_holdings_embed
+        embed = create_holdings_embed(holdings, ctx.capital)
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="remove_holding", description="從資產清單中移除特定的現貨紀錄")
+    @app_commands.describe(symbol="要移除的股票代號")
+    async def remove_holding(self, interaction: discord.Interaction, symbol: str):
+        symbol = symbol.upper()
+        from database.holdings import delete_holding
+        success = delete_holding(interaction.user.id, symbol)
+        
+        if success:
+            # 🚀 刷新 Greeks
+            from market_analysis.portfolio import refresh_portfolio_greeks
+            await refresh_portfolio_greeks(interaction.user.id)
+            await interaction.response.send_message(f"🗑️ **已移除現貨紀錄**: `{symbol}`", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"❌ 找不到標的 `{symbol}` 的現貨紀錄。", ephemeral=True)
 
     @app_commands.command(name="remove_watch", description="將標的從觀察清單中移除")
     async def remove_watch(self, interaction: discord.Interaction, symbol: str):
