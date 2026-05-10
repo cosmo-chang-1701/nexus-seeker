@@ -12,19 +12,20 @@ from database.user_settings import get_full_user_context
 async def test_command_settings(mock_interaction, db_conn):
     bot = MagicMock()
     cog = TerminalCog(bot)
-    
+
     # Execute /settings command using .callback
     await cog.update_settings.callback(
         cog,
-        mock_interaction, 
-        capital=100000.0, 
+        mock_interaction,
+        capital=100000.0,
         risk_limit=15.0,
         enable_vtr=True
     )
-    
+
     # Verify response
-    mock_interaction.response.send_message.assert_called_once()
-    args, kwargs = mock_interaction.response.send_message.call_args
+    mock_interaction.followup.send.assert_called_once()
+    args, kwargs = mock_interaction.followup.send.call_args
+    assert "✅ **帳戶設定已更新**" in args[0]
     assert "💰 總資金: `$100,000.00`" in args[0]
     assert "🛡️ 風險限制: `15.0%`" in args[0]
     
@@ -57,8 +58,8 @@ async def test_command_add_holding(mock_interaction, db_conn, mock_market_data):
     # Execute /add_holding
     await cog.add_holding.callback(cog, mock_interaction, symbol="AAPL", quantity=10, avg_cost=150.0)
     
-    mock_interaction.response.send_message.assert_called_once()
-    assert "✅ **現貨持倉已登錄**" in mock_interaction.response.send_message.call_args[0][0]
+    mock_interaction.followup.send.assert_called_once()
+    assert "✅ **現貨持倉已登錄**" in mock_interaction.followup.send.call_args[0][0]
     
     # Verify DB
     from database.holdings import get_user_holdings

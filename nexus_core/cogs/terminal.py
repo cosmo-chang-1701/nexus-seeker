@@ -61,6 +61,7 @@ class TerminalCog(commands.Cog):
         tax_reserve_rate: Optional[float] = None,
         cash_reserve: Optional[float] = None
     ):
+        await interaction.response.defer(ephemeral=True)
         user_id = interaction.user.id
         updates = []
         kwargs = {}
@@ -70,14 +71,14 @@ class TerminalCog(commands.Cog):
                 kwargs['capital'] = capital
                 updates.append(f"💰 總資金: `${capital:,.2f}`")
             else:
-                return await interaction.response.send_message("❌ 資金必須大於 0", ephemeral=True)
+                return await interaction.followup.send("❌ 資金必須大於 0", ephemeral=True)
 
         if risk_limit is not None:
             if 1.0 <= risk_limit <= 50.0:
                 kwargs['risk_limit'] = risk_limit
                 updates.append(f"🛡️ 風險限制: `{risk_limit}%`")
             else:
-                return await interaction.response.send_message("❌ 風險限制需介於 1.0% 至 50.0% 之間", ephemeral=True)
+                return await interaction.followup.send("❌ 風險限制需介於 1.0% 至 50.0% 之間", ephemeral=True)
 
         if alert_mode is not None:
             kwargs['option_alert_mode'] = alert_mode
@@ -110,38 +111,39 @@ class TerminalCog(commands.Cog):
                 kwargs['polymarket_slippage'] = polymarket_slippage
                 updates.append(f"🌊 Polymarket 滑價門檻: `{polymarket_slippage}%`")
             else:
-                return await interaction.response.send_message("❌ 滑價門檻需介於 0.1% 至 10.0% 之間", ephemeral=True)
+                return await interaction.followup.send("❌ 滑價門檻需介於 0.1% 至 10.0% 之間", ephemeral=True)
 
         if monthly_expense is not None:
             if monthly_expense >= 0:
                 kwargs['monthly_expense'] = monthly_expense
                 updates.append(f"💸 每月支出預算: `${monthly_expense:,.0f}`")
             else:
-                return await interaction.response.send_message("❌ 支出預算不能為負數", ephemeral=True)
+                return await interaction.followup.send("❌ 支出預算不能為負數", ephemeral=True)
 
         if tax_reserve_rate is not None:
             if 0.0 <= tax_reserve_rate <= 1.0:
                 kwargs['tax_reserve_rate'] = tax_reserve_rate
                 updates.append(f"🏦 稅務預留比例: `{tax_reserve_rate:.1%}`")
             else:
-                return await interaction.response.send_message("❌ 稅務比例需介於 0.0 與 1.0 之間", ephemeral=True)
+                return await interaction.followup.send("❌ 稅務比例需介於 0.0 與 1.0 之間", ephemeral=True)
 
         if cash_reserve is not None:
             if cash_reserve >= 0:
                 kwargs['cash_reserve'] = cash_reserve
                 updates.append(f"💰 現金儲備: `${cash_reserve:,.0f}`")
             else:
-                return await interaction.response.send_message("❌ 現金儲備不能為負數", ephemeral=True)
+                return await interaction.followup.send("❌ 現金儲備不能為負數", ephemeral=True)
 
         if not kwargs:
-            return await interaction.response.send_message("請至少選擇並輸入一個要修改的參數。", ephemeral=True)
+            return await interaction.followup.send("請至少選擇並輸入一個要修改的參數。", ephemeral=True)
 
         success = database.upsert_user_config(user_id, **kwargs)
         if not success:
-            return await interaction.response.send_message("❌ 設定失敗，請稍後再試。", ephemeral=True)
+            return await interaction.followup.send("❌ 設定失敗，請稍後再試。", ephemeral=True)
 
         msg = "✅ **帳戶設定已更新**：\n" + "\n".join(updates)
-        await interaction.response.send_message(msg, ephemeral=True)
+        await interaction.followup.send(msg, ephemeral=True)
+
 
     @app_commands.command(name="runway_check", description="執行財務生存跑道與 Theta 收益分析")
     async def runway_check(self, interaction: discord.Interaction):
@@ -646,9 +648,9 @@ class TerminalCog(commands.Cog):
         
         success = manager.add_asset(asset)
         if success:
-            await interaction.response.send_message(f"✅ **已加入觀察清單**: `{symbol}` (AI 分析: `{'開啟' if use_llm else '關閉'}`)", ephemeral=True)
+            await interaction.followup.send(f"✅ **已加入觀察清單**: `{symbol}` (AI 分析: `{'開啟' if use_llm else '關閉'}`)", ephemeral=True)
         else:
-            await interaction.response.send_message(f"⚠️ `{symbol}` 已在您的資產清單中或發生錯誤。", ephemeral=True)
+            await interaction.followup.send(f"⚠️ `{symbol}` 已在您的資產清單中或發生錯誤。", ephemeral=True)
 
     @app_commands.command(name="edit_watch", description="修改觀察清單中的標的參數")
     @app_commands.describe(symbol="要修改的股票代號", use_llm="更新 AI 輔助分析開關 (選填)")
@@ -657,6 +659,7 @@ class TerminalCog(commands.Cog):
         if use_llm is None:
             return await interaction.response.send_message("請提供要修改的參數 (如 use_llm)。", ephemeral=True)
             
+        await interaction.response.defer(ephemeral=True)
         from services.asset_manager import AssetManager
         from models.asset import ContextType
         manager = AssetManager()
@@ -666,9 +669,9 @@ class TerminalCog(commands.Cog):
         )
         
         if success:
-            await interaction.response.send_message(f"✅ **已更新觀察設定**: `{symbol}` (AI 分析: `{'開啟' if use_llm else '關閉'}`)", ephemeral=True)
+            await interaction.followup.send(f"✅ **已更新觀察設定**: `{symbol}` (AI 分析: `{'開啟' if use_llm else '關閉'}`)", ephemeral=True)
         else:
-            await interaction.response.send_message(f"❌ 找不到標的 `{symbol}` 或發生錯誤。", ephemeral=True)
+            await interaction.followup.send(f"❌ 找不到標的 `{symbol}` 或發生錯誤。", ephemeral=True)
 
     @app_commands.command(name="add_holding", description="登錄實際現貨持倉 (HOLDING)")
     @app_commands.describe(symbol="股票代號", quantity="持有股數", avg_cost="平均買入成本 (USD)")
@@ -688,20 +691,30 @@ class TerminalCog(commands.Cog):
         from models.asset import Asset, ContextType
         manager = AssetManager()
         
-        asset = Asset(
-            user_id=user_id,
-            symbol=symbol,
-            context_type=ContextType.HOLDING,
-            metadata={"quantity": quantity, "avg_cost": avg_cost}
-        )
+        # 🚀 檢查是否已存在，若存在則更新 (Upsert 邏輯)
+        existing_asset = manager.get_asset_by_symbol(user_id, symbol, ContextType.HOLDING)
         
-        success = manager.add_asset(asset)
+        if existing_asset:
+            existing_asset.metadata["quantity"] = quantity
+            existing_asset.metadata["avg_cost"] = avg_cost
+            success = manager.update_asset(existing_asset)
+            action_text = "更新"
+        else:
+            asset = Asset(
+                user_id=user_id,
+                symbol=symbol,
+                context_type=ContextType.HOLDING,
+                metadata={"quantity": quantity, "avg_cost": avg_cost}
+            )
+            success = manager.add_asset(asset)
+            action_text = "登錄"
+        
         if success:
             from market_analysis.portfolio import refresh_portfolio_greeks
             await refresh_portfolio_greeks(user_id)
-            await interaction.response.send_message(f"✅ **現貨持倉已登錄**: `{symbol}` | `{quantity:,.0f}` 股 | 成本 `${avg_cost:,.2f}`", ephemeral=True)
+            await interaction.followup.send(f"✅ **現貨持倉已{action_text}**: `{symbol}` | `{quantity:,.0f}` 股 | 成本 `${avg_cost:,.2f}`", ephemeral=True)
         else:
-            await interaction.response.send_message("❌ 登錄失敗，請檢查輸入數據或稍後再試。", ephemeral=True)
+            await interaction.followup.send(f"❌ {action_text}失敗，請檢查輸入數據或稍後再試。", ephemeral=True)
 
     @app_commands.command(name="edit_holding", description="修改現貨持倉參數 (數量或成本)")
     @app_commands.describe(symbol="股票代號", quantity="更新後的持有股數 (選填)", avg_cost="更新後的平均成本 (選填)")
@@ -710,6 +723,7 @@ class TerminalCog(commands.Cog):
         if quantity is None and avg_cost is None:
             return await interaction.response.send_message("請提供要修改的參數 (數量或成本)。", ephemeral=True)
             
+        await interaction.response.defer(ephemeral=True)
         from services.asset_manager import AssetManager
         from models.asset import ContextType
         manager = AssetManager()
@@ -725,9 +739,9 @@ class TerminalCog(commands.Cog):
         if success:
             from market_analysis.portfolio import refresh_portfolio_greeks
             await refresh_portfolio_greeks(interaction.user.id)
-            await interaction.response.send_message(f"✅ **現貨持倉已更新**: `{symbol}`", ephemeral=True)
+            await interaction.followup.send(f"✅ **現貨持倉已更新**: `{symbol}`", ephemeral=True)
         else:
-            await interaction.response.send_message(f"❌ 找不到標的 `{symbol}` 的現貨紀錄或發生錯誤。", ephemeral=True)
+            await interaction.followup.send(f"❌ 找不到標的 `{symbol}` 的現貨紀錄或發生錯誤。", ephemeral=True)
 
     @app_commands.command(name="list_holdings", description="列出目前所有現貨持倉、分配比例與即時損益估計")
     async def list_holdings(self, interaction: discord.Interaction):
