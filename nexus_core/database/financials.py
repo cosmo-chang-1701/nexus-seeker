@@ -4,7 +4,7 @@ import sqlite3
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
-from config import DB_NAME
+import config
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ def _get_payload_column(cursor: sqlite3.Cursor) -> str:
 def get_cached_financials(symbol: str, expiry_hours: int = 24) -> Optional[Dict[str, Any]]:
     """Read non-expired financial metrics from SQLite cache."""
     try:
-        with sqlite3.connect(DB_NAME) as conn:
+        with sqlite3.connect(config.DB_NAME) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
 
@@ -48,7 +48,7 @@ def get_cached_financials(symbol: str, expiry_hours: int = 24) -> Optional[Dict[
 def save_financials_cache(symbol: str, data: Dict[str, Any]) -> None:
     """Upsert financial metrics into SQLite cache."""
     try:
-        with sqlite3.connect(DB_NAME) as conn:
+        with sqlite3.connect(config.DB_NAME) as conn:
             cursor = conn.cursor()
             payload_col = _get_payload_column(cursor)
             cursor.execute(
@@ -65,7 +65,7 @@ def save_financials_cache(symbol: str, data: Dict[str, Any]) -> None:
 
 def purge_old_cache(days: int = 30) -> int:
     """Delete expired cache rows and return number of removed rows."""
-    with sqlite3.connect(DB_NAME) as conn:
+    with sqlite3.connect(config.DB_NAME) as conn:
         cursor = conn.cursor()
         limit = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute("DELETE FROM financials_cache WHERE updated_at < ?", (limit,))

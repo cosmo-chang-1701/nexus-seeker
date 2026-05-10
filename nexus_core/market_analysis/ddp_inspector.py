@@ -149,8 +149,8 @@ class DDPInspector:
         """將信號存入資料庫"""
         try:
             import sqlite3
-            from config import DB_NAME
-            with sqlite3.connect(DB_NAME) as conn:
+            import config
+            with sqlite3.connect(config.DB_NAME) as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
                     INSERT INTO ddp_signals (symbol, current_pe, pe_mean_3y, eps_growth, rev_accel_status, confidence_score)

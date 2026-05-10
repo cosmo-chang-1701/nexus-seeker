@@ -25,7 +25,6 @@ class TestUnifiedAssetLifecycle(unittest.IsolatedAsyncioTestCase):
         self._patchers = [
             patch("database.core.DB_NAME", self.db_path),
             patch("database.user_settings.DB_NAME", self.db_path),
-            patch("services.asset_manager.DB_NAME", self.db_path),
             patch("config.DB_NAME", self.db_path),
         ]
         for p in self._patchers:

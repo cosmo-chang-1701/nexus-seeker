@@ -2,7 +2,7 @@ import sqlite3
 import logging
 from typing import Any, Dict, Optional
 from dataclasses import dataclass
-from config import DB_NAME
+import config
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:
         return False
 
     try:
-        with sqlite3.connect(DB_NAME) as conn:
+        with sqlite3.connect(config.DB_NAME) as conn:
             cursor = conn.cursor()
             
             # 1. 確保使用者紀錄存在
@@ -98,7 +98,7 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:
 def get_user_capital(user_id: int) -> float:
     """取得使用者設定的總資金，若未設定則預設為 100000"""
     try:
-        with sqlite3.connect(DB_NAME) as conn:
+        with sqlite3.connect(config.DB_NAME) as conn:
             cursor = conn.cursor()
             cursor.execute('SELECT capital FROM user_settings WHERE user_id = ?', (user_id,))
             row = cursor.fetchone()
@@ -110,7 +110,7 @@ def get_user_capital(user_id: int) -> float:
 def get_user_risk_limit(user_id: int) -> float:
     """從資料庫獲取使用者的個人化風險上限 (Base Risk Limit %)"""
     try:
-        with sqlite3.connect(DB_NAME) as conn:
+        with sqlite3.connect(config.DB_NAME) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT risk_limit FROM user_settings WHERE user_id = ?", (user_id,))
             row = cursor.fetchone()
@@ -122,7 +122,7 @@ def get_user_risk_limit(user_id: int) -> float:
 def get_all_user_ids():
     """取得資料庫中所有出現過的使用者 ID"""
     try:
-        with sqlite3.connect(DB_NAME) as conn:
+        with sqlite3.connect(config.DB_NAME) as conn:
             cursor = conn.cursor()
             # UNION 自動去重
             cursor.execute('''
@@ -145,7 +145,7 @@ def get_full_user_context(user_id: int) -> UserContext:
     使用單一 SQL 查詢同時聚合設定與 Greeks。
     """
     try:
-        with sqlite3.connect(DB_NAME) as conn:
+        with sqlite3.connect(config.DB_NAME) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             

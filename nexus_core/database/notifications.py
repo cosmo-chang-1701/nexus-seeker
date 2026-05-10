@@ -2,7 +2,7 @@ import sqlite3
 import json
 import logging
 from typing import List, Tuple, Optional, Any
-from config import DB_NAME
+import config
 
 logger = logging.getLogger(__name__)
 
@@ -10,7 +10,7 @@ def add_pending_notification(user_id: int, content: Optional[str] = None, embed_
     """將待發送通知存入資料庫"""
     try:
         embed_json = json.dumps(embed_dict) if embed_dict else None
-        with sqlite3.connect(DB_NAME) as conn:
+        with sqlite3.connect(config.DB_NAME) as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO pending_notifications (user_id, content, embed_json)
@@ -24,7 +24,7 @@ def get_pending_notifications(limit: int = 50) -> List[Tuple[int, int, Optional[
     """獲取待發送通知清單"""
     results = []
     try:
-        with sqlite3.connect(DB_NAME) as conn:
+        with sqlite3.connect(config.DB_NAME) as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT id, user_id, content, embed_json 
@@ -44,7 +44,7 @@ def get_pending_notifications(limit: int = 50) -> List[Tuple[int, int, Optional[
 def delete_notification(notif_id: int):
     """刪除已處理的通知"""
     try:
-        with sqlite3.connect(DB_NAME) as conn:
+        with sqlite3.connect(config.DB_NAME) as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM pending_notifications WHERE id = ?", (notif_id,))
             conn.commit()
@@ -54,7 +54,7 @@ def delete_notification(notif_id: int):
 def get_pending_count() -> int:
     """獲取剩餘待發送數量"""
     try:
-        with sqlite3.connect(DB_NAME) as conn:
+        with sqlite3.connect(config.DB_NAME) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM pending_notifications")
             return cursor.fetchone()[0]

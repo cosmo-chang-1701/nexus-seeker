@@ -2,14 +2,14 @@ import sqlite3
 import json
 import logging
 from typing import List, Optional, Dict, Any
-from config import DB_NAME
+import config
 from models.asset import Asset, ContextType, TradeMetadata, HoldingMetadata, WatchMetadata
 
 logger = logging.getLogger(__name__)
 
 class AssetManager:
     def __init__(self, db_name: str = None):
-        self.db_name = db_name or DB_NAME
+        self.db_name = db_name or config.DB_NAME
 
     def _get_conn(self):
         conn = sqlite3.connect(self.db_name)
@@ -48,6 +48,59 @@ class AssetManager:
                 data['metadata'] = json.loads(data['metadata']) if data['metadata'] else {}
                 return Asset(**data)
         return None
+
+    def get_asset_by_id(self, user_id: int, asset_id: int) -> Optional[Asset]:
+        """根據 ID 獲取單一資產"""
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM assets WHERE user_id = ? AND id = ?",
+                (user_id, asset_id)
+            )
+            row = cursor.fetchone()
+            if row:
+                data = dict(row)
+                data['metadata'] = json.loads(data['metadata']) if data['metadata'] else {}
+                return Asset(**data)
+        return None
+
+    def update_asset(self, asset: Asset) -> bool:
+        """更新完整的資產紀錄"""
+        metadata_json = json.dumps(asset.metadata)
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    """
+                    UPDATE assets 
+                    SET symbol = ?, context_type = ?, risk_weight = ?, metadata = ?, updated_at = CURRENT_TIMESTAMP 
+                    WHERE id = ? AND user_id = ?
+                    """,
+                    (asset.symbol.upper(), asset.context_type.value, asset.risk_weight, metadata_json, asset.id, asset.user_id)
+                )
+                conn.commit()
+                return True
+            except Exception as e:
+                logger.error(f"Update asset error: {e}")
+                return False
+
+    def update_asset_metadata(self, user_id: int, asset_id: int, updates: Dict[str, Any]) -> bool:
+        """部分更新資產的 metadata"""
+        asset = self.get_asset_by_id(user_id, asset_id)
+        if not asset:
+            return False
+            
+        asset.metadata.update(updates)
+        return self.update_asset(asset)
+
+    def update_asset_metadata_by_symbol(self, user_id: int, symbol: str, context_type: ContextType, updates: Dict[str, Any]) -> bool:
+        """根據 symbol 與類型部分更新資產的 metadata"""
+        asset = self.get_asset_by_symbol(user_id, symbol, context_type)
+        if not asset:
+            return False
+            
+        asset.metadata.update(updates)
+        return self.update_asset(asset)
 
     def promote_to_trade(self, user_id: int, symbol: str, trade_details: Dict[str, Any]) -> bool:
         """將 WATCH 狀態提升為 TRADE"""

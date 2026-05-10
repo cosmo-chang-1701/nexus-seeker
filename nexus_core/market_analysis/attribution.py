@@ -4,7 +4,7 @@ import sqlite3
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 import numpy as np
-from config import DB_NAME
+import config
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ class AttributionEngine:
         [Snapshot Mechanism] 記錄 VTR 對沖執行瞬間的 Greeks 與 Polymarket 機率快照。
         """
         try:
-            conn = sqlite3.connect(DB_NAME)
+            conn = sqlite3.connect(config.DB_NAME)
             cursor = conn.cursor()
             
             event_context = {
@@ -73,7 +73,7 @@ class AttributionEngine:
         針對已平倉的 VTR 對沖進行歸因分析。
         """
         try:
-            conn = sqlite3.connect(DB_NAME)
+            conn = sqlite3.connect(config.DB_NAME)
             cursor = conn.cursor()
             
             cursor.execute("SELECT id, event_context, pre_hedge_greeks FROM vtr_hedge_logs WHERE user_id = ? AND status = 'OPEN'", (user_id,))
@@ -104,7 +104,7 @@ class AttributionEngine:
     def generate_evolution_advice(user_id: int) -> Optional[str]:
         """基於歸因數據生成 NRO 參數微調建議。"""
         try:
-            conn = sqlite3.connect(DB_NAME)
+            conn = sqlite3.connect(config.DB_NAME)
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT protection_score FROM vtr_hedge_logs 
@@ -131,7 +131,7 @@ class AttributionEngine:
     async def generate_attribution_narration(user_id: int, log_id: int) -> str:
         """利用 LLM 生成人性化的對沖成功/失敗總結。"""
         try:
-            conn = sqlite3.connect(DB_NAME)
+            conn = sqlite3.connect(config.DB_NAME)
             cursor = conn.cursor()
             cursor.execute("SELECT strategy_tag, pre_hedge_greeks, protection_score, loss_avoided FROM vtr_hedge_logs WHERE id = ?", (log_id,))
             row = cursor.fetchone()
@@ -168,7 +168,7 @@ class AttributionEngine:
     def format_attribution_report(user_id: int) -> List[str]:
         """格式化對沖效能歸因報告 (Traditional Chinese)。"""
         try:
-            conn = sqlite3.connect(DB_NAME)
+            conn = sqlite3.connect(config.DB_NAME)
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT timestamp, strategy_tag, protection_score, loss_avoided, event_context FROM vtr_hedge_logs 

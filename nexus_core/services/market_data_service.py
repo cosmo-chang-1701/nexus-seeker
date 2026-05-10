@@ -142,6 +142,14 @@ async def get_quote(symbol: str) -> Dict[str, Any]:
         logger.error(f"[{symbol}] Finnhub quote 失敗: {e}")
         return {}
 
+async def validate_symbol(symbol: str) -> bool:
+    """驗證標的代號是否有效 (透過嘗試獲取報價)。"""
+    if not symbol:
+        return False
+    quote = await get_quote(symbol.upper())
+    # 如果能拿到價格且價格大於 0，視為有效標的
+    return bool(quote and quote.get('c', 0) > 0)
+
 async def batch_get_quotes(symbols: List[str]) -> Dict[str, Dict[str, Any]]:
     """批次取得多檔標的的即時報價。"""
     tasks = [get_quote(sym) for sym in symbols]

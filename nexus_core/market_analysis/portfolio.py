@@ -188,7 +188,7 @@ class PortfolioStatusOrchestrator:
         high_corr_pairs = await analyze_sector_correlation_core(symbols)
         self.report_lines.extend(format_correlation_report_core(high_corr_pairs, len(symbols)))
 
-async def refresh_portfolio_greeks(user_id: int = None):
+async def refresh_portfolio_greeks(user_id: int = None, manager=None):
     """
     [Unified Asset Lifecycle] 重新整理 Assets 表中所有資產的希臘字母數據。
     包含：TRADE (期權) 與 HOLDING (現貨)。
@@ -199,7 +199,8 @@ async def refresh_portfolio_greeks(user_id: int = None):
         from py_vollib.black_scholes_merton.implied_volatility import implied_volatility
         import json
         
-        manager = AssetManager()
+        if manager is None:
+            manager = AssetManager()
         # 取得所有非 WATCH 的資產
         query = "SELECT * FROM assets WHERE context_type IN ('TRADE', 'HOLDING')"
         params = []

@@ -2,7 +2,7 @@ import sqlite3
 import logging
 import pkgutil
 import importlib
-from config import DB_NAME
+import config
 
 from database import migrations
 
@@ -31,7 +31,7 @@ MIGRATIONS = get_migrations()
 
 def run_migrations():
     """執行資料庫版本控管與遷移邏輯"""
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
 
     # 1. 確保版控紀錄表存在

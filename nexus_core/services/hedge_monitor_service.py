@@ -15,7 +15,7 @@ from market_analysis.risk_engine import (
 )
 from market_analysis.portfolio import PortfolioStatusOrchestrator
 import sqlite3
-from config import DB_NAME
+import config
 
 logger = logging.getLogger(__name__)
 
@@ -204,7 +204,7 @@ class HedgeMonitorService:
             return "市場波動劇烈，組合 Delta 已偏離中性。建議執行對沖以鎖定風險。"
 
     def _save_alert(self, user_id, vix, stage_move, delta, vega, hedge_qty, instr, narration):
-        conn = sqlite3.connect(DB_NAME)
+        conn = sqlite3.connect(config.DB_NAME)
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO hedge_alerts (user_id, vix_level, vix_stage_move, portfolio_delta, portfolio_vega, hedge_instrument, hedge_contracts, instruction_text, narration)

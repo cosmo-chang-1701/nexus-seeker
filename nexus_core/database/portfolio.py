@@ -1,16 +1,31 @@
 import sqlite3
-from config import DB_NAME
+import json
+import config
 
 # ==========================================
 # 交易持倉 (Portfolio) CRUD (綁定 user_id)
 # ==========================================
 def add_portfolio_record(user_id, symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost, weighted_delta: float = 0.0, theta: float = 0.0, gamma: float = 0.0, trade_category: str = 'SPECULATIVE'):
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
+    
+    metadata = {
+        "opt_type": opt_type,
+        "strike": strike,
+        "expiry": expiry,
+        "entry_price": entry_price,
+        "quantity": quantity,
+        "stock_cost": stock_cost,
+        "weighted_delta": weighted_delta,
+        "theta": theta,
+        "gamma": gamma,
+        "category": trade_category
+    }
+    
     cursor.execute('''
-        INSERT INTO portfolio (user_id, symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost, weighted_delta, theta, gamma, trade_category)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (user_id, symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost, weighted_delta, theta, gamma, trade_category))
+        INSERT INTO assets (user_id, symbol, context_type, metadata)
+        VALUES (?, ?, 'TRADE', ?)
+    ''', (user_id, symbol.upper(), json.dumps(metadata)))
     trade_id = cursor.lastrowid
     conn.commit()
     conn.close()
@@ -18,19 +33,37 @@ def add_portfolio_record(user_id, symbol, opt_type, strike, expiry, entry_price,
 
 def get_user_portfolio(user_id):
     """取得特定使用者的持倉"""
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
-    cursor.execute('SELECT id, symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost, weighted_delta, theta, gamma, trade_category FROM portfolio WHERE user_id = ?', (user_id,))
-    rows = cursor.fetchall()
+    cursor.execute("SELECT id, symbol, metadata FROM assets WHERE user_id = ? AND context_type = 'TRADE'", (user_id,))
+    rows = []
+    for row in cursor.fetchall():
+        asset_id, sym, meta_json = row
+        m = json.loads(meta_json) if meta_json else {}
+        rows.append((
+            asset_id, sym, m.get('opt_type'), m.get('strike'), m.get('expiry'),
+            m.get('entry_price'), m.get('quantity'), m.get('stock_cost', 0.0),
+            m.get('weighted_delta', 0.0), m.get('theta', 0.0), m.get('gamma', 0.0),
+            m.get('category', 'SPECULATIVE')
+        ))
     conn.close()
     return rows
 
 def get_all_portfolio():
     """取得全站所有持倉 (供背景排程使用)"""
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
-    cursor.execute('SELECT user_id, id, symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost, weighted_delta, theta, gamma, trade_category FROM portfolio')
-    rows = cursor.fetchall()
+    cursor.execute("SELECT user_id, id, symbol, metadata FROM assets WHERE context_type = 'TRADE'")
+    rows = []
+    for row in cursor.fetchall():
+        uid, asset_id, sym, meta_json = row
+        m = json.loads(meta_json) if meta_json else {}
+        rows.append((
+            uid, asset_id, sym, m.get('opt_type'), m.get('strike'), m.get('expiry'),
+            m.get('entry_price'), m.get('quantity'), m.get('stock_cost', 0.0),
+            m.get('weighted_delta', 0.0), m.get('theta', 0.0), m.get('gamma', 0.0),
+            m.get('category', 'SPECULATIVE')
+        ))
     conn.close()
     return rows
 
@@ -53,24 +86,34 @@ def get_user_portfolio_stats(user_id):
 
 def delete_portfolio_record(user_id, trade_id):
     """確保使用者只能刪除自己的紀錄"""
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
-    cursor.execute('SELECT symbol, strike, opt_type FROM portfolio WHERE id = ? AND user_id = ?', (trade_id, user_id))
-    record = cursor.fetchone()
-    if record:
-        cursor.execute('DELETE FROM portfolio WHERE id = ?', (trade_id,))
+    cursor.execute("SELECT symbol, metadata FROM assets WHERE id = ? AND user_id = ? AND context_type = 'TRADE'", (trade_id, user_id))
+    row = cursor.fetchone()
+    record = None
+    if row:
+        sym, meta_json = row
+        m = json.loads(meta_json) if meta_json else {}
+        record = (sym, m.get('strike'), m.get('opt_type'))
+        cursor.execute('DELETE FROM assets WHERE id = ?', (trade_id,))
         conn.commit()
     conn.close()
     return record
+
 def update_portfolio_greeks(trade_id: int, weighted_delta: float, theta: float, gamma: float):
     """更新持倉紀錄的希臘字母數據"""
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
-    cursor.execute('''
-        UPDATE portfolio 
-        SET weighted_delta = ?, theta = ?, gamma = ?
-        WHERE id = ?
-    ''', (weighted_delta, theta, gamma, trade_id))
+    
+    cursor.execute("SELECT metadata FROM assets WHERE id = ?", (trade_id,))
+    row = cursor.fetchone()
+    if row:
+        meta = json.loads(row[0]) if row[0] else {}
+        meta['weighted_delta'] = weighted_delta
+        meta['theta'] = theta
+        meta['gamma'] = gamma
+        cursor.execute('UPDATE assets SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (json.dumps(meta), trade_id))
+    
     conn.commit()
     conn.close()
     return True
@@ -80,7 +123,7 @@ def update_portfolio_greeks(trade_id: int, weighted_delta: float, theta: float, 
 # ==========================================
 def add_hedge_history(user_id, date, alpha_pnl, hedge_pnl, effectiveness, tau_applied):
     """紀錄每日對沖績效與使用的 Tau 係數"""
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
     cursor.execute('''
         INSERT INTO hedge_history (user_id, date, alpha_pnl, hedge_pnl, effectiveness, tau_applied)
@@ -91,7 +134,7 @@ def add_hedge_history(user_id, date, alpha_pnl, hedge_pnl, effectiveness, tau_ap
 
 def get_hedge_history(user_id, limit=7):
     """獲取過去 N 天的對沖績效紀錄"""
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(config.DB_NAME)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute('''

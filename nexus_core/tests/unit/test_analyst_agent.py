@@ -14,26 +14,20 @@ import os
 
 class TestAnalystAgent(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        # Use a temporary file for the DB to allow multiple connections
-        self.temp_db_fd, self.temp_db_path = tempfile.mkstemp()
-        
-        self.original_db = user_settings.DB_NAME
-        user_settings.DB_NAME = self.temp_db_path
-        db_core.DB_NAME = self.temp_db_path
-        database.DB_NAME = self.temp_db_path
-        
+        # Setup isolated database
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self._tmpdir.name, "test_analyst.db")
+
+        # Patch DB_NAME across ALL modules that use it at top level
+        self._patcher = patch("config.DB_NAME", self.db_path)
+        self._patcher.start()
+
         # Initialize DB with migrations (includes v017)
         db_core.init_db()
 
     def tearDown(self):
-        # Restore DB name
-        user_settings.DB_NAME = self.original_db
-        db_core.DB_NAME = self.original_db
-        database.DB_NAME = self.original_db
-        
-        # Cleanup temp DB
-        os.close(self.temp_db_fd)
-        os.remove(self.temp_db_path)
+        self._patcher.stop()
+        self._tmpdir.cleanup()
 
     def test_user_settings_analyst_agent_flag(self):
         user_id = 999

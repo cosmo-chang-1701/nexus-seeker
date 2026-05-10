@@ -226,6 +226,11 @@ class TerminalCog(commands.Cog):
         symbol = symbol.upper()
         user_id = interaction.user.id
         trade_category = category.value if category else "SPECULATIVE"
+        await interaction.response.defer(ephemeral=True)
+        
+        # 🚀 驗證標的合法性
+        if not await market_data_service.validate_symbol(symbol):
+            return await interaction.followup.send(f"❌ **無效的標的代號**: `{symbol}`。請輸入正確的美股代號。", ephemeral=True)
         
         # 🛡️ Defensive Programming: Validate Expiry Date Format
         from datetime import datetime
@@ -235,7 +240,7 @@ class TerminalCog(commands.Cog):
             datetime.strptime(expiry_clean, '%Y-%m-%d')
             expiry = expiry_clean # Standardized format
         except Exception:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"❌ **日期格式錯誤**: `{expiry}`。請確保為 `YYYY-MM-DD` 格式。", 
                 ephemeral=True
             )
@@ -271,27 +276,85 @@ class TerminalCog(commands.Cog):
                 from market_analysis.portfolio import refresh_portfolio_greeks
                 await refresh_portfolio_greeks(user_id)
                 action_text = "賣出 (STO)" if quantity < 0 else "買入 (BTO)"
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     f"✅ **新增交易成功**: {action_text} {abs(quantity)} 口 `{symbol}` ${strike} {opt_type.value.upper()}", 
                     ephemeral=True
                 )
             else:
-                await interaction.response.send_message("❌ 新增交易失敗，請稍後再試。", ephemeral=True)
+                await interaction.followup.send("❌ 新增交易失敗，請稍後再試。", ephemeral=True)
 
         except Exception as e:
             logger.error(f"Add trade failed: {e}")
-            await interaction.response.send_message(f"❌ **發生錯誤**: {e}", ephemeral=True)
+            await interaction.followup.send(f"❌ **發生錯誤**: {e}", ephemeral=True)
 
+
+    @app_commands.command(name="edit_trade", description="修改實單交易參數 (履約價、到期日、價格或口數)")
+    @app_commands.describe(
+        trade_id="資產 ID (從 /list_trades 獲取)",
+        strike="更新履約價 (選填)",
+        expiry="更新到期日 YYYY-MM-DD (選填)",
+        price="更新成交價格 (選填)",
+        quantity="更新口數 (選填)",
+        category="更新類別 SPECULATIVE/HEDGE (選填)"
+    )
+    @app_commands.choices(category=[
+        app_commands.Choice(name="SPECULATIVE", value="SPECULATIVE"),
+        app_commands.Choice(name="HEDGE", value="HEDGE")
+    ])
+    async def edit_trade(
+        self, 
+        interaction: discord.Interaction, 
+        trade_id: int, 
+        strike: Optional[float] = None,
+        expiry: Optional[str] = None,
+        price: Optional[float] = None,
+        quantity: Optional[int] = None,
+        category: Optional[app_commands.Choice[str]] = None
+    ):
+        await interaction.response.defer(ephemeral=True)
+        from services.asset_manager import AssetManager
+        manager = AssetManager()
+        
+        updates = {}
+        if strike is not None: updates['strike'] = strike
+        if expiry is not None:
+            from datetime import datetime
+            try:
+                expiry_clean = expiry.split(' ')[0]
+                datetime.strptime(expiry_clean, '%Y-%m-%d')
+                updates['expiry'] = expiry_clean
+            except Exception:
+                return await interaction.followup.send(f"❌ **日期格式錯誤**: `{expiry}`。請確保為 `YYYY-MM-DD` 格式。", ephemeral=True)
+        if price is not None: updates['entry_price'] = price
+        if quantity is not None: updates['quantity'] = quantity
+        if category is not None: updates['category'] = category.value
+        
+        if not updates:
+            return await interaction.followup.send("請提供至少一個要修改的參數。", ephemeral=True)
+            
+        success = manager.update_asset_metadata(interaction.user.id, trade_id, updates)
+        if success:
+            from market_analysis.portfolio import refresh_portfolio_greeks
+            await refresh_portfolio_greeks(interaction.user.id)
+            await interaction.followup.send(f"✅ **交易紀錄已更新 (ID: {trade_id})**", ephemeral=True)
+        else:
+            await interaction.followup.send(f"❌ 找不到交易 ID `{trade_id}` 或發生錯誤。", ephemeral=True)
 
     @app_commands.command(name="scan", description="手動執行量化掃描與 What-if 曝險模擬")
     async def manual_scan(self, interaction: discord.Interaction, symbol: str):
         await interaction.response.defer(ephemeral=True)
         user_id, symbol = interaction.user.id, symbol.upper()
 
+        # 🚀 驗證標的合法性
+        if not await market_data_service.validate_symbol(symbol):
+            return await interaction.followup.send(f"❌ **無效的標的代號**: `{symbol}`。請輸入正確的美股代號。", ephemeral=True)
+
         # 🚀 獲取用戶現貨成本 (如果有)
-        from database.holdings import get_user_holdings
-        holdings = await asyncio.to_thread(get_user_holdings, user_id)
-        stock_cost = next((h['avg_cost'] for h in holdings if h['symbol'] == symbol), 0.0)
+        from services.asset_manager import AssetManager
+        from models.asset import ContextType
+        manager = AssetManager()
+        assets = manager.get_assets(user_id, ContextType.HOLDING)
+        stock_cost = next((a.metadata.get('avg_cost', 0.0) for a in assets if a.symbol == symbol), 0.0)
 
         try:
             spy_task = market_data_service.get_spy_history_df("1y")
@@ -494,6 +557,11 @@ class TerminalCog(commands.Cog):
     async def promote_watch(self, interaction: discord.Interaction, symbol: str, opt_type: str, strike: float, expiry: str, price: float, qty: int):
         await interaction.response.defer(ephemeral=True)
         symbol = symbol.upper()
+        
+        # 🚀 驗證標的合法性
+        if not await market_data_service.validate_symbol(symbol):
+            return await interaction.followup.send(f"❌ **無效的標的代號**: `{symbol}`。請輸入正確的美股代號。", ephemeral=True)
+
         from services.asset_manager import AssetManager
         manager = AssetManager()
         
@@ -542,6 +610,12 @@ class TerminalCog(commands.Cog):
     @app_commands.describe(symbol="股票代號 (如 TSLA)", use_llm="是否啟用 AI 輔助分析")
     async def add_watch(self, interaction: discord.Interaction, symbol: str, use_llm: bool = True):
         symbol = symbol.upper()
+        await interaction.response.defer(ephemeral=True)
+        
+        # 🚀 驗證標的合法性
+        if not await market_data_service.validate_symbol(symbol):
+            return await interaction.followup.send(f"❌ **無效的標的代號**: `{symbol}`。請輸入正確的美股代號。", ephemeral=True)
+
         from services.asset_manager import AssetManager
         from models.asset import Asset, ContextType
         manager = AssetManager()
@@ -563,21 +637,35 @@ class TerminalCog(commands.Cog):
     @app_commands.describe(symbol="要修改的股票代號", use_llm="更新 AI 輔助分析開關 (選填)")
     async def edit_watch(self, interaction: discord.Interaction, symbol: str, use_llm: Optional[bool] = None):
         symbol = symbol.upper()
-        from database.watchlist import update_user_watchlist
-        success = update_user_watchlist(interaction.user.id, symbol, use_llm)
+        if use_llm is None:
+            return await interaction.response.send_message("請提供要修改的參數 (如 use_llm)。", ephemeral=True)
+            
+        from services.asset_manager import AssetManager
+        from models.asset import ContextType
+        manager = AssetManager()
+        
+        success = manager.update_asset_metadata_by_symbol(
+            interaction.user.id, symbol, ContextType.WATCH, {"use_llm": use_llm}
+        )
+        
         if success:
-            await interaction.response.send_message(f"✅ **已更新觀察設定**: `{symbol}`", ephemeral=True)
+            await interaction.response.send_message(f"✅ **已更新觀察設定**: `{symbol}` (AI 分析: `{'開啟' if use_llm else '關閉'}`)", ephemeral=True)
         else:
-            await interaction.response.send_message(f"❌ 找不到標的 `{symbol}` 或未提供任何修改參數。", ephemeral=True)
+            await interaction.response.send_message(f"❌ 找不到標的 `{symbol}` 或發生錯誤。", ephemeral=True)
 
     @app_commands.command(name="add_holding", description="登錄實際現貨持倉 (HOLDING)")
     @app_commands.describe(symbol="股票代號", quantity="持有股數", avg_cost="平均買入成本 (USD)")
     async def add_holding(self, interaction: discord.Interaction, symbol: str, quantity: float, avg_cost: float):
         symbol = symbol.upper()
         user_id = interaction.user.id
+        await interaction.response.defer(ephemeral=True)
+        
+        # 🚀 驗證標的合法性
+        if not await market_data_service.validate_symbol(symbol):
+            return await interaction.followup.send(f"❌ **無效的標的代號**: `{symbol}`。請輸入正確的美股代號。", ephemeral=True)
         
         if quantity <= 0 or avg_cost < 0:
-            return await interaction.response.send_message("❌ 數量必須大於 0 且成本不能為負數。", ephemeral=True)
+            return await interaction.followup.send("❌ 數量必須大於 0 且成本不能為負數。", ephemeral=True)
             
         from services.asset_manager import AssetManager
         from models.asset import Asset, ContextType
@@ -598,22 +686,60 @@ class TerminalCog(commands.Cog):
         else:
             await interaction.response.send_message("❌ 登錄失敗，請檢查輸入數據或稍後再試。", ephemeral=True)
 
+    @app_commands.command(name="edit_holding", description="修改現貨持倉參數 (數量或成本)")
+    @app_commands.describe(symbol="股票代號", quantity="更新後的持有股數 (選填)", avg_cost="更新後的平均成本 (選填)")
+    async def edit_holding(self, interaction: discord.Interaction, symbol: str, quantity: Optional[float] = None, avg_cost: Optional[float] = None):
+        symbol = symbol.upper()
+        if quantity is None and avg_cost is None:
+            return await interaction.response.send_message("請提供要修改的參數 (數量或成本)。", ephemeral=True)
+            
+        from services.asset_manager import AssetManager
+        from models.asset import ContextType
+        manager = AssetManager()
+        
+        updates = {}
+        if quantity is not None: updates['quantity'] = quantity
+        if avg_cost is not None: updates['avg_cost'] = avg_cost
+        
+        success = manager.update_asset_metadata_by_symbol(
+            interaction.user.id, symbol, ContextType.HOLDING, updates
+        )
+        
+        if success:
+            from market_analysis.portfolio import refresh_portfolio_greeks
+            await refresh_portfolio_greeks(interaction.user.id)
+            await interaction.response.send_message(f"✅ **現貨持倉已更新**: `{symbol}`", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"❌ 找不到標的 `{symbol}` 的現貨紀錄或發生錯誤。", ephemeral=True)
+
     @app_commands.command(name="list_holdings", description="列出目前所有現貨持倉、分配比例與即時損益估計")
     async def list_holdings(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         user_id = interaction.user.id
         
-        from database.holdings import get_user_holdings
-        holdings = get_user_holdings(user_id)
+        from services.asset_manager import AssetManager
+        from models.asset import ContextType
+        manager = AssetManager()
+        assets = manager.get_assets(user_id, ContextType.HOLDING)
         
-        if not holdings:
+        if not assets:
             return await interaction.followup.send("📭 您目前無現貨持倉紀錄。請使用 `/add_holding` 進行登錄。", ephemeral=True)
             
-        # 獲取即時價格以計算損益
-        for h in holdings:
-            sym = h['symbol']
+        holdings = []
+        for a in assets:
+            sym = a.symbol
             quote = await market_data_service.get_quote(sym)
-            h['current_price'] = quote.get('c', 0.0) if quote else 0.0
+            current_price = quote.get('c', 0.0) if quote else 0.0
+            
+            h_data = {
+                'id': a.id,
+                'symbol': a.symbol,
+                'quantity': a.metadata.get('quantity', 0.0),
+                'avg_cost': a.metadata.get('avg_cost', 0.0),
+                'weighted_delta': a.metadata.get('weighted_delta', 0.0),
+                'current_price': current_price
+            }
+            holdings.append(h_data)
             
         ctx = get_full_user_context(user_id)
         from cogs.embed_builder import create_holdings_embed
@@ -624,8 +750,10 @@ class TerminalCog(commands.Cog):
     @app_commands.describe(symbol="要移除的股票代號")
     async def remove_holding(self, interaction: discord.Interaction, symbol: str):
         symbol = symbol.upper()
-        from database.holdings import delete_holding
-        success = delete_holding(interaction.user.id, symbol)
+        from services.asset_manager import AssetManager
+        from models.asset import ContextType
+        manager = AssetManager()
+        success = manager.delete_asset_by_symbol(interaction.user.id, symbol, ContextType.HOLDING)
         
         if success:
             # 🚀 刷新 Greeks
@@ -638,8 +766,11 @@ class TerminalCog(commands.Cog):
     @app_commands.command(name="remove_watch", description="將標的從觀察清單中移除")
     async def remove_watch(self, interaction: discord.Interaction, symbol: str):
         symbol = symbol.upper()
-        from database.watchlist import delete_watchlist_symbol
-        success = delete_watchlist_symbol(interaction.user.id, symbol)
+        from services.asset_manager import AssetManager
+        from models.asset import ContextType
+        manager = AssetManager()
+        success = manager.delete_asset_by_symbol(interaction.user.id, symbol, ContextType.WATCH)
+        
         if success:
             await interaction.response.send_message(f"🗑️ **已移除觀察標的**: `{symbol}`", ephemeral=True)
         else:
@@ -648,11 +779,16 @@ class TerminalCog(commands.Cog):
     @app_commands.command(name="list_watch", description="列出您的雷達觀察清單")
     async def list_watch(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        from database.watchlist import get_user_watchlist
-        symbols_data = get_user_watchlist(interaction.user.id)
-        if not symbols_data:
+        from services.asset_manager import AssetManager
+        from models.asset import ContextType
+        manager = AssetManager()
+        assets = manager.get_assets(interaction.user.id, ContextType.WATCH)
+        
+        if not assets:
             await interaction.followup.send("📭 您的觀察清單是空的。", ephemeral=True)
             return
+        
+        symbols_data = [(a.symbol, a.metadata.get('use_llm', True)) for a in assets]
         
         from ui.watchlist import WatchlistPagination
         view = WatchlistPagination(symbols_data)
@@ -663,13 +799,28 @@ class TerminalCog(commands.Cog):
     async def list_trades(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         user_id = interaction.user.id
-        rows = database.get_user_portfolio(user_id)
-        if not rows:
+        from services.asset_manager import AssetManager
+        from models.asset import ContextType
+        manager = AssetManager()
+        assets = manager.get_assets(user_id, ContextType.TRADE)
+        
+        if not assets:
             await interaction.followup.send("📭 您目前無持倉紀錄。", ephemeral=True)
             return
             
-        # 獲取標的現價以判定 ITM/OTM
-        unique_symbols = sorted(list(set([row[1] for row in rows])))
+        # 轉換為舊格式以相容 create_trades_embed
+        rows = []
+        unique_symbols = set()
+        for a in assets:
+            m = a.metadata
+            rows.append((
+                a.id, a.symbol, m.get('opt_type'), m.get('strike'), m.get('expiry'),
+                m.get('entry_price'), m.get('quantity'), 0.0, # stock_cost
+                m.get('weighted_delta', 0.0), m.get('theta', 0.0), m.get('gamma', 0.0),
+                m.get('category', 'SPECULATIVE')
+            ))
+            unique_symbols.add(a.symbol)
+
         stock_quotes = {}
         for sym in unique_symbols:
             quote = await market_data_service.get_quote(sym)
@@ -684,9 +835,11 @@ class TerminalCog(commands.Cog):
     @app_commands.command(name="remove_trade", description="將部位從監控管線中移除")
     async def remove_trade(self, interaction: discord.Interaction, trade_id: int):
         user_id = interaction.user.id
-        record = database.delete_portfolio_record(user_id, trade_id)
-        if record:
-            await interaction.response.send_message(f"🗑️ **已刪除紀錄 (ID: {trade_id})**: `{record[0]}` 已移除。", ephemeral=True)
+        from services.asset_manager import AssetManager
+        manager = AssetManager()
+        asset = manager.get_asset_by_id(user_id, trade_id)
+        if asset and manager.delete_asset_by_id(user_id, trade_id):
+            await interaction.response.send_message(f"🗑️ **已刪除紀錄 (ID: {trade_id})**: `{asset.symbol}` 已移除。", ephemeral=True)
         else:
             await interaction.response.send_message(f"❌ 找不到 ID `{trade_id}`。", ephemeral=True)
 

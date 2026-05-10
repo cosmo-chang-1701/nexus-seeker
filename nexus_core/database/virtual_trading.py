@@ -1,7 +1,7 @@
 import sqlite3
 import datetime
 import json
-from config import DB_NAME
+import config
 
 # ==========================================
 # 虛擬交易室 (Virtual Trading Room) CRUD
@@ -10,7 +10,7 @@ from config import DB_NAME
 def add_virtual_trade(user_id: int, symbol: str, opt_type: str, strike: float, expiry: str, entry_price: float, quantity: int, weighted_delta: float = 0.0, theta: float = 0.0, gamma: float = 0.0, tags: list = None, parent_trade_id: int = None, trade_category: str = 'SPECULATIVE'):
     tags_str = json.dumps(tags) if tags else None
     
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
     cursor.execute('''
         INSERT INTO virtual_trades (user_id, symbol, opt_type, strike, expiry, entry_price, quantity, weighted_delta, theta, gamma, status, parent_trade_id, tags, trade_category)
@@ -28,7 +28,7 @@ def get_virtual_trades(user_id: int = None, status: str = None):
     若傳入 user_id，則只過濾特定用戶
     若傳入 status，則只過濾特定狀態 (如 'OPEN', 'CLOSED', 'ROLLED')
     """
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(config.DB_NAME)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     
@@ -62,7 +62,7 @@ def get_all_open_virtual_trades():
 
 def get_virtual_trade_by_id(trade_id: int):
     """根據 trade_id 獲取虛擬交易"""
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(config.DB_NAME)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM virtual_trades WHERE id = ?", (trade_id,))
@@ -81,7 +81,7 @@ def get_virtual_trade_by_id(trade_id: int):
 
 def close_virtual_trade(trade_id: int, exit_price: float, status: str = 'CLOSED', pnl: float = 0.0):
     """平倉虛擬交易"""
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(config.DB_NAME)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     
@@ -120,7 +120,7 @@ def get_open_virtual_trades(user_id: int = None):
     """
     抓取所有開放中的虛擬部位。如果 user_id 為 None，則抓取全系統部位 (用於背景排程)。
     """
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
     
     query = "SELECT * FROM virtual_trades WHERE status = 'OPEN'"
@@ -136,7 +136,7 @@ def get_open_virtual_trades(user_id: int = None):
 
 def update_virtual_trade_greeks(trade_id: int, weighted_delta: float, theta: float, gamma: float):
     """更新虛擬交易紀錄的希臘字母數據"""
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
     cursor.execute('''
         UPDATE virtual_trades
@@ -151,7 +151,7 @@ def get_all_virtual_trades(user_id: int):
     """
     抓取該使用者的所有虛擬交易紀錄 (不限狀態)，用於績效統計。
     """
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
     
     # 這裡不加 status 濾網，因為我們要算歷史總帳

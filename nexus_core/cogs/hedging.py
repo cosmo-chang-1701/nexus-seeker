@@ -3,9 +3,8 @@ from discord.ext import commands
 from discord import app_commands
 import logging
 import sqlite3
+import config
 from datetime import datetime
-from typing import Optional
-from config import DB_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +24,7 @@ class HedgingCog(commands.Cog):
         user_id = interaction.user.id
         
         try:
-            conn = sqlite3.connect(DB_NAME)
+            conn = sqlite3.connect(config.DB_NAME)
             cursor = conn.cursor()
             
             # 1. 驗證警報是否存在且屬於該使用者
@@ -73,7 +72,7 @@ class HedgingCog(commands.Cog):
         user_id = interaction.user.id
         
         try:
-            conn = sqlite3.connect(DB_NAME)
+            conn = sqlite3.connect(config.DB_NAME)
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT id, vix_level, hedge_contracts, status, created_at 

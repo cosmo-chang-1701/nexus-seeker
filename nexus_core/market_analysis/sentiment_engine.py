@@ -7,7 +7,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from services import market_data_service
 import database.core as db_core
 import sqlite3
-from config import DB_NAME
+import config
 
 logger = logging.getLogger(__name__)
 
@@ -223,7 +223,7 @@ class SentimentEngine:
     def save_sentiment_history(symbol: str, indicator: str, value: float):
         """將情緒指標存入資料庫。"""
         try:
-            conn = sqlite3.connect(DB_NAME)
+            conn = sqlite3.connect(config.DB_NAME)
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO sentiment_history (symbol, indicator, value)
@@ -238,7 +238,7 @@ class SentimentEngine:
     def get_indicator_percentile(symbol: str, indicator: str, current_value: float) -> float:
         """計算目前值在歷史數據中的百分位數。"""
         try:
-            conn = sqlite3.connect(DB_NAME)
+            conn = sqlite3.connect(config.DB_NAME)
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT value FROM sentiment_history 
