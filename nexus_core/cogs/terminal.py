@@ -749,6 +749,7 @@ class TerminalCog(commands.Cog):
     @app_commands.command(name="remove_holding", description="從資產清單中移除特定的現貨紀錄")
     @app_commands.describe(symbol="要移除的股票代號")
     async def remove_holding(self, interaction: discord.Interaction, symbol: str):
+        await interaction.response.defer(ephemeral=True)
         symbol = symbol.upper()
         from services.asset_manager import AssetManager
         from models.asset import ContextType
@@ -759,12 +760,13 @@ class TerminalCog(commands.Cog):
             # 🚀 刷新 Greeks
             from market_analysis.portfolio import refresh_portfolio_greeks
             await refresh_portfolio_greeks(interaction.user.id)
-            await interaction.response.send_message(f"🗑️ **已移除現貨紀錄**: `{symbol}`", ephemeral=True)
+            await interaction.followup.send(f"🗑️ **已移除現貨紀錄**: `{symbol}`", ephemeral=True)
         else:
-            await interaction.response.send_message(f"❌ 找不到標的 `{symbol}` 的現貨紀錄。", ephemeral=True)
+            await interaction.followup.send(f"❌ 找不到標的 `{symbol}` 的現貨紀錄。", ephemeral=True)
 
     @app_commands.command(name="remove_watch", description="將標的從觀察清單中移除")
     async def remove_watch(self, interaction: discord.Interaction, symbol: str):
+        await interaction.response.defer(ephemeral=True)
         symbol = symbol.upper()
         from services.asset_manager import AssetManager
         from models.asset import ContextType
@@ -772,9 +774,9 @@ class TerminalCog(commands.Cog):
         success = manager.delete_asset_by_symbol(interaction.user.id, symbol, ContextType.WATCH)
         
         if success:
-            await interaction.response.send_message(f"🗑️ **已移除觀察標的**: `{symbol}`", ephemeral=True)
+            await interaction.followup.send(f"🗑️ **已移除觀察標的**: `{symbol}`", ephemeral=True)
         else:
-            await interaction.response.send_message(f"❌ 您的觀察清單中找不到 `{symbol}`。", ephemeral=True)
+            await interaction.followup.send(f"❌ 您的觀察清單中找不到 `{symbol}`。", ephemeral=True)
 
     @app_commands.command(name="list_watch", description="列出您的雷達觀察清單")
     async def list_watch(self, interaction: discord.Interaction):
@@ -834,14 +836,18 @@ class TerminalCog(commands.Cog):
 
     @app_commands.command(name="remove_trade", description="將部位從監控管線中移除")
     async def remove_trade(self, interaction: discord.Interaction, trade_id: int):
+        await interaction.response.defer(ephemeral=True)
         user_id = interaction.user.id
         from services.asset_manager import AssetManager
         manager = AssetManager()
         asset = manager.get_asset_by_id(user_id, trade_id)
         if asset and manager.delete_asset_by_id(user_id, trade_id):
-            await interaction.response.send_message(f"🗑️ **已刪除紀錄 (ID: {trade_id})**: `{asset.symbol}` 已移除。", ephemeral=True)
+            # 🚀 刷新 Greeks
+            from market_analysis.portfolio import refresh_portfolio_greeks
+            await refresh_portfolio_greeks(user_id)
+            await interaction.followup.send(f"🗑️ **已刪除紀錄 (ID: {trade_id})**: `{asset.symbol}` 已移除。", ephemeral=True)
         else:
-            await interaction.response.send_message(f"❌ 找不到 ID `{trade_id}`。", ephemeral=True)
+            await interaction.followup.send(f"❌ 找不到 ID `{trade_id}`。", ephemeral=True)
 
     @app_commands.command(name="transition_sim", description="模擬投機部位向 Core Equity/Covered Call 演進")
     @app_commands.describe(
