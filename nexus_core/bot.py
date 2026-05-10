@@ -14,6 +14,8 @@ class NexusBot(commands.Bot):
         super().__init__(command_prefix='!', intents=intents)
         # 仍然保留一個訊號訊號量，用於喚醒工人
         self.message_signal = asyncio.Event()
+        self._has_notified_ready = False
+        self._is_closing = False
 
     async def queue_dm(self, user_id: int, message: str = None, embed: discord.Embed = None):
         """將私訊任務加入持久化佇列，並喚醒發送工人"""
@@ -67,6 +69,10 @@ class NexusBot(commands.Bot):
             logger.error(f"❌ 同步指令失敗: {e}")
 
     async def on_ready(self):
+        if self._has_notified_ready:
+            logger.info("Bot 已重連，跳過啟動通知。")
+            return
+
         logger.info(f'初始化資料庫中...')
         database.init_db()
         logger.info(f'🚀 Nexus Seeker 啟動成功！Bot ID: {self.user}')
@@ -78,8 +84,13 @@ class NexusBot(commands.Bot):
 
         logger.info('等待美股排程觸發...')
         await self.notify_all_users("🚀 Nexus Seeker 機器人已啟動！")
+        self._has_notified_ready = True
 
     async def close(self):
+        if self._is_closing:
+            return
+        self._is_closing = True
+        
         logger.info("🛑 Nexus Seeker 正在關閉...")
         
         # 停止記憶體管理員
