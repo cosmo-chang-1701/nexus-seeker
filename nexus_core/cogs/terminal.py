@@ -327,17 +327,49 @@ class TerminalCog(commands.Cog):
         if is_option_valid:
             from services import llm_service, news_service, reddit_service
             from market_analysis.risk_engine import optimize_position_risk
+            from market_analysis.sentiment_engine import SentimentEngine
             
             # 使用快取 Reddit 資料
             from database.cache import get_kv_cache
             reddit_text = get_kv_cache(f"reddit_sentiment_{symbol}") or "暫無快取情緒資料。"
             news_text = await news_service.fetch_recent_news(symbol)
             
+            # 並行獲取期權情緒指標
+            skew_task = SentimentEngine.calculate_skew(symbol)
+            pcr_task = SentimentEngine.calculate_pcr(symbol)
+            uoa_task = SentimentEngine.detect_uoa(symbol)
+            
+            skew_data, pcr_data, uoa_list = await asyncio.gather(skew_task, pcr_task, uoa_task)
+            pcr_val = pcr_data.get('pcr', 0.8)
+            skew_val = skew_data.get('skew', 0.0)
+            
             ai_verdict = await llm_service.evaluate_trade_risk(symbol, result.get('strategy', ''), news_text, reddit_text)
-            result.update({'news_text': news_text, 'reddit_text': reddit_text, 'ai_decision': ai_verdict.get('decision', 'APPROVE'), 'ai_reasoning': ai_verdict.get('reasoning', '無資料'), 'vix': macro_data.vix, 'oil': macro_data.oil_price})
+            result.update({
+                'news_text': news_text, 
+                'reddit_text': reddit_text, 
+                'ai_decision': ai_verdict.get('decision', 'APPROVE'), 
+                'ai_reasoning': ai_verdict.get('reasoning', '無資料'), 
+                'vix': macro_data.vix, 
+                'oil': macro_data.oil_price,
+                'pcr': pcr_val,
+                'skew': skew_val,
+                'uoa_list': uoa_list
+            })
 
             user_context = database.get_full_user_context(user_id)
-            safe_qty, hedge_spy = optimize_position_risk(current_delta=user_context.total_weighted_delta, unit_weighted_delta=result.get('weighted_delta', 0.0), user_capital=user_context.capital, spy_price=spy_price, stock_iv=result.get('iv', 0.15), strategy=result.get('strategy', ''), macro_data=macro_data, base_risk_limit_pct=user_context.risk_limit_base, vix_spot=macro_data.vix)
+            safe_qty, hedge_spy = optimize_position_risk(
+                current_delta=user_context.total_weighted_delta, 
+                unit_weighted_delta=result.get('weighted_delta', 0.0), 
+                user_capital=user_context.capital, 
+                spy_price=spy_price, 
+                stock_iv=result.get('iv', 0.15), 
+                strategy=result.get('strategy', ''), 
+                macro_data=macro_data, 
+                base_risk_limit_pct=user_context.risk_limit_base, 
+                vix_spot=macro_data.vix,
+                pcr=pcr_val,
+                skew=skew_val
+            )
 
             projected_total_delta = user_context.total_weighted_delta + (result.get('weighted_delta', 0.0) * (-1 if "STO" in result.get('strategy', '') else 1) * safe_qty)
             projected_exposure_pct = (projected_total_delta * spy_price / user_context.capital) * 100 if user_context.capital > 0 else 0
@@ -354,16 +386,83 @@ class TerminalCog(commands.Cog):
         else:
             await interaction.followup.send(f"📊 目前 `{symbol}` 查無有效訊號。")
 
-    @app_commands.command(name="vtr_stats", description="檢視虛擬交易室的績效統計與盈虧歸因")
+    @app_commands.command(name="vtr_stats", description="檢視虛擬交易室的績效統計與對沖歸因")
     async def vtr_stats(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
+            from market_analysis.ghost_trader import GhostTrader
+            from market_analysis.attribution import AttributionEngine
+            
+            # 0. 結算目前的對沖日誌 (歸因分析)
+            await AttributionEngine.finalize_vtr_attribution(interaction.user.id)
+            
+            # 1. 獲取基礎統計
             stats = await GhostTrader.get_vtr_performance_stats(interaction.user.id)
-            embed = build_vtr_stats_embed(interaction.user.display_name, stats)
+            
+            # 2. 獲取對沖歸因報告
+            attr_lines = AttributionEngine.format_attribution_report(interaction.user.id)
+            
+            # 3. 建立 Embed
+            from cogs.embed_builder import build_vtr_stats_embed
+            embed = build_vtr_stats_embed(interaction.user.display_name, stats, attr_lines)
+            
             await interaction.followup.send(embed=embed, ephemeral=True)
-        except Exception:
-            await interaction.followup.send("❌ 無法獲取績效數據。", ephemeral=True)
+        except Exception as e:
+            logger.error(f"VTR Stats failed: {e}")
+            await interaction.followup.send(f"❌ 無法獲取績效數據: {e}", ephemeral=True)
 
+    @app_commands.command(name="sys_health", description="[Hidden] 檢查系統資源狀態與記憶體健康度")
+    async def sys_health(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        import psutil
+        import os
+        import gc
+        from services import market_data_service, polymarket_service
+
+        # 1. 系統資源
+        mem = psutil.virtual_memory()
+        cpu_load = psutil.cpu_percent()
+        process = psutil.Process(os.getpid())
+        proc_mem = process.memory_info().rss / (1024 * 1024) # MB
+
+        # 2. 快取狀態
+        # 注意：這裡直接存取 private 變數僅供監控
+        sma_count = len(market_data_service._sma_cache)
+        ema_count = len(market_data_service._ema_cache)
+        poly_cache_count = 0
+        orderbook_count = 0
+
+        if hasattr(self.bot, 'polymarket_service'):
+            poly_cache_count = len(self.bot.polymarket_service._market_cache)
+            orderbook_count = len(self.bot.polymarket_service._order_books)
+
+        embed = discord.Embed(
+            title="🖥️ Nexus Seeker 系統健康診斷",
+            color=discord.Color.green() if mem.percent < 80 else discord.Color.red(),
+            timestamp=discord.utils.utcnow()
+        )
+
+        embed.add_field(name="VPS 記憶體", value=f"`{mem.percent}%` (可用: {mem.available / (1024**2):.1f}MB)", inline=True)
+        embed.add_field(name="CPU 負載", value=f"`{cpu_load}%`", inline=True)
+        embed.add_field(name="程序占用 (RSS)", value=f"`{proc_mem:.1f} MB`", inline=True)
+
+        cache_info = (
+            f"• SMA/EMA Cache: `{sma_count}/{ema_count}`\n"
+            f"• Poly Markets: `{poly_cache_count}`\n"
+            f"• OrderBooks: `{orderbook_count}`"
+        )
+        embed.add_field(name="📦 快取統計 (LRU/Bounded)", value=cache_info, inline=False)
+
+        health_status = "✅ 狀態優良"
+        if mem.percent > 85:
+            health_status = "⚠️ **記憶體吃緊** (LLM 閘門已開啟)"
+        elif mem.percent > 95:
+            health_status = "🆘 **極度危險** (可能觸發 OOM Killer)"
+
+        embed.add_field(name="🩺 健康評級", value=health_status, inline=False)
+        embed.set_footer(text="Argo Optimization Engine | Low-RAM VPS Edition")
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
     @app_commands.command(name="vtr_list", description="列出虛擬交易室中的所有持倉與歷史紀錄")
     async def vtr_list(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -371,16 +470,16 @@ class TerminalCog(commands.Cog):
         rows = get_all_virtual_trades(interaction.user.id)
         if not rows:
             return await interaction.followup.send("📭 虛擬交易室目前無任何紀錄。", ephemeral=True)
-        
+
         msg = "👻 **【虛擬交易室 (VTR) 紀錄清單】**\n"
         for row in rows[:20]: # 限制顯示最近 20 筆
             status_emoji = "🟢" if row['status'] == 'OPEN' else "⚪"
             pnl_str = f" | PnL: `{row['pnl']:+.2f}`" if row['status'] != 'OPEN' else ""
             msg += f"{status_emoji} `ID:{row['id']:02d}` | **{row['symbol']}** | ${row['strike']} {row['opt_type'].upper()} | {row['status']}{pnl_str}\n"
-        
+
         if len(rows) > 20:
             msg += f"\n*(僅顯示最近 20 筆，總計 {len(rows)} 筆)*"
-            
+
         await interaction.followup.send(msg, ephemeral=True)
 
     @app_commands.command(name="promote_watch", description="將觀察標的提升為實單交易 (WATCH -> TRADE)")

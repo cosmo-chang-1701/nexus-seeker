@@ -1,43 +1,45 @@
 # 🌌 Nexus Seeker - AGENTS.md
 
 ## Project Overview
-Nexus Seeker is a multi-tenant **Options Quant Risk-Control & Trading Operations Platform** driven by Discord. It combines technical analysis, Black-Scholes-Merton pricing models, LLM-based NLP risk sentiment analysis, a custom **Nexus Risk Optimizer (NRO)** for portfolio exposure精算, and a **6-tier VIX Battle Ladder** system for dynamic risk appetite scaling. The project is structured as a dual-service architecture to handle complex market data processing and edge-scraping tasks efficiently.
+Nexus Seeker is a multi-tenant **Options Quant Risk-Control & Trading Operations Platform** driven by Discord. It combines technical analysis, Black-Scholes-Merton pricing models, LLM-based NLP risk sentiment analysis, and a custom **Nexus Risk Optimizer (NRO)** for advanced portfolio exposure management. The system utilizes a **6-tier VIX Battle Ladder** for dynamic risk scaling and is optimized for stable operation on memory-constrained (1GB RAM) VPS environments.
 
 ### Key Technologies
 - **Language:** Python 3.12
 - **Frameworks:** `discord.py` (Discord Bot), `FastAPI` (Edge Scraper API)
 - **Market Data:** `finnhub-python`, `yfinance`, `pandas-ta`, `py_vollib` (Greeks/Pricing)
-- **Data Science:** `numpy`, `pandas`, `pandas_market_calendars`
-- **AI/LLM:** OpenAI-compatible API with `pydantic` structured outputs
-- **Scraping:** `playwright`, `BeautifulSoup4`
-- **Database:** SQLite with a custom automated migration engine
-- **Infrastructure:** Docker, Docker Compose, Cloudflare Tunnel
+- **Quant Math:** `numpy`, `pandas`, `scipy`
+- **AI/LLM:** OpenAI-compatible API with `pydantic` structured outputs and memory safety gates
+- **Database:** SQLite (v032+) with an automated migration engine and JSON metadata support
+- **Infrastructure:** Docker, Docker Compose, Cloudflare Tunnel, psutil (System Health)
 
 ---
 
 ## Architecture
 The system is divided into two main services:
-1.  **`nexus_core`**: The central Discord Bot. Handles user commands, portfolio management, risk engine calculations, and periodic market scans.
-2.  **`nexus_edge_scraper`**: A specialized service (intended to run locally or via tunnel) that uses Playwright to scrape Reddit sentiment and consensus scores without triggering bot detection on cloud IPs.
+1.  **`nexus_core`**: The central Discord Bot. Handles user commands, portfolio management, risk engine calculations, and autonomous market monitoring.
+2.  **`nexus_edge_scraper`**: A specialized service (intended to run locally or via tunnel) that uses Playwright to scrape Reddit sentiment and consensus scores without triggering bot detection.
 
 ### Core Modules (`nexus_core`)
-- **`config.py`**: Global configuration constants including `VIX_LADDER_CONFIG` (6-tier system: Dormant/Caution/Ready/Aggressive/Heavy/All-in), `VIX_QUANTILE_BOUNDS`, and the `get_vix_tier()` helper function (includes NaN/None robustness with "Ready" fallback).
+- **`config.py`**: Global configuration and the **VIX Battle Ladder** (Dormant/Caution/Ready/Aggressive/Heavy/All-in).
 - **`market_analysis/`**: The quant engine.
   - **`strategy.py`**: Core strategy logic with VIX ladder gating and delta capping.
-  - **`ddp_inspector.py`**: **Davis Double Play (DDP)** detection engine. Implements EPS momentum (>15% YoY), P/E historical range analysis (bottom 25th percentile), and revenue acceleration checks.
-  - **`volatility_inspector.py`**: **Volatility Strategist Agent**. Detects "Cheap Volatility" (IVP < 25%, IV < HV) with momentum alignment and earnings shielding.
-  - **`psq_engine.py`**: PowerSqueeze (PSQ) scoring with VIX-aware momentum labeling.
-  - **`risk_engine.py`**: NRO risk optimization with dynamic Kelly scaling.
+  - **`sentiment_engine.py`**: **Volatility Strategist**. Calculates Skew, PCR, Max Pain, and detects Unusual Options Activity (UOA).
+  - **`risk_engine.py`**: NRO risk optimization with dynamic Kelly scaling and Vega-adjusted Delta (Vanna) calculations.
+  - **`attribution.py`**: **Self-Evolving Attribution System**. Analyzes hedge efficiency (Protection Score) and provides NRO parameter feedback.
   - **`ghost_trader.py`**: Virtual Trading Room (VTR) and autonomous DITM defense.
-- **`database/`**: Persistent storage layer with an automated migration engine. Includes aggregate Greeks tracking, DDP signals, and the **`holdings`** table for independent equity asset accounting (v027+).
-- **`services/`**: Business logic layer (`TradingService`, `LLMService`, `PolymarketService`, `MarketDataService`, `NewsService`, `RedditService`) that decouples the Discord UI from core computations.
-- `cogs/`: Discord extensions implementing slash commands and background tasks.
-  - **`terminal.py`**: High-impact professional terminal commands (`/runway_check`, `/scan`, `/ddp_scan`, `/iv_scan`, `/add_holding`, `/list_holdings`, `/remove_holding`, `/add_trade`, `/list_trades`, `/remove_trade`, `/add_watch`, `/edit_watch`, `/remove_watch`, `/list_watch`, `/settings`, `/vtr_list`).
-  - **`intelligence.py`**: Market intelligence and edge detection terminal (`/poly_list`, `/scan_news`, `/scan_reddit`, `/quote`).
-  - **`trading.py`**: Automated market scanning (NRO + DDP + Volatility) and background risk auditing.
-  - **`analyst_agent.py`**: Scheduled Wall Street Quantitative Analyst Agent.
-
-- **`ui/`**: Reusable Discord UI components and views for interactive commands.
+  - **`ddp_inspector.py`**: Davis Double Play (DDP) detection (EPS Momentum + P/E expansion).
+  - **`psq_engine.py`**: PowerSqueeze (PSQ) scoring with VIX-aware momentum labeling.
+- **`database/`**: Persistent storage layer with an automated migration engine. Includes unified asset lifecycle tracking and sentiment history.
+- **`services/`**: Business logic layer.
+  - **`hedge_monitor_service.py`**: Automated Hedging & Alert Pipeline. Monitors VIX spikes and pushes actionable SPY hedge instructions.
+  - **`memory_manager.py`**: System health watchdog optimized for 1GB RAM. Handles periodic GC and emergency OOM alerts.
+  - **`polymarket_service.py`**: Prediction market whale monitoring with real-time snapshot mechanisms for attribution.
+  - **`llm_service.py`**: Structured AI analysis with memory safety gates.
+- **`cogs/`**: Discord extensions.
+  - **`terminal.py`**: High-impact commands (`/scan`, `/vtr_stats`, `/sys_health`, `/add_holding`).
+  - **`sentiment.py`**: Sentiment analytics terminal (`/skew_scan`, `/max_pain`).
+  - **`hedging.py`**: Risk settlement and attribution commands (`/settle_hedge`, `/hedge_list`).
+  - **`intelligence.py`**: Market edge detection (`/poly_list`, `/scan_news`, `/quote`).
 
 ---
 
@@ -46,73 +48,35 @@ The system is divided into two main services:
 ### Prerequisites
 - Docker & Docker Compose
 - Discord Bot Token & Finnhub API Key
-- (Optional) OpenAI-compatible LLM endpoint
-- (Optional) Cloudflare Tunnel for Reddit scraping
+- OpenAI-compatible LLM endpoint
 
 ### Development Setup
 1.  **Configure Environment:**
     ```bash
     cp nexus_core/.env.example nexus_core/.env
-    # Fill in DISCORD_TOKEN, FINNHUB_API_KEY, etc.
+    # Fill in DISCORD_TOKEN, FINNHUB_API_KEY, LLM_API_BASE, etc.
     ```
 2.  **Start Services:**
     ```bash
     # Start Core Bot
     cd nexus_core
     docker compose up -d --build
-
-    # Start Edge Scraper (if needed)
-    cd ../nexus_edge_scraper
-    docker compose up -d --build
     ```
 
 ### Deployment Strategy
-The system utilizes **Docker Swarm** with a `start-first` update configuration to achieve a Blue-Green style handoff:
-1.  **Green (New)** instance is launched and verifies health.
-2.  **Graceful Handoff**: The old instance receives `SIGTERM` and enters a 60-second `stop_grace_period`. It drains its persistent notification queue and completes ongoing quant scans before terminating.
-3.  **Persistence**: Unsent messages are stored in SQLite and automatically picked up by the new instance upon startup, ensuring zero message loss during version transitions.
-4.  Automatic **Rollback** is triggered if the new instance fails to connect.
+The system is optimized for **Low-RAM VPS** deployment:
+1.  **Bounded Caching**: All in-memory caches (SMA/EMA/Poly) use LRU policies with a 500-entry limit to prevent memory leaks.
+2.  **Memory Gates**: LLM tasks are automatically downgraded if system RAM usage exceeds 85%.
+3.  **Graceful Handoff**: Docker Swarm `start-first` configuration with 60s grace period for notification queue drainage.
 
 ### Testing
 Tests are located in `nexus_core/tests/`.
-- **Mandate:** All tests and debug scripts MUST be executed within the Docker container environment.
+- **Mandate:** All tests MUST be executed within the Docker container environment.
 - **Run all tests:**
   ```bash
   docker compose run --rm nexus-seeker python -m unittest discover -s tests -v
   ```
-- **Integration Tests:** Focused on database migrations, trading flows, Polymarket whale monitoring (`test_polymarket_integration.py`), and LLM/Risk engine integration.
-- **Unit Tests:** Covers core logic for Greeks, PSQ, **DDP Inspector** (`test_ddp_inspector.py`), **Volatility Inspector** (`test_volatility_inspector.py`), and **Unified Assets** (`test_unified_assets.py`).
-
----
-
-## 🛠 Mandatory Development Pipeline (PROTOCOL)
-**Every single task** is considered INCOMPLETE and a failure of protocol unless the following sequence is executed in full. There are no exceptions for "simple" or "UI-only" changes.
-
-### 1. [PHASE: IMPLEMENT] Code Modification
-- Implement features/fixes following the established architecture.
-- **Localization**: All user-facing strings MUST be Traditional Chinese (zh-tw).
-- **Standards**: Adhere to SOLID, KISS, and DRY principles as defined in `GEMINI.md`.
-
-### 2. [PHASE: VALIDATE] Containerized Testing (MANDATORY)
-- **Rule**: You are PROHIBITED from declaring a task finished without running tests.
-- **Action**: Execute the mandatory test suite inside the Docker environment:
-  ```bash
-  cd nexus_core && docker compose run --rm nexus-seeker python -m unittest discover -s tests -v
-  ```
-- **Fallback**: If Docker is unavailable, you MUST explicitly state the reason, create a new unit test for your change, and attempt a local verification before proceeding.
-
-### 3. [PHASE: DOCUMENT] Documentation Sync
-- **README.md**: Update the Command Table if any slash command behavior or parameters changed.
-- **AGENTS.md**: Update "Key Files Summary" or "Architecture" if logic moved or new modules were added.
-- **Memory**: Ensure the project index/memory reflects the current system state.
-
-### 4. [DEFINITION OF DONE]
-A task is only "Done" when:
-1. [ ] Code is implemented, linted, and syntax-checked.
-2. [ ] Mandatory test suite passes (or fallback logic is documented).
-3. [ ] README.md reflects the new command/feature state.
-4. [ ] AGENTS.md reflects any architectural shifts.
-**Failure to check all 4 boxes is a protocol violation.**
+- **Key Suites:** Database migrations (`v032`), Polymarket WS integration, Skew/Sentiment logic, and NRO Risk scaling.
 
 ---
 
@@ -120,70 +84,34 @@ A task is only "Done" when:
 
 ### 1. Database Migrations
 Never modify the database schema manually. Use the migration engine:
-- Create a new file in `nexus_core/database/migrations/` (e.g., `v028_unified_assets.py`).
-- Export `version` (int), `description` (str), and `sql` (str).
-- **Advanced**: Export a `migrate_data(conn: sqlite3.Connection)` function for complex data transformations or JSON metadata handling that pure SQL cannot perform.
-- The bot will automatically apply SQL and then execute `migrate_data` on the next startup.
+- Create a new file in `nexus_core/database/migrations/` (e.g., `v032_add_hedge_logs.py`).
+- Export `version`, `description`, and `sql`. Use `migrate_data` for JSON transformations.
 
 ### 2. Discord Commands (Cogs)
-New commands should be added as **Slash Commands** within a Cog in `nexus_core/cogs/`.
-- Use `discord.app_commands` for slash command definitions.
-- All replies should ideally be **ephemeral** (`ephemeral=True`) to maintain multi-tenant privacy.
-- For long-running tasks, use `bot.queue_dm(user_id, message, embed)` to send asynchronous notifications via the background message worker.
+- All user-facing strings MUST be **Traditional Chinese (zh-tw)**.
+- Use `ephemeral=True` for private settings and portfolio commands.
+- Long-running analytics should use `bot.queue_dm()` to prevent interaction timeouts.
 
-### 3. Market Analysis & Strategy
-- Core logic belongs in `nexus_core/market_analysis/strategy.py`.
-- **Unified Asset Lifecycle**: Assets transition through a state machine: **WATCH -> TRADE -> HOLDING**.
-  - **WATCH**: Monitored tickers via `/add_watch`.
-  - **TRADE**: Active option positions via `/promote_watch` or `/add_trade`. Includes real-time Greek tracking.
-  - **HOLDING**: Settled equity assets via `/settle_trade` or `/add_holding`.
-- **Holdings Management**: Equity assets contribute to the total portfolio Beta-Weighted Delta but have 0 Theta/Gamma. Refreshed via `refresh_portfolio_greeks()`.
-- **Davis Double Play (DDP)**: Implemented in `ddp_inspector.py`. Identifies stocks with simultaneous EPS growth (>15%) and P/E expansion potential.
-- **Volatility Strategist (IV)**: Implemented in `volatility_inspector.py`. Detects undervalued options (IVP < 25%, IV < HV) with technical momentum alignment.
-- Use the `AlertFilter` in `services/alert_filter.py` to implement noise reduction.
-- `GhostTrader` (`market_analysis/ghost_trader.py`) handles the Virtual Trading Room (VTR).
-- `PSQ Engine` (`market_analysis/psq_engine.py`) provides the PowerSqueeze momentum indicator.
-- `NRO Risk Engine` (`market_analysis/risk_engine.py`) provides portfolio risk optimization.
-- `Portfolio Management` (`market_analysis/portfolio.py`) handles Greeks refresh with **IV back-solving**.
-- `Financial Analytics` (`market_analysis/pro_management.py`) handles **Financial Survival Runway**.
+### 3. Unified Asset Lifecycle
+Assets transition through a persistent state machine in the `assets` table (v028+):
+- **WATCH**: tickers monitored for technical setup.
+- **TRADE**: Active option positions with real-time Greek tracking ($\Delta, \Gamma, \nu, \theta$).
+- **HOLDING**: Settled equity assets contributing to Beta-Weighted Delta.
 
-### 4. Service Layer & Decision Pipeline
-- `TradingService` (`services/trading_service.py`) implements a **4-stage validation pipeline**: **Macro -> Alpha -> Risk -> Financials**.
-- **Alpha Filtering**: Enforces 15% minimum AROC for STO signals.
-- **Exposure Monitoring**: Generates actionable SPY hedge directives.
-
-### 5. VIX Battle Ladder
-The VIX Battle Ladder is a 6-tier system defined in `config.py` (`VIX_LADDER_CONFIG`) that dynamically governs risk appetite.
-
-### 6. Localization & Copywriting
-The terminal's Discord output is localized to **Professional Traditional Chinese (Taiwan)**. All user-facing Embed content, command descriptions, and error messages strictly follow Traditional Chinese standards.
-
-### 7. Code Style
-- **Type Hinting:** Strictly define types for all functions and class members.
-- **Logging:** Use the project-wide logger.
-- **Async/Await:** Ensure all I/O bound operations are non-blocking.
+### 4. Memory Optimization
+- Use `ConfigDict(slots=True)` for all Pydantic models.
+- Prefer `BoundedCache` over standard `dict` for frequently updated data.
+- Trigger `gc.collect()` after large batch operations to reclaim RAM.
 
 ---
 
 ## Key Files Summary
-- `nexus_core/main.py`: Application entry point.
-- `nexus_core/bot.py`: Main Bot class and persistent message worker.
-- `nexus_core/config.py`: Global configuration and **VIX Battle Ladder**.
-- `nexus_core/market_time.py`: NYSE market calendar.
-- `nexus_core/services/trading_service.py`: Centralized business logic orchestrator.
-- **`services/polymarket_service.py`**: Polymarket whale monitoring.
-- `nexus_core/market_analysis/strategy.py`: Quant scanning and filtering pipeline.
-- **`nexus_core/market_analysis/volatility_inspector.py`**: IV Opportunity Detection engine (Volatility Strategist).
-- `nexus_core/market_analysis/psq_engine.py`: PowerSqueeze engine.
-- `nexus_core/market_analysis/risk_engine.py`: NRO risk optimizer.
-- `nexus_core/market_analysis/hedging.py`: Beta-Weighted Delta tracking.
-- `nexus_core/market_analysis/ghost_trader.py`: Virtual Trade Replicator.
-- `nexus_core/market_analysis/portfolio.py`: Portfolio Greeks refresh.
-- `nexus_core/market_analysis/pro_management.py`: Financial Runway analysis.
-- `nexus_core/database/user_settings.py`: User profile and context management.
-- `nexus_core/database/notifications.py`: Persistent notification queue.
-- `nexus_core/database/holdings.py`: Independent equity asset accounting.
-- `nexus_core/cogs/embed_builder.py`: Discord UI/UX generator.
-- **`nexus_core/cogs/analyst_agent.py`**: Wall Street Analyst Agent.
-- `nexus_core/database/core.py`: SQLite migration engine.
-- `nexus_edge_scraper/local_api.py`: Playwright-based scraping endpoint.
+- `nexus_core/bot.py`: Main Bot and service orchestrator.
+- `nexus_core/config.py`: Global constants and **VIX Ladder**.
+- `nexus_core/services/trading_service.py`: 4-stage validation pipeline.
+- `nexus_core/services/hedge_monitor_service.py`: Automated risk defense.
+- `nexus_core/market_analysis/sentiment_engine.py`: Skew/PCR/UOA logic.
+- `nexus_core/market_analysis/risk_engine.py`: NRO & Vanna adjustment.
+- `nexus_core/market_analysis/attribution.py`: Protection scoring & self-evolution.
+- `nexus_core/services/memory_manager.py`: VPS stability watchdog.
+- `nexus_core/cogs/embed_builder.py`: Centralized UI/UX generator.

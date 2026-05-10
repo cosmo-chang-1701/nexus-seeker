@@ -433,6 +433,62 @@ def _add_trend_and_support_fields(embed, data):
 
     embed.add_field(name="🧭 趨勢與支撐 (EMA 8/21)", value=trend_info + "\n\u200b", inline=False)
 
+def create_sentiment_scan_embed(symbol: str, skew_data: dict, pcr_data: dict, uoa_data: list, max_pain_data: dict) -> discord.Embed:
+    """建立期權情緒掃描報告 Embed (繁體中文)"""
+    embed = discord.Embed(
+        title=f"📊 {symbol} 期權情緒掃描 (Sentiment Scan)",
+        color=discord.Color.dark_magenta(),
+        timestamp=datetime.now(timezone.utc)
+    )
+
+    # Skew
+    skew_val = skew_data.get('skew', 0)
+    skew_state = skew_data.get('state', 'N/A')
+    embed.add_field(name="📐 Option Skew", value=f"值: `{skew_val}%`\n狀態: **{skew_state}**", inline=True)
+
+    # PCR
+    pcr_val = pcr_data.get('pcr', 0)
+    pcr_state = pcr_data.get('state', 'N/A')
+    embed.add_field(name="⚖️ Put/Call Ratio", value=f"值: `{pcr_val}`\n狀態: **{pcr_state}**", inline=True)
+
+    # Max Pain
+    mp_strike = max_pain_data.get('max_pain', 'N/A')
+    is_conv = "🎯 趨於收斂" if max_pain_data.get('is_converging') else "⏳ 尚有距離"
+    embed.add_field(name="📍 Max Pain (最大痛點)", value=f"履約價: `${mp_strike}`\n收斂: {is_conv}", inline=True)
+
+    # UOA
+    if uoa_data:
+        uoa_text = ""
+        for item in uoa_data:
+            uoa_text += f"• `{item['expiry']}` `${item['strike']}` {item['type']} (Vol/OI: {item['ratio']}x)\n"
+        embed.add_field(name="🐋 異常活動 (UOA)", value=uoa_text, inline=False)
+    else:
+        embed.add_field(name="🐋 異常活動 (UOA)", value="目前無顯著異常活動", inline=False)
+
+    embed.set_footer(text="Nexus Seeker | Volatility Strategist")
+    return embed
+
+def _add_sentiment_fields(embed, data):
+    """添加期權情緒指標到掃描報告"""
+    skew_val = data.get('skew')
+    pcr_val = data.get('pcr')
+    uoa_list = data.get('uoa_list', [])
+
+    if skew_val is not None or pcr_val is not None or uoa_list:
+        content = ""
+        if skew_val is not None:
+            content += f"📐 **Skew:** `{skew_val}%` | "
+        if pcr_val is not None:
+            content += f"⚖️ **PCR:** `{pcr_val}`"
+        
+        if uoa_list:
+            content += "\n🐋 **UOA 偵測:** `FOUND` | 信心: `HIGH`"
+            if data.get('high_conviction'):
+                content += " | 🔥 **高信心訊號**"
+        
+        if content:
+            embed.add_field(name="🎭 期權市場情緒 (Sentiment)", value=content + "\n\u200b", inline=False)
+
 def create_scan_embed(data, user_capital=100000.0):
     strategy = data.get('strategy', 'UNKNOWN')
     stock_cost = data.get('stock_cost', 0.0)
@@ -470,6 +526,7 @@ def create_scan_embed(data, user_capital=100000.0):
 
     _add_market_overview_fields(embed, data)
     _add_volatility_fields(embed, data, strategy)
+    _add_sentiment_fields(embed, data)
     _add_trend_and_support_fields(embed, data)
     _add_performance_and_kelly_fields(embed, data, user_capital)
     _add_earnings_fields(embed, data, strategy)
@@ -927,12 +984,12 @@ def create_transition_suggestion_embed(data: Dict[str, Any]) -> discord.Embed:
     embed.set_footer(text="Nexus Position Evolution Engine | 專業投資者建議")
     return embed
 
-def build_vtr_stats_embed(user_name: str, stats: dict) -> discord.Embed:
+def build_vtr_stats_embed(user_name: str, stats: dict, attribution_lines: List[str] = None) -> discord.Embed:
     """
-    建構 VTR 績效統計 Embed 面板
+    建構 VTR 績效統計 Embed 面板，含對沖效能歸因。
     """
     # 根據勝率決定顏色
-    win_rate = stats['win_rate']
+    win_rate = stats.get('win_rate', 0)
     if win_rate >= 60:
         color = 0x2ecc71  # 綠色 (Success)
         status_icon = "🟢"
@@ -944,27 +1001,32 @@ def build_vtr_stats_embed(user_name: str, stats: dict) -> discord.Embed:
         status_icon = "🔴"
 
     embed = discord.Embed(
-        title=f"📈 Nexus Seeker | 虛擬交易室 (VTR) 績效週報",
-        description=f"使用者: **{user_name}** 的自動化回測數據",
+        title=f"📈 Nexus Seeker | 虛擬交易室 (VTR) 績效總結",
+        description=f"使用者: **{user_name}** 的系統歸因分析",
         color=color,
-        timestamp=datetime.now()
+        timestamp=datetime.now(timezone.utc)
     )
 
     # 核心指標
-    embed.add_field(name="總結算次數", value=f"`{stats['total_trades']}`", inline=True)
+    embed.add_field(name="總結算次數", value=f"`{stats.get('total_trades', 0)}`", inline=True)
     embed.add_field(name="勝率", value=f"{status_icon} `{win_rate}%`", inline=True)
-    
-    # 損益指標 (使用 LaTeX 格式強調數值)
-    pnl = stats['total_pnl']
-    pnl_str = f"+${pnl:,}" if pnl >= 0 else f"-${abs(pnl):,}"
+
+    # 損益指標
+    pnl = stats.get('total_pnl', 0.0)
+    pnl_str = f"+${pnl:,.2f}" if pnl >= 0 else f"-${abs(pnl):,.2f}"
     embed.add_field(name="累計總損益", value=f"**{pnl_str}**", inline=True)
-    embed.add_field(name="平均單筆損益", value=f"`${stats['avg_pnl']}`", inline=True)
+    embed.add_field(name="平均單筆損益", value=f"`${stats.get('avg_pnl', 0.0):.2f}`", inline=True)
 
-    # 腳註與提示
-    embed.set_footer(text="數據包含已平倉 (CLOSED) 與 已轉倉 (ROLLED) 之合約")
-    
+    # 對沖歸因報告
+    if attribution_lines:
+        attr_text = "\n".join(attribution_lines)
+        # 截斷過長內容
+        if len(attr_text) > 1024: attr_text = attr_text[:1021] + "..."
+        embed.add_field(name="🛡️ 對沖效能與自我進化", value=attr_text, inline=False)
+
+    embed.set_footer(text="Nexus Sandbox Engine | 數據包含已平倉之虛擬部位")
+
     return embed
-
 def build_scan_report(result: Dict[str, Any]):
     """
     量化掃描報告Embed，整合 Greeks, NRO 與 EMA 訊號。

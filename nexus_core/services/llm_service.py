@@ -1,13 +1,22 @@
 import os
 import json
 import logging
+import psutil
 from openai import AsyncOpenAI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Literal
 
 from config import LLM_API_BASE, LLM_MODEL_NAME, API_KEY
 
 logger = logging.getLogger(__name__)
+
+# 記憶體安全閾值 (85%)
+MEMORY_SAFETY_THRESHOLD = 85.0
+
+def is_memory_safe() -> bool:
+    """檢查系統記憶體是否高於安全閾值。"""
+    mem = psutil.virtual_memory()
+    return mem.percent < MEMORY_SAFETY_THRESHOLD
 
 # ==========================================
 # ⚙️ LLM Inference Server 連線設定
@@ -24,6 +33,7 @@ client = AsyncOpenAI(**client_args)
 # 📊 Pydantic Schema 定義 (Structured Output)
 # ==========================================
 class RiskAssessment(BaseModel):
+    model_config = ConfigDict(slots=True)
     decision: Literal["APPROVE", "VETO"] = Field(
         description="風控裁決結果：APPROVE (批准) 或 VETO (否決)"
     )
@@ -35,18 +45,57 @@ class RiskAssessment(BaseModel):
     )
 
 class AnalystReport(BaseModel):
+    model_config = ConfigDict(slots=True)
     report_content: str = Field(description="完整的分析報告內容 (Markdown 格式)，必須維持原本的標題與分隔線")
 
 class PolymarketAnalysis(BaseModel):
+    model_config = ConfigDict(slots=True)
     event_background: str = Field(description="簡短的事件背景，說明該預測市場在賭什麼")
     whale_logic: str = Field(description="分析此筆大額交易可能的動機、對沖行為或內線情報推測")
     market_sentiment: str = Field(description="目前市場的整體情緒、賠率分布與預期偏差")
     one_line_verdict: str = Field(description="一句話的核心總結，必須包含看多/看空的方向性結論")
 
+class UOAIntentMapping(BaseModel):
+    model_config = ConfigDict(slots=True)
+    classification: Literal["Institutional Hedging", "Speculative Directional Betting", "Arbitrage", "Unknown"] = Field(
+        description="活動分類"
+    )
+    confidence: float = Field(description="信心指數 (0.0 - 1.0)")
+    explanation: str = Field(description="簡短解釋分類理由 (繁體中文)")
+
+async def classify_uoa_intent(symbol: str, uoa_data: dict, whale_intent: str = None) -> dict:
+    """
+    結合 UOA 數據與 Polymarket 巨鯨意圖，判定異常活動性質。
+    """
+    if not is_memory_safe():
+        logger.warning("🚨 [記憶體警報] 系統資源不足，跳過 UOA LLM 分析。")
+        return {"classification": "Unknown", "confidence": 0, "explanation": "系統記憶體負載過高，已自動降級。"}
+
+    system_prompt = """
+...
+    """
+
+    try:
+        response = await client.beta.chat.completions.parse(
+            model=LLM_MODEL_NAME,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            response_format=UOAIntentMapping
+        )
+        return response.choices[0].message.parsed.model_dump()
+    except Exception as e:
+        logger.error(f"UOA 分類失敗: {e}")
+        return {"classification": "Unknown", "confidence": 0, "explanation": "AI 分析不可用"}
+
 async def evaluate_trade_risk(symbol: str, strategy: str, news_context: str, reddit_context: str) -> dict:
     """
     呼叫 LLM 進行 NLP 新聞毒性分析與風控審查
     """
+    if not is_memory_safe():
+        logger.warning("🚨 [記憶體警報] 系統資源不足，跳過風控 LLM 分析。")
+        return {"decision": "APPROVE", "tags": ["資源受限"], "reasoning": "系統記憶體高負載，自動通過風控審查以確保核心運行。"}
     system_prompt = """
     ## Role & Objective
     You are a Quant Hedge Fund CRO. Evaluate option proposals by cross-referencing official news and Reddit sentiment (titles + consensus scores) to prevent tail risks.

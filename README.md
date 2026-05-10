@@ -10,7 +10,7 @@
 [![Docker](https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white)](nexus_core/docker-compose.yml)
 [![Architecture](https://img.shields.io/badge/architecture-dual--service-purple.svg)](#architecture)
 
-> **Nexus Seeker** 是一款專為專業選擇權交易者設計的高效能終端，核心設計圍繞 **Financial Runway (財務跑道)**、**Gamma Integrity (Gamma 完整性)** 與 **Cross-Market Edge Detection (跨市場邊緣偵測)**。透過 **Black-Scholes-Merton** 精算與 **Nexus Risk Optimizer (NRO)**，本系統提供從信號偵測到自動化對沖的完整風控管線。
+> **Nexus Seeker** 是一款專為專業選擇權交易者設計的高效能終端，核心設計圍繞 **Financial Runway (財務跑道)**、**Greeks Integrity (希臘字母完整性)** 與 **Cross-Market Edge Detection (跨市場邊緣偵測)**。透過 **Black-Scholes-Merton** 精算、**Nexus Risk Optimizer (NRO)** 與 **Sentiment Engine**，本系統提供從信號偵測到自動化對沖的完整專業風控管線。
 
 ---
 
@@ -18,19 +18,20 @@
 
 | 類別 | 技術規格 (Specifications) |
 |---|---|
-| **Runtime 環境** | Python 3.12 (WSL2 / Windows 11 最佳化) |
+| **Runtime 環境** | Python 3.12 (WSL2 / Windows 11 / Low-RAM VPS 最佳化) |
 | **量化定價引擎** | Black-Scholes-Merton (via `py_vollib`, 含股息率校正) |
-| **風險精算核心** | Nexus Risk Optimizer (NRO) - 二階 Beta-Weighted 曝險模型 |
-| **數據源 (Feeds)** | Finnhub (Real-time), yfinance (Chain), Polymarket (WS L2), Reddit (Edge) |
-| **持久化層** | SQLite 搭配自動化 Migration Engine (v028+) |
-| **智能層** | Structured LLM Output (Pydantic Schema) via OpenAI-compatible API |
+| **風險精算核心** | Nexus Risk Optimizer (NRO) - 二階 Beta-Weighted 曝險模型 (含 Vanna 修正) |
+| **情緒分析中心** | Sentiment Engine - Skew 偏斜、PCR、Max Pain 與 UOA 偵測 |
+| **數據源 (Feeds)** | Finnhub (Real-time), yfinance (Options), Polymarket (WS L2), Reddit (Edge) |
+| **持久化層** | SQLite 搭配自動化 Migration Engine (v032+) |
+| **智能層** | Structured LLM Output (Pydantic Schema) 具備 Memory Safety Gates |
 | **訊息傳遞** | Discord.py (持久化非同步訊息佇列，支援多租戶隔離) |
 
 ---
 
 ## 🏗 System Architecture
 
-系統採用分散式雙服務架構，確保雲端執行效率與邊緣爬蟲的隱私性。Reddit 數據現在以每日非同步方式抓取並快取，極大化掃描響應速度。
+系統採用分散式雙服務架構，確保雲端執行效率與邊緣爬蟲的隱私性。最新版本針對 **1GB RAM 環境** 進行了深度優化，引入 LRU Bounded Cache 與緊急記憶體閘門。
 
 ```mermaid
 graph TD
@@ -38,9 +39,11 @@ graph TD
         Bot[NexusBot Core]
         TS[TradingService - Business Logic]
         RE[Risk Engine - NRO]
-        DB[(SQLite DB v027)]
+        SE[Sentiment Engine - Skew/PCR/UOA]
+        MM[Memory Manager - VPS Health]
+        DB[(SQLite DB v032)]
         S[Services - LLM/Polymarket]
-        C[KV Cache - Reddit]
+        C[Bounded Cache - SMA/EMA/Poly]
     end
 
     subgraph Edge_Environment [Local / Edge Scraper]
@@ -50,6 +53,7 @@ graph TD
     User((Professional Trader)) -- Slash Commands --> Bot
     Bot --> TS
     TS --> RE
+    TS --> SE
     TS --> DB
     TS --> S
     S -- Cloudflare Tunnel --> ES
@@ -63,42 +67,37 @@ graph TD
 針對全職投資者量身打造的生存與效率指標：
 
 *   **財務生存與跑道分析 (Financial Survival & Runway)**：
-    系統自動對照使用者的 **Cash Reserve (現金儲備)** 與 **Monthly Expenses (每月支出)**，利用投資組合的 **Total Theta (每日總 Theta 收租額)** 動態估算「財務生存天數」。透過 `/runway_check` 隨時掌握現金流健康度。
-    *   **收益支出比 (Income/Expense Ratio)**：採用百分比格式渲染（如 `0.48%`），精確追蹤微小現金流貢獻。
-*   **Capital Efficiency (AROC 門檻)**：
-    嚴格執行 **15% Annualized Return on Capital (AROC)** 准入制度。所有 **STO (Sell-to-Open)** 訊號若年化回報率低於 15%，將被系統過濾器直接攔截 (Blocked)，確保保證金利用率極大化。
+    系統自動對照使用者的 **Cash Reserve (現金儲備)** 與 **Monthly Expenses (每月支出)**，利用投資組合的 **Total Theta (每日總 Theta 收租額)** 動態估算「財務生存天數」。
+*   **對沖歸因與自我進化 (Self-Evolving Attribution)**：
+    系統會追蹤每一筆虛擬對沖 (VTR Hedge) 的 **Protection Score (保護評分)**。若保護效率偏低，AI 將自動建議調整 NRO 觸發閾值或相關性 Proxy，實現策略的動態迭代。
 
 ---
 
 ## 🛡️ Functional Pillars
 
 ### 1. Risk Integrity (NRO 引擎)
-*   **Gamma Fragility Warning (Gamma 脆弱性警告)**：
-    利用二階 Beta-Weighted 平方加權監控投資組合的淨 Gamma。當偵測到非線性風險加速時（淨 Gamma < −20），自動發出脆弱性警告。
-*   **DITM 凸性防護 (Convexity Guard)**：
-    針對買方部位，當 **Delta ≥ 0.85** 且獲利豐厚時，偵測到部位喪失 **Convexity (凸性)** 並轉化為合成現股。系統會發出 **"Profit Lock" (獲利鎖定)** 優先指令，強制執行資本回收。
+*   **Vanna-Adjusted Delta (隱含 Delta 修正)**：
+    考慮 IV 劇烈變動對 Delta 的非線性影響 ($d\Delta/d\sigma$)。在 VIX 飆升時，系統會自動估算 **"Hidden Delta"** 並給出更精確的對沖口數建議。
+*   **Automated Hedging Pipeline (自動化對沖管線)**：
+    當 VIX 觸發戰情階梯跳級或單日移動 > 10% 時，系統主動推送 **「緊急對沖指令」**。使用者可透過 `/settle_hedge` 一鍵記錄執行結果。
 *   **VIX 戰情階梯 (Battle Ladder)**：
-    6 階段自適應風險調控系統，根據即時波動率動態縮放 **Kelly Criterion (凱利準則)** 比例與 **Target Delta (目標曝險)**。
+    6 階段自適應風險調控系統，根據即時波動率動態縮放 **Kelly Criterion** 比例。
 
-### 2. Market Intelligence (邊緣偵測)
-*   **Volatility Strategist (波動率優勢偵測)**：
-    偵測「廉價波動率」機會。當 IV 處於 252 日歷史低位 (IVP < 25%) 且低於歷史波動率 (IV < HV)，結合價格動能發出 BTO 或牛市價差建議。
-*   **Davis Double Play (戴維斯雙擊引擎)**：
-    量化偵測盈餘增長與估值擴張的共振機會。要求 YoY EPS 成長 > 15% 且 P/E 處於 3 年歷史低位 (25th Percentile)，並經由營收加速狀態確認。
-*   **Polymarket 巨鯨意圖圖譜 (Whale Intent Mapping)**：
-    透過 WebSocket 即時監控預測市場 **L2 Order Book**。結合 LLM 進行 **吃單者意圖映射 (Taker Intent Mapping)** 識別機構級巨鯨建倉動機。
+### 2. Market Sentiment (市場情緒引擎)
+*   **Option Skew Strategist (偏斜策略家)**：
+    監控 OTM Put 與 Call 的 IV 差值。當 Skew 進入 90th 百分位時，發出 **"Pre-emptive Hedge" (預警性對沖)** 訊號。
+*   **UOA & Whale Intent Mapping (巨鯨意圖映射)**：
+    將 Polymarket 的巨鯨交易與選擇權市場的 **Unusual Options Activity (UOA)** 進行關聯分析，判定是大規模方向性押注還是機構對沖行為。
+*   **Max Pain Analysis (最大痛點分析)**：
+    計算結算日前夕的 Max Pain 價格，評估標的是否趨於收斂以鎖定最終利潤。
 
-### 3. Execution Automation
+### 3. Execution Automation & VPS Stability
 *   **NYSE 動態調度器 (Dynamic Scheduler)**：
-    精準對齊交易所交易時鐘，以 30 分鐘為心跳 (Heartbeat) 進行全自動化掃描，避開造市商無報價時段。
-*   **盤前財報雷達 (Pre-market Earnings Radar)**：
-    每日 09:00 自動掃描持倉與觀察清單，依據距離財報天數**升冪排序**（0天優先），提供即時風險預警。
-*   **優雅關閉與持久化私訊佇列 (Graceful Handoff)**：
-    部署新版本時，系統會自動將未送出的警報存入 SQLite 佇列，並由新實例在啟動後接力補發。
+    精準對齊交易所交易時鐘，以 30 分鐘為心跳進行全自動掃描。
+*   **VPS Performance Guard (1GB RAM 優化)**：
+    針對低配 VPS 引入 **BoundedCache (max 500)** 與 **Memory Safety Gates**。當系統 RAM > 85% 時，自動延後非核心 AI 分析，優先確保風險計算與警報發送。
 *   **獨立現貨持倉系統 (Independent Holdings System)**：
-    解耦觀察清單與實際資產會計。透過 `/add_holding` 獨立管理長期股權，並將其 Beta-Weighted Delta 自動納入 NRO 全局風險精算。
-*   **零停機部署 (Zero-Downtime Deployment)**：
-    採用 Docker Swarm `start-first` 藍綠部屬策略，維持服務 24/7 不中斷。
+    解耦觀察清單與實際資產。長期股權會自動納入 NRO 全局風險精算。
 
 ---
 
@@ -108,15 +107,16 @@ graph TD
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Detection: Signal Detection (EMA/PSQ/DDP/IV)
+    [*] --> Detection: Signal Detection (EMA/PSQ/DDP/IV/Skew)
     Detection --> Audit: Risk/AROC Audit (15% Threshold)
     Audit --> Execution: VTR / Live Execution
-    Execution --> Monitoring: Real-time Delta/DTE/Gamma Tracking
-    Monitoring --> Defense: DITM Convexity Loss / Gamma Trap
-    Monitoring --> Hedging: Net Delta > ±50 Exposure
+    Execution --> Monitoring: Real-time Delta/Vanna/Vega/Gamma Tracking
+    Monitoring --> Defense: DITM Convexity / Max Pain Proximity
+    Monitoring --> Hedging: VIX Spike / Delta Deviation
     Defense --> ProfitLock: Automated Closing / Roll
     Hedging --> Adjust: Automated SPY Hedge Instructions
-    Adjust --> Monitoring
+    Adjust --> Attribution: Protection Score Analysis
+    Attribution --> Monitoring: Parameter Feedback
     Monitoring --> Exit: Target PnL (50%/100%) / Hard Stop
     Exit --> [*]
 ```
@@ -125,35 +125,24 @@ stateDiagram-v2
 
 ## ⌨️ Command Matrix (CLI)
 
-| Command | Description | Input Schema (Summary) | Level |
-|---|---|---|---|
-| `/settings` | 配置全域資產、風險、生存支出與推播開關 | `capital`, `risk_limit`, `expense`, `cash_reserve` | User |
-| `/runway_check` | 執行財務生存跑道分析 (含 HOLDING 資產備用流動性) | — | User |
-| `/promote_watch` | 將觀察標的提升為實單交易 (WATCH -> TRADE) | `symbol`, `details` | User |
-| `/settle_trade` | 將實單交易結算為現貨持倉 (TRADE -> HOLDING) | `asset_id`, `price` | User |
-| `/add_holding` | 登錄實際現貨持倉 (HOLDING) | `symbol`, `quantity`, `avg_cost` | User |
-| `/list_holdings` | 列出目前所有現貨持倉、分配比例與即時損益估計 | — | User |
-| `/remove_holding` | 從資產清單中移除特定的現貨紀錄 | `symbol` | User |
-| `/add_trade` | 登錄實單部位至 NRO 監控管線 (含 YYYY-MM-DD 驗證) | `symbol`, `opt_type`, `strike`, `qty`, `expiry`, `cost` | User |
-| `/scan` | 手動執行量化掃描與 What-if 曝險模擬 | `symbol` | User |
-| `/ddp_scan` | 立即對觀察清單執行 Davis Double Play (DDP) 深度掃描 | — | User |
-| `/iv_scan` | 立即對觀察清單執行波動率優勢 (Cheap IV) 偵測 | — | User |
-| `/vtr_stats` | 檢視虛擬交易室勝率與盈虧歸因週報 | — | User |
-| `/vtr_list` | 列出虛擬交易室中的所有持倉與歷史紀錄 | — | User |
-| `/add_watch` | 將標的加入自動化量化監控清單 | `symbol`, `use_llm` | User |
-| `/edit_watch` | 修改觀察清單中的標的參數 | `symbol`, `use_llm` | User |
-| `/remove_watch` | 將標的從觀察清單中移除 | `symbol` | User |
-| `/list_watch` | 列出您的雷達觀察清單 | — | User |
-| `/list_trades` | 列出目前實單持倉、即時 ITM/OTM 狀態與權利金成本估計 | — | User |
-| `/remove_trade` | 將部位從監控管線中移除 | `trade_id` | User |
-| `/poly_list` | 顯示 Polymarket 活躍市場清單與巨鯨意圖 | — | User |
-| `/quote` | 獲取標的之即時報價與漲跌資訊 | `symbol` | User |
-| `/scan_news` | 掃描特定標的之最新官方新聞 | `symbol` | User |
-| `/scan_reddit` | 掃描特定標的之 Reddit 散戶情緒 | `symbol` | User |
-| `/force_scan` | [Admin] 立即驅動全站同步掃描與私訊分發 | — | Admin |
-| `/poly_status` | [Admin] 查看 Polymarket WebSocket 連線狀態 | — | Admin |
-
-> **策略邏輯與 VIX 戰情細節：** 關於詳細的量化濾網規則與 VIX 階梯係數，請參閱 [docs/STRATEGY.md](docs/STRATEGY.md)。
+| Command | Description | Input Schema (Summary) |
+|---|---|---|
+| `/settings` | 配置全域資產、風險、生存支出與推播開關 | `capital`, `risk_limit`, `expense` |
+| `/runway_check` | 執行財務生存跑道分析 | — |
+| `/skew_scan` | **[New]** 執行期權偏斜 (Skew) 與市場情緒掃描 | `symbol` |
+| `/max_pain` | **[New]** 計算特定標的之最大痛點與收斂狀態 | `symbol`, `expiry` |
+| `/vtr_stats` | 檢視 VTR 績效統計與 **對沖效能歸因** | — |
+| `/settle_hedge` | **[New]** 確認並記錄已執行的對沖操作 (維持 Delta 中性) | `alert_id`, `qty` |
+| `/hedge_list` | **[New]** 查看最近的對沖警報與執行狀態 | — |
+| `/sys_health` | **[New]** [Hidden] 檢查 VPS 資源狀態與快取健康度 | — |
+| `/scan` | 手動執行量化掃描與 What-if 曝險模擬 | `symbol` |
+| `/ddp_scan` | 對觀察清單執行 Davis Double Play (DDP) 掃描 | — |
+| `/add_holding` | 登錄實際現貨持倉 (納入 Beta-Delta 計算) | `symbol`, `quantity`, `avg_cost` |
+| `/list_holdings` | 列出目前所有現貨持倉與分配比例 | — |
+| `/poly_list` | 顯示 Polymarket 活躍市場清單與巨鯨意圖 | — |
+| `/quote` | 獲取標的之即時報價與漲跌資訊 | `symbol` |
+| `/scan_news` | 掃描特定標的之最新官方新聞 | `symbol` |
+| `/scan_reddit` | 掃描特定標的之 Reddit 散戶情緒 | `symbol` |
 
 ---
 
@@ -161,13 +150,13 @@ stateDiagram-v2
 
 ### Prerequisites
 *   Docker & Docker Compose
-*   Finnhub API Key (Mission Critical)
-*   Discord Bot Token
+*   Finnhub API Key & Discord Bot Token
+*   OpenAI-compatible API Key (用於智能分析)
 
 ### Quick Deployment
 1.  `cp .env.example .env` (填寫 API Keys)
 2.  `docker compose up -d --build`
-3.  進入 Discord 使用 `/settings` 初始化您的交易配置。
+3.  進入 Discord 使用 `/settings` 初始化配置。
 
 ---
 

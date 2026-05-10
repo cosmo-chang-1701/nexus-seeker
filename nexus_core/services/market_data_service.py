@@ -185,14 +185,55 @@ async def get_spy_history_df(period: str = "1y", interval: str = "1d", retries: 
     return pd.DataFrame()
 
 # ---------------------------------------------------------------------------
+# Options Data (yfinance)
+# ---------------------------------------------------------------------------
+async def get_all_option_expiries(symbol: str) -> List[str]:
+    """取得該標的所有可用的期權到期日。"""
+    try:
+        ticker = yf.Ticker(symbol)
+        expiries = await asyncio.to_thread(lambda: ticker.options)
+        return list(expiries)
+    except Exception as e:
+        logger.error(f"[{symbol}] 獲取期權到期日失敗: {e}")
+        return []
+
+async def get_option_chain(symbol: str, expiry: str) -> Optional[Any]:
+    """取得指定到期日的期權鏈。"""
+    try:
+        ticker = yf.Ticker(symbol)
+        chain = await asyncio.to_thread(ticker.option_chain, expiry)
+        return chain
+    except Exception as e:
+        logger.error(f"[{symbol}] 獲取期權鏈失敗 (expiry={expiry}): {e}")
+        return None
+
+from collections import OrderedDict
+import gc
+
+# 限制快取大小以節省記憶體 (1GB RAM VPS 優化)
+MAX_CACHE_SIZE = 500
+
+class BoundedCache(OrderedDict):
+    """具備容量上限的快取 (LRU 邏輯)。"""
+    def __init__(self, max_size=MAX_CACHE_SIZE):
+        super().__init__()
+        self.max_size = max_size
+
+    def __setitem__(self, key, value):
+        if key in self:
+            self.move_to_end(key)
+        super().__setitem__(key, value)
+        if len(self) > self.max_size:
+            self.popitem(last=False)
+
+# ---------------------------------------------------------------------------
 # SMA 記憶體快取設定
 # ---------------------------------------------------------------------------
-_sma_cache = {} 
-_SMA_CACHE_TTL = 28800  # 8 小時
+_sma_cache = BoundedCache(max_size=MAX_CACHE_SIZE)
+_SMA_CACHE_TTL = 3600  # 1 小時 (1GB VPS 優化)
 
 async def get_sma(symbol: str, window: int = 200) -> Optional[float]:
     """計算簡單移動平均線 (SMA)。"""
-    global _sma_cache
     current_time = time.time()
     cache_key = (symbol, window)
 
@@ -220,19 +261,17 @@ async def get_sma(symbol: str, window: int = 200) -> Optional[float]:
         return None
 
 def clear_sma_cache():
-    global _sma_cache
     _sma_cache.clear()
     logger.info("Clarified SMA cache")
 
 # ---------------------------------------------------------------------------
 # EMA 記憶體快取設定
 # ---------------------------------------------------------------------------
-_ema_cache = {} 
-_EMA_CACHE_TTL = 28800  # 8 小時
+_ema_cache = BoundedCache(max_size=MAX_CACHE_SIZE)
+_EMA_CACHE_TTL = 3600  # 1 小時 (1GB VPS 優化)
 
 async def get_ema(symbol: str, window: int = 21) -> Optional[float]:
     """計算指數移動平均線 (EMA)。"""
-    global _ema_cache
     now = time.time()
     cache_key = (symbol, window)
 
@@ -259,9 +298,13 @@ async def get_ema(symbol: str, window: int = 21) -> Optional[float]:
         return None
 
 def clear_ema_cache():
-    global _ema_cache
     _ema_cache.clear()
     logger.info("Clarified EMA cache")
+
+def run_garbage_collection():
+    """手動觸發垃圾回收 (用於大規模掃描後)。"""
+    gc.collect()
+    logger.info("🧹 [系統優化] 已手動執行垃圾回收機制。")
 
 # ---------------------------------------------------------------------------
 # Basic Financials (具備 SQLite 持久化快取)

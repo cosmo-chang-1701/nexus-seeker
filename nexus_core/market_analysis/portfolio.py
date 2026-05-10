@@ -51,6 +51,8 @@ class PortfolioStatusOrchestrator:
         self.total_theta = 0.0
         self.total_margin_used = 0.0
         self.total_gamma = 0.0
+        self.total_vega = 0.0
+        self.total_vanna = 0.0
 
     async def run(self, portfolio_rows):
         # 1. 預處理：批次下載資料
@@ -132,6 +134,10 @@ class PortfolioStatusOrchestrator:
                 spx_weighted_gamma = pos_gamma * (weight_factor ** 2)
                 self.total_gamma += spx_weighted_gamma
 
+                # Vega & Vanna
+                self.total_vega += greeks['vega'] * quantity * 100 * weight_factor
+                self.total_vanna += greeks['vanna'] * quantity * 100 * weight_factor
+
                 pnl_pct = (entry_price - current_price) / entry_price if quantity < 0 else (current_price - entry_price) / entry_price
                 status = evaluate_defense_status_core(quantity, opt_type, pnl_pct, greeks['delta'], (exp_date - self.today).days)
                 cc_tag = " 🛡️(CC)" if (opt_type == 'call' and stock_cost > 0.0) else ""
@@ -173,7 +179,8 @@ class PortfolioStatusOrchestrator:
         """追加宏觀風險與相關性報告。"""
         metrics = get_macro_risk_metrics_core(
             self.total_beta_delta, self.total_theta, self.total_margin_used, 
-            self.total_gamma, self.user_capital, self.spy_price
+            self.total_gamma, self.user_capital, self.spy_price,
+            total_vega=self.total_vega, total_vanna=self.total_vanna
         )
         self.report_lines.extend(format_macro_risk_report_core(metrics, self.spy_price))
         
@@ -258,6 +265,8 @@ async def refresh_portfolio_greeks(user_id: int = None):
                     meta.weighted_delta = round(greeks['delta'] * meta.quantity * 100 * weight_factor, 4)
                     meta.theta = round(greeks['theta'] * meta.quantity * 100, 4)
                     meta.gamma = round(greeks['gamma'] * meta.quantity * 100 * (weight_factor**2), 6)
+                    meta.vega = round(greeks['vega'] * meta.quantity * 100 * weight_factor, 4)
+                    meta.vanna = round(greeks['vanna'] * meta.quantity * 100 * weight_factor, 4)
                     
                     cursor.execute("UPDATE assets SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (meta.model_dump_json(), asset.id))
 

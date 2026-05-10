@@ -1,6 +1,6 @@
 from enum import Enum
 from typing import Optional, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from datetime import datetime
 
 class ContextType(str, Enum):
@@ -9,9 +9,11 @@ class ContextType(str, Enum):
     HOLDING = "HOLDING"
 
 class WatchMetadata(BaseModel):
+    model_config = ConfigDict(slots=True)
     use_llm: bool = True
 
 class TradeMetadata(BaseModel):
+    model_config = ConfigDict(slots=True)
     opt_type: str # 'call' or 'put'
     strike: float
     expiry: str # YYYY-MM-DD
@@ -20,14 +22,18 @@ class TradeMetadata(BaseModel):
     weighted_delta: float = 0.0
     theta: float = 0.0
     gamma: float = 0.0
+    vega: float = 0.0
+    vanna: float = 0.0
     category: str = "SPEC"
 
 class HoldingMetadata(BaseModel):
+    model_config = ConfigDict(slots=True)
     quantity: float
     avg_cost: float
     weighted_delta: float = 0.0
 
 class Asset(BaseModel):
+    model_config = ConfigDict(slots=True)
     id: Optional[int] = None
     user_id: int
     symbol: str

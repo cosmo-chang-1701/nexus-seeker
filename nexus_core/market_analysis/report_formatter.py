@@ -75,6 +75,15 @@ def format_macro_risk_report(metrics: Dict[str, Any], spy_price: float) -> List[
         
     lines.append(f"🔹 **資金熱度 (Heat):** `${total_margin_used:,.2f}` (`{portfolio_heat:.1f}%`)\n")
     lines.append(f" └─ {heat_status}\n")
+    lines.append(EMPTY_LINE)
+
+    # Vega & Vanna
+    total_vega = metrics.get("total_vega", 0.0)
+    total_vanna = metrics.get("total_vanna", 0.0)
+    lines.append(f"🔹 **組合淨 Vega:** `${total_vega:+.2f}`\n")
+    lines.append(f" └─ 指向 IV 升高時的盈虧變動。\n")
+    lines.append(f"🔹 **組合淨 Vanna:** `${total_vanna:+.2f}`\n")
+    lines.append(f" └─ 指向 IV 升高對 Delta 曝險的二次影響 (Hidden Delta)。\n")
     
     return lines
 

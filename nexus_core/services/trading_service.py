@@ -303,6 +303,13 @@ class TradingService:
                         opt_data = base_data.copy()
                         opt_data['alert_type'] = 'OPTION'
                         
+                        # 🚀 整合核心：期權情緒掃描
+                        from market_analysis.sentiment_engine import SentimentEngine
+                        skew_data = await SentimentEngine.calculate_skew(symbol)
+                        pcr_data = await SentimentEngine.calculate_pcr(symbol)
+                        pcr_val = pcr_data.get('pcr', 0.8)
+                        skew_val = skew_data.get('skew', 0.0)
+                        
                         # 🚀 整合核心：注入宏觀背景進行風險優化
                         strategy = opt_data.get('strategy', '')
                         safe_qty, hedge_spy = portfolio.optimize_position_risk(
@@ -314,7 +321,9 @@ class TradingService:
                             strategy=strategy,
                             macro_data=macro_data,
                             base_risk_limit_pct=user_risk_pref,
-                            vix_spot=vix_spot
+                            vix_spot=vix_spot,
+                            pcr=pcr_val,
+                            skew=skew_val
                         )
 
                         # 模擬成交後的衝擊
@@ -326,7 +335,9 @@ class TradingService:
                         opt_data.update({
                             'safe_qty': safe_qty,
                             'hedge_spy': hedge_spy,
-                            'projected_exposure_pct': round(projected_exposure_pct, 2)
+                            'projected_exposure_pct': round(projected_exposure_pct, 2),
+                            'pcr': pcr_val,
+                            'skew': skew_val
                         })
 
                         # 🚀 執行集中化決策管線 (Stage 1-4)

@@ -9,7 +9,11 @@ from dataclasses import dataclass, field
 
 import database
 from database.user_settings import get_full_user_context, get_all_user_ids
-from services.llm_service import generate_polymarket_summary
+from services.llm_service import generate_polymarket_summary, classify_uoa_intent
+from market_analysis.sentiment_engine import SentimentEngine
+
+from collections import OrderedDict
+import gc
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +21,21 @@ POLY_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 POLY_API_BASE = "https://clob.polymarket.com"
 GAMMA_API_BASE = "https://gamma-api.polymarket.com"
 
+# 限制快取大小以節省記憶體 (1GB RAM VPS 優化)
+MAX_CACHE_SIZE = 500
+
+class BoundedCache(OrderedDict):
+    """具備容量上限的快取 (LRU 邏輯)。"""
+    def __init__(self, max_size=MAX_CACHE_SIZE):
+        super().__init__()
+        self.max_size = max_size
+
+    def __setitem__(self, key, value):
+        if key in self:
+            self.move_to_end(key)
+        super().__setitem__(key, value)
+        if len(self) > self.max_size:
+            self.popitem(last=False)
 
 @dataclass
 class OrderBook:
@@ -73,17 +92,47 @@ class PolymarketService:
     def __init__(self, bot):
         self.bot = bot
         self.running = False
-        self._market_cache = {}
+        self._market_cache = BoundedCache(max_size=MAX_CACHE_SIZE)
         self._active_markets = []  # 儲存目前活躍市場的詳細資訊
-        self._order_books: Dict[str, OrderBook] = {}
+        self._order_books = BoundedCache(max_size=MAX_CACHE_SIZE)
         self._monitor_task = None
         self._ping_task = None
+        self._cleanup_task = None
+        self._cache_lock = asyncio.Lock()
         
         # 狀態追蹤
         self.last_message_at = None
         self.asset_count = 0
         self.error_count = 0
         self.is_connected = False
+
+    async def get_market_snapshot(self, limit: int = 5) -> List[Dict[str, Any]]:
+        """
+        [Snapshot Mechanism] 獲取目前快取中活躍市場的即時快照。
+        用於對沖觸發時的歸因分析。
+        """
+        async with self._cache_lock:
+            snapshot = []
+            for m in self._active_markets[:limit]:
+                tokens = m.get('tokens', [])
+                token_snapshots = []
+                for t in tokens:
+                    tid = t.get('token_id')
+                    price = t.get('price', 0)
+                    if tid in self._order_books:
+                        price = self._order_books[tid].get_mid_price()
+                    
+                    token_snapshots.append({
+                        "outcome": t.get('outcome'),
+                        "odds": round(price, 4)
+                    })
+                
+                snapshot.append({
+                    "question": m.get("question"),
+                    "odds_distribution": token_snapshots,
+                    "last_updated": datetime.datetime.now(datetime.timezone.utc).isoformat()
+                })
+            return snapshot
 
     def get_status(self) -> Dict[str, Any]:
         """獲取目前服務狀態摘要"""
@@ -111,7 +160,8 @@ class PolymarketService:
             return
         self.running = True
         self._monitor_task = asyncio.create_task(self._monitor_loop())
-        logger.info("🐋 Polymarket Whale Monitor Service started with Dynamic Slippage Engine.")
+        self._cleanup_task = asyncio.create_task(self._periodic_cleanup())
+        logger.info("🐋 Polymarket Whale Monitor Service started with Memory-Safe Bounded Cache.")
 
     def stop(self):
         self.running = False
@@ -120,7 +170,33 @@ class PolymarketService:
             self._monitor_task.cancel()
         if self._ping_task:
             self._ping_task.cancel()
+        if self._cleanup_task:
+            self._cleanup_task.cancel()
         logger.info("🛑 Polymarket Whale Monitor Service stopped.")
+
+    async def _periodic_cleanup(self):
+        """每 15 分鐘執行一次強制垃圾回收與過期快取清理。"""
+        while self.running:
+            await asyncio.sleep(900) # 15 min
+            try:
+                now = datetime.datetime.now(datetime.timezone.utc)
+                async with self._cache_lock:
+                    # 1. 清理過期的 OrderBooks (TTL 15 min)
+                    expired_aids = []
+                    for aid, ob in self._order_books.items():
+                        if (now - ob.last_update_at).total_seconds() > 900:
+                            expired_aids.append(aid)
+                    
+                    for aid in expired_aids:
+                        del self._order_books[aid]
+                        if aid in self._market_cache:
+                            del self._market_cache[aid]
+                
+                # 2. 強制垃圾回收
+                gc.collect()
+                logger.info(f"🧹 [記憶體優化] 已清理 {len(expired_aids)} 筆過期期貨快取並執行 GC。")
+            except Exception as e:
+                logger.error(f"Cleanup error: {e}")
 
     async def _monitor_loop(self):
         retry_delay = 5
@@ -249,6 +325,19 @@ class PolymarketService:
         if side and price > 0:
             ob.update(side, price, size)
 
+    async def _handle_uoa_correlation(self, symbol: str, whale_intent: str) -> Optional[Dict[str, Any]]:
+        """偵測異常期權活動 (UOA) 並與 Polymarket 意圖進行關聯分析"""
+        uoa_data = await SentimentEngine.detect_uoa(symbol)
+        if not uoa_data:
+            return None
+        
+        # 進行 AI 分類
+        classification = await classify_uoa_intent(symbol, uoa_data[0], whale_intent)
+        return {
+            "uoa": uoa_data[0],
+            "classification": classification
+        }
+
     async def _handle_trade(self, trade: Dict[str, Any]):
         """
         處理單筆交易：動態滑價門檻判定 -> 獲取背景 -> LLM 總結 -> 推播
@@ -279,8 +368,6 @@ class PolymarketService:
             target_users = []
             for uid in user_ids:
                 context = get_full_user_context(uid)
-                # 修改為 AND 邏輯：必須同時滿足動態門檻與使用者設定的靜態門檻
-                # 如果使用者未設定靜態門檻 (<= 0)，則只看動態門檻
                 meets_dynamic = usd_value >= dynamic_threshold
                 meets_static = (context.polymarket_threshold <= 0 or usd_value >= context.polymarket_threshold)
                 
@@ -297,20 +384,27 @@ class PolymarketService:
             if not market_info:
                 market_info = {"question": "未知市場", "description": "無法獲取市場詳細資訊"}
 
-            # 4. 推播通知
+            # 4. 嘗試關聯 UOA (如果標的包含股票代碼)
+            uoa_correlation = None
+            import re
+            symbol_match = re.search(r'\b([A-Z]{1,5})\b', market_info.get('question', ''))
+            if symbol_match:
+                symbol = symbol_match.group(1)
+                # 簡單白名單檢查以防過度掃描
+                if len(symbol) >= 2:
+                    details = self._resolve_trade_details(trade, market_info)
+                    uoa_correlation = await self._handle_uoa_correlation(symbol, details['intent'])
+
+            # 5. 推播通知
             summary_cache = None
-            # 獲取基礎交易詳情用於快取
             base_details = self._resolve_trade_details(trade, market_info)
             
             for uid in target_users:
                 context = get_full_user_context(uid)
-                
-                # 重新為該使用者計算其偏好的動態門檻 (如果滑價設定不同)
                 user_dynamic_threshold = dynamic_threshold
                 if context.polymarket_slippage != 2.0 and ob:
                     user_dynamic_threshold = ob.calculate_slippage_threshold(target_percent=context.polymarket_slippage / 100.0)
                 
-                # 再次確認是否符合該使用者的門檻 (AND 邏輯)
                 meets_dynamic = usd_value >= user_dynamic_threshold
                 meets_static = (context.polymarket_threshold <= 0 or usd_value >= context.polymarket_threshold)
                 
@@ -323,12 +417,12 @@ class PolymarketService:
                         summary_cache = await generate_polymarket_summary(market_info, trade, usd_value, base_details)
                     current_summary = summary_cache
                 
-                await self._push_notification(uid, current_summary, market_info, trade, usd_value, user_dynamic_threshold)
+                await self._push_notification(uid, current_summary, market_info, trade, usd_value, user_dynamic_threshold, uoa_correlation)
 
         except Exception as e:
             logger.error(f"Failed to handle Polymarket trade: {e}")
 
-    async def _push_notification(self, user_id: int, summary: str, market_info: Dict[str, Any], trade: Dict[str, Any], usd_value: float, dynamic_threshold: float):
+    async def _push_notification(self, user_id: int, summary: str, market_info: Dict[str, Any], trade: Dict[str, Any], usd_value: float, dynamic_threshold: float, uoa_correlation: Optional[Dict[str, Any]] = None):
         """
         封裝 Discord Embed (專業分析師格式) 並排入私訊佇列
         """
@@ -339,18 +433,12 @@ class PolymarketService:
         size = float(trade.get("size", 0))
         win_rate = details['p_yes'] * 100
         
-        # 計算 Whale Multiplier (交易金額是動態門檻的幾倍)
-        whale_multiplier = usd_value / dynamic_threshold if dynamic_threshold > 0 else 1.0
-        multiplier_str = f"{whale_multiplier:.2f}x" if whale_multiplier >= 0.01 else ("< 0.01x" if whale_multiplier > 0 else "0.00x")
-        
-        # 估計價格衝擊 (Price Impact)
-        user_slip = context.polymarket_slippage
-        price_impact = (usd_value / dynamic_threshold) * user_slip if dynamic_threshold > 0 else 0.0
-        impact_str = f"{price_impact:.2f}%" if price_impact >= 0.01 else ("< 0.01%" if price_impact > 0 else "0.00%")
+        # 是否為高信心訊號 (大額交易 + UOA 關聯)
+        is_high_conviction = uoa_correlation is not None and usd_value > 50000
             
         embed = discord.Embed(
-            title="【 🐋 Polymarket 巨鯨戰報 】",
-            color=discord.Color.blue() if details['is_bullish'] else discord.Color.red(),
+            title="【 🐋 Polymarket 巨鯨戰報 】" + (" 🔥 高信心訊號" if is_high_conviction else ""),
+            color=discord.Color.gold() if is_high_conviction else (discord.Color.blue() if details['is_bullish'] else discord.Color.red()),
             timestamp=discord.utils.utcnow()
         )
         
@@ -359,28 +447,41 @@ class PolymarketService:
             "---",
             f"**市場問題：** **{market_info.get('question', '未知市場')}**",
             f"**交易金額：** `${usd_value:,.2f}`",
-            f"**流動性倍數：** `{multiplier_str}` (相對於 {user_slip}% 滑價深度)",
-            f"**估計價格衝擊：** `{impact_str}`",
-            f"**當前勝率：** {win_rate:.1f}% (Yes: {details['p_yes']:.3f} | No: {details['p_no']:.3f})",
-            "**交易屬性：** 主動買入 (Market Taker)",
+            f"**流動性倍數：** `{usd_value / dynamic_threshold:.2f}x`",
+            f"**當前勝率：** {win_rate:.1f}%",
             "---"
         ]
+        
+        if uoa_correlation:
+            uoa = uoa_correlation['uoa']
+            cls = uoa_correlation['classification']
+            content.append(f"🔍 **UOA 關聯偵測 ({uoa['symbol']})**")
+            content.append(f"- 合約: `{uoa['expiry']}` `${uoa['strike']}` {uoa['type']}")
+            content.append(f"- 性質: **{cls['classification']}** (信心: `{cls['confidence']:.2f}`)")
+            content.append(f"- 理由: {cls['explanation']}")
+            content.append("---")
+        
+        # 預測性對沖建議 (Predictive Hedge)
+        if win_rate > 70 or win_rate < 30:
+            content.append("🛡️ **【預測性對沖建議 (Predictive Hedge)】**")
+            event_name = market_info.get('question', '特定事件')
+            content.append(f"偵測到預測市場對 `{event_name}` 的機率激增至 `{win_rate:.1f}%`，建議提前在 VTR 執行 Delta 對沖，以應對潛在的波動率跳空。")
+            content.append("---")
         
         if summary and summary != "（未啟用 AI 分析）":
             content.append(f"**🤖 AI 總結分析**\n{summary}")
             content.append("---")
         
-        # 連結處理
         event_slug = market_info.get("event_slug")
-        market_slug = market_info.get("slug")
-        market_url = f"https://polymarket.com/event/{event_slug}" if event_slug else (f"https://polymarket.com/market/{market_slug}" if market_slug else "https://polymarket.com")
+        market_url = f"https://polymarket.com/event/{event_slug}" if event_slug else "https://polymarket.com"
             
-        content.append(f"[🔗 點擊前往 Polymarket 市場]({market_url})")
+        content.append(f"[🔗 前往市場]({market_url})")
         
         embed.description = "\n".join(content)
         embed.set_footer(text=f"Nexus Seeker 監測系統 | 動態門檻: ${dynamic_threshold:,.0f}")
         
         await self.bot.queue_dm(user_id, embed=embed)
+
 
     async def _fetch_all_active_asset_ids(self) -> List[str]:
         """

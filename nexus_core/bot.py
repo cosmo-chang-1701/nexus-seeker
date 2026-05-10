@@ -28,11 +28,29 @@ class NexusBot(commands.Bot):
         await self.load_extension("cogs.trading")
         await self.load_extension("cogs.analyst_agent")
         await self.load_extension("cogs.intelligence")
+        await self.load_extension("cogs.sentiment")
+        await self.load_extension("cogs.hedging")
         
         # 啟動背景任務與服務
         self.loop.create_task(self._message_worker())
         self.loop.create_task(self._health_worker())
         
+        # 啟動記憶體管理員 (1GB RAM 優化)
+        try:
+            from services.memory_manager import MemoryManager
+            self.memory_manager = MemoryManager(self)
+            self.memory_manager.start()
+        except Exception as e:
+            logger.error(f"❌ 啟動記憶體管理員失敗: {e}")
+
+        # 啟動對沖監控服務
+        try:
+            from services.hedge_monitor_service import HedgeMonitorService
+            self.hedge_monitor = HedgeMonitorService(self)
+            self.hedge_monitor.start()
+        except Exception as e:
+            logger.error(f"❌ 啟動對沖監控服務失敗: {e}")
+
         # 啟動 Polymarket 巨鯨監控服務
         try:
             from services.polymarket_service import PolymarketService
@@ -63,6 +81,20 @@ class NexusBot(commands.Bot):
     async def close(self):
         logger.info("🛑 Nexus Seeker 正在關閉...")
         
+        # 停止記憶體管理員
+        if hasattr(self, 'memory_manager'):
+            try:
+                self.memory_manager.stop()
+            except Exception as e:
+                logger.error(f"停止記憶體管理員時出錯: {e}")
+
+        # 停止對沖監控服務
+        if hasattr(self, 'hedge_monitor'):
+            try:
+                self.hedge_monitor.stop()
+            except Exception as e:
+                logger.error(f"停止對沖監控服務時出錯: {e}")
+
         # 停止 Polymarket 服務
         if hasattr(self, 'polymarket_service'):
             try:
