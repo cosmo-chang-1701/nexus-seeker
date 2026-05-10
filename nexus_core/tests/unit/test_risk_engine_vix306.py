@@ -25,7 +25,7 @@ class TestRiskEngineVIX306(unittest.TestCase):
         self.assertEqual(w_regime, 0.6) # vix_trend_up -> 0.6
 
     def test_optimize_position_risk_high_tail_risk(self):
-        """Test that is_high_tail_risk=True halves risk_limit_pct."""
+        """Test that is_high_tail_risk=True halves risk_limit."""
         user_cap = 1000000.0
         spy_price = 500.0
         stock_iv = 0.30
@@ -37,7 +37,7 @@ class TestRiskEngineVIX306(unittest.TestCase):
         qty_normal, hedge_normal = optimize_position_risk(
             current_delta=0, unit_weighted_delta=10.0, user_capital=user_cap, 
             spy_price=spy_price, stock_iv=stock_iv, strategy="STO_PUT",
-            macro_data=macro, base_risk_limit_pct=15.0, is_high_tail_risk=False,
+            macro_data=macro, risk_limit=15.0, is_high_tail_risk=False,
             vix_spot=20.0
         )
         
@@ -45,7 +45,7 @@ class TestRiskEngineVIX306(unittest.TestCase):
         qty_high_risk, hedge_high_risk = optimize_position_risk(
             current_delta=0, unit_weighted_delta=10.0, user_capital=user_cap, 
             spy_price=spy_price, stock_iv=stock_iv, strategy="STO_PUT",
-            macro_data=macro, base_risk_limit_pct=15.0, is_high_tail_risk=True,
+            macro_data=macro, risk_limit=15.0, is_high_tail_risk=True,
             vix_spot=20.0
         )
 
@@ -59,23 +59,24 @@ class TestRiskEngineVIX306(unittest.TestCase):
         spy_price = 500.0
         stock_iv = 0.30
         
-        # Normal macro (Ready tier)
+        # Normal Macro
         macro_normal = MacroContext(vix=20.0, oil_price=70.0, vix_change=0.0, vts_ratio=0.9, vix_trend_up=False)
         qty_normal, _ = optimize_position_risk(
             current_delta=0, unit_weighted_delta=10.0, user_capital=user_cap, 
             spy_price=spy_price, stock_iv=stock_iv, strategy="STO_PUT",
-            macro_data=macro_normal, base_risk_limit_pct=15.0, is_high_tail_risk=False,
+            macro_data=macro_normal, risk_limit=15.0, is_high_tail_risk=False,
             vix_spot=20.0
         )
-        
-        # Same VIX but with backwardation + trend up (regime dampening)
-        macro_extreme = MacroContext(vix=20.0, oil_price=70.0, vix_change=0.0, vts_ratio=1.05, vix_trend_up=True)
+
+        # Extreme Macro (High Oil, Backwardation, VIX Up)
+        macro_extreme = MacroContext(vix=32.0, oil_price=105.0, vix_change=0.05, vts_ratio=1.1, vix_trend_up=True)
         qty_extreme, _ = optimize_position_risk(
             current_delta=0, unit_weighted_delta=10.0, user_capital=user_cap, 
             spy_price=spy_price, stock_iv=stock_iv, strategy="STO_PUT",
-            macro_data=macro_extreme, base_risk_limit_pct=15.0, is_high_tail_risk=False,
-            vix_spot=20.0
+            macro_data=macro_extreme, risk_limit=15.0, is_high_tail_risk=False,
+            vix_spot=32.0
         )
+
 
         self.assertTrue(qty_extreme < qty_normal)
         self.assertTrue(qty_normal > 0)

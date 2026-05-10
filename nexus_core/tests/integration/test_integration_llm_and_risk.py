@@ -69,7 +69,7 @@ class TestRiskEngineIntegration(unittest.TestCase):
             stock_iv=0.30,
             strategy="STO_PUT",
             macro_data=caution,
-            base_risk_limit_pct=50.0,
+            risk_limit=50.0,
             vix_spot=16.0,
         )
         allin_qty, _ = optimize_position_risk(
@@ -80,7 +80,7 @@ class TestRiskEngineIntegration(unittest.TestCase):
             stock_iv=0.30,
             strategy="STO_PUT",
             macro_data=allin,
-            base_risk_limit_pct=50.0,
+            risk_limit=50.0,
             vix_spot=36.0,
         )
 

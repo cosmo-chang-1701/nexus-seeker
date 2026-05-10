@@ -32,8 +32,9 @@ def evaluate_rehedge_necessity(u_ctx: UserContext, result: Dict[str, Any]) -> Op
 
     if u_ctx.capital > 0:
         current_exposure_pct = (u_ctx.total_weighted_delta * spy_price) / u_ctx.capital * 100
-        if current_exposure_pct > u_ctx.risk_limit_base:
-            rehedge_reason = f"🔥 總曝險 ({current_exposure_pct:.1f}%) 已超過個人風險上限 ({u_ctx.risk_limit_base}%)"
+        if current_exposure_pct > u_ctx.risk_limit:
+            rehedge_reason = f"🔥 總曝險 ({current_exposure_pct:.1f}%) 已超過個人風險上限 ({u_ctx.risk_limit}%)"
+            return True, rehedge_reason
 
     if rehedge_reason:
         needed_spy_qty = u_ctx.total_weighted_delta

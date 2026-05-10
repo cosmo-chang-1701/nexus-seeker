@@ -284,7 +284,7 @@ def _add_risk_optimization_fields(embed, data, user_capital=None):
     
     # 🚀 修正點 1：風險閾值應從數據中取得，或設為全局變數
     # 避免後台改了 10% 這裡還在顯示 15%
-    RISK_THRESHOLD = data.get('risk_limit_pct', 15.0) 
+    RISK_THRESHOLD = data.get('risk_limit', 15.0) 
     
     # 1. 曝險現況區塊
     is_overloaded = abs(projected_pct) > RISK_THRESHOLD
@@ -1047,7 +1047,7 @@ def build_scan_report(result: Dict[str, Any]):
 
     # 2. NRO 風控區塊
     nro_info = (f"建議口數: `{result.get('safe_qty', 0)}` 口\n"
-               f"預期總曝險: `{result.get('projected_exposure_pct', 0):+.1f}%` / `{result.get('risk_limit_pct', 15.0)}%` (紅線)")
+               f"預期總曝險: `{result.get('projected_exposure_pct', 0):+.1f}%` / `{result.get('risk_limit', 15.0)}%` (紅線)")
     embed.add_field(name="🛡️ NRO 風控判定", value=nro_info, inline=False)
 
     # 3. 🚀 整合 EMA 訊號區塊

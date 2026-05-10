@@ -62,7 +62,7 @@ class TestUserContextAggregation(DbIsolatedTestCase):
 
     def test_context_aggregates_real_and_holdings_greeks(self):
         """測試 get_full_user_context 是否能正確從 assets 表聚合 TRADE 與 HOLDING 的 Greeks"""
-        upsert_user_config(1001, capital=50000.0, risk_limit_pct=50.0)
+        upsert_user_config(1001, capital=50000.0, risk_limit=50.0)
 
         # 1. 模擬實單部位 (TRADE)
         meta_trade = {
@@ -98,7 +98,7 @@ class TestUserContextAggregation(DbIsolatedTestCase):
 
         self.assertEqual(ctx.user_id, 1001)
         self.assertEqual(ctx.capital, 50000.0)
-        self.assertEqual(ctx.risk_limit_base, 50.0)
+        self.assertEqual(ctx.risk_limit, 50.0)
         # -50.0 (TRADE) + 65.0 (HOLDING) = 15.0
         self.assertAlmostEqual(ctx.total_weighted_delta, 15.0)
         # TRADE Theta = -9.0 (Annual) -> -9.0 / 365 (Daily)

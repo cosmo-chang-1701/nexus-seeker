@@ -167,7 +167,9 @@ class IntelligenceCog(commands.Cog):
         })
 
         # 3. 獲取用戶資金並渲染
-        user_capital = database.get_full_user_context(interaction.user.id).capital
+        user_ctx = database.get_full_user_context(interaction.user.id)
+        user_capital = user_ctx.capital
+        mock_data['risk_limit'] = user_ctx.risk_limit
         embed = create_scan_embed(mock_data, user_capital)
         
         await interaction.followup.send(

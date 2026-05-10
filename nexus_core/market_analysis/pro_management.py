@@ -67,16 +67,19 @@ def simulate_pro_transition(
         capital_efficiency_gain=efficiency_gain
     )
 
-def calculate_survival_runway(cash_reserve: float, monthly_expenses: float, daily_theta: float) -> float:
+def calculate_survival_runway(cash_reserve: float, monthly_expense: float, daily_theta: float) -> float:
     """
     生存天數計算 (Survival Runway):
     衡量現有現金儲備配合 Theta 現金流能維持多久的生存。
     """
-    net_monthly_burn = monthly_expenses - (daily_theta * 30)
+    net_monthly_burn = monthly_expense - (daily_theta * 30)
     if net_monthly_burn <= 0:
         return 9999.0
     runway_months = cash_reserve / net_monthly_burn
     return round(runway_months * 30, 1)
+
+# Aliases for compatibility
+calculate_financial_runway = calculate_survival_runway
 
 def simulate_cc_transition(
     current_option_pnl: float,

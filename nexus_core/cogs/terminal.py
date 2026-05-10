@@ -68,7 +68,7 @@ class TerminalCog(commands.Cog):
 
         if risk_limit is not None:
             if 1.0 <= risk_limit <= 50.0:
-                kwargs['risk_limit_pct'] = risk_limit
+                kwargs['risk_limit'] = risk_limit
                 updates.append(f"🛡️ 風險限制: `{risk_limit}%`")
             else:
                 return await interaction.response.send_message("❌ 風險限制需介於 1.0% 至 50.0% 之間", ephemeral=True)
@@ -148,12 +148,12 @@ class TerminalCog(commands.Cog):
         ctx = get_full_user_context(user_id)
         
         if ctx.monthly_expense <= 0:
-            return await interaction.followup.send("⚠️ 請先使用 `/settings` 配置您的每月支出 (expense)，才能計算跑道。", ephemeral=True)
+            return await interaction.followup.send("⚠️ 請先使用 `/settings` 配置您的每月支出 (monthly_expense)，才能計算跑道。", ephemeral=True)
 
         from market_analysis.pro_management import calculate_financial_runway
         runway_days = calculate_financial_runway(
             cash_reserve=ctx.cash_reserve,
-            monthly_expenses=ctx.monthly_expense,
+            monthly_expense=ctx.monthly_expense,
             daily_theta=ctx.total_theta
         )
         
@@ -175,7 +175,7 @@ class TerminalCog(commands.Cog):
         # 計算含備用流動性的跑道
         extended_runway = calculate_financial_runway(
             cash_reserve=ctx.cash_reserve + backup_liquidity,
-            monthly_expenses=ctx.monthly_expense,
+            monthly_expense=ctx.monthly_expense,
             daily_theta=ctx.total_theta
         )
 
@@ -365,7 +365,7 @@ class TerminalCog(commands.Cog):
                 stock_iv=result.get('iv', 0.15), 
                 strategy=result.get('strategy', ''), 
                 macro_data=macro_data, 
-                base_risk_limit_pct=user_context.risk_limit_base, 
+                risk_limit=user_context.risk_limit, 
                 vix_spot=macro_data.vix,
                 pcr=pcr_val,
                 skew=skew_val
@@ -374,7 +374,13 @@ class TerminalCog(commands.Cog):
             projected_total_delta = user_context.total_weighted_delta + (result.get('weighted_delta', 0.0) * (-1 if "STO" in result.get('strategy', '') else 1) * safe_qty)
             projected_exposure_pct = (projected_total_delta * spy_price / user_context.capital) * 100 if user_context.capital > 0 else 0
             
-            result.update({'projected_exposure_pct': round(projected_exposure_pct, 2), 'safe_qty': safe_qty, 'hedge_spy': hedge_spy, 'spy_price': spy_price})
+            result.update({
+                'projected_exposure_pct': round(projected_exposure_pct, 2), 
+                'safe_qty': safe_qty, 
+                'hedge_spy': hedge_spy, 
+                'spy_price': spy_price,
+                'risk_limit': user_context.risk_limit
+            })
             embeds_to_send.append(create_scan_embed(result, user_context.capital))
 
         if psq_result:

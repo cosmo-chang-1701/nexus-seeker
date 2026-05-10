@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 class UserContext:
     user_id: int
     capital: float              # 總資金
-    risk_limit_base: float      # 基準風險上限 %
+    risk_limit: float           # 基準風險上限 %
     total_weighted_delta: float # 組合總加權 Delta (目前持倉)
     total_theta: float          # 組合總每日 Theta (目前持倉)
     total_gamma: float          # 組合總 Gamma (目前持倉)
@@ -22,7 +22,7 @@ class UserContext:
     enable_analyst_agent: bool = False # 是否啟用 Wall Street Analyst Agent 每日推播
     polymarket_threshold: float = 10000.0 # Polymarket 巨鯨監控門檻 (USD, 0=關閉)
     polymarket_use_llm: bool = True       # 是否使用 LLM 進行 Polymarket 交易分析
-    polymarket_slippage: float = 2.0      # Polymarket 巨鯨判定目標滑價百分比 (預設 2.0%)
+    polymarket_slippage: bool = 2.0       # Polymarket 巨鯨判定目標滑價百分比 (預設 2.0%)
     monthly_expense: float = 0.0          # 每月支出預算
     tax_reserve_rate: float = 0.20        # 稅務預留比例 (預設 20%)
     cash_reserve: float = 0.0             # 現金儲備 (用於生存天數計算)
@@ -46,17 +46,17 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:
             
             # 1. 確保使用者紀錄存在
             cursor.execute('''
-                INSERT OR IGNORE INTO user_settings (user_id, portfolio_value, risk_limit_pct) 
+                INSERT OR IGNORE INTO user_settings (user_id, capital, risk_limit) 
                 VALUES (?, 100000.0, 15.0)
             ''', (user_id,))
             
-            # 2. 轉譯 capital 為 portfolio_value
-            if 'capital' in kwargs and kwargs['capital'] is not None:
-                kwargs['portfolio_value'] = kwargs.pop('capital')
+            # 2. 轉譯別名 (Aliases) 確保與 README/CLI 參數對齊
+            if 'expense' in kwargs and kwargs['expense'] is not None:
+                kwargs['monthly_expense'] = kwargs.pop('expense')
             
             # 3. 動態構建 SQL SET 子句 (白名單防護)
             allowed_keys = {
-                'portfolio_value', 'risk_limit_pct', 'last_rehedge_alert_time', 'dynamic_tau', 
+                'capital', 'risk_limit', 'last_rehedge_alert_time', 'dynamic_tau', 
                 'enable_option_alerts', 'enable_vtr', 'enable_psq_watchlist', 'enable_analyst_agent',
                 'polymarket_threshold', 'polymarket_use_llm', 'polymarket_slippage',
                 'monthly_expense', 'tax_reserve_rate', 'cash_reserve'
@@ -66,9 +66,9 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:
             
             for key, value in kwargs.items():
                 if key in allowed_keys and value is not None:
-                    if key == 'portfolio_value':
+                    if key == 'capital':
                         value = max(float(value), 1.0)
-                    elif key == 'risk_limit_pct':
+                    elif key == 'risk_limit':
                         value = max(1.0, min(value, 50.0))
                     elif key in ['polymarket_threshold', 'monthly_expense', 'cash_reserve']:
                         value = max(0.0, float(value))
@@ -100,7 +100,7 @@ def get_user_capital(user_id: int) -> float:
     try:
         with sqlite3.connect(DB_NAME) as conn:
             cursor = conn.cursor()
-            cursor.execute('SELECT portfolio_value FROM user_settings WHERE user_id = ?', (user_id,))
+            cursor.execute('SELECT capital FROM user_settings WHERE user_id = ?', (user_id,))
             row = cursor.fetchone()
             return float(row[0]) if row and row[0] is not None else 100000.0
     except Exception as e:
@@ -112,7 +112,7 @@ def get_user_risk_limit(user_id: int) -> float:
     try:
         with sqlite3.connect(DB_NAME) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT risk_limit_pct FROM user_settings WHERE user_id = ?", (user_id,))
+            cursor.execute("SELECT risk_limit FROM user_settings WHERE user_id = ?", (user_id,))
             row = cursor.fetchone()
             return float(row[0]) if row and row[0] is not None else 15.0
     except Exception as e:
@@ -180,9 +180,9 @@ def get_full_user_context(user_id: int) -> UserContext:
             sum_gamma = user_row['sum_gamma'] if user_row['sum_gamma'] is not None else 0.0
             
             # 處理基本設定與空值
-            capital_raw = float(user_row['portfolio_value']) if user_row['portfolio_value'] is not None else 100000.0
+            capital_raw = float(user_row['capital']) if user_row['capital'] is not None else 100000.0
             capital = max(capital_raw, 1.0)
-            risk_limit = float(user_row['risk_limit_pct']) if user_row['risk_limit_pct'] is not None else 15.0
+            risk_limit = float(user_row['risk_limit']) if user_row['risk_limit'] is not None else 15.0
             
             # Helper for booleans and defaults
             def _get_val(key: str, default: Any) -> Any:
@@ -193,7 +193,7 @@ def get_full_user_context(user_id: int) -> UserContext:
             return UserContext(
                 user_id=user_id,
                 capital=capital,
-                risk_limit_base=risk_limit,
+                risk_limit=risk_limit,
                 total_weighted_delta=sum_delta,
                 total_theta=sum_theta,
                 total_gamma=sum_gamma,

@@ -75,7 +75,7 @@ class TestUnifiedAssetLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(meta.quantity, -2)
         
         # 3. Risk Aggregation Verification
-        upsert_user_config(self.user_id, portfolio_value=100000.0)
+        upsert_user_config(self.user_id, capital=100000.0)
         ctx = get_full_user_context(self.user_id)
         # Delta should be -45.0 from trade
         self.assertEqual(ctx.total_weighted_delta, -45.0)
@@ -97,7 +97,7 @@ class TestUnifiedAssetLifecycle(unittest.IsolatedAsyncioTestCase):
     @patch("services.market_data_service.get_quote")
     async def test_nro_aggregation_with_holdings(self, mock_quote, mock_hist):
         # Setup user config
-        upsert_user_config(self.user_id, portfolio_value=100000.0)
+        upsert_user_config(self.user_id, capital=100000.0)
         
         # Setup mock data for Greeks refresh
         mock_quote.return_value = {"c": 160.0} # TSLA price

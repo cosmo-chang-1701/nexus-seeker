@@ -269,7 +269,7 @@ class TradingService:
             
             user_context = database.get_full_user_context(uid)
             user_capital = user_context.capital
-            user_risk_pref = user_context.risk_limit_base
+            user_risk_pref = user_context.risk_limit
             current_total_delta = user_context.total_weighted_delta
 
             for sym, stock_cost, use_llm in watchlist_items:
@@ -312,7 +312,7 @@ class TradingService:
                         
                         # 🚀 整合核心：注入宏觀背景進行風險優化
                         strategy = opt_data.get('strategy', '')
-                        safe_qty, hedge_spy = portfolio.optimize_position_risk(
+                        safe_qty, hedge_spy = optimize_position_risk(
                             current_delta=current_total_delta,
                             unit_weighted_delta=opt_data.get('weighted_delta', 0.0),
                             user_capital=user_capital,
@@ -320,11 +320,12 @@ class TradingService:
                             stock_iv=opt_data.get('iv', 0.15),
                             strategy=strategy,
                             macro_data=macro_data,
-                            base_risk_limit_pct=user_risk_pref,
+                            risk_limit=user_context.risk_limit,
                             vix_spot=vix_spot,
                             pcr=pcr_val,
                             skew=skew_val
                         )
+
 
                         # 模擬成交後的衝擊
                         side_multiplier = -1 if "STO" in strategy else 1
@@ -337,7 +338,8 @@ class TradingService:
                             'hedge_spy': hedge_spy,
                             'projected_exposure_pct': round(projected_exposure_pct, 2),
                             'pcr': pcr_val,
-                            'skew': skew_val
+                            'skew': skew_val,
+                            'risk_limit': user_context.risk_limit
                         })
 
                         # 🚀 執行集中化決策管線 (Stage 1-4)
@@ -623,7 +625,7 @@ class TradingService:
             from market_analysis.pro_management import calculate_survival_runway
             survival_runway = calculate_survival_runway(
                 cash_reserve=user_ctx.cash_reserve,
-                monthly_expenses=user_ctx.monthly_expense,
+                monthly_expense=user_ctx.monthly_expense,
                 daily_theta=user_ctx.total_theta
             )
 

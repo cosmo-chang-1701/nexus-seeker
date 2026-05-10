@@ -5,9 +5,10 @@ from database.user_settings import UserContext
 class TestHedgeDirectives(unittest.TestCase):
     def setUp(self):
         self.user_ctx = UserContext(
-            user_id=1, capital=100000.0, risk_limit_base=15.0,
-            total_weighted_delta=0.0, total_theta=0.0, total_gamma=0.0
+            user_id=1, capital=100000.0, risk_limit=15.0,
+            total_weighted_delta=2000.0, total_theta=-50.0, total_gamma=0.0
         )
+
 
     def test_hold_within_threshold(self):
         self.user_ctx.total_weighted_delta = 30.0

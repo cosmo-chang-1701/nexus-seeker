@@ -279,7 +279,7 @@ class TestRiskEngineDynamicKelly(unittest.TestCase):
         qty_normal, _ = optimize_position_risk(
             current_delta=0, unit_weighted_delta=10.0, user_capital=user_cap,
             spy_price=spy_price, stock_iv=stock_iv, strategy="STO_PUT",
-            macro_data=macro, base_risk_limit_pct=15.0, vix_spot=20.0,
+            macro_data=macro, risk_limit=15.0, vix_spot=20.0,
         )
         self.assertTrue(qty_normal > 0)
 
@@ -293,14 +293,14 @@ class TestRiskEngineDynamicKelly(unittest.TestCase):
         qty_normal, _ = optimize_position_risk(
             current_delta=0, unit_weighted_delta=10.0, user_capital=user_cap,
             spy_price=spy_price, stock_iv=stock_iv, strategy="STO_PUT",
-            macro_data=macro_normal, base_risk_limit_pct=15.0, vix_spot=20.0,
+            macro_data=macro_normal, risk_limit=15.0, vix_spot=20.0,
         )
 
         macro_high = MacroContext(vix=32.0, oil_price=70.0, vix_change=0.0, vts_ratio=0.9, vix_trend_up=False)
         qty_high, _ = optimize_position_risk(
             current_delta=0, unit_weighted_delta=10.0, user_capital=user_cap,
             spy_price=spy_price, stock_iv=stock_iv, strategy="STO_PUT",
-            macro_data=macro_high, base_risk_limit_pct=15.0, vix_spot=32.0,
+            macro_data=macro_high, risk_limit=15.0, vix_spot=32.0,
         )
 
         # High VIX should allow MORE contracts (offensive posture)
@@ -318,14 +318,14 @@ class TestRiskEngineDynamicKelly(unittest.TestCase):
         qty_allin, _ = optimize_position_risk(
             current_delta=0, unit_weighted_delta=10.0, user_capital=user_cap,
             spy_price=spy_price, stock_iv=stock_iv, strategy="STO_PUT",
-            macro_data=macro, base_risk_limit_pct=15.0, vix_spot=38.0,
+            macro_data=macro, risk_limit=15.0, vix_spot=38.0,
         )
 
         # Without vix_spot (old path), oil & regime would heavily reduce
         qty_old_path, _ = optimize_position_risk(
             current_delta=0, unit_weighted_delta=10.0, user_capital=user_cap,
             spy_price=spy_price, stock_iv=stock_iv, strategy="STO_PUT",
-            macro_data=macro, base_risk_limit_pct=15.0, vix_spot=None,
+            macro_data=macro, risk_limit=15.0, vix_spot=None,
         )
 
         # All-in bypass should allow significantly more contracts

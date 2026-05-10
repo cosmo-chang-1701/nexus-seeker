@@ -7,7 +7,7 @@ class TestValidationPipeline(unittest.TestCase):
     def setUp(self):
         self.ts = TradingService(None)
         self.user_ctx = UserContext(
-            user_id=1, capital=100000.0, risk_limit_base=15.0,
+            user_id=1, capital=100000.0, risk_limit=15.0,
             total_weighted_delta=0.0, total_theta=0.0, total_gamma=0.0
         )
 

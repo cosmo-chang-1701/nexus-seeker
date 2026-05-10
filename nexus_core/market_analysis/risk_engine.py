@@ -134,7 +134,7 @@ def get_macro_modifiers(macro: MacroContext, pcr: float = 0.8, skew: float = 0.0
     
     return w_vix, w_oil, w_regime
 
-def optimize_position_risk(current_delta: float, unit_weighted_delta: float, user_capital: float, spy_price: float, stock_iv: float, strategy: str, macro_data: Optional[MacroContext] = None, base_risk_limit_pct: float = 15.0, is_high_tail_risk: bool = False, vix_spot: Optional[float] = None, pcr: float = 0.8, skew: float = 0.0) -> Tuple[int, float]:
+def optimize_position_risk(current_delta: float, unit_weighted_delta: float, user_capital: float, spy_price: float, stock_iv: float, strategy: str, macro_data: Optional[MacroContext] = None, risk_limit: float = 15.0, is_high_tail_risk: bool = False, vix_spot: Optional[float] = None, pcr: float = 0.8, skew: float = 0.0) -> Tuple[int, float]:
     """NRO 風險優化器：根據宏觀環境計算安全持倉口數。
     
     Args:
@@ -145,7 +145,7 @@ def optimize_position_risk(current_delta: float, unit_weighted_delta: float, use
     if spy_price <= 0:
         return 0, 0.0
 
-    spy_iv, risk_limit_pct = 0.16, base_risk_limit_pct
+    spy_iv, current_risk_limit = 0.16, risk_limit
     if macro_data: 
         # ---------- VIX < 15.0 Dormant Tier Enforcement ----------
         if macro_data.vix < 15.0 and "STO" in strategy:
@@ -161,32 +161,32 @@ def optimize_position_risk(current_delta: float, unit_weighted_delta: float, use
             d_regime *= 0.8
             
         # All-in 模式 (VIX > 35): 繞過宏觀修正因子的衰減效應，
-        # 直接使用 base_risk_limit_pct * d_vix 以最大化風險額度。
+        # 直接使用 risk_limit * d_vix 以最大化風險額度。
         if vix_spot is not None and vix_spot >= 35.0:
-            risk_limit_pct = base_risk_limit_pct * d_vix  # d_vix=2.0 at this tier
+            current_risk_limit = risk_limit * d_vix  # d_vix=2.0 at this tier
         else:
-            risk_limit_pct = base_risk_limit_pct * d_vix * d_oil * d_regime
+            current_risk_limit = risk_limit * d_vix * d_oil * d_regime
         spy_iv = macro_data.vix / 100.0
 
         
     if is_high_tail_risk:
-        risk_limit_pct *= 0.5 # Tail risk haircut
+        current_risk_limit *= 0.5 # Tail risk haircut
 
     # 動態 Kelly 縮放：VIX 超過 upper_10 (29.5) 時，
     # 從 1/4 Kelly 向 1/2 Kelly 線性插值。
     # 此值透過 strategy 層的 kelly_fraction_override 機制獨立於此處運作，
-    # 這裡僅調整 risk_limit_pct 上的 Kelly-adjacent 縮放。
+    # 這裡僅調整 current_risk_limit 上的 Kelly-adjacent 縮放。
     if vix_spot is not None:
         upper_10 = VIX_QUANTILE_BOUNDS.get('upper_10', 29.5)
         if vix_spot > upper_10:
             # 以 VIX 45 為插值上限 (避免無窮外推)
             vix_ceiling = 45.0
             t = min((vix_spot - upper_10) / (vix_ceiling - upper_10), 1.0)
-            kelly_scale = 1.0 + t * 0.5  # 從 1.0x 到 1.5x risk_limit_pct
-            risk_limit_pct *= kelly_scale
+            kelly_scale = 1.0 + t * 0.5  # 從 1.0x 到 1.5x current_risk_limit
+            current_risk_limit *= kelly_scale
 
     val_adj_unit_delta = unit_weighted_delta * (stock_iv / max(spy_iv, 0.01)) * (-1 if "STO" in strategy else 1)
-    max_safe_shares = (user_capital * (risk_limit_pct / 100)) / spy_price
+    max_safe_shares = (user_capital * (current_risk_limit / 100)) / spy_price
     safe_qty = int((max_safe_shares - current_delta) // val_adj_unit_delta) if val_adj_unit_delta > 0 else int((-max_safe_shares - current_delta) // val_adj_unit_delta) if val_adj_unit_delta < 0 else 0
     proj_delta = current_delta + (val_adj_unit_delta * max(0, safe_qty))
     suggested_hedge_spy = proj_delta - max_safe_shares if proj_delta > max_safe_shares else proj_delta + max_safe_shares if proj_delta < -max_safe_shares else 0.0
