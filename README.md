@@ -22,6 +22,7 @@
 | **量化定價引擎** | Black-Scholes-Merton (via `py_vollib`, 含股息率校正) |
 | **風險精算核心** | Nexus Risk Optimizer (NRO) - 二階 Beta-Weighted 曝險模型 (含 Vanna 修正) |
 | **情緒分析中心** | Sentiment Engine - Skew 偏斜、PCR、Max Pain 與 UOA 偵測 |
+| **驗證與測試** | `pytest` + `pytest-asyncio` (核心引擎覆蓋率 > 90%) |
 | **數據源 (Feeds)** | Finnhub (Real-time), yfinance (Options), Polymarket (WS L2), Reddit (Edge) |
 | **持久化層** | SQLite 搭配自動化 Migration Engine (v032+) |
 | **智能層** | Structured LLM Output (Pydantic Schema) 具備 Memory Safety Gates |

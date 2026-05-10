@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
+import asyncio
 import logging
 from datetime import datetime
 from typing import Optional
@@ -34,7 +35,7 @@ class SentimentCog(commands.Cog):
             uoa_task = SentimentEngine.detect_uoa(symbol)
             max_pain_task = SentimentEngine.calculate_max_pain(symbol)
             
-            skew_data, pcr_data, uoa_data, max_pain_data = await discord.utils.gather(
+            skew_data, pcr_data, uoa_data, max_pain_data = await asyncio.gather(
                 skew_task, pcr_task, uoa_task, max_pain_task
             )
             

@@ -71,12 +71,14 @@ The system is optimized for **Low-RAM VPS** deployment:
 
 ### Testing
 Tests are located in `nexus_core/tests/`.
-- **Mandate:** All tests MUST be executed within the Docker container environment.
+- **Mandate:** All tests MUST be executed using `pytest`.
+- **Framework:** `pytest` with `pytest-asyncio` and `pytest-mock`.
+- **Coverage:** Core engines (NRO/Sentiment) must achieve >90% code coverage.
 - **Run all tests:**
   ```bash
-  docker compose run --rm nexus-seeker python -m unittest discover -s tests -v
+  cd nexus_core && .venv/bin/python -m pytest --cov=market_analysis --cov=services --cov-report=term-missing
   ```
-- **Key Suites:** Database migrations (`v032`), Polymarket WS integration, Skew/Sentiment logic, and NRO Risk scaling.
+- **Persistence:** Tests use a shared in-memory SQLite database (`file:testdb?mode=memory&cache=shared`) with full migration (v032+) support.
 
 ---
 

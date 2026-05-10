@@ -5,6 +5,7 @@ import logging
 import sqlite3
 import config
 from datetime import datetime
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
