@@ -8,8 +8,8 @@ from models.asset import Asset, ContextType, TradeMetadata, HoldingMetadata, Wat
 logger = logging.getLogger(__name__)
 
 class AssetManager:
-    def __init__(self, db_name: str = DB_NAME):
-        self.db_name = db_name
+    def __init__(self, db_name: str = None):
+        self.db_name = db_name or DB_NAME
 
     def _get_conn(self):
         conn = sqlite3.connect(self.db_name)
