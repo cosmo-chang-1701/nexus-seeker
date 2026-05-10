@@ -105,6 +105,8 @@ graph TD
     精準對齊交易所交易時鐘，以 30 分鐘為心跳進行全自動掃描。
 *   **VPS Performance Guard (1GB RAM 優化)**：
     針對低配 VPS 引入 **BoundedCache (max 500)** 與 **Memory Safety Gates**。當系統 RAM > 85% 時，自動延後非核心 AI 分析，優先確保風險計算與警報發送。
+*   **System Health & Disk Diagnostics (硬碟與系統診斷)**：
+    `/sys_health` 指令現在包含硬碟空間監控，能自動辨識磁碟滿載風險並提供視覺化健康評級。
 *   **獨立現貨持倉系統 (Independent Holdings System)**：
     解耦觀察清單與實際資產。長期股權會自動納入 NRO 全局風險精算。
 

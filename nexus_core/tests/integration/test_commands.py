@@ -157,3 +157,36 @@ async def test_command_vtr_stats(mock_interaction, db_conn):
     
     await cog.vtr_stats.callback(cog, mock_interaction)
     assert mock_interaction.response.send_message.called or mock_interaction.followup.send.called
+
+@pytest.mark.asyncio
+async def test_command_sys_health(mock_interaction):
+    bot = MagicMock()
+    cog = TerminalCog(bot)
+    
+    with patch("psutil.virtual_memory") as mock_mem, \
+         patch("psutil.disk_usage") as mock_disk, \
+         patch("psutil.cpu_percent") as mock_cpu:
+        
+        # Case 1: Healthy
+        mock_mem.return_value.percent = 50.0
+        mock_mem.return_value.available = 512 * 1024 * 1024
+        mock_disk.return_value.percent = 40.0
+        mock_disk.return_value.free = 10 * 1024 * 1024 * 1024
+        mock_cpu.return_value = 10.0
+        
+        await cog.sys_health.callback(cog, mock_interaction)
+        mock_interaction.followup.send.assert_called()
+        args, kwargs = mock_interaction.followup.send.call_args
+        embed = kwargs['embed']
+        assert "✅ 狀態優良" in embed.fields[-1].value
+        assert discord.Color.green() == embed.color
+
+        # Case 2: Disk Full Danger
+        mock_interaction.followup.send.reset_mock()
+        mock_disk.return_value.percent = 96.0
+        await cog.sys_health.callback(cog, mock_interaction)
+        args, kwargs = mock_interaction.followup.send.call_args
+        embed = kwargs['embed']
+        assert "🆘 **極度危險**" in embed.fields[-1].value
+        assert "(磁碟即將滿載)" in embed.fields[-1].value
+        assert discord.Color.red() == embed.color

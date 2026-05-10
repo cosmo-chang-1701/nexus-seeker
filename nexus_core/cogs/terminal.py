@@ -498,6 +498,7 @@ class TerminalCog(commands.Cog):
         # 1. 系統資源
         mem = psutil.virtual_memory()
         cpu_load = psutil.cpu_percent()
+        disk = psutil.disk_usage('/')
         process = psutil.Process(os.getpid())
         proc_mem = process.memory_info().rss / (1024 * 1024) # MB
 
@@ -514,13 +515,14 @@ class TerminalCog(commands.Cog):
 
         embed = discord.Embed(
             title="🖥️ Nexus Seeker 系統健康診斷",
-            color=discord.Color.green() if mem.percent < 80 else discord.Color.red(),
+            color=discord.Color.green() if (mem.percent < 80 and disk.percent < 85) else discord.Color.red(),
             timestamp=discord.utils.utcnow()
         )
 
         embed.add_field(name="VPS 記憶體", value=f"`{mem.percent}%` (可用: {mem.available / (1024**2):.1f}MB)", inline=True)
         embed.add_field(name="CPU 負載", value=f"`{cpu_load}%`", inline=True)
         embed.add_field(name="程序占用 (RSS)", value=f"`{proc_mem:.1f} MB`", inline=True)
+        embed.add_field(name="💿 硬碟空間", value=f"`{disk.percent}%` (可用: {disk.free / (1024**3):.1f}GB)", inline=True)
 
         cache_info = (
             f"• SMA/EMA Cache: `{sma_count}/{ema_count}`\n"
@@ -530,10 +532,19 @@ class TerminalCog(commands.Cog):
         embed.add_field(name="📦 快取統計 (LRU/Bounded)", value=cache_info, inline=False)
 
         health_status = "✅ 狀態優良"
-        if mem.percent > 85:
-            health_status = "⚠️ **記憶體吃緊** (LLM 閘門已開啟)"
-        elif mem.percent > 95:
-            health_status = "🆘 **極度危險** (可能觸發 OOM Killer)"
+        if mem.percent > 85 or disk.percent > 85:
+            health_status = "⚠️ **資源吃緊**"
+            if mem.percent > 85:
+                health_status += " (記憶體閾值已達)"
+            if disk.percent > 85:
+                health_status += " (磁碟空間不足)"
+        
+        if mem.percent > 95 or disk.percent > 95:
+            health_status = "🆘 **極度危險**"
+            if mem.percent > 95:
+                health_status += " (OOM 警告)"
+            if disk.percent > 95:
+                health_status += " (磁碟即將滿載)"
 
         embed.add_field(name="🩺 健康評級", value=health_status, inline=False)
         embed.set_footer(text="Argo Optimization Engine | Low-RAM VPS Edition")

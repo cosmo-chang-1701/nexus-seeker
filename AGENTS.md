@@ -10,7 +10,7 @@ Nexus Seeker is a multi-tenant **Options Quant Risk-Control & Trading Operations
 - **Quant Math:** `numpy`, `pandas`, `scipy`
 - **AI/LLM:** OpenAI-compatible API with `pydantic` structured outputs and memory safety gates
 - **Database:** SQLite (v032+) with an automated migration engine and JSON metadata support
-- **Infrastructure:** Docker, Docker Compose, Cloudflare Tunnel, psutil (System Health)
+- **Infrastructure:** Docker, Docker Compose, Cloudflare Tunnel, psutil (System Health & Disk Monitoring)
 
 ---
 
@@ -37,7 +37,7 @@ The system is divided into two main services:
   - **`calendar_service.py`**: **Calendar-Aware Guard**. Fetches high-impact economic/earnings data with LRU caching.
   - **`llm_service.py`**: Structured AI analysis with memory safety gates.
 - **`cogs/`**: Discord extensions.
-  - **`terminal.py`**: High-impact commands (`/scan`, `/vtr_stats`, `/sys_health`, `/add_holding`, `/settings` with three-stage alert switch).
+  - **`terminal.py`**: High-impact commands (`/scan`, `/vtr_stats`, `/sys_health` with disk diagnostics, `/add_holding`, `/settings` with three-stage alert switch).
   - **`sentiment.py`**: Sentiment analytics terminal (`/skew_scan`, `/max_pain`).
   - **`calendar.py`**: Event-driven risk control (`/calendar`, `/iv_rank`, `/event_impact`).
   - **`hedging.py`**: Risk settlement and attribution commands (`/settle_hedge`, `/hedge_list`).
