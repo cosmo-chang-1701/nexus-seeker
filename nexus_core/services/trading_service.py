@@ -310,7 +310,11 @@ class TradingService:
                         pcr_val = pcr_data.get('pcr', 0.8)
                         skew_val = skew_data.get('skew', 0.0)
                         
-                        # 🚀 整合核心：注入宏觀背景進行風險優化
+                        # 🚀 整合核心：注入宏觀背景與日曆事件進行風險優化
+                        from services.calendar_service import calendar_service
+                        earnings_info = await calendar_service.get_symbol_earnings(symbol)
+                        tte_hours = earnings_info['tte_hours'] if earnings_info else None
+
                         strategy = opt_data.get('strategy', '')
                         safe_qty, hedge_spy = optimize_position_risk(
                             current_delta=current_total_delta,
@@ -323,7 +327,8 @@ class TradingService:
                             risk_limit=user_context.risk_limit,
                             vix_spot=vix_spot,
                             pcr=pcr_val,
-                            skew=skew_val
+                            skew=skew_val,
+                            event_tte_hours=tte_hours
                         )
 
 

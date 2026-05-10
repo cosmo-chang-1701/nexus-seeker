@@ -379,6 +379,22 @@ async def is_etf(symbol: str) -> bool:
         return False
 
 # ---------------------------------------------------------------------------
+# Economic Calendar (經濟行事曆)
+async def get_economic_calendar(from_date: str, to_date: str) -> List[Dict[str, Any]]:
+    """獲取經濟行事曆資料。"""
+    try:
+        client = _get_client()
+        async with _limiter:
+            data = await asyncio.to_thread(
+                client.economic_calendar,
+                _from=from_date,
+                to=to_date
+            )
+        return data.get('economicCalendar', []) if data else []
+    except Exception as e:
+        logger.error(f"Finnhub economic calendar 失敗: {e}")
+        return []
+
 # Earnings Calendar (財報日期)
 # ---------------------------------------------------------------------------
 async def get_earnings_calendar(

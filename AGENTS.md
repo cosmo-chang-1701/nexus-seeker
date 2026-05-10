@@ -34,10 +34,12 @@ The system is divided into two main services:
   - **`hedge_monitor_service.py`**: Automated Hedging & Alert Pipeline. Monitors VIX spikes and pushes actionable SPY hedge instructions.
   - **`memory_manager.py`**: System health watchdog optimized for 1GB RAM. Handles periodic GC and emergency OOM alerts.
   - **`polymarket_service.py`**: Prediction market whale monitoring with real-time snapshot mechanisms for attribution.
+  - **`calendar_service.py`**: **Calendar-Aware Guard**. Fetches high-impact economic/earnings data with LRU caching.
   - **`llm_service.py`**: Structured AI analysis with memory safety gates.
 - **`cogs/`**: Discord extensions.
   - **`terminal.py`**: High-impact commands (`/scan`, `/vtr_stats`, `/sys_health`, `/add_holding`, `/settings` with three-stage alert switch).
   - **`sentiment.py`**: Sentiment analytics terminal (`/skew_scan`, `/max_pain`).
+  - **`calendar.py`**: Event-driven risk control (`/calendar`, `/iv_rank`, `/event_impact`).
   - **`hedging.py`**: Risk settlement and attribution commands (`/settle_hedge`, `/hedge_list`).
   - **`intelligence.py`**: Market edge detection (`/poly_list`, `/scan_news`, `/quote`).
 

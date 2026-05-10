@@ -92,7 +92,15 @@ graph TD
 *   **Max Pain Analysis (最大痛點分析)**：
     計算結算日前夕的 Max Pain 價格，評估標的是否趨於收斂以鎖定最終利潤。
 
-### 3. Execution Automation & VPS Stability
+### 3. Calendar-Aware Risk Guard (日曆感應風險防護)
+*   **Event-Driven Vanna Weighting (事件驅動 Vanna 權重)**：
+    自動監控 CPI、FOMC 及財報事件。當重大事件 TTE < 72h 時，NRO 引擎自動調高 **Vanna ($d\Delta/d\sigma$)** 權重，縮減曝險以應對「IV Run-up」。
+*   **IV Crush Detection (波動率驟降偵測)**：
+    當 IV Rank > 80% 且距離財報 < 24h 時，系統標註為「高風險波動率事件」，並建議採取風險中性或防禦性價差策略。
+*   **Proactive Event Alerts (主動事件預警)**：
+    後台監控器每 4 小時掃描一次，針對 48 小時內即將發生的重大衝擊事件向持倉用戶發送對沖預警。
+
+### 4. Execution Automation & VPS Stability
 *   **NYSE 動態調度器 (Dynamic Scheduler)**：
     精準對齊交易所交易時鐘，以 30 分鐘為心跳進行全自動掃描。
 *   **VPS Performance Guard (1GB RAM 優化)**：
@@ -144,6 +152,9 @@ stateDiagram-v2
 | `/quote` | 獲取標的之即時報價與漲跌資訊 | `symbol` |
 | `/scan_news` | 掃描特定標的之最新官方新聞 | `symbol` |
 | `/scan_reddit` | 掃描特定標的之 Reddit 散戶情緒 | `symbol` |
+| `/calendar` | **[New]** 顯示影響目前投資組合的即時重大事件 | — |
+| `/iv_rank` | **[New]** 掃描觀察清單中具備高 IV Rank 或財報前夕的標的 | — |
+| `/event_impact` | **[New]** 針對特定即時事件進行 Greeks (Delta, Vanna) 模擬 | `symbol`, `vol_move` |
 
 ---
 

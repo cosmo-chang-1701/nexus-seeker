@@ -134,18 +134,27 @@ def get_macro_modifiers(macro: MacroContext, pcr: float = 0.8, skew: float = 0.0
     
     return w_vix, w_oil, w_regime
 
-def optimize_position_risk(current_delta: float, unit_weighted_delta: float, user_capital: float, spy_price: float, stock_iv: float, strategy: str, macro_data: Optional[MacroContext] = None, risk_limit: float = 15.0, is_high_tail_risk: bool = False, vix_spot: Optional[float] = None, pcr: float = 0.8, skew: float = 0.0) -> Tuple[int, float]:
-    """NRO 風險優化器：根據宏觀環境計算安全持倉口數。
+def optimize_position_risk(current_delta: float, unit_weighted_delta: float, user_capital: float, spy_price: float, stock_iv: float, strategy: str, macro_data: Optional[MacroContext] = None, risk_limit: float = 15.0, is_high_tail_risk: bool = False, vix_spot: Optional[float] = None, pcr: float = 0.8, skew: float = 0.0, event_tte_hours: Optional[float] = None) -> Tuple[int, float]:
+    """NRO 風險優化器：根據宏觀環境與日曆事件計算安全持倉口數。
     
     Args:
-        vix_spot: VIX 即時價格。用於動態 Kelly 縮放與 All-in 模式。
+        vix_spot: VIX 即時價格。
         pcr: 買賣權比率。
         skew: 期權偏斜度。
+        event_tte_hours: 距離重大事件 (如財報) 的剩餘小時數。
     """
     if spy_price <= 0:
         return 0, 0.0
 
     spy_iv, current_risk_limit = 0.16, risk_limit
+    
+    # ------------------ Calendar-Aware Vanna Weighting ------------------
+    vanna_weight = 1.0
+    if event_tte_hours is not None and event_tte_hours < 72.0:
+        vanna_weight = 1.5 + max(0, (72.0 - event_tte_hours) / 72.0)
+        logger.info(f"NRO Calendar Guard: Event TTE {event_tte_hours:.1f}h. Vanna weighting boosted to {vanna_weight:.2f}")
+    # --------------------------------------------------------------------
+
     if macro_data: 
         # ---------- VIX < 15.0 Dormant Tier Enforcement ----------
         if macro_data.vix < 15.0 and "STO" in strategy:
@@ -184,6 +193,12 @@ def optimize_position_risk(current_delta: float, unit_weighted_delta: float, use
             t = min((vix_spot - upper_10) / (vix_ceiling - upper_10), 1.0)
             kelly_scale = 1.0 + t * 0.5  # 從 1.0x 到 1.5x current_risk_limit
             current_risk_limit *= kelly_scale
+
+    # ------------------ Hidden Delta Haircut ------------------
+    if vanna_weight > 1.0:
+        # Conservative reduction of effective risk limit to account for Hidden Delta (Vanna)
+        current_risk_limit *= (1.0 / vanna_weight)
+    # ---------------------------------------------------------
 
     val_adj_unit_delta = unit_weighted_delta * (stock_iv / max(spy_iv, 0.01)) * (-1 if "STO" in strategy else 1)
     max_safe_shares = (user_capital * (current_risk_limit / 100)) / spy_price
@@ -230,12 +245,12 @@ def get_macro_risk_metrics(total_beta_delta: float, total_theta: float, total_ma
         "vix_tier_name": vix_tier_name,
     }
 
-def calculate_vega_adjusted_delta(total_delta: float, total_vanna: float, vol_change: float) -> float:
+def calculate_vega_adjusted_delta(total_delta: float, total_vanna: float, vol_change: float, event_multiplier: float = 1.0) -> float:
     """
     計算考慮 Vega 影響後的調整後 Delta (Hidden Delta)。
-    Delta_adj = Delta + Vanna * Delta_Vol
+    Delta_adj = Delta + (Vanna * event_multiplier) * Delta_Vol
     """
-    return total_delta + (total_vanna * vol_change)
+    return total_delta + (total_vanna * event_multiplier * vol_change)
 
 def calculate_hedge_instruction(total_beta_delta: float, hedge_instrument_delta: float = -1.0) -> int:
     """
