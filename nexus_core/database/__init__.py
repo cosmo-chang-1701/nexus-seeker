@@ -1,5 +1,5 @@
 from .core import run_migrations, init_db
-from .portfolio import add_portfolio_record, get_user_portfolio, get_all_portfolio, delete_portfolio_record, get_user_portfolio_stats, add_hedge_history, get_hedge_history
+from .portfolio import add_portfolio_record, get_user_portfolio, get_all_portfolio, delete_portfolio_record, get_user_portfolio_stats, add_hedge_history, get_hedge_history, is_symbol_in_portfolio
 from .watchlist import add_watchlist_symbol, get_user_watchlist, get_user_watchlist_by_symbol, update_user_watchlist, get_all_watchlist, delete_watchlist_symbol, get_watchlist_alert_state, update_watchlist_alert_state
 from .holdings import add_holding, get_user_holdings, delete_holding, get_all_holdings, update_holding_greeks
 from .user_settings import upsert_user_config, get_full_user_context, get_all_user_ids, UserContext

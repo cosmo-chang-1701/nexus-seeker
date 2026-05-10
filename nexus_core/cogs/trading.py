@@ -408,6 +408,19 @@ class SchedulerCog(commands.Cog):
         if not found_any:
             await interaction.followup.send("🔎 掃描完成，目前沒有符合波動率優勢 (Cheap IV) 條件的標的。")
 
+    async def _should_send_alert(self, uid: int, symbol: str, alert_mode: int) -> bool:
+        """
+        根據使用者的警報模式與標的是否在持倉中，決定是否發送通知。
+        0=OFF, 1=ALL, 2=PORTFOLIO_ONLY
+        """
+        if alert_mode == 0:
+            return False
+        if alert_mode == 1:
+            return True
+        if alert_mode == 2:
+            return database.is_symbol_in_portfolio(uid, symbol)
+        return True
+
     async def _run_market_scan_logic(self, is_auto=True, triggered_by=None):
         """共用的掃描核心邏輯，協調 Service 計算與 Discord 訊息發送。"""
         try:
@@ -422,20 +435,28 @@ class SchedulerCog(commands.Cog):
                 for report in ddp_results:
                     from cogs.embed_builder import create_ddp_embed
                     embed = create_ddp_embed(report)
-                    user_ids = database.get_all_user_ids()
-                    for uid in user_ids:
-                        await self.bot.queue_dm(uid, embed=embed)
+                    sym = report['symbol']
+                    
+                    # ⚠️ 這裡原本會發給全站用戶，現在修正為僅發給 Watchlist 中有該標的且符合模式的用戶
+                    for uid, watch_sym, _ in all_watchlists:
+                        if watch_sym == sym:
+                            ctx = database.get_full_user_context(uid)
+                            if await self._should_send_alert(uid, sym, ctx.option_alert_mode):
+                                await self.bot.queue_dm(uid, embed=embed)
+                    
                     self.trading_service.ddp_inspector.record_signal(report)
 
             # 🚀 2. 執行 IV 優勢掃描 (Volatility Strategist)
             uids = sorted(list(set(row[0] for row in all_watchlists)))
             for uid in uids:
+                user_context = database.get_full_user_context(uid)
                 user_watch = [row[1] for row in all_watchlists if row[0] == uid]
                 vol_results = await self.trading_service.run_iv_opportunity_scan(user_watch, uid)
                 for report in vol_results:
-                    from cogs.embed_builder import create_volatility_embed
-                    embed = create_volatility_embed(report)
-                    await self.bot.queue_dm(uid, embed=embed)
+                    if await self._should_send_alert(uid, report['symbol'], user_context.option_alert_mode):
+                        from cogs.embed_builder import create_volatility_embed
+                        embed = create_volatility_embed(report)
+                        await self.bot.queue_dm(uid, embed=embed)
 
             # 🚀 3. 執行標準 NRO 掃描
             user_results = await self.trading_service.run_market_scan(
@@ -499,7 +520,9 @@ class SchedulerCog(commands.Cog):
                         if reason:
                             data['alert_reason'] = reason
                         
-                        valid_alerts.append(data)
+                        if await self._should_send_alert(uid, sym, user_context.option_alert_mode):
+                            valid_alerts.append(data)
+                        
                         if is_auto:
                             user_cooldowns[cooldown_key] = now
                             # 執行 VTR 自動建倉
@@ -507,7 +530,8 @@ class SchedulerCog(commands.Cog):
                                 await self.trading_service.execute_vtr_auto_entry(data)
                                 
                     elif alert_type == 'PSQ':
-                        valid_alerts.append(data)
+                        if await self._should_send_alert(uid, sym, user_context.option_alert_mode):
+                            valid_alerts.append(data)
                         if is_auto:
                             user_cooldowns[cooldown_key] = now
 

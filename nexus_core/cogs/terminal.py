@@ -29,7 +29,7 @@ class TerminalCog(commands.Cog):
     @app_commands.describe(
         capital="更新帳戶總資金 (USD)",
         risk_limit="更新基準風險上限 % (1.0 - 50.0)",
-        enable_option_alerts="是否接收選項策略推播",
+        alert_mode="期權警報模式: OFF(關閉), ALL(所有訊號), PORTFOLIO_ONLY(僅限持倉標的)",
         enable_vtr="是否啟用虛擬交易室 GhostTrader 自動建倉",
         enable_psq_watchlist="是否對 watchlist 開啟 PowerSqueeze 戰情追蹤",
         enable_analyst_agent="是否啟用 Wall Street Analyst Agent 每日推播",
@@ -40,12 +40,17 @@ class TerminalCog(commands.Cog):
         tax_reserve_rate="稅務預留比例 (0.0 - 1.0)",
         cash_reserve="現金儲備金額 (USD, 用於生存天數計算)"
     )
+    @app_commands.choices(alert_mode=[
+        app_commands.Choice(name="OFF (關閉)", value=0),
+        app_commands.Choice(name="ALL (所有掃描訊號)", value=1),
+        app_commands.Choice(name="PORTFOLIO_ONLY (僅限持倉標的)", value=2)
+    ])
     async def update_settings(
         self, 
         interaction: discord.Interaction, 
         capital: Optional[float] = None, 
         risk_limit: Optional[float] = None,
-        enable_option_alerts: Optional[bool] = None,
+        alert_mode: Optional[int] = None,
         enable_vtr: Optional[bool] = None,
         enable_psq_watchlist: Optional[bool] = None,
         enable_analyst_agent: Optional[bool] = None,
@@ -74,9 +79,10 @@ class TerminalCog(commands.Cog):
             else:
                 return await interaction.response.send_message("❌ 風險限制需介於 1.0% 至 50.0% 之間", ephemeral=True)
 
-        if enable_option_alerts is not None:
-            kwargs['enable_option_alerts'] = enable_option_alerts
-            updates.append(f"🔔 選項策略推播: `{'開啟' if enable_option_alerts else '關閉'}`")
+        if alert_mode is not None:
+            kwargs['option_alert_mode'] = alert_mode
+            mode_names = {0: "OFF (關閉)", 1: "ALL (所有掃描訊號)", 2: "PORTFOLIO_ONLY (僅限持倉標的)"}
+            updates.append(f"🔔 期權警報模式: `{mode_names[alert_mode]}`")
             
         if enable_vtr is not None:
             kwargs['enable_vtr'] = enable_vtr

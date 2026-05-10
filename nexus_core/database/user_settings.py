@@ -16,7 +16,7 @@ class UserContext:
     total_gamma: float          # 組合總 Gamma (目前持倉)
     last_rehedge_alert_time: int = 0 # 上次發送回補警報的時間 (Unix Timestamp)
     dynamic_tau: float = 1.0        # 自動優化對沖係數
-    enable_option_alerts: bool = True # 是否接收選項策略推播
+    option_alert_mode: int = 1        # 期權警報模式: 0=OFF, 1=ALL, 2=PORTFOLIO_ONLY
     enable_vtr: bool = True           # 是否啟用虛擬交易室 (GhostTrader) 自動跟單
     enable_psq_watchlist: bool = False # 是否對 add_watch 標的執行 PowerSqueeze 追蹤
     enable_analyst_agent: bool = False # 是否啟用 Wall Street Analyst Agent 每日推播
@@ -57,7 +57,7 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:
             # 3. 動態構建 SQL SET 子句 (白名單防護)
             allowed_keys = {
                 'capital', 'risk_limit', 'last_rehedge_alert_time', 'dynamic_tau', 
-                'enable_option_alerts', 'enable_vtr', 'enable_psq_watchlist', 'enable_analyst_agent',
+                'option_alert_mode', 'enable_vtr', 'enable_psq_watchlist', 'enable_analyst_agent',
                 'polymarket_threshold', 'polymarket_use_llm', 'polymarket_slippage',
                 'monthly_expense', 'tax_reserve_rate', 'cash_reserve'
             }
@@ -70,6 +70,8 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:
                         value = max(float(value), 1.0)
                     elif key == 'risk_limit':
                         value = max(1.0, min(value, 50.0))
+                    elif key == 'option_alert_mode':
+                        value = max(0, min(int(value), 2))
                     elif key in ['polymarket_threshold', 'monthly_expense', 'cash_reserve']:
                         value = max(0.0, float(value))
                     elif key == 'polymarket_slippage':
@@ -199,7 +201,7 @@ def get_full_user_context(user_id: int) -> UserContext:
                 total_gamma=sum_gamma,
                 last_rehedge_alert_time=_get_val('last_rehedge_alert_time', 0),
                 dynamic_tau=_get_val('dynamic_tau', 1.0),
-                enable_option_alerts=bool(_get_val('enable_option_alerts', True)),
+                option_alert_mode=_get_val('option_alert_mode', 1),
                 enable_vtr=bool(_get_val('enable_vtr', True)),
                 enable_psq_watchlist=bool(_get_val('enable_psq_watchlist', False)),
                 enable_analyst_agent=bool(_get_val('enable_analyst_agent', False)),

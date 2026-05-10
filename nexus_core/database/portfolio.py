@@ -118,6 +118,19 @@ def update_portfolio_greeks(trade_id: int, weighted_delta: float, theta: float, 
     conn.close()
     return True
 
+def is_symbol_in_portfolio(user_id: int, symbol: str) -> bool:
+    """檢查標的是否存在於使用者的活躍持倉 (TRADE) 或現貨 (HOLDING) 中"""
+    conn = sqlite3.connect(config.DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT 1 FROM assets 
+        WHERE user_id = ? AND symbol = ? AND context_type IN ('TRADE', 'HOLDING')
+        LIMIT 1
+    ''', (user_id, symbol.upper()))
+    res = cursor.fetchone()
+    conn.close()
+    return res is not None
+
 # ==========================================
 # 對沖歷史紀錄 (Hedge History)
 # ==========================================

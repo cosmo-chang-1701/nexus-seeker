@@ -29,14 +29,14 @@ The system is divided into two main services:
   - **`ghost_trader.py`**: Virtual Trading Room (VTR) and autonomous DITM defense.
   - **`ddp_inspector.py`**: Davis Double Play (DDP) detection (EPS Momentum + P/E expansion).
   - **`psq_engine.py`**: PowerSqueeze (PSQ) scoring with VIX-aware momentum labeling.
-- **`database/`**: Persistent storage layer with an automated migration engine. Includes unified asset lifecycle tracking and sentiment history.
+- **`database/`**: Persistent storage layer with an automated migration engine. Includes unified asset lifecycle tracking, sentiment history, and three-stage alert filtering (v034).
 - **`services/`**: Business logic layer.
   - **`hedge_monitor_service.py`**: Automated Hedging & Alert Pipeline. Monitors VIX spikes and pushes actionable SPY hedge instructions.
   - **`memory_manager.py`**: System health watchdog optimized for 1GB RAM. Handles periodic GC and emergency OOM alerts.
   - **`polymarket_service.py`**: Prediction market whale monitoring with real-time snapshot mechanisms for attribution.
   - **`llm_service.py`**: Structured AI analysis with memory safety gates.
 - **`cogs/`**: Discord extensions.
-  - **`terminal.py`**: High-impact commands (`/scan`, `/vtr_stats`, `/sys_health`, `/add_holding`).
+  - **`terminal.py`**: High-impact commands (`/scan`, `/vtr_stats`, `/sys_health`, `/add_holding`, `/settings` with three-stage alert switch).
   - **`sentiment.py`**: Sentiment analytics terminal (`/skew_scan`, `/max_pain`).
   - **`hedging.py`**: Risk settlement and attribution commands (`/settle_hedge`, `/hedge_list`).
   - **`intelligence.py`**: Market edge detection (`/poly_list`, `/scan_news`, `/quote`).
