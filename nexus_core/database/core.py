@@ -70,6 +70,18 @@ def run_migrations():
                 logger.info(f"✅ V{v} 遷移成功！")
             except Exception as e:
                 conn.rollback()
+                
+                # 🚀 [Self-Healing] 嘗試自動清理殘留的 _new 暫存表，防止下次遷移因表已存在而死鎖
+                try:
+                    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%_new'")
+                    temp_tables = cursor.fetchall()
+                    for (table_name,) in temp_tables:
+                        logger.warning(f"🧹 偵測到殘留暫存表 {table_name}，正在自動清理以解除遷移死鎖...")
+                        cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
+                    conn.commit()
+                except Exception as cleanup_err:
+                    logger.error(f"⚠️ 自動清理暫存表時出錯: {cleanup_err}")
+
                 if "duplicate column" in str(e).lower() or "no such column" in str(e).lower():
                     logger.warning(f"⚠️ V{v} 遷移警告: {e} (允許繼續，標記為成功)")
                     cursor.execute('INSERT INTO schema_versions (version) VALUES (?)', (v,))
