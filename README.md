@@ -142,14 +142,24 @@ stateDiagram-v2
 
 ---
 
-## ⌨️ Command Matrix (CLI)
+## ⌨️ Command Matrix (Unified Hubs)
+
+| Command | Description | Interactive Tabs / Buttons |
+|---|---|---|
+| **`/x [symbol]`** | **🌌 標的分析中心** | 報價, 量化掃描, 📰新聞, 💬Reddit, 📐情緒, 🎯MaxPain |
+| **`/dash`** | **📊 交易員看板** | 📋實單持倉, 📦現貨持倉, 🏁財務跑道, 👻VTR績效 |
+| **`/market`** | **📅 市場情報中心** | 📅市場日曆, 🐋預測市場, 🔥高波動掃描, 🌌DDP掃描 |
+
+---
+
+## ⌨️ Operational Commands (Legacy & Tools)
 
 | Command | Description | Input Schema (Summary) |
 |---|---|---|
 | `/settings` | 配置全域資產、風險、生存支出與 **三段式警報開關** | `capital`, `risk_limit`, `alert_mode` |
 | `/runway_check` | 執行財務生存跑道分析 | — |
-| `/skew_scan` | **[New]** 執行期權偏斜 (Skew) 與市場情緒掃描 | `symbol` |
-| `/max_pain` | **[New]** 計算特定標的之最大痛點與收斂狀態 | `symbol`, `expiry` |
+| `/skew_scan` | 執行期權偏斜 (Skew) 與市場情緒掃描 | `symbol` |
+| `/max_pain` | 計算特定標的之最大痛點與收斂狀態 | `symbol`, `expiry` |
 | `/vtr_stats` | 檢視 VTR 績效統計與 **對沖效能歸因** | — |
 | `/settle_hedge` | **[New]** 確認並記錄已執行的對沖操作 (維持 Delta 中性) | `alert_id`, `qty` |
 | `/hedge_list` | **[New]** 查看最近的對沖警報與執行狀態 | — |
@@ -163,9 +173,9 @@ stateDiagram-v2
 | `/quote` | 獲取標的之即時報價與漲跌資訊 | `symbol` |
 | `/scan_news` | 掃描特定標的之最新官方新聞 | `symbol` |
 | `/scan_reddit` | 掃描特定標的之 Reddit 散戶情緒 | `symbol` |
-| `/calendar` | **[New]** 顯示影響目前投資組合的即時重大事件 | — |
-| `/iv_rank` | **[New]** 掃描觀察清單中具備高 IV Rank 或財報前夕的標的 | — |
-| `/event_impact` | **[New]** 針對特定即時事件進行 Greeks (Delta, Vanna) 模擬 | `symbol`, `vol_move` |
+| `/calendar` | 顯示影響目前投資組合的即時重大事件 | — |
+| `/iv_rank` | 掃描觀察清單中具備高 IV Rank 或財報前夕的標的 | — |
+| `/event_impact` | 針對特定即時事件進行 Greeks (Delta, Vanna) 模擬 | `symbol`, `vol_move` |
 
 ---
 

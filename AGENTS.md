@@ -38,11 +38,12 @@ The system is divided into two main services:
   - **`calendar_service.py`**: **Calendar-Aware Guard**. Fetches high-impact economic/earnings data with LRU caching.
   - **`llm_service.py`**: Structured AI analysis with memory safety gates.
 - **`cogs/`**: Discord extensions.
-  - **`terminal.py`**: High-impact commands (`/scan`, `/vtr_stats`, `/sys_health` with disk diagnostics, `/add_holding`, `/settings` with three-stage alert switch).
-  - **`sentiment.py`**: Sentiment analytics terminal (`/skew_scan`, `/max_pain`).
-  - **`calendar.py`**: Event-driven risk control (`/calendar`, `/iv_rank`, `/event_impact`).
+  - **`unified_terminal.py`**: **Core Hub**. Consolidates 20+ commands into three primary hubs: `/x` (Symbol), `/dash` (Portfolio), and `/market` (Pulse). Includes interactive buttons and views.
+  - **`terminal.py`**: High-impact legacy commands and `/settings` management.
+  - **`sentiment.py`**: Sentiment analytics terminal (Legacy `/skew_scan`, `/max_pain`).
+  - **`calendar.py`**: Event-driven risk control (Legacy `/calendar`, `/iv_rank`).
   - **`hedging.py`**: Risk settlement and attribution commands (`/settle_hedge`, `/hedge_list`).
-  - **`intelligence.py`**: Market edge detection (`/poly_list`, `/scan_news`, `/quote`).
+  - **`intelligence.py`**: Market edge detection (Legacy `/poly_list`, `/scan_news`).
   - **`analyst_agent.py`**: **Autonomous Intelligence Analyst**. Generates automated pre-market, intra-day, and post-market reports, including the **Sector Flow Mapping** report.
 
 ---

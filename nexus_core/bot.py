@@ -34,6 +34,7 @@ class NexusBot(commands.Bot):
         self.message_signal.set()
 
     async def setup_hook(self):
+        await self.load_extension("cogs.unified_terminal")
         await self.load_extension("cogs.terminal")
         await self.load_extension("cogs.trading")
         await self.load_extension("cogs.analyst_agent")
