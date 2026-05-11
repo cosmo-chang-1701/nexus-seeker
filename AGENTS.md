@@ -11,6 +11,7 @@ Nexus Seeker is a multi-tenant **Options Quant Risk-Control & Trading Operations
 - **AI/LLM:** OpenAI-compatible API with `pydantic` structured outputs and memory safety gates
 - **Database:** SQLite (v032+) with an automated migration engine and JSON metadata support
 - **Infrastructure:** Docker, Docker Compose, Cloudflare Tunnel, psutil (System Health & Disk Monitoring)
+- **Security & Quality:** `pre-commit`, `ruff` (Linter/Formatter), `semgrep` (SAST), `Dockerfile.test`
 
 ---
 
@@ -76,6 +77,10 @@ Tests are located in `nexus_core/tests/`.
 - **Mandate:** All tests MUST be executed using `pytest` inside the Docker container.
 - **Framework:** `pytest` with `pytest-asyncio` and `pytest-mock`.
 - **Coverage:** Core engines (NRO/Sentiment) must achieve >90% code coverage.
+- **Pre-commit Pipeline:** All commits are automatically verified via `pre-commit` hooks, which include:
+  - **Linter & Formatter:** `ruff` (extremely fast Python linting and formatting).
+  - **Security Scan:** `semgrep` (scans for SQL injection, insecure imports, etc. during `pre-push`).
+  - **Containerized Testing:** `docker-test` (executes all unit tests in a fresh Docker container before each commit).
 - **Run all tests (Docker):**
   ```bash
   cd nexus_core && docker compose run --rm nexus-seeker python -m pytest tests
@@ -84,7 +89,10 @@ Tests are located in `nexus_core/tests/`.
   ```bash
   cd nexus_core && docker compose run --rm nexus-seeker python -m pytest --cov=market_analysis --cov=services --cov-report=term-missing
   ```
-- **Persistence:** Tests use a shared in-memory SQLite database (`file:testdb?mode=memory&cache=shared`) with full migration (v032+) support.
+- **Manual Hook Run:**
+  ```bash
+  pre-commit run --all-files
+  ```
 
 ---
 
@@ -110,6 +118,12 @@ Assets transition through a persistent state machine in the `assets` table (v028
 - Use `ConfigDict(slots=True)` for all Pydantic models.
 - Prefer `BoundedCache` over standard `dict` for frequently updated data.
 - Trigger `gc.collect()` after large batch operations to reclaim RAM.
+
+### 5. Code Quality & Security
+- **Strict Linting:** All code must pass `ruff` check. Avoid `E701` (multiple statements on one line) and `F841` (unused variables).
+- **Security Awareness:** Avoid dynamic SQL strings (f-strings in `.execute()`). Use parameterized queries.
+- **Import Ordering:** Imports should be at the top of the file, organized by standard library, third-party, and local modules.
+- **Docker Hardening:** Containers run as non-root `appuser`. Always verify file permissions in the `Dockerfile`.
 
 ---
 
