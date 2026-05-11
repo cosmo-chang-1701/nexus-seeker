@@ -44,6 +44,7 @@ class Asset(BaseModel):
     symbol: str
     context_type: ContextType
     risk_weight: float = 1.0  # Beta
+    entry_price: Optional[float] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
     last_scan_id: Optional[str] = None
     created_at: Optional[datetime] = None

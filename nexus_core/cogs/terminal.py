@@ -1161,54 +1161,32 @@ class TerminalCog(commands.Cog):
         )
 
     @app_commands.command(
-        name="list_trades", description="列出目前資料庫中的所有實單持倉"
+        name="list_trades", description="列出目前資料庫中的所有實單持倉與未實現損益"
     )
     async def list_trades(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         user_id = interaction.user.id
-        from services.asset_manager import AssetManager
-        from models.asset import ContextType
 
-        manager = AssetManager()
-        assets = manager.get_assets(user_id, ContextType.TRADE)
+        from services.trading_service import TradingService
 
-        if not assets:
+        trading_service = TradingService(self.bot)
+
+        try:
+            pnl_data = await trading_service.get_portfolio_pnl(user_id)
+        except Exception as e:
+            logger.error(f"Failed to calculate PnL: {e}")
+            return await interaction.followup.send(
+                f"❌ 計算未實現損益時發生錯誤: {e}", ephemeral=True
+            )
+
+        if not pnl_data["trades"]:
             await interaction.followup.send("📭 您目前無持倉紀錄。", ephemeral=True)
             return
 
-        # 轉換為舊格式以相容 create_trades_embed
-        rows = []
-        unique_symbols = set()
-        for a in assets:
-            m = a.metadata
-            rows.append(
-                (
-                    a.id,
-                    a.symbol,
-                    m.get("opt_type"),
-                    m.get("strike"),
-                    m.get("expiry"),
-                    m.get("entry_price"),
-                    m.get("quantity"),
-                    0.0,  # stock_cost
-                    m.get("weighted_delta", 0.0),
-                    m.get("theta", 0.0),
-                    m.get("gamma", 0.0),
-                    m.get("category", "SPECULATIVE"),
-                )
-            )
-            unique_symbols.add(a.symbol)
-
-        stock_quotes = {}
-        for sym in unique_symbols:
-            quote = await market_data_service.get_quote(sym)
-            if quote:
-                stock_quotes[sym] = quote.get("c", 0.0)
-
-        ctx = get_full_user_context(user_id)
+        ctx = database.get_full_user_context(user_id)
         from cogs.embed_builder import create_trades_embed
 
-        embed = create_trades_embed(rows, stock_quotes, ctx.capital)
+        embed = create_trades_embed(pnl_data, ctx.capital)
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="remove_trade", description="將部位從監控管線中移除")

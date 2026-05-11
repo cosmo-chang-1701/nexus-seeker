@@ -954,75 +954,70 @@ def create_holdings_embed(
 
 
 def create_trades_embed(
-    portfolio_rows: List[tuple],
-    stock_quotes: Dict[str, float] = None,
+    pnl_data: Dict[str, Any],
     total_capital: float = 0.0,
 ) -> discord.Embed:
-    """建構實單持倉 (Portfolio) 狀態報告 Embed"""
+    """建構實單持倉 (Portfolio) 狀態與未實現損益報告 Embed"""
     embed = discord.Embed(
-        title="📊 Nexus Seeker | 實單持倉清單",
-        description="追蹤您的期權與衍生品實單持倉。\n\u200b",
+        title="📊 Nexus Seeker | 實單持倉清單 (包含帳面損益)",
+        description="追蹤您的期權實單持倉與即時未實現損益 (Unrealized PnL)。\n\u200b",
         color=discord.Color.green(),
         timestamp=datetime.now(timezone.utc),
     )
 
-    if not portfolio_rows:
+    trades = pnl_data.get("trades", [])
+    if not trades:
         embed.description = "📭 目前無持倉紀錄。"
         return embed
 
     lines = ["```ansi"]
-    # 標頭: ID | 標的 | 到期日 | 履約 | 數量 | 狀態
-    header = f"{'ID'.ljust(3)} | {'標的'.ljust(5)} | {'到期日'.ljust(10)} | {'履約/類型'.ljust(10)} | {'數量'.rjust(4)} | {'現價/狀態'}"
+    # 標頭: ID | 標的 | 到期日 | 履約 | 數量 | 帳面損益
+    header = f"{'ID'.ljust(3)} | {'標的'.ljust(5)} | {'到期日'.ljust(10)} | {'履約/類型'.ljust(10)} | {'數量'.rjust(4)} | {'帳面損益'.rjust(12)}"
     lines.append(header)
     lines.append("-" * 55)
 
-    for row in portfolio_rows:
-        # row: (id, symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost, weighted_delta, theta, gamma, trade_category)
-        trade_id = row[0]
-        sym = row[1]
-        o_type = row[2]
-        strike = row[3]
-        exp = row[4]
-        qty = row[6]
+    total_cost = 0.0
+    for t in trades:
+        trade_id = t["id"]
+        sym = t["symbol"]
+        o_type = t["opt_type"]
+        strike = t["strike"]
+        exp = t["expiry"]
+        qty = t["quantity"]
+        entry_p = t["entry_price"]
+        unrealized_pnl = t["unrealized_pnl"]
+        pnl_pct = t["pnl_pct"]
+
+        total_cost += abs(entry_p * qty * 100)
 
         id_fmt = f"{trade_id:02d}".ljust(3)
         sym_fmt = sym.ljust(5)
         exp_fmt = exp.ljust(10)
         st_type_fmt = f"${strike}{o_type[0].upper()}".ljust(10)
 
-        color_code = "[0;32m" if qty > 0 else "[0;31m"
-        qty_fmt = f"{color_code}{abs(qty):>4}[0m"
+        color_code = "\x1b[0;32m" if qty > 0 else "\x1b[0;31m"
+        qty_fmt = f"{color_code}{abs(qty):>4}\x1b[0m"
 
-        # 狀態判定 (ITM/OTM)
-        status_fmt = "N/A"
-        if stock_quotes and sym in stock_quotes:
-            curr_p = stock_quotes[sym]
-            if o_type.upper() == "CALL":
-                is_itm = curr_p > strike
-            else:  # PUT
-                is_itm = curr_p < strike
-
-            status_text = "ITM" if is_itm else "OTM"
-            status_color = "[0;32m" if is_itm else "[0;34m"  # ITM 綠色, OTM 藍色
-            status_fmt = f"${curr_p:.1f} {status_color}{status_text}[0m"
+        pnl_color = "\x1b[0;32m" if unrealized_pnl >= 0 else "\x1b[0;31m"
+        pnl_str = f"{pnl_color}${unrealized_pnl:+.0f} ({pnl_pct:+.1%})\x1b[0m".rjust(20)
 
         lines.append(
-            f"{id_fmt} | {sym_fmt} | {exp_fmt} | {st_type_fmt} | {qty_fmt} | {status_fmt}"
+            f"{id_fmt} | {sym_fmt} | {exp_fmt} | {st_type_fmt} | {qty_fmt} | {pnl_str}"
         )
 
     lines.append("```")
     embed.add_field(name="📦 持倉明細", value="\n".join(lines), inline=False)
 
-    # 計算總成本 (概算)
-    total_cost = sum(abs(row[5] * row[6] * 100) for row in portfolio_rows)
+    total_unrealized_pnl = pnl_data.get("total_unrealized_pnl", 0.0)
 
     summary = (
         f"💰 **持倉總權利金成本 (概算)**: `${total_cost:,.2f}`\n"
-        f"⚖️ **佔總預算比例**: `{ (total_cost / total_capital * 100) if total_capital > 0 else 0:.1f}%`"
+        f"⚖️ **佔總預算比例**: `{ (total_cost / total_capital * 100) if total_capital > 0 else 0:.1f}%`\n"
+        f"📈 **總未實現損益 (Unrealized PnL)**: `${total_unrealized_pnl:,.2f}`"
     )
-    embed.add_field(name="🏁 財務摘要", value=summary, inline=False)
+    embed.add_field(name="🏁 財務摘要 (Financial Summary)", value=summary, inline=False)
 
-    embed.set_footer(text="Nexus Portfolio Engine | 專業實單監控")
+    embed.set_footer(text="Nexus Portfolio Engine | 專業實單與損益監控")
     return embed
 
 

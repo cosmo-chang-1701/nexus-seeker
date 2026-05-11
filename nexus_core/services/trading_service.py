@@ -42,6 +42,62 @@ class TradingService:
         """執行波動率優勢掃描 (IV Opportunity)"""
         return await self.vol_inspector.run_scan(symbols, user_id)
 
+    async def get_portfolio_pnl(self, user_id: int) -> Dict[str, Any]:
+        """
+        計算實單持倉的未實現損益 (Unrealized PnL)
+        回傳結構: {'trades': [...], 'total_unrealized_pnl': ...}
+        """
+        from services.asset_manager import AssetManager
+        from models.asset import ContextType
+        from market_analysis.portfolio import get_option_chain_mid_iv
+
+        manager = AssetManager()
+        assets = manager.get_assets(user_id, ContextType.TRADE)
+
+        trades = []
+        total_unrealized_pnl = 0.0
+
+        for a in assets:
+            m = a.metadata
+            sym = a.symbol
+            opt_type = m.get("opt_type")
+            strike = m.get("strike")
+            expiry = m.get("expiry")
+            entry_price = m.get("entry_price") or a.entry_price or 0.0
+            quantity = m.get("quantity", 0)
+
+            mid, _ = await asyncio.to_thread(
+                get_option_chain_mid_iv, sym, expiry, strike, opt_type
+            )
+
+            unrealized_pnl = (mid - entry_price) * 100 * quantity
+            pnl_pct = ((mid - entry_price) / entry_price) if entry_price > 0 else 0.0
+
+            if quantity < 0:
+                unrealized_pnl = (entry_price - mid) * 100 * abs(quantity)
+                pnl_pct = (
+                    ((entry_price - mid) / entry_price) if entry_price > 0 else 0.0
+                )
+
+            total_unrealized_pnl += unrealized_pnl
+
+            trades.append(
+                {
+                    "id": a.id,
+                    "symbol": sym,
+                    "opt_type": opt_type,
+                    "strike": strike,
+                    "expiry": expiry,
+                    "entry_price": entry_price,
+                    "current_price": mid,
+                    "quantity": quantity,
+                    "unrealized_pnl": unrealized_pnl,
+                    "pnl_pct": pnl_pct,
+                }
+            )
+
+        return {"trades": trades, "total_unrealized_pnl": total_unrealized_pnl}
+
     async def get_pre_market_alerts_data(
         self, warning_days: int
     ) -> Dict[int, Dict[str, Any]]:

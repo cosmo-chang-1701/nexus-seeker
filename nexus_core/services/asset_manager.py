@@ -83,13 +83,14 @@ class AssetManager:
                 cursor.execute(
                     """
                     UPDATE assets
-                    SET symbol = ?, context_type = ?, risk_weight = ?, metadata = ?, updated_at = CURRENT_TIMESTAMP
+                    SET symbol = ?, context_type = ?, risk_weight = ?, entry_price = ?, metadata = ?, updated_at = CURRENT_TIMESTAMP
                     WHERE id = ? AND user_id = ?
                     """,
                     (
                         asset.symbol.upper(),
                         asset.context_type.value,
                         asset.risk_weight,
+                        asset.entry_price,
                         metadata_json,
                         asset.id,
                         asset.user_id,
@@ -216,14 +217,15 @@ class AssetManager:
             try:
                 cursor.execute(
                     """
-                    INSERT INTO assets (user_id, symbol, context_type, risk_weight, metadata)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO assets (user_id, symbol, context_type, risk_weight, entry_price, metadata)
+                    VALUES (?, ?, ?, ?, ?, ?)
                     """,
                     (
                         asset.user_id,
                         asset.symbol.upper(),
                         asset.context_type.value,
                         asset.risk_weight,
+                        asset.entry_price,
                         metadata_json,
                     ),
                 )
