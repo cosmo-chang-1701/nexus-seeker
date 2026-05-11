@@ -120,6 +120,8 @@ jobs:
               ["FINNHUB_API_KEY"]="${{ secrets.FINNHUB_API_KEY }}"
             )
 
+            # 取得現有服務掛載的祕密資訊 (用於精確移除舊版本)
+            CURRENT_SECRETS=$(docker service inspect "$SERVICE_NAME" --format '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{.SecretName}} {{.File.Name}}{{"\n"}}{{end}}' 2>/dev/null || true)
             SECRET_UPDATE_FLAGS=""
 
             for KEY in "${!SECRETS_MAP[@]}"; do
@@ -127,13 +129,21 @@ jobs:
               VALUE="${SECRETS_MAP[$KEY]}"
 
               # 建立新版本祕密 (若已存在則跳過)
-              if ! docker secret ls | grep -q "$NEW_SECRET_NAME"; then
+              if ! docker secret ls --format '{{.Name}}' | grep -q "^${NEW_SECRET_NAME}$"; then
                 echo "🔑 建立新祕密: $NEW_SECRET_NAME"
                 echo "$VALUE" | docker secret create "$NEW_SECRET_NAME" -
               fi
 
-              # 構建服務更新指令中的祕密映射參數
-              SECRET_UPDATE_FLAGS="$SECRET_UPDATE_FLAGS --secret-rm ${KEY} --secret-add source=${NEW_SECRET_NAME},target=${KEY}"
+              # 找出目前掛載到該 KEY 的舊祕密名稱
+              OLD_SECRET_NAME=$(echo "$CURRENT_SECRETS" | grep " $KEY$" | awk '{print $1}' || true)
+
+              if [ -n "$OLD_SECRET_NAME" ] && [ "$OLD_SECRET_NAME" != "$NEW_SECRET_NAME" ]; then
+                echo "♻️ 準備替換祕密: $OLD_SECRET_NAME -> $NEW_SECRET_NAME"
+                SECRET_UPDATE_FLAGS="$SECRET_UPDATE_FLAGS --secret-rm $OLD_SECRET_NAME --secret-add source=${NEW_SECRET_NAME},target=${KEY}"
+              elif [ -z "$OLD_SECRET_NAME" ]; then
+                echo "➕ 準備新增祕密: $NEW_SECRET_NAME"
+                SECRET_UPDATE_FLAGS="$SECRET_UPDATE_FLAGS --secret-add source=${NEW_SECRET_NAME},target=${KEY}"
+              fi
             done
 
             # 4. 服務更新與建立 (Zero-Downtime Strategy)
@@ -172,8 +182,11 @@ jobs:
             # 5. 清理與驗證
             echo "🧹 執行環境清理..."
             # 移除未被使用的舊版本祕密 (排除目前剛建立的版本)
+            # 注意：由於 start-first 策略，舊版本可能還在運作中，rm 失敗是正常的
             for KEY in "${!SECRETS_MAP[@]}"; do
-              docker secret ls --format "{{.Name}}" | grep "^${KEY}_" | grep -v "$DEPLOY_VERSION" | xargs -r docker secret rm || true
+              docker secret ls --format "{{.Name}}" | grep "^${KEY}_" | grep -v "$DEPLOY_VERSION" | while read -r OLD_SEC; do
+                docker secret rm "$OLD_SEC" 2>/dev/null || echo "⏳ 祕密 $OLD_SEC 仍在使用中，跳過清理"
+              done
             done
 
             # 清理過期映像檔
