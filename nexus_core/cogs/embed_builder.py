@@ -971,10 +971,10 @@ def create_trades_embed(
         return embed
 
     lines = ["```ansi"]
-    # 標頭: ID | 標的 | 到期日 | 履約 | 數量 | 帳面損益
-    header = f"{'ID'.ljust(3)} | {'標的'.ljust(5)} | {'到期日'.ljust(10)} | {'履約/類型'.ljust(10)} | {'數量'.rjust(4)} | {'帳面損益'.rjust(12)}"
+    # 標頭 (調整 Python len 以匹配可見寬度)
+    header = f"{'ID'.ljust(2)} | {'標的'.ljust(4)} | {'到期日'.ljust(7)} | {'履約'.ljust(5)} | {'數'.rjust(1)} | {'成本'.rjust(4)} | {'現價'.rjust(4)} | {'帳面損益'.rjust(10)}"
     lines.append(header)
-    lines.append("-" * 55)
+    lines.append("-" * 75)
 
     total_cost = 0.0
     for t in trades:
@@ -985,24 +985,30 @@ def create_trades_embed(
         exp = t["expiry"]
         qty = t["quantity"]
         entry_p = t["entry_price"]
+        curr_p = t.get("current_price", 0.0)
         unrealized_pnl = t["unrealized_pnl"]
         pnl_pct = t["pnl_pct"]
 
         total_cost += abs(entry_p * qty * 100)
 
-        id_fmt = f"{trade_id:02d}".ljust(3)
-        sym_fmt = sym.ljust(5)
+        id_fmt = f"{trade_id:02d}".ljust(2)
+        sym_fmt = sym.ljust(4)
         exp_fmt = exp.ljust(10)
-        st_type_fmt = f"${strike}{o_type[0].upper()}".ljust(10)
+        st_type_fmt = f"{strike}{o_type[0].upper()}".ljust(7)
 
         color_code = "\x1b[0;32m" if qty > 0 else "\x1b[0;31m"
-        qty_fmt = f"{color_code}{abs(qty):>4}\x1b[0m"
+        qty_val = f"{abs(qty):>2}"
+        qty_fmt = f"{color_code}{qty_val}\x1b[0m"
+
+        cost_fmt = f"{entry_p:6.2f}"
+        curr_fmt = f"{curr_p:6.2f}"
 
         pnl_color = "\x1b[0;32m" if unrealized_pnl >= 0 else "\x1b[0;31m"
-        pnl_str = f"{pnl_color}${unrealized_pnl:+.0f} ({pnl_pct:+.1%})\x1b[0m".rjust(20)
+        pnl_val = f"${unrealized_pnl:+.0f} ({pnl_pct:+.1%})"
+        pnl_fmt = f"{pnl_color}{pnl_val:>14}\x1b[0m"
 
         lines.append(
-            f"{id_fmt} | {sym_fmt} | {exp_fmt} | {st_type_fmt} | {qty_fmt} | {pnl_str}"
+            f"{id_fmt} | {sym_fmt} | {exp_fmt} | {st_type_fmt} | {qty_fmt} | {cost_fmt} | {curr_fmt} | {pnl_fmt}"
         )
 
     lines.append("```")
