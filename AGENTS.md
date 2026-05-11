@@ -43,6 +43,7 @@ The system is divided into two main services:
   - **`calendar.py`**: Event-driven risk control (`/calendar`, `/iv_rank`, `/event_impact`).
   - **`hedging.py`**: Risk settlement and attribution commands (`/settle_hedge`, `/hedge_list`).
   - **`intelligence.py`**: Market edge detection (`/poly_list`, `/scan_news`, `/quote`).
+  - **`analyst_agent.py`**: **Autonomous Intelligence Analyst**. Generates automated pre-market, intra-day, and post-market reports, including the **Sector Flow Mapping** report.
 
 ---
 
@@ -136,6 +137,7 @@ Assets transition through a persistent state machine in the `assets` table (v028
 - `nexus_core/market_analysis/risk_engine.py`: NRO & Vanna adjustment.
 - `nexus_core/market_analysis/attribution.py`: Protection scoring & self-evolution.
 - `nexus_core/gather_report.py`: Capital Flow & Sector Rotation report logic.
+- `nexus_core/cogs/analyst_agent.py`: Autonomous intelligence reports & sector flow mapping.
 - `nexus_core/services/memory_manager.py`: VPS stability watchdog.
 - `nexus_core/cogs/embed_builder.py`: Centralized UI/UX generator.
 
