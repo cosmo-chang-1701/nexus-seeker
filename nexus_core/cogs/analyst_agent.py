@@ -15,15 +15,36 @@ from market_time import (
 )
 from database.user_settings import get_full_user_context
 from database.watchlist import get_all_watchlist
-from services.market_data_service import get_history_df, get_earnings_calendar
+from services.market_data_service import (
+    get_history_df,
+    get_earnings_calendar,
+    get_quote,
+    get_macro_environment,
+)
 from services.llm_service import generate_analyst_report
 from services.news_service import fetch_recent_news
 from services.reddit_service import get_reddit_context
 from market_analysis.psq_engine import analyze_psq
 from market_analysis.hedging import analyze_hedge_performance
+from market_analysis.sentiment_engine import SentimentEngine
 from config import get_vix_tier
+import httpx
 
 logger = logging.getLogger(__name__)
+
+SECTORS = {
+    "XLK": "Technology",
+    "XLV": "Healthcare",
+    "XLF": "Financials",
+    "XLY": "Consumer Discretionary",
+    "XLC": "Communication Services",
+    "XLI": "Industrials",
+    "XLP": "Consumer Staples",
+    "XLE": "Energy",
+    "XLU": "Utilities",
+    "XLB": "Materials",
+    "XLRE": "Real Estate",
+}
 
 
 class AnalystAgent(commands.Cog):
@@ -115,6 +136,10 @@ class AnalystAgent(commands.Cog):
                 summary_report = await self.run_postmarket_summary()
                 if summary_report:
                     await self.dispatch_report(summary_report)
+
+                sector_report = await self.run_sector_flow_report()
+                if sector_report:
+                    await self.dispatch_report(sector_report)
 
                 next_day_report = await self.run_next_day_strategy()
                 if next_day_report:
@@ -515,6 +540,100 @@ class AnalystAgent(commands.Cog):
         except Exception as e:
             logger.error(f"run_postmarket_summary error: {e}")
             return f"**{time_str} 盤後交易與每日總結**\n--------------------------------------------------\n系統分析發生錯誤: {e}"
+
+    async def run_sector_flow_report(self):
+        time_str = self._get_tw_time_str()
+        try:
+            # 1. Market Snapshot
+            macro = await get_macro_environment()
+            vix = macro.get("vix", 18.0)
+            vix_tier = get_vix_tier(vix)
+            spy_quote = await get_quote("SPY")
+
+            # 2. Sector Rotation Data
+            sector_results = []
+            for symbol, name in SECTORS.items():
+                try:
+                    df = await get_history_df(symbol, period="1mo")
+                    if df.empty:
+                        continue
+
+                    pct_change = (
+                        (df["Close"].iloc[-1] - df["Close"].iloc[-2])
+                        / df["Close"].iloc[-2]
+                        * 100
+                    )
+                    vol_current = df["Volume"].iloc[-1]
+                    vol_avg = df["Volume"].tail(20).mean()
+                    rel_vol = vol_current / vol_avg if vol_avg > 0 else 1.0
+
+                    try:
+                        skew_data = await SentimentEngine.calculate_skew(symbol)
+                    except Exception:
+                        skew_data = {"skew": 0, "state": "N/A"}
+
+                    try:
+                        uoa = await SentimentEngine.detect_uoa(symbol)
+                    except Exception:
+                        uoa = []
+
+                    sector_results.append(
+                        {
+                            "symbol": symbol,
+                            "name": name,
+                            "pct_change": round(pct_change, 2),
+                            "rel_vol": round(rel_vol, 2),
+                            "skew": skew_data.get("skew", 0),
+                            "skew_state": skew_data.get("state", "N/A"),
+                            "uoa_count": len(uoa),
+                        }
+                    )
+                except Exception as e:
+                    logger.error(f"Error gathering data for {symbol}: {e}")
+
+            # 3. Polymarket Events
+            poly_events = []
+            try:
+                GAMMA_API_BASE = "https://gamma-api.polymarket.com"
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    resp = await client.get(
+                        f"{GAMMA_API_BASE}/markets",
+                        params={"active": "true", "closed": "false", "limit": 10},
+                    )
+                    if resp.status_code == 200:
+                        markets = resp.json()
+                        for m in markets[:5]:
+                            poly_events.append(
+                                {
+                                    "question": m.get("question"),
+                                    "outcome": m.get("outcomes"),
+                                    "price": m.get("outcomePrices"),
+                                }
+                            )
+            except Exception as e:
+                logger.error(f"Error fetching Polymarket data: {e}")
+
+            # 4. Max Pain
+            try:
+                spy_max_pain = await SentimentEngine.calculate_max_pain("SPY")
+            except Exception:
+                spy_max_pain = {"error": "N/A"}
+
+            raw_data = {
+                "vix": vix,
+                "vix_tier_name": vix_tier.get("name", "Unknown"),
+                "spy_price": spy_quote.get("c", 0),
+                "sectors": sector_results,
+                "poly_events": poly_events,
+                "spy_max_pain": spy_max_pain,
+            }
+
+            report_type = f"{time_str} 收盤資金流向與板塊輪動報告"
+            report = await generate_analyst_report(report_type, raw_data)
+            return report
+        except Exception as e:
+            logger.error(f"run_sector_flow_report error: {e}")
+            return f"**{time_str} 收盤資金流向報告**\n--------------------------------------------------\n系統分析發生錯誤: {e}"
 
     async def run_next_day_strategy(self):
         time_str = self._get_tw_time_str()
