@@ -84,6 +84,15 @@ jobs:
     steps:
       - name: 🌐 Deploy via SSH
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          DISCORD_ADMIN_USER_ID: ${{ secrets.DISCORD_ADMIN_USER_ID }}
+          LLM_API_BASE: ${{ secrets.LLM_API_BASE }}
+          LLM_MODEL_NAME: ${{ secrets.LLM_MODEL_NAME }}
+          API_KEY: ${{ secrets.API_KEY }}
+          TUNNEL_URL: ${{ secrets.TUNNEL_URL }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
         with:
           host: ${{ secrets.DIGITALOCEAN_HOST }}
           username: ${{ secrets.DIGITALOCEAN_USERNAME }}
@@ -106,18 +115,18 @@ jobs:
             fi
 
             # 2. 登入 GHCR
-            echo "${{ secrets.GHCR_TOKEN }}" | docker login $REGISTRY -u "${{ github.actor }}" --password-stdin
+            echo "$GHCR_TOKEN" | docker login $REGISTRY -u "${{ github.actor }}" --password-stdin
 
             # 3. 處理版本化祕密 (Versioned Secrets Management)
-            # 定義需要被版本化的祕密清單
+            # 定義需要被版本化的祕密清單 (從環境變數讀取)
             declare -A SECRETS_MAP=(
-              ["DISCORD_TOKEN"]="${{ secrets.DISCORD_TOKEN }}"
-              ["DISCORD_ADMIN_USER_ID"]="${{ secrets.DISCORD_ADMIN_USER_ID }}"
-              ["LLM_API_BASE"]="${{ secrets.LLM_API_BASE }}"
-              ["LLM_MODEL_NAME"]="${{ secrets.LLM_MODEL_NAME }}"
-              ["API_KEY"]="${{ secrets.API_KEY }}"
-              ["TUNNEL_URL"]="${{ secrets.TUNNEL_URL }}"
-              ["FINNHUB_API_KEY"]="${{ secrets.FINNHUB_API_KEY }}"
+              ["DISCORD_TOKEN"]="$DISCORD_TOKEN"
+              ["DISCORD_ADMIN_USER_ID"]="$DISCORD_ADMIN_USER_ID"
+              ["LLM_API_BASE"]="$LLM_API_BASE"
+              ["LLM_MODEL_NAME"]="$LLM_MODEL_NAME"
+              ["API_KEY"]="$API_KEY"
+              ["TUNNEL_URL"]="$TUNNEL_URL"
+              ["FINNHUB_API_KEY"]="$FINNHUB_API_KEY"
             )
 
             # 取得現有服務掛載的祕密資訊 (用於精確移除舊版本)
