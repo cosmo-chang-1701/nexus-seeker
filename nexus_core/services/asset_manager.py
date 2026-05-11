@@ -23,7 +23,7 @@ class AssetManager:
         if context_type:
             query += " AND context_type = ?"
             params.append(context_type.value)
-        
+
         assets = []
         with self._get_conn() as conn:
             cursor = conn.cursor()
@@ -72,8 +72,8 @@ class AssetManager:
             try:
                 cursor.execute(
                     """
-                    UPDATE assets 
-                    SET symbol = ?, context_type = ?, risk_weight = ?, metadata = ?, updated_at = CURRENT_TIMESTAMP 
+                    UPDATE assets
+                    SET symbol = ?, context_type = ?, risk_weight = ?, metadata = ?, updated_at = CURRENT_TIMESTAMP
                     WHERE id = ? AND user_id = ?
                     """,
                     (asset.symbol.upper(), asset.context_type.value, asset.risk_weight, metadata_json, asset.id, asset.user_id)
@@ -89,7 +89,7 @@ class AssetManager:
         asset = self.get_asset_by_id(user_id, asset_id)
         if not asset:
             return False
-            
+
         asset.metadata.update(updates)
         return self.update_asset(asset)
 
@@ -98,7 +98,7 @@ class AssetManager:
         asset = self.get_asset_by_symbol(user_id, symbol, context_type)
         if not asset:
             return False
-            
+
         asset.metadata.update(updates)
         return self.update_asset(asset)
 
@@ -106,15 +106,15 @@ class AssetManager:
         """將 WATCH 狀態提升為 TRADE"""
         symbol = symbol.upper()
         watch_asset = self.get_asset_by_symbol(user_id, symbol, ContextType.WATCH)
-        
+
         if not watch_asset:
             logger.warning(f"Promote failed: {symbol} not found in WATCH for user {user_id}")
             return False
-            
+
         # 準備 TRADE 詮釋資料
         trade_meta = TradeMetadata(**trade_details)
         metadata_json = trade_meta.model_dump_json()
-        
+
         with self._get_conn() as conn:
             cursor = conn.cursor()
             try:
@@ -122,8 +122,8 @@ class AssetManager:
                 # 這裡採取「轉換」策略：更新原有紀錄
                 cursor.execute(
                     """
-                    UPDATE assets 
-                    SET context_type = 'TRADE', metadata = ?, updated_at = CURRENT_TIMESTAMP 
+                    UPDATE assets
+                    SET context_type = 'TRADE', metadata = ?, updated_at = CURRENT_TIMESTAMP
                     WHERE id = ?
                     """,
                     (metadata_json, watch_asset.id)
@@ -142,28 +142,28 @@ class AssetManager:
             cursor.execute("SELECT * FROM assets WHERE id = ? AND user_id = ?", (asset_id, user_id))
             row = cursor.fetchone()
             if not row: return False
-            
+
             asset = Asset(**{**dict(row), 'metadata': json.loads(row['metadata'])})
             if asset.context_type != ContextType.TRADE:
                 return False
-                
+
             trade_meta = TradeMetadata(**asset.metadata)
-            
+
             # 簡單結算邏輯：若是 Put 履約，則以 (Strike - Price) 或直接以 Strike 作為成本
             # 這裡假設 settle 指的是轉換為 100 股現貨
             holding_qty = trade_meta.quantity * 100
-            
+
             # 更新為 HOLDING
             holding_meta = HoldingMetadata(
                 quantity=holding_qty,
                 avg_cost=execution_price
             )
-            
+
             try:
                 cursor.execute(
                     """
-                    UPDATE assets 
-                    SET context_type = 'HOLDING', metadata = ?, updated_at = CURRENT_TIMESTAMP 
+                    UPDATE assets
+                    SET context_type = 'HOLDING', metadata = ?, updated_at = CURRENT_TIMESTAMP
                     WHERE id = ?
                     """,
                     (holding_meta.model_dump_json(), asset_id)

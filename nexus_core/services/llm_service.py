@@ -135,11 +135,11 @@ async def evaluate_trade_risk(symbol: str, strategy: str, news_context: str, red
     try:
         response = await client.responses.parse(
             model=LLM_MODEL_NAME,
-            instructions=system_prompt, 
+            instructions=system_prompt,
             input=user_prompt,
             text_format=RiskAssessment
         )
-        
+
         result = response.output_parsed
         tags_str = " ".join([f"[{tag}]" for tag in result.tags])
         formatted_reasoning = f"🏷️ 標籤：{tags_str}\n📝 理由：{result.reasoning}"
@@ -185,7 +185,7 @@ async def generate_polymarket_summary(market_info: dict, trade_data: dict, usd_v
     """
     intent_desc = trade_details.get('intent', '未知意圖') if trade_details else '未知意圖'
     sentiment_tag = "看多 (Bullish)" if (trade_details and trade_details.get('is_bullish')) else "看空 (Bearish)"
-    
+
     system_prompt = f"""
     你是一位華爾街頂尖預測市場策略師。
     請針對 Polymarket 的大額交易提供深度、結構化的 Markdown 分析。
@@ -219,7 +219,7 @@ async def generate_polymarket_summary(market_info: dict, trade_data: dict, usd_v
             input=user_prompt,
             text_format=PolymarketAnalysis
         )
-        
+
         # 使用 Markdown 優化輸出格式
         res = response.output_parsed
         formatted_md = (

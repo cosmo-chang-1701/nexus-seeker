@@ -1,6 +1,6 @@
 # 📈 Nexus Seeker: Quantitative Strategy & Risk Mathematics
 
-This document defines the mathematical foundations of the **Nexus Risk Optimizer (NRO)**, the **VIX Battle Ladder**, and the **Gamma Fragility Assessment** protocols. 
+This document defines the mathematical foundations of the **Nexus Risk Optimizer (NRO)**, the **VIX Battle Ladder**, and the **Gamma Fragility Assessment** protocols.
 
 ---
 

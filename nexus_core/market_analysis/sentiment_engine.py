@@ -37,7 +37,7 @@ class SentimentEngine:
                 if 20 <= days_to_expiry <= 45:
                     target_expiry = exp
                     break
-            
+
             if not target_expiry:
                 target_expiry = expiries[0] # 回退到最近的一個
 
@@ -57,7 +57,7 @@ class SentimentEngine:
             # 實務上應使用 py_vollib 計算 Delta，此處先用 Strike 偏移量作為代理
             # 25 Delta Call 通常在現價 + 5~10%
             # 25 Delta Put 通常在現價 - 5~10%
-            
+
             otm_call = calls[calls['strike'] > spot_price * 1.05].iloc[0] if not calls[calls['strike'] > spot_price * 1.05].empty else None
             otm_put = puts[puts['strike'] < spot_price * 0.95].iloc[-1] if not puts[puts['strike'] < spot_price * 0.95].empty else None
 
@@ -104,7 +104,7 @@ class SentimentEngine:
             # 彙整前三個到期日的數據
             total_put_vol = 0
             total_call_vol = 0
-            
+
             for exp in expiries[:3]:
                 chain = await market_data_service.get_option_chain(symbol, exp)
                 if not chain: continue
@@ -115,7 +115,7 @@ class SentimentEngine:
                 return {"symbol": symbol, "pcr": 0, "state": "N/A"}
 
             pcr_val = total_put_vol / total_call_vol
-            
+
             state = "平衡"
             if pcr_val > 1.0:
                 state = "🐻 偏向空頭"
@@ -155,7 +155,7 @@ class SentimentEngine:
 
             # 彙整所有履約價
             strikes = sorted(list(set(calls['strike']) | set(puts['strike'])))
-            
+
             # 計算每個履約價下的總痛點 (Dollar Value if expired there)
             pains = []
             for s in strikes:
@@ -166,12 +166,12 @@ class SentimentEngine:
                 pains.append(call_pain + put_pain)
 
             max_pain_strike = strikes[pains.index(min(pains))]
-            
+
             quote = await market_data_service.get_quote(symbol)
             spot_price = quote.get('c', 0)
-            
+
             dist_pct = (spot_price - max_pain_strike) / spot_price * 100 if spot_price > 0 else 0
-            
+
             return {
                 "symbol": symbol,
                 "expiry": expiry,
@@ -199,7 +199,7 @@ class SentimentEngine:
             for exp in expiries[:2]:
                 chain = await market_data_service.get_option_chain(symbol, exp)
                 if not chain: continue
-                
+
                 for _, row in pd.concat([chain.calls, chain.puts]).iterrows():
                     # 門檻：Volume > 5 * OI 且 Volume > 500
                     if row['volume'] > 5 * row['openInterest'] and row['volume'] > 500:
@@ -213,7 +213,7 @@ class SentimentEngine:
                             "ratio": round(row['volume'] / max(row['openInterest'], 1), 2),
                             "iv": round(row['impliedVolatility'], 4)
                         })
-            
+
             return sorted(uoa_list, key=lambda x: x['volume'], reverse=True)[:5]
         except Exception as e:
             logger.error(f"[{symbol}] UOA 偵測失敗: {e}")
@@ -241,15 +241,15 @@ class SentimentEngine:
             conn = sqlite3.connect(config.DB_NAME)
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT value FROM sentiment_history 
-                WHERE symbol = ? AND indicator = ? 
+                SELECT value FROM sentiment_history
+                WHERE symbol = ? AND indicator = ?
                 ORDER BY timestamp DESC LIMIT 100
             """, (symbol, indicator))
             values = [row[0] for row in cursor.fetchall()]
             conn.close()
-            
+
             if not values: return 50.0 # 預設中值
-            
+
             count = sum(1 for v in values if v < current_value)
             return (count / len(values)) * 100
         except Exception:

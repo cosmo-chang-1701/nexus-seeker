@@ -28,7 +28,7 @@ class SchedulerCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.trading_service = TradingService(bot)
-        
+
         # 啟動背景任務
         self.pre_market_risk_monitor.start()
         self.dynamic_market_scanner.start()
@@ -45,7 +45,7 @@ class SchedulerCog(commands.Cog):
 
         # 🚀 宏觀環境快照：用於 AlertFilter 比對 VIX 變動幅度
         self.prev_macro_state: Dict[str, float] = {}
-        
+
         logger.info("SchedulerCog loaded. Background tasks started.")
 
     def cog_unload(self):
@@ -68,10 +68,10 @@ class SchedulerCog(commands.Cog):
         logger.info("🕸️ [Daily Update] 開始非同步抓取 Reddit 情緒快取...")
         all_watchlists = database.get_all_watchlist()
         symbols = sorted(list(set(row[1] for row in all_watchlists)))
-        
+
         from services.reddit_service import get_reddit_context
         from database.cache import save_kv_cache
-        
+
         for sym in symbols:
             try:
                 # 抓取情緒並存入 KV 快取 (key: reddit_sentiment_{symbol})
@@ -94,7 +94,7 @@ class SchedulerCog(commands.Cog):
         """每 30 分鐘審計真實持倉風險 (DITM & Gamma Fragility)"""
         if not market_time.is_market_open():
             return
-            
+
         logger.info("🛡️ [NRO] 開始執行真實持倉風險審計...")
         try:
             risk_events = await self.trading_service.audit_real_portfolio_risk()
@@ -113,7 +113,7 @@ class SchedulerCog(commands.Cog):
                     embed.set_footer(text="Mission-Critical Risk Environment | Nexus Seeker")
                     embed.timestamp = datetime.now(ny_tz)
                     await self.bot.queue_dm(uid, embed=embed)
-                    
+
                 elif event['type'] == 'GAMMA_FRAGILITY':
                     embed = discord.Embed(
                         title="🆘 Gamma 脆弱性警告 (Net Gamma < -20)",
@@ -145,7 +145,7 @@ class SchedulerCog(commands.Cog):
             return
 
         logger.info("📅 [Weekly Report] 偵測到週五收盤，開始產生績效週報...")
-        
+
         all_watchlists = database.get_all_watchlist()
         unique_users = set(row[0] for row in all_watchlists)
 
@@ -168,7 +168,7 @@ class SchedulerCog(commands.Cog):
         """09:00：盤前財報警報 (依使用者分發私訊)"""
         now_ny = datetime.now(ny_tz)
         today = now_ny.date()
-        
+
         # 檢查今天是否為交易日
         schedule = market_time.nyse_calendar.schedule(start_date=today, end_date=today)
         if schedule.empty:
@@ -177,7 +177,7 @@ class SchedulerCog(commands.Cog):
         logger.info("Starting pre_market_risk_monitor task.")
         try:
             results = await self.trading_service.get_pre_market_alerts_data(self.EARNINGS_WARNING_DAYS)
-            
+
             for uid, data in results.items():
                 alerts = []
                 for item in data['alerts']:
@@ -191,7 +191,7 @@ class SchedulerCog(commands.Cog):
                     else:
                         scanned_list = "、".join([f"`{s}`" for s in data['scanned_symbols']])
                         embed = discord.Embed(title="✅ 【盤前財報季雷達掃描完畢】", description=f"已掃描：{scanned_list}\n\n近 {self.EARNINGS_WARNING_DAYS} 日內無財報風險，安全過關！", color=discord.Color.green())
-                    
+
                     try:
                         await self.bot.queue_dm(uid, embed=embed)
                     except discord.Forbidden:
@@ -208,7 +208,7 @@ class SchedulerCog(commands.Cog):
         """盤中動態巡邏：每 30 分鐘心跳檢查，僅在盤中 (09:45後) 執行掃描"""
         if not market_time.is_market_open():
             return
-                
+
         now_ny = datetime.now(market_time.ny_tz)
         if now_ny.hour == 9: # 09:30 - 09:59 避開
             return
@@ -363,7 +363,7 @@ class SchedulerCog(commands.Cog):
         await interaction.response.defer(ephemeral=False)
         all_watchlists = database.get_all_watchlist()
         symbols = sorted(list(set(row[1] for row in all_watchlists)))
-        
+
         if not symbols:
             await interaction.followup.send("📭 觀察清單為空，無法執行 DDP 掃描。")
             return
@@ -386,7 +386,7 @@ class SchedulerCog(commands.Cog):
         all_watchlists = database.get_all_watchlist()
         # 為每個用戶獨立掃描 (因為 Runway Impact 不同)
         uids = sorted(list(set(row[0] for row in all_watchlists)))
-        
+
         if not uids:
             await interaction.followup.send("📭 觀察清單為空，無法執行 IV 掃描。")
             return
@@ -395,7 +395,7 @@ class SchedulerCog(commands.Cog):
         for uid in uids:
             user_watch = [row[1] for row in all_watchlists if row[0] == uid]
             results = await self.trading_service.run_iv_opportunity_scan(user_watch, uid)
-            
+
             for report in results:
                 from cogs.embed_builder import create_volatility_embed
                 embed = create_volatility_embed(report)
@@ -436,14 +436,14 @@ class SchedulerCog(commands.Cog):
                     from cogs.embed_builder import create_ddp_embed
                     embed = create_ddp_embed(report)
                     sym = report['symbol']
-                    
+
                     # ⚠️ 這裡原本會發給全站用戶，現在修正為僅發給 Watchlist 中有該標的且符合模式的用戶
                     for uid, watch_sym, _ in all_watchlists:
                         if watch_sym == sym:
                             ctx = database.get_full_user_context(uid)
                             if await self._should_send_alert(uid, sym, ctx.option_alert_mode):
                                 await self.bot.queue_dm(uid, embed=embed)
-                    
+
                     self.trading_service.ddp_inspector.record_signal(report)
 
             # 🚀 2. 執行 IV 優勢掃描 (Volatility Strategist)
@@ -460,7 +460,7 @@ class SchedulerCog(commands.Cog):
 
             # 🚀 3. 執行標準 NRO 掃描
             user_results = await self.trading_service.run_market_scan(
-                is_auto=is_auto, 
+                is_auto=is_auto,
                 triggered_by_id=triggered_by.id if triggered_by else None
             )
 
@@ -483,15 +483,15 @@ class SchedulerCog(commands.Cog):
 
                     # 攔截邏輯：VETO 絕對不建倉
                     if ai_decision == "VETO":
-                        continue 
-                    
+                        continue
+
                     # 冷卻檢查 (僅在自動模式下)
                     if is_auto:
                         last_sent_time = user_cooldowns.get(cooldown_key)
                         if last_sent_time:
                             time_diff = (now - last_sent_time).total_seconds()
                             if time_diff < (self.COOLDOWN_HOURS * 3600):
-                                continue 
+                                continue
 
                     if alert_type == 'OPTION':
                         # 🚀 條件式過濾 (AlertFilter 訊號降噪 + 防騙線)
@@ -519,16 +519,16 @@ class SchedulerCog(commands.Cog):
                         # 將推播理由注入 data，供 Embed 顯示
                         if reason:
                             data['alert_reason'] = reason
-                        
+
                         if await self._should_send_alert(uid, sym, user_context.option_alert_mode):
                             valid_alerts.append(data)
-                        
+
                         if is_auto:
                             user_cooldowns[cooldown_key] = now
                             # 執行 VTR 自動建倉
                             if user_context.enable_vtr:
                                 await self.trading_service.execute_vtr_auto_entry(data)
-                                
+
                     elif alert_type == 'PSQ':
                         if await self._should_send_alert(uid, sym, user_context.option_alert_mode):
                             valid_alerts.append(data)
@@ -545,7 +545,7 @@ class SchedulerCog(commands.Cog):
                             await self.bot.queue_dm(uid, embed=create_psq_embed(data))
                         else:
                             await self.bot.queue_dm(uid, embed=create_scan_embed(data, user_capital))
-                            
+
                             # 🛡️ 檢查是否有自動回補避險建議
                             rehedge_info = data.get('rehedge_info')
                             if rehedge_info:
@@ -575,7 +575,7 @@ class SchedulerCog(commands.Cog):
         """16:15：持倉結算與防禦建議 (依使用者分發私訊)"""
         now_ny = datetime.now(ny_tz)
         today = now_ny.date()
-        
+
         # 檢查今天是否為交易日
         schedule = market_time.nyse_calendar.schedule(start_date=today, end_date=today)
         if schedule.empty:
@@ -604,7 +604,7 @@ class SchedulerCog(commands.Cog):
         """每 30 分鐘檢查 VTR，並在轉倉/平倉時即時通知"""
         if not market_time.is_market_open():
             return
-            
+
         logger.info("👻 [GhostTrader] 開始掃描 VTR 持倉與風險檢查...")
         try:
             results = await self.trading_service.monitor_vtr_and_calculate_hedging()
@@ -614,14 +614,14 @@ class SchedulerCog(commands.Cog):
                 hedge = res['hedge']
                 uid = res['uid']
                 tags = trade_info.get('tags', [])
-                
+
                 # 偵測是否為 DITM 防禦事件
                 is_ditm = any("DITM" in str(tag) for tag in tags)
-                
+
                 if is_ditm:
                     exit_reason = next((tag.split(":", 1)[1] for tag in tags if tag.startswith("exit_reason:")), "N/A")
                     action_taken = "已平倉 (Closed)" if trade_info['status'] == 'CLOSED' else "已自動轉倉 (向上/向後轉倉)"
-                    
+
                     embed = discord.Embed(
                         title="🚨 NRO 優先指令：Profit Lock (DITM 凸性防禦)",
                         description=f"偵測到標的 **{trade_info['symbol']}** 已進入深價內 (DITM)，凸性消失且風險報酬比惡化。",
@@ -630,20 +630,20 @@ class SchedulerCog(commands.Cog):
                     embed.add_field(name="觸發指標", value=f"```\n{exit_reason}\n```", inline=False)
                     embed.add_field(name="執行動作", value=f"✅ **{action_taken}**", inline=True)
                     embed.add_field(name="鎖定利潤", value=f"💰 `${trade_info['pnl']:.2f}`", inline=True)
-                    
+
                     exposure_pct = (res['current_total_delta'] * res['spy_price'] / res['user_capital']) * 100
                     embed.add_field(name="帳戶目前總曝險", value=f"`{exposure_pct:.2f}%` (Beta-Weighted Delta)", inline=False)
-                    
+
                     if hedge:
                         embed.add_field(name="🛡️ NRO 對沖建議", value=f"{hedge['action']} (缺口: `{hedge['gap']}`)", inline=False)
-                    
+
                     embed.set_footer(text="Quantitative Defense Pipeline | Nexus Risk Optimizer")
                     embed.timestamp = datetime.now(ny_tz)
                     await self.bot.queue_dm(uid, embed=embed)
                 else:
                     status_icon = "🔄 [轉倉完成]" if trade_info['status'] == 'ROLLED' else "🔴 [自動平倉]"
                     exposure_pct = (res['current_total_delta'] * res['spy_price'] / res['user_capital']) * 100
-                    
+
                     msg = (
                         f"{status_icon} **{trade_info['symbol']}** 結算通知\n"
                         f"└ 損益: `${trade_info['pnl']:.2f}` | 目前總曝險: `{exposure_pct:.2f}%` \n"
@@ -655,12 +655,12 @@ class SchedulerCog(commands.Cog):
                             f"└ 理想總曝險目標：`{res['target_delta']:.1f} Delta`\n"
                             f"🛡️ **自動對沖決策：** {hedge['action']} (缺口: `{hedge['gap']}`)"
                         )
-                    
+
                     await self.bot.queue_dm(uid, message=msg)
 
         except Exception as e:
             logger.error(f"VTR 對沖連動任務錯誤: {e}")
-            
+
     @monitor_vtr_task.before_loop
     async def before_monitor_vtr_task(self):
         await self.bot.wait_until_ready()

@@ -29,7 +29,7 @@ class VolatilityInspector:
         results = []
         # 使用 to_thread 因為 get_full_user_context 是同步資料庫讀取
         user_ctx = await asyncio.to_thread(get_full_user_context, user_id)
-        
+
         for sym in symbols:
             try:
                 report = await self.inspect_symbol(sym, user_ctx)
@@ -43,7 +43,7 @@ class VolatilityInspector:
     async def inspect_symbol(self, symbol: str, user_ctx: Any) -> Optional[Dict[str, Any]]:
         """分析單一標的是否具備波動率優勢或高風險事件"""
         ticker = yf.Ticker(symbol)
-        
+
         # 1. 獲取歷史數據 (252天) 用於 HV 與 IVP
         df = await market_data_service.get_history_df(symbol, period="1y")
         if df.empty or len(df) < 252:
@@ -54,7 +54,7 @@ class VolatilityInspector:
         # 滾動 HV (20天窗口)
         df['HV_20'] = df['Log_Ret'].rolling(window=20).std() * np.sqrt(252)
         hv_current = df['HV_20'].iloc[-1]
-        
+
         if pd.isna(hv_current):
             return None
 
@@ -80,14 +80,14 @@ class VolatilityInspector:
         hv_range = df['HV_20'].dropna()
         hv_min = hv_range.min()
         hv_max = hv_range.max()
-        
+
         ivr = ((iv_current - hv_min) / (hv_max - hv_min)) * 100 if hv_max > hv_min else 0.0
-        
+
         # 5. 財報事件與 IV Crush 偵測
         from services.calendar_service import calendar_service
         earnings_info = await calendar_service.get_symbol_earnings(symbol)
         tte_hours = earnings_info['tte_hours'] if earnings_info else 9999.0
-        
+
         is_high_risk_vol = False
         if ivr > 80.0 and tte_hours < 24.0:
             is_high_risk_vol = True
@@ -96,14 +96,14 @@ class VolatilityInspector:
         price = info.get('currentPrice') or df['Close'].iloc[-1]
         ema_eval = await evaluate_ema_trend(symbol, price)
         psq_res = analyze_psq(df)
-        
+
         has_momentum = (ema_eval['trend'] == "BULLISH_STRONG") or (psq_res and psq_res.signal_direction == "Long")
-        
+
         # 7. 判定是否為機會
         # 機會定義：IVP < 25% 且 IV < HV 且具備趨勢動能
-        iv_p = ivr 
+        iv_p = ivr
         is_opportunity = (iv_p < 25.0 and iv_current < hv_current and has_momentum)
-        
+
         if not is_opportunity and not is_high_risk_vol:
             return None
 
@@ -120,7 +120,7 @@ class VolatilityInspector:
             trigger_logic = "IV 處於歷史極低位且低於歷史波動率 (IV < HV)，同時價格呈現看漲突破，適合利用廉價權利金建立槓桿部位。"
 
         # 8. Runway Impact (NRO)
-        daily_theta = price * iv_current * 0.01 
+        daily_theta = price * iv_current * 0.01
         runway_impact_days = 0
         if user_ctx.cash_reserve > 0 and user_ctx.monthly_expense > 0:
             daily_burn = user_ctx.monthly_expense / 30.0

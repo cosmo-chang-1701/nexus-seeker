@@ -28,7 +28,7 @@ CREATE INDEX IF NOT EXISTS idx_assets_symbol ON assets(symbol);
 
 def migrate_data(conn: sqlite3.Connection):
     cursor = conn.cursor()
-    
+
     # Helper to check if table exists
     def table_exists(name):
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (name,))
@@ -44,7 +44,7 @@ def migrate_data(conn: sqlite3.Connection):
                     "INSERT INTO assets (user_id, symbol, context_type, metadata) VALUES (?, ?, 'WATCH', ?)",
                     (uid, sym, metadata)
                 )
-            
+
         # 2.2 Migrate PORTFOLIO (Trades)
         if table_exists("portfolio"):
             cursor.execute("SELECT user_id, symbol, opt_type, strike, expiry, entry_price, quantity, weighted_delta, theta, gamma, trade_category FROM portfolio")
@@ -83,6 +83,6 @@ def migrate_data(conn: sqlite3.Connection):
         logger.warning(f"Unified Asset Data Migration partially failed: {e}")
         # We don't rollback here because the Assets table creation was already successful in executescript
 
-# Note: The automated migration engine in database/core.py might need update to handle migrate_data function 
-# or I just put standard SQL here. Since SQLite doesn't handle JSON easily in SQL scripts for complex migration, 
+# Note: The automated migration engine in database/core.py might need update to handle migrate_data function
+# or I just put standard SQL here. Since SQLite doesn't handle JSON easily in SQL scripts for complex migration,
 # I will implement the logic within the database/core.py or keep it simple if possible.

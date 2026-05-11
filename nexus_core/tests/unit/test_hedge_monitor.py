@@ -7,7 +7,7 @@ from config import VIX_LADDER_CONFIG
 async def test_vix_spike_detection():
     bot = MagicMock()
     service = HedgeMonitorService(bot)
-    
+
     # Mock macro environment
     with patch("services.market_data_service.get_macro_environment", new_callable=AsyncMock) as mock_macro:
         # Initial state: VIX 18 (Ready)
@@ -15,7 +15,7 @@ async def test_vix_spike_detection():
         await service._check_spikes_and_alerts()
         assert service._last_vix_level == 18.0
         assert service._last_vix_stage == 2 # Index of Ready
-        
+
         # Scenario 1: VIX spikes to 24 (18 -> 24 is > 10% change)
         mock_macro.return_value = {'vix': 24.0}
         with patch.object(service, '_trigger_global_hedge_assessment', new_callable=AsyncMock) as mock_trigger:
@@ -28,12 +28,12 @@ async def test_vix_spike_detection():
 async def test_vix_stage_move_detection():
     bot = MagicMock()
     service = HedgeMonitorService(bot)
-    
+
     with patch("services.market_data_service.get_macro_environment", new_callable=AsyncMock) as mock_macro:
         # Initial state: VIX 15 (Caution)
         mock_macro.return_value = {'vix': 15.0}
         await service._check_spikes_and_alerts()
-        
+
         # Scenario 2: VIX jumps 2 stages (Caution -> Ready -> Aggressive)
         # Caution (15), Aggressive starts at 24.
         mock_macro.return_value = {'vix': 25.0}

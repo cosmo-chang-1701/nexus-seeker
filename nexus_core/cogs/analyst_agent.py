@@ -43,22 +43,22 @@ class AnalystAgent(commands.Cog):
         while True:
             target = get_next_market_target_time("open", offset_minutes=-30)
             sleep_secs = get_sleep_seconds(target)
-            
+
             logger.info(f"🤖 [Analyst Pre-Market] 下次執行時間: {target} (倒數 {sleep_secs/3600:.2f} 小時)")
             await asyncio.sleep(sleep_secs)
-            
+
             try:
                 logger.info("🤖 [Analyst Pre-Market] 啟動盤前巨觀與財報掃描...")
                 macro_report = await self.run_macro_scan()
                 if macro_report:
                     await self.dispatch_report(macro_report)
-                
+
                 earnings_report = await self.run_premarket_earnings()
                 if earnings_report:
                     await self.dispatch_report(earnings_report)
             except Exception as e:
                 logger.error(f"Analyst Pre-Market loop error: {e}")
-            
+
             await asyncio.sleep(60) # 避免在同一秒重複觸發
 
     # ==========================================
@@ -76,7 +76,7 @@ class AnalystAgent(commands.Cog):
                         await self.dispatch_report(report)
                 except Exception as e:
                     logger.error(f"Analyst Intra-Day loop error: {e}")
-                
+
                 await asyncio.sleep(30 * 60)
             else:
                 target = get_next_market_target_time("open", offset_minutes=0)
@@ -93,29 +93,29 @@ class AnalystAgent(commands.Cog):
         while True:
             target = get_next_market_target_time("close", offset_minutes=15)
             sleep_secs = get_sleep_seconds(target)
-            
+
             logger.info(f"🤖 [Analyst Post-Market] 下次執行時間: {target} (倒數 {sleep_secs/3600:.2f} 小時)")
             await asyncio.sleep(sleep_secs)
-            
+
             try:
                 logger.info("🤖 [Analyst Post-Market] 啟動盤後總結與次日策略規劃...")
                 summary_report = await self.run_postmarket_summary()
                 if summary_report:
                     await self.dispatch_report(summary_report)
-                
+
                 next_day_report = await self.run_next_day_strategy()
                 if next_day_report:
                     await self.dispatch_report(next_day_report)
             except Exception as e:
                 logger.error(f"Analyst Post-Market loop error: {e}")
-            
+
             await asyncio.sleep(60)
 
     async def run_intraday_intelligence(self):
         """根據盤中時段動態調整分析重點"""
         now_ny = datetime.now(ny_tz)
         hour = now_ny.hour
-        
+
         # 09:30 - 11:30 Focus: Liquidity & Open Vol
         if hour < 11:
             return await self.run_market_open_liquidity()
@@ -130,7 +130,7 @@ class AnalystAgent(commands.Cog):
         """Dispatch the markdown report to all users who have opted in."""
         user_ids = database.get_all_user_ids()
         dispatched_count = 0
-        
+
         for uid in user_ids:
             context = get_full_user_context(uid)
             if context.enable_analyst_agent:
@@ -143,7 +143,7 @@ class AnalystAgent(commands.Cog):
                 embed.set_footer(text="Nexus Seeker 量化分析代理")
                 await self.bot.queue_dm(uid, embed=embed)
                 dispatched_count += 1
-                
+
         logger.info(f"Dispatched Analyst Report to {dispatched_count} users.")
 
     async def _fetch_macro_data(self):
@@ -151,7 +151,7 @@ class AnalystAgent(commands.Cog):
         def fetch():
             # Quick fetch of some proxies: VIX, DXY, TNX (10-yr yield), IRX (13-week bill as proxy or ^IRX)
             # DXY fallback: 'DX-Y.NYB' or 'UUP' (ETF)
-            # For 2Y yield, we can use ^IRX or just ^TYX for 30Y and interpolate, 
+            # For 2Y yield, we can use ^IRX or just ^TYX for 30Y and interpolate,
             # but usually ^IRX is 13W. Let's try ^VIX, DX-Y.NYB, ^TNX, ^IRX
             tickers = yf.Tickers('^VIX DX-Y.NYB ^TNX ^IRX')
             hist = tickers.history(period="2d")
@@ -165,23 +165,23 @@ class AnalystAgent(commands.Cog):
                 dxy = float(hist['Close']['DX-Y.NYB'].iloc[-1])
                 tnx = float(hist['Close']['^TNX'].iloc[-1])
                 irx = float(hist['Close']['^IRX'].iloc[-1]) # 13W Bill as a floor proxy or use it for spread
-                
+
                 # Previous Close
                 vix_prev = float(hist['Close']['^VIX'].iloc[-2])
                 tnx_prev = float(hist['Close']['^TNX'].iloc[-2])
-                
+
                 # Check for NaN and fallback
                 if math.isnan(vix):
                     vix = float('nan')
                 if math.isnan(vix_prev):
                     vix_prev = vix
-                
+
                 vix_change = vix - vix_prev if not math.isnan(vix) and not math.isnan(vix_prev) else 0.0
                 tnx_change_bps = (tnx - tnx_prev) * 100 if not (math.isnan(tnx) or math.isnan(tnx_prev)) else 0.0
-                
+
                 # Mock US2Y as TNX - 0.2 if IRX is too low, or use a better proxy if available
                 us2y = tnx - 0.2 if not math.isnan(tnx) else 0.0 # Fallback
-                
+
                 return {
                     'vix': round(vix, 2),
                     'vix_change': round(vix_change, 2),
@@ -195,11 +195,11 @@ class AnalystAgent(commands.Cog):
                 vix = float(hist['Close']['^VIX'].iloc[-1])
                 dxy = float(hist['Close']['DX-Y.NYB'].iloc[-1])
                 tnx = float(hist['Close']['^TNX'].iloc[-1])
-                
+
                 vix = float('nan') if math.isnan(vix) else vix
                 dxy = 0.0 if math.isnan(dxy) else dxy
                 tnx = 0.0 if math.isnan(tnx) else tnx
-                
+
                 return {'vix': vix, 'vix_change': 0.0, 'dxy': dxy, 'tnx': tnx, 'tnx_change_bps': 0.0, 'us2y': tnx - 0.2}
         except Exception as e:
             logger.warning(f"Failed to fetch macro proxies: {e}")
@@ -212,7 +212,7 @@ class AnalystAgent(commands.Cog):
 
     async def run_macro_scan(self):
         macro_data = await self._fetch_macro_data()
-        
+
         # 處理資料格式兼容 (若為舊版 tuple 則轉為新版 dict 預設值)
         if isinstance(macro_data, tuple):
             vix, dxy, tnx = macro_data
@@ -224,13 +224,13 @@ class AnalystAgent(commands.Cog):
         tnx = macro_data.get('tnx', 0.0)
         tnx_change_bps = macro_data.get('tnx_change_bps', 0.0)
         us2y = macro_data.get('us2y', 0.0)
-        
+
         # 1. 計算利差
         spread = tnx - us2y
-        
+
         # 動態生成台灣時間 (UTC+8) 的當下時間
         time_str = self._get_tw_time_str()
-        
+
         # 2. 多因子告警判定
         alerts = []
         if spread < -0.2:
@@ -243,7 +243,7 @@ class AnalystAgent(commands.Cog):
             alerts.append("恐慌指數急遽上升，市場避險情緒發酵，注意流動性風險")
         if dxy > 105:
             alerts.append("美元指數處於強勢區間，可能壓抑跨國企業獲利與大宗商品表現")
-            
+
         # 3. 組合報告內容
         report_lines = []
         report_lines.append(f"**{time_str} 巨觀環境與隔夜市場掃描**")
@@ -254,7 +254,7 @@ class AnalystAgent(commands.Cog):
         report_lines.append(f"**2Y-10Y 利差:** {spread:+.2f}%")
         report_lines.append(f"**恐慌指數 (VIX):** {vix:.2f} (單日變化: {vix_change:+.2f})")
         report_lines.append("")
-        
+
         # 結論區塊
         if alerts:
             report_lines.append("🚨 **風險警示：**")
@@ -262,7 +262,7 @@ class AnalystAgent(commands.Cog):
                 report_lines.append(f"- {alert}")
         else:
             report_lines.append("✅ **巨觀狀態：** 殖利率曲線、匯率與波動率未見極端異常。維持標準市場部位。")
-            
+
         return "\n".join(report_lines)
 
     async def run_premarket_earnings(self):
@@ -271,37 +271,37 @@ class AnalystAgent(commands.Cog):
             # 獲取所有觀察名單標的
             watchlist = get_all_watchlist()
             symbols = list(set([row[1] for row in watchlist]))
-            
+
             # 獲取財報日曆
             earnings_data = {}
             for sym in symbols[:10]: # 限制數量以防超載
                 calendar = await get_earnings_calendar(sym)
                 if calendar:
                     earnings_data[sym] = calendar[:1] # 只取最近一次
-            
+
             # 並行獲取即將發布財報標的之新聞與 Reddit 情緒 (最多取前 2 個)
             upcoming_symbols = list(earnings_data.keys())[:2]
             sentiment_data = {}
             if upcoming_symbols:
                 news_tasks = [fetch_recent_news(sym) for sym in upcoming_symbols]
                 reddit_tasks = [get_reddit_context(sym) for sym in upcoming_symbols]
-                
+
                 news_results = await asyncio.gather(*news_tasks, return_exceptions=True)
                 reddit_results = await asyncio.gather(*reddit_tasks, return_exceptions=True)
-                
+
                 for i, sym in enumerate(upcoming_symbols):
                     sentiment_data[sym] = {
                         "news": news_results[i] if not isinstance(news_results[i], Exception) else "無法獲取",
                         "reddit_sentiment": reddit_results[i] if not isinstance(reddit_results[i], Exception) else "無法獲取"
                     }
-            
+
             raw_data = {
                 "analyzed_symbols": len(symbols),
                 "upcoming_earnings": earnings_data,
                 "earnings_sentiment_scan": sentiment_data,
                 "note": "IV and VRP are evaluated dynamically based on recent price action."
             }
-            
+
             report_type = f"{time_str} 盤前財報與估值調整"
             report = await generate_analyst_report(report_type, raw_data)
             return report
@@ -325,12 +325,12 @@ class AnalystAgent(commands.Cog):
                         "last_price": float(df['Close'].iloc[-1]),
                         "volume": int(df['Volume'].iloc[-1])
                     }
-                    
+
             raw_data = {
                 "monitored_indices": liquidity_data,
                 "liquidity_filter_active": True
             }
-            
+
             report_type = f"{time_str} 開盤與流動性執行監控"
             report = await generate_analyst_report(report_type, raw_data)
             return report
@@ -344,35 +344,35 @@ class AnalystAgent(commands.Cog):
             # 總經板塊分析
             sectors = {"Semiconductors": "SMH", "Technology": "XLK", "Financials": "XLF"}
             research_data = {}
-            
+
             # 並行獲取價格歷史、新聞與 Reddit 資訊
             hist_tasks = [get_history_df(sym, period="3mo") for sym in sectors.values()]
             news_tasks = [fetch_recent_news(sym) for sym in sectors.values()]
             reddit_tasks = [get_reddit_context(sym) for sym in sectors.values()]
-            
+
             hist_results = await asyncio.gather(*hist_tasks, return_exceptions=True)
             news_results = await asyncio.gather(*news_tasks, return_exceptions=True)
             reddit_results = await asyncio.gather(*reddit_tasks, return_exceptions=True)
-            
+
             for i, (name, sym) in enumerate(sectors.items()):
                 df = hist_results[i]
                 if not isinstance(df, Exception) and not df.empty:
                     pct_change = (df['Close'].iloc[-1] - df['Close'].iloc[0]) / df['Close'].iloc[0] * 100
                 else:
                     pct_change = 0.0
-                
+
                 research_data[name] = {
-                    "symbol": sym, 
+                    "symbol": sym,
                     "quarterly_performance_pct": round(pct_change, 2),
                     "news": news_results[i] if not isinstance(news_results[i], Exception) else "無法獲取",
                     "reddit_sentiment": reddit_results[i] if not isinstance(reddit_results[i], Exception) else "無法獲取"
                 }
-                    
+
             raw_data = {
                 "sector_analysis": research_data,
                 "capex_and_dso_status": "No cyclic oversupply detected based on price momentum proxy."
             }
-            
+
             report_type = f"{time_str} 深度研究與特定板塊分析"
             report = await generate_analyst_report(report_type, raw_data)
             return report
@@ -385,21 +385,21 @@ class AnalystAgent(commands.Cog):
         try:
             user_ids = database.get_all_user_ids()
             system_hedge_status = []
-            
+
             for uid in user_ids[:5]: # 取樣前 5 名活躍用戶以避免過度計算
                 perf = await analyze_hedge_performance(uid)
                 system_hedge_status.append(perf)
-                
+
             avg_hedge = sum(p['hedge_ratio'] for p in system_hedge_status) / max(len(system_hedge_status), 1)
             avg_eff = sum(p['effectiveness'] for p in system_hedge_status) / max(len(system_hedge_status), 1)
-                
+
             raw_data = {
                 "users_analyzed": len(system_hedge_status),
                 "avg_hedge_ratio": round(avg_hedge, 4),
                 "avg_effectiveness": round(avg_eff, 4),
                 "note": "Gamma levels and SPY Delta hedge requirements evaluated."
             }
-            
+
             report_type = f"{time_str} 投資組合再平衡與避險策略"
             report = await generate_analyst_report(report_type, raw_data)
             return report
@@ -415,13 +415,13 @@ class AnalystAgent(commands.Cog):
             total_net_pnl = 0
             total_alpha = 0
             total_hedge = 0
-            
+
             for uid in user_ids[:5]:
                 perf = await analyze_hedge_performance(uid)
                 total_net_pnl += perf.get('net_pnl', 0)
                 total_alpha += perf.get('alpha_contribution', 0)
                 total_hedge += perf.get('hedge_contribution', 0)
-                
+
             raw_data = {
                 "brinson_attribution_proxy": {
                     "total_net_pnl": round(total_net_pnl, 2),
@@ -430,7 +430,7 @@ class AnalystAgent(commands.Cog):
                 },
                 "sector_correlation": "Stable"
             }
-            
+
             report_type = f"{time_str} 盤後交易與每日總結"
             report = await generate_analyst_report(report_type, raw_data)
             return report
@@ -444,9 +444,9 @@ class AnalystAgent(commands.Cog):
         vix = macro_data.get('vix', 0.0) if isinstance(macro_data, dict) else macro_data[0]
         tier = get_vix_tier(vix)
         tier_display = f"{tier.get('emoji', '')} {tier.get('name', 'Unknown')}"
-        
+
         vix_display = f"{vix:.2f}" if not math.isnan(vix) else "N/A (Using Default)"
-        
+
         report = (
             f"**{time_str} 次日策略制定**\n"
             "--------------------------------------------------\n"
@@ -460,7 +460,7 @@ class AnalystAgent(commands.Cog):
             report += "🚨 市場處於極度恐慌 (All-In)。繞過市場政權阻尼，啟用 1/2 Kelly 覆寫。"
         else:
             report += "✅ 已設定標準量化掃描參數。NRO 保證金限制正常運作。"
-        
+
         return report
 
 async def setup(bot):

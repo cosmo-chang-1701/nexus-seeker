@@ -8,9 +8,9 @@ from database.user_settings import get_all_user_ids, get_full_user_context
 from services import market_data_service, llm_service
 from config import get_vix_tier, VIX_LADDER_CONFIG
 from market_analysis.risk_engine import (
-    MacroContext, 
-    get_macro_risk_metrics, 
-    calculate_vega_adjusted_delta, 
+    MacroContext,
+    get_macro_risk_metrics,
+    calculate_vega_adjusted_delta,
     calculate_hedge_instruction
 )
 from market_analysis.portfolio import PortfolioStatusOrchestrator
@@ -62,12 +62,12 @@ class HedgeMonitorService:
         # 2. Check for VIX stage moves or spikes
         is_spike = False
         stage_move = 0
-        
+
         if self._last_vix_level is not None:
             vix_change_pct = (current_vix - self._last_vix_level) / self._last_vix_level
             if vix_change_pct >= 0.10:
                 is_spike = True
-            
+
             if self._last_vix_stage is not None:
                 stage_move = current_stage_idx - self._last_vix_stage
                 if stage_move >= 2:
@@ -93,13 +93,13 @@ class HedgeMonitorService:
         # 1. Refresh Greeks to get latest Vega/Vanna
         from market_analysis.portfolio import refresh_portfolio_greeks
         await refresh_portfolio_greeks(user_id)
-        
+
         # 2. Calculate Portfolio Risk from Assets table
         user_context = get_full_user_context(user_id)
         from services.asset_manager import AssetManager
         from models.asset import ContextType, TradeMetadata, HoldingMetadata
         import json
-        
+
         manager = AssetManager()
         total_delta = 0.0
         total_vega = 0.0
@@ -107,7 +107,7 @@ class HedgeMonitorService:
         total_theta = 0.0
         total_gamma = 0.0
         total_margin = 0.0
-        
+
         spy_df = await market_data_service.get_history_df("SPY", "2d")
         spy_price = spy_df['Close'].iloc[-1] if not spy_df.empty else 670.0
 
@@ -117,7 +117,7 @@ class HedgeMonitorService:
             for row in cursor.fetchall():
                 c_type, meta_str = row
                 meta = json.loads(meta_str)
-                
+
                 if c_type == ContextType.TRADE:
                     t_meta = TradeMetadata(**meta)
                     total_delta += t_meta.weighted_delta
@@ -140,7 +140,7 @@ class HedgeMonitorService:
         # Account for Hidden Delta: Delta_adj = Delta + Vanna * Delta_Vol
         # Assume Delta_Vol is 10% (0.10) for the spike
         adj_delta = calculate_vega_adjusted_delta(total_delta, total_vanna, 0.10)
-        
+
         # Hedge using SPY shorting (Delta -1.0)
         hedge_qty = calculate_hedge_instruction(adj_delta, -1.0)
         if abs(hedge_qty) < 5: return # Ignore small hedges
@@ -186,7 +186,7 @@ class HedgeMonitorService:
         - 調整後 Delta (考慮 Vanna): {adj_delta:.2f}
         - Vega 曝險: {metrics['total_vega']:.2f}
         - Vanna 曝險: {metrics['total_vanna']:.2f}
-        
+
         請以資深風險控管主管 (CRO) 的口吻，用繁體中文解釋為什麼需要對沖。
         說明 IV 上升對當前部位的具體威脅（特別是隱含 Delta 的擴張）。
         字數控制在 80 字以內，語氣冷靜專業。
@@ -218,17 +218,17 @@ class HedgeMonitorService:
     async def _send_discord_alert(self, user_id, vix, stage_move, metrics, adj_delta, hedge_qty, instr, narration, alert_id, poly_snapshot=None):
         import discord
         from config import get_vix_tier
-        
+
         tier = get_vix_tier(vix)
         color = discord.Color(tier.get('color_hex', 0xFF0000))
-        
+
         embed = discord.Embed(
             title=f"🚨 【戰位報告：自動化對沖警報】",
             description=f"**警報等級：** {tier['emoji']} {tier['name']} (移動 `{stage_move:+} 階`)",
             color=color,
             timestamp=discord.utils.utcnow()
         )
-        
+
         embed.add_field(name="📊 風險指標", value=(
             f"• **即時 VIX:** `{vix:.2f}`\n"
             f"• **淨 Delta:** `{metrics['total_beta_delta']:+.1f}`\n"
@@ -243,19 +243,19 @@ class HedgeMonitorService:
                 odds = event.get('odds_distribution', [])
                 odds_str = " | ".join([f"{o.get('outcome')}: `{o.get('odds')*100:.0f}%`" for o in odds[:2]])
                 snapshot_text += f"• **{q}**\n  └ {odds_str}\n"
-            
+
             if snapshot_text:
                 embed.add_field(name="🌐 [快取快照] Polymarket 即時機率", value=snapshot_text, inline=False)
-        
+
         embed.add_field(name="🤖 AI 風險敘述", value=f"*{narration}*", inline=False)
-        
+
         embed.add_field(name="🛡️ 對沖建議指令", value=f"```fix\n{instr}\n```", inline=False)
-        
+
         embed.add_field(name="📈 預期效果", value=(
             f"執行後淨 Delta 將回歸至 `{adj_delta + (hedge_qty * -1.0):+.1f}` 附近，"
             f"顯著降低系統性回撤風險。"
         ), inline=False)
-        
+
         embed.set_footer(text=f"Nexus Seeker Battle Station | Alert ID: {alert_id}")
-        
+
         await self.bot.queue_dm(user_id, embed=embed)

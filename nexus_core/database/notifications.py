@@ -27,9 +27,9 @@ def get_pending_notifications(limit: int = 50) -> List[Tuple[int, int, Optional[
         with sqlite3.connect(config.DB_NAME) as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT id, user_id, content, embed_json 
-                FROM pending_notifications 
-                ORDER BY created_at ASC 
+                SELECT id, user_id, content, embed_json
+                FROM pending_notifications
+                ORDER BY created_at ASC
                 LIMIT ?
             """, (limit,))
             rows = cursor.fetchall()

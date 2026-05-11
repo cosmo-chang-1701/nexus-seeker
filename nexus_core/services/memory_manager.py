@@ -46,7 +46,7 @@ class MemoryManager:
         mem = psutil.virtual_memory()
         process = psutil.Process(os.getpid())
         proc_mem = process.memory_info().rss / (1024 * 1024)
-        
+
         # 1. 定期垃圾回收 (基本維護)
         if mem.percent > 80:
             gc.collect()
@@ -62,7 +62,7 @@ class MemoryManager:
 
     async def _trigger_emergency_alert(self, total_usage: float, proc_mem: float):
         from config import DISCORD_ADMIN_USER_ID
-        
+
         if not DISCORD_ADMIN_USER_ID: return
 
         embed = discord.Embed(
@@ -71,17 +71,17 @@ class MemoryManager:
             color=discord.Color.red(),
             timestamp=discord.utils.utcnow()
         )
-        
+
         embed.add_field(name="當前總占用", value=f"`{total_usage}%`", inline=True)
         embed.add_field(name="程序占用 (RSS)", value=f"`{proc_mem:.1f} MB`", inline=True)
-        
+
         # 嘗試列出最大的快取對象
         from services import market_data_service
         sma_count = len(market_data_service._sma_cache)
         ema_count = len(market_data_service._ema_cache)
-        
+
         embed.add_field(name="📦 快取消費者", value=f"SMA/EMA: `{sma_count}/{ema_count}` 筆", inline=False)
         embed.set_footer(text="建議重啟服務或增加 Swap 分區。")
-        
+
         await self.bot.queue_dm(DISCORD_ADMIN_USER_ID, embed=embed)
         logger.warning(f"🚨 [OOM 警報] 記憶體使用率過高: {total_usage}%")

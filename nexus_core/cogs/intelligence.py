@@ -27,7 +27,7 @@ class IntelligenceCog(commands.Cog):
         try:
             if not hasattr(self.bot, 'polymarket_service'):
                 return await interaction.followup.send("❌ Polymarket 服務未初始化。", ephemeral=True)
-                
+
             markets = self.bot.polymarket_service.get_active_markets(limit=20)
             embed = create_polymarket_list_embed(markets)
             await interaction.followup.send(embed=embed, ephemeral=True)
@@ -40,18 +40,18 @@ class IntelligenceCog(commands.Cog):
         if not hasattr(self.bot, 'polymarket_service'):
             await interaction.response.send_message("❌ Polymarket 服務未初始化。", ephemeral=True)
             return
-            
+
         status = self.bot.polymarket_service.get_status()
-        
+
         embed = discord.Embed(
             title="【 🐋 Polymarket 服務狀態 】",
             color=discord.Color.green() if status["connected"] else discord.Color.red(),
             timestamp=discord.utils.utcnow()
         )
-        
+
         status_emoji = "🟢 已連線" if status["connected"] else "🔴 斷線中"
         running_emoji = "✅ 運行中" if status["running"] else "🛑 已停止"
-        
+
         content = [
             f"## 🖥️ 監控系統運行資訊",
             "---",
@@ -62,17 +62,17 @@ class IntelligenceCog(commands.Cog):
             f"**異常計數：** `{status['errors']}` 次",
             "---"
         ]
-        
+
         embed.description = "\n".join(content)
         embed.set_footer(text="Nexus Seeker | Polymarket Monitor")
-        
+
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="test_poly_whale", description="🛠️ [開發者] 模擬 Polymarket 巨鯨交易推播")
     @app_commands.describe(usd_value="模擬成交金額 (USD)", side="交易方向 (BUY/SELL)")
     async def test_poly_whale(self, interaction: discord.Interaction, usd_value: float = 50000.0, side: str = "BUY"):
         await interaction.response.defer(ephemeral=True)
-        
+
         try:
             # 1. 準備 Mock Data
             mock_trade = {
@@ -82,16 +82,16 @@ class IntelligenceCog(commands.Cog):
                 "side": side.upper(),
                 "event_type": "trade"
             }
-            
+
             mock_market = {
                 "question": "Will Bitcoin reach $100,000 by end of 2026?",
                 "description": "This market resolves to Yes if BTC hits $100k according to CoinGecko by Dec 31, 2026.",
                 "outcome": "Yes" if side.upper() == "BUY" else "No"
             }
-            
+
             # 2. 獲取 LLM 總結
             summary = await llm_service.generate_polymarket_summary(mock_market, mock_trade, usd_value)
-            
+
             # 3. 使用 PolymarketService 的私訊推播邏輯 (或直接模擬)
             if hasattr(self.bot, 'polymarket_service'):
                 # 模擬動態門檻，預設為 $10,000 以便計算倍數
@@ -102,7 +102,7 @@ class IntelligenceCog(commands.Cog):
                 await interaction.followup.send(f"✅ 已成功模擬並發送巨鯨交易通知 (${usd_value:,.2f}) 到您的私訊。", ephemeral=True)
             else:
                 await interaction.followup.send("❌ Polymarket 服務未啟動。", ephemeral=True)
-                
+
         except Exception as e:
             logger.error(f"Polymarket 模擬失敗: {e}")
             await interaction.followup.send(f"❌ 模擬失敗: {e}", ephemeral=True)
@@ -110,7 +110,7 @@ class IntelligenceCog(commands.Cog):
     @app_commands.command(name="test_risk_ui", description="🛠️ [開發者] 模擬高風險 LMND 掃描視覺成果")
     async def test_risk_ui(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        
+
         # 1. 準備基礎 Mock Data
         mock_data = {
             "symbol": "LMND",
@@ -171,7 +171,7 @@ class IntelligenceCog(commands.Cog):
         user_capital = user_ctx.capital
         mock_data['risk_limit'] = user_ctx.risk_limit
         embed = create_scan_embed(mock_data, user_capital)
-        
+
         await interaction.followup.send(
             content="📊 **這是一份經過數學修正的模擬資料，用於驗證 Beta 與加權股數的正負號邏輯。**",
             embed=embed
@@ -208,8 +208,8 @@ class IntelligenceCog(commands.Cog):
             return await interaction.followup.send(f"❌ 無法取得 `{symbol}` 的報價，請檢查代碼是否正確。", ephemeral=True)
 
         embed = discord.Embed(
-            title=f"💹 {symbol} 即時報價 (Real-time Quote)", 
-            color=discord.Color.blue() if data['dp'] >= 0 else discord.Color.red(), 
+            title=f"💹 {symbol} 即時報價 (Real-time Quote)",
+            color=discord.Color.blue() if data['dp'] >= 0 else discord.Color.red(),
             timestamp=datetime.now()
         )
         embed.add_field(name="現價 (Current)", value=f"**${data['c']}**", inline=True)

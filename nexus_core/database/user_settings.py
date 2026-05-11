@@ -43,27 +43,27 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:
     try:
         with sqlite3.connect(config.DB_NAME) as conn:
             cursor = conn.cursor()
-            
+
             # 1. 確保使用者紀錄存在
             cursor.execute('''
-                INSERT OR IGNORE INTO user_settings (user_id, capital, risk_limit) 
+                INSERT OR IGNORE INTO user_settings (user_id, capital, risk_limit)
                 VALUES (?, 100000.0, 15.0)
             ''', (user_id,))
-            
+
             # 2. 轉譯別名 (Aliases) 確保與 README/CLI 參數對齊
             if 'expense' in kwargs and kwargs['expense'] is not None:
                 kwargs['monthly_expense'] = kwargs.pop('expense')
-            
+
             # 3. 動態構建 SQL SET 子句 (白名單防護)
             allowed_keys = {
-                'capital', 'risk_limit', 'last_rehedge_alert_time', 'dynamic_tau', 
+                'capital', 'risk_limit', 'last_rehedge_alert_time', 'dynamic_tau',
                 'option_alert_mode', 'enable_vtr', 'enable_psq_watchlist', 'enable_analyst_agent',
                 'polymarket_threshold', 'polymarket_use_llm', 'polymarket_slippage',
                 'monthly_expense', 'tax_reserve_rate', 'cash_reserve'
             }
             update_pairs = []
             values = []
-            
+
             for key, value in kwargs.items():
                 if key in allowed_keys and value is not None:
                     if key == 'capital':
@@ -78,21 +78,22 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:
                         value = max(0.1, min(float(value), 10.0))
                     elif key == 'tax_reserve_rate':
                         value = max(0.0, min(float(value), 1.0))
-                        
+
                     update_pairs.append(f"{key} = ?")
                     values.append(value)
-            
+
             if not update_pairs:
                 return False
-                
+
             # 4. 參數化執行更新
             sql = f"UPDATE user_settings SET {', '.join(update_pairs)} WHERE user_id = ?"
             values.append(user_id)
-            
+
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             cursor.execute(sql, tuple(values))
             conn.commit()
             return True
-            
+
     except Exception as e:
         logger.error(f"執行 upsert_user_config 失敗 (User: {user_id}): {e}")
         return False
@@ -150,15 +151,15 @@ def get_full_user_context(user_id: int) -> UserContext:
         with sqlite3.connect(config.DB_NAME) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
-            
+
             # 🚀 [Unified Asset Lifecycle] 從新的 assets 表聚合 Greeks
             sql = """
-                SELECT 
+                SELECT
                     u.*,
                     g.sum_delta, g.sum_theta, g.sum_gamma
                 FROM user_settings u
                 LEFT JOIN (
-                    SELECT 
+                    SELECT
                         user_id,
                         SUM(COALESCE(CAST(json_extract(metadata, '$.weighted_delta') AS REAL), 0.0)) as sum_delta,
                         SUM(COALESCE(CAST(json_extract(metadata, '$.theta') AS REAL), 0.0)) as sum_theta,
@@ -171,7 +172,7 @@ def get_full_user_context(user_id: int) -> UserContext:
             """
             cursor.execute(sql, (user_id,))
             user_row = cursor.fetchone()
-            
+
             if not user_row:
                 return UserContext(user_id, 100000.0, 15.0, 0.0, 0.0, 0.0)
 
@@ -180,12 +181,12 @@ def get_full_user_context(user_id: int) -> UserContext:
             sum_delta = user_row['sum_delta'] if user_row['sum_delta'] is not None else 0.0
             sum_theta = (user_row['sum_theta'] if user_row['sum_theta'] is not None else 0.0) / 365.0
             sum_gamma = user_row['sum_gamma'] if user_row['sum_gamma'] is not None else 0.0
-            
+
             # 處理基本設定與空值
             capital_raw = float(user_row['capital']) if user_row['capital'] is not None else 100000.0
             capital = max(capital_raw, 1.0)
             risk_limit = float(user_row['risk_limit']) if user_row['risk_limit'] is not None else 15.0
-            
+
             # Helper for booleans and defaults
             def _get_val(key: str, default: Any) -> Any:
                 if key in user_row.keys() and user_row[key] is not None:
@@ -212,7 +213,7 @@ def get_full_user_context(user_id: int) -> UserContext:
                 tax_reserve_rate=_get_val('tax_reserve_rate', 0.20),
                 cash_reserve=_get_val('cash_reserve', 0.0)
             )
-            
+
     except Exception as e:
         logger.error(f"獲取 UserContext 失敗 (UID: {user_id}): {e}")
         return UserContext(user_id, 100000.0, 15.0, 0.0, 0.0, 0.0)

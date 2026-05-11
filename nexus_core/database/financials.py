@@ -28,14 +28,24 @@ def get_cached_financials(symbol: str, expiry_hours: int = 24) -> Optional[Dict[
             payload_col = _get_payload_column(cursor)
             expiry_limit = (datetime.now() - timedelta(hours=expiry_hours)).strftime("%Y-%m-%d %H:%M:%S")
 
-            cursor.execute(
-                f"""
-                SELECT {payload_col} AS payload
-                FROM financials_cache
-                WHERE symbol = ? AND updated_at > ?
-                """,
-                (symbol.upper(), expiry_limit),
-            )
+            if payload_col == "data":
+                cursor.execute(
+                    """
+                    SELECT data AS payload
+                    FROM financials_cache
+                    WHERE symbol = ? AND updated_at > ?
+                    """,
+                    (symbol.upper(), expiry_limit),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT metrics AS payload
+                    FROM financials_cache
+                    WHERE symbol = ? AND updated_at > ?
+                    """,
+                    (symbol.upper(), expiry_limit),
+                )
             row = cursor.fetchone()
             if not row or not row["payload"]:
                 return None
@@ -51,13 +61,23 @@ def save_financials_cache(symbol: str, data: Dict[str, Any]) -> None:
         with sqlite3.connect(config.DB_NAME) as conn:
             cursor = conn.cursor()
             payload_col = _get_payload_column(cursor)
-            cursor.execute(
-                f"""
-                INSERT OR REPLACE INTO financials_cache (symbol, {payload_col}, updated_at)
-                VALUES (?, ?, CURRENT_TIMESTAMP)
-                """,
-                (symbol.upper(), json.dumps(data)),
-            )
+
+            if payload_col == "data":
+                cursor.execute(
+                    """
+                    INSERT OR REPLACE INTO financials_cache (symbol, data, updated_at)
+                    VALUES (?, ?, CURRENT_TIMESTAMP)
+                    """,
+                    (symbol.upper(), json.dumps(data)),
+                )
+            else:
+                cursor.execute(
+                    """
+                    INSERT OR REPLACE INTO financials_cache (symbol, metrics, updated_at)
+                    VALUES (?, ?, CURRENT_TIMESTAMP)
+                    """,
+                    (symbol.upper(), json.dumps(data)),
+                )
             conn.commit()
     except Exception as e:
         logger.error("[%s] 寫入 financials_cache 失敗: %s", symbol, e)

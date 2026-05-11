@@ -104,7 +104,7 @@ class PolymarketService:
         self._ping_task = None
         self._cleanup_task = None
         self._cache_lock = asyncio.Lock()
-        
+
         # 狀態追蹤
         self.last_message_at = None
         self.asset_count = 0
@@ -126,12 +126,12 @@ class PolymarketService:
                     price = t.get('price', 0)
                     if tid in self._order_books:
                         price = self._order_books[tid].get_mid_price()
-                    
+
                     token_snapshots.append({
                         "outcome": t.get('outcome'),
                         "odds": round(price, 4)
                     })
-                
+
                 snapshot.append({
                     "question": m.get("question"),
                     "odds_distribution": token_snapshots,
@@ -191,12 +191,12 @@ class PolymarketService:
                     for aid, ob in self._order_books.items():
                         if (now - ob.last_update_at).total_seconds() > 900:
                             expired_aids.append(aid)
-                    
+
                     for aid in expired_aids:
                         del self._order_books[aid]
                         if aid in self._market_cache:
                             del self._market_cache[aid]
-                
+
                 # 2. 強制垃圾回收
                 gc.collect()
                 logger.info(f"🧹 [記憶體優化] 已清理 {len(expired_aids)} 筆過期期貨快取並執行 GC。")
@@ -206,7 +206,7 @@ class PolymarketService:
     async def _monitor_loop(self):
         retry_delay = 5
         max_delay = 60
-        
+
         while self.running:
             try:
                 # 1. 獲取所有活躍市場以取得 asset_id 列表
@@ -250,13 +250,13 @@ class PolymarketService:
                     async for message in ws:
                         if not self.running:
                             break
-                        
+
                         self.last_message_at = datetime.datetime.now(datetime.timezone.utc)
                         retry_delay = 5 # 成功通訊後重設延遲
-                        
+
                         try:
                             data = json.loads(message)
-                            
+
                             # 處理訊息
                             if isinstance(data, dict):
                                 event_type = data.get("event_type")
@@ -264,7 +264,7 @@ class PolymarketService:
                                     await self._handle_trade(data)
                                 elif event_type == "order_book_update":
                                     self._handle_order_book_update(data)
-                            
+
                             elif isinstance(data, list):
                                 for item in data:
                                     event_type = item.get("event_type")
@@ -272,7 +272,7 @@ class PolymarketService:
                                         await self._handle_trade(item)
                                     elif event_type == "order_book_update":
                                         self._handle_order_book_update(item)
-                                
+
                         except json.JSONDecodeError:
                             continue
                         except Exception as e:
@@ -289,7 +289,7 @@ class PolymarketService:
             finally:
                 if self._ping_task:
                     self._ping_task.cancel()
-            
+
             if self.running:
                 await asyncio.sleep(retry_delay)
                 retry_delay = min(retry_delay * 2, max_delay)
@@ -318,15 +318,15 @@ class PolymarketService:
         asset_id = data.get("asset_id")
         if not asset_id:
             return
-            
+
         if asset_id not in self._order_books:
             self._order_books[asset_id] = OrderBook(token_id=asset_id)
-            
+
         ob = self._order_books[asset_id]
         side = data.get("side")
         price = float(data.get("price", 0))
         size = float(data.get("size", 0))
-        
+
         if side and price > 0:
             ob.update(side, price, size)
 
@@ -335,7 +335,7 @@ class PolymarketService:
         uoa_data = await SentimentEngine.detect_uoa(symbol)
         if not uoa_data:
             return None
-        
+
         # 進行 AI 分類
         classification = await classify_uoa_intent(symbol, uoa_data[0], whale_intent)
         return {
@@ -352,7 +352,7 @@ class PolymarketService:
             price = float(trade.get("price", 0))
             size = float(trade.get("size", 0))
             usd_value = price * size
-            
+
             if usd_value <= 0:
                 return
 
@@ -362,12 +362,12 @@ class PolymarketService:
                 # 如果沒有快取，嘗試同步抓取一次
                 await self._initialize_order_books([asset_id])
                 ob = self._order_books.get(asset_id)
-            
+
             # 動態門檻判定
             dynamic_threshold = 10000.0 # 預設回退值
             if ob:
                 dynamic_threshold = ob.calculate_slippage_threshold(target_percent=0.02)
-            
+
             # 2. 篩選符合門檻的使用者
             user_ids = get_all_user_ids()
             target_users = []
@@ -375,10 +375,10 @@ class PolymarketService:
                 context = get_full_user_context(uid)
                 meets_dynamic = usd_value >= dynamic_threshold
                 meets_static = (context.polymarket_threshold <= 0 or usd_value >= context.polymarket_threshold)
-                
+
                 if meets_dynamic and meets_static:
                     target_users.append(uid)
-            
+
             if not target_users:
                 return
 
@@ -403,16 +403,16 @@ class PolymarketService:
             # 5. 推播通知
             summary_cache = None
             base_details = self._resolve_trade_details(trade, market_info)
-            
+
             for uid in target_users:
                 context = get_full_user_context(uid)
                 user_dynamic_threshold = dynamic_threshold
                 if context.polymarket_slippage != 2.0 and ob:
                     user_dynamic_threshold = ob.calculate_slippage_threshold(target_percent=context.polymarket_slippage / 100.0)
-                
+
                 meets_dynamic = usd_value >= user_dynamic_threshold
                 meets_static = (context.polymarket_threshold <= 0 or usd_value >= context.polymarket_threshold)
-                
+
                 if not (meets_dynamic and meets_static):
                     continue
 
@@ -421,7 +421,7 @@ class PolymarketService:
                     if summary_cache is None:
                         summary_cache = await generate_polymarket_summary(market_info, trade, usd_value, base_details)
                     current_summary = summary_cache
-                
+
                 await self._push_notification(uid, current_summary, market_info, trade, usd_value, user_dynamic_threshold, uoa_correlation)
 
         except Exception as e:
@@ -432,21 +432,21 @@ class PolymarketService:
         封裝 Discord Embed (專業分析師格式) 並排入私訊佇列
         """
         import discord
-        
+
         context = get_full_user_context(user_id)
         details = self._resolve_trade_details(trade, market_info)
         size = float(trade.get("size", 0))
         win_rate = details['p_yes'] * 100
-        
+
         # 是否為高信心訊號 (大額交易 + UOA 關聯)
         is_high_conviction = uoa_correlation is not None and usd_value > 50000
-            
+
         embed = discord.Embed(
             title="【 🐋 Polymarket 巨鯨戰報 】" + (" 🔥 高信心訊號" if is_high_conviction else ""),
             color=discord.Color.gold() if is_high_conviction else (discord.Color.blue() if details['is_bullish'] else discord.Color.red()),
             timestamp=discord.utils.utcnow()
         )
-        
+
         content = [
             f"## {details['emoji']} {details['intent'].split(']')[0][1:]}",
             "---",
@@ -456,7 +456,7 @@ class PolymarketService:
             f"**當前勝率：** {win_rate:.1f}%",
             "---"
         ]
-        
+
         if uoa_correlation:
             uoa = uoa_correlation['uoa']
             cls = uoa_correlation['classification']
@@ -465,26 +465,26 @@ class PolymarketService:
             content.append(f"- 性質: **{cls['classification']}** (信心: `{cls['confidence']:.2f}`)")
             content.append(f"- 理由: {cls['explanation']}")
             content.append("---")
-        
+
         # 預測性對沖建議 (Predictive Hedge)
         if win_rate > 70 or win_rate < 30:
             content.append("🛡️ **【預測性對沖建議 (Predictive Hedge)】**")
             event_name = market_info.get('question', '特定事件')
             content.append(f"偵測到預測市場對 `{event_name}` 的機率激增至 `{win_rate:.1f}%`，建議提前在 VTR 執行 Delta 對沖，以應對潛在的波動率跳空。")
             content.append("---")
-        
+
         if summary and summary != "（未啟用 AI 分析）":
             content.append(f"**🤖 AI 總結分析**\n{summary}")
             content.append("---")
-        
+
         event_slug = market_info.get("event_slug")
         market_url = f"https://polymarket.com/event/{event_slug}" if event_slug else "https://polymarket.com"
-            
+
         content.append(f"[🔗 前往市場]({market_url})")
-        
+
         embed.description = "\n".join(content)
         embed.set_footer(text=f"Nexus Seeker 監測系統 | 動態門檻: ${dynamic_threshold:,.0f}")
-        
+
         await self.bot.queue_dm(user_id, embed=embed)
 
 
@@ -494,7 +494,7 @@ class PolymarketService:
         """
         asset_ids = []
         active_markets_data = []
-        
+
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 params = {
@@ -503,7 +503,7 @@ class PolymarketService:
                     "limit": 100
                 }
                 resp = await client.get(f"{GAMMA_API_BASE}/markets", params=params)
-                
+
                 if resp.status_code == 200:
                     markets = resp.json()
                     for m in markets:
@@ -511,30 +511,30 @@ class PolymarketService:
                         clob_tokens_raw = m.get("clobTokenIds")
                         if not clob_tokens_raw:
                             continue
-                            
+
                         try:
                             if isinstance(clob_tokens_raw, str):
                                 t_ids = json.loads(clob_tokens_raw)
                             else:
                                 t_ids = clob_tokens_raw
-                            
+
                             if not t_ids:
                                 continue
-                                
+
                             outcomes_raw = m.get("outcomes", [])
                             prices_raw = m.get("outcomePrices", [])
-                            
+
                             try:
                                 if isinstance(outcomes_raw, str):
                                     outcomes = json.loads(outcomes_raw)
                                 else:
                                     outcomes = outcomes_raw
-                                
+
                                 if isinstance(prices_raw, str):
                                     outcome_prices = json.loads(prices_raw)
                                 else:
                                     outcome_prices = prices_raw
-                                    
+
                                 outcomes = outcomes if isinstance(outcomes, list) else []
                                 outcome_prices = outcome_prices if isinstance(outcome_prices, list) else []
                             except Exception:
@@ -544,7 +544,7 @@ class PolymarketService:
                             current_market_tokens = []
                             for i, tid in enumerate(t_ids):
                                 asset_ids.append(tid)
-                                
+
                                 event_slug = None
                                 if "events" in m and m["events"] and isinstance(m["events"], list):
                                     event_slug = m["events"][0].get("slug")
@@ -568,18 +568,18 @@ class PolymarketService:
                                     "outcome": outcome_name,
                                     "price": current_price
                                 })
-                            
+
                             active_markets_data.append({
                                 "question": q,
                                 "description": m.get("description"),
                                 "end_date": m.get("endDate"),
                                 "tokens": current_market_tokens
                             })
-                            
+
                             cond_id = m.get("conditionId")
                             if cond_id:
                                 self._market_cache[cond_id] = self._market_cache[t_ids[0]]
-                                
+
                         except Exception as e:
                             logger.error(f"Error parsing tokens for market '{q}': {e}")
 
@@ -621,7 +621,7 @@ class PolymarketService:
         side_raw = trade.get("side", "BUY")
         base_price = float(trade.get("price", 0))
         outcome = str(market_info.get("outcome", "Yes")).upper()
-        
+
         if outcome == "YES":
             if side_raw == "BUY":
                 intent = "[強力看多] (主動買入 YES)"

@@ -16,7 +16,7 @@ async def get_next_earnings_date(symbol: str):
     """取得下一次財報發布日期。"""
     try:
         earnings = await market_data_service.get_earnings_calendar(symbol)
-        
+
         if not earnings: return None
         today = date.today()
         for entry in earnings:

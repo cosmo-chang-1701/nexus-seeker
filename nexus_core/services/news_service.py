@@ -14,7 +14,7 @@ async def fetch_recent_news(symbol: str, limit: int = 5) -> str:
         news_items = await market_data_service.get_company_news(symbol, limit=limit)
         if not news_items:
             return "近期無重大新聞。"
-        
+
         lines = [
             f"▪️ {item.get('headline', 'No Title')}"
             for item in news_items

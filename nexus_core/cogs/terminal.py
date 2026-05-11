@@ -46,9 +46,9 @@ class TerminalCog(commands.Cog):
         app_commands.Choice(name="PORTFOLIO_ONLY (僅限持倉標的)", value=2)
     ])
     async def update_settings(
-        self, 
-        interaction: discord.Interaction, 
-        capital: Optional[float] = None, 
+        self,
+        interaction: discord.Interaction,
+        capital: Optional[float] = None,
         risk_limit: Optional[float] = None,
         alert_mode: Optional[int] = None,
         enable_vtr: Optional[bool] = None,
@@ -84,7 +84,7 @@ class TerminalCog(commands.Cog):
             kwargs['option_alert_mode'] = alert_mode
             mode_names = {0: "OFF (關閉)", 1: "ALL (所有掃描訊號)", 2: "PORTFOLIO_ONLY (僅限持倉標的)"}
             updates.append(f"🔔 期權警報模式: `{mode_names[alert_mode]}`")
-            
+
         if enable_vtr is not None:
             kwargs['enable_vtr'] = enable_vtr
             updates.append(f"👻 虛擬交易室 (VTR): `{'開啟' if enable_vtr else '關閉'}`")
@@ -149,13 +149,13 @@ class TerminalCog(commands.Cog):
     async def runway_check(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         user_id = interaction.user.id
-        
+
         # 🚀 執行即時 Greeks 刷新，確保數據最新
         from market_analysis.portfolio import refresh_portfolio_greeks
         await refresh_portfolio_greeks(user_id)
-        
+
         ctx = get_full_user_context(user_id)
-        
+
         if ctx.monthly_expense <= 0:
             return await interaction.followup.send("⚠️ 請先使用 `/settings` 配置您的每月支出 (monthly_expense)，才能計算跑道。", ephemeral=True)
 
@@ -165,22 +165,22 @@ class TerminalCog(commands.Cog):
             monthly_expense=ctx.monthly_expense,
             daily_theta=ctx.total_theta
         )
-        
+
         # 🚀 [Unified Asset Lifecycle] 計算 HOLDING 資產的備用流動性 (含 20% Haircut)
         from services.asset_manager import AssetManager
         from models.asset import ContextType, HoldingMetadata
         manager = AssetManager()
         holdings = manager.get_assets(user_id, ContextType.HOLDING)
-        
+
         total_holding_value = 0.0
         for h in holdings:
             meta = HoldingMetadata(**h.metadata)
             quote = await market_data_service.get_quote(h.symbol)
             price = quote.get('c', 0.0) if quote else 0.0
             total_holding_value += (price * meta.quantity)
-            
+
         backup_liquidity = total_holding_value * 0.8 # 20% Haircut
-        
+
         # 計算含備用流動性的跑道
         extended_runway = calculate_financial_runway(
             cash_reserve=ctx.cash_reserve + backup_liquidity,
@@ -193,26 +193,26 @@ class TerminalCog(commands.Cog):
             color=discord.Color.green() if runway_days > 180 else discord.Color.orange(),
             timestamp=datetime.now(timezone.utc)
         )
-        
+
         runway_str = f"`{runway_days:,.1f}` 天" if runway_days < 9999 else "♾️ 無限 (收益已覆蓋支出)"
         ext_runway_str = f"`{extended_runway:,.1f}` 天" if extended_runway < 9999 else "♾️ 無限"
 
         embed.add_field(name="💰 現金儲備 (Cash)", value=f"`${ctx.cash_reserve:,.2f}`", inline=True)
         embed.add_field(name="📉 每月支出", value=f"`${ctx.monthly_expense:,.2f}`", inline=True)
         embed.add_field(name="💸 每日 Theta 收益", value=f"`+${ctx.total_theta:,.2f}/day`", inline=True)
-        
+
         embed.add_field(name="⌛ 核心生存跑道", value=f"**{runway_str}**", inline=False)
-        
+
         if backup_liquidity > 0:
             embed.add_field(
-                name="🛡️ 備用流動性 (HOLDING 淨值)", 
-                value=f"`${total_holding_value:,.2f}` (折價後: `${backup_liquidity:,.2f}`)\n預計可將跑道延長至: **{ext_runway_str}**", 
+                name="🛡️ 備用流動性 (HOLDING 淨值)",
+                value=f"`${total_holding_value:,.2f}` (折價後: `${backup_liquidity:,.2f}`)\n預計可將跑道延長至: **{ext_runway_str}**",
                 inline=False
             )
-            
+
         ratio = (ctx.total_theta * 30) / ctx.monthly_expense if ctx.monthly_expense > 0 else 0
         embed.add_field(name="📊 收益支出比 (Theta/Expense)", value=f"`{ratio:.2%}`", inline=True)
-        
+
         embed.set_footer(text="Nexus Risk Engine | 跑道計算含 20% 流動性折價")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -235,11 +235,11 @@ class TerminalCog(commands.Cog):
         user_id = interaction.user.id
         trade_category = category.value if category else "SPECULATIVE"
         await interaction.response.defer(ephemeral=True)
-        
+
         # 🚀 驗證標的合法性
         if not await market_data_service.validate_symbol(symbol):
             return await interaction.followup.send(f"❌ **無效的標的代號**: `{symbol}`。請輸入正確的美股代號。", ephemeral=True)
-        
+
         # 🛡️ Defensive Programming: Validate Expiry Date Format
         from datetime import datetime
         try:
@@ -249,7 +249,7 @@ class TerminalCog(commands.Cog):
             expiry = expiry_clean # Standardized format
         except Exception:
             await interaction.followup.send(
-                f"❌ **日期格式錯誤**: `{expiry}`。請確保為 `YYYY-MM-DD` 格式。", 
+                f"❌ **日期格式錯誤**: `{expiry}`。請確保為 `YYYY-MM-DD` 格式。",
                 ephemeral=True
             )
             return
@@ -285,7 +285,7 @@ class TerminalCog(commands.Cog):
                 await refresh_portfolio_greeks(user_id)
                 action_text = "賣出 (STO)" if quantity < 0 else "買入 (BTO)"
                 await interaction.followup.send(
-                    f"✅ **新增交易成功**: {action_text} {abs(quantity)} 口 `{symbol}` ${strike} {opt_type.value.upper()}", 
+                    f"✅ **新增交易成功**: {action_text} {abs(quantity)} 口 `{symbol}` ${strike} {opt_type.value.upper()}",
                     ephemeral=True
                 )
             else:
@@ -310,9 +310,9 @@ class TerminalCog(commands.Cog):
         app_commands.Choice(name="HEDGE", value="HEDGE")
     ])
     async def edit_trade(
-        self, 
-        interaction: discord.Interaction, 
-        trade_id: int, 
+        self,
+        interaction: discord.Interaction,
+        trade_id: int,
         strike: Optional[float] = None,
         expiry: Optional[str] = None,
         price: Optional[float] = None,
@@ -322,7 +322,7 @@ class TerminalCog(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         from services.asset_manager import AssetManager
         manager = AssetManager()
-        
+
         updates = {}
         if strike is not None: updates['strike'] = strike
         if expiry is not None:
@@ -336,10 +336,10 @@ class TerminalCog(commands.Cog):
         if price is not None: updates['entry_price'] = price
         if quantity is not None: updates['quantity'] = quantity
         if category is not None: updates['category'] = category.value
-        
+
         if not updates:
             return await interaction.followup.send("請提供至少一個要修改的參數。", ephemeral=True)
-            
+
         success = manager.update_asset_metadata(interaction.user.id, trade_id, updates)
         if success:
             from market_analysis.portfolio import refresh_portfolio_greeks
@@ -400,28 +400,28 @@ class TerminalCog(commands.Cog):
             from services import llm_service, news_service, reddit_service
             from market_analysis.risk_engine import optimize_position_risk
             from market_analysis.sentiment_engine import SentimentEngine
-            
+
             # 使用快取 Reddit 資料
             from database.cache import get_kv_cache
             reddit_text = get_kv_cache(f"reddit_sentiment_{symbol}") or "暫無快取情緒資料。"
             news_text = await news_service.fetch_recent_news(symbol)
-            
+
             # 並行獲取期權情緒指標
             skew_task = SentimentEngine.calculate_skew(symbol)
             pcr_task = SentimentEngine.calculate_pcr(symbol)
             uoa_task = SentimentEngine.detect_uoa(symbol)
-            
+
             skew_data, pcr_data, uoa_list = await asyncio.gather(skew_task, pcr_task, uoa_task)
             pcr_val = pcr_data.get('pcr', 0.8)
             skew_val = skew_data.get('skew', 0.0)
-            
+
             ai_verdict = await llm_service.evaluate_trade_risk(symbol, result.get('strategy', ''), news_text, reddit_text)
             result.update({
-                'news_text': news_text, 
-                'reddit_text': reddit_text, 
-                'ai_decision': ai_verdict.get('decision', 'APPROVE'), 
-                'ai_reasoning': ai_verdict.get('reasoning', '無資料'), 
-                'vix': macro_data.vix, 
+                'news_text': news_text,
+                'reddit_text': reddit_text,
+                'ai_decision': ai_verdict.get('decision', 'APPROVE'),
+                'ai_reasoning': ai_verdict.get('reasoning', '無資料'),
+                'vix': macro_data.vix,
                 'oil': macro_data.oil_price,
                 'pcr': pcr_val,
                 'skew': skew_val,
@@ -430,14 +430,14 @@ class TerminalCog(commands.Cog):
 
             user_context = database.get_full_user_context(user_id)
             safe_qty, hedge_spy = optimize_position_risk(
-                current_delta=user_context.total_weighted_delta, 
-                unit_weighted_delta=result.get('weighted_delta', 0.0), 
-                user_capital=user_context.capital, 
-                spy_price=spy_price, 
-                stock_iv=result.get('iv', 0.15), 
-                strategy=result.get('strategy', ''), 
-                macro_data=macro_data, 
-                risk_limit=user_context.risk_limit, 
+                current_delta=user_context.total_weighted_delta,
+                unit_weighted_delta=result.get('weighted_delta', 0.0),
+                user_capital=user_context.capital,
+                spy_price=spy_price,
+                stock_iv=result.get('iv', 0.15),
+                strategy=result.get('strategy', ''),
+                macro_data=macro_data,
+                risk_limit=user_context.risk_limit,
                 vix_spot=macro_data.vix,
                 pcr=pcr_val,
                 skew=skew_val
@@ -445,11 +445,11 @@ class TerminalCog(commands.Cog):
 
             projected_total_delta = user_context.total_weighted_delta + (result.get('weighted_delta', 0.0) * (-1 if "STO" in result.get('strategy', '') else 1) * safe_qty)
             projected_exposure_pct = (projected_total_delta * spy_price / user_context.capital) * 100 if user_context.capital > 0 else 0
-            
+
             result.update({
-                'projected_exposure_pct': round(projected_exposure_pct, 2), 
-                'safe_qty': safe_qty, 
-                'hedge_spy': hedge_spy, 
+                'projected_exposure_pct': round(projected_exposure_pct, 2),
+                'safe_qty': safe_qty,
+                'hedge_spy': hedge_spy,
                 'spy_price': spy_price,
                 'risk_limit': user_context.risk_limit
             })
@@ -458,7 +458,7 @@ class TerminalCog(commands.Cog):
         if psq_result:
             result['price'] = df_hist_1d['Close'].iloc[-1] if not df_hist_1d.empty else 0.0
             embeds_to_send.append(create_psq_embed(result))
-            
+
         if embeds_to_send:
             await interaction.followup.send(embeds=embeds_to_send)
         else:
@@ -470,20 +470,20 @@ class TerminalCog(commands.Cog):
         try:
             from market_analysis.ghost_trader import GhostTrader
             from market_analysis.attribution import AttributionEngine
-            
+
             # 0. 結算目前的對沖日誌 (歸因分析)
             await AttributionEngine.finalize_vtr_attribution(interaction.user.id)
-            
+
             # 1. 獲取基礎統計
             stats = await GhostTrader.get_vtr_performance_stats(interaction.user.id)
-            
+
             # 2. 獲取對沖歸因報告
             attr_lines = AttributionEngine.format_attribution_report(interaction.user.id)
-            
+
             # 3. 建立 Embed
             from cogs.embed_builder import build_vtr_stats_embed
             embed = build_vtr_stats_embed(interaction.user.display_name, stats, attr_lines)
-            
+
             await interaction.followup.send(embed=embed, ephemeral=True)
         except Exception as e:
             logger.error(f"VTR Stats failed: {e}")
@@ -540,7 +540,7 @@ class TerminalCog(commands.Cog):
                 health_status += " (記憶體閾值已達)"
             if disk.percent > 85:
                 health_status += " (磁碟空間不足)"
-        
+
         if mem.percent > 95 or disk.percent > 95:
             health_status = "🆘 **極度危險**"
             if mem.percent > 95:
@@ -576,14 +576,14 @@ class TerminalCog(commands.Cog):
     async def promote_watch(self, interaction: discord.Interaction, symbol: str, opt_type: str, strike: float, expiry: str, price: float, qty: int):
         await interaction.response.defer(ephemeral=True)
         symbol = symbol.upper()
-        
+
         # 🚀 驗證標的合法性
         if not await market_data_service.validate_symbol(symbol):
             return await interaction.followup.send(f"❌ **無效的標的代號**: `{symbol}`。請輸入正確的美股代號。", ephemeral=True)
 
         from services.asset_manager import AssetManager
         manager = AssetManager()
-        
+
         trade_details = {
             "opt_type": opt_type.lower(),
             "strike": strike,
@@ -592,12 +592,12 @@ class TerminalCog(commands.Cog):
             "quantity": qty,
             "category": "SPEC"
         }
-        
+
         success = manager.promote_to_trade(interaction.user.id, symbol, trade_details)
         if success:
             from market_analysis.portfolio import refresh_portfolio_greeks
             await refresh_portfolio_greeks(interaction.user.id)
-            
+
             embed = discord.Embed(
                 title=f"🌌 Nexus | 資產晉升成功",
                 description=f"標的 **{symbol}** 已從「觀察」提升為「實單交易」。",
@@ -615,12 +615,12 @@ class TerminalCog(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         from services.asset_manager import AssetManager
         manager = AssetManager()
-        
+
         success = manager.settle_to_holding(interaction.user.id, asset_id, execution_price)
         if success:
             from market_analysis.portfolio import refresh_portfolio_greeks
             await refresh_portfolio_greeks(interaction.user.id)
-            
+
             await interaction.followup.send(f"✅ **交易結算完成**：資產 ID `{asset_id}` 已轉換為「現貨持倉」。平均成本已更新為 `${execution_price:.2f}`。", ephemeral=True)
         else:
             await interaction.followup.send(f"❌ 結算失敗。請檢查資產 ID 是否正確且屬於「實單交易」狀態。", ephemeral=True)
@@ -630,7 +630,7 @@ class TerminalCog(commands.Cog):
     async def add_watch(self, interaction: discord.Interaction, symbol: str, use_llm: bool = True):
         symbol = symbol.upper()
         await interaction.response.defer(ephemeral=True)
-        
+
         # 🚀 驗證標的合法性
         if not await market_data_service.validate_symbol(symbol):
             return await interaction.followup.send(f"❌ **無效的標的代號**: `{symbol}`。請輸入正確的美股代號。", ephemeral=True)
@@ -638,14 +638,14 @@ class TerminalCog(commands.Cog):
         from services.asset_manager import AssetManager
         from models.asset import Asset, ContextType
         manager = AssetManager()
-        
+
         asset = Asset(
             user_id=interaction.user.id,
             symbol=symbol,
             context_type=ContextType.WATCH,
             metadata={"use_llm": use_llm}
         )
-        
+
         success = manager.add_asset(asset)
         if success:
             await interaction.followup.send(f"✅ **已加入觀察清單**: `{symbol}` (AI 分析: `{'開啟' if use_llm else '關閉'}`)", ephemeral=True)
@@ -658,16 +658,16 @@ class TerminalCog(commands.Cog):
         symbol = symbol.upper()
         if use_llm is None:
             return await interaction.response.send_message("請提供要修改的參數 (如 use_llm)。", ephemeral=True)
-            
+
         await interaction.response.defer(ephemeral=True)
         from services.asset_manager import AssetManager
         from models.asset import ContextType
         manager = AssetManager()
-        
+
         success = manager.update_asset_metadata_by_symbol(
             interaction.user.id, symbol, ContextType.WATCH, {"use_llm": use_llm}
         )
-        
+
         if success:
             await interaction.followup.send(f"✅ **已更新觀察設定**: `{symbol}` (AI 分析: `{'開啟' if use_llm else '關閉'}`)", ephemeral=True)
         else:
@@ -679,21 +679,21 @@ class TerminalCog(commands.Cog):
         symbol = symbol.upper()
         user_id = interaction.user.id
         await interaction.response.defer(ephemeral=True)
-        
+
         # 🚀 驗證標的合法性
         if not await market_data_service.validate_symbol(symbol):
             return await interaction.followup.send(f"❌ **無效的標的代號**: `{symbol}`。請輸入正確的美股代號。", ephemeral=True)
-        
+
         if quantity <= 0 or avg_cost < 0:
             return await interaction.followup.send("❌ 數量必須大於 0 且成本不能為負數。", ephemeral=True)
-            
+
         from services.asset_manager import AssetManager
         from models.asset import Asset, ContextType
         manager = AssetManager()
-        
+
         # 🚀 檢查是否已存在，若存在則更新 (Upsert 邏輯)
         existing_asset = manager.get_asset_by_symbol(user_id, symbol, ContextType.HOLDING)
-        
+
         if existing_asset:
             existing_asset.metadata["quantity"] = quantity
             existing_asset.metadata["avg_cost"] = avg_cost
@@ -708,7 +708,7 @@ class TerminalCog(commands.Cog):
             )
             success = manager.add_asset(asset)
             action_text = "登錄"
-        
+
         if success:
             from market_analysis.portfolio import refresh_portfolio_greeks
             await refresh_portfolio_greeks(user_id)
@@ -722,20 +722,20 @@ class TerminalCog(commands.Cog):
         symbol = symbol.upper()
         if quantity is None and avg_cost is None:
             return await interaction.response.send_message("請提供要修改的參數 (數量或成本)。", ephemeral=True)
-            
+
         await interaction.response.defer(ephemeral=True)
         from services.asset_manager import AssetManager
         from models.asset import ContextType
         manager = AssetManager()
-        
+
         updates = {}
         if quantity is not None: updates['quantity'] = quantity
         if avg_cost is not None: updates['avg_cost'] = avg_cost
-        
+
         success = manager.update_asset_metadata_by_symbol(
             interaction.user.id, symbol, ContextType.HOLDING, updates
         )
-        
+
         if success:
             from market_analysis.portfolio import refresh_portfolio_greeks
             await refresh_portfolio_greeks(interaction.user.id)
@@ -747,21 +747,21 @@ class TerminalCog(commands.Cog):
     async def list_holdings(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         user_id = interaction.user.id
-        
+
         from services.asset_manager import AssetManager
         from models.asset import ContextType
         manager = AssetManager()
         assets = manager.get_assets(user_id, ContextType.HOLDING)
-        
+
         if not assets:
             return await interaction.followup.send("📭 您目前無現貨持倉紀錄。請使用 `/add_holding` 進行登錄。", ephemeral=True)
-            
+
         holdings = []
         for a in assets:
             sym = a.symbol
             quote = await market_data_service.get_quote(sym)
             current_price = quote.get('c', 0.0) if quote else 0.0
-            
+
             h_data = {
                 'id': a.id,
                 'symbol': a.symbol,
@@ -771,7 +771,7 @@ class TerminalCog(commands.Cog):
                 'current_price': current_price
             }
             holdings.append(h_data)
-            
+
         ctx = get_full_user_context(user_id)
         from cogs.embed_builder import create_holdings_embed
         embed = create_holdings_embed(holdings, ctx.capital)
@@ -786,7 +786,7 @@ class TerminalCog(commands.Cog):
         from models.asset import ContextType
         manager = AssetManager()
         success = manager.delete_asset_by_symbol(interaction.user.id, symbol, ContextType.HOLDING)
-        
+
         if success:
             # 🚀 刷新 Greeks
             from market_analysis.portfolio import refresh_portfolio_greeks
@@ -803,7 +803,7 @@ class TerminalCog(commands.Cog):
         from models.asset import ContextType
         manager = AssetManager()
         success = manager.delete_asset_by_symbol(interaction.user.id, symbol, ContextType.WATCH)
-        
+
         if success:
             await interaction.followup.send(f"🗑️ **已移除觀察標的**: `{symbol}`", ephemeral=True)
         else:
@@ -816,13 +816,13 @@ class TerminalCog(commands.Cog):
         from models.asset import ContextType
         manager = AssetManager()
         assets = manager.get_assets(interaction.user.id, ContextType.WATCH)
-        
+
         if not assets:
             await interaction.followup.send("📭 您的觀察清單是空的。", ephemeral=True)
             return
-        
+
         symbols_data = [(a.symbol, a.metadata.get('use_llm', True)) for a in assets]
-        
+
         from ui.watchlist import WatchlistPagination
         view = WatchlistPagination(symbols_data)
         view.update_buttons()
@@ -836,11 +836,11 @@ class TerminalCog(commands.Cog):
         from models.asset import ContextType
         manager = AssetManager()
         assets = manager.get_assets(user_id, ContextType.TRADE)
-        
+
         if not assets:
             await interaction.followup.send("📭 您目前無持倉紀錄。", ephemeral=True)
             return
-            
+
         # 轉換為舊格式以相容 create_trades_embed
         rows = []
         unique_symbols = set()
@@ -888,20 +888,20 @@ class TerminalCog(commands.Cog):
         target_cc_premium="預計單次收租權利金 (USD)"
     )
     async def transition_sim(
-        self, 
-        interaction: discord.Interaction, 
-        symbol: str, 
-        current_option_pnl: float, 
-        target_cc_strike: float, 
+        self,
+        interaction: discord.Interaction,
+        symbol: str,
+        current_option_pnl: float,
+        target_cc_strike: float,
         target_cc_premium: float
     ):
         await interaction.response.defer(ephemeral=True)
         symbol = symbol.upper()
-        
+
         try:
             quote = await market_data_service.get_quote(symbol)
             current_price = quote.get('c', 0.0) if quote else 0.0
-            
+
             if current_price <= 0:
                 return await interaction.followup.send(f"❌ 無法獲取 `{symbol}` 即時報價。", ephemeral=True)
 
@@ -919,10 +919,10 @@ class TerminalCog(commands.Cog):
                 color=discord.Color.blue(),
                 timestamp=discord.utils.utcnow()
             )
-            
+
             embed.add_field(name="現價 (Price)", value=f"`${current_price:.2f}`", inline=True)
             embed.add_field(name="期權獲利 (Option PnL)", value=f"`${res.initial_pnl:,.2f}`", inline=True)
-            
+
             roadmap = (
                 f"1. **執行動作**：平倉現有 DITM 部位，回收收益。\n"
                 f"2. **購入現股**：以 `${current_price:.2f}` 購入 100 股。\n"
@@ -931,17 +931,17 @@ class TerminalCog(commands.Cog):
                 f"5. **建立 CC**：賣出 `${target_cc_strike}` Call，收取 `${target_cc_premium:.2f}` 權利金。"
             )
             embed.add_field(name="🚀 資本重分配路線圖 (Roadmap)", value=roadmap, inline=False)
-            
+
             efficiency = (
                 f"• **預期年化回報 (AROC)**：`{res.projected_aroc:.1f}%` "
                 f"{'✅ 符合 15% 門檻' if res.projected_aroc >= 15 else '⚠️ 低於效率門檻'}\n"
                 f"• **單次收租殖利率**：`{res.capital_efficiency_gain:.2f}%`"
             )
             embed.add_field(name="📊 資本效率評估", value=efficiency, inline=False)
-            
+
             embed.set_footer(text="戰略轉軌引擎 v1.0 | 專業營運模式")
             await interaction.followup.send(embed=embed)
-            
+
         except Exception as e:
             logger.error(f"Transition Simulation failed: {e}")
             await interaction.followup.send("❌ 模擬執行失敗，請檢查輸入數據。", ephemeral=True)

@@ -16,7 +16,7 @@ CREATE INDEX IF NOT EXISTS idx_holdings_user ON holdings(user_id);
 -- 2. Migrate existing stock_cost from watchlist to holdings (Quantity 0 as migrated placeholder)
 INSERT INTO holdings (user_id, symbol, avg_cost, quantity, weighted_delta)
 SELECT user_id, symbol, stock_cost, 0.0, 0.0
-FROM watchlist 
+FROM watchlist
 WHERE stock_cost > 0;
 
 -- 3. Refactor watchlist (Remove stock_cost column)
@@ -32,7 +32,7 @@ CREATE TABLE watchlist_new (
 );
 
 INSERT INTO watchlist_new (user_id, symbol, use_llm, last_cross_dir, last_cross_price, last_cross_time)
-SELECT user_id, symbol, COALESCE(use_llm, 1), last_cross_dir, last_cross_price, last_cross_time 
+SELECT user_id, symbol, COALESCE(use_llm, 1), last_cross_dir, last_cross_price, last_cross_time
 FROM watchlist;
 
 DROP TABLE watchlist;

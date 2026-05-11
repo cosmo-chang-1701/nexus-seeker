@@ -44,4 +44,3 @@ __all__ = [
     "save_financials_cache",
     "purge_old_cache",
 ]
-

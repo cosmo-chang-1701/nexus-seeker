@@ -27,7 +27,7 @@ class GapAnalyzer:
     量化跳空分析引擎 (Gap & Fill Monitor Engine)：
     監控盤中價格與跳空區間 (Gap Zone) 的互動，驗證技術支撐與阻力。
     """
-    
+
     @staticmethod
     def analyze_gap(df: pd.DataFrame) -> Optional[GapMetrics]:
         """
@@ -36,31 +36,31 @@ class GapAnalyzer:
         """
         if df is None or len(df) < 2:
             return None
-            
+
         try:
             prev_day = df.iloc[-2]
             curr_day = df.iloc[-1]
-            
+
             prev_close = float(prev_day['Close'])
             curr_open = float(curr_day['Open'])
             curr_low = float(curr_day['Low'])
             curr_high = float(curr_day['High'])
             curr_price = float(curr_day['Close'])
-            
+
             gap_size = curr_open - prev_close
             gap_pct = (gap_size / prev_close) * 100
-            
+
             # 門檻判定：若跳空幅度小於 0.3%，視為無跳空以過濾雜訊
             if abs(gap_pct) < 0.3:
                 return None
-                
+
             # 定義跳空區間 (Gap Zone)
             gap_zone = (min(prev_close, curr_open), max(prev_close, curr_open))
-            
+
             # 判定填補狀態 (以向上跳空為例)
             status = GapStatus.GAP_HOLDING
             is_support_confirmed = False
-            
+
             if gap_size > 0: # Up-Gap
                 if curr_low <= prev_close:
                     status = GapStatus.FULL_FILL
@@ -78,7 +78,7 @@ class GapAnalyzer:
                     status = GapStatus.PARTIAL_FILL
                 else:
                     status = GapStatus.GAP_HOLDING
-                    
+
             return GapMetrics(
                 symbol=str(df.index.name or "UNKNOWN"),
                 gap_size=round(gap_size, 2),
@@ -89,7 +89,7 @@ class GapAnalyzer:
                 intraday_low=curr_low,
                 prev_close=prev_close
             )
-            
+
         except Exception as e:
             logger.error(f"Gap 分析失敗: {e}")
             return None

@@ -9,10 +9,10 @@ async def test_calculate_skew_full():
     with patch('services.market_data_service.get_all_option_expiries', new_callable=AsyncMock) as mock_expiries, \
          patch('services.market_data_service.get_option_chain', new_callable=AsyncMock) as mock_chain, \
          patch('services.market_data_service.get_quote', new_callable=AsyncMock) as mock_quote:
-        
+
         mock_expiries.return_value = ['2026-06-19']
         mock_quote.return_value = {'c': 100.0}
-        
+
         calls_df = pd.DataFrame({
             'strike': [105, 110, 115],
             'impliedVolatility': [0.18, 0.17, 0.16],
@@ -25,17 +25,17 @@ async def test_calculate_skew_full():
             'volume': [100, 100, 100],
             'openInterest': [100, 100, 100]
         })
-        
+
         class MockChain:
             def __init__(self, calls, puts):
                 self.calls = calls
                 self.puts = puts
-        
+
         mock_chain.return_value = MockChain(calls_df, puts_df)
-        
+
         with patch('market_analysis.greeks.calculate_contract_delta') as mock_delta:
             mock_delta.side_effect = [0.35, 0.25, 0.15, -0.35, -0.25, -0.15]
-            
+
             result = await SentimentEngine.calculate_skew("AAPL")
             assert "skew" in result
             assert result["state"] != "ERROR"
@@ -44,9 +44,9 @@ async def test_calculate_skew_full():
 async def test_calculate_pcr():
     with patch('services.market_data_service.get_all_option_expiries', new_callable=AsyncMock) as mock_expiries, \
          patch('services.market_data_service.get_option_chain', new_callable=AsyncMock) as mock_chain:
-        
+
         mock_expiries.return_value = ['2026-06-19']
-        
+
         calls_df = pd.DataFrame({
             'strike': [100],
             'openInterest': [100],
@@ -57,14 +57,14 @@ async def test_calculate_pcr():
             'openInterest': [120],
             'volume': [60]
         })
-        
+
         class MockChain:
             def __init__(self, calls, puts):
                 self.calls = calls
                 self.puts = puts
-        
+
         mock_chain.return_value = MockChain(calls_df, puts_df)
-        
+
         result = await SentimentEngine.calculate_pcr("AAPL")
         assert result["pcr"] == pytest.approx(1.2)
 
@@ -72,9 +72,9 @@ async def test_calculate_pcr():
 async def test_detect_uoa():
     with patch('services.market_data_service.get_all_option_expiries', new_callable=AsyncMock) as mock_expiries, \
          patch('services.market_data_service.get_option_chain', new_callable=AsyncMock) as mock_chain:
-        
+
         mock_expiries.return_value = ['2026-06-19']
-        
+
         calls_df = pd.DataFrame({
             'strike': [110],
             'volume': [2000],
@@ -89,14 +89,14 @@ async def test_detect_uoa():
             'volume': [10],
             'openInterest': [100]
         })
-        
+
         class MockChain:
             def __init__(self, calls, puts):
                 self.calls = calls
                 self.puts = puts
-        
+
         mock_chain.return_value = MockChain(calls_df, puts_df)
-        
+
         result = await SentimentEngine.detect_uoa("AAPL")
         assert len(result) >= 1
         assert result[0]["type"] == "CALL"
@@ -106,11 +106,11 @@ def test_save_sentiment_history():
     with patch('sqlite3.connect') as mock_connect:
         mock_conn = MagicMock()
         mock_connect.return_value = mock_conn
-        
+
         # Test success
         SentimentEngine.save_sentiment_history("AAPL", "PCR", 0.8)
         mock_conn.cursor().execute.assert_called()
-        
+
         # Test failure (branch coverage)
         mock_connect.side_effect = Exception("DB Error")
         SentimentEngine.save_sentiment_history("AAPL", "PCR", 0.8)
@@ -216,10 +216,10 @@ async def test_calculate_max_pain_full():
     with patch('services.market_data_service.get_all_option_expiries', new_callable=AsyncMock) as mock_expiries, \
          patch('services.market_data_service.get_option_chain', new_callable=AsyncMock) as mock_chain, \
          patch('services.market_data_service.get_quote', new_callable=AsyncMock) as mock_quote:
-        
+
         mock_expiries.return_value = ['2026-06-19']
         mock_quote.return_value = {'c': 100.0}
-        
+
         calls_df = pd.DataFrame({
             'strike': [90, 100, 110],
             'openInterest': [10, 100, 10]
@@ -228,13 +228,13 @@ async def test_calculate_max_pain_full():
             'strike': [90, 100, 110],
             'openInterest': [10, 100, 10]
         })
-        
+
         class MockChain:
             def __init__(self, calls, puts):
                 self.calls = calls
                 self.puts = puts
-        
+
         mock_chain.return_value = MockChain(calls_df, puts_df)
-        
+
         result = await SentimentEngine.calculate_max_pain("AAPL")
         assert result["max_pain"] == 100

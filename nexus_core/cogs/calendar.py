@@ -43,9 +43,9 @@ class CalendarCog(commands.Cog):
     async def calendar(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         user_id = interaction.user.id
-        
+
         events = await calendar_service.get_portfolio_events(user_id)
-        
+
         if not events:
             return await interaction.followup.send("📭 未來 7 日內無影響持倉標的的重大事件或財報。")
 
@@ -64,7 +64,7 @@ class CalendarCog(commands.Cog):
             else:
                 field_name = f"📊 {event['symbol']} 財報發布"
                 field_value = f"⏰ TTE: `{event['tte_hours']}` 小時 | 日期: `{event['date']}`"
-            
+
             embed.add_field(name=field_name, value=field_value, inline=False)
 
         embed.set_footer(text="Calendar-Aware Guard | Nexus Seeker")
@@ -76,15 +76,15 @@ class CalendarCog(commands.Cog):
         all_watchlists = database.get_all_watchlist()
         user_id = interaction.user.id
         user_watch = [row[1] for row in all_watchlists if row[0] == user_id]
-        
+
         if not user_watch:
             return await interaction.followup.send("📭 觀察清單為空，無法執行 IV 掃描。")
 
         results = await self.vol_inspector.run_scan(user_watch, user_id)
-        
+
         # Filter for IV Rank > 80 or high risk vol
         high_iv_results = [r for r in results if r.get('iv_rank', 0) > 80 or r.get('is_high_risk_vol')]
-        
+
         if not high_iv_results:
             return await interaction.followup.send("🔎 掃描完成，未發現 IV Rank > 80% 的高波動標的。")
 
@@ -113,15 +113,15 @@ class CalendarCog(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         symbol = symbol.upper()
         user_id = interaction.user.id
-        
+
         from database.user_settings import get_full_user_context
         ctx = get_full_user_context(user_id)
-        
+
         # Get Greeks for the user's positions in this symbol
         from database.portfolio import get_user_portfolio
         portfolio = get_user_portfolio(user_id)
         symbol_positions = [p for p in portfolio if p[1] == symbol]
-        
+
         if not symbol_positions:
             return await interaction.followup.send(f"📭 您目前並未持有 `{symbol}` 的部位，無法進行模擬。")
 
@@ -129,14 +129,14 @@ class CalendarCog(commands.Cog):
         total_gamma = sum(p[10] for p in symbol_positions)
         # We might not have Vanna stored yet, need to calculate it
         # For simplicity in this CLI, we simulate impact based on Delta and assumed Vanna relation
-        
+
         # Calculate Vanna for each position
         from market_analysis.greeks import calculate_vanna, calculate_greeks
         from services import market_data_service
-        
+
         price_data = await market_data_service.get_quote(symbol)
         price = price_data.get('c', 0.0)
-        
+
         total_vanna = 0.0
         for p in symbol_positions:
             # (asset_id, sym, opt_type, strike, expiry, entry_price, quantity, stock_cost, delta, theta, gamma, category)
@@ -144,40 +144,40 @@ class CalendarCog(commands.Cog):
             opt_type = 'c' if p[2].lower() == 'call' else 'p'
             strike = p[3]
             expiry = p[4]
-            
+
             # Calculate years to expiry
             t_dt = datetime.strptime(expiry, '%Y-%m-%d')
             t_years = (t_dt - datetime.now()).days / 365.0
-            
+
             # Get current IV from market data or use placeholder
             # Real implementation would fetch from chain
             vanna = calculate_vanna(opt_type, price, strike, t_years, 0.3, 0.0)
             total_vanna += vanna * qty * 100 # Multiplier for contract size
-            
+
         from market_analysis.risk_engine import calculate_vega_adjusted_delta
         # Use vanna_weight adjustment for upcoming event simulation
         vol_change_decimal = vol_move / 100.0
         adj_delta = calculate_vega_adjusted_delta(total_delta, total_vanna, vol_change_decimal, event_multiplier=1.8)
-        
+
         delta_shift = adj_delta - total_delta
-        
+
         embed = discord.Embed(
             title=f"🎲 【 {symbol} 事件風險模擬 (What-if) 】",
             description=f"假設波動率變動 `{vol_move}%` 時，部位 Greeks 的動態偏移：",
             color=discord.Color.gold()
         )
-        
+
         embed.add_field(name="目前 Beta-Weighted Delta", value=f"`{total_delta:.2f}`", inline=True)
         embed.add_field(name="目前 Vanna (曝險變化率)", value=f"`{total_vanna:.2f}`", inline=True)
         embed.add_field(name="預期 Hidden Delta", value=f"`{adj_delta:.2f}`", inline=False)
         embed.add_field(name="Delta 偏移量", value=f"`{delta_shift:+.2f}`", inline=True)
-        
+
         exposure_shift_dollars = delta_shift * 670.0 # Assuming SPY=670 for beta-delta dollar mapping
         embed.add_field(name="等值曝險變動 (USD)", value=f"`${exposure_shift_dollars:,.2f}`", inline=True)
-        
+
         risk_status = "🔴 危險" if abs(adj_delta) > 100 else "🟢 安全"
         embed.add_field(name="風險狀態判定", value=f"**{risk_status}**", inline=False)
-        
+
         embed.set_footer(text="NRO Vanna Simulation | Nexus Seeker")
         await interaction.followup.send(embed=embed)
 

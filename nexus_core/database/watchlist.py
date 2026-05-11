@@ -55,20 +55,20 @@ def update_user_watchlist(user_id, symbol, use_llm=None):
     """
     if use_llm is None:
         return False
-        
+
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
-    
+
     # 先獲取現有 metadata
     cursor.execute("SELECT metadata FROM assets WHERE user_id = ? AND symbol = ? AND context_type = 'WATCH'", (user_id, symbol.upper()))
     row = cursor.fetchone()
     if not row:
         conn.close()
         return False
-        
+
     meta = json.loads(row[0]) if row[0] else {}
     meta['use_llm'] = bool(use_llm)
-    
+
     cursor.execute(
         "UPDATE assets SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND symbol = ? AND context_type = 'WATCH'",
         (json.dumps(meta), user_id, symbol.upper())
@@ -76,7 +76,7 @@ def update_user_watchlist(user_id, symbol, use_llm=None):
     rows_affected = cursor.rowcount
     conn.commit()
     conn.close()
-    
+
     return rows_affected > 0
 
 def get_all_watchlist():
@@ -135,19 +135,19 @@ def update_watchlist_alert_state(user_id, symbol, direction, price, timestamp):
     """記錄本次觸發的訊號狀態"""
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
-    
+
     # 先獲取現有 metadata
     cursor.execute("SELECT metadata FROM assets WHERE user_id = ? AND symbol = ? AND context_type = 'WATCH'", (user_id, symbol.upper()))
     row = cursor.fetchone()
     if not row:
         conn.close()
         return False
-        
+
     meta = json.loads(row[0]) if row[0] else {}
     meta['last_cross_dir'] = direction
     meta['last_cross_price'] = price
     meta['last_cross_time'] = timestamp
-    
+
     cursor.execute(
         "UPDATE assets SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND symbol = ? AND context_type = 'WATCH'",
         (json.dumps(meta), user_id, symbol.upper())

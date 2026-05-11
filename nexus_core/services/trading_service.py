@@ -72,7 +72,7 @@ class TradingService:
         for uid, symbols_data in user_symbols.items():
             alerts = []
             combined_symbols = symbols_data['port'].union(symbols_data['watch'])
-            
+
             for sym in combined_symbols:
                 e_date = earnings_cache.get(sym)
                 if e_date:
@@ -85,10 +85,10 @@ class TradingService:
                             'days_left': days_left
                         }
                         alerts.append(item)
-            
+
             # 🚀 根據距離財報天數升冪排序 (0天優先)
             alerts.sort(key=lambda x: x['days_left'])
-            
+
             results[uid] = {
                 'alerts': alerts,
                 'scanned_symbols': sorted(combined_symbols)
@@ -100,28 +100,28 @@ class TradingService:
         4-Stage Validation Pipeline: Macro -> Alpha -> Risk -> Financials.
         """
         strategy = data.get('strategy', '')
-        
+
         # --- Stage 1: Macro (VIX Battle Ladder & Regime) ---
         vix_allow = data.get('vix_allow_signal', True)
         if "STO" in strategy and not vix_allow:
             return False, f"MACRO_REJECT: VIX {data.get('vix_spot'):.1f} tier '{data.get('vix_tier_name')}' restricts STO entry."
-        
+
         # --- Stage 2: Alpha (AROC & Signal Strength) ---
         aroc = data.get('aroc', 0.0)
         if "STO" in strategy and aroc < 15.0:
             return False, f"STO 訊號遭攔截：低於 15% AROC 閾值 (目前: {aroc:.1f}%)"
         if "BTO" in strategy and aroc < 30.0:
             return False, f"ALPHA_REJECT: BTO AROC {aroc:.1f}% < 30.0% 閾值。"
-        
+
         # --- Stage 3: Risk (NRO & Kelly Sizing) ---
         if data.get('safe_qty', 0) <= 0:
             return False, "RISK_REJECT: NRO optimization determined zero safe quantity (Risk budget exceeded)."
-            
+
         # --- Stage 4: Financials (Runway & Survival) ---
         # If runway < 180 days, reject any non-hedging trades that increase margin
         # (Actual implementation will use the runway helper in Phase 4)
         pass
-            
+
         return True, "APPROVED"
 
     async def run_market_scan(self, is_auto: bool = True, triggered_by_id: Optional[int] = None) -> Dict[int, List[Dict[str, Any]]]:
@@ -159,9 +159,9 @@ class TradingService:
         for uid, sym, use_llm in all_watchlists:
             cost = holding_map.get((uid, sym), 0.0)
             scan_targets.append((sym, cost, use_llm))
-            
+
         unique_targets = list(set(scan_targets))
-        
+
         async def _scan_single_target(target):
             sym, stock_cost, use_llm = target
             # ... (rest of scan logic)
@@ -190,10 +190,10 @@ class TradingService:
                 if not df_hist_1h.empty:
                     ema_8_sig = market_math.detect_ema_signals(df_hist_1h, window=8)
                     ema_21_sig = market_math.detect_ema_signals(df_hist_1h, window=21)
-                    
+
                     # 整合訊號至結果字典
                     res['ema_signals'] = [sig for sig in [ema_8_sig, ema_21_sig] if sig]
-                    
+
                     # 如果有 EMA 訊號，強制標註為「高價值追蹤」
                     if res['ema_signals']:
                         res['is_priority_alert'] = True
@@ -216,12 +216,12 @@ class TradingService:
                 if is_option_valid or has_psq_signal:
                     # 併行獲取新聞 (Finnhub) 與 Reddit (從 KV 快取讀取)
                     news_task = news_service.fetch_recent_news(sym)
-                    
+
                     from database.cache import get_kv_cache
                     reddit_text = get_kv_cache(f"reddit_sentiment_{sym}") or "暫無快取情緒資料 (等待每日更新)。"
-                    
+
                     news_text = await news_task
-                    
+
                     if use_llm:
                         strategy_text = res.get('strategy', 'PowerSqueeze Trigger')
                         ai_verdict = await llm_service.evaluate_trade_risk(sym, strategy_text, news_text, reddit_text)
@@ -230,9 +230,9 @@ class TradingService:
                     else:
                         res['ai_decision'] = 'SKIP'
                         res['ai_reasoning'] = '未啟用 LLM 語意風控'
-                    
+
                     res.update({'news_text': news_text, 'reddit_text': reddit_text})
-                
+
                 return target, res
             except Exception as e:
                 logger.error(f"掃描標的 {sym} 失敗: {e}")
@@ -248,7 +248,7 @@ class TradingService:
             results_list.extend(batch_results)
             if i + batch_size < len(unique_targets):
                 await asyncio.sleep(0.5)  # 給 API 一點緩衝，並釋放池空間
-        
+
         scan_results = {target: res for target, res in results_list if res is not None}
 
         if not scan_results:
@@ -262,11 +262,11 @@ class TradingService:
 
         for uid, watchlist_items in user_watchlists.items():
             valid_user_alerts = []
-            
+
             # 獲取該使用者的動態風險參數與目前持倉統計
             # 🚀 [Resource Isolation] 確保 Greeks 數據最新，避免使用舊 Delta 判斷避險
             await portfolio.refresh_portfolio_greeks(uid)
-            
+
             user_context = database.get_full_user_context(uid)
             user_capital = user_context.capital
             user_risk_pref = user_context.risk_limit
@@ -290,26 +290,26 @@ class TradingService:
                         'sto_delta_cap': vix_tier.get('sto_delta_cap', 0.0),
                         'sizing_multiplier': vix_tier.get('sizing_multiplier', 1.0),
                     }
-                    
+
                     is_option_valid = base_data.get('is_option_valid', False)
                     psq_result = base_data.get('psq_result')
                     has_psq_signal = psq_result and (getattr(psq_result, 'is_breakout_long', False) or psq_result.is_near_support)
-                    
+
                     if not is_option_valid and not has_psq_signal:
                         continue # 此標的沒有任何觸發訊號
-                    
+
                     # === 1. 選擇權策略分支 ===
                     if user_context.enable_option_alerts and is_option_valid:
                         opt_data = base_data.copy()
                         opt_data['alert_type'] = 'OPTION'
-                        
+
                         # 🚀 整合核心：期權情緒掃描
                         from market_analysis.sentiment_engine import SentimentEngine
                         skew_data = await SentimentEngine.calculate_skew(symbol)
                         pcr_data = await SentimentEngine.calculate_pcr(symbol)
                         pcr_val = pcr_data.get('pcr', 0.8)
                         skew_val = skew_data.get('skew', 0.0)
-                        
+
                         # 🚀 整合核心：注入宏觀背景與日曆事件進行風險優化
                         from services.calendar_service import calendar_service
                         earnings_info = await calendar_service.get_symbol_earnings(symbol)
@@ -363,7 +363,7 @@ class TradingService:
                                 if unlock_advice:
                                     opt_data['hedge_unlock'] = unlock_advice
                                 break
-                        
+
                         # 🚀 自動回補避險 (Auto Re-Hedging)
                         now_ts = int(time.time())
                         if now_ts - user_context.last_rehedge_alert_time > 3600:
@@ -381,7 +381,7 @@ class TradingService:
                         psq_data = base_data.copy()
                         psq_data['alert_type'] = 'PSQ'
                         valid_user_alerts.append(psq_data)
-            
+
             if valid_user_alerts:
                 user_alerts_results[uid] = valid_user_alerts
 
@@ -395,25 +395,25 @@ class TradingService:
         sym = data['symbol']
         strategy = data.get('strategy', '')
         safe_qty = data.get('safe_qty', 0)
-        
+
         # VIX 戰情階梯 VTR 建倉閘門
         vix_spot_val = data.get('vix_spot')
         current_vix_tier = get_vix_tier(vix_spot_val)
         if not current_vix_tier.get('vtr_entry_allowed', True):
             logger.info(f"[VTR] 建倉已被 VIX 階梯 '{current_vix_tier['name']}' 放行禁止，略過 {sym}")
             return
-        
+
         if safe_qty > 0:
             try:
                 opt_t = 'put' if 'PUT' in strategy else 'call'
                 qty = -safe_qty if 'STO' in strategy else safe_qty
-                
+
                 # 自動判定類別：Short SPY 或 BTO SPY Put 為 HEDGE
                 trade_category = 'SPECULATIVE'
                 if sym == 'SPY':
                     if qty < 0 or (opt_t == 'put' and qty > 0):
                         trade_category = 'HEDGE'
-                        
+
                 await self.vtr_engine.record_virtual_entry(
                     user_id=uid,
                     symbol=sym,
@@ -444,7 +444,7 @@ class TradingService:
             # 執行管理與轉倉
             await self.vtr_engine.manage_virtual_positions()
             await self.vtr_engine.execute_virtual_roll()
-            
+
             # 重新檢查交易列表
             after_trades = await asyncio.to_thread(get_all_open_virtual_trades)
             after_ids = {t['id'] for t in after_trades}
@@ -456,23 +456,23 @@ class TradingService:
                 trade = cand['trade']
                 uid = trade['user_id']
                 sym = trade['symbol']
-                
+
                 quote = await market_data_service.get_quote(sym)
                 stock_price = quote.get('c', 0.0) if quote else 0.0
                 if stock_price == 0.0: continue
-                
+
                 # 模擬演進邏輯
                 # 假設目標 CC Strike 為 5% OTM，權利金為 2%
                 target_cc_strike = round(stock_price * 1.05, 1)
                 est_premium = round(stock_price * 0.02, 2)
-                
+
                 trans_result = simulate_cc_transition(
                     current_option_pnl=cand['pnl_usd'],
                     current_stock_price=stock_price,
                     target_cc_strike=target_cc_strike,
                     target_cc_premium=est_premium
                 )
-                
+
                 results.append({
                     'uid': uid,
                     'type': 'TRANSITION_SUGGESTION',
@@ -492,7 +492,7 @@ class TradingService:
                 for tid in closed_ids:
                     trade_info = next((t for t in all_history if t['id'] == tid), None)
                     if not trade_info: continue
-                    
+
                     uid = trade_info['user_id']
                     user_context = database.get_full_user_context(uid)
                     current_total_delta = user_context.total_weighted_delta
@@ -514,7 +514,7 @@ class TradingService:
                     })
         except Exception as e:
             logger.error(f"VTR monitoring service error: {e}")
-        
+
         return results
 
     async def audit_real_portfolio_risk(self) -> List[Dict[str, Any]]:
@@ -537,7 +537,7 @@ class TradingService:
 
         for uid, rows in user_ports.items():
             user_ctx = database.get_full_user_context(uid)
-            
+
             # 1. 檢查 Gamma 脆性 (Fragility Guard)
             if user_ctx.total_gamma < -20.0:
                 results.append({
@@ -551,34 +551,34 @@ class TradingService:
             # row: (symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost, weighted_delta, theta, gamma, trade_category)
             for row in rows:
                 sym, opt_t, strike, exp, entry, qty, cost, w_delta, theta, gamma, *_ = row
-                
+
                 # 僅針對買方 (quantity > 0)
                 if qty > 0 and w_delta != 0:
                     exp_date = datetime.strptime(exp, '%Y-%m-%d').date()
                     dte = (exp_date - datetime.now().date()).days
-                    
+
                     # 獲取標的現價以進行 Greeks 換算
                     quote = await market_data_service.get_quote(sym)
                     curr_price = quote.get('c', 0.0) if quote else 0.0
                     if curr_price <= 0: continue
-                    
+
                     # 換算回局部合約 Delta (Local Delta)
                     # 公式：delta = w_delta / (qty * 100 * beta * (price / spy_price))
                     # 此處簡化處理，利用 w_delta 與 qty 的關係進行臨界點判定
                     # 在 NRO 模型中，若 w_delta / (qty * 100) 接近 beta * (price / spy_price)，則 local delta 趨近於 1
-                    
+
                     from market_analysis.portfolio import calculate_beta
                     beta = await calculate_beta(sym)
-                    
+
                     # 精確局部 Delta 估算
                     denominator = (qty * 100 * beta * (curr_price / spy_price))
                     local_delta = abs(w_delta / denominator) if denominator != 0 else 0
-                    
+
                     # Profit Lock 觸發條件：Delta >= 0.85 且 PnL > 150% 且 DTE <= 21
                     # 獲取即時 Mid 以計算 PnL
                     mid, _ = await portfolio.get_option_chain_mid_iv(sym, exp, strike, opt_t)
                     pnl_pct = ((mid - entry) / entry) if mid > 0 else 0
-                    
+
                     if (local_delta >= 0.85 or pnl_pct > 1.5) and dte <= 21:
                          results.append({
                             'uid': uid,
@@ -600,7 +600,7 @@ class TradingService:
         if not all_portfolios:
             logger.info("盤後報告略過：無任何持倉資料。")
             return {}
-        
+
         user_ports = {}
         for row in all_portfolios:
             uid = row[0]

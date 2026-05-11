@@ -29,7 +29,7 @@ class GhostTrader:
             contract = opts[opts['strike'] == strike]
             if contract.empty:
                 return None, None
-            
+
             bid, ask, last, iv = contract['bid'].iloc[0], contract['ask'].iloc[0], contract['lastPrice'].iloc[0], contract['impliedVolatility'].iloc[0]
             if pd.isna(bid) or pd.isna(ask) or bid == 0 or ask == 0:
                 mid = last
@@ -46,10 +46,10 @@ class GhostTrader:
         if mid is None:
             logger.warning(f"VTR 建倉失敗：找不到 {symbol} {expiry} {strike} {opt_type} 的報價")
             return None
-            
+
         slippage_factor = 1.01 if quantity > 0 else 0.99
         entry_price = mid * slippage_factor
-        
+
         trade_id = await asyncio.to_thread(
             add_virtual_trade, user_id=user_id, symbol=symbol, opt_type=opt_type, strike=strike, expiry=expiry, entry_price=entry_price, quantity=quantity, weighted_delta=weighted_delta, theta=theta, gamma=gamma, tags=tags, parent_trade_id=parent_trade_id, trade_category=trade_category
         )
@@ -66,7 +66,7 @@ class GhostTrader:
         trade_id, symbol, opt_type, strike, expiry, entry_price, quantity = trade['id'], trade['symbol'], trade['opt_type'], trade['strike'], trade['expiry'], trade['entry_price'], trade['quantity']
         exp_date = datetime.datetime.strptime(expiry, '%Y-%m-%d').date()
         dte = (exp_date - self.today).days
-        
+
         if dte <= 21:
             # 基本 DTE 檢查，如果是賣方則強制平倉，買方則由下方的 DITM 邏輯進一步判斷或在此平倉
             if quantity < 0:
@@ -80,15 +80,15 @@ class GhostTrader:
         if quantity > 0:
             quote = await market_data_service.get_quote(symbol)
             current_stock_price = quote.get('c') if quote else None
-            
+
             if current_stock_price and iv and iv > 0:
                 t_years = max(dte, 1) / 365.0
                 try:
                     current_delta = delta(('c' if opt_type == 'call' else 'p'), current_stock_price, strike, t_years, RISK_FREE_RATE, iv, 0.0)
                     pnl_pct = (mid - entry_price) / entry_price
-                    
+
                     ditm_action = evaluate_ditm_defense(quantity, current_delta, dte, pnl_pct)
-                    
+
                     if ditm_action == DITMDefenseAction.DEFENSIVE_CLOSE:
                         await self._close_position(trade, f"🚨 DITM 喪失凸性防禦 ｜ Delta:{current_delta:.2f}, PnL:{pnl_pct*100:.1f}%", mid)
                         return
@@ -99,13 +99,13 @@ class GhostTrader:
                         new_contract = await self._find_target_contract(symbol, opt_type, current_stock_price, target_dte=(30, 45), target_delta=0.50)
                         if new_contract:
                             await self.record_virtual_entry(
-                                user_id=trade['user_id'], symbol=symbol, opt_type=opt_type, strike=new_contract['strike'], expiry=new_contract['expiry'], 
+                                user_id=trade['user_id'], symbol=symbol, opt_type=opt_type, strike=new_contract['strike'], expiry=new_contract['expiry'],
                                 quantity=quantity, tags=["ditm_roll", f"from:{trade_id}"], parent_trade_id=trade_id
                             )
                         return
                 except Exception as e:
                     logger.error(f"DITM 檢查失敗 {symbol}: {e}")
-            
+
         if quantity < 0:
             pnl_pct = (entry_price - mid) / entry_price
             if pnl_pct >= 0.50: await self._close_position(trade, "Seller Target Reached (>=50%)", mid)
@@ -114,7 +114,7 @@ class GhostTrader:
             ema21 = await market_data_service.get_ema(symbol, 21)
             quote = await market_data_service.get_quote(symbol)
             current_price = quote.get('c') if quote else None
-            
+
             if ema21 is not None and current_price is not None:
                 if (opt_type == 'call' and current_price < ema21) or (opt_type == 'put' and current_price > ema21):
                     await self._close_position(trade, f"🚨 動能平倉警報 ｜ 價格{'跌破' if opt_type=='call' else '突破'} EMA 21", mid)
@@ -129,19 +129,19 @@ class GhostTrader:
         if exit_price is None:
             exit_price, _ = await self.get_option_mid_price(trade['symbol'], trade['opt_type'], trade['strike'], trade['expiry'])
             if exit_price is None: return
-                
+
         actual_exit_price = exit_price * (0.99 if trade['quantity'] > 0 else 1.01)
         pnl = (actual_exit_price - trade['entry_price']) * trade['quantity'] * 100
-        
+
         # 紀錄原因至 tags
         updated_tags = trade.get('tags', [])
         if not isinstance(updated_tags, list):
             updated_tags = []
         updated_tags.append(f"exit_reason:{reason}")
-        
+
         # 執行主平倉邏輯
         success = await asyncio.to_thread(close_virtual_trade, trade['id'], actual_exit_price, status=status, pnl=pnl)
-        
+
         # 由於 close_virtual_trade 不支援 tags 更新，此處手動補償
         if success:
             import config
@@ -152,7 +152,7 @@ class GhostTrader:
                     conn.commit()
             except Exception as e:
                 logger.error(f"VTR 更新 tags 失敗: {e}")
-                
+
             logger.info(f"🔴 VTR 自動平倉 [{trade['id']}] {trade['symbol']} {trade['opt_type']} {trade['strike']} 原因:{reason} Exit:{actual_exit_price:.2f}")
 
     async def get_transition_candidates(self):
@@ -165,10 +165,10 @@ class GhostTrader:
         for trade in open_trades:
             if trade.get('trade_category') != 'SPECULATIVE' or trade['quantity'] <= 0:
                 continue
-            
+
             mid, _ = await self.get_option_mid_price(trade['symbol'], trade['opt_type'], trade['strike'], trade['expiry'])
             if mid is None: continue
-            
+
             pnl_pct = (mid - trade['entry_price']) / trade['entry_price']
             if pnl_pct >= 0.30: # 30% 獲利門檻
                 candidates.append({
@@ -185,17 +185,17 @@ class GhostTrader:
         for trade in open_trades:
             if trade['quantity'] >= 0: continue
             symbol, opt_type, strike, expiry = trade['symbol'], trade['opt_type'], trade['strike'], trade['expiry']
-            
+
             quote = await market_data_service.get_quote(symbol)
             if not quote or 'c' not in quote: continue
             current_stock_price = quote['c']
-            
+
             mid, iv = await self.get_option_mid_price(symbol, opt_type, strike, expiry)
             if mid is None or iv is None or iv <= 0: continue
-                
+
             exp_date = datetime.datetime.strptime(expiry, '%Y-%m-%d').date()
             t_years = max((exp_date - self.today).days, 1) / 365.0
-            
+
             try:
                 opt_delta = delta(('c' if opt_type == 'call' else 'p'), current_stock_price, strike, t_years, RISK_FREE_RATE, iv, 0.0)
                 if abs(opt_delta) >= 0.40:
@@ -208,7 +208,7 @@ class GhostTrader:
         """平掉舊部位，尋找並開啟新部位 (Async)"""
         await self._close_position(old_trade, reason="Auto-Roll (Delta >= 0.40)", exit_price=None, status='ROLLED')
         new_contract = await self._find_target_contract(old_trade['symbol'], old_trade['opt_type'], current_stock_price, target_dte=(30, 45), target_delta=0.20)
-        
+
         if new_contract:
             await self.record_virtual_entry(
                 user_id=old_trade['user_id'], symbol=old_trade['symbol'], opt_type=old_trade['opt_type'], strike=new_contract['strike'], expiry=new_contract['expiry'], quantity=old_trade['quantity'], tags=["rolled_from:" + str(old_trade['id'])], parent_trade_id=old_trade['id']
@@ -218,22 +218,22 @@ class GhostTrader:
         """尋找符合 DTE 與 Delta 條件的合約 (Async)"""
         ticker = yf.Ticker(symbol)
         expirations = await asyncio.to_thread(lambda: ticker.options)
-        
+
         valid_expiries = []
         for exp in expirations:
             dte = (datetime.datetime.strptime(exp, '%Y-%m-%d').date() - self.today).days
             if target_dte[0] <= dte <= target_dte[1]:
                 valid_expiries.append((exp, dte))
         if not valid_expiries: return None
-            
+
         best_exp = min(valid_expiries, key=lambda x: abs(x[1] - (sum(target_dte) / 2.0)))[0]
         chain = await asyncio.to_thread(ticker.option_chain, best_exp)
         opts = chain.calls if opt_type == 'call' else chain.puts
-        
+
         best_strike, min_diff = None, 999
         t_years = max((datetime.datetime.strptime(best_exp, '%Y-%m-%d').date() - self.today).days, 1) / 365.0
         flag = 'c' if opt_type == 'call' else 'p'
-        
+
         for _, row in opts.iterrows():
             strike, iv = row['strike'], row['impliedVolatility']
             if iv <= 0: continue
@@ -243,7 +243,7 @@ class GhostTrader:
                 if diff < min_diff:
                     min_diff, best_strike = diff, strike
             except: pass
-                
+
         if best_strike: return {'expiry': best_exp, 'strike': best_strike}
         return None
 

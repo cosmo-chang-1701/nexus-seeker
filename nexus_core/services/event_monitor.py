@@ -28,19 +28,19 @@ class EventMonitor:
             pass
 
         user_ids = await asyncio.to_thread(get_all_user_ids)
-        
+
         for uid in user_ids:
             try:
                 # 1. Fetch events affecting this user
                 events = await calendar_service.get_portfolio_events(uid, days=3)
-                
+
                 # 2. Filter for events within the next 24-72 hours that haven't been alerted
                 # For simplicity, we alert if TTE < 48h
                 critical_events = [e for e in events if 0 < e['tte_hours'] < 48.0]
-                
+
                 if critical_events:
                     await self._send_event_alert(uid, critical_events)
-                    
+
             except Exception as e:
                 logger.error(f"Error checking events for user {uid}: {e}")
 
@@ -49,14 +49,14 @@ class EventMonitor:
         Send a proactive hedging alert based on upcoming events.
         """
         import discord
-        
+
         embed = discord.Embed(
             title="🛡️ 【 預警：重大事件即時防護 】",
             description="偵測到您的持倉標的即將迎來重大波動事件，請留意風險對沖。",
             color=discord.Color.dark_red(),
             timestamp=datetime.now()
         )
-        
+
         for event in events:
             if event['type'] == 'ECONOMIC':
                 name = f"🔴 經濟數據: {event['event']}"
@@ -64,9 +64,9 @@ class EventMonitor:
             else:
                 name = f"📊 財報預警: {event['symbol']}"
                 value = f"距離發布: `{event['tte_hours']}` 小時 \n**NRO 指令**: 已啟動 IV Crush 防護機制。"
-            
+
             embed.add_field(name=name, value=value, inline=False)
-            
+
         embed.set_footer(text="Proactive Event Monitor | Nexus Seeker")
         await self.bot.queue_dm(user_id, embed=embed)
 

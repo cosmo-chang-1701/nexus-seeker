@@ -22,7 +22,7 @@ def _calculate_technical_indicators(df):
     try:
         if df.empty or len(df) < 50:
             return None
-            
+
         df['Log_Ret'] = np.log(df['Close'] / df['Close'].shift(1))
         df['HV_20'] = df['Log_Ret'].rolling(window=20).std() * np.sqrt(252)
         hv_min = df['HV_20'].min()
@@ -35,7 +35,7 @@ def _calculate_technical_indicators(df):
         df.ta.rsi(length=14, append=True)
         df.ta.sma(length=20, append=True)
         df.ta.macd(fast=12, slow=26, signal=9, append=True)
-        
+
         latest = df.iloc[-1]
         return {
             'price': latest.get('Close'),
@@ -86,7 +86,7 @@ async def _calculate_mmm(ticker, price, today, symbol, is_etf):
         if isinstance(earnings_date, datetime):
             earnings_date = earnings_date.date()
         days_to_earnings = (earnings_date - today).days
-        
+
         if 0 <= days_to_earnings <= 14:
             target_exp_for_mmm = None
             try:
@@ -96,7 +96,7 @@ async def _calculate_mmm(ticker, price, today, symbol, is_etf):
                         break
             except Exception:
                 pass
-            
+
             if target_exp_for_mmm:
                 try:
                     chain_mmm = ticker.option_chain(target_exp_for_mmm)
@@ -115,7 +115,7 @@ async def _calculate_mmm(ticker, price, today, symbol, is_etf):
                         atm_put = puts_mmm.loc[atm_put_idx]
                         p_bid, p_ask, p_last = atm_put.get('bid', 0.0), atm_put.get('ask', 0.0), atm_put.get('lastPrice', 0.0)
                         p_price = (p_bid + p_ask)/2 if (p_bid > 0 and p_ask > 0) else p_last
-                    
+
                     if price > 0:
                         mmm_pct = ((c_price + p_price) / price) * 100
                         safe_lower = price * (1 - mmm_pct / 100)
@@ -129,36 +129,36 @@ def _calculate_term_structure(ticker, expirations, price, today):
     """計算波動率期限結構"""
     front_date, back_date = None, None
     front_diff, back_diff = 9999, 9999
-    
+
     for exp in expirations:
         days_to_expiry = (datetime.strptime(exp, '%Y-%m-%d').date() - today).days
         if abs(days_to_expiry - 30) < front_diff:
             front_diff, front_date = abs(days_to_expiry - 30), exp
         if abs(days_to_expiry - 60) < back_diff:
             back_diff, back_date = abs(days_to_expiry - 60), exp
-            
+
     ts_ratio, ts_state = 1.0, "平滑 (Flat)"
     if front_date and back_date and front_date != back_date:
         try:
             front_chain = ticker.option_chain(front_date).puts
             back_chain = ticker.option_chain(back_date).puts
-            
+
             if not front_chain.empty and not back_chain.empty:
                 front_iv_idx = (front_chain['strike'] - price).abs().idxmin()
                 back_iv_idx = (back_chain['strike'] - price).abs().idxmin()
                 front_iv = front_chain.loc[front_iv_idx].get('impliedVolatility', 0.0)
                 back_iv = back_chain.loc[back_iv_idx].get('impliedVolatility', 0.0)
-                
+
                 if back_iv > 0.01:
                     ts_ratio = front_iv / back_iv
-                
+
                 if ts_ratio >= 1.05:
                     ts_state = "🚨 恐慌 (Backwardation)"
                 elif ts_ratio <= 0.95:
                     ts_state = "🌊 正常 (Contango)"
         except Exception:
             pass
-            
+
     return ts_ratio, ts_state
 
 def _find_target_expiry(expirations, today, min_dte, max_dte):
@@ -175,18 +175,18 @@ def _get_best_contract_data(ticker, target_expiry_date, opt_type, target_delta, 
         opt_chain = ticker.option_chain(target_expiry_date)
         chain_data = opt_chain.calls if opt_type == "call" else opt_chain.puts
         chain_data = chain_data[chain_data['volume'] > 0].copy()
-        
+
         if chain_data.empty:
             return None, None
 
         t_years = max(days_to_expiry, 1) / 365.0
         flag = 'c' if opt_type == "call" else 'p'
         chain_data['bs_delta'] = chain_data.apply(
-            lambda row: calculate_contract_delta(row, price, t_years, flag, q=dividend_yield), 
+            lambda row: calculate_contract_delta(row, price, t_years, flag, q=dividend_yield),
             axis=1
         )
         chain_data = chain_data[chain_data['bs_delta'] != 0.0].copy()
-        
+
         if chain_data.empty:
             return None, None
 
@@ -201,27 +201,27 @@ def _calculate_vertical_skew(opt_chain, price, days_to_expiry, strategy, symbol,
     skew_state = "⚖️ 中性 (Neutral)"
     t_years = max(days_to_expiry, 1) / 365.0
     is_high_tail_risk = False
-    
+
     try:
         calls_skew = opt_chain.calls[opt_chain.calls['volume'] > 0].copy()
         puts_skew = opt_chain.puts[opt_chain.puts['volume'] > 0].copy()
-        
+
         if not calls_skew.empty and not puts_skew.empty:
             calls_skew['bs_delta'] = calls_skew.apply(lambda row: calculate_contract_delta(row, price, t_years, 'c', q=dividend_yield), axis=1)
             puts_skew['bs_delta'] = puts_skew.apply(lambda row: calculate_contract_delta(row, price, t_years, 'p', q=dividend_yield), axis=1)
-            
+
             call_25_idx = (calls_skew['bs_delta'] - 0.25).abs().idxmin()
             put_25_idx = (puts_skew['bs_delta'] - (-0.25)).abs().idxmin()
             call_25 = calls_skew.loc[[call_25_idx]]
             put_25 = puts_skew.loc[[put_25_idx]]
-            
+
             if not call_25.empty and not put_25.empty:
                 iv_call_25 = call_25.iloc[0].get('impliedVolatility', 0.0)
                 iv_put_25 = put_25.iloc[0].get('impliedVolatility', 0.0)
-                
+
                 if iv_call_25 > 0.01:
                     vertical_skew = iv_put_25 / iv_call_25
-                    
+
                 if vertical_skew >= 1.30:
                     skew_state = "⚠️ 嚴重左偏 (高尾部風險)"
                     if vertical_skew >= 1.50:
@@ -231,7 +231,7 @@ def _calculate_vertical_skew(opt_chain, price, days_to_expiry, strategy, symbol,
                     skew_state = "🚀 右偏 (看漲狂熱)"
     except Exception as e:
         logger.error(f"[{symbol}] 垂直偏態運算錯誤: {e}")
-        
+
     return vertical_skew, skew_state, is_high_tail_risk
 
 def _evaluate_option_liquidity(option_data: dict) -> dict:
@@ -252,14 +252,14 @@ def _evaluate_option_liquidity(option_data: dict) -> dict:
 
     if oi < 100 or volume < 10:
         return {
-            "status": "🔴 極差", 
-            "embed_msg": f"流動性枯竭 (OI: {oi}, Vol: {volume})，滑價風險極高", 
+            "status": "🔴 極差",
+            "embed_msg": f"流動性枯竭 (OI: {oi}, Vol: {volume})，滑價風險極高",
             "is_pass": False
         }
 
-    max_rel_spread = 0.10 
-    if dte > 90: max_rel_spread += 0.05 
-    if delta > 0.80 or delta < 0.15: max_rel_spread += 0.05 
+    max_rel_spread = 0.10
+    if dte > 90: max_rel_spread += 0.05
+    if delta > 0.80 or delta < 0.15: max_rel_spread += 0.05
 
     is_spread_valid = True
     if ask < 1.00:
@@ -269,8 +269,8 @@ def _evaluate_option_liquidity(option_data: dict) -> dict:
 
     if not is_spread_valid:
         return {
-            "status": "🔴 警示", 
-            "embed_msg": f"價差過寬 (Spread: {rel_spread:.1%}, 絕對值: ${abs_spread:.2f})", 
+            "status": "🔴 警示",
+            "embed_msg": f"價差過寬 (Spread: {rel_spread:.1%}, 絕對值: ${abs_spread:.2f})",
             "is_pass": False
         }
 
@@ -293,28 +293,28 @@ def _validate_risk_and_liquidity(strategy, best_contract, price, hv_current, day
     oi = 0 if pd.isna(oi) else int(oi)
     volume = best_contract.get('volume', 0)
     volume = 0 if pd.isna(volume) else int(volume)
-    
+
     option_data_for_liq = {'bid': bid, 'ask': ask, 'oi': oi, 'volume': volume, 'dte': days_to_expiry, 'delta': delta}
     liq_eval = _evaluate_option_liquidity(option_data_for_liq)
-    
+
     if not liq_eval['is_pass']:
         logger.info(f"[{symbol}] 剔除: {liq_eval['status']} - {liq_eval['embed_msg']}")
         return None
-        
+
     vrp = iv - hv_current
     if strategy in ["STO_PUT", "STO_CALL"]:
         if vrp < 0:
             logger.info(f"[{symbol}] 剔除: 賣方策略但 VRP {vrp*100:.2f}% < 0")
             return None
     elif strategy in ["BTO_PUT", "BTO_CALL"]:
-        if vrp > 0.03: 
+        if vrp > 0.03:
             logger.info(f"[{symbol}] 剔除: 買方策略但 VRP 高達 {vrp*100:.2f}%")
             return None
 
     expected_move = price * iv * math.sqrt(max(days_to_expiry, 1) / 365.0)
     em_lower = price - expected_move
     em_upper = price + expected_move
-    
+
     if strategy == "STO_PUT":
         breakeven = strike - bid
         if breakeven > em_lower:
@@ -331,7 +331,7 @@ def _validate_risk_and_liquidity(strategy, best_contract, price, hv_current, day
     spread_ratio = (spread / mid_price) * 100 if mid_price > 0 else 999.0
 
     suggested_hedge_strike = em_upper if strategy == "BTO_CALL" else (em_lower if strategy == "BTO_PUT" else None)
-            
+
     return {
         "bid": bid, "ask": ask, "spread": spread, "spread_ratio": spread_ratio,
         "vrp": vrp, "expected_move": expected_move, "em_lower": em_lower, "em_upper": em_upper,
@@ -354,18 +354,18 @@ def apply_vix_ladder(vix_spot: float) -> dict:
 
 def _calculate_sizing(strategy, best_contract, days_to_expiry, expected_move=0.0, price=0.0, stock_cost=0.0, kelly_fraction=0.5, kelly_fraction_override: Optional[float] = None):
     """計算資金效率與倉位大小
-    
+
     Args:
         kelly_fraction_override: 若非 None，則覆寫 kelly_fraction（用於 VIX All-in 階梯）。
     """
     effective_kelly = kelly_fraction_override if kelly_fraction_override is not None else kelly_fraction
     aroc, alloc_pct, margin_per_contract = 0.0, 0.0, 0.0
-    
+
     bid = best_contract.get('bid', 0.0)
     ask = best_contract.get('ask', 0.0)
     strike = best_contract.get('strike', 0.0)
     delta = best_contract.get('bs_delta', 0.0)
-    
+
     if strategy in ["STO_PUT", "STO_CALL"]:
         margin_required = (strike - bid) if strategy == "STO_PUT" else (stock_cost if stock_cost > 0.0 else max((0.20 * price) - max(0, strike - price) + bid, 0.10 * price + bid) if price > 0 else strike)
         if margin_required > 0:
@@ -389,14 +389,14 @@ def _calculate_sizing(strategy, best_contract, days_to_expiry, expected_move=0.0
                     kelly_f = (p * b - (1.0 - p)) / b
                     alloc_pct = min(max(kelly_f * effective_kelly, 0.0), 0.03)
             margin_per_contract = premium * 100
-                    
+
     return aroc, alloc_pct, margin_per_contract
 
 async def evaluate_ema_trend(symbol: str, current_price: float) -> dict:
     """評估 EMA 8/21 趨勢狀態。"""
     ema8 = await market_data_service.get_ema(symbol, 8)
     ema21 = await market_data_service.get_ema(symbol, 21)
-    
+
     if not ema8 or not ema21:
         return {"trend": "UNKNOWN", "score": 0, "ema_8": 0.0, "ema_21": 0.0, "distance_from_21": 0.0}
 
@@ -428,7 +428,7 @@ def detect_ema_signals(df: pd.DataFrame, window: int = 21, threshold: float = 0.
 
 async def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None, vix_spot: Optional[float] = None):
     """掃描技術指標、波動率、偏態、Greeks 等進行核心分析。
-    
+
     Args:
         vix_spot: VIX 即時價格。用於 VIX 戰情階梯判定（Delta 上限、倉位縮放、訊號閘門）。
     """
@@ -446,7 +446,7 @@ async def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None, vi
         else: dividend_yield = await market_data_service.get_dividend_yield(symbol)
 
         if df_spy is None: df_spy = await market_data_service.get_history_df("SPY", "1y")
-        
+
         if df_spy.empty:
             logger.warning(f"無法取得 SPY 基準資料，{symbol} 改用 beta=1.0 fallback")
             spy_price_val = spy_price if spy_price is not None and spy_price > 0 else price
@@ -457,7 +457,7 @@ async def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None, vi
 
         indicators = _calculate_technical_indicators(df)
         if indicators is None: return None
-        price = indicators['price'] 
+        price = indicators['price']
 
         strategy, opt_type, target_delta, min_dte, max_dte = _determine_strategy_signal(indicators)
         if not strategy: return None
@@ -483,7 +483,7 @@ async def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None, vi
         expirations = await asyncio.to_thread(lambda: ticker.options)
         if not expirations: return None
         today = datetime.now().date()
-        
+
         target_expiry_date, days_to_expiry = _find_target_expiry(expirations, today, min_dte, max_dte)
         if not target_expiry_date: return None
 
@@ -507,23 +507,23 @@ async def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None, vi
         # ------------------ VIX306 Advanced Volatility Filters ------------------
         vix_vts_data = await market_data_service.get_vix_term_structure()
         vix_zscores = await market_data_service.get_vix_zscores()
-        
+
         vts_ratio = vix_vts_data.get('vts_ratio', 1.0)
         z30 = vix_zscores.get('zscore_30', 0.0)
         z60 = vix_zscores.get('zscore_60', 0.0)
-        
+
         # Filter #12: VTS Filter
         if strategy == "STO_PUT" and vts_ratio >= 1.0:
             logger.info(f"[{symbol}] 剔除: VIX 目前處於逆價差 Backwardation (VTS >= 1.0)，市場風險極高")
             return None
-            
+
         # Filter #14: Regime Alignment
         vix_trending_up = (z30 > 0.5 and z60 > 0.0)
         is_bullish_strategy = strategy in ["BTO_CALL", "STO_PUT"]
         if vix_trending_up and is_bullish_strategy:
             logger.info(f"[{symbol}] 剔除: VIX 30/60 雙重指標看漲中(波動率放大)，拒絕作多")
             return None
-            
+
         # Filter: SPX/NDX Alignment
         if is_bullish_strategy:
             spy_sma20 = await market_data_service.get_sma("SPY", 20)
@@ -535,7 +535,7 @@ async def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None, vi
         if opt_chain is not None:
             vertical_skew, skew_state, is_high_tail_risk = _calculate_vertical_skew(opt_chain, price, days_to_expiry, strategy, symbol, dividend_yield)
             if vertical_skew is None: return None
-        else: 
+        else:
             vertical_skew, skew_state, is_high_tail_risk = 1.0, "N/A", False
 
         risk_metrics = _validate_risk_and_liquidity(strategy, best_contract, price, indicators.get('hv_current', 0.0), days_to_expiry, symbol)
@@ -545,8 +545,8 @@ async def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None, vi
         kelly_fraction = 0.25 if is_high_tail_risk else 0.50
 
         aroc, alloc_pct, margin_per_contract = _calculate_sizing(
-            strategy, best_contract, days_to_expiry, 
-            expected_move=risk_metrics.get('expected_move', 0.0), 
+            strategy, best_contract, days_to_expiry,
+            expected_move=risk_metrics.get('expected_move', 0.0),
             price=price, stock_cost=stock_cost, kelly_fraction=kelly_fraction,
             kelly_fraction_override=vix_kelly_override
         )
@@ -554,7 +554,7 @@ async def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None, vi
         # VIX 倉位縮放：將階梯乘數套用至 alloc_pct
         if vix_sizing_multiplier != 1.0:
             alloc_pct *= vix_sizing_multiplier
-        
+
         # AROC 驗證邏輯移交給 TradingService 驗證管線 (Validation Pipeline) 處理
         # 此處僅保留基礎數據計算
 
@@ -563,7 +563,7 @@ async def analyze_symbol(symbol, stock_cost=0.0, df_spy=None, spy_price=None, vi
         weighted_delta = round(raw_delta * beta * (price / safe_spy_price) * 100, 2)
 
         greeks = calculate_greeks(opt_type, price, best_contract.get('strike', 0.0), max(days_to_expiry, 1) / 365.0, best_contract.get('impliedVolatility', 0.0), dividend_yield)
-        
+
         return {
             "symbol": symbol, "price": price, "beta": beta, "weighted_delta": weighted_delta, "stock_cost": stock_cost,
             "rsi": indicators.get('rsi', 0.0), "sma20": indicators.get('sma20', 0.0), "hv_rank": indicators.get('hv_rank', 0.0),
@@ -598,12 +598,12 @@ async def get_option_metrics(symbol, opt_type, strike, expiry):
         chain_data = opt_chain.calls if opt_type == "call" else opt_chain.puts
         contract = chain_data[chain_data['strike'] == strike]
         if contract.empty: return {'delta': 0.0, 'dte': 0, 'mid': 0.0}
-        
+
         c = contract.iloc[0]
         days_to_expiry = (datetime.strptime(expiry, '%Y-%m-%d').date() - today).days
         quote = await market_data_service.get_quote(symbol)
         price = quote.get('c', 0.0) if quote else 0.0
-        
+
         delta_val = calculate_contract_delta(c, price, max(days_to_expiry, 1) / 365.0, ('c' if opt_type == "call" else 'p'))
         bid, ask = c.get('bid', 0.0), c.get('ask', 0.0)
         mid = (bid + ask) / 2.0 if bid > 0 and ask > 0 else c.get('lastPrice', 0.0)
@@ -619,14 +619,14 @@ async def find_best_contract(symbol, strategy_type, target_delta, min_dte, max_d
         today = datetime.now().date()
         target_expiry_date, days_to_expiry = _find_target_expiry(expirations, today, min_dte, max_dte)
         if not target_expiry_date: return None
-            
+
         quote = await market_data_service.get_quote(symbol)
         price = quote.get('c', 0.0) if quote else 0.0
-        
+
         opt_type = "call" if "CALL" in strategy_type else "put"
         best_contract, _ = await asyncio.to_thread(_get_best_contract_data, ticker, target_expiry_date, opt_type, target_delta, price, days_to_expiry)
         if best_contract is None: return None
-        
+
         bid, ask = best_contract.get('bid', 0.0), best_contract.get('ask', 0.0)
         mid = (bid + ask) / 2.0 if bid > 0 and ask > 0 else best_contract.get('lastPrice', 0.0)
         return {'strike': float(best_contract.get('strike', 0.0)), 'expiry': target_expiry_date, 'mid': mid}

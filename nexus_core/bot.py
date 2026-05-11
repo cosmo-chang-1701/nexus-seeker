@@ -33,11 +33,11 @@ class NexusBot(commands.Bot):
         await self.load_extension("cogs.sentiment")
         await self.load_extension("cogs.hedging")
         await self.load_extension("cogs.calendar")
-        
+
         # 啟動背景任務與服務
         self.loop.create_task(self._message_worker())
         self.loop.create_task(self._health_worker())
-        
+
         # 啟動記憶體管理員 (1GB RAM 優化)
         try:
             from services.memory_manager import MemoryManager
@@ -76,7 +76,7 @@ class NexusBot(commands.Bot):
         logger.info(f'初始化資料庫中...')
         database.init_db()
         logger.info(f'🚀 Nexus Seeker 啟動成功！Bot ID: {self.user}')
-        
+
         # 啟動後檢查有無遺留通知並喚醒工人
         if await asyncio.to_thread(get_pending_count) > 0:
             logger.info("發現遺留的待發送通知，啟動補發流程...")
@@ -90,9 +90,9 @@ class NexusBot(commands.Bot):
         if self._is_closing:
             return
         self._is_closing = True
-        
+
         logger.info("🛑 Nexus Seeker 正在關閉...")
-        
+
         # 停止記憶體管理員
         if hasattr(self, 'memory_manager'):
             try:
@@ -146,11 +146,11 @@ class NexusBot(commands.Bot):
     async def _message_worker(self):
         """專職負責發送訊息的工人，從資料庫讀取待發送清單"""
         await self.wait_until_ready()
-        
+
         while not self.is_closed():
             # 1. 取得下一批待發送通知
             pending = await asyncio.to_thread(get_pending_notifications, limit=10)
-            
+
             if not pending:
                 # 如果沒信，進入等待狀態
                 self.message_signal.clear()
@@ -163,9 +163,9 @@ class NexusBot(commands.Bot):
             # 2. 逐一處理通知
             for notif_id, user_id, message, embed_dict in pending:
                 if self.is_closed(): break
-                
+
                 embed = discord.Embed.from_dict(embed_dict) if embed_dict else None
-                
+
                 try:
                     user = await self.fetch_user(user_id)
                     if user:
@@ -184,7 +184,7 @@ class NexusBot(commands.Bot):
                     await asyncio.sleep(2)
                 except Exception as e:
                     logger.error(f"發信失敗(Unexpected): uid={user_id}, err={e}")
-                
+
                 # 間隔 0.2 秒再寄下一封，避免觸發速率限制
                 await asyncio.sleep(0.2)
 

@@ -1,0 +1,18 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# Copy nexus_core requirements
+COPY nexus_core/pyproject.toml /app/
+
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir .
+
+# Copy nexus_core source and tests
+COPY nexus_core /app/
+
+# Run tests
+CMD ["python", "-m", "pytest", "tests"]

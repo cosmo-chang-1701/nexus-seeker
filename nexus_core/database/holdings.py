@@ -15,28 +15,28 @@ def add_holding(user_id: int, symbol: str, quantity: float, avg_cost: float) -> 
         # 檢查是否已存在
         cursor.execute("SELECT id, metadata FROM assets WHERE user_id = ? AND symbol = ? AND context_type = 'HOLDING'", (user_id, symbol))
         row = cursor.fetchone()
-        
+
         metadata = {
             "quantity": quantity,
             "avg_cost": avg_cost
         }
-        
+
         if row:
             # 更新已存在的紀錄
             existing_meta = json.loads(row[1]) if row[1] else {}
             existing_meta.update(metadata)
             cursor.execute('''
-                UPDATE assets 
-                SET metadata = ?, updated_at = CURRENT_TIMESTAMP 
+                UPDATE assets
+                SET metadata = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
             ''', (json.dumps(existing_meta), row[0]))
         else:
             # 新增紀錄
             cursor.execute('''
-                INSERT INTO assets (user_id, symbol, context_type, metadata) 
+                INSERT INTO assets (user_id, symbol, context_type, metadata)
                 VALUES (?, ?, 'HOLDING', ?)
             ''', (user_id, symbol, json.dumps(metadata)))
-            
+
         conn.commit()
         return True
     except Exception:
@@ -91,13 +91,13 @@ def update_holding_greeks(holding_id: int, weighted_delta: float):
     """更新現貨持倉的加權 Delta"""
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
-    
+
     cursor.execute("SELECT metadata FROM assets WHERE id = ?", (holding_id,))
     row = cursor.fetchone()
     if row:
         meta = json.loads(row[0]) if row[0] else {}
         meta['weighted_delta'] = weighted_delta
         cursor.execute('UPDATE assets SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (json.dumps(meta), holding_id))
-    
+
     conn.commit()
     conn.close()

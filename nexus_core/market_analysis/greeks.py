@@ -18,7 +18,7 @@ def calculate_vanna(flag, stock_price, strike, t_years, iv, q):
         d1_val = d1(stock_price, strike, t_years, RISK_FREE_RATE, iv, q)
         d2_val = d2(stock_price, strike, t_years, RISK_FREE_RATE, iv, q)
         v_val = vega(flag, stock_price, strike, t_years, RISK_FREE_RATE, iv, q)
-        
+
         # Vanna = - (Vega / (S * sigma * sqrt(T))) * d2
         # Textbook vega = vollib_vega * 100
         vanna_val = - ((v_val * 100.0) / (stock_price * iv * math.sqrt(t_years))) * d2_val
@@ -50,7 +50,7 @@ def calculate_greeks(opt_type, stock_price, strike, t_years, iv, q):
     try:
         if iv <= 0:
             return {'delta': 0.0, 'theta': 0.0, 'gamma': 0.0, 'vega': 0.0, 'vanna': 0.0}
-        
+
         res = {
             'delta': delta(flag, stock_price, strike, t_years, RISK_FREE_RATE, iv, q),
             'theta': theta(flag, stock_price, strike, t_years, RISK_FREE_RATE, iv, q),

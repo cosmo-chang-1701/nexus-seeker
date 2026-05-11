@@ -24,15 +24,21 @@ def db_conn():
 
 @pytest.fixture(autouse=True)
 def clean_db(db_conn):
-    # Clear tables before each test if needed, 
+    # Clear tables before each test if needed,
     # but since it's :memory: and we might want to test persistence between some calls,
     # we can just clear specific tables.
     cursor = db_conn.cursor()
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
     tables = cursor.fetchall()
+
+    import re
+    table_pattern = re.compile(r"^[a-zA-Z0-9_]+$")
+
     for (table,) in tables:
         if table != "schema_versions":
-            cursor.execute(f"DELETE FROM {table}")
+            if table_pattern.match(table):
+                # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+                cursor.execute(f"DELETE FROM {table}")
     db_conn.commit()
     yield
 

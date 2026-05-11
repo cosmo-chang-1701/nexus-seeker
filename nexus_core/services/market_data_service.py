@@ -95,14 +95,14 @@ async def get_yfinance_quote(symbol: str) -> Dict[str, Any]:
         if df.empty:
             logger.warning(f"[{yf_symbol}] yfinance quote 回傳資料為空")
             return {}
-        
+
         latest = df.iloc[-1]
         prev_close = df.iloc[-2]['Close'] if len(df) > 1 else latest['Open']
         current_price = latest['Close']
-        
+
         change = current_price - prev_close
         pct_change = (change / prev_close) * 100 if prev_close != 0 else 0.0
-        
+
         return {
             'c': round(float(current_price), 2),
             'd': round(float(change), 2),
@@ -127,7 +127,7 @@ async def get_quote(symbol: str) -> Dict[str, Any]:
         data = await _execute_api_call(client.quote, symbol)
         if data and data.get('c', 0) > 0:
             return data
-        
+
         # 若 Finnhub 回傳無效或報權限錯誤 (c=0 有可能是權限問題或標的不存在)
         # 嘗試作為 fallback 轉向 yfinance
         logger.warning(f"[{symbol}] Finnhub quote 無效，嘗試 yfinance fallback")
@@ -167,7 +167,7 @@ async def get_history_df(symbol: str, period: str = "1y", interval: str = "1d") 
         ticker = yf.Ticker(symbol)
         # yfinance 內部為同步，同樣使用 to_thread
         df = await asyncio.to_thread(ticker.history, period=period, interval=interval)
-        
+
         if df.empty:
             logger.warning(f"[{symbol}] yfinance 歷史數據為空 (period={period}, interval={interval})")
             return pd.DataFrame()
@@ -175,7 +175,7 @@ async def get_history_df(symbol: str, period: str = "1y", interval: str = "1d") 
         df.index.name = 'Date'
         if df.index.tz is not None:
             df.index = df.index.tz_localize(None)
-            
+
         return df[['Open', 'High', 'Low', 'Close', 'Volume']]
     except Exception as e:
         logger.error(f"[{symbol}] yfinance 抓取失敗: {e}")
@@ -267,7 +267,7 @@ async def get_sma(symbol: str, window: int = 200) -> Optional[float]:
 
         if not pd.isna(current_sma):
             _sma_cache[cache_key] = (current_sma, current_time + _SMA_CACHE_TTL)
-        
+
         return current_sma if not pd.isna(current_sma) else None
     except Exception as e:
         logger.error(f"[{symbol}] 計算 SMA{window} 失敗: {e}")
@@ -336,11 +336,11 @@ async def get_basic_financials(symbol: str, expiry_hours: int = 24) -> Dict[str,
     try:
         data = await _execute_api_call(client.company_basic_financials, symbol, 'all')
         metrics = data.get('metric', {}) if data else {}
-        
+
         if metrics:
             # 3. 非同步寫入快取
             await asyncio.to_thread(db_financials.save_financials_cache, symbol, metrics)
-            
+
         return metrics
     except Exception as e:
         logger.error(f"[{symbol}] Finnhub financials 失敗: {e}")
@@ -448,7 +448,7 @@ async def get_company_news(
         cleaned_news = []
         seen_headlines = set()
         symbol_pattern = re.compile(rf'\b{re.escape(symbol)}\b', re.IGNORECASE)
-        
+
         for item in data:
             headline = item.get('headline', '').strip()
             summary = item.get('summary', '').strip()
@@ -477,9 +477,9 @@ async def get_macro_environment() -> Dict[str, float]:
         # 同時啟動兩個非同步任務
         vix_task = get_history_df("^VIX", period="5d")
         oil_task = get_history_df("CL=F", period="5d")
-        
+
         vix_df, oil_df = await asyncio.gather(vix_task, oil_task)
-        
+
         if vix_df.empty or oil_df.empty:
             logger.warning("宏觀數據 (VIX/Oil) 抓取結果為空，使用預設值")
             return {"vix": 18.0, "oil": 75.0, "vix_change": 0.0}
@@ -503,18 +503,18 @@ async def get_vix_term_structure() -> Dict[str, Any]:
         vix_task = get_history_df("^VIX", period="5d")
         vix3m_task = get_history_df("^VIX3M", period="5d")
         vix_df, vix3m_df = await asyncio.gather(vix_task, vix3m_task)
-        
+
         if vix_df.empty or vix3m_df.empty:
             return {"vts_ratio": 1.0, "vts_state": "UNKNOWN"}
-            
+
         vix_close = float(vix_df['Close'].iloc[-1])
         vix3m_close = float(vix3m_df['Close'].iloc[-1])
-        
+
         if vix3m_close > 0:
             vts_ratio = round(vix_close / vix3m_close, 3)
         else:
             vts_ratio = 1.0
-            
+
         state = "Backwardation" if vts_ratio >= 1.0 else "Contango"
         return {"vts_ratio": vts_ratio, "vts_state": state, "vix_front": vix_close, "vix_back": vix3m_close}
     except Exception as e:
@@ -528,19 +528,19 @@ async def get_vix_zscores() -> Dict[str, float]:
         df = await get_history_df("^VIX", period="6mo")
         if df.empty or len(df) < 60:
             return {"zscore_30": 0.0, "zscore_60": 0.0}
-            
+
         current_vix = float(df['Close'].iloc[-1])
-        
+
         # 30 day z-score
         mean_30 = float(df['Close'].tail(30).mean())
         std_30 = float(df['Close'].tail(30).std())
         z_30 = (current_vix - mean_30) / std_30 if std_30 > 0.01 else 0.0
-        
+
         # 60 day z-score
         mean_60 = float(df['Close'].tail(60).mean())
         std_60 = float(df['Close'].tail(60).std())
         z_60 = (current_vix - mean_60) / std_60 if std_60 > 0.01 else 0.0
-        
+
         return {"zscore_30": round(z_30, 2), "zscore_60": round(z_60, 2)}
     except Exception as e:
         logger.error(f"VIX Z-score 計算失敗: {e}")

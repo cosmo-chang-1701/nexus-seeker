@@ -18,7 +18,7 @@ def evaluate_rehedge_necessity(u_ctx: UserContext, result: Dict[str, Any]) -> Op
     current_vix = result.get('macro_vix') or result.get('vix', 18.0)
     vix_change = result.get('macro_vix_change', 0.0)
     spy_price = result.get('spy_price', 670.0)
-    
+
     rehedge_reason = None
     if current_price > 0 and ema_8 > 0 and current_price < ema_8:
         rehedge_reason = "📉 價格跌破 EMA 8 (動能轉弱)"
@@ -27,7 +27,7 @@ def evaluate_rehedge_necessity(u_ctx: UserContext, result: Dict[str, Any]) -> Op
 
     if current_vix > 20:
         rehedge_reason = f"🌪️ VIX 突破 20 ({current_vix:.1f} 市場進入恐慌區)"
-    if vix_change > 0.10: 
+    if vix_change > 0.10:
         rehedge_reason = f"⚡ VIX 單日大幅飆升 ({vix_change*100:+.1f}%)"
 
     if u_ctx.capital > 0:
@@ -53,10 +53,10 @@ def get_portfolio_exposure_status(u_ctx: UserContext, spy_price: float, delta_th
     當曝險超過使用者定義的門檻 (預設 ±50 Delta) 時，生成具體行動建議。
     """
     total_delta = u_ctx.total_weighted_delta
-    
+
     directive = "HOLD"
     instruction = "曝險處於安全區間內。"
-    
+
     if total_delta > delta_threshold:
         directive = "REDUCE_EXPOSURE"
         # 賣出 SPY 現貨以對沖正 Delta 曝險
@@ -67,7 +67,7 @@ def get_portfolio_exposure_status(u_ctx: UserContext, spy_price: float, delta_th
         # 買入 SPY 現貨以對沖負 Delta 曝險
         shares_to_buy = abs(total_delta)
         instruction = f"建議：買入 {abs(shares_to_buy):.1f} 股 SPY 以中和 Delta 曝險。"
-        
+
     return {
         "total_beta_delta": round(total_delta, 2),
         "directive": directive,
@@ -105,7 +105,7 @@ async def get_market_regime_target(spy_price: float, user_capital: float) -> tup
 def calculate_autonomous_hedge(current_delta: float, target_delta: float, spy_price: float):
     delta_gap = target_delta - current_delta
     if abs(delta_gap) < 50: return None
-    qty = round(abs(delta_gap) / 50) 
+    qty = round(abs(delta_gap) / 50)
     action = "BTO PUT" if delta_gap < 0 else "BTO CALL"
     return {"action": action, "quantity": qty}
 
@@ -117,7 +117,7 @@ def suggest_hedge_unlock(u_ctx: UserContext, result: Dict[str, Any], mtf: MTFRes
     price, ema_8 = result.get('price', 0.0), result.get('ema_8', 0.0)
     if not (ema_8 > 0 and (price - ema_8) / ema_8 >= 0.015): return None
     if result.get('weighted_delta', 0.0) <= 0 or u_ctx.total_weighted_delta >= 0: return None
-    
+
     potential_delta_shift = abs(u_ctx.total_weighted_delta)
     return {
         "action": "UNLOCK_HEDGE", "symbol": result.get('symbol'),
@@ -132,10 +132,10 @@ async def analyze_hedge_performance(user_id: int) -> Dict[str, Any]:
     from database.portfolio import get_user_portfolio
     from database.virtual_trading import get_open_virtual_trades
     from market_analysis.portfolio import get_option_chain_mid_iv
-    
+
     real_trades = await asyncio.to_thread(get_user_portfolio, user_id)
     virtual_trades = await asyncio.to_thread(get_open_virtual_trades, user_id)
-    
+
     all_trades_normalized = []
     for t in real_trades:
         all_trades_normalized.append({

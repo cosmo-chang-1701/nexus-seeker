@@ -8,7 +8,7 @@ import config
 def add_portfolio_record(user_id, symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost, weighted_delta: float = 0.0, theta: float = 0.0, gamma: float = 0.0, trade_category: str = 'SPECULATIVE'):
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
-    
+
     metadata = {
         "opt_type": opt_type,
         "strike": strike,
@@ -21,7 +21,7 @@ def add_portfolio_record(user_id, symbol, opt_type, strike, expiry, entry_price,
         "gamma": gamma,
         "category": trade_category
     }
-    
+
     cursor.execute('''
         INSERT INTO assets (user_id, symbol, context_type, metadata)
         VALUES (?, ?, 'TRADE', ?)
@@ -72,7 +72,7 @@ def get_user_portfolio_stats(user_id):
     [Database Layer] 結算使用者當前投資組合的總體風險數據 (暫行簡化版)。
     """
     rows = get_user_portfolio(user_id)
-    
+
     if not rows:
         return {"total_weighted_delta": 0.0, "total_gamma": 0.0, "active_count": 0}
 
@@ -104,7 +104,7 @@ def update_portfolio_greeks(trade_id: int, weighted_delta: float, theta: float, 
     """更新持倉紀錄的希臘字母數據"""
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
-    
+
     cursor.execute("SELECT metadata FROM assets WHERE id = ?", (trade_id,))
     row = cursor.fetchone()
     if row:
@@ -113,7 +113,7 @@ def update_portfolio_greeks(trade_id: int, weighted_delta: float, theta: float, 
         meta['theta'] = theta
         meta['gamma'] = gamma
         cursor.execute('UPDATE assets SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (json.dumps(meta), trade_id))
-    
+
     conn.commit()
     conn.close()
     return True
@@ -123,7 +123,7 @@ def is_symbol_in_portfolio(user_id: int, symbol: str) -> bool:
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
     cursor.execute('''
-        SELECT 1 FROM assets 
+        SELECT 1 FROM assets
         WHERE user_id = ? AND symbol = ? AND context_type IN ('TRADE', 'HOLDING')
         LIMIT 1
     ''', (user_id, symbol.upper()))
@@ -151,10 +151,10 @@ def get_hedge_history(user_id, limit=7):
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute('''
-        SELECT date, alpha_pnl, hedge_pnl, effectiveness, tau_applied 
-        FROM hedge_history 
-        WHERE user_id = ? 
-        ORDER BY date DESC 
+        SELECT date, alpha_pnl, hedge_pnl, effectiveness, tau_applied
+        FROM hedge_history
+        WHERE user_id = ?
+        ORDER BY date DESC
         LIMIT ?
     ''', (user_id, limit))
     rows = cursor.fetchall()

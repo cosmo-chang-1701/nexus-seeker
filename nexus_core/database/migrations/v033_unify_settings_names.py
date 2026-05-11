@@ -32,7 +32,7 @@ INSERT INTO user_settings_new (
     polymarket_threshold, polymarket_use_llm, polymarket_slippage,
     is_professional_mode, monthly_expense, tax_reserve_rate, cash_reserve
 )
-SELECT 
+SELECT
     user_id, portfolio_value, risk_limit_pct, last_rehedge_alert_time, dynamic_tau,
     enable_option_alerts, enable_vtr, enable_psq_watchlist, enable_analyst_agent,
     polymarket_threshold, polymarket_use_llm, polymarket_slippage,

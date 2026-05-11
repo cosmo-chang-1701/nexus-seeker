@@ -95,22 +95,22 @@ def _add_vix_battle_status_field(embed, data):
     tier_emoji = vix_status.get('emoji') or data.get('vix_tier_emoji', '')
     delta_cap = vix_status.get('sto_delta_cap') or data.get('vix_sto_delta_cap', 0.0)
     sizing_mult = vix_status.get('sizing_multiplier') or data.get('vix_sizing_multiplier', 1.0)
-    
+
     if vix_spot is None:
         return
-    
+
     status_line = f"{tier_emoji} **{tier_name}** | VIX: `{vix_spot:.1f}`"
     details = []
     if delta_cap != 0.0:
         details.append(f"Delta Cap: `{delta_cap:.2f}`")
     if sizing_mult != 1.0:
         details.append(f"\u5009\u4f4d\u4e58\u6578: `{sizing_mult:.1f}x`")
-    
+
     value = status_line
     if details:
         value += "\n" + " | ".join(details)
     value += "\n\u200b"
-    
+
     embed.add_field(name="🛡️ VIX 戰情階梯狀態", value=value, inline=False)
 
 def _add_market_overview_fields(embed, data):
@@ -133,7 +133,7 @@ def _add_volatility_fields(embed, data, strategy):
     # ---------------- VIX 306 Volatility Metrics ----------------
     vts_str = f"`{data.get('vix_vts_ratio', 1.0):.2f}` {data.get('vix_regime', '')}"
     embed.add_field(name="🌐 大盤 VIX 期限結構\u2800", value=f"{vts_str}\n\u200b", inline=True)
-    
+
     z30 = data.get('vix_z30', 0.0)
     z60 = data.get('vix_z60', 0.0)
     z_icon = "📈 擴張" if z30 > 0.5 and z60 > 0 else "📉 收斂"
@@ -156,22 +156,22 @@ def _add_performance_and_kelly_fields(embed, data, user_capital):
 
     # 1. 希臘字母與部位方向
     embed.add_field(
-        name="🧩 Delta (部位加權)\u2800\u2800", 
-        value=f"{raw_delta:.3f} (`{pos_weighted_shares:+.1f}`股)\n\u200b", 
+        name="🧩 Delta (部位加權)\u2800\u2800",
+        value=f"{raw_delta:.3f} (`{pos_weighted_shares:+.1f}`股)\n\u200b",
         inline=True
     )
-    
+
     # 2. 獲利效率與隱含波動率
     embed.add_field(
-        name="💰 AROC / IV\u2800\u2800\u2800\u2800", 
-        value=f"`{data['aroc']:.1f}%` / {data['iv']:.1%}\n\u200b", 
+        name="💰 AROC / IV\u2800\u2800\u2800\u2800",
+        value=f"`{data['aroc']:.1f}%` / {data['iv']:.1%}\n\u200b",
         inline=True
     )
 
     # 3. 凱利建議邏輯
     alloc_pct = data.get('alloc_pct', 0.0)
     suggested = data.get('suggested_contracts', 0)
-    
+
     if alloc_pct <= 0:
         kelly_value = "`不建議建倉`"
     elif not user_capital or user_capital <= 0:
@@ -179,7 +179,7 @@ def _add_performance_and_kelly_fields(embed, data, user_capital):
     else:
         # 使用與主邏輯同步的 25% Kelly 上限顯示
         kelly_value = f"`{suggested} 口` ({min(alloc_pct, 0.25)*100:.1f}%)" if suggested > 0 else "`本金不足`"
-    
+
     embed.add_field(name="🧮 凱利原始建議\u2800\u2800", value=f"{kelly_value}\n\u200b", inline=True)
 
 def _add_earnings_fields(embed, data, strategy):
@@ -188,14 +188,14 @@ def _add_earnings_fields(embed, data, strategy):
         mmm_str = f"±{data['mmm_pct']:.1f}% (倒數 {data['earnings_days']} 天)"
         bounds_str = f"🛡️ 安全區間: **`${data['safe_lower']:.2f}`** ~ **`${data['safe_upper']:.2f}`**"
         strike = data['strike']
-        
+
         if "STO" in strategy:
             is_safe = (strategy == "STO_PUT" and strike <= data['safe_lower']) or \
                       (strategy == "STO_CALL" and strike >= data['safe_upper'])
             safety_icon = "✅ 避開雷區 (適宜收租)" if is_safe else "💣 位於雷區 (極高風險)"
         else:
             safety_icon = "🎲 財報盲盒 (注意 IV Crush 波動率壓縮風險)"
-            
+
         embed.add_field(name="📊 財報預期波動 (MMM)", value=f"`{mmm_str}`\n{bounds_str}\n{safety_icon}\n\u200b", inline=False)
 
 def _add_covered_call_fields(embed, data, stock_cost):
@@ -203,7 +203,7 @@ def _add_covered_call_fields(embed, data, stock_cost):
     bid = data.get('bid', 0)
     true_breakeven = stock_cost - bid
     yoc = (bid / stock_cost) * 100 if stock_cost > 0 else 0
-    
+
     cc_info = (f"📦 **真實現股成本:** `${stock_cost:.2f}`\n"
                f"🛡️ **真實下檔防線:** `${true_breakeven:.2f}`\n"
                f"💸 **單次收租殖利率 (Yield on Cost):** `{yoc:.2f}%`\n"
@@ -215,14 +215,14 @@ def _add_expected_move_fields(embed, data, strategy, is_covered):
     em = data.get('expected_move', 0.0)
     em_lower = data.get('em_lower', 0.0)
     em_upper = data.get('em_upper', 0.0)
-    
+
     if "STO_PUT" in strategy:
         breakeven = data['strike'] - data.get('bid', 0)
         safe = breakeven < em_lower
         safety_text = "✅ 防線已建構於預期暴跌區間外" if safe else "⚠️ 損益兩平點位於預期波動區間內，風險較高"
         em_info = f"1σ 預期下緣: `${em_lower:.2f}` (預期最大跌幅 -${em:.2f})\n🛡️ 損益兩平點: **`${breakeven:.2f}`**\n{safety_text}\n\u200b"
         embed.add_field(name="🎯 機率圓錐 (1σ 預期波動)", value=em_info, inline=False)
-        
+
     elif "STO_CALL" in strategy:
         breakeven = data['strike'] + data.get('bid', 0)
         safe = breakeven > em_upper
@@ -230,7 +230,7 @@ def _add_expected_move_fields(embed, data, strategy, is_covered):
             safety_text = "✅ 若漲破此價位，將以最高獲利出場 (股票被 Call 走)"
         else:
             safety_text = "✅ 防線已建構於預期暴漲區聯外" if safe else "⚠️ 損益兩平點位於預期波動區間內，風險較高"
-            
+
         em_info = f"1σ 預期上緣: `${em_upper:.2f}` (預期最大漲幅 +${em:.2f})\n🛡️ 合約兩平點: **`${breakeven:.2f}`**\n{safety_text}\n\u200b"
         embed.add_field(name="🎯 機率圓錐 (1σ 預期波動)", value=em_info, inline=False)
 
@@ -262,7 +262,7 @@ def _add_strategy_upgrade_fields(embed, data, strategy):
         if hedge_strike:
             spread_type = "多頭價差 (Bull Call Spread)" if strategy == "BTO_CALL" else "空頭價差 (Bear Put Spread)"
             hedge_type = "Call" if strategy == "BTO_CALL" else "Put"
-            
+
             upgrade_text = (f"為抵銷 Theta (時間價值) 衰減並降低建倉成本，\n"
                             f"建議在買入本合約的同時，賣出更價外的 **${hedge_strike:.0f} {hedge_type}**\n"
                             f"👉 組合為: **{spread_type}**\n\u200b")
@@ -281,14 +281,14 @@ def _add_risk_optimization_fields(embed, data, user_capital=None):
     safe_qty = data.get('safe_qty', 0)
     hedge_spy = data.get('hedge_spy', 0.0)
     suggested = data.get('suggested_contracts', 0)
-    
+
     # 🚀 修正點 1：風險閾值應從數據中取得，或設為全局變數
     # 避免後台改了 10% 這裡還在顯示 15%
-    RISK_THRESHOLD = data.get('risk_limit', 15.0) 
-    
+    RISK_THRESHOLD = data.get('risk_limit', 15.0)
+
     # 1. 曝險現況區塊
     is_overloaded = abs(projected_pct) > RISK_THRESHOLD
-    
+
     if is_overloaded:
         sim_status = "🚨 警告：曝險過載"
         # 使用 diff 語法渲染紅色背景
@@ -307,26 +307,26 @@ def _add_risk_optimization_fields(embed, data, user_capital=None):
             f"符合資產組合平衡標準\n"
             f"```"
         )
-    
+
     embed.add_field(name=f"🛡️ What-if 曝險模擬 | {sim_status}", value=f"{sim_block}\n\u200b", inline=False)
 
     # 2. Nexus Risk Optimizer 自動優化建議
     if suggested > safe_qty:
         opt_title = "⚖️ Nexus Risk Optimizer (自動優化建議)"
-        
+
         # 🚀 修正點 2：加入基準 SPY 價格的動態提示 (讓對沖建議更可信)
         spy_p = data.get('spy_price', 690.0)
-        
+
         actions = [f"--- 偵測到風險超標，執行自動降規 ---"]
         actions.append(f"❌ 原始建議: {suggested} 口")
         actions.append(f"✅ 安全成交: {safe_qty} 口 (符合風控)")
-        
+
         if safe_qty == 0 and hedge_spy != 0:
             actions.append(f"\n⚠️ 警告: 即使下 1 口也過載")
             direction = "賣出" if hedge_spy > 0 else "買入"
             # 格式化對沖股數，避免出現 22.2222222
             actions.append(f"🛡️ 建議對沖: {direction} {abs(hedge_spy):.1f} 股 SPY (@${spy_p:.1f})")
-        
+
         opt_block = "```diff\n" + "\n".join(actions) + "\n```"
         embed.add_field(name=opt_title, value=f"{opt_block}\n\u200b", inline=False)
 
@@ -349,7 +349,7 @@ def _add_hedge_unlock_fields(embed, data):
         f"🚀 **預計效應：** 釋放 Beta 動能，預計提升總組合 Delta 至 `{new_delta:+.1f}`。\n"
         f"🛡️ **防禦補償：** {risk_note}\n\u200b"
     )
-    
+
     embed.add_field(
         name=f"🔓 對沖優化建議 ({reason})",
         value=unlock_text,
@@ -372,7 +372,7 @@ def _add_ai_verification_fields(embed, data):
             ai_title = "🤖 Argo Cortex: ⚠️ 未啟用 (SKIP)"
             ai_value = f"```\n{ai_reasoning}\n```"
             embed.color = discord.Color.blue()
-            
+
         embed.add_field(name=ai_title, value=ai_value, inline=False)
 
 def get_ema_signal_ui(ema_signals: List[Dict[str, Any]]) -> str:
@@ -388,7 +388,7 @@ def get_ema_signal_ui(ema_signals: List[Dict[str, Any]]) -> str:
         sig_type = sig['type']
         direction = sig['direction']
         dist = sig['distance_pct']
-        
+
         # 1. 決定圖示與標題
         if sig_type == "CROSSOVER":
             icon = "🚀" if direction == "BULLISH" else "💀"
@@ -480,29 +480,29 @@ def _add_sentiment_fields(embed, data):
             content += f"📐 **Skew:** `{skew_val}%` | "
         if pcr_val is not None:
             content += f"⚖️ **PCR:** `{pcr_val}`"
-        
+
         if uoa_list:
             content += "\n🐋 **UOA 偵測:** `FOUND` | 信心: `HIGH`"
             if data.get('high_conviction'):
                 content += " | 🔥 **高信心訊號**"
-        
+
         if content:
             embed.add_field(name="🎭 期權市場情緒 (Sentiment)", value=content + "\n\u200b", inline=False)
 
 def create_scan_embed(data, user_capital=100000.0):
     strategy = data.get('strategy', 'UNKNOWN')
     stock_cost = data.get('stock_cost', 0.0)
-    
+
     embed, is_covered = _build_embed_base(data, strategy, stock_cost)
-    
+
     # VIX tier color override
     vix_color = data.get('vix_tier_color') or (data.get('vix_battle_status', {}).get('color_hex'))
     if vix_color:
         embed.color = discord.Color(vix_color)
-    
+
     # Render UI fields (VIX Battle Status first)
     _add_vix_battle_status_field(embed, data)
-    
+
     # 🚀 整合 Gap & Fill 狀態 (New Engine)
     gap = data.get('gap_status')
     if gap:
@@ -513,10 +513,10 @@ def create_scan_embed(data, user_capital=100000.0):
             GapStatus.FULL_FILL: "🔴 完全回補 (Filled)",
             GapStatus.NO_GAP: "⚪ 無跳空"
         }.get(gap.current_fill_status, "⚪ N/A")
-        
+
         support_tag = " | 🛡️ 支撐已確認" if gap.is_support_confirmed else ""
         gap_color = "🟢" if gap.gap_size > 0 else "🔴"
-        
+
         gap_info = (
             f"{gap_color} **{'向上跳空 (UP-GAP)' if gap.gap_size > 0 else '向下跳空 (DOWN-GAP)'}**: `{gap.gap_pct:+.2f}%` (${gap.gap_size:+.2f})\n"
             f"**狀態:** {status_emoji}{support_tag}\n"
@@ -530,18 +530,18 @@ def create_scan_embed(data, user_capital=100000.0):
     _add_trend_and_support_fields(embed, data)
     _add_performance_and_kelly_fields(embed, data, user_capital)
     _add_earnings_fields(embed, data, strategy)
-    
+
     if is_covered:
         _add_covered_call_fields(embed, data, stock_cost)
-        
+
     _add_expected_move_fields(embed, data, strategy, is_covered)
     _add_liquidity_fields(embed, data)
     _add_strategy_upgrade_fields(embed, data, strategy)
-    
+
     # 🚀 執行優化回饋顯示
     _add_risk_optimization_fields(embed, data, user_capital)
     _add_hedge_unlock_fields(embed, data)
-    
+
     add_news_field(embed, data.get('news_text'))
     add_reddit_field(embed, data.get('reddit_text'))
     _add_ai_verification_fields(embed, data)
@@ -566,33 +566,33 @@ def create_psq_embed(data: dict) -> discord.Embed:
     """建構獨立的 PowerSqueeze (PSQ) 戰情報告 Embed"""
     sym = data.get('symbol', 'UNKNOWN')
     psq = data.get('psq_result')
-    
+
     if not psq: # fallback
         return discord.Embed(title=f"⚡ PowerSqueeze 戰情報告 | {sym}", description="無可用數據", color=discord.Color.dark_grey())
-        
+
     color = discord.Color.purple() if psq.is_squeezing else discord.Color.dark_teal()
     if psq.is_breakout_long:
         color = discord.Color.green()
     elif psq.is_breakout_short:
         color = discord.Color.red()
-        
+
     embed = discord.Embed(
         title=f"⚡ PowerSqueeze 戰情報告 | {sym}",
         description=f"💰 最新股價: `${data.get('price', 0.0):.2f}`\n\u200b",
         color=color,
         timestamp=datetime.now(timezone.utc)
     )
-    
+
     # 壓縮狀態指示
     squeeze_val = "🔴 **壓縮中 (Squeeze On)**" if psq.is_squeezing else "⚪ **無壓縮 (Squeeze Off)**"
     energy_str = "🔥 動能向上爆發" if psq.is_breakout_long else ("💀 動能向下崩潰" if psq.is_breakout_short else "⚡ 蓄力中")
-    
+
     embed.add_field(name="🔋 能量壓縮狀態", value=f"{squeeze_val}\n狀態: {energy_str}\n\u200b", inline=True)
-    
+
     # 動能趨勢
     trend_val = "🟢 多方主導" if psq.momentum_value > 0 else "🔴 空方主導"
     embed.add_field(name="🚀 線性動能 (Momentum)", value=f"`{psq.momentum_value:+.2f}`\n趨勢: {trend_val}\n\u200b", inline=True)
-    
+
     # 支撐區間
     support_val = f"✅ 靠近 20SMA (距離: `{psq.sma_distance_pct:.2f}%`)\n" if psq.is_near_support else f"⚠️ 偏離 20SMA (距離: `{psq.sma_distance_pct:.2f}%`)\n"
     support_val += f"📉 20SMA: `${psq.sma_20:.2f}`\n\u200b"
@@ -601,7 +601,7 @@ def create_psq_embed(data: dict) -> discord.Embed:
     # VIX momentum label
     vix_label = psq.vix_momentum_label if hasattr(psq, 'vix_momentum_label') else 'NORMAL'
     vix_tf_note = psq.vix_timeframe_note if hasattr(psq, 'vix_timeframe_note') else ''
-    
+
     if vix_label != 'NORMAL':
         label_map = {
             'OVEREXTENDED_RISK': '⚠️ **過度延伸風險** | 低 VIX 環境多頭訊號可能是牛陷阱',
@@ -609,13 +609,13 @@ def create_psq_embed(data: dict) -> discord.Embed:
         }
         label_text = label_map.get(vix_label, vix_label)
         embed.add_field(name="🏅 VIX 動能判定", value=f"{label_text}\n\u200b", inline=False)
-    
+
     if vix_tf_note:
         embed.add_field(name="⏱️ 時間框架建議", value=f"`{vix_tf_note}`\n\u200b", inline=False)
-        
+
     # 最新新聞
     add_news_field(embed, data.get('news_text'))
-    
+
     # VIX tier info in footer
     vix_spot_val = data.get('vix_spot') or (data.get('vix_battle_status', {}).get('vix_spot'))
     vix_emoji_val = data.get('vix_battle_status', {}).get('emoji', '')
@@ -628,7 +628,7 @@ def create_psq_embed(data: dict) -> discord.Embed:
 def create_news_scan_embed(symbol, news_text):
     """建構新聞掃描結果的 Embed"""
     embed = discord.Embed(
-        title=f"📰 {symbol} 官方新聞掃描", 
+        title=f"📰 {symbol} 官方新聞掃描",
         color=discord.Color.blue()
     )
     add_news_field(embed, news_text)
@@ -638,7 +638,7 @@ def create_news_scan_embed(symbol, news_text):
 def create_reddit_scan_embed(symbol, reddit_text):
     """建構 Reddit 情緒掃描結果的 Embed"""
     embed = discord.Embed(
-        title=f"🔥 {symbol} 散戶情緒優勢 (Reddit 同步)", 
+        title=f"🔥 {symbol} 散戶情緒優勢 (Reddit 同步)",
         color=discord.Color.orange()
     )
     add_reddit_text = reddit_text
@@ -654,7 +654,7 @@ def create_polymarket_list_embed(markets: List[Dict[str, Any]]):
         color=discord.Color.blue(),
         timestamp=datetime.now(timezone.utc)
     )
-    
+
     if not markets:
         embed.description = "目前沒有監控中的市場。"
         return embed
@@ -665,7 +665,7 @@ def create_polymarket_list_embed(markets: List[Dict[str, Any]]):
         # 截斷過長的標題
         if len(question) > 70:
             question = question[:67] + "..."
-        
+
         # 取得 token 價格資訊 (如果有的話)
         tokens = m.get("tokens", [])
         price_info = ""
@@ -675,21 +675,21 @@ def create_polymarket_list_embed(markets: List[Dict[str, Any]]):
             for t in tokens[:2]:
                 outcome = str(t.get('outcome', '')).strip()
                 price = t.get('price', 0)
-                
+
                 # 排除單字元的雜訊 (例如 [ or " )
                 if len(outcome) <= 1 and outcome not in ["?", "是", "否"]:
                     continue
-                    
+
                 # 簡單格式化價格 (0-1)
                 try:
                     price_val = float(price)
                     price_str = f"{price_val:.2f}"
                 except:
                     price_str = str(price)
-                
+
                 if outcome:
                     p_list.append(f"{outcome}: `{price_str}`")
-            
+
             if p_list:
                 price_info = " | ".join(p_list)
                 line = f"**{i}.** {question}\n   └ {price_info}\n"
@@ -697,12 +697,12 @@ def create_polymarket_list_embed(markets: List[Dict[str, Any]]):
                 line = f"**{i}.** {question}\n"
         else:
             line = f"**{i}.** {question}\n"
-        
+
         # 檢查總長度，避免超過 Discord 限制
         if len(description) + len(line) > 3900:
             break
         description += line
-        
+
     embed.description = description
     embed.set_footer(text="Nexus Seeker | Polymarket Monitor (Top 20 Active Markets)")
     return embed
@@ -716,14 +716,14 @@ def create_holdings_embed(holdings_data: List[Dict[str, Any]], total_capital: fl
         color=discord.Color.blue(),
         timestamp=datetime.now(timezone.utc)
     )
-    
+
     if not holdings_data:
         embed.description = "📭 目前無現貨持倉紀錄。請使用 `/add_holding` 進行登錄。"
         return embed
 
     total_value = 0.0
     total_pnl = 0.0
-    
+
     lines = ["```ansi"]
     header = f"{'標的'.ljust(8)} | {'數量'.rjust(8)} | {'平均成本'.rjust(10)} | {'當前損益'.rjust(10)}"
     lines.append(header)
@@ -733,28 +733,28 @@ def create_holdings_embed(holdings_data: List[Dict[str, Any]], total_capital: fl
         sym = h['symbol'].ljust(8)
         qty = f"{h['quantity']:,.0f}".rjust(8)
         cost = f"${h['avg_cost']:,.2f}".rjust(10)
-        
+
         curr_p = h.get('current_price', 0.0)
         pnl = (curr_p - h['avg_cost']) * h['quantity'] if curr_p > 0 else 0.0
         pnl_pct = (curr_p / h['avg_cost'] - 1) if h['avg_cost'] > 0 and curr_p > 0 else 0.0
-        
+
         total_pnl += pnl
         total_value += (curr_p * h['quantity'])
-        
+
         # 使用 ANSI 顏色：綠色表示正損益，紅色表示負損益
         color_start = "[0;32m" if pnl >= 0 else "[0;31m"
-        pnl_fmt = f"{color_start}{pnl_pct:+.1%}[0m".rjust(18) 
-        
+        pnl_fmt = f"{color_start}{pnl_pct:+.1%}[0m".rjust(18)
+
         lines.append(f"{sym} | {qty} | {cost} | {pnl_fmt}")
 
     lines.append("```")
     embed.add_field(name="📦 持倉明細", value="\n".join(lines), inline=False)
-    
+
     summary = (f"💰 **持倉總市值**: `${total_value:,.2f}`\n"
                f"📈 **累計未實現損益**: `${total_pnl:,.2f}`\n"
                f"⚖️ **佔總預算比例**: `{ (total_value / total_capital * 100) if total_capital > 0 else 0:.1f}%`")
     embed.add_field(name="🏁 財務摘要", value=summary, inline=False)
-    
+
     embed.set_footer(text="Nexus Accounting Engine | 專業股權追蹤")
     return embed
 
@@ -766,7 +766,7 @@ def create_trades_embed(portfolio_rows: List[tuple], stock_quotes: Dict[str, flo
         color=discord.Color.green(),
         timestamp=datetime.now(timezone.utc)
     )
-    
+
     if not portfolio_rows:
         embed.description = "📭 目前無持倉紀錄。"
         return embed
@@ -785,15 +785,15 @@ def create_trades_embed(portfolio_rows: List[tuple], stock_quotes: Dict[str, flo
         strike = row[3]
         exp = row[4]
         qty = row[6]
-        
+
         id_fmt = f"{trade_id:02d}".ljust(3)
         sym_fmt = sym.ljust(5)
         exp_fmt = exp.ljust(10)
         st_type_fmt = f"${strike}{o_type[0].upper()}".ljust(10)
-        
+
         color_code = "[0;32m" if qty > 0 else "[0;31m"
         qty_fmt = f"{color_code}{abs(qty):>4}[0m"
-        
+
         # 狀態判定 (ITM/OTM)
         status_fmt = "N/A"
         if stock_quotes and sym in stock_quotes:
@@ -802,7 +802,7 @@ def create_trades_embed(portfolio_rows: List[tuple], stock_quotes: Dict[str, flo
                 is_itm = curr_p > strike
             else: # PUT
                 is_itm = curr_p < strike
-            
+
             status_text = "ITM" if is_itm else "OTM"
             status_color = "[0;32m" if is_itm else "[0;34m" # ITM 綠色, OTM 藍色
             status_fmt = f"${curr_p:.1f} {status_color}{status_text}[0m"
@@ -811,20 +811,20 @@ def create_trades_embed(portfolio_rows: List[tuple], stock_quotes: Dict[str, flo
 
     lines.append("```")
     embed.add_field(name="📦 持倉明細", value="\n".join(lines), inline=False)
-    
+
     # 計算總成本 (概算)
     total_cost = sum(abs(row[5] * row[6] * 100) for row in portfolio_rows)
-    
+
     summary = (f"💰 **持倉總權利金成本 (概算)**: `${total_cost:,.2f}`\n"
                f"⚖️ **佔總預算比例**: `{ (total_cost / total_capital * 100) if total_capital > 0 else 0:.1f}%`")
     embed.add_field(name="🏁 財務摘要", value=summary, inline=False)
-    
+
     embed.set_footer(text="Nexus Portfolio Engine | 專業實單監控")
     return embed
 
 def create_watchlist_embed(page_data, current_page, total_pages, total_items):
     """生成觀察清單的分頁 Embed (移除成本欄位)"""
-    
+
     if not page_data:
         description = "目前沒有追蹤任何項目"
     else:
@@ -832,25 +832,25 @@ def create_watchlist_embed(page_data, current_page, total_pages, total_items):
         # 1. 標頭修改為兩欄
         header = f"{'標的'.ljust(12)} | {'AI 分析 (LLM)'.rjust(12)}"
         lines.append(header)
-        
+
         # 2. 分隔線
-        lines.append("-" * 28) 
-        
+        lines.append("-" * 28)
+
         for sym, use_llm in page_data:
             sym_fmt = sym.ljust(12)
             llm_text = "開啟 (ON)" if use_llm else "關閉 (OFF)"
             llm_fmt = llm_text.rjust(12)
             lines.append(f"{sym_fmt} | {llm_fmt}")
-            
+
         lines.append("```")
         description = "\n".join(lines)
-        
+
     embed = discord.Embed(
         title=f"📡 【您的專屬觀察清單】",
         description=f"目前監控中的標的清單。系統將每 30 分鐘自動執行量化掃描。\n\n{description}",
         color=discord.Color.blurple()
     )
-    
+
     embed.set_footer(text=f"頁次: {current_page}/{total_pages} ｜ 📊 總項目: {total_items}")
     return embed
 
@@ -891,7 +891,7 @@ def create_portfolio_report_embed(report_lines, hedge_analysis=None, survival_ru
         positions_text = "\n\n".join(positions_list)
     else:
         positions_text = "目前無持倉部位。"
-    
+
     # 二次確認，防止 macro_text 全空或只包含空白，Discord Embed value 必須為非空字串
     if not macro_text:
         macro_text = "無宏觀風險數據。"
@@ -930,7 +930,7 @@ def create_portfolio_report_embed(report_lines, hedge_analysis=None, survival_ru
     # 🚀 欄位三：對沖有效性分析 (新增)
     if hedge_analysis:
         build_hedge_analysis_field(embed, hedge_analysis)
-        
+
         # 如果有 Tau 係數更新資訊，則額外提示
         dynamic_tau = getattr(embed, 'dynamic_tau', None) or (hedge_analysis.get('dynamic_tau') if isinstance(hedge_analysis, dict) else None)
         if dynamic_tau is not None:
@@ -938,7 +938,7 @@ def create_portfolio_report_embed(report_lines, hedge_analysis=None, survival_ru
             embed.add_field(name="🧬 STHE 自動優化狀態", value=f"目前對沖調教因子 τ: `{dynamic_tau:.2f}`", inline=False)
 
     embed.set_footer(text="Argo Risk Engine v2.5 | 基準標的: SPY")
-    
+
     return embed
 
 def create_transition_suggestion_embed(data: Dict[str, Any]) -> discord.Embed:
@@ -948,21 +948,21 @@ def create_transition_suggestion_embed(data: Dict[str, Any]) -> discord.Embed:
     pnl_usd = data['pnl_usd']
     res = data['transition_result']
     stock_p = data['stock_price']
-    
+
     embed = discord.Embed(
         title=f"🔄 倉位演進建議 | {sym}",
         description=f"偵測到投機部位獲利豐厚，建議轉向「收租模式」以鎖定長期收益。",
         color=discord.Color.gold(),
         timestamp=datetime.now(timezone.utc)
     )
-    
+
     # 目前獲利狀況
     embed.add_field(
-        name="📈 目前獲利狀況", 
-        value=f"獲利率: `{pnl_pct:+.1f}%` / `${pnl_usd:,.2f}`\n\u200b", 
+        name="📈 目前獲利狀況",
+        value=f"獲利率: `{pnl_pct:+.1f}%` / `${pnl_usd:,.2f}`\n\u200b",
         inline=True
     )
-    
+
     # 演進後效益
     embed.add_field(
         name="🧬 演進後預期效益",
@@ -971,7 +971,7 @@ def create_transition_suggestion_embed(data: Dict[str, Any]) -> discord.Embed:
                f"預期 CC 年化報酬 (AROC): `{res.projected_aroc:.1f}%` (@${res.cc_strike})\n\u200b"),
         inline=False
     )
-    
+
     # 操作指令建議
     embed.add_field(
         name="🛠️ 建議操作路徑",
@@ -980,7 +980,7 @@ def create_transition_suggestion_embed(data: Dict[str, Any]) -> discord.Embed:
                f"3. **Covered Call**: 賣出 `${res.cc_strike}` Call 啟動收租。\n\u200b"),
         inline=False
     )
-    
+
     embed.set_footer(text="Nexus Position Evolution Engine | 專業投資者建議")
     return embed
 
@@ -1033,7 +1033,7 @@ def build_scan_report(result: Dict[str, Any]):
     """
     ai_decision = result.get('ai_decision', 'SKIP')
     color = 0x2ecc71 if ai_decision == 'APPROVE' else (0xe74c3c if ai_decision == 'VETO' else 0x3498db)
-    
+
     embed = discord.Embed(
         title=f"📡 量化掃描報告: {result['symbol']}",
         description=f"策略: `{result.get('strategy', 'N/A')}` | 履約價: `${result.get('strike', 'N/A')}` | 到期日: `{result.get('target_date', 'N/A')}`",
@@ -1062,9 +1062,9 @@ def build_scan_report(result: Dict[str, Any]):
     vix = result.get('macro_vix', result.get('vix', 0))
     oil = result.get('macro_oil', result.get('oil', 0))
     vix_status = "🔴" if vix > 25 else "🟢"
-    
+
     embed.set_footer(text=f"環境感知: VIX {vix} {vix_status} | WTI ${oil} | 基準 SPY: ${result.get('spy_price', 0):.1f}")
-    
+
     return embed
 
 def create_rehedge_embed(rehedge_info: Dict[str, Any]) -> discord.Embed:
@@ -1073,25 +1073,25 @@ def create_rehedge_embed(rehedge_info: Dict[str, Any]) -> discord.Embed:
     """
     priority = rehedge_info.get('priority', 'NORMAL')
     color = 0xf1c40f if priority == "NORMAL" else 0xe74c3c # 黃色或紅色
-    
+
     symbol = rehedge_info.get('symbol', 'SPY')
     suggested_qty = rehedge_info.get('suggested_spy_qty', 0)
     reason = rehedge_info.get('reason', '偵測到曝險異常或市場轉弱')
 
     embed = discord.Embed(
-        title="🛡️ 防禦啟動：自動避險回補建議", 
+        title="🛡️ 防禦啟動：自動避險回補建議",
         color=color,
         description=f"標的: **{symbol}**"
     )
-    
+
     embed.add_field(name="觸發原因", value=f"```\n{reason}\n```", inline=False)
-    
+
     action_val = f"賣出 (Short) `{suggested_qty}` 股 SPY" if suggested_qty > 0 else f"買入 (Long) `{abs(suggested_qty)}` 股 SPY"
     embed.add_field(name="建議動作", value=action_val, inline=True)
-    
+
     embed.set_footer(text="提示：當前趨勢已走弱，掛回避險可鎖定現有獲利。")
     embed.timestamp = datetime.now(timezone.utc)
-    
+
     return embed
 
 def create_ddp_embed(report: Dict[str, Any]) -> discord.Embed:
@@ -1102,25 +1102,25 @@ def create_ddp_embed(report: Dict[str, Any]) -> discord.Embed:
     eps_growth = report['eps_growth'] * 100
     rev_accel = "加速 (Accelerating)" if report['rev_accel'] else "穩定 (Stable)"
     score = report['confidence_score']
-    
+
     # 計算 P/E 均值回歸空間 (預期漲幅)
     pe_upside = (pe_mean / curr_pe - 1) * 100 if curr_pe > 0 else 0
-    
+
     embed = discord.Embed(
         title=f"🌌 Nexus 戴維斯雙擊預警: {sym}",
         description=f"偵測到標的符合 **Davis Double Play (DDP)** 條件：盈餘增長與估值擴張的雙重共振。",
         color=0x00FF7F, # SpringGreen
         timestamp=datetime.now(timezone.utc)
     )
-    
+
     embed.add_field(name="目前本益比 (Current P/E)", value=f"`{curr_pe:.2f}`", inline=True)
     embed.add_field(name="3 年本益比均值 (3Y P/E Mean)", value=f"`{pe_mean:.2f}`", inline=True)
     embed.add_field(name="預估本益比回歸空間", value=f"`+{pe_upside:.1f}%`", inline=True)
-    
+
     embed.add_field(name="預估 EPS 成長率 (Proj. EPS Growth)", value=f"`{eps_growth:+.1f}%`", inline=True)
     embed.add_field(name="營收加速狀態 (Revenue Acceleration)", value=f"`{rev_accel}`", inline=True)
     embed.add_field(name="DDP 信心評分 (Confidence Score)", value=f"`{score:.0f}/100`", inline=True)
-    
+
     # 邏輯解釋
     logic_text = (
         f"1. **盈餘動能**: YoY 成長率 `{eps_growth:.1f}%` 超過 15% 門檻。\n"
@@ -1129,7 +1129,7 @@ def create_ddp_embed(report: Dict[str, Any]) -> discord.Embed:
         f"4. **動能確認**: 營收成長較前一週期加速。"
     )
     embed.add_field(name="🧐 量化篩選邏輯", value=logic_text, inline=False)
-    
+
     embed.set_footer(text="Nexus Quantitative Research | 戴維斯雙擊引擎 v1.0")
     return embed
 
@@ -1147,36 +1147,36 @@ def create_volatility_embed(report: Dict[str, Any]) -> discord.Embed:
     stop_loss = report['stop_loss']
     daily_theta = report['daily_theta']
     runway_impact = report['runway_impact']
-    
+
     # 決定顏色 (Buy Signal = Green, Watchlist Alert = Yellow)
     color = 0x00ff00 if status == "波動率極低" else 0xffff00
-    
+
     embed = discord.Embed(
         title="📊 Nexus Seeker | 波動率優勢偵測",
         color=color,
         timestamp=datetime.now(timezone.utc)
     )
-    
+
     # Field 1: [Symbol] 戰略評估
     val1 = (f"當前價格 (Current Price): `${price:.2f}`\n"
             f"IV / IV Percentile: `{iv}% ({iv_p}%)`\n"
             f"HV (252-day): `{hv}%`\n"
             f"狀態: **{status}**\n\u200b")
     embed.add_field(name=f"🔍 {sym} 戰略評估", value=val1, inline=False)
-    
+
     # Field 2: 買入時機分析
     catalyst = f"距離財報 {days_to_earnings} 天" if days_to_earnings <= 90 else "無近期財報"
     val2 = (f"建議策略 (Recommended Strategy): **{strategy}**\n"
             f"觸發邏輯 (Trigger Logic): {trigger_logic}\n"
             f"催化劑 (Catalysts): {catalyst}\n\u200b")
     embed.add_field(name="🎯 買入時機分析", value=val2, inline=False)
-    
+
     # Field 3: 風險管理 (NRO)
     val3 = (f"建議停損 (Suggested Stop Loss): `${stop_loss:.2f}`\n"
             f"Theta 每日損耗 (Daily Theta Decay): `-${daily_theta:.2f}/day`\n"
             f"跑道影響 (Runway Impact): 預計影響生存跑道 `{runway_impact}` 天\n\u200b")
     embed.add_field(name="🛡️ 風險管理 (NRO)", value=val3, inline=False)
-    
+
     embed.set_footer(text="Nexus Volatility Strategist Agent v1.0 | 專注廉價波動率偵測")
     return embed
 
@@ -1199,7 +1199,7 @@ def build_hedge_analysis_field(embed, analysis):
     hedge_contribution = _safe_float(analysis.get('hedge_contribution', 0.0), 0.0)
     hedge_ratio = _safe_float(analysis.get('hedge_ratio', 0.0), 0.0)
     net_pnl = _safe_float(analysis.get('net_pnl', 0.0), 0.0)
-    
+
     # 決定有效性評價
     if effectiveness >= 0.8: eff_text = "🎯 精準"
     elif effectiveness >= 0.6: eff_text = "⚖️ 適中"
@@ -1212,5 +1212,5 @@ def build_hedge_analysis_field(embed, analysis):
         f"🧩 **對沖有效性 (ES)**: `{effectiveness:.2%}` ({eff_text})\n"
         f"🏁 **最終淨損益**: **`${net_pnl:,.2f}`**"
     )
-    
+
     embed.add_field(name="🛡️ 對沖有效性診斷", value=_safe_embed_field_value(content, "對沖分析資料不足。"), inline=False)

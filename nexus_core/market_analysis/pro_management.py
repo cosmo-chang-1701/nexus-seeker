@@ -31,25 +31,25 @@ def simulate_pro_transition(
     模擬將「投機性期權部位 (Speculative Options)」演進為「核心現股 + 備兌買權 (Core Equity + Covered Call)」的過程。
     """
     # 1. 計算平倉收益
-    net_proceeds = current_option_pnl 
-    
+    net_proceeds = current_option_pnl
+
     # 2. 計算購入現股所需總資本
     total_purchase_cost = current_stock_price * lot_size
     cc_total_premium = target_cc_premium * lot_size
-    
+
     # 3. 計算追加資本 (不含即將收取的權利金，因為下單買股票時權利金尚未入帳)
     additional_capital = max(0.0, total_purchase_cost - net_proceeds)
-    
+
     # 4. 淨投入資本 (扣除期權利潤與即將收取的權利金)
     net_capital_outlay = total_purchase_cost - net_proceeds - cc_total_premium
-    
+
     # 5. 計算調整後成本價 (Adjusted Cost Basis)
     adjusted_cost_basis = net_capital_outlay / lot_size
-    
+
     # 6. 計算預期年化回報率 (AROC)
     # 使用淨投入作為分母來衡量資本效率
     projected_aroc = (cc_total_premium / net_capital_outlay * (365 / dte) * 100) if net_capital_outlay > 0 else 0.0
-    
+
     # 7. 效率增益：相對於現價的成本折讓比
     efficiency_gain = (1 - (adjusted_cost_basis / current_stock_price)) * 100
 

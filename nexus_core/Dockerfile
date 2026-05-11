@@ -21,6 +21,7 @@ RUN chmod +x /entrypoint.sh
 # Change ownership to the non-root user and initialize data dir for named volume
 RUN mkdir -p /app/data && chown -R appuser:appuser /app
 
+USER appuser
 
 HEALTHCHECK --interval=1m --timeout=10s --start-period=1m --retries=3 \
     CMD python bot_healthy.py || exit 1

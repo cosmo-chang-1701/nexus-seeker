@@ -1,0 +1,27 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+      - id: check-json
+      - id: debug-statements
+
+  - repo: https://github.com/returntocorp/semgrep
+    rev: 'v1.65.0'
+    hooks:
+      - id: semgrep
+        args: ['--config', 'auto', '--error']
+        stages: [pre-push]
+
+  - repo: local
+    hooks:
+      - id: docker-test
+        name: docker-test
+        entry: bash -c "docker build -t nexus-seeker-test -f Dockerfile.test . && docker run --rm nexus-seeker-test"
+        language: system
+        stages: [pre-commit]
+        always_run: true
+        pass_filenames: false

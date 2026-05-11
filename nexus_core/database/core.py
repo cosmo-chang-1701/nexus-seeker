@@ -3,6 +3,7 @@ import logging
 import pkgutil
 import importlib
 import config
+import re
 
 from database import migrations
 
@@ -15,7 +16,15 @@ logger = logging.getLogger(__name__)
 # 系統啟動時會自動掃描該目錄下的所有模組並載入。
 def get_migrations():
     migration_list = []
+    # 預期模組名稱格式: v001_init 等
+    module_pattern = re.compile(r"^[a-z0-9_]+$")
+
     for _, module_name, _ in pkgutil.iter_modules(migrations.__path__):
+        if not module_pattern.match(module_name):
+            logger.warning(f"跳過不合規的遷移模組名稱: {module_name}")
+            continue
+
+        # nosemgrep: python.lang.security.audit.non-literal-import.non-literal-import
         mod = importlib.import_module(f"database.migrations.{module_name}")
         if hasattr(mod, "version") and hasattr(mod, "description") and hasattr(mod, "sql"):
             migration_list.append({
@@ -50,6 +59,8 @@ def run_migrations():
     logger.info(f"目前資料庫 Schema 版本: V{current_version}")
 
     # 3. 依序執行尚未套用的遷移指令
+    table_pattern = re.compile(r"^[a-zA-Z0-9_]+$")
+
     for migration in MIGRATIONS:
         v = migration["version"]
         if v > current_version:
@@ -57,7 +68,7 @@ def run_migrations():
             try:
                 # 執行 SQL 遷移
                 cursor.executescript(migration["sql"])
-                
+
                 # 🚀 執行選配的 Python 資料遷移函式
                 mod = migration["module"]
                 if hasattr(mod, "migrate_data"):
@@ -70,14 +81,18 @@ def run_migrations():
                 logger.info(f"✅ V{v} 遷移成功！")
             except Exception as e:
                 conn.rollback()
-                
+
                 # 🚀 [Self-Healing] 嘗試自動清理殘留的 _new 暫存表，防止下次遷移因表已存在而死鎖
                 try:
                     cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%_new'")
                     temp_tables = cursor.fetchall()
                     for (table_name,) in temp_tables:
-                        logger.warning(f"🧹 偵測到殘留暫存表 {table_name}，正在自動清理以解除遷移死鎖...")
-                        cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
+                        if table_pattern.match(table_name):
+                            logger.warning(f"🧹 偵測到殘留暫存表 {table_name}，正在自動清理以解除遷移死鎖...")
+                            # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+                            cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
+                        else:
+                            logger.error(f"⚠️ 偵測到非法格式的暫存表名稱: {table_name}，拒絕自動清理。")
                     conn.commit()
                 except Exception as cleanup_err:
                     logger.error(f"⚠️ 自動清理暫存表時出錯: {cleanup_err}")
