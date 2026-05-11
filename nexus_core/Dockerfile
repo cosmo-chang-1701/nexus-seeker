@@ -11,15 +11,14 @@ WORKDIR /app
 COPY pyproject.toml /app/
 
 RUN pip install --upgrade pip && \
-    pip install --no-cache-dir . && \
-    apt-get update && apt-get install -y --no-install-recommends gosu && rm -rf /var/lib/apt/lists/*
+    pip install --no-cache-dir .
 
 COPY . /app/
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # Change ownership to the non-root user and initialize data dir for named volume
-RUN mkdir -p /app/data && chown -R appuser:appuser /app
+RUN mkdir -p /app/data && chown -R appuser:appuser /app /entrypoint.sh
 
 USER appuser
 
