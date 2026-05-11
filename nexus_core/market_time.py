@@ -6,7 +6,8 @@ import logging
 logger = logging.getLogger(__name__)
 
 ny_tz = ZoneInfo("America/New_York")
-nyse_calendar = mcal.get_calendar('NYSE')
+nyse_calendar = mcal.get_calendar("NYSE")
+
 
 def get_next_market_target_time(reference="open", offset_minutes=0, skip_today=False):
     """獲取下一個市場的目標時間"""
@@ -22,9 +23,9 @@ def get_next_market_target_time(reference="open", offset_minutes=0, skip_today=F
 
     for index, row in schedule.iterrows():
         if reference == "open":
-            target_utc = row['market_open'].to_pydatetime()
+            target_utc = row["market_open"].to_pydatetime()
         else:
-            target_utc = row['market_close'].to_pydatetime()
+            target_utc = row["market_close"].to_pydatetime()
 
         # Ensure target_utc is timezone-aware (UTC)
         if target_utc.tzinfo is None:
@@ -38,12 +39,14 @@ def get_next_market_target_time(reference="open", offset_minutes=0, skip_today=F
 
     return None
 
+
 def get_sleep_seconds(target_time):
     if not target_time:
         return 3600
 
     sleep_secs = (target_time - datetime.now(ny_tz)).total_seconds()
     return max(0.0, sleep_secs)
+
 
 def is_market_open():
     """
@@ -62,8 +65,8 @@ def is_market_open():
 
     # 4. 取得今天的確切開盤與收盤時間，並強制轉換為美東時區
     row = schedule.iloc[0]
-    market_open = row['market_open'].tz_convert(ny_tz).to_pydatetime()
-    market_close = row['market_close'].tz_convert(ny_tz).to_pydatetime()
+    market_open = row["market_open"].tz_convert(ny_tz).to_pydatetime()
+    market_close = row["market_close"].tz_convert(ny_tz).to_pydatetime()
 
     # 5. 判斷當下時間是否落在開盤與收盤之間
     return market_open <= now_ny <= market_close

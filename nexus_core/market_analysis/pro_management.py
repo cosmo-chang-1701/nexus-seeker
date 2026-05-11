@@ -1,22 +1,24 @@
 from dataclasses import dataclass
-from typing import Dict, Any
+
 
 @dataclass
 class TransitionResult:
     """
     Data structure representing the outcome of a position transition simulation.
     """
+
     initial_pnl: float
     net_proceeds: float
     shares_purchasable: int
-    additional_capital_required: float # 追加保證金/現金
-    net_capital_outlay: float         # 淨投入資本 (扣除權利金)
-    adjusted_cost_basis: float        # 調整後每股成本
+    additional_capital_required: float  # 追加保證金/現金
+    net_capital_outlay: float  # 淨投入資本 (扣除權利金)
+    adjusted_cost_basis: float  # 調整後每股成本
     total_shares: int
     cc_strike: float
     cc_premium: float
     projected_aroc: float
     capital_efficiency_gain: float
+
 
 def simulate_pro_transition(
     current_option_pnl: float,
@@ -24,7 +26,7 @@ def simulate_pro_transition(
     target_cc_strike: float,
     target_cc_premium: float,
     lot_size: int = 100,
-    dte: int = 30
+    dte: int = 30,
 ) -> TransitionResult:
     """
     戰略轉軌引擎 (Strategic Transition Engine)：
@@ -48,7 +50,11 @@ def simulate_pro_transition(
 
     # 6. 計算預期年化回報率 (AROC)
     # 使用淨投入作為分母來衡量資本效率
-    projected_aroc = (cc_total_premium / net_capital_outlay * (365 / dte) * 100) if net_capital_outlay > 0 else 0.0
+    projected_aroc = (
+        (cc_total_premium / net_capital_outlay * (365 / dte) * 100)
+        if net_capital_outlay > 0
+        else 0.0
+    )
 
     # 7. 效率增益：相對於現價的成本折讓比
     efficiency_gain = (1 - (adjusted_cost_basis / current_stock_price)) * 100
@@ -64,10 +70,13 @@ def simulate_pro_transition(
         cc_strike=target_cc_strike,
         cc_premium=target_cc_premium,
         projected_aroc=projected_aroc,
-        capital_efficiency_gain=efficiency_gain
+        capital_efficiency_gain=efficiency_gain,
     )
 
-def calculate_survival_runway(cash_reserve: float, monthly_expense: float, daily_theta: float) -> float:
+
+def calculate_survival_runway(
+    cash_reserve: float, monthly_expense: float, daily_theta: float
+) -> float:
     """
     生存天數計算 (Survival Runway):
     衡量現有現金儲備配合 Theta 現金流能維持多久的生存。
@@ -78,15 +87,17 @@ def calculate_survival_runway(cash_reserve: float, monthly_expense: float, daily
     runway_months = cash_reserve / net_monthly_burn
     return round(runway_months * 30, 1)
 
+
 # Aliases for compatibility
 calculate_financial_runway = calculate_survival_runway
+
 
 def simulate_cc_transition(
     current_option_pnl: float,
     current_stock_price: float,
     target_cc_strike: float,
     target_cc_premium: float,
-    lot_size: int = 100
+    lot_size: int = 100,
 ) -> TransitionResult:
     """
     向前相容的 CC 演進模擬接口。
@@ -96,5 +107,5 @@ def simulate_cc_transition(
         current_stock_price=current_stock_price,
         target_cc_strike=target_cc_strike,
         target_cc_premium=target_cc_premium,
-        lot_size=lot_size
+        lot_size=lot_size,
     )

@@ -7,20 +7,53 @@ import config
 # 虛擬交易室 (Virtual Trading Room) CRUD
 # ==========================================
 
-def add_virtual_trade(user_id: int, symbol: str, opt_type: str, strike: float, expiry: str, entry_price: float, quantity: int, weighted_delta: float = 0.0, theta: float = 0.0, gamma: float = 0.0, tags: list = None, parent_trade_id: int = None, trade_category: str = 'SPECULATIVE'):
+
+def add_virtual_trade(
+    user_id: int,
+    symbol: str,
+    opt_type: str,
+    strike: float,
+    expiry: str,
+    entry_price: float,
+    quantity: int,
+    weighted_delta: float = 0.0,
+    theta: float = 0.0,
+    gamma: float = 0.0,
+    tags: list = None,
+    parent_trade_id: int = None,
+    trade_category: str = "SPECULATIVE",
+):
     tags_str = json.dumps(tags) if tags else None
 
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
-    cursor.execute('''
+    cursor.execute(
+        """
         INSERT INTO virtual_trades (user_id, symbol, opt_type, strike, expiry, entry_price, quantity, weighted_delta, theta, gamma, status, parent_trade_id, tags, trade_category)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?)
-    ''', (user_id, symbol, opt_type, strike, expiry, entry_price, quantity, weighted_delta, theta, gamma, parent_trade_id, tags_str, trade_category))
+    """,
+        (
+            user_id,
+            symbol,
+            opt_type,
+            strike,
+            expiry,
+            entry_price,
+            quantity,
+            weighted_delta,
+            theta,
+            gamma,
+            parent_trade_id,
+            tags_str,
+            trade_category,
+        ),
+    )
 
     trade_id = cursor.lastrowid
     conn.commit()
     conn.close()
     return trade_id
+
 
 def get_virtual_trades(user_id: int = None, status: str = None):
     """
@@ -49,16 +82,18 @@ def get_virtual_trades(user_id: int = None, status: str = None):
 
     # deserialize tags
     for row in rows:
-        if row['tags']:
-            row['tags'] = json.loads(row['tags'])
+        if row["tags"]:
+            row["tags"] = json.loads(row["tags"])
         else:
-            row['tags'] = []
+            row["tags"] = []
 
     return rows
 
+
 def get_all_open_virtual_trades():
     """獲取全站所有開啟的虛擬交易"""
-    return get_virtual_trades(status='OPEN')
+    return get_virtual_trades(status="OPEN")
+
 
 def get_virtual_trade_by_id(trade_id: int):
     """根據 trade_id 獲取虛擬交易"""
@@ -71,29 +106,34 @@ def get_virtual_trade_by_id(trade_id: int):
     row = None
     if fetched:
         row = dict(fetched)
-        if row['tags']:
-            row['tags'] = json.loads(row['tags'])
+        if row["tags"]:
+            row["tags"] = json.loads(row["tags"])
         else:
-            row['tags'] = []
+            row["tags"] = []
 
     conn.close()
     return row
 
-def close_virtual_trade(trade_id: int, exit_price: float, status: str = 'CLOSED', pnl: float = 0.0):
+
+def close_virtual_trade(
+    trade_id: int, exit_price: float, status: str = "CLOSED", pnl: float = 0.0
+):
     """平倉虛擬交易"""
     conn = sqlite3.connect(config.DB_NAME)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
     # 先取得目前的資料來計算 PnL
-    cursor.execute("SELECT entry_price, quantity FROM virtual_trades WHERE id = ?", (trade_id,))
+    cursor.execute(
+        "SELECT entry_price, quantity FROM virtual_trades WHERE id = ?", (trade_id,)
+    )
     trade = cursor.fetchone()
     if not trade:
         conn.close()
         return False
 
-    entry_price = trade['entry_price']
-    quantity = trade['quantity']
+    entry_price = trade["entry_price"]
+    quantity = trade["quantity"]
 
     # PnL 計算:如果是買方(quantity > 0)，則 PnL = (exit - entry) * quantity * 100
     # 但 quantity 這裡是指合約數，我們統一用 (exit - entry) * quantity * 100 嗎？
@@ -106,15 +146,19 @@ def close_virtual_trade(trade_id: int, exit_price: float, status: str = 'CLOSED'
 
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    cursor.execute('''
+    cursor.execute(
+        """
         UPDATE virtual_trades
         SET status = ?, exit_price = ?, closed_at = ?, pnl = ?
         WHERE id = ?
-    ''', (status, exit_price, now, pnl, trade_id))
+    """,
+        (status, exit_price, now, pnl, trade_id),
+    )
 
     conn.commit()
     conn.close()
     return True
+
 
 def get_open_virtual_trades(user_id: int = None):
     """
@@ -134,18 +178,25 @@ def get_open_virtual_trades(user_id: int = None):
     columns = [column[0] for column in cursor.description]
     return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
-def update_virtual_trade_greeks(trade_id: int, weighted_delta: float, theta: float, gamma: float):
+
+def update_virtual_trade_greeks(
+    trade_id: int, weighted_delta: float, theta: float, gamma: float
+):
     """更新虛擬交易紀錄的希臘字母數據"""
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
-    cursor.execute('''
+    cursor.execute(
+        """
         UPDATE virtual_trades
         SET weighted_delta = ?, theta = ?, gamma = ?
         WHERE id = ?
-    ''', (weighted_delta, theta, gamma, trade_id))
+    """,
+        (weighted_delta, theta, gamma, trade_id),
+    )
     conn.commit()
     conn.close()
     return True
+
 
 def get_all_virtual_trades(user_id: int):
     """

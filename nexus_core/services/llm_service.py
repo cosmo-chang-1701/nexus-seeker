@@ -1,4 +1,3 @@
-import os
 import json
 import logging
 import psutil
@@ -13,10 +12,12 @@ logger = logging.getLogger(__name__)
 # 記憶體安全閾值 (85%)
 MEMORY_SAFETY_THRESHOLD = 85.0
 
+
 def is_memory_safe() -> bool:
     """檢查系統記憶體是否高於安全閾值。"""
     mem = psutil.virtual_memory()
     return mem.percent < MEMORY_SAFETY_THRESHOLD
+
 
 # ==========================================
 # ⚙️ LLM Inference Server 連線設定
@@ -28,6 +29,7 @@ if API_KEY:
 if LLM_API_BASE:
     client_args["base_url"] = LLM_API_BASE
 client = AsyncOpenAI(**client_args)
+
 
 # ==========================================
 # 📊 Pydantic Schema 定義 (Structured Output)
@@ -44,58 +46,91 @@ class RiskAssessment(BaseModel):
         description="一句話的終極風控結論 (請控制在 30 字以內，極度冷靜客觀)"
     )
 
+
 class AnalystReport(BaseModel):
     model_config = ConfigDict(slots=True)
-    report_content: str = Field(description="完整的分析報告內容 (Markdown 格式)，必須維持原本的標題與分隔線")
+    report_content: str = Field(
+        description="完整的分析報告內容 (Markdown 格式)，必須維持原本的標題與分隔線"
+    )
+
 
 class PolymarketAnalysis(BaseModel):
     model_config = ConfigDict(slots=True)
     event_background: str = Field(description="簡短的事件背景，說明該預測市場在賭什麼")
-    whale_logic: str = Field(description="分析此筆大額交易可能的動機、對沖行為或內線情報推測")
+    whale_logic: str = Field(
+        description="分析此筆大額交易可能的動機、對沖行為或內線情報推測"
+    )
     market_sentiment: str = Field(description="目前市場的整體情緒、賠率分布與預期偏差")
-    one_line_verdict: str = Field(description="一句話的核心總結，必須包含看多/看空的方向性結論")
+    one_line_verdict: str = Field(
+        description="一句話的核心總結，必須包含看多/看空的方向性結論"
+    )
+
 
 class UOAIntentMapping(BaseModel):
     model_config = ConfigDict(slots=True)
-    classification: Literal["Institutional Hedging", "Speculative Directional Betting", "Arbitrage", "Unknown"] = Field(
-        description="活動分類"
-    )
+    classification: Literal[
+        "Institutional Hedging",
+        "Speculative Directional Betting",
+        "Arbitrage",
+        "Unknown",
+    ] = Field(description="活動分類")
     confidence: float = Field(description="信心指數 (0.0 - 1.0)")
     explanation: str = Field(description="簡短解釋分類理由 (繁體中文)")
 
-async def classify_uoa_intent(symbol: str, uoa_data: dict, whale_intent: str = None) -> dict:
+
+async def classify_uoa_intent(
+    symbol: str, uoa_data: dict, whale_intent: str = None
+) -> dict:
     """
     結合 UOA 數據與 Polymarket 巨鯨意圖，判定異常活動性質。
     """
     if not is_memory_safe():
         logger.warning("🚨 [記憶體警報] 系統資源不足，跳過 UOA LLM 分析。")
-        return {"classification": "Unknown", "confidence": 0, "explanation": "系統記憶體負載過高，已自動降級。"}
+        return {
+            "classification": "Unknown",
+            "confidence": 0,
+            "explanation": "系統記憶體負載過高，已自動降級。",
+        }
 
     system_prompt = """
-...
+    你是 Nexus Seeker 的異常期權活動分析專家。
+    請分析給定的 UOA (Unusual Option Activity) 數據，並結合 Polymarket 巨鯨的意圖 (若有提供)，判定該交易的性質。
     """
+
+    user_prompt = f"標的: {symbol}\nUOA 數據: {json.dumps(uoa_data, ensure_ascii=False)}\n巨鯨意圖: {whale_intent or '無'}"
 
     try:
         response = await client.beta.chat.completions.parse(
             model=LLM_MODEL_NAME,
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
+                {"role": "user", "content": user_prompt},
             ],
-            response_format=UOAIntentMapping
+            response_format=UOAIntentMapping,
         )
         return response.choices[0].message.parsed.model_dump()
     except Exception as e:
         logger.error(f"UOA 分類失敗: {e}")
-        return {"classification": "Unknown", "confidence": 0, "explanation": "AI 分析不可用"}
+        return {
+            "classification": "Unknown",
+            "confidence": 0,
+            "explanation": "AI 分析不可用",
+        }
 
-async def evaluate_trade_risk(symbol: str, strategy: str, news_context: str, reddit_context: str) -> dict:
+
+async def evaluate_trade_risk(
+    symbol: str, strategy: str, news_context: str, reddit_context: str
+) -> dict:
     """
     呼叫 LLM 進行 NLP 新聞毒性分析與風控審查
     """
     if not is_memory_safe():
         logger.warning("🚨 [記憶體警報] 系統資源不足，跳過風控 LLM 分析。")
-        return {"decision": "APPROVE", "tags": ["資源受限"], "reasoning": "系統記憶體高負載，自動通過風控審查以確保核心運行。"}
+        return {
+            "decision": "APPROVE",
+            "tags": ["資源受限"],
+            "reasoning": "系統記憶體高負載，自動通過風控審查以確保核心運行。",
+        }
     system_prompt = """
     ## Role & Objective
     You are a Quant Hedge Fund CRO. Evaluate option proposals by cross-referencing official news and Reddit sentiment (titles + consensus scores) to prevent tail risks.
@@ -137,21 +172,22 @@ async def evaluate_trade_risk(symbol: str, strategy: str, news_context: str, red
             model=LLM_MODEL_NAME,
             instructions=system_prompt,
             input=user_prompt,
-            text_format=RiskAssessment
+            text_format=RiskAssessment,
         )
 
         result = response.output_parsed
         tags_str = " ".join([f"[{tag}]" for tag in result.tags])
         formatted_reasoning = f"🏷️ 標籤：{tags_str}\n📝 理由：{result.reasoning}"
-        return {
-            "decision": result.decision,
-            "reasoning": formatted_reasoning
-        }
+        return {"decision": result.decision, "reasoning": formatted_reasoning}
 
     except Exception as e:
         logger.error(f"[{symbol}] LLM 伺服器連線或推論失敗: {e}")
         # Fail-Open 策略
-        return {"decision": "APPROVE", "reasoning": f"AI 伺服器離線或異常，預設放行: {str(e)}"}
+        return {
+            "decision": "APPROVE",
+            "reasoning": f"AI 伺服器離線或異常，預設放行: {str(e)}",
+        }
+
 
 async def generate_analyst_report(report_type: str, raw_data: dict) -> str:
     """
@@ -172,19 +208,28 @@ async def generate_analyst_report(report_type: str, raw_data: dict) -> str:
             model=LLM_MODEL_NAME,
             instructions=system_prompt,
             input=user_prompt,
-            text_format=AnalystReport
+            text_format=AnalystReport,
         )
         return response.output_parsed.report_content
     except Exception as e:
         logger.error(f"Failed to generate analyst report: {e}")
         return f"**{report_type}**\n--------------------------------------------------\n⚠️ LLM 生成失敗或伺服器離線: {str(e)}"
 
-async def generate_polymarket_summary(market_info: dict, trade_data: dict, usd_value: float, trade_details: dict = None) -> str:
+
+async def generate_polymarket_summary(
+    market_info: dict, trade_data: dict, usd_value: float, trade_details: dict = None
+) -> str:
     """
     針對 Polymarket 巨鯨交易生成高度結構化的 Markdown 分析報告。
     """
-    intent_desc = trade_details.get('intent', '未知意圖') if trade_details else '未知意圖'
-    sentiment_tag = "看多 (Bullish)" if (trade_details and trade_details.get('is_bullish')) else "看空 (Bearish)"
+    intent_desc = (
+        trade_details.get("intent", "未知意圖") if trade_details else "未知意圖"
+    )
+    sentiment_tag = (
+        "看多 (Bullish)"
+        if (trade_details and trade_details.get("is_bullish"))
+        else "看空 (Bearish)"
+    )
 
     system_prompt = f"""
     你是一位華爾街頂尖預測市場策略師。
@@ -217,7 +262,7 @@ async def generate_polymarket_summary(market_info: dict, trade_data: dict, usd_v
             model=LLM_MODEL_NAME,
             instructions=system_prompt,
             input=user_prompt,
-            text_format=PolymarketAnalysis
+            text_format=PolymarketAnalysis,
         )
 
         # 使用 Markdown 優化輸出格式

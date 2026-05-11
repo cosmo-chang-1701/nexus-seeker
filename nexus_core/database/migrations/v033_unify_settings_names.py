@@ -1,6 +1,3 @@
-import sqlite3
-import logging
-
 version = 33
 description = "Unify user_settings column names: portfolio_value -> capital, risk_limit_pct -> risk_limit"
 

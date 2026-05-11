@@ -1,5 +1,7 @@
 version = 14
-description = "Ensure financials_cache supports data payload column and updated_at index"
+description = (
+    "Ensure financials_cache supports data payload column and updated_at index"
+)
 sql = """
 ALTER TABLE financials_cache ADD COLUMN data TEXT;
 UPDATE financials_cache SET data = metrics WHERE data IS NULL;

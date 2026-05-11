@@ -3,9 +3,10 @@ import json
 import logging
 from typing import List, Optional, Dict, Any
 import config
-from models.asset import Asset, ContextType, TradeMetadata, HoldingMetadata, WatchMetadata
+from models.asset import Asset, ContextType, TradeMetadata, HoldingMetadata
 
 logger = logging.getLogger(__name__)
+
 
 class AssetManager:
     def __init__(self, db_name: str = None):
@@ -16,7 +17,9 @@ class AssetManager:
         conn.row_factory = sqlite3.Row
         return conn
 
-    def get_assets(self, user_id: int, context_type: Optional[ContextType] = None) -> List[Asset]:
+    def get_assets(
+        self, user_id: int, context_type: Optional[ContextType] = None
+    ) -> List[Asset]:
         """獲取指定使用者的資產清單"""
         query = "SELECT * FROM assets WHERE user_id = ?"
         params = [user_id]
@@ -30,22 +33,28 @@ class AssetManager:
             cursor.execute(query, params)
             for row in cursor.fetchall():
                 data = dict(row)
-                data['metadata'] = json.loads(data['metadata']) if data['metadata'] else {}
+                data["metadata"] = (
+                    json.loads(data["metadata"]) if data["metadata"] else {}
+                )
                 assets.append(Asset(**data))
         return assets
 
-    def get_asset_by_symbol(self, user_id: int, symbol: str, context_type: ContextType) -> Optional[Asset]:
+    def get_asset_by_symbol(
+        self, user_id: int, symbol: str, context_type: ContextType
+    ) -> Optional[Asset]:
         """根據代號與類型獲取單一資產"""
         with self._get_conn() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT * FROM assets WHERE user_id = ? AND symbol = ? AND context_type = ?",
-                (user_id, symbol.upper(), context_type.value)
+                (user_id, symbol.upper(), context_type.value),
             )
             row = cursor.fetchone()
             if row:
                 data = dict(row)
-                data['metadata'] = json.loads(data['metadata']) if data['metadata'] else {}
+                data["metadata"] = (
+                    json.loads(data["metadata"]) if data["metadata"] else {}
+                )
                 return Asset(**data)
         return None
 
@@ -54,13 +63,14 @@ class AssetManager:
         with self._get_conn() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT * FROM assets WHERE user_id = ? AND id = ?",
-                (user_id, asset_id)
+                "SELECT * FROM assets WHERE user_id = ? AND id = ?", (user_id, asset_id)
             )
             row = cursor.fetchone()
             if row:
                 data = dict(row)
-                data['metadata'] = json.loads(data['metadata']) if data['metadata'] else {}
+                data["metadata"] = (
+                    json.loads(data["metadata"]) if data["metadata"] else {}
+                )
                 return Asset(**data)
         return None
 
@@ -76,7 +86,14 @@ class AssetManager:
                     SET symbol = ?, context_type = ?, risk_weight = ?, metadata = ?, updated_at = CURRENT_TIMESTAMP
                     WHERE id = ? AND user_id = ?
                     """,
-                    (asset.symbol.upper(), asset.context_type.value, asset.risk_weight, metadata_json, asset.id, asset.user_id)
+                    (
+                        asset.symbol.upper(),
+                        asset.context_type.value,
+                        asset.risk_weight,
+                        metadata_json,
+                        asset.id,
+                        asset.user_id,
+                    ),
                 )
                 conn.commit()
                 return True
@@ -84,7 +101,9 @@ class AssetManager:
                 logger.error(f"Update asset error: {e}")
                 return False
 
-    def update_asset_metadata(self, user_id: int, asset_id: int, updates: Dict[str, Any]) -> bool:
+    def update_asset_metadata(
+        self, user_id: int, asset_id: int, updates: Dict[str, Any]
+    ) -> bool:
         """部分更新資產的 metadata"""
         asset = self.get_asset_by_id(user_id, asset_id)
         if not asset:
@@ -93,7 +112,13 @@ class AssetManager:
         asset.metadata.update(updates)
         return self.update_asset(asset)
 
-    def update_asset_metadata_by_symbol(self, user_id: int, symbol: str, context_type: ContextType, updates: Dict[str, Any]) -> bool:
+    def update_asset_metadata_by_symbol(
+        self,
+        user_id: int,
+        symbol: str,
+        context_type: ContextType,
+        updates: Dict[str, Any],
+    ) -> bool:
         """根據 symbol 與類型部分更新資產的 metadata"""
         asset = self.get_asset_by_symbol(user_id, symbol, context_type)
         if not asset:
@@ -102,13 +127,17 @@ class AssetManager:
         asset.metadata.update(updates)
         return self.update_asset(asset)
 
-    def promote_to_trade(self, user_id: int, symbol: str, trade_details: Dict[str, Any]) -> bool:
+    def promote_to_trade(
+        self, user_id: int, symbol: str, trade_details: Dict[str, Any]
+    ) -> bool:
         """將 WATCH 狀態提升為 TRADE"""
         symbol = symbol.upper()
         watch_asset = self.get_asset_by_symbol(user_id, symbol, ContextType.WATCH)
 
         if not watch_asset:
-            logger.warning(f"Promote failed: {symbol} not found in WATCH for user {user_id}")
+            logger.warning(
+                f"Promote failed: {symbol} not found in WATCH for user {user_id}"
+            )
             return False
 
         # 準備 TRADE 詮釋資料
@@ -126,7 +155,7 @@ class AssetManager:
                     SET context_type = 'TRADE', metadata = ?, updated_at = CURRENT_TIMESTAMP
                     WHERE id = ?
                     """,
-                    (metadata_json, watch_asset.id)
+                    (metadata_json, watch_asset.id),
                 )
                 conn.commit()
                 return True
@@ -135,15 +164,20 @@ class AssetManager:
                 conn.rollback()
                 return False
 
-    def settle_to_holding(self, user_id: int, asset_id: int, execution_price: float) -> bool:
+    def settle_to_holding(
+        self, user_id: int, asset_id: int, execution_price: float
+    ) -> bool:
         """將 TRADE 狀態結算為 HOLDING (例如選擇權履約或到期轉現貨)"""
         with self._get_conn() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM assets WHERE id = ? AND user_id = ?", (asset_id, user_id))
+            cursor.execute(
+                "SELECT * FROM assets WHERE id = ? AND user_id = ?", (asset_id, user_id)
+            )
             row = cursor.fetchone()
-            if not row: return False
+            if not row:
+                return False
 
-            asset = Asset(**{**dict(row), 'metadata': json.loads(row['metadata'])})
+            asset = Asset(**{**dict(row), "metadata": json.loads(row["metadata"])})
             if asset.context_type != ContextType.TRADE:
                 return False
 
@@ -155,8 +189,7 @@ class AssetManager:
 
             # 更新為 HOLDING
             holding_meta = HoldingMetadata(
-                quantity=holding_qty,
-                avg_cost=execution_price
+                quantity=holding_qty, avg_cost=execution_price
             )
 
             try:
@@ -166,7 +199,7 @@ class AssetManager:
                     SET context_type = 'HOLDING', metadata = ?, updated_at = CURRENT_TIMESTAMP
                     WHERE id = ?
                     """,
-                    (holding_meta.model_dump_json(), asset_id)
+                    (holding_meta.model_dump_json(), asset_id),
                 )
                 conn.commit()
                 return True
@@ -186,7 +219,13 @@ class AssetManager:
                     INSERT INTO assets (user_id, symbol, context_type, risk_weight, metadata)
                     VALUES (?, ?, ?, ?, ?)
                     """,
-                    (asset.user_id, asset.symbol.upper(), asset.context_type.value, asset.risk_weight, metadata_json)
+                    (
+                        asset.user_id,
+                        asset.symbol.upper(),
+                        asset.context_type.value,
+                        asset.risk_weight,
+                        metadata_json,
+                    ),
                 )
                 conn.commit()
                 return True
@@ -194,13 +233,15 @@ class AssetManager:
                 logger.error(f"Add asset error: {e}")
                 return False
 
-    def delete_asset_by_symbol(self, user_id: int, symbol: str, context_type: ContextType) -> bool:
+    def delete_asset_by_symbol(
+        self, user_id: int, symbol: str, context_type: ContextType
+    ) -> bool:
         """刪除特定類型的資產"""
         with self._get_conn() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "DELETE FROM assets WHERE user_id = ? AND symbol = ? AND context_type = ?",
-                (user_id, symbol.upper(), context_type.value)
+                (user_id, symbol.upper(), context_type.value),
             )
             changes = cursor.rowcount
             conn.commit()
@@ -210,7 +251,9 @@ class AssetManager:
         """根據 ID 刪除資產"""
         with self._get_conn() as conn:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM assets WHERE id = ? AND user_id = ?", (asset_id, user_id))
+            cursor.execute(
+                "DELETE FROM assets WHERE id = ? AND user_id = ?", (asset_id, user_id)
+            )
             changes = cursor.rowcount
             conn.commit()
             return changes > 0

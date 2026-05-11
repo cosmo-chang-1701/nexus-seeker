@@ -9,6 +9,7 @@ from database import migrations
 
 logger = logging.getLogger(__name__)
 
+
 # ==========================================
 # 資料庫版本遷移註冊表 (Migration Registry)
 # ==========================================
@@ -26,17 +27,25 @@ def get_migrations():
 
         # nosemgrep: python.lang.security.audit.non-literal-import.non-literal-import
         mod = importlib.import_module(f"database.migrations.{module_name}")
-        if hasattr(mod, "version") and hasattr(mod, "description") and hasattr(mod, "sql"):
-            migration_list.append({
-                "version": mod.version,
-                "description": mod.description,
-                "sql": mod.sql,
-                "module": mod # 🚀 儲存模組參考
-            })
+        if (
+            hasattr(mod, "version")
+            and hasattr(mod, "description")
+            and hasattr(mod, "sql")
+        ):
+            migration_list.append(
+                {
+                    "version": mod.version,
+                    "description": mod.description,
+                    "sql": mod.sql,
+                    "module": mod,  # 🚀 儲存模組參考
+                }
+            )
     migration_list.sort(key=lambda x: x["version"])
     return migration_list
 
+
 MIGRATIONS = get_migrations()
+
 
 def run_migrations():
     """執行資料庫版本控管與遷移邏輯"""
@@ -44,15 +53,15 @@ def run_migrations():
     cursor = conn.cursor()
 
     # 1. 確保版控紀錄表存在
-    cursor.execute('''
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS schema_versions (
             version INTEGER PRIMARY KEY,
             applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-    ''')
+    """)
 
     # 2. 取得目前已套用的最高版本
-    cursor.execute('SELECT MAX(version) FROM schema_versions')
+    cursor.execute("SELECT MAX(version) FROM schema_versions")
     result = cursor.fetchone()[0]
     current_version = result if result is not None else 0
 
@@ -76,7 +85,7 @@ def run_migrations():
                     mod.migrate_data(conn)
 
                 # 紀錄該版本已套用
-                cursor.execute('INSERT INTO schema_versions (version) VALUES (?)', (v,))
+                cursor.execute("INSERT INTO schema_versions (version) VALUES (?)", (v,))
                 conn.commit()
                 logger.info(f"✅ V{v} 遷移成功！")
             except Exception as e:
@@ -84,28 +93,40 @@ def run_migrations():
 
                 # 🚀 [Self-Healing] 嘗試自動清理殘留的 _new 暫存表，防止下次遷移因表已存在而死鎖
                 try:
-                    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%_new'")
+                    cursor.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%_new'"
+                    )
                     temp_tables = cursor.fetchall()
                     for (table_name,) in temp_tables:
                         if table_pattern.match(table_name):
-                            logger.warning(f"🧹 偵測到殘留暫存表 {table_name}，正在自動清理以解除遷移死鎖...")
+                            logger.warning(
+                                f"🧹 偵測到殘留暫存表 {table_name}，正在自動清理以解除遷移死鎖..."
+                            )
                             # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                             cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
                         else:
-                            logger.error(f"⚠️ 偵測到非法格式的暫存表名稱: {table_name}，拒絕自動清理。")
+                            logger.error(
+                                f"⚠️ 偵測到非法格式的暫存表名稱: {table_name}，拒絕自動清理。"
+                            )
                     conn.commit()
                 except Exception as cleanup_err:
                     logger.error(f"⚠️ 自動清理暫存表時出錯: {cleanup_err}")
 
-                if "duplicate column" in str(e).lower() or "no such column" in str(e).lower():
+                if (
+                    "duplicate column" in str(e).lower()
+                    or "no such column" in str(e).lower()
+                ):
                     logger.warning(f"⚠️ V{v} 遷移警告: {e} (允許繼續，標記為成功)")
-                    cursor.execute('INSERT INTO schema_versions (version) VALUES (?)', (v,))
+                    cursor.execute(
+                        "INSERT INTO schema_versions (version) VALUES (?)", (v,)
+                    )
                     conn.commit()
                 else:
                     logger.error(f"❌ V{v} 遷移失敗，已執行 Rollback: {e}")
-                    break # 發生 Error 即停止後續遷移，確保資料一致性
+                    break  # 發生 Error 即停止後續遷移，確保資料一致性
 
     conn.close()
+
 
 # 為了向下相容，您可以保留 init_db 的名稱，並讓它直接呼叫 run_migrations
 def init_db():

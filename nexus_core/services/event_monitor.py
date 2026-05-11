@@ -1,21 +1,23 @@
 import asyncio
 import logging
-from datetime import datetime, time
+from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Dict, Any, List
 
 from services.calendar_service import calendar_service
-from database.user_settings import get_all_user_ids, get_full_user_context
+from database.user_settings import get_all_user_ids
 import market_time
 
 logger = logging.getLogger(__name__)
 ny_tz = ZoneInfo("America/New_York")
+
 
 class EventMonitor:
     """
     Background monitor for NYSE Dynamic Scheduler.
     Detects upcoming high-impact events and pushes proactive alerts.
     """
+
     def __init__(self, bot):
         self.bot = bot
 
@@ -36,7 +38,7 @@ class EventMonitor:
 
                 # 2. Filter for events within the next 24-72 hours that haven't been alerted
                 # For simplicity, we alert if TTE < 48h
-                critical_events = [e for e in events if 0 < e['tte_hours'] < 48.0]
+                critical_events = [e for e in events if 0 < e["tte_hours"] < 48.0]
 
                 if critical_events:
                     await self._send_event_alert(uid, critical_events)
@@ -54,11 +56,11 @@ class EventMonitor:
             title="🛡️ 【 預警：重大事件即時防護 】",
             description="偵測到您的持倉標的即將迎來重大波動事件，請留意風險對沖。",
             color=discord.Color.dark_red(),
-            timestamp=datetime.now()
+            timestamp=datetime.now(),
         )
 
         for event in events:
-            if event['type'] == 'ECONOMIC':
+            if event["type"] == "ECONOMIC":
                 name = f"🔴 經濟數據: {event['event']}"
                 value = f"距離發布: `{event['tte_hours']}` 小時 \n**NRO 指令**: 增加 Vanna 權重，縮減賣方曝險。"
             else:
@@ -69,6 +71,7 @@ class EventMonitor:
 
         embed.set_footer(text="Proactive Event Monitor | Nexus Seeker")
         await self.bot.queue_dm(user_id, embed=embed)
+
 
 # Helper to start the monitor
 async def start_event_monitor(bot):

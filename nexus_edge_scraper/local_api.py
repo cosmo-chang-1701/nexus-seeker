@@ -1,13 +1,19 @@
 from fastapi import FastAPI, Query
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import (
+    async_playwright,
+    TimeoutError as PlaywrightTimeoutError,
+)
 from bs4 import BeautifulSoup
 import logging
 
 app = FastAPI()
 logger = logging.getLogger(__name__)
 
+
 @app.get("/scrape/reddit/{symbol}")
-async def scrape_reddit(symbol: str, limit: int = Query(5, description="回傳的貼文數量上限")):
+async def scrape_reddit(
+    symbol: str, limit: int = Query(5, description="回傳的貼文數量上限")
+):
     symbol_clean = symbol.replace("$", "")
     url = (
         f"https://old.reddit.com/r/wallstreetbets+stocks+options/search"
@@ -18,14 +24,22 @@ async def scrape_reddit(symbol: str, limit: int = Query(5, description="回傳�
     )
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
+        browser = await p.chromium.launch(
+            headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"]
+        )
         try:
             context = await browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-                java_script_enabled=False
+                java_script_enabled=False,
             )
 
-            await context.route("**/*", lambda route: route.abort() if route.request.resource_type in ["image", "stylesheet", "font", "script"] else route.continue_())
+            await context.route(
+                "**/*",
+                lambda route: route.abort()
+                if route.request.resource_type
+                in ["image", "stylesheet", "font", "script"]
+                else route.continue_(),
+            )
 
             page = await context.new_page()
             await page.goto(url, wait_until="domcontentloaded", timeout=15000)

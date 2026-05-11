@@ -1,10 +1,11 @@
 from enum import Enum
-from typing import Optional, List
+from typing import Optional
 from pydantic import BaseModel, Field
 import pandas as pd
 import logging
 
 logger = logging.getLogger(__name__)
+
 
 class GapStatus(str, Enum):
     GAP_HOLDING = "GAP_HOLDING"
@@ -12,15 +13,21 @@ class GapStatus(str, Enum):
     FULL_FILL = "FULL_FILL"
     NO_GAP = "NO_GAP"
 
+
 class GapMetrics(BaseModel):
     symbol: str
     gap_size: float = Field(description="Today's Open - Yesterday's Close")
     gap_pct: float = Field(description="Gap size as a percentage of previous close")
-    gap_zone: tuple[float, float] = Field(description="(Lower Bound, Upper Bound) of the gap")
+    gap_zone: tuple[float, float] = Field(
+        description="(Lower Bound, Upper Bound) of the gap"
+    )
     current_fill_status: GapStatus
-    is_support_confirmed: bool = Field(default=False, description="True if price entered zone but rebounded strongly")
+    is_support_confirmed: bool = Field(
+        default=False, description="True if price entered zone but rebounded strongly"
+    )
     intraday_low: float
     prev_close: float
+
 
 class GapAnalyzer:
     """
@@ -41,11 +48,11 @@ class GapAnalyzer:
             prev_day = df.iloc[-2]
             curr_day = df.iloc[-1]
 
-            prev_close = float(prev_day['Close'])
-            curr_open = float(curr_day['Open'])
-            curr_low = float(curr_day['Low'])
-            curr_high = float(curr_day['High'])
-            curr_price = float(curr_day['Close'])
+            prev_close = float(prev_day["Close"])
+            curr_open = float(curr_day["Open"])
+            curr_low = float(curr_day["Low"])
+            curr_high = float(curr_day["High"])
+            curr_price = float(curr_day["Close"])
 
             gap_size = curr_open - prev_close
             gap_pct = (gap_size / prev_close) * 100
@@ -61,17 +68,20 @@ class GapAnalyzer:
             status = GapStatus.GAP_HOLDING
             is_support_confirmed = False
 
-            if gap_size > 0: # Up-Gap
+            if gap_size > 0:  # Up-Gap
                 if curr_low <= prev_close:
                     status = GapStatus.FULL_FILL
                 elif curr_low < curr_open:
                     status = GapStatus.PARTIAL_FILL
                     # 支撐確認邏輯：若最低價進入區間但收盤價回升至區間上方，且留有下影線
-                    if curr_price > curr_open and (curr_price - curr_low) > (curr_open - prev_close) * 0.5:
+                    if (
+                        curr_price > curr_open
+                        and (curr_price - curr_low) > (curr_open - prev_close) * 0.5
+                    ):
                         is_support_confirmed = True
                 else:
                     status = GapStatus.GAP_HOLDING
-            else: # Down-Gap
+            else:  # Down-Gap
                 if curr_high >= prev_close:
                     status = GapStatus.FULL_FILL
                 elif curr_high > curr_open:
@@ -87,7 +97,7 @@ class GapAnalyzer:
                 current_fill_status=status,
                 is_support_confirmed=is_support_confirmed,
                 intraday_low=curr_low,
-                prev_close=prev_close
+                prev_close=prev_close,
             )
 
         except Exception as e:

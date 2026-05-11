@@ -11,11 +11,12 @@ Finnhub Service — 集中式 Finnhub API client wrapper (Async Optimized)。
 import asyncio
 import logging
 import time
-import json
 import random
 import math
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
+from collections import OrderedDict
+import gc
 
 import finnhub
 import pandas as pd
@@ -37,6 +38,7 @@ _limiter = AsyncLimiter(55, 60)
 # Singleton client instance
 _client: Optional[finnhub.Client] = None
 
+
 def _get_client() -> finnhub.Client:
     """取得或初始化 Finnhub client (lazy singleton)。"""
     global _client
@@ -46,6 +48,7 @@ def _get_client() -> finnhub.Client:
         _client = finnhub.Client(api_key=FINNHUB_API_KEY)
         logger.info("Finnhub Client (Async Wrapper) 初始化完成")
     return _client
+
 
 # ---------------------------------------------------------------------------
 # Core Async API Call (Thread-safe Wrapper)
@@ -67,20 +70,29 @@ async def _execute_api_call(func, *args, **kwargs) -> Any:
             except Exception as e:
                 error_msg = str(e).lower()
                 is_rate_limit = "429" in error_msg or "limit reached" in error_msg
-                is_conn_error = "connection aborted" in error_msg or "timeout" in error_msg or "remotedisconnected" in error_msg
+                is_conn_error = (
+                    "connection aborted" in error_msg
+                    or "timeout" in error_msg
+                    or "remotedisconnected" in error_msg
+                )
                 if is_rate_limit or is_conn_error:
                     if attempt < max_retries:
                         # 指數退避，加入 jitter 避免同時重試
-                        delay = base_delay * (2 ** attempt) + random.uniform(1, 3)
+                        delay = base_delay * (2**attempt) + random.uniform(1, 3)
                         reason = "429 頻率限制" if is_rate_limit else "連線錯誤/超時"
-                        logger.warning(f"🚨 觸發 Finnhub {reason}。將於 {delay:.1f} 秒後重試 (次數: {attempt + 1}/{max_retries})...")
+                        logger.warning(
+                            f"🚨 觸發 Finnhub {reason}。將於 {delay:.1f} 秒後重試 (次數: {attempt + 1}/{max_retries})..."
+                        )
                         await asyncio.sleep(delay)
                         continue
                     else:
                         reason = "429 頻率限制" if is_rate_limit else "連線錯誤/超時"
-                        logger.error(f"🚨 觸發 Finnhub {reason}。已達最大重試次數，放棄呼叫。")
+                        logger.error(
+                            f"🚨 觸發 Finnhub {reason}。已達最大重試次數，放棄呼叫。"
+                        )
                         raise e
                 raise e
+
 
 # ---------------------------------------------------------------------------
 # Quote (即時報價)
@@ -97,35 +109,36 @@ async def get_yfinance_quote(symbol: str) -> Dict[str, Any]:
             return {}
 
         latest = df.iloc[-1]
-        prev_close = df.iloc[-2]['Close'] if len(df) > 1 else latest['Open']
-        current_price = latest['Close']
+        prev_close = df.iloc[-2]["Close"] if len(df) > 1 else latest["Open"]
+        current_price = latest["Close"]
 
         change = current_price - prev_close
         pct_change = (change / prev_close) * 100 if prev_close != 0 else 0.0
 
         return {
-            'c': round(float(current_price), 2),
-            'd': round(float(change), 2),
-            'dp': round(float(pct_change), 4),
-            'h': round(float(latest['High']), 2),
-            'l': round(float(latest['Low']), 2),
-            'o': round(float(latest['Open']), 2),
-            'pc': round(float(prev_close), 2),
-            't': int(df.index[-1].timestamp())
+            "c": round(float(current_price), 2),
+            "d": round(float(change), 2),
+            "dp": round(float(pct_change), 4),
+            "h": round(float(latest["High"]), 2),
+            "l": round(float(latest["Low"]), 2),
+            "o": round(float(latest["Open"]), 2),
+            "pc": round(float(prev_close), 2),
+            "t": int(df.index[-1].timestamp()),
         }
     except Exception as e:
         logger.error(f"[{yf_symbol}] yfinance quote 失敗: {e}")
         return {}
 
+
 async def get_quote(symbol: str) -> Dict[str, Any]:
     """取得即時報價 (非同步)。對於指數型標的，強制轉向 yfinance。"""
-    if symbol.startswith('^') or symbol == 'VIX':
+    if symbol.startswith("^") or symbol == "VIX":
         return await get_yfinance_quote(symbol)
 
     client = _get_client()
     try:
         data = await _execute_api_call(client.quote, symbol)
-        if data and data.get('c', 0) > 0:
+        if data and data.get("c", 0) > 0:
             return data
 
         # 若 Finnhub 回傳無效或報權限錯誤 (c=0 有可能是權限問題或標的不存在)
@@ -135,12 +148,13 @@ async def get_quote(symbol: str) -> Dict[str, Any]:
     except Exception as e:
         # 如果是明確的權限錯誤，也轉向 yfinance
         error_msg = str(e).lower()
-        if 'subscription required' in error_msg or 'market data' in error_msg:
-             logger.info(f"[{symbol}] Finnhub 權限受限，強制轉向 yfinance")
-             return await get_yfinance_quote(symbol)
+        if "subscription required" in error_msg or "market data" in error_msg:
+            logger.info(f"[{symbol}] Finnhub 權限受限，強制轉向 yfinance")
+            return await get_yfinance_quote(symbol)
 
         logger.error(f"[{symbol}] Finnhub quote 失敗: {e}")
         return {}
+
 
 async def validate_symbol(symbol: str) -> bool:
     """驗證標的代號是否有效 (透過嘗試獲取報價)。"""
@@ -148,7 +162,8 @@ async def validate_symbol(symbol: str) -> bool:
         return False
     quote = await get_quote(symbol.upper())
     # 如果能拿到價格且價格大於 0，視為有效標的
-    return bool(quote and quote.get('c', 0) > 0)
+    return bool(quote and quote.get("c", 0) > 0)
+
 
 async def batch_get_quotes(symbols: List[str]) -> Dict[str, Dict[str, Any]]:
     """批次取得多檔標的的即時報價。"""
@@ -156,10 +171,13 @@ async def batch_get_quotes(symbols: List[str]) -> Dict[str, Dict[str, Any]]:
     quotes = await asyncio.gather(*tasks)
     return {sym: q for sym, q in zip(symbols, quotes) if q}
 
+
 # ---------------------------------------------------------------------------
 # 歷史數據與指標 (yfinance)
 # ---------------------------------------------------------------------------
-async def get_history_df(symbol: str, period: str = "1y", interval: str = "1d") -> pd.DataFrame:
+async def get_history_df(
+    symbol: str, period: str = "1y", interval: str = "1d"
+) -> pd.DataFrame:
     """
     使用 yfinance 抓取歷史 K 線 (異步化)。
     """
@@ -169,19 +187,24 @@ async def get_history_df(symbol: str, period: str = "1y", interval: str = "1d") 
         df = await asyncio.to_thread(ticker.history, period=period, interval=interval)
 
         if df.empty:
-            logger.warning(f"[{symbol}] yfinance 歷史數據為空 (period={period}, interval={interval})")
+            logger.warning(
+                f"[{symbol}] yfinance 歷史數據為空 (period={period}, interval={interval})"
+            )
             return pd.DataFrame()
 
-        df.index.name = 'Date'
+        df.index.name = "Date"
         if df.index.tz is not None:
             df.index = df.index.tz_localize(None)
 
-        return df[['Open', 'High', 'Low', 'Close', 'Volume']]
+        return df[["Open", "High", "Low", "Close", "Volume"]]
     except Exception as e:
         logger.error(f"[{symbol}] yfinance 抓取失敗: {e}")
         return pd.DataFrame()
 
-async def get_spy_history_df(period: str = "1y", interval: str = "1d", retries: int = 3) -> pd.DataFrame:
+
+async def get_spy_history_df(
+    period: str = "1y", interval: str = "1d", retries: int = 3
+) -> pd.DataFrame:
     """取得 SPY 基準歷史資料，針對暫時性鎖衝突進行重試。"""
     for attempt in range(retries):
         df = await get_history_df("SPY", period=period, interval=interval)
@@ -191,6 +214,7 @@ async def get_spy_history_df(period: str = "1y", interval: str = "1d", retries: 
 
     logger.error(f"[SPY] 重試 {retries} 次後仍無法取得歷史資料")
     return pd.DataFrame()
+
 
 # ---------------------------------------------------------------------------
 # Options Data (yfinance)
@@ -205,6 +229,7 @@ async def get_all_option_expiries(symbol: str) -> List[str]:
         logger.error(f"[{symbol}] 獲取期權到期日失敗: {e}")
         return []
 
+
 async def get_option_chain(symbol: str, expiry: str) -> Optional[Any]:
     """取得指定到期日的期權鏈。"""
     try:
@@ -215,14 +240,14 @@ async def get_option_chain(symbol: str, expiry: str) -> Optional[Any]:
         logger.error(f"[{symbol}] 獲取期權鏈失敗 (expiry={expiry}): {e}")
         return None
 
-from collections import OrderedDict
-import gc
 
 # 限制快取大小以節省記憶體 (1GB RAM VPS 優化)
 MAX_CACHE_SIZE = 500
 
+
 class BoundedCache(OrderedDict):
     """具備容量上限的快取 (LRU 邏輯)。"""
+
     def __init__(self, max_size=MAX_CACHE_SIZE):
         super().__init__()
         self.max_size = max_size
@@ -239,11 +264,13 @@ class BoundedCache(OrderedDict):
         if len(self) > self.max_size:
             self.popitem(last=False)
 
+
 # ---------------------------------------------------------------------------
 # SMA 記憶體快取設定
 # ---------------------------------------------------------------------------
 _sma_cache = BoundedCache(max_size=MAX_CACHE_SIZE)
 _SMA_CACHE_TTL = 3600  # 1 小時 (1GB VPS 優化)
+
 
 async def get_sma(symbol: str, window: int = 200) -> Optional[float]:
     """計算簡單移動平均線 (SMA)。"""
@@ -262,7 +289,7 @@ async def get_sma(symbol: str, window: int = 200) -> Optional[float]:
         if df.empty or len(df) < window:
             return None
 
-        sma_series = df['Close'].rolling(window=window).mean()
+        sma_series = df["Close"].rolling(window=window).mean()
         current_sma = round(float(sma_series.iloc[-1]), 4)
 
         if not pd.isna(current_sma):
@@ -273,15 +300,18 @@ async def get_sma(symbol: str, window: int = 200) -> Optional[float]:
         logger.error(f"[{symbol}] 計算 SMA{window} 失敗: {e}")
         return None
 
+
 def clear_sma_cache():
     _sma_cache.clear()
     logger.info("Clarified SMA cache")
+
 
 # ---------------------------------------------------------------------------
 # EMA 記憶體快取設定
 # ---------------------------------------------------------------------------
 _ema_cache = BoundedCache(max_size=MAX_CACHE_SIZE)
 _EMA_CACHE_TTL = 3600  # 1 小時 (1GB VPS 優化)
+
 
 async def get_ema(symbol: str, window: int = 21) -> Optional[float]:
     """計算指數移動平均線 (EMA)。"""
@@ -300,7 +330,7 @@ async def get_ema(symbol: str, window: int = 21) -> Optional[float]:
         if df.empty or len(df) < window:
             return None
 
-        ema_series = df['Close'].ewm(span=window, adjust=False).mean()
+        ema_series = df["Close"].ewm(span=window, adjust=False).mean()
         current_ema = round(float(ema_series.iloc[-1]), 4)
 
         if not np.isnan(current_ema):
@@ -310,14 +340,17 @@ async def get_ema(symbol: str, window: int = 21) -> Optional[float]:
         logger.error(f"[{symbol}] EMA{window} 計算失敗: {e}")
         return None
 
+
 def clear_ema_cache():
     _ema_cache.clear()
     logger.info("Clarified EMA cache")
+
 
 def run_garbage_collection():
     """手動觸發垃圾回收 (用於大規模掃描後)。"""
     gc.collect()
     logger.info("🧹 [系統優化] 已手動執行垃圾回收機制。")
+
 
 # ---------------------------------------------------------------------------
 # Basic Financials (具備 SQLite 持久化快取)
@@ -327,32 +360,38 @@ async def get_basic_financials(symbol: str, expiry_hours: int = 24) -> Dict[str,
     symbol = symbol.upper()
 
     # 1. 優先檢查 SQLite 持久化快取，並用 to_thread 避免阻塞 event loop
-    cached_data = await asyncio.to_thread(db_financials.get_cached_financials, symbol, expiry_hours)
+    cached_data = await asyncio.to_thread(
+        db_financials.get_cached_financials, symbol, expiry_hours
+    )
     if cached_data:
         return cached_data
 
     # 2. 快取失效，執行 API 請求
     client = _get_client()
     try:
-        data = await _execute_api_call(client.company_basic_financials, symbol, 'all')
-        metrics = data.get('metric', {}) if data else {}
+        data = await _execute_api_call(client.company_basic_financials, symbol, "all")
+        metrics = data.get("metric", {}) if data else {}
 
         if metrics:
             # 3. 非同步寫入快取
-            await asyncio.to_thread(db_financials.save_financials_cache, symbol, metrics)
+            await asyncio.to_thread(
+                db_financials.save_financials_cache, symbol, metrics
+            )
 
         return metrics
     except Exception as e:
         logger.error(f"[{symbol}] Finnhub financials 失敗: {e}")
         return {}
 
+
 async def get_dividend_yield(symbol: str) -> float:
     """取得年化股息殖利率。"""
     metrics = await get_basic_financials(symbol)
-    yield_val = metrics.get('dividendYieldIndicatedAnnual', 0.0)
+    yield_val = metrics.get("dividendYieldIndicatedAnnual", 0.0)
     if yield_val is None:
         return 0.0
     return round(float(yield_val) / 100.0, 4)
+
 
 # ---------------------------------------------------------------------------
 # Company Profile & ETF
@@ -367,16 +406,18 @@ async def get_company_profile(symbol: str) -> Dict[str, Any]:
         logger.error(f"[{symbol}] Finnhub company profile 失敗: {e}")
         return {}
 
+
 async def is_etf(symbol: str) -> bool:
     """判斷標的是否為 ETF。"""
     client = _get_client()
     try:
         data = await _execute_api_call(client.etfs_profile, symbol=symbol)
-        if data and data.get('name'):
+        if data and data.get("name"):
             return True
         return False
     except Exception:
         return False
+
 
 # ---------------------------------------------------------------------------
 # Economic Calendar (經濟行事曆)
@@ -386,14 +427,13 @@ async def get_economic_calendar(from_date: str, to_date: str) -> List[Dict[str, 
         client = _get_client()
         async with _limiter:
             data = await asyncio.to_thread(
-                client.economic_calendar,
-                _from=from_date,
-                to=to_date
+                client.economic_calendar, _from=from_date, to=to_date
             )
-        return data.get('economicCalendar', []) if data else []
+        return data.get("economicCalendar", []) if data else []
     except Exception as e:
         logger.error(f"Finnhub economic calendar 失敗: {e}")
         return []
+
 
 # Earnings Calendar (財報日期)
 # ---------------------------------------------------------------------------
@@ -406,22 +446,20 @@ async def get_earnings_calendar(
     client = _get_client()
     try:
         if from_date is None:
-            from_date = datetime.now().strftime('%Y-%m-%d')
+            from_date = datetime.now().strftime("%Y-%m-%d")
         if to_date is None:
-            to_date = (datetime.now() + timedelta(days=90)).strftime('%Y-%m-%d')
+            to_date = (datetime.now() + timedelta(days=90)).strftime("%Y-%m-%d")
 
         data = await _execute_api_call(
-            client.earnings_calendar,
-            _from=from_date,
-            to=to_date,
-            symbol=symbol
+            client.earnings_calendar, _from=from_date, to=to_date, symbol=symbol
         )
-        earnings = data.get('earningsCalendar', []) if data else []
-        earnings.sort(key=lambda x: x.get('date', ''))
+        earnings = data.get("earningsCalendar", []) if data else []
+        earnings.sort(key=lambda x: x.get("date", ""))
         return earnings
     except Exception as e:
         logger.error(f"[{symbol}] Finnhub earnings calendar 失敗: {e}")
         return []
+
 
 # ---------------------------------------------------------------------------
 # Company News (公司新聞)
@@ -436,22 +474,25 @@ async def get_company_news(
     client = _get_client()
     try:
         if to_date is None:
-            to_date = datetime.now().strftime('%Y-%m-%d')
+            to_date = datetime.now().strftime("%Y-%m-%d")
         if from_date is None:
-            from_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
+            from_date = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
 
-        data = await _execute_api_call(client.company_news, symbol, _from=from_date, to=to_date)
+        data = await _execute_api_call(
+            client.company_news, symbol, _from=from_date, to=to_date
+        )
         if not data:
             return []
 
         import re
+
         cleaned_news = []
         seen_headlines = set()
-        symbol_pattern = re.compile(rf'\b{re.escape(symbol)}\b', re.IGNORECASE)
+        symbol_pattern = re.compile(rf"\b{re.escape(symbol)}\b", re.IGNORECASE)
 
         for item in data:
-            headline = item.get('headline', '').strip()
-            summary = item.get('summary', '').strip()
+            headline = item.get("headline", "").strip()
+            summary = item.get("summary", "").strip()
             if not headline:
                 continue
             hl_lower = headline.lower()
@@ -467,6 +508,7 @@ async def get_company_news(
     except Exception as e:
         logger.error(f"[{symbol}] Finnhub company news 失敗: {e}")
         return []
+
 
 # ---------------------------------------------------------------------------
 # Macro Environment (異步併發優化)
@@ -484,18 +526,21 @@ async def get_macro_environment() -> Dict[str, float]:
             logger.warning("宏觀數據 (VIX/Oil) 抓取結果為空，使用預設值")
             return {"vix": 18.0, "oil": 75.0, "vix_change": 0.0}
 
-        vix_val = float(vix_df['Close'].iloc[-1])
-        oil_val = float(oil_df['Close'].iloc[-1])
-        vix_change_val = float(vix_df['Close'].pct_change().iloc[-1])
+        vix_val = float(vix_df["Close"].iloc[-1])
+        oil_val = float(oil_df["Close"].iloc[-1])
+        vix_change_val = float(vix_df["Close"].pct_change().iloc[-1])
 
         return {
             "vix": round(vix_val, 2) if not math.isnan(vix_val) else 18.0,
             "oil": round(oil_val, 2) if not math.isnan(oil_val) else 75.0,
-            "vix_change": round(vix_change_val, 4) if not math.isnan(vix_change_val) else 0.0
+            "vix_change": round(vix_change_val, 4)
+            if not math.isnan(vix_change_val)
+            else 0.0,
         }
     except Exception as e:
         logger.error(f"宏觀環境參數獲取失敗: {e}")
         return {"vix": 18.0, "oil": 75.0, "vix_change": 0.0}
+
 
 async def get_vix_term_structure() -> Dict[str, Any]:
     """取得 VIX 期限結構 (以 ^VIX / ^VIX3M 為代理)。"""
@@ -507,8 +552,8 @@ async def get_vix_term_structure() -> Dict[str, Any]:
         if vix_df.empty or vix3m_df.empty:
             return {"vts_ratio": 1.0, "vts_state": "UNKNOWN"}
 
-        vix_close = float(vix_df['Close'].iloc[-1])
-        vix3m_close = float(vix3m_df['Close'].iloc[-1])
+        vix_close = float(vix_df["Close"].iloc[-1])
+        vix3m_close = float(vix3m_df["Close"].iloc[-1])
 
         if vix3m_close > 0:
             vts_ratio = round(vix_close / vix3m_close, 3)
@@ -516,10 +561,16 @@ async def get_vix_term_structure() -> Dict[str, Any]:
             vts_ratio = 1.0
 
         state = "Backwardation" if vts_ratio >= 1.0 else "Contango"
-        return {"vts_ratio": vts_ratio, "vts_state": state, "vix_front": vix_close, "vix_back": vix3m_close}
+        return {
+            "vts_ratio": vts_ratio,
+            "vts_state": state,
+            "vix_front": vix_close,
+            "vix_back": vix3m_close,
+        }
     except Exception as e:
         logger.error(f"VIX 期限結構計算失敗: {e}")
         return {"vts_ratio": 1.0, "vts_state": "UNKNOWN"}
+
 
 async def get_vix_zscores() -> Dict[str, float]:
     """取得 VIX 30天與60天 Z-Score"""
@@ -529,16 +580,16 @@ async def get_vix_zscores() -> Dict[str, float]:
         if df.empty or len(df) < 60:
             return {"zscore_30": 0.0, "zscore_60": 0.0}
 
-        current_vix = float(df['Close'].iloc[-1])
+        current_vix = float(df["Close"].iloc[-1])
 
         # 30 day z-score
-        mean_30 = float(df['Close'].tail(30).mean())
-        std_30 = float(df['Close'].tail(30).std())
+        mean_30 = float(df["Close"].tail(30).mean())
+        std_30 = float(df["Close"].tail(30).std())
         z_30 = (current_vix - mean_30) / std_30 if std_30 > 0.01 else 0.0
 
         # 60 day z-score
-        mean_60 = float(df['Close'].tail(60).mean())
-        std_60 = float(df['Close'].tail(60).std())
+        mean_60 = float(df["Close"].tail(60).mean())
+        std_60 = float(df["Close"].tail(60).std())
         z_60 = (current_vix - mean_60) / std_60 if std_60 > 0.01 else 0.0
 
         return {"zscore_30": round(z_30, 2), "zscore_60": round(z_60, 2)}

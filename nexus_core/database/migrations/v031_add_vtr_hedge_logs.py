@@ -21,5 +21,6 @@ CREATE TABLE IF NOT EXISTS vtr_hedge_logs (
 CREATE INDEX IF NOT EXISTS idx_vtr_hedge_user ON vtr_hedge_logs(user_id);
 """
 
+
 def migrate_data(conn: sqlite3.Connection):
     pass

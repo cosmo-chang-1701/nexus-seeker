@@ -23,5 +23,6 @@ CREATE TABLE IF NOT EXISTS hedge_alerts (
 CREATE INDEX IF NOT EXISTS idx_hedge_alerts_user_status ON hedge_alerts(user_id, status);
 """
 
+
 def migrate_data(conn: sqlite3.Connection):
     pass

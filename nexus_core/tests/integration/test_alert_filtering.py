@@ -1,8 +1,7 @@
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-import discord
-import database
+from unittest.mock import AsyncMock, patch
 from cogs.trading import SchedulerCog
+
 
 @pytest.mark.asyncio
 async def test_alert_filtering_logic(mock_interaction, db_conn):
@@ -21,7 +20,9 @@ async def test_alert_filtering_logic(mock_interaction, db_conn):
     from database.user_settings import upsert_user_config
 
     # Add AAPL to portfolio
-    add_portfolio_record(user_id, symbol_in_port, "call", 150, "2026-06-19", 5.0, 1, 150.0)
+    add_portfolio_record(
+        user_id, symbol_in_port, "call", 150, "2026-06-19", 5.0, 1, 150.0
+    )
     # Add TSLA to watchlist only
     add_watchlist_symbol(user_id, symbol_not_in_port)
 
@@ -39,6 +40,7 @@ async def test_alert_filtering_logic(mock_interaction, db_conn):
     upsert_user_config(user_id, option_alert_mode=0)
     assert await cog._should_send_alert(user_id, symbol_in_port, 0) is False
     assert await cog._should_send_alert(user_id, symbol_not_in_port, 0) is False
+
 
 @pytest.mark.asyncio
 async def test_run_market_scan_logic_filtering(mock_interaction, db_conn):
@@ -58,19 +60,23 @@ async def test_run_market_scan_logic_filtering(mock_interaction, db_conn):
     # Mock trading_service.run_market_scan to return a TSLA alert
     cog.trading_service = AsyncMock()
     cog.trading_service.run_market_scan.return_value = {
-        user_id: [{
-            'symbol': symbol_watch,
-            'alert_type': 'OPTION',
-            'ai_decision': 'APPROVE',
-            'price': 200.0,
-            'macro_vix': 20.0,
-            'strategy': 'BTO_CALL'
-        }]
+        user_id: [
+            {
+                "symbol": symbol_watch,
+                "alert_type": "OPTION",
+                "ai_decision": "APPROVE",
+                "price": 200.0,
+                "macro_vix": 20.0,
+                "strategy": "BTO_CALL",
+            }
+        ]
     }
     cog.trading_service.execute_vtr_auto_entry = AsyncMock()
 
     # Mock should_send_priority_alert to return True
-    with patch('cogs.trading.should_send_priority_alert', new_callable=AsyncMock) as mock_priority:
+    with patch(
+        "cogs.trading.should_send_priority_alert", new_callable=AsyncMock
+    ) as mock_priority:
         mock_priority.return_value = (True, "Priority")
 
         # Test Case 1: Mode ALL (1) -> Should queue DM

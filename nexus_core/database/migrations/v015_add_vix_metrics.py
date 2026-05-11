@@ -1,5 +1,7 @@
 version = 15
-description = "建立 daily_market_regime 表格以儲存 VIX 波動率期限結構、30/60 天指標等市場狀態"
+description = (
+    "建立 daily_market_regime 表格以儲存 VIX 波動率期限結構、30/60 天指標等市場狀態"
+)
 sql = """
     CREATE TABLE IF NOT EXISTS daily_market_regime (
         id INTEGER PRIMARY KEY AUTOINCREMENT,

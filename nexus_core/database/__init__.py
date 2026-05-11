@@ -1,9 +1,48 @@
 from .core import run_migrations, init_db
-from .portfolio import add_portfolio_record, get_user_portfolio, get_all_portfolio, delete_portfolio_record, get_user_portfolio_stats, add_hedge_history, get_hedge_history, is_symbol_in_portfolio
-from .watchlist import add_watchlist_symbol, get_user_watchlist, get_user_watchlist_by_symbol, update_user_watchlist, get_all_watchlist, delete_watchlist_symbol, get_watchlist_alert_state, update_watchlist_alert_state
-from .holdings import add_holding, get_user_holdings, delete_holding, get_all_holdings, update_holding_greeks
-from .user_settings import upsert_user_config, get_full_user_context, get_all_user_ids, UserContext
-from .virtual_trading import add_virtual_trade, get_virtual_trades, get_all_open_virtual_trades, close_virtual_trade, get_virtual_trade_by_id, get_open_virtual_trades, get_all_virtual_trades
+from .portfolio import (
+    add_portfolio_record,
+    get_user_portfolio,
+    get_all_portfolio,
+    delete_portfolio_record,
+    get_user_portfolio_stats,
+    is_symbol_in_portfolio,
+    update_portfolio_greeks,
+    add_hedge_history,
+    get_hedge_history,
+)
+from .watchlist import (
+    add_watchlist_symbol,
+    get_user_watchlist,
+    get_user_watchlist_by_symbol,
+    update_user_watchlist,
+    get_all_watchlist,
+    delete_watchlist_symbol,
+    get_watchlist_alert_state,
+    update_watchlist_alert_state,
+)
+from .holdings import (
+    add_holding,
+    get_user_holdings,
+    delete_holding,
+    get_all_holdings,
+    update_holding_greeks,
+)
+from .user_settings import (
+    upsert_user_config,
+    get_full_user_context,
+    get_all_user_ids,
+    UserContext,
+)
+from .virtual_trading import (
+    add_virtual_trade,
+    get_virtual_trades,
+    get_all_open_virtual_trades,
+    close_virtual_trade,
+    get_virtual_trade_by_id,
+    get_open_virtual_trades,
+    get_all_virtual_trades,
+    update_virtual_trade_greeks,
+)
 from .financials import get_cached_financials, save_financials_cache, purge_old_cache
 
 __all__ = [
@@ -14,6 +53,8 @@ __all__ = [
     "get_all_portfolio",
     "delete_portfolio_record",
     "get_user_portfolio_stats",
+    "is_symbol_in_portfolio",
+    "update_portfolio_greeks",
     "add_hedge_history",
     "get_hedge_history",
     "add_watchlist_symbol",
@@ -40,6 +81,7 @@ __all__ = [
     "get_virtual_trade_by_id",
     "get_open_virtual_trades",
     "get_all_virtual_trades",
+    "update_virtual_trade_greeks",
     "get_cached_financials",
     "save_financials_cache",
     "purge_old_cache",

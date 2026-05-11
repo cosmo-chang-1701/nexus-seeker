@@ -1,4 +1,5 @@
 import os
+import math
 from dotenv import load_dotenv
 
 # 載入 .env 檔案
@@ -18,12 +19,7 @@ TUNNEL_URL = os.getenv("TUNNEL_URL", "")
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")
 
 # 策略目標 Delta 參數
-TARGET_DELTAS = {
-    "STO_PUT": -0.20,
-    "STO_CALL": 0.20,
-    "BTO_PUT": -0.50,
-    "BTO_CALL": 0.50
-}
+TARGET_DELTAS = {"STO_PUT": -0.20, "STO_CALL": 0.20, "BTO_PUT": -0.50, "BTO_CALL": 0.50}
 
 # ---------------------------------------------------------------------------
 # VIX 戰情階梯系統 (VIX Battle Ladder)
@@ -114,9 +110,6 @@ VIX_QUANTILE_BOUNDS = {
     "upper_4": 26.1,
     "upper_10": 29.5,
 }
-
-
-import math
 
 
 def get_vix_tier(vix_spot: float) -> dict:

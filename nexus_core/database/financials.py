@@ -18,7 +18,9 @@ def _get_payload_column(cursor: sqlite3.Cursor) -> str:
     return "metrics"
 
 
-def get_cached_financials(symbol: str, expiry_hours: int = 24) -> Optional[Dict[str, Any]]:
+def get_cached_financials(
+    symbol: str, expiry_hours: int = 24
+) -> Optional[Dict[str, Any]]:
     """Read non-expired financial metrics from SQLite cache."""
     try:
         with sqlite3.connect(config.DB_NAME) as conn:
@@ -26,7 +28,9 @@ def get_cached_financials(symbol: str, expiry_hours: int = 24) -> Optional[Dict[
             cursor = conn.cursor()
 
             payload_col = _get_payload_column(cursor)
-            expiry_limit = (datetime.now() - timedelta(hours=expiry_hours)).strftime("%Y-%m-%d %H:%M:%S")
+            expiry_limit = (datetime.now() - timedelta(hours=expiry_hours)).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
 
             if payload_col == "data":
                 cursor.execute(

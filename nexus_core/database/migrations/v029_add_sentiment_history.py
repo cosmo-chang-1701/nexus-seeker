@@ -15,5 +15,6 @@ CREATE TABLE IF NOT EXISTS sentiment_history (
 CREATE INDEX IF NOT EXISTS idx_sentiment_symbol_indicator ON sentiment_history(symbol, indicator);
 """
 
+
 def migrate_data(conn: sqlite3.Connection):
     pass

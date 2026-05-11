@@ -1,14 +1,16 @@
 import logging
 import asyncio
 import signal
-import sys
 import os
 import yfinance as yf
 from config import DISCORD_TOKEN, LOG_LEVEL
 from bot import NexusBot
 
 # 0. 設定日誌
-logging.basicConfig(level=getattr(logging, LOG_LEVEL), format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL),
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 # --- yfinance 快取初始化 ---
@@ -25,6 +27,7 @@ except Exception as e:
     # 預防某些版本不支援此方法
     logger.warning(f"⚠️ 無法設定 yfinance 快取路徑: {e}")
 # --------------------------
+
 
 async def main():
     if not DISCORD_TOKEN:
@@ -47,12 +50,15 @@ async def main():
         loop.add_signal_handler(signal.SIGINT, handle_signal)
         loop.add_signal_handler(signal.SIGTERM, handle_signal)
     except NotImplementedError:
-        logger.warning("當前環境不支援 add_signal_handler (可能是 Windows)，將使用預設訊號處理。")
+        logger.warning(
+            "當前環境不支援 add_signal_handler (可能是 Windows)，將使用預設訊號處理。"
+        )
         # 如果是在 Windows 開發，可以 fallback 到 signal.signal，但通常建議在 WSL/Linux 下運行
         pass
 
     async with bot:
         await bot.start(DISCORD_TOKEN)
+
 
 if __name__ == "__main__":
     try:

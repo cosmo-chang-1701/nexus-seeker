@@ -3,20 +3,23 @@ from typing import Optional, Dict, Any
 from pydantic import BaseModel, Field, ConfigDict
 from datetime import datetime
 
+
 class ContextType(str, Enum):
     WATCH = "WATCH"
     TRADE = "TRADE"
     HOLDING = "HOLDING"
 
+
 class WatchMetadata(BaseModel):
     model_config = ConfigDict(slots=True)
     use_llm: bool = True
 
+
 class TradeMetadata(BaseModel):
     model_config = ConfigDict(slots=True)
-    opt_type: str # 'call' or 'put'
+    opt_type: str  # 'call' or 'put'
     strike: float
-    expiry: str # YYYY-MM-DD
+    expiry: str  # YYYY-MM-DD
     entry_price: float
     quantity: int
     weighted_delta: float = 0.0
@@ -26,11 +29,13 @@ class TradeMetadata(BaseModel):
     vanna: float = 0.0
     category: str = "SPEC"
 
+
 class HoldingMetadata(BaseModel):
     model_config = ConfigDict(slots=True)
     quantity: float
     avg_cost: float
     weighted_delta: float = 0.0
+
 
 class Asset(BaseModel):
     model_config = ConfigDict(slots=True)
@@ -38,7 +43,7 @@ class Asset(BaseModel):
     user_id: int
     symbol: str
     context_type: ContextType
-    risk_weight: float = 1.0 # Beta
+    risk_weight: float = 1.0  # Beta
     metadata: Dict[str, Any] = Field(default_factory=dict)
     last_scan_id: Optional[str] = None
     created_at: Optional[datetime] = None

@@ -8,6 +8,15 @@ repos:
       - id: check-added-large-files
       - id: check-json
       - id: debug-statements
+      - id: check-ast
+      - id: check-merge-conflict
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.3.0
+    hooks:
+      - id: ruff
+        args: [ --fix ]
+      - id: ruff-format
 
   - repo: https://github.com/returntocorp/semgrep
     rev: 'v1.65.0'

@@ -3,21 +3,29 @@ import logging
 from discord.ext import commands
 import asyncio
 import database
-from database.notifications import add_pending_notification, get_pending_notifications, delete_notification, get_pending_count
+from database.notifications import (
+    add_pending_notification,
+    get_pending_notifications,
+    delete_notification,
+    get_pending_count,
+)
 
 logger = logging.getLogger(__name__)
+
 
 class NexusBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
         intents.message_content = True
-        super().__init__(command_prefix='!', intents=intents)
+        super().__init__(command_prefix="!", intents=intents)
         # 仍然保留一個訊號訊號量，用於喚醒工人
         self.message_signal = asyncio.Event()
         self._has_notified_ready = False
         self._is_closing = False
 
-    async def queue_dm(self, user_id: int, message: str = None, embed: discord.Embed = None):
+    async def queue_dm(
+        self, user_id: int, message: str = None, embed: discord.Embed = None
+    ):
         """將私訊任務加入持久化佇列，並喚醒發送工人"""
         embed_dict = embed.to_dict() if embed else None
         # 1. 存入資料庫 (持久化)
@@ -41,6 +49,7 @@ class NexusBot(commands.Bot):
         # 啟動記憶體管理員 (1GB RAM 優化)
         try:
             from services.memory_manager import MemoryManager
+
             self.memory_manager = MemoryManager(self)
             self.memory_manager.start()
         except Exception as e:
@@ -49,6 +58,7 @@ class NexusBot(commands.Bot):
         # 啟動對沖監控服務
         try:
             from services.hedge_monitor_service import HedgeMonitorService
+
             self.hedge_monitor = HedgeMonitorService(self)
             self.hedge_monitor.start()
         except Exception as e:
@@ -57,6 +67,7 @@ class NexusBot(commands.Bot):
         # 啟動 Polymarket 巨鯨監控服務
         try:
             from services.polymarket_service import PolymarketService
+
             self.polymarket_service = PolymarketService(self)
             self.polymarket_service.start()
         except Exception as e:
@@ -73,16 +84,16 @@ class NexusBot(commands.Bot):
             logger.info("Bot 已重連，跳過啟動通知。")
             return
 
-        logger.info(f'初始化資料庫中...')
+        logger.info("初始化資料庫中...")
         database.init_db()
-        logger.info(f'🚀 Nexus Seeker 啟動成功！Bot ID: {self.user}')
+        logger.info(f"🚀 Nexus Seeker 啟動成功！Bot ID: {self.user}")
 
         # 啟動後檢查有無遺留通知並喚醒工人
         if await asyncio.to_thread(get_pending_count) > 0:
             logger.info("發現遺留的待發送通知，啟動補發流程...")
             self.message_signal.set()
 
-        logger.info('等待美股排程觸發...')
+        logger.info("等待美股排程觸發...")
         await self.notify_all_users("🚀 Nexus Seeker 機器人已啟動！")
         self._has_notified_ready = True
 
@@ -94,21 +105,21 @@ class NexusBot(commands.Bot):
         logger.info("🛑 Nexus Seeker 正在關閉...")
 
         # 停止記憶體管理員
-        if hasattr(self, 'memory_manager'):
+        if hasattr(self, "memory_manager"):
             try:
                 self.memory_manager.stop()
             except Exception as e:
                 logger.error(f"停止記憶體管理員時出錯: {e}")
 
         # 停止對沖監控服務
-        if hasattr(self, 'hedge_monitor'):
+        if hasattr(self, "hedge_monitor"):
             try:
                 self.hedge_monitor.stop()
             except Exception as e:
                 logger.error(f"停止對沖監控服務時出錯: {e}")
 
         # 停止 Polymarket 服務
-        if hasattr(self, 'polymarket_service'):
+        if hasattr(self, "polymarket_service"):
             try:
                 self.polymarket_service.stop()
             except Exception as e:
@@ -124,7 +135,9 @@ class NexusBot(commands.Bot):
         wait_time = 0
         while await asyncio.to_thread(get_pending_count) > 0 and wait_time < 30:
             if wait_time % 5 == 0:
-                logger.info(f"正在等待訊息佇列清空 (剩餘 {await asyncio.to_thread(get_pending_count)} 條)...")
+                logger.info(
+                    f"正在等待訊息佇列清空 (剩餘 {await asyncio.to_thread(get_pending_count)} 條)..."
+                )
             await asyncio.sleep(1)
             wait_time += 1
 
@@ -134,6 +147,7 @@ class NexusBot(commands.Bot):
         """定期更新健康狀態檔案，讓 Docker 能夠識別機器人的健康度。"""
         await self.wait_until_ready()
         import time
+
         while not self.is_closed():
             try:
                 # 寫入 /tmp 資料夾以更新時間戳記
@@ -162,7 +176,8 @@ class NexusBot(commands.Bot):
 
             # 2. 逐一處理通知
             for notif_id, user_id, message, embed_dict in pending:
-                if self.is_closed(): break
+                if self.is_closed():
+                    break
 
                 embed = discord.Embed.from_dict(embed_dict) if embed_dict else None
 
@@ -174,12 +189,16 @@ class NexusBot(commands.Bot):
                         await asyncio.to_thread(delete_notification, notif_id)
                 except discord.Forbidden as e:
                     logger.warning(f"發信失敗(Forbidden): uid={user_id}, err={e}")
-                    await asyncio.to_thread(delete_notification, notif_id) # 無權限直接放棄
+                    await asyncio.to_thread(
+                        delete_notification, notif_id
+                    )  # 無權限直接放棄
                 except discord.NotFound as e:
                     logger.warning(f"發信失敗(NotFound): uid={user_id}, err={e}")
                     await asyncio.to_thread(delete_notification, notif_id)
                 except discord.HTTPException as e:
-                    logger.error(f"發信失敗(HTTPException): uid={user_id}, status={e.status}, err={e}")
+                    logger.error(
+                        f"發信失敗(HTTPException): uid={user_id}, status={e.status}, err={e}"
+                    )
                     # 429 或 5xx 可能需要重試，這裡簡單間隔後繼續
                     await asyncio.sleep(2)
                 except Exception as e:

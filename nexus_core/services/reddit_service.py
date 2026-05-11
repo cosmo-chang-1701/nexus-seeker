@@ -4,14 +4,19 @@ import config
 
 logger = logging.getLogger(__name__)
 
+
 async def get_reddit_context(symbol: str, limit: int = 5) -> str:
     """透過 Cloudflare Tunnel 呼叫本地端爬取 Reddit"""
     try:
-        logger.info(f"[{symbol}] 啟動邊緣運算呼叫，透過 Tunnel 要求本地端爬取 Reddit...")
+        logger.info(
+            f"[{symbol}] 啟動邊緣運算呼叫，透過 Tunnel 要求本地端爬取 Reddit..."
+        )
 
         # 設定 25 秒超時，給予本地端足夠的渲染時間
         async with httpx.AsyncClient(timeout=25.0) as client:
-            res = await client.get(f"{config.TUNNEL_URL}/scrape/reddit/{symbol}?limit={limit}")
+            res = await client.get(
+                f"{config.TUNNEL_URL}/scrape/reddit/{symbol}?limit={limit}"
+            )
             res.raise_for_status()
 
             # 解析本地端回傳的 JSON
@@ -20,7 +25,9 @@ async def get_reddit_context(symbol: str, limit: int = 5) -> str:
                 logger.info(f"[{symbol}] 成功從本地端取得 Reddit 資料！")
                 return response_json.get("data")
             else:
-                logger.warning(f"[{symbol}] 本地端爬取發生內部錯誤: {response_json.get('data')}")
+                logger.warning(
+                    f"[{symbol}] 本地端爬取發生內部錯誤: {response_json.get('data')}"
+                )
                 return "本地備援節點發生錯誤，暫無情緒資料。"
 
     except httpx.ReadTimeout:

@@ -1,4 +1,3 @@
-
 version = 13
 description = "Add financials_cache table for market data caching"
 sql = """

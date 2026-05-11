@@ -1,11 +1,10 @@
 import pytest
 import sqlite3
-import os
-from unittest.mock import MagicMock, AsyncMock, patch
-import config
+from unittest.mock import AsyncMock, patch
 
 # Use a shared in-memory database for testing
 TEST_DB_NAME = "file:testdb?mode=memory&cache=shared"
+
 
 @pytest.fixture(scope="session", autouse=True)
 def mock_db_name():
@@ -18,9 +17,11 @@ def db_conn():
     conn = sqlite3.connect(TEST_DB_NAME)
     # Run migrations
     from database.core import run_migrations
+
     run_migrations()
     yield conn
     conn.close()
+
 
 @pytest.fixture(autouse=True)
 def clean_db(db_conn):
@@ -32,6 +33,7 @@ def clean_db(db_conn):
     tables = cursor.fetchall()
 
     import re
+
     table_pattern = re.compile(r"^[a-zA-Z0-9_]+$")
 
     for (table,) in tables:
@@ -41,6 +43,7 @@ def clean_db(db_conn):
                 cursor.execute(f"DELETE FROM {table}")
     db_conn.commit()
     yield
+
 
 @pytest.fixture
 def mock_interaction():
@@ -52,15 +55,22 @@ def mock_interaction():
     interaction.guild_id = 987654321
     return interaction
 
+
 @pytest.fixture
 def mock_market_data():
-    with patch("services.market_data_service.get_quote", new_callable=AsyncMock) as mock_price, \
-         patch("services.market_data_service.get_history_df", new_callable=AsyncMock) as mock_hist:
+    with patch(
+        "services.market_data_service.get_quote", new_callable=AsyncMock
+    ) as mock_price, patch(
+        "services.market_data_service.get_history_df", new_callable=AsyncMock
+    ) as mock_hist:
         mock_price.return_value = {"c": 150.0}
         yield mock_price, mock_hist
 
+
 @pytest.fixture
 def mock_llm():
-    with patch("services.llm_service.generate_market_report", new_callable=AsyncMock) as mock_report:
+    with patch(
+        "services.llm_service.generate_market_report", new_callable=AsyncMock
+    ) as mock_report:
         mock_report.return_value = "Mocked LLM Report"
         yield mock_report

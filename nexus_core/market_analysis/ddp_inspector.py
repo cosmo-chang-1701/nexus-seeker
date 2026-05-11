@@ -1,15 +1,13 @@
 import logging
 import asyncio
-import pandas as pd
 import numpy as np
 import yfinance as yf
-from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
 
 from services import market_data_service
-import database
 
 logger = logging.getLogger(__name__)
+
 
 class DDPInspector:
     """
@@ -52,22 +50,28 @@ class DDPInspector:
 
         try:
             # EPS Momentum Check (YoY)
-            if 'Net Income' not in q_inc.index:
+            if "Net Income" not in q_inc.index:
                 logger.info(f"[{symbol}] DDP Fail: 'Net Income' not in index")
                 return None
 
             if q_inc.shape[1] < 5:
-                logger.info(f"[{symbol}] DDP Fail: Not enough data points ({q_inc.shape[1]})")
+                logger.info(
+                    f"[{symbol}] DDP Fail: Not enough data points ({q_inc.shape[1]})"
+                )
                 return None
 
             # 使用 Net Income
-            net_inc = q_inc.loc['Net Income']
-            rev = q_inc.loc['Total Revenue']
+            net_inc = q_inc.loc["Net Income"]
+            rev = q_inc.loc["Total Revenue"]
 
             curr_eps_val = net_inc.iloc[0]
-            prev_y_eps_val = net_inc.iloc[4] # 去年同期
+            prev_y_eps_val = net_inc.iloc[4]  # 去年同期
 
-            eps_growth = (curr_eps_val - prev_y_eps_val) / abs(prev_y_eps_val) if prev_y_eps_val != 0 else 0
+            eps_growth = (
+                (curr_eps_val - prev_y_eps_val) / abs(prev_y_eps_val)
+                if prev_y_eps_val != 0
+                else 0
+            )
 
             if eps_growth < 0.15:
                 logger.info(f"[{symbol}] DDP Fail: EPS growth {eps_growth:.2%} < 15%")
@@ -84,40 +88,50 @@ class DDPInspector:
 
             rev_accel = curr_rev_growth > prev_rev_growth
             if not rev_accel:
-                logger.info(f"[{symbol}] DDP Fail: Revenue growth not accelerating (Curr: {curr_rev_growth:.2%}, Prev: {prev_rev_growth:.2%})")
+                logger.info(
+                    f"[{symbol}] DDP Fail: Revenue growth not accelerating (Curr: {curr_rev_growth:.2%}, Prev: {prev_rev_growth:.2%})"
+                )
                 return None
 
             # 2. P/E Analysis (Historical Range)
             info = ticker.info
-            curr_pe = info.get('trailingPE')
-            fwd_pe = info.get('forwardPE')
+            curr_pe = info.get("trailingPE")
+            fwd_pe = info.get("forwardPE")
 
             if not curr_pe or not fwd_pe or curr_pe <= 0:
-                logger.info(f"[{symbol}] DDP Fail: P/E missing or invalid (Trailing: {curr_pe}, Forward: {fwd_pe})")
+                logger.info(
+                    f"[{symbol}] DDP Fail: P/E missing or invalid (Trailing: {curr_pe}, Forward: {fwd_pe})"
+                )
                 return None
 
             # Forward Alignment: Forward P/E < Trailing P/E
             if fwd_pe >= curr_pe:
-                logger.info(f"[{symbol}] DDP Fail: Forward P/E {fwd_pe} >= Trailing P/E {curr_pe}")
+                logger.info(
+                    f"[{symbol}] DDP Fail: Forward P/E {fwd_pe} >= Trailing P/E {curr_pe}"
+                )
                 return None
 
             # P/E Historical Range (3Y)
-            hist = await market_data_service.get_history_df(symbol, period="3y", interval="1wk")
+            hist = await market_data_service.get_history_df(
+                symbol, period="3y", interval="1wk"
+            )
             if hist.empty:
                 logger.info(f"[{symbol}] DDP Fail: History empty")
                 return None
 
-            ttm_eps = info.get('trailingEps')
+            ttm_eps = info.get("trailingEps")
             if not ttm_eps or ttm_eps <= 0:
                 logger.info(f"[{symbol}] DDP Fail: TTM EPS missing")
                 return None
 
-            hist_pe = hist['Close'] / ttm_eps
+            hist_pe = hist["Close"] / ttm_eps
             pe_25th = np.percentile(hist_pe, 25)
             pe_mean = hist_pe.mean()
 
             if curr_pe > pe_25th:
-                logger.info(f"[{symbol}] DDP Fail: Current P/E {curr_pe} > 25th percentile {pe_25th:.2f}")
+                logger.info(
+                    f"[{symbol}] DDP Fail: Current P/E {curr_pe} > 25th percentile {pe_25th:.2f}"
+                )
                 return None
 
             # Confidence Score Calculation
@@ -138,7 +152,7 @@ class DDPInspector:
                 "rev_accel": rev_accel,
                 "curr_rev_growth": curr_rev_growth,
                 "prev_rev_growth": prev_rev_growth,
-                "confidence_score": min(100, score)
+                "confidence_score": min(100, score),
             }
 
         except Exception as e:
@@ -150,19 +164,25 @@ class DDPInspector:
         try:
             import sqlite3
             import config
+
             with sqlite3.connect(config.DB_NAME) as conn:
                 cursor = conn.cursor()
-                cursor.execute("""
+                cursor.execute(
+                    """
                     INSERT INTO ddp_signals (symbol, current_pe, pe_mean_3y, eps_growth, rev_accel_status, confidence_score)
                     VALUES (?, ?, ?, ?, ?, ?)
-                """, (
-                    report['symbol'],
-                    report['current_pe'],
-                    report['pe_mean_3y'],
-                    report['eps_growth'],
-                    "加速 (Accelerating)" if report['rev_accel'] else "穩定 (Stable)",
-                    report['confidence_score']
-                ))
+                """,
+                    (
+                        report["symbol"],
+                        report["current_pe"],
+                        report["pe_mean_3y"],
+                        report["eps_growth"],
+                        "加速 (Accelerating)"
+                        if report["rev_accel"]
+                        else "穩定 (Stable)",
+                        report["confidence_score"],
+                    ),
+                )
                 conn.commit()
         except Exception as e:
             logger.error(f"記錄 DDP 信號失敗: {e}")

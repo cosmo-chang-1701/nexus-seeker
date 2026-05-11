@@ -7,7 +7,6 @@ import httpx
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 
-import database
 from database.user_settings import get_full_user_context, get_all_user_ids
 from services.llm_service import generate_polymarket_summary, classify_uoa_intent
 from market_analysis.sentiment_engine import SentimentEngine
@@ -24,8 +23,10 @@ GAMMA_API_BASE = "https://gamma-api.polymarket.com"
 # 限制快取大小以節省記憶體 (1GB RAM VPS 優化)
 MAX_CACHE_SIZE = 500
 
+
 class BoundedCache(OrderedDict):
     """具備容量上限的快取 (LRU 邏輯)。"""
+
     def __init__(self, max_size=MAX_CACHE_SIZE):
         super().__init__()
         self.max_size = max_size
@@ -42,12 +43,15 @@ class BoundedCache(OrderedDict):
         if len(self) > self.max_size:
             self.popitem(last=False)
 
+
 @dataclass
 class OrderBook:
     token_id: str
     bids: Dict[float, float] = field(default_factory=dict)  # price -> size
     asks: Dict[float, float] = field(default_factory=dict)  # price -> size
-    last_update_at: datetime.datetime = field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc))
+    last_update_at: datetime.datetime = field(
+        default_factory=lambda: datetime.datetime.now(datetime.timezone.utc)
+    )
 
     def update(self, side: str, price: float, size: float):
         target = self.bids if side.lower() in ["buy", "bid"] else self.asks
@@ -119,24 +123,27 @@ class PolymarketService:
         async with self._cache_lock:
             snapshot = []
             for m in self._active_markets[:limit]:
-                tokens = m.get('tokens', [])
+                tokens = m.get("tokens", [])
                 token_snapshots = []
                 for t in tokens:
-                    tid = t.get('token_id')
-                    price = t.get('price', 0)
+                    tid = t.get("token_id")
+                    price = t.get("price", 0)
                     if tid in self._order_books:
                         price = self._order_books[tid].get_mid_price()
 
-                    token_snapshots.append({
-                        "outcome": t.get('outcome'),
-                        "odds": round(price, 4)
-                    })
+                    token_snapshots.append(
+                        {"outcome": t.get("outcome"), "odds": round(price, 4)}
+                    )
 
-                snapshot.append({
-                    "question": m.get("question"),
-                    "odds_distribution": token_snapshots,
-                    "last_updated": datetime.datetime.now(datetime.timezone.utc).isoformat()
-                })
+                snapshot.append(
+                    {
+                        "question": m.get("question"),
+                        "odds_distribution": token_snapshots,
+                        "last_updated": datetime.datetime.now(
+                            datetime.timezone.utc
+                        ).isoformat(),
+                    }
+                )
             return snapshot
 
     def get_status(self) -> Dict[str, Any]:
@@ -153,7 +160,7 @@ class PolymarketService:
             "asset_count": self.asset_count,
             "order_book_count": len(self._order_books),
             "last_message": last_msg,
-            "errors": self.error_count
+            "errors": self.error_count,
         }
 
     def get_active_markets(self, limit: int = 20) -> List[Dict[str, Any]]:
@@ -166,7 +173,9 @@ class PolymarketService:
         self.running = True
         self._monitor_task = asyncio.create_task(self._monitor_loop())
         self._cleanup_task = asyncio.create_task(self._periodic_cleanup())
-        logger.info("🐋 Polymarket Whale Monitor Service started with Memory-Safe Bounded Cache.")
+        logger.info(
+            "🐋 Polymarket Whale Monitor Service started with Memory-Safe Bounded Cache."
+        )
 
     def stop(self):
         self.running = False
@@ -182,7 +191,7 @@ class PolymarketService:
     async def _periodic_cleanup(self):
         """每 15 分鐘執行一次強制垃圾回收與過期快取清理。"""
         while self.running:
-            await asyncio.sleep(900) # 15 min
+            await asyncio.sleep(900)  # 15 min
             try:
                 now = datetime.datetime.now(datetime.timezone.utc)
                 async with self._cache_lock:
@@ -199,7 +208,9 @@ class PolymarketService:
 
                 # 2. 強制垃圾回收
                 gc.collect()
-                logger.info(f"🧹 [記憶體優化] 已清理 {len(expired_aids)} 筆過期期貨快取並執行 GC。")
+                logger.info(
+                    f"🧹 [記憶體優化] 已清理 {len(expired_aids)} 筆過期期貨快取並執行 GC。"
+                )
             except Exception as e:
                 logger.error(f"Cleanup error: {e}")
 
@@ -212,22 +223,30 @@ class PolymarketService:
                 # 1. 獲取所有活躍市場以取得 asset_id 列表
                 asset_ids = await self._fetch_all_active_asset_ids()
                 if not asset_ids:
-                    logger.warning(f"No active asset IDs found. Retrying in {retry_delay}s...")
+                    logger.warning(
+                        f"No active asset IDs found. Retrying in {retry_delay}s..."
+                    )
                     self.error_count += 1
                     await asyncio.sleep(retry_delay)
                     retry_delay = min(retry_delay * 2, max_delay)
                     continue
 
                 self.asset_count = len(asset_ids)
-                retry_delay = 5 # 重設延遲
+                retry_delay = 5  # 重設延遲
 
                 # 預熱 Order Books
-                await self._initialize_order_books(asset_ids[:50])  # 先預熱前 50 個熱門資產
+                await self._initialize_order_books(
+                    asset_ids[:50]
+                )  # 先預熱前 50 個熱門資產
 
                 try:
-                    ws = await asyncio.wait_for(websockets.connect(POLY_WS_URL), timeout=10)
+                    ws = await asyncio.wait_for(
+                        websockets.connect(POLY_WS_URL), timeout=10
+                    )
                 except asyncio.TimeoutError:
-                    logger.error(f"Polymarket WS connection timed out. Retrying in {retry_delay}s...")
+                    logger.error(
+                        f"Polymarket WS connection timed out. Retrying in {retry_delay}s..."
+                    )
                     self.error_count += 1
                     await asyncio.sleep(retry_delay)
                     retry_delay = min(retry_delay * 2, max_delay)
@@ -239,10 +258,12 @@ class PolymarketService:
                     sub_msg = {
                         "type": "market",
                         "assets_ids": asset_ids,
-                        "custom_feature_enabled": True
+                        "custom_feature_enabled": True,
                     }
                     await ws.send(json.dumps(sub_msg))
-                    logger.info(f"Subscribed to 'market' channel for {len(asset_ids)} assets (Trades + L2 updates).")
+                    logger.info(
+                        f"Subscribed to 'market' channel for {len(asset_ids)} assets (Trades + L2 updates)."
+                    )
 
                     # 啟動 PING 任務
                     self._ping_task = asyncio.create_task(self._ping_loop(ws))
@@ -251,8 +272,10 @@ class PolymarketService:
                         if not self.running:
                             break
 
-                        self.last_message_at = datetime.datetime.now(datetime.timezone.utc)
-                        retry_delay = 5 # 成功通訊後重設延遲
+                        self.last_message_at = datetime.datetime.now(
+                            datetime.timezone.utc
+                        )
+                        retry_delay = 5  # 成功通訊後重設延遲
 
                         try:
                             data = json.loads(message)
@@ -281,11 +304,15 @@ class PolymarketService:
 
             except websockets.exceptions.ConnectionClosed:
                 self.is_connected = False
-                logger.warning(f"Polymarket WS connection closed. Reconnecting in {retry_delay}s...")
+                logger.warning(
+                    f"Polymarket WS connection closed. Reconnecting in {retry_delay}s..."
+                )
             except Exception as e:
                 self.is_connected = False
                 self.error_count += 1
-                logger.error(f"Polymarket WS monitor loop encountered error: {e}. Reconnecting in {retry_delay}s...")
+                logger.error(
+                    f"Polymarket WS monitor loop encountered error: {e}. Reconnecting in {retry_delay}s..."
+                )
             finally:
                 if self._ping_task:
                     self._ping_task.cancel()
@@ -299,7 +326,9 @@ class PolymarketService:
         async with httpx.AsyncClient(timeout=10.0) as client:
             for aid in asset_ids:
                 try:
-                    resp = await client.get(f"{POLY_API_BASE}/book", params={"token_id": aid})
+                    resp = await client.get(
+                        f"{POLY_API_BASE}/book", params={"token_id": aid}
+                    )
                     if resp.status_code == 200:
                         data = resp.json()
                         ob = OrderBook(token_id=aid)
@@ -330,7 +359,9 @@ class PolymarketService:
         if side and price > 0:
             ob.update(side, price, size)
 
-    async def _handle_uoa_correlation(self, symbol: str, whale_intent: str) -> Optional[Dict[str, Any]]:
+    async def _handle_uoa_correlation(
+        self, symbol: str, whale_intent: str
+    ) -> Optional[Dict[str, Any]]:
         """偵測異常期權活動 (UOA) 並與 Polymarket 意圖進行關聯分析"""
         uoa_data = await SentimentEngine.detect_uoa(symbol)
         if not uoa_data:
@@ -338,10 +369,7 @@ class PolymarketService:
 
         # 進行 AI 分類
         classification = await classify_uoa_intent(symbol, uoa_data[0], whale_intent)
-        return {
-            "uoa": uoa_data[0],
-            "classification": classification
-        }
+        return {"uoa": uoa_data[0], "classification": classification}
 
     async def _handle_trade(self, trade: Dict[str, Any]):
         """
@@ -364,7 +392,7 @@ class PolymarketService:
                 ob = self._order_books.get(asset_id)
 
             # 動態門檻判定
-            dynamic_threshold = 10000.0 # 預設回退值
+            dynamic_threshold = 10000.0  # 預設回退值
             if ob:
                 dynamic_threshold = ob.calculate_slippage_threshold(target_percent=0.02)
 
@@ -374,7 +402,10 @@ class PolymarketService:
             for uid in user_ids:
                 context = get_full_user_context(uid)
                 meets_dynamic = usd_value >= dynamic_threshold
-                meets_static = (context.polymarket_threshold <= 0 or usd_value >= context.polymarket_threshold)
+                meets_static = (
+                    context.polymarket_threshold <= 0
+                    or usd_value >= context.polymarket_threshold
+                )
 
                 if meets_dynamic and meets_static:
                     target_users.append(uid)
@@ -382,23 +413,35 @@ class PolymarketService:
             if not target_users:
                 return
 
-            logger.info(f"🐋 Whale trade detected: {trade.get('side')} ${usd_value:,.2f} on asset {asset_id} (Dynamic Threshold: ${dynamic_threshold:,.2f})")
+            logger.info(
+                f"🐋 Whale trade detected: {trade.get('side')} ${usd_value:,.2f} on asset {asset_id} (Dynamic Threshold: ${dynamic_threshold:,.2f})"
+            )
 
             # 3. 獲取市場背景資訊
-            market_info = await self._get_market_info(asset_id, trade.get("condition_id"))
+            market_info = await self._get_market_info(
+                asset_id, trade.get("condition_id")
+            )
             if not market_info:
-                market_info = {"question": "未知市場", "description": "無法獲取市場詳細資訊"}
+                market_info = {
+                    "question": "未知市場",
+                    "description": "無法獲取市場詳細資訊",
+                }
 
             # 4. 嘗試關聯 UOA (如果標的包含股票代碼)
             uoa_correlation = None
             import re
-            symbol_match = re.search(r'\b([A-Z]{1,5})\b', market_info.get('question', ''))
+
+            symbol_match = re.search(
+                r"\b([A-Z]{1,5})\b", market_info.get("question", "")
+            )
             if symbol_match:
                 symbol = symbol_match.group(1)
                 # 簡單白名單檢查以防過度掃描
                 if len(symbol) >= 2:
                     details = self._resolve_trade_details(trade, market_info)
-                    uoa_correlation = await self._handle_uoa_correlation(symbol, details['intent'])
+                    uoa_correlation = await self._handle_uoa_correlation(
+                        symbol, details["intent"]
+                    )
 
             # 5. 推播通知
             summary_cache = None
@@ -408,10 +451,15 @@ class PolymarketService:
                 context = get_full_user_context(uid)
                 user_dynamic_threshold = dynamic_threshold
                 if context.polymarket_slippage != 2.0 and ob:
-                    user_dynamic_threshold = ob.calculate_slippage_threshold(target_percent=context.polymarket_slippage / 100.0)
+                    user_dynamic_threshold = ob.calculate_slippage_threshold(
+                        target_percent=context.polymarket_slippage / 100.0
+                    )
 
                 meets_dynamic = usd_value >= user_dynamic_threshold
-                meets_static = (context.polymarket_threshold <= 0 or usd_value >= context.polymarket_threshold)
+                meets_static = (
+                    context.polymarket_threshold <= 0
+                    or usd_value >= context.polymarket_threshold
+                )
 
                 if not (meets_dynamic and meets_static):
                     continue
@@ -419,32 +467,54 @@ class PolymarketService:
                 current_summary = "（未啟用 AI 分析）"
                 if context.polymarket_use_llm:
                     if summary_cache is None:
-                        summary_cache = await generate_polymarket_summary(market_info, trade, usd_value, base_details)
+                        summary_cache = await generate_polymarket_summary(
+                            market_info, trade, usd_value, base_details
+                        )
                     current_summary = summary_cache
 
-                await self._push_notification(uid, current_summary, market_info, trade, usd_value, user_dynamic_threshold, uoa_correlation)
+                await self._push_notification(
+                    uid,
+                    current_summary,
+                    market_info,
+                    trade,
+                    usd_value,
+                    user_dynamic_threshold,
+                    uoa_correlation,
+                )
 
         except Exception as e:
             logger.error(f"Failed to handle Polymarket trade: {e}")
 
-    async def _push_notification(self, user_id: int, summary: str, market_info: Dict[str, Any], trade: Dict[str, Any], usd_value: float, dynamic_threshold: float, uoa_correlation: Optional[Dict[str, Any]] = None):
+    async def _push_notification(
+        self,
+        user_id: int,
+        summary: str,
+        market_info: Dict[str, Any],
+        trade: Dict[str, Any],
+        usd_value: float,
+        dynamic_threshold: float,
+        uoa_correlation: Optional[Dict[str, Any]] = None,
+    ):
         """
         封裝 Discord Embed (專業分析師格式) 並排入私訊佇列
         """
         import discord
 
-        context = get_full_user_context(user_id)
         details = self._resolve_trade_details(trade, market_info)
-        size = float(trade.get("size", 0))
-        win_rate = details['p_yes'] * 100
+        win_rate = details["p_yes"] * 100
 
         # 是否為高信心訊號 (大額交易 + UOA 關聯)
         is_high_conviction = uoa_correlation is not None and usd_value > 50000
 
         embed = discord.Embed(
-            title="【 🐋 Polymarket 巨鯨戰報 】" + (" 🔥 高信心訊號" if is_high_conviction else ""),
-            color=discord.Color.gold() if is_high_conviction else (discord.Color.blue() if details['is_bullish'] else discord.Color.red()),
-            timestamp=discord.utils.utcnow()
+            title="【 🐋 Polymarket 巨鯨戰報 】"
+            + (" 🔥 高信心訊號" if is_high_conviction else ""),
+            color=discord.Color.gold()
+            if is_high_conviction
+            else (
+                discord.Color.blue() if details["is_bullish"] else discord.Color.red()
+            ),
+            timestamp=discord.utils.utcnow(),
         )
 
         content = [
@@ -454,23 +524,29 @@ class PolymarketService:
             f"**交易金額：** `${usd_value:,.2f}`",
             f"**流動性倍數：** `{usd_value / dynamic_threshold:.2f}x`",
             f"**當前勝率：** {win_rate:.1f}%",
-            "---"
+            "---",
         ]
 
         if uoa_correlation:
-            uoa = uoa_correlation['uoa']
-            cls = uoa_correlation['classification']
+            uoa = uoa_correlation["uoa"]
+            cls = uoa_correlation["classification"]
             content.append(f"🔍 **UOA 關聯偵測 ({uoa['symbol']})**")
-            content.append(f"- 合約: `{uoa['expiry']}` `${uoa['strike']}` {uoa['type']}")
-            content.append(f"- 性質: **{cls['classification']}** (信心: `{cls['confidence']:.2f}`)")
+            content.append(
+                f"- 合約: `{uoa['expiry']}` `${uoa['strike']}` {uoa['type']}"
+            )
+            content.append(
+                f"- 性質: **{cls['classification']}** (信心: `{cls['confidence']:.2f}`)"
+            )
             content.append(f"- 理由: {cls['explanation']}")
             content.append("---")
 
         # 預測性對沖建議 (Predictive Hedge)
         if win_rate > 70 or win_rate < 30:
             content.append("🛡️ **【預測性對沖建議 (Predictive Hedge)】**")
-            event_name = market_info.get('question', '特定事件')
-            content.append(f"偵測到預測市場對 `{event_name}` 的機率激增至 `{win_rate:.1f}%`，建議提前在 VTR 執行 Delta 對沖，以應對潛在的波動率跳空。")
+            event_name = market_info.get("question", "特定事件")
+            content.append(
+                f"偵測到預測市場對 `{event_name}` 的機率激增至 `{win_rate:.1f}%`，建議提前在 VTR 執行 Delta 對沖，以應對潛在的波動率跳空。"
+            )
             content.append("---")
 
         if summary and summary != "（未啟用 AI 分析）":
@@ -478,15 +554,20 @@ class PolymarketService:
             content.append("---")
 
         event_slug = market_info.get("event_slug")
-        market_url = f"https://polymarket.com/event/{event_slug}" if event_slug else "https://polymarket.com"
+        market_url = (
+            f"https://polymarket.com/event/{event_slug}"
+            if event_slug
+            else "https://polymarket.com"
+        )
 
         content.append(f"[🔗 前往市場]({market_url})")
 
         embed.description = "\n".join(content)
-        embed.set_footer(text=f"Nexus Seeker 監測系統 | 動態門檻: ${dynamic_threshold:,.0f}")
+        embed.set_footer(
+            text=f"Nexus Seeker 監測系統 | 動態門檻: ${dynamic_threshold:,.0f}"
+        )
 
         await self.bot.queue_dm(user_id, embed=embed)
-
 
     async def _fetch_all_active_asset_ids(self) -> List[str]:
         """
@@ -497,11 +578,7 @@ class PolymarketService:
 
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                params = {
-                    "active": "true",
-                    "closed": "false",
-                    "limit": 100
-                }
+                params = {"active": "true", "closed": "false", "limit": 100}
                 resp = await client.get(f"{GAMMA_API_BASE}/markets", params=params)
 
                 if resp.status_code == 200:
@@ -535,8 +612,14 @@ class PolymarketService:
                                 else:
                                     outcome_prices = prices_raw
 
-                                outcomes = outcomes if isinstance(outcomes, list) else []
-                                outcome_prices = outcome_prices if isinstance(outcome_prices, list) else []
+                                outcomes = (
+                                    outcomes if isinstance(outcomes, list) else []
+                                )
+                                outcome_prices = (
+                                    outcome_prices
+                                    if isinstance(outcome_prices, list)
+                                    else []
+                                )
                             except Exception:
                                 outcomes = []
                                 outcome_prices = []
@@ -546,13 +629,23 @@ class PolymarketService:
                                 asset_ids.append(tid)
 
                                 event_slug = None
-                                if "events" in m and m["events"] and isinstance(m["events"], list):
+                                if (
+                                    "events" in m
+                                    and m["events"]
+                                    and isinstance(m["events"], list)
+                                ):
                                     event_slug = m["events"][0].get("slug")
                                 elif "event" in m and m["event"]:
                                     event_slug = m["event"].get("slug")
 
-                                outcome_name = str(outcomes[i]).strip().strip('"') if i < len(outcomes) else "未知選項"
-                                current_price = outcome_prices[i] if i < len(outcome_prices) else 0
+                                outcome_name = (
+                                    str(outcomes[i]).strip().strip('"')
+                                    if i < len(outcomes)
+                                    else "未知選項"
+                                )
+                                current_price = (
+                                    outcome_prices[i] if i < len(outcome_prices) else 0
+                                )
 
                                 self._market_cache[tid] = {
                                     "question": q,
@@ -561,24 +654,30 @@ class PolymarketService:
                                     "condition_id": m.get("conditionId"),
                                     "slug": m.get("slug"),
                                     "event_slug": event_slug,
-                                    "outcome": outcome_name
-                                }
-                                current_market_tokens.append({
-                                    "token_id": tid,
                                     "outcome": outcome_name,
-                                    "price": current_price
-                                })
+                                }
+                                current_market_tokens.append(
+                                    {
+                                        "token_id": tid,
+                                        "outcome": outcome_name,
+                                        "price": current_price,
+                                    }
+                                )
 
-                            active_markets_data.append({
-                                "question": q,
-                                "description": m.get("description"),
-                                "end_date": m.get("endDate"),
-                                "tokens": current_market_tokens
-                            })
+                            active_markets_data.append(
+                                {
+                                    "question": q,
+                                    "description": m.get("description"),
+                                    "end_date": m.get("endDate"),
+                                    "tokens": current_market_tokens,
+                                }
+                            )
 
                             cond_id = m.get("conditionId")
                             if cond_id:
-                                self._market_cache[cond_id] = self._market_cache[t_ids[0]]
+                                self._market_cache[cond_id] = self._market_cache[
+                                    t_ids[0]
+                                ]
 
                         except Exception as e:
                             logger.error(f"Error parsing tokens for market '{q}': {e}")
@@ -597,7 +696,9 @@ class PolymarketService:
         except Exception:
             pass
 
-    async def _get_market_info(self, asset_id: str, condition_id: str = None) -> Dict[str, Any]:
+    async def _get_market_info(
+        self, asset_id: str, condition_id: str = None
+    ) -> Dict[str, Any]:
         if asset_id in self._market_cache:
             return self._market_cache[asset_id]
         if condition_id and condition_id in self._market_cache:
@@ -606,7 +707,10 @@ class PolymarketService:
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 if condition_id:
-                    resp = await client.get(f"{GAMMA_API_BASE}/markets", params={"condition_id": condition_id})
+                    resp = await client.get(
+                        f"{GAMMA_API_BASE}/markets",
+                        params={"condition_id": condition_id},
+                    )
                     if resp.status_code == 200:
                         data = resp.json()
                         market = data[0] if isinstance(data, list) and data else data
@@ -614,10 +718,14 @@ class PolymarketService:
                             self._market_cache[condition_id] = market
                             return market
         except Exception as e:
-            logger.error(f"Error fetching market info for {asset_id}/{condition_id}: {e}")
+            logger.error(
+                f"Error fetching market info for {asset_id}/{condition_id}: {e}"
+            )
         return None
 
-    def _resolve_trade_details(self, trade: Dict[str, Any], market_info: Dict[str, Any]) -> Dict[str, Any]:
+    def _resolve_trade_details(
+        self, trade: Dict[str, Any], market_info: Dict[str, Any]
+    ) -> Dict[str, Any]:
         side_raw = trade.get("side", "BUY")
         base_price = float(trade.get("price", 0))
         outcome = str(market_info.get("outcome", "Yes")).upper()
@@ -661,5 +769,5 @@ class PolymarketService:
             "p_yes": p_yes,
             "p_no": p_no,
             "emoji": "🟢" if is_bullish else "🔴",
-            "is_bullish": is_bullish
+            "is_bullish": is_bullish,
         }
