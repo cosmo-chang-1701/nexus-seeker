@@ -5,18 +5,37 @@ from dotenv import load_dotenv
 # 載入 .env 檔案
 load_dotenv()
 
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-DISCORD_ADMIN_USER_ID = int(os.getenv("DISCORD_ADMIN_USER_ID", 0))
-LOG_LEVEL = os.getenv("LOG_LEVEL", "WARNING").upper()
+
+def get_env_or_secret(key, default=None):
+    """取得環境變數，若不存在則嘗試從 Docker Secret 讀取。"""
+    value = os.getenv(key)
+    if value:
+        return value
+
+    # 嘗試從 Docker Secret 讀取 (/run/secrets/<key>)
+    secret_path = f"/run/secrets/{key}"
+    if os.path.exists(secret_path):
+        try:
+            with open(secret_path, "r") as f:
+                return f.read().strip()
+        except Exception:
+            pass
+
+    return default
+
+
+DISCORD_TOKEN = get_env_or_secret("DISCORD_TOKEN")
+DISCORD_ADMIN_USER_ID = int(get_env_or_secret("DISCORD_ADMIN_USER_ID", 0))
+LOG_LEVEL = get_env_or_secret("LOG_LEVEL", "WARNING").upper()
 
 # 系統與模型參數
 RISK_FREE_RATE = 0.042
-DB_NAME = os.getenv("NEXUS_DB_NAME", "data/nexus_data.db")
-LLM_API_BASE = os.getenv("LLM_API_BASE", None)
-LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", None)
-API_KEY = os.getenv("API_KEY", None)
-TUNNEL_URL = os.getenv("TUNNEL_URL", "")
-FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")
+DB_NAME = get_env_or_secret("NEXUS_DB_NAME", "data/nexus_data.db")
+LLM_API_BASE = get_env_or_secret("LLM_API_BASE", None)
+LLM_MODEL_NAME = get_env_or_secret("LLM_MODEL_NAME", None)
+API_KEY = get_env_or_secret("API_KEY", None)
+TUNNEL_URL = get_env_or_secret("TUNNEL_URL", "")
+FINNHUB_API_KEY = get_env_or_secret("FINNHUB_API_KEY", "")
 
 # 策略目標 Delta 參數
 TARGET_DELTAS = {"STO_PUT": -0.20, "STO_CALL": 0.20, "BTO_PUT": -0.50, "BTO_CALL": 0.50}

@@ -163,7 +163,6 @@ jobs:
                 --with-registry-auth \
                 --replicas 1 \
                 --update-order start-first \
-                --publish 8081:8080 \
                 --env TZ=America/New_York \
                 --env DEPLOYMENT_TIMESTAMP=$(date +%s) \
                 $INIT_SECRET_FLAGS \

@@ -145,8 +145,16 @@ class NexusBot(commands.Bot):
 
     async def _health_worker(self):
         """定期更新健康狀態檔案，讓 Docker 能夠識別機器人的健康度。"""
-        await self.wait_until_ready()
         import time
+
+        # 啟動時立即寫入一次，確保 Docker Healthcheck 不會太快判定失敗
+        try:
+            with open("/tmp/bot_healthy", "w") as f:
+                f.write(str(time.time()))
+        except Exception as e:
+            logger.error(f"初始寫入 bot_healthy 失敗: {e}")
+
+        await self.wait_until_ready()
 
         while not self.is_closed():
             try:
