@@ -414,7 +414,35 @@ class UnifiedTerminalCog(commands.Cog):
             result["spy_price"] = spy_price
 
             user_context = database.get_full_user_context(user_id)
-            main_embed = create_scan_embed(result, user_context.capital)
+
+            if "strategy" in result:
+                main_embed = create_scan_embed(result, user_context.capital)
+            else:
+                # 查無信號時，建立基礎報價 Embed
+                quote = await market_data_service.get_quote(symbol)
+                main_embed = discord.Embed(
+                    title=f"💹 {symbol} 基礎行情 (查無量化訊號)",
+                    color=discord.Color.blue()
+                    if quote.get("dp", 0) >= 0
+                    else discord.Color.red(),
+                    timestamp=datetime.now(timezone.utc),
+                )
+                main_embed.add_field(
+                    name="現價 (Current)",
+                    value=f"**${quote.get('c', 0.0)}**",
+                    inline=True,
+                )
+                main_embed.add_field(
+                    name="漲跌幅 (%)", value=f"`{quote.get('dp', 0.0)}%`", inline=True
+                )
+                main_embed.add_field(
+                    name="VIX / SPY",
+                    value=f"`{macro_data.vix:.1f}` / `${spy_price:.1f}`",
+                    inline=True,
+                )
+                main_embed.set_footer(
+                    text="Nexus Seeker | 點擊下方按鈕獲取進一步深度分析"
+                )
 
             view = SymbolHubView(symbol, user_id, self.bot)
             view.base_data = result

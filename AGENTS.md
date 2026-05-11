@@ -78,11 +78,12 @@ The system is optimized for **Low-RAM VPS** deployment:
 Tests are located in `nexus_core/tests/`.
 - **Mandate:** All tests MUST be executed using `pytest` inside the Docker container.
 - **Framework:** `pytest` with `pytest-asyncio` and `pytest-mock`.
-- **Coverage:** Core engines (NRO/Sentiment) must achieve >90% code coverage.
+- **Coverage:** Core engines (NRO/Sentiment) and Unified Hubs must achieve >90% code coverage.
 - **Pre-commit Pipeline:** All commits are automatically verified via `pre-commit` hooks, which include:
   - **Linter & Formatter:** `ruff` (extremely fast Python linting and formatting).
   - **Security Scan:** `semgrep` (scans for SQL injection, insecure imports, etc. during `pre-push`).
   - **Containerized Testing:** `docker-test` (executes all unit tests in a fresh Docker container before each commit).
+  - **Interactive Component Testing:** Specialized tests for Discord Views (Buttons/Selects) in `test_unified_terminal_interactive.py`.
 - **Run all tests (Docker):**
   ```bash
   cd nexus_core && docker compose run --rm nexus-seeker python -m pytest tests
