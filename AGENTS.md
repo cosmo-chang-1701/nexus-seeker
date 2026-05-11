@@ -137,4 +137,12 @@ Assets transition through a persistent state machine in the `assets` table (v028
 - `nexus_core/market_analysis/attribution.py`: Protection scoring & self-evolution.
 - `nexus_core/services/memory_manager.py`: VPS stability watchdog.
 - `nexus_core/cogs/embed_builder.py`: Centralized UI/UX generator.
-alized UI/UX generator.
+
+---
+
+## Deployment & CI/CD
+The project implements a high-quality **Docker Swarm CD Workflow** with the following features:
+1.  **CI/CD Separation**: Image building occurs on every push to `main`, while deployment only triggers on version tags (`v*`).
+2.  **Versioned Secrets**: Uses a custom Bash logic to handle immutable Swarm Secrets by appending the Commit Short SHA (e.g., `DISCORD_TOKEN_[SHA]`).
+3.  **Zero-Downtime Updates**: Employs `--update-order start-first` to ensure the new version is healthy before stopping the old one.
+4.  **Automatic Cleanup**: Post-deployment scripts automatically remove orphaned old secrets and prune unused images.

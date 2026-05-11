@@ -1,66 +1,68 @@
-name: Build and Deploy Nexus Core to DigitalOcean
+name: Build and Deploy Nexus Seeker (Swarm Zero-Downtime)
 
 on:
   push:
     branches:
       - main
-    paths:
-      - 'nexus_core/**'
-      - '.github/workflows/deploy.yml'
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+    tags:
+      - 'v*'
 
 env:
-  RAW_IMAGE_NAME: ghcr.io/${{ github.repository }}
+  # GHCR 映像檔基本路徑
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  # 遠端 Swarm 服務名稱
   SERVICE_NAME: nexus-seeker-service
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  # --- 第一階段：建置與推送 Docker 映像檔 ---
+  # --- 第一階段：持續整合 (CI) - 建置並推送映像檔 ---
   build-and-push:
-    name: Build and Push Docker Image
+    name: 🏗️ Build and Push Image
     runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.vars.outputs.sha_short }}
-      image_lower: ${{ steps.vars.outputs.image_lower }}
-
     permissions:
       contents: read
       packages: write
 
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
+    outputs:
+      deploy_version: ${{ steps.vars.outputs.sha_short }}
+      image_tag: ${{ steps.vars.outputs.image_tag }}
 
-      - name: Set outputs
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔑 Set Deployment Variables
         id: vars
         run: |
-          echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-          echo "image_lower=$(echo ${{ env.RAW_IMAGE_NAME }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+          SHA_SHORT=$(git rev-parse --short HEAD)
+          echo "sha_short=${SHA_SHORT}" >> $GITHUB_OUTPUT
+          # 映像檔標籤包含 sha 後綴，這是版本化祕密同步的關鍵
+          echo "image_tag=sha-${SHA_SHORT}" >> $GITHUB_OUTPUT
+          # 轉換映像檔名稱為小寫以符合 Docker 規範
+          echo "image_lower=$(echo ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+      - name: 🐳 Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v4
+      - name: 🔐 Log in to GHCR
+        uses: docker/login-action@v3
         with:
-          registry: ghcr.io
+          registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata
+      - name: 🏷️ Extract Docker metadata
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@v5
         with:
           images: ${{ steps.vars.outputs.image_lower }}
           tags: |
-            type=sha,format=short,prefix=,suffix=
+            type=raw,value=${{ steps.vars.outputs.image_tag }}
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=ref,event=tag
 
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v7
+      - name: 🚀 Build and push Docker image
+        uses: docker/build-push-action@v5
         with:
           context: ./nexus_core
           file: ./nexus_core/Dockerfile
@@ -70,86 +72,114 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # --- 第二階段：遠端部署至 DigitalOcean ---
+  # --- 第二階段：持續佈署 (CD) - 遠端 Docker Swarm 滾動更新 ---
   deploy:
-    name: Deploy to DigitalOcean
+    name: 🚢 Deploy to Production (Swarm)
     needs: build-and-push
-    environment: production
+    # 僅在推送 v* 標籤時觸發佈署
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    environment: production
 
     steps:
-      - name: Deploy to Droplet via SSH
-        uses: appleboy/ssh-action@v1.2.5
-        env:
-          SERVICE_NAME: ${{ env.SERVICE_NAME }}
-          IMAGE_TAG: ${{ needs.build-and-push.outputs.version }}
-          IMAGE_LOWER: ${{ needs.build-and-push.outputs.image_lower }}
-          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
-          DISCORD_ADMIN_USER_ID: ${{ secrets.DISCORD_ADMIN_USER_ID }}
-          LLM_API_BASE: ${{ secrets.LLM_API_BASE }}
-          LLM_MODEL_NAME: ${{ secrets.LLM_MODEL_NAME }}
-          API_KEY: ${{ secrets.API_KEY }}
-          TUNNEL_URL: ${{ secrets.TUNNEL_URL }}
-          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
-          TZ: "America/New_York"
+      - name: 🌐 Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DIGITALOCEAN_HOST }}
           username: ${{ secrets.DIGITALOCEAN_USERNAME }}
           key: ${{ secrets.DIGITALOCEAN_SSH_KEY }}
-          envs: SERVICE_NAME,IMAGE_TAG,IMAGE_LOWER,DISCORD_TOKEN,DISCORD_ADMIN_USER_ID,LLM_API_BASE,LLM_MODEL_NAME,API_KEY,TUNNEL_URL,FINNHUB_API_KEY,TZ
+          envs: SERVICE_NAME,DEPLOY_VERSION,IMAGE_TAG,REGISTRY,IMAGE_NAME,DISCORD_TOKEN,DISCORD_ADMIN_USER_ID,LLM_API_BASE,LLM_MODEL_NAME,API_KEY,TUNNEL_URL,FINNHUB_API_KEY,GHCR_TOKEN
           script: |
-            FULL_IMAGE_URL="$IMAGE_LOWER:$IMAGE_TAG"
-            echo "Deploying version: $FULL_IMAGE_URL"
+            # 初始化環境變數
+            DEPLOY_VERSION="${{ needs.build-and-push.outputs.deploy_version }}"
+            IMAGE_TAG="${{ needs.build-and-push.outputs.image_tag }}"
+            IMAGE_LOWER=$(echo $REGISTRY/$IMAGE_NAME | tr '[:upper:]' '[:lower:]')
+            FULL_IMAGE="$IMAGE_LOWER:$IMAGE_TAG"
 
-            # 1. 初始化 Docker Swarm (確保環境就緒)
+            echo "🚀 開始執行零停機佈署，版本: $DEPLOY_VERSION"
+            echo "📦 使用映像檔: $FULL_IMAGE"
+
+            # 1. 檢查並初始化 Docker Swarm (冪等性)
             if ! docker info | grep -q "Swarm: active"; then
-              docker swarm init
+              echo "⚠️ 偵測到 Swarm 未啟動，正在初始化..."
+              docker swarm init || true
             fi
 
-            # 2. 登入 GitHub Container Registry
-            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+            # 2. 登入 GHCR
+            echo "${{ secrets.GHCR_TOKEN }}" | docker login $REGISTRY -u "${{ github.actor }}" --password-stdin
 
-            # 3. 預先拉取新映像檔以縮短停機時間
-            docker pull $FULL_IMAGE_URL
+            # 3. 處理版本化祕密 (Versioned Secrets Management)
+            # 定義需要被版本化的祕密清單
+            declare -A SECRETS_MAP=(
+              ["DISCORD_TOKEN"]="${{ secrets.DISCORD_TOKEN }}"
+              ["DISCORD_ADMIN_USER_ID"]="${{ secrets.DISCORD_ADMIN_USER_ID }}"
+              ["LLM_API_BASE"]="${{ secrets.LLM_API_BASE }}"
+              ["LLM_MODEL_NAME"]="${{ secrets.LLM_MODEL_NAME }}"
+              ["API_KEY"]="${{ secrets.API_KEY }}"
+              ["TUNNEL_URL"]="${{ secrets.TUNNEL_URL }}"
+              ["FINNHUB_API_KEY"]="${{ secrets.FINNHUB_API_KEY }}"
+            )
 
-            # 4. 確保持久化數據 Volume 存在
-            docker volume create nexus-data || true
+            SECRET_UPDATE_FLAGS=""
 
-            # 5. 執行 Stack 部署 (使用 heredoc 餵入 docker-compose 配置)
-            docker stack deploy --with-registry-auth -c - $SERVICE_NAME <<EOF
-            version: '3.8'
-            services:
-              bot:
-                image: $FULL_IMAGE_URL
-                deploy:
-                  replicas: 1
-                  restart_policy:
-                    condition: any
-                  update_config:
-                    order: start-first
-                    failure_action: rollback
-                    delay: 10s
-                    monitor: 30s
-                    max_failure_ratio: 0.1
-                  rollback_config:
-                    order: stop-first
-                    failure_action: pause
-                    delay: 10s
-                volumes:
-                  - nexus-data:/app/data
-                environment:
-                  - TZ=\$TZ
-                  - DISCORD_TOKEN=\$DISCORD_TOKEN
-                  - DISCORD_ADMIN_USER_ID=\$DISCORD_ADMIN_USER_ID
-                  - LLM_API_BASE=\$LLM_API_BASE
-                  - LLM_MODEL_NAME=\$LLM_MODEL_NAME
-                  - API_KEY=\$API_KEY
-                  - TUNNEL_URL=\$TUNNEL_URL
-                  - FINNHUB_API_KEY=\$FINNHUB_API_KEY
-            volumes:
-              nexus-data:
-                external: true
-            EOF
+            for KEY in "${!SECRETS_MAP[@]}"; do
+              NEW_SECRET_NAME="${KEY}_${DEPLOY_VERSION}"
+              VALUE="${SECRETS_MAP[$KEY]}"
 
-            # 6. 清理舊版映像檔釋放磁碟空間
+              # 建立新版本祕密 (若已存在則跳過)
+              if ! docker secret ls | grep -q "$NEW_SECRET_NAME"; then
+                echo "🔑 建立新祕密: $NEW_SECRET_NAME"
+                echo "$VALUE" | docker secret create "$NEW_SECRET_NAME" -
+              fi
+
+              # 構建服務更新指令中的祕密映射參數
+              SECRET_UPDATE_FLAGS="$SECRET_UPDATE_FLAGS --secret-rm ${KEY} --secret-add source=${NEW_SECRET_NAME},target=${KEY}"
+            done
+
+            # 4. 服務更新與建立 (Zero-Downtime Strategy)
+            # 使用更精確的過濾器來尋找現有服務
+            if docker service ls --filter "name=$SERVICE_NAME" --format '{{.Name}}' | grep -q "^${SERVICE_NAME}$"; then
+              echo "🔄 偵測到服務 $SERVICE_NAME 已存在，執行滾動更新 (start-first)..."
+              docker service update \
+                --image "$FULL_IMAGE" \
+                --with-registry-auth \
+                --update-order start-first \
+                --update-failure-action rollback \
+                --update-monitor 30s \
+                --env-add DEPLOYMENT_TIMESTAMP=$(date +%s) \
+                --env-add TZ=America/New_York \
+                $SECRET_UPDATE_FLAGS \
+                "$SERVICE_NAME"
+            else
+              echo "🆕 建立全新服務: $SERVICE_NAME"
+              # 初次建立服務時需要特殊處理祕密掛載
+              INIT_SECRET_FLAGS=""
+              for KEY in "${!SECRETS_MAP[@]}"; do
+                INIT_SECRET_FLAGS="$INIT_SECRET_FLAGS --secret source=${KEY}_${DEPLOY_VERSION},target=${KEY}"
+              done
+
+              docker service create \
+                --name "$SERVICE_NAME" \
+                --with-registry-auth \
+                --replicas 1 \
+                --update-order start-first \
+                --publish 8080:8080 \
+                --env TZ=America/New_York \
+                --env DEPLOYMENT_TIMESTAMP=$(date +%s) \
+                $INIT_SECRET_FLAGS \
+                "$FULL_IMAGE"
+            fi
+
+            # 5. 清理與驗證
+            echo "🧹 執行環境清理..."
+            # 移除未被使用的舊版本祕密 (排除目前剛建立的版本)
+            for KEY in "${!SECRETS_MAP[@]}"; do
+              docker secret ls --format "{{.Name}}" | grep "^${KEY}_" | grep -v "$DEPLOY_VERSION" | xargs -r docker secret rm || true
+            done
+
+            # 清理過期映像檔
             docker image prune -af
+
+            echo "✅ 佈署驗證狀態:"
+            docker service ls | grep "$SERVICE_NAME"
+            docker service ps "$SERVICE_NAME" --no-trunc | head -n 5
