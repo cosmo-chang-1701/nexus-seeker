@@ -100,7 +100,15 @@ graph TD
 *   **Proactive Event Alerts (主動事件預警)**：
     後台監控器每 4 小時掃描一次，針對 48 小時內即將發生的重大衝擊事件向持倉用戶發送對沖預警。
 
-### 4. Execution Automation & VPS Stability
+### 4. Capital Flow & Sector Rotation (資金流向與板塊輪動)
+*   **Sector Flow Mapping (板塊資金圖譜)**：
+    分析 S&P 500 的 11 大板塊 (XLK, XLF, XLE 等) 之價量關係，辨識機構資金的流向趨勢。
+*   **Cross-Market Intelligence (跨市場情報)**：
+    整合 Polymarket 預測市場、期權市場 (UOA) 與現貨板塊表現，捕捉市場廣度與深度風險。
+*   **Automated Intelligence Reports (自動化情報報告)**：
+    由 **Analyst Agent** 於收盤後自動生成「收盤資金流向報告」，協助交易者判斷次日開盤的板塊佈局。
+
+### 5. Execution Automation & VPS Stability
 *   **NYSE 動態調度器 (Dynamic Scheduler)**：
     精準對齊交易所交易時鐘，以 30 分鐘為心跳進行全自動掃描。
 *   **VPS Performance Guard (1GB RAM 優化)**：
