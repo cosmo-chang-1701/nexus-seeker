@@ -146,7 +146,7 @@ stateDiagram-v2
 
 | Command | Description | Interactive Tabs / Buttons |
 |---|---|---|
-| **`/x [symbol]`** | **🌌 標的分析中心** | 報價, 量化掃描, 📰新聞, 💬Reddit, 📐情緒, 🎯MaxPain |
+| **`/x [symbol]`** | **🌌 標的分析中心** | 🏠主頁, 📰新聞, 💬Reddit, 📐情緒, 🎯MaxPain |
 | **`/dash`** | **📊 交易員看板** | 📋實單持倉, 📦現貨持倉, 🏁財務跑道, 👻VTR績效 |
 | **`/market`** | **📅 市場情報中心** | 📅市場日曆, 🐋預測市場, 🔥高波動掃描, 🌌DDP掃描 |
 
