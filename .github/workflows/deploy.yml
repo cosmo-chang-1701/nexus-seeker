@@ -161,6 +161,7 @@ jobs:
               echo "🔄 偵測到服務 $SERVICE_NAME 已存在，執行滾動更新 (start-first)..."
               docker service update \
                 --image "$FULL_IMAGE" \
+                --user root \
                 --with-registry-auth \
                 --update-order start-first \
                 --update-failure-action rollback \
@@ -179,6 +180,7 @@ jobs:
 
               docker service create \
                 --name "$SERVICE_NAME" \
+                --user root \
                 --with-registry-auth \
                 --replicas 1 \
                 --update-order start-first \

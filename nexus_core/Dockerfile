@@ -21,8 +21,7 @@ RUN chmod +x /entrypoint.sh
 # Change ownership to the non-root user and initialize data dir for named volume
 RUN mkdir -p /app/data && chown -R appuser:appuser /app
 
-# nosemgrep: dockerfile.security.missing-user.missing-user
-USER root
+USER appuser
 
 HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=3 \
     CMD python bot_healthy.py || exit 1
