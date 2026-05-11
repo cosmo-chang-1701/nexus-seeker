@@ -114,6 +114,11 @@ jobs:
               docker swarm init || true
             fi
 
+            # 🚀 [Host Fix] 確保宿主機上的 Volume 目錄權限正確 (給 1001:1001)
+            # 這是為了讓非 root 容器能讀寫 /app/data
+            echo "🔧 修正宿主機 Volume 權限..."
+            sudo chown -R 1001:1001 /var/lib/docker/volumes/nexus-data/_data || true
+
             # 2. 登入 GHCR
             echo "$GHCR_TOKEN" | docker login $REGISTRY -u "${{ github.actor }}" --password-stdin
 
@@ -161,11 +166,11 @@ jobs:
               echo "🔄 偵測到服務 $SERVICE_NAME 已存在，執行滾動更新 (start-first)..."
               docker service update \
                 --image "$FULL_IMAGE" \
-                --user root \
                 --with-registry-auth \
                 --update-order start-first \
                 --update-failure-action rollback \
                 --update-monitor 60s \
+                --mount-add type=volume,source=nexus-data,target=/app/data \
                 --env-add DEPLOYMENT_TIMESTAMP=$(date +%s) \
                 --env-add TZ=America/New_York \
                 $SECRET_UPDATE_FLAGS \
@@ -180,8 +185,8 @@ jobs:
 
               docker service create \
                 --name "$SERVICE_NAME" \
-                --user root \
                 --with-registry-auth \
+                --mount type=volume,source=nexus-data,target=/app/data \
                 --replicas 1 \
                 --update-order start-first \
                 --env TZ=America/New_York \
