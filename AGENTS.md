@@ -100,7 +100,7 @@ Tests are located in `nexus_core/tests/`.
 
 ### 1. Database Migrations
 Never modify the database schema manually. Use the migration engine:
-- Create a new file in `nexus_core/database/migrations/` (e.g., `v032_add_hedge_logs.py`).
+- Create a new file in `nexus_core/database/migrations/` (e.g., `v035_add_entry_price_to_assets.py`).
 - Export `version`, `description`, and `sql`. Use `migrate_data` for JSON transformations.
 
 ### 2. Discord Commands (Cogs)
@@ -137,3 +137,4 @@ Assets transition through a persistent state machine in the `assets` table (v028
 - `nexus_core/market_analysis/attribution.py`: Protection scoring & self-evolution.
 - `nexus_core/services/memory_manager.py`: VPS stability watchdog.
 - `nexus_core/cogs/embed_builder.py`: Centralized UI/UX generator.
+alized UI/UX generator.

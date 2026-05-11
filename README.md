@@ -42,7 +42,7 @@ graph TD
         RE[Risk Engine - NRO]
         SE[Sentiment Engine - Skew/PCR/UOA]
         MM[Memory Manager - VPS Health]
-        DB[(SQLite DB v032)]
+        DB[(SQLite DB v035)]
         S[Services - LLM/Polymarket]
         C[Bounded Cache - SMA/EMA/Poly]
     end
@@ -146,6 +146,7 @@ stateDiagram-v2
 | `/settle_hedge` | **[New]** 確認並記錄已執行的對沖操作 (維持 Delta 中性) | `alert_id`, `qty` |
 | `/hedge_list` | **[New]** 查看最近的對沖警報與執行狀態 | — |
 | `/sys_health` | **[New]** [Hidden] 檢查 VPS 資源狀態與快取健康度 | — |
+| `/list_trades` | 列出目前資料庫中的所有實單持倉與即時未實現損益 | — |
 | `/scan` | 手動執行量化掃描與 What-if 曝險模擬 | `symbol` |
 | `/ddp_scan` | 對觀察清單執行 Davis Double Play (DDP) 掃描 | — |
 | `/add_holding` | 登錄實際現貨持倉 (納入 Beta-Delta 計算) | `symbol`, `quantity`, `avg_cost` |
