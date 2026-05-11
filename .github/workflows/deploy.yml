@@ -155,7 +155,7 @@ jobs:
                 --with-registry-auth \
                 --update-order start-first \
                 --update-failure-action rollback \
-                --update-monitor 30s \
+                --update-monitor 60s \
                 --env-add DEPLOYMENT_TIMESTAMP=$(date +%s) \
                 --env-add TZ=America/New_York \
                 $SECRET_UPDATE_FLAGS \

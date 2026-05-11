@@ -85,17 +85,29 @@ class NexusBot(commands.Bot):
             return
 
         logger.info("初始化資料庫中...")
-        database.init_db()
+        try:
+            await asyncio.to_thread(database.init_db)
+            logger.info("✅ 資料庫初始化完成。")
+        except Exception as e:
+            logger.error(f"❌ 資料庫初始化失敗: {e}")
+
         logger.info(f"🚀 Nexus Seeker 啟動成功！Bot ID: {self.user}")
 
         # 啟動後檢查有無遺留通知並喚醒工人
-        if await asyncio.to_thread(get_pending_count) > 0:
-            logger.info("發現遺留的待發送通知，啟動補發流程...")
-            self.message_signal.set()
+        try:
+            pending_count = await asyncio.to_thread(get_pending_count)
+            if pending_count > 0:
+                logger.info(f"發現 {pending_count} 條遺留的待發送通知，啟動補發流程...")
+                self.message_signal.set()
+        except Exception as e:
+            logger.error(f"檢查待發送通知時出錯: {e}")
 
-        logger.info("等待美股排程觸發...")
-        await self.notify_all_users("🚀 Nexus Seeker 機器人已啟動！")
+        # 核心改進：將啟動通知改為背景任務，避免阻塞 on_ready
+        logger.info("正在準備背景啟動通知...")
+        asyncio.create_task(self.notify_all_users("🚀 Nexus Seeker 機器人已啟動！"))
+
         self._has_notified_ready = True
+        logger.info("✅ on_ready 流程處理完畢，機器人進入運行狀態。")
 
     async def close(self):
         if self._is_closing:
@@ -216,10 +228,16 @@ class NexusBot(commands.Bot):
                 await asyncio.sleep(0.2)
 
     async def notify_all_users(self, message):
-        """一次將所有訊息排入背景寄發列隊"""
-        user_ids = database.get_all_user_ids()
-        count = 0
-        for user_id in user_ids:
-            await self.queue_dm(user_id, message=message)
-            count += 1
-        logger.info(f"已排程要發送通知給 {count} 位用戶: {message}")
+        """一次將所有訊息排入背景寄發列隊 (優化為非阻塞)"""
+        try:
+            from database.user_settings import get_all_user_ids
+
+            user_ids = await asyncio.to_thread(get_all_user_ids)
+
+            count = 0
+            for user_id in user_ids:
+                await self.queue_dm(user_id, message=message)
+                count += 1
+            logger.info(f"已將啟動通知排入 {count} 位用戶的發送列隊。")
+        except Exception as e:
+            logger.error(f"通知所有用戶時出錯: {e}")
