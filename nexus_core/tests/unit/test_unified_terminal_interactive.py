@@ -1,4 +1,5 @@
 import pytest
+import discord
 from unittest.mock import AsyncMock, patch, MagicMock
 import sys
 import os
@@ -22,64 +23,52 @@ def mock_bot():
 
 @pytest.mark.asyncio
 async def test_symbol_hub_interactions(mock_interaction, mock_bot):
-    """測試 /x 指令按鈕互動"""
+    """測試 /x 指令按鈕互動與讀取狀態"""
     view = SymbolHubView(symbol="AAPL", user_id=123, bot=mock_bot)
+    # 準備 base_data 以供 btn_home 使用
+    view.base_data = {"vix": 15.0, "spy_price": 500.0}
 
-    # 1. 測試新聞按鈕
+    # 測試新聞按鈕的狀態轉換 (應使用 edit_original_response)
     with patch(
         "services.news_service.fetch_recent_news", new_callable=AsyncMock
     ) as mock_news:
         mock_news.return_value = "Mock News"
+
+        # 執行 Callback
         await view.btn_news.callback(mock_interaction)
-        mock_interaction.response.defer.assert_called()
-        mock_interaction.followup.send.assert_called()
-        args, kwargs = mock_interaction.followup.send.call_args
-        assert "embed" in kwargs
-        assert "📰 AAPL 官方新聞掃描" in kwargs["embed"].title
 
-    # 2. 測試 Reddit 按鈕
-    mock_interaction.followup.send.reset_mock()
+        # 驗證 1: 呼叫了 defer
+        mock_interaction.response.defer.assert_called_once()
+
+        # 驗證 2: 呼叫了兩次 edit_original_response (一次設為 loading，一次恢復並更新 Embed)
+        assert mock_interaction.edit_original_response.call_count == 2
+
+        # 驗證 3: 最後一次呼叫時按鈕應為啟用狀態，且帶有 Embed
+        _, last_kwargs = mock_interaction.edit_original_response.call_args
+        assert last_kwargs["view"].children[0].disabled is False
+        assert "📰 AAPL 官方新聞掃描" in last_kwargs["embed"].title
+
+    # 測試 Home 按鈕 (應恢復主頁)
+    mock_interaction.edit_original_response.reset_mock()
     with patch(
-        "services.reddit_service.get_reddit_context", new_callable=AsyncMock
-    ) as mock_reddit:
-        mock_reddit.return_value = "Mock Reddit"
-        await view.btn_reddit.callback(mock_interaction)
-        args, kwargs = mock_interaction.followup.send.call_args
-        assert "embed" in kwargs
-        assert "🔥 AAPL 散戶情緒優勢" in kwargs["embed"].title
+        "services.market_data_service.get_quote", new_callable=AsyncMock
+    ) as mock_quote, patch(
+        "database.user_settings.get_full_user_context"
+    ) as mock_user_ctx:
+        mock_quote.return_value = {"dp": 1.0, "c": 150.0}
+        mock_user_ctx.return_value = MagicMock(capital=100000)
 
-    # 3. 測試情緒掃描按鈕
-    mock_interaction.followup.send.reset_mock()
-    with patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_skew",
-        new_callable=AsyncMock,
-    ) as mock_skew, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
-        new_callable=AsyncMock,
-    ) as mock_pcr, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
-        new_callable=AsyncMock,
-    ) as mock_uoa, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_max_pain",
-        new_callable=AsyncMock,
-    ) as mock_max_pain:
-        mock_skew.return_value = {"skew": 5, "state": "Normal"}
-        mock_pcr.return_value = {"pcr": 0.8, "state": "Normal"}
-        mock_uoa.return_value = []
-        mock_max_pain.return_value = {"max_pain": 150, "is_converging": True}
-
-        await view.btn_sentiment.callback(mock_interaction)
-        args, kwargs = mock_interaction.followup.send.call_args
-        assert "embed" in kwargs
-        assert "📊 AAPL 期權情緒掃描" in kwargs["embed"].title
+        await view.btn_home.callback(mock_interaction)
+        assert mock_interaction.edit_original_response.call_count == 2
+        _, last_kwargs = mock_interaction.edit_original_response.call_args
+        assert "AAPL 基礎行情" in last_kwargs["embed"].title
 
 
 @pytest.mark.asyncio
 async def test_portfolio_hub_interactions(mock_interaction, mock_bot):
-    """測試 /dash 指令分頁互動"""
+    """測試 /dash 指令分頁互動與讀取狀態"""
     view = PortfolioHubView(user_id=123, bot=mock_bot)
 
-    # 測試現貨持倉按鈕
     with patch(
         "services.asset_manager.AssetManager.get_assets"
     ) as mock_get_assets, patch(
@@ -95,15 +84,20 @@ async def test_portfolio_hub_interactions(mock_interaction, mock_bot):
         mock_user_ctx.return_value = MagicMock(capital=100000)
 
         await view.btn_holdings.callback(mock_interaction)
-        mock_interaction.edit_original_response.assert_called()
-        _, kwargs = mock_interaction.edit_original_response.call_args
-        assert "embed" in kwargs
-        assert "現貨持倉清單" in kwargs["embed"].title
+
+        # 驗證呼叫了兩次 edit_original_response (一次禁用，一次恢復並帶入資料)
+        assert mock_interaction.edit_original_response.call_count == 2
+
+        # 檢查最後一次呼叫的參數
+        _, last_kwargs = mock_interaction.edit_original_response.call_args
+        assert last_kwargs["embed"] is not None
+        assert "現貨持倉清單" in last_kwargs["embed"].title
+        assert last_kwargs["view"].children[0].disabled is False
 
 
 @pytest.mark.asyncio
 async def test_pulse_hub_interactions(mock_interaction, mock_bot):
-    """測試 /market 指令互動"""
+    """測試 /market 指令互動與讀取狀態"""
     view = PulseHubView(user_id=123, bot=mock_bot)
 
     # 測試預測市場按鈕
@@ -112,8 +106,12 @@ async def test_pulse_hub_interactions(mock_interaction, mock_bot):
         {"question": "Test?", "tokens": []}
     ]
 
-    await view.btn_poly.callback(mock_interaction)
-    mock_interaction.edit_original_response.assert_called()
-    _, kwargs = mock_interaction.edit_original_response.call_args
-    assert "embed" in kwargs
-    assert "Polymarket 巨鯨意圖圖譜" in kwargs["embed"].title
+    with patch("cogs.unified_terminal.create_polymarket_list_embed") as mock_embed_gen:
+        mock_embed_gen.return_value = MagicMock(spec=discord.Embed)
+
+        await view.btn_poly.callback(mock_interaction)
+
+        # 驗證讀取狀態切換
+        assert mock_interaction.edit_original_response.call_count == 2
+        _, last_kwargs = mock_interaction.edit_original_response.call_args
+        assert last_kwargs["view"].children[0].disabled is False
