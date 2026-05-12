@@ -41,7 +41,9 @@ async def main():
 
     # 定義訊號處理器
     def handle_signal():
-        logger.info("收到停止訊號 (SIGINT/SIGTERM)，正在發送關閉通知...")
+        if bot._is_closing:
+            return
+        logger.info("收到停止訊號 (SIGINT/SIGTERM)，正在啟動關閉流程...")
         # 建立一個 task 來執行 bot.close()，這會觸發 bot.close() 中的通知邏輯
         asyncio.create_task(bot.close())
 

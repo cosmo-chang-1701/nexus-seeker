@@ -22,6 +22,7 @@ class NexusBot(commands.Bot):
         self.message_signal = asyncio.Event()
         self._has_notified_ready = False
         self._is_closing = False
+        self._setup_done = False
 
     async def queue_dm(
         self, user_id: int, message: str = None, embed: discord.Embed = None
@@ -34,6 +35,10 @@ class NexusBot(commands.Bot):
         self.message_signal.set()
 
     async def setup_hook(self):
+        if self._setup_done:
+            return
+        self._setup_done = True
+
         await self.load_extension("cogs.unified_terminal")
         await self.load_extension("cogs.terminal")
         await self.load_extension("cogs.trading")
@@ -85,6 +90,8 @@ class NexusBot(commands.Bot):
             logger.info("Bot 已重連，跳過啟動通知。")
             return
 
+        self._has_notified_ready = True
+
         logger.info("初始化資料庫中...")
         try:
             await asyncio.to_thread(database.init_db)
@@ -107,7 +114,6 @@ class NexusBot(commands.Bot):
         logger.info("正在準備背景啟動通知...")
         asyncio.create_task(self.notify_all_users("🚀 Nexus Seeker 機器人已啟動！"))
 
-        self._has_notified_ready = True
         logger.info("✅ on_ready 流程處理完畢，機器人進入運行狀態。")
 
     async def close(self):
