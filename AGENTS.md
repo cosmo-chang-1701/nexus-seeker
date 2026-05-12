@@ -38,7 +38,7 @@ The system is divided into two main services:
   - **`calendar_service.py`**: **Calendar-Aware Guard**. Fetches high-impact economic/earnings data with LRU caching.
   - **`llm_service.py`**: Structured AI analysis with memory safety gates.
 - **`cogs/`**: Discord extensions.
-  - **`unified_terminal.py`**: **Core Hub**. Consolidates 20+ commands into three primary hubs: `/x` (Symbol), `/dash` (Portfolio), and `/market` (Pulse). Includes interactive buttons and views.
+  - **`unified_terminal.py`**: **Core Hub**. Consolidates 20+ commands into three primary hubs: `/x` (Actionable Symbol Intelligence), `/dash` (Strategic Portfolio Dashboard), and `/market` (Pulse). Includes interactive buttons and decision-centric views.
   - **`terminal.py`**: High-impact legacy commands and `/settings` management.
   - **`sentiment.py`**: Sentiment analytics terminal (Legacy `/skew_scan`, `/max_pain`).
   - **`calendar.py`**: Event-driven risk control (Legacy `/calendar`, `/iv_rank`).

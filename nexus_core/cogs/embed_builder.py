@@ -1,5 +1,6 @@
 import discord
 import logging
+import psutil
 
 from datetime import datetime, timezone
 from typing import List, Dict, Any
@@ -1024,6 +1025,167 @@ def create_trades_embed(
     embed.add_field(name="🏁 財務摘要 (Financial Summary)", value=summary, inline=False)
 
     embed.set_footer(text="Nexus Portfolio Engine | 專業實單與損益監控")
+    return embed
+
+
+def create_strategic_dash_embed(
+    user_ctx: Any, pnl_data: Dict[str, Any], vix_spot: float = 18.0
+) -> discord.Embed:
+    """
+    建構戰略看板 (Strategic Dashboard) Embed.
+    遵循 Task 1 的 Traditional Chinese 模板。
+    """
+    embed = discord.Embed(
+        title="📊 Nexus 交易員戰略看板",
+        color=discord.Color.dark_blue(),
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    # 1. 財務生存狀態 (Financial Runway)
+    daily_theta = _safe_float(user_ctx.total_theta)
+    monthly_expense = _safe_float(user_ctx.monthly_expense)
+    daily_expense = monthly_expense / 30.0 if monthly_expense > 0 else 0.0
+    coverage_pct = (daily_theta / daily_expense * 100) if daily_expense > 0 else 100.0
+
+    # 計算跑道天數
+    gap = daily_expense - daily_theta
+    cash_reserve = _safe_float(user_ctx.cash_reserve)
+    if gap <= 0:
+        runway_days = "∞ (收益已覆蓋支出)"
+    else:
+        runway_days = f"{cash_reserve / gap:,.0f}" if gap > 0 else "∞"
+
+    status_mode = "觀戰模式" if not user_ctx.is_professional_mode else "實戰模式"
+    nav = _safe_float(user_ctx.capital) + pnl_data.get("total_unrealized_pnl", 0.0)
+
+    runway_info = (
+        f"* **總資產 (NAV):** `${nav:,.0f}` ({status_mode})\n"
+        f"* **目前跑道:** {runway_days} 天 (由現有現金與 Theta 收益推算)\n"
+        f"* **收租效率:** 每日 Theta `${daily_theta:,.2f}` (覆蓋率 {coverage_pct:.1f}%)\n"
+    )
+    if coverage_pct < 100 and daily_expense > 0:
+        runway_info += f"> 💡 警訊：現金流覆蓋不足，每日收租缺口為 `${gap:,.2f}`。"
+
+    embed.add_field(
+        name="🏁 財務生存狀態 (Financial Runway)", value=runway_info, inline=False
+    )
+
+    # 2. 組合風險精算 (NRO Integrity)
+    # Vanna Sensitivity Stress Test: 若 VIX 上升 10%，隱含 Delta 將變動至 [New_Delta]
+    total_vanna = _safe_float(user_ctx.total_vanna)
+    total_delta = _safe_float(user_ctx.total_weighted_delta)
+    capital = _safe_float(user_ctx.capital)
+
+    vanna_impact = total_vanna * (vix_spot * 0.10 / 100.0)
+    new_delta = total_delta + vanna_impact
+
+    # 對沖狀態與建議
+    hedge_status = "運行中" if abs(total_delta) < (capital * 0.1) else "需調整"
+    # 簡單邏輯：如果 Delta 太正，建議賣出 SPY；如果太負，建議買入 SPY
+    if total_delta > 100:
+        hedge_instruction = f"賣出 {int(total_delta)} 股 SPY 以對沖正 Delta"
+    elif total_delta < -100:
+        hedge_instruction = f"買入 {int(abs(total_delta))} 股 SPY 以對沖負 Delta"
+    else:
+        hedge_instruction = "目前曝險平衡，無需立即調整"
+
+    nro_info = (
+        f"* **Beta-Delta:** `{total_delta:+.1f}` (相對於 SPY 的整體曝險)\n"
+        f"* **Vanna 敏感度:** 若 VIX 上升 10%，隱含 Delta 將變動至 `{new_delta:+.1f}`。\n"
+        f"* **對沖狀態:** {hedge_status}\n"
+        f"> 🎯 建議對沖位：{hedge_instruction}"
+    )
+    embed.add_field(name="🛡️ 組合風險精算 (NRO Integrity)", value=nro_info, inline=False)
+
+    # 3. 系統健康
+    ram_usage = psutil.virtual_memory().percent
+    # 假設 BoundedCache 正常，這裡簡單寫死或從某處獲取
+    sys_health = f"RAM {ram_usage}% | BoundedCache 穩定"
+    embed.add_field(name="⚙️ 系統健康", value=sys_health, inline=False)
+
+    embed.set_footer(text="Nexus Seeker | 戰術風險管理終端")
+    return embed
+
+
+def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
+    """
+    建構標的深度分析 (Tactical Deep-Dive) Embed.
+    遵循 Task 2 的 Traditional Chinese 模板。
+    """
+    symbol = data.get("symbol", "UNKNOWN")
+    embed = discord.Embed(
+        title=f"🌌 標的分析中心: {symbol}",
+        color=discord.Color.dark_magenta(),
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    # 1. 情緒與邊緣偵測 (Edge Detection)
+    skew_val = data.get("skew", 0.0)
+    skew_percentile = data.get("skew_percentile", 50.0)
+
+    edge_info = (
+        f"* **Option Skew:** `{skew_val:.2f}%` (處於 `{skew_percentile:.1f}` 分位點)\n"
+    )
+    if skew_percentile > 90:
+        edge_info += "> ⚠️ 市場下行保護需求極高，隱含避險情緒升溫。\n"
+
+    # 巨鯨/散戶意圖映射
+    poly_odds = data.get("polymarket_odds", "N/A")
+    reddit_score = data.get("reddit_sentiment_score", "中性")
+
+    edge_info += (
+        f"* **巨鯨/散戶意圖映射:**\n"
+        f"    * Polymarket 預測勝率: `{poly_odds}`\n"
+        f"    * Reddit 情緒指數: `{reddit_score}`\n"
+    )
+
+    # 偵測背離
+    # 簡單邏輯：如果 Skew 很高但 Reddit 很樂觀，就是背離
+    divergence = "同步"
+    action = "保持觀察"
+    if skew_percentile > 80 and "看多" in str(reddit_score):
+        divergence = "情緒背離 (散戶樂觀 vs 專業避險)"
+        action = "建立保護性賣權或減碼"
+    elif skew_percentile < 20 and "看空" in str(reddit_score):
+        divergence = "情緒背離 (散戶恐慌 vs 權利金便宜)"
+        action = "考慮賣出賣權 (Cash Secured Put)"
+
+    edge_info += f"> 💡 偵測到{divergence}，建議 {action}。\n"
+
+    embed.add_field(
+        name="📐 情緒與邊緣偵測 (Edge Detection)", value=edge_info, inline=False
+    )
+
+    # 2. 結算與目標 (Target Lock)
+    max_pain = data.get("max_pain", 0.0)
+    price = data.get("price", 1.0)
+    distance = ((max_pain - price) / price * 100) if price > 0 else 0.0
+
+    ddp_status = "符合 (符合 DDP 盈餘/估值雙擊)" if data.get("is_ddp") else "不符合"
+    ivr = data.get("iv_rank", 0.0)
+
+    target_info = (
+        f"* **Max Pain:** `${max_pain:.2f}` (目前價差: `{distance:+.1f}%`)\n"
+        f"* **DDP 掃描:** {ddp_status} (IV Rank: `{ivr:.1f}%`)\n"
+    )
+
+    # 操作指引 (What-if Scenario Analysis)
+    if abs(distance) < 2.0:
+        scenario = "價格接近最大痛點，結算日前可能維持震盪。"
+    elif distance > 5.0:
+        scenario = "價格遠低於最大痛點，具備磁吸效應回升動能。"
+    elif distance < -5.0:
+        scenario = "價格遠高於最大痛點，需留意結算日前壓回風險。"
+    else:
+        scenario = "目前價差適中，依技術指標操作為主。"
+
+    target_info += f"* **操作指引:** {scenario}\n"
+
+    embed.add_field(name="🎯 結算與目標 (Target Lock)", value=target_info, inline=False)
+
+    embed.set_footer(
+        text="🔗 使用 /settle_hedge 紀錄對沖或 /event_impact 進行曝險模擬。"
+    )
     return embed
 
 

@@ -12,11 +12,12 @@ from market_analysis.risk_engine import MacroContext
 import market_math
 import database
 from cogs.embed_builder import (
-    create_scan_embed,
     create_sentiment_scan_embed,
     create_news_scan_embed,
     create_reddit_scan_embed,
     create_trades_embed,
+    create_strategic_dash_embed,
+    create_tactical_symbol_embed,
     create_holdings_embed,
     build_vtr_stats_embed,
     create_polymarket_list_embed,
@@ -62,32 +63,7 @@ class SymbolHubView(discord.ui.View):
         await self._set_loading(interaction)
         embed = None
         try:
-            user_context = database.get_full_user_context(self.user_id)
-            if "strategy" in self.base_data:
-                embed = create_scan_embed(self.base_data, user_context.capital)
-            else:
-                quote = await market_data_service.get_quote(self.symbol)
-                embed = discord.Embed(
-                    title=f"💹 {self.symbol} 基礎行情 (查無量化訊號)",
-                    color=discord.Color.blue()
-                    if quote.get("dp", 0) >= 0
-                    else discord.Color.red(),
-                    timestamp=datetime.now(timezone.utc),
-                )
-                embed.add_field(
-                    name="現價 (Current)",
-                    value=f"**${quote.get('c', 0.0)}**",
-                    inline=True,
-                )
-                embed.add_field(
-                    name="漲跌幅 (%)", value=f"`{quote.get('dp', 0.0)}%`", inline=True
-                )
-                embed.add_field(
-                    name="VIX / SPY",
-                    value=f"`{self.base_data.get('vix', 0.0):.1f}` / `${self.base_data.get('spy_price', 0.0):.1f}`",
-                    inline=True,
-                )
-                embed.set_footer(text="Nexus Seeker | 點擊下方按鈕獲取進一步深度分析")
+            embed = create_tactical_symbol_embed(self.base_data)
         except Exception as e:
             await interaction.followup.send(f"❌ 恢復主頁失敗: {e}", ephemeral=True)
         finally:
@@ -226,6 +202,33 @@ class PortfolioHubView(discord.ui.View):
             if isinstance(child, discord.ui.Button):
                 child.disabled = False
         await interaction.edit_original_response(embed=embed, view=self)
+
+    @discord.ui.button(
+        label="🏠 戰略看板",
+        style=discord.ButtonStyle.success,
+        custom_id="btn_home_port",
+    )
+    async def btn_home(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        await interaction.response.defer()
+        await self._set_loading(interaction)
+        embed = None
+        try:
+            from services.trading_service import TradingService
+
+            trading_service = TradingService(self.bot)
+            pnl_data = await trading_service.get_portfolio_pnl(self.user_id)
+            ctx = database.get_full_user_context(self.user_id)
+
+            macro_raw = await market_data_service.get_macro_environment()
+            vix_spot = macro_raw.get("vix", 18.0)
+
+            embed = create_strategic_dash_embed(ctx, pnl_data, vix_spot=vix_spot)
+        except Exception as e:
+            await interaction.followup.send(f"❌ 恢復戰略看板失敗: {e}", ephemeral=True)
+        finally:
+            await self._reset_loading(interaction, embed=embed)
 
     @discord.ui.button(label="📋 實單持倉", style=discord.ButtonStyle.primary)
     async def btn_trades(
@@ -558,39 +561,51 @@ class UnifiedTerminalCog(commands.Cog):
 
             skew_data = await SentimentEngine.calculate_skew(symbol)
             result["skew"] = skew_data.get("skew", 0.0)
+            result["skew_percentile"] = SentimentEngine.get_indicator_percentile(
+                symbol, "SKEW", result["skew"]
+            )
+
             result["vix"] = macro_data.vix
             result["spy_price"] = spy_price
 
-            user_context = database.get_full_user_context(user_id)
+            # 額外獲取 DDP 與情緒數據
+            from market_analysis.ddp_inspector import DDPInspector
 
-            if "strategy" in result:
-                main_embed = create_scan_embed(result, user_context.capital)
+            ddp_inspector = DDPInspector(self.bot)
+            ddp_report = await ddp_inspector.inspect_symbol(symbol)
+            result["is_ddp"] = ddp_report.get("is_ddp", False) if ddp_report else False
+            result["iv_rank"] = result.get(
+                "hv_rank", 0.0
+            )  # 暫時用 hv_rank 代替，或從 result 取得
+
+            max_pain_data = await SentimentEngine.calculate_max_pain(symbol)
+            result["max_pain"] = max_pain_data.get("max_pain", 0.0)
+
+            reddit_text = await reddit_service.get_reddit_context(symbol)
+            # 簡單情緒判定
+            if "看多" in reddit_text or "Bullish" in reddit_text:
+                result["reddit_sentiment_score"] = "🚀 樂觀 (Bullish)"
+            elif "看空" in reddit_text or "Bearish" in reddit_text:
+                result["reddit_sentiment_score"] = "💀 恐慌 (Bearish)"
             else:
-                # 查無信號時，建立基礎報價 Embed
-                quote = await market_data_service.get_quote(symbol)
-                main_embed = discord.Embed(
-                    title=f"💹 {symbol} 基礎行情 (查無量化訊號)",
-                    color=discord.Color.blue()
-                    if quote.get("dp", 0) >= 0
-                    else discord.Color.red(),
-                    timestamp=datetime.now(timezone.utc),
-                )
-                main_embed.add_field(
-                    name="現價 (Current)",
-                    value=f"**${quote.get('c', 0.0)}**",
-                    inline=True,
-                )
-                main_embed.add_field(
-                    name="漲跌幅 (%)", value=f"`{quote.get('dp', 0.0)}%`", inline=True
-                )
-                main_embed.add_field(
-                    name="VIX / SPY",
-                    value=f"`{macro_data.vix:.1f}` / `${spy_price:.1f}`",
-                    inline=True,
-                )
-                main_embed.set_footer(
-                    text="Nexus Seeker | 點擊下方按鈕獲取進一步深度分析"
-                )
+                result["reddit_sentiment_score"] = "⚖️ 中性"
+
+            # Polymarket 數據 (簡化版：若有市場則取第一名的勝率)
+            from services.polymarket_service import PolymarketService
+
+            poly_service = PolymarketService(self.bot)
+            poly_markets = await poly_service.get_market_snapshot(limit=10)
+            # 尋找與該 symbol 相關的市場 (模糊匹配)
+            poly_odds = "N/A"
+            for m in poly_markets:
+                if symbol.lower() in m.get("question", "").lower():
+                    tokens = m.get("tokens", [])
+                    if tokens:
+                        poly_odds = f"{tokens[0].get('outcome', 'Yes')}: {float(tokens[0].get('price', 0))*100:.1f}%"
+                    break
+            result["polymarket_odds"] = poly_odds
+
+            main_embed = create_tactical_symbol_embed(result)
 
             view = SymbolHubView(symbol, user_id, self.bot)
             view.base_data = result
@@ -615,7 +630,12 @@ class UnifiedTerminalCog(commands.Cog):
         trading_service = TradingService(self.bot)
         pnl_data = await trading_service.get_portfolio_pnl(user_id)
         ctx = database.get_full_user_context(user_id)
-        embed = create_trades_embed(pnl_data, ctx.capital)
+
+        # 獲取 VIX 資訊
+        macro_raw = await market_data_service.get_macro_environment()
+        vix_spot = macro_raw.get("vix", 18.0)
+
+        embed = create_strategic_dash_embed(ctx, pnl_data, vix_spot=vix_spot)
 
         view = PortfolioHubView(user_id, self.bot)
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)

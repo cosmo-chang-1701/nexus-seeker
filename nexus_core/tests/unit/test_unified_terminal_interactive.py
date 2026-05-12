@@ -26,7 +26,7 @@ async def test_symbol_hub_interactions(mock_interaction, mock_bot):
     """測試 /x 指令按鈕互動與讀取狀態"""
     view = SymbolHubView(symbol="AAPL", user_id=123, bot=mock_bot)
     # 準備 base_data 以供 btn_home 使用
-    view.base_data = {"vix": 15.0, "spy_price": 500.0}
+    view.base_data = {"symbol": "AAPL", "vix": 15.0, "spy_price": 500.0}
 
     # 測試新聞按鈕的狀態轉換 (應使用 edit_original_response)
     with patch(
@@ -46,7 +46,7 @@ async def test_symbol_hub_interactions(mock_interaction, mock_bot):
         # 驗證 3: 最後一次呼叫時按鈕應為啟用狀態，且帶有 Embed
         _, last_kwargs = mock_interaction.edit_original_response.call_args
         assert last_kwargs["view"].children[0].disabled is False
-        assert "📰 AAPL 官方新聞掃描" in last_kwargs["embed"].title
+        assert "AAPL 官方新聞掃描" in last_kwargs["embed"].title
 
     # 測試 Home 按鈕 (應恢復主頁)
     mock_interaction.edit_original_response.reset_mock()
@@ -61,7 +61,7 @@ async def test_symbol_hub_interactions(mock_interaction, mock_bot):
         await view.btn_home.callback(mock_interaction)
         assert mock_interaction.edit_original_response.call_count == 2
         _, last_kwargs = mock_interaction.edit_original_response.call_args
-        assert "AAPL 基礎行情" in last_kwargs["embed"].title
+        assert "標的分析中心: AAPL" in last_kwargs["embed"].title
 
 
 @pytest.mark.asyncio

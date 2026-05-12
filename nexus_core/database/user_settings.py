@@ -15,6 +15,7 @@ class UserContext:
     total_weighted_delta: float  # 組合總加權 Delta (目前持倉)
     total_theta: float  # 組合總每日 Theta (目前持倉)
     total_gamma: float  # 組合總 Gamma (目前持倉)
+    total_vanna: float = 0.0  # 組合總 Vanna
     last_rehedge_alert_time: int = 0  # 上次發送回補警報的時間 (Unix Timestamp)
     dynamic_tau: float = 1.0  # 自動優化對沖係數
     option_alert_mode: int = 1  # 期權警報模式: 0=OFF, 1=ALL, 2=PORTFOLIO_ONLY
@@ -23,8 +24,10 @@ class UserContext:
     enable_analyst_agent: bool = False  # 是否啟用 Wall Street Analyst Agent 每日推播
     polymarket_threshold: float = 10000.0  # Polymarket 巨鯨監控門檻 (USD, 0=關閉)
     polymarket_use_llm: bool = True  # 是否使用 LLM 進行 Polymarket 交易分析
-    polymarket_slippage: bool = 2.0  # Polymarket 巨鯨判定目標滑價百分比 (預設 2.0%)
+    polymarket_slippage: float = 2.0  # Polymarket 巨鯨判定目標滑價百分比 (預設 2.0%)
+    is_professional_mode: bool = True  # 專業模式 / 觀戰模式切換
     monthly_expense: float = 0.0  # 每月支出預算
+
     tax_reserve_rate: float = 0.20  # 稅務預留比例 (預設 20%)
     cash_reserve: float = 0.0  # 現金儲備 (用於生存天數計算)
 
@@ -185,14 +188,15 @@ def get_full_user_context(user_id: int) -> UserContext:
             sql = """
                 SELECT
                     u.*,
-                    g.sum_delta, g.sum_theta, g.sum_gamma
+                    g.sum_delta, g.sum_theta, g.sum_gamma, g.sum_vanna
                 FROM user_settings u
                 LEFT JOIN (
                     SELECT
                         user_id,
                         SUM(COALESCE(CAST(json_extract(metadata, '$.weighted_delta') AS REAL), 0.0)) as sum_delta,
                         SUM(COALESCE(CAST(json_extract(metadata, '$.theta') AS REAL), 0.0)) as sum_theta,
-                        SUM(COALESCE(CAST(json_extract(metadata, '$.gamma') AS REAL), 0.0)) as sum_gamma
+                        SUM(COALESCE(CAST(json_extract(metadata, '$.gamma') AS REAL), 0.0)) as sum_gamma,
+                        SUM(COALESCE(CAST(json_extract(metadata, '$.vanna') AS REAL), 0.0)) as sum_vanna
                     FROM assets
                     WHERE context_type IN ('TRADE', 'HOLDING')
                     GROUP BY user_id
@@ -203,7 +207,7 @@ def get_full_user_context(user_id: int) -> UserContext:
             user_row = cursor.fetchone()
 
             if not user_row:
-                return UserContext(user_id, 100000.0, 15.0, 0.0, 0.0, 0.0)
+                return UserContext(user_id, 100000.0, 15.0, 0.0, 0.0, 0.0, 0.0)
 
             # 提取 Greeks (Annual from DB -> Daily for Context)
             # COALESCE ensures we don't get None here even if the JOIN failed to find trades
@@ -215,6 +219,9 @@ def get_full_user_context(user_id: int) -> UserContext:
             ) / 365.0
             sum_gamma = (
                 user_row["sum_gamma"] if user_row["sum_gamma"] is not None else 0.0
+            )
+            sum_vanna = (
+                user_row["sum_vanna"] if user_row["sum_vanna"] is not None else 0.0
             )
 
             # 處理基本設定與空值
@@ -243,6 +250,7 @@ def get_full_user_context(user_id: int) -> UserContext:
                 total_weighted_delta=sum_delta,
                 total_theta=sum_theta,
                 total_gamma=sum_gamma,
+                total_vanna=sum_vanna,
                 last_rehedge_alert_time=_get_val("last_rehedge_alert_time", 0),
                 dynamic_tau=_get_val("dynamic_tau", 1.0),
                 option_alert_mode=_get_val("option_alert_mode", 1),
@@ -252,6 +260,7 @@ def get_full_user_context(user_id: int) -> UserContext:
                 polymarket_threshold=_get_val("polymarket_threshold", 10000.0),
                 polymarket_use_llm=bool(_get_val("polymarket_use_llm", True)),
                 polymarket_slippage=_get_val("polymarket_slippage", 2.0),
+                is_professional_mode=bool(_get_val("is_professional_mode", True)),
                 monthly_expense=_get_val("monthly_expense", 0.0),
                 tax_reserve_rate=_get_val("tax_reserve_rate", 0.20),
                 cash_reserve=_get_val("cash_reserve", 0.0),
