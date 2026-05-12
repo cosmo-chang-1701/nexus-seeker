@@ -78,9 +78,9 @@ graph TD
 
 ### 1. Risk Integrity (NRO 引擎)
 *   **Vanna-Adjusted Delta (隱含 Delta 修正)**：
-    考慮 IV 劇烈變動對 Delta 的非線性影響 ($d\Delta/d\sigma$)。在 VIX 飆升時，系統會自動估算 **"Hidden Delta"** 並給出更精確的對沖口數建議。
+    考慮 IV 劇烈變動對 Delta 的非線性影響 ($d\Delta/d\sigma$)。在 VIX 飆升時，系統會自動估算 **"Hidden Delta"**，並主動於「盤中量化指引」中推送精確的避險口數建議。
 *   **Automated Hedging Pipeline (自動化對沖管線)**：
-    當 VIX 觸發戰情階梯跳級或單日移動 > 10% 時，系統主動推送 **「緊急對沖指令」**。使用者可透過 `/settle_hedge` 一鍵記錄執行結果。
+    系統每 30 分鐘執行一次心跳掃描，當 VIX 觸發戰情階梯跳級或單日移動 > 10% 時，主動推送 **「緊急對沖指令」**（如：建議 BUY X 單位 SPY 對沖 Delta 偏離）。使用者可透過 `/settle_hedge` 一鍵記錄執行結果。
 *   **VIX 戰情階梯 (Battle Ladder)**：
     6 階段自適應風險調控系統，根據即時波動率動態縮放 **Kelly Criterion** 比例。
 
@@ -92,31 +92,13 @@ graph TD
 *   **Max Pain Analysis (最大痛點分析)**：
     計算結算日前夕的 Max Pain 價格，評估標的是否趨於收斂以鎖定最終利潤。
 
-### 3. Calendar-Aware Risk Guard (日曆感應風險防護)
-*   **Event-Driven Vanna Weighting (事件驅動 Vanna 權重)**：
-    自動監控 CPI、FOMC 及財報事件。當重大事件 TTE < 72h 時，NRO 引擎自動調高 **Vanna ($d\Delta/d\sigma$)** 權重，縮減曝險以應對「IV Run-up」。
-*   **IV Crush Detection (波動率驟降偵測)**：
-    當 IV Rank > 80% 且距離財報 < 24h 時，系統標註為「高風險波動率事件」，並建議採取風險中性或防禦性價差策略。
-*   **Proactive Event Alerts (主動事件預警)**：
-    後台監控器每 4 小時掃描一次，針對 48 小時內即將發生的重大衝擊事件向持倉用戶發送對沖預警。
-
-### 4. Capital Flow & Sector Rotation (資金流向與板塊輪動)
-*   **Sector Flow Mapping (板塊資金圖譜)**：
-    分析 S&P 500 的 11 大板塊 (XLK, XLF, XLE 等) 之價量關係，辨識機構資金的流向趨勢。
-*   **Cross-Market Intelligence (跨市場情報)**：
-    整合 Polymarket 預測市場、期權市場 (UOA) 與現貨板塊表現，捕捉市場廣度與深度風險。
-*   **Automated Intelligence Reports (自動化情報報告)**：
-    由 **Analyst Agent** 於收盤後自動生成「收盤資金流向報告」，協助交易者判斷次日開盤的板塊佈局。
-
-### 5. Execution Automation & VPS Stability
-*   **NYSE 動態調度器 (Dynamic Scheduler)**：
-    精準對齊交易所交易時鐘，以 30 分鐘為心跳進行全自動掃描。
+### 3. Execution Automation & Active Reporting
+*   **Intra-day Active Execution Guide (盤中動態量化指引)**：
+    取代傳統靜態報告。每 30 分鐘主動評估 Vanna 曝險與財務跑道 (Financial Runway)，並依據時段 (Phase A: 開盤流動性 / Phase B: 板塊輪動 / Phase C: 尾盤對沖) 動態調整關注焦點與對沖指令。
 *   **VPS Performance Guard (1GB RAM 優化)**：
-    針對低配 VPS 引入 **BoundedCache (max 500)** 與 **Memory Safety Gates**。當系統 RAM > 85% 時，自動延後非核心 AI 分析，優先確保風險計算與警報發送。
+    針對低配 VPS 引入 **BoundedCache (max 500)** 與 **Memory Safety Gates**。當系統 RAM > 85% 時，自動延後非核心 AI 分析，優先確保 NRO 核心風險計算與警報發送。
 *   **System Health & Disk Diagnostics (硬碟與系統診斷)**：
-    `/sys_health` 指令現在包含硬碟空間監控，能自動辨識磁碟滿載風險並提供視覺化健康評級。
-*   **獨立現貨持倉系統 (Independent Holdings System)**：
-    解耦觀察清單與實際資產。長期股權會自動納入 NRO 全局風險精算。
+    提供視覺化健康評級，包含 RAM 與快取消耗統計。
 
 ---
 

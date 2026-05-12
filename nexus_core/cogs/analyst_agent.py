@@ -8,12 +8,10 @@ import yfinance as yf
 
 import database
 from market_time import (
-    ny_tz,
     get_next_market_target_time,
     get_sleep_seconds,
     is_market_open,
 )
-from database.user_settings import get_full_user_context
 from database.watchlist import get_all_watchlist
 from services.market_data_service import (
     get_history_df,
@@ -98,12 +96,10 @@ class AnalystAgent(commands.Cog):
         while True:
             if is_market_open():
                 logger.info(
-                    "🤖 [Analyst Intra-Day] 偵測到開盤，執行 30 分鐘心跳掃描..."
+                    "🤖 [Analyst Intra-Day] 偵測到開盤，執行 30 分鐘心跳掃描 (Active Execution Guide)..."
                 )
                 try:
-                    report = await self.run_intraday_intelligence()
-                    if report:
-                        await self.dispatch_report(report)
+                    await self.dispatch_intraday_guide()
                 except Exception as e:
                     logger.error(f"Analyst Intra-Day loop error: {e}")
 
@@ -115,6 +111,180 @@ class AnalystAgent(commands.Cog):
                     f"🤖 [Analyst Intra-Day] 市場休市。下次開盤心跳: {target} (倒數 {sleep_secs/3600:.2f} 小時)"
                 )
                 await asyncio.sleep(min(sleep_secs, 3600))  # 最多睡一小時再檢查一次
+
+    async def dispatch_intraday_guide(self):
+        """
+        Active, risk-aware execution guide.
+        Replaces the old passive intra-day reports.
+        """
+        import psutil
+        from market_analysis.portfolio import refresh_portfolio_greeks
+        from services.asset_manager import AssetManager
+        from models.asset import ContextType, TradeMetadata, HoldingMetadata
+        from market_analysis.risk_engine import calculate_vega_adjusted_delta
+        from market_analysis.pro_management import calculate_financial_runway
+        from market_analysis.sentiment_engine import SentimentEngine
+
+        # 0. 系統健康檢查 (Memory Safety Gate)
+        mem = psutil.virtual_memory()
+        if mem.percent > 85.0:
+            logger.warning(
+                "🚨 [Memory Gate] RAM usage > 85%, deferring heavy intraday analysis."
+            )
+            # Still send a basic health alert instead of skipping entirely
+            is_memory_gated = True
+        else:
+            is_memory_gated = False
+
+        # 1. Macro Data & VIX Ladder
+        macro_data = await self._fetch_macro_data()
+        vix = macro_data.get("vix", 18.0)
+        vix_tier = get_vix_tier(vix)
+        vix_level_name = vix_tier.get("name", "Unknown")
+
+        # Determine Phase
+        from market_time import ny_tz
+
+        now_ny = datetime.now(ny_tz)
+        hour = now_ny.hour
+        if hour < 11:
+            phase = "A"
+            phase_name = "流動性與開盤波動 (Phase A)"
+        elif 11 <= hour < 14:
+            phase = "B"
+            phase_name = "深度研究與板塊輪動 (Phase B)"
+        else:
+            phase = "C"
+            phase_name = "投資組合對沖與收尾 (Phase C)"
+
+        # Get Polymarket Whale Intent (Spy/Market general)
+        poly_intent = "無顯著巨鯨活動"
+        if not is_memory_gated and hasattr(self.bot, "polymarket_service"):
+            try:
+                markets = self.bot.polymarket_service.get_active_markets(limit=3)
+                if markets:
+                    poly_intent = f"焦點: {markets[0].get('question', '')[:30]}..."
+            except Exception:
+                pass
+
+        # Get General SPY Skew
+        skew_data = {"skew": 0.0, "state": "N/A"}
+        if not is_memory_gated:
+            try:
+                skew_data = await SentimentEngine.calculate_skew("SPY")
+            except Exception:
+                pass
+
+        user_ids = database.get_all_user_ids()
+        dispatched_count = 0
+
+        for uid in user_ids:
+            ctx = database.get_full_user_context(uid)
+            if not ctx.enable_analyst_agent:
+                continue
+
+            embed = discord.Embed(
+                title=f"🛡️ 盤中量化執行指引 - {phase_name}",
+                color=discord.Color.red() if vix > 25 else discord.Color.blue(),
+                timestamp=discord.utils.utcnow(),
+            )
+
+            if is_memory_gated:
+                embed.description = "⚠️ **Memory Safety Gate Active**: VPS RAM > 85%。已暫停部分耗能分析以保證風控引擎穩定。"
+                embed.add_field(
+                    name="系統狀態", value=f"RAM: `{mem.percent}%`", inline=False
+                )
+                await self.bot.queue_dm(uid, embed=embed)
+                dispatched_count += 1
+                continue
+
+            # 2. Portfolio Greeks & Vanna
+            await refresh_portfolio_greeks(uid)
+            manager = AssetManager()
+            trade_assets = manager.get_assets(uid, ContextType.TRADE)
+            holding_assets = manager.get_assets(uid, ContextType.HOLDING)
+
+            total_delta = 0.0
+            total_vanna = 0.0
+            for a in trade_assets:
+                t_meta = TradeMetadata(**a.metadata)
+                total_delta += t_meta.weighted_delta
+                total_vanna += t_meta.vanna
+            for a in holding_assets:
+                h_meta = HoldingMetadata(**a.metadata)
+                total_delta += h_meta.weighted_delta
+
+            # Vanna-Adjusted Delta (Assuming 10% IV shock for stress test)
+            adj_delta = calculate_vega_adjusted_delta(total_delta, total_vanna, 0.10)
+
+            greeks_status = (
+                f"Δ: `{total_delta:.2f}` | 隱含 Δ (Vanna): `{adj_delta:.2f}`"
+            )
+            embed.add_field(
+                name="1️⃣ 風險狀態 (Risk Status)",
+                value=f"**VIX 階級:** {vix_level_name} ({vix:.1f})\n**Greeks 完整性:** {greeks_status}",
+                inline=False,
+            )
+
+            # 3. Financial Health
+            runway_days = calculate_financial_runway(
+                ctx.cash_reserve, ctx.monthly_expense, ctx.total_theta
+            )
+            theta_cov = (
+                (ctx.total_theta * 30 / ctx.monthly_expense * 100)
+                if ctx.monthly_expense > 0
+                else 0.0
+            )
+
+            embed.add_field(
+                name="2️⃣ 財務健康 (Financial Health)",
+                value=f"**剩餘跑道:** `{runway_days:.1f}` 天\n**Theta 覆蓋率:** `{theta_cov:.1f}%`",
+                inline=False,
+            )
+
+            # 4. Active Signal
+            active_signal_content = ""
+            hedge_suggest = "無需緊急對沖 (Hold)"
+            if abs(adj_delta) > (ctx.capital / 1000) * 0.1:  # Simple threshold logic
+                action = "BUY" if adj_delta < 0 else "SELL"
+                qty = max(1, int(abs(adj_delta) / 0.5))  # Rough SPY delta mapping
+                hedge_suggest = (
+                    f"建議 {action} {qty} 單位 SPY 對沖 Delta 偏離 (`/settle_hedge`)"
+                )
+            elif vix_tier.get("multiplier", 1.0) < 0.5:
+                hedge_suggest = "VIX 過高，建議啟動尾部風險防禦"
+
+            if phase == "A":
+                active_signal_content = f"**早盤流動性:** 觀察 VIX 變化與日內開盤跳空缺口。\n**對沖建議:** {hedge_suggest}"
+            elif phase == "B":
+                active_signal_content = f"**情緒/巨鯨:** Skew `{skew_data.get('skew', 0.0)}`, {poly_intent}\n**板塊輪動:** 關注科技與金融板塊資金流向。"
+            elif phase == "C":
+                active_signal_content = f"**尾盤收斂:** 檢視 Vanna-Adjusted Delta 是否過高。\n**強制對沖建議:** {hedge_suggest}"
+
+            embed.add_field(
+                name="3️⃣ 活躍信號 (Active Signal)",
+                value=active_signal_content,
+                inline=False,
+            )
+
+            # 5. System Health
+            import services.market_data_service as mds
+
+            sma_count = len(mds._sma_cache)
+            ema_count = len(mds._ema_cache)
+            embed.add_field(
+                name="4️⃣ 系統狀態 (System Health)",
+                value=f"RAM: `{mem.percent}%` | BoundedCache (SMA/EMA): `{sma_count}/{ema_count}`",
+                inline=False,
+            )
+
+            embed.set_footer(text="Nexus Seeker | NRO Vanna-Aware Intelligence")
+            await self.bot.queue_dm(uid, embed=embed)
+            dispatched_count += 1
+
+        logger.info(
+            f"Dispatched Intra-day Execution Guide to {dispatched_count} users."
+        )
 
     # ==========================================
     # 🚀 3. 盤後策略：收盤後 15 分鐘啟動
@@ -148,41 +318,6 @@ class AnalystAgent(commands.Cog):
                 logger.error(f"Analyst Post-Market loop error: {e}")
 
             await asyncio.sleep(60)
-
-    async def run_intraday_intelligence(self):
-        """根據盤中時段動態調整分析重點"""
-        now_ny = datetime.now(ny_tz)
-        hour = now_ny.hour
-
-        # 09:30 - 11:30 Focus: Liquidity & Open Vol
-        if hour < 11:
-            return await self.run_market_open_liquidity()
-        # 11:30 - 14:00 Focus: Sector Research
-        elif 11 <= hour < 14:
-            return await self.run_deep_research()
-        # 14:00 - 16:00 Focus: Portfolio Hedging
-        else:
-            return await self.run_portfolio_hedging()
-
-    async def dispatch_report(self, report_md: str):
-        """Dispatch the markdown report to all users who have opted in."""
-        user_ids = database.get_all_user_ids()
-        dispatched_count = 0
-
-        for uid in user_ids:
-            context = get_full_user_context(uid)
-            if context.enable_analyst_agent:
-                embed = discord.Embed(
-                    title="🤖 Nexus Seeker 系統分析報告",
-                    description=report_md,
-                    color=discord.Color.gold(),
-                    timestamp=discord.utils.utcnow(),
-                )
-                embed.set_footer(text="Nexus Seeker 量化分析代理")
-                await self.bot.queue_dm(uid, embed=embed)
-                dispatched_count += 1
-
-        logger.info(f"Dispatched Analyst Report to {dispatched_count} users.")
 
     async def _fetch_macro_data(self):
         """Helper to fetch general macro proxies."""

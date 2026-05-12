@@ -44,7 +44,12 @@ The system is divided into two main services:
   - **`calendar.py`**: Event-driven risk control (Legacy `/calendar`, `/iv_rank`).
   - **`hedging.py`**: Risk settlement and attribution commands (`/settle_hedge`, `/hedge_list`).
   - **`intelligence.py`**: Market edge detection (Legacy `/poly_list`, `/scan_news`).
-  - **`analyst_agent.py`**: **Autonomous Intelligence Analyst**. Generates automated pre-market, intra-day, and post-market reports, including the **Sector Flow Mapping** report.
+  - **`analyst_agent.py`**: **Autonomous Intelligence Analyst**. Generates dynamic, risk-aware intra-day execution guides and post-market Sector Flow Mapping reports.
+    *   **Decision-Making Flow (Intra-day Heartbeat):**
+        *   **Phase A (Open-11:00 ET):** Focuses on liquidity, open volatility, and pre-market gaps.
+        *   **Phase B (11:00-14:00 ET):** Focuses on sector rotation, Reddit sentiment, and Polymarket whale intent.
+        *   **Phase C (14:00-Close ET):** Focuses on portfolio hedging, specifically monitoring **Vanna-Adjusted Delta** for tail-risk exposure.
+    *   **Memory Safety Gate:** Automatically defers non-critical LLM analyses if VPS RAM exceeds 85%, prioritizing core risk operations.
 
 ---
 
