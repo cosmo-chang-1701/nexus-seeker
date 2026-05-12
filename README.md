@@ -124,6 +124,25 @@ stateDiagram-v2
 
 ---
 
+## 👨‍💻 Professional Investor Workflow (全職投資者實戰流程)
+
+Nexus Seeker 的設計初衷是為了讓全職投資者能從繁瑣的數據整理中解放，專注於決策執行。以下是一個典型的「專業風控交易日」：
+
+1.  **盤前情報與生存檢查 (08:30 - 09:30)**
+    *   使用 `/dash` 檢查 **Financial Runway**，確認目前的 Theta 收入是否能覆蓋每日支出，並檢視整體 Delta 曝險。
+    *   使用 `/market` 查看今日重大財經事件與 Polymarket 上的巨鯨方向性押注。
+2.  **盤中動態監測與標的分層 (09:30 - 15:30)**
+    *   接收系統每 30 分鐘自動推送的 **「盤中動態量化指引」**，關注當前時段的 Vanna 曝險變動。
+    *   針對感興趣的標的，使用 `/x [symbol]` 一鍵調用 Sentiment Engine，分析 Reddit 情緒與期權 Skew 是否背離。
+3.  **危機防禦與自動化對沖 (隨時觸發)**
+    *   當 VIX 劇烈波動或標的跌破關鍵支撐，系統主動發出 **「緊急對沖指令」**。
+    *   投資者依據指令執行 SPY 避險後，輸入 `/settle_hedge` 記錄操作。系統隨即更新 **Protection Score** 並重新計算 Greeks 完整性。
+4.  **盤後歸因與策略迭代 (16:30+)**
+    *   使用 `/vtr_stats` 審視今日對沖的保護效率 (Attribution)，分析 AI 建議的閾值調整。
+    *   使用 `/add_holding` 更新現貨持倉，確保明早的 Beta-Weighted Delta 計算基準精確無誤。
+
+---
+
 ## ⌨️ Command Matrix (Unified Hubs)
 
 | Command | Description | Interactive Tabs / Buttons |
