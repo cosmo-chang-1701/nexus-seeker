@@ -21,7 +21,7 @@ POLY_API_BASE = "https://clob.polymarket.com"
 GAMMA_API_BASE = "https://gamma-api.polymarket.com"
 
 # 限制快取大小以節省記憶體 (1GB RAM VPS 優化)
-MAX_CACHE_SIZE = 500
+MAX_CACHE_SIZE = 2000
 
 
 class BoundedCache(OrderedDict):
@@ -422,6 +422,7 @@ class PolymarketService:
                 asset_id, trade.get("condition_id")
             )
             if not market_info:
+                logger.warning(f"⚠️ 即使嘗試隨選抓取，仍無法獲取市場資訊: {asset_id}")
                 market_info = {
                     "question": "未知市場",
                     "description": "無法獲取市場詳細資訊",
@@ -578,7 +579,7 @@ class PolymarketService:
 
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                params = {"active": "true", "closed": "false", "limit": 100}
+                params = {"active": "true", "closed": "false", "limit": 500}
                 resp = await client.get(f"{GAMMA_API_BASE}/markets", params=params)
 
                 if resp.status_code == 200:
@@ -699,6 +700,10 @@ class PolymarketService:
     async def _get_market_info(
         self, asset_id: str, condition_id: str = None
     ) -> Dict[str, Any]:
+        """
+        獲取市場背景資訊。優先從快取讀取，若無則嘗試從 Gamma API 抓取。
+        支援使用 asset_id 或 condition_id 查詢。
+        """
         if asset_id in self._market_cache:
             return self._market_cache[asset_id]
         if condition_id and condition_id in self._market_cache:
@@ -706,17 +711,72 @@ class PolymarketService:
 
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
+                # Gamma API 支援透過 token_id 或 condition_id 查詢
+                params = {}
                 if condition_id:
-                    resp = await client.get(
-                        f"{GAMMA_API_BASE}/markets",
-                        params={"condition_id": condition_id},
-                    )
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        market = data[0] if isinstance(data, list) and data else data
-                        if market:
-                            self._market_cache[condition_id] = market
-                            return market
+                    params["condition_id"] = condition_id
+                else:
+                    params["token_id"] = asset_id
+
+                resp = await client.get(f"{GAMMA_API_BASE}/markets", params=params)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    # Gamma API 返回通常是列表
+                    m = data[0] if isinstance(data, list) and data else None
+                    if m and isinstance(m, dict):
+                        # 格式化成與 _fetch_all_active_asset_ids 一致的結構
+                        q = m.get("question")
+                        clob_tokens_raw = m.get("clobTokenIds")
+                        outcomes_raw = m.get("outcomes")
+
+                        try:
+                            t_ids = (
+                                json.loads(clob_tokens_raw)
+                                if isinstance(clob_tokens_raw, str)
+                                else clob_tokens_raw
+                            )
+                            outcomes = (
+                                json.loads(outcomes_raw)
+                                if isinstance(outcomes_raw, str)
+                                else outcomes_raw
+                            )
+
+                            outcome_name = "未知選項"
+                            if isinstance(t_ids, list) and asset_id in t_ids:
+                                idx = t_ids.index(asset_id)
+                                if isinstance(outcomes, list) and idx < len(outcomes):
+                                    outcome_name = str(outcomes[idx]).strip().strip('"')
+
+                            event_slug = None
+                            if (
+                                "events" in m
+                                and m["events"]
+                                and isinstance(m["events"], list)
+                            ):
+                                event_slug = m["events"][0].get("slug")
+                            elif "event" in m and m["event"]:
+                                event_slug = m["event"].get("slug")
+
+                            formatted_info = {
+                                "question": q,
+                                "description": m.get("description"),
+                                "end_date": m.get("endDate"),
+                                "condition_id": m.get("conditionId"),
+                                "slug": m.get("slug"),
+                                "event_slug": event_slug,
+                                "outcome": outcome_name,
+                            }
+
+                            # 存入快取
+                            self._market_cache[asset_id] = formatted_info
+                            if formatted_info["condition_id"]:
+                                self._market_cache[formatted_info["condition_id"]] = (
+                                    formatted_info
+                                )
+
+                            return formatted_info
+                        except Exception as e:
+                            logger.error(f"Error parsing on-demand market info: {e}")
         except Exception as e:
             logger.error(
                 f"Error fetching market info for {asset_id}/{condition_id}: {e}"
