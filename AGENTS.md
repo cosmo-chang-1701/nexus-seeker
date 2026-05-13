@@ -24,7 +24,7 @@ The system is divided into two main services:
 - **`config.py`**: Global configuration and the **VIX Battle Ladder** (Dormant/Caution/Ready/Aggressive/Heavy/All-in).
 - **`market_analysis/`**: The quant engine.
   - **`strategy.py`**: Core strategy logic with VIX ladder gating and delta capping.
-  - **`sentiment_engine.py`**: **Volatility Strategist**. Calculates Skew, PCR, Max Pain, and detects Unusual Options Activity (UOA).
+  - **`sentiment_engine.py`**: **Volatility Strategist**. Calculates Skew, PCR, Max Pain, and detects Unusual Options Activity (UOA). Implements the **PolymarketWhaleFilter**—a 4-phase high-signal pipeline (Category Gate, Semantic Ticker Validator, Capital Efficiency Gate, and Cross-Market Skew/IVR Validation).
   - **`risk_engine.py`**: NRO risk optimization with dynamic Kelly scaling and Vega-adjusted Delta (Vanna) calculations.
   - **`attribution.py`**: **Self-Evolving Attribution System**. Analyzes hedge efficiency (Protection Score) and provides NRO parameter feedback.
   - **`ghost_trader.py`**: Virtual Trading Room (VTR) and autonomous DITM defense.

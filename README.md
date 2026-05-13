@@ -88,7 +88,11 @@ graph TD
 *   **Option Skew Strategist (偏斜策略家)**：
     監控 OTM Put 與 Call 的 IV 差值。當 Skew 進入 90th 百分位時，發出 **"Pre-emptive Hedge" (預警性對沖)** 訊號。
 *   **UOA & Whale Intent Mapping (巨鯨意圖映射)**：
-    將 Polymarket 的巨鯨交易與選擇權市場的 **Unusual Options Activity (UOA)** 進行關聯分析，判定是大規模方向性押注還是機構對沖行為。
+    將 Polymarket 的巨鯨交易與選擇權市場的 **Unusual Options Activity (UOA)** 進行關聯分析。內建 **PolymarketWhaleFilter** 高信號過濾管線：
+    1. **Category Hard Gate**: 僅限經濟、政治、加密、聯準會、科技與 AI。
+    2. **Semantic Ticker Validator**: 基於實體識別的代碼映射，防止語義幻覺（如誤將體育人名當作股票）。
+    3. **Capital Efficiency Gate**: 計算預期 ROI 與 $\Delta P$，過濾低效套利噪音。
+    4. **Cross-Market Validation**: 僅在標的 Skew > 90th 或 IV Rank > 70 時觸發預警。
 *   **Max Pain Analysis (最大痛點分析)**：
     計算結算日前夕的 Max Pain 價格，評估標的是否趨於收斂以鎖定最終利潤。
 
