@@ -112,6 +112,24 @@ class AnalystAgent(commands.Cog):
                 )
                 await asyncio.sleep(min(sleep_secs, 3600))  # 最多睡一小時再檢查一次
 
+    async def dispatch_report(self, report_content: str):
+        """
+        將報告發送給所有啟用了 Analyst Agent 的用戶。
+        """
+        import database
+
+        user_ids = database.get_all_user_ids()
+        dispatched_count = 0
+        for uid in user_ids:
+            ctx = database.get_full_user_context(uid)
+            if ctx.enable_analyst_agent:
+                try:
+                    await self.bot.queue_dm(uid, message=report_content)
+                    dispatched_count += 1
+                except Exception as e:
+                    logger.error(f"Failed to dispatch report to {uid}: {e}")
+        logger.info(f"Dispatched report to {dispatched_count} users.")
+
     async def dispatch_intraday_guide(self):
         """
         Active, risk-aware execution guide.
