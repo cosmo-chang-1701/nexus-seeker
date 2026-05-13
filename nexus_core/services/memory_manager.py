@@ -20,20 +20,25 @@ class MemoryManager:
         self.threshold = threshold
         self.running = False
         self._monitor_task = None
+        self._warmup_task = None
         self._check_interval = 300  # 5 分鐘檢查一次
         self._last_alert_at = 0
+        self._last_warmup_date = None
 
     def start(self):
         if self.running:
             return
         self.running = True
         self._monitor_task = asyncio.create_task(self._monitor_loop())
+        self._warmup_task = asyncio.create_task(self._warmup_loop())
         logger.info("🧠 Memory Manager Service started.")
 
     def stop(self):
         self.running = False
         if self._monitor_task:
             self._monitor_task.cancel()
+        if self._warmup_task:
+            self._warmup_task.cancel()
         logger.info("🛑 Memory Manager Service stopped.")
 
     async def _monitor_loop(self):
@@ -43,6 +48,71 @@ class MemoryManager:
             except Exception as e:
                 logger.error(f"Health check error: {e}")
             await asyncio.sleep(self._check_interval)
+
+    async def _warmup_loop(self):
+        """🚀 Task 2: 定期檢查盤前預熱視窗 (08:30 - 09:30 ET)"""
+        while self.running:
+            try:
+                from market_time import ny_tz
+
+                now_ny = datetime.now(ny_tz)
+                # 08:30 - 09:30 ET 視窗
+                if 8 <= now_ny.hour <= 9:
+                    if now_ny.hour == 8 and now_ny.minute < 30:
+                        pass
+                    elif now_ny.hour == 9 and now_ny.minute > 30:
+                        pass
+                    else:
+                        await self.proactive_warmup()
+            except Exception as e:
+                logger.error(f"Warmup loop error: {e}")
+            await asyncio.sleep(600)  # 每 10 分鐘檢查一次
+
+    async def proactive_warmup(self):
+        """執行快取預熱，具備冪等性與記憶體保護門檻。"""
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        if self._last_warmup_date == today_str:
+            return
+
+        mem = psutil.virtual_memory()
+        if mem.percent > 85.0:
+            logger.warning(
+                f"🚨 [Warmup Gate] RAM usage ({mem.percent}%) too high, skipping cache warmup."
+            )
+            return
+
+        logger.info("🔥 [Warmup] 啟動盤前快取預熱 (Cache Warmup)...")
+        try:
+            from database.watchlist import get_all_watchlist
+            from services.market_data_service import get_sma, get_ema, get_quote
+
+            watchlist = get_all_watchlist()
+            symbols = list(set([row[1] for row in watchlist]))
+            # 確保 SPY 優先預熱
+            if "SPY" not in symbols:
+                symbols.insert(0, "SPY")
+            else:
+                symbols.remove("SPY")
+                symbols.insert(0, "SPY")
+
+            for sym in symbols[:20]:  # 限制數量以防 OOM
+                # 平行預熱常用指標
+                await asyncio.gather(
+                    get_quote(sym),
+                    get_sma(sym, 200),
+                    get_ema(sym, 8),
+                    get_ema(sym, 21),
+                    return_exceptions=True,
+                )
+                # 每個標的間隔一下，避免 CPU 瞬間飆升
+                await asyncio.sleep(0.5)
+
+            self._last_warmup_date = today_str
+            logger.info(
+                f"✅ [Warmup] 快取預熱完成。共處理 {len(symbols[:20])} 檔標的。"
+            )
+        except Exception as e:
+            logger.error(f"Cache warmup failed: {e}")
 
     async def _perform_health_check(self):
         mem = psutil.virtual_memory()

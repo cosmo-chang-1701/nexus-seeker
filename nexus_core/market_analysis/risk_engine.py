@@ -336,6 +336,10 @@ def get_macro_risk_metrics(
     else:
         heat_limit = 80.0  # 預設上限
 
+    # 🚀 NRO Telemetry Enhancement (Task 1)
+    # 提供計算細節以便稽核對沖指令
+    vix_scale_multiplier = vix_tier.get("sizing_multiplier", 1.0) if vix_tier else 1.0
+
     return {
         "net_exposure_dollars": net_exposure_dollars,
         "exposure_pct": exposure_pct,
@@ -350,6 +354,12 @@ def get_macro_risk_metrics(
         "total_vanna": total_vanna,
         "total_margin_used": total_margin_used,
         "vix_tier_name": vix_tier_name,
+        "nro_telemetry": {
+            "raw_delta": round(total_beta_delta, 2),
+            "vix_scale_multiplier": round(vix_scale_multiplier, 2),
+            "spy_price": round(spy_price, 2),
+            "capital": round(user_capital, 2),
+        },
     }
 
 

@@ -268,9 +268,12 @@ class AnalystAgent(commands.Cog):
             hedge_suggest = "無需緊急對沖 (Hold)"
             if abs(adj_delta) > (ctx.capital / 1000) * 0.1:  # Simple threshold logic
                 action = "BUY" if adj_delta < 0 else "SELL"
-                qty = max(1, int(abs(adj_delta) / 0.5))  # Rough SPY delta mapping
+                # 🚀 Task 1 Fix: SPY 每股 Delta 為 1.0，而非 0.5 (後者常規用於平價選擇權)
+                # 原本使用 0.5 導致對沖口數翻倍 (166.94 -> 333)
+                qty = max(1, int(round(abs(adj_delta))))
                 hedge_suggest = (
-                    f"建議 {action} {qty} 單位 SPY 對沖 Delta 偏離 (`/settle_hedge`)"
+                    f"建議 {action} {qty} 單位 SPY 對沖 Delta 偏離 (`/settle_hedge`)\n"
+                    f"> (稽核詳情: adj_delta={adj_delta:.2f}, capital=${ctx.capital:,.0f})"
                 )
             elif vix_tier.get("multiplier", 1.0) < 0.5:
                 hedge_suggest = "VIX 過高，建議啟動尾部風險防禦"

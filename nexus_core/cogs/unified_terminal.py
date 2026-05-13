@@ -515,6 +515,12 @@ class UnifiedTerminalCog(commands.Cog):
         symbol = symbol.upper()
         user_id = interaction.user.id
 
+        # 🚀 Task 2 Hook: Proactive Warmup during pre-market window (08:30 - 09:30 ET)
+        if hasattr(self.bot, "memory_manager"):
+            coro = self.bot.memory_manager.proactive_warmup()
+            if asyncio.iscoroutine(coro):
+                asyncio.create_task(coro)
+
         if not await market_data_service.validate_symbol(symbol):
             return await interaction.followup.send(
                 f"❌ **無效的標的代號**: `{symbol}`", ephemeral=True
@@ -625,6 +631,12 @@ class UnifiedTerminalCog(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         user_id = interaction.user.id
 
+        # 🚀 Task 2 Hook: Proactive Warmup during pre-market window
+        if hasattr(self.bot, "memory_manager"):
+            coro = self.bot.memory_manager.proactive_warmup()
+            if asyncio.iscoroutine(coro):
+                asyncio.create_task(coro)
+
         from services.trading_service import TradingService
 
         trading_service = TradingService(self.bot)
@@ -645,6 +657,13 @@ class UnifiedTerminalCog(commands.Cog):
     )
     async def pulse_hub(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
+
+        # 🚀 Task 2 Hook: Proactive Warmup during pre-market window
+        if hasattr(self.bot, "memory_manager"):
+            coro = self.bot.memory_manager.proactive_warmup()
+            if asyncio.iscoroutine(coro):
+                asyncio.create_task(coro)
+
         from services.calendar_service import calendar_service
 
         events = await calendar_service.get_portfolio_events(interaction.user.id)

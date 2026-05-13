@@ -33,7 +33,8 @@ The system is divided into two main services:
 - **`database/`**: Persistent storage layer with an automated migration engine. Includes unified asset lifecycle tracking, sentiment history, and three-stage alert filtering (v034).
 - **`services/`**: Business logic layer.
   - **`hedge_monitor_service.py`**: Automated Hedging & Alert Pipeline. Monitors VIX spikes and pushes actionable SPY hedge instructions.
-  - **`memory_manager.py`**: System health watchdog optimized for 1GB RAM. Handles periodic GC and emergency OOM alerts.
+  - **`memory_manager.py`**: **VPS Health Watchdog** optimized for 1GB RAM. Handles periodic GC, emergency OOM alerts, and implements the **Pre-Market Cache Warmup Engine** (08:30-09:30 ET) to prevent cold-start latency.
+
   - **`polymarket_service.py`**: Prediction market whale monitoring with real-time snapshot mechanisms for attribution.
   - **`calendar_service.py`**: **Calendar-Aware Guard**. Fetches high-impact economic/earnings data with LRU caching.
   - **`llm_service.py`**: Structured AI analysis with memory safety gates.
