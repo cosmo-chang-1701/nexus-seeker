@@ -112,7 +112,7 @@ class AnalystAgent(commands.Cog):
                 )
                 await asyncio.sleep(min(sleep_secs, 3600))  # 最多睡一小時再檢查一次
 
-    async def dispatch_report(self, report_content: str):
+    async def dispatch_report(self, report_content):
         """
         將報告發送給所有啟用了 Analyst Agent 的用戶。
         """
@@ -124,7 +124,10 @@ class AnalystAgent(commands.Cog):
             ctx = database.get_full_user_context(uid)
             if ctx.enable_analyst_agent:
                 try:
-                    await self.bot.queue_dm(uid, message=report_content)
+                    if isinstance(report_content, discord.Embed):
+                        await self.bot.queue_dm(uid, embed=report_content)
+                    else:
+                        await self.bot.queue_dm(uid, message=report_content)
                     dispatched_count += 1
                 except Exception as e:
                     logger.error(f"Failed to dispatch report to {uid}: {e}")
@@ -448,9 +451,6 @@ class AnalystAgent(commands.Cog):
         # 1. 計算利差
         spread = tnx - us2y
 
-        # 動態生成台灣時間 (UTC+8) 的當下時間
-        time_str = self._get_tw_time_str()
-
         # 2. 多因子告警判定
         alerts = []
         if spread < -0.2:
@@ -470,32 +470,10 @@ class AnalystAgent(commands.Cog):
         if dxy > 105:
             alerts.append("美元指數處於強勢區間，可能壓抑跨國企業獲利與大宗商品表現")
 
-        # 3. 組合報告內容
-        report_lines = []
-        report_lines.append(f"**{time_str} 巨觀環境與隔夜市場掃描**")
-        report_lines.append("--------------------------------------------------")
-        report_lines.append(f"**美元指數 (DXY):** {dxy:.2f}")
-        report_lines.append(
-            f"**10 年期公債殖利率 (TNX):** {tnx:.2f}% (單日變化: {tnx_change_bps:+.1f} bps)"
-        )
-        report_lines.append(f"**2 年期公債殖利率 (US2Y):** {us2y:.2f}%")
-        report_lines.append(f"**2Y-10Y 利差:** {spread:+.2f}%")
-        report_lines.append(
-            f"**恐慌指數 (VIX):** {vix:.2f} (單日變化: {vix_change:+.2f})"
-        )
-        report_lines.append("")
+        # 3. 建立 Embed 報告 (美化格式)
+        from cogs.embed_builder import create_macro_scan_embed
 
-        # 結論區塊
-        if alerts:
-            report_lines.append("🚨 **風險警示：**")
-            for alert in alerts:
-                report_lines.append(f"- {alert}")
-        else:
-            report_lines.append(
-                "✅ **巨觀狀態：** 殖利率曲線、匯率與波動率未見極端異常。維持標準市場部位。"
-            )
-
-        return "\n".join(report_lines)
+        return create_macro_scan_embed(macro_data, alerts)
 
     async def run_premarket_earnings(self):
         time_str = self._get_tw_time_str()

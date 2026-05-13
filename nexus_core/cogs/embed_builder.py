@@ -605,6 +605,69 @@ def create_sentiment_scan_embed(
     return embed
 
 
+def create_macro_scan_embed(macro_data: dict, alerts: list = None) -> discord.Embed:
+    """建立巨觀環境與隔夜市場掃描 Embed (繁體中文)"""
+    embed = discord.Embed(
+        title="🌍 巨觀環境與隔夜市場掃描 (Macro Scan)",
+        color=discord.Color.blue(),
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    dxy = macro_data.get("dxy", 0.0)
+    tnx = macro_data.get("tnx", 0.0)
+    tnx_change = macro_data.get("tnx_change_bps", 0.0)
+    us2y = macro_data.get("us2y", 0.0)
+    vix = macro_data.get("vix", 0.0)
+    vix_change = macro_data.get("vix_change", 0.0)
+    spread = tnx - us2y
+
+    # 美元指數 (DXY)
+    embed.add_field(
+        name="💵 美元指數 (DXY)",
+        value=f"值: `{dxy:.2f}`",
+        inline=True,
+    )
+
+    # 10年期公債 (TNX)
+    embed.add_field(
+        name="📈 10Y 公債 (TNX)",
+        value=f"值: `{tnx:.2f}%`\n變化: `{tnx_change:+.1f} bps`",
+        inline=True,
+    )
+
+    # 2年期公債 (US2Y)
+    embed.add_field(
+        name="📉 2Y 公債 (US2Y)",
+        value=f"值: `{us2y:.2f}%`\n利差: `{spread:+.2f}%`",
+        inline=True,
+    )
+
+    # 恐慌指數 (VIX)
+    vix_emoji = "🔥" if vix > 25 else ("⚠️" if vix > 20 else "🟢")
+    embed.add_field(
+        name="🌪️ 恐慌指數 (VIX)",
+        value=f"值: `{vix:.2f}` {vix_emoji}\n變化: `{vix_change:+.2f}`",
+        inline=True,
+    )
+
+    # 結論與警示
+    if alerts:
+        alert_text = "\n".join([f"• {a}" for a in alerts])
+        embed.add_field(
+            name="🚨 風險警示 (Macro Alerts)", value=alert_text, inline=False
+        )
+        embed.color = discord.Color.red()
+    else:
+        embed.add_field(
+            name="✅ 巨觀狀態",
+            value="殖利率曲線、匯率與波動率未見極端異常。維持標準市場部位。",
+            inline=False,
+        )
+
+    embed.set_footer(text="Nexus Seeker | Global Macro Intelligence")
+    return embed
+
+
 def _add_sentiment_fields(embed, data):
     """添加期權情緒指標到掃描報告"""
     skew_val = data.get("skew")

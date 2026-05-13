@@ -99,6 +99,8 @@ graph TD
 ### 3. Execution Automation & Active Reporting
 *   **Intra-day Active Execution Guide (盤中動態量化指引)**：
     取代傳統靜態報告。每 30 分鐘主動評估 Vanna 曝險與財務跑道 (Financial Runway)，並依據時段 (Phase A: 開盤流動性 / Phase B: 板塊輪動 / Phase C: 尾盤對沖) 動態調整關注焦點與對沖指令。
+*   **Beautified Macro Scan (美化巨觀掃描)**：
+    提供結構化的 Discord Embed 報告，整合美元指數、公債殖利率與 VIX 實時指標，並具備多因子風險告警 (Multi-factor Risk Alerts)。
 *   **VPS Performance Guard (1GB RAM 優化)**：
     針對低配 VPS 引入 **BoundedCache (max 500)** 與 **Memory Safety Gates**。當系統 RAM > 85% 時，自動延後非核心 AI 分析，優先確保 NRO 核心風險計算與警報發送。
 *   **System Health & Disk Diagnostics (硬碟與系統診斷)**：
