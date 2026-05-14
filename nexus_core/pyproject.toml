@@ -30,6 +30,13 @@ dependencies = [
     "pytest-cov>=4.1.0",
 ]
 
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cogs*", "database*", "market_analysis*", "models*", "services*", "ui*"]
+
+[tool.setuptools]
+py-modules = ["bot", "bot_healthy", "config", "gather_report", "main", "market_math", "market_time", "verify_stat1"]
+
 [tool.mypy]
 python_version = "3.12"
 warn_return_any = false
