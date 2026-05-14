@@ -33,8 +33,11 @@ The system is divided into two main services:
   - **`ghost_trader.py`**: Virtual Trading Room (VTR) and autonomous DITM defense.
   - **`ddp_inspector.py`**: Davis Double Play (DDP) detection (EPS Momentum + P/E expansion).
   - **`psq_engine.py`**: PowerSqueeze (PSQ) scoring with VIX-aware momentum labeling.
+  - **`execution_router.py`**: **Execution Decision Matrix (SDDM)**. Routes conditions to SHIELD (Defensive Grid) or SPEAR (Aggressive Options) based on Gatekeeper logic (VIX/Skew/UOA).
 - **`database/`**: Persistent storage layer with an automated migration engine. Includes unified asset lifecycle tracking, sentiment history, and three-stage alert filtering (v034).
 - **`services/`**: Business logic layer.
+  - **`trading_service.py`**: 4-stage validation pipeline. Now integrated with the **ExecutionRouter** to automate tactical decision-making during scans.
+  - **`execution_router.py`**: Core logic for the SDDM, calculating ATR-based grids and Kelly-optimized position sizing.
   - **`hedge_monitor_service.py`**: Automated Hedging & Alert Pipeline. Monitors VIX spikes and pushes actionable SPY hedge instructions.
   - **`memory_manager.py`**: **VPS Health Watchdog** optimized for 1GB RAM. Handles periodic GC, emergency OOM alerts, and implements the **Pre-Market Cache Warmup Engine** (08:30-09:30 ET) to prevent cold-start latency.
 

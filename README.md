@@ -97,7 +97,13 @@ graph TD
 *   **Max Pain Analysis (最大痛點分析)**：
     計算結算日前夕的 Max Pain 價格，評估標的是否趨於收斂以鎖定最終利潤。
 
-### 3. Execution Automation & Active Reporting
+### 3. Execution Strategy (SDDM 執行矩陣)
+*   **Execution Decision Matrix (SDDM)**：
+    自動化執行決策系統。根據市場狀況（VIX、Skew、UOA、RSI）自動將交易路由至 **Module A (SHIELD: 防禦網格)** 或 **Module B (SPEAR: 期權攻擊)**。
+*   **Tactical Routing (戰術路由)**：
+    在極端波動環境下，系統會自動切換至 SHIELD 模式，並基於 ATR 計算動態網格步長；在穩定且具備高勝率信號（如 UOA 觸發）時，切換至 SPEAR 模式並利用凱利公式優化倉位。
+
+### 4. Execution Automation & Active Reporting
 *   **Intra-day Active Execution Guide (盤中動態量化指引)**：
     取代傳統靜態報告。每 30 分鐘主動評估 Vanna 曝險與財務跑道 (Financial Runway)，並依據時段 (Phase A: 開盤流動性 / Phase B: 板塊輪動 / Phase C: 尾盤對沖) 動態調整關注焦點與對沖指令。
 *   **Optimized Post-market Risk Settlement (盤後風險結算總結)**：

@@ -3,11 +3,29 @@ import pytest
 import sqlite3
 from unittest.mock import AsyncMock, patch
 
-# Ensure OpenAI API key is set for tests to avoid collection errors
+# Ensure API keys are set for tests to avoid collection errors
 os.environ["OPENAI_API_KEY"] = "sk-dummy-key-for-tests"
+os.environ["FINNHUB_API_KEY"] = "dummy-finnhub-key-for-tests"
 
 # Use a shared in-memory database for testing
 TEST_DB_NAME = "file:testdb?mode=memory&cache=shared"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def mock_finnhub_client():
+    """Globally mock finnhub.Client to avoid real API calls."""
+    with patch("finnhub.Client") as mock:
+        yield mock
+
+
+@pytest.fixture(scope="session", autouse=True)
+def mock_symbol_validation():
+    """Globally mock validate_symbol to return True for common test symbols."""
+    with patch(
+        "services.market_data_service.validate_symbol", new_callable=AsyncMock
+    ) as mock:
+        mock.return_value = True
+        yield mock
 
 
 @pytest.fixture(scope="session", autouse=True)

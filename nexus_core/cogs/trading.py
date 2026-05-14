@@ -633,6 +633,17 @@ class SchedulerCog(commands.Cog):
                         ):
                             valid_alerts.append(data)
 
+                            # 🚀 立即發送執行決策 (SDDM)
+                            exec_decision = data.get("execution_decision")
+                            if exec_decision:
+                                from formatters.execution_embeds import (
+                                    build_execution_embed,
+                                )
+
+                                await self.bot.queue_dm(
+                                    uid, embed=build_execution_embed(exec_decision)
+                                )
+
                         if is_auto:
                             user_cooldowns[cooldown_key] = now
                             # 執行 VTR 自動建倉

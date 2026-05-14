@@ -16,6 +16,8 @@ from market_analysis.risk_engine import optimize_position_risk
 from services import market_data_service, news_service, llm_service
 from market_analysis.ddp_inspector import DDPInspector
 from market_analysis.volatility_inspector import VolatilityInspector
+from services.execution_router import ExecutionRouter
+from models.execution import MarketCondition
 
 logger = logging.getLogger(__name__)
 ny_tz = ZoneInfo("America/New_York")
@@ -31,6 +33,7 @@ class TradingService:
         self.vtr_engine = GhostTrader()
         self.ddp_inspector = DDPInspector(bot)
         self.vol_inspector = VolatilityInspector(bot)
+        self.execution_router = ExecutionRouter()
 
     async def run_ddp_scan(self, symbols: List[str]) -> List[Dict[str, Any]]:
         """執行 Davis Double Play (DDP) 掃描"""
@@ -41,6 +44,67 @@ class TradingService:
     ) -> List[Dict[str, Any]]:
         """執行波動率優勢掃描 (IV Opportunity)"""
         return await self.vol_inspector.run_scan(symbols, user_id)
+
+    async def get_execution_decision(
+        self, symbol: str, stock_cost: float = 0.0
+    ) -> Optional[Any]:
+        """
+        獲取標的的執行決策 (SHIELD/SPEAR/STANDBY)。
+        整合市場數據並調用 ExecutionRouter。
+        """
+        try:
+            # 1. 獲取核心市場指標
+            macro = await market_data_service.get_macro_environment()
+            df_hist_1d = await market_data_service.get_history_df(
+                symbol, period="60d", interval="1d"
+            )
+
+            if df_hist_1d.empty:
+                return None
+
+            # 計算 MA20 與 ATR
+            import pandas_ta as ta
+
+            df_hist_1d["SMA20"] = ta.sma(df_hist_1d["Close"], length=20)
+            df_hist_1d["ATR14"] = ta.atr(
+                df_hist_1d["High"], df_hist_1d["Low"], df_hist_1d["Close"], length=14
+            )
+            df_hist_1d["RSI14"] = ta.rsi(df_hist_1d["Close"], length=14)
+
+            last_row = df_hist_1d.iloc[-1]
+            price = last_row["Close"]
+            ma20 = last_row["SMA20"]
+            atr = last_row["ATR14"]
+            rsi = last_row["RSI14"]
+
+            # 獲取 Skew 與 UOA (這裡簡化，實戰中可從 SentimentEngine 獲取)
+            from market_analysis.sentiment_engine import SentimentEngine
+
+            skew_res = await SentimentEngine.calculate_skew(symbol)
+            skew_val = skew_res.get("skew", 0.0) / 100.0  # 轉為小數
+
+            # 偵測 UOA
+            from market_data_service import get_option_uoa
+
+            uoa_list = await get_option_uoa(symbol)
+            uoa_detected = len(uoa_list) > 0
+
+            # 2. 構建 MarketCondition
+            condition = MarketCondition(
+                vix=macro.get("vix", 18.0),
+                skew_percent=skew_val,
+                asset_price=price,
+                ma20=ma20,
+                atr_14=atr,
+                rsi_14=rsi,
+                uoa_detected=uoa_detected,
+            )
+
+            # 3. 調用 Router
+            return self.execution_router.evaluate_market(condition)
+        except Exception as e:
+            logger.error(f"獲獲取執行決策失敗 for {symbol}: {e}")
+            return None
 
     async def get_portfolio_pnl(self, user_id: int) -> Dict[str, Any]:
         """
@@ -298,6 +362,47 @@ class TradingService:
                 if psq_result:
                     res["psq_result"] = psq_result
                     # Ensure price is available for PSQ reports
+
+                # 🚀 整合核心：Execution Router 執行決策 (SDDM)
+                try:
+                    import pandas_ta as ta
+
+                    # 使用 df_hist_1d (日 K) 計算指標
+                    if not df_hist_1d.empty:
+                        df_hist_1d["SMA20"] = ta.sma(df_hist_1d["Close"], length=20)
+                        df_hist_1d["ATR14"] = ta.atr(
+                            df_hist_1d["High"],
+                            df_hist_1d["Low"],
+                            df_hist_1d["Close"],
+                            length=14,
+                        )
+                        df_hist_1d["RSI14"] = ta.rsi(df_hist_1d["Close"], length=14)
+
+                        last_row = df_hist_1d.iloc[-1]
+
+                        from market_analysis.sentiment_engine import SentimentEngine
+
+                        skew_res = await SentimentEngine.calculate_skew(sym)
+                        skew_val = skew_res.get("skew", 0.0) / 100.0
+
+                        uoa_detected = bool(
+                            res.get("uoa_list")
+                        )  # 這裡假設 analyze_symbol 已處理 uoa_list
+
+                        condition = MarketCondition(
+                            vix=vix_spot,
+                            skew_percent=skew_val,
+                            asset_price=last_row["Close"],
+                            ma20=last_row["SMA20"],
+                            atr_14=last_row["ATR14"],
+                            rsi_14=last_row["RSI14"],
+                            uoa_detected=uoa_detected,
+                        )
+                        res["execution_decision"] = (
+                            self.execution_router.evaluate_market(condition)
+                        )
+                except Exception as ex_router_e:
+                    logger.warning(f"ExecutionRouter 評估失敗 for {sym}: {ex_router_e}")
                     if not res.get("price") or res.get("price") <= 0:
                         res["price"] = (
                             df_hist_1d["Close"].iloc[-1]
