@@ -1,6 +1,10 @@
+import os
 import pytest
 import sqlite3
 from unittest.mock import AsyncMock, patch
+
+# Ensure OpenAI API key is set for tests to avoid collection errors
+os.environ["OPENAI_API_KEY"] = "sk-dummy-key-for-tests"
 
 # Use a shared in-memory database for testing
 TEST_DB_NAME = "file:testdb?mode=memory&cache=shared"
