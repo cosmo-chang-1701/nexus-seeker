@@ -8,6 +8,8 @@ on:
       - 'v*'
 
 env:
+  # Opt into Node.js 24 for all actions to resolve deprecation warnings
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
   # GHCR 映像檔基本路徑
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
