@@ -4,6 +4,7 @@ from discord import app_commands
 import asyncio
 import logging
 from datetime import datetime, timezone
+from typing import Dict, Any
 
 from services import market_data_service, news_service, reddit_service
 from market_analysis.sentiment_engine import SentimentEngine
@@ -37,7 +38,7 @@ class SymbolHubView(discord.ui.View):
         self.symbol = symbol.upper()
         self.user_id = user_id
         self.bot = bot
-        self.base_data = {}
+        self.base_data: Dict[str, Any] = {}
 
     async def _set_loading(self, interaction: discord.Interaction):
         """將所有按鈕設為禁用狀態以表示讀取中"""
@@ -395,7 +396,11 @@ class PulseHubView(discord.ui.View):
         await self._set_loading(interaction)
         embed = None
         try:
-            from services.calendar_service import calendar_service
+            from services.calendar_service import (
+                calendar_service,
+                EconomicEvent,
+                EarningsEvent,
+            )
 
             events = await calendar_service.get_portfolio_events(self.user_id)
             if not events:
@@ -411,17 +416,17 @@ class PulseHubView(discord.ui.View):
                     timestamp=datetime.now(),
                 )
                 for event in events[:15]:
-                    if event["type"] == "ECONOMIC":
-                        impact = "🔴" if event["impact"].lower() == "high" else "🟡"
+                    if isinstance(event, EconomicEvent):
+                        impact = "🔴" if event.impact.lower() == "high" else "🟡"
                         embed.add_field(
-                            name=f"{impact} {event['event']} ({event['country']})",
-                            value=f"⏰ TTE: `{event['tte_hours']}`h | `{event['time']}`",
+                            name=f"{impact} {event.event} ({event.country})",
+                            value=f"⏰ TTE: `{event.tte_hours}`h | `{event.time}`",
                             inline=False,
                         )
-                    else:
+                    elif isinstance(event, EarningsEvent):
                         embed.add_field(
-                            name=f"📊 {event['symbol']} 財報發布",
-                            value=f"⏰ TTE: `{event['tte_hours']}`h | `{event['date']}`",
+                            name=f"📊 {event.symbol} 財報發布",
+                            value=f"⏰ TTE: `{event.tte_hours}`h | `{event.date}`",
                             inline=False,
                         )
         except Exception as e:
@@ -664,7 +669,11 @@ class UnifiedTerminalCog(commands.Cog):
             if asyncio.iscoroutine(coro):
                 asyncio.create_task(coro)
 
-        from services.calendar_service import calendar_service
+        from services.calendar_service import (
+            calendar_service,
+            EconomicEvent,
+            EarningsEvent,
+        )
 
         events = await calendar_service.get_portfolio_events(interaction.user.id)
         embed = discord.Embed(
@@ -676,17 +685,17 @@ class UnifiedTerminalCog(commands.Cog):
             embed.description = "📭 未來 7 日內無重大事件。"
         else:
             for event in events[:10]:
-                if event["type"] == "ECONOMIC":
-                    impact = "🔴" if event["impact"].lower() == "high" else "🟡"
+                if isinstance(event, EconomicEvent):
+                    impact = "🔴" if event.impact.lower() == "high" else "🟡"
                     embed.add_field(
-                        name=f"{impact} {event['event']}",
-                        value=f"⏰ TTE: `{event['tte_hours']}`h",
+                        name=f"{impact} {event.event}",
+                        value=f"⏰ TTE: `{event.tte_hours}`h",
                         inline=False,
                     )
-                else:
+                elif isinstance(event, EarningsEvent):
                     embed.add_field(
-                        name=f"📊 {event['symbol']} 財報",
-                        value=f"⏰ TTE: `{event['tte_hours']}`h",
+                        name=f"📊 {event.symbol} 財報",
+                        value=f"⏰ TTE: `{event.tte_hours}`h",
                         inline=False,
                     )
 

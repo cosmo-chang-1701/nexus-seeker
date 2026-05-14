@@ -377,6 +377,9 @@ class PolymarketService:
         """
         try:
             asset_id = trade.get("asset_id")
+            if asset_id is None:
+                return
+
             price = float(trade.get("price", 0))
             size = float(trade.get("size", 0))
             usd_value = price * size
@@ -418,8 +421,9 @@ class PolymarketService:
             )
 
             # 3. 獲取市場背景資訊
+            condition_id = trade.get("condition_id")
             market_info = await self._get_market_info(
-                asset_id, trade.get("condition_id")
+                str(asset_id), str(condition_id) if condition_id else None
             )
             if not market_info:
                 logger.warning(f"⚠️ 即使嘗試隨選抓取，仍無法獲取市場資訊: {asset_id}")
@@ -579,7 +583,11 @@ class PolymarketService:
 
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                params = {"active": "true", "closed": "false", "limit": 500}
+                params: Dict[str, Any] = {
+                    "active": "true",
+                    "closed": "false",
+                    "limit": 500,
+                }
                 resp = await client.get(f"{GAMMA_API_BASE}/markets", params=params)
 
                 if resp.status_code == 200:
@@ -699,7 +707,7 @@ class PolymarketService:
 
     async def _get_market_info(
         self, asset_id: str, condition_id: str = None
-    ) -> Dict[str, Any]:
+    ) -> Optional[Dict[str, Any]]:
         """
         獲取市場背景資訊。優先從快取讀取，若無則嘗試從 Gamma API 抓取。
         支援使用 asset_id 或 condition_id 查詢。

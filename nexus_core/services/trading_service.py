@@ -3,7 +3,7 @@ import logging
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional, Tuple, Set
 
 import database
 import market_math
@@ -108,7 +108,7 @@ class TradingService:
         all_portfolios = database.get_all_portfolio()
         all_watchlists = database.get_all_watchlist()
 
-        user_symbols = {}
+        user_symbols: Dict[int, Dict[str, Set[str]]] = {}
         unique_symbols = set()
 
         for row in all_portfolios:
@@ -362,7 +362,7 @@ class TradingService:
 
         # 3. 準備使用者分發與「個人化 NRO 優化」
         user_alerts_results = {}
-        user_watchlists = {}
+        user_watchlists: Dict[int, List[Tuple[str, float, bool]]] = {}
         for uid, sym, stock_cost, use_llm in all_watchlists:
             user_watchlists.setdefault(uid, []).append((sym, stock_cost, use_llm))
 
@@ -407,7 +407,7 @@ class TradingService:
                         continue  # 此標的沒有任何觸發訊號
 
                     # === 1. 選擇權策略分支 ===
-                    if user_context.enable_option_alerts and is_option_valid:
+                    if user_context.option_alert_mode != 0 and is_option_valid:
                         opt_data = base_data.copy()
                         opt_data["alert_type"] = "OPTION"
 
@@ -423,9 +423,7 @@ class TradingService:
                         from services.calendar_service import calendar_service
 
                         earnings_info = await calendar_service.get_symbol_earnings(sym)
-                        tte_hours = (
-                            earnings_info["tte_hours"] if earnings_info else None
-                        )
+                        tte_hours = earnings_info.tte_hours if earnings_info else None
 
                         strategy = opt_data.get("strategy", "")
                         opt_res = optimize_position_risk(
@@ -686,7 +684,7 @@ class TradingService:
         if not all_portfolios:
             return []
 
-        user_ports = {}
+        user_ports: Dict[int, List[Any]] = {}
         for row in all_portfolios:
             uid = row[0]
             user_ports.setdefault(uid, []).append(row[2:])
@@ -694,6 +692,7 @@ class TradingService:
         results = []
         spy_quote = await market_data_service.get_quote("SPY")
         spy_price = spy_quote.get("c", 670.0) if spy_quote else 670.0
+        df_spy = await market_data_service.get_history_df("SPY", "60d")
 
         for uid, rows in user_ports.items():
             user_ctx = database.get_full_user_context(uid)
@@ -734,7 +733,8 @@ class TradingService:
 
                     from market_analysis.portfolio import calculate_beta
 
-                    beta = await calculate_beta(sym)
+                    df_stock = await market_data_service.get_history_df(sym, "60d")
+                    beta = calculate_beta(df_stock, df_spy)
 
                     # 精確局部 Delta 估算
                     denominator = qty * 100 * beta * (curr_price / spy_price)
@@ -771,7 +771,7 @@ class TradingService:
             logger.info("盤後報告略過：無任何持倉資料。")
             return {}
 
-        user_ports = {}
+        user_ports: Dict[int, List[Any]] = {}
         for row in all_portfolios:
             uid = row[0]
             user_ports.setdefault(uid, []).append(row[2:])

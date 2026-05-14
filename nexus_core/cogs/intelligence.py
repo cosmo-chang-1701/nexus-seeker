@@ -3,6 +3,7 @@ from discord.ext import commands
 from discord import app_commands
 import logging
 from datetime import datetime
+from typing import Any
 
 import database
 from services import reddit_service, news_service, market_data_service, llm_service
@@ -184,10 +185,12 @@ class IntelligenceCog(commands.Cog):
         }
 
         # 🚀 2. 插入這段：修正 Mock Data 的數學一致性
-        beta_val = 2.45  # LMND 的實際高 Beta
-        spy_p = mock_data["spy_price"]
-        price_ratio = mock_data["price"] / spy_p  # 標本價格比
-        raw_delta = mock_data["delta"]
+        from typing import cast
+
+        beta_val = float(cast(Any, mock_data["beta"])) if "beta" in mock_data else 2.45
+        spy_p = float(cast(Any, mock_data["spy_price"]))
+        price_ratio = float(cast(Any, mock_data["price"])) / spy_p  # 標本價格比
+        raw_delta = float(cast(Any, mock_data["delta"]))
 
         # 單口加權 Delta 公式：Delta * Beta * (Price / SPY_Price) * 100
         weighted_delta_val = round(raw_delta * beta_val * price_ratio * 100, 1)

@@ -4,6 +4,7 @@ import pandas as pd
 import logging
 import asyncio
 from datetime import datetime
+from typing import List, Dict
 from .greeks import calculate_greeks
 
 from .risk_engine import (
@@ -43,8 +44,8 @@ class PortfolioStatusOrchestrator:
         self.today = datetime.now().date()
         self.spy_price = 500.0
         self.spy_hist = pd.DataFrame()
-        self.stock_hist_map = {}
-        self.report_lines = []
+        self.stock_hist_map: Dict[str, pd.DataFrame] = {}
+        self.report_lines: List[str] = []
 
         self.total_beta_delta = 0.0
         self.total_theta = 0.0
@@ -296,19 +297,21 @@ async def refresh_portfolio_greeks(user_id: int = None, manager=None):
                 weight_factor = s_info["beta"] * (s_info["price"] / spy_price)
 
                 if asset.context_type == ContextType.TRADE:
-                    meta = TradeMetadata(**asset.metadata)
+                    trade_meta = TradeMetadata(**asset.metadata)
                     mid, iv_raw = await asyncio.to_thread(
                         get_option_chain_mid_iv,
                         asset.symbol,
-                        meta.expiry,
-                        meta.strike,
-                        meta.opt_type,
+                        trade_meta.expiry,
+                        trade_meta.strike,
+                        trade_meta.opt_type,
                     )
 
                     iv = iv_raw
                     if iv <= 0.001 and mid > 0:
                         try:
-                            exp_date = datetime.strptime(meta.expiry, "%Y-%m-%d").date()
+                            exp_date = datetime.strptime(
+                                trade_meta.expiry, "%Y-%m-%d"
+                            ).date()
                             t_years = (
                                 max((exp_date - datetime.now().date()).days, 1) / 365.0
                             )
@@ -317,10 +320,10 @@ async def refresh_portfolio_greeks(user_id: int = None, manager=None):
                             iv = implied_volatility(
                                 mid,
                                 s_info["price"],
-                                meta.strike,
+                                trade_meta.strike,
                                 t_years,
                                 RISK_FREE_RATE,
-                                meta.opt_type[0],
+                                trade_meta.opt_type[0],
                             )
                         except Exception:
                             iv = iv_raw
@@ -331,7 +334,7 @@ async def refresh_portfolio_greeks(user_id: int = None, manager=None):
                     t_years = (
                         max(
                             (
-                                datetime.strptime(meta.expiry, "%Y-%m-%d").date()
+                                datetime.strptime(trade_meta.expiry, "%Y-%m-%d").date()
                                 - datetime.now().date()
                             ).days,
                             1,
@@ -339,40 +342,48 @@ async def refresh_portfolio_greeks(user_id: int = None, manager=None):
                         / 365.0
                     )
                     greeks = calculate_greeks(
-                        meta.opt_type,
+                        trade_meta.opt_type,
                         s_info["price"],
-                        meta.strike,
+                        trade_meta.strike,
                         t_years,
                         iv,
                         s_info["div_yield"],
                     )
 
-                    meta.weighted_delta = round(
-                        greeks["delta"] * meta.quantity * 100 * weight_factor, 4
+                    trade_meta.weighted_delta = round(
+                        greeks["delta"] * trade_meta.quantity * 100 * weight_factor, 4
                     )
-                    meta.theta = round(greeks["theta"] * meta.quantity * 100, 4)
-                    meta.gamma = round(
-                        greeks["gamma"] * meta.quantity * 100 * (weight_factor**2), 6
+                    trade_meta.theta = round(
+                        greeks["theta"] * trade_meta.quantity * 100, 4
                     )
-                    meta.vega = round(
-                        greeks["vega"] * meta.quantity * 100 * weight_factor, 4
+                    trade_meta.gamma = round(
+                        greeks["gamma"]
+                        * trade_meta.quantity
+                        * 100
+                        * (weight_factor**2),
+                        6,
                     )
-                    meta.vanna = round(
-                        greeks["vanna"] * meta.quantity * 100 * weight_factor, 4
+                    trade_meta.vega = round(
+                        greeks["vega"] * trade_meta.quantity * 100 * weight_factor, 4
+                    )
+                    trade_meta.vanna = round(
+                        greeks["vanna"] * trade_meta.quantity * 100 * weight_factor, 4
                     )
 
                     cursor.execute(
                         "UPDATE assets SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                        (meta.model_dump_json(), asset.id),
+                        (trade_meta.model_dump_json(), asset.id),
                     )
 
                 elif asset.context_type == ContextType.HOLDING:
-                    meta = HoldingMetadata(**asset.metadata)
+                    holding_meta = HoldingMetadata(**asset.metadata)
                     # 現貨 Delta 為 1.0
-                    meta.weighted_delta = round(1.0 * meta.quantity * weight_factor, 4)
+                    holding_meta.weighted_delta = round(
+                        1.0 * holding_meta.quantity * weight_factor, 4
+                    )
                     cursor.execute(
                         "UPDATE assets SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                        (meta.model_dump_json(), asset.id),
+                        (holding_meta.model_dump_json(), asset.id),
                     )
 
             conn.commit()

@@ -22,7 +22,7 @@ class AssetManager:
     ) -> List[Asset]:
         """獲取指定使用者的資產清單"""
         query = "SELECT * FROM assets WHERE user_id = ?"
-        params = [user_id]
+        params: list[Any] = [user_id]
         if context_type:
             query += " AND context_type = ?"
             params.append(context_type.value)

@@ -39,7 +39,14 @@ def evaluate_rehedge_necessity(
         )
         if current_exposure_pct > u_ctx.risk_limit:
             rehedge_reason = f"🔥 總曝險 ({current_exposure_pct:.1f}%) 已超過個人風險上限 ({u_ctx.risk_limit}%)"
-            return True, rehedge_reason
+            needed_spy_qty = u_ctx.total_weighted_delta
+            return {
+                "action": "RE_HEDGE",
+                "symbol": result.get("symbol", "SPY"),
+                "reason": rehedge_reason,
+                "suggested_spy_qty": round(needed_spy_qty, 2),
+                "priority": "HIGH",
+            }
 
     if rehedge_reason:
         needed_spy_qty = u_ctx.total_weighted_delta

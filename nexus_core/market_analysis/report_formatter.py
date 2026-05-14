@@ -64,8 +64,6 @@ def format_macro_risk_report(
     lines.append(EMPTY_LINE)
 
     # Gamma
-    total_gamma = metrics["total_gamma"]
-    gamma_threshold = metrics["gamma_threshold"]
     if total_gamma < -gamma_threshold:
         gamma_status = "🚨 **脆性警告 (Negative Gamma)**"
         g_msg = "   👉 下行加速度風險極大，建議買入 OTM Put 注入正 Gamma。"
@@ -81,8 +79,6 @@ def format_macro_risk_report(
     lines.append(EMPTY_LINE)
 
     # Theta
-    theta_yield = metrics["theta_yield"]
-    total_theta = metrics["total_theta"]
     theta_status = "✅ 現金流健康"
     if theta_yield < 0.05:
         theta_status = "⚠️ **收益率過低** (資金利用率不足)"
@@ -96,8 +92,6 @@ def format_macro_risk_report(
     lines.append(EMPTY_LINE)
 
     # Heat
-    portfolio_heat = metrics["portfolio_heat"]
-    total_margin_used = metrics["total_margin_used"]
     heat_status = "✅ 水位正常"
     if portfolio_heat > 50.0:
         heat_status = "🆘 **強烈警告** (Heat > 50%，極易觸發保證金追繳)"
@@ -111,8 +105,6 @@ def format_macro_risk_report(
     lines.append(EMPTY_LINE)
 
     # Vega & Vanna
-    total_vega = metrics.get("total_vega", 0.0)
-    total_vanna = metrics.get("total_vanna", 0.0)
     lines.append(f"🔹 **組合淨 Vega:** `${total_vega:+.2f}`\n")
     lines.append(" └─ 指向 IV 升高時的盈虧變動。\n")
     lines.append(f"🔹 **組合淨 Vanna:** `${total_vanna:+.2f}`\n")

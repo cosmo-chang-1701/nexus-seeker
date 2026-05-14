@@ -5,7 +5,7 @@ import asyncio
 import time as _time
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
-from typing import Dict
+from typing import Dict, Any
 import logging
 
 import database
@@ -338,7 +338,7 @@ class SchedulerCog(commands.Cog):
     ):
         """共用盤後報告流程：支援排程與手動 dry-run。"""
         mode = "DRY-RUN" if dry_run else "SEND"
-        stats = {
+        stats: dict[str, Any] = {
             "users_total": 0,
             "users_queued": 0,
             "users_skipped": 0,

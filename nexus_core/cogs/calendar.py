@@ -5,7 +5,7 @@ import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from services.calendar_service import calendar_service
+from services.calendar_service import calendar_service, EconomicEvent, EarningsEvent
 from market_analysis.volatility_inspector import VolatilityInspector
 import database
 
@@ -62,13 +62,15 @@ class CalendarCog(commands.Cog):
         )
 
         for event in events[:20]:  # Limit to 20 for embed safety
-            if event.type == "ECONOMIC":
+            if isinstance(event, EconomicEvent):
                 impact_color = "🔴" if event.impact.lower() == "high" else "🟡"
                 field_name = f"{impact_color} {event.event} ({event.country})"
                 field_value = f"⏰ TTE: `{event.tte_hours}` 小時 | 時間: `{event.time}`"
-            else:
+            elif isinstance(event, EarningsEvent):
                 field_name = f"📊 {event.symbol} 財報發布"
                 field_value = f"⏰ TTE: `{event.tte_hours}` 小時 | 日期: `{event.date}`"
+            else:
+                continue
 
             embed.add_field(name=field_name, value=field_value, inline=False)
 

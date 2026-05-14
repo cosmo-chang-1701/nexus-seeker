@@ -135,7 +135,7 @@ class DDPInspector:
                 return None
 
             # Confidence Score Calculation
-            score = 60
+            score = 60.0
             score += min(20, (eps_growth - 0.15) * 100)
             score += 10 if rev_accel else 0
             score += 10 if curr_pe < (pe_mean * 0.8) else 0

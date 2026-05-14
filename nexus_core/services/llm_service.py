@@ -108,7 +108,10 @@ async def classify_uoa_intent(
             ],
             response_format=UOAIntentMapping,
         )
-        return response.choices[0].message.parsed.model_dump()
+        parsed = response.choices[0].message.parsed
+        if parsed is None:
+            raise ValueError("Parsed result is None")
+        return parsed.model_dump()
     except Exception as e:
         logger.error(f"UOA 分類失敗: {e}")
         return {
@@ -178,6 +181,8 @@ async def evaluate_trade_risk(
         )
 
         result = response.choices[0].message.parsed
+        if result is None:
+            raise ValueError("Parsed result is None")
         tags_str = " ".join([f"[{tag}]" for tag in result.tags])
         formatted_reasoning = f"🏷️ 標籤：{tags_str}\n📝 理由：{result.reasoning}"
         return {"decision": result.decision, "reasoning": formatted_reasoning}
@@ -223,7 +228,10 @@ async def generate_analyst_report(report_type: str, raw_data: dict) -> str:
             ],
             response_format=AnalystReport,
         )
-        return response.choices[0].message.parsed.report_content
+        result = response.choices[0].message.parsed
+        if result is None:
+            raise ValueError("Parsed result is None")
+        return result.report_content
     except Exception as e:
         logger.error(f"Failed to generate analyst report: {e}")
         return f"**{report_type}**\n--------------------------------------------------\n⚠️ LLM 生成失敗或伺服器離線: {str(e)}"
@@ -282,6 +290,9 @@ async def generate_polymarket_summary(
 
         # 使用 Markdown 優化輸出格式
         res = response.choices[0].message.parsed
+        if res is None:
+            return "⚠️ 無法解析 AI 結構化總結，請參考原始交易數據。"
+
         formatted_md = (
             f"> **背景摘要**\n> {res.event_background}\n\n"
             f"💡 **巨鯨動機分析**\n- {res.whale_logic}\n\n"

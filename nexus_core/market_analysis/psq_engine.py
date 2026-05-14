@@ -57,7 +57,9 @@ def analyze_psq(
         df = df.copy()
 
         # 1. Bollinger Bands (20, 2)
-        bb = ta.bbands(df["Close"], length=length, std=bb_mult)
+        from typing import Any, cast
+
+        bb = ta.bbands(df["Close"], length=length, std=cast(Any, bb_mult))
         if bb is None:
             return None
 

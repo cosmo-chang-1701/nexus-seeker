@@ -5,7 +5,7 @@ import numpy as np
 import yfinance as yf  # 僅保留用於 option_chain() / options
 from services import market_data_service
 from datetime import datetime
-from config import TARGET_DELTAS, get_vix_tier
+from config import TARGET_DELTAS, get_vix_tier, VixTier
 from .greeks import calculate_contract_delta, calculate_greeks
 from .data import get_next_earnings_date
 
@@ -433,7 +433,7 @@ def _validate_risk_and_liquidity(
     }
 
 
-def apply_vix_ladder(vix_spot: float) -> dict:
+def apply_vix_ladder(vix_spot: Optional[float]) -> VixTier:
     """根據 VIX 即時水位回傳對應的戰情階梯配置。
 
     回傳值為 tier dict，包含：
@@ -739,7 +739,7 @@ async def analyze_symbol(
         # Filter: SPX/NDX Alignment
         if is_bullish_strategy:
             spy_sma20 = await market_data_service.get_sma("SPY", 20)
-            if spy_sma20 and spy_price_val < spy_sma20:
+            if spy_sma20 and spy_price_val and spy_price_val < spy_sma20:
                 logger.info(f"[{symbol}] 剔除: SPY 跌破 20MA，大盤弱勢拒絕作多")
                 return None
         # -------------------------------------------------------------------------

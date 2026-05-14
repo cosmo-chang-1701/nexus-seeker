@@ -171,7 +171,7 @@ class HedgeMonitorService:
 
         # 4. LLM Narration
         narration = await self._generate_narration(
-            user_id, metrics, adj_delta, vix_level
+            user_id, metrics.model_dump(), adj_delta, vix_level
         )
 
         # 5. Polymarket Snapshot mechanism
@@ -251,7 +251,8 @@ class HedgeMonitorService:
                 ],
                 max_tokens=200,
             )
-            return response.choices[0].message.content.strip()
+            content = response.choices[0].message.content
+            return content.strip() if content else "市場波動劇烈，建議執行對沖。"
         except Exception:
             return "市場波動劇烈，組合 Delta 已偏離中性。建議執行對沖以鎖定風險。"
 

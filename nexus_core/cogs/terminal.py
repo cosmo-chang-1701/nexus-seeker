@@ -4,7 +4,7 @@ from discord import app_commands
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Dict, Any
 
 import database
 import market_math
@@ -418,7 +418,7 @@ class TerminalCog(commands.Cog):
 
         manager = AssetManager()
 
-        updates = {}
+        updates: Dict[str, Any] = {}
         if strike is not None:
             updates["strike"] = strike
         if expiry is not None:
@@ -479,7 +479,12 @@ class TerminalCog(commands.Cog):
         manager = AssetManager()
         assets = manager.get_assets(user_id, ContextType.HOLDING)
         stock_cost = next(
-            (a.metadata.get("avg_cost", 0.0) for a in assets if a.symbol == symbol), 0.0
+            (
+                float(a.metadata.get("avg_cost", 0.0))
+                for a in assets
+                if a.symbol == symbol
+            ),
+            0.0,
         )
 
         try:

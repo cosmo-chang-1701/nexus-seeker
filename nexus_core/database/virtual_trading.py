@@ -1,6 +1,7 @@
 import sqlite3
 import datetime
 import json
+from typing import List, Any
 import config
 
 # ==========================================
@@ -66,7 +67,7 @@ def get_virtual_trades(user_id: int = None, status: str = None):
     cursor = conn.cursor()
 
     query = "SELECT * FROM virtual_trades WHERE 1=1"
-    params = []
+    params: List[Any] = []
 
     if user_id is not None:
         query += " AND user_id = ?"
@@ -168,7 +169,7 @@ def get_open_virtual_trades(user_id: int = None):
     cursor = conn.cursor()
 
     query = "SELECT * FROM virtual_trades WHERE status = 'OPEN'"
-    params = ()
+    params: tuple[Any, ...] = ()
 
     if user_id:
         query += " AND user_id = ?"

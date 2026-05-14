@@ -2,7 +2,9 @@ import discord
 import logging
 from discord.ext import commands
 import asyncio
+from typing import Optional, Dict, Any, cast
 import database
+
 from database.notifications import (
     add_pending_notification,
     get_pending_notifications,
@@ -28,7 +30,9 @@ class NexusBot(commands.Bot):
         self, user_id: int, message: str = None, embed: discord.Embed = None
     ):
         """將私訊任務加入持久化佇列，並喚醒發送工人"""
-        embed_dict = embed.to_dict() if embed else None
+        embed_dict: Optional[Dict[str, Any]] = (
+            cast(Any, embed.to_dict()) if embed else None
+        )
         # 1. 存入資料庫 (持久化)
         await asyncio.to_thread(add_pending_notification, user_id, message, embed_dict)
         # 2. 喚醒發送工人

@@ -95,7 +95,7 @@ class VolatilityInspector:
         from services.calendar_service import calendar_service
 
         earnings_info = await calendar_service.get_symbol_earnings(symbol)
-        tte_hours = earnings_info["tte_hours"] if earnings_info else 9999.0
+        tte_hours = earnings_info.tte_hours if earnings_info else 9999.0
 
         is_high_risk_vol = False
         if ivr > 80.0 and tte_hours < 24.0:

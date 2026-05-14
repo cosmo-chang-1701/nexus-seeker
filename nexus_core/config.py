@@ -1,9 +1,23 @@
 import os
 import math
+from typing import List, TypedDict, Optional
 from dotenv import load_dotenv
 
 # 載入 .env 檔案
 load_dotenv()
+
+
+class VixTier(TypedDict):
+    name: str
+    vix_floor: float
+    vix_ceil: float
+    allow_signal: bool
+    sto_delta_cap: float
+    sizing_multiplier: float
+    kelly_fraction_override: Optional[float]
+    vtr_entry_allowed: bool
+    emoji: str
+    color_hex: int
 
 
 def get_env_or_secret(key, default=None):
@@ -45,7 +59,7 @@ TARGET_DELTAS = {"STO_PUT": -0.20, "STO_CALL": 0.20, "BTO_PUT": -0.50, "BTO_CALL
 # 根據 VIX 即時水位動態調整 STO Delta 上限、倉位大小與 VTR 建倉權限。
 # 每個 tier 由 [vix_floor, vix_ceil) 半開區間定義，清單需按 vix_floor 升序排列。
 # ---------------------------------------------------------------------------
-VIX_LADDER_CONFIG = [
+VIX_LADDER_CONFIG: List[VixTier] = [
     {
         "name": "休兵 (Dormant)",
         "vix_floor": 0.0,
@@ -131,7 +145,7 @@ VIX_QUANTILE_BOUNDS = {
 }
 
 
-def get_vix_tier(vix_spot: float) -> dict:
+def get_vix_tier(vix_spot: Optional[float]) -> VixTier:
     """根據 VIX 即時價格回傳對應的戰情階梯 tier 配置。
 
     若 vix_spot 為 None、NaN 或無效值，回傳 Ready 階梯作為安全預設值。
