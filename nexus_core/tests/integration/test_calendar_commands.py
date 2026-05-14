@@ -15,6 +15,7 @@ async def test_command_calendar(mock_interaction, db_conn):
         new_callable=AsyncMock,
     ) as mock_events:
         from services.calendar_service import EconomicEvent, EarningsEvent
+
         mock_events.return_value = [
             EconomicEvent(
                 type="ECONOMIC",

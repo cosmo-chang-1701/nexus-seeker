@@ -6,7 +6,9 @@ ZWS = "\u200b"  # 零寬空格
 EMPTY_LINE = f"{ZWS}\n"
 
 
-def format_macro_risk_report(metrics: Union[MacroRiskMetrics, Dict[str, Any]], spy_price: float) -> List[str]:
+def format_macro_risk_report(
+    metrics: Union[MacroRiskMetrics, Dict[str, Any]], spy_price: float
+) -> List[str]:
     """
     將宏觀風險指標格式化為文字報告。
     """

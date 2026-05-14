@@ -110,11 +110,11 @@ graph TD
     提供視覺化健康評級，包含 RAM 與快取消耗統計。
 
 ### 4. Robustness Engineering (系統魯棒性)
-*   **Pydantic Data Modeling**: 
+*   **Pydantic Data Modeling**:
     全面棄用鬆散的 Dict 傳遞，改用強型別 Pydantic 模型（如 `OptimizationResult`, `MacroRiskMetrics`）。確保數據在跨服務傳遞時的完整性與自動類型校準。
-*   **Static Type Enforcement (Mypy)**: 
+*   **Static Type Enforcement (Mypy)**:
     導入 Mypy 靜態類型檢查，在開發階段即攔截潛在的類型不匹配（如 `date` vs `datetime`）與屬性錯誤。
-*   **Contract-Aware Testing**: 
+*   **Contract-Aware Testing**:
     使用 `autospec=True` 強化單元測試 Mock 精度，確保測試邏輯始終與底層 SDK 調用契約同步。
 
 ---

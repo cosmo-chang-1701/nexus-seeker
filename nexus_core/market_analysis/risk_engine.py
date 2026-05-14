@@ -240,7 +240,11 @@ def optimize_position_risk(
             logger.info(
                 f"NRO Reject: VIX {macro_data.vix:.1f} is in Dormant tier. STO entry forbidden."
             )
-            return OptimizationResult(suggested_contracts=0, exposure_pct=0.0, warnings=["VIX Dormant: STO 禁用"])
+            return OptimizationResult(
+                suggested_contracts=0,
+                exposure_pct=0.0,
+                warnings=["VIX Dormant: STO 禁用"],
+            )
         # --------------------------------------------------------
 
         d_vix, d_oil, d_regime = get_macro_modifiers(macro_data, pcr, skew)
@@ -274,7 +278,9 @@ def optimize_position_risk(
             t = min((vix_spot - upper_10) / (vix_ceiling - upper_10), 1.0)
             kelly_scale = 1.0 + t * 0.5  # 從 1.0x 到 1.5x current_risk_limit
             current_risk_limit *= kelly_scale
-            warnings.append(f"動態 Kelly 縮放: VIX {vix_spot:.1f} (Scale: {kelly_scale:.2f}x)")
+            warnings.append(
+                f"動態 Kelly 縮放: VIX {vix_spot:.1f} (Scale: {kelly_scale:.2f}x)"
+            )
 
     # ------------------ Hidden Delta Haircut ------------------
     if vanna_weight > 1.0:
@@ -303,15 +309,17 @@ def optimize_position_risk(
         if proj_delta < -max_safe_shares
         else 0.0
     )
-    
+
     suggested_contracts = int(max(0, safe_qty))
-    exposure_pct = (abs(proj_delta) * spy_price / user_capital * 100) if user_capital > 0 else 0
+    exposure_pct = (
+        (abs(proj_delta) * spy_price / user_capital * 100) if user_capital > 0 else 0
+    )
 
     return OptimizationResult(
         suggested_contracts=suggested_contracts,
         exposure_pct=round(exposure_pct, 2),
         suggested_hedge_spy=round(float(suggested_hedge_spy), 2),
-        warnings=warnings
+        warnings=warnings,
     )
 
 
@@ -358,7 +366,9 @@ def get_macro_risk_metrics(
         exposure_pct=round(exposure_pct, 2),
         total_beta_delta=round(total_beta_delta, 2),
         gamma_threshold=round((user_capital / 10000.0) * 2.0, 2),
-        theta_yield=round((total_theta / user_capital) * 100 if user_capital > 0 else 0, 4),
+        theta_yield=round(
+            (total_theta / user_capital) * 100 if user_capital > 0 else 0, 4
+        ),
         portfolio_heat=round(portfolio_heat, 2),
         portfolio_heat_limit=round(heat_limit, 2),
         total_gamma=round(total_gamma, 4),

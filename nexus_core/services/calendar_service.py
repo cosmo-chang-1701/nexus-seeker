@@ -1,8 +1,8 @@
 import asyncio
 import logging
 from datetime import datetime, timedelta, date
-from typing import List, Dict, Any, Optional, Union
-from pydantic import BaseModel, Field, field_validator
+from typing import List, Optional, Union
+from pydantic import BaseModel, field_validator
 from services import market_data_service
 from services.market_data_service import BoundedCache
 
@@ -13,17 +13,21 @@ logger = logging.getLogger(__name__)
 # 📊 Pydantic Models for Type Safety
 # ==========================================
 
+
 class CalendarEvent(BaseModel):
     """Base model for all calendar events."""
+
     type: str
     tte_hours: float
-    
+
     @property
     def is_imminent(self) -> bool:
         return 0 < self.tte_hours <= 24
 
+
 class EconomicEvent(CalendarEvent):
     """Model for macro economic events (CPI, FOMC, etc)."""
+
     type: str = "ECONOMIC"
     event: str
     time: str  # ISO format string
@@ -40,8 +44,10 @@ class EconomicEvent(CalendarEvent):
             raise ValueError(f"Invalid timestamp format: {v}")
         return v
 
+
 class EarningsEvent(CalendarEvent):
     """Model for equity earnings events."""
+
     type: str = "EARNINGS"
     symbol: str
     date: str  # YYYY-MM-DD
@@ -141,6 +147,7 @@ class CalendarService:
 
         try:
             from market_analysis.data import get_next_earnings_date
+
             next_date = await get_next_earnings_date(symbol)
 
             if next_date:
@@ -166,7 +173,9 @@ class CalendarService:
                     self._earnings_cache[symbol] = earnings_info
                     return earnings_info
                 except Exception as ve:
-                    logger.warning(f"Skipping malformed earnings event for {symbol}: {ve}")
+                    logger.warning(
+                        f"Skipping malformed earnings event for {symbol}: {ve}"
+                    )
 
         except Exception as e:
             logger.error(f"Failed to fetch earnings for {symbol}: {e}")

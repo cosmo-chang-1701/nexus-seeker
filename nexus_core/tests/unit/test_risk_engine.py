@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 from market_analysis.risk_engine import (
     evaluate_ditm_defense,
     DITMDefenseAction,

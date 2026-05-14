@@ -590,12 +590,6 @@ class TerminalCog(commands.Cog):
             )
             safe_qty = opt_res.suggested_contracts
             hedge_spy = opt_res.suggested_hedge_spy
-
-            projected_total_delta = user_context.total_weighted_delta + (
-                result.get("weighted_delta", 0.0)
-                * (-1 if "STO" in result.get("strategy", "") else 1)
-                * safe_qty
-            )
             projected_exposure_pct = opt_res.exposure_pct
 
             result.update(

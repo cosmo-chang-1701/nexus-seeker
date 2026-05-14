@@ -65,14 +65,10 @@ class CalendarCog(commands.Cog):
             if event.type == "ECONOMIC":
                 impact_color = "🔴" if event.impact.lower() == "high" else "🟡"
                 field_name = f"{impact_color} {event.event} ({event.country})"
-                field_value = (
-                    f"⏰ TTE: `{event.tte_hours}` 小時 | 時間: `{event.time}`"
-                )
+                field_value = f"⏰ TTE: `{event.tte_hours}` 小時 | 時間: `{event.time}`"
             else:
                 field_name = f"📊 {event.symbol} 財報發布"
-                field_value = (
-                    f"⏰ TTE: `{event.tte_hours}` 小時 | 日期: `{event.date}`"
-                )
+                field_value = f"⏰ TTE: `{event.tte_hours}` 小時 | 日期: `{event.date}`"
 
             embed.add_field(name=field_name, value=field_value, inline=False)
 

@@ -41,7 +41,7 @@ def test_optimize_position_risk_very_near_event():
     res_1h = optimize_position_risk(
         0.0, 1.0, 100000.0, 500.0, 0.2, "BTO_CALL", event_tte_hours=1.0
     )
-    
+
     qty_71h = res_71h.suggested_contracts
     qty_1h = res_1h.suggested_contracts
 
