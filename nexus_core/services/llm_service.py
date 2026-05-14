@@ -168,14 +168,16 @@ async def evaluate_trade_risk(
     """
 
     try:
-        response = await client.responses.parse(
+        response = await client.beta.chat.completions.parse(
             model=LLM_MODEL_NAME,
-            instructions=system_prompt,
-            input=user_prompt,
-            text_format=RiskAssessment,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            response_format=RiskAssessment,
         )
 
-        result = response.output_parsed
+        result = response.choices[0].message.parsed
         tags_str = " ".join([f"[{tag}]" for tag in result.tags])
         formatted_reasoning = f"🏷️ 標籤：{tags_str}\n📝 理由：{result.reasoning}"
         return {"decision": result.decision, "reasoning": formatted_reasoning}
@@ -213,13 +215,15 @@ async def generate_analyst_report(report_type: str, raw_data: dict) -> str:
     user_prompt = f"Report Type: {report_type}\nRaw Data: {json.dumps(raw_data, ensure_ascii=False)}\nGenerate the report."
 
     try:
-        response = await client.responses.parse(
+        response = await client.beta.chat.completions.parse(
             model=LLM_MODEL_NAME,
-            instructions=system_prompt,
-            input=user_prompt,
-            text_format=AnalystReport,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            response_format=AnalystReport,
         )
-        return response.output_parsed.report_content
+        return response.choices[0].message.parsed.report_content
     except Exception as e:
         logger.error(f"Failed to generate analyst report: {e}")
         return f"**{report_type}**\n--------------------------------------------------\n⚠️ LLM 生成失敗或伺服器離線: {str(e)}"
@@ -267,15 +271,17 @@ async def generate_polymarket_summary(
     """
 
     try:
-        response = await client.responses.parse(
+        response = await client.beta.chat.completions.parse(
             model=LLM_MODEL_NAME,
-            instructions=system_prompt,
-            input=user_prompt,
-            text_format=PolymarketAnalysis,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            response_format=PolymarketAnalysis,
         )
 
         # 使用 Markdown 優化輸出格式
-        res = response.output_parsed
+        res = response.choices[0].message.parsed
         formatted_md = (
             f"> **背景摘要**\n> {res.event_background}\n\n"
             f"💡 **巨鯨動機分析**\n- {res.whale_logic}\n\n"

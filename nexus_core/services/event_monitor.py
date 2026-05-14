@@ -38,7 +38,7 @@ class EventMonitor:
 
                 # 2. Filter for events within the next 24-72 hours that haven't been alerted
                 # For simplicity, we alert if TTE < 48h
-                critical_events = [e for e in events if 0 < e["tte_hours"] < 48.0]
+                critical_events = [e for e in events if 0 < e.tte_hours < 48.0]
 
                 if critical_events:
                     await self._send_event_alert(uid, critical_events)
@@ -46,7 +46,7 @@ class EventMonitor:
             except Exception as e:
                 logger.error(f"Error checking events for user {uid}: {e}")
 
-    async def _send_event_alert(self, user_id: int, events: List[Dict[str, Any]]):
+    async def _send_event_alert(self, user_id: int, events: List[Any]):
         """
         Send a proactive hedging alert based on upcoming events.
         """
@@ -60,12 +60,12 @@ class EventMonitor:
         )
 
         for event in events:
-            if event["type"] == "ECONOMIC":
-                name = f"🔴 經濟數據: {event['event']}"
-                value = f"距離發布: `{event['tte_hours']}` 小時 \n**NRO 指令**: 增加 Vanna 權重，縮減賣方曝險。"
+            if event.type == "ECONOMIC":
+                name = f"🔴 經濟數據: {event.event}"
+                value = f"距離發布: `{event.tte_hours}` 小時 \n**NRO 指令**: 增加 Vanna 權重，縮減賣方曝險。"
             else:
-                name = f"📊 財報預警: {event['symbol']}"
-                value = f"距離發布: `{event['tte_hours']}` 小時 \n**NRO 指令**: 已啟動 IV Crush 防護機制。"
+                name = f"📊 財報預警: {event.symbol}"
+                value = f"距離發布: `{event.tte_hours}` 小時 \n**NRO 指令**: 已啟動 IV Crush 防護機制。"
 
             embed.add_field(name=name, value=value, inline=False)
 

@@ -189,10 +189,10 @@ class HedgeMonitorService:
         from market_analysis.attribution import AttributionEngine
 
         pre_hedge_greeks = {
-            "delta": round(metrics["total_beta_delta"], 2),
-            "vega": round(metrics["total_vega"], 2),
-            "vanna": round(metrics["total_vanna"], 2),
-            "gamma": round(metrics["total_gamma"], 4),
+            "delta": round(metrics.total_beta_delta, 2),
+            "vega": round(metrics.total_vega, 2),
+            "vanna": round(metrics.total_vanna, 2),
+            "gamma": round(metrics.total_gamma, 4),
         }
         # 將快照序列化存入 vtr_hedge_logs
         await AttributionEngine.log_vtr_hedge(
