@@ -213,6 +213,12 @@ async def generate_analyst_report(report_type: str, raw_data: dict) -> str:
     4. **🛡️ 風控管線評估與對沖決策**: Analyze macro_snapshot (VIX) and aggregate_risk_metrics (Delta, Heat).
     5. **🧬 系統狀態與 STHE 優化**: Brief status of the system based on sector_correlation and volatility.
 
+    ### Specific Instructions for "盤前財報與估值調整" (Pre-market Earnings):
+    If the report type contains "盤前財報與估值調整", you MUST structure the report with the following sections:
+    1. **🧬 財報影響力評估 (Impact Assessment)**: 根據即將發布財報的標的，分析其對所屬板塊的潛在波動傳導。
+    2. **🧪 估值調整與期望值 (Valuation & Expectation)**: 討論市場目前的預期是否過高或過低，以及隱含波動率 (IV) 的合理性。
+    3. **🎯 戰術建議 (Tactical Advice)**: 給出具體的交易策略建議 (例如：跨式、勒式或中性對沖)。
+
     Do not invent numbers, only use the provided raw_data.
     Keep the tone extremely cold, objective, and analytical.
     """

@@ -522,8 +522,11 @@ class AnalystAgent(commands.Cog):
             }
 
             report_type = f"{time_str} 盤前財報與估值調整"
-            report = await generate_analyst_report(report_type, raw_data)
-            return report
+            report_content = await generate_analyst_report(report_type, raw_data)
+
+            from cogs.embed_builder import create_earnings_report_embed
+
+            return create_earnings_report_embed(report_type, report_content, raw_data)
         except Exception as e:
             logger.error(f"run_premarket_earnings error: {e}")
             return f"**{time_str} 盤前財報與估值調整**\n--------------------------------------------------\n系統分析發生錯誤: {e}"

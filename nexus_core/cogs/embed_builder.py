@@ -668,6 +668,63 @@ def create_macro_scan_embed(macro_data: dict, alerts: list = None) -> discord.Em
     return embed
 
 
+def create_earnings_report_embed(
+    report_type: str, report_content: str, raw_data: dict
+) -> discord.Embed:
+    """
+    建立盤前財報與估值調整 Embed (繁體中文)，參照 Polymarket 巨鯨戰報風格。
+    """
+    embed = discord.Embed(
+        title=f"【 {report_type} 】",
+        color=discord.Color.blue(),
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    upcoming = raw_data.get("upcoming_earnings", {})
+    sentiment = raw_data.get("earnings_sentiment_scan", {})
+
+    content = []
+
+    if upcoming:
+        content.append("## 📅 即將發布財報標的")
+        content.append("---")
+        for sym, events in upcoming.items():
+            for event in events:
+                date = event.get("date", "未知日期")
+                period = event.get("period", "未知季度")
+
+                sym_sentiment = sentiment.get(sym, {})
+                news = sym_sentiment.get("news", "無相關資訊")
+                reddit = sym_sentiment.get("reddit_sentiment", "無相關資訊")
+
+                # 簡單截斷以防過長
+                if isinstance(news, str) and len(news) > 80:
+                    news = news[:77] + "..."
+                if isinstance(reddit, str) and len(reddit) > 80:
+                    reddit = reddit[:77] + "..."
+
+                content.append(f"**{sym}** ({period})")
+                content.append(f" ├─ 📅 財報日期: `{date}`")
+                content.append(f" ├─ 📰 新聞摘要: {news}")
+                content.append(f" └─ 💬 社群情緒: {reddit}")
+                content.append("")
+        content.append("---")
+
+    # 加入 LLM 生成的分析報告
+    content.append("**🤖 AI 分析報告**")
+    content.append(report_content)
+
+    # 組合內容並檢查長度 (Discord Embed Description 限制 4096)
+    full_description = "\n".join(content)
+    if len(full_description) > 4000:
+        full_description = full_description[:3997] + "..."
+
+    embed.description = full_description
+    embed.set_footer(text="Nexus Seeker | Earnings Intelligence Agent")
+
+    return embed
+
+
 def _add_sentiment_fields(embed, data):
     """添加期權情緒指標到掃描報告"""
     skew_val = data.get("skew")
