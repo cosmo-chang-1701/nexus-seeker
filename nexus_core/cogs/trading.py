@@ -31,7 +31,7 @@ class SchedulerCog(commands.Cog):
     僅負責「何時執行」與「如何展現結果」，核心業務邏輯委派給 TradingService。
     """
 
-    def __init__(self, bot):
+    def __init__(self, bot: Any) -> None:
         self.bot = bot
         self.trading_service = TradingService(bot)
 
@@ -45,7 +45,7 @@ class SchedulerCog(commands.Cog):
         self.weekly_vtr_report_task.start()
 
         # 狀態與設定 (由 Cog 維護，與 Discord 狀態相關)
-        self.signal_cooldowns = {}
+        self.signal_cooldowns: Dict[str, Any] = {}
         self.COOLDOWN_HOURS = 4
         self.EARNINGS_WARNING_DAYS = 14
 
@@ -54,7 +54,7 @@ class SchedulerCog(commands.Cog):
 
         logger.info("SchedulerCog loaded. Background tasks started.")
 
-    def cog_unload(self):
+    async def cog_unload(self) -> None:
         """卸載 Cog 時取消所有背景任務。"""
         self.pre_market_risk_monitor.cancel()
         self.dynamic_market_scanner.cancel()

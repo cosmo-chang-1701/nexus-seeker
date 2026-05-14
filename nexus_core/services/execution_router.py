@@ -37,6 +37,7 @@ class ExecutionRouter:
                 decision_type="SHIELD",
                 trigger_reason=f"市場波動率過高 (VIX: {condition.vix:.2f})，啟動防禦性網格策略 (SHIELD) 以對沖風險。",
                 grid_params=self._calculate_atr_grid(condition),
+                position_sizing=None,
                 exit_strategy=self._define_trailing_stop(condition, "SHIELD"),
             )
 
@@ -45,6 +46,7 @@ class ExecutionRouter:
                 decision_type="SHIELD",
                 trigger_reason=f"市場偏度異常 (Skew: {condition.skew_percent*100:.2f}%)，防範潛在黑天鵝事件。",
                 grid_params=self._calculate_atr_grid(condition),
+                position_sizing=None,
                 exit_strategy=self._define_trailing_stop(condition, "SHIELD"),
             )
 
@@ -53,6 +55,7 @@ class ExecutionRouter:
                 decision_type="SHIELD",
                 trigger_reason=f"價格嚴重偏離 20MA (乖離率: {deviation*100:.2f}%)，進入震盪修復網格模式。",
                 grid_params=self._calculate_atr_grid(condition),
+                position_sizing=None,
                 exit_strategy=self._define_trailing_stop(condition, "SHIELD"),
             )
 
@@ -64,6 +67,7 @@ class ExecutionRouter:
             return ExecutionDecision(
                 decision_type="SPEAR",
                 trigger_reason="偵測到大宗異常期權流 (UOA)，市場情緒支撐攻擊性期權策略 (SPEAR)。",
+                grid_params=None,
                 position_sizing=self._calculate_kelly_size(condition),
                 exit_strategy=self._define_trailing_stop(condition, "SPEAR"),
             )
@@ -72,6 +76,9 @@ class ExecutionRouter:
         return ExecutionDecision(
             decision_type="STANDBY",
             trigger_reason="當前市場指標處於平衡區間，無明顯技術面或情緒面觸發信號。",
+            grid_params=None,
+            position_sizing=None,
+            exit_strategy=None,
         )
 
     def _calculate_atr_grid(self, condition: MarketCondition) -> GridParameters:
