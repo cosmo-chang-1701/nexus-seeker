@@ -199,6 +199,7 @@ class CalendarService:
         results = await asyncio.gather(events_task, *earnings_tasks)
 
         from typing import cast
+
         economic_events = cast(List[EconomicEvent], results[0])
         earnings_events = [cast(EarningsEvent, e) for e in results[1:] if e is not None]
 
