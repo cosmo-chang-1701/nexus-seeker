@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock, patch
-from services.calendar_service import CalendarService
+from services.calendar_service import CalendarService, EconomicEvent, EarningsEvent
 from datetime import datetime, timedelta
 
 
@@ -10,7 +10,7 @@ async def test_get_high_impact_events():
 
     # Mock market_data_service.get_economic_calendar
     with patch(
-        "services.market_data_service.get_economic_calendar", new_callable=AsyncMock
+        "services.market_data_service.get_economic_calendar", autospec=True
     ) as mock_cal:
         mock_cal.return_value = [
             {
@@ -29,8 +29,9 @@ async def test_get_high_impact_events():
 
         events = await service.get_high_impact_events(days=7)
         assert len(events) == 1
-        assert events[0]["event"] == "CPI Report"
-        assert events[0]["impact"] == "high"
+        assert isinstance(events[0], EconomicEvent)
+        assert events[0].event == "CPI Report"
+        assert events[0].impact == "high"
 
 
 @pytest.mark.asyncio
@@ -40,9 +41,12 @@ async def test_get_symbol_earnings():
     with patch(
         "market_analysis.data.get_next_earnings_date", new_callable=AsyncMock
     ) as mock_date:
+        # get_next_earnings_date returns a date object
         next_dt = datetime.now() + timedelta(days=2)
-        mock_date.return_value = next_dt
+        mock_date.return_value = next_dt.date()
 
         info = await service.get_symbol_earnings("AAPL")
-        assert info["symbol"] == "AAPL"
-        assert 47.0 < info["tte_hours"] < 49.0
+        assert isinstance(info, EarningsEvent)
+        assert info.symbol == "AAPL"
+        # tte_hours depends on current time, but should be around 2 days (48h) +/- 12h
+        assert 30.0 < info.tte_hours < 60.0

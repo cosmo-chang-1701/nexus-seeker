@@ -59,9 +59,9 @@ def mock_interaction():
 @pytest.fixture
 def mock_market_data():
     with patch(
-        "services.market_data_service.get_quote", new_callable=AsyncMock
+        "services.market_data_service.get_quote", autospec=True
     ) as mock_price, patch(
-        "services.market_data_service.get_history_df", new_callable=AsyncMock
+        "services.market_data_service.get_history_df", autospec=True
     ) as mock_hist:
         mock_price.return_value = {"c": 150.0}
         yield mock_price, mock_hist
@@ -70,7 +70,7 @@ def mock_market_data():
 @pytest.fixture
 def mock_llm():
     with patch(
-        "services.llm_service.generate_market_report", new_callable=AsyncMock
+        "services.llm_service.generate_market_report", autospec=True
     ) as mock_report:
         mock_report.return_value = "Mocked LLM Report"
         yield mock_report

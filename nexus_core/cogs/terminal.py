@@ -575,7 +575,7 @@ class TerminalCog(commands.Cog):
             )
 
             user_context = database.get_full_user_context(user_id)
-            safe_qty, hedge_spy = optimize_position_risk(
+            opt_res = optimize_position_risk(
                 current_delta=user_context.total_weighted_delta,
                 unit_weighted_delta=result.get("weighted_delta", 0.0),
                 user_capital=user_context.capital,
@@ -588,17 +588,15 @@ class TerminalCog(commands.Cog):
                 pcr=pcr_val,
                 skew=skew_val,
             )
+            safe_qty = opt_res.suggested_contracts
+            hedge_spy = opt_res.suggested_hedge_spy
 
             projected_total_delta = user_context.total_weighted_delta + (
                 result.get("weighted_delta", 0.0)
                 * (-1 if "STO" in result.get("strategy", "") else 1)
                 * safe_qty
             )
-            projected_exposure_pct = (
-                (projected_total_delta * spy_price / user_context.capital) * 100
-                if user_context.capital > 0
-                else 0
-            )
+            projected_exposure_pct = opt_res.exposure_pct
 
             result.update(
                 {

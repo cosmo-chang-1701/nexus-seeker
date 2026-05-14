@@ -428,7 +428,7 @@ class TradingService:
                         )
 
                         strategy = opt_data.get("strategy", "")
-                        safe_qty, hedge_spy = optimize_position_risk(
+                        opt_res = optimize_position_risk(
                             current_delta=current_total_delta,
                             unit_weighted_delta=opt_data.get("weighted_delta", 0.0),
                             user_capital=user_capital,
@@ -442,6 +442,11 @@ class TradingService:
                             skew=skew_val,
                             event_tte_hours=tte_hours,
                         )
+                        safe_qty = opt_res.suggested_contracts
+                        hedge_spy = opt_res.suggested_hedge_spy
+
+                        if opt_res.warnings:
+                            opt_data["nro_warnings"] = opt_res.warnings
 
                         # 模擬成交後的衝擊
                         side_multiplier = -1 if "STO" in strategy else 1

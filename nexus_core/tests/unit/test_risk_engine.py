@@ -9,6 +9,7 @@ from market_analysis.risk_engine import (
     get_macro_modifiers,
     optimize_position_risk,
 )
+from models.quant import OptimizationResult, MacroRiskMetrics
 
 
 def test_evaluate_ditm_defense():
@@ -52,11 +53,12 @@ def test_get_macro_risk_metrics():
         total_vanna=20.0,
     )
 
-    assert metrics["net_exposure_dollars"] == 10.0 * 500.0
-    assert metrics["exposure_pct"] == (5000.0 / 100000.0) * 100
-    assert metrics["vix_tier_name"] == "摩拳擦掌 (Ready)"
-    assert metrics["portfolio_heat"] == (5000.0 / 100000.0) * 100
-    assert metrics["total_vanna"] == 20.0
+    assert isinstance(metrics, MacroRiskMetrics)
+    assert metrics.net_exposure_dollars == 10.0 * 500.0
+    assert metrics.exposure_pct == (5000.0 / 100000.0) * 100
+    assert metrics.vix_tier_name == "摩拳擦掌 (Ready)"
+    assert metrics.portfolio_heat == (5000.0 / 100000.0) * 100
+    assert metrics.total_vanna == 20.0
 
 
 def test_get_macro_modifiers_all_cases():
@@ -124,7 +126,7 @@ def test_get_macro_modifiers_all_cases():
 def test_optimize_position_risk_all_branches():
     # BTO strategy with market heat (low PCR)
     macro = MacroContext(vix=20.0, oil_price=70.0, vix_change=0.0, vts_ratio=0.9)
-    qty, _ = optimize_position_risk(
+    res = optimize_position_risk(
         current_delta=0.0,
         unit_weighted_delta=1.0,
         user_capital=100000.0,
@@ -134,23 +136,24 @@ def test_optimize_position_risk_all_branches():
         macro_data=macro,
         pcr=0.5,  # Low PCR
     )
-    assert qty > 0
+    assert isinstance(res, OptimizationResult)
+    assert res.suggested_contracts > 0
 
     # High tail risk
-    qty_normal, _ = optimize_position_risk(
+    res_normal = optimize_position_risk(
         0.0, 1.0, 100000.0, 500.0, 0.2, "BTO_CALL", macro
     )
-    qty_tail, _ = optimize_position_risk(
+    res_tail = optimize_position_risk(
         0.0, 1.0, 100000.0, 500.0, 0.2, "BTO_CALL", macro, is_high_tail_risk=True
     )
-    assert qty_tail < qty_normal
+    assert res_tail.suggested_contracts < res_normal.suggested_contracts
 
     # All-in mode (VIX > 35)
     macro_extreme = MacroContext(vix=36.0, oil_price=70.0, vix_change=0.0)
-    qty_extreme, _ = optimize_position_risk(
+    res_extreme = optimize_position_risk(
         0.0, 1.0, 100000.0, 500.0, 0.2, "BTO_CALL", macro_extreme, vix_spot=36.0
     )
-    assert qty_extreme > 0
+    assert res_extreme.suggested_contracts > 0
 
 
 def test_evaluate_defense_status():
@@ -169,6 +172,9 @@ def test_evaluate_defense_status():
 
     # Hold
     assert "繼續持有" in evaluate_defense_status(1, "call", 0.1, 0.5, 30)
+
+
+def test_calculate_beta():
     import pandas as pd
     import numpy as np
 
@@ -226,7 +232,7 @@ async def test_analyze_sector_correlation():
     )
 
     with patch(
-        "services.market_data_service.get_history_df", new_callable=AsyncMock
+        "services.market_data_service.get_history_df", autospec=True
     ) as mock_hist:
         mock_hist.side_effect = [df1, df2]
 

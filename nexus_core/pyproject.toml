@@ -1,31 +1,13 @@
-[build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = true
+ignore_missing_imports = true
 
-[project]
-name = "nexus-core"
-version = "1.4.2"
-description = "Nexus Seeker Core Bot and Market Analysis"
-requires-python = ">=3.10"
-dependencies = [
-    "discord.py>=2.3.0",
-    "yfinance>=0.2.31",
-    "pandas>=2.0.0",
-    "pandas-ta>=0.3.14",
-    "py_vollib>=1.0.1",
-    "pandas_market_calendars>=4.3.1",
-    "python-dotenv>=1.0.0",
-    "tzdata>=2023.3",
-    "numpy>=1.24.0",
-    "pydantic>=2.12.5",
-    "openai>=2.21.0",
-    "httpx",
-    "finnhub-python>=2.4.20",
-    "aiolimiter>=1.1.0",
-    "websockets>=12.0",
-    "psutil>=5.9.0",
-    "pytest>=8.0.0",
-    "pytest-asyncio>=0.23.0",
-    "pytest-mock>=3.12.0",
-    "pytest-cov>=4.1.0",
-]
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]

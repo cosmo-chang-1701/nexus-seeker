@@ -427,7 +427,7 @@ async def get_economic_calendar(from_date: str, to_date: str) -> List[Dict[str, 
         client = _get_client()
         async with _limiter:
             data = await asyncio.to_thread(
-                client.economic_calendar, _from=from_date, to=to_date
+                client.calendar_economic, _from=from_date, to=to_date
             )
         return data.get("economicCalendar", []) if data else []
     except Exception as e:

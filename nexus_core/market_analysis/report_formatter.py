@@ -1,19 +1,42 @@
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Union
+from models.quant import MacroRiskMetrics
 
 # Discord/Telegram 排版優化常數
 ZWS = "\u200b"  # 零寬空格
 EMPTY_LINE = f"{ZWS}\n"
 
 
-def format_macro_risk_report(metrics: Dict[str, Any], spy_price: float) -> List[str]:
+def format_macro_risk_report(metrics: Union[MacroRiskMetrics, Dict[str, Any]], spy_price: float) -> List[str]:
     """
     將宏觀風險指標格式化為文字報告。
     """
     lines = ["🌐 **【宏觀風險與資金水位報告】**", EMPTY_LINE]
 
-    exposure_pct = metrics["exposure_pct"]
-    net_exposure_dollars = metrics["net_exposure_dollars"]
-    total_beta_delta = metrics["total_beta_delta"]
+    # 支援 Pydantic 模型與傳統 Dict
+    if isinstance(metrics, MacroRiskMetrics):
+        exposure_pct = metrics.exposure_pct
+        net_exposure_dollars = metrics.net_exposure_dollars
+        total_beta_delta = metrics.total_beta_delta
+        total_gamma = metrics.total_gamma
+        gamma_threshold = metrics.gamma_threshold
+        theta_yield = metrics.theta_yield
+        total_theta = metrics.total_theta
+        portfolio_heat = metrics.portfolio_heat
+        total_margin_used = metrics.total_margin_used
+        total_vega = metrics.total_vega
+        total_vanna = metrics.total_vanna
+    else:
+        exposure_pct = metrics["exposure_pct"]
+        net_exposure_dollars = metrics["net_exposure_dollars"]
+        total_beta_delta = metrics["total_beta_delta"]
+        total_gamma = metrics["total_gamma"]
+        gamma_threshold = metrics["gamma_threshold"]
+        theta_yield = metrics["theta_yield"]
+        total_theta = metrics["total_theta"]
+        portfolio_heat = metrics["portfolio_heat"]
+        total_margin_used = metrics["total_margin_used"]
+        total_vega = metrics.get("total_vega", 0.0)
+        total_vanna = metrics.get("total_vanna", 0.0)
 
     DELTA_THRESHOLD_PCT = 15.0
 

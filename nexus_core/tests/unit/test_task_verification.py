@@ -13,6 +13,7 @@ from market_analysis.risk_engine import (
     calculate_hedge_instruction,
 )
 from services.memory_manager import MemoryManager
+from models.quant import MacroRiskMetrics
 
 
 def test_task1_spy_delta_calculation():
@@ -31,7 +32,7 @@ def test_task1_spy_delta_calculation():
 
 
 def test_task1_nro_telemetry():
-    """驗證 Task 1: NRO Telemetry 增強欄位"""
+    """驗證 Task 1: NRO Telemetry 增強欄位 (現在已整合到 MacroRiskMetrics)"""
     metrics = get_macro_risk_metrics(
         total_beta_delta=166.94,
         total_theta=50.0,
@@ -44,12 +45,11 @@ def test_task1_nro_telemetry():
         total_vanna=20.0,
     )
 
-    assert "nro_telemetry" in metrics
-    telemetry = metrics["nro_telemetry"]
-    assert telemetry["raw_delta"] == 166.94
-    assert telemetry["spy_price"] == 500.0
-    assert telemetry["capital"] == 100000.0
-    assert "vix_scale_multiplier" in telemetry
+    assert isinstance(metrics, MacroRiskMetrics)
+    assert metrics.total_beta_delta == 166.94
+    assert metrics.total_theta == 50.0
+    assert metrics.total_margin_used == 5000.0
+    assert metrics.vix_scale_multiplier == 1.0
 
 
 @pytest.mark.asyncio
@@ -60,10 +60,10 @@ async def test_task2_warmup_idempotency():
 
     # Mock dependencies
     with patch("database.watchlist.get_all_watchlist") as mock_list, patch(
-        "services.market_data_service.get_quote", new_callable=AsyncMock
+        "services.market_data_service.get_quote", autospec=True
     ) as mock_quote, patch(
-        "services.market_data_service.get_sma", new_callable=AsyncMock
-    ), patch("services.market_data_service.get_ema", new_callable=AsyncMock):
+        "services.market_data_service.get_sma", autospec=True
+    ), patch("services.market_data_service.get_ema", autospec=True):
         mock_list.return_value = [("user", "AAPL"), ("user", "MSFT")]
 
         # 第一次執行

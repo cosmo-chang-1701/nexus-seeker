@@ -25,6 +25,7 @@
 | **驗證與品質** | `pre-commit` (Ruff, Docker-test, Semgrep), Zero-Downtime Swarm CD |
 | **數據源 (Feeds)** | Finnhub (Real-time), yfinance (Options), Polymarket (WS L2), Reddit (Edge) |
 | **持久化層** | SQLite 搭配自動化 Migration Engine (v035+) |
+| **強健性工程** | Pydantic v2 數據建模 + Mypy 靜態類型檢查 (v1.4.4+) |
 | **智能層** | Structured LLM Output (Pydantic Schema) 具備 Memory Safety Gates |
 | **訊息傳遞** | Discord.py (持久化非同步訊息佇列，支援多租戶隔離) |
 
@@ -107,6 +108,14 @@ graph TD
     針對低配 VPS 引入 **BoundedCache (max 500)** 與 **Memory Safety Gates**。當系統 RAM > 85% 時，自動延後非核心 AI 分析，優先確保 NRO 核心風險計算與警報發送。
 *   **System Health & Disk Diagnostics (硬碟與系統診斷)**：
     提供視覺化健康評級，包含 RAM 與快取消耗統計。
+
+### 4. Robustness Engineering (系統魯棒性)
+*   **Pydantic Data Modeling**: 
+    全面棄用鬆散的 Dict 傳遞，改用強型別 Pydantic 模型（如 `OptimizationResult`, `MacroRiskMetrics`）。確保數據在跨服務傳遞時的完整性與自動類型校準。
+*   **Static Type Enforcement (Mypy)**: 
+    導入 Mypy 靜態類型檢查，在開發階段即攔截潛在的類型不匹配（如 `date` vs `datetime`）與屬性錯誤。
+*   **Contract-Aware Testing**: 
+    使用 `autospec=True` 強化單元測試 Mock 精度，確保測試邏輯始終與底層 SDK 調用契約同步。
 
 ---
 

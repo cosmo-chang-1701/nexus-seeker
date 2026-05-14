@@ -6,6 +6,8 @@ Nexus Seeker is a multi-tenant **Options Quant Risk-Control & Trading Operations
 ### Key Technologies
 - **Language:** Python 3.12
 - **Frameworks:** `discord.py` (Discord Bot), `FastAPI` (Edge Scraper API)
+- **Data Validation:** `Pydantic v2` (Structured Models & Validation)
+- **Static Analysis:** `Mypy` (Type Checking)
 - **Market Data:** `finnhub-python`, `yfinance`, `pandas-ta`, `py_vollib` (Greeks/Pricing)
 - **Quant Math:** `numpy`, `pandas`, `scipy`
 - **AI/LLM:** OpenAI-compatible API with `pydantic` structured outputs and memory safety gates
@@ -18,6 +20,7 @@ Nexus Seeker is a multi-tenant **Options Quant Risk-Control & Trading Operations
 ## Architecture
 The system is divided into two main services:
 1.  **`nexus_core`**: The central Discord Bot. Handles user commands, portfolio management, risk engine calculations, and autonomous market monitoring.
+    *   **Robustness Refactoring (v1.4.4+):** Implementation of the `models/quant.py` shared schema. Refactored `RiskEngine`, `CalendarService`, and `TradingService` to use strongly-typed models, eliminating runtime type conflicts.
 2.  **`nexus_edge_scraper`**: A specialized service (intended to run locally or via tunnel) that uses Playwright to scrape Reddit sentiment and consensus scores without triggering bot detection.
 
 ### Core Modules (`nexus_core`)

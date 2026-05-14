@@ -7,6 +7,7 @@ from services import market_data_service
 from enum import Enum
 from typing import Dict, List, Tuple, Any, Optional
 from config import get_vix_tier, VIX_QUANTILE_BOUNDS
+from models.quant import OptimizationResult, MacroRiskMetrics
 
 logger = logging.getLogger(__name__)
 
@@ -209,7 +210,7 @@ def optimize_position_risk(
     pcr: float = 0.8,
     skew: float = 0.0,
     event_tte_hours: Optional[float] = None,
-) -> Tuple[int, float]:
+) -> OptimizationResult:
     """NRO 風險優化器：根據宏觀環境與日曆事件計算安全持倉口數。
 
     Args:
@@ -219,9 +220,10 @@ def optimize_position_risk(
         event_tte_hours: 距離重大事件 (如財報) 的剩餘小時數。
     """
     if spy_price <= 0:
-        return 0, 0.0
+        return OptimizationResult(suggested_contracts=0, exposure_pct=0.0)
 
     spy_iv, current_risk_limit = 0.16, risk_limit
+    warnings = []
 
     # ------------------ Calendar-Aware Vanna Weighting ------------------
     vanna_weight = 1.0
@@ -238,7 +240,7 @@ def optimize_position_risk(
             logger.info(
                 f"NRO Reject: VIX {macro_data.vix:.1f} is in Dormant tier. STO entry forbidden."
             )
-            return 0, 0.0
+            return OptimizationResult(suggested_contracts=0, exposure_pct=0.0, warnings=["VIX Dormant: STO 禁用"])
         # --------------------------------------------------------
 
         d_vix, d_oil, d_regime = get_macro_modifiers(macro_data, pcr, skew)
@@ -247,22 +249,23 @@ def optimize_position_risk(
         if pcr < 0.6 and "BTO" in strategy:
             # 市場過熱，警告但不一定硬拒，此處微幅縮減買方額度
             d_regime *= 0.8
+            warnings.append("PCR 低位: 市場過熱，買方倉位縮減")
 
         # All-in 模式 (VIX > 35): 繞過宏觀修正因子的衰減效應，
         # 直接使用 risk_limit * d_vix 以最大化風險額度。
         if vix_spot is not None and vix_spot >= 35.0:
             current_risk_limit = risk_limit * d_vix  # d_vix=2.0 at this tier
+            warnings.append("VIX Extreme: All-in 模式啟動")
         else:
             current_risk_limit = risk_limit * d_vix * d_oil * d_regime
         spy_iv = macro_data.vix / 100.0
 
     if is_high_tail_risk:
         current_risk_limit *= 0.5  # Tail risk haircut
+        warnings.append("尾端風險警告: Gamma 脆性高")
 
     # 動態 Kelly 縮放：VIX 超過 upper_10 (29.5) 時，
     # 從 1/4 Kelly 向 1/2 Kelly 線性插值。
-    # 此值透過 strategy 層的 kelly_fraction_override 機制獨立於此處運作，
-    # 這裡僅調整 current_risk_limit 上的 Kelly-adjacent 縮放。
     if vix_spot is not None:
         upper_10 = VIX_QUANTILE_BOUNDS.get("upper_10", 29.5)
         if vix_spot > upper_10:
@@ -271,6 +274,7 @@ def optimize_position_risk(
             t = min((vix_spot - upper_10) / (vix_ceiling - upper_10), 1.0)
             kelly_scale = 1.0 + t * 0.5  # 從 1.0x 到 1.5x current_risk_limit
             current_risk_limit *= kelly_scale
+            warnings.append(f"動態 Kelly 縮放: VIX {vix_spot:.1f} (Scale: {kelly_scale:.2f}x)")
 
     # ------------------ Hidden Delta Haircut ------------------
     if vanna_weight > 1.0:
@@ -299,7 +303,16 @@ def optimize_position_risk(
         if proj_delta < -max_safe_shares
         else 0.0
     )
-    return max(0, safe_qty), round(float(suggested_hedge_spy), 2)
+    
+    suggested_contracts = int(max(0, safe_qty))
+    exposure_pct = (abs(proj_delta) * spy_price / user_capital * 100) if user_capital > 0 else 0
+
+    return OptimizationResult(
+        suggested_contracts=suggested_contracts,
+        exposure_pct=round(exposure_pct, 2),
+        suggested_hedge_spy=round(float(suggested_hedge_spy), 2),
+        warnings=warnings
+    )
 
 
 def get_macro_risk_metrics(
@@ -312,7 +325,7 @@ def get_macro_risk_metrics(
     vix_spot: Optional[float] = None,
     total_vega: float = 0.0,
     total_vanna: float = 0.0,
-) -> Dict[str, Any]:
+) -> MacroRiskMetrics:
     """計算組合級宏觀風險指標。
 
     Args:
@@ -340,27 +353,22 @@ def get_macro_risk_metrics(
     # 提供計算細節以便稽核對沖指令
     vix_scale_multiplier = vix_tier.get("sizing_multiplier", 1.0) if vix_tier else 1.0
 
-    return {
-        "net_exposure_dollars": net_exposure_dollars,
-        "exposure_pct": exposure_pct,
-        "total_beta_delta": total_beta_delta,
-        "gamma_threshold": (user_capital / 10000.0) * 2.0,
-        "theta_yield": (total_theta / user_capital) * 100 if user_capital > 0 else 0,
-        "portfolio_heat": portfolio_heat,
-        "portfolio_heat_limit": heat_limit,
-        "total_gamma": total_gamma,
-        "total_theta": total_theta,
-        "total_vega": total_vega,
-        "total_vanna": total_vanna,
-        "total_margin_used": total_margin_used,
-        "vix_tier_name": vix_tier_name,
-        "nro_telemetry": {
-            "raw_delta": round(total_beta_delta, 2),
-            "vix_scale_multiplier": round(vix_scale_multiplier, 2),
-            "spy_price": round(spy_price, 2),
-            "capital": round(user_capital, 2),
-        },
-    }
+    return MacroRiskMetrics(
+        net_exposure_dollars=round(net_exposure_dollars, 2),
+        exposure_pct=round(exposure_pct, 2),
+        total_beta_delta=round(total_beta_delta, 2),
+        gamma_threshold=round((user_capital / 10000.0) * 2.0, 2),
+        theta_yield=round((total_theta / user_capital) * 100 if user_capital > 0 else 0, 4),
+        portfolio_heat=round(portfolio_heat, 2),
+        portfolio_heat_limit=round(heat_limit, 2),
+        total_gamma=round(total_gamma, 4),
+        total_theta=round(total_theta, 2),
+        total_margin_used=round(total_margin_used, 2),
+        total_vega=round(total_vega, 2),
+        total_vanna=round(total_vanna, 2),
+        vix_tier_name=vix_tier_name,
+        vix_scale_multiplier=vix_scale_multiplier,
+    )
 
 
 def calculate_vega_adjusted_delta(

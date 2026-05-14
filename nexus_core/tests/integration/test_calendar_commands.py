@@ -14,21 +14,22 @@ async def test_command_calendar(mock_interaction, db_conn):
         "services.calendar_service.calendar_service.get_portfolio_events",
         new_callable=AsyncMock,
     ) as mock_events:
+        from services.calendar_service import EconomicEvent, EarningsEvent
         mock_events.return_value = [
-            {
-                "type": "ECONOMIC",
-                "event": "FOMC",
-                "impact": "high",
-                "country": "US",
-                "tte_hours": 24.0,
-                "time": "2026-05-15",
-            },
-            {
-                "type": "EARNINGS",
-                "symbol": "AAPL",
-                "date": "2026-05-16",
-                "tte_hours": 48.0,
-            },
+            EconomicEvent(
+                type="ECONOMIC",
+                event="FOMC",
+                impact="high",
+                country="US",
+                tte_hours=24.0,
+                time="2026-05-15T18:00:00Z",
+            ),
+            EarningsEvent(
+                type="EARNINGS",
+                symbol="AAPL",
+                date="2026-05-16",
+                tte_hours=48.0,
+            ),
         ]
 
         await cog.calendar.callback(cog, mock_interaction)
