@@ -15,9 +15,40 @@ env:
   SERVICE_NAME: nexus-seeker-service
 
 jobs:
+  # --- 第零階段：測試與品質檢查 (Test & Lint) ---
+  test:
+    name: 🧪 Run Tests & Static Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 📦 Install dependencies
+        run: |
+          cd nexus_core
+          pip install --upgrade pip
+          pip install .
+          pip install mypy types-requests types-psutil pytest-asyncio pytest-mock
+
+      - name: 🔍 Run Static Analysis (Mypy)
+        run: |
+          cd nexus_core
+          mypy . --config-file pyproject.toml --ignore-missing-imports
+
+      - name: 🧪 Run Tests (Pytest)
+        run: |
+          cd nexus_core
+          python -m pytest tests
+
   # --- 第一階段：持續整合 (CI) - 建置並推送映像檔 ---
   build-and-push:
     name: 🏗️ Build and Push Image
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read

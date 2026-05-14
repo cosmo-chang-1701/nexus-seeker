@@ -19,7 +19,7 @@ class AssetType(Enum):
 class PositionRisk(BaseModel):
     """Model for individual position risk metrics."""
 
-    model_config = ConfigDict(slots=True)
+    model_config = ConfigDict()
 
     symbol: str
     quantity: float
@@ -36,7 +36,7 @@ class PositionRisk(BaseModel):
 class OptimizationResult(BaseModel):
     """Result of NRO position size optimization."""
 
-    model_config = ConfigDict(slots=True)
+    model_config = ConfigDict()
 
     suggested_contracts: int
     exposure_pct: float
@@ -48,7 +48,7 @@ class OptimizationResult(BaseModel):
 class MacroRiskMetrics(BaseModel):
     """Aggregated macro risk metrics for the entire portfolio."""
 
-    model_config = ConfigDict(slots=True)
+    model_config = ConfigDict()
 
     net_exposure_dollars: float
     exposure_pct: float
@@ -69,7 +69,7 @@ class MacroRiskMetrics(BaseModel):
 class PortfolioSummary(BaseModel):
     """Aggregate portfolio metrics."""
 
-    model_config = ConfigDict(slots=True)
+    model_config = ConfigDict()
 
     total_capital: float
     total_weighted_delta: float

@@ -18,18 +18,26 @@ repos:
         args: [ --fix ]
       - id: ruff-format
 
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.9.0
+    hooks:
+      - id: mypy
+        args: [--config-file=nexus_core/pyproject.toml, --ignore-missing-imports, --explicit-package-bases]
+        additional_dependencies: [pydantic>=2.0.0, types-requests, types-psutil]
+        files: ^nexus_core/
+
   - repo: https://github.com/returntocorp/semgrep
     rev: 'v1.65.0'
     hooks:
       - id: semgrep
-        args: ['--config', 'auto', '--error']
+        args: ['--config', auto, '--error']
         stages: [pre-push]
 
   - repo: local
     hooks:
       - id: docker-test
         name: docker-test
-        entry: bash -c "docker build -t nexus-seeker-test -f Dockerfile.test . && docker run --rm nexus-seeker-test"
+        entry: bash -c "docker build -t nexus-seeker-test -f Dockerfile.test . && docker run --rm nexus-seeker-test python -m pytest tests"
         language: system
         stages: [pre-commit]
         always_run: true

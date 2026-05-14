@@ -35,7 +35,7 @@ client = AsyncOpenAI(**client_args)
 # 📊 Pydantic Schema 定義 (Structured Output)
 # ==========================================
 class RiskAssessment(BaseModel):
-    model_config = ConfigDict(slots=True)
+    model_config = ConfigDict()
     decision: Literal["APPROVE", "VETO"] = Field(
         description="風控裁決結果：APPROVE (批准) 或 VETO (否決)"
     )
@@ -48,14 +48,14 @@ class RiskAssessment(BaseModel):
 
 
 class AnalystReport(BaseModel):
-    model_config = ConfigDict(slots=True)
+    model_config = ConfigDict()
     report_content: str = Field(
         description="完整的分析報告內容 (Markdown 格式)，必須維持原本的標題與分隔線"
     )
 
 
 class PolymarketAnalysis(BaseModel):
-    model_config = ConfigDict(slots=True)
+    model_config = ConfigDict()
     event_background: str = Field(description="簡短的事件背景，說明該預測市場在賭什麼")
     whale_logic: str = Field(
         description="分析此筆大額交易可能的動機、對沖行為或內線情報推測"
@@ -67,7 +67,7 @@ class PolymarketAnalysis(BaseModel):
 
 
 class UOAIntentMapping(BaseModel):
-    model_config = ConfigDict(slots=True)
+    model_config = ConfigDict()
     classification: Literal[
         "Institutional Hedging",
         "Speculative Directional Betting",

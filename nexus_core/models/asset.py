@@ -11,12 +11,12 @@ class ContextType(str, Enum):
 
 
 class WatchMetadata(BaseModel):
-    model_config = ConfigDict(slots=True)
+    model_config = ConfigDict()
     use_llm: bool = True
 
 
 class TradeMetadata(BaseModel):
-    model_config = ConfigDict(slots=True)
+    model_config = ConfigDict()
     opt_type: str  # 'call' or 'put'
     strike: float
     expiry: str  # YYYY-MM-DD
@@ -31,14 +31,14 @@ class TradeMetadata(BaseModel):
 
 
 class HoldingMetadata(BaseModel):
-    model_config = ConfigDict(slots=True)
+    model_config = ConfigDict()
     quantity: float
     avg_cost: float
     weighted_delta: float = 0.0
 
 
 class Asset(BaseModel):
-    model_config = ConfigDict(slots=True)
+    model_config = ConfigDict()
     id: Optional[int] = None
     user_id: int
     symbol: str

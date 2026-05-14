@@ -198,10 +198,15 @@ class CalendarService:
 
         results = await asyncio.gather(events_task, *earnings_tasks)
 
-        economic_events = results[0]
-        earnings_events = [e for e in results[1:] if e is not None]
+        from typing import cast
+        economic_events = cast(List[EconomicEvent], results[0])
+        earnings_events = [cast(EarningsEvent, e) for e in results[1:] if e is not None]
 
-        combined = sorted(economic_events + earnings_events, key=lambda x: x.tte_hours)
+        all_events: List[Union[EconomicEvent, EarningsEvent]] = []
+        all_events.extend(economic_events)
+        all_events.extend(earnings_events)
+
+        combined = sorted(all_events, key=lambda x: x.tte_hours)
         return combined
 
 
