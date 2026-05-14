@@ -2,7 +2,7 @@ import asyncio
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from typing import Dict, Any, List
+from typing import Any, List
 
 from services.calendar_service import calendar_service
 from database.user_settings import get_all_user_ids
