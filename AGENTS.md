@@ -45,8 +45,9 @@ The system is divided into two main services:
   - **`calendar.py`**: Event-driven risk control (Legacy `/calendar`, `/iv_rank`).
   - **`hedging.py`**: Risk settlement and attribution commands (`/settle_hedge`, `/hedge_list`).
   - **`intelligence.py`**: Market edge detection (Legacy `/poly_list`, `/scan_news`).
-  - **`analyst_agent.py`**: **Autonomous Intelligence Analyst**. Generates dynamic, risk-aware intra-day execution guides and post-market Sector Flow Mapping reports.
+  - **analyst_agent.py**: **Autonomous Intelligence Analyst**. Generates dynamic, risk-aware intra-day execution guides and post-market Sector Flow Mapping reports.
     *   **Macro Scan**: Features a beautified Discord Embed with DXY, TNX, US2Y, and VIX metrics, including automated risk alerting.
+    *   **Post-market Risk Settlement Summary (v1.4.3+):** Optimized to align with professional risk reporting. Automatically aggregates PnL attribution (Alpha vs. Hedge), macro environment snapshots, portfolio risk metrics (Delta, Heat), and Financial Runway assessments across sample users.
     *   **Decision-Making Flow (Intra-day Heartbeat):**
         *   **Phase A (Open-11:00 ET):** Focuses on liquidity, open volatility, and pre-market gaps.
         *   **Phase B (11:00-14:00 ET):** Focuses on sector rotation, Reddit sentiment, and Polymarket whale intent.

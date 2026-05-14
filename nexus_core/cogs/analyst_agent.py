@@ -647,23 +647,72 @@ class AnalystAgent(commands.Cog):
     async def run_postmarket_summary(self):
         time_str = self._get_tw_time_str()
         try:
-            # 簡單加總當日 PnL
+            # 1. 獲取宏觀環境
+            macro = await get_macro_environment()
+            vix = macro.get("vix", 18.0)
+            vix_tier = get_vix_tier(vix)
+
+            # 2. 彙整核心用戶數據 (取前 5 名作為樣本)
             user_ids = database.get_all_user_ids()
             total_net_pnl = 0
             total_alpha = 0
             total_hedge = 0
+            total_theta = 0
+            total_delta = 0
+            total_capital = 0
+            total_runway = 0
+            active_users = 0
 
             for uid in user_ids[:5]:
+                # 績效歸因
                 perf = await analyze_hedge_performance(uid)
                 total_net_pnl += perf.get("net_pnl", 0)
                 total_alpha += perf.get("alpha_contribution", 0)
                 total_hedge += perf.get("hedge_contribution", 0)
 
+                # 風險指標
+                u_ctx = await asyncio.to_thread(database.get_full_user_context, uid)
+                total_theta += u_ctx.total_theta
+                total_delta += u_ctx.total_weighted_delta
+                total_capital += u_ctx.capital
+
+                # 計算生存跑道 (Runway)
+                if u_ctx.monthly_expense > 0:
+                    daily_burn = (u_ctx.monthly_expense / 30.0) - u_ctx.total_theta
+                    if daily_burn <= 0:
+                        runway = 9999
+                    else:
+                        runway = (u_ctx.cash_reserve + u_ctx.capital) / daily_burn
+                    total_runway += runway
+
+                active_users += 1
+
+            avg_runway = total_runway / active_users if active_users > 0 else 0
+
+            spy_data = await get_quote("SPY")
+            spy_price = spy_data.get("c", 500.0)
+            portfolio_heat = (
+                (abs(total_delta) * spy_price / total_capital * 100)
+                if total_capital > 0
+                else 0
+            )
+
             raw_data = {
+                "macro_snapshot": {
+                    "vix": vix,
+                    "vix_tier": vix_tier,
+                    "spy_price": spy_price,
+                },
                 "brinson_attribution_proxy": {
                     "total_net_pnl": round(total_net_pnl, 2),
                     "alpha_selection_pnl": round(total_alpha, 2),
                     "market_hedge_pnl": round(total_hedge, 2),
+                },
+                "aggregate_risk_metrics": {
+                    "total_theta": round(total_theta, 2),
+                    "total_beta_delta": round(total_delta, 2),
+                    "portfolio_heat_pct": round(portfolio_heat, 2),
+                    "avg_financial_runway_days": round(avg_runway, 1),
                 },
                 "sector_correlation": "Stable",
             }

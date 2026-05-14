@@ -99,6 +99,8 @@ graph TD
 ### 3. Execution Automation & Active Reporting
 *   **Intra-day Active Execution Guide (盤中動態量化指引)**：
     取代傳統靜態報告。每 30 分鐘主動評估 Vanna 曝險與財務跑道 (Financial Runway)，並依據時段 (Phase A: 開盤流動性 / Phase B: 板塊輪動 / Phase C: 尾盤對沖) 動態調整關注焦點與對沖指令。
+*   **Optimized Post-market Risk Settlement (盤後風險結算總結)**：
+    盤後自動生成高度結構化的分析報告，整合 **PnL 歸因 (Alpha vs. Hedge)**、**宏觀快照**與**聚合風險指標**，並對齊專業投資者的「財務生存跑道」評估。
 *   **Beautified Macro Scan (美化巨觀掃描)**：
     提供結構化的 Discord Embed 報告，整合美元指數、公債殖利率與 VIX 實時指標，並具備多因子風險告警 (Multi-factor Risk Alerts)。
 *   **VPS Performance Guard (1GB RAM 優化)**：

@@ -197,6 +197,15 @@ async def generate_analyst_report(report_type: str, raw_data: dict) -> str:
     You are a Wall Street Quantitative Analyst Agent for Nexus Seeker.
     Your task is to take raw quantitative data and output a concise, professional, and insightful market report in Traditional Chinese (繁體中文).
     The report should be formatted in Markdown, strictly keeping the specified header format for the given report type.
+
+    ### Specific Instructions for "盤後交易與每日總結" (Post-market Summary):
+    If the report type contains "盤後交易與每日總結", you MUST structure the report with the following sections:
+    1. **📊 Nexus Seeker 盤後風險結算報告** (Main Title)
+    2. **🏁 財務生存跑道 (Financial Runway)**: Use aggregate_risk_metrics.avg_financial_runway_days. If >= 9999, describe as "無限 (收益已覆蓋支出)".
+    3. **📦 當日盈虧歸因 (PnL Attribution)**: Use brinson_attribution_proxy data.
+    4. **🛡️ 風控管線評估與對沖決策**: Analyze macro_snapshot (VIX) and aggregate_risk_metrics (Delta, Heat).
+    5. **🧬 系統狀態與 STHE 優化**: Brief status of the system based on sector_correlation and volatility.
+
     Do not invent numbers, only use the provided raw_data.
     Keep the tone extremely cold, objective, and analytical.
     """
