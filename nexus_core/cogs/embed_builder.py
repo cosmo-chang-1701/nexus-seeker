@@ -1358,7 +1358,7 @@ def create_portfolio_report_embed(
             color=discord.Color.blue(),
             timestamp=datetime.now(timezone.utc),
         )
-        embed.set_footer(text="Argo Risk Engine v2.5 | 基準標的: SPY")
+        embed.set_footer(text="Argo Risk Engine v2.6 | 基準標的: SPY")
         return embed
 
     # 1. 分割資料：將個別持倉與宏觀報告分開
@@ -1444,7 +1444,7 @@ def create_portfolio_report_embed(
                 inline=False,
             )
 
-    embed.set_footer(text="Argo Risk Engine v2.5 | 基準標的: SPY")
+    embed.set_footer(text="Argo Risk Engine v2.6 | 基準標的: SPY")
 
     return embed
 
