@@ -10,9 +10,11 @@ import logging
 
 import database
 import market_time
-from config import DISCORD_ADMIN_USER_ID
+from config import DISCORD_ADMIN_USER_ID, get_vix_tier
 from services.trading_service import TradingService
 from services.alert_filter import should_send_priority_alert
+from services.market_data_service import get_macro_environment, get_quote
+from services.llm_service import generate_analyst_report
 from cogs.embed_builder import (
     create_scan_embed,
     build_vtr_stats_embed,
@@ -347,6 +349,20 @@ class SchedulerCog(commands.Cog):
         }
 
         logger.info(f"[AfterMarketReport] Start pipeline mode={mode}")
+
+        # 🚀 準備宏觀數據與標記時間 (用於 AI 報告)
+        try:
+            macro = await get_macro_environment()
+            vix = macro.get("vix", 18.0)
+            vix_tier = get_vix_tier(vix)
+            spy_data = await get_quote("SPY")
+            spy_price = spy_data.get("c", 500.0)
+            time_str = datetime.now().strftime("%Y-%m-%d")
+        except Exception as e:
+            logger.warning(f"Macro 數據獲取失敗，部分 AI 功能可能受限: {e}")
+            vix, vix_tier, spy_price = 18.0, "NORMAL", 500.0
+            time_str = datetime.now().strftime("%Y-%m-%d")
+
         try:
             user_reports = await self.trading_service.get_after_market_report_data()
         except Exception:
@@ -360,12 +376,75 @@ class SchedulerCog(commands.Cog):
 
         for uid, data in user_reports.items():
             report_lines = data.get("report_lines", [])
-            hedge_analysis = data.get("hedge_analysis")
+            hedge_analysis = data.get("hedge_analysis", {})
             survival_runway = data.get("survival_runway")
 
+            # 🚀 [Integrated Analyst Agent] 整合 AI 專業點評
+            message_content = "📊 **【Nexus Seeker 盤後結算系統】**"
+            ai_enabled = False
+            if not dry_run:
+                try:
+                    user_ctx = database.get_full_user_context(uid)
+                    if user_ctx.enable_analyst_agent:
+                        ai_enabled = True
+                        # 構建個人化量化數據集
+                        raw_data = {
+                            "macro_snapshot": {
+                                "vix": vix,
+                                "vix_tier": vix_tier,
+                                "spy_price": spy_price,
+                            },
+                            "brinson_attribution_proxy": {
+                                "total_net_pnl": round(
+                                    hedge_analysis.get("net_pnl", 0), 2
+                                ),
+                                "alpha_selection_pnl": round(
+                                    hedge_analysis.get("alpha_contribution", 0), 2
+                                ),
+                                "market_hedge_pnl": round(
+                                    hedge_analysis.get("hedge_contribution", 0), 2
+                                ),
+                            },
+                            "aggregate_risk_metrics": {
+                                "total_theta": round(user_ctx.total_theta, 2),
+                                "total_beta_delta": round(
+                                    user_ctx.total_weighted_delta, 2
+                                ),
+                                "portfolio_heat_pct": round(
+                                    (
+                                        abs(user_ctx.total_weighted_delta)
+                                        * spy_price
+                                        / user_ctx.capital
+                                        * 100
+                                    )
+                                    if user_ctx.capital > 0
+                                    else 0,
+                                    2,
+                                ),
+                                "avg_financial_runway_days": round(
+                                    survival_runway
+                                    if survival_runway is not None
+                                    else 0,
+                                    1,
+                                ),
+                            },
+                            "sector_correlation": "Stable",
+                        }
+                        report_type = f"{time_str} 盤後交易與每日總結"
+                        logger.info(f"正在為用戶 {uid} 生成 AI 盤後分析報告...")
+                        ai_report = await generate_analyst_report(report_type, raw_data)
+                        message_content = (
+                            f"📊 **【Nexus Seeker 盤後 AI 深度分析】**\n\n{ai_report}"
+                        )
+                except Exception as ai_e:
+                    logger.error(f"AI 報告生成失敗 (uid={uid})，改用預設標題: {ai_e}")
+
             try:
+                # 如果啟用了 AI 點評，則在 Embed 中隱藏重複的生存跑道資訊
+                # AI 報告已包含跑道、歸因與風控評估
+                embed_runway = None if ai_enabled else survival_runway
                 embed = create_portfolio_report_embed(
-                    report_lines, hedge_analysis, survival_runway
+                    report_lines, hedge_analysis, embed_runway
                 )
             except Exception:
                 stats["users_failed"] += 1
@@ -409,12 +488,10 @@ class SchedulerCog(commands.Cog):
                 continue
 
             try:
-                await self.bot.queue_dm(
-                    uid, message="📊 **【Nexus Seeker 盤後結算系統】**", embed=embed
-                )
+                await self.bot.queue_dm(uid, message=message_content, embed=embed)
                 stats["users_queued"] += 1
                 logger.info(
-                    f"盤後報告已排入 DM 佇列，uid={uid}，fields={len(embed.fields)}"
+                    f"盤後報告已排入 DM 佇列，uid={uid}，AI={message_content[:20]}..."
                 )
             except discord.Forbidden:
                 stats["users_skipped"] += 1

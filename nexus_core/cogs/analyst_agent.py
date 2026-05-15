@@ -327,9 +327,7 @@ class AnalystAgent(commands.Cog):
 
             try:
                 logger.info("🤖 [Analyst Post-Market] 啟動盤後總結與次日策略規劃...")
-                summary_report = await self.run_postmarket_summary()
-                if summary_report:
-                    await self.dispatch_report(summary_report)
+                # 註記：summary_report (盤後風險結算報告) 已整合至 Trading Cog 的 personalized pipeline，此處略過發送以防重複。
 
                 sector_report = await self.run_sector_flow_report()
                 if sector_report:
@@ -720,12 +718,12 @@ class AnalystAgent(commands.Cog):
                 "sector_correlation": "Stable",
             }
 
-            report_type = f"{time_str} 盤後交易與每日總結"
+            report_type = f"{time_str} 全系統宏觀風險總結"
             report = await generate_analyst_report(report_type, raw_data)
             return report
         except Exception as e:
             logger.error(f"run_postmarket_summary error: {e}")
-            return f"**{time_str} 盤後交易與每日總結**\n--------------------------------------------------\n系統分析發生錯誤: {e}"
+            return f"**{time_str} 全系統宏觀風險總結**\n--------------------------------------------------\n系統分析發生錯誤: {e}"
 
     async def run_sector_flow_report(self):
         time_str = self._get_tw_time_str()

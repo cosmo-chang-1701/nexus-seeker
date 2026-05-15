@@ -207,11 +207,10 @@ async def generate_analyst_report(report_type: str, raw_data: dict) -> str:
 
     ### Specific Instructions for "盤後交易與每日總結" (Post-market Summary):
     If the report type contains "盤後交易與每日總結", you MUST structure the report with the following sections:
-    1. **📊 Nexus Seeker 盤後風險結算報告** (Main Title)
-    2. **🏁 財務生存跑道 (Financial Runway)**: Use aggregate_risk_metrics.avg_financial_runway_days. If >= 9999, describe as "無限 (收益已覆蓋支出)".
-    3. **📦 當日盈虧歸因 (PnL Attribution)**: Use brinson_attribution_proxy data.
-    4. **🛡️ 風控管線評估與對沖決策**: Analyze macro_snapshot (VIX) and aggregate_risk_metrics (Delta, Heat).
-    5. **🧬 系統狀態與 STHE 優化**: Brief status of the system based on sector_correlation and volatility.
+    1. **🏁 財務生存跑道 (Financial Runway)**: Use aggregate_risk_metrics.avg_financial_runway_days. If >= 9999, describe as "無限 (收益已覆蓋支出)".
+    2. **📦 當日盈虧歸因 (PnL Attribution)**: Use brinson_attribution_proxy data.
+    3. **🛡️ 風控管線評估與對沖決策**: Analyze macro_snapshot (VIX) and aggregate_risk_metrics (Delta, Heat).
+    4. **🧬 系統狀態與 STHE 優化**: Brief status of the system based on sector_correlation and volatility.
 
     ### Specific Instructions for "盤前財報與估值調整" (Pre-market Earnings):
     If the report type contains "盤前財報與估值調整", you MUST structure the report with the following sections:
