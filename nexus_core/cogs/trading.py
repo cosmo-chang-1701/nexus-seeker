@@ -352,7 +352,7 @@ class SchedulerCog(commands.Cog):
 
         # 🚀 準備宏觀數據與標記時間 (用於 AI 報告)
         try:
-            macro = await get_macro_environment()
+            macro: dict[str, Any] = await get_macro_environment()
             vix = macro.get("vix", 18.0)
             vix_tier = get_vix_tier(vix)
             spy_data = await get_quote("SPY")
@@ -360,7 +360,9 @@ class SchedulerCog(commands.Cog):
             time_str = datetime.now().strftime("%Y-%m-%d")
         except Exception as e:
             logger.warning(f"Macro 數據獲取失敗，部分 AI 功能可能受限: {e}")
-            vix, vix_tier, spy_price = 18.0, "NORMAL", 500.0
+            vix = 18.0
+            vix_tier = get_vix_tier(vix)
+            spy_price = 500.0
             time_str = datetime.now().strftime("%Y-%m-%d")
 
         try:
