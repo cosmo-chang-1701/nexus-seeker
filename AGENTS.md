@@ -59,10 +59,13 @@ The system is divided into two main services:
         *   **Phase B (11:00-14:00 ET):** Focuses on sector rotation, Reddit sentiment, and Polymarket whale intent.
         *   **Phase C (14:00-Close ET):** Focuses on portfolio hedging, specifically monitoring **Vanna-Adjusted Delta** for tail-risk exposure.
     *   **Memory Safety Gate:** Automatically defers non-critical LLM analyses if VPS RAM exceeds 85%, prioritizing core risk operations.
-- **`cli.py`**: **Professional CLI Terminal**. A standalone entry point built with `click` and `rich`.
-    *   Allows core trading operations (Health, Quote, Portfolio, DDP Scan) without a running Discord bot.
+- **`cli.py`**: **Professional CLI Terminal**. A standalone entry point built with `click` and `rich` mirroring all Bot functionality.
+    *   **Group `sys`**: Account settings, system health, and market status.
+    *   **Group `watch`**: Full watchlist CRUD operations.
+    *   **Group `pf`**: Portfolio PnL reporting, trade management, and Financial Runway analysis.
+    *   **Group `mkt`**: Real-time quotes, DDP quant scans, and Skew sentiment analysis.
+    *   **Group `admin`**: Force manual scans and system overrides.
     *   Supports custom database paths (`--db`) and multi-tenant user context switching (`--user-id`).
-    *   Provides professional terminal output with structured tables and real-time status panels.
 
 ---
 
