@@ -167,6 +167,132 @@ class PolymarketService:
         """獲取目前監控中的活躍市場清單"""
         return self._active_markets[:limit]
 
+    def _is_relevant_market(self, market_info: Dict[str, Any]) -> bool:
+        """
+        [Category Hard Gate] 篩選無關市場。
+        僅允許經濟、政治、加密、科技與 AI 相關標的。
+        """
+        import re
+
+        question = market_info.get("question", "").upper()
+        description = (market_info.get("description") or "").upper()
+        full_text = f"{question} {description}"
+
+        # 1. 關鍵字白名單 (包含這些通常是相關的)
+        allow_keywords = [
+            "FED",
+            "INTEREST RATE",
+            "INFLATION",
+            "CPI",
+            "GDP",
+            "SEC",
+            "BITCOIN",
+            "ETH",
+            "CRYPTO",
+            "SOLANA",
+            "AI",
+            "CHATGPT",
+            "OPENAI",
+            "NVIDIA",
+            "TSMC",
+            "APPLE",
+            "GOOGLE",
+            "META",
+            "AMAZON",
+            "TESLA",
+            "ELECTION",
+            "PRESIDENT",
+            "TRUMP",
+            "BIDEN",
+            "HARRIS",
+            "REPUBLICAN",
+            "DEMOCRAT",
+            "STOCK",
+            "MARKET",
+            "S&P",
+            "NASDAQ",
+            "DJIA",
+            "VIX",
+            "RECESSION",
+            "ECONOMIC",
+            "TREASURY",
+            "YIELD",
+            "CURRENCY",
+            "DOLLAR",
+            "OIL",
+            "GOLD",
+        ]
+
+        # 2. 關鍵字黑名單 (優先排除)
+        deny_keywords = [
+            "NBA",
+            "FINALS",
+            "SUPER BOWL",
+            "NFL",
+            "MLB",
+            "NHL",
+            "SOCCER",
+            "FOOTBALL",
+            "BASKETBALL",
+            "BASEBALL",
+            "CHAMPIONS LEAGUE",
+            "WORLD CUP",
+            "OSCAR",
+            "GRAMMY",
+            "EMMY",
+            "BOX OFFICE",
+            "ENTERTAINMENT",
+            "MOVIE",
+            "TEMPERATURE",
+            "WEATHER",
+            "SPORTS",
+            "TOURNAMENT",
+            "PLAYOFFS",
+            "FIGHT",
+            "UFC",
+            "BOXING",
+            "WRESTLING",
+            "CELEBRITY",
+            "MUSIC",
+            "ALBUM",
+        ]
+
+        # 策略：精確匹配單字 (Word Boundary) 命中白名單則放行
+        for kw in allow_keywords:
+            if re.search(rf"\b{re.escape(kw)}\b", full_text):
+                return True
+
+        # 命中黑名單則攔截
+        for kw in deny_keywords:
+            if re.search(rf"\b{re.escape(kw)}\b", full_text):
+                return False
+
+        # 3. 股票代碼偵測 (包含 2-5 個連續大寫字母且非常見縮寫)
+        # 這裡用原始 question 檢查真正的全大寫單字
+        symbol_match = re.search(r"\b([A-Z]{2,5})\b", market_info.get("question", ""))
+        if symbol_match:
+            sym = symbol_match.group(1)
+            common_non_stock_caps = [
+                "USA",
+                "US",
+                "UK",
+                "EU",
+                "UN",
+                "AI",
+                "CEO",
+                "CFO",
+                "SEC",
+                "FED",
+                "WHO",
+                "WILL",
+                "WIN",
+                "THE",
+            ]
+            if sym not in common_non_stock_caps:
+                return True
+
+        return False
+
     def start(self):
         if self.running:
             return
@@ -416,10 +542,6 @@ class PolymarketService:
             if not target_users:
                 return
 
-            logger.info(
-                f"🐋 Whale trade detected: {trade.get('side')} ${usd_value:,.2f} on asset {asset_id} (Dynamic Threshold: ${dynamic_threshold:,.2f})"
-            )
-
             # 3. 獲取市場背景資訊
             condition_id = trade.get("condition_id")
             market_info = await self._get_market_info(
@@ -431,6 +553,14 @@ class PolymarketService:
                     "question": "未知市場",
                     "description": "無法獲取市場詳細資訊",
                 }
+
+            # [Category Hard Gate] 篩選無關市場 (體育、娛樂等)
+            if not self._is_relevant_market(market_info):
+                return
+
+            logger.info(
+                f"🐋 Whale trade detected: {trade.get('side')} ${usd_value:,.2f} on asset {asset_id} (Dynamic Threshold: ${dynamic_threshold:,.2f})"
+            )
 
             # 4. 嘗試關聯 UOA (如果標的包含股票代碼)
             uoa_correlation = None

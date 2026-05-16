@@ -22,7 +22,7 @@ def test_cli_health_integration(mock_market_data):
 
         runner = CliRunner()
         # 指定使用測試資料庫
-        result = runner.invoke(cli, ["--db", config.DB_NAME, "health"])
+        result = runner.invoke(cli, ["--db", config.DB_NAME, "sys", "health"])
 
         assert result.exit_code == 0
         assert "15.0" in result.output
@@ -46,7 +46,7 @@ def test_cli_portfolio_integration(db_conn, mock_market_data):
 
         runner = CliRunner()
         result = runner.invoke(
-            cli, ["--db", config.DB_NAME, "--user-id", str(user_id), "portfolio"]
+            cli, ["--db", config.DB_NAME, "--user-id", str(user_id), "pf", "pnl"]
         )
 
         assert result.exit_code == 0
@@ -68,8 +68,8 @@ def test_cli_scan_ddp_integration(db_conn):
         mock_scan.return_value = [{"symbol": "MSFT", "reason": "High Growth"}]
 
         runner = CliRunner()
-        result = runner.invoke(cli, ["--db", config.DB_NAME, "scan-ddp"])
+        result = runner.invoke(cli, ["--db", config.DB_NAME, "mkt", "ddp"])
 
         assert result.exit_code == 0
-        assert "正在掃描 1 個標的" in result.output
+        assert "正在對 1 個標的執行 DDP 掃描" in result.output
         assert "MSFT" in result.output

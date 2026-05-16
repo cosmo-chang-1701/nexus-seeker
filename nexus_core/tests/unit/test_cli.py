@@ -28,7 +28,7 @@ def test_cli_health():
         mock_quote.return_value = {"c": 500.0}
 
         runner = CliRunner()
-        result = runner.invoke(cli, ["health"])
+        result = runner.invoke(cli, ["sys", "health"])
         assert result.exit_code == 0
         assert "VIX Index" in result.output
         assert "18.5" in result.output
@@ -48,7 +48,7 @@ def test_cli_quote():
         }
 
         runner = CliRunner()
-        result = runner.invoke(cli, ["quote", "AAPL"])
+        result = runner.invoke(cli, ["mkt", "quote", "AAPL"])
         assert result.exit_code == 0
         assert "AAPL" in result.output
         assert "$200.0" in result.output
@@ -63,6 +63,6 @@ def test_cli_portfolio_empty():
         mock_pnl.return_value = {"trades": [], "total_unrealized_pnl": 0.0}
 
         runner = CliRunner()
-        result = runner.invoke(cli, ["portfolio"])
+        result = runner.invoke(cli, ["pf", "pnl"])
         assert result.exit_code == 0
         assert "目前無持倉紀錄" in result.output
