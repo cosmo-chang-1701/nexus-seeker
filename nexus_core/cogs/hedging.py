@@ -1,3 +1,4 @@
+from cogs.embed_builder import create_info_embed, create_error_embed
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -45,12 +46,18 @@ class HedgingCog(commands.Cog):
 
             if not alert:
                 return await interaction.followup.send(
-                    "❌ 找不到該警報 ID，或您無權操作。", ephemeral=True
+                    embed=create_error_embed(
+                        "找不到該警報 ID，或您無權操作。", title="系統錯誤"
+                    ),
+                    ephemeral=True,
                 )
 
             if alert[10] != "PENDING":  # status is at index 10
                 return await interaction.followup.send(
-                    f"⚠️ 該警報已處理過 (狀態: {alert[10]})。", ephemeral=True
+                    embed=create_error_embed(
+                        f"該警報已處理過 (狀態: {alert[10]})。", title="系統警告"
+                    ),
+                    ephemeral=True,
                 )
 
             # 2. 更新狀態為 EXECUTED
@@ -85,7 +92,10 @@ class HedgingCog(commands.Cog):
 
         except Exception as e:
             logger.error(f"Settle hedge failed: {e}")
-            await interaction.followup.send(f"❌ 結算失敗: {e}", ephemeral=True)
+            await interaction.followup.send(
+                embed=create_error_embed(f"結算失敗: {e}", title="系統錯誤"),
+                ephemeral=True,
+            )
 
     @app_commands.command(name="hedge_list", description="查看最近的對沖警報與執行狀態")
     async def hedge_list(self, interaction: discord.Interaction):
@@ -109,7 +119,10 @@ class HedgingCog(commands.Cog):
 
             if not rows:
                 return await interaction.followup.send(
-                    "📭 目前無對沖警報紀錄。", ephemeral=True
+                    embed=create_info_embed(
+                        title="查無資料", message="📭 目前無對沖警報紀錄。"
+                    ),
+                    ephemeral=True,
                 )
 
             embed = discord.Embed(
@@ -130,7 +143,10 @@ class HedgingCog(commands.Cog):
 
         except Exception as e:
             logger.error(f"Hedge list failed: {e}")
-            await interaction.followup.send(f"❌ 獲取列表失敗: {e}", ephemeral=True)
+            await interaction.followup.send(
+                embed=create_error_embed(f"獲取列表失敗: {e}", title="系統錯誤"),
+                ephemeral=True,
+            )
 
 
 async def setup(bot):

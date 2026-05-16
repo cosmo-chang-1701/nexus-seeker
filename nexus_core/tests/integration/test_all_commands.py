@@ -33,13 +33,19 @@ async def test_all_commands_structure(mock_interaction, db_conn, mock_bot):
     await terminal.update_settings.callback(
         terminal, mock_interaction, capital=150000.0
     )
-    assert "✅ **帳戶設定已更新**" in mock_interaction.followup.send.call_args[0][0]
+    assert (
+        "帳戶設定已更新"
+        in mock_interaction.followup.send.call_args.kwargs["embed"].description
+    )
     mock_interaction.followup.send.reset_mock()
 
     await terminal.add_watch.callback(
         terminal, mock_interaction, symbol="NVDA", use_llm=True
     )
-    assert "✅ **已加入觀察清單**" in mock_interaction.followup.send.call_args[0][0]
+    assert (
+        "已加入觀察清單"
+        in mock_interaction.followup.send.call_args.kwargs["embed"].description
+    )
     mock_interaction.followup.send.reset_mock()
 
     await terminal.list_watch.callback(terminal, mock_interaction)
@@ -150,7 +156,10 @@ async def test_command_remove_watch(mock_interaction, db_conn, mock_bot):
 
     add_watchlist_symbol(mock_interaction.user.id, "AMD")
     await terminal.remove_watch.callback(terminal, mock_interaction, symbol="AMD")
-    assert "已移除觀察標的" in mock_interaction.followup.send.call_args[0][0]
+    assert (
+        "已移除觀察標的"
+        in mock_interaction.followup.send.call_args.kwargs["embed"].description
+    )
 
 
 @pytest.mark.asyncio

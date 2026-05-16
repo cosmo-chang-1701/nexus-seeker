@@ -22,9 +22,9 @@ async def test_command_settings(mock_interaction, db_conn):
     # Verify response
     mock_interaction.followup.send.assert_called_once()
     args, kwargs = mock_interaction.followup.send.call_args
-    assert "✅ **帳戶設定已更新**" in args[0]
-    assert "💰 總資金: `$100,000.00`" in args[0]
-    assert "🛡️ 風險限制: `15.0%`" in args[0]
+    assert "帳戶設定已更新" in kwargs["embed"].description
+    assert "💰 總資金: `$100,000.00`" in kwargs["embed"].description
+    assert "🛡️ 風險限制: `15.0%`" in kwargs["embed"].description
 
     # Verify database update
     context = get_full_user_context(mock_interaction.user.id)
@@ -65,7 +65,8 @@ async def test_command_add_holding(mock_interaction, db_conn, mock_market_data):
     )
 
     mock_interaction.followup.send.assert_called_once()
-    assert "✅ **現貨持倉已登錄**" in mock_interaction.followup.send.call_args[0][0]
+    args, kwargs = mock_interaction.followup.send.call_args
+    assert "現貨持倉已登錄" in kwargs["embed"].description
 
     # Verify DB
     from database.holdings import get_user_holdings

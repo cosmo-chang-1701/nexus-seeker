@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Optional
 
 from market_analysis.sentiment_engine import SentimentEngine
-from cogs.embed_builder import create_sentiment_scan_embed
+from cogs.embed_builder import create_error_embed, create_sentiment_scan_embed
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,10 @@ class SentimentCog(commands.Cog):
 
             if "error" in skew_data and skew_data["error"] == "No expiries":
                 return await interaction.followup.send(
-                    f"❌ 無法取得 `{symbol}` 的期權數據，請檢查標的是否支援期權交易。"
+                    embed=create_error_embed(
+                        f"無法取得 `{symbol}` 的期權數據，請檢查標的是否支援期權交易。",
+                        title="系統錯誤",
+                    )
                 )
 
             embed = create_sentiment_scan_embed(
@@ -53,7 +56,9 @@ class SentimentCog(commands.Cog):
 
         except Exception as e:
             logger.error(f"[{symbol}] skew_scan 失敗: {e}")
-            await interaction.followup.send(f"❌ 執行掃描時發生錯誤: {e}")
+            await interaction.followup.send(
+                embed=create_error_embed(f"執行掃描時發生錯誤: {e}", title="系統錯誤")
+            )
 
     @app_commands.command(
         name="max_pain", description="計算特定標的之最大痛點 (Max Pain)"
@@ -74,7 +79,11 @@ class SentimentCog(commands.Cog):
             data = await SentimentEngine.calculate_max_pain(symbol, expiry)
 
             if "error" in data:
-                return await interaction.followup.send(f"❌ 計算失敗: {data['error']}")
+                return await interaction.followup.send(
+                    embed=create_error_embed(
+                        f"計算失敗: {data['error']}", title="系統錯誤"
+                    )
+                )
 
             embed = discord.Embed(
                 title=f"📍 {symbol} 最大痛點分析 (Max Pain)",
@@ -116,7 +125,9 @@ class SentimentCog(commands.Cog):
 
         except Exception as e:
             logger.error(f"[{symbol}] max_pain 失敗: {e}")
-            await interaction.followup.send("❌ 執行計算時發生錯誤。")
+            await interaction.followup.send(
+                embed=create_error_embed("執行計算時發生錯誤。", title="系統錯誤")
+            )
 
 
 async def setup(bot):

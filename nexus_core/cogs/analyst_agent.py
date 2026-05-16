@@ -26,6 +26,10 @@ from market_analysis.psq_engine import analyze_psq
 from market_analysis.hedging import analyze_hedge_performance
 from market_analysis.sentiment_engine import SentimentEngine
 from config import get_vix_tier
+from cogs.embed_builder import (
+    create_ai_analysis_embed,
+    create_next_day_strategy_embed,
+)
 import httpx
 
 logger = logging.getLogger(__name__)
@@ -77,11 +81,17 @@ class AnalystAgent(commands.Cog):
                 logger.info("🤖 [Analyst Pre-Market] 啟動盤前巨觀與財報掃描...")
                 macro_report = await self.run_macro_scan()
                 if macro_report:
-                    await self.dispatch_report(macro_report)
+                    embed = create_ai_analysis_embed(
+                        macro_report, title="📊 Nexus Seeker 盤前巨觀風險報告"
+                    )
+                    await self.dispatch_report(embed)
 
                 earnings_report = await self.run_premarket_earnings()
                 if earnings_report:
-                    await self.dispatch_report(earnings_report)
+                    embed = create_ai_analysis_embed(
+                        earnings_report, title="📊 Nexus Seeker 盤前財報與估值調整"
+                    )
+                    await self.dispatch_report(embed)
             except Exception as e:
                 logger.error(f"Analyst Pre-Market loop error: {e}")
 
@@ -331,11 +341,16 @@ class AnalystAgent(commands.Cog):
 
                 sector_report = await self.run_sector_flow_report()
                 if sector_report:
-                    await self.dispatch_report(sector_report)
+                    embed = create_ai_analysis_embed(
+                        sector_report,
+                        title="📊 Nexus Seeker 收盤資金流向與板塊輪動報告",
+                    )
+                    await self.dispatch_report(embed)
 
                 next_day_report = await self.run_next_day_strategy()
                 if next_day_report:
-                    await self.dispatch_report(next_day_report)
+                    embed = create_next_day_strategy_embed(next_day_report)
+                    await self.dispatch_report(embed)
             except Exception as e:
                 logger.error(f"Analyst Post-Market loop error: {e}")
 

@@ -125,5 +125,13 @@ async def test_post_market_loop_triggers_sector_report():
 
         # Verify run_sector_flow_report was called
         agent.run_sector_flow_report.assert_called_once()
-        # Verify dispatch_report was called for sector report
-        agent.dispatch_report.assert_any_call("Sector Report")
+        # Verify dispatch_report was called for sector report and next day strategy
+        assert agent.dispatch_report.call_count == 2
+
+        # 檢查第一個調用 (Sector Report)
+        first_call_args = agent.dispatch_report.call_args_list[0][0][0]
+        assert first_call_args.title == "📊 Nexus Seeker 收盤資金流向與板塊輪動報告"
+
+        # 檢查第二個調用 (Next Day Strategy)
+        second_call_args = agent.dispatch_report.call_args_list[1][0][0]
+        assert second_call_args.title == "🎯 Nexus Seeker 次日策略制定"

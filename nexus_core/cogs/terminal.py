@@ -9,7 +9,7 @@ from typing import Optional, Dict, Any
 import database
 import market_math
 from services import market_data_service
-from cogs.embed_builder import create_scan_embed
+from cogs.embed_builder import create_scan_embed, create_info_embed, create_error_embed
 from database.user_settings import get_full_user_context
 
 logger = logging.getLogger(__name__)
@@ -76,7 +76,8 @@ class TerminalCog(commands.Cog):
                 updates.append(f"💰 總資金: `${capital:,.2f}`")
             else:
                 return await interaction.followup.send(
-                    "❌ 資金必須大於 0", ephemeral=True
+                    embed=create_error_embed("資金必須大於 0", title="系統錯誤"),
+                    ephemeral=True,
                 )
 
         if risk_limit is not None:
@@ -85,7 +86,10 @@ class TerminalCog(commands.Cog):
                 updates.append(f"🛡️ 風險限制: `{risk_limit}%`")
             else:
                 return await interaction.followup.send(
-                    "❌ 風險限制需介於 1.0% 至 50.0% 之間", ephemeral=True
+                    embed=create_error_embed(
+                        "風險限制需介於 1.0% 至 50.0% 之間", title="系統錯誤"
+                    ),
+                    ephemeral=True,
                 )
 
         if alert_mode is not None:
@@ -134,7 +138,10 @@ class TerminalCog(commands.Cog):
                 updates.append(f"🌊 Polymarket 滑價門檻: `{polymarket_slippage}%`")
             else:
                 return await interaction.followup.send(
-                    "❌ 滑價門檻需介於 0.1% 至 10.0% 之間", ephemeral=True
+                    embed=create_error_embed(
+                        "滑價門檻需介於 0.1% 至 10.0% 之間", title="系統錯誤"
+                    ),
+                    ephemeral=True,
                 )
 
         if monthly_expense is not None:
@@ -143,7 +150,8 @@ class TerminalCog(commands.Cog):
                 updates.append(f"💸 每月支出預算: `${monthly_expense:,.0f}`")
             else:
                 return await interaction.followup.send(
-                    "❌ 支出預算不能為負數", ephemeral=True
+                    embed=create_error_embed("支出預算不能為負數", title="系統錯誤"),
+                    ephemeral=True,
                 )
 
         if tax_reserve_rate is not None:
@@ -152,7 +160,10 @@ class TerminalCog(commands.Cog):
                 updates.append(f"🏦 稅務預留比例: `{tax_reserve_rate:.1%}`")
             else:
                 return await interaction.followup.send(
-                    "❌ 稅務比例需介於 0.0 與 1.0 之間", ephemeral=True
+                    embed=create_error_embed(
+                        "稅務比例需介於 0.0 與 1.0 之間", title="系統錯誤"
+                    ),
+                    ephemeral=True,
                 )
 
         if cash_reserve is not None:
@@ -161,22 +172,29 @@ class TerminalCog(commands.Cog):
                 updates.append(f"💰 現金儲備: `${cash_reserve:,.0f}`")
             else:
                 return await interaction.followup.send(
-                    "❌ 現金儲備不能為負數", ephemeral=True
+                    embed=create_error_embed("現金儲備不能為負數", title="系統錯誤"),
+                    ephemeral=True,
                 )
 
         if not kwargs:
             return await interaction.followup.send(
-                "請至少選擇並輸入一個要修改的參數。", ephemeral=True
+                embed=create_info_embed(
+                    title="系統資訊", message=" 請至少選擇並輸入一個要修改的參數。"
+                ),
+                ephemeral=True,
             )
 
         success = database.upsert_user_config(user_id, **kwargs)
         if not success:
             return await interaction.followup.send(
-                "❌ 設定失敗，請稍後再試。", ephemeral=True
+                embed=create_error_embed("設定失敗，請稍後再試。", title="系統錯誤"),
+                ephemeral=True,
             )
 
         msg = "✅ **帳戶設定已更新**：\n" + "\n".join(updates)
-        await interaction.followup.send(msg, ephemeral=True)
+        await interaction.followup.send(
+            embed=create_info_embed(title="系統資訊", message=msg), ephemeral=True
+        )
 
     @app_commands.command(
         name="runway_check", description="執行財務生存跑道與 Theta 收益分析"
@@ -194,7 +212,10 @@ class TerminalCog(commands.Cog):
 
         if ctx.monthly_expense <= 0:
             return await interaction.followup.send(
-                "⚠️ 請先使用 `/settings` 配置您的每月支出 (monthly_expense)，才能計算跑道。",
+                embed=create_error_embed(
+                    "請先使用 `/settings` 配置您的每月支出 (monthly_expense)，才能計算跑道。",
+                    title="系統警告",
+                ),
                 ephemeral=True,
             )
 
@@ -322,7 +343,10 @@ class TerminalCog(commands.Cog):
         # 🚀 驗證標的合法性
         if not await market_data_service.validate_symbol(symbol):
             return await interaction.followup.send(
-                f"❌ **無效的標的代號**: `{symbol}`。請輸入正確的美股代號。",
+                embed=create_error_embed(
+                    f"**無效的標的代號**: `{symbol}`。請輸入正確的美股代號。",
+                    title="系統錯誤",
+                ),
                 ephemeral=True,
             )
 
@@ -336,7 +360,10 @@ class TerminalCog(commands.Cog):
             expiry = expiry_clean  # Standardized format
         except Exception:
             await interaction.followup.send(
-                f"❌ **日期格式錯誤**: `{expiry}`。請確保為 `YYYY-MM-DD` 格式。",
+                embed=create_error_embed(
+                    f"**日期格式錯誤**: `{expiry}`。請確保為 `YYYY-MM-DD` 格式。",
+                    title="系統錯誤",
+                ),
                 ephemeral=True,
             )
             return
@@ -374,17 +401,26 @@ class TerminalCog(commands.Cog):
                 await refresh_portfolio_greeks(user_id)
                 action_text = "賣出 (STO)" if quantity < 0 else "買入 (BTO)"
                 await interaction.followup.send(
-                    f"✅ **新增交易成功**: {action_text} {abs(quantity)} 口 `{symbol}` ${strike} {opt_type.value.upper()}",
+                    embed=create_info_embed(
+                        title="操作成功",
+                        message=f"✅ **新增交易成功**: {action_text} {abs(quantity)} 口 `{symbol}` ${strike} {opt_type.value.upper()}",
+                    ),
                     ephemeral=True,
                 )
             else:
                 await interaction.followup.send(
-                    "❌ 新增交易失敗，請稍後再試。", ephemeral=True
+                    embed=create_error_embed(
+                        "新增交易失敗，請稍後再試。", title="系統錯誤"
+                    ),
+                    ephemeral=True,
                 )
 
         except Exception as e:
             logger.error(f"Add trade failed: {e}")
-            await interaction.followup.send(f"❌ **發生錯誤**: {e}", ephemeral=True)
+            await interaction.followup.send(
+                embed=create_error_embed(f"**發生錯誤**: {e}", title="操作失敗"),
+                ephemeral=True,
+            )
 
     @app_commands.command(
         name="edit_trade", description="修改實單交易參數 (履約價、到期日、價格或口數)"
@@ -430,7 +466,10 @@ class TerminalCog(commands.Cog):
                 updates["expiry"] = expiry_clean
             except Exception:
                 return await interaction.followup.send(
-                    f"❌ **日期格式錯誤**: `{expiry}`。請確保為 `YYYY-MM-DD` 格式。",
+                    embed=create_error_embed(
+                        f"**日期格式錯誤**: `{expiry}`。請確保為 `YYYY-MM-DD` 格式。",
+                        title="系統錯誤",
+                    ),
                     ephemeral=True,
                 )
         if price is not None:
@@ -442,7 +481,10 @@ class TerminalCog(commands.Cog):
 
         if not updates:
             return await interaction.followup.send(
-                "請提供至少一個要修改的參數。", ephemeral=True
+                embed=create_info_embed(
+                    title="系統資訊", message=" 請提供至少一個要修改的參數。"
+                ),
+                ephemeral=True,
             )
 
         success = manager.update_asset_metadata(interaction.user.id, trade_id, updates)
@@ -451,11 +493,17 @@ class TerminalCog(commands.Cog):
 
             await refresh_portfolio_greeks(interaction.user.id)
             await interaction.followup.send(
-                f"✅ **交易紀錄已更新 (ID: {trade_id})**", ephemeral=True
+                embed=create_info_embed(
+                    title="操作成功", message=f"✅ **交易紀錄已更新 (ID: {trade_id})**"
+                ),
+                ephemeral=True,
             )
         else:
             await interaction.followup.send(
-                f"❌ 找不到交易 ID `{trade_id}` 或發生錯誤。", ephemeral=True
+                embed=create_error_embed(
+                    f"找不到交易 ID `{trade_id}` 或發生錯誤。", title="系統錯誤"
+                ),
+                ephemeral=True,
             )
 
     @app_commands.command(
@@ -468,7 +516,10 @@ class TerminalCog(commands.Cog):
         # 🚀 驗證標的合法性
         if not await market_data_service.validate_symbol(symbol):
             return await interaction.followup.send(
-                f"❌ **無效的標的代號**: `{symbol}`。請輸入正確的美股代號。",
+                embed=create_error_embed(
+                    f"**無效的標的代號**: `{symbol}`。請輸入正確的美股代號。",
+                    title="系統錯誤",
+                ),
                 ephemeral=True,
             )
 
@@ -617,7 +668,11 @@ class TerminalCog(commands.Cog):
         if embeds_to_send:
             await interaction.followup.send(embeds=embeds_to_send)
         else:
-            await interaction.followup.send(f"📊 目前 `{symbol}` 查無有效訊號。")
+            await interaction.followup.send(
+                embed=create_info_embed(
+                    title="系統資訊", message=f" 目前 `{symbol}` 查無有效訊號。"
+                )
+            )
 
     @app_commands.command(
         name="vtr_stats", description="檢視虛擬交易室的績效統計與對沖歸因"
@@ -649,7 +704,10 @@ class TerminalCog(commands.Cog):
             await interaction.followup.send(embed=embed, ephemeral=True)
         except Exception as e:
             logger.error(f"VTR Stats failed: {e}")
-            await interaction.followup.send(f"❌ 無法獲取績效數據: {e}", ephemeral=True)
+            await interaction.followup.send(
+                embed=create_error_embed(f"無法獲取績效數據: {e}", title="操作失敗"),
+                ephemeral=True,
+            )
 
     @app_commands.command(
         name="sys_health", description="[Hidden] 檢查系統資源狀態與記憶體健康度"
@@ -740,7 +798,10 @@ class TerminalCog(commands.Cog):
         rows = get_all_virtual_trades(interaction.user.id)
         if not rows:
             return await interaction.followup.send(
-                "📭 虛擬交易室目前無任何紀錄。", ephemeral=True
+                embed=create_info_embed(
+                    title="查無資料", message="📭 虛擬交易室目前無任何紀錄。"
+                ),
+                ephemeral=True,
             )
 
         msg = "👻 **【虛擬交易室 (VTR) 紀錄清單】**\n"
@@ -752,7 +813,9 @@ class TerminalCog(commands.Cog):
         if len(rows) > 20:
             msg += f"\n*(僅顯示最近 20 筆，總計 {len(rows)} 筆)*"
 
-        await interaction.followup.send(msg, ephemeral=True)
+        await interaction.followup.send(
+            embed=create_info_embed(title="系統資訊", message=msg), ephemeral=True
+        )
 
     @app_commands.command(
         name="promote_watch", description="將觀察標的提升為實單交易 (WATCH -> TRADE)"
@@ -781,7 +844,10 @@ class TerminalCog(commands.Cog):
         # 🚀 驗證標的合法性
         if not await market_data_service.validate_symbol(symbol):
             return await interaction.followup.send(
-                f"❌ **無效的標的代號**: `{symbol}`。請輸入正確的美股代號。",
+                embed=create_error_embed(
+                    f"**無效的標的代號**: `{symbol}`。請輸入正確的美股代號。",
+                    title="系統錯誤",
+                ),
                 ephemeral=True,
             )
 
@@ -817,7 +883,10 @@ class TerminalCog(commands.Cog):
             await interaction.followup.send(embed=embed, ephemeral=True)
         else:
             await interaction.followup.send(
-                f"❌ 提升失敗。請確認 `{symbol}` 是否在您的觀察清單中，且參數格式正確。",
+                embed=create_error_embed(
+                    f"提升失敗。請確認 `{symbol}` 是否在您的觀察清單中，且參數格式正確。",
+                    title="系統錯誤",
+                ),
                 ephemeral=True,
             )
 
@@ -845,12 +914,18 @@ class TerminalCog(commands.Cog):
             await refresh_portfolio_greeks(interaction.user.id)
 
             await interaction.followup.send(
-                f"✅ **交易結算完成**：資產 ID `{asset_id}` 已轉換為「現貨持倉」。平均成本已更新為 `${execution_price:.2f}`。",
+                embed=create_info_embed(
+                    title="操作成功",
+                    message=f"✅ **交易結算完成**：資產 ID `{asset_id}` 已轉換為「現貨持倉」。平均成本已更新為 `${execution_price:.2f}`。",
+                ),
                 ephemeral=True,
             )
         else:
             await interaction.followup.send(
-                "❌ 結算失敗。請檢查資產 ID 是否正確且屬於「實單交易」狀態。",
+                embed=create_error_embed(
+                    "結算失敗。請檢查資產 ID 是否正確且屬於「實單交易」狀態。",
+                    title="系統錯誤",
+                ),
                 ephemeral=True,
             )
 
@@ -867,7 +942,10 @@ class TerminalCog(commands.Cog):
         # 🚀 驗證標的合法性
         if not await market_data_service.validate_symbol(symbol):
             return await interaction.followup.send(
-                f"❌ **無效的標的代號**: `{symbol}`。請輸入正確的美股代號。",
+                embed=create_error_embed(
+                    f"**無效的標的代號**: `{symbol}`。請輸入正確的美股代號。",
+                    title="系統錯誤",
+                ),
                 ephemeral=True,
             )
 
@@ -886,12 +964,18 @@ class TerminalCog(commands.Cog):
         success = manager.add_asset(asset)
         if success:
             await interaction.followup.send(
-                f"✅ **已加入觀察清單**: `{symbol}` (AI 分析: `{'開啟' if use_llm else '關閉'}`)",
+                embed=create_info_embed(
+                    title="操作成功",
+                    message=f"✅ **已加入觀察清單**: `{symbol}` (AI 分析: `{'開啟' if use_llm else '關閉'}`)",
+                ),
                 ephemeral=True,
             )
         else:
             await interaction.followup.send(
-                f"⚠️ `{symbol}` 已在您的資產清單中或發生錯誤。", ephemeral=True
+                embed=create_error_embed(
+                    f"`{symbol}` 已在您的資產清單中或發生錯誤。", title="系統警告"
+                ),
+                ephemeral=True,
             )
 
     @app_commands.command(name="edit_watch", description="修改觀察清單中的標的參數")
@@ -907,7 +991,10 @@ class TerminalCog(commands.Cog):
         symbol = symbol.upper()
         if use_llm is None:
             return await interaction.response.send_message(
-                "請提供要修改的參數 (如 use_llm)。", ephemeral=True
+                embed=create_info_embed(
+                    title="系統資訊", message=" 請提供要修改的參數 (如 use_llm)。"
+                ),
+                ephemeral=True,
             )
 
         await interaction.response.defer(ephemeral=True)
@@ -922,12 +1009,18 @@ class TerminalCog(commands.Cog):
 
         if success:
             await interaction.followup.send(
-                f"✅ **已更新觀察設定**: `{symbol}` (AI 分析: `{'開啟' if use_llm else '關閉'}`)",
+                embed=create_info_embed(
+                    title="操作成功",
+                    message=f"✅ **已更新觀察設定**: `{symbol}` (AI 分析: `{'開啟' if use_llm else '關閉'}`)",
+                ),
                 ephemeral=True,
             )
         else:
             await interaction.followup.send(
-                f"❌ 找不到標的 `{symbol}` 或發生錯誤。", ephemeral=True
+                embed=create_error_embed(
+                    f"找不到標的 `{symbol}` 或發生錯誤。", title="系統錯誤"
+                ),
+                ephemeral=True,
             )
 
     @app_commands.command(name="add_holding", description="登錄實際現貨持倉 (HOLDING)")
@@ -948,13 +1041,19 @@ class TerminalCog(commands.Cog):
         # 🚀 驗證標的合法性
         if not await market_data_service.validate_symbol(symbol):
             return await interaction.followup.send(
-                f"❌ **無效的標的代號**: `{symbol}`。請輸入正確的美股代號。",
+                embed=create_error_embed(
+                    f"**無效的標的代號**: `{symbol}`。請輸入正確的美股代號。",
+                    title="系統錯誤",
+                ),
                 ephemeral=True,
             )
 
         if quantity <= 0 or avg_cost < 0:
             return await interaction.followup.send(
-                "❌ 數量必須大於 0 且成本不能為負數。", ephemeral=True
+                embed=create_error_embed(
+                    "數量必須大於 0 且成本不能為負數。", title="系統錯誤"
+                ),
+                ephemeral=True,
             )
 
         from services.asset_manager import AssetManager
@@ -987,12 +1086,18 @@ class TerminalCog(commands.Cog):
 
             await refresh_portfolio_greeks(user_id)
             await interaction.followup.send(
-                f"✅ **現貨持倉已{action_text}**: `{symbol}` | `{quantity:,.0f}` 股 | 成本 `${avg_cost:,.2f}`",
+                embed=create_info_embed(
+                    title="操作成功",
+                    message=f"✅ **現貨持倉已{action_text}**: `{symbol}` | `{quantity:,.0f}` 股 | 成本 `${avg_cost:,.2f}`",
+                ),
                 ephemeral=True,
             )
         else:
             await interaction.followup.send(
-                f"❌ {action_text}失敗，請檢查輸入數據或稍後再試。", ephemeral=True
+                embed=create_error_embed(
+                    f"{action_text}失敗，請檢查輸入數據或稍後再試。", title="系統錯誤"
+                ),
+                ephemeral=True,
             )
 
     @app_commands.command(
@@ -1013,7 +1118,10 @@ class TerminalCog(commands.Cog):
         symbol = symbol.upper()
         if quantity is None and avg_cost is None:
             return await interaction.response.send_message(
-                "請提供要修改的參數 (數量或成本)。", ephemeral=True
+                embed=create_info_embed(
+                    title="系統資訊", message=" 請提供要修改的參數 (數量或成本)。"
+                ),
+                ephemeral=True,
             )
 
         await interaction.response.defer(ephemeral=True)
@@ -1037,11 +1145,17 @@ class TerminalCog(commands.Cog):
 
             await refresh_portfolio_greeks(interaction.user.id)
             await interaction.followup.send(
-                f"✅ **現貨持倉已更新**: `{symbol}`", ephemeral=True
+                embed=create_info_embed(
+                    title="操作成功", message=f"✅ **現貨持倉已更新**: `{symbol}`"
+                ),
+                ephemeral=True,
             )
         else:
             await interaction.followup.send(
-                f"❌ 找不到標的 `{symbol}` 的現貨紀錄或發生錯誤。", ephemeral=True
+                embed=create_error_embed(
+                    f"找不到標的 `{symbol}` 的現貨紀錄或發生錯誤。", title="系統錯誤"
+                ),
+                ephemeral=True,
             )
 
     @app_commands.command(
@@ -1059,7 +1173,10 @@ class TerminalCog(commands.Cog):
 
         if not assets:
             return await interaction.followup.send(
-                "📭 您目前無現貨持倉紀錄。請使用 `/add_holding` 進行登錄。",
+                embed=create_info_embed(
+                    title="查無資料",
+                    message="📭 您目前無現貨持倉紀錄。請使用 `/add_holding` 進行登錄。",
+                ),
                 ephemeral=True,
             )
 
@@ -1106,11 +1223,17 @@ class TerminalCog(commands.Cog):
 
             await refresh_portfolio_greeks(interaction.user.id)
             await interaction.followup.send(
-                f"🗑️ **已移除現貨紀錄**: `{symbol}`", ephemeral=True
+                embed=create_info_embed(
+                    title="移除成功", message=f"✅ **已移除現貨紀錄**: `{symbol}`"
+                ),
+                ephemeral=True,
             )
         else:
             await interaction.followup.send(
-                f"❌ 找不到標的 `{symbol}` 的現貨紀錄。", ephemeral=True
+                embed=create_error_embed(
+                    f"找不到標的 `{symbol}` 的現貨紀錄。", title="系統錯誤"
+                ),
+                ephemeral=True,
             )
 
     @app_commands.command(name="remove_watch", description="將標的從觀察清單中移除")
@@ -1127,11 +1250,17 @@ class TerminalCog(commands.Cog):
 
         if success:
             await interaction.followup.send(
-                f"🗑️ **已移除觀察標的**: `{symbol}`", ephemeral=True
+                embed=create_info_embed(
+                    title="移除成功", message=f"✅ **已移除觀察標的**: `{symbol}`"
+                ),
+                ephemeral=True,
             )
         else:
             await interaction.followup.send(
-                f"❌ 您的觀察清單中找不到 `{symbol}`。", ephemeral=True
+                embed=create_error_embed(
+                    f"您的觀察清單中找不到 `{symbol}`。", title="系統錯誤"
+                ),
+                ephemeral=True,
             )
 
     @app_commands.command(name="list_watch", description="列出您的雷達觀察清單")
@@ -1144,7 +1273,12 @@ class TerminalCog(commands.Cog):
         assets = manager.get_assets(interaction.user.id, ContextType.WATCH)
 
         if not assets:
-            await interaction.followup.send("📭 您的觀察清單是空的。", ephemeral=True)
+            await interaction.followup.send(
+                embed=create_info_embed(
+                    title="查無資料", message="📭 您的觀察清單是空的。"
+                ),
+                ephemeral=True,
+            )
             return
 
         symbols_data = [(a.symbol, a.metadata.get("use_llm", True)) for a in assets]
@@ -1173,11 +1307,19 @@ class TerminalCog(commands.Cog):
         except Exception as e:
             logger.error(f"Failed to calculate PnL: {e}")
             return await interaction.followup.send(
-                f"❌ 計算未實現損益時發生錯誤: {e}", ephemeral=True
+                embed=create_error_embed(
+                    f"計算未實現損益時發生錯誤: {e}", title="系統錯誤"
+                ),
+                ephemeral=True,
             )
 
         if not pnl_data["trades"]:
-            await interaction.followup.send("📭 您目前無持倉紀錄。", ephemeral=True)
+            await interaction.followup.send(
+                embed=create_info_embed(
+                    title="查無資料", message="📭 您目前無持倉紀錄。"
+                ),
+                ephemeral=True,
+            )
             return
 
         ctx = database.get_full_user_context(user_id)
@@ -1200,12 +1342,16 @@ class TerminalCog(commands.Cog):
 
             await refresh_portfolio_greeks(user_id)
             await interaction.followup.send(
-                f"🗑️ **已刪除紀錄 (ID: {trade_id})**: `{asset.symbol}` 已移除。",
+                embed=create_info_embed(
+                    title="移除成功",
+                    message=f"✅ **已刪除紀錄 (ID: {trade_id})**: `{asset.symbol}` 已移除。",
+                ),
                 ephemeral=True,
             )
         else:
             await interaction.followup.send(
-                f"❌ 找不到 ID `{trade_id}`。", ephemeral=True
+                embed=create_error_embed(f"找不到 ID `{trade_id}`。", title="系統錯誤"),
+                ephemeral=True,
             )
 
     @app_commands.command(
@@ -1235,7 +1381,10 @@ class TerminalCog(commands.Cog):
 
             if current_price <= 0:
                 return await interaction.followup.send(
-                    f"❌ 無法獲取 `{symbol}` 即時報價。", ephemeral=True
+                    embed=create_error_embed(
+                        f"無法獲取 `{symbol}` 即時報價。", title="系統錯誤"
+                    ),
+                    ephemeral=True,
                 )
 
             from market_analysis.pro_management import simulate_pro_transition
@@ -1287,7 +1436,10 @@ class TerminalCog(commands.Cog):
         except Exception as e:
             logger.error(f"Transition Simulation failed: {e}")
             await interaction.followup.send(
-                "❌ 模擬執行失敗，請檢查輸入數據。", ephemeral=True
+                embed=create_error_embed(
+                    "模擬執行失敗，請檢查輸入數據。", title="系統錯誤"
+                ),
+                ephemeral=True,
             )
 
 

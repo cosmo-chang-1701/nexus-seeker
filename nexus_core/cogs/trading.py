@@ -20,6 +20,9 @@ from cogs.embed_builder import (
     build_vtr_stats_embed,
     create_portfolio_report_embed,
     create_rehedge_embed,
+    create_ai_analysis_embed,
+    create_info_embed,
+    create_error_embed,
 )
 from market_analysis.ghost_trader import GhostTrader
 
@@ -277,7 +280,10 @@ class SchedulerCog(commands.Cog):
     async def force_scan(self, interaction: discord.Interaction):
         if interaction.user.id != DISCORD_ADMIN_USER_ID:
             await interaction.response.send_message(
-                "⛔ 權限不足：此指令僅限管理員使用。", ephemeral=True
+                embed=create_error_embed(
+                    "權限不足：此指令僅限管理員使用。", title="權限錯誤"
+                ),
+                ephemeral=True,
             )
             logger.warning(
                 f"Unauthorized force_scan attempt by {interaction.user.name} ({interaction.user.id})"
@@ -288,7 +294,8 @@ class SchedulerCog(commands.Cog):
             f"Admin {interaction.user.name} ({interaction.user.id}) triggered force_scan"
         )
         await interaction.response.send_message(
-            "🚀 強制啟動全站掃描中...", ephemeral=True
+            embed=create_info_embed("系統控制", "🚀 強制啟動全站掃描中..."),
+            ephemeral=True,
         )
         asyncio.create_task(
             self._run_market_scan_logic(is_auto=False, triggered_by=interaction.user)
@@ -304,7 +311,10 @@ class SchedulerCog(commands.Cog):
     ):
         if interaction.user.id != DISCORD_ADMIN_USER_ID:
             await interaction.response.send_message(
-                "⛔ 權限不足：此指令僅限管理員使用。", ephemeral=True
+                embed=create_error_embed(
+                    "權限不足：此指令僅限管理員使用。", title="權限錯誤"
+                ),
+                ephemeral=True,
             )
             logger.warning(
                 f"Unauthorized force_after_report attempt by {interaction.user.name} ({interaction.user.id})"
@@ -316,7 +326,9 @@ class SchedulerCog(commands.Cog):
             f"Admin {interaction.user.name} ({interaction.user.id}) triggered force_after_report mode={mode}"
         )
         await interaction.response.send_message(
-            f"🧪 盤後結算報告手動執行中 (`{mode}`)...",
+            embed=create_info_embed(
+                "系統控制", f"🧪 盤後結算報告手動執行中 (`{mode}`)..."
+            ),
             ephemeral=True,
         )
 
@@ -324,13 +336,15 @@ class SchedulerCog(commands.Cog):
             dry_run=dry_run, triggered_by=interaction.user
         )
         await interaction.followup.send(
-            (
-                "✅ 盤後結算流程完成\n"
-                f"mode: `{mode}`\n"
-                f"users_total: `{stats['users_total']}`\n"
-                f"users_queued: `{stats['users_queued']}`\n"
-                f"users_skipped: `{stats['users_skipped']}`\n"
-                f"users_failed: `{stats['users_failed']}`"
+            embed=create_info_embed(
+                "盤後結算報告完成",
+                (
+                    f"mode: `{mode}`\n"
+                    f"users_total: `{stats['users_total']}`\n"
+                    f"users_queued: `{stats['users_queued']}`\n"
+                    f"users_skipped: `{stats['users_skipped']}`\n"
+                    f"users_failed: `{stats['users_failed']}`"
+                ),
             ),
             ephemeral=True,
         )
@@ -382,7 +396,6 @@ class SchedulerCog(commands.Cog):
             survival_runway = data.get("survival_runway")
 
             # 🚀 [Integrated Analyst Agent] 整合 AI 專業點評
-            message_content = "📊 **【Nexus Seeker 盤後結算系統】**"
             ai_enabled = False
             if not dry_run:
                 try:
@@ -435,9 +448,6 @@ class SchedulerCog(commands.Cog):
                         report_type = f"{time_str} 盤後交易與每日總結"
                         logger.info(f"正在為用戶 {uid} 生成 AI 盤後分析報告...")
                         ai_report = await generate_analyst_report(report_type, raw_data)
-                        message_content = (
-                            f"📊 **【Nexus Seeker 盤後 AI 深度分析】**\n\n{ai_report}"
-                        )
                 except Exception as ai_e:
                     logger.error(f"AI 報告生成失敗 (uid={uid})，改用預設標題: {ai_e}")
 
@@ -490,19 +500,24 @@ class SchedulerCog(commands.Cog):
                 continue
 
             try:
-                await self.bot.queue_dm(uid, message=message_content, embed=embed)
+                # 如果有 AI 報告，先發送 AI 報告 Embed
+                if ai_enabled and "ai_report" in locals() and ai_report:
+                    ai_embed = create_ai_analysis_embed(ai_report)
+                    await self.bot.queue_dm(uid, embed=ai_embed)
+                    logger.info(f"盤後 AI 深度分析 Embed 已排入 DM 佇列，uid={uid}")
+
+                # 發送標準風險結算報告 Embed
+                await self.bot.queue_dm(uid, embed=embed)
                 stats["users_queued"] += 1
-                logger.info(
-                    f"盤後報告已排入 DM 佇列，uid={uid}，AI={message_content[:20]}..."
-                )
+                logger.info(f"盤後風險結算報告已排入 DM 佇列，uid={uid}")
             except discord.Forbidden:
                 stats["users_skipped"] += 1
                 logger.warning(f"無法發送私訊給用戶 {uid}")
-            except Exception:
+            except Exception as e:
                 stats["users_failed"] += 1
-                err = f"queue_dm_failed: uid={uid}"
+                err = f"queue_dm_failed: uid={uid}, err={e}"
                 stats["errors"].append(err)
-                logger.exception(f"盤後報告排入 DM 佇列失敗，uid={uid}")
+                logger.error(f"發送盤後報告失敗，uid={uid}：{e}")
 
         if stats["errors"]:
             logger.warning(
@@ -531,13 +546,20 @@ class SchedulerCog(commands.Cog):
         symbols = sorted(list(set(row[1] for row in all_watchlists)))
 
         if not symbols:
-            await interaction.followup.send("📭 觀察清單為空，無法執行 DDP 掃描。")
+            await interaction.followup.send(
+                embed=create_info_embed(
+                    "觀察清單", "📭 觀察清單為空，無法執行 DDP 掃描。"
+                )
+            )
             return
 
         results = await self.trading_service.run_ddp_scan(symbols)
         if not results:
             await interaction.followup.send(
-                "🔎 掃描完成，目前沒有符合 Davis Double Play (DDP) 條件的標的。"
+                embed=create_info_embed(
+                    "DDP 掃描結果",
+                    "🔎 掃描完成，目前沒有符合 Davis Double Play (DDP) 條件的標的。",
+                )
             )
             return
 
@@ -559,7 +581,11 @@ class SchedulerCog(commands.Cog):
         uids = sorted(list(set(row[0] for row in all_watchlists)))
 
         if not uids:
-            await interaction.followup.send("📭 觀察清單為空，無法執行 IV 掃描。")
+            await interaction.followup.send(
+                embed=create_info_embed(
+                    "觀察清單", "📭 觀察清單為空，無法執行 IV 掃描。"
+                )
+            )
             return
 
         found_any = False
@@ -581,7 +607,10 @@ class SchedulerCog(commands.Cog):
 
         if not found_any:
             await interaction.followup.send(
-                "🔎 掃描完成，目前沒有符合波動率優勢 (Cheap IV) 條件的標的。"
+                embed=create_info_embed(
+                    "IV 掃描結果",
+                    "🔎 掃描完成，目前沒有符合波動率優勢 (Cheap IV) 條件的標的。",
+                )
             )
 
     async def _should_send_alert(self, uid: int, symbol: str, alert_mode: int) -> bool:

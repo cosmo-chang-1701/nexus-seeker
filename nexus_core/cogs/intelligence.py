@@ -8,6 +8,8 @@ from typing import Any
 import database
 from services import reddit_service, news_service, market_data_service, llm_service
 from cogs.embed_builder import (
+    create_error_embed,
+    create_info_embed,
     create_polymarket_list_embed,
     create_news_scan_embed,
     create_reddit_scan_embed,
@@ -35,7 +37,10 @@ class IntelligenceCog(commands.Cog):
         try:
             if not hasattr(self.bot, "polymarket_service"):
                 return await interaction.followup.send(
-                    "❌ Polymarket 服務未初始化。", ephemeral=True
+                    embed=create_error_embed(
+                        "Polymarket 服務未初始化。", title="系統錯誤"
+                    ),
+                    ephemeral=True,
                 )
 
             markets = self.bot.polymarket_service.get_active_markets(limit=20)
@@ -44,7 +49,10 @@ class IntelligenceCog(commands.Cog):
         except Exception as e:
             logger.error(f"獲取 Polymarket 清單失敗: {e}")
             await interaction.followup.send(
-                "❌ 獲取 Polymarket 資訊時發生錯誤。", ephemeral=True
+                embed=create_error_embed(
+                    "獲取 Polymarket 資訊時發生錯誤。", title="系統錯誤"
+                ),
+                ephemeral=True,
             )
 
     @app_commands.command(
@@ -53,7 +61,8 @@ class IntelligenceCog(commands.Cog):
     async def poly_status(self, interaction: discord.Interaction):
         if not hasattr(self.bot, "polymarket_service"):
             await interaction.response.send_message(
-                "❌ Polymarket 服務未初始化。", ephemeral=True
+                embed=create_error_embed("Polymarket 服務未初始化。", title="系統錯誤"),
+                ephemeral=True,
             )
             return
 
@@ -130,17 +139,26 @@ class IntelligenceCog(commands.Cog):
                     mock_threshold,
                 )
                 await interaction.followup.send(
-                    f"✅ 已成功模擬並發送巨鯨交易通知 (${usd_value:,.2f}) 到您的私訊。",
+                    embed=create_info_embed(
+                        title="操作成功",
+                        message=f"✅ 已成功模擬並發送巨鯨交易通知 (${usd_value:,.2f}) 到您的私訊。",
+                    ),
                     ephemeral=True,
                 )
             else:
                 await interaction.followup.send(
-                    "❌ Polymarket 服務未啟動。", ephemeral=True
+                    embed=create_error_embed(
+                        "Polymarket 服務未啟動。", title="系統錯誤"
+                    ),
+                    ephemeral=True,
                 )
 
         except Exception as e:
             logger.error(f"Polymarket 模擬失敗: {e}")
-            await interaction.followup.send(f"❌ 模擬失敗: {e}", ephemeral=True)
+            await interaction.followup.send(
+                embed=create_error_embed(f"模擬失敗: {e}", title="系統錯誤"),
+                ephemeral=True,
+            )
 
     @app_commands.command(
         name="test_risk_ui", description="🛠️ [開發者] 模擬高風險 LMND 掃描視覺成果"
@@ -232,7 +250,10 @@ class IntelligenceCog(commands.Cog):
         except Exception as e:
             logger.error(f"[{symbol}] 新聞掃描失敗: {e}")
             await interaction.followup.send(
-                f"❌ 獲取 {symbol} 新聞時發生錯誤。", ephemeral=True
+                embed=create_error_embed(
+                    f"獲取 {symbol} 新聞時發生錯誤。", title="系統錯誤"
+                ),
+                ephemeral=True,
             )
 
     @app_commands.command(
@@ -251,7 +272,10 @@ class IntelligenceCog(commands.Cog):
         except Exception as e:
             logger.error(f"[{symbol}] Reddit 掃描失敗: {e}")
             await interaction.followup.send(
-                f"❌ 獲取 {symbol} Reddit 情緒時發生錯誤。", ephemeral=True
+                embed=create_error_embed(
+                    f"獲取 {symbol} Reddit 情緒時發生錯誤。", title="系統錯誤"
+                ),
+                ephemeral=True,
             )
 
     @app_commands.command(name="quote", description="獲取標的即時報價 (Finnhub)")
@@ -261,7 +285,11 @@ class IntelligenceCog(commands.Cog):
         data = await market_data_service.get_quote(symbol)
         if not data:
             return await interaction.followup.send(
-                f"❌ 無法取得 `{symbol}` 的報價，請檢查代碼是否正確。", ephemeral=True
+                embed=create_error_embed(
+                    f"無法取得 `{symbol}` 的報價，請檢查代碼是否正確。",
+                    title="系統錯誤",
+                ),
+                ephemeral=True,
             )
 
         embed = discord.Embed(

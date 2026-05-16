@@ -1,3 +1,4 @@
+from cogs.embed_builder import create_info_embed
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
@@ -51,7 +52,10 @@ class CalendarCog(commands.Cog):
 
         if not events:
             return await interaction.followup.send(
-                "📭 未來 7 日內無影響持倉標的的重大事件或財報。"
+                embed=create_info_embed(
+                    title="查無資料",
+                    message="📭 未來 7 日內無影響持倉標的的重大事件或財報。",
+                )
             )
 
         embed = discord.Embed(
@@ -88,7 +92,9 @@ class CalendarCog(commands.Cog):
 
         if not user_watch:
             return await interaction.followup.send(
-                "📭 觀察清單為空，無法執行 IV 掃描。"
+                embed=create_info_embed(
+                    title="查無資料", message="📭 觀察清單為空，無法執行 IV 掃描。"
+                )
             )
 
         results = await self.vol_inspector.run_scan(user_watch, user_id)
@@ -100,7 +106,10 @@ class CalendarCog(commands.Cog):
 
         if not high_iv_results:
             return await interaction.followup.send(
-                "🔎 掃描完成，未發現 IV Rank > 80% 的高波動標的。"
+                embed=create_info_embed(
+                    title="系統資訊",
+                    message="📊 掃描完成，未發現 IV Rank > 80% 的高波動標的。",
+                )
             )
 
         embed = discord.Embed(
@@ -143,7 +152,10 @@ class CalendarCog(commands.Cog):
 
         if not symbol_positions:
             return await interaction.followup.send(
-                f"📭 您目前並未持有 `{symbol}` 的部位，無法進行模擬。"
+                embed=create_info_embed(
+                    title="查無資料",
+                    message=f"📭 您目前並未持有 `{symbol}` 的部位，無法進行模擬。",
+                )
             )
 
         total_delta = sum(p[8] for p in symbol_positions)

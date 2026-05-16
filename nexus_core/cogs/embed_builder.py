@@ -1,6 +1,7 @@
 import discord
 import logging
 import psutil
+import re
 
 from datetime import datetime, timezone
 from typing import List, Dict, Any
@@ -1781,3 +1782,137 @@ def build_hedge_analysis_field(embed, analysis):
         value=_safe_embed_field_value(content, "對沖分析資料不足。"),
         inline=False,
     )
+
+
+def create_ai_analysis_embed(
+    ai_report_text: str, title: str = "📊 Nexus Seeker 盤後 AI 深度分析"
+) -> discord.Embed:
+    """
+    將 AI 產出的盤後深度分析轉換為 Discord Embed 格式。
+    參考盤後風險結算報告風格。
+    """
+    embed_color = discord.Color.blue()
+    if "🚨" in ai_report_text or "🆘" in ai_report_text:
+        embed_color = discord.Color.red()
+    elif "⚠️" in ai_report_text:
+        embed_color = discord.Color.orange()
+
+    embed = discord.Embed(
+        title=title,
+        color=embed_color,
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    # 嘗試將報告內容分割成段落 (以 Markdown 標題分割)
+    # 預期格式如: 1. **🏁 財務生存跑道**
+    sections = re.split(r"\n(?=\d+\.\s+\*\*|(?:\*\*[\u2600-\u2BFF]))", ai_report_text)
+
+    if len(sections) > 1:
+        for section in sections:
+            section = section.strip()
+            if not section:
+                continue
+
+            # 提取標題與內容
+            lines = section.split("\n", 1)
+            header = lines[0].replace("**", "").strip()
+            # 去掉序號如 "1. "
+            header = re.sub(r"^\d+\.\s*", "", header)
+
+            content = lines[1].strip() if len(lines) > 1 else "無內容"
+            # 移除分隔線
+            content = re.sub(r"^-{3,}$", "", content, flags=re.MULTILINE).strip()
+
+            embed.add_field(
+                name=header,
+                value=_safe_embed_field_value(content, "無詳細資訊"),
+                inline=False,
+            )
+    else:
+        # 如果沒辦法切分，則整塊放入
+        embed.description = _truncate_with_boundary(ai_report_text, 4000)
+
+    embed.set_footer(text="Nexus Seeker AI Analyst v1.0 | 智慧投研管線")
+    return embed
+
+
+def create_next_day_strategy_embed(strategy_text: str) -> discord.Embed:
+    """
+    將次日策略制定報告轉換為 Discord Embed 格式。
+    參考盤後風險結算報告風格。
+    """
+    embed_color = discord.Color.blue()
+    if "🚨" in strategy_text or "🆘" in strategy_text:
+        embed_color = discord.Color.red()
+    elif "⚠️" in strategy_text:
+        embed_color = discord.Color.orange()
+
+    embed = discord.Embed(
+        title="🎯 Nexus Seeker 次日策略制定",
+        color=embed_color,
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    # 策略報告通常包含 VIX 資訊與戰術建議
+    # 嘗試切分 **標題**:
+    sections = re.split(r"\n(?=\*\*[^*]+\*\*[:：])", strategy_text)
+
+    if len(sections) > 1:
+        # 第一部分可能是時間標題行，放在 description
+        first_part = sections[0].strip()
+        # 移除時間標題與分隔線
+        first_part = re.sub(r"\*\*.*次日策略制定\*\*", "", first_part)
+        first_part = re.sub(r"-{10,}", "", first_part).strip()
+
+        if first_part:
+            embed.description = first_part
+
+        # 處理後續欄位
+        for section in sections[1:]:
+            section = section.strip()
+            if not section:
+                continue
+
+            lines = section.split("\n", 1)
+            header = (
+                lines[0].replace("**", "").replace(":", "").replace("：", "").strip()
+            )
+            content = lines[1].strip() if len(lines) > 1 else "無內容"
+
+            embed.add_field(
+                name=header,
+                value=_safe_embed_field_value(content, "無詳細資訊"),
+                inline=False,
+            )
+    else:
+        # 移除標題行後放入 description
+        clean_text = re.sub(r"\*\*.*次日策略制定\*\*", "", strategy_text)
+        clean_text = re.sub(r"-{10,}", "", clean_text).strip()
+        embed.description = _truncate_with_boundary(clean_text, 4000)
+
+    embed.set_footer(text="Nexus Seeker Strategy Engine v1.0 | 戰鬥階級系統")
+    return embed
+
+
+def create_info_embed(title: str, message: str) -> discord.Embed:
+    """建立標準資訊通知 Embed"""
+    embed = discord.Embed(
+        title=f"ℹ️ {title}",
+        description=message,
+        color=discord.Color.blue(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.set_footer(text="Nexus Seeker | System Notification")
+    return embed
+
+
+def create_error_embed(message: str, title: str = "系統錯誤") -> discord.Embed:
+    """建立標準錯誤通知 Embed"""
+    embed = discord.Embed(
+        title=f"❌ {title}",
+        description=message,
+        color=discord.Color.red(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.set_footer(text="Nexus Seeker | Error Report")
+    return embed

@@ -30,6 +30,13 @@ class NexusBot(commands.Bot):
         self, user_id: int, message: str = None, embed: discord.Embed = None
     ):
         """將私訊任務加入持久化佇列，並喚醒發送工人"""
+        from cogs.embed_builder import create_info_embed
+
+        # 如果只有訊息且沒有 Embed，則將其封裝進 Embed
+        if message and not embed:
+            embed = create_info_embed("Nexus Seeker 通知", message)
+            message = None  # 清除純文字內容，避免重複發送
+
         embed_dict: Optional[Dict[str, Any]] = (
             cast(Any, embed.to_dict()) if embed else None
         )
