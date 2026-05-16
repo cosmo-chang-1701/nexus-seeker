@@ -3,17 +3,17 @@ import click
 import logging
 import os
 import sys
+import json
 from typing import Optional, Any, Dict, List
+from unittest.mock import MagicMock
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich import print as rprint
-import json
+from dotenv import load_dotenv
 
 # 環境變數與路徑設定
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
-from dotenv import load_dotenv
 load_dotenv()
 
 # 設定 Logging 為 Quiet 模式
@@ -35,9 +35,6 @@ class MockBot:
             title = getattr(embed, 'title', 'No Title')
             desc = getattr(embed, 'description', 'No Description')
             rprint(Panel(desc, title=f"📊 {title}"))
-
-# 為了 MockBot 裡面的 MagicMock
-from unittest.mock import MagicMock
 
 def run_async(coro):
     """助手函數：在現有 loop 或新 loop 中執行協程"""
@@ -110,9 +107,12 @@ def settings(ctx, capital, risk_limit, alert_mode):
     
     if capital is not None or risk_limit is not None or alert_mode is not None:
         kwargs = {}
-        if capital is not None: kwargs['capital'] = capital
-        if risk_limit is not None: kwargs['risk_limit'] = risk_limit
-        if alert_mode is not None: kwargs['option_alert_mode'] = alert_mode
+        if capital is not None:
+            kwargs['capital'] = capital
+        if risk_limit is not None:
+            kwargs['risk_limit'] = risk_limit
+        if alert_mode is not None:
+            kwargs['option_alert_mode'] = alert_mode
         
         database.update_user_settings(uid, **kwargs)
         rprint("[bold green]✅ 帳戶設定已更新。[/bold green]")
@@ -185,7 +185,7 @@ def portfolio_group():
 @portfolio_group.command(name='pnl')
 @click.pass_context
 def portfolio_pnl(ctx):
-    """查看持倉未實現損益 (與舊 portfolio 指令相同)"""
+    """查看持倉未實現損益"""
     uid = ctx.obj['user_id']
     service = ctx.obj['trading_service']
     async def _run():
@@ -229,7 +229,6 @@ def runway_check(ctx):
     uid = ctx.obj['user_id']
     u_ctx = database.get_full_user_context(uid)
     
-    # 獲取總 Theta
     from services.asset_manager import AssetManager
     from models.asset import ContextType
     manager = AssetManager()
@@ -327,11 +326,9 @@ def admin_group():
 def force_scan(ctx):
     """立即執行全站掃描"""
     service = ctx.obj['trading_service']
-    # 這裡通常是背景任務，我們直接調用內部邏輯
     rprint("[bold yellow]🚀 啟動全站強制掃描... (這可能需要幾分鐘)[/bold yellow]")
     async def _run():
-        from services.trading_service import TradingService
-        # 模擬 _run_market_scan_logic
+        import database
         all_watch = database.get_all_watchlist()
         symbols = list(set(row[1] for row in all_watch))
         await service.run_ddp_scan(symbols)
