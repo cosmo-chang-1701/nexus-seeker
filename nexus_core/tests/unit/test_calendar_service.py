@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, patch
 from services.calendar_service import CalendarService, EconomicEvent, EarningsEvent
-from datetime import datetime, timedelta
+from datetime import datetime, date
 
 
 @pytest.mark.asyncio
@@ -38,15 +38,24 @@ async def test_get_high_impact_events():
 async def test_get_symbol_earnings():
     service = CalendarService()
 
-    with patch(
-        "market_analysis.data.get_next_earnings_date", new_callable=AsyncMock
-    ) as mock_date:
-        # get_next_earnings_date returns a date object
-        next_dt = datetime.now() + timedelta(days=2)
-        mock_date.return_value = next_dt.date()
+    fixed_now = datetime(2026, 5, 18, 12, 0, 0)
+    with patch("services.calendar_service.datetime") as mock_datetime:
+        mock_datetime.now.return_value = fixed_now
+        mock_datetime.combine = datetime.combine
+        mock_datetime.min = datetime.min
+        mock_datetime.strptime = datetime.strptime
 
-        info = await service.get_symbol_earnings("AAPL")
-        assert isinstance(info, EarningsEvent)
-        assert info.symbol == "AAPL"
-        # tte_hours depends on current time, but should be around 2 days (48h) +/- 12h
-        assert 30.0 < info.tte_hours < 60.0
+        with patch(
+            "market_analysis.data.get_next_earnings_date", new_callable=AsyncMock
+        ) as mock_date:
+            # get_next_earnings_date returns a date object
+            # Set it to 2 days after our fixed_now
+            target_date = date(2026, 5, 20)
+            mock_date.return_value = target_date
+
+            info = await service.get_symbol_earnings("AAPL")
+            assert isinstance(info, EarningsEvent)
+            assert info.symbol == "AAPL"
+            assert info.date == "2026-05-20"
+            # (May 20, 00:00 - May 18, 12:00) = 36 hours
+            assert info.tte_hours == 36.0

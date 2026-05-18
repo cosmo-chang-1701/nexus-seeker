@@ -797,11 +797,18 @@ class AnalystAgent(commands.Cog):
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     resp = await client.get(
                         f"{GAMMA_API_BASE}/markets",
-                        params={"active": "true", "closed": "false", "limit": 10},
+                        params={"active": "true", "closed": "false", "limit": 20},
                     )
                     if resp.status_code == 200:
                         markets = resp.json()
-                        for m in markets[:5]:
+                        for m in markets:
+                            # 使用 PolymarketService 的過濾邏輯
+                            if hasattr(self.bot, "polymarket_service"):
+                                if not self.bot.polymarket_service._is_relevant_market(
+                                    m
+                                ):
+                                    continue
+
                             poly_events.append(
                                 {
                                     "question": m.get("question"),
@@ -809,6 +816,8 @@ class AnalystAgent(commands.Cog):
                                     "price": m.get("outcomePrices"),
                                 }
                             )
+                            if len(poly_events) >= 5:
+                                break
             except Exception as e:
                 logger.error(f"Error fetching Polymarket data: {e}")
 
