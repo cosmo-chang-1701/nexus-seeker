@@ -113,7 +113,8 @@ class AnalystAgent(commands.Cog):
                 except Exception as e:
                     logger.error(f"Analyst Intra-Day loop error: {e}")
 
-                await asyncio.sleep(30 * 60)
+                # Reduce frequency to every 120 minutes (2 hours)
+                await asyncio.sleep(120 * 60)
             else:
                 target = get_next_market_target_time("open", offset_minutes=0)
                 sleep_secs = get_sleep_seconds(target)

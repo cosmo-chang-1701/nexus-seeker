@@ -8,6 +8,8 @@ from services.calendar_service import calendar_service
 from database.user_settings import get_all_user_ids
 import market_time
 
+from services.market_data_service import BoundedCache
+
 logger = logging.getLogger(__name__)
 ny_tz = ZoneInfo("America/New_York")
 
@@ -20,6 +22,10 @@ class EventMonitor:
 
     def __init__(self, bot):
         self.bot = bot
+        # Cache to track alerted events to prevent spam
+        # Key: (user_id, event_type, event_id, event_date)
+        # Max 2000 entries should be enough for many users and events
+        self._alerted_cache = BoundedCache(max_size=2000)
 
     async def check_upcoming_events(self):
         """
@@ -36,9 +42,27 @@ class EventMonitor:
                 # 1. Fetch events affecting this user
                 events = await calendar_service.get_portfolio_events(uid, days=3)
 
-                # 2. Filter for events within the next 24-72 hours that haven't been alerted
-                # For simplicity, we alert if TTE < 48h
-                critical_events = [e for e in events if 0 < e.tte_hours < 48.0]
+                # 2. Filter for events within the next 48 hours that haven't been alerted
+                critical_events = []
+                for e in events:
+                    if not (0 < e.tte_hours < 48.0):
+                        continue
+
+                    # Create a unique key for deduplication
+                    if e.type == "ECONOMIC":
+                        # For economic events, use event name and ISO time
+                        event_id = getattr(e, "event", "unknown")
+                        event_date = getattr(e, "time", "unknown")
+                    else:
+                        # For earnings, use symbol and date
+                        event_id = getattr(e, "symbol", "unknown")
+                        event_date = getattr(e, "date", "unknown")
+
+                    alert_key = f"{uid}_{e.type}_{event_id}_{event_date}"
+
+                    if alert_key not in self._alerted_cache:
+                        critical_events.append(e)
+                        self._alerted_cache[alert_key] = datetime.now()
 
                 if critical_events:
                     await self._send_event_alert(uid, critical_events)
