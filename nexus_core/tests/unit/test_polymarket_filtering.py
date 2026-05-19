@@ -74,6 +74,6 @@ def test_is_relevant_market_mixed(poly_service):
         "question": "NBA vs NFL viewership during Election night",
         "description": "Comparing sports and politics.",
     }
-    # Hits NBA/NFL first in blacklist? No, it checks allow_keywords first.
-    # "Election" is in allow_keywords.
-    assert poly_service._is_relevant_market(market_info) is True
+    # Now that we prioritize blacklist, hitting NBA/NFL should return False
+    # even though "Election" is in allow_keywords.
+    assert poly_service._is_relevant_market(market_info) is False

@@ -164,13 +164,19 @@ class PolymarketService:
         }
 
     def get_active_markets(self, limit: int = 20) -> List[Dict[str, Any]]:
-        """獲取目前監控中的活躍市場清單"""
-        return self._active_markets[:limit]
+        """獲取目前監控中的活躍市場清單 (套用類別過濾)"""
+        filtered = []
+        for m in self._active_markets:
+            if self._is_relevant_market(m):
+                filtered.append(m)
+            if len(filtered) >= limit:
+                break
+        return filtered
 
     def _is_relevant_market(self, market_info: Dict[str, Any]) -> bool:
         """
         [Category Hard Gate] 篩選無關市場。
-        僅允許經濟、政治、加密、科技與 AI 相關標的。
+        採用「黑名單優先」策略，確保娛樂、遊戲等非相關標的被絕對攔截。
         """
         import re
 
@@ -178,7 +184,79 @@ class PolymarketService:
         description = (market_info.get("description") or "").upper()
         full_text = f"{question} {description}"
 
-        # 1. 關鍵字白名單 (包含這些通常是相關的)
+        # 1. 絕對排除黑名單 (優先檢查)
+        deny_keywords = [
+            "NBA",
+            "FINALS",
+            "SUPER BOWL",
+            "NFL",
+            "MLB",
+            "NHL",
+            "SOCCER",
+            "FOOTBALL",
+            "BASKETBALL",
+            "BASEBALL",
+            "CHAMPIONS LEAGUE",
+            "WORLD CUP",
+            "OSCAR",
+            "GRAMMY",
+            "EMMY",
+            "BOX OFFICE",
+            "ENTERTAINMENT",
+            "MOVIE",
+            "TEMPERATURE",
+            "WEATHER",
+            "SPORTS",
+            "TOURNAMENT",
+            "PLAYOFFS",
+            "FIGHT",
+            "UFC",
+            "BOXING",
+            "WRESTLING",
+            "CELEBRITY",
+            "MUSIC",
+            "ALBUM",
+            "GTA",
+            "GTA VI",
+            "GTA 6",
+            "GAME",
+            "GAMES",
+            "SONG",
+            "SINGLE",
+            "SINGLES",
+            "TOUR",
+            "CONCERT",
+            "FESTIVAL",
+            "RELEASE",
+            "TRAILER",
+            "NETFLIX",
+            "YOUTUBE",
+            "TIKTOK",
+            "STREAMER",
+            "RIHANNA",
+            "BEYONCE",
+            "TAYLOR",
+            "SWIFT",
+            "KANYE",
+            "ELON MUSK",
+            "MRBEAST",
+            "FORNITE",
+            "MINECRAFT",
+            "NINTENDO",
+            "SONY",
+            "PLAYSTATION",
+            "XBOX",
+            "ACTOR",
+            "ACTRESS",
+            "MARVEL",
+            "DC",
+        ]
+
+        for kw in deny_keywords:
+            if re.search(rf"\b{re.escape(kw)}\b", full_text):
+                return False
+
+        # 2. 關鍵字白名單 (包含這些通常是相關的)
         allow_keywords = [
             "FED",
             "INTEREST RATE",
@@ -221,110 +299,65 @@ class PolymarketService:
             "DOLLAR",
             "OIL",
             "GOLD",
+            "STRIKE",
+            "LABOR",
+            "TARIFF",
+            "TRADE WAR",
         ]
 
-        # 2. 關鍵字黑名單 (優先排除)
-        deny_keywords = [
-            "NBA",
-            "FINALS",
-            "SUPER BOWL",
-            "NFL",
-            "MLB",
-            "NHL",
-            "SOCCER",
-            "FOOTBALL",
-            "BASKETBALL",
-            "BASEBALL",
-            "CHAMPIONS LEAGUE",
-            "WORLD CUP",
-            "OSCAR",
-            "GRAMMY",
-            "EMMY",
-            "BOX OFFICE",
-            "ENTERTAINMENT",
-            "MOVIE",
-            "TEMPERATURE",
-            "WEATHER",
-            "SPORTS",
-            "TOURNAMENT",
-            "PLAYOFFS",
-            "FIGHT",
-            "UFC",
-            "BOXING",
-            "WRESTLING",
-            "CELEBRITY",
-            "MUSIC",
-            "ALBUM",
-            "GTA",
-            "GAME",
-            "GAMES",
-            "SONG",
-            "SINGLE",
-            "SINGLES",
-            "TOUR",
-            "CONCERT",
-            "FESTIVAL",
-            "RELEASE",
-            "TRAILER",
-            "NETFLIX",
-            "YOUTUBE",
-            "TIKTOK",
-            "STREAMER",
-            "RIHANNA",
-            "BEYONCE",
-            "TAYLOR",
-            "SWIFT",
-            "KANYE",
-        ]
-
-        # 策略：精確匹配單字 (Word Boundary) 命中白名單則放行
         for kw in allow_keywords:
             if re.search(rf"\b{re.escape(kw)}\b", full_text):
                 return True
 
-        # 命中黑名單則攔截
-        for kw in deny_keywords:
-            if re.search(rf"\b{re.escape(kw)}\b", full_text):
-                return False
-
         # 3. 股票代碼偵測 (包含 2-5 個連續大寫字母且非常見縮寫)
         # 這裡用原始 question 檢查真正的全大寫單字
-        symbol_match = re.search(r"\b([A-Z]{2,5})\b", market_info.get("question", ""))
-        if symbol_match:
-            sym = symbol_match.group(1)
-            common_non_stock_caps = [
-                "USA",
-                "US",
-                "UK",
-                "EU",
-                "UN",
-                "AI",
-                "CEO",
-                "CFO",
-                "SEC",
-                "FED",
-                "WHO",
-                "WILL",
-                "WIN",
-                "THE",
-                "YES",
-                "NO",
-                "MAY",
-                "GTA",
-                "VI",
-                "II",
-                "III",
-                "IV",
-                "V",
-                "X",
-                "NEW",
-                "TOP",
-                "PRO",
-                "MAX",
-                "DATE",
-                "TIME",
-                "LIVE",
-            ]
+        symbols = re.findall(r"\b([A-Z]{2,5})\b", market_info.get("question", ""))
+        common_non_stock_caps = [
+            "USA",
+            "US",
+            "UK",
+            "EU",
+            "UN",
+            "AI",
+            "CEO",
+            "CFO",
+            "SEC",
+            "FED",
+            "WHO",
+            "WILL",
+            "WIN",
+            "THE",
+            "YES",
+            "NO",
+            "MAY",
+            "GTA",
+            "VI",
+            "II",
+            "III",
+            "IV",
+            "V",
+            "X",
+            "NEW",
+            "TOP",
+            "PRO",
+            "MAX",
+            "DATE",
+            "TIME",
+            "LIVE",
+            "AN",
+            "OR",
+            "IF",
+            "HOW",
+            "WHY",
+            "WAS",
+            "FOR",
+            "OUT",
+            "IN",
+            "OFF",
+            "ON",
+        ]
+
+        for sym in symbols:
             if sym not in common_non_stock_caps:
                 return True
 
