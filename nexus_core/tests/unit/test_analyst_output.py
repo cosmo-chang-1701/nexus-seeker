@@ -1,3 +1,4 @@
+import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -30,7 +31,12 @@ async def test_dispatch_intraday_guide_uses_builder():
     ) as mock_ctx, patch(
         "cogs.analyst_agent.create_intraday_execution_guide_embed",
         return_value=embed,
-    ) as mock_builder:
+    ) as mock_builder, patch("cogs.analyst_agent.datetime") as mock_datetime:
+        mock_now = datetime.datetime(2024, 1, 1, 10, 0, 0)
+        mock_datetime.now.return_value = mock_now
+        mock_datetime.side_effect = lambda *args, **kwargs: datetime.datetime(
+            *args, **kwargs
+        )
         mock_mem = MagicMock()
         mock_mem.percent = 50.0
         mock_vmem.return_value = mock_mem

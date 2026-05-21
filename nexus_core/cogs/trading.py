@@ -28,6 +28,7 @@ from cogs.embed_builder import (
     create_pre_market_earnings_embed,
     create_ditm_transition_alert_embed,
     create_vtr_settlement_notice_embed,
+    create_watchlist_signal_embed,
 )
 from market_analysis.ghost_trader import GhostTrader
 
@@ -200,15 +201,13 @@ class SchedulerCog(commands.Cog):
 
     @tasks.loop(minutes=30)
     async def dynamic_market_scanner(self):
-        """盤中動態巡邏：每 30 分鐘心跳檢查，僅在盤中 (09:45後) 執行掃描"""
+        """盤中動態巡邏：每 30 分鐘心跳檢查，僅在盤中執行掃描"""
         if not market_time.is_market_open():
             return
 
-        now_ny = datetime.now(market_time.ny_tz)
-        if now_ny.hour == 9:  # 09:30 - 09:59 避開
-            return
-
         logger.info("🕒 [盤中掃描] 美股交易時段內，啟動動態雷達...")
+        all_watchlists = database.get_all_watchlist()
+        await self._dispatch_watchlist_heartbeat(all_watchlists)
         await self._run_market_scan_logic(is_auto=True)
 
     @dynamic_market_scanner.before_loop
@@ -567,6 +566,69 @@ class SchedulerCog(commands.Cog):
         if alert_mode == 2:
             return database.is_symbol_in_portfolio(uid, symbol)
         return True
+
+    async def _dispatch_watchlist_heartbeat(
+        self, all_watchlists: list[tuple[int, str, int]] | None = None
+    ) -> None:
+        """每個 30 分鐘節點推送 watchlist 全標的技術 / 期權 / skew 戰報。"""
+        from market_analysis.intraday_pipeline import (
+            build_watchlist_option_plan,
+            derive_watchlist_option_guidance,
+            evaluate_watchlist_symbol,
+        )
+        from ui.formatter import generate_ansi_watchlist_report
+
+        if all_watchlists is None:
+            all_watchlists = database.get_all_watchlist()
+        if not all_watchlists:
+            return
+
+        unique_symbols = sorted({sym for _, sym, _ in all_watchlists})
+        evaluations = await asyncio.gather(
+            *(evaluate_watchlist_symbol(symbol) for symbol in unique_symbols)
+        )
+        evaluation_map = {
+            evaluation.metrics.symbol: evaluation
+            for evaluation in evaluations
+            if evaluation is not None
+        }
+
+        user_symbols: Dict[int, list[str]] = {}
+        for uid, sym, _ in all_watchlists:
+            user_symbols.setdefault(uid, [])
+            if sym not in user_symbols[uid]:
+                user_symbols[uid].append(sym)
+
+        for uid, symbols in user_symbols.items():
+            user_context = database.get_full_user_context(uid)
+            for sym in symbols:
+                evaluation = evaluation_map.get(sym)
+                if evaluation is None:
+                    continue
+                report_body = generate_ansi_watchlist_report(
+                    evaluation.metrics, evaluation.tactical
+                )
+                option_guidance = derive_watchlist_option_guidance(
+                    evaluation.metrics, evaluation.tactical
+                )
+                option_plan = await build_watchlist_option_plan(
+                    evaluation.metrics,
+                    evaluation.tactical,
+                    capital=user_context.capital,
+                    risk_limit=user_context.risk_limit,
+                )
+                embed = create_watchlist_signal_embed(
+                    symbol=sym,
+                    report_body=report_body,
+                    option_guidance=option_guidance,
+                    skew_state=(
+                        f"{evaluation.metrics.option_skew:+.2f}% ｜ "
+                        f"{evaluation.metrics.option_skew_state}"
+                    ),
+                    alert_level=evaluation.tactical.alert_level,
+                    option_plan=option_plan,
+                )
+                await self.bot.queue_dm(uid, embed=embed)
 
     async def _run_market_scan_logic(self, is_auto=True, triggered_by=None):
         """共用的掃描核心邏輯，協調 Service 計算與 Discord 訊息發送。"""

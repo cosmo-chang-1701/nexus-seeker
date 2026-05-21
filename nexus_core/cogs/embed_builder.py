@@ -14,6 +14,8 @@ import re
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 
+from models.schemas import WatchlistOptionPlan
+
 logger = logging.getLogger(__name__)
 
 
@@ -1892,6 +1894,79 @@ def create_watchlist_embed(page_data, current_page, total_pages, total_items):
     embed.set_footer(
         text=f"頁次: {current_page}/{total_pages} ｜ 📊 總項目: {total_items}"
     )
+    return embed
+
+
+def create_watchlist_signal_embed(
+    symbol: str,
+    report_body: str,
+    option_guidance: str,
+    skew_state: str,
+    alert_level: str,
+    option_plan: WatchlistOptionPlan | None = None,
+) -> discord.Embed:
+    """建立 watchlist 半小時心跳推播 Embed。"""
+    color = {
+        "red": discord.Color.red(),
+        "yellow": discord.Color.orange(),
+        "green": discord.Color.green(),
+    }.get(alert_level, discord.Color.blurple())
+    level_text = {
+        "red": "🔴 高優先",
+        "yellow": "🟡 注意觀察",
+        "green": "🟢 例行追蹤",
+    }.get(alert_level, "🔵 一般")
+
+    embed = discord.Embed(
+        title=f"📡 Watchlist 半小時戰報：{symbol}",
+        description=(
+            f"**警報等級：** {level_text}\n"
+            "根據價位 / 技術面、期權結構與 Skew 的半小時盤中快照。"
+        ),
+        color=color,
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.add_field(
+        name="📊 技術 / 期權快照",
+        value=_safe_embed_field_value(report_body, "暫無快照"),
+        inline=False,
+    )
+    skew_lines = [skew_state]
+    if option_plan is not None:
+        skew_lines.append(option_plan.rationale)
+    embed.add_field(
+        name="📐 Skew 與市場判讀",
+        value=_safe_embed_field_value("\n".join(skew_lines), "N/A"),
+        inline=False,
+    )
+    embed.add_field(
+        name="🎯 執行建議",
+        value=_safe_embed_field_value(option_guidance, "暫無建議"),
+        inline=False,
+    )
+    if option_plan is not None:
+        leg_lines = []
+        for leg in option_plan.legs:
+            leg_lines.append(
+                f"- {leg.action} {leg.opt_type} {leg.strike:.2f} {leg.expiry} @ {leg.mid_price:.2f}"
+            )
+        option_lines = [
+            f"策略: {option_plan.strategy_name}",
+            f"權利金型態: {'Debit' if option_plan.premium_type == 'debit' else 'Credit'}",
+            f"估計淨權利金: ${option_plan.estimated_net_premium:.2f}",
+            f"建議口數: {option_plan.suggested_contracts}",
+            f"估計最大風險: ${option_plan.max_risk_amount:.2f}",
+            *leg_lines,
+        ]
+        option_value = "\n".join(option_lines)
+    else:
+        option_value = "目前無符合條件的完整期權合約，保留正股 / 策略觀察。"
+    embed.add_field(
+        name="🧾 可執行期權合約",
+        value=_safe_embed_field_value(option_value, "暫無合約"),
+        inline=False,
+    )
+    embed.set_footer(text="Nexus Seeker Watchlist Heartbeat | 每 30 分鐘更新")
     return embed
 
 

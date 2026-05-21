@@ -109,6 +109,8 @@ def test_cli_watchlist_check_integration(db_conn):
             ma50=142.0,
             ma200=130.0,
             iv_rank=72.0,
+            option_skew=5.4,
+            option_skew_state="⚠️ 預警性對沖 (Put 昂貴)",
             volume_poc=144.0,
             gex_max_put_wall=138.0,
             vanna_sensitivity=0.3,

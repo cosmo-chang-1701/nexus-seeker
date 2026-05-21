@@ -94,6 +94,8 @@ def test_cli_watchlist_check():
         ma50=170.0,
         ma200=158.0,
         iv_rank=71.0,
+        option_skew=4.2,
+        option_skew_state="正常",
         volume_poc=174.5,
         gex_max_put_wall=168.0,
         vanna_sensitivity=0.42,
