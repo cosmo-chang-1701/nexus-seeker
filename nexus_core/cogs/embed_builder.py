@@ -9,6 +9,150 @@ from typing import List, Dict, Any
 logger = logging.getLogger(__name__)
 
 
+def _visual_len(s: str) -> int:
+    """計算字串的視覺寬度，中文字元與中文標點視為雙倍寬度。"""
+    return sum(
+        2
+        if (ord(c) > 127 or 0x3000 <= ord(c) <= 0x303F or 0xFF00 <= ord(c) <= 0xFFEF)
+        else 1
+        for c in s
+    )
+
+
+def _pad_string(s: str, width: int, align: str = "left") -> str:
+    """根據視覺寬度對字串進行填充。"""
+    vlen = _visual_len(s)
+    pad_len = max(0, width - vlen)
+    if align == "right":
+        return " " * pad_len + s
+    elif align == "center":
+        left_pad = pad_len // 2
+        right_pad = pad_len - left_pad
+        return " " * left_pad + s + " " * right_pad
+    else:
+        return s + " " * pad_len
+
+
+def _visual_truncate(s: str, max_vlen: int) -> str:
+    """根據視覺寬度截斷字串，避免中文字元被切成一半。"""
+    current_vlen = 0
+    chars = []
+    for c in s:
+        char_vlen = (
+            2
+            if (
+                ord(c) > 127 or 0x3000 <= ord(c) <= 0x303F or 0xFF00 <= ord(c) <= 0xFFEF
+            )
+            else 1
+        )
+        if current_vlen + char_vlen > max_vlen:
+            break
+        chars.append(c)
+        current_vlen += char_vlen
+    return "".join(chars)
+
+
+def _parse_and_format_positions_table(positions_list: List[str]) -> str:
+    if not positions_list:
+        return "目前無持倉部位。"
+
+    table_lines = ["```ansi"]
+    headers = [
+        "標的",
+        "到期日",
+        "履約/類型",
+        "成本",
+        "現價",
+        "損益",
+        "DTE",
+        "SPY Δ",
+        "動作",
+    ]
+    widths = [6, 11, 10, 8, 8, 12, 6, 8, 10]
+
+    header_line = " | ".join(
+        _pad_string(h, w, "left" if i in (0, 1, 2, 8) else "right")
+        for i, (h, w) in enumerate(zip(headers, widths))
+    )
+    table_lines.append(header_line)
+    table_lines.append("-" * (sum(widths) + 3 * (len(widths) - 1)))
+
+    for pos_item in positions_list:
+        # Regex parsing
+        sym_match = re.search(r"🔹\s*\*\*(.*?)\*\*", pos_item)
+        exp_match = re.search(r"`(\d{4}-\d{2}-\d{2})`", pos_item)
+        strike_type_match = re.search(r"`?\$([\d\.]+)`?\s*\*\*(.*?)\*\*", pos_item)
+        cc_tag = " (CC)" if "🛡️(CC)" in pos_item else ""
+
+        cost_match = re.search(r"成本:\s*`\$?([\d\.,\-]+)`", pos_item)
+        price_match = re.search(r"現價:\s*`\$?([\d\.,\-]+)`", pos_item)
+        pnl_match = re.search(r"損益:\s*\*\*(.*?)\*\*", pos_item)
+        dte_match = re.search(r"DTE:\s*`(.*?)`", pos_item)
+        delta_match = re.search(r"SPY\s*Δ:\s*`(.*?)`", pos_item)
+        status_match = re.search(r"動作:\s*(.*)", pos_item)
+
+        symbol = sym_match.group(1).strip() if sym_match else "UNKNOWN"
+        expiry = exp_match.group(1).strip() if exp_match else "N/A"
+
+        strike_val = strike_type_match.group(1).strip() if strike_type_match else ""
+        opt_type = strike_type_match.group(2).strip() if strike_type_match else ""
+        type_letter = (
+            "C"
+            if "CALL" in opt_type.upper()
+            else "P"
+            if "PUT" in opt_type.upper()
+            else opt_type
+        )
+        strike_type = f"${strike_val}{type_letter}{cc_tag}"
+
+        cost = f"${cost_match.group(1).strip()}" if cost_match else "N/A"
+        price = f"${price_match.group(1).strip()}" if price_match else "N/A"
+
+        raw_pnl = pnl_match.group(1).strip() if pnl_match else "0.0%"
+
+        dte = dte_match.group(1).strip() if dte_match else "0"
+        if "天" in dte:
+            dte = dte.replace("天", "").strip()
+        dte = f"{dte}d"
+
+        delta = delta_match.group(1).strip() if delta_match else "0.0"
+        status = status_match.group(1).strip() if status_match else "HOLD"
+
+        symbol = _visual_truncate(symbol, widths[0])
+        expiry = _visual_truncate(expiry, widths[1])
+        strike_type = _visual_truncate(strike_type, widths[2])
+        cost = _visual_truncate(cost, widths[3])
+        price = _visual_truncate(price, widths[4])
+        raw_pnl_truncated = _visual_truncate(raw_pnl, widths[5])
+        pnl_fmt_truncated = raw_pnl_truncated
+        if "+" in raw_pnl_truncated:
+            pnl_fmt_truncated = f" [0;32m{raw_pnl_truncated} [0m"
+        elif "-" in raw_pnl_truncated:
+            pnl_fmt_truncated = f" [0;31m{raw_pnl_truncated} [0m"
+
+        dte = _visual_truncate(dte, widths[6])
+        delta = _visual_truncate(delta, widths[7])
+        status = _visual_truncate(status, widths[8])
+
+        cols = [
+            _pad_string(symbol, widths[0], "left"),
+            _pad_string(expiry, widths[1], "left"),
+            _pad_string(strike_type, widths[2], "left"),
+            _pad_string(cost, widths[3], "right"),
+            _pad_string(price, widths[4], "right"),
+            _pad_string(raw_pnl_truncated, widths[5], "right").replace(
+                raw_pnl_truncated, pnl_fmt_truncated
+            ),
+            _pad_string(dte, widths[6], "right"),
+            _pad_string(delta, widths[7], "right"),
+            _pad_string(status, widths[8], "left"),
+        ]
+        table_lines.append(" | ".join(cols))
+
+    table_lines.append("```")
+    return "\n".join(table_lines)
+
+
 def _is_macro_report_marker(line: str) -> bool:
     """較穩健地辨識宏觀風險段落起始行。"""
     if not line:
@@ -564,42 +708,86 @@ def create_sentiment_scan_embed(
         timestamp=datetime.now(timezone.utc),
     )
 
-    # Skew
+    # Skew, PCR, Max Pain consolidated
     skew_val = skew_data.get("skew", 0)
     skew_state = skew_data.get("state", "N/A")
-    embed.add_field(
-        name="📐 Option Skew",
-        value=f"值: `{skew_val}%`\n狀態: **{skew_state}**",
-        inline=True,
-    )
-
-    # PCR
     pcr_val = pcr_data.get("pcr", 0)
     pcr_state = pcr_data.get("state", "N/A")
-    embed.add_field(
-        name="⚖️ Put/Call Ratio",
-        value=f"值: `{pcr_val}`\n狀態: **{pcr_state}**",
-        inline=True,
-    )
-
-    # Max Pain
     mp_strike = max_pain_data.get("max_pain", "N/A")
     is_conv = "🎯 趨於收斂" if max_pain_data.get("is_converging") else "⏳ 尚有距離"
+
+    metrics_lines = ["```ansi"]
+    m_headers = ["指標項目", "數據值", "狀態 / 備註"]
+    m_widths = [14, 10, 14]
+    metrics_lines.append(
+        " | ".join(
+            _pad_string(h, w, "left" if i == 0 or i == 2 else "right")
+            for i, (h, w) in enumerate(zip(m_headers, m_widths))
+        )
+    )
+    metrics_lines.append("-" * (sum(m_widths) + 3 * (len(m_widths) - 1)))
+
+    # Skew
+    skew_val_str = f"{skew_val}%"
+    metrics_lines.append(
+        f"{_pad_string('Option Skew', m_widths[0])} | {_pad_string(skew_val_str, m_widths[1], 'right')} | {_pad_string(skew_state, m_widths[2])}"
+    )
+    # PCR
+    pcr_val_str = f"{pcr_val}"
+    metrics_lines.append(
+        f"{_pad_string('Put/Call Ratio', m_widths[0])} | {_pad_string(pcr_val_str, m_widths[1], 'right')} | {_pad_string(pcr_state, m_widths[2])}"
+    )
+    # Max Pain
+    mp_strike_str = f"${mp_strike}"
+    metrics_lines.append(
+        f"{_pad_string('Max Pain', m_widths[0])} | {_pad_string(mp_strike_str, m_widths[1], 'right')} | {_pad_string(is_conv, m_widths[2])}"
+    )
+    metrics_lines.append("```")
     embed.add_field(
-        name="📍 Max Pain (最大痛點)",
-        value=f"履約價: `${mp_strike}`\n收斂: {is_conv}",
-        inline=True,
+        name="📐 期權情緒指標", value="\n".join(metrics_lines), inline=False
     )
 
     # UOA
     if uoa_data:
-        uoa_text = ""
+        uoa_lines = ["```ansi"]
+        uoa_headers = ["到期日", "履約價", "類型", "比例"]
+        uoa_widths = [11, 8, 6, 8]
+        uoa_lines.append(
+            " | ".join(
+                _pad_string(h, w, "left" if i in (0, 2) else "right")
+                for i, (h, w) in enumerate(zip(uoa_headers, uoa_widths))
+            )
+        )
+        uoa_lines.append("-" * (sum(uoa_widths) + 3 * (len(uoa_widths) - 1)))
         for item in uoa_data:
-            uoa_text += f"• `{item['expiry']}` `${item['strike']}` {item['type']} (Vol/OI: {item['ratio']}x)\n"
-        embed.add_field(name="🐋 異常活動 (UOA)", value=uoa_text, inline=False)
+            expiry = str(item.get("expiry", "N/A"))
+            strike = f"${item.get('strike', 'N/A')}"
+            opt_type = str(item.get("type", "N/A")).upper()
+            ratio = f"{item.get('ratio', 'N/A')}x"
+
+            expiry = _visual_truncate(expiry, uoa_widths[0])
+            strike = _visual_truncate(strike, uoa_widths[1])
+            opt_type = _visual_truncate(opt_type, uoa_widths[2])
+            ratio = _visual_truncate(ratio, uoa_widths[3])
+
+            row_str = " | ".join(
+                [
+                    _pad_string(expiry, uoa_widths[0], "left"),
+                    _pad_string(strike, uoa_widths[1], "right"),
+                    _pad_string(opt_type, uoa_widths[2], "left"),
+                    _pad_string(ratio, uoa_widths[3], "right"),
+                ]
+            )
+            uoa_lines.append(row_str)
+        uoa_lines.append("```")
+        embed.add_field(
+            name="🐋 異常活動 (UOA)", value="\n".join(uoa_lines), inline=False
+        )
     else:
         embed.add_field(
-            name="🐋 異常活動 (UOA)", value="目前無顯著異常活動", inline=False
+            name="🐋 異常活動 (UOA)",
+            value="```ansi\n目前無顯著異常活動\n```",
+            inline=False,
         )
 
     embed.set_footer(text="Nexus Seeker | Volatility Strategist")
@@ -622,34 +810,43 @@ def create_macro_scan_embed(macro_data: dict, alerts: list = None) -> discord.Em
     vix_change = macro_data.get("vix_change", 0.0)
     spread = tnx - us2y
 
-    # 美元指數 (DXY)
-    embed.add_field(
-        name="💵 美元指數 (DXY)",
-        value=f"值: `{dxy:.2f}`",
-        inline=True,
-    )
-
-    # 10年期公債 (TNX)
-    embed.add_field(
-        name="📈 10Y 公債 (TNX)",
-        value=f"值: `{tnx:.2f}%`\n變化: `{tnx_change:+.1f} bps`",
-        inline=True,
-    )
-
-    # 2年期公債 (US2Y)
-    embed.add_field(
-        name="📉 2Y 公債 (US2Y)",
-        value=f"值: `{us2y:.2f}%`\n利差: `{spread:+.2f}%`",
-        inline=True,
-    )
-
-    # 恐慌指數 (VIX)
+    # Consolidate into monospace table
     vix_emoji = "🔥" if vix > 25 else ("⚠️" if vix > 20 else "🟢")
-    embed.add_field(
-        name="🌪️ 恐慌指數 (VIX)",
-        value=f"值: `{vix:.2f}` {vix_emoji}\n變化: `{vix_change:+.2f}`",
-        inline=True,
+
+    lines = ["```ansi"]
+    headers = ["指標", "數值", "變動 / 備註"]
+    widths = [14, 8, 14]
+    lines.append(
+        " | ".join(
+            _pad_string(h, w, "left" if i == 0 else "right")
+            for i, (h, w) in enumerate(zip(headers, widths))
+        )
     )
+    lines.append("-" * (sum(widths) + 3 * (len(widths) - 1)))
+
+    # 1. DXY
+    lines.append(
+        f"{_pad_string('DXY 美元指數', widths[0])} | {_pad_string(f'{dxy:.2f}', widths[1], 'right')} | {_pad_string('-', widths[2], 'right')}"
+    )
+    # 2. TNX
+    lines.append(
+        f"{_pad_string('TNX 10Y 公債', widths[0])} | {_pad_string(f'{tnx:.2f}%', widths[1], 'right')} | {_pad_string(f'{tnx_change:+.1f} bps', widths[2], 'right')}"
+    )
+    # 3. US2Y
+    lines.append(
+        f"{_pad_string('US2Y 2Y 公債', widths[0])} | {_pad_string(f'{us2y:.2f}%', widths[1], 'right')} | {_pad_string(f'利差 {spread:+.2f}%', widths[2], 'right')}"
+    )
+    # 4. VIX
+    vix_color_start = " [0;31m" if vix > 25 else (" [0;33m" if vix > 20 else " [0;32m")
+    vix_note = f"{vix_change:+.2f} ({vix_emoji})"
+    vix_note_colored = f"{vix_change:+.2f} ({vix_color_start}{vix_emoji} [0m)"
+    vix_val_str = f"{vix:.2f}"
+    lines.append(
+        f"{_pad_string('VIX 恐慌指數', widths[0])} | {_pad_string(vix_val_str, widths[1], 'right')} | {_pad_string(vix_note, widths[2], 'right').replace(vix_note, vix_note_colored)}"
+    )
+    lines.append("```")
+
+    embed.add_field(name="🌍 巨觀數據指標", value="\n".join(lines), inline=False)
 
     # 結論與警示
     if alerts:
@@ -689,6 +886,7 @@ def create_earnings_report_embed(
     if upcoming:
         content.append("## 📅 即將發布財報標的")
         content.append("---")
+        earnings_lines = ["```ansi"]
         for sym, events in upcoming.items():
             for event in events:
                 date = event.get("date", "未知日期")
@@ -704,11 +902,14 @@ def create_earnings_report_embed(
                 if isinstance(reddit, str) and len(reddit) > 80:
                     reddit = reddit[:77] + "..."
 
-                content.append(f"**{sym}** ({period})")
-                content.append(f" ├─ 📅 財報日期: `{date}`")
-                content.append(f" ├─ 📰 新聞摘要: {news}")
-                content.append(f" └─ 💬 社群情緒: {reddit}")
-                content.append("")
+                earnings_lines.append(f"【{sym}】({period}) | 📅 {date}")
+                earnings_lines.append(f" ├─ 📰 新聞: {news}")
+                earnings_lines.append(f" └─ 💬 社群: {reddit}")
+                earnings_lines.append("")
+        if len(earnings_lines) > 1:
+            earnings_lines.pop()  # remove last empty line
+        earnings_lines.append("```")
+        content.append("\n".join(earnings_lines))
         content.append("---")
 
     # 加入 LLM 生成的分析報告
@@ -862,40 +1063,63 @@ def create_psq_embed(data: dict) -> discord.Embed:
         timestamp=datetime.now(timezone.utc),
     )
 
-    # 壓縮狀態指示
-    squeeze_val = (
-        "🔴 **壓縮中 (Squeeze On)**"
-        if psq.is_squeezing
-        else "⚪ **無壓縮 (Squeeze Off)**"
+    # Format PSQ quantitative metrics into a monospace table
+    psq_lines = ["```ansi"]
+    headers = ["項目", "數據值", "判定狀態"]
+    widths = [14, 12, 24]
+    psq_lines.append(
+        " | ".join(
+            _pad_string(h, w, "left" if i == 0 or i == 2 else "right")
+            for i, (h, w) in enumerate(zip(headers, widths))
+        )
     )
-    energy_str = (
-        "🔥 動能向上爆發"
+    psq_lines.append("-" * (sum(widths) + 3 * (len(widths) - 1)))
+
+    # 1. 能量壓縮
+    sq_status = "ON" if psq.is_squeezing else "OFF"
+    sq_color = " [0;31m" if psq.is_squeezing else " [0;32m"
+    sq_status_colored = f"{sq_color}{sq_status} [0m"
+    psq_lines.append(
+        f"{_pad_string('能量壓縮狀態', widths[0])} | {_pad_string(sq_status, widths[1], 'right').replace(sq_status, sq_status_colored)} | {_pad_string('壓縮蓄力中' if psq.is_squeezing else '無壓縮', widths[2])}"
+    )
+
+    # 2. 動能爆發
+    energy_val = (
+        "LONG"
         if psq.is_breakout_long
-        else ("💀 動能向下崩潰" if psq.is_breakout_short else "⚡ 蓄力中")
+        else ("SHORT" if psq.is_breakout_short else "STABLE")
+    )
+    energy_color = (
+        " [0;32m"
+        if psq.is_breakout_long
+        else (" [0;31m" if psq.is_breakout_short else " [0m")
+    )
+    energy_desc = (
+        "多頭向上爆發"
+        if psq.is_breakout_long
+        else ("空頭向下崩潰" if psq.is_breakout_short else "波動蓄勢")
+    )
+    psq_lines.append(
+        f"{_pad_string('動能爆發方向', widths[0])} | {_pad_string(energy_val, widths[1], 'right').replace(energy_val, f'{energy_color}{energy_val} [0m')} | {_pad_string(energy_desc, widths[2])}"
     )
 
-    embed.add_field(
-        name="🔋 能量壓縮狀態",
-        value=f"{squeeze_val}\n狀態: {energy_str}\n\u200b",
-        inline=True,
+    # 3. 線性動能
+    mom_trend = "多方主導" if psq.momentum_value > 0 else "空方主導"
+    mom_color = " [0;32m" if psq.momentum_value > 0 else " [0;31m"
+    psq_lines.append(
+        f"{_pad_string('線性動能 (Mom)', widths[0])} | {_pad_string(f'{psq.momentum_value:+.2f}', widths[1], 'right').replace(f'{psq.momentum_value:+.2f}', f'{mom_color}{psq.momentum_value:+.2f} [0m')} | {_pad_string(mom_trend, widths[2])}"
     )
 
-    # 動能趨勢
-    trend_val = "🟢 多方主導" if psq.momentum_value > 0 else "🔴 空方主導"
-    embed.add_field(
-        name="🚀 線性動能 (Momentum)",
-        value=f"`{psq.momentum_value:+.2f}`\n趨勢: {trend_val}\n\u200b",
-        inline=True,
+    # 4. 均線支撐
+    dist_val = f"{psq.sma_distance_pct:.2f}%"
+    dist_desc = f"20SMA支撐 (${psq.sma_20:.2f})"
+    dist_color = " [0;32m" if psq.is_near_support else " [0;33m"
+    psq_lines.append(
+        f"{_pad_string('偏離 20SMA', widths[0])} | {_pad_string(dist_val, widths[1], 'right').replace(dist_val, f'{dist_color}{dist_val} [0m')} | {_pad_string(dist_desc, widths[2])}"
     )
 
-    # 支撐區間
-    support_val = (
-        f"✅ 靠近 20SMA (距離: `{psq.sma_distance_pct:.2f}%`)\n"
-        if psq.is_near_support
-        else f"⚠️ 偏離 20SMA (距離: `{psq.sma_distance_pct:.2f}%`)\n"
-    )
-    support_val += f"📉 20SMA: `${psq.sma_20:.2f}`\n\u200b"
-    embed.add_field(name="🧭 均線支撐 (Daily)", value=support_val, inline=False)
+    psq_lines.append("```")
+    embed.add_field(name="⚡ PSQ 量化指標", value="\n".join(psq_lines), inline=False)
 
     # VIX momentum label
     vix_label = (
@@ -909,14 +1133,10 @@ def create_psq_embed(data: dict) -> discord.Embed:
             "HIGH_CONVICTION_RECOVERY": "🚀 **高確信反彈** | 高 VIX + 空頭減速 = 反轉機會",
         }
         label_text = label_map.get(vix_label, vix_label)
-        embed.add_field(
-            name="🏅 VIX 動能判定", value=f"{label_text}\n\u200b", inline=False
-        )
+        embed.add_field(name="🏅 VIX 動能判定", value=label_text, inline=False)
 
     if vix_tf_note:
-        embed.add_field(
-            name="⏱️ 時間框架建議", value=f"`{vix_tf_note}`\n\u200b", inline=False
-        )
+        embed.add_field(name="⏱️ 時間框架建議", value=f"`{vix_tf_note}`", inline=False)
 
     # 最新新聞
     add_news_field(embed, data.get("news_text"))
@@ -969,12 +1189,12 @@ def create_polymarket_list_embed(markets: List[Dict[str, Any]]):
         embed.description = "目前沒有監控中的市場。"
         return embed
 
-    description = ""
+    description_lines = ["```ansi"]
     for i, m in enumerate(markets, 1):
         question = m.get("question", "未知市場")
         # 截斷過長的標題
-        if len(question) > 70:
-            question = question[:67] + "..."
+        if len(question) > 55:
+            question = question[:52] + "..."
 
         # 取得 token 價格資訊 (如果有的話)
         tokens = m.get("tokens", [])
@@ -998,22 +1218,27 @@ def create_polymarket_list_embed(markets: List[Dict[str, Any]]):
                     price_str = str(price)
 
                 if outcome:
-                    p_list.append(f"{outcome}: `{price_str}`")
+                    p_list.append(f"{outcome}: {price_str}")
 
             if p_list:
                 price_info = " | ".join(p_list)
-                line = f"**{i}.** {question}\n   └ {price_info}\n"
-            else:
-                line = f"**{i}.** {question}\n"
+
+        description_lines.append(f"{i:2d}. {question}")
+        if price_info:
+            description_lines.append(f"    └─ {price_info}")
         else:
-            line = f"**{i}.** {question}\n"
+            description_lines.append("")
 
-        # 檢查總長度，避免超過 Discord 限制
-        if len(description) + len(line) > 3900:
-            break
-        description += line
+    if len(description_lines) > 1 and description_lines[-1] == "":
+        description_lines.pop()
+    description_lines.append("```")
 
-    embed.description = description
+    full_desc = "\n".join(description_lines)
+    # 檢查總長度，避免超過 Discord 限制
+    if len(full_desc) > 3900:
+        full_desc = full_desc[:3890] + "\n...\n```"
+
+    embed.description = full_desc
     embed.set_footer(text="Nexus Seeker | Polymarket Monitor (Top 20 Active Markets)")
     return embed
 
@@ -1037,15 +1262,11 @@ def create_holdings_embed(
     total_pnl = 0.0
 
     lines = ["```ansi"]
-    header = f"{'標的'.ljust(8)} | {'數量'.rjust(8)} | {'平均成本'.rjust(10)} | {'當前損益'.rjust(10)}"
+    header = f"{_pad_string('標的', 8)} | {_pad_string('數量', 8, 'right')} | {_pad_string('平均成本', 10, 'right')} | {_pad_string('現價', 10, 'right')} | {_pad_string('當前損益', 10, 'right')}"
     lines.append(header)
-    lines.append("-" * 43)
+    lines.append("-" * 58)
 
     for h in holdings_data:
-        sym = h["symbol"].ljust(8)
-        qty = f"{h['quantity']:,.0f}".rjust(8)
-        cost = f"${h['avg_cost']:,.2f}".rjust(10)
-
         curr_p = h.get("current_price", 0.0)
         pnl = (curr_p - h["avg_cost"]) * h["quantity"] if curr_p > 0 else 0.0
         pnl_pct = (
@@ -1055,11 +1276,20 @@ def create_holdings_embed(
         total_pnl += pnl
         total_value += curr_p * h["quantity"]
 
-        # 使用 ANSI 顏色：綠色表示正損益，紅色表示負損益
-        color_start = "[0;32m" if pnl >= 0 else "[0;31m"
-        pnl_fmt = f"{color_start}{pnl_pct:+.1%}[0m".rjust(18)
+        sym = _pad_string(h["symbol"], 8)
+        qty = _pad_string(f"{h['quantity']:,.0f}", 8, "right")
+        cost = _pad_string(f"${h['avg_cost']:,.2f}", 10, "right")
+        curr_price_str = f"${curr_p:,.2f}"
+        curr_p_fmt = _pad_string(curr_price_str, 10, "right")
 
-        lines.append(f"{sym} | {qty} | {cost} | {pnl_fmt}")
+        # 使用 ANSI 顏色：綠色表示正損益，紅色表示負損益
+        color_start = "\u001b[0;32m" if pnl >= 0 else "\u001b[0;31m"
+        pnl_pct_str = f"{pnl_pct:+.1%}"
+        pnl_fmt = _pad_string(pnl_pct_str, 10, "right").replace(
+            pnl_pct_str, f"{color_start}{pnl_pct_str}\u001b[0m"
+        )
+
+        lines.append(f"{sym} | {qty} | {cost} | {curr_p_fmt} | {pnl_fmt}")
 
     lines.append("```")
     embed.add_field(name="📦 持倉明細", value="\n".join(lines), inline=False)
@@ -1318,16 +1548,18 @@ def create_watchlist_embed(page_data, current_page, total_pages, total_items):
     else:
         lines = ["```ansi"]
         # 1. 標頭修改為兩欄
-        header = f"{'標的'.ljust(12)} | {'AI 分析 (LLM)'.rjust(12)}"
+        header = (
+            f"{_pad_string('標的', 12)} | {_pad_string('AI 分析 (LLM)', 12, 'right')}"
+        )
         lines.append(header)
 
         # 2. 分隔線
-        lines.append("-" * 28)
+        lines.append("-" * 27)
 
         for sym, use_llm in page_data:
-            sym_fmt = sym.ljust(12)
+            sym_fmt = _pad_string(sym, 12)
             llm_text = "開啟 (ON)" if use_llm else "關閉 (OFF)"
-            llm_fmt = llm_text.rjust(12)
+            llm_fmt = _pad_string(llm_text, 12, "right")
             lines.append(f"{sym_fmt} | {llm_fmt}")
 
         lines.append("```")
@@ -1385,7 +1617,7 @@ def create_portfolio_report_embed(
 
     # 使用 \n\n 分隔部位
     if positions_list:
-        positions_text = "\n\n".join(positions_list)
+        positions_text = _parse_and_format_positions_table(positions_list)
     else:
         positions_text = "目前無持倉部位。"
 
@@ -1518,24 +1750,52 @@ def build_vtr_stats_embed(
 
     embed = discord.Embed(
         title="📈 Nexus Seeker | 虛擬交易室 (VTR) 績效總結",
-        description=f"使用者: **{user_name}** 的系統歸因分析",
+        description=f"{status_icon} 使用者: **{user_name}** 的系統歸因分析",
         color=color,
         timestamp=datetime.now(timezone.utc),
     )
 
-    # 核心指標
-    embed.add_field(
-        name="總結算次數", value=f"`{stats.get('total_trades', 0)}`", inline=True
-    )
-    embed.add_field(name="勝率", value=f"{status_icon} `{win_rate}%`", inline=True)
-
-    # 損益指標
+    # 績效統計指標 table
     pnl = stats.get("total_pnl", 0.0)
     pnl_str = f"+${pnl:,.2f}" if pnl >= 0 else f"-${abs(pnl):,.2f}"
-    embed.add_field(name="累計總損益", value=f"**{pnl_str}**", inline=True)
-    embed.add_field(
-        name="平均單筆損益", value=f"`${stats.get('avg_pnl', 0.0):.2f}`", inline=True
+    avg_pnl = stats.get("avg_pnl", 0.0)
+    avg_pnl_str = f"+${avg_pnl:.2f}" if avg_pnl >= 0 else f"-${abs(avg_pnl):.2f}"
+
+    if win_rate >= 60:
+        win_color = " \033[0;32m"
+    elif win_rate >= 40:
+        win_color = " \033[0;33m"
+    else:
+        win_color = " \033[0;31m"
+
+    pnl_color = " \033[0;32m" if pnl >= 0 else " \033[0;31m"
+    avg_pnl_color = " \033[0;32m" if avg_pnl >= 0 else " \033[0;31m"
+
+    vtr_lines = ["```ansi"]
+    headers = ["績效指標", "數據值"]
+    widths = [14, 18]
+    vtr_lines.append(" | ".join(_pad_string(h, w) for h, w in zip(headers, widths)))
+    vtr_lines.append("-" * (sum(widths) + 3))
+
+    vtr_lines.append(
+        f"{_pad_string('總結算次數', widths[0])} | {_pad_string(str(stats.get('total_trades', 0)), widths[1])}"
     )
+
+    win_rate_val = f"{win_rate}%"
+    vtr_lines.append(
+        f"{_pad_string('勝率', widths[0])} | {_pad_string(win_rate_val, widths[1]).replace(win_rate_val, f'{win_color}{win_rate_val}\033[0m')}"
+    )
+
+    vtr_lines.append(
+        f"{_pad_string('累計總損益', widths[0])} | {_pad_string(pnl_str, widths[1]).replace(pnl_str, f'{pnl_color}{pnl_str}\033[0m')}"
+    )
+
+    vtr_lines.append(
+        f"{_pad_string('平均單筆損益', widths[0])} | {_pad_string(avg_pnl_str, widths[1]).replace(avg_pnl_str, f'{avg_pnl_color}{avg_pnl_str}\033[0m')}"
+    )
+    vtr_lines.append("```")
+
+    embed.add_field(name="📊 VTR 績效指標", value="\n".join(vtr_lines), inline=False)
 
     # 對沖歸因報告
     if attribution_lines:
@@ -1568,17 +1828,60 @@ def build_scan_report(result: Dict[str, Any]):
     )
 
     # 1. Greeks 區塊 (從 result 中提取)
-    greeks_info = (
-        f"Delta: `{result.get('delta', 0):.3f}` ｜ Theta: `{result.get('theta', 0):.4f}`\n"
-        f"Gamma: `{result.get('gamma', 0):.6f}` ｜ IV: `{result.get('iv', 0):.1%}`"
+    g_delta = result.get("delta", 0.0)
+    g_theta = result.get("theta", 0.0)
+    g_gamma = result.get("gamma", 0.0)
+    g_iv = result.get("iv", 0.0)
+
+    greeks_lines = ["```ansi"]
+    g_headers = ["希臘字母", "數據值"]
+    g_widths = [14, 18]
+    greeks_lines.append(
+        " | ".join(_pad_string(h, w) for h, w in zip(g_headers, g_widths))
     )
+    greeks_lines.append("-" * (sum(g_widths) + 3))
+
+    greeks_lines.append(
+        f"{_pad_string('Delta', g_widths[0])} | {_pad_string(f'{g_delta:+.3f}', g_widths[1])}"
+    )
+    greeks_lines.append(
+        f"{_pad_string('Theta', g_widths[0])} | {_pad_string(f'{g_theta:+.4f}', g_widths[1])}"
+    )
+    greeks_lines.append(
+        f"{_pad_string('Gamma', g_widths[0])} | {_pad_string(f'{g_gamma:+.6f}', g_widths[1])}"
+    )
+    greeks_lines.append(
+        f"{_pad_string('IV (隱含波動率)', g_widths[0])} | {_pad_string(f'{g_iv:.1%}', g_widths[1])}"
+    )
+    greeks_lines.append("```")
+    greeks_info = "\n".join(greeks_lines)
     embed.add_field(name="🧬 Greeks 希臘字母", value=greeks_info, inline=False)
 
     # 2. NRO 風控區塊
-    nro_info = (
-        f"建議口數: `{result.get('safe_qty', 0)}` 口\n"
-        f"預期總曝險: `{result.get('projected_exposure_pct', 0):+.1f}%` / `{result.get('risk_limit', 15.0)}%` (紅線)"
+    safe_qty = result.get("safe_qty", 0)
+    projected = result.get("projected_exposure_pct", 0.0)
+    risk_limit = result.get("risk_limit", 15.0)
+
+    proj_color = " \033[0;31m" if projected > risk_limit else " \033[0;32m"
+    proj_str = f"{projected:+.1f}%"
+
+    nro_lines = ["```ansi"]
+    n_headers = ["風控項目", "數據值"]
+    n_widths = [14, 18]
+    nro_lines.append(" | ".join(_pad_string(h, w) for h, w in zip(n_headers, n_widths)))
+    nro_lines.append("-" * (sum(n_widths) + 3))
+
+    nro_lines.append(
+        f"{_pad_string('建議口數', n_widths[0])} | {_pad_string(f'{safe_qty} 口', n_widths[1])}"
     )
+    nro_lines.append(
+        f"{_pad_string('預期總曝險', n_widths[0])} | {_pad_string(proj_str, n_widths[1]).replace(proj_str, f'{proj_color}{proj_str}\033[0m')}"
+    )
+    nro_lines.append(
+        f"{_pad_string('曝險風控紅線', n_widths[0])} | {_pad_string(f'{risk_limit:.1f}%', n_widths[1])}"
+    )
+    nro_lines.append("```")
+    nro_info = "\n".join(nro_lines)
     embed.add_field(name="🛡️ NRO 風控判定", value=nro_info, inline=False)
 
     # 3. 🚀 整合 EMA 訊號區塊
@@ -1648,27 +1951,40 @@ def create_ddp_embed(report: Dict[str, Any]) -> discord.Embed:
         timestamp=datetime.now(timezone.utc),
     )
 
-    embed.add_field(
-        name="目前本益比 (Current P/E)", value=f"`{curr_pe:.2f}`", inline=True
+    ddp_lines = ["```ansi"]
+    headers = ["DDP 量化指標", "數據值"]
+    widths = [24, 20]
+    ddp_lines.append(" | ".join(_pad_string(h, w) for h, w in zip(headers, widths)))
+    ddp_lines.append("-" * (sum(widths) + 3))
+
+    ddp_lines.append(
+        f"{_pad_string('目前本益比 (TTM P/E)', widths[0])} | {_pad_string(f'{curr_pe:.2f}', widths[1])}"
     )
-    embed.add_field(
-        name="3 年本益比均值 (3Y P/E Mean)", value=f"`{pe_mean:.2f}`", inline=True
-    )
-    embed.add_field(
-        name="預估本益比回歸空間", value=f"`+{pe_upside:.1f}%`", inline=True
+    ddp_lines.append(
+        f"{_pad_string('3 年本益比均值 (3Y Mean)', widths[0])} | {_pad_string(f'{pe_mean:.2f}', widths[1])}"
     )
 
-    embed.add_field(
-        name="預估 EPS 成長率 (Proj. EPS Growth)",
-        value=f"`{eps_growth:+.1f}%`",
-        inline=True,
+    upside_str = f"+{pe_upside:.1f}%" if pe_upside >= 0 else f"{pe_upside:.1f}%"
+    ddp_lines.append(
+        f"{_pad_string('本益比估值回歸空間', widths[0])} | {_pad_string(upside_str, widths[1]).replace(upside_str, f'\033[0;32m{upside_str}\033[0m' if pe_upside >= 0 else f'\033[0;31m{upside_str}\033[0m')}"
     )
-    embed.add_field(
-        name="營收加速狀態 (Revenue Acceleration)", value=f"`{rev_accel}`", inline=True
+
+    growth_str = f"{eps_growth:+.1f}%"
+    ddp_lines.append(
+        f"{_pad_string('預估 EPS 成長率', widths[0])} | {_pad_string(growth_str, widths[1]).replace(growth_str, f'\033[0;32m{growth_str}\033[0m' if eps_growth >= 0 else f'\033[0;31m{growth_str}\033[0m')}"
     )
-    embed.add_field(
-        name="DDP 信心評分 (Confidence Score)", value=f"`{score:.0f}/100`", inline=True
+
+    ddp_lines.append(
+        f"{_pad_string('營收加速狀態', widths[0])} | {_pad_string(rev_accel, widths[1])}"
     )
+
+    score_str = f"{score:.0f}/100"
+    ddp_lines.append(
+        f"{_pad_string('DDP 信心評分', widths[0])} | {_pad_string(score_str, widths[1]).replace(score_str, f'\033[0;32m{score_str}\033[0m' if score >= 70 else (f'\033[0;33m{score_str}\033[0m' if score >= 50 else f'\033[0;31m{score_str}\033[0m'))}"
+    )
+    ddp_lines.append("```")
+
+    embed.add_field(name="📊 DDP 量化指標", value="\n".join(ddp_lines), inline=False)
 
     # 邏輯解釋
     logic_text = (
@@ -1708,31 +2024,70 @@ def create_volatility_embed(report: Dict[str, Any]) -> discord.Embed:
     )
 
     # Field 1: [Symbol] 戰略評估
-    val1 = (
-        f"當前價格 (Current Price): `${price:.2f}`\n"
-        f"IV / IV Percentile: `{iv}% ({iv_p}%)`\n"
-        f"HV (252-day): `{hv}%`\n"
-        f"狀態: **{status}**\n\u200b"
+    v1_headers = ["評估指標", "數據值"]
+    v1_widths = [20, 20]
+    val1_lines = ["```ansi"]
+    val1_lines.append(
+        " | ".join(_pad_string(h, w) for h, w in zip(v1_headers, v1_widths))
     )
+    val1_lines.append("-" * (sum(v1_widths) + 3))
+    val1_lines.append(
+        f"{_pad_string('當前價格 (Price)', v1_widths[0])} | {_pad_string(f'${price:.2f}', v1_widths[1])}"
+    )
+    val1_lines.append(
+        f"{_pad_string('IV / IV Percentile', v1_widths[0])} | {_pad_string(f'{iv}% ({iv_p}%)', v1_widths[1])}"
+    )
+    val1_lines.append(
+        f"{_pad_string('HV (252-day)', v1_widths[0])} | {_pad_string(f'{hv}%', v1_widths[1])}"
+    )
+    status_colored = (
+        f"\033[0;32m{status}\033[0m"
+        if status == "波動率極低"
+        else f"\033[0;33m{status}\033[0m"
+    )
+    val1_lines.append(
+        f"{_pad_string('目前狀態 (Status)', v1_widths[0])} | {_pad_string(status, v1_widths[1]).replace(status, status_colored)}"
+    )
+    val1_lines.append("```")
+    val1 = "\n".join(val1_lines)
     embed.add_field(name=f"🔍 {sym} 戰略評估", value=val1, inline=False)
 
     # Field 2: 買入時機分析
     catalyst = (
         f"距離財報 {days_to_earnings} 天" if days_to_earnings <= 90 else "無近期財報"
     )
-    val2 = (
-        f"建議策略 (Recommended Strategy): **{strategy}**\n"
-        f"觸發邏輯 (Trigger Logic): {trigger_logic}\n"
-        f"催化劑 (Catalysts): {catalyst}\n\u200b"
-    )
+    val2_lines = ["```ansi"]
+    val2_lines.append(f"建議策略 (Strategy): {strategy}")
+    val2_lines.append(f"觸發邏輯 (Trigger) : {trigger_logic}")
+    val2_lines.append(f"催化因子 (Catalyst): {catalyst}")
+    val2_lines.append("```")
+    val2 = "\n".join(val2_lines)
     embed.add_field(name="🎯 買入時機分析", value=val2, inline=False)
 
     # Field 3: 風險管理 (NRO)
-    val3 = (
-        f"建議停損 (Suggested Stop Loss): `${stop_loss:.2f}`\n"
-        f"Theta 每日損耗 (Daily Theta Decay): `-${daily_theta:.2f}/day`\n"
-        f"跑道影響 (Runway Impact): 預計影響生存跑道 `{runway_impact}` 天\n\u200b"
+    v3_headers = ["風控指標", "評估數據"]
+    v3_widths = [22, 18]
+    val3_lines = ["```ansi"]
+    val3_lines.append(
+        " | ".join(_pad_string(h, w) for h, w in zip(v3_headers, v3_widths))
     )
+    val3_lines.append("-" * (sum(v3_widths) + 3))
+
+    val3_lines.append(
+        f"{_pad_string('建議停損 (Stop Loss)', v3_widths[0])} | {_pad_string(f'${stop_loss:.2f}', v3_widths[1])}"
+    )
+
+    theta_str = f"-${daily_theta:.2f}/day"
+    val3_lines.append(
+        f"{_pad_string('Theta 每日損耗', v3_widths[0])} | {_pad_string(theta_str, v3_widths[1]).replace(theta_str, f'\033[0;31m{theta_str}\033[0m')}"
+    )
+
+    runway_str = f"{runway_impact} 天"
+    val3_lines.append(
+        f"{_pad_string('預估跑道影響', v3_widths[0])} | {_pad_string(runway_str, v3_widths[1])}"
+    )
+    val3_lines.append("```")
+    val3 = "\n".join(val3_lines)
     embed.add_field(name="🛡️ 風險管理 (NRO)", value=val3, inline=False)
 
     embed.set_footer(text="Nexus Volatility Strategist Agent v1.0 | 專注廉價波動率偵測")
