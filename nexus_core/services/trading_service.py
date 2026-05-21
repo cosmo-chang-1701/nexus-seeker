@@ -3,7 +3,7 @@ import logging
 import time
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
-from typing import Dict, List, Any, Optional, Tuple, Set
+from typing import Dict, List, Any, Optional, Tuple, Set, TypedDict
 
 import database
 import market_math
@@ -21,6 +21,13 @@ from models.execution import MarketCondition
 
 logger = logging.getLogger(__name__)
 ny_tz = ZoneInfo("America/New_York")
+
+
+class EarningsAlert(TypedDict):
+    symbol: str
+    is_portfolio: bool
+    earnings_date: date
+    days_left: int
 
 
 class TradingService:
@@ -203,7 +210,7 @@ class TradingService:
 
         results = {}
         for uid, symbols_data in user_symbols.items():
-            alerts = []
+            alerts: List[EarningsAlert] = []
             combined_symbols = symbols_data["port"].union(symbols_data["watch"])
 
             for sym in combined_symbols:
@@ -211,7 +218,7 @@ class TradingService:
                 if cached_earnings_date:
                     days_left = (cached_earnings_date - today).days
                     if 0 <= days_left <= warning_days:
-                        item = {
+                        item: EarningsAlert = {
                             "symbol": sym,
                             "is_portfolio": sym in symbols_data["port"],
                             "earnings_date": cached_earnings_date,

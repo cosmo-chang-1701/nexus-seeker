@@ -13,8 +13,12 @@ from models.schemas import (
     EnhancedWatchlistMetrics,
     WatchlistEvaluation,
     WatchlistEventContext,
+    WatchlistLegAction,
     WatchlistOptionLeg,
     WatchlistOptionPlan,
+    WatchlistOptionType,
+    WatchlistPremiumType,
+    WatchlistRiskMode,
     WatchlistTacticalPlan,
 )
 from risk_engine.nro import WatchlistRiskController
@@ -372,7 +376,7 @@ def _hours_to_days_text(hours: float) -> str:
 
 def _resolve_watchlist_event_mode(
     earnings_tte_hours: float | None, macro_tte_hours: float | None
-) -> str:
+) -> WatchlistRiskMode:
     if earnings_tte_hours is not None and 0 < earnings_tte_hours <= 72.0:
         return "event-lock"
     if earnings_tte_hours is not None and 0 < earnings_tte_hours <= 168.0:
@@ -388,7 +392,7 @@ def _build_watchlist_event_summary(
     earnings_tte_hours: float | None,
     macro_event: str | None,
     macro_tte_hours: float | None,
-    risk_mode: str,
+    risk_mode: WatchlistRiskMode,
 ) -> str:
     if risk_mode == "event-lock" and earnings_tte_hours is not None:
         return (
@@ -664,11 +668,12 @@ async def build_watchlist_option_plan(
     )
 
     strategy_name: str | None = None
-    premium_type: str | None = None
+    premium_type: WatchlistPremiumType | None = None
     primary_leg: dict[str, float | str] | None = None
     hedge_leg: dict[str, float | str] | None = None
-    primary_action = "BUY"
-    opt_type = "put"
+    primary_action: WatchlistLegAction = "BUY"
+    chain_opt_type = "put"
+    leg_opt_type: WatchlistOptionType = "PUT"
     cover_direction = "lower"
     width = 0.0
 
@@ -682,7 +687,8 @@ async def build_watchlist_option_plan(
     if event_guard and tactical_model.scenario == "hard-hedge":
         strategy_name = "Bear Put Spread"
         premium_type = "debit"
-        opt_type = "put"
+        chain_opt_type = "put"
+        leg_opt_type = "PUT"
         primary_leg = await find_best_contract(metrics.symbol, "BTO_PUT", -0.35, 21, 60)
         primary_action = "BUY"
         cover_direction = "lower"
@@ -691,7 +697,8 @@ async def build_watchlist_option_plan(
         if bullish_event_bias:
             strategy_name = "Bull Call Spread"
             premium_type = "debit"
-            opt_type = "call"
+            chain_opt_type = "call"
+            leg_opt_type = "CALL"
             primary_leg = await find_best_contract(
                 metrics.symbol, "BTO_CALL", 0.45, 21, 60
             )
@@ -700,7 +707,8 @@ async def build_watchlist_option_plan(
         else:
             strategy_name = "Bear Put Spread"
             premium_type = "debit"
-            opt_type = "put"
+            chain_opt_type = "put"
+            leg_opt_type = "PUT"
             primary_leg = await find_best_contract(
                 metrics.symbol, "BTO_PUT", -0.35, 21, 60
             )
@@ -709,12 +717,14 @@ async def build_watchlist_option_plan(
     elif tactical_model.scenario == "hard-hedge":
         strategy_name = "Bear Put Spread"
         premium_type = "debit"
-        opt_type = "put"
+        chain_opt_type = "put"
+        leg_opt_type = "PUT"
         primary_leg = await find_best_contract(metrics.symbol, "BTO_PUT", -0.35, 21, 60)
         primary_action = "BUY"
         cover_direction = "lower"
     elif tactical_model.scenario == "premium-harvest":
-        opt_type = "put"
+        chain_opt_type = "put"
+        leg_opt_type = "PUT"
         primary_leg = await find_best_contract(metrics.symbol, "STO_PUT", -0.20, 30, 45)
         primary_action = "SELL"
         if metrics.option_skew >= 5.0:
@@ -730,14 +740,16 @@ async def build_watchlist_option_plan(
     ):
         strategy_name = "Call Credit Spread"
         premium_type = "credit"
-        opt_type = "call"
+        chain_opt_type = "call"
+        leg_opt_type = "CALL"
         primary_leg = await find_best_contract(metrics.symbol, "STO_CALL", 0.20, 21, 45)
         primary_action = "SELL"
         cover_direction = "higher"
     elif metrics.current_price <= metrics.buy_price_phase1 and metrics.iv_rank < 65.0:
         strategy_name = "Bull Call Spread"
         premium_type = "debit"
-        opt_type = "call"
+        chain_opt_type = "call"
+        leg_opt_type = "CALL"
         primary_leg = await find_best_contract(metrics.symbol, "BTO_CALL", 0.45, 30, 60)
         primary_action = "BUY"
         cover_direction = "higher"
@@ -751,7 +763,7 @@ async def build_watchlist_option_plan(
         hedge_leg = await _pick_watchlist_cover_leg(
             metrics.symbol,
             str(primary_leg["expiry"]),
-            opt_type,
+            chain_opt_type,
             float(primary_leg["strike"]),
             cover_direction,
             metrics.current_price,
@@ -764,7 +776,7 @@ async def build_watchlist_option_plan(
     legs = [
         WatchlistOptionLeg(
             action=primary_action,
-            opt_type=opt_type.upper(),
+            opt_type=leg_opt_type,
             strike=float(primary_leg["strike"]),
             expiry=str(primary_leg["expiry"]),
             mid_price=float(primary_leg["mid"]),
@@ -773,7 +785,7 @@ async def build_watchlist_option_plan(
 
     estimated_net_premium = float(primary_leg["mid"])
     if hedge_leg is not None:
-        hedge_action = "SELL" if premium_type == "debit" else "BUY"
+        hedge_action: WatchlistLegAction = "SELL" if premium_type == "debit" else "BUY"
         estimated_net_premium = (
             max(float(primary_leg["mid"]) - float(hedge_leg["mid"]), 0.01)
             if premium_type == "debit"
@@ -782,7 +794,7 @@ async def build_watchlist_option_plan(
         legs.append(
             WatchlistOptionLeg(
                 action=hedge_action,
-                opt_type=opt_type.upper(),
+                opt_type=leg_opt_type,
                 strike=float(hedge_leg["strike"]),
                 expiry=str(hedge_leg["expiry"]),
                 mid_price=float(hedge_leg["mid"]),
