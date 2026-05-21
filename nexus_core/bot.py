@@ -14,6 +14,60 @@ from database.notifications import (
 
 logger = logging.getLogger(__name__)
 
+DISCORD_CONTENT_LIMIT = 2000
+DISCORD_EMBED_DESCRIPTION_LIMIT = 4000
+
+
+def _split_plain_text(text: str, max_len: int) -> list[str]:
+    """依邊界切分文字，盡量保留換行與空白結構。"""
+    if len(text) <= max_len:
+        return [text]
+
+    chunks: list[str] = []
+    start = 0
+    while start < len(text):
+        remaining = len(text) - start
+        if remaining <= max_len:
+            chunks.append(text[start:])
+            break
+
+        window = text[start : start + max_len]
+        split_at: Optional[int] = None
+        for separator in ("\n\n", "\n", " "):
+            boundary = window.rfind(separator)
+            if boundary >= int(max_len * 0.5):
+                split_at = start + boundary + len(separator)
+                break
+
+        if split_at is None or split_at <= start:
+            split_at = start + max_len
+
+        chunks.append(text[start:split_at])
+        start = split_at
+
+    return chunks
+
+
+def _split_discord_text(text: str, max_len: int) -> list[str]:
+    """切分 Discord 訊息，必要時維持 code block 完整。"""
+    if len(text) <= max_len:
+        return [text]
+
+    if text.startswith("```") and text.endswith("```"):
+        first_newline = text.find("\n")
+        if first_newline != -1:
+            fence = text[:first_newline]
+            body = text[first_newline + 1 : -3]
+            reserved = len(fence) + len("\n") + len("\n```")
+            body_room = max_len - reserved
+            if body_room > 0:
+                return [
+                    f"{fence}\n{chunk}\n```"
+                    for chunk in _split_plain_text(body, body_room)
+                ]
+
+    return _split_plain_text(text, max_len)
+
 
 class NexusBot(commands.Bot):
     def __init__(self):
@@ -34,8 +88,16 @@ class NexusBot(commands.Bot):
 
         # 如果只有訊息且沒有 Embed，則將其封裝進 Embed
         if message and not embed:
-            embed = create_info_embed("Nexus Seeker 通知", message)
-            message = None  # 清除純文字內容，避免重複發送
+            for chunk in _split_discord_text(message, DISCORD_EMBED_DESCRIPTION_LIMIT):
+                chunk_embed = create_info_embed("Nexus Seeker 通知", chunk)
+                await asyncio.to_thread(
+                    add_pending_notification,
+                    user_id,
+                    None,
+                    cast(Any, chunk_embed.to_dict()),
+                )
+            self.message_signal.set()
+            return
 
         embed_dict: Optional[Dict[str, Any]] = (
             cast(Any, embed.to_dict()) if embed else None
@@ -222,7 +284,17 @@ class NexusBot(commands.Bot):
                 try:
                     user = await self.fetch_user(user_id)
                     if user:
-                        await user.send(content=message, embed=embed)
+                        message_chunks = (
+                            _split_discord_text(message, DISCORD_CONTENT_LIMIT)
+                            if message
+                            else [None]
+                        )
+
+                        for index, chunk in enumerate(message_chunks):
+                            await user.send(
+                                content=chunk or None,
+                                embed=embed if index == 0 else None,
+                            )
                         # 發送成功才從資料庫刪除
                         await asyncio.to_thread(delete_notification, notif_id)
                 except discord.Forbidden as e:
