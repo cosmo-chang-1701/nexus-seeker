@@ -15,7 +15,6 @@ from market_time import (
 from database.watchlist import get_all_watchlist
 from services.market_data_service import (
     get_history_df,
-    get_earnings_calendar,
     get_quote,
     get_macro_environment,
     get_vix_term_structure,
@@ -478,16 +477,20 @@ class AnalystAgent(commands.Cog):
     async def run_premarket_earnings(self):
         time_str = self._get_tw_time_str()
         try:
+            from services.calendar_service import calendar_service
+
             # 獲取所有觀察名單標的
             watchlist = get_all_watchlist()
             symbols = list(set([row[1] for row in watchlist]))
 
             # 獲取財報日曆
             earnings_data = {}
-            for sym in symbols[:10]:  # 限制數量以防超載
-                calendar = await get_earnings_calendar(sym)
-                if calendar:
-                    earnings_data[sym] = calendar[:1]  # 只取最近一次
+            earnings_map = await calendar_service.get_symbol_earnings_batch(
+                symbols[:10]
+            )
+            for sym, earnings_info in earnings_map.items():
+                if earnings_info is not None:
+                    earnings_data[sym] = [{"date": earnings_info.date}]
 
             # 並行獲取即將發布財報標的之新聞與 Reddit 情緒 (最多取前 2 個)
             upcoming_symbols = list(earnings_data.keys())[:2]

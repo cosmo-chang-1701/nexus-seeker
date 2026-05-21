@@ -11,7 +11,7 @@ Nexus Seeker is a multi-tenant **Options Quant Risk-Control & Trading Operations
 - **Market Data:** `finnhub-python`, `yfinance`, `pandas-ta`, `py_vollib` (Greeks/Pricing)
 - **Quant Math:** `numpy`, `pandas`, `scipy`
 - **AI/LLM:** OpenAI-compatible API with `pydantic` structured outputs and memory safety gates
-- **Database:** SQLite (v032+) with an automated migration engine and JSON metadata support
+- **Database:** SQLite (v037+) with an automated migration engine, JSON metadata support, and event calendar caches
 - **Infrastructure:** Docker, Docker Compose, Cloudflare Tunnel, psutil (System Health & Disk Monitoring)
 - **Security & Quality:** `pre-commit`, `ruff` (Linter/Formatter), `semgrep` (SAST), `Dockerfile.test`
 
@@ -34,8 +34,9 @@ The system is divided into two main services:
   - **`ddp_inspector.py`**: Davis Double Play (DDP) detection (EPS Momentum + P/E expansion).
   - **`psq_engine.py`**: PowerSqueeze (PSQ) scoring with VIX-aware momentum labeling.
   - **`intraday_pipeline.py`**: **Intraday Scan & Gamma Squeeze Engine**. Contains the `IntradayScanPipeline` background loop (runs every 30 mins) and the `NexusGammaSqueezeEngine` core decision logic (evaluating 4-Stage gates, financial runway, Vanna-adjusted Delta hedging, VIX battle ladder sizing, and post-market attribution feedback).
+    *   Also owns the watchlist heartbeat models and recommendation flow used by the 30-minute watchlist push, including skew-aware stock/option guidance, executable option contract selection (strategy, legs, strike, expiry, mid price, suggested size, max risk), and event-aware throttling from cached earnings / macro calendars.
   - **`execution_router.py`**: **Execution Decision Matrix (SDDM)**. Routes conditions to SHIELD (Defensive Grid) or SPEAR (Aggressive Options) based on Gatekeeper logic (VIX/Skew/UOA).
-- **`database/`**: Persistent storage layer with an automated migration engine. Includes unified asset lifecycle tracking, sentiment history, and three-stage alert filtering (v034).
+- **`database/`**: Persistent storage layer with an automated migration engine. Includes unified asset lifecycle tracking, sentiment history, three-stage alert filtering (v034), and SQLite-backed event calendar caches for macro months plus rolling per-symbol earnings refresh.
 - **`services/`**: Business logic layer.
   - **`trading_service.py`**: 4-stage validation pipeline. Now integrated with the **ExecutionRouter** to automate tactical decision-making during scans.
   - **`execution_router.py`**: Core logic for the SDDM, calculating ATR-based grids and Kelly-optimized position sizing.
@@ -43,7 +44,7 @@ The system is divided into two main services:
   - **`memory_manager.py`**: **VPS Health Watchdog** optimized for 1GB RAM. Handles periodic GC, emergency OOM alerts, and implements the **Pre-Market Cache Warmup Engine** (08:30-09:30 ET) to prevent cold-start latency.
 
   - **`polymarket_service.py`**: Prediction market whale monitoring with real-time snapshot mechanisms for attribution.
-  - **`calendar_service.py`**: **Calendar-Aware Guard**. Fetches high-impact economic/earnings data with LRU caching.
+  - **`calendar_service.py`**: **Calendar-Aware Guard**. Uses SQLite-backed event caching first: month-level macro-event cache, rolling earnings cache, and batch lookup helpers shared by watchlist heartbeat, calendar views, pre-market scans, and event monitors.
   - **`llm_service.py`**: Structured AI analysis with memory safety gates.
 - **`cogs/`**: Discord extensions.
   - **`unified_terminal.py`**: **Core Hub**. Consolidates 20+ commands into three primary hubs: `/x` (Actionable Symbol Intelligence), `/dash` (Strategic Portfolio Dashboard), and `/market` (Pulse). Includes interactive buttons and decision-centric views.
@@ -53,6 +54,7 @@ The system is divided into two main services:
   - **`hedging.py`**: Risk settlement and attribution commands (`/settle_hedge`, `/hedge_list`).
   - **`intelligence.py`**: Market edge detection (Legacy `/poly_list`, `/scan_news`).
   - **`embed_builder.py`**: **Centralized UI/UX Embed Generator**. Formats all Discord embeds. Optimized to package metrics and lists inside monospace ANSI code blocks (` ```ansi `), resolving CJK character visual alignment for perfect layout, and tracking real-time asset pricing ("現價").
+    *   The `create_watchlist_signal_embed()` heartbeat now follows the same field-oriented alert layout as other production embeds, while still embedding the ANSI watchlist snapshot in a dedicated field.
   - **analyst_agent.py**: **Autonomous Intelligence Analyst**. Generates dynamic, risk-aware intra-day execution guides and post-market Sector Flow Mapping reports.
     *   **Macro Scan**: Features a beautified Discord Embed with DXY, TNX, US2Y, and VIX metrics, including automated risk alerting.
     *   **Post-market Risk Settlement Summary (v1.4.3+):** Optimized to align with professional risk reporting. Automatically aggregates PnL attribution (Alpha vs. Hedge), macro environment snapshots, portfolio risk metrics (Delta, Heat), and Financial Runway assessments across sample users.
@@ -60,6 +62,7 @@ The system is divided into two main services:
         *   **Phase A (Open-11:00 ET):** Focuses on liquidity, open volatility, and pre-market gaps.
         *   **Phase B (11:00-14:00 ET):** Focuses on sector rotation, Reddit sentiment, and Polymarket whale intent.
         *   **Phase C (14:00-Close ET):** Focuses on portfolio hedging, specifically monitoring **Vanna-Adjusted Delta** for tail-risk exposure.
+    *   The Analyst Agent intra-day execution guide is lower frequency than the watchlist heartbeat: it pushes every 120 minutes during market hours, while the watchlist heartbeat pushes every 30 minutes.
     *   **Memory Safety Gate:** Automatically defers non-critical LLM analyses if VPS RAM exceeds 85%, prioritizing core risk operations.
 - **`cli.py`**: **Professional CLI Terminal**. A standalone entry point built with `click` and `rich` mirroring all Bot functionality.
     *   **Group `sys`**: Account settings, system health, and market status.
@@ -134,6 +137,8 @@ Never modify the database schema manually. Use the migration engine:
 - Use `ephemeral=True` for private settings and portfolio commands.
 - Long-running analytics should use `bot.queue_dm()` to prevent interaction timeouts.
 - **Monospace layout alignment**: For complex tables or lists (e.g., Greeks, NRO metrics, DDP reports, Holdings/Trades), wrap data inside monospace (` ```ansi `) code blocks. Use `_visual_len` and `_pad_string` helpers in `embed_builder.py` to calculate exact visual widths of CJK (Traditional Chinese) characters and preserve alignment.
+- For push notifications, prefer the centralized field-based embed style already used by scan, hedge, and heartbeat alerts; if ANSI tables are needed, place them inside a dedicated field instead of making the full embed description a raw report dump.
+- For any new economic / earnings logic, route through `services/calendar_service.py` or the SQLite cache helpers rather than calling raw market calendar APIs directly from feature code.
 
 ### 3. Unified Asset Lifecycle
 Assets transition through a persistent state machine in the `assets` table (v028+):
@@ -163,6 +168,8 @@ Assets transition through a persistent state machine in the `assets` table (v028
 - `nexus_core/market_analysis/risk_engine.py`: NRO & Vanna adjustment.
 - `nexus_core/market_analysis/attribution.py`: Protection scoring & self-evolution.
 - `nexus_core/market_analysis/intraday_pipeline.py`: Asynchronous intraday scan pipeline & risk-defended execution engine.
+- `nexus_core/database/calendar_cache.py`: SQLite cache helpers for month-level macro events and rolling earnings cache reads/writes.
+- `nexus_core/services/calendar_service.py`: Shared calendar cache entrypoint used by watchlist, calendar commands, event monitor, and pre-market earnings flows.
 - `nexus_core/gather_report.py`: Capital Flow & Sector Rotation report logic.
 - `nexus_core/cogs/analyst_agent.py`: Autonomous intelligence reports & sector flow mapping.
 - `nexus_core/services/memory_manager.py`: VPS stability watchdog.
