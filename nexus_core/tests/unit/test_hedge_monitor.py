@@ -1,5 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
+from models.quant import MacroRiskMetrics
 from services.hedge_monitor_service import HedgeMonitorService
 
 
@@ -52,3 +53,49 @@ async def test_vix_stage_move_detection():
             # Stage move: Aggressive (3) - Caution (1) = 2
             args, _ = mock_trigger.call_args
             assert args[1] == 2
+
+
+@pytest.mark.asyncio
+async def test_send_discord_alert_uses_embed_builder():
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+    service = HedgeMonitorService(bot)
+    metrics = MacroRiskMetrics(
+        net_exposure_dollars=50000.0,
+        exposure_pct=25.0,
+        total_beta_delta=75.0,
+        gamma_threshold=10.0,
+        theta_yield=0.12,
+        portfolio_heat=18.0,
+        portfolio_heat_limit=30.0,
+        total_gamma=2.5,
+        total_theta=120.0,
+        total_margin_used=10000.0,
+        total_vega=-15.5,
+        total_vanna=8.2,
+        vix_tier_name="Aggressive",
+        vix_scale_multiplier=1.2,
+    )
+    embed = object()
+
+    with patch(
+        "services.hedge_monitor_service.create_hedge_alert_embed",
+        return_value=embed,
+    ) as mock_create:
+        await service._send_discord_alert(
+            user_id=123,
+            vix=24.0,
+            stage_move=2,
+            metrics=metrics,
+            adj_delta=82.0,
+            hedge_qty=82,
+            instr="賣出 82 股 SPY",
+            narration="請先降低曝險。",
+            alert_id=5,
+            poly_snapshot=[{"question": "test", "odds_distribution": []}],
+        )
+
+    mock_create.assert_called_once()
+    assert mock_create.call_args.kwargs["total_beta_delta"] == 75.0
+    assert mock_create.call_args.kwargs["total_vega"] == -15.5
+    bot.queue_dm.assert_awaited_once_with(123, embed=embed)

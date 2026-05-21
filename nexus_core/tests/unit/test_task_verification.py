@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime
 
 # Ensure we can import from nexus_core
@@ -92,3 +92,26 @@ async def test_task2_warmup_memory_gate():
         await mm.proactive_warmup()
         assert mm._last_warmup_date is None  # 未執行
         assert mock_list.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_memory_manager_alert_uses_embed_builder():
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+    mm = MemoryManager(bot)
+    embed = object()
+
+    with patch("config.DISCORD_ADMIN_USER_ID", 999), patch(
+        "services.memory_manager.create_memory_alert_embed", return_value=embed
+    ) as mock_create, patch(
+        "services.market_data_service._sma_cache", {1: 1, 2: 2}
+    ), patch("services.market_data_service._ema_cache", {1: 1}):
+        await mm._trigger_emergency_alert(92.5, 640.0)
+
+    mock_create.assert_called_once_with(
+        total_usage=92.5,
+        process_memory_mb=640.0,
+        sma_cache_size=2,
+        ema_cache_size=1,
+    )
+    bot.queue_dm.assert_awaited_once_with(999, embed=embed)

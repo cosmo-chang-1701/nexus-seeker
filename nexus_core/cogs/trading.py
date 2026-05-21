@@ -23,6 +23,11 @@ from cogs.embed_builder import (
     create_ai_analysis_embed,
     create_info_embed,
     create_error_embed,
+    create_profit_lock_alert_embed,
+    create_gamma_fragility_embed,
+    create_pre_market_earnings_embed,
+    create_ditm_transition_alert_embed,
+    create_vtr_settlement_notice_embed,
 )
 from market_analysis.ghost_trader import GhostTrader
 
@@ -113,51 +118,11 @@ class SchedulerCog(commands.Cog):
             for event in risk_events:
                 uid = event["uid"]
                 if event["type"] == "PROFIT_LOCK":
-                    embed = discord.Embed(
-                        title="🚨 DITM 凸性防護：獲利鎖定已觸發",
-                        description=f"偵測到標的 **{event['symbol']}** 已進入深價內 (DITM)，凸性消失且風險報酬比惡化。",
-                        color=discord.Color.gold(),
-                    )
-                    embed.add_field(
-                        name="觸發指標",
-                        value=f"```\n未實現損益: {event['pnl_pct']}% | DTE: {event['dte']}\n```",
-                        inline=False,
-                    )
-                    embed.add_field(
-                        name="執行指令",
-                        value="✅ **獲利鎖定 (Profit Lock)**",
-                        inline=True,
-                    )
-                    embed.add_field(
-                        name="核心邏輯", value=event["reason"], inline=False
-                    )
-                    embed.set_footer(
-                        text="Mission-Critical Risk Environment | Nexus Seeker"
-                    )
-                    embed.timestamp = datetime.now(ny_tz)
+                    embed = create_profit_lock_alert_embed(event)
                     await self.bot.queue_dm(uid, embed=embed)
 
                 elif event["type"] == "GAMMA_FRAGILITY":
-                    embed = discord.Embed(
-                        title="🆘 Gamma 脆弱性警告 (Net Gamma < -20)",
-                        description="偵測到投資組合淨 Gamma 已跌破臨界點，曝險加速度呈非線性擴張。",
-                        color=discord.Color.dark_red(),
-                    )
-                    embed.add_field(
-                        name="目前淨 Gamma",
-                        value=f"`{event['net_gamma']}`",
-                        inline=True,
-                    )
-                    embed.add_field(
-                        name="安全臨界點", value=f"`{event['threshold']}`", inline=True
-                    )
-                    embed.add_field(
-                        name="優先指令",
-                        value="🛡️ **注入正 Gamma 緩衝 (買入近月 ATM 期權) 或 立即減倉**",
-                        inline=False,
-                    )
-                    embed.set_footer(text="Fragility Guard Engine v2.0 | Nexus Seeker")
-                    embed.timestamp = datetime.now(ny_tz)
+                    embed = create_gamma_fragility_embed(event)
                     await self.bot.queue_dm(uid, embed=embed)
 
         except Exception as e:
@@ -188,11 +153,7 @@ class SchedulerCog(commands.Cog):
                 if stats["total_trades"] > 0:
                     user = await self.bot.fetch_user(uid)
                     embed = build_vtr_stats_embed(user.display_name, stats)
-                    await self.bot.queue_dm(
-                        uid,
-                        message="📊 **本週虛擬交易室 (VTR) 績效週報已送達！**",
-                        embed=embed,
-                    )
+                    await self.bot.queue_dm(uid, embed=embed)
                     logger.info(f"✅ 週報已發送給用戶 {uid}")
             except Exception as e:
                 logger.error(f"發送週報給 {uid} 失敗: {e}")
@@ -218,32 +179,13 @@ class SchedulerCog(commands.Cog):
             )
 
             for uid, data in results.items():
-                alerts = []
-                for item in data["alerts"]:
-                    status = (
-                        "⚠️ **持倉高風險**" if item["is_portfolio"] else "👀 觀察清單"
-                    )
-                    alerts.append(
-                        f"**{item['symbol']}** ({status})\n└ 📅 財報日: `{item['earnings_date']}` (倒數 **{item['days_left']}** 天)"
-                    )
-
                 user = await self.bot.fetch_user(uid)
                 if user:
-                    if alerts:
-                        embed = discord.Embed(
-                            title="🚨 【盤前財報季雷達預警】",
-                            description="\n\n".join(alerts),
-                            color=discord.Color.red(),
-                        )
-                    else:
-                        scanned_list = "、".join(
-                            [f"`{s}`" for s in data["scanned_symbols"]]
-                        )
-                        embed = discord.Embed(
-                            title="✅ 【盤前財報季雷達掃描完畢】",
-                            description=f"已掃描：{scanned_list}\n\n近 {self.EARNINGS_WARNING_DAYS} 日內無財報風險，安全過關！",
-                            color=discord.Color.green(),
-                        )
+                    embed = create_pre_market_earnings_embed(
+                        data["alerts"],
+                        data["scanned_symbols"],
+                        self.EARNINGS_WARNING_DAYS,
+                    )
 
                     try:
                         await self.bot.queue_dm(uid, embed=embed)
@@ -772,7 +714,10 @@ class SchedulerCog(commands.Cog):
                         if is_auto
                         else "⚡ **【管理員強制掃描】風險模擬結果：**"
                     )
-                    await self.bot.queue_dm(uid, message=title)
+                    await self.bot.queue_dm(
+                        uid,
+                        embed=create_info_embed(title="掃描通知", message=title),
+                    )
                     user_capital = user_context.capital
                     for data in valid_alerts:
                         if data.get("alert_type") == "PSQ":
@@ -875,45 +820,19 @@ class SchedulerCog(commands.Cog):
                         else "已自動轉倉 (向上/向後轉倉)"
                     )
 
-                    embed = discord.Embed(
-                        title="🚨 NRO 優先指令：Profit Lock (DITM 凸性防禦)",
-                        description=f"偵測到標的 **{trade_info['symbol']}** 已進入深價內 (DITM)，凸性消失且風險報酬比惡化。",
-                        color=discord.Color.gold(),
-                    )
-                    embed.add_field(
-                        name="觸發指標", value=f"```\n{exit_reason}\n```", inline=False
-                    )
-                    embed.add_field(
-                        name="執行動作", value=f"✅ **{action_taken}**", inline=True
-                    )
-                    embed.add_field(
-                        name="鎖定利潤",
-                        value=f"💰 `${trade_info['pnl']:.2f}`",
-                        inline=True,
-                    )
-
                     exposure_pct = (
                         res["current_total_delta"]
                         * res["spy_price"]
                         / res["user_capital"]
                     ) * 100
-                    embed.add_field(
-                        name="帳戶目前總曝險",
-                        value=f"`{exposure_pct:.2f}%` (Beta-Weighted Delta)",
-                        inline=False,
+                    embed = create_ditm_transition_alert_embed(
+                        symbol=trade_info["symbol"],
+                        exit_reason=exit_reason,
+                        action_taken=action_taken,
+                        pnl=float(trade_info["pnl"]),
+                        exposure_pct=exposure_pct,
+                        hedge=hedge,
                     )
-
-                    if hedge:
-                        embed.add_field(
-                            name="🛡️ NRO 對沖建議",
-                            value=f"{hedge['action']} (缺口: `{hedge['gap']}`)",
-                            inline=False,
-                        )
-
-                    embed.set_footer(
-                        text="Quantitative Defense Pipeline | Nexus Risk Optimizer"
-                    )
-                    embed.timestamp = datetime.now(ny_tz)
                     await self.bot.queue_dm(uid, embed=embed)
                 else:
                     status_icon = (
@@ -927,19 +846,18 @@ class SchedulerCog(commands.Cog):
                         / res["user_capital"]
                     ) * 100
 
-                    msg = (
-                        f"{status_icon} **{trade_info['symbol']}** 結算通知\n"
-                        f"└ 損益: `${trade_info['pnl']:.2f}` | 目前總曝險: `{exposure_pct:.2f}%` \n"
+                    await self.bot.queue_dm(
+                        uid,
+                        embed=create_vtr_settlement_notice_embed(
+                            status_icon=status_icon,
+                            symbol=trade_info["symbol"],
+                            pnl=float(trade_info["pnl"]),
+                            exposure_pct=exposure_pct,
+                            regime=res.get("regime"),
+                            target_delta=res.get("target_delta"),
+                            hedge=hedge,
+                        ),
                     )
-
-                    if hedge:
-                        msg += (
-                            f"\n🧠 **系統自主位階判定：** `{res['regime']}`\n"
-                            f"└ 理想總曝險目標：`{res['target_delta']:.1f} Delta`\n"
-                            f"🛡️ **自動對沖決策：** {hedge['action']} (缺口: `{hedge['gap']}`)"
-                        )
-
-                    await self.bot.queue_dm(uid, message=msg)
 
         except Exception as e:
             logger.error(f"VTR 對沖連動任務錯誤: {e}")

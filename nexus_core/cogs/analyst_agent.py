@@ -29,6 +29,7 @@ from market_analysis.sentiment_engine import SentimentEngine
 from config import get_vix_tier
 from cogs.embed_builder import (
     create_ai_analysis_embed,
+    create_intraday_execution_guide_embed,
     create_next_day_strategy_embed,
 )
 import httpx
@@ -124,7 +125,7 @@ class AnalystAgent(commands.Cog):
                 )
                 await asyncio.sleep(min(sleep_secs, 3600))  # 最多睡一小時再檢查一次
 
-    async def dispatch_report(self, report_content):
+    async def dispatch_report(self, report_content: discord.Embed):
         """
         將報告發送給所有啟用了 Analyst Agent 的用戶。
         """
@@ -136,10 +137,7 @@ class AnalystAgent(commands.Cog):
             ctx = database.get_full_user_context(uid)
             if ctx.enable_analyst_agent:
                 try:
-                    if isinstance(report_content, discord.Embed):
-                        await self.bot.queue_dm(uid, embed=report_content)
-                    else:
-                        await self.bot.queue_dm(uid, message=report_content)
+                    await self.bot.queue_dm(uid, embed=report_content)
                     dispatched_count += 1
                 except Exception as e:
                     logger.error(f"Failed to dispatch report to {uid}: {e}")
@@ -216,16 +214,12 @@ class AnalystAgent(commands.Cog):
             if not ctx.enable_analyst_agent:
                 continue
 
-            embed = discord.Embed(
-                title=f"🛡️ 盤中量化執行指引 - {phase_name}",
-                color=discord.Color.red() if vix > 25 else discord.Color.blue(),
-                timestamp=discord.utils.utcnow(),
-            )
-
             if is_memory_gated:
-                embed.description = "⚠️ **Memory Safety Gate Active**: VPS RAM > 85%。已暫停部分耗能分析以保證風控引擎穩定。"
-                embed.add_field(
-                    name="系統狀態", value=f"RAM: `{mem.percent}%`", inline=False
+                embed = create_intraday_execution_guide_embed(
+                    phase_name=phase_name,
+                    vix=vix,
+                    memory_percent=mem.percent,
+                    is_memory_gated=True,
                 )
                 await self.bot.queue_dm(uid, embed=embed)
                 dispatched_count += 1
@@ -253,12 +247,6 @@ class AnalystAgent(commands.Cog):
             greeks_status = (
                 f"Δ: `{total_delta:.2f}` | 隱含 Δ (Vanna): `{adj_delta:.2f}`"
             )
-            embed.add_field(
-                name="1️⃣ 風險狀態 (Risk Status)",
-                value=f"**VIX 階級:** {vix_level_name} ({vix:.1f})\n**Greeks 完整性:** {greeks_status}",
-                inline=False,
-            )
-
             # 3. Financial Health
             runway_days = calculate_financial_runway(
                 ctx.cash_reserve, ctx.monthly_expense, ctx.total_theta
@@ -267,12 +255,6 @@ class AnalystAgent(commands.Cog):
                 (ctx.total_theta * 30 / ctx.monthly_expense * 100)
                 if ctx.monthly_expense > 0
                 else 0.0
-            )
-
-            embed.add_field(
-                name="2️⃣ 財務健康 (Financial Health)",
-                value=f"**剩餘跑道:** `{runway_days:.1f}` 天\n**Theta 覆蓋率:** `{theta_cov:.1f}%`",
-                inline=False,
             )
 
             # 4. Active Signal
@@ -297,24 +279,24 @@ class AnalystAgent(commands.Cog):
             elif phase == "C":
                 active_signal_content = f"**尾盤收斂:** 檢視 Vanna-Adjusted Delta 是否過高。\n**強制對沖建議:** {hedge_suggest}"
 
-            embed.add_field(
-                name="3️⃣ 活躍信號 (Active Signal)",
-                value=active_signal_content,
-                inline=False,
-            )
-
             # 5. System Health
             import services.market_data_service as mds
 
             sma_count = len(mds._sma_cache)
             ema_count = len(mds._ema_cache)
-            embed.add_field(
-                name="4️⃣ 系統狀態 (System Health)",
-                value=f"RAM: `{mem.percent}%` | BoundedCache (SMA/EMA): `{sma_count}/{ema_count}`",
-                inline=False,
+            embed = create_intraday_execution_guide_embed(
+                phase_name=phase_name,
+                vix=vix,
+                memory_percent=mem.percent,
+                is_memory_gated=False,
+                vix_level_name=vix_level_name,
+                greeks_status=greeks_status,
+                runway_days=runway_days,
+                theta_cov=theta_cov,
+                active_signal_content=active_signal_content,
+                sma_cache_size=sma_count,
+                ema_cache_size=ema_count,
             )
-
-            embed.set_footer(text="Nexus Seeker | NRO Vanna-Aware Intelligence")
             await self.bot.queue_dm(uid, embed=embed)
             dispatched_count += 1
 

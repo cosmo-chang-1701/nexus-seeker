@@ -7,6 +7,11 @@ import os
 sys.path.append(os.path.join(os.getcwd(), "nexus_core"))
 
 from cli import cli
+from models.schemas import (
+    EnhancedWatchlistMetrics,
+    WatchlistEvaluation,
+    WatchlistTacticalPlan,
+)
 
 
 def test_cli_help():
@@ -66,3 +71,58 @@ def test_cli_portfolio_empty():
         result = runner.invoke(cli, ["pf", "pnl"])
         assert result.exit_code == 0
         assert "目前無持倉紀錄" in result.output
+
+
+def test_cli_watchlist_check():
+    metrics = EnhancedWatchlistMetrics(
+        symbol="AAPL",
+        exchange="NASDAQ",
+        current_price=180.0,
+        buy_zone_status="🟢 買點：趨勢支撐 (VIX 修正)",
+        buy_price_phase1=178.0,
+        buy_price_phase2=172.0,
+        buy_price_phase3=165.0,
+        sell_zone_status="🟢 賣點：第一壓力帶",
+        sell_price_phase1=185.0,
+        sell_price_phase2=190.0,
+        sell_price_phase3=196.0,
+        pe_ratio=28.5,
+        rsi_14=54.0,
+        atr_14=4.2,
+        beta=1.1,
+        ma20=176.0,
+        ma50=170.0,
+        ma200=158.0,
+        iv_rank=71.0,
+        volume_poc=174.5,
+        gex_max_put_wall=168.0,
+        vanna_sensitivity=0.42,
+        relative_strength_spy=0.03,
+    )
+    evaluation = WatchlistEvaluation(
+        metrics=metrics,
+        tactical=WatchlistTacticalPlan(
+            scenario="premium-harvest",
+            sddm_route="SHIELD (防禦網格 - 左側權利金收集)",
+            action_guideline="建議以 Phase 2 建立 Cash-Secured Put。",
+            dynamic_grid_step=2.1,
+            hidden_delta_risk=0.0,
+            hedge_instruction=None,
+            hedge_allocation_shares=0,
+            alert_level="yellow",
+        ),
+    )
+
+    with patch("database.init_db"), patch(
+        "database.watchlist.get_user_watchlist", return_value=[("AAPL", 1)]
+    ), patch(
+        "market_analysis.intraday_pipeline.evaluate_watchlist_symbol",
+        new_callable=AsyncMock,
+        return_value=evaluation,
+    ):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["mkt", "watchlist_check"])
+        assert result.exit_code == 0
+        assert "AAPL | NASDAQ" in result.output
+        assert "SHIELD (防禦網格 - 左側權利金收集)" in result.output
+        assert "```ansi" in result.output

@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 import database
+from cogs.embed_builder import create_hedge_alert_embed
 from database.user_settings import get_full_user_context
 from services import market_data_service
 from config import get_vix_tier, VIX_LADDER_CONFIG
@@ -286,65 +287,20 @@ class HedgeMonitorService:
         alert_id,
         poly_snapshot=None,
     ):
-        import discord
-        from config import get_vix_tier
-
         tier = get_vix_tier(vix)
-        color = discord.Color(tier.get("color_hex", 0xFF0000))
-
-        embed = discord.Embed(
-            title="🚨 【戰位報告：自動化對沖警報】",
-            description=f"**警報等級：** {tier['emoji']} {tier['name']} (移動 `{stage_move:+} 階`)",
-            color=color,
-            timestamp=discord.utils.utcnow(),
+        embed = create_hedge_alert_embed(
+            vix=vix,
+            stage_move=stage_move,
+            tier_name=str(tier["name"]),
+            tier_emoji=str(tier["emoji"]),
+            color_hex=int(tier.get("color_hex", 0xFF0000)),
+            total_beta_delta=metrics.total_beta_delta,
+            adjusted_delta=adj_delta,
+            total_vega=metrics.total_vega,
+            hedge_quantity=hedge_qty,
+            instruction_text=instr,
+            narration=narration,
+            alert_id=alert_id,
+            poly_snapshot=poly_snapshot,
         )
-
-        embed.add_field(
-            name="📊 風險指標",
-            value=(
-                f"• **即時 VIX:** `{vix:.2f}`\n"
-                f"• **淨 Delta:** `{metrics['total_beta_delta']:+.1f}`\n"
-                f"• **調整後 Delta:** `{adj_delta:+.1f}` (Hidden Delta)\n"
-                f"• **Vega 脆弱性:** `{metrics['total_vega']:+.2f}`"
-            ),
-            inline=False,
-        )
-
-        if poly_snapshot:
-            snapshot_text = ""
-            for event in poly_snapshot:
-                q = event.get("question")[:40] + "..."
-                odds = event.get("odds_distribution", [])
-                odds_str = " | ".join(
-                    [
-                        f"{o.get('outcome')}: `{o.get('odds')*100:.0f}%`"
-                        for o in odds[:2]
-                    ]
-                )
-                snapshot_text += f"• **{q}**\n  └ {odds_str}\n"
-
-            if snapshot_text:
-                embed.add_field(
-                    name="🌐 [快取快照] Polymarket 即時機率",
-                    value=snapshot_text,
-                    inline=False,
-                )
-
-        embed.add_field(name="🤖 AI 風險敘述", value=f"*{narration}*", inline=False)
-
-        embed.add_field(
-            name="🛡️ 對沖建議指令", value=f"```fix\n{instr}\n```", inline=False
-        )
-
-        embed.add_field(
-            name="📈 預期效果",
-            value=(
-                f"執行後淨 Delta 將回歸至 `{adj_delta + (hedge_qty * -1.0):+.1f}` 附近，"
-                f"顯著降低系統性回撤風險。"
-            ),
-            inline=False,
-        )
-
-        embed.set_footer(text=f"Nexus Seeker Battle Station | Alert ID: {alert_id}")
-
         await self.bot.queue_dm(user_id, embed=embed)

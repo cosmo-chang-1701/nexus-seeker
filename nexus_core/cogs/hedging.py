@@ -1,4 +1,9 @@
-from cogs.embed_builder import create_info_embed, create_error_embed
+from cogs.embed_builder import (
+    create_error_embed,
+    create_hedge_list_embed,
+    create_hedge_settlement_embed,
+    create_info_embed,
+)
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -78,16 +83,11 @@ class HedgingCog(commands.Cog):
             conn.close()
 
             # 3. 回饋使用者
-            embed = discord.Embed(
-                title="✅ 對沖結算完成",
-                description=f"已成功記錄警報 `#{alert_id}` 的對沖執行紀錄。",
-                color=discord.Color.green(),
-                timestamp=discord.utils.utcnow(),
+            embed = create_hedge_settlement_embed(
+                alert_id=alert_id,
+                hedge_instrument=str(alert[6]),
+                executed_quantity=int(final_qty),
             )
-            embed.add_field(name="執行標的", value=f"`{alert[6]}`", inline=True)
-            embed.add_field(name="執行數量", value=f"`{final_qty}`", inline=True)
-            embed.set_footer(text="數據已同步至 SQLite 持久化層，可用於歸因分析。")
-
             await interaction.followup.send(embed=embed, ephemeral=True)
 
         except Exception as e:
@@ -125,20 +125,7 @@ class HedgingCog(commands.Cog):
                     ephemeral=True,
                 )
 
-            embed = discord.Embed(
-                title="📜 最近對沖警報列表", color=discord.Color.blue()
-            )
-
-            content = []
-            for r in rows:
-                status_emoji = (
-                    "⏳" if r[3] == "PENDING" else "✅" if r[3] == "EXECUTED" else "❌"
-                )
-                content.append(
-                    f"`#{r[0]}` | {status_emoji} | VIX: `{r[1]:.2f}` | 建議: `{r[2]}`股 | {r[4][:16]}"
-                )
-
-            embed.description = "\n".join(content)
+            embed = create_hedge_list_embed(rows)
             await interaction.followup.send(embed=embed, ephemeral=True)
 
         except Exception as e:

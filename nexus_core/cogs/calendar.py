@@ -1,4 +1,9 @@
-from cogs.embed_builder import create_info_embed
+from cogs.embed_builder import (
+    create_event_impact_embed,
+    create_info_embed,
+    create_iv_risk_scan_embed,
+    create_market_calendar_embed,
+)
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
@@ -6,7 +11,7 @@ import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from services.calendar_service import calendar_service, EconomicEvent, EarningsEvent
+from services.calendar_service import calendar_service
 from market_analysis.volatility_inspector import VolatilityInspector
 import database
 
@@ -58,26 +63,11 @@ class CalendarCog(commands.Cog):
                 )
             )
 
-        embed = discord.Embed(
-            title="📅 【 重大市場事件 & 財報日曆 】",
-            description="針對您的持倉標的過濾後的高影響力事件：",
-            color=discord.Color.blue(),
-            timestamp=datetime.now(),
+        embed = create_market_calendar_embed(
+            events,
+            max_items=20,
+            empty_message="📭 未來 7 日內無影響持倉標的的重大事件或財報。",
         )
-
-        for event in events[:20]:  # Limit to 20 for embed safety
-            if isinstance(event, EconomicEvent):
-                impact_color = "🔴" if event.impact.lower() == "high" else "🟡"
-                field_name = f"{impact_color} {event.event} ({event.country})"
-                field_value = f"⏰ TTE: `{event.tte_hours}` 小時 | 時間: `{event.time}`"
-            elif isinstance(event, EarningsEvent):
-                field_name = f"📊 {event.symbol} 財報發布"
-                field_value = f"⏰ TTE: `{event.tte_hours}` 小時 | 日期: `{event.date}`"
-            else:
-                continue
-
-            embed.add_field(name=field_name, value=field_value, inline=False)
-
         embed.set_footer(text="Calendar-Aware Guard | Nexus Seeker")
         await interaction.followup.send(embed=embed)
 
@@ -112,22 +102,7 @@ class CalendarCog(commands.Cog):
                 )
             )
 
-        embed = discord.Embed(
-            title="🔥 【 高波動 & IV Crush 風險掃描 】", color=discord.Color.red()
-        )
-
-        for res in high_iv_results:
-            risk_label = "🚨 CRITICAL" if res["is_high_risk_vol"] else "⚠️ HIGH IV"
-            field_name = f"[{risk_label}] {res['symbol']} (IVR: {res['iv_rank']}%)"
-            field_value = (
-                f"價格: `${res['price']}` | IV: `{res['iv_current']}%` | HV: `{res['hv_current']}%` \n"
-                f"財報 TTE: `{res['tte_hours']:.1f}` 小時 \n"
-                f"**策略建議**: {res['strategy']} \n"
-                f"**邏輯**: {res['trigger_logic']}"
-            )
-            embed.add_field(name=field_name, value=field_value, inline=False)
-
-        embed.set_footer(text="IV Rank Scanner | Nexus Seeker")
+        embed = create_iv_risk_scan_embed(high_iv_results)
         await interaction.followup.send(embed=embed)
 
     @app_commands.command(
@@ -196,36 +171,18 @@ class CalendarCog(commands.Cog):
 
         delta_shift = adj_delta - total_delta
 
-        embed = discord.Embed(
-            title=f"🎲 【 {symbol} 事件風險模擬 (What-if) 】",
-            description=f"假設波動率變動 `{vol_move}%` 時，部位 Greeks 的動態偏移：",
-            color=discord.Color.gold(),
-        )
-
-        embed.add_field(
-            name="目前 Beta-Weighted Delta", value=f"`{total_delta:.2f}`", inline=True
-        )
-        embed.add_field(
-            name="目前 Vanna (曝險變化率)", value=f"`{total_vanna:.2f}`", inline=True
-        )
-        embed.add_field(
-            name="預期 Hidden Delta", value=f"`{adj_delta:.2f}`", inline=False
-        )
-        embed.add_field(name="Delta 偏移量", value=f"`{delta_shift:+.2f}`", inline=True)
-
         exposure_shift_dollars = (
             delta_shift * 670.0
         )  # Assuming SPY=670 for beta-delta dollar mapping
-        embed.add_field(
-            name="等值曝險變動 (USD)",
-            value=f"`${exposure_shift_dollars:,.2f}`",
-            inline=True,
+        embed = create_event_impact_embed(
+            symbol=symbol,
+            vol_move=vol_move,
+            total_delta=total_delta,
+            total_vanna=total_vanna,
+            adjusted_delta=adj_delta,
+            delta_shift=delta_shift,
+            exposure_shift_dollars=exposure_shift_dollars,
         )
-
-        risk_status = "🔴 危險" if abs(adj_delta) > 100 else "🟢 安全"
-        embed.add_field(name="風險狀態判定", value=f"**{risk_status}**", inline=False)
-
-        embed.set_footer(text="NRO Vanna Simulation | Nexus Seeker")
         await interaction.followup.send(embed=embed)
 
 
