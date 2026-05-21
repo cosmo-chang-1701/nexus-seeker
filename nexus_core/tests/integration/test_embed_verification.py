@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch
-from bot import NexusBot
+from bot import NexusBot, DISCORD_EMBED_DESCRIPTION_LIMIT, _split_discord_text
 from cogs.terminal import TerminalCog
 from cogs.embed_builder import create_info_embed
 
@@ -42,6 +42,44 @@ async def test_bot_queue_dm_keeps_embed(bot):
         assert args[2] is not None
         assert args[2]["title"] == "ℹ️ Custom Title"
         assert args[2]["description"] == "Custom Message"
+
+
+@pytest.mark.asyncio
+async def test_bot_queue_dm_splits_long_text(bot):
+    """測試超長純文字通知會自動切成多個安全 Embed。"""
+    user_id = 12345
+    test_message = "A" * (DISCORD_EMBED_DESCRIPTION_LIMIT + 100)
+
+    with patch("bot.add_pending_notification") as mock_add:
+        await bot.queue_dm(user_id, message=test_message)
+
+        assert mock_add.call_count == 2
+
+        first_args, _ = mock_add.call_args_list[0]
+        second_args, _ = mock_add.call_args_list[1]
+
+        assert first_args[0] == user_id
+        assert first_args[1] is None
+        assert second_args[1] is None
+        assert len(first_args[2]["description"]) <= DISCORD_EMBED_DESCRIPTION_LIMIT
+        assert len(second_args[2]["description"]) <= DISCORD_EMBED_DESCRIPTION_LIMIT
+        assert (
+            first_args[2]["description"] + second_args[2]["description"] == test_message
+        )
+
+
+@pytest.mark.asyncio
+async def test_split_discord_text_preserves_code_blocks():
+    """測試超長 ANSI code block 仍會維持合法 fence 格式。"""
+    body = "A" * (DISCORD_EMBED_DESCRIPTION_LIMIT + 100)
+    message = f"```ansi\n{body}\n```"
+
+    chunks = _split_discord_text(message, DISCORD_EMBED_DESCRIPTION_LIMIT)
+
+    assert len(chunks) == 2
+    assert all(len(chunk) <= DISCORD_EMBED_DESCRIPTION_LIMIT for chunk in chunks)
+    assert all(chunk.startswith("```ansi\n") for chunk in chunks)
+    assert all(chunk.endswith("\n```") for chunk in chunks)
 
 
 @pytest.mark.asyncio
