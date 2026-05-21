@@ -9,6 +9,7 @@ sys.path.append(os.path.join(os.getcwd(), "nexus_core"))
 from cli import cli
 from models.schemas import (
     EnhancedWatchlistMetrics,
+    WatchlistEventContext,
     WatchlistEvaluation,
     WatchlistTacticalPlan,
 )
@@ -112,6 +113,10 @@ def test_cli_watchlist_check():
             hedge_instruction=None,
             hedge_allocation_shares=0,
             alert_level="yellow",
+        ),
+        event_context=WatchlistEventContext(
+            risk_mode="normal",
+            summary="未偵測到近期需調整參數的重大事件。",
         ),
     )
 

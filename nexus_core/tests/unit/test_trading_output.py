@@ -187,14 +187,28 @@ async def test_dispatch_watchlist_heartbeat_sends_all_watchlist_symbols():
     eval_aapl.metrics.option_skew = 3.2
     eval_aapl.metrics.option_skew_state = "正常"
     eval_aapl.tactical.alert_level = "green"
+    eval_aapl.event_context.summary = "未偵測到近期需調整參數的重大事件。"
 
     eval_nvda = MagicMock()
     eval_nvda.metrics.symbol = "NVDA"
     eval_nvda.metrics.option_skew = 6.8
     eval_nvda.metrics.option_skew_state = "⚠️ 預警性對沖 (Put 昂貴)"
     eval_nvda.tactical.alert_level = "yellow"
+    eval_nvda.event_context.summary = (
+        "CPI 倒數 12.0 小時 ｜ 先縮口數，優先定義風險的 Debit Spread / 保護性部位。"
+    )
 
     with patch(
+        "services.calendar_service.calendar_service.get_next_high_impact_event",
+        new_callable=AsyncMock,
+        return_value=SimpleNamespace(
+            event="CPI", time="2026-05-22T12:30:00Z", tte_hours=12.0
+        ),
+    ), patch(
+        "services.calendar_service.calendar_service.get_symbol_earnings_batch",
+        new_callable=AsyncMock,
+        return_value={"AAPL": None, "NVDA": None},
+    ), patch(
         "market_analysis.intraday_pipeline.evaluate_watchlist_symbol",
         new_callable=AsyncMock,
         side_effect=[eval_aapl, eval_nvda],

@@ -114,6 +114,22 @@ class WatchlistOptionPlan(BaseModel):
     legs: list[WatchlistOptionLeg] = Field(min_length=1)
 
 
+class WatchlistEventContext(BaseModel):
+    """Upcoming earnings / macro events affecting watchlist execution."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    earnings_date: str | None = None
+    earnings_tte_hours: float | None = None
+    macro_event: str | None = None
+    macro_event_time: str | None = None
+    macro_tte_hours: float | None = None
+    risk_mode: Literal["normal", "macro-guard", "earnings-guard", "event-lock"] = (
+        "normal"
+    )
+    summary: str = Field(min_length=1)
+
+
 class WatchlistEvaluation(BaseModel):
     """Structured watchlist monitoring snapshot."""
 
@@ -121,3 +137,4 @@ class WatchlistEvaluation(BaseModel):
 
     metrics: EnhancedWatchlistMetrics
     tactical: WatchlistTacticalPlan
+    event_context: WatchlistEventContext

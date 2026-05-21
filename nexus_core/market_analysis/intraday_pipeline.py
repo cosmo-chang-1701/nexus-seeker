@@ -12,6 +12,7 @@ from market_time import ny_tz, is_market_open
 from models.schemas import (
     EnhancedWatchlistMetrics,
     WatchlistEvaluation,
+    WatchlistEventContext,
     WatchlistOptionLeg,
     WatchlistOptionPlan,
     WatchlistTacticalPlan,
@@ -363,23 +364,175 @@ async def build_enhanced_watchlist_metrics(
     return metrics
 
 
-async def evaluate_watchlist_symbol(symbol: str) -> Optional[WatchlistEvaluation]:
-    metrics = await build_enhanced_watchlist_metrics(symbol)
+def _hours_to_days_text(hours: float) -> str:
+    if hours >= 24.0:
+        return f"{hours / 24.0:.1f} 天"
+    return f"{hours:.1f} 小時"
+
+
+def _resolve_watchlist_event_mode(
+    earnings_tte_hours: float | None, macro_tte_hours: float | None
+) -> str:
+    if earnings_tte_hours is not None and 0 < earnings_tte_hours <= 72.0:
+        return "event-lock"
+    if earnings_tte_hours is not None and 0 < earnings_tte_hours <= 168.0:
+        return "earnings-guard"
+    if macro_tte_hours is not None and 0 < macro_tte_hours <= 48.0:
+        return "macro-guard"
+    return "normal"
+
+
+def _build_watchlist_event_summary(
+    symbol: str,
+    earnings_date: str | None,
+    earnings_tte_hours: float | None,
+    macro_event: str | None,
+    macro_tte_hours: float | None,
+    risk_mode: str,
+) -> str:
+    if risk_mode == "event-lock" and earnings_tte_hours is not None:
+        return (
+            f"{symbol} 財報倒數 {_hours_to_days_text(earnings_tte_hours)} ｜ "
+            "禁做賣方、僅保留保護性 / Debit Spread 類型。"
+        )
+    if risk_mode == "earnings-guard" and earnings_tte_hours is not None:
+        return (
+            f"{symbol} 財報將於 {earnings_date or '近期'} 公布 "
+            f"(倒數 {_hours_to_days_text(earnings_tte_hours)}) ｜ "
+            "先降風險，避免裸賣方與過大口數。"
+        )
+    if (
+        risk_mode == "macro-guard"
+        and macro_event is not None
+        and macro_tte_hours is not None
+    ):
+        return (
+            f"{macro_event} 倒數 {_hours_to_days_text(macro_tte_hours)} ｜ "
+            "先縮口數，優先定義風險的 Debit Spread / 保護性部位。"
+        )
+    return "未偵測到近期需調整參數的重大事件。"
+
+
+async def build_watchlist_event_context(
+    symbol: str,
+    *,
+    earnings_event: Any | None = None,
+    macro_event: Any | None = None,
+) -> WatchlistEventContext:
+    from services.calendar_service import calendar_service
+
+    if earnings_event is None or macro_event is None:
+        fetched_earnings, fetched_macro = await asyncio.gather(
+            calendar_service.get_symbol_earnings(symbol),
+            calendar_service.get_next_high_impact_event(days=7),
+        )
+        if earnings_event is None:
+            earnings_event = fetched_earnings
+        if macro_event is None:
+            macro_event = fetched_macro
+
+    earnings_date = getattr(earnings_event, "date", None)
+    earnings_tte_hours = getattr(earnings_event, "tte_hours", None)
+    macro_name = getattr(macro_event, "event", None)
+    macro_time = getattr(macro_event, "time", None)
+    macro_tte_hours = getattr(macro_event, "tte_hours", None)
+    risk_mode = _resolve_watchlist_event_mode(earnings_tte_hours, macro_tte_hours)
+    summary = _build_watchlist_event_summary(
+        symbol,
+        earnings_date,
+        earnings_tte_hours,
+        macro_name,
+        macro_tte_hours,
+        risk_mode,
+    )
+    return WatchlistEventContext(
+        earnings_date=earnings_date,
+        earnings_tte_hours=earnings_tte_hours,
+        macro_event=macro_name,
+        macro_event_time=macro_time,
+        macro_tte_hours=macro_tte_hours,
+        risk_mode=risk_mode,
+        summary=summary,
+    )
+
+
+def _watchlist_event_risk_multiplier(
+    event_context: WatchlistEventContext | None,
+) -> float:
+    if event_context is None:
+        return 1.0
+    multipliers = [1.0]
+    if (
+        event_context.earnings_tte_hours is not None
+        and 0 < event_context.earnings_tte_hours <= 72.0
+    ):
+        multipliers.append(0.35)
+    elif (
+        event_context.earnings_tte_hours is not None
+        and 0 < event_context.earnings_tte_hours <= 168.0
+    ):
+        multipliers.append(0.5)
+
+    if (
+        event_context.macro_tte_hours is not None
+        and 0 < event_context.macro_tte_hours <= 24.0
+    ):
+        multipliers.append(0.5)
+    elif (
+        event_context.macro_tte_hours is not None
+        and 0 < event_context.macro_tte_hours <= 48.0
+    ):
+        multipliers.append(0.67)
+
+    return min(multipliers)
+
+
+async def evaluate_watchlist_symbol(
+    symbol: str,
+    *,
+    earnings_event: Any | None = None,
+    macro_event: Any | None = None,
+) -> Optional[WatchlistEvaluation]:
+    metrics, event_context = await asyncio.gather(
+        build_enhanced_watchlist_metrics(symbol),
+        build_watchlist_event_context(
+            symbol, earnings_event=earnings_event, macro_event=macro_event
+        ),
+    )
     if metrics is None:
         return None
     tactical = WatchlistRiskController.process_metrics(metrics)
-    return WatchlistEvaluation(metrics=metrics, tactical=tactical)
+    return WatchlistEvaluation(
+        metrics=metrics, tactical=tactical, event_context=event_context
+    )
 
 
 def derive_watchlist_option_guidance(
     metrics: EnhancedWatchlistMetrics,
     tactical: Mapping[str, Any] | WatchlistTacticalPlan,
+    event_context: WatchlistEventContext | None = None,
 ) -> str:
     tactical_model = (
         tactical
         if isinstance(tactical, WatchlistTacticalPlan)
         else WatchlistTacticalPlan.model_validate(tactical)
     )
+
+    if event_context is not None and event_context.risk_mode == "event-lock":
+        return (
+            f"{event_context.summary} 目前不建議賣方收租；"
+            "若要保留方向判斷，優先 Bear Put Spread / Bull Call Spread 這類定義風險結構。"
+        )
+    if event_context is not None and event_context.risk_mode == "earnings-guard":
+        return (
+            f"{event_context.summary} 事件前幾天避免 Cash-Secured Put / Call Credit 之類賣方；"
+            "改以小倉 Debit Spread 或保護性 Put 控制 IV Crush 風險。"
+        )
+    if event_context is not None and event_context.risk_mode == "macro-guard":
+        return (
+            f"{event_context.summary} CPI / FOMC / NFP 前先縮口數，"
+            "若要進場優先 Bull Call Spread / Bear Put Spread。"
+        )
 
     if tactical_model.scenario == "hard-hedge":
         return (
@@ -475,8 +628,10 @@ def _estimate_watchlist_contract_count(
     short_strike: float,
     capital: float,
     risk_limit: float,
+    risk_budget_multiplier: float = 1.0,
 ) -> tuple[int, float]:
     base_budget = max(capital * min(max(risk_limit, 1.0), 15.0) / 100.0 * 0.1, 500.0)
+    base_budget *= max(min(risk_budget_multiplier, 1.0), 0.2)
 
     if premium_type == "debit":
         risk_per_contract = max(estimated_net_premium * 100.0, 1.0)
@@ -495,6 +650,7 @@ async def build_watchlist_option_plan(
     *,
     capital: float,
     risk_limit: float,
+    event_context: WatchlistEventContext | None = None,
 ) -> Optional[WatchlistOptionPlan]:
     from market_analysis.strategy import find_best_contract
 
@@ -503,7 +659,9 @@ async def build_watchlist_option_plan(
         if isinstance(tactical, WatchlistTacticalPlan)
         else WatchlistTacticalPlan.model_validate(tactical)
     )
-    stock_action = derive_watchlist_option_guidance(metrics, tactical_model)
+    stock_action = derive_watchlist_option_guidance(
+        metrics, tactical_model, event_context=event_context
+    )
 
     strategy_name: str | None = None
     premium_type: str | None = None
@@ -514,7 +672,41 @@ async def build_watchlist_option_plan(
     cover_direction = "lower"
     width = 0.0
 
-    if tactical_model.scenario == "hard-hedge":
+    event_lock = event_context is not None and event_context.risk_mode == "event-lock"
+    event_guard = event_context is not None and event_context.risk_mode in {
+        "event-lock",
+        "earnings-guard",
+        "macro-guard",
+    }
+
+    if event_guard and tactical_model.scenario == "hard-hedge":
+        strategy_name = "Bear Put Spread"
+        premium_type = "debit"
+        opt_type = "put"
+        primary_leg = await find_best_contract(metrics.symbol, "BTO_PUT", -0.35, 21, 60)
+        primary_action = "BUY"
+        cover_direction = "lower"
+    elif event_guard:
+        bullish_event_bias = metrics.current_price <= metrics.sell_price_phase1
+        if bullish_event_bias:
+            strategy_name = "Bull Call Spread"
+            premium_type = "debit"
+            opt_type = "call"
+            primary_leg = await find_best_contract(
+                metrics.symbol, "BTO_CALL", 0.45, 21, 60
+            )
+            primary_action = "BUY"
+            cover_direction = "higher"
+        else:
+            strategy_name = "Bear Put Spread"
+            premium_type = "debit"
+            opt_type = "put"
+            primary_leg = await find_best_contract(
+                metrics.symbol, "BTO_PUT", -0.35, 21, 60
+            )
+            primary_action = "BUY"
+            cover_direction = "lower"
+    elif tactical_model.scenario == "hard-hedge":
         strategy_name = "Bear Put Spread"
         premium_type = "debit"
         opt_type = "put"
@@ -608,12 +800,17 @@ async def build_watchlist_option_plan(
         else float(primary_leg["strike"]),
         capital=capital,
         risk_limit=risk_limit,
+        risk_budget_multiplier=_watchlist_event_risk_multiplier(event_context),
     )
 
     rationale = (
         f"依據 {strategy_name} 路由，結合 IV Rank {metrics.iv_rank:.1f}%、"
         f"Skew {metrics.option_skew:+.2f}% 與當前技術位階自動選約。"
     )
+    if event_context is not None and event_context.risk_mode != "normal":
+        rationale = f"{rationale} {event_context.summary}"
+    if event_lock and "Credit" in strategy_name:
+        return None
     return WatchlistOptionPlan(
         strategy_name=strategy_name,
         premium_type=premium_type,
@@ -1231,7 +1428,8 @@ class IntradayScanPipeline:
     ) -> Optional[TickerMarketData]:
         """獲取標的即時數據並拼裝為 TickerMarketData"""
         try:
-            from services.market_data_service import get_quote, get_earnings_calendar
+            from services.calendar_service import calendar_service
+            from services.market_data_service import get_quote
 
             quote = await get_quote(ticker)
             if not quote or "current_price" not in quote:
@@ -1242,16 +1440,10 @@ class IntradayScanPipeline:
             # 獲取財報日期
             days_earnings = 30
             try:
-                cal = await get_earnings_calendar(ticker)
-                if cal and len(cal) > 0:
-                    earnings_date_str = cal[0].get("date", "")
-                    if earnings_date_str:
-                        dt_earn = datetime.strptime(
-                            earnings_date_str, "%Y-%m-%d"
-                        ).date()
-                        days_earnings = max(
-                            0, (dt_earn - datetime.now(ny_tz).date()).days
-                        )
+                earnings_info = await calendar_service.get_symbol_earnings(ticker)
+                if earnings_info is not None:
+                    dt_earn = datetime.strptime(earnings_info.date, "%Y-%m-%d").date()
+                    days_earnings = max(0, (dt_earn - datetime.now(ny_tz).date()).days)
             except Exception:
                 pass
 

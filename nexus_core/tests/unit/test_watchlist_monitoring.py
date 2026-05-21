@@ -6,12 +6,13 @@ from unittest.mock import AsyncMock, patch
 from market_analysis.intraday_pipeline import (
     _WATCHLIST_METRICS_CACHE,
     build_enhanced_watchlist_metrics,
+    build_watchlist_event_context,
     build_watchlist_option_plan,
     derive_watchlist_option_guidance,
     evaluate_watchlist_symbol,
 )
 from models.quant import IVMetrics
-from models.schemas import EnhancedWatchlistMetrics
+from models.schemas import EnhancedWatchlistMetrics, WatchlistEventContext
 from risk_engine.nro import WatchlistRiskController
 from ui.formatter import generate_ansi_watchlist_report
 
@@ -47,6 +48,20 @@ def _sample_metrics(**overrides):
     }
     payload.update(overrides)
     return EnhancedWatchlistMetrics(**payload)
+
+
+def _sample_event_context(**overrides):
+    payload = {
+        "earnings_date": None,
+        "earnings_tte_hours": None,
+        "macro_event": None,
+        "macro_event_time": None,
+        "macro_tte_hours": None,
+        "risk_mode": "normal",
+        "summary": "未偵測到近期需調整參數的重大事件。",
+    }
+    payload.update(overrides)
+    return WatchlistEventContext(**payload)
 
 
 @pytest.fixture(autouse=True)
@@ -119,6 +134,24 @@ def test_derive_watchlist_option_guidance_mentions_skew_and_strategy():
     assert "Cash-Secured Put" in guidance
 
 
+def test_derive_watchlist_option_guidance_prioritizes_event_guard():
+    metrics = _sample_metrics(current_price=129.0, iv_rank=78.0, option_skew=7.2)
+    tactical = WatchlistRiskController.process_metrics(metrics)
+    event_context = _sample_event_context(
+        earnings_date="2026-05-24",
+        earnings_tte_hours=36.0,
+        risk_mode="event-lock",
+        summary="NVDA 財報倒數 36.0 小時 ｜ 禁做賣方、僅保留保護性 / Debit Spread 類型。",
+    )
+
+    guidance = derive_watchlist_option_guidance(
+        metrics, tactical, event_context=event_context
+    )
+
+    assert "禁做賣方" in guidance
+    assert "Debit Spread" in guidance
+
+
 @pytest.mark.asyncio
 async def test_build_watchlist_option_plan_builds_credit_spread():
     metrics = _sample_metrics(current_price=129.0, iv_rank=78.0, option_skew=7.2)
@@ -159,6 +192,115 @@ async def test_build_watchlist_option_plan_builds_credit_spread():
     assert len(plan.legs) == 2
     assert plan.legs[0].action == "SELL"
     assert plan.legs[1].action == "BUY"
+
+
+@pytest.mark.asyncio
+async def test_build_watchlist_option_plan_switches_to_debit_before_earnings():
+    metrics = _sample_metrics(current_price=129.0, iv_rank=78.0, option_skew=7.2)
+    tactical = WatchlistRiskController.process_metrics(metrics)
+    event_context = _sample_event_context(
+        earnings_date="2026-05-24",
+        earnings_tte_hours=36.0,
+        risk_mode="event-lock",
+        summary="NVDA 財報倒數 36.0 小時 ｜ 禁做賣方、僅保留保護性 / Debit Spread 類型。",
+    )
+    chain = type(
+        "Chain",
+        (),
+        {
+            "calls": pd.DataFrame(
+                [
+                    {"strike": 132.0, "bid": 2.2, "ask": 2.4, "lastPrice": 2.3},
+                    {"strike": 138.0, "bid": 0.9, "ask": 1.1, "lastPrice": 1.0},
+                ]
+            ),
+            "puts": pd.DataFrame(
+                [
+                    {"strike": 120.0, "bid": 1.0, "ask": 1.2, "lastPrice": 1.1},
+                    {"strike": 118.0, "bid": 0.7, "ask": 0.9, "lastPrice": 0.8},
+                ]
+            ),
+        },
+    )()
+
+    with patch(
+        "market_analysis.strategy.find_best_contract",
+        new_callable=AsyncMock,
+        return_value={"strike": 132.0, "expiry": "2026-06-19", "mid": 2.3},
+    ), patch(
+        "services.market_data_service.get_option_chain",
+        new_callable=AsyncMock,
+        return_value=chain,
+    ):
+        plan = await build_watchlist_option_plan(
+            metrics,
+            tactical,
+            capital=100000.0,
+            risk_limit=15.0,
+            event_context=event_context,
+        )
+
+    assert plan is not None
+    assert plan.strategy_name == "Bull Call Spread"
+    assert plan.premium_type == "debit"
+    assert "財報倒數" in plan.rationale
+    assert plan.legs[0].action == "BUY"
+
+
+@pytest.mark.asyncio
+async def test_build_watchlist_option_plan_reduces_size_before_macro_event():
+    metrics = _sample_metrics(current_price=130.0, iv_rank=55.0, option_skew=1.2)
+    tactical = WatchlistRiskController.process_metrics(metrics)
+    normal_context = _sample_event_context()
+    macro_context = _sample_event_context(
+        macro_event="CPI",
+        macro_event_time="2026-05-22T12:30:00Z",
+        macro_tte_hours=12.0,
+        risk_mode="macro-guard",
+        summary="CPI 倒數 12.0 小時 ｜ 先縮口數，優先定義風險的 Debit Spread / 保護性部位。",
+    )
+    chain = type(
+        "Chain",
+        (),
+        {
+            "calls": pd.DataFrame(
+                [
+                    {"strike": 124.0, "bid": 3.0, "ask": 3.2, "lastPrice": 3.1},
+                    {"strike": 130.0, "bid": 1.2, "ask": 1.4, "lastPrice": 1.3},
+                ]
+            ),
+            "puts": pd.DataFrame(),
+        },
+    )()
+
+    with patch(
+        "market_analysis.strategy.find_best_contract",
+        new_callable=AsyncMock,
+        return_value={"strike": 124.0, "expiry": "2026-06-19", "mid": 3.1},
+    ), patch(
+        "services.market_data_service.get_option_chain",
+        new_callable=AsyncMock,
+        return_value=chain,
+    ):
+        normal_plan = await build_watchlist_option_plan(
+            metrics,
+            tactical,
+            capital=100000.0,
+            risk_limit=15.0,
+            event_context=normal_context,
+        )
+        macro_plan = await build_watchlist_option_plan(
+            metrics,
+            tactical,
+            capital=100000.0,
+            risk_limit=15.0,
+            event_context=macro_context,
+        )
+
+    assert normal_plan is not None
+    assert macro_plan is not None
+    assert macro_plan.suggested_contracts <= normal_plan.suggested_contracts
+    assert "CPI" in macro_plan.rationale
 
 
 @pytest.mark.asyncio
@@ -258,11 +400,16 @@ async def test_build_enhanced_watchlist_metrics_assembles_quant_fields():
 @pytest.mark.asyncio
 async def test_evaluate_watchlist_symbol_returns_wait_snapshot():
     metrics = _sample_metrics(current_price=136.0, iv_rank=40.0)
+    event_context = _sample_event_context()
 
     with patch(
         "market_analysis.intraday_pipeline.build_enhanced_watchlist_metrics",
         new_callable=AsyncMock,
         return_value=metrics,
+    ), patch(
+        "market_analysis.intraday_pipeline.build_watchlist_event_context",
+        new_callable=AsyncMock,
+        return_value=event_context,
     ):
         evaluation = await evaluate_watchlist_symbol("NVDA")
 
@@ -270,3 +417,23 @@ async def test_evaluate_watchlist_symbol_returns_wait_snapshot():
     assert evaluation.metrics.symbol == "NVDA"
     assert evaluation.tactical.scenario == "wait"
     assert evaluation.tactical.sddm_route == "WAIT (觀望 / 待機)"
+    assert evaluation.event_context.risk_mode == "normal"
+
+
+@pytest.mark.asyncio
+async def test_build_watchlist_event_context_marks_earnings_lock():
+    earnings_event = type(
+        "EarningsEvent", (), {"date": "2026-05-24", "tte_hours": 36.0}
+    )()
+    macro_event = type(
+        "EconomicEvent",
+        (),
+        {"event": "CPI", "time": "2026-05-23T12:30:00Z", "tte_hours": 60.0},
+    )()
+
+    context = await build_watchlist_event_context(
+        "NVDA", earnings_event=earnings_event, macro_event=macro_event
+    )
+
+    assert context.risk_mode == "event-lock"
+    assert "禁做賣方" in context.summary

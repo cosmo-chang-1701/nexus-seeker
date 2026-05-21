@@ -576,6 +576,7 @@ class SchedulerCog(commands.Cog):
             derive_watchlist_option_guidance,
             evaluate_watchlist_symbol,
         )
+        from services.calendar_service import calendar_service
         from ui.formatter import generate_ansi_watchlist_report
 
         if all_watchlists is None:
@@ -584,8 +585,19 @@ class SchedulerCog(commands.Cog):
             return
 
         unique_symbols = sorted({sym for _, sym, _ in all_watchlists})
+        macro_event, earnings_map = await asyncio.gather(
+            calendar_service.get_next_high_impact_event(days=7),
+            calendar_service.get_symbol_earnings_batch(unique_symbols),
+        )
         evaluations = await asyncio.gather(
-            *(evaluate_watchlist_symbol(symbol) for symbol in unique_symbols)
+            *(
+                evaluate_watchlist_symbol(
+                    symbol,
+                    earnings_event=earnings_map.get(symbol),
+                    macro_event=macro_event,
+                )
+                for symbol in unique_symbols
+            )
         )
         evaluation_map = {
             evaluation.metrics.symbol: evaluation
@@ -609,18 +621,22 @@ class SchedulerCog(commands.Cog):
                     evaluation.metrics, evaluation.tactical
                 )
                 option_guidance = derive_watchlist_option_guidance(
-                    evaluation.metrics, evaluation.tactical
+                    evaluation.metrics,
+                    evaluation.tactical,
+                    event_context=evaluation.event_context,
                 )
                 option_plan = await build_watchlist_option_plan(
                     evaluation.metrics,
                     evaluation.tactical,
                     capital=user_context.capital,
                     risk_limit=user_context.risk_limit,
+                    event_context=evaluation.event_context,
                 )
                 embed = create_watchlist_signal_embed(
                     symbol=sym,
                     report_body=report_body,
                     option_guidance=option_guidance,
+                    event_risk_summary=evaluation.event_context.summary,
                     skew_state=(
                         f"{evaluation.metrics.option_skew:+.2f}% ｜ "
                         f"{evaluation.metrics.option_skew_state}"

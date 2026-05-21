@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import time
-from datetime import datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 from typing import Dict, List, Any, Optional, Tuple, Set
 
@@ -168,6 +168,8 @@ class TradingService:
         """
         取得盤前財報警報數據。
         """
+        from services.calendar_service import calendar_service
+
         today = datetime.now(ny_tz).date()
         all_portfolios = database.get_all_portfolio()
         all_watchlists = database.get_all_watchlist()
@@ -189,14 +191,15 @@ class TradingService:
             )
             unique_symbols.add(sym)
 
-        # 批次快取財報日期
-        earnings_cache = {}
-        for sym in unique_symbols:
-            e_date = await market_math.get_next_earnings_date(sym)
-            if e_date:
-                if isinstance(e_date, datetime):
-                    e_date = e_date.date()
-                earnings_cache[sym] = e_date
+        earnings_infos = await calendar_service.get_symbol_earnings_batch(
+            list(unique_symbols)
+        )
+        earnings_cache: Dict[str, date] = {}
+        for sym, earnings_info in earnings_infos.items():
+            if earnings_info is None:
+                continue
+            e_date = datetime.strptime(earnings_info.date, "%Y-%m-%d").date()
+            earnings_cache[sym] = e_date
 
         results = {}
         for uid, symbols_data in user_symbols.items():
@@ -204,14 +207,14 @@ class TradingService:
             combined_symbols = symbols_data["port"].union(symbols_data["watch"])
 
             for sym in combined_symbols:
-                e_date = earnings_cache.get(sym)
-                if e_date:
-                    days_left = (e_date - today).days
+                cached_earnings_date: date | None = earnings_cache.get(sym)
+                if cached_earnings_date:
+                    days_left = (cached_earnings_date - today).days
                     if 0 <= days_left <= warning_days:
                         item = {
                             "symbol": sym,
                             "is_portfolio": sym in symbols_data["port"],
-                            "earnings_date": e_date,
+                            "earnings_date": cached_earnings_date,
                             "days_left": days_left,
                         }
                         alerts.append(item)

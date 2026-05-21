@@ -10,6 +10,7 @@ from cli import cli
 import config
 from models.schemas import (
     EnhancedWatchlistMetrics,
+    WatchlistEventContext,
     WatchlistEvaluation,
     WatchlistTacticalPlan,
 )
@@ -127,6 +128,10 @@ def test_cli_watchlist_check_integration(db_conn):
                 hedge_instruction=None,
                 hedge_allocation_shares=0,
                 alert_level="yellow",
+            ),
+            event_context=WatchlistEventContext(
+                risk_mode="normal",
+                summary="未偵測到近期需調整參數的重大事件。",
             ),
         )
 

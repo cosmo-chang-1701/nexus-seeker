@@ -291,6 +291,7 @@ def test_create_watchlist_signal_embed():
         symbol="NVDA",
         report_body="```ansi\nwatchlist report\n```",
         option_guidance="可先以 Bull Put Spread 佈局。",
+        event_risk_summary="CPI 倒數 12.0 小時 ｜ 先縮口數，優先定義風險的 Debit Spread / 保護性部位。",
         skew_state="+6.20% ｜ ⚠️ 預警性對沖 (Put 昂貴)",
         alert_level="yellow",
         option_plan=option_plan,
@@ -302,8 +303,10 @@ def test_create_watchlist_signal_embed():
     assert "watchlist report" in embed.fields[0].value
     assert embed.fields[1].name == "📐 Skew 與市場判讀"
     assert "測試用" in embed.fields[1].value
-    assert "Bull Put Spread" in embed.fields[3].value
-    assert "SELL PUT 120.00" in embed.fields[3].value
+    assert embed.fields[2].name == "🗓️ 事件風控"
+    assert "CPI" in embed.fields[2].value
+    assert "Bull Put Spread" in embed.fields[4].value
+    assert "SELL PUT 120.00" in embed.fields[4].value
 
 
 def test_create_memory_alert_embed():

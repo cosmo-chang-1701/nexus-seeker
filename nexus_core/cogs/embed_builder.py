@@ -1901,6 +1901,7 @@ def create_watchlist_signal_embed(
     symbol: str,
     report_body: str,
     option_guidance: str,
+    event_risk_summary: str,
     skew_state: str,
     alert_level: str,
     option_plan: WatchlistOptionPlan | None = None,
@@ -1937,6 +1938,11 @@ def create_watchlist_signal_embed(
     embed.add_field(
         name="📐 Skew 與市場判讀",
         value=_safe_embed_field_value("\n".join(skew_lines), "N/A"),
+        inline=False,
+    )
+    embed.add_field(
+        name="🗓️ 事件風控",
+        value=_safe_embed_field_value(event_risk_summary, "未偵測到近期重大事件"),
         inline=False,
     )
     embed.add_field(
