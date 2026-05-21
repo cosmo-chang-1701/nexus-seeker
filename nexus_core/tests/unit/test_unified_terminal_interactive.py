@@ -8,6 +8,7 @@ import os
 sys.path.append(os.path.join(os.getcwd(), "nexus_core"))
 
 from cogs.unified_terminal import (
+    UnifiedTerminalCog,
     SymbolHubView,
     PortfolioHubView,
     PulseHubView,
@@ -65,6 +66,47 @@ async def test_symbol_hub_interactions(mock_interaction, mock_bot):
 
 
 @pytest.mark.asyncio
+async def test_symbol_hub_max_pain_uses_builder(mock_interaction, mock_bot):
+    view = SymbolHubView(symbol="AAPL", user_id=123, bot=mock_bot)
+
+    with patch(
+        "market_analysis.sentiment_engine.SentimentEngine.calculate_max_pain",
+        new_callable=AsyncMock,
+        return_value={
+            "expiry": "2026-06-19",
+            "max_pain": 150,
+            "current_price": 148.5,
+            "distance_pct": -1.01,
+        },
+    ), patch("cogs.unified_terminal.create_max_pain_embed") as mock_builder:
+        mock_builder.return_value = MagicMock(spec=discord.Embed)
+
+        await view.btn_maxpain.callback(mock_interaction)
+
+        mock_builder.assert_called_once()
+        _, last_kwargs = mock_interaction.edit_original_response.call_args
+        assert last_kwargs["embed"] is mock_builder.return_value
+
+
+@pytest.mark.asyncio
+async def test_symbol_hub_invalid_symbol_returns_error_embed(
+    mock_interaction, mock_bot
+):
+    cog = UnifiedTerminalCog(mock_bot)
+
+    with patch(
+        "services.market_data_service.validate_symbol",
+        new_callable=AsyncMock,
+        return_value=False,
+    ):
+        await cog.symbol_hub.callback(cog, mock_interaction, symbol="bad!")
+
+    _, kwargs = mock_interaction.followup.send.call_args
+    assert "embed" in kwargs
+    assert kwargs["embed"].title.startswith("❌")
+
+
+@pytest.mark.asyncio
 async def test_portfolio_hub_interactions(mock_interaction, mock_bot):
     """測試 /dash 指令分頁互動與讀取狀態"""
     view = PortfolioHubView(user_id=123, bot=mock_bot)
@@ -96,6 +138,30 @@ async def test_portfolio_hub_interactions(mock_interaction, mock_bot):
 
 
 @pytest.mark.asyncio
+async def test_portfolio_hub_runway_uses_builder(mock_interaction, mock_bot):
+    view = PortfolioHubView(user_id=123, bot=mock_bot)
+
+    with patch(
+        "market_analysis.portfolio.refresh_portfolio_greeks", new_callable=AsyncMock
+    ), patch(
+        "market_analysis.pro_management.calculate_financial_runway",
+        side_effect=[120.0, 180.0],
+    ), patch("services.asset_manager.AssetManager.get_assets", return_value=[]), patch(
+        "database.get_full_user_context",
+        return_value=MagicMock(
+            cash_reserve=20000.0, monthly_expense=5000.0, total_theta=25.0
+        ),
+    ), patch("cogs.unified_terminal.create_financial_runway_embed") as mock_builder:
+        mock_builder.return_value = MagicMock(spec=discord.Embed)
+
+        await view.btn_runway.callback(mock_interaction)
+
+        mock_builder.assert_called_once()
+        _, last_kwargs = mock_interaction.edit_original_response.call_args
+        assert last_kwargs["embed"] is mock_builder.return_value
+
+
+@pytest.mark.asyncio
 async def test_pulse_hub_interactions(mock_interaction, mock_bot):
     """測試 /market 指令互動與讀取狀態"""
     view = PulseHubView(user_id=123, bot=mock_bot)
@@ -115,3 +181,53 @@ async def test_pulse_hub_interactions(mock_interaction, mock_bot):
         assert mock_interaction.edit_original_response.call_count == 2
         _, last_kwargs = mock_interaction.edit_original_response.call_args
         assert last_kwargs["view"].children[0].disabled is False
+
+
+@pytest.mark.asyncio
+async def test_pulse_hub_calendar_uses_builder(mock_interaction, mock_bot):
+    view = PulseHubView(user_id=123, bot=mock_bot)
+
+    with patch(
+        "services.calendar_service.calendar_service.get_portfolio_events",
+        new_callable=AsyncMock,
+        return_value=[],
+    ), patch("cogs.unified_terminal.create_market_calendar_embed") as mock_builder:
+        mock_builder.return_value = MagicMock(spec=discord.Embed)
+
+        await view.btn_calendar.callback(mock_interaction)
+
+        mock_builder.assert_called_once()
+        _, last_kwargs = mock_interaction.edit_original_response.call_args
+        assert last_kwargs["embed"] is mock_builder.return_value
+
+
+@pytest.mark.asyncio
+async def test_pulse_hub_iv_uses_builder_for_empty_watchlist(
+    mock_interaction, mock_bot
+):
+    view = PulseHubView(user_id=123, bot=mock_bot)
+
+    with patch("database.get_all_watchlist", return_value=[]), patch(
+        "cogs.unified_terminal.create_info_embed"
+    ) as mock_builder:
+        mock_builder.return_value = MagicMock(spec=discord.Embed)
+
+        await view.btn_iv.callback(mock_interaction)
+
+        mock_builder.assert_called_once()
+        _, last_kwargs = mock_interaction.edit_original_response.call_args
+        assert last_kwargs["embed"] is mock_builder.return_value
+
+
+@pytest.mark.asyncio
+async def test_pulse_hub_poly_without_service_returns_error_embed(
+    mock_interaction, mock_bot
+):
+    view = PulseHubView(user_id=123, bot=mock_bot)
+    if hasattr(mock_bot, "polymarket_service"):
+        delattr(mock_bot, "polymarket_service")
+
+    await view.btn_poly.callback(mock_interaction)
+
+    _, last_kwargs = mock_interaction.edit_original_response.call_args
+    assert last_kwargs["embed"].title.startswith("❌")

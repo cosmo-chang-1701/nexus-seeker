@@ -3,7 +3,6 @@ from discord.ext import commands
 from discord import app_commands
 import asyncio
 import logging
-from datetime import datetime, timezone
 from typing import Dict, Any
 
 from services import market_data_service, news_service, reddit_service
@@ -13,6 +12,12 @@ from market_analysis.risk_engine import MacroContext
 import market_math
 import database
 from cogs.embed_builder import (
+    create_error_embed,
+    create_financial_runway_embed,
+    create_info_embed,
+    create_iv_risk_scan_embed,
+    create_market_calendar_embed,
+    create_max_pain_embed,
     create_sentiment_scan_embed,
     create_news_scan_embed,
     create_reddit_scan_embed,
@@ -66,7 +71,9 @@ class SymbolHubView(discord.ui.View):
         try:
             embed = create_tactical_symbol_embed(self.base_data)
         except Exception as e:
-            await interaction.followup.send(f"❌ 恢復主頁失敗: {e}", ephemeral=True)
+            await interaction.followup.send(
+                embed=create_error_embed(f"恢復主頁失敗: {e}"), ephemeral=True
+            )
         finally:
             await self._reset_loading(interaction, embed=embed)
 
@@ -83,7 +90,9 @@ class SymbolHubView(discord.ui.View):
             news_text = await news_service.fetch_recent_news(self.symbol)
             embed = create_news_scan_embed(self.symbol, news_text)
         except Exception as e:
-            await interaction.followup.send(f"❌ 獲取新聞失敗: {e}", ephemeral=True)
+            await interaction.followup.send(
+                embed=create_error_embed(f"獲取新聞失敗: {e}"), ephemeral=True
+            )
         finally:
             await self._reset_loading(interaction, embed=embed)
 
@@ -103,7 +112,8 @@ class SymbolHubView(discord.ui.View):
             embed = create_reddit_scan_embed(self.symbol, reddit_text)
         except Exception as e:
             await interaction.followup.send(
-                f"❌ 獲取 Reddit 情緒失敗: {e}", ephemeral=True
+                embed=create_error_embed(f"獲取 Reddit 情緒失敗: {e}"),
+                ephemeral=True,
             )
         finally:
             await self._reset_loading(interaction, embed=embed)
@@ -124,15 +134,25 @@ class SymbolHubView(discord.ui.View):
             pcr_task = SentimentEngine.calculate_pcr(self.symbol)
             uoa_task = SentimentEngine.detect_uoa(self.symbol)
             max_pain_task = SentimentEngine.calculate_max_pain(self.symbol)
+            iv_task = SentimentEngine.fetch_and_calculate_iv_metrics(self.symbol)
 
-            skew_data, pcr_data, uoa_data, max_pain_data = await asyncio.gather(
-                skew_task, pcr_task, uoa_task, max_pain_task
+            (
+                skew_data,
+                pcr_data,
+                uoa_data,
+                max_pain_data,
+                iv_data,
+            ) = await asyncio.gather(
+                skew_task, pcr_task, uoa_task, max_pain_task, iv_task
             )
             embed = create_sentiment_scan_embed(
-                self.symbol, skew_data, pcr_data, uoa_data, max_pain_data
+                self.symbol, skew_data, pcr_data, uoa_data, max_pain_data, iv_data
             )
         except Exception as e:
-            await interaction.followup.send(f"❌ 執行情緒掃描失敗: {e}", ephemeral=True)
+            await interaction.followup.send(
+                embed=create_error_embed(f"執行情緒掃描失敗: {e}"),
+                ephemeral=True,
+            )
         finally:
             await self._reset_loading(interaction, embed=embed)
 
@@ -151,33 +171,16 @@ class SymbolHubView(discord.ui.View):
             data = await SentimentEngine.calculate_max_pain(self.symbol)
             if "error" in data:
                 await interaction.followup.send(
-                    f"❌ 計算失敗: {data['error']}", ephemeral=True
+                    embed=create_error_embed(f"計算失敗: {data['error']}"),
+                    ephemeral=True,
                 )
             else:
-                embed = discord.Embed(
-                    title=f"📍 {self.symbol} 最大痛點分析 (Max Pain)",
-                    color=discord.Color.blue(),
-                    timestamp=datetime.now(),
-                )
-                embed.add_field(name="到期日", value=f"`{data['expiry']}`", inline=True)
-                embed.add_field(
-                    name="最大痛點 Strike",
-                    value=f"**${data['max_pain']}**",
-                    inline=True,
-                )
-                embed.add_field(
-                    name="目前價格", value=f"`${data['current_price']}`", inline=True
-                )
-                dist = data["distance_pct"]
-                dist_str = (
-                    f"現價高於痛點 `{dist}%`"
-                    if dist > 0
-                    else f"現價低於痛點 `{abs(dist)}%`"
-                )
-                embed.add_field(name="偏離度", value=dist_str, inline=False)
-                embed.set_footer(text="Nexus Seeker | Execution Automation")
+                embed = create_max_pain_embed(self.symbol, data)
         except Exception as e:
-            await interaction.followup.send(f"❌ 計算最大痛點失敗: {e}", ephemeral=True)
+            await interaction.followup.send(
+                embed=create_error_embed(f"計算最大痛點失敗: {e}"),
+                ephemeral=True,
+            )
         finally:
             await self._reset_loading(interaction, embed=embed)
 
@@ -227,7 +230,10 @@ class PortfolioHubView(discord.ui.View):
 
             embed = create_strategic_dash_embed(ctx, pnl_data, vix_spot=vix_spot)
         except Exception as e:
-            await interaction.followup.send(f"❌ 恢復戰略看板失敗: {e}", ephemeral=True)
+            await interaction.followup.send(
+                embed=create_error_embed(f"恢復戰略看板失敗: {e}"),
+                ephemeral=True,
+            )
         finally:
             await self._reset_loading(interaction, embed=embed)
 
@@ -246,7 +252,9 @@ class PortfolioHubView(discord.ui.View):
             ctx = database.get_full_user_context(self.user_id)
             embed = create_trades_embed(pnl_data, ctx.capital)
         except Exception as e:
-            await interaction.followup.send(f"❌ 獲取持倉失敗: {e}", ephemeral=True)
+            await interaction.followup.send(
+                embed=create_error_embed(f"獲取持倉失敗: {e}"), ephemeral=True
+            )
         finally:
             await self._reset_loading(interaction, embed=embed)
 
@@ -276,7 +284,9 @@ class PortfolioHubView(discord.ui.View):
             ctx = database.get_full_user_context(self.user_id)
             embed = create_holdings_embed(holdings, ctx.capital)
         except Exception as e:
-            await interaction.followup.send(f"❌ 獲取現貨失敗: {e}", ephemeral=True)
+            await interaction.followup.send(
+                embed=create_error_embed(f"獲取現貨失敗: {e}"), ephemeral=True
+            )
         finally:
             await self._reset_loading(interaction, embed=embed)
 
@@ -311,33 +321,18 @@ class PortfolioHubView(discord.ui.View):
             ext_runway = calculate_financial_runway(
                 ctx.cash_reserve + backup_liq, ctx.monthly_expense, ctx.total_theta
             )
-            embed = discord.Embed(
-                title="🏁 財務生存跑道分析",
-                color=discord.Color.green(),
-                timestamp=datetime.now(timezone.utc),
+            embed = create_financial_runway_embed(
+                cash_reserve=ctx.cash_reserve,
+                monthly_expense=ctx.monthly_expense,
+                total_theta=ctx.total_theta,
+                runway_days=runway_days,
+                backup_liquidity=backup_liq,
+                extended_runway=ext_runway,
             )
-            embed.add_field(
-                name="💰 現金儲備", value=f"`${ctx.cash_reserve:,.2f}`", inline=True
-            )
-            embed.add_field(
-                name="📉 每月支出", value=f"`${ctx.monthly_expense:,.2f}`", inline=True
-            )
-            embed.add_field(
-                name="💸 每日 Theta",
-                value=f"`+${ctx.total_theta:,.2f}/day`",
-                inline=True,
-            )
-            embed.add_field(
-                name="⌛ 核心生存跑道", value=f"**{runway_days:,.1f} 天**", inline=False
-            )
-            if backup_liq > 0:
-                embed.add_field(
-                    name="🛡️ 備用流動性",
-                    value=f"含 HOLDING 淨值後預計可達: **{ext_runway:,.1f} 天**",
-                    inline=False,
-                )
         except Exception as e:
-            await interaction.followup.send(f"❌ 計算跑道失敗: {e}", ephemeral=True)
+            await interaction.followup.send(
+                embed=create_error_embed(f"計算跑道失敗: {e}"), ephemeral=True
+            )
         finally:
             await self._reset_loading(interaction, embed=embed)
 
@@ -360,7 +355,8 @@ class PortfolioHubView(discord.ui.View):
             )
         except Exception as e:
             await interaction.followup.send(
-                f"❌ 獲取 VTR 績效失敗: {e}", ephemeral=True
+                embed=create_error_embed(f"獲取 VTR 績效失敗: {e}"),
+                ephemeral=True,
             )
         finally:
             await self._reset_loading(interaction, embed=embed)
@@ -396,41 +392,18 @@ class PulseHubView(discord.ui.View):
         await self._set_loading(interaction)
         embed = None
         try:
-            from services.calendar_service import (
-                calendar_service,
-                EconomicEvent,
-                EarningsEvent,
-            )
+            from services.calendar_service import calendar_service
 
             events = await calendar_service.get_portfolio_events(self.user_id)
-            if not events:
-                await interaction.edit_original_response(
-                    content="📭 未來 7 日內無影響持倉標的的重大事件或財報。",
-                    embed=None,
-                    view=self,
-                )
-            else:
-                embed = discord.Embed(
-                    title="📅 【 重大市場事件 & 財報日曆 】",
-                    color=discord.Color.blue(),
-                    timestamp=datetime.now(),
-                )
-                for event in events[:15]:
-                    if isinstance(event, EconomicEvent):
-                        impact = "🔴" if event.impact.lower() == "high" else "🟡"
-                        embed.add_field(
-                            name=f"{impact} {event.event} ({event.country})",
-                            value=f"⏰ TTE: `{event.tte_hours}`h | `{event.time}`",
-                            inline=False,
-                        )
-                    elif isinstance(event, EarningsEvent):
-                        embed.add_field(
-                            name=f"📊 {event.symbol} 財報發布",
-                            value=f"⏰ TTE: `{event.tte_hours}`h | `{event.date}`",
-                            inline=False,
-                        )
+            embed = create_market_calendar_embed(
+                events,
+                max_items=15,
+                empty_message="📭 未來 7 日內無影響持倉標的的重大事件或財報。",
+            )
         except Exception as e:
-            await interaction.followup.send(f"❌ 獲取日曆失敗: {e}", ephemeral=True)
+            await interaction.followup.send(
+                embed=create_error_embed(f"獲取日曆失敗: {e}"), ephemeral=True
+            )
         finally:
             await self._reset_loading(interaction, embed=embed)
 
@@ -443,14 +416,17 @@ class PulseHubView(discord.ui.View):
         embed = None
         try:
             if not hasattr(self.bot, "polymarket_service"):
-                await interaction.edit_original_response(
-                    content="❌ Polymarket 服務未初始化。", embed=None, view=self
+                embed = create_error_embed(
+                    "Polymarket 服務未初始化。", title="系統錯誤"
                 )
             else:
                 markets = self.bot.polymarket_service.get_active_markets(limit=20)
                 embed = create_polymarket_list_embed(markets)
         except Exception as e:
-            await interaction.followup.send(f"❌ 獲取預測市場失敗: {e}", ephemeral=True)
+            await interaction.followup.send(
+                embed=create_error_embed(f"獲取預測市場失敗: {e}"),
+                ephemeral=True,
+            )
         finally:
             await self._reset_loading(interaction, embed=embed)
 
@@ -465,8 +441,8 @@ class PulseHubView(discord.ui.View):
             all_watchlists = database.get_all_watchlist()
             user_watch = [row[1] for row in all_watchlists if row[0] == self.user_id]
             if not user_watch:
-                await interaction.edit_original_response(
-                    content="📭 觀察清單為空，無法執行 IV 掃描。", embed=None, view=self
+                embed = create_info_embed(
+                    "查無資料", "📭 觀察清單為空，無法執行 IV 掃描。"
                 )
             else:
                 inspector = VolatilityInspector(self.bot)
@@ -476,27 +452,12 @@ class PulseHubView(discord.ui.View):
                     for r in results
                     if r.get("iv_rank", 0) > 80 or r.get("is_high_risk_vol")
                 ]
-
-                if not high_iv:
-                    await interaction.edit_original_response(
-                        content="🔎 未發現 IV Rank > 80% 的高波動標的。",
-                        embed=None,
-                        view=self,
-                    )
-                else:
-                    embed = discord.Embed(
-                        title="🔥 【 高波動 & IV Crush 風險掃描 】",
-                        color=discord.Color.red(),
-                    )
-                    for res in high_iv[:15]:
-                        risk = "🚨" if res["is_high_risk_vol"] else "⚠️"
-                        embed.add_field(
-                            name=f"{risk} {res['symbol']} (IVR: {res['iv_rank']}%)",
-                            value=f"TTE: `{res['tte_hours']:.1f}`h | 策略: {res['strategy']}",
-                            inline=False,
-                        )
+                embed = create_iv_risk_scan_embed(high_iv)
         except Exception as e:
-            await interaction.followup.send(f"❌ 執行 IV 掃描失敗: {e}", ephemeral=True)
+            await interaction.followup.send(
+                embed=create_error_embed(f"執行 IV 掃描失敗: {e}"),
+                ephemeral=True,
+            )
         finally:
             await self._reset_loading(interaction, embed=embed)
 
@@ -528,7 +489,10 @@ class UnifiedTerminalCog(commands.Cog):
 
         if not await market_data_service.validate_symbol(symbol):
             return await interaction.followup.send(
-                f"❌ **無效的標的代號**: `{symbol}`", ephemeral=True
+                embed=create_error_embed(
+                    f"無效的標的代號: `{symbol}`", title="輸入錯誤"
+                ),
+                ephemeral=True,
             )
 
         try:
@@ -585,9 +549,8 @@ class UnifiedTerminalCog(commands.Cog):
             ddp_inspector = DDPInspector(self.bot)
             ddp_report = await ddp_inspector.inspect_symbol(symbol)
             result["is_ddp"] = ddp_report.get("is_ddp", False) if ddp_report else False
-            result["iv_rank"] = result.get(
-                "hv_rank", 0.0
-            )  # 暫時用 hv_rank 代替，或從 result 取得
+            iv_metrics = await SentimentEngine.fetch_and_calculate_iv_metrics(symbol)
+            result["iv_rank"] = iv_metrics.iv_rank
 
             max_pain_data = await SentimentEngine.calculate_max_pain(symbol)
             result["max_pain"] = max_pain_data.get("max_pain", 0.0)
@@ -626,7 +589,8 @@ class UnifiedTerminalCog(commands.Cog):
         except Exception as e:
             logger.error(f"Symbol Hub Error for {symbol}: {e}")
             await interaction.followup.send(
-                f"❌ 載入 `{symbol}` 資料時發生錯誤: {e}", ephemeral=True
+                embed=create_error_embed(f"載入 `{symbol}` 資料時發生錯誤: {e}"),
+                ephemeral=True,
             )
 
     @app_commands.command(
@@ -669,35 +633,14 @@ class UnifiedTerminalCog(commands.Cog):
             if asyncio.iscoroutine(coro):
                 asyncio.create_task(coro)
 
-        from services.calendar_service import (
-            calendar_service,
-            EconomicEvent,
-            EarningsEvent,
-        )
+        from services.calendar_service import calendar_service
 
         events = await calendar_service.get_portfolio_events(interaction.user.id)
-        embed = discord.Embed(
-            title="📅 【 重大市場事件 & 財報日曆 】",
-            color=discord.Color.blue(),
-            timestamp=datetime.now(),
+        embed = create_market_calendar_embed(
+            events,
+            max_items=10,
+            empty_message="📭 未來 7 日內無重大事件。",
         )
-        if not events:
-            embed.description = "📭 未來 7 日內無重大事件。"
-        else:
-            for event in events[:10]:
-                if isinstance(event, EconomicEvent):
-                    impact = "🔴" if event.impact.lower() == "high" else "🟡"
-                    embed.add_field(
-                        name=f"{impact} {event.event}",
-                        value=f"⏰ TTE: `{event.tte_hours}`h",
-                        inline=False,
-                    )
-                elif isinstance(event, EarningsEvent):
-                    embed.add_field(
-                        name=f"📊 {event.symbol} 財報",
-                        value=f"⏰ TTE: `{event.tte_hours}`h",
-                        inline=False,
-                    )
 
         view = PulseHubView(interaction.user.id, self.bot)
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)

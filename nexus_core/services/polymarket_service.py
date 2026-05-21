@@ -7,6 +7,7 @@ import httpx
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 
+from cogs.embed_builder import create_polymarket_whale_alert_embed
 from database.user_settings import get_full_user_context, get_all_user_ids
 from services.llm_service import generate_polymarket_summary, classify_uoa_intent
 from market_analysis.sentiment_engine import SentimentEngine
@@ -703,73 +704,28 @@ class PolymarketService:
         """
         封裝 Discord Embed (專業分析師格式) 並排入私訊佇列
         """
-        import discord
-
         details = self._resolve_trade_details(trade, market_info)
         win_rate = details["p_yes"] * 100
 
         # 是否為高信心訊號 (大額交易 + UOA 關聯)
         is_high_conviction = uoa_correlation is not None and usd_value > 50000
-
-        embed = discord.Embed(
-            title="【 🐋 Polymarket 巨鯨戰報 】"
-            + (" 🔥 高信心訊號" if is_high_conviction else ""),
-            color=discord.Color.gold()
-            if is_high_conviction
-            else (
-                discord.Color.blue() if details["is_bullish"] else discord.Color.red()
-            ),
-            timestamp=discord.utils.utcnow(),
+        intent_prefix = str(details["intent"]).split("]")[0]
+        intent_label = (
+            intent_prefix[1:] if intent_prefix.startswith("[") else intent_prefix
         )
 
-        content = [
-            f"## {details['emoji']} {details['intent'].split(']')[0][1:]}",
-            "---",
-            f"**市場問題：** **{market_info.get('question', '未知市場')}**",
-            f"**交易金額：** `${usd_value:,.2f}`",
-            f"**流動性倍數：** `{usd_value / dynamic_threshold:.2f}x`",
-            f"**當前勝率：** {win_rate:.1f}%",
-            "---",
-        ]
-
-        if uoa_correlation:
-            uoa = uoa_correlation["uoa"]
-            cls = uoa_correlation["classification"]
-            content.append(f"🔍 **UOA 關聯偵測 ({uoa['symbol']})**")
-            content.append(
-                f"- 合約: `{uoa['expiry']}` `${uoa['strike']}` {uoa['type']}"
-            )
-            content.append(
-                f"- 性質: **{cls['classification']}** (信心: `{cls['confidence']:.2f}`)"
-            )
-            content.append(f"- 理由: {cls['explanation']}")
-            content.append("---")
-
-        # 預測性對沖建議 (Predictive Hedge)
-        if win_rate > 70 or win_rate < 30:
-            content.append("🛡️ **【預測性對沖建議 (Predictive Hedge)】**")
-            event_name = market_info.get("question", "特定事件")
-            content.append(
-                f"偵測到預測市場對 `{event_name}` 的機率激增至 `{win_rate:.1f}%`，建議提前在 VTR 執行 Delta 對沖，以應對潛在的波動率跳空。"
-            )
-            content.append("---")
-
-        if summary and summary != "（未啟用 AI 分析）":
-            content.append(f"**🤖 AI 總結分析**\n{summary}")
-            content.append("---")
-
-        event_slug = market_info.get("event_slug")
-        market_url = (
-            f"https://polymarket.com/event/{event_slug}"
-            if event_slug
-            else "https://polymarket.com"
-        )
-
-        content.append(f"[🔗 前往市場]({market_url})")
-
-        embed.description = "\n".join(content)
-        embed.set_footer(
-            text=f"Nexus Seeker 監測系統 | 動態門檻: ${dynamic_threshold:,.0f}"
+        embed = create_polymarket_whale_alert_embed(
+            intent_emoji=str(details["emoji"]),
+            intent_label=intent_label,
+            market_question=str(market_info.get("question", "未知市場")),
+            usd_value=usd_value,
+            dynamic_threshold=dynamic_threshold,
+            win_rate=win_rate,
+            is_high_conviction=is_high_conviction,
+            is_bullish=bool(details["is_bullish"]),
+            summary=summary,
+            event_slug=market_info.get("event_slug"),
+            uoa_correlation=uoa_correlation,
         )
 
         await self.bot.queue_dm(user_id, embed=embed)

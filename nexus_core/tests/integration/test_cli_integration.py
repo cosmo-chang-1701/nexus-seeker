@@ -8,6 +8,11 @@ sys.path.append(os.path.join(os.getcwd(), "nexus_core"))
 
 from cli import cli
 import config
+from models.schemas import (
+    EnhancedWatchlistMetrics,
+    WatchlistEvaluation,
+    WatchlistTacticalPlan,
+)
 
 
 def test_cli_health_integration(mock_market_data):
@@ -73,3 +78,77 @@ def test_cli_scan_ddp_integration(db_conn):
         assert result.exit_code == 0
         assert "正在對 1 個標的執行 DDP 掃描" in result.output
         assert "MSFT" in result.output
+
+
+def test_cli_watchlist_check_integration(db_conn):
+    """測試 CLI watchlist_check 指令與資料庫 watchlist 的整合。"""
+    from database.watchlist import add_watchlist_symbol
+
+    user_id = 123456789
+    add_watchlist_symbol(user_id, "NVDA")
+    add_watchlist_symbol(user_id, "TSLA")
+
+    def _evaluation(symbol: str) -> WatchlistEvaluation:
+        metrics = EnhancedWatchlistMetrics(
+            symbol=symbol,
+            exchange="NASDAQ",
+            current_price=150.0,
+            buy_zone_status="🟢 買點：趨勢支撐 (VIX 修正)",
+            buy_price_phase1=145.0,
+            buy_price_phase2=140.0,
+            buy_price_phase3=135.0,
+            sell_zone_status="🟢 賣點：第一壓力帶",
+            sell_price_phase1=155.0,
+            sell_price_phase2=160.0,
+            sell_price_phase3=166.0,
+            pe_ratio=25.0,
+            rsi_14=52.0,
+            atr_14=5.0,
+            beta=1.15,
+            ma20=146.0,
+            ma50=142.0,
+            ma200=130.0,
+            iv_rank=72.0,
+            volume_poc=144.0,
+            gex_max_put_wall=138.0,
+            vanna_sensitivity=0.3,
+            relative_strength_spy=0.02,
+        )
+        return WatchlistEvaluation(
+            metrics=metrics,
+            tactical=WatchlistTacticalPlan(
+                scenario="premium-harvest",
+                sddm_route="SHIELD (防禦網格 - 左側權利金收集)",
+                action_guideline=f"{symbol} 建議以 Phase 2 建立 Cash-Secured Put。",
+                dynamic_grid_step=2.5,
+                hidden_delta_risk=0.0,
+                hedge_instruction=None,
+                hedge_allocation_shares=0,
+                alert_level="yellow",
+            ),
+        )
+
+    with patch(
+        "market_analysis.intraday_pipeline.evaluate_watchlist_symbol",
+        new_callable=AsyncMock,
+    ) as mock_evaluate:
+        mock_evaluate.side_effect = lambda symbol: _evaluation(symbol)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--db",
+                config.DB_NAME,
+                "--user-id",
+                str(user_id),
+                "mkt",
+                "watchlist_check",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert result.output.count("```ansi") == 2
+    assert "NVDA | NASDAQ" in result.output
+    assert "TSLA | NASDAQ" in result.output
+    assert "SHIELD (防禦網格 - 左側權利金收集)" in result.output

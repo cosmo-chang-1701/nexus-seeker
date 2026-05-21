@@ -3,13 +3,21 @@ from discord.ext import commands
 from discord import app_commands
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional, Dict, Any
 
 import database
 import market_math
 from services import market_data_service
-from cogs.embed_builder import create_scan_embed, create_info_embed, create_error_embed
+from cogs.embed_builder import (
+    create_asset_promotion_embed,
+    create_error_embed,
+    create_financial_runway_embed,
+    create_info_embed,
+    create_scan_embed,
+    create_system_health_embed,
+    create_transition_simulation_embed,
+)
 from database.user_settings import get_full_user_context
 
 logger = logging.getLogger(__name__)
@@ -250,54 +258,22 @@ class TerminalCog(commands.Cog):
             daily_theta=ctx.total_theta,
         )
 
-        embed = discord.Embed(
-            title="🏁 財務生存跑道分析 (zh-tw)",
-            color=discord.Color.green()
-            if runway_days > 180
-            else discord.Color.orange(),
-            timestamp=datetime.now(timezone.utc),
-        )
-
-        runway_str = (
-            f"`{runway_days:,.1f}` 天"
-            if runway_days < 9999
-            else "♾️ 無限 (收益已覆蓋支出)"
-        )
-        ext_runway_str = (
-            f"`{extended_runway:,.1f}` 天" if extended_runway < 9999 else "♾️ 無限"
-        )
-
-        embed.add_field(
-            name="💰 現金儲備 (Cash)", value=f"`${ctx.cash_reserve:,.2f}`", inline=True
-        )
-        embed.add_field(
-            name="📉 每月支出", value=f"`${ctx.monthly_expense:,.2f}`", inline=True
-        )
-        embed.add_field(
-            name="💸 每日 Theta 收益",
-            value=f"`+${ctx.total_theta:,.2f}/day`",
-            inline=True,
-        )
-
-        embed.add_field(name="⌛ 核心生存跑道", value=f"**{runway_str}**", inline=False)
-
-        if backup_liquidity > 0:
-            embed.add_field(
-                name="🛡️ 備用流動性 (HOLDING 淨值)",
-                value=f"`${total_holding_value:,.2f}` (折價後: `${backup_liquidity:,.2f}`)\n預計可將跑道延長至: **{ext_runway_str}**",
-                inline=False,
-            )
-
         ratio = (
             (ctx.total_theta * 30) / ctx.monthly_expense
             if ctx.monthly_expense > 0
             else 0
         )
-        embed.add_field(
-            name="📊 收益支出比 (Theta/Expense)", value=f"`{ratio:.2%}`", inline=True
+        embed = create_financial_runway_embed(
+            cash_reserve=ctx.cash_reserve,
+            monthly_expense=ctx.monthly_expense,
+            total_theta=ctx.total_theta,
+            runway_days=runway_days,
+            backup_liquidity=backup_liquidity,
+            extended_runway=extended_runway,
+            total_holding_value=total_holding_value,
+            ratio=ratio,
+            footer_text="Nexus Risk Engine | 跑道計算含 20% 流動性折價",
         )
-
-        embed.set_footer(text="Nexus Risk Engine | 跑道計算含 20% 流動性折價")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="add_trade", description="將新的選擇權部位加入監控管線")
@@ -351,7 +327,6 @@ class TerminalCog(commands.Cog):
             )
 
         # 🛡️ Defensive Programming: Validate Expiry Date Format
-        from datetime import datetime
 
         try:
             # Only capture the first 10 characters (YYYY-MM-DD) to prevent trailing argument capture
@@ -736,55 +711,18 @@ class TerminalCog(commands.Cog):
             poly_cache_count = len(self.bot.polymarket_service._market_cache)
             orderbook_count = len(self.bot.polymarket_service._order_books)
 
-        embed = discord.Embed(
-            title="🖥️ Nexus Seeker 系統健康診斷",
-            color=discord.Color.green()
-            if (mem.percent < 80 and disk.percent < 85)
-            else discord.Color.red(),
-            timestamp=discord.utils.utcnow(),
+        embed = create_system_health_embed(
+            memory_percent=mem.percent,
+            memory_available_mb=mem.available / (1024**2),
+            cpu_percent=cpu_load,
+            process_memory_mb=proc_mem,
+            disk_percent=disk.percent,
+            disk_free_gb=disk.free / (1024**3),
+            sma_cache_size=sma_count,
+            ema_cache_size=ema_count,
+            poly_cache_size=poly_cache_count,
+            orderbook_size=orderbook_count,
         )
-
-        embed.add_field(
-            name="VPS 記憶體",
-            value=f"`{mem.percent}%` (可用: {mem.available / (1024**2):.1f}MB)",
-            inline=True,
-        )
-        embed.add_field(name="CPU 負載", value=f"`{cpu_load}%`", inline=True)
-        embed.add_field(
-            name="程序占用 (RSS)", value=f"`{proc_mem:.1f} MB`", inline=True
-        )
-        embed.add_field(
-            name="💿 硬碟空間",
-            value=f"`{disk.percent}%` (可用: {disk.free / (1024**3):.1f}GB)",
-            inline=True,
-        )
-
-        cache_info = (
-            f"• SMA/EMA Cache: `{sma_count}/{ema_count}`\n"
-            f"• Poly Markets: `{poly_cache_count}`\n"
-            f"• OrderBooks: `{orderbook_count}`"
-        )
-        embed.add_field(
-            name="📦 快取統計 (LRU/Bounded)", value=cache_info, inline=False
-        )
-
-        health_status = "✅ 狀態優良"
-        if mem.percent > 85 or disk.percent > 85:
-            health_status = "⚠️ **資源吃緊**"
-            if mem.percent > 85:
-                health_status += " (記憶體閾值已達)"
-            if disk.percent > 85:
-                health_status += " (磁碟空間不足)"
-
-        if mem.percent > 95 or disk.percent > 95:
-            health_status = "🆘 **極度危險**"
-            if mem.percent > 95:
-                health_status += " (OOM 警告)"
-            if disk.percent > 95:
-                health_status += " (磁碟即將滿載)"
-
-        embed.add_field(name="🩺 健康評級", value=health_status, inline=False)
-        embed.set_footer(text="Argo Optimization Engine | Low-RAM VPS Edition")
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -870,16 +808,14 @@ class TerminalCog(commands.Cog):
 
             await refresh_portfolio_greeks(interaction.user.id)
 
-            embed = discord.Embed(
-                title="🌌 Nexus | 資產晉升成功",
-                description=f"標的 **{symbol}** 已從「觀察」提升為「實單交易」。",
-                color=0x00FF7F,
+            embed = create_asset_promotion_embed(
+                symbol=symbol,
+                expiry=expiry,
+                strike=strike,
+                opt_type=opt_type,
+                quantity=qty,
+                price=price,
             )
-            embed.add_field(
-                name="合約細節",
-                value=f"`{expiry}` ${strike} {opt_type.upper()}\n數量: `{qty}` 口 | 價格: `${price}`",
-            )
-            embed.set_footer(text="Unified Asset Lifecycle v1.0")
             await interaction.followup.send(embed=embed, ephemeral=True)
         else:
             await interaction.followup.send(
@@ -1396,41 +1332,17 @@ class TerminalCog(commands.Cog):
                 target_cc_premium=target_cc_premium,
             )
 
-            embed = discord.Embed(
-                title=f"🔄 戰略轉軌模擬 (演進) | {symbol}",
-                description=f"模擬將 `{symbol}` 投機期權部位演進為 **核心現股 + 備兌買權 (Covered Call)** 模型。",
-                color=discord.Color.blue(),
-                timestamp=discord.utils.utcnow(),
+            embed = create_transition_simulation_embed(
+                symbol=symbol,
+                current_price=current_price,
+                initial_pnl=res.initial_pnl,
+                additional_capital_required=res.additional_capital_required,
+                adjusted_cost_basis=res.adjusted_cost_basis,
+                target_cc_strike=target_cc_strike,
+                target_cc_premium=target_cc_premium,
+                projected_aroc=res.projected_aroc,
+                capital_efficiency_gain=res.capital_efficiency_gain,
             )
-
-            embed.add_field(
-                name="現價 (Price)", value=f"`${current_price:.2f}`", inline=True
-            )
-            embed.add_field(
-                name="期權獲利 (Option PnL)",
-                value=f"`${res.initial_pnl:,.2f}`",
-                inline=True,
-            )
-
-            roadmap = (
-                f"1. **執行動作**：平倉現有 DITM 部位，回收收益。\n"
-                f"2. **購入現股**：以 `${current_price:.2f}` 購入 100 股。\n"
-                f"3. **追加資本**：需額外投入 **`${res.additional_capital_required:,.2f}`**。\n"
-                f"4. **成本調整**：調整後每股成本為 **`${res.adjusted_cost_basis:.2f}`**。\n"
-                f"5. **建立 CC**：賣出 `${target_cc_strike}` Call，收取 `${target_cc_premium:.2f}` 權利金。"
-            )
-            embed.add_field(
-                name="🚀 資本重分配路線圖 (Roadmap)", value=roadmap, inline=False
-            )
-
-            efficiency = (
-                f"• **預期年化回報 (AROC)**：`{res.projected_aroc:.1f}%` "
-                f"{'✅ 符合 15% 門檻' if res.projected_aroc >= 15 else '⚠️ 低於效率門檻'}\n"
-                f"• **單次收租殖利率**：`{res.capital_efficiency_gain:.2f}%`"
-            )
-            embed.add_field(name="📊 資本效率評估", value=efficiency, inline=False)
-
-            embed.set_footer(text="戰略轉軌引擎 v1.0 | 專業營運模式")
             await interaction.followup.send(embed=embed)
 
         except Exception as e:

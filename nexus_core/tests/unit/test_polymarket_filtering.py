@@ -1,4 +1,5 @@
 import pytest
+from unittest.mock import patch
 from services.polymarket_service import PolymarketService
 
 
@@ -77,3 +78,48 @@ def test_is_relevant_market_mixed(poly_service):
     # Now that we prioritize blacklist, hitting NBA/NFL should return False
     # even though "Election" is in allow_keywords.
     assert poly_service._is_relevant_market(market_info) is False
+
+
+@pytest.mark.asyncio
+async def test_push_notification_uses_embed_builder(poly_service):
+    embed = object()
+    market_info = {
+        "question": "Will NVDA beat earnings?",
+        "event_slug": "nvda-earnings",
+    }
+    trade = {"side": "BUY", "price": 0.74}
+    uoa_correlation = {
+        "uoa": {
+            "symbol": "NVDA",
+            "expiry": "2026-06-19",
+            "strike": 150,
+            "type": "CALL",
+        },
+        "classification": {
+            "classification": "方向性押注",
+            "confidence": 0.88,
+            "explanation": "同步觀察到買權放量。",
+        },
+    }
+
+    with patch(
+        "services.polymarket_service.create_polymarket_whale_alert_embed",
+        return_value=embed,
+    ) as mock_create:
+        await poly_service._push_notification(
+            123,
+            "市場預期財報後仍有延續動能。",
+            market_info,
+            trade,
+            65000.0,
+            10000.0,
+            uoa_correlation,
+        )
+
+    mock_create.assert_called_once()
+    kwargs = mock_create.call_args.kwargs
+    assert kwargs["intent_label"] == "強力看多"
+    assert kwargs["win_rate"] == 74.0
+    assert kwargs["is_high_conviction"] is True
+    assert kwargs["event_slug"] == "nvda-earnings"
+    assert poly_service.bot.queued_dms == [(123, embed)]

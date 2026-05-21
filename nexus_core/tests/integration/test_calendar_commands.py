@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from cogs.calendar import CalendarCog
 
 
@@ -43,6 +43,39 @@ async def test_command_calendar(mock_interaction, db_conn):
 
 
 @pytest.mark.asyncio
+async def test_command_calendar_uses_builder(mock_interaction, db_conn):
+    bot = AsyncMock()
+    bot.wait_until_ready = AsyncMock()
+    cog = CalendarCog(bot)
+
+    from services.calendar_service import EconomicEvent
+
+    with patch(
+        "cogs.calendar.calendar_service.get_portfolio_events",
+        new_callable=AsyncMock,
+        return_value=[
+            EconomicEvent(
+                type="ECONOMIC",
+                event="CPI",
+                impact="high",
+                country="US",
+                tte_hours=12.0,
+                time="2026-05-15T18:00:00Z",
+            )
+        ],
+    ), patch("cogs.calendar.create_market_calendar_embed") as mock_builder:
+        mock_builder.return_value = MagicMock()
+
+        await cog.calendar.callback(cog, mock_interaction)
+
+    mock_builder.assert_called_once()
+    assert (
+        mock_interaction.followup.send.call_args[1]["embed"]
+        is mock_builder.return_value
+    )
+
+
+@pytest.mark.asyncio
 async def test_command_iv_rank(mock_interaction, db_conn):
     bot = AsyncMock()
     bot.wait_until_ready = AsyncMock()
@@ -80,6 +113,39 @@ async def test_command_iv_rank(mock_interaction, db_conn):
         assert "高波動 & IV Crush 風險掃描" in embed.title
         assert "NVDA" in embed.fields[0].name
         assert "92.5%" in embed.fields[0].name
+
+
+@pytest.mark.asyncio
+async def test_command_iv_rank_uses_builder(mock_interaction, db_conn):
+    bot = AsyncMock()
+    bot.wait_until_ready = AsyncMock()
+    cog = CalendarCog(bot)
+
+    from database.watchlist import add_watchlist_symbol
+
+    add_watchlist_symbol(mock_interaction.user.id, "NVDA")
+
+    with patch.object(
+        cog.vol_inspector, "run_scan", new_callable=AsyncMock
+    ) as mock_scan, patch("cogs.calendar.create_iv_risk_scan_embed") as mock_builder:
+        mock_scan.return_value = [
+            {
+                "symbol": "NVDA",
+                "iv_rank": 85.0,
+                "is_high_risk_vol": False,
+                "tte_hours": 18.0,
+                "strategy": "Defensive",
+            }
+        ]
+        mock_builder.return_value = MagicMock()
+
+        await cog.iv_rank.callback(cog, mock_interaction)
+
+    mock_builder.assert_called_once()
+    assert (
+        mock_interaction.followup.send.call_args[1]["embed"]
+        is mock_builder.return_value
+    )
 
 
 @pytest.mark.asyncio
@@ -123,3 +189,46 @@ async def test_command_event_impact(mock_interaction, db_conn):
         assert f"{symbol} 事件風險模擬" in embed.title
         assert "10.00" in embed.fields[0].value  # Beta-Weighted Delta
         assert "Hidden Delta" in embed.fields[2].name
+
+
+@pytest.mark.asyncio
+async def test_command_event_impact_uses_builder(mock_interaction, db_conn):
+    bot = AsyncMock()
+    bot.wait_until_ready = AsyncMock()
+    cog = CalendarCog(bot)
+
+    user_id = mock_interaction.user.id
+    symbol = "AAPL"
+
+    from database.portfolio import add_portfolio_record
+
+    add_portfolio_record(
+        user_id,
+        symbol,
+        "call",
+        150,
+        "2026-06-19",
+        5.0,
+        1,
+        150.0,
+        weighted_delta=10.0,
+        gamma=0.5,
+    )
+
+    with patch(
+        "services.market_data_service.get_quote", new_callable=AsyncMock
+    ) as mock_quote, patch(
+        "market_analysis.greeks.calculate_vanna", return_value=2.5
+    ), patch("cogs.calendar.create_event_impact_embed") as mock_builder:
+        mock_quote.return_value = {"c": 155.0}
+        mock_builder.return_value = MagicMock()
+
+        await cog.event_impact.callback(
+            cog, mock_interaction, symbol=symbol, vol_move=20.0
+        )
+
+    mock_builder.assert_called_once()
+    assert (
+        mock_interaction.followup.send.call_args[1]["embed"]
+        is mock_builder.return_value
+    )

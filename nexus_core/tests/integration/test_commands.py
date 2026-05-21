@@ -190,6 +190,30 @@ async def test_command_settle_hedge(mock_interaction, db_conn):
 
 
 @pytest.mark.asyncio
+async def test_command_hedge_list(mock_interaction, db_conn):
+    cursor = db_conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO hedge_alerts (user_id, vix_level, portfolio_delta, portfolio_vega, hedge_instrument, hedge_contracts, instruction_text, status)
+        VALUES (?, 22.5, 15.0, 40.0, 'SPY', 8, 'Hedge instructions', 'PENDING')
+    """,
+        (mock_interaction.user.id,),
+    )
+    db_conn.commit()
+
+    bot = MagicMock()
+    cog = HedgingCog(bot)
+
+    await cog.hedge_list.callback(cog, mock_interaction)
+
+    mock_interaction.followup.send.assert_called_once()
+    embed = mock_interaction.followup.send.call_args[1]["embed"]
+    assert "最近對沖警報列表" in embed.title
+    assert "#1" in embed.description
+    assert "22.50" in embed.description
+
+
+@pytest.mark.asyncio
 async def test_command_vtr_stats(mock_interaction, db_conn):
     bot = MagicMock()
     cog = TerminalCog(bot)

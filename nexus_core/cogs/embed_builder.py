@@ -1,12 +1,25 @@
+"""Centralized Discord embed builders for Nexus Seeker.
+
+Cog and service layers should assemble data and route notifications, while this
+module owns the final Discord embed presentation. Helpers are grouped with
+lightweight section markers so future output work stays centralized and easier
+to navigate.
+"""
+
 import discord
 import logging
 import psutil
 import re
 
 from datetime import datetime, timezone
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# Visual-width and content-safety utilities
+# ============================================================================
 
 
 def _visual_len(s: str) -> int:
@@ -208,6 +221,11 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+# ============================================================================
+# Shared field-formatting helpers
+# ============================================================================
 
 
 def add_news_field(embed, news_text):
@@ -698,8 +716,18 @@ def _add_trend_and_support_fields(embed, data):
     )
 
 
+# ============================================================================
+# Scan, intelligence, and market-report embeds
+# ============================================================================
+
+
 def create_sentiment_scan_embed(
-    symbol: str, skew_data: dict, pcr_data: dict, uoa_data: list, max_pain_data: dict
+    symbol: str,
+    skew_data: dict,
+    pcr_data: dict,
+    uoa_data: list,
+    max_pain_data: dict,
+    iv_data: Optional[Any] = None,
 ) -> discord.Embed:
     """建立期權情緒掃描報告 Embed (繁體中文)"""
     embed = discord.Embed(
@@ -707,6 +735,44 @@ def create_sentiment_scan_embed(
         color=discord.Color.dark_magenta(),
         timestamp=datetime.now(timezone.utc),
     )
+
+    if iv_data:
+        if hasattr(iv_data, "current_iv"):
+            current_iv = iv_data.current_iv
+            iv_rank = iv_data.iv_rank
+            iv_percentile = iv_data.iv_percentile
+            expected_move_weekly = iv_data.expected_move_weekly
+            iv_status = iv_data.iv_status
+        else:
+            current_iv = iv_data.get("current_iv", 0.0)
+            iv_rank = iv_data.get("iv_rank", 0.0)
+            iv_percentile = iv_data.get("iv_percentile", 0.0)
+            expected_move_weekly = iv_data.get("expected_move_weekly", 0.0)
+            iv_status = iv_data.get("iv_status", "Normal")
+
+        iv_status_map = {
+            "Low": "低 / 便宜",
+            "Normal": "正常 / 公允",
+            "High": "高 / 昂貴",
+            "Extreme": "極高 / 泡沫",
+        }
+        status_tw = iv_status_map.get(iv_status, "正常 / 公允")
+
+        iv_lines = [
+            "```ansi",
+            f" 🌌 {symbol} 期權情緒掃描 (Sentiment Scan)",
+            " ----------------------------------",
+            " Implied Volatility (IV)",
+            f" └─ 值: {current_iv * 100:.1f}% (當前 30 天平值期權隱含波動率)",
+            " IV Rank / IV Percentile",
+            f" └─ IV Rank: {iv_rank:.1f}% | IV Percentile: {iv_percentile:.1f}% (狀態: {status_tw})",
+            " Expected Move (預期震盪區間)",
+            f" └─ 本週預期: ±${expected_move_weekly:.2f} (基於當前 IV 計算)",
+            "```",
+        ]
+        embed.add_field(
+            name="📊 隱含波動率與預期區間", value="\n".join(iv_lines), inline=False
+        )
 
     # Skew, PCR, Max Pain consolidated
     skew_val = skew_data.get("skew", 0)
@@ -794,7 +860,9 @@ def create_sentiment_scan_embed(
     return embed
 
 
-def create_macro_scan_embed(macro_data: dict, alerts: list = None) -> discord.Embed:
+def create_macro_scan_embed(
+    macro_data: dict, alerts: Optional[List[Any]] = None
+) -> discord.Embed:
     """建立巨觀環境與隔夜市場掃描 Embed (繁體中文)"""
     embed = discord.Embed(
         title="🌍 巨觀環境與隔夜市場掃描 (Macro Scan)",
@@ -1241,6 +1309,256 @@ def create_polymarket_list_embed(markets: List[Dict[str, Any]]):
     embed.description = full_desc
     embed.set_footer(text="Nexus Seeker | Polymarket Monitor (Top 20 Active Markets)")
     return embed
+
+
+def create_polymarket_status_embed(status: Dict[str, Any]) -> discord.Embed:
+    """建構 Polymarket 服務狀態 Embed。"""
+    embed = discord.Embed(
+        title="【 🐋 Polymarket 服務狀態 】",
+        color=discord.Color.green() if status["connected"] else discord.Color.red(),
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    status_emoji = "🟢 已連線" if status["connected"] else "🔴 斷線中"
+    running_emoji = "✅ 運行中" if status["running"] else "🛑 已停止"
+    content = [
+        "## 🖥️ 監控系統運行資訊",
+        "---",
+        f"**服務狀態：** {running_emoji}",
+        f"**連線狀態：** {status_emoji}",
+        f"**訂閱資產：** `{status['asset_count']}` 個標的",
+        f"**最後訊息：** {status['last_message']}",
+        f"**異常計數：** `{status['errors']}` 次",
+        "---",
+    ]
+    embed.description = "\n".join(content)
+    embed.set_footer(text="Nexus Seeker | Polymarket Monitor")
+    return embed
+
+
+def create_quote_embed(symbol: str, data: Dict[str, Any]) -> discord.Embed:
+    """建構即時報價 Embed。"""
+    embed = discord.Embed(
+        title=f"💹 {symbol} 即時報價 (Real-time Quote)",
+        color=discord.Color.blue() if data["dp"] >= 0 else discord.Color.red(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.add_field(name="現價 (Current)", value=f"**${data['c']}**", inline=True)
+    embed.add_field(name="漲跌幅 (%)", value=f"`{data['dp']}%`", inline=True)
+    embed.add_field(
+        name="今日高/低", value=f"H: `${data['h']}` / L: `${data['l']}`", inline=False
+    )
+    embed.add_field(name="前收盤 (PC)", value=f"`${data['pc']}`", inline=True)
+    embed.set_footer(text="Nexus Seeker | Market Intelligence Feed")
+    return embed
+
+
+# ============================================================================
+# Trading, risk, and alert embeds
+# ============================================================================
+
+
+def create_profit_lock_alert_embed(event: Dict[str, Any]) -> discord.Embed:
+    """建立 DITM 獲利鎖定警報 Embed。"""
+    embed = discord.Embed(
+        title="🚨 DITM 凸性防護：獲利鎖定已觸發",
+        description=(
+            f"偵測到標的 **{event['symbol']}** 已進入深價內 (DITM)，"
+            "凸性消失且風險報酬比惡化。"
+        ),
+        color=discord.Color.gold(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.add_field(
+        name="觸發指標",
+        value=f"```\n未實現損益: {event['pnl_pct']}% | DTE: {event['dte']}\n```",
+        inline=False,
+    )
+    embed.add_field(name="執行指令", value="✅ **獲利鎖定 (Profit Lock)**", inline=True)
+    embed.add_field(name="核心邏輯", value=event["reason"], inline=False)
+    embed.set_footer(text="Mission-Critical Risk Environment | Nexus Seeker")
+    return embed
+
+
+def create_gamma_fragility_embed(event: Dict[str, Any]) -> discord.Embed:
+    """建立 Gamma 脆弱性警告 Embed。"""
+    embed = discord.Embed(
+        title="🆘 Gamma 脆弱性警告 (Net Gamma < -20)",
+        description="偵測到投資組合淨 Gamma 已跌破臨界點，曝險加速度呈非線性擴張。",
+        color=discord.Color.dark_red(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.add_field(name="目前淨 Gamma", value=f"`{event['net_gamma']}`", inline=True)
+    embed.add_field(name="安全臨界點", value=f"`{event['threshold']}`", inline=True)
+    embed.add_field(
+        name="優先指令",
+        value="🛡️ **注入正 Gamma 緩衝 (買入近月 ATM 期權) 或 立即減倉**",
+        inline=False,
+    )
+    embed.set_footer(text="Fragility Guard Engine v2.0 | Nexus Seeker")
+    return embed
+
+
+def create_pre_market_earnings_embed(
+    alerts: List[Dict[str, Any]], scanned_symbols: List[str], warning_days: int
+) -> discord.Embed:
+    """建立盤前財報雷達通知 Embed。"""
+    if alerts:
+        description = "\n\n".join(
+            (
+                f"**{item['symbol']}** "
+                f"({'⚠️ **持倉高風險**' if item['is_portfolio'] else '👀 觀察清單'})\n"
+                f"└ 📅 財報日: `{item['earnings_date']}` (倒數 **{item['days_left']}** 天)"
+            )
+            for item in alerts
+        )
+        return discord.Embed(
+            title="🚨 【盤前財報季雷達預警】",
+            description=description,
+            color=discord.Color.red(),
+            timestamp=datetime.now(timezone.utc),
+        )
+
+    scanned_list = "、".join(f"`{symbol}`" for symbol in scanned_symbols)
+    return discord.Embed(
+        title="✅ 【盤前財報季雷達掃描完畢】",
+        description=f"已掃描：{scanned_list}\n\n近 {warning_days} 日內無財報風險，安全過關！",
+        color=discord.Color.green(),
+        timestamp=datetime.now(timezone.utc),
+    )
+
+
+def create_ditm_transition_alert_embed(
+    *,
+    symbol: str,
+    exit_reason: str,
+    action_taken: str,
+    pnl: float,
+    exposure_pct: float,
+    hedge: Optional[Dict[str, Any]] = None,
+) -> discord.Embed:
+    """建立 VTR DITM 防禦通知 Embed。"""
+    embed = discord.Embed(
+        title="🚨 NRO 優先指令：Profit Lock (DITM 凸性防禦)",
+        description=f"偵測到標的 **{symbol}** 已進入深價內 (DITM)，凸性消失且風險報酬比惡化。",
+        color=discord.Color.gold(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.add_field(name="觸發指標", value=f"```\n{exit_reason}\n```", inline=False)
+    embed.add_field(name="執行動作", value=f"✅ **{action_taken}**", inline=True)
+    embed.add_field(name="鎖定利潤", value=f"💰 `${pnl:.2f}`", inline=True)
+    embed.add_field(
+        name="帳戶目前總曝險",
+        value=f"`{exposure_pct:.2f}%` (Beta-Weighted Delta)",
+        inline=False,
+    )
+    if hedge:
+        embed.add_field(
+            name="🛡️ NRO 對沖建議",
+            value=f"{hedge['action']} (缺口: `{hedge['gap']}`)",
+            inline=False,
+        )
+    embed.set_footer(text="Quantitative Defense Pipeline | Nexus Risk Optimizer")
+    return embed
+
+
+def create_intraday_execution_guide_embed(
+    *,
+    phase_name: str,
+    vix: float,
+    memory_percent: float,
+    is_memory_gated: bool,
+    vix_level_name: str = "",
+    greeks_status: str = "",
+    runway_days: float = 0.0,
+    theta_cov: float = 0.0,
+    active_signal_content: str = "",
+    sma_cache_size: int = 0,
+    ema_cache_size: int = 0,
+) -> discord.Embed:
+    """建立盤中量化執行指引 Embed。"""
+    embed = discord.Embed(
+        title=f"🛡️ 盤中量化執行指引 - {phase_name}",
+        color=discord.Color.red() if vix > 25 else discord.Color.blue(),
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    if is_memory_gated:
+        embed.description = (
+            "⚠️ **Memory Safety Gate Active**: VPS RAM > 85%。"
+            "已暫停部分耗能分析以保證風控引擎穩定。"
+        )
+        embed.add_field(
+            name="系統狀態", value=f"RAM: `{memory_percent}%`", inline=False
+        )
+        embed.set_footer(text="Nexus Seeker | NRO Vanna-Aware Intelligence")
+        return embed
+
+    embed.add_field(
+        name="1️⃣ 風險狀態 (Risk Status)",
+        value=f"**VIX 階級:** {vix_level_name} ({vix:.1f})\n**Greeks 完整性:** {greeks_status}",
+        inline=False,
+    )
+    embed.add_field(
+        name="2️⃣ 財務健康 (Financial Health)",
+        value=f"**剩餘跑道:** `{runway_days:.1f}` 天\n**Theta 覆蓋率:** `{theta_cov:.1f}%`",
+        inline=False,
+    )
+    embed.add_field(
+        name="3️⃣ 活躍信號 (Active Signal)",
+        value=active_signal_content,
+        inline=False,
+    )
+    embed.add_field(
+        name="4️⃣ 系統狀態 (System Health)",
+        value=f"RAM: `{memory_percent}%` | BoundedCache (SMA/EMA): `{sma_cache_size}/{ema_cache_size}`",
+        inline=False,
+    )
+    embed.set_footer(text="Nexus Seeker | NRO Vanna-Aware Intelligence")
+    return embed
+
+
+def create_vtr_settlement_notice_embed(
+    *,
+    status_icon: str,
+    symbol: str,
+    pnl: float,
+    exposure_pct: float,
+    regime: Optional[str] = None,
+    target_delta: Optional[float] = None,
+    hedge: Optional[Dict[str, Any]] = None,
+) -> discord.Embed:
+    """建立 VTR 轉倉/平倉結算通知 Embed。"""
+    embed = discord.Embed(
+        title=f"{status_icon} {symbol} 結算通知",
+        color=discord.Color.blue() if "轉倉" in status_icon else discord.Color.red(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.add_field(name="損益", value=f"`${pnl:.2f}`", inline=True)
+    embed.add_field(
+        name="目前總曝險",
+        value=f"`{exposure_pct:.2f}%` (Beta-Weighted Delta)",
+        inline=True,
+    )
+
+    if regime is not None and target_delta is not None:
+        embed.add_field(name="🧠 系統自主位階判定", value=f"`{regime}`", inline=False)
+        embed.add_field(
+            name="理想總曝險目標", value=f"`{target_delta:.1f} Delta`", inline=True
+        )
+    if hedge:
+        embed.add_field(
+            name="🛡️ 自動對沖決策",
+            value=f"{hedge['action']} (缺口: `{hedge['gap']}`)",
+            inline=False,
+        )
+    embed.set_footer(text="GhostTrader | Settlement Notice")
+    return embed
+
+
+# ============================================================================
+# Portfolio, watchlist, and terminal embeds
+# ============================================================================
 
 
 def create_holdings_embed(
@@ -1731,7 +2049,7 @@ def create_transition_suggestion_embed(data: Dict[str, Any]) -> discord.Embed:
 
 
 def build_vtr_stats_embed(
-    user_name: str, stats: dict, attribution_lines: List[str] = None
+    user_name: str, stats: dict, attribution_lines: Optional[List[str]] = None
 ) -> discord.Embed:
     """
     建構 VTR 績效統計 Embed 面板，含對沖效能歸因。
@@ -2139,6 +2457,11 @@ def build_hedge_analysis_field(embed, analysis):
     )
 
 
+# ============================================================================
+# Common notification, calendar, and service-operation embeds
+# ============================================================================
+
+
 def create_ai_analysis_embed(
     ai_report_text: str, title: str = "📊 Nexus Seeker 盤後 AI 深度分析"
 ) -> discord.Embed:
@@ -2270,4 +2593,688 @@ def create_error_embed(message: str, title: str = "系統錯誤") -> discord.Emb
         timestamp=datetime.now(timezone.utc),
     )
     embed.set_footer(text="Nexus Seeker | Error Report")
+    return embed
+
+
+def create_max_pain_embed(symbol: str, data: Dict[str, Any]) -> discord.Embed:
+    """建立最大痛點分析 Embed。"""
+    embed = discord.Embed(
+        title=f"📍 {symbol} 最大痛點分析 (Max Pain)",
+        color=discord.Color.blue(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.add_field(name="到期日", value=f"`{data.get('expiry', 'N/A')}`", inline=True)
+    embed.add_field(
+        name="最大痛點 Strike",
+        value=f"**${data.get('max_pain', 'N/A')}**",
+        inline=True,
+    )
+    embed.add_field(
+        name="目前價格",
+        value=f"`${data.get('current_price', 'N/A')}`",
+        inline=True,
+    )
+
+    distance_pct = _safe_float(data.get("distance_pct"))
+    distance_text = (
+        f"現價高於痛點 `{distance_pct:.2f}%`"
+        if distance_pct > 0
+        else f"現價低於痛點 `{abs(distance_pct):.2f}%`"
+        if distance_pct < 0
+        else "現價貼近最大痛點 `0.00%`"
+    )
+    embed.add_field(name="偏離度", value=distance_text, inline=False)
+
+    if data.get("is_converging"):
+        embed.description = "🎯 **價格正向最大痛點收斂中** (預期結算日波動縮小)"
+
+    expiry = data.get("expiry")
+    if isinstance(expiry, str):
+        try:
+            expiry_dt = datetime.strptime(expiry, "%Y-%m-%d")
+            dte = (expiry_dt - datetime.now()).days
+            if dte <= 3:
+                embed.add_field(
+                    name="🚀 執行建議",
+                    value="⚠️ **DTE < 3 且接近最大痛點**\n建議提升 **獲利鎖定 (Profit Lock)** 優先級，規避結算震盪。",
+                    inline=False,
+                )
+        except ValueError:
+            pass
+
+    embed.set_footer(text="Nexus Seeker | Execution Automation")
+    return embed
+
+
+def create_financial_runway_embed(
+    cash_reserve: float,
+    monthly_expense: float,
+    total_theta: float,
+    runway_days: float,
+    backup_liquidity: float = 0.0,
+    extended_runway: float | None = None,
+    total_holding_value: float = 0.0,
+    ratio: float | None = None,
+    footer_text: str = "Nexus Seeker | Financial Runway",
+) -> discord.Embed:
+    """建立財務生存跑道 Embed。"""
+    color = discord.Color.green() if runway_days > 180 else discord.Color.orange()
+    embed = discord.Embed(
+        title="🏁 財務生存跑道分析",
+        color=color,
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.add_field(name="💰 現金儲備", value=f"`${cash_reserve:,.2f}`", inline=True)
+    embed.add_field(name="📉 每月支出", value=f"`${monthly_expense:,.2f}`", inline=True)
+    embed.add_field(
+        name="💸 每日 Theta",
+        value=f"`+${total_theta:,.2f}/day`",
+        inline=True,
+    )
+    runway_text = (
+        f"**{runway_days:,.1f} 天**"
+        if runway_days < 9999
+        else "**♾️ 無限 (收益已覆蓋支出)**"
+    )
+    embed.add_field(
+        name="⌛ 核心生存跑道",
+        value=runway_text,
+        inline=False,
+    )
+    if backup_liquidity > 0 and extended_runway is not None:
+        extended_text = (
+            f"**{extended_runway:,.1f} 天**" if extended_runway < 9999 else "**♾️ 無限**"
+        )
+        embed.add_field(
+            name="🛡️ 備用流動性",
+            value=(
+                f"`${total_holding_value:,.2f}` (折價後: `${backup_liquidity:,.2f}`)\n"
+                f"預計可將跑道延長至: {extended_text}"
+            ),
+            inline=False,
+        )
+    if ratio is not None:
+        embed.add_field(
+            name="📊 收益支出比 (Theta/Expense)", value=f"`{ratio:.2%}`", inline=True
+        )
+    embed.set_footer(text=footer_text)
+    return embed
+
+
+def create_system_health_embed(
+    *,
+    memory_percent: float,
+    memory_available_mb: float,
+    cpu_percent: float,
+    process_memory_mb: float,
+    disk_percent: float,
+    disk_free_gb: float,
+    sma_cache_size: int,
+    ema_cache_size: int,
+    poly_cache_size: int = 0,
+    orderbook_size: int = 0,
+) -> discord.Embed:
+    """建立系統健康診斷 Embed。"""
+    is_healthy = memory_percent < 80 and disk_percent < 85
+    embed = discord.Embed(
+        title="🖥️ Nexus Seeker 系統健康診斷",
+        color=discord.Color.green() if is_healthy else discord.Color.red(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.add_field(
+        name="VPS 記憶體",
+        value=f"`{memory_percent}%` (可用: {memory_available_mb:.1f}MB)",
+        inline=True,
+    )
+    embed.add_field(name="CPU 負載", value=f"`{cpu_percent}%`", inline=True)
+    embed.add_field(
+        name="程序占用 (RSS)", value=f"`{process_memory_mb:.1f} MB`", inline=True
+    )
+    embed.add_field(
+        name="💿 硬碟空間",
+        value=f"`{disk_percent}%` (可用: {disk_free_gb:.1f}GB)",
+        inline=True,
+    )
+    cache_info = (
+        f"• SMA/EMA Cache: `{sma_cache_size}/{ema_cache_size}`\n"
+        f"• Poly Markets: `{poly_cache_size}`\n"
+        f"• OrderBooks: `{orderbook_size}`"
+    )
+    embed.add_field(name="📦 快取統計 (LRU/Bounded)", value=cache_info, inline=False)
+
+    health_status = "✅ 狀態優良"
+    if memory_percent > 85 or disk_percent > 85:
+        health_status = "⚠️ **資源吃緊**"
+        if memory_percent > 85:
+            health_status += " (記憶體閾值已達)"
+        if disk_percent > 85:
+            health_status += " (磁碟空間不足)"
+
+    if memory_percent > 95 or disk_percent > 95:
+        health_status = "🆘 **極度危險**"
+        if memory_percent > 95:
+            health_status += " (OOM 警告)"
+        if disk_percent > 95:
+            health_status += " (磁碟即將滿載)"
+
+    embed.add_field(name="🩺 健康評級", value=health_status, inline=False)
+    embed.set_footer(text="Argo Optimization Engine | Low-RAM VPS Edition")
+    return embed
+
+
+def create_asset_promotion_embed(
+    symbol: str,
+    expiry: str,
+    strike: float,
+    opt_type: str,
+    quantity: int,
+    price: float,
+) -> discord.Embed:
+    """建立 WATCH -> TRADE 晉升成功 Embed。"""
+    embed = discord.Embed(
+        title="🌌 Nexus | 資產晉升成功",
+        description=f"標的 **{symbol}** 已從「觀察」提升為「實單交易」。",
+        color=0x00FF7F,
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.add_field(
+        name="合約細節",
+        value=f"`{expiry}` ${strike} {opt_type.upper()}\n數量: `{quantity}` 口 | 價格: `${price}`",
+    )
+    embed.set_footer(text="Unified Asset Lifecycle v1.0")
+    return embed
+
+
+def create_transition_simulation_embed(
+    *,
+    symbol: str,
+    current_price: float,
+    initial_pnl: float,
+    additional_capital_required: float,
+    adjusted_cost_basis: float,
+    target_cc_strike: float,
+    target_cc_premium: float,
+    projected_aroc: float,
+    capital_efficiency_gain: float,
+) -> discord.Embed:
+    """建立戰略轉軌模擬 Embed。"""
+    embed = discord.Embed(
+        title=f"🔄 戰略轉軌模擬 (演進) | {symbol}",
+        description=f"模擬將 `{symbol}` 投機期權部位演進為 **核心現股 + 備兌買權 (Covered Call)** 模型。",
+        color=discord.Color.blue(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.add_field(name="現價 (Price)", value=f"`${current_price:.2f}`", inline=True)
+    embed.add_field(
+        name="期權獲利 (Option PnL)", value=f"`${initial_pnl:,.2f}`", inline=True
+    )
+    roadmap = (
+        "1. **執行動作**：平倉現有 DITM 部位，回收收益。\n"
+        f"2. **購入現股**：以 `${current_price:.2f}` 購入 100 股。\n"
+        f"3. **追加資本**：需額外投入 **`${additional_capital_required:,.2f}`**。\n"
+        f"4. **成本調整**：調整後每股成本為 **`${adjusted_cost_basis:.2f}`**。\n"
+        f"5. **建立 CC**：賣出 `${target_cc_strike}` Call，收取 `${target_cc_premium:.2f}` 權利金。"
+    )
+    embed.add_field(name="🚀 資本重分配路線圖 (Roadmap)", value=roadmap, inline=False)
+    efficiency = (
+        f"• **預期年化回報 (AROC)**：`{projected_aroc:.1f}%` "
+        f"{'✅ 符合 15% 門檻' if projected_aroc >= 15 else '⚠️ 低於效率門檻'}\n"
+        f"• **單次收租殖利率**：`{capital_efficiency_gain:.2f}%`"
+    )
+    embed.add_field(name="📊 資本效率評估", value=efficiency, inline=False)
+    embed.set_footer(text="戰略轉軌引擎 v1.0 | 專業營運模式")
+    return embed
+
+
+def create_market_calendar_embed(
+    events: List[Any],
+    *,
+    max_items: int = 15,
+    empty_message: str = "📭 未來 7 日內無重大事件。",
+) -> discord.Embed:
+    """建立市場事件與財報日曆 Embed。"""
+    if not events:
+        return create_info_embed("查無資料", empty_message)
+
+    embed = discord.Embed(
+        title="📅 【 重大市場事件 & 財報日曆 】",
+        color=discord.Color.blue(),
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    for event in events[:max_items]:
+        event_name = getattr(event, "event", None)
+        symbol = getattr(event, "symbol", None)
+        tte_hours = getattr(event, "tte_hours", "N/A")
+        event_date = getattr(event, "date", None)
+        country = getattr(event, "country", None)
+        impact = str(getattr(event, "impact", "")).lower()
+        event_time = getattr(event, "time", None)
+
+        if event_name is not None:
+            impact_icon = "🔴" if impact == "high" else "🟡"
+            field_name = (
+                f"{impact_icon} {event_name} ({country})"
+                if country
+                else f"{impact_icon} {event_name}"
+            )
+            time_part = f" | `{event_time}`" if event_time else ""
+            field_value = f"⏰ TTE: `{tte_hours}`h{time_part}"
+        elif symbol is not None:
+            field_name = f"📊 {symbol} 財報發布"
+            date_part = f" | `{event_date}`" if event_date else ""
+            field_value = f"⏰ TTE: `{tte_hours}`h{date_part}"
+        else:
+            continue
+
+        embed.add_field(name=field_name, value=field_value, inline=False)
+
+    embed.set_footer(text="Calendar-Aware Guard | Nexus Seeker")
+    return embed
+
+
+def create_iv_risk_scan_embed(results: List[Dict[str, Any]]) -> discord.Embed:
+    """建立高 IV / IV Crush 風險掃描 Embed。"""
+    if not results:
+        return create_info_embed("系統資訊", "🔎 未發現 IV Rank > 80% 的高波動標的。")
+
+    embed = discord.Embed(
+        title="🔥 【 高波動 & IV Crush 風險掃描 】",
+        color=discord.Color.red(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    for res in results[:15]:
+        risk_icon = "🚨" if res.get("is_high_risk_vol") else "⚠️"
+        embed.add_field(
+            name=f"{risk_icon} {res.get('symbol', 'N/A')} (IVR: {res.get('iv_rank', 0)}%)",
+            value=(
+                f"TTE: `{_safe_float(res.get('tte_hours')):.1f}`h | "
+                f"策略: {res.get('strategy', 'N/A')}"
+            ),
+            inline=False,
+        )
+    embed.set_footer(text="IV Rank Scanner | Nexus Seeker")
+    return embed
+
+
+def create_event_impact_embed(
+    symbol: str,
+    vol_move: float,
+    total_delta: float,
+    total_vanna: float,
+    adjusted_delta: float,
+    delta_shift: float,
+    exposure_shift_dollars: float,
+) -> discord.Embed:
+    """建立事件風險 What-if 模擬 Embed。"""
+    embed = discord.Embed(
+        title=f"🎲 【 {symbol} 事件風險模擬 (What-if) 】",
+        description=f"假設波動率變動 `{vol_move}%` 時，部位 Greeks 的動態偏移：",
+        color=discord.Color.gold(),
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    embed.add_field(
+        name="目前 Beta-Weighted Delta",
+        value=f"`{total_delta:.2f}`",
+        inline=True,
+    )
+    embed.add_field(
+        name="目前 Vanna (曝險變化率)",
+        value=f"`{total_vanna:.2f}`",
+        inline=True,
+    )
+    embed.add_field(
+        name="預期 Hidden Delta",
+        value=f"`{adjusted_delta:.2f}`",
+        inline=False,
+    )
+    embed.add_field(name="Delta 偏移量", value=f"`{delta_shift:+.2f}`", inline=True)
+    embed.add_field(
+        name="等值曝險變動 (USD)",
+        value=f"`${exposure_shift_dollars:,.2f}`",
+        inline=True,
+    )
+
+    risk_status = "🔴 危險" if abs(adjusted_delta) > 100 else "🟢 安全"
+    embed.add_field(name="風險狀態判定", value=f"**{risk_status}**", inline=False)
+    embed.set_footer(text="NRO Vanna Simulation | Nexus Seeker")
+    return embed
+
+
+def create_hedge_settlement_embed(
+    alert_id: int, hedge_instrument: str, executed_quantity: int
+) -> discord.Embed:
+    """建立對沖結算完成 Embed。"""
+    embed = discord.Embed(
+        title="✅ 對沖結算完成",
+        description=f"已成功記錄警報 `#{alert_id}` 的對沖執行紀錄。",
+        color=discord.Color.green(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.add_field(name="執行標的", value=f"`{hedge_instrument}`", inline=True)
+    embed.add_field(name="執行數量", value=f"`{executed_quantity}`", inline=True)
+    embed.set_footer(text="數據已同步至 SQLite 持久化層，可用於歸因分析。")
+    return embed
+
+
+def create_hedge_list_embed(rows: List[Any]) -> discord.Embed:
+    """建立最近對沖警報列表 Embed。"""
+    embed = discord.Embed(
+        title="📜 最近對沖警報列表",
+        color=discord.Color.blue(),
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    content: List[str] = []
+    for row in rows:
+        status_emoji = (
+            "⏳" if row[3] == "PENDING" else "✅" if row[3] == "EXECUTED" else "❌"
+        )
+        content.append(
+            f"`#{row[0]}` | {status_emoji} | VIX: `{row[1]:.2f}` | 建議: `{row[2]}`股 | {row[4][:16]}"
+        )
+
+    embed.description = "\n".join(content) if content else "📭 目前無對沖警報紀錄。"
+    embed.set_footer(text="Nexus Seeker | Hedge Ledger")
+    return embed
+
+
+def create_hedge_alert_embed(
+    *,
+    vix: float,
+    stage_move: int,
+    tier_name: str,
+    tier_emoji: str,
+    color_hex: int,
+    total_beta_delta: float,
+    adjusted_delta: float,
+    total_vega: float,
+    hedge_quantity: int,
+    instruction_text: str,
+    narration: str,
+    alert_id: int,
+    poly_snapshot: Optional[List[Dict[str, Any]]] = None,
+) -> discord.Embed:
+    """建立自動化對沖警報 Embed。"""
+    embed = discord.Embed(
+        title="🚨 【戰位報告：自動化對沖警報】",
+        description=f"**警報等級：** {tier_emoji} {tier_name} (移動 `{stage_move:+} 階`)",
+        color=discord.Color(color_hex),
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    embed.add_field(
+        name="📊 風險指標",
+        value=(
+            f"• **即時 VIX:** `{vix:.2f}`\n"
+            f"• **淨 Delta:** `{total_beta_delta:+.1f}`\n"
+            f"• **調整後 Delta:** `{adjusted_delta:+.1f}` (Hidden Delta)\n"
+            f"• **Vega 脆弱性:** `{total_vega:+.2f}`"
+        ),
+        inline=False,
+    )
+
+    if poly_snapshot:
+        snapshot_lines: List[str] = []
+        for event in poly_snapshot:
+            question = str(event.get("question", "N/A"))
+            truncated = question[:40] + "..." if len(question) > 40 else question
+            odds = event.get("odds_distribution", [])
+            odds_str = " | ".join(
+                f"{item.get('outcome')}: `{item.get('odds', 0.0) * 100:.0f}%`"
+                for item in odds[:2]
+            )
+            snapshot_lines.append(f"• **{truncated}**\n  └ {odds_str}")
+
+        if snapshot_lines:
+            embed.add_field(
+                name="🌐 [快取快照] Polymarket 即時機率",
+                value="\n".join(snapshot_lines),
+                inline=False,
+            )
+
+    embed.add_field(name="🤖 AI 風險敘述", value=f"*{narration}*", inline=False)
+    embed.add_field(
+        name="🛡️ 對沖建議指令",
+        value=f"```fix\n{instruction_text}\n```",
+        inline=False,
+    )
+    embed.add_field(
+        name="📈 預期效果",
+        value=(
+            f"執行後淨 Delta 將回歸至 `{adjusted_delta + (hedge_quantity * -1.0):+.1f}` 附近，"
+            "顯著降低系統性回撤風險。"
+        ),
+        inline=False,
+    )
+    embed.set_footer(text=f"Nexus Seeker Battle Station | Alert ID: {alert_id}")
+    return embed
+
+
+def create_proactive_event_alert_embed(events: List[Any]) -> discord.Embed:
+    """建立重大事件主動預警 Embed。"""
+    embed = discord.Embed(
+        title="🛡️ 【 預警：重大事件即時防護 】",
+        description="偵測到您的持倉標的即將迎來重大波動事件，請留意風險對沖。",
+        color=discord.Color.dark_red(),
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    for event in events:
+        if event.type == "ECONOMIC":
+            name = f"🔴 經濟數據: {event.event}"
+            value = (
+                f"距離發布: `{event.tte_hours}` 小時 \n"
+                "**NRO 指令**: 增加 Vanna 權重，縮減賣方曝險。"
+            )
+        else:
+            name = f"📊 財報預警: {event.symbol}"
+            value = (
+                f"距離發布: `{event.tte_hours}` 小時 \n"
+                "**NRO 指令**: 已啟動 IV Crush 防護機制。"
+            )
+
+        embed.add_field(name=name, value=value, inline=False)
+
+    embed.set_footer(text="Proactive Event Monitor | Nexus Seeker")
+    return embed
+
+
+def create_memory_alert_embed(
+    total_usage: float,
+    process_memory_mb: float,
+    sma_cache_size: int,
+    ema_cache_size: int,
+) -> discord.Embed:
+    """建立記憶體不足緊急警報 Embed。"""
+    embed = discord.Embed(
+        title="🆘 【系統緊急警報：記憶體不足】",
+        description=(
+            f"VPS 記憶體使用量已達臨界值 (`{total_usage}%`)，"
+            "可能導致程序被 OOM Killer 終止。"
+        ),
+        color=discord.Color.red(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.add_field(name="當前總占用", value=f"`{total_usage}%`", inline=True)
+    embed.add_field(
+        name="程序占用 (RSS)", value=f"`{process_memory_mb:.1f} MB`", inline=True
+    )
+    embed.add_field(
+        name="📦 快取消費者",
+        value=f"SMA/EMA: `{sma_cache_size}/{ema_cache_size}` 筆",
+        inline=False,
+    )
+    embed.set_footer(text="建議重啟服務或增加 Swap 分區。")
+    return embed
+
+
+def create_polymarket_whale_alert_embed(
+    *,
+    intent_emoji: str,
+    intent_label: str,
+    market_question: str,
+    usd_value: float,
+    dynamic_threshold: float,
+    win_rate: float,
+    is_high_conviction: bool,
+    is_bullish: bool,
+    summary: str,
+    event_slug: Optional[str] = None,
+    uoa_correlation: Optional[Dict[str, Any]] = None,
+) -> discord.Embed:
+    """建立 Polymarket 巨鯨戰報 Embed。"""
+    embed = discord.Embed(
+        title="【 🐋 Polymarket 巨鯨戰報 】"
+        + (" 🔥 高信心訊號" if is_high_conviction else ""),
+        color=(
+            discord.Color.gold()
+            if is_high_conviction
+            else (discord.Color.blue() if is_bullish else discord.Color.red())
+        ),
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    content = [
+        f"## {intent_emoji} {intent_label}",
+        "---",
+        f"**市場問題：** **{market_question}**",
+        f"**交易金額：** `${usd_value:,.2f}`",
+        f"**流動性倍數：** `{usd_value / dynamic_threshold:.2f}x`",
+        f"**當前勝率：** {win_rate:.1f}%",
+        "---",
+    ]
+
+    if uoa_correlation:
+        uoa = uoa_correlation["uoa"]
+        classification = uoa_correlation["classification"]
+        content.append(f"🔍 **UOA 關聯偵測 ({uoa['symbol']})**")
+        content.append(f"- 合約: `{uoa['expiry']}` `${uoa['strike']}` {uoa['type']}")
+        content.append(
+            f"- 性質: **{classification['classification']}** (信心: `{classification['confidence']:.2f}`)"
+        )
+        content.append(f"- 理由: {classification['explanation']}")
+        content.append("---")
+
+    if win_rate > 70 or win_rate < 30:
+        content.append("🛡️ **【預測性對沖建議 (Predictive Hedge)】**")
+        content.append(
+            f"偵測到預測市場對 `{market_question}` 的機率激增至 `{win_rate:.1f}%`，建議提前在 VTR 執行 Delta 對沖，以應對潛在的波動率跳空。"
+        )
+        content.append("---")
+
+    if summary and summary != "（未啟用 AI 分析）":
+        content.append(f"**🤖 AI 總結分析**\n{summary}")
+        content.append("---")
+
+    market_url = (
+        f"https://polymarket.com/event/{event_slug}"
+        if event_slug
+        else "https://polymarket.com"
+    )
+    content.append(f"[🔗 前往市場]({market_url})")
+
+    embed.description = "\n".join(content)
+    embed.set_footer(
+        text=f"Nexus Seeker 監測系統 | 動態門檻: ${dynamic_threshold:,.0f}"
+    )
+    return embed
+
+
+# ============================================================================
+# Intraday pipeline and automation-specific embeds
+# ============================================================================
+
+
+def create_intraday_scan_embed(output) -> discord.Embed:
+    """建立盤中量化掃描與避險執行指南的 Discord Embed"""
+    route_icon = (
+        "🏹 SPEAR"
+        if output.sddm_route == "SPEAR"
+        else ("🛡️ SHIELD" if output.sddm_route == "SHIELD" else "⏳ WAIT")
+    )
+
+    embed_color = discord.Color.green()
+    if output.sddm_route == "SHIELD":
+        embed_color = (
+            discord.Color.red() if output.failed_gates else discord.Color.orange()
+        )
+    elif output.sddm_route == "WAIT":
+        embed_color = discord.Color.blue()
+
+    embed = discord.Embed(
+        title=f"📊 Nexus Seeker | 盤中量化掃描 & 避險執行指南 ({output.ticker})",
+        color=embed_color,
+        timestamp=output.timestamp.astimezone(timezone.utc),
+    )
+
+    # Monospace block 1: Account survival runway
+    runway_block = [
+        "```ansi",
+        "\033[1;36m[帳戶生存與財務跑道評估]\033[0m",
+        f"存活天數 : {output.financial_runway_days} 天",
+        f"Theta 每日覆蓋率 : {output.theta_coverage_pct:.1f}%",
+        f"狀態評估 : {output.runway_status_msg}",
+        "```",
+    ]
+    embed.add_field(name="🏁 財務生存跑道", value="\n".join(runway_block), inline=False)
+
+    # Monospace block 2: Squeeze and gates info
+    sddm_color = "\033[1;32m" if output.sddm_route == "SPEAR" else "\033[1;31m"
+    gates_status = (
+        "全部通過 (PASS)"
+        if not output.failed_gates
+        else f"未通過 ({len(output.failed_gates)} 項門檻)"
+    )
+
+    gates_block = [
+        "```ansi",
+        "\033[1;36m[戰術決策與門檻狀態]\033[0m",
+        f"市場時段 : {output.market_phase}",
+        f"門檻狀態 : {gates_status}",
+        f"執行路徑 : {sddm_color}{route_icon}\033[0m",
+        "```",
+    ]
+    embed.add_field(name="🏹 戰術決策路由", value="\n".join(gates_block), inline=False)
+
+    if output.failed_gates:
+        failed_block = ["```ansi", "\033[1;31m[未通過之戰術硬性門檻]\033[0m"]
+        for fg in output.failed_gates:
+            failed_block.append(f"- {fg}")
+        failed_block.append("```")
+        embed.add_field(
+            name="❌ 未達標門檻詳情", value="\n".join(failed_block), inline=False
+        )
+
+    # Monospace block 3: Squeeze indicators and execution actions
+    action_block = ["```ansi", "\033[1;36m[定量執行指南]\033[0m"]
+    if output.magnet_target:
+        action_block.append(f"磁吸目標價 : ${output.magnet_target:.2f}")
+    action_block.append(f"凱利倉位配比 : {output.kelly_position_scaling * 100:.1f}%")
+    action_block.append("--------------------------------------------------")
+    for act in output.recommended_actions:
+        action_block.append(f" {act}")
+    action_block.append("```")
+    embed.add_field(name="🎯 戰術執行步驟", value="\n".join(action_block), inline=False)
+
+    # Monospace block 4: Vanna Hedging Instructions
+    hedge_block = [
+        "```ansi",
+        "\033[1;36m[Vanna-Adjusted Delta 對沖指引]\033[0m",
+        f"對沖指令 : {output.vanna_hedging_instruction}",
+        "```",
+    ]
+    embed.add_field(name="🛡️ 系統性對沖避險", value="\n".join(hedge_block), inline=False)
+
+    # Monospace block 5: Risk notes
+    notes_block = [
+        "```ansi",
+        "\033[1;33m[風控合規備註]\033[0m",
+        f"{output.risk_mitigation_notes}",
+        "```",
+    ]
+    embed.add_field(name="⚠️ 風險管控備註", value="\n".join(notes_block), inline=False)
+
+    embed.set_footer(text="Nexus Risk Optimizer | Intraday Squeeze Scan v1.0")
     return embed

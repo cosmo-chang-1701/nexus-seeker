@@ -369,6 +369,43 @@ def market_skew(ctx, symbol):
     run_async(_run())
 
 
+@market_group.command(name="watchlist_check")
+@click.pass_context
+def market_watchlist_check(ctx):
+    """輸出 watchlist 監控與 SDDM 風控報告。"""
+
+    async def _run():
+        from database.watchlist import get_user_watchlist
+        from market_analysis.intraday_pipeline import evaluate_watchlist_symbol
+        from ui.formatter import generate_ansi_watchlist_report
+
+        watchlist = get_user_watchlist(ctx.obj["user_id"])
+        symbols = sorted({symbol for symbol, _ in watchlist})
+        if not symbols:
+            rprint("[yellow]觀察清單為空。[/yellow]")
+            return
+
+        evaluations = await asyncio.gather(
+            *(evaluate_watchlist_symbol(symbol) for symbol in symbols)
+        )
+        rendered = 0
+        for evaluation in evaluations:
+            if evaluation is None:
+                continue
+            click.echo(
+                generate_ansi_watchlist_report(
+                    evaluation.metrics,
+                    evaluation.tactical,
+                )
+            )
+            rendered += 1
+
+        if rendered == 0:
+            rprint("[yellow]目前無法生成 watchlist 風控報告。[/yellow]")
+
+    run_async(_run())
+
+
 # ==========================================
 # 5. Admin Group
 # ==========================================

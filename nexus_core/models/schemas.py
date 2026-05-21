@@ -1,0 +1,94 @@
+from __future__ import annotations
+
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+class EnhancedWatchlistMetrics(BaseModel):
+    """結合技術位階、期權情緒與 NRO 欄位的 watchlist 監控模型。"""
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    symbol: str = Field(min_length=1)
+    exchange: str = Field(min_length=1)
+    current_price: float = Field(gt=0.0)
+
+    buy_zone_status: str = Field(min_length=1)
+    buy_price_phase1: float = Field(gt=0.0)
+    buy_price_phase2: float = Field(gt=0.0)
+    buy_price_phase3: float = Field(gt=0.0)
+
+    sell_zone_status: str = Field(min_length=1)
+    sell_price_phase1: float = Field(gt=0.0)
+    sell_price_phase2: float = Field(gt=0.0)
+    sell_price_phase3: float = Field(gt=0.0)
+
+    pe_ratio: float | None = Field(default=None, gt=0.0)
+    rsi_14: float = Field(ge=0.0, le=100.0)
+    atr_14: float = Field(gt=0.0)
+    beta: float = Field(ge=-5.0, le=5.0)
+    ma20: float = Field(gt=0.0)
+    ma50: float = Field(gt=0.0)
+    ma200: float = Field(gt=0.0)
+    bias_ma20: float = 0.0
+
+    iv_rank: float = Field(ge=0.0, le=100.0)
+    volume_poc: float = Field(gt=0.0)
+    gex_max_put_wall: float = Field(gt=0.0)
+    vanna_sensitivity: float
+    relative_strength_spy: float
+
+    @field_validator("symbol")
+    @classmethod
+    def _normalize_symbol(cls, value: str) -> str:
+        return value.upper()
+
+    @field_validator("exchange")
+    @classmethod
+    def _normalize_exchange(cls, value: str) -> str:
+        return value.upper()
+
+    @model_validator(mode="after")
+    def _validate_levels(self) -> "EnhancedWatchlistMetrics":
+        if not (
+            self.buy_price_phase1 >= self.buy_price_phase2 >= self.buy_price_phase3
+        ):
+            raise ValueError("buy phases must be ordered phase1 >= phase2 >= phase3")
+        if not (
+            self.sell_price_phase1 <= self.sell_price_phase2 <= self.sell_price_phase3
+        ):
+            raise ValueError("sell phases must be ordered phase1 <= phase2 <= phase3")
+
+        self.bias_ma20 = (self.current_price / self.ma20) - 1.0
+        return self
+
+    @property
+    def distance_to_absolute_support(self) -> float:
+        return (
+            self.current_price / min(self.buy_price_phase3, self.gex_max_put_wall)
+        ) - 1.0
+
+
+class WatchlistTacticalPlan(BaseModel):
+    """Watchlist tactical routing output consumed by CLI and Discord reporting."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scenario: Literal["premium-harvest", "hard-hedge", "wait"]
+    sddm_route: str = Field(min_length=1)
+    action_guideline: str = Field(min_length=1)
+    dynamic_grid_step: float = Field(ge=0.0)
+    hidden_delta_risk: float = 0.0
+    hedge_instruction: str | None = None
+    hedge_allocation_shares: int = 0
+    alert_level: Literal["green", "yellow", "red"] = "green"
+
+
+class WatchlistEvaluation(BaseModel):
+    """Structured watchlist monitoring snapshot."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    metrics: EnhancedWatchlistMetrics
+    tactical: WatchlistTacticalPlan

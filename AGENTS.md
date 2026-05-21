@@ -27,12 +27,13 @@ The system is divided into two main services:
 - **`config.py`**: Global configuration and the **VIX Battle Ladder** (Dormant/Caution/Ready/Aggressive/Heavy/All-in).
 - **`market_analysis/`**: The quant engine.
   - **`strategy.py`**: Core strategy logic with VIX ladder gating and delta capping.
-  - **`sentiment_engine.py`**: **Volatility Strategist**. Calculates Skew, PCR, Max Pain, and detects Unusual Options Activity (UOA). Implements the **PolymarketWhaleFilter**—a 4-phase high-signal pipeline (Category Gate, Semantic Ticker Validator, Capital Efficiency Gate, and Cross-Market Skew/IVR Validation).
+  - **`sentiment_engine.py`**: **Volatility Strategist**. Calculates Skew, PCR, Max Pain, and detects Unusual Options Activity (UOA). Implements the **PolymarketWhaleFilter** and computes Implied Volatility (IV) metrics (IV Rank, IV Percentile, Expected Move) with database tracking (`historical_iv`) and multi-tiered fallbacks.
   - **`risk_engine.py`**: NRO risk optimization with dynamic Kelly scaling and Vega-adjusted Delta (Vanna) calculations.
   - **`attribution.py`**: **Self-Evolving Attribution System**. Analyzes hedge efficiency (Protection Score) and provides NRO parameter feedback.
   - **`ghost_trader.py`**: Virtual Trading Room (VTR) and autonomous DITM defense.
   - **`ddp_inspector.py`**: Davis Double Play (DDP) detection (EPS Momentum + P/E expansion).
   - **`psq_engine.py`**: PowerSqueeze (PSQ) scoring with VIX-aware momentum labeling.
+  - **`intraday_pipeline.py`**: **Intraday Scan & Gamma Squeeze Engine**. Contains the `IntradayScanPipeline` background loop (runs every 30 mins) and the `NexusGammaSqueezeEngine` core decision logic (evaluating 4-Stage gates, financial runway, Vanna-adjusted Delta hedging, VIX battle ladder sizing, and post-market attribution feedback).
   - **`execution_router.py`**: **Execution Decision Matrix (SDDM)**. Routes conditions to SHIELD (Defensive Grid) or SPEAR (Aggressive Options) based on Gatekeeper logic (VIX/Skew/UOA).
 - **`database/`**: Persistent storage layer with an automated migration engine. Includes unified asset lifecycle tracking, sentiment history, and three-stage alert filtering (v034).
 - **`services/`**: Business logic layer.
@@ -51,6 +52,7 @@ The system is divided into two main services:
   - **`calendar.py`**: Event-driven risk control (Legacy `/calendar`, `/iv_rank`).
   - **`hedging.py`**: Risk settlement and attribution commands (`/settle_hedge`, `/hedge_list`).
   - **`intelligence.py`**: Market edge detection (Legacy `/poly_list`, `/scan_news`).
+  - **`embed_builder.py`**: **Centralized UI/UX Embed Generator**. Formats all Discord embeds. Optimized to package metrics and lists inside monospace ANSI code blocks (` ```ansi `), resolving CJK character visual alignment for perfect layout, and tracking real-time asset pricing ("現價").
   - **analyst_agent.py**: **Autonomous Intelligence Analyst**. Generates dynamic, risk-aware intra-day execution guides and post-market Sector Flow Mapping reports.
     *   **Macro Scan**: Features a beautified Discord Embed with DXY, TNX, US2Y, and VIX metrics, including automated risk alerting.
     *   **Post-market Risk Settlement Summary (v1.4.3+):** Optimized to align with professional risk reporting. Automatically aggregates PnL attribution (Alpha vs. Hedge), macro environment snapshots, portfolio risk metrics (Delta, Heat), and Financial Runway assessments across sample users.
@@ -104,7 +106,7 @@ Tests are located in `nexus_core/tests/`.
   - **Linter & Formatter:** `ruff` (extremely fast Python linting and formatting).
   - **Security Scan:** `semgrep` (scans for SQL injection, insecure imports, etc. during `pre-push`).
   - **Containerized Testing:** `docker-test` (executes all unit tests in a fresh Docker container before each commit).
-  - **Interactive Component Testing:** Specialized tests for Discord Views (Buttons/Selects) in `test_unified_terminal_interactive.py`.
+  - **Interactive Component & Embed Testing:** Specialized tests for Discord Views (Buttons/Selects) in `test_unified_terminal_interactive.py` and layout/formatting/padding tests in `test_embed_builder.py`.
 - **Run all tests (Docker):**
   ```bash
   cd nexus_core && docker compose run --rm nexus-seeker python -m pytest tests
@@ -124,13 +126,14 @@ Tests are located in `nexus_core/tests/`.
 
 ### 1. Database Migrations
 Never modify the database schema manually. Use the migration engine:
-- Create a new file in `nexus_core/database/migrations/` (e.g., `v035_add_entry_price_to_assets.py`).
+- Create a new file in `nexus_core/database/migrations/` (e.g., `v036_add_historical_iv.py`).
 - Export `version`, `description`, and `sql`. Use `migrate_data` for JSON transformations.
 
 ### 2. Discord Commands (Cogs)
 - All user-facing strings MUST be **Traditional Chinese (zh-tw)**.
 - Use `ephemeral=True` for private settings and portfolio commands.
 - Long-running analytics should use `bot.queue_dm()` to prevent interaction timeouts.
+- **Monospace layout alignment**: For complex tables or lists (e.g., Greeks, NRO metrics, DDP reports, Holdings/Trades), wrap data inside monospace (` ```ansi `) code blocks. Use `_visual_len` and `_pad_string` helpers in `embed_builder.py` to calculate exact visual widths of CJK (Traditional Chinese) characters and preserve alignment.
 
 ### 3. Unified Asset Lifecycle
 Assets transition through a persistent state machine in the `assets` table (v028+):
@@ -156,13 +159,14 @@ Assets transition through a persistent state machine in the `assets` table (v028
 - `nexus_core/config.py`: Global constants and **VIX Ladder**.
 - `nexus_core/services/trading_service.py`: 4-stage validation pipeline.
 - `nexus_core/services/hedge_monitor_service.py`: Automated risk defense.
-- `nexus_core/market_analysis/sentiment_engine.py`: Skew/PCR/UOA logic.
+- `nexus_core/market_analysis/sentiment_engine.py`: Skew/PCR/UOA logic, IV, IV Rank, and Expected Move.
 - `nexus_core/market_analysis/risk_engine.py`: NRO & Vanna adjustment.
 - `nexus_core/market_analysis/attribution.py`: Protection scoring & self-evolution.
+- `nexus_core/market_analysis/intraday_pipeline.py`: Asynchronous intraday scan pipeline & risk-defended execution engine.
 - `nexus_core/gather_report.py`: Capital Flow & Sector Rotation report logic.
 - `nexus_core/cogs/analyst_agent.py`: Autonomous intelligence reports & sector flow mapping.
 - `nexus_core/services/memory_manager.py`: VPS stability watchdog.
-- `nexus_core/cogs/embed_builder.py`: Centralized UI/UX generator.
+- `nexus_core/cogs/embed_builder.py`: Centralized UI/UX generator optimized for ANSI monospace table layouts and CJK visual alignment.
 
 ---
 
@@ -172,4 +176,3 @@ The project implements a high-quality **Docker Swarm CD Workflow** with the foll
 2.  **Versioned Secrets**: Uses a custom Bash logic to handle immutable Swarm Secrets by appending the Commit Short SHA (e.g., `DISCORD_TOKEN_[SHA]`).
 3.  **Zero-Downtime Updates**: Employs `--update-order start-first` to ensure the new version is healthy before stopping the old one.
 4.  **Automatic Cleanup**: Post-deployment scripts automatically remove orphaned old secrets and prune unused images.
-t-deployment scripts automatically remove orphaned old secrets and prune unused images.

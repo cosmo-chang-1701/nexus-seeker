@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List
+from typing import List, Literal
 from enum import Enum
 
 
@@ -83,3 +83,16 @@ class PortfolioSummary(BaseModel):
     @property
     def is_over_exposed(self) -> bool:
         return abs(self.exposure_pct) > 30.0
+
+
+class IVMetrics(BaseModel):
+    """Model for symbol options implied volatility metrics."""
+
+    model_config = ConfigDict()
+
+    symbol: str
+    current_iv: float  # fraction, e.g. 0.585 for 58.5%
+    iv_rank: float  # 0.0 to 100.0
+    iv_percentile: float  # 0.0 to 100.0
+    expected_move_weekly: float
+    iv_status: Literal["Low", "Normal", "High", "Extreme"]

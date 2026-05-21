@@ -3,8 +3,9 @@ import psutil
 import logging
 import gc
 import os
-import discord
 from datetime import datetime, timezone
+
+from cogs.embed_builder import create_memory_alert_embed
 
 logger = logging.getLogger(__name__)
 
@@ -140,30 +141,18 @@ class MemoryManager:
         if not DISCORD_ADMIN_USER_ID:
             return
 
-        embed = discord.Embed(
-            title="🆘 【系統緊急警報：記憶體不足】",
-            description=f"VPS 記憶體使用量已達臨界值 (`{total_usage}%`)，可能導致程序被 OOM Killer 終止。",
-            color=discord.Color.red(),
-            timestamp=discord.utils.utcnow(),
-        )
-
-        embed.add_field(name="當前總占用", value=f"`{total_usage}%`", inline=True)
-        embed.add_field(
-            name="程序占用 (RSS)", value=f"`{proc_mem:.1f} MB`", inline=True
-        )
-
         # 嘗試列出最大的快取對象
         from services import market_data_service
 
         sma_count = len(market_data_service._sma_cache)
         ema_count = len(market_data_service._ema_cache)
 
-        embed.add_field(
-            name="📦 快取消費者",
-            value=f"SMA/EMA: `{sma_count}/{ema_count}` 筆",
-            inline=False,
+        embed = create_memory_alert_embed(
+            total_usage=total_usage,
+            process_memory_mb=proc_mem,
+            sma_cache_size=sma_count,
+            ema_cache_size=ema_count,
         )
-        embed.set_footer(text="建議重啟服務或增加 Swap 分區。")
 
         await self.bot.queue_dm(DISCORD_ADMIN_USER_ID, embed=embed)
         logger.warning(f"🚨 [OOM 警報] 記憶體使用率過高: {total_usage}%")

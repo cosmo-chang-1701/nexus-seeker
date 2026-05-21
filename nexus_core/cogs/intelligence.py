@@ -2,7 +2,6 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import logging
-from datetime import datetime
 from typing import Any
 
 import database
@@ -11,6 +10,8 @@ from cogs.embed_builder import (
     create_error_embed,
     create_info_embed,
     create_polymarket_list_embed,
+    create_polymarket_status_embed,
+    create_quote_embed,
     create_news_scan_embed,
     create_reddit_scan_embed,
     create_scan_embed,
@@ -67,30 +68,7 @@ class IntelligenceCog(commands.Cog):
             return
 
         status = self.bot.polymarket_service.get_status()
-
-        embed = discord.Embed(
-            title="【 🐋 Polymarket 服務狀態 】",
-            color=discord.Color.green() if status["connected"] else discord.Color.red(),
-            timestamp=discord.utils.utcnow(),
-        )
-
-        status_emoji = "🟢 已連線" if status["connected"] else "🔴 斷線中"
-        running_emoji = "✅ 運行中" if status["running"] else "🛑 已停止"
-
-        content = [
-            "## 🖥️ 監控系統運行資訊",
-            "---",
-            f"**服務狀態：** {running_emoji}",
-            f"**連線狀態：** {status_emoji}",
-            f"**訂閱資產：** `{status['asset_count']}` 個標的",
-            f"**最後訊息：** {status['last_message']}",
-            f"**異常計數：** `{status['errors']}` 次",
-            "---",
-        ]
-
-        embed.description = "\n".join(content)
-        embed.set_footer(text="Nexus Seeker | Polymarket Monitor")
-
+        embed = create_polymarket_status_embed(status)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(
@@ -292,20 +270,7 @@ class IntelligenceCog(commands.Cog):
                 ephemeral=True,
             )
 
-        embed = discord.Embed(
-            title=f"💹 {symbol} 即時報價 (Real-time Quote)",
-            color=discord.Color.blue() if data["dp"] >= 0 else discord.Color.red(),
-            timestamp=datetime.now(),
-        )
-        embed.add_field(name="現價 (Current)", value=f"**${data['c']}**", inline=True)
-        embed.add_field(name="漲跌幅 (%)", value=f"`{data['dp']}%`", inline=True)
-        embed.add_field(
-            name="今日高/低",
-            value=f"H: `${data['h']}` / L: `${data['l']}`",
-            inline=False,
-        )
-        embed.add_field(name="前收盤 (PC)", value=f"`${data['pc']}`", inline=True)
-        embed.set_footer(text="Nexus Seeker | Market Intelligence Feed")
+        embed = create_quote_embed(symbol, data)
         await interaction.followup.send(embed=embed, ephemeral=True)
 
 
