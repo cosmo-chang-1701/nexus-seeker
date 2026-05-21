@@ -1,8 +1,16 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+WatchlistLegAction: TypeAlias = Literal["BUY", "SELL"]
+WatchlistOptionType: TypeAlias = Literal["CALL", "PUT"]
+WatchlistPremiumType: TypeAlias = Literal["debit", "credit"]
+WatchlistRiskMode: TypeAlias = Literal[
+    "normal", "macro-guard", "earnings-guard", "event-lock"
+]
 
 
 class EnhancedWatchlistMetrics(BaseModel):
@@ -92,8 +100,8 @@ class WatchlistOptionLeg(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    action: Literal["BUY", "SELL"]
-    opt_type: Literal["CALL", "PUT"]
+    action: WatchlistLegAction
+    opt_type: WatchlistOptionType
     strike: float = Field(gt=0.0)
     expiry: str = Field(min_length=1)
     mid_price: float = Field(ge=0.0)
@@ -105,7 +113,7 @@ class WatchlistOptionPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     strategy_name: str = Field(min_length=1)
-    premium_type: Literal["debit", "credit"]
+    premium_type: WatchlistPremiumType
     estimated_net_premium: float = Field(ge=0.0)
     suggested_contracts: int = Field(ge=1)
     max_risk_amount: float = Field(ge=0.0)
@@ -124,9 +132,7 @@ class WatchlistEventContext(BaseModel):
     macro_event: str | None = None
     macro_event_time: str | None = None
     macro_tte_hours: float | None = None
-    risk_mode: Literal["normal", "macro-guard", "earnings-guard", "event-lock"] = (
-        "normal"
-    )
+    risk_mode: WatchlistRiskMode = "normal"
     summary: str = Field(min_length=1)
 
 
