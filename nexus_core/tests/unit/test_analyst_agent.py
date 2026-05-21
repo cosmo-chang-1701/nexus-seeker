@@ -135,3 +135,57 @@ async def test_post_market_loop_triggers_sector_report():
         # 檢查第二個調用 (Next Day Strategy)
         second_call_args = agent.dispatch_report.call_args_list[1][0][0]
         assert second_call_args.title == "🎯 Nexus Seeker 次日策略制定"
+
+
+@pytest.mark.asyncio
+async def test_run_next_day_strategy_success():
+    bot = MagicMock()
+    with patch("discord.ext.tasks.Loop.start"):
+        agent = AnalystAgent(bot)
+
+    agent._fetch_macro_data = AsyncMock(return_value={"vix": 14.5})
+
+    with patch(
+        "cogs.analyst_agent.get_vix_term_structure", new_callable=AsyncMock
+    ) as mock_vts, patch(
+        "cogs.analyst_agent.SentimentEngine.calculate_skew", new_callable=AsyncMock
+    ) as mock_skew:
+        mock_vts.return_value = {
+            "vts_ratio": 0.85,
+            "vts_state": "Contango",
+            "vix_front": 14.5,
+            "vix_back": 17.06,
+        }
+        mock_skew.return_value = {"skew": 6.5, "state": "⚠️ 預警性對沖 (Put 昂貴)"}
+
+        report = await agent.run_next_day_strategy()
+
+        assert "14.50" in report
+        assert "0.850" in report
+        assert "Contango" in report
+        assert "17.06" in report
+        assert "6.5%" in report
+        assert "⚠️ 預警性對沖" in report
+        assert "⚠️ 市場處於休眠期 (Dormant)。強制拒絕所有 STO 訊號。" in report
+
+
+@pytest.mark.asyncio
+async def test_run_next_day_strategy_failure_fallbacks():
+    bot = MagicMock()
+    with patch("discord.ext.tasks.Loop.start"):
+        agent = AnalystAgent(bot)
+
+    agent._fetch_macro_data = AsyncMock(return_value={"vix": 20.0})
+
+    with patch(
+        "cogs.analyst_agent.get_vix_term_structure", new_callable=AsyncMock
+    ) as mock_vts, patch(
+        "cogs.analyst_agent.SentimentEngine.calculate_skew", new_callable=AsyncMock
+    ) as mock_skew:
+        mock_vts.side_effect = Exception("VTS failed")
+        mock_skew.side_effect = Exception("Skew failed")
+
+        report = await agent.run_next_day_strategy()
+
+        assert "20.00" in report
+        assert "取得失敗 (Using Default)" in report

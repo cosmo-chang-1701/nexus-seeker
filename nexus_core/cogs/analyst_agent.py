@@ -18,6 +18,7 @@ from services.market_data_service import (
     get_earnings_calendar,
     get_quote,
     get_macro_environment,
+    get_vix_term_structure,
 )
 from services.llm_service import generate_analyst_report
 from services.news_service import fetch_recent_news
@@ -857,11 +858,39 @@ class AnalystAgent(commands.Cog):
 
         vix_display = f"{vix:.2f}" if not math.isnan(vix) else "N/A (Using Default)"
 
+        # 實際動態獲取 VIX 期限結構與 SPY 偏態指數
+        try:
+            vts_data = await get_vix_term_structure()
+            vts_ratio = vts_data.get("vts_ratio", 1.0)
+            vts_state = vts_data.get("vts_state", "UNKNOWN")
+            vix_front = vts_data.get("vix_front")
+            vix_back = vts_data.get("vix_back")
+            vts_detail = (
+                f" (VIX/VIX3M: {vix_front:.2f}/{vix_back:.2f})"
+                if (vix_front is not None and vix_back is not None)
+                else ""
+            )
+            vts_display = f"{vts_ratio:.3f} ({vts_state}){vts_detail}"
+        except Exception as e:
+            logger.error(f"獲取 VIX 期限結構失敗: {e}")
+            vts_display = "取得失敗 (Using Default)"
+
+        try:
+            skew_data = await SentimentEngine.calculate_skew("SPY")
+            skew_val = skew_data.get("skew", 0.0)
+            skew_state = skew_data.get("state", "N/A")
+            skew_display = f"{skew_val}% ({skew_state})"
+        except Exception as e:
+            logger.error(f"計算 SPY Skew Index 失敗: {e}")
+            skew_display = "取得失敗 (Using Default)"
+
         report = (
             f"**{time_str} 次日策略制定**\n"
             "--------------------------------------------------\n"
-            f"**當前 VIX:** {vix_display} -> **戰鬥階級 (Tier):** {tier_display}\n"
-            "正在分析 VIX 期限結構與偏態指數 (Skew Index)...\n\n"
+            f"**市場狀態指標：**\n"
+            f"• 當前 VIX: {vix_display} ({tier_display})\n"
+            f"• VIX 期限結構 (VTS): {vts_display}\n"
+            f"• SPY 偏態指數 (Skew): {skew_display}\n\n"
             "**戰術建議：**\n"
         )
         if vix < 15:
