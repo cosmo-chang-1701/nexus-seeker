@@ -26,7 +26,9 @@ from cogs.embed_builder import (
     create_hedge_list_embed,
     create_proactive_event_alert_embed,
     create_hedge_settlement_embed,
+    create_watchlist_signal_embed,
 )
+from models.schemas import WatchlistOptionLeg, WatchlistOptionPlan
 from types import SimpleNamespace
 
 
@@ -257,6 +259,51 @@ def test_create_proactive_event_alert_embed():
     assert len(embed.fields) == 2
     assert "CPI" in embed.fields[0].name
     assert "AAPL" in embed.fields[1].name
+
+
+def test_create_watchlist_signal_embed():
+    option_plan = WatchlistOptionPlan(
+        strategy_name="Bull Put Spread",
+        premium_type="credit",
+        estimated_net_premium=0.35,
+        suggested_contracts=2,
+        max_risk_amount=330.0,
+        rationale="測試用",
+        stock_action="測試用",
+        legs=[
+            WatchlistOptionLeg(
+                action="SELL",
+                opt_type="PUT",
+                strike=120.0,
+                expiry="2026-06-19",
+                mid_price=1.1,
+            ),
+            WatchlistOptionLeg(
+                action="BUY",
+                opt_type="PUT",
+                strike=118.0,
+                expiry="2026-06-19",
+                mid_price=0.75,
+            ),
+        ],
+    )
+    embed = create_watchlist_signal_embed(
+        symbol="NVDA",
+        report_body="```ansi\nwatchlist report\n```",
+        option_guidance="可先以 Bull Put Spread 佈局。",
+        skew_state="+6.20% ｜ ⚠️ 預警性對沖 (Put 昂貴)",
+        alert_level="yellow",
+        option_plan=option_plan,
+    )
+
+    assert embed.title == "📡 Watchlist 半小時戰報：NVDA"
+    assert "警報等級" in (embed.description or "")
+    assert embed.fields[0].name == "📊 技術 / 期權快照"
+    assert "watchlist report" in embed.fields[0].value
+    assert embed.fields[1].name == "📐 Skew 與市場判讀"
+    assert "測試用" in embed.fields[1].value
+    assert "Bull Put Spread" in embed.fields[3].value
+    assert "SELL PUT 120.00" in embed.fields[3].value
 
 
 def test_create_memory_alert_embed():

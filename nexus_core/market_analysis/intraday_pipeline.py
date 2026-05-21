@@ -2,14 +2,20 @@ import logging
 import asyncio
 import math
 from datetime import datetime
-from typing import List, Optional, Tuple, Dict, Any
+from typing import List, Optional, Tuple, Dict, Any, Mapping
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 from pydantic import BaseModel, Field, ConfigDict
 
 from market_time import ny_tz, is_market_open
-from models.schemas import EnhancedWatchlistMetrics, WatchlistEvaluation
+from models.schemas import (
+    EnhancedWatchlistMetrics,
+    WatchlistEvaluation,
+    WatchlistOptionLeg,
+    WatchlistOptionPlan,
+    WatchlistTacticalPlan,
+)
 from risk_engine.nro import WatchlistRiskController
 from services.market_data_service import BoundedCache
 
@@ -261,6 +267,7 @@ async def build_enhanced_watchlist_metrics(
     financials_task = market_data_service.get_basic_financials(symbol)
     profile_task = market_data_service.get_company_profile(symbol)
     iv_task = SentimentEngine.fetch_and_calculate_iv_metrics(symbol)
+    skew_task = SentimentEngine.calculate_skew(symbol)
     dividend_yield_task = market_data_service.get_dividend_yield(symbol)
 
     (
@@ -270,6 +277,7 @@ async def build_enhanced_watchlist_metrics(
         financials,
         profile,
         iv_metrics,
+        skew_metrics,
         dividend_yield,
     ) = await asyncio.gather(
         quote_task,
@@ -278,6 +286,7 @@ async def build_enhanced_watchlist_metrics(
         financials_task,
         profile_task,
         iv_task,
+        skew_task,
         dividend_yield_task,
     )
 
@@ -343,6 +352,8 @@ async def build_enhanced_watchlist_metrics(
         ma50=ma50,
         ma200=ma200,
         iv_rank=iv_metrics.iv_rank,
+        option_skew=float(skew_metrics.get("skew", 0.0)),
+        option_skew_state=str(skew_metrics.get("state") or "N/A"),
         volume_poc=volume_poc,
         gex_max_put_wall=max(gex_max_put_wall, 0.01),
         vanna_sensitivity=vanna_sensitivity,
@@ -358,6 +369,261 @@ async def evaluate_watchlist_symbol(symbol: str) -> Optional[WatchlistEvaluation
         return None
     tactical = WatchlistRiskController.process_metrics(metrics)
     return WatchlistEvaluation(metrics=metrics, tactical=tactical)
+
+
+def derive_watchlist_option_guidance(
+    metrics: EnhancedWatchlistMetrics,
+    tactical: Mapping[str, Any] | WatchlistTacticalPlan,
+) -> str:
+    tactical_model = (
+        tactical
+        if isinstance(tactical, WatchlistTacticalPlan)
+        else WatchlistTacticalPlan.model_validate(tactical)
+    )
+
+    if tactical_model.scenario == "hard-hedge":
+        return (
+            f"Skew {metrics.option_skew:+.2f}% 顯示尾端風險仍高，現階段不宜新開多單；"
+            "若要保留方向曝險，優先保護性 Put 或 Bear Put Spread。"
+        )
+
+    if tactical_model.scenario == "premium-harvest":
+        if metrics.option_skew >= 5.0:
+            return (
+                f"IV Rank {metrics.iv_rank:.1f}% 配合左偏 Skew {metrics.option_skew:+.2f}%，"
+                "建議優先 Cash-Secured Put 或 Bull Put Spread 收租，避免直接承接現股。"
+            )
+        return (
+            f"IV Rank {metrics.iv_rank:.1f}% 偏高，買方成本較貴；"
+            "可先用 Cash-Secured Put 分批卡位，想降風險可改 Bull Put Spread。"
+        )
+
+    if (
+        metrics.current_price >= metrics.sell_price_phase1
+        and metrics.option_skew <= -2.0
+    ):
+        return (
+            f"價格進入賣壓區且 Skew {metrics.option_skew:+.2f}% 偏右，"
+            "若已有部位可分批止盈，或用 Covered Call / Call Credit Spread 鎖利。"
+        )
+
+    if metrics.current_price <= metrics.buy_price_phase1 and metrics.iv_rank < 65.0:
+        return (
+            f"價格接近買區、IV Rank {metrics.iv_rank:.1f}% 尚未過熱，"
+            "可小倉分批買入現股，或以 Bull Call Spread / 單買 Call 參與反彈。"
+        )
+
+    return (
+        f"Skew {metrics.option_skew:+.2f}% 目前未形成極端訊號；"
+        "先觀察價格是否靠近 Buy P1 / Sell P1，再決定現股或期權切入。"
+    )
+
+
+def _mid_price_from_row(row: pd.Series) -> float:
+    bid = float(row.get("bid", 0.0) or 0.0)
+    ask = float(row.get("ask", 0.0) or 0.0)
+    if bid > 0.0 and ask > 0.0:
+        return round((bid + ask) / 2.0, 4)
+    return round(float(row.get("lastPrice", 0.0) or 0.0), 4)
+
+
+async def _pick_watchlist_cover_leg(
+    symbol: str,
+    expiry: str,
+    opt_type: str,
+    anchor_strike: float,
+    direction: str,
+    current_price: float,
+    atr_14: float,
+) -> Optional[dict[str, float | str]]:
+    from services import market_data_service
+
+    chain = await market_data_service.get_option_chain(symbol, expiry)
+    if chain is None:
+        return None
+
+    contracts = chain.calls if opt_type == "call" else chain.puts
+    if contracts.empty:
+        return None
+
+    width = max(round(max(atr_14, current_price * 0.03), 2), 1.0)
+    target_strike = (
+        anchor_strike + width if direction == "higher" else anchor_strike - width
+    )
+
+    if direction == "higher":
+        candidates = contracts[contracts["strike"] > anchor_strike].copy()
+    else:
+        candidates = contracts[contracts["strike"] < anchor_strike].copy()
+    if candidates.empty:
+        return None
+
+    idx = (candidates["strike"] - target_strike).abs().idxmin()
+    leg = candidates.loc[idx]
+    return {
+        "strike": float(leg["strike"]),
+        "expiry": expiry,
+        "mid": _mid_price_from_row(leg),
+    }
+
+
+def _estimate_watchlist_contract_count(
+    *,
+    premium_type: str,
+    estimated_net_premium: float,
+    width: float,
+    short_strike: float,
+    capital: float,
+    risk_limit: float,
+) -> tuple[int, float]:
+    base_budget = max(capital * min(max(risk_limit, 1.0), 15.0) / 100.0 * 0.1, 500.0)
+
+    if premium_type == "debit":
+        risk_per_contract = max(estimated_net_premium * 100.0, 1.0)
+    elif width > 0.0:
+        risk_per_contract = max((width - estimated_net_premium) * 100.0, 1.0)
+    else:
+        risk_per_contract = max((short_strike - estimated_net_premium) * 100.0, 1.0)
+
+    suggested = max(1, min(int(base_budget // risk_per_contract) or 1, 3))
+    return suggested, round(risk_per_contract * suggested, 2)
+
+
+async def build_watchlist_option_plan(
+    metrics: EnhancedWatchlistMetrics,
+    tactical: Mapping[str, Any] | WatchlistTacticalPlan,
+    *,
+    capital: float,
+    risk_limit: float,
+) -> Optional[WatchlistOptionPlan]:
+    from market_analysis.strategy import find_best_contract
+
+    tactical_model = (
+        tactical
+        if isinstance(tactical, WatchlistTacticalPlan)
+        else WatchlistTacticalPlan.model_validate(tactical)
+    )
+    stock_action = derive_watchlist_option_guidance(metrics, tactical_model)
+
+    strategy_name: str | None = None
+    premium_type: str | None = None
+    primary_leg: dict[str, float | str] | None = None
+    hedge_leg: dict[str, float | str] | None = None
+    primary_action = "BUY"
+    opt_type = "put"
+    cover_direction = "lower"
+    width = 0.0
+
+    if tactical_model.scenario == "hard-hedge":
+        strategy_name = "Bear Put Spread"
+        premium_type = "debit"
+        opt_type = "put"
+        primary_leg = await find_best_contract(metrics.symbol, "BTO_PUT", -0.35, 21, 60)
+        primary_action = "BUY"
+        cover_direction = "lower"
+    elif tactical_model.scenario == "premium-harvest":
+        opt_type = "put"
+        primary_leg = await find_best_contract(metrics.symbol, "STO_PUT", -0.20, 30, 45)
+        primary_action = "SELL"
+        if metrics.option_skew >= 5.0:
+            strategy_name = "Bull Put Spread"
+            premium_type = "credit"
+            cover_direction = "lower"
+        else:
+            strategy_name = "Cash-Secured Put"
+            premium_type = "credit"
+    elif (
+        metrics.current_price >= metrics.sell_price_phase1
+        and metrics.option_skew <= -2.0
+    ):
+        strategy_name = "Call Credit Spread"
+        premium_type = "credit"
+        opt_type = "call"
+        primary_leg = await find_best_contract(metrics.symbol, "STO_CALL", 0.20, 21, 45)
+        primary_action = "SELL"
+        cover_direction = "higher"
+    elif metrics.current_price <= metrics.buy_price_phase1 and metrics.iv_rank < 65.0:
+        strategy_name = "Bull Call Spread"
+        premium_type = "debit"
+        opt_type = "call"
+        primary_leg = await find_best_contract(metrics.symbol, "BTO_CALL", 0.45, 30, 60)
+        primary_action = "BUY"
+        cover_direction = "higher"
+    else:
+        return None
+
+    if primary_leg is None or strategy_name is None or premium_type is None:
+        return None
+
+    if "Spread" in strategy_name:
+        hedge_leg = await _pick_watchlist_cover_leg(
+            metrics.symbol,
+            str(primary_leg["expiry"]),
+            opt_type,
+            float(primary_leg["strike"]),
+            cover_direction,
+            metrics.current_price,
+            metrics.atr_14,
+        )
+        if hedge_leg is None:
+            return None
+        width = abs(float(primary_leg["strike"]) - float(hedge_leg["strike"]))
+
+    legs = [
+        WatchlistOptionLeg(
+            action=primary_action,
+            opt_type=opt_type.upper(),
+            strike=float(primary_leg["strike"]),
+            expiry=str(primary_leg["expiry"]),
+            mid_price=float(primary_leg["mid"]),
+        )
+    ]
+
+    estimated_net_premium = float(primary_leg["mid"])
+    if hedge_leg is not None:
+        hedge_action = "SELL" if premium_type == "debit" else "BUY"
+        estimated_net_premium = (
+            max(float(primary_leg["mid"]) - float(hedge_leg["mid"]), 0.01)
+            if premium_type == "debit"
+            else max(float(primary_leg["mid"]) - float(hedge_leg["mid"]), 0.01)
+        )
+        legs.append(
+            WatchlistOptionLeg(
+                action=hedge_action,
+                opt_type=opt_type.upper(),
+                strike=float(hedge_leg["strike"]),
+                expiry=str(hedge_leg["expiry"]),
+                mid_price=float(hedge_leg["mid"]),
+            )
+        )
+
+    suggested_contracts, max_risk_amount = _estimate_watchlist_contract_count(
+        premium_type=premium_type,
+        estimated_net_premium=estimated_net_premium,
+        width=width,
+        short_strike=float(primary_leg["strike"])
+        if primary_action == "SELL"
+        else float(hedge_leg["strike"])
+        if hedge_leg is not None and premium_type == "credit"
+        else float(primary_leg["strike"]),
+        capital=capital,
+        risk_limit=risk_limit,
+    )
+
+    rationale = (
+        f"依據 {strategy_name} 路由，結合 IV Rank {metrics.iv_rank:.1f}%、"
+        f"Skew {metrics.option_skew:+.2f}% 與當前技術位階自動選約。"
+    )
+    return WatchlistOptionPlan(
+        strategy_name=strategy_name,
+        premium_type=premium_type,
+        estimated_net_premium=round(estimated_net_premium, 4),
+        suggested_contracts=suggested_contracts,
+        max_risk_amount=max_risk_amount,
+        rationale=rationale,
+        stock_action=stock_action,
+        legs=legs,
+    )
 
 
 class TraderAccountState(BaseModel):

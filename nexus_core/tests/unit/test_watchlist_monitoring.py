@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, patch
 from market_analysis.intraday_pipeline import (
     _WATCHLIST_METRICS_CACHE,
     build_enhanced_watchlist_metrics,
+    build_watchlist_option_plan,
+    derive_watchlist_option_guidance,
     evaluate_watchlist_symbol,
 )
 from models.quant import IVMetrics
@@ -36,6 +38,8 @@ def _sample_metrics(**overrides):
         "ma200": 110.0,
         "bias_ma20": 999.0,
         "iv_rank": 72.0,
+        "option_skew": 6.4,
+        "option_skew_state": "⚠️ 預警性對沖 (Put 昂貴)",
         "volume_poc": 126.5,
         "gex_max_put_wall": 120.0,
         "vanna_sensitivity": 0.35,
@@ -99,9 +103,62 @@ def test_generate_ansi_watchlist_report_contains_sections():
     tactical = WatchlistRiskController.process_metrics(metrics)
     report = generate_ansi_watchlist_report(metrics, tactical)
     assert report.startswith("```ansi")
+    assert "Skew" in report
     assert "技術 / 防禦牆" in report
     assert "SDDM / 對沖" in report
     assert "NVDA | NASDAQ" in report
+
+
+def test_derive_watchlist_option_guidance_mentions_skew_and_strategy():
+    metrics = _sample_metrics(current_price=129.0, iv_rank=78.0, option_skew=7.2)
+    tactical = WatchlistRiskController.process_metrics(metrics)
+
+    guidance = derive_watchlist_option_guidance(metrics, tactical)
+
+    assert "Skew" in guidance
+    assert "Cash-Secured Put" in guidance
+
+
+@pytest.mark.asyncio
+async def test_build_watchlist_option_plan_builds_credit_spread():
+    metrics = _sample_metrics(current_price=129.0, iv_rank=78.0, option_skew=7.2)
+    tactical = WatchlistRiskController.process_metrics(metrics)
+    chain = type(
+        "Chain",
+        (),
+        {
+            "calls": pd.DataFrame(),
+            "puts": pd.DataFrame(
+                [
+                    {"strike": 120.0, "bid": 1.0, "ask": 1.2, "lastPrice": 1.1},
+                    {"strike": 118.0, "bid": 0.7, "ask": 0.9, "lastPrice": 0.8},
+                ]
+            ),
+        },
+    )()
+
+    with patch(
+        "market_analysis.strategy.find_best_contract",
+        new_callable=AsyncMock,
+        return_value={"strike": 120.0, "expiry": "2026-06-19", "mid": 1.1},
+    ), patch(
+        "services.market_data_service.get_option_chain",
+        new_callable=AsyncMock,
+        return_value=chain,
+    ):
+        plan = await build_watchlist_option_plan(
+            metrics,
+            tactical,
+            capital=100000.0,
+            risk_limit=15.0,
+        )
+
+    assert plan is not None
+    assert plan.strategy_name == "Bull Put Spread"
+    assert plan.suggested_contracts >= 1
+    assert len(plan.legs) == 2
+    assert plan.legs[0].action == "SELL"
+    assert plan.legs[1].action == "BUY"
 
 
 @pytest.mark.asyncio
@@ -164,6 +221,10 @@ async def test_build_enhanced_watchlist_metrics_assembles_quant_fields():
             iv_status="High",
         ),
     ), patch(
+        "market_analysis.sentiment_engine.SentimentEngine.calculate_skew",
+        new_callable=AsyncMock,
+        return_value={"symbol": "MSFT", "skew": 4.8, "state": "正常"},
+    ), patch(
         "market_analysis.intraday_pipeline._estimate_options_wall_metrics",
         new_callable=AsyncMock,
         return_value=(165.0, 0.44),
@@ -179,6 +240,8 @@ async def test_build_enhanced_watchlist_metrics_assembles_quant_fields():
     assert metrics.current_price == 172.5
     assert metrics.pe_ratio == 31.2
     assert metrics.iv_rank == 68.0
+    assert metrics.option_skew == 4.8
+    assert metrics.option_skew_state == "正常"
     assert metrics.gex_max_put_wall == 165.0
     assert metrics.vanna_sensitivity == 0.44
     assert metrics.beta == 1.23

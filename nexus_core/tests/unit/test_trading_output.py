@@ -172,3 +172,54 @@ async def test_monitor_vtr_task_uses_settlement_helper_for_non_ditm():
     assert kwargs["symbol"] == "QQQ"
     assert kwargs["regime"] == "Balanced"
     bot.queue_dm.assert_awaited_once_with(1, embed=embed)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_watchlist_heartbeat_sends_all_watchlist_symbols():
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+
+    with patch("discord.ext.tasks.Loop.start"):
+        cog = SchedulerCog(bot)
+
+    eval_aapl = MagicMock()
+    eval_aapl.metrics.symbol = "AAPL"
+    eval_aapl.metrics.option_skew = 3.2
+    eval_aapl.metrics.option_skew_state = "正常"
+    eval_aapl.tactical.alert_level = "green"
+
+    eval_nvda = MagicMock()
+    eval_nvda.metrics.symbol = "NVDA"
+    eval_nvda.metrics.option_skew = 6.8
+    eval_nvda.metrics.option_skew_state = "⚠️ 預警性對沖 (Put 昂貴)"
+    eval_nvda.tactical.alert_level = "yellow"
+
+    with patch(
+        "market_analysis.intraday_pipeline.evaluate_watchlist_symbol",
+        new_callable=AsyncMock,
+        side_effect=[eval_aapl, eval_nvda],
+    ), patch(
+        "database.get_full_user_context",
+        side_effect=[
+            SimpleNamespace(capital=100000.0, risk_limit=15.0),
+        ],
+    ), patch(
+        "ui.formatter.generate_ansi_watchlist_report",
+        side_effect=["AAPL report", "NVDA report"],
+    ), patch(
+        "market_analysis.intraday_pipeline.derive_watchlist_option_guidance",
+        side_effect=["AAPL guidance", "NVDA guidance"],
+    ), patch(
+        "market_analysis.intraday_pipeline.build_watchlist_option_plan",
+        new_callable=AsyncMock,
+        side_effect=[object(), object()],
+    ), patch(
+        "cogs.trading.create_watchlist_signal_embed",
+        side_effect=[object(), object()],
+    ) as mock_builder:
+        await cog._dispatch_watchlist_heartbeat(
+            [(1, "AAPL", 1), (1, "NVDA", 1), (1, "AAPL", 1)]
+        )
+
+    assert mock_builder.call_count == 2
+    assert bot.queue_dm.await_count == 2

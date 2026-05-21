@@ -34,6 +34,8 @@ class EnhancedWatchlistMetrics(BaseModel):
     bias_ma20: float = 0.0
 
     iv_rank: float = Field(ge=0.0, le=100.0)
+    option_skew: float
+    option_skew_state: str = Field(min_length=1)
     volume_poc: float = Field(gt=0.0)
     gex_max_put_wall: float = Field(gt=0.0)
     vanna_sensitivity: float
@@ -83,6 +85,33 @@ class WatchlistTacticalPlan(BaseModel):
     hedge_instruction: str | None = None
     hedge_allocation_shares: int = 0
     alert_level: Literal["green", "yellow", "red"] = "green"
+
+
+class WatchlistOptionLeg(BaseModel):
+    """Single options leg selected for the watchlist heartbeat."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["BUY", "SELL"]
+    opt_type: Literal["CALL", "PUT"]
+    strike: float = Field(gt=0.0)
+    expiry: str = Field(min_length=1)
+    mid_price: float = Field(ge=0.0)
+
+
+class WatchlistOptionPlan(BaseModel):
+    """Executable options plan attached to a watchlist heartbeat."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    strategy_name: str = Field(min_length=1)
+    premium_type: Literal["debit", "credit"]
+    estimated_net_premium: float = Field(ge=0.0)
+    suggested_contracts: int = Field(ge=1)
+    max_risk_amount: float = Field(ge=0.0)
+    rationale: str = Field(min_length=1)
+    stock_action: str = Field(min_length=1)
+    legs: list[WatchlistOptionLeg] = Field(min_length=1)
 
 
 class WatchlistEvaluation(BaseModel):

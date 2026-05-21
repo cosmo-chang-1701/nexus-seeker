@@ -99,6 +99,13 @@ def generate_ansi_watchlist_report(
         C_RED if abs(tactical_model.hidden_delta_risk) >= 25 else C_YELLOW
     )
     rs_color = C_GREEN if metrics.relative_strength_spy >= 0 else C_RED
+    skew_color = (
+        C_RED
+        if metrics.option_skew >= 5
+        else C_GREEN
+        if metrics.option_skew <= -2
+        else C_YELLOW
+    )
 
     lines = [
         "```ansi",
@@ -115,20 +122,27 @@ def generate_ansi_watchlist_report(
         _format_pair(
             "PE",
             f"{metrics.pe_ratio:.2f}" if metrics.pe_ratio is not None else "N/A",
-            "RSI 14",
-            f"{metrics.rsi_14:.2f}",
+            "Skew",
+            f"{metrics.option_skew:+.2f}%",
+            right_color=skew_color,
         ),
         _format_pair(
             "ATR 14",
             f"{metrics.atr_14:.2f}",
-            "Beta",
-            f"{metrics.beta:.2f}",
+            "RSI 14",
+            f"{metrics.rsi_14:.2f}",
         ),
         _format_pair(
             "MA20/50",
             f"{metrics.ma20:.2f} / {metrics.ma50:.2f}",
+            "Beta",
+            f"{metrics.beta:.2f}",
+        ),
+        _format_pair(
             "MA200",
             f"{metrics.ma200:.2f}",
+            "Skew 狀態",
+            metrics.option_skew_state,
         ),
         _format_pair(
             "MA20 偏離",
