@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, patch, MagicMock
 import pandas as pd
 import sys
 import os
+import discord
 
 # Ensure we can import from nexus_core
 sys.path.append(os.path.join(os.getcwd(), "nexus_core"))
@@ -70,7 +71,8 @@ async def test_run_sector_flow_report():
         report = await agent.run_sector_flow_report()
 
         # Verify
-        assert report == "Generated Report Content"
+        assert report.title == "📊 Nexus Seeker 收盤資金流向與板塊輪動報告"
+        assert report.fields[0].name == "🌐 收盤市場快照"
         mock_gen_report.assert_called_once()
 
         # Check that it called get_history_df for all sectors
@@ -99,7 +101,9 @@ async def test_post_market_loop_triggers_sector_report():
 
     # Mock methods called in post_market_loop
     agent.run_postmarket_summary = AsyncMock(return_value="Summary")
-    agent.run_sector_flow_report = AsyncMock(return_value="Sector Report")
+    agent.run_sector_flow_report = AsyncMock(
+        return_value=discord.Embed(title="📊 Nexus Seeker 收盤資金流向與板塊輪動報告")
+    )
     agent.run_next_day_strategy = AsyncMock(return_value="Next Day")
     agent.dispatch_report = AsyncMock()
 
@@ -135,6 +139,31 @@ async def test_post_market_loop_triggers_sector_report():
         # 檢查第二個調用 (Next Day Strategy)
         second_call_args = agent.dispatch_report.call_args_list[1][0][0]
         assert second_call_args.title == "🎯 Nexus Seeker 次日策略制定"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_report_sends_each_block_as_separate_message():
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+    with patch("discord.ext.tasks.Loop.start"):
+        agent = AnalystAgent(bot)
+
+    embed = discord.Embed(title="📊 測試報告", description="摘要")
+    embed.add_field(name="區塊一", value="內容一", inline=False)
+    embed.add_field(name="區塊二", value="內容二", inline=False)
+
+    with patch("database.get_all_user_ids", return_value=[1]), patch(
+        "database.get_full_user_context",
+        return_value=MagicMock(enable_analyst_agent=True),
+    ):
+        await agent.dispatch_report(embed)
+
+    assert bot.queue_dm.await_count == 2
+    first_embed = bot.queue_dm.await_args_list[0].kwargs["embed"]
+    second_embed = bot.queue_dm.await_args_list[1].kwargs["embed"]
+    assert first_embed.fields[0].name == "區塊一"
+    assert second_embed.fields[0].name == "區塊二"
+    assert second_embed.description is None
 
 
 @pytest.mark.asyncio
