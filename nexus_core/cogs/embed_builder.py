@@ -3448,24 +3448,35 @@ def create_proactive_event_alert_embed(events: List[Any]) -> discord.Embed:
     """建立重大事件主動預警 Embed。"""
     embed = discord.Embed(
         title="🛡️ 【 預警：重大事件即時防護 】",
-        description="偵測到您的持倉標的即將迎來重大波動事件，請留意風險對沖。",
+        description=(
+            "偵測到您的持倉標的即將迎來重大波動事件；以下 NRO 指令已依事件類型、"
+            "剩餘時間與目前持倉風險狀態調整。"
+        ),
         color=discord.Color.dark_red(),
         timestamp=datetime.now(timezone.utc),
     )
 
     for event in events:
-        if event.type == "ECONOMIC":
-            name = f"🔴 經濟數據: {event.event}"
-            value = (
-                f"距離發布: `{event.tte_hours}` 小時 \n"
-                "**NRO 指令**: 增加 Vanna 權重，縮減賣方曝險。"
-            )
+        if isinstance(event, dict):
+            name = str(event.get("name", "⚠️ 重大事件"))
+            tte_hours = float(event.get("tte_hours", 0.0) or 0.0)
+            risk_status = str(event.get("risk_status", "持倉風險狀態暫不可用"))
+            instruction = str(event.get("instruction", "請先降低曝險並觀察事件落地。"))
         else:
-            name = f"📊 財報預警: {event.symbol}"
-            value = (
-                f"距離發布: `{event.tte_hours}` 小時 \n"
-                "**NRO 指令**: 已啟動 IV Crush 防護機制。"
-            )
+            if event.type == "ECONOMIC":
+                name = f"🔴 經濟數據: {event.event}"
+                instruction = "增加 Vanna 權重，縮減賣方曝險。"
+            else:
+                name = f"📊 財報預警: {event.symbol}"
+                instruction = "已啟動 IV Crush 防護機制。"
+            tte_hours = float(getattr(event, "tte_hours", 0.0) or 0.0)
+            risk_status = "持倉風險狀態未提供，請搭配組合 Greeks 自行覆核。"
+
+        value = (
+            f"距離發布: `{tte_hours:.1f}` 小時\n"
+            f"**持倉風險狀態**: {risk_status}\n"
+            f"**NRO 指令**: {instruction}"
+        )
 
         embed.add_field(name=name, value=value, inline=False)
 

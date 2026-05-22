@@ -33,7 +33,6 @@ from cogs.embed_builder import (
     create_watchlist_signal_embed,
 )
 from models.schemas import WatchlistOptionLeg, WatchlistOptionPlan
-from types import SimpleNamespace
 
 
 def test_create_holdings_embed():
@@ -359,14 +358,26 @@ def test_create_hedge_alert_embed():
 
 def test_create_proactive_event_alert_embed():
     events = [
-        SimpleNamespace(type="ECONOMIC", event="CPI", tte_hours=12),
-        SimpleNamespace(type="EARNINGS", symbol="AAPL", tte_hours=18),
+        {
+            "name": "🔴 經濟數據: CPI",
+            "tte_hours": 12.0,
+            "risk_status": "Heat `9.2% / 15.0%` ｜ 賣方偏重 ｜ 短 Gamma ｜ Vanna 敏感中",
+            "instruction": "維持 Calendar Guard：提高 Vanna 權重、縮小方向押注，優先保留可快速調整的部位。",
+        },
+        {
+            "name": "📊 財報預警: AAPL",
+            "tte_hours": 18.0,
+            "risk_status": "Heat `9.2% / 15.0%` ｜ 賣方偏重 ｜ 短 Gamma ｜ Vanna 敏感中",
+            "instruction": "財報窗口已開啟；控制口數、避免堆疊裸賣方，若要保留方向觀點優先使用定義風險結構。",
+        },
     ]
     embed = create_proactive_event_alert_embed(events)
     assert embed.title == "🛡️ 【 預警：重大事件即時防護 】"
     assert len(embed.fields) == 2
     assert "CPI" in embed.fields[0].name
     assert "AAPL" in embed.fields[1].name
+    assert "持倉風險狀態" in embed.fields[0].value
+    assert "NRO 指令" in embed.fields[1].value
 
 
 def test_create_watchlist_signal_embed():
