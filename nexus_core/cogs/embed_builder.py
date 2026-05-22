@@ -218,6 +218,42 @@ def _safe_embed_field_value(text: str, fallback: str, max_len: int = 1024) -> st
     return value
 
 
+def _chunk_ansi_table(
+    header: str, divider: str, data_lines: List[str], max_len: int = 1024
+) -> List[str]:
+    """
+    將 data_lines 切分成多個符合 Discord Embed field value 長度限制 (max_len) 的字串區塊。
+    每個區塊都以 ```ansi 包裹並包含相同的 header 與 divider。
+    """
+    prefix = f"```ansi\n{header}\n{divider}\n"
+    suffix = "\n```"
+
+    # 預留長度給字尾
+    limit = max_len - len(suffix)
+
+    chunks: List[str] = []
+    current_lines: List[str] = []
+
+    for line in data_lines:
+        test_val = prefix + "\n".join(current_lines + [line])
+        if len(test_val) <= limit:
+            current_lines.append(line)
+        else:
+            if current_lines:
+                chunks.append(prefix + "\n".join(current_lines) + suffix)
+                current_lines = [line]
+            else:
+                # 單行超長，強行截斷 (正常不應發生)
+                truncated = line[: limit - len(prefix)]
+                chunks.append(prefix + truncated + suffix)
+                current_lines = []
+
+    if current_lines:
+        chunks.append(prefix + "\n".join(current_lines) + suffix)
+
+    return chunks
+
+
 def _safe_float(value: Any, default: float = 0.0) -> float:
     try:
         return float(value)
@@ -1817,10 +1853,9 @@ def create_holdings_embed(
     total_value = 0.0
     total_pnl = 0.0
 
-    lines = ["```ansi"]
+    data_lines = []
     header = f"{_pad_string('標的', 8)} | {_pad_string('數量', 8, 'right')} | {_pad_string('平均成本', 10, 'right')} | {_pad_string('現價', 10, 'right')} | {_pad_string('當前損益', 10, 'right')}"
-    lines.append(header)
-    lines.append("-" * 58)
+    divider = "-" * 58
 
     for h in holdings_data:
         curr_p = h.get("current_price", 0.0)
@@ -1845,10 +1880,14 @@ def create_holdings_embed(
             pnl_pct_str, f"{color_start}{pnl_pct_str}\u001b[0m"
         )
 
-        lines.append(f"{sym} | {qty} | {cost} | {curr_p_fmt} | {pnl_fmt}")
+        data_lines.append(f"{sym} | {qty} | {cost} | {curr_p_fmt} | {pnl_fmt}")
 
-    lines.append("```")
-    embed.add_field(name="📦 持倉明細", value="\n".join(lines), inline=False)
+    chunks = _chunk_ansi_table(header, divider, data_lines)
+    for i, chunk in enumerate(chunks):
+        name = (
+            f"📦 持倉明細 ({i+1}/{len(chunks)})" if len(chunks) > 1 else "📦 持倉明細"
+        )
+        embed.add_field(name=name, value=chunk, inline=False)
 
     summary = (
         f"💰 **持倉總市值**: `${total_value:,.2f}`\n"
@@ -1878,11 +1917,10 @@ def create_trades_embed(
         embed.description = "📭 目前無持倉紀錄。"
         return embed
 
-    lines = ["```ansi"]
+    data_lines = []
     # 標頭 (調整 Python len 以匹配可見寬度)
     header = f"{'ID'.ljust(2)} | {'標的'.ljust(4)} | {'到期日'.ljust(7)} | {'履約'.ljust(5)} | {'數'.rjust(1)} | {'成本'.rjust(4)} | {'現價'.rjust(4)} | {'帳面損益'.rjust(10)}"
-    lines.append(header)
-    lines.append("-" * 75)
+    divider = "-" * 75
 
     total_cost = 0.0
     for t in trades:
@@ -1915,12 +1953,16 @@ def create_trades_embed(
         pnl_val = f"${unrealized_pnl:+.0f} ({pnl_pct:+.1%})"
         pnl_fmt = f"{pnl_color}{pnl_val:>14}\x1b[0m"
 
-        lines.append(
+        data_lines.append(
             f"{id_fmt} | {sym_fmt} | {exp_fmt} | {st_type_fmt} | {qty_fmt} | {cost_fmt} | {curr_fmt} | {pnl_fmt}"
         )
 
-    lines.append("```")
-    embed.add_field(name="📦 持倉明細", value="\n".join(lines), inline=False)
+    chunks = _chunk_ansi_table(header, divider, data_lines)
+    for i, chunk in enumerate(chunks):
+        name = (
+            f"📦 持倉明細 ({i+1}/{len(chunks)})" if len(chunks) > 1 else "📦 持倉明細"
+        )
+        embed.add_field(name=name, value=chunk, inline=False)
 
     total_unrealized_pnl = pnl_data.get("total_unrealized_pnl", 0.0)
 
@@ -2406,8 +2448,29 @@ def create_portfolio_report_embed(
         )
 
     # 🚀 欄位一：個別持倉細節
-    positions_text = _safe_embed_field_value(positions_text, "目前無持倉部位。")
-    embed.add_field(name="📦 當前持倉明細", value=positions_text, inline=False)
+    if (
+        positions_list
+        and "positions_text" in locals()
+        and positions_text != "目前無持倉部位。"
+    ):
+        raw_lines = positions_text.split("\n")
+        if len(raw_lines) >= 4 and raw_lines[0] == "```ansi" and raw_lines[-1] == "```":
+            header = raw_lines[1]
+            divider = raw_lines[2]
+            data_lines = raw_lines[3:-1]
+            chunks = _chunk_ansi_table(header, divider, data_lines)
+            for i, chunk in enumerate(chunks):
+                name = (
+                    f"📦 當前持倉明細 ({i+1}/{len(chunks)})"
+                    if len(chunks) > 1
+                    else "📦 當前持倉明細"
+                )
+                embed.add_field(name=name, value=chunk, inline=False)
+        else:
+            positions_text = _safe_embed_field_value(positions_text, "目前無持倉部位。")
+            embed.add_field(name="📦 當前持倉明細", value=positions_text, inline=False)
+    else:
+        embed.add_field(name="📦 當前持倉明細", value="目前無持倉部位。", inline=False)
 
     # 🚀 欄位二：全帳戶宏觀風險與對沖指令 (核心！)
     macro_text = _safe_embed_field_value(macro_text, "無宏觀風險數據。")
