@@ -228,6 +228,17 @@ async def test_dispatch_watchlist_heartbeat_sends_all_watchlist_symbols():
         new_callable=AsyncMock,
         side_effect=[object(), object()],
     ), patch(
+        "services.llm_service.generate_watchlist_skew_commentary",
+        new_callable=AsyncMock,
+        side_effect=["AAPL skew", "NVDA skew"],
+    ), patch(
+        "services.llm_service.generate_watchlist_roundup_commentary",
+        new_callable=AsyncMock,
+        return_value="本輪先留意 NVDA 的事件風險與偏左 skew，AAPL 仍以例行追蹤為主。",
+    ), patch(
+        "cogs.trading.create_watchlist_overview_embed",
+        return_value=object(),
+    ) as mock_overview_builder, patch(
         "cogs.trading.create_watchlist_signal_embed",
         side_effect=[object(), object()],
     ) as mock_builder:
@@ -236,4 +247,7 @@ async def test_dispatch_watchlist_heartbeat_sends_all_watchlist_symbols():
         )
 
     assert mock_builder.call_count == 2
-    assert bot.queue_dm.await_count == 2
+    mock_overview_builder.assert_called_once()
+    assert bot.queue_dm.await_count == 3
+    assert mock_builder.call_args_list[0].kwargs["skew_commentary"] == "AAPL skew"
+    assert mock_builder.call_args_list[1].kwargs["skew_commentary"] == "NVDA skew"

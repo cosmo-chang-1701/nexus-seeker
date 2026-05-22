@@ -28,6 +28,7 @@ from cogs.embed_builder import (
     create_pre_market_earnings_embed,
     create_ditm_transition_alert_embed,
     create_vtr_settlement_notice_embed,
+    create_watchlist_overview_embed,
     create_watchlist_signal_embed,
 )
 from market_analysis.ghost_trader import GhostTrader
@@ -572,11 +573,16 @@ class SchedulerCog(commands.Cog):
     ) -> None:
         """每個 30 分鐘節點推送 watchlist 全標的技術 / 期權 / skew 戰報。"""
         from market_analysis.intraday_pipeline import (
+            build_watchlist_skew_commentary_payload,
             build_watchlist_option_plan,
             derive_watchlist_option_guidance,
             evaluate_watchlist_symbol,
         )
         from services.calendar_service import calendar_service
+        from services.llm_service import (
+            generate_watchlist_roundup_commentary,
+            generate_watchlist_skew_commentary,
+        )
         from ui.formatter import generate_ansi_watchlist_report
 
         if all_watchlists is None:
@@ -604,6 +610,20 @@ class SchedulerCog(commands.Cog):
             for evaluation in evaluations
             if evaluation is not None
         }
+        skew_commentary_map: Dict[str, str] = {}
+        if evaluation_map:
+            skew_commentaries = await asyncio.gather(
+                *(
+                    generate_watchlist_skew_commentary(
+                        symbol,
+                        build_watchlist_skew_commentary_payload(evaluation),
+                    )
+                    for symbol, evaluation in evaluation_map.items()
+                )
+            )
+            skew_commentary_map = dict(
+                zip(evaluation_map.keys(), skew_commentaries, strict=False)
+            )
 
         user_symbols: Dict[int, list[str]] = {}
         for uid, sym, _ in all_watchlists:
@@ -613,6 +633,46 @@ class SchedulerCog(commands.Cog):
 
         for uid, symbols in user_symbols.items():
             user_context = database.get_full_user_context(uid)
+            summary_items: list[dict[str, str]] = []
+            for sym in symbols:
+                evaluation = evaluation_map.get(sym)
+                if evaluation is None:
+                    continue
+                summary_items.append(
+                    {
+                        "symbol": sym,
+                        "alert_level": str(evaluation.tactical.alert_level),
+                        "skew_state": (
+                            f"{evaluation.metrics.option_skew:+.2f}% ｜ "
+                            f"{evaluation.metrics.option_skew_state}"
+                        ),
+                        "scenario": str(evaluation.tactical.scenario),
+                        "event_risk_summary": str(evaluation.event_context.summary),
+                    }
+                )
+
+            if summary_items:
+                roundup_commentary = await generate_watchlist_roundup_commentary(
+                    {
+                        "symbols_total": len(summary_items),
+                        "symbols": [
+                            {
+                                **item,
+                                "skew_commentary": skew_commentary_map.get(
+                                    item["symbol"],
+                                    "",
+                                ),
+                            }
+                            for item in summary_items
+                        ],
+                    }
+                )
+                overview_embed = create_watchlist_overview_embed(
+                    summary_items,
+                    llm_overview=roundup_commentary,
+                )
+                await self.bot.queue_dm(uid, embed=overview_embed)
+
             for sym in symbols:
                 evaluation = evaluation_map.get(sym)
                 if evaluation is None:
@@ -643,6 +703,7 @@ class SchedulerCog(commands.Cog):
                     ),
                     alert_level=evaluation.tactical.alert_level,
                     option_plan=option_plan,
+                    skew_commentary=skew_commentary_map.get(sym),
                 )
                 await self.bot.queue_dm(uid, embed=embed)
 
