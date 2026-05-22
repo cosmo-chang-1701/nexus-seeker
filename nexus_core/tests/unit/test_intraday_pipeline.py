@@ -1,6 +1,9 @@
 import pytest
+from datetime import date
+from unittest.mock import MagicMock
 
 from market_analysis.intraday_pipeline import (
+    IntradayScanPipeline,
     TraderAccountState,
     OptionHolding,
     TickerMarketData,
@@ -12,6 +15,11 @@ from market_analysis.intraday_pipeline import (
 @pytest.fixture
 def squeeze_engine():
     return NexusGammaSqueezeEngine(base_gate_3_threshold=1000000.0)
+
+
+@pytest.fixture
+def intraday_pipeline(squeeze_engine):
+    return IntradayScanPipeline(MagicMock(), squeeze_engine)
 
 
 @pytest.fixture
@@ -216,3 +224,28 @@ def test_post_market_attribution_evolution(squeeze_engine):
     assert res2["old_threshold"] == 900000.0
     assert res2["new_threshold"] == 1035000.0
     assert "調升明日 Gate 3" in res2["evolution_msg"]
+
+
+def test_intraday_scan_report_only_sends_once_in_phase_b(intraday_pipeline):
+    trading_date = date(2026, 5, 22)
+
+    assert intraday_pipeline._should_send_intraday_scan_report(
+        42, "MU", "Phase B", trading_date
+    )
+
+    intraday_pipeline._mark_intraday_scan_report_sent(42, "MU", trading_date)
+
+    assert not intraday_pipeline._should_send_intraday_scan_report(
+        42, "MU", "Phase B", trading_date
+    )
+
+
+def test_intraday_scan_report_skips_non_mid_session(intraday_pipeline):
+    trading_date = date(2026, 5, 22)
+
+    assert not intraday_pipeline._should_send_intraday_scan_report(
+        42, "MU", "Phase A", trading_date
+    )
+    assert not intraday_pipeline._should_send_intraday_scan_report(
+        42, "MU", "Phase C", trading_date
+    )
