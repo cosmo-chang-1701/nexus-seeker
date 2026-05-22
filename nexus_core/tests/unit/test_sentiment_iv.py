@@ -345,3 +345,25 @@ async def test_iv_rank_and_percentile_math():
     cursor.execute("DELETE FROM historical_iv WHERE symbol = ?", (symbol,))
     conn.commit()
     conn.close()
+
+
+@pytest.mark.asyncio
+async def test_fetch_and_calculate_iv_metrics_value_error_warning():
+    """Test that a ValueError raised during calculation is handled as warning and returns default metrics."""
+    symbol = "TEST_VALUE_ERROR"
+    with patch(
+        "services.market_data_service.get_quote", new_callable=AsyncMock
+    ) as m_quote, patch(
+        "services.market_data_service.get_history_df", new_callable=AsyncMock
+    ) as m_hist:
+        m_quote.return_value = {"c": 0.0}
+        m_hist.return_value = pd.DataFrame()
+
+        metrics = await SentimentEngine.fetch_and_calculate_iv_metrics(symbol)
+        assert isinstance(metrics, IVMetrics)
+        assert metrics.symbol == symbol
+        assert metrics.current_iv == 0.0
+        assert metrics.iv_rank == 0.0
+        assert metrics.iv_percentile == 0.0
+        assert metrics.expected_move_weekly == 0.0
+        assert metrics.iv_status == "Normal"

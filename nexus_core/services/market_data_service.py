@@ -34,8 +34,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # 設定每分鐘 55 次請求，保留 5 次緩衝以防網路重試導致的溢出
 _limiter = AsyncLimiter(55, 60)
-
-# Singleton client instance
+_rate_limit_until = 0.0
 _client: Optional[finnhub.Client] = None
 
 
@@ -57,12 +56,20 @@ async def _execute_api_call(func, *args, **kwargs) -> Any:
     """
     執行 Finnhub API 呼叫的異步封裝。
     使用 aiolimiter 進行流量管制，並透過 asyncio.to_thread 避免阻塞事件循環。
-    加入 Exponential Backoff 以自動處理 429 頻率限制。
+    加入 Cooperative Backoff 與 Exponential Backoff 以自動處理 429 頻率限制。
     """
+    global _rate_limit_until
     max_retries = 3
     base_delay = 10.0
 
     for attempt in range(max_retries + 1):
+        # 1. 檢查並等待全局冷卻時間
+        now = time.time()
+        if now < _rate_limit_until:
+            wait_time = _rate_limit_until - now
+            logger.info(f"⏳ 檢測到全局頻率限制中，主動等待 {wait_time:.1f} 秒...")
+            await asyncio.sleep(wait_time)
+
         async with _limiter:
             try:
                 # Finnhub SDK 為同步阻塞 I/O，必須在獨立線程中執行
@@ -79,6 +86,11 @@ async def _execute_api_call(func, *args, **kwargs) -> Any:
                     if attempt < max_retries:
                         # 指數退避，加入 jitter 避免同時重試
                         delay = base_delay * (2**attempt) + random.uniform(1, 3)
+
+                        if is_rate_limit:
+                            # 設置全局限制截止時間，防止併發的其他任務觸發 429
+                            _rate_limit_until = time.time() + delay
+
                         reason = "429 頻率限制" if is_rate_limit else "連線錯誤/超時"
                         logger.warning(
                             f"🚨 觸發 Finnhub {reason}。將於 {delay:.1f} 秒後重試 (次數: {attempt + 1}/{max_retries})..."
@@ -485,10 +497,9 @@ async def get_economic_calendar(from_date: str, to_date: str) -> List[Dict[str, 
     """獲取經濟行事曆資料。"""
     try:
         client = _get_client()
-        async with _limiter:
-            data = await asyncio.to_thread(
-                client.calendar_economic, _from=from_date, to=to_date
-            )
+        data = await _execute_api_call(
+            client.calendar_economic, _from=from_date, to=to_date
+        )
         return data.get("economicCalendar", []) if data else []
     except Exception as e:
         logger.error(f"Finnhub economic calendar 失敗: {e}")

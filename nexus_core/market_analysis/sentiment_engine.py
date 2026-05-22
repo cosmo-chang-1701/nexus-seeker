@@ -511,6 +511,16 @@ class SentimentEngine:
             _iv_cache[symbol] = (metrics, current_time + _IV_CACHE_TTL)
             return metrics
 
+        except ValueError as ve:
+            logger.warning(f"[{symbol}] IV 指標計算退級: {ve}")
+            return IVMetrics(
+                symbol=symbol,
+                current_iv=0.0,
+                iv_rank=0.0,
+                iv_percentile=0.0,
+                expected_move_weekly=0.0,
+                iv_status="Normal",
+            )
         except Exception as e:
             logger.error(f"[{symbol}] IV 指標計算失敗: {e}")
             # 回傳預設降級指標
