@@ -1,6 +1,7 @@
 import pytest
 from datetime import date
-from unittest.mock import MagicMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from market_analysis.intraday_pipeline import (
     IntradayScanPipeline,
@@ -248,4 +249,54 @@ def test_intraday_scan_report_skips_non_mid_session(intraday_pipeline):
     )
     assert not intraday_pipeline._should_send_intraday_scan_report(
         42, "MU", "Phase C", trading_date
+    )
+
+
+@pytest.mark.asyncio
+async def test_build_watchlist_heartbeat_embed_includes_option_plan(intraday_pipeline):
+    evaluation = SimpleNamespace(
+        metrics=SimpleNamespace(
+            symbol="MU",
+            option_skew=6.25,
+            option_skew_state="左偏保護",
+        ),
+        tactical=SimpleNamespace(alert_level="yellow"),
+        event_context=SimpleNamespace(summary="財報前風控"),
+    )
+    user_context = SimpleNamespace(capital=120000.0, risk_limit=12.0)
+
+    with patch(
+        "ui.formatter.generate_ansi_watchlist_report",
+        return_value="heartbeat snapshot",
+    ), patch(
+        "market_analysis.intraday_pipeline.derive_watchlist_option_guidance",
+        return_value="option guidance",
+    ), patch(
+        "market_analysis.intraday_pipeline.build_watchlist_option_plan",
+        new_callable=AsyncMock,
+        return_value="option-plan",
+    ) as mock_build_plan, patch(
+        "cogs.embed_builder.create_watchlist_signal_embed",
+        return_value="watchlist-embed",
+    ) as mock_create_embed:
+        embed = await intraday_pipeline._build_watchlist_heartbeat_embed(
+            evaluation, user_context
+        )
+
+    assert embed == "watchlist-embed"
+    mock_build_plan.assert_awaited_once_with(
+        evaluation.metrics,
+        evaluation.tactical,
+        capital=120000.0,
+        risk_limit=12.0,
+        event_context=evaluation.event_context,
+    )
+    mock_create_embed.assert_called_once_with(
+        symbol="MU",
+        report_body="heartbeat snapshot",
+        option_guidance="option guidance",
+        event_risk_summary="財報前風控",
+        skew_state="+6.25% ｜ 左偏保護",
+        alert_level="yellow",
+        option_plan="option-plan",
     )

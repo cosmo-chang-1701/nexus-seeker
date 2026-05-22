@@ -1265,6 +1265,51 @@ class IntradayScanPipeline:
         self._prune_intraday_scan_cache(trading_date)
         self._intraday_scan_sent.add((user_id, ticker, trading_date))
 
+    async def _build_watchlist_heartbeat_embed(
+        self, evaluation: WatchlistEvaluation, user_context: Any
+    ) -> Any:
+        from cogs.embed_builder import create_watchlist_signal_embed
+        from ui.formatter import generate_ansi_watchlist_report
+
+        report_body = generate_ansi_watchlist_report(
+            evaluation.metrics,
+            evaluation.tactical,
+        )
+        option_guidance = derive_watchlist_option_guidance(
+            evaluation.metrics,
+            evaluation.tactical,
+            event_context=evaluation.event_context,
+        )
+        option_plan = await build_watchlist_option_plan(
+            evaluation.metrics,
+            evaluation.tactical,
+            capital=float(
+                getattr(
+                    user_context,
+                    "capital",
+                    getattr(user_context, "total_capital", 100000.0),
+                )
+            ),
+            risk_limit=float(getattr(user_context, "risk_limit", 15.0)),
+            event_context=evaluation.event_context,
+        )
+        return create_watchlist_signal_embed(
+            symbol=evaluation.metrics.symbol,
+            report_body=report_body,
+            option_guidance=option_guidance,
+            event_risk_summary=(
+                evaluation.event_context.summary
+                if evaluation.event_context is not None
+                else "未偵測到近期重大事件"
+            ),
+            skew_state=(
+                f"{evaluation.metrics.option_skew:+.2f}% ｜ "
+                f"{evaluation.metrics.option_skew_state}"
+            ),
+            alert_level=evaluation.tactical.alert_level,
+            option_plan=option_plan,
+        )
+
     async def _run_loop(self):
         while self.is_running:
             try:
@@ -1353,14 +1398,12 @@ class IntradayScanPipeline:
                             watchlist_eval is not None
                             and watchlist_eval.tactical.alert_level != "green"
                         ):
-                            from ui.formatter import generate_ansi_watchlist_report
-
+                            embed = await self._build_watchlist_heartbeat_embed(
+                                watchlist_eval, ctx
+                            )
                             await self.bot.queue_dm(
                                 uid,
-                                message=generate_ansi_watchlist_report(
-                                    watchlist_eval.metrics,
-                                    watchlist_eval.tactical,
-                                ),
+                                embed=embed,
                             )
                         market_data = await self._fetch_ticker_market_data(ticker)
                         if not market_data:
