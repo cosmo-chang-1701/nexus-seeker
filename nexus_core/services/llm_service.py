@@ -78,6 +78,13 @@ class UOAIntentMapping(BaseModel):
     explanation: str = Field(description="簡短解釋分類理由 (繁體中文)")
 
 
+class SkewCommentary(BaseModel):
+    model_config = ConfigDict()
+    commentary: str = Field(
+        description="針對單一標的 skew / IV / 事件風險的簡短解說，必須使用繁體中文並控制在 120 字內"
+    )
+
+
 async def classify_uoa_intent(
     symbol: str, uoa_data: dict, whale_intent: str = None
 ) -> dict:
@@ -240,6 +247,49 @@ async def generate_analyst_report(report_type: str, raw_data: dict) -> str:
     except Exception as e:
         logger.error(f"Failed to generate analyst report: {e}")
         return f"**{report_type}**\n--------------------------------------------------\n⚠️ LLM 生成失敗或伺服器離線: {str(e)}"
+
+
+async def generate_watchlist_skew_commentary(symbol: str, raw_data: dict) -> str:
+    """
+    針對 watchlist 心跳中的 skew 狀態生成簡短解說。
+    """
+    if not is_memory_safe():
+        logger.warning("🚨 [記憶體警報] 系統資源不足，跳過 Watchlist Skew LLM 解說。")
+        return "系統記憶體負載偏高，暫停 LLM skew 解說；請先依 IV Rank、Skew 狀態與事件風控欄位手動判讀。"
+
+    system_prompt = """
+    你是 Nexus Seeker 的期權偏斜結構分析助手。
+    請根據提供的單一標的 watchlist 原始數據，解讀目前 skew / IV / 事件風險代表的市場部位偏向與交易含義。
+
+    規則：
+    1. 只能使用提供的資料，不得虛構數值。
+    2. 使用繁體中文，語氣冷靜專業。
+    3. 請聚焦於 skew 代表的保護需求、方向偏好、IV 成本與事件風險。
+    4. 控制在 120 字內，適合直接放進 Discord embed 欄位。
+    """
+
+    user_prompt = (
+        f"標的: {symbol}\n"
+        f"Watchlist 資料: {json.dumps(raw_data, ensure_ascii=False)}\n"
+        "請輸出一段簡短的 skew 解說。"
+    )
+
+    try:
+        response = await client.beta.chat.completions.parse(
+            model=LLM_MODEL_NAME,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            response_format=SkewCommentary,
+        )
+        result = response.choices[0].message.parsed
+        if result is None:
+            raise ValueError("Parsed result is None")
+        return result.commentary
+    except Exception as e:
+        logger.error(f"[{symbol}] Watchlist skew LLM 解說失敗: {e}")
+        return f"LLM skew 解說暫時不可用：{str(e)}"
 
 
 async def generate_polymarket_summary(

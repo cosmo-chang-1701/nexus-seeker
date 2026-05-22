@@ -257,10 +257,18 @@ async def test_build_watchlist_heartbeat_embed_includes_option_plan(intraday_pip
     evaluation = SimpleNamespace(
         metrics=SimpleNamespace(
             symbol="MU",
+            current_price=410.5,
+            iv_rank=68.0,
             option_skew=6.25,
             option_skew_state="左偏保護",
+            buy_zone_status="🟡 測試買區",
+            sell_zone_status="⚪ 測試賣區",
         ),
-        tactical=SimpleNamespace(alert_level="yellow"),
+        tactical=SimpleNamespace(
+            alert_level="yellow",
+            scenario="premium-harvest",
+            sddm_route="SHIELD",
+        ),
         event_context=SimpleNamespace(summary="財報前風控"),
     )
     user_context = SimpleNamespace(capital=120000.0, risk_limit=12.0)
@@ -276,6 +284,10 @@ async def test_build_watchlist_heartbeat_embed_includes_option_plan(intraday_pip
         new_callable=AsyncMock,
         return_value="option-plan",
     ) as mock_build_plan, patch(
+        "services.llm_service.generate_watchlist_skew_commentary",
+        new_callable=AsyncMock,
+        return_value="llm-skew-commentary",
+    ) as mock_skew_commentary, patch(
         "cogs.embed_builder.create_watchlist_signal_embed",
         return_value="watchlist-embed",
     ) as mock_create_embed:
@@ -291,6 +303,7 @@ async def test_build_watchlist_heartbeat_embed_includes_option_plan(intraday_pip
         risk_limit=12.0,
         event_context=evaluation.event_context,
     )
+    mock_skew_commentary.assert_awaited_once()
     mock_create_embed.assert_called_once_with(
         symbol="MU",
         report_body="heartbeat snapshot",
@@ -299,4 +312,5 @@ async def test_build_watchlist_heartbeat_embed_includes_option_plan(intraday_pip
         skew_state="+6.25% ｜ 左偏保護",
         alert_level="yellow",
         option_plan="option-plan",
+        skew_commentary="llm-skew-commentary",
     )

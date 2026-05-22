@@ -2141,6 +2141,7 @@ def create_watchlist_signal_embed(
     skew_state: str,
     alert_level: str,
     option_plan: WatchlistOptionPlan | None = None,
+    skew_commentary: str | None = None,
 ) -> discord.Embed:
     """建立 watchlist 半小時心跳推播 Embed。"""
     color = {
@@ -2174,6 +2175,14 @@ def create_watchlist_signal_embed(
     embed.add_field(
         name="📐 Skew 與市場判讀",
         value=_safe_embed_field_value("\n".join(skew_lines), "N/A"),
+        inline=False,
+    )
+    embed.add_field(
+        name="🤖 LLM Skew 解說",
+        value=_safe_embed_field_value(
+            skew_commentary or "",
+            "暫無 LLM skew 解說，請先依上方 Skew / IV / 事件風控欄位判讀。",
+        ),
         inline=False,
     )
     embed.add_field(

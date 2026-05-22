@@ -1269,6 +1269,7 @@ class IntradayScanPipeline:
         self, evaluation: WatchlistEvaluation, user_context: Any
     ) -> Any:
         from cogs.embed_builder import create_watchlist_signal_embed
+        from services.llm_service import generate_watchlist_skew_commentary
         from ui.formatter import generate_ansi_watchlist_report
 
         report_body = generate_ansi_watchlist_report(
@@ -1280,18 +1281,42 @@ class IntradayScanPipeline:
             evaluation.tactical,
             event_context=evaluation.event_context,
         )
-        option_plan = await build_watchlist_option_plan(
-            evaluation.metrics,
-            evaluation.tactical,
-            capital=float(
-                getattr(
-                    user_context,
-                    "capital",
-                    getattr(user_context, "total_capital", 100000.0),
-                )
+        user_capital = float(
+            getattr(
+                user_context,
+                "capital",
+                getattr(user_context, "total_capital", 100000.0),
+            )
+        )
+        user_risk_limit = float(getattr(user_context, "risk_limit", 15.0))
+        option_plan, skew_commentary = await asyncio.gather(
+            build_watchlist_option_plan(
+                evaluation.metrics,
+                evaluation.tactical,
+                capital=user_capital,
+                risk_limit=user_risk_limit,
+                event_context=evaluation.event_context,
             ),
-            risk_limit=float(getattr(user_context, "risk_limit", 15.0)),
-            event_context=evaluation.event_context,
+            generate_watchlist_skew_commentary(
+                evaluation.metrics.symbol,
+                {
+                    "symbol": evaluation.metrics.symbol,
+                    "current_price": evaluation.metrics.current_price,
+                    "iv_rank": evaluation.metrics.iv_rank,
+                    "option_skew": evaluation.metrics.option_skew,
+                    "option_skew_state": evaluation.metrics.option_skew_state,
+                    "alert_level": evaluation.tactical.alert_level,
+                    "scenario": evaluation.tactical.scenario,
+                    "sddm_route": evaluation.tactical.sddm_route,
+                    "buy_zone_status": evaluation.metrics.buy_zone_status,
+                    "sell_zone_status": evaluation.metrics.sell_zone_status,
+                    "event_risk_summary": (
+                        evaluation.event_context.summary
+                        if evaluation.event_context is not None
+                        else "未偵測到近期重大事件"
+                    ),
+                },
+            ),
         )
         return create_watchlist_signal_embed(
             symbol=evaluation.metrics.symbol,
@@ -1308,6 +1333,7 @@ class IntradayScanPipeline:
             ),
             alert_level=evaluation.tactical.alert_level,
             option_plan=option_plan,
+            skew_commentary=skew_commentary,
         )
 
     async def _run_loop(self):

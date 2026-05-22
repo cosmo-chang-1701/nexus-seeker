@@ -402,6 +402,7 @@ def test_create_watchlist_signal_embed():
         skew_state="+6.20% ｜ ⚠️ 預警性對沖 (Put 昂貴)",
         alert_level="yellow",
         option_plan=option_plan,
+        skew_commentary="Skew 左偏代表保護性買盤偏多，若事件風險逼近應優先使用定義風險結構。",
     )
 
     assert embed.title == "📡 Watchlist 半小時戰報：NVDA"
@@ -410,10 +411,12 @@ def test_create_watchlist_signal_embed():
     assert "watchlist report" in embed.fields[0].value
     assert embed.fields[1].name == "📐 Skew 與市場判讀"
     assert "測試用" in embed.fields[1].value
-    assert embed.fields[2].name == "🗓️ 事件風控"
-    assert "CPI" in embed.fields[2].value
-    assert "Bull Put Spread" in embed.fields[4].value
-    assert "SELL PUT 120.00" in embed.fields[4].value
+    assert embed.fields[2].name == "🤖 LLM Skew 解說"
+    assert "Skew 左偏" in embed.fields[2].value
+    assert embed.fields[3].name == "🗓️ 事件風控"
+    assert "CPI" in embed.fields[3].value
+    assert "Bull Put Spread" in embed.fields[5].value
+    assert "SELL PUT 120.00" in embed.fields[5].value
 
 
 def test_create_memory_alert_embed():
