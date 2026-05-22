@@ -1,185 +1,312 @@
 # 🌌 Nexus Seeker - AGENTS.md
 
 ## Project Overview
-Nexus Seeker is a multi-tenant **Options Quant Risk-Control & Trading Operations Platform** driven by Discord. It combines technical analysis, Black-Scholes-Merton pricing models, LLM-based NLP risk sentiment analysis, and a custom **Nexus Risk Optimizer (NRO)** for advanced portfolio exposure management. The system utilizes a **6-tier VIX Battle Ladder** for dynamic risk scaling and is optimized for stable operation on memory-constrained (1GB RAM) VPS environments.
 
-### Key Technologies
+Nexus Seeker is a multi-tenant **Discord-first options risk-control and trading operations platform**. It combines technical structure, Black-Scholes-Merton pricing, Greeks-based portfolio risk, event-aware calendar defenses, and LLM-assisted structured commentary.
+
+Current released core version: **`1.6.14`**
+
+The codebase is optimized for:
+
+- **low-RAM VPS deployment**
+- **persistent Discord DM delivery**
+- **field-based, centralized embed output**
+- **SQLite-first caching for recurring event data**
+
+---
+
+## Current Runtime Architecture
+
+### Services
+
+1. **`nexus_core`**
+   - Main Discord bot
+   - Owns all slash commands, background schedulers, embeds, portfolio/risk logic, watchlist heartbeat, and DM queueing
+
+2. **`nexus_edge_scraper`**
+   - Optional FastAPI + Playwright edge service
+   - Used for Reddit scraping without exposing the bot runtime directly
+
+### Important Runtime Distinction
+
+- **Watchlist 半小時心跳** is currently emitted by `cogs/trading.py` via `SchedulerCog.dynamic_market_scanner()`
+- **Analyst Agent** is a separate report family in `cogs/analyst_agent.py`
+- `market_analysis/intraday_pipeline.py` currently serves as the **shared watchlist evaluation / option-plan / engine helper module**, and also contains the reusable `IntradayScanPipeline` class and gamma squeeze engine logic
+
+Do **not** assume that enabling Analyst Agent is required for the watchlist heartbeat; in current code, those are separate paths.
+
+---
+
+## Key Technologies
+
 - **Language:** Python 3.12
-- **Frameworks:** `discord.py` (Discord Bot), `FastAPI` (Edge Scraper API)
-- **Data Validation:** `Pydantic v2` (Structured Models & Validation)
-- **Static Analysis:** `Mypy` (Type Checking)
-- **Market Data:** `finnhub-python`, `yfinance`, `pandas-ta`, `py_vollib` (Greeks/Pricing)
-- **Quant Math:** `numpy`, `pandas`, `scipy`
-- **AI/LLM:** OpenAI-compatible API with `pydantic` structured outputs and memory safety gates
-- **Database:** SQLite (v037+) with an automated migration engine, JSON metadata support, and event calendar caches
-- **Infrastructure:** Docker, Docker Compose, Cloudflare Tunnel, psutil (System Health & Disk Monitoring)
-- **Security & Quality:** `pre-commit`, `ruff` (Linter/Formatter), `semgrep` (SAST), `Dockerfile.test`
+- **Discord framework:** `discord.py`
+- **Edge API:** `FastAPI`
+- **Validation:** `Pydantic v2`
+- **Type checking:** `mypy`
+- **Market data:** `finnhub-python`, `yfinance`, `pandas-ta`, `py_vollib`
+- **Quant stack:** `numpy`, `pandas`, `scipy`
+- **AI / LLM:** OpenAI-compatible API with structured `pydantic` outputs
+- **Persistence:** SQLite + migration engine + event caches
+- **Infra:** Docker / Docker Compose / optional Cloudflare Tunnel
+- **Quality:** `ruff`, `pre-commit`, `semgrep`, containerized `pytest`
 
 ---
 
-## Architecture
-The system is divided into two main services:
-1.  **`nexus_core`**: The central Discord Bot. Handles user commands, portfolio management, risk engine calculations, and autonomous market monitoring.
-    *   **Robustness Refactoring (v1.4.4+):** Implementation of the `models/quant.py` shared schema. Refactored `RiskEngine`, `CalendarService`, and `TradingService` to use strongly-typed models, eliminating runtime type conflicts.
-2.  **`nexus_edge_scraper`**: A specialized service (intended to run locally or via tunnel) that uses Playwright to scrape Reddit sentiment and consensus scores without triggering bot detection.
+## Active Background Jobs
 
-### Core Modules (`nexus_core`)
-- **`config.py`**: Global configuration and the **VIX Battle Ladder** (Dormant/Caution/Ready/Aggressive/Heavy/All-in).
-- **`market_analysis/`**: The quant engine.
-  - **`strategy.py`**: Core strategy logic with VIX ladder gating and delta capping.
-  - **`sentiment_engine.py`**: **Volatility Strategist**. Calculates Skew, PCR, Max Pain, and detects Unusual Options Activity (UOA). Implements the **PolymarketWhaleFilter** and computes Implied Volatility (IV) metrics (IV Rank, IV Percentile, Expected Move) with database tracking (`historical_iv`) and multi-tiered fallbacks.
-  - **`risk_engine.py`**: NRO risk optimization with dynamic Kelly scaling and Vega-adjusted Delta (Vanna) calculations.
-  - **`attribution.py`**: **Self-Evolving Attribution System**. Analyzes hedge efficiency (Protection Score) and provides NRO parameter feedback.
-  - **`ghost_trader.py`**: Virtual Trading Room (VTR) and autonomous DITM defense.
-  - **`ddp_inspector.py`**: Davis Double Play (DDP) detection (EPS Momentum + P/E expansion).
-  - **`psq_engine.py`**: PowerSqueeze (PSQ) scoring with VIX-aware momentum labeling.
-  - **`intraday_pipeline.py`**: **Intraday Scan & Gamma Squeeze Engine**. Contains the `IntradayScanPipeline` background loop (runs every 30 mins) and the `NexusGammaSqueezeEngine` core decision logic (evaluating 4-Stage gates, financial runway, Vanna-adjusted Delta hedging, VIX battle ladder sizing, and post-market attribution feedback).
-    *   Also owns the watchlist heartbeat models and recommendation flow used by the 30-minute watchlist push, including skew-aware stock/option guidance, executable option contract selection (strategy, legs, strike, expiry, mid price, suggested size, max risk), and event-aware throttling from cached earnings / macro calendars.
-  - **`execution_router.py`**: **Execution Decision Matrix (SDDM)**. Routes conditions to SHIELD (Defensive Grid) or SPEAR (Aggressive Options) based on Gatekeeper logic (VIX/Skew/UOA).
-- **`database/`**: Persistent storage layer with an automated migration engine. Includes unified asset lifecycle tracking, sentiment history, three-stage alert filtering (v034), and SQLite-backed event calendar caches for macro months plus rolling per-symbol earnings refresh.
-- **`services/`**: Business logic layer.
-  - **`trading_service.py`**: 4-stage validation pipeline. Now integrated with the **ExecutionRouter** to automate tactical decision-making during scans.
-  - **`execution_router.py`**: Core logic for the SDDM, calculating ATR-based grids and Kelly-optimized position sizing.
-  - **`hedge_monitor_service.py`**: Automated Hedging & Alert Pipeline. Monitors VIX spikes and pushes actionable SPY hedge instructions.
-  - **`memory_manager.py`**: **VPS Health Watchdog** optimized for 1GB RAM. Handles periodic GC, emergency OOM alerts, and implements the **Pre-Market Cache Warmup Engine** (08:30-09:30 ET) to prevent cold-start latency.
+### In `cogs/trading.py`
 
-  - **`polymarket_service.py`**: Prediction market whale monitoring with real-time snapshot mechanisms for attribution.
-  - **`calendar_service.py`**: **Calendar-Aware Guard**. Uses SQLite-backed event caching first: month-level macro-event cache, rolling earnings cache, and batch lookup helpers shared by watchlist heartbeat, calendar views, pre-market scans, and event monitors.
-  - **`llm_service.py`**: Structured AI analysis with memory safety gates.
-- **`cogs/`**: Discord extensions.
-  - **`unified_terminal.py`**: **Core Hub**. Consolidates 20+ commands into three primary hubs: `/x` (Actionable Symbol Intelligence), `/dash` (Strategic Portfolio Dashboard), and `/market` (Pulse). Includes interactive buttons and decision-centric views.
-  - **`terminal.py`**: High-impact legacy commands and `/settings` management.
-  - **`sentiment.py`**: Sentiment analytics terminal (Legacy `/skew_scan`, `/max_pain`).
-  - **`calendar.py`**: Event-driven risk control (Legacy `/calendar`, `/iv_rank`).
-  - **`hedging.py`**: Risk settlement and attribution commands (`/settle_hedge`, `/hedge_list`).
-  - **`intelligence.py`**: Market edge detection (Legacy `/poly_list`, `/scan_news`).
-  - **`embed_builder.py`**: **Centralized UI/UX Embed Generator**. Formats all Discord embeds. Optimized to package metrics and lists inside monospace ANSI code blocks (` ```ansi `), resolving CJK character visual alignment for perfect layout, and tracking real-time asset pricing ("現價").
-    *   The `create_watchlist_signal_embed()` heartbeat now follows the same field-oriented alert layout as other production embeds, while still embedding the ANSI watchlist snapshot in a dedicated field.
-  - **analyst_agent.py**: **Autonomous Intelligence Analyst**. Generates dynamic, risk-aware intra-day execution guides and post-market Sector Flow Mapping reports.
-    *   **Macro Scan**: Features a beautified Discord Embed with DXY, TNX, US2Y, and VIX metrics, including automated risk alerting.
-    *   **Post-market Risk Settlement Summary (v1.4.3+):** Optimized to align with professional risk reporting. Automatically aggregates PnL attribution (Alpha vs. Hedge), macro environment snapshots, portfolio risk metrics (Delta, Heat), and Financial Runway assessments across sample users.
-    *   **Decision-Making Flow (Intra-day Heartbeat):**
-        *   **Phase A (Open-11:00 ET):** Focuses on liquidity, open volatility, and pre-market gaps.
-        *   **Phase B (11:00-14:00 ET):** Focuses on sector rotation, Reddit sentiment, and Polymarket whale intent.
-        *   **Phase C (14:00-Close ET):** Focuses on portfolio hedging, specifically monitoring **Vanna-Adjusted Delta** for tail-risk exposure.
-    *   The Analyst Agent intra-day execution guide is lower frequency than the watchlist heartbeat: it pushes every 120 minutes during market hours, while the watchlist heartbeat pushes every 30 minutes.
-    *   **Memory Safety Gate:** Automatically defers non-critical LLM analyses if VPS RAM exceeds 85%, prioritizing core risk operations.
-- **`cli.py`**: **Professional CLI Terminal**. A standalone entry point built with `click` and `rich` mirroring all Bot functionality.
-    *   **Group `sys`**: Account settings, system health, and market status.
-    *   **Group `watch`**: Full watchlist CRUD operations.
-    *   **Group `pf`**: Portfolio PnL reporting, trade management, and Financial Runway analysis.
-    *   **Group `mkt`**: Real-time quotes, DDP quant scans, and Skew sentiment analysis.
-    *   **Group `admin`**: Force manual scans and system overrides.
-    *   Supports custom database paths (`--db`) and multi-tenant user context switching (`--user-id`).
+- `daily_reddit_update` — **08:30 ET**
+- `pre_market_risk_monitor` — **09:00 ET**
+- `dynamic_market_scanner` — **every 30 minutes during market hours**
+- `monitor_real_portfolio_task` — **every 30 minutes during market hours**
+- `dynamic_after_market_report` — **16:15 ET**
+- `weekly_vtr_report_task` — **Friday 17:05 ET**
+
+### In `cogs/analyst_agent.py`
+
+- `pre_market_loop` — **30 minutes before market open**
+- `intra_day_loop` — **every 120 minutes while market is open**
+- `post_market_loop` — **post-market report flow**
+
+### In `bot.py`
+
+- persistent DM queue worker
+- health worker
+- memory manager start/stop
+- hedge monitor start/stop
+- polymarket service start/stop
 
 ---
 
-## Building and Running
+## Watchlist Half-Hour Heartbeat
 
-### Prerequisites
-- Docker & Docker Compose
-- Discord Bot Token & Finnhub API Key
-- OpenAI-compatible LLM endpoint
+### Actual current flow
 
-### Development Setup
-1.  **Configure Environment:**
-    ```bash
-    cp nexus_core/.env.example nexus_core/.env
-    # Fill in DISCORD_TOKEN, FINNHUB_API_KEY, LLM_API_BASE, etc.
-    ```
-2.  **Start Services:**
-    ```bash
-    # Start Core Bot
-    cd nexus_core
-    docker compose up -d --build
-    ```
+`SchedulerCog.dynamic_market_scanner()`:
 
-### Deployment Strategy
-The system is optimized for **Low-RAM VPS** deployment:
-1.  **Bounded Caching**: All in-memory caches (SMA/EMA/Poly) use LRU policies with a 500-entry limit to prevent memory leaks.
-2.  **Memory Gates**: LLM tasks are automatically downgraded if system RAM usage exceeds 85%.
-3.  **Graceful Handoff**: Docker Swarm `start-first` configuration with 60s grace period for notification queue drainage.
+1. checks market-open state
+2. calls `_dispatch_watchlist_heartbeat()`
+3. then runs `_run_market_scan_logic()`
 
-### Testing
-Tests are located in `nexus_core/tests/`.
-- **Mandate:** All tests MUST be executed using `pytest` inside the Docker container.
-- **Framework:** `pytest` with `pytest-asyncio` and `pytest-mock`.
-- **Coverage:** Core engines (NRO/Sentiment) and Unified Hubs must achieve >90% code coverage.
-- **Pre-commit Pipeline:** All commits are automatically verified via `pre-commit` hooks, which include:
-  - **Linter & Formatter:** `ruff` (extremely fast Python linting and formatting).
-  - **Security Scan:** `semgrep` (scans for SQL injection, insecure imports, etc. during `pre-push`).
-  - **Containerized Testing:** `docker-test` (executes all unit tests in a fresh Docker container before each commit).
-  - **Interactive Component & Embed Testing:** Specialized tests for Discord Views (Buttons/Selects) in `test_unified_terminal_interactive.py` and layout/formatting/padding tests in `test_embed_builder.py`.
-- **Run all tests (Docker):**
-  ```bash
-  cd nexus_core && docker compose run --rm nexus-seeker python -m pytest tests
-  ```
-- **Run with Coverage:**
-  ```bash
-  cd nexus_core && docker compose run --rm nexus-seeker python -m pytest --cov=market_analysis --cov=services --cov-report=term-missing
-  ```
-- **Manual Hook Run:**
-  ```bash
-  pre-commit run --all-files
-  ```
+### Watchlist heartbeat build path
+
+The heartbeat currently reuses logic from `market_analysis/intraday_pipeline.py`:
+
+- `evaluate_watchlist_symbol()`
+- `derive_watchlist_option_guidance()`
+- `build_watchlist_option_plan()`
+
+### Current heartbeat output
+
+The active embed builder is `create_watchlist_signal_embed()` in `cogs/embed_builder.py`.
+
+Current sections:
+
+1. **📊 技術 / 期權快照**
+2. **📐 Skew 與市場判讀**
+3. **🤖 LLM Skew 解說**
+4. **🗓️ 事件風控**
+5. **🎯 執行建議**
+6. **🧾 可執行期權合約**
+
+### Current heartbeat logic details
+
+- sent **per user, per symbol**
+- includes:
+  - ANSI snapshot
+  - skew / IV structure interpretation
+  - event risk summary
+  - executable option plan
+  - LLM-generated skew commentary
+- option plans are event-aware:
+  - earnings proximity reduces risk
+  - pre-event windows prefer defined-risk structures
+  - macro events shrink size / bias toward debit spreads or protection
+
+### LLM skew commentary
+
+`services.llm_service.generate_watchlist_skew_commentary()`:
+
+- receives the single-symbol heartbeat snapshot
+- summarizes skew / IV / event risk in short Traditional Chinese
+- is protected by the global memory-safety gate
+- degrades explicitly when RAM usage is too high
+
+---
+
+## Intraday Quant / Execution Logic
+
+`market_analysis/intraday_pipeline.py` contains:
+
+- watchlist metrics construction
+- event-context resolution
+- option guidance derivation
+- executable option-leg planning
+- `NexusGammaSqueezeEngine`
+- `IntradayScanPipeline`
+
+Important current rule inside `IntradayScanPipeline`:
+
+- `盤中量化掃描 & 避險執行指南` is gated to **Phase B only**
+- it is sent **at most once per user + ticker + trading day**
+
+This gating is tested in `tests/unit/test_intraday_pipeline.py`.
+
+---
+
+## Analyst Agent Reporting
+
+`cogs/analyst_agent.py` is responsible for:
+
+- macro scan
+- pre-market earnings / valuation adjustment report
+- intraday execution guide
+- post-market summary
+- sector flow / rotation report
+- next-day strategy report
+
+Important current behavior:
+
+- report dispatch uses `split_embed_by_fields()`
+- large multi-section reports are split into **one message per field block**
+- this avoids Discord embed/content limits
+
+---
+
+## Notification and Delivery Layer
+
+`nexus_core/bot.py` owns the persistent DM queue.
+
+Current important behavior:
+
+- pending notifications are stored before send
+- startup/shutdown will attempt to recover and flush queue state
+- long text is automatically split
+- fenced code blocks are preserved during splitting
+- this protects against Discord `content <= 2000` failures
+
+When documenting notification behavior, treat the DM queue as **persistent and retry-oriented**, not fire-and-forget.
+
+---
+
+## Event Calendar Architecture
+
+`services/calendar_service.py` is the shared calendar gateway.
+
+Current design:
+
+- macro events are cached by **month**
+- earnings are cached by **symbol**
+- watchlist heartbeat, calendar views, pre-market alerting, and analyst flows all share the same SQLite-backed cache path
+
+Do **not** add raw market-calendar API calls directly to feature code when calendar helpers already exist.
+
+---
+
+## Embed Architecture
+
+All production embed construction should remain centralized in:
+
+- `nexus_core/cogs/embed_builder.py`
+
+This is enforced by:
+
+- `tests/unit/test_output_centralization.py`
+
+Current repository rule:
+
+- cogs should **not** construct `discord.Embed` directly
+- cogs should **not** use the `queue_dm(message=...)` shortcut
+- push/report messages should prefer **field-based embeds**
+- ANSI tables belong inside a field, not dumped into the full description when avoidable
+
+---
+
+## Core Modules to Know
+
+- `nexus_core/bot.py` — bot bootstrap, DM queue, service lifecycle
+- `nexus_core/cogs/trading.py` — active runtime scheduler and watchlist heartbeat sender
+- `nexus_core/cogs/analyst_agent.py` — analyst report scheduler and dispatcher
+- `nexus_core/cogs/embed_builder.py` — single source of truth for embeds
+- `nexus_core/market_analysis/intraday_pipeline.py` — watchlist evaluation, option-plan logic, intraday engine helpers
+- `nexus_core/market_analysis/sentiment_engine.py` — skew / UOA / IV stack
+- `nexus_core/services/calendar_service.py` — shared event cache entrypoint
+- `nexus_core/services/llm_service.py` — structured LLM outputs and memory-safe degradation
+- `nexus_core/services/trading_service.py` — scan / report / validation data orchestration
+- `nexus_core/tests/unit/test_intraday_pipeline.py` — heartbeat and phase-B gating tests
+- `nexus_core/tests/unit/test_embed_builder.py` — embed contract tests
+- `nexus_core/tests/unit/test_output_centralization.py` — embed-centralization enforcement
 
 ---
 
 ## Development Conventions
 
-### 1. Database Migrations
-Never modify the database schema manually. Use the migration engine:
-- Create a new file in `nexus_core/database/migrations/` (e.g., `v036_add_historical_iv.py`).
-- Export `version`, `description`, and `sql`. Use `migrate_data` for JSON transformations.
+### User-facing output
 
-### 2. Discord Commands (Cogs)
-- All user-facing strings MUST be **Traditional Chinese (zh-tw)**.
-- Use `ephemeral=True` for private settings and portfolio commands.
-- Long-running analytics should use `bot.queue_dm()` to prevent interaction timeouts.
-- **Monospace layout alignment**: For complex tables or lists (e.g., Greeks, NRO metrics, DDP reports, Holdings/Trades), wrap data inside monospace (` ```ansi `) code blocks. Use `_visual_len` and `_pad_string` helpers in `embed_builder.py` to calculate exact visual widths of CJK (Traditional Chinese) characters and preserve alignment.
-- For push notifications, prefer the centralized field-based embed style already used by scan, hedge, and heartbeat alerts; if ANSI tables are needed, place them inside a dedicated field instead of making the full embed description a raw report dump.
-- For any new economic / earnings logic, route through `services/calendar_service.py` or the SQLite cache helpers rather than calling raw market calendar APIs directly from feature code.
+- All user-facing strings should be **Traditional Chinese**
+- Private settings / sensitive account operations should use `ephemeral=True`
 
-### 3. Unified Asset Lifecycle
-Assets transition through a persistent state machine in the `assets` table (v028+):
-- **WATCH**: tickers monitored for technical setup.
-- **TRADE**: Active option positions with real-time Greek tracking ($\Delta, \Gamma, \nu, \theta$).
-- **HOLDING**: Settled equity assets contributing to Beta-Weighted Delta.
+### Database changes
 
-### 4. Memory Optimization
-- Use `ConfigDict(slots=True)` for all Pydantic models.
-- Prefer `BoundedCache` over standard `dict` for frequently updated data.
-- Trigger `gc.collect()` after large batch operations to reclaim RAM.
+- Never edit schema manually
+- Add a migration file in `nexus_core/database/migrations/`
 
-### 5. Code Quality & Security
-- **Strict Linting:** All code must pass `ruff` check. Avoid `E701` (multiple statements on one line) and `F841` (unused variables).
-- **Security Awareness:** Avoid dynamic SQL strings (f-strings in `.execute()`). Use parameterized queries.
-- **Import Ordering:** Imports should be at the top of the file, organized by standard library, third-party, and local modules.
-- **Docker Hardening:** Containers run as non-root `appuser`. Always verify file permissions in the `Dockerfile`.
+### Memory / VPS safety
+
+- prefer `BoundedCache` for recurring hot data
+- respect the 85% RAM memory gate for non-core LLM work
+- keep features safe for 1GB RAM deployment
+
+### Type safety
+
+- prefer explicit Pydantic models / aliases over loose dicts
+- keep literal types consistent with model fields
+- avoid `Any` unless truly unavoidable at integration boundaries
+
+### Security
+
+- use parameterized SQL
+- avoid raw string interpolation in SQL execution
 
 ---
 
-## Key Files Summary
-- `nexus_core/bot.py`: Main Bot and service orchestrator.
-- `nexus_core/config.py`: Global constants and **VIX Ladder**.
-- `nexus_core/services/trading_service.py`: 4-stage validation pipeline.
-- `nexus_core/services/hedge_monitor_service.py`: Automated risk defense.
-- `nexus_core/market_analysis/sentiment_engine.py`: Skew/PCR/UOA logic, IV, IV Rank, and Expected Move.
-- `nexus_core/market_analysis/risk_engine.py`: NRO & Vanna adjustment.
-- `nexus_core/market_analysis/attribution.py`: Protection scoring & self-evolution.
-- `nexus_core/market_analysis/intraday_pipeline.py`: Asynchronous intraday scan pipeline & risk-defended execution engine.
-- `nexus_core/database/calendar_cache.py`: SQLite cache helpers for month-level macro events and rolling earnings cache reads/writes.
-- `nexus_core/services/calendar_service.py`: Shared calendar cache entrypoint used by watchlist, calendar commands, event monitor, and pre-market earnings flows.
-- `nexus_core/gather_report.py`: Capital Flow & Sector Rotation report logic.
-- `nexus_core/cogs/analyst_agent.py`: Autonomous intelligence reports & sector flow mapping.
-- `nexus_core/services/memory_manager.py`: VPS stability watchdog.
-- `nexus_core/cogs/embed_builder.py`: Centralized UI/UX generator optimized for ANSI monospace table layouts and CJK visual alignment.
+## Testing
+
+Tests must be run from `nexus_core` inside Docker:
+
+```bash
+cd nexus_core
+docker compose run --rm nexus-seeker python -m pytest tests
+```
+
+Useful focused runs:
+
+```bash
+cd nexus_core
+docker compose run --rm nexus-seeker python -m pytest tests/unit/test_intraday_pipeline.py
+docker compose run --rm nexus-seeker python -m pytest tests/unit/test_embed_builder.py
+docker compose run --rm nexus-seeker python -m pytest tests/unit/test_output_centralization.py
+```
 
 ---
 
-## Deployment & CI/CD
-The project implements a high-quality **Docker Swarm CD Workflow** with the following features:
-1.  **CI/CD Separation**: Image building occurs on every push to `main`, while deployment only triggers on version tags (`v*`).
-2.  **Versioned Secrets**: Uses a custom Bash logic to handle immutable Swarm Secrets by appending the Commit Short SHA (e.g., `DISCORD_TOKEN_[SHA]`).
-3.  **Zero-Downtime Updates**: Employs `--update-order start-first` to ensure the new version is healthy before stopping the old one.
-4.  **Automatic Cleanup**: Post-deployment scripts automatically remove orphaned old secrets and prune unused images.
+## Deployment Notes
+
+- `nexus_core/docker-compose.yml` currently defines the core bot service
+- `nexus_edge_scraper/docker-compose.yml` defines the optional edge scraper + cloudflared sidecar
+- production release flow is tag-driven (`v*`)
+- post-push hooks run lint, mypy, semgrep, and dockerized tests
+
+---
+
+## Documentation Guidance
+
+When updating docs in this repository:
+
+1. distinguish **actual runtime flow** from helper modules
+2. separate **watchlist heartbeat** from **Analyst Agent**
+3. reflect the current field-based embed format
+4. mention the persistent DM queue when discussing notifications
+5. keep README user-oriented and AGENTS contributor-oriented

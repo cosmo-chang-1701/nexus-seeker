@@ -1,271 +1,299 @@
-# 🌌 Nexus Seeker: Professional Liquidity & Risk Management Terminal
+# 🌌 Nexus Seeker
 
 <div align="center">
   <img src="assets/hero.png" alt="Nexus Seeker Terminal Hero" width="800" />
 </div>
 
-**針對全職投資者打造的關鍵任務執行環境 — 專注於資產保護與系統性風險對沖**
+**Discord 驅動的多租戶選擇權風控、交易監控與主動推播平台。**
 
 [![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white)](nexus_core/docker-compose.yml)
-[![Architecture](https://img.shields.io/badge/architecture-dual--service-purple.svg)](#architecture)
+[![Version](https://img.shields.io/badge/version-1.6.14-purple.svg)](nexus_core/pyproject.toml)
 
-> **Nexus Seeker** 是一款專為專業選擇權交易者設計的高效能終端，核心設計圍繞 **Financial Runway (財務跑道)**、**Greeks Integrity (希臘字母完整性)** 與 **Cross-Market Edge Detection (跨市場邊緣偵測)**。透過 **Black-Scholes-Merton** 精算、**Nexus Risk Optimizer (NRO)** 與 **Sentiment Engine**，本系統提供從信號偵測到自動化對沖的完整專業風控管線。
+Nexus Seeker 以 **Financial Runway**、**Greeks Integrity**、**Skew / IV 結構判讀** 與 **事件風險防禦** 為核心，整合 Black-Scholes-Merton、Nexus Risk Optimizer (NRO)、Sentiment Engine、Polymarket 與 LLM 結構化分析，提供從 watchlist 心跳、盤中對沖、盤前財報掃描到盤後風險結算的完整工作流。
 
 ---
 
-## 🛠 Technical Specifications
+## 🧭 Current System Snapshot
 
-| 類別 | 技術規格 (Specifications) |
+| 項目 | 現況 |
 |---|---|
-| **Runtime 環境** | Dockerized Python 3.12 (Low-RAM VPS 最佳化) |
-| **量化定價引擎** | Black-Scholes-Merton (via `py_vollib`, 含股息率校正) |
-| **風險精算核心** | Nexus Risk Optimizer (NRO) - 二階 Beta-Weighted 曝險模型 (含 Vanna 修正) |
-| **情緒分析中心** | Sentiment Engine - Skew 偏斜、PCR、Max Pain、UOA 偵測與 IV / IV Rank 估算 |
-| **驗證與品質** | `pre-commit` (Ruff, Docker-test, Semgrep), Zero-Downtime Swarm CD |
-| **數據源 (Feeds)** | Finnhub (Real-time), yfinance (Options), Polymarket (WS L2), Reddit (Edge) |
-| **持久化層** | SQLite 搭配自動化 Migration Engine (v037+，含事件日曆快取) |
-| **強健性工程** | Pydantic v2 數據建模 + Mypy 靜態類型檢查 (v1.4.4+) |
-| **智能層** | Structured LLM Output (Pydantic Schema) 具備 Memory Safety Gates |
-| **訊息傳遞** | Discord.py (持久化非同步訊息佇列，支援多租戶隔離) |
+| **核心服務** | `nexus_core` Discord Bot + `nexus_edge_scraper` 可選 Edge Scraper |
+| **執行環境** | Python 3.12 / Docker / SQLite |
+| **版本** | `1.6.14` |
+| **量化核心** | BSM Greeks、NRO、Sentiment Engine、Execution Router |
+| **事件快取** | SQLite 月度總經事件快取 + rolling earnings cache |
+| **推播骨幹** | 持久化 DM queue，支援 Discord 長訊息切分 |
+| **Discord 輸出** | `cogs/embed_builder.py` 統一管理所有 embeds |
+| **LLM 安全閘門** | RAM > 85% 時自動降級非核心 LLM 分析 |
 
 ---
 
-## 🏗 System Architecture
-
-系統採用分散式雙服務架構，確保雲端執行效率與邊緣爬蟲的隱私性。最新版本針對 **1GB RAM 環境** 進行了深度優化，引入 LRU Bounded Cache 與緊急記憶體閘門。
+## 🏗 Runtime Architecture
 
 ```mermaid
 graph TD
-    subgraph Cloud_Environment [Cloud / Discord Service]
-        Bot[NexusBot Core]
-        TS[TradingService - Business Logic]
-        RE[Risk Engine - NRO]
-        SE[Sentiment Engine - Skew/PCR/UOA]
-        MM[Memory Manager - VPS Health]
-        DB[(SQLite DB v035)]
-        S[Services - LLM/Polymarket]
-        C[Bounded Cache - SMA/EMA/Poly]
+    User((Discord User))
+
+    subgraph Core[nexus_core]
+        Bot[NexusBot]
+        Queue[Persistent DM Queue]
+        Trading[SchedulerCog / TradingService]
+        Analyst[AnalystAgent]
+        Sentiment[Sentiment Engine]
+        NRO[NRO / Risk Engine]
+        Calendar[CalendarService + SQLite Cache]
+        LLM[LLM Service]
+        DB[(SQLite)]
     end
 
-    subgraph Edge_Environment [Local / Edge Scraper]
-        ES[Nexus Edge Scraper - Playwright]
+    subgraph Edge[nexus_edge_scraper]
+        EdgeAPI[FastAPI + Playwright]
+        Tunnel[Cloudflare Tunnel]
     end
 
-    User((Professional Trader)) -- Slash Commands --> Bot
-    Bot --> TS
-    TS --> RE
-    TS --> SE
-    TS --> DB
-    TS --> S
-    S -- Cloudflare Tunnel --> ES
-    TS -- Async Notify --> User
+    User --> Bot
+    Bot --> Queue
+    Bot --> Trading
+    Bot --> Analyst
+    Trading --> Sentiment
+    Trading --> NRO
+    Trading --> Calendar
+    Trading --> LLM
+    Trading --> DB
+    Analyst --> Calendar
+    Analyst --> LLM
+    Analyst --> DB
+    LLM --> Queue
+    Trading --> Queue
+    Queue --> User
+    Bot -. Reddit / Edge Fetch .-> EdgeAPI
+    Tunnel --> EdgeAPI
+```
+
+### 核心結論
+
+1. **Watchlist 半小時心跳** 目前由 `cogs/trading.py` 的 `SchedulerCog.dynamic_market_scanner()` 實際發送。
+2. **Analyst Agent** 是另一條獨立推播線，負責盤前 / 盤中 / 盤後分析報告，不是 watchlist 心跳的開關。
+3. **`market_analysis/intraday_pipeline.py`** 目前主要提供 watchlist 評估、選約、事件風控與量化引擎 helper；其中的模型與邏輯被 `SchedulerCog` 重用。
+
+---
+
+## ⏱️ Active Background Loops
+
+| 任務 | 實際來源 | 頻率 / 時點 | 作用 |
+|---|---|---|---|
+| Reddit 情緒快取 | `SchedulerCog.daily_reddit_update` | 08:30 ET | 預抓 watchlist Reddit 情緒 |
+| 盤前財報警報 | `SchedulerCog.pre_market_risk_monitor` | 09:00 ET | 發送財報 / 事件風險預警 |
+| Watchlist 半小時心跳 | `SchedulerCog.dynamic_market_scanner` | 開盤時每 30 分鐘 | 逐檔推送 watchlist embed + 量化掃描 |
+| 真實持倉風險審計 | `SchedulerCog.monitor_real_portfolio_task` | 開盤時每 30 分鐘 | 利潤鎖定 / Gamma fragility |
+| 盤後風險結算 | `SchedulerCog.dynamic_after_market_report` | 16:15 ET | 盤後風險結算報告 |
+| 週報 | `SchedulerCog.weekly_vtr_report_task` | 週五 17:05 ET | VTR 績效摘要 |
+| Analyst 盤前掃描 | `AnalystAgent.pre_market_loop` | 開盤前 30 分鐘 | Macro scan + earnings report |
+| Analyst 盤中指引 | `AnalystAgent.intra_day_loop` | 開盤時每 120 分鐘 | Active execution guide |
+| Analyst 盤後分析 | `AnalystAgent.post_market_loop` | 盤後排程 | sector flow / macro summary / next-day strategy |
+
+---
+
+## 📡 Watchlist Half-Hour Heartbeat
+
+目前半小時心跳的實際邏輯如下：
+
+- 由 `SchedulerCog.dynamic_market_scanner()` 在 **市場開盤期間每 30 分鐘** 啟動
+- 以 **每個 watchlist ticker 各自一則 embed** 發送
+- 透過 `market_analysis.intraday_pipeline` 的 helper 完成：
+  - `evaluate_watchlist_symbol()`
+  - `derive_watchlist_option_guidance()`
+  - `build_watchlist_option_plan()`
+- 事件風控會先經過 `CalendarService` 與 SQLite 快取
+- skew 補充說明透過 `services.llm_service.generate_watchlist_skew_commentary()` 生成
+
+### 目前心跳 embed 內容
+
+`create_watchlist_signal_embed()` 目前包含：
+
+1. **📊 技術 / 期權快照**：ANSI 格式的技術位階、IV Rank、Skew、GEX Put Wall、Vanna、買賣區等
+2. **📐 Skew 與市場判讀**：skew 狀態 + 期權策略 rationale
+3. **🤖 LLM Skew 解說**：針對單一標的當下 heartbeat 快照生成簡短繁中判讀
+4. **🗓️ 事件風控**：財報 / CPI / FOMC / NFP 等事件摘要
+5. **🎯 執行建議**：現股或期權切入建議
+6. **🧾 可執行期權合約**：策略、權利金型態、腿位、strike、expiry、mid、建議口數、最大風險
+
+### 事件防禦邏輯
+
+- 財報前幾天：自動降風險
+- 財報前 72 小時：避免賣方收租，優先 `Debit Spread` / 保護性結構
+- CPI / FOMC / NFP 前：自動縮口數
+- 高風險事件下：優先定義風險結構，而非裸賣方
+
+---
+
+## 🧠 Analyst Agent
+
+`cogs/analyst_agent.py` 目前是獨立於 watchlist heartbeat 的分析報告系統：
+
+- **盤前**：Macro scan + `盤前財報與估值調整`
+- **盤中**：每 120 分鐘一次的 `盤中量化掃描 & 避險執行指南`
+- **盤後**：`收盤資金流向與板塊輪動報告`、`盤後風險結算` 類型報告
+
+### 目前的重要行為
+
+- Analyst 報告會經過 `split_embed_by_fields()`，將多區塊報告拆成 **多則訊息**，避免 Discord embed 長度超限
+- 記憶體壓力高時，會自動降級非必要 LLM 分析，優先保留核心風控運算
+
+---
+
+## 🛡️ Risk, Quant, and Sentiment Stack
+
+### Risk / NRO
+
+- Vanna-adjusted delta / hidden delta 估算
+- 依 VIX Battle Ladder 縮放 Kelly sizing
+- Protection Score 盤後歸因回饋
+- SHIELD / SPEAR 戰術路由
+
+### Sentiment / Options Structure
+
+- Skew、PCR、Max Pain、UOA 偵測
+- IV / IV Rank / IV Percentile / Expected Move
+- Polymarket whale filtering 與跨市場驗證
+
+### Calendar-Aware Guard
+
+- 月度 macro cache：先讀 SQLite，再補抓 API
+- rolling earnings cache：symbol 級別更新
+- watchlist heartbeat、盤前財報、日曆檢視與 analyst flows 共用同一來源
+
+---
+
+## ✉️ Notification Delivery
+
+`nexus_core/bot.py` 目前的通知層有兩個重要特性：
+
+1. **持久化 DM queue**：通知先入 SQLite，再由 worker 補發
+2. **Discord 長訊息安全切分**：
+   - 自動處理超過 `2000` 字元的 content
+   - 支援 code block 保留與切分
+   - 避免 `Invalid Form Body / In content: Must be 2000 or fewer in length`
+
+---
+
+## 🎨 Discord UI Conventions
+
+- 所有 cog 的 embed 都集中在 `nexus_core/cogs/embed_builder.py`
+- `tests/unit/test_output_centralization.py` 會防止 cog 直接建 `discord.Embed`
+- 複雜表格統一放入 ` ```ansi ` 區塊
+- CJK 對齊依賴 `_visual_len()` / `_pad_string()`
+- 新的推播類訊息優先採用 **field-based embed**，不要把整段報告塞進 description
+
+---
+
+## 🧱 Repository Layout
+
+```text
+.
+├── README.md
+├── AGENTS.md
+├── Dockerfile.test
+├── nexus_core/
+│   ├── bot.py
+│   ├── cli.py
+│   ├── config.py
+│   ├── cogs/
+│   ├── database/
+│   ├── market_analysis/
+│   ├── models/
+│   ├── services/
+│   ├── tests/
+│   └── docker-compose.yml
+└── nexus_edge_scraper/
+    ├── local_api.py
+    ├── docker-compose.yml
+    └── Dockerfile
 ```
 
 ---
 
-## 🏁 Financial Intelligence
+## ⌨️ Main User Surfaces
 
-針對全職投資者量身打造的生存與效率指標：
+### Discord
 
-*   **財務生存與跑道分析 (Financial Survival & Runway)**：
-    系統自動對照使用者的 **Cash Reserve (現金儲備)** 與 **Monthly Expenses (每月支出)**，利用投資組合的 **Total Theta (每日總 Theta 收租額)** 動態估算「財務生存天數」。
-*   **對沖歸因與自我進化 (Self-Evolving Attribution)**：
-    系統會追蹤每一筆虛擬對沖 (VTR Hedge) 的 **Protection Score (保護評分)**。若保護效率偏低，AI 將自動建議調整 NRO 觸發閾值或相關性 Proxy，實現策略的動態迭代。
+- `/x`：標的分析中心
+- `/dash`：策略儀表板 / 跑道 / 持倉
+- `/market`：市場脈搏 / 日曆 / Polymarket / DDP
+- `/settings`：資金、風險、支出、模式設定
+- `/settle_hedge`、`/hedge_list`：對沖警報與執行記錄
+- `/ddp_scan`、`/iv_scan`、`/calendar`、`/skew_scan`、`/max_pain`
 
----
+### CLI
 
-## 🛡️ Functional Pillars
+`nexus_core/cli.py` 提供與 Discord 對應的 CLI：
 
-### 1. Risk Integrity (NRO 引擎)
-*   **Vanna-Adjusted Delta (隱含 Delta 修正)**：
-    考慮 IV 劇烈變動對 Delta 的非線性影響 ($d\Delta/d\sigma$)。在 VIX 飆升時，系統會自動估算 **"Hidden Delta"**，並主動於「盤中量化指引」中推送精確的避險口數建議。
-*   **Automated Hedging & Intraday Scan Pipeline (自動化對沖與盤中掃描管線)**：
-    系統由 `IntradayScanPipeline` 驅動，每 30 分鐘執行一次開盤心跳監測，自動執行 `NexusGammaSqueezeEngine` 量化風控決策。當 VIX 觸發戰情階梯跳級或單日移動 > 10% 時，主動推送 **「緊急對沖指令」**（如：建議 BUY X 單位 SPY 對沖 Delta 偏離）。使用者可透過 `/settle_hedge` 一鍵記錄執行結果。
-*   **Gamma Squeeze 4 階段戰術門檻過濾 (4-Stage Tactical Gates)**：
-    交易前對標的進行 4 階段硬性門檻檢查：流動性閘門（市值 >= 20B 且日均期權量 >= 50,000）、事件風險閘門（距離財報 > 3 天）、資金效率閘門（明日到期 OTM Call 總權利金 >= $1M，Phase A 開盤前一小時自動調降 30% 且具備盤後 Protection Score 自我進化反饋調整機制）與跨市場驗證閘門（IV Rank >= 50 或 skew 絕對值 >= 0.05）。未通過者強制路由至 SHIELD 防禦模式。
-*   **VIX 戰情階梯 (Battle Ladder)**：
-    6 階段自適應風險調控系統，根據即時波動率動態縮放 **Kelly Criterion** 比例。
-*   **SQLite Event Calendar Cache (事件日曆快取)**：
-    重大總經事件採用 **月初整月快取**，財報事件採用 **per-symbol 滾動更新快取**。`CalendarService` 與下游風控 / 日曆 / watchlist 流程皆先讀 SQLite，再依到期或過期狀態補抓，降低盤中重複 API 請求。
-
-### 2. Market Sentiment (市場情緒引擎)
-*   **IV & IV Rank 波動率監控**：
-    實時計算與監控 30 天平值期權隱含波動率 (IV)、52 週 IV Rank、IV 百分位點與週預期震盪區間。支持多級降級策略 (yfinance -> ATM option chain -> DB -> HV) 與 30 分鐘 BoundedCache，自動偵測波動率便宜 (Low) 或泡沫化 (Extreme) 狀態以路由對沖策略。
-*   **Option Skew Strategist (偏斜策略家)**：
-    監控 OTM Put 與 Call 的 IV 差值。當 Skew 進入 90th 百分位時，發出 **"Pre-emptive Hedge" (預警性對沖)** 訊號。
-*   **UOA & Whale Intent Mapping (巨鯨意圖映射)**：
-    將 Polymarket 的巨鯨交易與選擇權市場的 **Unusual Options Activity (UOA)** 進行關聯分析。內建 **PolymarketWhaleFilter** 高信號過濾管線：
-    1. **Category Hard Gate**: 僅限經濟、政治、加密、聯準會、科技與 AI。
-    2. **Semantic Ticker Validator**: 基於實體識別的代碼映射，防止語義幻覺（如誤將體育人名當作股票）。
-    3. **Capital Efficiency Gate**: 計算預期 ROI 與 $\Delta P$，過濾低效套利噪音。
-    4. **Cross-Market Validation**: 僅在標的 Skew > 90th 或 IV Rank > 70 時觸發預警。
-*   **Max Pain Analysis (最大痛點分析)**：
-    計算結算日前夕的 Max Pain 價格，評估標的是否趨於收斂以鎖定最終利潤。
-
-### 3. Execution Strategy (SDDM 執行矩陣)
-*   **Execution Decision Matrix (SDDM)**：
-    自動化執行決策系統。根據市場狀況（VIX、Skew、UOA、RSI）自動將交易路由至 **Module A (SHIELD: 防禦網格)** 或 **Module B (SPEAR: 期權攻擊)**。
-*   **Tactical Routing (戰術路由)**：
-    在極端波動環境下，系統會自動切換至 SHIELD 模式，並基於 ATR 計算動態網格步長；在穩定且具備高勝率信號（如 UOA 觸發）時，切換至 SPEAR 模式並利用凱利公式優化倉位。
-*   **Watchlist Half-Hour Heartbeat (觀察清單半小時戰報)**：
-    盤中每 30 分鐘主動對 watchlist 全標的推送 **Watchlist 半小時戰報**。報告整合價位 / 技術面、IV Rank、GEX Put Wall、Vanna 與 Skew，並依據支撐 / 壓力區與波動率結構，提供 **正股買入 / 賣出建議** 與 **完整可執行期權合約**（策略名稱、每一腿 BUY/SELL、CALL/PUT、strike、expiry、中間價、建議口數、估計最大風險）。
-    目前已接入 **事件風控**：財報前幾天自動降風險、財報前 72 小時禁做賣方收租、CPI / FOMC / NFP 前自動縮口數，並優先改推 **Debit Spread / 保護性部位**。
-
-### 4. Execution Automation & Active Reporting
-*   **Intra-day Active Execution Guide (盤中動態量化指引)**：
-    取代傳統靜態報告。盤中每 120 分鐘主動評估 Vanna 曝險與財務跑道 (Financial Runway)，並依據時段 (Phase A: 開盤流動性 / Phase B: 板塊輪動 / Phase C: 尾盤對沖) 動態調整關注焦點與對沖指令。
-*   **Shared Event Cache Surfaces (事件快取共用表面)**：
-    `/calendar`、Unified Terminal 市場日曆、盤前財報警報、Analyst Agent 盤前財報掃描、波動率 / 選約相關財報判斷，以及 watchlist 半小時戰報，現在都共用同一套 SQLite 事件快取來源。
-*   **Optimized Post-market Risk Settlement (盤後風險結算總結)**：
-    盤後自動生成高度結構化的分析報告，整合 **PnL 歸因 (Alpha vs. Hedge)**、**宏觀快照**與**聚合風險指標**，並對齊專業投資者的「財務生存跑道」評估。採用 ANSI 等寬字型區塊格式優化，解決中英文混排對齊問題，使關鍵數據易於複製且排版美觀。
-*   **Beautified Monospace Terminal UI (等寬終端美化佈局)**：
-    全面優化現貨持倉、實單期權、Greeks 希臘字母、NRO 風控、VTR 績效、DDP、廉價波動率等 Discord 輸出格式，將數據欄位統一收納於 monospace (` ```ansi `) 區塊中，並新增 **現價 (Current Price)** 追蹤，搭配專利中文字元視覺寬度計算，確保排版完美對齊。
-    提供結構化的 Discord Embed 報告，整合美元指數、公債殖利率與 VIX 實時指標，並具備多因子風險告警 (Multi-factor Risk Alerts)。
-*   **VPS Performance Guard (1GB RAM 優化)**：
-    針對低配 VPS 引入 **BoundedCache (max 500)** 與 **Memory Safety Gates**。當系統 RAM > 85% 時，自動延後非核心 AI 分析，優先確保 NRO 核心風險計算與警報發送。
-*   **System Health & Disk Diagnostics (硬碟與系統診斷)**：
-    提供視覺化健康評級，包含 RAM 與快取消耗統計。
-
-### 4. Robustness Engineering (系統魯棒性)
-*   **Pydantic Data Modeling**:
-    全面棄用鬆散的 Dict 傳遞，改用強型別 Pydantic 模型（如 `OptimizationResult`, `MacroRiskMetrics`）。確保數據在跨服務傳遞時的完整性與自動類型校準。
-*   **Static Type Enforcement (Mypy)**:
-    導入 Mypy 靜態類型檢查，在開發階段即攔截潛在的類型不匹配（如 `date` vs `datetime`）與屬性錯誤。
-*   **Contract-Aware Testing**:
-    使用 `autospec=True` 強化單元測試 Mock 精度，確保測試邏輯始終與底層 SDK 調用契約同步。
-
----
-
-## 🔄 Contract Lifecycle
-
-系統管理期權合約從「偵測」到「對沖結算」的完整專業流程：
-
-```mermaid
-stateDiagram-v2
-    [*] --> Detection: Signal Detection (EMA/PSQ/DDP/IV/Skew)
-    Detection --> Audit: Risk/AROC Audit (15% Threshold)
-    Audit --> Execution: VTR / Live Execution
-    Execution --> Monitoring: Real-time Delta/Vanna/Vega/Gamma Tracking
-    Monitoring --> Defense: DITM Convexity / Max Pain Proximity
-    Monitoring --> Hedging: VIX Spike / Delta Deviation
-    Defense --> ProfitLock: Automated Closing / Roll
-    Hedging --> Adjust: Automated SPY Hedge Instructions
-    Adjust --> Attribution: Protection Score Analysis
-    Attribution --> Monitoring: Parameter Feedback
-    Monitoring --> Exit: Target PnL (50%/100%) / Hard Stop
-    Exit --> [*]
-```
-
----
-
-## 👨‍💻 Professional Investor Workflow (全職投資者實戰流程)
-
-Nexus Seeker 的設計初衷是為了讓全職投資者能從繁瑣的數據整理中解放，專注於決策執行。以下是一個典型的「專業風控交易日」：
-
-*   **盤前情報與生存檢查 (08:30 - 09:30)**
-    *   使用 `/dash` 檢查 **Financial Runway** 與 **NRO Integrity**，確認 Theta 收益覆蓋率與組合 Vanna 敏感度，檢視整體 Delta 曝險。
-    *   使用 `/market` 查看今日重大財經事件與 Polymarket 上的巨鯨方向性押注。
-2.  **盤中動態監測與標的分層 (09:30 - 15:30)**
-    *   接收系統每 120 分鐘自動推送的 **「盤中動態量化指引」**，關注當前時段的 Vanna 曝險變動。
-    *   接收系統每 30 分鐘自動推送的 **「Watchlist 半小時戰報」**，快速查看 watchlist 全標的的技術位階、Skew 判讀、事件風控狀態與完整期權合約建議。
-    *   針對感興趣的標的，使用 `/x [symbol]` 進入 **「標的分析中心」**，分析 Skew 分位點、DDP 訊號與 Reddit/Polymarket 情緒背離。
-3.  **危機防禦與自動化對沖 (隨時觸發)**
-
-    *   當 VIX 劇烈波動或標的跌破關鍵支撐，系統主動發出 **「緊急對沖指令」**。
-    *   投資者依據指令執行 SPY 避險後，輸入 `/settle_hedge` 記錄操作。系統隨即更新 **Protection Score** 並重新計算 Greeks 完整性。
-4.  **盤後歸因與策略迭代 (16:30+)**
-    *   使用 `/vtr_stats` 審視今日對沖的保護效率 (Attribution)，分析 AI 建議的閾值調整。
-    *   使用 `/add_holding` 更新現貨持倉，確保明早的 Beta-Weighted Delta 計算基準精確無誤。
-
----
-
-## ⌨️ Command Matrix (Unified Hubs)
-
-| Command | Description | Interactive Tabs / Buttons |
-|---|---|---|
-| **`/x [symbol]`** | **🌌 標的分析中心 (Actionable Intelligence)** | 🏠主頁(DDP/Skew), 📰新聞, 💬Reddit, 📐情緒, 🎯MaxPain |
-| **`/dash`** | **📊 交易員看板 (Strategic Dashboard)** | 🏠戰略看板, 📋實單持倉, 📦現貨持倉, 🏁財務跑道, 👻VTR績效 |
-| **`/market`** | **📅 市場情報中心** | 📅市場日曆, 🐋預測市場, 🔥高波動掃描, 🌌DDP掃描 |
-
----
-
-## ⌨️ Operational Commands (Legacy & Tools)
-
-| Command | Description | Input Schema (Summary) |
-|---|---|---|
-| `/settings` | 配置全域資產、風險、生存支出與 **三段式警報開關** | `capital`, `risk_limit`, `alert_mode` |
-| `/runway_check` | 執行財務生存跑道分析 | — |
-| `/skew_scan` | 執行期權偏斜 (Skew) 與市場情緒掃描 (含 IV/IV Rank/預期震盪區間) | `symbol` |
-| `/max_pain` | 計算特定標的之最大痛點與收斂狀態 | `symbol`, `expiry` |
-| `/vtr_stats` | 檢視 VTR 績效統計與 **對沖效能歸因** | — |
-| `/settle_hedge` | **[New]** 確認並記錄已執行的對沖操作 (維持 Delta 中性) | `alert_id`, `qty` |
-| `/hedge_list` | **[New]** 查看最近的對沖警報與執行狀態 | — |
-| `/sys_health` | **[New]** [Hidden] 檢查 VPS 資源狀態與快取健康度 | — |
-| `/list_trades` | 列出目前資料庫中的所有實單持倉與即時未實現損益 | — |
-| `/scan` | 手動執行量化掃描與 What-if 曝險模擬 | `symbol` |
-| `/ddp_scan` | 對觀察清單執行 Davis Double Play (DDP) 掃描 | — |
-| `/add_holding` | 登錄實際現貨持倉 (納入 Beta-Delta 計算) | `symbol`, `quantity`, `avg_cost` |
-| `/list_holdings` | 列出目前所有現貨持倉與分配比例 | — |
-| `/poly_list` | 顯示 Polymarket 活躍市場清單與巨鯨意圖 | — |
-| `/quote` | 獲取標的之即時報價與漲跌資訊 | `symbol` |
-| `/scan_news` | 掃描特定標的之最新官方新聞 | `symbol` |
-| `/scan_reddit` | 掃描特定標的之 Reddit 散戶情緒 | `symbol` |
-| `/calendar` | 顯示影響目前投資組合的即時重大事件 | — |
-| `/iv_rank` | 掃描觀察清單中具備高 IV Rank 或財報前夕的標的 | — |
-| `/event_impact` | 針對特定即時事件進行 Greeks (Delta, Vanna) 模擬 | `symbol`, `vol_move` |
-
----
-
-## ⌨️ Professional CLI Terminal
-
-除了 Discord 介面，Nexus Seeker 提供全功能的 CLI 工具。指令採分組管理，完整映射 Discord 的 Slash Commands。
-
-### 核心功能組
-*   **`sys` (系統)**：`health`, `settings` (資金/風險配置)。
-*   **`watch` (監控)**：`add`, `remove`, `list` 觀察清單。
-*   **`pf` (持倉)**：`pnl` (損益報表), `runway` (財務跑道)。
-*   **`mkt` (行情)**：`quote` (報價), `ddp` (量化掃描), `skew` (情緒分析)。
-
-### 使用方法
-```bash
-cd nexus_core
-python cli.py --help
-
-# 更新帳戶資金
-python cli.py sys settings --capital 200000
-
-# 加入觀察標的
-python cli.py watch add TSLA
-
-# 執行財務跑道分析
-python cli.py pf runway
-
-# 查看全站 DDP 掃描結果
-python cli.py mkt ddp
-```
+- `sys`：health / settings
+- `watch`：watchlist CRUD
+- `pf`：portfolio / runway
+- `mkt`：quote / ddp / skew
+- `admin`：手動掃描與系統控制
 
 ---
 
 ## 🚀 Getting Started
 
-### Prerequisites
-*   Docker & Docker Compose
-*   Finnhub API Key & Discord Bot Token
-*   OpenAI-compatible API Key (用於智能分析)
+### Core Bot
 
-### Quick Deployment
-1.  `cp .env.example .env` (填寫 API Keys)
-2.  `docker compose up -d --build`
-3.  進入 Discord 使用 `/settings` 初始化配置。
+```bash
+cd nexus_core
+cp .env.example .env
+docker compose up -d --build
+```
+
+### Edge Scraper (Optional)
+
+```bash
+cd nexus_edge_scraper
+cp .env.example .env
+docker compose up -d --build
+```
+
+---
+
+## 🧪 Testing
+
+測試全部位於 `nexus_core/tests/`，並以容器內 `pytest` 為準：
+
+```bash
+cd nexus_core
+docker compose run --rm nexus-seeker python -m pytest tests
+```
+
+常見驗證：
+
+```bash
+cd nexus_core
+docker compose run --rm nexus-seeker python -m pytest tests/unit/test_embed_builder.py
+docker compose run --rm nexus-seeker python -m pytest tests/unit/test_intraday_pipeline.py
+docker compose run --rm nexus-seeker python -m pytest --cov=market_analysis --cov=services --cov-report=term-missing
+```
+
+---
+
+## 🔐 Development Rules
+
+- 所有使用者可見文案使用 **繁體中文**
+- DB schema 一律透過 migration engine 更新
+- 新事件 / 財報邏輯優先接 `services/calendar_service.py`
+- 不要在 cog 內自行建 embed
+- 不要用動態 SQL 字串拼接參數
+- 請優先維持低 RAM VPS 的可運行性
 
 ---
 
 ## 📄 License
-本專案採用 [MIT 授權條款](LICENSE)。
+
+本專案採用 [MIT License](LICENSE)。
 
 <div align="center">
 
-*由 [Cosmo Chang](https://github.com/cosmo-chang-1701) 以 ❤️ 打造，追求量化自由。*
+*Built by [Cosmo Chang](https://github.com/cosmo-chang-1701) for disciplined options risk operations.*
 
 </div>
