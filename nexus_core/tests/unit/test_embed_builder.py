@@ -714,3 +714,80 @@ def test_create_vtr_settlement_notice_embed():
     assert "`9.50%`" in embed.fields[1].value
     assert "`Balanced`" in embed.fields[2].value
     assert "買入 5 股 SPY" in embed.fields[4].value
+
+
+def test_create_holdings_embed_chunking():
+    # Create 30 holdings to force chunking
+    holdings_data = []
+    for i in range(30):
+        holdings_data.append(
+            {
+                "symbol": f"SYM{i:02d}",
+                "quantity": 100,
+                "avg_cost": 10.0,
+                "current_price": 12.0,
+            }
+        )
+    embed = create_holdings_embed(holdings_data, total_capital=100000.0)
+    # Check that it split into multiple fields
+    holding_fields = [f for f in embed.fields if "持倉明細" in f.name]
+    assert len(holding_fields) > 1
+    assert "持倉明細 (1/" in holding_fields[0].name
+    for f in holding_fields:
+        assert len(f.value) <= 1024
+        assert "SYM" in f.value
+        assert "```ansi" in f.value
+        assert "```" in f.value
+
+
+def test_create_trades_embed_chunking():
+    # Create 30 trades to force chunking
+    trades = []
+    for i in range(30):
+        trades.append(
+            {
+                "id": i + 1,
+                "symbol": f"S{i:02d}",
+                "opt_type": "call",
+                "strike": 100.0,
+                "expiry": "2026-06-19",
+                "quantity": 1,
+                "entry_price": 2.0,
+                "current_price": 2.50,
+                "unrealized_pnl": 50.0,
+                "pnl_pct": 0.25,
+            }
+        )
+    pnl_data = {
+        "trades": trades,
+        "total_unrealized_pnl": 1500.0,
+    }
+    embed = create_trades_embed(pnl_data, total_capital=100000.0)
+    trade_fields = [f for f in embed.fields if "持倉明細" in f.name]
+    assert len(trade_fields) > 1
+    assert "持倉明細 (1/" in trade_fields[0].name
+    for f in trade_fields:
+        assert len(f.value) <= 1024
+        assert "```ansi" in f.value
+        assert "```" in f.value
+
+
+def test_create_portfolio_report_embed_chunking():
+    # Create a large number of positions to force chunking in create_portfolio_report_embed
+    report_lines = []
+    for i in range(30):
+        report_lines.append(
+            f"🔹 **SYM{i:02d}** ｜ `2026-06-19` ｜ `$100.0` **CALL**\n├─ 💰 成本: `$2.00` ｜ 📈 現價: `$2.50`\n├─ 🟢 損益: **+25.00%**\n├─ ⏳ DTE: `29` 天 ｜ 秤⚖️ SPY Δ: `+5.0`\n└─ 🎯 動作: HOLD"
+        )
+    # Add macro section
+    report_lines.append("🌐 【宏觀風險與資金水位報告】")
+    report_lines.append("Beta-Weighted Delta: +150.0")
+
+    embed = create_portfolio_report_embed(report_lines, survival_runway=120)
+    pos_fields = [f for f in embed.fields if "當前持倉明細" in f.name]
+    assert len(pos_fields) > 1
+    assert "當前持倉明細 (1/" in pos_fields[0].name
+    for f in pos_fields:
+        assert len(f.value) <= 1024
+        assert "```ansi" in f.value
+        assert "```" in f.value
