@@ -2142,6 +2142,9 @@ def create_watchlist_signal_embed(
     alert_level: str,
     option_plan: WatchlistOptionPlan | None = None,
     skew_commentary: str | None = None,
+    has_position: bool = False,
+    holding_quantity: float | None = None,
+    holding_avg_cost: float | None = None,
 ) -> discord.Embed:
     """建立 watchlist 半小時心跳推播 Embed。"""
     color = {
@@ -2188,6 +2191,23 @@ def create_watchlist_signal_embed(
     embed.add_field(
         name="🗓️ 事件風控",
         value=_safe_embed_field_value(event_risk_summary, "未偵測到近期重大事件"),
+        inline=False,
+    )
+    quantity_text = None
+    if holding_quantity is not None:
+        quantity_text = f"{holding_quantity:,.2f}".rstrip("0").rstrip(".")
+    holding_lines = [f"部位狀態: {'已持有' if has_position else '未持有'}"]
+    if has_position and quantity_text is not None:
+        holding_lines.append(f"現貨股數: {quantity_text} 股")
+        if holding_avg_cost is not None and holding_avg_cost > 0.0:
+            holding_lines.append(f"平均成本: ${holding_avg_cost:,.2f}")
+    elif has_position:
+        holding_lines.append("現貨持倉: 未記錄（可能為期權 / 其他交易部位）")
+    else:
+        holding_lines.append("目前以 watchlist 觀察為主。")
+    embed.add_field(
+        name="💼 持倉摘要",
+        value=_safe_embed_field_value("\n".join(holding_lines), "暫無持倉資訊"),
         inline=False,
     )
     embed.add_field(

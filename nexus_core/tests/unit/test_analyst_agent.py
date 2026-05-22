@@ -1,5 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
+from datetime import datetime, timedelta
 import pandas as pd
 import sys
 import os
@@ -218,3 +219,86 @@ async def test_run_next_day_strategy_failure_fallbacks():
 
         assert "20.00" in report
         assert "取得失敗 (Using Default)" in report
+
+
+@pytest.mark.asyncio
+async def test_run_premarket_earnings_sorting_and_filtering():
+    bot = MagicMock()
+    with patch("discord.ext.tasks.Loop.start"):
+        agent = AnalystAgent(bot)
+
+    # Calculate dates dynamically relative to current NY time
+    from market_time import ny_tz
+
+    today = datetime.now(ny_tz).date()
+
+    mock_watchlist = [(1, "SYM_A", 1), (1, "SYM_B", 1), (1, "SYM_C", 1)]
+    mock_portfolio = [(1, 123, "SYM_D")]
+
+    # SYM_D is 1 day away (valid, index 0 after sort)
+    # SYM_A is 2 days away (valid, index 1 after sort)
+    # SYM_C is 5 days away (valid, index 2 after sort)
+    # SYM_B is 15 days away (invalid, filtered out)
+    # SYM_E has no earnings info (invalid, filtered out)
+    mock_earnings = {
+        "SYM_A": MagicMock(date=(today + timedelta(days=2)).strftime("%Y-%m-%d")),
+        "SYM_B": MagicMock(date=(today + timedelta(days=15)).strftime("%Y-%m-%d")),
+        "SYM_C": MagicMock(date=(today + timedelta(days=5)).strftime("%Y-%m-%d")),
+        "SYM_D": MagicMock(date=(today + timedelta(days=1)).strftime("%Y-%m-%d")),
+        "SYM_E": None,
+    }
+
+    with patch(
+        "cogs.analyst_agent.get_all_watchlist", return_value=mock_watchlist
+    ) as mock_get_wl, patch(
+        "cogs.analyst_agent.database.get_all_portfolio", return_value=mock_portfolio
+    ) as mock_get_pf, patch(
+        "services.calendar_service.calendar_service.get_symbol_earnings_batch",
+        new_callable=AsyncMock,
+    ) as mock_get_batch, patch(
+        "cogs.analyst_agent.fetch_recent_news", new_callable=AsyncMock
+    ) as mock_fetch_news, patch(
+        "cogs.analyst_agent.get_reddit_context", new_callable=AsyncMock
+    ) as mock_fetch_reddit, patch(
+        "cogs.analyst_agent.generate_analyst_report", new_callable=AsyncMock
+    ) as mock_gen_report, patch(
+        "cogs.analyst_agent.create_earnings_report_embed"
+    ) as mock_create_embed:
+        mock_get_batch.return_value = mock_earnings
+        mock_fetch_news.return_value = "News content"
+        mock_fetch_reddit.return_value = "Reddit content"
+        mock_gen_report.return_value = "Report generated"
+        mock_create_embed.return_value = discord.Embed(
+            title="📊 Nexus Seeker 盤前財報與估值調整"
+        )
+
+        # Execute
+        await agent.run_premarket_earnings()
+
+        # Assertions
+        mock_get_wl.assert_called_once()
+        mock_get_pf.assert_called_once()
+
+        # Verify get_symbol_earnings_batch was called with all symbols (order doesn't matter since it is a set)
+        called_symbols = mock_get_batch.call_args[0][0]
+        assert set(called_symbols) == {"SYM_A", "SYM_B", "SYM_C", "SYM_D"}
+
+        # Verify generate_analyst_report was called with sorted list (max 10) and only within 14 days
+        args, kwargs = mock_gen_report.call_args
+        raw_data = args[1]
+
+        # Check analyzed_symbols count (total 4 unique symbols)
+        assert raw_data["analyzed_symbols"] == 4
+
+        # Check upcoming_earnings is filtered and sorted (top 10 closest)
+        upcoming = list(raw_data["upcoming_earnings"].keys())
+        assert len(upcoming) == 3
+        # Should be ordered by closeness: SYM_D (1 day), SYM_A (2 days), SYM_C (5 days)
+        assert upcoming == ["SYM_D", "SYM_A", "SYM_C"]
+
+        # Check sentiment scan targets (top 2 closest: SYM_D, SYM_A)
+        assert mock_fetch_news.call_count == 2
+        assert mock_fetch_reddit.call_count == 2
+
+        news_calls = [c[0][0] for c in mock_fetch_news.call_args_list]
+        assert set(news_calls) == {"SYM_D", "SYM_A"}

@@ -633,11 +633,21 @@ class SchedulerCog(commands.Cog):
 
         for uid, symbols in user_symbols.items():
             user_context = database.get_full_user_context(uid)
+            option_alert_mode = int(getattr(user_context, "option_alert_mode", 1))
+            user_holdings = {
+                str(row.get("symbol", "")).upper(): row
+                for row in database.get_user_holdings(uid)
+            }
             summary_items: list[dict[str, str]] = []
+            deliverable_symbols: list[tuple[str, bool]] = []
             for sym in symbols:
                 evaluation = evaluation_map.get(sym)
                 if evaluation is None:
                     continue
+                has_position = database.is_symbol_in_portfolio(uid, sym)
+                if option_alert_mode == 2 and not has_position:
+                    continue
+                deliverable_symbols.append((sym, has_position))
                 summary_items.append(
                     {
                         "symbol": sym,
@@ -673,10 +683,19 @@ class SchedulerCog(commands.Cog):
                 )
                 await self.bot.queue_dm(uid, embed=overview_embed)
 
-            for sym in symbols:
+            for sym, has_position in deliverable_symbols:
                 evaluation = evaluation_map.get(sym)
                 if evaluation is None:
                     continue
+                holding_row = user_holdings.get(sym.upper())
+                holding_quantity = None
+                holding_avg_cost = None
+                if (
+                    holding_row is not None
+                    and float(holding_row.get("quantity", 0.0)) > 0.0
+                ):
+                    holding_quantity = float(holding_row["quantity"])
+                    holding_avg_cost = float(holding_row.get("avg_cost", 0.0))
                 report_body = generate_ansi_watchlist_report(
                     evaluation.metrics, evaluation.tactical
                 )
@@ -684,6 +703,7 @@ class SchedulerCog(commands.Cog):
                     evaluation.metrics,
                     evaluation.tactical,
                     event_context=evaluation.event_context,
+                    has_position=has_position,
                 )
                 option_plan = await build_watchlist_option_plan(
                     evaluation.metrics,
@@ -704,6 +724,9 @@ class SchedulerCog(commands.Cog):
                     alert_level=evaluation.tactical.alert_level,
                     option_plan=option_plan,
                     skew_commentary=skew_commentary_map.get(sym),
+                    has_position=has_position,
+                    holding_quantity=holding_quantity,
+                    holding_avg_cost=holding_avg_cost,
                 )
                 await self.bot.queue_dm(uid, embed=embed)
 

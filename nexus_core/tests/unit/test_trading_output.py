@@ -215,15 +215,21 @@ async def test_dispatch_watchlist_heartbeat_sends_all_watchlist_symbols():
     ), patch(
         "database.get_full_user_context",
         side_effect=[
-            SimpleNamespace(capital=100000.0, risk_limit=15.0),
+            SimpleNamespace(capital=100000.0, risk_limit=15.0, option_alert_mode=1),
         ],
+    ), patch(
+        "database.is_symbol_in_portfolio",
+        side_effect=[False, True],
+    ), patch(
+        "database.get_user_holdings",
+        return_value=[{"symbol": "NVDA", "quantity": 100.0, "avg_cost": 900.0}],
     ), patch(
         "ui.formatter.generate_ansi_watchlist_report",
         side_effect=["AAPL report", "NVDA report"],
     ), patch(
         "market_analysis.intraday_pipeline.derive_watchlist_option_guidance",
         side_effect=["AAPL guidance", "NVDA guidance"],
-    ), patch(
+    ) as mock_guidance, patch(
         "market_analysis.intraday_pipeline.build_watchlist_option_plan",
         new_callable=AsyncMock,
         side_effect=[object(), object()],
@@ -249,5 +255,101 @@ async def test_dispatch_watchlist_heartbeat_sends_all_watchlist_symbols():
     assert mock_builder.call_count == 2
     mock_overview_builder.assert_called_once()
     assert bot.queue_dm.await_count == 3
+    assert mock_guidance.call_args_list[0].kwargs["has_position"] is False
+    assert mock_guidance.call_args_list[1].kwargs["has_position"] is True
+    assert mock_builder.call_args_list[0].kwargs["option_guidance"] == "AAPL guidance"
     assert mock_builder.call_args_list[0].kwargs["skew_commentary"] == "AAPL skew"
+    assert mock_builder.call_args_list[0].kwargs["has_position"] is False
+    assert mock_builder.call_args_list[0].kwargs["holding_quantity"] is None
     assert mock_builder.call_args_list[1].kwargs["skew_commentary"] == "NVDA skew"
+    assert mock_builder.call_args_list[1].kwargs["has_position"] is True
+    assert mock_builder.call_args_list[1].kwargs["holding_quantity"] == 100.0
+    assert mock_builder.call_args_list[1].kwargs["holding_avg_cost"] == 900.0
+
+
+@pytest.mark.asyncio
+async def test_dispatch_watchlist_heartbeat_honors_portfolio_only_mode():
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+
+    with patch("discord.ext.tasks.Loop.start"):
+        cog = SchedulerCog(bot)
+
+    eval_aapl = MagicMock()
+    eval_aapl.metrics.symbol = "AAPL"
+    eval_aapl.metrics.option_skew = 3.2
+    eval_aapl.metrics.option_skew_state = "正常"
+    eval_aapl.tactical.alert_level = "green"
+    eval_aapl.event_context.summary = "未偵測到近期需調整參數的重大事件。"
+
+    eval_nvda = MagicMock()
+    eval_nvda.metrics.symbol = "NVDA"
+    eval_nvda.metrics.option_skew = 6.8
+    eval_nvda.metrics.option_skew_state = "⚠️ 預警性對沖 (Put 昂貴)"
+    eval_nvda.tactical.alert_level = "yellow"
+    eval_nvda.event_context.summary = (
+        "CPI 倒數 12.0 小時 ｜ 先縮口數，優先定義風險的 Debit Spread / 保護性部位。"
+    )
+
+    with patch(
+        "services.calendar_service.calendar_service.get_next_high_impact_event",
+        new_callable=AsyncMock,
+        return_value=SimpleNamespace(
+            event="CPI", time="2026-05-22T12:30:00Z", tte_hours=12.0
+        ),
+    ), patch(
+        "services.calendar_service.calendar_service.get_symbol_earnings_batch",
+        new_callable=AsyncMock,
+        return_value={"AAPL": None, "NVDA": None},
+    ), patch(
+        "market_analysis.intraday_pipeline.evaluate_watchlist_symbol",
+        new_callable=AsyncMock,
+        side_effect=[eval_aapl, eval_nvda],
+    ), patch(
+        "database.get_full_user_context",
+        return_value=SimpleNamespace(
+            capital=100000.0, risk_limit=15.0, option_alert_mode=2
+        ),
+    ), patch(
+        "database.is_symbol_in_portfolio",
+        side_effect=[False, True],
+    ), patch(
+        "database.get_user_holdings",
+        return_value=[{"symbol": "NVDA", "quantity": 100.0, "avg_cost": 900.0}],
+    ), patch(
+        "ui.formatter.generate_ansi_watchlist_report",
+        return_value="NVDA report",
+    ), patch(
+        "market_analysis.intraday_pipeline.derive_watchlist_option_guidance",
+        return_value="NVDA holding guidance",
+    ) as mock_guidance, patch(
+        "market_analysis.intraday_pipeline.build_watchlist_option_plan",
+        new_callable=AsyncMock,
+        return_value=object(),
+    ), patch(
+        "services.llm_service.generate_watchlist_skew_commentary",
+        new_callable=AsyncMock,
+        side_effect=["AAPL skew", "NVDA skew"],
+    ), patch(
+        "services.llm_service.generate_watchlist_roundup_commentary",
+        new_callable=AsyncMock,
+        return_value="本輪僅推送持倉內標的。",
+    ), patch(
+        "cogs.trading.create_watchlist_overview_embed",
+        return_value=object(),
+    ), patch(
+        "cogs.trading.create_watchlist_signal_embed",
+        return_value=object(),
+    ) as mock_builder:
+        await cog._dispatch_watchlist_heartbeat([(1, "AAPL", 1), (1, "NVDA", 1)])
+
+    mock_guidance.assert_called_once_with(
+        eval_nvda.metrics,
+        eval_nvda.tactical,
+        event_context=eval_nvda.event_context,
+        has_position=True,
+    )
+    mock_builder.assert_called_once()
+    assert mock_builder.call_args.kwargs["holding_quantity"] == 100.0
+    assert mock_builder.call_args.kwargs["holding_avg_cost"] == 900.0
+    assert bot.queue_dm.await_count == 2

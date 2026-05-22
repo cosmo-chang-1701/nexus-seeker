@@ -474,22 +474,47 @@ class AnalystAgent(commands.Cog):
         time_str = self._get_tw_time_str()
         try:
             from services.calendar_service import calendar_service
+            from market_time import ny_tz
 
-            # 獲取所有觀察名單標的
+            # 獲取所有觀察名單與持倉標的
             watchlist = get_all_watchlist()
-            symbols = list(set([row[1] for row in watchlist]))
-
-            # 獲取財報日曆
-            earnings_data = {}
-            earnings_map = await calendar_service.get_symbol_earnings_batch(
-                symbols[:10]
+            portfolio = database.get_all_portfolio()
+            symbols = list(
+                set([row[1] for row in watchlist] + [row[2] for row in portfolio])
             )
-            for sym, earnings_info in earnings_map.items():
-                if earnings_info is not None:
-                    earnings_data[sym] = [{"date": earnings_info.date}]
 
-            # 並行獲取即將發布財報標的之新聞與 Reddit 情緒 (最多取前 2 個)
-            upcoming_symbols = list(earnings_data.keys())[:2]
+            # 獲取所有標的的財報日曆以進行過濾與排序
+            earnings_map = await calendar_service.get_symbol_earnings_batch(symbols)
+
+            today = datetime.now(ny_tz).date()
+            valid_earnings = []
+            for sym, info in earnings_map.items():
+                if info is not None:
+                    try:
+                        e_date = datetime.strptime(info.date, "%Y-%m-%d").date()
+                        days_left = (e_date - today).days
+                        # 篩選未來 14 天內的財報事件（與預警雷達保持一致）
+                        if 0 <= days_left <= 14:
+                            valid_earnings.append(
+                                {
+                                    "symbol": sym,
+                                    "date": info.date,
+                                    "days_left": days_left,
+                                }
+                            )
+                    except Exception as ve:
+                        logger.warning(f"Error parsing earnings date for {sym}: {ve}")
+
+            # 依據距離天數升序排序 (越近的排越前面)
+            valid_earnings.sort(key=lambda x: x["days_left"])
+
+            # 建立符合原 Embed/LLM 要求的結構，限制最多前 10 個
+            earnings_data = {}
+            for item in valid_earnings[:10]:
+                earnings_data[item["symbol"]] = [{"date": item["date"]}]
+
+            # 並行獲取即將發布財報標的之新聞與 Reddit 情緒 (最多取前 2 個，以緊迫度排序)
+            upcoming_symbols = [item["symbol"] for item in valid_earnings[:2]]
             sentiment_data = {}
             if upcoming_symbols:
                 news_tasks = [fetch_recent_news(sym) for sym in upcoming_symbols]
@@ -514,7 +539,7 @@ class AnalystAgent(commands.Cog):
                 "analyzed_symbols": len(symbols),
                 "upcoming_earnings": earnings_data,
                 "earnings_sentiment_scan": sentiment_data,
-                "note": "IV and VRP are evaluated dynamically based on recent price action.",
+                "note": "IV and VRP are evaluated dynamically based on recent price action. Proximity sorted (max 10).",
             }
 
             report_type = f"{time_str} 盤前財報與估值調整"

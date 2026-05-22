@@ -134,6 +134,16 @@ def test_derive_watchlist_option_guidance_mentions_skew_and_strategy():
     assert "Cash-Secured Put" in guidance
 
 
+def test_derive_watchlist_option_guidance_switches_to_position_management_copy():
+    metrics = _sample_metrics(current_price=129.0, iv_rank=78.0, option_skew=7.2)
+    tactical = WatchlistRiskController.process_metrics(metrics)
+
+    guidance = derive_watchlist_option_guidance(metrics, tactical, has_position=True)
+
+    assert "已有部位" in guidance
+    assert "Covered Call" in guidance
+
+
 def test_derive_watchlist_option_guidance_prioritizes_event_guard():
     metrics = _sample_metrics(current_price=129.0, iv_rank=78.0, option_skew=7.2)
     tactical = WatchlistRiskController.process_metrics(metrics)
@@ -150,6 +160,27 @@ def test_derive_watchlist_option_guidance_prioritizes_event_guard():
 
     assert "禁做賣方" in guidance
     assert "Debit Spread" in guidance
+
+
+def test_derive_watchlist_option_guidance_uses_position_copy_during_event_guard():
+    metrics = _sample_metrics(current_price=129.0, iv_rank=78.0, option_skew=7.2)
+    tactical = WatchlistRiskController.process_metrics(metrics)
+    event_context = _sample_event_context(
+        earnings_date="2026-05-24",
+        earnings_tte_hours=36.0,
+        risk_mode="event-lock",
+        summary="NVDA 財報倒數 36.0 小時 ｜ 禁做賣方、僅保留保護性 / Debit Spread 類型。",
+    )
+
+    guidance = derive_watchlist_option_guidance(
+        metrics,
+        tactical,
+        event_context=event_context,
+        has_position=True,
+    )
+
+    assert "已有部位" in guidance
+    assert "保護性 Put" in guidance
 
 
 @pytest.mark.asyncio
