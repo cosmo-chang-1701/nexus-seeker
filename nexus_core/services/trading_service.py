@@ -42,6 +42,49 @@ class TradingService:
         self.vol_inspector = VolatilityInspector(bot)
         self.execution_router = ExecutionRouter()
 
+    def _clean_market_condition_inputs(
+        self, price: float, ma20: Any, atr: Any, rsi: Any
+    ) -> Tuple[float, float, float]:
+        """
+        清理指標資料，防止 NaN / None 導致 Pydantic MarketCondition 驗證錯誤。
+        """
+        import math
+        import pandas as pd
+
+        # ma20 fallback to price
+        if (
+            ma20 is None
+            or pd.isna(ma20)
+            or (isinstance(ma20, float) and math.isnan(ma20))
+        ):
+            clean_ma20 = price
+        else:
+            clean_ma20 = float(ma20)
+
+        # atr fallback to 2% of price
+        if (
+            atr is None
+            or pd.isna(atr)
+            or (isinstance(atr, float) and math.isnan(atr))
+            or atr < 0
+        ):
+            clean_atr = 0.02 * price
+        else:
+            clean_atr = float(atr)
+
+        # rsi fallback to 50.0
+        if (
+            rsi is None
+            or pd.isna(rsi)
+            or (isinstance(rsi, float) and math.isnan(rsi))
+            or not (0 <= rsi <= 100)
+        ):
+            clean_rsi = 50.0
+        else:
+            clean_rsi = float(rsi)
+
+        return clean_ma20, clean_atr, clean_rsi
+
     async def run_ddp_scan(self, symbols: List[str]) -> List[Dict[str, Any]]:
         """執行 Davis Double Play (DDP) 掃描"""
         return await self.ddp_inspector.run_scan(symbols)
@@ -84,6 +127,11 @@ class TradingService:
             atr = last_row["ATR14"]
             rsi = last_row["RSI14"]
 
+            # 清理指標防範空值/NaN
+            clean_ma20, clean_atr, clean_rsi = self._clean_market_condition_inputs(
+                price, ma20, atr, rsi
+            )
+
             # 獲取 Skew 與 UOA (這裡簡化，實戰中可從 SentimentEngine 獲取)
             from market_analysis.sentiment_engine import SentimentEngine
 
@@ -101,9 +149,9 @@ class TradingService:
                 vix=macro.get("vix", 18.0),
                 skew_percent=skew_val,
                 asset_price=price,
-                ma20=ma20,
-                atr_14=atr,
-                rsi_14=rsi,
+                ma20=clean_ma20,
+                atr_14=clean_atr,
+                rsi_14=clean_rsi,
                 uoa_detected=uoa_detected,
             )
 
@@ -399,13 +447,23 @@ class TradingService:
                             res.get("uoa_list")
                         )  # 這裡假設 analyze_symbol 已處理 uoa_list
 
+                        price = last_row["Close"]
+                        ma20 = last_row["SMA20"]
+                        atr = last_row["ATR14"]
+                        rsi = last_row["RSI14"]
+
+                        # 清理指標防範空值/NaN
+                        clean_ma20, clean_atr, clean_rsi = (
+                            self._clean_market_condition_inputs(price, ma20, atr, rsi)
+                        )
+
                         condition = MarketCondition(
                             vix=vix_spot,
                             skew_percent=skew_val,
-                            asset_price=last_row["Close"],
-                            ma20=last_row["SMA20"],
-                            atr_14=last_row["ATR14"],
-                            rsi_14=last_row["RSI14"],
+                            asset_price=price,
+                            ma20=clean_ma20,
+                            atr_14=clean_atr,
+                            rsi_14=clean_rsi,
                             uoa_detected=uoa_detected,
                         )
                         res["execution_decision"] = (
@@ -478,7 +536,8 @@ class TradingService:
         # 3. 準備使用者分發與「個人化 NRO 優化」
         user_alerts_results = {}
         user_watchlists: Dict[int, List[Tuple[str, float, bool]]] = {}
-        for uid, sym, stock_cost, use_llm in all_watchlists:
+        for uid, sym, use_llm in all_watchlists:
+            stock_cost = holding_map.get((uid, sym), 0.0)
             user_watchlists.setdefault(uid, []).append((sym, stock_cost, use_llm))
 
         for uid, watchlist_items in user_watchlists.items():
