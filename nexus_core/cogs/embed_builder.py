@@ -2214,66 +2214,95 @@ def create_watchlist_signal_embed(
         value=_safe_embed_field_value(report_body, "暫無快照"),
         inline=False,
     )
-    skew_lines = [skew_state]
+    skew_lines = [f"├─ Skew 數據: {skew_state}"]
     if option_plan is not None:
-        skew_lines.append(option_plan.rationale)
+        skew_lines.append(f"└─ 策略解說: *{option_plan.rationale}*")
+    else:
+        skew_lines.append("└─ 策略解說: 目前無可執行期權合約計畫")
     embed.add_field(
         name="📐 Skew 與市場判讀",
         value=_safe_embed_field_value("\n".join(skew_lines), "N/A"),
         inline=False,
     )
+
+    if skew_commentary:
+        commentary_text = "\n".join(
+            f"> {line}" for line in skew_commentary.strip().split("\n")
+        )
+    else:
+        commentary_text = (
+            "> *暫無 LLM skew 即時解說，請先依上方 Skew / IV / 事件風控欄位判讀。*"
+        )
     embed.add_field(
         name="🤖 LLM Skew 解說",
-        value=_safe_embed_field_value(
-            skew_commentary or "",
-            "暫無 LLM skew 解說，請先依上方 Skew / IV / 事件風控欄位判讀。",
-        ),
+        value=_safe_embed_field_value(commentary_text, "暫無解說"),
         inline=False,
+    )
+
+    event_val = (
+        f"└─ {event_risk_summary}" if event_risk_summary else "└─ 未偵測到近期重大事件"
     )
     embed.add_field(
         name="🗓️ 事件風控",
-        value=_safe_embed_field_value(event_risk_summary, "未偵測到近期重大事件"),
+        value=_safe_embed_field_value(event_val, "未偵測到近期重大事件"),
         inline=False,
     )
-    quantity_text = None
-    if holding_quantity is not None:
-        quantity_text = f"{holding_quantity:,.2f}".rstrip("0").rstrip(".")
-    holding_lines = [f"部位狀態: {'已持有' if has_position else '未持有'}"]
-    if has_position and quantity_text is not None:
-        holding_lines.append(f"現貨股數: {quantity_text} 股")
-        if holding_avg_cost is not None and holding_avg_cost > 0.0:
-            holding_lines.append(f"平均成本: ${holding_avg_cost:,.2f}")
-    elif has_position:
-        holding_lines.append("現貨持倉: 未記錄（可能為期權 / 其他交易部位）")
+
+    holding_lines = []
+    if has_position:
+        holding_lines.append("├─ 部位狀態: 已持有")
+        if holding_quantity is not None:
+            quantity_text = f"{holding_quantity:,.2f}".rstrip("0").rstrip(".")
+            holding_lines.append(f"├─ 現貨股數: {quantity_text} 股")
+            if holding_avg_cost is not None and holding_avg_cost > 0.0:
+                holding_lines.append(f"└─ 平均成本: ${holding_avg_cost:,.2f}")
+            else:
+                holding_lines[-1] = f"└─ 現貨股數: {quantity_text} 股"
+        else:
+            holding_lines.append("└─ 現貨持倉: 未記錄（可能為期權 / 其他交易部位）")
     else:
-        holding_lines.append("目前以 watchlist 觀察為主。")
+        holding_lines.append("├─ 部位狀態: 未持有")
+        holding_lines.append("└─ 操作提示: 目前無持倉，以 watchlist 追蹤觀察為主")
     embed.add_field(
         name="💼 持倉摘要",
         value=_safe_embed_field_value("\n".join(holding_lines), "暫無持倉資訊"),
         inline=False,
     )
+
+    if option_guidance:
+        guidance_text = "\n".join(
+            f"> {line}" for line in option_guidance.strip().split("\n")
+        )
+    else:
+        guidance_text = "> *暫無執行建議*"
     embed.add_field(
         name="🎯 執行建議",
-        value=_safe_embed_field_value(option_guidance, "暫無建議"),
+        value=_safe_embed_field_value(guidance_text, "暫無建議"),
         inline=False,
     )
+
     if option_plan is not None:
+        premium_type_text = (
+            "Debit / 收支" if option_plan.premium_type == "debit" else "Credit / 收租"
+        )
         leg_lines = []
-        for leg in option_plan.legs:
+        for i, leg in enumerate(option_plan.legs):
+            is_last = i == len(option_plan.legs) - 1
+            connector = "└──" if is_last else "├──"
             leg_lines.append(
-                f"- {leg.action} {leg.opt_type} {leg.strike:.2f} {leg.expiry} @ {leg.mid_price:.2f}"
+                f"{connector} {leg.action.upper()} {leg.opt_type.upper()} {leg.strike:.2f} {leg.expiry} @ {leg.mid_price:.2f}"
             )
+        leg_block = "\n".join(leg_lines)
         option_lines = [
-            f"策略: {option_plan.strategy_name}",
-            f"權利金型態: {'Debit' if option_plan.premium_type == 'debit' else 'Credit'}",
-            f"估計淨權利金: ${option_plan.estimated_net_premium:.2f}",
-            f"建議口數: {option_plan.suggested_contracts}",
-            f"估計最大風險: ${option_plan.max_risk_amount:.2f}",
-            *leg_lines,
+            f"📦 **期權策略**: `{option_plan.strategy_name}` (型態: `{premium_type_text}`)",
+            f"├─ 預估權利金: `${option_plan.estimated_net_premium:.2f}` (建議 `{option_plan.suggested_contracts}` 口)",
+            f"├─ 估計最大風險: `${option_plan.max_risk_amount:.2f}`",
+            "└─ 執行合約結構:",
+            f"```\n{leg_block}\n```",
         ]
         option_value = "\n".join(option_lines)
     else:
-        option_value = "目前無符合條件的完整期權合約，保留正股 / 策略觀察。"
+        option_value = "└─ 目前無符合條件的完整期權合約，保留正股 / 策略觀察。"
     embed.add_field(
         name="🧾 可執行期權合約",
         value=_safe_embed_field_value(option_value, "暫無合約"),

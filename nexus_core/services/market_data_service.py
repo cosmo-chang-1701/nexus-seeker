@@ -132,28 +132,41 @@ async def get_yfinance_quote(symbol: str) -> Dict[str, Any]:
 
 async def get_quote(symbol: str) -> Dict[str, Any]:
     """取得即時報價 (非同步)。對於指數型標的，強制轉向 yfinance。"""
-    if symbol.startswith("^") or symbol == "VIX":
-        return await get_yfinance_quote(symbol)
+    symbol = symbol.upper()
+    now = time.time()
+    if symbol in _quote_cache:
+        val, expiry = _quote_cache[symbol]
+        if now < expiry:
+            return val
 
-    client = _get_client()
-    try:
-        data = await _execute_api_call(client.quote, symbol)
-        if data and data.get("c", 0) > 0:
-            return data
-
-        # 若 Finnhub 回傳無效或報權限錯誤 (c=0 有可能是權限問題或標的不存在)
-        # 嘗試作為 fallback 轉向 yfinance
-        logger.warning(f"[{symbol}] Finnhub quote 無效，嘗試 yfinance fallback")
-        return await get_yfinance_quote(symbol)
-    except Exception as e:
-        # 如果是明確的權限錯誤，也轉向 yfinance
-        error_msg = str(e).lower()
-        if "subscription required" in error_msg or "market data" in error_msg:
-            logger.info(f"[{symbol}] Finnhub 權限受限，強制轉向 yfinance")
+    async def _fetch():
+        if symbol.startswith("^") or symbol == "VIX":
             return await get_yfinance_quote(symbol)
 
-        logger.error(f"[{symbol}] Finnhub quote 失敗: {e}")
-        return {}
+        client = _get_client()
+        try:
+            data = await _execute_api_call(client.quote, symbol)
+            if data and data.get("c", 0) > 0:
+                return data
+
+            # 若 Finnhub 回傳無效或報權限錯誤 (c=0 有可能是權限問題或標的不存在)
+            # 嘗試作為 fallback 轉向 yfinance
+            logger.warning(f"[{symbol}] Finnhub quote 無效，嘗試 yfinance fallback")
+            return await get_yfinance_quote(symbol)
+        except Exception as e:
+            # 如果是明確的權限錯誤，也轉向 yfinance
+            error_msg = str(e).lower()
+            if "subscription required" in error_msg or "market data" in error_msg:
+                logger.info(f"[{symbol}] Finnhub 權限受限，強制轉向 yfinance")
+                return await get_yfinance_quote(symbol)
+
+            logger.error(f"[{symbol}] Finnhub quote 失敗: {e}")
+            return {}
+
+    res = await _fetch()
+    if res and res.get("c", 0) > 0:
+        _quote_cache[symbol] = (res, now + _QUOTE_CACHE_TTL)
+    return res
 
 
 async def validate_symbol(symbol: str) -> bool:
@@ -270,6 +283,34 @@ class BoundedCache(OrderedDict):
 # ---------------------------------------------------------------------------
 _sma_cache = BoundedCache(max_size=MAX_CACHE_SIZE)
 _SMA_CACHE_TTL = 3600  # 1 小時 (1GB VPS 優化)
+
+
+# ---------------------------------------------------------------------------
+# 即時報價與基本面資料快取設定
+# ---------------------------------------------------------------------------
+_quote_cache = BoundedCache(max_size=MAX_CACHE_SIZE)
+_QUOTE_CACHE_TTL = 15  # 15 秒，避免在同一次掃描中心跳訊號重複對相同標的進行即時報價呼叫
+
+_profile_cache = BoundedCache(max_size=MAX_CACHE_SIZE)
+_PROFILE_CACHE_TTL = 86400  # 24 小時，公司 Profile 通常是靜態的
+
+_etf_cache = BoundedCache(max_size=MAX_CACHE_SIZE)
+_ETF_CACHE_TTL = 86400  # 24 小時，ETF 屬性通常是靜態的
+
+
+def clear_quote_cache():
+    _quote_cache.clear()
+    logger.info("Clarified quote cache")
+
+
+def clear_profile_cache():
+    _profile_cache.clear()
+    logger.info("Clarified profile cache")
+
+
+def clear_etf_cache():
+    _etf_cache.clear()
+    logger.info("Clarified ETF cache")
 
 
 async def get_sma(symbol: str, window: int = 200) -> Optional[float]:
@@ -398,10 +439,20 @@ async def get_dividend_yield(symbol: str) -> float:
 # ---------------------------------------------------------------------------
 async def get_company_profile(symbol: str) -> Dict[str, Any]:
     """取得公司/ETF 基本資料。"""
+    symbol = symbol.upper()
+    now = time.time()
+    if symbol in _profile_cache:
+        val, expiry = _profile_cache[symbol]
+        if now < expiry:
+            return val
+
     client = _get_client()
     try:
         data = await _execute_api_call(client.company_profile2, symbol=symbol)
-        return data if data else {}
+        res = data if data else {}
+        if res:
+            _profile_cache[symbol] = (res, now + _PROFILE_CACHE_TTL)
+        return res
     except Exception as e:
         logger.error(f"[{symbol}] Finnhub company profile 失敗: {e}")
         return {}
@@ -409,12 +460,21 @@ async def get_company_profile(symbol: str) -> Dict[str, Any]:
 
 async def is_etf(symbol: str) -> bool:
     """判斷標的是否為 ETF。"""
+    symbol = symbol.upper()
+    now = time.time()
+    if symbol in _etf_cache:
+        val, expiry = _etf_cache[symbol]
+        if now < expiry:
+            return val
+
     client = _get_client()
     try:
         data = await _execute_api_call(client.etfs_profile, symbol=symbol)
+        res = False
         if data and data.get("name"):
-            return True
-        return False
+            res = True
+        _etf_cache[symbol] = (res, now + _ETF_CACHE_TTL)
+        return res
     except Exception:
         return False
 
