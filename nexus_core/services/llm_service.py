@@ -85,6 +85,13 @@ class SkewCommentary(BaseModel):
     )
 
 
+class WatchlistRoundupCommentary(BaseModel):
+    model_config = ConfigDict()
+    commentary: str = Field(
+        description="針對本輪 watchlist 多標的重點的簡短總覽，必須使用繁體中文並控制在 180 字內"
+    )
+
+
 async def classify_uoa_intent(
     symbol: str, uoa_data: dict, whale_intent: str = None
 ) -> dict:
@@ -290,6 +297,48 @@ async def generate_watchlist_skew_commentary(symbol: str, raw_data: dict) -> str
     except Exception as e:
         logger.error(f"[{symbol}] Watchlist skew LLM 解說失敗: {e}")
         return f"LLM skew 解說暫時不可用：{str(e)}"
+
+
+async def generate_watchlist_roundup_commentary(raw_data: dict) -> str:
+    """
+    針對單一使用者本輪 watchlist 心跳生成總覽摘要。
+    """
+    if not is_memory_safe():
+        logger.warning("🚨 [記憶體警報] 系統資源不足，跳過 Watchlist 總覽 LLM 解說。")
+        return "系統記憶體負載偏高，暫停本輪 watchlist 總覽 LLM 摘要；請優先檢查紅 / 黃燈標的與事件風控欄位。"
+
+    system_prompt = """
+    你是 Nexus Seeker 的 watchlist 輪巡總覽助手。
+    請根據同一輪 heartbeat 的多標的資料，整理一段可直接放進 Discord embed 的總覽摘要。
+
+    規則：
+    1. 只能使用提供的資料，不得虛構數值。
+    2. 使用繁體中文，語氣冷靜專業。
+    3. 優先指出最高優先標的、共同事件風險與本輪倉位/風險姿態。
+    4. 控制在 180 字內。
+    """
+
+    user_prompt = (
+        f"本輪 Watchlist 資料: {json.dumps(raw_data, ensure_ascii=False)}\n"
+        "請輸出一段本輪 watchlist 總覽摘要。"
+    )
+
+    try:
+        response = await client.beta.chat.completions.parse(
+            model=LLM_MODEL_NAME,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            response_format=WatchlistRoundupCommentary,
+        )
+        result = response.choices[0].message.parsed
+        if result is None:
+            raise ValueError("Parsed result is None")
+        return result.commentary
+    except Exception as e:
+        logger.error(f"Watchlist 總覽 LLM 解說失敗: {e}")
+        return f"本輪總覽 LLM 摘要暫時不可用：{str(e)}"
 
 
 async def generate_polymarket_summary(

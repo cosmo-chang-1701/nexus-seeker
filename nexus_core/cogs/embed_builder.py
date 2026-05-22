@@ -2221,6 +2221,96 @@ def create_watchlist_signal_embed(
     return embed
 
 
+def create_watchlist_overview_embed(
+    summary_items: List[Dict[str, str]],
+    llm_overview: str | None = None,
+) -> discord.Embed:
+    """建立單一使用者本輪 watchlist 總覽摘要 Embed。"""
+    scenario_labels = {
+        "hard-hedge": "防守對沖",
+        "premium-harvest": "權利金佈局",
+        "wait": "觀望待機",
+    }
+    priority = {"red": 0, "yellow": 1, "green": 2}
+    icon_map = {"red": "🔴", "yellow": "🟡", "green": "🟢"}
+    ordered_items = sorted(
+        summary_items,
+        key=lambda item: (
+            priority.get(item.get("alert_level", ""), 3),
+            item.get("symbol", ""),
+        ),
+    )
+    counts = {
+        level: sum(1 for item in ordered_items if item.get("alert_level") == level)
+        for level in ("red", "yellow", "green")
+    }
+    embed_color = (
+        discord.Color.red()
+        if counts["red"] > 0
+        else discord.Color.orange()
+        if counts["yellow"] > 0
+        else discord.Color.green()
+    )
+
+    embed = discord.Embed(
+        title="🧭 本輪 Watchlist 總覽",
+        description=(
+            f"**追蹤標的：** `{len(ordered_items)}` ｜ "
+            f"🔴 `{counts['red']}` ｜ 🟡 `{counts['yellow']}` ｜ 🟢 `{counts['green']}`\n"
+            "先看高優先標的，再回頭逐則檢查個別 heartbeat。"
+        ),
+        color=embed_color,
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    focus_lines = []
+    for item in ordered_items[:3]:
+        icon = icon_map.get(item.get("alert_level", ""), "🔵")
+        scenario_label = scenario_labels.get(
+            item.get("scenario", ""),
+            item.get("scenario", "觀望待機"),
+        )
+        focus_lines.append(
+            f"{icon} {item.get('symbol', 'N/A')}｜{item.get('skew_state', 'N/A')}｜{scenario_label}"
+        )
+        focus_lines.append(
+            f"事件：{item.get('event_risk_summary', '未偵測到近期重大事件')}"
+        )
+    if not focus_lines:
+        focus_lines = ["本輪無可用 watchlist 評估結果。"]
+    embed.add_field(
+        name="🎯 本輪焦點",
+        value=_safe_embed_field_value("\n".join(focus_lines), "暫無重點"),
+        inline=False,
+    )
+
+    overview_lines = []
+    for item in ordered_items:
+        icon = icon_map.get(item.get("alert_level", ""), "🔵")
+        scenario_label = scenario_labels.get(
+            item.get("scenario", ""),
+            item.get("scenario", "觀望待機"),
+        )
+        overview_lines.append(
+            f"{icon} {item.get('symbol', 'N/A')}｜{item.get('skew_state', 'N/A')}｜{scenario_label}"
+        )
+    embed.add_field(
+        name="📋 全標的速覽",
+        value=_safe_embed_field_value("\n".join(overview_lines), "暫無總覽"),
+        inline=False,
+    )
+    embed.add_field(
+        name="🤖 LLM 本輪摘要",
+        value=_safe_embed_field_value(
+            llm_overview or "",
+            "暫無本輪 LLM 摘要，請優先查看紅 / 黃燈標的與事件風控。",
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="Nexus Seeker Watchlist Roundup | 每 30 分鐘更新")
+    return embed
+
+
 def create_portfolio_report_embed(
     report_lines, hedge_analysis=None, survival_runway=None
 ):

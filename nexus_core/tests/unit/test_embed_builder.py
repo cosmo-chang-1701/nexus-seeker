@@ -29,6 +29,7 @@ from cogs.embed_builder import (
     create_sector_flow_report_embed,
     split_embed_by_fields,
     create_hedge_settlement_embed,
+    create_watchlist_overview_embed,
     create_watchlist_signal_embed,
 )
 from models.schemas import WatchlistOptionLeg, WatchlistOptionPlan
@@ -417,6 +418,39 @@ def test_create_watchlist_signal_embed():
     assert "CPI" in embed.fields[3].value
     assert "Bull Put Spread" in embed.fields[5].value
     assert "SELL PUT 120.00" in embed.fields[5].value
+
+
+def test_create_watchlist_overview_embed():
+    embed = create_watchlist_overview_embed(
+        [
+            {
+                "symbol": "NVDA",
+                "alert_level": "yellow",
+                "skew_state": "+6.20% ｜ ⚠️ 預警性對沖 (Put 昂貴)",
+                "scenario": "premium-harvest",
+                "event_risk_summary": "CPI 倒數 12.0 小時 ｜ 先縮口數，優先定義風險的 Debit Spread / 保護性部位。",
+            },
+            {
+                "symbol": "AAPL",
+                "alert_level": "green",
+                "skew_state": "+1.10% ｜ 正常",
+                "scenario": "wait",
+                "event_risk_summary": "未偵測到近期需調整參數的重大事件。",
+            },
+        ],
+        llm_overview="本輪先留意 NVDA 的事件風險與偏左 skew，AAPL 維持例行追蹤。",
+    )
+
+    assert embed.title == "🧭 本輪 Watchlist 總覽"
+    assert "追蹤標的" in (embed.description or "")
+    assert embed.fields[0].name == "🎯 本輪焦點"
+    assert "NVDA" in embed.fields[0].value
+    assert "權利金佈局" in embed.fields[0].value
+    assert embed.fields[1].name == "📋 全標的速覽"
+    assert "AAPL" in embed.fields[1].value
+    assert "觀望待機" in embed.fields[1].value
+    assert embed.fields[2].name == "🤖 LLM 本輪摘要"
+    assert "NVDA" in embed.fields[2].value
 
 
 def test_create_memory_alert_embed():
