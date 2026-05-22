@@ -151,4 +151,14 @@ class VolatilityInspector:
             "trend": ema_eval["trend"],
             "psq_signal": psq_res.signal_direction if psq_res else "None",
             "runway_impact": round(runway_impact_days, 1),
+            # Compatibility keys for create_volatility_embed
+            "iv": round(iv_current * 100, 1),
+            "iv_p": round(ivr, 1),
+            "hv": round(hv_current * 100, 1),
+            "status": "高風險事件"
+            if is_high_risk_vol
+            else ("波動率極低" if is_opportunity else "波動率正常"),
+            "days_to_earnings": round(days_to_earnings, 1),
+            "stop_loss": round(price * 0.9, 2),
+            "daily_theta": round(daily_theta, 2),
         }
