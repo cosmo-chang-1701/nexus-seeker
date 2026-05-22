@@ -28,8 +28,11 @@ from market_analysis.sentiment_engine import SentimentEngine
 from config import get_vix_tier
 from cogs.embed_builder import (
     create_ai_analysis_embed,
+    create_earnings_report_embed,
     create_intraday_execution_guide_embed,
     create_next_day_strategy_embed,
+    create_sector_flow_report_embed,
+    split_embed_by_fields,
 )
 import httpx
 
@@ -82,17 +85,11 @@ class AnalystAgent(commands.Cog):
                 logger.info("🤖 [Analyst Pre-Market] 啟動盤前巨觀與財報掃描...")
                 macro_report = await self.run_macro_scan()
                 if macro_report:
-                    embed = create_ai_analysis_embed(
-                        macro_report, title="📊 Nexus Seeker 盤前巨觀風險報告"
-                    )
-                    await self.dispatch_report(embed)
+                    await self.dispatch_report(macro_report)
 
                 earnings_report = await self.run_premarket_earnings()
                 if earnings_report:
-                    embed = create_ai_analysis_embed(
-                        earnings_report, title="📊 Nexus Seeker 盤前財報與估值調整"
-                    )
-                    await self.dispatch_report(embed)
+                    await self.dispatch_report(earnings_report)
             except Exception as e:
                 logger.error(f"Analyst Pre-Market loop error: {e}")
 
@@ -130,14 +127,17 @@ class AnalystAgent(commands.Cog):
         """
         import database
 
+        report_embeds = split_embed_by_fields(report_content)
+
         user_ids = database.get_all_user_ids()
         dispatched_count = 0
         for uid in user_ids:
             ctx = database.get_full_user_context(uid)
             if ctx.enable_analyst_agent:
                 try:
-                    await self.bot.queue_dm(uid, embed=report_content)
-                    dispatched_count += 1
+                    for embed in report_embeds:
+                        await self.bot.queue_dm(uid, embed=embed)
+                        dispatched_count += 1
                 except Exception as e:
                     logger.error(f"Failed to dispatch report to {uid}: {e}")
         logger.info(f"Dispatched report to {dispatched_count} users.")
@@ -324,11 +324,7 @@ class AnalystAgent(commands.Cog):
 
                 sector_report = await self.run_sector_flow_report()
                 if sector_report:
-                    embed = create_ai_analysis_embed(
-                        sector_report,
-                        title="📊 Nexus Seeker 收盤資金流向與板塊輪動報告",
-                    )
-                    await self.dispatch_report(embed)
+                    await self.dispatch_report(sector_report)
 
                 next_day_report = await self.run_next_day_strategy()
                 if next_day_report:
@@ -524,12 +520,13 @@ class AnalystAgent(commands.Cog):
             report_type = f"{time_str} 盤前財報與估值調整"
             report_content = await generate_analyst_report(report_type, raw_data)
 
-            from cogs.embed_builder import create_earnings_report_embed
-
             return create_earnings_report_embed(report_type, report_content, raw_data)
         except Exception as e:
             logger.error(f"run_premarket_earnings error: {e}")
-            return f"**{time_str} 盤前財報與估值調整**\n--------------------------------------------------\n系統分析發生錯誤: {e}"
+            return create_ai_analysis_embed(
+                f"**{time_str} 盤前財報與估值調整**\n--------------------------------------------------\n系統分析發生錯誤: {e}",
+                title="📊 Nexus Seeker 盤前財報與估值調整",
+            )
 
     async def run_market_open_liquidity(self):
         time_str = self._get_tw_time_str()
@@ -825,10 +822,13 @@ class AnalystAgent(commands.Cog):
 
             report_type = f"{time_str} 收盤資金流向與板塊輪動報告"
             report = await generate_analyst_report(report_type, raw_data)
-            return report
+            return create_sector_flow_report_embed(report_type, report, raw_data)
         except Exception as e:
             logger.error(f"run_sector_flow_report error: {e}")
-            return f"**{time_str} 收盤資金流向報告**\n--------------------------------------------------\n系統分析發生錯誤: {e}"
+            return create_ai_analysis_embed(
+                f"**{time_str} 收盤資金流向報告**\n--------------------------------------------------\n系統分析發生錯誤: {e}",
+                title="📊 Nexus Seeker 收盤資金流向與板塊輪動報告",
+            )
 
     async def run_next_day_strategy(self):
         time_str = self._get_tw_time_str()

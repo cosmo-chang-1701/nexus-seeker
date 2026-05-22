@@ -6,6 +6,7 @@ from cogs.embed_builder import (
     create_portfolio_report_embed,
     build_vtr_stats_embed,
     build_scan_report,
+    create_earnings_report_embed,
     create_ddp_embed,
     create_asset_promotion_embed,
     create_ditm_transition_alert_embed,
@@ -25,6 +26,8 @@ from cogs.embed_builder import (
     create_hedge_alert_embed,
     create_hedge_list_embed,
     create_proactive_event_alert_embed,
+    create_sector_flow_report_embed,
+    split_embed_by_fields,
     create_hedge_settlement_embed,
     create_watchlist_signal_embed,
 )
@@ -96,6 +99,110 @@ def test_create_portfolio_report_embed():
     assert "2026-06-19" in positions_value
     assert "$150.0C" in positions_value
     assert "+30.00%" in positions_value
+
+
+def test_create_earnings_report_embed():
+    embed = create_earnings_report_embed(
+        "[08:30 UTC+8] 盤前財報與估值調整",
+        "1. **📌 核心觀察**\nMU 與 NVDA 進入財報前壓縮區。\n"
+        "2. **⚠️ 風險提示**\n避免在事件前擴大裸賣方曝險。",
+        {
+            "analyzed_symbols": 12,
+            "upcoming_earnings": {
+                "MU": [{"date": "2026-05-23"}],
+                "NVDA": [{"date": "2026-05-24"}],
+            },
+            "earnings_sentiment_scan": {
+                "MU": {
+                    "news": "Micron 財報前市場聚焦 HBM 需求延續。",
+                    "reddit_sentiment": "社群偏多，但擔心財測落差。",
+                }
+            },
+            "note": "IV and VRP are evaluated dynamically based on recent price action.",
+        },
+    )
+
+    assert embed.title == "📊 Nexus Seeker 盤前財報與估值調整"
+    assert "更新批次" in (embed.description or "")
+    assert embed.fields[0].name == "📅 即將發布財報標的"
+    assert "MU" in embed.fields[0].value
+    assert embed.fields[1].name == "🧠 情緒 / 估值快照"
+    assert "HBM" in embed.fields[1].value
+    assert any(field.name == "📌 核心觀察" for field in embed.fields)
+
+
+def test_create_sector_flow_report_embed():
+    embed = create_sector_flow_report_embed(
+        "[04:15 UTC+8] 收盤資金流向與板塊輪動報告",
+        "1. **🔄 板塊主線**\n科技與金融為今日主導。\n"
+        "2. **🐋 事件觀察**\nPolymarket 仍聚焦降息與 AI 資本支出。",
+        {
+            "vix": 19.2,
+            "vix_tier_name": "Ready",
+            "spy_price": 528.5,
+            "sectors": [
+                {
+                    "symbol": "XLK",
+                    "name": "Technology",
+                    "pct_change": 1.45,
+                    "rel_vol": 1.32,
+                    "skew": 4.8,
+                    "uoa_count": 2,
+                },
+                {
+                    "symbol": "XLF",
+                    "name": "Financials",
+                    "pct_change": 0.92,
+                    "rel_vol": 1.18,
+                    "skew": 1.5,
+                    "uoa_count": 1,
+                },
+            ],
+            "poly_events": [{"question": "Will the Fed cut rates by September?"}],
+            "spy_max_pain": {"max_pain": 520.0},
+        },
+    )
+
+    assert embed.title == "📊 Nexus Seeker 收盤資金流向與板塊輪動報告"
+    assert "SPY 現價" in (embed.description or "")
+    assert embed.fields[0].name == "🌐 收盤市場快照"
+    assert "Ready" in embed.fields[0].value
+    assert embed.fields[1].name == "🔄 板塊輪動快照"
+    assert "XLK" in embed.fields[1].value
+    assert any(field.name == "🔄 板塊主線" for field in embed.fields)
+
+
+def test_split_embed_by_fields_creates_one_message_per_block():
+    embed = create_sector_flow_report_embed(
+        "[04:15 UTC+8] 收盤資金流向與板塊輪動報告",
+        "1. **🔄 板塊主線**\n科技與金融為今日主導。\n"
+        "2. **🐋 事件觀察**\nPolymarket 仍聚焦降息與 AI 資本支出。",
+        {
+            "vix": 19.2,
+            "vix_tier_name": "Ready",
+            "spy_price": 528.5,
+            "sectors": [
+                {
+                    "symbol": "XLK",
+                    "name": "Technology",
+                    "pct_change": 1.45,
+                    "rel_vol": 1.32,
+                    "skew": 4.8,
+                    "uoa_count": 2,
+                }
+            ],
+            "poly_events": [{"question": "Will the Fed cut rates by September?"}],
+            "spy_max_pain": {"max_pain": 520.0},
+        },
+    )
+
+    split_embeds = split_embed_by_fields(embed)
+
+    assert len(split_embeds) == len(embed.fields)
+    assert split_embeds[0].description
+    assert split_embeds[1].description is None
+    assert split_embeds[0].fields[0].name == embed.fields[0].name
+    assert split_embeds[-1].title.endswith(f"({len(embed.fields)}/{len(embed.fields)})")
 
 
 def test_build_vtr_stats_embed():

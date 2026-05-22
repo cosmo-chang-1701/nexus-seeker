@@ -225,6 +225,96 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _report_embed_color(text: str) -> discord.Color:
+    """根據報告內容關鍵字推導一致的報告顏色。"""
+    if "🚨" in text or "🆘" in text:
+        return discord.Color.red()
+    if "⚠️" in text:
+        return discord.Color.orange()
+    return discord.Color.blue()
+
+
+def _extract_report_batch(report_type: str) -> str:
+    match = re.search(r"(\[[^\]]+\])", report_type)
+    if match:
+        return match.group(1)
+    return report_type
+
+
+def _parse_ai_report_sections(ai_report_text: str) -> list[tuple[str, str]]:
+    """將 LLM 報告切成可直接映射到 Embed 欄位的段落。"""
+    sections = re.split(r"\n(?=\d+\.\s+\*\*|(?:\*\*[\u2600-\u2BFF]))", ai_report_text)
+    parsed_sections: list[tuple[str, str]] = []
+
+    if len(sections) <= 1:
+        return parsed_sections
+
+    for section in sections:
+        section = section.strip()
+        if not section:
+            continue
+
+        lines = section.split("\n", 1)
+        header = lines[0].replace("**", "").strip()
+        header = re.sub(r"^\d+\.\s*", "", header)
+        content = lines[1].strip() if len(lines) > 1 else "無內容"
+        content = re.sub(r"^-{3,}$", "", content, flags=re.MULTILINE).strip()
+        if header:
+            parsed_sections.append((header, content or "無詳細資訊"))
+
+    return parsed_sections
+
+
+def _append_ai_report_fields(
+    embed: discord.Embed,
+    ai_report_text: str,
+    *,
+    fallback_field_name: str = "🤖 AI 分析摘要",
+) -> None:
+    """將 AI 報告以一致的欄位格式附加到 Embed。"""
+    sections = _parse_ai_report_sections(ai_report_text)
+    if sections:
+        for header, content in sections:
+            embed.add_field(
+                name=header,
+                value=_safe_embed_field_value(content, "無詳細資訊"),
+                inline=False,
+            )
+        return
+
+    embed.add_field(
+        name=fallback_field_name,
+        value=_safe_embed_field_value(ai_report_text, "無詳細資訊"),
+        inline=False,
+    )
+
+
+def split_embed_by_fields(embed: discord.Embed) -> list[discord.Embed]:
+    """將多欄位報告拆成多則 Embed，避免單則訊息過長。"""
+    if len(embed.fields) <= 1:
+        return [embed]
+
+    base_payload = embed.to_dict()
+    base_payload.pop("fields", None)
+
+    split_embeds: list[discord.Embed] = []
+    total = len(embed.fields)
+
+    for index, field in enumerate(embed.fields, start=1):
+        payload = dict(base_payload)
+        title = payload.get("title")
+        if title:
+            payload["title"] = f"{title} ({index}/{total})"
+        if index > 1:
+            payload.pop("description", None)
+
+        split_embed = discord.Embed.from_dict(payload)
+        split_embed.add_field(name=field.name, value=field.value, inline=field.inline)
+        split_embeds.append(split_embed)
+
+    return split_embeds
+
+
 # ============================================================================
 # Shared field-formatting helpers
 # ============================================================================
@@ -940,60 +1030,206 @@ def create_earnings_report_embed(
     report_type: str, report_content: str, raw_data: dict
 ) -> discord.Embed:
     """
-    建立盤前財報與估值調整 Embed (繁體中文)，參照 Polymarket 巨鯨戰報風格。
+    建立盤前財報與估值調整 Embed，沿用欄位化戰報風格。
     """
+    upcoming = raw_data.get("upcoming_earnings", {})
+    sentiment = raw_data.get("earnings_sentiment_scan", {})
+    analyzed_symbols = int(raw_data.get("analyzed_symbols", 0) or 0)
+    batch_label = _extract_report_batch(report_type)
+
     embed = discord.Embed(
-        title=f"【 {report_type} 】",
-        color=discord.Color.blue(),
+        title="📊 Nexus Seeker 盤前財報與估值調整",
+        description=(
+            f"**更新批次：** {batch_label}\n"
+            f"**掃描標的：** `{analyzed_symbols}` 檔 ｜ "
+            f"**即將財報：** `{len(upcoming)}` 檔\n"
+            "盤前聚焦財報日期、情緒與估值風險，維持與其他核心戰報一致的欄位式呈現。"
+        ),
+        color=_report_embed_color(report_content),
         timestamp=datetime.now(timezone.utc),
     )
 
-    upcoming = raw_data.get("upcoming_earnings", {})
-    sentiment = raw_data.get("earnings_sentiment_scan", {})
-
-    content = []
-
     if upcoming:
-        content.append("## 📅 即將發布財報標的")
-        content.append("---")
         earnings_lines = ["```ansi"]
+        headers = ["標的", "財報日", "情緒覆蓋"]
+        widths = [8, 14, 12]
+        earnings_lines.append(
+            " | ".join(_pad_string(h, w) for h, w in zip(headers, widths))
+        )
+        earnings_lines.append("-" * (sum(widths) + 3 * (len(widths) - 1)))
         for sym, events in upcoming.items():
             for event in events:
                 date = event.get("date", "未知日期")
-                period = event.get("period", "未知季度")
-
-                sym_sentiment = sentiment.get(sym, {})
-                news = sym_sentiment.get("news", "無相關資訊")
-                reddit = sym_sentiment.get("reddit_sentiment", "無相關資訊")
-
-                # 簡單截斷以防過長
-                if isinstance(news, str) and len(news) > 80:
-                    news = news[:77] + "..."
-                if isinstance(reddit, str) and len(reddit) > 80:
-                    reddit = reddit[:77] + "..."
-
-                earnings_lines.append(f"【{sym}】({period}) | 📅 {date}")
-                earnings_lines.append(f" ├─ 📰 新聞: {news}")
-                earnings_lines.append(f" └─ 💬 社群: {reddit}")
-                earnings_lines.append("")
-        if len(earnings_lines) > 1:
-            earnings_lines.pop()  # remove last empty line
+                sentiment_status = "新聞+社群" if sym in sentiment else "日曆"
+                earnings_lines.append(
+                    " | ".join(
+                        [
+                            _pad_string(_visual_truncate(sym, widths[0]), widths[0]),
+                            _pad_string(_visual_truncate(date, widths[1]), widths[1]),
+                            _pad_string(
+                                _visual_truncate(sentiment_status, widths[2]), widths[2]
+                            ),
+                        ]
+                    )
+                )
         earnings_lines.append("```")
-        content.append("\n".join(earnings_lines))
-        content.append("---")
+        embed.add_field(
+            name="📅 即將發布財報標的",
+            value=_safe_embed_field_value("\n".join(earnings_lines), "近期無財報事件"),
+            inline=False,
+        )
+    else:
+        embed.add_field(
+            name="📅 即將發布財報標的",
+            value=_safe_embed_field_value(
+                "近期無需調整倉位的財報事件。", "近期無財報事件"
+            ),
+            inline=False,
+        )
 
-    # 加入 LLM 生成的分析報告
-    content.append("**🤖 AI 分析報告**")
-    content.append(report_content)
+    sentiment_lines = []
+    for sym, payload in list(sentiment.items())[:3]:
+        news = str(payload.get("news", "無相關資訊"))
+        reddit = str(payload.get("reddit_sentiment", "無相關資訊"))
+        sentiment_lines.append(f"**{sym}**")
+        sentiment_lines.append(f"📰 新聞：{_truncate_with_boundary(news, 140)}")
+        sentiment_lines.append(f"💬 社群：{_truncate_with_boundary(reddit, 140)}")
+        sentiment_lines.append("")
+    if sentiment_lines:
+        sentiment_lines.pop()
+    else:
+        sentiment_lines = ["目前無額外新聞 / Reddit 情緒補充。"]
+    embed.add_field(
+        name="🧠 情緒 / 估值快照",
+        value=_safe_embed_field_value("\n".join(sentiment_lines), "目前無額外情緒資訊"),
+        inline=False,
+    )
 
-    # 組合內容並檢查長度 (Discord Embed Description 限制 4096)
-    full_description = "\n".join(content)
-    if len(full_description) > 4000:
-        full_description = full_description[:3997] + "..."
+    note = raw_data.get("note", "")
+    if note:
+        embed.add_field(
+            name="🧾 掃描備註",
+            value=_safe_embed_field_value(str(note), "無補充備註"),
+            inline=False,
+        )
 
-    embed.description = full_description
-    embed.set_footer(text="Nexus Seeker | Earnings Intelligence Agent")
+    _append_ai_report_fields(embed, report_content)
+    embed.set_footer(text="Nexus Seeker AI Analyst | 盤前財報與估值調整")
+    return embed
 
+
+def create_sector_flow_report_embed(
+    report_type: str, report_content: str, raw_data: dict
+) -> discord.Embed:
+    """建立收盤資金流向與板塊輪動報告 Embed。"""
+    batch_label = _extract_report_batch(report_type)
+    vix = _safe_float(raw_data.get("vix"))
+    spy_price = _safe_float(raw_data.get("spy_price"))
+    vix_tier_name = str(raw_data.get("vix_tier_name", "Unknown"))
+    sectors = raw_data.get("sectors", []) or []
+    poly_events = raw_data.get("poly_events", []) or []
+    spy_max_pain = raw_data.get("spy_max_pain", {}) or {}
+
+    embed = discord.Embed(
+        title="📊 Nexus Seeker 收盤資金流向與板塊輪動報告",
+        description=(
+            f"**更新批次：** {batch_label}\n"
+            f"**SPY 現價：** `${spy_price:.2f}` ｜ "
+            f"**VIX：** `{vix:.2f}` (`{vix_tier_name}`)\n"
+            "沿用欄位式收盤戰報版型，彙整板塊輪動、事件定價與 AI 收斂結論。"
+        ),
+        color=_report_embed_color(report_content),
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    market_snapshot = [
+        "```yaml",
+        f"SPY: ${spy_price:.2f}",
+        f"VIX: {vix:.2f}",
+        f"VIX Tier: {vix_tier_name}",
+        f"Sectors Scanned: {len(sectors)}",
+        f"Polymarket Signals: {len(poly_events)}",
+        "```",
+    ]
+    embed.add_field(
+        name="🌐 收盤市場快照",
+        value=_safe_embed_field_value("\n".join(market_snapshot), "無市場快照"),
+        inline=False,
+    )
+
+    if sectors:
+        sector_lines = ["```ansi"]
+        headers = ["ETF", "板塊", "日變動", "量比", "Skew", "UOA"]
+        widths = [5, 18, 8, 6, 8, 4]
+        sector_lines.append(
+            " | ".join(_pad_string(h, w) for h, w in zip(headers, widths))
+        )
+        sector_lines.append("-" * (sum(widths) + 3 * (len(widths) - 1)))
+        sorted_sectors = sorted(
+            sectors,
+            key=lambda item: abs(_safe_float(item.get("pct_change"))),
+            reverse=True,
+        )
+        for item in sorted_sectors:
+            sector_lines.append(
+                " | ".join(
+                    [
+                        _pad_string(
+                            _visual_truncate(str(item.get("symbol", "N/A")), widths[0]),
+                            widths[0],
+                        ),
+                        _pad_string(
+                            _visual_truncate(str(item.get("name", "N/A")), widths[1]),
+                            widths[1],
+                        ),
+                        _pad_string(
+                            f"{_safe_float(item.get('pct_change')):+.2f}%",
+                            widths[2],
+                            "right",
+                        ),
+                        _pad_string(
+                            f"{_safe_float(item.get('rel_vol')):.2f}x",
+                            widths[3],
+                            "right",
+                        ),
+                        _pad_string(
+                            f"{_safe_float(item.get('skew')):+.1f}",
+                            widths[4],
+                            "right",
+                        ),
+                        _pad_string(
+                            str(int(item.get("uoa_count", 0))), widths[5], "right"
+                        ),
+                    ]
+                )
+            )
+        sector_lines.append("```")
+        sector_value = "\n".join(sector_lines)
+    else:
+        sector_value = "目前無板塊輪動資料。"
+    embed.add_field(
+        name="🔄 板塊輪動快照",
+        value=_safe_embed_field_value(sector_value, "目前無板塊輪動資料。"),
+        inline=False,
+    )
+
+    event_lines = []
+    max_pain_value = spy_max_pain.get("max_pain")
+    if max_pain_value is not None:
+        event_lines.append(f"📍 SPY Max Pain：`${_safe_float(max_pain_value):.2f}`")
+    for event in poly_events[:3]:
+        question = _truncate_with_boundary(str(event.get("question", "N/A")), 110)
+        event_lines.append(f"🐋 {question}")
+    if not event_lines:
+        event_lines = ["目前無顯著 Polymarket / Max Pain 補充訊號。"]
+    embed.add_field(
+        name="🐋 事件定價與關鍵參考",
+        value=_safe_embed_field_value("\n".join(event_lines), "目前無事件定價資料"),
+        inline=False,
+    )
+
+    _append_ai_report_fields(embed, report_content)
+    embed.set_footer(text="Nexus Seeker AI Analyst | 收盤資金流向與板塊輪動")
     return embed
 
 
@@ -2550,45 +2786,21 @@ def create_ai_analysis_embed(
     將 AI 產出的盤後深度分析轉換為 Discord Embed 格式。
     參考盤後風險結算報告風格。
     """
-    embed_color = discord.Color.blue()
-    if "🚨" in ai_report_text or "🆘" in ai_report_text:
-        embed_color = discord.Color.red()
-    elif "⚠️" in ai_report_text:
-        embed_color = discord.Color.orange()
-
     embed = discord.Embed(
         title=title,
-        color=embed_color,
+        color=_report_embed_color(ai_report_text),
         timestamp=datetime.now(timezone.utc),
     )
 
-    # 嘗試將報告內容分割成段落 (以 Markdown 標題分割)
-    # 預期格式如: 1. **🏁 財務生存跑道**
-    sections = re.split(r"\n(?=\d+\.\s+\*\*|(?:\*\*[\u2600-\u2BFF]))", ai_report_text)
-
-    if len(sections) > 1:
-        for section in sections:
-            section = section.strip()
-            if not section:
-                continue
-
-            # 提取標題與內容
-            lines = section.split("\n", 1)
-            header = lines[0].replace("**", "").strip()
-            # 去掉序號如 "1. "
-            header = re.sub(r"^\d+\.\s*", "", header)
-
-            content = lines[1].strip() if len(lines) > 1 else "無內容"
-            # 移除分隔線
-            content = re.sub(r"^-{3,}$", "", content, flags=re.MULTILINE).strip()
-
+    sections = _parse_ai_report_sections(ai_report_text)
+    if sections:
+        for header, content in sections:
             embed.add_field(
                 name=header,
                 value=_safe_embed_field_value(content, "無詳細資訊"),
                 inline=False,
             )
     else:
-        # 如果沒辦法切分，則整塊放入
         embed.description = _truncate_with_boundary(ai_report_text, 4000)
 
     embed.set_footer(text="Nexus Seeker AI Analyst v1.0 | 智慧投研管線")
