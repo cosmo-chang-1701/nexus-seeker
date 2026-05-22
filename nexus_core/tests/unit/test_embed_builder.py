@@ -415,6 +415,9 @@ def test_create_watchlist_signal_embed():
         alert_level="yellow",
         option_plan=option_plan,
         skew_commentary="Skew 左偏代表保護性買盤偏多，若事件風險逼近應優先使用定義風險結構。",
+        has_position=True,
+        holding_quantity=120.0,
+        holding_avg_cost=150.0,
     )
 
     assert embed.title == "📡 Watchlist 半小時戰報：NVDA"
@@ -427,8 +430,12 @@ def test_create_watchlist_signal_embed():
     assert "Skew 左偏" in embed.fields[2].value
     assert embed.fields[3].name == "🗓️ 事件風控"
     assert "CPI" in embed.fields[3].value
-    assert "Bull Put Spread" in embed.fields[5].value
-    assert "SELL PUT 120.00" in embed.fields[5].value
+    assert embed.fields[4].name == "💼 持倉摘要"
+    assert "已持有" in embed.fields[4].value
+    assert "120 股" in embed.fields[4].value
+    assert "$150.00" in embed.fields[4].value
+    assert "Bull Put Spread" in embed.fields[6].value
+    assert "SELL PUT 120.00" in embed.fields[6].value
 
 
 def test_create_watchlist_overview_embed():

@@ -538,6 +538,7 @@ def derive_watchlist_option_guidance(
     metrics: EnhancedWatchlistMetrics,
     tactical: Mapping[str, Any] | WatchlistTacticalPlan,
     event_context: WatchlistEventContext | None = None,
+    has_position: bool = False,
 ) -> str:
     tactical_model = (
         tactical
@@ -546,28 +547,58 @@ def derive_watchlist_option_guidance(
     )
 
     if event_context is not None and event_context.risk_mode == "event-lock":
+        if has_position:
+            return (
+                f"{event_context.summary} 目前已有部位，先以減碼 / 保護為主；"
+                "避免事件前再做賣方收租，優先保護性 Put 或定義風險的 Debit Spread。"
+            )
         return (
             f"{event_context.summary} 目前不建議賣方收租；"
             "若要保留方向判斷，優先 Bear Put Spread / Bull Call Spread 這類定義風險結構。"
         )
     if event_context is not None and event_context.risk_mode == "earnings-guard":
+        if has_position:
+            return (
+                f"{event_context.summary} 若手上已有部位，事件前幾天先降曝險；"
+                "以保護性 Put、減碼或小倉 Debit Spread 調整，避免再擴大部位。"
+            )
         return (
             f"{event_context.summary} 事件前幾天避免 Cash-Secured Put / Call Credit 之類賣方；"
             "改以小倉 Debit Spread 或保護性 Put 控制 IV Crush 風險。"
         )
     if event_context is not None and event_context.risk_mode == "macro-guard":
+        if has_position:
+            return (
+                f"{event_context.summary} 若已有部位，先以續抱觀察、縮口數或加保護為主；"
+                "若要調整方向，優先定義風險的 Bull Call Spread / Bear Put Spread。"
+            )
         return (
             f"{event_context.summary} CPI / FOMC / NFP 前先縮口數，"
             "若要進場優先 Bull Call Spread / Bear Put Spread。"
         )
 
     if tactical_model.scenario == "hard-hedge":
+        if has_position:
+            return (
+                f"Skew {metrics.option_skew:+.2f}% 顯示尾端風險仍高；"
+                "若手上已有部位，優先減碼、建立保護性 Put 或以 Bear Put Spread 對沖，不建議逆勢加碼。"
+            )
         return (
             f"Skew {metrics.option_skew:+.2f}% 顯示尾端風險仍高，現階段不宜新開多單；"
             "若要保留方向曝險，優先保護性 Put 或 Bear Put Spread。"
         )
 
     if tactical_model.scenario == "premium-harvest":
+        if has_position:
+            if metrics.option_skew >= 5.0:
+                return (
+                    f"IV Rank {metrics.iv_rank:.1f}% 配合左偏 Skew {metrics.option_skew:+.2f}%，"
+                    "若已有部位，優先用 Covered Call / Collar 收租或小幅減碼，避免直接再加大現股曝險。"
+                )
+            return (
+                f"IV Rank {metrics.iv_rank:.1f}% 偏高，若已有部位可優先做 Covered Call、分批鎖利或保留現股續抱；"
+                "若想加碼，建議改用風險較清楚的 Bull Put Spread。"
+            )
         if metrics.option_skew >= 5.0:
             return (
                 f"IV Rank {metrics.iv_rank:.1f}% 配合左偏 Skew {metrics.option_skew:+.2f}%，"
@@ -582,15 +613,31 @@ def derive_watchlist_option_guidance(
         metrics.current_price >= metrics.sell_price_phase1
         and metrics.option_skew <= -2.0
     ):
+        if has_position:
+            return (
+                f"價格進入賣壓區且 Skew {metrics.option_skew:+.2f}% 偏右，"
+                "若已有部位可分批止盈、減碼，或用 Covered Call / Call Credit Spread 鎖定部位利潤。"
+            )
         return (
             f"價格進入賣壓區且 Skew {metrics.option_skew:+.2f}% 偏右，"
             "若已有部位可分批止盈，或用 Covered Call / Call Credit Spread 鎖利。"
         )
 
     if metrics.current_price <= metrics.buy_price_phase1 and metrics.iv_rank < 65.0:
+        if has_position:
+            return (
+                f"價格接近買區、IV Rank {metrics.iv_rank:.1f}% 尚未過熱；"
+                "若已有部位可只做小幅加碼或改用 Bull Call Spread，避免重倉攤平。"
+            )
         return (
             f"價格接近買區、IV Rank {metrics.iv_rank:.1f}% 尚未過熱，"
             "可小倉分批買入現股，或以 Bull Call Spread / 單買 Call 參與反彈。"
+        )
+
+    if has_position:
+        return (
+            f"Skew {metrics.option_skew:+.2f}% 目前未形成極端訊號；"
+            "若已有部位，先以續抱觀察為主，等待價格靠近 Buy P1 / Sell P1 再決定加碼、減碼或保護。"
         )
 
     return (
@@ -1291,6 +1338,7 @@ class IntradayScanPipeline:
     async def _build_watchlist_heartbeat_embed(
         self, evaluation: WatchlistEvaluation, user_context: Any
     ) -> Any:
+        import database
         from cogs.embed_builder import create_watchlist_signal_embed
         from services.llm_service import generate_watchlist_skew_commentary
         from ui.formatter import generate_ansi_watchlist_report
@@ -1299,11 +1347,30 @@ class IntradayScanPipeline:
             evaluation.metrics,
             evaluation.tactical,
         )
+        user_id = int(getattr(user_context, "user_id", 0))
+        has_position = (
+            database.is_symbol_in_portfolio(user_id, evaluation.metrics.symbol)
+            if user_id
+            else False
+        )
         option_guidance = derive_watchlist_option_guidance(
             evaluation.metrics,
             evaluation.tactical,
             event_context=evaluation.event_context,
+            has_position=has_position,
         )
+        holding_row = None
+        if user_id:
+            user_holdings = {
+                str(row.get("symbol", "")).upper(): row
+                for row in database.get_user_holdings(user_id)
+            }
+            holding_row = user_holdings.get(evaluation.metrics.symbol.upper())
+        holding_quantity = None
+        holding_avg_cost = None
+        if holding_row is not None and float(holding_row.get("quantity", 0.0)) > 0.0:
+            holding_quantity = float(holding_row["quantity"])
+            holding_avg_cost = float(holding_row.get("avg_cost", 0.0))
         user_capital = float(
             getattr(
                 user_context,
@@ -1341,6 +1408,9 @@ class IntradayScanPipeline:
             alert_level=evaluation.tactical.alert_level,
             option_plan=option_plan,
             skew_commentary=skew_commentary,
+            has_position=has_position,
+            holding_quantity=holding_quantity,
+            holding_avg_cost=holding_avg_cost,
         )
 
     async def _run_loop(self):

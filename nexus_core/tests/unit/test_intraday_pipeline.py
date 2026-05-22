@@ -271,15 +271,21 @@ async def test_build_watchlist_heartbeat_embed_includes_option_plan(intraday_pip
         ),
         event_context=SimpleNamespace(summary="財報前風控"),
     )
-    user_context = SimpleNamespace(capital=120000.0, risk_limit=12.0)
+    user_context = SimpleNamespace(user_id=42, capital=120000.0, risk_limit=12.0)
 
     with patch(
         "ui.formatter.generate_ansi_watchlist_report",
         return_value="heartbeat snapshot",
     ), patch(
+        "database.is_symbol_in_portfolio",
+        return_value=False,
+    ), patch(
+        "database.get_user_holdings",
+        return_value=[],
+    ), patch(
         "market_analysis.intraday_pipeline.derive_watchlist_option_guidance",
         return_value="option guidance",
-    ), patch(
+    ) as mock_guidance, patch(
         "market_analysis.intraday_pipeline.build_watchlist_option_plan",
         new_callable=AsyncMock,
         return_value="option-plan",
@@ -303,6 +309,12 @@ async def test_build_watchlist_heartbeat_embed_includes_option_plan(intraday_pip
         risk_limit=12.0,
         event_context=evaluation.event_context,
     )
+    mock_guidance.assert_called_once_with(
+        evaluation.metrics,
+        evaluation.tactical,
+        event_context=evaluation.event_context,
+        has_position=False,
+    )
     mock_skew_commentary.assert_awaited_once()
     mock_create_embed.assert_called_once_with(
         symbol="MU",
@@ -313,4 +325,7 @@ async def test_build_watchlist_heartbeat_embed_includes_option_plan(intraday_pip
         alert_level="yellow",
         option_plan="option-plan",
         skew_commentary="llm-skew-commentary",
+        has_position=False,
+        holding_quantity=None,
+        holding_avg_cost=None,
     )
