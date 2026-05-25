@@ -243,6 +243,20 @@ class SentimentEngine:
                 for _, row in pd.concat([chain.calls, chain.puts]).iterrows():
                     # 門檻：Volume > 5 * OI 且 Volume > 500
                     if row["volume"] > 5 * row["openInterest"] and row["volume"] > 500:
+                        trade_type = row.get("trade_type")
+                        if not trade_type:
+                            trade_type = (
+                                "BLOCK"
+                                if (row["volume"] > 1500 and row["volume"] % 100 == 0)
+                                else "SWEEP"
+                            )
+
+                        oi_change_net = row.get("oi_change_net")
+                        if oi_change_net is None:
+                            oi_change_net = int(row["volume"] - row["openInterest"])
+                        else:
+                            oi_change_net = int(oi_change_net)
+
                         uoa_list.append(
                             {
                                 "symbol": symbol,
@@ -257,6 +271,8 @@ class SentimentEngine:
                                     row["volume"] / max(row["openInterest"], 1), 2
                                 ),
                                 "iv": round(row["impliedVolatility"], 4),
+                                "trade_type": trade_type,
+                                "oi_change_net": oi_change_net,
                             }
                         )
 

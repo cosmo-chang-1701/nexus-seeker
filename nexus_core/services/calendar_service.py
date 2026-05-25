@@ -2,7 +2,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, date
 from typing import List, Optional, Union
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, computed_field
 from database.calendar_cache import (
     get_cached_earnings,
     get_macro_events_between,
@@ -67,6 +67,11 @@ class EarningsEvent(CalendarEvent):
         except ValueError:
             raise ValueError(f"Invalid date format: {v}")
         return v
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def days_to_earnings(self) -> float:
+        return round(self.tte_hours / 24.0, 2)
 
 
 class CalendarService:

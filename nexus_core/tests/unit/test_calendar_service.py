@@ -74,6 +74,8 @@ async def test_get_symbol_earnings():
     assert info.symbol == "AAPL"
     assert info.date == "2026-05-20"
     assert info.tte_hours == 36.0
+    assert info.days_to_earnings == pytest.approx(1.5)
     assert isinstance(cached_info, EarningsEvent)
     assert cached_info.date == "2026-05-20"
+    assert cached_info.days_to_earnings == pytest.approx(1.5)
     assert mock_calendar.await_count == 1

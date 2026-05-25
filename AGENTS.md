@@ -4,7 +4,7 @@
 
 Nexus Seeker is a multi-tenant **Discord-first options risk-control and trading operations platform**. It combines technical structure, Black-Scholes-Merton pricing, Greeks-based portfolio risk, event-aware calendar defenses, and LLM-assisted structured commentary.
 
-Current released core version: **`1.6.21`**
+Current released core version: **`1.6.22`**
 
 The codebase is optimized for:
 
@@ -115,7 +115,9 @@ Current sections:
 
 - sent **per user, per symbol**
 - includes:
-  - ANSI snapshot
+  - ANSI snapshot and enriched Unusual Option Activity (UOA) table:
+    - UOA entries are processed with `trade_type` (`SWEEP` or `BLOCK`) and `oi_change_net`.
+    - Presentational layer tags UOA records visually with `🔥 SWEEP` or `📦 BLOCK` and the corresponding daily Open Interest net change.
   - skew / IV structure interpretation
   - event risk summary
   - executable option plan
@@ -147,6 +149,12 @@ Current sections:
 - `NexusGammaSqueezeEngine`
 - `IntradayScanPipeline`
 
+Relative Strength (RS) & Tactical Routing:
+- Relative Strength formula is implemented in `risk_engine.py`:
+  $$RS_{Ticker} = \frac{Price_{Ticker}(t) / Price_{Ticker}(t-n)}{Price_{Benchmark}(t) / Price_{Benchmark}(t-n)}$$
+  using sectoral ETFs (e.g., `SMH` for semiconductor tickers) as benchmarks.
+- In `ExecutionRouter`, overextended bullish assets (Price/MA20 Deviation > 10% AND RSI > 65) with high Relative Strength (RS > 1.2) are routed to **SPEAR** mode (suggesting Bull Put Spreads or OTM Covered Calls) instead of SHIELD grid shorting.
+
 Important current rule inside `IntradayScanPipeline`:
 
 - `盤中量化掃描 & 避險執行指南` is gated to **Phase B only**
@@ -166,6 +174,17 @@ This gating is tested in `tests/unit/test_intraday_pipeline.py`.
 - post-market summary
 - sector flow / rotation report
 - next-day strategy report
+
+Prompt Refactoring & Constraints:
+- The system prompt in `generate_analyst_report` enforces:
+  - 100% fluent, finance-grade Traditional Chinese (繁體中文) using Taiwanese market terminology (`選擇權` for Options, `履約價` for Strike, `權利金` for Premium, `價差期權/價差策略` for Spreads, `隱含波動率` for Implied Volatility, `乖離率` for Deviation).
+  - Explicit Markdown formatting structure with headers:
+    1. 📊 多空大盤交叉驗證解讀
+    2. ⚠️ 潛在陷阱與風險提示
+    3. 🛡️ 高勝率交易策略推薦
+  - Mathematical cross-validation:
+    - **IV Bubble Validation**: If Technical Overheating (Deviation > 10% or RSI > 65) occurs while `IV Rank > 90%` and `days_to_earnings > 20`, flag an artificial IV bubble and avoid single-leg long options.
+    - **Market Divergence Validation**: If `Option Skew` is negative but `PCR > 1.5`, explain this divergence as retail momentum vs. institutional hedging.
 
 Important current behavior:
 
