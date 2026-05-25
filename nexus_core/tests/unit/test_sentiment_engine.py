@@ -107,6 +107,18 @@ async def test_detect_uoa():
         assert len(result) >= 1
         assert result[0]["type"] == "CALL"
         assert result[0]["ratio"] == 20.0
+        assert result[0]["trade_type"] == "BLOCK"
+        assert result[0]["oi_change_net"] == 1900
+
+        # Test with explicit columns
+        calls_df["trade_type"] = ["SWEEP"]
+        calls_df["oi_change_net"] = [123]
+        mock_chain.return_value = MockChain(calls_df, puts_df)
+
+        result_explicit = await SentimentEngine.detect_uoa("AAPL")
+        assert len(result_explicit) >= 1
+        assert result_explicit[0]["trade_type"] == "SWEEP"
+        assert result_explicit[0]["oi_change_net"] == 123
 
 
 def test_save_sentiment_history():

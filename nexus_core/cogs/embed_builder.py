@@ -944,11 +944,11 @@ def create_sentiment_scan_embed(
     # UOA
     if uoa_data:
         uoa_lines = ["```ansi"]
-        uoa_headers = ["到期日", "履約價", "類型", "比例"]
-        uoa_widths = [11, 8, 6, 8]
+        uoa_headers = ["到期日", "履約價", "類型", "機構/OI", "比例"]
+        uoa_widths = [10, 7, 4, 15, 6]
         uoa_lines.append(
             " | ".join(
-                _pad_string(h, w, "left" if i in (0, 2) else "right")
+                _pad_string(h, w, "left" if i in (0, 2, 3) else "right")
                 for i, (h, w) in enumerate(zip(uoa_headers, uoa_widths))
             )
         )
@@ -958,18 +958,26 @@ def create_sentiment_scan_embed(
             strike = f"${item.get('strike', 'N/A')}"
             opt_type = str(item.get("type", "N/A")).upper()
             ratio = f"{item.get('ratio', 'N/A')}x"
+            trade_type = str(item.get("trade_type", "SWEEP")).upper()
+            oi_change = item.get("oi_change_net", 0)
+
+            tag = "🔥 SWEEP" if trade_type == "SWEEP" else "📦 BLOCK"
+            oi_change_str = f"{oi_change:+d}" if oi_change != 0 else "0"
+            inst_str = f"{tag}({oi_change_str})"
 
             expiry = _visual_truncate(expiry, uoa_widths[0])
             strike = _visual_truncate(strike, uoa_widths[1])
             opt_type = _visual_truncate(opt_type, uoa_widths[2])
-            ratio = _visual_truncate(ratio, uoa_widths[3])
+            inst_str = _visual_truncate(inst_str, uoa_widths[3])
+            ratio = _visual_truncate(ratio, uoa_widths[4])
 
             row_str = " | ".join(
                 [
                     _pad_string(expiry, uoa_widths[0], "left"),
                     _pad_string(strike, uoa_widths[1], "right"),
                     _pad_string(opt_type, uoa_widths[2], "left"),
-                    _pad_string(ratio, uoa_widths[3], "right"),
+                    _pad_string(inst_str, uoa_widths[3], "left"),
+                    _pad_string(ratio, uoa_widths[4], "right"),
                 ]
             )
             uoa_lines.append(row_str)

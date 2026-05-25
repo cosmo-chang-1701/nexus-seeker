@@ -16,6 +16,9 @@ class MarketCondition(BaseModel):
     atr_14: float = Field(..., description="14日平均真實波幅 (ATR)", ge=0)
     rsi_14: float = Field(..., description="14日相對強弱指數 (RSI)", ge=0, le=100)
     uoa_detected: bool = Field(False, description="是否偵測到異常期權活動 (UOA)")
+    relative_strength: float = Field(
+        1.0, description="相對強度 (Relative Strength) 指標"
+    )
 
 
 class GridParameters(BaseModel):

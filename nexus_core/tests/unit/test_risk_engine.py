@@ -241,3 +241,28 @@ async def test_analyze_sector_correlation():
         assert pairs[0][0] == "AAPL"
         assert pairs[0][1] == "MSFT"
         assert pairs[0][2] > 0.75
+
+
+def test_sector_benchmark_mapping():
+    from market_analysis.risk_engine import get_sector_benchmark
+
+    assert get_sector_benchmark("MU") == "SMH"
+    assert get_sector_benchmark("NVDA") == "SMH"
+    assert get_sector_benchmark("AAPL") == "XLK"
+    assert get_sector_benchmark("UNKNOWN_TICKER") == "SPY"
+
+
+def test_calculate_relative_strength_index():
+    import pandas as pd
+    from market_analysis.risk_engine import calculate_relative_strength_index
+
+    # Stock goes up by 20%, Benchmark goes up by 10%
+    # RS = (120 / 100) / (110 / 100) = 1.2 / 1.1 = 1.0909
+    df_stock = pd.DataFrame({"Close": [100.0] * 20 + [120.0]})
+    df_bench = pd.DataFrame({"Close": [100.0] * 20 + [110.0]})
+
+    rs = calculate_relative_strength_index(df_stock, df_bench, n=20)
+    assert rs == pytest.approx(1.0909, abs=0.001)
+
+    # Test edge cases where index length is insufficient
+    assert calculate_relative_strength_index(pd.DataFrame(), pd.DataFrame()) == 1.0

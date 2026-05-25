@@ -50,6 +50,25 @@ class ExecutionRouter:
                 exit_strategy=self._define_trailing_stop(condition, "SHIELD"),
             )
 
+        # --- SPEAR 戰術路由優先判定 (極端強勢標的) ---
+        # 價格/MA20 Deviation > 10% 且 RSI > 65，但相對強度 RS > 1.2
+        is_overextended_bullish = (
+            (condition.asset_price - condition.ma20) / condition.ma20 > 0.10
+        ) and (condition.rsi_14 > 65)
+        if is_overextended_bullish and condition.relative_strength > 1.2:
+            return ExecutionDecision(
+                decision_type="SPEAR",
+                trigger_reason=(
+                    f"標的價格與20MA乖離率 ({(condition.asset_price - condition.ma20) / condition.ma20 * 100:.1f}%) "
+                    f"達超買區且 RSI ({condition.rsi_14:.1f}) > 65，但其相對行業板塊強度 RS "
+                    f"({condition.relative_strength:.2f}) > 1.2 呈極端強勢，戰術路由至 SPEAR 模式"
+                    f"（建議以賣權價差/Bull Put Spread或價外看漲備兌/OTM Covered Call進行操作，取代直接放空）。"
+                ),
+                grid_params=None,
+                position_sizing=self._calculate_kelly_size(condition),
+                exit_strategy=self._define_trailing_stop(condition, "SPEAR"),
+            )
+
         if deviation > 0.10:
             return ExecutionDecision(
                 decision_type="SHIELD",

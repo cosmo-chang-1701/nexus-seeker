@@ -405,3 +405,89 @@ def calculate_hedge_instruction(
         return 0
     qty = -total_beta_delta / hedge_instrument_delta
     return int(round(qty))
+
+
+SECTOR_BENCHMARK_MAP = {
+    # Semiconductors
+    "MU": "SMH",
+    "NVDA": "SMH",
+    "AMD": "SMH",
+    "INTC": "SMH",
+    "TSM": "SMH",
+    "AVGO": "SMH",
+    "ASML": "SMH",
+    "LRCX": "SMH",
+    "AMAT": "SMH",
+    "TXN": "SMH",
+    "QCOM": "SMH",
+    "ADI": "SMH",
+    # Technology / Software
+    "AAPL": "XLK",
+    "MSFT": "XLK",
+    "ORCL": "XLK",
+    "CRM": "XLK",
+    "ADBE": "XLK",
+    "PANW": "XLK",
+    "FTNT": "XLK",
+    # Financials
+    "JPM": "XLF",
+    "BAC": "XLF",
+    "MS": "XLF",
+    "GS": "XLF",
+    "C": "XLF",
+    "WFC": "XLF",
+    # Energy
+    "XOM": "XLE",
+    "CVX": "XLE",
+    "SLB": "XLE",
+    "COP": "XLE",
+    # Health Care
+    "JNJ": "XLV",
+    "LLY": "XLV",
+    "UNH": "XLV",
+    "PFE": "XLV",
+    "ABBV": "XLV",
+    # Retail / Consumer Discretionary
+    "AMZN": "XLY",
+    "TSLA": "XLY",
+    "HD": "XLY",
+    "MCD": "XLY",
+    "NKE": "XLY",
+    # Industrials
+    "CAT": "XLI",
+    "GE": "XLI",
+    "HON": "XLI",
+    "UNP": "XLI",
+}
+
+
+def get_sector_benchmark(symbol: str) -> str:
+    """獲取標的所屬的行業板塊 ETF，預設回傳 SPY。"""
+    return SECTOR_BENCHMARK_MAP.get(symbol.upper(), "SPY")
+
+
+def calculate_relative_strength_index(
+    df_stock: pd.DataFrame, df_benchmark: pd.DataFrame, n: int = 20
+) -> float:
+    """
+    計算 Ticker 相對於 Benchmark ETF 在過去 n 天的相對強度 (Relative Strength Index)。
+    RS = (Price_Ticker(t) / Price_Ticker(t-n)) / (Price_Benchmark(t) / Price_Benchmark(t-n))
+    """
+    try:
+        if len(df_stock) < n + 1 or len(df_benchmark) < n + 1:
+            return 1.0
+
+        stock_t = float(df_stock["Close"].iloc[-1])
+        stock_t_n = float(df_stock["Close"].iloc[-(n + 1)])
+
+        bench_t = float(df_benchmark["Close"].iloc[-1])
+        bench_t_n = float(df_benchmark["Close"].iloc[-(n + 1)])
+
+        if stock_t_n <= 0 or bench_t_n <= 0 or bench_t <= 0:
+            return 1.0
+
+        rs = (stock_t / stock_t_n) / (bench_t / bench_t_n)
+        return round(rs, 4)
+    except Exception as e:
+        logger.error(f"RS 計算失敗: {e}")
+        return 1.0

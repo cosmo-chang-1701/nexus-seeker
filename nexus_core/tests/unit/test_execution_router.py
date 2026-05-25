@@ -144,3 +144,38 @@ def test_kelly_sizing_cap(router):
     assert decision.decision_type == "SPEAR"
     # 凱利百分比不應超過安全上限 (例如 0.15)
     assert decision.position_sizing.kelly_percentage <= 0.15
+
+
+def test_gatekeeper_spear_on_overextended_bullish_and_high_rs(router):
+    """
+    當價格嚴重超買 (偏離 > 10% AND RSI > 65) 且相對強度 RS > 1.2 時，應戰術路由至 SPEAR 模式。
+    """
+    # Case 1: Overextended bullish and RS > 1.2 -> SPEAR
+    condition_spear = MarketCondition(
+        vix=15.0,
+        skew_percent=0.02,
+        asset_price=112.0,  # 12% deviation from ma20
+        ma20=100.0,
+        atr_14=2.0,
+        rsi_14=70.0,  # > 65
+        uoa_detected=False,
+        relative_strength=1.3,  # > 1.2
+    )
+    decision = router.evaluate_market(condition_spear)
+    assert decision.decision_type == "SPEAR"
+    assert "相對行業板塊強度 RS" in decision.trigger_reason
+
+    # Case 2: Overextended bullish but RS <= 1.2 -> SHIELD (falling back to standard deviation grid)
+    condition_shield = MarketCondition(
+        vix=15.0,
+        skew_percent=0.02,
+        asset_price=112.0,
+        ma20=100.0,
+        atr_14=2.0,
+        rsi_14=70.0,
+        uoa_detected=False,
+        relative_strength=1.1,  # <= 1.2
+    )
+    decision_shield = router.evaluate_market(condition_shield)
+    assert decision_shield.decision_type == "SHIELD"
+    assert "乖離" in decision_shield.trigger_reason

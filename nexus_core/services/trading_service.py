@@ -144,6 +144,20 @@ class TradingService:
             uoa_list = await get_option_uoa(symbol)
             uoa_detected = len(uoa_list) > 0
 
+            # 計算相對強度 (Relative Strength)
+            from market_analysis.risk_engine import (
+                get_sector_benchmark,
+                calculate_relative_strength_index,
+            )
+
+            benchmark_symbol = get_sector_benchmark(symbol)
+            df_bench = await market_data_service.get_history_df(
+                benchmark_symbol, period="60d", interval="1d"
+            )
+            relative_strength = calculate_relative_strength_index(
+                df_hist_1d, df_bench, n=20
+            )
+
             # 2. 構建 MarketCondition
             condition = MarketCondition(
                 vix=macro.get("vix", 18.0),
@@ -153,6 +167,7 @@ class TradingService:
                 atr_14=clean_atr,
                 rsi_14=clean_rsi,
                 uoa_detected=uoa_detected,
+                relative_strength=relative_strength,
             )
 
             # 3. 調用 Router
@@ -457,6 +472,20 @@ class TradingService:
                             self._clean_market_condition_inputs(price, ma20, atr, rsi)
                         )
 
+                        # 計算相對強度 (Relative Strength)
+                        from market_analysis.risk_engine import (
+                            get_sector_benchmark,
+                            calculate_relative_strength_index,
+                        )
+
+                        benchmark_symbol = get_sector_benchmark(sym)
+                        df_bench = await market_data_service.get_history_df(
+                            benchmark_symbol, period="1y", interval="1d"
+                        )
+                        relative_strength = calculate_relative_strength_index(
+                            df_hist_1d, df_bench, n=20
+                        )
+
                         condition = MarketCondition(
                             vix=vix_spot,
                             skew_percent=skew_val,
@@ -465,6 +494,7 @@ class TradingService:
                             atr_14=clean_atr,
                             rsi_14=clean_rsi,
                             uoa_detected=uoa_detected,
+                            relative_strength=relative_strength,
                         )
                         res["execution_decision"] = (
                             self.execution_router.evaluate_market(condition)
