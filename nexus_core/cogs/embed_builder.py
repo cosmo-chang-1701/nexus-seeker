@@ -858,8 +858,27 @@ def create_sentiment_scan_embed(
     iv_data: Optional[Any] = None,
 ) -> discord.Embed:
     """建立期權情緒掃描報告 Embed (繁體中文)"""
+    title_suffix = ""
+    is_premarket = False
+    if iv_data:
+        if hasattr(iv_data, "is_premarket"):
+            is_premarket = iv_data.is_premarket
+        elif isinstance(iv_data, dict):
+            is_premarket = iv_data.get("is_premarket", False)
+
+        current_iv_val = (
+            iv_data.current_iv
+            if hasattr(iv_data, "current_iv")
+            else iv_data.get("current_iv", 0.0)
+        )
+        if is_premarket:
+            if current_iv_val > 0.0:
+                title_suffix = " [盤前/前日收盤]"
+            else:
+                title_suffix = " [盤前數據未更新]"
+
     embed = discord.Embed(
-        title=f"📊 {symbol} 期權情緒掃描 (Sentiment Scan)",
+        title=f"📊 {symbol} 期權情緒掃描 (Sentiment Scan){title_suffix}",
         color=discord.Color.dark_magenta(),
         timestamp=datetime.now(timezone.utc),
     )
@@ -886,18 +905,45 @@ def create_sentiment_scan_embed(
         }
         status_tw = iv_status_map.get(iv_status, "正常 / 公允")
 
-        iv_lines = [
-            "```ansi",
-            f" 🌌 {symbol} 期權情緒掃描 (Sentiment Scan)",
-            " ----------------------------------",
-            " Implied Volatility (IV)",
-            f" └─ 值: {current_iv * 100:.1f}% (當前 30 天平值期權隱含波動率)",
-            " IV Rank / IV Percentile",
-            f" └─ IV Rank: {iv_rank:.1f}% | IV Percentile: {iv_percentile:.1f}% (狀態: {status_tw})",
-            " Expected Move (預期震盪區間)",
-            f" └─ 本週預期: ±${expected_move_weekly:.2f} (基於當前 IV 計算)",
-            "```",
-        ]
+        if is_premarket and current_iv == 0.0:
+            iv_lines = [
+                "```ansi",
+                f" 🌌 {symbol} 期權情緒掃描 (Sentiment Scan)",
+                " ----------------------------------",
+                " Implied Volatility (IV)",
+                " └─ 值: \u001b[1;30m--%\u001b[0m (等待開盤 / 盤前未開市)",
+                " IV Rank / IV Percentile",
+                " └─ IV Rank: \u001b[1;30m--%\u001b[0m | IV Percentile: \u001b[1;30m--%\u001b[0m (狀態: 待開盤)",
+                " Expected Move (預期震盪區間)",
+                " └─ 本週預期: \u001b[1;30m--\u001b[0m (開盤後更新)",
+                "```",
+            ]
+        elif is_premarket:
+            iv_lines = [
+                "```ansi",
+                f" 🌌 {symbol} 期權情緒掃描 (Sentiment Scan)",
+                " ----------------------------------",
+                " Implied Volatility (IV)",
+                f" └─ 值: {current_iv * 100:.1f}% (前日收盤 / 歷史波動率代理)",
+                " IV Rank / IV Percentile",
+                f" └─ IV Rank: {iv_rank:.1f}% | IV Percentile: {iv_percentile:.1f}% (狀態: {status_tw})",
+                " Expected Move (預期震盪區間)",
+                f" └─ 本週預期: ±${expected_move_weekly:.2f} (基於前收/HV計算)",
+                "```",
+            ]
+        else:
+            iv_lines = [
+                "```ansi",
+                f" 🌌 {symbol} 期權情緒掃描 (Sentiment Scan)",
+                " ----------------------------------",
+                " Implied Volatility (IV)",
+                f" └─ 值: {current_iv * 100:.1f}% (當前 30 天平值期權隱含波動率)",
+                " IV Rank / IV Percentile",
+                f" └─ IV Rank: {iv_rank:.1f}% | IV Percentile: {iv_percentile:.1f}% (狀態: {status_tw})",
+                " Expected Move (預期震盪區間)",
+                f" └─ 本週預期: ±${expected_move_weekly:.2f} (基於當前 IV 計算)",
+                "```",
+            ]
         embed.add_field(
             name="📊 隱含波動率與預期區間", value="\n".join(iv_lines), inline=False
         )

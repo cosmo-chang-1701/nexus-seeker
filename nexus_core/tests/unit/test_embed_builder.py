@@ -31,6 +31,7 @@ from cogs.embed_builder import (
     create_hedge_settlement_embed,
     create_watchlist_overview_embed,
     create_watchlist_signal_embed,
+    create_sentiment_scan_embed,
 )
 from models.schemas import WatchlistOptionLeg, WatchlistOptionPlan
 
@@ -791,3 +792,62 @@ def test_create_portfolio_report_embed_chunking():
         assert len(f.value) <= 1024
         assert "```ansi" in f.value
         assert "```" in f.value
+
+
+def test_create_sentiment_scan_embed_premarket():
+    """Verify that create_sentiment_scan_embed renders correct UI components for pre-market and regular paths."""
+    symbol = "AAPL"
+    skew_data = {"skew": 2.5, "state": "Bullish"}
+    pcr_data = {"pcr": 0.8, "state": "Normal"}
+    uoa_data = []
+    max_pain_data = {"max_pain": 150.0, "is_converging": True}
+
+    # Path A: Pre-market Scan with Complete Failure (current_iv = 0.0, is_premarket = True)
+    iv_data_degraded = {
+        "current_iv": 0.0,
+        "iv_rank": 0.0,
+        "iv_percentile": 0.0,
+        "expected_move_weekly": 0.0,
+        "iv_status": "Normal",
+        "is_premarket": True,
+    }
+    embed_degraded = create_sentiment_scan_embed(
+        symbol, skew_data, pcr_data, uoa_data, max_pain_data, iv_data_degraded
+    )
+    assert "[盤前數據未更新]" in embed_degraded.title
+    iv_field_value_degraded = embed_degraded.fields[0].value
+    assert "--%" in iv_field_value_degraded
+    assert "等待開盤" in iv_field_value_degraded
+
+    # Path B: Pre-market Scan with Fallback Success (current_iv = 0.45, is_premarket = True)
+    iv_data_fallback = {
+        "current_iv": 0.45,
+        "iv_rank": 52.0,
+        "iv_percentile": 60.0,
+        "expected_move_weekly": 5.4,
+        "iv_status": "Normal",
+        "is_premarket": True,
+    }
+    embed_fallback = create_sentiment_scan_embed(
+        symbol, skew_data, pcr_data, uoa_data, max_pain_data, iv_data_fallback
+    )
+    assert "[盤前/前日收盤]" in embed_fallback.title
+    iv_field_value_fallback = embed_fallback.fields[0].value
+    assert "前日收盤 / 歷史波動率代理" in iv_field_value_fallback
+    assert "45.0%" in iv_field_value_fallback
+
+    # Path C: Regular Scan (is_premarket = False)
+    iv_data_regular = {
+        "current_iv": 0.45,
+        "iv_rank": 52.0,
+        "iv_percentile": 60.0,
+        "expected_move_weekly": 5.4,
+        "iv_status": "Normal",
+        "is_premarket": False,
+    }
+    embed_regular = create_sentiment_scan_embed(
+        symbol, skew_data, pcr_data, uoa_data, max_pain_data, iv_data_regular
+    )
+    assert "[盤前" not in embed_regular.title
+    iv_field_value_regular = embed_regular.fields[0].value
+    assert "當前 30 天平值期權隱含波動率" in iv_field_value_regular

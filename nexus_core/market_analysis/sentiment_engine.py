@@ -12,6 +12,8 @@ from services import market_data_service
 from services.market_data_service import BoundedCache
 import config
 from models.quant import IVMetrics
+from market_time import is_market_open
+
 
 _iv_cache = BoundedCache(max_size=500)
 _IV_CACHE_TTL = 1200  # 20 minutes
@@ -392,9 +394,25 @@ class SentimentEngine:
                 raise ValueError(f"無法取得 {symbol} 的現價，無法計算預期震盪區間")
 
             # 2. 獲取當前 IV
-            ticker = yf.Ticker(symbol)
-            info = await asyncio.to_thread(lambda: ticker.info)
-            current_iv = info.get("impliedVolatility")
+            current_iv = None
+            is_market_active = is_market_open()
+
+            # 盤前優先嘗試取得前一交易日存入的 IV (歷史最近一筆紀錄)
+            if not is_market_active:
+                last_db_iv = SentimentEngine.get_last_stored_iv(symbol)
+                if last_db_iv and last_db_iv > 0:
+                    current_iv = last_db_iv
+                    logger.info(
+                        f"[{symbol}] 偵測為非交易時段，優先採用前日收盤歷史 IV 代理: {current_iv}"
+                    )
+
+            if not current_iv or current_iv <= 0:
+                ticker = yf.Ticker(symbol)
+                try:
+                    info = await asyncio.to_thread(lambda: ticker.info)
+                    current_iv = info.get("impliedVolatility")
+                except Exception as e:
+                    logger.warning(f"[{symbol}] yfinance ticker.info 獲取異常: {e}")
 
             if not current_iv or current_iv <= 0:
                 # Fallback to ATM option implied volatility from nearest chain
@@ -522,6 +540,7 @@ class SentimentEngine:
                 iv_percentile=iv_percentile,
                 expected_move_weekly=expected_move_weekly,
                 iv_status=iv_status,
+                is_premarket=not is_market_active,
             )
 
             # 12. 寫入快取
@@ -537,6 +556,7 @@ class SentimentEngine:
                 iv_percentile=0.0,
                 expected_move_weekly=0.0,
                 iv_status="Normal",
+                is_premarket=True,
             )
         except Exception as e:
             logger.error(f"[{symbol}] IV 指標計算失敗: {e}")
@@ -548,4 +568,5 @@ class SentimentEngine:
                 iv_percentile=0.0,
                 expected_move_weekly=0.0,
                 iv_status="Normal",
+                is_premarket=True,
             )
