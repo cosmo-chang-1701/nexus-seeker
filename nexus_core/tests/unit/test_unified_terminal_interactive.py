@@ -29,14 +29,17 @@ async def test_symbol_hub_interactions(mock_interaction, mock_bot):
     # 準備 base_data 以供 btn_home 使用
     view.base_data = {"symbol": "AAPL", "vix": 15.0, "spy_price": 500.0}
 
-    # 測試新聞按鈕的狀態轉換 (應使用 edit_original_response)
+    # 測試輿情社群按鈕的狀態轉換 (應使用 edit_original_response)
     with patch(
         "services.news_service.fetch_recent_news", new_callable=AsyncMock
-    ) as mock_news:
+    ) as mock_news, patch(
+        "services.reddit_service.get_reddit_context", new_callable=AsyncMock
+    ) as mock_reddit:
         mock_news.return_value = "Mock News"
+        mock_reddit.return_value = "Mock Reddit"
 
         # 執行 Callback
-        await view.btn_news.callback(mock_interaction)
+        await view.btn_media.callback(mock_interaction)
 
         # 驗證 1: 呼叫了 defer
         mock_interaction.response.defer.assert_called_once()
@@ -47,7 +50,7 @@ async def test_symbol_hub_interactions(mock_interaction, mock_bot):
         # 驗證 3: 最後一次呼叫時按鈕應為啟用狀態，且帶有 Embed
         _, last_kwargs = mock_interaction.edit_original_response.call_args
         assert last_kwargs["view"].children[0].disabled is False
-        assert "AAPL 官方新聞掃描" in last_kwargs["embed"].title
+        assert "輿情與社群大盤掃描" in last_kwargs["embed"].title
 
     # 測試 Home 按鈕 (應恢復主頁)
     mock_interaction.edit_original_response.reset_mock()
@@ -66,25 +69,20 @@ async def test_symbol_hub_interactions(mock_interaction, mock_bot):
 
 
 @pytest.mark.asyncio
-async def test_symbol_hub_max_pain_uses_builder(mock_interaction, mock_bot):
+async def test_symbol_hub_hedge_uses_builder(mock_interaction, mock_bot):
+    """測試一鍵對沖按鈕引導是否調用了 create_tactical_hedge_embed"""
     view = SymbolHubView(symbol="AAPL", user_id=123, bot=mock_bot)
+    view.base_data = {"symbol": "AAPL", "iv_rank": 55.0}
 
-    with patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_max_pain",
-        new_callable=AsyncMock,
-        return_value={
-            "expiry": "2026-06-19",
-            "max_pain": 150,
-            "current_price": 148.5,
-            "distance_pct": -1.01,
-        },
-    ), patch("cogs.unified_terminal.create_max_pain_embed") as mock_builder:
+    with patch("cogs.unified_terminal.create_tactical_hedge_embed") as mock_builder:
         mock_builder.return_value = MagicMock(spec=discord.Embed)
 
-        await view.btn_maxpain.callback(mock_interaction)
+        await view.btn_hedge.callback(mock_interaction)
 
-        mock_builder.assert_called_once()
-        _, last_kwargs = mock_interaction.edit_original_response.call_args
+        mock_builder.assert_called_once_with(
+            "AAPL", 55.0, "Bull Put Spread (賣出認沽價差策略)"
+        )
+        _, last_kwargs = mock_interaction.followup.send.call_args
         assert last_kwargs["embed"] is mock_builder.return_value
 
 

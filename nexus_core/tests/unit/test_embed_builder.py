@@ -32,6 +32,7 @@ from cogs.embed_builder import (
     create_watchlist_overview_embed,
     create_watchlist_signal_embed,
     create_sentiment_scan_embed,
+    create_media_sentiment_embed,
 )
 from models.schemas import WatchlistOptionLeg, WatchlistOptionPlan
 
@@ -851,3 +852,17 @@ def test_create_sentiment_scan_embed_premarket():
     assert "[盤前" not in embed_regular.title
     iv_field_value_regular = embed_regular.fields[0].value
     assert "當前 30 天平值期權隱含波動率" in iv_field_value_regular
+
+
+def test_create_media_sentiment_embed():
+    """Verify that create_media_sentiment_embed renders institutional news and reddit consensus correctly."""
+    symbol = "TSLA"
+    news_text = "Tesla stock spikes on earnings beat"
+    reddit_text = "To the moon! Bullish sentiment on TSLA options"
+
+    embed = create_media_sentiment_embed(symbol, news_text, reddit_text)
+    assert embed.title == "🎭 TSLA 輿情與社群大盤掃描 (Media & Social)"
+    assert "最新新聞" in embed.fields[0].name
+    assert news_text in embed.fields[0].value
+    assert "Reddit 討論" in embed.fields[1].name
+    assert reddit_text in embed.fields[1].value

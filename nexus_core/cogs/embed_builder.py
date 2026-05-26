@@ -1573,6 +1573,20 @@ def create_reddit_scan_embed(symbol, reddit_text):
     return embed
 
 
+def create_media_sentiment_embed(symbol, news_text, reddit_text):
+    """建構輿情與社群 (Media & Social) 掃描結果的統一 Embed"""
+    embed = discord.Embed(
+        title=f"🎭 {symbol} 輿情與社群大盤掃描 (Media & Social)",
+        color=discord.Color.blue(),
+    )
+    add_news_field(embed, news_text)
+    add_reddit_field(embed, reddit_text)
+    embed.set_footer(
+        text="Nexus Seeker 輿情中心 • 資料來源: Yahoo Finance & Reddit (WSB/Stocks/Options)"
+    )
+    return embed
+
+
 def create_polymarket_list_embed(markets: List[Dict[str, Any]]):
     """建構 Polymarket 監控中的熱門市場 Embed"""
     embed = discord.Embed(
@@ -2188,6 +2202,27 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
     embed.set_footer(
         text="🔗 使用 /settle_hedge 紀錄對沖或 /event_impact 進行曝險模擬。"
+    )
+    return embed
+
+
+def create_tactical_hedge_embed(
+    symbol: str, ivr: float, rec_strategy: str
+) -> discord.Embed:
+    """建構標的對沖防禦中心的 Embed"""
+    embed = discord.Embed(
+        title=f"🛡️ {symbol} 對沖防禦中心 (Tactical Hedging)",
+        color=discord.Color.red(),
+    )
+    embed.add_field(
+        name="📊 當前波動率狀態 (Volatility Context)",
+        value=f"* **IV Rank:** `{ivr:.1f}%`\n* **推薦防禦策略:** `{rec_strategy}`",
+        inline=False,
+    )
+    embed.add_field(
+        name="🛠️ 推薦執行步驟",
+        value="1. 請在終端機或聊天室中輸入 `/settle_hedge` 以登錄對沖操作。\n2. 可搭配 `/event_impact` 輸入事件代號模擬近期宏觀事件（財報/CPI）對選擇權曝險的影響。",
+        inline=False,
     )
     return embed
 

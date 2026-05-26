@@ -17,13 +17,12 @@ from cogs.embed_builder import (
     create_info_embed,
     create_iv_risk_scan_embed,
     create_market_calendar_embed,
-    create_max_pain_embed,
     create_sentiment_scan_embed,
-    create_news_scan_embed,
-    create_reddit_scan_embed,
+    create_media_sentiment_embed,
     create_trades_embed,
     create_strategic_dash_embed,
     create_tactical_symbol_embed,
+    create_tactical_hedge_embed,
     create_holdings_embed,
     build_vtr_stats_embed,
     create_polymarket_list_embed,
@@ -78,49 +77,8 @@ class SymbolHubView(discord.ui.View):
             await self._reset_loading(interaction, embed=embed)
 
     @discord.ui.button(
-        label="📰 新聞分析", style=discord.ButtonStyle.primary, custom_id="btn_news"
-    )
-    async def btn_news(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
-        await interaction.response.defer()
-        await self._set_loading(interaction)
-        embed = None
-        try:
-            news_text = await news_service.fetch_recent_news(self.symbol)
-            embed = create_news_scan_embed(self.symbol, news_text)
-        except Exception as e:
-            await interaction.followup.send(
-                embed=create_error_embed(f"獲取新聞失敗: {e}"), ephemeral=True
-            )
-        finally:
-            await self._reset_loading(interaction, embed=embed)
-
-    @discord.ui.button(
-        label="💬 Reddit 情緒",
+        label="📐 期權情緒",
         style=discord.ButtonStyle.primary,
-        custom_id="btn_reddit",
-    )
-    async def btn_reddit(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
-        await interaction.response.defer()
-        await self._set_loading(interaction)
-        embed = None
-        try:
-            reddit_text = await reddit_service.get_reddit_context(self.symbol)
-            embed = create_reddit_scan_embed(self.symbol, reddit_text)
-        except Exception as e:
-            await interaction.followup.send(
-                embed=create_error_embed(f"獲取 Reddit 情緒失敗: {e}"),
-                ephemeral=True,
-            )
-        finally:
-            await self._reset_loading(interaction, embed=embed)
-
-    @discord.ui.button(
-        label="📐 情緒掃描",
-        style=discord.ButtonStyle.secondary,
         custom_id="btn_sentiment",
     )
     async def btn_sentiment(
@@ -150,39 +108,185 @@ class SymbolHubView(discord.ui.View):
             )
         except Exception as e:
             await interaction.followup.send(
-                embed=create_error_embed(f"執行情緒掃描失敗: {e}"),
+                embed=create_error_embed(f"執行期權情緒分析失敗: {e}"),
                 ephemeral=True,
             )
         finally:
             await self._reset_loading(interaction, embed=embed)
 
     @discord.ui.button(
-        label="🎯 最大痛點",
-        style=discord.ButtonStyle.secondary,
-        custom_id="btn_maxpain",
+        label="🎭 輿情社群",
+        style=discord.ButtonStyle.primary,
+        custom_id="btn_media",
     )
-    async def btn_maxpain(
+    async def btn_media(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ):
         await interaction.response.defer()
         await self._set_loading(interaction)
         embed = None
         try:
-            data = await SentimentEngine.calculate_max_pain(self.symbol)
-            if "error" in data:
-                await interaction.followup.send(
-                    embed=create_error_embed(f"計算失敗: {data['error']}"),
-                    ephemeral=True,
-                )
-            else:
-                embed = create_max_pain_embed(self.symbol, data)
+            news_task = news_service.fetch_recent_news(self.symbol)
+            reddit_task = reddit_service.get_reddit_context(self.symbol)
+            news_text, reddit_text = await asyncio.gather(news_task, reddit_task)
+            embed = create_media_sentiment_embed(self.symbol, news_text, reddit_text)
         except Exception as e:
             await interaction.followup.send(
-                embed=create_error_embed(f"計算最大痛點失敗: {e}"),
+                embed=create_error_embed(f"獲取輿情社群失敗: {e}"),
                 ephemeral=True,
             )
         finally:
             await self._reset_loading(interaction, embed=embed)
+
+    @discord.ui.button(
+        label="🔄 即時整理",
+        style=discord.ButtonStyle.secondary,
+        custom_id="btn_refresh",
+    )
+    async def btn_refresh(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        await interaction.response.defer()
+        await self._set_loading(interaction)
+        embed = None
+        try:
+            # 清除該 symbol 在 sentiment_engine 中的 BoundedCache 快取
+            from market_analysis.sentiment_engine import _iv_cache
+
+            if self.symbol in _iv_cache:
+                del _iv_cache[self.symbol]
+                logger.info(f"[{self.symbol}] 按鈕觸發：已清除 IV 數據快取")
+
+            # 重新加載最新的基礎數據分析結果
+            spy_task = market_data_service.get_spy_history_df("1y")
+            macro_task = market_data_service.get_macro_environment()
+            df_spy, macro_raw = await asyncio.gather(spy_task, macro_task)
+            spy_price = df_spy["Close"].iloc[-1] if not df_spy.empty else 670.0
+            macro_data = MacroContext(
+                vix=macro_raw.get("vix", 18.0),
+                oil_price=macro_raw.get("oil", 75.0),
+                vix_change=macro_raw.get("vix_change", 0.0),
+            )
+
+            # 獲取 stock_cost
+            from services.asset_manager import AssetManager
+            from models.asset import ContextType
+
+            manager = AssetManager()
+            assets = manager.get_assets(self.user_id, ContextType.HOLDING)
+            stock_cost = next(
+                (
+                    a.metadata.get("avg_cost", 0.0)
+                    for a in assets
+                    if a.symbol == self.symbol
+                ),
+                0.0,
+            )
+
+            result = await market_math.analyze_symbol(
+                self.symbol, stock_cost, df_spy, spy_price, vix_spot=macro_data.vix
+            )
+            if not result:
+                result = {"symbol": self.symbol, "stock_cost": stock_cost, "price": 0.0}
+
+            df_hist_1d = await market_data_service.get_history_df(
+                self.symbol, period="1y", interval="1d"
+            )
+            psq_result = analyze_psq(df_hist_1d, vix_spot=macro_data.vix)
+            if psq_result:
+                result["psq_result"] = psq_result
+                result["price"] = (
+                    df_hist_1d["Close"].iloc[-1]
+                    if not df_hist_1d.empty
+                    else result.get("price", 0.0)
+                )
+
+            skew_data = await SentimentEngine.calculate_skew(self.symbol)
+            result["skew"] = skew_data.get("skew", 0.0)
+            result["skew_percentile"] = SentimentEngine.get_indicator_percentile(
+                self.symbol, "SKEW", result["skew"]
+            )
+
+            result["vix"] = macro_data.vix
+            result["spy_price"] = spy_price
+
+            from market_analysis.ddp_inspector import DDPInspector
+
+            ddp_inspector = DDPInspector(self.bot)
+            ddp_report = await ddp_inspector.inspect_symbol(self.symbol)
+            result["is_ddp"] = ddp_report.get("is_ddp", False) if ddp_report else False
+
+            iv_metrics = await SentimentEngine.fetch_and_calculate_iv_metrics(
+                self.symbol
+            )
+            result["iv_rank"] = iv_metrics.iv_rank
+
+            max_pain_data = await SentimentEngine.calculate_max_pain(self.symbol)
+            result["max_pain"] = max_pain_data.get("max_pain", 0.0)
+
+            reddit_text = await reddit_service.get_reddit_context(self.symbol)
+            if "看多" in reddit_text or "Bullish" in reddit_text:
+                result["reddit_sentiment_score"] = "🚀 樂觀 (Bullish)"
+            elif "看空" in reddit_text or "Bearish" in reddit_text:
+                result["reddit_sentiment_score"] = "💀 恐慌 (Bearish)"
+            else:
+                result["reddit_sentiment_score"] = "⚖️ 中性"
+
+            from services.polymarket_service import PolymarketService
+
+            poly_service = PolymarketService(self.bot)
+            poly_markets = await poly_service.get_market_snapshot(limit=10)
+            poly_odds = "N/A"
+            for m in poly_markets:
+                if self.symbol.lower() in m.get("question", "").lower():
+                    tokens = m.get("tokens", [])
+                    if tokens:
+                        poly_odds = f"{tokens[0].get('outcome', 'Yes')}: {float(tokens[0].get('price', 0))*100:.1f}%"
+                    break
+            result["polymarket_odds"] = poly_odds
+
+            self.base_data = result
+            embed = create_tactical_symbol_embed(self.base_data)
+            await interaction.followup.send(
+                embed=create_info_embed(
+                    f"✨ `{self.symbol}` 最新數據已重整並更新！", title="更新成功"
+                ),
+                ephemeral=True,
+            )
+        except Exception as e:
+            await interaction.followup.send(
+                embed=create_error_embed(f"重整數據失敗: {e}"), ephemeral=True
+            )
+        finally:
+            await self._reset_loading(interaction, embed=embed)
+
+    @discord.ui.button(
+        label="🛡️ 一鍵對沖",
+        style=discord.ButtonStyle.danger,
+        custom_id="btn_hedge",
+    )
+    async def btn_hedge(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        await interaction.response.defer()
+        await self._set_loading(interaction)
+        try:
+            # 根據目前波動率與情緒自動引導對沖操作
+            ivr = self.base_data.get("iv_rank", 50.0)
+            rec_strategy = (
+                "Bull Put Spread (賣出認沽價差策略)"
+                if ivr > 50.0
+                else "Bear Debits / Put Protection (買入保護性認沽)"
+            )
+
+            embed_hedge = create_tactical_hedge_embed(self.symbol, ivr, rec_strategy)
+            await interaction.followup.send(embed=embed_hedge, ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(
+                embed=create_error_embed(f"開啟對沖中心失敗: {e}"), ephemeral=True
+            )
+        finally:
+            await self._reset_loading(interaction)
 
 
 class PortfolioHubView(discord.ui.View):
