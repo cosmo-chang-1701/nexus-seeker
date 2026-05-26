@@ -300,7 +300,9 @@ async def test_iv_rank_and_percentile_math():
         "services.market_data_service.get_quote", new_callable=AsyncMock
     ) as m_quote, patch("yfinance.Ticker") as m_ticker, patch(
         "services.market_data_service.get_history_df", new_callable=AsyncMock
-    ) as m_hist:
+    ) as m_hist, patch(
+        "market_analysis.sentiment_engine.is_market_open", return_value=True
+    ):
         m_quote.return_value = mock_quote
         m_hist.return_value = pd.DataFrame()  # empty so we only use DB data
 
@@ -367,3 +369,86 @@ async def test_fetch_and_calculate_iv_metrics_value_error_warning():
         assert metrics.iv_percentile == 0.0
         assert metrics.expected_move_weekly == 0.0
         assert metrics.iv_status == "Normal"
+        assert metrics.is_premarket is True
+
+
+@pytest.mark.asyncio
+async def test_fetch_and_calculate_iv_metrics_premarket_success():
+    """Test pre-market IV calculation falling back to previous day's close in DB."""
+    symbol = "TEST_PREMARKET_OK"
+    mock_quote = {"c": 120.0}
+
+    # Populate DB with historical records
+    conn = sqlite3.connect(config.DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM historical_iv WHERE symbol = ?", (symbol,))
+    conn.commit()
+
+    # Pre-populate historical records: low=0.20, high=0.60
+    SentimentEngine.save_historical_iv(symbol, 0.20, "2026-05-15")
+    SentimentEngine.save_historical_iv(symbol, 0.60, "2026-05-16")
+    SentimentEngine.save_historical_iv(
+        symbol, 0.40, "2026-05-17"
+    )  # last stored is 0.40
+    conn.commit()
+
+    with patch(
+        "services.market_data_service.get_quote", new_callable=AsyncMock
+    ) as m_quote, patch(
+        "market_analysis.sentiment_engine.is_market_open", return_value=False
+    ), patch(
+        "services.market_data_service.get_history_df", new_callable=AsyncMock
+    ) as m_hist:
+        m_quote.return_value = mock_quote
+        m_hist.return_value = pd.DataFrame()  # empty to rely on DB values
+
+        _iv_cache.clear()
+        metrics = await SentimentEngine.fetch_and_calculate_iv_metrics(symbol)
+
+        assert isinstance(metrics, IVMetrics)
+        assert metrics.symbol == symbol
+        assert metrics.is_premarket is True
+        assert metrics.current_iv == pytest.approx(
+            0.40
+        )  # should match the last DB record
+        # History includes [0.20, 0.60, 0.40] -> min=0.20, max=0.60, current=0.40
+        # Rank: ((0.40 - 0.20) / (0.60 - 0.20)) * 100 = 50.0%
+        assert metrics.iv_rank == pytest.approx(50.0)
+
+    # Clean up DB
+    cursor.execute("DELETE FROM historical_iv WHERE symbol = ?", (symbol,))
+    conn.commit()
+    conn.close()
+
+
+@pytest.mark.asyncio
+async def test_fetch_and_calculate_iv_metrics_premarket_degraded():
+    """Test pre-market IV calculation when DB is empty and options data fails, causing graceful degrade."""
+    symbol = "TEST_PREMARKET_FAIL"
+    mock_quote = {"c": 120.0}
+
+    conn = sqlite3.connect(config.DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM historical_iv WHERE symbol = ?", (symbol,))
+    conn.commit()
+    conn.close()
+
+    with patch(
+        "services.market_data_service.get_quote", new_callable=AsyncMock
+    ) as m_quote, patch(
+        "market_analysis.sentiment_engine.is_market_open", return_value=False
+    ), patch(
+        "services.market_data_service.get_history_df", new_callable=AsyncMock
+    ) as m_hist, patch("yfinance.Ticker") as m_ticker:
+        m_quote.return_value = mock_quote
+        m_hist.return_value = pd.DataFrame()  # empty
+        m_ticker.side_effect = Exception("Ticker failure")
+
+        _iv_cache.clear()
+        metrics = await SentimentEngine.fetch_and_calculate_iv_metrics(symbol)
+
+        assert isinstance(metrics, IVMetrics)
+        assert metrics.symbol == symbol
+        assert metrics.is_premarket is True
+        assert metrics.current_iv == 0.0
+        assert metrics.iv_rank == 0.0

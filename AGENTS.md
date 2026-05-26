@@ -4,7 +4,7 @@
 
 Nexus Seeker is a multi-tenant **Discord-first options risk-control and trading operations platform**. It combines technical structure, Black-Scholes-Merton pricing, Greeks-based portfolio risk, event-aware calendar defenses, and LLM-assisted structured commentary.
 
-Current released core version: **`1.6.24`**
+Current released core version: **`1.6.25`**
 
 The codebase is optimized for:
 
@@ -135,6 +135,19 @@ Current sections:
 - summarizes skew / IV / event risk in short Traditional Chinese
 - is protected by the global memory-safety gate
 - degrades explicitly when RAM usage is too high
+
+### Pre-market IV Sentiment Scan & Fallback
+
+During pre-market hours (before 09:30 ET), the options market is closed and live implied volatility (IV) is unavailable. In standard setups, this causes `IV Rank` and `IV Percentile` calculations to fail or return a misleading `0.0%` (which users might mistake for historically cheap IV).
+
+We resolve this via a comprehensive pre-market optimization workflow:
+1. **Trading Hours Detection**: The engine checks the market state using `market_time.is_market_open()`.
+2. **Database Fallback**: If the market is closed (`not is_market_open()`), it automatically queries the SQLite database `historical_iv` table for the last known closing IV of the symbol and sets it as `current_iv`.
+3. **Historical Volatility (HV) Fallback**: If the DB has no history for the symbol, the engine calculates the standard 30-day Historical Volatility (HV) using historical stock close prices as a proxy.
+4. **Degradation Gating**: If all options and historical data are unavailable, the engine gracefully degrades and sets the `is_premarket` flag to `True` on the returned `IVMetrics` model.
+5. **Presentation Layer Customization**: In `embed_builder.py`, if `is_premarket` is `True`:
+   - **Complete Data Absence (`current_iv == 0.0`)**: Appends ` [盤前數據未更新]` to the title and displays friendly placeholders (`--%` and `等待開盤`) to prevent user confusion.
+   - **Successful Fallback (`current_iv > 0.0`)**: Appends ` [盤前/前日收盤]` to the title and tags the IV values with `(前日收盤 / 歷史波動率代理)` to clearly report that the data reflects previous closing levels.
 
 ---
 
