@@ -14,7 +14,8 @@ import config
 from models.quant import IVMetrics
 
 _iv_cache = BoundedCache(max_size=500)
-_IV_CACHE_TTL = 1800  # 30 minutes
+_IV_CACHE_TTL = 1200  # 20 minutes
+
 
 logger = logging.getLogger(__name__)
 

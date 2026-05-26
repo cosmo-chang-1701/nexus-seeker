@@ -15,7 +15,7 @@ import random
 import math
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
-from collections import OrderedDict
+from collections import OrderedDict, namedtuple
 import gc
 
 import finnhub
@@ -204,8 +204,17 @@ async def get_history_df(
     symbol: str, period: str = "1y", interval: str = "1d"
 ) -> pd.DataFrame:
     """
-    使用 yfinance 抓取歷史 K 線 (異步化)。
+    使用 yfinance 抓取歷史 K 線 (異步化，支援 4 小時快取與 Copy 隔離)。
     """
+    symbol = symbol.upper()
+    cache_key = (symbol, period, interval)
+    now = time.time()
+
+    if cache_key in _history_cache:
+        cached_df, expiry = _history_cache[cache_key]
+        if now < expiry:
+            return cached_df.copy()
+
     try:
         ticker = yf.Ticker(symbol)
         # yfinance 內部為同步，同樣使用 to_thread
@@ -221,7 +230,9 @@ async def get_history_df(
         if df.index.tz is not None:
             df.index = df.index.tz_localize(None)
 
-        return df[["Open", "High", "Low", "Close", "Volume"]]
+        result_df = df[["Open", "High", "Low", "Close", "Volume"]]
+        _history_cache[cache_key] = (result_df.copy(), now + _HISTORY_CACHE_TTL)
+        return result_df
     except Exception as e:
         logger.error(f"[{symbol}] yfinance 抓取失敗: {e}")
         return pd.DataFrame()
@@ -241,26 +252,81 @@ async def get_spy_history_df(
     return pd.DataFrame()
 
 
-# ---------------------------------------------------------------------------
-# Options Data (yfinance)
-# ---------------------------------------------------------------------------
+OptionChainData = namedtuple("OptionChainData", ["calls", "puts", "underlying"])
+
+
 async def get_all_option_expiries(symbol: str) -> List[str]:
-    """取得該標的所有可用的期權到期日。"""
+    """取得該標的所有可用的期權到期日 (支援 12 小時快取)。"""
+    symbol = symbol.upper()
+    now = time.time()
+    if symbol in _option_expiries_cache:
+        cached_val, expiry = _option_expiries_cache[symbol]
+        if now < expiry:
+            return list(cached_val)
+
     try:
         ticker = yf.Ticker(symbol)
         expiries = await asyncio.to_thread(lambda: ticker.options)
-        return list(expiries)
+        res = list(expiries)
+        if res:
+            _option_expiries_cache[symbol] = (
+                list(res),
+                now + _OPTION_EXPIRIES_CACHE_TTL,
+            )
+        return res
     except Exception as e:
         logger.error(f"[{symbol}] 獲取期權到期日失敗: {e}")
         return []
 
 
 async def get_option_chain(symbol: str, expiry: str) -> Optional[Any]:
-    """取得指定到期日的期權鏈。"""
+    """取得指定到期日的期權鏈 (支援 40 分鐘快取與 Copy 隔離)。"""
+    symbol = symbol.upper()
+    cache_key = (symbol, expiry)
+    now = time.time()
+
+    if cache_key in _option_chain_cache:
+        cached_val, expiry_time = _option_chain_cache[cache_key]
+        if now < expiry_time:
+            calls_copy = (
+                cached_val.calls.copy() if cached_val.calls is not None else None
+            )
+            puts_copy = cached_val.puts.copy() if cached_val.puts is not None else None
+            underlying_copy = (
+                cached_val.underlying.copy()
+                if hasattr(cached_val.underlying, "copy")
+                else cached_val.underlying
+            )
+            return OptionChainData(
+                calls=calls_copy, puts=puts_copy, underlying=underlying_copy
+            )
+
     try:
         ticker = yf.Ticker(symbol)
         chain = await asyncio.to_thread(ticker.option_chain, expiry)
-        return chain
+        if chain is not None:
+            calls_copy = chain.calls.copy() if chain.calls is not None else None
+            puts_copy = chain.puts.copy() if chain.puts is not None else None
+            underlying_copy = (
+                chain.underlying.copy()
+                if hasattr(chain.underlying, "copy")
+                else chain.underlying
+            )
+            cached_entry = OptionChainData(
+                calls=calls_copy, puts=puts_copy, underlying=underlying_copy
+            )
+            _option_chain_cache[cache_key] = (
+                cached_entry,
+                now + _OPTION_CHAIN_CACHE_TTL,
+            )
+            return OptionChainData(
+                calls=calls_copy.copy() if calls_copy is not None else None,
+                puts=puts_copy.copy() if puts_copy is not None else None,
+                underlying=underlying_copy.copy()
+                if hasattr(underlying_copy, "copy")
+                else underlying_copy,
+            )
+        return None
     except Exception as e:
         logger.error(f"[{symbol}] 獲取期權鏈失敗 (expiry={expiry}): {e}")
         return None
@@ -309,6 +375,21 @@ _PROFILE_CACHE_TTL = 86400  # 24 小時，公司 Profile 通常是靜態的
 _etf_cache = BoundedCache(max_size=MAX_CACHE_SIZE)
 _ETF_CACHE_TTL = 86400  # 24 小時，ETF 屬性通常是靜態的
 
+# ---------------------------------------------------------------------------
+# 歷史 K 線數據快取設定 (4 小時，避開盤中大量重複 API 查詢)
+# ---------------------------------------------------------------------------
+_history_cache = BoundedCache(max_size=MAX_CACHE_SIZE)
+_HISTORY_CACHE_TTL = 14400  # 4 小時
+
+# ---------------------------------------------------------------------------
+# 期權到期日與期權鏈快取設定 (避開盤中重複的 yfinance 查詢)
+# ---------------------------------------------------------------------------
+_option_expiries_cache = BoundedCache(max_size=MAX_CACHE_SIZE)
+_OPTION_EXPIRIES_CACHE_TTL = 43200  # 12 小時
+
+_option_chain_cache = BoundedCache(max_size=MAX_CACHE_SIZE)
+_OPTION_CHAIN_CACHE_TTL = 1200  # 20 分鐘
+
 
 def clear_quote_cache():
     _quote_cache.clear()
@@ -323,6 +404,17 @@ def clear_profile_cache():
 def clear_etf_cache():
     _etf_cache.clear()
     logger.info("Clarified ETF cache")
+
+
+def clear_history_cache():
+    _history_cache.clear()
+    logger.info("Clarified history cache")
+
+
+def clear_options_cache():
+    _option_expiries_cache.clear()
+    _option_chain_cache.clear()
+    logger.info("Clarified options cache")
 
 
 async def get_sma(symbol: str, window: int = 200) -> Optional[float]:
