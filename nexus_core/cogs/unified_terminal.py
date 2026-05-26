@@ -249,7 +249,8 @@ class SymbolHubView(discord.ui.View):
             embed = create_tactical_symbol_embed(self.base_data)
             await interaction.followup.send(
                 embed=create_info_embed(
-                    f"✨ `{self.symbol}` 最新數據已重整並更新！", title="更新成功"
+                    title="更新成功",
+                    message=f"✨ `{self.symbol}` 最新數據已重整並更新！",
                 ),
                 ephemeral=True,
             )
