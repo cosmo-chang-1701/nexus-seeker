@@ -27,7 +27,7 @@ from services.market_data_service import BoundedCache
 logger = logging.getLogger(__name__)
 
 _WATCHLIST_METRICS_CACHE = BoundedCache(max_size=128)
-_WATCHLIST_METRICS_TTL = 30 * 60
+_WATCHLIST_METRICS_TTL = 20 * 60
 
 
 def _quote_price(quote: Dict[str, Any], fallback: float = 0.0) -> float:
@@ -254,6 +254,8 @@ async def _estimate_options_wall_metrics(
 
 async def build_enhanced_watchlist_metrics(
     symbol: str,
+    *,
+    df_spy: pd.DataFrame | None = None,
 ) -> Optional[EnhancedWatchlistMetrics]:
     from market_analysis.risk_engine import calculate_beta
     from market_analysis.sentiment_engine import SentimentEngine
@@ -268,7 +270,16 @@ async def build_enhanced_watchlist_metrics(
 
     quote_task = market_data_service.get_quote(symbol)
     stock_history_task = market_data_service.get_history_df(symbol, period="1y")
-    spy_history_task = market_data_service.get_spy_history_df(period="1y")
+
+    if df_spy is None:
+        spy_history_task = market_data_service.get_spy_history_df(period="1y")
+    else:
+
+        async def _get_provided_spy():
+            return df_spy
+
+        spy_history_task = _get_provided_spy()
+
     financials_task = market_data_service.get_basic_financials(symbol)
     profile_task = market_data_service.get_company_profile(symbol)
     iv_task = SentimentEngine.fetch_and_calculate_iv_metrics(symbol)
@@ -496,9 +507,10 @@ async def evaluate_watchlist_symbol(
     *,
     earnings_event: Any | None = None,
     macro_event: Any | None = None,
+    df_spy: pd.DataFrame | None = None,
 ) -> Optional[WatchlistEvaluation]:
     metrics, event_context = await asyncio.gather(
-        build_enhanced_watchlist_metrics(symbol),
+        build_enhanced_watchlist_metrics(symbol, df_spy=df_spy),
         build_watchlist_event_context(
             symbol, earnings_event=earnings_event, macro_event=macro_event
         ),

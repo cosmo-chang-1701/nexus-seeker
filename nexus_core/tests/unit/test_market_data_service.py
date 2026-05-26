@@ -57,3 +57,246 @@ async def test_execute_api_call_sets_rate_limit_on_429():
         # but the local lookup in _execute_api_call modified the patched value.
         # Let's verify that the module reference (which is patched) was set.
         assert services.market_data_service._rate_limit_until > time.time()
+
+
+@pytest.mark.asyncio
+async def test_get_history_df_caching_success():
+    """Test that get_history_df caches results and returns cached copies on subsequent calls."""
+    import pandas as pd
+    from services.market_data_service import get_history_df, clear_history_cache
+
+    clear_history_cache()
+
+    mock_df = pd.DataFrame(
+        {
+            "Open": [100.0],
+            "High": [105.0],
+            "Low": [95.0],
+            "Close": [102.0],
+            "Volume": [1000],
+        },
+        index=pd.to_datetime(["2026-05-25"]),
+    )
+    mock_df.index.name = "Date"
+
+    mock_ticker = MagicMock()
+    mock_ticker.history = MagicMock(return_value=mock_df)
+
+    with patch(
+        "services.market_data_service.yf.Ticker", return_value=mock_ticker
+    ) as mock_yf_ticker:
+        # First call: cache miss
+        df1 = await get_history_df("AAPL", period="1y", interval="1d")
+        assert not df1.empty
+        assert df1.loc["2026-05-25", "Close"] == 102.0
+        mock_yf_ticker.assert_called_once_with("AAPL")
+        mock_ticker.history.assert_called_once_with(period="1y", interval="1d")
+
+        # Second call: cache hit
+        mock_yf_ticker.reset_mock()
+        mock_ticker.history.reset_mock()
+
+        df2 = await get_history_df("AAPL", period="1y", interval="1d")
+        assert not df2.empty
+        assert df2.loc["2026-05-25", "Close"] == 102.0
+        # Should NOT call yfinance again
+        mock_yf_ticker.assert_not_called()
+        mock_ticker.history.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_history_df_cache_expiry():
+    """Test that cache expires correctly after TTL."""
+    import pandas as pd
+    from services.market_data_service import get_history_df, clear_history_cache
+
+    clear_history_cache()
+
+    mock_df = pd.DataFrame(
+        {
+            "Open": [100.0],
+            "High": [105.0],
+            "Low": [95.0],
+            "Close": [102.0],
+            "Volume": [1000],
+        },
+        index=pd.to_datetime(["2026-05-25"]),
+    )
+    mock_df.index.name = "Date"
+
+    mock_ticker = MagicMock()
+    mock_ticker.history = MagicMock(return_value=mock_df)
+
+    start_time = 100000.0
+    with patch(
+        "services.market_data_service.yf.Ticker", return_value=mock_ticker
+    ), patch("time.time", return_value=start_time):
+        df1 = await get_history_df("AAPL", period="1y", interval="1d")
+        assert not df1.empty
+
+    # Fast forward past TTL (4 hours = 14400 seconds)
+    expiry_time = start_time + 14401.0
+    with patch(
+        "services.market_data_service.yf.Ticker", return_value=mock_ticker
+    ) as mock_yf_ticker, patch("time.time", return_value=expiry_time):
+        df2 = await get_history_df("AAPL", period="1y", interval="1d")
+        assert not df2.empty
+        # Should call yfinance again due to expiry
+        mock_yf_ticker.assert_called_once_with("AAPL")
+
+
+@pytest.mark.asyncio
+async def test_get_history_df_copy_isolation():
+    """Test that modifying a returned dataframe does not mutate the cached dataframe."""
+    import pandas as pd
+    from services.market_data_service import get_history_df, clear_history_cache
+
+    clear_history_cache()
+
+    mock_df = pd.DataFrame(
+        {
+            "Open": [100.0],
+            "High": [105.0],
+            "Low": [95.0],
+            "Close": [102.0],
+            "Volume": [1000],
+        },
+        index=pd.to_datetime(["2026-05-25"]),
+    )
+    mock_df.index.name = "Date"
+
+    mock_ticker = MagicMock()
+    mock_ticker.history = MagicMock(return_value=mock_df)
+
+    with patch("services.market_data_service.yf.Ticker", return_value=mock_ticker):
+        df1 = await get_history_df("AAPL", period="1y", interval="1d")
+        assert "modified_col" not in df1.columns
+
+        # Mutate df1
+        df1["modified_col"] = 42
+
+        # Fetch again: cache hit should return clean copy
+        df2 = await get_history_df("AAPL", period="1y", interval="1d")
+        assert "modified_col" not in df2.columns
+
+
+@pytest.mark.asyncio
+async def test_clear_history_cache():
+    """Test that clear_history_cache properly invalidates the cache."""
+    import pandas as pd
+    from services.market_data_service import get_history_df, clear_history_cache
+
+    clear_history_cache()
+
+    mock_df = pd.DataFrame(
+        {
+            "Open": [100.0],
+            "High": [105.0],
+            "Low": [95.0],
+            "Close": [102.0],
+            "Volume": [1000],
+        },
+        index=pd.to_datetime(["2026-05-25"]),
+    )
+    mock_df.index.name = "Date"
+
+    mock_ticker = MagicMock()
+    mock_ticker.history = MagicMock(return_value=mock_df)
+
+    with patch(
+        "services.market_data_service.yf.Ticker", return_value=mock_ticker
+    ) as mock_yf_ticker:
+        # Fetch once to populate cache
+        await get_history_df("AAPL", period="1y", interval="1d")
+        mock_yf_ticker.assert_called_once()
+        mock_yf_ticker.reset_mock()
+
+        # Clear cache
+        clear_history_cache()
+
+        # Fetch again: should be cache miss
+        await get_history_df("AAPL", period="1y", interval="1d")
+        mock_yf_ticker.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_get_all_option_expiries_caching():
+    """Test that get_all_option_expiries caches the returned expiry dates list."""
+    from services.market_data_service import (
+        get_all_option_expiries,
+        clear_options_cache,
+    )
+
+    clear_options_cache()
+
+    mock_ticker = MagicMock()
+    mock_ticker.options = ["2026-06-19", "2026-07-17"]
+
+    with patch(
+        "services.market_data_service.yf.Ticker", return_value=mock_ticker
+    ) as mock_yf_ticker:
+        # Miss
+        expiries1 = await get_all_option_expiries("MSFT")
+        assert expiries1 == ["2026-06-19", "2026-07-17"]
+        mock_yf_ticker.assert_called_once_with("MSFT")
+
+        # Hit
+        mock_yf_ticker.reset_mock()
+        expiries2 = await get_all_option_expiries("MSFT")
+        assert expiries2 == ["2026-06-19", "2026-07-17"]
+        mock_yf_ticker.assert_not_called()
+
+        # Clear
+        clear_options_cache()
+        expiries3 = await get_all_option_expiries("MSFT")
+        assert expiries3 == ["2026-06-19", "2026-07-17"]
+        mock_yf_ticker.assert_called_once_with("MSFT")
+
+
+@pytest.mark.asyncio
+async def test_get_option_chain_caching():
+    """Test that get_option_chain caches the chain and enforces copy-isolation on dataframes."""
+    import pandas as pd
+    from services.market_data_service import get_option_chain, clear_options_cache
+
+    clear_options_cache()
+
+    mock_calls = pd.DataFrame(
+        {"strike": [150.0], "impliedVolatility": [0.3]}, index=[0]
+    )
+    mock_puts = pd.DataFrame(
+        {"strike": [140.0], "impliedVolatility": [0.32]}, index=[0]
+    )
+    mock_underlying = {"symbol": "MSFT", "price": 145.0}
+
+    mock_chain = MagicMock()
+    mock_chain.calls = mock_calls
+    mock_chain.puts = mock_puts
+    mock_chain.underlying = mock_underlying
+
+    mock_ticker = MagicMock()
+    mock_ticker.option_chain = MagicMock(return_value=mock_chain)
+
+    with patch(
+        "services.market_data_service.yf.Ticker", return_value=mock_ticker
+    ) as mock_yf_ticker:
+        # First call: cache miss
+        chain1 = await get_option_chain("MSFT", "2026-06-19")
+        assert chain1 is not None
+        assert list(chain1.calls["strike"]) == [150.0]
+        mock_yf_ticker.assert_called_once_with("MSFT")
+        mock_ticker.option_chain.assert_called_once_with("2026-06-19")
+
+        # Second call: cache hit
+        mock_yf_ticker.reset_mock()
+        mock_ticker.option_chain.reset_mock()
+        chain2 = await get_option_chain("MSFT", "2026-06-19")
+        assert chain2 is not None
+        assert list(chain2.calls["strike"]) == [150.0]
+        mock_yf_ticker.assert_not_called()
+        mock_ticker.option_chain.assert_not_called()
+
+        # Mutate chain1 dataframe and check copy isolation
+        chain1.calls["strike"] = [999.0]
+        chain3 = await get_option_chain("MSFT", "2026-06-19")
+        assert list(chain3.calls["strike"]) == [150.0]

@@ -82,7 +82,7 @@ def _determine_strategy_signal(indicators):
         return None, None, 0, 0, 0
 
 
-async def _calculate_mmm(ticker, price, today, symbol, is_etf):
+async def _calculate_mmm(symbol, price, today, is_etf):
     """計算財報日 MMM (Market Maker Move)"""
     earnings_date = None if is_etf else await get_next_earnings_date(symbol)
     days_to_earnings = -1
@@ -96,7 +96,8 @@ async def _calculate_mmm(ticker, price, today, symbol, is_etf):
         if 0 <= days_to_earnings <= 14:
             target_exp_for_mmm = None
             try:
-                for exp in ticker.options:
+                options = await market_data_service.get_all_option_expiries(symbol)
+                for exp in options:
                     if datetime.strptime(exp, "%Y-%m-%d").date() >= earnings_date:
                         target_exp_for_mmm = exp
                         break
@@ -105,46 +106,53 @@ async def _calculate_mmm(ticker, price, today, symbol, is_etf):
 
             if target_exp_for_mmm:
                 try:
-                    chain_mmm = ticker.option_chain(target_exp_for_mmm)
-                    calls_mmm = chain_mmm.calls
-                    c_price = 0
-                    if not calls_mmm.empty:
-                        atm_call_idx = (calls_mmm["strike"] - price).abs().idxmin()
-                        atm_call = calls_mmm.loc[atm_call_idx]
-                        c_bid, c_ask, c_last = (
-                            atm_call.get("bid", 0.0),
-                            atm_call.get("ask", 0.0),
-                            atm_call.get("lastPrice", 0.0),
-                        )
-                        c_price = (
-                            (c_bid + c_ask) / 2 if (c_bid > 0 and c_ask > 0) else c_last
-                        )
+                    chain_mmm = await market_data_service.get_option_chain(
+                        symbol, target_exp_for_mmm
+                    )
+                    if chain_mmm is not None:
+                        calls_mmm = chain_mmm.calls
+                        c_price = 0
+                        if calls_mmm is not None and not calls_mmm.empty:
+                            atm_call_idx = (calls_mmm["strike"] - price).abs().idxmin()
+                            atm_call = calls_mmm.loc[atm_call_idx]
+                            c_bid, c_ask, c_last = (
+                                atm_call.get("bid", 0.0),
+                                atm_call.get("ask", 0.0),
+                                atm_call.get("lastPrice", 0.0),
+                            )
+                            c_price = (
+                                (c_bid + c_ask) / 2
+                                if (c_bid > 0 and c_ask > 0)
+                                else c_last
+                            )
 
-                    puts_mmm = chain_mmm.puts
-                    p_price = 0
-                    if not puts_mmm.empty:
-                        atm_put_idx = (puts_mmm["strike"] - price).abs().idxmin()
-                        atm_put = puts_mmm.loc[atm_put_idx]
-                        p_bid, p_ask, p_last = (
-                            atm_put.get("bid", 0.0),
-                            atm_put.get("ask", 0.0),
-                            atm_put.get("lastPrice", 0.0),
-                        )
-                        p_price = (
-                            (p_bid + p_ask) / 2 if (p_bid > 0 and p_ask > 0) else p_last
-                        )
+                        puts_mmm = chain_mmm.puts
+                        p_price = 0
+                        if puts_mmm is not None and not puts_mmm.empty:
+                            atm_put_idx = (puts_mmm["strike"] - price).abs().idxmin()
+                            atm_put = puts_mmm.loc[atm_put_idx]
+                            p_bid, p_ask, p_last = (
+                                atm_put.get("bid", 0.0),
+                                atm_put.get("ask", 0.0),
+                                atm_put.get("lastPrice", 0.0),
+                            )
+                            p_price = (
+                                (p_bid + p_ask) / 2
+                                if (p_bid > 0 and p_ask > 0)
+                                else p_last
+                            )
 
-                    if price > 0:
-                        mmm_pct = ((c_price + p_price) / price) * 100
-                        safe_lower = price * (1 - mmm_pct / 100)
-                        safe_upper = price * (1 + mmm_pct / 100)
+                        if price > 0:
+                            mmm_pct = ((c_price + p_price) / price) * 100
+                            safe_lower = price * (1 - mmm_pct / 100)
+                            safe_upper = price * (1 + mmm_pct / 100)
                 except Exception as e:
                     logger.error(f"[{symbol}] MMM 運算失敗: {e}")
 
     return mmm_pct, safe_lower, safe_upper, days_to_earnings
 
 
-def _calculate_term_structure(ticker, expirations, price, today):
+async def _calculate_term_structure(symbol, expirations, price, today):
     """計算波動率期限結構"""
     front_date, back_date = None, None
     front_diff, back_diff = 9999, 9999
@@ -159,22 +167,34 @@ def _calculate_term_structure(ticker, expirations, price, today):
     ts_ratio, ts_state = 1.0, "平滑 (Flat)"
     if front_date and back_date and front_date != back_date:
         try:
-            front_chain = ticker.option_chain(front_date).puts
-            back_chain = ticker.option_chain(back_date).puts
+            front_task = market_data_service.get_option_chain(symbol, front_date)
+            back_task = market_data_service.get_option_chain(symbol, back_date)
+            front_chain, back_chain = await asyncio.gather(front_task, back_task)
 
-            if not front_chain.empty and not back_chain.empty:
-                front_iv_idx = (front_chain["strike"] - price).abs().idxmin()
-                back_iv_idx = (back_chain["strike"] - price).abs().idxmin()
-                front_iv = front_chain.loc[front_iv_idx].get("impliedVolatility", 0.0)
-                back_iv = back_chain.loc[back_iv_idx].get("impliedVolatility", 0.0)
+            if front_chain is not None and back_chain is not None:
+                front_puts = front_chain.puts
+                back_puts = back_chain.puts
 
-                if back_iv > 0.01:
-                    ts_ratio = front_iv / back_iv
+                if (
+                    front_puts is not None
+                    and back_puts is not None
+                    and not front_puts.empty
+                    and not back_puts.empty
+                ):
+                    front_iv_idx = (front_puts["strike"] - price).abs().idxmin()
+                    back_iv_idx = (back_puts["strike"] - price).abs().idxmin()
+                    front_iv = front_puts.loc[front_iv_idx].get(
+                        "impliedVolatility", 0.0
+                    )
+                    back_iv = back_puts.loc[back_iv_idx].get("impliedVolatility", 0.0)
 
-                if ts_ratio >= 1.05:
-                    ts_state = "🚨 恐慌 (Backwardation)"
-                elif ts_ratio <= 0.95:
-                    ts_state = "🌊 正常 (Contango)"
+                    if back_iv > 0.01:
+                        ts_ratio = front_iv / back_iv
+
+                    if ts_ratio >= 1.05:
+                        ts_state = "🚨 恐慌 (Backwardation)"
+                    elif ts_ratio <= 0.95:
+                        ts_state = "🌊 正常 (Contango)"
         except Exception:
             pass
 
@@ -191,8 +211,7 @@ def _find_target_expiry(expirations, today, min_dte, max_dte):
 
 
 def _get_best_contract_data(
-    ticker,
-    target_expiry_date,
+    opt_chain,
     opt_type,
     target_delta,
     price,
@@ -201,8 +220,11 @@ def _get_best_contract_data(
 ):
     """取得最佳合約與 Greeks"""
     try:
-        opt_chain = ticker.option_chain(target_expiry_date)
+        if opt_chain is None:
+            return None, None
         chain_data = opt_chain.calls if opt_type == "call" else opt_chain.puts
+        if chain_data is None:
+            return None, None
         chain_data = chain_data[chain_data["volume"] > 0].copy()
 
         if chain_data.empty:
@@ -595,7 +617,6 @@ async def analyze_symbol(
         vix_spot: VIX 即時價格。用於 VIX 戰情階梯判定（Delta 上限、倉位縮放、訊號閘門）。
     """
     try:
-        ticker = yf.Ticker(symbol)
         quote = await market_data_service.get_quote(symbol)
         price = quote.get("c", 0.0) if quote else None
         is_etf = await market_data_service.is_etf(symbol)
@@ -663,7 +684,7 @@ async def analyze_symbol(
                 target_delta = abs(sto_cap)
         # ----------------------------------------------------------------
 
-        expirations = await asyncio.to_thread(lambda: ticker.options)
+        expirations = await market_data_service.get_all_option_expiries(symbol)
         if not expirations:
             return None
         today = datetime.now().date()
@@ -674,10 +695,12 @@ async def analyze_symbol(
         if not target_expiry_date:
             return None
 
+        opt_chain = await market_data_service.get_option_chain(
+            symbol, target_expiry_date
+        )
         best_contract, opt_chain = await asyncio.to_thread(
             _get_best_contract_data,
-            ticker,
-            target_expiry_date,
+            opt_chain,
             opt_type,
             target_delta,
             price,
@@ -706,10 +729,10 @@ async def analyze_symbol(
             ema_8, ema_21, dist_21 = 0.0, 0.0, 0.0
 
         mmm_pct, safe_lower, safe_upper, days_to_earnings = await _calculate_mmm(
-            ticker, price, today, symbol, is_etf
+            symbol, price, today, is_etf
         )
-        ts_ratio, ts_state = await asyncio.to_thread(
-            _calculate_term_structure, ticker, expirations, price, today
+        ts_ratio, ts_state = await _calculate_term_structure(
+            symbol, expirations, price, today
         )
 
         # ------------------ VIX306 Advanced Volatility Filters ------------------
@@ -893,8 +916,7 @@ async def get_option_metrics(symbol, opt_type, strike, expiry):
 
 async def find_best_contract(symbol, strategy_type, target_delta, min_dte, max_dte):
     try:
-        ticker = yf.Ticker(symbol)
-        expirations = await asyncio.to_thread(lambda: ticker.options)
+        expirations = await market_data_service.get_all_option_expiries(symbol)
         today = datetime.now().date()
         target_expiry_date, days_to_expiry = _find_target_expiry(
             expirations, today, min_dte, max_dte
@@ -905,11 +927,13 @@ async def find_best_contract(symbol, strategy_type, target_delta, min_dte, max_d
         quote = await market_data_service.get_quote(symbol)
         price = quote.get("c", 0.0) if quote else 0.0
 
+        opt_chain = await market_data_service.get_option_chain(
+            symbol, target_expiry_date
+        )
         opt_type = "call" if "CALL" in strategy_type else "put"
         best_contract, _ = await asyncio.to_thread(
             _get_best_contract_data,
-            ticker,
-            target_expiry_date,
+            opt_chain,
             opt_type,
             target_delta,
             price,

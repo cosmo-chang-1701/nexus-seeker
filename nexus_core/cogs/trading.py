@@ -584,6 +584,7 @@ class SchedulerCog(commands.Cog):
             generate_watchlist_skew_commentary,
         )
         from ui.formatter import generate_ansi_watchlist_report
+        from services import market_data_service
 
         if all_watchlists is None:
             all_watchlists = database.get_all_watchlist()
@@ -591,9 +592,10 @@ class SchedulerCog(commands.Cog):
             return
 
         unique_symbols = sorted({sym for _, sym, _ in all_watchlists})
-        macro_event, earnings_map = await asyncio.gather(
+        macro_event, earnings_map, df_spy = await asyncio.gather(
             calendar_service.get_next_high_impact_event(days=7),
             calendar_service.get_symbol_earnings_batch(unique_symbols),
+            market_data_service.get_spy_history_df(period="1y"),
         )
         evaluations = await asyncio.gather(
             *(
@@ -601,6 +603,7 @@ class SchedulerCog(commands.Cog):
                     symbol,
                     earnings_event=earnings_map.get(symbol),
                     macro_event=macro_event,
+                    df_spy=df_spy,
                 )
                 for symbol in unique_symbols
             )
