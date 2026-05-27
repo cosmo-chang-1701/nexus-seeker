@@ -2130,13 +2130,57 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     遵循 Task 2 的 Traditional Chinese 模板。
     """
     symbol = data.get("symbol", "UNKNOWN")
+
+    # 處理盤前狀態與波動率 degradation
+    iv_data = data.get("iv_data")
+    title_suffix = ""
+    is_premarket = False
+    if iv_data:
+        if hasattr(iv_data, "is_premarket"):
+            is_premarket = iv_data.is_premarket
+        elif isinstance(iv_data, dict):
+            is_premarket = iv_data.get("is_premarket", False)
+
+        current_iv_val = (
+            iv_data.current_iv
+            if hasattr(iv_data, "current_iv")
+            else iv_data.get("current_iv", 0.0)
+        )
+        if is_premarket:
+            if current_iv_val > 0.0:
+                title_suffix = " [盤前/前日收盤]"
+            else:
+                title_suffix = " [盤前數據未更新]"
+
     embed = discord.Embed(
-        title=f"🌌 標的分析中心: {symbol}",
+        title=f"🌌 標的分析中心: {symbol}{title_suffix}",
         color=discord.Color.dark_magenta(),
         timestamp=datetime.now(timezone.utc),
     )
 
-    # 1. 情緒與邊緣偵測 (Edge Detection)
+    # 1. 💹 即時報價 (Real-time Quote)
+    quote = data.get("quote", {})
+    c_val = quote.get("c", data.get("price", 0.0))
+    dp_val = quote.get("dp", 0.0)
+    d_val = quote.get("d", 0.0)
+    o_val = quote.get("o", 0.0)
+    h_val = quote.get("h", 0.0)
+    l_val = quote.get("l", 0.0)
+    pc_val = quote.get("pc", 0.0)
+
+    price_emoji = "📈" if dp_val >= 0 else "📉"
+    if not quote or c_val == 0.0:
+        quote_info = f"* **當前現價:** `${c_val:.2f}` (暫無即時報價數據)\n"
+    else:
+        quote_info = (
+            f"* **當前現價:** **`${c_val:.2f}`** ({price_emoji} `{dp_val:+.2f}%` / `{d_val:+.2f}`)\n"
+            f"* **今日區間:** 開盤 `{o_val:.2f}` | 最高 `{h_val:.2f}` | 最低 `{l_val:.2f}` | 前收 `{pc_val:.2f}`\n"
+        )
+    embed.add_field(
+        name="💹 即時報價 (Real-time Quote)", value=quote_info, inline=False
+    )
+
+    # 2. 📐 情緒與邊緣偵測 (Edge Detection)
     skew_val = data.get("skew", 0.0)
     skew_percentile = data.get("skew_percentile", 50.0)
 
@@ -2146,7 +2190,6 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     if skew_percentile > 90:
         edge_info += "> ⚠️ 市場下行保護需求極高，隱含避險情緒升溫。\n"
 
-    # 巨鯨/散戶意圖映射
     poly_odds = data.get("polymarket_odds", "N/A")
     reddit_score = data.get("reddit_sentiment_score", "中性")
 
@@ -2156,8 +2199,6 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         f"    * Reddit 情緒指數: `{reddit_score}`\n"
     )
 
-    # 偵測背離
-    # 簡單邏輯：如果 Skew 很高但 Reddit 很樂觀，就是背離
     divergence = "同步"
     action = "保持觀察"
     if skew_percentile > 80 and "看多" in str(reddit_score):
@@ -2173,20 +2214,86 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         name="📐 情緒與邊緣偵測 (Edge Detection)", value=edge_info, inline=False
     )
 
-    # 2. 結算與目標 (Target Lock)
+    # 3. 📊 隱含波動率與預期區間 (IV Context)
+    if iv_data:
+        if hasattr(iv_data, "current_iv"):
+            current_iv = iv_data.current_iv
+            iv_rank = iv_data.iv_rank
+            iv_percentile = iv_data.iv_percentile
+            expected_move_weekly = iv_data.expected_move_weekly
+            iv_status = iv_data.iv_status
+        else:
+            current_iv = iv_data.get("current_iv", 0.0)
+            iv_rank = iv_data.get("iv_rank", 0.0)
+            iv_percentile = iv_data.get("iv_percentile", 0.0)
+            expected_move_weekly = iv_data.get("expected_move_weekly", 0.0)
+            iv_status = iv_data.get("iv_status", "Normal")
+
+        iv_status_map = {
+            "Low": "低 / 便宜",
+            "Normal": "正常 / 公允",
+            "High": "高 / 昂貴",
+            "Extreme": "極高 / 泡沫",
+        }
+        status_tw = iv_status_map.get(iv_status, "正常 / 公允")
+
+        if is_premarket and current_iv == 0.0:
+            iv_lines = [
+                "```ansi",
+                " Implied Volatility (IV)",
+                " └─ 值: \u001b[1;30m--%\u001b[0m (等待開盤 / 盤前未開市)",
+                " IV Rank / IV Percentile",
+                " └─ IV Rank: \u001b[1;30m--%\u001b[0m | IV Percentile: \u001b[1;30m--%\u001b[0m (狀態: 待開盤)",
+                " Expected Move (預期區間)",
+                " └─ 本週預期: \u001b[1;30m--\u001b[0m (開盤後更新)",
+                "```",
+            ]
+        elif is_premarket:
+            iv_lines = [
+                "```ansi",
+                " Implied Volatility (IV)",
+                f" └─ 值: {current_iv * 100:.1f}% (前日收盤 / 歷史波動率代理)",
+                " IV Rank / IV Percentile",
+                f" └─ IV Rank: {iv_rank:.1f}% | IV Percentile: {iv_percentile:.1f}% (狀態: {status_tw})",
+                " Expected Move (預期區間)",
+                f" └─ 本週預期: ±${expected_move_weekly:.2f} (基於前收/HV計算)",
+                "```",
+            ]
+        else:
+            iv_lines = [
+                "```ansi",
+                " Implied Volatility (IV)",
+                f" └─ 值: {current_iv * 100:.1f}% (當前 30 天平值期權隱含波動率)",
+                " IV Rank / IV Percentile",
+                f" └─ IV Rank: {iv_rank:.1f}% | IV Percentile: {iv_percentile:.1f}% (狀態: {status_tw})",
+                " Expected Move (預期區間)",
+                f" └─ 本週預期: ±${expected_move_weekly:.2f} (基於當前 IV 計算)",
+                "```",
+            ]
+        embed.add_field(
+            name="📊 隱含波動率與預期區間 (IV Context)",
+            value="\n".join(iv_lines),
+            inline=False,
+        )
+
+    # 4. 🎯 結算與目標 (Target Lock)
     max_pain = data.get("max_pain", 0.0)
-    price = data.get("price", 1.0)
+    price = c_val
     distance = ((max_pain - price) / price * 100) if price > 0 else 0.0
 
     ddp_status = "符合 (符合 DDP 盈餘/估值雙擊)" if data.get("is_ddp") else "不符合"
     ivr = data.get("iv_rank", 0.0)
 
+    pcr_data = data.get("pcr", {})
+    pcr_val = pcr_data.get("pcr", 0.0) if pcr_data else 0.0
+    pcr_state = pcr_data.get("state", "N/A") if pcr_data else "N/A"
+
     target_info = (
         f"* **Max Pain:** `${max_pain:.2f}` (目前價差: `{distance:+.1f}%`)\n"
         f"* **DDP 掃描:** {ddp_status} (IV Rank: `{ivr:.1f}%`)\n"
+        f"* **Put/Call Ratio (PCR):** `{pcr_val}` ({pcr_state})\n"
     )
 
-    # 操作指引 (What-if Scenario Analysis)
     if abs(distance) < 2.0:
         scenario = "價格接近最大痛點，結算日前可能維持震盪。"
     elif distance > 5.0:
@@ -2199,6 +2306,58 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     target_info += f"* **操作指引:** {scenario}\n"
 
     embed.add_field(name="🎯 結算與目標 (Target Lock)", value=target_info, inline=False)
+
+    # 5. 🐋 異常活動 (UOA)
+    uoa_data = data.get("uoa", [])
+    if uoa_data:
+        uoa_lines = ["```ansi"]
+        uoa_headers = ["到期日", "履約價", "類型", "機構/OI", "比例"]
+        uoa_widths = [10, 7, 4, 15, 6]
+        uoa_lines.append(
+            " | ".join(
+                _pad_string(h, w, "left" if i in (0, 2, 3) else "right")
+                for i, (h, w) in enumerate(zip(uoa_headers, uoa_widths))
+            )
+        )
+        uoa_lines.append("-" * (sum(uoa_widths) + 3 * (len(uoa_widths) - 1)))
+        for item in uoa_data:
+            expiry = str(item.get("expiry", "N/A"))
+            strike = f"${item.get('strike', 'N/A')}"
+            opt_type = str(item.get("type", "N/A")).upper()
+            ratio = f"{item.get('ratio', 'N/A')}x"
+            trade_type = str(item.get("trade_type", "SWEEP")).upper()
+            oi_change = item.get("oi_change_net", 0)
+
+            tag = "🔥 SWEEP" if trade_type == "SWEEP" else "📦 BLOCK"
+            oi_change_str = f"{oi_change:+d}" if oi_change != 0 else "0"
+            inst_str = f"{tag}({oi_change_str})"
+
+            expiry = _visual_truncate(expiry, uoa_widths[0])
+            strike = _visual_truncate(strike, uoa_widths[1])
+            opt_type = _visual_truncate(opt_type, uoa_widths[2])
+            inst_str = _visual_truncate(inst_str, uoa_widths[3])
+            ratio = _visual_truncate(ratio, uoa_widths[4])
+
+            row_str = " | ".join(
+                [
+                    _pad_string(expiry, uoa_widths[0], "left"),
+                    _pad_string(strike, uoa_widths[1], "right"),
+                    _pad_string(opt_type, uoa_widths[2], "left"),
+                    _pad_string(inst_str, uoa_widths[3], "left"),
+                    _pad_string(ratio, uoa_widths[4], "right"),
+                ]
+            )
+            uoa_lines.append(row_str)
+        uoa_lines.append("```")
+        embed.add_field(
+            name="🐋 異常活動 (UOA)", value="\n".join(uoa_lines), inline=False
+        )
+    else:
+        embed.add_field(
+            name="🐋 異常活動 (UOA)",
+            value="```ansi\n目前無顯著異常活動\n```",
+            inline=False,
+        )
 
     embed.set_footer(
         text="🔗 使用 /settle_hedge 紀錄對沖或 /event_impact 進行曝險模擬。"
