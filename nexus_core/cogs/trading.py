@@ -641,7 +641,7 @@ class SchedulerCog(commands.Cog):
                 str(row.get("symbol", "")).upper(): row
                 for row in database.get_user_holdings(uid)
             }
-            summary_items: list[dict[str, str]] = []
+            summary_items: list[dict[str, Any]] = []
             deliverable_symbols: list[tuple[str, bool]] = []
             for sym in symbols:
                 evaluation = evaluation_map.get(sym)
@@ -664,7 +664,7 @@ class SchedulerCog(commands.Cog):
                             evaluation.metrics.current_price - sum_holding_avg_cost
                         ) / sum_holding_avg_cost
 
-                item_data = {
+                item_data: dict[str, Any] = {
                     "symbol": sym,
                     "alert_level": str(evaluation.tactical.alert_level),
                     "skew_state": (
