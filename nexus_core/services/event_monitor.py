@@ -146,7 +146,13 @@ def _build_event_alert_payload(
     risk_snapshot: dict[str, Any],
 ) -> dict[str, str | float]:
     if getattr(event, "type", "") == "ECONOMIC":
-        name = f"🔴 經濟數據: {getattr(event, 'event', '未知事件')}"
+        country = getattr(event, "country", None)
+        event_name = getattr(event, "event", "未知事件")
+        name = (
+            f"🔴 經濟數據: {event_name} ({country})"
+            if country
+            else f"🔴 經濟數據: {event_name}"
+        )
     else:
         name = f"📊 財報預警: {getattr(event, 'symbol', '未知標的')}"
     return {
