@@ -109,9 +109,10 @@ def generate_ansi_watchlist_report(
 
     lines = [
         "```ansi",
-        f"{C_CYAN}▶ {metrics.symbol} | {metrics.exchange}{C_RESET}",
-        "────────────────────────────────────────────────────────────",
-        _format_pair(
+        f" 📊 {metrics.symbol} | {metrics.exchange} 技術與期權快照",
+        " ----------------------------------",
+        " "
+        + _format_pair(
             "現價",
             f"${metrics.current_price:.2f}",
             "IV Rank",
@@ -119,32 +120,37 @@ def generate_ansi_watchlist_report(
             left_color=price_color,
             right_color=C_YELLOW if metrics.iv_rank > 65 else C_GREEN,
         ),
-        _format_pair(
+        " "
+        + _format_pair(
             "PE",
             f"{metrics.pe_ratio:.2f}" if metrics.pe_ratio is not None else "N/A",
             "Skew",
             f"{metrics.option_skew:+.2f}%",
             right_color=skew_color,
         ),
-        _format_pair(
+        " "
+        + _format_pair(
             "ATR 14",
             f"{metrics.atr_14:.2f}",
             "RSI 14",
             f"{metrics.rsi_14:.2f}",
         ),
-        _format_pair(
+        " "
+        + _format_pair(
             "MA20/50",
             f"{metrics.ma20:.2f} / {metrics.ma50:.2f}",
             "Beta",
             f"{metrics.beta:.2f}",
         ),
-        _format_pair(
+        " "
+        + _format_pair(
             "MA200",
             f"{metrics.ma200:.2f}",
             "Skew 狀態",
             metrics.option_skew_state,
         ),
-        _format_pair(
+        " "
+        + _format_pair(
             "MA20 偏離",
             f"{metrics.bias_ma20 * 100:+.2f}%",
             "相對 SPY",
@@ -152,17 +158,19 @@ def generate_ansi_watchlist_report(
             left_color=bias_color,
             right_color=rs_color,
         ),
-        "────────────────────────────────────────────────────────────",
-        f"{C_CYAN}技術 / 防禦牆{C_RESET}",
-        f"買點狀態      {metrics.buy_zone_status}",
-        _format_pair(
+        " ----------------------------------",
+        f" {C_CYAN}技術 / 防禦牆{C_RESET}",
+        f" 買點狀態      {metrics.buy_zone_status}",
+        " "
+        + _format_pair(
             "Buy P1",
             f"${metrics.buy_price_phase1:.2f}",
             "Vol POC",
             f"${metrics.volume_poc:.2f}",
             left_color=C_GREEN,
         ),
-        _format_pair(
+        " "
+        + _format_pair(
             "Buy P2",
             f"${metrics.buy_price_phase2:.2f}",
             "GEX PutWall",
@@ -170,7 +178,8 @@ def generate_ansi_watchlist_report(
             left_color=C_YELLOW,
             right_color=C_YELLOW,
         ),
-        _format_pair(
+        " "
+        + _format_pair(
             "Buy P3",
             f"${metrics.buy_price_phase3:.2f}",
             "絕對支撐距",
@@ -178,23 +187,26 @@ def generate_ansi_watchlist_report(
             left_color=C_RED,
             right_color=support_color,
         ),
-        _format_pair(
+        " "
+        + _format_pair(
             "Sell P1",
             f"${metrics.sell_price_phase1:.2f}",
             "Sell P2",
             f"${metrics.sell_price_phase2:.2f}",
         ),
-        _format_pair(
+        " "
+        + _format_pair(
             "Sell P3",
             f"${metrics.sell_price_phase3:.2f}",
             "Vanna",
             f"{metrics.vanna_sensitivity:+.4f}",
         ),
-        f"賣出狀態      {metrics.sell_zone_status}",
-        "────────────────────────────────────────────────────────────",
-        f"{C_CYAN}SDDM / 對沖{C_RESET}",
-        _format_single("路由", tactical_model.sddm_route, color=route_color),
-        _format_pair(
+        f" 賣出狀態      {metrics.sell_zone_status}",
+        " ----------------------------------",
+        f" {C_CYAN}SDDM / 對沖{C_RESET}",
+        " " + _format_single("路由", tactical_model.sddm_route, color=route_color),
+        " "
+        + _format_pair(
             "網格步長",
             f"{tactical_model.dynamic_grid_step:.2f}",
             "Hidden Δ",
@@ -202,7 +214,8 @@ def generate_ansi_watchlist_report(
             left_color=C_YELLOW,
             right_color=hidden_delta_color,
         ),
-        _format_single(
+        " "
+        + _format_single(
             "對沖股數",
             str(tactical_model.hedge_allocation_shares),
             color=C_RED if tactical_model.hedge_allocation_shares else C_GREEN,
@@ -214,18 +227,18 @@ def generate_ansi_watchlist_report(
         width=55,
         indent=" " * 14,
     )
-    lines.append(f"執行指南      {route_color}{instruction_lines[0]}{C_RESET}")
+    lines.append(f" 執行指南      {route_color}{instruction_lines[0]}{C_RESET}")
     for extra_line in instruction_lines[1:]:
-        lines.append(f"{route_color}{extra_line}{C_RESET}")
+        lines.append(f" {route_color}{extra_line}{C_RESET}")
     if tactical_model.hedge_instruction:
         hedge_lines = _wrap_visual(
             tactical_model.hedge_instruction,
             width=55,
             indent=" " * 14,
         )
-        lines.append(f"對沖指令      {C_RED}{hedge_lines[0]}{C_RESET}")
+        lines.append(f" 對沖指令      {C_RED}{hedge_lines[0]}{C_RESET}")
         for extra_line in hedge_lines[1:]:
-            lines.append(f"{C_RED}{extra_line}{C_RESET}")
+            lines.append(f" {C_RED}{extra_line}{C_RESET}")
 
     lines.append("```")
     return "\n".join(lines)
