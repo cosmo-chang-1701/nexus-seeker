@@ -3931,11 +3931,37 @@ def create_proactive_event_alert_embed(events: List[Any]) -> discord.Embed:
             tte_hours = float(getattr(event, "tte_hours", 0.0) or 0.0)
             risk_status = "持倉風險狀態未提供，請搭配組合 Greeks 自行覆核。"
 
-        value = (
-            f"距離發布: `{tte_hours:.1f}` 小時\n"
-            f"**持倉風險狀態**: {risk_status}\n"
-            f"**NRO 指令**: {instruction}"
-        )
+        # Determine colors for TTE
+        if tte_hours <= 12.0:
+            tte_color = "\u001b[1;31m"  # Urgent Red
+        elif tte_hours <= 24.0:
+            tte_color = "\u001b[1;33m"  # Warning Yellow
+        else:
+            tte_color = "\u001b[1;36m"  # Safe Cyan
+
+        # Determine colors for Risk Status
+        risk_str = str(risk_status)
+        if any(
+            w in risk_str
+            for w in ["危險", "警告", "高", "🚨", "⚠️", "賣方偏重", "短 Gamma"]
+        ):
+            risk_color = "\u001b[1;31m"  # High Risk Red
+        elif any(w in risk_str for w in ["安全", "低", "良好", "正常"]):
+            risk_color = "\u001b[1;32m"  # Low Risk Green
+        else:
+            risk_color = "\u001b[1;33m"  # Neutral Yellow
+
+        event_lines = [
+            "```ansi",
+            " 距離發布 (Time to Event)",
+            f" └─ 剩餘時間: {tte_color}{tte_hours:.1f} 小時\u001b[0m",
+            " 持倉風險狀態 (Position Risk Status)",
+            f" └─ 狀態: {risk_color}{risk_status}\u001b[0m",
+            " NRO 指令 (NRO Instruction)",
+            f" └─ 指令: \u001b[1;36m{instruction}\u001b[0m",
+            "```",
+        ]
+        value = "\n".join(event_lines)
 
         embed.add_field(name=name, value=value, inline=False)
 
