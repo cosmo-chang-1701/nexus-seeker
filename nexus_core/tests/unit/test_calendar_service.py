@@ -79,3 +79,36 @@ async def test_get_symbol_earnings():
     assert cached_info.date == "2026-05-20"
     assert cached_info.days_to_earnings == pytest.approx(1.5)
     assert mock_calendar.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_get_symbol_earnings_timezone_robustness():
+    from zoneinfo import ZoneInfo
+
+    ny_tz = ZoneInfo("America/New_York")
+
+    # Mock current time in NY as 2026-05-18 21:00:00
+    fixed_now_ny = datetime(2026, 5, 18, 21, 0, 0, tzinfo=ny_tz)
+
+    with patch("services.calendar_service.datetime") as mock_datetime:
+        mock_datetime.now.side_effect = (
+            lambda tz=None: fixed_now_ny if tz is None else fixed_now_ny.astimezone(tz)
+        )
+        mock_datetime.fromisoformat = datetime.fromisoformat
+        mock_datetime.combine = datetime.combine
+        mock_datetime.min = datetime.min
+        mock_datetime.strptime = datetime.strptime
+
+        with patch(
+            "services.market_data_service.get_earnings_calendar", new_callable=AsyncMock
+        ) as mock_calendar:
+            mock_calendar.return_value = [{"date": "2026-05-19"}]
+
+            service = CalendarService()
+            info = await service.get_symbol_earnings("AAPL")
+
+    assert isinstance(info, EarningsEvent)
+    assert info.symbol == "AAPL"
+    assert info.date == "2026-05-19"
+    # 2026-05-19 00:00:00 NY time - 2026-05-18 21:00:00 NY time = 3.0 hours
+    assert info.tte_hours == 3.0
