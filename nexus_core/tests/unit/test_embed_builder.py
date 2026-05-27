@@ -421,6 +421,9 @@ def test_create_watchlist_signal_embed():
         holding_quantity=120.0,
         holding_avg_cost=150.0,
         holding_pnl_pct=0.10,
+        suitable_sell_price=165.50,
+        suitable_sell_shares=30,
+        sell_rationale="分批減碼 25%",
     )
 
     assert embed.title == "📡 Watchlist 半小時戰報：NVDA"
@@ -429,16 +432,21 @@ def test_create_watchlist_signal_embed():
     assert "watchlist report" in embed.fields[0].value
     assert embed.fields[1].name == "📐 Skew 與市場判讀"
     assert "測試用" in embed.fields[1].value
+    assert " └─ Skew 數據" in embed.fields[1].value
     assert embed.fields[2].name == "🤖 LLM Skew 解說"
     assert "Skew 左偏" in embed.fields[2].value
     assert embed.fields[3].name == "🗓️ 事件風控"
     assert "CPI" in embed.fields[3].value
-    assert embed.fields[4].name == "💼 持倉摘要"
+    assert embed.fields[4].name == "💼 持倉與操作指引"
     assert "已持有" in embed.fields[4].value
     assert "120 股" in embed.fields[4].value
     assert "$150.00" in embed.fields[4].value
     assert "標的損益" in embed.fields[4].value
     assert "+10.00%" in embed.fields[4].value
+    assert "165.50" in embed.fields[4].value
+    assert "30" in embed.fields[4].value
+    assert "分批減碼 25%" in embed.fields[4].value
+    assert " └─ 部位狀態" in embed.fields[4].value
     assert "Bull Put Spread" in embed.fields[6].value
     assert "SELL PUT 120.00" in embed.fields[6].value
 

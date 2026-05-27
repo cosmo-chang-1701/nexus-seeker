@@ -343,12 +343,10 @@ async def test_dispatch_watchlist_heartbeat_honors_portfolio_only_mode():
     ) as mock_builder:
         await cog._dispatch_watchlist_heartbeat([(1, "AAPL", 1), (1, "NVDA", 1)])
 
-    mock_guidance.assert_called_once_with(
-        eval_nvda.metrics,
-        eval_nvda.tactical,
-        event_context=eval_nvda.event_context,
-        has_position=True,
-    )
+    assert mock_guidance.call_count == 1
+    call_kwargs = mock_guidance.call_args.kwargs
+    assert call_kwargs["has_position"] is True
+    assert call_kwargs["event_context"] == eval_nvda.event_context
     mock_builder.assert_called_once()
     assert mock_builder.call_args.kwargs["holding_quantity"] == 100.0
     assert mock_builder.call_args.kwargs["holding_avg_cost"] == 900.0

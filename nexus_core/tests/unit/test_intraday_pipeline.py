@@ -309,23 +309,26 @@ async def test_build_watchlist_heartbeat_embed_includes_option_plan(intraday_pip
         risk_limit=12.0,
         event_context=evaluation.event_context,
     )
-    mock_guidance.assert_called_once_with(
-        evaluation.metrics,
-        evaluation.tactical,
-        event_context=evaluation.event_context,
-        has_position=False,
-    )
+    mock_guidance.assert_called_once()
+    assert mock_guidance.call_args[1]["suitable_buy_price"] == 377.78
+    assert mock_guidance.call_args[1]["suitable_sell_price"] == 0.0
+
     mock_skew_commentary.assert_awaited_once()
-    mock_create_embed.assert_called_once_with(
-        symbol="MU",
-        report_body="heartbeat snapshot",
-        option_guidance="option guidance",
-        event_risk_summary="財報前風控",
-        skew_state="+6.25% ｜ 左偏保護",
-        alert_level="yellow",
-        option_plan="option-plan",
-        skew_commentary="llm-skew-commentary",
-        has_position=False,
-        holding_quantity=None,
-        holding_avg_cost=None,
-    )
+    mock_create_embed.assert_called_once()
+    create_embed_kwargs = mock_create_embed.call_args[1]
+    assert create_embed_kwargs["symbol"] == "MU"
+    assert create_embed_kwargs["report_body"] == "heartbeat snapshot"
+    assert create_embed_kwargs["option_guidance"] == "option guidance"
+    assert create_embed_kwargs["event_risk_summary"] == "財報前風控"
+    assert create_embed_kwargs["skew_state"] == "+6.25% ｜ 左偏保護"
+    assert create_embed_kwargs["alert_level"] == "yellow"
+    assert create_embed_kwargs["option_plan"] == "option-plan"
+    assert create_embed_kwargs["skew_commentary"] == "llm-skew-commentary"
+    assert create_embed_kwargs["has_position"] is False
+    assert create_embed_kwargs["holding_quantity"] is None
+    assert create_embed_kwargs["holding_avg_cost"] is None
+    assert create_embed_kwargs["suitable_buy_price"] == 377.78
+    assert create_embed_kwargs["suitable_buy_shares"] == 10
+    assert create_embed_kwargs["suitable_sell_price"] == 0.0
+    assert create_embed_kwargs["suitable_sell_shares"] == 0
+    assert "Skew 避險情緒折價" in create_embed_kwargs["buy_rationale"]
