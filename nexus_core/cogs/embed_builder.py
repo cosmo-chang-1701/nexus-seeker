@@ -2276,6 +2276,7 @@ def create_watchlist_signal_embed(
     has_position: bool = False,
     holding_quantity: float | None = None,
     holding_avg_cost: float | None = None,
+    holding_pnl_pct: float | None = None,
 ) -> discord.Embed:
     """建立 watchlist 半小時心跳推播 Embed。"""
     color = {
@@ -2303,11 +2304,16 @@ def create_watchlist_signal_embed(
         value=_safe_embed_field_value(report_body, "暫無快照"),
         inline=False,
     )
-    skew_lines = [f"├─ Skew 數據: {skew_state}"]
+
+    skew_lines = ["```ansi"]
+    skew_lines.append(f" 📐 {symbol} Skew 與市場判讀 (Option Skew)")
+    skew_lines.append(" ----------------------------------")
+    skew_lines.append(f" Skew 數據: \u001b[1;36m{skew_state}\u001b[0m")
     if option_plan is not None:
-        skew_lines.append(f"└─ 策略解說: *{option_plan.rationale}*")
+        skew_lines.append(f" 策略解說: \u001b[3m{option_plan.rationale}\u001b[0m")
     else:
-        skew_lines.append("└─ 策略解說: 目前無可執行期權合約計畫")
+        skew_lines.append(" 策略解說: 目前無可執行期權合約計畫")
+    skew_lines.append("```")
     embed.add_field(
         name="📐 Skew 與市場判讀",
         value=_safe_embed_field_value("\n".join(skew_lines), "N/A"),
@@ -2337,21 +2343,33 @@ def create_watchlist_signal_embed(
         inline=False,
     )
 
-    holding_lines = []
+    holding_lines = ["```ansi"]
+    holding_lines.append(f" 💼 {symbol} 持倉摘要 (Holding Summary)")
+    holding_lines.append(" ----------------------------------")
     if has_position:
-        holding_lines.append("├─ 部位狀態: 已持有")
+        holding_lines.append(" 部位狀態: \u001b[1;32m已持有\u001b[0m")
         if holding_quantity is not None:
             quantity_text = f"{holding_quantity:,.2f}".rstrip("0").rstrip(".")
-            holding_lines.append(f"├─ 現貨股數: {quantity_text} 股")
+            holding_lines.append(f" 現貨股數: {quantity_text} 股")
             if holding_avg_cost is not None and holding_avg_cost > 0.0:
-                holding_lines.append(f"└─ 平均成本: ${holding_avg_cost:,.2f}")
-            else:
-                holding_lines[-1] = f"└─ 現貨股數: {quantity_text} 股"
-        else:
-            holding_lines.append("└─ 現貨持倉: 未記錄（可能為期權 / 其他交易部位）")
+                holding_lines.append(f" 平均成本: ${holding_avg_cost:,.2f}")
+                if holding_pnl_pct is not None:
+                    pnl_val = holding_pnl_pct * 100
+                    pnl_color = (
+                        "\u001b[1;32m"
+                        if pnl_val > 0
+                        else "\u001b[1;31m"
+                        if pnl_val < 0
+                        else "\u001b[0m"
+                    )
+                    pnl_icon = "🟢" if pnl_val > 0 else "🔴" if pnl_val < 0 else "⚪"
+                    holding_lines.append(
+                        f" 標的損益: {pnl_icon} {pnl_color}{pnl_val:+.2f}%\u001b[0m"
+                    )
     else:
-        holding_lines.append("├─ 部位狀態: 未持有")
-        holding_lines.append("└─ 操作提示: 目前無持倉，以 watchlist 追蹤觀察為主")
+        holding_lines.append(" 部位狀態: 未持有")
+        holding_lines.append(" 操作提示: 目前無持倉，以 watchlist 追蹤觀察為主")
+    holding_lines.append("```")
     embed.add_field(
         name="💼 持倉摘要",
         value=_safe_embed_field_value("\n".join(holding_lines), "暫無持倉資訊"),
@@ -2450,8 +2468,13 @@ def create_watchlist_overview_embed(
             item.get("scenario", ""),
             item.get("scenario", "觀望待機"),
         )
+        pnl_suffix = ""
+        if "holding_pnl_pct" in item and item["holding_pnl_pct"] is not None:
+            pnl_val = float(item["holding_pnl_pct"]) * 100
+            pnl_icon = "🟢" if pnl_val > 0 else "🔴" if pnl_val < 0 else "⚪"
+            pnl_suffix = f" ｜ {pnl_icon} 現貨損益: `{pnl_val:+.2f}%`"
         focus_lines.append(
-            f"{icon} {item.get('symbol', 'N/A')}｜{item.get('skew_state', 'N/A')}｜{scenario_label}"
+            f"{icon} {item.get('symbol', 'N/A')}｜{item.get('skew_state', 'N/A')}｜{scenario_label}{pnl_suffix}"
         )
         focus_lines.append(
             f"事件：{item.get('event_risk_summary', '未偵測到近期重大事件')}"
@@ -2471,8 +2494,13 @@ def create_watchlist_overview_embed(
             item.get("scenario", ""),
             item.get("scenario", "觀望待機"),
         )
+        pnl_suffix = ""
+        if "holding_pnl_pct" in item and item["holding_pnl_pct"] is not None:
+            pnl_val = float(item["holding_pnl_pct"]) * 100
+            pnl_icon = "🟢" if pnl_val > 0 else "🔴" if pnl_val < 0 else "⚪"
+            pnl_suffix = f" ｜ {pnl_icon} 現貨損益: `{pnl_val:+.2f}%`"
         overview_lines.append(
-            f"{icon} {item.get('symbol', 'N/A')}｜{item.get('skew_state', 'N/A')}｜{scenario_label}"
+            f"{icon} {item.get('symbol', 'N/A')}｜{item.get('skew_state', 'N/A')}｜{scenario_label}{pnl_suffix}"
         )
     embed.add_field(
         name="📋 全標的速覽",

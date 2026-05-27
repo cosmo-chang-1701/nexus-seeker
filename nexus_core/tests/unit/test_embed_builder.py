@@ -420,6 +420,7 @@ def test_create_watchlist_signal_embed():
         has_position=True,
         holding_quantity=120.0,
         holding_avg_cost=150.0,
+        holding_pnl_pct=0.10,
     )
 
     assert embed.title == "📡 Watchlist 半小時戰報：NVDA"
@@ -436,6 +437,8 @@ def test_create_watchlist_signal_embed():
     assert "已持有" in embed.fields[4].value
     assert "120 股" in embed.fields[4].value
     assert "$150.00" in embed.fields[4].value
+    assert "標的損益" in embed.fields[4].value
+    assert "+10.00%" in embed.fields[4].value
     assert "Bull Put Spread" in embed.fields[6].value
     assert "SELL PUT 120.00" in embed.fields[6].value
 
@@ -449,6 +452,7 @@ def test_create_watchlist_overview_embed():
                 "skew_state": "+6.20% ｜ ⚠️ 預警性對沖 (Put 昂貴)",
                 "scenario": "premium-harvest",
                 "event_risk_summary": "CPI 倒數 12.0 小時 ｜ 先縮口數，優先定義風險的 Debit Spread / 保護性部位。",
+                "holding_pnl_pct": 0.15,
             },
             {
                 "symbol": "AAPL",
@@ -466,9 +470,13 @@ def test_create_watchlist_overview_embed():
     assert embed.fields[0].name == "🎯 本輪焦點"
     assert "NVDA" in embed.fields[0].value
     assert "權利金佈局" in embed.fields[0].value
+    assert "現貨損益" in embed.fields[0].value
+    assert "+15.00%" in embed.fields[0].value
     assert embed.fields[1].name == "📋 全標的速覽"
     assert "AAPL" in embed.fields[1].value
     assert "觀望待機" in embed.fields[1].value
+    assert "NVDA" in embed.fields[1].value
+    assert "+15.00%" in embed.fields[1].value
     assert embed.fields[2].name == "🤖 LLM 本輪摘要"
     assert "NVDA" in embed.fields[2].value
 
