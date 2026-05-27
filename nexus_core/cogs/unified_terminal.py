@@ -17,7 +17,6 @@ from cogs.embed_builder import (
     create_info_embed,
     create_iv_risk_scan_embed,
     create_market_calendar_embed,
-    create_sentiment_scan_embed,
     create_media_sentiment_embed,
     create_trades_embed,
     create_strategic_dash_embed,
@@ -77,44 +76,6 @@ class SymbolHubView(discord.ui.View):
             await self._reset_loading(interaction, embed=embed)
 
     @discord.ui.button(
-        label="📐 期權情緒",
-        style=discord.ButtonStyle.primary,
-        custom_id="btn_sentiment",
-    )
-    async def btn_sentiment(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
-        await interaction.response.defer()
-        await self._set_loading(interaction)
-        embed = None
-        try:
-            skew_task = SentimentEngine.calculate_skew(self.symbol)
-            pcr_task = SentimentEngine.calculate_pcr(self.symbol)
-            uoa_task = SentimentEngine.detect_uoa(self.symbol)
-            max_pain_task = SentimentEngine.calculate_max_pain(self.symbol)
-            iv_task = SentimentEngine.fetch_and_calculate_iv_metrics(self.symbol)
-
-            (
-                skew_data,
-                pcr_data,
-                uoa_data,
-                max_pain_data,
-                iv_data,
-            ) = await asyncio.gather(
-                skew_task, pcr_task, uoa_task, max_pain_task, iv_task
-            )
-            embed = create_sentiment_scan_embed(
-                self.symbol, skew_data, pcr_data, uoa_data, max_pain_data, iv_data
-            )
-        except Exception as e:
-            await interaction.followup.send(
-                embed=create_error_embed(f"執行期權情緒分析失敗: {e}"),
-                ephemeral=True,
-            )
-        finally:
-            await self._reset_loading(interaction, embed=embed)
-
-    @discord.ui.button(
         label="🎭 輿情社群",
         style=discord.ButtonStyle.primary,
         custom_id="btn_media",
@@ -157,17 +118,6 @@ class SymbolHubView(discord.ui.View):
                 del _iv_cache[self.symbol]
                 logger.info(f"[{self.symbol}] 按鈕觸發：已清除 IV 數據快取")
 
-            # 重新加載最新的基礎數據分析結果
-            spy_task = market_data_service.get_spy_history_df("1y")
-            macro_task = market_data_service.get_macro_environment()
-            df_spy, macro_raw = await asyncio.gather(spy_task, macro_task)
-            spy_price = df_spy["Close"].iloc[-1] if not df_spy.empty else 670.0
-            macro_data = MacroContext(
-                vix=macro_raw.get("vix", 18.0),
-                oil_price=macro_raw.get("oil", 75.0),
-                vix_change=macro_raw.get("vix_change", 0.0),
-            )
-
             # 獲取 stock_cost
             from services.asset_manager import AssetManager
             from models.asset import ContextType
@@ -183,15 +133,70 @@ class SymbolHubView(discord.ui.View):
                 0.0,
             )
 
+            # 用於 DDP 與 Polymarket 等服務
+            from market_analysis.ddp_inspector import DDPInspector
+            from services.polymarket_service import PolymarketService
+
+            ddp_inspector = DDPInspector(self.bot)
+            poly_service = PolymarketService(self.bot)
+
+            # 並行抓取所有數據
+            spy_task = market_data_service.get_spy_history_df("1y")
+            macro_task = market_data_service.get_macro_environment()
+            quote_task = market_data_service.get_quote(self.symbol)
+            skew_task = SentimentEngine.calculate_skew(self.symbol)
+            pcr_task = SentimentEngine.calculate_pcr(self.symbol)
+            uoa_task = SentimentEngine.detect_uoa(self.symbol)
+            mp_task = SentimentEngine.calculate_max_pain(self.symbol)
+            iv_task = SentimentEngine.fetch_and_calculate_iv_metrics(self.symbol)
+            reddit_task = reddit_service.get_reddit_context(self.symbol)
+            poly_task = poly_service.get_market_snapshot(limit=10)
+            ddp_task = ddp_inspector.inspect_symbol(self.symbol)
+            df_hist_task = market_data_service.get_history_df(
+                self.symbol, period="1y", interval="1d"
+            )
+
+            (
+                df_spy,
+                macro_raw,
+                quote,
+                skew_data,
+                pcr_data,
+                uoa_data,
+                max_pain_data,
+                iv_metrics,
+                reddit_text,
+                poly_markets,
+                ddp_report,
+                df_hist_1d,
+            ) = await asyncio.gather(
+                spy_task,
+                macro_task,
+                quote_task,
+                skew_task,
+                pcr_task,
+                uoa_task,
+                mp_task,
+                iv_task,
+                reddit_task,
+                poly_task,
+                ddp_task,
+                df_hist_task,
+            )
+
+            spy_price = df_spy["Close"].iloc[-1] if not df_spy.empty else 670.0
+            macro_data = MacroContext(
+                vix=macro_raw.get("vix", 18.0),
+                oil_price=macro_raw.get("oil", 75.0),
+                vix_change=macro_raw.get("vix_change", 0.0),
+            )
+
             result = await market_math.analyze_symbol(
                 self.symbol, stock_cost, df_spy, spy_price, vix_spot=macro_data.vix
             )
             if not result:
                 result = {"symbol": self.symbol, "stock_cost": stock_cost, "price": 0.0}
 
-            df_hist_1d = await market_data_service.get_history_df(
-                self.symbol, period="1y", interval="1d"
-            )
             psq_result = analyze_psq(df_hist_1d, vix_spot=macro_data.vix)
             if psq_result:
                 result["psq_result"] = psq_result
@@ -201,30 +206,21 @@ class SymbolHubView(discord.ui.View):
                     else result.get("price", 0.0)
                 )
 
-            skew_data = await SentimentEngine.calculate_skew(self.symbol)
+            result["quote"] = quote
             result["skew"] = skew_data.get("skew", 0.0)
             result["skew_percentile"] = SentimentEngine.get_indicator_percentile(
                 self.symbol, "SKEW", result["skew"]
             )
-
+            result["pcr"] = pcr_data
+            result["uoa"] = uoa_data
+            result["iv_data"] = iv_metrics
+            result["iv_rank"] = iv_metrics.iv_rank
+            result["max_pain"] = max_pain_data.get("max_pain", 0.0)
+            result["is_ddp"] = ddp_report.get("is_ddp", False) if ddp_report else False
             result["vix"] = macro_data.vix
             result["spy_price"] = spy_price
 
-            from market_analysis.ddp_inspector import DDPInspector
-
-            ddp_inspector = DDPInspector(self.bot)
-            ddp_report = await ddp_inspector.inspect_symbol(self.symbol)
-            result["is_ddp"] = ddp_report.get("is_ddp", False) if ddp_report else False
-
-            iv_metrics = await SentimentEngine.fetch_and_calculate_iv_metrics(
-                self.symbol
-            )
-            result["iv_rank"] = iv_metrics.iv_rank
-
-            max_pain_data = await SentimentEngine.calculate_max_pain(self.symbol)
-            result["max_pain"] = max_pain_data.get("max_pain", 0.0)
-
-            reddit_text = await reddit_service.get_reddit_context(self.symbol)
+            # Reddit sentiment score
             if "看多" in reddit_text or "Bullish" in reddit_text:
                 result["reddit_sentiment_score"] = "🚀 樂觀 (Bullish)"
             elif "看空" in reddit_text or "Bearish" in reddit_text:
@@ -232,10 +228,7 @@ class SymbolHubView(discord.ui.View):
             else:
                 result["reddit_sentiment_score"] = "⚖️ 中性"
 
-            from services.polymarket_service import PolymarketService
-
-            poly_service = PolymarketService(self.bot)
-            poly_markets = await poly_service.get_market_snapshot(limit=10)
+            # Polymarket odds
             poly_odds = "N/A"
             for m in poly_markets:
                 if self.symbol.lower() in m.get("question", "").lower():
@@ -611,9 +604,57 @@ class UnifiedTerminalCog(commands.Cog):
                 0.0,
             )
 
+            # 用於 DDP 與 Polymarket 等服務
+            from market_analysis.ddp_inspector import DDPInspector
+            from services.polymarket_service import PolymarketService
+
+            ddp_inspector = DDPInspector(self.bot)
+            poly_service = PolymarketService(self.bot)
+
+            # 並行抓取所有數據
             spy_task = market_data_service.get_spy_history_df("1y")
             macro_task = market_data_service.get_macro_environment()
-            df_spy, macro_raw = await asyncio.gather(spy_task, macro_task)
+            quote_task = market_data_service.get_quote(symbol)
+            skew_task = SentimentEngine.calculate_skew(symbol)
+            pcr_task = SentimentEngine.calculate_pcr(symbol)
+            uoa_task = SentimentEngine.detect_uoa(symbol)
+            mp_task = SentimentEngine.calculate_max_pain(symbol)
+            iv_task = SentimentEngine.fetch_and_calculate_iv_metrics(symbol)
+            reddit_task = reddit_service.get_reddit_context(symbol)
+            poly_task = poly_service.get_market_snapshot(limit=10)
+            ddp_task = ddp_inspector.inspect_symbol(symbol)
+            df_hist_task = market_data_service.get_history_df(
+                symbol, period="1y", interval="1d"
+            )
+
+            (
+                df_spy,
+                macro_raw,
+                quote,
+                skew_data,
+                pcr_data,
+                uoa_data,
+                max_pain_data,
+                iv_metrics,
+                reddit_text,
+                poly_markets,
+                ddp_report,
+                df_hist_1d,
+            ) = await asyncio.gather(
+                spy_task,
+                macro_task,
+                quote_task,
+                skew_task,
+                pcr_task,
+                uoa_task,
+                mp_task,
+                iv_task,
+                reddit_task,
+                poly_task,
+                ddp_task,
+                df_hist_task,
+            )
+
             spy_price = df_spy["Close"].iloc[-1] if not df_spy.empty else 670.0
             macro_data = MacroContext(
                 vix=macro_raw.get("vix", 18.0),
@@ -627,9 +668,6 @@ class UnifiedTerminalCog(commands.Cog):
             if not result:
                 result = {"symbol": symbol, "stock_cost": stock_cost, "price": 0.0}
 
-            df_hist_1d = await market_data_service.get_history_df(
-                symbol, period="1y", interval="1d"
-            )
             psq_result = analyze_psq(df_hist_1d, vix_spot=macro_data.vix)
             if psq_result:
                 result["psq_result"] = psq_result
@@ -639,29 +677,21 @@ class UnifiedTerminalCog(commands.Cog):
                     else result.get("price", 0.0)
                 )
 
-            skew_data = await SentimentEngine.calculate_skew(symbol)
+            result["quote"] = quote
             result["skew"] = skew_data.get("skew", 0.0)
             result["skew_percentile"] = SentimentEngine.get_indicator_percentile(
                 symbol, "SKEW", result["skew"]
             )
-
+            result["pcr"] = pcr_data
+            result["uoa"] = uoa_data
+            result["iv_data"] = iv_metrics
+            result["iv_rank"] = iv_metrics.iv_rank
+            result["max_pain"] = max_pain_data.get("max_pain", 0.0)
+            result["is_ddp"] = ddp_report.get("is_ddp", False) if ddp_report else False
             result["vix"] = macro_data.vix
             result["spy_price"] = spy_price
 
-            # 額外獲取 DDP 與情緒數據
-            from market_analysis.ddp_inspector import DDPInspector
-
-            ddp_inspector = DDPInspector(self.bot)
-            ddp_report = await ddp_inspector.inspect_symbol(symbol)
-            result["is_ddp"] = ddp_report.get("is_ddp", False) if ddp_report else False
-            iv_metrics = await SentimentEngine.fetch_and_calculate_iv_metrics(symbol)
-            result["iv_rank"] = iv_metrics.iv_rank
-
-            max_pain_data = await SentimentEngine.calculate_max_pain(symbol)
-            result["max_pain"] = max_pain_data.get("max_pain", 0.0)
-
-            reddit_text = await reddit_service.get_reddit_context(symbol)
-            # 簡單情緒判定
+            # Reddit sentiment score
             if "看多" in reddit_text or "Bullish" in reddit_text:
                 result["reddit_sentiment_score"] = "🚀 樂觀 (Bullish)"
             elif "看空" in reddit_text or "Bearish" in reddit_text:
@@ -669,12 +699,7 @@ class UnifiedTerminalCog(commands.Cog):
             else:
                 result["reddit_sentiment_score"] = "⚖️ 中性"
 
-            # Polymarket 數據 (簡化版：若有市場則取第一名的勝率)
-            from services.polymarket_service import PolymarketService
-
-            poly_service = PolymarketService(self.bot)
-            poly_markets = await poly_service.get_market_snapshot(limit=10)
-            # 尋找與該 symbol 相關的市場 (模糊匹配)
+            # Polymarket odds
             poly_odds = "N/A"
             for m in poly_markets:
                 if symbol.lower() in m.get("question", "").lower():
