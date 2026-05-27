@@ -435,6 +435,8 @@ class TradingService:
                 if psq_result:
                     res["psq_result"] = psq_result
                     # Ensure price is available for PSQ reports
+                    if not df_hist_1d.empty:
+                        res["price"] = float(df_hist_1d["Close"].iloc[-1])
 
                 # 🚀 整合核心：Execution Router 執行決策 (SDDM)
                 try:
