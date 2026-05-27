@@ -2170,48 +2170,92 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
     price_emoji = "📈" if dp_val >= 0 else "📉"
     if not quote or c_val == 0.0:
-        quote_info = f"* **當前現價:** `${c_val:.2f}` (暫無即時報價數據)\n"
+        quote_lines = [
+            "```ansi",
+            " 當前現價 (Current Price)",
+            f" └─ 現價: \u001b[1;37m${c_val:.2f}\u001b[0m (暫無即時報價數據)",
+            "```",
+        ]
     else:
-        quote_info = (
-            f"* **當前現價:** **`${c_val:.2f}`** ({price_emoji} `{dp_val:+.2f}%` / `{d_val:+.2f}`)\n"
-            f"* **今日區間:** 開盤 `{o_val:.2f}` | 最高 `{h_val:.2f}` | 最低 `{l_val:.2f}` | 前收 `{pc_val:.2f}`\n"
-        )
+        color_code = "\u001b[1;32m" if dp_val >= 0 else "\u001b[1;31m"
+        quote_lines = [
+            "```ansi",
+            " 當前現價 (Current Price)",
+            f" └─ 現價: {color_code}${c_val:.2f}\u001b[0m ({price_emoji} {color_code}{dp_val:+.2f}%\u001b[0m / {color_code}{d_val:+.2f}\u001b[0m)",
+            " 今日區間 (Daily Range)",
+            f" └─ 開盤: \u001b[1;36m{o_val:.2f}\u001b[0m | 最高: \u001b[1;31m{h_val:.2f}\u001b[0m | 最低: \u001b[1;32m{l_val:.2f}\u001b[0m | 前收: \u001b[1;30m{pc_val:.2f}\u001b[0m",
+            "```",
+        ]
     embed.add_field(
-        name="💹 即時報價 (Real-time Quote)", value=quote_info, inline=False
+        name="💹 即時報價 (Real-time Quote)",
+        value="\n".join(quote_lines),
+        inline=False,
     )
 
     # 2. 📐 情緒與邊緣偵測 (Edge Detection)
     skew_val = data.get("skew", 0.0)
     skew_percentile = data.get("skew_percentile", 50.0)
-
-    edge_info = (
-        f"* **Option Skew:** `{skew_val:.2f}%` (處於 `{skew_percentile:.1f}` 分位點)\n"
-    )
-    if skew_percentile > 90:
-        edge_info += "> ⚠️ 市場下行保護需求極高，隱含避險情緒升溫。\n"
-
     poly_odds = data.get("polymarket_odds", "N/A")
     reddit_score = data.get("reddit_sentiment_score", "中性")
 
-    edge_info += (
-        f"* **巨鯨/散戶意圖映射:**\n"
-        f"    * Polymarket 預測勝率: `{poly_odds}`\n"
-        f"    * Reddit 情緒指數: `{reddit_score}`\n"
-    )
-
     divergence = "同步"
     action = "保持觀察"
-    if skew_percentile > 80 and "看多" in str(reddit_score):
+    if skew_percentile > 80 and (
+        "樂觀" in str(reddit_score)
+        or "🚀" in str(reddit_score)
+        or "Bullish" in str(reddit_score)
+    ):
         divergence = "情緒背離 (散戶樂觀 vs 專業避險)"
         action = "建立保護性賣權或減碼"
-    elif skew_percentile < 20 and "看空" in str(reddit_score):
+    elif skew_percentile < 20 and (
+        "悲觀" in str(reddit_score)
+        or "💀" in str(reddit_score)
+        or "Bearish" in str(reddit_score)
+    ):
         divergence = "情緒背離 (散戶恐慌 vs 權利金便宜)"
         action = "考慮賣出賣權 (Cash Secured Put)"
 
-    edge_info += f"> 💡 偵測到{divergence}，建議 {action}。\n"
+    skew_color = "\u001b[1;35m" if skew_percentile > 80 else "\u001b[1;36m"
+    sentiment_color = (
+        "\u001b[1;32m"
+        if "🚀" in str(reddit_score)
+        or "樂觀" in str(reddit_score)
+        or "Bullish" in str(reddit_score)
+        else (
+            "\u001b[1;31m"
+            if "💀" in str(reddit_score)
+            or "悲觀" in str(reddit_score)
+            or "Bearish" in str(reddit_score)
+            else "\u001b[1;33m"
+        )
+    )
+    divergence_color = "\u001b[1;31m" if divergence != "同步" else "\u001b[1;32m"
 
+    edge_lines = [
+        "```ansi",
+        " Option Skew (期權偏斜)",
+        f" └─ Skew 值: {skew_color}{skew_val:.2f}%\u001b[0m (分位點: {skew_color}{skew_percentile:.1f}%\u001b[0m)",
+    ]
+    if skew_percentile > 90:
+        edge_lines.append(
+            "    \u001b[1;33m⚠️ 市場下行保護需求極高，隱含避險情緒升溫。\u001b[0m"
+        )
+
+    edge_lines.extend(
+        [
+            " 巨鯨/散戶意圖映射 (Market Intention)",
+            f" ├─ Polymarket 預測勝率: \u001b[1;34m{poly_odds}\u001b[0m",
+            f" └─ Reddit 情緒指數: {sentiment_color}{reddit_score}\u001b[0m",
+            " 情緒背離偵測 (Divergence Check)",
+            f" └─ 狀態: {divergence_color}{divergence}\u001b[0m",
+            f" └─ 建議: \u001b[1;32m{action}\u001b[0m",
+            "```",
+        ]
+    )
     embed.add_field(
-        name="📐 情緒與邊緣偵測 (Edge Detection)", value=edge_info, inline=False
+        name="📐 情緒與邊緣偵測 (Edge Detection)",
+        value="\n".join(edge_lines),
+        inline=False,
     )
 
     # 3. 📊 隱含波動率與預期區間 (IV Context)
@@ -2282,30 +2326,52 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     distance = ((max_pain - price) / price * 100) if price > 0 else 0.0
 
     ddp_status = "符合 (符合 DDP 盈餘/估值雙擊)" if data.get("is_ddp") else "不符合"
+    ddp_color = "\u001b[1;32m" if data.get("is_ddp") else "\u001b[1;30m"
+
     ivr = data.get("iv_rank", 0.0)
+    ivr_color = "\u001b[1;35m" if ivr > 50 else "\u001b[1;36m"
 
     pcr_data = data.get("pcr", {})
     pcr_val = pcr_data.get("pcr", 0.0) if pcr_data else 0.0
     pcr_state = pcr_data.get("state", "N/A") if pcr_data else "N/A"
-
-    target_info = (
-        f"* **Max Pain:** `${max_pain:.2f}` (目前價差: `{distance:+.1f}%`)\n"
-        f"* **DDP 掃描:** {ddp_status} (IV Rank: `{ivr:.1f}%`)\n"
-        f"* **Put/Call Ratio (PCR):** `{pcr_val}` ({pcr_state})\n"
+    pcr_color = (
+        "\u001b[1;31m"
+        if "偏高" in str(pcr_state) or "極高" in str(pcr_state)
+        else ("\u001b[1;32m" if "偏低" in str(pcr_state) else "\u001b[1;36m")
     )
 
     if abs(distance) < 2.0:
         scenario = "價格接近最大痛點，結算日前可能維持震盪。"
+        scen_color = "\u001b[1;33m"
     elif distance > 5.0:
         scenario = "價格遠低於最大痛點，具備磁吸效應回升動能。"
+        scen_color = "\u001b[1;32m"
     elif distance < -5.0:
         scenario = "價格遠高於最大痛點，需留意結算日前壓回風險。"
+        scen_color = "\u001b[1;31m"
     else:
         scenario = "目前價差適中，依技術指標操作為主。"
+        scen_color = "\u001b[1;36m"
 
-    target_info += f"* **操作指引:** {scenario}\n"
+    dist_color = "\u001b[1;31m" if abs(distance) > 5.0 else "\u001b[1;32m"
 
-    embed.add_field(name="🎯 結算與目標 (Target Lock)", value=target_info, inline=False)
+    target_lines = [
+        "```ansi",
+        " 最大痛點結算 (Max Pain Settlement)",
+        f" └─ Max Pain價位: \u001b[1;33m${max_pain:.2f}\u001b[0m (當前價差: {dist_color}{distance:+.1f}%\u001b[0m)",
+        " DDP 與期權風控 (DDP & Risk Metrics)",
+        f" ├─ DDP 估值雙擊: {ddp_color}{ddp_status}\u001b[0m",
+        f" ├─ IV Rank: {ivr_color}{ivr:.1f}%\u001b[0m",
+        f" └─ Put/Call Ratio: \u001b[1;36m{pcr_val:.2f}\u001b[0m ({pcr_color}{pcr_state}\u001b[0m)",
+        " 結算價操作指引 (Scenario Analysis)",
+        f" └─ 操作指引: {scen_color}{scenario}\u001b[0m",
+        "```",
+    ]
+    embed.add_field(
+        name="🎯 結算與目標 (Target Lock)",
+        value="\n".join(target_lines),
+        inline=False,
+    )
 
     # 5. 🐋 異常活動 (UOA)
     uoa_data = data.get("uoa", [])
