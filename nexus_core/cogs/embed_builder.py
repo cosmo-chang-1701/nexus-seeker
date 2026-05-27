@@ -3693,7 +3693,12 @@ def create_proactive_event_alert_embed(events: List[Any]) -> discord.Embed:
             instruction = str(event.get("instruction", "請先降低曝險並觀察事件落地。"))
         else:
             if event.type == "ECONOMIC":
-                name = f"🔴 經濟數據: {event.event}"
+                country = getattr(event, "country", None)
+                name = (
+                    f"🔴 經濟數據: {event.event} ({country})"
+                    if country
+                    else f"🔴 經濟數據: {event.event}"
+                )
                 instruction = "增加 Vanna 權重，縮減賣方曝險。"
             else:
                 name = f"📊 財報預警: {event.symbol}"
