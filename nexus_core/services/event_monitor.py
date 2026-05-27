@@ -100,43 +100,50 @@ def _build_event_nro_instruction(event: Any, risk_snapshot: dict[str, Any]) -> s
     short_gamma = gamma_state in {"Gamma 脆弱", "短 Gamma"}
     vanna_sensitive = vanna_state in {"Vanna 敏感高", "Vanna 敏感中"}
 
+    # Extract targeted subject for NRO personalization
+    if getattr(event, "type", "") == "ECONOMIC":
+        subject = getattr(event, "event", "經濟數據")
+    else:
+        subject = getattr(event, "symbol", "該標的")
+
     if getattr(event, "type", "") == "ECONOMIC":
         if imminent and (tier == "high" or gamma_fragile):
             return (
-                "巨集事件已逼近，先降 Beta-Weighted Delta、回補短 Gamma，"
+                f"【{subject}】巨集事件已逼近，先降 Beta-Weighted Delta、回補短 Gamma，"
                 "避免新增賣方與高槓桿方向押注。"
             )
         if imminent and seller_bias:
             return (
-                "數據前 8 小時內先縮減賣方曝險，保留定義風險結構，"
+                f"【{subject}】數據前 8 小時內先縮減賣方曝險，保留定義風險結構，"
                 "必要時用保護性 Put / Debit Spread 緩衝。"
             )
         if near_term and vanna_sensitive:
             return (
-                "維持 Calendar Guard：提高 Vanna 權重、縮小方向押注，"
+                f"【{subject}】維持 Calendar Guard：提高 Vanna 權重、縮小方向押注，"
                 "優先保留可快速調整的部位。"
             )
         return (
-            "事件前先控管方向曝險與倉位槓桿，避免新增裸賣方，"
+            f"【{subject}】事件前先控管方向曝險與倉位槓桿，避免新增裸賣方，"
             "待數據落地後再恢復常態部署。"
         )
 
     if imminent and seller_bias:
         return (
-            "財報臨近且組合偏賣方；優先回補短 Vega / Theta 收租倉，"
+            f"【{subject}】財報臨近且組合偏賣方；優先回補短 Vega / Theta 收租倉，"
             "避免承受 IV Crush 與跳空雙重風險。"
         )
     if imminent and short_gamma:
         return (
-            "財報前短 Gamma 風險偏高；先降倉並改用定義風險結構，" "避免跳空放大損益。"
+            f"【{subject}】財報前短 Gamma 風險偏高；先降倉並改用定義風險結構，"
+            "避免跳空放大損益。"
         )
     if near_term and tier == "high":
         return (
-            "啟動 Earnings Guard：降低總曝險與集中度，"
+            f"【{subject}】啟動 Earnings Guard：降低總曝險與集中度，"
             "若保留方向判斷優先保護性 Put 或 Debit Spread。"
         )
     return (
-        "財報窗口已開啟；控制口數、避免堆疊裸賣方，"
+        f"【{subject}】財報窗口已開啟；控制口數、避免堆疊裸賣方，"
         "若要保留方向觀點優先使用定義風險結構。"
     )
 
