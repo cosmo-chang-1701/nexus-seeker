@@ -651,18 +651,33 @@ class SchedulerCog(commands.Cog):
                 if option_alert_mode == 2 and not has_position:
                     continue
                 deliverable_symbols.append((sym, has_position))
-                summary_items.append(
-                    {
-                        "symbol": sym,
-                        "alert_level": str(evaluation.tactical.alert_level),
-                        "skew_state": (
-                            f"{evaluation.metrics.option_skew:+.2f}% ｜ "
-                            f"{evaluation.metrics.option_skew_state}"
-                        ),
-                        "scenario": str(evaluation.tactical.scenario),
-                        "event_risk_summary": str(evaluation.event_context.summary),
-                    }
-                )
+
+                sum_holding_row = user_holdings.get(sym.upper())
+                sum_holding_pnl_pct = None
+                if (
+                    sum_holding_row is not None
+                    and float(sum_holding_row.get("quantity", 0.0)) > 0.0
+                ):
+                    sum_holding_avg_cost = float(sum_holding_row.get("avg_cost", 0.0))
+                    if sum_holding_avg_cost > 0.0:
+                        sum_holding_pnl_pct = (
+                            evaluation.metrics.current_price - sum_holding_avg_cost
+                        ) / sum_holding_avg_cost
+
+                item_data = {
+                    "symbol": sym,
+                    "alert_level": str(evaluation.tactical.alert_level),
+                    "skew_state": (
+                        f"{evaluation.metrics.option_skew:+.2f}% ｜ "
+                        f"{evaluation.metrics.option_skew_state}"
+                    ),
+                    "scenario": str(evaluation.tactical.scenario),
+                    "event_risk_summary": str(evaluation.event_context.summary),
+                }
+                if sum_holding_pnl_pct is not None:
+                    item_data["holding_pnl_pct"] = sum_holding_pnl_pct
+
+                summary_items.append(item_data)
 
             if summary_items:
                 roundup_commentary = await generate_watchlist_roundup_commentary(
@@ -691,14 +706,19 @@ class SchedulerCog(commands.Cog):
                 if evaluation is None:
                     continue
                 holding_row = user_holdings.get(sym.upper())
-                holding_quantity = None
-                holding_avg_cost = None
+                holding_quantity: float | None = None
+                holding_avg_cost: float | None = None
+                holding_pnl_pct: float | None = None
                 if (
                     holding_row is not None
                     and float(holding_row.get("quantity", 0.0)) > 0.0
                 ):
                     holding_quantity = float(holding_row["quantity"])
                     holding_avg_cost = float(holding_row.get("avg_cost", 0.0))
+                    if holding_avg_cost > 0.0:
+                        holding_pnl_pct = (
+                            evaluation.metrics.current_price - holding_avg_cost
+                        ) / holding_avg_cost
                 report_body = generate_ansi_watchlist_report(
                     evaluation.metrics, evaluation.tactical
                 )
@@ -730,6 +750,7 @@ class SchedulerCog(commands.Cog):
                     has_position=has_position,
                     holding_quantity=holding_quantity,
                     holding_avg_cost=holding_avg_cost,
+                    holding_pnl_pct=holding_pnl_pct,
                 )
                 await self.bot.queue_dm(uid, embed=embed)
 
