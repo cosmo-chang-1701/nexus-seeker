@@ -4,7 +4,7 @@
 
 Nexus Seeker is a multi-tenant **Discord-first options risk-control and trading operations platform**. It combines technical structure, Black-Scholes-Merton pricing, Greeks-based portfolio risk, event-aware calendar defenses, and LLM-assisted structured commentary.
 
-Current released core version: **`1.6.34`**
+Current released core version: **`1.6.35`**
 
 The codebase is optimized for:
 
@@ -104,12 +104,13 @@ The active embed builder is `create_watchlist_signal_embed()` in `cogs/embed_bui
 
 Current sections:
 
-1. **📊 技術 / 期權快照**
-2. **📐 Skew 與市場判讀**
-3. **🤖 LLM Skew 解說**
-4. **🗓️ 事件風控**
-5. **🎯 執行建議**
-6. **🧾 可執行期權合約**
+1. **📊 技術 / 期權快照** (Technical/Options Snapshot ANSI Panel)
+2. **📐 Skew 與市場判讀** (Skew Interpretation ANSI Panel - aligned with Sentiment Scan style)
+3. **🤖 LLM Skew 解說** (LLM Skew Commentary)
+4. **🗓️ 事件風控** (Event Risk Management Summary)
+5. **💼 持倉與操作指引** (Holdings & Trading Guide ANSI Panel - dynamically calculates suitable entry/exit prices and shares sizing)
+6. **🎯 執行建議** (Execution Suggestions - with options suggestions aligned with calculated pricing strikes)
+7. **🧾 可執行期權合約** (Executable Options Contracts)
 
 ### Current heartbeat logic details
 
@@ -122,6 +123,13 @@ Current sections:
   - event risk summary
   - executable option plan
   - LLM-generated skew commentary
+  - **Dynamic Stock Pricing & Share Sizing**:
+    - Unheld tickers: Calculates a dynamic `suitable_buy_price` based on RSI and Skew (downside fear discount factor) and corresponding shares budget based on user `capital` and `risk_limit`.
+    - Held tickers: Calculates a dynamic `suitable_sell_price` and recommended sell shares (25%, 33%, 50%, or 100% exit ratio depending on RSI and scenario like `hard-hedge`).
+  - **Strike-Aligned Options Guidance**:
+    - Option guidelines are dynamically mapped to target strikes (e.g. CSP at `suitable_buy_price` or Covered Call at `suitable_sell_price`).
+  - **Visual Panel Consistency**:
+    - Dotted lines ` ----------------------------------` and ` └─ ` indent prefixes matching the Option Sentiment Scan (Sentiment Scan) format.
 - option plans are event-aware:
   - earnings proximity reduces risk
   - pre-event windows prefer defined-risk structures

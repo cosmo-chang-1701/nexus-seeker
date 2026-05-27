@@ -577,6 +577,7 @@ class SchedulerCog(commands.Cog):
             build_watchlist_option_plan,
             derive_watchlist_option_guidance,
             evaluate_watchlist_symbol,
+            calculate_dynamic_trading_signals,
         )
         from services.calendar_service import calendar_service
         from services.llm_service import (
@@ -722,11 +723,25 @@ class SchedulerCog(commands.Cog):
                 report_body = generate_ansi_watchlist_report(
                     evaluation.metrics, evaluation.tactical
                 )
+
+                # 計算動態買賣現貨與對齊期權操作建議
+                signals = calculate_dynamic_trading_signals(
+                    evaluation.metrics,
+                    evaluation.tactical,
+                    has_position=has_position,
+                    holding_quantity=holding_quantity,
+                    holding_avg_cost=holding_avg_cost,
+                    capital=user_context.capital,
+                    risk_limit=user_context.risk_limit,
+                )
+
                 option_guidance = derive_watchlist_option_guidance(
                     evaluation.metrics,
                     evaluation.tactical,
                     event_context=evaluation.event_context,
                     has_position=has_position,
+                    suitable_buy_price=signals.get("suitable_buy_price"),
+                    suitable_sell_price=signals.get("suitable_sell_price"),
                 )
                 option_plan = await build_watchlist_option_plan(
                     evaluation.metrics,
@@ -751,6 +766,12 @@ class SchedulerCog(commands.Cog):
                     holding_quantity=holding_quantity,
                     holding_avg_cost=holding_avg_cost,
                     holding_pnl_pct=holding_pnl_pct,
+                    suitable_buy_price=signals.get("suitable_buy_price"),
+                    suitable_buy_shares=signals.get("suitable_buy_shares"),
+                    suitable_sell_price=signals.get("suitable_sell_price"),
+                    suitable_sell_shares=signals.get("suitable_sell_shares"),
+                    buy_rationale=signals.get("buy_rationale"),
+                    sell_rationale=signals.get("sell_rationale"),
                 )
                 await self.bot.queue_dm(uid, embed=embed)
 

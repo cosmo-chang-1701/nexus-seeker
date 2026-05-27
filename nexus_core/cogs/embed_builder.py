@@ -2502,8 +2502,14 @@ def create_watchlist_signal_embed(
     holding_quantity: float | None = None,
     holding_avg_cost: float | None = None,
     holding_pnl_pct: float | None = None,
+    suitable_buy_price: float | None = None,
+    suitable_buy_shares: int | None = None,
+    suitable_sell_price: float | None = None,
+    suitable_sell_shares: int | None = None,
+    buy_rationale: str | None = None,
+    sell_rationale: str | None = None,
 ) -> discord.Embed:
-    """建立 watchlist 半小時心跳推播 Embed。"""
+    """建立 watchlist 半小時心跳推播 Embed (視覺排版與情緒掃描一致)。"""
     color = {
         "red": discord.Color.red(),
         "yellow": discord.Color.orange(),
@@ -2531,13 +2537,13 @@ def create_watchlist_signal_embed(
     )
 
     skew_lines = ["```ansi"]
-    skew_lines.append(f" 📐 {symbol} Skew 與市場判讀 (Option Skew)")
+    skew_lines.append(f" 📐 {symbol} 期權偏斜判讀 (Option Skew Scan)")
     skew_lines.append(" ----------------------------------")
-    skew_lines.append(f" Skew 數據: \u001b[1;36m{skew_state}\u001b[0m")
+    skew_lines.append(f" └─ Skew 數據: \u001b[1;36m{skew_state}\u001b[0m")
     if option_plan is not None:
-        skew_lines.append(f" 策略解說: \u001b[3m{option_plan.rationale}\u001b[0m")
+        skew_lines.append(f" └─ 策略解說: \u001b[3m{option_plan.rationale}\u001b[0m")
     else:
-        skew_lines.append(" 策略解說: 目前無可執行期權合約計畫")
+        skew_lines.append(" └─ 策略解說: 目前無可執行期權合約計畫")
     skew_lines.append("```")
     embed.add_field(
         name="📐 Skew 與市場判讀",
@@ -2569,15 +2575,15 @@ def create_watchlist_signal_embed(
     )
 
     holding_lines = ["```ansi"]
-    holding_lines.append(f" 💼 {symbol} 持倉摘要 (Holding Summary)")
+    holding_lines.append(f" 💼 {symbol} 持倉與操作指引 (Holding & Trading Guide)")
     holding_lines.append(" ----------------------------------")
     if has_position:
-        holding_lines.append(" 部位狀態: \u001b[1;32m已持有\u001b[0m")
+        holding_lines.append(" └─ 部位狀態: \u001b[1;32m已持有\u001b[0m")
         if holding_quantity is not None:
             quantity_text = f"{holding_quantity:,.2f}".rstrip("0").rstrip(".")
-            holding_lines.append(f" 現貨股數: {quantity_text} 股")
+            holding_lines.append(f" └─ 現貨股數: {quantity_text} 股")
             if holding_avg_cost is not None and holding_avg_cost > 0.0:
-                holding_lines.append(f" 平均成本: ${holding_avg_cost:,.2f}")
+                holding_lines.append(f" └─ 平均成本: ${holding_avg_cost:,.2f}")
                 if holding_pnl_pct is not None:
                     pnl_val = holding_pnl_pct * 100
                     pnl_color = (
@@ -2589,15 +2595,36 @@ def create_watchlist_signal_embed(
                     )
                     pnl_icon = "🟢" if pnl_val > 0 else "🔴" if pnl_val < 0 else "⚪"
                     holding_lines.append(
-                        f" 標的損益: {pnl_icon} {pnl_color}{pnl_val:+.2f}%\u001b[0m"
+                        f" └─ 標的損益: {pnl_icon} {pnl_color}{pnl_val:+.2f}%\u001b[0m"
                     )
+        if suitable_sell_price is not None and suitable_sell_price > 0.0:
+            holding_lines.append(
+                f" └─ 適合賣出價位: \u001b[1;33m${suitable_sell_price:,.2f}\u001b[0m (基於 Skew 與阻力位微調)"
+            )
+            if suitable_sell_shares is not None and suitable_sell_shares > 0:
+                holding_lines.append(
+                    f" └─ 建議賣出股數: \u001b[1;35m{suitable_sell_shares}\u001b[0m 股"
+                )
+            if sell_rationale:
+                holding_lines.append(f" └─ 操盤減碼指引: {sell_rationale}")
     else:
-        holding_lines.append(" 部位狀態: 未持有")
-        holding_lines.append(" 操作提示: 目前無持倉，以 watchlist 追蹤觀察為主")
+        holding_lines.append(" └─ 部位狀態: 未持有")
+        if suitable_buy_price is not None and suitable_buy_price > 0.0:
+            holding_lines.append(
+                f" └─ 適合買入價位: \u001b[1;32m${suitable_buy_price:,.2f}\u001b[0m (基於 Skew 折價調整)"
+            )
+            if suitable_buy_shares is not None and suitable_buy_shares > 0:
+                holding_lines.append(
+                    f" └─ 建議買入股數: \u001b[1;36m{suitable_buy_shares}\u001b[0m 股"
+                )
+            if buy_rationale:
+                holding_lines.append(f" └─ 操盤進場指引: {buy_rationale}")
+        else:
+            holding_lines.append(" └─ 操作提示: 目前無持倉，以 watchlist 追蹤觀察為主")
     holding_lines.append("```")
     embed.add_field(
-        name="💼 持倉摘要",
-        value=_safe_embed_field_value("\n".join(holding_lines), "暫無持倉資訊"),
+        name="💼 持倉與操作指引",
+        value=_safe_embed_field_value("\n".join(holding_lines), "暫無持倉與操作指引"),
         inline=False,
     )
 
