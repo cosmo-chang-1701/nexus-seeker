@@ -1,8 +1,10 @@
 import asyncio
 import logging
-from datetime import datetime, timedelta, date
+from datetime import date, datetime, timedelta
 from typing import List, Optional, Union
-from pydantic import BaseModel, field_validator, computed_field
+from zoneinfo import ZoneInfo
+
+from pydantic import BaseModel, computed_field, field_validator
 from database.calendar_cache import (
     get_cached_earnings,
     get_macro_events_between,
@@ -12,6 +14,8 @@ from database.calendar_cache import (
 )
 from services import market_data_service
 from services.market_data_service import BoundedCache
+
+ny_tz = ZoneInfo("America/New_York")
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +133,7 @@ class CalendarService:
         if not entries:
             return None
 
-        today = date.today()
+        today = datetime.now(ny_tz).date()
         parsed_dates: list[date] = []
         for entry in entries:
             raw_date = entry.get("date")
@@ -265,7 +269,7 @@ class CalendarService:
 
         try:
             cached = get_cached_earnings(symbol)
-            today = datetime.now().date()
+            today = datetime.now(ny_tz).date()
             if cached and self._is_timestamp_fresh(
                 cached.get("checked_at"), self._earnings_cache_hours
             ):
@@ -279,8 +283,10 @@ class CalendarService:
                     parsed_cached = None
 
                 if parsed_cached is not None and parsed_cached >= today:
-                    next_dt = datetime.combine(parsed_cached, datetime.min.time())
-                    tte_hours = (next_dt - datetime.now()).total_seconds() / 3600
+                    next_dt = datetime.combine(
+                        parsed_cached, datetime.min.time()
+                    ).replace(tzinfo=ny_tz)
+                    tte_hours = (next_dt - datetime.now(ny_tz)).total_seconds() / 3600
                     earnings_info = EarningsEvent(
                         symbol=symbol,
                         date=parsed_cached.strftime("%Y-%m-%d"),
@@ -296,8 +302,10 @@ class CalendarService:
             )
 
             if next_date is not None:
-                next_dt = datetime.combine(next_date, datetime.min.time())
-                now = datetime.now()
+                next_dt = datetime.combine(next_date, datetime.min.time()).replace(
+                    tzinfo=ny_tz
+                )
+                now = datetime.now(ny_tz)
                 tte_hours = (next_dt - now).total_seconds() / 3600
 
                 try:
