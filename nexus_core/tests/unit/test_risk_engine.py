@@ -266,3 +266,28 @@ def test_calculate_relative_strength_index():
 
     # Test edge cases where index length is insufficient
     assert calculate_relative_strength_index(pd.DataFrame(), pd.DataFrame()) == 1.0
+
+
+@pytest.mark.asyncio
+async def test_boxx_capital_adjustment_and_beta():
+    """測試持倉中有 BOXX 時，可用資本折算（套用 90% 折價）的計算是否正確"""
+    from unittest.mock import patch, AsyncMock
+    from services.trading_service import get_adjusted_user_capital
+
+    mock_holdings = [
+        {"symbol": "AAPL", "quantity": 10},
+        {"symbol": "BOXX", "quantity": 100, "avg_cost": 210.0},
+    ]
+    mock_quote = {"c": 210.0}
+
+    with patch(
+        "database.holdings.get_user_holdings", return_value=mock_holdings
+    ), patch(
+        "services.market_data_service.get_quote", AsyncMock(return_value=mock_quote)
+    ):
+        # Base capital = 50000.0
+        # BOXX value = 100 * 210.0 = 21000.0
+        # Collateral value = 21000.0 * 0.90 = 18900.0
+        # Adjusted capital = 50000.0 + 18900.0 = 68900.0
+        adj_capital = await get_adjusted_user_capital(12345, 50000.0)
+        assert adj_capital == 68900.0
