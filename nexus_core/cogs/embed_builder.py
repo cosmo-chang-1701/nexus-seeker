@@ -67,6 +67,21 @@ def _visual_truncate(s: str, max_vlen: int) -> str:
     return "".join(chars)
 
 
+def _wrap_visual(text: str, width: int, indent: str = "") -> list[str]:
+    lines: list[str] = []
+    current = ""
+    for char in text:
+        candidate = current + char
+        if current and _visual_len(candidate) > width:
+            lines.append(current)
+            current = indent + char
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    return lines or [indent]
+
+
 def _parse_and_format_positions_table(positions_list: List[str]) -> str:
     if not positions_list:
         return "目前無持倉部位。"
@@ -2608,22 +2623,33 @@ def create_watchlist_signal_embed(
     )
 
     if skew_commentary:
-        commentary_text = "\n".join(
-            f"> {line}" for line in skew_commentary.strip().split("\n")
-        )
+        commentary_lines = ["```ansi"]
+        commentary_lines.append(" 🤖 LLM Skew 即時解說 (AI Skew Commentary)")
+        commentary_lines.append(" ----------------------------------")
+        wrapped_lines = _wrap_visual(skew_commentary.strip(), width=45, indent="   ")
+        for line in wrapped_lines:
+            commentary_lines.append(f" └─ {line}")
+        commentary_lines.append("```")
+        commentary_text = "\n".join(commentary_lines)
     else:
-        commentary_text = (
-            "> *暫無 LLM skew 即時解說，請先依上方 Skew / IV / 事件風控欄位判讀。*"
-        )
+        commentary_text = "```ansi\n 🤖 暫無 LLM skew 即時解說\n```"
     embed.add_field(
         name="🤖 LLM Skew 解說",
         value=_safe_embed_field_value(commentary_text, "暫無解說"),
         inline=False,
     )
 
-    event_val = (
-        f"└─ {event_risk_summary}" if event_risk_summary else "└─ 未偵測到近期重大事件"
-    )
+    event_lines = ["```ansi"]
+    event_lines.append(" 🗓️ 近期重大事件 (Macro & Earnings Events)")
+    event_lines.append(" ----------------------------------")
+    if event_risk_summary:
+        wrapped_event = _wrap_visual(event_risk_summary.strip(), width=45, indent="   ")
+        for line in wrapped_event:
+            event_lines.append(f" └─ {line}")
+    else:
+        event_lines.append(" └─ 未偵測到近期重大事件")
+    event_lines.append("```")
+    event_val = "\n".join(event_lines)
     embed.add_field(
         name="🗓️ 事件風控",
         value=_safe_embed_field_value(event_val, "未偵測到近期重大事件"),
@@ -2684,12 +2710,17 @@ def create_watchlist_signal_embed(
         inline=False,
     )
 
+    guidance_lines = ["```ansi"]
+    guidance_lines.append(" 🎯 交易執行建議 (Tactical Option Guidance)")
+    guidance_lines.append(" ----------------------------------")
     if option_guidance:
-        guidance_text = "\n".join(
-            f"> {line}" for line in option_guidance.strip().split("\n")
-        )
+        wrapped_guidance = _wrap_visual(option_guidance.strip(), width=45, indent="   ")
+        for line in wrapped_guidance:
+            guidance_lines.append(f" └─ {line}")
     else:
-        guidance_text = "> *暫無執行建議*"
+        guidance_lines.append(" └─ 暫無執行建議")
+    guidance_lines.append("```")
+    guidance_text = "\n".join(guidance_lines)
     embed.add_field(
         name="🎯 執行建議",
         value=_safe_embed_field_value(guidance_text, "暫無建議"),
@@ -2697,27 +2728,38 @@ def create_watchlist_signal_embed(
     )
 
     if option_plan is not None:
-        premium_type_text = (
+        premium_type_tw = (
             "Debit / 收支" if option_plan.premium_type == "debit" else "Credit / 收租"
         )
-        leg_lines = []
+        plan_lines = ["```ansi"]
+        plan_lines.append(" 🧾 建議期權合約 (Suggested Option Contract)")
+        plan_lines.append(" ----------------------------------")
+        plan_lines.append(
+            f" ├─ 策略名稱: \u001b[1;36m{option_plan.strategy_name}\u001b[0m ({premium_type_tw})"
+        )
+        plan_lines.append(
+            f" ├─ 預估權利金: \u001b[1;32m${option_plan.estimated_net_premium:.2f}\u001b[0m (建議 \u001b[1;35m{option_plan.suggested_contracts}\u001b[0m 口)"
+        )
+        plan_lines.append(
+            f" ├─ 估計最大風險: \u001b[1;31m${option_plan.max_risk_amount:.2f}\u001b[0m"
+        )
+        plan_lines.append(" └─ 執行合約結構:")
         for i, leg in enumerate(option_plan.legs):
             is_last = i == len(option_plan.legs) - 1
-            connector = "└──" if is_last else "├──"
-            leg_lines.append(
+            connector = "    └──" if is_last else "    ├──"
+            plan_lines.append(
                 f"{connector} {leg.action.upper()} {leg.opt_type.upper()} {leg.strike:.2f} {leg.expiry} @ {leg.mid_price:.2f}"
             )
-        leg_block = "\n".join(leg_lines)
-        option_lines = [
-            f"📦 **期權策略**: `{option_plan.strategy_name}` (型態: `{premium_type_text}`)",
-            f"├─ 預估權利金: `${option_plan.estimated_net_premium:.2f}` (建議 `{option_plan.suggested_contracts}` 口)",
-            f"├─ 估計最大風險: `${option_plan.max_risk_amount:.2f}`",
-            "└─ 執行合約結構:",
-            f"```\n{leg_block}\n```",
-        ]
-        option_value = "\n".join(option_lines)
+        plan_lines.append("```")
+        option_value = "\n".join(plan_lines)
     else:
-        option_value = "└─ 目前無符合條件的完整期權合約，保留正股 / 策略觀察。"
+        option_value = (
+            "```ansi\n"
+            " 🧾 建議期權合約 (Suggested Option Contract)\n"
+            " ----------------------------------\n"
+            " └─ 目前無符合條件的完整期權合約，保留現貨/策略觀察。\n"
+            "```"
+        )
     embed.add_field(
         name="🧾 可執行期權合約",
         value=_safe_embed_field_value(option_value, "暫無合約"),
@@ -4031,6 +4073,8 @@ def create_proactive_event_alert_embed(events: List[Any]) -> discord.Embed:
 
         event_lines = [
             "```ansi",
+            " 🛡️ 即時防護狀態 (Event Risk Protection)",
+            " ----------------------------------",
             " 距離發布 (Time to Event)",
             f" └─ 剩餘時間: {tte_color}{tte_hours:.1f} 小時\u001b[0m",
             " 持倉風險狀態 (Position Risk Status)",
