@@ -200,7 +200,9 @@ class PortfolioStatusOrchestrator:
             else:
                 dividend_yield = await market_data_service.get_dividend_yield(symbol)
 
-            if not self.spy_hist.empty and not stock_hist.empty:
+            if symbol.upper() == "BOXX":
+                beta_val = 0.0
+            elif not self.spy_hist.empty and not stock_hist.empty:
                 beta_val = calculate_beta(stock_hist, self.spy_hist)
             else:
                 beta_val = 1.0
@@ -281,9 +283,13 @@ async def refresh_portfolio_greeks(user_id: int = None, manager=None):
             quote = await market_data_service.get_quote(sym)
             stock_data[sym] = {
                 "price": quote.get("c", df["Close"].iloc[-1] if not df.empty else 0.0),
-                "beta": calculate_beta(df, spy_df)
-                if not df.empty and not spy_df.empty
-                else 1.0,
+                "beta": 0.0
+                if sym.upper() == "BOXX"
+                else (
+                    calculate_beta(df, spy_df)
+                    if not df.empty and not spy_df.empty
+                    else 1.0
+                ),
                 "div_yield": await market_data_service.get_dividend_yield(sym),
             }
 

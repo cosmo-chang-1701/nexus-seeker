@@ -645,7 +645,10 @@ async def analyze_symbol(
             spy_price_val = (
                 spy_price if spy_price is not None else df_spy["Close"].iloc[-1]
             )
-            beta = calculate_beta(df, df_spy) if symbol != "SPY" else 1.0
+            if symbol.upper() == "BOXX":
+                beta = 0.0
+            else:
+                beta = calculate_beta(df, df_spy) if symbol != "SPY" else 1.0
 
         indicators = _calculate_technical_indicators(df)
         if indicators is None:

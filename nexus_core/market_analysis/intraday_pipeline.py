@@ -320,7 +320,7 @@ async def build_enhanced_watchlist_metrics(
     )
     rsi_14 = _calculate_rsi(df_stock["Close"])
     atr_14 = max(_calculate_atr(df_stock), 0.01)
-    beta = calculate_beta(df_stock, df_spy)
+    beta = 0.0 if symbol.upper() == "BOXX" else calculate_beta(df_stock, df_spy)
     volume_poc = max(_estimate_volume_poc(df_stock), 0.01)
     gex_max_put_wall, vanna_sensitivity = await _estimate_options_wall_metrics(
         symbol,
@@ -1636,13 +1636,21 @@ class IntradayScanPipeline:
             holding_quantity = float(holding_row["quantity"])
             holding_avg_cost = float(holding_row.get("avg_cost", 0.0))
 
-        user_capital = float(
+        base_capital = float(
             getattr(
                 user_context,
                 "capital",
                 getattr(user_context, "total_capital", 100000.0),
             )
         )
+        user_capital = base_capital
+        if user_id:
+            try:
+                from services.trading_service import get_adjusted_user_capital
+
+                user_capital = await get_adjusted_user_capital(user_id, base_capital)
+            except Exception:
+                user_capital = base_capital
         user_risk_limit = float(getattr(user_context, "risk_limit", 15.0))
 
         # 計算動態買賣點現貨及對齊的期權操盤建議
