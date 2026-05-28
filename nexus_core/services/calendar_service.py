@@ -166,7 +166,10 @@ class CalendarService:
 
         high_impact: list[dict[str, str]] = []
         for event in raw_events:
-            country = str(event.get("country", "US")).upper()
+            raw_country = event.get("country")
+            if not raw_country or not isinstance(raw_country, str):
+                continue
+            country = raw_country.strip().upper()
             if country != "US":
                 continue
 
