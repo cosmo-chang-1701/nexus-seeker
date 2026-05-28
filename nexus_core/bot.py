@@ -69,6 +69,25 @@ def _split_discord_text(text: str, max_len: int) -> list[str]:
     return _split_plain_text(text, max_len)
 
 
+def _get_embed_length(embed: discord.Embed) -> int:
+    """計算 Embed 的總字元數，用以評估是否超出 Discord 的 6000 字元限制。"""
+    total = 0
+    if embed.title:
+        total += len(embed.title)
+    if embed.description:
+        total += len(embed.description)
+    if embed.footer and embed.footer.text:
+        total += len(embed.footer.text)
+    if embed.author and embed.author.name:
+        total += len(embed.author.name)
+    for field in embed.fields:
+        if field.name:
+            total += len(field.name)
+        if field.value:
+            total += len(field.value)
+    return total
+
+
 class NexusBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
@@ -98,6 +117,21 @@ class NexusBot(commands.Bot):
                 )
             self.message_signal.set()
             return
+
+        # 如果有 Embed 且超長，將其拆分後遞迴加入列隊
+        if embed and _get_embed_length(embed) > 5500:
+            from cogs.embed_builder import split_embed_by_fields
+
+            split_embeds = split_embed_by_fields(embed)
+            if len(split_embeds) > 1:
+                for idx, s_embed in enumerate(split_embeds):
+                    # 只有第一個 Split Embed 帶有原始訊息文字，避免重複發送
+                    await self.queue_dm(
+                        user_id,
+                        message=message if idx == 0 else None,
+                        embed=s_embed,
+                    )
+                return
 
         embed_dict: Optional[Dict[str, Any]] = (
             cast(Any, embed.to_dict()) if embed else None
@@ -309,8 +343,14 @@ class NexusBot(commands.Bot):
                     logger.error(
                         f"發信失敗(HTTPException): uid={user_id}, status={e.status}, err={e}"
                     )
-                    # 429 或 5xx 可能需要重試，這裡簡單間隔後繼續
-                    await asyncio.sleep(2)
+                    if e.status == 400:
+                        logger.error(
+                            f"永久發送錯誤(HTTP 400 Bad Request)，已將該通知從列隊刪除以防阻塞: uid={user_id}"
+                        )
+                        await asyncio.to_thread(delete_notification, notif_id)
+                    else:
+                        # 429 或 5xx 可能需要重試，這裡簡單間隔後繼續
+                        await asyncio.sleep(2)
                 except Exception as e:
                     logger.error(f"發信失敗(Unexpected): uid={user_id}, err={e}")
 

@@ -106,3 +106,82 @@ async def test_terminal_cog_success_embed(mock_interaction, bot, db_conn):
     assert "embed" in kwargs
     assert kwargs["embed"].title == "ℹ️ 系統資訊"
     assert "帳戶設定已更新" in kwargs["embed"].description
+
+
+@pytest.mark.asyncio
+async def test_bot_queue_dm_splits_large_embed(bot):
+    """測試當 Embed 總長度大於 5500 字元時，queue_dm 會自動將其拆分為多個通知並存入資料庫。"""
+    import discord
+
+    user_id = 12345
+    large_embed = discord.Embed(title="Oversized Embed", description="Base description")
+    # 增加大量 fields 使其長度超過 5500 字元
+    for i in range(7):
+        large_embed.add_field(name=f"Field {i}", value="A" * 900, inline=False)
+
+    with patch("bot.add_pending_notification") as mock_add:
+        await bot.queue_dm(user_id, message="Original Message Text", embed=large_embed)
+
+        # 應該被拆分成 7 個獨立的欄位 Embed
+        assert mock_add.call_count == 7
+
+        # 檢查第一個通知
+        first_args, _ = mock_add.call_args_list[0]
+        assert first_args[0] == user_id
+        assert first_args[1] == "Original Message Text"
+        assert first_args[2] is not None
+        assert "Field 0" in first_args[2]["fields"][0]["name"]
+
+        # 檢查後續通知，其 message 欄位應該為 None (避免重複發送)
+        for idx in range(1, 7):
+            args, _ = mock_add.call_args_list[idx]
+            assert args[0] == user_id
+            assert args[1] is None
+            assert args[2] is not None
+            assert f"Field {idx}" in args[2]["fields"][0]["name"]
+
+
+@pytest.mark.asyncio
+async def test_message_worker_unblocks_on_http_400(bot):
+    """測試當 _message_worker 遭遇 HTTP 400 Bad Request 時，會將該永久失敗的通知從資料庫刪除，以防阻塞佇列。"""
+    import discord
+    from unittest.mock import MagicMock, AsyncMock
+
+    user_id = 12345
+    notif_id = 999
+    message = "Test message"
+    embed_dict = {"title": "Test"}
+
+    # Mock discord.HTTPException (status = 400)
+    mock_resp = MagicMock()
+    mock_resp.status = 400
+    mock_resp.reason = "Bad Request"
+    http_exc = discord.HTTPException(
+        response=mock_resp, message="Embed size exceeds maximum size of 6000"
+    )
+
+    # Mock database functions & fetch_user
+    mock_get_pending = MagicMock(
+        return_value=[(notif_id, user_id, message, embed_dict)]
+    )
+    mock_delete = MagicMock()
+
+    mock_user = MagicMock()
+    mock_user.send = AsyncMock(side_effect=http_exc)
+    mock_fetch_user = AsyncMock(return_value=mock_user)
+
+    with patch("bot.get_pending_notifications", mock_get_pending), patch(
+        "bot.delete_notification", mock_delete
+    ), patch.object(bot, "fetch_user", mock_fetch_user), patch.object(
+        bot, "wait_until_ready", AsyncMock()
+    ), patch.object(
+        bot, "is_closed", side_effect=[False, False, True, True, True]
+    ):  # 執行一次 loop 後終止
+        await bot._message_worker()
+
+        # 應調用 fetch_user 及 user.send
+        mock_fetch_user.assert_called_once_with(user_id)
+        mock_user.send.assert_called_once()
+
+        # 遭遇 HTTP 400 時，應立即刪除通知，以防阻塞
+        mock_delete.assert_called_once_with(notif_id)
