@@ -112,3 +112,43 @@ async def test_get_symbol_earnings_timezone_robustness():
     assert info.date == "2026-05-19"
     # 2026-05-19 00:00:00 NY time - 2026-05-18 21:00:00 NY time = 3.0 hours
     assert info.tte_hours == 3.0
+
+
+@pytest.mark.asyncio
+async def test_get_high_impact_events_filters_non_us():
+    fixed_now = datetime(2026, 5, 12, 12, 0, 0)
+    with patch("services.calendar_service.datetime") as mock_datetime:
+        mock_datetime.now.side_effect = (
+            lambda tz=None: fixed_now if tz is None else fixed_now.replace(tzinfo=tz)
+        )
+        mock_datetime.fromisoformat = datetime.fromisoformat
+        mock_datetime.strptime = datetime.strptime
+        mock_datetime.combine = datetime.combine
+        mock_datetime.min = datetime.min
+
+        with patch(
+            "services.market_data_service.get_economic_calendar", autospec=True
+        ) as mock_cal:
+            mock_cal.return_value = [
+                {
+                    "event": "US CPI Report",
+                    "impact": "high",
+                    "time": "2026-05-15T12:30:00Z",
+                    "country": "US",
+                },
+                {
+                    "event": "CA Retail Sales",
+                    "impact": "high",
+                    "time": "2026-05-15T13:00:00Z",
+                    "country": "CA",
+                },
+            ]
+
+            service = CalendarService()
+            events = await service.get_high_impact_events(days=7)
+
+    # Asserts that the CA event was filtered out and only the US event remains
+    assert len(events) == 1
+    assert isinstance(events[0], EconomicEvent)
+    assert events[0].event == "US CPI Report"
+    assert events[0].country == "US"

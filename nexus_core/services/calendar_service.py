@@ -166,6 +166,10 @@ class CalendarService:
 
         high_impact: list[dict[str, str]] = []
         for event in raw_events:
+            country = str(event.get("country", "US")).upper()
+            if country != "US":
+                continue
+
             impact = str(event.get("impact", "low"))
             name = str(event.get("event", ""))
             is_high = impact.lower() == "high" or any(
@@ -183,7 +187,7 @@ class CalendarService:
                     "event": name,
                     "time": event_time_str,
                     "impact": impact,
-                    "country": str(event.get("country", "US")),
+                    "country": country,
                 }
             )
 
