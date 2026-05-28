@@ -152,3 +152,55 @@ async def test_get_high_impact_events_filters_non_us():
     assert isinstance(events[0], EconomicEvent)
     assert events[0].event == "US CPI Report"
     assert events[0].country == "US"
+
+
+@pytest.mark.asyncio
+async def test_get_high_impact_events_filters_empty_or_invalid_country():
+    fixed_now = datetime(2026, 5, 12, 12, 0, 0)
+    with patch("services.calendar_service.datetime") as mock_datetime:
+        mock_datetime.now.side_effect = (
+            lambda tz=None: fixed_now if tz is None else fixed_now.replace(tzinfo=tz)
+        )
+        mock_datetime.fromisoformat = datetime.fromisoformat
+        mock_datetime.strptime = datetime.strptime
+        mock_datetime.combine = datetime.combine
+        mock_datetime.min = datetime.min
+
+        with patch(
+            "services.market_data_service.get_economic_calendar", autospec=True
+        ) as mock_cal:
+            mock_cal.return_value = [
+                {
+                    "event": "Valid US CPI",
+                    "impact": "high",
+                    "time": "2026-05-15T12:30:00Z",
+                    "country": "US",
+                },
+                {
+                    "event": "Invalid Empty CPI",
+                    "impact": "high",
+                    "time": "2026-05-15T13:00:00Z",
+                    "country": "",
+                },
+                {
+                    "event": "Invalid None CPI",
+                    "impact": "high",
+                    "time": "2026-05-15T13:30:00Z",
+                    "country": None,
+                },
+                {
+                    "event": "Invalid Type CPI",
+                    "impact": "high",
+                    "time": "2026-05-15T14:00:00Z",
+                    "country": 123,
+                },
+            ]
+
+            service = CalendarService()
+            events = await service.get_high_impact_events(days=7)
+
+    # Verify that only the Valid US CPI remains and all empty/invalid country ones are skipped
+    assert len(events) == 1
+    assert isinstance(events[0], EconomicEvent)
+    assert events[0].event == "Valid US CPI"
+    assert events[0].country == "US"
