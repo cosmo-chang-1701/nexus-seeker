@@ -153,10 +153,21 @@ async def test_dispatch_report_sends_each_block_as_separate_message():
     embed.add_field(name="區塊一", value="內容一", inline=False)
     embed.add_field(name="區塊二", value="內容二", inline=False)
 
+    mock_split = MagicMock(
+        return_value=[
+            discord.Embed(title="📊 測試報告 (1/2)", description="摘要").add_field(
+                name="區塊一", value="內容一", inline=False
+            ),
+            discord.Embed(title="📊 測試報告 (2/2)").add_field(
+                name="區塊二", value="內容二", inline=False
+            ),
+        ]
+    )
+
     with patch("database.get_all_user_ids", return_value=[1]), patch(
         "database.get_full_user_context",
         return_value=MagicMock(enable_analyst_agent=True),
-    ):
+    ), patch("cogs.analyst_agent.split_embed_by_fields", mock_split):
         await agent.dispatch_report(embed)
 
     assert bot.queue_dm.await_count == 2

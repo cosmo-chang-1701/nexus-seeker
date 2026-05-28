@@ -198,7 +198,7 @@ def test_split_embed_by_fields_creates_one_message_per_block():
         },
     )
 
-    split_embeds = split_embed_by_fields(embed)
+    split_embeds = split_embed_by_fields(embed, max_size=1)
 
     assert len(split_embeds) == len(embed.fields)
     assert split_embeds[0].description
