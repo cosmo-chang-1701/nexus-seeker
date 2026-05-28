@@ -122,8 +122,8 @@ async def test_bot_queue_dm_splits_large_embed(bot):
     with patch("bot.add_pending_notification") as mock_add:
         await bot.queue_dm(user_id, message="Original Message Text", embed=large_embed)
 
-        # 應該被拆分成 7 個獨立的欄位 Embed
-        assert mock_add.call_count == 7
+        # 應該被合併拆分成 2 個獨立的欄位 Embed (而非 7 個零碎的)
+        assert mock_add.call_count == 2
 
         # 檢查第一個通知
         first_args, _ = mock_add.call_args_list[0]
@@ -133,12 +133,14 @@ async def test_bot_queue_dm_splits_large_embed(bot):
         assert "Field 0" in first_args[2]["fields"][0]["name"]
 
         # 檢查後續通知，其 message 欄位應該為 None (避免重複發送)
-        for idx in range(1, 7):
-            args, _ = mock_add.call_args_list[idx]
-            assert args[0] == user_id
-            assert args[1] is None
-            assert args[2] is not None
-            assert f"Field {idx}" in args[2]["fields"][0]["name"]
+        second_args, _ = mock_add.call_args_list[1]
+        assert second_args[0] == user_id
+        assert second_args[1] is None
+        assert second_args[2] is not None
+        # 第二個通知應該包含後面剩餘的 fields
+        assert any(
+            f"Field {idx}" in second_args[2]["fields"][0]["name"] for idx in [5, 6]
+        )
 
 
 @pytest.mark.asyncio

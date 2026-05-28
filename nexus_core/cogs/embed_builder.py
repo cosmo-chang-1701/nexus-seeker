@@ -340,18 +340,63 @@ def _append_ai_report_fields(
     )
 
 
-def split_embed_by_fields(embed: discord.Embed) -> list[discord.Embed]:
-    """將多欄位報告拆成多則 Embed，避免單則訊息過長。"""
+def split_embed_by_fields(
+    embed: discord.Embed, max_size: int = 5000
+) -> list[discord.Embed]:
+    """將多欄位報告拆成多則 Embed，儘量合併欄位以防訊息過於零碎，且確保單則長度不超過 max_size。"""
     if len(embed.fields) <= 1:
         return [embed]
 
     base_payload = embed.to_dict()
     base_payload.pop("fields", None)
 
-    split_embeds: list[discord.Embed] = []
-    total = len(embed.fields)
+    def _get_base_len(include_desc: bool) -> int:
+        total = 0
+        title = base_payload.get("title")
+        if title:
+            total += len(title)
+        if include_desc:
+            desc = base_payload.get("description")
+            if desc:
+                total += len(desc)
+        footer = base_payload.get("footer")
+        if footer and footer.get("text"):
+            total += len(footer["text"])
+        author = base_payload.get("author")
+        if author and author.get("name"):
+            total += len(author["name"])
+        return total
 
-    for index, field in enumerate(embed.fields, start=1):
+    base_len_first = _get_base_len(include_desc=True)
+    base_len_subsequent = _get_base_len(include_desc=False)
+
+    groups: List[List[Any]] = []
+    current_group: List[Any] = []
+    current_len = 0
+
+    for field in embed.fields:
+        field_len = len(field.name or "") + len(field.value or "")
+        is_first = len(groups) == 0
+        base_len = base_len_first if is_first else base_len_subsequent
+
+        if current_group and (base_len + current_len + field_len > max_size):
+            groups.append(current_group)
+            current_group = [field]
+            current_len = field_len
+        else:
+            current_group.append(field)
+            current_len += field_len
+
+    if current_group:
+        groups.append(current_group)
+
+    if len(groups) <= 1:
+        return [embed]
+
+    split_embeds: list[discord.Embed] = []
+    total = len(groups)
+
+    for index, group in enumerate(groups, start=1):
         payload = dict(base_payload)
         title = payload.get("title")
         if title:
@@ -360,7 +405,10 @@ def split_embed_by_fields(embed: discord.Embed) -> list[discord.Embed]:
             payload.pop("description", None)
 
         split_embed = discord.Embed.from_dict(payload)
-        split_embed.add_field(name=field.name, value=field.value, inline=field.inline)
+        for field in group:
+            split_embed.add_field(
+                name=field.name, value=field.value, inline=field.inline
+            )
         split_embeds.append(split_embed)
 
     return split_embeds
