@@ -2525,9 +2525,70 @@ def create_watchlist_signal_embed(
         color=color,
         timestamp=datetime.now(timezone.utc),
     )
+    # Split the report body into three sections if it contains the standard headers
+    section_price = ""
+    section_defense = ""
+    section_sddm = ""
+
+    if (
+        "技術面與現價快照" in report_body
+        and "🛡️ 技術 / 防禦牆" in report_body
+        and "⚙️ SDDM / 對沖" in report_body
+    ):
+        lines = report_body.strip().split("\n")
+        clean_lines = []
+        for line in lines:
+            if line.strip() in ("```ansi", "```"):
+                continue
+            clean_lines.append(line)
+
+        sec1_lines = []
+        sec2_lines = []
+        sec3_lines = []
+
+        current_sec = 1
+        for line in clean_lines:
+            if "🛡️ 技術 / 防禦牆" in line:
+                current_sec = 2
+            elif "⚙️ SDDM / 對沖" in line:
+                current_sec = 3
+
+            # Skip the divider lines so that the three separate code blocks are clean
+            if "----------------------------------" in line:
+                continue
+
+            if current_sec == 1:
+                sec1_lines.append(line)
+            elif current_sec == 2:
+                sec2_lines.append(line)
+            elif current_sec == 3:
+                sec3_lines.append(line)
+
+        if sec1_lines:
+            section_price = "```ansi\n" + "\n".join(sec1_lines) + "\n```"
+        if sec2_lines:
+            section_defense = "```ansi\n" + "\n".join(sec2_lines) + "\n```"
+        if sec3_lines:
+            section_sddm = "```ansi\n" + "\n".join(sec3_lines) + "\n```"
+    else:
+        # Fallback to displaying all of it in the first field, and empty/placeholder in the others
+        section_price = report_body
+        section_defense = "```ansi\n 🛡️ 暫無防禦牆快照數據\n```"
+        section_sddm = "```ansi\n ⚙️ 暫無 SDDM / 對沖數據\n```"
+
     embed.add_field(
-        name="📊 技術 / 期權快照",
-        value=_safe_embed_field_value(report_body, "暫無快照"),
+        name="📊 技術與現價快照",
+        value=_safe_embed_field_value(section_price, "暫無快照"),
+        inline=False,
+    )
+    embed.add_field(
+        name="🛡️ 技術 / 防禦牆",
+        value=_safe_embed_field_value(section_defense, "暫無防禦牆"),
+        inline=False,
+    )
+    embed.add_field(
+        name="⚙️ SDDM / 對沖",
+        value=_safe_embed_field_value(section_sddm, "暫無對沖機制"),
         inline=False,
     )
 
