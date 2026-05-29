@@ -22,6 +22,7 @@ class TradeMetadata(BaseModel):
     expiry: str  # YYYY-MM-DD
     entry_price: float
     quantity: int
+    stock_cost: float = 0.0
     weighted_delta: float = 0.0
     theta: float = 0.0
     gamma: float = 0.0
