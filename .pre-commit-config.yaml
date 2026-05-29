@@ -18,12 +18,14 @@ repos:
         args: [ --fix ]
       - id: ruff-format
 
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.9.0
+  - repo: local
     hooks:
       - id: mypy
+        name: mypy
+        entry: mypy
         args: [--config-file=nexus_core/pyproject.toml, --ignore-missing-imports, --explicit-package-bases]
-        additional_dependencies: [pydantic>=2.0.0, types-requests, types-psutil]
+        language: system
+        types: [python]
         files: ^nexus_core/
 
   - repo: https://github.com/returntocorp/semgrep
