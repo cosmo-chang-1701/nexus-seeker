@@ -25,6 +25,8 @@ from services.reddit_service import get_reddit_context
 from market_analysis.psq_engine import analyze_psq
 from market_analysis.hedging import analyze_hedge_performance
 from market_analysis.sentiment_engine import SentimentEngine
+from market_analysis.intraday_pipeline import evaluate_watchlist_symbol
+from services import market_data_service
 from config import get_vix_tier
 from cogs.embed_builder import (
     create_ai_analysis_embed,
@@ -508,10 +510,119 @@ class AnalystAgent(commands.Cog):
             # 依據距離天數升序排序 (越近的排越前面)
             valid_earnings.sort(key=lambda x: x["days_left"])
 
-            # 建立符合原 Embed/LLM 要求的結構，限制最多前 10 個
+            # 建立符合原 Embed/LLM 要求的結構，限制最多前 10 個，並進行緊迫度分級優化
+            top_earnings = valid_earnings[:10]
+
+            # 緊迫度分級：僅對 2 天內發布財報的標的執行深度掃描與 PCR 計算，其餘使用輕量默認值
+            deep_scan_symbols = [
+                item["symbol"] for item in top_earnings if item["days_left"] <= 2
+            ]
+            light_scan_symbols = [
+                item["symbol"] for item in top_earnings if item["days_left"] > 2
+            ]
+
+            # 控制最大併發數，避免觸發 Finnhub / yfinance 的 Rate Limit
+            sem = asyncio.Semaphore(3)
+
+            async def deep_scan_symbol(sym):
+                async with sem:
+                    # evaluate_watchlist_symbol、calculate_pcr 與 get_company_profile 併行執行
+                    eval_task = evaluate_watchlist_symbol(sym)
+                    pcr_task = SentimentEngine.calculate_pcr(sym)
+                    profile_task = market_data_service.get_company_profile(sym)
+                    return await asyncio.gather(
+                        eval_task, pcr_task, profile_task, return_exceptions=True
+                    )
+
+            async def light_scan_symbol(sym):
+                async with sem:
+                    # 輕量級僅獲取公司行業板塊資訊
+                    profile_res = await market_data_service.get_company_profile(sym)
+                    return profile_res
+
+            # 執行非同步任務
+            deep_tasks = [deep_scan_symbol(sym) for sym in deep_scan_symbols]
+            deep_results_list = await asyncio.gather(
+                *deep_tasks, return_exceptions=True
+            )
+            deep_results_map = {}
+            for sym, res in zip(deep_scan_symbols, deep_results_list):
+                if isinstance(res, Exception) or not isinstance(res, (list, tuple)):
+                    deep_results_map[sym] = (None, {"pcr": 0.0, "state": "ERROR"}, {})
+                else:
+                    eval_res = res[0] if not isinstance(res[0], Exception) else None
+                    pcr_res = (
+                        res[1]
+                        if not isinstance(res[1], Exception)
+                        else {"pcr": 0.0, "state": "ERROR"}
+                    )
+                    prof_res = res[2] if not isinstance(res[2], Exception) else {}
+                    deep_results_map[sym] = (eval_res, pcr_res, prof_res)
+
+            light_tasks = [light_scan_symbol(sym) for sym in light_scan_symbols]
+            light_results_list = await asyncio.gather(
+                *light_tasks, return_exceptions=True
+            )
+            light_results_map = {}
+            for sym, res in zip(light_scan_symbols, light_results_list):
+                if isinstance(res, Exception):
+                    light_results_map[sym] = {}
+                else:
+                    light_results_map[sym] = res
+
             earnings_data = {}
-            for item in valid_earnings[:10]:
-                earnings_data[item["symbol"]] = [{"date": item["date"]}]
+            for item in top_earnings:
+                sym = item["symbol"]
+                date = item["date"]
+                days_left = item["days_left"]
+
+                # 建立基本量化上下文，修剪不必要欄位以減少 LLM Token 成本
+                metrics_payload = {
+                    "date": date,
+                    "days_left": days_left,
+                    "current_price": 0.0,
+                    "rsi_14": 50.0,
+                    "pe_ratio": None,
+                    "bias_ma20": 0.0,
+                    "iv_rank": 0.0,
+                    "option_skew": 0.0,
+                    "pcr": 0.0,
+                    "sector": "Unknown",
+                }
+
+                if sym in deep_results_map:
+                    eval_res, pcr_res, prof_res = deep_results_map[sym]
+                    metrics_payload.update(
+                        {
+                            "pcr": pcr_res.get("pcr", 0.0),
+                            "sector": prof_res.get("finnhubIndustry", "Unknown"),
+                        }
+                    )
+                    if eval_res is not None and eval_res.metrics is not None:
+                        m = eval_res.metrics
+                        metrics_payload.update(
+                            {
+                                "current_price": m.current_price,
+                                "rsi_14": m.rsi_14,
+                                "pe_ratio": m.pe_ratio,
+                                "bias_ma20": getattr(
+                                    m,
+                                    "bias_ma20",
+                                    (m.current_price / m.ma20 - 1.0) if m.ma20 else 0.0,
+                                ),
+                                "iv_rank": m.iv_rank,
+                                "option_skew": m.option_skew,
+                            }
+                        )
+                elif sym in light_results_map:
+                    prof_res = light_results_map[sym]
+                    metrics_payload.update(
+                        {
+                            "sector": prof_res.get("finnhubIndustry", "Unknown"),
+                        }
+                    )
+
+                earnings_data[sym] = [metrics_payload]
 
             # 並行獲取即將發布財報標的之新聞與 Reddit 情緒 (最多取前 2 個，以緊迫度排序)
             upcoming_symbols = [item["symbol"] for item in valid_earnings[:2]]
