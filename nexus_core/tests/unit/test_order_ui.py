@@ -285,8 +285,9 @@ async def test_order_panel_command(mock_interaction):
 
     await cog.order_panel.callback(cog, mock_interaction)
 
-    assert mock_interaction.response.send_message.called
-    kwargs = mock_interaction.response.send_message.call_args[1]
+    assert mock_interaction.response.defer.called
+    assert mock_interaction.followup.send.called
+    kwargs = mock_interaction.followup.send.call_args[1]
     embed = kwargs["embed"]
     view = kwargs["view"]
 
@@ -311,8 +312,9 @@ async def test_orders_list_command(mock_interaction, db_conn):
     cog = OrderUICog(bot)
     await cog.list_orders.callback(cog, mock_interaction)
 
-    assert mock_interaction.response.send_message.called
-    kwargs = mock_interaction.response.send_message.call_args[1]
+    assert mock_interaction.response.defer.called
+    assert mock_interaction.followup.send.called
+    kwargs = mock_interaction.followup.send.call_args[1]
     embed = kwargs["embed"]
     view = kwargs["view"]
 
@@ -339,8 +341,9 @@ async def test_telemetry_alert_and_alignment(mock_interaction, db_conn):
 
     # 1. 觸發警報面板
     await cog.telemetry_alert.callback(cog, mock_interaction)
-    assert mock_interaction.response.send_message.called
-    kwargs = mock_interaction.response.send_message.call_args[1]
+    assert mock_interaction.response.defer.called
+    assert mock_interaction.followup.send.called
+    kwargs = mock_interaction.followup.send.call_args[1]
     embed = kwargs["embed"]
     view = kwargs["view"]
     assert "對齊警報" in embed.title

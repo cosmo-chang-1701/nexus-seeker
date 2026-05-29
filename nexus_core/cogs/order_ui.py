@@ -505,15 +505,17 @@ class OrderUICog(commands.Cog):
 
     @app_commands.command(name="order_panel", description="喚起交易委託單設定面板")
     async def order_panel(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         embed = create_info_embed(
             title="📥 交易委託單設定面版",
             message="請由下方下拉選單中選擇您要建立的**訂單類型**，系統將自動彈出專屬設定表單。",
         )
         view = OrderSetupView()
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
     @app_commands.command(name="orders", description="列出目前所有活躍的待成交委託單")
     async def list_orders(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         orders = get_user_active_orders(interaction.user.id)
 
         if not orders:
@@ -521,7 +523,7 @@ class OrderUICog(commands.Cog):
                 title="📋 待成交委託單列表",
                 message="您目前沒有任何活躍的待成交委託單。可以使用 `/order_panel` 喚起面板新增。",
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
             return
 
         order_type_zh = {
@@ -562,16 +564,17 @@ class OrderUICog(commands.Cog):
             message="\n\n".join(lines),
         )
         view = OrderManagementView()
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
     @app_commands.command(
         name="telemetry_alert", description="[模擬] 喚起半小時心跳遙測價格偏離警報"
     )
     async def telemetry_alert(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         orders = get_user_active_orders(interaction.user.id)
 
         if not orders:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 embed=create_error_embed(
                     "❌ 您目前沒有任何活躍的待成交委託單，無法進行偏離度對齊分析。請先使用 `/order_panel` 建立委託。"
                 ),
@@ -607,7 +610,7 @@ class OrderUICog(commands.Cog):
             message=msg,
         )
         view = ApplyTelemetryView()
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
 
 async def setup(bot):
