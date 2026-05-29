@@ -14,7 +14,7 @@ def add_portfolio_record(
     expiry,
     entry_price,
     quantity,
-    stock_cost,
+    stock_cost=0.0,
     weighted_delta: float = 0.0,
     theta: float = 0.0,
     gamma: float = 0.0,
@@ -22,6 +22,21 @@ def add_portfolio_record(
 ):
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
+
+    # 🚀 自動抓取目前持倉數據以取得現貨成本 (如果傳入的為 0.0)
+    if stock_cost == 0.0:
+        symbol_upper = symbol.upper()
+        cursor.execute(
+            "SELECT metadata FROM assets WHERE user_id = ? AND symbol = ? AND context_type = 'HOLDING'",
+            (user_id, symbol_upper),
+        )
+        h_row = cursor.fetchone()
+        if h_row:
+            try:
+                m_hold = json.loads(h_row[0]) if h_row[0] else {}
+                stock_cost = float(m_hold.get("avg_cost", 0.0))
+            except Exception:
+                pass
 
     metadata = {
         "opt_type": opt_type,
@@ -53,6 +68,18 @@ def get_user_portfolio(user_id):
     """取得特定使用者的持倉"""
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
+
+    # 🚀 自動抓取該用戶的所有目前持倉數據 (HOLDING)
+    cursor.execute(
+        "SELECT symbol, metadata FROM assets WHERE user_id = ? AND context_type = 'HOLDING'",
+        (user_id,),
+    )
+    holding_map = {}
+    for h_row in cursor.fetchall():
+        sym, meta_json = h_row
+        m_hold = json.loads(meta_json) if meta_json else {}
+        holding_map[sym.upper()] = float(m_hold.get("avg_cost", 0.0))
+
     cursor.execute(
         "SELECT id, symbol, metadata FROM assets WHERE user_id = ? AND context_type = 'TRADE'",
         (user_id,),
@@ -61,6 +88,9 @@ def get_user_portfolio(user_id):
     for row in cursor.fetchall():
         asset_id, sym, meta_json = row
         m = json.loads(meta_json) if meta_json else {}
+        sym_upper = sym.upper()
+        # 🚀 優先從 HOLDING 抓取目前持倉成本，若無則 fallback
+        stock_cost = holding_map.get(sym_upper, m.get("stock_cost", 0.0))
         rows.append(
             (
                 asset_id,
@@ -70,7 +100,7 @@ def get_user_portfolio(user_id):
                 m.get("expiry"),
                 m.get("entry_price"),
                 m.get("quantity"),
-                m.get("stock_cost", 0.0),
+                stock_cost,
                 m.get("weighted_delta", 0.0),
                 m.get("theta", 0.0),
                 m.get("gamma", 0.0),
@@ -85,6 +115,17 @@ def get_all_portfolio():
     """取得全站所有持倉 (供背景排程使用)"""
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
+
+    # 🚀 自動抓取全站所有持倉數據 (HOLDING)
+    cursor.execute(
+        "SELECT user_id, symbol, metadata FROM assets WHERE context_type = 'HOLDING'"
+    )
+    holding_map = {}
+    for h_row in cursor.fetchall():
+        uid, sym, meta_json = h_row
+        m_hold = json.loads(meta_json) if meta_json else {}
+        holding_map[(uid, sym.upper())] = float(m_hold.get("avg_cost", 0.0))
+
     cursor.execute(
         "SELECT user_id, id, symbol, metadata FROM assets WHERE context_type = 'TRADE'"
     )
@@ -92,6 +133,9 @@ def get_all_portfolio():
     for row in cursor.fetchall():
         uid, asset_id, sym, meta_json = row
         m = json.loads(meta_json) if meta_json else {}
+        sym_upper = sym.upper()
+        # 🚀 優先從 HOLDING 抓取目前持倉成本，若無則 fallback
+        stock_cost = holding_map.get((uid, sym_upper), m.get("stock_cost", 0.0))
         rows.append(
             (
                 uid,
@@ -102,7 +146,7 @@ def get_all_portfolio():
                 m.get("expiry"),
                 m.get("entry_price"),
                 m.get("quantity"),
-                m.get("stock_cost", 0.0),
+                stock_cost,
                 m.get("weighted_delta", 0.0),
                 m.get("theta", 0.0),
                 m.get("gamma", 0.0),

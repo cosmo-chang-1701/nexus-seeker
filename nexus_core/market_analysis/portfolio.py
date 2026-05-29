@@ -293,6 +293,14 @@ async def refresh_portfolio_greeks(user_id: int = None, manager=None):
                 "div_yield": await market_data_service.get_dividend_yield(sym),
             }
 
+        # 🚀 構建 HOLDING 現貨成本 Map
+        holding_map = {}
+        for asset in assets_to_update:
+            if asset.context_type == ContextType.HOLDING:
+                holding_map[(asset.user_id, asset.symbol.upper())] = float(
+                    asset.metadata.get("avg_cost", 0.0)
+                )
+
         with manager._get_conn() as conn:
             cursor = conn.cursor()
             for asset in assets_to_update:
@@ -304,6 +312,10 @@ async def refresh_portfolio_greeks(user_id: int = None, manager=None):
 
                 if asset.context_type == ContextType.TRADE:
                     trade_meta = TradeMetadata(**asset.metadata)
+                    # 🚀 自動抓取目前持倉數據中的平均成本 (stock_cost)
+                    trade_meta.stock_cost = holding_map.get(
+                        (asset.user_id, asset.symbol.upper()), trade_meta.stock_cost
+                    )
                     mid, iv_raw = await asyncio.to_thread(
                         get_option_chain_mid_iv,
                         asset.symbol,

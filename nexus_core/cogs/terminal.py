@@ -290,14 +290,6 @@ class TerminalCog(commands.Cog):
         expiry="到期日 (YYYY-MM-DD)",
         entry_price="成交價格",
         quantity="口數",
-        stock_cost="持有現股平均成本 (可選)",
-        category="部位類別 (SPECULATIVE/HEDGE)",
-    )
-    @app_commands.choices(
-        category=[
-            app_commands.Choice(name="SPECULATIVE", value="SPECULATIVE"),
-            app_commands.Choice(name="HEDGE", value="HEDGE"),
-        ]
     )
     async def add_trade(
         self,
@@ -308,12 +300,9 @@ class TerminalCog(commands.Cog):
         expiry: str,
         entry_price: float,
         quantity: int,
-        stock_cost: float = 0.0,
-        category: app_commands.Choice[str] = None,
     ):
         symbol = symbol.upper()
         user_id = interaction.user.id
-        trade_category = category.value if category else "SPECULATIVE"
         await interaction.response.defer(ephemeral=True)
 
         # 🚀 驗證標的合法性
@@ -343,15 +332,40 @@ class TerminalCog(commands.Cog):
             )
             return
 
-        if not category and symbol == "SPY":
-            if quantity < 0 or (opt_type.value == "put" and quantity > 0):
-                trade_category = "HEDGE"
-
         try:
             from services.asset_manager import AssetManager
             from models.asset import Asset, ContextType
 
             manager = AssetManager()
+
+            # 🚀 自動抓取目前持倉數據以取得平均成本 (stock_cost) 與持倉量
+            assets = manager.get_assets(user_id, ContextType.HOLDING)
+            stock_cost = 0.0
+            holding_qty = 0.0
+            for a in assets:
+                if a.symbol == symbol:
+                    stock_cost = float(a.metadata.get("avg_cost", 0.0))
+                    holding_qty = float(a.metadata.get("quantity", 0.0))
+                    break
+
+            # 🚀 根據相關數據自動判定部位分類 (Auto-classify trade category)
+            is_market_etf = symbol in ("SPY", "QQQ", "IWM")
+            is_short_position = quantity < 0
+            is_long_put = opt_type.value == "put" and quantity > 0
+
+            # 備兌買權特徵 (Covered Call): 賣出 Call 且用戶持有足夠現貨 (HOLDING)
+            is_covered_call = False
+            if opt_type.value == "call" and quantity < 0:
+                needed_shares = abs(quantity) * 100
+                if holding_qty >= needed_shares:
+                    is_covered_call = True
+
+            if (
+                is_market_etf and (is_short_position or is_long_put)
+            ) or is_covered_call:
+                trade_category = "HEDGE"
+            else:
+                trade_category = "SPECULATIVE"
 
             trade_details = {
                 "opt_type": opt_type.value,
@@ -360,6 +374,7 @@ class TerminalCog(commands.Cog):
                 "entry_price": entry_price,
                 "quantity": quantity,
                 "category": trade_category,
+                "stock_cost": stock_cost,
             }
 
             asset = Asset(
