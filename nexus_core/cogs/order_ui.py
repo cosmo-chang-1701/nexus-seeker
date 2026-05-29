@@ -17,6 +17,13 @@ logger = logging.getLogger(__name__)
 # 1. 委託單新增 Modal
 # ==========================================
 class DynamicOrderModal(discord.ui.Modal):
+    ticker: discord.ui.TextInput
+    quantity: discord.ui.TextInput
+    validity: discord.ui.TextInput
+    limit_price: discord.ui.TextInput
+    stop_price: discord.ui.TextInput
+    trailing_value: discord.ui.TextInput
+
     def __init__(self, order_type: str, title: str):
         super().__init__(title=title)
         self.order_type = order_type
