@@ -121,12 +121,13 @@ async def test_calculate_telemetry_pricing_engine():
 @pytest.mark.asyncio
 async def test_dynamic_order_modal_on_submit_limit_success(mock_interaction, db_conn):
     """測試限價訂單 Modal 成功送出與資料庫寫入"""
-    modal = DynamicOrderModal(order_type="LIMIT", title="新增限價訂單")
+    modal = DynamicOrderModal(
+        order_type="LIMIT", title="新增限價訂單", validity_db="DAY"
+    )
 
     # 填充欄位資料
     modal.ticker._value = "NET "
     modal.quantity._value = " 100 "
-    modal.validity._value = " 當日有效 (DAY) "
     modal.limit_price._value = " 85.5 "
 
     await modal.on_submit(mock_interaction)
@@ -152,11 +153,12 @@ async def test_dynamic_order_modal_on_submit_limit_success(mock_interaction, db_
 @pytest.mark.asyncio
 async def test_dynamic_order_modal_validation_failure_quantity(mock_interaction):
     """測試數量欄位輸入非數字的驗證失敗"""
-    modal = DynamicOrderModal(order_type="LIMIT", title="新增限價訂單")
+    modal = DynamicOrderModal(
+        order_type="LIMIT", title="新增限價訂單", validity_db="DAY"
+    )
 
     modal.ticker._value = "AAPL"
     modal.quantity._value = "abc"  # 錯誤字串
-    modal.validity._value = "當日有效"
     modal.limit_price._value = "150.0"
 
     await modal.on_submit(mock_interaction)
@@ -171,11 +173,12 @@ async def test_dynamic_order_modal_validation_failure_quantity(mock_interaction)
 @pytest.mark.asyncio
 async def test_dynamic_order_modal_validation_failure_price(mock_interaction):
     """測試限價價格輸入非數字的驗證失敗"""
-    modal = DynamicOrderModal(order_type="LIMIT", title="新增限價訂單")
+    modal = DynamicOrderModal(
+        order_type="LIMIT", title="新增限價訂單", validity_db="DAY"
+    )
 
     modal.ticker._value = "AAPL"
     modal.quantity._value = "10"
-    modal.validity._value = "當日有效"
     modal.limit_price._value = "xyz"  # 錯誤字串
 
     await modal.on_submit(mock_interaction)
@@ -193,12 +196,13 @@ async def test_dynamic_order_modal_on_submit_trailing_pct_success(
 ):
     """測試百分比追蹤停損單的成功提交"""
     modal = DynamicOrderModal(
-        order_type="TRAILING_STOP_PCT", title="新增百分比追蹤停損單"
+        order_type="TRAILING_STOP_PCT",
+        title="新增百分比追蹤停損單",
+        validity_db="NIGHT",
     )
 
     modal.ticker._value = "HOOD"
     modal.quantity._value = "50"
-    modal.validity._value = "夜盤"
     modal.trailing_value._value = "8.5"
 
     await modal.on_submit(mock_interaction)
