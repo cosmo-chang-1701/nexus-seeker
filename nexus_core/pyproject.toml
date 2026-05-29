@@ -50,6 +50,7 @@ ignore_missing_imports = true
 explicit_package_bases = true
 mypy_path = "."
 no_implicit_optional = false
+exclude = ["build", "dist"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

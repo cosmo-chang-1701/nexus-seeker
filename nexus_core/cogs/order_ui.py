@@ -443,7 +443,8 @@ class OrderValiditySelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         selected = self.values[0]
-        self.view.selected_validity = selected
+        if self.view is not None:
+            setattr(self.view, "selected_validity", selected)
 
         # 更新下拉選單的 default 狀態，讓 UI 呈現已被選取的狀態
         for option in self.options:
@@ -504,7 +505,10 @@ class OrderSetupSelect(discord.ui.Select):
             "TRAILING_STOP_PCT": "新增追蹤停損單 (%)",
         }.get(order_type, "新增訂單")
 
-        validity = getattr(self.view, "selected_validity", "DAY")
+        validity = "DAY"
+        if self.view is not None:
+            validity = getattr(self.view, "selected_validity", "DAY")
+
         modal = DynamicOrderModal(
             order_type=order_type, title=modal_title, validity_db=validity
         )
