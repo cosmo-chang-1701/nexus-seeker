@@ -274,7 +274,14 @@ async def test_run_premarket_earnings_sorting_and_filtering():
         "cogs.analyst_agent.generate_analyst_report", new_callable=AsyncMock
     ) as mock_gen_report, patch(
         "cogs.analyst_agent.create_earnings_report_embed"
-    ) as mock_create_embed:
+    ) as mock_create_embed, patch(
+        "cogs.analyst_agent.evaluate_watchlist_symbol", new_callable=AsyncMock
+    ) as mock_eval_symbol, patch(
+        "cogs.analyst_agent.SentimentEngine.calculate_pcr", new_callable=AsyncMock
+    ) as mock_calc_pcr, patch(
+        "cogs.analyst_agent.market_data_service.get_company_profile",
+        new_callable=AsyncMock,
+    ) as mock_get_profile:
         mock_get_batch.return_value = mock_earnings
         mock_fetch_news.return_value = "News content"
         mock_fetch_reddit.return_value = "Reddit content"
@@ -282,6 +289,31 @@ async def test_run_premarket_earnings_sorting_and_filtering():
         mock_create_embed.return_value = discord.Embed(
             title="📊 Nexus Seeker 盤前財報與估值調整"
         )
+
+        # Define mock metrics for SYM_A to test successful data enrichment
+        mock_eval = MagicMock()
+        mock_eval.metrics = MagicMock(
+            current_price=150.0,
+            rsi_14=62.0,
+            pe_ratio=25.0,
+            bias_ma20=0.05,
+            iv_rank=85.0,
+            option_skew=-0.02,
+            option_skew_state="Bullish",
+            beta=1.1,
+            relative_strength_spy=1.05,
+            buy_zone_status="Buy Zone",
+            sell_zone_status="Hold",
+        )
+
+        async def mock_eval_side_effect(symbol):
+            if symbol == "SYM_A":
+                return mock_eval
+            return None
+
+        mock_eval_symbol.side_effect = mock_eval_side_effect
+        mock_calc_pcr.return_value = {"pcr": 1.2, "state": "偏向空頭"}
+        mock_get_profile.return_value = {"finnhubIndustry": "Semiconductors"}
 
         # Execute
         await agent.run_premarket_earnings()
@@ -293,6 +325,16 @@ async def test_run_premarket_earnings_sorting_and_filtering():
         # Verify get_symbol_earnings_batch was called with all symbols (order doesn't matter since it is a set)
         called_symbols = mock_get_batch.call_args[0][0]
         assert set(called_symbols) == {"SYM_A", "SYM_B", "SYM_C", "SYM_D"}
+
+        # Verify evaluate_watchlist_symbol and calculate_pcr were called in parallel ONLY for top deep scan symbols (days_left <= 2: SYM_D, SYM_A)
+        assert mock_eval_symbol.call_count == 2
+        eval_calls = [c[0][0] for c in mock_eval_symbol.call_args_list]
+        assert set(eval_calls) == {"SYM_D", "SYM_A"}
+
+        assert mock_calc_pcr.call_count == 2
+
+        # Verify get_company_profile was called for all 3 sorted symbols (deep + light scan)
+        assert mock_get_profile.call_count == 3
 
         # Verify generate_analyst_report was called with sorted list (max 10) and only within 14 days
         args, kwargs = mock_gen_report.call_args
@@ -306,6 +348,35 @@ async def test_run_premarket_earnings_sorting_and_filtering():
         assert len(upcoming) == 3
         # Should be ordered by closeness: SYM_D (1 day), SYM_A (2 days), SYM_C (5 days)
         assert upcoming == ["SYM_D", "SYM_A", "SYM_C"]
+
+        # Check data enrichment for SYM_A (successful deep scan fetch)
+        a_metrics = raw_data["upcoming_earnings"]["SYM_A"][0]
+        assert a_metrics["current_price"] == 150.0
+        assert a_metrics["rsi_14"] == 62.0
+        assert a_metrics["pe_ratio"] == 25.0
+        assert a_metrics["bias_ma20"] == 0.05
+        assert a_metrics["iv_rank"] == 85.0
+        assert a_metrics["option_skew"] == -0.02
+        assert a_metrics["pcr"] == 1.2
+        assert a_metrics["sector"] == "Semiconductors"
+
+        # Check data enrichment for SYM_D (graceful deep scan fallback)
+        d_metrics = raw_data["upcoming_earnings"]["SYM_D"][0]
+        assert d_metrics["current_price"] == 0.0
+        assert d_metrics["rsi_14"] == 50.0
+        assert d_metrics["pe_ratio"] is None
+        assert d_metrics["bias_ma20"] == 0.0
+        assert d_metrics["pcr"] == 1.2
+        assert d_metrics["sector"] == "Semiconductors"
+
+        # Check data enrichment for SYM_C (successful light scan)
+        c_metrics = raw_data["upcoming_earnings"]["SYM_C"][0]
+        assert c_metrics["current_price"] == 0.0
+        assert c_metrics["rsi_14"] == 50.0
+        assert c_metrics["pe_ratio"] is None
+        assert c_metrics["bias_ma20"] == 0.0
+        assert c_metrics["pcr"] == 0.0  # PCR skipped for light scan
+        assert c_metrics["sector"] == "Semiconductors"
 
         # Check sentiment scan targets (top 2 closest: SYM_D, SYM_A)
         assert mock_fetch_news.call_count == 2
