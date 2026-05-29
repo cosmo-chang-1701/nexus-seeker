@@ -4,7 +4,7 @@
 
 Nexus Seeker is a multi-tenant **Discord-first options risk-control and trading operations platform**. It combines technical structure, Black-Scholes-Merton pricing, Greeks-based portfolio risk, event-aware calendar defenses, and LLM-assisted structured commentary.
 
-Current released core version: **`1.6.41`**
+Current released core version: **`1.6.42`**
 
 The codebase is optimized for:
 
@@ -215,6 +215,38 @@ Important current behavior:
 
 ---
 
+## Active Order Management & Telemetry Alignment
+
+To support dynamic tactical order adjustments and "trap setting" for spot assets, the system features a dedicated SQLite state engine paired with a dynamic Discord modal setup pipeline and quantitative price alignment logic.
+
+### 1. Database Schema (`database/orders.py`)
+
+Pending orders are tracked using the `active_orders` table:
+- `user_id` (INTEGER) and `symbol` (TEXT)
+- `quantity` (REAL) and `order_type` (TEXT: `MARKET`, `LIMIT`, `STOP`, `STOP_LIMIT`, `TRAILING_STOP_USD`, `TRAILING_STOP_PCT`)
+- `validity` (TEXT: `DAY`, `EXT_DAY`, `NIGHT`, `GTC_90`)
+- `limit_price` (REAL), `stop_price` (REAL), and `trailing_value` (REAL)
+- SQLite schema migrations are managed chronologically under `database/migrations/`.
+
+### 2. UI & Interaction Layer (`cogs/order_ui.py`)
+
+Users manage setup, adjustment, and cancellation of pending orders directly via interactive Discord interfaces:
+- **Order Setup Panel (`/order_panel`)**: Populates a dynamic dropdown view. Selecting an order type triggers a customized `DynamicOrderModal` containing base fields (Symbol, Quantity, Validity) and conditional price fields (Limit, Stop, or Trailing values).
+- **Active Orders Listing (`/orders`)**: Displays current active orders in a detailed Traditional Chinese embed, equipped with:
+  - `❌ 取消委託 (Cancel Order)` button: Triggers `CancelOrderModal` for low-latency cancellation.
+  - `⚙️ 快速微調價格 (Quick Adjust)` button: Triggers `AdjustOrderModal` to quickly adjust pending limits/stops.
+- **Telemetry Price Alignment (`/telemetry_alert`)**: Implements dynamic telemetry price alignment alerts, offering:
+  - `⚡ 一鍵套用遙測建議價 (Apply Telemetry Price)` button: Automatically updates the prices of active orders to safer alignments matching the telemetry pricing engine's calculations.
+
+### 3. Telemetry Pricing Engine (`services/telemetry_pricing_engine.py`)
+
+The engine calculates recommended limit/stop pricing offsets along three operational vectors:
+1. **Option Flow & Gravity**: Gravity index offsets aligned with options Max Pain and downside fear Option Skew percentiles.
+2. **Statistical Volatility Boundaries**: Pullbacks driven by short-term IV spikes or crush, scaled by Expected Move (EM) limits.
+3. **Technical & Liquidity Anchors**: Support zone offsets aligned with previous close gap-fills and心理整數關卡 (Psychological round number levels, e.g., offset by `Round Level - 0.75`).
+
+---
+
 ## Notification and Delivery Layer
 
 `nexus_core/bot.py` owns the persistent DM queue.
@@ -269,15 +301,20 @@ Current repository rule:
 - `nexus_core/bot.py` — bot bootstrap, DM queue, service lifecycle
 - `nexus_core/cogs/trading.py` — active runtime scheduler and watchlist heartbeat sender
 - `nexus_core/cogs/analyst_agent.py` — analyst report scheduler and dispatcher
+- `nexus_core/cogs/order_ui.py` — active orders setting panel, list views, cancellation/adjustment modals, and telemetry alignment buttons
 - `nexus_core/cogs/embed_builder.py` — single source of truth for embeds
+- `nexus_core/database/orders.py` — active orders SQLite database state CRUD operations
+- `nexus_core/database/migrations/v038_add_active_orders.py` — migration registering the active_orders table in SQLite
 - `nexus_core/market_analysis/intraday_pipeline.py` — watchlist evaluation, option-plan logic, intraday engine helpers
 - `nexus_core/market_analysis/sentiment_engine.py` — skew / UOA / IV stack
 - `nexus_core/services/calendar_service.py` — shared event cache entrypoint
 - `nexus_core/services/llm_service.py` — structured LLM outputs and memory-safe degradation
 - `nexus_core/services/trading_service.py` — scan / report / validation data orchestration
+- `nexus_core/services/telemetry_pricing_engine.py` — dynamic telemetry pricing calculation covering Max Pain, EM, Skew, IV Spikes, and psychological round numbers
 - `nexus_core/tests/unit/test_intraday_pipeline.py` — heartbeat and phase-B gating tests
 - `nexus_core/tests/unit/test_embed_builder.py` — embed contract tests
 - `nexus_core/tests/unit/test_output_centralization.py` — embed-centralization enforcement
+- `nexus_core/tests/unit/test_order_ui.py` — unit tests for order UI, active order database, and telemetry pricing alignment
 
 ---
 
@@ -328,6 +365,7 @@ cd nexus_core
 docker compose run --rm nexus-seeker python -m pytest tests/unit/test_intraday_pipeline.py
 docker compose run --rm nexus-seeker python -m pytest tests/unit/test_embed_builder.py
 docker compose run --rm nexus-seeker python -m pytest tests/unit/test_output_centralization.py
+docker compose run --rm nexus-seeker python -m pytest tests/unit/test_order_ui.py
 ```
 
 ---

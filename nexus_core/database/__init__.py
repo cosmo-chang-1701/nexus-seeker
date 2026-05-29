@@ -44,6 +44,13 @@ from .virtual_trading import (
     update_virtual_trade_greeks,
 )
 from .financials import get_cached_financials, save_financials_cache, purge_old_cache
+from .orders import (
+    add_active_order,
+    get_user_active_orders,
+    get_all_active_orders,
+    delete_active_order,
+    update_active_order_price,
+)
 
 __all__ = [
     "run_migrations",
@@ -85,4 +92,9 @@ __all__ = [
     "get_cached_financials",
     "save_financials_cache",
     "purge_old_cache",
+    "add_active_order",
+    "get_user_active_orders",
+    "get_all_active_orders",
+    "delete_active_order",
+    "update_active_order_price",
 ]

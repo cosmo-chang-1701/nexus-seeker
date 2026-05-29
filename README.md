@@ -59,6 +59,9 @@ graph TD
 
 - **📡 主動式 Watchlist 心跳與動態買賣點演算**：開盤期間每 30 分鐘逐檔推送 watchlist 戰報，**並依據現價、RSI 與期權偏斜（Option Skew）自動演算未持倉標的的適合買入價與股數，以及已持倉標的的適合賣出價與減碼比例**，實現現貨與期權交易計畫的高度對稱，不必手動輪流查圖、查鏈。
 - **🧾 可執行期權合約建議與履約價對齊**：不只顯示訊號，還直接給出策略、腿位、strike、expiry、mid、建議口數與最大風險。**特別是期權策略的履約價（Strike）會與計算出的現股適合買入/賣出價位高度對齊**（例如：在適合買入價附近賣出 Cash-Secured Put 承接，或在適合賣出價附近建立 Covered Call 鎖利），實現股期雙向立體化操盤。
+- **📥 交易委託單設定面板與動態彈出表單**：提供 `/order_panel` 交易委託單設定面板，使用者在下拉選單選擇訂單類型（市價、限價、停損價、停損限價、追蹤停損 $ 或 %）後，系統將動態彈出對應的輸入表單（Modal），整合輸入驗證與資料庫持久化（DAY、EXT_DAY、NIGHT、GTC_90 等有效期限映射）。
+- **📋 待成交委託單管理與交互操作按鈕**：使用 `/orders` 列出當前活躍的待成交委託單，並附帶 `❌ 取消委託` 與 `⚙️ 快速微調價格` 交互按鈕，可直接於 Discord 彈出對應微調 Modal 進行對應的資料庫異動，實現低延遲快速互動。
+- **⚡ 盤中每半小時 Telemetry 價格對齊防線**：提供 `/telemetry_alert` 偏離度對齊模擬，或與每半小時心跳（Heartbeat）整合，動態結合「期權籌碼引力面（Max Pain）」、「數學統計邊界面（Expected Move、IV Spike）」、「技術與流動性結構面（心理整數關卡、Gap Fill）」演算出最佳安全對齊價，並附加 `⚡ 一鍵套用遙測建議價` 按鈕，點擊後自動安全調降/調升限價，防守財務大後方。
 - **🧠 LLM 輔助分析與 Skew 解讀**：自動進行 IV 泡沫與多空背離數學交叉驗證，並生成 100% 繁中金融級分析。
 - **📊 盤前 IV 情緒與波動率掃描優化**：在非交易時段（盤前/盤後）執行 `/skew_scan` 時，系統會自動切換至盤前優化工作流，利用資料庫前日收盤歷史 IV（或歷史波動率代理）進行計算並附帶 `[盤前/前日收盤]` 標記；若完全無數據則以 `--%` 佔位符優雅顯示，避免回傳誤導性的 `0.0%` 或錯誤。
 - **🗓️ 事件風險內建防禦**：財報、CPI、FOMC、NFP 會先經過事件快取與風控邏輯，避免在錯誤時機硬開倉。
@@ -182,6 +185,7 @@ cd nexus_core
 docker compose run --rm nexus-seeker python -m pytest tests/unit/test_intraday_pipeline.py
 docker compose run --rm nexus-seeker python -m pytest tests/unit/test_embed_builder.py
 docker compose run --rm nexus-seeker python -m pytest tests/unit/test_output_centralization.py
+docker compose run --rm nexus-seeker python -m pytest tests/unit/test_order_ui.py
 ```
 
 ### 貢獻流程
