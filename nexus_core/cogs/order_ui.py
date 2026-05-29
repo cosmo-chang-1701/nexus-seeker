@@ -19,14 +19,14 @@ logger = logging.getLogger(__name__)
 class DynamicOrderModal(discord.ui.Modal):
     ticker: discord.ui.TextInput
     quantity: discord.ui.TextInput
-    validity: discord.ui.TextInput
     limit_price: discord.ui.TextInput
     stop_price: discord.ui.TextInput
     trailing_value: discord.ui.TextInput
 
-    def __init__(self, order_type: str, title: str):
+    def __init__(self, order_type: str, title: str, validity_db: str):
         super().__init__(title=title)
         self.order_type = order_type
+        self.validity_db = validity_db
 
         # 基礎必要欄位 (所有訂單類型皆有)
         self.ticker = discord.ui.TextInput(
@@ -40,15 +40,9 @@ class DynamicOrderModal(discord.ui.Modal):
             placeholder="例如: 100",
             required=True,
         )
-        self.validity = discord.ui.TextInput(
-            label="有效期限 (Time In Force)",
-            placeholder="填寫: 當日有效 / 盤前當日盤後 / 夜盤 / 90天有效",
-            required=True,
-        )
 
         self.add_item(self.ticker)
         self.add_item(self.quantity)
-        self.add_item(self.validity)
 
         # 條件式動態欄位注入
         if self.order_type == "LIMIT":
@@ -155,45 +149,26 @@ class DynamicOrderModal(discord.ui.Modal):
                 )
                 return
 
-        # 3. 映射有效期限到 DB Enum strings: ['DAY', 'EXT_DAY', 'NIGHT', 'GTC_90']
-        validity_input = self.validity.value.strip().lower()
-        validity_map = {
-            "當日有效": "DAY",
-            "day": "DAY",
-            "盤前當日盤後": "EXT_DAY",
-            "ext_day": "EXT_DAY",
-            "夜盤": "NIGHT",
-            "night": "NIGHT",
-            "90天有效": "GTC_90",
-            "gtc_90": "GTC_90",
-        }
-
-        validity_db = "DAY"  # 預設
-        for k, v in validity_map.items():
-            if k in validity_input:
-                validity_db = v
-                break
-
-        # 4. 寫入資料庫
+        # 3. 寫入資料庫
         try:
             order_id = add_active_order(
                 user_id=interaction.user.id,
                 symbol=self.ticker.value.strip().upper(),
                 quantity=qty,
                 order_type=self.order_type,
-                validity=validity_db,
+                validity=self.validity_db,
                 limit_price=limit_val,
                 stop_price=stop_val,
                 trailing_value=trailing_val,
             )
 
-            # 5. 回傳 Traditional Chinese Embed 成功訊息
+            # 4. 回傳 Traditional Chinese Embed 成功訊息
             validity_zh = {
                 "DAY": "當日有效 (DAY)",
                 "EXT_DAY": "盤前 + 當日 + 盤後 (EXT_DAY)",
                 "NIGHT": "夜盤 (NIGHT)",
                 "GTC_90": "90 天有效 (GTC_90)",
-            }.get(validity_db, validity_db)
+            }.get(self.validity_db, self.validity_db)
 
             order_type_zh = {
                 "MARKET": "市價單",
@@ -434,6 +409,49 @@ class ApplyTelemetryView(discord.ui.View):
 # ==========================================
 # 4. 前端委託單面版下拉選單
 # ==========================================
+class OrderValiditySelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(
+                label="當日有效 (DAY)",
+                value="DAY",
+                description="常規盤收盤自動失效",
+                default=True,
+            ),
+            discord.SelectOption(
+                label="盤前 + 當日 + 盤後 (EXT_DAY)",
+                value="EXT_DAY",
+                description="盤前、常規盤、盤後皆有效",
+            ),
+            discord.SelectOption(
+                label="夜盤 (NIGHT)",
+                value="NIGHT",
+                description="夜盤時段有效",
+            ),
+            discord.SelectOption(
+                label="90 天有效 (GTC_90)",
+                value="GTC_90",
+                description="90 天長期有效 (Good 'Til Cancelled)",
+            ),
+        ]
+        super().__init__(
+            placeholder="選擇有效期限 (預設為當日有效)...",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        selected = self.values[0]
+        self.view.selected_validity = selected
+
+        # 更新下拉選單的 default 狀態，讓 UI 呈現已被選取的狀態
+        for option in self.options:
+            option.default = option.value == selected
+
+        await interaction.response.edit_message(view=self.view)
+
+
 class OrderSetupSelect(discord.ui.Select):
     def __init__(self):
         options = [
@@ -486,13 +504,18 @@ class OrderSetupSelect(discord.ui.Select):
             "TRAILING_STOP_PCT": "新增追蹤停損單 (%)",
         }.get(order_type, "新增訂單")
 
-        modal = DynamicOrderModal(order_type=order_type, title=modal_title)
+        validity = getattr(self.view, "selected_validity", "DAY")
+        modal = DynamicOrderModal(
+            order_type=order_type, title=modal_title, validity_db=validity
+        )
         await interaction.response.send_modal(modal)
 
 
 class OrderSetupView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=180)
+        self.selected_validity = "DAY"
+        self.add_item(OrderValiditySelect())
         self.add_item(OrderSetupSelect())
 
 
