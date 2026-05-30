@@ -1827,13 +1827,20 @@ class IntradayScanPipeline:
                             output.sddm_route == "SPEAR"
                             or "偏離" in output.vanna_hedging_instruction
                         ):
-                            from cogs.embed_builder import create_intraday_scan_embed
+                            import database
 
-                            if self._should_send_intraday_scan_report(
-                                uid, ticker, phase, now_ny.date()
+                            if database.is_notification_enabled(
+                                uid, "intraday_decision_scan"
                             ):
-                                embed = create_intraday_scan_embed(output)
-                                await self.bot.queue_dm(uid, embed=embed)
+                                from cogs.embed_builder import (
+                                    create_intraday_scan_embed,
+                                )
+
+                                if self._should_send_intraday_scan_report(
+                                    uid, ticker, phase, now_ny.date()
+                                ):
+                                    embed = create_intraday_scan_embed(output)
+                                    await self.bot.queue_dm(uid, embed=embed)
                                 self._mark_intraday_scan_report_sent(
                                     uid, ticker, now_ny.date()
                                 )

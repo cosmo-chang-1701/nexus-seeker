@@ -287,6 +287,13 @@ class HedgeMonitorService:
         alert_id,
         poly_snapshot=None,
     ):
+        import database
+
+        if not database.is_notification_enabled(user_id, "global_vol_hedge_alert"):
+            logger.info(
+                f"使用者 {user_id} 已關閉 global_vol_hedge_alert，略過組合對沖警報。"
+            )
+            return
         tier = get_vix_tier(vix)
         embed = create_hedge_alert_embed(
             vix=vix,

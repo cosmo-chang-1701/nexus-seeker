@@ -51,6 +51,12 @@ from .orders import (
     delete_active_order,
     update_active_order_price,
 )
+from .notifications import (
+    get_user_notification_settings,
+    set_user_notification_setting,
+    set_all_user_notification_settings,
+    is_notification_enabled,
+)
 
 __all__ = [
     "run_migrations",
@@ -97,4 +103,8 @@ __all__ = [
     "get_all_active_orders",
     "delete_active_order",
     "update_active_order_price",
+    "get_user_notification_settings",
+    "set_user_notification_setting",
+    "set_all_user_notification_settings",
+    "is_notification_enabled",
 ]

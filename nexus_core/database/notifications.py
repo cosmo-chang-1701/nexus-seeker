@@ -76,3 +76,118 @@ def get_pending_count() -> int:
             return cursor.fetchone()[0]
     except Exception:
         return 0
+
+
+# ============================================================================
+# 🔔 使用者自訂通知開關 (Notification Toggles)
+# ============================================================================
+
+ALL_NOTIFICATION_KEYS = [
+    # 定時與掃描背景通知 (Scheduled & Scan)
+    "watchlist_heartbeat",
+    "pre_market_macro",
+    "pre_market_earnings",
+    "intraday_execution_guide",
+    "intraday_decision_scan",
+    "post_market_risk",
+    "post_market_ai",
+    "post_market_sector_flow",
+    "next_day_strategy",
+    "weekly_vtr_report",
+    # 即時風險與事件警報 (Real-time & Events)
+    "profit_lock_alert",
+    "gamma_fragility_alert",
+    "ditm_transition_alert",
+    "vtr_settlement_notice",
+    "ddp_cheap_vol_alert",
+    "proactive_event_alert",
+    "global_vol_hedge_alert",
+    "polymarket_whale_alert",
+]
+
+
+def get_user_notification_settings(user_id: int) -> dict[str, bool]:
+    """獲取使用者的所有通知開啟狀態，預設皆為 True"""
+    settings = {key: True for key in ALL_NOTIFICATION_KEYS}
+    try:
+        with sqlite3.connect(config.DB_NAME) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT notification_key, enabled
+                FROM user_notification_settings
+                WHERE user_id = ?
+            """,
+                (user_id,),
+            )
+            rows = cursor.fetchall()
+            for key, val in rows:
+                if key in settings:
+                    settings[key] = bool(val)
+    except Exception as e:
+        logger.error(f"讀取使用者通知設定失敗 (UID: {user_id}): {e}")
+    return settings
+
+
+def set_user_notification_setting(user_id: int, key: str, enabled: bool):
+    """新增或更新單一通知設定"""
+    if key not in ALL_NOTIFICATION_KEYS:
+        logger.warning(f"未知通知 key: {key}")
+        return
+    try:
+        val = 1 if enabled else 0
+        with sqlite3.connect(config.DB_NAME) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO user_notification_settings (user_id, notification_key, enabled)
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id, notification_key) DO UPDATE SET enabled = excluded.enabled
+            """,
+                (user_id, key, val),
+            )
+            conn.commit()
+    except Exception as e:
+        logger.error(f"儲存使用者通知設定失敗 (UID: {user_id}, Key: {key}): {e}")
+
+
+def set_all_user_notification_settings(user_id: int, enabled: bool):
+    """一鍵開啟或關閉所有通知項目"""
+    try:
+        val = 1 if enabled else 0
+        with sqlite3.connect(config.DB_NAME) as conn:
+            cursor = conn.cursor()
+            for key in ALL_NOTIFICATION_KEYS:
+                cursor.execute(
+                    """
+                    INSERT INTO user_notification_settings (user_id, notification_key, enabled)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(user_id, notification_key) DO UPDATE SET enabled = excluded.enabled
+                """,
+                    (user_id, key, val),
+                )
+            conn.commit()
+    except Exception as e:
+        logger.error(f"一鍵更新所有通知設定失敗 (UID: {user_id}): {e}")
+
+
+def is_notification_enabled(user_id: int, key: str) -> bool:
+    """快速檢查特定通知是否開啟"""
+    if key not in ALL_NOTIFICATION_KEYS:
+        return True
+    try:
+        with sqlite3.connect(config.DB_NAME) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT enabled FROM user_notification_settings
+                WHERE user_id = ? AND notification_key = ?
+            """,
+                (user_id, key),
+            )
+            row = cursor.fetchone()
+            if row is not None:
+                return bool(row[0])
+    except Exception as e:
+        logger.error(f"檢查通知狀態失敗 (UID: {user_id}, Key: {key}): {e}")
+    return True
