@@ -170,9 +170,7 @@ class TradingService:
             skew_val = skew_res.get("skew", 0.0) / 100.0  # 轉為小數
 
             # 偵測 UOA
-            from market_data_service import get_option_uoa
-
-            uoa_list = await get_option_uoa(symbol)
+            uoa_list = await SentimentEngine.detect_uoa(symbol)
             uoa_detected = len(uoa_list) > 0
 
             # 計算相對強度 (Relative Strength)

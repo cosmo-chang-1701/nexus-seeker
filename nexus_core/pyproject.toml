@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nexus-core"
-version = "1.6.48"
+version = "1.6.49"
 description = "Nexus Seeker Core Bot and Market Analysis"
 requires-python = ">=3.10"
 dependencies = [
@@ -46,11 +46,29 @@ warn_unused_configs = true
 disallow_untyped_defs = false
 disallow_incomplete_defs = false
 check_untyped_defs = false
-ignore_missing_imports = true
+ignore_missing_imports = false
 explicit_package_bases = true
-mypy_path = "."
+mypy_path = ".:nexus_core"
 no_implicit_optional = false
 exclude = ["build", "dist"]
+
+[[tool.mypy.overrides]]
+module = [
+    "yfinance",
+    "pandas_ta.*",
+    "py_vollib.*",
+    "pandas_market_calendars.*",
+    "finnhub.*",
+    "aiolimiter.*",
+    "pandas.*",
+    "websockets.*",
+    "numpy.*",
+    "openai.*",
+    "discord.*",
+    "dotenv.*",
+    "psutil.*"
+]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -1443,7 +1443,7 @@ class NotificationSettingsModal(discord.ui.Modal):
         self.label = label
         self.view = view
 
-        self.input_field = discord.ui.TextInput(
+        self.input_field: discord.ui.TextInput = discord.ui.TextInput(
             label=f"請輸入新的數值 (目前: {current_value})",
             placeholder=placeholder,
             default=str(current_value),
@@ -1505,7 +1505,9 @@ class NotificationSettingsModal(discord.ui.Modal):
             await interaction.response.edit_message(embed=embed, view=self.view)
         else:
             await interaction.response.send_message(
-                embed=create_info_embed("✅ 設定已成功更新！", title="系統資訊"),
+                embed=create_info_embed(
+                    title="系統資訊", message="✅ 設定已成功更新！"
+                ),
                 ephemeral=True,
             )
 
@@ -1643,11 +1645,13 @@ class NotificationSettingsView(discord.ui.View):
         self.add_item(btn_disable_all)
 
     async def on_select_callback(self, interaction: discord.Interaction):
+        if interaction.data is None or not isinstance(interaction.data, dict):
+            return
         select_values = interaction.data.get("values")
-        if not select_values:
+        if not select_values or not isinstance(select_values, list):
             return
 
-        key = select_values[0]
+        key = str(select_values[0])
         ctx = database.get_full_user_context(self.user_id)
 
         # 1. 處理 Polymarket 的非開關設定 (Modal)
@@ -1781,7 +1785,7 @@ class AccountSettingsModal(discord.ui.Modal):
         self.label = label
         self.view = view
 
-        self.input_field = discord.ui.TextInput(
+        self.input_field: discord.ui.TextInput = discord.ui.TextInput(
             label=f"請輸入新的數值 (目前: {current_value})",
             placeholder=placeholder,
             default=str(current_value),
@@ -1871,7 +1875,9 @@ class AccountSettingsModal(discord.ui.Modal):
             await interaction.response.edit_message(embed=embed, view=self.view)
         else:
             await interaction.response.send_message(
-                embed=create_info_embed("✅ 設定已成功更新！", title="系統資訊"),
+                embed=create_info_embed(
+                    title="系統資訊", message="✅ 設定已成功更新！"
+                ),
                 ephemeral=True,
             )
 
@@ -1926,11 +1932,13 @@ class AccountSettingsView(discord.ui.View):
         self.add_item(select)
 
     async def on_select_callback(self, interaction: discord.Interaction):
+        if interaction.data is None or not isinstance(interaction.data, dict):
+            return
         select_values = interaction.data.get("values")
-        if not select_values:
+        if not select_values or not isinstance(select_values, list):
             return
 
-        key = select_values[0]
+        key = str(select_values[0])
         ctx = database.get_full_user_context(self.user_id)
 
         # 針對布林值，直接切換狀態
