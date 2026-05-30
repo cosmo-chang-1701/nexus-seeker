@@ -87,11 +87,11 @@ class AnalystAgent(commands.Cog):
                 logger.info("🤖 [Analyst Pre-Market] 啟動盤前巨觀與財報掃描...")
                 macro_report = await self.run_macro_scan()
                 if macro_report:
-                    await self.dispatch_report(macro_report)
+                    await self.dispatch_report(macro_report, "pre_market_macro")
 
                 earnings_report = await self.run_premarket_earnings()
                 if earnings_report:
-                    await self.dispatch_report(earnings_report)
+                    await self.dispatch_report(earnings_report, "pre_market_earnings")
             except Exception as e:
                 logger.error(f"Analyst Pre-Market loop error: {e}")
 
@@ -123,7 +123,9 @@ class AnalystAgent(commands.Cog):
                 )
                 await asyncio.sleep(min(sleep_secs, 3600))  # 最多睡一小時再檢查一次
 
-    async def dispatch_report(self, report_content: discord.Embed):
+    async def dispatch_report(
+        self, report_content: discord.Embed, notification_key: str = None
+    ):
         """
         將報告發送給所有啟用了 Analyst Agent 的用戶。
         """
@@ -134,14 +136,19 @@ class AnalystAgent(commands.Cog):
         user_ids = database.get_all_user_ids()
         dispatched_count = 0
         for uid in user_ids:
-            ctx = database.get_full_user_context(uid)
-            if ctx.enable_analyst_agent:
-                try:
-                    for embed in report_embeds:
-                        await self.bot.queue_dm(uid, embed=embed)
-                        dispatched_count += 1
-                except Exception as e:
-                    logger.error(f"Failed to dispatch report to {uid}: {e}")
+            if notification_key and not database.is_notification_enabled(
+                uid, notification_key
+            ):
+                logger.info(
+                    f"使用者 {uid} 已關閉 {notification_key} 訂閱，略過本次推送。"
+                )
+                continue
+            try:
+                for embed in report_embeds:
+                    await self.bot.queue_dm(uid, embed=embed)
+                    dispatched_count += 1
+            except Exception as e:
+                logger.error(f"Failed to dispatch report to {uid}: {e}")
         logger.info(f"Dispatched report to {dispatched_count} users.")
 
     async def dispatch_intraday_guide(self):
@@ -211,9 +218,9 @@ class AnalystAgent(commands.Cog):
         dispatched_count = 0
 
         for uid in user_ids:
-            ctx = database.get_full_user_context(uid)
-            if not ctx.enable_analyst_agent:
+            if not database.is_notification_enabled(uid, "intraday_execution_guide"):
                 continue
+            ctx = database.get_full_user_context(uid)
 
             if is_memory_gated:
                 embed = create_intraday_execution_guide_embed(
@@ -326,12 +333,12 @@ class AnalystAgent(commands.Cog):
 
                 sector_report = await self.run_sector_flow_report()
                 if sector_report:
-                    await self.dispatch_report(sector_report)
+                    await self.dispatch_report(sector_report, "post_market_sector_flow")
 
                 next_day_report = await self.run_next_day_strategy()
                 if next_day_report:
                     embed = create_next_day_strategy_embed(next_day_report)
-                    await self.dispatch_report(embed)
+                    await self.dispatch_report(embed, "next_day_strategy")
             except Exception as e:
                 logger.error(f"Analyst Post-Market loop error: {e}")
 

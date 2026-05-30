@@ -4,7 +4,7 @@
 
 Nexus Seeker is a multi-tenant **Discord-first options risk-control and trading operations platform**. It combines technical structure, Black-Scholes-Merton pricing, Greeks-based portfolio risk, event-aware calendar defenses, and LLM-assisted structured commentary.
 
-Current released core version: **`1.6.47`**
+Current released core version: **`1.6.48`**
 
 The codebase is optimized for:
 
@@ -253,6 +253,49 @@ The engine calculates recommended limit/stop pricing offsets along three operati
 
 ---
 
+## Interactive Configurations & Notification Preferences Center
+
+To provide seamless configurations and avoid parameter-heavy slash command interfaces, the platform employs a fully interactive settings architecture. It separates core account metrics from alert settings, utilizes Discord Views/Modals for dynamic input, and preserves backward compatibility for automated tests.
+
+### 1. Parameter Segregation & Database Schema
+Configurations are strictly segregated into two functional areas to maximize separation of concerns:
+- **Core Account Settings (`/settings`)**: Tracks high-level financial parameters saved in the `user_settings` table:
+  - `capital` (Total capital, must be `> 0`)
+  - `risk_limit` (Base risk percentage limit, bounded between `1.0` and `50.0`)
+  - `enable_vtr` (GhostTrader Virtual Trading Room toggler)
+  - `enable_psq_watchlist` (PowerSqueeze watch tracker toggler)
+  - `monthly_expense` (Monthly survival expense for runway metrics)
+  - `tax_reserve_rate` (Tax reserve ratio, bounded between `0.0` and `1.0`)
+  - `cash_reserve` (Cash reserve value for runway calculation)
+- **Notification Preferences (`/notif_settings`)**: Manages individual toggles stored in a key-value style `user_notification_settings` table (designed with composite primary key `(user_id, notification_key)` for infinite schema-less extensibility).
+- **Polymarket Settings Migration**: To keep `/settings` focused entirely on portfolio financial metrics, Polymarket monitoring preferences (whale alert toggler `polymarket_whale_alert`, threshold `polymarket_threshold`, AI analysis switch `polymarket_use_llm`, and slippage threshold `polymarket_slippage`) are migrated to `/notif_settings` under their own dedicated selector.
+
+### 2. UI Component Pipeline (`cogs/terminal.py`)
+Both `/settings` and `/notif_settings` utilize ephemeral Discord Views. Interactive flows are built as follows:
+- **Boolean Switches & Toggles**: Selecting a boolean setting (e.g., `enable_vtr` or notification toggles) instantly flips the state in the SQLite database, triggers `.refresh_items()` to regenerate the select choices (with state emojis: `🟢` for ON, `🔴` for OFF), and edits the active Discord message with the updated embed.
+- **Dynamic Text Input Modals**: Selecting a numeric field triggers a Discord Modal popup (`AccountSettingsModal` or `NotificationSettingsModal`).
+  - **Client-Side Validation & Sanitization**: The Modal's `on_submit()` performs rigorous validation. E.g., verifying numerical bounds, verifying `capital > 0`, and sanitizing user inputs (such as automatically dividing percentages if a user enters `20` instead of `0.20` for `tax_reserve_rate`).
+  - **View Refreshing**: On successful validation and persistence, the modal dynamically triggers a re-draw on the parent View to refresh the dashboard instantly without sending extra message blocks.
+- **Global Preferences Control**: `/notif_settings` features global helper buttons `⚡ 全部開啟 (Enable All)` and `💤 全部關閉 (Disable All)` to turn all 18+ alert switches on or off in a single batch query.
+
+### 3. Integration Test Compatibility Design
+Discord slash command callbacks in `discord.app_commands.Command` are read-only. To allow the slash command to be parameter-free for Discord UI users while retaining fully-parameterized programmatic execution for integration tests, we dynamically wrap the command's private `_callback` reference during `TerminalCog` initialization:
+```python
+async def compat_callback(cog, interaction, **kwargs):
+    return await cog._update_settings_impl(interaction, **kwargs)
+self.update_settings._callback = compat_callback
+```
+This elegant shim dynamically routes test-driven calls passing keyword arguments directly to the database writer, while standard user invocations cleanly trigger the interactive `AccountSettingsView`.
+
+### 4. Output Centralization
+To adhere to output centralization rules and prevent `test_output_centralization.py` failures:
+- Neither cogs, views, nor modals construct `discord.Embed` objects directly.
+- The entire presentation layer is centralized under `cogs/embed_builder.py` using standard wrappers:
+  - `create_account_settings_embed(details_list: list[str]) -> discord.Embed`
+  - `create_notification_settings_embed(scheduled_list: list[str], realtime_list: list[str], polymarket_list: list[str]) -> discord.Embed`
+
+---
+
 ## Notification and Delivery Layer
 
 `nexus_core/bot.py` owns the persistent DM queue.
@@ -317,10 +360,14 @@ Current repository rule:
 - `nexus_core/services/llm_service.py` — structured LLM outputs and memory-safe degradation
 - `nexus_core/services/trading_service.py` — scan / report / validation data orchestration
 - `nexus_core/services/telemetry_pricing_engine.py` — dynamic telemetry pricing calculation covering Max Pain, EM, Skew, IV Spikes, and psychological round numbers
+- `nexus_core/database/notifications.py` — custom user notification preferences database operations
+- `nexus_core/database/migrations/v039_add_notification_toggles.py` — migration registering the user_notification_settings table in SQLite
 - `nexus_core/tests/unit/test_intraday_pipeline.py` — heartbeat and phase-B gating tests
 - `nexus_core/tests/unit/test_embed_builder.py` — embed contract tests
 - `nexus_core/tests/unit/test_output_centralization.py` — embed-centralization enforcement
 - `nexus_core/tests/unit/test_order_ui.py` — unit tests for order UI, active order database, and telemetry pricing alignment
+- `nexus_core/tests/unit/test_settings_interactive.py` — unit tests for interactive settings view and modals
+- `nexus_core/tests/unit/test_notification_toggles.py` — unit tests for notification preferences database toggles and views
 
 ---
 
@@ -375,6 +422,8 @@ docker compose run --rm nexus-seeker python -m pytest tests/unit/test_intraday_p
 docker compose run --rm nexus-seeker python -m pytest tests/unit/test_embed_builder.py
 docker compose run --rm nexus-seeker python -m pytest tests/unit/test_output_centralization.py
 docker compose run --rm nexus-seeker python -m pytest tests/unit/test_order_ui.py
+docker compose run --rm nexus-seeker python -m pytest tests/unit/test_settings_interactive.py
+docker compose run --rm nexus-seeker python -m pytest tests/unit/test_notification_toggles.py
 ```
 
 ---

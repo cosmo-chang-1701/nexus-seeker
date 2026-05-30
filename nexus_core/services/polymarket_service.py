@@ -704,6 +704,13 @@ class PolymarketService:
         """
         封裝 Discord Embed (專業分析師格式) 並排入私訊佇列
         """
+        import database
+
+        if not database.is_notification_enabled(user_id, "polymarket_whale_alert"):
+            logger.info(
+                f"使用者 {user_id} 已關閉 polymarket_whale_alert，略過巨鯨交易警報。"
+            )
+            return
         details = self._resolve_trade_details(trade, market_info)
         win_rate = details["p_yes"] * 100
 

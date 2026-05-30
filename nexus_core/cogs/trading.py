@@ -120,12 +120,14 @@ class SchedulerCog(commands.Cog):
             for event in risk_events:
                 uid = event["uid"]
                 if event["type"] == "PROFIT_LOCK":
-                    embed = create_profit_lock_alert_embed(event)
-                    await self.bot.queue_dm(uid, embed=embed)
+                    if database.is_notification_enabled(uid, "profit_lock_alert"):
+                        embed = create_profit_lock_alert_embed(event)
+                        await self.bot.queue_dm(uid, embed=embed)
 
                 elif event["type"] == "GAMMA_FRAGILITY":
-                    embed = create_gamma_fragility_embed(event)
-                    await self.bot.queue_dm(uid, embed=embed)
+                    if database.is_notification_enabled(uid, "gamma_fragility_alert"):
+                        embed = create_gamma_fragility_embed(event)
+                        await self.bot.queue_dm(uid, embed=embed)
 
         except Exception as e:
             logger.error(f"真實持倉風險審計錯誤: {e}")
@@ -151,6 +153,8 @@ class SchedulerCog(commands.Cog):
 
         for uid in unique_users:
             try:
+                if not database.is_notification_enabled(uid, "weekly_vtr_report"):
+                    continue
                 stats = await GhostTrader.get_vtr_performance_stats(uid)
                 if stats["total_trades"] > 0:
                     user = await self.bot.fetch_user(uid)
@@ -181,6 +185,8 @@ class SchedulerCog(commands.Cog):
             )
 
             for uid, data in results.items():
+                if not database.is_notification_enabled(uid, "pre_market_earnings"):
+                    continue
                 user = await self.bot.fetch_user(uid)
                 if user:
                     embed = create_pre_market_earnings_embed(
@@ -444,14 +450,18 @@ class SchedulerCog(commands.Cog):
             try:
                 # 如果有 AI 報告，先發送 AI 報告 Embed
                 if ai_enabled and "ai_report" in locals() and ai_report:
-                    ai_embed = create_ai_analysis_embed(ai_report)
-                    await self.bot.queue_dm(uid, embed=ai_embed)
-                    logger.info(f"盤後 AI 深度分析 Embed 已排入 DM 佇列，uid={uid}")
+                    if database.is_notification_enabled(uid, "post_market_ai"):
+                        ai_embed = create_ai_analysis_embed(ai_report)
+                        await self.bot.queue_dm(uid, embed=ai_embed)
+                        logger.info(f"盤後 AI 深度分析 Embed 已排入 DM 佇列，uid={uid}")
 
                 # 發送標準風險結算報告 Embed
-                await self.bot.queue_dm(uid, embed=embed)
-                stats["users_queued"] += 1
-                logger.info(f"盤後風險結算報告已排入 DM 佇列，uid={uid}")
+                if database.is_notification_enabled(uid, "post_market_risk"):
+                    await self.bot.queue_dm(uid, embed=embed)
+                    stats["users_queued"] += 1
+                    logger.info(f"盤後風險結算報告已排入 DM 佇列，uid={uid}")
+                else:
+                    logger.info(f"盤後風險結算報告已被使用者關閉，跳過，uid={uid}")
             except discord.Forbidden:
                 stats["users_skipped"] += 1
                 logger.warning(f"無法發送私訊給用戶 {uid}")
@@ -636,6 +646,11 @@ class SchedulerCog(commands.Cog):
                 user_symbols[uid].append(sym)
 
         for uid, symbols in user_symbols.items():
+            if not database.is_notification_enabled(uid, "watchlist_heartbeat"):
+                logger.info(
+                    f"使用者 {uid} 已關閉 watchlist_heartbeat 訂閱，略過心跳推送。"
+                )
+                continue
             user_context = database.get_full_user_context(uid)
             option_alert_mode = int(getattr(user_context, "option_alert_mode", 1))
             user_holdings = {
@@ -795,6 +810,10 @@ class SchedulerCog(commands.Cog):
                     # ⚠️ 這裡原本會發給全站用戶，現在修正為僅發給 Watchlist 中有該標的且符合模式的用戶
                     for uid, watch_sym, _ in all_watchlists:
                         if watch_sym == sym:
+                            if not database.is_notification_enabled(
+                                uid, "ddp_cheap_vol_alert"
+                            ):
+                                continue
                             ctx = database.get_full_user_context(uid)
                             if await self._should_send_alert(
                                 uid, sym, ctx.option_alert_mode
@@ -806,6 +825,8 @@ class SchedulerCog(commands.Cog):
             # 🚀 2. 執行 IV 優勢掃描 (Volatility Strategist)
             uids = sorted(list(set(row[0] for row in all_watchlists)))
             for uid in uids:
+                if not database.is_notification_enabled(uid, "ddp_cheap_vol_alert"):
+                    continue
                 user_context = database.get_full_user_context(uid)
                 user_watch = [row[1] for row in all_watchlists if row[0] == uid]
                 vol_results = await self.trading_service.run_iv_opportunity_scan(
@@ -1032,39 +1053,41 @@ class SchedulerCog(commands.Cog):
                         * res["spy_price"]
                         / res["user_capital"]
                     ) * 100
-                    embed = create_ditm_transition_alert_embed(
-                        symbol=trade_info["symbol"],
-                        exit_reason=exit_reason,
-                        action_taken=action_taken,
-                        pnl=float(trade_info["pnl"]),
-                        exposure_pct=exposure_pct,
-                        hedge=hedge,
-                    )
-                    await self.bot.queue_dm(uid, embed=embed)
-                else:
-                    status_icon = (
-                        "🔄 [轉倉完成]"
-                        if trade_info["status"] == "ROLLED"
-                        else "🔴 [自動平倉]"
-                    )
-                    exposure_pct = (
-                        res["current_total_delta"]
-                        * res["spy_price"]
-                        / res["user_capital"]
-                    ) * 100
-
-                    await self.bot.queue_dm(
-                        uid,
-                        embed=create_vtr_settlement_notice_embed(
-                            status_icon=status_icon,
+                    if database.is_notification_enabled(uid, "ditm_transition_alert"):
+                        embed = create_ditm_transition_alert_embed(
                             symbol=trade_info["symbol"],
+                            exit_reason=exit_reason,
+                            action_taken=action_taken,
                             pnl=float(trade_info["pnl"]),
                             exposure_pct=exposure_pct,
-                            regime=res.get("regime"),
-                            target_delta=res.get("target_delta"),
                             hedge=hedge,
-                        ),
-                    )
+                        )
+                        await self.bot.queue_dm(uid, embed=embed)
+                else:
+                    if database.is_notification_enabled(uid, "vtr_settlement_notice"):
+                        status_icon = (
+                            "🔄 [轉倉完成]"
+                            if trade_info["status"] == "ROLLED"
+                            else "🔴 [自動平倉]"
+                        )
+                        exposure_pct = (
+                            res["current_total_delta"]
+                            * res["spy_price"]
+                            / res["user_capital"]
+                        ) * 100
+
+                        await self.bot.queue_dm(
+                            uid,
+                            embed=create_vtr_settlement_notice_embed(
+                                status_icon=status_icon,
+                                symbol=trade_info["symbol"],
+                                pnl=float(trade_info["pnl"]),
+                                exposure_pct=exposure_pct,
+                                regime=res.get("regime"),
+                                target_delta=res.get("target_delta"),
+                                hedge=hedge,
+                            ),
+                        )
 
         except Exception as e:
             logger.error(f"VTR 對沖連動任務錯誤: {e}")
