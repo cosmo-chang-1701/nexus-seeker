@@ -22,7 +22,7 @@ repos:
     rev: v1.9.0
     hooks:
       - id: mypy
-        args: [--config-file=nexus_core/pyproject.toml, --ignore-missing-imports, --explicit-package-bases]
+        args: [--config-file=nexus_core/pyproject.toml, --explicit-package-bases]
         additional_dependencies: [pydantic>=2.13.4, types-requests, types-psutil]
         files: ^nexus_core/
 

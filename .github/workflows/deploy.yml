@@ -40,7 +40,7 @@ jobs:
       - name: 🔍 Run Static Analysis (Mypy)
         run: |
           cd nexus_core
-          mypy . --config-file pyproject.toml --ignore-missing-imports
+          mypy . --config-file pyproject.toml
 
       - name: 🧪 Run Tests (Pytest)
         run: |
