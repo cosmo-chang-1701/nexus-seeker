@@ -241,15 +241,18 @@ Users manage setup, adjustment, and cancellation of pending orders directly via 
 - **Active Orders Listing (`/orders`)**: Displays current active orders in a detailed Traditional Chinese embed, equipped with:
   - `❌ 取消委託 (Cancel Order)` button: Triggers `CancelOrderModal` for low-latency cancellation.
   - `⚙️ 快速微調價格 (Quick Adjust)` button: Triggers `AdjustOrderModal` to quickly adjust pending limits/stops.
-- **Telemetry Price Alignment (`/telemetry_alert`)**: Implements dynamic telemetry price alignment alerts, offering:
-  - `⚡ 一鍵套用遙測建議價 (Apply Telemetry Price)` button: Automatically updates the prices of active orders to safer alignments matching the telemetry pricing engine's calculations.
+- **Telemetry Price & Size Alignment (`/telemetry_alert`)**: Implements dynamic telemetry price and size alignment alerts, offering:
+  - `⚡ 一鍵套用遙測建議價 (Apply Telemetry Price)` button: Automatically updates **both** the price and the quantity/shares of active orders to safer alignments in SQLite, matching the telemetry pricing engine's latest calculations. It features built-in `[⚠️ Tail Risk Mitigation]` log notification if size downscaling was triggered.
 
 ### 3. Telemetry Pricing Engine (`services/telemetry_pricing_engine.py`)
 
 The engine calculates recommended limit/stop pricing offsets along three operational vectors:
-1. **Option Flow & Gravity**: Gravity index offsets aligned with options Max Pain and downside fear Option Skew percentiles.
-2. **Statistical Volatility Boundaries**: Pullbacks driven by short-term IV spikes or crush, scaled by Expected Move (EM) limits.
+1. **Option Flow & Gravity**:
+   - **Max Pain Migration**: Gravity index offsets aligned with options Max Pain migrations.
+   - **Extreme Skew Tail Risk Linkage**: When options Skew percentile hits extreme tails (`skew_percentile < 0.05` or `skew_percentile > 0.95`), the engine shifts the pending order's price **1.5% closer to the spot price** (intercepting the shadow of a panic/squeeze) and dynamically applies a **defensive multiplier of `0.75`** to the quantity/shares (`[⚠️ Tail Risk Mitigation]`) to protect capital liquidity and prevent reservoir depletion.
+2. **Statistical Volatility Boundaries**: Pullbacks driven by short-term IV spikes (3% price buffer pullback) or crush (floor to EM Lower Bound), scaled by Expected Move (EM) limits.
 3. **Technical & Liquidity Anchors**: Support zone offsets aligned with previous close gap-fills and心理整數關卡 (Psychological round number levels, e.g., offset by `Round Level - 0.75`).
+
 
 ---
 

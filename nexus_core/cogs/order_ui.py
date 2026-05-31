@@ -364,9 +364,11 @@ class ApplyTelemetryView(discord.ui.View):
                     else order["trailing_value"]
                 )
             )
+            original_qty = float(order.get("quantity") or 1.0)
 
-            # 模擬盤中行情遙測參數：IV 突發暴噴 55% vs 歷史 35%
-            optimal_price, logs = await calculate_telemetry_price(
+            # 模擬盤中行情遙測參數：若 skew_percentile 觸發極端，則會調整數量為 75%
+            # 我們在這裡模擬 skew_percentile 為 0.98，以便在模擬過程中能觸發並展示此機制
+            optimal_price, optimal_qty, logs = await calculate_telemetry_price(
                 symbol=symbol,
                 base_price=current_price,
                 spot_price=current_price * 1.02,
@@ -374,17 +376,21 @@ class ApplyTelemetryView(discord.ui.View):
                 hist_iv=0.35,
                 max_pain=100.0,
                 prev_max_pain=100.0,
-                skew_percentile=0.5,
+                skew_percentile=0.98,  # 觸發極端偏斜以展示倉位控管連結
                 prev_close=current_price,
+                base_quantity=original_qty,
             )
 
-            if optimal_price != current_price:
-                update_active_order_price(order["id"], optimal_price)
+            if optimal_price != current_price or optimal_qty != original_qty:
+                update_active_order_price(order["id"], optimal_price, optimal_qty)
                 updated_count += 1
+                qty_change_msg = ""
+                if optimal_qty < original_qty:
+                    qty_change_msg = f" (數量自 {original_qty} 調降至 {optimal_qty:.2f} 股 [⚠️ Tail Risk Mitigation])"
                 details.append(
                     f"• **委託單 ID `{order['id']}` ({symbol})**:\n"
                     f"  - 原有價格: `${current_price:.2f}`\n"
-                    f"  - 調整後安全建議價: `${optimal_price:.2f}` (IV 暴噴，向下修補 3%)\n"
+                    f"  - 調整後安全建議價: `${optimal_price:.2f}`{qty_change_msg}\n"
                 )
 
         if updated_count > 0:
@@ -609,12 +615,14 @@ class OrderUICog(commands.Cog):
             )
             return
 
-        # 模擬情境：市場 IV 突發暴噴，原有的掛單與預期波動率 (Expected Move) 下限偏離
+        # 模擬情境：市場極端 Skew 尾部風險，原有的掛單與預期波動率 (Expected Move) 下限偏離
         # 顯示警報 Embed
         msg = (
-            "⚠️ **【動態掛單偏離度警報】**\n"
-            "偵測到美股市場短線隱含波動率 (IV) 劇烈放大，導致您的待成交限價單面臨砸盤被穿風險：\n\n"
+            "⚠️ **【動態掛單偏離度與尾部風險警報】**\n"
+            "偵測到美股市場短線隱含波動率 (IV) 劇烈放大，且期權偏斜（Skew）指標進入極端異常區間：\n\n"
         )
+
+        from services.telemetry_pricing_engine import calculate_telemetry_price
 
         for o in orders:
             current_price = (
@@ -622,15 +630,34 @@ class OrderUICog(commands.Cog):
                 if o["limit_price"] > 0
                 else (o["stop_price"] if o["stop_price"] > 0 else o["trailing_value"])
             )
-            suggested_price = current_price * 0.97
-            msg += (
-                f"• **標的 `{o['symbol']}` (ID `{o['id']}`)**:\n"
-                f"  - 當前掛單價格: `${current_price:.2f}`\n"
-                f"  - 遙測最佳防線價: `${suggested_price:.2f}` (IV 暴噴，預期震盪 EM 下移)\n"
-                f"  - **狀態**: ⚠️ 偏離度過高，面臨被擊穿風險\n\n"
+            original_qty = float(o.get("quantity") or 1.0)
+
+            # 使用模擬的極端偏斜百分比 (0.98) 調用定價引擎，驗證價格與數量雙向調整
+            suggested_price, suggested_qty, logs = await calculate_telemetry_price(
+                symbol=o["symbol"],
+                base_price=current_price,
+                spot_price=current_price * 1.02,
+                iv=0.55,
+                hist_iv=0.35,
+                max_pain=100.0,
+                prev_max_pain=100.0,
+                skew_percentile=0.98,  # 觸發極端偏斜
+                prev_close=current_price,
+                base_quantity=original_qty,
             )
 
-        msg += "💡 **建議操作**：請點擊下方綠色按鈕「一鍵套用遙測建議價」，系統將自動安全調降您的委託限價以防守大後方。"
+            size_down_warning = ""
+            if suggested_qty < original_qty:
+                size_down_warning = "\n  - **[⚠️ Tail Risk Mitigation]** Extreme Skew Tail Risk detected. Intercepting price adjusted closer to spot; order size scaled down to 75% for asset protection."
+
+            msg += (
+                f"• **標的 `{o['symbol']}` (ID `{o['id']}`)**:\n"
+                f"  - 當前掛單價格: `${current_price:.2f}` (數量: {original_qty})\n"
+                f"  - 遙測最佳防線價: `${suggested_price:.2f}` (數量: {suggested_qty:.2f})\n"
+                f"  - **狀態**: ⚠️ 偏離度與尾部風險過高，面臨被擊穿風險{size_down_warning}\n\n"
+            )
+
+        msg += "💡 **建議操作**：請點擊下方綠色按鈕「一鍵套用遙測建議價」，系統將自動調整您的委託價格並下調掛單股數以防守大後方。"
 
         embed = create_info_embed(
             title="📡 待成交委託單 - 盤中每半小時 telemetry 對齊警報",

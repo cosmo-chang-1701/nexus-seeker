@@ -15,14 +15,16 @@ async def calculate_telemetry_price(
     skew_percentile: float,
     days_to_expiration: float = 7.0,
     prev_close: float = 0.0,
-) -> tuple[float, list[str]]:
+    base_quantity: float = 1.0,
+) -> tuple[float, float, list[str]]:
     """
-    計算最佳「左側現股捕獸夾」遙測訂價。
-    回傳: (最佳價格, 決策日誌列表)
+    計算最佳「左側現股捕獸夾」遙測訂價，並將倉位控管動態連結至極端期權流指標。
+    回傳: (最佳價格, 最佳股數, 決策日誌列表)
     """
     price = base_price
     logs = []
     symbol = symbol.upper()
+    sizing_multiplier = 1.0
 
     # 1. 期權籌碼引力面 (Option Flow & Gravity)
     # 最大痛點位移
@@ -35,9 +37,17 @@ async def calculate_telemetry_price(
 
     # 期權偏斜與情緒背離
     if skew_percentile < 0.05 or skew_percentile > 0.95:
-        price = price * 1.015
+        # 將價格調整至現價的 1.5% 處以捕捉恐慌/軋空盤影線
+        if spot_price > price:
+            price = spot_price * 0.985
+        else:
+            price = spot_price * 1.015
+
+        # 連結優化：將分配預算減至 75%，防止激進攔截時資金過快枯竭
+        sizing_multiplier = 0.75
         logs.append(
-            f"📐 期權偏斜異常 (分位點 {skew_percentile*100:.1f}%)：市場情緒單邊極度扭曲，價格向現價逼近 1.5% 至 ${price:.2f} 以主動攔截恐慌盤。"
+            f"[⚠️ Tail Risk Mitigation] Extreme Skew Tail Risk detected (Percentile {skew_percentile*100:.1f}%). "
+            f"Intercepting price adjusted closer to spot (${price:.2f}); order size scaled down to 75% for asset protection."
         )
 
     # 2. 數學統計邊界面 (Statistical Boundaries & Volatility)
@@ -81,4 +91,12 @@ async def calculate_telemetry_price(
             )
             break
 
-    return price, logs
+    # 計算最終股數，確保數量不小於 1
+    final_quantity = max(
+        1.0 if isinstance(base_quantity, float) else 1,
+        base_quantity * sizing_multiplier,
+    )
+    if isinstance(base_quantity, int):
+        final_quantity = int(final_quantity)
+
+    return round(price, 2), final_quantity, logs

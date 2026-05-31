@@ -76,7 +76,7 @@ async def test_calculate_telemetry_pricing_engine():
     """測試「捕獸夾」遙測訂價引擎的三大維度決策樹算法"""
 
     # 維度一：最大痛點上移
-    price_pain, logs_pain = await calculate_telemetry_price(
+    price_pain, qty_pain, logs_pain = await calculate_telemetry_price(
         symbol="AAPL",
         base_price=100.0,
         spot_price=100.0,
@@ -87,10 +87,11 @@ async def test_calculate_telemetry_pricing_engine():
         skew_percentile=0.5,
     )
     assert price_pain == 120.0  # 100 * (120/100)
+    assert qty_pain == 1.0
     assert any("最大痛點位移" in log for log in logs_pain)
 
     # 維度二：IV 暴噴工作流 (Pull back 3%)
-    price_spike, logs_spike = await calculate_telemetry_price(
+    price_spike, qty_spike, logs_spike = await calculate_telemetry_price(
         symbol="AAPL",
         base_price=100.0,
         spot_price=100.0,
@@ -101,10 +102,11 @@ async def test_calculate_telemetry_pricing_engine():
         skew_percentile=0.5,
     )
     assert price_spike == 97.0  # 100 * 0.97
+    assert qty_spike == 1.0
     assert any("IV 暴噴警報" in log for log in logs_spike)
 
     # 維度三：整數心理鐵壁防禦 ($100.5 -> $99.25)
-    price_round, logs_round = await calculate_telemetry_price(
+    price_round, qty_round, logs_round = await calculate_telemetry_price(
         symbol="AAPL",
         base_price=100.5,  # 接近 100.0 的整數大關
         spot_price=100.5,
@@ -115,7 +117,25 @@ async def test_calculate_telemetry_pricing_engine():
         skew_percentile=0.5,
     )
     assert price_round == 99.25  # 100 - 0.75
+    assert qty_round == 1.0
     assert any("整數心理大關防禦" in log for log in logs_round)
+
+    # 新增測試：極端 Skew 尾部風險與倉位調整聯動 (Dimension 1 Option Flow & Gravity Linkage)
+    price_skew, qty_skew, logs_skew = await calculate_telemetry_price(
+        symbol="AAPL",
+        base_price=120.0,
+        spot_price=120.0,
+        iv=0.3,
+        hist_iv=0.3,
+        max_pain=120.0,
+        prev_max_pain=120.0,
+        skew_percentile=0.98,  # 觸發極端偏斜
+        base_quantity=100.0,
+    )
+    # spot_price (120.0) 偏近 1.5% -> 因為 spot_price <= price (120.0 == 120.0), 所以 price = 120.0 * 1.015 = 121.8
+    assert price_skew == 121.8
+    assert qty_skew == 75.0  # 100.0 * 0.75
+    assert any("Extreme Skew Tail Risk detected" in log for log in logs_skew)
 
 
 @pytest.mark.asyncio
@@ -363,10 +383,11 @@ async def test_telemetry_alert_and_alignment(mock_interaction, db_conn):
     assert mock_btn_interaction.response.defer.called
     assert mock_btn_interaction.followup.send.called
 
-    # 驗證資料庫已被下調 3% (100 -> 97)
+    # 驗證資料庫已被調整：價格調整為 97.46，數量調降至 75% 即 15.0 股
     orders = get_user_active_orders(user_id)
     assert len(orders) == 1
-    assert orders[0]["limit_price"] == 97.0
+    assert orders[0]["limit_price"] == 97.46
+    assert orders[0]["quantity"] == 15.0
 
 
 @pytest.mark.asyncio
