@@ -231,6 +231,11 @@ class AssetManager:
                 )
                 conn.commit()
                 return True
+            except sqlite3.IntegrityError as e:
+                logger.warning(
+                    f"Add asset unique constraint triggered (already exists): {e}"
+                )
+                return False
             except Exception as e:
                 logger.error(f"Add asset error: {e}")
                 return False
