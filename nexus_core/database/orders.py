@@ -77,21 +77,37 @@ def delete_active_order(order_id: int) -> bool:
     return changes > 0
 
 
-def update_active_order_price(order_id: int, new_price: float) -> bool:
-    """更新委託單價格 (包含 limit_price, stop_price, trailing_value 等)"""
+def update_active_order_price(
+    order_id: int, new_price: float, new_quantity: float | None = None
+) -> bool:
+    """更新委託單價格 (包含 limit_price, stop_price, trailing_value 等) 以及可選的數量"""
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
-    cursor.execute(
-        """
-        UPDATE active_orders
-        SET limit_price = CASE WHEN order_type IN ('LIMIT', 'STOP_LIMIT') THEN ? ELSE limit_price END,
-            stop_price = CASE WHEN order_type IN ('STOP', 'STOP_LIMIT') THEN ? ELSE stop_price END,
-            trailing_value = CASE WHEN order_type IN ('TRAILING_STOP_USD', 'TRAILING_STOP_PCT') THEN ? ELSE trailing_value END,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-        """,
-        (new_price, new_price, new_price, order_id),
-    )
+    if new_quantity is not None:
+        cursor.execute(
+            """
+            UPDATE active_orders
+            SET limit_price = CASE WHEN order_type IN ('LIMIT', 'STOP_LIMIT') THEN ? ELSE limit_price END,
+                stop_price = CASE WHEN order_type IN ('STOP', 'STOP_LIMIT') THEN ? ELSE stop_price END,
+                trailing_value = CASE WHEN order_type IN ('TRAILING_STOP_USD', 'TRAILING_STOP_PCT') THEN ? ELSE trailing_value END,
+                quantity = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (new_price, new_price, new_price, new_quantity, order_id),
+        )
+    else:
+        cursor.execute(
+            """
+            UPDATE active_orders
+            SET limit_price = CASE WHEN order_type IN ('LIMIT', 'STOP_LIMIT') THEN ? ELSE limit_price END,
+                stop_price = CASE WHEN order_type IN ('STOP', 'STOP_LIMIT') THEN ? ELSE stop_price END,
+                trailing_value = CASE WHEN order_type IN ('TRAILING_STOP_USD', 'TRAILING_STOP_PCT') THEN ? ELSE trailing_value END,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (new_price, new_price, new_price, order_id),
+        )
     changes = cursor.rowcount
     conn.commit()
     conn.close()
