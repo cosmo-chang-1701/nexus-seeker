@@ -816,10 +816,13 @@ class OrderUICog(commands.Cog):
 
         # 模擬情境：市場極端 Skew 尾部風險，原有的掛單與預期波動率 (Expected Move) 下限偏離
         # 顯示警報 Embed
-        msg = (
+        msg_header = (
             "⚠️ **【動態掛單偏離度與尾部風險警報】**\n"
             "偵測到美股市場短線隱含波動率 (IV) 劇烈放大，且期權偏斜（Skew）指標進入極端異常區間：\n\n"
         )
+        msg_footer = "\n💡 **建議操作**：請點擊下方綠色按鈕「一鍵套用遙測建議價」，系統將自動調整您的委託價格並下調掛單股數以防守大後方。"
+        msg_body = ""
+        truncated = False
 
         from services.telemetry_pricing_engine import calculate_telemetry_price
 
@@ -849,14 +852,26 @@ class OrderUICog(commands.Cog):
             if suggested_qty < original_qty:
                 size_down_warning = "\n  - **[⚠️ Tail Risk Mitigation]** Extreme Skew Tail Risk detected. Intercepting price adjusted closer to spot; order size scaled down to 75% for asset protection."
 
-            msg += (
+            order_msg = (
                 f"• **標的 `{o['symbol']}` (ID `{o['id']}`)**:\n"
                 f"  - 當前掛單價格: `${current_price:.2f}` (數量: {original_qty})\n"
                 f"  - 遙測最佳防線價: `${suggested_price:.2f}` (數量: {suggested_qty:.2f})\n"
                 f"  - **狀態**: ⚠️ 偏離度與尾部風險過高，面臨被擊穿風險{size_down_warning}\n\n"
             )
 
-        msg += "💡 **建議操作**：請點擊下方綠色按鈕「一鍵套用遙測建議價」，系統將自動調整您的委託價格並下調掛單股數以防守大後方。"
+            if (
+                len(msg_header) + len(msg_body) + len(order_msg) + len(msg_footer)
+                > 4000
+            ):
+                truncated = True
+                break
+
+            msg_body += order_msg
+
+        if truncated:
+            msg_body += "⚠️ *(由於您的活躍委託單數量較多，部分標的之偏離度警報已被安全省略，請至 `/orders` 查看完整列表)*\n"
+
+        msg = msg_header + msg_body + msg_footer
 
         embed = create_info_embed(
             title="📡 待成交委託單 - 盤中每半小時 telemetry 對齊警報",

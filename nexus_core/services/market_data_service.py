@@ -63,7 +63,7 @@ async def _execute_api_call(func, *args, **kwargs) -> Any:
     base_delay = 10.0
 
     for attempt in range(max_retries + 1):
-        # 1. 檢查並等待全局冷卻時間
+        # 1. 第一層快速檢查：等待全局冷卻時間（快速過濾）
         now = time.time()
         if now < _rate_limit_until:
             wait_time = _rate_limit_until - now
@@ -71,6 +71,15 @@ async def _execute_api_call(func, *args, **kwargs) -> Any:
             await asyncio.sleep(wait_time)
 
         async with _limiter:
+            # 2. 第二層精確檢查：進入限流鎖後，再次確認冷卻時間（防止排隊期間被併發任務觸發）
+            now = time.time()
+            if now < _rate_limit_until:
+                wait_time = _rate_limit_until - now
+                logger.info(
+                    f"⏳ 限流鎖內確認全局頻率限制，主動等待 {wait_time:.1f} 秒..."
+                )
+                await asyncio.sleep(wait_time)
+
             try:
                 # Finnhub SDK 為同步阻塞 I/O，必須在獨立線程中執行
                 return await asyncio.to_thread(func, *args, **kwargs)
