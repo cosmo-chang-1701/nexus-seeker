@@ -2,6 +2,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 import logging
+import asyncio
 from cogs.embed_builder import create_info_embed, create_error_embed
 from database.orders import (
     add_active_order,
@@ -378,17 +379,21 @@ class CancelOrderModal(discord.ui.Modal):
         self.add_item(self.order_id)
 
     async def on_submit(self, interaction: discord.Interaction):
+        # 1. 立即延遲回應，以防止任何資料庫/網絡延遲導致的 3 秒超時「此交互失敗」
+        await interaction.response.defer(ephemeral=True)
+
         try:
             oid = int(self.order_id.value.strip())
         except Exception:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 embed=create_error_embed("❌ 錯誤：請輸入有效的整數作為委託單 ID。"),
                 ephemeral=True,
             )
             return
 
         try:
-            success = delete_active_order(oid)
+            # 2. 將同步的資料庫操作交給執行緒，避免阻塞事件循環
+            success = await asyncio.to_thread(delete_active_order, oid)
             if success:
                 embed = create_info_embed(
                     title="取消委託成功",
@@ -398,10 +403,10 @@ class CancelOrderModal(discord.ui.Modal):
                 embed = create_error_embed(
                     f"❌ 錯誤：找不到委託單 ID `{oid}`，請確認 ID 是否正確。"
                 )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
         except Exception as e:
             logger.error(f"Failed to delete order {oid}: {e}")
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 embed=create_error_embed(f"❌ 錯誤：取消失敗：{e}"),
                 ephemeral=True,
             )
@@ -424,10 +429,13 @@ class AdjustOrderModal(discord.ui.Modal):
         self.add_item(self.new_price)
 
     async def on_submit(self, interaction: discord.Interaction):
+        # 1. 立即延遲回應，以防止任何資料庫/網絡延遲導致的 3 秒超時「此交互失敗」
+        await interaction.response.defer(ephemeral=True)
+
         try:
             oid = int(self.order_id.value.strip())
         except Exception:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 embed=create_error_embed("❌ 錯誤：請輸入有效的整數作為委託單 ID。"),
                 ephemeral=True,
             )
@@ -438,14 +446,15 @@ class AdjustOrderModal(discord.ui.Modal):
             if price <= 0:
                 raise ValueError()
         except Exception:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 embed=create_error_embed("❌ 錯誤：請輸入有效的正數作為新價格。"),
                 ephemeral=True,
             )
             return
 
         try:
-            success = update_active_order_price(oid, price)
+            # 2. 將同步的資料庫操作交給執行緒，避免阻塞事件循環
+            success = await asyncio.to_thread(update_active_order_price, oid, price)
             if success:
                 embed = create_info_embed(
                     title="價格微調成功",
@@ -455,10 +464,10 @@ class AdjustOrderModal(discord.ui.Modal):
                 embed = create_error_embed(
                     f"❌ 錯誤：找不到委託單 ID `{oid}`，請確認 ID 是否正確。"
                 )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
         except Exception as e:
             logger.error(f"Failed to adjust order {oid}: {e}")
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 embed=create_error_embed(f"❌ 錯誤：更新失敗：{e}"),
                 ephemeral=True,
             )
@@ -475,13 +484,45 @@ class OrderManagementView(discord.ui.View):
     async def cancel_button(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ):
-        await interaction.response.send_modal(CancelOrderModal())
+        try:
+            await interaction.response.send_modal(CancelOrderModal())
+        except Exception as e:
+            logger.error(f"Failed to send CancelOrderModal: {e}", exc_info=True)
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(
+                        embed=create_error_embed(f"❌ 無法開啟取消委託視窗：{e}"),
+                        ephemeral=True,
+                    )
+                else:
+                    await interaction.followup.send(
+                        embed=create_error_embed(f"❌ 無法開啟取消委託視窗：{e}"),
+                        ephemeral=True,
+                    )
+            except Exception as inner_e:
+                logger.error(f"Failed to send error fallback: {inner_e}")
 
     @discord.ui.button(label="⚙️ 快速微調價格", style=discord.ButtonStyle.primary)
     async def adjust_button(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ):
-        await interaction.response.send_modal(AdjustOrderModal())
+        try:
+            await interaction.response.send_modal(AdjustOrderModal())
+        except Exception as e:
+            logger.error(f"Failed to send AdjustOrderModal: {e}", exc_info=True)
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(
+                        embed=create_error_embed(f"❌ 無法開啟價格微調視窗：{e}"),
+                        ephemeral=True,
+                    )
+                else:
+                    await interaction.followup.send(
+                        embed=create_error_embed(f"❌ 無法開啟價格微調視窗：{e}"),
+                        ephemeral=True,
+                    )
+            except Exception as inner_e:
+                logger.error(f"Failed to send error fallback: {inner_e}")
 
 
 class ApplyTelemetryView(discord.ui.View):
