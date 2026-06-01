@@ -3,7 +3,11 @@ from discord import app_commands
 from discord.ext import commands
 import logging
 import asyncio
-from cogs.embed_builder import create_info_embed, create_error_embed
+from cogs.embed_builder import (
+    create_info_embed,
+    create_error_embed,
+    create_active_orders_embed,
+)
 from database.orders import (
     add_active_order,
     get_user_active_orders,
@@ -790,43 +794,7 @@ class OrderUICog(commands.Cog):
             await interaction.followup.send(embed=embed, ephemeral=True)
             return
 
-        order_type_zh = {
-            "MARKET": "市價單",
-            "LIMIT": "限價單",
-            "STOP": "停損價單",
-            "STOP_LIMIT": "停損限價單",
-            "TRAILING_STOP_USD": "追蹤停損單 ($)",
-            "TRAILING_STOP_PCT": "追蹤停損單 (%)",
-        }
-
-        validity_zh = {
-            "DAY": "當日有效 (DAY)",
-            "EXT_DAY": "盤前 + 當日 + 盤後 (EXT_DAY)",
-            "NIGHT": "夜盤 (NIGHT)",
-            "GTC_90": "90 天有效 (GTC_90)",
-        }
-
-        lines = []
-        for o in orders:
-            price_details = ""
-            if o["order_type"] in ("LIMIT", "STOP_LIMIT"):
-                price_details += f" | 限價: `${o['limit_price']:.2f}`"
-            if o["order_type"] in ("STOP", "STOP_LIMIT"):
-                price_details += f" | 停損價: `${o['stop_price']:.2f}`"
-            if o["order_type"] == "TRAILING_STOP_USD":
-                price_details += f" | 追蹤值: `${o['trailing_value']:.2f}`"
-            if o["order_type"] == "TRAILING_STOP_PCT":
-                price_details += f" | 追蹤值: `{o['trailing_value']:.2f}%`"
-
-            lines.append(
-                f"• **ID `{o['id']}` - `{o['symbol']}`** ({order_type_zh.get(o['order_type'], o['order_type'])})\n"
-                f"  - 數量: `{o['quantity']}` | 有效期: `{validity_zh.get(o['validity'], o['validity'])}`{price_details}"
-            )
-
-        embed = create_info_embed(
-            title="📋 待成交委託單列表",
-            message="\n\n".join(lines),
-        )
+        embed = create_active_orders_embed(orders)
         view = OrderManagementView()
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 

@@ -345,7 +345,7 @@ async def test_orders_list_command(mock_interaction, db_conn):
     view = kwargs["view"]
 
     assert "待成交委託單列表" in embed.title
-    assert "TSLA" in embed.description
+    assert any("TSLA" in f.name or "TSLA" in f.value for f in embed.fields)
     assert isinstance(view, OrderManagementView)
 
 

@@ -4389,3 +4389,84 @@ def create_intraday_scan_embed(output) -> discord.Embed:
 
     embed.set_footer(text="Nexus Risk Optimizer | Intraday Squeeze Scan v1.0")
     return embed
+
+
+def create_active_orders_embed(orders: List[Dict[str, Any]]) -> discord.Embed:
+    """建構待成交委託單列表報告 Embed (使用 Premium ANSI Card 設計，讓數值高亮且易於閱讀)"""
+    embed = discord.Embed(
+        title="📋 Nexus Seeker | 待成交委託單列表",
+        description="以下是您目前所有活躍且待成交的委託單。點擊下方按鈕可進行撤銷或微調。\n\u200b",
+        color=discord.Color.orange(),
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    if not orders:
+        embed.description = "📭 目前沒有任何活躍的待成交委託單。您可以透過 `/order_panel` 建立新的掛單。"
+        return embed
+
+    order_type_zh = {
+        "MARKET": "\u001b[1;36m市價單 (MARKET)\u001b[0m",
+        "LIMIT": "\u001b[1;32m限價單 (LIMIT)\u001b[0m",
+        "STOP": "\u001b[1;31m停損單 (STOP)\u001b[0m",
+        "STOP_LIMIT": "\u001b[1;33m停損限價單 (STOP_LIMIT)\u001b[0m",
+        "TRAILING_STOP_USD": "\u001b[1;35m追蹤停損單 USD (TRAILING_STOP_USD)\u001b[0m",
+        "TRAILING_STOP_PCT": "\u001b[1;35m追蹤停損單 PCT (TRAILING_STOP_PCT)\u001b[0m",
+    }
+
+    validity_zh = {
+        "DAY": "\u001b[1;37m當日有效 (DAY)\u001b[0m",
+        "EXT_DAY": "\u001b[1;34m全時段有效 (EXT_DAY)\u001b[0m",
+        "NIGHT": "\u001b[1;34m夜盤交易 (NIGHT)\u001b[0m",
+        "GTC_90": "\u001b[1;37m90天有效 (GTC_90)\u001b[0m",
+    }
+
+    for idx, o in enumerate(orders):
+        ansi_lines = ["```ansi"]
+        ansi_lines.append(
+            f" 📂 委託單 ID: \u001b[1;33m{o['id']}\u001b[0m  |  標的: \u001b[1;36m{o['symbol']}\u001b[0m"
+        )
+        ansi_lines.append(" ----------------------------------")
+
+        type_str = order_type_zh.get(o["order_type"], o["order_type"])
+        ansi_lines.append(f"  └─ 訂單類型: {type_str}")
+        ansi_lines.append(f"  └─ 委託數量: \u001b[1;37m{o['quantity']}\u001b[0m 股")
+
+        val_str = validity_zh.get(o["validity"], o["validity"])
+        ansi_lines.append(f"  └─ 有效期限: {val_str}")
+
+        # 價格明細條件解析
+        price_conditions = []
+        if o.get("order_type") in ("LIMIT", "STOP_LIMIT"):
+            price_conditions.append(
+                f"限價: \u001b[1;32m${o.get('limit_price', 0.0):.2f}\u001b[0m"
+            )
+        if o.get("order_type") in ("STOP", "STOP_LIMIT"):
+            price_conditions.append(
+                f"停損價: \u001b[1;31m${o.get('stop_price', 0.0):.2f}\u001b[0m"
+            )
+        if o.get("order_type") == "TRAILING_STOP_USD":
+            price_conditions.append(
+                f"追蹤值: \u001b[1;35m${o.get('trailing_value', 0.0):.2f}\u001b[0m"
+            )
+        if o.get("order_type") == "TRAILING_STOP_PCT":
+            price_conditions.append(
+                f"追蹤值: \u001b[1;35m{o.get('trailing_value', 0.0):.2f}%\u001b[0m"
+            )
+
+        if price_conditions:
+            conds_str = " | ".join(price_conditions)
+            ansi_lines.append(f"  └─ 委託條件: {conds_str}")
+        else:
+            ansi_lines.append("  └─ 委託條件: 預設市價成交")
+
+        ansi_lines.append("```")
+
+        card_content = "\n".join(ansi_lines)
+        embed.add_field(
+            name=f"📦 委託單 #{idx+1} (ID: {o['id']})",
+            value=_safe_embed_field_value(card_content, "暫無詳情"),
+            inline=False,
+        )
+
+    embed.set_footer(text="Nexus Seeker • 待成交委託單管理系統")
+    return embed
