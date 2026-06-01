@@ -44,33 +44,33 @@ class DynamicOrderModal(discord.ui.Modal):
         self.add_item(self.ticker)
         self.add_item(self.quantity)
 
-        # 條件式動態欄位注入
+        # 條件式動態欄位注入 (設為非必填，以利空值時自動套用遙測定價)
         if self.order_type == "LIMIT":
             self.limit_price = discord.ui.TextInput(
                 label="限價 (Limit Price)",
-                placeholder="例如: 85.5",
-                required=True,
+                placeholder="例如: 85.5 (留空則自動套用遙測定價)",
+                required=False,
             )
             self.add_item(self.limit_price)
 
         elif self.order_type == "STOP":
             self.stop_price = discord.ui.TextInput(
                 label="停損價 (Stop Price)",
-                placeholder="例如: 80.0",
-                required=True,
+                placeholder="例如: 80.0 (留空則自動套用遙測定價)",
+                required=False,
             )
             self.add_item(self.stop_price)
 
         elif self.order_type == "STOP_LIMIT":
             self.limit_price = discord.ui.TextInput(
                 label="限價 (Limit Price)",
-                placeholder="例如: 85.5",
-                required=True,
+                placeholder="例如: 85.5 (留空則自動套用遙測定價)",
+                required=False,
             )
             self.stop_price = discord.ui.TextInput(
                 label="停損價 (Stop Price)",
-                placeholder="例如: 80.0",
-                required=True,
+                placeholder="例如: 80.0 (留空則自動套用遙測定價)",
+                required=False,
             )
             self.add_item(self.limit_price)
             self.add_item(self.stop_price)
@@ -78,16 +78,16 @@ class DynamicOrderModal(discord.ui.Modal):
         elif self.order_type == "TRAILING_STOP_USD":
             self.trailing_value = discord.ui.TextInput(
                 label="追蹤值 $ (Trailing Amount USD)",
-                placeholder="例如: 5.0",
-                required=True,
+                placeholder="例如: 5.0 (留空則自動套用遙測定價)",
+                required=False,
             )
             self.add_item(self.trailing_value)
 
         elif self.order_type == "TRAILING_STOP_PCT":
             self.trailing_value = discord.ui.TextInput(
                 label="追蹤值 % (Trailing Amount PCT)",
-                placeholder="例如: 10.0",
-                required=True,
+                placeholder="例如: 10.0 (留空則自動套用遙測定價)",
+                required=False,
             )
             self.add_item(self.trailing_value)
 
@@ -103,7 +103,9 @@ class DynamicOrderModal(discord.ui.Modal):
                 raise ValueError("數量必須大於 0")
         except Exception:
             await interaction.response.send_message(
-                embed=create_error_embed("❌ 錯誤：請輸入有效的正數作為訂單數量。"),
+                embed=create_error_embed(
+                    "❌ 錯誤：請輸入有效的正數作為訂單數量。", title="系統錯誤"
+                ),
                 ephemeral=True,
             )
             return
@@ -112,49 +114,193 @@ class DynamicOrderModal(discord.ui.Modal):
         limit_val = 0.0
         stop_val = 0.0
         trailing_val = 0.0
+        auto_telemetry_triggered = False
 
-        if self.order_type in ("LIMIT", "STOP_LIMIT"):
+        def is_empty_or_zero(field) -> bool:
+            if not field or not getattr(field, "value", "").strip():
+                return True
             try:
-                limit_val = float(self.limit_price.value.strip())
-                if limit_val <= 0:
-                    raise ValueError()
-            except Exception:
-                await interaction.response.send_message(
-                    embed=create_error_embed("❌ 錯誤：請輸入有效的限價。"),
+                val = float(field.value.strip())
+                return val <= 0.0
+            except ValueError:
+                return False
+
+        if self.order_type == "LIMIT":
+            if is_empty_or_zero(getattr(self, "limit_price", None)):
+                auto_telemetry_triggered = True
+            else:
+                try:
+                    limit_val = float(self.limit_price.value.strip())
+                    if limit_val <= 0:
+                        raise ValueError()
+                except Exception:
+                    await interaction.response.send_message(
+                        embed=create_error_embed(
+                            "❌ 錯誤：請輸入有效的限價。", title="系統錯誤"
+                        ),
+                        ephemeral=True,
+                    )
+                    return
+
+        elif self.order_type == "STOP":
+            if is_empty_or_zero(getattr(self, "stop_price", None)):
+                auto_telemetry_triggered = True
+            else:
+                try:
+                    stop_val = float(self.stop_price.value.strip())
+                    if stop_val <= 0:
+                        raise ValueError()
+                except Exception:
+                    await interaction.response.send_message(
+                        embed=create_error_embed(
+                            "❌ 錯誤：請輸入有效的停損價。", title="系統錯誤"
+                        ),
+                        ephemeral=True,
+                    )
+                    return
+
+        elif self.order_type == "STOP_LIMIT":
+            if is_empty_or_zero(getattr(self, "limit_price", None)) or is_empty_or_zero(
+                getattr(self, "stop_price", None)
+            ):
+                auto_telemetry_triggered = True
+            else:
+                try:
+                    limit_val = float(self.limit_price.value.strip())
+                    stop_val = float(self.stop_price.value.strip())
+                    if limit_val <= 0 or stop_val <= 0:
+                        raise ValueError()
+                except Exception:
+                    await interaction.response.send_message(
+                        embed=create_error_embed(
+                            "❌ 錯誤：請輸入有效的限價與停損價。", title="系統錯誤"
+                        ),
+                        ephemeral=True,
+                    )
+                    return
+
+        elif self.order_type in ("TRAILING_STOP_USD", "TRAILING_STOP_PCT"):
+            if is_empty_or_zero(getattr(self, "trailing_value", None)):
+                auto_telemetry_triggered = True
+            else:
+                try:
+                    trailing_val = float(self.trailing_value.value.strip())
+                    if trailing_val <= 0:
+                        raise ValueError()
+                except Exception:
+                    await interaction.response.send_message(
+                        embed=create_error_embed(
+                            "❌ 錯誤：請輸入有效的追蹤停損值。", title="系統錯誤"
+                        ),
+                        ephemeral=True,
+                    )
+                    return
+
+        symbol = self.ticker.value.strip().upper()
+        telemetry_logs: list[str] = []
+        final_qty = qty
+
+        if auto_telemetry_triggered:
+            # 延遲回應，避免查詢 API 時超時
+            await interaction.response.defer(ephemeral=True)
+            from services import market_data_service
+            from market_analysis.sentiment_engine import SentimentEngine
+            from services.telemetry_pricing_engine import calculate_telemetry_price
+
+            try:
+                quote = await market_data_service.get_quote(symbol)
+                spot_price = quote.get("c", 0.0)
+                if spot_price <= 0.0:
+                    df_temp = await market_data_service.get_history_df(
+                        symbol, period="2d"
+                    )
+                    if not df_temp.empty:
+                        spot_price = float(df_temp["Close"].iloc[-1])
+            except Exception as e:
+                logger.error(f"Error fetching quote for telemetry fallback: {e}")
+                spot_price = 0.0
+
+            if spot_price <= 0.0:
+                await interaction.followup.send(
+                    embed=create_error_embed(
+                        f"❌ 錯誤：無法獲取標的 {symbol} 的現有價格以進行遙測定價。請手動輸入價格。"
+                    ),
                     ephemeral=True,
                 )
                 return
 
-        if self.order_type in ("STOP", "STOP_LIMIT"):
+            iv = 0.35
+            hist_iv = 0.30
             try:
-                stop_val = float(self.stop_price.value.strip())
-                if stop_val <= 0:
-                    raise ValueError()
-            except Exception:
-                await interaction.response.send_message(
-                    embed=create_error_embed("❌ 錯誤：請輸入有效的停損價。"),
-                    ephemeral=True,
+                iv_metrics = await SentimentEngine.fetch_and_calculate_iv_metrics(
+                    symbol
                 )
-                return
+                if iv_metrics and iv_metrics.current_iv > 0:
+                    iv = iv_metrics.current_iv
+                    hist_iv = iv / 1.1
+            except Exception as e:
+                logger.warning(f"Error fetching IV metrics for {symbol}: {e}")
 
-        if self.order_type in ("TRAILING_STOP_USD", "TRAILING_STOP_PCT"):
+            skew_val = 0.5
             try:
-                trailing_val = float(self.trailing_value.value.strip())
-                if trailing_val <= 0:
-                    raise ValueError()
-            except Exception:
-                await interaction.response.send_message(
-                    embed=create_error_embed("❌ 錯誤：請輸入有效的追蹤停損值。"),
-                    ephemeral=True,
-                )
-                return
+                skew_metrics = await SentimentEngine.calculate_skew(symbol)
+                if skew_metrics and "skew" in skew_metrics:
+                    skew = float(skew_metrics["skew"])
+                    if skew > 5.0:
+                        skew_val = 0.98
+                    elif skew < -2.0:
+                        skew_val = 0.02
+            except Exception as e:
+                logger.warning(f"Error calculating skew for {symbol}: {e}")
+
+            prev_close = quote.get("pc", spot_price)
+
+            if self.order_type in ("LIMIT", "STOP_LIMIT"):
+                base_price = spot_price
+            elif self.order_type == "STOP":
+                base_price = spot_price
+            elif self.order_type == "TRAILING_STOP_USD":
+                base_price = spot_price * 0.05
+            elif self.order_type == "TRAILING_STOP_PCT":
+                base_price = 5.0
+            else:
+                base_price = spot_price
+
+            (
+                resolved_price,
+                resolved_qty,
+                telemetry_logs,
+            ) = await calculate_telemetry_price(
+                symbol=symbol,
+                base_price=base_price,
+                spot_price=spot_price,
+                iv=iv,
+                hist_iv=hist_iv,
+                max_pain=spot_price,
+                prev_max_pain=spot_price,
+                skew_percentile=skew_val,
+                prev_close=prev_close,
+                base_quantity=qty,
+            )
+
+            if self.order_type == "LIMIT":
+                limit_val = resolved_price
+            elif self.order_type == "STOP":
+                stop_val = resolved_price
+            elif self.order_type == "STOP_LIMIT":
+                limit_val = resolved_price
+                stop_val = resolved_price * 0.98
+            elif self.order_type in ("TRAILING_STOP_USD", "TRAILING_STOP_PCT"):
+                trailing_val = resolved_price
+
+            final_qty = resolved_qty
 
         # 3. 寫入資料庫
         try:
             order_id = add_active_order(
                 user_id=interaction.user.id,
-                symbol=self.ticker.value.strip().upper(),
-                quantity=qty,
+                symbol=symbol,
+                quantity=final_qty,
                 order_type=self.order_type,
                 validity=self.validity_db,
                 limit_price=limit_val,
@@ -182,9 +328,9 @@ class DynamicOrderModal(discord.ui.Modal):
             msg = (
                 f"✅ **訂單已成功建立並進入排程**\n\n"
                 f"• **委託單 ID**: `{order_id}`\n"
-                f"• **標的**: `{self.ticker.value.strip().upper()}`\n"
+                f"• **標的**: `{symbol}`\n"
                 f"• **類型**: `{order_type_zh}`\n"
-                f"• **數量**: `{qty}`\n"
+                f"• **數量**: `{final_qty}`\n"
                 f"• **有效期限**: `{validity_zh}`\n"
             )
             if self.order_type in ("LIMIT", "STOP_LIMIT"):
@@ -196,17 +342,26 @@ class DynamicOrderModal(discord.ui.Modal):
             if self.order_type == "TRAILING_STOP_PCT":
                 msg += f"• **追蹤停損值 (%)**: `{trailing_val:.2f}%`\n"
 
+            if auto_telemetry_triggered:
+                msg += "\n🤖 **[已自動套用遙測最佳防線價與數量優化]**"
+                if telemetry_logs:
+                    msg += "\n\n**遙測決策軌跡:**\n" + "\n".join(telemetry_logs[:2])
+
             embed = create_info_embed(
                 title="訂單登錄成功",
                 message=msg,
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            if auto_telemetry_triggered:
+                await interaction.followup.send(embed=embed, ephemeral=True)
+            else:
+                await interaction.response.send_message(embed=embed, ephemeral=True)
         except Exception as e:
             logger.error(f"Error persisting active order: {e}")
-            await interaction.response.send_message(
-                embed=create_error_embed(f"❌ 寫入資料庫時出錯：{str(e)}"),
-                ephemeral=True,
-            )
+            err_embed = create_error_embed(f"❌ 寫入資料庫時出錯：{str(e)}")
+            if auto_telemetry_triggered:
+                await interaction.followup.send(embed=err_embed, ephemeral=True)
+            else:
+                await interaction.response.send_message(embed=err_embed, ephemeral=True)
 
 
 # ==========================================
@@ -528,6 +683,41 @@ class OrderSetupView(discord.ui.View):
         self.add_item(OrderValiditySelect())
         self.add_item(OrderSetupSelect())
 
+    @discord.ui.button(
+        label="🟢 限價單 (Limit)", style=discord.ButtonStyle.success, row=2
+    )
+    async def limit_shortcut(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        modal = DynamicOrderModal(
+            order_type="LIMIT", title="新增限價訂單", validity_db=self.selected_validity
+        )
+        await interaction.response.send_modal(modal)
+
+    @discord.ui.button(label="停損單 (Stop)", style=discord.ButtonStyle.primary, row=2)
+    async def stop_shortcut(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        modal = DynamicOrderModal(
+            order_type="STOP",
+            title="新增停損價訂單",
+            validity_db=self.selected_validity,
+        )
+        await interaction.response.send_modal(modal)
+
+    @discord.ui.button(
+        label="⚡ 市價單 (Market)", style=discord.ButtonStyle.secondary, row=2
+    )
+    async def market_shortcut(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        modal = DynamicOrderModal(
+            order_type="MARKET",
+            title="新增市價訂單",
+            validity_db=self.selected_validity,
+        )
+        await interaction.response.send_modal(modal)
+
 
 # ==========================================
 # 5. Discord Cog 模組
@@ -665,6 +855,234 @@ class OrderUICog(commands.Cog):
         )
         view = ApplyTelemetryView()
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
+    @app_commands.command(
+        name="add_order",
+        description="直接新增一個交易委託單 (未填價格時自動套用遙測定價)",
+    )
+    @app_commands.describe(
+        symbol="標的代碼 (例如: AAPL)",
+        quantity="委託數量 (正數)",
+        order_type="訂單類型 (MARKET, LIMIT, STOP, STOP_LIMIT, TRAILING_STOP_USD, TRAILING_STOP_PCT)",
+        validity="有效期限制 (預設 DAY) - 可選: DAY, EXT_DAY, NIGHT, GTC_90",
+        price="限價/停損價/追蹤值 (可選，未填時自動呼叫遙測定價進行高安全邊際折價)",
+    )
+    @app_commands.choices(
+        order_type=[
+            app_commands.Choice(name="市價單 (MARKET)", value="MARKET"),
+            app_commands.Choice(name="限價單 (LIMIT)", value="LIMIT"),
+            app_commands.Choice(name="停損單 (STOP)", value="STOP"),
+            app_commands.Choice(name="停損限價單 (STOP_LIMIT)", value="STOP_LIMIT"),
+            app_commands.Choice(
+                name="追蹤停損單 USD (TRAILING_STOP_USD)", value="TRAILING_STOP_USD"
+            ),
+            app_commands.Choice(
+                name="追蹤停損單 PCT (TRAILING_STOP_PCT)", value="TRAILING_STOP_PCT"
+            ),
+        ],
+        validity=[
+            app_commands.Choice(name="當日有效 (DAY)", value="DAY"),
+            app_commands.Choice(name="盤前+當日+盤後 (EXT_DAY)", value="EXT_DAY"),
+            app_commands.Choice(name="夜盤 (NIGHT)", value="NIGHT"),
+            app_commands.Choice(name="90天長期有效 (GTC_90)", value="GTC_90"),
+        ],
+    )
+    async def add_order(
+        self,
+        interaction: discord.Interaction,
+        symbol: str,
+        quantity: float,
+        order_type: str,
+        validity: str = "DAY",
+        price: float = 0.0,
+    ):
+        await interaction.response.defer(ephemeral=True)
+
+        # 1. 驗證數量
+        if quantity <= 0:
+            await interaction.followup.send(
+                embed=create_error_embed("❌ 錯誤：請輸入有效的正數作為訂單數量。"),
+                ephemeral=True,
+            )
+            return
+
+        # 2. 決定是否啟用遙測定價
+        limit_val = 0.0
+        stop_val = 0.0
+        trailing_val = 0.0
+        auto_telemetry_triggered = price <= 0.0
+        symbol = symbol.strip().upper()
+        telemetry_logs: list[str] = []
+        final_qty = quantity
+
+        if auto_telemetry_triggered:
+            from services import market_data_service
+            from market_analysis.sentiment_engine import SentimentEngine
+            from services.telemetry_pricing_engine import calculate_telemetry_price
+
+            try:
+                quote = await market_data_service.get_quote(symbol)
+                spot_price = quote.get("c", 0.0)
+                if spot_price <= 0.0:
+                    df_temp = await market_data_service.get_history_df(
+                        symbol, period="2d"
+                    )
+                    if not df_temp.empty:
+                        spot_price = float(df_temp["Close"].iloc[-1])
+            except Exception as e:
+                logger.error(f"Error fetching quote for telemetry fallback: {e}")
+                spot_price = 0.0
+
+            if spot_price <= 0.0:
+                await interaction.followup.send(
+                    embed=create_error_embed(
+                        f"❌ 錯誤：無法獲取標的 {symbol} 的現有價格以進行遙測定價。請手動輸入價格。"
+                    ),
+                    ephemeral=True,
+                )
+                return
+
+            iv = 0.35
+            hist_iv = 0.30
+            try:
+                iv_metrics = await SentimentEngine.fetch_and_calculate_iv_metrics(
+                    symbol
+                )
+                if iv_metrics and iv_metrics.current_iv > 0:
+                    iv = iv_metrics.current_iv
+                    hist_iv = iv / 1.1
+            except Exception as e:
+                logger.warning(f"Error fetching IV metrics for {symbol}: {e}")
+
+            skew_val = 0.5
+            try:
+                skew_metrics = await SentimentEngine.calculate_skew(symbol)
+                if skew_metrics and "skew" in skew_metrics:
+                    skew = float(skew_metrics["skew"])
+                    if skew > 5.0:
+                        skew_val = 0.98
+                    elif skew < -2.0:
+                        skew_val = 0.02
+            except Exception as e:
+                logger.warning(f"Error calculating skew for {symbol}: {e}")
+
+            prev_close = quote.get("pc", spot_price)
+
+            if order_type in ("LIMIT", "STOP_LIMIT"):
+                base_price = spot_price
+            elif order_type == "STOP":
+                base_price = spot_price
+            elif order_type == "TRAILING_STOP_USD":
+                base_price = spot_price * 0.05
+            elif order_type == "TRAILING_STOP_PCT":
+                base_price = 5.0
+            else:
+                base_price = spot_price
+
+            (
+                resolved_price,
+                resolved_qty,
+                telemetry_logs,
+            ) = await calculate_telemetry_price(
+                symbol=symbol,
+                base_price=base_price,
+                spot_price=spot_price,
+                iv=iv,
+                hist_iv=hist_iv,
+                max_pain=spot_price,
+                prev_max_pain=spot_price,
+                skew_percentile=skew_val,
+                prev_close=prev_close,
+                base_quantity=quantity,
+            )
+
+            if order_type == "LIMIT":
+                limit_val = resolved_price
+            elif order_type == "STOP":
+                stop_val = resolved_price
+            elif order_type == "STOP_LIMIT":
+                limit_val = resolved_price
+                stop_val = resolved_price * 0.98
+            elif order_type in ("TRAILING_STOP_USD", "TRAILING_STOP_PCT"):
+                trailing_val = resolved_price
+
+            final_qty = resolved_qty
+
+        else:
+            # 手動輸入價格映射
+            if order_type == "LIMIT":
+                limit_val = price
+            elif order_type == "STOP":
+                stop_val = price
+            elif order_type == "STOP_LIMIT":
+                limit_val = price
+                stop_val = price
+            elif order_type in ("TRAILING_STOP_USD", "TRAILING_STOP_PCT"):
+                trailing_val = price
+
+        # 3. 寫入資料庫
+        try:
+            order_id = add_active_order(
+                user_id=interaction.user.id,
+                symbol=symbol,
+                quantity=final_qty,
+                order_type=order_type,
+                validity=validity,
+                limit_price=limit_val,
+                stop_price=stop_val,
+                trailing_value=trailing_val,
+            )
+
+            # 4. 回傳 Traditional Chinese Embed 成功訊息
+            validity_zh = {
+                "DAY": "當日有效 (DAY)",
+                "EXT_DAY": "盤前 + 當日 + 盤後 (EXT_DAY)",
+                "NIGHT": "夜盤 (NIGHT)",
+                "GTC_90": "90 天有效 (GTC_90)",
+            }.get(validity, validity)
+
+            order_type_zh = {
+                "MARKET": "市價單",
+                "LIMIT": "限價單",
+                "STOP": "停損價單",
+                "STOP_LIMIT": "停損限價單",
+                "TRAILING_STOP_USD": "追蹤停損單 ($)",
+                "TRAILING_STOP_PCT": "追蹤停損單 (%)",
+            }.get(order_type, order_type)
+
+            msg = (
+                f"✅ **訂單已成功建立並進入排程**\n\n"
+                f"• **委託單 ID**: `{order_id}`\n"
+                f"• **標的**: `{symbol}`\n"
+                f"• **類型**: `{order_type_zh}`\n"
+                f"• **數量**: `{final_qty}`\n"
+                f"• **有效期限**: `{validity_zh}`\n"
+            )
+            if order_type in ("LIMIT", "STOP_LIMIT"):
+                msg += f"• **限價**: `${limit_val:.2f}`\n"
+            if order_type in ("STOP", "STOP_LIMIT"):
+                msg += f"• **停損價**: `${stop_val:.2f}`\n"
+            if order_type == "TRAILING_STOP_USD":
+                msg += f"• **追蹤停損值 ($)**: `${trailing_val:.2f}`\n"
+            if order_type == "TRAILING_STOP_PCT":
+                msg += f"• **追蹤停損值 (%)**: `{trailing_val:.2f}%`\n"
+
+            if auto_telemetry_triggered:
+                msg += "\n🤖 **[已自動套用遙測最佳防線價與數量優化]**"
+                if telemetry_logs:
+                    msg += "\n\n**遙測決策軌跡:**\n" + "\n".join(telemetry_logs[:2])
+
+            embed = create_info_embed(
+                title="訂單登錄成功",
+                message=msg,
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        except Exception as e:
+            logger.error(f"Error persisting active order: {e}")
+            await interaction.followup.send(
+                embed=create_error_embed(f"❌ 寫入資料庫時出錯：{str(e)}"),
+                ephemeral=True,
+            )
 
 
 async def setup(bot):

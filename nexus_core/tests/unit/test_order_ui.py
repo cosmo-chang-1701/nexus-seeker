@@ -409,3 +409,209 @@ async def test_order_management_view_buttons(mock_interaction):
     assert mock_interaction.response.send_modal.called
     modal_adjust = mock_interaction.response.send_modal.call_args[0][0]
     assert isinstance(modal_adjust, AdjustOrderModal)
+
+
+@pytest.mark.asyncio
+async def test_order_setup_view_shortcut_buttons(mock_interaction):
+    """測試 OrderSetupView 中的限價、停損與市價單快捷按鈕是否正常觸發 Modal"""
+    view = OrderSetupView()
+
+    # 1. 限價單快捷
+    mock_interaction.response.send_modal.reset_mock()
+    await view.limit_shortcut.callback(mock_interaction)
+    assert mock_interaction.response.send_modal.called
+    modal = mock_interaction.response.send_modal.call_args[0][0]
+    assert isinstance(modal, DynamicOrderModal)
+    assert modal.order_type == "LIMIT"
+
+    # 2. 停損單快捷
+    mock_interaction.response.send_modal.reset_mock()
+    await view.stop_shortcut.callback(mock_interaction)
+    assert mock_interaction.response.send_modal.called
+    modal = mock_interaction.response.send_modal.call_args[0][0]
+    assert isinstance(modal, DynamicOrderModal)
+    assert modal.order_type == "STOP"
+
+    # 3. 市價單快捷
+    mock_interaction.response.send_modal.reset_mock()
+    await view.market_shortcut.callback(mock_interaction)
+    assert mock_interaction.response.send_modal.called
+    modal = mock_interaction.response.send_modal.call_args[0][0]
+    assert isinstance(modal, DynamicOrderModal)
+    assert modal.order_type == "MARKET"
+
+
+@pytest.mark.asyncio
+async def test_dynamic_order_modal_telemetry_fallback(
+    mock_interaction, db_conn, monkeypatch
+):
+    """測試當限價留空/為 0 時，Modal 能否自動套用遙測定價 fallback"""
+    modal = DynamicOrderModal(
+        order_type="LIMIT", title="新增限價訂單", validity_db="DAY"
+    )
+
+    modal.ticker._value = "AAPL"
+    modal.quantity._value = "10"
+    modal.limit_price._value = ""  # 留空以觸發遙測
+
+    # 模擬外部 API 調用，防範測試無網路
+    async def mock_get_quote(symbol):
+        return {"c": 150.0, "pc": 148.0}
+
+    async def mock_get_history_df(symbol, period):
+        import pandas as pd
+
+        return pd.DataFrame({"Close": [150.0]})
+
+    # Mock SentimentEngine & calculate_telemetry_price
+    async def mock_fetch_iv(symbol):
+        class MockIV:
+            current_iv = 0.3
+            iv_rank = 30.0
+
+        return MockIV()
+
+    async def mock_calculate_skew(symbol):
+        return {"skew": 1.0}
+
+    async def mock_telemetry(
+        symbol,
+        base_price,
+        spot_price,
+        iv,
+        hist_iv,
+        max_pain,
+        prev_max_pain,
+        skew_percentile,
+        prev_close,
+        base_quantity,
+    ):
+        return 145.0, base_quantity, ["Mocked Telemetry Price Resolved"]
+
+    monkeypatch.setattr("services.market_data_service.get_quote", mock_get_quote)
+    monkeypatch.setattr(
+        "services.market_data_service.get_history_df", mock_get_history_df
+    )
+    monkeypatch.setattr(
+        "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
+        mock_fetch_iv,
+    )
+    monkeypatch.setattr(
+        "market_analysis.sentiment_engine.SentimentEngine.calculate_skew",
+        mock_calculate_skew,
+    )
+    monkeypatch.setattr(
+        "services.telemetry_pricing_engine.calculate_telemetry_price", mock_telemetry
+    )
+
+    await modal.on_submit(mock_interaction)
+
+    assert mock_interaction.response.defer.called
+    assert mock_interaction.followup.send.called
+    embed = mock_interaction.followup.send.call_args[1]["embed"]
+    assert "訂單登錄成功" in embed.title
+    assert "145.0" in embed.description
+    assert "自動套用遙測最佳防線價" in embed.description
+
+    # 驗證寫入資料庫
+    orders = [
+        o
+        for o in get_user_active_orders(mock_interaction.user.id)
+        if o["symbol"] == "AAPL"
+    ]
+    assert len(orders) == 1
+    assert orders[0]["limit_price"] == 145.0
+
+
+@pytest.mark.asyncio
+async def test_add_order_slash_command_manual(mock_interaction, db_conn):
+    """測試直接下單 Slash Command，帶手動價格"""
+    bot = MagicMock()
+    cog = OrderUICog(bot)
+
+    # 測試手動帶價格的限價單
+    await cog.add_order.callback(
+        cog,
+        mock_interaction,
+        symbol="TSLA",
+        quantity=5,
+        order_type="LIMIT",
+        validity="DAY",
+        price=200.0,
+    )
+
+    assert mock_interaction.response.defer.called
+    assert mock_interaction.followup.send.called
+    embed = mock_interaction.followup.send.call_args[1]["embed"]
+    assert "訂單登錄成功" in embed.title
+    assert "TSLA" in embed.description
+    assert "200.0" in embed.description
+
+    # 驗證資料庫寫入
+    orders = [
+        o
+        for o in get_user_active_orders(mock_interaction.user.id)
+        if o["symbol"] == "TSLA"
+    ]
+    assert len(orders) == 1
+    assert orders[0]["limit_price"] == 200.0
+
+
+@pytest.mark.asyncio
+async def test_add_order_slash_command_telemetry(
+    mock_interaction, db_conn, monkeypatch
+):
+    """測試直接下單 Slash Command，留空/價格為0時自動對齊遙測"""
+    bot = MagicMock()
+    cog = OrderUICog(bot)
+
+    # Mock Telemetry dependencies
+    async def mock_get_quote(symbol):
+        return {"c": 100.0, "pc": 99.0}
+
+    async def mock_telemetry(
+        symbol,
+        base_price,
+        spot_price,
+        iv,
+        hist_iv,
+        max_pain,
+        prev_max_pain,
+        skew_percentile,
+        prev_close,
+        base_quantity,
+    ):
+        return 95.5, base_quantity, ["Mocked Telemetry Command Price Resolved"]
+
+    monkeypatch.setattr("services.market_data_service.get_quote", mock_get_quote)
+    monkeypatch.setattr(
+        "services.telemetry_pricing_engine.calculate_telemetry_price", mock_telemetry
+    )
+
+    # 帶價格為 0 以觸發遙測
+    await cog.add_order.callback(
+        cog,
+        mock_interaction,
+        symbol="BABA",
+        quantity=10,
+        order_type="LIMIT",
+        validity="DAY",
+        price=0.0,
+    )
+
+    assert mock_interaction.response.defer.called
+    assert mock_interaction.followup.send.called
+    embed = mock_interaction.followup.send.call_args[1]["embed"]
+    assert "訂單登錄成功" in embed.title
+    assert "BABA" in embed.description
+    assert "95.5" in embed.description
+    assert "自動套用遙測最佳防線價" in embed.description
+
+    # 驗證資料庫
+    orders = [
+        o
+        for o in get_user_active_orders(mock_interaction.user.id)
+        if o["symbol"] == "BABA"
+    ]
+    assert len(orders) == 1
+    assert orders[0]["limit_price"] == 95.5
