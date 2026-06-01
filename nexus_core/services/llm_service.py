@@ -109,6 +109,7 @@ async def classify_uoa_intent(
     system_prompt = """
     你是 Nexus Seeker 的異常期權活動分析專家。
     請分析給定的 UOA (Unusual Option Activity) 數據，並結合 Polymarket 巨鯨的意圖 (若有提供)，判定該交易的性質。
+    你必須使用繁體中文 (Traditional Chinese) 填寫所有非枚舉的回傳欄位 (例如 explanation)，並遵循台灣期權交易術語。
     """
 
     user_prompt = f"標的: {symbol}\nUOA 數據: {json.dumps(uoa_data, ensure_ascii=False)}\n巨鯨意圖: {whale_intent or '無'}"

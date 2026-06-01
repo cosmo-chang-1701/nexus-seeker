@@ -247,7 +247,10 @@ class HedgeMonitorService:
             response = await client.chat.completions.create(
                 model=LLM_MODEL_NAME,
                 messages=[
-                    {"role": "system", "content": "You are a Quant Risk Manager."},
+                    {
+                        "role": "system",
+                        "content": "You are a Quant Risk Manager. You must answer in 100% fluent Traditional Chinese (繁體中文) using Taiwanese market terminology.",
+                    },
                     {"role": "user", "content": prompt},
                 ],
                 max_tokens=200,
