@@ -33,6 +33,7 @@ from cogs.embed_builder import (
     create_watchlist_signal_embed,
     create_sentiment_scan_embed,
     create_media_sentiment_embed,
+    create_active_orders_embed,
 )
 from models.schemas import WatchlistOptionLeg, WatchlistOptionPlan
 
@@ -887,3 +888,47 @@ def test_create_media_sentiment_embed():
     assert news_text in embed.fields[0].value
     assert "Reddit 討論" in embed.fields[1].name
     assert reddit_text in embed.fields[1].value
+
+
+def test_create_active_orders_embed():
+    """Verify that create_active_orders_embed correctly renders active orders with premium ANSI card formatting."""
+    # 1. Test empty state
+    embed_empty = create_active_orders_embed([])
+    assert "待成交委託單列表" in embed_empty.title
+    assert "目前沒有任何活躍的待成交委託單" in embed_empty.description
+
+    # 2. Test populated state
+    orders = [
+        {
+            "id": 1,
+            "symbol": "AAPL",
+            "quantity": 100.0,
+            "order_type": "LIMIT",
+            "validity": "DAY",
+            "limit_price": 175.50,
+            "stop_price": 0.0,
+            "trailing_value": 0.0,
+        },
+        {
+            "id": 2,
+            "symbol": "TSLA",
+            "quantity": 50.0,
+            "order_type": "STOP",
+            "validity": "NIGHT",
+            "limit_price": 0.0,
+            "stop_price": 180.00,
+            "trailing_value": 0.0,
+        },
+    ]
+    embed = create_active_orders_embed(orders)
+    assert embed.title == "📋 Nexus Seeker | 待成交委託單列表"
+    assert len(embed.fields) == 2
+    assert "委託單 #1" in embed.fields[0].name
+    assert "AAPL" in embed.fields[0].value
+    assert "限價單 (LIMIT)" in embed.fields[0].value
+    assert "175.50" in embed.fields[0].value
+
+    assert "委託單 #2" in embed.fields[1].name
+    assert "TSLA" in embed.fields[1].value
+    assert "停損單 (STOP)" in embed.fields[1].value
+    assert "180.00" in embed.fields[1].value
