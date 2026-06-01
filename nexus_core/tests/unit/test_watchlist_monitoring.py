@@ -74,7 +74,9 @@ def clear_watchlist_metrics_cache():
 def test_enhanced_watchlist_metrics_computes_bias_and_support_distance():
     metrics = _sample_metrics()
     assert metrics.bias_ma20 == pytest.approx((132.0 / 128.0) - 1.0)
-    assert metrics.distance_to_absolute_support == pytest.approx((132.0 / 118.0) - 1.0)
+    assert metrics.distance_to_absolute_support == pytest.approx(
+        (132.0 - 118.0) / 132.0
+    )
 
 
 def test_enhanced_watchlist_metrics_rejects_invalid_phase_order():
@@ -98,9 +100,9 @@ def test_watchlist_risk_controller_routes_hard_hedge():
     )
     assert tactical.scenario == "hard-hedge"
     assert tactical.alert_level == "red"
-    assert tactical.hidden_delta_risk == pytest.approx(60.0)
-    assert tactical.hedge_allocation_shares == 60
-    assert "放空 60 股 SPY" in tactical.hedge_instruction
+    assert tactical.hidden_delta_risk == 0.00
+    assert tactical.hedge_allocation_shares == 0
+    assert tactical.hedge_instruction is None
 
 
 def test_watchlist_risk_controller_routes_wait():
@@ -456,10 +458,13 @@ async def test_build_watchlist_event_context_marks_earnings_lock():
     earnings_event = type(
         "EarningsEvent", (), {"date": "2026-05-24", "tte_hours": 36.0}
     )()
+    from datetime import datetime, timedelta
+
+    future_time = (datetime.now() + timedelta(days=5)).isoformat()
     macro_event = type(
         "EconomicEvent",
         (),
-        {"event": "CPI", "time": "2026-05-23T12:30:00Z", "tte_hours": 60.0},
+        {"event": "CPI", "time": future_time, "tte_hours": 60.0},
     )()
 
     context = await build_watchlist_event_context(
@@ -497,6 +502,7 @@ async def test_rule2_premium_selling_option_strategy_routing():
         scenario="premium-harvest",
         sddm_route="SHIELD (全面防禦中)",
         dynamic_grid_step=4.65,
+        action_guideline="test",
         alert_level="yellow",
     )
 

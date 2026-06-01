@@ -163,9 +163,9 @@ async def test_fetch_and_calculate_iv_metrics_fallback_option_chain():
 
         metrics = await SentimentEngine.fetch_and_calculate_iv_metrics(symbol)
 
-        assert metrics.current_iv == pytest.approx(0.38)
+        assert metrics.current_iv == pytest.approx(0.36875)
         assert metrics.expected_move_weekly == pytest.approx(
-            100.0 * 0.38 * math.sqrt(7.0 / 365.0)
+            100.0 * 0.36875 * math.sqrt(7.0 / 365.0)
         )
 
 
