@@ -415,7 +415,8 @@ class SentimentEngine:
                     logger.warning(f"[{symbol}] yfinance ticker.info 獲取異常: {e}")
 
             if not current_iv or current_iv <= 0:
-                # Fallback to ATM option implied volatility from nearest chain
+                # VIX-style forward-looking weighted average implied volatility calculation
+                # across the nearest front-month options chains
                 try:
                     expirations = await market_data_service.get_all_option_expiries(
                         symbol
@@ -426,17 +427,43 @@ class SentimentEngine:
                         )
                         if chain:
                             calls = chain.calls
-                            if not calls.empty:
-                                atm_call_idx = (
-                                    (calls["strike"] - spot_price).abs().idxmin()
-                                )
-                                current_iv = float(
-                                    calls.loc[atm_call_idx].get(
-                                        "impliedVolatility", 0.0
+                            puts = chain.puts
+                            all_options = []
+                            for df in [calls, puts]:
+                                if df is not None and not df.empty:
+                                    for _, row in df.iterrows():
+                                        iv_val = float(
+                                            row.get("impliedVolatility", 0.0)
+                                        )
+                                        strike_val = float(row.get("strike", 0.0))
+                                        oi = float(row.get("openInterest", 0.0))
+                                        vol = float(row.get("volume", 0.0))
+                                        if iv_val > 0.01 and strike_val > 0.0:
+                                            # Filter to options near-the-money (within 20% of spot)
+                                            if (
+                                                abs(strike_val - spot_price)
+                                                / spot_price
+                                                <= 0.20
+                                            ):
+                                                # VIX-style weight: liquid options close to ATM are weighted higher
+                                                dist = abs(strike_val - spot_price)
+                                                weight = (oi + vol + 1.0) / (dist + 1.0)
+                                                all_options.append((iv_val, weight))
+                            if all_options:
+                                total_weight = sum(w for _, w in all_options)
+                                if total_weight > 0:
+                                    current_iv = (
+                                        sum(iv * w for iv, w in all_options)
+                                        / total_weight
                                     )
-                                )
+                                    logger.info(
+                                        f"[{symbol}] VIX-style weighted average IV computed: {current_iv:.4f} "
+                                        f"across {len(all_options)} liquid contracts."
+                                    )
                 except Exception as opt_err:
-                    logger.warning(f"[{symbol}] ATM 期權鏈 IV 獲取失敗: {opt_err}")
+                    logger.warning(
+                        f"[{symbol}] VIX-style weighted average IV calculation failed: {opt_err}"
+                    )
 
             if not current_iv or current_iv <= 0:
                 # Fallback to DB or historical volatility (HV)
@@ -518,6 +545,13 @@ class SentimentEngine:
             # 9. 限制範圍 0.0 - 100.0
             iv_rank = max(0.0, min(100.0, iv_rank))
             iv_percentile = max(0.0, min(100.0, iv_percentile))
+
+            # Rule 4: If IV_Rank > 70%, current_iv cannot physically scale down to near-zero levels (<5%).
+            # Trigger an extraction error flag if conflict occurs.
+            if iv_rank > 70.0 and current_iv < 0.05:
+                raise ValueError(
+                    f"Conflict detected: IV Rank is high ({iv_rank:.1f}%) but Implied Volatility is suspiciously low ({current_iv * 100:.1f}%)."
+                )
 
             # 10. 計算 Expected Move Weekly (Stock Price * IV * sqrt(7/365))
             expected_move_weekly = spot_price * current_iv * math.sqrt(7.0 / 365.0)

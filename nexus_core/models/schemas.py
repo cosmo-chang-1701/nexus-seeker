@@ -75,9 +75,8 @@ class EnhancedWatchlistMetrics(BaseModel):
 
     @property
     def distance_to_absolute_support(self) -> float:
-        return (
-            self.current_price / min(self.buy_price_phase3, self.gex_max_put_wall)
-        ) - 1.0
+        support = min(self.buy_price_phase3, self.gex_max_put_wall)
+        return (self.current_price - support) / self.current_price
 
 
 class WatchlistTacticalPlan(BaseModel):

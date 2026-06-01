@@ -16,18 +16,25 @@ C_CYAN = "\u001b[1;36m"
 
 
 def _wrap_visual(text: str, width: int, indent: str = "") -> list[str]:
-    lines: list[str] = []
-    current = ""
-    for char in text:
-        candidate = current + char
-        if current and _visual_len(candidate) > width:
+    paragraphs = text.replace("\r\n", "\n").split("\n")
+    all_wrapped_lines = []
+    for para in paragraphs:
+        para = para.strip()
+        if not para:
+            continue
+        lines: list[str] = []
+        current = ""
+        for char in para:
+            candidate = current + char
+            if current and _visual_len(candidate) > width:
+                lines.append(current)
+                current = indent + char
+            else:
+                current = candidate
+        if current:
             lines.append(current)
-            current = indent + char
-        else:
-            current = candidate
-    if current:
-        lines.append(current)
-    return lines or [indent]
+        all_wrapped_lines.extend(lines)
+    return all_wrapped_lines or [indent]
 
 
 def _format_pair(
@@ -126,19 +133,28 @@ def generate_ansi_watchlist_report(
         " ----------------------------------",
         " ⚙️ SDDM / 對沖 (SDDM Routing & Hedge Control)",
         f" ├─ 路由機制: {route_color}{tactical_model.sddm_route}{C_RESET} | 網格步長: {tactical_model.dynamic_grid_step:.2f}",
-        f" ├─ Delta 曝險: Hidden Δ: {hidden_delta_color}{tactical_model.hidden_delta_risk:+.2f}{C_RESET} | 對沖股數: {C_RED if tactical_model.hedge_allocation_shares > 0 else C_GREEN}{tactical_model.hedge_allocation_shares}{C_RESET} 股",
     ]
+    if tactical_model.scenario == "hard-hedge":
+        lines.append(
+            " ├─ Delta 曝險: Hidden Δ: 0.00 (由於觸發 Hard-Hedge 出清，全面關閉對沖)"
+        )
+    else:
+        lines.append(
+            f" ├─ Delta 曝險: Hidden Δ: {hidden_delta_color}{tactical_model.hidden_delta_risk:+.2f}{C_RESET} "
+            f"| 對沖股數: {C_RED if tactical_model.hedge_allocation_shares > 0 else C_GREEN}{tactical_model.hedge_allocation_shares}{C_RESET} 股"
+        )
 
     instruction_lines = _wrap_visual(
         tactical_model.action_guideline,
         width=50,
         indent=" " * 13,
     )
-    lines.append(f" ├─ 執行指南: {route_color}{instruction_lines[0]}{C_RESET}")
-    for extra_line in instruction_lines[1:]:
-        lines.append(f" │           {route_color}{extra_line}{C_RESET}")
 
     if tactical_model.hedge_instruction:
+        lines.append(f" ├─ 執行指南: {route_color}{instruction_lines[0]}{C_RESET}")
+        for extra_line in instruction_lines[1:]:
+            lines.append(f" │           {route_color}{extra_line}{C_RESET}")
+
         hedge_lines = _wrap_visual(
             tactical_model.hedge_instruction,
             width=50,
@@ -148,8 +164,9 @@ def generate_ansi_watchlist_report(
         for extra_line in hedge_lines[1:]:
             lines.append(f"              {C_RED}{extra_line}{C_RESET}")
     else:
-        # If no hedge instruction, make execution guideline the leaf node
-        lines[-1] = lines[-1].replace(" ├─ 執行指南:", " └─ 執行指南:")
+        lines.append(f" └─ 執行指南: {route_color}{instruction_lines[0]}{C_RESET}")
+        for extra_line in instruction_lines[1:]:
+            lines.append(f"              {route_color}{extra_line}{C_RESET}")
 
     lines.append("```")
     return "\n".join(lines)

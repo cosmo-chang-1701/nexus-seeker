@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nexus-core"
-version = "1.6.55"
+version = "1.6.60"
 description = "Nexus Seeker Core Bot and Market Analysis"
 requires-python = ">=3.10"
 dependencies = [
@@ -67,7 +67,8 @@ module = [
     "discord.*",
     "dotenv.*",
     "psutil.*",
-    "pytest"
+    "pytest",
+    "httpx"
 ]
 ignore_missing_imports = true
 

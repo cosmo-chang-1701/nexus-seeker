@@ -11,33 +11,17 @@ class WatchlistRiskController:
         dynamic_grid_step = round(metrics.atr_14 * 0.5, 2)
 
         if metrics.current_price <= metrics.buy_price_phase2:
-            hidden_delta_risk = round(
-                metrics.beta * metrics.vanna_sensitivity * 100.0, 2
-            )
-            hedge_allocation_shares = int(round(abs(hidden_delta_risk)))
-            if hidden_delta_risk > 0:
-                hedge_instruction = (
-                    f"🚨 緊急對沖指令：Hidden Delta {hidden_delta_risk:+.2f}，"
-                    f"建議立即放空 {hedge_allocation_shares} 股 SPY 對沖。"
-                )
-            elif hidden_delta_risk < 0:
-                hedge_instruction = (
-                    f"🚨 緊急對沖指令：Hidden Delta {hidden_delta_risk:+.2f}，"
-                    f"建議立即買入 {hedge_allocation_shares} 股 SPY 對沖。"
-                )
-            else:
-                hedge_instruction = "🚨 緊急對沖指令：Hidden Delta 接近 0，先降槓桿並觀察下一個 30 分鐘節點。"
             return WatchlistTacticalPlan(
                 scenario="hard-hedge",
-                sddm_route="SHIELD (網格全面防禦)",
+                sddm_route="SHIELD (全面防禦中)",
                 action_guideline=(
-                    f"{hedge_instruction} 現價已跌破 Phase 2 (${metrics.buy_price_phase2:.2f})，"
-                    "先執行保命對沖，再評估是否保留底倉。"
+                    "現貨部位已進入 Hard-Hedge 全數出清路由，"
+                    "無需執行 SPY 指數對沖，確保流動性完全回歸。"
                 ),
                 dynamic_grid_step=dynamic_grid_step,
-                hidden_delta_risk=hidden_delta_risk,
-                hedge_instruction=hedge_instruction,
-                hedge_allocation_shares=hedge_allocation_shares,
+                hidden_delta_risk=0.00,
+                hedge_instruction=None,
+                hedge_allocation_shares=0,
                 alert_level="red",
             )
 
