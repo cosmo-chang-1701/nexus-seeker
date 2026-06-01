@@ -451,15 +451,43 @@ async def build_watchlist_event_context(
     macro_name = getattr(macro_event, "event", None)
     macro_time = getattr(macro_event, "time", None)
     macro_tte_hours = getattr(macro_event, "tte_hours", None)
-    risk_mode = _resolve_watchlist_event_mode(earnings_tte_hours, macro_tte_hours)
-    summary = _build_watchlist_event_summary(
-        symbol,
-        earnings_date,
-        earnings_tte_hours,
-        macro_name,
-        macro_tte_hours,
-        risk_mode,
-    )
+
+    is_macro_released = False
+    macro_release_time = None
+    if macro_time and macro_name:
+        try:
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+
+            cleaned_time = macro_time.replace("Z", "+00:00")
+            macro_release_time = datetime.fromisoformat(cleaned_time).astimezone(
+                ZoneInfo("Asia/Taipei")
+            )
+            current_cst = datetime.now(ZoneInfo("Asia/Taipei"))
+            if current_cst >= macro_release_time:
+                is_macro_released = True
+        except Exception as e:
+            logger.warning(f"Error parsing macro event time {macro_time}: {e}")
+
+    if is_macro_released and macro_release_time is not None:
+        macro_tte_hours = None
+        risk_mode = _resolve_watchlist_event_mode(earnings_tte_hours, None)
+        release_time_str = macro_release_time.strftime("%H:%M")
+        summary = (
+            f"{macro_name} 數據已於 {release_time_str} CST 正式公布。"
+            f"宏觀不確定性逐步落地，轉入盤中實體重力回歸監控。"
+        )
+    else:
+        risk_mode = _resolve_watchlist_event_mode(earnings_tte_hours, macro_tte_hours)
+        summary = _build_watchlist_event_summary(
+            symbol,
+            earnings_date,
+            earnings_tte_hours,
+            macro_name,
+            macro_tte_hours,
+            risk_mode,
+        )
+
     return WatchlistEventContext(
         earnings_date=earnings_date,
         earnings_tte_hours=earnings_tte_hours,
@@ -756,7 +784,7 @@ def calculate_dynamic_trading_signals(
         if tactical_model.scenario == "hard-hedge":
             sell_pct = 1.0
             result["sell_rationale"] = (
-                "⚠️ 系統啟動硬避險 (Hard-Hedge)，建議全數出清現貨避險"
+                "⚠️ 系統啟動硬避險 (Hard-Hedge)，建議依指令全數出清現貨，抹平所有底層資產曝險。"
             )
         elif rsi > 75:
             sell_pct = 0.5
@@ -841,13 +869,16 @@ def derive_watchlist_option_guidance(
         )
 
     if event_context is not None and event_context.risk_mode == "macro-guard":
+        macro_name = event_context.macro_event or "重要總經數據"
+        is_occurring = any(ind in macro_name.upper() for ind in ["CPI", "FOMC", "NFP"])
+        placeholder = "CPI / FOMC / NFP" if is_occurring else macro_name
         if has_position:
             return (
-                f"{event_context.summary} CPI / FOMC / NFP 前先以續抱觀察、加強保護為主；"
+                f"{event_context.summary} {placeholder} 前先以續抱觀察、加強保護為主；"
                 f"可於阻力位 ${suitable_sell_price:.2f} 附近分批調節，期權優先考慮 Definition-Risk 價差結構。"
             )
         return (
-            f"{event_context.summary} 重要總經數據前先縮減交易規模，"
+            f"{event_context.summary} {placeholder} 前先縮減交易規模，"
             f"若價格回落至防線 ${suitable_buy_price:.2f} 想進場，期權優先選擇 Bull Call Spread 規避波動劇烈風險。"
         )
 
@@ -996,6 +1027,7 @@ async def build_watchlist_option_plan(
     capital: float,
     risk_limit: float,
     event_context: WatchlistEventContext | None = None,
+    has_position: bool = False,
 ) -> Optional[WatchlistOptionPlan]:
     from market_analysis.strategy import find_best_contract
 
@@ -1004,7 +1036,7 @@ async def build_watchlist_option_plan(
 
     tactical_model = _get_tactical_model(tactical)
     stock_action = derive_watchlist_option_guidance(
-        metrics, tactical_model, event_context=event_context
+        metrics, tactical_model, event_context=event_context, has_position=has_position
     )
 
     strategy_name: str | None = None
@@ -1024,7 +1056,30 @@ async def build_watchlist_option_plan(
         "macro-guard",
     }
 
-    if event_guard and tactical_model.scenario == "hard-hedge":
+    # Rule 2: Dynamic Option Strategy Optimization (Option Skew vs. Strategy Selector)
+    is_rule2_active = metrics.iv_rank > 50.0 and metrics.option_skew < 0.00
+
+    if is_rule2_active:
+        if has_position:
+            strategy_name = "Covered Call (拋補看漲期權 / 高位收租)"
+            premium_type = "credit"
+            chain_opt_type = "call"
+            leg_opt_type = "CALL"
+            primary_leg = await find_best_contract(
+                metrics.symbol, "STO_CALL", 0.20, 21, 45
+            )
+            primary_action = "SELL"
+        else:
+            strategy_name = "Bull Put Spread"
+            premium_type = "credit"
+            chain_opt_type = "put"
+            leg_opt_type = "PUT"
+            primary_leg = await find_best_contract(
+                metrics.symbol, "STO_PUT", -0.20, 30, 45
+            )
+            primary_action = "SELL"
+            cover_direction = "lower"
+    elif event_guard and tactical_model.scenario == "hard-hedge":
         strategy_name = "Bear Put Spread"
         premium_type = "debit"
         chain_opt_type = "put"
@@ -1680,6 +1735,7 @@ class IntradayScanPipeline:
                 capital=user_capital,
                 risk_limit=user_risk_limit,
                 event_context=evaluation.event_context,
+                has_position=has_position,
             ),
             generate_watchlist_skew_commentary(
                 evaluation.metrics.symbol,

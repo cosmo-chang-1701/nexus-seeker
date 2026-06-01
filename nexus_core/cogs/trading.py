@@ -764,6 +764,7 @@ class SchedulerCog(commands.Cog):
                     capital=user_context.capital,
                     risk_limit=user_context.risk_limit,
                     event_context=evaluation.event_context,
+                    has_position=has_position,
                 )
                 embed = create_watchlist_signal_embed(
                     symbol=sym,

@@ -68,18 +68,25 @@ def _visual_truncate(s: str, max_vlen: int) -> str:
 
 
 def _wrap_visual(text: str, width: int, indent: str = "") -> list[str]:
-    lines: list[str] = []
-    current = ""
-    for char in text:
-        candidate = current + char
-        if current and _visual_len(candidate) > width:
+    paragraphs = text.replace("\r\n", "\n").split("\n")
+    all_wrapped_lines = []
+    for para in paragraphs:
+        para = para.strip()
+        if not para:
+            continue
+        lines: list[str] = []
+        current = ""
+        for char in para:
+            candidate = current + char
+            if current and _visual_len(candidate) > width:
+                lines.append(current)
+                current = indent + char
+            else:
+                current = candidate
+        if current:
             lines.append(current)
-            current = indent + char
-        else:
-            current = candidate
-    if current:
-        lines.append(current)
-    return lines or [indent]
+        all_wrapped_lines.extend(lines)
+    return all_wrapped_lines or [indent]
 
 
 def _parse_and_format_positions_table(positions_list: List[str]) -> str:
@@ -2776,8 +2783,15 @@ def create_watchlist_signal_embed(
     )
 
     if option_plan is not None:
+        is_covered_call = "Covered Call" in option_plan.strategy_name
         premium_type_tw = (
-            "Debit / 收支" if option_plan.premium_type == "debit" else "Credit / 收租"
+            "收入 / Credit"
+            if is_covered_call
+            else (
+                "Debit / 收支"
+                if option_plan.premium_type == "debit"
+                else "Credit / 收租"
+            )
         )
         plan_lines = ["```ansi"]
         plan_lines.append(" 🧾 建議期權合約 (Suggested Option Contract)")
@@ -2785,19 +2799,28 @@ def create_watchlist_signal_embed(
         plan_lines.append(
             f" ├─ 策略名稱: \u001b[1;36m{option_plan.strategy_name}\u001b[0m ({premium_type_tw})"
         )
-        plan_lines.append(
-            f" ├─ 預估權利金: \u001b[1;32m${option_plan.estimated_net_premium:.2f}\u001b[0m (建議 \u001b[1;35m{option_plan.suggested_contracts}\u001b[0m 口)"
-        )
-        plan_lines.append(
-            f" ├─ 估計最大風險: \u001b[1;31m${option_plan.max_risk_amount:.2f}\u001b[0m"
-        )
-        plan_lines.append(" └─ 執行合約結構:")
+
+        if is_covered_call:
+            plan_lines.append(
+                f" ├─ 預估權利金: \u001b[1;32m${option_plan.estimated_net_premium:.2f}\u001b[0m ({premium_type_tw})"
+            )
+            plan_lines.append(" └─ 執行合約結構:")
+        else:
+            plan_lines.append(
+                f" ├─ 預估權利金: \u001b[1;32m${option_plan.estimated_net_premium:.2f}\u001b[0m (建議 \u001b[1;35m{option_plan.suggested_contracts}\u001b[0m 口)"
+            )
+            plan_lines.append(
+                f" ├─ 估計最大風險: \u001b[1;31m${option_plan.max_risk_amount:.2f}\u001b[0m"
+            )
+            plan_lines.append(" └─ 執行合約結構:")
+
         for i, leg in enumerate(option_plan.legs):
             is_last = i == len(option_plan.legs) - 1
             connector = "    └──" if is_last else "    ├──"
-            plan_lines.append(
-                f"{connector} {leg.action.upper()} {leg.opt_type.upper()} {leg.strike:.2f} {leg.expiry} @ {leg.mid_price:.2f}"
-            )
+            leg_str = f"{connector} {leg.action.upper()} {leg.opt_type.upper()} {leg.strike:.2f} {leg.expiry} @ {leg.mid_price:.2f}"
+            if is_covered_call:
+                leg_str += " (鎖定 Max Pain 利益中樞)"
+            plan_lines.append(leg_str)
         plan_lines.append("```")
         option_value = "\n".join(plan_lines)
     else:

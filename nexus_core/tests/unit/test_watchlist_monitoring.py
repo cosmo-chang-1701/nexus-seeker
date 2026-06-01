@@ -468,3 +468,105 @@ async def test_build_watchlist_event_context_marks_earnings_lock():
 
     assert context.risk_mode == "event-lock"
     assert "禁做賣方" in context.summary
+
+
+def test_watchlist_risk_controller_hard_hedge_suppresses_spy_hedging():
+    """Rule 1: Hard-Hedge triggers suppression of index short hedging."""
+    metrics = _sample_metrics(current_price=95.0, iv_rank=74.7)
+    metrics.buy_price_phase2 = 100.0  # spot < phase2 triggers hard-hedge
+
+    tactical = WatchlistRiskController.process_metrics(metrics)
+
+    assert tactical.scenario == "hard-hedge"
+    assert tactical.sddm_route == "SHIELD (全面防禦中)"
+    assert tactical.hidden_delta_risk == 0.00
+    assert tactical.hedge_allocation_shares == 0
+    assert tactical.hedge_instruction is None
+    assert "無需執行 SPY 指數對沖" in tactical.action_guideline
+
+
+@pytest.mark.asyncio
+async def test_rule2_premium_selling_option_strategy_routing():
+    """Rule 2: IV_Rank > 50% and Option_Skew < 0% routes to Premium Selling Strategies and bans Debit Spreads."""
+    from models.schemas import WatchlistTacticalPlan
+
+    metrics = _sample_metrics(current_price=108.99, iv_rank=74.7)
+    metrics.option_skew = -5.10  # right-skewed / calls overvalued
+
+    tactical = WatchlistTacticalPlan(
+        scenario="premium-harvest",
+        sddm_route="SHIELD (全面防禦中)",
+        dynamic_grid_step=4.65,
+        alert_level="yellow",
+    )
+
+    # 1. With position: routes to Covered Call
+    with patch(
+        "market_analysis.strategy.find_best_contract", new_callable=AsyncMock
+    ) as mock_find:
+        mock_find.return_value = {"strike": 115.0, "expiry": "2026-06-26", "mid": 4.15}
+        plan_held = await build_watchlist_option_plan(
+            metrics, tactical, capital=100000.0, risk_limit=15.0, has_position=True
+        )
+        assert plan_held is not None
+        assert "Covered Call" in plan_held.strategy_name
+        assert plan_held.premium_type == "credit"
+        assert len(plan_held.legs) == 1
+        assert plan_held.legs[0].action == "SELL"
+        assert plan_held.legs[0].opt_type == "CALL"
+
+    # 2. Without position: routes to Bull Put Spread
+    with patch(
+        "market_analysis.strategy.find_best_contract", new_callable=AsyncMock
+    ) as mock_find, patch(
+        "market_analysis.intraday_pipeline._pick_watchlist_cover_leg",
+        new_callable=AsyncMock,
+    ) as mock_cover:
+        mock_find.return_value = {"strike": 105.0, "expiry": "2026-06-26", "mid": 4.15}
+        mock_cover.return_value = {"strike": 100.0, "expiry": "2026-06-26", "mid": 1.15}
+
+        plan_unheld = await build_watchlist_option_plan(
+            metrics, tactical, capital=100000.0, risk_limit=15.0, has_position=False
+        )
+        assert plan_unheld is not None
+        assert plan_unheld.strategy_name == "Bull Put Spread"
+        assert plan_unheld.premium_type == "credit"
+        assert len(plan_unheld.legs) == 2
+
+
+@pytest.mark.asyncio
+async def test_rule3_macro_timer_cache_invalidation():
+    """Rule 3: Macro event release time in the past invalidates countdown and switches to published state."""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    # Set event release time 1 hour in the past
+    past_time = (datetime.now(ZoneInfo("Asia/Taipei")) - timedelta(hours=1)).isoformat()
+
+    macro_event = type(
+        "EconomicEvent",
+        (),
+        {"event": "ISM Manufacturing PMI", "time": past_time, "tte_hours": -1.0},
+    )()
+
+    context = await build_watchlist_event_context(
+        "INTC", earnings_event=None, macro_event=macro_event
+    )
+
+    assert context.risk_mode == "normal"
+    assert context.macro_tte_hours is None
+    assert "ISM Manufacturing PMI" in context.summary
+    assert "正式公布" in context.summary
+    assert "宏觀不確定性逐步落地" in context.summary
+
+
+def test_rule5_support_distance_formula_correctness():
+    """Rule 5 & Bug 4: Support distance is defined as (current - support) / current."""
+    metrics = _sample_metrics(current_price=108.99, iv_rank=74.7)
+    metrics.buy_price_phase3 = 49.60
+    metrics.gex_max_put_wall = 50.00
+
+    # support_price = min(buy_price_phase3, gex_max_put_wall) = 49.60
+    # distance = (108.99 - 49.60) / 108.99 = 0.544912...
+    dist = metrics.distance_to_absolute_support
+    assert abs(dist - 0.5449) < 0.001
