@@ -278,87 +278,111 @@ async def generate_analyst_report(report_type: str, raw_data: dict) -> str:
 
 async def generate_watchlist_skew_commentary(symbol: str, raw_data: dict) -> str:
     """
-    針對 watchlist 心跳中的 skew 狀態生成簡短解說。
+    程式化（規則引擎）替代個股 skew / IV / 事件風險解說，0 延遲，100% 穩定。
     """
-    if not is_memory_safe():
-        logger.warning("🚨 [記憶體警報] 系統資源不足，跳過 Watchlist Skew LLM 解說。")
-        return "系統記憶體負載偏高，暫停 LLM skew 解說；請先依 IV Rank、Skew 狀態與事件風控欄位手動判讀。"
+    commentary_parts = []
+    symbol = symbol.upper()
 
-    system_prompt = """
-    你是 Nexus Seeker 的期權偏斜結構分析助手。
-    請根據提供的單一標的 watchlist 原始數據，解讀目前 skew / IV / 事件風險代表的市場部位偏向與交易含義。
-
-    規則：
-    1. 只能使用提供的資料，不得虛構數值。
-    2. 使用繁體中文，語氣冷靜專業。
-    3. 請聚焦於 skew 代表的保護需求、方向偏好、IV 成本與事件風險。
-    4. 控制在 120 字內，適合直接放進 Discord embed 欄位。
-    """
-
-    user_prompt = (
-        f"標的: {symbol}\n"
-        f"Watchlist 資料: {json.dumps(raw_data, ensure_ascii=False)}\n"
-        "請輸出一段簡短的 skew 解說。"
-    )
-
-    try:
-        response = await client.beta.chat.completions.parse(
-            model=LLM_MODEL_NAME,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            response_format=SkewCommentary,
+    # 1. 偏斜 Skew 結構解讀
+    skew = float(raw_data.get("option_skew", 0.0))
+    skew_state = str(raw_data.get("option_skew_state", "N/A"))
+    if skew >= 5.0:
+        commentary_parts.append(
+            f"期權結構呈顯著左偏({skew_state})，反映市場避險情緒濃厚，機構正購入下行 Put 保險。"
         )
-        result = response.choices[0].message.parsed
-        if result is None:
-            raise ValueError("Parsed result is None")
-        return result.commentary
-    except Exception as e:
-        logger.error(f"[{symbol}] Watchlist skew LLM 解說失敗: {e}")
-        return f"LLM skew 解說暫時不可用：{str(e)}"
+    elif skew <= -2.0:
+        commentary_parts.append(
+            f"期權結構呈顯著右偏({skew_state})，反映市場看多投機情緒高漲，買權 Call 相對昂貴。"
+        )
+    else:
+        commentary_parts.append(
+            f"期權偏斜（Skew {skew:+.2f}%）平穩，多空籌碼均衡，無明顯單向偏好。"
+        )
+
+    # 2. 隱含波動率與支撐位階
+    iv_rank = float(raw_data.get("iv_rank", 50.0))
+    scenario = str(raw_data.get("scenario", "wait"))
+    if iv_rank > 65.0:
+        commentary_parts.append(
+            f"即時 IV Rank ({iv_rank:.1f}%) 偏高，權利金定價昂貴，賣方（如 CSP）極具收租溢價優勢。"
+        )
+    elif iv_rank < 35.0:
+        commentary_parts.append(
+            f"即時 IV Rank ({iv_rank:.1f}%) 偏低，權利金便宜，較利於買方以價差策略（Debit Spread）卡位。"
+        )
+
+    # 3. 戰術與事件風控提示
+    event_risk_summary = str(raw_data.get("event_risk_summary", ""))
+    if "財報" in event_risk_summary or "倒數" in event_risk_summary:
+        commentary_parts.append(
+            "⚠️ 財報/事件前夕，波動率劇烈震盪，務必收縮裸賣方口數，優先選擇價差防守。"
+        )
+    elif scenario == "hard-hedge":
+        commentary_parts.append(
+            "🚨 已跌破關鍵防線，系統啟動 Hard-Hedge 網格防禦，切忌重倉逆勢摸底。"
+        )
+    elif scenario == "premium-harvest":
+        commentary_parts.append(
+            "🟡 現價接近 Phase 1 支撐帶，且 IV 偏高，適合在買點分批以 CSP 收集租金建倉。"
+        )
+    else:
+        commentary_parts.append(
+            "🟢 常態跟蹤區間，多頭架構穩固，維持既有網格或現貨策略守株待兔。"
+        )
+
+    return " ".join(commentary_parts)[:200]  # 控制字數，適合 Discord embed 欄位
 
 
 async def generate_watchlist_roundup_commentary(raw_data: dict) -> str:
     """
-    針對單一使用者本輪 watchlist 心跳生成總覽摘要。
+    程式化（規則引擎）替代自選股組合本輪全局總覽，0 延遲，100% 穩定。
     """
-    if not is_memory_safe():
-        logger.warning("🚨 [記憶體警報] 系統資源不足，跳過 Watchlist 總覽 LLM 解說。")
-        return "系統記憶體負載偏高，暫停本輪 watchlist 總覽 LLM 摘要；請優先檢查紅 / 黃燈標的與事件風控欄位。"
+    symbols_data = raw_data.get("symbols", [])
+    total = len(symbols_data)
+    if total == 0:
+        return "本輪無可用 watchlist 評估結果。"
 
-    system_prompt = """
-    你是 Nexus Seeker 的 watchlist 輪巡總覽助手。
-    請根據同一輪 heartbeat 的多標的資料，整理一段可直接放進 Discord embed 的總覽摘要。
+    red_items = [item for item in symbols_data if item.get("alert_level") == "red"]
+    yellow_items = [
+        item for item in symbols_data if item.get("alert_level") == "yellow"
+    ]
 
-    規則：
-    1. 只能使用提供的資料，不得虛構數值。
-    2. 使用繁體中文，語氣冷靜專業。
-    3. 優先指出最高優先標的、共同事件風險與本輪倉位/風險姿態。
-    4. 控制在 180 字內。
-    """
+    roundup_parts = []
+    roundup_parts.append(f"📡 【本輪自選股全局診斷】共掃描 `{total}` 檔標的。")
 
-    user_prompt = (
-        f"本輪 Watchlist 資料: {json.dumps(raw_data, ensure_ascii=False)}\n"
-        "請輸出一段本輪 watchlist 總覽摘要。"
-    )
-
-    try:
-        response = await client.beta.chat.completions.parse(
-            model=LLM_MODEL_NAME,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            response_format=WatchlistRoundupCommentary,
+    if red_items:
+        red_syms = ", ".join([str(item.get("symbol")) for item in red_items])
+        roundup_parts.append(
+            f"🔴 **高危警報 (紅燈 {len(red_items)} 檔)**：`{red_syms}` 已擊穿支撐防線！系統已啟動 Hard-Hedge 與緊急 SPY 對沖。請「優先處置」這些標的，做好現貨鎖利或保護性 Put。"
         )
-        result = response.choices[0].message.parsed
-        if result is None:
-            raise ValueError("Parsed result is None")
-        return result.commentary
-    except Exception as e:
-        logger.error(f"Watchlist 總覽 LLM 解說失敗: {e}")
-        return f"本輪總覽 LLM 摘要暫時不可用：{str(e)}"
+
+    if yellow_items:
+        yellow_syms = ", ".join([str(item.get("symbol")) for item in yellow_items])
+        roundup_parts.append(
+            f"🟡 **收租機會 (黃燈 {len(yellow_items)} 檔)**：`{yellow_syms}` 處於 Phase 1 支撐且 IV 偏高。推薦在買點賣出 CSP 收集溢價，勝率高於現股追高。"
+        )
+
+    if not red_items and not yellow_items:
+        roundup_parts.append(
+            "🟢 **全局安全**：所有標的均處於常規防禦區間，多頭大後方安全穩固，無須任何緊急對沖，耐心等待買點陷阱觸發。"
+        )
+
+    # 檢測是否有重大事件
+    event_symbols = []
+    for item in symbols_data:
+        sym = item.get("symbol", "")
+        ev = item.get("event_risk_summary", "")
+        if ev and "未偵測到" not in ev and "無重大事件" not in ev:
+            # 取得前段事件名稱簡化呈現
+            ev_name = ev.split("｜")[0] if "｜" in ev else ev
+            event_symbols.append(f"{sym}({ev_name})")
+
+    if event_symbols:
+        roundup_parts.append(
+            f"🗓️ **重大事件追蹤**：`{', '.join(event_symbols)}`，注意事件前波動率 Crush 與跳空風險。"
+        )
+
+    return "\n\n".join(roundup_parts)[:250]
 
 
 async def generate_polymarket_summary(
