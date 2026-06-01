@@ -194,7 +194,7 @@ class AttributionEngine:
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are a Quant Attribution Analyst.",
+                        "content": "You are a Quant Attribution Analyst. You must answer in 100% fluent Traditional Chinese (繁體中文) using Taiwanese market terminology.",
                     },
                     {"role": "user", "content": prompt},
                 ],
