@@ -308,6 +308,7 @@ async def test_build_watchlist_heartbeat_embed_includes_option_plan(intraday_pip
         capital=120000.0,
         risk_limit=12.0,
         event_context=evaluation.event_context,
+        has_position=False,
     )
     mock_guidance.assert_called_once()
     assert mock_guidance.call_args[1]["suitable_buy_price"] == 377.78
