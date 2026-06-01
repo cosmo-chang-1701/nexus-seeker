@@ -457,6 +457,55 @@ def test_create_watchlist_signal_embed():
     assert "SELL PUT 120.00" in embed.fields[8].value
 
 
+def test_create_watchlist_signal_embed_covered_call():
+    option_plan = WatchlistOptionPlan(
+        strategy_name="Covered Call",
+        premium_type="credit",
+        estimated_net_premium=4.15,
+        suggested_contracts=1,
+        max_risk_amount=0.0,
+        rationale="測試 Covered Call",
+        stock_action="拋補看漲期權 / 高位收租",
+        legs=[
+            WatchlistOptionLeg(
+                action="SELL",
+                opt_type="CALL",
+                strike=115.0,
+                expiry="2026-06-26",
+                mid_price=4.15,
+            )
+        ],
+    )
+    embed = create_watchlist_signal_embed(
+        symbol="INTC",
+        report_body="```ansi\nwatchlist report\n```",
+        option_guidance=" Covered Call 鎖利。",
+        event_risk_summary="無重大事件",
+        skew_state="-5.10% ｜ 右偏 (Call 昂貴)",
+        alert_level="yellow",
+        option_plan=option_plan,
+        skew_commentary="Skew 右偏顯示買權昂貴，適合 Covered Call 收租。",
+        has_position=True,
+        holding_quantity=100.0,
+        holding_avg_cost=113.50,
+        holding_pnl_pct=-0.0397,
+        suitable_sell_price=115.00,
+        suitable_sell_shares=100,
+        sell_rationale="全數出清現貨避險",
+    )
+
+    assert embed.title == "📡 Watchlist 半小時戰報：INTC"
+    assert "Covered Call" in embed.fields[8].value
+    assert "預估權利金:" in embed.fields[8].value
+    assert "$4.15" in embed.fields[8].value
+    assert "(收入 / Credit)" in embed.fields[8].value
+    assert (
+        "執行合約結構: SELL CALL 115.00 2026-06-26 @ 4.15 (鎖定 Max Pain 利益中樞)"
+        in embed.fields[8].value
+    )
+    assert "估計最大風險" not in embed.fields[8].value
+
+
 def test_create_watchlist_overview_embed():
     embed = create_watchlist_overview_embed(
         [
