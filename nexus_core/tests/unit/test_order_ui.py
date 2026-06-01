@@ -263,8 +263,9 @@ async def test_cancel_order_modal_success(mock_interaction, db_conn):
 
     await modal.on_submit(mock_interaction)
 
-    assert mock_interaction.response.send_message.called
-    embed = mock_interaction.response.send_message.call_args[1]["embed"]
+    assert mock_interaction.response.defer.called
+    assert mock_interaction.followup.send.called
+    embed = mock_interaction.followup.send.call_args[1]["embed"]
     assert "取消委託成功" in embed.title
 
     # 驗證資料庫已被刪除
@@ -291,8 +292,9 @@ async def test_adjust_order_modal_success(mock_interaction, db_conn):
 
     await modal.on_submit(mock_interaction)
 
-    assert mock_interaction.response.send_message.called
-    embed = mock_interaction.response.send_message.call_args[1]["embed"]
+    assert mock_interaction.response.defer.called
+    assert mock_interaction.followup.send.called
+    embed = mock_interaction.followup.send.call_args[1]["embed"]
     assert "價格微調成功" in embed.title
 
     # 驗證資料庫價格更新

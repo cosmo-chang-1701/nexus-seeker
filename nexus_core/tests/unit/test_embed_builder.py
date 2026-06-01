@@ -438,7 +438,7 @@ def test_create_watchlist_signal_embed():
     assert embed.fields[3].name == "📐 Skew 與市場判讀"
     assert "測試用" in embed.fields[3].value
     assert " └─ Skew 數據" in embed.fields[3].value
-    assert embed.fields[4].name == "🤖 LLM Skew 解說"
+    assert embed.fields[4].name == "⚡ Skew 即時智能診斷"
     assert "Skew 左偏" in embed.fields[4].value
     assert embed.fields[5].name == "🗓️ 事件風控"
     assert "CPI" in embed.fields[5].value

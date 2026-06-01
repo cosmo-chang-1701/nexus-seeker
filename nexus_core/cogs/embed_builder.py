@@ -2672,7 +2672,7 @@ def create_watchlist_signal_embed(
 
     if skew_commentary:
         commentary_lines = ["```ansi"]
-        commentary_lines.append(" 🤖 LLM Skew 即時解說 (AI Skew Commentary)")
+        commentary_lines.append(" ⚡ Skew 即時智能診斷 (Rule Engine)")
         commentary_lines.append(" ----------------------------------")
         wrapped_lines = _wrap_visual(skew_commentary.strip(), width=45, indent="   ")
         for line in wrapped_lines:
@@ -2680,9 +2680,9 @@ def create_watchlist_signal_embed(
         commentary_lines.append("```")
         commentary_text = "\n".join(commentary_lines)
     else:
-        commentary_text = "```ansi\n 🤖 暫無 LLM skew 即時解說\n```"
+        commentary_text = "```ansi\n ⚡ 暫無 Skew 即時智能診斷\n```"
     embed.add_field(
-        name="🤖 LLM Skew 解說",
+        name="⚡ Skew 即時智能診斷",
         value=_safe_embed_field_value(commentary_text, "暫無解說"),
         inline=False,
     )
