@@ -135,7 +135,7 @@ async def test_calculate_telemetry_pricing_engine():
     # spot_price (120.0) 偏近 1.5% -> 因為 spot_price <= price (120.0 == 120.0), 所以 price = 120.0 * 1.015 = 121.8
     assert price_skew == 121.8
     assert qty_skew == 75.0  # 100.0 * 0.75
-    assert any("Extreme Skew Tail Risk detected" in log for log in logs_skew)
+    assert any("偵測到期權偏斜極端尾端風險" in log for log in logs_skew)
 
 
 @pytest.mark.asyncio
