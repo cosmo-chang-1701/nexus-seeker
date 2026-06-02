@@ -127,7 +127,7 @@ class NexusEmbed(discord.Embed):
 
 
 # 置換當前 module 內部的 discord.Embed 參照，完美攔截並重構所有 Embed 版面
-discord.Embed = NexusEmbed
+discord.Embed = NexusEmbed  # type: ignore[misc]
 
 
 # ============================================================================
