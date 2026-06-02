@@ -4,7 +4,7 @@
 
 Nexus Seeker is a multi-tenant **Discord-first options risk-control and trading operations platform**. It combines technical structure, Black-Scholes-Merton pricing, Greeks-based portfolio risk, event-aware calendar defenses, and LLM-assisted structured commentary.
 
-Current released core version: **`1.6.68`**
+Current released core version: **`1.6.69`**
 
 The codebase is optimized for:
 
@@ -410,6 +410,7 @@ Current repository rule:
 - **Union & Nullability Safety**: Always perform explicit check-guards (e.g. `if obj is not None:`) before accessing properties on optional/nullable objects (like `interaction.message` or `self.view` on Discord items) to avoid Mypy `union-attr` check failures.
 - **Dynamic Property Reflection**: Use safe dynamic helpers `getattr(obj, "attr", default)` or `setattr(obj, "attr", val)` when passing or querying dynamic custom states across UI components (e.g. tracking pre-selected states in views before triggering modals).
 - **Mypy Exclusion Configuration**: Stale build directories (`build/`, `dist/`) must be kept clean and explicitly ignored in `[tool.mypy]` `exclude` configuration under `pyproject.toml` to prevent build-pipeline duplicate scans.
+- **型別自我檢測 (Pre-commit Type Check)**：向遠端 Git 倉庫提交程式碼前，應先於本地虛擬環境內執行一次靜態型別檢測（於 `nexus_core` 目錄下執行 `.venv/bin/mypy . --config-file pyproject.toml`）以避免型別錯誤進入遠端倉庫。
 
 ### Security
 
