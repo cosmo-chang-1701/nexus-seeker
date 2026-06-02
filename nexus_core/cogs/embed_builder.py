@@ -4264,7 +4264,7 @@ def create_hedge_alert_embed(
     return embed
 
 
-def create_proactive_event_alert_embed(events: List[Any]) -> discord.Embed:
+def create_proactive_event_alert_embed(events: List[Any]) -> List[discord.Embed]:
     """建立重大事件主動預警 Embed。"""
     embed = discord.Embed(
         title="🛡️ 【 預警：重大事件即時防護 】",
@@ -4276,10 +4276,12 @@ def create_proactive_event_alert_embed(events: List[Any]) -> discord.Embed:
         timestamp=datetime.now(timezone.utc),
     )
 
-    max_display = 24
-    display_events = events[:max_display]
+    if not events:
+        embed.description = "📭 目前沒有偵測到即將來臨的重大波動事件。"
+        embed.set_footer(text="Proactive Event Monitor | Nexus Seeker")
+        return [embed]
 
-    for event in display_events:
+    for event in events:
         if isinstance(event, dict):
             name = str(event.get("name", "⚠️ 重大事件"))
             tte_hours = float(event.get("tte_hours", 0.0) or 0.0)
@@ -4331,22 +4333,8 @@ def create_proactive_event_alert_embed(events: List[Any]) -> discord.Embed:
 
         embed.add_field(name=name, value=value, inline=False)
 
-    if len(events) > max_display:
-        omitted_count = len(events) - max_display
-        warning_msg = (
-            f"```ansi\n"
-            f"\u001b[1;31m⚠️ 由於 Discord 單個 Embed 的 25 個欄位限制，其餘 {omitted_count} 筆重大事件已被安全省略。\u001b[0m\n"
-            f"💡 請使用 `/calendar` 或查看系統日誌獲取完整重大事件清單。\n"
-            f"```"
-        )
-        embed.add_field(
-            name="⚠️ 其餘重大事件已被省略",
-            value=_safe_embed_field_value(warning_msg, "部分事件已被省略"),
-            inline=False,
-        )
-
     embed.set_footer(text="Proactive Event Monitor | Nexus Seeker")
-    return embed
+    return split_embed_by_fields(embed)
 
 
 def create_memory_alert_embed(
@@ -4548,7 +4536,7 @@ def create_intraday_scan_embed(output) -> discord.Embed:
     return embed
 
 
-def create_active_orders_embed(orders: List[Dict[str, Any]]) -> discord.Embed:
+def create_active_orders_embed(orders: List[Dict[str, Any]]) -> List[discord.Embed]:
     """建構待成交委託單列表報告 Embed (使用 Premium ANSI Card 設計，讓數值高亮且易於閱讀)"""
     embed = discord.Embed(
         title="📋 Nexus Seeker | 待成交委託單列表",
@@ -4559,7 +4547,8 @@ def create_active_orders_embed(orders: List[Dict[str, Any]]) -> discord.Embed:
 
     if not orders:
         embed.description = "📭 目前沒有任何活躍的待成交委託單。您可以透過 `/order_panel` 建立新的掛單。"
-        return embed
+        embed.set_footer(text="Nexus Seeker • 待成交委託單管理系統")
+        return [embed]
 
     order_type_zh = {
         "MARKET": "\u001b[1;36m市價單 (MARKET)\u001b[0m",
@@ -4577,10 +4566,7 @@ def create_active_orders_embed(orders: List[Dict[str, Any]]) -> discord.Embed:
         "GTC_90": "\u001b[1;37m90天有效 (GTC_90)\u001b[0m",
     }
 
-    max_display = 24
-    display_orders = orders[:max_display]
-
-    for idx, o in enumerate(display_orders):
+    for idx, o in enumerate(orders):
         ansi_lines = ["```ansi"]
         ansi_lines.append(
             f" 📂 委託單 ID: \u001b[1;33m{o['id']}\u001b[0m  |  標的: \u001b[1;36m{o['symbol']}\u001b[0m"
@@ -4628,22 +4614,8 @@ def create_active_orders_embed(orders: List[Dict[str, Any]]) -> discord.Embed:
             inline=False,
         )
 
-    if len(orders) > max_display:
-        omitted_count = len(orders) - max_display
-        warning_msg = (
-            f"```ansi\n"
-            f"\u001b[1;31m⚠️ 由於 Discord 單個 Embed 的 25 個欄位限制，其餘 {omitted_count} 筆活躍委託單已被安全省略。\u001b[0m\n"
-            f"💡 請至委託管理面板快速撤銷或微調掛單以防守大後方。\n"
-            f"```"
-        )
-        embed.add_field(
-            name="⚠️ 剩餘委託單未完全顯示",
-            value=_safe_embed_field_value(warning_msg, "部分委託單已被省略"),
-            inline=False,
-        )
-
     embed.set_footer(text="Nexus Seeker • 待成交委託單管理系統")
-    return embed
+    return split_embed_by_fields(embed)
 
 
 def create_telemetry_alignment_embed(

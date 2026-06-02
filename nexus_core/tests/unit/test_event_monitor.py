@@ -29,7 +29,7 @@ async def test_send_event_alert_uses_embed_builder():
         new=AsyncMock(return_value={"c": 500.0}),
     ), patch(
         "services.event_monitor.create_proactive_event_alert_embed",
-        return_value=embed,
+        return_value=[embed],
     ) as mock_create:
         await monitor._send_event_alert(123, events)
 
