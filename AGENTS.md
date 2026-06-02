@@ -345,6 +345,16 @@ Current repository rule:
 - cogs should **not** use the `queue_dm(message=...)` shortcut
 - push/report messages should prefer **field-based embeds**
 - ANSI tables belong inside a field, not dumped into the full description when avoidable
+- **Visual Consistency & Subclassing (`NexusEmbed`)**:
+  - To maintain absolute visual consistency across all modules, all instantiated embeds in `cogs/embed_builder.py` are dynamically wrapped via the `NexusEmbed` subclass.
+  - **Curated Color Palette**: All standard colors are mapped to cohesive, premium palettes:
+    - Primary system/info: Curated blue `0x3498DB`
+    - Danger/risk alerts: Curated red `0xE74C3C`
+    - Settlement/profits: Curated green `0x2ECC71`
+    - Warning/observation: Curated orange `0xF39C12`
+    - Secondary: Curated blurple `0x5865F2`
+  - **Standardized Footer Signature**: Every embed footer is dynamically formatted as `"🌌 Nexus Seeker • [Module Description]"`, clean of duplicate prefixes, and synchronized with a system timestamp.
+  - **Pagination Compatibility (`from_dict`)**: The `.from_dict()` classmethod is overridden to seamlessly convert serialized dictionary payloads back into fully styled `NexusEmbed` instances.
 
 ---
 
