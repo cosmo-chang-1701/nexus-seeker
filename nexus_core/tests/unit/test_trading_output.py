@@ -234,8 +234,7 @@ async def test_dispatch_watchlist_heartbeat_sends_all_watchlist_symbols():
         new_callable=AsyncMock,
         side_effect=[object(), object()],
     ), patch(
-        "services.llm_service.generate_watchlist_skew_commentary",
-        new_callable=AsyncMock,
+        "market_analysis.intraday_pipeline.build_watchlist_skew_rule_commentary",
         side_effect=["AAPL skew", "NVDA skew"],
     ), patch(
         "services.llm_service.generate_watchlist_roundup_commentary",
@@ -327,8 +326,7 @@ async def test_dispatch_watchlist_heartbeat_honors_portfolio_only_mode():
         new_callable=AsyncMock,
         return_value=object(),
     ), patch(
-        "services.llm_service.generate_watchlist_skew_commentary",
-        new_callable=AsyncMock,
+        "market_analysis.intraday_pipeline.build_watchlist_skew_rule_commentary",
         side_effect=["AAPL skew", "NVDA skew"],
     ), patch(
         "services.llm_service.generate_watchlist_roundup_commentary",

@@ -23,7 +23,7 @@ repos:
     hooks:
       - id: mypy
         args: [--config-file=nexus_core/pyproject.toml, --explicit-package-bases]
-        additional_dependencies: [pydantic>=2.13.4, types-requests, types-psutil]
+        additional_dependencies: [pydantic>=2.13.4, types-requests, types-psutil, click>=8.1.0, rich>=13.0.0]
         files: ^nexus_core/
 
   - repo: https://github.com/returntocorp/semgrep

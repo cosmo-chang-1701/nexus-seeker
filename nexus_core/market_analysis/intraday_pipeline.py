@@ -284,6 +284,7 @@ async def build_enhanced_watchlist_metrics(
     profile_task = market_data_service.get_company_profile(symbol)
     iv_task = SentimentEngine.fetch_and_calculate_iv_metrics(symbol)
     skew_task = SentimentEngine.calculate_skew(symbol)
+    pcr_task = SentimentEngine.calculate_pcr(symbol)
     dividend_yield_task = market_data_service.get_dividend_yield(symbol)
 
     (
@@ -294,6 +295,7 @@ async def build_enhanced_watchlist_metrics(
         profile,
         iv_metrics,
         skew_metrics,
+        pcr_metrics,
         dividend_yield,
     ) = await asyncio.gather(
         quote_task,
@@ -303,6 +305,7 @@ async def build_enhanced_watchlist_metrics(
         profile_task,
         iv_task,
         skew_task,
+        pcr_task,
         dividend_yield_task,
     )
 
@@ -377,8 +380,11 @@ async def build_enhanced_watchlist_metrics(
         ma50=ma50,
         ma200=ma200,
         iv_rank=iv_metrics.iv_rank,
+        iv_percentile=iv_metrics.iv_percentile,
         option_skew=float(skew_metrics.get("skew", 0.0)),
+        skew_percentile=float(skew_metrics.get("skew_percentile", 50.0)),
         option_skew_state=str(skew_metrics.get("state") or "N/A"),
+        pcr=float(pcr_metrics.get("pcr", 0.0)),
         volume_poc=volume_poc,
         gex_max_put_wall=max(gex_max_put_wall, 0.01),
         vanna_sensitivity=vanna_sensitivity,
@@ -555,6 +561,22 @@ async def evaluate_watchlist_symbol(
     if metrics is None:
         return None
     tactical = WatchlistRiskController.process_metrics(metrics)
+
+    # Consistency Check: if Skew percentile is extreme but PCR stays low, treat as local hedging noise
+    if metrics.skew_percentile >= 90.0 and 0.0 < metrics.pcr <= 0.75:
+        tactical = WatchlistTacticalPlan(
+            scenario="wait",
+            sddm_route="WAIT (觀望 / 待機)",
+            action_guideline=(
+                "價格仍在防守框架內，維持現貨 $1.00×$ 零槓桿死守，將雙手嚴格離開期權開倉鍵。"
+            ),
+            dynamic_grid_step=tactical.dynamic_grid_step,
+            hidden_delta_risk=0.0,
+            hedge_instruction=None,
+            hedge_allocation_shares=0,
+            alert_level="yellow",
+        )
+
     return WatchlistEvaluation(
         metrics=metrics, tactical=tactical, event_context=event_context
     )
@@ -563,6 +585,7 @@ async def evaluate_watchlist_symbol(
 def build_watchlist_skew_commentary_payload(
     evaluation: WatchlistEvaluation,
 ) -> dict[str, Any]:
+    """Legacy payload used by LLM commentary (kept for backward compatibility)."""
     event_risk_summary = (
         evaluation.event_context.summary
         if evaluation.event_context is not None
@@ -581,6 +604,35 @@ def build_watchlist_skew_commentary_payload(
         "sell_zone_status": evaluation.metrics.sell_zone_status,
         "event_risk_summary": event_risk_summary,
     }
+
+
+_SKEW_PCR_DIVERGENCE_WARNING = (
+    "[⚠️ 數據警報]: 盤中 Skew 與 PCR 產生幅震背離，可能為單一機構巨鯨執行大宗客製化對沖所致之流動性偏斜，"
+    "不具備全域恐慌指導意義，建議維持現貨觀察。"
+)
+
+
+def build_watchlist_skew_rule_commentary(metrics: EnhancedWatchlistMetrics) -> str:
+    """Deterministic skew diagnostics (no LLM)."""
+
+    skew_val = float(getattr(metrics, "option_skew", 0.0) or 0.0)
+    skew_percentile = float(getattr(metrics, "skew_percentile", 50.0) or 50.0)
+    pcr = float(getattr(metrics, "pcr", 0.0) or 0.0)
+
+    # Consistency Check (Skew vs PCR)
+    if skew_percentile >= 90.0 and 0.0 < pcr <= 0.75:
+        return _SKEW_PCR_DIVERGENCE_WARNING
+
+    # Rigid skew sign ↔ interpretation mapping
+    if skew_val > 0 and skew_percentile >= 80.0:
+        return "⚠️ 市場下行保護需求極高，隱含避險情緒升溫（機構大舉購入 Put 保險）"
+    if skew_val < 0 and skew_percentile <= 20.0:
+        return "🔥 市場上行看漲需求爆發，動能抄底/追高情緒極端亢奮（散戶搶購末日 Call）"
+
+    return (
+        f"Skew {skew_val:+.2f}%（百分位 {skew_percentile:.0f}%）屬常態區；"
+        "建議以價位牆與事件風控為主，避免對單一指標過度解讀。"
+    )
 
 
 def _is_mock(obj: Any) -> bool:
@@ -824,6 +876,10 @@ def derive_watchlist_option_guidance(
 
     tactical_model = _get_tactical_model(tactical)
 
+    # 文案與 SDDM 路由剛性同步：WAIT 狀態下禁止任何期權開倉建議
+    if tactical_model.scenario == "wait" or "WAIT" in tactical_model.sddm_route.upper():
+        return "價格仍在防守框架內，維持現貨 $1.00×$ 零槓桿死守，將雙手嚴格離開期權開倉鍵。"
+
     # 確保取得適合的買賣點價位 (如未提供，則以默認資金參數在線計算)
     if has_position and suitable_sell_price is None:
         sig = calculate_dynamic_trading_signals(
@@ -843,6 +899,22 @@ def derive_watchlist_option_guidance(
             risk_limit=15.0,
         )
         suitable_buy_price = sig["suitable_buy_price"]
+
+    # IV Percentile 極端泡沫：封鎖買方路由 (Long Call / Long Put / Debit)
+    iv_percentile = float(getattr(metrics, "iv_percentile", 0.0) or 0.0)
+    if iv_percentile > 90.0:
+        warning = "🚨 當前隱含波動率已高度泡沫化，強烈預警造市商波動率扼殺 (IV Crush) 陷阱，全面關閉買方路由。"
+        if has_position:
+            return (
+                warning
+                + f"已有部位以現貨分批調節為主，或於阻力位 ${float(suitable_sell_price or 0.0):.2f} 建立 Covered Call／Collar 收租鎖利；"
+                "嚴禁任何單邊買入期權 (Long Call / Long Put) 或追價型 Debit 結構。"
+            )
+        return (
+            warning
+            + f"未持倉建議維持現貨觀察，等待價格回落至防線 ${float(suitable_buy_price or 0.0):.2f} 再評估；"
+            "不輸出任何 Long Call / Long Put 建議。"
+        )
 
     # 屬性安全獲取 (支援測試用 SimpleNamespace 模擬物件)
     current_price = metrics.current_price
@@ -916,7 +988,7 @@ def derive_watchlist_option_guidance(
 
     if tactical_model.scenario == "premium-harvest":
         if has_position:
-            if skew_val <= -5.0:
+            if skew_val >= 5.0:
                 return (
                     f"IV Rank {iv_rank:.1f}% 配合左偏 Skew {skew_val:+.2f}%；"
                     f"已有部位優先於阻力位 ${suitable_sell_price:.2f} 建立 Covered Call 或 Collar 進行收租與保護，避免直接加碼現股。"
@@ -925,17 +997,17 @@ def derive_watchlist_option_guidance(
                 f"IV Rank {iv_rank:.1f}% 偏高，已有部位可優先於 ${suitable_sell_price:.2f} 建立 Covered Call 收租鎖利；"
                 "若欲加碼，建議改用風險較清楚的 Bull Put Spread。"
             )
-        if skew_val <= -5.0:
+        if skew_val >= 5.0:
             return (
                 f"IV Rank {iv_rank:.1f}% 配合左偏 Skew {skew_val:+.2f}%；"
                 f"建議優先於動態買點 ${suitable_buy_price:.2f} 附近賣出 Cash-Secured Put 或 Bull Put Spread 收租，避免直接承接現股。"
             )
         return (
-            f"IV Rank {iv_rank:.1f}% 偏高，買方成本較貴；"
+            f"IV Rank {iv_rank:.1f}% 偏高，Skew {skew_val:+.2f}% 仍在可控區；買方成本較貴；"
             f"建議於適合買入價 ${suitable_buy_price:.2f} 附近賣出 Cash-Secured Put 卡位，或改用 Bull Put Spread 降低風險。"
         )
 
-    if current_price >= sell_price_phase1 and skew_val >= 2.0:
+    if current_price >= sell_price_phase1 and skew_val <= -2.0:
         if has_position:
             return (
                 f"價格進入賣壓阻力區且 Skew {skew_val:+.2f}% 偏右（買權昂貴，具看多情緒）；"
@@ -1056,9 +1128,17 @@ async def build_watchlist_option_plan(
         return None
 
     tactical_model = _get_tactical_model(tactical)
+
+    # SDDM 文案剛性同步：WAIT 狀態下不輸出任何可執行期權合約
+    if tactical_model.scenario == "wait" or "WAIT" in tactical_model.sddm_route.upper():
+        return None
+
     stock_action = derive_watchlist_option_guidance(
         metrics, tactical_model, event_context=event_context, has_position=has_position
     )
+
+    iv_percentile = float(getattr(metrics, "iv_percentile", 0.0) or 0.0)
+    iv_bubble = iv_percentile > 90.0
 
     strategy_name: str | None = None
     premium_type: WatchlistPremiumType | None = None
@@ -1165,7 +1245,7 @@ async def build_watchlist_option_plan(
                 metrics.symbol, "STO_PUT", -0.20, 30, 45
             )
             primary_action = "SELL"
-            if metrics.option_skew <= -5.0:
+            if metrics.option_skew >= 5.0:
                 strategy_name = "Bull Put Spread"
                 premium_type = "credit"
                 cover_direction = "lower"
@@ -1174,7 +1254,7 @@ async def build_watchlist_option_plan(
                 premium_type = "credit"
         elif (
             metrics.current_price >= metrics.sell_price_phase1
-            and metrics.option_skew >= 2.0
+            and metrics.option_skew <= -2.0
         ):
             strategy_name = "Call Credit Spread"
             premium_type = "credit"
@@ -1201,6 +1281,10 @@ async def build_watchlist_option_plan(
             return None
 
     if primary_leg is None or strategy_name is None or premium_type is None:
+        return None
+
+    # IV Percentile > 90%: hard block all buyer routes (debit / BTO structures)
+    if iv_bubble and premium_type == "debit":
         return None
 
     # Option pricing and liquidity verification (Guideline Four)
@@ -1291,12 +1375,26 @@ async def build_watchlist_option_plan(
         risk_budget_multiplier=_watchlist_event_risk_multiplier(event_context),
     )
 
+    # Macro 高衝擊事件倒數：剛性縮口數，避免事件前過度曝險
+    if (
+        event_context is not None
+        and event_context.macro_tte_hours is not None
+        and 0 < event_context.macro_tte_hours <= 24.0
+    ):
+        suggested_contracts = min(int(suggested_contracts), 1)
+
     rationale = (
         f"依據 {strategy_name} 路由，結合 IV Rank {metrics.iv_rank:.1f}%、"
         f"Skew {metrics.option_skew:+.2f}% 與當前技術位階自動選約。"
     )
     if event_context is not None and event_context.risk_mode != "normal":
         rationale = f"{rationale} {event_context.summary}"
+
+    if iv_bubble:
+        rationale = (
+            "🚨 當前隱含波動率已高度泡沫化，強烈預警造市商波動率扼殺 (IV Crush) 陷阱，全面關閉買方路由。 "
+            + rationale
+        )
     if event_lock and "Credit" in strategy_name:
         return None
     return WatchlistOptionPlan(
@@ -1746,7 +1844,6 @@ class IntradayScanPipeline:
     ) -> Any:
         import database
         from cogs.embed_builder import create_watchlist_signal_embed
-        from services.llm_service import generate_watchlist_skew_commentary
         from ui.formatter import generate_ansi_watchlist_report
 
         report_body = generate_ansi_watchlist_report(
@@ -1809,20 +1906,15 @@ class IntradayScanPipeline:
             suitable_sell_price=signals.get("suitable_sell_price"),
         )
 
-        option_plan, skew_commentary = await asyncio.gather(
-            build_watchlist_option_plan(
-                evaluation.metrics,
-                evaluation.tactical,
-                capital=user_capital,
-                risk_limit=user_risk_limit,
-                event_context=evaluation.event_context,
-                has_position=has_position,
-            ),
-            generate_watchlist_skew_commentary(
-                evaluation.metrics.symbol,
-                build_watchlist_skew_commentary_payload(evaluation),
-            ),
+        option_plan = await build_watchlist_option_plan(
+            evaluation.metrics,
+            evaluation.tactical,
+            capital=user_capital,
+            risk_limit=user_risk_limit,
+            event_context=evaluation.event_context,
+            has_position=has_position,
         )
+        skew_commentary = build_watchlist_skew_rule_commentary(evaluation.metrics)
         return create_watchlist_signal_embed(
             symbol=evaluation.metrics.symbol,
             report_body=report_body,

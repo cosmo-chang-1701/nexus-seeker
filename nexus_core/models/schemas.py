@@ -43,8 +43,16 @@ class EnhancedWatchlistMetrics(BaseModel):
     bias_ma20: float = 0.0
 
     iv_rank: float = Field(ge=0.0, le=100.0)
+    iv_percentile: float = Field(ge=0.0, le=100.0)
+
+    # Option Skew = IV(OTM Put) - IV(OTM Call) in percentage points
     option_skew: float
+    skew_percentile: float = Field(ge=0.0, le=100.0)
     option_skew_state: str = Field(min_length=1)
+
+    # Put/Call Ratio (volume-based), used for skew consistency checks
+    pcr: float = Field(ge=0.0)
+
     volume_poc: float = Field(gt=0.0)
     gex_max_put_wall: float = Field(gt=0.0)
     vanna_sensitivity: float

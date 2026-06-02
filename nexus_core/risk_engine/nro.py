@@ -44,7 +44,9 @@ class WatchlistRiskController:
         return WatchlistTacticalPlan(
             scenario="wait",
             sddm_route="WAIT (觀望 / 待機)",
-            action_guideline="價格仍在防守框架內，維持觀察並等待更佳風險報酬比。",
+            action_guideline=(
+                "價格仍在防守框架內，維持現貨 $1.00×$ 零槓桿死守，將雙手嚴格離開期權開倉鍵。"
+            ),
             dynamic_grid_step=dynamic_grid_step,
             hidden_delta_risk=0.0,
             hedge_instruction=None,

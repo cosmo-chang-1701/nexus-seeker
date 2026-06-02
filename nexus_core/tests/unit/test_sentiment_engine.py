@@ -46,6 +46,7 @@ async def test_calculate_skew_full():
 
             result = await SentimentEngine.calculate_skew("AAPL")
             assert "skew" in result
+            assert result["skew"] == pytest.approx(7.0)
             assert result["state"] != "ERROR"
 
 
