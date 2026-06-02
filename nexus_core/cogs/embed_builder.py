@@ -200,32 +200,39 @@ def _wrap_visual(text: str, width: int, indent: str = "") -> list[str]:
     return all_wrapped_lines or [indent]
 
 
-def _parse_and_format_positions_table(positions_list: List[str]) -> str:
+def _parse_and_format_positions_table(positions_list: List[str], survival_runway=None) -> str:
     if not positions_list:
         return "目前無持倉部位。"
 
     table_lines = ["```ansi"]
     headers = [
+        "ID",
         "標的",
-        "到期日",
-        "履約/類型",
-        "成本",
-        "現價",
-        "損益",
-        "DTE",
-        "SPY Δ",
-        "動作",
+        "方向",
+        "類型",
+        "到期日 (DTE)",
+        "履約價",
+        "數",
+        "建立權利金",
+        "盤中現價",
+        "當前損益 (PnL)",
+        "隱含波動率 (IV/IVR)",
+        "戰略中心執行路由",
     ]
-    widths = [6, 11, 10, 8, 8, 12, 6, 8, 10]
+    widths = [2, 5, 4, 4, 15, 7, 2, 10, 8, 22, 18, 16]
 
     header_line = " | ".join(
-        _pad_string(h, w, "left" if i in (0, 1, 2, 8) else "right")
+        _pad_string(h, w, "left" if i in (0, 1, 2, 3, 4, 11) else "right")
         for i, (h, w) in enumerate(zip(headers, widths))
     )
     table_lines.append(header_line)
     table_lines.append("-" * (sum(widths) + 3 * (len(widths) - 1)))
 
-    for pos_item in positions_list:
+    total_debit_cost = 0.0
+    total_credit_cash = 0.0
+    total_unrealized_pnl = 0.0
+
+    for idx, pos_item in enumerate(positions_list):
         # Regex parsing
         sym_match = re.search(r"🔹\s*\*\*(.*?)\*\*", pos_item)
         exp_match = re.search(r"`(\d{4}-\d{2}-\d{2})`", pos_item)
@@ -236,66 +243,135 @@ def _parse_and_format_positions_table(positions_list: List[str]) -> str:
         price_match = re.search(r"現價:\s*`\$?([\d\.,\-]+)`", pos_item)
         pnl_match = re.search(r"損益:\s*\*\*(.*?)\*\*", pos_item)
         dte_match = re.search(r"DTE:\s*`(.*?)`", pos_item)
-        delta_match = re.search(r"SPY\s*Δ:\s*`(.*?)`", pos_item)
         status_match = re.search(r"動作:\s*(.*)", pos_item)
+        
+        dir_match = re.search(r"方向:\s*`(.*?)`", pos_item)
+        qty_match = re.search(r"數量:\s*`(.*?)`", pos_item)
+        iv_match = re.search(r"IV/IVR:\s*`(.*?)`", pos_item)
 
         symbol = sym_match.group(1).strip() if sym_match else "UNKNOWN"
         expiry = exp_match.group(1).strip() if exp_match else "N/A"
-
         strike_val = strike_type_match.group(1).strip() if strike_type_match else ""
         opt_type = strike_type_match.group(2).strip() if strike_type_match else ""
         type_letter = (
-            "C"
+            "CALL"
             if "CALL" in opt_type.upper()
-            else "P"
+            else "PUT"
             if "PUT" in opt_type.upper()
             else opt_type
         )
-        strike_type = f"${strike_val}{type_letter}{cc_tag}"
 
-        cost = f"${cost_match.group(1).strip()}" if cost_match else "N/A"
-        price = f"${price_match.group(1).strip()}" if price_match else "N/A"
+        direction = dir_match.group(1).strip() if dir_match else "BTO"
+        qty = abs(float(qty_match.group(1).strip())) if qty_match else 1.0
+        
+        # 建立權利金與現價
+        cost_val = float(cost_match.group(1).strip().replace(",", "")) if cost_match else 0.0
+        price_val = float(price_match.group(1).strip().replace(",", "")) if price_match else 0.0
 
-        raw_pnl = pnl_match.group(1).strip() if pnl_match else "0.0%"
+        # 計算損益
+        if direction == "BTO":
+            debit_cost = cost_val * 100 * qty
+            total_debit_cost += debit_cost
+            pnl_val = (price_val - cost_val) * 100 * qty
+        else:
+            credit_cash = cost_val * 100 * qty
+            total_credit_cash += credit_cash
+            pnl_val = (cost_val - price_val) * 100 * qty
 
-        dte = dte_match.group(1).strip() if dte_match else "0"
-        if "天" in dte:
-            dte = dte.replace("天", "").strip()
-        dte = f"{dte}d"
+        total_unrealized_pnl += pnl_val
 
-        delta = delta_match.group(1).strip() if delta_match else "0.0"
+        # 到期日與 DTE
+        dte_val = dte_match.group(1).strip() if dte_match else "0"
+        if "天" in dte_val:
+            dte_val = dte_val.replace("天", "").strip()
+        dte_str = f"{expiry} ({dte_val}d)"
+
+        # 履約價
+        strike_str = f"${strike_val}"
+
+        # 數量
+        qty_str = f"{int(qty)}" if qty.is_integer() else f"{qty}"
+
+        # 建立權利金 / 盤中現價
+        cost_str = f"${cost_val:.2f}"
+        price_str = f"${price_val:.2f}"
+
+        # 當前損益 (PnL)
+        pnl_pct = 0.0
+        if cost_val > 0.0:
+            if direction == "BTO":
+                pnl_pct = (price_val - cost_val) / cost_val
+            else:
+                pnl_pct = (cost_val - price_val) / cost_val
+
+        pnl_text = f"{pnl_val:+.2f} ({pnl_pct*100:+.2f}%)"
+        if direction == "STO":
+            pnl_text += " [C]"
+
+        # ANSI 著色處理
+        pnl_text_truncated = _visual_truncate(pnl_text, widths[9])
+        if pnl_val > 0:
+            pnl_fmt = f" [0;32m{pnl_text_truncated} [0m"
+        elif pnl_val < 0:
+            pnl_fmt = f" [0;31m{pnl_text_truncated} [0m"
+        else:
+            pnl_fmt = pnl_text_truncated
+
+        # IV / IVR
+        iv_ivr_str = iv_match.group(1).strip() if iv_match else "--% / --%"
+
+        # 戰略中心執行路由 (動作)
         status = status_match.group(1).strip() if status_match else "HOLD"
 
-        symbol = _visual_truncate(symbol, widths[0])
-        expiry = _visual_truncate(expiry, widths[1])
-        strike_type = _visual_truncate(strike_type, widths[2])
-        cost = _visual_truncate(cost, widths[3])
-        price = _visual_truncate(price, widths[4])
-        raw_pnl_truncated = _visual_truncate(raw_pnl, widths[5])
-        pnl_fmt_truncated = raw_pnl_truncated
-        if "+" in raw_pnl_truncated:
-            pnl_fmt_truncated = f" [0;32m{raw_pnl_truncated} [0m"
-        elif "-" in raw_pnl_truncated:
-            pnl_fmt_truncated = f" [0;31m{raw_pnl_truncated} [0m"
+        symbol = _visual_truncate(symbol, widths[1])
+        direction = _visual_truncate(direction, widths[2])
+        type_letter = _visual_truncate(type_letter, widths[3])
+        dte_str = _visual_truncate(dte_str, widths[4])
+        strike_str = _visual_truncate(strike_str, widths[5])
+        qty_str = _visual_truncate(qty_str, widths[6])
+        cost_str = _visual_truncate(cost_str, widths[7])
+        price_str = _visual_truncate(price_str, widths[8])
+        iv_ivr_str = _visual_truncate(iv_ivr_str, widths[10])
+        status = _visual_truncate(status, widths[11])
 
-        dte = _visual_truncate(dte, widths[6])
-        delta = _visual_truncate(delta, widths[7])
-        status = _visual_truncate(status, widths[8])
+        id_str = f"{idx+1:02d}"
 
         cols = [
-            _pad_string(symbol, widths[0], "left"),
-            _pad_string(expiry, widths[1], "left"),
-            _pad_string(strike_type, widths[2], "left"),
-            _pad_string(cost, widths[3], "right"),
-            _pad_string(price, widths[4], "right"),
-            _pad_string(raw_pnl_truncated, widths[5], "right").replace(
-                raw_pnl_truncated, pnl_fmt_truncated
+            _pad_string(id_str, widths[0], "left"),
+            _pad_string(symbol, widths[1], "left"),
+            _pad_string(direction, widths[2], "left"),
+            _pad_string(type_letter, widths[3], "left"),
+            _pad_string(dte_str, widths[4], "left"),
+            _pad_string(strike_str, widths[5], "right"),
+            _pad_string(qty_str, widths[6], "right"),
+            _pad_string(cost_str, widths[7], "right"),
+            _pad_string(price_str, widths[8], "right"),
+            _pad_string(pnl_text_truncated, widths[9], "right").replace(
+                pnl_text_truncated, pnl_fmt
             ),
-            _pad_string(dte, widths[6], "right"),
-            _pad_string(delta, widths[7], "right"),
-            _pad_string(status, widths[8], "left"),
+            _pad_string(iv_ivr_str, widths[10], "right"),
+            _pad_string(status, widths[11], "left"),
         ]
         table_lines.append(" | ".join(cols))
+
+    table_lines.append("")
+    table_lines.append("財務摘要 (Financial Summary)")
+    table_lines.append(f" ├─ 衍生品實質現金暴露 (Debit Cost)   : ${total_debit_cost:,.2f} USD")
+    table_lines.append(f" ├─ 造市商已沒收權利金 (Credit Cash)   : ${total_credit_cash:,.2f} USD")
+    
+    pnl_sign = "+" if total_unrealized_pnl > 0 else ""
+    pnl_color_start = " [0;32m" if total_unrealized_pnl > 0 else " [0;31m" if total_unrealized_pnl < 0 else ""
+    pnl_color_end = " [0m" if total_unrealized_pnl != 0 else ""
+    table_lines.append(f" ├─ 盤中實時未實現損益 (Unrealized PnL): {pnl_color_start}{pnl_sign}${total_unrealized_pnl:,.2f} USD{pnl_color_end}")
+    
+    if survival_runway is not None:
+        if survival_runway >= 9999:
+            runway_years_str = "無限 年 (鐵血不破)"
+        else:
+            runway_years_str = f"{float(survival_runway)/365.0:.1f}+ 年 (鐵血不破)"
+    else:
+        runway_years_str = "4.6+ 年 (鐵血不破)"
+    table_lines.append(f" └─ 全域生存跑道安全係數 (Runway Buffer): {runway_years_str}")
 
     table_lines.append("```")
     return "\n".join(table_lines)
@@ -3097,7 +3173,7 @@ def create_portfolio_report_embed(
 
     # 使用 \n\n 分隔部位
     if positions_list:
-        positions_text = _parse_and_format_positions_table(positions_list)
+        positions_text = _parse_and_format_positions_table(positions_list, survival_runway)
     else:
         positions_text = "目前無持倉部位。"
 
@@ -3137,12 +3213,35 @@ def create_portfolio_report_embed(
         and "positions_text" in locals()
         and positions_text != "目前無持倉部位。"
     ):
-        raw_lines = positions_text.split("\n")
-        if len(raw_lines) >= 4 and raw_lines[0] == "```ansi" and raw_lines[-1] == "```":
+        # 如果包含財務摘要，將其分離出來單獨處理
+        if "財務摘要 (Financial Summary)" in positions_text:
+            table_part, summary_part = positions_text.split("\n\n財務摘要 (Financial Summary)")
+            summary_text = "\n\n財務摘要 (Financial Summary)" + summary_part
+            if summary_text.endswith("\n```"):
+                summary_text = summary_text[:-4]  # 移除字尾的 ```
+        else:
+            table_part = positions_text
+            summary_text = ""
+
+        raw_lines = table_part.split("\n")
+        if raw_lines and raw_lines[-1] == "```":
+            raw_lines = raw_lines[:-1]
+        if len(raw_lines) >= 3 and raw_lines[0] == "```ansi":
             header = raw_lines[1]
             divider = raw_lines[2]
-            data_lines = raw_lines[3:-1]
+            data_lines = raw_lines[3:]
             chunks = _chunk_ansi_table(header, divider, data_lines)
+            
+            # 將財務摘要追加到最後一個 chunk 中
+            if summary_text:
+                if chunks:
+                    last_chunk = chunks[-1]
+                    if last_chunk.endswith("```"):
+                        last_chunk = last_chunk[:-3] + summary_text + "\n```"
+                        chunks[-1] = last_chunk
+                    else:
+                        chunks[-1] = last_chunk + "\n" + summary_text
+            
             for i, chunk in enumerate(chunks):
                 name = (
                     f"📦 當前持倉明細 ({i+1}/{len(chunks)})"

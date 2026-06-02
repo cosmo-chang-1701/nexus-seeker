@@ -100,7 +100,8 @@ def test_create_portfolio_report_embed():
     assert "標的" in positions_value
     assert "AAPL" in positions_value
     assert "2026-06-19" in positions_value
-    assert "$150.0C" in positions_value
+    assert "$150.0" in positions_value
+    assert "CALL" in positions_value
     assert "+30.00%" in positions_value
 
 
