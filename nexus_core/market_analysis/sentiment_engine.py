@@ -88,22 +88,39 @@ class SentimentEngine:
             if otm_call is None or otm_put is None:
                 return {"symbol": symbol, "skew": 0, "state": "數據不足"}
 
-            iv_call = otm_call["impliedVolatility"]
-            iv_put = otm_put["impliedVolatility"]
-            skew_val = (iv_call - iv_put) * 100  # 以百分點表示 (Call IV - Put IV)
+            iv_call = float(otm_call["impliedVolatility"])
+            iv_put = float(otm_put["impliedVolatility"])
 
-            state = "正常"
-            if skew_val < -5:
-                state = "⚠️ 預警性對沖 (Put 昂貴)"
-            elif skew_val > 2:
-                state = "🚀 看多情緒濃厚 (Call 昂貴)"
+            # --- Rigid definition (must not drift) ---
+            # Option Skew = IV(OTM Put) - IV(OTM Call)
+            skew_val = (iv_put - iv_call) * 100  # percentage points
 
             # 儲存到資料庫以便後續計算百分位
             SentimentEngine.save_sentiment_history(symbol, "SKEW", skew_val)
+            skew_percentile = SentimentEngine.get_indicator_percentile(
+                symbol, "SKEW", skew_val
+            )
+
+            # --- Rigid label mapping (sign + percentile must be consistent) ---
+            # +Skew @ high percentile => Put expensive => downside hedging demand
+            # -Skew @ low percentile  => Call expensive => upside chasing demand
+            if skew_val > 0 and skew_percentile >= 80.0:
+                state = (
+                    "⚠️ 市場下行保護需求極高，隱含避險情緒升溫（機構大舉購入 Put 保險）"
+                )
+            elif skew_val < 0 and skew_percentile <= 20.0:
+                state = "🔥 市場上行看漲需求爆發，動能抄底/追高情緒極端亢奮（散戶搶購末日 Call）"
+            elif skew_val > 0:
+                state = "左偏 (Put 昂貴)"
+            elif skew_val < 0:
+                state = "右偏 (Call 昂貴)"
+            else:
+                state = "平穩"
 
             return {
                 "symbol": symbol,
                 "skew": round(skew_val, 2),
+                "skew_percentile": float(round(skew_percentile, 2)),
                 "iv_put": round(iv_put, 4),
                 "iv_call": round(iv_call, 4),
                 "state": state,

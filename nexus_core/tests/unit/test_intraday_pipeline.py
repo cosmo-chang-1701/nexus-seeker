@@ -290,9 +290,8 @@ async def test_build_watchlist_heartbeat_embed_includes_option_plan(intraday_pip
         new_callable=AsyncMock,
         return_value="option-plan",
     ) as mock_build_plan, patch(
-        "services.llm_service.generate_watchlist_skew_commentary",
-        new_callable=AsyncMock,
-        return_value="llm-skew-commentary",
+        "market_analysis.intraday_pipeline.build_watchlist_skew_rule_commentary",
+        return_value="rule-skew-commentary",
     ) as mock_skew_commentary, patch(
         "cogs.embed_builder.create_watchlist_signal_embed",
         return_value="watchlist-embed",
@@ -314,7 +313,7 @@ async def test_build_watchlist_heartbeat_embed_includes_option_plan(intraday_pip
     assert mock_guidance.call_args[1]["suitable_buy_price"] == 377.78
     assert mock_guidance.call_args[1]["suitable_sell_price"] == 0.0
 
-    mock_skew_commentary.assert_awaited_once()
+    mock_skew_commentary.assert_called_once()
     mock_create_embed.assert_called_once()
     create_embed_kwargs = mock_create_embed.call_args[1]
     assert create_embed_kwargs["symbol"] == "MU"
@@ -324,7 +323,7 @@ async def test_build_watchlist_heartbeat_embed_includes_option_plan(intraday_pip
     assert create_embed_kwargs["skew_state"] == "+6.25% ｜ 左偏保護"
     assert create_embed_kwargs["alert_level"] == "yellow"
     assert create_embed_kwargs["option_plan"] == "option-plan"
-    assert create_embed_kwargs["skew_commentary"] == "llm-skew-commentary"
+    assert create_embed_kwargs["skew_commentary"] == "rule-skew-commentary"
     assert create_embed_kwargs["has_position"] is False
     assert create_embed_kwargs["holding_quantity"] is None
     assert create_embed_kwargs["holding_avg_cost"] is None

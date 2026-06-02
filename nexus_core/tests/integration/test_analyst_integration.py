@@ -82,10 +82,10 @@ async def test_analyst_agent_integration_with_sentiment_engine():
         raw_data = args[1]
 
         # 驗證板塊數據中包含來自 SentimentEngine 的 Skew 計算結果
-        # Skew = (0.22 - 0.25) * 100 = -3.0
+        # Skew = (0.25 - 0.22) * 100 = +3.0 (PutIV - CallIV)
         assert "sectors" in raw_data
         for sector in raw_data["sectors"]:
             assert "skew" in sector
-            assert sector["skew"] == -3.0
+            assert sector["skew"] == 3.0
             assert "skew_state" in sector
-            assert sector["skew_state"] == "正常"
+            assert sector["skew_state"] == "左偏 (Put 昂貴)"

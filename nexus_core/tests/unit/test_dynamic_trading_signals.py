@@ -27,8 +27,11 @@ def _sample_metrics(**overrides):
         "ma200": 155.0,
         "bias_ma20": 0.0,
         "iv_rank": 45.0,
+        "iv_percentile": 45.0,
         "option_skew": 2.0,  # 2% skew
+        "skew_percentile": 55.0,
         "option_skew_state": "Normal",
+        "pcr": 0.9,
         "volume_poc": 167.0,
         "gex_max_put_wall": 160.0,
         "vanna_sensitivity": 0.15,

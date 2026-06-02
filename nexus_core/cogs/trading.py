@@ -583,17 +583,14 @@ class SchedulerCog(commands.Cog):
     ) -> None:
         """每個 30 分鐘節點推送 watchlist 全標的技術 / 期權 / skew 戰報。"""
         from market_analysis.intraday_pipeline import (
-            build_watchlist_skew_commentary_payload,
             build_watchlist_option_plan,
+            build_watchlist_skew_rule_commentary,
             derive_watchlist_option_guidance,
             evaluate_watchlist_symbol,
             calculate_dynamic_trading_signals,
         )
         from services.calendar_service import calendar_service
-        from services.llm_service import (
-            generate_watchlist_roundup_commentary,
-            generate_watchlist_skew_commentary,
-        )
+        from services.llm_service import generate_watchlist_roundup_commentary
         from ui.formatter import generate_ansi_watchlist_report
         from services import market_data_service
 
@@ -626,18 +623,10 @@ class SchedulerCog(commands.Cog):
         }
         skew_commentary_map: Dict[str, str] = {}
         if evaluation_map:
-            skew_commentaries = await asyncio.gather(
-                *(
-                    generate_watchlist_skew_commentary(
-                        symbol,
-                        build_watchlist_skew_commentary_payload(evaluation),
-                    )
-                    for symbol, evaluation in evaluation_map.items()
-                )
-            )
-            skew_commentary_map = dict(
-                zip(evaluation_map.keys(), skew_commentaries, strict=False)
-            )
+            skew_commentary_map = {
+                symbol: build_watchlist_skew_rule_commentary(evaluation.metrics)
+                for symbol, evaluation in evaluation_map.items()
+            }
 
         user_symbols: Dict[int, list[str]] = {}
         for uid, sym, _ in all_watchlists:

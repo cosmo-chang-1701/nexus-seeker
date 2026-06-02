@@ -39,8 +39,11 @@ def _sample_metrics(**overrides):
         "ma200": 110.0,
         "bias_ma20": 999.0,
         "iv_rank": 72.0,
+        "iv_percentile": 64.0,
         "option_skew": -6.4,
-        "option_skew_state": "⚠️ 預警性對沖 (Put 昂貴)",
+        "skew_percentile": 10.0,
+        "option_skew_state": "右偏 (Call 昂貴)",
+        "pcr": 0.95,
         "volume_poc": 126.5,
         "gex_max_put_wall": 120.0,
         "vanna_sensitivity": 0.35,
@@ -187,7 +190,7 @@ def test_derive_watchlist_option_guidance_uses_position_copy_during_event_guard(
 
 @pytest.mark.asyncio
 async def test_build_watchlist_option_plan_builds_credit_spread():
-    metrics = _sample_metrics(current_price=129.0, iv_rank=78.0, option_skew=-7.2)
+    metrics = _sample_metrics(current_price=129.0, iv_rank=78.0, option_skew=7.2)
     tactical = WatchlistRiskController.process_metrics(metrics)
     chain = type(
         "Chain",
@@ -282,7 +285,7 @@ async def test_build_watchlist_option_plan_switches_to_debit_before_earnings():
 
 @pytest.mark.asyncio
 async def test_build_watchlist_option_plan_reduces_size_before_macro_event():
-    metrics = _sample_metrics(current_price=130.0, iv_rank=55.0, option_skew=1.2)
+    metrics = _sample_metrics(current_price=130.0, iv_rank=72.0, option_skew=1.2)
     tactical = WatchlistRiskController.process_metrics(metrics)
     normal_context = _sample_event_context()
     macro_context = _sample_event_context(
@@ -398,7 +401,16 @@ async def test_build_enhanced_watchlist_metrics_assembles_quant_fields():
     ), patch(
         "market_analysis.sentiment_engine.SentimentEngine.calculate_skew",
         new_callable=AsyncMock,
-        return_value={"symbol": "MSFT", "skew": 4.8, "state": "正常"},
+        return_value={
+            "symbol": "MSFT",
+            "skew": 4.8,
+            "skew_percentile": 55.0,
+            "state": "左偏 (Put 昂貴)",
+        },
+    ), patch(
+        "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
+        new_callable=AsyncMock,
+        return_value={"symbol": "MSFT", "pcr": 0.92, "state": "平衡"},
     ), patch(
         "market_analysis.intraday_pipeline._estimate_options_wall_metrics",
         new_callable=AsyncMock,
@@ -415,8 +427,11 @@ async def test_build_enhanced_watchlist_metrics_assembles_quant_fields():
     assert metrics.current_price == 172.5
     assert metrics.pe_ratio == 31.2
     assert metrics.iv_rank == 68.0
+    assert metrics.iv_percentile == 64.0
     assert metrics.option_skew == 4.8
-    assert metrics.option_skew_state == "正常"
+    assert metrics.skew_percentile == 55.0
+    assert metrics.option_skew_state == "左偏 (Put 昂貴)"
+    assert metrics.pcr == 0.92
     assert metrics.gex_max_put_wall == 165.0
     assert metrics.vanna_sensitivity == 0.44
     assert metrics.beta == 1.23
