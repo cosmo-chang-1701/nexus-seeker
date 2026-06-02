@@ -100,6 +100,13 @@ class PortfolioStatusOrchestrator:
             dividend_yield = stock_info["dividend_yield"]
             beta = stock_info["beta"]
 
+            iv_metrics = None
+            try:
+                from market_analysis.sentiment_engine import SentimentEngine
+                iv_metrics = await SentimentEngine.fetch_and_calculate_iv_metrics(symbol)
+            except Exception as e:
+                logger.error(f"獲取 {symbol} IV指標失敗: {e}")
+
             option_chains_cache = {}
 
             for row in rows:
@@ -181,6 +188,9 @@ class PortfolioStatusOrchestrator:
                         (exp_date - self.today).days,
                         spx_weighted_delta,
                         status,
+                        quantity=quantity,
+                        iv=iv if iv is not None else 0.0,
+                        iv_rank=iv_metrics.iv_rank if (iv_metrics and iv_metrics.iv_rank is not None) else 0.0,
                     )
                 )
         except Exception as e:

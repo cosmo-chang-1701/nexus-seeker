@@ -151,15 +151,22 @@ def format_position_report(
     dte: int,
     spx_weighted_delta: float,
     status: str,
+    quantity: float = 1.0,
+    iv: float = 0.0,
+    iv_rank: float = 0.0,
 ) -> str:
     """
     格式化單一持倉報告。
     """
     pnl_icon = "🟢" if pnl_pct > 0 else "🔴" if pnl_pct < 0 else "⚪"
+    direction = "STO" if quantity < 0 else "BTO"
+    opt_type_upper = opt_type.upper()
     return (
-        f"🔹 **{symbol}** ｜ `{expiry}` ｜ `${strike}` **{opt_type.upper()}**{cc_tag}\n"
+        f"🔹 **{symbol}** ｜ `{expiry}` ｜ `${strike}` **{opt_type_upper}**{cc_tag}\n"
         f"├─ 💰 成本: `${entry_price:.2f}` ｜ 📈 現價: `${current_price:.2f}`\n"
         f"├─ {pnl_icon} 損益: **{pnl_pct*100:+.2f}%**\n"
         f"├─ ⏳ DTE: `{dte}` 天 ｜ 秤⚖️ SPY Δ: `{spx_weighted_delta:+.2f}`\n"
+        f"├─ ⚙️ 方向: `{direction}` ｜ 📦 數量: `{quantity}`\n"
+        f"├─ 📊 IV/IVR: `{iv*100:.1f}%/{iv_rank:.1f}%`\n"
         f"└─ 🎯 動作: {status}\n"
     )
