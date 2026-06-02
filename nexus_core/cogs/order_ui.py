@@ -542,7 +542,9 @@ class ApplyTelemetryView(discord.ui.View):
         # 延遲回覆以防計算超時
         await interaction.response.defer(ephemeral=True)
 
-        user_orders = get_user_active_orders(interaction.user.id)
+        user_orders = await asyncio.to_thread(
+            get_user_active_orders, interaction.user.id
+        )
         if not user_orders:
             await interaction.followup.send(
                 embed=create_error_embed("❌ 您目前沒有任何活躍的待成交委託單。"),
@@ -784,7 +786,7 @@ class OrderUICog(commands.Cog):
     @app_commands.command(name="orders", description="列出目前所有活躍的待成交委託單")
     async def list_orders(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        orders = get_user_active_orders(interaction.user.id)
+        orders = await asyncio.to_thread(get_user_active_orders, interaction.user.id)
 
         if not orders:
             embed = create_info_embed(
@@ -803,7 +805,7 @@ class OrderUICog(commands.Cog):
     )
     async def telemetry_alert(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        orders = get_user_active_orders(interaction.user.id)
+        orders = await asyncio.to_thread(get_user_active_orders, interaction.user.id)
 
         if not orders:
             await interaction.followup.send(
