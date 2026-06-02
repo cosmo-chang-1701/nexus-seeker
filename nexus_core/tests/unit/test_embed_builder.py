@@ -385,12 +385,14 @@ def test_create_proactive_event_alert_embed():
     # 3. Test safety truncation (30 events)
     many_events = []
     for i in range(30):
-        many_events.append({
-            "name": f"Event {i}",
-            "tte_hours": 10.0,
-            "risk_status": "正常",
-            "instruction": "測試",
-        })
+        many_events.append(
+            {
+                "name": f"Event {i}",
+                "tte_hours": 10.0,
+                "risk_status": "正常",
+                "instruction": "測試",
+            }
+        )
     embed_many = create_proactive_event_alert_embed(many_events)
     # 24 display fields + 1 warning summary field = 25 fields maximum
     assert len(embed_many.fields) == 25
@@ -1000,16 +1002,18 @@ def test_create_active_orders_embed():
     # 3. Test safety truncation (30 orders)
     many_orders = []
     for i in range(30):
-        many_orders.append({
-            "id": i + 1,
-            "symbol": f"SYM{i}",
-            "quantity": 10.0,
-            "order_type": "LIMIT",
-            "validity": "DAY",
-            "limit_price": 100.0,
-            "stop_price": 0.0,
-            "trailing_value": 0.0,
-        })
+        many_orders.append(
+            {
+                "id": i + 1,
+                "symbol": f"SYM{i}",
+                "quantity": 10.0,
+                "order_type": "LIMIT",
+                "validity": "DAY",
+                "limit_price": 100.0,
+                "stop_price": 0.0,
+                "trailing_value": 0.0,
+            }
+        )
     embed_many = create_active_orders_embed(many_orders)
     # 24 display fields + 1 warning summary field = 25 fields maximum
     assert len(embed_many.fields) == 25

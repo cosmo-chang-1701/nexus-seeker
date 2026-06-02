@@ -498,8 +498,7 @@ def split_embed_by_fields(
         base_len = base_len_first if is_first else base_len_subsequent
 
         if current_group and (
-            base_len + current_len + field_len > max_size
-            or len(current_group) >= 24
+            base_len + current_len + field_len > max_size or len(current_group) >= 24
         ):
             groups.append(current_group)
             current_group = [field]
