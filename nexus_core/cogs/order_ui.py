@@ -798,7 +798,11 @@ class OrderUICog(commands.Cog):
 
         embeds = create_active_orders_embed(orders)
         view = OrderManagementView()
-        await interaction.followup.send(embeds=embeds, view=view, ephemeral=True)
+        # 傳送第一個 Embed 以及操作按鈕視圖
+        await interaction.followup.send(embed=embeds[0], view=view, ephemeral=True)
+        # 若有分頁產生的多個 Embed，分別以獨立訊息傳送，徹底避免單一訊息中所有 Embed 累計長度突破 Discord 6,000 字限制
+        for extra_embed in embeds[1:]:
+            await interaction.followup.send(embed=extra_embed, ephemeral=True)
 
     @app_commands.command(
         name="telemetry_alert", description="[模擬] 喚起半小時心跳遙測價格偏離警報"

@@ -341,11 +341,9 @@ async def test_orders_list_command(mock_interaction, db_conn):
     assert mock_interaction.response.defer.called
     assert mock_interaction.followup.send.called
     kwargs = mock_interaction.followup.send.call_args[1]
-    embeds = kwargs["embeds"]
+    embed = kwargs["embed"]
     view = kwargs["view"]
 
-    assert len(embeds) == 1
-    embed = embeds[0]
     assert "待成交委託單列表" in embed.title
     assert any("TSLA" in f.name or "TSLA" in f.value for f in embed.fields)
     assert isinstance(view, OrderManagementView)
