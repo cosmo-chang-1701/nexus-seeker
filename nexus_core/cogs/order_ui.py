@@ -794,9 +794,9 @@ class OrderUICog(commands.Cog):
             await interaction.followup.send(embed=embed, ephemeral=True)
             return
 
-        embed = create_active_orders_embed(orders)
+        embeds = create_active_orders_embed(orders)
         view = OrderManagementView()
-        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+        await interaction.followup.send(embeds=embeds, view=view, ephemeral=True)
 
     @app_commands.command(
         name="telemetry_alert", description="[模擬] 喚起半小時心跳遙測價格偏離警報"

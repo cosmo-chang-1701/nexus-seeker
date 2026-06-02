@@ -247,8 +247,9 @@ class EventMonitor:
         event_payloads = [
             _build_event_alert_payload(event, risk_snapshot) for event in events
         ]
-        embed = create_proactive_event_alert_embed(event_payloads)
-        await self.bot.queue_dm(user_id, embed=embed)
+        embeds = create_proactive_event_alert_embed(event_payloads)
+        for embed in embeds:
+            await self.bot.queue_dm(user_id, embed=embed)
 
 
 # Helper to start the monitor

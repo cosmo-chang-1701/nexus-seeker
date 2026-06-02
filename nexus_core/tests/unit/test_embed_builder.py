@@ -356,7 +356,7 @@ def test_create_hedge_alert_embed():
     assert "Aggressive" in embed.description
     assert "140.0" in embed.fields[0].value
     assert "SPY" in embed.fields[3].value
-    assert embed.footer.text == "Nexus Seeker Battle Station | Alert ID: 7"
+    assert embed.footer.text == "🌌 Nexus Seeker • Battle Station | Alert ID: 7"
 
 
 def test_create_proactive_event_alert_embed():
@@ -374,7 +374,9 @@ def test_create_proactive_event_alert_embed():
             "instruction": "財報窗口已開啟；控制口數、避免堆疊裸賣方，若要保留方向觀點優先使用定義風險結構。",
         },
     ]
-    embed = create_proactive_event_alert_embed(events)
+    embeds = create_proactive_event_alert_embed(events)
+    assert len(embeds) == 1
+    embed = embeds[0]
     assert embed.title == "🛡️ 【 預警：重大事件即時防護 】"
     assert len(embed.fields) == 2
     assert "CPI" in embed.fields[0].name
@@ -382,7 +384,7 @@ def test_create_proactive_event_alert_embed():
     assert "持倉風險狀態" in embed.fields[0].value
     assert "NRO 指令" in embed.fields[1].value
 
-    # 3. Test safety truncation (30 events)
+    # 3. Test pagination (30 events)
     many_events = []
     for i in range(30):
         many_events.append(
@@ -393,11 +395,10 @@ def test_create_proactive_event_alert_embed():
                 "instruction": "測試",
             }
         )
-    embed_many = create_proactive_event_alert_embed(many_events)
-    # 24 display fields + 1 warning summary field = 25 fields maximum
-    assert len(embed_many.fields) == 25
-    assert "其餘重大事件已被省略" in embed_many.fields[24].name
-    assert "其餘 6 筆重大事件已被安全省略" in embed_many.fields[24].value
+    embeds_many = create_proactive_event_alert_embed(many_events)
+    assert len(embeds_many) > 1
+    assert sum(len(e.fields) for e in embeds_many) == 30
+    assert " (1/" in embeds_many[0].title
 
 
 def test_create_watchlist_signal_embed():
@@ -959,9 +960,10 @@ def test_create_media_sentiment_embed():
 def test_create_active_orders_embed():
     """Verify that create_active_orders_embed correctly renders active orders with premium ANSI card formatting."""
     # 1. Test empty state
-    embed_empty = create_active_orders_embed([])
-    assert "待成交委託單列表" in embed_empty.title
-    assert "目前沒有任何活躍的待成交委託單" in embed_empty.description
+    embeds_empty = create_active_orders_embed([])
+    assert len(embeds_empty) == 1
+    assert "待成交委託單列表" in embeds_empty[0].title
+    assert "目前沒有任何活躍的待成交委託單" in embeds_empty[0].description
 
     # 2. Test populated state
     orders = [
@@ -986,7 +988,9 @@ def test_create_active_orders_embed():
             "trailing_value": 0.0,
         },
     ]
-    embed = create_active_orders_embed(orders)
+    embeds = create_active_orders_embed(orders)
+    assert len(embeds) == 1
+    embed = embeds[0]
     assert embed.title == "📋 Nexus Seeker | 待成交委託單列表"
     assert len(embed.fields) == 2
     assert "委託單 #1" in embed.fields[0].name
@@ -999,7 +1003,7 @@ def test_create_active_orders_embed():
     assert "停損單 (STOP)" in embed.fields[1].value
     assert "180.00" in embed.fields[1].value
 
-    # 3. Test safety truncation (30 orders)
+    # 3. Test pagination (30 orders)
     many_orders = []
     for i in range(30):
         many_orders.append(
@@ -1014,8 +1018,7 @@ def test_create_active_orders_embed():
                 "trailing_value": 0.0,
             }
         )
-    embed_many = create_active_orders_embed(many_orders)
-    # 24 display fields + 1 warning summary field = 25 fields maximum
-    assert len(embed_many.fields) == 25
-    assert "剩餘委託單未完全顯示" in embed_many.fields[24].name
-    assert "其餘 6 筆活躍委託單已被安全省略" in embed_many.fields[24].value
+    embeds_many = create_active_orders_embed(many_orders)
+    assert len(embeds_many) > 1
+    assert sum(len(e.fields) for e in embeds_many) == 30
+    assert " (1/" in embeds_many[0].title
