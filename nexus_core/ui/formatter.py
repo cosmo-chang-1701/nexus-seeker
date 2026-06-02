@@ -108,19 +108,25 @@ def generate_ansi_watchlist_report(
     rs_color = C_GREEN if metrics.relative_strength_spy >= 0 else C_RED
     skew_color = (
         C_RED
-        if metrics.option_skew >= 5
+        if metrics.option_skew <= -5
         else C_GREEN
-        if metrics.option_skew <= -2
+        if metrics.option_skew >= 2
         else C_YELLOW
     )
 
     # 1. 標題與基本快照
+    pe_warning = getattr(metrics, "pe_outlier_warning", None)
+    if pe_warning:
+        pe_str = f"N/A {pe_warning}"
+    else:
+        pe_str = f"{metrics.pe_ratio:.2f}" if metrics.pe_ratio is not None else "N/A"
+
     lines = [
         "```ansi",
         f" 📊 {metrics.symbol} | {metrics.exchange} 技術與期權快照",
         " ----------------------------------",
         " 技術面與現價快照 (Technical & Price Spot)",
-        f" ├─ 現價: {price_color}${metrics.current_price:.2f}{C_RESET} | PE: {metrics.pe_ratio or 'N/A'} | Beta: {metrics.beta:.2f}",
+        f" ├─ 現價: {price_color}${metrics.current_price:.2f}{C_RESET} | PE: {pe_str} | Beta: {metrics.beta:.2f}",
         f" ├─ RSI 14: {C_YELLOW if metrics.rsi_14 > 65 else C_GREEN}{metrics.rsi_14:.1f}{C_RESET} | ATR 14: {metrics.atr_14:.2f} | Option Skew: {skew_color}{metrics.option_skew:+.2f}%{C_RESET}",
         f" ├─ MA200 支撐: ${metrics.ma200:.2f} | 相對 SPY: {rs_color}{metrics.relative_strength_spy * 100:+.2f}%{C_RESET}",
         f" └─ 均線乖離: MA20: ${metrics.ma20:.2f} / MA50: ${metrics.ma50:.2f} | MA20 偏離: {bias_color}{metrics.bias_ma20 * 100:+.2f}%{C_RESET}",

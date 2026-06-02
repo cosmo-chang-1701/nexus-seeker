@@ -90,12 +90,12 @@ class SentimentEngine:
 
             iv_call = otm_call["impliedVolatility"]
             iv_put = otm_put["impliedVolatility"]
-            skew_val = (iv_put - iv_call) * 100  # 以百分點表示
+            skew_val = (iv_call - iv_put) * 100  # 以百分點表示 (Call IV - Put IV)
 
             state = "正常"
-            if skew_val > 5:
+            if skew_val < -5:
                 state = "⚠️ 預警性對沖 (Put 昂貴)"
-            elif skew_val < -2:
+            elif skew_val > 2:
                 state = "🚀 看多情緒濃厚 (Call 昂貴)"
 
             # 儲存到資料庫以便後續計算百分位

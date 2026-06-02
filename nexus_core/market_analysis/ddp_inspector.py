@@ -98,6 +98,12 @@ class DDPInspector:
             curr_pe = info.get("trailingPE")
             fwd_pe = info.get("forwardPE")
 
+            if curr_pe is not None and float(curr_pe) > 500.0:
+                logger.warning(
+                    f"[{symbol}] DDP Intercepted: P/E {curr_pe} is extreme (>500), likely a quarterly EPS drop noise."
+                )
+                return None
+
             if not curr_pe or not fwd_pe or curr_pe <= 0:
                 logger.info(
                     f"[{symbol}] DDP Fail: P/E missing or invalid (Trailing: {curr_pe}, Forward: {fwd_pe})"
