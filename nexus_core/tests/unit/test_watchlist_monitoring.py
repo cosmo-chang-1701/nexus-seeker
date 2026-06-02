@@ -39,7 +39,7 @@ def _sample_metrics(**overrides):
         "ma200": 110.0,
         "bias_ma20": 999.0,
         "iv_rank": 72.0,
-        "option_skew": 6.4,
+        "option_skew": -6.4,
         "option_skew_state": "⚠️ 預警性對沖 (Put 昂貴)",
         "volume_poc": 126.5,
         "gex_max_put_wall": 120.0,
@@ -127,7 +127,7 @@ def test_generate_ansi_watchlist_report_contains_sections():
 
 
 def test_derive_watchlist_option_guidance_mentions_skew_and_strategy():
-    metrics = _sample_metrics(current_price=129.0, iv_rank=78.0, option_skew=7.2)
+    metrics = _sample_metrics(current_price=129.0, iv_rank=78.0, option_skew=-7.2)
     tactical = WatchlistRiskController.process_metrics(metrics)
 
     guidance = derive_watchlist_option_guidance(metrics, tactical)
@@ -137,7 +137,7 @@ def test_derive_watchlist_option_guidance_mentions_skew_and_strategy():
 
 
 def test_derive_watchlist_option_guidance_switches_to_position_management_copy():
-    metrics = _sample_metrics(current_price=129.0, iv_rank=78.0, option_skew=7.2)
+    metrics = _sample_metrics(current_price=129.0, iv_rank=78.0, option_skew=-7.2)
     tactical = WatchlistRiskController.process_metrics(metrics)
 
     guidance = derive_watchlist_option_guidance(metrics, tactical, has_position=True)
@@ -147,7 +147,7 @@ def test_derive_watchlist_option_guidance_switches_to_position_management_copy()
 
 
 def test_derive_watchlist_option_guidance_prioritizes_event_guard():
-    metrics = _sample_metrics(current_price=129.0, iv_rank=78.0, option_skew=7.2)
+    metrics = _sample_metrics(current_price=129.0, iv_rank=78.0, option_skew=-7.2)
     tactical = WatchlistRiskController.process_metrics(metrics)
     event_context = _sample_event_context(
         earnings_date="2026-05-24",
@@ -165,7 +165,7 @@ def test_derive_watchlist_option_guidance_prioritizes_event_guard():
 
 
 def test_derive_watchlist_option_guidance_uses_position_copy_during_event_guard():
-    metrics = _sample_metrics(current_price=129.0, iv_rank=78.0, option_skew=7.2)
+    metrics = _sample_metrics(current_price=129.0, iv_rank=78.0, option_skew=-7.2)
     tactical = WatchlistRiskController.process_metrics(metrics)
     event_context = _sample_event_context(
         earnings_date="2026-05-24",
@@ -187,7 +187,7 @@ def test_derive_watchlist_option_guidance_uses_position_copy_during_event_guard(
 
 @pytest.mark.asyncio
 async def test_build_watchlist_option_plan_builds_credit_spread():
-    metrics = _sample_metrics(current_price=129.0, iv_rank=78.0, option_skew=7.2)
+    metrics = _sample_metrics(current_price=129.0, iv_rank=78.0, option_skew=-7.2)
     tactical = WatchlistRiskController.process_metrics(metrics)
     chain = type(
         "Chain",

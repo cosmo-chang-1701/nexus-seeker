@@ -346,6 +346,14 @@ async def build_enhanced_watchlist_metrics(
         atr_14,
     )
 
+    pe_raw = _extract_pe_ratio(financials)
+    pe_outlier_warning = None
+    if pe_raw is not None and pe_raw > 500.0:
+        pe_outlier_warning = "【⚠️ 季度 EPS 驟降導致之數據雜訊預警】"
+        pe_ratio = None
+    else:
+        pe_ratio = pe_raw
+
     metrics = EnhancedWatchlistMetrics(
         symbol=symbol,
         exchange=str(
@@ -360,7 +368,8 @@ async def build_enhanced_watchlist_metrics(
         sell_price_phase1=sell_phase1,
         sell_price_phase2=sell_phase2,
         sell_price_phase3=sell_phase3,
-        pe_ratio=_extract_pe_ratio(financials),
+        pe_ratio=pe_ratio,
+        pe_outlier_warning=pe_outlier_warning,
         rsi_14=rsi_14,
         atr_14=atr_14,
         beta=beta,
@@ -846,6 +855,18 @@ def derive_watchlist_option_guidance(
         metrics, "sell_price_phase1", round(current_price * 1.03, 2)
     )
 
+    # 徹底消滅「一邊逃跑、一邊虛值追高」的策略悖論
+    if getattr(metrics, "rsi_14", 50.0) > 65.0:
+        if has_position:
+            return (
+                f"RSI 14 達 {metrics.rsi_14:.1f} 極度超買過熱；"
+                f"⚠️ 現貨強烈建議分批止盈減碼，期權端優先考慮【現貨限價調節】或建立 Covered Call 鎖利，絕對禁止在高位盲目追高或買入虛值 Call。"
+            )
+        return (
+            f"RSI 14 達 {metrics.rsi_14:.1f} 極度超買過熱，現貨面臨回檔引力收斂風險；"
+            f"⚠️ 建議【等待引力收斂】，目前不宜推薦 any OTM 買權或看漲結構，不宜新開多單接盤。"
+        )
+
     if event_context is not None and event_context.risk_mode == "event-lock":
         if has_position:
             return (
@@ -895,7 +916,7 @@ def derive_watchlist_option_guidance(
 
     if tactical_model.scenario == "premium-harvest":
         if has_position:
-            if skew_val >= 5.0:
+            if skew_val <= -5.0:
                 return (
                     f"IV Rank {iv_rank:.1f}% 配合左偏 Skew {skew_val:+.2f}%；"
                     f"已有部位優先於阻力位 ${suitable_sell_price:.2f} 建立 Covered Call 或 Collar 進行收租與保護，避免直接加碼現股。"
@@ -904,7 +925,7 @@ def derive_watchlist_option_guidance(
                 f"IV Rank {iv_rank:.1f}% 偏高，已有部位可優先於 ${suitable_sell_price:.2f} 建立 Covered Call 收租鎖利；"
                 "若欲加碼，建議改用風險較清楚的 Bull Put Spread。"
             )
-        if skew_val >= 5.0:
+        if skew_val <= -5.0:
             return (
                 f"IV Rank {iv_rank:.1f}% 配合左偏 Skew {skew_val:+.2f}%；"
                 f"建議優先於動態買點 ${suitable_buy_price:.2f} 附近賣出 Cash-Secured Put 或 Bull Put Spread 收租，避免直接承接現股。"
@@ -914,7 +935,7 @@ def derive_watchlist_option_guidance(
             f"建議於適合買入價 ${suitable_buy_price:.2f} 附近賣出 Cash-Secured Put 卡位，或改用 Bull Put Spread 降低風險。"
         )
 
-    if current_price >= sell_price_phase1 and skew_val <= -2.0:
+    if current_price >= sell_price_phase1 and skew_val >= 2.0:
         if has_position:
             return (
                 f"價格進入賣壓阻力區且 Skew {skew_val:+.2f}% 偏右（買權昂貴，具看多情緒）；"
@@ -1056,11 +1077,10 @@ async def build_watchlist_option_plan(
         "macro-guard",
     }
 
-    # Rule 2: Dynamic Option Strategy Optimization (Option Skew vs. Strategy Selector)
-    is_rule2_active = metrics.iv_rank > 50.0 and metrics.option_skew < 0.00
-
-    if is_rule2_active:
+    # 徹底消滅「一邊逃跑、一邊虛值追高」的策略悖論
+    if getattr(metrics, "rsi_14", 50.0) > 65.0:
         if has_position:
+            # 僅允許 Covered Call 收租鎖利，絕對禁止買入任何看漲結構
             strategy_name = "Covered Call (拋補看漲期權 / 高位收租)"
             premium_type = "credit"
             chain_opt_type = "call"
@@ -1070,36 +1090,33 @@ async def build_watchlist_option_plan(
             )
             primary_action = "SELL"
         else:
-            strategy_name = "Bull Put Spread"
-            premium_type = "credit"
-            chain_opt_type = "put"
-            leg_opt_type = "PUT"
-            primary_leg = await find_best_contract(
-                metrics.symbol, "STO_PUT", -0.20, 30, 45
-            )
-            primary_action = "SELL"
-            cover_direction = "lower"
-    elif event_guard and tactical_model.scenario == "hard-hedge":
-        strategy_name = "Bear Put Spread"
-        premium_type = "debit"
-        chain_opt_type = "put"
-        leg_opt_type = "PUT"
-        primary_leg = await find_best_contract(metrics.symbol, "BTO_PUT", -0.35, 21, 60)
-        primary_action = "BUY"
-        cover_direction = "lower"
-    elif event_guard:
-        bullish_event_bias = metrics.current_price <= metrics.sell_price_phase1
-        if bullish_event_bias:
-            strategy_name = "Bull Call Spread"
-            premium_type = "debit"
-            chain_opt_type = "call"
-            leg_opt_type = "CALL"
-            primary_leg = await find_best_contract(
-                metrics.symbol, "BTO_CALL", 0.45, 21, 60
-            )
-            primary_action = "BUY"
-            cover_direction = "higher"
-        else:
+            # 未持倉者：RSI 超買過熱，此時禁止任何買權或看漲價差，直接拒絕推薦新開多單結構 (WAIT)
+            return None
+    else:
+        # Rule 2: Dynamic Option Strategy Optimization (Option Skew vs. Strategy Selector)
+        is_rule2_active = metrics.iv_rank > 50.0 and metrics.option_skew < 0.00
+
+        if is_rule2_active:
+            if has_position:
+                strategy_name = "Covered Call (拋補看漲期權 / 高位收租)"
+                premium_type = "credit"
+                chain_opt_type = "call"
+                leg_opt_type = "CALL"
+                primary_leg = await find_best_contract(
+                    metrics.symbol, "STO_CALL", 0.20, 21, 45
+                )
+                primary_action = "SELL"
+            else:
+                strategy_name = "Bull Put Spread"
+                premium_type = "credit"
+                chain_opt_type = "put"
+                leg_opt_type = "PUT"
+                primary_leg = await find_best_contract(
+                    metrics.symbol, "STO_PUT", -0.20, 30, 45
+                )
+                primary_action = "SELL"
+                cover_direction = "lower"
+        elif event_guard and tactical_model.scenario == "hard-hedge":
             strategy_name = "Bear Put Spread"
             premium_type = "debit"
             chain_opt_type = "put"
@@ -1109,50 +1126,114 @@ async def build_watchlist_option_plan(
             )
             primary_action = "BUY"
             cover_direction = "lower"
-    elif tactical_model.scenario == "hard-hedge":
-        strategy_name = "Bear Put Spread"
-        premium_type = "debit"
-        chain_opt_type = "put"
-        leg_opt_type = "PUT"
-        primary_leg = await find_best_contract(metrics.symbol, "BTO_PUT", -0.35, 21, 60)
-        primary_action = "BUY"
-        cover_direction = "lower"
-    elif tactical_model.scenario == "premium-harvest":
-        chain_opt_type = "put"
-        leg_opt_type = "PUT"
-        primary_leg = await find_best_contract(metrics.symbol, "STO_PUT", -0.20, 30, 45)
-        primary_action = "SELL"
-        if metrics.option_skew >= 5.0:
-            strategy_name = "Bull Put Spread"
-            premium_type = "credit"
+        elif event_guard:
+            bullish_event_bias = metrics.current_price <= metrics.sell_price_phase1
+            if bullish_event_bias:
+                strategy_name = "Bull Call Spread"
+                premium_type = "debit"
+                chain_opt_type = "call"
+                leg_opt_type = "CALL"
+                primary_leg = await find_best_contract(
+                    metrics.symbol, "BTO_CALL", 0.45, 21, 60
+                )
+                primary_action = "BUY"
+                cover_direction = "higher"
+            else:
+                strategy_name = "Bear Put Spread"
+                premium_type = "debit"
+                chain_opt_type = "put"
+                leg_opt_type = "PUT"
+                primary_leg = await find_best_contract(
+                    metrics.symbol, "BTO_PUT", -0.35, 21, 60
+                )
+                primary_action = "BUY"
+                cover_direction = "lower"
+        elif tactical_model.scenario == "hard-hedge":
+            strategy_name = "Bear Put Spread"
+            premium_type = "debit"
+            chain_opt_type = "put"
+            leg_opt_type = "PUT"
+            primary_leg = await find_best_contract(
+                metrics.symbol, "BTO_PUT", -0.35, 21, 60
+            )
+            primary_action = "BUY"
             cover_direction = "lower"
-        else:
-            strategy_name = "Cash-Secured Put"
+        elif tactical_model.scenario == "premium-harvest":
+            chain_opt_type = "put"
+            leg_opt_type = "PUT"
+            primary_leg = await find_best_contract(
+                metrics.symbol, "STO_PUT", -0.20, 30, 45
+            )
+            primary_action = "SELL"
+            if metrics.option_skew <= -5.0:
+                strategy_name = "Bull Put Spread"
+                premium_type = "credit"
+                cover_direction = "lower"
+            else:
+                strategy_name = "Cash-Secured Put"
+                premium_type = "credit"
+        elif (
+            metrics.current_price >= metrics.sell_price_phase1
+            and metrics.option_skew >= 2.0
+        ):
+            strategy_name = "Call Credit Spread"
             premium_type = "credit"
-    elif (
-        metrics.current_price >= metrics.sell_price_phase1
-        and metrics.option_skew <= -2.0
-    ):
-        strategy_name = "Call Credit Spread"
-        premium_type = "credit"
-        chain_opt_type = "call"
-        leg_opt_type = "CALL"
-        primary_leg = await find_best_contract(metrics.symbol, "STO_CALL", 0.20, 21, 45)
-        primary_action = "SELL"
-        cover_direction = "higher"
-    elif metrics.current_price <= metrics.buy_price_phase1 and metrics.iv_rank < 65.0:
-        strategy_name = "Bull Call Spread"
-        premium_type = "debit"
-        chain_opt_type = "call"
-        leg_opt_type = "CALL"
-        primary_leg = await find_best_contract(metrics.symbol, "BTO_CALL", 0.45, 30, 60)
-        primary_action = "BUY"
-        cover_direction = "higher"
-    else:
-        return None
+            chain_opt_type = "call"
+            leg_opt_type = "CALL"
+            primary_leg = await find_best_contract(
+                metrics.symbol, "STO_CALL", 0.20, 21, 45
+            )
+            primary_action = "SELL"
+            cover_direction = "higher"
+        elif (
+            metrics.current_price <= metrics.buy_price_phase1 and metrics.iv_rank < 65.0
+        ):
+            strategy_name = "Bull Call Spread"
+            premium_type = "debit"
+            chain_opt_type = "call"
+            leg_opt_type = "CALL"
+            primary_leg = await find_best_contract(
+                metrics.symbol, "BTO_CALL", 0.45, 30, 60
+            )
+            primary_action = "BUY"
+            cover_direction = "higher"
+        else:
+            return None
 
     if primary_leg is None or strategy_name is None or premium_type is None:
         return None
+
+    # Option pricing and liquidity verification (Guideline Four)
+    # Formula: OTM Call Premium << |Strike - Spot|
+    # Also verify contradictions where IV Rank is 0.0% but OTM Call Premium is extremely expensive
+    strike_val = float(primary_leg.get("strike", 0.0))
+    mid_val = float(primary_leg.get("mid", 0.0))
+    is_call_leg = leg_opt_type == "CALL"
+    is_otm_leg = (is_call_leg and strike_val >= metrics.current_price) or (
+        not is_call_leg and strike_val <= metrics.current_price
+    )
+
+    is_illiquid = False
+    if is_otm_leg:
+        distance_val = abs(strike_val - metrics.current_price)
+        if (
+            distance_val > 0.0
+            and mid_val >= distance_val * 0.7
+            and metrics.iv_rank == 0.0
+        ):
+            is_illiquid = True
+
+    if is_illiquid:
+        return WatchlistOptionPlan(
+            strategy_name="WAIT (期權鏈流動性不足，點差過大，拒絕路由)",
+            premium_type="credit",
+            estimated_net_premium=0.0,
+            suggested_contracts=0,
+            max_risk_amount=0.0,
+            rationale="⚠️ 【期權鏈流動性不足，點差過大，拒絕路由】",
+            stock_action="⚠️ 【期權鏈流動性不足，點差過大，拒絕路由】",
+            legs=[],
+        )
 
     if "Spread" in strategy_name:
         hedge_leg = await _pick_watchlist_cover_leg(

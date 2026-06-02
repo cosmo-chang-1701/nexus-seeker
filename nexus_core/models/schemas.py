@@ -33,6 +33,7 @@ class EnhancedWatchlistMetrics(BaseModel):
     sell_price_phase3: float = Field(gt=0.0)
 
     pe_ratio: float | None = Field(default=None, gt=0.0)
+    pe_outlier_warning: str | None = Field(default=None)
     rsi_14: float = Field(ge=0.0, le=100.0)
     atr_14: float = Field(gt=0.0)
     beta: float = Field(ge=-5.0, le=5.0)
