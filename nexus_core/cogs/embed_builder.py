@@ -2094,6 +2094,9 @@ def create_holdings_embed(
         embed.description = "📭 目前無現貨持倉紀錄。請使用 `/add_holding` 進行登錄。"
         return embed
 
+    # A-Z sort by symbol
+    sorted_holdings = sorted(holdings_data, key=lambda x: x.get("symbol", "").upper())
+
     total_value = 0.0
     total_pnl = 0.0
 
@@ -2101,7 +2104,7 @@ def create_holdings_embed(
     header = f"{_pad_string('標的', 8)} | {_pad_string('數量', 8, 'right')} | {_pad_string('平均成本', 10, 'right')} | {_pad_string('現價', 10, 'right')} | {_pad_string('當前損益', 10, 'right')}"
     divider = "-" * 58
 
-    for h in holdings_data:
+    for h in sorted_holdings:
         curr_p = h.get("current_price", 0.0)
         pnl = (curr_p - h["avg_cost"]) * h["quantity"] if curr_p > 0 else 0.0
         pnl_pct = (
