@@ -4494,3 +4494,77 @@ def create_active_orders_embed(orders: List[Dict[str, Any]]) -> discord.Embed:
 
     embed.set_footer(text="Nexus Seeker • 待成交委託單管理系統")
     return embed
+
+
+def create_telemetry_alignment_embed(
+    alignment_items: List[Dict[str, Any]], truncated: bool = False
+) -> discord.Embed:
+    """建構待成交委託單盤中遙測對齊警報 Embed (排版參照 Watchlist 半小時戰報 樹狀格式)"""
+    embed = discord.Embed(
+        title="📡 待成交委託單 - 盤中每半小時 Telemetry 對齊警報",
+        description=(
+            "⚠️ **【動態掛單偏離度與尾部風險警報】**\n"
+            "偵測到美股市場短線隱含波動率 (IV) 劇烈放大，且期權偏斜（Skew）指標進入極端異常區間：\n\u200b"
+        ),
+        color=discord.Color.red()
+        if any(i.get("is_size_down") for i in alignment_items)
+        else discord.Color.orange(),
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    for o in alignment_items:
+        sym = o["symbol"]
+        order_id = o["order_id"]
+        curr_p = o["current_price"]
+        orig_q = o["original_qty"]
+        sugg_p = o["suggested_price"]
+        sugg_q = o["suggested_qty"]
+        is_size_down = o["is_size_down"]
+
+        ansi_lines = ["```ansi"]
+        ansi_lines.append(
+            f" \u001b[1;36m📐 {sym} 遙測價格對齊 (Telemetry Pricing Alignment)\u001b[0m"
+        )
+        ansi_lines.append(" ----------------------------------")
+        ansi_lines.append(
+            f"  ├─ 當前掛單價格: \u001b[1;37m${curr_p:.2f}\u001b[0m (數量: \u001b[1;37m{orig_q:.1f}\u001b[0m 股)"
+        )
+
+        sugg_price_color = "\u001b[1;32m" if sugg_p == curr_p else "\u001b[1;33m"
+        ansi_lines.append(
+            f"  ├─ 遙測最佳防線: {sugg_price_color}${sugg_p:.2f}\u001b[0m (數量: \u001b[1;37m{sugg_q:.1f}\u001b[0m 股)"
+        )
+
+        if is_size_down:
+            ansi_lines.append(
+                "  ├─ 偏離防禦狀態: \u001b[1;31m⚠️ 偏離度與尾部風險過高，面臨被擊穿風險\u001b[0m"
+            )
+            ansi_lines.append(
+                "  └─ \u001b[1;31m⚠️ [尾端風險防禦] 偵測到期權偏斜極端尾端風險。系統已自動攔截並將掛單價格微調至更接近現價，且將掛單數量打 75 折以防禦尾部風險。\u001b[0m"
+            )
+        else:
+            ansi_lines.append(
+                "  └─ 偏離防禦狀態: \u001b[1;33m⚠️ 偏離度與尾部風險過高，面臨被擊穿風險\u001b[0m"
+            )
+
+        ansi_lines.append("```")
+        card_content = "\n".join(ansi_lines)
+
+        embed.add_field(
+            name=f"📊 標的代號：{sym} (委託單 ID: {order_id})",
+            value=_safe_embed_field_value(card_content, "暫無遙測對齊詳情"),
+            inline=False,
+        )
+
+    footer_text = ""
+    if truncated:
+        footer_text += "⚠️ *(由於您的活躍委託單數量較多，部分標的之偏離度警報已被安全省略，請至 `/orders` 查看完整列表)*\n\n"
+    footer_text += "💡 **建議操作**：請點擊下方綠色按鈕「一鍵套用遙測建議價」，系統將自動調整您的委託價格並下調掛單股數以防守大後方。"
+
+    embed.add_field(
+        name="💡 建議操作與指引",
+        value=_safe_embed_field_value(footer_text, "請使用下方按鈕進行套用"),
+        inline=False,
+    )
+    embed.set_footer(text="Nexus Seeker • 盤中每半小時 telemetry 對齊警報")
+    return embed

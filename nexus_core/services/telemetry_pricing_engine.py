@@ -46,8 +46,8 @@ async def calculate_telemetry_price(
         # 連結優化：將分配預算減至 75%，防止激進攔截時資金過快枯竭
         sizing_multiplier = 0.75
         logs.append(
-            f"[⚠️ Tail Risk Mitigation] Extreme Skew Tail Risk detected (Percentile {skew_percentile*100:.1f}%). "
-            f"Intercepting price adjusted closer to spot (${price:.2f}); order size scaled down to 75% for asset protection."
+            f"[⚠️ 尾端風險防禦] 偵測到期權偏斜極端尾端風險 (百分位數 {skew_percentile*100:.1f}%)。"
+            f"已將掛單價格微調至更接近現價 (${price:.2f})，且將掛單數量打 75 折以防禦尾部風險，保護資產流動性。"
         )
 
     # 2. 數學統計邊界面 (Statistical Boundaries & Volatility)
