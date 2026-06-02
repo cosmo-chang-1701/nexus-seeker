@@ -497,7 +497,10 @@ def split_embed_by_fields(
         is_first = len(groups) == 0
         base_len = base_len_first if is_first else base_len_subsequent
 
-        if current_group and (base_len + current_len + field_len > max_size):
+        if current_group and (
+            base_len + current_len + field_len > max_size
+            or len(current_group) >= 24
+        ):
             groups.append(current_group)
             current_group = [field]
             current_len = field_len
@@ -4274,7 +4277,10 @@ def create_proactive_event_alert_embed(events: List[Any]) -> discord.Embed:
         timestamp=datetime.now(timezone.utc),
     )
 
-    for event in events:
+    max_display = 24
+    display_events = events[:max_display]
+
+    for event in display_events:
         if isinstance(event, dict):
             name = str(event.get("name", "⚠️ 重大事件"))
             tte_hours = float(event.get("tte_hours", 0.0) or 0.0)
@@ -4325,6 +4331,20 @@ def create_proactive_event_alert_embed(events: List[Any]) -> discord.Embed:
         value = "\n".join(event_lines)
 
         embed.add_field(name=name, value=value, inline=False)
+
+    if len(events) > max_display:
+        omitted_count = len(events) - max_display
+        warning_msg = (
+            f"```ansi\n"
+            f"\u001b[1;31m⚠️ 由於 Discord 單個 Embed 的 25 個欄位限制，其餘 {omitted_count} 筆重大事件已被安全省略。\u001b[0m\n"
+            f"💡 請使用 `/calendar` 或查看系統日誌獲取完整重大事件清單。\n"
+            f"```"
+        )
+        embed.add_field(
+            name="⚠️ 其餘重大事件已被省略",
+            value=_safe_embed_field_value(warning_msg, "部分事件已被省略"),
+            inline=False,
+        )
 
     embed.set_footer(text="Proactive Event Monitor | Nexus Seeker")
     return embed
@@ -4558,7 +4578,10 @@ def create_active_orders_embed(orders: List[Dict[str, Any]]) -> discord.Embed:
         "GTC_90": "\u001b[1;37m90天有效 (GTC_90)\u001b[0m",
     }
 
-    for idx, o in enumerate(orders):
+    max_display = 24
+    display_orders = orders[:max_display]
+
+    for idx, o in enumerate(display_orders):
         ansi_lines = ["```ansi"]
         ansi_lines.append(
             f" 📂 委託單 ID: \u001b[1;33m{o['id']}\u001b[0m  |  標的: \u001b[1;36m{o['symbol']}\u001b[0m"
@@ -4603,6 +4626,20 @@ def create_active_orders_embed(orders: List[Dict[str, Any]]) -> discord.Embed:
         embed.add_field(
             name=f"📦 委託單 #{idx+1} (ID: {o['id']})",
             value=_safe_embed_field_value(card_content, "暫無詳情"),
+            inline=False,
+        )
+
+    if len(orders) > max_display:
+        omitted_count = len(orders) - max_display
+        warning_msg = (
+            f"```ansi\n"
+            f"\u001b[1;31m⚠️ 由於 Discord 單個 Embed 的 25 個欄位限制，其餘 {omitted_count} 筆活躍委託單已被安全省略。\u001b[0m\n"
+            f"💡 請至委託管理面板快速撤銷或微調掛單以防守大後方。\n"
+            f"```"
+        )
+        embed.add_field(
+            name="⚠️ 剩餘委託單未完全顯示",
+            value=_safe_embed_field_value(warning_msg, "部分委託單已被省略"),
             inline=False,
         )
 
