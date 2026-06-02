@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 _OriginalEmbed = discord.Embed
 
 
-class NexusEmbed(_OriginalEmbed):
+class NexusEmbed(discord.Embed):
     """自訂 Embed 子類別，用以動態實現一致的版面設計、精緻調色盤與標準 Footer 排版。"""
 
     def __init__(self, *args, **kwargs):
