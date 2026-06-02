@@ -134,8 +134,8 @@ async def test_get_history_df_cache_expiry():
         df1 = await get_history_df("AAPL", period="1y", interval="1d")
         assert not df1.empty
 
-    # Fast forward past TTL (4 hours = 14400 seconds)
-    expiry_time = start_time + 14401.0
+    # Fast forward past TTL (6 hours = 21600 seconds)
+    expiry_time = start_time + 21601.0
     with patch(
         "services.market_data_service.yf.Ticker", return_value=mock_ticker
     ) as mock_yf_ticker, patch("time.time", return_value=expiry_time):
