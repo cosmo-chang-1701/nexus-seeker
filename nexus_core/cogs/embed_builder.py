@@ -4911,6 +4911,7 @@ def create_active_orders_embed(orders: List[Dict[str, Any]]) -> List[discord.Emb
 def _build_telemetry_alignment_ansi_card(item: Dict[str, Any]) -> str:
     """建構 Telemetry 對齊卡片 (ANSI)，版面參照待成交委託單列表卡片。"""
     sym = str(item.get("symbol") or "").upper()
+    price_label = str(item.get("price_label") or "掛單價格")
     curr_p = float(item.get("current_price") or 0)
     orig_q = int(round(float(item.get("original_qty") or 0)))
     sugg_p = float(item.get("suggested_price") or 0)
@@ -4925,7 +4926,7 @@ def _build_telemetry_alignment_ansi_card(item: Dict[str, Any]) -> str:
     )
     ansi_lines.append(" ----------------------------------")
     ansi_lines.append(
-        f"  ├─ 當前掛單價格: \u001b[1;37m${curr_p:.2f}\u001b[0m (數量: \u001b[1;37m{orig_q}\u001b[0m 股)"
+        f"  ├─ 當前{price_label}: \u001b[1;37m${curr_p:.2f}\u001b[0m (數量: \u001b[1;37m{orig_q}\u001b[0m 股)"
     )
 
     sugg_price_color = "\u001b[1;32m" if abs(sugg_p - curr_p) < 0.01 else "\u001b[1;33m"
