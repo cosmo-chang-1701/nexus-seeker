@@ -924,7 +924,7 @@ def test_create_sentiment_scan_embed_premarket():
     )
     assert "[盤前/前日收盤]" in embed_fallback.title
     iv_field_value_fallback = embed_fallback.fields[0].value
-    assert "前日收盤 / 歷史波動率代理" in iv_field_value_fallback
+    assert "前日收盤 IV / SQLite 快取" in iv_field_value_fallback
     assert "45.0%" in iv_field_value_fallback
 
     # Path C: Regular Scan (is_premarket = False)

@@ -97,3 +97,7 @@ class IVMetrics(BaseModel):
     expected_move_weekly: float
     iv_status: Literal["Low", "Normal", "High", "Extreme"]
     is_premarket: bool = False
+    # Data provenance for volatility inputs. Used to keep IV/HV definitions consistent in UI.
+    iv_source: Literal["LIVE_IV", "STORED_IV", "HV_PROXY", "UNAVAILABLE"] = (
+        "UNAVAILABLE"
+    )

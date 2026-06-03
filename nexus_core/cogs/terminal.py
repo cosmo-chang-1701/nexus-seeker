@@ -56,6 +56,7 @@ class TerminalCog(commands.Cog):
         risk_limit: Optional[float] = None,
         enable_vtr: Optional[bool] = None,
         enable_psq_watchlist: Optional[bool] = None,
+        enable_local_tunnel: Optional[bool] = None,
         polymarket_threshold: Optional[float] = None,
         polymarket_use_llm: Optional[bool] = None,
         polymarket_slippage: Optional[float] = None,
@@ -75,6 +76,7 @@ class TerminalCog(commands.Cog):
                 risk_limit,
                 enable_vtr,
                 enable_psq_watchlist,
+                enable_local_tunnel,
                 polymarket_threshold,
                 polymarket_use_llm,
                 polymarket_slippage,
@@ -125,6 +127,12 @@ class TerminalCog(commands.Cog):
             db_updates["enable_psq_watchlist"] = enable_psq_watchlist
             updates.append(
                 f"⚡ PowerSqueeze 追蹤: `{'開啟' if enable_psq_watchlist else '關閉'}`"
+            )
+
+        if enable_local_tunnel is not None:
+            db_updates["enable_local_tunnel"] = enable_local_tunnel
+            updates.append(
+                f"🛜 本地 Tunnel 呼叫: `{'開啟' if enable_local_tunnel else '關閉'}`"
             )
 
         if polymarket_threshold is not None:
@@ -1752,6 +1760,11 @@ SETTINGS_LABELS = {
         "是否對自選股開啟 PowerSqueeze 戰情追蹤",
         None,
     ),
+    "enable_local_tunnel": (
+        "🛜 本地 Tunnel 呼叫",
+        "是否允許呼叫本地 Tunnel/Edge Scraper（關閉時將不做任何 Tunnel I/O）",
+        None,
+    ),
     "monthly_expense": (
         "💸 每月支出預算",
         "每月生存支出預算 (USD, 用於財務跑道分析)",
@@ -1943,7 +1956,12 @@ class AccountSettingsView(discord.ui.View):
         ctx = database.get_full_user_context(self.user_id)
 
         # 針對布林值，直接切換狀態
-        if key in ["enable_vtr", "enable_psq_watchlist", "polymarket_use_llm"]:
+        if key in [
+            "enable_vtr",
+            "enable_psq_watchlist",
+            "enable_local_tunnel",
+            "polymarket_use_llm",
+        ]:
             current_val = getattr(ctx, key, False)
             new_val = not current_val
             database.upsert_user_config(self.user_id, **{key: new_val})
@@ -1974,6 +1992,7 @@ class AccountSettingsView(discord.ui.View):
             f"🛡️ **基準風險上限**: `{ctx.risk_limit}%`",
             f"👻 **虛擬交易室 (VTR) 跟單**: `{'🟢 開啟' if ctx.enable_vtr else '🔴 關閉'}`",
             f"⚡ **PowerSqueeze 追蹤**: `{'🟢 開啟' if ctx.enable_psq_watchlist else '🔴 關閉'}`",
+            f"🛜 **本地 Tunnel 呼叫**: `{'🟢 開啟' if ctx.enable_local_tunnel else '🔴 關閉'}`",
         ]
 
         runway_settings = [

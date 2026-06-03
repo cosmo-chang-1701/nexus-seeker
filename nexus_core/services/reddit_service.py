@@ -5,8 +5,18 @@ import config
 logger = logging.getLogger(__name__)
 
 
-async def get_reddit_context(symbol: str, limit: int = 5) -> str:
-    """透過 Cloudflare Tunnel 呼叫本地端爬取 Reddit"""
+async def get_reddit_context(
+    symbol: str, limit: int = 5, *, enable_tunnel: bool = True
+) -> str:
+    """透過 Cloudflare Tunnel 呼叫本地端爬取 Reddit。
+
+    注意：若 enable_tunnel=False，必須直接跳過呼叫（避免任何本地 Tunnel I/O）。
+    """
+    if not enable_tunnel:
+        return "本地 Tunnel 已關閉（可於 /settings 開啟），暫不抓取 Reddit 情緒。"
+    if not getattr(config, "TUNNEL_URL", ""):
+        return "尚未配置本地 Tunnel URL，暫不抓取 Reddit 情緒。"
+
     try:
         logger.info(
             f"[{symbol}] 啟動邊緣運算呼叫，透過 Tunnel 要求本地端爬取 Reddit..."

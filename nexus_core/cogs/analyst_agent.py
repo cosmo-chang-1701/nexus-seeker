@@ -648,11 +648,17 @@ class AnalystAgent(commands.Cog):
             sentiment_data = {}
             if upcoming_symbols:
                 news_tasks = [fetch_recent_news(sym) for sym in upcoming_symbols]
-                reddit_tasks = [get_reddit_context(sym) for sym in upcoming_symbols]
+                if database.any_user_local_tunnel_enabled():
+                    reddit_tasks = [get_reddit_context(sym) for sym in upcoming_symbols]
+                else:
+                    reddit_tasks = []
 
                 news_results = await asyncio.gather(*news_tasks, return_exceptions=True)
-                reddit_results = await asyncio.gather(
-                    *reddit_tasks, return_exceptions=True
+                reddit_results = (
+                    await asyncio.gather(*reddit_tasks, return_exceptions=True)
+                    if reddit_tasks
+                    else ["本地 Tunnel 已關閉，略過 Reddit 情緒。"]
+                    * len(upcoming_symbols)
                 )
 
                 for i, sym in enumerate(upcoming_symbols):
@@ -728,11 +734,19 @@ class AnalystAgent(commands.Cog):
             # 並行獲取價格歷史、新聞與 Reddit 資訊
             hist_tasks = [get_history_df(sym, period="3mo") for sym in sectors.values()]
             news_tasks = [fetch_recent_news(sym) for sym in sectors.values()]
-            reddit_tasks = [get_reddit_context(sym) for sym in sectors.values()]
+            reddit_tasks = (
+                [get_reddit_context(sym) for sym in sectors.values()]
+                if database.any_user_local_tunnel_enabled()
+                else []
+            )
 
             hist_results = await asyncio.gather(*hist_tasks, return_exceptions=True)
             news_results = await asyncio.gather(*news_tasks, return_exceptions=True)
-            reddit_results = await asyncio.gather(*reddit_tasks, return_exceptions=True)
+            reddit_results = (
+                await asyncio.gather(*reddit_tasks, return_exceptions=True)
+                if reddit_tasks
+                else ["本地 Tunnel 已關閉，略過 Reddit 情緒。"] * len(sectors)
+            )
 
             for i, (name, sym) in enumerate(sectors.items()):
                 df = hist_results[i]

@@ -26,12 +26,13 @@ async def test_settings_view_structure(db_conn):
     assert isinstance(select, discord.ui.Select)
     assert select.custom_id == "select_account_settings"
 
-    # 驗證包含 7 個設定選項
-    assert len(select.options) == 7
+    # 驗證包含 8 個設定選項
+    assert len(select.options) == 8
     labels = [opt.label for opt in select.options]
     assert "💰 總資金" in labels
     assert "🛡️ 基準風險上限 %" in labels
     assert "👻 虛擬交易室 (VTR)" in labels
+    assert "🛜 本地 Tunnel 呼叫" in labels
 
 
 @pytest.mark.asyncio
