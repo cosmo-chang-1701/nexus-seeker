@@ -31,18 +31,18 @@ Nexus Seeker 是一個 **Discord-first 的選擇權風控與交易營運平台**
 graph TD
     User((Discord User))
 
-    subgraph Core[nexus_core]
-        Bot[NexusBot]
-        Cogs[Cogs: trading / terminal / sentiment / order_ui / ...]
-        Services[Services: trading / calendar / llm / telemetry / ...]
-        Queue[Persistent DM Queue]
-        Leader[SQLite leader lock (blue/green safe)]
+    subgraph Core["nexus_core"]
+        Bot["NexusBot"]
+        Cogs["Cogs: trading / terminal / sentiment / order_ui / ..."]
+        Services["Services: trading / calendar / llm / telemetry / ..."]
+        Queue["Persistent DM Queue"]
+        Leader["SQLite leader lock (blue-green safe)"]
         DB[(SQLite)]
     end
 
-    subgraph Edge[nexus_edge_scraper (optional)]
-        EdgeAPI[FastAPI + Playwright]
-        Tunnel[Cloudflare Tunnel]
+    subgraph Edge["nexus_edge_scraper (optional)"]
+        EdgeAPI["FastAPI + Playwright"]
+        Tunnel["Cloudflare Tunnel"]
     end
 
     User --> Bot
