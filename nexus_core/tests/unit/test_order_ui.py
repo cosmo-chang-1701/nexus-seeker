@@ -357,7 +357,7 @@ async def test_order_panel_command(mock_interaction):
 
 @pytest.mark.asyncio
 async def test_orders_list_command(mock_interaction, db_conn):
-    """測試查詢待成交委託單清單命令"""
+    """測試查詢待成交委託單清單命令（預設：全部）"""
     user_id = mock_interaction.user.id
     add_active_order(
         user_id=user_id,
@@ -370,6 +370,7 @@ async def test_orders_list_command(mock_interaction, db_conn):
 
     bot = MagicMock()
     cog = OrderUICog(bot)
+    # 不傳任何下拉參數時，預設視為全部
     await cog.list_orders.callback(cog, mock_interaction)
 
     assert mock_interaction.response.defer.called
@@ -389,6 +390,70 @@ async def test_orders_list_command(mock_interaction, db_conn):
 
     assert any("TSLA" in f.name or "TSLA" in f.value for f in embed.fields)
     assert isinstance(view, OrderManagementView)
+
+
+@pytest.mark.asyncio
+async def test_orders_list_command_filters(mock_interaction, db_conn):
+    """測試 /list_orders 下拉篩選：方向與條件"""
+    user_id = mock_interaction.user.id
+
+    add_active_order(
+        user_id=user_id,
+        symbol="AAPL",
+        quantity=10,
+        order_type="LIMIT",
+        validity="DAY",
+        side="BUY",
+        limit_price=180.0,
+    )
+    add_active_order(
+        user_id=user_id,
+        symbol="TSLA",
+        quantity=5,
+        order_type="STOP",
+        validity="NIGHT",
+        side="SELL",
+        stop_price=150.0,
+    )
+
+    bot = MagicMock()
+    cog = OrderUICog(bot)
+
+    # 篩選：只看 SELL
+    await cog.list_orders.callback(cog, mock_interaction, side="SELL")
+
+    assert mock_interaction.followup.send.called
+    kwargs = mock_interaction.followup.send.call_args_list[-1].kwargs
+    embed = kwargs["embed"]
+
+    # 應只看到 TSLA (SELL)
+    joined = (
+        (embed.description or "")
+        + "\n"
+        + "\n".join([f.name + "\n" + str(f.value) for f in embed.fields])
+    )
+    assert "TSLA" in joined
+    assert "AAPL" not in joined
+
+    mock_interaction.followup.send.reset_mock()
+
+    # 篩選：含停損 (HAS_STOP) + SELL
+    await cog.list_orders.callback(
+        cog,
+        mock_interaction,
+        side="SELL",
+        condition="HAS_STOP",
+    )
+
+    kwargs2 = mock_interaction.followup.send.call_args_list[-1].kwargs
+    embed2 = kwargs2["embed"]
+    joined2 = (
+        (embed2.description or "")
+        + "\n"
+        + "\n".join([f.name + "\n" + str(f.value) for f in embed2.fields])
+    )
+    assert "TSLA" in joined2
+    assert "AAPL" not in joined2
 
 
 @pytest.mark.asyncio
