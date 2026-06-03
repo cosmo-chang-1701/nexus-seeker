@@ -1382,6 +1382,7 @@ class TerminalCog(commands.Cog):
 
 SCHEDULED_LABELS = {
     "watchlist_heartbeat": "📊 自選半小時心跳監測",
+    "order_telemetry_alignment_alert": "📡 待成交委託單 Telemetry 對齊警報",
     "pre_market_macro": "📈 盤前巨觀與避險環境報告",
     "pre_market_earnings": "🔍 盤前自選股財報與估值報告",
     "intraday_execution_guide": "🛡️ 盤中量化執行與避險指引",
