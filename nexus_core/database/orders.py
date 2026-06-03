@@ -89,26 +89,60 @@ def update_active_order_price(
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
 
-    sets: list[str] = [
-        "limit_price = CASE WHEN order_type IN ('LIMIT', 'STOP_LIMIT') THEN ? ELSE limit_price END",
-        "stop_price = CASE WHEN order_type IN ('STOP', 'STOP_LIMIT') THEN ? ELSE stop_price END",
-        "trailing_value = CASE WHEN order_type IN ('TRAILING_STOP_USD', 'TRAILING_STOP_PCT') THEN ? ELSE trailing_value END",
-    ]
-    params: list[object] = [new_price, new_price, new_price]
+    side = new_side.upper() if new_side is not None else None
 
-    if new_quantity is not None:
-        sets.append("quantity = ?")
-        params.append(new_quantity)
-
-    if new_side is not None:
-        sets.append("side = ?")
-        params.append(new_side.upper())
-
-    sets.append("updated_at = CURRENT_TIMESTAMP")
-
-    sql = f"UPDATE active_orders SET {', '.join(sets)} WHERE id = ?"
-    params.append(order_id)
-    cursor.execute(sql, params)
+    if new_quantity is None and side is None:
+        cursor.execute(
+            """
+            UPDATE active_orders
+            SET limit_price = CASE WHEN order_type IN ('LIMIT', 'STOP_LIMIT') THEN ? ELSE limit_price END,
+                stop_price = CASE WHEN order_type IN ('STOP', 'STOP_LIMIT') THEN ? ELSE stop_price END,
+                trailing_value = CASE WHEN order_type IN ('TRAILING_STOP_USD', 'TRAILING_STOP_PCT') THEN ? ELSE trailing_value END,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (new_price, new_price, new_price, order_id),
+        )
+    elif new_quantity is not None and side is None:
+        cursor.execute(
+            """
+            UPDATE active_orders
+            SET limit_price = CASE WHEN order_type IN ('LIMIT', 'STOP_LIMIT') THEN ? ELSE limit_price END,
+                stop_price = CASE WHEN order_type IN ('STOP', 'STOP_LIMIT') THEN ? ELSE stop_price END,
+                trailing_value = CASE WHEN order_type IN ('TRAILING_STOP_USD', 'TRAILING_STOP_PCT') THEN ? ELSE trailing_value END,
+                quantity = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (new_price, new_price, new_price, new_quantity, order_id),
+        )
+    elif new_quantity is None and side is not None:
+        cursor.execute(
+            """
+            UPDATE active_orders
+            SET limit_price = CASE WHEN order_type IN ('LIMIT', 'STOP_LIMIT') THEN ? ELSE limit_price END,
+                stop_price = CASE WHEN order_type IN ('STOP', 'STOP_LIMIT') THEN ? ELSE stop_price END,
+                trailing_value = CASE WHEN order_type IN ('TRAILING_STOP_USD', 'TRAILING_STOP_PCT') THEN ? ELSE trailing_value END,
+                side = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (new_price, new_price, new_price, side, order_id),
+        )
+    else:
+        cursor.execute(
+            """
+            UPDATE active_orders
+            SET limit_price = CASE WHEN order_type IN ('LIMIT', 'STOP_LIMIT') THEN ? ELSE limit_price END,
+                stop_price = CASE WHEN order_type IN ('STOP', 'STOP_LIMIT') THEN ? ELSE stop_price END,
+                trailing_value = CASE WHEN order_type IN ('TRAILING_STOP_USD', 'TRAILING_STOP_PCT') THEN ? ELSE trailing_value END,
+                quantity = ?,
+                side = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (new_price, new_price, new_price, new_quantity, side, order_id),
+        )
 
     changes = cursor.rowcount
     conn.commit()
