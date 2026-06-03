@@ -7,7 +7,10 @@ from cogs.embed_builder import create_info_embed
 
 @pytest.fixture
 def bot():
-    return NexusBot()
+    # 測試 queue_dm/worker 行為時，需允許寫入通知佇列（避免 follower gate 直接跳過）
+    inst = NexusBot()
+    setattr(inst, "_is_leader_instance", True)
+    return inst
 
 
 @pytest.mark.asyncio

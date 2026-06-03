@@ -2,8 +2,15 @@ import discord
 import logging
 from discord.ext import commands
 import asyncio
+import os
+import uuid
 from typing import Optional, Dict, Any, cast
 import database
+from database.leader_lock import (
+    LOCK_NAME_DISCORD_BOT,
+    try_acquire_leader_lock,
+    release_leader_lock,
+)
 
 from database.notifications import (
     add_pending_notification,
@@ -93,6 +100,13 @@ class NexusBot(commands.Bot):
         intents = discord.Intents.default()
         intents.message_content = True
         super().__init__(command_prefix="!", intents=intents)
+
+        # Blue/Green-safe instance identity & leader lock state
+        self.instance_id = os.getenv("NEXUS_INSTANCE_ID") or str(uuid.uuid4())
+        self._is_leader_instance = False
+        self._leader_lock_task: asyncio.Task | None = None
+        self._leader_services_started = False
+
         # 仍然保留一個訊號訊號量，用於喚醒工人
         self.message_signal = asyncio.Event()
         self._has_notified_ready = False
@@ -102,7 +116,12 @@ class NexusBot(commands.Bot):
     async def queue_dm(
         self, user_id: int, message: str = None, embed: discord.Embed = None
     ):
-        """將私訊任務加入持久化佇列，並喚醒發送工人"""
+        """將私訊任務加入持久化佇列，並喚醒發送工人
+
+        為了支援 Swarm start-first / 藍綠部署，本方法僅允許 leader instance 寫入列隊。
+        """
+        if not self._is_leader_instance:
+            return
         from cogs.embed_builder import create_info_embed
 
         # 如果只有訊息且沒有 Embed，則將其封裝進 Embed
@@ -160,32 +179,27 @@ class NexusBot(commands.Bot):
         self.loop.create_task(self._message_worker())
         self.loop.create_task(self._health_worker())
 
-        # 啟動記憶體管理員 (1GB RAM 優化)
+        # 建立 leader-only 服務，但延後到 leader acquisition 才 start (blue/green 安全)
         try:
             from services.memory_manager import MemoryManager
 
             self.memory_manager = MemoryManager(self)
-            self.memory_manager.start()
         except Exception as e:
-            logger.error(f"❌ 啟動記憶體管理員失敗: {e}")
+            logger.error(f"❌ 建立記憶體管理員失敗: {e}")
 
-        # 啟動對沖監控服務
         try:
             from services.hedge_monitor_service import HedgeMonitorService
 
             self.hedge_monitor = HedgeMonitorService(self)
-            self.hedge_monitor.start()
         except Exception as e:
-            logger.error(f"❌ 啟動對沖監控服務失敗: {e}")
+            logger.error(f"❌ 建立對沖監控服務失敗: {e}")
 
-        # 啟動 Polymarket 巨鯨監控服務
         try:
             from services.polymarket_service import PolymarketService
 
             self.polymarket_service = PolymarketService(self)
-            self.polymarket_service.start()
         except Exception as e:
-            logger.error(f"❌ 啟動 Polymarket 服務失敗: {e}")
+            logger.error(f"❌ 建立 Polymarket 服務失敗: {e}")
 
         try:
             synced = await self.tree.sync()
@@ -207,20 +221,43 @@ class NexusBot(commands.Bot):
         except Exception as e:
             logger.error(f"❌ 資料庫初始化失敗: {e}")
 
-        logger.info(f"🚀 Nexus Seeker 啟動成功！Bot ID: {self.user}")
-
-        # 啟動後檢查有無遺留通知並喚醒工人
+        # Acquire leader lock once immediately after migrations
         try:
-            pending_count = await asyncio.to_thread(get_pending_count)
-            if pending_count > 0:
-                logger.info(f"發現 {pending_count} 條遺留的待發送通知，啟動補發流程...")
-                self.message_signal.set()
-        except Exception as e:
-            logger.error(f"檢查待發送通知時出錯: {e}")
+            self._is_leader_instance = await asyncio.to_thread(
+                try_acquire_leader_lock,
+                LOCK_NAME_DISCORD_BOT,
+                self.instance_id,
+                int(os.getenv("NEXUS_LEADER_LOCK_TTL", "30")),
+            )
+        except Exception:
+            self._is_leader_instance = False
 
-        # 核心改進：將啟動通知改為背景任務，避免阻塞 on_ready
-        logger.info("正在準備背景啟動通知...")
-        asyncio.create_task(self.notify_all_users("🚀 Nexus Seeker 機器人已啟動！"))
+        # Start leader lock loop after migrations (table must exist)
+        if self._leader_lock_task is None:
+            self._leader_lock_task = self.loop.create_task(self._leader_lock_loop())
+
+        logger.info(
+            f"🚀 Nexus Seeker 啟動成功！Bot ID: {self.user} | instance_id={self.instance_id} | leader={self._is_leader_instance}"
+        )
+
+        if self._is_leader_instance:
+            self._start_leader_services()
+
+        # 啟動後檢查有無遺留通知並喚醒工人 (leader only)
+        if self._is_leader_instance:
+            try:
+                pending_count = await asyncio.to_thread(get_pending_count)
+                if pending_count > 0:
+                    logger.info(
+                        f"發現 {pending_count} 條遺留的待發送通知，啟動補發流程..."
+                    )
+                    self.message_signal.set()
+            except Exception as e:
+                logger.error(f"檢查待發送通知時出錯: {e}")
+
+            # 核心改進：將啟動通知改為背景任務，避免阻塞 on_ready
+            logger.info("正在準備背景啟動通知...")
+            asyncio.create_task(self.notify_all_users("🚀 Nexus Seeker 機器人已啟動！"))
 
         logger.info("✅ on_ready 流程處理完畢，機器人進入運行狀態。")
 
@@ -231,32 +268,26 @@ class NexusBot(commands.Bot):
 
         logger.info("🛑 Nexus Seeker 正在關閉...")
 
-        # 停止記憶體管理員
-        if hasattr(self, "memory_manager"):
-            try:
-                self.memory_manager.stop()
-            except Exception as e:
-                logger.error(f"停止記憶體管理員時出錯: {e}")
-
-        # 停止對沖監控服務
-        if hasattr(self, "hedge_monitor"):
-            try:
-                self.hedge_monitor.stop()
-            except Exception as e:
-                logger.error(f"停止對沖監控服務時出錯: {e}")
-
-        # 停止 Polymarket 服務
-        if hasattr(self, "polymarket_service"):
-            try:
-                self.polymarket_service.stop()
-            except Exception as e:
-                logger.error(f"停止 Polymarket 服務時出錯: {e}")
-
-        # 發送關閉通知
+        # Stop leader lock loop and release lease
+        if self._leader_lock_task is not None:
+            self._leader_lock_task.cancel()
+            self._leader_lock_task = None
         try:
-            await self.notify_all_users("🛑 Nexus Seeker 機器人正在關閉，請稍候...")
-        except Exception as e:
-            logger.error(f"發送關閉通知時發生錯誤: {e}")
+            await asyncio.to_thread(
+                release_leader_lock, LOCK_NAME_DISCORD_BOT, self.instance_id
+            )
+        except Exception:
+            pass
+
+        # 停止 leader-only 服務 (即便尚未啟動也安全)
+        self._stop_leader_services()
+
+        # 發送關閉通知 (leader only)
+        if self._is_leader_instance:
+            try:
+                await self.notify_all_users("🛑 Nexus Seeker 機器人正在關閉，請稍候...")
+            except Exception as e:
+                logger.error(f"發送關閉通知時發生錯誤: {e}")
 
         # ⏳ 核心改進：等待所有持久化訊息送出 (或直到 Docker 強制終止)
         wait_time = 0
@@ -269,6 +300,86 @@ class NexusBot(commands.Bot):
             wait_time += 1
 
         await super().close()
+
+    def _start_leader_services(self) -> None:
+        if self._leader_services_started:
+            return
+        self._leader_services_started = True
+
+        try:
+            if hasattr(self, "memory_manager"):
+                self.memory_manager.start()
+        except Exception as e:
+            logger.error(f"❌ 啟動記憶體管理員失敗: {e}")
+
+        try:
+            if hasattr(self, "hedge_monitor"):
+                self.hedge_monitor.start()
+        except Exception as e:
+            logger.error(f"❌ 啟動對沖監控服務失敗: {e}")
+
+        try:
+            if hasattr(self, "polymarket_service"):
+                self.polymarket_service.start()
+        except Exception as e:
+            logger.error(f"❌ 啟動 Polymarket 服務失敗: {e}")
+
+    def _stop_leader_services(self) -> None:
+        if not self._leader_services_started:
+            return
+        self._leader_services_started = False
+
+        try:
+            if hasattr(self, "memory_manager"):
+                self.memory_manager.stop()
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self, "hedge_monitor"):
+                self.hedge_monitor.stop()
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self, "polymarket_service"):
+                self.polymarket_service.stop()
+        except Exception:
+            pass
+
+    async def _leader_lock_loop(self):
+        """Maintain a SQLite leader lease to support Swarm start-first blue/green deploy."""
+        ttl = int(os.getenv("NEXUS_LEADER_LOCK_TTL", "30"))
+        interval = int(os.getenv("NEXUS_LEADER_LOCK_INTERVAL", "10"))
+
+        await self.wait_until_ready()
+
+        while not self.is_closed():
+            try:
+                acquired = await asyncio.to_thread(
+                    try_acquire_leader_lock,
+                    LOCK_NAME_DISCORD_BOT,
+                    self.instance_id,
+                    ttl,
+                )
+
+                if acquired != self._is_leader_instance:
+                    self._is_leader_instance = acquired
+                    if acquired:
+                        logger.warning(
+                            f"🟢 Leader acquired: instance_id={self.instance_id} (blue/green promote)"
+                        )
+                        self._start_leader_services()
+                        self.message_signal.set()
+                    else:
+                        logger.warning(
+                            f"🔴 Leader lost: instance_id={self.instance_id} (blue/green demote)"
+                        )
+                        self._stop_leader_services()
+            except Exception as e:
+                logger.debug(f"Leader lock loop error: {e}")
+
+            await asyncio.sleep(interval)
 
     async def _health_worker(self):
         """定期更新健康狀態檔案，讓 Docker 能夠識別機器人的健康度。"""
@@ -297,6 +408,11 @@ class NexusBot(commands.Bot):
         await self.wait_until_ready()
 
         while not self.is_closed():
+            # leader-only: avoid double-send during blue/green overlap
+            if not self._is_leader_instance:
+                await asyncio.sleep(2)
+                continue
+
             # 1. 取得下一批待發送通知
             pending = await asyncio.to_thread(get_pending_notifications, limit=10)
 
@@ -360,6 +476,8 @@ class NexusBot(commands.Bot):
 
     async def notify_all_users(self, message):
         """一次將所有訊息排入背景寄發列隊 (優化為非阻塞)"""
+        if not self._is_leader_instance:
+            return
         try:
             from database.user_settings import get_all_user_ids
 

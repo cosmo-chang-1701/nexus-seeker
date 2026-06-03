@@ -84,6 +84,10 @@ class AnalystAgent(commands.Cog):
             await asyncio.sleep(sleep_secs)
 
             try:
+                if not getattr(self.bot, "_is_leader_instance", True):
+                    await asyncio.sleep(30)
+                    continue
+
                 logger.info("🤖 [Analyst Pre-Market] 啟動盤前巨觀與財報掃描...")
                 macro_report = await self.run_macro_scan()
                 if macro_report:
@@ -105,6 +109,10 @@ class AnalystAgent(commands.Cog):
         await self.bot.wait_until_ready()
         while True:
             if is_market_open():
+                if not getattr(self.bot, "_is_leader_instance", True):
+                    await asyncio.sleep(30)
+                    continue
+
                 logger.info(
                     "🤖 [Analyst Intra-Day] 偵測到開盤，執行 30 分鐘心跳掃描 (Active Execution Guide)..."
                 )
@@ -328,6 +336,10 @@ class AnalystAgent(commands.Cog):
             await asyncio.sleep(sleep_secs)
 
             try:
+                if not getattr(self.bot, "_is_leader_instance", True):
+                    await asyncio.sleep(30)
+                    continue
+
                 logger.info("🤖 [Analyst Post-Market] 啟動盤後總結與次日策略規劃...")
                 # 註記：summary_report (盤後風險結算報告) 已整合至 Trading Cog 的 personalized pipeline，此處略過發送以防重複。
 

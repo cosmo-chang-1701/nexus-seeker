@@ -20,6 +20,7 @@ from cogs.order_ui import (
     CancelOrderModal,
     EditOrderModal,
     OrderManagementView,
+    OrderItemView,
     ApplyTelemetryView,
 )
 
@@ -306,6 +307,37 @@ async def test_edit_order_modal_success(mock_interaction, db_conn):
 
 
 @pytest.mark.asyncio
+async def test_edit_order_modal_side_only_success(mock_interaction, db_conn):
+    """測試編輯委託單表單送出 (僅更新方向，價格留空)"""
+    user_id = mock_interaction.user.id
+    order_id = add_active_order(
+        user_id=user_id,
+        symbol="AAPL",
+        quantity=10,
+        order_type="LIMIT",
+        validity="DAY",
+        limit_price=150.0,
+    )
+
+    modal = EditOrderModal()
+    modal.order_id._value = str(order_id)
+    modal.new_side._value = "SELL"
+    modal.new_price._value = ""  # 留空：不變更價格
+
+    await modal.on_submit(mock_interaction)
+
+    assert mock_interaction.response.defer.called
+    assert mock_interaction.followup.send.called
+    embed = mock_interaction.followup.send.call_args[1]["embed"]
+    assert "編輯委託單成功" in embed.title
+
+    orders = get_user_active_orders(user_id)
+    assert len(orders) == 1
+    assert orders[0]["limit_price"] == 150.0
+    assert orders[0]["side"] == "SELL"
+
+
+@pytest.mark.asyncio
 async def test_order_panel_command(mock_interaction):
     """測試喚起訂單設定面板命令"""
     bot = MagicMock()
@@ -342,13 +374,26 @@ async def test_orders_list_command(mock_interaction, db_conn):
 
     assert mock_interaction.response.defer.called
     assert mock_interaction.followup.send.called
-    kwargs = mock_interaction.followup.send.call_args[1]
-    embed = kwargs["embed"]
-    view = kwargs["view"]
 
-    assert "待成交委託單列表" in embed.title
-    assert any("TSLA" in f.name or "TSLA" in f.value for f in embed.fields)
-    assert isinstance(view, OrderManagementView)
+    # 會送出 1 則總覽 + 每筆訂單各 1 則卡片訊息
+    assert mock_interaction.followup.send.call_count == 2
+
+    header_kwargs = mock_interaction.followup.send.call_args_list[0].kwargs
+    header_embed = header_kwargs["embed"]
+    assert "待成交委託單列表" in header_embed.title
+    assert "共" in header_embed.description
+    assert "取消" in header_embed.description
+    assert "編輯" in header_embed.description
+
+    card_kwargs = mock_interaction.followup.send.call_args_list[1].kwargs
+    card_embed = card_kwargs["embed"]
+    card_view = card_kwargs["view"]
+
+    assert "待成交委託單" in card_embed.title
+    assert "TSLA" in card_embed.description or any(
+        "TSLA" in f.name or "TSLA" in f.value for f in card_embed.fields
+    )
+    assert isinstance(card_view, OrderItemView)
 
 
 @pytest.mark.asyncio
@@ -413,6 +458,24 @@ async def test_order_management_view_buttons(mock_interaction):
     assert mock_interaction.response.send_modal.called
     modal_adjust = mock_interaction.response.send_modal.call_args[0][0]
     assert isinstance(modal_adjust, EditOrderModal)
+
+
+@pytest.mark.asyncio
+async def test_order_item_view_buttons_prefill_order_id(mock_interaction):
+    """測試單筆委託單卡片按鈕會自動預填 order_id 到 Modal"""
+    view = OrderItemView(order_id=99)
+
+    await view.cancel_order_button.callback(mock_interaction)
+    modal_cancel = mock_interaction.response.send_modal.call_args[0][0]
+    assert isinstance(modal_cancel, CancelOrderModal)
+    assert modal_cancel.order_id.default == "99"
+
+    mock_interaction.response.send_modal.reset_mock()
+
+    await view.edit_order_button.callback(mock_interaction)
+    modal_edit = mock_interaction.response.send_modal.call_args[0][0]
+    assert isinstance(modal_edit, EditOrderModal)
+    assert modal_edit.order_id.default == "99"
 
 
 @pytest.mark.asyncio

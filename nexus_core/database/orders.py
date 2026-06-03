@@ -81,7 +81,7 @@ def delete_active_order(order_id: int) -> bool:
 
 def update_active_order_price(
     order_id: int,
-    new_price: float,
+    new_price: float | None,
     new_quantity: float | None = None,
     new_side: str | None = None,
 ) -> bool:
@@ -90,6 +90,48 @@ def update_active_order_price(
     cursor = conn.cursor()
 
     side = new_side.upper() if new_side is not None else None
+
+    # 允許只更新方向/數量 (new_price=None)
+    if new_price is None:
+        if new_quantity is None and side is None:
+            conn.close()
+            return False
+        if new_quantity is not None and side is None:
+            cursor.execute(
+                """
+                UPDATE active_orders
+                SET quantity = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (new_quantity, order_id),
+            )
+        elif new_quantity is None and side is not None:
+            cursor.execute(
+                """
+                UPDATE active_orders
+                SET side = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (side, order_id),
+            )
+        else:
+            cursor.execute(
+                """
+                UPDATE active_orders
+                SET quantity = ?,
+                    side = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (new_quantity, side, order_id),
+            )
+
+        changes = cursor.rowcount
+        conn.commit()
+        conn.close()
+        return changes > 0
 
     if new_quantity is None and side is None:
         cursor.execute(
