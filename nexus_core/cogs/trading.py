@@ -83,6 +83,8 @@ class SchedulerCog(commands.Cog):
     @tasks.loop(time=time(hour=8, minute=30, tzinfo=ny_tz))
     async def daily_reddit_update(self):
         """08:30：每日更新 Reddit 散戶情緒快取 (低頻率任務)"""
+        if not getattr(self.bot, "_is_leader_instance", True):
+            return
         logger.info("🕸️ [Daily Update] 開始非同步抓取 Reddit 情緒快取...")
         all_watchlists = database.get_all_watchlist()
         symbols = sorted(list(set(row[1] for row in all_watchlists)))
@@ -110,6 +112,8 @@ class SchedulerCog(commands.Cog):
     @tasks.loop(minutes=30)
     async def monitor_real_portfolio_task(self):
         """每 30 分鐘審計真實持倉風險 (DITM & Gamma Fragility)"""
+        if not getattr(self.bot, "_is_leader_instance", True):
+            return
         if not market_time.is_market_open():
             return
 
@@ -142,6 +146,8 @@ class SchedulerCog(commands.Cog):
     @tasks.loop(time=time(hour=17, minute=5, tzinfo=ny_tz))
     async def weekly_vtr_report_task(self):
         """每週五收盤後：自動推送 VTR 績效週報"""
+        if not getattr(self.bot, "_is_leader_instance", True):
+            return
         now = datetime.now(ny_tz)
         if now.weekday() != 4:  # 4 代表 Friday
             return
@@ -170,6 +176,8 @@ class SchedulerCog(commands.Cog):
     @tasks.loop(time=time(hour=9, minute=0, tzinfo=ny_tz))
     async def pre_market_risk_monitor(self):
         """09:00：盤前財報警報 (依使用者分發私訊)"""
+        if not getattr(self.bot, "_is_leader_instance", True):
+            return
         now_ny = datetime.now(ny_tz)
         today = now_ny.date()
 
@@ -209,6 +217,8 @@ class SchedulerCog(commands.Cog):
     @tasks.loop(minutes=30)
     async def dynamic_market_scanner(self):
         """盤中動態巡邏：每 30 分鐘心跳檢查，僅在盤中執行掃描"""
+        if not getattr(self.bot, "_is_leader_instance", True):
+            return
         if not market_time.is_market_open():
             return
 
@@ -226,6 +236,15 @@ class SchedulerCog(commands.Cog):
         name="force_scan", description="[Admin] 立即手動執行全站掃描 (不論開盤時間)"
     )
     async def force_scan(self, interaction: discord.Interaction):
+        if not getattr(self.bot, "_is_leader_instance", True):
+            await interaction.response.send_message(
+                embed=create_info_embed(
+                    "系統控制",
+                    "⚠️ 目前此實例為 follower（藍綠部署中）。請稍候或重新觸發指令。",
+                ),
+                ephemeral=True,
+            )
+            return
         if interaction.user.id != DISCORD_ADMIN_USER_ID:
             await interaction.response.send_message(
                 embed=create_error_embed(
@@ -976,6 +995,8 @@ class SchedulerCog(commands.Cog):
     @tasks.loop(time=time(hour=16, minute=15, tzinfo=ny_tz))
     async def dynamic_after_market_report(self):
         """16:15：持倉結算與防禦建議 (依使用者分發私訊)"""
+        if not getattr(self.bot, "_is_leader_instance", True):
+            return
         now_ny = datetime.now(ny_tz)
         today = now_ny.date()
 
@@ -1007,6 +1028,8 @@ class SchedulerCog(commands.Cog):
     @tasks.loop(minutes=30)
     async def monitor_vtr_task(self):
         """每 30 分鐘檢查 VTR，並在轉倉/平倉時即時通知"""
+        if not getattr(self.bot, "_is_leader_instance", True):
+            return
         if not market_time.is_market_open():
             return
 

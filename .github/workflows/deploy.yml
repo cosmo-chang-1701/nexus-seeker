@@ -196,11 +196,13 @@ jobs:
             # 4. 服務更新與建立 (Zero-Downtime Strategy)
             # 使用更精確的過濾器來尋找現有服務
             if docker service ls --filter "name=$SERVICE_NAME" --format '{{.Name}}' | grep -q "^${SERVICE_NAME}$"; then
-              echo "🔄 偵測到服務 $SERVICE_NAME 已存在，執行滾動更新 (stop-first)..."
+              echo "🔄 偵測到服務 $SERVICE_NAME 已存在，執行滾動更新 (start-first)..."
               docker service update \
                 --image "$FULL_IMAGE" \
                 --with-registry-auth \
-                --update-order stop-first \
+                --update-parallelism 1 \
+                --update-delay 5s \
+                --update-order start-first \
                 --update-failure-action rollback \
                 --update-monitor 60s \
                 --mount-add type=volume,source=nexus-data,target=/app/data \
@@ -221,7 +223,9 @@ jobs:
                 --with-registry-auth \
                 --mount type=volume,source=nexus-data,target=/app/data \
                 --replicas 1 \
-                --update-order stop-first \
+                --update-parallelism 1 \
+                --update-delay 5s \
+                --update-order start-first \
                 --env TZ=America/New_York \
                 --env DEPLOYMENT_TIMESTAMP=$(date +%s) \
                 $INIT_SECRET_FLAGS \
@@ -231,7 +235,7 @@ jobs:
             # 5. 清理與驗證
             echo "🧹 執行環境清理..."
             # 移除未被使用的舊版本祕密 (排除目前剛建立的版本)
-            # 注意：由於 stop-first 策略，舊版本此時已停止，若 rm 失敗通常是有殘留引用
+            # 注意：由於 start-first 策略，舊版本可能短暫仍在運行，若 rm 失敗通常是有殘留引用
             for KEY in "${!SECRETS_MAP[@]}"; do
               docker secret ls --format "{{.Name}}" | grep "^${KEY}_" | grep -v "$DEPLOY_VERSION" | while read -r OLD_SEC; do
                 docker secret rm "$OLD_SEC" 2>/dev/null || echo "⏳ 祕密 $OLD_SEC 仍在使用中，跳過清理"

@@ -6,7 +6,6 @@ import asyncio
 from cogs.embed_builder import (
     create_info_embed,
     create_error_embed,
-    create_active_orders_embed,
 )
 from database.orders import (
     add_active_order,
@@ -380,11 +379,14 @@ class DynamicOrderModal(discord.ui.Modal):
 # 2. 委託單管理交互 Modal
 # ==========================================
 class CancelOrderModal(discord.ui.Modal):
-    def __init__(self):
+    order_id: discord.ui.TextInput
+
+    def __init__(self, order_id: int | None = None):
         super().__init__(title="取消待成交委託單")
         self.order_id = discord.ui.TextInput(
             label="委託單 ID (Order ID)",
             placeholder="例如: 1",
+            default=str(order_id) if order_id is not None else None,
             required=True,
         )
         self.add_item(self.order_id)
@@ -424,11 +426,16 @@ class CancelOrderModal(discord.ui.Modal):
 
 
 class EditOrderModal(discord.ui.Modal):
-    def __init__(self):
+    order_id: discord.ui.TextInput
+    new_side: discord.ui.TextInput
+    new_price: discord.ui.TextInput
+
+    def __init__(self, order_id: int | None = None):
         super().__init__(title="編輯委託單")
         self.order_id = discord.ui.TextInput(
             label="委託單 ID (Order ID)",
             placeholder="例如: 1",
+            default=str(order_id) if order_id is not None else None,
             required=True,
         )
         self.new_side = discord.ui.TextInput(
@@ -438,8 +445,8 @@ class EditOrderModal(discord.ui.Modal):
         )
         self.new_price = discord.ui.TextInput(
             label="新限價 / 新價格 / 新追蹤值",
-            placeholder="例如: 82.5",
-            required=True,
+            placeholder="例如: 82.5（留空則不變更價格）",
+            required=False,
         )
         self.add_item(self.order_id)
         self.add_item(self.new_side)
@@ -458,16 +465,21 @@ class EditOrderModal(discord.ui.Modal):
             )
             return
 
-        try:
-            price = float(self.new_price.value.strip())
-            if price <= 0:
-                raise ValueError()
-        except Exception:
-            await interaction.followup.send(
-                embed=create_error_embed("❌ 錯誤：請輸入有效的正數作為新價格。"),
-                ephemeral=True,
-            )
-            return
+        price_text = self.new_price.value.strip() if self.new_price.value else ""
+        price: float | None = None
+        if price_text:
+            try:
+                price = float(price_text)
+                if price <= 0:
+                    raise ValueError()
+            except Exception:
+                await interaction.followup.send(
+                    embed=create_error_embed(
+                        "❌ 錯誤：請輸入有效的正數作為新價格（或留空不變更）。"
+                    ),
+                    ephemeral=True,
+                )
+                return
 
         new_side = self.new_side.value.strip().upper()
         side_to_apply: str | None = None
@@ -482,6 +494,15 @@ class EditOrderModal(discord.ui.Modal):
                 return
             side_to_apply = new_side
 
+        if price is None and side_to_apply is None:
+            await interaction.followup.send(
+                embed=create_error_embed(
+                    "❌ 錯誤：請至少填寫『新價格』或『方向』其中一項。"
+                ),
+                ephemeral=True,
+            )
+            return
+
         try:
             # 2. 將同步的資料庫操作交給執行緒，避免阻塞事件循環
             success = await asyncio.to_thread(
@@ -491,11 +512,16 @@ class EditOrderModal(discord.ui.Modal):
                 side_msg = (
                     f"方向更新為 `{side_to_apply}`" if side_to_apply else "方向未變更"
                 )
+                price_msg = (
+                    f"新價格: `${price:.2f}` (或 {price:.2f}%)"
+                    if price is not None
+                    else "價格未變更"
+                )
                 embed = create_info_embed(
                     title="編輯委託單成功",
                     message=(
                         f"✅ **成功更新委託單**：委託單 ID `{oid}`\n"
-                        f"• 新價格: `${price:.2f}` (或 {price:.2f}%)\n"
+                        f"• {price_msg}\n"
                         f"• {side_msg}"
                     ),
                 )
@@ -562,6 +588,48 @@ class OrderManagementView(discord.ui.View):
                     )
             except Exception as inner_e:
                 logger.error(f"Failed to send error fallback: {inner_e}")
+
+
+class OrderItemView(discord.ui.View):
+    """單筆委託單卡片的操作按鈕（每一筆訂單底下都有獨立按鈕）。"""
+
+    def __init__(self, order_id: int):
+        super().__init__(timeout=180)
+        self.order_id = int(order_id)
+
+    @discord.ui.button(label="❌ 取消委託單", style=discord.ButtonStyle.danger)
+    async def cancel_order_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        try:
+            await interaction.response.send_modal(
+                CancelOrderModal(order_id=self.order_id)
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to send CancelOrderModal(order_id={self.order_id}): {e}"
+            )
+            await interaction.followup.send(
+                embed=create_error_embed(f"❌ 無法開啟取消委託視窗：{e}"),
+                ephemeral=True,
+            )
+
+    @discord.ui.button(label="✏️ 編輯委託單", style=discord.ButtonStyle.primary)
+    async def edit_order_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        try:
+            await interaction.response.send_modal(
+                EditOrderModal(order_id=self.order_id)
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to send EditOrderModal(order_id={self.order_id}): {e}"
+            )
+            await interaction.followup.send(
+                embed=create_error_embed(f"❌ 無法開啟編輯委託單視窗：{e}"),
+                ephemeral=True,
+            )
 
 
 class ApplyTelemetryView(discord.ui.View):
@@ -875,13 +943,24 @@ class OrderUICog(commands.Cog):
             await interaction.followup.send(embed=embed, ephemeral=True)
             return
 
-        embeds = create_active_orders_embed(orders)
-        view = OrderManagementView()
-        # 傳送第一個 Embed 以及操作按鈕視圖
-        await interaction.followup.send(embed=embeds[0], view=view, ephemeral=True)
-        # 若有分頁產生的多個 Embed，分別以獨立訊息傳送，徹底避免單一訊息中所有 Embed 累計長度突破 Discord 6,000 字限制
-        for extra_embed in embeds[1:]:
-            await interaction.followup.send(embed=extra_embed, ephemeral=True)
+        # 先送一個總覽訊息（避免第一筆就被按鈕佔據，且提供操作說明）
+        header = create_info_embed(
+            title="📋 待成交委託單列表",
+            message=(
+                f"共 `{len(orders)}` 筆待成交委託單。\n"
+                "每一筆委託單卡片底下都有 **取消** 與 **編輯** 按鈕，可直接操作該筆訂單。"
+            ),
+        )
+        await interaction.followup.send(embed=header, ephemeral=True)
+
+        # 每一筆訂單各自一則訊息 + 專屬按鈕
+        from cogs.embed_builder import create_active_order_card_embed
+
+        for o in orders:
+            order_id = int(o.get("id"))
+            embed = create_active_order_card_embed(o)
+            view = OrderItemView(order_id=order_id)
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
     @app_commands.command(
         name="telemetry_alert", description="[模擬] 喚起半小時心跳遙測價格偏離警報"
