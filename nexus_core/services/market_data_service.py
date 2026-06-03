@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 from collections import OrderedDict, namedtuple
 import gc
+import weakref
 
 import finnhub
 import pandas as pd
@@ -54,10 +55,12 @@ def _to_yfinance_symbol(symbol: str) -> str:
 # 配置與 Rate Limiting (免費方案 60 calls/min)
 # ---------------------------------------------------------------------------
 # 注意：AsyncLimiter / Semaphore 不建議跨 event loop 重複使用；測試/整合環境可能會建立多個 loop。
-# 因此 limiter / semaphore 以 event loop 為單位延遲初始化。
-_finnhub_controls_by_loop: dict[int, dict[str, Any]] = {}
+# 使用 WeakKeyDictionary 以「loop 物件」為 key，避免 id(loop) 被重用造成 limiter 跨 loop 共享。
+_finnhub_controls_by_loop: weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop, dict[str, Any]
+] = weakref.WeakKeyDictionary()
 
-# 429 cooldown 仍維持全局共享，讓同一個 runtime 內的所有 task 共同避開重試碰撞。
+# 429 cooldown 維持全局共享，讓同一個 runtime 內的所有 task 共同避開重試碰撞。
 # （單元測試也會 patch 這個變數以驗證行為）
 _rate_limit_until = 0.0
 
@@ -66,8 +69,7 @@ _client: Optional[finnhub.Client] = None
 
 def _get_finnhub_controls() -> dict[str, Any]:
     loop = asyncio.get_running_loop()
-    key = id(loop)
-    controls = _finnhub_controls_by_loop.get(key)
+    controls = _finnhub_controls_by_loop.get(loop)
     if controls is None:
         controls = {
             # 1) 每分鐘 55 次請求（保留緩衝以容納重試）
@@ -77,7 +79,7 @@ def _get_finnhub_controls() -> dict[str, Any]:
             # 3) 併發上限（避免同時間大量 to_thread 造成碰撞與資源抖動）
             "sem": asyncio.Semaphore(3),
         }
-        _finnhub_controls_by_loop[key] = controls
+        _finnhub_controls_by_loop[loop] = controls
     return controls
 
 
