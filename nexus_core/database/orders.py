@@ -8,6 +8,7 @@ def add_active_order(
     quantity: float,
     order_type: str,
     validity: str,
+    side: str = "BUY",
     limit_price: float = 0.0,
     stop_price: float = 0.0,
     trailing_value: float = 0.0,
@@ -18,9 +19,9 @@ def add_active_order(
     cursor.execute(
         """
         INSERT INTO active_orders (
-            user_id, symbol, quantity, order_type, validity,
+            user_id, symbol, quantity, order_type, validity, side,
             limit_price, stop_price, trailing_value
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             user_id,
@@ -28,6 +29,7 @@ def add_active_order(
             quantity,
             order_type.upper(),
             validity.upper(),
+            side.upper(),
             limit_price,
             stop_price,
             trailing_value,

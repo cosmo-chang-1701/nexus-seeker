@@ -28,10 +28,13 @@ class DynamicOrderModal(discord.ui.Modal):
     stop_price: discord.ui.TextInput
     trailing_value: discord.ui.TextInput
 
-    def __init__(self, order_type: str, title: str, validity_db: str):
+    def __init__(
+        self, order_type: str, title: str, validity_db: str, side_db: str = "BUY"
+    ):
         super().__init__(title=title)
         self.order_type = order_type
         self.validity_db = validity_db
+        self.side_db = side_db
 
         # 基礎必要欄位 (所有訂單類型皆有)
         self.ticker = discord.ui.TextInput(
@@ -308,6 +311,7 @@ class DynamicOrderModal(discord.ui.Modal):
                 quantity=final_qty,
                 order_type=self.order_type,
                 validity=self.validity_db,
+                side=self.side_db,
                 limit_price=limit_val,
                 stop_price=stop_val,
                 trailing_value=trailing_val,
@@ -330,11 +334,14 @@ class DynamicOrderModal(discord.ui.Modal):
                 "TRAILING_STOP_PCT": "追蹤停損單 (%)",
             }.get(self.order_type, self.order_type)
 
+            side_zh = "買入 (BUY)" if self.side_db.upper() == "BUY" else "賣出 (SELL)"
+
             msg = (
                 f"✅ **訂單已成功建立並進入排程**\n\n"
                 f"• **委託單 ID**: `{order_id}`\n"
                 f"• **標的**: `{symbol}`\n"
                 f"• **類型**: `{order_type_zh}`\n"
+                f"• **方向**: `{side_zh}`\n"
                 f"• **數量**: `{final_qty}`\n"
                 f"• **有效期限**: `{validity_zh}`\n"
             )
@@ -617,6 +624,39 @@ class ApplyTelemetryView(discord.ui.View):
 # ==========================================
 # 4. 前端委託單面版下拉選單
 # ==========================================
+class OrderSideSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(
+                label="買入 (BUY)",
+                value="BUY",
+                description="建立買入方向委託 (例如：逢低承接 / 突破追價)",
+                default=True,
+            ),
+            discord.SelectOption(
+                label="賣出 (SELL)",
+                value="SELL",
+                description="建立賣出方向委託 (例如：停損 / 停利 / 減碼)",
+            ),
+        ]
+        super().__init__(
+            placeholder="選擇委託方向 (預設為買入)...",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        selected = self.values[0]
+        if self.view is not None:
+            setattr(self.view, "selected_side", selected)
+
+        for option in self.options:
+            option.default = option.value == selected
+
+        await interaction.response.edit_message(view=self.view)
+
+
 class OrderValiditySelect(discord.ui.Select):
     def __init__(self):
         options = [
@@ -714,11 +754,13 @@ class OrderSetupSelect(discord.ui.Select):
         }.get(order_type, "新增訂單")
 
         validity = "DAY"
+        side = "BUY"
         if self.view is not None:
             validity = getattr(self.view, "selected_validity", "DAY")
+            side = getattr(self.view, "selected_side", "BUY")
 
         modal = DynamicOrderModal(
-            order_type=order_type, title=modal_title, validity_db=validity
+            order_type=order_type, title=modal_title, validity_db=validity, side_db=side
         )
         await interaction.response.send_modal(modal)
 
@@ -726,7 +768,9 @@ class OrderSetupSelect(discord.ui.Select):
 class OrderSetupView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=180)
+        self.selected_side = "BUY"
         self.selected_validity = "DAY"
+        self.add_item(OrderSideSelect())
         self.add_item(OrderValiditySelect())
         self.add_item(OrderSetupSelect())
 
@@ -737,7 +781,10 @@ class OrderSetupView(discord.ui.View):
         self, interaction: discord.Interaction, button: discord.ui.Button
     ):
         modal = DynamicOrderModal(
-            order_type="LIMIT", title="新增限價訂單", validity_db=self.selected_validity
+            order_type="LIMIT",
+            title="新增限價訂單",
+            validity_db=self.selected_validity,
+            side_db=self.selected_side,
         )
         await interaction.response.send_modal(modal)
 
@@ -749,6 +796,7 @@ class OrderSetupView(discord.ui.View):
             order_type="STOP",
             title="新增停損價訂單",
             validity_db=self.selected_validity,
+            side_db=self.selected_side,
         )
         await interaction.response.send_modal(modal)
 
@@ -762,6 +810,7 @@ class OrderSetupView(discord.ui.View):
             order_type="MARKET",
             title="新增市價訂單",
             validity_db=self.selected_validity,
+            side_db=self.selected_side,
         )
         await interaction.response.send_modal(modal)
 
@@ -783,7 +832,9 @@ class OrderUICog(commands.Cog):
         view = OrderSetupView()
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
-    @app_commands.command(name="orders", description="列出目前所有活躍的待成交委託單")
+    @app_commands.command(
+        name="list_orders", description="列出目前所有活躍的待成交委託單"
+    )
     async def list_orders(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         orders = await asyncio.to_thread(get_user_active_orders, interaction.user.id)
@@ -882,6 +933,7 @@ class OrderUICog(commands.Cog):
         symbol="標的代碼 (例如: AAPL)",
         quantity="委託數量 (正數)",
         order_type="訂單類型 (MARKET, LIMIT, STOP, STOP_LIMIT, TRAILING_STOP_USD, TRAILING_STOP_PCT)",
+        side="委託方向 (BUY 買入 / SELL 賣出)",
         validity="有效期限制 (預設 DAY) - 可選: DAY, EXT_DAY, NIGHT, GTC_90",
         price="限價/停損價/追蹤值 (可選，未填時自動呼叫遙測定價進行高安全邊際折價)",
     )
@@ -898,6 +950,10 @@ class OrderUICog(commands.Cog):
                 name="追蹤停損單 PCT (TRAILING_STOP_PCT)", value="TRAILING_STOP_PCT"
             ),
         ],
+        side=[
+            app_commands.Choice(name="買入 (BUY)", value="BUY"),
+            app_commands.Choice(name="賣出 (SELL)", value="SELL"),
+        ],
         validity=[
             app_commands.Choice(name="當日有效 (DAY)", value="DAY"),
             app_commands.Choice(name="盤前+當日+盤後 (EXT_DAY)", value="EXT_DAY"),
@@ -911,6 +967,7 @@ class OrderUICog(commands.Cog):
         symbol: str,
         quantity: float,
         order_type: str,
+        side: str = "BUY",
         validity: str = "DAY",
         price: float = 0.0,
     ):
@@ -1046,6 +1103,7 @@ class OrderUICog(commands.Cog):
                 quantity=final_qty,
                 order_type=order_type,
                 validity=validity,
+                side=side,
                 limit_price=limit_val,
                 stop_price=stop_val,
                 trailing_value=trailing_val,
@@ -1068,11 +1126,14 @@ class OrderUICog(commands.Cog):
                 "TRAILING_STOP_PCT": "追蹤停損單 (%)",
             }.get(order_type, order_type)
 
+            side_zh = "買入 (BUY)" if side.upper() == "BUY" else "賣出 (SELL)"
+
             msg = (
                 f"✅ **訂單已成功建立並進入排程**\n\n"
                 f"• **委託單 ID**: `{order_id}`\n"
                 f"• **標的**: `{symbol}`\n"
                 f"• **類型**: `{order_type_zh}`\n"
+                f"• **方向**: `{side_zh}`\n"
                 f"• **數量**: `{final_qty}`\n"
                 f"• **有效期限**: `{validity_zh}`\n"
             )

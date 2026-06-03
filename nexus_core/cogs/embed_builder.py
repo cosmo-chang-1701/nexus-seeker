@@ -4723,6 +4723,14 @@ def create_active_orders_embed(orders: List[Dict[str, Any]]) -> List[discord.Emb
 
         type_str = order_type_zh.get(o["order_type"], o["order_type"])
         ansi_lines.append(f"  └─ 訂單類型: {type_str}")
+
+        side = str(o.get("side") or "BUY").upper()
+        side_str = (
+            "\u001b[1;32m買入 (BUY)\u001b[0m"
+            if side == "BUY"
+            else "\u001b[1;31m賣出 (SELL)\u001b[0m"
+        )
+        ansi_lines.append(f"  └─ 委託方向: {side_str}")
         ansi_lines.append(f"  └─ 委託數量: \u001b[1;37m{o['quantity']}\u001b[0m 股")
 
         val_str = validity_zh.get(o["validity"], o["validity"])
@@ -4828,7 +4836,7 @@ def create_telemetry_alignment_embed(
 
     footer_text = ""
     if truncated:
-        footer_text += "⚠️ *(由於您的活躍委託單數量較多，部分標的之偏離度警報已被安全省略，請至 `/orders` 查看完整列表)*\n\n"
+        footer_text += "⚠️ *(由於您的活躍委託單數量較多，部分標的之偏離度警報已被安全省略，請至 `/list_orders` 查看完整列表)*\n\n"
     footer_text += "💡 **建議操作**：請點擊下方綠色按鈕「一鍵套用遙測建議價」，系統將自動調整您的委託價格並下調掛單股數以防守大後方。"
 
     embed.add_field(
