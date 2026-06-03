@@ -29,13 +29,56 @@ import database.financials as db_financials
 
 logger = logging.getLogger(__name__)
 
+
+def _sanitize_ticker(raw: str) -> str:
+    """清洗外部輸入的 ticker。
+
+    - 移除前置/後置的 `$`（例如 `$SPCX`）以避免 yfinance HTTP 400。
+    - 去除空白並統一大寫，確保 cache key 與下游查詢一致。
+    """
+
+    s = (raw or "").strip()
+    # 僅移除前置/後置的 `$`，不做更激進的字串重寫以避免破壞如 BRK.B 等格式
+    s = s.strip("$")
+    return s.upper()
+
+
+def _to_yfinance_symbol(symbol: str) -> str:
+    """將內部 ticker 轉為 yfinance 可接受的格式。"""
+
+    s = _sanitize_ticker(symbol)
+    return "^VIX" if s == "VIX" else s
+
+
 # ---------------------------------------------------------------------------
 # 配置與 Rate Limiting (免費方案 60 calls/min)
 # ---------------------------------------------------------------------------
-# 設定每分鐘 55 次請求，保留 5 次緩衝以防網路重試導致的溢出
-_limiter = AsyncLimiter(55, 60)
+# 注意：AsyncLimiter / Semaphore 不建議跨 event loop 重複使用；測試/整合環境可能會建立多個 loop。
+# 因此 limiter / semaphore 以 event loop 為單位延遲初始化。
+_finnhub_controls_by_loop: dict[int, dict[str, Any]] = {}
+
+# 429 cooldown 仍維持全局共享，讓同一個 runtime 內的所有 task 共同避開重試碰撞。
+# （單元測試也會 patch 這個變數以驗證行為）
 _rate_limit_until = 0.0
+
 _client: Optional[finnhub.Client] = None
+
+
+def _get_finnhub_controls() -> dict[str, Any]:
+    loop = asyncio.get_running_loop()
+    key = id(loop)
+    controls = _finnhub_controls_by_loop.get(key)
+    if controls is None:
+        controls = {
+            # 1) 每分鐘 55 次請求（保留緩衝以容納重試）
+            "limiter": AsyncLimiter(55, 60),
+            # 2) 每秒 8 次請求（抑制突發 burst，避免 Finnhub 以秒級限流回 429）
+            "limiter_per_second": AsyncLimiter(8, 1),
+            # 3) 併發上限（避免同時間大量 to_thread 造成碰撞與資源抖動）
+            "sem": asyncio.Semaphore(3),
+        }
+        _finnhub_controls_by_loop[key] = controls
+    return controls
 
 
 def _get_client() -> finnhub.Client:
@@ -53,52 +96,87 @@ def _get_client() -> finnhub.Client:
 # Core Async API Call (Thread-safe Wrapper)
 # ---------------------------------------------------------------------------
 async def _execute_api_call(func, *args, **kwargs) -> Any:
+    """執行 Finnhub API 呼叫的異步封裝（生產等級防禦）。
+
+    目標：
+    - Rate limiting：同時做「每分鐘」+「每秒」節流，抑制 burst。
+    - Concurrency limiting：限制同時間最大併發，避免重試碰撞與 thread 資源抖動。
+    - Retries：針對 429/連線錯誤做「指數退避 + 抖動」，讓重試時間錯開。
+
+    注意：limiter 以 event loop 維度維護；429 cooldown 以全局 `_rate_limit_until` 維護。
     """
-    執行 Finnhub API 呼叫的異步封裝。
-    使用 aiolimiter 進行流量管制，並透過 asyncio.to_thread 避免阻塞事件循環。
-    加入 Cooperative Backoff 與 Exponential Backoff 以自動處理 429 頻率限制。
-    """
+
     global _rate_limit_until
+
+    controls = _get_finnhub_controls()
+
     max_retries = 3
     base_delay = 10.0
+    max_delay = 90.0
+
+    def _equal_jitter_delay(attempt: int) -> float:
+        # Equal Jitter: [exp/2, exp]
+        exp = min(max_delay, base_delay * (2**attempt))
+        return (exp / 2.0) + random.uniform(0, exp / 2.0)
 
     for attempt in range(max_retries + 1):
-        # 1. 第一層快速檢查：等待全局冷卻時間（快速過濾）
+        # 0) 全局冷卻（先快檢一次，不要讓所有 task 進 limiter 排隊後又卡住）
         now = time.time()
-        if now < _rate_limit_until:
-            wait_time = _rate_limit_until - now
+        rate_limit_until = _rate_limit_until
+        if now < rate_limit_until:
+            wait_time = rate_limit_until - now
             logger.info(f"⏳ 檢測到全局頻率限制中，主動等待 {wait_time:.1f} 秒...")
             await asyncio.sleep(wait_time)
 
-        async with _limiter:
-            # 2. 第二層精確檢查：進入限流鎖後，再次確認冷卻時間（防止排隊期間被併發任務觸發）
-            now = time.time()
-            if now < _rate_limit_until:
-                wait_time = _rate_limit_until - now
-                logger.info(
-                    f"⏳ 限流鎖內確認全局頻率限制，主動等待 {wait_time:.1f} 秒..."
-                )
-                await asyncio.sleep(wait_time)
+        async with controls["sem"]:
+            async with controls["limiter_per_second"]:
+                async with controls["limiter"]:
+                    # 1) 進入限流鎖後再確認一次（防止排隊期間被其他 task 更新 cooldown）
+                    now = time.time()
+                    rate_limit_until = _rate_limit_until
+                    if now < rate_limit_until:
+                        wait_time = rate_limit_until - now
+                        logger.info(
+                            f"⏳ 限流鎖內確認全局頻率限制，主動等待 {wait_time:.1f} 秒..."
+                        )
+                        await asyncio.sleep(wait_time)
 
-            try:
-                # Finnhub SDK 為同步阻塞 I/O，必須在獨立線程中執行
-                return await asyncio.to_thread(func, *args, **kwargs)
-            except Exception as e:
-                error_msg = str(e).lower()
-                is_rate_limit = "429" in error_msg or "limit reached" in error_msg
-                is_conn_error = (
-                    "connection aborted" in error_msg
-                    or "timeout" in error_msg
-                    or "remotedisconnected" in error_msg
-                )
-                if is_rate_limit or is_conn_error:
-                    if attempt < max_retries:
-                        # 指數退避，加入 jitter 避免同時重試
-                        delay = base_delay * (2**attempt) + random.uniform(1, 3)
+                    try:
+                        # Finnhub SDK 為同步阻塞 I/O，必須在獨立線程中執行
+                        return await asyncio.to_thread(func, *args, **kwargs)
+                    except Exception as e:
+                        error_msg = str(e).lower()
+                        is_rate_limit = (
+                            "429" in error_msg
+                            or "limit reached" in error_msg
+                            or "too many requests" in error_msg
+                        )
+                        is_conn_error = (
+                            "connection aborted" in error_msg
+                            or "timeout" in error_msg
+                            or "remotedisconnected" in error_msg
+                            or "temporarily unavailable" in error_msg
+                        )
+
+                        if not (is_rate_limit or is_conn_error):
+                            raise
+
+                        if attempt >= max_retries:
+                            reason = (
+                                "429 頻率限制" if is_rate_limit else "連線錯誤/超時"
+                            )
+                            logger.error(
+                                f"🚨 觸發 Finnhub {reason}。已達最大重試次數，放棄呼叫。"
+                            )
+                            raise
+
+                        delay = _equal_jitter_delay(attempt)
 
                         if is_rate_limit:
-                            # 設置全局限制截止時間，防止併發的其他任務觸發 429
-                            _rate_limit_until = time.time() + delay
+                            # 使用 max() 保留最長冷卻時間，避免被較短 delay 覆蓋
+                            _rate_limit_until = max(
+                                _rate_limit_until, time.time() + delay
+                            )
 
                         reason = "429 頻率限制" if is_rate_limit else "連線錯誤/超時"
                         logger.warning(
@@ -106,26 +184,53 @@ async def _execute_api_call(func, *args, **kwargs) -> Any:
                         )
                         await asyncio.sleep(delay)
                         continue
-                    else:
-                        reason = "429 頻率限制" if is_rate_limit else "連線錯誤/超時"
-                        logger.error(
-                            f"🚨 觸發 Finnhub {reason}。已達最大重試次數，放棄呼叫。"
-                        )
-                        raise e
-                raise e
 
 
 # ---------------------------------------------------------------------------
 # Quote (即時報價)
 # ---------------------------------------------------------------------------
+async def _safe_yf_history(
+    ticker: yf.Ticker,
+    *,
+    period: str,
+    interval: Optional[str] = None,
+) -> Optional[pd.DataFrame]:
+    """安全包裝 yfinance history。
+
+    - 捕捉 yfinance 的 HTTP 400 / delisted / 空資料等狀況
+    - 若回傳空 DataFrame，統一回傳 None（呼叫端再做 fallback/降級）
+    """
+
+    try:
+        if interval is None:
+            df = await asyncio.to_thread(ticker.history, period=period)
+        else:
+            df = await asyncio.to_thread(
+                ticker.history, period=period, interval=interval
+            )
+
+        if df is None or getattr(df, "empty", True):
+            return None
+        return df
+    except Exception as e:
+        logger.warning(f"yfinance history 失敗: {e}")
+        return None
+
+
 async def get_yfinance_quote(symbol: str) -> Dict[str, Any]:
-    """使用 yfinance 取得即時報價，並轉換格式與 Finnhub 相容。"""
-    yf_symbol = symbol if not symbol == "VIX" else "^VIX"
+    """使用 yfinance 取得即時報價，並轉換格式與 Finnhub 相容。
+
+    防禦性處理：
+    - 自動清洗 ticker（移除 `$` 與空白），避免 yfinance HTTP 400。
+    - 若回傳為空則記錄 warning 並回傳空 dict，避免中斷批次任務。
+    """
+
+    yf_symbol = _to_yfinance_symbol(symbol)
     try:
         ticker = yf.Ticker(yf_symbol)
         # 抓取最近 2 天資料以計算昨日收盤 (pc)
-        df = await asyncio.to_thread(ticker.history, period="2d")
-        if df.empty:
+        df = await _safe_yf_history(ticker, period="2d")
+        if df is None:
             logger.warning(f"[{yf_symbol}] yfinance quote 回傳資料為空")
             return {}
 
@@ -153,7 +258,7 @@ async def get_yfinance_quote(symbol: str) -> Dict[str, Any]:
 
 async def get_quote(symbol: str) -> Dict[str, Any]:
     """取得即時報價 (非同步)。對於指數型標的，強制轉向 yfinance。"""
-    symbol = symbol.upper()
+    symbol = _sanitize_ticker(symbol)
     now = time.time()
     if symbol in _quote_cache:
         val, expiry = _quote_cache[symbol]
@@ -194,16 +299,21 @@ async def validate_symbol(symbol: str) -> bool:
     """驗證標的代號是否有效 (透過嘗試獲取報價)。"""
     if not symbol:
         return False
-    quote = await get_quote(symbol.upper())
+    quote = await get_quote(symbol)
     # 如果能拿到價格且價格大於 0，視為有效標的
     return bool(quote and quote.get("c", 0) > 0)
 
 
 async def batch_get_quotes(symbols: List[str]) -> Dict[str, Dict[str, Any]]:
-    """批次取得多檔標的的即時報價。"""
-    tasks = [get_quote(sym) for sym in symbols]
+    """批次取得多檔標的的即時報價。
+
+    注意：會先做 ticker 清洗（移除 `$`/空白並大寫），避免 yfinance/Finnhub 請求格式錯誤。
+    """
+
+    clean_symbols = [_sanitize_ticker(s) for s in symbols if s]
+    tasks = [get_quote(sym) for sym in clean_symbols]
     quotes = await asyncio.gather(*tasks)
-    return {sym: q for sym, q in zip(symbols, quotes) if q}
+    return {sym: q for sym, q in zip(clean_symbols, quotes) if q}
 
 
 # ---------------------------------------------------------------------------
@@ -215,7 +325,7 @@ async def get_history_df(
     """
     使用 yfinance 抓取歷史 K 線 (異步化，支援 4 小時快取與 Copy 隔離)。
     """
-    symbol = symbol.upper()
+    symbol = _to_yfinance_symbol(symbol)
     cache_key = (symbol, period, interval)
     now = time.time()
 
@@ -226,10 +336,9 @@ async def get_history_df(
 
     try:
         ticker = yf.Ticker(symbol)
-        # yfinance 內部為同步，同樣使用 to_thread
-        df = await asyncio.to_thread(ticker.history, period=period, interval=interval)
+        df = await _safe_yf_history(ticker, period=period, interval=interval)
 
-        if df.empty:
+        if df is None:
             logger.warning(
                 f"[{symbol}] yfinance 歷史數據為空 (period={period}, interval={interval})"
             )
@@ -266,7 +375,7 @@ OptionChainData = namedtuple("OptionChainData", ["calls", "puts", "underlying"])
 
 async def get_all_option_expiries(symbol: str) -> List[str]:
     """取得該標的所有可用的期權到期日 (支援 12 小時快取)。"""
-    symbol = symbol.upper()
+    symbol = _sanitize_ticker(symbol)
     now = time.time()
     if symbol in _option_expiries_cache:
         cached_val, expiry = _option_expiries_cache[symbol]
@@ -290,7 +399,7 @@ async def get_all_option_expiries(symbol: str) -> List[str]:
 
 async def get_option_chain(symbol: str, expiry: str) -> Optional[Any]:
     """取得指定到期日的期權鏈 (支援 40 分鐘快取與 Copy 隔離)。"""
-    symbol = symbol.upper()
+    symbol = _sanitize_ticker(symbol)
     cache_key = (symbol, expiry)
     now = time.time()
 
@@ -511,7 +620,7 @@ def run_garbage_collection():
 # ---------------------------------------------------------------------------
 async def get_basic_financials(symbol: str, expiry_hours: int = 24) -> Dict[str, Any]:
     """取得基本面指標，優先從資料庫讀取快取。"""
-    symbol = symbol.upper()
+    symbol = _sanitize_ticker(symbol)
 
     # 1. 優先檢查 SQLite 持久化快取，並用 to_thread 避免阻塞 event loop
     cached_data = await asyncio.to_thread(
@@ -552,7 +661,7 @@ async def get_dividend_yield(symbol: str) -> float:
 # ---------------------------------------------------------------------------
 async def get_company_profile(symbol: str) -> Dict[str, Any]:
     """取得公司/ETF 基本資料。"""
-    symbol = symbol.upper()
+    symbol = _sanitize_ticker(symbol)
     now = time.time()
     if symbol in _profile_cache:
         val, expiry = _profile_cache[symbol]
@@ -573,7 +682,7 @@ async def get_company_profile(symbol: str) -> Dict[str, Any]:
 
 async def is_etf(symbol: str) -> bool:
     """判斷標的是否為 ETF。"""
-    symbol = symbol.upper()
+    symbol = _sanitize_ticker(symbol)
     now = time.time()
     if symbol in _etf_cache:
         val, expiry = _etf_cache[symbol]

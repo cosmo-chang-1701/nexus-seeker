@@ -212,12 +212,25 @@ class SchedulerCog(commands.Cog):
                 if not sym:
                     continue
 
+                order_type = str(o.get("order_type") or "").upper()
+
+                # Trailing stop 的 trailing_value 並非「固定掛單價格」，不適用價格對齊警報。
+                if order_type in ("TRAILING_STOP_USD", "TRAILING_STOP_PCT"):
+                    continue
+
                 limit_p = float(o.get("limit_price") or 0)
                 stop_p = float(o.get("stop_price") or 0)
-                trailing_v = float(o.get("trailing_value") or 0)
-                current_price = (
-                    limit_p if limit_p > 0 else (stop_p if stop_p > 0 else trailing_v)
-                )
+
+                price_label = "掛單價格"
+                if order_type in ("LIMIT", "STOP_LIMIT") and limit_p > 0:
+                    current_price = limit_p
+                    price_label = "掛單限價"
+                elif order_type in ("STOP", "STOP_LIMIT") and stop_p > 0:
+                    current_price = stop_p
+                    price_label = "掛單停損價"
+                else:
+                    current_price = limit_p if limit_p > 0 else stop_p
+
                 if current_price <= 0:
                     continue
 
@@ -263,6 +276,8 @@ class SchedulerCog(commands.Cog):
                     {
                         "symbol": sym,
                         "order_id": o.get("id"),
+                        "order_type": order_type,
+                        "price_label": price_label,
                         "current_price": current_price,
                         "original_qty": original_qty,
                         "suggested_price": suggested_price,
