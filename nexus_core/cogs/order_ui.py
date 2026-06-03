@@ -929,12 +929,60 @@ class OrderUICog(commands.Cog):
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
     @app_commands.command(
-        name="list_orders", description="列出目前所有活躍的待成交委託單"
+        name="list_orders",
+        description="列出目前所有活躍的待成交委託單（可用下拉篩選）",
     )
-    async def list_orders(self, interaction: discord.Interaction):
+    @app_commands.describe(
+        order_type="訂單類型（預設：全部）",
+        side="委託方向（預設：全部）",
+        validity="有效期限（預設：全部）",
+        condition="委託條件（預設：全部）",
+    )
+    @app_commands.choices(
+        order_type=[
+            app_commands.Choice(name="全部 (ALL)", value="ALL"),
+            app_commands.Choice(name="市價單 (MARKET)", value="MARKET"),
+            app_commands.Choice(name="限價單 (LIMIT)", value="LIMIT"),
+            app_commands.Choice(name="停損單 (STOP)", value="STOP"),
+            app_commands.Choice(name="停損限價單 (STOP_LIMIT)", value="STOP_LIMIT"),
+            app_commands.Choice(
+                name="追蹤停損單 USD (TRAILING_STOP_USD)", value="TRAILING_STOP_USD"
+            ),
+            app_commands.Choice(
+                name="追蹤停損單 PCT (TRAILING_STOP_PCT)", value="TRAILING_STOP_PCT"
+            ),
+        ],
+        side=[
+            app_commands.Choice(name="全部 (ALL)", value="ALL"),
+            app_commands.Choice(name="買入 (BUY)", value="BUY"),
+            app_commands.Choice(name="賣出 (SELL)", value="SELL"),
+        ],
+        validity=[
+            app_commands.Choice(name="全部 (ALL)", value="ALL"),
+            app_commands.Choice(name="當日有效 (DAY)", value="DAY"),
+            app_commands.Choice(name="盤前+當日+盤後 (EXT_DAY)", value="EXT_DAY"),
+            app_commands.Choice(name="夜盤 (NIGHT)", value="NIGHT"),
+            app_commands.Choice(name="90天長期有效 (GTC_90)", value="GTC_90"),
+        ],
+        condition=[
+            app_commands.Choice(name="全部 (ALL)", value="ALL"),
+            app_commands.Choice(name="市價 (無條件)", value="MARKET_DEFAULT"),
+            app_commands.Choice(name="含限價 (Limit)", value="HAS_LIMIT"),
+            app_commands.Choice(name="含停損 (Stop)", value="HAS_STOP"),
+            app_commands.Choice(name="含追蹤 (Trailing)", value="HAS_TRAIL"),
+        ],
+    )
+    async def list_orders(
+        self,
+        interaction: discord.Interaction,
+        order_type: str | None = None,
+        side: str | None = None,
+        validity: str | None = None,
+        condition: str | None = None,
+    ):
         await interaction.response.defer(ephemeral=True)
-        orders = await asyncio.to_thread(get_user_active_orders, interaction.user.id)
 
+        orders = await asyncio.to_thread(get_user_active_orders, interaction.user.id)
         if not orders:
             embed = create_info_embed(
                 title="📋 待成交委託單列表",
@@ -943,11 +991,77 @@ class OrderUICog(commands.Cog):
             await interaction.followup.send(embed=embed, ephemeral=True)
             return
 
+        # Normalize filters (optional → default ALL)
+        order_type_v = (order_type or "ALL").strip().upper()
+        side_v = (side or "ALL").strip().upper()
+        validity_v = (validity or "ALL").strip().upper()
+        condition_v = (condition or "ALL").strip().upper()
+
+        def _match_condition(o: dict) -> bool:
+            if condition_v == "ALL":
+                return True
+
+            ot = str(o.get("order_type") or "").upper()
+
+            if condition_v == "MARKET_DEFAULT":
+                return ot == "MARKET"
+            if condition_v == "HAS_LIMIT":
+                return ot in ("LIMIT", "STOP_LIMIT")
+            if condition_v == "HAS_STOP":
+                return ot in ("STOP", "STOP_LIMIT")
+            if condition_v == "HAS_TRAIL":
+                return ot in ("TRAILING_STOP_USD", "TRAILING_STOP_PCT")
+
+            return True
+
+        filtered = []
+        for o in orders:
+            ot = str(o.get("order_type") or "").upper()
+            sd = str(o.get("side") or "BUY").upper()
+            vd = str(o.get("validity") or "").upper()
+
+            if order_type_v != "ALL" and ot != order_type_v:
+                continue
+            if side_v != "ALL" and sd != side_v:
+                continue
+            if validity_v != "ALL" and vd != validity_v:
+                continue
+            if not _match_condition(o):
+                continue
+
+            filtered.append(o)
+
+        if not filtered:
+            embed = create_info_embed(
+                title="📋 待成交委託單列表",
+                message=(
+                    "您目前有待成交委託單，但 **沒有任何訂單符合篩選條件**。\n"
+                    "建議：將下拉篩選改回 `全部 (ALL)` 後再試一次。"
+                ),
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+
         # 清單式：整合多筆委託單於單一訊息中；若內容超限，會自動拆成多則訊息接續。
         # 每則訊息底部統一提供「取消 / 編輯」按鈕，使用者輸入委託單 ID 即可操作。
         from cogs.embed_builder import create_active_orders_embed
 
-        embeds = create_active_orders_embed(orders)
+        embeds = create_active_orders_embed(filtered)
+
+        filters_applied = (
+            order_type_v != "ALL"
+            or side_v != "ALL"
+            or validity_v != "ALL"
+            or condition_v != "ALL"
+        )
+        if filters_applied:
+            filter_line = (
+                "篩選條件："
+                f"類型=`{order_type_v}`、方向=`{side_v}`、有效期限=`{validity_v}`、條件=`{condition_v}`\n"
+            )
+            for e in embeds:
+                e.description = filter_line + (e.description or "")
+
         for embed in embeds:
             await interaction.followup.send(
                 embed=embed, view=OrderManagementView(), ephemeral=True
