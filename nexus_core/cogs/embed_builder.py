@@ -4773,10 +4773,13 @@ def create_active_order_card_embed(order: Dict[str, Any]) -> discord.Embed:
 
 
 def create_active_orders_embed(orders: List[Dict[str, Any]]) -> List[discord.Embed]:
-    """建構待成交委託單列表報告 Embed (使用 Premium ANSI Card 設計，讓數值高亮且易於閱讀)"""
+    """建構待成交委託單列表報告 Embed (清單整合；超過字數限制自動拆訊息)。"""
     embed = discord.Embed(
         title="📋 Nexus Seeker | 待成交委託單列表",
-        description="以下是您目前所有活躍且待成交的委託單。點擊下方按鈕可進行撤銷或微調。\n\u200b",
+        description=(
+            f"共 `{len(orders)}` 筆待成交委託單。\n"
+            "點擊下方按鈕可進行撤銷或微調（系統會要求您輸入委託單 ID）。\n\u200b"
+        ),
         color=discord.Color.orange(),
         timestamp=datetime.now(timezone.utc),
     )
@@ -4786,72 +4789,8 @@ def create_active_orders_embed(orders: List[Dict[str, Any]]) -> List[discord.Emb
         embed.set_footer(text="Nexus Seeker • 待成交委託單管理系統")
         return [embed]
 
-    order_type_zh = {
-        "MARKET": "\u001b[1;36m市價單 (MARKET)\u001b[0m",
-        "LIMIT": "\u001b[1;32m限價單 (LIMIT)\u001b[0m",
-        "STOP": "\u001b[1;31m停損單 (STOP)\u001b[0m",
-        "STOP_LIMIT": "\u001b[1;33m停損限價單 (STOP_LIMIT)\u001b[0m",
-        "TRAILING_STOP_USD": "\u001b[1;35m追蹤停損單 USD (TRAILING_STOP_USD)\u001b[0m",
-        "TRAILING_STOP_PCT": "\u001b[1;35m追蹤停損單 PCT (TRAILING_STOP_PCT)\u001b[0m",
-    }
-
-    validity_zh = {
-        "DAY": "\u001b[1;37m當日有效 (DAY)\u001b[0m",
-        "EXT_DAY": "\u001b[1;34m全時段有效 (EXT_DAY)\u001b[0m",
-        "NIGHT": "\u001b[1;34m夜盤交易 (NIGHT)\u001b[0m",
-        "GTC_90": "\u001b[1;37m90天有效 (GTC_90)\u001b[0m",
-    }
-
     for idx, o in enumerate(orders):
-        ansi_lines = ["```ansi"]
-        ansi_lines.append(
-            f" 📂 委託單 ID: \u001b[1;33m{o['id']}\u001b[0m  |  標的: \u001b[1;36m{o['symbol']}\u001b[0m"
-        )
-        ansi_lines.append(" ----------------------------------")
-
-        type_str = order_type_zh.get(o["order_type"], o["order_type"])
-        ansi_lines.append(f"  └─ 訂單類型: {type_str}")
-
-        side = str(o.get("side") or "BUY").upper()
-        side_str = (
-            "\u001b[1;32m買入 (BUY)\u001b[0m"
-            if side == "BUY"
-            else "\u001b[1;31m賣出 (SELL)\u001b[0m"
-        )
-        ansi_lines.append(f"  └─ 委託方向: {side_str}")
-        ansi_lines.append(f"  └─ 委託數量: \u001b[1;37m{o['quantity']}\u001b[0m 股")
-
-        val_str = validity_zh.get(o["validity"], o["validity"])
-        ansi_lines.append(f"  └─ 有效期限: {val_str}")
-
-        # 價格明細條件解析
-        price_conditions = []
-        if o.get("order_type") in ("LIMIT", "STOP_LIMIT"):
-            price_conditions.append(
-                f"限價: \u001b[1;32m${o.get('limit_price', 0.0):.2f}\u001b[0m"
-            )
-        if o.get("order_type") in ("STOP", "STOP_LIMIT"):
-            price_conditions.append(
-                f"停損價: \u001b[1;31m${o.get('stop_price', 0.0):.2f}\u001b[0m"
-            )
-        if o.get("order_type") == "TRAILING_STOP_USD":
-            price_conditions.append(
-                f"追蹤值: \u001b[1;35m${o.get('trailing_value', 0.0):.2f}\u001b[0m"
-            )
-        if o.get("order_type") == "TRAILING_STOP_PCT":
-            price_conditions.append(
-                f"追蹤值: \u001b[1;35m{o.get('trailing_value', 0.0):.2f}%\u001b[0m"
-            )
-
-        if price_conditions:
-            conds_str = " | ".join(price_conditions)
-            ansi_lines.append(f"  └─ 委託條件: {conds_str}")
-        else:
-            ansi_lines.append("  └─ 委託條件: 預設市價成交")
-
-        ansi_lines.append("```")
-
-        card_content = "\n".join(ansi_lines)
+        card_content = _build_active_order_ansi_card(o)
         embed.add_field(
             name=f"📦 委託單 #{idx+1} (ID: {o['id']})",
             value=_safe_embed_field_value(card_content, "暫無詳情"),
@@ -4862,75 +4801,124 @@ def create_active_orders_embed(orders: List[Dict[str, Any]]) -> List[discord.Emb
     return split_embed_by_fields(embed)
 
 
-def create_telemetry_alignment_embed(
-    alignment_items: List[Dict[str, Any]], truncated: bool = False
-) -> discord.Embed:
-    """建構待成交委託單盤中遙測對齊警報 Embed (排版參照 Watchlist 半小時戰報 樹狀格式)"""
-    embed = discord.Embed(
-        title="📡 待成交委託單 - 盤中每半小時 Telemetry 對齊警報",
-        description=(
-            "⚠️ **【動態掛單偏離度與尾部風險警報】**\n"
-            "偵測到美股市場短線隱含波動率 (IV) 劇烈放大，且期權偏斜（Skew）指標進入極端異常區間：\n\u200b"
-        ),
-        color=discord.Color.red()
+def _build_telemetry_alignment_ansi_card(item: Dict[str, Any]) -> str:
+    """建構 Telemetry 對齊卡片 (ANSI)，版面參照待成交委託單列表卡片。"""
+    sym = str(item.get("symbol") or "").upper()
+    curr_p = float(item.get("current_price") or 0)
+    orig_q = float(item.get("original_qty") or 0)
+    sugg_p = float(item.get("suggested_price") or 0)
+    sugg_q = float(item.get("suggested_qty") or 0)
+    is_size_down = bool(item.get("is_size_down"))
+
+    ansi_lines = ["```ansi"]
+    ansi_lines.append(
+        f" \u001b[1;36m📡 {sym} Telemetry 對齊摘要\u001b[0m"
+        if sym
+        else " \u001b[1;36m📡 Telemetry 對齊摘要\u001b[0m"
+    )
+    ansi_lines.append(" ----------------------------------")
+    ansi_lines.append(
+        f"  ├─ 當前掛單價格: \u001b[1;37m${curr_p:.2f}\u001b[0m (數量: \u001b[1;37m{orig_q:.1f}\u001b[0m 股)"
+    )
+
+    sugg_price_color = "\u001b[1;32m" if abs(sugg_p - curr_p) < 0.01 else "\u001b[1;33m"
+    ansi_lines.append(
+        f"  ├─ 遙測建議防線: {sugg_price_color}${sugg_p:.2f}\u001b[0m (數量: \u001b[1;37m{sugg_q:.1f}\u001b[0m 股)"
+    )
+
+    if is_size_down:
+        ansi_lines.append(
+            "  └─ 防禦狀態: \u001b[1;31m⚠️ 尾端風險偏高（已觸發控倉 75%）\u001b[0m"
+        )
+    else:
+        ansi_lines.append(
+            "  └─ 防禦狀態: \u001b[1;33m⚠️ 需要對齊（偏離度偏高）\u001b[0m"
+        )
+
+    ansi_lines.append("```")
+    return "\n".join(ansi_lines)
+
+
+def create_telemetry_alignment_embeds(
+    alignment_items: List[Dict[str, Any]],
+    truncated: bool = False,
+    include_apply_button_hint: bool = True,
+    scheduled_mode: bool = False,
+) -> List[discord.Embed]:
+    """建構 Telemetry 對齊警報 (清單整合；超過字數限制自動拆訊息)。
+
+    - 版面參照 `create_active_orders_embed()`（清單欄位式）
+    - scheduled_mode=True: 盤中每半小時自動推播版本（不含按鈕）
+    """
+
+    title = "📡 Nexus Seeker | 待成交委託單 Telemetry 對齊警報"
+    if scheduled_mode:
+        title += " (盤中每半小時)"
+
+    color = (
+        discord.Color.red()
         if any(i.get("is_size_down") for i in alignment_items)
-        else discord.Color.orange(),
+        else discord.Color.orange()
+    )
+
+    description_lines = [f"共 `{len(alignment_items)}` 筆委託單需要進行遙測對齊。"]
+
+    if truncated:
+        description_lines.append(
+            "⚠️ 由於委託單數量較多，部分標的已被安全省略；可先用 `/list_orders` 查看完整列表。"
+        )
+
+    if include_apply_button_hint and not scheduled_mode:
+        description_lines.append(
+            "點擊下方按鈕可一鍵套用遙測建議價（將同步調整價格與股數）。"
+        )
+    else:
+        description_lines.append(
+            "此為通知版本（不含按鈕）。若要一鍵套用，請使用 `/telemetry_alert` 開啟互動面板。"
+        )
+
+    embed = discord.Embed(
+        title=title,
+        description="\n".join(description_lines) + "\n\u200b",
+        color=color,
         timestamp=datetime.now(timezone.utc),
     )
 
-    for o in alignment_items:
-        sym = o["symbol"]
-        order_id = o["order_id"]
-        curr_p = o["current_price"]
-        orig_q = o["original_qty"]
-        sugg_p = o["suggested_price"]
-        sugg_q = o["suggested_qty"]
-        is_size_down = o["is_size_down"]
+    for idx, item in enumerate(alignment_items):
+        sym = str(item.get("symbol") or "").upper()
+        order_id = item.get("order_id")
+        card_content = _build_telemetry_alignment_ansi_card(item)
 
-        ansi_lines = ["```ansi"]
-        ansi_lines.append(
-            f" \u001b[1;36m📐 {sym} 遙測價格對齊 (Telemetry Pricing Alignment)\u001b[0m"
-        )
-        ansi_lines.append(" ----------------------------------")
-        ansi_lines.append(
-            f"  ├─ 當前掛單價格: \u001b[1;37m${curr_p:.2f}\u001b[0m (數量: \u001b[1;37m{orig_q:.1f}\u001b[0m 股)"
-        )
+        name_prefix = f"📦 委託單 #{idx+1}"
+        if order_id is not None:
+            name_prefix += f" (ID: {order_id})"
 
-        sugg_price_color = "\u001b[1;32m" if sugg_p == curr_p else "\u001b[1;33m"
-        ansi_lines.append(
-            f"  ├─ 遙測最佳防線: {sugg_price_color}${sugg_p:.2f}\u001b[0m (數量: \u001b[1;37m{sugg_q:.1f}\u001b[0m 股)"
-        )
-
-        if is_size_down:
-            ansi_lines.append(
-                "  ├─ 偏離防禦狀態: \u001b[1;31m⚠️ 偏離度與尾部風險過高，面臨被擊穿風險\u001b[0m"
-            )
-            ansi_lines.append(
-                "  └─ \u001b[1;31m⚠️ [尾端風險防禦] 偵測到期權偏斜極端尾端風險。系統已自動攔截並將掛單價格微調至更接近現價，且將掛單數量打 75 折以防禦尾部風險。\u001b[0m"
-            )
+        if sym:
+            field_name = f"{name_prefix} | {sym}"
         else:
-            ansi_lines.append(
-                "  └─ 偏離防禦狀態: \u001b[1;33m⚠️ 偏離度與尾部風險過高，面臨被擊穿風險\u001b[0m"
-            )
-
-        ansi_lines.append("```")
-        card_content = "\n".join(ansi_lines)
+            field_name = name_prefix
 
         embed.add_field(
-            name=f"📊 標的代號：{sym} (委託單 ID: {order_id})",
+            name=field_name,
             value=_safe_embed_field_value(card_content, "暫無遙測對齊詳情"),
             inline=False,
         )
 
-    footer_text = ""
-    if truncated:
-        footer_text += "⚠️ *(由於您的活躍委託單數量較多，部分標的之偏離度警報已被安全省略，請至 `/list_orders` 查看完整列表)*\n\n"
-    footer_text += "💡 **建議操作**：請點擊下方綠色按鈕「一鍵套用遙測建議價」，系統將自動調整您的委託價格並下調掛單股數以防守大後方。"
+    embed.set_footer(text="Nexus Seeker • 待成交委託單管理系統")
+    return split_embed_by_fields(embed)
 
-    embed.add_field(
-        name="💡 建議操作與指引",
-        value=_safe_embed_field_value(footer_text, "請使用下方按鈕進行套用"),
-        inline=False,
+
+def create_telemetry_alignment_embed(
+    alignment_items: List[Dict[str, Any]],
+    truncated: bool = False,
+    include_apply_button_hint: bool = True,
+    scheduled_mode: bool = False,
+) -> discord.Embed:
+    """相容舊呼叫：回傳第一頁 Embed。"""
+    embeds = create_telemetry_alignment_embeds(
+        alignment_items,
+        truncated=truncated,
+        include_apply_button_hint=include_apply_button_hint,
+        scheduled_mode=scheduled_mode,
     )
-    embed.set_footer(text="Nexus Seeker • 盤中每半小時 telemetry 對齊警報")
-    return embed
+    return embeds[0] if embeds else discord.Embed(title="Telemetry 對齊警報")

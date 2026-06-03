@@ -94,6 +94,7 @@ ALL_NOTIFICATION_KEYS = [
     "post_market_sector_flow",
     "next_day_strategy",
     "weekly_vtr_report",
+    "order_telemetry_alignment_alert",
     # 即時風險與事件警報 (Real-time & Events)
     "profit_lock_alert",
     "gamma_fragility_alert",
@@ -105,10 +106,16 @@ ALL_NOTIFICATION_KEYS = [
     "polymarket_whale_alert",
 ]
 
+# 預設通知狀態：大多數維持預設開啟，但允許針對單一 key 預設關閉以避免噪音
+DEFAULT_NOTIFICATION_SETTINGS: dict[str, bool] = {
+    key: True for key in ALL_NOTIFICATION_KEYS
+}
+DEFAULT_NOTIFICATION_SETTINGS["order_telemetry_alignment_alert"] = False
+
 
 def get_user_notification_settings(user_id: int) -> dict[str, bool]:
-    """獲取使用者的所有通知開啟狀態，預設皆為 True"""
-    settings = {key: True for key in ALL_NOTIFICATION_KEYS}
+    """獲取使用者的所有通知開啟狀態（預設由 DEFAULT_NOTIFICATION_SETTINGS 決定）"""
+    settings = DEFAULT_NOTIFICATION_SETTINGS.copy()
     try:
         with sqlite3.connect(config.DB_NAME) as conn:
             cursor = conn.cursor()
@@ -190,4 +197,4 @@ def is_notification_enabled(user_id: int, key: str) -> bool:
                 return bool(row[0])
     except Exception as e:
         logger.error(f"檢查通知狀態失敗 (UID: {user_id}, Key: {key}): {e}")
-    return True
+    return DEFAULT_NOTIFICATION_SETTINGS.get(key, True)

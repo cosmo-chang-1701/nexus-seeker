@@ -375,25 +375,20 @@ async def test_orders_list_command(mock_interaction, db_conn):
     assert mock_interaction.response.defer.called
     assert mock_interaction.followup.send.called
 
-    # 會送出 1 則總覽 + 每筆訂單各 1 則卡片訊息
-    assert mock_interaction.followup.send.call_count == 2
+    # 清單式：單一訊息整合多筆（此案例只有 1 筆，因此只會送出 1 則清單訊息）
+    assert mock_interaction.followup.send.call_count == 1
 
-    header_kwargs = mock_interaction.followup.send.call_args_list[0].kwargs
-    header_embed = header_kwargs["embed"]
-    assert "待成交委託單列表" in header_embed.title
-    assert "共" in header_embed.description
-    assert "取消" in header_embed.description
-    assert "編輯" in header_embed.description
+    kwargs = mock_interaction.followup.send.call_args_list[0].kwargs
+    embed = kwargs["embed"]
+    view = kwargs["view"]
 
-    card_kwargs = mock_interaction.followup.send.call_args_list[1].kwargs
-    card_embed = card_kwargs["embed"]
-    card_view = card_kwargs["view"]
+    assert "待成交委託單列表" in embed.title
+    assert "共" in (embed.description or "")
+    assert "撤銷" in (embed.description or "")
+    assert "微調" in (embed.description or "")
 
-    assert "待成交委託單" in card_embed.title
-    assert "TSLA" in card_embed.description or any(
-        "TSLA" in f.name or "TSLA" in f.value for f in card_embed.fields
-    )
-    assert isinstance(card_view, OrderItemView)
+    assert any("TSLA" in f.name or "TSLA" in f.value for f in embed.fields)
+    assert isinstance(view, OrderManagementView)
 
 
 @pytest.mark.asyncio

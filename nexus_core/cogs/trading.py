@@ -13,7 +13,11 @@ import market_time
 from config import DISCORD_ADMIN_USER_ID, get_vix_tier
 from services.trading_service import TradingService
 from services.alert_filter import should_send_priority_alert
-from services.market_data_service import get_macro_environment, get_quote
+from services.market_data_service import (
+    get_macro_environment,
+    get_quote,
+    batch_get_quotes,
+)
 from services.llm_service import generate_analyst_report
 from cogs.embed_builder import (
     create_scan_embed,
@@ -30,6 +34,7 @@ from cogs.embed_builder import (
     create_vtr_settlement_notice_embed,
     create_watchlist_overview_embed,
     create_watchlist_signal_embed,
+    create_telemetry_alignment_embeds,
 )
 from market_analysis.ghost_trader import GhostTrader
 
@@ -53,6 +58,7 @@ class SchedulerCog(commands.Cog):
         self.dynamic_after_market_report.start()
         self.monitor_vtr_task.start()
         self.monitor_real_portfolio_task.start()
+        self.monitor_order_telemetry_alignment_task.start()
         self.daily_reddit_update.start()
         self.weekly_vtr_report_task.start()
 
@@ -73,6 +79,7 @@ class SchedulerCog(commands.Cog):
         self.dynamic_after_market_report.cancel()
         self.monitor_vtr_task.cancel()
         self.monitor_real_portfolio_task.cancel()
+        self.monitor_order_telemetry_alignment_task.cancel()
         self.daily_reddit_update.cancel()
         self.weekly_vtr_report_task.cancel()
         logger.info("SchedulerCog unloaded. Background tasks cancelled.")
@@ -139,6 +146,135 @@ class SchedulerCog(commands.Cog):
     @monitor_real_portfolio_task.before_loop
     async def before_monitor_real_portfolio_task(self):
         await self.bot.wait_until_ready()
+
+    # ==========================================
+    # 📡 待成交委託單 Telemetry 對齊警報 (盤中每 30 分鐘)
+    # ==========================================
+    @tasks.loop(minutes=30)
+    async def monitor_order_telemetry_alignment_task(self):
+        """盤中每 30 分鐘推播委託單 Telemetry 對齊警報（需於 /notif_settings 手動開啟）"""
+        if not getattr(self.bot, "_is_leader_instance", True):
+            return
+        if not market_time.is_market_open():
+            return
+
+        try:
+            await self._dispatch_order_telemetry_alignment_alert()
+        except Exception as e:
+            logger.error(f"委託單 Telemetry 對齊警報執行錯誤: {e}")
+
+    @monitor_order_telemetry_alignment_task.before_loop
+    async def before_monitor_order_telemetry_alignment_task(self):
+        await self.bot.wait_until_ready()
+
+    async def _dispatch_order_telemetry_alignment_alert(self) -> None:
+        from database.orders import get_all_active_orders
+        from services.telemetry_pricing_engine import calculate_telemetry_price
+
+        all_orders = await asyncio.to_thread(get_all_active_orders)
+        if not all_orders:
+            return
+
+        # 盤中風險條件：用 VIX 作為簡化的「尾端風險」開關（避免每 30 分鐘做大量深度期權掃描）
+        vix_quote = await get_quote("VIX")
+        vix_level = float(vix_quote.get("c", 0) or 0)
+        is_tail_risk = vix_level >= 25.0
+
+        symbols = sorted(
+            {str(o.get("symbol") or "").upper() for o in all_orders if o.get("symbol")}
+        )
+        quotes = await batch_get_quotes(symbols) if symbols else {}
+
+        orders_by_uid: dict[int, list[dict[str, Any]]] = {}
+        for o in all_orders:
+            uid = int(o.get("user_id") or 0)
+            if uid <= 0:
+                continue
+            orders_by_uid.setdefault(uid, []).append(o)
+
+        for uid, orders in orders_by_uid.items():
+            if not database.is_notification_enabled(
+                uid, "order_telemetry_alignment_alert"
+            ):
+                continue
+
+            alignment_items: list[dict[str, Any]] = []
+            truncated = False
+
+            for o in orders:
+                sym = str(o.get("symbol") or "").upper()
+                if not sym:
+                    continue
+
+                limit_p = float(o.get("limit_price") or 0)
+                stop_p = float(o.get("stop_price") or 0)
+                trailing_v = float(o.get("trailing_value") or 0)
+                current_price = (
+                    limit_p if limit_p > 0 else (stop_p if stop_p > 0 else trailing_v)
+                )
+                if current_price <= 0:
+                    continue
+
+                original_qty = float(o.get("quantity") or 1.0)
+
+                q = quotes.get(sym, {})
+                spot_price = float(q.get("c") or 0) or current_price
+                prev_close = float(q.get("pc") or 0)
+
+                # Telemetry 引擎：目前以輕量化模式運行（由 VIX 高低控制尾端風險參數）
+                iv = 0.55 if is_tail_risk else 0.35
+                hist_iv = 0.35
+                skew_percentile = 0.98 if is_tail_risk else 0.50
+
+                suggested_price, suggested_qty, _logs = await calculate_telemetry_price(
+                    symbol=sym,
+                    base_price=current_price,
+                    spot_price=spot_price,
+                    iv=iv,
+                    hist_iv=hist_iv,
+                    max_pain=0.0,
+                    prev_max_pain=0.0,
+                    skew_percentile=skew_percentile,
+                    prev_close=prev_close,
+                    base_quantity=original_qty,
+                )
+
+                # 只有在價格或數量真的需要調整時才推播，避免每 30 分鐘噪音轟炸
+                if (
+                    abs(suggested_price - current_price) < 0.01
+                    and abs(suggested_qty - original_qty) < 0.01
+                ):
+                    continue
+
+                is_size_down = suggested_qty < original_qty
+
+                if len(alignment_items) * 500 > 3500:
+                    truncated = True
+                    break
+
+                alignment_items.append(
+                    {
+                        "symbol": sym,
+                        "order_id": o.get("id"),
+                        "current_price": current_price,
+                        "original_qty": original_qty,
+                        "suggested_price": suggested_price,
+                        "suggested_qty": suggested_qty,
+                        "is_size_down": is_size_down,
+                    }
+                )
+
+            if not alignment_items:
+                continue
+
+            embeds = create_telemetry_alignment_embeds(
+                alignment_items,
+                truncated=truncated,
+                include_apply_button_hint=False,
+                scheduled_mode=True,
+            )
+            for embed in embeds:
+                await self.bot.queue_dm(uid, embed=embed)
 
     # ==========================================
     # 🚀 每週 VTR 績效週報 (美東週五 17:05)

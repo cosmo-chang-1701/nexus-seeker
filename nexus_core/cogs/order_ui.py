@@ -943,24 +943,15 @@ class OrderUICog(commands.Cog):
             await interaction.followup.send(embed=embed, ephemeral=True)
             return
 
-        # 先送一個總覽訊息（避免第一筆就被按鈕佔據，且提供操作說明）
-        header = create_info_embed(
-            title="📋 待成交委託單列表",
-            message=(
-                f"共 `{len(orders)}` 筆待成交委託單。\n"
-                "每一筆委託單卡片底下都有 **取消** 與 **編輯** 按鈕，可直接操作該筆訂單。"
-            ),
-        )
-        await interaction.followup.send(embed=header, ephemeral=True)
+        # 清單式：整合多筆委託單於單一訊息中；若內容超限，會自動拆成多則訊息接續。
+        # 每則訊息底部統一提供「取消 / 編輯」按鈕，使用者輸入委託單 ID 即可操作。
+        from cogs.embed_builder import create_active_orders_embed
 
-        # 每一筆訂單各自一則訊息 + 專屬按鈕
-        from cogs.embed_builder import create_active_order_card_embed
-
-        for o in orders:
-            order_id = int(o.get("id"))
-            embed = create_active_order_card_embed(o)
-            view = OrderItemView(order_id=order_id)
-            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+        embeds = create_active_orders_embed(orders)
+        for embed in embeds:
+            await interaction.followup.send(
+                embed=embed, view=OrderManagementView(), ephemeral=True
+            )
 
     @app_commands.command(
         name="telemetry_alert", description="[模擬] 喚起半小時心跳遙測價格偏離警報"
@@ -980,7 +971,7 @@ class OrderUICog(commands.Cog):
 
         # 模擬情境：市場極端 Skew 尾部風險，原有的掛單與預期波動率 (Expected Move) 下限偏離
         from services.telemetry_pricing_engine import calculate_telemetry_price
-        from cogs.embed_builder import create_telemetry_alignment_embed
+        from cogs.embed_builder import create_telemetry_alignment_embeds
 
         from typing import List, Dict, Any
 
@@ -1028,9 +1019,16 @@ class OrderUICog(commands.Cog):
                 }
             )
 
-        embed = create_telemetry_alignment_embed(alignment_items, truncated=truncated)
-        view = ApplyTelemetryView()
-        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+        embeds = create_telemetry_alignment_embeds(
+            alignment_items,
+            truncated=truncated,
+            include_apply_button_hint=True,
+            scheduled_mode=False,
+        )
+        for embed in embeds:
+            await interaction.followup.send(
+                embed=embed, view=ApplyTelemetryView(), ephemeral=True
+            )
 
     @app_commands.command(
         name="add_order",
