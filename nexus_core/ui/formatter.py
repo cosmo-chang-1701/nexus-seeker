@@ -132,7 +132,7 @@ def generate_ansi_watchlist_report(
         f" └─ 均線乖離: MA20: ${metrics.ma20:.2f} / MA50: ${metrics.ma50:.2f} | MA20 偏離: {bias_color}{metrics.bias_ma20 * 100:+.2f}%{C_RESET}",
         " ----------------------------------",
         " 🛡️ 技術 / 防禦牆 (Technical & Defense Walls)",
-        f" ├─ 狀態判讀: 買點狀態: {metrics.buy_zone_status} | 賣出狀態: {metrics.sell_zone_status} | 絕對支撐距: {support_color}{metrics.distance_to_absolute_support * 100:+.2f}%{C_RESET}",
+        f" ├─ 狀態判讀: 買點狀態: {metrics.buy_zone_status} | 賣出狀態: {metrics.sell_zone_status} | 距離絕對支撐: {support_color}{metrics.distance_to_absolute_support * 100:+.2f}%{C_RESET}",
         f" ├─ 買點支撐: P1: ${metrics.buy_price_phase1:.2f} | P2: ${metrics.buy_price_phase2:.2f} | P3: ${metrics.buy_price_phase3:.2f}",
         f" ├─ 賣出阻力: P1: ${metrics.sell_price_phase1:.2f} | P2: ${metrics.sell_price_phase2:.2f} | P3: ${metrics.sell_price_phase3:.2f}",
         f" └─ 關鍵位與敏感度: Vol POC: ${metrics.volume_poc:.2f} | GEX PutWall: ${metrics.gex_max_put_wall:.2f} | Vanna: {metrics.vanna_sensitivity:+.4f}",
