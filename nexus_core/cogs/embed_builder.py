@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 
 from models.schemas import WatchlistOptionPlan
+from ui import panel_renderer
 
 logger = logging.getLogger(__name__)
 
@@ -161,46 +162,16 @@ def _pad_string(s: str, width: int, align: str = "left") -> str:
 
 def _visual_truncate(s: str, max_vlen: int) -> str:
     """根據視覺寬度截斷字串，避免中文字元被切成一半。"""
-    current_vlen = 0
-    chars = []
-    for c in s:
-        char_vlen = (
-            2
-            if (
-                ord(c) > 127 or 0x3000 <= ord(c) <= 0x303F or 0xFF00 <= ord(c) <= 0xFFEF
-            )
-            else 1
-        )
-        if current_vlen + char_vlen > max_vlen:
-            break
-        chars.append(c)
-        current_vlen += char_vlen
-    return "".join(chars)
+    return panel_renderer.visual_truncate(s, max_vlen)
 
 
 def _wrap_visual(text: str, width: int, indent: str = "") -> list[str]:
-    paragraphs = text.replace("\r\n", "\n").split("\n")
-    all_wrapped_lines = []
-    for para in paragraphs:
-        para = para.strip()
-        if not para:
-            continue
-        lines: list[str] = []
-        current = ""
-        for char in para:
-            candidate = current + char
-            if current and _visual_len(candidate) > width:
-                lines.append(current)
-                current = indent + char
-            else:
-                current = candidate
-        if current:
-            lines.append(current)
-        all_wrapped_lines.extend(lines)
-    return all_wrapped_lines or [indent]
+    return panel_renderer.wrap_visual(text, width, indent)
 
 
-def _parse_and_format_positions_table(positions_list: List[str], survival_runway=None) -> str:
+def _parse_and_format_positions_table(
+    positions_list: List[str], survival_runway=None
+) -> str:
     if not positions_list:
         return "目前無持倉部位。"
 
@@ -237,14 +208,12 @@ def _parse_and_format_positions_table(positions_list: List[str], survival_runway
         sym_match = re.search(r"🔹\s*\*\*(.*?)\*\*", pos_item)
         exp_match = re.search(r"`(\d{4}-\d{2}-\d{2})`", pos_item)
         strike_type_match = re.search(r"`?\$([\d\.]+)`?\s*\*\*(.*?)\*\*", pos_item)
-        cc_tag = " (CC)" if "🛡️(CC)" in pos_item else ""
 
         cost_match = re.search(r"成本:\s*`\$?([\d\.,\-]+)`", pos_item)
         price_match = re.search(r"現價:\s*`\$?([\d\.,\-]+)`", pos_item)
-        pnl_match = re.search(r"損益:\s*\*\*(.*?)\*\*", pos_item)
         dte_match = re.search(r"DTE:\s*`(.*?)`", pos_item)
         status_match = re.search(r"動作:\s*(.*)", pos_item)
-        
+
         dir_match = re.search(r"方向:\s*`(.*?)`", pos_item)
         qty_match = re.search(r"數量:\s*`(.*?)`", pos_item)
         iv_match = re.search(r"IV/IVR:\s*`(.*?)`", pos_item)
@@ -263,10 +232,14 @@ def _parse_and_format_positions_table(positions_list: List[str], survival_runway
 
         direction = dir_match.group(1).strip() if dir_match else "BTO"
         qty = abs(float(qty_match.group(1).strip())) if qty_match else 1.0
-        
+
         # 建立權利金與現價
-        cost_val = float(cost_match.group(1).strip().replace(",", "")) if cost_match else 0.0
-        price_val = float(price_match.group(1).strip().replace(",", "")) if price_match else 0.0
+        cost_val = (
+            float(cost_match.group(1).strip().replace(",", "")) if cost_match else 0.0
+        )
+        price_val = (
+            float(price_match.group(1).strip().replace(",", "")) if price_match else 0.0
+        )
 
         # 計算損益
         if direction == "BTO":
@@ -356,14 +329,26 @@ def _parse_and_format_positions_table(positions_list: List[str], survival_runway
 
     table_lines.append("")
     table_lines.append("財務摘要 (Financial Summary)")
-    table_lines.append(f" ├─ 衍生品實質現金暴露 (Debit Cost)   : ${total_debit_cost:,.2f} USD")
-    table_lines.append(f" ├─ 造市商已沒收權利金 (Credit Cash)   : ${total_credit_cash:,.2f} USD")
-    
+    table_lines.append(
+        f" ├─ 衍生品實質現金暴露 (Debit Cost)   : ${total_debit_cost:,.2f} USD"
+    )
+    table_lines.append(
+        f" ├─ 造市商已沒收權利金 (Credit Cash)   : ${total_credit_cash:,.2f} USD"
+    )
+
     pnl_sign = "+" if total_unrealized_pnl > 0 else ""
-    pnl_color_start = " [0;32m" if total_unrealized_pnl > 0 else " [0;31m" if total_unrealized_pnl < 0 else ""
+    pnl_color_start = (
+        " [0;32m"
+        if total_unrealized_pnl > 0
+        else " [0;31m"
+        if total_unrealized_pnl < 0
+        else ""
+    )
     pnl_color_end = " [0m" if total_unrealized_pnl != 0 else ""
-    table_lines.append(f" ├─ 盤中實時未實現損益 (Unrealized PnL): {pnl_color_start}{pnl_sign}${total_unrealized_pnl:,.2f} USD{pnl_color_end}")
-    
+    table_lines.append(
+        f" ├─ 盤中實時未實現損益 (Unrealized PnL): {pnl_color_start}{pnl_sign}${total_unrealized_pnl:,.2f} USD{pnl_color_end}"
+    )
+
     if survival_runway is not None:
         if survival_runway >= 9999:
             runway_years_str = "無限 年 (鐵血不破)"
@@ -389,23 +374,7 @@ def _is_macro_report_marker(line: str) -> bool:
 
 def _truncate_with_boundary(text: str, max_len: int) -> str:
     """優先在換行或句點邊界截斷，避免硬切造成可讀性差。"""
-    if len(text) <= max_len:
-        return text
-
-    reserved = 3
-    safe_len = max(1, max_len - reserved)
-    candidate = text[:safe_len]
-
-    boundary_candidates = [
-        candidate.rfind("\n\n"),
-        candidate.rfind("\n"),
-        candidate.rfind("。"),
-    ]
-    boundary = max(boundary_candidates)
-    if boundary > int(max_len * 0.6):
-        candidate = candidate[:boundary]
-
-    return candidate.rstrip() + "..."
+    return panel_renderer.truncate_with_boundary(text, max_len)
 
 
 def _safe_embed_field_value(text: str, fallback: str, max_len: int = 1024) -> str:
@@ -430,37 +399,13 @@ def _safe_embed_field_value(text: str, fallback: str, max_len: int = 1024) -> st
 def _chunk_ansi_table(
     header: str, divider: str, data_lines: List[str], max_len: int = 1024
 ) -> List[str]:
-    """
-    將 data_lines 切分成多個符合 Discord Embed field value 長度限制 (max_len) 的字串區塊。
-    每個區塊都以 ```ansi 包裹並包含相同的 header 與 divider。
-    """
-    prefix = f"```ansi\n{header}\n{divider}\n"
-    suffix = "\n```"
-
-    # 預留長度給字尾
-    limit = max_len - len(suffix)
-
-    chunks: List[str] = []
-    current_lines: List[str] = []
-
-    for line in data_lines:
-        test_val = prefix + "\n".join(current_lines + [line])
-        if len(test_val) <= limit:
-            current_lines.append(line)
-        else:
-            if current_lines:
-                chunks.append(prefix + "\n".join(current_lines) + suffix)
-                current_lines = [line]
-            else:
-                # 單行超長，強行截斷 (正常不應發生)
-                truncated = line[: limit - len(prefix)]
-                chunks.append(prefix + truncated + suffix)
-                current_lines = []
-
-    if current_lines:
-        chunks.append(prefix + "\n".join(current_lines) + suffix)
-
-    return chunks
+    """將 ANSI 表格切成多個符合 Discord Embed field value 長度限制的區塊。"""
+    return panel_renderer.chunk_ansi_table(
+        header,
+        divider,
+        data_lines,
+        max_len=max_len,
+    )
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -508,6 +453,39 @@ def _parse_ai_report_sections(ai_report_text: str) -> list[tuple[str, str]]:
             parsed_sections.append((header, content or "無詳細資訊"))
 
     return parsed_sections
+
+
+def _safe_embed_codeblock_value(
+    content: str,
+    fallback: str,
+    *,
+    lang: str = "text",
+    max_len: int = 1024,
+) -> str:
+    """產生安全的 code block 欄位值，避免截斷導致 fence 不閉合。"""
+    return panel_renderer.safe_codeblock_value(
+        content,
+        fallback,
+        lang=lang,
+        max_len=max_len,
+        add_zws_suffix=True,
+    )
+
+
+def _build_watchlist_style_panel(
+    title_line: str,
+    content: str,
+    *,
+    width: int = 45,
+    empty_msg: str = "暫無資料",
+) -> str:
+    """建立 Watchlist 半小時戰報風格的 ANSI 面板文字內容 (不含尾端 \u200b)。"""
+    return panel_renderer.build_watchlist_style_panel(
+        title_line,
+        content,
+        width=width,
+        empty_msg=empty_msg,
+    )
 
 
 def _append_ai_report_fields(
@@ -1491,27 +1469,38 @@ def create_sector_flow_report_embed(
         timestamp=datetime.now(timezone.utc),
     )
 
-    market_snapshot = [
-        "```yaml",
-        f"SPY: ${spy_price:.2f}",
-        f"VIX: {vix:.2f}",
-        f"VIX Tier: {vix_tier_name}",
-        f"Sectors Scanned: {len(sectors)}",
-        f"Polymarket Signals: {len(poly_events)}",
-        "```",
-    ]
+    market_panel_body = "\n".join(
+        [
+            f"SPY 現價: ${spy_price:.2f}",
+            f"VIX: {vix:.2f} ({vix_tier_name})",
+            f"掃描板塊數: {len(sectors)}",
+            f"Polymarket 訊號: {len(poly_events)}",
+        ]
+    )
+    market_panel = _build_watchlist_style_panel(
+        "🌐 收盤市場快照 (Close Snapshot)",
+        market_panel_body,
+        width=45,
+        empty_msg="暫無市場快照",
+    )
     embed.add_field(
         name="🌐 收盤市場快照",
-        value=_safe_embed_field_value("\n".join(market_snapshot), "無市場快照"),
+        value=_safe_embed_codeblock_value(market_panel, "暫無市場快照", lang="ansi"),
         inline=False,
     )
 
     if sectors:
         sector_lines = ["```ansi"]
+        sector_lines.append(" 🔄 板塊輪動快照 (Sector Rotation)")
+        sector_lines.append(" ----------------------------------")
         headers = ["ETF", "板塊", "日變動", "量比", "Skew", "UOA"]
         widths = [5, 18, 8, 6, 8, 4]
         sector_lines.append(
-            " | ".join(_pad_string(h, w) for h, w in zip(headers, widths))
+            " ".join(
+                [
+                    " | ".join(_pad_string(h, w) for h, w in zip(headers, widths)),
+                ]
+            )
         )
         sector_lines.append("-" * (sum(widths) + 3 * (len(widths) - 1)))
         sorted_sectors = sorted(
@@ -1555,29 +1544,68 @@ def create_sector_flow_report_embed(
         sector_lines.append("```")
         sector_value = "\n".join(sector_lines)
     else:
-        sector_value = "目前無板塊輪動資料。"
+        sector_panel = _build_watchlist_style_panel(
+            "🔄 板塊輪動快照 (Sector Rotation)",
+            "",
+            width=45,
+            empty_msg="目前無板塊輪動資料。",
+        )
+        sector_value = f"```ansi\n{sector_panel}\n```"
     embed.add_field(
         name="🔄 板塊輪動快照",
         value=_safe_embed_field_value(sector_value, "目前無板塊輪動資料。"),
         inline=False,
     )
 
-    event_lines = []
+    event_bullets: list[str] = []
     max_pain_value = spy_max_pain.get("max_pain")
     if max_pain_value is not None:
-        event_lines.append(f"📍 SPY Max Pain：`${_safe_float(max_pain_value):.2f}`")
+        event_bullets.append(f"SPY Max Pain: ${_safe_float(max_pain_value):.2f}")
+
     for event in poly_events[:3]:
-        question = _truncate_with_boundary(str(event.get("question", "N/A")), 110)
-        event_lines.append(f"🐋 {question}")
-    if not event_lines:
-        event_lines = ["目前無顯著 Polymarket / Max Pain 補充訊號。"]
+        question = _truncate_with_boundary(str(event.get("question", "N/A")), 140)
+        event_bullets.append(f"Polymarket: {question}")
+
+    event_panel = _build_watchlist_style_panel(
+        "🐋 事件定價與關鍵參考 (Event Pricing)",
+        "\n".join(event_bullets),
+        width=45,
+        empty_msg="目前無顯著 Polymarket / Max Pain 補充訊號。",
+    )
     embed.add_field(
         name="🐋 事件定價與關鍵參考",
-        value=_safe_embed_field_value("\n".join(event_lines), "目前無事件定價資料"),
+        value=_safe_embed_codeblock_value(
+            event_panel, "目前無事件定價資料", lang="ansi"
+        ),
         inline=False,
     )
 
-    _append_ai_report_fields(embed, report_content)
+    sections = _parse_ai_report_sections(report_content)
+    if sections:
+        for header, content in sections:
+            panel = _build_watchlist_style_panel(
+                header,
+                content,
+                width=45,
+                empty_msg="無詳細資訊",
+            )
+            embed.add_field(
+                name=header,
+                value=_safe_embed_codeblock_value(panel, "無詳細資訊", lang="ansi"),
+                inline=False,
+            )
+    else:
+        panel = _build_watchlist_style_panel(
+            "🤖 AI 分析摘要 (AI Summary)",
+            report_content,
+            width=45,
+            empty_msg="無詳細資訊",
+        )
+        embed.add_field(
+            name="🤖 AI 分析摘要",
+            value=_safe_embed_codeblock_value(panel, "無詳細資訊", lang="ansi"),
+            inline=False,
+        )
     embed.set_footer(text="Nexus Seeker AI Analyst | 收盤資金流向與板塊輪動")
     return embed
 
@@ -3173,7 +3201,9 @@ def create_portfolio_report_embed(
 
     # 使用 \n\n 分隔部位
     if positions_list:
-        positions_text = _parse_and_format_positions_table(positions_list, survival_runway)
+        positions_text = _parse_and_format_positions_table(
+            positions_list, survival_runway
+        )
     else:
         positions_text = "目前無持倉部位。"
 
@@ -3215,7 +3245,9 @@ def create_portfolio_report_embed(
     ):
         # 如果包含財務摘要，將其分離出來單獨處理
         if "財務摘要 (Financial Summary)" in positions_text:
-            table_part, summary_part = positions_text.split("\n\n財務摘要 (Financial Summary)")
+            table_part, summary_part = positions_text.split(
+                "\n\n財務摘要 (Financial Summary)"
+            )
             summary_text = "\n\n財務摘要 (Financial Summary)" + summary_part
             if summary_text.endswith("\n```"):
                 summary_text = summary_text[:-4]  # 移除字尾的 ```
@@ -3231,7 +3263,7 @@ def create_portfolio_report_embed(
             divider = raw_lines[2]
             data_lines = raw_lines[3:]
             chunks = _chunk_ansi_table(header, divider, data_lines)
-            
+
             # 將財務摘要追加到最後一個 chunk 中
             if summary_text:
                 if chunks:
@@ -3241,7 +3273,7 @@ def create_portfolio_report_embed(
                         chunks[-1] = last_chunk
                     else:
                         chunks[-1] = last_chunk + "\n" + summary_text
-            
+
             for i, chunk in enumerate(chunks):
                 name = (
                     f"📦 當前持倉明細 ({i+1}/{len(chunks)})"
@@ -3815,16 +3847,33 @@ def create_next_day_strategy_embed(strategy_text: str) -> discord.Embed:
             )
             content = lines[1].strip() if len(lines) > 1 else "無內容"
 
+            panel = _build_watchlist_style_panel(
+                f"{header} (Next-Day Strategy)",
+                content,
+                width=45,
+                empty_msg="無詳細資訊",
+            )
             embed.add_field(
                 name=header,
-                value=_safe_embed_field_value(content, "無詳細資訊"),
+                value=_safe_embed_codeblock_value(panel, "無詳細資訊", lang="ansi"),
                 inline=False,
             )
     else:
-        # 移除標題行後放入 description
+        # 移除標題行後放入欄位 (全部內容也用文字面板呈現)
         clean_text = re.sub(r"\*\*.*次日策略制定\*\*", "", strategy_text)
         clean_text = re.sub(r"-{10,}", "", clean_text).strip()
-        embed.description = _truncate_with_boundary(clean_text, 4000)
+        embed.description = "以下為次日策略摘要，建議依序閱讀各區塊。"
+        panel = _build_watchlist_style_panel(
+            "🎯 次日策略摘要 (Next-Day Summary)",
+            clean_text,
+            width=45,
+            empty_msg="無詳細資訊",
+        )
+        embed.add_field(
+            name="🎯 次日策略摘要",
+            value=_safe_embed_codeblock_value(panel, "無詳細資訊", lang="ansi"),
+            inline=False,
+        )
 
     embed.set_footer(text="Nexus Seeker Strategy Engine v1.0 | 戰鬥階級系統")
     return embed
