@@ -4,7 +4,7 @@
 
 Nexus Seeker is a multi-tenant **Discord-first options risk-control and trading operations platform**. It combines technical structure, Black-Scholes-Merton pricing, Greeks-based portfolio risk, event-aware calendar defenses, and LLM-assisted structured commentary.
 
-Current released core version: **`1.6.75`**
+Current released core version: **`1.6.76`**
 
 The codebase is optimized for:
 
@@ -238,9 +238,9 @@ Pending orders are tracked using the `active_orders` table:
 
 Users manage setup, adjustment, and cancellation of pending orders directly via interactive Discord interfaces:
 - **Order Setup Panel (`/order_panel`)**: Populates a dynamic dropdown view. Selecting an order type triggers a customized `DynamicOrderModal` containing base fields (Symbol, Quantity, Validity) and conditional price fields (Limit, Stop, or Trailing values).
-- **Active Orders Listing (`/orders`)**: Displays current active orders in a detailed Traditional Chinese embed, equipped with:
+- **Active Orders Listing (`/list_orders`)**: Displays current active orders in a detailed Traditional Chinese embed, equipped with:
   - `❌ 取消委託 (Cancel Order)` button: Triggers `CancelOrderModal` for low-latency cancellation.
-  - `⚙️ 快速微調價格 (Quick Adjust)` button: Triggers `AdjustOrderModal` to quickly adjust pending limits/stops.
+  - `✏️ 編輯委託單 (Edit Order)` button: Triggers `EditOrderModal` to edit pending order price and side (BUY/SELL).
 - **Telemetry Price & Size Alignment (`/telemetry_alert`)**: Implements dynamic telemetry price and size alignment alerts, offering:
   - `⚡ 一鍵套用遙測建議價 (Apply Telemetry Price)` button: Automatically updates **both** the price and the quantity/shares of active orders to safer alignments in SQLite, matching the telemetry pricing engine's latest calculations. It features built-in `[⚠️ Tail Risk Mitigation]` log notification if size downscaling was triggered.
 

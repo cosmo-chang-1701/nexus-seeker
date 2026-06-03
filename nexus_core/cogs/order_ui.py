@@ -423,13 +423,18 @@ class CancelOrderModal(discord.ui.Modal):
             )
 
 
-class AdjustOrderModal(discord.ui.Modal):
+class EditOrderModal(discord.ui.Modal):
     def __init__(self):
-        super().__init__(title="微調委託單價格")
+        super().__init__(title="編輯委託單")
         self.order_id = discord.ui.TextInput(
             label="委託單 ID (Order ID)",
             placeholder="例如: 1",
             required=True,
+        )
+        self.new_side = discord.ui.TextInput(
+            label="委託方向 (BUY/SELL)",
+            placeholder="例如: BUY 或 SELL（留空則不變）",
+            required=False,
         )
         self.new_price = discord.ui.TextInput(
             label="新限價 / 新價格 / 新追蹤值",
@@ -437,6 +442,7 @@ class AdjustOrderModal(discord.ui.Modal):
             required=True,
         )
         self.add_item(self.order_id)
+        self.add_item(self.new_side)
         self.add_item(self.new_price)
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -463,13 +469,35 @@ class AdjustOrderModal(discord.ui.Modal):
             )
             return
 
+        new_side = self.new_side.value.strip().upper()
+        side_to_apply: str | None = None
+        if new_side:
+            if new_side not in ("BUY", "SELL"):
+                await interaction.followup.send(
+                    embed=create_error_embed(
+                        "❌ 錯誤：方向請輸入 BUY 或 SELL（或留空不變）。"
+                    ),
+                    ephemeral=True,
+                )
+                return
+            side_to_apply = new_side
+
         try:
             # 2. 將同步的資料庫操作交給執行緒，避免阻塞事件循環
-            success = await asyncio.to_thread(update_active_order_price, oid, price)
+            success = await asyncio.to_thread(
+                update_active_order_price, oid, price, None, side_to_apply
+            )
             if success:
+                side_msg = (
+                    f"方向更新為 `{side_to_apply}`" if side_to_apply else "方向未變更"
+                )
                 embed = create_info_embed(
-                    title="價格微調成功",
-                    message=f"✅ **成功更新委託單價格**：已將委託單 ID `{oid}` 的價格微調至 `${price:.2f}` (或 {price:.2f}%)。",
+                    title="編輯委託單成功",
+                    message=(
+                        f"✅ **成功更新委託單**：委託單 ID `{oid}`\n"
+                        f"• 新價格: `${price:.2f}` (或 {price:.2f}%)\n"
+                        f"• {side_msg}"
+                    ),
                 )
             else:
                 embed = create_error_embed(
@@ -477,7 +505,7 @@ class AdjustOrderModal(discord.ui.Modal):
                 )
             await interaction.followup.send(embed=embed, ephemeral=True)
         except Exception as e:
-            logger.error(f"Failed to adjust order {oid}: {e}")
+            logger.error(f"Failed to edit order {oid}: {e}")
             await interaction.followup.send(
                 embed=create_error_embed(f"❌ 錯誤：更新失敗：{e}"),
                 ephemeral=True,
@@ -513,23 +541,23 @@ class OrderManagementView(discord.ui.View):
             except Exception as inner_e:
                 logger.error(f"Failed to send error fallback: {inner_e}")
 
-    @discord.ui.button(label="⚙️ 快速微調價格", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="✏️ 編輯委託單", style=discord.ButtonStyle.primary)
     async def adjust_button(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ):
         try:
-            await interaction.response.send_modal(AdjustOrderModal())
+            await interaction.response.send_modal(EditOrderModal())
         except Exception as e:
-            logger.error(f"Failed to send AdjustOrderModal: {e}", exc_info=True)
+            logger.error(f"Failed to send EditOrderModal: {e}", exc_info=True)
             try:
                 if not interaction.response.is_done():
                     await interaction.response.send_message(
-                        embed=create_error_embed(f"❌ 無法開啟價格微調視窗：{e}"),
+                        embed=create_error_embed(f"❌ 無法開啟編輯委託單視窗：{e}"),
                         ephemeral=True,
                     )
                 else:
                     await interaction.followup.send(
-                        embed=create_error_embed(f"❌ 無法開啟價格微調視窗：{e}"),
+                        embed=create_error_embed(f"❌ 無法開啟編輯委託單視窗：{e}"),
                         ephemeral=True,
                     )
             except Exception as inner_e:

@@ -18,7 +18,7 @@ from cogs.order_ui import (
     OrderSetupView,
     OrderUICog,
     CancelOrderModal,
-    AdjustOrderModal,
+    EditOrderModal,
     OrderManagementView,
     ApplyTelemetryView,
 )
@@ -274,8 +274,8 @@ async def test_cancel_order_modal_success(mock_interaction, db_conn):
 
 
 @pytest.mark.asyncio
-async def test_adjust_order_modal_success(mock_interaction, db_conn):
-    """測試委託單價格微調表單送出"""
+async def test_edit_order_modal_success(mock_interaction, db_conn):
+    """測試編輯委託單表單送出 (更新價格 + 方向)"""
     user_id = mock_interaction.user.id
     order_id = add_active_order(
         user_id=user_id,
@@ -286,8 +286,9 @@ async def test_adjust_order_modal_success(mock_interaction, db_conn):
         limit_price=150.0,
     )
 
-    modal = AdjustOrderModal()
+    modal = EditOrderModal()
     modal.order_id._value = str(order_id)
+    modal.new_side._value = "SELL"
     modal.new_price._value = "145.50"
 
     await modal.on_submit(mock_interaction)
@@ -295,12 +296,13 @@ async def test_adjust_order_modal_success(mock_interaction, db_conn):
     assert mock_interaction.response.defer.called
     assert mock_interaction.followup.send.called
     embed = mock_interaction.followup.send.call_args[1]["embed"]
-    assert "價格微調成功" in embed.title
+    assert "編輯委託單成功" in embed.title
 
-    # 驗證資料庫價格更新
+    # 驗證資料庫價格/方向更新
     orders = get_user_active_orders(user_id)
     assert len(orders) == 1
     assert orders[0]["limit_price"] == 145.50
+    assert orders[0]["side"] == "SELL"
 
 
 @pytest.mark.asyncio
@@ -394,7 +396,7 @@ async def test_telemetry_alert_and_alignment(mock_interaction, db_conn):
 
 @pytest.mark.asyncio
 async def test_order_management_view_buttons(mock_interaction):
-    """測試訂單管理面板的按鈕交互 (取消與快速微調)"""
+    """測試訂單管理面板的按鈕交互 (取消與編輯委託單)"""
     view = OrderManagementView()
 
     # 測試點擊取消委託按鈕
@@ -406,11 +408,11 @@ async def test_order_management_view_buttons(mock_interaction):
     # 重設 mock
     mock_interaction.response.send_modal.reset_mock()
 
-    # 測試點擊快速微調按鈕
+    # 測試點擊編輯委託單按鈕
     await view.adjust_button.callback(mock_interaction)
     assert mock_interaction.response.send_modal.called
     modal_adjust = mock_interaction.response.send_modal.call_args[0][0]
-    assert isinstance(modal_adjust, AdjustOrderModal)
+    assert isinstance(modal_adjust, EditOrderModal)
 
 
 @pytest.mark.asyncio
