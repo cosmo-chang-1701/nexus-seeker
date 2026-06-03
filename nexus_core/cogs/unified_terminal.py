@@ -88,7 +88,10 @@ class SymbolHubView(discord.ui.View):
         embed = None
         try:
             news_task = news_service.fetch_recent_news(self.symbol)
-            reddit_task = reddit_service.get_reddit_context(self.symbol)
+            ctx = database.get_full_user_context(self.user_id)
+            reddit_task = reddit_service.get_reddit_context(
+                self.symbol, enable_tunnel=ctx.enable_local_tunnel
+            )
             news_text, reddit_text = await asyncio.gather(news_task, reddit_task)
             embed = create_media_sentiment_embed(self.symbol, news_text, reddit_text)
         except Exception as e:

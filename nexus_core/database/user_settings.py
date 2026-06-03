@@ -21,6 +21,7 @@ class UserContext:
     option_alert_mode: int = 1  # 期權警報模式: 0=OFF, 1=ALL, 2=PORTFOLIO_ONLY
     enable_vtr: bool = True  # 是否啟用虛擬交易室 (GhostTrader) 自動跟單
     enable_psq_watchlist: bool = False  # 是否對 add_watch 標的執行 PowerSqueeze 追蹤
+    enable_local_tunnel: bool = False  # 是否允許呼叫本地 Tunnel (Edge Scraper)
     enable_analyst_agent: bool = False  # 是否啟用 Wall Street Analyst Agent 每日推播
     polymarket_threshold: float = 10000.0  # Polymarket 巨鯨監控門檻 (USD, 0=關閉)
     polymarket_use_llm: bool = True  # 是否使用 LLM 進行 Polymarket 交易分析
@@ -71,6 +72,7 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:
                 "option_alert_mode",
                 "enable_vtr",
                 "enable_psq_watchlist",
+                "enable_local_tunnel",
                 "enable_analyst_agent",
                 "polymarket_threshold",
                 "polymarket_use_llm",
@@ -173,6 +175,20 @@ def get_all_user_ids():
         return []
 
 
+def any_user_local_tunnel_enabled() -> bool:
+    """是否存在任何使用者啟用本地 Tunnel。用於全域背景任務的呼叫閘門。"""
+    try:
+        with sqlite3.connect(config.DB_NAME) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT 1 FROM user_settings WHERE COALESCE(enable_local_tunnel, 0) = 1 LIMIT 1"
+            )
+            return cursor.fetchone() is not None
+    except Exception as e:
+        logger.error(f"檢查 enable_local_tunnel 失敗: {e}")
+        return False
+
+
 def get_full_user_context(user_id: int) -> UserContext:
     """
     帳戶上下文提供者 (User Context Provider)：
@@ -256,6 +272,7 @@ def get_full_user_context(user_id: int) -> UserContext:
                 option_alert_mode=_get_val("option_alert_mode", 1),
                 enable_vtr=bool(_get_val("enable_vtr", True)),
                 enable_psq_watchlist=bool(_get_val("enable_psq_watchlist", False)),
+                enable_local_tunnel=bool(_get_val("enable_local_tunnel", False)),
                 enable_analyst_agent=bool(_get_val("enable_analyst_agent", False)),
                 polymarket_threshold=_get_val("polymarket_threshold", 10000.0),
                 polymarket_use_llm=bool(_get_val("polymarket_use_llm", True)),

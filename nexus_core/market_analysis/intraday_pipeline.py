@@ -562,19 +562,23 @@ async def evaluate_watchlist_symbol(
         return None
     tactical = WatchlistRiskController.process_metrics(metrics)
 
-    # Consistency Check: if Skew percentile is extreme but PCR stays low, treat as local hedging noise
-    if metrics.skew_percentile >= 90.0 and 0.0 < metrics.pcr <= 0.75:
+    # Structural divergence check (Skew vs PCR extremes)
+    if (metrics.skew_percentile > 85.0 and 0.0 < metrics.pcr < 0.4) or (
+        metrics.skew_percentile < 15.0 and metrics.pcr > 1.5
+    ):
         tactical = WatchlistTacticalPlan(
             scenario="wait",
             sddm_route="WAIT (觀望 / 待機)",
             action_guideline=(
-                "價格仍在防守框架內，維持現貨 $1.00×$ 零槓桿死守，將雙手嚴格離開期權開倉鍵。"
+                "⚠️ WARNING: Structural Sentiment Divergence｜Skew 分位極端但 PCR 指向相反極端，"
+                "可能是機構大幅對沖、散戶追逐買權的結構性分裂。建議停止追價單腿，"
+                "僅允許小倉位收租並搭配保護性 Put/Collar 或使用價差結構。"
             ),
             dynamic_grid_step=tactical.dynamic_grid_step,
             hidden_delta_risk=0.0,
             hedge_instruction=None,
             hedge_allocation_shares=0,
-            alert_level="yellow",
+            alert_level="red",
         )
 
     return WatchlistEvaluation(
@@ -607,8 +611,9 @@ def build_watchlist_skew_commentary_payload(
 
 
 _SKEW_PCR_DIVERGENCE_WARNING = (
-    "[⚠️ 數據警報]: 盤中 Skew 與 PCR 產生幅震背離，可能為單一機構巨鯨執行大宗客製化對沖所致之流動性偏斜，"
-    "不具備全域恐慌指導意義，建議維持現貨觀察。"
+    "[⚠️ WARNING: Structural Sentiment Divergence] Skew 分位極端且 PCR 指向相反極端，"
+    "代表市場結構分裂（常見為機構對沖 vs 散戶追逐買權）。"
+    "此情境不宜解讀為『同步』，建議降槓桿、避免追價單腿，優先採用定義風險的價差/保護性結構。"
 )
 
 
@@ -619,8 +624,10 @@ def build_watchlist_skew_rule_commentary(metrics: EnhancedWatchlistMetrics) -> s
     skew_percentile = float(getattr(metrics, "skew_percentile", 50.0) or 50.0)
     pcr = float(getattr(metrics, "pcr", 0.0) or 0.0)
 
-    # Consistency Check (Skew vs PCR)
-    if skew_percentile >= 90.0 and 0.0 < pcr <= 0.75:
+    # Structural divergence check (Skew vs PCR extremes)
+    if (skew_percentile > 85.0 and 0.0 < pcr < 0.4) or (
+        skew_percentile < 15.0 and pcr > 1.5
+    ):
         return _SKEW_PCR_DIVERGENCE_WARNING
 
     # Rigid skew sign ↔ interpretation mapping

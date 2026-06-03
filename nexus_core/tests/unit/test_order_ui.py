@@ -30,7 +30,7 @@ async def test_active_orders_db_operations(db_conn):
     """測試待成交委託單資料庫 CRUD 運作"""
     user_id = 999999
     symbol = "TSLA"
-    quantity = 50.5
+    quantity = 50
     order_type = "LIMIT"
     validity = "GTC_90"
     limit_price = 185.5
@@ -54,7 +54,7 @@ async def test_active_orders_db_operations(db_conn):
     user_orders = get_user_active_orders(user_id)
     assert len(user_orders) == 1
     assert user_orders[0]["symbol"] == "TSLA"
-    assert user_orders[0]["quantity"] == 50.5
+    assert user_orders[0]["quantity"] == 50
     assert user_orders[0]["limit_price"] == 185.5
 
     # 3. 測試價格微調 (update_active_order_price)
@@ -88,7 +88,7 @@ async def test_calculate_telemetry_pricing_engine():
         skew_percentile=0.5,
     )
     assert price_pain == 120.0  # 100 * (120/100)
-    assert qty_pain == 1.0
+    assert qty_pain == 1
     assert any("最大痛點位移" in log for log in logs_pain)
 
     # 維度二：IV 暴噴工作流 (Pull back 3%)
@@ -103,7 +103,7 @@ async def test_calculate_telemetry_pricing_engine():
         skew_percentile=0.5,
     )
     assert price_spike == 97.0  # 100 * 0.97
-    assert qty_spike == 1.0
+    assert qty_spike == 1
     assert any("IV 暴噴警報" in log for log in logs_spike)
 
     # 維度三：整數心理鐵壁防禦 ($100.5 -> $99.25)
@@ -118,7 +118,7 @@ async def test_calculate_telemetry_pricing_engine():
         skew_percentile=0.5,
     )
     assert price_round == 99.25  # 100 - 0.75
-    assert qty_round == 1.0
+    assert qty_round == 1
     assert any("整數心理大關防禦" in log for log in logs_round)
 
     # 新增測試：極端 Skew 尾部風險與倉位調整聯動 (Dimension 1 Option Flow & Gravity Linkage)
@@ -131,11 +131,11 @@ async def test_calculate_telemetry_pricing_engine():
         max_pain=120.0,
         prev_max_pain=120.0,
         skew_percentile=0.98,  # 觸發極端偏斜
-        base_quantity=100.0,
+        base_quantity=100,
     )
     # spot_price (120.0) 偏近 1.5% -> 因為 spot_price <= price (120.0 == 120.0), 所以 price = 120.0 * 1.015 = 121.8
     assert price_skew == 121.8
-    assert qty_skew == 75.0  # 100.0 * 0.75
+    assert qty_skew == 75  # 100 * 0.75 -> floor
     assert any("偵測到期權偏斜極端尾端風險" in log for log in logs_skew)
 
 
@@ -188,7 +188,7 @@ async def test_dynamic_order_modal_validation_failure_quantity(mock_interaction)
     assert mock_interaction.response.send_message.called
     embed = mock_interaction.response.send_message.call_args[1]["embed"]
     assert "系統錯誤" in embed.title
-    assert "請輸入有效的正數" in embed.description
+    assert "請輸入有效的正整數" in embed.description
 
 
 @pytest.mark.asyncio

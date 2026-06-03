@@ -103,15 +103,15 @@ class DynamicOrderModal(discord.ui.Modal):
         try:
             qty_str = self.quantity.value.strip()
             if "." in qty_str:
-                qty = float(qty_str)
-            else:
-                qty = int(qty_str)
+                raise ValueError("股數必須為整數")
+            qty = int(qty_str)
             if qty <= 0:
                 raise ValueError("數量必須大於 0")
         except Exception:
             await interaction.response.send_message(
                 embed=create_error_embed(
-                    "❌ 錯誤：請輸入有效的正數作為訂單數量。", title="系統錯誤"
+                    "❌ 錯誤：請輸入有效的正整數作為股數（Quantity）。",
+                    title="系統錯誤",
                 ),
                 ephemeral=True,
             )
@@ -205,7 +205,7 @@ class DynamicOrderModal(discord.ui.Modal):
 
         symbol = self.ticker.value.strip().upper()
         telemetry_logs: list[str] = []
-        final_qty = qty
+        final_qty = int(qty)
 
         if auto_telemetry_triggered:
             # 延遲回應，避免查詢 API 時超時
@@ -300,7 +300,8 @@ class DynamicOrderModal(discord.ui.Modal):
             elif self.order_type in ("TRAILING_STOP_USD", "TRAILING_STOP_PCT"):
                 trailing_val = resolved_price
 
-            final_qty = resolved_qty
+            final_qty = int(resolved_qty)
+            final_qty = max(1, final_qty)
 
         # 3. 寫入資料庫
         try:
@@ -341,7 +342,7 @@ class DynamicOrderModal(discord.ui.Modal):
                 f"• **標的**: `{symbol}`\n"
                 f"• **類型**: `{order_type_zh}`\n"
                 f"• **方向**: `{side_zh}`\n"
-                f"• **數量**: `{final_qty}`\n"
+                f"• **數量**: `{int(final_qty)}`\n"
                 f"• **有效期限**: `{validity_zh}`\n"
             )
             if self.order_type in ("LIMIT", "STOP_LIMIT"):
@@ -669,7 +670,8 @@ class ApplyTelemetryView(discord.ui.View):
                     else order["trailing_value"]
                 )
             )
-            original_qty = float(order.get("quantity") or 1.0)
+            original_qty = int(round(float(order.get("quantity") or 1.0)))
+            original_qty = max(1, original_qty)
 
             # 模擬盤中行情遙測參數：若 skew_percentile 觸發極端，則會調整數量為 75%
             # 我們在這裡模擬 skew_percentile 為 0.98，以便在模擬過程中能觸發並展示此機制
@@ -686,12 +688,15 @@ class ApplyTelemetryView(discord.ui.View):
                 base_quantity=original_qty,
             )
 
-            if optimal_price != current_price or optimal_qty != original_qty:
-                update_active_order_price(order["id"], optimal_price, optimal_qty)
+            if (
+                abs(optimal_price - current_price) >= 0.01
+                or optimal_qty != original_qty
+            ):
+                update_active_order_price(order["id"], optimal_price, int(optimal_qty))
                 updated_count += 1
                 qty_change_msg = ""
                 if optimal_qty < original_qty:
-                    qty_change_msg = f" (數量自 {original_qty} 調降至 {optimal_qty:.2f} 股 [⚠️ 尾端風險防禦])"
+                    qty_change_msg = f" (數量自 {original_qty} 調降至 {int(optimal_qty)} 股 [⚠️ 尾端風險防禦])"
                 details.append(
                     f"• **委託單 ID `{order['id']}` ({symbol})**:\n"
                     f"  - 原有價格: `${current_price:.2f}`\n"
@@ -1098,7 +1103,8 @@ class OrderUICog(commands.Cog):
                 if o["limit_price"] > 0
                 else (o["stop_price"] if o["stop_price"] > 0 else o["trailing_value"])
             )
-            original_qty = float(o.get("quantity") or 1.0)
+            original_qty = int(round(float(o.get("quantity") or 1.0)))
+            original_qty = max(1, original_qty)
 
             # 使用模擬的極端偏斜百分比 (0.98) 調用定價引擎，驗證價格與數量雙向調整
             suggested_price, suggested_qty, logs = await calculate_telemetry_price(
@@ -1192,10 +1198,12 @@ class OrderUICog(commands.Cog):
     ):
         await interaction.response.defer(ephemeral=True)
 
-        # 1. 驗證數量
-        if quantity <= 0:
+        # 1. 驗證數量（股數只能是整數）
+        if quantity <= 0 or (isinstance(quantity, float) and not quantity.is_integer()):
             await interaction.followup.send(
-                embed=create_error_embed("❌ 錯誤：請輸入有效的正數作為訂單數量。"),
+                embed=create_error_embed(
+                    "❌ 錯誤：請輸入有效的正整數作為股數（Quantity）。"
+                ),
                 ephemeral=True,
             )
             return
@@ -1207,7 +1215,8 @@ class OrderUICog(commands.Cog):
         auto_telemetry_triggered = price <= 0.0
         symbol = symbol.strip().upper()
         telemetry_logs: list[str] = []
-        final_qty = quantity
+        quantity_int = max(1, int(quantity))
+        final_qty = quantity_int
 
         if auto_telemetry_triggered:
             from services import market_data_service
@@ -1300,7 +1309,8 @@ class OrderUICog(commands.Cog):
             elif order_type in ("TRAILING_STOP_USD", "TRAILING_STOP_PCT"):
                 trailing_val = resolved_price
 
-            final_qty = resolved_qty
+            final_qty = int(resolved_qty)
+            final_qty = max(1, final_qty)
 
         else:
             # 手動輸入價格映射
@@ -1353,7 +1363,7 @@ class OrderUICog(commands.Cog):
                 f"• **標的**: `{symbol}`\n"
                 f"• **類型**: `{order_type_zh}`\n"
                 f"• **方向**: `{side_zh}`\n"
-                f"• **數量**: `{final_qty}`\n"
+                f"• **數量**: `{int(final_qty)}`\n"
                 f"• **有效期限**: `{validity_zh}`\n"
             )
             if order_type in ("LIMIT", "STOP_LIMIT"):

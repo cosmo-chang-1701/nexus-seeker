@@ -411,7 +411,10 @@ class SentimentEngine:
                 raise ValueError(f"無法取得 {symbol} 的現價，無法計算預期震盪區間")
 
             # 2. 獲取當前 IV
-            current_iv = None
+            current_iv: float | None = None
+            iv_source: Literal["LIVE_IV", "STORED_IV", "HV_PROXY", "UNAVAILABLE"] = (
+                "UNAVAILABLE"
+            )
             is_market_active = is_market_open()
 
             # 盤前優先嘗試取得前一交易日存入的 IV (歷史最近一筆紀錄)
@@ -419,8 +422,9 @@ class SentimentEngine:
                 last_db_iv = SentimentEngine.get_last_stored_iv(symbol)
                 if last_db_iv and last_db_iv > 0:
                     current_iv = last_db_iv
+                    iv_source = "STORED_IV"
                     logger.info(
-                        f"[{symbol}] 偵測為非交易時段，優先採用前日收盤歷史 IV 代理: {current_iv}"
+                        f"[{symbol}] 偵測為非交易時段，優先採用前日收盤 SQLite 歷史 IV: {current_iv}"
                     )
 
             if not current_iv or current_iv <= 0:
@@ -428,6 +432,8 @@ class SentimentEngine:
                 try:
                     info = await asyncio.to_thread(lambda: ticker.info)
                     current_iv = info.get("impliedVolatility")
+                    if current_iv and current_iv > 0:
+                        iv_source = "LIVE_IV" if is_market_active else "STORED_IV"
                 except Exception as e:
                     logger.warning(f"[{symbol}] yfinance ticker.info 獲取異常: {e}")
 
@@ -473,6 +479,9 @@ class SentimentEngine:
                                         sum(iv * w for iv, w in all_options)
                                         / total_weight
                                     )
+                                    iv_source = (
+                                        "LIVE_IV" if is_market_active else "STORED_IV"
+                                    )
                                     logger.info(
                                         f"[{symbol}] VIX-style weighted average IV computed: {current_iv:.4f} "
                                         f"across {len(all_options)} liquid contracts."
@@ -485,10 +494,11 @@ class SentimentEngine:
             if not current_iv or current_iv <= 0:
                 # Fallback to DB or historical volatility (HV)
                 last_db_iv = SentimentEngine.get_last_stored_iv(symbol)
-                if last_db_iv:
+                if last_db_iv and last_db_iv > 0:
                     current_iv = last_db_iv
+                    iv_source = "STORED_IV"
                 else:
-                    # Fallback to 30-day historical volatility
+                    # Fallback to 30-day historical volatility (HV proxy)
                     df_temp = await market_data_service.get_history_df(
                         symbol, period="1mo"
                     )
@@ -497,6 +507,7 @@ class SentimentEngine:
                             df_temp["Close"] / df_temp["Close"].shift(1)
                         )
                         current_iv = float(df_temp["Log_Ret"].std() * np.sqrt(252))
+                        iv_source = "HV_PROXY"
                     else:
                         raise ValueError(
                             f"無法獲取 {symbol} 的 IV，且歷史波動率數據不足"
@@ -592,6 +603,7 @@ class SentimentEngine:
                 expected_move_weekly=expected_move_weekly,
                 iv_status=iv_status,
                 is_premarket=not is_market_active,
+                iv_source=iv_source,
             )
 
             # 12. 寫入快取
@@ -608,6 +620,7 @@ class SentimentEngine:
                 expected_move_weekly=0.0,
                 iv_status="Normal",
                 is_premarket=True,
+                iv_source="UNAVAILABLE",
             )
         except Exception as e:
             logger.error(f"[{symbol}] IV 指標計算失敗: {e}")
@@ -620,4 +633,5 @@ class SentimentEngine:
                 expected_move_weekly=0.0,
                 iv_status="Normal",
                 is_premarket=True,
+                iv_source="UNAVAILABLE",
             )

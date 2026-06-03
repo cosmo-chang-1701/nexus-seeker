@@ -92,6 +92,12 @@ class SchedulerCog(commands.Cog):
         """08:30：每日更新 Reddit 散戶情緒快取 (低頻率任務)"""
         if not getattr(self.bot, "_is_leader_instance", True):
             return
+        if not database.any_user_local_tunnel_enabled():
+            logger.info(
+                "🕸️ [Daily Update] 本地 Tunnel 已關閉（無任何使用者啟用），跳過 Reddit 情緒快取更新。"
+            )
+            return
+
         logger.info("🕸️ [Daily Update] 開始非同步抓取 Reddit 情緒快取...")
         all_watchlists = database.get_all_watchlist()
         symbols = sorted(list(set(row[1] for row in all_watchlists)))
@@ -215,7 +221,8 @@ class SchedulerCog(commands.Cog):
                 if current_price <= 0:
                     continue
 
-                original_qty = float(o.get("quantity") or 1.0)
+                original_qty = int(round(float(o.get("quantity") or 1.0)))
+                original_qty = max(1, original_qty)
 
                 q = quotes.get(sym, {})
                 spot_price = float(q.get("c") or 0) or current_price
@@ -242,7 +249,7 @@ class SchedulerCog(commands.Cog):
                 # 只有在價格或數量真的需要調整時才推播，避免每 30 分鐘噪音轟炸
                 if (
                     abs(suggested_price - current_price) < 0.01
-                    and abs(suggested_qty - original_qty) < 0.01
+                    and suggested_qty == original_qty
                 ):
                     continue
 

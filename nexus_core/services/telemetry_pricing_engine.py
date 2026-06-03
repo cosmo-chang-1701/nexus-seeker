@@ -15,8 +15,8 @@ async def calculate_telemetry_price(
     skew_percentile: float,
     days_to_expiration: float = 7.0,
     prev_close: float = 0.0,
-    base_quantity: float = 1.0,
-) -> tuple[float, float, list[str]]:
+    base_quantity: float | int = 1,
+) -> tuple[float, int, list[str]]:
     """
     計算最佳「左側現股捕獸夾」遙測訂價，並將倉位控管動態連結至極端期權流指標。
     回傳: (最佳價格, 最佳股數, 決策日誌列表)
@@ -91,12 +91,11 @@ async def calculate_telemetry_price(
             )
             break
 
-    # 計算最終股數，確保數量不小於 1
-    final_quantity = max(
-        1.0 if isinstance(base_quantity, float) else 1,
-        base_quantity * sizing_multiplier,
-    )
-    if isinstance(base_quantity, int):
-        final_quantity = int(final_quantity)
+    # 計算最終股數：股數只能是整數，且不得小於 1
+    base_qty_int = int(round(float(base_quantity or 1)))
+    base_qty_int = max(1, base_qty_int)
+
+    final_quantity = int(math.floor(base_qty_int * sizing_multiplier))
+    final_quantity = max(1, final_quantity)
 
     return round(price, 2), final_quantity, logs

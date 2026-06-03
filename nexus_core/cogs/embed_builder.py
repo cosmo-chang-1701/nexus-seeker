@@ -1097,6 +1097,7 @@ def create_sentiment_scan_embed(
     """建立期權情緒掃描報告 Embed (繁體中文)"""
     title_suffix = ""
     is_premarket = False
+    iv_source = None
     if iv_data:
         if hasattr(iv_data, "is_premarket"):
             is_premarket = iv_data.is_premarket
@@ -1108,9 +1109,26 @@ def create_sentiment_scan_embed(
             if hasattr(iv_data, "current_iv")
             else iv_data.get("current_iv", 0.0)
         )
+
+        iv_source = (
+            iv_data.iv_source
+            if hasattr(iv_data, "iv_source")
+            else (iv_data.get("iv_source") if isinstance(iv_data, dict) else None)
+        )
+
+        if iv_source is None:
+            if is_premarket and current_iv_val > 0.0:
+                iv_source = "STORED_IV"
+            elif current_iv_val > 0.0:
+                iv_source = "LIVE_IV"
+            else:
+                iv_source = "UNAVAILABLE"
+
         if is_premarket:
             if current_iv_val > 0.0:
-                title_suffix = " [盤前/前日收盤]"
+                title_suffix = (
+                    " [盤前/HV代理]" if iv_source == "HV_PROXY" else " [盤前/前日收盤]"
+                )
             else:
                 title_suffix = " [盤前數據未更新]"
 
@@ -1156,29 +1174,47 @@ def create_sentiment_scan_embed(
                 "```",
             ]
         elif is_premarket:
+            # IV/HV definition safety: never label HV as IV.
+            if iv_source == "HV_PROXY":
+                vol_title = "Historical Volatility (HV, 30D)"
+                vol_note = "30D 歷史實現波動率代理（期權未開市/IV 不可用）"
+                em_note = "基於 30D HV 代理估算"
+            else:
+                vol_title = "Implied Volatility (IV)"
+                vol_note = "前日收盤 IV / SQLite 快取（期權未開市）"
+                em_note = "基於前日收盤 IV 計算"
+
             iv_lines = [
                 "```ansi",
                 f" 🌌 {symbol} 期權情緒掃描 (Sentiment Scan)",
                 " ----------------------------------",
-                " Implied Volatility (IV)",
-                f" └─ 值: {current_iv * 100:.1f}% (前日收盤 / 歷史波動率代理)",
+                vol_title,
+                f" └─ 值: {current_iv * 100:.1f}% ({vol_note})",
                 " IV Rank / IV Percentile",
                 f" └─ IV Rank: {iv_rank:.1f}% | IV Percentile: {iv_percentile:.1f}% (狀態: {status_tw})",
                 " Expected Move (預期震盪區間)",
-                f" └─ 本週預期: ±${expected_move_weekly:.2f} (基於前收/HV計算)",
+                f" └─ 本週預期: ±${expected_move_weekly:.2f} ({em_note})",
                 "```",
             ]
         else:
+            vol_note = (
+                "當前 30 天平值期權隱含波動率"
+                if iv_source != "STORED_IV"
+                else "SQLite 快取 IV（非即時）"
+            )
+            em_note = (
+                "基於當前 IV 計算" if iv_source != "STORED_IV" else "基於快取 IV 計算"
+            )
             iv_lines = [
                 "```ansi",
                 f" 🌌 {symbol} 期權情緒掃描 (Sentiment Scan)",
                 " ----------------------------------",
                 " Implied Volatility (IV)",
-                f" └─ 值: {current_iv * 100:.1f}% (當前 30 天平值期權隱含波動率)",
+                f" └─ 值: {current_iv * 100:.1f}% ({vol_note})",
                 " IV Rank / IV Percentile",
                 f" └─ IV Rank: {iv_rank:.1f}% | IV Percentile: {iv_percentile:.1f}% (狀態: {status_tw})",
                 " Expected Move (預期震盪區間)",
-                f" └─ 本週預期: ±${expected_move_weekly:.2f} (基於當前 IV 計算)",
+                f" └─ 本週預期: ±${expected_move_weekly:.2f} ({em_note})",
                 "```",
             ]
         embed.add_field(
@@ -2420,6 +2456,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     iv_data = data.get("iv_data")
     title_suffix = ""
     is_premarket = False
+    iv_source = None
     if iv_data:
         if hasattr(iv_data, "is_premarket"):
             is_premarket = iv_data.is_premarket
@@ -2431,9 +2468,19 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             if hasattr(iv_data, "current_iv")
             else iv_data.get("current_iv", 0.0)
         )
+        iv_source = (
+            iv_data.iv_source
+            if hasattr(iv_data, "iv_source")
+            else (iv_data.get("iv_source") if isinstance(iv_data, dict) else None)
+        )
+        if iv_source is None and is_premarket and current_iv_val > 0.0:
+            iv_source = "STORED_IV"
+
         if is_premarket:
             if current_iv_val > 0.0:
-                title_suffix = " [盤前/前日收盤]"
+                title_suffix = (
+                    " [盤前/HV代理]" if iv_source == "HV_PROXY" else " [盤前/前日收盤]"
+                )
             else:
                 title_suffix = " [盤前數據未更新]"
 
@@ -2483,9 +2530,38 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     poly_odds = data.get("polymarket_odds", "N/A")
     reddit_score = data.get("reddit_sentiment_score", "中性")
 
+    pcr_data_for_div = data.get("pcr", {}) or {}
+    pcr_val_for_div = float(pcr_data_for_div.get("pcr", 0.0) or 0.0)
+
+    # Divergence Check Engine (Skew vs PCR consistency + spot move)
+    is_structural_divergence = False
+    divergence_level = ""
+
+    if skew_percentile > 85.0 and 0.0 < pcr_val_for_div < 0.4:
+        # Severe structural divergence: whales hedge aggressively while retail buys calls.
+        is_structural_divergence = True
+        divergence_level = "High Divergence"
+    elif skew_percentile < 15.0 and pcr_val_for_div > 1.5:
+        # Opposite extreme: calls expensive while put-volume spikes.
+        is_structural_divergence = True
+        divergence_level = "High Divergence"
+    elif dp_val > 0.0 and skew_percentile > 90.0:
+        # Spot rising while downside protection cost stays extreme -> warn even without PCR clarity.
+        is_structural_divergence = True
+        divergence_level = "Warning"
+
     divergence = "同步"
     action = "保持觀察"
-    if skew_percentile > 80 and (
+
+    if is_structural_divergence:
+        divergence = "⚠️ WARNING: Structural Sentiment Divergence"
+        if divergence_level == "High Divergence":
+            action = (
+                "High Divergence：避免追價買權；僅允許小倉位收租並搭配保護性 Put/Collar"
+            )
+        else:
+            action = "留意結構性背離：建議降槓桿、以保護性結構防禦"
+    elif skew_percentile > 80 and (
         "樂觀" in str(reddit_score)
         or "🚀" in str(reddit_score)
         or "Bullish" in str(reddit_score)
@@ -2578,25 +2654,42 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 "```",
             ]
         elif is_premarket:
+            if iv_source == "HV_PROXY":
+                vol_title = "Historical Volatility (HV, 30D)"
+                vol_note = "30D 歷史實現波動率代理（期權未開市/IV 不可用）"
+                em_note = "基於 30D HV 代理估算"
+            else:
+                vol_title = "Implied Volatility (IV)"
+                vol_note = "前日收盤 IV / SQLite 快取（期權未開市）"
+                em_note = "基於前日收盤 IV 計算"
+
             iv_lines = [
                 "```ansi",
-                " Implied Volatility (IV)",
-                f" └─ 值: {current_iv * 100:.1f}% (前日收盤 / 歷史波動率代理)",
+                vol_title,
+                f" └─ 值: {current_iv * 100:.1f}% ({vol_note})",
                 " IV Rank / IV Percentile",
                 f" └─ IV Rank: {iv_rank:.1f}% | IV Percentile: {iv_percentile:.1f}% (狀態: {status_tw})",
                 " Expected Move (預期區間)",
-                f" └─ 本週預期: ±${expected_move_weekly:.2f} (基於前收/HV計算)",
+                f" └─ 本週預期: ±${expected_move_weekly:.2f} ({em_note})",
                 "```",
             ]
         else:
+            vol_note = (
+                "當前 30 天平值期權隱含波動率"
+                if iv_source != "STORED_IV"
+                else "SQLite 快取 IV（非即時）"
+            )
+            em_note = (
+                "基於當前 IV 計算" if iv_source != "STORED_IV" else "基於快取 IV 計算"
+            )
             iv_lines = [
                 "```ansi",
                 " Implied Volatility (IV)",
-                f" └─ 值: {current_iv * 100:.1f}% (當前 30 天平值期權隱含波動率)",
+                f" └─ 值: {current_iv * 100:.1f}% ({vol_note})",
                 " IV Rank / IV Percentile",
                 f" └─ IV Rank: {iv_rank:.1f}% | IV Percentile: {iv_percentile:.1f}% (狀態: {status_tw})",
                 " Expected Move (預期區間)",
-                f" └─ 本週預期: ±${expected_move_weekly:.2f} (基於當前 IV 計算)",
+                f" └─ 本週預期: ±${expected_move_weekly:.2f} ({em_note})",
                 "```",
             ]
         embed.add_field(
@@ -2637,6 +2730,20 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     else:
         scenario = "目前價差適中，依技術指標操作為主。"
         scen_color = "\u001b[1;36m"
+
+    # Overlay: Structural divergence + high-IV environment should override neutral guidance.
+    scenario_overlays: list[str] = []
+    if is_structural_divergence:
+        scenario_overlays.append(
+            "⚠️ 結構性情緒背離：Skew 避險分位極端，且 PCR 落在相反極端，請以防守為主。"
+        )
+    if ivr >= 90.0:
+        scenario_overlays.append(
+            "⚠️ IV Rank 極高：避免追價單腿多方；優先定義風險的價差/保護性結構，並縮小口數。"
+        )
+    if scenario_overlays:
+        scenario = f"{scenario} " + " ".join(scenario_overlays)
+        scen_color = "\u001b[1;31m" if is_structural_divergence else "\u001b[1;33m"
 
     dist_color = "\u001b[1;31m" if abs(distance) > 5.0 else "\u001b[1;32m"
 
@@ -4805,9 +4912,9 @@ def _build_telemetry_alignment_ansi_card(item: Dict[str, Any]) -> str:
     """建構 Telemetry 對齊卡片 (ANSI)，版面參照待成交委託單列表卡片。"""
     sym = str(item.get("symbol") or "").upper()
     curr_p = float(item.get("current_price") or 0)
-    orig_q = float(item.get("original_qty") or 0)
+    orig_q = int(round(float(item.get("original_qty") or 0)))
     sugg_p = float(item.get("suggested_price") or 0)
-    sugg_q = float(item.get("suggested_qty") or 0)
+    sugg_q = int(round(float(item.get("suggested_qty") or 0)))
     is_size_down = bool(item.get("is_size_down"))
 
     ansi_lines = ["```ansi"]
@@ -4818,12 +4925,12 @@ def _build_telemetry_alignment_ansi_card(item: Dict[str, Any]) -> str:
     )
     ansi_lines.append(" ----------------------------------")
     ansi_lines.append(
-        f"  ├─ 當前掛單價格: \u001b[1;37m${curr_p:.2f}\u001b[0m (數量: \u001b[1;37m{orig_q:.1f}\u001b[0m 股)"
+        f"  ├─ 當前掛單價格: \u001b[1;37m${curr_p:.2f}\u001b[0m (數量: \u001b[1;37m{orig_q}\u001b[0m 股)"
     )
 
     sugg_price_color = "\u001b[1;32m" if abs(sugg_p - curr_p) < 0.01 else "\u001b[1;33m"
     ansi_lines.append(
-        f"  ├─ 遙測建議防線: {sugg_price_color}${sugg_p:.2f}\u001b[0m (數量: \u001b[1;37m{sugg_q:.1f}\u001b[0m 股)"
+        f"  ├─ 遙測建議防線: {sugg_price_color}${sugg_p:.2f}\u001b[0m (數量: \u001b[1;37m{sugg_q}\u001b[0m 股)"
     )
 
     if is_size_down:
