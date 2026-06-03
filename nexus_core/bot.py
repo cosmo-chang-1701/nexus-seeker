@@ -110,6 +110,7 @@ class NexusBot(commands.Bot):
         # 仍然保留一個訊號訊號量，用於喚醒工人
         self.message_signal = asyncio.Event()
         self._has_notified_ready = False
+        self._has_broadcast_startup_notice = False
         self._is_closing = False
         self._setup_done = False
 
@@ -257,6 +258,7 @@ class NexusBot(commands.Bot):
 
             # 核心改進：將啟動通知改為背景任務，避免阻塞 on_ready
             logger.info("正在準備背景啟動通知...")
+            self._has_broadcast_startup_notice = True
             asyncio.create_task(self.notify_all_users("🚀 Nexus Seeker 機器人已啟動！"))
 
         logger.info("✅ on_ready 流程處理完畢，機器人進入運行狀態。")
@@ -371,6 +373,16 @@ class NexusBot(commands.Bot):
                         )
                         self._start_leader_services()
                         self.message_signal.set()
+
+                        # follower → leader：補發啟動通知（每個實例生命週期僅一次）
+                        if (
+                            not self._is_closing
+                            and not self._has_broadcast_startup_notice
+                        ):
+                            self._has_broadcast_startup_notice = True
+                            asyncio.create_task(
+                                self.notify_all_users("🚀 Nexus Seeker 機器人已啟動！")
+                            )
                     else:
                         logger.warning(
                             f"🔴 Leader lost: instance_id={self.instance_id} (blue/green demote)"
