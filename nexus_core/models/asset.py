@@ -10,6 +10,12 @@ class ContextType(str, Enum):
     HOLDING = "HOLDING"
 
 
+class HoldingType(str, Enum):
+    PURE_STOCK_100X = "PURE_STOCK_100X"
+    LEVERAGED_MARGIN = "LEVERAGED_MARGIN"
+    COMPLEX_OPTIONS = "COMPLEX_OPTIONS"
+
+
 class WatchMetadata(BaseModel):
     model_config = ConfigDict()
     use_llm: bool = True

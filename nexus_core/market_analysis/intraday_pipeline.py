@@ -618,11 +618,30 @@ _SKEW_PCR_DIVERGENCE_WARNING = (
 
 
 def build_watchlist_skew_rule_commentary(metrics: EnhancedWatchlistMetrics) -> str:
-    """Deterministic skew diagnostics (no LLM)."""
+    """Deterministic skew diagnostics (no LLM).
+
+    SDD changes:
+    - Suppress standard warnings when skew percentile within [30, 70]
+    - Only route on absolute tail anomalies per spec
+    """
 
     skew_val = float(getattr(metrics, "option_skew", 0.0) or 0.0)
     skew_percentile = float(getattr(metrics, "skew_percentile", 50.0) or 50.0)
     pcr = float(getattr(metrics, "pcr", 0.0) or 0.0)
+    iv_rank = float(getattr(metrics, "iv_rank", 0.0) or 0.0)
+
+    # High-pass filter: suppress normal-range noise
+    if 30.0 <= skew_percentile <= 70.0:
+        return "Skew 分位屬常態 (30-70%)，已抑制警報。"
+
+    # Absolute tail-risk routes
+    # Left-Tail Explosion (Put Panic)
+    if skew_percentile > 90.0 and iv_rank > 70.0:
+        return "[IV 火山爆發 ── 收租主動路由] 市場呈現左尾極端避險，建議優先收租/定義風險的 Premium Extraction。"
+
+    # Right-Tail Mania (Call FOMO)
+    if pcr < 0.35:
+        return "[FOMO 情緒泡沫 ── 靜默防守路由] 檢測到極端追漲行為，強烈封鎖單腿長權利金追價。"
 
     # Structural divergence check (Skew vs PCR extremes)
     if (skew_percentile > 85.0 and 0.0 < pcr < 0.4) or (

@@ -73,6 +73,9 @@ def _format_single(label: str, value: str, *, color: str = "") -> str:
 def generate_ansi_watchlist_report(
     metrics: EnhancedWatchlistMetrics,
     tactical: Mapping[str, object] | WatchlistTacticalPlan,
+    *,
+    system_status: str | None = None,
+    order_radar: list | None = None,
 ) -> str:
     tactical_model = (
         tactical
@@ -173,6 +176,31 @@ def generate_ansi_watchlist_report(
         lines.append(f" └─ 執行指南: {route_color}{instruction_lines[0]}{C_RESET}")
         for extra_line in instruction_lines[1:]:
             lines.append(f"              {route_color}{extra_line}{C_RESET}")
+
+    # Optional: Sovereign System Status
+    if system_status:
+        lines.append(" ----------------------------------")
+        lines.append(" ⚙️ 【最高主權指令 (Sovereign Command)】")
+        lines.append(f" └─ 狀態: {system_status}")
+        lines.append(f" └─ 指引: {tactical_model.action_guideline}")
+
+    # Optional: Order Radar
+    if order_radar:
+        lines.append(" ----------------------------------")
+        lines.append(" ⚔️ 【捕獸夾雷達 (Order Radar)】")
+        for o in order_radar:
+            try:
+                oid = o.get("order_id")
+                tck = o.get("ticker")
+                lp = float(o.get("limit_price") or 0.0)
+                vol = int(o.get("shares") or 0)
+                prox = float(o.get("proximity_pct") or 0.0)
+                status = o.get("radar_status") or ""
+            except Exception:
+                continue
+            lines.append(
+                f" ├─ ID {oid} ({tck} 買入限價 ${lp:.2f} / {vol}股) ── 距離成交差: {prox:.2f}% [{status}]"
+            )
 
     lines.append("```")
     return "\n".join(lines)
