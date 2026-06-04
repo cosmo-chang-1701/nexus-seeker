@@ -912,8 +912,72 @@ class SchedulerCog(commands.Cog):
                         holding_pnl_pct = (
                             evaluation.metrics.current_price - holding_avg_cost
                         ) / holding_avg_cost
+                # Build Order Radar from user's active orders
+                user_active_orders = database.get_user_active_orders(uid)
+                order_radar: list[dict] = []
+                for ord_row in user_active_orders:
+                    try:
+                        if str(ord_row.get("symbol", "")).upper() != sym.upper():
+                            continue
+                        limit_price = float(ord_row.get("limit_price") or 0.0)
+                        shares = float(ord_row.get("quantity") or 0.0)
+                        proximity = (
+                            abs(evaluation.metrics.current_price - limit_price)
+                            / evaluation.metrics.current_price
+                            * 100.0
+                            if limit_price > 0
+                            else 999.0
+                        )
+                        radar_status = "[雷達鎖定中]" if proximity <= 2.0 else ""
+                        order_radar.append(
+                            {
+                                "order_id": ord_row.get("id"),
+                                "ticker": ord_row.get("symbol"),
+                                "limit_price": limit_price,
+                                "shares": shares,
+                                "proximity_pct": round(proximity, 2),
+                                "radar_status": radar_status,
+                            }
+                        )
+                    except Exception:
+                        continue
+
+                # Determine holding type heuristically (on-the-fly)
+                trades = database.get_user_portfolio(uid)
+                holdings = database.get_user_holdings(uid)
+                if (not trades) and holdings:
+                    holding_type = "PURE_STOCK_100X"
+                elif any((t[2] is not None) for t in trades):
+                    holding_type = "COMPLEX_OPTIONS"
+                else:
+                    holding_type = "LEVERAGED_MARGIN"
+
+                system_status = None
+                # Apply sovereign gating for PURE_STOCK_100X: suppress panic directives
+                if holding_type == "PURE_STOCK_100X":
+                    system_status = "SYSTEM LOCK / STEEL FORTRESS"
+                    try:
+                        sddm_route = str(evaluation.tactical.sddm_route).upper()
+                    except Exception:
+                        sddm_route = ""
+                    if (
+                        evaluation.tactical.scenario == "hard-hedge"
+                        or "HEDGE" in sddm_route
+                        or "LIQUIDATE" in sddm_route
+                    ):
+                        # Downgrade to passive wait state
+                        evaluation.tactical.scenario = "wait"
+                        evaluation.tactical.sddm_route = system_status
+                        evaluation.tactical.action_guideline = (
+                            "持股為純現貨，已鎖定系統保護，抑制強制避險。"
+                        )
+
+                # Generate the ANSI report with optional radar & system status
                 report_body = generate_ansi_watchlist_report(
-                    evaluation.metrics, evaluation.tactical
+                    evaluation.metrics,
+                    evaluation.tactical,
+                    system_status=system_status,
+                    order_radar=order_radar,
                 )
 
                 # 計算動態買賣現貨與對齊期權操作建議
