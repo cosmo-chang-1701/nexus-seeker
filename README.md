@@ -6,7 +6,7 @@
 
 Nexus Seeker 是一個 **Discord-first 的選擇權風控與交易營運平台**：把 watchlist 半小時心跳、期權結構判讀、事件風險防禦、委託單管理與 LLM 輔助解讀，收斂成一套可長期運行、可主動推播、適合實盤節奏的工作流。
 
-> 核心版本（nexus_core）：**v1.6.84**
+> 核心版本（nexus_core）：**v1.6.85**
 
 ---
 
@@ -151,7 +151,7 @@ Edge API 預設在 `:8000`。若你使用 Cloudflare Tunnel，請把 **公開的
 - **/market**：市場情報中心（事件日曆與市場狀態）
 - **/skew_scan**：期權偏斜/IV/PCR/UOA/Max Pain 掃描
 - **/order_panel**：委託單面板（動態 Modal 建單）
-- **/list_orders**：列出活躍委託單 + 取消/編輯互動
+- **/list_orders**：列出活躍委託單（支援標的篩選：symbol） + 取消/編輯互動
 - **/telemetry_alert**：遙測偏離對齊（模擬/提示用）
 
 ---
