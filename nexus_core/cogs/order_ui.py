@@ -641,7 +641,7 @@ class ApplyTelemetryView(discord.ui.View):
     async def apply_telemetry_button(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ):
-        from services.telemetry_pricing_engine import calculate_telemetry_price
+        from market_analysis.telemetry_pricing_engine import generate_alignment_decision
 
         # 延遲回覆以防計算超時
         await interaction.response.defer(ephemeral=True)
@@ -673,20 +673,29 @@ class ApplyTelemetryView(discord.ui.View):
             original_qty = int(round(float(order.get("quantity") or 1.0)))
             original_qty = max(1, original_qty)
 
-            # 模擬盤中行情遙測參數：若 skew_percentile 觸發極端，則會調整數量為 75%
-            # 我們在這裡模擬 skew_percentile 為 0.98，以便在模擬過程中能觸發並展示此機制
-            optimal_price, optimal_qty, logs = await calculate_telemetry_price(
+            # 模擬盤中行情遙測參數（價格下修仍允許；但 PRICE_UP 會經過四大風控模組）
+            decision = await generate_alignment_decision(
+                user_id=interaction.user.id,
+                order_id=int(order["id"]),
                 symbol=symbol,
-                base_price=current_price,
-                spot_price=current_price * 1.02,
+                current_order_price=float(current_price),
+                spot_price=float(current_price) * 1.02,
+                original_qty=original_qty,
                 iv=0.55,
                 hist_iv=0.35,
-                max_pain=100.0,
+                iv_rank=0.50,
+                max_pain_price=100.0,
                 prev_max_pain=100.0,
-                skew_percentile=0.98,  # 觸發極端偏斜以展示倉位控管連結
-                prev_close=current_price,
-                base_quantity=original_qty,
+                skew_percentile=0.98,
+                put_call_ratio=1.0,
+                prev_close=float(current_price),
             )
+
+            if decision is None:
+                continue
+
+            optimal_price = float(decision.suggested_price)
+            optimal_qty = int(decision.suggested_qty)
 
             if (
                 abs(optimal_price - current_price) >= 0.01
@@ -1088,8 +1097,8 @@ class OrderUICog(commands.Cog):
             )
             return
 
-        # 模擬情境：市場極端 Skew 尾部風險，原有的掛單與預期波動率 (Expected Move) 下限偏離
-        from services.telemetry_pricing_engine import calculate_telemetry_price
+        # 模擬情境：市場極端 Skew 尾部風險（PRICE_UP 會經過四大風控模組）
+        from market_analysis.telemetry_pricing_engine import generate_alignment_decision
         from cogs.embed_builder import create_telemetry_alignment_embeds
 
         from typing import List, Dict, Any
@@ -1123,19 +1132,28 @@ class OrderUICog(commands.Cog):
             original_qty = int(round(float(o.get("quantity") or 1.0)))
             original_qty = max(1, original_qty)
 
-            # 使用模擬的極端偏斜百分比 (0.98) 調用定價引擎，驗證價格與數量雙向調整
-            suggested_price, suggested_qty, logs = await calculate_telemetry_price(
-                symbol=o["symbol"],
-                base_price=current_price,
-                spot_price=current_price * 1.02,
+            decision = await generate_alignment_decision(
+                user_id=interaction.user.id,
+                order_id=int(o["id"]),
+                symbol=str(o["symbol"]),
+                current_order_price=float(current_price),
+                spot_price=float(current_price) * 1.02,
+                original_qty=original_qty,
                 iv=0.55,
                 hist_iv=0.35,
-                max_pain=100.0,
+                iv_rank=0.50,
+                max_pain_price=100.0,
                 prev_max_pain=100.0,
-                skew_percentile=0.98,  # 觸發極端偏斜
-                prev_close=current_price,
-                base_quantity=original_qty,
+                skew_percentile=0.98,
+                put_call_ratio=1.0,
+                prev_close=float(current_price),
             )
+
+            if decision is None:
+                continue
+
+            suggested_price = float(decision.suggested_price)
+            suggested_qty = int(decision.suggested_qty)
 
             is_size_down = suggested_qty < original_qty
 
@@ -1155,6 +1173,7 @@ class OrderUICog(commands.Cog):
                     "suggested_price": suggested_price,
                     "suggested_qty": suggested_qty,
                     "is_size_down": is_size_down,
+                    "alert_text": getattr(decision, "alert_text", None),
                 }
             )
 
