@@ -175,7 +175,7 @@ class SchedulerCog(commands.Cog):
 
     async def _dispatch_order_telemetry_alignment_alert(self) -> None:
         from database.orders import get_all_active_orders
-        from services.telemetry_pricing_engine import calculate_telemetry_price
+        from market_analysis.telemetry_pricing_engine import generate_alignment_decision
 
         all_orders = await asyncio.to_thread(get_all_active_orders)
         if not all_orders:
@@ -246,18 +246,28 @@ class SchedulerCog(commands.Cog):
                 hist_iv = 0.35
                 skew_percentile = 0.98 if is_tail_risk else 0.50
 
-                suggested_price, suggested_qty, _logs = await calculate_telemetry_price(
+                decision = await generate_alignment_decision(
+                    user_id=uid,
+                    order_id=int(o.get("id") or 0),
                     symbol=sym,
-                    base_price=current_price,
-                    spot_price=spot_price,
+                    current_order_price=float(current_price),
+                    spot_price=float(spot_price),
+                    original_qty=original_qty,
                     iv=iv,
                     hist_iv=hist_iv,
-                    max_pain=0.0,
+                    iv_rank=None,  # risk-averse default: unknown IVR locks PRICE_UP
+                    max_pain_price=None,  # will fallback to Expected Move boundary only
                     prev_max_pain=0.0,
                     skew_percentile=skew_percentile,
+                    put_call_ratio=1.0,
                     prev_close=prev_close,
-                    base_quantity=original_qty,
                 )
+
+                if decision is None:
+                    continue
+
+                suggested_price = float(decision.suggested_price)
+                suggested_qty = int(decision.suggested_qty)
 
                 # 只有在價格或數量真的需要調整時才推播，避免每 30 分鐘噪音轟炸
                 if (
@@ -283,6 +293,7 @@ class SchedulerCog(commands.Cog):
                         "suggested_price": suggested_price,
                         "suggested_qty": suggested_qty,
                         "is_size_down": is_size_down,
+                        "alert_text": getattr(decision, "alert_text", None),
                     }
                 )
 

@@ -4944,6 +4944,11 @@ def _build_telemetry_alignment_ansi_card(item: Dict[str, Any]) -> str:
         )
 
     ansi_lines.append("```")
+
+    alert_text = item.get("alert_text")
+    if isinstance(alert_text, str) and alert_text.strip():
+        ansi_lines.append(alert_text.strip())
+
     return "\n".join(ansi_lines)
 
 
