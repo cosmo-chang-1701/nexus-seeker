@@ -3,6 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 import logging
 import asyncio
+from datetime import datetime
 from cogs.embed_builder import (
     create_info_embed,
     create_error_embed,
@@ -15,6 +16,50 @@ from database.orders import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+async def _fetch_cache_and_live_price(symbol: str) -> tuple[float, float]:
+    """Fetch one cached snapshot and one forced-refresh live snapshot for drift checking."""
+    from services import market_data_service
+
+    cache_price = 0.0
+    live_price = 0.0
+
+    cached_quote = await market_data_service.get_quote(symbol)
+    if cached_quote:
+        cache_price = float(cached_quote.get("c") or 0.0)
+
+    market_data_service.clear_quote_cache()
+    fresh_quote = await market_data_service.get_quote(symbol)
+    if fresh_quote:
+        live_price = float(fresh_quote.get("c") or 0.0)
+
+    yfinance_quote = await market_data_service.get_yfinance_quote(symbol)
+    yfinance_price = float(yfinance_quote.get("c") or 0.0) if yfinance_quote else 0.0
+    if yfinance_price > 0.0:
+        live_price = yfinance_price
+
+    if live_price <= 0.0:
+        hist_df = await market_data_service.get_history_df(symbol, period="2d")
+        if not hist_df.empty:
+            live_price = float(hist_df["Close"].iloc[-1])
+
+    return cache_price, live_price
+
+
+def _resolve_holding_type_and_rows(
+    *, holdings: list[dict], trades: list[tuple]
+) -> tuple[str, dict[str, dict]]:
+    holding_map = {
+        str(row.get("symbol", "")).upper(): row
+        for row in holdings
+        if isinstance(row, dict) and row.get("symbol")
+    }
+    if (not trades) and holdings:
+        return "PURE_STOCK_100X", holding_map
+    if any((t[2] is not None) for t in trades):
+        return "COMPLEX_OPTIONS", holding_map
+    return "LEVERAGED_MARGIN", holding_map
 
 
 # ==========================================
@@ -641,7 +686,11 @@ class ApplyTelemetryView(discord.ui.View):
     async def apply_telemetry_button(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ):
-        from market_analysis.telemetry_pricing_engine import generate_alignment_decision
+        from market_analysis.telemetry_pricing_engine import (
+            DataContaminationException,
+            generate_alignment_decision,
+        )
+        import database
 
         # 延遲回覆以防計算超時
         await interaction.response.defer(ephemeral=True)
@@ -655,6 +704,16 @@ class ApplyTelemetryView(discord.ui.View):
                 ephemeral=True,
             )
             return
+
+        user_holdings = await asyncio.to_thread(
+            database.get_user_holdings, interaction.user.id
+        )
+        user_trades = await asyncio.to_thread(
+            database.get_user_portfolio, interaction.user.id
+        )
+        holding_type, holding_map = _resolve_holding_type_and_rows(
+            holdings=user_holdings, trades=user_trades
+        )
 
         updated_count = 0
         details = []
@@ -673,23 +732,39 @@ class ApplyTelemetryView(discord.ui.View):
             original_qty = int(round(float(order.get("quantity") or 1.0)))
             original_qty = max(1, original_qty)
 
-            # 模擬盤中行情遙測參數（價格下修仍允許；但 PRICE_UP 會經過四大風控模組）
-            decision = await generate_alignment_decision(
-                user_id=interaction.user.id,
-                order_id=int(order["id"]),
-                symbol=symbol,
-                current_order_price=float(current_price),
-                spot_price=float(current_price) * 1.02,
-                original_qty=original_qty,
-                iv=0.55,
-                hist_iv=0.35,
-                iv_rank=0.50,
-                max_pain_price=100.0,
-                prev_max_pain=100.0,
-                skew_percentile=0.98,
-                put_call_ratio=1.0,
-                prev_close=float(current_price),
-            )
+            cache_price, live_price = await _fetch_cache_and_live_price(symbol)
+            if live_price <= 0.0:
+                continue
+
+            holding_row = holding_map.get(symbol.upper(), {})
+            holding_shares = float(holding_row.get("quantity", 0.0) or 0.0)
+
+            try:
+                decision = await generate_alignment_decision(
+                    user_id=interaction.user.id,
+                    order_id=int(order["id"]),
+                    symbol=symbol,
+                    current_order_price=float(current_price),
+                    spot_price=float(live_price),
+                    original_qty=original_qty,
+                    iv=0.55,
+                    hist_iv=0.35,
+                    iv_rank=0.50,
+                    max_pain_price=100.0,
+                    prev_max_pain=100.0,
+                    skew_percentile=0.98,
+                    put_call_ratio=1.0,
+                    prev_close=float(
+                        cache_price if cache_price > 0.0 else current_price
+                    ),
+                    cache_price=cache_price,
+                    live_price=live_price,
+                    order_side=str(order.get("side") or "BUY"),
+                    holding_type=holding_type,
+                    holding_shares=holding_shares,
+                )
+            except DataContaminationException:
+                continue
 
             if decision is None:
                 continue
@@ -1088,7 +1163,8 @@ class OrderUICog(commands.Cog):
             )
 
     @app_commands.command(
-        name="telemetry_alert", description="[模擬] 喚起半小時心跳遙測價格偏離警報"
+        name="telemetry_alert",
+        description="喚起半小時心跳遙測價格偏離警報（含實時對齊防線）",
     )
     async def telemetry_alert(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -1103,14 +1179,40 @@ class OrderUICog(commands.Cog):
             )
             return
 
-        # 模擬情境：市場極端 Skew 尾部風險（PRICE_UP 會經過四大風控模組）
-        from market_analysis.telemetry_pricing_engine import generate_alignment_decision
+        from market_analysis.telemetry_pricing_engine import (
+            DataContaminationException,
+            generate_alignment_decision,
+        )
         from cogs.embed_builder import create_telemetry_alignment_embeds
+        from market_analysis.sentiment_engine import SentimentEngine
+        from services.calendar_service import calendar_service
+        import database
 
         from typing import List, Dict, Any
 
         alignment_items: List[Dict[str, Any]] = []
         truncated = False
+
+        user_holdings = await asyncio.to_thread(
+            database.get_user_holdings, interaction.user.id
+        )
+        user_trades = await asyncio.to_thread(
+            database.get_user_portfolio, interaction.user.id
+        )
+        holding_type, holding_map = _resolve_holding_type_and_rows(
+            holdings=user_holdings, trades=user_trades
+        )
+
+        macro_events = await calendar_service.get_high_impact_events(days=14)
+        macro_event_dates: set[str] = set()
+        for event in macro_events:
+            try:
+                event_date = datetime.fromisoformat(
+                    str(event.time).replace("Z", "+00:00")
+                ).date()
+                macro_event_dates.add(event_date.isoformat())
+            except ValueError:
+                continue
 
         for o in orders:
             order_type = str(o.get("order_type") or "").upper()
@@ -1138,22 +1240,72 @@ class OrderUICog(commands.Cog):
             original_qty = int(round(float(o.get("quantity") or 1.0)))
             original_qty = max(1, original_qty)
 
-            decision = await generate_alignment_decision(
-                user_id=interaction.user.id,
-                order_id=int(o["id"]),
-                symbol=str(o["symbol"]),
-                current_order_price=float(current_price),
-                spot_price=float(current_price) * 1.02,
-                original_qty=original_qty,
-                iv=0.55,
-                hist_iv=0.35,
-                iv_rank=0.50,
-                max_pain_price=100.0,
-                prev_max_pain=100.0,
-                skew_percentile=0.98,
-                put_call_ratio=1.0,
-                prev_close=float(current_price),
+            symbol = str(o["symbol"]).upper()
+            cache_price, live_price = await _fetch_cache_and_live_price(symbol)
+            if live_price <= 0.0:
+                live_price = float(current_price)
+
+            (
+                iv_metrics,
+                skew_metrics,
+                max_pain_metrics,
+                uoa_list,
+                earnings_event,
+            ) = await asyncio.gather(
+                SentimentEngine.fetch_and_calculate_iv_metrics(symbol),
+                SentimentEngine.calculate_skew(symbol),
+                SentimentEngine.calculate_max_pain(symbol),
+                SentimentEngine.detect_uoa(symbol),
+                calendar_service.get_symbol_earnings(symbol),
             )
+            if earnings_event is not None and earnings_event.date:
+                macro_event_dates.add(earnings_event.date)
+
+            max_pain_price = float(max_pain_metrics.get("max_pain", 0.0) or 0.0)
+            uoa_payload = [
+                {
+                    "expiration_date": str(item.get("expiry", "")),
+                    "strike": float(item.get("strike", 0.0) or 0.0),
+                    "option_type": str(item.get("type", "")),
+                    "volume_to_oi_ratio": float(item.get("ratio", 0.0) or 0.0),
+                }
+                for item in uoa_list
+            ]
+
+            holding_row = holding_map.get(symbol, {})
+            holding_shares = float(holding_row.get("quantity", 0.0) or 0.0)
+
+            try:
+                decision = await generate_alignment_decision(
+                    user_id=interaction.user.id,
+                    order_id=int(o["id"]),
+                    symbol=symbol,
+                    current_order_price=float(current_price),
+                    spot_price=float(live_price),
+                    original_qty=original_qty,
+                    iv=float(iv_metrics.current_iv or 0.0),
+                    hist_iv=max(float(iv_metrics.current_iv or 0.0) / 1.1, 0.0001),
+                    iv_rank=float(iv_metrics.iv_rank / 100.0),
+                    max_pain_price=max_pain_price if max_pain_price > 0.0 else None,
+                    prev_max_pain=max_pain_price if max_pain_price > 0.0 else 0.0,
+                    skew_percentile=float(
+                        skew_metrics.get("skew_percentile", 50.0) / 100.0
+                    ),
+                    put_call_ratio=1.0,
+                    prev_close=float(
+                        cache_price if cache_price > 0.0 else current_price
+                    ),
+                    cache_price=cache_price,
+                    live_price=live_price,
+                    order_side=str(o.get("side") or "BUY"),
+                    holding_type=holding_type,
+                    holding_shares=holding_shares,
+                    uoa_array=uoa_payload,
+                    macro_event_dates=set(macro_event_dates),
+                    emit_suppressed_decision=True,
+                )
+            except DataContaminationException:
+                decision = None
 
             if decision is None:
                 continue
@@ -1163,6 +1315,57 @@ class OrderUICog(commands.Cog):
 
             is_size_down = suggested_qty < original_qty
 
+            avg_cost = float(holding_row.get("avg_cost", 0.0) or 0.0)
+            gain_loss_pct = (
+                (live_price - avg_cost) / avg_cost * 100.0 if avg_cost > 0.0 else 0.0
+            )
+            put_wall = max_pain_price if max_pain_price > 0.0 else live_price
+            wall_dist_pct = (
+                (live_price - put_wall) / live_price * 100.0
+                if live_price > 0.0
+                else 0.0
+            )
+
+            skew_val = float(skew_metrics.get("skew", 0.0) or 0.0)
+            skew_pct = float(skew_metrics.get("skew_percentile", 0.0) or 0.0)
+            skew_status = str(skew_metrics.get("state", "平穩"))
+            iv_val = float(iv_metrics.current_iv * 100.0)
+            iv_rank = float(iv_metrics.iv_rank)
+            iv_status = str(iv_metrics.iv_status)
+
+            proximity = (
+                abs(live_price - current_price) / live_price * 100.0
+                if live_price > 0.0
+                else 999.0
+            )
+            radar_status = (
+                "FORTRESS RE-LOCKED"
+                if decision.action == "SUPPRESSED"
+                else ("雷達鎖定中" if proximity <= 2.0 else "偏離擴大")
+            )
+
+            if holding_type == "PURE_STOCK_100X":
+                holding_type_label = "1.00x 純現貨 (0 槓桿)"
+            else:
+                holding_type_label = "LEVERAGED"
+
+            holding_status = "空倉待命" if holding_shares <= 0 else "持倉中"
+            wall_status = "上方緩衝" if wall_dist_pct >= 0 else "跌破支撐"
+            system_status_flag = (
+                decision.system_status_flag
+                if decision.system_status_flag
+                else (
+                    "FORTRESS RE-LOCKED"
+                    if decision.action == "SUPPRESSED"
+                    else "TELEMETRY ACTIVE"
+                )
+            )
+            directive = (
+                decision.system_instruction_directive
+                if decision.system_instruction_directive
+                else (decision.alert_text or "通過實時對齊檢查，僅在防線內調整掛單。")
+            )
+
             # 限制每個 Embed 擁有的標的數量以防字元數超限 (預估每個標的卡片佔用約 500 字元)
             if len(alignment_items) * 500 > 3500:
                 truncated = True
@@ -1170,7 +1373,7 @@ class OrderUICog(commands.Cog):
 
             alignment_items.append(
                 {
-                    "symbol": o["symbol"],
+                    "symbol": symbol,
                     "order_id": o["id"],
                     "order_type": order_type,
                     "price_label": price_label,
@@ -1180,6 +1383,25 @@ class OrderUICog(commands.Cog):
                     "suggested_qty": suggested_qty,
                     "is_size_down": is_size_down,
                     "alert_text": getattr(decision, "alert_text", None),
+                    "holding_type_label": holding_type_label,
+                    "holding_shares": int(round(holding_shares)),
+                    "holding_status": holding_status,
+                    "avg_cost": avg_cost,
+                    "live_price": live_price,
+                    "gain_loss_pct": gain_loss_pct,
+                    "put_wall": put_wall,
+                    "wall_dist_pct": wall_dist_pct,
+                    "wall_status": wall_status,
+                    "skew_val": skew_val,
+                    "skew_pct": skew_pct,
+                    "skew_status": skew_status,
+                    "iv_val": iv_val,
+                    "iv_rank": iv_rank,
+                    "iv_status": iv_status,
+                    "proximity_pct": proximity,
+                    "radar_status": radar_status,
+                    "system_status_flag": system_status_flag,
+                    "system_instruction_directive": directive,
                 }
             )
 

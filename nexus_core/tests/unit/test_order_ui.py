@@ -1,7 +1,7 @@
 import pytest
 import sys
 import os
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 # Ensure we can import from nexus_core
 sys.path.append(os.path.join(os.getcwd(), "nexus_core"))
@@ -473,13 +473,42 @@ async def test_telemetry_alert_and_alignment(mock_interaction, db_conn):
     cog = OrderUICog(bot)
 
     # 1. 觸發警報面板
-    await cog.telemetry_alert.callback(cog, mock_interaction)
+    mock_iv = MagicMock(
+        current_iv=0.35,
+        iv_rank=45.0,
+        iv_status="Normal",
+    )
+    with patch(
+        "cogs.order_ui._fetch_cache_and_live_price",
+        new=AsyncMock(return_value=(101.0, 102.0)),
+    ), patch(
+        "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
+        new=AsyncMock(return_value=mock_iv),
+    ), patch(
+        "market_analysis.sentiment_engine.SentimentEngine.calculate_skew",
+        new=AsyncMock(
+            return_value={"skew": 1.2, "skew_percentile": 65.0, "state": "平穩"}
+        ),
+    ), patch(
+        "market_analysis.sentiment_engine.SentimentEngine.calculate_max_pain",
+        new=AsyncMock(return_value={"max_pain": 101.0}),
+    ), patch(
+        "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
+        new=AsyncMock(return_value=[]),
+    ), patch(
+        "services.calendar_service.calendar_service.get_high_impact_events",
+        new=AsyncMock(return_value=[]),
+    ), patch(
+        "services.calendar_service.calendar_service.get_symbol_earnings",
+        new=AsyncMock(return_value=None),
+    ):
+        await cog.telemetry_alert.callback(cog, mock_interaction)
     assert mock_interaction.response.defer.called
     assert mock_interaction.followup.send.called
     kwargs = mock_interaction.followup.send.call_args[1]
     embed = kwargs["embed"]
     view = kwargs["view"]
-    assert "對齊警報" in embed.title
+    assert "實時對齊快照" in embed.title
     assert isinstance(view, ApplyTelemetryView)
 
     # 2. 一鍵套用遙測建議價
@@ -488,7 +517,11 @@ async def test_telemetry_alert_and_alignment(mock_interaction, db_conn):
     mock_btn_interaction.response = AsyncMock()
     mock_btn_interaction.followup = AsyncMock()
 
-    await view.apply_telemetry_button.callback(mock_btn_interaction)
+    with patch(
+        "cogs.order_ui._fetch_cache_and_live_price",
+        new=AsyncMock(return_value=(101.0, 102.0)),
+    ):
+        await view.apply_telemetry_button.callback(mock_btn_interaction)
     assert mock_btn_interaction.response.defer.called
     assert mock_btn_interaction.followup.send.called
 

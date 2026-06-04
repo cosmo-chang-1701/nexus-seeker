@@ -70,6 +70,7 @@ def archive_expired_portfolio_records():
     """
     import logging
     from datetime import datetime
+
     logger = logging.getLogger(__name__)
 
     conn = sqlite3.connect(config.DB_NAME)
@@ -77,7 +78,9 @@ def archive_expired_portfolio_records():
 
     try:
         # 先確認表是否存在，避免在 Migration 還沒跑完時報錯
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='archived_assets'")
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='archived_assets'"
+        )
         if not cursor.fetchone():
             conn.close()
             return
@@ -92,7 +95,17 @@ def archive_expired_portfolio_records():
         expired_records = []
 
         for row in rows:
-            asset_id, user_id, symbol, context_type, risk_weight, meta_json, last_scan_id, created_at, updated_at = row
+            (
+                asset_id,
+                user_id,
+                symbol,
+                context_type,
+                risk_weight,
+                meta_json,
+                last_scan_id,
+                created_at,
+                updated_at,
+            ) = row
             m = json.loads(meta_json) if meta_json else {}
             expiry = m.get("expiry")
             if expiry:
@@ -100,9 +113,18 @@ def archive_expired_portfolio_records():
                     exp_date = datetime.strptime(expiry, "%Y-%m-%d").date()
                     if exp_date <= today:
                         expired_ids.append(asset_id)
-                        expired_records.append((
-                            user_id, symbol, context_type, risk_weight, meta_json, last_scan_id, created_at, updated_at
-                        ))
+                        expired_records.append(
+                            (
+                                user_id,
+                                symbol,
+                                context_type,
+                                risk_weight,
+                                meta_json,
+                                last_scan_id,
+                                created_at,
+                                updated_at,
+                            )
+                        )
                 except Exception as e:
                     logger.error(f"解析到期日失敗 for asset_id={asset_id}: {e}")
 
@@ -112,12 +134,16 @@ def archive_expired_portfolio_records():
                 INSERT INTO archived_assets (user_id, symbol, context_type, risk_weight, metadata, last_scan_id, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                expired_records
+                expired_records,
             )
             placeholders = ",".join("?" for _ in expired_ids)
-            cursor.execute(f"DELETE FROM assets WHERE id IN ({placeholders})", expired_ids)
+            cursor.execute(
+                f"DELETE FROM assets WHERE id IN ({placeholders})", expired_ids
+            )
             conn.commit()
-            logger.info(f"成功將 {len(expired_ids)} 筆已過期合約移至歷史存檔資料庫 (Archive DB)")
+            logger.info(
+                f"成功將 {len(expired_ids)} 筆已過期合約移至歷史存檔資料庫 (Archive DB)"
+            )
     except Exception as e:
         logger.exception(f"自動過期存檔處理失敗: {e}")
     finally:

@@ -4909,47 +4909,66 @@ def create_active_orders_embed(orders: List[Dict[str, Any]]) -> List[discord.Emb
 
 
 def _build_telemetry_alignment_ansi_card(item: Dict[str, Any]) -> str:
-    """建構 Telemetry 對齊卡片 (ANSI)，版面參照待成交委託單列表卡片。"""
+    """建構 Telemetry 實時對齊快照卡片。"""
     sym = str(item.get("symbol") or "").upper()
-    price_label = str(item.get("price_label") or "掛單價格")
-    curr_p = float(item.get("current_price") or 0)
-    orig_q = int(round(float(item.get("original_qty") or 0)))
-    sugg_p = float(item.get("suggested_price") or 0)
-    sugg_q = int(round(float(item.get("suggested_qty") or 0)))
-    is_size_down = bool(item.get("is_size_down"))
+    current_price = float(item.get("live_price") or item.get("current_price") or 0.0)
+    avg_cost = float(item.get("avg_cost") or 0.0)
+    gain_loss_pct = float(item.get("gain_loss_pct") or 0.0)
+    put_wall = float(item.get("put_wall") or 0.0)
+    wall_dist_pct = float(item.get("wall_dist_pct") or 0.0)
+    order_id = int(item.get("order_id") or 0)
+    limit_price = float(item.get("current_price") or 0.0)
+    shares = int(round(float(item.get("original_qty") or 0.0)))
+    proximity_pct = float(item.get("proximity_pct") or 0.0)
+    skew_val = float(item.get("skew_val") or 0.0)
+    skew_pct = float(item.get("skew_pct") or 0.0)
+    iv_val = float(item.get("iv_val") or 0.0)
+    iv_rank = float(item.get("iv_rank") or 0.0)
 
-    ansi_lines = ["```ansi"]
-    ansi_lines.append(
-        f" \u001b[1;36m📡 {sym} Telemetry 對齊摘要\u001b[0m"
-        if sym
-        else " \u001b[1;36m📡 Telemetry 對齊摘要\u001b[0m"
+    lines = ["```text"]
+    lines.append(f"🌌 Nexus Seeker • Watchlist Heartbeat [{sym} 實時對齊快照]")
+    lines.append("─────────────────────────────────────────────────────────────")
+    lines.append("🛡️ 【物理防線 (The Shield)】")
+    lines.append(
+        " ├─ 持倉型態: "
+        f"{item.get('holding_type_label', 'LEVERAGED')} ｜ 持股: {int(item.get('holding_shares', 0))} 股 "
+        f"[{item.get('holding_status', '待確認')}]"
     )
-    ansi_lines.append(" ----------------------------------")
-    ansi_lines.append(
-        f"  ├─ 當前{price_label}: \u001b[1;37m${curr_p:.2f}\u001b[0m (數量: \u001b[1;37m{orig_q}\u001b[0m 股)"
+    lines.append(
+        " ├─ 成本對齊: "
+        f"平均成本 ${avg_cost:.2f} ｜ 當前現價: ${current_price:.2f} (損益: {gain_loss_pct:+.2f}%)"
     )
-
-    sugg_price_color = "\u001b[1;32m" if abs(sugg_p - curr_p) < 0.01 else "\u001b[1;33m"
-    ansi_lines.append(
-        f"  ├─ 遙測建議防線: {sugg_price_color}${sugg_p:.2f}\u001b[0m (數量: \u001b[1;37m{sugg_q}\u001b[0m 股)"
+    lines.append(
+        " └─ 做市商牆: "
+        f"GEX PutWall ${put_wall:.2f} ｜ 距離硬支撐: {wall_dist_pct:+.2f}% "
+        f"({item.get('wall_status', '待確認')})"
     )
-
-    if is_size_down:
-        ansi_lines.append(
-            "  └─ 防禦狀態: \u001b[1;31m⚠️ 尾端風險偏高（已觸發控倉 75%）\u001b[0m"
-        )
-    else:
-        ansi_lines.append(
-            "  └─ 防禦狀態: \u001b[1;33m⚠️ 需要對齊（偏離度偏高）\u001b[0m"
-        )
-
-    ansi_lines.append("```")
-
-    alert_text = item.get("alert_text")
-    if isinstance(alert_text, str) and alert_text.strip():
-        ansi_lines.append(alert_text.strip())
-
-    return "\n".join(ansi_lines)
+    lines.append("")
+    lines.append("📐 【籌碼偏斜 (Market Intention)】")
+    lines.append(
+        " ├─ Option Skew: "
+        f"{skew_val:+.2f}% (分位點 {skew_pct:.2f}%) ── [狀態: {item.get('skew_status', '平穩')}]"
+    )
+    lines.append(
+        " └─ 實時平值 IV: "
+        f"{iv_val:.2f}% (IV Rank: {iv_rank:.2f}%) ── [狀態: {item.get('iv_status', 'Normal')}]"
+    )
+    lines.append("")
+    lines.append("⚔️ 【捕獸夾雷達 (Order Radar)】")
+    lines.append(
+        " └─ ID "
+        f"{order_id} ({sym} 買入限價 ${limit_price:.2f} / {shares}股) ── 距離成交差: "
+        f"{proximity_pct:.2f}% [{item.get('radar_status', '監控中')}]"
+    )
+    lines.append("")
+    lines.append("⚙️ 【最高主權指令 (Sovereign Command)】")
+    lines.append(f" └─ 狀態: {item.get('system_status_flag', 'TELEMETRY ACTIVE')}")
+    lines.append(
+        f" └─ 指引: {item.get('system_instruction_directive', '通過實時防線，維持紀律掛單。')}"
+    )
+    lines.append("─────────────────────────────────────────────────────────────")
+    lines.append("```")
+    return "\n".join(lines)
 
 
 def create_telemetry_alignment_embeds(
@@ -4964,7 +4983,7 @@ def create_telemetry_alignment_embeds(
     - scheduled_mode=True: 盤中每半小時自動推播版本（不含按鈕）
     """
 
-    title = "📡 Nexus Seeker | 待成交委託單 Telemetry 對齊警報"
+    title = "🌌 Nexus Seeker | 待成交委託單實時對齊快照"
     if scheduled_mode:
         title += " (盤中每半小時)"
 

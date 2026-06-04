@@ -12,6 +12,10 @@ from database.cache import save_kv_cache
 logger = logging.getLogger(__name__)
 
 
+class DataContaminationException(RuntimeError):
+    """Raised when cached and live prices diverge beyond the hard stale-lock threshold."""
+
+
 @dataclass(frozen=True)
 class AlignmentDecision:
     symbol: str
@@ -25,6 +29,11 @@ class AlignmentDecision:
     is_size_down: bool
     reasons: list[str]
     alert_text: str | None
+    system_status_flag: str = ""
+    system_instruction_directive: str = ""
+    drift_pct: float | None = None
+    cache_price: float | None = None
+    live_price: float | None = None
 
 
 def _now_utc() -> datetime:
@@ -133,6 +142,68 @@ def _build_alert_text(
     )
 
 
+def _build_suppressed_decision(
+    *,
+    symbol: str,
+    order_id: int,
+    current_order_price: float,
+    spot_price: float,
+    original_qty: int,
+    reasons: list[str],
+    system_status_flag: str,
+    system_instruction_directive: str,
+    drift_pct: float | None = None,
+    cache_price: float | None = None,
+    live_price: float | None = None,
+) -> AlignmentDecision:
+    return AlignmentDecision(
+        symbol=symbol,
+        order_id=order_id,
+        action="SUPPRESSED",
+        current_order_price=current_order_price,
+        spot_price=spot_price,
+        suggested_price=current_order_price,
+        original_qty=original_qty,
+        suggested_qty=original_qty,
+        is_size_down=False,
+        reasons=reasons,
+        alert_text=None,
+        system_status_flag=system_status_flag,
+        system_instruction_directive=system_instruction_directive,
+        drift_pct=drift_pct,
+        cache_price=cache_price,
+        live_price=live_price,
+    )
+
+
+def _classify_uoa_squeeze(
+    uoa_array: list[dict[str, Any]] | None,
+    macro_event_dates: set[str],
+) -> tuple[bool, str]:
+    if not uoa_array:
+        return False, ""
+
+    for item in uoa_array:
+        raw_ratio = item.get("volume_to_oi_ratio", item.get("ratio", 0.0))
+        try:
+            ratio = float(raw_ratio or 0.0)
+        except Exception:
+            ratio = 0.0
+
+        expiry = str(item.get("expiration_date", item.get("expiry", "")) or "")
+        if ratio > 3.0 and expiry in macro_event_dates:
+            strike = float(item.get("strike", 0.0) or 0.0)
+            option_type = str(
+                item.get("option_type", item.get("type", "")) or ""
+            ).upper()
+            return (
+                True,
+                f"[機構鎖定 / 強勢逼空 Gamma Squeeze] {expiry} {option_type} ${strike:.2f} ({ratio:.2f}x)",
+            )
+
+    return False, ""
+
+
 async def generate_alignment_decision(
     *,
     user_id: int,
@@ -150,16 +221,29 @@ async def generate_alignment_decision(
     put_call_ratio: float = 1.0,
     days_to_expiration: float = 7.0,
     prev_close: float = 0.0,
+    cache_price: Optional[float] = None,
+    live_price: Optional[float] = None,
+    max_drift_pct: float = 1.5,
+    deep_sea_gap_lock_pct: float = 5.0,
+    order_side: str = "BUY",
+    holding_type: str = "",
+    holding_shares: float = 0.0,
+    uoa_array: Optional[list[dict[str, Any]]] = None,
+    macro_event_dates: Optional[set[str]] = None,
+    emit_suppressed_decision: bool = False,
 ) -> AlignmentDecision | None:
-    """Central alignment alert pipeline with 4 defensive pillars.
+    """Central alignment alert pipeline with stale-lock, fortress relock and sovereign gating.
 
-    Returns None when suppressed (ghost order / clear-position / IV fuse / no alignment needed).
+    Returns None when suppressed unless ``emit_suppressed_decision=True``.
     """
 
     symbol = symbol.upper()
     current_order_price = float(current_order_price or 0.0)
     spot_price = float(spot_price or 0.0)
     original_qty = max(1, int(round(float(original_qty or 1))))
+    cache_price = float(cache_price or 0.0)
+    live_price = float(live_price or 0.0)
+    effective_live_price = live_price if live_price > 0 else spot_price
 
     # Pillar 4 (Sweeper): hard DB sync
     if not _is_active_order_in_db(order_id, user_id):
@@ -176,6 +260,17 @@ async def generate_alignment_decision(
                 "reason": "ORDER_NOT_ACTIVE",
             },
         )
+        if emit_suppressed_decision:
+            return _build_suppressed_decision(
+                symbol=symbol,
+                order_id=order_id,
+                current_order_price=current_order_price,
+                spot_price=spot_price,
+                original_qty=original_qty,
+                reasons=["ORDER_NOT_ACTIVE"],
+                system_status_flag="FORTRESS RE-LOCKED",
+                system_instruction_directive="委託單已失效，不允許對齊調整。",
+            )
         return None
 
     if _recent_clear_position_suppression(user_id, symbol):
@@ -190,6 +285,128 @@ async def generate_alignment_decision(
                 "reason": "RECENT_CLEAR_POSITION",
             },
         )
+        if emit_suppressed_decision:
+            return _build_suppressed_decision(
+                symbol=symbol,
+                order_id=order_id,
+                current_order_price=current_order_price,
+                spot_price=spot_price,
+                original_qty=original_qty,
+                reasons=["RECENT_CLEAR_POSITION"],
+                system_status_flag="FORTRESS RE-LOCKED",
+                system_instruction_directive="最近已清倉，暫停追價與自動調整。",
+            )
+        return None
+
+    if cache_price > 0 and effective_live_price > 0:
+        drift_pct = (
+            abs(effective_live_price - cache_price) / effective_live_price * 100.0
+        )
+        if drift_pct > max_drift_pct:
+            _log_decision_to_sqlite(
+                user_id,
+                symbol,
+                order_id,
+                {
+                    "ts": _now_utc().isoformat(),
+                    "action": "SUPPRESSED",
+                    "reason": "DATA_CONTAMINATION",
+                    "cache_price": cache_price,
+                    "live_price": effective_live_price,
+                    "drift_pct": drift_pct,
+                },
+            )
+            if emit_suppressed_decision:
+                return _build_suppressed_decision(
+                    symbol=symbol,
+                    order_id=order_id,
+                    current_order_price=current_order_price,
+                    spot_price=spot_price,
+                    original_qty=original_qty,
+                    reasons=[f"DATA_CONTAMINATION drift={drift_pct:.2f}%"],
+                    system_status_flag="FORTRESS RE-LOCKED",
+                    system_instruction_directive="快取與即時報價偏離過大，已終止改價建議。",
+                    drift_pct=round(drift_pct, 2),
+                    cache_price=cache_price,
+                    live_price=effective_live_price,
+                )
+            raise DataContaminationException(
+                f"{symbol} data contamination detected: drift={drift_pct:.2f}%"
+            )
+
+    side = str(order_side or "BUY").upper()
+    if side == "BUY" and current_order_price > 0 and effective_live_price > 0:
+        deep_sea_gap_pct = (
+            (effective_live_price - current_order_price) / effective_live_price * 100.0
+        )
+        if deep_sea_gap_pct > deep_sea_gap_lock_pct:
+            _log_decision_to_sqlite(
+                user_id,
+                symbol,
+                order_id,
+                {
+                    "ts": _now_utc().isoformat(),
+                    "action": "SUPPRESSED",
+                    "reason": "FORTRESS_RELOCK_DEEP_SEA",
+                    "gap_pct": deep_sea_gap_pct,
+                },
+            )
+            if emit_suppressed_decision:
+                return _build_suppressed_decision(
+                    symbol=symbol,
+                    order_id=order_id,
+                    current_order_price=current_order_price,
+                    spot_price=spot_price,
+                    original_qty=original_qty,
+                    reasons=[f"DEEP_SEA_GAP {deep_sea_gap_pct:.2f}%"],
+                    system_status_flag="FORTRESS RE-LOCKED",
+                    system_instruction_directive="現價遠離深海買單超過 5%，禁止追價改單。",
+                    cache_price=cache_price if cache_price > 0 else None,
+                    live_price=effective_live_price
+                    if effective_live_price > 0
+                    else None,
+                )
+            return None
+
+    holding_type_norm = str(holding_type or "").upper()
+    if holding_type_norm == "PURE_STOCK_100X":
+        if holding_shares <= 0.0:
+            sovereign_directive = (
+                "空倉維持被動深海限價；硬鎖現金擔保/裸賣選擇權觸發，拒絕追價。"
+            )
+        else:
+            sovereign_directive = "純現貨防線啟動，禁止追價改單與槓桿擴張。"
+        if emit_suppressed_decision:
+            return _build_suppressed_decision(
+                symbol=symbol,
+                order_id=order_id,
+                current_order_price=current_order_price,
+                spot_price=spot_price,
+                original_qty=original_qty,
+                reasons=["PURE_STOCK_100X_SOVEREIGN_GATE"],
+                system_status_flag="FORTRESS RE-LOCKED",
+                system_instruction_directive=sovereign_directive,
+                cache_price=cache_price if cache_price > 0 else None,
+                live_price=effective_live_price if effective_live_price > 0 else None,
+            )
+        return None
+
+    macro_dates = macro_event_dates or set()
+    squeeze_flag, squeeze_note = _classify_uoa_squeeze(uoa_array, macro_dates)
+    if squeeze_flag:
+        if emit_suppressed_decision:
+            return _build_suppressed_decision(
+                symbol=symbol,
+                order_id=order_id,
+                current_order_price=current_order_price,
+                spot_price=spot_price,
+                original_qty=original_qty,
+                reasons=[squeeze_note],
+                system_status_flag="FORTRESS RE-LOCKED",
+                system_instruction_directive="機構籌碼鎖定事件週，策略切換防守持有，抑制改價。",
+                cache_price=cache_price if cache_price > 0 else None,
+                live_price=effective_live_price if effective_live_price > 0 else None,
+            )
         return None
 
     from services.telemetry_pricing_engine import calculate_telemetry_price
@@ -312,6 +529,8 @@ async def generate_alignment_decision(
         is_size_down=int(suggested_qty) < original_qty,
         reasons=reasons,
         alert_text=alert_text,
+        cache_price=cache_price if cache_price > 0 else None,
+        live_price=effective_live_price if effective_live_price > 0 else None,
     )
 
     _log_decision_to_sqlite(
