@@ -137,6 +137,7 @@ def archive_expired_portfolio_records():
                 expired_records,
             )
             placeholders = ",".join("?" for _ in expired_ids)
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             cursor.execute(
                 f"DELETE FROM assets WHERE id IN ({placeholders})", expired_ids
             )
