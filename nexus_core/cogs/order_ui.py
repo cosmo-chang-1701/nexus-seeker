@@ -947,6 +947,7 @@ class OrderUICog(commands.Cog):
         description="列出目前所有活躍的待成交委託單（可用下拉篩選）",
     )
     @app_commands.describe(
+        symbol="標的 (Ticker) 篩選，例如: AAPL（預設：全部）",
         order_type="訂單類型（預設：全部）",
         side="委託方向（預設：全部）",
         validity="有效期限（預設：全部）",
@@ -989,6 +990,7 @@ class OrderUICog(commands.Cog):
     async def list_orders(
         self,
         interaction: discord.Interaction,
+        symbol: str | None = None,
         order_type: str | None = None,
         side: str | None = None,
         validity: str | None = None,
@@ -1006,6 +1008,7 @@ class OrderUICog(commands.Cog):
             return
 
         # Normalize filters (optional → default ALL)
+        symbol_v = (symbol or "ALL").strip().upper()
         order_type_v = (order_type or "ALL").strip().upper()
         side_v = (side or "ALL").strip().upper()
         validity_v = (validity or "ALL").strip().upper()
@@ -1034,6 +1037,8 @@ class OrderUICog(commands.Cog):
             sd = str(o.get("side") or "BUY").upper()
             vd = str(o.get("validity") or "").upper()
 
+            if symbol_v != "ALL" and str(o.get("symbol") or "").upper() != symbol_v:
+                continue
             if order_type_v != "ALL" and ot != order_type_v:
                 continue
             if side_v != "ALL" and sd != side_v:
@@ -1063,7 +1068,8 @@ class OrderUICog(commands.Cog):
         embeds = create_active_orders_embed(filtered)
 
         filters_applied = (
-            order_type_v != "ALL"
+            symbol_v != "ALL"
+            or order_type_v != "ALL"
             or side_v != "ALL"
             or validity_v != "ALL"
             or condition_v != "ALL"
@@ -1071,7 +1077,7 @@ class OrderUICog(commands.Cog):
         if filters_applied:
             filter_line = (
                 "篩選條件："
-                f"類型=`{order_type_v}`、方向=`{side_v}`、有效期限=`{validity_v}`、條件=`{condition_v}`\n"
+                f"標的=`{symbol_v}`、類型=`{order_type_v}`、方向=`{side_v}`、有效期限=`{validity_v}`、條件=`{condition_v}`\n"
             )
             for e in embeds:
                 e.description = filter_line + (e.description or "")
