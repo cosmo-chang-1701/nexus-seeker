@@ -39,6 +39,6 @@ repos:
         name: docker-test
         entry: bash -c "docker build -t nexus-seeker-test -f Dockerfile.test . && docker run --rm nexus-seeker-test python -m pytest tests"
         language: system
-        stages: [pre-commit]
+        stages: [pre-push]
         always_run: true
         pass_filenames: false
