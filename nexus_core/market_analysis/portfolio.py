@@ -103,7 +103,10 @@ class PortfolioStatusOrchestrator:
             iv_metrics = None
             try:
                 from market_analysis.sentiment_engine import SentimentEngine
-                iv_metrics = await SentimentEngine.fetch_and_calculate_iv_metrics(symbol)
+
+                iv_metrics = await SentimentEngine.fetch_and_calculate_iv_metrics(
+                    symbol
+                )
             except Exception as e:
                 logger.error(f"獲取 {symbol} IV指標失敗: {e}")
 
@@ -190,7 +193,9 @@ class PortfolioStatusOrchestrator:
                         status,
                         quantity=quantity,
                         iv=iv if iv is not None else 0.0,
-                        iv_rank=iv_metrics.iv_rank if (iv_metrics and iv_metrics.iv_rank is not None) else 0.0,
+                        iv_rank=iv_metrics.iv_rank
+                        if (iv_metrics and iv_metrics.iv_rank is not None)
+                        else 0.0,
                     )
                 )
         except Exception as e:
