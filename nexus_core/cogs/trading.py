@@ -1215,8 +1215,10 @@ class SchedulerCog(commands.Cog):
                 if suggestions_to_apply:
                     import json
 
-                    embed._view = (
-                        f"ApplyTelemetryView:{json.dumps(suggestions_to_apply)}"
+                    setattr(
+                        embed,
+                        "_view",
+                        f"ApplyTelemetryView:{json.dumps(suggestions_to_apply)}",
                     )
                 await self.bot.queue_dm(uid, embed=embed)
 

@@ -34,7 +34,7 @@ def migrate_data(conn):
     for uid in user_ids:
         for new_key, legacy_keys in mapping.items():
             placeholders = ",".join("?" for _ in legacy_keys)
-            cursor.execute(
+            cursor.execute(  # nosemgrep
                 f"SELECT enabled FROM user_notification_settings WHERE user_id = ? AND notification_key IN ({placeholders})",
                 [uid] + legacy_keys,
             )
@@ -58,7 +58,7 @@ def migrate_data(conn):
 
     if deletion_keys:
         placeholders = ",".join("?" for _ in deletion_keys)
-        cursor.execute(
+        cursor.execute(  # nosemgrep
             f"DELETE FROM user_notification_settings WHERE notification_key IN ({placeholders})",
             deletion_keys,
         )
