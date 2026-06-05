@@ -525,11 +525,11 @@ async def test_telemetry_alert_and_alignment(mock_interaction, db_conn):
     assert mock_btn_interaction.response.defer.called
     assert mock_btn_interaction.followup.send.called
 
-    # 驗證資料庫已被調整：價格調整為 97.46，數量調降至 75% 即 15.0 股
+    # 驗證資料庫已被調整：依據實時對齊建議，價格調整為 99.25，數量維持 20 股
     orders = get_user_active_orders(user_id)
     assert len(orders) == 1
-    assert orders[0]["limit_price"] == 97.46
-    assert orders[0]["quantity"] == 15.0
+    assert orders[0]["limit_price"] == 99.25
+    assert orders[0]["quantity"] == 20.0
 
 
 @pytest.mark.asyncio

@@ -679,8 +679,9 @@ class OrderItemView(discord.ui.View):
 
 
 class ApplyTelemetryView(discord.ui.View):
-    def __init__(self):
+    def __init__(self, suggestions: dict[int, tuple[float, int]] = None):
         super().__init__(timeout=180)
+        self.suggestions = suggestions or {}
 
     @discord.ui.button(label="⚡ 一鍵套用遙測建議價", style=discord.ButtonStyle.success)
     async def apply_telemetry_button(
@@ -690,7 +691,9 @@ class ApplyTelemetryView(discord.ui.View):
             DataContaminationException,
             generate_alignment_decision,
         )
+        from database.cache import get_kv_cache
         import database
+        from datetime import datetime
 
         # 延遲回覆以防計算超時
         await interaction.response.defer(ephemeral=True)
@@ -719,6 +722,7 @@ class ApplyTelemetryView(discord.ui.View):
         details = []
 
         for order in user_orders:
+            order_id = int(order["id"])
             symbol = order["symbol"]
             current_price = (
                 order["limit_price"]
@@ -732,45 +736,84 @@ class ApplyTelemetryView(discord.ui.View):
             original_qty = int(round(float(order.get("quantity") or 1.0)))
             original_qty = max(1, original_qty)
 
-            cache_price, live_price = await _fetch_cache_and_live_price(symbol)
-            if live_price <= 0.0:
-                continue
+            # Option A Logic: Retrieve suggested price & quantity
+            optimal_price = None
+            optimal_qty = None
 
-            holding_row = holding_map.get(symbol.upper(), {})
-            holding_shares = float(holding_row.get("quantity", 0.0) or 0.0)
-
-            try:
-                decision = await generate_alignment_decision(
-                    user_id=interaction.user.id,
-                    order_id=int(order["id"]),
-                    symbol=symbol,
-                    current_order_price=float(current_price),
-                    spot_price=float(live_price),
-                    original_qty=original_qty,
-                    iv=0.55,
-                    hist_iv=0.35,
-                    iv_rank=0.50,
-                    max_pain_price=100.0,
-                    prev_max_pain=100.0,
-                    skew_percentile=0.98,
-                    put_call_ratio=1.0,
-                    prev_close=float(
-                        cache_price if cache_price > 0.0 else current_price
-                    ),
-                    cache_price=cache_price,
-                    live_price=live_price,
-                    order_side=str(order.get("side") or "BUY"),
-                    holding_type=holding_type,
-                    holding_shares=holding_shares,
+            # 1. 優先使用 View 記憶體中攜帶的即時對齊建議價格
+            if order_id in self.suggestions:
+                optimal_price, optimal_qty = self.suggestions[order_id]
+                logger.info(
+                    f"一鍵套用：使用內存遙測建議 (order_id={order_id}, symbol={symbol}): "
+                    f"price={optimal_price}, qty={optimal_qty}"
                 )
-            except DataContaminationException:
-                continue
+            else:
+                # 2. 次之使用資料庫 kv_cache 中快取的對齊建議 (10 分鐘內有效)
+                key = f"telemetry:alignment_decision:{interaction.user.id}:{symbol.upper()}:{order_id}"
+                cached_data = get_kv_cache(key)
+                if cached_data and isinstance(cached_data, dict):
+                    ts_str = cached_data.get("ts")
+                    is_fresh = False
+                    if ts_str:
+                        try:
+                            ts_dt = datetime.fromisoformat(ts_str)
+                            if (datetime.utcnow() - ts_dt).total_seconds() < 600:
+                                is_fresh = True
+                        except Exception:
+                            pass
+                    if is_fresh:
+                        optimal_price = cached_data.get("suggested_price")
+                        optimal_qty = cached_data.get("suggested_qty")
+                        logger.info(
+                            f"一鍵套用：使用快取遙測建議 (order_id={order_id}, symbol={symbol}): "
+                            f"price={optimal_price}, qty={optimal_qty}"
+                        )
 
-            if decision is None:
-                continue
+            # 3. 若以上皆無，則後備使用原有的 Mock 參數重算以維持基本行為
+            if optimal_price is None or optimal_qty is None:
+                cache_price, live_price = await _fetch_cache_and_live_price(symbol)
+                if live_price <= 0.0:
+                    continue
 
-            optimal_price = float(decision.suggested_price)
-            optimal_qty = int(decision.suggested_qty)
+                holding_row = holding_map.get(symbol.upper(), {})
+                holding_shares = float(holding_row.get("quantity", 0.0) or 0.0)
+
+                try:
+                    decision = await generate_alignment_decision(
+                        user_id=interaction.user.id,
+                        order_id=order_id,
+                        symbol=symbol,
+                        current_order_price=float(current_price),
+                        spot_price=float(live_price),
+                        original_qty=original_qty,
+                        iv=0.55,
+                        hist_iv=0.35,
+                        iv_rank=0.50,
+                        max_pain_price=100.0,
+                        prev_max_pain=100.0,
+                        skew_percentile=0.98,
+                        put_call_ratio=1.0,
+                        prev_close=float(
+                            cache_price if cache_price > 0.0 else current_price
+                        ),
+                        cache_price=cache_price,
+                        live_price=live_price,
+                        order_side=str(order.get("side") or "BUY"),
+                        holding_type=holding_type,
+                        holding_shares=holding_shares,
+                    )
+                except DataContaminationException:
+                    continue
+
+                if decision is None:
+                    continue
+
+                optimal_price = float(decision.suggested_price)
+                optimal_qty = int(decision.suggested_qty)
+                logger.info(
+                    f"一鍵套用：重新計算後備建議 (order_id={order_id}, symbol={symbol}): "
+                    f"price={optimal_price}, qty={optimal_qty}"
+                )
 
             if (
                 abs(optimal_price - current_price) >= 0.01
@@ -1411,9 +1454,13 @@ class OrderUICog(commands.Cog):
             include_apply_button_hint=True,
             scheduled_mode=False,
         )
+        suggestions = {
+            item["order_id"]: (item["suggested_price"], item["suggested_qty"])
+            for item in alignment_items
+        }
         for embed in embeds:
             await interaction.followup.send(
-                embed=embed, view=ApplyTelemetryView(), ephemeral=True
+                embed=embed, view=ApplyTelemetryView(suggestions), ephemeral=True
             )
 
     @app_commands.command(
