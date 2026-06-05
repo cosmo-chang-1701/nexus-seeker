@@ -3,6 +3,7 @@ import logging
 from discord.ext import commands
 import asyncio
 import os
+import json
 import uuid
 from typing import Optional, Dict, Any, cast
 import database
@@ -156,6 +157,12 @@ class NexusBot(commands.Bot):
         embed_dict: Optional[Dict[str, Any]] = (
             cast(Any, embed.to_dict()) if embed else None
         )
+        if (
+            embed
+            and getattr(embed, "_view", None) is not None
+            and embed_dict is not None
+        ):
+            embed_dict["_view"] = getattr(embed, "_view")
         # 1. 存入資料庫 (持久化)
         await asyncio.to_thread(add_pending_notification, user_id, message, embed_dict)
         # 2. 喚醒發送工人
@@ -442,7 +449,23 @@ class NexusBot(commands.Bot):
                 if self.is_closed():
                     break
 
+                view_info = embed_dict.pop("_view", None) if embed_dict else None
                 embed = discord.Embed.from_dict(embed_dict) if embed_dict else None
+                view = None
+                if view_info:
+                    if view_info.startswith("ApplyTelemetryView:"):
+                        sug_str = view_info.split(":", 1)[1]
+                        try:
+                            from cogs.order_ui import ApplyTelemetryView
+
+                            sug_raw = json.loads(sug_str)
+                            suggestions = {
+                                int(k): (float(v[0]), int(v[1]))
+                                for k, v in sug_raw.items()
+                            }
+                            view = ApplyTelemetryView(suggestions)
+                        except Exception as e:
+                            logger.error(f"Failed to rebuild ApplyTelemetryView: {e}")
 
                 try:
                     user = await self.fetch_user(user_id)
@@ -457,6 +480,7 @@ class NexusBot(commands.Bot):
                             await user.send(
                                 content=chunk or None,
                                 embed=embed if index == 0 else None,
+                                view=view if (index == 0 and view) else None,
                             )
                         # 發送成功才從資料庫刪除
                         await asyncio.to_thread(delete_notification, notif_id)

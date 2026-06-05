@@ -84,33 +84,24 @@ def get_pending_count() -> int:
 
 ALL_NOTIFICATION_KEYS = [
     # 定時與掃描背景通知 (Scheduled & Scan)
-    "watchlist_heartbeat",
-    "pre_market_macro",
-    "pre_market_earnings",
-    "intraday_execution_guide",
+    "watchlist_heartbeat_alignment",
+    "pre_market_briefing",
     "intraday_decision_scan",
-    "post_market_risk",
-    "post_market_ai",
-    "post_market_sector_flow",
-    "next_day_strategy",
+    "post_market_intelligence",
     "weekly_vtr_report",
-    "order_telemetry_alignment_alert",
     # 即時風險與事件警報 (Real-time & Events)
     "profit_lock_alert",
     "gamma_fragility_alert",
-    "ditm_transition_alert",
-    "vtr_settlement_notice",
+    "option_defense_alert",
     "ddp_cheap_vol_alert",
-    "proactive_event_alert",
-    "global_vol_hedge_alert",
+    "volatility_risk_alert",
     "polymarket_whale_alert",
 ]
 
-# 預設通知狀態：大多數維持預設開啟，但允許針對單一 key 預設關閉以避免噪音
+# 預設通知狀態：大多數維持預設開啟
 DEFAULT_NOTIFICATION_SETTINGS: dict[str, bool] = {
     key: True for key in ALL_NOTIFICATION_KEYS
 }
-DEFAULT_NOTIFICATION_SETTINGS["order_telemetry_alignment_alert"] = False
 
 
 def get_user_notification_settings(user_id: int) -> dict[str, bool]:

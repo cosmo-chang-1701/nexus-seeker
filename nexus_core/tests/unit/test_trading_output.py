@@ -120,12 +120,13 @@ async def test_monitor_vtr_task_uses_ditm_helper():
     embed = object()
 
     with patch("cogs.trading.market_time.is_market_open", return_value=True), patch(
-        "cogs.trading.create_ditm_transition_alert_embed", return_value=embed
+        "cogs.trading.create_option_defense_alert_embed", return_value=embed
     ) as mock_builder:
         await cog.monitor_vtr_task()
 
     mock_builder.assert_called_once()
     kwargs = mock_builder.call_args.kwargs
+    assert kwargs["is_live"] is False
     assert kwargs["symbol"] == "TSLA"
     assert kwargs["action_taken"] == "已平倉 (Closed)"
     assert kwargs["exposure_pct"] == 12.5
@@ -162,13 +163,14 @@ async def test_monitor_vtr_task_uses_settlement_helper_for_non_ditm():
     embed = object()
 
     with patch("cogs.trading.market_time.is_market_open", return_value=True), patch(
-        "cogs.trading.create_vtr_settlement_notice_embed", return_value=embed
+        "cogs.trading.create_option_defense_alert_embed", return_value=embed
     ) as mock_builder:
         await cog.monitor_vtr_task()
 
     mock_builder.assert_called_once()
     kwargs = mock_builder.call_args.kwargs
-    assert kwargs["status_icon"] == "🔄 [轉倉完成]"
+    assert kwargs["is_live"] is False
+    assert kwargs["status_icon"] == "🔄"
     assert kwargs["symbol"] == "QQQ"
     assert kwargs["regime"] == "Balanced"
     bot.queue_dm.assert_awaited_once_with(1, embed=embed)

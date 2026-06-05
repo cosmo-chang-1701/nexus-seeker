@@ -101,12 +101,7 @@ async def test_post_market_loop_triggers_sector_report():
         agent = AnalystAgent(bot)
 
     # Mock methods called in post_market_loop
-    agent.run_postmarket_summary = AsyncMock(return_value="Summary")
-    agent.run_sector_flow_report = AsyncMock(
-        return_value=discord.Embed(title="📊 Nexus Seeker 收盤資金流向與板塊輪動報告")
-    )
-    agent.run_next_day_strategy = AsyncMock(return_value="Next Day")
-    agent.dispatch_report = AsyncMock()
+    agent.dispatch_post_market_intelligence = AsyncMock()
 
     # Mock timing functions to avoid sleeping
     with patch("cogs.analyst_agent.get_next_market_target_time") as mock_target, patch(
@@ -116,9 +111,6 @@ async def test_post_market_loop_triggers_sector_report():
         mock_sleep.return_value = 0.1
 
         # We need to break the while True loop in post_market_loop
-        # We can use side_effect to raise an exception or just let it run once if we can mock the loop differently
-        # But post_market_loop is a @tasks.loop(count=1) with a while True inside.
-
         # Let's mock the while True by making it run once then raising an error we catch
         mock_async_sleep.side_effect = [None, Exception("Stop loop")]
 
@@ -128,18 +120,8 @@ async def test_post_market_loop_triggers_sector_report():
             if str(e) != "Stop loop":
                 raise e
 
-        # Verify run_sector_flow_report was called
-        agent.run_sector_flow_report.assert_called_once()
-        # Verify dispatch_report was called for sector report and next day strategy
-        assert agent.dispatch_report.call_count == 2
-
-        # 檢查第一個調用 (Sector Report)
-        first_call_args = agent.dispatch_report.call_args_list[0][0][0]
-        assert first_call_args.title == "📊 Nexus Seeker 收盤資金流向與板塊輪動報告"
-
-        # 檢查第二個調用 (Next Day Strategy)
-        second_call_args = agent.dispatch_report.call_args_list[1][0][0]
-        assert second_call_args.title == "🎯 Nexus Seeker 次日策略制定"
+        # Verify dispatch_post_market_intelligence was called
+        agent.dispatch_post_market_intelligence.assert_called_once()
 
 
 @pytest.mark.asyncio
