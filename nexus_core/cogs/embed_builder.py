@@ -16,6 +16,7 @@ from typing import List, Dict, Any, Optional
 
 from models.schemas import WatchlistOptionPlan
 from ui import panel_renderer
+from market_analysis.uoa_telemetry import UOATradeResult, generate_uoa_ascii_table
 
 logger = logging.getLogger(__name__)
 
@@ -1086,6 +1087,63 @@ def _add_trend_and_support_fields(embed, data):
 # ============================================================================
 
 
+def _format_uoa_field(uoa_data: list) -> str:
+    """將 uoa_data 列表轉換為動態對齊的標準 ASCII 表格。"""
+    trades = []
+    for item in uoa_data:
+        if "action" in item and "intent" in item:
+            trade = UOATradeResult(
+                expiry=str(item.get("expiry", "")),
+                strike_price=float(item.get("strike", 0.0)),
+                option_type=str(item.get("type", "")),
+                trade_price=float(item.get("trade_price", 0.0)),
+                bid_price=float(item.get("bid_price", 0.0)),
+                ask_price=float(item.get("ask_price", 0.0)),
+                volume=int(item.get("volume", 0)),
+                open_interest=int(item.get("oi", 0)),
+                ratio=float(item.get("ratio", 0.0)),
+                ratio_str=str(item.get("ratio_str", f"{item.get('ratio', 0.0)}x")),
+                action=str(item.get("action", "")),
+                intent=str(item.get("intent", "")),
+                symbol=item.get("symbol"),
+            )
+        else:
+            expiry = str(item.get("expiry", ""))
+            strike = float(item.get("strike", 0.0))
+            opt_type = str(item.get("type", ""))
+            volume = int(item.get("volume", 0))
+            oi = int(item.get("oi", 0))
+            ratio_val = float(item.get("ratio", 0.0))
+            trade_type = str(item.get("trade_type", "SWEEP")).upper()
+            action = (
+                "🟢 BUY to OPEN (Ask)"
+                if trade_type == "SWEEP"
+                else "🔴 SELL to OPEN (Bid)"
+            )
+            intent = (
+                "🔥 機構主動買入：末日 Gamma 逼空"
+                if opt_type == "CALL"
+                else "🛡️ 機構開倉賣 PUT：強力構築下行支撐地板"
+            )
+            trade = UOATradeResult(
+                expiry=expiry,
+                strike_price=strike,
+                option_type=opt_type,
+                trade_price=0.0,
+                bid_price=0.0,
+                ask_price=0.0,
+                volume=volume,
+                open_interest=oi,
+                ratio=ratio_val,
+                ratio_str=f"{ratio_val:.2f}x",
+                action=action,
+                intent=intent,
+                symbol=item.get("symbol"),
+            )
+        trades.append(trade)
+    return generate_uoa_ascii_table(trades)
+
+
 def create_sentiment_scan_embed(
     symbol: str,
     skew_data: dict,
@@ -1262,47 +1320,9 @@ def create_sentiment_scan_embed(
 
     # UOA
     if uoa_data:
-        uoa_lines = ["```ansi"]
-        uoa_headers = ["到期日", "履約價", "類型", "機構/OI", "比例"]
-        uoa_widths = [10, 7, 4, 15, 6]
-        uoa_lines.append(
-            " | ".join(
-                _pad_string(h, w, "left" if i in (0, 2, 3) else "right")
-                for i, (h, w) in enumerate(zip(uoa_headers, uoa_widths))
-            )
-        )
-        uoa_lines.append("-" * (sum(uoa_widths) + 3 * (len(uoa_widths) - 1)))
-        for item in uoa_data:
-            expiry = str(item.get("expiry", "N/A"))
-            strike = f"${item.get('strike', 'N/A')}"
-            opt_type = str(item.get("type", "N/A")).upper()
-            ratio = f"{item.get('ratio', 'N/A')}x"
-            trade_type = str(item.get("trade_type", "SWEEP")).upper()
-            oi_change = item.get("oi_change_net", 0)
-
-            tag = "🔥 SWEEP" if trade_type == "SWEEP" else "📦 BLOCK"
-            oi_change_str = f"{oi_change:+d}" if oi_change != 0 else "0"
-            inst_str = f"{tag}({oi_change_str})"
-
-            expiry = _visual_truncate(expiry, uoa_widths[0])
-            strike = _visual_truncate(strike, uoa_widths[1])
-            opt_type = _visual_truncate(opt_type, uoa_widths[2])
-            inst_str = _visual_truncate(inst_str, uoa_widths[3])
-            ratio = _visual_truncate(ratio, uoa_widths[4])
-
-            row_str = " | ".join(
-                [
-                    _pad_string(expiry, uoa_widths[0], "left"),
-                    _pad_string(strike, uoa_widths[1], "right"),
-                    _pad_string(opt_type, uoa_widths[2], "left"),
-                    _pad_string(inst_str, uoa_widths[3], "left"),
-                    _pad_string(ratio, uoa_widths[4], "right"),
-                ]
-            )
-            uoa_lines.append(row_str)
-        uoa_lines.append("```")
+        table_str = _format_uoa_field(uoa_data)
         embed.add_field(
-            name="🐋 異常活動 (UOA)", value="\n".join(uoa_lines), inline=False
+            name="🐋 異常活動 (UOA)", value=f"```ansi\n{table_str}\n```", inline=False
         )
     else:
         embed.add_field(
@@ -2768,47 +2788,9 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     # 5. 🐋 異常活動 (UOA)
     uoa_data = data.get("uoa", [])
     if uoa_data:
-        uoa_lines = ["```ansi"]
-        uoa_headers = ["到期日", "履約價", "類型", "機構/OI", "比例"]
-        uoa_widths = [10, 7, 4, 15, 6]
-        uoa_lines.append(
-            " | ".join(
-                _pad_string(h, w, "left" if i in (0, 2, 3) else "right")
-                for i, (h, w) in enumerate(zip(uoa_headers, uoa_widths))
-            )
-        )
-        uoa_lines.append("-" * (sum(uoa_widths) + 3 * (len(uoa_widths) - 1)))
-        for item in uoa_data:
-            expiry = str(item.get("expiry", "N/A"))
-            strike = f"${item.get('strike', 'N/A')}"
-            opt_type = str(item.get("type", "N/A")).upper()
-            ratio = f"{item.get('ratio', 'N/A')}x"
-            trade_type = str(item.get("trade_type", "SWEEP")).upper()
-            oi_change = item.get("oi_change_net", 0)
-
-            tag = "🔥 SWEEP" if trade_type == "SWEEP" else "📦 BLOCK"
-            oi_change_str = f"{oi_change:+d}" if oi_change != 0 else "0"
-            inst_str = f"{tag}({oi_change_str})"
-
-            expiry = _visual_truncate(expiry, uoa_widths[0])
-            strike = _visual_truncate(strike, uoa_widths[1])
-            opt_type = _visual_truncate(opt_type, uoa_widths[2])
-            inst_str = _visual_truncate(inst_str, uoa_widths[3])
-            ratio = _visual_truncate(ratio, uoa_widths[4])
-
-            row_str = " | ".join(
-                [
-                    _pad_string(expiry, uoa_widths[0], "left"),
-                    _pad_string(strike, uoa_widths[1], "right"),
-                    _pad_string(opt_type, uoa_widths[2], "left"),
-                    _pad_string(inst_str, uoa_widths[3], "left"),
-                    _pad_string(ratio, uoa_widths[4], "right"),
-                ]
-            )
-            uoa_lines.append(row_str)
-        uoa_lines.append("```")
+        table_str = _format_uoa_field(uoa_data)
         embed.add_field(
-            name="🐋 異常活動 (UOA)", value="\n".join(uoa_lines), inline=False
+            name="🐋 異常活動 (UOA)", value=f"```ansi\n{table_str}\n```", inline=False
         )
     else:
         embed.add_field(

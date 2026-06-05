@@ -13,6 +13,7 @@ from services.market_data_service import BoundedCache
 import config
 from models.quant import IVMetrics
 from market_time import is_market_open
+from market_analysis.uoa_telemetry import UOATradeInput, classify_uoa_trade
 
 
 _iv_cache = BoundedCache(max_size=500)
@@ -277,20 +278,59 @@ class SentimentEngine:
                         else:
                             oi_change_net = int(oi_change_net)
 
+                        opt_type = (
+                            "CALL"
+                            if row["strike"] in chain.calls["strike"].values
+                            else "PUT"
+                        )
+                        trade_price = (
+                            float(row["lastPrice"])
+                            if "lastPrice" in row and pd.notna(row["lastPrice"])
+                            else 0.0
+                        )
+                        bid_price = (
+                            float(row["bid"])
+                            if "bid" in row and pd.notna(row["bid"])
+                            else 0.0
+                        )
+                        ask_price = (
+                            float(row["ask"])
+                            if "ask" in row and pd.notna(row["ask"])
+                            else 0.0
+                        )
+
+                        trade_input = UOATradeInput(
+                            expiry=exp,
+                            strike_price=float(row["strike"]),
+                            option_type=opt_type,
+                            trade_price=trade_price,
+                            bid_price=bid_price,
+                            ask_price=ask_price,
+                            volume=int(row["volume"]),
+                            open_interest=int(row["openInterest"]),
+                            symbol=symbol,
+                        )
+                        result = classify_uoa_trade(trade_input)
+
                         uoa_list.append(
                             {
                                 "symbol": symbol,
                                 "expiry": exp,
-                                "strike": row["strike"],
-                                "type": "CALL"
-                                if row["strike"] in chain.calls["strike"].values
-                                else "PUT",
-                                "volume": int(row["volume"]),
-                                "oi": int(row["openInterest"]),
-                                "ratio": round(
-                                    row["volume"] / max(row["openInterest"], 1), 2
-                                ),
-                                "iv": round(row["impliedVolatility"], 4),
+                                "strike": result.strike_price,
+                                "type": result.option_type,
+                                "volume": result.volume,
+                                "oi": result.open_interest,
+                                "ratio": result.ratio,
+                                "ratio_str": result.ratio_str,
+                                "trade_price": result.trade_price,
+                                "bid_price": result.bid_price,
+                                "ask_price": result.ask_price,
+                                "action": result.action,
+                                "intent": result.intent,
+                                "iv": round(row["impliedVolatility"], 4)
+                                if "impliedVolatility" in row
+                                and pd.notna(row["impliedVolatility"])
+                                else 0.0,
                                 "trade_type": trade_type,
                                 "oi_change_net": oi_change_net,
                             }
