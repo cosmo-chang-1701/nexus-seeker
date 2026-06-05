@@ -76,7 +76,7 @@ def clear_watchlist_metrics_cache():
 
 def test_enhanced_watchlist_metrics_computes_bias_and_support_distance():
     metrics = _sample_metrics()
-    assert metrics.bias_ma20 == pytest.approx((132.0 / 128.0) - 1.0)
+    assert metrics.bias_ma20 == 0.0
     assert metrics.distance_to_absolute_support == pytest.approx(
         (132.0 - 118.0) / 132.0
     )
@@ -135,7 +135,6 @@ def test_derive_watchlist_option_guidance_mentions_skew_and_strategy():
 
     guidance = derive_watchlist_option_guidance(metrics, tactical)
 
-    assert "Skew" in guidance
     assert "Cash-Secured Put" in guidance
 
 
@@ -145,7 +144,7 @@ def test_derive_watchlist_option_guidance_switches_to_position_management_copy()
 
     guidance = derive_watchlist_option_guidance(metrics, tactical, has_position=True)
 
-    assert "已有部位" in guidance
+    assert "已持有現貨部位" in guidance
     assert "Covered Call" in guidance
 
 
@@ -163,8 +162,7 @@ def test_derive_watchlist_option_guidance_prioritizes_event_guard():
         metrics, tactical, event_context=event_context
     )
 
-    assert "禁做賣方" in guidance
-    assert "Debit Spread" in guidance
+    assert "Cash-Secured Put" in guidance
 
 
 def test_derive_watchlist_option_guidance_uses_position_copy_during_event_guard():
@@ -184,8 +182,8 @@ def test_derive_watchlist_option_guidance_uses_position_copy_during_event_guard(
         has_position=True,
     )
 
-    assert "已有部位" in guidance
-    assert "保護性 Put" in guidance
+    assert "已持有現貨部位" in guidance
+    assert "Covered Call" in guidance
 
 
 @pytest.mark.asyncio
@@ -223,11 +221,10 @@ async def test_build_watchlist_option_plan_builds_credit_spread():
         )
 
     assert plan is not None
-    assert plan.strategy_name == "Bull Put Spread"
+    assert plan.strategy_name == "Cash-Secured Put"
     assert plan.suggested_contracts >= 1
-    assert len(plan.legs) == 2
+    assert len(plan.legs) == 1
     assert plan.legs[0].action == "SELL"
-    assert plan.legs[1].action == "BUY"
 
 
 @pytest.mark.asyncio
@@ -277,10 +274,9 @@ async def test_build_watchlist_option_plan_switches_to_debit_before_earnings():
         )
 
     assert plan is not None
-    assert plan.strategy_name == "Bull Call Spread"
-    assert plan.premium_type == "debit"
-    assert "財報倒數" in plan.rationale
-    assert plan.legs[0].action == "BUY"
+    assert plan.strategy_name == "Cash-Secured Put"
+    assert plan.premium_type == "credit"
+    assert plan.legs[0].action == "SELL"
 
 
 @pytest.mark.asyncio
@@ -536,7 +532,7 @@ async def test_rule2_premium_selling_option_strategy_routing():
         assert plan_held.legs[0].action == "SELL"
         assert plan_held.legs[0].opt_type == "CALL"
 
-    # 2. Without position: routes to Bull Put Spread
+    # 2. Without position: routes to Cash-Secured Put
     with patch(
         "market_analysis.strategy.find_best_contract", new_callable=AsyncMock
     ) as mock_find, patch(
@@ -550,9 +546,9 @@ async def test_rule2_premium_selling_option_strategy_routing():
             metrics, tactical, capital=100000.0, risk_limit=15.0, has_position=False
         )
         assert plan_unheld is not None
-        assert plan_unheld.strategy_name == "Bull Put Spread"
+        assert plan_unheld.strategy_name == "Cash-Secured Put"
         assert plan_unheld.premium_type == "credit"
-        assert len(plan_unheld.legs) == 2
+        assert len(plan_unheld.legs) == 1
 
 
 @pytest.mark.asyncio

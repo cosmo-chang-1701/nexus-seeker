@@ -236,16 +236,32 @@ async def test_dispatch_watchlist_heartbeat_sends_all_watchlist_symbols():
         new_callable=AsyncMock,
         side_effect=[object(), object()],
     ), patch(
-        "market_analysis.intraday_pipeline.build_watchlist_skew_rule_commentary",
+        "services.llm_service.generate_watchlist_skew_commentary",
+        new_callable=AsyncMock,
         side_effect=["AAPL skew", "NVDA skew"],
     ), patch(
-        "services.llm_service.generate_watchlist_roundup_commentary",
+        "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
         new_callable=AsyncMock,
-        return_value="本輪先留意 NVDA 的事件風險與偏左 skew，AAPL 仍以例行追蹤為主。",
+        return_value=SimpleNamespace(
+            is_premarket=False,
+            current_iv=0.35,
+            iv_rank=50.0,
+            iv_percentile=50.0,
+            symbol="AAPL",
+        ),
     ), patch(
-        "cogs.trading.create_watchlist_overview_embed",
-        return_value=object(),
-    ) as mock_overview_builder, patch(
+        "market_analysis.sentiment_engine.SentimentEngine.calculate_max_pain",
+        new_callable=AsyncMock,
+        return_value={"max_pain": 150.0, "current_price": 150.0, "is_converging": True},
+    ), patch(
+        "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
+        new_callable=AsyncMock,
+        return_value=1.0,
+    ), patch(
+        "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
+        new_callable=AsyncMock,
+        return_value=[],
+    ), patch(
         "cogs.trading.create_watchlist_signal_embed",
         side_effect=[object(), object()],
     ) as mock_builder:
@@ -254,8 +270,7 @@ async def test_dispatch_watchlist_heartbeat_sends_all_watchlist_symbols():
         )
 
     assert mock_builder.call_count == 2
-    mock_overview_builder.assert_called_once()
-    assert bot.queue_dm.await_count == 3
+    assert bot.queue_dm.await_count == 2
     assert mock_guidance.call_args_list[0].kwargs["has_position"] is False
     assert mock_guidance.call_args_list[1].kwargs["has_position"] is True
     assert mock_builder.call_args_list[0].kwargs["option_guidance"] == "AAPL guidance"
@@ -328,15 +343,31 @@ async def test_dispatch_watchlist_heartbeat_honors_portfolio_only_mode():
         new_callable=AsyncMock,
         return_value=object(),
     ), patch(
-        "market_analysis.intraday_pipeline.build_watchlist_skew_rule_commentary",
+        "services.llm_service.generate_watchlist_skew_commentary",
+        new_callable=AsyncMock,
         side_effect=["AAPL skew", "NVDA skew"],
     ), patch(
-        "services.llm_service.generate_watchlist_roundup_commentary",
+        "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
         new_callable=AsyncMock,
-        return_value="本輪僅推送持倉內標的。",
+        return_value=SimpleNamespace(
+            is_premarket=False,
+            current_iv=0.35,
+            iv_rank=50.0,
+            iv_percentile=50.0,
+            symbol="NVDA",
+        ),
     ), patch(
-        "cogs.trading.create_watchlist_overview_embed",
-        return_value=object(),
+        "market_analysis.sentiment_engine.SentimentEngine.calculate_max_pain",
+        new_callable=AsyncMock,
+        return_value={"max_pain": 900.0, "current_price": 900.0, "is_converging": True},
+    ), patch(
+        "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
+        new_callable=AsyncMock,
+        return_value=1.0,
+    ), patch(
+        "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
+        new_callable=AsyncMock,
+        return_value=[],
     ), patch(
         "cogs.trading.create_watchlist_signal_embed",
         return_value=object(),
@@ -350,4 +381,4 @@ async def test_dispatch_watchlist_heartbeat_honors_portfolio_only_mode():
     mock_builder.assert_called_once()
     assert mock_builder.call_args.kwargs["holding_quantity"] == 100.0
     assert mock_builder.call_args.kwargs["holding_avg_cost"] == 900.0
-    assert bot.queue_dm.await_count == 2
+    assert bot.queue_dm.await_count == 1

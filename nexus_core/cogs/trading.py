@@ -31,7 +31,6 @@ from cogs.embed_builder import (
     create_gamma_fragility_embed,
     create_pre_market_earnings_embed,
     create_option_defense_alert_embed,
-    create_watchlist_overview_embed,
     create_watchlist_signal_embed,
     create_telemetry_alignment_embeds,
 )
@@ -39,6 +38,10 @@ from market_analysis.ghost_trader import GhostTrader
 
 ny_tz = ZoneInfo("America/New_York")
 logger = logging.getLogger(__name__)
+
+scanner_times = [
+    time(hour=h, minute=m, tzinfo=ny_tz) for h in range(24) for m in (0, 30)
+]
 
 
 class SchedulerCog(commands.Cog):
@@ -398,7 +401,7 @@ class SchedulerCog(commands.Cog):
     async def before_pre_market_risk_monitor(self):
         await self.bot.wait_until_ready()
 
-    @tasks.loop(minutes=30)
+    @tasks.loop(time=scanner_times)
     async def dynamic_market_scanner(self):
         """盤中動態巡邏：每 30 分鐘心跳檢查，僅在盤中執行掃描"""
         if not getattr(self.bot, "_is_leader_instance", True):
@@ -787,15 +790,14 @@ class SchedulerCog(commands.Cog):
         """每個 30 分鐘節點推送 watchlist 全標的技術 / 期權 / skew 戰報。"""
         from market_analysis.intraday_pipeline import (
             build_watchlist_option_plan,
-            build_watchlist_skew_rule_commentary,
             derive_watchlist_option_guidance,
             evaluate_watchlist_symbol,
             calculate_dynamic_trading_signals,
         )
         from services.calendar_service import calendar_service
-        from services.llm_service import generate_watchlist_roundup_commentary
-        from ui.formatter import generate_ansi_watchlist_report
         from services import market_data_service
+        from market_analysis.sentiment_engine import SentimentEngine
+        from services.llm_service import generate_watchlist_skew_commentary
 
         if all_watchlists is None:
             all_watchlists = database.get_all_watchlist()
@@ -825,12 +827,54 @@ class SchedulerCog(commands.Cog):
             for evaluation in evaluations
             if evaluation is not None
         }
-        skew_commentary_map: Dict[str, str] = {}
+
+        # Pre-fetch all upgraded metrics for each unique symbol in parallel
+        iv_metrics_map = {}
+        max_pain_map = {}
+        pcr_map = {}
+        uoa_map = {}
+        skew_commentary_map = {}
+
         if evaluation_map:
-            skew_commentary_map = {
-                symbol: build_watchlist_skew_rule_commentary(evaluation.metrics)
-                for symbol, evaluation in evaluation_map.items()
-            }
+            sym_list = list(evaluation_map.keys())
+
+            iv_results, mp_results, pcr_results, uoa_results = await asyncio.gather(
+                asyncio.gather(
+                    *(
+                        SentimentEngine.fetch_and_calculate_iv_metrics(s)
+                        for s in sym_list
+                    )
+                ),
+                asyncio.gather(
+                    *(SentimentEngine.calculate_max_pain(s) for s in sym_list)
+                ),
+                asyncio.gather(*(SentimentEngine.calculate_pcr(s) for s in sym_list)),
+                asyncio.gather(*(SentimentEngine.detect_uoa(s) for s in sym_list)),
+            )
+
+            for i, s in enumerate(sym_list):
+                iv_metrics_map[s] = iv_results[i]
+                max_pain_map[s] = mp_results[i]
+                pcr_map[s] = pcr_results[i]
+                uoa_map[s] = uoa_results[i]
+
+            # LLM commentary parallel execution
+            comm_tasks = []
+            for s in sym_list:
+                eval_obj = evaluation_map[s]
+                raw_payload = {
+                    "option_skew": eval_obj.metrics.option_skew,
+                    "option_skew_state": eval_obj.metrics.option_skew_state,
+                    "iv_rank": eval_obj.metrics.iv_rank,
+                    "scenario": eval_obj.tactical.scenario,
+                    "event_risk_summary": eval_obj.event_context.summary
+                    if eval_obj.event_context
+                    else "",
+                }
+                comm_tasks.append(generate_watchlist_skew_commentary(s, raw_payload))
+            comm_results = await asyncio.gather(*comm_tasks)
+            for i, s in enumerate(sym_list):
+                skew_commentary_map[s] = comm_results[i]
 
         user_symbols: Dict[int, list[str]] = {}
         for uid, sym, _ in all_watchlists:
@@ -852,7 +896,7 @@ class SchedulerCog(commands.Cog):
                 str(row.get("symbol", "")).upper(): row
                 for row in database.get_user_holdings(uid)
             }
-            summary_items: list[dict[str, Any]] = []
+
             deliverable_symbols: list[tuple[str, bool]] = []
             for sym in symbols:
                 evaluation = evaluation_map.get(sym)
@@ -862,55 +906,6 @@ class SchedulerCog(commands.Cog):
                 if option_alert_mode == 2 and not has_position:
                     continue
                 deliverable_symbols.append((sym, has_position))
-
-                sum_holding_row = user_holdings.get(sym.upper())
-                sum_holding_pnl_pct = None
-                if (
-                    sum_holding_row is not None
-                    and float(sum_holding_row.get("quantity", 0.0)) > 0.0
-                ):
-                    sum_holding_avg_cost = float(sum_holding_row.get("avg_cost", 0.0))
-                    if sum_holding_avg_cost > 0.0:
-                        sum_holding_pnl_pct = (
-                            evaluation.metrics.current_price - sum_holding_avg_cost
-                        ) / sum_holding_avg_cost
-
-                item_data: dict[str, Any] = {
-                    "symbol": sym,
-                    "alert_level": str(evaluation.tactical.alert_level),
-                    "skew_state": (
-                        f"{evaluation.metrics.option_skew:+.2f}% ｜ "
-                        f"{evaluation.metrics.option_skew_state}"
-                    ),
-                    "scenario": str(evaluation.tactical.scenario),
-                    "event_risk_summary": str(evaluation.event_context.summary),
-                }
-                if sum_holding_pnl_pct is not None:
-                    item_data["holding_pnl_pct"] = sum_holding_pnl_pct
-
-                summary_items.append(item_data)
-
-            if summary_items:
-                roundup_commentary = await generate_watchlist_roundup_commentary(
-                    {
-                        "symbols_total": len(summary_items),
-                        "symbols": [
-                            {
-                                **item,
-                                "skew_commentary": skew_commentary_map.get(
-                                    item["symbol"],
-                                    "",
-                                ),
-                            }
-                            for item in summary_items
-                        ],
-                    }
-                )
-                overview_embed = create_watchlist_overview_embed(
-                    summary_items,
-                    llm_overview=roundup_commentary,
-                )
-                await self.bot.queue_dm(uid, embed=overview_embed)
 
             for sym, has_position in deliverable_symbols:
                 evaluation = evaluation_map.get(sym)
@@ -1153,14 +1148,6 @@ class SchedulerCog(commands.Cog):
                             "持股為純現貨，已鎖定系統保護，抑制強制避險。"
                         )
 
-                # Generate the ANSI report with optional radar & system status
-                report_body = generate_ansi_watchlist_report(
-                    evaluation.metrics,
-                    evaluation.tactical,
-                    system_status=system_status,
-                    order_radar=order_radar,
-                )
-
                 # 計算動態買賣現貨與對齊期權操作建議
                 signals = calculate_dynamic_trading_signals(
                     evaluation.metrics,
@@ -1190,13 +1177,10 @@ class SchedulerCog(commands.Cog):
                 )
                 embed = create_watchlist_signal_embed(
                     symbol=sym,
-                    report_body=report_body,
                     option_guidance=option_guidance,
-                    event_risk_summary=evaluation.event_context.summary,
-                    skew_state=(
-                        f"{evaluation.metrics.option_skew:+.2f}% ｜ "
-                        f"{evaluation.metrics.option_skew_state}"
-                    ),
+                    event_risk_summary=evaluation.event_context.summary
+                    if evaluation.event_context
+                    else "",
                     alert_level=evaluation.tactical.alert_level,
                     option_plan=option_plan,
                     skew_commentary=skew_commentary_map.get(sym),
@@ -1211,6 +1195,13 @@ class SchedulerCog(commands.Cog):
                     buy_rationale=signals.get("buy_rationale"),
                     sell_rationale=signals.get("sell_rationale"),
                     telemetry_alignment_note=telemetry_alignment_note,
+                    # Upgraded Parameters
+                    metrics=evaluation.metrics,
+                    quote=q_data,
+                    iv_metrics=iv_metrics_map.get(sym),
+                    max_pain_data=max_pain_map.get(sym),
+                    pcr_data=pcr_map.get(sym),
+                    uoa_list=uoa_map.get(sym),
                 )
                 if suggestions_to_apply:
                     import json
