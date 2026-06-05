@@ -1854,13 +1854,20 @@ class IntradayScanPipeline:
                                 watchlist_eval is not None
                                 and watchlist_eval.tactical.alert_level != "green"
                             ):
-                                embed = await self._build_watchlist_heartbeat_embed(
-                                    watchlist_eval, ctx
-                                )
-                                await self.bot.queue_dm(
-                                    uid,
-                                    embed=embed,
-                                )
+                                if database.is_notification_enabled(
+                                    uid, "watchlist_heartbeat_alignment"
+                                ):
+                                    embed = await self._build_watchlist_heartbeat_embed(
+                                        watchlist_eval, ctx
+                                    )
+                                    await self.bot.queue_dm(
+                                        uid,
+                                        embed=embed,
+                                    )
+                                else:
+                                    logger.info(
+                                        f"使用者 {uid} 已關閉 watchlist_heartbeat_alignment 訂閱，略過心跳推送。"
+                                    )
                             market_data = await self._fetch_ticker_market_data(ticker)
                             if not market_data:
                                 continue
