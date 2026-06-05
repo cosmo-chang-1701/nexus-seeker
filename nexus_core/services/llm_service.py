@@ -287,59 +287,95 @@ async def generate_analyst_report(report_type: str, raw_data: dict) -> str:
 
 async def generate_watchlist_skew_commentary(symbol: str, raw_data: dict) -> str:
     """
-    程式化（規則引擎）替代個股 skew / IV / 事件風險解說，0 延遲，100% 穩定。
+    針對單一標的 skew / IV / 事件風險，在記憶體安全時呼叫 LLM 進行智能解說，否則降級為規則引擎。
     """
-    commentary_parts = []
     symbol = symbol.upper()
 
-    # 1. 偏斜 Skew 結構解讀
-    skew = float(raw_data.get("option_skew", 0.0))
-    skew_state = str(raw_data.get("option_skew_state", "N/A"))
-    if skew >= 5.0:
-        commentary_parts.append(
-            f"期權結構呈顯著左偏({skew_state})，反映市場避險情緒濃厚，機構正購入下行 Put 保險。"
-        )
-    elif skew <= -2.0:
-        commentary_parts.append(
-            f"期權結構呈顯著右偏({skew_state})，反映市場看多投機情緒高漲，買權 Call 相對昂貴。"
-        )
-    else:
-        commentary_parts.append(
-            f"期權偏斜（Skew {skew:+.2f}%）平穩，多空籌碼均衡，無明顯單向偏好。"
-        )
+    def _deterministic_commentary() -> str:
+        commentary_parts = []
+        skew = float(raw_data.get("option_skew", 0.0))
+        skew_state = str(raw_data.get("option_skew_state", "N/A"))
+        if skew >= 5.0:
+            commentary_parts.append(
+                f"期權結構呈顯著左偏({skew_state})，反映市場避險情緒濃厚，機構正購入下行 Put 保險。"
+            )
+        elif skew <= -2.0:
+            commentary_parts.append(
+                f"期權結構呈顯著右偏({skew_state})，反映市場看多投機情緒高漲，買權 Call 相對昂貴。"
+            )
+        else:
+            commentary_parts.append(
+                f"期權偏斜（Skew {skew:+.2f}%）平穩，多空籌碼均衡，無明顯單向偏好。"
+            )
 
-    # 2. 隱含波動率與支撐位階
-    iv_rank = float(raw_data.get("iv_rank", 50.0))
-    scenario = str(raw_data.get("scenario", "wait"))
-    if iv_rank > 65.0:
-        commentary_parts.append(
-            f"即時 IV Rank ({iv_rank:.1f}%) 偏高，權利金定價昂貴，賣方（如 CSP）極具收租溢價優勢。"
-        )
-    elif iv_rank < 35.0:
-        commentary_parts.append(
-            f"即時 IV Rank ({iv_rank:.1f}%) 偏低，權利金便宜，較利於買方以價差策略（Debit Spread）卡位。"
-        )
+        iv_rank = float(raw_data.get("iv_rank", 50.0))
+        scenario = str(raw_data.get("scenario", "wait"))
+        if iv_rank > 65.0:
+            commentary_parts.append(
+                f"即時 IV Rank ({iv_rank:.1f}%) 偏高，權利金定價昂貴，賣方（如 CSP）極具收租溢價優勢。"
+            )
+        elif iv_rank < 35.0:
+            commentary_parts.append(
+                f"即時 IV Rank ({iv_rank:.1f}%) 偏低，權利金便宜，較利於買方以價差策略（Debit Spread）卡位。"
+            )
 
-    # 3. 戰術與事件風控提示
-    event_risk_summary = str(raw_data.get("event_risk_summary", ""))
-    if "財報" in event_risk_summary or "倒數" in event_risk_summary:
-        commentary_parts.append(
-            "⚠️ 財報/事件前夕，波動率劇烈震盪，務必收縮裸賣方口數，優先選擇價差防守。"
-        )
-    elif scenario == "hard-hedge":
-        commentary_parts.append(
-            "🚨 已跌破關鍵防線，系統啟動 Hard-Hedge 網格防禦，切忌重倉逆勢摸底。"
-        )
-    elif scenario == "premium-harvest":
-        commentary_parts.append(
-            "🟡 現價接近 Phase 1 支撐帶，且 IV 偏高，適合在買點分批以 CSP 收集租金建倉。"
-        )
-    else:
-        commentary_parts.append(
-            "🟢 常態跟蹤區間，多頭架構穩固，維持既有網格或現貨策略守株待兔。"
-        )
+        event_risk_summary = str(raw_data.get("event_risk_summary", ""))
+        if "財報" in event_risk_summary or "倒數" in event_risk_summary:
+            commentary_parts.append(
+                "⚠️ 財報/事件前夕，波動率劇烈震盪，務必收縮裸賣方口數，優先選擇價差防守。"
+            )
+        elif scenario == "hard-hedge":
+            commentary_parts.append(
+                "🚨 已跌破關鍵防線，系統啟動 Hard-Hedge 網格防禦，切忌重倉逆勢摸底。"
+            )
+        elif scenario == "premium-harvest":
+            commentary_parts.append(
+                "🟡 現價接近 Phase 1 支撐帶，且 IV 偏高，適合在買點分批以 CSP 收集租金建倉。"
+            )
+        else:
+            commentary_parts.append(
+                "🟢 常態跟蹤區間，多頭架構穩固，維持既有網格或現貨策略守株待兔。"
+            )
 
-    return " ".join(commentary_parts)[:200]  # 控制字數，適合 Discord embed 欄位
+        return " ".join(commentary_parts)[:200]
+
+    # 1. 記憶體安全防線
+    if not is_memory_safe():
+        logger.warning(
+            f"🚨 [記憶體警報] 系統資源不足，{symbol} skew 診斷自動降級為規則引擎。"
+        )
+        return _deterministic_commentary()
+
+    # 2. 呼叫 LLM 進行智能診斷
+    system_prompt = """
+    你是 Nexus Seeker 的期權與波動率分析專家。
+    請分析給定的個股期權 skew、IV 階數與事件風險，提供簡短的診斷與策略指引。
+    你必須遵循以下規範：
+    1. 使用 100% 繁體中文，語氣冷靜、專業。
+    2. 控制在 120 字以內。
+    3. 必須嚴格遵循台灣期權交易術語，例如：選擇權 (Options)、履約價 (Strike)、權利金 (Premium)、價差期權/價差策略 (Spreads)、隱含波動率 (Implied Volatility)、乖離率 (Deviation)。絕對不要使用簡體字、期權、執行價、期權費、偏差等大陸用語。
+    """
+
+    user_prompt = (
+        f"標的: {symbol}\n期權與市場數據: {json.dumps(raw_data, ensure_ascii=False)}"
+    )
+
+    try:
+        response = await client.beta.chat.completions.parse(
+            model=LLM_MODEL_NAME,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            response_format=SkewCommentary,
+        )
+        parsed = response.choices[0].message.parsed
+        if parsed is None or not parsed.commentary:
+            raise ValueError("Parsed skew commentary is empty or None")
+        return parsed.commentary.strip()
+    except Exception as e:
+        logger.error(f"[{symbol}] LLM skew 診斷失敗，自動降級為規則引擎: {e}")
+        return _deterministic_commentary()
 
 
 async def generate_watchlist_roundup_commentary(raw_data: dict) -> str:

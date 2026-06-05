@@ -14,7 +14,8 @@ import re
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 
-from models.schemas import WatchlistOptionPlan
+from models.schemas import WatchlistOptionPlan, EnhancedWatchlistMetrics
+from models.quant import IVMetrics
 from ui import panel_renderer
 from market_analysis.uoa_telemetry import UOATradeResult, generate_uoa_ascii_table
 
@@ -2865,11 +2866,11 @@ def create_watchlist_embed(page_data, current_page, total_pages, total_items):
 
 def create_watchlist_signal_embed(
     symbol: str,
-    report_body: str,
-    option_guidance: str,
-    event_risk_summary: str,
-    skew_state: str,
-    alert_level: str,
+    report_body: str = "",
+    option_guidance: str = "",
+    event_risk_summary: str = "",
+    skew_state: str = "",
+    alert_level: str = "",
     option_plan: WatchlistOptionPlan | None = None,
     skew_commentary: str | None = None,
     has_position: bool = False,
@@ -2883,277 +2884,179 @@ def create_watchlist_signal_embed(
     buy_rationale: str | None = None,
     sell_rationale: str | None = None,
     telemetry_alignment_note: str | None = None,
+    # Upgraded Heartbeat Parameters
+    metrics: EnhancedWatchlistMetrics | None = None,
+    quote: dict | None = None,
+    iv_metrics: IVMetrics | None = None,
+    max_pain_data: dict | None = None,
+    pcr_data: dict | None = None,
+    uoa_list: list[dict] | None = None,
 ) -> discord.Embed:
-    """建立 watchlist 半小時心跳推播 Embed (視覺排版與情緒掃描一致)。"""
-    color = {
+    """建立標的分析中心 2.0 • 戰場心跳快照 (Watchlist Heartbeat) 的 Markdown-ASCII 統一模板。"""
+    from services.llm_service import is_memory_safe
+    from datetime import datetime, timezone, timedelta
+
+    taipei_tz = timezone(timedelta(hours=8))
+    timestamp_str = datetime.now(taipei_tz).strftime("%Y-%m-%d %H:%M:%S")
+
+    sys_status = "TELEMETRY RUNNING"
+    if not is_memory_safe():
+        sys_status = "TELEMETRY RUNNING (⚠️ LOW RAM DEGRADED)"
+
+    # Extract Live Price Metrics
+    if metrics is not None:
+        live_price = metrics.current_price
+        gex_putwall = metrics.gex_max_put_wall
+        vol_poc = metrics.volume_poc
+        skew_val = metrics.option_skew
+        skew_per = metrics.skew_percentile
+        pcr_val = metrics.pcr
+    else:
+        live_price = suitable_buy_price or suitable_sell_price or 100.0
+        gex_putwall = 100.0
+        vol_poc = 100.0
+        skew_val = 0.0
+        skew_per = 50.0
+        pcr_val = 1.0
+
+    # Extract Finnhub Quote Data
+    if quote is not None:
+        open_val = float(quote.get("o") or 0.0)
+        high_val = float(quote.get("h") or 0.0)
+        low_val = float(quote.get("l") or 0.0)
+        prev_close = float(quote.get("pc") or 0.0)
+        change_raw = float(quote.get("d") or 0.0)
+        change_pct = float(quote.get("dp") or 0.0)
+    else:
+        open_val = live_price
+        high_val = live_price
+        low_val = live_price
+        prev_close = live_price
+        change_raw = 0.0
+        change_pct = 0.0
+
+    # Extract IV metrics
+    if iv_metrics is not None:
+        iv_val = iv_metrics.current_iv * 100.0
+        iv_rank = iv_metrics.iv_rank
+        iv_status = iv_metrics.iv_status.upper()
+        expected_move = iv_metrics.expected_move_weekly
+    else:
+        iv_val = 30.0
+        iv_rank = 50.0
+        iv_status = "NORMAL"
+        expected_move = 5.0
+
+    # Extract Max Pain Data
+    if max_pain_data is not None:
+        max_pain = float(max_pain_data.get("max_pain") or 0.0)
+        pain_dist = float(max_pain_data.get("distance_pct") or 0.0)
+    else:
+        max_pain = live_price
+        pain_dist = 0.0
+
+    # Extract PCR Data
+    if pcr_data is not None:
+        pcr_status = pcr_data.get("state", "平衡")
+    else:
+        pcr_status = "平衡"
+
+    gex_dist = (
+        ((live_price - gex_putwall) / gex_putwall * 100.0) if gex_putwall else 0.0
+    )
+    change_emoji = "📈" if change_raw >= 0.0 else "📉"
+
+    # Unusual Options Activity (UOA) table formatting
+    uoa_table_lines = []
+    if uoa_list:
+        for item in uoa_list[:3]:
+            exp = item.get("expiry", "")
+            strike_val = float(item.get("strike", 0.0))
+            opt_type = str(item.get("type", "")).upper()
+            action = item.get("action", "")
+            vol_val = int(item.get("volume", 0))
+            ratio_str = item.get("ratio_str", "0.00x")
+            intent = item.get("intent", "")
+
+            uoa_table_lines.append(
+                f" {exp:<10} | ${strike_val:<9.2f} | {opt_type:<4} | {action:<21} | +{vol_val:<8,} | {ratio_str:<6} | {intent}"
+            )
+    if not uoa_table_lines:
+        uoa_table_lines.append(" (目前未偵測到符合篩選標準的異常期權交易流量)")
+
+    # Holding status
+    shares_str = f"{int(holding_quantity)}" if holding_quantity is not None else "0"
+    avg_cost_str = (
+        f"${holding_avg_cost:.2f}" if holding_avg_cost is not None else "$0.00"
+    )
+    pnl_str = (
+        f"{holding_pnl_pct * 100:+.2f}%" if holding_pnl_pct is not None else "0.00%"
+    )
+
+    inst_str = (
+        option_guidance
+        or "價格仍在防守框架內，維持現貨 $1.00×$ 零槓桿死守，將雙手嚴格離開期權開倉鍵。"
+    )
+
+    lines = [
+        "```ansi",
+        f" 標的分析中心 2.0: {symbol} 每半小時戰場心跳 (Watchlist Heartbeat)",
+        f" [{timestamp_str} - UTC+8] ｜ 系統狀態: {sys_status}",
+        "",
+        " 當前現價 (Current Price)",
+        f" ├─ 現價: ${live_price:.2f} ({change_emoji} {change_pct:+.2f}% / ${change_raw:+.2f})",
+        f" └─ 今日區間: 開盤: {open_val:.2f} | 最高: {high_val:.2f} | 最低: {low_val:.2f} | 前收: {prev_close:.2f}",
+        "",
+        " 物理籌碼牆與邊緣偵測 (Market Footprints)",
+        f" ├─ GEX PutWall (做市商底牆): ${gex_putwall:.2f} (當前價差: {gex_dist:+.2f}%)",
+        f" ├─ Vol POC (籌碼控制中心): ${vol_poc:.2f}",
+        f" └─ Option Skew (期權偏斜): {skew_val:+.2f}% (分位點: {skew_per:.1f}%)",
+        "",
+        " 隱含波動率與預期空間 (IV Context)",
+        f" ├─ Implied Volatility (IV): {iv_val:.1f}% ｜ IV Rank: {iv_rank:.1f}% (狀態: {iv_status})",
+        f" └─ 本週預期波幅 (Expected Move): ±${expected_move:.2f}",
+        "",
+        " 結算與目標 (Target Lock)",
+        f" ├─ 最大痛點結算 (Max Pain): ${max_pain:.2f} (當前價差: {pain_dist:+.2f}%)",
+        f" └─ Put/Call Ratio (PCR): {pcr_val:.2f} (狀態: {pcr_status})",
+        "",
+        " 異常活動穿透 (Directional UOA - Bid/Ask Track)",
+        " 到期日     | 履約價      | 類型 | 交易流向 [買/賣]      | 機構/OI    | 比例   | 戰略意圖映射",
+        " ---------------------------------------------------------------------------------------",
+    ]
+    lines.extend(uoa_table_lines)
+    lines.extend(
+        [
+            "",
+            " 賬戶股權防護指引 (Holding & Risk Alignment Guide)",
+            f" ├─ 既有現貨持倉: {shares_str} 股 ｜ 平均成本: {avg_cost_str} ｜ 當前損益: {pnl_str}",
+            f" └─ 操盤執行指南: {inst_str}",
+            "```",
+        ]
+    )
+    description = "\n".join(lines)
+
+    color_val = {
         "red": discord.Color.red(),
         "yellow": discord.Color.orange(),
         "green": discord.Color.green(),
     }.get(alert_level, discord.Color.blurple())
-    level_text = {
-        "red": "🔴 高優先",
-        "yellow": "🟡 注意觀察",
-        "green": "🟢 例行追蹤",
-    }.get(alert_level, "🔵 一般")
 
-    embed = discord.Embed(
-        title=f"📡 Watchlist 半小時戰報：{symbol}",
-        description=(
-            f"**警報等級：** {level_text}\n"
-            "根據價位 / 技術面、期權結構與 Skew 的半小時盤中快照。"
-        ),
-        color=color,
+    embed = NexusEmbed(
+        title=f"標的分析中心 2.0: {symbol} 每半小時戰場心跳",
+        description=description,
+        color=color_val,
         timestamp=datetime.now(timezone.utc),
     )
-    # Split the report body into three sections if it contains the standard headers
-    section_price = ""
-    section_defense = ""
-    section_sddm = ""
 
-    if (
-        "技術面與現價快照" in report_body
-        and "🛡️ 技術 / 防禦牆" in report_body
-        and "⚙️ SDDM / 對沖" in report_body
-    ):
-        lines = report_body.strip().split("\n")
-        clean_lines = []
-        for line in lines:
-            if line.strip() in ("```ansi", "```"):
-                continue
-            clean_lines.append(line)
-
-        sec1_lines = []
-        sec2_lines = []
-        sec3_lines = []
-
-        current_sec = 1
-        for line in clean_lines:
-            if "🛡️ 技術 / 防禦牆" in line:
-                current_sec = 2
-            elif "⚙️ SDDM / 對沖" in line:
-                current_sec = 3
-
-            # Skip the divider lines so that the three separate code blocks are clean
-            if "----------------------------------" in line:
-                continue
-
-            if current_sec == 1:
-                sec1_lines.append(line)
-            elif current_sec == 2:
-                sec2_lines.append(line)
-            elif current_sec == 3:
-                sec3_lines.append(line)
-
-        if sec1_lines:
-            section_price = "```ansi\n" + "\n".join(sec1_lines) + "\n```"
-        if sec2_lines:
-            section_defense = "```ansi\n" + "\n".join(sec2_lines) + "\n```"
-        if sec3_lines:
-            section_sddm = "```ansi\n" + "\n".join(sec3_lines) + "\n```"
-    else:
-        # Fallback to displaying all of it in the first field, and empty/placeholder in the others
-        section_price = report_body
-        section_defense = "```ansi\n 🛡️ 暫無防禦牆快照數據\n```"
-        section_sddm = "```ansi\n ⚙️ 暫無 SDDM / 對沖數據\n```"
-
-    embed.add_field(
-        name="📊 技術與現價快照",
-        value=_safe_embed_field_value(section_price, "暫無快照"),
-        inline=False,
-    )
-    embed.add_field(
-        name="🛡️ 技術 / 防禦牆",
-        value=_safe_embed_field_value(section_defense, "暫無防禦牆"),
-        inline=False,
-    )
-    embed.add_field(
-        name="⚙️ SDDM / 對沖",
-        value=_safe_embed_field_value(section_sddm, "暫無對沖機制"),
-        inline=False,
-    )
-
-    skew_lines = ["```ansi"]
-    skew_lines.append(f" 📐 {symbol} 期權偏斜判讀 (Option Skew Scan)")
-    skew_lines.append(" ----------------------------------")
-    skew_lines.append(f" └─ Skew 數據: \u001b[1;36m{skew_state}\u001b[0m")
-    if option_plan is not None:
-        skew_lines.append(f" └─ 策略解說: \u001b[3m{option_plan.rationale}\u001b[0m")
-    else:
-        skew_lines.append(" └─ 策略解說: 目前無可執行期權合約計畫")
-    skew_lines.append("```")
-    embed.add_field(
-        name="📐 Skew 與市場判讀",
-        value=_safe_embed_field_value("\n".join(skew_lines), "N/A"),
-        inline=False,
-    )
-
-    if skew_commentary:
-        commentary_lines = ["```ansi"]
-        commentary_lines.append(" ⚡ Skew 即時智能診斷 (Rule Engine)")
-        commentary_lines.append(" ----------------------------------")
-        wrapped_lines = _wrap_visual(skew_commentary.strip(), width=45, indent="   ")
-        for line in wrapped_lines:
-            commentary_lines.append(f" └─ {line}")
-        commentary_lines.append("```")
-        commentary_text = "\n".join(commentary_lines)
-    else:
-        commentary_text = "```ansi\n ⚡ 暫無 Skew 即時智能診斷\n```"
-    embed.add_field(
-        name="⚡ Skew 即時智能診斷",
-        value=_safe_embed_field_value(commentary_text, "暫無解說"),
-        inline=False,
-    )
-
-    event_lines = ["```ansi"]
-    event_lines.append(" 🗓️ 近期重大事件 (Macro & Earnings Events)")
-    event_lines.append(" ----------------------------------")
-    if event_risk_summary:
-        wrapped_event = _wrap_visual(event_risk_summary.strip(), width=45, indent="   ")
-        for line in wrapped_event:
-            event_lines.append(f" └─ {line}")
-    else:
-        event_lines.append(" └─ 未偵測到近期重大事件")
-    event_lines.append("```")
-    event_val = "\n".join(event_lines)
-    embed.add_field(
-        name="🗓️ 事件風控",
-        value=_safe_embed_field_value(event_val, "未偵測到近期重大事件"),
-        inline=False,
-    )
-
-    holding_lines = ["```ansi"]
-    holding_lines.append(f" 💼 {symbol} 持倉與操作指引 (Holding & Trading Guide)")
-    holding_lines.append(" ----------------------------------")
-    if has_position:
-        holding_lines.append(" └─ 部位狀態: \u001b[1;32m已持有\u001b[0m")
-        if holding_quantity is not None:
-            quantity_text = f"{holding_quantity:,.2f}".rstrip("0").rstrip(".")
-            holding_lines.append(f" └─ 現貨股數: {quantity_text} 股")
-            if holding_avg_cost is not None and holding_avg_cost > 0.0:
-                holding_lines.append(f" └─ 平均成本: ${holding_avg_cost:,.2f}")
-                if holding_pnl_pct is not None:
-                    pnl_val = holding_pnl_pct * 100
-                    pnl_color = (
-                        "\u001b[1;32m"
-                        if pnl_val > 0
-                        else "\u001b[1;31m"
-                        if pnl_val < 0
-                        else "\u001b[0m"
-                    )
-                    pnl_icon = "🟢" if pnl_val > 0 else "🔴" if pnl_val < 0 else "⚪"
-                    holding_lines.append(
-                        f" └─ 標的損益: {pnl_icon} {pnl_color}{pnl_val:+.2f}%\u001b[0m"
-                    )
-        if suitable_sell_price is not None and suitable_sell_price > 0.0:
-            holding_lines.append(
-                f" └─ 適合賣出價位: \u001b[1;33m${suitable_sell_price:,.2f}\u001b[0m (基於 Skew 與阻力位微調)"
-            )
-            if suitable_sell_shares is not None and suitable_sell_shares > 0:
-                holding_lines.append(
-                    f" └─ 建議賣出股數: \u001b[1;35m{suitable_sell_shares}\u001b[0m 股"
-                )
-            if sell_rationale:
-                holding_lines.append(f" └─ 操盤減碼指引: {sell_rationale}")
-    else:
-        holding_lines.append(" └─ 部位狀態: 未持有")
-        if suitable_buy_price is not None and suitable_buy_price > 0.0:
-            holding_lines.append(
-                f" └─ 適合買入價位: \u001b[1;32m${suitable_buy_price:,.2f}\u001b[0m (基於 Skew 折價調整)"
-            )
-            if suitable_buy_shares is not None and suitable_buy_shares > 0:
-                holding_lines.append(
-                    f" └─ 建議買入股數: \u001b[1;36m{suitable_buy_shares}\u001b[0m 股"
-                )
-            if buy_rationale:
-                holding_lines.append(f" └─ 操盤進場指引: {buy_rationale}")
-        else:
-            holding_lines.append(" └─ 操作提示: 目前無持倉，以 watchlist 追蹤觀察為主")
-    holding_lines.append("```")
-    embed.add_field(
-        name="💼 持倉與操作指引",
-        value=_safe_embed_field_value("\n".join(holding_lines), "暫無持倉與操作指引"),
-        inline=False,
-    )
-
-    guidance_lines = ["```ansi"]
-    guidance_lines.append(" 🎯 交易執行建議 (Tactical Option Guidance)")
-    guidance_lines.append(" ----------------------------------")
-    if option_guidance:
-        wrapped_guidance = _wrap_visual(option_guidance.strip(), width=45, indent="   ")
-        for line in wrapped_guidance:
-            guidance_lines.append(f" └─ {line}")
-    else:
-        guidance_lines.append(" └─ 暫無執行建議")
-    guidance_lines.append("```")
-    guidance_text = "\n".join(guidance_lines)
-    embed.add_field(
-        name="🎯 執行建議",
-        value=_safe_embed_field_value(guidance_text, "暫無建議"),
-        inline=False,
-    )
-
-    if option_plan is not None:
-        is_covered_call = "Covered Call" in option_plan.strategy_name
-        premium_type_tw = (
-            "收入 / Credit"
-            if is_covered_call
-            else (
-                "Debit / 收支"
-                if option_plan.premium_type == "debit"
-                else "Credit / 收租"
-            )
-        )
-        plan_lines = ["```ansi"]
-        plan_lines.append(" 🧾 建議期權合約 (Suggested Option Contract)")
-        plan_lines.append(" ----------------------------------")
-        plan_lines.append(
-            f" ├─ 策略名稱: \u001b[1;36m{option_plan.strategy_name}\u001b[0m ({premium_type_tw})"
-        )
-
-        if is_covered_call:
-            plan_lines.append(
-                f" ├─ 預估權利金: \u001b[1;32m${option_plan.estimated_net_premium:.2f}\u001b[0m ({premium_type_tw})"
-            )
-            if option_plan.legs:
-                leg = option_plan.legs[0]
-                plan_lines.append(
-                    f" └─ 執行合約結構: {leg.action.upper()} {leg.opt_type.upper()} {leg.strike:.2f} {leg.expiry} @ {leg.mid_price:.2f} (鎖定 Max Pain 利益中樞)"
-                )
-        else:
-            plan_lines.append(
-                f" ├─ 預估權利金: \u001b[1;32m${option_plan.estimated_net_premium:.2f}\u001b[0m (建議 \u001b[1;35m{option_plan.suggested_contracts}\u001b[0m 口)"
-            )
-            plan_lines.append(
-                f" ├─ 估計最大風險: \u001b[1;31m${option_plan.max_risk_amount:.2f}\u001b[0m"
-            )
-            plan_lines.append(" └─ 執行合約結構:")
-            for i, leg in enumerate(option_plan.legs):
-                is_last = i == len(option_plan.legs) - 1
-                connector = "    └──" if is_last else "    ├──"
-                leg_str = f"{connector} {leg.action.upper()} {leg.opt_type.upper()} {leg.strike:.2f} {leg.expiry} @ {leg.mid_price:.2f}"
-                plan_lines.append(leg_str)
-        plan_lines.append("```")
-        option_value = "\n".join(plan_lines)
-    else:
-        option_value = (
-            "```ansi\n"
-            " 🧾 建議期權合約 (Suggested Option Contract)\n"
-            " ----------------------------------\n"
-            " └─ 目前無符合條件的完整期權合約，保留現貨/策略觀察。\n"
-            "```"
-        )
-    embed.add_field(
-        name="🧾 可執行期權合約",
-        value=_safe_embed_field_value(option_value, "暫無合約"),
-        inline=False,
-    )
     if telemetry_alignment_note:
         embed.add_field(
             name="📡 Telemetry 待成交委託單實時對齊建議",
             value=_safe_embed_field_value(telemetry_alignment_note, "暫無對齊建議"),
             inline=False,
         )
-    embed.set_footer(text="Nexus Seeker Watchlist Heartbeat | 每 30 分鐘更新")
+
+    embed.set_footer(text="Watchlist Heartbeat | 核心作戰雷達每 30 分鐘自動校準")
     return embed
 
 

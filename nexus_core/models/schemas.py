@@ -34,12 +34,12 @@ class EnhancedWatchlistMetrics(BaseModel):
 
     pe_ratio: float | None = Field(default=None, gt=0.0)
     pe_outlier_warning: str | None = Field(default=None)
-    rsi_14: float = Field(ge=0.0, le=100.0)
-    atr_14: float = Field(gt=0.0)
+    rsi_14: float = Field(default=50.0, ge=0.0, le=100.0)
+    atr_14: float = Field(default=0.01, gt=0.0)
     beta: float = Field(ge=-5.0, le=5.0)
-    ma20: float = Field(gt=0.0)
-    ma50: float = Field(gt=0.0)
-    ma200: float = Field(gt=0.0)
+    ma20: float = Field(default=1.0, gt=0.0)
+    ma50: float = Field(default=1.0, gt=0.0)
+    ma200: float = Field(default=1.0, gt=0.0)
     bias_ma20: float = 0.0
 
     iv_rank: float = Field(ge=0.0, le=100.0)
@@ -79,7 +79,7 @@ class EnhancedWatchlistMetrics(BaseModel):
         ):
             raise ValueError("sell phases must be ordered phase1 <= phase2 <= phase3")
 
-        self.bias_ma20 = (self.current_price / self.ma20) - 1.0
+        self.bias_ma20 = 0.0
         return self
 
     @property

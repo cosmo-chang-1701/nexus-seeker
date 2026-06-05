@@ -446,34 +446,17 @@ def test_create_watchlist_signal_embed():
         sell_rationale="分批減碼 25%",
     )
 
-    assert embed.title == "📡 Watchlist 半小時戰報：NVDA"
-    assert "警報等級" in (embed.description or "")
-    assert embed.fields[0].name == "📊 技術與現價快照"
-    assert "watchlist report" in embed.fields[0].value
-    assert embed.fields[1].name == "🛡️ 技術 / 防禦牆"
-    assert "暫無防禦牆" in embed.fields[1].value
-    assert embed.fields[2].name == "⚙️ SDDM / 對沖"
-    assert "暫無 SDDM" in embed.fields[2].value
-
-    assert embed.fields[3].name == "📐 Skew 與市場判讀"
-    assert "測試用" in embed.fields[3].value
-    assert " └─ Skew 數據" in embed.fields[3].value
-    assert embed.fields[4].name == "⚡ Skew 即時智能診斷"
-    assert "Skew 左偏" in embed.fields[4].value
-    assert embed.fields[5].name == "🗓️ 事件風控"
-    assert "CPI" in embed.fields[5].value
-    assert embed.fields[6].name == "💼 持倉與操作指引"
-    assert "已持有" in embed.fields[6].value
-    assert "120 股" in embed.fields[6].value
-    assert "$150.00" in embed.fields[6].value
-    assert "標的損益" in embed.fields[6].value
-    assert "+10.00%" in embed.fields[6].value
-    assert "165.50" in embed.fields[6].value
-    assert "30" in embed.fields[6].value
-    assert "分批減碼 25%" in embed.fields[6].value
-    assert " └─ 部位狀態" in embed.fields[6].value
-    assert "Bull Put Spread" in embed.fields[8].value
-    assert "SELL PUT 120.00" in embed.fields[8].value
+    assert embed.title == "標的分析中心 2.0: NVDA 每半小時戰場心跳"
+    assert "當前現價 (Current Price)" in embed.description
+    assert "物理籌碼牆與邊緣偵測 (Market Footprints)" in embed.description
+    assert "隱含波動率與預期空間 (IV Context)" in embed.description
+    assert "結算與目標 (Target Lock)" in embed.description
+    assert "異常活動穿透 (Directional UOA - Bid/Ask Track)" in embed.description
+    assert (
+        "既有現貨持倉: 120 股 ｜ 平均成本: $150.00 ｜ 當前損益: +10.00%"
+        in embed.description
+    )
+    assert "操盤執行指南: 可先以 Bull Put Spread 佈局。" in embed.description
 
 
 def test_create_watchlist_signal_embed_covered_call():
@@ -498,7 +481,7 @@ def test_create_watchlist_signal_embed_covered_call():
     embed = create_watchlist_signal_embed(
         symbol="INTC",
         report_body="```ansi\nwatchlist report\n```",
-        option_guidance=" Covered Call 鎖利。",
+        option_guidance="Covered Call 鎖利。",
         event_risk_summary="無重大事件",
         skew_state="-5.10% ｜ 右偏 (Call 昂貴)",
         alert_level="yellow",
@@ -513,16 +496,12 @@ def test_create_watchlist_signal_embed_covered_call():
         sell_rationale="全數出清現貨避險",
     )
 
-    assert embed.title == "📡 Watchlist 半小時戰報：INTC"
-    assert "Covered Call" in embed.fields[8].value
-    assert "預估權利金:" in embed.fields[8].value
-    assert "$4.15" in embed.fields[8].value
-    assert "(收入 / Credit)" in embed.fields[8].value
+    assert embed.title == "標的分析中心 2.0: INTC 每半小時戰場心跳"
     assert (
-        "執行合約結構: SELL CALL 115.00 2026-06-26 @ 4.15 (鎖定 Max Pain 利益中樞)"
-        in embed.fields[8].value
+        "既有現貨持倉: 100 股 ｜ 平均成本: $113.50 ｜ 當前損益: -3.97%"
+        in embed.description
     )
-    assert "估計最大風險" not in embed.fields[8].value
+    assert "操盤執行指南: Covered Call 鎖利。" in embed.description
 
 
 def test_create_watchlist_overview_embed():

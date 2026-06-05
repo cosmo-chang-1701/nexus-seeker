@@ -38,38 +38,30 @@ def _quote_price(quote: Dict[str, Any], fallback: float = 0.0) -> float:
     return fallback
 
 
-def _calculate_rsi(close: pd.Series, window: int = 14) -> float:
-    delta = close.diff()
-    gains = delta.clip(lower=0.0)
-    losses = -delta.clip(upper=0.0)
-    avg_gain = gains.rolling(window=window, min_periods=window).mean()
-    avg_loss = losses.rolling(window=window, min_periods=window).mean()
-    if avg_gain.empty or avg_loss.empty:
-        return 50.0
+def get_cached_volume_poc(symbol: str) -> float | None:
+    from database.cache import get_kv_cache
 
-    last_gain = float(avg_gain.iloc[-1]) if not pd.isna(avg_gain.iloc[-1]) else 0.0
-    last_loss = float(avg_loss.iloc[-1]) if not pd.isna(avg_loss.iloc[-1]) else 0.0
-    if last_loss == 0.0:
-        return 100.0 if last_gain > 0.0 else 50.0
-
-    rs = last_gain / last_loss
-    return float(round(100.0 - (100.0 / (1.0 + rs)), 2))
+    val = get_kv_cache(f"volume_poc_{symbol.upper()}")
+    return float(val) if val is not None else None
 
 
-def _calculate_atr(df: pd.DataFrame, window: int = 14) -> float:
-    prev_close = df["Close"].shift(1)
-    tr = pd.concat(
-        [
-            df["High"] - df["Low"],
-            (df["High"] - prev_close).abs(),
-            (df["Low"] - prev_close).abs(),
-        ],
-        axis=1,
-    ).max(axis=1)
-    atr = tr.rolling(window=window, min_periods=window).mean()
-    if atr.empty or pd.isna(atr.iloc[-1]):
-        return 0.0
-    return float(round(float(atr.iloc[-1]), 4))
+def save_cached_volume_poc(symbol: str, poc: float) -> None:
+    from database.cache import save_kv_cache
+
+    save_kv_cache(f"volume_poc_{symbol.upper()}", poc)
+
+
+def get_cached_gex_putwall(symbol: str) -> float | None:
+    from database.cache import get_kv_cache
+
+    val = get_kv_cache(f"gex_putwall_{symbol.upper()}")
+    return float(val) if val is not None else None
+
+
+def save_cached_gex_putwall(symbol: str, wall: float) -> None:
+    from database.cache import save_kv_cache
+
+    save_kv_cache(f"gex_putwall_{symbol.upper()}", wall)
 
 
 def _estimate_volume_poc(df: pd.DataFrame, bins: int = 24) -> float:
@@ -111,21 +103,16 @@ def _derive_buy_levels(
     atr_14: float,
 ) -> tuple[float, float, float]:
     candidates = [
-        value
-        for value in [ma20, ma50, ma200, volume_poc, gex_max_put_wall]
-        if value > 0.0
+        value for value in [gex_max_put_wall, volume_poc] if 0.0 < value < current_price
     ]
-    if not candidates:
-        candidates = [
-            max(current_price - (atr_14 * factor), 0.01) for factor in (0.5, 1.0, 1.5)
-        ]
-
+    while len(candidates) < 3:
+        fallback = current_price * (1.0 - 0.02 * (len(candidates) + 1))
+        candidates.append(fallback)
     unique_levels = sorted({round(value, 2) for value in candidates}, reverse=True)
     while len(unique_levels) < 3:
-        fallback = max(current_price - (atr_14 * (len(unique_levels) + 1)), 0.01)
+        fallback = unique_levels[-1] * 0.98
         unique_levels.append(round(fallback, 2))
         unique_levels = sorted(set(unique_levels), reverse=True)
-
     return unique_levels[0], unique_levels[1], unique_levels[2]
 
 
@@ -135,14 +122,21 @@ def _derive_sell_levels(
     ma50: float,
     ma200: float,
     atr_14: float,
+    volume_poc: float = 0.0,
+    gex_max_put_wall: float = 0.0,
 ) -> tuple[float, float, float]:
     candidates = [
-        max(current_price + (atr_14 * 0.75), ma20),
-        max(current_price + (atr_14 * 1.5), ma50),
-        max(current_price + (atr_14 * 2.25), ma200),
+        value for value in [volume_poc, gex_max_put_wall] if value > current_price
     ]
-    levels = sorted(round(value, 2) for value in candidates)
-    return levels[0], levels[1], levels[2]
+    while len(candidates) < 3:
+        fallback = current_price * (1.0 + 0.02 * (len(candidates) + 1))
+        candidates.append(fallback)
+    unique_levels = sorted({round(value, 2) for value in candidates})
+    while len(unique_levels) < 3:
+        fallback = unique_levels[-1] * 1.02
+        unique_levels.append(round(fallback, 2))
+        unique_levels = sorted(set(unique_levels))
+    return unique_levels[0], unique_levels[1], unique_levels[2]
 
 
 def _buy_zone_status(current_price: float, phase1: float, phase2: float) -> str:
@@ -314,39 +308,77 @@ async def build_enhanced_watchlist_metrics(
     if df_spy.empty or len(df_spy) < 60:
         return None
 
-    last_close = float(df_stock["Close"].iloc[-1])
+    last_close = 0.0
+    if quote:
+        last_close = float(quote.get("pc", 0.0) or quote.get("c", 0.0) or 0.0)
+    if last_close <= 0.0 and not df_stock.empty:
+        last_close = float(df_stock["Close"].iloc[-1])
     current_price = _quote_price(quote, fallback=last_close)
-    ma20 = float(round(float(df_stock["Close"].tail(min(20, len(df_stock))).mean()), 4))
-    ma50 = float(round(float(df_stock["Close"].tail(min(50, len(df_stock))).mean()), 4))
-    ma200 = float(
-        round(float(df_stock["Close"].tail(min(200, len(df_stock))).mean()), 4)
+
+    # 1. Vol POC (Volume Point of Control) via SQLite cache fallback
+    volume_poc = 0.0
+    if not df_stock.empty and len(df_stock) >= 60:
+        try:
+            volume_poc = max(_estimate_volume_poc(df_stock), 0.01)
+            save_cached_volume_poc(symbol, volume_poc)
+        except Exception as e:
+            logger.warning(f"Error calculating Vol POC for {symbol}: {e}")
+    if volume_poc <= 0.0:
+        cached_poc = get_cached_volume_poc(symbol)
+        volume_poc = cached_poc if cached_poc else current_price
+
+    # 2. GEX PutWall via SQLite cache fallback
+    gex_max_put_wall = 0.0
+    vanna_sensitivity = 0.0
+    try:
+        gex_max_put_wall, vanna_sensitivity = await _estimate_options_wall_metrics(
+            symbol,
+            current_price,
+            dividend_yield,
+        )
+        save_cached_gex_putwall(symbol, gex_max_put_wall)
+    except Exception as e:
+        logger.warning(f"Error calculating GEX PutWall for {symbol}: {e}")
+    if gex_max_put_wall <= 0.0:
+        cached_wall = get_cached_gex_putwall(symbol)
+        gex_max_put_wall = cached_wall if cached_wall else current_price
+
+    # Legacy retail indicators are completely removed from pipeline
+    rsi_14 = 50.0
+    atr_14 = 0.01
+    ma20 = current_price
+    ma50 = current_price
+    ma200 = current_price
+    beta = (
+        0.0
+        if symbol.upper() == "BOXX"
+        else calculate_beta(df_stock, df_spy)
+        if not df_stock.empty and not df_spy.empty
+        else 1.0
     )
-    rsi_14 = _calculate_rsi(df_stock["Close"])
-    atr_14 = max(_calculate_atr(df_stock), 0.01)
-    beta = 0.0 if symbol.upper() == "BOXX" else calculate_beta(df_stock, df_spy)
-    volume_poc = max(_estimate_volume_poc(df_stock), 0.01)
-    gex_max_put_wall, vanna_sensitivity = await _estimate_options_wall_metrics(
-        symbol,
-        current_price,
-        dividend_yield,
+    relative_strength_spy = (
+        _relative_strength_vs_spy(df_stock, df_spy)
+        if not df_stock.empty and not df_spy.empty
+        else 0.0
     )
-    relative_strength_spy = _relative_strength_vs_spy(df_stock, df_spy)
 
     buy_phase1, buy_phase2, buy_phase3 = _derive_buy_levels(
         current_price,
-        ma20,
-        ma50,
-        ma200,
+        0.0,
+        0.0,
+        0.0,
         volume_poc,
         max(gex_max_put_wall, 0.01),
-        atr_14,
+        0.0,
     )
     sell_phase1, sell_phase2, sell_phase3 = _derive_sell_levels(
         current_price,
-        ma20,
-        ma50,
-        ma200,
-        atr_14,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        volume_poc=volume_poc,
+        gex_max_put_wall=max(gex_max_put_wall, 0.01),
     )
 
     pe_raw = _extract_pe_ratio(financials)
@@ -379,12 +411,16 @@ async def build_enhanced_watchlist_metrics(
         ma20=ma20,
         ma50=ma50,
         ma200=ma200,
-        iv_rank=iv_metrics.iv_rank,
-        iv_percentile=iv_metrics.iv_percentile,
-        option_skew=float(skew_metrics.get("skew", 0.0)),
-        skew_percentile=float(skew_metrics.get("skew_percentile", 50.0)),
-        option_skew_state=str(skew_metrics.get("state") or "N/A"),
-        pcr=float(pcr_metrics.get("pcr", 0.0)),
+        iv_rank=iv_metrics.iv_rank if iv_metrics else 50.0,
+        iv_percentile=iv_metrics.iv_percentile if iv_metrics else 50.0,
+        option_skew=float(skew_metrics.get("skew", 0.0)) if skew_metrics else 0.0,
+        skew_percentile=float(skew_metrics.get("skew_percentile", 50.0))
+        if skew_metrics
+        else 50.0,
+        option_skew_state=str(skew_metrics.get("state") or "N/A")
+        if skew_metrics
+        else "N/A",
+        pcr=float(pcr_metrics.get("pcr", 0.0)) if pcr_metrics else 0.0,
         volume_poc=volume_poc,
         gex_max_put_wall=max(gex_max_put_wall, 0.01),
         vanna_sensitivity=vanna_sensitivity,
@@ -906,7 +942,7 @@ def derive_watchlist_option_guidance(
     if tactical_model.scenario == "wait" or "WAIT" in tactical_model.sddm_route.upper():
         return "價格仍在防守框架內，維持現貨 $1.00×$ 零槓桿死守，將雙手嚴格離開期權開倉鍵。"
 
-    # 確保取得適合的買賣點價位 (如未提供，則以默認資金參數在線計算)
+    # 確保取得適合 the 買賣點價位 (如未提供，則以默認資金參數在線計算)
     if has_position and suitable_sell_price is None:
         sig = calculate_dynamic_trading_signals(
             metrics,
@@ -915,7 +951,7 @@ def derive_watchlist_option_guidance(
             capital=100000.0,
             risk_limit=15.0,
         )
-        suitable_sell_price = sig["suitable_sell_price"]
+        suitable_sell_price = sig.get("suitable_sell_price", metrics.current_price)
     elif not has_position and suitable_buy_price is None:
         sig = calculate_dynamic_trading_signals(
             metrics,
@@ -924,147 +960,19 @@ def derive_watchlist_option_guidance(
             capital=100000.0,
             risk_limit=15.0,
         )
-        suitable_buy_price = sig["suitable_buy_price"]
+        suitable_buy_price = sig.get("suitable_buy_price", metrics.current_price)
 
-    # IV Percentile 極端泡沫：封鎖買方路由 (Long Call / Long Put / Debit)
-    iv_percentile = float(getattr(metrics, "iv_percentile", 0.0) or 0.0)
-    if iv_percentile > 90.0:
-        warning = "🚨 當前隱含波動率已高度泡沫化，強烈預警造市商波動率扼殺 (IV Crush) 陷阱，全面關閉買方路由。"
-        if has_position:
-            return (
-                warning
-                + f"已有部位以現貨分批調節為主，或於阻力位 ${float(suitable_sell_price or 0.0):.2f} 建立 Covered Call／Collar 收租鎖利；"
-                "嚴禁任何單邊買入期權 (Long Call / Long Put) 或追價型 Debit 結構。"
-            )
-        return (
-            warning
-            + f"未持倉建議維持現貨觀察，等待價格回落至防線 ${float(suitable_buy_price or 0.0):.2f} 再評估；"
-            "不輸出任何 Long Call / Long Put 建議。"
-        )
-
-    # 屬性安全獲取 (支援測試用 SimpleNamespace 模擬物件)
-    current_price = metrics.current_price
-    skew_val = getattr(metrics, "option_skew", 0.0)
-    iv_rank = getattr(metrics, "iv_rank", 50.0)
-    buy_price_phase1 = getattr(
-        metrics, "buy_price_phase1", round(current_price * 0.97, 2)
-    )
-    sell_price_phase1 = getattr(
-        metrics, "sell_price_phase1", round(current_price * 1.03, 2)
-    )
-
-    # 徹底消滅「一邊逃跑、一邊虛值追高」的策略悖論
-    if getattr(metrics, "rsi_14", 50.0) > 65.0:
-        if has_position:
-            return (
-                f"RSI 14 達 {metrics.rsi_14:.1f} 極度超買過熱；"
-                f"⚠️ 現貨強烈建議分批止盈減碼，期權端優先考慮【現貨限價調節】或建立 Covered Call 鎖利，絕對禁止在高位盲目追高或買入虛值 Call。"
-            )
-        return (
-            f"RSI 14 達 {metrics.rsi_14:.1f} 極度超買過熱，現貨面臨回檔引力收斂風險；"
-            f"⚠️ 建議【等待引力收斂】，目前不宜推薦 any OTM 買權或看漲結構，不宜新開多單接盤。"
-        )
-
-    if event_context is not None and event_context.risk_mode == "event-lock":
-        if has_position:
-            return (
-                f"{event_context.summary} 目前已有部位，先以減碼 / 保護為主；"
-                f"建議於阻力位 ${suitable_sell_price:.2f} 附近減碼，期權優先考慮保護性 Put，避免事件前再做賣方收租。"
-            )
-        return (
-            f"{event_context.summary} 目前不建議賣方收租；"
-            f"若要在買點 ${suitable_buy_price:.2f} 附近保留方向判斷，優先以 Bear Put Spread / Bull Call Spread 這類定義風險結構替代現股。"
-        )
-
-    if event_context is not None and event_context.risk_mode == "earnings-guard":
-        if has_position:
-            return (
-                f"{event_context.summary} 財報事件前幾天先降低曝險；"
-                f"現貨接近阻力位 ${suitable_sell_price:.2f} 時分批減碼或配合 Covered Call 鎖利，避免財報前盲目擴大部位。"
-            )
-        return (
-            f"{event_context.summary} 財報前幾天避免 Cash-Secured Put 等賣方收租；"
-            f"若價格跌至安全買點 ${suitable_buy_price:.2f}，建議改以小倉 Bull Call Spread 參與，降低 IV Crush 風險。"
-        )
-
-    if event_context is not None and event_context.risk_mode == "macro-guard":
-        macro_name = event_context.macro_event or "重要總經數據"
-        is_occurring = any(ind in macro_name.upper() for ind in ["CPI", "FOMC", "NFP"])
-        placeholder = "CPI / FOMC / NFP" if is_occurring else macro_name
-        if has_position:
-            return (
-                f"{event_context.summary} {placeholder} 前先以續抱觀察、加強保護為主；"
-                f"可於阻力位 ${suitable_sell_price:.2f} 附近分批調節，期權優先考慮 Definition-Risk 價差結構。"
-            )
-        return (
-            f"{event_context.summary} {placeholder} 前先縮減交易規模，"
-            f"若價格回落至防線 ${suitable_buy_price:.2f} 想進場，期權優先選擇 Bull Call Spread 規避波動劇烈風險。"
-        )
-
-    if tactical_model.scenario == "hard-hedge":
-        if has_position:
-            return (
-                f"Skew {skew_val:+.2f}% 顯示下行尾端風險仍高；"
-                f"⚠️ 已持倉部位建議於阻力位 ${suitable_sell_price:.2f} 止損、減碼，或建立 Bear Put Spread 對沖保護，不建議逆勢加碼。"
-            )
-        return (
-            f"Skew {skew_val:+.2f}% 顯示下行尾端風險仍高，現階段不宜新開現股多單；"
-            f"若回落至買點 ${suitable_buy_price:.2f} 仍想建立方向曝險，優先以 Bear Put Spread 替代現股以嚴格鎖定最大風險。"
-        )
-
-    if tactical_model.scenario == "premium-harvest":
-        if has_position:
-            if skew_val >= 5.0:
-                return (
-                    f"IV Rank {iv_rank:.1f}% 配合左偏 Skew {skew_val:+.2f}%；"
-                    f"已有部位優先於阻力位 ${suitable_sell_price:.2f} 建立 Covered Call 或 Collar 進行收租與保護，避免直接加碼現股。"
-                )
-            return (
-                f"IV Rank {iv_rank:.1f}% 偏高，已有部位可優先於 ${suitable_sell_price:.2f} 建立 Covered Call 收租鎖利；"
-                "若欲加碼，建議改用風險較清楚的 Bull Put Spread。"
-            )
-        if skew_val >= 5.0:
-            return (
-                f"IV Rank {iv_rank:.1f}% 配合左偏 Skew {skew_val:+.2f}%；"
-                f"建議優先於動態買點 ${suitable_buy_price:.2f} 附近賣出 Cash-Secured Put 或 Bull Put Spread 收租，避免直接承接現股。"
-            )
-        return (
-            f"IV Rank {iv_rank:.1f}% 偏高，Skew {skew_val:+.2f}% 仍在可控區；買方成本較貴；"
-            f"建議於適合買入價 ${suitable_buy_price:.2f} 附近賣出 Cash-Secured Put 卡位，或改用 Bull Put Spread 降低風險。"
-        )
-
-    if current_price >= sell_price_phase1 and skew_val <= -2.0:
-        if has_position:
-            return (
-                f"價格進入賣壓阻力區且 Skew {skew_val:+.2f}% 偏右（買權昂貴，具看多情緒）；"
-                f"已有部位可分批於 ${suitable_sell_price:.2f} 止盈，或以此為履約價建立 Covered Call 鎖定部位利潤。"
-            )
-        return (
-            f"價格進入賣壓阻力區且 Skew {skew_val:+.2f}% 偏右（看多情緒）；"
-            f"現貨建議於阻力位 ${suitable_sell_price:.2f} 附近對已持有部位分批止盈，未持倉者此時不宜盲目追高。"
-        )
-
-    if current_price <= buy_price_phase1 and iv_rank < 65.0:
-        if has_position:
-            return (
-                f"價格接近買區、IV Rank {iv_rank:.1f}% 尚未過熱；"
-                f"已持持倉可於 ${suitable_buy_price:.2f} 小幅加碼，或改用 Bull Call Spread 替代現股，避免重倉攤平。"
-            )
-        return (
-            f"價格接近買區、IV Rank {iv_rank:.1f}% 尚未過熱；"
-            f"可於買點 ${suitable_buy_price:.2f} 分批買入現股，或賣出該履約價的 Cash-Secured Put 承接，或買 Bull Call Spread。"
-        )
-
+    # 1.00x pure equity cash-backed strategy option guidance
     if has_position:
         return (
-            f"Skew {skew_val:+.2f}% 目前未形成極端訊號；"
-            f"已有部位優先於阻力位 ${suitable_sell_price:.2f} 附近分批調節，或建立 Covered Call 進行收租保護。"
+            f"已持有現貨部位，建議於阻力位 ${float(suitable_sell_price or 0.0):.2f} "
+            f"建立 Covered Call (拋補看漲選擇權) 進行鎖利收租，並嚴格執行 1.00x 純現貨無槓桿防守。"
         )
-
-    return (
-        f"Skew {skew_val:+.2f}% 目前未形成極端訊號；"
-        f"現股建議耐心等待價格回落至防線 ${suitable_buy_price:.2f} 再分批布局，或於該價位賣出 Cash-Secured Put。"
-    )
+    else:
+        return (
+            f"目前未持倉，建議於安全買點 ${float(suitable_buy_price or 0.0):.2f} "
+            f"建立 Cash-Secured Put (現金擔保賣出賣權) 進行建倉收租，嚴禁任何單邊買入或價差期權策略。"
+        )
 
 
 def _mid_price_from_row(row: pd.Series) -> float:
@@ -1177,134 +1085,21 @@ async def build_watchlist_option_plan(
     width = 0.0
 
     event_lock = event_context is not None and event_context.risk_mode == "event-lock"
-    event_guard = event_context is not None and event_context.risk_mode in {
-        "event-lock",
-        "earnings-guard",
-        "macro-guard",
-    }
 
-    # 徹底消滅「一邊逃跑、一邊虛值追高」的策略悖論
-    if getattr(metrics, "rsi_14", 50.0) > 65.0:
-        if has_position:
-            # 僅允許 Covered Call 收租鎖利，絕對禁止買入任何看漲結構
-            strategy_name = "Covered Call (拋補看漲期權 / 高位收租)"
-            premium_type = "credit"
-            chain_opt_type = "call"
-            leg_opt_type = "CALL"
-            primary_leg = await find_best_contract(
-                metrics.symbol, "STO_CALL", 0.20, 21, 45
-            )
-            primary_action = "SELL"
-        else:
-            # 未持倉者：RSI 超買過熱，此時禁止任何買權或看漲價差，直接拒絕推薦新開多單結構 (WAIT)
-            return None
+    if has_position:
+        strategy_name = "Covered Call (拋補看漲期權 / 高位收租)"
+        premium_type = "credit"
+        chain_opt_type = "call"
+        leg_opt_type = "CALL"
+        primary_leg = await find_best_contract(metrics.symbol, "STO_CALL", 0.20, 21, 45)
+        primary_action = "SELL"
     else:
-        # Rule 2: Dynamic Option Strategy Optimization (Option Skew vs. Strategy Selector)
-        is_rule2_active = metrics.iv_rank > 50.0 and metrics.option_skew < 0.00
-
-        if is_rule2_active:
-            if has_position:
-                strategy_name = "Covered Call (拋補看漲期權 / 高位收租)"
-                premium_type = "credit"
-                chain_opt_type = "call"
-                leg_opt_type = "CALL"
-                primary_leg = await find_best_contract(
-                    metrics.symbol, "STO_CALL", 0.20, 21, 45
-                )
-                primary_action = "SELL"
-            else:
-                strategy_name = "Bull Put Spread"
-                premium_type = "credit"
-                chain_opt_type = "put"
-                leg_opt_type = "PUT"
-                primary_leg = await find_best_contract(
-                    metrics.symbol, "STO_PUT", -0.20, 30, 45
-                )
-                primary_action = "SELL"
-                cover_direction = "lower"
-        elif event_guard and tactical_model.scenario == "hard-hedge":
-            strategy_name = "Bear Put Spread"
-            premium_type = "debit"
-            chain_opt_type = "put"
-            leg_opt_type = "PUT"
-            primary_leg = await find_best_contract(
-                metrics.symbol, "BTO_PUT", -0.35, 21, 60
-            )
-            primary_action = "BUY"
-            cover_direction = "lower"
-        elif event_guard:
-            bullish_event_bias = metrics.current_price <= metrics.sell_price_phase1
-            if bullish_event_bias:
-                strategy_name = "Bull Call Spread"
-                premium_type = "debit"
-                chain_opt_type = "call"
-                leg_opt_type = "CALL"
-                primary_leg = await find_best_contract(
-                    metrics.symbol, "BTO_CALL", 0.45, 21, 60
-                )
-                primary_action = "BUY"
-                cover_direction = "higher"
-            else:
-                strategy_name = "Bear Put Spread"
-                premium_type = "debit"
-                chain_opt_type = "put"
-                leg_opt_type = "PUT"
-                primary_leg = await find_best_contract(
-                    metrics.symbol, "BTO_PUT", -0.35, 21, 60
-                )
-                primary_action = "BUY"
-                cover_direction = "lower"
-        elif tactical_model.scenario == "hard-hedge":
-            strategy_name = "Bear Put Spread"
-            premium_type = "debit"
-            chain_opt_type = "put"
-            leg_opt_type = "PUT"
-            primary_leg = await find_best_contract(
-                metrics.symbol, "BTO_PUT", -0.35, 21, 60
-            )
-            primary_action = "BUY"
-            cover_direction = "lower"
-        elif tactical_model.scenario == "premium-harvest":
-            chain_opt_type = "put"
-            leg_opt_type = "PUT"
-            primary_leg = await find_best_contract(
-                metrics.symbol, "STO_PUT", -0.20, 30, 45
-            )
-            primary_action = "SELL"
-            if metrics.option_skew >= 5.0:
-                strategy_name = "Bull Put Spread"
-                premium_type = "credit"
-                cover_direction = "lower"
-            else:
-                strategy_name = "Cash-Secured Put"
-                premium_type = "credit"
-        elif (
-            metrics.current_price >= metrics.sell_price_phase1
-            and metrics.option_skew <= -2.0
-        ):
-            strategy_name = "Call Credit Spread"
-            premium_type = "credit"
-            chain_opt_type = "call"
-            leg_opt_type = "CALL"
-            primary_leg = await find_best_contract(
-                metrics.symbol, "STO_CALL", 0.20, 21, 45
-            )
-            primary_action = "SELL"
-            cover_direction = "higher"
-        elif (
-            metrics.current_price <= metrics.buy_price_phase1 and metrics.iv_rank < 65.0
-        ):
-            strategy_name = "Bull Call Spread"
-            premium_type = "debit"
-            chain_opt_type = "call"
-            leg_opt_type = "CALL"
-            primary_leg = await find_best_contract(
-                metrics.symbol, "BTO_CALL", 0.45, 30, 60
-            )
-            primary_action = "BUY"
-            cover_direction = "higher"
-        else:
-            return None
+        strategy_name = "Cash-Secured Put"
+        premium_type = "credit"
+        chain_opt_type = "put"
+        leg_opt_type = "PUT"
+        primary_leg = await find_best_contract(metrics.symbol, "STO_PUT", -0.20, 30, 45)
+        primary_action = "SELL"
 
     if primary_leg is None or strategy_name is None or premium_type is None:
         return None
