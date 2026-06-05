@@ -332,3 +332,54 @@ async def test_build_watchlist_heartbeat_embed_includes_option_plan(intraday_pip
     assert create_embed_kwargs["suitable_sell_price"] == 0.0
     assert create_embed_kwargs["suitable_sell_shares"] == 0
     assert "Skew 避險情緒折價" in create_embed_kwargs["buy_rationale"]
+
+
+@pytest.mark.asyncio
+async def test_run_loop_exception_isolation(intraday_pipeline):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    # Setup mocks
+    intraday_pipeline.is_running = True
+    mock_now = datetime(2026, 6, 5, 10, 0, 0, tzinfo=ZoneInfo("America/New_York"))
+
+    called_tickers = []
+
+    async def mock_evaluate(ticker):
+        called_tickers.append(ticker)
+        if ticker == "AAPL":
+            raise ValueError("Mock AAPL Exception")
+        return None
+
+    intraday_pipeline.evaluate_watchlist_symbol = mock_evaluate
+
+    with patch(
+        "market_analysis.intraday_pipeline.is_market_open", return_value=True
+    ), patch(
+        "market_analysis.intraday_pipeline.datetime"
+    ) as mock_datetime_class, patch(
+        "database.get_all_user_ids", return_value=[42]
+    ), patch("database.get_full_user_context") as mock_ctx, patch(
+        "database.get_user_watchlist", return_value=[("AAPL", 1), ("MSFT", 1)]
+    ):
+        mock_datetime_class.now.return_value = mock_now
+
+        user_ctx = SimpleNamespace(
+            user_id=42,
+            enable_analyst_agent=True,
+            total_capital=100000.0,
+            risk_limit=15.0,
+            monthly_burn_rate=5000.0,
+            cash_reserve=20000.0,
+        )
+        mock_ctx.return_value = user_ctx
+
+        async def mock_sleep(secs):
+            intraday_pipeline.is_running = False
+
+        with patch("asyncio.sleep", side_effect=mock_sleep):
+            await intraday_pipeline._run_loop()
+
+    assert "AAPL" in called_tickers
+    assert "MSFT" in called_tickers
+    assert intraday_pipeline.is_running is False

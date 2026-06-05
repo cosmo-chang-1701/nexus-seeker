@@ -2051,57 +2051,65 @@ class IntradayScanPipeline:
                     # 掃描 watchlist 中的標的
                     watchlist = database.get_user_watchlist(uid)
                     for ticker, _ in watchlist:
-                        watchlist_eval = await self.evaluate_watchlist_symbol(ticker)
-                        if (
-                            watchlist_eval is not None
-                            and watchlist_eval.tactical.alert_level != "green"
-                        ):
-                            embed = await self._build_watchlist_heartbeat_embed(
-                                watchlist_eval, ctx
+                        try:
+                            watchlist_eval = await self.evaluate_watchlist_symbol(
+                                ticker
                             )
-                            await self.bot.queue_dm(
-                                uid,
-                                embed=embed,
-                            )
-                        market_data = await self._fetch_ticker_market_data(ticker)
-                        if not market_data:
-                            continue
-
-                        # 執行核心量化引擎
-                        output = self.engine.analyze_ticker(
-                            data=market_data,
-                            account_state=account_state,
-                            options_holdings=holdings,
-                            portfolio_greeks=portfolio_greeks,
-                            market_phase=phase,
-                            current_time=now_ny,
-                        )
-
-                        # 如果是 SPEAR 訊號或是 Vanna 偏離警戒，則發送 Discord 私訊通知
-                        if (
-                            output.sddm_route == "SPEAR"
-                            or "偏離" in output.vanna_hedging_instruction
-                        ):
-                            import database
-
-                            if database.is_notification_enabled(
-                                uid, "intraday_decision_scan"
+                            if (
+                                watchlist_eval is not None
+                                and watchlist_eval.tactical.alert_level != "green"
                             ):
-                                from cogs.embed_builder import (
-                                    create_intraday_scan_embed,
+                                embed = await self._build_watchlist_heartbeat_embed(
+                                    watchlist_eval, ctx
                                 )
+                                await self.bot.queue_dm(
+                                    uid,
+                                    embed=embed,
+                                )
+                            market_data = await self._fetch_ticker_market_data(ticker)
+                            if not market_data:
+                                continue
 
-                                if self._should_send_intraday_scan_report(
-                                    uid, ticker, phase, now_ny.date()
+                            # 執行核心量化引擎
+                            output = self.engine.analyze_ticker(
+                                data=market_data,
+                                account_state=account_state,
+                                options_holdings=holdings,
+                                portfolio_greeks=portfolio_greeks,
+                                market_phase=phase,
+                                current_time=now_ny,
+                            )
+
+                            # 如果是 SPEAR 訊號或是 Vanna 偏離警戒，則發送 Discord 私訊通知
+                            if (
+                                output.sddm_route == "SPEAR"
+                                or "偏離" in output.vanna_hedging_instruction
+                            ):
+                                import database
+
+                                if database.is_notification_enabled(
+                                    uid, "intraday_decision_scan"
                                 ):
-                                    embed = create_intraday_scan_embed(output)
-                                    await self.bot.queue_dm(uid, embed=embed)
-                                self._mark_intraday_scan_report_sent(
-                                    uid, ticker, now_ny.date()
-                                )
-                                logger.info(
-                                    f"Sent Intraday Decision report for {ticker} to user {uid}"
-                                )
+                                    from cogs.embed_builder import (
+                                        create_intraday_scan_embed,
+                                    )
+
+                                    if self._should_send_intraday_scan_report(
+                                        uid, ticker, phase, now_ny.date()
+                                    ):
+                                        embed = create_intraday_scan_embed(output)
+                                        await self.bot.queue_dm(uid, embed=embed)
+                                    self._mark_intraday_scan_report_sent(
+                                        uid, ticker, now_ny.date()
+                                    )
+                                    logger.info(
+                                        f"Sent Intraday Decision report for {ticker} to user {uid}"
+                                    )
+                        except Exception as ticker_err:
+                            logger.error(
+                                f"❌ IntradayScanPipeline 處理標的 {ticker} 時發生錯誤: {ticker_err}",
+                                exc_info=True,
+                            )
 
                 # 4. 睡眠 30 分鐘
                 await asyncio.sleep(self.scan_interval_seconds)
