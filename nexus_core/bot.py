@@ -97,7 +97,7 @@ def _get_embed_length(embed: discord.Embed) -> int:
 
 
 class NexusBot(commands.Bot):
-    def __init__(self):
+    def __init__(self) -> None:
         intents = discord.Intents.default()
         intents.message_content = True
         super().__init__(command_prefix="!", intents=intents)
