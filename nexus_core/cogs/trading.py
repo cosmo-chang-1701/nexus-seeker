@@ -30,8 +30,7 @@ from cogs.embed_builder import (
     create_profit_lock_alert_embed,
     create_gamma_fragility_embed,
     create_pre_market_earnings_embed,
-    create_ditm_transition_alert_embed,
-    create_vtr_settlement_notice_embed,
+    create_option_defense_alert_embed,
     create_watchlist_overview_embed,
     create_watchlist_signal_embed,
     create_telemetry_alignment_embeds,
@@ -53,14 +52,28 @@ class SchedulerCog(commands.Cog):
         self.trading_service = TradingService(bot)
 
         # 啟動背景任務
-        self.pre_market_risk_monitor.start()
+        # self.pre_market_risk_monitor.start()  # 已整合至 AnalystAgent 的 pre_market_loop
         self.dynamic_market_scanner.start()
-        self.dynamic_after_market_report.start()
+        # self.dynamic_after_market_report.start()  # 已整合至 AnalystAgent 的 post_market_loop
         self.monitor_vtr_task.start()
         self.monitor_real_portfolio_task.start()
         self.monitor_order_telemetry_alignment_task.start()
         self.daily_reddit_update.start()
         self.weekly_vtr_report_task.start()
+
+        # Intraday decision scan pipeline (Real-time Phase B SPEAR/Vanna warnings)
+        from market_analysis.intraday_pipeline import (
+            IntradayScanPipeline,
+            NexusGammaSqueezeEngine,
+        )
+
+        self.intraday_pipeline = IntradayScanPipeline(
+            bot, NexusGammaSqueezeEngine(base_gate_3_threshold=1000000.0)
+        )
+        self.intraday_pipeline.start()
+
+        # Scheduled Intraday Audit loop (every 120 minutes)
+        self.scheduled_intraday_audit.start()
 
         # 狀態與設定 (由 Cog 維護，與 Discord 狀態相關)
         self.signal_cooldowns: Dict[str, Any] = {}
@@ -74,14 +87,16 @@ class SchedulerCog(commands.Cog):
 
     async def cog_unload(self) -> None:
         """卸載 Cog 時取消所有背景任務。"""
-        self.pre_market_risk_monitor.cancel()
+        # self.pre_market_risk_monitor.cancel()
         self.dynamic_market_scanner.cancel()
-        self.dynamic_after_market_report.cancel()
+        # self.dynamic_after_market_report.cancel()
         self.monitor_vtr_task.cancel()
         self.monitor_real_portfolio_task.cancel()
         self.monitor_order_telemetry_alignment_task.cancel()
         self.daily_reddit_update.cancel()
         self.weekly_vtr_report_task.cancel()
+        self.intraday_pipeline.stop()
+        self.scheduled_intraday_audit.cancel()
         logger.info("SchedulerCog unloaded. Background tasks cancelled.")
 
     # ==========================================
@@ -788,10 +803,11 @@ class SchedulerCog(commands.Cog):
             return
 
         unique_symbols = sorted({sym for _, sym, _ in all_watchlists})
-        macro_event, earnings_map, df_spy = await asyncio.gather(
+        macro_event, earnings_map, df_spy, quotes = await asyncio.gather(
             calendar_service.get_next_high_impact_event(days=7),
             calendar_service.get_symbol_earnings_batch(unique_symbols),
             market_data_service.get_spy_history_df(period="1y"),
+            batch_get_quotes(unique_symbols),
         )
         evaluations = await asyncio.gather(
             *(
@@ -823,9 +839,11 @@ class SchedulerCog(commands.Cog):
                 user_symbols[uid].append(sym)
 
         for uid, symbols in user_symbols.items():
-            if not database.is_notification_enabled(uid, "watchlist_heartbeat"):
+            if not database.is_notification_enabled(
+                uid, "watchlist_heartbeat_alignment"
+            ):
                 logger.info(
-                    f"使用者 {uid} 已關閉 watchlist_heartbeat 訂閱，略過心跳推送。"
+                    f"使用者 {uid} 已關閉 watchlist_heartbeat_alignment 訂閱，略過心跳推送。"
                 )
                 continue
             user_context = database.get_full_user_context(uid)
@@ -952,6 +970,169 @@ class SchedulerCog(commands.Cog):
                 else:
                     holding_type = "LEVERAGED_MARGIN"
 
+                # Build Telemetry Suggestions and Alignment Notes
+                symbol_active_orders = [
+                    o
+                    for o in user_active_orders
+                    if str(o.get("symbol") or "").upper() == sym.upper()
+                ]
+                telemetry_alignment_note = None
+                suggestions_to_apply = {}
+                alignment_items = []
+
+                # Fetch prev_close from quotes
+                q_data = quotes.get(sym.upper(), {}) if quotes else {}
+                prev_close = float(q_data.get("pc") or 0.0)
+
+                for o in symbol_active_orders:
+                    order_type = str(o.get("order_type") or "").upper()
+                    if order_type in ("TRAILING_STOP_USD", "TRAILING_STOP_PCT"):
+                        continue
+                    limit_p = float(o.get("limit_price") or 0)
+                    stop_p = float(o.get("stop_price") or 0)
+                    if order_type in ("LIMIT", "STOP_LIMIT") and limit_p > 0:
+                        current_price = limit_p
+                        price_label = "掛單限價"
+                    elif order_type in ("STOP", "STOP_LIMIT") and stop_p > 0:
+                        current_price = stop_p
+                        price_label = "掛單停損價"
+                    else:
+                        current_price = limit_p if limit_p > 0 else stop_p
+                    if current_price <= 0:
+                        continue
+
+                    original_qty = int(round(float(o.get("quantity") or 1.0)))
+                    original_qty = max(1, original_qty)
+
+                    from market_analysis.telemetry_pricing_engine import (
+                        generate_alignment_decision,
+                    )
+
+                    decision = await generate_alignment_decision(
+                        user_id=uid,
+                        order_id=int(o.get("id") or 0),
+                        symbol=sym,
+                        current_order_price=float(current_price),
+                        spot_price=float(evaluation.metrics.current_price),
+                        original_qty=original_qty,
+                        iv=evaluation.metrics.iv_percentile / 100.0
+                        if evaluation.metrics.iv_percentile > 0
+                        else 0.35,
+                        hist_iv=0.35,
+                        iv_rank=evaluation.metrics.iv_rank / 100.0,
+                        max_pain_price=None,
+                        prev_max_pain=0.0,
+                        skew_percentile=evaluation.metrics.skew_percentile / 100.0,
+                        put_call_ratio=evaluation.metrics.pcr,
+                        prev_close=prev_close,
+                    )
+
+                    if decision is not None:
+                        suggested_price = float(decision.suggested_price)
+                        suggested_qty = int(decision.suggested_qty)
+
+                        if (
+                            abs(suggested_price - current_price) >= 0.01
+                            or suggested_qty != original_qty
+                        ):
+                            suggestions_to_apply[int(o.get("id"))] = (
+                                suggested_price,
+                                suggested_qty,
+                            )
+                            is_size_down = suggested_qty < original_qty
+
+                            gain_loss_pct = (
+                                (
+                                    (
+                                        evaluation.metrics.current_price
+                                        - holding_avg_cost
+                                    )
+                                    / holding_avg_cost
+                                    * 100.0
+                                )
+                                if (holding_avg_cost and holding_avg_cost > 0)
+                                else 0.0
+                            )
+                            wall_dist = (
+                                (
+                                    (
+                                        evaluation.metrics.current_price
+                                        - evaluation.metrics.gex_max_put_wall
+                                    )
+                                    / evaluation.metrics.gex_max_put_wall
+                                    * 100.0
+                                )
+                                if evaluation.metrics.gex_max_put_wall > 0
+                                else 0.0
+                            )
+
+                            if holding_type == "PURE_STOCK_100X":
+                                holding_type_label = "PURE STOCK (現貨防禦)"
+                                holding_status = "鋼鐵防線鎖定"
+                            elif holding_type == "COMPLEX_OPTIONS":
+                                holding_type_label = "COMPLEX OPTIONS (期權組合)"
+                                holding_status = "期權動態對沖"
+                            else:
+                                holding_type_label = "LEVERAGED (槓桿保證金)"
+                                holding_status = "槓桿動態監控"
+
+                            alignment_item = {
+                                "symbol": sym,
+                                "order_id": o.get("id"),
+                                "order_type": order_type,
+                                "price_label": price_label,
+                                "current_price": current_price,
+                                "original_qty": original_qty,
+                                "suggested_price": suggested_price,
+                                "suggested_qty": suggested_qty,
+                                "is_size_down": is_size_down,
+                                "alert_text": getattr(decision, "alert_text", None),
+                                "live_price": evaluation.metrics.current_price,
+                                "avg_cost": holding_avg_cost or 0.0,
+                                "gain_loss_pct": gain_loss_pct,
+                                "put_wall": evaluation.metrics.gex_max_put_wall,
+                                "wall_dist_pct": wall_dist,
+                                "wall_status": "支撐穩固"
+                                if wall_dist >= 0
+                                else "已跌破防線",
+                                "skew_val": evaluation.metrics.option_skew,
+                                "skew_pct": evaluation.metrics.skew_percentile,
+                                "skew_status": evaluation.metrics.option_skew_state,
+                                "iv_val": evaluation.metrics.iv_percentile,
+                                "iv_rank": evaluation.metrics.iv_rank,
+                                "iv_status": "HIGH"
+                                if evaluation.metrics.iv_rank > 70
+                                else "LOW"
+                                if evaluation.metrics.iv_rank < 30
+                                else "NORMAL",
+                                "holding_type_label": holding_type_label,
+                                "holding_shares": int(holding_quantity or 0),
+                                "holding_status": holding_status,
+                                "proximity_pct": abs(
+                                    evaluation.metrics.current_price - current_price
+                                )
+                                / evaluation.metrics.current_price
+                                * 100.0,
+                                "radar_status": "偏離建議區"
+                                if abs(suggested_price - current_price) >= 0.01
+                                else "精準對齊中",
+                                "system_status_flag": "⚠️ TAIL RISK REDUCTION"
+                                if is_size_down
+                                else "ACTIVE MONITOR",
+                                "system_instruction_directive": getattr(
+                                    decision, "alert_text", "偏離安全區，建議對齊。"
+                                ),
+                            }
+                            alignment_items.append(alignment_item)
+
+                if alignment_items:
+                    card_contents = []
+                    from cogs.embed_builder import _build_telemetry_alignment_ansi_card
+
+                    for item in alignment_items:
+                        card_contents.append(_build_telemetry_alignment_ansi_card(item))
+                    telemetry_alignment_note = "\n\n".join(card_contents)
+
                 system_status = None
                 # Apply sovereign gating for PURE_STOCK_100X: suppress panic directives
                 if holding_type == "PURE_STOCK_100X":
@@ -1029,7 +1210,14 @@ class SchedulerCog(commands.Cog):
                     suitable_sell_shares=signals.get("suitable_sell_shares"),
                     buy_rationale=signals.get("buy_rationale"),
                     sell_rationale=signals.get("sell_rationale"),
+                    telemetry_alignment_note=telemetry_alignment_note,
                 )
+                if suggestions_to_apply:
+                    import json
+
+                    embed._view = (
+                        f"ApplyTelemetryView:{json.dumps(suggestions_to_apply)}"
+                    )
                 await self.bot.queue_dm(uid, embed=embed)
 
     async def _run_market_scan_logic(self, is_auto=True, triggered_by=None):
@@ -1256,6 +1444,31 @@ class SchedulerCog(commands.Cog):
         await self.bot.wait_until_ready()
 
     # ==========================================
+    # ⚡ 盤中量化掃描與執行指南 (Scheduled Audit)
+    # ==========================================
+    @tasks.loop(minutes=120)
+    async def scheduled_intraday_audit(self):
+        """每 120 分鐘執行盤中 Scheduled Audit (Active Execution Guide)"""
+        if not getattr(self.bot, "_is_leader_instance", True):
+            return
+        if not market_time.is_market_open():
+            return
+
+        logger.info("⚡ [Scheduled Audit] 啟動 120 分鐘盤中 Scheduled Audit 掃描...")
+        try:
+            analyst_cog = self.bot.get_cog("AnalystAgent")
+            if analyst_cog:
+                await analyst_cog.dispatch_intraday_guide()
+            else:
+                logger.warning("未找到 AnalystAgent Cog，跳過執行指南分發。")
+        except Exception as e:
+            logger.error(f"120分鐘盤中 Scheduled Audit 掃描錯誤: {e}")
+
+    @scheduled_intraday_audit.before_loop
+    async def before_scheduled_intraday_audit(self):
+        await self.bot.wait_until_ready()
+
+    # ==========================================
     # 🚀 VTR 監控與風險即時預警
     # ==========================================
     @tasks.loop(minutes=30)
@@ -1279,6 +1492,10 @@ class SchedulerCog(commands.Cog):
                 # 偵測是否為 DITM 防禦事件
                 is_ditm = any("DITM" in str(tag) for tag in tags)
 
+                exposure_pct = (
+                    res["current_total_delta"] * res["spy_price"] / res["user_capital"]
+                ) * 100
+
                 if is_ditm:
                     exit_reason = next(
                         (
@@ -1294,39 +1511,35 @@ class SchedulerCog(commands.Cog):
                         else "已自動轉倉 (向上/向後轉倉)"
                     )
 
-                    exposure_pct = (
-                        res["current_total_delta"]
-                        * res["spy_price"]
-                        / res["user_capital"]
-                    ) * 100
-                    if database.is_notification_enabled(uid, "ditm_transition_alert"):
-                        embed = create_ditm_transition_alert_embed(
+                    if database.is_notification_enabled(uid, "option_defense_alert"):
+                        embed = create_option_defense_alert_embed(
+                            is_live=False,
                             symbol=trade_info["symbol"],
-                            exit_reason=exit_reason,
+                            status_icon="🛡️"
+                            if trade_info["status"] == "ROLLED"
+                            else "🔴",
                             action_taken=action_taken,
                             pnl=float(trade_info["pnl"]),
                             exposure_pct=exposure_pct,
+                            exit_reason=exit_reason,
                             hedge=hedge,
                         )
                         await self.bot.queue_dm(uid, embed=embed)
                 else:
-                    if database.is_notification_enabled(uid, "vtr_settlement_notice"):
-                        status_icon = (
-                            "🔄 [轉倉完成]"
+                    if database.is_notification_enabled(uid, "option_defense_alert"):
+                        status_icon = "🔄" if trade_info["status"] == "ROLLED" else "🔴"
+                        action_taken_str = (
+                            "已自動轉倉 (Rolled)"
                             if trade_info["status"] == "ROLLED"
-                            else "🔴 [自動平倉]"
+                            else "已自動平倉 (Closed)"
                         )
-                        exposure_pct = (
-                            res["current_total_delta"]
-                            * res["spy_price"]
-                            / res["user_capital"]
-                        ) * 100
-
                         await self.bot.queue_dm(
                             uid,
-                            embed=create_vtr_settlement_notice_embed(
-                                status_icon=status_icon,
+                            embed=create_option_defense_alert_embed(
+                                is_live=False,
                                 symbol=trade_info["symbol"],
+                                status_icon=status_icon,
+                                action_taken=action_taken_str,
                                 pnl=float(trade_info["pnl"]),
                                 exposure_pct=exposure_pct,
                                 regime=res.get("regime"),

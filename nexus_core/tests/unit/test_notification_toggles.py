@@ -19,13 +19,13 @@ def clean_db(db_conn):
 
 
 def test_default_all_enabled(db_conn):
-    """測試全新用戶通知預設值（允許單一 key 預設關閉以降低噪音）"""
+    """測試全新用戶通知預設值（預設全部開啟）"""
     user_id = 999111
     settings = get_user_notification_settings(user_id)
     assert len(settings) == len(ALL_NOTIFICATION_KEYS)
 
     for key in ALL_NOTIFICATION_KEYS:
-        expected = False if key == "order_telemetry_alignment_alert" else True
+        expected = True
         assert settings[key] is expected
         assert is_notification_enabled(user_id, key) is expected
 
@@ -33,7 +33,7 @@ def test_default_all_enabled(db_conn):
 def test_toggle_single_setting(db_conn):
     """測試單一通知項目的切換 (ON/OFF)"""
     user_id = 999111
-    target_key = "watchlist_heartbeat"
+    target_key = "watchlist_heartbeat_alignment"
 
     # 1. 切換為關閉 (False)
     set_user_notification_setting(user_id, target_key, False)
@@ -41,11 +41,11 @@ def test_toggle_single_setting(db_conn):
 
     settings = get_user_notification_settings(user_id)
     assert settings[target_key] is False
-    # 其他未設定項目仍應維持預設值（允許單一 key 預設關閉）
+    # 其他未設定項目仍應維持預設值
     for key in ALL_NOTIFICATION_KEYS:
         if key == target_key:
             continue
-        expected = False if key == "order_telemetry_alignment_alert" else True
+        expected = True
         assert settings[key] is expected
 
     # 2. 切換回開啟 (True)
@@ -92,8 +92,8 @@ async def test_notification_settings_view_structure(db_conn):
     select_polymarket = next(
         c for c in view.children if c.custom_id == "select_polymarket"
     )
-    assert len(select_scheduled.options) == 11
-    assert len(select_realtime.options) == 7
+    assert len(select_scheduled.options) == 5
+    assert len(select_realtime.options) == 5
     assert len(select_polymarket.options) == 4
 
     # 預期預設選項前綴為 🟢

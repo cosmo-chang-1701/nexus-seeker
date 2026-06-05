@@ -247,6 +247,14 @@ async def generate_analyst_report(report_type: str, raw_data: dict) -> str:
     - **🛡️ 風控管線評估與對沖決策**: Analyze macro_snapshot (VIX) and aggregate_risk_metrics (Delta, Heat).
     - **🧬 系統狀態與 STHE 優化**: Brief status of the system based on sector_correlation and volatility.
 
+    ### Specific Instructions for "盤後綜合風險與 AI 策略報告" (Post-market Intelligence):
+    If the report type contains "盤後綜合風險與 AI 策略報告", you MUST include the following in your analysis under the headers above:
+    - **🏁 財務生存跑道 (Financial Runway)**: Use aggregate_risk_metrics.avg_financial_runway_days. If >= 9999, describe as "無限 (收益已覆蓋支出)".
+    - **📦 當日盈虧歸因 (PnL Attribution)**: Use brinson_attribution_proxy data.
+    - **⚙️ 行業板塊資金輪動 (Sector Rotation)**: Analyze the sectors data (pct_change, rel_vol, skew).
+    - **🛡️ 盤後風險對沖決策**: Analyze Delta/Theta exposure and margin utilization.
+    - **🎯 次日交易策略模板 (Next Day Strategy)**: Generate specific tactical guidelines for tomorrow, including defense/resistance zones (防線區間) and execution trigger conditions (觸發條件).
+
     ### Specific Instructions for "盤前財報與估值調整" (Pre-market Earnings):
     If the report type contains "盤前財報與估值調整", you MUST include the following in your analysis under the headers above:
     - **🧬 財報影響力評估 (Impact Assessment)**: 根據即將發布財報的標的，分析其對所屬板塊的潛在波動傳導。

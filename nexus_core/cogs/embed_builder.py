@@ -2900,6 +2900,7 @@ def create_watchlist_signal_embed(
     suitable_sell_shares: int | None = None,
     buy_rationale: str | None = None,
     sell_rationale: str | None = None,
+    telemetry_alignment_note: str | None = None,
 ) -> discord.Embed:
     """建立 watchlist 半小時心跳推播 Embed (視覺排版與情緒掃描一致)。"""
     color = {
@@ -3164,6 +3165,12 @@ def create_watchlist_signal_embed(
         value=_safe_embed_field_value(option_value, "暫無合約"),
         inline=False,
     )
+    if telemetry_alignment_note:
+        embed.add_field(
+            name="📡 Telemetry 待成交委託單實時對齊建議",
+            value=_safe_embed_field_value(telemetry_alignment_note, "暫無對齊建議"),
+            inline=False,
+        )
     embed.set_footer(text="Nexus Seeker Watchlist Heartbeat | 每 30 分鐘更新")
     return embed
 
@@ -5054,3 +5061,336 @@ def create_telemetry_alignment_embed(
         scheduled_mode=scheduled_mode,
     )
     return embeds[0] if embeds else discord.Embed(title="Telemetry 對齊警報")
+
+
+def build_pre_market_briefing_embed(
+    macro_data: dict,
+    alerts: Optional[List[Any]] = None,
+    earnings_alerts: Optional[List[Dict[str, Any]]] = None,
+    scanned_symbols: Optional[List[str]] = None,
+    warning_days: int = 2,
+) -> discord.Embed:
+    """建立盤前綜合宏觀與自選股報告 Embed (🌅 盤前綜合宏觀與自選股報告)"""
+    is_risky = bool(alerts) or bool(earnings_alerts)
+    base_color = discord.Color.red() if is_risky else discord.Color.blue()
+
+    embed = discord.Embed(
+        title="🌅 Nexus Seeker | 盤前綜合宏觀與自選股報告",
+        description="盤前 30 分鐘市場狀態與自選股財報季預警快速簡報。",
+        color=base_color,
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    # 1. 巨觀數據指標
+    dxy = macro_data.get("dxy", 0.0)
+    tnx = macro_data.get("tnx", 0.0)
+    tnx_change = macro_data.get("tnx_change_bps", 0.0)
+    us2y = macro_data.get("us2y", 0.0)
+    vix = macro_data.get("vix", 0.0)
+    vix_change = macro_data.get("vix_change", 0.0)
+    spread = tnx - us2y
+
+    vix_emoji = "🔥" if vix > 25 else ("⚠️" if vix > 20 else "🟢")
+
+    lines = ["```ansi"]
+    headers = ["指標", "數值", "變動 / 備註"]
+    widths = [14, 8, 14]
+    lines.append(
+        " | ".join(
+            _pad_string(h, w, "left" if i == 0 else "right")
+            for i, (h, w) in enumerate(zip(headers, widths))
+        )
+    )
+    lines.append("-" * (sum(widths) + 3 * (len(widths) - 1)))
+
+    lines.append(
+        f"{_pad_string('DXY 美元指數', widths[0])} | {_pad_string(f'{dxy:.2f}', widths[1], 'right')} | {_pad_string('-', widths[2], 'right')}"
+    )
+    lines.append(
+        f"{_pad_string('TNX 10Y 公債', widths[0])} | {_pad_string(f'{tnx:.2f}%', widths[1], 'right')} | {_pad_string(f'{tnx_change:+.1f} bps', widths[2], 'right')}"
+    )
+    lines.append(
+        f"{_pad_string('US2Y 2Y 公債', widths[0])} | {_pad_string(f'{us2y:.2f}%', widths[1], 'right')} | {_pad_string(f'利差 {spread:+.2f}%', widths[2], 'right')}"
+    )
+    vix_color_start = " [0;31m" if vix > 25 else (" [0;33m" if vix > 20 else " [0;32m")
+    vix_note = f"{vix_change:+.2f} ({vix_emoji})"
+    vix_note_colored = f"{vix_change:+.2f} ({vix_color_start}{vix_emoji} [0m)"
+    vix_val_str = f"{vix:.2f}"
+    lines.append(
+        f"{_pad_string('VIX 恐慌指數', widths[0])} | {_pad_string(vix_val_str, widths[1], 'right')} | {_pad_string(vix_note, widths[2], 'right').replace(vix_note, vix_note_colored)}"
+    )
+    lines.append("```")
+
+    embed.add_field(name="🌍 巨觀數據指標", value="\n".join(lines), inline=False)
+
+    # 2. 宏觀風險警示
+    if alerts:
+        alert_text = "\n".join([f"• {a}" for a in alerts])
+        embed.add_field(
+            name="🚨 宏觀風險警示 (Macro Alerts)", value=alert_text, inline=False
+        )
+    else:
+        embed.add_field(
+            name="✅ 宏觀狀態",
+            value="殖利率曲線、匯率與波動率未見極端異常。維持市場部位。",
+            inline=False,
+        )
+
+    # 3. 自選股財報雷達
+    if earnings_alerts:
+        earnings_text = "\n\n".join(
+            (
+                f"**{item['symbol']}** "
+                f"({'⚠️ **持倉高風險**' if item['is_portfolio'] else '👀 觀察清單'})\n"
+                f"└ 📅 財報日: `{item['earnings_date']}` (倒數 **{item['days_left']}** 天)"
+            )
+            for item in earnings_alerts
+        )
+        embed.add_field(
+            name="🚨 自選股財報季雷達預警 (Earnings Radar)",
+            value=earnings_text,
+            inline=False,
+        )
+    else:
+        scanned_list = (
+            "、".join(f"`{symbol}`" for symbol in scanned_symbols)
+            if scanned_symbols
+            else "無"
+        )
+        embed.add_field(
+            name="✅ 自選股財報季雷達",
+            value=f"已掃描標的：{scanned_list}\n\n近 {warning_days} 日內無財報風險，安全過關！",
+            inline=False,
+        )
+
+    embed.set_footer(text="🌌 Nexus Seeker • 盤前綜合簡報")
+    return embed
+
+
+def build_post_market_intelligence_embed(
+    report_lines: List[str],
+    hedge_analysis: Optional[Dict[str, Any]] = None,
+    survival_runway: Optional[float] = None,
+    sectors_data: Optional[List[Dict[str, Any]]] = None,
+    ai_commentary: Optional[str] = None,
+) -> discord.Embed:
+    """建立盤後綜合風險與 AI 策略報告 Embed (📋 盤後綜合風險與 AI 策略報告)"""
+    embed_color = discord.Color.blue()
+    if ai_commentary:
+        if "🚨" in ai_commentary or "🆘" in ai_commentary:
+            embed_color = discord.Color.red()
+        elif "⚠️" in ai_commentary:
+            embed_color = discord.Color.orange()
+
+    embed = discord.Embed(
+        title="📋 Nexus Seeker | 盤後綜合風險與 AI 策略報告",
+        description="每日收盤結算、行業資金輪動、AI attribution 歸因與次日對沖決策綜合簡報。",
+        color=embed_color,
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    if survival_runway is not None:
+        runway_text = (
+            "無限 (收益已覆蓋支出)"
+            if survival_runway >= 9999
+            else f"`{survival_runway:,.1f}` 天"
+        )
+        embed.add_field(
+            name="🏁 財務生存跑道 (Financial Runway)",
+            value=f"```yaml\n預估剩餘天數: {runway_text}\n(基於現有現金儲備與 Theta 收益)\n```",
+            inline=False,
+        )
+
+    if report_lines:
+        macro_index = -1
+        for i, line in enumerate(report_lines):
+            if _is_macro_report_marker(line):
+                macro_index = i
+                break
+        if macro_index != -1:
+            positions_list = [
+                line.strip() for line in report_lines[:macro_index] if line.strip()
+            ]
+            macro_text = "\n".join(
+                line.strip() for line in report_lines[macro_index:] if line.strip()
+            )
+        else:
+            positions_list = [line.strip() for line in report_lines if line.strip()]
+            macro_text = "目前無宏觀風險數據。"
+
+        if positions_list:
+            positions_text = _parse_and_format_positions_table(
+                positions_list, survival_runway
+            )
+        else:
+            positions_text = "目前無持倉部位。"
+
+        embed.add_field(
+            name="📊 投資組合收盤持倉明細",
+            value=_safe_embed_field_value(positions_text, "暫無持倉"),
+            inline=False,
+        )
+        embed.add_field(
+            name="🌐 投資組合收盤宏觀風險",
+            value=_safe_embed_field_value(f"```\n{macro_text}\n```", "無數據"),
+            inline=False,
+        )
+
+    if sectors_data:
+        sector_lines = ["```ansi"]
+        sector_lines.append(" 🔄 板塊輪動快照 (Sector Rotation)")
+        sector_lines.append(" ----------------------------------")
+        headers = ["ETF", "板塊", "日變動", "量比", "Skew", "UOA"]
+        widths = [5, 18, 8, 6, 8, 4]
+        sector_lines.append(
+            " ".join(
+                [
+                    " | ".join(_pad_string(h, w) for h, w in zip(headers, widths)),
+                ]
+            )
+        )
+        sector_lines.append("-" * (sum(widths) + 3 * (len(widths) - 1)))
+        sorted_sectors = sorted(
+            sectors_data,
+            key=lambda item: abs(_safe_float(item.get("pct_change"))),
+            reverse=True,
+        )
+        for item in sorted_sectors:
+            sector_lines.append(
+                " | ".join(
+                    [
+                        _pad_string(
+                            _visual_truncate(str(item.get("symbol", "N/A")), widths[0]),
+                            widths[0],
+                        ),
+                        _pad_string(
+                            _visual_truncate(str(item.get("name", "N/A")), widths[1]),
+                            widths[1],
+                        ),
+                        _pad_string(
+                            f"{_safe_float(item.get('pct_change')):+.2f}%",
+                            widths[2],
+                            "right",
+                        ),
+                        _pad_string(
+                            f"{_safe_float(item.get('rel_vol')):.2f}x",
+                            widths[3],
+                            "right",
+                        ),
+                        _pad_string(
+                            f"{_safe_float(item.get('skew')):+.1f}",
+                            widths[4],
+                            "right",
+                        ),
+                        _pad_string(
+                            str(int(item.get("uoa_count", 0))), widths[5], "right"
+                        ),
+                    ]
+                )
+            )
+        sector_lines.append("```")
+        sector_value = "\n".join(sector_lines)
+        embed.add_field(
+            name="🔄 行業板塊資金輪動 (Sector Rotation)",
+            value=_safe_embed_field_value(sector_value, "無數據"),
+            inline=False,
+        )
+
+    if ai_commentary:
+        embed.add_field(
+            name="🧠 AI 損益歸因與次日策略點評",
+            value=_safe_embed_field_value(ai_commentary, "暫無分析"),
+            inline=False,
+        )
+
+    embed.set_footer(text="🌌 Nexus Seeker • 盤後綜合策略簡報")
+    return embed
+
+
+def create_option_defense_alert_embed(
+    *,
+    is_live: bool,
+    symbol: str,
+    status_icon: str,
+    action_taken: str,
+    pnl: float,
+    exposure_pct: float,
+    exit_reason: Optional[str] = None,
+    regime: Optional[str] = None,
+    target_delta: Optional[float] = None,
+    hedge: Optional[Dict[str, Any]] = None,
+) -> discord.Embed:
+    """建立期權轉倉防禦與結算警報 Embed (合併實盤與 VTR)"""
+    title_prefix = "🛡️ 【實盤防禦】" if is_live else "🤖 【VTR 自動處置結果】"
+    color = (
+        discord.Color.gold()
+        if is_live or "轉倉" in action_taken
+        else discord.Color.red()
+    )
+    if pnl < 0:
+        color = discord.Color.red()
+    elif pnl > 0:
+        color = discord.Color.green()
+
+    embed = discord.Embed(
+        title=f"{title_prefix} {symbol} 轉倉防禦與結算",
+        description=f"標的 **{symbol}** 已執行平倉或防禦性轉倉處置。\n\u200b",
+        color=color,
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.add_field(
+        name="處置狀態", value=f"{status_icon} **{action_taken}**", inline=True
+    )
+    embed.add_field(name="實現損益", value=f"💰 `${pnl:.2f}`", inline=True)
+    embed.add_field(
+        name="目前帳戶總曝險",
+        value=f"`{exposure_pct:.2f}%` (Beta-Weighted Delta)",
+        inline=True,
+    )
+
+    if exit_reason:
+        embed.add_field(
+            name="觸發原因 / 指標", value=f"```\n{exit_reason}\n```", inline=False
+        )
+
+    if regime is not None and target_delta is not None:
+        embed.add_field(name="🧠 系統自主位階判定", value=f"`{regime}`", inline=False)
+        embed.add_field(
+            name="理想總曝險目標", value=f"`{target_delta:.1f} Delta`", inline=True
+        )
+
+    if hedge:
+        embed.add_field(
+            name="🛡️ 自動對沖決策",
+            value=f"{hedge['action']} (缺口: `{hedge['gap']}`)",
+            inline=False,
+        )
+
+    embed.set_footer(text="🌌 Nexus Seeker • 期權轉倉防禦與結算警報")
+    return embed
+
+
+def create_volatility_risk_alert_embed(
+    *,
+    alert_type: str,
+    title_text: str,
+    description_text: str,
+    color_hex: int,
+    fields_data: List[Dict[str, Any]],
+    footer_text: str = "Nexus Seeker Volatility Risk Alert",
+) -> discord.Embed:
+    """建立波動率與重大事件對沖警報 Embed (合併主動與被動)"""
+    embed = discord.Embed(
+        title=title_text,
+        description=description_text,
+        color=discord.Color(color_hex),
+        timestamp=datetime.now(timezone.utc),
+    )
+    for field in fields_data:
+        embed.add_field(
+            name=field["name"],
+            value=field["value"],
+            inline=field.get("inline", False),
+        )
+    embed.set_footer(text=footer_text)
+    return embed

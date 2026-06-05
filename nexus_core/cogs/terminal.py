@@ -1389,27 +1389,19 @@ class TerminalCog(commands.Cog):
 # ============================================================================
 
 SCHEDULED_LABELS = {
-    "watchlist_heartbeat": "📊 自選半小時心跳監測",
-    "order_telemetry_alignment_alert": "📡 待成交委託單 Telemetry 對齊警報",
-    "pre_market_macro": "📈 盤前巨觀與避險環境報告",
-    "pre_market_earnings": "🔍 盤前自選股財報與估值報告",
-    "intraday_execution_guide": "🛡️ 盤中量化執行與避險指引",
-    "intraday_decision_scan": "⚡ 盤中量化掃描與避險執行指南",
-    "post_market_risk": "📊 盤後風險結算與對沖報告",
-    "post_market_ai": "🤖 盤後 AI 深度分析與歸因點評",
-    "post_market_sector_flow": "⚙️ 盤後行業板塊板動與輪動報告",
-    "next_day_strategy": "🎯 次日交易策略報告",
+    "watchlist_heartbeat_alignment": "📊 自選心跳與委託對齊",
+    "pre_market_briefing": "🌅 盤前綜合宏觀與自選股報告",
+    "intraday_decision_scan": "⚡ 盤中量化掃描與執行指南",
+    "post_market_intelligence": "📋 盤後綜合風險與 AI 策略報告",
     "weekly_vtr_report": "📅 每週 VTR 績效週報",
 }
 
 REALTIME_LABELS = {
     "profit_lock_alert": "💰 期權實單利潤鎖定警報",
     "gamma_fragility_alert": "⚠️ 組合 Gamma 脆弱性警報",
-    "ditm_transition_alert": "🔄 DITM 轉倉防禦警報",
-    "vtr_settlement_notice": "🔴 VTR 自動結算/轉倉通知",
+    "option_defense_alert": "🛡️ 期權轉倉防禦與結算警報",
     "ddp_cheap_vol_alert": "🌌 雙擊與便宜波動率預警",
-    "proactive_event_alert": "🗓️ 主動式事件避險預警",
-    "global_vol_hedge_alert": "🛡️ 波動率劇變與對沖警報",
+    "volatility_risk_alert": "🌪️ 波動率與重大事件對沖警報",
 }
 
 POLYMARKET_SETTINGS_LABELS = {

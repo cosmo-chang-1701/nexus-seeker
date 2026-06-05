@@ -32,7 +32,6 @@ from cogs.embed_builder import (
     create_ai_analysis_embed,
     create_earnings_report_embed,
     create_intraday_execution_guide_embed,
-    create_next_day_strategy_embed,
     create_sector_flow_report_embed,
     split_embed_by_fields,
 )
@@ -58,14 +57,14 @@ SECTORS = {
 class AnalystAgent(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        # 啟動三大動態排程任務
+        # 啟動動態排程任務
         self.pre_market_loop.start()
-        self.intra_day_loop.start()
+        # self.intra_day_loop.start()  # 已整合至 trading.py 的 intraday_decision_scan
         self.post_market_loop.start()
 
     def cog_unload(self):
         self.pre_market_loop.cancel()
-        self.intra_day_loop.cancel()
+        # self.intra_day_loop.cancel()
         self.post_market_loop.cancel()
 
     # ==========================================
@@ -88,14 +87,8 @@ class AnalystAgent(commands.Cog):
                     await asyncio.sleep(30)
                     continue
 
-                logger.info("🤖 [Analyst Pre-Market] 啟動盤前巨觀與財報掃描...")
-                macro_report = await self.run_macro_scan()
-                if macro_report:
-                    await self.dispatch_report(macro_report, "pre_market_macro")
-
-                earnings_report = await self.run_premarket_earnings()
-                if earnings_report:
-                    await self.dispatch_report(earnings_report, "pre_market_earnings")
+                logger.info("🤖 [Analyst Pre-Market] 啟動盤前綜合宏觀與自選股報告...")
+                await self.dispatch_pre_market_briefing()
             except Exception as e:
                 logger.error(f"Analyst Pre-Market loop error: {e}")
 
@@ -226,7 +219,7 @@ class AnalystAgent(commands.Cog):
         dispatched_count = 0
 
         for uid in user_ids:
-            if not database.is_notification_enabled(uid, "intraday_execution_guide"):
+            if not database.is_notification_enabled(uid, "intraday_decision_scan"):
                 continue
             ctx = database.get_full_user_context(uid)
 
@@ -340,17 +333,10 @@ class AnalystAgent(commands.Cog):
                     await asyncio.sleep(30)
                     continue
 
-                logger.info("🤖 [Analyst Post-Market] 啟動盤後總結與次日策略規劃...")
-                # 註記：summary_report (盤後風險結算報告) 已整合至 Trading Cog 的 personalized pipeline，此處略過發送以防重複。
-
-                sector_report = await self.run_sector_flow_report()
-                if sector_report:
-                    await self.dispatch_report(sector_report, "post_market_sector_flow")
-
-                next_day_report = await self.run_next_day_strategy()
-                if next_day_report:
-                    embed = create_next_day_strategy_embed(next_day_report)
-                    await self.dispatch_report(embed, "next_day_strategy")
+                logger.info(
+                    "🤖 [Analyst Post-Market] 啟動盤後綜合風險與 AI 策略報告流程..."
+                )
+                await self.dispatch_post_market_intelligence()
             except Exception as e:
                 logger.error(f"Analyst Post-Market loop error: {e}")
 
@@ -1057,6 +1043,279 @@ class AnalystAgent(commands.Cog):
             report += "✅ 已設定標準量化掃描參數。NRO 保證金限制正常運作。"
 
         return report
+
+    async def dispatch_pre_market_briefing(self):
+        # 1. 執行巨觀資料獲取
+        macro_data = await self._fetch_macro_data()
+        if isinstance(macro_data, tuple):
+            vix, dxy, tnx = macro_data
+            macro_data = {
+                "vix": vix,
+                "vix_change": 0.0,
+                "dxy": dxy,
+                "tnx": tnx,
+                "tnx_change_bps": 0.0,
+                "us2y": tnx - 0.2,
+            }
+        vix = macro_data.get("vix", 0.0)
+        vix_change = macro_data.get("vix_change", 0.0)
+        dxy = macro_data.get("dxy", 0.0)
+        tnx = macro_data.get("tnx", 0.0)
+        tnx_change_bps = macro_data.get("tnx_change_bps", 0.0)
+        us2y = macro_data.get("us2y", 0.0)
+        spread = tnx - us2y
+
+        macro_alerts = []
+        if spread < -0.2:
+            macro_alerts.append(
+                "殖利率曲線深度倒掛。市場反映中長期經濟衰退預期，建議關注防禦型資產"
+            )
+        if -0.1 <= spread <= 0.2 and tnx_change_bps < 0:
+            macro_alerts.append("殖利率曲線接近解除倒掛 (陡峭化)。留意衰退交易發酵")
+        if tnx > 4.5 and tnx_change_bps > 8:
+            macro_alerts.append(
+                "10 年期殖利率突破 4.5% 且短期急升。建議盤中降低對高 Beta / 估值敏感成長股的曝險"
+            )
+        if vix > 20 and vix_change > 2.0:
+            macro_alerts.append("恐慌指數急遽上升，市場避險情緒發酵，注意流動性風險")
+        if dxy > 105:
+            macro_alerts.append(
+                "美元指數處於強勢區間，可能壓抑跨國企業獲利與大宗商品表現"
+            )
+
+        # 2. 執行財報資料獲取
+        warning_days = 2
+        from services.trading_service import TradingService
+
+        ts = TradingService(self.bot)
+        user_earnings_data = await ts.get_pre_market_alerts_data(
+            warning_days=warning_days
+        )
+
+        user_ids = database.get_all_user_ids()
+        from cogs.embed_builder import build_pre_market_briefing_embed
+
+        for uid in user_ids:
+            if not database.is_notification_enabled(uid, "pre_market_briefing"):
+                continue
+            u_data = user_earnings_data.get(uid, {"alerts": [], "scanned_symbols": []})
+
+            # format alert dates and ensure they are parsed properly
+            formatted_alerts = []
+            for alert in u_data["alerts"]:
+                e_date_str = (
+                    alert["earnings_date"].strftime("%Y-%m-%d")
+                    if isinstance(alert["earnings_date"], datetime)
+                    or hasattr(alert["earnings_date"], "strftime")
+                    else str(alert["earnings_date"])
+                )
+                formatted_alerts.append(
+                    {
+                        "symbol": alert["symbol"],
+                        "is_portfolio": alert["is_portfolio"],
+                        "earnings_date": e_date_str,
+                        "days_left": alert["days_left"],
+                    }
+                )
+
+            embed = build_pre_market_briefing_embed(
+                macro_data=macro_data,
+                alerts=macro_alerts,
+                earnings_alerts=formatted_alerts,
+                scanned_symbols=u_data["scanned_symbols"],
+                warning_days=warning_days,
+            )
+            await self.bot.queue_dm(uid, embed=embed)
+
+    async def gather_sector_rotation_data(self):
+        macro = await get_macro_environment()
+        vix = macro.get("vix", 18.0)
+        vix_tier = get_vix_tier(vix)
+        spy_quote = await get_quote("SPY")
+
+        sector_results = []
+        for symbol, name in SECTORS.items():
+            try:
+                df = await get_history_df(symbol, period="1mo")
+                if df.empty:
+                    continue
+
+                pct_change = (
+                    (df["Close"].iloc[-1] - df["Close"].iloc[-2])
+                    / df["Close"].iloc[-2]
+                    * 100
+                )
+                vol_current = df["Volume"].iloc[-1]
+                vol_avg = df["Volume"].tail(20).mean()
+                rel_vol = vol_current / vol_avg if vol_avg > 0 else 1.0
+
+                try:
+                    skew_data = await SentimentEngine.calculate_skew(symbol)
+                except Exception:
+                    skew_data = {"skew": 0, "state": "N/A"}
+
+                try:
+                    uoa = await SentimentEngine.detect_uoa(symbol)
+                except Exception:
+                    uoa = []
+
+                sector_results.append(
+                    {
+                        "symbol": symbol,
+                        "name": name,
+                        "pct_change": round(pct_change, 2),
+                        "rel_vol": round(rel_vol, 2),
+                        "skew": skew_data.get("skew", 0),
+                        "skew_state": skew_data.get("state", "N/A"),
+                        "uoa_count": len(uoa),
+                    }
+                )
+            except Exception as e:
+                logger.error(f"Error gathering data for {symbol}: {e}")
+
+        poly_events = []
+        try:
+            GAMMA_API_BASE = "https://gamma-api.polymarket.com"
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    f"{GAMMA_API_BASE}/markets",
+                    params={"active": "true", "closed": "false", "limit": 20},
+                )
+                if resp.status_code == 200:
+                    markets = resp.json()
+                    for m in markets:
+                        if hasattr(self.bot, "polymarket_service"):
+                            if not self.bot.polymarket_service._is_relevant_market(m):
+                                continue
+                        poly_events.append(
+                            {
+                                "question": m.get("question"),
+                                "outcome": m.get("outcomes"),
+                                "price": m.get("outcomePrices"),
+                            }
+                        )
+                        if len(poly_events) >= 5:
+                            break
+        except Exception as e:
+            logger.error(f"Error fetching Polymarket data: {e}")
+
+        try:
+            spy_max_pain = await SentimentEngine.calculate_max_pain("SPY")
+        except Exception:
+            spy_max_pain = {"error": "N/A"}
+
+        return {
+            "vix": vix,
+            "vix_tier_name": vix_tier.get("name", "Unknown"),
+            "spy_price": spy_quote.get("c", 0),
+            "sectors": sector_results,
+            "poly_events": poly_events,
+            "spy_max_pain": spy_max_pain,
+        }
+
+    async def dispatch_post_market_intelligence(self):
+        # 1. Purge old cache
+        try:
+            purged_rows = database.purge_old_cache(days=30)
+            logger.info(
+                f"🧹 financials_cache 清理完成，刪除 {purged_rows} 筆 30 天前資料"
+            )
+        except Exception as e:
+            logger.warning(f"financials_cache 清理失敗: {e}")
+
+        # 2. Gather sector rotation data (run once)
+        sector_rotation_data = await self.gather_sector_rotation_data()
+
+        # 3. Gather portfolio risk metrics for all users (run once)
+        from services.trading_service import TradingService
+
+        ts = TradingService(self.bot)
+        try:
+            user_reports = await ts.get_after_market_report_data()
+        except Exception as e:
+            logger.error(f"Error gathering after market report data: {e}")
+            user_reports = {}
+
+        user_ids = database.get_all_user_ids()
+        import psutil
+        from cogs.embed_builder import build_post_market_intelligence_embed
+
+        for uid in user_ids:
+            if not database.is_notification_enabled(uid, "post_market_intelligence"):
+                continue
+
+            user_ctx = database.get_full_user_context(uid)
+            if not user_ctx.enable_analyst_agent:
+                continue
+
+            u_report = user_reports.get(uid, {})
+            report_lines = u_report.get("report_lines", [])
+            hedge_analysis = u_report.get("hedge_analysis", {})
+            survival_runway = u_report.get("survival_runway")
+
+            # 4. Memory Safety Gate Check
+            mem = psutil.virtual_memory()
+            if mem.percent > 85.0:
+                logger.warning(
+                    f"🚨 [Memory Gate] RAM usage ({mem.percent}%) > 85%, AI Commentary suspended for user {uid}"
+                )
+                ai_commentary = "⚠️ [Memory Gate] 系統記憶體使用率高於 85%，為確保系統穩定，盤後 AI 深度分析與歸因點評已暫停。"
+            else:
+                raw_data = {
+                    "macro_snapshot": {
+                        "vix": sector_rotation_data["vix"],
+                        "vix_tier": sector_rotation_data["vix_tier_name"],
+                        "spy_price": sector_rotation_data["spy_price"],
+                    },
+                    "brinson_attribution_proxy": {
+                        "total_net_pnl": round(hedge_analysis.get("net_pnl", 0), 2),
+                        "alpha_selection_pnl": round(
+                            hedge_analysis.get("alpha_contribution", 0), 2
+                        ),
+                        "market_hedge_pnl": round(
+                            hedge_analysis.get("hedge_contribution", 0), 2
+                        ),
+                    },
+                    "aggregate_risk_metrics": {
+                        "total_theta": round(user_ctx.total_theta, 2),
+                        "total_beta_delta": round(user_ctx.total_weighted_delta, 2),
+                        "portfolio_heat_pct": round(
+                            (
+                                abs(user_ctx.total_weighted_delta)
+                                * sector_rotation_data["spy_price"]
+                                / user_ctx.capital
+                                * 100
+                            )
+                            if user_ctx.capital > 0
+                            else 0,
+                            2,
+                        ),
+                        "avg_financial_runway_days": round(
+                            survival_runway if survival_runway is not None else 0, 1
+                        ),
+                    },
+                    "sectors": sector_rotation_data["sectors"],
+                    "poly_events": sector_rotation_data["poly_events"],
+                    "spy_max_pain": sector_rotation_data["spy_max_pain"],
+                }
+
+                time_str = datetime.now().strftime("%Y-%m-%d")
+                report_type = f"{time_str} 盤後綜合風險與 AI 策略報告"
+                try:
+                    ai_commentary = await generate_analyst_report(report_type, raw_data)
+                except Exception as e:
+                    logger.error(f"Error generating analyst report for user {uid}: {e}")
+                    ai_commentary = "⚠️ 無法生成 AI 報告分析。"
+
+            embed = build_post_market_intelligence_embed(
+                report_lines=report_lines,
+                hedge_analysis=hedge_analysis,
+                survival_runway=survival_runway,
+                sectors_data=sector_rotation_data["sectors"],
+                ai_commentary=ai_commentary,
+            )
+
+            await self.bot.queue_dm(uid, embed=embed)
 
 
 async def setup(bot):

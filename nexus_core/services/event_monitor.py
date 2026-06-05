@@ -227,9 +227,9 @@ class EventMonitor:
         """
         import database
 
-        if not database.is_notification_enabled(user_id, "proactive_event_alert"):
+        if not database.is_notification_enabled(user_id, "volatility_risk_alert"):
             logger.info(
-                f"使用者 {user_id} 已關閉 proactive_event_alert，略過經濟/財報事件警報。"
+                f"使用者 {user_id} 已關閉 volatility_risk_alert，略過經濟/財報事件警報。"
             )
             return
         user_context = await asyncio.to_thread(get_full_user_context, user_id)
