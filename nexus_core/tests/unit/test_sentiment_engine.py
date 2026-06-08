@@ -299,3 +299,40 @@ async def test_calculate_max_pain_full():
 
         result = await SentimentEngine.calculate_max_pain("AAPL")
         assert result["max_pain"] == 100
+
+
+@pytest.mark.asyncio
+async def test_calculate_max_pain_split_adjustment():
+    with patch(
+        "services.market_data_service.get_all_option_expiries", new_callable=AsyncMock
+    ) as mock_expiries, patch(
+        "services.market_data_service.get_option_chain", new_callable=AsyncMock
+    ) as mock_chain, patch(
+        "services.market_data_service.get_quote", new_callable=AsyncMock
+    ) as mock_quote, patch(
+        "services.market_data_service.get_stock_splits", new_callable=AsyncMock
+    ) as mock_splits:
+        mock_expiries.return_value = ["2026-06-19"]
+        mock_quote.return_value = {"c": 80.0}
+        mock_splits.return_value = pd.Series([10.0], index=[pd.Timestamp("2024-06-10")])
+
+        # Pre-split strikes at 800.0 (equivalent to post-split 80.0)
+        calls_df = pd.DataFrame(
+            {"strike": [700.0, 800.0, 900.0], "openInterest": [10, 100, 10]}
+        )
+        puts_df = pd.DataFrame(
+            {"strike": [700.0, 800.0, 900.0], "openInterest": [10, 100, 10]}
+        )
+
+        class MockChain:
+            def __init__(self, calls, puts):
+                self.calls = calls
+                self.puts = puts
+
+        mock_chain.return_value = MockChain(calls_df, puts_df)
+
+        result = await SentimentEngine.calculate_max_pain("NVDA")
+        # The pre-split strike of 800.0 should be adjusted by dividing by 10.0 to 80.0
+        assert result["max_pain"] == 80.0
+        assert result["current_price"] == 80.0
+        assert result["distance_pct"] == 0.0

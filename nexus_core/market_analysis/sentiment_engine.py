@@ -189,7 +189,8 @@ class SentimentEngine:
         from database.cache import get_kv_cache, save_kv_cache
         from datetime import datetime
 
-        today_str = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now().date()
+        today_str = today.strftime("%Y-%m-%d")
         cache_key = f"max_pain_{symbol.upper()}_{expiry or 'first'}_{today_str}"
         cached = get_kv_cache(cache_key)
         if cached is not None:
@@ -200,39 +201,126 @@ class SentimentEngine:
                 expiries = await market_data_service.get_all_option_expiries(symbol)
                 if not expiries:
                     return {"error": "No expiries"}
-                expiry = expiries[0]
+
+                # 收緊到期日過濾器：排除已過期的日期，排除 5 年後到期的極遠端 LEAPs
+                valid_expiries = []
+                for exp in expiries:
+                    try:
+                        exp_dt = datetime.strptime(exp, "%Y-%m-%d").date()
+                        if exp_dt < today:
+                            continue
+                        if (exp_dt - today).days > 1825:
+                            continue
+                        valid_expiries.append(exp)
+                    except ValueError:
+                        continue
+
+                if not valid_expiries:
+                    return {"error": "No valid expiries after filtering"}
+                expiry = valid_expiries[0]
 
             chain = await market_data_service.get_option_chain(symbol, expiry)
             if not chain:
                 return {"error": "No chain data"}
 
-            calls = chain.calls.dropna(subset=["openInterest"])
-            puts = chain.puts.dropna(subset=["openInterest"])
+            calls = chain.calls.copy()
+            puts = chain.puts.copy()
+
+            # 確保欄位存在並填補空值
+            for df in [calls, puts]:
+                if "openInterest" not in df.columns:
+                    df["openInterest"] = 0.0
+                else:
+                    df["openInterest"] = df["openInterest"].fillna(0.0)
+                if "volume" not in df.columns:
+                    df["volume"] = 0.0
+                else:
+                    df["volume"] = df["volume"].fillna(0.0)
+
+            # 取得即時股價
+            quote = await market_data_service.get_quote(symbol)
+            spot_price = quote.get("c", 0.0)
+
+            # 導入拆股調整 (Split-Adjustment Verification)
+            splits = await market_data_service.get_stock_splits(symbol)
+            if splits is not None and not splits.empty and spot_price > 0:
+                split_ratios = list(splits.values)
+                for df in [calls, puts]:
+                    if df.empty:
+                        continue
+                    new_strikes = []
+                    new_oi = []
+                    new_vol = []
+                    for _, row in df.iterrows():
+                        k = row["strike"]
+                        oi = row["openInterest"]
+                        vol = row["volume"]
+                        for r in split_ratios:
+                            if r <= 0.0 or r == 1.0:
+                                continue
+                            current_dev = abs(k - spot_price) / spot_price
+                            adjusted_dev = abs((k / r) - spot_price) / spot_price
+                            # 若調整後乖離率顯著降低且落在合理區間內，則判定為未調整之歷史 Strike，進行清洗
+                            if (
+                                adjusted_dev < current_dev
+                                and adjusted_dev < 1.5
+                                and current_dev > 1.5
+                            ):
+                                k = k / r
+                                oi = oi * r
+                                vol = vol * r
+                                break
+                        new_strikes.append(k)
+                        new_oi.append(oi)
+                        new_vol.append(vol)
+                    df["strike"] = new_strikes
+                    df["openInterest"] = new_oi
+                    df["volume"] = new_vol
+
+            # 過濾掉 OI 為 0 且 Volume 為 0 的死合約
+            calls = calls[(calls["openInterest"] > 0) | (calls["volume"] > 0)]
+            puts = puts[(puts["openInterest"] > 0) | (puts["volume"] > 0)]
+
+            # 檢查 OI 總量是否大於 0，否則退化回使用成交量 (Volume) 作為權重
+            total_oi = calls["openInterest"].sum() + puts["openInterest"].sum()
+            use_volume = False
+            if total_oi == 0:
+                total_vol = calls["volume"].sum() + puts["volume"].sum()
+                if total_vol > 0:
+                    use_volume = True
+                else:
+                    return {
+                        "error": "No active options contracts (OI and Volume are both 0)"
+                    }
 
             # 彙整所有履約價
             strikes = sorted(list(set(calls["strike"]) | set(puts["strike"])))
+            if not strikes:
+                return {"error": "No strikes available"}
+
+            # 過濾極端履約價防止數據扭曲 (現價 25% ~ 400% 區間)
+            if spot_price > 0:
+                strikes = [
+                    s for s in strikes if spot_price * 0.25 <= s <= spot_price * 4.0
+                ]
+                if not strikes:
+                    strikes = sorted(list(set(calls["strike"]) | set(puts["strike"])))
 
             # 計算每個履約價下的總痛點 (Dollar Value if expired there)
             pains = []
+            weight_col = "volume" if use_volume else "openInterest"
             for s in strikes:
-                # Call Pain: max(0, spot - strike) * OI
-                call_pain = (
-                    calls[calls["strike"] < s]
-                    .apply(lambda x: (s - x["strike"]) * x["openInterest"], axis=1)
-                    .sum()
-                )
-                # Put Pain: max(0, strike - spot) * OI
-                put_pain = (
-                    puts[puts["strike"] > s]
-                    .apply(lambda x: (x["strike"] - s) * x["openInterest"], axis=1)
-                    .sum()
-                )
+                # Call Pain: max(0, spot - strike) * Weight
+                call_sub = calls[calls["strike"] < s]
+                call_pain = (call_sub[weight_col] * (s - call_sub["strike"])).sum()
+
+                # Put Pain: max(0, strike - spot) * Weight
+                put_sub = puts[puts["strike"] > s]
+                put_pain = (put_sub[weight_col] * (put_sub["strike"] - s)).sum()
+
                 pains.append(call_pain + put_pain)
 
             max_pain_strike = strikes[pains.index(min(pains))]
-
-            quote = await market_data_service.get_quote(symbol)
-            spot_price = quote.get("c", 0)
 
             dist_pct = (
                 (spot_price - max_pain_strike) / spot_price * 100
