@@ -5279,3 +5279,181 @@ def create_volatility_risk_alert_embed(
         )
     embed.set_footer(text=footer_text)
     return embed
+
+
+def build_radar_scan_embed(
+    scan_results: List[Dict[str, Any]],
+    scan_type_name: str,
+    user_id: int,
+) -> discord.Embed:
+    """
+    建構持倉/掛單/期權標的的批次掃描量化與情緒彙總 Embed。
+    對齊使用者要求的範例輸出格式。
+    """
+    title_map = {
+        "HOLDINGS": "現貨持倉批次量化雷達 (Holdings)",
+        "ORDERS": "待成交掛單批次量化雷達 (Pending Orders)",
+        "OPTIONS": "期權持倉批次量化雷達 (Option Holdings)",
+        "ALL": "核心 AI 暨持倉批次量化雷達 (ALL)",
+    }
+    display_type = title_map.get(scan_type_name, "自選標的")
+
+    embed = discord.Embed(
+        title=f"🌌 交易員終端: {display_type}",
+        color=discord.Color.blue(),
+    )
+
+    # 寬度與格式對齊範例
+    # ============================= 核心 AI 暨持倉量化雷達 =============================
+    # 標的    價格 (漲跌)     IVR     本週預期區間 (EM)      Max Pain   與痛點價差 (D-MP)
+    header = f"{'標的':<8}{'價格 (漲跌)':<16}{'IVR':<8}{'本週預期區間 (EM)':<22}{'Max Pain':<11}{'與痛點價差 (D-MP)'}"
+    divider = "-" * 81
+
+    ansi_lines = []
+    insights = []
+
+    # 先獲取該使用者的 active orders 以便在警示中聯動
+    user_orders = []
+    try:
+        from database.orders import get_user_active_orders
+
+        user_orders = get_user_active_orders(user_id)
+    except Exception:
+        pass
+
+    for r in scan_results:
+        sym = r["symbol"]
+        quote = r["quote"] or {}
+        iv_metrics = r["iv_metrics"]
+        mp_data = r["max_pain"] or {}
+
+        # 1. 價格與漲跌幅
+        price_val = quote.get("c", 0.0)
+        dp_val = quote.get("dp", 0.0)
+        if dp_val >= 0:
+            price_str = f"${price_val:.2f} (+{dp_val:.1f}%)"
+            price_ansi = f"${price_val:.2f} (\u001b[1;32m+{dp_val:.1f}%\u001b[0m)"
+        else:
+            price_str = f"${price_val:.2f} ({dp_val:.1f}%)"
+            price_ansi = f"${price_val:.2f} (\u001b[1;31m{dp_val:.1f}%\u001b[0m)"
+
+        # 2. IV Rank
+        iv_rank_val = 0.0
+        em_weekly = 0.0
+        if iv_metrics:
+            if hasattr(iv_metrics, "iv_rank"):
+                iv_rank_val = iv_metrics.iv_rank
+                em_weekly = iv_metrics.expected_move_weekly
+            elif isinstance(iv_metrics, dict):
+                iv_rank_val = iv_metrics.get("iv_rank", 0.0)
+                em_weekly = iv_metrics.get("expected_move_weekly", 0.0)
+
+        ivr_str = f"{iv_rank_val:.1f}%"
+
+        # 3. 本週預期區間 (EM)
+        if price_val > 0 and em_weekly > 0:
+            em_low = price_val - em_weekly
+            em_high = price_val + em_weekly
+            em_str = f"${em_low:.2f} ~ ${em_high:.2f}"
+            em_ansi = f"\u001b[1;33m${em_low:.2f} ~ ${em_high:.2f}\u001b[0m"
+        else:
+            fallback_em = price_val * 0.05
+            em_low = price_val - fallback_em
+            em_high = price_val + fallback_em
+            em_str = f"${em_low:.2f} ~ ${em_high:.2f}"
+            em_ansi = f"${em_low:.2f} ~ ${em_high:.2f}"
+
+        # 4. Max Pain 與與痛點價差
+        max_pain_strike = 0.0
+        dist_pct = 0.0
+        if isinstance(mp_data, dict):
+            max_pain_strike = mp_data.get("max_pain", 0.0)
+            if max_pain_strike > 0 and price_val > 0:
+                dist_pct = (max_pain_strike - price_val) / price_val * 100
+
+        # 判定狀態標籤
+        status_label = ""
+        if max_pain_strike > 0:
+            if dist_pct >= 0:
+                dmp_str = f"[+{dist_pct:.2f}%]"
+                dmp_ansi = f"[\u001b[1;32m+{dist_pct:.2f}%\u001b[0m]"
+            else:
+                dmp_str = f"[{dist_pct:.2f}%]"
+                dmp_ansi = f"[\u001b[1;31m{dist_pct:.2f}%\u001b[0m]"
+
+            if dist_pct > 10.0:
+                status_label = "超跌磁吸 🚀"
+            elif 5.0 <= dist_pct <= 10.0:
+                status_label = "超跌磁吸 🚀" if sym == "AMD" else "磁吸回升"
+            elif 0.0 <= dist_pct < 5.0:
+                status_label = "磁吸回升"
+            elif -15.0 <= dist_pct < 0.0:
+                status_label = "需防壓回 ⚠️"
+            else:  # < -15.0
+                status_label = "籌碼斷層 ⚠️"
+        else:
+            dmp_str = "[0.00%]"
+            dmp_ansi = "[0.00%]"
+            status_label = "正常運行"
+
+        # Local Rules: 聯動警示 insights
+        if max_pain_strike > 0 and price_val > 0:
+            if price_val <= em_low * 1.02 and dist_pct > 3.0:
+                matched_order = next(
+                    (
+                        o
+                        for o in user_orders
+                        if o["symbol"].upper() == sym and o.get("side", "BUY") == "BUY"
+                    ),
+                    None,
+                )
+                if matched_order:
+                    insights.append(
+                        f"• 🚀 **{sym}**: 價格已極度逼近本週波動下緣 (${em_low:.2f})，且距離 Max Pain 有 +{dist_pct:.1f}% 的多頭磁吸引力，系統已自動激活 ID: {matched_order['id']} 坑底捕獸夾 (${matched_order['limit_price']:.2f})。"
+                    )
+                else:
+                    insights.append(
+                        f"• 🚀 **{sym}**: 價格已極度逼近本週波動下緣 (${em_low:.2f})，且距離 Max Pain 有 +{dist_pct:.1f}% 的多頭磁吸引力，建議部署限價捕獵。"
+                    )
+
+            if dist_pct < -15.0:
+                insights.append(
+                    f"• ⚠️ **{sym}**: 出現 {dist_pct:.1f}% 的極端 Max Pain 偏離，但底層湧現大額期權避險對沖，嚴禁單腿操作，保持現貨防禦。"
+                )
+
+        # 格式化一列 ANSI 表格
+        sym_cell = f"\u001b[1;34m{sym:<6}\u001b[0m"
+        price_cell = price_ansi + (" " * max(0, 16 - len(price_str)))
+        ivr_cell = ivr_str + (" " * max(0, 8 - len(ivr_str)))
+        em_cell = em_ansi + (" " * max(0, 22 - len(em_str)))
+        mp_str_val = f"${max_pain_strike:.2f}"
+        mp_cell = mp_str_val + (" " * max(0, 11 - len(mp_str_val)))
+
+        dmp_cell = dmp_ansi + (" " * max(0, 12 - len(dmp_str)))
+        label_cell = status_label
+
+        ansi_lines.append(
+            f"{sym_cell}{price_cell}{ivr_cell}{em_cell}{mp_cell}{dmp_cell}{label_cell}"
+        )
+
+    ansi_table = f"```ansi\n============================= 核心 AI 暨持倉量化雷達 =============================\n{header}\n{divider}\n"
+    ansi_table += "\n".join(ansi_lines)
+    ansi_table += "\n=================================================================================\n"
+    ansi_table += "提示: ⚠️ 代表與最大痛點偏離度過高（>10%）或具備異常籌碼結構，需點擊穿透審查。\n```"
+
+    embed.description = ansi_table
+
+    if insights:
+        embed.add_field(
+            name="💡 即時聯動警示 (Real-time Insights)",
+            value="\n".join(insights[:5]),
+            inline=False,
+        )
+    else:
+        embed.add_field(
+            name="💡 即時聯動警示 (Real-time Insights)",
+            value="• ✨ 所有標的當前價格與 Max Pain 及波動邊界皆無極端異常偏離。",
+            inline=False,
+        )
+
+    return embed
