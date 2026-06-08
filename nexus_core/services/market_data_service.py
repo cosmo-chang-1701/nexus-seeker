@@ -893,3 +893,58 @@ async def get_vix_zscores() -> Dict[str, float]:
     except Exception as e:
         logger.error(f"VIX Z-score 計算失敗: {e}")
         return {"zscore_30": 0.0, "zscore_60": 0.0}
+
+
+def check_and_reconcile_max_pain_anomaly(
+    symbol: str, max_pain: float, spot_price: float
+) -> bool:
+    """
+    Check if the Max Pain price deviates from the spot price by more than 30%.
+    If so, record a warning log, clear database caches for this symbol, and return True to suggest a retry.
+    """
+    if spot_price <= 0.0 or max_pain <= 0.0:
+        return False
+
+    deviation = abs(max_pain - spot_price) / spot_price
+    if deviation > 0.30:
+        logger.warning(
+            f"🚨 [Max Pain Anomaly Alert] For {symbol}, Max Pain (${max_pain:.2f}) "
+            f"deviates from spot price (${spot_price:.2f}) by {deviation:.2%} (> 30%). "
+            f"Triggering database cache purging for symbol..."
+        )
+        try:
+            import sqlite3
+            import config
+
+            with sqlite3.connect(config.DB_NAME) as conn:
+                cursor = conn.cursor()
+                # Clear all related option metrics and max pain entries in kv_cache
+                cursor.execute(
+                    "DELETE FROM kv_cache WHERE key LIKE ?", (f"%_{symbol.upper()}_%",)
+                )
+                # Clear from market_cache as well
+                cursor.execute(
+                    "DELETE FROM market_cache WHERE symbol = ?", (symbol.upper(),)
+                )
+                conn.commit()
+
+            # Clear memory caches as well
+            from market_analysis.sentiment_engine import _iv_cache
+
+            if symbol.upper() in _iv_cache:
+                del _iv_cache[symbol.upper()]
+
+            # Remove matching expiries from _option_chain_cache
+            keys_to_del = [
+                k for k in _option_chain_cache.keys() if k[0].upper() == symbol.upper()
+            ]
+            for k in keys_to_del:
+                del _option_chain_cache[k]
+
+            logger.info(
+                f"🧹 Successfully purged cache for {symbol} due to Max Pain deviation > 30%."
+            )
+            return True  # Suggesting retry
+        except Exception as e:
+            logger.error(f"Failed to purge cache for anomaly check: {e}")
+    return False

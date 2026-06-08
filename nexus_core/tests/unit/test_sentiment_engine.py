@@ -336,3 +336,111 @@ async def test_calculate_max_pain_split_adjustment():
         assert result["max_pain"] == 80.0
         assert result["current_price"] == 80.0
         assert result["distance_pct"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_iv_metrics_cache_invalidation_on_price_deviation():
+    from market_analysis.sentiment_engine import _iv_cache, SentimentEngine
+    from models.quant import IVMetrics
+    import time
+
+    _iv_cache.clear()
+
+    # 1. Warm cache with ref price = 100.0
+    metrics = IVMetrics(
+        symbol="TSLA",
+        current_iv=0.5,
+        iv_rank=40.0,
+        iv_percentile=40.0,
+        expected_move_weekly=5.0,
+        iv_status="Normal",
+        is_premarket=False,
+        iv_source="LIVE_IV",
+        reference_spot_price=100.0,
+    )
+    _iv_cache["TSLA"] = (metrics, time.time() + 1800)
+
+    # Mock market_data_service.get_quote to return a deviated price, e.g. 103.0 (> 2% deviation)
+    with patch(
+        "services.market_data_service.get_quote", new_callable=AsyncMock
+    ) as mock_quote, patch(
+        "services.market_data_service.get_all_option_expiries", new_callable=AsyncMock
+    ) as mock_expiries:
+        mock_quote.return_value = {"c": 103.0}
+        mock_expiries.return_value = []
+
+        res = await SentimentEngine.fetch_and_calculate_iv_metrics("TSLA")
+        assert res.iv_rank != 40.0  # it was invalidated!
+
+
+@pytest.mark.asyncio
+async def test_kv_cache_invalidation_on_price_deviation():
+    from market_analysis.sentiment_engine import SentimentEngine
+    from database.cache import save_kv_cache
+    from datetime import datetime
+
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    cache_key = f"iv_metrics_AMD_{today_str}"
+
+    # Save a cached value with ref price = 100.0
+    cached_data = {
+        "symbol": "AMD",
+        "current_iv": 0.5,
+        "iv_rank": 40.0,
+        "iv_percentile": 40.0,
+        "expected_move_weekly": 5.0,
+        "iv_status": "Normal",
+        "is_premarket": False,
+        "iv_source": "LIVE_IV",
+        "reference_spot_price": 100.0,
+    }
+    save_kv_cache(cache_key, cached_data)
+
+    # Mock get_quote to return 105.0 (> 2% deviation)
+    with patch(
+        "services.market_data_service.get_quote", new_callable=AsyncMock
+    ) as mock_quote, patch(
+        "services.market_data_service.get_all_option_expiries", new_callable=AsyncMock
+    ) as mock_expiries, patch("market_analysis.sentiment_engine._iv_cache", {}):
+        mock_quote.return_value = {"c": 105.0}
+        mock_expiries.return_value = []
+
+        res = await SentimentEngine.fetch_and_calculate_iv_metrics("AMD")
+        assert res.iv_rank != 40.0  # kv_cache was invalidated!
+
+
+@pytest.mark.asyncio
+async def test_max_pain_anomaly_warning_and_retry():
+    from market_analysis.sentiment_engine import SentimentEngine
+
+    with patch(
+        "services.market_data_service.get_all_option_expiries", new_callable=AsyncMock
+    ) as mock_expiries, patch(
+        "services.market_data_service.get_option_chain", new_callable=AsyncMock
+    ) as mock_chain, patch(
+        "services.market_data_service.get_quote", new_callable=AsyncMock
+    ) as mock_quote, patch(
+        "services.market_data_service.check_and_reconcile_max_pain_anomaly",
+        return_value=True,
+    ) as mock_anomaly:
+        mock_expiries.return_value = ["2026-06-19"]
+        mock_quote.return_value = {"c": 100.0}
+
+        calls_df = pd.DataFrame(
+            {
+                "strike": [50.0],
+                "openInterest": [100.0],
+            }  # Max Pain is at 50, which is > 30% away from 100
+        )
+        puts_df = pd.DataFrame({"strike": [50.0], "openInterest": [100.0]})
+
+        class MockChain:
+            def __init__(self, calls, puts):
+                self.calls = calls
+                self.puts = puts
+
+        mock_chain.return_value = MockChain(calls_df, puts_df)
+
+        await SentimentEngine.calculate_max_pain("AAPL")
+        # Assert check_and_reconcile_max_pain_anomaly was called
+        mock_anomaly.assert_called_once()

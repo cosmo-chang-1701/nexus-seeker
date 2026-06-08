@@ -2554,6 +2554,15 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     pcr_data_for_div = data.get("pcr", {}) or {}
     pcr_val_for_div = float(pcr_data_for_div.get("pcr", 0.0) or 0.0)
 
+    # 預先解析 iv_rank 供背離引擎使用
+    iv_data = data.get("iv_data")
+    iv_rank_val = 0.0
+    if iv_data:
+        if hasattr(iv_data, "iv_rank"):
+            iv_rank_val = iv_data.iv_rank
+        elif isinstance(iv_data, dict):
+            iv_rank_val = iv_data.get("iv_rank", 0.0)
+
     # Divergence Check Engine (Skew vs PCR consistency + spot move)
     is_structural_divergence = False
     divergence_level = ""
@@ -2570,18 +2579,26 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         # Spot rising while downside protection cost stays extreme -> warn even without PCR clarity.
         is_structural_divergence = True
         divergence_level = "Warning"
+    elif dp_val < -3.0 and iv_rank_val < 15.0:
+        # Divergence: spot falls severely but IV Rank remains extremely low (implied volatility suppression)
+        is_structural_divergence = True
+        divergence_level = "IV Suppression"
 
     divergence = "同步"
     action = "保持觀察"
 
     if is_structural_divergence:
-        divergence = "⚠️ WARNING: Structural Sentiment Divergence"
-        if divergence_level == "High Divergence":
+        if divergence_level == "IV Suppression":
+            divergence = "情緒背離 (現價暴跌但波動率極低)"
             action = (
-                "High Divergence：避免追價買權；僅允許小倉位收租並搭配保護性 Put/Collar"
+                "異常背離：現價大跌但 IV Rank 處於極低位階，警惕快取異常或非理性低波"
             )
         else:
-            action = "留意結構性背離：建議降槓桿、以保護性結構防禦"
+            divergence = "⚠️ WARNING: Structural Sentiment Divergence"
+            if divergence_level == "High Divergence":
+                action = "High Divergence：避免追價買權；僅允許小倉位收租並搭配保護性 Put/Collar"
+            else:
+                action = "留意結構性背離：建議降槓桿、以保護性結構防禦"
     elif skew_percentile > 80 and (
         "樂觀" in str(reddit_score)
         or "🚀" in str(reddit_score)

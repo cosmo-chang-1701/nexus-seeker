@@ -8,21 +8,29 @@ def save_market_cache(
     max_pain: float,
     expected_move_lower: float,
     expected_move_upper: float,
+    reference_spot_price: Optional[float] = None,
 ) -> bool:
     try:
         with sqlite3.connect(config.DB_NAME) as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                INSERT INTO market_cache (symbol, max_pain, expected_move_lower, expected_move_upper, updated_at)
-                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                INSERT INTO market_cache (symbol, max_pain, expected_move_lower, expected_move_upper, reference_spot_price, updated_at)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(symbol) DO UPDATE SET
                 max_pain = excluded.max_pain,
                 expected_move_lower = excluded.expected_move_lower,
                 expected_move_upper = excluded.expected_move_upper,
+                reference_spot_price = excluded.reference_spot_price,
                 updated_at = CURRENT_TIMESTAMP
             """,
-                (symbol.upper(), max_pain, expected_move_lower, expected_move_upper),
+                (
+                    symbol.upper(),
+                    max_pain,
+                    expected_move_lower,
+                    expected_move_upper,
+                    reference_spot_price,
+                ),
             )
             conn.commit()
             return True
