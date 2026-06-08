@@ -892,6 +892,13 @@ class UnifiedTerminalCog(commands.Cog):
             sym, "SKEW", skew_val
         )
 
+        # 取得 UOA (異常期權活動) 資料
+        uoa_data = []
+        try:
+            uoa_data = await SentimentEngine.detect_uoa(sym)
+        except Exception as e:
+            logger.error(f"[{sym}] Batch Scan 獲取 UOA 失敗: {e}")
+
         # 3. 讀取 market_cache 快取
         cache_data = await asyncio.to_thread(get_market_cache, sym)
 
@@ -945,6 +952,7 @@ class UnifiedTerminalCog(commands.Cog):
             "max_pain": {
                 "max_pain": max_pain,
             },
+            "uoa": uoa_data,
         }
 
     @app_commands.command(

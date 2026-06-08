@@ -5416,10 +5416,76 @@ def build_radar_scan_embed(
                         f"• 🚀 **{sym}**: 價格已極度逼近本週波動下緣 (${em_low:.2f})，且距離 Max Pain 有 +{dist_pct:.1f}% 的多頭磁吸引力，建議部署限價捕獵。"
                     )
 
-            if dist_pct < -15.0:
-                insights.append(
-                    f"• ⚠️ **{sym}**: 出現 {dist_pct:.1f}% 的極端 Max Pain 偏離，但底層湧現大額期權避險對沖，嚴禁單腿操作，保持現貨防禦。"
+            # 穿透式 UOA 與偏離度聯動判定：當偏離度顯著時 (例如 |dist_pct| > 10%)
+            if abs(dist_pct) > 10.0:
+                # 解析 UOA
+                uoa_list = r.get("uoa") or []
+                uoa_calls_vol = sum(
+                    u.get("volume", 0) for u in uoa_list if u.get("type") == "CALL"
                 )
+                uoa_puts_vol = sum(
+                    u.get("volume", 0) for u in uoa_list if u.get("type") == "PUT"
+                )
+
+                # 解析 Skew 百分位與情緒
+                skew_percentile = r.get("skew_percentile")
+                if skew_percentile is None:
+                    # 依據 skew 值做預設回退
+                    skew_val = r.get("skew", 0.0)
+                    if skew_val > 0:
+                        skew_percentile = 75.0
+                    elif skew_val < 0:
+                        skew_percentile = 25.0
+                    else:
+                        skew_percentile = 50.0
+
+                # 1. 籌碼狀態
+                if (
+                    uoa_calls_vol > uoa_puts_vol * 1.5
+                    and uoa_calls_vol > 0
+                    and skew_percentile <= 30.0
+                ):
+                    chip_status = "🔥 籌碼面呈大額買權掃貨且看漲情緒亢奮"
+                elif (
+                    uoa_puts_vol > uoa_calls_vol * 1.5
+                    and uoa_puts_vol > 0
+                    and skew_percentile >= 70.0
+                ):
+                    chip_status = "⚠️ 籌碼面顯現大額避險 Put 流入且下行保護需求高企"
+                elif uoa_calls_vol > uoa_puts_vol * 1.5 and uoa_calls_vol > 0:
+                    chip_status = "📈 籌碼面出現大額 Call 掃單"
+                elif uoa_puts_vol > uoa_calls_vol * 1.5 and uoa_puts_vol > 0:
+                    chip_status = "📉 籌碼面湧現大額 Put 避險買盤"
+                elif skew_percentile >= 70.0:
+                    chip_status = "🛡️ 情緒面呈現 Put 偏斜昂貴，避險情緒高溫"
+                elif skew_percentile <= 30.0:
+                    chip_status = "🚀 情緒面呈現 Call 偏斜亢奮，散戶搶購看漲"
+                else:
+                    chip_status = "⚖️ 籌碼結構與情緒波動相對均衡"
+
+                # 2. 量化偏離事實
+                if dist_pct > 10.0:
+                    dev_fact = f"，股價低於 Max Pain {abs(dist_pct):.1f}%，存在顯著的向上磁吸效應"
+                else:
+                    dev_fact = f"，股價高於 Max Pain {abs(dist_pct):.1f}%，面臨向上動能衰退與拉回修正壓力"
+
+                # 3. 實盤防禦指引
+                if dist_pct < -10.0 and skew_percentile >= 70.0:
+                    guidance = "；操作上應嚴禁單腿追高，建議以現貨持有搭配賣出 OTM Call（備兌看漲）進行防禦保護，或買入 Put 鎖定下行風險。"
+                elif dist_pct < -10.0 and skew_percentile <= 30.0:
+                    guidance = "；此時散戶搶購情緒極端，防範主力拉回殺多，嚴禁盲目單腿裸買 Call，建議逢高分批鎖定利潤。"
+                elif dist_pct > 10.0 and uoa_calls_vol > uoa_puts_vol * 1.5:
+                    guidance = "；量化磁吸與多頭籌碼共振，可於波動下緣分批逢低吸納，或部署 Bull Put Spread 策略。"
+                elif dist_pct > 10.0 and skew_percentile >= 70.0:
+                    guidance = "；雖有磁吸引力但避險情緒仍重，建議透過賣出 CSP（備兌看跌）分批建倉，避免單腿買入。"
+                else:
+                    if dist_pct < -10.0:
+                        guidance = "；操作上建議保持現貨防禦，嚴禁單腿操作。"
+                    else:
+                        guidance = "；操作上建議於支撐區間分批逢低吸納，降低建倉成本。"
+
+                dynamic_insight = f"• ⚠️ **{sym}**: {chip_status}{dev_fact}{guidance}"
+                insights.append(dynamic_insight)
 
         # 格式化一列 ANSI 表格
         sym_cell = f"\u001b[1;34m{sym:<6}\u001b[0m"

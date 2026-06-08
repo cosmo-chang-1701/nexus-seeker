@@ -372,6 +372,20 @@ async def get_spy_history_df(
     return pd.DataFrame()
 
 
+async def get_stock_splits(symbol: str) -> pd.Series:
+    """取得標的的拆股歷史資料。"""
+    symbol = _sanitize_ticker(symbol)
+    try:
+        ticker = yf.Ticker(symbol)
+        splits = await asyncio.to_thread(lambda: ticker.splits)
+        if splits is None:
+            return pd.Series(dtype=float)
+        return splits
+    except Exception as e:
+        logger.error(f"[{symbol}] yfinance 獲取拆股歷史失敗: {e}")
+        return pd.Series(dtype=float)
+
+
 OptionChainData = namedtuple("OptionChainData", ["calls", "puts", "underlying"])
 
 
