@@ -180,7 +180,7 @@ class SentimentEngine:
 
     @staticmethod
     async def calculate_max_pain(
-        symbol: str, expiry: Optional[str] = None
+        symbol: str, expiry: Optional[str] = None, _retry: bool = False
     ) -> Dict[str, Any]:
         """
         計算最大痛點 (Max Pain)。
@@ -189,12 +189,30 @@ class SentimentEngine:
         from database.cache import get_kv_cache, save_kv_cache
         from datetime import datetime
 
+        # 0. 預先取得現價，用於快取失效判定
+        spot_price = 0.0
+        try:
+            quote = await market_data_service.get_quote(symbol)
+            spot_price = quote.get("c", 0.0) if quote else 0.0
+        except Exception as e:
+            logger.warning(f"[{symbol}] calculate_max_pain 預先取得現價失敗: {e}")
+
         today = datetime.now().date()
         today_str = today.strftime("%Y-%m-%d")
         cache_key = f"max_pain_{symbol.upper()}_{expiry or 'first'}_{today_str}"
         cached = get_kv_cache(cache_key)
         if cached is not None:
-            return cached
+            cached_price = cached.get("current_price", 0.0)
+            if cached_price > 0 and spot_price > 0:
+                deviation = abs(spot_price - cached_price) / cached_price
+                if deviation > 0.02:
+                    logger.warning(
+                        f"[{symbol}] Spot price shifted from {cached_price} to {spot_price} "
+                        f"(dev={deviation:.2%}), invalidating max_pain kv_cache"
+                    )
+                    cached = None
+            if cached is not None:
+                return cached
 
         try:
             if not expiry:
@@ -238,8 +256,9 @@ class SentimentEngine:
                     df["volume"] = df["volume"].fillna(0.0)
 
             # 取得即時股價
-            quote = await market_data_service.get_quote(symbol)
-            spot_price = quote.get("c", 0.0)
+            if spot_price <= 0.0:
+                quote = await market_data_service.get_quote(symbol)
+                spot_price = quote.get("c", 0.0) if quote else 0.0
 
             # 導入拆股調整 (Split-Adjustment Verification)
             splits = await market_data_service.get_stock_splits(symbol)
@@ -321,6 +340,27 @@ class SentimentEngine:
                 pains.append(call_pain + put_pain)
 
             max_pain_strike = strikes[pains.index(min(pains))]
+
+            # 30% 偏離度異常防禦
+            from services.market_data_service import (
+                check_and_reconcile_max_pain_anomaly,
+            )
+
+            if (
+                spot_price > 0
+                and abs(max_pain_strike - spot_price) / spot_price > 0.30
+                and not _retry
+            ):
+                # 觸發警告與資料庫快取清理
+                check_and_reconcile_max_pain_anomaly(
+                    symbol, max_pain_strike, spot_price
+                )
+                logger.info(
+                    f"[{symbol}] Retrying calculate_max_pain after cache purge..."
+                )
+                return await SentimentEngine.calculate_max_pain(
+                    symbol, expiry, _retry=True
+                )
 
             dist_pct = (
                 (spot_price - max_pain_strike) / spot_price * 100
@@ -530,11 +570,35 @@ class SentimentEngine:
         symbol = symbol.upper()
         current_time = time.time()
 
+        # 0. 預先獲取現價，用於快取失效比對
+        spot_price = 0.0
+        try:
+            quote = await market_data_service.get_quote(symbol)
+            spot_price = quote.get("c", 0.0) if quote else 0.0
+            if spot_price <= 0.0:
+                # 嘗試 yfinance fallback 價格
+                df_temp = await market_data_service.get_history_df(symbol, period="2d")
+                if not df_temp.empty:
+                    spot_price = float(df_temp["Close"].iloc[-1])
+        except Exception as e:
+            logger.warning(f"[{symbol}] 預先取得現價失敗: {e}")
+
         # Check cache
         if symbol in _iv_cache:
             cached_val, expiry = _iv_cache[symbol]
             if current_time < expiry:
-                return cached_val
+                ref_price = getattr(cached_val, "reference_spot_price", None)
+                if ref_price and ref_price > 0 and spot_price > 0:
+                    deviation = abs(spot_price - ref_price) / ref_price
+                    if deviation <= 0.02:
+                        return cached_val
+                    else:
+                        logger.warning(
+                            f"[{symbol}] Spot price shifted from {ref_price} to {spot_price} "
+                            f"(dev={deviation:.2%}), invalidating memory cache"
+                        )
+                else:
+                    return cached_val
 
         # Check SQLite kv_cache next for same-day warm cache
         from database.cache import get_kv_cache, save_kv_cache
@@ -546,8 +610,19 @@ class SentimentEngine:
         if cached is not None:
             try:
                 metrics = IVMetrics(**cached)
-                _iv_cache[symbol] = (metrics, current_time + 1800)
-                return metrics
+                ref_price = getattr(metrics, "reference_spot_price", None)
+                use_cache = True
+                if ref_price and ref_price > 0 and spot_price > 0:
+                    deviation = abs(spot_price - ref_price) / ref_price
+                    if deviation > 0.02:
+                        logger.warning(
+                            f"[{symbol}] Spot price shifted from {ref_price} to {spot_price} "
+                            f"(dev={deviation:.2%}), invalidating kv_cache"
+                        )
+                        use_cache = False
+                if use_cache:
+                    _iv_cache[symbol] = (metrics, current_time + 1800)
+                    return metrics
             except Exception as e:
                 logger.warning(
                     f"[{symbol}] Failed to restore IVMetrics from kv_cache: {e}"
@@ -555,13 +630,16 @@ class SentimentEngine:
 
         try:
             # 1. 取得現價
-            quote = await market_data_service.get_quote(symbol)
-            spot_price = quote.get("c", 0.0)
             if spot_price <= 0.0:
-                # 嘗試 yfinance fallback 價格
-                df_temp = await market_data_service.get_history_df(symbol, period="2d")
-                if not df_temp.empty:
-                    spot_price = float(df_temp["Close"].iloc[-1])
+                quote = await market_data_service.get_quote(symbol)
+                spot_price = quote.get("c", 0.0)
+                if spot_price <= 0.0:
+                    # 嘗試 yfinance fallback 價格
+                    df_temp = await market_data_service.get_history_df(
+                        symbol, period="2d"
+                    )
+                    if not df_temp.empty:
+                        spot_price = float(df_temp["Close"].iloc[-1])
 
             if spot_price <= 0.0:
                 raise ValueError(f"無法取得 {symbol} 的現價，無法計算預期震盪區間")
@@ -760,6 +838,7 @@ class SentimentEngine:
                 iv_status=iv_status,
                 is_premarket=not is_market_active,
                 iv_source=iv_source,
+                reference_spot_price=spot_price,
             )
 
             # 12. 寫入快取
@@ -781,6 +860,7 @@ class SentimentEngine:
                 iv_status="Normal",
                 is_premarket=True,
                 iv_source="UNAVAILABLE",
+                reference_spot_price=spot_price,
             )
         except Exception as e:
             logger.error(f"[{symbol}] IV 指標計算失敗: {e}")
@@ -794,4 +874,5 @@ class SentimentEngine:
                 iv_status="Normal",
                 is_premarket=True,
                 iv_source="UNAVAILABLE",
+                reference_spot_price=spot_price,
             )

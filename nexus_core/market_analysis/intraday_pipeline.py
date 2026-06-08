@@ -617,6 +617,33 @@ async def evaluate_watchlist_symbol(
             alert_level="red",
         )
 
+    # 價格暴跌但波動率低壓背離偵測
+    try:
+        from services import market_data_service
+
+        quote = await market_data_service.get_quote(symbol)
+        dp_val = quote.get("dp", 0.0) if quote else 0.0
+        if dp_val < -3.0 and metrics.iv_rank < 15.0:
+            tactical = WatchlistTacticalPlan(
+                scenario="wait",
+                sddm_route="WAIT (IV 壓抑背離)",
+                action_guideline=(
+                    "⚠️ WARNING: IV Suppression Divergence｜現價暴跌但波動率低壓，"
+                    f"IV Rank 處於極低位階 ({metrics.iv_rank:.1f}%)，與現貨大跌 ({dp_val:+.2f}%) 矛盾。"
+                    "可能存在系統快取延遲或異常，建議暫緩單腿長權利金操作，"
+                    "僅允許小倉位收租並搭配保護性結構。"
+                ),
+                dynamic_grid_step=tactical.dynamic_grid_step,
+                hidden_delta_risk=0.0,
+                hedge_instruction=None,
+                hedge_allocation_shares=0,
+                alert_level="red",
+            )
+    except Exception as e:
+        logger.warning(
+            f"[{symbol}] evaluate_watchlist_symbol 背離比對獲取現價失敗: {e}"
+        )
+
     return WatchlistEvaluation(
         metrics=metrics, tactical=tactical, event_context=event_context
     )

@@ -101,3 +101,4 @@ class IVMetrics(BaseModel):
     iv_source: Literal["LIVE_IV", "STORED_IV", "HV_PROXY", "UNAVAILABLE"] = (
         "UNAVAILABLE"
     )
+    reference_spot_price: float | None = None

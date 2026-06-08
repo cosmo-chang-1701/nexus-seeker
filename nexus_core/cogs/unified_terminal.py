@@ -901,6 +901,16 @@ class UnifiedTerminalCog(commands.Cog):
 
         # 3. 讀取 market_cache 快取
         cache_data = await asyncio.to_thread(get_market_cache, sym)
+        if cache_data and price > 0:
+            ref_price = cache_data.get("reference_spot_price")
+            if ref_price and ref_price > 0:
+                deviation = abs(price - ref_price) / ref_price
+                if deviation > 0.02:
+                    logger.warning(
+                        f"[{sym}] Spot price shifted from {ref_price} to {price} "
+                        f"(dev={deviation:.2%}), invalidating market_cache"
+                    )
+                    cache_data = None
 
         iv_rank_val = 0.0
         em_weekly = 0.0
@@ -933,7 +943,7 @@ class UnifiedTerminalCog(commands.Cog):
 
             # 寫回快取
             await asyncio.to_thread(
-                save_market_cache, sym, max_pain, em_lower, em_upper
+                save_market_cache, sym, max_pain, em_lower, em_upper, price
             )
 
         # 將模擬資料庫回傳包裝成可以傳給 build_radar_scan_embed 的字典

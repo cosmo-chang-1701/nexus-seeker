@@ -383,3 +383,86 @@ async def test_run_loop_exception_isolation(intraday_pipeline):
     assert "AAPL" in called_tickers
     assert "MSFT" in called_tickers
     assert intraday_pipeline.is_running is False
+
+
+@pytest.mark.asyncio
+async def test_evaluate_watchlist_symbol_iv_suppression():
+    from market_analysis.intraday_pipeline import evaluate_watchlist_symbol
+    from unittest.mock import AsyncMock, patch
+    from models.schemas import (
+        EnhancedWatchlistMetrics,
+        WatchlistTacticalPlan,
+        WatchlistEventContext,
+    )
+
+    mock_metrics = EnhancedWatchlistMetrics(
+        symbol="AAPL",
+        exchange="NASDAQ",
+        current_price=100.0,
+        buy_zone_status="Wait",
+        buy_price_phase1=90.0,
+        buy_price_phase2=80.0,
+        buy_price_phase3=70.0,
+        sell_zone_status="Wait",
+        sell_price_phase1=110.0,
+        sell_price_phase2=120.0,
+        sell_price_phase3=130.0,
+        rsi_14=50.0,
+        atr_14=2.0,
+        beta=1.0,
+        ma20=100.0,
+        ma50=100.0,
+        ma200=100.0,
+        iv_rank=10.0,  # < 15%
+        iv_percentile=10.0,
+        option_skew=0.0,
+        skew_percentile=50.0,
+        option_skew_state="Normal",
+        pcr=1.0,
+        volume_poc=100.0,
+        gex_max_put_wall=100.0,
+        vanna_sensitivity=0.1,
+        relative_strength_spy=1.0,
+    )
+
+    mock_event = WatchlistEventContext(
+        earnings_date=None,
+        earnings_tte_hours=None,
+        macro_event=None,
+        macro_event_time=None,
+        macro_tte_hours=None,
+        risk_mode="normal",
+        summary="Normal",
+    )
+
+    dummy_tactical = WatchlistTacticalPlan(
+        scenario="wait",
+        sddm_route="WAIT (正常)",
+        action_guideline="指引",
+        dynamic_grid_step=1.0,
+        hidden_delta_risk=0.0,
+        hedge_instruction=None,
+        hedge_allocation_shares=0,
+        alert_level="yellow",
+    )
+
+    with patch(
+        "market_analysis.intraday_pipeline.build_enhanced_watchlist_metrics",
+        new_callable=AsyncMock,
+        return_value=mock_metrics,
+    ), patch(
+        "market_analysis.intraday_pipeline.build_watchlist_event_context",
+        new_callable=AsyncMock,
+        return_value=mock_event,
+    ), patch(
+        "market_analysis.intraday_pipeline.WatchlistRiskController.process_metrics",
+        return_value=dummy_tactical,
+    ), patch(
+        "services.market_data_service.get_quote",
+        new_callable=AsyncMock,
+        return_value={"dp": -5.0},  # < -3%
+    ):
+        res = await evaluate_watchlist_symbol("AAPL")
+        assert res is not None
+        assert res.tactical.alert_level == "red"
+        assert "IV 壓抑背離" in res.tactical.sddm_route
