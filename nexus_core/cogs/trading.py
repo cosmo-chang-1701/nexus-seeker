@@ -394,6 +394,9 @@ class SchedulerCog(commands.Cog):
                         await self.bot.queue_dm(uid, embed=embed)
                     except discord.Forbidden:
                         pass
+
+            # 🚀 盤前預熱所有標的的 Max Pain 與 Expected Move 數據快取
+            asyncio.create_task(self._pre_warm_all_targets())
         except Exception as e:
             logger.error(f"盤前掃描執行錯誤: {e}")
 
@@ -1547,6 +1550,60 @@ class SchedulerCog(commands.Cog):
     @monitor_vtr_task.before_loop
     async def before_monitor_vtr_task(self):
         await self.bot.wait_until_ready()
+
+    async def _pre_warm_all_targets(self):
+        """盤前預熱所有自選標的、持倉標的及掛單標的之量化/期權快取。"""
+        logger.info("🚀 [盤前預熱] 開始計算並快取所有相關標的指標...")
+        symbols = set()
+        try:
+            # 1. 獲取所有 watchlists 中的標的
+            all_watch = database.get_all_watchlist()
+            for _, sym, _ in all_watch:
+                symbols.add(sym.upper())
+
+            # 2. 獲取全站所有 holdings 中的標的
+            from database.holdings import get_all_holdings
+
+            holdings = await asyncio.to_thread(get_all_holdings)
+            for h in holdings:
+                symbols.add(h["symbol"].upper())
+
+            # 3. 獲取全站所有掛單中的標的
+            from database.orders import get_all_active_orders
+
+            orders = await asyncio.to_thread(get_all_active_orders)
+            for o in orders:
+                symbols.add(o["symbol"].upper())
+        except Exception as e:
+            logger.error(f"預熱標的清單收集失敗: {e}")
+
+        unique_symbols = sorted(list(symbols))
+        logger.info(
+            f"[盤前預熱] 收集到 {len(unique_symbols)} 個獨特標的: {unique_symbols}"
+        )
+
+        async def _warm_one(sym):
+            try:
+                from market_analysis.sentiment_engine import SentimentEngine
+
+                # 這裡會觸發 fetch_and_calculate_iv_metrics 並寫入當天快取
+                await SentimentEngine.fetch_and_calculate_iv_metrics(sym)
+                # 這裡會觸發 calculate_max_pain 並寫入當天快取
+                await SentimentEngine.calculate_max_pain(sym)
+            except Exception as err:
+                logger.warning(f"[盤前預熱] 標的 {sym} 預熱失敗: {err}")
+
+        # 使用 semaphore 控制並行請求數量，防止 API 被鎖
+        sem = asyncio.Semaphore(3)
+
+        async def _throttled_warm(sym):
+            async with sem:
+                await _warm_one(sym)
+
+        await asyncio.gather(
+            *(_throttled_warm(s) for s in unique_symbols), return_exceptions=True
+        )
+        logger.info("✅ [盤前預熱] 量化/期權數據快取預熱完成。")
 
 
 async def setup(bot):

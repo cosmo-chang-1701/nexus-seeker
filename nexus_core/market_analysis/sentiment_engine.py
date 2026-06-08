@@ -186,6 +186,15 @@ class SentimentEngine:
         計算最大痛點 (Max Pain)。
         邏輯：尋找讓所有期權買家總價值最小化的標的價格。
         """
+        from database.cache import get_kv_cache, save_kv_cache
+        from datetime import datetime
+
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        cache_key = f"max_pain_{symbol.upper()}_{expiry or 'first'}_{today_str}"
+        cached = get_kv_cache(cache_key)
+        if cached is not None:
+            return cached
+
         try:
             if not expiry:
                 expiries = await market_data_service.get_all_option_expiries(symbol)
@@ -231,7 +240,7 @@ class SentimentEngine:
                 else 0
             )
 
-            return {
+            result = {
                 "symbol": symbol,
                 "expiry": expiry,
                 "max_pain": max_pain_strike,
@@ -239,6 +248,8 @@ class SentimentEngine:
                 "distance_pct": round(dist_pct, 2),
                 "is_converging": abs(dist_pct) < 2.0,
             }
+            save_kv_cache(cache_key, result)
+            return result
         except Exception as e:
             logger.error(f"[{symbol}] Max Pain 計算失敗: {e}")
             return {"error": str(e)}
@@ -436,6 +447,23 @@ class SentimentEngine:
             cached_val, expiry = _iv_cache[symbol]
             if current_time < expiry:
                 return cached_val
+
+        # Check SQLite kv_cache next for same-day warm cache
+        from database.cache import get_kv_cache, save_kv_cache
+        from datetime import datetime
+
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        cache_key = f"iv_metrics_{symbol}_{today_str}"
+        cached = get_kv_cache(cache_key)
+        if cached is not None:
+            try:
+                metrics = IVMetrics(**cached)
+                _iv_cache[symbol] = (metrics, current_time + 1800)
+                return metrics
+            except Exception as e:
+                logger.warning(
+                    f"[{symbol}] Failed to restore IVMetrics from kv_cache: {e}"
+                )
 
         try:
             # 1. 取得現價
@@ -648,6 +676,10 @@ class SentimentEngine:
 
             # 12. 寫入快取
             _iv_cache[symbol] = (metrics, current_time + _IV_CACHE_TTL)
+            try:
+                save_kv_cache(cache_key, metrics.model_dump())
+            except Exception as e:
+                logger.warning(f"[{symbol}] Failed to save IVMetrics to kv_cache: {e}")
             return metrics
 
         except ValueError as ve:

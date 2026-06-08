@@ -34,6 +34,7 @@ from cogs.embed_builder import (
     create_sentiment_scan_embed,
     create_media_sentiment_embed,
     create_active_orders_embed,
+    build_radar_scan_embed,
 )
 from models.schemas import WatchlistOptionLeg, WatchlistOptionPlan
 
@@ -1002,3 +1003,40 @@ def test_create_active_orders_embed():
     assert len(embeds_many) > 1
     assert sum(len(e.fields) for e in embeds_many) == 30
     assert " (1/" in embeds_many[0].title
+
+
+def test_build_radar_scan_embed():
+    """Verify that build_radar_scan_embed correctly renders batch scan results with premium ANSI card formatting."""
+    scan_results = [
+        {
+            "symbol": "AMD",
+            "quote": {"c": 466.38, "dp": -10.8},
+            "iv_metrics": {
+                "iv_rank": 0.1,
+                "expected_move_weekly": 17.05,
+            },
+            "skew": 1.1,
+            "max_pain": {"max_pain": 492.50},
+        },
+        {
+            "symbol": "MRVL",
+            "quote": {"c": 263.47, "dp": -16.7},
+            "iv_metrics": {
+                "iv_rank": 63.5,
+                "expected_move_weekly": 44.21,
+            },
+            "skew": 1.1,
+            "max_pain": {"max_pain": 225.00},
+        },
+    ]
+
+    embed = build_radar_scan_embed(scan_results, "ALL", 12345)
+    assert embed.title == "🌌 交易員終端: 核心 AI 暨持倉批次量化雷達 (ALL)"
+    assert (
+        "============================= 核心 AI 暨持倉量化雷達 ============================="
+        in embed.description
+    )
+    assert "AMD" in embed.description
+    assert "MRVL" in embed.description
+    assert "超跌磁吸" in embed.description
+    assert "需防壓回" in embed.description

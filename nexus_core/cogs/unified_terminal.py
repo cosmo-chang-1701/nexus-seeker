@@ -3,7 +3,7 @@ from discord.ext import commands
 from discord import app_commands
 import asyncio
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Optional, List
 
 from services import market_data_service, news_service, reddit_service
 from market_analysis.sentiment_engine import SentimentEngine
@@ -25,9 +25,49 @@ from cogs.embed_builder import (
     create_holdings_embed,
     build_vtr_stats_embed,
     create_polymarket_list_embed,
+    build_radar_scan_embed,
 )
 
 logger = logging.getLogger(__name__)
+
+
+class BatchScanSelect(discord.ui.Select):
+    """
+    批次掃描標的後，提供下拉選單讓使用者可以點擊深入分析 (Drill-down) 特定標的。
+    """
+
+    def __init__(self, symbols: List[str], cog, bot):
+        options = []
+        for sym in symbols[:25]:  # Discord Select Menu 項目上限為 25
+            options.append(
+                discord.SelectOption(
+                    label=sym, description=f"🔍 點擊深入分析 {sym}", emoji="📊"
+                )
+            )
+        super().__init__(
+            placeholder="🔍 選擇單一標的深入分析...",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+        self.cog = cog
+        self.bot = bot
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        symbol = self.values[0]
+        user_id = interaction.user.id
+        await self.cog._run_single_symbol_hub(interaction, symbol, user_id)
+
+
+class BatchScanView(discord.ui.View):
+    """
+    批次掃描總覽面板的互動 View，內含 Drill-down 下拉選單。
+    """
+
+    def __init__(self, symbols: List[str], cog, bot):
+        super().__init__(timeout=300)
+        self.add_item(BatchScanSelect(symbols, cog, bot))
 
 
 class SymbolHubView(discord.ui.View):
@@ -576,10 +616,29 @@ class UnifiedTerminalCog(commands.Cog):
     @app_commands.command(
         name="x", description="🌌 標體分析中心：一站式獲取報價、量化掃描與情緒分析"
     )
-    @app_commands.describe(symbol="股票代號 (如 NVDA)")
-    async def symbol_hub(self, interaction: discord.Interaction, symbol: str):
+    @app_commands.describe(
+        symbol="股票代號 (如 NVDA，與 scan_type 二擇一)",
+        scan_type="批次掃描類型 (HOLDINGS:持倉, ORDERS:掛單, OPTIONS:持有期權, ALL:三者全部)",
+    )
+    @app_commands.choices(
+        scan_type=[
+            app_commands.Choice(name="💼 掃描持倉標的 (Holdings)", value="HOLDINGS"),
+            app_commands.Choice(
+                name="⏳ 掃描掛單標的 (Pending Orders)", value="ORDERS"
+            ),
+            app_commands.Choice(
+                name="📜 掃描期權持倉標的 (Option Holdings)", value="OPTIONS"
+            ),
+            app_commands.Choice(name="🌀 掃描全部 (持倉+掛單+期權標的)", value="ALL"),
+        ]
+    )
+    async def symbol_hub(
+        self,
+        interaction: discord.Interaction,
+        symbol: Optional[str] = None,
+        scan_type: Optional[app_commands.Choice[str]] = None,
+    ):
         await interaction.response.defer(ephemeral=True)
-        symbol = symbol.upper()
         user_id = interaction.user.id
 
         # 🚀 Task 2 Hook: Proactive Warmup during pre-market window (08:30 - 09:30 ET)
@@ -588,6 +647,93 @@ class UnifiedTerminalCog(commands.Cog):
             if asyncio.iscoroutine(coro):
                 asyncio.create_task(coro)
 
+        # 1. 參數驗證
+        if not symbol and not scan_type:
+            return await interaction.followup.send(
+                embed=create_error_embed(
+                    "請輸入 `symbol` 參數，或選擇 `scan_type` 進行批次掃描。",
+                    title="輸入錯誤",
+                ),
+                ephemeral=True,
+            )
+
+        # 2. 單一標的深度分析
+        if symbol:
+            symbol = symbol.upper()
+            await self._run_single_symbol_hub(interaction, symbol, user_id)
+            return
+
+        # 3. 批次掃描邏輯
+        if not scan_type:
+            return
+        scan_value = scan_type.value
+        target_symbols = set()
+
+        if scan_value in ("HOLDINGS", "ALL"):
+            from services.asset_manager import AssetManager
+            from models.asset import ContextType
+
+            manager = AssetManager()
+            holding_assets = manager.get_assets(user_id, ContextType.HOLDING)
+            for a in holding_assets:
+                target_symbols.add(a.symbol.upper())
+
+        if scan_value in ("ORDERS", "ALL"):
+            from database.orders import get_user_active_orders
+
+            active_orders = await asyncio.to_thread(get_user_active_orders, user_id)
+            for o in active_orders:
+                target_symbols.add(o["symbol"].upper())
+
+        if scan_value in ("OPTIONS", "ALL"):
+            from database.portfolio import get_user_portfolio
+
+            portfolio_rows = await asyncio.to_thread(get_user_portfolio, user_id)
+            for row in portfolio_rows:
+                target_symbols.add(row[1].upper())
+
+        unique_symbols = sorted(list(target_symbols))
+
+        if not unique_symbols:
+            scan_names = {
+                "HOLDINGS": "現貨持倉",
+                "ORDERS": "待成交掛單",
+                "OPTIONS": "期權持倉",
+                "ALL": "持倉、掛單或期權",
+            }
+            return await interaction.followup.send(
+                embed=create_error_embed(
+                    f"您目前沒有任何{scan_names.get(scan_value, '相關')}標的，無法進行批次掃描。",
+                    title="無標的資料",
+                ),
+                ephemeral=True,
+            )
+
+        try:
+            # 並行獲取所有標的的雷達數據 (Cache-Aside)
+            scan_results = await asyncio.gather(
+                *(self._fetch_sym_radar_data(s) for s in unique_symbols),
+                return_exceptions=True,
+            )
+            # 過濾 Exception 並確保是 dict 類型以滿足 mypy
+            valid_results = [r for r in scan_results if isinstance(r, dict)]
+
+            embed = build_radar_scan_embed(valid_results, scan_value, user_id)
+            view = BatchScanView(unique_symbols, self, self.bot)
+
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
+        except Exception as e:
+            logger.error(f"Batch Scan Error for {scan_value}: {e}")
+            await interaction.followup.send(
+                embed=create_error_embed(f"執行批次掃描時發生錯誤: {e}"),
+                ephemeral=True,
+            )
+
+    async def _run_single_symbol_hub(
+        self, interaction: discord.Interaction, symbol: str, user_id: int
+    ):
+        symbol = symbol.upper()
         if not await market_data_service.validate_symbol(symbol):
             return await interaction.followup.send(
                 embed=create_error_embed(
@@ -725,6 +871,81 @@ class UnifiedTerminalCog(commands.Cog):
                 embed=create_error_embed(f"載入 `{symbol}` 資料時發生錯誤: {e}"),
                 ephemeral=True,
             )
+
+    async def _fetch_sym_radar_data(self, sym: str):
+        """
+        獲取單一標的的雷達量化數據。
+        採用 Cache-Aside 設計，直接物理性從 SQLite 中的 market_cache 讀取，快取未命中則進行退級即時計算。
+        """
+        from database import get_market_cache, save_market_cache
+        from market_analysis.sentiment_engine import SentimentEngine
+        from services import market_data_service
+
+        # 1. 取得 quote (必須即時，因為是價格)
+        quote = await market_data_service.get_quote(sym)
+        price = quote.get("c", 0.0) if quote else 0.0
+
+        # 2. 取得 Skew (情緒)
+        skew_data = await SentimentEngine.calculate_skew(sym)
+        skew_val = skew_data.get("skew", 0.0) if isinstance(skew_data, dict) else 0.0
+        skew_percentile = SentimentEngine.get_indicator_percentile(
+            sym, "SKEW", skew_val
+        )
+
+        # 3. 讀取 market_cache 快取
+        cache_data = await asyncio.to_thread(get_market_cache, sym)
+
+        iv_rank_val = 0.0
+        em_weekly = 0.0
+        max_pain = 0.0
+
+        if cache_data:
+            max_pain = cache_data.get("max_pain", 0.0)
+            em_lower = cache_data.get("expected_move_lower", 0.0)
+            em_upper = cache_data.get("expected_move_upper", 0.0)
+            # 從上下緣反推 em_weekly
+            if em_upper > em_lower and price > 0:
+                em_weekly = (em_upper - em_lower) / 2.0
+            # IV Rank 仍可以從 fetch_and_calculate_iv_metrics 快速取（因為它有快取）
+            iv_m = await SentimentEngine.fetch_and_calculate_iv_metrics(sym)
+            if iv_m:
+                iv_rank_val = iv_m.iv_rank
+        else:
+            # Cache-Aside: 快取不存在，進行即時計算並存回 SQLite
+            iv_m = await SentimentEngine.fetch_and_calculate_iv_metrics(sym)
+            mp_d = await SentimentEngine.calculate_max_pain(sym)
+
+            if iv_m:
+                iv_rank_val = iv_m.iv_rank
+                em_weekly = iv_m.expected_move_weekly
+            if mp_d and isinstance(mp_d, dict):
+                max_pain = mp_d.get("max_pain", 0.0)
+
+            em_lower = price - em_weekly if price > 0 else 0.0
+            em_upper = price + em_weekly if price > 0 else 0.0
+
+            # 寫回快取
+            await asyncio.to_thread(
+                save_market_cache, sym, max_pain, em_lower, em_upper
+            )
+
+        # 將模擬資料庫回傳包裝成可以傳給 build_radar_scan_embed 的字典
+        # 以便不管是否快取，都具有相同的 iv_metrics 結構
+        mock_iv = {
+            "iv_rank": iv_rank_val,
+            "expected_move_weekly": em_weekly,
+        }
+
+        return {
+            "symbol": sym,
+            "quote": quote,
+            "iv_metrics": mock_iv,
+            "skew": skew_val,
+            "skew_percentile": skew_percentile,
+            "max_pain": {
+                "max_pain": max_pain,
+            },
+        }
 
     @app_commands.command(
         name="dash", description="📊 交易員看板：一站式監控持倉、跑道與 VTR 績效"
