@@ -80,6 +80,35 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 
 ---
 
+## Quantitative Radar Terminal & Cache-Aside Architecture
+
+The system features a low-latency, high-information-density **Trader Terminal Radar Panel** (accessed via `/x scan_type: ALL | HOLDINGS | ORDERS | OPTIONS`). To ensure Discord response times are strictly under **100ms** and prevent 3-second timeouts, the first-level radar panel runs completely **without LLM calls** or real-time option chain requests.
+
+### 1. Pre-market SQLite Pre-warming & Database Schema
+A daily pre-market task runs asynchronously (at 18:00 UTC+8) to fetch option Open Interest (OI), Implied Volatility (IV), and compute weekly expected moves and max pain for all watchlist symbols. These values are cached locally in the `market_cache` table:
+```sql
+CREATE TABLE IF NOT EXISTS market_cache (
+    symbol TEXT PRIMARY KEY,
+    max_pain REAL,
+    expected_move_lower REAL,
+    expected_move_upper REAL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+During the market session, `/x` command reads from this local cache. If a cache miss occurs, the system calculates the metrics in a non-blocking Cache-Aside manner and writes them back.
+
+### 2. Local Rules Engine (Zero-LLM Latency)
+Instead of invoking LLM on the first-level radar panel, a lightweight rules engine evaluates spot prices against the SQLite cache bounds:
+- **超跌磁吸 🚀**: Triggered if `price <= expected_move_lower` and `Delta MP% > 5%`.
+- **需防壓回 ⚠️ / 籌碼斷層 ⚠️**: Triggered if `abs(Delta MP%) > 10%`.
+- **Real-time Insights**: Automatically matches active pending orders or option protection strategies (e.g., triggering pull-back alerts or tail-risk warnings).
+
+### 3. Rendering Layer (`build_radar_scan_embed`)
+The ANSI terminal radar card is built inside `cogs/embed_builder.py` using `build_radar_scan_embed()`, keeping with the **Single Source of Truth** for embeds. It prints an interactive ANSI plain-text grid showing current price, IVR, Expected Move range, Max Pain, and D-MP% deviation.
+
+---
+
 ## Watchlist Half-Hour Heartbeat
 
 ### Actual current flow
