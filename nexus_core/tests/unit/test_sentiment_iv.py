@@ -13,7 +13,10 @@ import config
 @pytest.fixture(autouse=True)
 def clear_iv_cache():
     _iv_cache.clear()
-    yield
+    with patch("database.cache.get_kv_cache", return_value=None), patch(
+        "database.cache.save_kv_cache", return_value=None
+    ):
+        yield
     _iv_cache.clear()
 
 
