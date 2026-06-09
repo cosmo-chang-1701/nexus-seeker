@@ -6,7 +6,7 @@ import time
 import math
 import asyncio
 import yfinance as yf
-from datetime import datetime
+from datetime import datetime, timedelta, date
 from typing import Dict, Any, List, Literal, Optional
 from services import market_data_service
 from services.market_data_service import BoundedCache
@@ -21,6 +21,15 @@ _IV_CACHE_TTL = 1200  # 20 minutes
 
 
 logger = logging.getLogger(__name__)
+
+
+def _current_week_friday() -> date:
+    """取得本週五日期。若今天已過週五（週六/週日），則取下週五。"""
+    today = date.today()
+    days_ahead = 4 - today.weekday()  # Friday = 4
+    if days_ahead < 0:  # Today is Saturday or Sunday
+        days_ahead += 7
+    return today + timedelta(days=days_ahead)
 
 
 class SentimentEngine:
@@ -220,22 +229,56 @@ class SentimentEngine:
                 if not expiries:
                     return {"error": "No expiries"}
 
-                # 收緊到期日過濾器：排除已過期的日期，排除 5 年後到期的極遠端 LEAPs
-                valid_expiries = []
+                # 嚴格到期日過濾：鎖定本週五即期到期合約，物理剔除 LEAPs
+                target_friday = _current_week_friday()
+                # 也接受半週到期 (Monday/Wednesday mini-options)
+                acceptable_dates = [
+                    target_friday,
+                    target_friday - timedelta(days=2),  # Wednesday
+                    target_friday - timedelta(days=4),  # Monday
+                ]
+                weekly_expiries: list[str] = []
+                near_term_expiries: list[str] = []
                 for exp in expiries:
                     try:
                         exp_dt = datetime.strptime(exp, "%Y-%m-%d").date()
                         if exp_dt < today:
                             continue
-                        if (exp_dt - today).days > 1825:
-                            continue
-                        valid_expiries.append(exp)
+                        if exp_dt in acceptable_dates:
+                            weekly_expiries.append(exp)
+                        elif (exp_dt - today).days <= 14:
+                            near_term_expiries.append(exp)
                     except ValueError:
                         continue
 
-                if not valid_expiries:
-                    return {"error": "No valid expiries after filtering"}
-                expiry = valid_expiries[0]
+                if weekly_expiries:
+                    # 優先選擇本週五
+                    friday_str = target_friday.strftime("%Y-%m-%d")
+                    expiry = (
+                        friday_str
+                        if friday_str in weekly_expiries
+                        else weekly_expiries[0]
+                    )
+                elif near_term_expiries:
+                    expiry = near_term_expiries[0]
+                    logger.warning(
+                        f"[{symbol}] 無本週五到期合約，回退至最近到期日: {expiry}"
+                    )
+                else:
+                    # 最終回退：取 90 天內最近的到期日
+                    valid_expiries = [
+                        exp
+                        for exp in expiries
+                        if datetime.strptime(exp, "%Y-%m-%d").date() >= today
+                        and (datetime.strptime(exp, "%Y-%m-%d").date() - today).days
+                        <= 90
+                    ]
+                    if not valid_expiries:
+                        return {"error": "No valid expiries after filtering"}
+                    expiry = valid_expiries[0]
+                    logger.warning(
+                        f"[{symbol}] 無近期到期合約，回退至 90 天內最近: {expiry}"
+                    )
 
             chain = await market_data_service.get_option_chain(symbol, expiry)
             if not chain:
@@ -260,41 +303,45 @@ class SentimentEngine:
                 quote = await market_data_service.get_quote(symbol)
                 spot_price = quote.get("c", 0.0) if quote else 0.0
 
-            # 導入拆股調整 (Split-Adjustment Verification)
+            # 確定性拆股因子校準 (Deterministic Split-Adjustment)
             splits = await market_data_service.get_stock_splits(symbol)
             if splits is not None and not splits.empty and spot_price > 0:
-                split_ratios = list(splits.values)
-                for df in [calls, puts]:
-                    if df.empty:
-                        continue
-                    new_strikes = []
-                    new_oi = []
-                    new_vol = []
-                    for _, row in df.iterrows():
-                        k = row["strike"]
-                        oi = row["openInterest"]
-                        vol = row["volume"]
-                        for r in split_ratios:
-                            if r <= 0.0 or r == 1.0:
-                                continue
-                            current_dev = abs(k - spot_price) / spot_price
-                            adjusted_dev = abs((k / r) - spot_price) / spot_price
-                            # 若調整後乖離率顯著降低且落在合理區間內，則判定為未調整之歷史 Strike，進行清洗
-                            if (
-                                adjusted_dev < current_dev
-                                and adjusted_dev < 1.5
-                                and current_dev > 1.5
-                            ):
-                                k = k / r
-                                oi = oi * r
-                                vol = vol * r
-                                break
-                        new_strikes.append(k)
-                        new_oi.append(oi)
-                        new_vol.append(vol)
-                    df["strike"] = new_strikes
-                    df["openInterest"] = new_oi
-                    df["volume"] = new_vol
+                # 計算累積拆股因子：所有歷史拆股比率的乘積
+                cumulative_factor = 1.0
+                for split_date, ratio in splits.items():
+                    if ratio > 0.0 and ratio != 1.0:
+                        cumulative_factor *= ratio
+
+                if cumulative_factor > 1.0:
+                    # 偵測並清洗未經調整的歷史 Strike
+                    for df in [calls, puts]:
+                        if df.empty:
+                            continue
+                        new_strikes = []
+                        new_oi = []
+                        new_vol = []
+                        for _, row in df.iterrows():
+                            k = row["strike"]
+                            oi = row["openInterest"]
+                            vol = row["volume"]
+                            # 若 Strike 明顯偏離現價（超過 2 倍），嘗試以累積因子校準
+                            if k > spot_price * 2.0:
+                                adjusted_k = k / cumulative_factor
+                                # 驗證調整後 Strike 落在合理區間內 (現價 ±100%)
+                                if 0.5 * spot_price <= adjusted_k <= 2.0 * spot_price:
+                                    logger.info(
+                                        f"[{symbol}] Split-adj: Strike ${k:.2f} → "
+                                        f"${adjusted_k:.2f} (factor={cumulative_factor:.1f})"
+                                    )
+                                    k = adjusted_k
+                                    oi = oi * cumulative_factor
+                                    vol = vol * cumulative_factor
+                            new_strikes.append(k)
+                            new_oi.append(oi)
+                            new_vol.append(vol)
+                        df["strike"] = new_strikes
+                        df["openInterest"] = new_oi
+                        df["volume"] = new_vol
 
             # 過濾掉 OI 為 0 且 Volume 為 0 的死合約
             calls = calls[(calls["openInterest"] > 0) | (calls["volume"] > 0)]
@@ -562,6 +609,81 @@ class SentimentEngine:
             logger.error(f"儲存歷史 IV 失敗: {e}")
 
     @staticmethod
+    async def _calculate_straddle_implied_em(
+        symbol: str, spot_price: float
+    ) -> float | None:
+        """以 ATM Straddle 權利金總和計算預期區間。
+
+        公式: Expected Move ≈ ATM Straddle Price × 0.85
+        此為業界標準的 1-sigma 近似法，直接反映造市商對短期波動的定價。
+        """
+        try:
+            expiries = await market_data_service.get_all_option_expiries(symbol)
+            if not expiries:
+                return None
+
+            # 選擇最近且尚未到期的到期日
+            today_dt = datetime.now().date()
+            target_expiry = None
+            for exp in expiries:
+                try:
+                    exp_dt = datetime.strptime(exp, "%Y-%m-%d").date()
+                    if exp_dt >= today_dt and (exp_dt - today_dt).days <= 14:
+                        target_expiry = exp
+                        break
+                except ValueError:
+                    continue
+            if target_expiry is None:
+                return None
+
+            chain = await market_data_service.get_option_chain(symbol, target_expiry)
+            if chain is None:
+                return None
+
+            calls = chain.calls
+            puts = chain.puts
+            if calls is None or calls.empty or puts is None or puts.empty:
+                return None
+
+            # 尋找最接近 ATM 的 Call 和 Put
+            call_atm_idx = (calls["strike"] - spot_price).abs().idxmin()
+            put_atm_idx = (puts["strike"] - spot_price).abs().idxmin()
+
+            call_atm = calls.loc[call_atm_idx]
+            put_atm = puts.loc[put_atm_idx]
+
+            # 使用 mid price (bid+ask)/2，若無 bid/ask 則用 lastPrice
+            def _mid(row):
+                bid = float(row.get("bid", 0.0) or 0.0)
+                ask = float(row.get("ask", 0.0) or 0.0)
+                if bid > 0 and ask > 0:
+                    return (bid + ask) / 2.0
+                return float(row.get("lastPrice", 0.0) or 0.0)
+
+            call_mid = _mid(call_atm)
+            put_mid = _mid(put_atm)
+
+            if call_mid <= 0 and put_mid <= 0:
+                return None
+
+            straddle_price = call_mid + put_mid
+            if straddle_price <= 0:
+                return None
+
+            # 業界標準 0.85 因子（1-sigma 近似）
+            em = straddle_price * 0.85
+
+            logger.info(
+                f"[{symbol}] Straddle-Implied EM: Call_mid=${call_mid:.2f} + "
+                f"Put_mid=${put_mid:.2f} = Straddle ${straddle_price:.2f} × 0.85 = ±${em:.2f}"
+            )
+            return em
+
+        except Exception as e:
+            logger.warning(f"[{symbol}] Straddle-Implied EM calculation failed: {e}")
+            return None
+
+    @staticmethod
     async def fetch_and_calculate_iv_metrics(symbol: str) -> IVMetrics:
         """
         獲取並計算隱含波動率 (IV) 相關指標，包括 IV Rank, IV Percentile, 週預期震盪區間。
@@ -815,8 +937,39 @@ class SentimentEngine:
                     f"Conflict detected: IV Rank is high ({iv_rank:.1f}%) but Implied Volatility is suspiciously low ({current_iv * 100:.1f}%)."
                 )
 
-            # 10. 計算 Expected Move Weekly (Stock Price * IV * sqrt(7/365))
-            expected_move_weekly = spot_price * current_iv * math.sqrt(7.0 / 365.0)
+            # 10. 計算 Expected Move Weekly — 多層降級防禦
+            # 優先級: (1) Straddle-Implied EM → (2) IV-based EM → (3) HV-20 proxy EM
+            em_from_iv = (
+                spot_price * current_iv * math.sqrt(7.0 / 365.0)
+                if current_iv > 0.001
+                else 0.0
+            )
+
+            straddle_em = await SentimentEngine._calculate_straddle_implied_em(
+                symbol, spot_price
+            )
+
+            if straddle_em and straddle_em > 0:
+                expected_move_weekly = straddle_em
+                # 交叉驗證：若 IV-based EM 也可用，取兩者較大值以反映尾部風險
+                if em_from_iv > 0:
+                    expected_move_weekly = max(straddle_em, em_from_iv)
+            elif em_from_iv > 0:
+                expected_move_weekly = em_from_iv
+            else:
+                # 最終降級：使用 HV-20 代理
+                hv_proxy = 0.0
+                if not df_hist.empty and "HV_20" in df_hist.columns:
+                    last_hv = df_hist["HV_20"].dropna()
+                    if not last_hv.empty:
+                        hv_proxy = float(last_hv.iloc[-1])
+                expected_move_weekly = (
+                    spot_price * max(hv_proxy, 0.15) * math.sqrt(7.0 / 365.0)
+                )
+                logger.warning(
+                    f"[{symbol}] Zero-IV fallback: using HV-20 proxy ({hv_proxy:.4f}) "
+                    f"for EM calculation. EM=${expected_move_weekly:.2f}"
+                )
 
             # 11. 判斷狀態
             iv_status: Literal["Low", "Normal", "High", "Extreme"]

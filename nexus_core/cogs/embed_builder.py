@@ -1121,11 +1121,33 @@ def _format_uoa_field(uoa_data: list) -> str:
                 if trade_type == "SWEEP"
                 else "🔴 SELL to OPEN (Bid)"
             )
-            intent = (
-                "🔥 機構主動買入：末日 Gamma 逼空"
-                if opt_type == "CALL"
-                else "🛡️ 機構開倉賣 PUT：強力構築下行支撐地板"
-            )
+            # 動態意圖生成：綁定真實交易數據
+            symbol_tag = f"[{item.get('symbol')}] " if item.get("symbol") else ""
+            strike_tag = f"${strike:.2f}"
+            vol_tag = f"{volume:,}"
+            oi_tag = f"{oi:,}"
+            if trade_type == "SWEEP":
+                if opt_type.upper() == "CALL":
+                    intent = (
+                        f"🔥 {symbol_tag}機構在 {strike_tag} 主動買入 {vol_tag} 口"
+                        f" CALL (OI={oi_tag})，Gamma 逼空火力集中"
+                    )
+                else:
+                    intent = (
+                        f"⚠️ {symbol_tag}機構在 {strike_tag} 急買 {vol_tag} 口"
+                        f" PUT (OI={oi_tag})，恐慌性避險避雷"
+                    )
+            else:
+                if opt_type.upper() == "CALL":
+                    intent = (
+                        f"🛡️ {symbol_tag}機構在 {strike_tag} 開倉賣出 {vol_tag} 口"
+                        f" CALL (OI={oi_tag})，物理封頂鎖死上方天花板"
+                    )
+                else:
+                    intent = (
+                        f"🛡️ {symbol_tag}機構在 {strike_tag} 開倉賣出 {vol_tag} 口"
+                        f" PUT (OI={oi_tag})，強力構築下行支撐地板"
+                    )
             trade = UOATradeResult(
                 expiry=expiry,
                 strike_price=strike,

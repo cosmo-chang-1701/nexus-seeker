@@ -23,7 +23,12 @@ def test_classify_uoa_trade_bto_mu():
 
     assert result.action == "🟢 BUY to OPEN (Ask)"
     assert result.ratio_str == "5.16x"
-    assert result.intent == "🔥 機構主動買入：末日 Gamma 逼空"
+    # Dynamic intent now includes ticker, strike, volume, OI, DTE
+    assert "🔥" in result.intent
+    assert "[MU]" in result.intent
+    assert "$1050.00" in result.intent
+    assert "22,348" in result.intent
+    assert "Gamma" in result.intent
 
 
 def test_classify_uoa_trade_sto_nvda():
@@ -44,7 +49,12 @@ def test_classify_uoa_trade_sto_nvda():
 
     assert result.action == "🔴 SELL to OPEN (Bid)"
     assert result.ratio_str == "6.20x"
-    assert result.intent == "🛡️ 做市商/機構開倉賣：鎖死上方天花板"
+    # Dynamic intent now includes ticker, strike, volume, OI
+    assert "🛡️" in result.intent
+    assert "[NVDA]" in result.intent
+    assert "$220.00" in result.intent
+    assert "15,000" in result.intent
+    assert "天花板" in result.intent
 
 
 def test_spacex_intent_and_ascii_table():
@@ -89,26 +99,24 @@ def test_spacex_intent_and_ascii_table():
 
     assert r2.action == "🟢 BUY to OPEN (Ask)"
     assert r2.ratio_str == "19.82x"
-    assert r2.intent == "🚀 跨週深價內建倉：SpaceX 週大吸籌"
+    # Dynamic intent: no more hardcoded SpaceX string, now uses data binding
+    assert "🚀" in r2.intent
+    assert "[SPACEX]" in r2.intent
+    assert "$790.00" in r2.intent
+    assert "13,741" in r2.intent
 
     assert r3.action == "🔴 SELL to OPEN (Bid)"
-    assert r3.intent == "🛡️ 做市商/機構開倉賣：鎖死上方天花板"
+    assert "🛡️" in r3.intent
+    assert "[NVDA]" in r3.intent
+    assert "$1100.00" in r3.intent
 
     table = generate_uoa_ascii_table([r1, r2, r3])
     print("\n" + table)
 
-    # 驗證輸出的表格列
+    # 驗證輸出的表格列結構
     lines = table.split("\n")
     assert len(lines) == 5  # header, sep, 3 data rows
-    assert (
-        "2026-06-05 | $1050.0 | CALL | 🟢 BUY to OPEN (Ask)  | +22,348  | 5.16x  | 🔥 機構主動買入：末日 Gamma 逼空"
-        in lines[2]
-    )
-    assert (
-        "2026-06-12 |  $790.0 | CALL | 🟢 BUY to OPEN (Ask)  | +13,741  | 19.82x | 🚀 跨週深價內建倉：SpaceX 週大吸籌"
-        in lines[3]
-    )
-    assert (
-        "2026-06-12 | $1100.0 | CALL | 🔴 SELL to OPEN (Bid) | +15,000  | 6.20x  | 🛡️ 做市商/機構開倉賣：鎖死上方天花板"
-        in lines[4]
-    )
+    # Verify structural presence of key data in each row
+    assert "2026-06-05" in lines[2] and "$1050.0" in lines[2] and "🟢" in lines[2]
+    assert "2026-06-12" in lines[3] and "$790.0" in lines[3] and "🟢" in lines[3]
+    assert "2026-06-12" in lines[4] and "$1100.0" in lines[4] and "🔴" in lines[4]

@@ -969,6 +969,30 @@ def derive_watchlist_option_guidance(
     if tactical_model.scenario == "wait" or "WAIT" in tactical_model.sddm_route.upper():
         return "價格仍在防守框架內，維持現貨 $1.00×$ 零槓桿死守，將雙手嚴格離開期權開倉鍵。"
 
+    # 金融常識約束模組 (Financial Sanity Guardrails)
+    # High IV Bubble Defense: IV Rank/Percentile > 80% 時禁止單腿買方策略
+    iv_rank = float(getattr(metrics, "iv_rank", 0.0) or 0.0)
+    iv_percentile = float(getattr(metrics, "iv_percentile", 0.0) or 0.0)
+
+    if iv_rank > 80.0 or iv_percentile > 80.0:
+        iv_warning = (
+            f"⚠️ IV 泡沫警告 (IV Rank: {iv_rank:.1f}% / IV Pctl: {iv_percentile:.1f}%)："
+            f"當前隱含波動率已進入歷史高位泡沫區，波動率收縮 (IV Crush) 風險極高。"
+            f"禁止觸發任何單腿買入 Put/Call 策略。"
+        )
+        if has_position:
+            return (
+                f"{iv_warning} "
+                f"已持倉：建議以 Covered Call 高位收租，或以 Collar (保護性領口) 鎖住利潤，"
+                f"嚴格執行 1.00x 純現貨無槓桿防守。"
+            )
+        else:
+            return (
+                f"{iv_warning} "
+                f"未持倉：建議觀望等待 IV 回落，或僅以 Credit Spread (賣方價差) 小倉位收租。"
+                f"禁止裸買任何單腿期權合約。"
+            )
+
     # 確保取得適合 the 買賣點價位 (如未提供，則以默認資金參數在線計算)
     if has_position and suitable_sell_price is None:
         sig = calculate_dynamic_trading_signals(
@@ -1100,6 +1124,10 @@ async def build_watchlist_option_plan(
 
     iv_percentile = float(getattr(metrics, "iv_percentile", 0.0) or 0.0)
     iv_bubble = iv_percentile > 90.0
+
+    # 單腿裸賣防禦：當 IV Rank 極端 (> 90%) 時，提示 assignment 風險
+    iv_rank_val = float(getattr(metrics, "iv_rank", 0.0) or 0.0)
+    naked_sell_warning = iv_rank_val > 90.0 and not has_position
 
     strategy_name: str | None = None
     premium_type: WatchlistPremiumType | None = None
@@ -1238,6 +1266,11 @@ async def build_watchlist_option_plan(
     if event_context is not None and event_context.risk_mode != "normal":
         rationale = f"{rationale} {event_context.summary}"
 
+    if naked_sell_warning:
+        rationale = (
+            "⚠️ IV Rank 極端高位 (>90%)：裸賣 CSP 面臨 Assignment 風險。"
+            "建議改用 Bull Put Spread 定義最大虧損。 " + rationale
+        )
     if iv_bubble:
         rationale = (
             "🚨 當前隱含波動率已高度泡沫化，強烈預警造市商波動率扼殺 (IV Crush) 陷阱，全面關閉買方路由。 "
