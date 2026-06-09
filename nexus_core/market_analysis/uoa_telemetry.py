@@ -109,32 +109,55 @@ def classify_uoa_trade(
     exp_dt = datetime.strptime(trade.expiry, "%Y-%m-%d").date()
     dte = (exp_dt - ref_dt).days
 
-    # 4. 戰略意圖映射 (Intent Mapping)
+    # 4. 動態戰略意圖映射 (Dynamic Intent Mapping)
+    # 所有文字動態綁定真實交易數據，禁止硬編碼罐頭字串
     opt_type_upper = trade.option_type.upper()
+    ticker_tag = f"[{trade.symbol}] " if trade.symbol else ""
+    volume_str = f"{trade.volume:,}"
+    strike_str = f"${trade.strike_price:.2f}"
+    oi_str = f"{trade.open_interest:,}"
 
     if action == "🟢 BUY to OPEN (Ask)":
         if opt_type_upper == "CALL":
             if dte <= 3:
-                intent = "🔥 機構主動買入：末日 Gamma 逼空"
+                intent = (
+                    f"🔥 {ticker_tag}機構在 {strike_str} 主動買入 {volume_str} 口"
+                    f" 末日 CALL (DTE={dte}, OI={oi_str})，Gamma 逼空火力集中"
+                )
             else:
-                if trade.strike_price == 790.0:
-                    intent = "🚀 跨週深價內建倉：SpaceX 週大吸籌"
-                else:
-                    intent = "🚀 跨週深價內建倉：大單主力吸籌"
+                intent = (
+                    f"🚀 {ticker_tag}大額資金在 {strike_str} 買入 {volume_str} 口"
+                    f" 跨週 CALL (DTE={dte}, OI={oi_str})，機構主力吸籌建倉"
+                )
         else:  # PUT
             if dte <= 3:
-                intent = "⚠️ 機構急買末日 PUT：恐慌性避險避雷"
+                intent = (
+                    f"⚠️ {ticker_tag}機構在 {strike_str} 急買 {volume_str} 口"
+                    f" 末日 PUT (DTE={dte}, OI={oi_str})，恐慌性避險避雷"
+                )
             else:
-                intent = "📉 空頭主動買入：加碼下行防護"
+                intent = (
+                    f"📉 {ticker_tag}空頭在 {strike_str} 主動買入 {volume_str} 口"
+                    f" PUT (DTE={dte}, OI={oi_str})，加碼下行防護"
+                )
 
     elif action == "🔴 SELL to OPEN (Bid)":
         if opt_type_upper == "CALL":
-            intent = "🛡️ 做市商/機構開倉賣：鎖死上方天花板"
+            intent = (
+                f"🛡️ {ticker_tag}機構在 {strike_str} 開倉賣出 {volume_str} 口 CALL"
+                f" (OI={oi_str})，物理封頂鎖死上方天花板"
+            )
         else:  # PUT
-            intent = "🛡️ 機構開倉賣 PUT：強力構築下行支撐地板"
+            intent = (
+                f"🛡️ {ticker_tag}機構在 {strike_str} 開倉賣出 {volume_str} 口 PUT"
+                f" (OI={oi_str})，強力構築下行支撐地板"
+            )
 
     else:  # ⚖️ MIDPOINT (Cross)
-        intent = "⚖️ 暗池Crossing對倒單：中性策略組合或調倉"
+        intent = (
+            f"⚖️ {ticker_tag}暗池 Crossing 在 {strike_str} 對倒 {volume_str} 口"
+            f" {opt_type_upper} (OI={oi_str})，中性策略組合或機構調倉"
+        )
 
     return UOATradeResult(
         expiry=trade.expiry,

@@ -410,7 +410,14 @@ def _validate_risk_and_liquidity(
             logger.info(f"[{symbol}] 剔除: 買方策略但 VRP 高達 {vrp*100:.2f}%")
             return None
 
-    expected_move = price * iv * math.sqrt(max(days_to_expiry, 1) / 365.0)
+    # Zero-IV 防禦：若 IV 為零，回退至 HV 代理
+    effective_iv = iv if iv > 0.001 else hv_current
+    if effective_iv <= 0.001:
+        effective_iv = 0.15  # 極端降級：使用 15% 年化波動率底線
+        logger.warning(
+            f"[{symbol}] Zero-IV AND Zero-HV in risk validation, using 15% floor for EM"
+        )
+    expected_move = price * effective_iv * math.sqrt(max(days_to_expiry, 1) / 365.0)
     em_lower = price - expected_move
     em_upper = price + expected_move
 
