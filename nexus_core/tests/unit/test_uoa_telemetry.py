@@ -120,3 +120,72 @@ def test_spacex_intent_and_ascii_table():
     assert "2026-06-05" in lines[2] and "$1050.0" in lines[2] and "🟢" in lines[2]
     assert "2026-06-12" in lines[3] and "$790.0" in lines[3] and "🟢" in lines[3]
     assert "2026-06-12" in lines[4] and "$1100.0" in lines[4] and "🔴" in lines[4]
+
+
+def test_classify_uoa_trade_moneyness():
+    """測試 UOA ITM/OTM 精確意圖分類"""
+    from market_analysis.uoa_telemetry import check_uoa_moneyness
+
+    # 1. CALL & Strike > Current Price => OTM
+    assert check_uoa_moneyness(True, 350.0, 136.85) == "OTM_Speculation"
+    trade1 = UOATradeInput(
+        strike_price=350.0,
+        option_type="CALL",
+        trade_price=0.55,
+        bid_price=0.45,
+        ask_price=0.55,
+        volume=1000,
+        open_interest=100,
+        expiry="2026-06-12",
+        symbol="PLTR",
+    )
+    res1 = classify_uoa_trade(trade1, reference_date="2026-06-05", current_price=136.85)
+    assert "OTM_Speculation" in res1.intent
+
+    # 2. CALL & Strike < Current Price => ITM
+    assert check_uoa_moneyness(True, 100.0, 136.85) == "ITM_Whale_Accumulation"
+    trade2 = UOATradeInput(
+        strike_price=100.0,
+        option_type="CALL",
+        trade_price=38.5,
+        bid_price=37.5,
+        ask_price=38.5,
+        volume=1000,
+        open_interest=100,
+        expiry="2026-06-12",
+        symbol="PLTR",
+    )
+    res2 = classify_uoa_trade(trade2, reference_date="2026-06-05", current_price=136.85)
+    assert "ITM_Whale_Accumulation" in res2.intent
+
+    # 3. PUT & Strike < Current Price => OTM
+    assert check_uoa_moneyness(False, 100.0, 136.85) == "OTM_Speculation"
+    trade3 = UOATradeInput(
+        strike_price=100.0,
+        option_type="PUT",
+        trade_price=0.85,
+        bid_price=0.75,
+        ask_price=0.85,
+        volume=1000,
+        open_interest=100,
+        expiry="2026-06-12",
+        symbol="PLTR",
+    )
+    res3 = classify_uoa_trade(trade3, reference_date="2026-06-05", current_price=136.85)
+    assert "OTM_Speculation" in res3.intent
+
+    # 4. PUT & Strike > Current Price => ITM
+    assert check_uoa_moneyness(False, 200.0, 136.85) == "ITM_Whale_Accumulation"
+    trade4 = UOATradeInput(
+        strike_price=200.0,
+        option_type="PUT",
+        trade_price=64.5,
+        bid_price=63.5,
+        ask_price=64.5,
+        volume=1000,
+        open_interest=100,
+        expiry="2026-06-12",
+        symbol="PLTR",
+    )
+    res4 = classify_uoa_trade(trade4, reference_date="2026-06-05", current_price=136.85)
+    assert "ITM_Whale_Accumulation" in res4.intent

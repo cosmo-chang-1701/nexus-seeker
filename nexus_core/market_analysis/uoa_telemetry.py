@@ -65,8 +65,23 @@ def _pad_string(s: str, width: int, align: str = "left") -> str:
         return s + " " * pad_len
 
 
+def check_uoa_moneyness(is_call: bool, strike: float, current_price: float) -> str:
+    """精確判定 UOA 交易的內外值屬性"""
+    if is_call and strike > current_price:
+        return "OTM_Speculation"
+    if is_call and strike < current_price:
+        return "ITM_Whale_Accumulation"
+    if not is_call and strike < current_price:
+        return "OTM_Speculation"
+    if not is_call and strike > current_price:
+        return "ITM_Whale_Accumulation"
+    return "ATM"
+
+
 def classify_uoa_trade(
-    trade: UOATradeInput, reference_date: Optional[Union[datetime, date, str]] = None
+    trade: UOATradeInput,
+    reference_date: Optional[Union[datetime, date, str]] = None,
+    current_price: Optional[float] = None,
 ) -> UOATradeResult:
     """
     根據即時 Bid/Ask 買賣價邊界進行全訂單流動性方向分類，並映射戰略意圖。
@@ -117,32 +132,62 @@ def classify_uoa_trade(
     strike_str = f"${trade.strike_price:.2f}"
     oi_str = f"{trade.open_interest:,}"
 
+    is_call = opt_type_upper == "CALL"
+
+    # 判斷是否可用現價做 ITM/OTM 精確分類
+    use_moneyness = current_price is not None and current_price > 0
+    moneyness = "UNKNOWN"
+    if use_moneyness and current_price is not None:
+        moneyness = check_uoa_moneyness(is_call, trade.strike_price, current_price)
+
     if action == "🟢 BUY to OPEN (Ask)":
-        if opt_type_upper == "CALL":
-            if dte <= 3:
+        if is_call:
+            if use_moneyness and moneyness == "OTM_Speculation":
                 intent = (
-                    f"🔥 {ticker_tag}機構在 {strike_str} 主動買入 {volume_str} 口"
-                    f" 末日 CALL (DTE={dte}, OI={oi_str})，Gamma 逼空火力集中"
+                    f"🔥 {ticker_tag}在 {strike_str} 買入 {volume_str} 口價外 CALL "
+                    f"(DTE={dte}, OI={oi_str})，屬 OTM 投機性看漲買盤 (OTM_Speculation)"
+                )
+            elif use_moneyness and moneyness == "ITM_Whale_Accumulation":
+                intent = (
+                    f"🚀 {ticker_tag}大額資金在 {strike_str} 買入 {volume_str} 口深價內 CALL "
+                    f"(DTE={dte}, OI={oi_str})，屬 ITM 機構主力吸籌建倉 (ITM_Whale_Accumulation)"
                 )
             else:
-                intent = (
-                    f"🚀 {ticker_tag}大額資金在 {strike_str} 買入 {volume_str} 口"
-                    f" 跨週 CALL (DTE={dte}, OI={oi_str})，機構主力吸籌建倉"
-                )
+                if dte <= 3:
+                    intent = (
+                        f"🔥 {ticker_tag}機構在 {strike_str} 主動買入 {volume_str} 口"
+                        f" 末日 CALL (DTE={dte}, OI={oi_str})，Gamma 逼空火力集中"
+                    )
+                else:
+                    intent = (
+                        f"🚀 {ticker_tag}大額資金在 {strike_str} 買入 {volume_str} 口"
+                        f" 跨週 CALL (DTE={dte}, OI={oi_str})，機構主力吸籌建倉"
+                    )
         else:  # PUT
-            if dte <= 3:
+            if use_moneyness and moneyness == "OTM_Speculation":
                 intent = (
-                    f"⚠️ {ticker_tag}機構在 {strike_str} 急買 {volume_str} 口"
-                    f" 末日 PUT (DTE={dte}, OI={oi_str})，恐慌性避險避雷"
+                    f"⚠️ {ticker_tag}在 {strike_str} 買入 {volume_str} 口價外 PUT "
+                    f"(DTE={dte}, OI={oi_str})，屬 OTM 投機避險買盤 (OTM_Speculation)"
+                )
+            elif use_moneyness and moneyness == "ITM_Whale_Accumulation":
+                intent = (
+                    f"📉 {ticker_tag}大額資金在 {strike_str} 買入 {volume_str} 口深價內 PUT "
+                    f"(DTE={dte}, OI={oi_str})，屬 ITM 機構主力避險建倉 (ITM_Whale_Accumulation)"
                 )
             else:
-                intent = (
-                    f"📉 {ticker_tag}空頭在 {strike_str} 主動買入 {volume_str} 口"
-                    f" PUT (DTE={dte}, OI={oi_str})，加碼下行防護"
-                )
+                if dte <= 3:
+                    intent = (
+                        f"⚠️ {ticker_tag}機構在 {strike_str} 急買 {volume_str} 口"
+                        f" 末日 PUT (DTE={dte}, OI={oi_str})，恐慌性避險避雷"
+                    )
+                else:
+                    intent = (
+                        f"📉 {ticker_tag}空頭在 {strike_str} 主動買入 {volume_str} 口"
+                        f" PUT (DTE={dte}, OI={oi_str})，加碼下行防護"
+                    )
 
     elif action == "🔴 SELL to OPEN (Bid)":
-        if opt_type_upper == "CALL":
+        if is_call:
             intent = (
                 f"🛡️ {ticker_tag}機構在 {strike_str} 開倉賣出 {volume_str} 口 CALL"
                 f" (OI={oi_str})，物理封頂鎖死上方天花板"
