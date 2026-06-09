@@ -2759,9 +2759,12 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         )
 
     # 4. 🎯 結算與目標 (Target Lock)
-    max_pain = data.get("max_pain", 0.0)
+    _mp_val = data.get("max_pain")
+    max_pain = float(_mp_val) if _mp_val is not None else 0.0
     price = c_val
-    distance = ((max_pain - price) / price * 100) if price > 0 else 0.0
+    distance = (
+        ((max_pain - price) / price * 100) if (price > 0 and max_pain > 0) else 0.0
+    )
 
     ddp_status = "符合 (符合 DDP 盈餘/估值雙擊)" if data.get("is_ddp") else "不符合"
     ddp_color = "\u001b[1;32m" if data.get("is_ddp") else "\u001b[1;30m"
@@ -2988,7 +2991,8 @@ def create_watchlist_signal_embed(
 
     # Extract Max Pain Data
     if max_pain_data is not None:
-        max_pain = float(max_pain_data.get("max_pain") or 0.0)
+        mp_val = max_pain_data.get("max_pain")
+        max_pain = float(mp_val) if mp_val is not None else 0.0
         pain_dist = float(max_pain_data.get("distance_pct") or 0.0)
     else:
         max_pain = live_price
@@ -4014,10 +4018,13 @@ def create_max_pain_embed(symbol: str, data: Dict[str, Any]) -> discord.Embed:
     )
 
     distance_pct = _safe_float(data.get("distance_pct"))
+    # 新公式: (max_pain - spot) / spot
+    # distance_pct > 0 → 痛點在現價之上 → 現價低於痛點
+    # distance_pct < 0 → 痛點在現價之下 → 現價高於痛點
     distance_text = (
-        f"現價高於痛點 `{distance_pct:.2f}%`"
+        f"現價低於痛點 `{distance_pct:.2f}%`"
         if distance_pct > 0
-        else f"現價低於痛點 `{abs(distance_pct):.2f}%`"
+        else f"現價高於痛點 `{abs(distance_pct):.2f}%`"
         if distance_pct < 0
         else "現價貼近最大痛點 `0.00%`"
     )
@@ -5406,7 +5413,8 @@ def build_radar_scan_embed(
         max_pain_strike = 0.0
         dist_pct = 0.0
         if isinstance(mp_data, dict):
-            max_pain_strike = mp_data.get("max_pain", 0.0)
+            mp_val = mp_data.get("max_pain")
+            max_pain_strike = float(mp_val) if mp_val is not None else 0.0
             if max_pain_strike > 0 and price_val > 0:
                 dist_pct = (max_pain_strike - price_val) / price_val * 100
 

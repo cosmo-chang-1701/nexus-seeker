@@ -224,6 +224,25 @@ class SentimentEngine:
                 return cached
 
         try:
+            if expiry:
+                try:
+                    exp_dt = datetime.strptime(expiry, "%Y-%m-%d").date()
+                    if (exp_dt - today).days > 30:
+                        logger.warning(
+                            f"[{symbol}] 指定到期日 {expiry} 超過 30 天，物理阻斷"
+                        )
+                        return {
+                            "symbol": symbol,
+                            "max_pain": None,
+                            "current_price": spot_price,
+                            "distance_pct": 0.0,
+                            "is_converging": False,
+                            "data_status": "Data_Missing",
+                            "error": "Data_Missing",
+                        }
+                except ValueError:
+                    pass
+
             if not expiry:
                 expiries = await market_data_service.get_all_option_expiries(symbol)
                 if not expiries:
@@ -265,24 +284,30 @@ class SentimentEngine:
                         f"[{symbol}] 無本週五到期合約，回退至最近到期日: {expiry}"
                     )
                 else:
-                    # 最終回退：取 90 天內最近的到期日
-                    valid_expiries = [
-                        exp
-                        for exp in expiries
-                        if datetime.strptime(exp, "%Y-%m-%d").date() >= today
-                        and (datetime.strptime(exp, "%Y-%m-%d").date() - today).days
-                        <= 90
-                    ]
-                    if not valid_expiries:
-                        return {"error": "No valid expiries after filtering"}
-                    expiry = valid_expiries[0]
                     logger.warning(
-                        f"[{symbol}] 無近期到期合約，回退至 90 天內最近: {expiry}"
+                        f"[{symbol}] 無本週及 14 天內到期合約，物理性阻斷並標記為 Data_Missing"
                     )
+                    return {
+                        "symbol": symbol,
+                        "max_pain": None,
+                        "current_price": spot_price,
+                        "distance_pct": 0.0,
+                        "is_converging": False,
+                        "data_status": "Data_Missing",
+                        "error": "Data_Missing",
+                    }
 
             chain = await market_data_service.get_option_chain(symbol, expiry)
             if not chain:
-                return {"error": "No chain data"}
+                return {
+                    "symbol": symbol,
+                    "max_pain": None,
+                    "current_price": spot_price,
+                    "distance_pct": 0.0,
+                    "is_converging": False,
+                    "data_status": "Data_Missing",
+                    "error": "No chain data",
+                }
 
             calls = chain.calls.copy()
             puts = chain.puts.copy()
@@ -297,6 +322,23 @@ class SentimentEngine:
                     df["volume"] = 0.0
                 else:
                     df["volume"] = df["volume"].fillna(0.0)
+
+            # 檢測當期未平倉量 (OI) 是否低於閾值 (例如 100)
+            total_oi = calls["openInterest"].sum() + puts["openInterest"].sum()
+            if total_oi < 100:
+                logger.warning(
+                    f"[{symbol}] Expiry {expiry} total open interest ({total_oi}) is below threshold 100. "
+                    "Forcing Data_Missing status to prevent stale data pollution."
+                )
+                return {
+                    "symbol": symbol,
+                    "max_pain": None,
+                    "current_price": spot_price,
+                    "distance_pct": 0.0,
+                    "is_converging": False,
+                    "data_status": "Data_Missing",
+                    "error": "Data_Missing",
+                }
 
             # 取得即時股價
             if spot_price <= 0.0:
@@ -410,7 +452,7 @@ class SentimentEngine:
                 )
 
             dist_pct = (
-                (spot_price - max_pain_strike) / spot_price * 100
+                (max_pain_strike - spot_price) / spot_price * 100
                 if spot_price > 0
                 else 0
             )
@@ -439,6 +481,14 @@ class SentimentEngine:
             expiries = await market_data_service.get_all_option_expiries(symbol)
             if not expiries:
                 return []
+
+            # 取得即時現價以提供 UOA 的 ITM/OTM 分類
+            spot_price = 0.0
+            try:
+                quote = await market_data_service.get_quote(symbol)
+                spot_price = quote.get("c", 0.0) if quote else 0.0
+            except Exception as e:
+                logger.warning(f"[{symbol}] detect_uoa 取得現價失敗: {e}")
 
             uoa_list = []
             # 檢查前兩個到期日
@@ -496,7 +546,9 @@ class SentimentEngine:
                             open_interest=int(row["openInterest"]),
                             symbol=symbol,
                         )
-                        result = classify_uoa_trade(trade_input)
+                        result = classify_uoa_trade(
+                            trade_input, current_price=spot_price
+                        )
 
                         uoa_list.append(
                             {
@@ -969,6 +1021,15 @@ class SentimentEngine:
                 logger.warning(
                     f"[{symbol}] Zero-IV fallback: using HV-20 proxy ({hv_proxy:.4f}) "
                     f"for EM calculation. EM=${expected_move_weekly:.2f}"
+                )
+
+            # 最終安全閥：若所有降級路徑皆產出零寬度 EM，強制使用 15% 年化波動率底線
+            # 防止 $X ~ $X 的零寬度預期區間顯示 (e.g. DELL $400.77 ~ $400.77)
+            if expected_move_weekly <= 0 and spot_price > 0:
+                expected_move_weekly = spot_price * 0.15 * math.sqrt(7.0 / 365.0)
+                logger.warning(
+                    f"[{symbol}] CRITICAL: All EM fallbacks exhausted, "
+                    f"using 15% floor. EM=${expected_move_weekly:.2f}"
                 )
 
             # 11. 判斷狀態
