@@ -93,8 +93,19 @@ def calculate_beta(df_stock: pd.DataFrame, df_spy: pd.DataFrame) -> float:
         if len(combined) < 60:
             return 1.0
         log_returns = np.log(combined / combined.shift(1)).dropna()
+        if log_returns.empty or len(log_returns) < 2:
+            return 1.0
+
         cov_matrix = np.cov(log_returns.iloc[:, 0], log_returns.iloc[:, 1])
-        beta = cov_matrix[0, 1] / cov_matrix[1, 1]
+        market_variance = cov_matrix[1, 1]
+        if np.isfinite(market_variance) and np.abs(market_variance) > 1e-9:
+            beta = cov_matrix[0, 1] / market_variance
+        else:
+            beta = 1.0  # 當市場無變動或資料異常時，預設回傳 1.0
+
+        if not np.isfinite(beta):
+            return 1.0
+
         return round(float(np.clip(beta, -5.0, 5.0)), 2)
     except Exception:
         return 1.0
