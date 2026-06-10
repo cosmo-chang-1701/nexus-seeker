@@ -192,7 +192,10 @@ class SymbolHubView(discord.ui.View):
             uoa_task = SentimentEngine.detect_uoa(self.symbol)
             mp_task = SentimentEngine.calculate_max_pain(self.symbol)
             iv_task = SentimentEngine.fetch_and_calculate_iv_metrics(self.symbol)
-            reddit_task = reddit_service.get_reddit_context(self.symbol)
+            ctx = database.get_full_user_context(self.user_id)
+            reddit_task = reddit_service.get_reddit_context(
+                self.symbol, enable_tunnel=ctx.enable_local_tunnel
+            )
             poly_task = poly_service.get_market_snapshot(limit=10)
             ddp_task = ddp_inspector.inspect_symbol(self.symbol)
             df_hist_task = market_data_service.get_history_df(
@@ -769,7 +772,10 @@ class UnifiedTerminalCog(commands.Cog):
             uoa_task = SentimentEngine.detect_uoa(symbol)
             mp_task = SentimentEngine.calculate_max_pain(symbol)
             iv_task = SentimentEngine.fetch_and_calculate_iv_metrics(symbol)
-            reddit_task = reddit_service.get_reddit_context(symbol)
+            ctx = database.get_full_user_context(user_id)
+            reddit_task = reddit_service.get_reddit_context(
+                symbol, enable_tunnel=ctx.enable_local_tunnel
+            )
             poly_task = poly_service.get_market_snapshot(limit=10)
             ddp_task = ddp_inspector.inspect_symbol(symbol)
             df_hist_task = market_data_service.get_history_df(

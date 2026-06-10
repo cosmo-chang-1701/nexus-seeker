@@ -309,11 +309,21 @@ async def validate_symbol(symbol: str) -> bool:
 async def batch_get_quotes(symbols: List[str]) -> Dict[str, Dict[str, Any]]:
     """批次取得多檔標的的即時報價。
 
-    注意：會先做 ticker 清洗（移除 `$`/空白並大寫），避免 yfinance/Finnhub 請求格式錯誤。
+    防禦性設計：
+    - 先做 ticker 清洗（移除 `$`/空白並大寫），避免 yfinance/Finnhub 請求格式錯誤。
+    - 使用批次級 ``asyncio.Semaphore(3)`` 限制同時在途的報價請求數量，
+      避免大量 watchlist 標的同時湧入下游 limiter 佇列而觸發 Finnhub 429。
+      （每個 ``get_quote()`` 仍有自己的 per-call rate limiter，此為外層保護層。）
     """
 
     clean_symbols = [_sanitize_ticker(s) for s in symbols if s]
-    tasks = [get_quote(sym) for sym in clean_symbols]
+    batch_sem = asyncio.Semaphore(3)
+
+    async def _throttled_quote(sym: str) -> Dict[str, Any]:
+        async with batch_sem:
+            return await get_quote(sym)
+
+    tasks = [_throttled_quote(sym) for sym in clean_symbols]
     quotes = await asyncio.gather(*tasks)
     return {sym: q for sym, q in zip(clean_symbols, quotes) if q}
 
