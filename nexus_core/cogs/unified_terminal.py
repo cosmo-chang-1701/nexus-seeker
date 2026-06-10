@@ -231,10 +231,11 @@ class SymbolHubView(discord.ui.View):
             )
 
             spy_price = df_spy["Close"].iloc[-1] if not df_spy.empty else 670.0
+            safe_macro = macro_raw or {}
             macro_data = MacroContext(
-                vix=macro_raw.get("vix", 18.0),
-                oil_price=macro_raw.get("oil", 75.0),
-                vix_change=macro_raw.get("vix_change", 0.0),
+                vix=safe_macro.get("vix", 18.0),
+                oil_price=safe_macro.get("oil", 75.0),
+                vix_change=safe_macro.get("vix_change", 0.0),
             )
 
             result = await market_math.analyze_symbol(
@@ -246,38 +247,50 @@ class SymbolHubView(discord.ui.View):
             psq_result = analyze_psq(df_hist_1d, vix_spot=macro_data.vix)
             if psq_result:
                 result["psq_result"] = psq_result
+                is_df_valid = df_hist_1d is not None and not df_hist_1d.empty
                 result["price"] = (
                     df_hist_1d["Close"].iloc[-1]
-                    if not df_hist_1d.empty
+                    if is_df_valid
                     else result.get("price", 0.0)
                 )
 
             result["quote"] = quote
-            result["skew"] = skew_data.get("skew", 0.0)
+
+            safe_skew = skew_data or {}
+            result["skew"] = safe_skew.get("skew", 0.0)
             result["skew_percentile"] = SentimentEngine.get_indicator_percentile(
                 self.symbol, "SKEW", result["skew"]
             )
-            result["pcr"] = pcr_data
-            result["uoa"] = uoa_data
+
+            result["pcr"] = pcr_data if pcr_data is not None else {}
+            result["uoa"] = uoa_data if uoa_data is not None else []
+
             result["iv_data"] = iv_metrics
-            result["iv_rank"] = iv_metrics.iv_rank
-            result["max_pain"] = max_pain_data.get("max_pain", 0.0)
+            result["iv_rank"] = iv_metrics.iv_rank if iv_metrics else 0.0
+
+            safe_mp = max_pain_data or {}
+            result["max_pain"] = safe_mp.get("max_pain", 0.0)
+
             result["is_ddp"] = ddp_report.get("is_ddp", False) if ddp_report else False
             result["vix"] = macro_data.vix
             result["spy_price"] = spy_price
 
             # Reddit sentiment score
-            if "看多" in reddit_text or "Bullish" in reddit_text:
+            safe_reddit_text = reddit_text or ""
+            if "看多" in safe_reddit_text or "Bullish" in safe_reddit_text:
                 result["reddit_sentiment_score"] = "🚀 樂觀 (Bullish)"
-            elif "看空" in reddit_text or "Bearish" in reddit_text:
+            elif "看空" in safe_reddit_text or "Bearish" in safe_reddit_text:
                 result["reddit_sentiment_score"] = "💀 恐慌 (Bearish)"
             else:
                 result["reddit_sentiment_score"] = "⚖️ 中性"
 
             # Polymarket odds
             poly_odds = "N/A"
-            for m in poly_markets:
-                if self.symbol.lower() in m.get("question", "").lower():
+            for m in poly_markets or []:
+                if (
+                    isinstance(m, dict)
+                    and self.symbol.lower() in m.get("question", "").lower()
+                ):
                     tokens = m.get("tokens", [])
                     if tokens:
                         poly_odds = f"{tokens[0].get('outcome', 'Yes')}: {float(tokens[0].get('price', 0))*100:.1f}%"
@@ -811,10 +824,11 @@ class UnifiedTerminalCog(commands.Cog):
             )
 
             spy_price = df_spy["Close"].iloc[-1] if not df_spy.empty else 670.0
+            safe_macro = macro_raw or {}
             macro_data = MacroContext(
-                vix=macro_raw.get("vix", 18.0),
-                oil_price=macro_raw.get("oil", 75.0),
-                vix_change=macro_raw.get("vix_change", 0.0),
+                vix=safe_macro.get("vix", 18.0),
+                oil_price=safe_macro.get("oil", 75.0),
+                vix_change=safe_macro.get("vix_change", 0.0),
             )
 
             result = await market_math.analyze_symbol(
@@ -826,38 +840,50 @@ class UnifiedTerminalCog(commands.Cog):
             psq_result = analyze_psq(df_hist_1d, vix_spot=macro_data.vix)
             if psq_result:
                 result["psq_result"] = psq_result
+                is_df_valid = df_hist_1d is not None and not df_hist_1d.empty
                 result["price"] = (
                     df_hist_1d["Close"].iloc[-1]
-                    if not df_hist_1d.empty
+                    if is_df_valid
                     else result.get("price", 0.0)
                 )
 
             result["quote"] = quote
-            result["skew"] = skew_data.get("skew", 0.0)
+
+            safe_skew = skew_data or {}
+            result["skew"] = safe_skew.get("skew", 0.0)
             result["skew_percentile"] = SentimentEngine.get_indicator_percentile(
                 symbol, "SKEW", result["skew"]
             )
-            result["pcr"] = pcr_data
-            result["uoa"] = uoa_data
+
+            result["pcr"] = pcr_data if pcr_data is not None else {}
+            result["uoa"] = uoa_data if uoa_data is not None else []
+
             result["iv_data"] = iv_metrics
-            result["iv_rank"] = iv_metrics.iv_rank
-            result["max_pain"] = max_pain_data.get("max_pain", 0.0)
+            result["iv_rank"] = iv_metrics.iv_rank if iv_metrics else 0.0
+
+            safe_mp = max_pain_data or {}
+            result["max_pain"] = safe_mp.get("max_pain", 0.0)
+
             result["is_ddp"] = ddp_report.get("is_ddp", False) if ddp_report else False
             result["vix"] = macro_data.vix
             result["spy_price"] = spy_price
 
             # Reddit sentiment score
-            if "看多" in reddit_text or "Bullish" in reddit_text:
+            safe_reddit_text = reddit_text or ""
+            if "看多" in safe_reddit_text or "Bullish" in safe_reddit_text:
                 result["reddit_sentiment_score"] = "🚀 樂觀 (Bullish)"
-            elif "看空" in reddit_text or "Bearish" in reddit_text:
+            elif "看空" in safe_reddit_text or "Bearish" in safe_reddit_text:
                 result["reddit_sentiment_score"] = "💀 恐慌 (Bearish)"
             else:
                 result["reddit_sentiment_score"] = "⚖️ 中性"
 
             # Polymarket odds
             poly_odds = "N/A"
-            for m in poly_markets:
-                if symbol.lower() in m.get("question", "").lower():
+            for m in poly_markets or []:
+                if (
+                    isinstance(m, dict)
+                    and symbol.lower() in m.get("question", "").lower()
+                ):
                     tokens = m.get("tokens", [])
                     if tokens:
                         poly_odds = f"{tokens[0].get('outcome', 'Yes')}: {float(tokens[0].get('price', 0))*100:.1f}%"
