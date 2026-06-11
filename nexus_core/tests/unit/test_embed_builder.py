@@ -36,6 +36,7 @@ from cogs.embed_builder import (
     create_active_orders_embed,
     build_radar_scan_embed,
     build_post_market_intelligence_embed,
+    create_covered_call_unlock_embed,
 )
 from models.schemas import WatchlistOptionLeg, WatchlistOptionPlan
 
@@ -1100,3 +1101,50 @@ def test_build_post_market_intelligence_embed_parsed_ai_commentary():
     assert "```ansi" in market_field.value
     assert " ├─ 第一點分析" in market_field.value
     assert " └─ 第二點分析" in market_field.value
+
+
+def test_create_covered_call_unlock_embed():
+    """Verify that create_covered_call_unlock_embed correctly renders deadlock release embed."""
+    # 1. With recommendations
+    data_with_recs = {
+        "symbol": "NVDA",
+        "current_shares": 100.0,
+        "current_cost": 120.0,
+        "new_cost_basis": 115.0,
+        "current_price": 110.0,
+        "recommendations": [
+            {
+                "expiration": "2026-07-17",
+                "strike": 125.0,
+                "delta": 0.12,
+                "premium": 2.50,
+                "annualized_yield": 18.5,
+            }
+        ],
+    }
+    embed_with_recs = create_covered_call_unlock_embed(data_with_recs)
+    assert embed_with_recs.title == "🔓 NVDA 物理死鎖解除與備兌建單指引"
+    assert len(embed_with_recs.fields) == 3
+    assert "現貨與吸籌模擬" in embed_with_recs.fields[0].name
+    assert "100 股" in embed_with_recs.fields[0].value
+    assert "$120.00" in embed_with_recs.fields[0].value
+    assert "$115.00" in embed_with_recs.fields[0].value
+    assert "推薦 Covered Call 備兌合約" in embed_with_recs.fields[1].name
+    assert "2026-07-17" in embed_with_recs.fields[1].value
+    assert "$125.00" in embed_with_recs.fields[1].value
+    assert "18.50%" in embed_with_recs.fields[1].value
+
+    # 2. Without recommendations
+    data_no_recs = {
+        "symbol": "AAPL",
+        "current_shares": 50.0,
+        "current_cost": 180.0,
+        "new_cost_basis": 178.0,
+        "current_price": 170.0,
+        "recommendations": [],
+    }
+    embed_no_recs = create_covered_call_unlock_embed(data_no_recs)
+    assert embed_no_recs.title == "🔓 AAPL 物理死鎖解除與備兌建單指引"
+    assert len(embed_no_recs.fields) == 2
+    assert "解鎖狀態與策略建議" in embed_no_recs.fields[1].name
+    assert "未尋獲符合條件之極虛值" in embed_no_recs.fields[1].value
