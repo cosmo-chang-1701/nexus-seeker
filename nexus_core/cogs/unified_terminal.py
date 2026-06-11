@@ -961,12 +961,40 @@ class UnifiedTerminalCog(commands.Cog):
                 ephemeral=True,
             )
 
+    async def _async_revalidate_market_cache(self, sym: str, price: float):
+        try:
+            from database import save_market_cache
+            from market_analysis.sentiment_engine import SentimentEngine
+
+            logger.info(f"🔄 [SWR] Background revalidating market cache for {sym}...")
+            iv_m = await SentimentEngine.fetch_and_calculate_iv_metrics(sym)
+            mp_d = await SentimentEngine.calculate_max_pain(sym)
+
+            em_weekly = iv_m.expected_move_weekly if iv_m else 0.0
+            max_pain = (
+                mp_d.get("max_pain", 0.0) if (mp_d and isinstance(mp_d, dict)) else 0.0
+            )
+
+            em_lower = price - em_weekly if price > 0 else 0.0
+            em_upper = price + em_weekly if price > 0 else 0.0
+
+            await asyncio.to_thread(
+                save_market_cache, sym, max_pain, em_lower, em_upper, price, 0
+            )
+            logger.info(f"✅ [SWR] Background revalidation complete for {sym}")
+        except Exception as e:
+            logger.error(f"❌ [SWR] Background revalidation failed for {sym}: {e}")
+
     async def _fetch_sym_radar_data(self, sym: str):
         """
         獲取單一標的的雷達量化數據。
         採用 Cache-Aside 設計，直接物理性從 SQLite 中的 market_cache 讀取，快取未命中則進行退級即時計算。
         """
-        from database import get_market_cache, save_market_cache
+        from database import (
+            get_market_cache,
+            save_market_cache,
+            mark_market_cache_stale,
+        )
         from market_analysis.sentiment_engine import SentimentEngine
         from services import market_data_service
 
@@ -997,9 +1025,11 @@ class UnifiedTerminalCog(commands.Cog):
                 if deviation > 0.02:
                     logger.warning(
                         f"[{sym}] Spot price shifted from {ref_price} to {price} "
-                        f"(dev={deviation:.2%}), invalidating market_cache"
+                        f"(dev={deviation:.2%}), marking stale & triggering revalidation."
                     )
-                    cache_data = None
+                    cache_data["is_stale"] = True
+                    await asyncio.to_thread(mark_market_cache_stale, sym)
+                    asyncio.create_task(self._async_revalidate_market_cache(sym, price))
 
         iv_rank_val = 0.0
         em_weekly = 0.0

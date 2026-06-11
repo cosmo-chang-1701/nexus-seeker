@@ -775,3 +775,74 @@ async def test_add_order_slash_command_telemetry(
     ]
     assert len(orders) == 1
     assert orders[0]["limit_price"] == 95.5
+
+
+@pytest.mark.asyncio
+async def test_telemetry_alert_ignores_stale_max_pain(mock_interaction, db_conn):
+    """測試當 Max Pain 快取過期時，遙測對齊警報能安全過濾不採用它進行調價計算"""
+    user_id = mock_interaction.user.id
+    # Clear orders first
+    db_conn.execute("DELETE FROM active_orders")
+    db_conn.commit()
+
+    add_active_order(
+        user_id=user_id,
+        symbol="AAPL",
+        quantity=20,
+        order_type="LIMIT",
+        validity="DAY",
+        limit_price=100.0,
+    )
+
+    bot = MagicMock()
+    cog = OrderUICog(bot)
+
+    mock_iv = MagicMock(
+        current_iv=0.35,
+        iv_rank=45.0,
+        iv_status="Normal",
+    )
+
+    # Mock SentimentEngine to return stale max pain metrics
+    mock_max_pain_stale = {
+        "max_pain": 120.0,
+        "is_stale": True,
+        "data_status": "Stale",
+    }
+
+    mock_telemetry_spy = AsyncMock(return_value=(100.0, 20, ["Telemetry Mock"]))
+
+    with patch(
+        "cogs.order_ui._fetch_cache_and_live_price",
+        new=AsyncMock(return_value=(101.0, 102.0)),
+    ), patch(
+        "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
+        new=AsyncMock(return_value=mock_iv),
+    ), patch(
+        "market_analysis.sentiment_engine.SentimentEngine.calculate_skew",
+        new=AsyncMock(
+            return_value={"skew": 1.2, "skew_percentile": 65.0, "state": "平穩"}
+        ),
+    ), patch(
+        "market_analysis.sentiment_engine.SentimentEngine.calculate_max_pain",
+        new=AsyncMock(return_value=mock_max_pain_stale),
+    ), patch(
+        "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
+        new=AsyncMock(return_value=[]),
+    ), patch(
+        "services.calendar_service.calendar_service.get_high_impact_events",
+        new=AsyncMock(return_value=[]),
+    ), patch(
+        "services.calendar_service.calendar_service.get_symbol_earnings",
+        new=AsyncMock(return_value=None),
+    ), patch(
+        "services.telemetry_pricing_engine.calculate_telemetry_price",
+        new=mock_telemetry_spy,
+    ):
+        await cog.telemetry_alert.callback(cog, mock_interaction)
+
+    # Verify that the max_pain parameter passed to calculate_telemetry_price is None or 0.0,
+    # indicating the stale value 120.0 was successfully overridden to 0.0/None.
+    assert mock_telemetry_spy.called
+    kwargs = mock_telemetry_spy.call_args.kwargs
+    assert kwargs.get("max_pain") is None or kwargs.get("max_pain") == 0.0

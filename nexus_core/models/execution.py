@@ -1,5 +1,10 @@
-from typing import Literal, Optional
-from pydantic import BaseModel, Field, ConfigDict, model_validator
+from typing import Literal, Optional, Any
+from enum import Enum
+from pydantic import BaseModel, Field, ConfigDict, model_validator, field_validator
+
+
+class Signal(Enum):
+    SKIP = "SKIP"
 
 
 class MarketCondition(BaseModel):
@@ -19,6 +24,68 @@ class MarketCondition(BaseModel):
     relative_strength: float = Field(
         1.0, description="相對強度 (Relative Strength) 指標"
     )
+
+    @field_validator(
+        "vix",
+        "skew_percent",
+        "asset_price",
+        "ma20",
+        "atr_14",
+        "rsi_14",
+        "relative_strength",
+        mode="before",
+    )
+    @classmethod
+    def clean_indicators(cls, v: Any, info) -> Any:
+        import math
+        import pandas as pd
+        import numpy as np
+
+        if v is None:
+            return cls._get_safe_default(info.field_name)
+
+        if isinstance(v, float) and (math.isnan(v) or np.isnan(v)):
+            return cls._get_safe_default(info.field_name)
+
+        if isinstance(v, (float, int)) and pd.isna(v):
+            return cls._get_safe_default(info.field_name)
+
+        try:
+            val = float(v)
+        except (ValueError, TypeError):
+            return cls._get_safe_default(info.field_name)
+
+        if isinstance(val, float) and (math.isnan(val) or np.isnan(val)):
+            return cls._get_safe_default(info.field_name)
+
+        # check bounds
+        if info.field_name == "vix" and val <= 0:
+            return 18.0
+        if info.field_name == "asset_price" and val <= 0:
+            return 100.0
+        if info.field_name == "ma20" and val <= 0:
+            return 100.0
+        if info.field_name == "atr_14" and val < 0:
+            return 2.0
+        if info.field_name == "rsi_14" and (val < 0 or val > 100):
+            return 50.0
+        if info.field_name == "relative_strength" and val <= 0:
+            return 1.0
+
+        return val
+
+    @classmethod
+    def _get_safe_default(cls, field_name: str) -> float:
+        defaults = {
+            "vix": 18.0,
+            "skew_percent": 0.0,
+            "asset_price": 100.0,
+            "ma20": 100.0,
+            "atr_14": 2.0,
+            "rsi_14": 50.0,
+            "relative_strength": 1.0,
+        }
+        return defaults.get(field_name, 0.0)
 
 
 class GridParameters(BaseModel):

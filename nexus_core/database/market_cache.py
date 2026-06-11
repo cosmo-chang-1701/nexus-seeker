@@ -9,19 +9,21 @@ def save_market_cache(
     expected_move_lower: float,
     expected_move_upper: float,
     reference_spot_price: Optional[float] = None,
+    is_stale: int = 0,
 ) -> bool:
     try:
         with sqlite3.connect(config.DB_NAME) as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                INSERT INTO market_cache (symbol, max_pain, expected_move_lower, expected_move_upper, reference_spot_price, updated_at)
-                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                INSERT INTO market_cache (symbol, max_pain, expected_move_lower, expected_move_upper, reference_spot_price, is_stale, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(symbol) DO UPDATE SET
                 max_pain = excluded.max_pain,
                 expected_move_lower = excluded.expected_move_lower,
                 expected_move_upper = excluded.expected_move_upper,
                 reference_spot_price = excluded.reference_spot_price,
+                is_stale = excluded.is_stale,
                 updated_at = CURRENT_TIMESTAMP
             """,
                 (
@@ -30,7 +32,22 @@ def save_market_cache(
                     expected_move_lower,
                     expected_move_upper,
                     reference_spot_price,
+                    is_stale,
                 ),
+            )
+            conn.commit()
+            return True
+    except Exception:
+        return False
+
+
+def mark_market_cache_stale(symbol: str) -> bool:
+    try:
+        with sqlite3.connect(config.DB_NAME) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE market_cache SET is_stale = 1 WHERE symbol = ?",
+                (symbol.upper(),),
             )
             conn.commit()
             return True

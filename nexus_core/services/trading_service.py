@@ -17,7 +17,9 @@ from services import market_data_service, news_service, llm_service
 from market_analysis.ddp_inspector import DDPInspector
 from market_analysis.volatility_inspector import VolatilityInspector
 from services.execution_router import ExecutionRouter
-from models.execution import MarketCondition
+from models.execution import MarketCondition, Signal
+# ... (rest of imports unchanged)
+
 
 logger = logging.getLogger(__name__)
 ny_tz = ZoneInfo("America/New_York")
@@ -187,20 +189,24 @@ class TradingService:
                 df_hist_1d, df_bench, n=20
             )
 
-            # 2. 構建 MarketCondition
-            condition = MarketCondition(
-                vix=macro.get("vix", 18.0),
-                skew_percent=skew_val,
-                asset_price=price,
-                ma20=clean_ma20,
-                atr_14=clean_atr,
-                rsi_14=clean_rsi,
-                uoa_detected=uoa_detected,
-                relative_strength=relative_strength,
-            )
-
-            # 3. 調用 Router
-            return self.execution_router.evaluate_market(condition)
+            # 2. 構建 MarketCondition與調用 Router
+            try:
+                condition = MarketCondition(
+                    vix=macro.get("vix", 18.0),
+                    skew_percent=skew_val,
+                    asset_price=price,
+                    ma20=clean_ma20,
+                    atr_14=clean_atr,
+                    rsi_14=clean_rsi,
+                    uoa_detected=uoa_detected,
+                    relative_strength=relative_strength,
+                )
+                return self.execution_router.evaluate_market(condition)
+            except Exception as e:
+                logger.debug(
+                    f"ExecutionRouter construct/evaluate failed for {symbol}: {e}"
+                )
+                return Signal.SKIP
         except Exception as e:
             logger.error(f"獲獲取執行決策失敗 for {symbol}: {e}")
             return None
@@ -517,19 +523,25 @@ class TradingService:
                             df_hist_1d, df_bench, n=20
                         )
 
-                        condition = MarketCondition(
-                            vix=vix_spot,
-                            skew_percent=skew_val,
-                            asset_price=price,
-                            ma20=clean_ma20,
-                            atr_14=clean_atr,
-                            rsi_14=clean_rsi,
-                            uoa_detected=uoa_detected,
-                            relative_strength=relative_strength,
-                        )
-                        res["execution_decision"] = (
-                            self.execution_router.evaluate_market(condition)
-                        )
+                        try:
+                            condition = MarketCondition(
+                                vix=vix_spot,
+                                skew_percent=skew_val,
+                                asset_price=price,
+                                ma20=clean_ma20,
+                                atr_14=clean_atr,
+                                rsi_14=clean_rsi,
+                                uoa_detected=uoa_detected,
+                                relative_strength=relative_strength,
+                            )
+                            res["execution_decision"] = (
+                                self.execution_router.evaluate_market(condition)
+                            )
+                        except Exception as ex_router_e:
+                            logger.debug(
+                                f"ExecutionRouter 評估失敗 for {sym}: {ex_router_e}"
+                            )
+                            res["execution_decision"] = Signal.SKIP
                 except Exception as ex_router_e:
                     logger.warning(f"ExecutionRouter 評估失敗 for {sym}: {ex_router_e}")
                     if not res.get("price") or res.get("price") <= 0:

@@ -61,6 +61,7 @@ from .notifications import (
 from .market_cache import (
     save_market_cache,
     get_market_cache,
+    mark_market_cache_stale,
 )
 
 __all__ = [
@@ -115,4 +116,5 @@ __all__ = [
     "is_notification_enabled",
     "save_market_cache",
     "get_market_cache",
+    "mark_market_cache_stale",
 ]
