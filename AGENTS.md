@@ -229,8 +229,8 @@ The platform implements an advanced macro risk-control layer that dynamically ad
 - **Rate Probabilities**: Crawls FOMC rate probabilities via `/scrape/macro/fedwatch` and saves to SQLite (`consensus_value` and `fedwatch_probability` fields in `economic_calendar_events`).
 - **Dynamic Escape Window**:
   - The pre-market analyst loop (`analyst_agent.py`) evaluates the probability of rates remaining high ($> 70\%$).
-  - If rates remain high (hawkish), it offsets the target "rebound escape window" (反彈逃頂窗口) of mid-to-late July by **5-7 business days** dynamically.
-  - If rate cuts are expected, the escape window adjusts forward (risk-on).
+  - If rates remain high (hawkish), it dynamically offsets the user's customized "rebound escape window" (反彈逃頂窗口，支援自訂並自動判定「上/中/下旬」) by **5** business days.
+  - If rate cuts are expected, the escape window adjusts forward (risk-on) by **5** business days.
 
 ### 3. Active Order Stress Testing (`/stress_test`)
 - **Risk Math**:

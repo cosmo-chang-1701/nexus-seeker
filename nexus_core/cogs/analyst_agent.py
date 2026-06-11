@@ -1151,6 +1151,14 @@ class AnalystAgent(commands.Cog):
         import sqlite3
         import config
 
+        def get_period_label(day: int) -> str:
+            if day <= 10:
+                return "上旬"
+            elif day <= 20:
+                return "中旬"
+            else:
+                return "下旬"
+
         # 1. 取得 FedWatch 概率
         prob = 0.72  # 預設值
         try:
@@ -1186,6 +1194,8 @@ class AnalystAgent(commands.Cog):
             start_m, start_d = 7, 15
             end_m, end_d = 7, 31
 
+        custom_period_label = f"{start_m}月{get_period_label(start_d)}至{end_m}月{get_period_label(end_d)}"
+
         # 3. 根據利率決策概率推演調整 (後推 / 前移)
         if prob > 0.70:
             shift_days = 5
@@ -1200,12 +1210,10 @@ class AnalystAgent(commands.Cog):
                 adj_end_d -= 30
                 adj_end_m = 1 if end_m == 12 else end_m + 1
 
-            adjusted_start = (
-                f"{adj_start_m}月下旬 (約 {adj_start_m:02d}-{adj_start_d:02d})"
-            )
-            adjusted_end = f"{adj_end_m}月上旬 (約 {adj_end_m:02d}-{adj_end_d:02d})"
+            adjusted_start = f"{adj_start_m}月{get_period_label(adj_start_d)} (約 {adj_start_m:02d}-{adj_start_d:02d})"
+            adjusted_end = f"{adj_end_m}月{get_period_label(adj_end_d)} (約 {adj_end_m:02d}-{adj_end_d:02d})"
             direction = "後推"
-            reason = f"由於下週 FOMC 維持高利率/加息機率達 {prob*100:.1f}%，大於 70% 警戒水位，市場流動性釋放延遲。系統自動將您自訂的 {start_m}月中下旬反彈逃頂窗口後推 {shift_days} 個交易日，建議延後多頭逃頂撤退計劃。"
+            reason = f"由於下週 FOMC 維持高利率/加息機率達 {prob*100:.1f}%，大於 70% 警戒水位，市場流動性釋放延遲。系統自動將您自訂的 {custom_period_label} 反彈逃頂窗口後推 {shift_days} 個交易日，建議延後多頭逃頂撤退計劃。"
         else:
             shift_days = 5
             adj_start_d = start_d - shift_days
@@ -1219,12 +1227,10 @@ class AnalystAgent(commands.Cog):
                 adj_end_d += 30
                 adj_end_m = 12 if end_m == 1 else end_m - 1
 
-            adjusted_start = (
-                f"{adj_start_m}月上旬 (約 {adj_start_m:02d}-{adj_start_d:02d})"
-            )
-            adjusted_end = f"{adj_end_m}月中旬 (約 {adj_end_m:02d}-{adj_end_d:02d})"
+            adjusted_start = f"{adj_start_m}月{get_period_label(adj_start_d)} (約 {adj_start_m:02d}-{adj_start_d:02d})"
+            adjusted_end = f"{adj_end_m}月{get_period_label(adj_end_d)} (約 {adj_end_m:02d}-{adj_end_d:02d})"
             direction = "前移"
-            reason = f"由於下週 FOMC 維持高利率/加息機率僅 {prob*100:.1f}%，小於 70% 臨界值，市場預期利空出盡。系統自動將您自訂的反彈逃頂窗口前移 {shift_days} 個交易日，提示多頭反彈可能提前發酵，需作好提前撤退部署。"
+            reason = f"由於下週 FOMC 維持高利率/加息機率僅 {prob*100:.1f}%，小於 70% 臨界值，市場預期利空出盡。系統自動將您自訂的 {custom_period_label} 反彈逃頂窗口前移 {shift_days} 個交易日，提示多頭反彈可能提前發酵，需作好提前撤退部署。"
 
         from cogs.embed_builder import create_fomc_escape_window_embed
 

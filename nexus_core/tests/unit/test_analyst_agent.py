@@ -428,3 +428,55 @@ async def test_dispatch_post_market_intelligence_runway_fallback():
         # The fields should include the survival runway field with "600"
         runway_field = next(f for f in sent_embed.fields if "財務生存跑道" in f.name)
         assert "600.0" in runway_field.value
+
+
+@pytest.mark.asyncio
+async def test_run_fomc_escape_window_analysis_dynamic_period_labels():
+    bot = MagicMock()
+    with patch("discord.ext.tasks.Loop.start"):
+        agent = AnalystAgent(bot)
+
+    # Mock user context with custom October window
+    user_ctx = MagicMock()
+    user_ctx.escape_window_start = "10-15"  # 15th is "中旬"
+    user_ctx.escape_window_end = "10-25"  # 25th is "下旬"
+
+    # Case 1: Hawkish (prob = 0.85 > 0.70)
+    with patch("sqlite3.connect") as mock_conn, patch(
+        "database.user_settings.get_full_user_context", return_value=user_ctx
+    ), patch("cogs.embed_builder.create_fomc_escape_window_embed") as mock_create_embed:
+        # Mock DB select to return prob = 0.85
+        mock_cursor = mock_conn.return_value.__enter__.return_value.cursor.return_value
+        mock_cursor.fetchone.return_value = {"fedwatch_probability": 0.85}
+
+        await agent.run_fomc_escape_window_analysis(12345)
+
+        # Verify dynamic labels for adjusted dates
+        # start: 15 + 5 = 20 -> "中旬"
+        # end: 25 + 5 = 30 -> "下旬"
+        mock_create_embed.assert_called_once()
+        kwargs = mock_create_embed.call_args.kwargs
+        assert kwargs["direction"] == "後推"
+        assert "10月中旬" in kwargs["adjusted_start"]
+        assert "10月下旬" in kwargs["adjusted_end"]
+        assert "10月中旬至10月下旬" in kwargs["reason"]
+
+    # Case 2: Dovish (prob = 0.45 <= 0.70)
+    with patch("sqlite3.connect") as mock_conn, patch(
+        "database.user_settings.get_full_user_context", return_value=user_ctx
+    ), patch("cogs.embed_builder.create_fomc_escape_window_embed") as mock_create_embed:
+        # Mock DB select to return prob = 0.45
+        mock_cursor = mock_conn.return_value.__enter__.return_value.cursor.return_value
+        mock_cursor.fetchone.return_value = {"fedwatch_probability": 0.45}
+
+        await agent.run_fomc_escape_window_analysis(12345)
+
+        # Verify dynamic labels for adjusted dates
+        # start: 15 - 5 = 10 -> "上旬"
+        # end: 25 - 5 = 20 -> "中旬"
+        mock_create_embed.assert_called_once()
+        kwargs = mock_create_embed.call_args.kwargs
+        assert kwargs["direction"] == "前移"
+        assert "10月上旬" in kwargs["adjusted_start"]
+        assert "10月中旬" in kwargs["adjusted_end"]
+        assert "10月中旬至10月下旬" in kwargs["reason"]
