@@ -1504,16 +1504,28 @@ class SchedulerCog(commands.Cog):
             results = await self.trading_service.monitor_vtr_and_calculate_hedging()
 
             for res in results:
-                trade_info = res["trade_info"]
-                hedge = res["hedge"]
-                uid = res["uid"]
+                trade_info = res.get("trade_info", {})
+                if not trade_info:
+                    continue
+
+                hedge = res.get("hedge")
+                uid = res.get("uid")
+                if uid is None:
+                    continue
+
                 tags = trade_info.get("tags", [])
 
                 # 偵測是否為 DITM 防禦事件
                 is_ditm = any("DITM" in str(tag) for tag in tags)
 
+                user_capital = res.get("user_capital")
+                if not user_capital or user_capital <= 0:
+                    user_capital = 1.0
+
                 exposure_pct = (
-                    res["current_total_delta"] * res["spy_price"] / res["user_capital"]
+                    res.get("current_total_delta", 0.0)
+                    * res.get("spy_price", 0.0)
+                    / user_capital
                 ) * 100
 
                 if is_ditm:
@@ -1527,19 +1539,19 @@ class SchedulerCog(commands.Cog):
                     )
                     action_taken = (
                         "已平倉 (Closed)"
-                        if trade_info["status"] == "CLOSED"
+                        if trade_info.get("status") == "CLOSED"
                         else "已自動轉倉 (向上/向後轉倉)"
                     )
 
                     if database.is_notification_enabled(uid, "option_defense_alert"):
                         embed = create_option_defense_alert_embed(
                             is_live=False,
-                            symbol=trade_info["symbol"],
+                            symbol=trade_info.get("symbol", "N/A"),
                             status_icon="🛡️"
-                            if trade_info["status"] == "ROLLED"
+                            if trade_info.get("status") == "ROLLED"
                             else "🔴",
                             action_taken=action_taken,
-                            pnl=float(trade_info["pnl"]),
+                            pnl=float(trade_info.get("pnl", 0.0)),
                             exposure_pct=exposure_pct,
                             exit_reason=exit_reason,
                             hedge=hedge,
@@ -1547,20 +1559,22 @@ class SchedulerCog(commands.Cog):
                         await self.bot.queue_dm(uid, embed=embed)
                 else:
                     if database.is_notification_enabled(uid, "option_defense_alert"):
-                        status_icon = "🔄" if trade_info["status"] == "ROLLED" else "🔴"
+                        status_icon = (
+                            "🔄" if trade_info.get("status") == "ROLLED" else "🔴"
+                        )
                         action_taken_str = (
                             "已自動轉倉 (Rolled)"
-                            if trade_info["status"] == "ROLLED"
+                            if trade_info.get("status") == "ROLLED"
                             else "已自動平倉 (Closed)"
                         )
                         await self.bot.queue_dm(
                             uid,
                             embed=create_option_defense_alert_embed(
                                 is_live=False,
-                                symbol=trade_info["symbol"],
+                                symbol=trade_info.get("symbol", "N/A"),
                                 status_icon=status_icon,
                                 action_taken=action_taken_str,
-                                pnl=float(trade_info["pnl"]),
+                                pnl=float(trade_info.get("pnl", 0.0)),
                                 exposure_pct=exposure_pct,
                                 regime=res.get("regime"),
                                 target_delta=res.get("target_delta"),

@@ -1,10 +1,11 @@
-from typing import Literal
+from typing import Literal, Union
 from models.execution import (
     MarketCondition,
     ExecutionDecision,
     GridParameters,
     PositionSizing,
     ExitStrategy,
+    Signal,
 )
 
 
@@ -15,7 +16,9 @@ class ExecutionRouter:
     採用無狀態設計，優化低記憶體環境下的運行效率。
     """
 
-    def evaluate_market(self, condition: MarketCondition) -> ExecutionDecision:
+    def evaluate_market(
+        self, condition: MarketCondition
+    ) -> Union[ExecutionDecision, Signal]:
         """
         評估市場狀況並返回執行決策。
 
@@ -24,81 +27,107 @@ class ExecutionRouter:
         2. 異常機會偵測 (SPEAR)
         3. 中性觀望 (STANDBY)
         """
-        # 計算價格偏離度 (乖離率)
-        deviation = abs(condition.asset_price - condition.ma20) / condition.ma20
+        import logging
 
-        # --- SHIELD 觸發條件 (Gatekeeper 邏輯) ---
-        # 1. 高波動 (VIX > 25)
-        # 2. 尾端風險增加 (Skew 絕對值 > 5%)
-        # 3. 超買超賣導致的均線偏離 (> 10%)
+        logger = logging.getLogger(__name__)
 
-        if condition.vix > 25:
+        try:
+            if condition is None:
+                logger.debug("MarketCondition is None, skipping evaluation.")
+                return Signal.SKIP
+
+            import math
+
+            # Validate core indicators defensively
+            if (
+                math.isnan(condition.asset_price)
+                or math.isnan(condition.ma20)
+                or condition.ma20 <= 0
+                or condition.asset_price <= 0
+            ):
+                logger.debug(
+                    f"Invalid indicators found: price={condition.asset_price}, ma20={condition.ma20}"
+                )
+                return Signal.SKIP
+
+            # 計算價格偏離度 (乖離率)
+            deviation = abs(condition.asset_price - condition.ma20) / condition.ma20
+
+            # --- SHIELD 觸發條件 (Gatekeeper 邏輯) ---
+            # 1. 高波動 (VIX > 25)
+            # 2. 尾端風險增加 (Skew 絕對值 > 5%)
+            # 3. 超買超賣導致的均線偏離 (> 10%)
+
+            if condition.vix > 25:
+                return ExecutionDecision(
+                    decision_type="SHIELD",
+                    trigger_reason=f"市場波動率過高 (VIX: {condition.vix:.2f})，啟動防禦性網格策略 (SHIELD) 以對沖風險。",
+                    grid_params=self._calculate_atr_grid(condition),
+                    position_sizing=None,
+                    exit_strategy=self._define_trailing_stop(condition, "SHIELD"),
+                )
+
+            if abs(condition.skew_percent) > 0.05:
+                return ExecutionDecision(
+                    decision_type="SHIELD",
+                    trigger_reason=f"市場偏度異常 (Skew: {condition.skew_percent*100:.2f}%)，防範潛在黑天鵝事件。",
+                    grid_params=self._calculate_atr_grid(condition),
+                    position_sizing=None,
+                    exit_strategy=self._define_trailing_stop(condition, "SHIELD"),
+                )
+
+            # --- SPEAR 戰術路由優先判定 (極端強勢標的) ---
+            # 價格/MA20 Deviation > 10% 且 RSI > 65，但相對強度 RS > 1.2
+            is_overextended_bullish = (
+                (condition.asset_price - condition.ma20) / condition.ma20 > 0.10
+            ) and (condition.rsi_14 > 65)
+            if is_overextended_bullish and condition.relative_strength > 1.2:
+                return ExecutionDecision(
+                    decision_type="SPEAR",
+                    trigger_reason=(
+                        f"標的價格與20MA乖離率 ({(condition.asset_price - condition.ma20) / condition.ma20 * 100:.1f}%) "
+                        f"達超買區且 RSI ({condition.rsi_14:.1f}) > 65，但其相對行業板塊強度 RS "
+                        f"({condition.relative_strength:.2f}) > 1.2 呈極端強勢，戰術路由至 SPEAR 模式"
+                        f"（建議以賣權價差/Bull Put Spread或價外看漲備兌/OTM Covered Call進行操作，取代直接放空）。"
+                    ),
+                    grid_params=None,
+                    position_sizing=self._calculate_kelly_size(condition),
+                    exit_strategy=self._define_trailing_stop(condition, "SPEAR"),
+                )
+
+            if deviation > 0.10:
+                return ExecutionDecision(
+                    decision_type="SHIELD",
+                    trigger_reason=f"價格嚴重偏離 20MA (乖離率: {deviation*100:.2f}%)，進入震盪修復網格模式。",
+                    grid_params=self._calculate_atr_grid(condition),
+                    position_sizing=None,
+                    exit_strategy=self._define_trailing_stop(condition, "SHIELD"),
+                )
+
+            # --- SPEAR 觸發條件 (Gatekeeper 邏輯) ---
+            # 1. 偵測到異常期權流 (UOA)
+            # 2. 且市場環境相對穩定 (未觸發 SHIELD)
+
+            if condition.uoa_detected:
+                return ExecutionDecision(
+                    decision_type="SPEAR",
+                    trigger_reason="偵測到大宗異常期權流 (UOA)，市場情緒支撐攻擊性期權策略 (SPEAR)。",
+                    grid_params=None,
+                    position_sizing=self._calculate_kelly_size(condition),
+                    exit_strategy=self._define_trailing_stop(condition, "SPEAR"),
+                )
+
+            # --- STANDBY 默認狀態 ---
             return ExecutionDecision(
-                decision_type="SHIELD",
-                trigger_reason=f"市場波動率過高 (VIX: {condition.vix:.2f})，啟動防禦性網格策略 (SHIELD) 以對沖風險。",
-                grid_params=self._calculate_atr_grid(condition),
-                position_sizing=None,
-                exit_strategy=self._define_trailing_stop(condition, "SHIELD"),
-            )
-
-        if abs(condition.skew_percent) > 0.05:
-            return ExecutionDecision(
-                decision_type="SHIELD",
-                trigger_reason=f"市場偏度異常 (Skew: {condition.skew_percent*100:.2f}%)，防範潛在黑天鵝事件。",
-                grid_params=self._calculate_atr_grid(condition),
-                position_sizing=None,
-                exit_strategy=self._define_trailing_stop(condition, "SHIELD"),
-            )
-
-        # --- SPEAR 戰術路由優先判定 (極端強勢標的) ---
-        # 價格/MA20 Deviation > 10% 且 RSI > 65，但相對強度 RS > 1.2
-        is_overextended_bullish = (
-            (condition.asset_price - condition.ma20) / condition.ma20 > 0.10
-        ) and (condition.rsi_14 > 65)
-        if is_overextended_bullish and condition.relative_strength > 1.2:
-            return ExecutionDecision(
-                decision_type="SPEAR",
-                trigger_reason=(
-                    f"標的價格與20MA乖離率 ({(condition.asset_price - condition.ma20) / condition.ma20 * 100:.1f}%) "
-                    f"達超買區且 RSI ({condition.rsi_14:.1f}) > 65，但其相對行業板塊強度 RS "
-                    f"({condition.relative_strength:.2f}) > 1.2 呈極端強勢，戰術路由至 SPEAR 模式"
-                    f"（建議以賣權價差/Bull Put Spread或價外看漲備兌/OTM Covered Call進行操作，取代直接放空）。"
-                ),
+                decision_type="STANDBY",
+                trigger_reason="當前市場指標處於平衡區間，無明顯技術面或情緒面觸發信號。",
                 grid_params=None,
-                position_sizing=self._calculate_kelly_size(condition),
-                exit_strategy=self._define_trailing_stop(condition, "SPEAR"),
-            )
-
-        if deviation > 0.10:
-            return ExecutionDecision(
-                decision_type="SHIELD",
-                trigger_reason=f"價格嚴重偏離 20MA (乖離率: {deviation*100:.2f}%)，進入震盪修復網格模式。",
-                grid_params=self._calculate_atr_grid(condition),
                 position_sizing=None,
-                exit_strategy=self._define_trailing_stop(condition, "SHIELD"),
+                exit_strategy=None,
             )
-
-        # --- SPEAR 觸發條件 (Gatekeeper 邏輯) ---
-        # 1. 偵測到異常期權流 (UOA)
-        # 2. 且市場環境相對穩定 (未觸發 SHIELD)
-
-        if condition.uoa_detected:
-            return ExecutionDecision(
-                decision_type="SPEAR",
-                trigger_reason="偵測到大宗異常期權流 (UOA)，市場情緒支撐攻擊性期權策略 (SPEAR)。",
-                grid_params=None,
-                position_sizing=self._calculate_kelly_size(condition),
-                exit_strategy=self._define_trailing_stop(condition, "SPEAR"),
-            )
-
-        # --- STANDBY 默認狀態 ---
-        return ExecutionDecision(
-            decision_type="STANDBY",
-            trigger_reason="當前市場指標處於平衡區間，無明顯技術面或情緒面觸發信號。",
-            grid_params=None,
-            position_sizing=None,
-            exit_strategy=None,
-        )
+        except Exception as e:
+            logger.debug(f"ExecutionRouter evaluate_market error: {e}", exc_info=True)
+            return Signal.SKIP
 
     def _calculate_atr_grid(self, condition: MarketCondition) -> GridParameters:
         """

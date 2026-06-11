@@ -382,3 +382,52 @@ async def test_dispatch_watchlist_heartbeat_honors_portfolio_only_mode():
     assert mock_builder.call_args.kwargs["holding_quantity"] == 100.0
     assert mock_builder.call_args.kwargs["holding_avg_cost"] == 900.0
     assert bot.queue_dm.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_monitor_vtr_task_handles_missing_trade_info():
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+
+    with patch("discord.ext.tasks.Loop.start"):
+        cog = SchedulerCog(bot)
+
+    # Mock the return value to contain a transition suggestion (which lacks trade_info)
+    # and a valid VTR hedging result.
+    cog.trading_service.monitor_vtr_and_calculate_hedging = AsyncMock(
+        return_value=[
+            {
+                "uid": 1,
+                "type": "TRANSITION_SUGGESTION",
+                "symbol": "AAPL",
+                "pnl_pct": 10.0,
+                "pnl_usd": 100.0,
+                "transition_result": {},
+                "stock_price": 175.0,
+            },
+            {
+                "uid": 2,
+                "trade_info": {
+                    "symbol": "TSLA",
+                    "status": "CLOSED",
+                    "pnl": 1250.0,
+                    "tags": ["DITM", "exit_reason:Delta 接近 1.0"],
+                },
+                "hedge": {"action": "賣出 10 股 SPY", "gap": 10},
+                "current_total_delta": 25.0,
+                "spy_price": 500.0,
+                "user_capital": 100000.0,
+            },
+        ]
+    )
+    embed = object()
+
+    with patch("cogs.trading.market_time.is_market_open", return_value=True), patch(
+        "cogs.trading.create_option_defense_alert_embed", return_value=embed
+    ) as mock_builder:
+        # This call should execute successfully and not crash with KeyError
+        await cog.monitor_vtr_task()
+
+    # Verify only the valid trade (uid 2) triggered an alert and queued a DM
+    mock_builder.assert_called_once()
+    bot.queue_dm.assert_awaited_once_with(2, embed=embed)

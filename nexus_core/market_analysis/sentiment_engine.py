@@ -440,16 +440,49 @@ class SentimentEngine:
                 and abs(max_pain_strike - spot_price) / spot_price > 0.30
                 and not _retry
             ):
-                # 觸發警告與資料庫快取清理
+                # 觸發警告與資料庫快取標記
                 check_and_reconcile_max_pain_anomaly(
                     symbol, max_pain_strike, spot_price
                 )
-                logger.info(
-                    f"[{symbol}] Retrying calculate_max_pain after cache purge..."
-                )
-                return await SentimentEngine.calculate_max_pain(
-                    symbol, expiry, _retry=True
-                )
+
+                # SWR: Try to read old cache from DB and return it directly, marked as is_stale = True
+                from database import get_market_cache
+
+                old_cache = get_market_cache(symbol)
+                if old_cache:
+                    logger.info(
+                        f"[{symbol}] SWR: Returning old cached Max Pain data to avoid cache avalanche."
+                    )
+                    cached_mp = old_cache.get("max_pain")
+                    dist_pct = (
+                        (float(cached_mp) - spot_price) / spot_price * 100
+                        if cached_mp is not None and spot_price > 0
+                        else 0.0
+                    )
+                    return {
+                        "symbol": symbol,
+                        "max_pain": cached_mp,
+                        "current_price": spot_price,
+                        "distance_pct": dist_pct,
+                        "is_converging": False,
+                        "data_status": "Stale",
+                        "is_stale": True,
+                    }
+                else:
+                    # If no old cache exists, we return the calculated strike but mark it as stale
+                    return {
+                        "symbol": symbol,
+                        "max_pain": max_pain_strike,
+                        "current_price": spot_price,
+                        "distance_pct": (
+                            (max_pain_strike - spot_price) / spot_price * 100
+                            if spot_price > 0
+                            else 0.0
+                        ),
+                        "is_converging": False,
+                        "data_status": "Stale",
+                        "is_stale": True,
+                    }
 
             dist_pct = (
                 (max_pain_strike - spot_price) / spot_price * 100

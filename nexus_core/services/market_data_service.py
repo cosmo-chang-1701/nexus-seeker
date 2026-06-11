@@ -64,6 +64,9 @@ _finnhub_controls_by_loop: weakref.WeakKeyDictionary[
 # （單元測試也會 patch 這個變數以驗證行為）
 _rate_limit_until = 0.0
 
+# module-level rate limiter semaphore
+_limiter: Optional[asyncio.Semaphore] = None
+
 _client: Optional[finnhub.Client] = None
 
 
@@ -108,7 +111,15 @@ async def _execute_api_call(func, *args, **kwargs) -> Any:
     注意：limiter 以 event loop 維度維護；429 cooldown 以全局 `_rate_limit_until` 維護。
     """
 
-    global _rate_limit_until
+    global _rate_limit_until, _limiter
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if _limiter is None or (loop and getattr(_limiter, "_loop", None) != loop):
+        _limiter = asyncio.Semaphore(3)
 
     controls = _get_finnhub_controls()
 
@@ -130,7 +141,7 @@ async def _execute_api_call(func, *args, **kwargs) -> Any:
             logger.info(f"⏳ 檢測到全局頻率限制中，主動等待 {wait_time:.1f} 秒...")
             await asyncio.sleep(wait_time)
 
-        async with controls["sem"]:
+        async with _limiter:
             async with controls["limiter_per_second"]:
                 async with controls["limiter"]:
                     # 1) 進入限流鎖後再確認一次（防止排隊期間被其他 task 更新 cooldown）
@@ -910,7 +921,7 @@ def check_and_reconcile_max_pain_anomaly(
 ) -> bool:
     """
     Check if the Max Pain price deviates from the spot price by more than 30%.
-    If so, record a warning log, clear database caches for this symbol, and return True to suggest a retry.
+    If so, record a warning log, mark database cache as stale, trigger background revalidation, and return True.
     """
     if spot_price <= 0.0 or max_pain <= 0.0:
         return False
@@ -920,41 +931,51 @@ def check_and_reconcile_max_pain_anomaly(
         logger.warning(
             f"🚨 [Max Pain Anomaly Alert] For {symbol}, Max Pain (${max_pain:.2f}) "
             f"deviates from spot price (${spot_price:.2f}) by {deviation:.2%} (> 30%). "
-            f"Triggering database cache purging for symbol..."
+            f"Marking cache as stale and triggering background revalidation..."
         )
         try:
-            import sqlite3
-            import config
+            from database import mark_market_cache_stale
 
-            with sqlite3.connect(config.DB_NAME) as conn:
-                cursor = conn.cursor()
-                # Clear all related option metrics and max pain entries in kv_cache
-                cursor.execute(
-                    "DELETE FROM kv_cache WHERE key LIKE ?", (f"%_{symbol.upper()}_%",)
-                )
-                # Clear from market_cache as well
-                cursor.execute(
-                    "DELETE FROM market_cache WHERE symbol = ?", (symbol.upper(),)
-                )
-                conn.commit()
+            # Mark stale in DB instead of deleting
+            mark_market_cache_stale(symbol)
 
-            # Clear memory caches as well
-            from market_analysis.sentiment_engine import _iv_cache
+            # Trigger background revalidation task
+            async def _async_revalidate_max_pain():
+                try:
+                    logger.info(
+                        f"🔄 [SWR] Background revalidating option chain/max pain for {symbol}..."
+                    )
+                    # Fetch fresh option chain and force update of the cache
+                    from market_analysis.sentiment_engine import SentimentEngine
 
-            if symbol.upper() in _iv_cache:
-                del _iv_cache[symbol.upper()]
+                    # Clear memory cache for this symbol first to force a fresh pull in background task
+                    from market_analysis.sentiment_engine import _iv_cache
 
-            # Remove matching expiries from _option_chain_cache
-            keys_to_del = [
-                k for k in _option_chain_cache.keys() if k[0].upper() == symbol.upper()
-            ]
-            for k in keys_to_del:
-                del _option_chain_cache[k]
+                    if symbol.upper() in _iv_cache:
+                        del _iv_cache[symbol.upper()]
+                    keys_to_del = [
+                        k
+                        for k in _option_chain_cache.keys()
+                        if k[0].upper() == symbol.upper()
+                    ]
+                    for k in keys_to_del:
+                        del _option_chain_cache[k]
 
-            logger.info(
-                f"🧹 Successfully purged cache for {symbol} due to Max Pain deviation > 30%."
-            )
-            return True  # Suggesting retry
+                    # Re-run calculate_max_pain with _retry=True to bypass cache check and pull fresh options data
+                    res = await SentimentEngine.calculate_max_pain(symbol, _retry=True)
+                    if res and not res.get("error"):
+                        logger.info(
+                            f"✅ [SWR] Background revalidation completed for {symbol}: Max Pain = {res.get('max_pain')}"
+                        )
+                except Exception as ex:
+                    logger.error(
+                        f"❌ [SWR] Background revalidation failed for {symbol}: {ex}"
+                    )
+
+            # Trigger background revalidation
+            asyncio.create_task(_async_revalidate_max_pain())
+
+            return True  # Anomaly detected and handled via SWR
         except Exception as e:
-            logger.error(f"Failed to purge cache for anomaly check: {e}")
+            logger.error(f"Failed to mark cache as stale: {e}")
     return False
