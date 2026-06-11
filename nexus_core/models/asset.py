@@ -41,7 +41,7 @@ class HoldingMetadata(BaseModel):
     model_config = ConfigDict()
     quantity: float
     avg_cost: float
-    weighted_delta: Optional[float] = 0.0
+    weighted_delta: float = 0.0
 
     @field_validator("weighted_delta", mode="before")
     @classmethod
