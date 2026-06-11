@@ -183,8 +183,11 @@ class SchedulerCog(commands.Cog):
                     for sym in symbols:
                         res = await recommend_covered_calls(u_id, sym)
                         if res and res.get("recommendations"):
-                            embed = create_covered_call_unlock_embed(res)
-                            await self.bot.queue_dm(u_id, embed=embed)
+                            if database.is_notification_enabled(
+                                u_id, "deadlock_recovery_alert"
+                            ):
+                                embed = create_covered_call_unlock_embed(res)
+                                await self.bot.queue_dm(u_id, embed=embed)
             except Exception as e:
                 logger.error(f"物理死鎖解除審計錯誤: {e}")
 

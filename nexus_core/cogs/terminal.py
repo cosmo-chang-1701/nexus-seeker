@@ -1402,6 +1402,7 @@ REALTIME_LABELS = {
     "option_defense_alert": "🛡️ 期權轉倉防禦與結算警報",
     "ddp_cheap_vol_alert": "🌌 雙擊與便宜波動率預警",
     "volatility_risk_alert": "🌪️ 波動率與重大事件對沖警報",
+    "deadlock_recovery_alert": "🔓 物理死鎖解除與備兌建單指引",
 }
 
 POLYMARKET_SETTINGS_LABELS = {

@@ -93,7 +93,7 @@ async def test_notification_settings_view_structure(db_conn):
         c for c in view.children if c.custom_id == "select_polymarket"
     )
     assert len(select_scheduled.options) == 5
-    assert len(select_realtime.options) == 5
+    assert len(select_realtime.options) == 6
     assert len(select_polymarket.options) == 4
 
     # 預期預設選項前綴為 🟢
