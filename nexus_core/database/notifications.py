@@ -96,6 +96,7 @@ ALL_NOTIFICATION_KEYS = [
     "ddp_cheap_vol_alert",
     "volatility_risk_alert",
     "polymarket_whale_alert",
+    "deadlock_recovery_alert",
 ]
 
 # 預設通知狀態：大多數維持預設開啟
