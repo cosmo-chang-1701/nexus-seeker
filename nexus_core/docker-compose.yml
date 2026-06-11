@@ -8,6 +8,7 @@ services:
       - .env
     volumes:
       - nexus_data:/app/data
+      - .:/app
     environment:
       - TZ=America/New_York
     logging:

@@ -1432,6 +1432,156 @@ def create_macro_scan_embed(
     return embed
 
 
+def create_fomc_escape_window_embed(
+    prob: float,
+    direction: str,
+    shift_days: int,
+    adjusted_start: str,
+    adjusted_end: str,
+    reason: str,
+) -> discord.Embed:
+    """建立方案 C 逃頂窗口推演 Embed (繁體中文)"""
+    color = discord.Color.red() if direction == "後推" else discord.Color.green()
+    embed = NexusEmbed(
+        title="📅 方案 C 逃頂窗口推演 (FOMC / FedWatch 宏觀警報)", color=color
+    )
+
+    embed.add_field(
+        name="📊 利率機率定價 (FedWatch)",
+        value=f"下週 FOMC 維持高利率/加息機率：**{prob * 100:.1f}%**",
+        inline=False,
+    )
+
+    embed.add_field(
+        name="🔄 逃頂窗口調整方向",
+        value=f"調整方向：**{direction} {shift_days} 個交易日**",
+        inline=True,
+    )
+
+    embed.add_field(
+        name="📆 調整後逃頂窗口預期",
+        value=f"預估窗口：**{adjusted_start}** 至 **{adjusted_end}**",
+        inline=True,
+    )
+
+    embed.add_field(name="💡 推演邏輯與風險分析", value=reason, inline=False)
+
+    embed.set_footer(text="方案 C 逃頂推演引擎")
+    return embed
+
+
+def create_stress_test_embed(results: dict) -> discord.Embed:
+    """建立 GTC 掛單現金赤字壓力測試 Embed (繁體中文)"""
+    is_critical = results.get("is_critical", False)
+    color = discord.Color.red() if is_critical else discord.Color.green()
+
+    embed = NexusEmbed(
+        title="🚨 GTC 掛單現金赤字壓力測試 (Worst-Case Stress Test)", color=color
+    )
+
+    total_deficit = results.get("total_deficit", 0.0)
+    cash_reserve = results.get("cash_reserve", 0.0)
+    boxx_shares = results.get("boxx_shares", 0.0)
+    boxx_cash = results.get("boxx_cash", 0.0)
+    net_deficit = results.get("net_deficit", 0.0)
+    order_count = results.get("gtc_buy_orders_count", 0)
+
+    embed.add_field(
+        name="📊 壓測摘要",
+        value=f"• 活躍 GTC 網格買單筆數：**{order_count} 筆**\n"
+        f"• 100% 全數成交所需總美金 (Total Cash Deficit)：**${total_deficit:,.2f}**\n"
+        f"• 常規可用現金 (cash_reserve)：**${cash_reserve:,.2f}**\n"
+        f"• BOXX 持倉股數：**{boxx_shares:.1f} 股** (常規清算上限 180 股)\n"
+        f"• BOXX 最大套現金額：**${boxx_cash:,.2f}**\n"
+        f"• 壓測後淨赤字/淨值：**${net_deficit:,.2f}**",
+        inline=False,
+    )
+
+    if is_critical:
+        embed.add_field(
+            name="🔥 CRITICAL WARNING",
+            value=f"**警告：當前 GTC 網格單潛在赤字已大於可用流動性！**\n"
+            f"在極端無差別踩踏情境下，若所有掛單 100% 全數成交，將會**抽乾 BOXX 水壩**，"
+            f"**破壞 +${cash_reserve:,.0f} 的安全常規現金水位**，且**危及 7 月底 $13,000 實體提領紅線**！\n"
+            f"建議立即取消部分 GTC 掛單，或注入額外資金以維持安全邊際。",
+            inline=False,
+        )
+    else:
+        embed.add_field(
+            name="✅ 系統安全狀態",
+            value="目前可用現金儲備與 BOXX 備用流動性充裕，足以覆蓋所有活躍 GTC 掛單全數成交之極端情境，未威脅到提領紅線。",
+            inline=False,
+        )
+
+    embed.set_footer(text="現金赤字壓力測試模組")
+    return embed
+
+
+def create_covered_call_unlock_embed(data: dict) -> discord.Embed:
+    """建立物理死鎖解除與備兌建單指引 Embed (繁體中文)"""
+    symbol = data.get("symbol", "")
+    current_shares = data.get("current_shares", 0.0)
+    current_cost = data.get("current_cost", 0.0)
+    new_cost_basis = data.get("new_cost_basis", 0.0)
+    current_price = data.get("current_price", 0.0)
+    recs = data.get("recommendations", [])
+
+    embed = NexusEmbed(
+        title=f"🔓 {symbol} 物理死鎖解除與備兌建單指引",
+        color=discord.Color.green() if recs else discord.Color.orange(),
+    )
+
+    embed.add_field(
+        name="💼 當前現貨持倉",
+        value=f"• 持股數量：**{current_shares:.0f} 股**\n"
+        f"• 原始持股均價：**${current_cost:,.2f}**\n"
+        f"• 當前現貨價格：**${current_price:,.2f}**",
+        inline=True,
+    )
+
+    embed.add_field(
+        name="📐 模擬吸籌後成本",
+        value=f"• 加權平均成本：**${new_cost_basis:,.2f}**\n"
+        f"*(已計入所有活躍 GTC 買入網格單模擬成交後的成本調整)*",
+        inline=True,
+    )
+
+    if recs:
+        rec_lines = []
+        for r in recs:
+            yield_str = (
+                f" (年化收益率: **{r['annualized_yield']}%**)"
+                if "annualized_yield" in r
+                else ""
+            )
+            rec_lines.append(
+                f"• **到期日：{r['expiration']}**\n"
+                f"  履約價：**${r['strike']:.2f}** (高於新成本線)\n"
+                f"  預估 Delta：`{r['delta']}`\n"
+                f"  權利金參考：**${r['premium']:.2f}**{yield_str}"
+            )
+        embed.add_field(
+            name="🎯 推薦 Covered Call 備兌合約",
+            value="\n".join(rec_lines),
+            inline=False,
+        )
+        embed.add_field(
+            name="💡 物理死鎖解鎖說明",
+            value="現貨大跌至低位網格吸籌完成後，透過建立**高於新成本線且 Delta < 0.15 且年化收益率 >= 10%** 的極虛值備兌 Call，"
+            "可以在安全保護現貨（防止被平價收回）的同時收取權利金，加速降低整體套牢部位的持有成本，實現物理死鎖解鎖。",
+            inline=False,
+        )
+    else:
+        embed.add_field(
+            name="⚠️ 解鎖狀態",
+            value="目前在目標到期日區間內，未尋獲符合條件（履約價高於新成本、Delta < 0.15 且年化收益率 >= 10%）的極虛值 Covered Call 合約。建議等待現貨反彈或波動率回升後再行評估。",
+            inline=False,
+        )
+
+    embed.set_footer(text="物理死鎖解除策略模組")
+    return embed
+
+
 def create_earnings_report_embed(
     report_type: str, report_content: str, raw_data: dict
 ) -> discord.Embed:

@@ -598,6 +598,17 @@ async def evaluate_watchlist_symbol(
         return None
     tactical = WatchlistRiskController.process_metrics(metrics)
 
+    # 零 Gamma 踩踏 Regime 檢查並自動調整網格間距
+    try:
+        from market_analysis.index_microstructure import get_market_regime
+
+        regime = await get_market_regime()
+        if regime == "SHORT_GAMMA_CRITICAL":
+            tactical.dynamic_grid_step = round(tactical.dynamic_grid_step * 1.5, 2)
+            tactical.action_guideline += " (⚠️ 偵測到大盤進入 SHORT_GAMMA_CRITICAL 極端踩踏恐慌軌道，個股網格單觸發間距已自動放大 1.5 倍以防禦資金被過早抽乾。)"
+    except Exception as e:
+        logger.warning(f"評估市場 Regime 時發生錯誤: {e}")
+
     # Structural divergence check (Skew vs PCR extremes)
     if (metrics.skew_percentile > 85.0 and 0.0 < metrics.pcr < 0.4) or (
         metrics.skew_percentile < 15.0 and metrics.pcr > 1.5

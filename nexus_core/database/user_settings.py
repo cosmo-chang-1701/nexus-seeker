@@ -31,6 +31,8 @@ class UserContext:
 
     tax_reserve_rate: float = 0.20  # 稅務預留比例 (預設 20%)
     cash_reserve: float = 0.0  # 現金儲備 (用於生存天數計算)
+    escape_window_start: str = "07-15"
+    escape_window_end: str = "07-31"
 
 
 # ==========================================
@@ -80,6 +82,8 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:
                 "monthly_expense",
                 "tax_reserve_rate",
                 "cash_reserve",
+                "escape_window_start",
+                "escape_window_end",
             }
             update_pairs = []
             values = []
@@ -281,6 +285,8 @@ def get_full_user_context(user_id: int) -> UserContext:
                 monthly_expense=_get_val("monthly_expense", 0.0),
                 tax_reserve_rate=_get_val("tax_reserve_rate", 0.20),
                 cash_reserve=_get_val("cash_reserve", 0.0),
+                escape_window_start=_get_val("escape_window_start", "07-15"),
+                escape_window_end=_get_val("escape_window_end", "07-31"),
             )
 
     except Exception as e:

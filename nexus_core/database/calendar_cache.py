@@ -27,7 +27,7 @@ def get_macro_month_status(month_key: str) -> Optional[dict[str, Any]]:
         return None
 
 
-def replace_macro_month_events(month_key: str, events: list[dict[str, str]]) -> None:
+def replace_macro_month_events(month_key: str, events: list[dict[str, Any]]) -> None:
     try:
         with sqlite3.connect(config.DB_NAME) as conn:
             cursor = conn.cursor()
@@ -39,8 +39,8 @@ def replace_macro_month_events(month_key: str, events: list[dict[str, str]]) -> 
                 cursor.executemany(
                     """
                     INSERT INTO economic_calendar_events
-                    (month_key, event, event_time, impact, country)
-                    VALUES (?, ?, ?, ?, ?)
+                    (month_key, event, event_time, impact, country, consensus_value, fedwatch_probability)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     [
                         (
@@ -49,6 +49,8 @@ def replace_macro_month_events(month_key: str, events: list[dict[str, str]]) -> 
                             item["time"],
                             item["impact"],
                             item.get("country", "US"),
+                            item.get("consensus_value"),
+                            item.get("fedwatch_probability"),
                         )
                         for item in events
                     ],
@@ -75,7 +77,7 @@ def get_macro_events_between(start_date: str, end_date: str) -> list[dict[str, A
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT event, event_time, impact, country
+                SELECT event, event_time, impact, country, consensus_value, fedwatch_probability
                 FROM economic_calendar_events
                 WHERE substr(event_time, 1, 10) BETWEEN ? AND ?
                 ORDER BY event_time ASC

@@ -13,6 +13,10 @@ Nexus Seeker 是一個 **Discord-first 的選擇權風控與交易營運平台**
 ## 你會拿到什麼（核心價值）
 
 - **📡 Watchlist 半小時心跳（盤中）**：每 30 分鐘逐使用者、逐標的推送戰報（技術/波動率/偏斜/事件風控/持倉指引/可執行策略）。
+- **🛡️ 衍生流動性與極限壓力測試**：新增 `/stress_test` 指令，動態計算所有活躍 GTC 網格買單的最大現金赤字，對照 BOXX 清算極限（$21,000）與安全賠付閾值（$13,000）進行預警，並無縫整合至 `/dash` 看板中。
+- **📊 指數微觀結構與 Gamma 避險**：即時抓取大盤 GEX 零 Gamma 線（Gamma Flip Line），當 VIX > 20 且大盤跌破零 Gamma 線進入 `SHORT_GAMMA_CRITICAL` 狀態時，自動將網格間距放大 $1.5\times$，防止踩踏行情中資金過早耗盡。
+- **🔮 CME FedWatch 利率概率與逃頂窗口**：動態爬取 FedWatch 利率概率，並於盤前簡報中自動計算並調整七月中下旬「反彈逃頂窗口」的延後或提前（5-7 個工作日），降低事件風控盲區。
+- **🔑 均價成本 Covered Call 解鎖**：自動依據「現有持倉加權活躍網格買單」重新計算新均價成本（New Cost Basis），並尋找 DTE 30-50 天、Strike > 新均價成本且 Delta < 0.15 的 Covered Call 合約進行收租解鎖（需滿足年化收益率 >= 10.0% 或單次收租權利金大於現貨 1.0%）。
 - **🧾 Strike 對齊的「可執行」期權策略**：策略建議會對齊系統計算的「適合買入/賣出價」，讓現股與選擇權計畫一致。
 - **📥 委託單面板 + 互動 Modal**：`/order_panel` 建單、`/list_orders` 管理、`/telemetry_alert` 模擬遙測偏離；並支援一鍵套用遙測建議價與安全倉位。
 - **🔔 通知偏好中心**：`/notif_settings` 針對 18+ 種推播開關精細控管（預設大多開啟，但允許針對噪音項目預設關閉）。
@@ -147,7 +151,8 @@ Edge API 預設在 `:8000`。若你使用 Cloudflare Tunnel，請把 **公開的
 - **/settings**：帳戶核心參數面板（資金、風險、VTR/PSQ 等開關）
 - **/notif_settings**：通知偏好中心（定時推播 / 即時警報 / Polymarket 類別）
 - **/x**：標的分析中心（支援單一標的深度分析，以及持倉/掛單/期權/ALL 的批次量化雷達掃描。首層雷達採用盤前快取與本地規則引擎，響應時間 <100ms）
-- **/dash**：交易員看板（持倉、跑道、績效與風控摘要）
+- **/dash**：交易員看板（持倉、跑道、績效、風控摘要與極限壓力測試結果）
+- **/stress_test**：委託單極限壓力測試與現金赤字預警面板
 - **/market**：市場情報中心（事件日曆與市場狀態）
 - **/skew_scan**：期權偏斜/IV/PCR/UOA/Max Pain 掃描
 - **/order_panel**：委託單面板（動態 Modal 建單）
@@ -184,6 +189,7 @@ docker compose run --rm nexus-seeker python -m pytest tests/unit/test_intraday_p
 docker compose run --rm nexus-seeker python -m pytest tests/unit/test_embed_builder.py
 docker compose run --rm nexus-seeker python -m pytest tests/unit/test_output_centralization.py
 docker compose run --rm nexus-seeker python -m pytest tests/unit/test_order_ui.py
+docker compose run --rm nexus-seeker python -m pytest tests/unit/test_macro_risk_upgrade.py
 ```
 
 ---

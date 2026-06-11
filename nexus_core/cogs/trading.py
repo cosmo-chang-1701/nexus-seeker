@@ -164,6 +164,30 @@ class SchedulerCog(commands.Cog):
                         embed = create_gamma_fragility_embed(event)
                         await self.bot.queue_dm(uid, embed=embed)
 
+            # 🚀 物理死鎖解除與備兌建單指引主動推播
+            try:
+                from database.holdings import get_all_holdings
+                from market_analysis.trading_orchestration import (
+                    recommend_covered_calls,
+                )
+                from cogs.embed_builder import create_covered_call_unlock_embed
+
+                all_holdings = get_all_holdings()
+                user_symbols = {}
+                for h in all_holdings:
+                    u_id = h["user_id"]
+                    sym = h["symbol"].upper()
+                    user_symbols.setdefault(u_id, []).append(sym)
+
+                for u_id, symbols in user_symbols.items():
+                    for sym in symbols:
+                        res = await recommend_covered_calls(u_id, sym)
+                        if res and res.get("recommendations"):
+                            embed = create_covered_call_unlock_embed(res)
+                            await self.bot.queue_dm(u_id, embed=embed)
+            except Exception as e:
+                logger.error(f"物理死鎖解除審計錯誤: {e}")
+
         except Exception as e:
             logger.error(f"真實持倉風險審計錯誤: {e}")
 

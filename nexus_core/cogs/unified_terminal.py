@@ -518,6 +518,63 @@ class PortfolioHubView(discord.ui.View):
         finally:
             await self._reset_loading(interaction, embed=embed)
 
+    @discord.ui.button(label="🚨 壓力測試", style=discord.ButtonStyle.danger)
+    async def btn_stress_test(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        await interaction.response.defer()
+        await self._set_loading(interaction)
+        embed = None
+        try:
+            from database.orders import get_user_active_orders
+
+            orders = get_user_active_orders(self.user_id)
+            total_deficit = 0.0
+            gtc_buy_orders = []
+            for o in orders:
+                validity = o.get("validity", "").upper()
+                side = o.get("side", "").upper()
+                if "GTC" in validity and side == "BUY":
+                    price = o.get("limit_price", 0.0)
+                    if price <= 0.0:
+                        price = o.get("stop_price", 0.0)
+                    qty = o.get("quantity", 0.0)
+                    total_deficit += price * qty
+                    gtc_buy_orders.append(o)
+            ctx = database.get_full_user_context(self.user_id)
+            cash_reserve = ctx.cash_reserve if ctx else 0.0
+
+            from database.holdings import get_user_holdings
+
+            holdings = get_user_holdings(self.user_id)
+            boxx_shares = 0.0
+            for h in holdings:
+                if h.get("symbol", "").upper() == "BOXX":
+                    boxx_shares = h.get("quantity", 0.0)
+                    break
+            boxx_cash = min(boxx_shares, 180.0) * (21000.0 / 180.0)
+            net_deficit = cash_reserve + boxx_cash - total_deficit
+            is_critical = total_deficit > (cash_reserve + boxx_cash)
+
+            results = {
+                "total_deficit": total_deficit,
+                "cash_reserve": cash_reserve,
+                "boxx_shares": boxx_shares,
+                "boxx_cash": boxx_cash,
+                "net_deficit": net_deficit,
+                "is_critical": is_critical,
+                "gtc_buy_orders_count": len(gtc_buy_orders),
+            }
+            from cogs.embed_builder import create_stress_test_embed
+
+            embed = create_stress_test_embed(results)
+        except Exception as e:
+            await interaction.followup.send(
+                embed=create_error_embed(f"壓力測試失敗: {e}"), ephemeral=True
+            )
+        finally:
+            await self._reset_loading(interaction, embed=embed)
+
 
 class PulseHubView(discord.ui.View):
     """
@@ -1048,6 +1105,63 @@ class UnifiedTerminalCog(commands.Cog):
 
         view = PulseHubView(interaction.user.id, self.bot)
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
+    @app_commands.command(
+        name="stress_test",
+        description="🚨 GTC 掛單現金赤字壓力測試 (Worst-Case Stress Test)",
+    )
+    async def stress_test(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        user_id = interaction.user.id
+
+        try:
+            from database.orders import get_user_active_orders
+
+            orders = get_user_active_orders(user_id)
+            total_deficit = 0.0
+            gtc_buy_orders = []
+            for o in orders:
+                validity = o.get("validity", "").upper()
+                side = o.get("side", "").upper()
+                if "GTC" in validity and side == "BUY":
+                    price = o.get("limit_price", 0.0)
+                    if price <= 0.0:
+                        price = o.get("stop_price", 0.0)
+                    qty = o.get("quantity", 0.0)
+                    total_deficit += price * qty
+                    gtc_buy_orders.append(o)
+            ctx = database.get_full_user_context(user_id)
+            cash_reserve = ctx.cash_reserve if ctx else 0.0
+
+            from database.holdings import get_user_holdings
+
+            holdings = get_user_holdings(user_id)
+            boxx_shares = 0.0
+            for h in holdings:
+                if h.get("symbol", "").upper() == "BOXX":
+                    boxx_shares = h.get("quantity", 0.0)
+                    break
+            boxx_cash = min(boxx_shares, 180.0) * (21000.0 / 180.0)
+            net_deficit = cash_reserve + boxx_cash - total_deficit
+            is_critical = total_deficit > (cash_reserve + boxx_cash)
+
+            results = {
+                "total_deficit": total_deficit,
+                "cash_reserve": cash_reserve,
+                "boxx_shares": boxx_shares,
+                "boxx_cash": boxx_cash,
+                "net_deficit": net_deficit,
+                "is_critical": is_critical,
+                "gtc_buy_orders_count": len(gtc_buy_orders),
+            }
+            from cogs.embed_builder import create_stress_test_embed
+
+            embed = create_stress_test_embed(results)
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(
+                embed=create_error_embed(f"壓力測試失敗: {e}"), ephemeral=True
+            )
 
 
 async def setup(bot):

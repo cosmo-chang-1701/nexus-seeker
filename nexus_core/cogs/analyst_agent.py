@@ -1,4 +1,5 @@
 import discord
+from typing import Optional
 from discord.ext import commands, tasks
 from datetime import timezone, datetime, timedelta
 import logging
@@ -1045,6 +1046,14 @@ class AnalystAgent(commands.Cog):
         return report
 
     async def dispatch_pre_market_briefing(self):
+        # 0. 盤前呼叫 edge scraper 更新 FedWatch 數據
+        try:
+            from services.calendar_service import calendar_service
+
+            await calendar_service.update_fedwatch_probability()
+        except Exception as e:
+            logger.warning(f"更新 FedWatch 概率失敗: {e}")
+
         # 1. 執行巨觀資料獲取
         macro_data = await self._fetch_macro_data()
         if isinstance(macro_data, tuple):
@@ -1126,6 +1135,107 @@ class AnalystAgent(commands.Cog):
                 warning_days=warning_days,
             )
             await self.bot.queue_dm(uid, embed=embed)
+
+            # 方案 C 逃頂窗口推演並推送宏觀警報 Embed
+            try:
+                fomc_embed = await self.run_fomc_escape_window_analysis(uid)
+                if fomc_embed:
+                    await self.bot.queue_dm(uid, embed=fomc_embed)
+            except Exception as e:
+                logger.error(f"推送方案 C 逃頂窗口 Embed 失敗: {e}")
+
+    async def run_fomc_escape_window_analysis(
+        self, user_id: int
+    ) -> Optional[discord.Embed]:
+        """依據下週 FOMC 的 FedWatch 定價機率與使用者自訂設定，動態推演反彈逃頂窗口。"""
+        import sqlite3
+        import config
+
+        # 1. 取得 FedWatch 概率
+        prob = 0.72  # 預設值
+        try:
+            with sqlite3.connect(config.DB_NAME) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    SELECT fedwatch_probability
+                    FROM economic_calendar_events
+                    WHERE event LIKE '%FOMC%' OR event LIKE '%Fed Interest Rate%'
+                    ORDER BY event_time ASC
+                    LIMIT 1
+                    """
+                )
+                row = cursor.fetchone()
+                if row and row["fedwatch_probability"] is not None:
+                    prob = row["fedwatch_probability"]
+        except Exception as e:
+            logger.warning(f"查詢 SQLite FOMC FedWatch 概率失敗: {e}")
+
+        # 2. 載入使用者自訂的逃頂窗口區間 (MM-DD 格式，例如 07-15, 07-31)
+        from database.user_settings import get_full_user_context
+
+        ctx = get_full_user_context(user_id)
+        start_setting = ctx.escape_window_start if ctx else "07-15"
+        end_setting = ctx.escape_window_end if ctx else "07-31"
+
+        try:
+            start_m, start_d = map(int, start_setting.split("-"))
+            end_m, end_d = map(int, end_setting.split("-"))
+        except Exception:
+            start_m, start_d = 7, 15
+            end_m, end_d = 7, 31
+
+        # 3. 根據利率決策概率推演調整 (後推 / 前移)
+        if prob > 0.70:
+            shift_days = 5
+            adj_start_d = start_d + shift_days
+            adj_end_d = end_d + shift_days
+            adj_start_m = start_m
+            adj_end_m = end_m
+            if adj_start_d > 30:
+                adj_start_d -= 30
+                adj_start_m = 1 if start_m == 12 else start_m + 1
+            if adj_end_d > 30:
+                adj_end_d -= 30
+                adj_end_m = 1 if end_m == 12 else end_m + 1
+
+            adjusted_start = (
+                f"{adj_start_m}月下旬 (約 {adj_start_m:02d}-{adj_start_d:02d})"
+            )
+            adjusted_end = f"{adj_end_m}月上旬 (約 {adj_end_m:02d}-{adj_end_d:02d})"
+            direction = "後推"
+            reason = f"由於下週 FOMC 維持高利率/加息機率達 {prob*100:.1f}%，大於 70% 警戒水位，市場流動性釋放延遲。系統自動將您自訂的 {start_m}月中下旬反彈逃頂窗口後推 {shift_days} 個交易日，建議延後多頭逃頂撤退計劃。"
+        else:
+            shift_days = 5
+            adj_start_d = start_d - shift_days
+            adj_end_d = end_d - shift_days
+            adj_start_m = start_m
+            adj_end_m = end_m
+            if adj_start_d <= 0:
+                adj_start_d += 30
+                adj_start_m = 12 if start_m == 1 else start_m - 1
+            if adj_end_d <= 0:
+                adj_end_d += 30
+                adj_end_m = 12 if end_m == 1 else end_m - 1
+
+            adjusted_start = (
+                f"{adj_start_m}月上旬 (約 {adj_start_m:02d}-{adj_start_d:02d})"
+            )
+            adjusted_end = f"{adj_end_m}月中旬 (約 {adj_end_m:02d}-{adj_end_d:02d})"
+            direction = "前移"
+            reason = f"由於下週 FOMC 維持高利率/加息機率僅 {prob*100:.1f}%，小於 70% 臨界值，市場預期利空出盡。系統自動將您自訂的反彈逃頂窗口前移 {shift_days} 個交易日，提示多頭反彈可能提前發酵，需作好提前撤退部署。"
+
+        from cogs.embed_builder import create_fomc_escape_window_embed
+
+        return create_fomc_escape_window_embed(
+            prob=prob,
+            direction=direction,
+            shift_days=shift_days,
+            adjusted_start=adjusted_start,
+            adjusted_end=adjusted_end,
+            reason=reason,
+        )
 
     async def gather_sector_rotation_data(self):
         macro = await get_macro_environment()

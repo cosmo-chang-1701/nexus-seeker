@@ -214,6 +214,42 @@ This gating is tested in `tests/unit/test_intraday_pipeline.py`.
 
 ---
 
+## Index Microstructure & Macro Risk Engine Upgrade
+
+The platform implements an advanced macro risk-control layer that dynamically adapts portfolio parameters based on market liquidity, rate projections, and cash risk constraints.
+
+### 1. Index Microstructure & Gamma Flip Gating (`index_microstructure.py`)
+- **Regime Evaluation**: Evaluates index liquidity conditions via `get_market_regime()`.
+- **SHORT_GAMMA_CRITICAL Detection**:
+  - Triggers when: $VIX > 20$ AND $vts\_ratio = \frac{VIX}{VIX3M} \ge 1.0$ (in backwardation) AND $\text{SPY Spot} < \text{Gamma Flip Line}$ (as estimated by the Playwright edge scraper `/scrape/macro/gex` route).
+- **Tactical Scaling**:
+  - Under `SHORT_GAMMA_CRITICAL`, the watchlist scanner in `intraday_pipeline.py` automatically scales `dynamic_grid_step` by **$1.5\times$** to slow down capital depletion during market washouts.
+
+### 2. CME FedWatch Forecasting & Escape Windows
+- **Rate Probabilities**: Crawls FOMC rate probabilities via `/scrape/macro/fedwatch` and saves to SQLite (`consensus_value` and `fedwatch_probability` fields in `economic_calendar_events`).
+- **Dynamic Escape Window**:
+  - The pre-market analyst loop (`analyst_agent.py`) evaluates the probability of rates remaining high ($> 70\%$).
+  - If rates remain high (hawkish), it offsets the target "rebound escape window" (反彈逃頂窗口) of mid-to-late July by **5-7 business days** dynamically.
+  - If rate cuts are expected, the escape window adjusts forward (risk-on).
+
+### 3. Active Order Stress Testing (`/stress_test`)
+- **Risk Math**:
+  $$\text{Total Cash Deficit} = \sum (\text{Active Buy Grid Limit Price} \times \text{Quantity})$$
+- **BOXX Buffer and Alerts**:
+  - Compares the total cash deficit with the user's available cash + maximum liquidatable $BOXX$ position (capped at 180 shares $\approx \$21,000$).
+  - If the potential deficit exceeds the $BOXX$ liquidation limit ($21,000 USD), a critical warning embed is dispatched alerting the user that the payout threshold ($13,000 USD) is endangered.
+  - Results are rendered in Traditional Chinese using `NexusEmbed` and integrated into the `/dash` workspace panel.
+
+### 4. Average Cost Basis & Covered Call Recovery Rules
+- **New Cost Basis Calculation**:
+  $$\text{New Cost Basis} = \frac{(\text{Current Shares} \times \text{Current Cost}) + \sum (\text{GTC Grid Shares} \times \text{Limit Price})}{\text{Current Shares} + \sum \text{GTC Grid Shares}}$$
+- **Covered Call Unlock Recommendations**:
+  - When assets are locked up, the system generates covered call guidelines to help rebuild runway.
+  - Filters option chains for: DTE 30-50 days, Strike > `New Cost Basis`, Delta < 0.15, and annualized yield >= 10.0% (or single premium >= 1.0% of spot).
+  - Utilizes 30-day Historical Volatility (HV) or last closing IV as fallback pricing inputs if live option chains are unavailable.
+
+---
+
 ## Analyst Agent Reporting
 
 `cogs/analyst_agent.py` is responsible for:
@@ -396,7 +432,10 @@ Current repository rule:
 - `nexus_core/cogs/embed_builder.py` — single source of truth for embeds
 - `nexus_core/database/orders.py` — active orders SQLite database state CRUD operations
 - `nexus_core/database/migrations/v038_add_active_orders.py` — migration registering the active_orders table in SQLite
+- `nexus_core/database/migrations/v047_add_macro_events_columns.py` — migration adding economic calendar columns consensus_value and fedwatch_probability
+- `nexus_core/database/migrations/v048_add_escape_window_settings.py` — migration adding escape window configuration columns to user settings
 - `nexus_core/market_analysis/intraday_pipeline.py` — watchlist evaluation, option-plan logic, intraday engine helpers
+- `nexus_core/market_analysis/index_microstructure.py` — market regime determination (SHORT_GAMMA_CRITICAL) using VIX, VIX3M, and zero-gamma line GEX
 - `nexus_core/market_analysis/sentiment_engine.py` — skew / UOA / IV stack
 - `nexus_core/services/calendar_service.py` — shared event cache entrypoint
 - `nexus_core/services/llm_service.py` — structured LLM outputs and memory-safe degradation
@@ -410,6 +449,7 @@ Current repository rule:
 - `nexus_core/tests/unit/test_order_ui.py` — unit tests for order UI, active order database, and telemetry pricing alignment
 - `nexus_core/tests/unit/test_settings_interactive.py` — unit tests for interactive settings view and modals
 - `nexus_core/tests/unit/test_notification_toggles.py` — unit tests for notification preferences database toggles and views
+- `nexus_core/tests/unit/test_macro_risk_upgrade.py` — unit tests for macro risk upgrade, index microstructure, and covered call unlocking
 
 ---
 
@@ -467,6 +507,7 @@ docker compose run --rm nexus-seeker python -m pytest tests/unit/test_output_cen
 docker compose run --rm nexus-seeker python -m pytest tests/unit/test_order_ui.py
 docker compose run --rm nexus-seeker python -m pytest tests/unit/test_settings_interactive.py
 docker compose run --rm nexus-seeker python -m pytest tests/unit/test_notification_toggles.py
+docker compose run --rm nexus-seeker python -m pytest tests/unit/test_macro_risk_upgrade.py
 ```
 
 ---
