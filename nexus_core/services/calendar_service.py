@@ -44,6 +44,8 @@ class EconomicEvent(CalendarEvent):
     time: str  # ISO format string
     impact: str
     country: str = "US"
+    consensus_value: Optional[str] = None
+    fedwatch_probability: Optional[float] = None
 
     @field_validator("time")
     @classmethod
@@ -254,6 +256,8 @@ class CalendarService:
                         impact=str(event.get("impact", "high")),
                         country=str(event.get("country", "US")),
                         tte_hours=round(tte_hours, 1),
+                        consensus_value=event.get("consensus_value"),
+                        fedwatch_probability=event.get("fedwatch_probability"),
                     )
                     high_impact.append(ev)
                 except Exception as ve:
@@ -387,6 +391,40 @@ class CalendarService:
 
         combined = sorted(all_events, key=lambda x: x.tte_hours)
         return combined
+
+    async def update_fedwatch_probability(self) -> None:
+        """從 edge scraper 獲取下週 FOMC 最新利率定價機率，並寫入資料庫。"""
+        import httpx
+        import sqlite3
+        import config
+
+        if not getattr(config, "TUNNEL_URL", ""):
+            logger.info("未配置 TUNNEL_URL，跳過 FedWatch 爬取。")
+            return
+
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                res = await client.get(f"{config.TUNNEL_URL}/scrape/macro/fedwatch")
+                if res.status_code == 200:
+                    payload = res.json()
+                    if payload.get("status") == "success":
+                        prob = payload["data"].get("probability", 0.72)
+                        with sqlite3.connect(config.DB_NAME) as conn:
+                            cursor = conn.cursor()
+                            cursor.execute(
+                                """
+                                UPDATE economic_calendar_events
+                                SET fedwatch_probability = ?
+                                WHERE event LIKE '%FOMC%' OR event LIKE '%Fed Interest Rate%'
+                                """,
+                                (prob,),
+                            )
+                            conn.commit()
+                        logger.info(
+                            f"成功更新 CME FedWatch FOMC 利率維持/加息機率: {prob * 100:.1f}%"
+                        )
+        except Exception as e:
+            logger.error(f"更新 FedWatch 概率失敗: {e}")
 
 
 # Singleton instance
