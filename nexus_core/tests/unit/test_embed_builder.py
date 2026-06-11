@@ -35,6 +35,7 @@ from cogs.embed_builder import (
     create_media_sentiment_embed,
     create_active_orders_embed,
     build_radar_scan_embed,
+    build_post_market_intelligence_embed,
 )
 from models.schemas import WatchlistOptionLeg, WatchlistOptionPlan
 
@@ -1040,3 +1041,62 @@ def test_build_radar_scan_embed():
     assert "MRVL" in embed.description
     assert "超跌磁吸" in embed.description
     assert "需防壓回" in embed.description
+
+
+def test_build_post_market_intelligence_embed_empty():
+    """Verify that build_post_market_intelligence_embed correctly renders when there are no report lines."""
+    embed = build_post_market_intelligence_embed(
+        report_lines=[],
+        hedge_analysis={},
+        survival_runway=9999.0,
+        sectors_data=[],
+        ai_commentary="Test AI commentary",
+    )
+    assert embed.title == "📋 Nexus Seeker | 盤後綜合風險與 AI 策略報告"
+
+    field_names = [f.name for f in embed.fields]
+    assert "🏁 財務生存跑道 (Financial Runway)" in field_names
+    assert "📊 投資組合收盤持倉明細" in field_names
+    assert "🌐 投資組合收盤宏觀風險" in field_names
+    assert "🧠 AI 損益歸因與次日策略點評" in field_names
+
+    positions_field = next(
+        f for f in embed.fields if f.name == "📊 投資組合收盤持倉明細"
+    )
+    macro_field = next(f for f in embed.fields if f.name == "🌐 投資組合收盤宏觀風險")
+    assert "目前無持倉部位。" in positions_field.value
+    assert "目前無宏觀風險數據。" in macro_field.value
+
+
+def test_build_post_market_intelligence_embed_parsed_ai_commentary():
+    """Verify that build_post_market_intelligence_embed correctly parses and formats the AI commentary into three fields in Target Center style."""
+    ai_commentary = (
+        "1. 📊 多空大盤交叉驗證解讀\n"
+        "- 第一點分析\n"
+        "- 第二點分析\n"
+        "2. ⚠️ 潛在陷阱與風險提示\n"
+        "- 第一個風險\n"
+        "- 第二個風險\n"
+        "3. 🛡️ 高勝率交易策略推薦\n"
+        "- 第一個策略\n"
+        "- 第二個策略\n"
+    )
+    embed = build_post_market_intelligence_embed(
+        report_lines=[],
+        hedge_analysis={},
+        survival_runway=9999.0,
+        sectors_data=[],
+        ai_commentary=ai_commentary,
+    )
+    field_names = [f.name for f in embed.fields]
+    assert "📊 AI 多空大盤交叉驗證解讀" in field_names
+    assert "⚠️ AI 潛在陷阱與風險提示" in field_names
+    assert "🛡️ AI 高勝率交易策略推薦" in field_names
+    assert "🧠 AI 損益歸因與次日策略點評" not in field_names
+
+    market_field = next(
+        f for f in embed.fields if f.name == "📊 AI 多空大盤交叉驗證解讀"
+    )
+    assert "```ansi" in market_field.value
+    assert " ├─ 第一點分析" in market_field.value
+    assert " └─ 第二點分析" in market_field.value

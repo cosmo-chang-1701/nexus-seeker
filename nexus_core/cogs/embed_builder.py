@@ -5098,6 +5098,71 @@ def build_pre_market_briefing_embed(
     return embed
 
 
+def _parse_post_market_ai_commentary(ai_commentary: str) -> dict[str, str]:
+    import re
+
+    patterns = {
+        "market": r"\*?\*?(?:1\.\s*)?📊\s*多空大盤交叉驗證解讀\*?\*?",
+        "risk": r"\*?\*?(?:2\.\s*)?⚠️\s*潛在陷阱與風險提示\*?\*?",
+        "strategy": r"\*?\*?(?:3\.\s*)?🛡️\s*高勝率交易策略推薦\*?\*?",
+    }
+
+    indices = {}
+    for key, pattern in patterns.items():
+        match = re.search(pattern, ai_commentary)
+        if match:
+            indices[key] = (match.start(), match.end())
+
+    if not indices:
+        return {}
+
+    sorted_keys = sorted(indices.keys(), key=lambda k: indices[k][0])
+    result = {}
+    for i, key in enumerate(sorted_keys):
+        start_idx = indices[key][1]
+        if i + 1 < len(sorted_keys):
+            next_key = sorted_keys[i + 1]
+            end_idx = indices[next_key][0]
+            content = ai_commentary[start_idx:end_idx].strip()
+        else:
+            content = ai_commentary[start_idx:].strip()
+
+        content = re.sub(r"^[:：\s\-\*]+", "", content).strip()
+        result[key] = content
+
+    return result
+
+
+def _format_to_target_center_style(text: str) -> str:
+    if not text:
+        return ""
+
+    raw_lines = text.split("\n")
+    cleaned_lines = []
+
+    for line in raw_lines:
+        line_str = line.strip()
+        if not line_str:
+            continue
+        # Remove standard list headers
+        import re
+
+        cleaned = re.sub(r"^[\-\*\•\d+\.\s]+", "", line_str).strip()
+        if cleaned:
+            cleaned_lines.append(cleaned)
+
+    if not cleaned_lines:
+        return text
+
+    formatted_lines = ["```ansi"]
+    for i, line in enumerate(cleaned_lines):
+        prefix = " ├─ " if i < len(cleaned_lines) - 1 else " └─ "
+        formatted_lines.append(f"{prefix}{line}")
+    formatted_lines.append("```")
+
+    return "\n".join(formatted_lines)
+
+
 def build_post_market_intelligence_embed(
     report_lines: List[str],
     hedge_analysis: Optional[Dict[str, Any]] = None,
@@ -5155,17 +5220,20 @@ def build_post_market_intelligence_embed(
             )
         else:
             positions_text = "目前無持倉部位。"
+    else:
+        positions_text = "目前無持倉部位。"
+        macro_text = "目前無宏觀風險數據。"
 
-        embed.add_field(
-            name="📊 投資組合收盤持倉明細",
-            value=_safe_embed_field_value(positions_text, "暫無持倉"),
-            inline=False,
-        )
-        embed.add_field(
-            name="🌐 投資組合收盤宏觀風險",
-            value=_safe_embed_field_value(f"```\n{macro_text}\n```", "無數據"),
-            inline=False,
-        )
+    embed.add_field(
+        name="📊 投資組合收盤持倉明細",
+        value=_safe_embed_field_value(positions_text, "暫無持倉"),
+        inline=False,
+    )
+    embed.add_field(
+        name="🌐 投資組合收盤宏觀風險",
+        value=_safe_embed_field_value(f"```\n{macro_text}\n```", "無數據"),
+        inline=False,
+    )
 
     if sectors_data:
         sector_lines = ["```ansi"]
@@ -5228,11 +5296,38 @@ def build_post_market_intelligence_embed(
         )
 
     if ai_commentary:
-        embed.add_field(
-            name="🧠 AI 損益歸因與次日策略點評",
-            value=_safe_embed_field_value(ai_commentary, "暫無分析"),
-            inline=False,
-        )
+        parsed = _parse_post_market_ai_commentary(ai_commentary)
+        if parsed:
+            if parsed.get("market"):
+                embed.add_field(
+                    name="📊 AI 多空大盤交叉驗證解讀",
+                    value=_safe_embed_field_value(
+                        _format_to_target_center_style(parsed["market"]), "暫無分析"
+                    ),
+                    inline=False,
+                )
+            if parsed.get("risk"):
+                embed.add_field(
+                    name="⚠️ AI 潛在陷阱與風險提示",
+                    value=_safe_embed_field_value(
+                        _format_to_target_center_style(parsed["risk"]), "暫無分析"
+                    ),
+                    inline=False,
+                )
+            if parsed.get("strategy"):
+                embed.add_field(
+                    name="🛡️ AI 高勝率交易策略推薦",
+                    value=_safe_embed_field_value(
+                        _format_to_target_center_style(parsed["strategy"]), "暫無分析"
+                    ),
+                    inline=False,
+                )
+        else:
+            embed.add_field(
+                name="🧠 AI 損益歸因與次日策略點評",
+                value=_safe_embed_field_value(ai_commentary, "暫無分析"),
+                inline=False,
+            )
 
     embed.set_footer(text="🌌 Nexus Seeker • 盤後綜合策略簡報")
     return embed

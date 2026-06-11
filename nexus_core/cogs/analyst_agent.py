@@ -1252,6 +1252,14 @@ class AnalystAgent(commands.Cog):
             report_lines = u_report.get("report_lines", [])
             hedge_analysis = u_report.get("hedge_analysis", {})
             survival_runway = u_report.get("survival_runway")
+            if survival_runway is None:
+                from market_analysis.pro_management import calculate_survival_runway
+
+                survival_runway = calculate_survival_runway(
+                    cash_reserve=user_ctx.cash_reserve,
+                    monthly_expense=user_ctx.monthly_expense,
+                    daily_theta=user_ctx.total_theta,
+                )
 
             # 4. Memory Safety Gate Check
             mem = psutil.virtual_memory()
