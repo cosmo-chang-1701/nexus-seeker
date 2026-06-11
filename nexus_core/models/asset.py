@@ -1,6 +1,6 @@
 from enum import Enum
 from typing import Optional, Dict, Any
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 from datetime import datetime
 
 
@@ -41,7 +41,14 @@ class HoldingMetadata(BaseModel):
     model_config = ConfigDict()
     quantity: float
     avg_cost: float
-    weighted_delta: float = 0.0
+    weighted_delta: Optional[float] = 0.0
+
+    @field_validator("weighted_delta", mode="before")
+    @classmethod
+    def default_weighted_delta(cls, v):
+        if v is None:
+            return 0.0
+        return v
 
 
 class Asset(BaseModel):
