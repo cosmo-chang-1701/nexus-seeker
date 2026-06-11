@@ -368,3 +368,63 @@ async def test_run_premarket_earnings_sorting_and_filtering():
 
         news_calls = [c[0][0] for c in mock_fetch_news.call_args_list]
         assert set(news_calls) == {"SYM_D", "SYM_A"}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_post_market_intelligence_runway_fallback():
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+
+    with patch("discord.ext.tasks.Loop.start"):
+        agent = AnalystAgent(bot)
+
+    # Mock gather_sector_rotation_data
+    agent.gather_sector_rotation_data = AsyncMock(
+        return_value={
+            "vix": 15.0,
+            "vix_tier_name": "Low",
+            "spy_price": 500.0,
+            "sectors": [],
+            "poly_events": [],
+            "spy_max_pain": {"max_pain": 500.0},
+        }
+    )
+
+    user_ctx = MagicMock()
+    user_ctx.enable_analyst_agent = True
+    user_ctx.capital = 100000.0
+    user_ctx.cash_reserve = 60000.0
+    user_ctx.monthly_expense = 3000.0
+    user_ctx.total_theta = 0.0  # daily theta
+
+    with patch("database.purge_old_cache", return_value=0), patch(
+        "services.trading_service.TradingService.get_after_market_report_data",
+        new_callable=AsyncMock,
+    ) as mock_get_data, patch("database.get_all_user_ids", return_value=[12345]), patch(
+        "database.is_notification_enabled", return_value=True
+    ), patch("database.get_full_user_context", return_value=user_ctx), patch(
+        "cogs.analyst_agent.generate_analyst_report", new_callable=AsyncMock
+    ) as mock_gen_report, patch("psutil.virtual_memory") as mock_vmem:
+        # Empty dict from ts.get_after_market_report_data
+        mock_get_data.return_value = {}
+
+        mock_mem = MagicMock()
+        mock_mem.percent = 50.0
+        mock_vmem.return_value = mock_mem
+
+        mock_gen_report.return_value = "Mocked AI Commentary"
+
+        await agent.dispatch_post_market_intelligence()
+
+        # Check that it fetched empty and fallback was applied
+        args, kwargs = mock_gen_report.call_args
+        raw_data = args[1]
+        # Check runway calculation fallback is 600.0
+        assert raw_data["aggregate_risk_metrics"]["avg_financial_runway_days"] == 600.0
+
+        # Check queue_dm was called with the build embed containing "600"
+        assert bot.queue_dm.await_count == 1
+        sent_embed = bot.queue_dm.await_args.kwargs["embed"]
+        # The fields should include the survival runway field with "600"
+        runway_field = next(f for f in sent_embed.fields if "財務生存跑道" in f.name)
+        assert "600.0" in runway_field.value
