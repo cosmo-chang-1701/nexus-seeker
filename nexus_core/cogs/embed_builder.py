@@ -1531,50 +1531,92 @@ def create_covered_call_unlock_embed(data: dict) -> discord.Embed:
         color=discord.Color.green() if recs else discord.Color.orange(),
     )
 
-    embed.add_field(
-        name="💼 當前現貨持倉",
-        value=f"• 持股數量：**{current_shares:.0f} 股**\n"
-        f"• 原始持股均價：**${current_cost:,.2f}**\n"
-        f"• 當前現貨價格：**${current_price:,.2f}**",
-        inline=True,
+    # 計算現價與成本價差比率
+    diff_pct = (
+        ((current_price - current_cost) / current_cost * 100.0)
+        if current_cost > 0
+        else 0.0
     )
+    diff_color = "\u001b[1;32m" if diff_pct >= 0 else "\u001b[1;31m"
+
+    spot_lines = [
+        "```ansi",
+        " 現貨持倉狀態 (Spot Position Details)",
+        f" ├─ 持股數量: \u001b[1;36m{current_shares:.0f} 股\u001b[0m",
+        f" ├─ 原始均價: \u001b[1;33m${current_cost:,.2f}\u001b[0m",
+        f" └─ 當前現價: \u001b[1;32m${current_price:,.2f}\u001b[0m (與均價價差: {diff_color}{diff_pct:+.2f}%\u001b[0m)",
+        "",
+        " 模擬吸籌後成本 (Simulated Cost Basis After Accumulation)",
+        f" └─ 加權平均成本: \u001b[1;35m${new_cost_basis:,.2f}\u001b[0m",
+        "```",
+        "*(已計入所有活躍 GTC 買入網格單模擬成交後的成本調整)*",
+    ]
 
     embed.add_field(
-        name="📐 模擬吸籌後成本",
-        value=f"• 加權平均成本：**${new_cost_basis:,.2f}**\n"
-        f"*(已計入所有活躍 GTC 買入網格單模擬成交後的成本調整)*",
-        inline=True,
+        name="💼 現貨與吸籌模擬 (Spot & Accumulation)",
+        value="\n".join(spot_lines),
+        inline=False,
     )
 
     if recs:
-        rec_lines = []
+        # 建立 ANSI 備兌推薦合約表格
+        rec_table_lines = [
+            "```ansi",
+            " 到期日     | 履約價    | 預估 Delta | 參考權利金 | 年化收益率",
+            " -----------------------------------------------------------",
+        ]
         for r in recs:
-            yield_str = (
-                f" (年化收益率: **{r['annualized_yield']}%**)"
-                if "annualized_yield" in r
-                else ""
+            exp = r.get("expiration", "")
+            strike = r.get("strike", 0.0)
+            d_val = r.get("delta", 0.0)
+            premium = r.get("premium", 0.0)
+            ann_yield = r.get("annualized_yield", 0.0)
+
+            # 預先格式化字串，保持欄位對齊
+            exp_str = f"{exp:<10}"
+            strike_str = f"${strike:<7.2f}"
+            delta_str = f"{d_val:<10.3f}"
+            premium_str = f"${premium:<9.2f}"
+
+            if "annualized_yield" in r:
+                yield_str = f"{ann_yield:>9.2f}%"
+                color_yield = "\u001b[1;32m" if ann_yield >= 10.0 else "\u001b[1;35m"
+            else:
+                yield_str = "      N/A"
+                color_yield = "\u001b[1;30m"
+
+            rec_table_lines.append(
+                f" {exp_str} | \u001b[1;33m{strike_str}\u001b[0m | \u001b[1;36m{delta_str}\u001b[0m | \u001b[1;32m{premium_str}\u001b[0m | {color_yield}{yield_str}\u001b[0m"
             )
-            rec_lines.append(
-                f"• **到期日：{r['expiration']}**\n"
-                f"  履約價：**${r['strike']:.2f}** (高於新成本線)\n"
-                f"  預估 Delta：`{r['delta']}`\n"
-                f"  權利金參考：**${r['premium']:.2f}**{yield_str}"
-            )
+        rec_table_lines.append("```")
+
         embed.add_field(
-            name="🎯 推薦 Covered Call 備兌合約",
-            value="\n".join(rec_lines),
+            name="🎯 推薦 Covered Call 備兌合約 (Recommended Contracts)",
+            value="\n".join(rec_table_lines),
             inline=False,
         )
+
         embed.add_field(
-            name="💡 物理死鎖解鎖說明",
-            value="現貨大跌至低位網格吸籌完成後，透過建立**高於新成本線且 Delta < 0.15 且年化收益率 >= 10%** 的極虛值備兌 Call，"
-            "可以在安全保護現貨（防止被平價收回）的同時收取權利金，加速降低整體套牢部位的持有成本，實現物理死鎖解鎖。",
+            name="💡 物理死鎖解鎖說明 (Recovery Guidance)",
+            value="現貨大跌至低位網格吸籌完成後，透過建立**高於新成本線且 Delta < 0.15 且年化收益率 >= 10%** 的極虛值備兌 Call，可以在安全保護現貨（防止被平價收回）的同時收取權利金，加速降低整體套牢部位的持有成本，實現物理死鎖解鎖。",
             inline=False,
         )
     else:
+        status_lines = [
+            "```ansi",
+            " ⚠️ 解鎖警告 (Unlock Alert)",
+            " └─ 狀態: \u001b[1;31m未尋獲符合條件之極虛值 Covered Call 合約\u001b[0m",
+            "",
+            " 篩選門檻 (Criteria)",
+            " ├─ 履約價 > 模擬加權成本",
+            " ├─ 預估 Delta < 0.15",
+            " └─ 年化收益率 >= 10.0% 或單次權利金 >= 現貨 1.0%",
+            "```",
+            "💡 **策略建議**：目前市場隱含波動率低迷或現貨價格過低，不宜盲目開倉。建議等待現貨反彈或波動率回升，拉開與成本線之空間後再行評估。",
+        ]
         embed.add_field(
-            name="⚠️ 解鎖狀態",
-            value="目前在目標到期日區間內，未尋獲符合條件（履約價高於新成本、Delta < 0.15 且年化收益率 >= 10%）的極虛值 Covered Call 合約。建議等待現貨反彈或波動率回升後再行評估。",
+            name="⚠️ 解鎖狀態與策略建議 (Unlock Status & Strategy)",
+            value="\n".join(status_lines),
             inline=False,
         )
 
