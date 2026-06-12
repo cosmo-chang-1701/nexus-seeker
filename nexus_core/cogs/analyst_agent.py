@@ -1196,25 +1196,25 @@ class AnalystAgent(commands.Cog):
 
         custom_period_label = f"{start_m}月{get_period_label(start_d)}至{end_m}月{get_period_label(end_d)}"
 
-        # 3. 根據利率決策概率推演調整 (後推 / 前移)
-        if prob > 0.70:
-            shift_days = 5
-            adj_start_d = start_d + shift_days
-            adj_end_d = end_d + shift_days
-            adj_start_m = start_m
-            adj_end_m = end_m
-            if adj_start_d > 30:
-                adj_start_d -= 30
-                adj_start_m = 1 if start_m == 12 else start_m + 1
-            if adj_end_d > 30:
-                adj_end_d -= 30
-                adj_end_m = 1 if end_m == 12 else end_m + 1
+        # 3. 根據通膨與利率概率動態微調 (提前 / 延後)
+        from database.cache import get_kv_cache
 
-            adjusted_start = f"{adj_start_m}月{get_period_label(adj_start_d)} (約 {adj_start_m:02d}-{adj_start_d:02d})"
-            adjusted_end = f"{adj_end_m}月{get_period_label(adj_end_d)} (約 {adj_end_m:02d}-{adj_end_d:02d})"
-            direction = "後推"
-            reason = f"由於下週 FOMC 維持高利率/加息機率達 {prob*100:.1f}%，大於 70% 警戒水位，市場流動性釋放延遲。系統自動將您自訂的 {custom_period_label} 反彈逃頂窗口後推 {shift_days} 個交易日，建議延後多頭逃頂撤退計劃。"
+        cpi_actual = get_kv_cache("macro_cpi_actual")
+        cpi_expected = get_kv_cache("macro_cpi_expected")
+        cpi_dev = 0.0
+        if cpi_actual is not None and cpi_expected is not None:
+            cpi_dev = cpi_actual - cpi_expected
         else:
+            cpi_dev = get_kv_cache("macro_cpi_deviation") or 0.0
+
+        wti = get_kv_cache("macro_wti") or 75.0
+        is_inflation_high = (cpi_dev > 0.1) or (wti > 85.0)
+
+        # 決定最終調整方向：如果通膨高，或者 FedWatch 降息/利空出盡機率高 (prob <= 0.70) -> 前移
+        # 否則 (通膨未過熱且維持高利率機率高 > 0.70) -> 後推
+        should_advance = is_inflation_high or (prob <= 0.70)
+
+        if should_advance:
             shift_days = 5
             adj_start_d = start_d - shift_days
             adj_end_d = end_d - shift_days
@@ -1230,7 +1230,33 @@ class AnalystAgent(commands.Cog):
             adjusted_start = f"{adj_start_m}月{get_period_label(adj_start_d)} (約 {adj_start_m:02d}-{adj_start_d:02d})"
             adjusted_end = f"{adj_end_m}月{get_period_label(adj_end_d)} (約 {adj_end_m:02d}-{adj_end_d:02d})"
             direction = "前移"
-            reason = f"由於下週 FOMC 維持高利率/加息機率僅 {prob*100:.1f}%，小於 70% 臨界值，市場預期利空出盡。系統自動將您自訂的 {custom_period_label} 反彈逃頂窗口前移 {shift_days} 個交易日，提示多頭反彈可能提前發酵，需作好提前撤退部署。"
+            if is_inflation_high:
+                reason = (
+                    f"由於核心 CPI/PCE 高於預期 ({cpi_dev:+.2f}%) 或 WTI 油價達 ${wti:.1f} 觸及通膨高風險閾值，"
+                    f"通膨壓力上升可能導致政策收緊。系統自動將您自訂的 {custom_period_label} 反彈逃頂窗口前移 {shift_days} 個交易日，提示需提前防禦撤退。"
+                )
+            else:
+                reason = f"由於下週 FOMC 維持高利率/加息機率僅 {prob*100:.1f}%，小於 70% 臨界值，市場預期利空出盡。系統自動將您自訂的 {custom_period_label} 反彈逃頂窗口前移 {shift_days} 個交易日，提示多頭反彈可能提前發酵，需作好提前撤退部署。"
+        else:
+            shift_days = 5
+            adj_start_d = start_d + shift_days
+            adj_end_d = end_d + shift_days
+            adj_start_m = start_m
+            adj_end_m = end_m
+            if adj_start_d > 30:
+                adj_start_d -= 30
+                adj_start_m = 1 if start_m == 12 else start_m + 1
+            if adj_end_d > 30:
+                adj_end_d -= 30
+                adj_end_m = 1 if end_m == 12 else end_m + 1
+
+            adjusted_start = f"{adj_start_m}月{get_period_label(adj_start_d)} (約 {adj_start_m:02d}-{adj_start_d:02d})"
+            adjusted_end = f"{adj_end_m}月{get_period_label(adj_end_d)} (約 {adj_end_m:02d}-{adj_end_d:02d})"
+            direction = "後推"
+            reason = (
+                f"由於通膨與油價數據放緩 (WTI: ${wti:.1f}, CPI偏差: {cpi_dev:+.2f}%) 且下週 FOMC 維持高利率機率為 {prob*100:.1f}%，"
+                f"市場流動性緊縮預期減弱。系統自動將您自訂的 {custom_period_label} 反彈逃頂窗口後推 {shift_days} 個交易日，建議延後多頭撤退計劃。"
+            )
 
         from cogs.embed_builder import create_fomc_escape_window_embed
 

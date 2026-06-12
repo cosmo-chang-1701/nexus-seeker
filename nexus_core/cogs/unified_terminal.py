@@ -4,6 +4,8 @@ from discord import app_commands
 import asyncio
 import logging
 from typing import Dict, Any, Optional, List
+import psutil
+from services.market_data_service import BoundedCache
 
 from services import market_data_service, news_service, reddit_service
 from market_analysis.sentiment_engine import SentimentEngine
@@ -26,6 +28,7 @@ from cogs.embed_builder import (
     build_vtr_stats_embed,
     create_polymarket_list_embed,
     build_radar_scan_embed,
+    build_market_macro_overview_embed,
 )
 
 logger = logging.getLogger(__name__)
@@ -576,6 +579,76 @@ class PortfolioHubView(discord.ui.View):
             await self._reset_loading(interaction, embed=embed)
 
 
+# LRU Bounded Cache for macro overview (max 10 entries)
+_macro_overview_cache = BoundedCache(max_size=10)
+
+
+def get_macro_overview_data(user_id: int) -> dict:
+    ram_usage = psutil.virtual_memory().percent
+    is_degraded = ram_usage > 85.0
+    cache_key = f"overview_{user_id}"
+
+    if is_degraded and cache_key in _macro_overview_cache:
+        data = _macro_overview_cache[cache_key].copy()
+        data["is_degraded"] = True
+        return data
+
+    # Read from SQLite kv_cache
+    from database import get_kv_cache
+    from market_analysis.trading_orchestration import get_safety_payout_threshold
+
+    spx = get_kv_cache("macro_spx") or 5150.0
+    vix = get_kv_cache("macro_vix") or 18.0
+    us10y = get_kv_cache("macro_us10y") or 4.25
+    # Normalize US10Y if needed
+    if us10y > 10.0:
+        us10y = us10y / 10.0
+
+    wti = get_kv_cache("macro_wti") or 75.0
+    rrp = get_kv_cache("macro_rrp") or 420.5
+    fed_balance = get_kv_cache("macro_fed_balance") or 7.25
+    cpi_nfp_calendar = (
+        get_kv_cache("macro_cpi_nfp_calendar") or "2026-06-18 (CPI), 2026-07-03 (NFP)"
+    )
+    fear_greed = get_kv_cache("macro_fear_greed") or 48.0
+    gamma_flip_line = get_kv_cache("macro_gamma_flip_line") or 5180.0
+    uer = get_kv_cache("macro_uer") or 4.0
+    sahm_rule = get_kv_cache("macro_sahm_rule") or 0.35
+    rrp_change_30d = get_kv_cache("macro_rrp_change_30d") or 5.0
+
+    # 零 Gamma 踩踏 Regime 判定
+    # SPX 跌破 Gamma Flip Line 且 VIX > 20
+    short_gamma_critical = (spx < gamma_flip_line) and (vix > 20.0)
+
+    # 衰退警告 RECESSION_WARNING
+    recession_warning = (sahm_rule >= 0.5) or (us10y > 4.5 and vix > 20.0)
+
+    payout_threshold = get_safety_payout_threshold()
+
+    data = {
+        "spx": spx,
+        "vix": vix,
+        "us10y": us10y,
+        "wti": wti,
+        "rrp": rrp,
+        "fed_balance": fed_balance,
+        "cpi_nfp_calendar": cpi_nfp_calendar,
+        "fear_greed": fear_greed,
+        "gamma_flip_line": gamma_flip_line,
+        "uer": uer,
+        "sahm_rule": sahm_rule,
+        "rrp_change_30d": rrp_change_30d,
+        "short_gamma_critical": short_gamma_critical,
+        "recession_warning": recession_warning,
+        "payout_threshold": payout_threshold,
+        "is_degraded": is_degraded,
+    }
+
+    # Save to memory cache
+    _macro_overview_cache[cache_key] = data
+    return data
+
+
 class PulseHubView(discord.ui.View):
     """
     Interactive view for the Pulse Hub (/market).
@@ -597,6 +670,25 @@ class PulseHubView(discord.ui.View):
             if isinstance(child, discord.ui.Button):
                 child.disabled = False
         await interaction.edit_original_response(embed=embed, view=self)
+
+    @discord.ui.button(label="📊 總經風控", style=discord.ButtonStyle.success)
+    async def btn_macro_overview(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        await interaction.response.defer()
+        await self._set_loading(interaction)
+        embed = None
+        try:
+            from cogs.embed_builder import build_market_macro_overview_embed
+
+            macro_data = get_macro_overview_data(self.user_id)
+            embed = build_market_macro_overview_embed(macro_data)
+        except Exception as e:
+            await interaction.followup.send(
+                embed=create_error_embed(f"獲取總經數據失敗: {e}"), ephemeral=True
+            )
+        finally:
+            await self._reset_loading(interaction, embed=embed)
 
     @discord.ui.button(label="📅 市場日曆", style=discord.ButtonStyle.primary)
     async def btn_calendar(
@@ -1124,14 +1216,8 @@ class UnifiedTerminalCog(commands.Cog):
             if asyncio.iscoroutine(coro):
                 asyncio.create_task(coro)
 
-        from services.calendar_service import calendar_service
-
-        events = await calendar_service.get_portfolio_events(interaction.user.id)
-        embed = create_market_calendar_embed(
-            events,
-            max_items=10,
-            empty_message="📭 未來 7 日內無重大事件。",
-        )
+        macro_data = get_macro_overview_data(interaction.user.id)
+        embed = build_market_macro_overview_embed(macro_data)
 
         view = PulseHubView(interaction.user.id, self.bot)
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)

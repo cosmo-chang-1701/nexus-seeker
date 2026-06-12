@@ -64,6 +64,10 @@ async def recommend_covered_calls(
     user_id: int, symbol: str
 ) -> Optional[Dict[str, Any]]:
     """尋找 7 月中下旬到期、符合 Strike > New Cost Basis 且 Delta < 0.15 的 Covered Call 推薦合約。"""
+    if not is_covered_call_unlock_allowed():
+        logger.warning("偵測到 RECESSION_WARNING 狀態，Covered Call 解鎖策略已被阻斷")
+        return None
+
     symbol = symbol.upper()
 
     # 1. 取得現有持倉
@@ -220,3 +224,38 @@ async def recommend_covered_calls(
         "fallback_iv": fallback_iv,
         "recommendations": recommendations[:3],  # 最多推薦前 3 個合約
     }
+
+
+def is_covered_call_unlock_allowed() -> bool:
+    """判斷當前是否允許解鎖 Covered Call。"""
+    from database import get_kv_cache
+
+    # 1. 取得薩姆規則指標
+    sahm_rule = get_kv_cache("macro_sahm_rule") or 0.35
+
+    # 2. 取得國債收益率與 VIX
+    us10y = get_kv_cache("macro_us10y") or 4.25
+    if us10y > 10.0:
+        us10y = us10y / 10.0  # 確保百分比格式 (e.g. 43.5 -> 4.35)
+
+    vix = get_kv_cache("macro_vix") or 18.0
+
+    # 3. 判定 RECESSION_WARNING
+    # 失業率上升觸及薩姆規則 (>= 0.5) 或 US10Y > 4.5% 且 VIX > 20
+    is_recession = (sahm_rule >= 0.5) or (us10y > 4.5 and vix > 20.0)
+
+    if is_recession:
+        return False
+    return True
+
+
+def get_safety_payout_threshold() -> float:
+    """獲取安全提領/賠付紅線。"""
+    from database import get_kv_cache
+
+    rrp_change = get_kv_cache("macro_rrp_change_30d") or 0.0
+    rrp_spike = get_kv_cache("macro_rrp_spike") or False
+
+    if rrp_change > 0.20 or rrp_spike:
+        return 10000.0
+    return 13000.0
