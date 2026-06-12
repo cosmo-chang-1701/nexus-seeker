@@ -177,7 +177,11 @@ def _parse_and_format_positions_table(
     if not positions_list:
         return "目前無持倉部位。"
 
-    table_lines = ["```ansi"]
+    table_lines = [
+        "```ansi",
+        " 當前持倉明細 (Current Positions)",
+        " ================================================================================================================================================",
+    ]
     headers = [
         "ID",
         "標的",
@@ -5355,6 +5359,36 @@ def _format_to_target_center_style(text: str) -> str:
     return "\n".join(formatted_lines)
 
 
+def _format_to_target_center_style_with_title(title: str, text: str) -> str:
+    if not text:
+        return ""
+
+    raw_lines = text.split("\n")
+    cleaned_lines = []
+
+    for line in raw_lines:
+        line_str = line.strip()
+        if not line_str:
+            continue
+        # Remove standard list headers
+        import re
+
+        cleaned = re.sub(r"^[\-\*\•\d+\.\s]+", "", line_str).strip()
+        if cleaned:
+            cleaned_lines.append(cleaned)
+
+    if not cleaned_lines:
+        return f"```ansi\n {title}\n └─ 暫無數據\n```"
+
+    formatted_lines = ["```ansi", f" {title}"]
+    for i, line in enumerate(cleaned_lines):
+        prefix = " ├─ " if i < len(cleaned_lines) - 1 else " └─ "
+        formatted_lines.append(f"{prefix}{line}")
+    formatted_lines.append("```")
+
+    return "\n".join(formatted_lines)
+
+
 def build_post_market_intelligence_embed(
     report_lines: List[str],
     hedge_analysis: Optional[Dict[str, Any]] = None,
@@ -5381,11 +5415,18 @@ def build_post_market_intelligence_embed(
         runway_text = (
             "無限 (收益已覆蓋支出)"
             if survival_runway >= 9999
-            else f"`{survival_runway:,.1f}` 天"
+            else f"{survival_runway:,.1f} 天"
+        )
+        runway_value = (
+            "```ansi\n"
+            " 財務生存跑道 (Financial Runway)\n"
+            f" ├─ 剩餘天數: {runway_text}\n"
+            " └─ 計算基準: 基於現有現金儲備與 Theta 收益\n"
+            "```"
         )
         embed.add_field(
             name="🏁 財務生存跑道 (Financial Runway)",
-            value=f"```yaml\n預估剩餘天數: {runway_text}\n(基於現有現金儲備與 Theta 收益)\n```",
+            value=runway_value,
             inline=False,
         )
 
@@ -5411,10 +5452,41 @@ def build_post_market_intelligence_embed(
                 positions_list, survival_runway
             )
         else:
-            positions_text = "目前無持倉部位。"
+            positions_text = (
+                "```ansi\n"
+                " 當前持倉明細 (Current Positions)\n"
+                " └─ 狀態: 目前無持倉部位。\n"
+                "```"
+            )
     else:
-        positions_text = "目前無持倉部位。"
+        positions_text = (
+            "```ansi\n"
+            " 當前持倉明細 (Current Positions)\n"
+            " └─ 狀態: 目前無持倉部位。\n"
+            "```"
+        )
         macro_text = "目前無宏觀風險數據。"
+
+    if (
+        macro_text
+        and macro_text.strip()
+        and macro_text.strip() != "目前無宏觀風險數據。"
+    ):
+        macro_lines = macro_text.split("\n")
+        cleaned_macro = [line.strip() for line in macro_lines if line.strip()]
+        formatted_macro_lines = ["```ansi", " 宏觀風險指標 (Macro Risk Metrics)"]
+        for idx, line in enumerate(cleaned_macro):
+            prefix = " ├─ " if idx < len(cleaned_macro) - 1 else " └─ "
+            formatted_macro_lines.append(f"{prefix}{line}")
+        formatted_macro_lines.append("```")
+        macro_value = "\n".join(formatted_macro_lines)
+    else:
+        macro_value = (
+            "```ansi\n"
+            " 宏觀風險指標 (Macro Risk Metrics)\n"
+            " └─ 狀態: 目前無宏觀風險數據。\n"
+            "```"
+        )
 
     embed.add_field(
         name="📊 投資組合收盤持倉明細",
@@ -5423,7 +5495,7 @@ def build_post_market_intelligence_embed(
     )
     embed.add_field(
         name="🌐 投資組合收盤宏觀風險",
-        value=_safe_embed_field_value(f"```\n{macro_text}\n```", "無數據"),
+        value=_safe_embed_field_value(macro_value, "無數據"),
         inline=False,
     )
 
@@ -5494,7 +5566,11 @@ def build_post_market_intelligence_embed(
                 embed.add_field(
                     name="📊 AI 多空大盤交叉驗證解讀",
                     value=_safe_embed_field_value(
-                        _format_to_target_center_style(parsed["market"]), "暫無分析"
+                        _format_to_target_center_style_with_title(
+                            "多空大盤交叉驗證 (Market Cross-Validation)",
+                            parsed["market"],
+                        ),
+                        "暫無分析",
                     ),
                     inline=False,
                 )
@@ -5502,7 +5578,11 @@ def build_post_market_intelligence_embed(
                 embed.add_field(
                     name="⚠️ AI 潛在陷阱與風險提示",
                     value=_safe_embed_field_value(
-                        _format_to_target_center_style(parsed["risk"]), "暫無分析"
+                        _format_to_target_center_style_with_title(
+                            "潛在陷阱與風險提示 (Risk Warning & Trap Alert)",
+                            parsed["risk"],
+                        ),
+                        "暫無分析",
                     ),
                     inline=False,
                 )
@@ -5510,14 +5590,24 @@ def build_post_market_intelligence_embed(
                 embed.add_field(
                     name="🛡️ AI 高勝率交易策略推薦",
                     value=_safe_embed_field_value(
-                        _format_to_target_center_style(parsed["strategy"]), "暫無分析"
+                        _format_to_target_center_style_with_title(
+                            "高勝率交易策略推薦 (Recommended Trading Strategies)",
+                            parsed["strategy"],
+                        ),
+                        "暫無分析",
                     ),
                     inline=False,
                 )
         else:
             embed.add_field(
                 name="🧠 AI 損益歸因與次日策略點評",
-                value=_safe_embed_field_value(ai_commentary, "暫無分析"),
+                value=_safe_embed_field_value(
+                    _format_to_target_center_style_with_title(
+                        "AI 損益歸因與次日策略 (AI Attribution & Strategy)",
+                        ai_commentary,
+                    ),
+                    "暫無分析",
+                ),
                 inline=False,
             )
 
