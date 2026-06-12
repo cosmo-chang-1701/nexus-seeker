@@ -584,58 +584,6 @@ class EditOrderModal(discord.ui.Modal):
             )
 
 
-# ==========================================
-# 3. 委託單管理與對齊 View
-# ==========================================
-class OrderManagementView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=180)
-
-    @discord.ui.button(label="❌ 取消委託", style=discord.ButtonStyle.danger)
-    async def cancel_button(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
-        try:
-            await interaction.response.send_modal(CancelOrderModal())
-        except Exception as e:
-            logger.error(f"Failed to send CancelOrderModal: {e}", exc_info=True)
-            try:
-                if not interaction.response.is_done():
-                    await interaction.response.send_message(
-                        embed=create_error_embed(f"❌ 無法開啟取消委託視窗：{e}"),
-                        ephemeral=True,
-                    )
-                else:
-                    await interaction.followup.send(
-                        embed=create_error_embed(f"❌ 無法開啟取消委託視窗：{e}"),
-                        ephemeral=True,
-                    )
-            except Exception as inner_e:
-                logger.error(f"Failed to send error fallback: {inner_e}")
-
-    @discord.ui.button(label="✏️ 編輯委託單", style=discord.ButtonStyle.primary)
-    async def adjust_button(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
-        try:
-            await interaction.response.send_modal(EditOrderModal())
-        except Exception as e:
-            logger.error(f"Failed to send EditOrderModal: {e}", exc_info=True)
-            try:
-                if not interaction.response.is_done():
-                    await interaction.response.send_message(
-                        embed=create_error_embed(f"❌ 無法開啟編輯委託單視窗：{e}"),
-                        ephemeral=True,
-                    )
-                else:
-                    await interaction.followup.send(
-                        embed=create_error_embed(f"❌ 無法開啟編輯委託單視窗：{e}"),
-                        ephemeral=True,
-                    )
-            except Exception as inner_e:
-                logger.error(f"Failed to send error fallback: {inner_e}")
-
-
 class OrderItemView(discord.ui.View):
     """單筆委託單卡片的操作按鈕（每一筆訂單底下都有獨立按鈕）。"""
 
@@ -1201,9 +1149,7 @@ class OrderUICog(commands.Cog):
                 e.description = filter_line + (e.description or "")
 
         for embed in embeds:
-            await interaction.followup.send(
-                embed=embed, view=OrderManagementView(), ephemeral=True
-            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(
         name="telemetry_alert",
@@ -1713,6 +1659,121 @@ class OrderUICog(commands.Cog):
             logger.error(f"Error persisting active order: {e}")
             await interaction.followup.send(
                 embed=create_error_embed(f"❌ 寫入資料庫時出錯：{str(e)}"),
+                ephemeral=True,
+            )
+
+    @app_commands.command(
+        name="remove_order",
+        description="取消指定的待成交委託單",
+    )
+    @app_commands.describe(order_id="要取消的委託單 ID (留空則彈出對話框輸入)")
+    async def remove_order(
+        self,
+        interaction: discord.Interaction,
+        order_id: int | None = None,
+    ):
+        if order_id is None:
+            await interaction.response.send_modal(CancelOrderModal())
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        try:
+            success = await asyncio.to_thread(delete_active_order, order_id)
+            if success:
+                embed = create_info_embed(
+                    title="取消委託成功",
+                    message=f"✅ **成功取消委託單**：已自資料庫中撤銷委託單 ID `{order_id}`。",
+                )
+            else:
+                embed = create_error_embed(
+                    f"❌ 錯誤：找不到委託單 ID `{order_id}`，請確認 ID 是否正確。"
+                )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        except Exception as e:
+            logger.error(f"Failed to delete order {order_id}: {e}")
+            await interaction.followup.send(
+                embed=create_error_embed(f"❌ 錯誤：取消失敗：{e}"),
+                ephemeral=True,
+            )
+
+    @app_commands.command(
+        name="edit_order",
+        description="編輯指定的待成交委託單",
+    )
+    @app_commands.describe(
+        order_id="委託單 ID (留空則彈出對話框輸入)",
+        price="新限價 / 新價格 / 新追蹤值 (留空則不變更價格)",
+        side="新委託方向 (BUY 買入 / SELL 賣出，留空則不變)",
+    )
+    @app_commands.choices(
+        side=[
+            app_commands.Choice(name="買入 (BUY)", value="BUY"),
+            app_commands.Choice(name="賣出 (SELL)", value="SELL"),
+        ]
+    )
+    async def edit_order(
+        self,
+        interaction: discord.Interaction,
+        order_id: int | None = None,
+        price: float | None = None,
+        side: str | None = None,
+    ):
+        if order_id is None:
+            await interaction.response.send_modal(EditOrderModal())
+            return
+
+        if price is None and side is None:
+            await interaction.response.send_modal(EditOrderModal(order_id=order_id))
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        if price is not None and price <= 0:
+            await interaction.followup.send(
+                embed=create_error_embed("❌ 錯誤：請輸入有效的正數作為新價格。"),
+                ephemeral=True,
+            )
+            return
+
+        side_to_apply = None
+        if side:
+            side_to_apply = side.strip().upper()
+            if side_to_apply not in ("BUY", "SELL"):
+                await interaction.followup.send(
+                    embed=create_error_embed("❌ 錯誤：方向請輸入 BUY 或 SELL。"),
+                    ephemeral=True,
+                )
+                return
+
+        try:
+            success = await asyncio.to_thread(
+                update_active_order_price, order_id, price, None, side_to_apply
+            )
+            if success:
+                side_msg = (
+                    f"方向更新為 `{side_to_apply}`" if side_to_apply else "方向未變更"
+                )
+                price_msg = (
+                    f"新價格: `${price:.2f}` (或 {price:.2f}%)"
+                    if price is not None
+                    else "價格未變更"
+                )
+                embed = create_info_embed(
+                    title="編輯委託單成功",
+                    message=(
+                        f"✅ **成功更新委託單**：委託單 ID `{order_id}`\n"
+                        f"• {price_msg}\n"
+                        f"• {side_msg}"
+                    ),
+                )
+            else:
+                embed = create_error_embed(
+                    f"❌ 錯誤：找不到委託單 ID `{order_id}`，請確認 ID 是否正確。"
+                )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        except Exception as e:
+            logger.error(f"Failed to edit order {order_id}: {e}")
+            await interaction.followup.send(
+                embed=create_error_embed(f"❌ 錯誤：更新失敗：{e}"),
                 ephemeral=True,
             )
 
