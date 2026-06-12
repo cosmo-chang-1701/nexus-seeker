@@ -26,10 +26,10 @@ async def test_settings_view_structure(db_conn):
     assert isinstance(select, discord.ui.Select)
     assert select.custom_id == "select_account_settings"
 
-    # 驗證包含 8 個設定選項
-    assert len(select.options) == 8
+    # 驗證包含 7 個設定選項
+    assert len(select.options) == 7
     labels = [opt.label for opt in select.options]
-    assert "💰 總資金" in labels
+    assert "💰 現金儲備金額" in labels
     assert "🛡️ 基準風險上限 %" in labels
     assert "👻 虛擬交易室 (VTR)" in labels
     assert "🛜 本地 Tunnel 呼叫" in labels
@@ -74,10 +74,10 @@ async def test_settings_numeric_modal_trigger(db_conn):
     user_id = 777888
     view = AccountSettingsView(user_id)
 
-    # 模擬選擇 "capital" (總資金)
+    # 模擬選擇 "risk_limit" (基準風險上限 %)
     mock_interaction = AsyncMock()
     mock_interaction.user.id = user_id
-    mock_interaction.data = {"values": ["capital"]}
+    mock_interaction.data = {"values": ["risk_limit"]}
     mock_interaction.response.send_modal = AsyncMock()
 
     await view.on_select_callback(mock_interaction)
@@ -86,23 +86,23 @@ async def test_settings_numeric_modal_trigger(db_conn):
     mock_interaction.response.send_modal.assert_called_once()
     modal = mock_interaction.response.send_modal.call_args[0][0]
     assert isinstance(modal, AccountSettingsModal)
-    assert modal.key == "capital"
-    assert modal.label == "💰 總資金"
+    assert modal.key == "risk_limit"
+    assert modal.label == "🛡️ 基準風險上限 %"
 
 
 @pytest.mark.asyncio
-async def test_settings_modal_validation_capital(db_conn):
-    """測試 Modal 針對 capital (總資金) 的輸入邊界驗證"""
+async def test_settings_modal_validation_cash_reserve(db_conn):
+    """測試 Modal 針對 cash_reserve (現金儲備) 的輸入邊界驗證"""
     user_id = 999000
     view = AccountSettingsView(user_id)
 
     # 建立 Modal 實例
     modal = AccountSettingsModal(
         user_id=user_id,
-        key="capital",
-        label="💰 總資金",
-        current_value=100000.0,
-        placeholder="輸入大於 0 的數字",
+        key="cash_reserve",
+        label="💰 現金儲備金額",
+        current_value=0.0,
+        placeholder="輸入大於等於 0 的現金儲備",
         view=view,
     )
 
@@ -117,14 +117,14 @@ async def test_settings_modal_validation_capital(db_conn):
         in mock_interaction.response.send_message.call_args[1]["embed"].description
     )
 
-    # 2. 測試輸入小於等於 0
+    # 2. 測試輸入小於 0
     modal.input_field._value = "-100"
     mock_interaction = AsyncMock()
     mock_interaction.response.send_message = AsyncMock()
     await modal.on_submit(mock_interaction)
     mock_interaction.response.send_message.assert_called_once()
     assert (
-        "必須大於 0"
+        "金額不能為負數"
         in mock_interaction.response.send_message.call_args[1]["embed"].description
     )
 
@@ -199,25 +199,56 @@ async def test_settings_modal_successful_submission(db_conn):
     view = AccountSettingsView(user_id)
     modal = AccountSettingsModal(
         user_id=user_id,
-        key="capital",
-        label="💰 總資金",
-        current_value=100000.0,
-        placeholder="輸入大於 0 的數字",
+        key="risk_limit",
+        label="🛡️ 基準風險上限 %",
+        current_value=15.0,
+        placeholder="輸入 1.0 - 50.0 之間的數值",
         view=view,
     )
 
-    modal.input_field._value = "250000.00"
+    modal.input_field._value = "25.0"
     mock_interaction = AsyncMock()
     mock_interaction.response.edit_message = AsyncMock()
 
     await modal.on_submit(mock_interaction)
 
-    # 驗證資料庫已成功儲存 250000.0
+    # 驗證資料庫已成功儲存 25.0
     ctx = database.get_full_user_context(user_id)
-    assert ctx.capital == 250000.0
+    assert ctx.risk_limit == 25.0
 
-    # 驗證 edit_message 中有傳入更新後的 embed，其內容包含新設定的總資金
+    # 驗證 edit_message 中有傳入更新後的 embed，其內容包含新設定的風險限制
     mock_interaction.response.edit_message.assert_called_once()
     call_kwargs = mock_interaction.response.edit_message.call_args[1]
     embed_sent = call_kwargs["embed"]
-    assert "$250,000.00" in embed_sent.fields[0].value
+    assert "25.0%" in embed_sent.fields[0].value
+
+
+@pytest.mark.asyncio
+async def test_settings_capital_auto_calculation(db_conn):
+    """測試總資金自動計算：加總持倉 (HOLDING)、期權 (TRADE) 與現金儲備 (cash_reserve)"""
+    user_id = 999111
+
+    # 1. 設置現金儲備
+    database.upsert_user_config(user_id, cash_reserve=5000.0)
+
+    # 2. 寫入持倉 (HOLDING) 資訊到 assets 表
+    from database.holdings import add_holding
+
+    add_holding(user_id, symbol="AAPL", quantity=10, avg_cost=150.0)  # Value: 1500.0
+
+    # 3. 寫入期權 (TRADE) 資訊到 assets 表
+    from database.portfolio import add_portfolio_record
+
+    add_portfolio_record(
+        user_id=user_id,
+        symbol="AAPL",
+        opt_type="CALL",
+        strike=160.0,
+        expiry="2026-07-17",
+        entry_price=2.5,
+        quantity=2,  # Value: 2.5 * 2 * 100 = 500.0
+    )
+
+    # 驗證自動計算的總資金：5000.0 (cash) + 1500.0 (holding) + 500.0 (option) = 7000.0
+    ctx = database.get_full_user_context(user_id)
+    assert ctx.capital == 7000.0

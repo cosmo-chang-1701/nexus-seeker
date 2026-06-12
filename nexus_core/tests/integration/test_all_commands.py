@@ -30,9 +30,7 @@ async def test_all_commands_structure(mock_interaction, db_conn, mock_bot):
     unified = UnifiedTerminalCog(mock_bot)
 
     # --- Terminal Commands ---
-    await terminal.update_settings.callback(
-        terminal, mock_interaction, capital=150000.0
-    )
+    await terminal.update_settings.callback(terminal, mock_interaction, risk_limit=25.0)
     assert (
         "帳戶設定已更新"
         in mock_interaction.followup.send.call_args.kwargs["embed"].description

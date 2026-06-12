@@ -129,19 +129,65 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:
         return False
 
 
-def get_user_capital(user_id: int) -> float:
-    """取得使用者設定的總資金，若未設定則預設為 100000"""
+def calculate_auto_capital(user_id: int, conn: sqlite3.Connection = None) -> float:
+    """
+    自動計算總資金：加總持倉 (HOLDING)、期權 (TRADE) 與現金儲備 (cash_reserve)
+    持倉價值 = avg_cost * quantity
+    期權價值 = entry_price * quantity * 100
+    現金儲備 = cash_reserve
+    """
+    should_close = False
+    if conn is None:
+        conn = sqlite3.connect(config.DB_NAME)
+        should_close = True
     try:
-        with sqlite3.connect(config.DB_NAME) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT capital FROM user_settings WHERE user_id = ?", (user_id,)
-            )
-            row = cursor.fetchone()
-            return float(row[0]) if row and row[0] is not None else 100000.0
-    except Exception as e:
-        logger.error(f"無法讀取使用者 {user_id} 的資金: {e}")
-        return 100000.0
+        cursor = conn.cursor()
+        # 1. 取得現金儲備
+        cursor.execute(
+            "SELECT cash_reserve FROM user_settings WHERE user_id = ?", (user_id,)
+        )
+        row = cursor.fetchone()
+        cash_reserve = float(row[0]) if row and row[0] is not None else 0.0
+
+        # 2. 取得 HOLDING 和 TRADE 的 metadata
+        cursor.execute(
+            "SELECT context_type, metadata FROM assets WHERE user_id = ? AND context_type IN ('HOLDING', 'TRADE')",
+            (user_id,),
+        )
+        rows = cursor.fetchall()
+
+        holdings_value = 0.0
+        options_value = 0.0
+
+        import json
+
+        for ctx_type, metadata_json in rows:
+            if not metadata_json:
+                continue
+            try:
+                meta = json.loads(metadata_json)
+                qty = float(meta.get("quantity", 0.0))
+                if ctx_type == "HOLDING":
+                    avg_cost = float(meta.get("avg_cost", 0.0))
+                    holdings_value += qty * avg_cost
+                elif ctx_type == "TRADE":
+                    entry_price = float(meta.get("entry_price", 0.0))
+                    options_value += qty * entry_price * 100.0
+            except Exception as ex:
+                logger.error(f"解析 asset metadata 失敗: {ex}")
+
+        total_val = holdings_value + options_value + cash_reserve
+        if total_val == 0.0:
+            return 100000.0
+        return max(total_val, 1.0)
+    finally:
+        if should_close:
+            conn.close()
+
+
+def get_user_capital(user_id: int) -> float:
+    """取得自動計算的總資金：加總持倉 (HOLDING)、期權 (TRADE) 與現金儲備 (cash_reserve)"""
+    return calculate_auto_capital(user_id)
 
 
 def get_user_risk_limit(user_id: int) -> float:
@@ -227,7 +273,8 @@ def get_full_user_context(user_id: int) -> UserContext:
             user_row = cursor.fetchone()
 
             if not user_row:
-                return UserContext(user_id, 100000.0, 15.0, 0.0, 0.0, 0.0, 0.0)
+                capital = calculate_auto_capital(user_id, conn)
+                return UserContext(user_id, capital, 15.0, 0.0, 0.0, 0.0, 0.0)
 
             # 提取 Greeks (Annual from DB -> Daily for Context)
             # COALESCE ensures we don't get None here even if the JOIN failed to find trades
@@ -245,12 +292,7 @@ def get_full_user_context(user_id: int) -> UserContext:
             )
 
             # 處理基本設定與空值
-            capital_raw = (
-                float(user_row["capital"])
-                if user_row["capital"] is not None
-                else 100000.0
-            )
-            capital = max(capital_raw, 1.0)
+            capital = calculate_auto_capital(user_id, conn)
             risk_limit = (
                 float(user_row["risk_limit"])
                 if user_row["risk_limit"] is not None

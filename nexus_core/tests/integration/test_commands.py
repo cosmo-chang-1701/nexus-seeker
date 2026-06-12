@@ -16,19 +16,17 @@ async def test_command_settings(mock_interaction, db_conn):
 
     # Execute /settings command using .callback
     await cog.update_settings.callback(
-        cog, mock_interaction, capital=100000.0, risk_limit=15.0, enable_vtr=True
+        cog, mock_interaction, risk_limit=15.0, enable_vtr=True
     )
 
     # Verify response
     mock_interaction.followup.send.assert_called_once()
     args, kwargs = mock_interaction.followup.send.call_args
     assert "帳戶設定已更新" in kwargs["embed"].description
-    assert "💰 總資金: `$100,000.00`" in kwargs["embed"].description
     assert "🛡️ 風險限制: `15.0%`" in kwargs["embed"].description
 
     # Verify database update
     context = get_full_user_context(mock_interaction.user.id)
-    assert context.capital == 100000.0
     assert context.risk_limit == 15.0
     assert context.enable_vtr is True
 

@@ -98,14 +98,12 @@ class TerminalCog(commands.Cog):
         db_updates = {}
 
         if capital is not None:
-            if capital > 0:
-                db_updates["capital"] = capital
-                updates.append(f"💰 總資金: `${capital:,.2f}`")
-            else:
-                return await interaction.followup.send(
-                    embed=create_error_embed("資金必須大於 0", title="系統錯誤"),
-                    ephemeral=True,
-                )
+            return await interaction.followup.send(
+                embed=create_error_embed(
+                    "總資金已改為自動計算，無法手動配置。", title="系統錯誤"
+                ),
+                ephemeral=True,
+            )
 
         if risk_limit is not None:
             if 1.0 <= risk_limit <= 50.0:
@@ -1737,7 +1735,6 @@ class NotificationSettingsView(discord.ui.View):
 # ============================================================================
 
 SETTINGS_LABELS = {
-    "capital": ("💰 總資金", "更新帳戶總資金 (USD)", "輸入資金數字，必須大於 0"),
     "risk_limit": (
         "🛡️ 基準風險上限 %",
         "更新基準風險上限 % (1.0 - 50.0)",
@@ -1815,14 +1812,7 @@ class AccountSettingsModal(discord.ui.Modal):
             return
 
         # 數值邊界驗證與防錯
-        if self.key == "capital":
-            if val <= 0:
-                await interaction.response.send_message(
-                    embed=create_error_embed("總資金必須大於 0", title="驗證失敗"),
-                    ephemeral=True,
-                )
-                return
-        elif self.key == "risk_limit":
+        if self.key == "risk_limit":
             if not (1.0 <= val <= 50.0):
                 await interaction.response.send_message(
                     embed=create_error_embed(
@@ -1981,7 +1971,7 @@ class AccountSettingsView(discord.ui.View):
 
         # 分類展示當前設定
         basic_settings = [
-            f"💰 **總資金**: `${ctx.capital:,.2f}`",
+            f"💰 **總資金**: `${ctx.capital:,.2f}` *(自動計算)*",
             f"🛡️ **基準風險上限**: `{ctx.risk_limit}%`",
             f"👻 **虛擬交易室 (VTR) 跟單**: `{'🟢 開啟' if ctx.enable_vtr else '🔴 關閉'}`",
             f"⚡ **PowerSqueeze 追蹤**: `{'🟢 開啟' if ctx.enable_psq_watchlist else '🔴 關閉'}`",
