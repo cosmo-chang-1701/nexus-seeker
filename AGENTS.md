@@ -248,6 +248,13 @@ The platform implements an advanced macro risk-control layer that dynamically ad
   - Filters option chains for: DTE 30-50 days, Strike > `New Cost Basis`, Delta < 0.15, and annualized yield >= 10.0% (or single premium >= 1.0% of spot).
   - Utilizes 30-day Historical Volatility (HV) or last closing IV as fallback pricing inputs if live option chains are unavailable.
 
+### 5. Manual Macro Update Controls (Added in v1.7.3)
+- **Discord Slash Command**: Administrators can manually update GEX and FedWatch data via `/force_macro_update` in Discord.
+- **CLI Command**: Developers or scripts can manually trigger macro crawlers via:
+  ```bash
+  python cli.py admin force-macro-update
+  ```
+
 ---
 
 ## Analyst Agent Reporting
