@@ -433,5 +433,37 @@ def force_scan(ctx):
     run_async(_run())
 
 
+@admin_group.command(name="force-macro-update")
+@click.pass_context
+def force_macro_update(ctx):
+    """立即執行大盤與總經數據 (GEX & FedWatch) 爬取與快取更新"""
+
+    async def _run():
+        from market_analysis.index_microstructure import fetch_gex_metrics
+        from services.calendar_service import calendar_service
+
+        rprint("[bold yellow]🚀 開始手動觸發大盤總經爬蟲...[/bold yellow]")
+
+        # 1. GEX
+        rprint("正在向 edge scraper 請求 GEX 數據...")
+        try:
+            gex_data = await fetch_gex_metrics()
+            rprint(
+                f"[bold green]✅ GEX 數據更新完成。[/bold green] (SPY: {gex_data.get('spy_spot')}, Flip: {gex_data.get('gamma_flip')})"
+            )
+        except Exception as e:
+            rprint(f"[bold red]❌ GEX 數據更新失敗: {e}[/bold red]")
+
+        # 2. FedWatch
+        rprint("正在向 edge scraper 請求 FedWatch 機率...")
+        try:
+            await calendar_service.update_fedwatch_probability()
+            rprint("[bold green]✅ FedWatch 機率更新完成。[/bold green]")
+        except Exception as e:
+            rprint(f"[bold red]❌ FedWatch 機率更新失敗: {e}[/bold red]")
+
+    run_async(_run())
+
+
 if __name__ == "__main__":
     cli()
