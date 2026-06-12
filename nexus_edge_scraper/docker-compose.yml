@@ -1,6 +1,6 @@
 services:
   # 服務 1：FastAPI 爬蟲微服務
-  nexus-seeker:
+  nexus-edge-api:
     build: .
     container_name: nexus-seeker-edge-api
     ports:
@@ -18,4 +18,4 @@ services:
       - TUNNEL_TOKEN=${CF_TUNNEL_TOKEN}
     command: tunnel run
     depends_on:
-      - nexus-seeker
+      - nexus-edge-api
