@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nexus-core"
-version = "1.7.1"
+version = "1.7.2"
 description = "Nexus Seeker Core Bot and Market Analysis"
 requires-python = ">=3.10"
 dependencies = [
