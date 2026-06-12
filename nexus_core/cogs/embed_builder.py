@@ -1443,16 +1443,19 @@ def create_fomc_escape_window_embed(
     adjusted_start: str,
     adjusted_end: str,
     reason: str,
+    is_fallback: bool = False,
 ) -> discord.Embed:
     """建立方案 C 逃頂窗口推演 Embed (繁體中文)"""
     color = discord.Color.red() if direction == "後推" else discord.Color.green()
-    embed = NexusEmbed(
-        title="📅 方案 C 逃頂窗口推演 (FOMC / FedWatch 宏觀警報)", color=color
-    )
+    title_text = "📅 方案 C 逃頂窗口推演 (FOMC / FedWatch 宏觀警報)"
+    if is_fallback:
+        title_text += " [歷史快取/備援]"
+    embed = NexusEmbed(title=title_text, color=color)
 
+    prob_suffix = " *(歷史快取/備援)*" if is_fallback else ""
     embed.add_field(
         name="📊 利率機率定價 (FedWatch)",
-        value=f"下週 FOMC 維持高利率/加息機率：**{prob * 100:.1f}%**",
+        value=f"下週 FOMC 維持高利率/加息機率：**{prob * 100:.1f}%**{prob_suffix}",
         inline=False,
     )
 
@@ -5997,10 +6000,21 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
     rrp_change_30d = macro_data.get("rrp_change_30d") or 0.0
 
     # 狀態標記
-    short_gamma_status = (
-        "\u001b[1;31m🚨 CRITICAL (網格步長 1.5x 已生效)\u001b[0m"
+    gex_is_fallback = macro_data.get("gex_is_fallback", False)
+    gex_suffix = " \u001b[1;33m[備援/快取]\u001b[0m" if gex_is_fallback else ""
+
+    short_gamma_desc = (
+        "🚨 CRITICAL (網格步長 1.5x 已生效)"
         if macro_data.get("short_gamma_critical", False)
-        else "\u001b[1;32m🟢 NORMAL (網格步長正常)\u001b[0m"
+        else "🟢 NORMAL (網格步長正常)"
+    )
+    if gex_is_fallback:
+        short_gamma_desc += " [備援估算]"
+
+    short_gamma_status = (
+        f"\u001b[1;31m{short_gamma_desc}\u001b[0m"
+        if macro_data.get("short_gamma_critical", False)
+        else f"\u001b[1;32m{short_gamma_desc}\u001b[0m"
     )
     recession_status = (
         "\u001b[1;31m🚨 WARNING (CC 開倉阻斷已生效)\u001b[0m"
@@ -6015,7 +6029,7 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
         f" ├─ S&P 500 Index (SPX): \u001b[1;32m{spx:,.2f}\u001b[0m",
         f" ├─ 恐慌指數 (VIX): \u001b[1;33m{vix:.2f}\u001b[0m",
         f" ├─ 10年期美債收益率 (US10Y): \u001b[1;36m{us10y:.2f}%\u001b[0m",
-        f" └─ 零 Gamma 翻轉線 (GEX Flip): \u001b[1;35m{gamma_flip:,.2f}\u001b[0m",
+        f" └─ 零 Gamma 翻轉線 (GEX Flip): \u001b[1;35m{gamma_flip:,.2f}\u001b[0m{gex_suffix}",
     ]
     core_panel = "```ansi\n" + "\n".join(core_lines) + "\n```"
 

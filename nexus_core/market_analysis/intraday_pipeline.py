@@ -604,8 +604,14 @@ async def evaluate_watchlist_symbol(
 
         regime = await get_market_regime()
         if regime == "SHORT_GAMMA_CRITICAL":
+            from database.cache import get_kv_cache
+
+            gex_fb = get_kv_cache("macro_gex_is_fallback")
+            is_fb = gex_fb is None or int(gex_fb) == 1
+            fb_tag = " [備援估算]" if is_fb else ""
+
             tactical.dynamic_grid_step = round(tactical.dynamic_grid_step * 1.5, 2)
-            tactical.action_guideline += " (⚠️ 偵測到大盤進入 SHORT_GAMMA_CRITICAL 極端踩踏恐慌軌道，個股網格單觸發間距已自動放大 1.5 倍以防禦資金被過早抽乾。)"
+            tactical.action_guideline += f" (⚠️ 偵測到大盤進入 SHORT_GAMMA_CRITICAL 極端踩踏恐慌軌道{fb_tag}，個股網格單觸發間距已自動放大 1.5 倍以防禦資金被過早抽乾。)"
     except Exception as e:
         logger.warning(f"評估市場 Regime 時發生錯誤: {e}")
 

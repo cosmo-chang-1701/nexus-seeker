@@ -1161,7 +1161,14 @@ class AnalystAgent(commands.Cog):
 
         # 1. 取得 FedWatch 概率
         prob = 0.72  # 預設值
+        is_fallback = False
         try:
+            from database.cache import get_kv_cache
+
+            fedwatch_fallback_val = get_kv_cache("macro_fedwatch_is_fallback")
+            if fedwatch_fallback_val is None or int(fedwatch_fallback_val) == 1:
+                is_fallback = True
+
             with sqlite3.connect(config.DB_NAME) as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
@@ -1177,8 +1184,11 @@ class AnalystAgent(commands.Cog):
                 row = cursor.fetchone()
                 if row and row["fedwatch_probability"] is not None:
                     prob = row["fedwatch_probability"]
+                else:
+                    is_fallback = True
         except Exception as e:
             logger.warning(f"查詢 SQLite FOMC FedWatch 概率失敗: {e}")
+            is_fallback = True
 
         # 2. 載入使用者自訂的逃頂窗口區間 (MM-DD 格式，例如 07-15, 07-31)
         from database.user_settings import get_full_user_context
@@ -1267,6 +1277,7 @@ class AnalystAgent(commands.Cog):
             adjusted_start=adjusted_start,
             adjusted_end=adjusted_end,
             reason=reason,
+            is_fallback=is_fallback,
         )
 
     async def gather_sector_rotation_data(self):

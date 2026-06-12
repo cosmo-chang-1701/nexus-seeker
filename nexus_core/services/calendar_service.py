@@ -397,9 +397,11 @@ class CalendarService:
         import httpx
         import sqlite3
         import config
+        from database.cache import save_kv_cache
 
         if not getattr(config, "TUNNEL_URL", ""):
             logger.info("未配置 TUNNEL_URL，跳過 FedWatch 爬取。")
+            save_kv_cache("macro_fedwatch_is_fallback", 1)
             return
 
         try:
@@ -423,8 +425,12 @@ class CalendarService:
                         logger.info(
                             f"成功更新 CME FedWatch FOMC 利率維持/加息機率: {prob * 100:.1f}%"
                         )
+                        save_kv_cache("macro_fedwatch_is_fallback", 0)
+                        return
         except Exception as e:
             logger.error(f"更新 FedWatch 概率失敗: {e}")
+
+        save_kv_cache("macro_fedwatch_is_fallback", 1)
 
 
 # Singleton instance
