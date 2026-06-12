@@ -2632,6 +2632,10 @@ def create_strategic_dash_embed(
     else:
         runway_days = f"{cash_reserve / gap:,.0f}" if gap > 0 else "∞"
 
+    from market_analysis.trading_orchestration import get_safety_payout_threshold
+
+    payout_threshold = get_safety_payout_threshold()
+
     status_mode = "觀戰模式" if not user_ctx.is_professional_mode else "實戰模式"
     nav = _safe_float(user_ctx.capital) + pnl_data.get("total_unrealized_pnl", 0.0)
 
@@ -2639,6 +2643,7 @@ def create_strategic_dash_embed(
         f"* **總資產 (NAV):** `${nav:,.0f}` ({status_mode})\n"
         f"* **目前跑道:** {runway_days} 天 (由現有現金與 Theta 收益推算)\n"
         f"* **收租效率:** 每日 Theta `${daily_theta:,.2f}` (覆蓋率 {coverage_pct:.1f}%)\n"
+        f"* **安全提領紅線:** `${payout_threshold:,.0f}` (流動性防守限制)\n"
     )
     if coverage_pct < 100 and daily_expense > 0:
         runway_info += f"> 💡 警訊：現金流覆蓋不足，每日收租缺口為 `${gap:,.2f}`。"
@@ -5946,4 +5951,109 @@ def build_radar_scan_embed(
             inline=False,
         )
 
+    return embed
+
+
+def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
+    """
+    建立美股總體經濟與大盤風險防禦指標 (Macro & Risk Dashboard) Embed。
+    採用繁體中文與 ANSI 雙色調 Panel 格式進行呈現。
+    """
+    import discord
+    from datetime import datetime, timezone
+
+    # 1. 依據 RAM 水位判定是否觸發降級
+    is_degraded = macro_data.get("is_degraded", False)
+
+    # 決定顏色
+    color = discord.Color.green()
+    if macro_data.get("recession_warning", False) or macro_data.get(
+        "short_gamma_critical", False
+    ):
+        color = discord.Color.red()
+    elif is_degraded:
+        color = discord.Color.orange()
+
+    embed = discord.Embed(
+        title="🌌 全局宏觀風控情報中心 (Macro Risk Control Hub)",
+        description="本面板整合全套美股總量指標、薩姆衰退防衛線與系統級流動性壓力測試紅線，為高安全邊際期權賣方提供核心營運決策指引。\n\u200b",
+        color=color,
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    # 2. 格式化數值
+    spx = macro_data.get("spx") or 0.0
+    vix = macro_data.get("vix") or 0.0
+    us10y = macro_data.get("us10y") or 0.0
+    gamma_flip = macro_data.get("gamma_flip_line") or 0.0
+    wti = macro_data.get("wti") or 0.0
+    rrp = macro_data.get("rrp") or 0.0
+    fed_balance = macro_data.get("fed_balance") or 0.0
+    cpi_nfp_calendar = macro_data.get("cpi_nfp_calendar") or "暫無數據"
+    fear_greed = macro_data.get("fear_greed") or 50.0
+    uer = macro_data.get("uer") or 0.0
+    sahm_rule = macro_data.get("sahm_rule") or 0.0
+    payout_threshold = macro_data.get("payout_threshold") or 13000.0
+    rrp_change_30d = macro_data.get("rrp_change_30d") or 0.0
+
+    # 狀態標記
+    short_gamma_status = (
+        "\u001b[1;31m🚨 CRITICAL (網格步長 1.5x 已生效)\u001b[0m"
+        if macro_data.get("short_gamma_critical", False)
+        else "\u001b[1;32m🟢 NORMAL (網格步長正常)\u001b[0m"
+    )
+    recession_status = (
+        "\u001b[1;31m🚨 WARNING (CC 開倉阻斷已生效)\u001b[0m"
+        if macro_data.get("recession_warning", False)
+        else "\u001b[1;32m🟢 NORMAL (CC 開倉正常)\u001b[0m"
+    )
+
+    # 3. 建立 ANSI 面板內容
+    core_lines = [
+        " 📊 大盤與核心指標 (Market & Core Indices)",
+        " ----------------------------------",
+        f" ├─ S&P 500 Index (SPX): \u001b[1;32m{spx:,.2f}\u001b[0m",
+        f" ├─ 恐慌指數 (VIX): \u001b[1;33m{vix:.2f}\u001b[0m",
+        f" ├─ 10年期美債收益率 (US10Y): \u001b[1;36m{us10y:.2f}%\u001b[0m",
+        f" └─ 零 Gamma 翻轉線 (GEX Flip): \u001b[1;35m{gamma_flip:,.2f}\u001b[0m",
+    ]
+    core_panel = "```ansi\n" + "\n".join(core_lines) + "\n```"
+
+    risk_lines = [
+        " 🛡️ 聯動風控引擎狀態 (Risk Engine Status)",
+        " ----------------------------------",
+        f" ├─ 零 Gamma 踩踏: {short_gamma_status}",
+        f" ├─ 經濟衰退警告: {recession_status}",
+        f" └─ 安全提領紅線: \u001b[1;31m${payout_threshold:,.0f}\u001b[0m",
+    ]
+    risk_panel = "```ansi\n" + "\n".join(risk_lines) + "\n```"
+
+    macro_lines = [
+        " 📈 流動性與總經指標 (Liquidity & Macro)",
+        " ----------------------------------",
+        f" ├─ WTI 原油價格: \u001b[1;33m${wti:.2f}\u001b[0m",
+        f" ├─ 聯準會逆回購 (RRP): \u001b[1;36m${rrp:,.1f}B\u001b[0m (30天變動: \u001b[1;35m{rrp_change_30d:+.1f}%\u001b[0m)",
+        f" ├─ 聯準會資產負債表: \u001b[1;32m${fed_balance:.2f}T\u001b[0m",
+        f" ├─ CNN 恐懼與貪婪指數: \u001b[1;36m{fear_greed:.1f}\u001b[0m",
+        f" └─ 美國失業率 (UER): \u001b[1;33m{uer:.1f}%\u001b[0m (薩姆規則值: \u001b[1;31m{sahm_rule:.2f}\u001b[0m)",
+    ]
+    macro_panel = "```ansi\n" + "\n".join(macro_lines) + "\n```"
+
+    calendar_panel = f"```\n 📅 總經公布日程 (CPI / NFP Schedule)\n ----------------------------------\n └─ {cpi_nfp_calendar}\n```"
+
+    # 4. 加入 Fields 到 Embed
+    embed.add_field(name="🏁 核心大盤與收益指標", value=core_panel, inline=False)
+    embed.add_field(name="🛡️ 聯動風控引擎狀態", value=risk_panel, inline=False)
+    embed.add_field(name="📈 總經與系統流動性指標", value=macro_panel, inline=False)
+    embed.add_field(name="🗓️ 總經事件公布日程", value=calendar_panel, inline=False)
+
+    # 如果有降級警告，加入說明
+    if is_degraded:
+        embed.add_field(
+            name="⚠️ 系統降級警告",
+            value="**[警告] 偵測到系統記憶體負載 > 85%，已自動啟用 LRU 降級保護機制，簡化部分動態計算以確保系統穩定。**",
+            inline=False,
+        )
+
+    embed.set_footer(text="Nexus Risk Engine | 總經大盤全局防禦系統")
     return embed

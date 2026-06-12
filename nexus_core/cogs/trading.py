@@ -439,7 +439,34 @@ class SchedulerCog(commands.Cog):
         if not market_time.is_market_open():
             return
 
-        logger.info("🕒 [盤中掃描] 美股交易時段內，啟動動態雷達...")
+        logger.info("🕒 [盤中掃描] 美股交易時段內，啟動動態雷達並更新大盤總經快取...")
+
+        # 1. 抓取 SPX, VIX, US10Y 數據並存入 SQLite
+        try:
+            spx_q, vix_q, tnx_q = await asyncio.gather(
+                get_quote("^SPX"),
+                get_quote("^VIX"),
+                get_quote("^TNX"),
+                return_exceptions=True,
+            )
+
+            spx_val = spx_q.get("c", 0.0) if isinstance(spx_q, dict) else 0.0
+            vix_val = vix_q.get("c", 0.0) if isinstance(vix_q, dict) else 0.0
+            tnx_val = tnx_q.get("c", 0.0) if isinstance(tnx_q, dict) else 0.0
+
+            if spx_val > 0.0:
+                database.save_kv_cache("macro_spx", spx_val)
+            if vix_val > 0.0:
+                database.save_kv_cache("macro_vix", vix_val)
+            if tnx_val > 0.0:
+                database.save_kv_cache("macro_us10y", tnx_val)
+
+            logger.info(
+                f"🕒 [盤中總經快取更新完成] SPX: {spx_val}, VIX: {vix_val}, US10Y: {tnx_val}"
+            )
+        except Exception as e:
+            logger.error(f"🕒 [盤中總經快取更新失敗]: {e}")
+
         all_watchlists = database.get_all_watchlist()
         await self._dispatch_watchlist_heartbeat(all_watchlists)
         await self._run_market_scan_logic(is_auto=True)

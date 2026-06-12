@@ -45,6 +45,7 @@ from .virtual_trading import (
     update_virtual_trade_greeks,
 )
 from .financials import get_cached_financials, save_financials_cache, purge_old_cache
+from .cache import save_kv_cache, get_kv_cache
 from .orders import (
     add_active_order,
     get_user_active_orders,
@@ -117,4 +118,6 @@ __all__ = [
     "save_market_cache",
     "get_market_cache",
     "mark_market_cache_stale",
+    "save_kv_cache",
+    "get_kv_cache",
 ]

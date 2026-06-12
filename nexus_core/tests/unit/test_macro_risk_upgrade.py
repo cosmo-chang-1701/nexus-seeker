@@ -222,3 +222,87 @@ async def test_recommend_covered_calls_filtering():
             assert len(recs) == 1
             assert recs[0]["strike"] == 170.0
             assert recs[0]["annualized_yield"] >= 10.0
+
+
+def test_is_covered_call_unlock_allowed_logic():
+    from market_analysis.trading_orchestration import is_covered_call_unlock_allowed
+
+    with patch("database.get_kv_cache") as mock_kv:
+        # Case 1: Normal
+        mock_kv.side_effect = lambda key: {
+            "macro_uer": 4.0,
+            "macro_sahm_rule": 0.35,
+            "macro_us10y": 4.25,
+            "macro_vix": 18.0,
+        }.get(key)
+        assert is_covered_call_unlock_allowed() is True
+
+        # Case 2: Sahm Rule triggered (recession warning)
+        mock_kv.side_effect = lambda key: {
+            "macro_uer": 4.0,
+            "macro_sahm_rule": 0.55,
+            "macro_us10y": 4.25,
+            "macro_vix": 18.0,
+        }.get(key)
+        assert is_covered_call_unlock_allowed() is False
+
+        # Case 3: Yield > 4.5% and VIX > 20 (recession warning)
+        mock_kv.side_effect = lambda key: {
+            "macro_uer": 4.0,
+            "macro_sahm_rule": 0.35,
+            "macro_us10y": 4.65,
+            "macro_vix": 22.0,
+        }.get(key)
+        assert is_covered_call_unlock_allowed() is False
+
+
+def test_safety_payout_threshold_logic():
+    from market_analysis.trading_orchestration import get_safety_payout_threshold
+
+    with patch("database.get_kv_cache") as mock_kv:
+        # Case 1: Normal
+        mock_kv.side_effect = lambda key: {
+            "macro_rrp_change_30d": 0.05,
+            "macro_rrp_spike": False,
+        }.get(key)
+        assert get_safety_payout_threshold() == 13000.0
+
+        # Case 2: RRP increase > 20%
+        mock_kv.side_effect = lambda key: {
+            "macro_rrp_change_30d": 0.25,
+            "macro_rrp_spike": False,
+        }.get(key)
+        assert get_safety_payout_threshold() == 10000.0
+
+        # Case 3: RRP Spike
+        mock_kv.side_effect = lambda key: {
+            "macro_rrp_change_30d": 0.05,
+            "macro_rrp_spike": True,
+        }.get(key)
+        assert get_safety_payout_threshold() == 10000.0
+
+
+def test_get_macro_overview_data_logic():
+    from cogs.unified_terminal import get_macro_overview_data
+
+    with patch("psutil.virtual_memory") as mock_mem, patch(
+        "database.get_kv_cache"
+    ) as mock_kv:
+        # Case 1: RAM normal
+        mock_mem.return_value.percent = 70.0
+        mock_kv.side_effect = lambda key: {
+            "macro_spx": 5150.0,
+            "macro_vix": 18.0,
+            "macro_us10y": 4.25,
+            "macro_gamma_flip_line": 5180.0,
+        }.get(key)
+
+        data = get_macro_overview_data(1)
+        assert data["is_degraded"] is False
+        assert data["spx"] == 5150.0
+        assert data["short_gamma_critical"] is False
+
+        # Case 2: RAM high (>85%) -> Degraded mode
+        mock_mem.return_value.percent = 90.0
+        data_degraded = get_macro_overview_data(1)
+        assert data_degraded["is_degraded"] is True
