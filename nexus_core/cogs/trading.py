@@ -560,6 +560,64 @@ class SchedulerCog(commands.Cog):
             ephemeral=True,
         )
 
+    @app_commands.command(
+        name="force_macro_update",
+        description="[Admin] 立即手動更新大盤總經數據 (GEX & FedWatch)",
+    )
+    async def force_macro_update(self, interaction: discord.Interaction):
+        if interaction.user.id != DISCORD_ADMIN_USER_ID:
+            await interaction.response.send_message(
+                embed=create_error_embed(
+                    "權限不足：此指令僅限管理員使用。", title="權限錯誤"
+                ),
+                ephemeral=True,
+            )
+            logger.warning(
+                f"Unauthorized force_macro_update attempt by {interaction.user.name} ({interaction.user.id})"
+            )
+            return
+
+        logger.info(
+            f"Admin {interaction.user.name} ({interaction.user.id}) triggered force_macro_update"
+        )
+        await interaction.response.defer(ephemeral=True)
+
+        from market_analysis.index_microstructure import fetch_gex_metrics
+        from services.calendar_service import calendar_service
+
+        errors = []
+        gex_info = ""
+
+        # 1. Update GEX
+        try:
+            gex_data = await fetch_gex_metrics()
+            gex_info = f"SPY: ${gex_data.get('spy_spot', 0.0):.2f} / Flip: {gex_data.get('gamma_flip', 0.0):.2f}"
+        except Exception as e:
+            errors.append(f"GEX 爬取失敗: {e}")
+
+        # 2. Update FedWatch
+        try:
+            await calendar_service.update_fedwatch_probability()
+        except Exception as e:
+            errors.append(f"FedWatch 更新失敗: {e}")
+
+        if errors:
+            err_msg = "\n".join(errors)
+            await interaction.followup.send(
+                embed=create_error_embed(
+                    f"⚠️ 部分大盤總經數據更新失敗：\n{err_msg}", title="更新部分失敗"
+                ),
+                ephemeral=True,
+            )
+        else:
+            await interaction.followup.send(
+                embed=create_info_embed(
+                    "系統控制",
+                    f"✅ 大盤與總經數據更新成功！\n- **GEX**: {gex_info}\n- **FedWatch**: 已寫入資料庫",
+                ),
+                ephemeral=True,
+            )
+
     async def _run_after_market_report_pipeline(
         self, dry_run: bool = False, triggered_by=None
     ):

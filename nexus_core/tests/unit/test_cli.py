@@ -136,3 +136,23 @@ def test_cli_watchlist_check():
         assert "AAPL | NASDAQ" in result.output
         assert "SHIELD (防禦網格 - 左側權利金收集)" in result.output
         assert "```ansi" in result.output
+
+
+def test_cli_force_macro_update():
+    """測試 force-macro-update 指令"""
+    with patch("database.init_db"), patch(
+        "market_analysis.index_microstructure.fetch_gex_metrics", new_callable=AsyncMock
+    ) as mock_fetch, patch(
+        "services.calendar_service.calendar_service.update_fedwatch_probability",
+        new_callable=AsyncMock,
+    ) as mock_update:
+        mock_fetch.return_value = {"spy_spot": 510.0, "gamma_flip": 515.0}
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["admin", "force-macro-update"])
+        assert result.exit_code == 0
+        assert "開始手動觸發大盤總經爬蟲" in result.output
+        assert "GEX 數據更新完成" in result.output
+        assert "FedWatch 機率更新完成" in result.output
+        mock_fetch.assert_called_once()
+        mock_update.assert_called_once()

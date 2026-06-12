@@ -146,6 +146,28 @@ async def test_all_commands_structure(mock_interaction, db_conn, mock_bot):
         assert mock_interaction.followup.send.called
     mock_interaction.followup.send.reset_mock()
 
+    # Test force_macro_update admin check failure
+    await trading.force_macro_update.callback(trading, mock_interaction)
+    assert mock_interaction.response.send_message.called
+    mock_interaction.response.send_message.reset_mock()
+
+    # Test force_macro_update success with admin permission
+    from config import DISCORD_ADMIN_USER_ID
+
+    mock_interaction.user.id = DISCORD_ADMIN_USER_ID
+    with patch(
+        "market_analysis.index_microstructure.fetch_gex_metrics", new_callable=AsyncMock
+    ) as m_gex, patch(
+        "services.calendar_service.calendar_service.update_fedwatch_probability",
+        new_callable=AsyncMock,
+    ) as m_fw:
+        m_gex.return_value = {"spy_spot": 510.0, "gamma_flip": 515.0}
+        await trading.force_macro_update.callback(trading, mock_interaction)
+        assert mock_interaction.followup.send.called
+        m_gex.assert_called_once()
+        m_fw.assert_called_once()
+    mock_interaction.followup.send.reset_mock()
+
 
 @pytest.mark.asyncio
 async def test_command_remove_watch(mock_interaction, db_conn, mock_bot):
