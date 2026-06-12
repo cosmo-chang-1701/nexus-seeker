@@ -19,7 +19,6 @@ from cogs.order_ui import (
     OrderUICog,
     CancelOrderModal,
     EditOrderModal,
-    OrderManagementView,
     OrderItemView,
     ApplyTelemetryView,
 )
@@ -381,7 +380,7 @@ async def test_orders_list_command(mock_interaction, db_conn):
 
     kwargs = mock_interaction.followup.send.call_args_list[0].kwargs
     embed = kwargs["embed"]
-    view = kwargs["view"]
+    view = kwargs.get("view")
 
     assert "待成交委託單列表" in embed.title
     assert "共" in (embed.description or "")
@@ -389,7 +388,7 @@ async def test_orders_list_command(mock_interaction, db_conn):
     assert "微調" in (embed.description or "")
 
     assert any("TSLA" in f.name or "TSLA" in f.value for f in embed.fields)
-    assert isinstance(view, OrderManagementView)
+    assert view is None
 
 
 @pytest.mark.asyncio
@@ -533,24 +532,106 @@ async def test_telemetry_alert_and_alignment(mock_interaction, db_conn):
 
 
 @pytest.mark.asyncio
-async def test_order_management_view_buttons(mock_interaction):
-    """測試訂單管理面板的按鈕交互 (取消與編輯委託單)"""
-    view = OrderManagementView()
+async def test_remove_order_command_with_id(mock_interaction, db_conn):
+    """測試 remove_order 傳入 ID 直接取消"""
+    user_id = mock_interaction.user.id
+    order_id = add_active_order(
+        user_id=user_id,
+        symbol="AAPL",
+        quantity=10,
+        order_type="LIMIT",
+        validity="DAY",
+        limit_price=150.0,
+    )
+    bot = MagicMock()
+    cog = OrderUICog(bot)
+    await cog.remove_order.callback(cog, mock_interaction, order_id=order_id)
 
-    # 測試點擊取消委託按鈕
-    await view.cancel_button.callback(mock_interaction)
+    assert mock_interaction.response.defer.called
+    assert mock_interaction.followup.send.called
+    embed = mock_interaction.followup.send.call_args[1]["embed"]
+    assert "取消委託成功" in embed.title
+
+    # 驗證資料庫已被刪除
+    orders = get_user_active_orders(user_id)
+    assert len(orders) == 0
+
+
+@pytest.mark.asyncio
+async def test_remove_order_command_no_id(mock_interaction):
+    """測試 remove_order 未傳入 ID 時喚起 Modal"""
+    bot = MagicMock()
+    cog = OrderUICog(bot)
+    await cog.remove_order.callback(cog, mock_interaction, order_id=None)
+
     assert mock_interaction.response.send_modal.called
-    modal_cancel = mock_interaction.response.send_modal.call_args[0][0]
-    assert isinstance(modal_cancel, CancelOrderModal)
+    modal = mock_interaction.response.send_modal.call_args[0][0]
+    assert isinstance(modal, CancelOrderModal)
 
-    # 重設 mock
-    mock_interaction.response.send_modal.reset_mock()
 
-    # 測試點擊編輯委託單按鈕
-    await view.adjust_button.callback(mock_interaction)
+@pytest.mark.asyncio
+async def test_edit_order_command_with_id_and_params(mock_interaction, db_conn):
+    """測試 edit_order 傳入 ID 與參數直接更新"""
+    user_id = mock_interaction.user.id
+    order_id = add_active_order(
+        user_id=user_id,
+        symbol="AAPL",
+        quantity=10,
+        order_type="LIMIT",
+        validity="DAY",
+        limit_price=150.0,
+    )
+    bot = MagicMock()
+    cog = OrderUICog(bot)
+    await cog.edit_order.callback(
+        cog, mock_interaction, order_id=order_id, price=145.5, side="SELL"
+    )
+
+    assert mock_interaction.response.defer.called
+    assert mock_interaction.followup.send.called
+    embed = mock_interaction.followup.send.call_args[1]["embed"]
+    assert "編輯委託單成功" in embed.title
+
+    orders = get_user_active_orders(user_id)
+    assert len(orders) == 1
+    assert orders[0]["limit_price"] == 145.5
+    assert orders[0]["side"] == "SELL"
+
+
+@pytest.mark.asyncio
+async def test_edit_order_command_no_id(mock_interaction):
+    """測試 edit_order 未傳入 ID 時喚起 Modal"""
+    bot = MagicMock()
+    cog = OrderUICog(bot)
+    await cog.edit_order.callback(cog, mock_interaction, order_id=None)
+
     assert mock_interaction.response.send_modal.called
-    modal_adjust = mock_interaction.response.send_modal.call_args[0][0]
-    assert isinstance(modal_adjust, EditOrderModal)
+    modal = mock_interaction.response.send_modal.call_args[0][0]
+    assert isinstance(modal, EditOrderModal)
+
+
+@pytest.mark.asyncio
+async def test_edit_order_command_id_only(mock_interaction, db_conn):
+    """測試 edit_order 僅傳入 ID 時喚起預填的 Modal"""
+    user_id = mock_interaction.user.id
+    order_id = add_active_order(
+        user_id=user_id,
+        symbol="AAPL",
+        quantity=10,
+        order_type="LIMIT",
+        validity="DAY",
+        limit_price=150.0,
+    )
+    bot = MagicMock()
+    cog = OrderUICog(bot)
+    await cog.edit_order.callback(
+        cog, mock_interaction, order_id=order_id, price=None, side=None
+    )
+
+    assert mock_interaction.response.send_modal.called
+    modal = mock_interaction.response.send_modal.call_args[0][0]
+    assert isinstance(modal, EditOrderModal)
+    assert modal.order_id.default == str(order_id)
 
 
 @pytest.mark.asyncio

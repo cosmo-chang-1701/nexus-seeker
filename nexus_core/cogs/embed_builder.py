@@ -5019,7 +5019,7 @@ def create_active_orders_embed(orders: List[Dict[str, Any]]) -> List[discord.Emb
         title="📋 Nexus Seeker | 待成交委託單列表",
         description=(
             f"共 `{len(orders)}` 筆待成交委託單。\n"
-            "點擊下方按鈕可進行撤銷或微調（系統會要求您輸入委託單 ID）。\n\u200b"
+            "請使用 `/remove_order` 或 `/edit_order` 指令來撤銷或微調委託單。\n\u200b"
         ),
         color=discord.Color.orange(),
         timestamp=datetime.now(timezone.utc),
