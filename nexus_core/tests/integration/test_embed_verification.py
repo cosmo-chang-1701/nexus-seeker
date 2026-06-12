@@ -89,20 +89,20 @@ async def test_split_discord_text_preserves_code_blocks():
 async def test_terminal_cog_uses_embeds(mock_interaction, bot):
     """測試 TerminalCog 的指令是否使用 Embed 輸出"""
     terminal = TerminalCog(bot)
-    await terminal.update_settings.callback(terminal, mock_interaction, capital=-100)
+    await terminal.update_settings.callback(terminal, mock_interaction, risk_limit=-100)
 
     assert mock_interaction.followup.send.called
     _, kwargs = mock_interaction.followup.send.call_args
     assert "embed" in kwargs
     assert kwargs["embed"].title == "❌ 系統錯誤"
-    assert "資金必須大於 0" in kwargs["embed"].description
+    assert "風險限制需介於 1.0% 至 50.0% 之間" in kwargs["embed"].description
 
 
 @pytest.mark.asyncio
 async def test_terminal_cog_success_embed(mock_interaction, bot, db_conn):
     """測試 TerminalCog 指令成功時是否也使用 Embed"""
     terminal = TerminalCog(bot)
-    await terminal.update_settings.callback(terminal, mock_interaction, capital=200000)
+    await terminal.update_settings.callback(terminal, mock_interaction, risk_limit=25.0)
 
     assert mock_interaction.followup.send.called
     _, kwargs = mock_interaction.followup.send.call_args
