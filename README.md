@@ -13,9 +13,18 @@ Nexus Seeker 是一個 **Discord-first 的選擇權風控與交易營運平台**
 ## 你會拿到什麼（核心價值）
 
 - **📡 Watchlist 半小時心跳（盤中）**：每 30 分鐘逐使用者、逐標的推送戰報（技術/波動率/偏斜/事件風控/持倉指引/可執行策略）。
-- **🛡️ 衍生流動性與極限壓力測試**：新增 `/stress_test` 指令，動態計算所有活躍 GTC 網格買單的最大現金赤字，對照 BOXX 清算極限（$21,000）與安全賠付閾值（$13,000）進行預警，並無縫整合至 `/dash` 看板中。
-- **📊 指數微觀結構與 Gamma 避險**：即時抓取大盤 GEX 零 Gamma 線（Gamma Flip Line），當 VIX > 20 且大盤跌破零 Gamma 線進入 `SHORT_GAMMA_CRITICAL` 狀態時，自動將網格間距放大 $1.5\times$，防止踩踏行情中資金過早耗盡。
-- **🔮 CME FedWatch 利率概率與逃頂窗口**：動態爬取 FedWatch 利率概率，並於盤前簡報中自動計算並依據使用者自訂的「反彈逃頂窗口」（支援動態判定上/中/下旬標籤）執行延後或提前（預設 5 個交易日），降低事件風控盲區。
+- **🛡️ 衍生流動性與極限壓力測試**：提供 `/stress_test` 指令，動態計算所有活躍 GTC 網格買單的最大現金赤字，對照 BOXX 清算極限（$21,000）與安全賠付閾值（$13,000）進行預警，並無縫整合至 `/dash` 看板中。
+- **📊 實時指數微觀結構與 Gamma 避險**：
+  - 邊緣服務會利用 Playwright 前往 Yahoo Finance 抓取實時 SPY 選擇權鏈（Option Chain）數據。
+  - **計算邏輯**：基於 **Black-Scholes 歐式期權 Gamma 計算公式**，動態計算各履約價的 GEX (Gamma Exposure)。
+  - **指標推導**：
+    - **Put Wall (最大賣權支持牆)**：取 Put 未平倉量 (OI) 最大之履約價。
+    - **Gamma Flip Line (零 Gamma 線)**：對現貨價格上下 20% 範圍進行網格搜索，找出總 Net GEX 改變正負號之臨界價格點。
+  - **風控聯動**：當 VIX > 20 且大盤跌破零 Gamma 線進入 `SHORT_GAMMA_CRITICAL` 狀態時，自動將網格間距放大 $1.5\times$，防止踩踏行情中資金過早耗盡。
+- **🔮 CME FedWatch 利率概率與逃頂窗口**：
+  - 邊緣服務透過 Playwright 強制使用 HTTP/1.1 繞過 Cloudflare WAF 協議保護，抓取 Investing.com 的 Fed Rate Monitor。
+  - **計算邏輯**：定位 `Meeting Time:` 錨點以精確隔離下一次 FOMC 會議的預估數據，讀取當前 Fed 基本利率後，將所有大於或等於維持利率區間的預估值加總，計算出「維持或加息機率」。
+  - **風控聯動**：於盤前簡報中自動依據此概率與通膨壓力，將使用者自訂的「反彈逃頂窗口」（支援動態判定上/中/下旬）自動前移或後推 5 個交易日，降低事件風控盲區。
 - **🔑 均價成本 Covered Call 解鎖**：自動依據「現有持倉加權活躍網格買單」重新計算新均價成本（New Cost Basis），並尋找 DTE 30-50 天、Strike > 新均價成本且 Delta < 0.15 的 Covered Call 合約進行收租解鎖（需滿足年化收益率 >= 10.0% 或單次收租權利金大於現貨 1.0%）。
 - **🧾 Strike 對齊的「可執行」期權策略**：策略建議會對齊系統計算的「適合買入/賣出價」，讓現股與選擇權計畫一致。
 - **📥 委託單面板 + 互動 Modal**：`/order_panel` 建單、`/list_orders` 管理、`/telemetry_alert` 模擬遙測偏離；並支援一鍵套用遙測建議價與安全倉位。
@@ -29,7 +38,7 @@ Nexus Seeker 是一個 **Discord-first 的選擇權風控與交易營運平台**
 ## 服務與架構（兩個服務，職責分離）
 
 - **`nexus_core/`**：主 Discord bot（slash commands、排程、量化引擎、推播、SQLite、Embed 產出）
-- **`nexus_edge_scraper/`（可選）**：FastAPI + Playwright 邊緣服務（主要用於 Reddit 抓取，避免把爬蟲壓力放進 bot runtime）
+- **`nexus_edge_scraper/`**：FastAPI + Playwright 邊緣服務，專責 Reddit 社群輿情爬取、SPY 選擇權鏈抓取與 GEX 演算，以及 Investing.com 的 CME FedWatch 利率機率解析，將耗能的網頁渲染與 WAF 繞過機制與 Bot 主執行緒完全隔離。
 
 ```mermaid
 graph TD
@@ -44,7 +53,7 @@ graph TD
         DB[(SQLite)]
     end
 
-    subgraph Edge["nexus_edge_scraper (optional)"]
+    subgraph Edge["nexus_edge_scraper"]
         EdgeAPI["FastAPI + Playwright"]
         Tunnel["Cloudflare Tunnel"]
     end
@@ -57,7 +66,7 @@ graph TD
     Leader --> DB
     Queue --> User
 
-    Services -. Optional .-> EdgeAPI
+    Services --> EdgeAPI
     Tunnel --> EdgeAPI
 ```
 
@@ -92,7 +101,7 @@ graph TD
 - Discord Bot Token
 - （建議）Finnhub API Key（市場資料與事件日曆）
 - （選用）OpenAI-compatible LLM endpoint（若要啟用 LLM 解讀/報告）
-- （選用）Edge Scraper + Cloudflare Tunnel（若要啟用 Reddit 抓取）
+- （必要）Edge Scraper + Cloudflare Tunnel（若要啟用 Reddit 與大盤總經抓取）
 
 ### 1) 啟動核心 Bot（nexus_core）
 
@@ -106,15 +115,16 @@ docker compose up -d --build
 
 `nexus_core/docker-compose.yml` 會建立 named volume `nexus_data`，SQLite DB 預設落在容器內 `/app/data`（可持久化）。
 
-### 2) （可選）啟動 Edge Scraper（nexus_edge_scraper）
+### 2) 啟動 Edge Scraper（nexus_edge_scraper）
 
 ```bash
 cd ../nexus_edge_scraper
 cp .env.example .env
+# 編輯 .env 設定 CF_TUNNEL_TOKEN
 docker compose up -d --build
 ```
 
-Edge API 預設在 `:8000`。若你使用 Cloudflare Tunnel，請把 **公開的 HTTPS URL** 填回 core 的 `TUNNEL_URL`，讓 bot 可以透過 `TUNNEL_URL/scrape/reddit/{symbol}` 取得 Reddit 資料。
+Edge API 預設在 `:8000`。請把 **公開的 HTTPS URL** 填回 core 的 `TUNNEL_URL`，讓 bot 可以透過 `TUNNEL_URL/scrape/reddit/{symbol}` 取得 Reddit 資料，以及呼叫大盤與總經數據。
 
 ---
 
@@ -132,7 +142,7 @@ Edge API 預設在 `:8000`。若你使用 Cloudflare Tunnel，請把 **公開的
 | `LLM_API_BASE` | 選用 | OpenAI-compatible base URL |
 | `LLM_MODEL_NAME` | 選用 | 模型名稱 |
 | `API_KEY` | 選用 | LLM API key |
-| `TUNNEL_URL` | 選用 | Edge Scraper 公開 URL（用於 Reddit 抓取） |
+| `TUNNEL_URL` | ✅ | Edge Scraper 公開 URL（用於大盤、總經與輿情抓取） |
 | `LOG_LEVEL` | 選用 | 預設 `WARNING` |
 | `NEXUS_DB_NAME` | 選用 | SQLite DB 路徑（預設 `data/nexus_data.db`） |
 
@@ -140,7 +150,7 @@ Edge API 預設在 `:8000`。若你使用 Cloudflare Tunnel，請把 **公開的
 
 | Key | 必要 | 用途 |
 |---|---:|---|
-| `CF_TUNNEL_TOKEN` | 依情境 | Cloudflare Tunnel token（若要啟用 sidecar tunnel） |
+| `CF_TUNNEL_TOKEN` | ✅ | Cloudflare Tunnel token（用於將邊緣服務安全暴露至公網） |
 
 ---
 
