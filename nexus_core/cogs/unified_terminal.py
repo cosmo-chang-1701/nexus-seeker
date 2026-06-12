@@ -616,6 +616,9 @@ def get_macro_overview_data(user_id: int) -> dict:
     sahm_rule = get_kv_cache("macro_sahm_rule") or 0.35
     rrp_change_30d = get_kv_cache("macro_rrp_change_30d") or 5.0
 
+    gex_fallback_val = get_kv_cache("macro_gex_is_fallback")
+    gex_is_fallback = gex_fallback_val is None or int(gex_fallback_val) == 1
+
     # 零 Gamma 踩踏 Regime 判定
     # SPX 跌破 Gamma Flip Line 且 VIX > 20
     short_gamma_critical = (spx < gamma_flip_line) and (vix > 20.0)
@@ -642,6 +645,7 @@ def get_macro_overview_data(user_id: int) -> dict:
         "recession_warning": recession_warning,
         "payout_threshold": payout_threshold,
         "is_degraded": is_degraded,
+        "gex_is_fallback": gex_is_fallback,
     }
 
     # Save to memory cache
