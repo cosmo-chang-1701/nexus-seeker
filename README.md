@@ -158,6 +158,35 @@ Edge API 預設在 `:8000`。若你使用 Cloudflare Tunnel，請把 **公開的
 - **/order_panel**：委託單面板（動態 Modal 建單）
 - **/list_orders**：列出活躍委託單（支援標的篩選：symbol） + 取消/編輯互動
 - **/telemetry_alert**：遙測偏離對齊（模擬/提示用）
+- **/force_macro_update**：[Admin] 立即手動更新大盤與總經數據 (GEX & FedWatch) 快取
+
+---
+
+## 🛠️ CLI 工具使用說明
+
+本專案提供 `cli.py` 工具，供開發者在伺服器本地端進行行情查詢、手動執行全站掃描或強制更新總經數據。
+
+在 `nexus_core/` 目錄下，您可以使用以下指令：
+* **即時報價查詢**：
+  ```bash
+  python cli.py mkt quote AAPL
+  ```
+* **手動進行 Watchlist 技術指標與風控檢查**（會觸發爬蟲更新 GEX 數據）：
+  ```bash
+  python cli.py mkt watchlist_check
+  ```
+* **立即觸發 Davis Double Play 掃描**：
+  ```bash
+  python cli.py mkt ddp
+  ```
+* **[管理員] 立即執行全站掃描**：
+  ```bash
+  python cli.py admin force-scan
+  ```
+* **[管理員] 立即強制更新大盤與總經數據 (GEX & FedWatch)**：
+  ```bash
+  python cli.py admin force-macro-update
+  ```
 
 ---
 
