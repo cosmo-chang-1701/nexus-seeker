@@ -5701,10 +5701,10 @@ def build_radar_scan_embed(
     scan_results: List[Dict[str, Any]],
     scan_type_name: str,
     user_id: int,
-) -> discord.Embed:
+) -> List[discord.Embed]:
     """
-    建構持倉/掛單/期權標的的批次掃描量化與情緒彙總 Embed。
-    對齊使用者要求的範例輸出格式。
+    建構持倉/掛單/期權標的的批次掃描量化與情緒彙總 Embed 列表。
+    為防止 Discord embed description 超過 4096 個字元限制，每頁最多顯示 15 個標的。
     """
     title_map = {
         "HOLDINGS": "現貨持倉批次量化雷達 (Holdings)",
@@ -5715,20 +5715,6 @@ def build_radar_scan_embed(
     }
     display_type = title_map.get(scan_type_name, "自選標的")
 
-    embed = discord.Embed(
-        title=f"🌌 交易員終端: {display_type}",
-        color=discord.Color.blue(),
-    )
-
-    # 寬度與格式對齊範例
-    # ============================= 核心 AI 暨持倉量化雷達 =============================
-    # 標的    價格 (漲跌)     IVR     本週預期區間 (EM)      Max Pain   與痛點價差 (D-MP)
-    header = f"{'標的':<8}{'價格 (漲跌)':<16}{'IVR':<8}{'本週預期區間 (EM)':<22}{'Max Pain':<11}{'與痛點價差 (D-MP)'}"
-    divider = "-" * 81
-
-    ansi_lines = []
-    insights = []
-
     # 先獲取該使用者的 active orders 以便在警示中聯動
     user_orders = []
     try:
@@ -5738,219 +5724,258 @@ def build_radar_scan_embed(
     except Exception:
         pass
 
-    for r in scan_results:
-        sym = r["symbol"]
-        quote = r["quote"] or {}
-        iv_metrics = r["iv_metrics"]
-        mp_data = r["max_pain"] or {}
+    # 將 scan_results 分組，每組最多 15 個標的
+    chunk_size = 15
+    chunks = [
+        scan_results[i : i + chunk_size]
+        for i in range(0, len(scan_results), chunk_size)
+    ]
+    if not chunks:
+        chunks = [[]]
 
-        # 1. 價格與漲跌幅
-        price_raw = quote.get("c")
-        price_val = float(price_raw) if price_raw is not None else 0.0
-        dp_raw = quote.get("dp")
-        dp_val = float(dp_raw) if dp_raw is not None else 0.0
-        if dp_val >= 0:
-            price_str = f"${price_val:.2f} (+{dp_val:.1f}%)"
-            price_ansi = f"${price_val:.2f} (\u001b[1;32m+{dp_val:.1f}%\u001b[0m)"
-        else:
-            price_str = f"${price_val:.2f} ({dp_val:.1f}%)"
-            price_ansi = f"${price_val:.2f} (\u001b[1;31m{dp_val:.1f}%\u001b[0m)"
+    embeds = []
+    total_pages = len(chunks)
 
-        # 2. IV Rank
-        iv_rank_val = 0.0
-        em_weekly = 0.0
-        if iv_metrics:
-            if hasattr(iv_metrics, "iv_rank"):
-                iv_rank_val = (
-                    float(iv_metrics.iv_rank) if iv_metrics.iv_rank is not None else 0.0
-                )
-                em_weekly = (
-                    float(iv_metrics.expected_move_weekly)
-                    if iv_metrics.expected_move_weekly is not None
-                    else 0.0
-                )
-            elif isinstance(iv_metrics, dict):
-                ivr_raw = iv_metrics.get("iv_rank")
-                iv_rank_val = float(ivr_raw) if ivr_raw is not None else 0.0
-                em_raw = iv_metrics.get("expected_move_weekly")
-                em_weekly = float(em_raw) if em_raw is not None else 0.0
+    for page_idx, chunk in enumerate(chunks):
+        page_num = page_idx + 1
+        page_title = f"🌌 交易員終端: {display_type}"
+        if total_pages > 1:
+            page_title += f" (第 {page_num}/{total_pages} 頁)"
 
-        ivr_str = f"{iv_rank_val:.1f}%"
+        embed = discord.Embed(
+            title=page_title,
+            color=discord.Color.blue(),
+        )
 
-        # 3. 本週預期區間 (EM)
-        if price_val > 0 and em_weekly > 0:
-            em_low = price_val - em_weekly
-            em_high = price_val + em_weekly
-            em_str = f"${em_low:.2f} ~ ${em_high:.2f}"
-            em_ansi = f"\u001b[1;33m${em_low:.2f} ~ ${em_high:.2f}\u001b[0m"
-        else:
-            fallback_em = price_val * 0.05
-            em_low = price_val - fallback_em
-            em_high = price_val + fallback_em
-            em_str = f"${em_low:.2f} ~ ${em_high:.2f}"
-            em_ansi = f"${em_low:.2f} ~ ${em_high:.2f}"
+        # 寬度與格式對齊範例
+        header = f"{'標的':<8}{'價格 (漲跌)':<16}{'IVR':<8}{'本週預期區間 (EM)':<22}{'Max Pain':<11}{'與痛點價差 (D-MP)'}"
+        divider = "-" * 81
 
-        # 4. Max Pain 與與痛點價差
-        max_pain_strike = 0.0
-        dist_pct = 0.0
-        if isinstance(mp_data, dict):
-            mp_val = mp_data.get("max_pain")
-            max_pain_strike = float(mp_val) if mp_val is not None else 0.0
-            if max_pain_strike > 0 and price_val > 0:
-                dist_pct = (max_pain_strike - price_val) / price_val * 100
+        ansi_lines = []
+        insights = []
 
-        # 判定狀態標籤
-        status_label = ""
-        if max_pain_strike > 0:
-            if dist_pct >= 0:
-                dmp_str = f"[+{dist_pct:.2f}%]"
-                dmp_ansi = f"[\u001b[1;32m+{dist_pct:.2f}%\u001b[0m]"
+        for r in chunk:
+            sym = r["symbol"]
+            quote = r["quote"] or {}
+            iv_metrics = r["iv_metrics"]
+            mp_data = r["max_pain"] or {}
+
+            # 1. 價格與漲跌幅
+            price_raw = quote.get("c")
+            price_val = float(price_raw) if price_raw is not None else 0.0
+            dp_raw = quote.get("dp")
+            dp_val = float(dp_raw) if dp_raw is not None else 0.0
+            if dp_val >= 0:
+                price_str = f"${price_val:.2f} (+{dp_val:.1f}%)"
+                price_ansi = f"${price_val:.2f} (\u001b[1;32m+{dp_val:.1f}%\u001b[0m)"
             else:
-                dmp_str = f"[{dist_pct:.2f}%]"
-                dmp_ansi = f"[\u001b[1;31m{dist_pct:.2f}%\u001b[0m]"
+                price_str = f"${price_val:.2f} ({dp_val:.1f}%)"
+                price_ansi = f"${price_val:.2f} (\u001b[1;31m{dp_val:.1f}%\u001b[0m)"
 
-            if dist_pct > 10.0:
-                status_label = "超跌磁吸 🚀"
-            elif 5.0 <= dist_pct <= 10.0:
-                status_label = "超跌磁吸 🚀" if sym == "AMD" else "磁吸回升"
-            elif 0.0 <= dist_pct < 5.0:
-                status_label = "磁吸回升"
-            elif -15.0 <= dist_pct < 0.0:
-                status_label = "需防壓回 ⚠️"
-            else:  # < -15.0
-                status_label = "籌碼斷層 ⚠️"
-        else:
-            dmp_str = "[0.00%]"
-            dmp_ansi = "[0.00%]"
-            status_label = "正常運行"
-
-        # Local Rules: 聯動警示 insights
-        if max_pain_strike > 0 and price_val > 0:
-            if price_val <= em_low * 1.02 and dist_pct > 3.0:
-                matched_order = next(
-                    (
-                        o
-                        for o in user_orders
-                        if o["symbol"].upper() == sym and o.get("side", "BUY") == "BUY"
-                    ),
-                    None,
-                )
-                if matched_order:
-                    insights.append(
-                        f"• 🚀 **{sym}**: 價格已極度逼近本週波動下緣 (${em_low:.2f})，且距離 Max Pain 有 +{dist_pct:.1f}% 的多頭磁吸引力，系統已自動激活 ID: {matched_order['id']} 坑底捕獸夾 (${matched_order['limit_price']:.2f})。"
+            # 2. IV Rank
+            iv_rank_val = 0.0
+            em_weekly = 0.0
+            if iv_metrics:
+                if hasattr(iv_metrics, "iv_rank"):
+                    iv_rank_val = (
+                        float(iv_metrics.iv_rank)
+                        if iv_metrics.iv_rank is not None
+                        else 0.0
                     )
-                else:
-                    insights.append(
-                        f"• 🚀 **{sym}**: 價格已極度逼近本週波動下緣 (${em_low:.2f})，且距離 Max Pain 有 +{dist_pct:.1f}% 的多頭磁吸引力，建議部署限價捕獵。"
+                    em_weekly = (
+                        float(iv_metrics.expected_move_weekly)
+                        if iv_metrics.expected_move_weekly is not None
+                        else 0.0
                     )
+                elif isinstance(iv_metrics, dict):
+                    ivr_raw = iv_metrics.get("iv_rank")
+                    iv_rank_val = float(ivr_raw) if ivr_raw is not None else 0.0
+                    em_raw = iv_metrics.get("expected_move_weekly")
+                    em_weekly = float(em_raw) if em_raw is not None else 0.0
 
-            # 穿透式 UOA 與偏離度聯動判定：當偏離度顯著時 (例如 |dist_pct| > 10%)
-            if abs(dist_pct) > 10.0:
-                # 解析 UOA
-                uoa_list = r.get("uoa") or []
-                uoa_calls_vol = sum(
-                    u.get("volume", 0) for u in uoa_list if u.get("type") == "CALL"
-                )
-                uoa_puts_vol = sum(
-                    u.get("volume", 0) for u in uoa_list if u.get("type") == "PUT"
-                )
+            ivr_str = f"{iv_rank_val:.1f}%"
 
-                # 解析 Skew 百分位與情緒
-                skew_percentile = r.get("skew_percentile")
-                if skew_percentile is None:
-                    # 依據 skew 值做預設回退
-                    skew_val = r.get("skew", 0.0)
-                    if skew_val > 0:
-                        skew_percentile = 75.0
-                    elif skew_val < 0:
-                        skew_percentile = 25.0
-                    else:
-                        skew_percentile = 50.0
+            # 3. 本週預期區間 (EM)
+            if price_val > 0 and em_weekly > 0:
+                em_low = price_val - em_weekly
+                em_high = price_val + em_weekly
+                em_str = f"${em_low:.2f} ~ ${em_high:.2f}"
+                em_ansi = f"\u001b[1;33m${em_low:.2f} ~ ${em_high:.2f}\u001b[0m"
+            else:
+                fallback_em = price_val * 0.05
+                em_low = price_val - fallback_em
+                em_high = price_val + fallback_em
+                em_str = f"${em_low:.2f} ~ ${em_high:.2f}"
+                em_ansi = f"${em_low:.2f} ~ ${em_high:.2f}"
 
-                # 1. 籌碼狀態
-                if (
-                    uoa_calls_vol > uoa_puts_vol * 1.5
-                    and uoa_calls_vol > 0
-                    and skew_percentile <= 30.0
-                ):
-                    chip_status = "🔥 籌碼面呈大額買權掃貨且看漲情緒亢奮"
-                elif (
-                    uoa_puts_vol > uoa_calls_vol * 1.5
-                    and uoa_puts_vol > 0
-                    and skew_percentile >= 70.0
-                ):
-                    chip_status = "⚠️ 籌碼面顯現大額避險 Put 流入且下行保護需求高企"
-                elif uoa_calls_vol > uoa_puts_vol * 1.5 and uoa_calls_vol > 0:
-                    chip_status = "📈 籌碼面出現大額 Call 掃單"
-                elif uoa_puts_vol > uoa_calls_vol * 1.5 and uoa_puts_vol > 0:
-                    chip_status = "📉 籌碼面湧現大額 Put 避險買盤"
-                elif skew_percentile >= 70.0:
-                    chip_status = "🛡️ 情緒面呈現 Put 偏斜昂貴，避險情緒高溫"
-                elif skew_percentile <= 30.0:
-                    chip_status = "🚀 情緒面呈現 Call 偏斜亢奮，散戶搶購看漲"
+            # 4. Max Pain 與與痛點價差
+            max_pain_strike = 0.0
+            dist_pct = 0.0
+            if isinstance(mp_data, dict):
+                mp_val = mp_data.get("max_pain")
+                max_pain_strike = float(mp_val) if mp_val is not None else 0.0
+                if max_pain_strike > 0 and price_val > 0:
+                    dist_pct = (max_pain_strike - price_val) / price_val * 100
+
+            # 判定狀態標籤
+            status_label = ""
+            if max_pain_strike > 0:
+                if dist_pct >= 0:
+                    dmp_str = f"[+{dist_pct:.2f}%]"
+                    dmp_ansi = f"[\u001b[1;32m+{dist_pct:.2f}%\u001b[0m]"
                 else:
-                    chip_status = "⚖️ 籌碼結構與情緒波動相對均衡"
+                    dmp_str = f"[{dist_pct:.2f}%]"
+                    dmp_ansi = f"[\u001b[1;31m{dist_pct:.2f}%\u001b[0m]"
 
-                # 2. 量化偏離事實
                 if dist_pct > 10.0:
-                    dev_fact = f"，股價低於 Max Pain {abs(dist_pct):.1f}%，存在顯著的向上磁吸效應"
-                else:
-                    dev_fact = f"，股價高於 Max Pain {abs(dist_pct):.1f}%，面臨向上動能衰退與拉回修正壓力"
+                    status_label = "超跌磁吸 🚀"
+                elif 5.0 <= dist_pct <= 10.0:
+                    status_label = "超跌磁吸 🚀" if sym == "AMD" else "磁吸回升"
+                elif 0.0 <= dist_pct < 5.0:
+                    status_label = "磁吸回升"
+                elif -15.0 <= dist_pct < 0.0:
+                    status_label = "需防壓回 ⚠️"
+                else:  # < -15.0
+                    status_label = "籌碼斷層 ⚠️"
+            else:
+                dmp_str = "[0.00%]"
+                dmp_ansi = "[0.00%]"
+                status_label = "正常運行"
 
-                # 3. 實盤防禦指引
-                if dist_pct < -10.0 and skew_percentile >= 70.0:
-                    guidance = "；操作上應嚴禁單腿追高，建議以現貨持有搭配賣出 OTM Call（備兌看漲）進行防禦保護，或買入 Put 鎖定下行風險。"
-                elif dist_pct < -10.0 and skew_percentile <= 30.0:
-                    guidance = "；此時散戶搶購情緒極端，防範主力拉回殺多，嚴禁盲目單腿裸買 Call，建議逢高分批鎖定利潤。"
-                elif dist_pct > 10.0 and uoa_calls_vol > uoa_puts_vol * 1.5:
-                    guidance = "；量化磁吸與多頭籌碼共振，可於波動下緣分批逢低吸納，或部署 Bull Put Spread 策略。"
-                elif dist_pct > 10.0 and skew_percentile >= 70.0:
-                    guidance = "；雖有磁吸引力但避險情緒仍重，建議透過賣出 CSP（備兌看跌）分批建倉，避免單腿買入。"
-                else:
-                    if dist_pct < -10.0:
-                        guidance = "；操作上建議保持現貨防禦，嚴禁單腿操作。"
+            # Local Rules: 聯動警示 insights
+            if max_pain_strike > 0 and price_val > 0:
+                if price_val <= em_low * 1.02 and dist_pct > 3.0:
+                    matched_order = next(
+                        (
+                            o
+                            for o in user_orders
+                            if o["symbol"].upper() == sym
+                            and o.get("side", "BUY") == "BUY"
+                        ),
+                        None,
+                    )
+                    if matched_order:
+                        insights.append(
+                            f"• 🚀 **{sym}**: 價格已極度逼近本週波動下緣 (${em_low:.2f})，且距離 Max Pain 有 +{dist_pct:.1f}% 的多頭磁吸引力，系統已自動激活 ID: {matched_order['id']} 坑底捕獸夾 (${matched_order['limit_price']:.2f})。"
+                        )
                     else:
-                        guidance = "；操作上建議於支撐區間分批逢低吸納，降低建倉成本。"
+                        insights.append(
+                            f"• 🚀 **{sym}**: 價格已極度逼近本週波動下緣 (${em_low:.2f})，且距離 Max Pain 有 +{dist_pct:.1f}% 的多頭磁吸引力，建議部署限價捕獵。"
+                        )
 
-                dynamic_insight = f"• ⚠️ **{sym}**: {chip_status}{dev_fact}{guidance}"
-                insights.append(dynamic_insight)
+                # 穿透式 UOA 與偏離度聯動判定：當偏離度顯著時 (例如 |dist_pct| > 10%)
+                if abs(dist_pct) > 10.0:
+                    # 解析 UOA
+                    uoa_list = r.get("uoa") or []
+                    uoa_calls_vol = sum(
+                        u.get("volume", 0) for u in uoa_list if u.get("type") == "CALL"
+                    )
+                    uoa_puts_vol = sum(
+                        u.get("volume", 0) for u in uoa_list if u.get("type") == "PUT"
+                    )
 
-        # 格式化一列 ANSI 表格
-        sym_cell = f"\u001b[1;34m{sym:<6}\u001b[0m"
-        price_cell = price_ansi + (" " * max(0, 16 - len(price_str)))
-        ivr_cell = ivr_str + (" " * max(0, 8 - len(ivr_str)))
-        em_cell = em_ansi + (" " * max(0, 22 - len(em_str)))
-        mp_str_val = f"${max_pain_strike:.2f}"
-        mp_cell = mp_str_val + (" " * max(0, 11 - len(mp_str_val)))
+                    # 解析 Skew 百分位與情緒
+                    skew_percentile = r.get("skew_percentile")
+                    if skew_percentile is None:
+                        # 依據 skew 值做預設回退
+                        skew_val = r.get("skew", 0.0)
+                        if skew_val > 0:
+                            skew_percentile = 75.0
+                        elif skew_val < 0:
+                            skew_percentile = 25.0
+                        else:
+                            skew_percentile = 50.0
 
-        dmp_cell = dmp_ansi + (" " * max(0, 12 - len(dmp_str)))
-        label_cell = status_label
+                    # 1. 籌碼狀態
+                    if (
+                        uoa_calls_vol > uoa_puts_vol * 1.5
+                        and uoa_calls_vol > 0
+                        and skew_percentile <= 30.0
+                    ):
+                        chip_status = "🔥 籌碼面呈大額買權掃貨且看漲情緒亢奮"
+                    elif (
+                        uoa_puts_vol > uoa_calls_vol * 1.5
+                        and uoa_puts_vol > 0
+                        and skew_percentile >= 70.0
+                    ):
+                        chip_status = "⚠️ 籌碼面顯現大額避險 Put 流入且下行保護需求高企"
+                    elif uoa_calls_vol > uoa_puts_vol * 1.5 and uoa_calls_vol > 0:
+                        chip_status = "📈 籌碼面出現大額 Call 掃單"
+                    elif uoa_puts_vol > uoa_calls_vol * 1.5 and uoa_puts_vol > 0:
+                        chip_status = "📉 籌碼面湧現大額 Put 避險買盤"
+                    elif skew_percentile >= 70.0:
+                        chip_status = "🛡️ 情緒面呈現 Put 偏斜昂貴，避險情緒高溫"
+                    elif skew_percentile <= 30.0:
+                        chip_status = "🚀 情緒面呈現 Call 偏斜亢奮，散戶搶購看漲"
+                    else:
+                        chip_status = "⚖️ 籌碼結構與情緒波動相對均衡"
 
-        ansi_lines.append(
-            f"{sym_cell}{price_cell}{ivr_cell}{em_cell}{mp_cell}{dmp_cell}{label_cell}"
-        )
+                    # 2. 量化偏離事實
+                    if dist_pct > 10.0:
+                        dev_fact = f"，股價低於 Max Pain {abs(dist_pct):.1f}%，存在顯著的向上磁吸效應"
+                    else:
+                        dev_fact = f"，股價高於 Max Pain {abs(dist_pct):.1f}%，面臨向上動能衰退與拉回修正壓力"
 
-    ansi_table = f"```ansi\n============================= 核心 AI 暨持倉量化雷達 =============================\n{header}\n{divider}\n"
-    ansi_table += "\n".join(ansi_lines)
-    ansi_table += "\n=================================================================================\n"
-    ansi_table += "提示: ⚠️ 代表與最大痛點偏離度過高（>10%）或具備異常籌碼結構，需點擊穿透審查。\n```"
+                    # 3. 實盤防禦指引
+                    if dist_pct < -10.0 and skew_percentile >= 70.0:
+                        guidance = "；操作上應嚴禁單腿追高，建議以現貨持有搭配賣出 OTM Call（備兌看漲）進行防禦保護，或買入 Put 鎖定下行風險。"
+                    elif dist_pct < -10.0 and skew_percentile <= 30.0:
+                        guidance = "；此時散戶搶購情緒極端，防範主力拉回殺多，嚴禁盲目單腿裸買 Call，建議逢高分批鎖定利潤。"
+                    elif dist_pct > 10.0 and uoa_calls_vol > uoa_puts_vol * 1.5:
+                        guidance = "；量化磁吸與多頭籌碼共振，可於波動下緣分批逢低吸納，或部署 Bull Put Spread 策略。"
+                    elif dist_pct > 10.0 and skew_percentile >= 70.0:
+                        guidance = "；雖有磁吸引力但避險情緒仍重，建議透過賣出 CSP（備兌看跌）分批建倉，避免單腿買入。"
+                    else:
+                        if dist_pct < -10.0:
+                            guidance = "；操作上建議保持現貨防禦，嚴禁單腿操作。"
+                        else:
+                            guidance = (
+                                "；操作上建議於支撐區間分批逢低吸納，降低建倉成本。"
+                            )
 
-    embed.description = ansi_table
+                    dynamic_insight = (
+                        f"• ⚠️ **{sym}**: {chip_status}{dev_fact}{guidance}"
+                    )
+                    insights.append(dynamic_insight)
 
-    if insights:
-        embed.add_field(
-            name="💡 即時聯動警示 (Real-time Insights)",
-            value="\n".join(insights[:5]),
-            inline=False,
-        )
-    else:
-        embed.add_field(
-            name="💡 即時聯動警示 (Real-time Insights)",
-            value="• ✨ 所有標的當前價格與 Max Pain 及波動邊界皆無極端異常偏離。",
-            inline=False,
-        )
+            # 格式化一列 ANSI 表格
+            sym_cell = f"\u001b[1;34m{sym:<6}\u001b[0m"
+            price_cell = price_ansi + (" " * max(0, 16 - len(price_str)))
+            ivr_cell = ivr_str + (" " * max(0, 8 - len(ivr_str)))
+            em_cell = em_ansi + (" " * max(0, 22 - len(em_str)))
+            mp_str_val = f"${max_pain_strike:.2f}"
+            mp_cell = mp_str_val + (" " * max(0, 11 - len(mp_str_val)))
 
-    return embed
+            dmp_cell = dmp_ansi + (" " * max(0, 12 - len(dmp_str)))
+            label_cell = status_label
+
+            ansi_lines.append(
+                f"{sym_cell}{price_cell}{ivr_cell}{em_cell}{mp_cell}{dmp_cell}{label_cell}"
+            )
+
+        ansi_table = f"```ansi\n============================= 核心 AI 暨持倉量化雷達 =============================\n{header}\n{divider}\n"
+        ansi_table += "\n".join(ansi_lines)
+        ansi_table += "\n=================================================================================\n"
+        ansi_table += "提示: ⚠️ 代表與最大痛點偏離度過高（>10%）或具備異常籌碼結構，需點擊穿透審查。\n```"
+
+        embed.description = ansi_table
+
+        if insights:
+            embed.add_field(
+                name="💡 即時聯動警示 (Real-time Insights)",
+                value="\n".join(insights[:5]),
+                inline=False,
+            )
+        else:
+            embed.add_field(
+                name="💡 即時聯動警示 (Real-time Insights)",
+                value="• ✨ 所有標的當前價格與 Max Pain 及波動邊界皆無極端異常偏離。",
+                inline=False,
+            )
+
+        embeds.append(embed)
+
+    return embeds
 
 
 def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:

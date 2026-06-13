@@ -898,10 +898,13 @@ class UnifiedTerminalCog(commands.Cog):
             # 過濾 Exception 並確保是 dict 類型以滿足 mypy
             valid_results = [r for r in scan_results if isinstance(r, dict)]
 
-            embed = build_radar_scan_embed(valid_results, scan_value, user_id)
+            embeds = build_radar_scan_embed(valid_results, scan_value, user_id)
             view = BatchScanView(unique_symbols, self, self.bot)
 
-            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+            if not isinstance(embeds, list):
+                embeds = [embeds]
+
+            await interaction.followup.send(embeds=embeds, view=view, ephemeral=True)
 
         except Exception as e:
             logger.error(f"Batch Scan Error for {scan_value}: {e}")
