@@ -107,6 +107,15 @@ Instead of invoking LLM on the first-level radar panel, a lightweight rules engi
 ### 3. Rendering Layer (`build_radar_scan_embed`)
 The ANSI terminal radar card is built inside `cogs/embed_builder.py` using `build_radar_scan_embed()`, keeping with the **Single Source of Truth** for embeds. It prints an interactive ANSI plain-text grid showing current price, IVR, Expected Move range, Max Pain, and D-MP% deviation.
 
+### 4. 避免 Discord 回應錯誤的長度分段與分頁原則
+為防範當自選標的 (Watchlist) 或持倉 (Holdings) 數量過大時，因 Embed Description 超過 Discord 的 4096 字元上限而導致 `400 Bad Request (error code: 50035): Invalid Form Body` 系統錯誤，系統實施以下長度分段與分頁原則：
+- **最大分段間距 (Chunk Size)**：批次掃描結果一律以每頁最多 **15 個標的**進行分組封裝。
+- **返回多個 Embed 列表**：`build_radar_scan_embed()` 的返回型別升級為 `List[discord.Embed]`。
+- **動態分頁標題**：若分頁數量大於 1，系統會在每個 Embed 的 Title 後方自動標註頁碼，格式為 `(第 X/Y 頁)`（例如：`(第 1/2 頁)`）。
+- **呼叫端分流處理**：
+  - **Discord 互動指令 (如 `/x`)**：將分頁後的 Embed 列表直接傳入 `interaction.followup.send(embeds=embeds)` 一併送出（最大上限 10 個 Embeds）。
+  - **背景排程與 DM 隊列 (如 Watchlist 30分鐘心跳)**：呼叫端會自動對 Embed 列表進行迭代，逐頁調用 `queue_dm` 加入發送佇列，確保每一頁皆能穩定投遞且不觸發 Discord API 的字數限制。
+
 ---
 
 ## Watchlist Half-Hour Heartbeat

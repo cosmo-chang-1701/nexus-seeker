@@ -1039,7 +1039,9 @@ def test_build_radar_scan_embed():
         },
     ]
 
-    embed = build_radar_scan_embed(scan_results, "ALL", 12345)
+    embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
+    assert len(embeds) == 1
+    embed = embeds[0]
     assert embed.title == "🌌 交易員終端: 核心 AI 暨持倉批次量化雷達 (ALL)"
     assert (
         "============================= 核心 AI 暨持倉量化雷達 ============================="

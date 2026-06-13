@@ -954,8 +954,11 @@ class SchedulerCog(commands.Cog):
             valid_results = [r for r in scan_results if isinstance(r, dict)]
 
             if valid_results:
-                embed = build_radar_scan_embed(valid_results, "WATCHLIST", uid)
-                await self.bot.queue_dm(uid, embed=embed)
+                embeds = build_radar_scan_embed(valid_results, "WATCHLIST", uid)
+                if not isinstance(embeds, list):
+                    embeds = [embeds]
+                for embed in embeds:
+                    await self.bot.queue_dm(uid, embed=embed)
 
     async def _run_market_scan_logic(self, is_auto=True, triggered_by=None):
         """共用的掃描核心邏輯，協調 Service 計算與 Discord 訊息發送。"""
