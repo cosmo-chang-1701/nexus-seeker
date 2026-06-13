@@ -787,7 +787,7 @@ class UnifiedTerminalCog(commands.Cog):
     )
     @app_commands.describe(
         symbol="股票代號 (如 NVDA，與 scan_type 二擇一)",
-        scan_type="批次掃描類型 (HOLDINGS:持倉, ORDERS:掛單, OPTIONS:持有期權, ALL:三者全部)",
+        scan_type="批次掃描類型 (HOLDINGS:持倉, ORDERS:掛單, OPTIONS:持有期權, WATCHLIST:自選, ALL:四者全部)",
     )
     @app_commands.choices(
         scan_type=[
@@ -798,6 +798,7 @@ class UnifiedTerminalCog(commands.Cog):
             app_commands.Choice(
                 name="📜 掃描期權持倉標的 (Option Holdings)", value="OPTIONS"
             ),
+            app_commands.Choice(name="🌟 掃描自選標的 (Watchlist)", value="WATCHLIST"),
             app_commands.Choice(name="🌀 掃描全部 (持倉+掛單+期權標的)", value="ALL"),
         ]
     )
@@ -861,6 +862,15 @@ class UnifiedTerminalCog(commands.Cog):
             for row in portfolio_rows:
                 target_symbols.add(row[1].upper())
 
+        if scan_value == "WATCHLIST":
+            import database
+
+            watchlist_items = await asyncio.to_thread(
+                database.get_user_watchlist, user_id
+            )
+            for item in watchlist_items:
+                target_symbols.add(item[0].upper())
+
         unique_symbols = sorted(list(target_symbols))
 
         if not unique_symbols:
@@ -868,6 +878,7 @@ class UnifiedTerminalCog(commands.Cog):
                 "HOLDINGS": "現貨持倉",
                 "ORDERS": "待成交掛單",
                 "OPTIONS": "期權持倉",
+                "WATCHLIST": "自選標的",
                 "ALL": "持倉、掛單或期權",
             }
             return await interaction.followup.send(

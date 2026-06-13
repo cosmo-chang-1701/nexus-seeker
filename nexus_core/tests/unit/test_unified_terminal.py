@@ -310,3 +310,49 @@ async def test_symbol_hub_batch_scan_all(mock_interaction, mock_bot):
         assert isinstance(kwargs["view"], BatchScanView)
         embed = kwargs["embed"]
         assert "核心 AI 暨持倉批次量化雷達 (ALL)" in embed.title
+
+
+@pytest.mark.asyncio
+async def test_symbol_hub_batch_scan_watchlist(mock_interaction, mock_bot):
+    cog = UnifiedTerminalCog(mock_bot)
+
+    # 模擬 scan_type Choice
+    mock_choice = MagicMock()
+    mock_choice.value = "WATCHLIST"
+
+    with patch("database.get_user_watchlist") as mock_get_watchlist, patch(
+        "services.market_data_service.get_quote", new_callable=AsyncMock
+    ) as mock_quote, patch(
+        "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
+        new_callable=AsyncMock,
+    ) as mock_iv, patch(
+        "market_analysis.sentiment_engine.SentimentEngine.calculate_skew",
+        new_callable=AsyncMock,
+    ) as mock_skew, patch(
+        "market_analysis.sentiment_engine.SentimentEngine.calculate_max_pain",
+        new_callable=AsyncMock,
+    ) as mock_mp, patch(
+        "market_analysis.sentiment_engine.SentimentEngine.get_indicator_percentile"
+    ) as mock_skew_p:
+        mock_get_watchlist.return_value = [("AAPL", 1)]
+        mock_quote.return_value = {"c": 150.0, "dp": 1.2}
+
+        mock_iv_metrics = MagicMock()
+        mock_iv_metrics.iv_rank = 30.0
+        mock_iv_metrics.expected_move_weekly = 4.5
+        mock_iv.return_value = mock_iv_metrics
+
+        mock_skew.return_value = {"skew": 1.1}
+        mock_mp.return_value = {"max_pain": 145.0, "distance_pct": 3.4}
+        mock_skew_p.return_value = 75.0
+
+        await cog.symbol_hub.callback(
+            cog, mock_interaction, symbol=None, scan_type=mock_choice
+        )
+
+        assert mock_interaction.followup.send.called
+        _, kwargs = mock_interaction.followup.send.call_args
+        assert "view" in kwargs
+        assert isinstance(kwargs["view"], BatchScanView)
+        embed = kwargs["embed"]
+        assert "自選標的批次量化雷達 (Watchlist)" in embed.title

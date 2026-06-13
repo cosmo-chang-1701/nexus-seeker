@@ -31,7 +31,6 @@ from cogs.embed_builder import (
     create_gamma_fragility_embed,
     create_pre_market_earnings_embed,
     create_option_defense_alert_embed,
-    create_watchlist_signal_embed,
     create_telemetry_alignment_embeds,
 )
 from market_analysis.ghost_trader import GhostTrader
@@ -902,100 +901,28 @@ class SchedulerCog(commands.Cog):
     async def _dispatch_watchlist_heartbeat(
         self, all_watchlists: list[tuple[int, str, int]] | None = None
     ) -> None:
-        """每個 30 分鐘節點推送 watchlist 全標的技術 / 期權 / skew 戰報。"""
-        from market_analysis.intraday_pipeline import (
-            build_watchlist_option_plan,
-            derive_watchlist_option_guidance,
-            evaluate_watchlist_symbol,
-            calculate_dynamic_trading_signals,
-        )
-        from services.calendar_service import calendar_service
-        from services import market_data_service
-        from market_analysis.sentiment_engine import SentimentEngine
-        from services.llm_service import generate_watchlist_skew_commentary
+        """每個 30 分鐘節點推送 watchlist 批次掃描量化雷達。"""
+        import database
+        from cogs.embed_builder import build_radar_scan_embed
 
         if all_watchlists is None:
             all_watchlists = database.get_all_watchlist()
         if not all_watchlists:
             return
 
-        unique_symbols = sorted({sym for _, sym, _ in all_watchlists})
-        macro_event, earnings_map, df_spy, quotes = await asyncio.gather(
-            calendar_service.get_next_high_impact_event(days=7),
-            calendar_service.get_symbol_earnings_batch(unique_symbols),
-            market_data_service.get_spy_history_df(period="1y"),
-            batch_get_quotes(unique_symbols),
-        )
-        evaluations = await asyncio.gather(
-            *(
-                evaluate_watchlist_symbol(
-                    symbol,
-                    earnings_event=earnings_map.get(symbol),
-                    macro_event=macro_event,
-                    df_spy=df_spy,
-                )
-                for symbol in unique_symbols
-            )
-        )
-        evaluation_map = {
-            evaluation.metrics.symbol: evaluation
-            for evaluation in evaluations
-            if evaluation is not None
-        }
-
-        # Pre-fetch all upgraded metrics for each unique symbol in parallel
-        iv_metrics_map = {}
-        max_pain_map = {}
-        pcr_map = {}
-        uoa_map = {}
-        skew_commentary_map = {}
-
-        if evaluation_map:
-            sym_list = list(evaluation_map.keys())
-
-            iv_results, mp_results, pcr_results, uoa_results = await asyncio.gather(
-                asyncio.gather(
-                    *(
-                        SentimentEngine.fetch_and_calculate_iv_metrics(s)
-                        for s in sym_list
-                    )
-                ),
-                asyncio.gather(
-                    *(SentimentEngine.calculate_max_pain(s) for s in sym_list)
-                ),
-                asyncio.gather(*(SentimentEngine.calculate_pcr(s) for s in sym_list)),
-                asyncio.gather(*(SentimentEngine.detect_uoa(s) for s in sym_list)),
-            )
-
-            for i, s in enumerate(sym_list):
-                iv_metrics_map[s] = iv_results[i]
-                max_pain_map[s] = mp_results[i]
-                pcr_map[s] = pcr_results[i]
-                uoa_map[s] = uoa_results[i]
-
-            # LLM commentary parallel execution
-            comm_tasks = []
-            for s in sym_list:
-                eval_obj = evaluation_map[s]
-                raw_payload = {
-                    "option_skew": eval_obj.metrics.option_skew,
-                    "option_skew_state": eval_obj.metrics.option_skew_state,
-                    "iv_rank": eval_obj.metrics.iv_rank,
-                    "scenario": eval_obj.tactical.scenario,
-                    "event_risk_summary": eval_obj.event_context.summary
-                    if eval_obj.event_context
-                    else "",
-                }
-                comm_tasks.append(generate_watchlist_skew_commentary(s, raw_payload))
-            comm_results = await asyncio.gather(*comm_tasks)
-            for i, s in enumerate(sym_list):
-                skew_commentary_map[s] = comm_results[i]
-
-        user_symbols: Dict[int, list[str]] = {}
+        # 整理出每個 uid 對應的 symbols
+        user_symbols: dict[int, list[str]] = {}
         for uid, sym, _ in all_watchlists:
             user_symbols.setdefault(uid, [])
             if sym not in user_symbols[uid]:
                 user_symbols[uid].append(sym)
+
+        terminal_cog = self.bot.get_cog("UnifiedTerminalCog")
+        if not terminal_cog:
+            logger.error(
+                "UnifiedTerminalCog not found, cannot dispatch watchlist heartbeat."
+            )
+            return
 
         for uid, symbols in user_symbols.items():
             if not database.is_notification_enabled(
@@ -1005,327 +932,29 @@ class SchedulerCog(commands.Cog):
                     f"使用者 {uid} 已關閉 watchlist_heartbeat_alignment 訂閱，略過心跳推送。"
                 )
                 continue
+
             user_context = database.get_full_user_context(uid)
             option_alert_mode = int(getattr(user_context, "option_alert_mode", 1))
-            user_holdings = {
-                str(row.get("symbol", "")).upper(): row
-                for row in database.get_user_holdings(uid)
-            }
 
-            deliverable_symbols: list[tuple[str, bool]] = []
+            deliverable_symbols = []
             for sym in symbols:
-                evaluation = evaluation_map.get(sym)
-                if evaluation is None:
-                    continue
                 has_position = database.is_symbol_in_portfolio(uid, sym)
                 if option_alert_mode == 2 and not has_position:
                     continue
-                deliverable_symbols.append((sym, has_position))
+                deliverable_symbols.append(sym)
 
-            for sym, has_position in deliverable_symbols:
-                evaluation = evaluation_map.get(sym)
-                if evaluation is None:
-                    continue
-                holding_row = user_holdings.get(sym.upper())
-                holding_quantity: float | None = None
-                holding_avg_cost: float | None = None
-                holding_pnl_pct: float | None = None
-                if (
-                    holding_row is not None
-                    and float(holding_row.get("quantity", 0.0)) > 0.0
-                ):
-                    holding_quantity = float(holding_row["quantity"])
-                    holding_avg_cost = float(holding_row.get("avg_cost", 0.0))
-                    if holding_avg_cost > 0.0:
-                        holding_pnl_pct = (
-                            evaluation.metrics.current_price - holding_avg_cost
-                        ) / holding_avg_cost
-                # Build Order Radar from user's active orders
-                user_active_orders = database.get_user_active_orders(uid)
-                order_radar: list[dict] = []
-                for ord_row in user_active_orders:
-                    try:
-                        if str(ord_row.get("symbol", "")).upper() != sym.upper():
-                            continue
-                        limit_price = float(ord_row.get("limit_price") or 0.0)
-                        shares = float(ord_row.get("quantity") or 0.0)
-                        proximity = (
-                            abs(evaluation.metrics.current_price - limit_price)
-                            / evaluation.metrics.current_price
-                            * 100.0
-                            if limit_price > 0
-                            else 999.0
-                        )
-                        radar_status = "[雷達鎖定中]" if proximity <= 2.0 else ""
-                        order_radar.append(
-                            {
-                                "order_id": ord_row.get("id"),
-                                "ticker": ord_row.get("symbol"),
-                                "limit_price": limit_price,
-                                "shares": shares,
-                                "proximity_pct": round(proximity, 2),
-                                "radar_status": radar_status,
-                            }
-                        )
-                    except Exception:
-                        continue
+            if not deliverable_symbols:
+                continue
 
-                # Determine holding type heuristically (on-the-fly)
-                trades = database.get_user_portfolio(uid)
-                holdings = database.get_user_holdings(uid)
-                if (not trades) and holdings:
-                    holding_type = "PURE_STOCK_100X"
-                elif any((t[2] is not None) for t in trades):
-                    holding_type = "COMPLEX_OPTIONS"
-                else:
-                    holding_type = "LEVERAGED_MARGIN"
+            # 獲取所有自選標的的雷達數據
+            scan_results = await asyncio.gather(
+                *(terminal_cog._fetch_sym_radar_data(s) for s in deliverable_symbols),
+                return_exceptions=True,
+            )
+            valid_results = [r for r in scan_results if isinstance(r, dict)]
 
-                # Build Telemetry Suggestions and Alignment Notes
-                symbol_active_orders = [
-                    o
-                    for o in user_active_orders
-                    if str(o.get("symbol") or "").upper() == sym.upper()
-                ]
-                telemetry_alignment_note = None
-                suggestions_to_apply = {}
-                alignment_items = []
-
-                # Fetch prev_close from quotes
-                q_data = quotes.get(sym.upper(), {}) if quotes else {}
-                prev_close = float(q_data.get("pc") or 0.0)
-
-                for o in symbol_active_orders:
-                    order_type = str(o.get("order_type") or "").upper()
-                    if order_type in ("TRAILING_STOP_USD", "TRAILING_STOP_PCT"):
-                        continue
-                    limit_p = float(o.get("limit_price") or 0)
-                    stop_p = float(o.get("stop_price") or 0)
-                    if order_type in ("LIMIT", "STOP_LIMIT") and limit_p > 0:
-                        current_price = limit_p
-                        price_label = "掛單限價"
-                    elif order_type in ("STOP", "STOP_LIMIT") and stop_p > 0:
-                        current_price = stop_p
-                        price_label = "掛單停損價"
-                    else:
-                        current_price = limit_p if limit_p > 0 else stop_p
-                    if current_price <= 0:
-                        continue
-
-                    original_qty = int(round(float(o.get("quantity") or 1.0)))
-                    original_qty = max(1, original_qty)
-
-                    from market_analysis.telemetry_pricing_engine import (
-                        generate_alignment_decision,
-                    )
-
-                    decision = await generate_alignment_decision(
-                        user_id=uid,
-                        order_id=int(o.get("id") or 0),
-                        symbol=sym,
-                        current_order_price=float(current_price),
-                        spot_price=float(evaluation.metrics.current_price),
-                        original_qty=original_qty,
-                        iv=evaluation.metrics.iv_percentile / 100.0
-                        if evaluation.metrics.iv_percentile > 0
-                        else 0.35,
-                        hist_iv=0.35,
-                        iv_rank=evaluation.metrics.iv_rank / 100.0,
-                        max_pain_price=None,
-                        prev_max_pain=0.0,
-                        skew_percentile=evaluation.metrics.skew_percentile / 100.0,
-                        put_call_ratio=evaluation.metrics.pcr,
-                        prev_close=prev_close,
-                    )
-
-                    if decision is not None:
-                        suggested_price = float(decision.suggested_price)
-                        suggested_qty = int(decision.suggested_qty)
-
-                        if (
-                            abs(suggested_price - current_price) >= 0.01
-                            or suggested_qty != original_qty
-                        ):
-                            suggestions_to_apply[int(o.get("id"))] = (
-                                suggested_price,
-                                suggested_qty,
-                            )
-                            is_size_down = suggested_qty < original_qty
-
-                            gain_loss_pct = (
-                                (
-                                    (
-                                        evaluation.metrics.current_price
-                                        - holding_avg_cost
-                                    )
-                                    / holding_avg_cost
-                                    * 100.0
-                                )
-                                if (holding_avg_cost and holding_avg_cost > 0)
-                                else 0.0
-                            )
-                            wall_dist = (
-                                (
-                                    (
-                                        evaluation.metrics.current_price
-                                        - evaluation.metrics.gex_max_put_wall
-                                    )
-                                    / evaluation.metrics.gex_max_put_wall
-                                    * 100.0
-                                )
-                                if evaluation.metrics.gex_max_put_wall > 0
-                                else 0.0
-                            )
-
-                            if holding_type == "PURE_STOCK_100X":
-                                holding_type_label = "PURE STOCK (現貨防禦)"
-                                holding_status = "鋼鐵防線鎖定"
-                            elif holding_type == "COMPLEX_OPTIONS":
-                                holding_type_label = "COMPLEX OPTIONS (期權組合)"
-                                holding_status = "期權動態對沖"
-                            else:
-                                holding_type_label = "LEVERAGED (槓桿保證金)"
-                                holding_status = "槓桿動態監控"
-
-                            alignment_item = {
-                                "symbol": sym,
-                                "order_id": o.get("id"),
-                                "order_type": order_type,
-                                "price_label": price_label,
-                                "current_price": current_price,
-                                "original_qty": original_qty,
-                                "suggested_price": suggested_price,
-                                "suggested_qty": suggested_qty,
-                                "is_size_down": is_size_down,
-                                "alert_text": getattr(decision, "alert_text", None),
-                                "live_price": evaluation.metrics.current_price,
-                                "avg_cost": holding_avg_cost or 0.0,
-                                "gain_loss_pct": gain_loss_pct,
-                                "put_wall": evaluation.metrics.gex_max_put_wall,
-                                "wall_dist_pct": wall_dist,
-                                "wall_status": "支撐穩固"
-                                if wall_dist >= 0
-                                else "已跌破防線",
-                                "skew_val": evaluation.metrics.option_skew,
-                                "skew_pct": evaluation.metrics.skew_percentile,
-                                "skew_status": evaluation.metrics.option_skew_state,
-                                "iv_val": evaluation.metrics.iv_percentile,
-                                "iv_rank": evaluation.metrics.iv_rank,
-                                "iv_status": "HIGH"
-                                if evaluation.metrics.iv_rank > 70
-                                else "LOW"
-                                if evaluation.metrics.iv_rank < 30
-                                else "NORMAL",
-                                "holding_type_label": holding_type_label,
-                                "holding_shares": int(holding_quantity or 0),
-                                "holding_status": holding_status,
-                                "proximity_pct": abs(
-                                    evaluation.metrics.current_price - current_price
-                                )
-                                / evaluation.metrics.current_price
-                                * 100.0,
-                                "radar_status": "偏離建議區"
-                                if abs(suggested_price - current_price) >= 0.01
-                                else "精準對齊中",
-                                "system_status_flag": "⚠️ TAIL RISK REDUCTION"
-                                if is_size_down
-                                else "ACTIVE MONITOR",
-                                "system_instruction_directive": getattr(
-                                    decision, "alert_text", "偏離安全區，建議對齊。"
-                                ),
-                            }
-                            alignment_items.append(alignment_item)
-
-                if alignment_items:
-                    card_contents = []
-                    from cogs.embed_builder import _build_telemetry_alignment_ansi_card
-
-                    for item in alignment_items:
-                        card_contents.append(_build_telemetry_alignment_ansi_card(item))
-                    telemetry_alignment_note = "\n\n".join(card_contents)
-
-                system_status = None
-                # Apply sovereign gating for PURE_STOCK_100X: suppress panic directives
-                if holding_type == "PURE_STOCK_100X":
-                    system_status = "SYSTEM LOCK / STEEL FORTRESS"
-                    try:
-                        sddm_route = str(evaluation.tactical.sddm_route).upper()
-                    except Exception:
-                        sddm_route = ""
-                    if (
-                        evaluation.tactical.scenario == "hard-hedge"
-                        or "HEDGE" in sddm_route
-                        or "LIQUIDATE" in sddm_route
-                    ):
-                        # Downgrade to passive wait state
-                        evaluation.tactical.scenario = "wait"
-                        evaluation.tactical.sddm_route = system_status
-                        evaluation.tactical.action_guideline = (
-                            "持股為純現貨，已鎖定系統保護，抑制強制避險。"
-                        )
-
-                # 計算動態買賣現貨與對齊期權操作建議
-                signals = calculate_dynamic_trading_signals(
-                    evaluation.metrics,
-                    evaluation.tactical,
-                    has_position=has_position,
-                    holding_quantity=holding_quantity,
-                    holding_avg_cost=holding_avg_cost,
-                    capital=user_context.capital,
-                    risk_limit=user_context.risk_limit,
-                )
-
-                option_guidance = derive_watchlist_option_guidance(
-                    evaluation.metrics,
-                    evaluation.tactical,
-                    event_context=evaluation.event_context,
-                    has_position=has_position,
-                    suitable_buy_price=signals.get("suitable_buy_price"),
-                    suitable_sell_price=signals.get("suitable_sell_price"),
-                )
-                option_plan = await build_watchlist_option_plan(
-                    evaluation.metrics,
-                    evaluation.tactical,
-                    capital=user_context.capital,
-                    risk_limit=user_context.risk_limit,
-                    event_context=evaluation.event_context,
-                    has_position=has_position,
-                )
-                embed = create_watchlist_signal_embed(
-                    symbol=sym,
-                    option_guidance=option_guidance,
-                    event_risk_summary=evaluation.event_context.summary
-                    if evaluation.event_context
-                    else "",
-                    alert_level=evaluation.tactical.alert_level,
-                    option_plan=option_plan,
-                    skew_commentary=skew_commentary_map.get(sym),
-                    has_position=has_position,
-                    holding_quantity=holding_quantity,
-                    holding_avg_cost=holding_avg_cost,
-                    holding_pnl_pct=holding_pnl_pct,
-                    suitable_buy_price=signals.get("suitable_buy_price"),
-                    suitable_buy_shares=signals.get("suitable_buy_shares"),
-                    suitable_sell_price=signals.get("suitable_sell_price"),
-                    suitable_sell_shares=signals.get("suitable_sell_shares"),
-                    buy_rationale=signals.get("buy_rationale"),
-                    sell_rationale=signals.get("sell_rationale"),
-                    telemetry_alignment_note=telemetry_alignment_note,
-                    # Upgraded Parameters
-                    metrics=evaluation.metrics,
-                    quote=q_data,
-                    iv_metrics=iv_metrics_map.get(sym),
-                    max_pain_data=max_pain_map.get(sym),
-                    pcr_data=pcr_map.get(sym),
-                    uoa_list=uoa_map.get(sym),
-                )
-                if suggestions_to_apply:
-                    import json
-
-                    setattr(
-                        embed,
-                        "_view",
-                        f"ApplyTelemetryView:{json.dumps(suggestions_to_apply)}",
-                    )
+            if valid_results:
+                embed = build_radar_scan_embed(valid_results, "WATCHLIST", uid)
                 await self.bot.queue_dm(uid, embed=embed)
 
     async def _run_market_scan_logic(self, is_auto=True, triggered_by=None):
