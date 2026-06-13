@@ -171,45 +171,52 @@ def _wrap_visual(text: str, width: int, indent: str = "") -> list[str]:
     return panel_renderer.wrap_visual(text, width, indent)
 
 
+def _clean_ansi(text: str) -> str:
+    if not text:
+        return ""
+    import re
+
+    # Remove real ANSI escape sequences
+    text = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", text)
+    text = re.sub(r"\033\[[0-9;]*[a-zA-Z]", "", text)
+    # Remove raw string ANSI residuals (e.g. [0;31m, [0m)
+    text = re.sub(r"\[\d+;?\d*m", "", text)
+    return text
+
+
+def _chunk_text_blocks(blocks: List[str], max_len: int = 1024) -> List[str]:
+    chunks = []
+    current_chunk: List[str] = []
+    current_len = 0
+
+    for block in blocks:
+        block_len = len(block)
+        if current_chunk and current_len + block_len + 2 > max_len:
+            chunks.append("\n\n".join(current_chunk))
+            current_chunk = [block]
+            current_len = block_len
+        else:
+            current_chunk.append(block)
+            current_len += block_len + (2 if current_len > 0 else 0)
+
+    if current_chunk:
+        chunks.append("\n\n".join(current_chunk))
+
+    return chunks
+
+
 def _parse_and_format_positions_table(
     positions_list: List[str], survival_runway=None
 ) -> str:
     if not positions_list:
         return "目前無持倉部位。"
 
-    table_lines = [
-        "```ansi",
-        " 當前持倉明細 (Current Positions)",
-        " ================================================================================================================================================",
-    ]
-    headers = [
-        "ID",
-        "標的",
-        "方向",
-        "類型",
-        "到期日 (DTE)",
-        "履約價",
-        "數",
-        "建立權利金",
-        "盤中現價",
-        "當前損益 (PnL)",
-        "隱含波動率 (IV/IVR)",
-        "戰略中心執行路由",
-    ]
-    widths = [2, 5, 4, 4, 15, 7, 2, 10, 8, 22, 18, 16]
-
-    header_line = " | ".join(
-        _pad_string(h, w, "left" if i in (0, 1, 2, 3, 4, 11) else "right")
-        for i, (h, w) in enumerate(zip(headers, widths))
-    )
-    table_lines.append(header_line)
-    table_lines.append("-" * (sum(widths) + 3 * (len(widths) - 1)))
-
+    parsed_blocks = []
     total_debit_cost = 0.0
     total_credit_cash = 0.0
     total_unrealized_pnl = 0.0
 
-    for idx, pos_item in enumerate(positions_list):
+    for pos_item in positions_list:
         # Regex parsing
         sym_match = re.search(r"🔹\s*\*\*(.*?)\*\*", pos_item)
         exp_match = re.search(r"`(\d{4}-\d{2}-\d{2})`", pos_item)
@@ -239,7 +246,6 @@ def _parse_and_format_positions_table(
         direction = dir_match.group(1).strip() if dir_match else "BTO"
         qty = abs(float(qty_match.group(1).strip())) if qty_match else 1.0
 
-        # 建立權利金與現價
         cost_val = (
             float(cost_match.group(1).strip().replace(",", "")) if cost_match else 0.0
         )
@@ -247,7 +253,6 @@ def _parse_and_format_positions_table(
             float(price_match.group(1).strip().replace(",", "")) if price_match else 0.0
         )
 
-        # 計算損益
         if direction == "BTO":
             debit_cost = cost_val * 100 * qty
             total_debit_cost += debit_cost
@@ -259,23 +264,12 @@ def _parse_and_format_positions_table(
 
         total_unrealized_pnl += pnl_val
 
-        # 到期日與 DTE
         dte_val = dte_match.group(1).strip() if dte_match else "0"
         if "天" in dte_val:
             dte_val = dte_val.replace("天", "").strip()
-        dte_str = f"{expiry} ({dte_val}d)"
 
-        # 履約價
-        strike_str = f"${strike_val}"
-
-        # 數量
         qty_str = f"{int(qty)}" if qty.is_integer() else f"{qty}"
 
-        # 建立權利金 / 盤中現價
-        cost_str = f"${cost_val:.2f}"
-        price_str = f"${price_val:.2f}"
-
-        # 當前損益 (PnL)
         pnl_pct = 0.0
         if cost_val > 0.0:
             if direction == "BTO":
@@ -283,76 +277,40 @@ def _parse_and_format_positions_table(
             else:
                 pnl_pct = (cost_val - price_val) / cost_val
 
-        pnl_text = f"{pnl_val:+.2f} ({pnl_pct*100:+.2f}%)"
-        if direction == "STO":
-            pnl_text += " [C]"
-
-        # ANSI 著色處理
-        pnl_text_truncated = _visual_truncate(pnl_text, widths[9])
-        if pnl_val > 0:
-            pnl_fmt = f" [0;32m{pnl_text_truncated} [0m"
-        elif pnl_val < 0:
-            pnl_fmt = f" [0;31m{pnl_text_truncated} [0m"
-        else:
-            pnl_fmt = pnl_text_truncated
-
-        # IV / IVR
         iv_ivr_str = iv_match.group(1).strip() if iv_match else "--% / --%"
-
-        # 戰略中心執行路由 (動作)
         status = status_match.group(1).strip() if status_match else "HOLD"
+        status = _clean_ansi(status)
 
-        symbol = _visual_truncate(symbol, widths[1])
-        direction = _visual_truncate(direction, widths[2])
-        type_letter = _visual_truncate(type_letter, widths[3])
-        dte_str = _visual_truncate(dte_str, widths[4])
-        strike_str = _visual_truncate(strike_str, widths[5])
-        qty_str = _visual_truncate(qty_str, widths[6])
-        cost_str = _visual_truncate(cost_str, widths[7])
-        price_str = _visual_truncate(price_str, widths[8])
-        iv_ivr_str = _visual_truncate(iv_ivr_str, widths[10])
-        status = _visual_truncate(status, widths[11])
+        pnl_sign = "+" if pnl_val > 0 else "-" if pnl_val < 0 else ""
+        pnl_abs_usd = abs(pnl_val)
+        pnl_emoji = "🟢" if pnl_val > 0 else "🚨" if pnl_val < 0 else "⚖️"
+        pnl_formatted = (
+            f"**{pnl_sign}${pnl_abs_usd:,.2f} ({pnl_pct*100:+.2f}%)** {pnl_emoji}"
+        )
 
-        id_str = f"{idx+1:02d}"
+        pos_block = (
+            f"**當前持倉明細 (標的: {symbol})**\n"
+            f"* 部位：`{direction} {type_letter}` | 數量：`{qty_str}` | {expiry} (**{dte_val}d DTE**)\n"
+            f"* 價格：履約價 `${strike_val}` | 現價 `${price_val:.2f}` *(成本 ${cost_val:.2f})* | IV/IVR: `{iv_ivr_str}`\n"
+            f"* 損益：{pnl_formatted} *{status}*"
+        )
+        parsed_blocks.append(pos_block)
 
-        cols = [
-            _pad_string(id_str, widths[0], "left"),
-            _pad_string(symbol, widths[1], "left"),
-            _pad_string(direction, widths[2], "left"),
-            _pad_string(type_letter, widths[3], "left"),
-            _pad_string(dte_str, widths[4], "left"),
-            _pad_string(strike_str, widths[5], "right"),
-            _pad_string(qty_str, widths[6], "right"),
-            _pad_string(cost_str, widths[7], "right"),
-            _pad_string(price_str, widths[8], "right"),
-            _pad_string(pnl_text_truncated, widths[9], "right").replace(
-                pnl_text_truncated, pnl_fmt
-            ),
-            _pad_string(iv_ivr_str, widths[10], "right"),
-            _pad_string(status, widths[11], "left"),
-        ]
-        table_lines.append(" | ".join(cols))
+    positions_part = "\n\n".join(parsed_blocks)
 
-    table_lines.append("")
-    table_lines.append("財務摘要 (Financial Summary)")
-    table_lines.append(
-        f" ├─ 衍生品實質現金暴露 (Debit Cost)   : ${total_debit_cost:,.2f} USD"
+    summary_lines = [
+        "財務摘要 (Financial Summary)",
+        f"* 衍生品實質現金暴露 (Debit Cost): `${total_debit_cost:,.2f}` USD",
+        f"* 造市商已沒收權利金 (Credit Cash): `${total_credit_cash:,.2f}` USD",
+    ]
+    pnl_sign = (
+        "+" if total_unrealized_pnl > 0 else "-" if total_unrealized_pnl < 0 else ""
     )
-    table_lines.append(
-        f" ├─ 造市商已沒收權利金 (Credit Cash)   : ${total_credit_cash:,.2f} USD"
+    pnl_emoji = (
+        "🟢" if total_unrealized_pnl > 0 else "🚨" if total_unrealized_pnl < 0 else "⚖️"
     )
-
-    pnl_sign = "+" if total_unrealized_pnl > 0 else ""
-    pnl_color_start = (
-        " [0;32m"
-        if total_unrealized_pnl > 0
-        else " [0;31m"
-        if total_unrealized_pnl < 0
-        else ""
-    )
-    pnl_color_end = " [0m" if total_unrealized_pnl != 0 else ""
-    table_lines.append(
-        f" ├─ 盤中實時未實現損益 (Unrealized PnL): {pnl_color_start}{pnl_sign}${total_unrealized_pnl:,.2f} USD{pnl_color_end}"
+    summary_lines.append(
+        f"* 盤中實時未實現損益 (Unrealized PnL): **{pnl_sign}${abs(total_unrealized_pnl):,.2f}** USD {pnl_emoji}"
     )
 
     if survival_runway is not None:
@@ -362,10 +320,13 @@ def _parse_and_format_positions_table(
             runway_years_str = f"{float(survival_runway)/365.0:.1f}+ 年 (鐵血不破)"
     else:
         runway_years_str = "4.6+ 年 (鐵血不破)"
-    table_lines.append(f" └─ 全域生存跑道安全係數 (Runway Buffer): {runway_years_str}")
+    summary_lines.append(
+        f"* 全域生存跑道安全係數 (Runway Buffer): `{runway_years_str}`"
+    )
 
-    table_lines.append("```")
-    return "\n".join(table_lines)
+    summary_part = "\n".join(summary_lines)
+
+    return f"{positions_part}\n\n{summary_part}"
 
 
 def _is_macro_report_marker(line: str) -> bool:
@@ -3506,44 +3467,56 @@ def create_portfolio_report_embed(
         # 如果包含財務摘要，將其分離出來單獨處理
         if "財務摘要 (Financial Summary)" in positions_text:
             table_part, summary_part = positions_text.split(
-                "\n\n財務摘要 (Financial Summary)"
+                "財務摘要 (Financial Summary)"
             )
-            summary_text = "\n\n財務摘要 (Financial Summary)" + summary_part
-            if summary_text.endswith("\n```"):
-                summary_text = summary_text[:-4]  # 移除字尾的 ```
+            summary_text = "財務摘要 (Financial Summary)" + summary_part
+            debit_match = re.search(r"Debit Cost.*:\s*(.*)", summary_text)
+            credit_match = re.search(r"Credit Cash.*:\s*(.*)", summary_text)
+            pnl_match = re.search(r"Unrealized PnL.*:\s*(.*)", summary_text)
+
+            debit_cost_val = (
+                _clean_ansi(debit_match.group(1).strip())
+                if debit_match
+                else "$0.00 USD"
+            )
+            credit_cash_val = (
+                _clean_ansi(credit_match.group(1).strip())
+                if credit_match
+                else "$0.00 USD"
+            )
+            pnl_val_str = (
+                _clean_ansi(pnl_match.group(1).strip()) if pnl_match else "$0.00 USD"
+            )
+
+            # Add inline fields for financial summary
+            embed.add_field(
+                name="💰 實質暴露 (Debit Cost)", value=debit_cost_val, inline=True
+            )
+            embed.add_field(
+                name="💵 收取權利金 (Credit Cash)", value=credit_cash_val, inline=True
+            )
+            embed.add_field(
+                name="📊 未實現損益 (Unrealized PnL)", value=pnl_val_str, inline=True
+            )
         else:
             table_part = positions_text
             summary_text = ""
 
-        raw_lines = table_part.split("\n")
-        if raw_lines and raw_lines[-1] == "```":
-            raw_lines = raw_lines[:-1]
-        if len(raw_lines) >= 3 and raw_lines[0] == "```ansi":
-            header = raw_lines[1]
-            divider = raw_lines[2]
-            data_lines = raw_lines[3:]
-            chunks = _chunk_ansi_table(header, divider, data_lines)
+        # Remove any formatting wrappers
+        table_part = table_part.strip().strip("`").strip()
+        summary_text = summary_text.strip().strip("`").strip()
 
-            # 將財務摘要追加到最後一個 chunk 中
-            if summary_text:
-                if chunks:
-                    last_chunk = chunks[-1]
-                    if last_chunk.endswith("```"):
-                        last_chunk = last_chunk[:-3] + summary_text + "\n```"
-                        chunks[-1] = last_chunk
-                    else:
-                        chunks[-1] = last_chunk + "\n" + summary_text
+        # Split positions_text by double-newline to get individual position blocks
+        blocks = [b.strip() for b in table_part.split("\n\n") if b.strip()]
+        chunks = _chunk_text_blocks(blocks, max_len=1024)
 
-            for i, chunk in enumerate(chunks):
-                name = (
-                    f"📦 當前持倉明細 ({i+1}/{len(chunks)})"
-                    if len(chunks) > 1
-                    else "📦 當前持倉明細"
-                )
-                embed.add_field(name=name, value=chunk, inline=False)
-        else:
-            positions_text = _safe_embed_field_value(positions_text, "目前無持倉部位。")
-            embed.add_field(name="📦 當前持倉明細", value=positions_text, inline=False)
+        for i, chunk in enumerate(chunks):
+            name = (
+                f"📦 當前持倉明細 ({i+1}/{len(chunks)})"
+                if len(chunks) > 1
+                else "📦 當前持倉明細"
+            )
+            embed.add_field(name=name, value=chunk, inline=False)
     else:
         embed.add_field(name="📦 當前持倉明細", value="目前無持倉部位。", inline=False)
 
@@ -5362,21 +5335,19 @@ def _format_to_target_center_style(text: str) -> str:
         line_str = line.strip()
         if not line_str:
             continue
-        # Remove standard list headers
         import re
 
         cleaned = re.sub(r"^[\-\*\•\d+\.\s]+", "", line_str).strip()
+        cleaned = _clean_ansi(cleaned)
         if cleaned:
             cleaned_lines.append(cleaned)
 
     if not cleaned_lines:
         return text
 
-    formatted_lines = ["```ansi"]
-    for i, line in enumerate(cleaned_lines):
-        prefix = " ├─ " if i < len(cleaned_lines) - 1 else " └─ "
-        formatted_lines.append(f"{prefix}{line}")
-    formatted_lines.append("```")
+    formatted_lines = []
+    for line in cleaned_lines:
+        formatted_lines.append(f"* {line}")
 
     return "\n".join(formatted_lines)
 
@@ -5392,21 +5363,19 @@ def _format_to_target_center_style_with_title(title: str, text: str) -> str:
         line_str = line.strip()
         if not line_str:
             continue
-        # Remove standard list headers
         import re
 
         cleaned = re.sub(r"^[\-\*\•\d+\.\s]+", "", line_str).strip()
+        cleaned = _clean_ansi(cleaned)
         if cleaned:
             cleaned_lines.append(cleaned)
 
     if not cleaned_lines:
-        return f"```ansi\n {title}\n └─ 暫無數據\n```"
+        return f"**{title}**\n* 暫無數據"
 
-    formatted_lines = ["```ansi", f" {title}"]
-    for i, line in enumerate(cleaned_lines):
-        prefix = " ├─ " if i < len(cleaned_lines) - 1 else " └─ "
-        formatted_lines.append(f"{prefix}{line}")
-    formatted_lines.append("```")
+    formatted_lines = [f"**{title}**"]
+    for line in cleaned_lines:
+        formatted_lines.append(f"* {line}")
 
     return "\n".join(formatted_lines)
 
@@ -5440,17 +5409,18 @@ def build_post_market_intelligence_embed(
             else f"{survival_runway:,.1f} 天"
         )
         runway_value = (
-            "```ansi\n"
-            " 財務生存跑道 (Financial Runway)\n"
-            f" ├─ 剩餘天數: {runway_text}\n"
-            " └─ 計算基準: 基於現有現金儲備與 Theta 收益\n"
-            "```"
+            f"預估剩餘天數: **{runway_text}**\n" "*(基於現有現金儲備與 Theta 收益)*"
         )
         embed.add_field(
             name="🏁 財務生存跑道 (Financial Runway)",
             value=runway_value,
             inline=False,
         )
+
+    positions_list = []
+    debit_cost_val = "$0.00 USD"
+    credit_cash_val = "$0.00 USD"
+    pnl_val_str = "$0.00 USD"
 
     if report_lines:
         macro_index = -1
@@ -5474,19 +5444,9 @@ def build_post_market_intelligence_embed(
                 positions_list, survival_runway
             )
         else:
-            positions_text = (
-                "```ansi\n"
-                " 當前持倉明細 (Current Positions)\n"
-                " └─ 狀態: 目前無持倉部位。\n"
-                "```"
-            )
+            positions_text = "目前無持倉部位。"
     else:
-        positions_text = (
-            "```ansi\n"
-            " 當前持倉明細 (Current Positions)\n"
-            " └─ 狀態: 目前無持倉部位。\n"
-            "```"
-        )
+        positions_text = "目前無持倉部位。"
         macro_text = "目前無宏觀風險數據。"
 
     if (
@@ -5496,25 +5456,69 @@ def build_post_market_intelligence_embed(
     ):
         macro_lines = macro_text.split("\n")
         cleaned_macro = [line.strip() for line in macro_lines if line.strip()]
-        formatted_macro_lines = ["```ansi", " 宏觀風險指標 (Macro Risk Metrics)"]
-        for idx, line in enumerate(cleaned_macro):
-            prefix = " ├─ " if idx < len(cleaned_macro) - 1 else " └─ "
-            formatted_macro_lines.append(f"{prefix}{line}")
-        formatted_macro_lines.append("```")
+        formatted_macro_lines = []
+        for line in cleaned_macro:
+            formatted_macro_lines.append(f"* {line}")
         macro_value = "\n".join(formatted_macro_lines)
     else:
-        macro_value = (
-            "```ansi\n"
-            " 宏觀風險指標 (Macro Risk Metrics)\n"
-            " └─ 狀態: 目前無宏觀風險數據。\n"
-            "```"
+        macro_value = "目前無宏觀風險數據。"
+
+    # Process positions text to extract financial summary and chunk positions
+    if positions_list and positions_text and positions_text != "目前無持倉部位。":
+        if "財務摘要 (Financial Summary)" in positions_text:
+            table_part, summary_part = positions_text.split(
+                "財務摘要 (Financial Summary)"
+            )
+            summary_text = "財務摘要 (Financial Summary)" + summary_part
+            debit_match = re.search(r"Debit Cost.*:\s*(.*)", summary_text)
+            credit_match = re.search(r"Credit Cash.*:\s*(.*)", summary_text)
+            pnl_match = re.search(r"Unrealized PnL.*:\s*(.*)", summary_text)
+
+            debit_cost_val = (
+                _clean_ansi(debit_match.group(1).strip())
+                if debit_match
+                else "$0.00 USD"
+            )
+            credit_cash_val = (
+                _clean_ansi(credit_match.group(1).strip())
+                if credit_match
+                else "$0.00 USD"
+            )
+            pnl_val_str = (
+                _clean_ansi(pnl_match.group(1).strip()) if pnl_match else "$0.00 USD"
+            )
+
+            positions_text = table_part.strip()
+
+        positions_text = positions_text.strip().strip("`").strip()
+        blocks = [b.strip() for b in positions_text.split("\n\n") if b.strip()]
+        chunks = _chunk_text_blocks(blocks, max_len=1024)
+
+        for i, chunk in enumerate(chunks):
+            name = (
+                f"📊 投資組合收盤持倉明細 ({i+1}/{len(chunks)})"
+                if len(chunks) > 1
+                else "📊 投資組合收盤持倉明細"
+            )
+            embed.add_field(name=name, value=chunk, inline=False)
+
+        # Add inline fields for financial summary
+        embed.add_field(
+            name="💰 實質暴露 (Debit Cost)", value=debit_cost_val, inline=True
+        )
+        embed.add_field(
+            name="💵 收取權利金 (Credit Cash)", value=credit_cash_val, inline=True
+        )
+        embed.add_field(
+            name="📊 未實現損益 (Unrealized PnL)", value=pnl_val_str, inline=True
+        )
+    else:
+        embed.add_field(
+            name="📊 投資組合收盤持倉明細",
+            value="目前無持倉部位。",
+            inline=False,
         )
 
-    embed.add_field(
-        name="📊 投資組合收盤持倉明細",
-        value=_safe_embed_field_value(positions_text, "暫無持倉"),
-        inline=False,
-    )
     embed.add_field(
         name="🌐 投資組合收盤宏觀風險",
         value=_safe_embed_field_value(macro_value, "無數據"),
@@ -5522,58 +5526,25 @@ def build_post_market_intelligence_embed(
     )
 
     if sectors_data:
-        sector_lines = ["```ansi"]
-        sector_lines.append(" 🔄 板塊輪動快照 (Sector Rotation)")
-        sector_lines.append(" ----------------------------------")
-        headers = ["ETF", "板塊", "日變動", "量比", "Skew", "UOA"]
-        widths = [5, 18, 8, 6, 8, 4]
-        sector_lines.append(
-            " ".join(
-                [
-                    " | ".join(_pad_string(h, w) for h, w in zip(headers, widths)),
-                ]
-            )
-        )
-        sector_lines.append("-" * (sum(widths) + 3 * (len(widths) - 1)))
+        sector_lines = ["**🔄 行業板塊資金輪動 (Sector Rotation)**"]
         sorted_sectors = sorted(
             sectors_data,
             key=lambda item: abs(_safe_float(item.get("pct_change"))),
             reverse=True,
         )
         for item in sorted_sectors:
+            symbol = item.get("symbol", "N/A")
+            name = item.get("name", "N/A")
+            change = _safe_float(item.get("pct_change"))
+            rel_vol = _safe_float(item.get("rel_vol"))
+            skew = _safe_float(item.get("skew"))
+            uoa_count = int(item.get("uoa_count", 0))
+
+            change_emoji = "🟢" if change > 0 else "🚨" if change < 0 else "⚖️"
+
             sector_lines.append(
-                " | ".join(
-                    [
-                        _pad_string(
-                            _visual_truncate(str(item.get("symbol", "N/A")), widths[0]),
-                            widths[0],
-                        ),
-                        _pad_string(
-                            _visual_truncate(str(item.get("name", "N/A")), widths[1]),
-                            widths[1],
-                        ),
-                        _pad_string(
-                            f"{_safe_float(item.get('pct_change')):+.2f}%",
-                            widths[2],
-                            "right",
-                        ),
-                        _pad_string(
-                            f"{_safe_float(item.get('rel_vol')):.2f}x",
-                            widths[3],
-                            "right",
-                        ),
-                        _pad_string(
-                            f"{_safe_float(item.get('skew')):+.1f}",
-                            widths[4],
-                            "right",
-                        ),
-                        _pad_string(
-                            str(int(item.get("uoa_count", 0))), widths[5], "right"
-                        ),
-                    ]
-                )
+                f"* **{symbol}** ({name})：{change_emoji} `{change:+.2f}%` | 量比 `{rel_vol:.2f}x` | Skew `{skew:+.1f}` | UOA `{uoa_count}`"
             )
-        sector_lines.append("```")
         sector_value = "\n".join(sector_lines)
         embed.add_field(
             name="🔄 行業板塊資金輪動 (Sector Rotation)",

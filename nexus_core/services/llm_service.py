@@ -227,7 +227,7 @@ async def generate_analyst_report(report_type: str, raw_data: dict) -> str:
     - Use "價差期權/價差策略" (Spreads)
     - Use "隱含波動率" (Implied Volatility)
     - Use "乖離率" (Deviation)
-    Do not use terms like "期權", "期權費", "執行價", "偏差", or simplified/mainland Chinese phrasing.
+    - Do not use simplified terms like "期權", "執行價", "期權費", etc.
 
     ### 📐 REQUIRED FORMAT & HEADERS
     The report MUST be structured using the following exact Markdown headers and formatting:
@@ -260,6 +260,10 @@ async def generate_analyst_report(report_type: str, raw_data: dict) -> str:
     - **🧬 財報影響力評估 (Impact Assessment)**: 根據即將發布財報的標的，分析其對所屬板塊的潛在波動傳導。
     - **🧪 估值調整與期望值 (Valuation & Expectation)**: 討論市場目前的預期是否過高或過低，以及隱含波動率 (IV) 的合理性。
     - **🎯 戰術建議 (Tactical Advice)**: 給出具體的交易策略建議 (例如：跨式、勒式或中性對沖)。
+
+    ### ⚠️ OUTPUT FORMATTING & LAYOUT RULES (CRITICAL)
+    1. **No ANSI Escape Code Residuals**: Do not include any Linux terminal formatting codes like "[0;31m", "[0;32m", "[0m", etc. Under no circumstances should these color codes appear in your response. Use standard Markdown or Discord Emojis (e.g. 🚨, 🟢) to highlight data or alerts.
+    2. **Strict tree structure limitation**: Do not use tree branch symbols like "├─", "└─", "│", "──" in your analysis, commentary, or recommended strategies. Standard Markdown bullet points ("*" or "-") must be used for listings to ensure proper mobile rendering.
 
     Do not invent numbers, only use the provided raw_data.
     Keep the tone extremely cold, objective, and analytical.
@@ -354,6 +358,8 @@ async def generate_watchlist_skew_commentary(symbol: str, raw_data: dict) -> str
     1. 使用 100% 繁體中文，語氣冷靜、專業。
     2. 控制在 120 字以內。
     3. 必須嚴格遵循台灣期權交易術語，例如：選擇權 (Options)、履約價 (Strike)、權利金 (Premium)、價差期權/價差策略 (Spreads)、隱含波動率 (Implied Volatility)、乖離率 (Deviation)。絕對不要使用簡體字、期權、執行價、期權費、偏差等大陸用語。
+    4. 絕對不可輸出任何 ANSI 轉義字元或殘留碼如 [0;31m, [0m。
+    5. 絕對不可在分析與策略指引中使用 ├─, └─ 等樹狀分支字元，使用標準 Markdown 項目符號。
     """
 
     user_prompt = (
