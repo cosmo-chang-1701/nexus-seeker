@@ -899,18 +899,17 @@ class UnifiedTerminalCog(commands.Cog):
             valid_results = [r for r in scan_results if isinstance(r, dict)]
 
             embeds = build_radar_scan_embed(valid_results, scan_value, user_id)
-            view = BatchScanView(unique_symbols, self, self.bot)
-
             if not isinstance(embeds, list):
                 embeds = [embeds]
 
+            chunk_size = 15
             for idx, emb in enumerate(embeds):
-                if idx == len(embeds) - 1:
-                    await interaction.followup.send(
-                        embed=emb, view=view, ephemeral=True
-                    )
-                else:
-                    await interaction.followup.send(embed=emb, ephemeral=True)
+                chunk_results = valid_results[idx * chunk_size : (idx + 1) * chunk_size]
+                chunk_symbols = [r["symbol"].upper() for r in chunk_results]
+                page_view = BatchScanView(chunk_symbols, self, self.bot)
+                await interaction.followup.send(
+                    embed=emb, view=page_view, ephemeral=True
+                )
 
         except Exception as e:
             logger.error(f"Batch Scan Error for {scan_value}: {e}")
