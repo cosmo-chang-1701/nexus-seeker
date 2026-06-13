@@ -5710,6 +5710,7 @@ def build_radar_scan_embed(
         "HOLDINGS": "現貨持倉批次量化雷達 (Holdings)",
         "ORDERS": "待成交掛單批次量化雷達 (Pending Orders)",
         "OPTIONS": "期權持倉批次量化雷達 (Option Holdings)",
+        "WATCHLIST": "自選標的批次量化雷達 (Watchlist)",
         "ALL": "核心 AI 暨持倉批次量化雷達 (ALL)",
     }
     display_type = title_map.get(scan_type_name, "自選標的")

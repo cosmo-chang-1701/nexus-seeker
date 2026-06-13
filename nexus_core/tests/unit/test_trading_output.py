@@ -181,106 +181,46 @@ async def test_dispatch_watchlist_heartbeat_sends_all_watchlist_symbols():
     bot = MagicMock()
     bot.queue_dm = AsyncMock()
 
+    mock_terminal = MagicMock()
+    mock_terminal._fetch_sym_radar_data = AsyncMock(
+        side_effect=lambda sym: {
+            "symbol": sym,
+            "quote": {"c": 150.0, "dp": 1.2},
+            "iv_metrics": {"iv_rank": 30.0, "expected_move_weekly": 4.5},
+            "skew": 1.1,
+            "skew_percentile": 75.0,
+            "max_pain": {"max_pain": 145.0},
+            "uoa": [],
+        }
+    )
+    bot.get_cog.return_value = mock_terminal
+
     with patch("discord.ext.tasks.Loop.start"):
         cog = SchedulerCog(bot)
 
-    eval_aapl = MagicMock()
-    eval_aapl.metrics.symbol = "AAPL"
-    eval_aapl.metrics.option_skew = 3.2
-    eval_aapl.metrics.option_skew_state = "正常"
-    eval_aapl.tactical.alert_level = "green"
-    eval_aapl.event_context.summary = "未偵測到近期需調整參數的重大事件。"
-
-    eval_nvda = MagicMock()
-    eval_nvda.metrics.symbol = "NVDA"
-    eval_nvda.metrics.option_skew = 6.8
-    eval_nvda.metrics.option_skew_state = "⚠️ 預警性對沖 (Put 昂貴)"
-    eval_nvda.tactical.alert_level = "yellow"
-    eval_nvda.event_context.summary = (
-        "CPI 倒數 12.0 小時 ｜ 先縮口數，優先定義風險的 Debit Spread / 保護性部位。"
-    )
-
     with patch(
-        "services.calendar_service.calendar_service.get_next_high_impact_event",
-        new_callable=AsyncMock,
-        return_value=SimpleNamespace(
-            event="CPI", time="2026-05-22T12:30:00Z", tte_hours=12.0
-        ),
-    ), patch(
-        "services.calendar_service.calendar_service.get_symbol_earnings_batch",
-        new_callable=AsyncMock,
-        return_value={"AAPL": None, "NVDA": None},
-    ), patch(
-        "market_analysis.intraday_pipeline.evaluate_watchlist_symbol",
-        new_callable=AsyncMock,
-        side_effect=[eval_aapl, eval_nvda],
-    ), patch(
         "database.get_full_user_context",
-        side_effect=[
-            SimpleNamespace(capital=100000.0, risk_limit=15.0, option_alert_mode=1),
-        ],
+        return_value=SimpleNamespace(
+            capital=100000.0, risk_limit=15.0, option_alert_mode=1
+        ),
     ), patch(
         "database.is_symbol_in_portfolio",
         side_effect=[False, True],
     ), patch(
-        "database.get_user_holdings",
-        return_value=[{"symbol": "NVDA", "quantity": 100.0, "avg_cost": 900.0}],
+        "database.is_notification_enabled",
+        return_value=True,
     ), patch(
-        "ui.formatter.generate_ansi_watchlist_report",
-        side_effect=["AAPL report", "NVDA report"],
-    ), patch(
-        "market_analysis.intraday_pipeline.derive_watchlist_option_guidance",
-        side_effect=["AAPL guidance", "NVDA guidance"],
-    ) as mock_guidance, patch(
-        "market_analysis.intraday_pipeline.build_watchlist_option_plan",
-        new_callable=AsyncMock,
-        side_effect=[object(), object()],
-    ), patch(
-        "services.llm_service.generate_watchlist_skew_commentary",
-        new_callable=AsyncMock,
-        side_effect=["AAPL skew", "NVDA skew"],
-    ), patch(
-        "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
-        new_callable=AsyncMock,
-        return_value=SimpleNamespace(
-            is_premarket=False,
-            current_iv=0.35,
-            iv_rank=50.0,
-            iv_percentile=50.0,
-            symbol="AAPL",
-        ),
-    ), patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_max_pain",
-        new_callable=AsyncMock,
-        return_value={"max_pain": 150.0, "current_price": 150.0, "is_converging": True},
-    ), patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
-        new_callable=AsyncMock,
-        return_value=1.0,
-    ), patch(
-        "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
-        new_callable=AsyncMock,
-        return_value=[],
-    ), patch(
-        "cogs.trading.create_watchlist_signal_embed",
-        side_effect=[object(), object()],
+        "cogs.embed_builder.build_radar_scan_embed",
+        return_value=object(),
     ) as mock_builder:
         await cog._dispatch_watchlist_heartbeat(
             [(1, "AAPL", 1), (1, "NVDA", 1), (1, "AAPL", 1)]
         )
 
-    assert mock_builder.call_count == 2
-    assert bot.queue_dm.await_count == 2
-    assert mock_guidance.call_args_list[0].kwargs["has_position"] is False
-    assert mock_guidance.call_args_list[1].kwargs["has_position"] is True
-    assert mock_builder.call_args_list[0].kwargs["option_guidance"] == "AAPL guidance"
-    assert mock_builder.call_args_list[0].kwargs["skew_commentary"] == "AAPL skew"
-    assert mock_builder.call_args_list[0].kwargs["has_position"] is False
-    assert mock_builder.call_args_list[0].kwargs["holding_quantity"] is None
-    assert mock_builder.call_args_list[1].kwargs["skew_commentary"] == "NVDA skew"
-    assert mock_builder.call_args_list[1].kwargs["has_position"] is True
-    assert mock_builder.call_args_list[1].kwargs["holding_quantity"] == 100.0
-    assert mock_builder.call_args_list[1].kwargs["holding_avg_cost"] == 900.0
+    # AAPL is duplicate in list, so unique AAPL and NVDA are fetched
+    assert mock_terminal._fetch_sym_radar_data.call_count == 2
+    mock_builder.assert_called_once()
+    assert bot.queue_dm.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -288,99 +228,46 @@ async def test_dispatch_watchlist_heartbeat_honors_portfolio_only_mode():
     bot = MagicMock()
     bot.queue_dm = AsyncMock()
 
+    mock_terminal = MagicMock()
+    mock_terminal._fetch_sym_radar_data = AsyncMock(
+        side_effect=lambda sym: {
+            "symbol": sym,
+            "quote": {"c": 150.0, "dp": 1.2},
+            "iv_metrics": {"iv_rank": 30.0, "expected_move_weekly": 4.5},
+            "skew": 1.1,
+            "skew_percentile": 75.0,
+            "max_pain": {"max_pain": 145.0},
+            "uoa": [],
+        }
+    )
+    bot.get_cog.return_value = mock_terminal
+
     with patch("discord.ext.tasks.Loop.start"):
         cog = SchedulerCog(bot)
 
-    eval_aapl = MagicMock()
-    eval_aapl.metrics.symbol = "AAPL"
-    eval_aapl.metrics.option_skew = 3.2
-    eval_aapl.metrics.option_skew_state = "正常"
-    eval_aapl.tactical.alert_level = "green"
-    eval_aapl.event_context.summary = "未偵測到近期需調整參數的重大事件。"
-
-    eval_nvda = MagicMock()
-    eval_nvda.metrics.symbol = "NVDA"
-    eval_nvda.metrics.option_skew = 6.8
-    eval_nvda.metrics.option_skew_state = "⚠️ 預警性對沖 (Put 昂貴)"
-    eval_nvda.tactical.alert_level = "yellow"
-    eval_nvda.event_context.summary = (
-        "CPI 倒數 12.0 小時 ｜ 先縮口數，優先定義風險的 Debit Spread / 保護性部位。"
-    )
-
     with patch(
-        "services.calendar_service.calendar_service.get_next_high_impact_event",
-        new_callable=AsyncMock,
-        return_value=SimpleNamespace(
-            event="CPI", time="2026-05-22T12:30:00Z", tte_hours=12.0
-        ),
-    ), patch(
-        "services.calendar_service.calendar_service.get_symbol_earnings_batch",
-        new_callable=AsyncMock,
-        return_value={"AAPL": None, "NVDA": None},
-    ), patch(
-        "market_analysis.intraday_pipeline.evaluate_watchlist_symbol",
-        new_callable=AsyncMock,
-        side_effect=[eval_aapl, eval_nvda],
-    ), patch(
         "database.get_full_user_context",
         return_value=SimpleNamespace(
             capital=100000.0, risk_limit=15.0, option_alert_mode=2
         ),
     ), patch(
         "database.is_symbol_in_portfolio",
-        side_effect=[False, True],
+        side_effect=[
+            False,
+            True,
+        ],  # AAPL has no position (False), NVDA has position (True)
     ), patch(
-        "database.get_user_holdings",
-        return_value=[{"symbol": "NVDA", "quantity": 100.0, "avg_cost": 900.0}],
+        "database.is_notification_enabled",
+        return_value=True,
     ), patch(
-        "ui.formatter.generate_ansi_watchlist_report",
-        return_value="NVDA report",
-    ), patch(
-        "market_analysis.intraday_pipeline.derive_watchlist_option_guidance",
-        return_value="NVDA holding guidance",
-    ) as mock_guidance, patch(
-        "market_analysis.intraday_pipeline.build_watchlist_option_plan",
-        new_callable=AsyncMock,
-        return_value=object(),
-    ), patch(
-        "services.llm_service.generate_watchlist_skew_commentary",
-        new_callable=AsyncMock,
-        side_effect=["AAPL skew", "NVDA skew"],
-    ), patch(
-        "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
-        new_callable=AsyncMock,
-        return_value=SimpleNamespace(
-            is_premarket=False,
-            current_iv=0.35,
-            iv_rank=50.0,
-            iv_percentile=50.0,
-            symbol="NVDA",
-        ),
-    ), patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_max_pain",
-        new_callable=AsyncMock,
-        return_value={"max_pain": 900.0, "current_price": 900.0, "is_converging": True},
-    ), patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
-        new_callable=AsyncMock,
-        return_value=1.0,
-    ), patch(
-        "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
-        new_callable=AsyncMock,
-        return_value=[],
-    ), patch(
-        "cogs.trading.create_watchlist_signal_embed",
+        "cogs.embed_builder.build_radar_scan_embed",
         return_value=object(),
     ) as mock_builder:
         await cog._dispatch_watchlist_heartbeat([(1, "AAPL", 1), (1, "NVDA", 1)])
 
-    assert mock_guidance.call_count == 1
-    call_kwargs = mock_guidance.call_args.kwargs
-    assert call_kwargs["has_position"] is True
-    assert call_kwargs["event_context"] == eval_nvda.event_context
+    # Only NVDA has position, so only NVDA should be fetched and scanned
+    mock_terminal._fetch_sym_radar_data.assert_called_once_with("NVDA")
     mock_builder.assert_called_once()
-    assert mock_builder.call_args.kwargs["holding_quantity"] == 100.0
-    assert mock_builder.call_args.kwargs["holding_avg_cost"] == 900.0
     assert bot.queue_dm.await_count == 1
 
 
