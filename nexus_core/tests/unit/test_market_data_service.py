@@ -330,3 +330,41 @@ async def test_execute_api_call_respects_retry_after():
         assert m_sleep.called
         sleep_args = [args[0] for args, _ in m_sleep.call_args_list]
         assert 5.5 in sleep_args
+
+
+@pytest.mark.asyncio
+async def test_execute_api_call_rotates_keys():
+    """Test that _execute_api_call rotates keys when hitting a 429 and multiple keys exist."""
+    import services.market_data_service as mds
+    from unittest.mock import MagicMock
+
+    orig_api_key = mds.FINNHUB_API_KEY
+    orig_clients = mds._clients
+    orig_idx = mds._client_idx
+
+    try:
+        mds.FINNHUB_API_KEY = "dummy-key-1,dummy-key-2"
+        mds._clients = []
+        mds._client_idx = 0
+
+        client1 = mds._get_client()
+        client2 = mds._get_client()
+
+        mds._client_idx = 0
+
+        client1.quote = MagicMock(side_effect=Exception("429 Too Many Requests"))
+        client2.quote = MagicMock(return_value={"c": 150.0})
+
+        with patch("services.market_data_service._rate_limit_until", 0.0), patch(
+            "asyncio.sleep", new_callable=AsyncMock
+        ):
+            res = await mds.get_quote("AAPL")
+            assert res == {"c": 150.0}
+
+            client1.quote.assert_called_once()
+            client2.quote.assert_called_once()
+
+    finally:
+        mds.FINNHUB_API_KEY = orig_api_key
+        mds._clients = orig_clients
+        mds._client_idx = orig_idx
