@@ -6,7 +6,7 @@
 
 Nexus Seeker 是一個 **Discord-first 的選擇權風控與交易營運平台**：把 watchlist 半小時心跳、期權結構判讀、事件風險防禦、委託單管理與 LLM 輔助解讀，收斂成一套可長期運行、可主動推播、適合實盤節奏的工作流。
 
-> 核心版本（nexus_core）：**v1.7.11**
+> 核心版本（nexus_core）：**v1.7.12**
 
 ---
 
@@ -83,7 +83,7 @@ graph TD
 ### 2) Analyst Agent（= 獨立報告家族）
 
 - 入口：`nexus_core/cogs/analyst_agent.py`
-- 行為：盤前 / 盤中（頻率較低）/ 盤後的報告流程
+- 行為：盤前 / 盤中（每 120 分鐘）/ 盤後的報告流程
 - **注意**：啟用/停用 Analyst Agent 並不等於啟用/停用 watchlist 心跳；兩條路徑是分離的。
 
 ### 3) 產出集中化（Embed 單一真相來源）
