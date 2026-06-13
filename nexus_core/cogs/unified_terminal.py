@@ -905,10 +905,12 @@ class UnifiedTerminalCog(commands.Cog):
                 embeds = [embeds]
 
             for idx, emb in enumerate(embeds):
-                msg_view = view if idx == len(embeds) - 1 else None
-                await interaction.followup.send(
-                    embed=emb, view=msg_view, ephemeral=True
-                )
+                if idx == len(embeds) - 1:
+                    await interaction.followup.send(
+                        embed=emb, view=view, ephemeral=True
+                    )
+                else:
+                    await interaction.followup.send(embed=emb, ephemeral=True)
 
         except Exception as e:
             logger.error(f"Batch Scan Error for {scan_value}: {e}")
