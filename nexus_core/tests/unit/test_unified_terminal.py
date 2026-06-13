@@ -233,9 +233,7 @@ async def test_symbol_hub_batch_scan_holdings(mock_interaction, mock_bot):
         _, kwargs = mock_interaction.followup.send.call_args
         assert "view" in kwargs
         assert isinstance(kwargs["view"], BatchScanView)
-        embeds = kwargs["embeds"]
-        assert len(embeds) == 1
-        embed = embeds[0]
+        embed = kwargs["embed"]
         assert "現貨持倉批次量化雷達 (Holdings)" in embed.title
 
 
@@ -310,9 +308,7 @@ async def test_symbol_hub_batch_scan_all(mock_interaction, mock_bot):
         _, kwargs = mock_interaction.followup.send.call_args
         assert "view" in kwargs
         assert isinstance(kwargs["view"], BatchScanView)
-        embeds = kwargs["embeds"]
-        assert len(embeds) == 1
-        embed = embeds[0]
+        embed = kwargs["embed"]
         assert "核心 AI 暨持倉批次量化雷達 (ALL)" in embed.title
 
 
@@ -358,7 +354,5 @@ async def test_symbol_hub_batch_scan_watchlist(mock_interaction, mock_bot):
         _, kwargs = mock_interaction.followup.send.call_args
         assert "view" in kwargs
         assert isinstance(kwargs["view"], BatchScanView)
-        embeds = kwargs["embeds"]
-        assert len(embeds) == 1
-        embed = embeds[0]
+        embed = kwargs["embed"]
         assert "自選標的批次量化雷達 (Watchlist)" in embed.title
