@@ -97,9 +97,17 @@ def test_create_portfolio_report_embed():
     embed = create_portfolio_report_embed(report_lines, survival_runway=120)
     assert embed.title == "📊 Nexus Seeker 盤後風險結算報告"
     assert "🏁 財務生存跑道" in embed.fields[0].name
-    assert "當前持倉明細" in embed.fields[1].name
 
-    positions_value = embed.fields[1].value
+    assert embed.fields[1].name == "💰 實質暴露 (Debit Cost)"
+    assert "$500.00" in embed.fields[1].value
+    assert embed.fields[2].name == "💵 收取權利金 (Credit Cash)"
+    assert "$0.00" in embed.fields[2].value
+    assert embed.fields[3].name == "📊 未實現損益 (Unrealized PnL)"
+    assert "+$150.00" in embed.fields[3].value
+
+    assert "當前持倉明細" in embed.fields[4].name
+
+    positions_value = embed.fields[4].value
     assert "標的" in positions_value
     assert "AAPL" in positions_value
     assert "2026-06-19" in positions_value
@@ -863,8 +871,7 @@ def test_create_portfolio_report_embed_chunking():
     assert "當前持倉明細 (1/" in pos_fields[0].name
     for f in pos_fields:
         assert len(f.value) <= 1024
-        assert "```ansi" in f.value
-        assert "```" in f.value
+        assert "```ansi" not in f.value
 
 
 def test_create_sentiment_scan_embed_premarket():
@@ -1098,9 +1105,9 @@ def test_build_post_market_intelligence_embed_parsed_ai_commentary():
     market_field = next(
         f for f in embed.fields if f.name == "📊 AI 多空大盤交叉驗證解讀"
     )
-    assert "```ansi" in market_field.value
-    assert " ├─ 第一點分析" in market_field.value
-    assert " └─ 第二點分析" in market_field.value
+    assert "```ansi" not in market_field.value
+    assert "* 第一點分析" in market_field.value
+    assert "* 第二點分析" in market_field.value
 
 
 def test_create_covered_call_unlock_embed():
