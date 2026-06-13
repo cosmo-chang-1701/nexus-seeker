@@ -67,7 +67,8 @@ _rate_limit_until = 0.0
 # module-level rate limiter semaphore
 _limiter: Optional[asyncio.Semaphore] = None
 
-_client: Optional[finnhub.Client] = None
+_clients: List[finnhub.Client] = []
+_client_idx = 0
 
 
 def _get_finnhub_controls() -> dict[str, Any]:
@@ -87,14 +88,34 @@ def _get_finnhub_controls() -> dict[str, Any]:
 
 
 def _get_client() -> finnhub.Client:
-    """取得或初始化 Finnhub client (lazy singleton)。"""
-    global _client
-    if _client is None:
+    """取得或初始化 Finnhub client (輪詢取得)。"""
+    global _clients, _client_idx
+    if not _clients:
         if not FINNHUB_API_KEY:
             raise RuntimeError("FINNHUB_API_KEY 未設定，請在 .env 中配置")
-        _client = finnhub.Client(api_key=FINNHUB_API_KEY)
-        logger.info("Finnhub Client (Async Wrapper) 初始化完成")
-    return _client
+        keys = [k.strip() for k in FINNHUB_API_KEY.split(",") if k.strip()]
+        for key in keys:
+            _clients.append(finnhub.Client(api_key=key))
+        logger.info(f"Finnhub Client Pool 初始化完成，共載入 {len(_clients)} 個金鑰")
+
+    if not _clients:
+        raise RuntimeError("金鑰池為空，請確認 FINNHUB_API_KEY 配置")
+
+    client = _clients[_client_idx]
+    if len(_clients) > 1:
+        _client_idx = (_client_idx + 1) % len(_clients)
+    return client
+
+
+def _rotate_client() -> finnhub.Client:
+    """將金鑰池輪替至下一個金鑰並回傳。"""
+    global _clients, _client_idx
+    if not _clients:
+        _get_client()
+    if len(_clients) > 1:
+        _client_idx = (_client_idx + 1) % len(_clients)
+        logger.info(f"🔄 偵測到頻率限制或重試，輪替 Finnhub 金鑰至索引 {_client_idx}")
+    return _clients[_client_idx]
 
 
 # ---------------------------------------------------------------------------
@@ -197,6 +218,14 @@ async def _execute_api_call(func, *args, **kwargs) -> Any:
                                 delay = (2**attempt) + random.uniform(0.1, 1.0)
                         else:
                             delay = (2**attempt) + random.uniform(0.1, 1.0)
+
+                        # Rotate Finnhub Client for retry if multiple keys are configured
+                        if _clients and len(_clients) > 1 and hasattr(func, "__name__"):
+                            try:
+                                next_client = _rotate_client()
+                                func = getattr(next_client, func.__name__)
+                            except Exception as ex:
+                                logger.warning(f"輪替 Finnhub 實例失敗: {ex}")
 
                         if is_rate_limit:
                             # 使用 max() 保留最長冷卻時間，避免被較短 delay 覆蓋
