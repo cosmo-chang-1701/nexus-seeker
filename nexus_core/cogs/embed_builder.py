@@ -2738,14 +2738,28 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     )
 
     # 1. 💹 即時報價 (Real-time Quote)
-    quote = data.get("quote", {})
-    c_val = quote.get("c", data.get("price", 0.0))
-    dp_val = quote.get("dp", 0.0)
-    d_val = quote.get("d", 0.0)
-    o_val = quote.get("o", 0.0)
-    h_val = quote.get("h", 0.0)
-    l_val = quote.get("l", 0.0)
-    pc_val = quote.get("pc", 0.0)
+    quote = data.get("quote") or {}
+
+    c_raw = quote.get("c") if quote.get("c") is not None else data.get("price")
+    c_val = float(c_raw) if c_raw is not None else 0.0
+
+    dp_raw = quote.get("dp")
+    dp_val = float(dp_raw) if dp_raw is not None else 0.0
+
+    d_raw = quote.get("d")
+    d_val = float(d_raw) if d_raw is not None else 0.0
+
+    o_raw = quote.get("o")
+    o_val = float(o_raw) if o_raw is not None else 0.0
+
+    h_raw = quote.get("h")
+    h_val = float(h_raw) if h_raw is not None else 0.0
+
+    l_raw = quote.get("l")
+    l_val = float(l_raw) if l_raw is not None else 0.0
+
+    pc_raw = quote.get("pc")
+    pc_val = float(pc_raw) if pc_raw is not None else 0.0
 
     price_emoji = "📈" if dp_val >= 0 else "📉"
     if not quote or c_val == 0.0:
@@ -5759,8 +5773,10 @@ def build_radar_scan_embed(
         mp_data = r["max_pain"] or {}
 
         # 1. 價格與漲跌幅
-        price_val = quote.get("c", 0.0)
-        dp_val = quote.get("dp", 0.0)
+        price_raw = quote.get("c")
+        price_val = float(price_raw) if price_raw is not None else 0.0
+        dp_raw = quote.get("dp")
+        dp_val = float(dp_raw) if dp_raw is not None else 0.0
         if dp_val >= 0:
             price_str = f"${price_val:.2f} (+{dp_val:.1f}%)"
             price_ansi = f"${price_val:.2f} (\u001b[1;32m+{dp_val:.1f}%\u001b[0m)"
@@ -5773,11 +5789,19 @@ def build_radar_scan_embed(
         em_weekly = 0.0
         if iv_metrics:
             if hasattr(iv_metrics, "iv_rank"):
-                iv_rank_val = iv_metrics.iv_rank
-                em_weekly = iv_metrics.expected_move_weekly
+                iv_rank_val = (
+                    float(iv_metrics.iv_rank) if iv_metrics.iv_rank is not None else 0.0
+                )
+                em_weekly = (
+                    float(iv_metrics.expected_move_weekly)
+                    if iv_metrics.expected_move_weekly is not None
+                    else 0.0
+                )
             elif isinstance(iv_metrics, dict):
-                iv_rank_val = iv_metrics.get("iv_rank", 0.0)
-                em_weekly = iv_metrics.get("expected_move_weekly", 0.0)
+                ivr_raw = iv_metrics.get("iv_rank")
+                iv_rank_val = float(ivr_raw) if ivr_raw is not None else 0.0
+                em_raw = iv_metrics.get("expected_move_weekly")
+                em_weekly = float(em_raw) if em_raw is not None else 0.0
 
         ivr_str = f"{iv_rank_val:.1f}%"
 

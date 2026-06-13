@@ -639,7 +639,8 @@ async def evaluate_watchlist_symbol(
         from services import market_data_service
 
         quote = await market_data_service.get_quote(symbol)
-        dp_val = quote.get("dp", 0.0) if quote else 0.0
+        dp_raw = quote.get("dp") if quote else None
+        dp_val = float(dp_raw) if dp_raw is not None else 0.0
         if dp_val < -3.0 and metrics.iv_rank < 15.0:
             tactical = WatchlistTacticalPlan(
                 scenario="wait",

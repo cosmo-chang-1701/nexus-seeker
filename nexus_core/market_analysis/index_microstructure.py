@@ -47,12 +47,14 @@ async def get_market_regime() -> str:
 
     # 1. 抓取大盤微觀結構 GEX 數據
     gex_data = await fetch_gex_metrics()
-    gamma_flip = gex_data.get("gamma_flip", 515.0)
+    gamma_flip_raw = gex_data.get("gamma_flip")
+    gamma_flip = float(gamma_flip_raw) if gamma_flip_raw is not None else 515.0
 
     # 2. 獲取 VIX 數值
     try:
         macro = await get_macro_environment()
-        vix = macro.get("vix", 18.0)
+        vix_raw = macro.get("vix")
+        vix = float(vix_raw) if vix_raw is not None else 18.0
     except Exception as e:
         logger.warning(f"獲取 VIX 指標失敗: {e}")
         vix = 18.0
@@ -60,7 +62,8 @@ async def get_market_regime() -> str:
     # 3. 獲取 VTS 期限結構
     try:
         vts = await get_vix_term_structure()
-        vts_ratio = vts.get("vts_ratio", 0.95)
+        vts_ratio_raw = vts.get("vts_ratio")
+        vts_ratio = float(vts_ratio_raw) if vts_ratio_raw is not None else 0.95
     except Exception as e:
         logger.warning(f"獲取 VIX 期限結構失敗: {e}")
         vts_ratio = 0.95
@@ -68,12 +71,15 @@ async def get_market_regime() -> str:
     # 4. 獲取 SPY 現貨價
     try:
         spy_quote = await get_quote("SPY")
-        spy_spot = spy_quote.get("c", 0.0) if spy_quote else 0.0
+        spy_spot_raw = spy_quote.get("c") if spy_quote else None
+        spy_spot = float(spy_spot_raw) if spy_spot_raw is not None else 0.0
         if spy_spot <= 0.0:
-            spy_spot = gex_data.get("spy_spot", 510.0)
+            spy_spot_gex = gex_data.get("spy_spot")
+            spy_spot = float(spy_spot_gex) if spy_spot_gex is not None else 510.0
     except Exception as e:
         logger.warning(f"獲取 SPY 即時報價失敗: {e}")
-        spy_spot = gex_data.get("spy_spot", 510.0)
+        spy_spot_gex = gex_data.get("spy_spot")
+        spy_spot = float(spy_spot_gex) if spy_spot_gex is not None else 510.0
 
     # 5. Regime 條件判定 (繁體中文回傳說明，內部邏輯以英文代號)
     # 條件：VIX > 20 且 vts_ratio >= 1.0 (Backwardation) 且 SPY 現貨價 < Gamma Flip Line

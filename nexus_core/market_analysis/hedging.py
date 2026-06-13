@@ -112,7 +112,8 @@ async def get_market_regime_target(
     """系統自行判斷：當前市場環境下的理想 Beta-weighted Delta 目標。"""
     sma_200 = await market_data_service.get_sma(symbol="SPY", window=200)
     vix_quote = await market_data_service.get_quote("^VIX")
-    vix_price = vix_quote.get("c", 20.0)
+    vix_c = vix_quote.get("c") if vix_quote else None
+    vix_price = float(vix_c) if vix_c is not None else 20.0
 
     if spy_price > (sma_200 or 0) and vix_price < 25:
         target_delta = user_capital * 0.002
