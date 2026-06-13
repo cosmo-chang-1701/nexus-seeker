@@ -4,7 +4,7 @@
 
 Nexus Seeker is a multi-tenant **Discord-first options risk-control and trading operations platform**. It combines technical structure, Black-Scholes-Merton pricing, Greeks-based portfolio risk, event-aware calendar defenses, and LLM-assisted structured commentary.
 
-Current released core version: **`1.7.7`**
+Current released core version: **`1.7.8`**
 
 The codebase is optimized for:
 
@@ -113,7 +113,7 @@ The ANSI terminal radar card is built inside `cogs/embed_builder.py` using `buil
 - **返回多個 Embed 列表**：`build_radar_scan_embed()` 的返回型別升級為 `List[discord.Embed]`。
 - **動態分頁標題**：若分頁數量大於 1，系統會在每個 Embed 的 Title 後方自動標註頁碼，格式為 `(第 X/Y 頁)`（例如：`(第 1/2 頁)`）。
 - **呼叫端分流處理**：
-  - **Discord 互動指令 (如 `/x`)**：將分頁後的 Embed 列表直接傳入 `interaction.followup.send(embeds=embeds)` 一併送出（最大上限 10 個 Embeds）。
+  - **Discord 互動指令 (如 `/x`)**：對分頁後的 Embed 列表進行迭代，逐頁調用 `interaction.followup.send(embed=emb, view=msg_view)` 作為獨立的 Ephemeral 訊息發送，並將互動選單 (`BatchScanView`) 僅附掛在最後一個分頁。這能徹底繞過單一訊息中所有 Embed 累計字數不得超過 6000 字元的 Discord 限制。
   - **背景排程與 DM 隊列 (如 Watchlist 30分鐘心跳)**：呼叫端會自動對 Embed 列表進行迭代，逐頁調用 `queue_dm` 加入發送佇列，確保每一頁皆能穩定投遞且不觸發 Discord API 的字數限制。
 
 ---
