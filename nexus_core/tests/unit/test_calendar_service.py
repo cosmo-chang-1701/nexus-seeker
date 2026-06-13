@@ -204,3 +204,68 @@ async def test_get_high_impact_events_filters_empty_or_invalid_country():
     assert isinstance(events[0], EconomicEvent)
     assert events[0].event == "Valid US CPI"
     assert events[0].country == "US"
+
+
+@pytest.mark.asyncio
+async def test_calendar_service_cold_start_policy():
+    """Test that CalendarService cold-start cache-first policy bypasses API calls if cache exists."""
+    fixed_now = datetime(2026, 5, 12, 12, 0, 0)
+    with patch("services.calendar_service.datetime") as mock_datetime:
+        mock_datetime.now.side_effect = (
+            lambda tz=None: fixed_now if tz is None else fixed_now.replace(tzinfo=tz)
+        )
+        mock_datetime.fromisoformat = datetime.fromisoformat
+        mock_datetime.strptime = datetime.strptime
+        mock_datetime.combine = datetime.combine
+        mock_datetime.min = datetime.min
+
+        # 1. Test macro events bypass
+        with patch(
+            "services.calendar_service.get_macro_month_status"
+        ) as mock_status, patch(
+            "services.calendar_service.get_macro_events_between"
+        ) as mock_events_between, patch(
+            "services.market_data_service.get_economic_calendar"
+        ) as mock_finnhub:
+            mock_status.return_value = {
+                "month_key": "2026-05",
+                "checked_at": "2026-05-01 00:00:00",
+            }
+            mock_events_between.return_value = [
+                {
+                    "event": "FOMC",
+                    "event_time": "2026-05-15T12:30:00Z",
+                    "impact": "high",
+                    "country": "US",
+                }
+            ]
+
+            service = CalendarService()
+            assert service._cold_start_complete is False
+
+            events = await service.get_high_impact_events(days=3)
+            assert service._cold_start_complete is True
+
+            mock_finnhub.assert_not_called()
+            assert len(events) == 1
+            assert events[0].event == "FOMC"
+
+        # 2. Test earnings bypass
+        with patch(
+            "services.calendar_service.get_cached_earnings"
+        ) as mock_get_earnings, patch(
+            "services.market_data_service.get_earnings_calendar"
+        ) as mock_earnings_finnhub:
+            mock_get_earnings.return_value = {
+                "symbol": "AAPL",
+                "earnings_date": "2026-05-20",
+                "checked_at": "2026-05-01 00:00:00",
+            }
+
+            service = CalendarService()
+            assert service._cold_start_complete is False
+
+            earnings = await service.get_symbol_earnings("AAPL")
+            mock_earnings_finnhub.assert_not_called()
+            assert earnings is not None
+            assert earnings.date == "2026-05-20"

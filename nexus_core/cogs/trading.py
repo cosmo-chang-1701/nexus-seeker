@@ -947,10 +947,18 @@ class SchedulerCog(commands.Cog):
                 continue
 
             # 獲取所有自選標的的雷達數據
-            scan_results = await asyncio.gather(
-                *(terminal_cog._fetch_sym_radar_data(s) for s in deliverable_symbols),
-                return_exceptions=True,
-            )
+            import random
+
+            scan_results = []
+            for idx, s in enumerate(deliverable_symbols):
+                if idx > 0:
+                    await asyncio.sleep(random.uniform(1.5, 2.0))
+                try:
+                    res = await terminal_cog._fetch_sym_radar_data(s)
+                    scan_results.append(res)
+                except Exception as ex:
+                    logger.error(f"Error fetching radar data for {s}: {ex}")
+                    scan_results.append(ex)
             valid_results = [r for r in scan_results if isinstance(r, dict)]
 
             if valid_results:
