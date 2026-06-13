@@ -124,13 +124,9 @@ async def _execute_api_call(func, *args, **kwargs) -> Any:
     controls = _get_finnhub_controls()
 
     max_retries = 3
-    base_delay = 10.0
-    max_delay = 90.0
 
-    def _equal_jitter_delay(attempt: int) -> float:
-        # Equal Jitter: [exp/2, exp]
-        exp = min(max_delay, base_delay * (2**attempt))
-        return (exp / 2.0) + random.uniform(0, exp / 2.0)
+    # Introduce Micro-Jitter (Throttling) before entering the semaphore / limiters
+    await asyncio.sleep(random.uniform(0.1, 0.3))
 
     for attempt in range(max_retries + 1):
         # 0) 全局冷卻（先快檢一次，不要讓所有 task 進 limiter 排隊後又卡住）
@@ -183,7 +179,24 @@ async def _execute_api_call(func, *args, **kwargs) -> Any:
                             )
                             raise
 
-                        delay = _equal_jitter_delay(attempt)
+                        # Parse Retry-After or apply exponential backoff fallback
+                        if is_rate_limit:
+                            retry_after = None
+                            if hasattr(e, "response") and e.response is not None:
+                                retry_after_hdr = e.response.headers.get(
+                                    "Retry-After"
+                                ) or e.response.headers.get("retry-after")
+                                if retry_after_hdr:
+                                    try:
+                                        retry_after = float(retry_after_hdr)
+                                    except ValueError:
+                                        pass
+                            if retry_after is not None:
+                                delay = retry_after
+                            else:
+                                delay = (2**attempt) + random.uniform(0.1, 1.0)
+                        else:
+                            delay = (2**attempt) + random.uniform(0.1, 1.0)
 
                         if is_rate_limit:
                             # 使用 max() 保留最長冷卻時間，避免被較短 delay 覆蓋

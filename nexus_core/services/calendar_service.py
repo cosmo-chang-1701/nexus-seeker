@@ -92,6 +92,7 @@ class CalendarService:
         self._earnings_cache = BoundedCache(max_size=500)
         self._macro_cache_hours = 24
         self._earnings_cache_hours = 24
+        self._cold_start_complete = False
         self._high_impact_keywords = [
             "CPI",
             "FOMC",
@@ -154,12 +155,15 @@ class CalendarService:
                 return item
         return parsed_dates[-1]
 
-    async def _ensure_macro_month_cached(self, month_key: str) -> None:
+    async def _ensure_macro_month_cached(
+        self, month_key: str, force_fresh: bool = True
+    ) -> None:
         status = get_macro_month_status(month_key)
-        if status and self._is_timestamp_fresh(
-            status.get("checked_at"), self._macro_cache_hours
-        ):
-            return
+        if status:
+            if not force_fresh or self._is_timestamp_fresh(
+                status.get("checked_at"), self._macro_cache_hours
+            ):
+                return
 
         start_date, end_date = self._month_bounds(month_key)
         raw_events = await market_data_service.get_economic_calendar(
@@ -232,12 +236,21 @@ class CalendarService:
 
         try:
             month_keys = self._iter_month_keys(start_day, end_day)
-            await asyncio.gather(
-                *(
-                    self._ensure_macro_month_cached(month_key)
-                    for month_key in month_keys
+
+            tasks = []
+            for key in month_keys:
+                force_fresh = True
+                if not self._cold_start_complete:
+                    if get_macro_month_status(key) is not None:
+                        force_fresh = False
+                tasks.append(
+                    self._ensure_macro_month_cached(key, force_fresh=force_fresh)
                 )
-            )
+
+            if not self._cold_start_complete:
+                self._cold_start_complete = True
+
+            await asyncio.gather(*tasks)
             raw_events = get_macro_events_between(start_date, end_date)
 
             high_impact = []
@@ -281,8 +294,11 @@ class CalendarService:
         try:
             cached = get_cached_earnings(symbol)
             today = datetime.now(ny_tz).date()
-            if cached and self._is_timestamp_fresh(
-                cached.get("checked_at"), self._earnings_cache_hours
+            if cached and (
+                self._is_timestamp_fresh(
+                    cached.get("checked_at"), self._earnings_cache_hours
+                )
+                or not self._cold_start_complete
             ):
                 cached_date = cached.get("earnings_date")
                 if not cached_date:

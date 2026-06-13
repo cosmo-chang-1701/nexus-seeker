@@ -300,3 +300,33 @@ async def test_get_option_chain_caching():
         chain1.calls["strike"] = [999.0]
         chain3 = await get_option_chain("MSFT", "2026-06-19")
         assert list(chain3.calls["strike"]) == [150.0]
+
+
+@pytest.mark.asyncio
+async def test_execute_api_call_respects_retry_after():
+    """Test that _execute_api_call respects Retry-After header when a 429 occurs."""
+
+    class MockResponse:
+        def __init__(self, headers):
+            self.headers = headers
+
+    class MockException(Exception):
+        def __init__(self, message, response):
+            super().__init__(message)
+            self.response = response
+
+    mock_response = MockResponse({"Retry-After": "5.5"})
+    mock_exception = MockException("429 Too Many Requests", mock_response)
+
+    mock_func = MagicMock()
+    mock_func.side_effect = [mock_exception, "recovered_after_retry"]
+
+    with patch("services.market_data_service._rate_limit_until", 0.0), patch(
+        "asyncio.sleep", new_callable=AsyncMock
+    ) as m_sleep:
+        res = await _execute_api_call(mock_func)
+        assert res == "recovered_after_retry"
+
+        assert m_sleep.called
+        sleep_args = [args[0] for args, _ in m_sleep.call_args_list]
+        assert 5.5 in sleep_args
