@@ -121,45 +121,15 @@ class BatchScanWarningButton(discord.ui.Button):
             await interaction.edit_original_response(view=view)
 
 
-class BatchScanSelect(discord.ui.Select):
-    """
-    批次掃描標的後，提供下拉選單讓使用者可以點擊深入分析 (Drill-down) 特定標的。
-    """
-
-    def __init__(self, symbols: List[str], cog, bot):
-        options = []
-        for sym in symbols[:25]:  # Discord Select Menu 項目上限為 25
-            options.append(
-                discord.SelectOption(
-                    label=sym, description=f"🔍 點擊深入分析 {sym}", emoji="📊"
-                )
-            )
-        super().__init__(
-            placeholder="🔍 選擇單一標的深入分析...",
-            min_values=1,
-            max_values=1,
-            options=options,
-            row=1,
-        )
-        self.cog = cog
-        self.bot = bot
-
-    async def callback(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        symbol = self.values[0]
-        user_id = interaction.user.id
-        await self.cog._run_single_symbol_hub(interaction, symbol, user_id)
-
-
 class BatchScanView(discord.ui.View):
     """
-    批次掃描總覽面板的互動 View，內含 Drill-down 下拉選單。
+    批次掃描總覽面板的互動 View。
+    已移除「選擇單一標的深入分析」下拉選單。
     """
 
     def __init__(self, symbols: List[str], cog, bot):
         super().__init__(timeout=300)
         self.add_item(BatchScanWarningButton(cog, bot))
-        self.add_item(BatchScanSelect(symbols, cog, bot))
 
 
 class SymbolHubView(discord.ui.View):
