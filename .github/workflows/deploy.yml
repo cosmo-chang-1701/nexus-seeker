@@ -10,7 +10,6 @@ on:
 env:
   # Opt into Node.js 24 for all actions to resolve deprecation warnings
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
-  NODE_OPTIONS: '--no-deprecation'
   # GHCR 映像檔基本路徑
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
@@ -76,10 +75,10 @@ jobs:
           echo "image_lower=$(echo ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
 
       - name: 🐳 Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: 🔐 Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -87,7 +86,7 @@ jobs:
 
       - name: 🏷️ Extract Docker metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ steps.vars.outputs.image_lower }}
           tags: |
@@ -96,7 +95,7 @@ jobs:
             type=ref,event=tag
 
       - name: 🚀 Build and push Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: ./nexus_core
           file: ./nexus_core/Dockerfile
