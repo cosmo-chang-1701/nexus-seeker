@@ -11,17 +11,26 @@ os.environ["FINNHUB_API_KEY"] = "dummy-finnhub-key-for-tests"
 TEST_DB_NAME = "file:testdb?mode=memory&cache=shared"
 os.environ["NEXUS_DB_NAME"] = TEST_DB_NAME
 
-# Monkey-patch sqlite3.connect to force uri=True for shared in-memory URI paths
+# Monkey-patch sqlite3.connect to force uri=True for shared in-memory URI paths and set busy timeout
 _original_connect = sqlite3.connect
 
 
 def _patched_connect(database, *args, **kwargs):
     if isinstance(database, str) and database.startswith("file:"):
         kwargs["uri"] = True
+    if "timeout" not in kwargs:
+        kwargs["timeout"] = 30.0
     return _original_connect(database, *args, **kwargs)
 
 
 sqlite3.connect = _patched_connect
+
+
+@pytest.fixture(scope="session", autouse=True)
+def mock_tasks_loop_start():
+    """Globally prevent background loop tasks from starting and leaking in tests."""
+    with patch("discord.ext.tasks.Loop.start") as mock:
+        yield mock
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -81,6 +90,10 @@ def clean_db(db_conn):
                 cursor.execute(f"DELETE FROM {table}")
     db_conn.commit()
     yield
+    try:
+        db_conn.rollback()
+    except Exception:
+        pass
 
 
 @pytest.fixture
