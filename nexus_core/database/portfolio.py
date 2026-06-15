@@ -22,46 +22,47 @@ def add_portfolio_record(
 ):
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
+    try:
+        # 🚀 自動抓取目前持倉數據以取得現貨成本 (如果傳入的為 0.0)
+        if stock_cost == 0.0:
+            symbol_upper = symbol.upper()
+            cursor.execute(
+                "SELECT metadata FROM assets WHERE user_id = ? AND symbol = ? AND context_type = 'HOLDING'",
+                (user_id, symbol_upper),
+            )
+            h_row = cursor.fetchone()
+            if h_row:
+                try:
+                    m_hold = json.loads(h_row[0]) if h_row[0] else {}
+                    stock_cost = float(m_hold.get("avg_cost", 0.0))
+                except Exception:
+                    pass
 
-    # 🚀 自動抓取目前持倉數據以取得現貨成本 (如果傳入的為 0.0)
-    if stock_cost == 0.0:
-        symbol_upper = symbol.upper()
+        metadata = {
+            "opt_type": opt_type,
+            "strike": strike,
+            "expiry": expiry,
+            "entry_price": entry_price,
+            "quantity": quantity,
+            "stock_cost": stock_cost,
+            "weighted_delta": weighted_delta,
+            "theta": theta,
+            "gamma": gamma,
+            "category": trade_category,
+        }
+
         cursor.execute(
-            "SELECT metadata FROM assets WHERE user_id = ? AND symbol = ? AND context_type = 'HOLDING'",
-            (user_id, symbol_upper),
+            """
+            INSERT INTO assets (user_id, symbol, context_type, metadata)
+            VALUES (?, ?, 'TRADE', ?)
+        """,
+            (user_id, symbol.upper(), json.dumps(metadata)),
         )
-        h_row = cursor.fetchone()
-        if h_row:
-            try:
-                m_hold = json.loads(h_row[0]) if h_row[0] else {}
-                stock_cost = float(m_hold.get("avg_cost", 0.0))
-            except Exception:
-                pass
-
-    metadata = {
-        "opt_type": opt_type,
-        "strike": strike,
-        "expiry": expiry,
-        "entry_price": entry_price,
-        "quantity": quantity,
-        "stock_cost": stock_cost,
-        "weighted_delta": weighted_delta,
-        "theta": theta,
-        "gamma": gamma,
-        "category": trade_category,
-    }
-
-    cursor.execute(
-        """
-        INSERT INTO assets (user_id, symbol, context_type, metadata)
-        VALUES (?, ?, 'TRADE', ?)
-    """,
-        (user_id, symbol.upper(), json.dumps(metadata)),
-    )
-    trade_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
-    return trade_id
+        trade_id = cursor.lastrowid
+        conn.commit()
+        return trade_id
+    finally:
+        conn.close()
 
 
 def archive_expired_portfolio_records():
@@ -82,7 +83,6 @@ def archive_expired_portfolio_records():
             "SELECT name FROM sqlite_master WHERE type='table' AND name='archived_assets'"
         )
         if not cursor.fetchone():
-            conn.close()
             return
 
         cursor.execute(
@@ -156,47 +156,48 @@ def get_user_portfolio(user_id):
     archive_expired_portfolio_records()
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
-
-    # 🚀 自動抓取該用戶的所有目前持倉數據 (HOLDING)
-    cursor.execute(
-        "SELECT symbol, metadata FROM assets WHERE user_id = ? AND context_type = 'HOLDING'",
-        (user_id,),
-    )
-    holding_map = {}
-    for h_row in cursor.fetchall():
-        sym, meta_json = h_row
-        m_hold = json.loads(meta_json) if meta_json else {}
-        holding_map[sym.upper()] = float(m_hold.get("avg_cost", 0.0))
-
-    cursor.execute(
-        "SELECT id, symbol, metadata FROM assets WHERE user_id = ? AND context_type = 'TRADE'",
-        (user_id,),
-    )
-    rows = []
-    for row in cursor.fetchall():
-        asset_id, sym, meta_json = row
-        m = json.loads(meta_json) if meta_json else {}
-        sym_upper = sym.upper()
-        # 🚀 優先從 HOLDING 抓取目前持倉成本，若無則 fallback
-        stock_cost = holding_map.get(sym_upper, m.get("stock_cost", 0.0))
-        rows.append(
-            (
-                asset_id,
-                sym,
-                m.get("opt_type"),
-                m.get("strike"),
-                m.get("expiry"),
-                m.get("entry_price"),
-                m.get("quantity"),
-                stock_cost,
-                m.get("weighted_delta", 0.0),
-                m.get("theta", 0.0),
-                m.get("gamma", 0.0),
-                m.get("category", "SPECULATIVE"),
-            )
+    try:
+        # 🚀 自動抓取該用戶的所有目前持倉數據 (HOLDING)
+        cursor.execute(
+            "SELECT symbol, metadata FROM assets WHERE user_id = ? AND context_type = 'HOLDING'",
+            (user_id,),
         )
-    conn.close()
-    return rows
+        holding_map = {}
+        for h_row in cursor.fetchall():
+            sym, meta_json = h_row
+            m_hold = json.loads(meta_json) if meta_json else {}
+            holding_map[sym.upper()] = float(m_hold.get("avg_cost", 0.0))
+
+        cursor.execute(
+            "SELECT id, symbol, metadata FROM assets WHERE user_id = ? AND context_type = 'TRADE'",
+            (user_id,),
+        )
+        rows = []
+        for row in cursor.fetchall():
+            asset_id, sym, meta_json = row
+            m = json.loads(meta_json) if meta_json else {}
+            sym_upper = sym.upper()
+            # 🚀 優先從 HOLDING 抓取目前持倉成本，若無則 fallback
+            stock_cost = holding_map.get(sym_upper, m.get("stock_cost", 0.0))
+            rows.append(
+                (
+                    asset_id,
+                    sym,
+                    m.get("opt_type"),
+                    m.get("strike"),
+                    m.get("expiry"),
+                    m.get("entry_price"),
+                    m.get("quantity"),
+                    stock_cost,
+                    m.get("weighted_delta", 0.0),
+                    m.get("theta", 0.0),
+                    m.get("gamma", 0.0),
+                    m.get("category", "SPECULATIVE"),
+                )
+            )
+        return rows
+    finally:
+        conn.close()
 
 
 def get_all_portfolio():
@@ -204,46 +205,47 @@ def get_all_portfolio():
     archive_expired_portfolio_records()
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
-
-    # 🚀 自動抓取全站所有持倉數據 (HOLDING)
-    cursor.execute(
-        "SELECT user_id, symbol, metadata FROM assets WHERE context_type = 'HOLDING'"
-    )
-    holding_map = {}
-    for h_row in cursor.fetchall():
-        uid, sym, meta_json = h_row
-        m_hold = json.loads(meta_json) if meta_json else {}
-        holding_map[(uid, sym.upper())] = float(m_hold.get("avg_cost", 0.0))
-
-    cursor.execute(
-        "SELECT user_id, id, symbol, metadata FROM assets WHERE context_type = 'TRADE'"
-    )
-    rows = []
-    for row in cursor.fetchall():
-        uid, asset_id, sym, meta_json = row
-        m = json.loads(meta_json) if meta_json else {}
-        sym_upper = sym.upper()
-        # 🚀 優先從 HOLDING 抓取目前持倉成本，若無則 fallback
-        stock_cost = holding_map.get((uid, sym_upper), m.get("stock_cost", 0.0))
-        rows.append(
-            (
-                uid,
-                asset_id,
-                sym,
-                m.get("opt_type"),
-                m.get("strike"),
-                m.get("expiry"),
-                m.get("entry_price"),
-                m.get("quantity"),
-                stock_cost,
-                m.get("weighted_delta", 0.0),
-                m.get("theta", 0.0),
-                m.get("gamma", 0.0),
-                m.get("category", "SPECULATIVE"),
-            )
+    try:
+        # 🚀 自動抓取全站所有持倉數據 (HOLDING)
+        cursor.execute(
+            "SELECT user_id, symbol, metadata FROM assets WHERE context_type = 'HOLDING'"
         )
-    conn.close()
-    return rows
+        holding_map = {}
+        for h_row in cursor.fetchall():
+            uid, sym, meta_json = h_row
+            m_hold = json.loads(meta_json) if meta_json else {}
+            holding_map[(uid, sym.upper())] = float(m_hold.get("avg_cost", 0.0))
+
+        cursor.execute(
+            "SELECT user_id, id, symbol, metadata FROM assets WHERE context_type = 'TRADE'"
+        )
+        rows = []
+        for row in cursor.fetchall():
+            uid, asset_id, sym, meta_json = row
+            m = json.loads(meta_json) if meta_json else {}
+            sym_upper = sym.upper()
+            # 🚀 優先從 HOLDING 抓取目前持倉成本，若無則 fallback
+            stock_cost = holding_map.get((uid, sym_upper), m.get("stock_cost", 0.0))
+            rows.append(
+                (
+                    uid,
+                    asset_id,
+                    sym,
+                    m.get("opt_type"),
+                    m.get("strike"),
+                    m.get("expiry"),
+                    m.get("entry_price"),
+                    m.get("quantity"),
+                    stock_cost,
+                    m.get("weighted_delta", 0.0),
+                    m.get("theta", 0.0),
+                    m.get("gamma", 0.0),
+                    m.get("category", "SPECULATIVE"),
+                )
+            )
+        return rows
+    finally:
+        conn.close()
 
 
 def get_user_portfolio_stats(user_id):
@@ -264,20 +266,22 @@ def delete_portfolio_record(user_id, trade_id):
     """確保使用者只能刪除自己的紀錄"""
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
-    cursor.execute(
-        "SELECT symbol, metadata FROM assets WHERE id = ? AND user_id = ? AND context_type = 'TRADE'",
-        (trade_id, user_id),
-    )
-    row = cursor.fetchone()
-    record = None
-    if row:
-        sym, meta_json = row
-        m = json.loads(meta_json) if meta_json else {}
-        record = (sym, m.get("strike"), m.get("opt_type"))
-        cursor.execute("DELETE FROM assets WHERE id = ?", (trade_id,))
-        conn.commit()
-    conn.close()
-    return record
+    try:
+        cursor.execute(
+            "SELECT symbol, metadata FROM assets WHERE id = ? AND user_id = ? AND context_type = 'TRADE'",
+            (trade_id, user_id),
+        )
+        row = cursor.fetchone()
+        record = None
+        if row:
+            sym, meta_json = row
+            m = json.loads(meta_json) if meta_json else {}
+            record = (sym, m.get("strike"), m.get("opt_type"))
+            cursor.execute("DELETE FROM assets WHERE id = ?", (trade_id,))
+            conn.commit()
+        return record
+    finally:
+        conn.close()
 
 
 def update_portfolio_greeks(
@@ -286,39 +290,41 @@ def update_portfolio_greeks(
     """更新持倉紀錄的希臘字母數據"""
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
-
-    cursor.execute("SELECT metadata FROM assets WHERE id = ?", (trade_id,))
-    row = cursor.fetchone()
-    if row:
-        meta = json.loads(row[0]) if row[0] else {}
-        meta["weighted_delta"] = weighted_delta
-        meta["theta"] = theta
-        meta["gamma"] = gamma
-        cursor.execute(
-            "UPDATE assets SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (json.dumps(meta), trade_id),
-        )
-
-    conn.commit()
-    conn.close()
-    return True
+    try:
+        cursor.execute("SELECT metadata FROM assets WHERE id = ?", (trade_id,))
+        row = cursor.fetchone()
+        if row:
+            meta = json.loads(row[0]) if row[0] else {}
+            meta["weighted_delta"] = weighted_delta
+            meta["theta"] = theta
+            meta["gamma"] = gamma
+            cursor.execute(
+                "UPDATE assets SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (json.dumps(meta), trade_id),
+            )
+        conn.commit()
+        return True
+    finally:
+        conn.close()
 
 
 def is_symbol_in_portfolio(user_id: int, symbol: str) -> bool:
     """檢查標的是否存在於使用者的活躍持倉 (TRADE) 或現貨 (HOLDING) 中"""
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT 1 FROM assets
-        WHERE user_id = ? AND symbol = ? AND context_type IN ('TRADE', 'HOLDING')
-        LIMIT 1
-    """,
-        (user_id, symbol.upper()),
-    )
-    res = cursor.fetchone()
-    conn.close()
-    return res is not None
+    try:
+        cursor.execute(
+            """
+            SELECT 1 FROM assets
+            WHERE user_id = ? AND symbol = ? AND context_type IN ('TRADE', 'HOLDING')
+            LIMIT 1
+        """,
+            (user_id, symbol.upper()),
+        )
+        res = cursor.fetchone()
+        return res is not None
+    finally:
+        conn.close()
 
 
 # ==========================================
@@ -328,15 +334,17 @@ def add_hedge_history(user_id, date, alpha_pnl, hedge_pnl, effectiveness, tau_ap
     """紀錄每日對沖績效與使用的 Tau 係數"""
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
-    cursor.execute(
-        """
-        INSERT INTO hedge_history (user_id, date, alpha_pnl, hedge_pnl, effectiveness, tau_applied)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """,
-        (user_id, date, alpha_pnl, hedge_pnl, effectiveness, tau_applied),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        cursor.execute(
+            """
+            INSERT INTO hedge_history (user_id, date, alpha_pnl, hedge_pnl, effectiveness, tau_applied)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """,
+            (user_id, date, alpha_pnl, hedge_pnl, effectiveness, tau_applied),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def get_hedge_history(user_id, limit=7):
@@ -344,17 +352,19 @@ def get_hedge_history(user_id, limit=7):
     conn = sqlite3.connect(config.DB_NAME)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT date, alpha_pnl, hedge_pnl, effectiveness, tau_applied
-        FROM hedge_history
-        WHERE user_id = ?
-        ORDER BY date DESC
-        LIMIT ?
-    """,
-        (user_id, limit),
-    )
-    rows = cursor.fetchall()
-    conn.close()
-    # 返回時按日期升序 (從舊到新)，利於後續移動平均計算
-    return [dict(row) for row in rows][::-1]
+    try:
+        cursor.execute(
+            """
+            SELECT date, alpha_pnl, hedge_pnl, effectiveness, tau_applied
+            FROM hedge_history
+            WHERE user_id = ?
+            ORDER BY date DESC
+            LIMIT ?
+        """,
+            (user_id, limit),
+        )
+        rows = cursor.fetchall()
+        # 返回時按日期升序 (從舊到新)，利於後續移動平均計算
+        return [dict(row) for row in rows][::-1]
+    finally:
+        conn.close()

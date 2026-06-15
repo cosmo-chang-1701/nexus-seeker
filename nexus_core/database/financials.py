@@ -22,76 +22,89 @@ def get_cached_financials(
     symbol: str, expiry_hours: int = 24
 ) -> Optional[Dict[str, Any]]:
     """Read non-expired financial metrics from SQLite cache."""
+    conn = None
     try:
-        with sqlite3.connect(config.DB_NAME) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
+        conn = sqlite3.connect(config.DB_NAME)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
 
-            payload_col = _get_payload_column(cursor)
-            expiry_limit = (datetime.now() - timedelta(hours=expiry_hours)).strftime(
-                "%Y-%m-%d %H:%M:%S"
+        payload_col = _get_payload_column(cursor)
+        expiry_limit = (datetime.now() - timedelta(hours=expiry_hours)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+
+        if payload_col == "data":
+            cursor.execute(
+                """
+                SELECT data AS payload
+                FROM financials_cache
+                WHERE symbol = ? AND updated_at > ?
+                """,
+                (symbol.upper(), expiry_limit),
             )
-
-            if payload_col == "data":
-                cursor.execute(
-                    """
-                    SELECT data AS payload
-                    FROM financials_cache
-                    WHERE symbol = ? AND updated_at > ?
-                    """,
-                    (symbol.upper(), expiry_limit),
-                )
-            else:
-                cursor.execute(
-                    """
-                    SELECT metrics AS payload
-                    FROM financials_cache
-                    WHERE symbol = ? AND updated_at > ?
-                    """,
-                    (symbol.upper(), expiry_limit),
-                )
-            row = cursor.fetchone()
-            if not row or not row["payload"]:
-                return None
-            return json.loads(row["payload"])
+        else:
+            cursor.execute(
+                """
+                SELECT metrics AS payload
+                FROM financials_cache
+                WHERE symbol = ? AND updated_at > ?
+                """,
+                (symbol.upper(), expiry_limit),
+            )
+        row = cursor.fetchone()
+        if not row or not row["payload"]:
+            return None
+        return json.loads(row["payload"])
     except Exception as e:
         logger.error("[%s] 讀取 financials_cache 失敗: %s", symbol, e)
         return None
+    finally:
+        if conn:
+            conn.close()
 
 
 def save_financials_cache(symbol: str, data: Dict[str, Any]) -> None:
     """Upsert financial metrics into SQLite cache."""
+    conn = None
     try:
-        with sqlite3.connect(config.DB_NAME) as conn:
-            cursor = conn.cursor()
-            payload_col = _get_payload_column(cursor)
+        conn = sqlite3.connect(config.DB_NAME)
+        cursor = conn.cursor()
+        payload_col = _get_payload_column(cursor)
 
-            if payload_col == "data":
-                cursor.execute(
-                    """
-                    INSERT OR REPLACE INTO financials_cache (symbol, data, updated_at)
-                    VALUES (?, ?, CURRENT_TIMESTAMP)
-                    """,
-                    (symbol.upper(), json.dumps(data)),
-                )
-            else:
-                cursor.execute(
-                    """
-                    INSERT OR REPLACE INTO financials_cache (symbol, metrics, updated_at)
-                    VALUES (?, ?, CURRENT_TIMESTAMP)
-                    """,
-                    (symbol.upper(), json.dumps(data)),
-                )
-            conn.commit()
+        if payload_col == "data":
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO financials_cache (symbol, data, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                """,
+                (symbol.upper(), json.dumps(data)),
+            )
+        else:
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO financials_cache (symbol, metrics, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                """,
+                (symbol.upper(), json.dumps(data)),
+            )
+        conn.commit()
     except Exception as e:
         logger.error("[%s] 寫入 financials_cache 失敗: %s", symbol, e)
+    finally:
+        if conn:
+            conn.close()
 
 
 def purge_old_cache(days: int = 30) -> int:
     """Delete expired cache rows and return number of removed rows."""
-    with sqlite3.connect(config.DB_NAME) as conn:
+    conn = None
+    try:
+        conn = sqlite3.connect(config.DB_NAME)
         cursor = conn.cursor()
         limit = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute("DELETE FROM financials_cache WHERE updated_at < ?", (limit,))
         conn.commit()
         return cursor.rowcount
+    finally:
+        if conn:
+            conn.close()

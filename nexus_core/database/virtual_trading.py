@@ -28,32 +28,34 @@ def add_virtual_trade(
 
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
-    cursor.execute(
-        """
-        INSERT INTO virtual_trades (user_id, symbol, opt_type, strike, expiry, entry_price, quantity, weighted_delta, theta, gamma, status, parent_trade_id, tags, trade_category)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?)
-    """,
-        (
-            user_id,
-            symbol,
-            opt_type,
-            strike,
-            expiry,
-            entry_price,
-            quantity,
-            weighted_delta,
-            theta,
-            gamma,
-            parent_trade_id,
-            tags_str,
-            trade_category,
-        ),
-    )
+    try:
+        cursor.execute(
+            """
+            INSERT INTO virtual_trades (user_id, symbol, opt_type, strike, expiry, entry_price, quantity, weighted_delta, theta, gamma, status, parent_trade_id, tags, trade_category)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?)
+        """,
+            (
+                user_id,
+                symbol,
+                opt_type,
+                strike,
+                expiry,
+                entry_price,
+                quantity,
+                weighted_delta,
+                theta,
+                gamma,
+                parent_trade_id,
+                tags_str,
+                trade_category,
+            ),
+        )
 
-    trade_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
-    return trade_id
+        trade_id = cursor.lastrowid
+        conn.commit()
+        return trade_id
+    finally:
+        conn.close()
 
 
 def get_virtual_trades(user_id: int = None, status: str = None):
@@ -65,30 +67,31 @@ def get_virtual_trades(user_id: int = None, status: str = None):
     conn = sqlite3.connect(config.DB_NAME)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
+    try:
+        query = "SELECT * FROM virtual_trades WHERE 1=1"
+        params: List[Any] = []
 
-    query = "SELECT * FROM virtual_trades WHERE 1=1"
-    params: List[Any] = []
+        if user_id is not None:
+            query += " AND user_id = ?"
+            params.append(user_id)
 
-    if user_id is not None:
-        query += " AND user_id = ?"
-        params.append(user_id)
+        if status is not None:
+            query += " AND status = ?"
+            params.append(status)
 
-    if status is not None:
-        query += " AND status = ?"
-        params.append(status)
+        cursor.execute(query, tuple(params))
+        rows = [dict(row) for row in cursor.fetchall()]
 
-    cursor.execute(query, tuple(params))
-    rows = [dict(row) for row in cursor.fetchall()]
-    conn.close()
+        # deserialize tags
+        for row in rows:
+            if row["tags"]:
+                row["tags"] = json.loads(row["tags"])
+            else:
+                row["tags"] = []
 
-    # deserialize tags
-    for row in rows:
-        if row["tags"]:
-            row["tags"] = json.loads(row["tags"])
-        else:
-            row["tags"] = []
-
-    return rows
+        return rows
+    finally:
+        conn.close()
 
 
 def get_all_open_virtual_trades():
@@ -101,19 +104,21 @@ def get_virtual_trade_by_id(trade_id: int):
     conn = sqlite3.connect(config.DB_NAME)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM virtual_trades WHERE id = ?", (trade_id,))
-    fetched = cursor.fetchone()
+    try:
+        cursor.execute("SELECT * FROM virtual_trades WHERE id = ?", (trade_id,))
+        fetched = cursor.fetchone()
 
-    row = None
-    if fetched:
-        row = dict(fetched)
-        if row["tags"]:
-            row["tags"] = json.loads(row["tags"])
-        else:
-            row["tags"] = []
+        row = None
+        if fetched:
+            row = dict(fetched)
+            if row["tags"]:
+                row["tags"] = json.loads(row["tags"])
+            else:
+                row["tags"] = []
 
-    conn.close()
-    return row
+        return row
+    finally:
+        conn.close()
 
 
 def close_virtual_trade(
@@ -123,42 +128,36 @@ def close_virtual_trade(
     conn = sqlite3.connect(config.DB_NAME)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
+    try:
+        # 先取得目前的資料來計算 PnL
+        cursor.execute(
+            "SELECT entry_price, quantity FROM virtual_trades WHERE id = ?", (trade_id,)
+        )
+        trade = cursor.fetchone()
+        if not trade:
+            return False
 
-    # 先取得目前的資料來計算 PnL
-    cursor.execute(
-        "SELECT entry_price, quantity FROM virtual_trades WHERE id = ?", (trade_id,)
-    )
-    trade = cursor.fetchone()
-    if not trade:
+        entry_price = trade["entry_price"]
+        quantity = trade["quantity"]
+
+        # PnL 計算
+        pnl = (exit_price - entry_price) * quantity * 100
+
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        cursor.execute(
+            """
+            UPDATE virtual_trades
+            SET status = ?, exit_price = ?, closed_at = ?, pnl = ?
+            WHERE id = ?
+        """,
+            (status, exit_price, now, pnl, trade_id),
+        )
+
+        conn.commit()
+        return True
+    finally:
         conn.close()
-        return False
-
-    entry_price = trade["entry_price"]
-    quantity = trade["quantity"]
-
-    # PnL 計算:如果是買方(quantity > 0)，則 PnL = (exit - entry) * quantity * 100
-    # 但 quantity 這裡是指合約數，我們統一用 (exit - entry) * quantity * 100 嗎？
-    # 退一步說，由於 quantity 可以帶正負號 (買方 > 0, 賣方 < 0)?
-    # 或者用傳統方式: PnL = (exit_price - entry_price) * quantity * 100
-    # 不行，如果我們不知道 quantity 的正負，這裡需要明確定義。通常 Long = 正, Short = 負
-    # 假設 quantity 是帶正負號的: PnL = (exit_price - entry_price) * quantity * 100
-    # 等一下，結算時如果是 Short，進入價格是 5.0，平倉價格是 2.0，獲利 3.0，PnL = (2.0 - 5.0) * (-1) * 100 = 300，正確。
-    pnl = (exit_price - entry_price) * quantity * 100
-
-    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    cursor.execute(
-        """
-        UPDATE virtual_trades
-        SET status = ?, exit_price = ?, closed_at = ?, pnl = ?
-        WHERE id = ?
-    """,
-        (status, exit_price, now, pnl, trade_id),
-    )
-
-    conn.commit()
-    conn.close()
-    return True
 
 
 def get_open_virtual_trades(user_id: int = None):
@@ -167,17 +166,19 @@ def get_open_virtual_trades(user_id: int = None):
     """
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
+    try:
+        query = "SELECT * FROM virtual_trades WHERE status = 'OPEN'"
+        params: tuple[Any, ...] = ()
 
-    query = "SELECT * FROM virtual_trades WHERE status = 'OPEN'"
-    params: tuple[Any, ...] = ()
+        if user_id:
+            query += " AND user_id = ?"
+            params = (user_id,)
 
-    if user_id:
-        query += " AND user_id = ?"
-        params = (user_id,)
-
-    cursor.execute(query, params)
-    columns = [column[0] for column in cursor.description]
-    return [dict(zip(columns, row)) for row in cursor.fetchall()]
+        cursor.execute(query, params)
+        columns = [column[0] for column in cursor.description]
+        return [dict(zip(columns, row)) for row in cursor.fetchall()]
+    finally:
+        conn.close()
 
 
 def update_virtual_trade_greeks(
@@ -186,17 +187,19 @@ def update_virtual_trade_greeks(
     """更新虛擬交易紀錄的希臘字母數據"""
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
-    cursor.execute(
-        """
-        UPDATE virtual_trades
-        SET weighted_delta = ?, theta = ?, gamma = ?
-        WHERE id = ?
-    """,
-        (weighted_delta, theta, gamma, trade_id),
-    )
-    conn.commit()
-    conn.close()
-    return True
+    try:
+        cursor.execute(
+            """
+            UPDATE virtual_trades
+            SET weighted_delta = ?, theta = ?, gamma = ?
+            WHERE id = ?
+        """,
+            (weighted_delta, theta, gamma, trade_id),
+        )
+        conn.commit()
+        return True
+    finally:
+        conn.close()
 
 
 def get_all_virtual_trades(user_id: int):
@@ -205,10 +208,12 @@ def get_all_virtual_trades(user_id: int):
     """
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
+    try:
+        # 這裡不加 status 濾網，因為我們要算歷史總帳
+        query = "SELECT * FROM virtual_trades WHERE user_id = ? ORDER BY opened_at DESC"
+        cursor.execute(query, (user_id,))
 
-    # 這裡不加 status 濾網，因為我們要算歷史總帳
-    query = "SELECT * FROM virtual_trades WHERE user_id = ? ORDER BY opened_at DESC"
-    cursor.execute(query, (user_id,))
-
-    columns = [column[0] for column in cursor.description]
-    return [dict(zip(columns, row)) for row in cursor.fetchall()]
+        columns = [column[0] for column in cursor.description]
+        return [dict(zip(columns, row)) for row in cursor.fetchall()]
+    finally:
+        conn.close()
