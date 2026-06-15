@@ -356,3 +356,68 @@ async def test_symbol_hub_batch_scan_watchlist(mock_interaction, mock_bot):
         assert isinstance(kwargs["view"], BatchScanView)
         embed = kwargs["embed"]
         assert "自選標的批次量化雷達 (Watchlist)" in embed.title
+
+
+@pytest.mark.asyncio
+async def test_batch_scan_warning_button_callback(mock_interaction, mock_bot):
+    from cogs.unified_terminal import BatchScanWarningButton
+
+    cog = UnifiedTerminalCog(mock_bot)
+    cog._run_single_symbol_hub = AsyncMock()
+
+    # Case 1: No message or embeds
+    btn = BatchScanWarningButton(cog, mock_bot)
+    mock_interaction.message = None
+    await btn.callback(mock_interaction)
+
+    assert mock_interaction.response.send_message.called
+    _, kwargs = mock_interaction.response.send_message.call_args
+    assert "無法讀取當前訊息" in kwargs["embed"].description
+
+    # Case 2: Embed has warnings
+    mock_interaction.response.send_message.reset_mock()
+    mock_interaction.followup.send.reset_mock()
+    mock_interaction.response.edit_message.reset_mock()
+    mock_interaction.edit_original_response.reset_mock()
+
+    mock_msg = MagicMock()
+    mock_embed = MagicMock()
+    mock_field = MagicMock()
+    mock_field.name = "💡 即時聯動警示 (Real-time Insights)"
+    mock_field.value = "• 🚀 **AAPL**: 價格接近下緣\n• ⚠️ **TSLA**: 籌碼面異常"
+    mock_embed.fields = [mock_field]
+    mock_msg.embeds = [mock_embed]
+    mock_interaction.message = mock_msg
+
+    # Mock the button's view
+    mock_view = MagicMock()
+    mock_view.children = [btn]
+    btn._view = mock_view
+
+    await btn.callback(mock_interaction)
+
+    # Verify disabled states were set and original message was updated
+    assert btn.disabled is False  # Restored in finally block
+    assert mock_interaction.response.edit_message.called
+    assert mock_interaction.edit_original_response.called
+
+    mock_interaction.followup.send.assert_any_call(
+        "🔄 正在批次分析以下 2 個警示標的: AAPL, TSLA...", ephemeral=True
+    )
+    assert cog._run_single_symbol_hub.call_count == 2
+    cog._run_single_symbol_hub.assert_any_call(
+        mock_interaction, "AAPL", mock_interaction.user.id
+    )
+    cog._run_single_symbol_hub.assert_any_call(
+        mock_interaction, "TSLA", mock_interaction.user.id
+    )
+
+    # Case 3: Embed has no warnings
+    cog._run_single_symbol_hub.reset_mock()
+    mock_interaction.followup.send.reset_mock()
+    mock_field.value = "• ✨ 所有標的當前價格與 Max Pain 及波動邊界皆無極端異常偏離。"
+    await btn.callback(mock_interaction)
+    assert mock_interaction.followup.send.called
+    _, kwargs = mock_interaction.followup.send.call_args
+    assert "當前訊息的「即時聯動警示」中沒有列出任何標的" in kwargs["embed"].description
+    assert cog._run_single_symbol_hub.call_count == 0
