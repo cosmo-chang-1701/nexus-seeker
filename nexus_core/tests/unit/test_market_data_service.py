@@ -368,3 +368,64 @@ async def test_execute_api_call_rotates_keys():
         mds.FINNHUB_API_KEY = orig_api_key
         mds._clients = orig_clients
         mds._client_idx = orig_idx
+
+
+@pytest.mark.asyncio
+async def test_validate_symbol(mock_symbol_validation):
+    validate_symbol = mock_symbol_validation.real_fn
+    import sqlite3
+    import config
+
+    # 1. Invalid input or format mismatch
+    assert not await validate_symbol("")
+    assert not await validate_symbol("TOOLONGTICKERNAME")
+    assert not await validate_symbol("INVALID$")
+
+    # 2. Valid quote case (returns True)
+    with patch(
+        "services.market_data_service.get_quote", new_callable=AsyncMock
+    ) as mock_get_quote:
+        mock_get_quote.return_value = {"c": 150.0}
+        assert await validate_symbol("AAPL")
+
+    # 3. Failed quote, but exists in DB (market_cache)
+    with patch(
+        "services.market_data_service.get_quote", new_callable=AsyncMock
+    ) as mock_get_quote:
+        mock_get_quote.return_value = {}
+
+        # Connect to test DB and insert the symbol into market_cache
+        conn = sqlite3.connect(config.DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute(
+            "CREATE TABLE IF NOT EXISTS market_cache (symbol TEXT PRIMARY KEY, max_pain REAL)"
+        )
+        cursor.execute(
+            "INSERT OR REPLACE INTO market_cache (symbol, max_pain) VALUES ('XYZ', 10.0)"
+        )
+        conn.commit()
+        conn.close()
+
+        assert await validate_symbol("XYZ")
+
+    # 4. Failed quote, missing in DB, but matches standard ticker format (1-6 alphanumeric/dot/dash)
+    with patch(
+        "services.market_data_service.get_quote", new_callable=AsyncMock
+    ) as mock_get_quote:
+        mock_get_quote.return_value = {}
+
+        # Make sure it's not in the DB
+        conn = sqlite3.connect(config.DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM market_cache WHERE symbol = 'ABC'")
+        conn.commit()
+        conn.close()
+
+        assert await validate_symbol("ABC")
+
+    # 5. Failed quote, missing in DB, doesn't match standard ticker format (too long)
+    with patch(
+        "services.market_data_service.get_quote", new_callable=AsyncMock
+    ) as mock_get_quote:
+        mock_get_quote.return_value = {}
+        assert not await validate_symbol("ABC-XYZ-LONG")
