@@ -14,8 +14,6 @@ import re
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 
-from models.schemas import WatchlistOptionPlan, EnhancedWatchlistMetrics
-from models.quant import IVMetrics
 from ui import panel_renderer
 from market_analysis.uoa_telemetry import UOATradeResult, generate_uoa_ascii_table
 
@@ -888,8 +886,6 @@ def _add_risk_optimization_fields(embed, data, user_capital=None):
     hedge_spy = data.get("hedge_spy", 0.0)
     suggested = data.get("suggested_contracts", 0)
 
-    # 🚀 修正點 1：風險閾值應從數據中取得，或設為全局變數
-    # 避免後台改了 10% 這裡還在顯示 15%
     RISK_THRESHOLD = data.get("risk_limit", 15.0)
 
     # 1. 曝險現況區塊
@@ -924,7 +920,6 @@ def _add_risk_optimization_fields(embed, data, user_capital=None):
     if suggested > safe_qty:
         opt_title = "⚖️ Nexus Risk Optimizer (自動優化建議)"
 
-        # 🚀 修正點 2：加入基準 SPY 價格的動態提示 (讓對沖建議更可信)
         spy_p = data.get("spy_price", 690.0)
 
         actions = ["--- 偵測到風險超標，執行自動降規 ---"]
@@ -1144,6 +1139,7 @@ def create_sentiment_scan_embed(
     title_suffix = ""
     is_premarket = False
     iv_source = None
+
     if iv_data:
         if hasattr(iv_data, "is_premarket"):
             is_premarket = iv_data.is_premarket
@@ -1247,7 +1243,6 @@ def create_sentiment_scan_embed(
             ]
         else:
             if is_premarket:
-                # IV/HV definition safety: never label HV as IV.
                 if iv_source == "HV_PROXY":
                     vol_title = "Historical Volatility (HV, 30D)"
                     vol_note = "30D 歷史實現波動率代理（期權未開市/IV 不可用）"
@@ -1295,49 +1290,69 @@ def create_sentiment_scan_embed(
             name="📊 隱含波動率與預期區間", value="\n".join(iv_lines), inline=False
         )
 
-    # Skew, PCR, Max Pain consolidated
-    skew_val = skew_data.get("skew", 0)
-    skew_state = skew_data.get("state", "N/A")
-    vol_pcr = pcr_data.get("volume_pcr", 0.0) if pcr_data else 0.0
-    oi_pcr = pcr_data.get("oi_pcr", pcr_data.get("pcr", 0.0)) if pcr_data else 0.0
+    skew_val = skew_data.get("skew", 0) if skew_data else 0
+    skew_state = skew_data.get("state", "N/A") if skew_data else "N/A"
 
-    if pcr_data:
-        if vol_pcr < 0.90:
-            vol_pcr_state = "🐂 中性偏多/看漲主導"
-        elif "volume_pcr_state" in pcr_data:
-            vol_pcr_state = pcr_data["volume_pcr_state"]
+    pcr_dict = pcr_data if isinstance(pcr_data, dict) else {}
+    vol_pcr = pcr_dict.get("volume_pcr", 0.0)
+    oi_pcr = pcr_dict.get("oi_pcr", pcr_dict.get("pcr", 0.0))
+
+    if pcr_dict:
+        if is_premarket or vol_pcr == 0.0:
+            vol_pcr_state = "⚖️ 封盤中 (盤前未更新)"
+            vol_pcr_str = "--"
         else:
-            if vol_pcr < 0.90:
+            vol_pcr_str = f"{vol_pcr:.2f}"
+            if "volume_pcr_state" in pcr_dict:
+                vol_pcr_state = pcr_dict["volume_pcr_state"]
+            elif vol_pcr < 0.90:
                 vol_pcr_state = "🐂 中性偏多/看漲主導"
             elif vol_pcr > 1.10:
                 vol_pcr_state = "🐻 偏向空頭/看空主導"
             else:
-                vol_pcr_state = "平衡"
+                vol_pcr_state = "⚖️ 結構平衡"
 
-        if oi_pcr < 0.90:
-            oi_pcr_state = "🐂 結構看漲/偏向多頭"
-        elif "oi_pcr_state" in pcr_data:
-            oi_pcr_state = pcr_data["oi_pcr_state"]
+        if oi_pcr == 0.0:
+            oi_pcr_state = "N/A (結構缺失)"
+            oi_pcr_str = "--"
         else:
-            legacy_state = pcr_data.get("state")
-            if legacy_state:
-                oi_pcr_state = legacy_state
+            oi_pcr_str = f"{oi_pcr:.2f}"
+            if "oi_pcr_state" in pcr_dict:
+                oi_pcr_state = pcr_dict["oi_pcr_state"]
+            elif oi_pcr < 0.90:
+                oi_pcr_state = "🏹 結構激進/看漲多頭沉澱"
+            elif oi_pcr > 1.20:
+                oi_pcr_state = "🛡️ 結構防禦/虛值 Put 沉澱"
             else:
-                if oi_pcr < 0.90:
-                    oi_pcr_state = "🐂 結構看漲/偏向多頭"
-                elif oi_pcr > 1.10:
-                    oi_pcr_state = "🐻 結構防禦/偏向空頭"
-                else:
-                    oi_pcr_state = "結構平衡"
+                oi_pcr_state = "⚖️ 籌碼結構中性"
     else:
-        vol_pcr_state = "平衡"
-        oi_pcr_state = "結構平衡"
-    mp_strike = max_pain_data.get("max_pain", "N/A")
-    is_conv = "🎯 趨於收斂" if max_pain_data.get("is_converging") else "⏳ 尚有距離"
+        vol_pcr_state = "⚖️ 封盤中 (盤前未更新)"
+        vol_pcr_str = "--"
+        oi_pcr_state = "N/A (結構缺失)"
+        oi_pcr_str = "--"
+
+    mp_strike = max_pain_data.get("max_pain", "N/A") if max_pain_data else "N/A"
+
+    if mp_strike == "N/A" or (isinstance(mp_strike, (int, float)) and mp_strike <= 0.0):
+        mp_strike_str = "N/A"
+        is_conv = "⚠️ 數據源缺失"
+    else:
+        if max_pain_data.get("is_circuit_breaker_triggered", False):
+            mp_strike_str = "N/A (已觸發斷路器)"
+            is_conv = "⚠️ 偏離度過高 (>30%)"
+        else:
+            mp_strike_str = (
+                f"${mp_strike:.2f}"
+                if isinstance(mp_strike, (int, float))
+                else f"${mp_strike}"
+            )
+            is_conv = (
+                "🎯 趨於收斂" if max_pain_data.get("is_converging") else "⏳ 尚有距離"
+            )
 
     metrics_lines = ["```ansi"]
     m_headers = ["指標項目", "數據值", "狀態 / 備註"]
-    m_widths = [14, 10, 14]
+    m_widths = [14, 20, 24]
     metrics_lines.append(
         " | ".join(
             _pad_string(h, w, "left" if i == 0 or i == 2 else "right")
@@ -1346,32 +1361,32 @@ def create_sentiment_scan_embed(
     )
     metrics_lines.append("-" * (sum(m_widths) + 3 * (len(m_widths) - 1)))
 
-    # Skew
-    skew_val_str = f"{skew_val}%"
+    # Skew 渲染
+    skew_val_str = (
+        f"{skew_val:.2f}%" if isinstance(skew_val, (int, float)) else f"{skew_val}%"
+    )
     metrics_lines.append(
         f"{_pad_string('Option Skew', m_widths[0])} | {_pad_string(skew_val_str, m_widths[1], 'right')} | {_pad_string(skew_state, m_widths[2])}"
     )
-    # Volume PCR
-    vol_pcr_str = f"{vol_pcr:.2f}"
+    # Volume PCR 渲染
     metrics_lines.append(
         f"{_pad_string('Volume PCR', m_widths[0])} | {_pad_string(vol_pcr_str, m_widths[1], 'right')} | {_pad_string(vol_pcr_state, m_widths[2])}"
     )
-    # OI PCR
-    oi_pcr_str = f"{oi_pcr:.2f}"
+    # OI PCR 渲染
     metrics_lines.append(
         f"{_pad_string('OI PCR', m_widths[0])} | {_pad_string(oi_pcr_str, m_widths[1], 'right')} | {_pad_string(oi_pcr_state, m_widths[2])}"
     )
-    # Max Pain
-    mp_strike_str = f"${mp_strike}"
+    # Max Pain 渲染
     metrics_lines.append(
         f"{_pad_string('Max Pain', m_widths[0])} | {_pad_string(mp_strike_str, m_widths[1], 'right')} | {_pad_string(is_conv, m_widths[2])}"
     )
     metrics_lines.append("```")
+
     embed.add_field(
         name="📐 期權情緒指標", value="\n".join(metrics_lines), inline=False
     )
 
-    # UOA
+    # UOA 渲染
     if uoa_data:
         table_str = _format_uoa_field(uoa_data)
         embed.add_field(
@@ -2817,10 +2832,12 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     poly_odds = data.get("polymarket_odds", "N/A")
     reddit_score = data.get("reddit_sentiment_score", "中性")
 
-    pcr_data_for_div = data.get("pcr", {}) or {}
-    pcr_val_for_div = float(pcr_data_for_div.get("pcr", 0.0) or 0.0)
+    _raw_pcr = data.get("pcr")
+    pcr_data_for_div: dict = _raw_pcr if isinstance(_raw_pcr, dict) else {}
+    pcr_val_for_div = float(
+        pcr_data_for_div.get("volume_pcr", pcr_data_for_div.get("pcr", 0.0))
+    )
 
-    # 預先解析 iv_rank 供背離引擎使用
     iv_data = data.get("iv_data")
     iv_rank_val = 0.0
     if iv_data:
@@ -2829,24 +2846,20 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         elif isinstance(iv_data, dict):
             iv_rank_val = iv_data.get("iv_rank", 0.0)
 
-    # Divergence Check Engine (Skew vs PCR consistency + spot move)
     is_structural_divergence = False
     divergence_level = ""
 
+    # 防止盤前(0.0) 觸發背離誤報
     if skew_percentile > 85.0 and 0.0 < pcr_val_for_div < 0.4:
-        # Severe structural divergence: whales hedge aggressively while retail buys calls.
         is_structural_divergence = True
         divergence_level = "High Divergence"
     elif skew_percentile < 15.0 and pcr_val_for_div > 1.5:
-        # Opposite extreme: calls expensive while put-volume spikes.
         is_structural_divergence = True
         divergence_level = "High Divergence"
     elif dp_val > 0.0 and skew_percentile > 90.0:
-        # Spot rising while downside protection cost stays extreme -> warn even without PCR clarity.
         is_structural_divergence = True
         divergence_level = "Warning"
     elif dp_val < -3.0 and iv_rank_val < 15.0:
-        # Divergence: spot falls severely but IV Rank remains extremely low (implied volatility suppression)
         is_structural_divergence = True
         divergence_level = "IV Suppression"
 
@@ -2856,13 +2869,11 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     if is_structural_divergence:
         if divergence_level == "IV Suppression":
             divergence = "情緒背離 (現價暴跌但波動率極低)"
-            action = (
-                "異常背離：現價大跌但 IV Rank 處於極低位階，警惕快取異常或非理性低波"
-            )
+            action = "異常背離：現價大跌但 IV Rank 極低，警惕快取異常或非理性低波"
         else:
             divergence = "⚠️ WARNING: Structural Sentiment Divergence"
             if divergence_level == "High Divergence":
-                action = "High Divergence：避免追價買權；僅允許小倉位收租並搭配保護性 Put/Collar"
+                action = "High Divergence：避免追價買權；僅允許小倉位收租並搭配保護"
             else:
                 action = "留意結構性背離：建議降槓桿、以保護性結構防禦"
     elif skew_percentile > 80 and (
@@ -2983,48 +2994,39 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 " └─ 本週預期: \u001b[1;30m--\u001b[0m (開盤後更新)",
                 "```",
             ]
-        elif is_premarket:
-            if iv_source == "HV_PROXY":
-                vol_title = "Historical Volatility (HV, 30D)"
-                vol_note = "30D 歷史實現波動率代理（期權未開市/IV 不可用）"
-                em_note = "基於 30D HV 代理估算"
+        else:
+            if is_premarket:
+                vol_title = (
+                    "Historical Volatility (HV, 30D)"
+                    if iv_source == "HV_PROXY"
+                    else "Implied Volatility (IV)"
+                )
+                vol_note = (
+                    "30D 歷史實現波動率代理（期權未開市/IV 不可用）"
+                    if iv_source == "HV_PROXY"
+                    else "前日收盤 IV / SQLite 快取（期權未開市）"
+                )
+                em_note = (
+                    "基於 30D HV 代理估算"
+                    if iv_source == "HV_PROXY"
+                    else "基於前日收盤 IV 計算"
+                )
             else:
                 vol_title = "Implied Volatility (IV)"
-                vol_note = "前日收盤 IV / SQLite 快取（期權未開市）"
-                em_note = "基於前日收盤 IV 計算"
+                vol_note = (
+                    "當前 30 天平值期權隱含波動率"
+                    if iv_source != "STORED_IV"
+                    else "SQLite 快取 IV（非即時）"
+                )
+                em_note = (
+                    "基於當前 IV 計算"
+                    if iv_source != "STORED_IV"
+                    else "基於快取 IV 計算"
+                )
 
             iv_lines = [
                 "```ansi",
                 vol_title,
-                f" └─ 值: {current_iv * 100:.1f}% ({vol_note})",
-                " IV Rank / IV Percentile",
-                f" └─ IV Rank: {iv_rank:.1f}% | IV Percentile: {iv_percentile:.1f}% ({iv_status_str})",
-                " Expected Move (預期區間)",
-            ]
-            if event_loading:
-                iv_lines.extend(
-                    [
-                        f" ├─ 本週預期: ±${expected_move_weekly:.2f} ({em_note})",
-                        " └─ 備註: 實盤請預留 1.4x 波動邊界以防範 IV Crush。",
-                    ]
-                )
-            else:
-                iv_lines.append(
-                    f" └─ 本週預期: ±${expected_move_weekly:.2f} ({em_note})"
-                )
-            iv_lines.append("```")
-        else:
-            vol_note = (
-                "當前 30 天平值期權隱含波動率"
-                if iv_source != "STORED_IV"
-                else "SQLite 快取 IV（非即時）"
-            )
-            em_note = (
-                "基於當前 IV 計算" if iv_source != "STORED_IV" else "基於快取 IV 計算"
-            )
-            iv_lines = [
-                "```ansi",
-                " Implied Volatility (IV)",
                 f" └─ 值: {current_iv * 100:.1f}% ({vol_note})",
                 " IV Rank / IV Percentile",
                 f" └─ IV Rank: {iv_rank:.1f}% | IV Percentile: {iv_percentile:.1f}% ({iv_status_str})",
@@ -3052,21 +3054,25 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     _mp_val = data.get("max_pain")
     cb_triggered = data.get("circuit_breaker_triggered", False)
 
-    if cb_triggered or _mp_val is None:
+    if _mp_val is None or (isinstance(_mp_val, (int, float)) and float(_mp_val) <= 0.0):
         max_pain = 0.0
         distance = 0.0
-        mp_str = "N/A (已觸發斷路器)"
-        dist_str = "N/A"
+        mp_str = "N/A"
+        dist_str = "⚠️ 數據源缺失"
         dist_color = "\u001b[1;30m"
     else:
-        max_pain = float(_mp_val) if _mp_val is not None else 0.0
+        max_pain = float(_mp_val)
         price = c_val
-        distance = (
-            ((max_pain - price) / price * 100) if (price > 0 and max_pain > 0) else 0.0
-        )
-        mp_str = f"${max_pain:.2f}"
-        dist_str = f"{distance:+.1f}%"
-        dist_color = "\u001b[1;31m" if abs(distance) > 5.0 else "\u001b[1;32m"
+        distance = (((max_pain - price) / price) * 100) if price > 0 else 0.0
+
+        if cb_triggered:
+            mp_str = "N/A (已觸發斷路器)"
+            dist_str = "⚠️ 偏離度過高 (>30%)"
+            dist_color = "\u001b[1;31m"
+        else:
+            mp_str = f"${max_pain:.2f}"
+            dist_str = f"{distance:+.1f}%"
+            dist_color = "\u001b[1;31m" if abs(distance) > 5.0 else "\u001b[1;32m"
 
     ddp_status = "符合 (符合 DDP 盈餘/估值雙擊)" if data.get("is_ddp") else "不符合"
     ddp_color = "\u001b[1;32m" if data.get("is_ddp") else "\u001b[1;30m"
@@ -3074,57 +3080,65 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     ivr = data.get("iv_rank", 0.0)
     ivr_color = "\u001b[1;35m" if ivr > 50 else "\u001b[1;36m"
 
-    # PCR split formatting
-    pcr_data = data.get("pcr", {})
-    volume_pcr = pcr_data.get("volume_pcr", 0.0) if pcr_data else 0.0
-    oi_pcr = pcr_data.get("oi_pcr", pcr_data.get("pcr", 0.0)) if pcr_data else 0.0
+    _raw_pcr = data.get("pcr")
+    pcr_dict: dict = _raw_pcr if isinstance(_raw_pcr, dict) else {}
+    vol_pcr = pcr_dict.get("volume_pcr", 0.0)
+    oi_pcr = pcr_dict.get("oi_pcr", pcr_dict.get("pcr", 0.0))
 
-    if pcr_data:
-        if volume_pcr < 0.90:
-            volume_state = "🐂 中性偏多/看漲主導"
-        elif "volume_pcr_state" in pcr_data:
-            volume_state = pcr_data["volume_pcr_state"]
+    if pcr_dict:
+        if is_premarket or vol_pcr == 0.0:
+            volume_state = "⚖️ 封盤中 (盤前未更新)"
+            vol_pcr_str = "--"
+            vol_pcr_color = "\u001b[1;30m"
         else:
-            if volume_pcr < 0.90:
+            vol_pcr_str = f"{vol_pcr:.2f}"
+            if "volume_pcr_state" in pcr_dict:
+                volume_state = pcr_dict["volume_pcr_state"]
+            elif vol_pcr < 0.90:
                 volume_state = "🐂 中性偏多/看漲主導"
-            elif volume_pcr > 1.10:
+            elif vol_pcr > 1.10:
                 volume_state = "🐻 偏向空頭/看空主導"
             else:
-                volume_state = "平衡"
+                volume_state = "⚖️ 結構平衡"
+            vol_pcr_color = (
+                "\u001b[1;32m"
+                if vol_pcr < 0.90
+                else ("\u001b[1;31m" if vol_pcr > 1.10 else "\u001b[1;36m")
+            )
 
-        if oi_pcr < 0.90:
-            oi_state = "🐂 結構看漲/偏向多頭"
-        elif "oi_pcr_state" in pcr_data:
-            oi_state = pcr_data["oi_pcr_state"]
+        if oi_pcr == 0.0:
+            oi_state = "N/A (結構缺失)"
+            oi_pcr_str = "--"
+            oi_pcr_color = "\u001b[1;30m"
         else:
-            legacy_state = pcr_data.get("state")
-            if legacy_state:
-                oi_state = legacy_state
+            oi_pcr_str = f"{oi_pcr:.2f}"
+            if "oi_pcr_state" in pcr_dict:
+                oi_state = pcr_dict["oi_pcr_state"]
+            elif oi_pcr < 0.90:
+                oi_state = "🏹 結構激進/看漲多頭沉澱"
+            elif oi_pcr > 1.20:
+                oi_state = "🛡️ 結構防禦/虛值 Put 沉澱"
             else:
-                if oi_pcr < 0.90:
-                    oi_state = "🐂 結構看漲/偏向多頭"
-                elif oi_pcr > 1.10:
-                    oi_state = "🐻 結構防禦/偏向空頭"
-                else:
-                    oi_state = "結構平衡"
+                oi_state = "⚖️ 籌碼結構中性"
+            oi_pcr_color = (
+                "\u001b[1;32m"
+                if oi_pcr < 0.90
+                else ("\u001b[1;31m" if oi_pcr > 1.10 else "\u001b[1;36m")
+            )
     else:
-        volume_state = "平衡"
-        oi_state = "結構平衡"
+        volume_state = "⚖️ 封盤中 (盤前未更新)"
+        vol_pcr_str = "--"
+        vol_pcr_color = "\u001b[1;30m"
+        oi_state = "N/A (結構缺失)"
+        oi_pcr_str = "--"
+        oi_pcr_color = "\u001b[1;30m"
 
-    vol_pcr_color = (
-        "\u001b[1;32m"
-        if volume_pcr < 0.90
-        else ("\u001b[1;31m" if volume_pcr > 1.10 else "\u001b[1;36m")
-    )
-    oi_pcr_color = (
-        "\u001b[1;32m"
-        if oi_pcr < 0.90
-        else ("\u001b[1;31m" if oi_pcr > 1.10 else "\u001b[1;36m")
-    )
-
-    if cb_triggered or _mp_val is None:
+    if cb_triggered:
         scenario = "⚠️ 最大痛點偏離度過高 (>30%) 已啟動斷路器，暫停輸出結算操作指引，請以技術指標為準。"
         scen_color = "\u001b[1;31m"
+    elif _mp_val is None or max_pain == 0.0:
+        scenario = "期權未平倉量數據不足，無法評估結算磁吸效應。"
+        scen_color = "\u001b[1;30m"
     elif abs(distance) < 2.0:
         scenario = "價格接近最大痛點，結算日前可能維持震盪。"
         scen_color = "\u001b[1;33m"
@@ -3138,7 +3152,6 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         scenario = "目前價差適中，依技術指標操作為主。"
         scen_color = "\u001b[1;36m"
 
-    # Overlay: Structural divergence + high-IV environment should override neutral guidance.
     scenario_overlays: list[str] = []
     if is_structural_divergence:
         scenario_overlays.append(
@@ -3159,25 +3172,33 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         " DDP 與期權風控 (DDP & Risk Metrics)",
         f" ├─ DDP 估值雙擊: {ddp_color}{ddp_status}\u001b[0m",
         f" ├─ IV Rank: {ivr_color}{ivr:.1f}%\u001b[0m",
-        f" ├─ Volume PCR (即時情緒): {vol_pcr_color}{volume_pcr:.2f}\u001b[0m ({vol_pcr_color}{volume_state}\u001b[0m)",
-        f" └─ OI PCR (結構防禦): {oi_pcr_color}{oi_pcr:.2f}\u001b[0m ({oi_pcr_color}{oi_state}\u001b[0m)",
+        f" ├─ Volume PCR (即時情緒): {vol_pcr_color}{vol_pcr_str}\u001b[0m ({vol_pcr_color}{volume_state}\u001b[0m)",
+        f" └─ OI PCR (結構防禦): {oi_pcr_color}{oi_pcr_str}\u001b[0m ({oi_pcr_color}{oi_state}\u001b[0m)",
         " 結算價操作指引 (Scenario Analysis)",
         f" └─ 操作指引: {scen_color}{scenario}\u001b[0m",
         "```",
     ]
     embed.add_field(
-        name="🎯 結算與目標 (Target Lock)",
-        value="\n".join(target_lines),
-        inline=False,
+        name="🎯 結算與目標 (Target Lock)", value="\n".join(target_lines), inline=False
     )
 
     # 5. 🐋 異常活動 (UOA)
     uoa_data = data.get("uoa", [])
     if uoa_data:
-        table_str = _format_uoa_field(uoa_data)
-        embed.add_field(
-            name="🐋 異常活動 (UOA)", value=f"```ansi\n{table_str}\n```", inline=False
-        )
+        try:
+            # 確保外部已載入 _format_uoa_field，或這裡安全呼叫
+            table_str = _format_uoa_field(uoa_data)
+            embed.add_field(
+                name="🐋 異常活動 (UOA)",
+                value=f"```ansi\n{table_str}\n```",
+                inline=False,
+            )
+        except NameError:
+            embed.add_field(
+                name="🐋 異常活動 (UOA)",
+                value="```ansi\n無法渲染異常活動資料\n```",
+                inline=False,
+            )
     else:
         embed.add_field(
             name="🐋 異常活動 (UOA)",
@@ -3256,7 +3277,7 @@ def create_watchlist_signal_embed(
     event_risk_summary: str = "",
     skew_state: str = "",
     alert_level: str = "",
-    option_plan: WatchlistOptionPlan | None = None,
+    option_plan: Any | None = None,
     skew_commentary: str | None = None,
     has_position: bool = False,
     holding_quantity: float | None = None,
@@ -3270,9 +3291,9 @@ def create_watchlist_signal_embed(
     sell_rationale: str | None = None,
     telemetry_alignment_note: str | None = None,
     # Upgraded Heartbeat Parameters
-    metrics: EnhancedWatchlistMetrics | None = None,
+    metrics: Any | None = None,
     quote: dict | None = None,
-    iv_metrics: IVMetrics | None = None,
+    iv_metrics: Any | None = None,
     max_pain_data: dict | None = None,
     pcr_data: dict | None = None,
     uoa_list: list[dict] | None = None,
@@ -3288,6 +3309,11 @@ def create_watchlist_signal_embed(
     if not is_memory_safe():
         sys_status = "TELEMETRY RUNNING (⚠️ LOW RAM DEGRADED)"
 
+    # 🛡️ 提取盤前狀態 (為後續 PCR 與 IV 降級防禦做準備)
+    is_premarket = False
+    if iv_metrics is not None and hasattr(iv_metrics, "is_premarket"):
+        is_premarket = iv_metrics.is_premarket
+
     # Extract Live Price Metrics
     if metrics is not None:
         live_price = metrics.current_price
@@ -3295,14 +3321,12 @@ def create_watchlist_signal_embed(
         vol_poc = metrics.volume_poc
         skew_val = metrics.option_skew
         skew_per = metrics.skew_percentile
-        pcr_val = metrics.pcr
     else:
         live_price = suitable_buy_price or suitable_sell_price or 100.0
         gex_putwall = 100.0
         vol_poc = 100.0
         skew_val = 0.0
         skew_per = 50.0
-        pcr_val = 1.0
 
     # Extract Finnhub Quote Data
     if quote is not None:
@@ -3337,15 +3361,17 @@ def create_watchlist_signal_embed(
         expected_move = 5.0
 
     if metrics is not None:
-        if metrics.has_event_loading_applied:
+        if (
+            hasattr(metrics, "has_event_loading_applied")
+            and metrics.has_event_loading_applied
+        ):
             event_loading = True
-        if metrics.iv_source:
+        if hasattr(metrics, "iv_source") and metrics.iv_source:
             iv_source = metrics.iv_source
 
     if iv_source in ["STORED_IV", "HV_PROXY"]:
         try:
             from database.calendar_cache import get_cached_earnings
-            from datetime import timedelta
 
             earnings = get_cached_earnings(symbol)
             if earnings and earnings.get("earnings_date"):
@@ -3362,77 +3388,56 @@ def create_watchlist_signal_embed(
     if event_loading:
         iv_status_str = "狀態: ⚠️ 臨近財報/快取波動率可能低估"
 
-    # Extract Max Pain Data
-    cb_triggered = False
     if max_pain_data is not None:
         mp_val = max_pain_data.get("max_pain")
-        cb_triggered = (
-            max_pain_data.get("circuit_breaker_triggered", False) or mp_val is None
-        )
-        if cb_triggered:
-            max_pain_str = "N/A (已觸發斷路器)"
+        if mp_val is None or (
+            isinstance(mp_val, (int, float)) and float(mp_val) <= 0.0
+        ):
+            max_pain_str = "N/A (⚠️ 數據源缺失)"
+        elif max_pain_data.get("circuit_breaker_triggered", False):
+            max_pain_str = "N/A (已觸發斷路器, ⚠️ 偏離度過高 >30%)"
         else:
-            max_pain = float(mp_val) if mp_val is not None else 0.0
+            max_pain = float(mp_val)
             pain_dist = float(max_pain_data.get("distance_pct") or 0.0)
             max_pain_str = f"${max_pain:.2f} (當前價差: {pain_dist:+.2f}%)"
     else:
-        max_pain_str = f"${live_price:.2f} (當前價差: +0.00%)"
+        max_pain_str = "N/A (⚠️ 數據源缺失)"
 
-    # Extract PCR Data
-    vol_pcr = pcr_val
-    oi_pcr = 0.0
-    vol_pcr_status = "平衡"
-    oi_pcr_status = "結構平衡"
+    vol_pcr_val = metrics.volume_pcr if metrics else 1.0
+    oi_pcr_val = metrics.oi_pcr if metrics else 0.0
 
-    if metrics is not None:
-        vol_pcr = metrics.volume_pcr
-        oi_pcr = metrics.oi_pcr
+    pcr_dict = pcr_data if isinstance(pcr_data, dict) else {}
+    if pcr_dict:
+        vol_pcr_val = pcr_dict.get("volume_pcr", vol_pcr_val)
+        oi_pcr_val = pcr_dict.get("oi_pcr", pcr_dict.get("pcr", oi_pcr_val))
 
-    if pcr_data is not None:
-        vol_pcr = pcr_data.get("volume_pcr", vol_pcr)
-        oi_pcr = pcr_data.get("oi_pcr", pcr_data.get("pcr", oi_pcr))
-
-        if vol_pcr < 0.90:
-            vol_pcr_status = "🐂 中性偏多/看漲主導"
-        elif "volume_pcr_state" in pcr_data:
-            vol_pcr_status = pcr_data["volume_pcr_state"]
-        else:
-            if vol_pcr < 0.90:
-                vol_pcr_status = "🐂 中性偏多/看漲主導"
-            elif vol_pcr > 1.10:
-                vol_pcr_status = "🐻 偏向空頭/看空主導"
-            else:
-                vol_pcr_status = "平衡"
-
-        if oi_pcr < 0.90:
-            oi_pcr_status = "🐂 結構看漲/偏向多頭"
-        elif "oi_pcr_state" in pcr_data:
-            oi_pcr_status = pcr_data["oi_pcr_state"]
-        else:
-            legacy_state = pcr_data.get("state")
-            if legacy_state:
-                oi_pcr_status = legacy_state
-            else:
-                if oi_pcr < 0.90:
-                    oi_pcr_status = "🐂 結構看漲/偏向多頭"
-                elif oi_pcr > 1.10:
-                    oi_pcr_status = "🐻 結構防禦/偏向空頭"
-                else:
-                    oi_pcr_status = "結構平衡"
+    if is_premarket or vol_pcr_val == 0.0:
+        vol_pcr_status = "⚖️ 封盤中 (盤前未更新)"
+        vol_pcr_str = "--"
     else:
-        if vol_pcr < 0.90:
+        vol_pcr_str = f"{vol_pcr_val:.2f}"
+        if "volume_pcr_state" in pcr_dict:
+            vol_pcr_status = pcr_dict["volume_pcr_state"]
+        elif vol_pcr_val < 0.90:
             vol_pcr_status = "🐂 中性偏多/看漲主導"
-        elif vol_pcr > 1.10:
+        elif vol_pcr_val > 1.10:
             vol_pcr_status = "🐻 偏向空頭/看空主導"
         else:
-            vol_pcr_status = "平衡"
+            vol_pcr_status = "⚖️ 結構平衡"
 
-        if oi_pcr < 0.90:
-            oi_pcr_status = "🐂 結構看漲/偏向多頭"
-        elif oi_pcr > 1.10:
-            oi_pcr_status = "🐻 結構防禦/偏向空頭"
+    if oi_pcr_val == 0.0:
+        oi_pcr_status = "N/A (結構缺失)"
+        oi_pcr_str = "--"
+    else:
+        oi_pcr_str = f"{oi_pcr_val:.2f}"
+        if "oi_pcr_state" in pcr_dict:
+            oi_pcr_status = pcr_dict["oi_pcr_state"]
+        elif oi_pcr_val < 0.90:
+            oi_pcr_status = "🏹 結構激進/看漲多頭沉澱"
+        elif oi_pcr_val > 1.20:
+            oi_pcr_status = "🛡️ 結構防禦/虛值 Put 沉澱"
         else:
-            oi_pcr_status = "結構平衡"
+            oi_pcr_status = "⚖️ 籌碼結構中性"
 
     gex_dist = (
         ((live_price - gex_putwall) / gex_putwall * 100.0) if gex_putwall else 0.0
@@ -3488,6 +3493,7 @@ def create_watchlist_signal_embed(
         " 隱含波動率與預期空間 (IV Context)",
         f" ├─ Implied Volatility (IV): {iv_val:.1f}% ｜ IV Rank: {iv_rank:.1f}% ({iv_status_str})",
     ]
+
     if event_loading:
         lines.extend(
             [
@@ -3503,8 +3509,8 @@ def create_watchlist_signal_embed(
             "",
             " 結算與目標 (Target Lock)",
             f" ├─ 最大痛點結算 (Max Pain): {max_pain_str}",
-            f" ├─ Volume PCR (即時情緒): {vol_pcr:.2f} (狀態: {vol_pcr_status})",
-            f" └─ OI PCR (結構防禦): {oi_pcr:.2f} (狀態: {oi_pcr_status})",
+            f" ├─ Volume PCR (即時情緒): {vol_pcr_str} (狀態: {vol_pcr_status})",
+            f" └─ OI PCR (結構防禦): {oi_pcr_str} (狀態: {oi_pcr_status})",
             "",
             " 異常活動穿透 (Directional UOA - Bid/Ask Track)",
             " 到期日     | 履約價      | 類型 | 交易流向 [買/賣]      | 機構/OI    | 比例   | 戰略意圖映射",
@@ -3529,17 +3535,36 @@ def create_watchlist_signal_embed(
         "green": discord.Color.green(),
     }.get(alert_level, discord.Color.blurple())
 
-    embed = NexusEmbed(
-        title=f"標的分析中心 2.0: {symbol} 每半小時戰場心跳",
-        description=description,
-        color=color_val,
-        timestamp=datetime.now(timezone.utc),
-    )
+    embed: discord.Embed
+    try:
+        embed = NexusEmbed(
+            title=f"標的分析中心 2.0: {symbol} 每半小時戰場心跳",
+            description=description,
+            color=color_val,
+            timestamp=datetime.now(timezone.utc),
+        )
+    except NameError:
+        embed = discord.Embed(
+            title=f"標的分析中心 2.0: {symbol} 每半小時戰場心跳",
+            description=description,
+            color=color_val,
+            timestamp=datetime.now(timezone.utc),
+        )
 
     if telemetry_alignment_note:
+        # 假設 _safe_embed_field_value 在此文件或同級模組中有定義
+        try:
+            val = _safe_embed_field_value(telemetry_alignment_note, "暫無對齊建議")
+        except NameError:
+            val = (
+                telemetry_alignment_note
+                if len(telemetry_alignment_note) <= 1024
+                else telemetry_alignment_note[:1021] + "..."
+            )
+
         embed.add_field(
             name="📡 Telemetry 待成交委託單實時對齊建議",
-            value=_safe_embed_field_value(telemetry_alignment_note, "暫無對齊建議"),
+            value=val,
             inline=False,
         )
 
