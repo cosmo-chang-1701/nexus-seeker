@@ -810,6 +810,16 @@ async def test_add_order_slash_command_telemetry(
     async def mock_get_quote(symbol):
         return {"c": 100.0, "pc": 99.0}
 
+    async def mock_fetch_iv(symbol):
+        class MockIV:
+            current_iv = 0.3
+            iv_rank = 30.0
+
+        return MockIV()
+
+    async def mock_calculate_skew(symbol):
+        return {"skew": 1.0}
+
     async def mock_telemetry(
         symbol,
         base_price,
@@ -825,6 +835,14 @@ async def test_add_order_slash_command_telemetry(
         return 95.5, base_quantity, ["Mocked Telemetry Command Price Resolved"]
 
     monkeypatch.setattr("services.market_data_service.get_quote", mock_get_quote)
+    monkeypatch.setattr(
+        "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
+        mock_fetch_iv,
+    )
+    monkeypatch.setattr(
+        "market_analysis.sentiment_engine.SentimentEngine.calculate_skew",
+        mock_calculate_skew,
+    )
     monkeypatch.setattr(
         "services.telemetry_pricing_engine.calculate_telemetry_price", mock_telemetry
     )
