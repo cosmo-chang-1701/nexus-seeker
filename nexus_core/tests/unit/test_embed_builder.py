@@ -1157,3 +1157,55 @@ def test_create_covered_call_unlock_embed():
     assert len(embed_no_recs.fields) == 2
     assert "解鎖狀態與策略建議" in embed_no_recs.fields[1].name
     assert "未尋獲符合條件之極虛值" in embed_no_recs.fields[1].value
+
+
+def test_create_watchlist_signal_embed_event_loading():
+    """Verify that event loading formatting displays status and expected move note correctly."""
+    from models.schemas import EnhancedWatchlistMetrics
+
+    metrics = EnhancedWatchlistMetrics(
+        symbol="MU",
+        exchange="NASDAQ",
+        current_price=130.0,
+        buy_zone_status="🟢 買點支撐",
+        buy_price_phase1=120.0,
+        buy_price_phase2=115.0,
+        buy_price_phase3=110.0,
+        sell_zone_status="🟢 賣點壓力",
+        sell_price_phase1=140.0,
+        sell_price_phase2=145.0,
+        sell_price_phase3=150.0,
+        pe_ratio=15.0,
+        rsi_14=55.0,
+        atr_14=4.5,
+        beta=1.2,
+        ma20=128.0,
+        ma50=125.0,
+        ma200=115.0,
+        iv_rank=85.0,
+        iv_percentile=88.0,
+        option_skew=5.0,
+        skew_percentile=85.0,
+        option_skew_state="正常",
+        pcr=0.78,
+        volume_poc=125.0,
+        gex_max_put_wall=110.0,
+        vanna_sensitivity=0.1,
+        relative_strength_spy=1.05,
+        iv_source="STORED_IV",
+        is_premarket=False,
+        volume_pcr=0.78,
+        oi_pcr=1.55,
+        has_event_loading_applied=True,
+    )
+
+    embed = create_watchlist_signal_embed(
+        symbol="MU",
+        metrics=metrics,
+        alert_level="yellow",
+    )
+
+    assert "(狀態: ⚠️ 臨近財報/快取波動率可能低估)" in embed.description
+    assert "備註: 實盤請預留 1.4x 波動邊界以防範 IV Crush。" in embed.description
+    assert "Volume PCR (即時情緒): 0.78" in embed.description
+    assert "OI PCR (結構防禦): 1.55" in embed.description
