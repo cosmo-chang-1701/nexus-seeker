@@ -9,6 +9,7 @@ os.environ["FINNHUB_API_KEY"] = "dummy-finnhub-key-for-tests"
 
 # Use a shared in-memory database for testing
 TEST_DB_NAME = "file:testdb?mode=memory&cache=shared"
+os.environ["NEXUS_DB_NAME"] = TEST_DB_NAME
 
 
 @pytest.fixture(scope="session", autouse=True)
