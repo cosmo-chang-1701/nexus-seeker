@@ -609,6 +609,15 @@ async def test_detect_uoa_sanity_filters():
                 "ask": 21.1,
                 "impliedVolatility": 0.3,
             },
+            {
+                "strike": 130.0,
+                "volume": 1000.0,  # Zero open interest check
+                "openInterest": 0.0,
+                "lastPrice": 1.0,
+                "bid": 0.95,
+                "ask": 1.05,
+                "impliedVolatility": 0.3,
+            },
         ]
     )
 

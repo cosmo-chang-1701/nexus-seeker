@@ -673,6 +673,8 @@ class SentimentEngine:
                     # 門檻：Volume > 5 * OI 且 Volume > 500
                     vol = float(row["volume"])
                     oi = float(row["openInterest"])
+                    if oi <= 0.0:
+                        continue
                     if vol > 5 * oi and vol > 500:
                         # 1. Conservation Law Validation
                         if vol > total_chain_volume:
@@ -1045,6 +1047,7 @@ class SentimentEngine:
                 "UNAVAILABLE"
             )
             is_market_active = is_market_open()
+            has_high_impact_event = False
 
             # A. Live IV Calculation (Preferred)
             if is_market_active:
@@ -1296,6 +1299,7 @@ class SentimentEngine:
                 is_premarket=not is_market_active,
                 iv_source=iv_source,
                 reference_spot_price=spot_price,
+                has_event_loading_applied=has_high_impact_event,
             )
 
             # 12. 寫入快取

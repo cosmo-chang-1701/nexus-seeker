@@ -1205,6 +1205,16 @@ def create_sentiment_scan_embed(
             "Extreme": "極高 / 泡沫",
         }
         status_tw = iv_status_map.get(iv_status, "正常 / 公允")
+        event_loading = False
+        if hasattr(iv_data, "has_event_loading_applied"):
+            event_loading = iv_data.has_event_loading_applied
+        elif isinstance(iv_data, dict):
+            event_loading = iv_data.get("has_event_loading_applied", False)
+
+        if event_loading:
+            status_tw = "⚠️ 臨近財報/快取波動率可能低估"
+
+        iv_status_str = f"狀態: {status_tw}" if not event_loading else status_tw
 
         if is_premarket and current_iv == 0.0:
             iv_lines = [
@@ -1219,16 +1229,29 @@ def create_sentiment_scan_embed(
                 " └─ 本週預期: \u001b[1;30m--\u001b[0m (開盤後更新)",
                 "```",
             ]
-        elif is_premarket:
-            # IV/HV definition safety: never label HV as IV.
-            if iv_source == "HV_PROXY":
-                vol_title = "Historical Volatility (HV, 30D)"
-                vol_note = "30D 歷史實現波動率代理（期權未開市/IV 不可用）"
-                em_note = "基於 30D HV 代理估算"
+        else:
+            if is_premarket:
+                # IV/HV definition safety: never label HV as IV.
+                if iv_source == "HV_PROXY":
+                    vol_title = "Historical Volatility (HV, 30D)"
+                    vol_note = "30D 歷史實現波動率代理（期權未開市/IV 不可用）"
+                    em_note = "基於 30D HV 代理估算"
+                else:
+                    vol_title = "Implied Volatility (IV)"
+                    vol_note = "前日收盤 IV / SQLite 快取（期權未開市）"
+                    em_note = "基於前日收盤 IV 計算"
             else:
                 vol_title = "Implied Volatility (IV)"
-                vol_note = "前日收盤 IV / SQLite 快取（期權未開市）"
-                em_note = "基於前日收盤 IV 計算"
+                vol_note = (
+                    "當前 30 天平值期權隱含波動率"
+                    if iv_source != "STORED_IV"
+                    else "SQLite 快取 IV（非即時）"
+                )
+                em_note = (
+                    "基於當前 IV 計算"
+                    if iv_source != "STORED_IV"
+                    else "基於快取 IV 計算"
+                )
 
             iv_lines = [
                 "```ansi",
@@ -1237,32 +1260,21 @@ def create_sentiment_scan_embed(
                 vol_title,
                 f" └─ 值: {current_iv * 100:.1f}% ({vol_note})",
                 " IV Rank / IV Percentile",
-                f" └─ IV Rank: {iv_rank:.1f}% | IV Percentile: {iv_percentile:.1f}% (狀態: {status_tw})",
+                f" └─ IV Rank: {iv_rank:.1f}% | IV Percentile: {iv_percentile:.1f}% ({iv_status_str})",
                 " Expected Move (預期震盪區間)",
-                f" └─ 本週預期: ±${expected_move_weekly:.2f} ({em_note})",
-                "```",
             ]
-        else:
-            vol_note = (
-                "當前 30 天平值期權隱含波動率"
-                if iv_source != "STORED_IV"
-                else "SQLite 快取 IV（非即時）"
-            )
-            em_note = (
-                "基於當前 IV 計算" if iv_source != "STORED_IV" else "基於快取 IV 計算"
-            )
-            iv_lines = [
-                "```ansi",
-                f" 🌌 {symbol} 期權情緒掃描 (Sentiment Scan)",
-                " ----------------------------------",
-                " Implied Volatility (IV)",
-                f" └─ 值: {current_iv * 100:.1f}% ({vol_note})",
-                " IV Rank / IV Percentile",
-                f" └─ IV Rank: {iv_rank:.1f}% | IV Percentile: {iv_percentile:.1f}% (狀態: {status_tw})",
-                " Expected Move (預期震盪區間)",
-                f" └─ 本週預期: ±${expected_move_weekly:.2f} ({em_note})",
-                "```",
-            ]
+            if event_loading:
+                iv_lines.extend(
+                    [
+                        f" ├─ 本週預期: ±${expected_move_weekly:.2f} ({em_note})",
+                        " └─ 備註: 實盤請預留 1.4x 波動邊界以防範 IV Crush。",
+                    ]
+                )
+            else:
+                iv_lines.append(
+                    f" └─ 本週預期: ±${expected_move_weekly:.2f} ({em_note})"
+                )
+            iv_lines.append("```")
         embed.add_field(
             name="📊 隱含波動率與預期區間", value="\n".join(iv_lines), inline=False
         )
@@ -1270,8 +1282,14 @@ def create_sentiment_scan_embed(
     # Skew, PCR, Max Pain consolidated
     skew_val = skew_data.get("skew", 0)
     skew_state = skew_data.get("state", "N/A")
-    pcr_val = pcr_data.get("pcr", 0)
-    pcr_state = pcr_data.get("state", "N/A")
+    vol_pcr = pcr_data.get("volume_pcr", 0.0) if pcr_data else 0.0
+    oi_pcr = pcr_data.get("oi_pcr", pcr_data.get("pcr", 0.0)) if pcr_data else 0.0
+    vol_pcr_state = (
+        pcr_data.get("volume_pcr_state", pcr_data.get("state", "平衡"))
+        if pcr_data
+        else "平衡"
+    )
+    oi_pcr_state = pcr_data.get("oi_pcr_state", "結構平衡") if pcr_data else "結構平衡"
     mp_strike = max_pain_data.get("max_pain", "N/A")
     is_conv = "🎯 趨於收斂" if max_pain_data.get("is_converging") else "⏳ 尚有距離"
 
@@ -1291,10 +1309,15 @@ def create_sentiment_scan_embed(
     metrics_lines.append(
         f"{_pad_string('Option Skew', m_widths[0])} | {_pad_string(skew_val_str, m_widths[1], 'right')} | {_pad_string(skew_state, m_widths[2])}"
     )
-    # PCR
-    pcr_val_str = f"{pcr_val}"
+    # Volume PCR
+    vol_pcr_str = f"{vol_pcr:.2f}"
     metrics_lines.append(
-        f"{_pad_string('Put/Call Ratio', m_widths[0])} | {_pad_string(pcr_val_str, m_widths[1], 'right')} | {_pad_string(pcr_state, m_widths[2])}"
+        f"{_pad_string('Volume PCR', m_widths[0])} | {_pad_string(vol_pcr_str, m_widths[1], 'right')} | {_pad_string(vol_pcr_state, m_widths[2])}"
+    )
+    # OI PCR
+    oi_pcr_str = f"{oi_pcr:.2f}"
+    metrics_lines.append(
+        f"{_pad_string('OI PCR', m_widths[0])} | {_pad_string(oi_pcr_str, m_widths[1], 'right')} | {_pad_string(oi_pcr_state, m_widths[2])}"
     )
     # Max Pain
     mp_strike_str = f"${mp_strike}"
@@ -2880,6 +2903,16 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             "Extreme": "極高 / 泡沫",
         }
         status_tw = iv_status_map.get(iv_status, "正常 / 公允")
+        event_loading = False
+        if hasattr(iv_data, "has_event_loading_applied"):
+            event_loading = iv_data.has_event_loading_applied
+        elif isinstance(iv_data, dict):
+            event_loading = iv_data.get("has_event_loading_applied", False)
+
+        if event_loading:
+            status_tw = "⚠️ 臨近財報/快取波動率可能低估"
+
+        iv_status_str = f"狀態: {status_tw}" if not event_loading else status_tw
 
         if is_premarket and current_iv == 0.0:
             iv_lines = [
@@ -2907,11 +2940,21 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 vol_title,
                 f" └─ 值: {current_iv * 100:.1f}% ({vol_note})",
                 " IV Rank / IV Percentile",
-                f" └─ IV Rank: {iv_rank:.1f}% | IV Percentile: {iv_percentile:.1f}% (狀態: {status_tw})",
+                f" └─ IV Rank: {iv_rank:.1f}% | IV Percentile: {iv_percentile:.1f}% ({iv_status_str})",
                 " Expected Move (預期區間)",
-                f" └─ 本週預期: ±${expected_move_weekly:.2f} ({em_note})",
-                "```",
             ]
+            if event_loading:
+                iv_lines.extend(
+                    [
+                        f" ├─ 本週預期: ±${expected_move_weekly:.2f} ({em_note})",
+                        " └─ 備註: 實盤請預留 1.4x 波動邊界以防範 IV Crush。",
+                    ]
+                )
+            else:
+                iv_lines.append(
+                    f" └─ 本週預期: ±${expected_move_weekly:.2f} ({em_note})"
+                )
+            iv_lines.append("```")
         else:
             vol_note = (
                 "當前 30 天平值期權隱含波動率"
@@ -2926,11 +2969,21 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 " Implied Volatility (IV)",
                 f" └─ 值: {current_iv * 100:.1f}% ({vol_note})",
                 " IV Rank / IV Percentile",
-                f" └─ IV Rank: {iv_rank:.1f}% | IV Percentile: {iv_percentile:.1f}% (狀態: {status_tw})",
+                f" └─ IV Rank: {iv_rank:.1f}% | IV Percentile: {iv_percentile:.1f}% ({iv_status_str})",
                 " Expected Move (預期區間)",
-                f" └─ 本週預期: ±${expected_move_weekly:.2f} ({em_note})",
-                "```",
             ]
+            if event_loading:
+                iv_lines.extend(
+                    [
+                        f" ├─ 本週預期: ±${expected_move_weekly:.2f} ({em_note})",
+                        " └─ 備註: 實盤請預留 1.4x 波動邊界以防範 IV Crush。",
+                    ]
+                )
+            else:
+                iv_lines.append(
+                    f" └─ 本週預期: ±${expected_move_weekly:.2f} ({em_note})"
+                )
+            iv_lines.append("```")
         embed.add_field(
             name="📊 隱含波動率與預期區間 (IV Context)",
             value="\n".join(iv_lines),
@@ -2965,15 +3018,10 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
     # PCR split formatting
     pcr_data = data.get("pcr", {})
-    pcr_val = pcr_data.get("pcr", 0.0) if pcr_data else 0.0
-    pcr_state = pcr_data.get("state", "N/A") if pcr_data else "N/A"
-
-    volume_pcr = pcr_data.get("volume_pcr", pcr_val) if pcr_data else pcr_val
-    oi_pcr = pcr_data.get("oi_pcr", 0.0) if pcr_data else 0.0
-    volume_state = (
-        pcr_data.get("volume_pcr_state", pcr_state) if pcr_data else pcr_state
-    )
-    oi_state = pcr_data.get("oi_pcr_state", "N/A") if pcr_data else "N/A"
+    volume_pcr = pcr_data.get("volume_pcr", 0.0) if pcr_data else 0.0
+    oi_pcr = pcr_data.get("oi_pcr", pcr_data.get("pcr", 0.0)) if pcr_data else 0.0
+    volume_state = pcr_data.get("volume_pcr_state", "平衡") if pcr_data else "平衡"
+    oi_state = pcr_data.get("oi_pcr_state", "結構平衡") if pcr_data else "結構平衡"
 
     vol_pcr_color = (
         "\u001b[1;32m"
@@ -3185,16 +3233,25 @@ def create_watchlist_signal_embed(
         change_pct = 0.0
 
     # Extract IV metrics
+    event_loading = False
     if iv_metrics is not None:
         iv_val = iv_metrics.current_iv * 100.0
         iv_rank = iv_metrics.iv_rank
         iv_status = iv_metrics.iv_status.upper()
         expected_move = iv_metrics.expected_move_weekly
+        event_loading = iv_metrics.has_event_loading_applied
     else:
         iv_val = 30.0
         iv_rank = 50.0
         iv_status = "NORMAL"
         expected_move = 5.0
+
+    if metrics is not None and metrics.has_event_loading_applied:
+        event_loading = True
+
+    iv_status_str = f"狀態: {iv_status}"
+    if event_loading:
+        iv_status_str = "⚠️ 臨近財報/快取波動率可能低估"
 
     # Extract Max Pain Data
     cb_triggered = False
@@ -3223,9 +3280,9 @@ def create_watchlist_signal_embed(
         oi_pcr = metrics.oi_pcr
 
     if pcr_data is not None:
-        vol_pcr = pcr_data.get("volume_pcr", pcr_data.get("pcr", vol_pcr))
-        oi_pcr = pcr_data.get("oi_pcr", oi_pcr)
-        vol_pcr_status = pcr_data.get("volume_pcr_state", pcr_data.get("state", "平衡"))
+        vol_pcr = pcr_data.get("volume_pcr", vol_pcr)
+        oi_pcr = pcr_data.get("oi_pcr", pcr_data.get("pcr", oi_pcr))
+        vol_pcr_status = pcr_data.get("volume_pcr_state", "平衡")
         oi_pcr_status = pcr_data.get("oi_pcr_state", "結構平衡")
 
     gex_dist = (
@@ -3280,18 +3337,31 @@ def create_watchlist_signal_embed(
         f" └─ Option Skew (期權偏斜): {skew_val:+.2f}% (分位點: {skew_per:.1f}%)",
         "",
         " 隱含波動率與預期空間 (IV Context)",
-        f" ├─ Implied Volatility (IV): {iv_val:.1f}% ｜ IV Rank: {iv_rank:.1f}% (狀態: {iv_status})",
-        f" └─ 本週預期波幅 (Expected Move): ±${expected_move:.2f}",
-        "",
-        " 結算與目標 (Target Lock)",
-        f" ├─ 最大痛點結算 (Max Pain): {max_pain_str}",
-        f" ├─ Volume PCR (即時情緒): {vol_pcr:.2f} (狀態: {vol_pcr_status})",
-        f" └─ OI PCR (結構防禦): {oi_pcr:.2f} (狀態: {oi_pcr_status})",
-        "",
-        " 異常活動穿透 (Directional UOA - Bid/Ask Track)",
-        " 到期日     | 履約價      | 類型 | 交易流向 [買/賣]      | 機構/OI    | 比例   | 戰略意圖映射",
-        " ---------------------------------------------------------------------------------------",
+        f" ├─ Implied Volatility (IV): {iv_val:.1f}% ｜ IV Rank: {iv_rank:.1f}% ({iv_status_str})",
     ]
+    if event_loading:
+        lines.extend(
+            [
+                f" ├─ 本週預期波幅 (Expected Move): ±${expected_move:.2f}",
+                " └─ 備註: 實盤請預留 1.4x 波動邊界以防範 IV Crush。",
+            ]
+        )
+    else:
+        lines.append(f" └─ 本週預期波幅 (Expected Move): ±${expected_move:.2f}")
+
+    lines.extend(
+        [
+            "",
+            " 結算與目標 (Target Lock)",
+            f" ├─ 最大痛點結算 (Max Pain): {max_pain_str}",
+            f" ├─ Volume PCR (即時情緒): {vol_pcr:.2f} (狀態: {vol_pcr_status})",
+            f" └─ OI PCR (結構防禦): {oi_pcr:.2f} (狀態: {oi_pcr_status})",
+            "",
+            " 異常活動穿透 (Directional UOA - Bid/Ask Track)",
+            " 到期日     | 履約價      | 類型 | 交易流向 [買/賣]      | 機構/OI    | 比例   | 戰略意圖映射",
+            " ---------------------------------------------------------------------------------------",
+        ]
+    )
     lines.extend(uoa_table_lines)
     lines.extend(
         [

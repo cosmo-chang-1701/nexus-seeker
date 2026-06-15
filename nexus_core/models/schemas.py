@@ -61,6 +61,7 @@ class EnhancedWatchlistMetrics(BaseModel):
     is_premarket: bool = False
     volume_pcr: float = 0.0
     oi_pcr: float = 0.0
+    has_event_loading_applied: bool = False
 
     @field_validator("symbol")
     @classmethod
