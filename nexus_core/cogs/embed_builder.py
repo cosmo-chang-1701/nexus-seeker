@@ -1211,10 +1211,26 @@ def create_sentiment_scan_embed(
         elif isinstance(iv_data, dict):
             event_loading = iv_data.get("has_event_loading_applied", False)
 
+        if iv_source in ["STORED_IV", "HV_PROXY"]:
+            try:
+                from database.calendar_cache import get_cached_earnings
+                from datetime import timedelta
+
+                earnings = get_cached_earnings(symbol)
+                if earnings and earnings.get("earnings_date"):
+                    today_dt = datetime.now().date()
+                    earn_date = datetime.strptime(
+                        earnings["earnings_date"][:10], "%Y-%m-%d"
+                    ).date()
+                    if today_dt <= earn_date <= today_dt + timedelta(days=14):
+                        event_loading = True
+            except Exception:
+                pass
+
         if event_loading:
             status_tw = "⚠️ 臨近財報/快取波動率可能低估"
 
-        iv_status_str = f"狀態: {status_tw}" if not event_loading else status_tw
+        iv_status_str = f"狀態: {status_tw}"
 
         if is_premarket and current_iv == 0.0:
             iv_lines = [
@@ -1284,12 +1300,34 @@ def create_sentiment_scan_embed(
     skew_state = skew_data.get("state", "N/A")
     vol_pcr = pcr_data.get("volume_pcr", 0.0) if pcr_data else 0.0
     oi_pcr = pcr_data.get("oi_pcr", pcr_data.get("pcr", 0.0)) if pcr_data else 0.0
-    vol_pcr_state = (
-        pcr_data.get("volume_pcr_state", pcr_data.get("state", "平衡"))
-        if pcr_data
-        else "平衡"
-    )
-    oi_pcr_state = pcr_data.get("oi_pcr_state", "結構平衡") if pcr_data else "結構平衡"
+
+    if pcr_data:
+        if "volume_pcr_state" in pcr_data:
+            vol_pcr_state = pcr_data["volume_pcr_state"]
+        else:
+            if vol_pcr < 0.90:
+                vol_pcr_state = "中性偏多/看漲主導"
+            elif vol_pcr > 1.10:
+                vol_pcr_state = "🐻 偏向空頭/看空主導"
+            else:
+                vol_pcr_state = "平衡"
+
+        if "oi_pcr_state" in pcr_data:
+            oi_pcr_state = pcr_data["oi_pcr_state"]
+        else:
+            legacy_state = pcr_data.get("state")
+            if legacy_state:
+                oi_pcr_state = legacy_state
+            else:
+                if oi_pcr < 0.90:
+                    oi_pcr_state = "🐂 結構看漲/偏向多頭"
+                elif oi_pcr > 1.10:
+                    oi_pcr_state = "🐻 結構防禦/偏向空頭"
+                else:
+                    oi_pcr_state = "結構平衡"
+    else:
+        vol_pcr_state = "平衡"
+        oi_pcr_state = "結構平衡"
     mp_strike = max_pain_data.get("max_pain", "N/A")
     is_conv = "🎯 趨於收斂" if max_pain_data.get("is_converging") else "⏳ 尚有距離"
 
@@ -2909,10 +2947,26 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         elif isinstance(iv_data, dict):
             event_loading = iv_data.get("has_event_loading_applied", False)
 
+        if iv_source in ["STORED_IV", "HV_PROXY"]:
+            try:
+                from database.calendar_cache import get_cached_earnings
+                from datetime import timedelta
+
+                earnings = get_cached_earnings(symbol)
+                if earnings and earnings.get("earnings_date"):
+                    today_dt = datetime.now().date()
+                    earn_date = datetime.strptime(
+                        earnings["earnings_date"][:10], "%Y-%m-%d"
+                    ).date()
+                    if today_dt <= earn_date <= today_dt + timedelta(days=14):
+                        event_loading = True
+            except Exception:
+                pass
+
         if event_loading:
             status_tw = "⚠️ 臨近財報/快取波動率可能低估"
 
-        iv_status_str = f"狀態: {status_tw}" if not event_loading else status_tw
+        iv_status_str = f"狀態: {status_tw}"
 
         if is_premarket and current_iv == 0.0:
             iv_lines = [
@@ -3020,8 +3074,34 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     pcr_data = data.get("pcr", {})
     volume_pcr = pcr_data.get("volume_pcr", 0.0) if pcr_data else 0.0
     oi_pcr = pcr_data.get("oi_pcr", pcr_data.get("pcr", 0.0)) if pcr_data else 0.0
-    volume_state = pcr_data.get("volume_pcr_state", "平衡") if pcr_data else "平衡"
-    oi_state = pcr_data.get("oi_pcr_state", "結構平衡") if pcr_data else "結構平衡"
+
+    if pcr_data:
+        if "volume_pcr_state" in pcr_data:
+            volume_state = pcr_data["volume_pcr_state"]
+        else:
+            if volume_pcr < 0.90:
+                volume_state = "中性偏多/看漲主導"
+            elif volume_pcr > 1.10:
+                volume_state = "🐻 偏向空頭/看空主導"
+            else:
+                volume_state = "平衡"
+
+        if "oi_pcr_state" in pcr_data:
+            oi_state = pcr_data["oi_pcr_state"]
+        else:
+            legacy_state = pcr_data.get("state")
+            if legacy_state:
+                oi_state = legacy_state
+            else:
+                if oi_pcr < 0.90:
+                    oi_state = "🐂 結構看漲/偏向多頭"
+                elif oi_pcr > 1.10:
+                    oi_state = "🐻 結構防禦/偏向空頭"
+                else:
+                    oi_state = "結構平衡"
+    else:
+        volume_state = "平衡"
+        oi_state = "結構平衡"
 
     vol_pcr_color = (
         "\u001b[1;32m"
@@ -3234,24 +3314,45 @@ def create_watchlist_signal_embed(
 
     # Extract IV metrics
     event_loading = False
+    iv_source = "UNAVAILABLE"
     if iv_metrics is not None:
         iv_val = iv_metrics.current_iv * 100.0
         iv_rank = iv_metrics.iv_rank
         iv_status = iv_metrics.iv_status.upper()
         expected_move = iv_metrics.expected_move_weekly
         event_loading = iv_metrics.has_event_loading_applied
+        iv_source = iv_metrics.iv_source
     else:
         iv_val = 30.0
         iv_rank = 50.0
         iv_status = "NORMAL"
         expected_move = 5.0
 
-    if metrics is not None and metrics.has_event_loading_applied:
-        event_loading = True
+    if metrics is not None:
+        if metrics.has_event_loading_applied:
+            event_loading = True
+        if metrics.iv_source:
+            iv_source = metrics.iv_source
+
+    if iv_source in ["STORED_IV", "HV_PROXY"]:
+        try:
+            from database.calendar_cache import get_cached_earnings
+            from datetime import timedelta
+
+            earnings = get_cached_earnings(symbol)
+            if earnings and earnings.get("earnings_date"):
+                today_dt = datetime.now().date()
+                earn_date = datetime.strptime(
+                    earnings["earnings_date"][:10], "%Y-%m-%d"
+                ).date()
+                if today_dt <= earn_date <= today_dt + timedelta(days=14):
+                    event_loading = True
+        except Exception:
+            pass
 
     iv_status_str = f"狀態: {iv_status}"
     if event_loading:
-        iv_status_str = "⚠️ 臨近財報/快取波動率可能低估"
+        iv_status_str = "狀態: ⚠️ 臨近財報/快取波動率可能低估"
 
     # Extract Max Pain Data
     cb_triggered = False
@@ -3282,8 +3383,45 @@ def create_watchlist_signal_embed(
     if pcr_data is not None:
         vol_pcr = pcr_data.get("volume_pcr", vol_pcr)
         oi_pcr = pcr_data.get("oi_pcr", pcr_data.get("pcr", oi_pcr))
-        vol_pcr_status = pcr_data.get("volume_pcr_state", "平衡")
-        oi_pcr_status = pcr_data.get("oi_pcr_state", "結構平衡")
+
+        if "volume_pcr_state" in pcr_data:
+            vol_pcr_status = pcr_data["volume_pcr_state"]
+        else:
+            if vol_pcr < 0.90:
+                vol_pcr_status = "中性偏多/看漲主導"
+            elif vol_pcr > 1.10:
+                vol_pcr_status = "🐻 偏向空頭/看空主導"
+            else:
+                vol_pcr_status = "平衡"
+
+        if "oi_pcr_state" in pcr_data:
+            oi_pcr_status = pcr_data["oi_pcr_state"]
+        else:
+            legacy_state = pcr_data.get("state")
+            if legacy_state:
+                oi_pcr_status = legacy_state
+            else:
+                if oi_pcr < 0.90:
+                    oi_pcr_status = "🐂 結構看漲/偏向多頭"
+                elif oi_pcr > 1.10:
+                    oi_pcr_status = "🐻 結構防禦/偏向空頭"
+                else:
+                    oi_pcr_status = "結構平衡"
+    else:
+        if metrics is not None:
+            if vol_pcr < 0.90:
+                vol_pcr_status = "中性偏多/看漲主導"
+            elif vol_pcr > 1.10:
+                vol_pcr_status = "🐻 偏向空頭/看空主導"
+            else:
+                vol_pcr_status = "平衡"
+
+            if oi_pcr < 0.90:
+                oi_pcr_status = "🐂 結構看漲/偏向多頭"
+            elif oi_pcr > 1.10:
+                oi_pcr_status = "🐻 結構防禦/偏向空頭"
+            else:
+                oi_pcr_status = "結構平衡"
 
     gex_dist = (
         ((live_price - gex_putwall) / gex_putwall * 100.0) if gex_putwall else 0.0
