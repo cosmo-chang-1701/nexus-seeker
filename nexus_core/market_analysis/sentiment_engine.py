@@ -192,7 +192,61 @@ class SentimentEngine:
         symbol: str, expiry: Optional[str] = None, _retry: bool = False
     ) -> Dict[str, Any]:
         """
-        計算最大痛點 (Max Pain)。
+        計算最大痛點 (Max Pain) 包裝器，具備 SQLite 快取回退功能。
+        """
+        res = await SentimentEngine._calculate_max_pain_raw(symbol, expiry, _retry)
+        if res and res.get("max_pain") is not None and "error" not in res:
+            return res
+
+        # 降級回退至 SQLite market_cache 資料表
+        try:
+            from database import get_market_cache
+
+            old_cache = get_market_cache(symbol)
+            if old_cache and old_cache.get("max_pain") is not None:
+                cached_mp = float(old_cache["max_pain"])
+                spot_price = (
+                    res.get("current_price") or 0.0 if isinstance(res, dict) else 0.0
+                )
+                if spot_price <= 0.0:
+                    try:
+                        quote = await market_data_service.get_quote(symbol)
+                        spot_price = quote.get("c", 0.0) if quote else 0.0
+                    except Exception:
+                        pass
+
+                dist_pct = (
+                    (cached_mp - spot_price) / spot_price * 100
+                    if spot_price > 0
+                    else 0.0
+                )
+
+                logger.info(
+                    f"[{symbol}] Fallback to SQLite cached Max Pain: ${cached_mp}"
+                )
+                return {
+                    "symbol": symbol,
+                    "max_pain": cached_mp,
+                    "current_price": spot_price,
+                    "distance_pct": round(dist_pct, 2),
+                    "is_converging": abs(dist_pct) < 2.0,
+                    "data_status": "Stale",
+                    "is_stale": True,
+                    "fallback_source": "SQLite",
+                }
+        except Exception as fallback_err:
+            logger.error(
+                f"[{symbol}] Failed to fallback to SQLite market_cache: {fallback_err}"
+            )
+
+        return res
+
+    @staticmethod
+    async def _calculate_max_pain_raw(
+        symbol: str, expiry: Optional[str] = None, _retry: bool = False
+    ) -> Dict[str, Any]:
+        """
+        計算最大痛點 (Max Pain) 原生邏輯。
         邏輯：尋找讓所有期權買家總價值最小化的標的價格。
         """
         from database.cache import get_kv_cache, save_kv_cache

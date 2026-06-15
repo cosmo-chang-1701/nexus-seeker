@@ -444,3 +444,27 @@ async def test_max_pain_anomaly_warning_and_retry():
         await SentimentEngine.calculate_max_pain("AAPL")
         # Assert check_and_reconcile_max_pain_anomaly was called
         mock_anomaly.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_calculate_max_pain_sqlite_fallback():
+    # Test fallback to SQLite market_cache when raw calculation fails / returns Data_Missing
+    with patch(
+        "services.market_data_service.get_all_option_expiries",
+        side_effect=Exception("API Error"),
+    ), patch("database.get_market_cache") as mock_get_cache, patch(
+        "services.market_data_service.get_quote", new_callable=AsyncMock
+    ) as mock_quote:
+        mock_get_cache.return_value = {
+            "symbol": "AAPL",
+            "max_pain": 120.0,
+            "expected_move_lower": 115.0,
+            "expected_move_upper": 125.0,
+        }
+        mock_quote.return_value = {"c": 100.0}
+
+        result = await SentimentEngine.calculate_max_pain("AAPL")
+        assert result["max_pain"] == 120.0
+        assert result["is_stale"] is True
+        assert result["fallback_source"] == "SQLite"
+        assert result["distance_pct"] == 20.0
