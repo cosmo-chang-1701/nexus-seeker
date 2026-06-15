@@ -57,34 +57,38 @@ def get_user_holdings(user_id: int):
     conn = sqlite3.connect(config.DB_NAME)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute(
-        "SELECT id, symbol, metadata, created_at FROM assets WHERE user_id = ? AND context_type = 'HOLDING'",
-        (user_id,),
-    )
-    rows = []
-    for row in cursor.fetchall():
-        d = dict(row)
-        meta = json.loads(d["metadata"]) if d["metadata"] else {}
-        d["quantity"] = meta.get("quantity", 0.0)
-        d["avg_cost"] = meta.get("avg_cost", 0.0)
-        d["weighted_delta"] = meta.get("weighted_delta", 0.0)
-        rows.append(d)
-    conn.close()
-    return rows
+    try:
+        cursor.execute(
+            "SELECT id, symbol, metadata, created_at FROM assets WHERE user_id = ? AND context_type = 'HOLDING'",
+            (user_id,),
+        )
+        rows = []
+        for row in cursor.fetchall():
+            d = dict(row)
+            meta = json.loads(d["metadata"]) if d["metadata"] else {}
+            d["quantity"] = meta.get("quantity", 0.0)
+            d["avg_cost"] = meta.get("avg_cost", 0.0)
+            d["weighted_delta"] = meta.get("weighted_delta", 0.0)
+            rows.append(d)
+        return rows
+    finally:
+        conn.close()
 
 
 def delete_holding(user_id: int, symbol: str) -> bool:
     """刪除特定的現貨持倉"""
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
-    cursor.execute(
-        "DELETE FROM assets WHERE user_id = ? AND symbol = ? AND context_type = 'HOLDING'",
-        (user_id, symbol.upper()),
-    )
-    changes = cursor.rowcount
-    conn.commit()
-    conn.close()
-    return changes > 0
+    try:
+        cursor.execute(
+            "DELETE FROM assets WHERE user_id = ? AND symbol = ? AND context_type = 'HOLDING'",
+            (user_id, symbol.upper()),
+        )
+        changes = cursor.rowcount
+        conn.commit()
+        return changes > 0
+    finally:
+        conn.close()
 
 
 def get_all_holdings():
@@ -92,34 +96,36 @@ def get_all_holdings():
     conn = sqlite3.connect(config.DB_NAME)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute(
-        "SELECT id, user_id, symbol, metadata FROM assets WHERE context_type = 'HOLDING'"
-    )
-    rows = []
-    for row in cursor.fetchall():
-        d = dict(row)
-        meta = json.loads(d["metadata"]) if d["metadata"] else {}
-        d["quantity"] = meta.get("quantity", 0.0)
-        d["avg_cost"] = meta.get("avg_cost", 0.0)
-        rows.append(d)
-    conn.close()
-    return rows
+    try:
+        cursor.execute(
+            "SELECT id, user_id, symbol, metadata FROM assets WHERE context_type = 'HOLDING'"
+        )
+        rows = []
+        for row in cursor.fetchall():
+            d = dict(row)
+            meta = json.loads(d["metadata"]) if d["metadata"] else {}
+            d["quantity"] = meta.get("quantity", 0.0)
+            d["avg_cost"] = meta.get("avg_cost", 0.0)
+            rows.append(d)
+        return rows
+    finally:
+        conn.close()
 
 
 def update_holding_greeks(holding_id: int, weighted_delta: float):
     """更新現貨持倉的加權 Delta"""
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
-
-    cursor.execute("SELECT metadata FROM assets WHERE id = ?", (holding_id,))
-    row = cursor.fetchone()
-    if row:
-        meta = json.loads(row[0]) if row[0] else {}
-        meta["weighted_delta"] = weighted_delta
-        cursor.execute(
-            "UPDATE assets SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (json.dumps(meta), holding_id),
-        )
-
-    conn.commit()
-    conn.close()
+    try:
+        cursor.execute("SELECT metadata FROM assets WHERE id = ?", (holding_id,))
+        row = cursor.fetchone()
+        if row:
+            meta = json.loads(row[0]) if row[0] else {}
+            meta["weighted_delta"] = weighted_delta
+            cursor.execute(
+                "UPDATE assets SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (json.dumps(meta), holding_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
