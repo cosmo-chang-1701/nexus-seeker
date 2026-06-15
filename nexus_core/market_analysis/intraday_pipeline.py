@@ -431,6 +431,9 @@ async def build_enhanced_watchlist_metrics(
         if pcr_metrics
         else 0.0,
         oi_pcr=float(pcr_metrics.get("oi_pcr", 0.0)) if pcr_metrics else 0.0,
+        has_event_loading_applied=iv_metrics.has_event_loading_applied
+        if iv_metrics
+        else False,
     )
     _WATCHLIST_METRICS_CACHE[symbol] = (metrics, now_ts + _WATCHLIST_METRICS_TTL)
     return metrics
@@ -1861,6 +1864,7 @@ class IntradayScanPipeline:
             suitable_sell_shares=signals.get("suitable_sell_shares"),
             buy_rationale=signals.get("buy_rationale"),
             sell_rationale=signals.get("sell_rationale"),
+            metrics=evaluation.metrics,
         )
 
     async def _run_loop(self):
