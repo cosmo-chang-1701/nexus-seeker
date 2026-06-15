@@ -42,10 +42,20 @@ repos:
 
   - repo: local
     hooks:
-      - id: docker-test
-        name: docker-test
+      - id: core-test
+        name: core-test
         entry: bash -c "docker build -t nexus-seeker-test -f Dockerfile.test . && docker run --rm nexus-seeker-test python -m pytest tests"
         language: system
         stages: [pre-push]
-        always_run: true
+        always_run: false
+        files: ^nexus_core/.*\.py$
+        pass_filenames: false
+
+      - id: scraper-test
+        name: scraper-test
+        entry: bash -c "PYTHONPATH=nexus_edge_scraper nexus_core/.venv/bin/pytest nexus_edge_scraper/tests"
+        language: system
+        stages: [pre-push]
+        always_run: false
+        files: ^nexus_edge_scraper/.*\.py$
         pass_filenames: false
