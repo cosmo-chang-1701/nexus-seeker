@@ -144,48 +144,79 @@ class SentimentEngine:
     @staticmethod
     async def calculate_pcr(symbol: str) -> Dict[str, Any]:
         """
-        計算買賣權比率 (Put/Call Ratio)。
-        邏輯：總成交量 (Volume) 或 未平倉量 (Open Interest) 的 P/C 比。
+        計算買賣權比率 (Put/Call Ratio)，拆分為成交量 (Volume) 與未平倉量 (Open Interest) 比率。
         """
         try:
             expiries = await market_data_service.get_all_option_expiries(symbol)
             if not expiries:
-                return {"symbol": symbol, "pcr": 0, "state": "N/A"}
+                return {
+                    "symbol": symbol,
+                    "pcr": 0.0,
+                    "volume_pcr": 0.0,
+                    "oi_pcr": 0.0,
+                    "state": "N/A",
+                    "volume_pcr_state": "N/A",
+                    "oi_pcr_state": "N/A",
+                }
 
             # 彙整前三個到期日的數據
-            total_put_vol = 0
-            total_call_vol = 0
+            total_put_vol = 0.0
+            total_call_vol = 0.0
+            total_put_oi = 0.0
+            total_call_oi = 0.0
 
             for exp in expiries[:3]:
                 chain = await market_data_service.get_option_chain(symbol, exp)
                 if not chain:
                     continue
-                total_put_vol += chain.puts["volume"].sum()
-                total_call_vol += chain.calls["volume"].sum()
+                if chain.puts is not None and not chain.puts.empty:
+                    total_put_vol += float(chain.puts["volume"].sum())
+                    total_put_oi += float(chain.puts["openInterest"].sum())
+                if chain.calls is not None and not chain.calls.empty:
+                    total_call_vol += float(chain.calls["volume"].sum())
+                    total_call_oi += float(chain.calls["openInterest"].sum())
 
-            if total_call_vol == 0:
-                return {"symbol": symbol, "pcr": 0, "state": "N/A"}
+            volume_pcr = total_put_vol / total_call_vol if total_call_vol > 0 else 0.0
+            oi_pcr = total_put_oi / total_call_oi if total_call_oi > 0 else 0.0
 
-            pcr_val = total_put_vol / total_call_vol
+            volume_state = "平衡"
+            if volume_pcr < 0.90:
+                volume_state = "中性偏多/看漲主導"
+            elif volume_pcr > 1.10:
+                volume_state = "🐻 偏向空頭/看空主導"
 
-            state = "平衡"
-            if pcr_val > 1.0:
-                state = "🐻 偏向空頭"
-            elif pcr_val < 0.6:
-                state = "🐂 市場過熱 (Extreme Greed)"
+            oi_state = "結構平衡"
+            if oi_pcr < 0.90:
+                oi_state = "🐂 結構看漲/偏向多頭"
+            elif oi_pcr > 1.10:
+                oi_state = "🐻 結構防禦/偏向空頭"
 
-            SentimentEngine.save_sentiment_history(symbol, "PCR", pcr_val)
+            SentimentEngine.save_sentiment_history(symbol, "PCR", volume_pcr)
 
             return {
                 "symbol": symbol,
-                "pcr": round(pcr_val, 2),
+                "pcr": round(volume_pcr, 2),
+                "volume_pcr": round(volume_pcr, 2),
+                "oi_pcr": round(oi_pcr, 2),
                 "put_vol": total_put_vol,
                 "call_vol": total_call_vol,
-                "state": state,
+                "put_oi": total_put_oi,
+                "call_oi": total_call_oi,
+                "state": volume_state,
+                "volume_pcr_state": volume_state,
+                "oi_pcr_state": oi_state,
             }
         except Exception as e:
             logger.error(f"[{symbol}] PCR 計算失敗: {e}")
-            return {"symbol": symbol, "pcr": 0, "state": "ERROR"}
+            return {
+                "symbol": symbol,
+                "pcr": 0.0,
+                "volume_pcr": 0.0,
+                "oi_pcr": 0.0,
+                "state": "ERROR",
+                "volume_pcr_state": "ERROR",
+                "oi_pcr_state": "ERROR",
+            }
 
     @staticmethod
     async def calculate_max_pain(
@@ -195,51 +226,71 @@ class SentimentEngine:
         計算最大痛點 (Max Pain) 包裝器，具備 SQLite 快取回退功能。
         """
         res = await SentimentEngine._calculate_max_pain_raw(symbol, expiry, _retry)
+        final_res = None
         if res and res.get("max_pain") is not None and "error" not in res:
-            return res
+            final_res = res
+        else:
+            # 降級回退至 SQLite market_cache 資料表
+            try:
+                from database import get_market_cache
 
-        # 降級回退至 SQLite market_cache 資料表
-        try:
-            from database import get_market_cache
+                old_cache = get_market_cache(symbol)
+                if old_cache and old_cache.get("max_pain") is not None:
+                    cached_mp = float(old_cache["max_pain"])
+                    spot_price = (
+                        res.get("current_price") or 0.0
+                        if isinstance(res, dict)
+                        else 0.0
+                    )
+                    if spot_price <= 0.0:
+                        try:
+                            quote = await market_data_service.get_quote(symbol)
+                            spot_price = quote.get("c", 0.0) if quote else 0.0
+                        except Exception:
+                            pass
 
-            old_cache = get_market_cache(symbol)
-            if old_cache and old_cache.get("max_pain") is not None:
-                cached_mp = float(old_cache["max_pain"])
-                spot_price = (
-                    res.get("current_price") or 0.0 if isinstance(res, dict) else 0.0
+                    dist_pct = (
+                        (cached_mp - spot_price) / spot_price * 100
+                        if spot_price > 0
+                        else 0.0
+                    )
+
+                    logger.info(
+                        f"[{symbol}] Fallback to SQLite cached Max Pain: ${cached_mp}"
+                    )
+                    final_res = {
+                        "symbol": symbol,
+                        "max_pain": cached_mp,
+                        "current_price": spot_price,
+                        "distance_pct": round(dist_pct, 2),
+                        "is_converging": abs(dist_pct) < 2.0,
+                        "data_status": "Stale",
+                        "is_stale": True,
+                        "fallback_source": "SQLite",
+                    }
+            except Exception as fallback_err:
+                logger.error(
+                    f"[{symbol}] Failed to fallback to SQLite market_cache: {fallback_err}"
                 )
-                if spot_price <= 0.0:
-                    try:
-                        quote = await market_data_service.get_quote(symbol)
-                        spot_price = quote.get("c", 0.0) if quote else 0.0
-                    except Exception:
-                        pass
 
-                dist_pct = (
-                    (cached_mp - spot_price) / spot_price * 100
-                    if spot_price > 0
-                    else 0.0
-                )
+        if final_res is None:
+            final_res = res
 
-                logger.info(
-                    f"[{symbol}] Fallback to SQLite cached Max Pain: ${cached_mp}"
-                )
-                return {
-                    "symbol": symbol,
-                    "max_pain": cached_mp,
-                    "current_price": spot_price,
-                    "distance_pct": round(dist_pct, 2),
-                    "is_converging": abs(dist_pct) < 2.0,
-                    "data_status": "Stale",
-                    "is_stale": True,
-                    "fallback_source": "SQLite",
-                }
-        except Exception as fallback_err:
-            logger.error(
-                f"[{symbol}] Failed to fallback to SQLite market_cache: {fallback_err}"
-            )
+        # Force Circuit Breaker: if max_pain deviates from spot_price by > 30%, set max_pain to None
+        if final_res and final_res.get("max_pain") is not None:
+            mp_val = float(final_res["max_pain"])
+            spot = float(final_res.get("current_price") or 0.0)
+            if spot > 0:
+                dev = abs(mp_val - spot) / spot
+                if dev > 0.30:
+                    final_res["max_pain"] = None
+                    final_res["distance_pct"] = None
+                    final_res["circuit_breaker_triggered"] = True
+                    logger.warning(
+                        f"[{symbol}] Circuit breaker triggered: Max Pain ${mp_val:.2f} deviates from spot ${spot:.2f} by {dev:.2%} (> 30%). Set to None."
+                    )
 
-        return res
+        return final_res
 
     @staticmethod
     async def _calculate_max_pain_raw(
@@ -443,17 +494,39 @@ class SentimentEngine:
             calls = calls[(calls["openInterest"] > 0) | (calls["volume"] > 0)]
             puts = puts[(puts["openInterest"] > 0) | (puts["volume"] > 0)]
 
-            # 檢查 OI 總量是否大於 0，否則退化回使用成交量 (Volume) 作為權重
+            # 檢查 OI 總量與資料完整性，若 OI 嚴重缺失則退化回使用成交量 (Volume) 作為權重
             total_oi = calls["openInterest"].sum() + puts["openInterest"].sum()
+            active_oi_contracts = (calls["openInterest"] > 0).sum() + (
+                puts["openInterest"] > 0
+            ).sum()
+            total_contracts = len(calls) + len(puts)
+
             use_volume = False
-            if total_oi == 0:
+            # 當符合以下條件之一時，判定為 OI 數據缺失/異常，自動退化為成交量權重：
+            # 1. 總未平倉量 (OI) 為 0
+            # 2. 總合約數 > 10，但具備有效 OI 的合約數量 <= 3 (代表絕大多數合約無 OI 資料)
+            # 3. 總合約數 > 10，但具備有效 OI 的合約佔比 < 2%
+            if (
+                total_oi == 0
+                or (total_contracts > 10 and active_oi_contracts <= 3)
+                or (
+                    total_contracts > 10
+                    and (active_oi_contracts / total_contracts) < 0.02
+                )
+            ):
                 total_vol = calls["volume"].sum() + puts["volume"].sum()
                 if total_vol > 0:
                     use_volume = True
+                    logger.warning(
+                        f"[{symbol}] Incomplete Open Interest detected (active contracts: {active_oi_contracts}/{total_contracts}). "
+                        "Falling back to Volume-weighted Max Pain calculation."
+                    )
                 else:
                     return {
                         "error": "No active options contracts (OI and Volume are both 0)"
                     }
+            else:
+                use_volume = False
 
             # 彙整所有履約價
             strikes = sorted(list(set(calls["strike"]) | set(puts["strike"])))
@@ -584,28 +657,101 @@ class SentimentEngine:
                 if not chain:
                     continue
 
-                for _, row in pd.concat([chain.calls, chain.puts]).iterrows():
+                total_chain_volume = 0.0
+                dfs = []
+                if chain.calls is not None and not chain.calls.empty:
+                    dfs.append(chain.calls)
+                    total_chain_volume += float(chain.calls["volume"].sum())
+                if chain.puts is not None and not chain.puts.empty:
+                    dfs.append(chain.puts)
+                    total_chain_volume += float(chain.puts["volume"].sum())
+                if not dfs:
+                    continue
+
+                df_combined = pd.concat(dfs)
+                for _, row in df_combined.iterrows():
                     # 門檻：Volume > 5 * OI 且 Volume > 500
-                    if row["volume"] > 5 * row["openInterest"] and row["volume"] > 500:
+                    vol = float(row["volume"])
+                    oi = float(row["openInterest"])
+                    if vol > 5 * oi and vol > 500:
+                        # 1. Conservation Law Validation
+                        if vol > total_chain_volume:
+                            logger.warning(
+                                f"[{symbol}] Option volume ({vol}) exceeds total chain volume ({total_chain_volume}) for expiry {exp}. Discarding polluted data."
+                            )
+                            continue
+
+                        is_call = (
+                            chain.calls is not None
+                            and not chain.calls.empty
+                            and row["strike"] in chain.calls["strike"].values
+                        )
+                        opt_type = "CALL" if is_call else "PUT"
+
+                        trade_price = (
+                            float(row["lastPrice"])
+                            if "lastPrice" in row and pd.notna(row["lastPrice"])
+                            else 0.0
+                        )
+
+                        # 2. Limit single trade virtual nominal value
+                        is_index = symbol.upper() in [
+                            "SPY",
+                            "QQQ",
+                            "DIA",
+                            "IWM",
+                            "SPX",
+                            "NDX",
+                            "RUT",
+                            "VIX",
+                        ] or symbol.startswith("^")
+                        nominal_val = vol * trade_price * 100.0
+                        if nominal_val > 500_000_000.0 and not is_index:
+                            logger.warning(
+                                f"[{symbol}] UOA nominal value ${nominal_val:,.2f} exceeds $500M limit for non-index ticker. "
+                                f"Excluding to prevent contamination."
+                            )
+                            continue
+
+                        # 3. Liquidity and Open Interest check (Delta check)
+                        from market_analysis.greeks import calculate_greeks
+
+                        exp_dt = datetime.strptime(exp, "%Y-%m-%d").date()
+                        today_dt = datetime.now().date()
+                        dte = (exp_dt - today_dt).days
+                        t_years = max(dte, 0.5) / 365.0
+                        iv_val = float(row.get("impliedVolatility", 0.0) or 0.0)
+
+                        greeks = calculate_greeks(
+                            opt_type.lower(),
+                            spot_price,
+                            float(row["strike"]),
+                            t_years,
+                            iv_val,
+                            0.0,
+                        )
+                        d_val = greeks.get("delta", 0.0)
+
+                        if vol > oi * 5.0 and (d_val > 0.70 or d_val < -0.70):
+                            logger.warning(
+                                f"[{symbol}] ITM option volume ({vol}) exceeds OI ({oi}) by > 5x with Delta {d_val:.2f}. "
+                                f"Excluding suspect unadjusted split data."
+                            )
+                            continue
+
                         trade_type = row.get("trade_type")
                         if not trade_type:
                             trade_type = (
                                 "BLOCK"
-                                if (row["volume"] > 1500 and row["volume"] % 100 == 0)
+                                if (vol > 1500 and int(vol) % 100 == 0)
                                 else "SWEEP"
                             )
 
                         oi_change_net = row.get("oi_change_net")
                         if oi_change_net is None:
-                            oi_change_net = int(row["volume"] - row["openInterest"])
+                            oi_change_net = int(vol - oi)
                         else:
                             oi_change_net = int(oi_change_net)
-
-                        opt_type = (
-                            "CALL"
-                            if row["strike"] in chain.calls["strike"].values
-                            else "PUT"
-                        )
                         trade_price = (
                             float(row["lastPrice"])
                             if "lastPrice" in row and pd.notna(row["lastPrice"])
@@ -890,18 +1036,6 @@ class SentimentEngine:
                 )
 
         try:
-            # 1. 取得現價
-            if spot_price <= 0.0:
-                quote = await market_data_service.get_quote(symbol)
-                spot_price = quote.get("c", 0.0)
-                if spot_price <= 0.0:
-                    # 嘗試 yfinance fallback 價格
-                    df_temp = await market_data_service.get_history_df(
-                        symbol, period="2d"
-                    )
-                    if not df_temp.empty:
-                        spot_price = float(df_temp["Close"].iloc[-1])
-
             if spot_price <= 0.0:
                 raise ValueError(f"無法取得 {symbol} 的現價，無法計算預期震盪區間")
 
@@ -912,88 +1046,67 @@ class SentimentEngine:
             )
             is_market_active = is_market_open()
 
-            # 盤前優先嘗試取得前一交易日存入的 IV (歷史最近一筆紀錄)
-            if not is_market_active:
-                last_db_iv = SentimentEngine.get_last_stored_iv(symbol)
-                if last_db_iv and last_db_iv > 0:
-                    current_iv = last_db_iv
-                    iv_source = "STORED_IV"
-                    logger.info(
-                        f"[{symbol}] 偵測為非交易時段，優先採用前日收盤 SQLite 歷史 IV: {current_iv}"
-                    )
-
-            if not current_iv or current_iv <= 0:
+            # A. Live IV Calculation (Preferred)
+            if is_market_active:
                 ticker = yf.Ticker(symbol)
                 try:
                     info = await asyncio.to_thread(lambda: ticker.info)
                     current_iv = info.get("impliedVolatility")
                     if current_iv and current_iv > 0:
-                        iv_source = "LIVE_IV" if is_market_active else "STORED_IV"
+                        iv_source = "LIVE_IV"
                 except Exception as e:
                     logger.warning(f"[{symbol}] yfinance ticker.info 獲取異常: {e}")
 
-            if not current_iv or current_iv <= 0:
-                # VIX-style forward-looking weighted average implied volatility calculation
-                # across the nearest front-month options chains
-                try:
-                    expirations = await market_data_service.get_all_option_expiries(
-                        symbol
-                    )
-                    if expirations:
-                        chain = await market_data_service.get_option_chain(
-                            symbol, expirations[0]
+                if not current_iv or current_iv <= 0:
+                    try:
+                        expirations = await market_data_service.get_all_option_expiries(
+                            symbol
                         )
-                        if chain:
-                            calls = chain.calls
-                            puts = chain.puts
-                            all_options = []
-                            for df in [calls, puts]:
-                                if df is not None and not df.empty:
-                                    for _, row in df.iterrows():
-                                        iv_val = float(
-                                            row.get("impliedVolatility", 0.0)
-                                        )
-                                        strike_val = float(row.get("strike", 0.0))
-                                        oi = float(row.get("openInterest", 0.0))
-                                        vol = float(row.get("volume", 0.0))
-                                        if iv_val > 0.01 and strike_val > 0.0:
-                                            # Filter to options near-the-money (within 20% of spot)
-                                            if (
-                                                abs(strike_val - spot_price)
-                                                / spot_price
-                                                <= 0.20
-                                            ):
-                                                # VIX-style weight: liquid options close to ATM are weighted higher
-                                                dist = abs(strike_val - spot_price)
-                                                weight = (oi + vol + 1.0) / (dist + 1.0)
-                                                all_options.append((iv_val, weight))
-                            if all_options:
-                                total_weight = sum(w for _, w in all_options)
-                                if total_weight > 0:
+                        if expirations:
+                            chain = await market_data_service.get_option_chain(
+                                symbol, expirations[0]
+                            )
+                            if chain:
+                                all_options = []
+                                for df in [chain.calls, chain.puts]:
+                                    if df is not None and not df.empty:
+                                        for _, row in df.iterrows():
+                                            iv_val = float(
+                                                row.get("impliedVolatility", 0.0)
+                                            )
+                                            strike_val = float(row.get("strike", 0.0))
+                                            oi = float(row.get("openInterest", 0.0))
+                                            vol = float(row.get("volume", 0.0))
+                                            if iv_val > 0.01 and strike_val > 0.0:
+                                                if (
+                                                    abs(strike_val - spot_price)
+                                                    / spot_price
+                                                    <= 0.20
+                                                ):
+                                                    weight = (oi + vol + 1.0) / (
+                                                        abs(strike_val - spot_price)
+                                                        + 1.0
+                                                    )
+                                                    all_options.append((iv_val, weight))
+                                if all_options:
+                                    total_weight = sum(w for _, w in all_options)
                                     current_iv = (
                                         sum(iv * w for iv, w in all_options)
                                         / total_weight
                                     )
-                                    iv_source = (
-                                        "LIVE_IV" if is_market_active else "STORED_IV"
-                                    )
-                                    logger.info(
-                                        f"[{symbol}] VIX-style weighted average IV computed: {current_iv:.4f} "
-                                        f"across {len(all_options)} liquid contracts."
-                                    )
-                except Exception as opt_err:
-                    logger.warning(
-                        f"[{symbol}] VIX-style weighted average IV calculation failed: {opt_err}"
-                    )
+                                    iv_source = "LIVE_IV"
+                    except Exception as opt_err:
+                        logger.warning(
+                            f"[{symbol}] VIX-style weighted IV calculation failed: {opt_err}"
+                        )
 
+            # B. Fallback path
             if not current_iv or current_iv <= 0:
-                # Fallback to DB or historical volatility (HV)
                 last_db_iv = SentimentEngine.get_last_stored_iv(symbol)
                 if last_db_iv and last_db_iv > 0:
                     current_iv = last_db_iv
                     iv_source = "STORED_IV"
                 else:
-                    # Fallback to 30-day historical volatility (HV proxy)
                     df_temp = await market_data_service.get_history_df(
                         symbol, period="1mo"
                     )
@@ -1003,10 +1116,63 @@ class SentimentEngine:
                         )
                         current_iv = float(df_temp["Log_Ret"].std() * np.sqrt(252))
                         iv_source = "HV_PROXY"
-                    else:
-                        raise ValueError(
-                            f"無法獲取 {symbol} 的 IV，且歷史波動率數據不足"
+
+            if not current_iv or current_iv <= 0:
+                raise ValueError(f"無法獲取 {symbol} 的 IV，且歷史波動率數據不足")
+
+            # Apply Event Loading Factor (1.4x) if fallback used and event near
+            if iv_source in ["STORED_IV", "HV_PROXY"]:
+                has_high_impact_event = False
+                try:
+                    from database.calendar_cache import (
+                        get_cached_earnings,
+                        get_macro_events_between,
+                    )
+
+                    today_dt = datetime.now().date()
+
+                    earnings = get_cached_earnings(symbol)
+                    if earnings and earnings.get("earnings_date"):
+                        try:
+                            earn_date = datetime.strptime(
+                                earnings["earnings_date"][:10], "%Y-%m-%d"
+                            ).date()
+                            if today_dt <= earn_date <= today_dt + timedelta(days=14):
+                                has_high_impact_event = True
+                        except Exception:
+                            pass
+
+                    if not has_high_impact_event:
+                        start_date_str = today_dt.strftime("%Y-%m-%d")
+                        end_date_str = (today_dt + timedelta(days=14)).strftime(
+                            "%Y-%m-%d"
                         )
+                        macro_events = get_macro_events_between(
+                            start_date_str, end_date_str
+                        )
+                        for evt in macro_events:
+                            event_name = evt.get("event", "").upper()
+                            if evt.get("impact", "").upper() == "HIGH" or any(
+                                term in event_name
+                                for term in [
+                                    "FOMC",
+                                    "INTEREST RATE",
+                                    "CPI",
+                                    "NFP",
+                                    "FED DECISION",
+                                ]
+                            ):
+                                has_high_impact_event = True
+                                break
+                except Exception:
+                    pass
+
+                if has_high_impact_event:
+                    orig = current_iv
+                    current_iv = current_iv * 1.4
+                    logger.warning(
+                        f"[{symbol}] Real-time IV missing. Applied 1.4x Event Loading Factor to {iv_source}: {orig:.4f} -> {current_iv:.4f}"
+                    )
 
             # 3. 儲存至 database historical_iv
             today_str = datetime.now().strftime("%Y-%m-%d")
@@ -1027,7 +1193,7 @@ class SentimentEngine:
             except Exception as e:
                 logger.error(f"讀取資料庫歷史 IV 失敗: {e}")
 
-            # 5. 取得 1y K-line history 做 HV 代理 (補足資料庫歷史不足部分)
+            # 5. 取得 1y K-line history 做 HV 代理
             df_hist = await market_data_service.get_history_df(symbol, period="1y")
             history_map = {}
             if not df_hist.empty:
@@ -1070,14 +1236,12 @@ class SentimentEngine:
             iv_percentile = max(0.0, min(100.0, iv_percentile))
 
             # Rule 4: If IV_Rank > 70%, current_iv cannot physically scale down to near-zero levels (<5%).
-            # Trigger an extraction error flag if conflict occurs.
             if iv_rank > 70.0 and current_iv < 0.05:
                 raise ValueError(
                     f"Conflict detected: IV Rank is high ({iv_rank:.1f}%) but Implied Volatility is suspiciously low ({current_iv * 100:.1f}%)."
                 )
 
-            # 10. 計算 Expected Move Weekly — 多層降級防禦
-            # 優先級: (1) Straddle-Implied EM → (2) IV-based EM → (3) HV-20 proxy EM
+            # 10. 計算 Expected Move Weekly
             em_from_iv = (
                 spot_price * current_iv * math.sqrt(7.0 / 365.0)
                 if current_iv > 0.001
@@ -1090,13 +1254,11 @@ class SentimentEngine:
 
             if straddle_em and straddle_em > 0:
                 expected_move_weekly = straddle_em
-                # 交叉驗證：若 IV-based EM 也可用，取兩者較大值以反映尾部風險
                 if em_from_iv > 0:
                     expected_move_weekly = max(straddle_em, em_from_iv)
             elif em_from_iv > 0:
                 expected_move_weekly = em_from_iv
             else:
-                # 最終降級：使用 HV-20 代理
                 hv_proxy = 0.0
                 if not df_hist.empty and "HV_20" in df_hist.columns:
                     last_hv = df_hist["HV_20"].dropna()
@@ -1105,13 +1267,7 @@ class SentimentEngine:
                 expected_move_weekly = (
                     spot_price * max(hv_proxy, 0.15) * math.sqrt(7.0 / 365.0)
                 )
-                logger.warning(
-                    f"[{symbol}] Zero-IV fallback: using HV-20 proxy ({hv_proxy:.4f}) "
-                    f"for EM calculation. EM=${expected_move_weekly:.2f}"
-                )
 
-            # 最終安全閥：若所有降級路徑皆產出零寬度 EM，強制使用 15% 年化波動率底線
-            # 防止 $X ~ $X 的零寬度預期區間顯示 (e.g. DELL $400.77 ~ $400.77)
             if expected_move_weekly <= 0 and spot_price > 0:
                 expected_move_weekly = spot_price * 0.15 * math.sqrt(7.0 / 365.0)
                 logger.warning(
@@ -1165,7 +1321,6 @@ class SentimentEngine:
             )
         except Exception as e:
             logger.error(f"[{symbol}] IV 指標計算失敗: {e}")
-            # 回傳預設降級指標
             return IVMetrics(
                 symbol=symbol,
                 current_iv=0.0,

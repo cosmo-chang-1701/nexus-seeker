@@ -259,6 +259,10 @@ class PolymarketService:
 
         # 2. 關鍵字白名單 (包含這些通常是相關的)
         allow_keywords = [
+            "MICRON",
+            "MU",
+            "EPS",
+            "REVENUE",
             "FED",
             "INTEREST RATE",
             "INFLATION",

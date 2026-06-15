@@ -2939,11 +2939,23 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
     # 4. 🎯 結算與目標 (Target Lock)
     _mp_val = data.get("max_pain")
-    max_pain = float(_mp_val) if _mp_val is not None else 0.0
-    price = c_val
-    distance = (
-        ((max_pain - price) / price * 100) if (price > 0 and max_pain > 0) else 0.0
-    )
+    cb_triggered = data.get("circuit_breaker_triggered", False)
+
+    if cb_triggered or _mp_val is None:
+        max_pain = 0.0
+        distance = 0.0
+        mp_str = "N/A (已觸發斷路器)"
+        dist_str = "N/A"
+        dist_color = "\u001b[1;30m"
+    else:
+        max_pain = float(_mp_val) if _mp_val is not None else 0.0
+        price = c_val
+        distance = (
+            ((max_pain - price) / price * 100) if (price > 0 and max_pain > 0) else 0.0
+        )
+        mp_str = f"${max_pain:.2f}"
+        dist_str = f"{distance:+.1f}%"
+        dist_color = "\u001b[1;31m" if abs(distance) > 5.0 else "\u001b[1;32m"
 
     ddp_status = "符合 (符合 DDP 盈餘/估值雙擊)" if data.get("is_ddp") else "不符合"
     ddp_color = "\u001b[1;32m" if data.get("is_ddp") else "\u001b[1;30m"
@@ -2951,16 +2963,33 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     ivr = data.get("iv_rank", 0.0)
     ivr_color = "\u001b[1;35m" if ivr > 50 else "\u001b[1;36m"
 
+    # PCR split formatting
     pcr_data = data.get("pcr", {})
     pcr_val = pcr_data.get("pcr", 0.0) if pcr_data else 0.0
     pcr_state = pcr_data.get("state", "N/A") if pcr_data else "N/A"
-    pcr_color = (
-        "\u001b[1;31m"
-        if "偏高" in str(pcr_state) or "極高" in str(pcr_state)
-        else ("\u001b[1;32m" if "偏低" in str(pcr_state) else "\u001b[1;36m")
+
+    volume_pcr = pcr_data.get("volume_pcr", pcr_val) if pcr_data else pcr_val
+    oi_pcr = pcr_data.get("oi_pcr", 0.0) if pcr_data else 0.0
+    volume_state = (
+        pcr_data.get("volume_pcr_state", pcr_state) if pcr_data else pcr_state
+    )
+    oi_state = pcr_data.get("oi_pcr_state", "N/A") if pcr_data else "N/A"
+
+    vol_pcr_color = (
+        "\u001b[1;32m"
+        if volume_pcr < 0.90
+        else ("\u001b[1;31m" if volume_pcr > 1.10 else "\u001b[1;36m")
+    )
+    oi_pcr_color = (
+        "\u001b[1;32m"
+        if oi_pcr < 0.90
+        else ("\u001b[1;31m" if oi_pcr > 1.10 else "\u001b[1;36m")
     )
 
-    if abs(distance) < 2.0:
+    if cb_triggered or _mp_val is None:
+        scenario = "⚠️ 最大痛點偏離度過高 (>30%) 已啟動斷路器，暫停輸出結算操作指引，請以技術指標為準。"
+        scen_color = "\u001b[1;31m"
+    elif abs(distance) < 2.0:
         scenario = "價格接近最大痛點，結算日前可能維持震盪。"
         scen_color = "\u001b[1;33m"
     elif distance > 5.0:
@@ -2987,16 +3016,15 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         scenario = f"{scenario} " + " ".join(scenario_overlays)
         scen_color = "\u001b[1;31m" if is_structural_divergence else "\u001b[1;33m"
 
-    dist_color = "\u001b[1;31m" if abs(distance) > 5.0 else "\u001b[1;32m"
-
     target_lines = [
         "```ansi",
         " 最大痛點結算 (Max Pain Settlement)",
-        f" └─ Max Pain價位: \u001b[1;33m${max_pain:.2f}\u001b[0m (當前價差: {dist_color}{distance:+.1f}%\u001b[0m)",
+        f" └─ Max Pain價位: \u001b[1;33m{mp_str}\u001b[0m (當前價差: {dist_color}{dist_str}\u001b[0m)",
         " DDP 與期權風控 (DDP & Risk Metrics)",
         f" ├─ DDP 估值雙擊: {ddp_color}{ddp_status}\u001b[0m",
         f" ├─ IV Rank: {ivr_color}{ivr:.1f}%\u001b[0m",
-        f" └─ Put/Call Ratio: \u001b[1;36m{pcr_val:.2f}\u001b[0m ({pcr_color}{pcr_state}\u001b[0m)",
+        f" ├─ Volume PCR (即時情緒): {vol_pcr_color}{volume_pcr:.2f}\u001b[0m ({vol_pcr_color}{volume_state}\u001b[0m)",
+        f" └─ OI PCR (結構防禦): {oi_pcr_color}{oi_pcr:.2f}\u001b[0m ({oi_pcr_color}{oi_state}\u001b[0m)",
         " 結算價操作指引 (Scenario Analysis)",
         f" └─ 操作指引: {scen_color}{scenario}\u001b[0m",
         "```",
@@ -3169,19 +3197,36 @@ def create_watchlist_signal_embed(
         expected_move = 5.0
 
     # Extract Max Pain Data
+    cb_triggered = False
     if max_pain_data is not None:
         mp_val = max_pain_data.get("max_pain")
-        max_pain = float(mp_val) if mp_val is not None else 0.0
-        pain_dist = float(max_pain_data.get("distance_pct") or 0.0)
+        cb_triggered = (
+            max_pain_data.get("circuit_breaker_triggered", False) or mp_val is None
+        )
+        if cb_triggered:
+            max_pain_str = "N/A (已觸發斷路器)"
+        else:
+            max_pain = float(mp_val) if mp_val is not None else 0.0
+            pain_dist = float(max_pain_data.get("distance_pct") or 0.0)
+            max_pain_str = f"${max_pain:.2f} (當前價差: {pain_dist:+.2f}%)"
     else:
-        max_pain = live_price
-        pain_dist = 0.0
+        max_pain_str = f"${live_price:.2f} (當前價差: +0.00%)"
 
     # Extract PCR Data
+    vol_pcr = pcr_val
+    oi_pcr = 0.0
+    vol_pcr_status = "平衡"
+    oi_pcr_status = "結構平衡"
+
+    if metrics is not None:
+        vol_pcr = metrics.volume_pcr
+        oi_pcr = metrics.oi_pcr
+
     if pcr_data is not None:
-        pcr_status = pcr_data.get("state", "平衡")
-    else:
-        pcr_status = "平衡"
+        vol_pcr = pcr_data.get("volume_pcr", pcr_data.get("pcr", vol_pcr))
+        oi_pcr = pcr_data.get("oi_pcr", oi_pcr)
+        vol_pcr_status = pcr_data.get("volume_pcr_state", pcr_data.get("state", "平衡"))
+        oi_pcr_status = pcr_data.get("oi_pcr_state", "結構平衡")
 
     gex_dist = (
         ((live_price - gex_putwall) / gex_putwall * 100.0) if gex_putwall else 0.0
@@ -3239,8 +3284,9 @@ def create_watchlist_signal_embed(
         f" └─ 本週預期波幅 (Expected Move): ±${expected_move:.2f}",
         "",
         " 結算與目標 (Target Lock)",
-        f" ├─ 最大痛點結算 (Max Pain): ${max_pain:.2f} (當前價差: {pain_dist:+.2f}%)",
-        f" └─ Put/Call Ratio (PCR): {pcr_val:.2f} (狀態: {pcr_status})",
+        f" ├─ 最大痛點結算 (Max Pain): {max_pain_str}",
+        f" ├─ Volume PCR (即時情緒): {vol_pcr:.2f} (狀態: {vol_pcr_status})",
+        f" └─ OI PCR (結構防禦): {oi_pcr:.2f} (狀態: {oi_pcr_status})",
         "",
         " 異常活動穿透 (Directional UOA - Bid/Ask Track)",
         " 到期日     | 履約價      | 類型 | 交易流向 [買/賣]      | 機構/OI    | 比例   | 戰略意圖映射",
@@ -4196,47 +4242,60 @@ def create_max_pain_embed(symbol: str, data: Dict[str, Any]) -> discord.Embed:
         color=discord.Color.blue(),
         timestamp=datetime.now(timezone.utc),
     )
+    cb_triggered = (
+        data.get("circuit_breaker_triggered", False) or data.get("max_pain") is None
+    )
+
+    mp_val = data.get("max_pain")
+    mp_display = f"${mp_val:.2f}" if mp_val is not None else "N/A"
+
     embed.add_field(name="到期日", value=f"`{data.get('expiry', 'N/A')}`", inline=True)
     embed.add_field(
         name="最大痛點 Strike",
-        value=f"**${data.get('max_pain', 'N/A')}**",
+        value=f"**{mp_display}**",
         inline=True,
     )
+
+    spot_val = data.get("current_price")
+    spot_display = f"${spot_val:.2f}" if spot_val is not None else "N/A"
     embed.add_field(
         name="目前價格",
-        value=f"`${data.get('current_price', 'N/A')}`",
+        value=f"`{spot_display}`",
         inline=True,
     )
 
-    distance_pct = _safe_float(data.get("distance_pct"))
-    # 新公式: (max_pain - spot) / spot
-    # distance_pct > 0 → 痛點在現價之上 → 現價低於痛點
-    # distance_pct < 0 → 痛點在現價之下 → 現價高於痛點
-    distance_text = (
-        f"現價低於痛點 `{distance_pct:.2f}%`"
-        if distance_pct > 0
-        else f"現價高於痛點 `{abs(distance_pct):.2f}%`"
-        if distance_pct < 0
-        else "現價貼近最大痛點 `0.00%`"
-    )
-    embed.add_field(name="偏離度", value=distance_text, inline=False)
+    if cb_triggered:
+        embed.add_field(
+            name="偏離度", value="N/A (偏離度過大，已觸發自動斷路)", inline=False
+        )
+        # Suppress converging and execution recommendation
+    else:
+        distance_pct = _safe_float(data.get("distance_pct"))
+        distance_text = (
+            f"現價低於痛點 `{distance_pct:.2f}%`"
+            if distance_pct > 0
+            else f"現價高於痛點 `{abs(distance_pct):.2f}%`"
+            if distance_pct < 0
+            else "現價貼近最大痛點 `0.00%`"
+        )
+        embed.add_field(name="偏離度", value=distance_text, inline=False)
 
-    if data.get("is_converging"):
-        embed.description = "🎯 **價格正向最大痛點收斂中** (預期結算日波動縮小)"
+        if data.get("is_converging"):
+            embed.description = "🎯 **價格正向最大痛點收斂中** (預期結算日波動縮小)"
 
-    expiry = data.get("expiry")
-    if isinstance(expiry, str):
-        try:
-            expiry_dt = datetime.strptime(expiry, "%Y-%m-%d")
-            dte = (expiry_dt - datetime.now()).days
-            if dte <= 3:
-                embed.add_field(
-                    name="🚀 執行建議",
-                    value="⚠️ **DTE < 3 且接近最大痛點**\n建議提升 **獲利鎖定 (Profit Lock)** 優先級，規避結算震盪。",
-                    inline=False,
-                )
-        except ValueError:
-            pass
+        expiry = data.get("expiry")
+        if isinstance(expiry, str):
+            try:
+                expiry_dt = datetime.strptime(expiry, "%Y-%m-%d")
+                dte = (expiry_dt - datetime.now()).days
+                if dte <= 3:
+                    embed.add_field(
+                        name="🚀 執行建議",
+                        value="⚠️ **DTE < 3 且接近最大痛點**\n建議提升 **獲利鎖定 (Profit Lock)** 優先級，規避結算震盪。",
+                        inline=False,
+                    )
+            except ValueError:
+                pass
 
     embed.set_footer(text="Nexus Seeker | Execution Automation")
     return embed
