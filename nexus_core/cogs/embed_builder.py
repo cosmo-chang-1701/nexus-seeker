@@ -1302,17 +1302,21 @@ def create_sentiment_scan_embed(
     oi_pcr = pcr_data.get("oi_pcr", pcr_data.get("pcr", 0.0)) if pcr_data else 0.0
 
     if pcr_data:
-        if "volume_pcr_state" in pcr_data:
+        if vol_pcr < 0.90:
+            vol_pcr_state = "🐂 中性偏多/看漲主導"
+        elif "volume_pcr_state" in pcr_data:
             vol_pcr_state = pcr_data["volume_pcr_state"]
         else:
             if vol_pcr < 0.90:
-                vol_pcr_state = "中性偏多/看漲主導"
+                vol_pcr_state = "🐂 中性偏多/看漲主導"
             elif vol_pcr > 1.10:
                 vol_pcr_state = "🐻 偏向空頭/看空主導"
             else:
                 vol_pcr_state = "平衡"
 
-        if "oi_pcr_state" in pcr_data:
+        if oi_pcr < 0.90:
+            oi_pcr_state = "🐂 結構看漲/偏向多頭"
+        elif "oi_pcr_state" in pcr_data:
             oi_pcr_state = pcr_data["oi_pcr_state"]
         else:
             legacy_state = pcr_data.get("state")
@@ -3076,17 +3080,21 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     oi_pcr = pcr_data.get("oi_pcr", pcr_data.get("pcr", 0.0)) if pcr_data else 0.0
 
     if pcr_data:
-        if "volume_pcr_state" in pcr_data:
+        if volume_pcr < 0.90:
+            volume_state = "🐂 中性偏多/看漲主導"
+        elif "volume_pcr_state" in pcr_data:
             volume_state = pcr_data["volume_pcr_state"]
         else:
             if volume_pcr < 0.90:
-                volume_state = "中性偏多/看漲主導"
+                volume_state = "🐂 中性偏多/看漲主導"
             elif volume_pcr > 1.10:
                 volume_state = "🐻 偏向空頭/看空主導"
             else:
                 volume_state = "平衡"
 
-        if "oi_pcr_state" in pcr_data:
+        if oi_pcr < 0.90:
+            oi_state = "🐂 結構看漲/偏向多頭"
+        elif "oi_pcr_state" in pcr_data:
             oi_state = pcr_data["oi_pcr_state"]
         else:
             legacy_state = pcr_data.get("state")
@@ -3384,17 +3392,21 @@ def create_watchlist_signal_embed(
         vol_pcr = pcr_data.get("volume_pcr", vol_pcr)
         oi_pcr = pcr_data.get("oi_pcr", pcr_data.get("pcr", oi_pcr))
 
-        if "volume_pcr_state" in pcr_data:
+        if vol_pcr < 0.90:
+            vol_pcr_status = "🐂 中性偏多/看漲主導"
+        elif "volume_pcr_state" in pcr_data:
             vol_pcr_status = pcr_data["volume_pcr_state"]
         else:
             if vol_pcr < 0.90:
-                vol_pcr_status = "中性偏多/看漲主導"
+                vol_pcr_status = "🐂 中性偏多/看漲主導"
             elif vol_pcr > 1.10:
                 vol_pcr_status = "🐻 偏向空頭/看空主導"
             else:
                 vol_pcr_status = "平衡"
 
-        if "oi_pcr_state" in pcr_data:
+        if oi_pcr < 0.90:
+            oi_pcr_status = "🐂 結構看漲/偏向多頭"
+        elif "oi_pcr_state" in pcr_data:
             oi_pcr_status = pcr_data["oi_pcr_state"]
         else:
             legacy_state = pcr_data.get("state")
@@ -3408,20 +3420,19 @@ def create_watchlist_signal_embed(
                 else:
                     oi_pcr_status = "結構平衡"
     else:
-        if metrics is not None:
-            if vol_pcr < 0.90:
-                vol_pcr_status = "中性偏多/看漲主導"
-            elif vol_pcr > 1.10:
-                vol_pcr_status = "🐻 偏向空頭/看空主導"
-            else:
-                vol_pcr_status = "平衡"
+        if vol_pcr < 0.90:
+            vol_pcr_status = "🐂 中性偏多/看漲主導"
+        elif vol_pcr > 1.10:
+            vol_pcr_status = "🐻 偏向空頭/看空主導"
+        else:
+            vol_pcr_status = "平衡"
 
-            if oi_pcr < 0.90:
-                oi_pcr_status = "🐂 結構看漲/偏向多頭"
-            elif oi_pcr > 1.10:
-                oi_pcr_status = "🐻 結構防禦/偏向空頭"
-            else:
-                oi_pcr_status = "結構平衡"
+        if oi_pcr < 0.90:
+            oi_pcr_status = "🐂 結構看漲/偏向多頭"
+        elif oi_pcr > 1.10:
+            oi_pcr_status = "🐻 結構防禦/偏向空頭"
+        else:
+            oi_pcr_status = "結構平衡"
 
     gex_dist = (
         ((live_price - gex_putwall) / gex_putwall * 100.0) if gex_putwall else 0.0
