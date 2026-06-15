@@ -1105,6 +1105,23 @@ def check_and_reconcile_max_pain_anomaly(
                     for k in keys_to_del:
                         del _option_chain_cache[k]
 
+                    # Clear SQLite KV cache for the symbol's Max Pain
+                    import sqlite3
+                    import config
+
+                    try:
+                        with sqlite3.connect(config.DB_NAME) as conn:
+                            cursor = conn.cursor()
+                            cursor.execute(
+                                "DELETE FROM kv_cache WHERE key LIKE ?",
+                                (f"max_pain_{symbol.upper()}%",),
+                            )
+                            conn.commit()
+                    except Exception as db_err:
+                        logger.warning(
+                            f"Failed to clear SQLite KV cache for {symbol} Max Pain: {db_err}"
+                        )
+
                     # Re-run calculate_max_pain with _retry=True to bypass cache check and pull fresh options data
                     res = await SentimentEngine.calculate_max_pain(symbol, _retry=True)
                     if res and not res.get("error"):

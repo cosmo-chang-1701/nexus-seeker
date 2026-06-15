@@ -425,6 +425,12 @@ async def build_enhanced_watchlist_metrics(
         gex_max_put_wall=max(gex_max_put_wall, 0.01),
         vanna_sensitivity=vanna_sensitivity,
         relative_strength_spy=relative_strength_spy,
+        iv_source=iv_metrics.iv_source if iv_metrics else "UNAVAILABLE",
+        is_premarket=iv_metrics.is_premarket if iv_metrics else False,
+        volume_pcr=float(pcr_metrics.get("volume_pcr", pcr_metrics.get("pcr", 0.0)))
+        if pcr_metrics
+        else 0.0,
+        oi_pcr=float(pcr_metrics.get("oi_pcr", 0.0)) if pcr_metrics else 0.0,
     )
     _WATCHLIST_METRICS_CACHE[symbol] = (metrics, now_ts + _WATCHLIST_METRICS_TTL)
     return metrics
@@ -987,6 +993,14 @@ def derive_watchlist_option_guidance(
     if tactical_model.scenario == "wait" or "WAIT" in tactical_model.sddm_route.upper():
         return "價格仍在防守框架內，維持現貨 $1.00×$ 零槓桿死守，將雙手嚴格離開期權開倉鍵。"
 
+    # Pre-market/degraded IV check: forbid all deterministic options strategies (e.g. Short Straddle/Iron Butterfly/selling premium)
+    iv_source = getattr(metrics, "iv_source", "UNAVAILABLE")
+    is_premarket = getattr(
+        metrics, "is_premarket", False
+    ) or "[盤前數據未更新]" in getattr(metrics, "option_skew_state", "")
+    if iv_source in ["HV_PROXY", "UNAVAILABLE"] or is_premarket:
+        return "⚠️ 盤前或波動率數據退化，為防範風險，嚴禁輸出任何確定性期權策略建議（如 Short Straddle / Iron Butterfly / 賣方收租）。請以現貨無槓桿死守為主。"
+
     # 金融常識約束模組 (Financial Sanity Guardrails)
     # High IV Bubble Defense: IV Rank/Percentile > 80% 時禁止單腿買方策略
     iv_rank = float(getattr(metrics, "iv_rank", 0.0) or 0.0)
@@ -1134,6 +1148,14 @@ async def build_watchlist_option_plan(
 
     # SDDM 文案剛性同步：WAIT 狀態下不輸出任何可執行期權合約
     if tactical_model.scenario == "wait" or "WAIT" in tactical_model.sddm_route.upper():
+        return None
+
+    # Pre-market/degraded IV check: forbid all deterministic options strategies (e.g. Short Straddle/Iron Butterfly/selling premium)
+    iv_source = getattr(metrics, "iv_source", "UNAVAILABLE")
+    is_premarket = getattr(
+        metrics, "is_premarket", False
+    ) or "[盤前數據未更新]" in getattr(metrics, "option_skew_state", "")
+    if iv_source in ["HV_PROXY", "UNAVAILABLE"] or is_premarket:
         return None
 
     stock_action = derive_watchlist_option_guidance(

@@ -66,7 +66,9 @@ async def test_fetch_and_calculate_iv_metrics_success():
         "services.market_data_service.get_quote", new_callable=AsyncMock
     ) as m_quote, patch("yfinance.Ticker") as m_ticker, patch(
         "services.market_data_service.get_history_df", new_callable=AsyncMock
-    ) as m_hist:
+    ) as m_hist, patch(
+        "market_analysis.sentiment_engine.is_market_open", return_value=True
+    ):
         m_quote.return_value = mock_quote
         m_hist.return_value = df_hist
 
@@ -102,7 +104,9 @@ async def test_fetch_and_calculate_iv_metrics_cache():
         "services.market_data_service.get_quote", new_callable=AsyncMock
     ) as m_quote, patch("yfinance.Ticker") as m_ticker, patch(
         "services.market_data_service.get_history_df", new_callable=AsyncMock
-    ) as m_hist:
+    ) as m_hist, patch(
+        "market_analysis.sentiment_engine.is_market_open", return_value=True
+    ):
         m_quote.return_value = mock_quote
         m_hist.return_value = pd.DataFrame()
 
@@ -154,7 +158,9 @@ async def test_fetch_and_calculate_iv_metrics_fallback_option_chain():
         "services.market_data_service.get_option_chain", new_callable=AsyncMock
     ) as m_chain, patch(
         "services.market_data_service.get_history_df", new_callable=AsyncMock
-    ) as m_hist:
+    ) as m_hist, patch(
+        "market_analysis.sentiment_engine.is_market_open", return_value=True
+    ):
         m_quote.return_value = mock_quote
         m_expiries.return_value = mock_expiries
         m_chain.return_value = MockChain(calls_df)

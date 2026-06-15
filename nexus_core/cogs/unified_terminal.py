@@ -34,6 +34,69 @@ from cogs.embed_builder import (
 logger = logging.getLogger(__name__)
 
 
+def find_matching_polymarket_odds(symbol: str, poly_markets: list) -> str:
+    import re
+
+    symbol = symbol.upper()
+    ticker_map = {
+        "MU": ["micron"],
+        "NVDA": ["nvidia"],
+        "AAPL": ["apple"],
+        "TSLA": ["tesla"],
+        "MSFT": ["microsoft"],
+        "GOOG": ["google", "alphabet"],
+        "GOOGL": ["google", "alphabet"],
+        "AMZN": ["amazon"],
+        "META": ["meta", "facebook"],
+        "NFLX": ["netflix"],
+    }
+    alts = ticker_map.get(symbol, [])
+
+    for m in poly_markets or []:
+        if not isinstance(m, dict):
+            continue
+        question = m.get("question", "")
+        question_lower = question.lower()
+
+        matches_ticker = False
+        if re.search(rf"\b{re.escape(symbol.lower())}\b", question_lower):
+            matches_ticker = True
+        else:
+            for alt in alts:
+                if alt in question_lower:
+                    matches_ticker = True
+                    break
+
+        if not matches_ticker and symbol == "MU":
+            if "micron" in question_lower and (
+                "eps" in question_lower
+                or "revenue" in question_lower
+                or "earnings" in question_lower
+            ):
+                matches_ticker = True
+
+        if matches_ticker:
+            tokens = m.get("tokens", [])
+            if tokens:
+                yes_token = None
+                for t in tokens:
+                    if str(t.get("outcome", "")).strip().lower() == "yes":
+                        yes_token = t
+                        break
+                target_token = yes_token if yes_token else tokens[0]
+                outcome = target_token.get("outcome", "Yes")
+                price_val = target_token.get("price", 0)
+                try:
+                    price_float = float(price_val)
+                    odds_pct = price_float * 100.0
+                    return f"{outcome}: {odds_pct:.1f}%"
+                except Exception:
+                    pass
+                return f"{outcome}: {price_val}"
+
+    return "N/A"
+
+
 class BatchScanWarningButton(discord.ui.Button):
     """
     按鈕：點擊後解析即時聯動警示列出的所有標的並批次執行深入分析。
@@ -347,16 +410,7 @@ class SymbolHubView(discord.ui.View):
                 result["reddit_sentiment_score"] = "⚖️ 中性"
 
             # Polymarket odds
-            poly_odds = "N/A"
-            for m in poly_markets or []:
-                if (
-                    isinstance(m, dict)
-                    and self.symbol.lower() in m.get("question", "").lower()
-                ):
-                    tokens = m.get("tokens", [])
-                    if tokens:
-                        poly_odds = f"{tokens[0].get('outcome', 'Yes')}: {float(tokens[0].get('price', 0))*100:.1f}%"
-                    break
+            poly_odds = find_matching_polymarket_odds(self.symbol, poly_markets)
             result["polymarket_odds"] = poly_odds
 
             self.base_data = result
@@ -1109,16 +1163,7 @@ class UnifiedTerminalCog(commands.Cog):
                 result["reddit_sentiment_score"] = "⚖️ 中性"
 
             # Polymarket odds
-            poly_odds = "N/A"
-            for m in poly_markets or []:
-                if (
-                    isinstance(m, dict)
-                    and symbol.lower() in m.get("question", "").lower()
-                ):
-                    tokens = m.get("tokens", [])
-                    if tokens:
-                        poly_odds = f"{tokens[0].get('outcome', 'Yes')}: {float(tokens[0].get('price', 0))*100:.1f}%"
-                    break
+            poly_odds = find_matching_polymarket_odds(symbol, poly_markets)
             result["polymarket_odds"] = poly_odds
 
             main_embed = create_tactical_symbol_embed(result)
