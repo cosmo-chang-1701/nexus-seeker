@@ -351,12 +351,65 @@ async def get_quote(symbol: str) -> Dict[str, Any]:
 
 
 async def validate_symbol(symbol: str) -> bool:
-    """驗證標的代號是否有效 (透過嘗試獲取報價)。"""
+    """驗證標的代號是否有效 (具備即時報價、本地資料庫對比及格式後備機制)。"""
     if not symbol:
         return False
-    quote = await get_quote(symbol)
-    # 如果能拿到價格且價格大於 0，視為有效標的
-    return bool(quote and quote.get("c", 0) > 0)
+
+    symbol = symbol.strip().upper()
+
+    # 1. 基礎格式驗證：代號長度不合理或包含非法字元直接過濾
+    import re
+
+    if not re.match(r"^[\^A-Z0-9.-]{1,10}$", symbol):
+        return False
+
+    # 2. 嘗試獲取即時報價，若有價格大於 0 則必為有效標的
+    try:
+        quote = await get_quote(symbol)
+        if quote and quote.get("c", 0) > 0:
+            return True
+    except Exception as e:
+        logger.warning(f"validate_symbol 獲取報價異常: {e}")
+
+    # 3. 後備機制 A：當 API 因限流、盤前/週末或網路波動而失效時，比對本地資料庫中是否已有該標的之運作紀錄
+    import sqlite3
+    import config
+
+    try:
+        with sqlite3.connect(config.DB_NAME) as conn:
+            cursor = conn.cursor()
+            tables_to_check = [
+                ("market_cache", "symbol"),
+                ("watchlist", "symbol"),
+                ("portfolio", "symbol"),
+                ("active_orders", "symbol"),
+                ("historical_iv", "symbol"),
+            ]
+            for table, col in tables_to_check:
+                try:
+                    cursor.execute(
+                        f"SELECT 1 FROM {table} WHERE UPPER({col}) = ? LIMIT 1",
+                        (symbol,),
+                    )
+                    if cursor.fetchone():
+                        logger.info(
+                            f"[{symbol}] 報價失敗，但於本地資料庫 {table} 中尋獲紀錄，判定為有效代號"
+                        )
+                        return True
+                except sqlite3.OperationalError:
+                    continue
+    except Exception as e:
+        logger.error(f"validate_symbol 資料庫後備驗證失敗: {e}")
+
+    # 4. 後備機制 B：若 API 與資料庫皆查無紀錄（如新添加標的但遇到 API 故障），若符合典型美股/指數格式則放行容錯
+    clean_sym = symbol.lstrip("^")
+    if re.match(r"^[A-Z0-9.-]{1,6}$", clean_sym):
+        logger.warning(
+            f"[{symbol}] 報價失敗且資料庫無紀錄，但符合典型美股/指數格式，寬鬆放行"
+        )
+        return True
+
+    return False
 
 
 async def batch_get_quotes(symbols: List[str]) -> Dict[str, Dict[str, Any]]:

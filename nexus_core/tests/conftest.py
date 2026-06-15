@@ -34,10 +34,13 @@ def mock_finnhub_client():
 @pytest.fixture(scope="session", autouse=True)
 def mock_symbol_validation():
     """Globally mock validate_symbol to return True for common test symbols."""
+    from services.market_data_service import validate_symbol as _real_validate_symbol
+
     with patch(
         "services.market_data_service.validate_symbol", new_callable=AsyncMock
     ) as mock:
         mock.return_value = True
+        mock.real_fn = _real_validate_symbol
         yield mock
 
 
