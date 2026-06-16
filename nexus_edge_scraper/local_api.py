@@ -5,6 +5,7 @@ from playwright.async_api import (
 )
 from bs4 import BeautifulSoup
 import logging
+from playwright_stealth import Stealth
 
 app = FastAPI()
 logger = logging.getLogger(__name__)
@@ -151,6 +152,7 @@ async def scrape_gex():
             context = await browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
             )
+            await Stealth().apply_stealth_async(context)
             # Speed up loading by blocking images and CSS
             await context.route(
                 "**/*",
@@ -280,94 +282,105 @@ async def scrape_gex():
 @app.get("/scrape/macro/fedwatch")
 async def scrape_fedwatch():
     import re
+    import urllib.request
+    import asyncio
+    from datetime import datetime, date
+    import openpyxl
 
     fallback = {"probability": 0.72, "decision": "maintain"}
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-blink-features=AutomationControlled",
-                "--disable-http2",  # Crucial to bypass Cloudflare protocol error
-            ],
+    def _fetch_and_parse_excel():
+        url = "https://www.atlantafed.org/-/media/Project/Atlanta/FRBA/Documents/cenfis/market-probability-tracker/mpt_histdata.xlsx"
+        local_path = "/tmp/mpt_histdata.xlsx"
+        urllib.request.urlretrieve(url, local_path)
+
+        wb = openpyxl.load_workbook(local_path, data_only=True, read_only=True)
+        ws = wb["DATA"]
+
+        # 1. Group rows by date
+        data_by_date = {}
+        for row in ws.iter_rows(max_row=1000000, max_col=5, values_only=True):
+            if not row or row[0] == "date" or row[0] is None:
+                continue
+            dt_str = str(row[0]).strip()
+            if dt_str not in data_by_date:
+                data_by_date[dt_str] = []
+            data_by_date[dt_str].append(row)
+
+        if not data_by_date:
+            raise ValueError("No data found in the Excel sheet")
+
+        # Get the latest date
+        sorted_dates = sorted(data_by_date.keys())
+        latest_date_str = sorted_dates[-1]
+
+        latest_rows = data_by_date[latest_date_str]
+
+        # 2. Group latest rows by meeting date (reference_start)
+        by_meeting = {}
+        for r in latest_rows:
+            meeting_dt = r[1]
+            if not isinstance(meeting_dt, datetime):
+                if isinstance(meeting_dt, str):
+                    try:
+                        meeting_dt = datetime.fromisoformat(meeting_dt)
+                    except ValueError:
+                        continue
+                else:
+                    continue
+            meeting_date = meeting_dt.date()
+            if meeting_date not in by_meeting:
+                by_meeting[meeting_date] = []
+            by_meeting[meeting_date].append(r)
+
+        # Find the next meeting date >= today
+        today = date.today()
+        future_meetings = [m for m in by_meeting.keys() if m >= today]
+        if not future_meetings:
+            next_meeting = sorted(by_meeting.keys())[0]
+        else:
+            next_meeting = min(future_meetings)
+
+        meeting_rows = by_meeting[next_meeting]
+
+        # 3. Parse target range and calculate maintain or hike probability
+        first_row = meeting_rows[0]
+        target_range_str = str(first_row[2] or "350bps - 375bps").strip()
+
+        # Extract current target range low
+        m = re.search(r"(\d+)bps", target_range_str)
+        current_range_low_bps = int(m.group(1)) if m else 350
+
+        maintain_or_hike_prob = 0.0
+        for r in meeting_rows:
+            field = r[3]
+            val_str = r[4]
+            if not field or val_str is None:
+                continue
+
+            match_prob = re.search(r"Prob:\s*(\d+)bps\s*-\s*(\d+)bps", str(field))
+            if match_prob:
+                low_bps = int(match_prob.group(1))
+                try:
+                    p_val = float(str(val_str).strip()) / 100.0
+                    if low_bps >= current_range_low_bps:
+                        maintain_or_hike_prob += p_val
+                except ValueError:
+                    pass
+
+        return maintain_or_hike_prob
+
+    try:
+        prob = await asyncio.to_thread(_fetch_and_parse_excel)
+        return {
+            "status": "success",
+            "data": {
+                "probability": round(prob, 4),
+                "decision": "maintain",
+            },
+        }
+    except Exception as e:
+        logger.warning(
+            f"Atlanta FedWatch parse failed with exception: {e}, using fallbacks."
         )
-        try:
-            context = await browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-                viewport={"width": 1280, "height": 800},
-            )
-            # Speed up loading by blocking images and CSS
-            await context.route(
-                "**/*",
-                lambda route: route.abort()
-                if route.request.resource_type in ["image", "stylesheet", "font"]
-                else route.continue_(),
-            )
-            page = await context.new_page()
-            await page.add_init_script("delete navigator.__proto__.webdriver;")
-
-            await page.goto(
-                "https://www.investing.com/central-banks/fed-rate-monitor",
-                timeout=25000,
-                wait_until="domcontentloaded",
-            )
-            await page.wait_for_timeout(3000)
-
-            text = await page.evaluate("() => document.body.innerText")
-
-            # Parse Current Fed Rate
-            current_rate = 3.75
-            rate_match = re.search(r"FED\s+(\d+\.\d+)%", text)
-            if rate_match:
-                current_rate = float(rate_match.group(1))
-
-            # Find next meeting block using anchor
-            anchor_idx = text.find("Meeting Time:")
-            if anchor_idx == -1:
-                logger.warning(
-                    "Investing.com Meeting Time anchor not found, using fallbacks."
-                )
-                return {"status": "success", "data": fallback}
-
-            start_idx = max(0, anchor_idx - 100)
-            search_text = text[start_idx : start_idx + 600]
-
-            # Parse line-by-line range and current probabilities
-            prob_map = {}
-            for line in search_text.split("\n"):
-                m = re.search(r"(\d+\.\d+)\s*-\s*(\d+\.\d+)\s+(\d+\.\d+)%", line)
-                if m:
-                    low = float(m.group(1))
-                    high = float(m.group(2))
-                    prob_val = float(m.group(3)) / 100.0
-                    prob_map[(low, high)] = prob_val
-
-            if not prob_map:
-                logger.warning(
-                    "No probabilities parsed from Investing.com, using fallbacks."
-                )
-                return {"status": "success", "data": fallback}
-
-            # Sum probability of maintaining or hiking (range low >= current_rate - 0.25)
-            current_range_low = current_rate - 0.25
-            maintain_or_hike_prob = 0.0
-            for (low, high), p_val in prob_map.items():
-                if low >= current_range_low:
-                    maintain_or_hike_prob += p_val
-
-            return {
-                "status": "success",
-                "data": {
-                    "probability": round(maintain_or_hike_prob, 4),
-                    "decision": "maintain",
-                },
-            }
-        except Exception as e:
-            logger.warning(
-                f"FedWatch scrape failed with exception: {e}, using fallbacks."
-            )
-            return {"status": "success", "data": fallback}
-        finally:
-            await browser.close()
+        return {"status": "success", "data": fallback}
