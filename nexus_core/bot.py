@@ -229,6 +229,15 @@ class NexusBot(commands.Bot):
         except Exception as e:
             logger.error(f"❌ 資料庫初始化失敗: {e}")
 
+        # Initialize the database write queue with the current running loop
+        try:
+            from database.connection import DatabaseWriteQueue
+
+            DatabaseWriteQueue.initialize(self.loop)
+            logger.info("✅ DatabaseWriteQueue 順利啟動並掛載於 Event Loop。")
+        except Exception as e:
+            logger.error(f"❌ DatabaseWriteQueue 啟動失敗: {e}")
+
         # Acquire leader lock once immediately after migrations
         try:
             self._is_leader_instance = await asyncio.to_thread(
@@ -276,6 +285,15 @@ class NexusBot(commands.Bot):
         self._is_closing = True
 
         logger.info("🛑 Nexus Seeker 正在關閉...")
+
+        # Stop database write queue background worker
+        try:
+            from database.connection import DatabaseWriteQueue
+
+            await DatabaseWriteQueue.stop_worker()
+            logger.info("✅ DatabaseWriteQueue 順利關閉。")
+        except Exception as e:
+            logger.error(f"Stopping DatabaseWriteQueue failed: {e}")
 
         # Stop leader lock loop and release lease
         if self._leader_lock_task is not None:

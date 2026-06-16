@@ -1,20 +1,17 @@
-import sqlite3
 import logging
 import json
 from typing import Any, Optional
-import config
 from .financials import get_cached_financials, save_financials_cache, purge_old_cache
+
+from database.connection import get_read_connection, execute_write
 
 logger = logging.getLogger(__name__)
 
 
 def save_kv_cache(key: str, value: Any) -> bool:
-    conn = None
     try:
         val_str = json.dumps(value)
-        conn = sqlite3.connect(config.DB_NAME)
-        cursor = conn.cursor()
-        cursor.execute(
+        execute_write(
             """
             INSERT INTO kv_cache (key, value, updated_at)
             VALUES (?, ?, CURRENT_TIMESTAMP)
@@ -24,20 +21,16 @@ def save_kv_cache(key: str, value: Any) -> bool:
         """,
             (key, val_str),
         )
-        conn.commit()
         return True
     except Exception as e:
         logger.error(f"save_kv_cache 失敗 (key: {key}): {e}")
         return False
-    finally:
-        if conn:
-            conn.close()
 
 
 def get_kv_cache(key: str) -> Optional[Any]:
     conn = None
     try:
-        conn = sqlite3.connect(config.DB_NAME)
+        conn = get_read_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT value FROM kv_cache WHERE key = ?", (key,))
         row = cursor.fetchone()
