@@ -43,8 +43,8 @@ def test_scrape_gex_fallback():
 
 
 def test_scrape_fedwatch_fallback():
-    # Mock playwright to fail at context creation inside try-except
-    with patch("local_api.async_playwright", return_value=AsyncContextManagerMock()):
+    # Mock requests.get to fail
+    with patch("requests.get", side_effect=Exception("Mock requests failure")):
         response = client.get("/scrape/macro/fedwatch")
         assert response.status_code == 200
         data = response.json()
