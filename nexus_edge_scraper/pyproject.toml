@@ -15,4 +15,5 @@ dependencies = [
     "lxml",
     "playwright-stealth",
     "openpyxl",
+    "requests",
 ]

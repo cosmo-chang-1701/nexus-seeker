@@ -282,7 +282,7 @@ async def scrape_gex():
 @app.get("/scrape/macro/fedwatch")
 async def scrape_fedwatch():
     import re
-    import urllib.request
+    import requests
     import asyncio
     from datetime import datetime, date
     import openpyxl
@@ -292,7 +292,12 @@ async def scrape_fedwatch():
     def _fetch_and_parse_excel():
         url = "https://www.atlantafed.org/-/media/Project/Atlanta/FRBA/Documents/cenfis/market-probability-tracker/mpt_histdata.xlsx"
         local_path = "/tmp/mpt_histdata.xlsx"
-        urllib.request.urlretrieve(url, local_path)
+
+        response = requests.get(url, stream=True)
+        response.raise_for_status()
+        with open(local_path, "wb") as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
 
         wb = openpyxl.load_workbook(local_path, data_only=True, read_only=True)
         ws = wb["DATA"]
