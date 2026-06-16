@@ -922,114 +922,128 @@ class UnifiedTerminalCog(commands.Cog):
         scan_type: Optional[app_commands.Choice[str]] = None,
     ):
         await interaction.response.defer(ephemeral=True)
-        user_id = interaction.user.id
-
-        # 🚀 Task 2 Hook: Proactive Warmup during pre-market window (08:30 - 09:30 ET)
-        if hasattr(self.bot, "memory_manager"):
-            coro = self.bot.memory_manager.proactive_warmup()
-            if asyncio.iscoroutine(coro):
-                asyncio.create_task(coro)
-
-        # 1. 參數驗證
-        if not symbol and not scan_type:
-            return await interaction.followup.send(
-                embed=create_error_embed(
-                    "請輸入 `symbol` 參數，或選擇 `scan_type` 進行批次掃描。",
-                    title="輸入錯誤",
-                ),
-                ephemeral=True,
-            )
-
-        # 2. 單一標的深度分析
-        if symbol:
-            symbol = symbol.upper()
-            await self._run_single_symbol_hub(interaction, symbol, user_id)
-            return
-
-        # 3. 批次掃描邏輯
-        if not scan_type:
-            return
-        scan_value = scan_type.value
-        target_symbols = set()
-
-        if scan_value in ("HOLDINGS", "ALL"):
-            from services.asset_manager import AssetManager
-            from models.asset import ContextType
-
-            manager = AssetManager()
-            holding_assets = manager.get_assets(user_id, ContextType.HOLDING)
-            for a in holding_assets:
-                target_symbols.add(a.symbol.upper())
-
-        if scan_value in ("ORDERS", "ALL"):
-            from database.orders import get_user_active_orders
-
-            active_orders = await asyncio.to_thread(get_user_active_orders, user_id)
-            for o in active_orders:
-                target_symbols.add(o["symbol"].upper())
-
-        if scan_value in ("OPTIONS", "ALL"):
-            from database.portfolio import get_user_portfolio
-
-            portfolio_rows = await asyncio.to_thread(get_user_portfolio, user_id)
-            for row in portfolio_rows:
-                target_symbols.add(row[1].upper())
-
-        if scan_value == "WATCHLIST":
-            import database
-
-            watchlist_items = await asyncio.to_thread(
-                database.get_user_watchlist, user_id
-            )
-            for item in watchlist_items:
-                target_symbols.add(item[0].upper())
-
-        unique_symbols = sorted(list(target_symbols))
-
-        if not unique_symbols:
-            scan_names = {
-                "HOLDINGS": "現貨持倉",
-                "ORDERS": "待成交掛單",
-                "OPTIONS": "期權持倉",
-                "WATCHLIST": "自選標的",
-                "ALL": "持倉、掛單或期權",
-            }
-            return await interaction.followup.send(
-                embed=create_error_embed(
-                    f"您目前沒有任何{scan_names.get(scan_value, '相關')}標的，無法進行批次掃描。",
-                    title="無標的資料",
-                ),
-                ephemeral=True,
-            )
-
         try:
-            # 並行獲取所有標的的雷達數據 (Cache-Aside)
-            scan_results = await asyncio.gather(
-                *(self._fetch_sym_radar_data(s) for s in unique_symbols),
-                return_exceptions=True,
-            )
-            # 過濾 Exception 並確保是 dict 類型以滿足 mypy
-            valid_results = [r for r in scan_results if isinstance(r, dict)]
+            user_id = interaction.user.id
 
-            embeds = build_radar_scan_embed(valid_results, scan_value, user_id)
-            if not isinstance(embeds, list):
-                embeds = [embeds]
+            # 🚀 Task 2 Hook: Proactive Warmup during pre-market window (08:30 - 09:30 ET)
+            if hasattr(self.bot, "memory_manager"):
+                coro = self.bot.memory_manager.proactive_warmup()
+                if asyncio.iscoroutine(coro):
+                    asyncio.create_task(coro)
 
-            chunk_size = 15
-            for idx, emb in enumerate(embeds):
-                chunk_results = valid_results[idx * chunk_size : (idx + 1) * chunk_size]
-                chunk_symbols = [r["symbol"].upper() for r in chunk_results]
-                page_view = BatchScanView(chunk_symbols, self, self.bot)
-                await interaction.followup.send(
-                    embed=emb, view=page_view, ephemeral=True
+            # 1. 參數驗證
+            if not symbol and not scan_type:
+                return await interaction.followup.send(
+                    embed=create_error_embed(
+                        "請輸入 `symbol` 參數，或選擇 `scan_type` 進行批次掃描。",
+                        title="輸入錯誤",
+                    ),
+                    ephemeral=True,
                 )
 
-        except Exception as e:
-            logger.error(f"Batch Scan Error for {scan_value}: {e}")
-            await interaction.followup.send(
-                embed=create_error_embed(f"執行批次掃描時發生錯誤: {e}"),
-                ephemeral=True,
-            )
+            # 2. 單一標的深度分析
+            if symbol:
+                symbol = symbol.upper()
+                await self._run_single_symbol_hub(interaction, symbol, user_id)
+                return
+
+            # 3. 批次掃描邏輯
+            if not scan_type:
+                return
+            scan_value = scan_type.value
+            target_symbols = set()
+
+            if scan_value in ("HOLDINGS", "ALL"):
+                from services.asset_manager import AssetManager
+                from models.asset import ContextType
+
+                manager = AssetManager()
+                holding_assets = manager.get_assets(user_id, ContextType.HOLDING)
+                for a in holding_assets:
+                    target_symbols.add(a.symbol.upper())
+
+            if scan_value in ("ORDERS", "ALL"):
+                from database.orders import get_user_active_orders
+
+                active_orders = await asyncio.to_thread(get_user_active_orders, user_id)
+                for o in active_orders:
+                    target_symbols.add(o["symbol"].upper())
+
+            if scan_value in ("OPTIONS", "ALL"):
+                from database.portfolio import get_user_portfolio
+
+                portfolio_rows = await asyncio.to_thread(get_user_portfolio, user_id)
+                for row in portfolio_rows:
+                    target_symbols.add(row[1].upper())
+
+            if scan_value == "WATCHLIST":
+                import database
+
+                watchlist_items = await asyncio.to_thread(
+                    database.get_user_watchlist, user_id
+                )
+                for item in watchlist_items:
+                    target_symbols.add(item[0].upper())
+
+            unique_symbols = sorted(list(target_symbols))
+
+            if not unique_symbols:
+                scan_names = {
+                    "HOLDINGS": "現貨持倉",
+                    "ORDERS": "待成交掛單",
+                    "OPTIONS": "期權持倉",
+                    "WATCHLIST": "自選標的",
+                    "ALL": "持倉、掛單或期權",
+                }
+                return await interaction.followup.send(
+                    embed=create_error_embed(
+                        f"您目前沒有任何{scan_names.get(scan_value, '相關')}標的，無法進行批次掃描。",
+                        title="無標的資料",
+                    ),
+                    ephemeral=True,
+                )
+
+            try:
+                # 並行獲取所有標的的雷達數據 (Cache-Aside)
+                scan_results = await asyncio.gather(
+                    *(self._fetch_sym_radar_data(s) for s in unique_symbols),
+                    return_exceptions=True,
+                )
+                # 過濾 Exception 並確保是 dict 類型以滿足 mypy
+                valid_results = [r for r in scan_results if isinstance(r, dict)]
+
+                embeds = build_radar_scan_embed(valid_results, scan_value, user_id)
+                if not isinstance(embeds, list):
+                    embeds = [embeds]
+
+                chunk_size = 15
+                for idx, emb in enumerate(embeds):
+                    chunk_results = valid_results[
+                        idx * chunk_size : (idx + 1) * chunk_size
+                    ]
+                    chunk_symbols = [r["symbol"].upper() for r in chunk_results]
+                    page_view = BatchScanView(chunk_symbols, self, self.bot)
+                    await interaction.followup.send(
+                        embed=emb, view=page_view, ephemeral=True
+                    )
+
+            except Exception as e:
+                logger.error(f"Batch Scan Error for {scan_value}: {e}")
+                await interaction.followup.send(
+                    embed=create_error_embed(f"執行批次掃描時發生錯誤: {e}"),
+                    ephemeral=True,
+                )
+        except Exception as outer_err:
+            logger.error(f"Outer Symbol Hub Error: {outer_err}")
+            try:
+                await interaction.followup.send(
+                    embed=create_error_embed(
+                        f"執行 `/x` 指令時發生未預期錯誤: {outer_err}"
+                    ),
+                    ephemeral=True,
+                )
+            except Exception as follow_err:
+                logger.error(f"Failed to send outer error followup: {follow_err}")
 
     async def _run_single_symbol_hub(
         self, interaction: discord.Interaction, symbol: str, user_id: int
@@ -1205,6 +1219,13 @@ class UnifiedTerminalCog(commands.Cog):
             logger.error(f"❌ [SWR] Background revalidation failed for {sym}: {e}")
 
     async def _fetch_sym_radar_data(self, sym: str):
+        from services.single_flight import SingleFlightManager
+
+        return await SingleFlightManager.run(
+            f"analyze_{sym}", self._fetch_sym_radar_data_raw, sym
+        )
+
+    async def _fetch_sym_radar_data_raw(self, sym: str):
         """
         獲取單一標的的雷達量化數據。
         採用 Cache-Aside 設計，直接物理性從 SQLite 中的 market_cache 讀取，快取未命中則進行退級即時計算。
@@ -1241,7 +1262,31 @@ class UnifiedTerminalCog(commands.Cog):
             ref_price = cache_data.get("reference_spot_price")
             if ref_price and ref_price > 0:
                 deviation = abs(price - ref_price) / ref_price
-                if deviation > 0.02:
+
+                # 平滑快取防護（強制冷卻機制）
+                is_cooldown = False
+                updated_str = cache_data.get("updated_at")
+                if updated_str:
+                    try:
+                        from datetime import datetime, timezone
+
+                        updated_dt = datetime.strptime(
+                            updated_str, "%Y-%m-%d %H:%M:%S"
+                        ).replace(tzinfo=timezone.utc)
+                        elapsed = (
+                            datetime.now(timezone.utc) - updated_dt
+                        ).total_seconds()
+                        if elapsed < 30.0:
+                            is_cooldown = True
+                            logger.info(
+                                f"[{sym}] 快取更新距今 {elapsed:.1f} 秒 (小於 MIN_TTL=30秒)，觸發平滑快取防護，強制判定快取依然可用。"
+                            )
+                    except Exception as ts_err:
+                        logger.error(f"[{sym}] 解析快取時間戳記失敗: {ts_err}")
+
+                if is_cooldown:
+                    cache_data["is_stale"] = False
+                elif deviation > 0.03:  # 3% 偏離度閾值
                     logger.warning(
                         f"[{sym}] Spot price shifted from {ref_price} to {price} "
                         f"(dev={deviation:.2%}), marking stale & triggering revalidation."
@@ -1254,7 +1299,7 @@ class UnifiedTerminalCog(commands.Cog):
         em_weekly = 0.0
         max_pain = 0.0
 
-        if cache_data:
+        if cache_data and not cache_data.get("is_stale", False):
             max_pain = cache_data.get("max_pain", 0.0)
             em_lower = cache_data.get("expected_move_lower", 0.0)
             em_upper = cache_data.get("expected_move_upper", 0.0)
@@ -1266,7 +1311,7 @@ class UnifiedTerminalCog(commands.Cog):
             if iv_m:
                 iv_rank_val = iv_m.iv_rank
         else:
-            # Cache-Aside: 快取不存在，進行即時計算並存回 SQLite
+            # Cache-Aside: 快取不存在或已過期，進行即時計算並存回 SQLite
             iv_m = await SentimentEngine.fetch_and_calculate_iv_metrics(sym)
             mp_d = await SentimentEngine.calculate_max_pain(sym)
 

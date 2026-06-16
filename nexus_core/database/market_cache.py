@@ -1,6 +1,6 @@
 import sqlite3
-import config
 from typing import Optional, Dict, Any
+from database.connection import get_read_connection, execute_write
 
 
 def save_market_cache(
@@ -11,11 +11,8 @@ def save_market_cache(
     reference_spot_price: Optional[float] = None,
     is_stale: int = 0,
 ) -> bool:
-    conn = None
     try:
-        conn = sqlite3.connect(config.DB_NAME)
-        cursor = conn.cursor()
-        cursor.execute(
+        execute_write(
             """
             INSERT INTO market_cache (symbol, max_pain, expected_move_lower, expected_move_upper, reference_spot_price, is_stale, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
@@ -36,37 +33,26 @@ def save_market_cache(
                 is_stale,
             ),
         )
-        conn.commit()
         return True
     except Exception:
         return False
-    finally:
-        if conn:
-            conn.close()
 
 
 def mark_market_cache_stale(symbol: str) -> bool:
-    conn = None
     try:
-        conn = sqlite3.connect(config.DB_NAME)
-        cursor = conn.cursor()
-        cursor.execute(
+        execute_write(
             "UPDATE market_cache SET is_stale = 1 WHERE symbol = ?",
             (symbol.upper(),),
         )
-        conn.commit()
         return True
     except Exception:
         return False
-    finally:
-        if conn:
-            conn.close()
 
 
 def get_market_cache(symbol: str) -> Optional[Dict[str, Any]]:
     conn = None
     try:
-        conn = sqlite3.connect(config.DB_NAME)
+        conn = get_read_connection()
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM market_cache WHERE symbol = ?", (symbol.upper(),))

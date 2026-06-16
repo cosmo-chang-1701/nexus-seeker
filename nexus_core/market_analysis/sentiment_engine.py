@@ -863,7 +863,9 @@ class SentimentEngine:
     def get_last_stored_iv(symbol: str) -> Optional[float]:
         """從資料庫中取得最後一次記錄的 IV。"""
         try:
-            conn = sqlite3.connect(config.DB_NAME)
+            from database.connection import get_read_connection
+
+            conn = get_read_connection()
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT iv FROM historical_iv WHERE symbol = ? ORDER BY date DESC LIMIT 1",
@@ -881,17 +883,11 @@ class SentimentEngine:
     def save_historical_iv(symbol: str, iv: float, date_str: str):
         """將每日 IV 存入 database。"""
         try:
-            conn = sqlite3.connect(config.DB_NAME)
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                INSERT OR REPLACE INTO historical_iv (symbol, iv, date)
-                VALUES (?, ?, ?)
-                """,
-                (symbol, iv, date_str),
+            from database.connection import DatabaseWriteQueue
+
+            DatabaseWriteQueue.put_task_sync(
+                "save_historical_iv", (symbol, iv, date_str)
             )
-            conn.commit()
-            conn.close()
         except Exception as e:
             logger.error(f"儲存歷史 IV 失敗: {e}")
 
@@ -1184,7 +1180,9 @@ class SentimentEngine:
             # 4. 取得 DB 歷史 IV
             db_ivs = {}
             try:
-                conn = sqlite3.connect(config.DB_NAME)
+                from database.connection import get_read_connection
+
+                conn = get_read_connection()
                 cursor = conn.cursor()
                 cursor.execute(
                     "SELECT date, iv FROM historical_iv WHERE symbol = ? ORDER BY date DESC LIMIT 252",
