@@ -21,7 +21,6 @@ from market_analysis.models.trader_models import (
     TraderAccountState,
     OptionHolding,
     TickerMarketData,
-    AdvancedTraderOutput,
 )
 from market_analysis.gamma_squeeze_engine import NexusGammaSqueezeEngine
 from market_analysis.signal_calculator import (
@@ -35,10 +34,6 @@ from market_analysis.signal_calculator import (
 from market_analysis.option_guidance import (
     derive_watchlist_option_guidance,
     build_watchlist_option_plan,
-    _pick_watchlist_cover_leg,
-    _estimate_watchlist_contract_count,
-    _mid_price_from_row,
-    _watchlist_event_risk_multiplier,
 )
 
 

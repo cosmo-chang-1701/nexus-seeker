@@ -536,7 +536,7 @@ async def test_rule2_premium_selling_option_strategy_routing():
     with patch(
         "market_analysis.strategy.find_best_contract", new_callable=AsyncMock
     ) as mock_find, patch(
-        "market_analysis.intraday_pipeline._pick_watchlist_cover_leg",
+        "market_analysis.option_guidance._pick_watchlist_cover_leg",
         new_callable=AsyncMock,
     ) as mock_cover:
         mock_find.return_value = {"strike": 105.0, "expiry": "2026-06-26", "mid": 4.15}
