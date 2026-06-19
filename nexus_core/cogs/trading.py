@@ -126,7 +126,9 @@ class SchedulerCog(commands.Cog):
             try:
                 # 抓取情緒並存入 KV 快取 (key: reddit_sentiment_{symbol})
                 sentiment = await get_reddit_context(sym, limit=5)
-                save_kv_cache(f"reddit_sentiment_{sym}", sentiment)
+                await asyncio.to_thread(
+                    save_kv_cache, f"reddit_sentiment_{sym}", sentiment
+                )
                 logger.info(f"✅ [{sym}] Reddit 情緒快取已更新。")
                 await asyncio.sleep(2)  # 減少 Tunnel 壓力
             except Exception as e:
@@ -454,11 +456,11 @@ class SchedulerCog(commands.Cog):
             tnx_val = tnx_q.get("c", 0.0) if isinstance(tnx_q, dict) else 0.0
 
             if spx_val > 0.0:
-                database.save_kv_cache("macro_spx", spx_val)
+                await asyncio.to_thread(database.save_kv_cache, "macro_spx", spx_val)
             if vix_val > 0.0:
-                database.save_kv_cache("macro_vix", vix_val)
+                await asyncio.to_thread(database.save_kv_cache, "macro_vix", vix_val)
             if tnx_val > 0.0:
-                database.save_kv_cache("macro_us10y", tnx_val)
+                await asyncio.to_thread(database.save_kv_cache, "macro_us10y", tnx_val)
 
             logger.info(
                 f"🕒 [盤中總經快取更新完成] SPX: {spx_val}, VIX: {vix_val}, US10Y: {tnx_val}"
@@ -841,7 +843,7 @@ class SchedulerCog(commands.Cog):
             embed = create_ddp_embed(report)
             await interaction.followup.send(embed=embed)
             # 同時存入資料庫
-            self.trading_service.ddp_inspector.record_signal(report)
+            await self.trading_service.ddp_inspector.record_signal(report)
 
     @app_commands.command(
         name="iv_scan", description="立即對觀察清單執行波動率優勢 (Cheap IV) 偵測"
@@ -998,7 +1000,7 @@ class SchedulerCog(commands.Cog):
                             ):
                                 await self.bot.queue_dm(uid, embed=embed)
 
-                    self.trading_service.ddp_inspector.record_signal(report)
+                    await self.trading_service.ddp_inspector.record_signal(report)
 
             # 🚀 2. 執行 IV 優勢掃描 (Volatility Strategist)
             uids = sorted(list(set(row[0] for row in all_watchlists)))

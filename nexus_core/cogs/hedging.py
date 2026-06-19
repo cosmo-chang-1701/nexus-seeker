@@ -37,7 +37,7 @@ class HedgingCog(commands.Cog):
         user_id = interaction.user.id
 
         try:
-            from database.connection import get_read_connection, execute_write
+            from database.connection import get_read_connection, execute_write_async
 
             conn = get_read_connection()
             cursor = conn.cursor()
@@ -71,7 +71,7 @@ class HedgingCog(commands.Cog):
                 actual_qty if actual_qty is not None else alert[8]
             )  # hedge_contracts is at index 8
 
-            execute_write(
+            await execute_write_async(
                 """
                 UPDATE hedge_alerts
                 SET status = 'EXECUTED', executed_at = CURRENT_TIMESTAMP, hedge_contracts = ?

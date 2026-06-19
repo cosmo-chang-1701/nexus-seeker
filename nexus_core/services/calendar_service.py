@@ -411,13 +411,14 @@ class CalendarService:
     async def update_fedwatch_probability(self) -> None:
         """從 edge scraper 獲取下週 FOMC 最新利率定價機率，並寫入資料庫。"""
         import httpx
-        import sqlite3
         import config
         from database.cache import save_kv_cache
+        from database.connection import execute_write_async
+        import asyncio
 
         if not getattr(config, "TUNNEL_URL", ""):
             logger.info("未配置 TUNNEL_URL，跳過 FedWatch 爬取。")
-            save_kv_cache("macro_fedwatch_is_fallback", 1)
+            await asyncio.to_thread(save_kv_cache, "macro_fedwatch_is_fallback", 1)
             return
 
         try:
@@ -427,26 +428,25 @@ class CalendarService:
                     payload = res.json()
                     if payload.get("status") == "success":
                         prob = payload["data"].get("probability", 0.72)
-                        with sqlite3.connect(config.DB_NAME) as conn:
-                            cursor = conn.cursor()
-                            cursor.execute(
-                                """
-                                UPDATE economic_calendar_events
-                                SET fedwatch_probability = ?
-                                WHERE event LIKE '%FOMC%' OR event LIKE '%Fed Interest Rate%'
-                                """,
-                                (prob,),
-                            )
-                            conn.commit()
+                        await execute_write_async(
+                            """
+                            UPDATE economic_calendar_events
+                            SET fedwatch_probability = ?
+                            WHERE event LIKE '%FOMC%' OR event LIKE '%Fed Interest Rate%'
+                            """,
+                            (prob,),
+                        )
                         logger.info(
                             f"成功更新 CME FedWatch FOMC 利率維持/加息機率: {prob * 100:.1f}%"
                         )
-                        save_kv_cache("macro_fedwatch_is_fallback", 0)
+                        await asyncio.to_thread(
+                            save_kv_cache, "macro_fedwatch_is_fallback", 0
+                        )
                         return
         except Exception as e:
             logger.error(f"更新 FedWatch 概率失敗: {e}")
 
-        save_kv_cache("macro_fedwatch_is_fallback", 1)
+        await asyncio.to_thread(save_kv_cache, "macro_fedwatch_is_fallback", 1)
 
 
 # Singleton instance

@@ -261,7 +261,7 @@ async def build_enhanced_watchlist_metrics(
     if not df_stock.empty and len(df_stock) >= 60:
         try:
             volume_poc = max(_estimate_volume_poc(df_stock), 0.01)
-            save_cached_volume_poc(symbol, volume_poc)
+            await asyncio.to_thread(save_cached_volume_poc, symbol, volume_poc)
         except Exception as e:
             logger.warning(f"Error calculating Vol POC for {symbol}: {e}")
     if volume_poc <= 0.0:
@@ -277,7 +277,7 @@ async def build_enhanced_watchlist_metrics(
             current_price,
             dividend_yield,
         )
-        save_cached_gex_putwall(symbol, gex_max_put_wall)
+        await asyncio.to_thread(save_cached_gex_putwall, symbol, gex_max_put_wall)
     except Exception as e:
         logger.warning(f"Error calculating GEX PutWall for {symbol}: {e}")
     if gex_max_put_wall <= 0.0:

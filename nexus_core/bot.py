@@ -97,10 +97,21 @@ def _get_embed_length(embed: discord.Embed) -> int:
 
 
 class NexusBot(commands.Bot):
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        return cls._instance
+
     def __init__(self) -> None:
         intents = discord.Intents.default()
         intents.message_content = True
         super().__init__(command_prefix="!", intents=intents)
+        NexusBot._instance = self
+
+        from database.connection import DatabaseWriteQueue
+
+        self.db_write_queue = DatabaseWriteQueue
 
         # Blue/Green-safe instance identity & leader lock state
         self.instance_id = os.getenv("NEXUS_INSTANCE_ID") or str(uuid.uuid4())
@@ -234,6 +245,7 @@ class NexusBot(commands.Bot):
             from database.connection import DatabaseWriteQueue
 
             DatabaseWriteQueue.initialize(self.loop)
+            self.db_write_queue = DatabaseWriteQueue
             logger.info("✅ DatabaseWriteQueue 順利啟動並掛載於 Event Loop。")
         except Exception as e:
             logger.error(f"❌ DatabaseWriteQueue 啟動失敗: {e}")

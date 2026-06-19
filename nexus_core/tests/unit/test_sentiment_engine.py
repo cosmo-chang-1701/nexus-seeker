@@ -125,18 +125,19 @@ async def test_detect_uoa():
         assert result_explicit[0]["oi_change_net"] == 123
 
 
-def test_save_sentiment_history():
+@pytest.mark.asyncio
+async def test_save_sentiment_history():
     with patch("sqlite3.connect") as mock_connect:
         mock_conn = MagicMock()
         mock_connect.return_value = mock_conn
 
         # Test success
-        SentimentEngine.save_sentiment_history("AAPL", "PCR", 0.8)
+        await SentimentEngine.save_sentiment_history("AAPL", "PCR", 0.8)
         mock_conn.cursor().execute.assert_called()
 
         # Test failure (branch coverage)
         mock_connect.side_effect = Exception("DB Error")
-        SentimentEngine.save_sentiment_history("AAPL", "PCR", 0.8)
+        await SentimentEngine.save_sentiment_history("AAPL", "PCR", 0.8)
 
 
 @pytest.mark.asyncio
@@ -271,7 +272,7 @@ async def test_sentiment_edge_cases():
 
     # Test save_sentiment_history failure logs (branch 254-256)
     with patch("sqlite3.connect", side_effect=sqlite3.Error("Conn error")):
-        SentimentEngine.save_sentiment_history("AAPL", "SKEW", 1.0)
+        await SentimentEngine.save_sentiment_history("AAPL", "SKEW", 1.0)
 
 
 @pytest.mark.asyncio

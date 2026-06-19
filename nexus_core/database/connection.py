@@ -86,13 +86,13 @@ class DatabaseWriteQueue:
         if not cls.is_active():
             return cls._execute_direct_write(task_type, data, commit)
 
-        # 2. Check if we are in the main event loop thread. If so, blocking with Event will deadlock!
+        # 2. Check if we are in the main event loop thread. If so, throw exception to prevent thread blocking!
         if threading.current_thread() is cls._loop_thread:
-            logger.warning(
-                f"Sync write called from main event loop thread for task {task_type}. "
-                "Executing directly to avoid deadlock."
+            raise RuntimeError(
+                f"Sync database write ({task_type}) called from main event loop thread. "
+                "This blocks the event loop and is strictly prohibited to prevent latency. "
+                "Please refactor the caller to use execute_write_async or await put_task directly."
             )
-            return cls._execute_direct_write(task_type, data, commit)
 
         # 3. We are in a worker thread. We can safely block using threading.Event.
         event = threading.Event()

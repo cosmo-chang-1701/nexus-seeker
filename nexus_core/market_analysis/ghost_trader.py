@@ -247,9 +247,9 @@ class GhostTrader:
         # 由於 close_virtual_trade 不支援 tags 更新，此處手動補償
         if success:
             try:
-                from database.connection import execute_write
+                from database.connection import execute_write_async
 
-                execute_write(
+                await execute_write_async(
                     "UPDATE virtual_trades SET tags = ? WHERE id = ?",
                     (json.dumps(updated_tags), trade["id"]),
                 )

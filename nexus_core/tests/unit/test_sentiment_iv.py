@@ -31,14 +31,14 @@ async def test_save_and_get_last_stored_iv():
     conn.commit()
 
     # Save a record
-    SentimentEngine.save_historical_iv(symbol, 0.45, "2026-05-20")
+    await SentimentEngine.save_historical_iv(symbol, 0.45, "2026-05-20")
 
     # Retrieve last stored IV
     last_iv = SentimentEngine.get_last_stored_iv(symbol)
     assert last_iv == pytest.approx(0.45)
 
     # Save a newer record and verify retrieve gets the newest one
-    SentimentEngine.save_historical_iv(symbol, 0.50, "2026-05-21")
+    await SentimentEngine.save_historical_iv(symbol, 0.50, "2026-05-21")
     last_iv = SentimentEngine.get_last_stored_iv(symbol)
     assert last_iv == pytest.approx(0.50)
 
@@ -191,7 +191,7 @@ async def test_fetch_and_calculate_iv_metrics_fallback_db():
     cursor = conn.cursor()
     cursor.execute("DELETE FROM historical_iv WHERE symbol = ?", (symbol,))
     conn.commit()
-    SentimentEngine.save_historical_iv(symbol, 0.28, "2026-05-20")
+    await SentimentEngine.save_historical_iv(symbol, 0.28, "2026-05-20")
 
     with patch(
         "services.market_data_service.get_quote", new_callable=AsyncMock
@@ -300,10 +300,10 @@ async def test_iv_rank_and_percentile_math():
     cursor.execute("DELETE FROM historical_iv WHERE symbol = ?", (symbol,))
     conn.commit()
 
-    SentimentEngine.save_historical_iv(symbol, 0.20, "2026-05-16")
-    SentimentEngine.save_historical_iv(symbol, 0.30, "2026-05-17")
-    SentimentEngine.save_historical_iv(symbol, 0.50, "2026-05-18")
-    SentimentEngine.save_historical_iv(symbol, 0.60, "2026-05-19")
+    await SentimentEngine.save_historical_iv(symbol, 0.20, "2026-05-16")
+    await SentimentEngine.save_historical_iv(symbol, 0.30, "2026-05-17")
+    await SentimentEngine.save_historical_iv(symbol, 0.50, "2026-05-18")
+    await SentimentEngine.save_historical_iv(symbol, 0.60, "2026-05-19")
 
     with patch(
         "services.market_data_service.get_quote", new_callable=AsyncMock
@@ -394,9 +394,9 @@ async def test_fetch_and_calculate_iv_metrics_premarket_success():
     conn.commit()
 
     # Pre-populate historical records: low=0.20, high=0.60
-    SentimentEngine.save_historical_iv(symbol, 0.20, "2026-05-15")
-    SentimentEngine.save_historical_iv(symbol, 0.60, "2026-05-16")
-    SentimentEngine.save_historical_iv(
+    await SentimentEngine.save_historical_iv(symbol, 0.20, "2026-05-15")
+    await SentimentEngine.save_historical_iv(symbol, 0.60, "2026-05-16")
+    await SentimentEngine.save_historical_iv(
         symbol, 0.40, "2026-05-17"
     )  # last stored is 0.40
     conn.commit()

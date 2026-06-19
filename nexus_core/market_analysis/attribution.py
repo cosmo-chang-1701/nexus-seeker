@@ -51,14 +51,14 @@ class AttributionEngine:
         [Snapshot Mechanism] 記錄 VTR 對沖執行瞬間的 Greeks 與 Polymarket 機率快照。
         """
         try:
-            from database.connection import execute_write
+            from database.connection import execute_write_async
 
             event_context = {
                 "poly_event_snapshot": poly_snapshot,
                 "timestamp_utc": datetime.now(timezone.utc).isoformat(),
             }
 
-            execute_write(
+            await execute_write_async(
                 """
                 INSERT INTO vtr_hedge_logs (user_id, strategy_tag, event_context, pre_hedge_greeks, status)
                 VALUES (?, ?, ?, ?, 'OPEN')
@@ -79,7 +79,7 @@ class AttributionEngine:
         針對已平倉的 VTR 對沖進行歸因分析。
         """
         try:
-            from database.connection import get_read_connection, execute_write
+            from database.connection import get_read_connection, execute_write_async
 
             conn = get_read_connection()
             cursor = conn.cursor()
@@ -103,7 +103,7 @@ class AttributionEngine:
                     theoretical_loss_avoided, cost, snapshot
                 )
 
-                execute_write(
+                await execute_write_async(
                     """
                     UPDATE vtr_hedge_logs
                     SET theoretical_pnl_delta = ?, cost_of_hedge = ?, loss_avoided = ?, protection_score = ?, status = 'CLOSED'
