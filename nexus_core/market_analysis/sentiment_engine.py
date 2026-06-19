@@ -170,9 +170,9 @@ class SentimentEngine:
 
                 # 2. Clear SQLite KV cache
                 try:
-                    from database.connection import execute_write
+                    from database.connection import execute_write_async
 
-                    execute_write(
+                    await execute_write_async(
                         "DELETE FROM kv_cache WHERE key LIKE ?",
                         (f"max_pain_{symbol_upper}%",),
                     )
@@ -185,7 +185,7 @@ class SentimentEngine:
                 try:
                     from database import mark_market_cache_stale
 
-                    mark_market_cache_stale(symbol_upper)
+                    await asyncio.to_thread(mark_market_cache_stale, symbol_upper)
                 except Exception as stale_err:
                     logger.warning(
                         f"Failed to mark market_cache stale for {symbol_upper}: {stale_err}"
@@ -275,7 +275,7 @@ class SentimentEngine:
             skew_val = (iv_put - iv_call) * 100  # percentage points
 
             # 儲存到資料庫以便後續計算百分位
-            SentimentEngine.save_sentiment_history(symbol, "SKEW", skew_val)
+            await SentimentEngine.save_sentiment_history(symbol, "SKEW", skew_val)
             skew_percentile = SentimentEngine.get_indicator_percentile(
                 symbol, "SKEW", skew_val
             )
@@ -360,7 +360,7 @@ class SentimentEngine:
             elif oi_pcr > 1.10:
                 oi_state = "🐻 結構防禦/偏向空頭"
 
-            SentimentEngine.save_sentiment_history(symbol, "PCR", volume_pcr)
+            await SentimentEngine.save_sentiment_history(symbol, "PCR", volume_pcr)
 
             return {
                 "symbol": symbol,
@@ -1020,12 +1020,12 @@ class SentimentEngine:
             return []
 
     @staticmethod
-    def save_sentiment_history(symbol: str, indicator: str, value: float):
+    async def save_sentiment_history(symbol: str, indicator: str, value: float):
         """將情緒指標存入資料庫。"""
         try:
-            from database.connection import execute_write
+            from database.connection import execute_write_async
 
-            execute_write(
+            await execute_write_async(
                 """
                 INSERT INTO sentiment_history (symbol, indicator, value)
                 VALUES (?, ?, ?)
@@ -1085,14 +1085,21 @@ class SentimentEngine:
         return None
 
     @staticmethod
-    def save_historical_iv(symbol: str, iv: float, date_str: str):
+    async def save_historical_iv(symbol: str, iv: float, date_str: str):
         """將每日 IV 存入 database。"""
         try:
+            from bot import NexusBot
             from database.connection import DatabaseWriteQueue
 
-            DatabaseWriteQueue.put_task_sync(
-                "save_historical_iv", (symbol, iv, date_str)
-            )
+            bot = NexusBot.get_instance()
+            if bot and hasattr(bot, "db_write_queue") and bot.db_write_queue:
+                await bot.db_write_queue.put_task(
+                    "save_historical_iv", (symbol, iv, date_str)
+                )
+            else:
+                await DatabaseWriteQueue.put_task(
+                    "save_historical_iv", (symbol, iv, date_str)
+                )
         except Exception as e:
             logger.error(f"儲存歷史 IV 失敗: {e}")
 
@@ -1380,7 +1387,7 @@ class SentimentEngine:
 
             # 3. 儲存至 database historical_iv
             today_str = datetime.now().strftime("%Y-%m-%d")
-            SentimentEngine.save_historical_iv(symbol, current_iv, today_str)
+            await SentimentEngine.save_historical_iv(symbol, current_iv, today_str)
 
             # 4. 取得 DB 歷史 IV
             db_ivs = {}

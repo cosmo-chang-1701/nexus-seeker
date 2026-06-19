@@ -123,14 +123,16 @@ def _expected_move_value(
     return spot_price * iv * math.sqrt(days_to_expiration / 365.0)
 
 
-def _log_decision_to_sqlite(
+async def _log_decision_to_sqlite(
     user_id: int, symbol: str, order_id: int, payload: dict[str, Any]
 ) -> None:
     # Use kv_cache as a lightweight SQLite-backed audit trail without schema changes.
     # We only keep the latest decision per (user, symbol, order).
     try:
+        import asyncio
+
         key = f"telemetry:alignment_decision:{user_id}:{symbol.upper()}:{order_id}"
-        save_kv_cache(key, payload)
+        await asyncio.to_thread(save_kv_cache, key, payload)
     except Exception as e:
         logger.debug(f"SYSTEM_LOG: kv_cache write skipped: {e}")
 
@@ -260,7 +262,7 @@ async def generate_alignment_decision(
         logger.info(
             f"SYSTEM_SWEEP: ORDER_NOT_ACTIVE for {symbol} (order_id={order_id})"
         )
-        _log_decision_to_sqlite(
+        await _log_decision_to_sqlite(
             user_id,
             symbol,
             order_id,
@@ -285,7 +287,7 @@ async def generate_alignment_decision(
 
     if _recent_clear_position_suppression(user_id, symbol):
         logger.info(f"SYSTEM_SWEEP: RECENT_CLEAR_POSITION for {symbol}")
-        _log_decision_to_sqlite(
+        await _log_decision_to_sqlite(
             user_id,
             symbol,
             order_id,
@@ -313,7 +315,7 @@ async def generate_alignment_decision(
             abs(effective_live_price - cache_price) / effective_live_price * 100.0
         )
         if drift_pct > max_drift_pct:
-            _log_decision_to_sqlite(
+            await _log_decision_to_sqlite(
                 user_id,
                 symbol,
                 order_id,
@@ -350,7 +352,7 @@ async def generate_alignment_decision(
             (effective_live_price - current_order_price) / effective_live_price * 100.0
         )
         if deep_sea_gap_pct > deep_sea_gap_lock_pct:
-            _log_decision_to_sqlite(
+            await _log_decision_to_sqlite(
                 user_id,
                 symbol,
                 order_id,
@@ -446,7 +448,7 @@ async def generate_alignment_decision(
     effective_iv_rank = 1.0 if iv_rank is None else float(iv_rank)
     if is_price_up and effective_iv_rank > 0.70:
         logger.warning(f"SYSTEM_LOCK: IV_TOO_HIGH for {symbol}")
-        _log_decision_to_sqlite(
+        await _log_decision_to_sqlite(
             user_id,
             symbol,
             order_id,
@@ -501,7 +503,7 @@ async def generate_alignment_decision(
         # Edge case: if after clamp markdown we are not strictly above the current order, no PRICE_UP needed.
         if suggested_price <= current_order_price + 1e-9:
             logger.info(f"SYSTEM_BOUND: NO_ALIGNMENT_NEEDED for {symbol}")
-            _log_decision_to_sqlite(
+            await _log_decision_to_sqlite(
                 user_id,
                 symbol,
                 order_id,
@@ -543,7 +545,7 @@ async def generate_alignment_decision(
         live_price=effective_live_price if effective_live_price > 0 else None,
     )
 
-    _log_decision_to_sqlite(
+    await _log_decision_to_sqlite(
         user_id,
         symbol,
         order_id,

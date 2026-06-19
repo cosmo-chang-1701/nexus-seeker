@@ -165,12 +165,12 @@ class DDPInspector:
             logger.info(f"[{symbol}] DDP 深度分析跳過: {e}")
             return None
 
-    def record_signal(self, report: Dict[str, Any]):
+    async def record_signal(self, report: Dict[str, Any]):
         """將信號存入資料庫"""
         try:
-            from database.connection import execute_write
+            from database.connection import execute_write_async
 
-            execute_write(
+            await execute_write_async(
                 """
                 INSERT INTO ddp_signals (symbol, current_pe, pe_mean_3y, eps_growth, rev_accel_status, confidence_score)
                 VALUES (?, ?, ?, ?, ?, ?)
