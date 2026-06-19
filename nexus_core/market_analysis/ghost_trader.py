@@ -1,4 +1,3 @@
-import sqlite3
 import logging
 import datetime
 import yfinance as yf
@@ -247,16 +246,13 @@ class GhostTrader:
 
         # 由於 close_virtual_trade 不支援 tags 更新，此處手動補償
         if success:
-            import config
-
             try:
-                with sqlite3.connect(config.DB_NAME) as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        "UPDATE virtual_trades SET tags = ? WHERE id = ?",
-                        (json.dumps(updated_tags), trade["id"]),
-                    )
-                    conn.commit()
+                from database.connection import execute_write
+
+                execute_write(
+                    "UPDATE virtual_trades SET tags = ? WHERE id = ?",
+                    (json.dumps(updated_tags), trade["id"]),
+                )
             except Exception as e:
                 logger.error(f"VTR 更新 tags 失敗: {e}")
 
