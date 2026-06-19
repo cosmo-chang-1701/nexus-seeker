@@ -3,14 +3,14 @@ from datetime import date
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from market_analysis.intraday_pipeline import (
-    IntradayScanPipeline,
+from market_analysis.intraday_pipeline import IntradayScanPipeline
+from market_analysis.models import (
     TraderAccountState,
     OptionHolding,
     TickerMarketData,
-    NexusGammaSqueezeEngine,
     AdvancedTraderOutput,
 )
+from market_analysis.gamma_squeeze_engine import NexusGammaSqueezeEngine
 
 
 @pytest.fixture
