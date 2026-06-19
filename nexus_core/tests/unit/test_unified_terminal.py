@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch, MagicMock, ANY
 import sys
 import os
 import pandas as pd
@@ -406,10 +406,10 @@ async def test_batch_scan_warning_button_callback(mock_interaction, mock_bot):
     )
     assert cog._run_single_symbol_hub.call_count == 2
     cog._run_single_symbol_hub.assert_any_call(
-        mock_interaction, "AAPL", mock_interaction.user.id
+        mock_interaction, "AAPL", mock_interaction.user.id, embeds_accumulator=ANY
     )
     cog._run_single_symbol_hub.assert_any_call(
-        mock_interaction, "TSLA", mock_interaction.user.id
+        mock_interaction, "TSLA", mock_interaction.user.id, embeds_accumulator=ANY
     )
 
     # Case 3: Embed has no warnings
@@ -421,3 +421,51 @@ async def test_batch_scan_warning_button_callback(mock_interaction, mock_bot):
     _, kwargs = mock_interaction.followup.send.call_args
     assert "當前訊息的「即時聯動警示」中沒有列出任何標的" in kwargs["embed"].description
     assert cog._run_single_symbol_hub.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_batch_scan_warning_button_chunking(mock_interaction, mock_bot):
+    from cogs.unified_terminal import BatchScanWarningButton
+    import discord
+
+    cog = UnifiedTerminalCog(mock_bot)
+
+    async def mock_run_hub(interaction, symbol, user_id, embeds_accumulator=None):
+        if embeds_accumulator is not None:
+            embeds_accumulator.append(discord.Embed(title=f"Mock Embed for {symbol}"))
+
+    cog._run_single_symbol_hub = mock_run_hub
+
+    btn = BatchScanWarningButton(cog, mock_bot)
+    mock_msg = MagicMock()
+    mock_embed = MagicMock()
+    mock_field = MagicMock()
+    mock_field.name = "💡 即時聯動警示 (Real-time Insights)"
+    # We construct 12 symbols
+    mock_field.value = "\n".join([f"• 🚀 **SYM{i}**: Test" for i in range(12)])
+    mock_embed.fields = [mock_field]
+    mock_msg.embeds = [mock_embed]
+    mock_interaction.message = mock_msg
+
+    mock_view = MagicMock()
+    mock_view.children = [btn]
+    btn._view = mock_view
+
+    mock_interaction.followup.send.reset_mock()
+    await btn.callback(mock_interaction)
+
+    # 12 embeds total. With chunk_size=5, it should send chunks of sizes: 5, 5, 2.
+    # So followup.send should be called 1 (initial progress message) + 3 (chunks) = 4 times.
+    assert mock_interaction.followup.send.call_count == 4
+
+    calls = mock_interaction.followup.send.call_args_list
+    assert "正在批次分析以下 12 個警示標的" in calls[0][0][0]
+
+    assert "embeds" in calls[1][1]
+    assert len(calls[1][1]["embeds"]) == 5
+
+    assert "embeds" in calls[2][1]
+    assert len(calls[2][1]["embeds"]) == 5
+
+    assert "embeds" in calls[3][1]
+    assert len(calls[3][1]["embeds"]) == 2
