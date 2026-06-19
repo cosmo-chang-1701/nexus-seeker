@@ -33,12 +33,181 @@ def _current_week_friday() -> date:
     return today + timedelta(days=days_ahead)
 
 
+def _calculate_max_pain_with_weights(
+    option_chain, weight_key="volume", spot_price=None
+):
+    """
+    Helper function to calculate Max Pain based on custom weight key (e.g. 'volume' or 'openInterest').
+    """
+    calls = (
+        option_chain.calls.copy() if option_chain.calls is not None else pd.DataFrame()
+    )
+    puts = option_chain.puts.copy() if option_chain.puts is not None else pd.DataFrame()
+
+    # Fill NA and ensure fields exist
+    for df in [calls, puts]:
+        if df.empty:
+            continue
+        if "openInterest" not in df.columns:
+            df["openInterest"] = 0.0
+        else:
+            df["openInterest"] = df["openInterest"].fillna(0.0)
+        if "volume" not in df.columns:
+            df["volume"] = 0.0
+        else:
+            df["volume"] = df["volume"].fillna(0.0)
+
+    # Resolve spot_price if not provided
+    if spot_price is None or spot_price <= 0.0:
+        underlying = getattr(option_chain, "underlying", None)
+        if isinstance(underlying, dict):
+            spot_price = float(
+                underlying.get("price") or underlying.get("regularMarketPrice") or 0.0
+            )
+
+        if not spot_price or spot_price <= 0.0:
+            symbol = None
+            for df in [calls, puts]:
+                if not df.empty and "contractSymbol" in df.columns:
+                    val = df["contractSymbol"].iloc[0]
+                    import re
+
+                    match = re.match(r"^([A-Za-z]+)\d", val)
+                    if match:
+                        symbol = match.group(1).upper()
+                        break
+            if symbol:
+                from services.market_data_service import _quote_cache
+
+                if symbol in _quote_cache:
+                    cached_val, _ = _quote_cache[symbol]
+                    if cached_val:
+                        spot_price = cached_val.get("c", 0.0)
+
+    # Retrieve all strikes
+    strikes = (
+        sorted(list(set(calls["strike"]) | set(puts["strike"])))
+        if not (calls.empty and puts.empty)
+        else []
+    )
+    if not strikes:
+        return 0.0
+
+    # Filter extreme strikes
+    if spot_price and spot_price > 0.0:
+        strikes = [s for s in strikes if spot_price * 0.25 <= s <= spot_price * 4.0]
+        if not strikes:
+            strikes = sorted(list(set(calls["strike"]) | set(puts["strike"])))
+
+    # Calculate pains
+    pains = []
+    for s in strikes:
+        call_sub = calls[calls["strike"] < s]
+        call_pain = (
+            (call_sub[weight_key] * (s - call_sub["strike"])).sum()
+            if not call_sub.empty
+            else 0.0
+        )
+
+        put_sub = puts[puts["strike"] > s]
+        put_pain = (
+            (put_sub[weight_key] * (put_sub["strike"] - s)).sum()
+            if not put_sub.empty
+            else 0.0
+        )
+
+        pains.append(call_pain + put_pain)
+
+    if not pains:
+        return 0.0
+    return strikes[pains.index(min(pains))]
+
+
 class SentimentEngine:
     """
     期權市場情緒引擎：負責計算 Skew, PCR, Max Pain 與 UOA 偵測。
     """
 
     INDEX_SYMBOLS = {"SPY", "QQQ", "DIA", "IWM", "SPX", "NDX", "RUT", "VIX"}
+
+    _revalidating_symbols: set[str] = set()
+
+    @staticmethod
+    def _trigger_background_cache_clear(symbol: str):
+        symbol_upper = symbol.upper()
+        if symbol_upper in SentimentEngine._revalidating_symbols:
+            logger.info(
+                f"[{symbol_upper}] Revalidation already in progress, skipping background task launch."
+            )
+            return
+
+        SentimentEngine._revalidating_symbols.add(symbol_upper)
+
+        async def _async_clear_and_revalidate():
+            try:
+                logger.info(
+                    f"🔄 [Self-Healing] Clearing SQLite/yfinance cache for {symbol_upper} due to circuit breaker breach..."
+                )
+
+                # 1. Clear memory caches
+                if symbol_upper in _iv_cache:
+                    del _iv_cache[symbol_upper]
+
+                from services.market_data_service import (
+                    _option_chain_cache,
+                    _option_expiries_cache,
+                )
+
+                if symbol_upper in _option_expiries_cache:
+                    del _option_expiries_cache[symbol_upper]
+
+                keys_to_del = [
+                    k
+                    for k in _option_chain_cache.keys()
+                    if isinstance(k, tuple) and k[0].upper() == symbol_upper
+                ]
+                for k in keys_to_del:
+                    del _option_chain_cache[k]
+
+                # 2. Clear SQLite KV cache
+                try:
+                    conn = sqlite3.connect(config.DB_NAME)
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "DELETE FROM kv_cache WHERE key LIKE ?",
+                        (f"max_pain_{symbol_upper}%",),
+                    )
+                    conn.commit()
+                    conn.close()
+                except Exception as db_err:
+                    logger.warning(
+                        f"Failed to clear SQLite KV cache for {symbol_upper}: {db_err}"
+                    )
+
+                # 3. Mark database cache stale
+                try:
+                    from database import mark_market_cache_stale
+
+                    mark_market_cache_stale(symbol_upper)
+                except Exception as stale_err:
+                    logger.warning(
+                        f"Failed to mark market_cache stale for {symbol_upper}: {stale_err}"
+                    )
+
+                # 4. Pre-warm / Revalidate
+                logger.info(
+                    f"🔄 [Self-Healing] Pre-warming cache with retry for {symbol_upper}..."
+                )
+                await SentimentEngine.calculate_max_pain(symbol_upper, _retry=True)
+
+            except Exception as ex:
+                logger.error(
+                    f"❌ [Self-Healing] Background cache clearing failed for {symbol_upper}: {ex}"
+                )
+            finally:
+                SentimentEngine._revalidating_symbols.discard(symbol_upper)
+
+        asyncio.create_task(_async_clear_and_revalidate())
 
     @staticmethod
     async def calculate_skew(symbol: str) -> Dict[str, Any]:
@@ -292,6 +461,8 @@ class SentimentEngine:
                     logger.warning(
                         f"[{symbol}] Circuit breaker triggered: Max Pain ${mp_val:.2f} deviates from spot ${spot:.2f} by {dev:.2%} (> 30%). Set to None."
                     )
+                    if not _retry:
+                        SentimentEngine._trigger_background_cache_clear(symbol)
 
         return final_res
 
@@ -497,68 +668,72 @@ class SentimentEngine:
             calls = calls[(calls["openInterest"] > 0) | (calls["volume"] > 0)]
             puts = puts[(puts["openInterest"] > 0) | (puts["volume"] > 0)]
 
+            # Filter out suspect unadjusted split data: volume > oi * 5 on ITM options
+            if spot_price > 0:
+                itm_calls_mask = (
+                    (calls["strike"] < spot_price)
+                    & (calls["openInterest"] > 0)
+                    & (calls["volume"] > calls["openInterest"] * 5)
+                )
+                itm_puts_mask = (
+                    (puts["strike"] > spot_price)
+                    & (puts["openInterest"] > 0)
+                    & (puts["volume"] > puts["openInterest"] * 5)
+                )
+
+                dropped_calls_cnt = itm_calls_mask.sum()
+                dropped_puts_cnt = itm_puts_mask.sum()
+                if dropped_calls_cnt > 0 or dropped_puts_cnt > 0:
+                    logger.warning(
+                        f"[{symbol}] Excluding suspect unadjusted split data."
+                    )
+
+                calls = calls[~itm_calls_mask]
+                puts = puts[~itm_puts_mask]
+
             # 檢查 OI 總量與資料完整性，若 OI 嚴重缺失則退化回使用成交量 (Volume) 作為權重
-            total_oi = calls["openInterest"].sum() + puts["openInterest"].sum()
-            active_oi_contracts = (calls["openInterest"] > 0).sum() + (
+            valid_oi_count = (calls["openInterest"] > 0).sum() + (
                 puts["openInterest"] > 0
             ).sum()
             total_contracts = len(calls) + len(puts)
 
-            use_volume = False
-            # 當符合以下條件之一時，判定為 OI 數據缺失/異常，自動退化為成交量權重：
-            # 1. 總未平倉量 (OI) 為 0
-            # 2. 總合約數 > 10，但具備有效 OI 的合約數量 <= 3 (代表絕大多數合約無 OI 資料)
-            # 3. 總合約數 > 10，但具備有效 OI 的合約佔比 < 2%
-            if (
-                total_oi == 0
-                or (total_contracts > 10 and active_oi_contracts <= 3)
-                or (
-                    total_contracts > 10
-                    and (active_oi_contracts / total_contracts) < 0.02
-                )
+            from collections import namedtuple
+
+            TempOptionChain = namedtuple(
+                "TempOptionChain", ["calls", "puts", "underlying"]
+            )
+            option_chain = TempOptionChain(
+                calls=calls, puts=puts, underlying=getattr(chain, "underlying", None)
+            )
+
+            # Align with README.md specification
+            if total_contracts > 10 and (
+                valid_oi_count <= 3 or (valid_oi_count / total_contracts) < 0.02
             ):
-                total_vol = calls["volume"].sum() + puts["volume"].sum()
-                if total_vol > 0:
-                    use_volume = True
-                    logger.warning(
-                        f"[{symbol}] Incomplete Open Interest detected (active contracts: {active_oi_contracts}/{total_contracts}). "
-                        "Falling back to Volume-weighted Max Pain calculation."
-                    )
-                else:
-                    return {
-                        "error": "No active options contracts (OI and Volume are both 0)"
-                    }
+                logger.warning(
+                    f"[{symbol}] Data integrity degraded (Valid OI too low). Downgrading to Volume-weighted Max Pain calculation."
+                )
+                # Fallback to volume-weighted calculation helper
+                max_pain = _calculate_max_pain_with_weights(
+                    option_chain, weight_key="volume", spot_price=spot_price
+                )
+                max_pain_strike = max_pain
             else:
-                use_volume = False
-
-            # 彙整所有履約價
-            strikes = sorted(list(set(calls["strike"]) | set(puts["strike"])))
-            if not strikes:
-                return {"error": "No strikes available"}
-
-            # 過濾極端履約價防止數據扭曲 (現價 25% ~ 400% 區間)
-            if spot_price > 0:
-                strikes = [
-                    s for s in strikes if spot_price * 0.25 <= s <= spot_price * 4.0
-                ]
-                if not strikes:
-                    strikes = sorted(list(set(calls["strike"]) | set(puts["strike"])))
-
-            # 計算每個履約價下的總痛點 (Dollar Value if expired there)
-            pains = []
-            weight_col = "volume" if use_volume else "openInterest"
-            for s in strikes:
-                # Call Pain: max(0, spot - strike) * Weight
-                call_sub = calls[calls["strike"] < s]
-                call_pain = (call_sub[weight_col] * (s - call_sub["strike"])).sum()
-
-                # Put Pain: max(0, strike - spot) * Weight
-                put_sub = puts[puts["strike"] > s]
-                put_pain = (put_sub[weight_col] * (put_sub["strike"] - s)).sum()
-
-                pains.append(call_pain + put_pain)
-
-            max_pain_strike = strikes[pains.index(min(pains))]
+                total_oi = calls["openInterest"].sum() + puts["openInterest"].sum()
+                if total_oi == 0:
+                    total_vol = calls["volume"].sum() + puts["volume"].sum()
+                    if total_vol > 0:
+                        max_pain_strike = _calculate_max_pain_with_weights(
+                            option_chain, weight_key="volume", spot_price=spot_price
+                        )
+                    else:
+                        return {
+                            "error": "No active options contracts (OI and Volume are both 0)"
+                        }
+                else:
+                    max_pain_strike = _calculate_max_pain_with_weights(
+                        option_chain, weight_key="openInterest", spot_price=spot_price
+                    )
 
             # 30% 偏離度異常防禦
             from services.market_data_service import (
