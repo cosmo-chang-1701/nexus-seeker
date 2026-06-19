@@ -668,3 +668,115 @@ def test_polymarket_fuzzy_matching_and_odds_format():
     ]
     odds_other = find_matching_polymarket_odds("MU", poly_markets_other)
     assert odds_other == "N/A"
+
+
+@pytest.mark.asyncio
+async def test_calculate_max_pain_split_anomaly_and_degradation():
+    from market_analysis.sentiment_engine import SentimentEngine
+
+    with patch(
+        "services.market_data_service.get_all_option_expiries", new_callable=AsyncMock
+    ) as mock_expiries, patch(
+        "services.market_data_service.get_option_chain", new_callable=AsyncMock
+    ) as mock_chain, patch(
+        "services.market_data_service.get_quote", new_callable=AsyncMock
+    ) as mock_quote, patch("database.cache.get_kv_cache", return_value=None), patch(
+        "market_analysis.sentiment_engine.logger.warning"
+    ) as mock_logger_warning:
+        mock_expiries.return_value = ["2026-06-19"]
+        mock_quote.return_value = {"c": 100.0}
+
+        # 12 contracts total.
+        # Calls:
+        # - Strike 90 (ITM Call): volume=600, openInterest=100 (6x, suspect split anomaly, should be excluded!)
+        # - Strike 95 (ITM Call): volume=10, openInterest=5 (kept)
+        # - Strike 100 (ATM Call): volume=10, openInterest=5 (kept)
+        # - Strike 105 (OTM Call): volume=10, openInterest=5 (kept)
+        # - Strike 110 (OTM Call): volume=10, openInterest=5 (kept)
+        # - Strike 115 (OTM Call): volume=10, openInterest=5 (kept)
+        calls_df = pd.DataFrame(
+            {
+                "strike": [90.0, 95.0, 100.0, 105.0, 110.0, 115.0],
+                "openInterest": [100.0, 5.0, 5.0, 5.0, 5.0, 5.0],
+                "volume": [600.0, 10.0, 10.0, 10.0, 10.0, 10.0],
+            }
+        )
+
+        # Puts:
+        # - Strike 90 (OTM Put): volume=10, openInterest=5 (kept)
+        # - Strike 95 (OTM Put): volume=10, openInterest=5 (kept)
+        # - Strike 100 (ATM Put): volume=10, openInterest=5 (kept)
+        # - Strike 105 (ITM Put): volume=600, openInterest=100 (6x, suspect split anomaly, should be excluded!)
+        # - Strike 110 (ITM Put): volume=10, openInterest=5 (kept)
+        # - Strike 115 (ITM Put): volume=10, openInterest=5 (kept)
+        puts_df = pd.DataFrame(
+            {
+                "strike": [90.0, 95.0, 100.0, 105.0, 110.0, 115.0],
+                "openInterest": [5.0, 5.0, 5.0, 100.0, 5.0, 5.0],
+                "volume": [10.0, 10.0, 10.0, 600.0, 10.0, 10.0],
+            }
+        )
+
+        class MockChain:
+            def __init__(self, calls, puts):
+                self.calls = calls
+                self.puts = puts
+                self.underlying = {"price": 100.0}
+
+        mock_chain.return_value = MockChain(calls_df, puts_df)
+
+        # Call calculate_max_pain
+        result = await SentimentEngine.calculate_max_pain("MU")
+        assert result is not None
+
+        # Verify logger warning for split anomaly exclusion was printed
+        any_excluding = any(
+            "Excluding suspect unadjusted split data" in args[0]
+            for args, _ in mock_logger_warning.call_args_list
+        )
+        assert any_excluding, "Should log Excluding suspect unadjusted split data"
+
+        # Valid contracts with OI > 0 is 10 (since the two anomalous ones are excluded, and 10 remain with OI=5)
+        # But wait, is valid_oi_count <= 3? No, it's 10. So it shouldn't trigger "Valid OI too low" downgrade here.
+        # Now let's test the "Valid OI too low" condition:
+        # If we change calls_df and puts_df to have almost all openInterest = 0.
+        calls_df["openInterest"] = [100.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        puts_df["openInterest"] = [0.0, 0.0, 0.0, 100.0, 0.0, 0.0]
+
+        mock_chain.return_value = MockChain(calls_df, puts_df)
+
+        # Clear mock calls log
+        mock_logger_warning.reset_mock()
+
+        result2 = await SentimentEngine.calculate_max_pain("MU")
+        assert result2 is not None
+
+        # Excluded split warning should still run (since ITM calls/puts still have volume > 5*OI and OI > 0)
+        # Total contracts remaining is 10 (12 - 2). valid_oi_count is 0 (since the two with OI=100 were excluded and the rest have OI=0).
+        # Total contracts is 10. Total contracts is not > 10 (it is exactly 10).
+        # Let's add more contracts to make total_contracts > 10.
+        calls_df = pd.DataFrame(
+            {
+                "strike": [90.0, 92.0, 95.0, 98.0, 100.0, 105.0, 110.0, 115.0],
+                "openInterest": [100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                "volume": [600.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0],
+            }
+        )
+        puts_df = pd.DataFrame(
+            {
+                "strike": [90.0, 92.0, 95.0, 98.0, 100.0, 105.0, 110.0, 115.0],
+                "openInterest": [0.0, 0.0, 0.0, 0.0, 0.0, 100.0, 0.0, 0.0],
+                "volume": [10.0, 10.0, 10.0, 10.0, 10.0, 600.0, 10.0, 10.0],
+            }
+        )
+        mock_chain.return_value = MockChain(calls_df, puts_df)
+        mock_logger_warning.reset_mock()
+
+        result3 = await SentimentEngine.calculate_max_pain("MU")
+        # Verify downgrading warning log is printed
+        any_downgrading = any(
+            "Data integrity degraded (Valid OI too low)" in args[0]
+            for args, _ in mock_logger_warning.call_args_list
+        )
+        assert any_downgrading, "Should log Data integrity degraded (Valid OI too low)"
+        assert result3["max_pain"] is not None
