@@ -21,7 +21,7 @@ async def test_alert_filtering_logic(mock_interaction, db_conn):
 
     # Add AAPL to portfolio
     add_portfolio_record(
-        user_id, symbol_in_port, "call", 150, "2026-06-19", 5.0, 1, 150.0
+        user_id, symbol_in_port, "call", 150, "2036-06-19", 5.0, 1, 150.0
     )
     # Add TSLA to watchlist only
     add_watchlist_symbol(user_id, symbol_not_in_port)

@@ -43,7 +43,7 @@ def test_cli_portfolio_integration(db_conn, mock_market_data):
 
     # 插入測試資料
     add_portfolio_record(
-        user_id, "AAPL", "CALL", 150.0, "2026-06-19", 5.0, 1, 0.0, 0.5, -0.1, 0.01
+        user_id, "AAPL", "CALL", 150.0, "2036-06-19", 5.0, 1, 0.0, 0.5, -0.1, 0.01
     )
 
     # Mock 期權價格獲取
