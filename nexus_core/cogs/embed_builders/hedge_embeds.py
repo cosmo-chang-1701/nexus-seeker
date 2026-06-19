@@ -171,7 +171,7 @@ def create_hedge_alert_embed(
         ),
         inline=False,
     )
-    embed.set_footer(text=f"Nexus Seeker Battle Station | Alert ID: {alert_id}")
+    embed.set_footer(text=f"🌌 Nexus Seeker • Battle Station | Alert ID: {alert_id}")
     return embed
 
 

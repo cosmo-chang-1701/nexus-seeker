@@ -271,7 +271,7 @@ def _parse_and_format_positions_table(
         # Regex parsing
         sym_match = re.search(r"🔹\s*\*\*(.*?)\*\*", pos_item)
         exp_match = re.search(r"`(\d{4}-\d{2}-\d{2})`", pos_item)
-        strike_type_match = re.search(r"`?\$([\\d\.]+)`?\s*\*\*(.*?)\*\*", pos_item)
+        strike_type_match = re.search(r"`?\$([\d\.]+)`?\s*\*\*(.*?)\*\*", pos_item)
 
         cost_match = re.search(r"成本:\s*`\$?([\d\.,\-]+)`", pos_item)
         price_match = re.search(r"現價:\s*`\$?([\d\.,\-]+)`", pos_item)
