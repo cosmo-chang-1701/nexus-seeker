@@ -166,22 +166,40 @@ class BatchScanWarningButton(discord.ui.Button):
                 ephemeral=True,
             )
 
+            accumulated_embeds: List[discord.Embed] = []
             for symbol in unique_warnings:
                 try:
-                    await self.cog._run_single_symbol_hub(interaction, symbol, user_id)
+                    await self.cog._run_single_symbol_hub(
+                        interaction,
+                        symbol,
+                        user_id,
+                        embeds_accumulator=accumulated_embeds,
+                    )
                 except Exception as e:
                     logger.error(f"Batch analysis failed for {symbol}: {e}")
-                    await interaction.followup.send(
-                        embed=create_error_embed(
-                            f"分析 `{symbol}` 時發生錯誤: {e}", title="分析錯誤"
-                        ),
-                        ephemeral=True,
+
+            # Chunk embeds and send them (5-8 embeds per message, using 5 here)
+            chunk_size = 5
+            for i in range(0, len(accumulated_embeds), chunk_size):
+                chunk = accumulated_embeds[i : i + chunk_size]
+                try:
+                    await interaction.followup.send(embeds=chunk, ephemeral=True)
+                except Exception as send_err:
+                    logger.error(
+                        f"Failed to send chunk of batch analysis embeds: {send_err}"
                     )
+        except Exception as outer_err:
+            logger.error(f"Outer Batch Scan Warning Button callback error: {outer_err}")
         finally:
             # 2. 恢復按鈕與下拉選單狀態
             for child in view.children:
                 child.disabled = False
-            await interaction.edit_original_response(view=view)
+            try:
+                await interaction.edit_original_response(view=view)
+            except Exception as final_err:
+                logger.error(
+                    f"Failed to edit original response in finally block: {final_err}"
+                )
 
 
 class BatchScanView(discord.ui.View):
@@ -1120,16 +1138,25 @@ class UnifiedTerminalCog(commands.Cog):
         }
 
     async def _run_single_symbol_hub(
-        self, interaction: discord.Interaction, symbol: str, user_id: int
+        self,
+        interaction: discord.Interaction,
+        symbol: str,
+        user_id: int,
+        embeds_accumulator: Optional[List[discord.Embed]] = None,
     ):
         symbol = symbol.upper()
         if not await market_data_service.validate_symbol(symbol):
-            return await interaction.followup.send(
-                embed=create_error_embed(
-                    f"無效的標的代號: `{symbol}`", title="輸入錯誤"
-                ),
-                ephemeral=True,
+            error_emb = create_error_embed(
+                f"無效的標的代號: `{symbol}`", title="輸入錯誤"
             )
+            if embeds_accumulator is not None:
+                embeds_accumulator.append(error_emb)
+                return
+            else:
+                return await interaction.followup.send(
+                    embed=error_emb,
+                    ephemeral=True,
+                )
 
         try:
             from services.asset_manager import AssetManager
@@ -1230,14 +1257,23 @@ class UnifiedTerminalCog(commands.Cog):
             view = SymbolHubView(symbol, user_id, self.bot)
             view.base_data = result
 
-            await interaction.followup.send(embed=main_embed, view=view, ephemeral=True)
+            if embeds_accumulator is not None:
+                embeds_accumulator.append(main_embed)
+            else:
+                await interaction.followup.send(
+                    embed=main_embed, view=view, ephemeral=True
+                )
 
         except Exception as e:
             logger.error(f"Symbol Hub Error for {symbol}: {e}")
-            await interaction.followup.send(
-                embed=create_error_embed(f"載入 `{symbol}` 資料時發生錯誤: {e}"),
-                ephemeral=True,
-            )
+            error_emb = create_error_embed(f"載入 `{symbol}` 資料時發生錯誤: {e}")
+            if embeds_accumulator is not None:
+                embeds_accumulator.append(error_emb)
+            else:
+                await interaction.followup.send(
+                    embed=error_emb,
+                    ephemeral=True,
+                )
 
     async def _async_revalidate_market_cache(self, sym: str, price: float):
         try:
