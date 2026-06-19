@@ -1,10 +1,8 @@
 import logging
 import json
-import sqlite3
 from typing import List, Optional
 from datetime import datetime, timezone
 import numpy as np
-import config
 
 logger = logging.getLogger(__name__)
 
@@ -53,15 +51,14 @@ class AttributionEngine:
         [Snapshot Mechanism] 記錄 VTR 對沖執行瞬間的 Greeks 與 Polymarket 機率快照。
         """
         try:
-            conn = sqlite3.connect(config.DB_NAME)
-            cursor = conn.cursor()
+            from database.connection import execute_write
 
             event_context = {
                 "poly_event_snapshot": poly_snapshot,
                 "timestamp_utc": datetime.now(timezone.utc).isoformat(),
             }
 
-            cursor.execute(
+            execute_write(
                 """
                 INSERT INTO vtr_hedge_logs (user_id, strategy_tag, event_context, pre_hedge_greeks, status)
                 VALUES (?, ?, ?, ?, 'OPEN')
@@ -73,9 +70,6 @@ class AttributionEngine:
                     json.dumps(pre_hedge_greeks),
                 ),
             )
-
-            conn.commit()
-            conn.close()
         except Exception as e:
             logger.error(f"Failed to log VTR hedge snapshot: {e}")
 
@@ -85,7 +79,9 @@ class AttributionEngine:
         針對已平倉的 VTR 對沖進行歸因分析。
         """
         try:
-            conn = sqlite3.connect(config.DB_NAME)
+            from database.connection import get_read_connection, execute_write
+
+            conn = get_read_connection()
             cursor = conn.cursor()
 
             cursor.execute(
@@ -93,6 +89,7 @@ class AttributionEngine:
                 (user_id,),
             )
             logs = cursor.fetchall()
+            conn.close()
 
             for log_id, context_json, greeks_json in logs:
                 context = json.loads(context_json) if context_json else {}
@@ -106,7 +103,7 @@ class AttributionEngine:
                     theoretical_loss_avoided, cost, snapshot
                 )
 
-                cursor.execute(
+                execute_write(
                     """
                     UPDATE vtr_hedge_logs
                     SET theoretical_pnl_delta = ?, cost_of_hedge = ?, loss_avoided = ?, protection_score = ?, status = 'CLOSED'
@@ -120,9 +117,6 @@ class AttributionEngine:
                         log_id,
                     ),
                 )
-
-            conn.commit()
-            conn.close()
         except Exception as e:
             logger.error(f"Failed to finalize VTR attribution: {e}")
 
@@ -130,7 +124,9 @@ class AttributionEngine:
     def generate_evolution_advice(user_id: int) -> Optional[str]:
         """基於歸因數據生成 NRO 參數微調建議。"""
         try:
-            conn = sqlite3.connect(config.DB_NAME)
+            from database.connection import get_read_connection
+
+            conn = get_read_connection()
             cursor = conn.cursor()
             cursor.execute(
                 """
@@ -161,7 +157,9 @@ class AttributionEngine:
     async def generate_attribution_narration(user_id: int, log_id: int) -> str:
         """利用 LLM 生成人性化的對沖成功/失敗總結。"""
         try:
-            conn = sqlite3.connect(config.DB_NAME)
+            from database.connection import get_read_connection
+
+            conn = get_read_connection()
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT strategy_tag, pre_hedge_greeks, protection_score, loss_avoided FROM vtr_hedge_logs WHERE id = ?",
@@ -210,7 +208,9 @@ class AttributionEngine:
     def format_attribution_report(user_id: int) -> List[str]:
         """格式化對沖效能歸因報告 (Traditional Chinese)。"""
         try:
-            conn = sqlite3.connect(config.DB_NAME)
+            from database.connection import get_read_connection
+
+            conn = get_read_connection()
             cursor = conn.cursor()
             cursor.execute(
                 """

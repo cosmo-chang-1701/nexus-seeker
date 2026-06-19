@@ -168,27 +168,21 @@ class DDPInspector:
     def record_signal(self, report: Dict[str, Any]):
         """將信號存入資料庫"""
         try:
-            import sqlite3
-            import config
+            from database.connection import execute_write
 
-            with sqlite3.connect(config.DB_NAME) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    INSERT INTO ddp_signals (symbol, current_pe, pe_mean_3y, eps_growth, rev_accel_status, confidence_score)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                    (
-                        report["symbol"],
-                        report["current_pe"],
-                        report["pe_mean_3y"],
-                        report["eps_growth"],
-                        "加速 (Accelerating)"
-                        if report["rev_accel"]
-                        else "穩定 (Stable)",
-                        report["confidence_score"],
-                    ),
-                )
-                conn.commit()
+            execute_write(
+                """
+                INSERT INTO ddp_signals (symbol, current_pe, pe_mean_3y, eps_growth, rev_accel_status, confidence_score)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """,
+                (
+                    report["symbol"],
+                    report["current_pe"],
+                    report["pe_mean_3y"],
+                    report["eps_growth"],
+                    "加速 (Accelerating)" if report["rev_accel"] else "穩定 (Stable)",
+                    report["confidence_score"],
+                ),
+            )
         except Exception as e:
             logger.error(f"記錄 DDP 信號失敗: {e}")

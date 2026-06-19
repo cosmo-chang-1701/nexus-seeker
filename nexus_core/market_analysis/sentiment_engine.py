@@ -1,7 +1,7 @@
 import logging
 import pandas as pd
 import numpy as np
-import sqlite3
+import sqlite3  # noqa: F401
 import time
 import math
 import asyncio
@@ -10,7 +10,6 @@ from datetime import datetime, timedelta, date
 from typing import Dict, Any, List, Literal, Optional
 from services import market_data_service
 from services.market_data_service import BoundedCache
-import config
 from models.quant import IVMetrics
 from market_time import is_market_open
 from market_analysis.uoa_telemetry import UOATradeInput, classify_uoa_trade
@@ -171,14 +170,12 @@ class SentimentEngine:
 
                 # 2. Clear SQLite KV cache
                 try:
-                    conn = sqlite3.connect(config.DB_NAME)
-                    cursor = conn.cursor()
-                    cursor.execute(
+                    from database.connection import execute_write
+
+                    execute_write(
                         "DELETE FROM kv_cache WHERE key LIKE ?",
                         (f"max_pain_{symbol_upper}%",),
                     )
-                    conn.commit()
-                    conn.close()
                 except Exception as db_err:
                     logger.warning(
                         f"Failed to clear SQLite KV cache for {symbol_upper}: {db_err}"
@@ -1026,17 +1023,15 @@ class SentimentEngine:
     def save_sentiment_history(symbol: str, indicator: str, value: float):
         """將情緒指標存入資料庫。"""
         try:
-            conn = sqlite3.connect(config.DB_NAME)
-            cursor = conn.cursor()
-            cursor.execute(
+            from database.connection import execute_write
+
+            execute_write(
                 """
                 INSERT INTO sentiment_history (symbol, indicator, value)
                 VALUES (?, ?, ?)
             """,
                 (symbol, indicator, value),
             )
-            conn.commit()
-            conn.close()
         except Exception as e:
             logger.error(f"儲存情緒歷史失敗: {e}")
 
@@ -1046,7 +1041,9 @@ class SentimentEngine:
     ) -> float:
         """計算目前值在歷史數據中的百分位數。"""
         try:
-            conn = sqlite3.connect(config.DB_NAME)
+            from database.connection import get_read_connection
+
+            conn = get_read_connection()
             cursor = conn.cursor()
             cursor.execute(
                 """

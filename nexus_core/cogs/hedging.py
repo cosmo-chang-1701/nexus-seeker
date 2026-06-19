@@ -8,8 +8,6 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import logging
-import sqlite3
-import config
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -39,7 +37,9 @@ class HedgingCog(commands.Cog):
         user_id = interaction.user.id
 
         try:
-            conn = sqlite3.connect(config.DB_NAME)
+            from database.connection import get_read_connection, execute_write
+
+            conn = get_read_connection()
             cursor = conn.cursor()
 
             # 1. 驗證警報是否存在且屬於該使用者
@@ -48,6 +48,7 @@ class HedgingCog(commands.Cog):
                 (alert_id, user_id),
             )
             alert = cursor.fetchone()
+            conn.close()
 
             if not alert:
                 return await interaction.followup.send(
@@ -70,7 +71,7 @@ class HedgingCog(commands.Cog):
                 actual_qty if actual_qty is not None else alert[8]
             )  # hedge_contracts is at index 8
 
-            cursor.execute(
+            execute_write(
                 """
                 UPDATE hedge_alerts
                 SET status = 'EXECUTED', executed_at = CURRENT_TIMESTAMP, hedge_contracts = ?
@@ -78,9 +79,6 @@ class HedgingCog(commands.Cog):
             """,
                 (final_qty, alert_id),
             )
-
-            conn.commit()
-            conn.close()
 
             # 3. 回饋使用者
             embed = create_hedge_settlement_embed(
@@ -103,7 +101,9 @@ class HedgingCog(commands.Cog):
         user_id = interaction.user.id
 
         try:
-            conn = sqlite3.connect(config.DB_NAME)
+            from database.connection import get_read_connection
+
+            conn = get_read_connection()
             cursor = conn.cursor()
             cursor.execute(
                 """

@@ -1045,6 +1045,80 @@ class UnifiedTerminalCog(commands.Cog):
             except Exception as follow_err:
                 logger.error(f"Failed to send outer error followup: {follow_err}")
 
+    async def _fetch_single_symbol_data_raw(
+        self, symbol: str, enable_local_tunnel: bool
+    ) -> dict:
+        """
+        獲取單一標的所需的所有重型量化數據與外部情緒分析。
+        供 SingleFlightManager 調度使用。
+        """
+        from market_analysis.ddp_inspector import DDPInspector
+        from services.polymarket_service import PolymarketService
+        from services import reddit_service
+
+        ddp_inspector = DDPInspector(self.bot)
+        poly_service = PolymarketService(self.bot)
+
+        spy_task = market_data_service.get_spy_history_df("1y")
+        macro_task = market_data_service.get_macro_environment()
+        quote_task = market_data_service.get_quote(symbol)
+        skew_task = SentimentEngine.calculate_skew(symbol)
+        pcr_task = SentimentEngine.calculate_pcr(symbol)
+        uoa_task = SentimentEngine.detect_uoa(symbol)
+        mp_task = SentimentEngine.calculate_max_pain(symbol)
+        iv_task = SentimentEngine.fetch_and_calculate_iv_metrics(symbol)
+        reddit_task = reddit_service.get_reddit_context(
+            symbol, enable_tunnel=enable_local_tunnel
+        )
+        poly_task = poly_service.get_market_snapshot(limit=10)
+        ddp_task = ddp_inspector.inspect_symbol(symbol)
+        df_hist_task = market_data_service.get_history_df(
+            symbol, period="1y", interval="1d"
+        )
+
+        (
+            df_spy,
+            macro_raw,
+            quote,
+            skew_data,
+            pcr_data,
+            uoa_data,
+            max_pain_data,
+            iv_metrics,
+            reddit_text,
+            poly_markets,
+            ddp_report,
+            df_hist_1d,
+        ) = await asyncio.gather(
+            spy_task,
+            macro_task,
+            quote_task,
+            skew_task,
+            pcr_task,
+            uoa_task,
+            mp_task,
+            iv_task,
+            reddit_task,
+            poly_task,
+            ddp_task,
+            df_hist_task,
+        )
+
+        return {
+            "df_spy": df_spy,
+            "macro_raw": macro_raw,
+            "quote": quote,
+            "skew_data": skew_data,
+            "pcr_data": pcr_data,
+            "uoa_data": uoa_data,
+            "max_pain_data": max_pain_data,
+            "iv_metrics": iv_metrics,
+            "reddit_text": reddit_text,
+            "poly_markets": poly_markets,
+            "ddp_report": ddp_report,
+            "df_hist_1d": df_hist_1d,
+        }
+
     async def _run_single_symbol_hub(
         self, interaction: discord.Interaction, symbol: str, user_id: int
     ):
@@ -1068,59 +1142,30 @@ class UnifiedTerminalCog(commands.Cog):
                 0.0,
             )
 
-            # 用於 DDP 與 Polymarket 等服務
-            from market_analysis.ddp_inspector import DDPInspector
-            from services.polymarket_service import PolymarketService
-
-            ddp_inspector = DDPInspector(self.bot)
-            poly_service = PolymarketService(self.bot)
-
-            # 並行抓取所有數據
-            spy_task = market_data_service.get_spy_history_df("1y")
-            macro_task = market_data_service.get_macro_environment()
-            quote_task = market_data_service.get_quote(symbol)
-            skew_task = SentimentEngine.calculate_skew(symbol)
-            pcr_task = SentimentEngine.calculate_pcr(symbol)
-            uoa_task = SentimentEngine.detect_uoa(symbol)
-            mp_task = SentimentEngine.calculate_max_pain(symbol)
-            iv_task = SentimentEngine.fetch_and_calculate_iv_metrics(symbol)
             ctx = database.get_full_user_context(user_id)
-            reddit_task = reddit_service.get_reddit_context(
-                symbol, enable_tunnel=ctx.enable_local_tunnel
-            )
-            poly_task = poly_service.get_market_snapshot(limit=10)
-            ddp_task = ddp_inspector.inspect_symbol(symbol)
-            df_hist_task = market_data_service.get_history_df(
-                symbol, period="1y", interval="1d"
+
+            # 🚀 Task 2 Hook: Coalesced fetch using SingleFlightManager
+            from services.single_flight import SingleFlightManager
+
+            data = await SingleFlightManager.run(
+                f"single_hub_{symbol}",
+                self._fetch_single_symbol_data_raw,
+                symbol,
+                ctx.enable_local_tunnel,
             )
 
-            (
-                df_spy,
-                macro_raw,
-                quote,
-                skew_data,
-                pcr_data,
-                uoa_data,
-                max_pain_data,
-                iv_metrics,
-                reddit_text,
-                poly_markets,
-                ddp_report,
-                df_hist_1d,
-            ) = await asyncio.gather(
-                spy_task,
-                macro_task,
-                quote_task,
-                skew_task,
-                pcr_task,
-                uoa_task,
-                mp_task,
-                iv_task,
-                reddit_task,
-                poly_task,
-                ddp_task,
-                df_hist_task,
-            )
+            df_spy = data["df_spy"]
+            macro_raw = data["macro_raw"]
+            quote = data["quote"]
+            skew_data = data["skew_data"]
+            pcr_data = data["pcr_data"]
+            uoa_data = data["uoa_data"]
+            max_pain_data = data["max_pain_data"]
+            iv_metrics = data["iv_metrics"]
+            reddit_text = data["reddit_text"]
+            poly_markets = data["poly_markets"]
+            ddp_report = data["ddp_report"]
+            df_hist_1d = data["df_hist_1d"]
 
             spy_price = df_spy["Close"].iloc[-1] if not df_spy.empty else 670.0
             safe_macro = macro_raw or {}

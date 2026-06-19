@@ -1,12 +1,10 @@
 import json
 import logging
 import math
-import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
-import config
 from database.cache import save_kv_cache
 
 logger = logging.getLogger(__name__)
@@ -54,55 +52,67 @@ def _parse_sqlite_timestamp(ts: str) -> Optional[datetime]:
 
 
 def _is_active_order_in_db(order_id: int, user_id: int) -> bool:
+    conn = None
     try:
-        with sqlite3.connect(config.DB_NAME) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT 1 FROM active_orders WHERE id = ? AND user_id = ? LIMIT 1",
-                (order_id, user_id),
-            )
-            return cursor.fetchone() is not None
+        from database.connection import get_read_connection
+
+        conn = get_read_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT 1 FROM active_orders WHERE id = ? AND user_id = ? LIMIT 1",
+            (order_id, user_id),
+        )
+        return cursor.fetchone() is not None
     except Exception as e:
         logger.warning(f"SYSTEM_SWEEP: DB_SYNC_FAILED for order_id={order_id}: {e}")
         return False
+    finally:
+        if conn:
+            conn.close()
 
 
 def _recent_clear_position_suppression(
     user_id: int, symbol: str, *, window_hours: int = 24
 ) -> bool:
     """Return True if symbol should suppress buy/alignment due to recent clear/zero holding."""
+    conn = None
     try:
-        with sqlite3.connect(config.DB_NAME) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT metadata, updated_at
-                FROM assets
-                WHERE user_id = ? AND symbol = ? AND context_type = 'HOLDING'
-                LIMIT 1
-                """,
-                (user_id, symbol.upper()),
-            )
-            row = cursor.fetchone()
-            if not row:
-                return False
+        from database.connection import get_read_connection
 
-            meta_json, updated_at = row
-            meta = json.loads(meta_json) if meta_json else {}
-            qty = float(meta.get("quantity", 0.0) or 0.0)
-            if qty != 0.0:
-                return False
-
-            t = _parse_sqlite_timestamp(str(updated_at or ""))
-            if t is None:
-                return False
-
-            if _now_utc() - t <= timedelta(hours=window_hours):
-                return True
+        conn = get_read_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT metadata, updated_at
+            FROM assets
+            WHERE user_id = ? AND symbol = ? AND context_type = 'HOLDING'
+            LIMIT 1
+            """,
+            (user_id, symbol.upper()),
+        )
+        row = cursor.fetchone()
+        if not row:
             return False
+
+        meta_json, updated_at = row
+        meta = json.loads(meta_json) if meta_json else {}
+        qty = float(meta.get("quantity", 0.0) or 0.0)
+        if qty != 0.0:
+            return False
+
+        t = _parse_sqlite_timestamp(str(updated_at or ""))
+        if t is None:
+            return False
+
+        if _now_utc() - t <= timedelta(hours=window_hours):
+            return True
+        return False
     except Exception as e:
         logger.warning(f"SYSTEM_SWEEP: HOLDING_SYNC_FAILED for {symbol}: {e}")
         return False
+    finally:
+        if conn:
+            conn.close()
 
 
 def _expected_move_value(
