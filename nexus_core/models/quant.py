@@ -91,11 +91,11 @@ class IVMetrics(BaseModel):
     model_config = ConfigDict()
 
     symbol: str
-    current_iv: float  # fraction, e.g. 0.585 for 58.5%
-    iv_rank: float  # 0.0 to 100.0
-    iv_percentile: float  # 0.0 to 100.0
-    expected_move_weekly: float
-    iv_status: Literal["Low", "Normal", "High", "Extreme"]
+    current_iv: float | None = None  # fraction, e.g. 0.585 for 58.5%
+    iv_rank: float | None = None  # 0.0 to 100.0
+    iv_percentile: float | None = None  # 0.0 to 100.0
+    expected_move_weekly: float | None = None
+    iv_status: Literal["Low", "Normal", "High", "Extreme"] | None = "Normal"
     is_premarket: bool = False
     iv_source: Literal["LIVE_IV", "STORED_IV", "HV_PROXY", "UNAVAILABLE"] = "LIVE_IV"
     reference_spot_price: float | None = None

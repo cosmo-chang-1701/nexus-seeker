@@ -25,7 +25,11 @@ class WatchlistRiskController:
                 alert_level="red",
             )
 
-        if metrics.current_price <= metrics.buy_price_phase1 and metrics.iv_rank > 65.0:
+        if (
+            metrics.current_price <= metrics.buy_price_phase1
+            and metrics.iv_rank is not None
+            and metrics.iv_rank > 65.0
+        ):
             return WatchlistTacticalPlan(
                 scenario="premium-harvest",
                 sddm_route="SHIELD (防禦網格 - 左側權利金收集)",

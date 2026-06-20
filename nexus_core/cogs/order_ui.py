@@ -287,7 +287,11 @@ class DynamicOrderModal(discord.ui.Modal):
                 iv_metrics = await SentimentEngine.fetch_and_calculate_iv_metrics(
                     symbol
                 )
-                if iv_metrics and iv_metrics.current_iv > 0:
+                if (
+                    iv_metrics
+                    and iv_metrics.current_iv is not None
+                    and iv_metrics.current_iv > 0
+                ):
                     iv = iv_metrics.current_iv
                     hist_iv = iv / 1.1
             except Exception as e:
@@ -1276,6 +1280,23 @@ class OrderUICog(commands.Cog):
             holding_shares = float(holding_row.get("quantity", 0.0) or 0.0)
 
             try:
+                iv_val_for_decision = (
+                    float(iv_metrics.current_iv or 0.0)
+                    if iv_metrics and iv_metrics.current_iv is not None
+                    else 0.35
+                )
+                iv_rank_for_decision = (
+                    float(iv_metrics.iv_rank / 100.0)
+                    if iv_metrics and iv_metrics.iv_rank is not None
+                    else None
+                )
+                skew_per_for_decision = (
+                    float(skew_per / 100.0)
+                    if skew_metrics
+                    and (skew_per := skew_metrics.get("skew_percentile")) is not None
+                    else 0.50
+                )
+
                 decision = await generate_alignment_decision(
                     user_id=interaction.user.id,
                     order_id=int(o["id"]),
@@ -1283,14 +1304,12 @@ class OrderUICog(commands.Cog):
                     current_order_price=float(current_price),
                     spot_price=float(live_price),
                     original_qty=original_qty,
-                    iv=float(iv_metrics.current_iv or 0.0),
-                    hist_iv=max(float(iv_metrics.current_iv or 0.0) / 1.1, 0.0001),
-                    iv_rank=float(iv_metrics.iv_rank / 100.0),
+                    iv=iv_val_for_decision,
+                    hist_iv=max(iv_val_for_decision / 1.1, 0.0001),
+                    iv_rank=iv_rank_for_decision,
                     max_pain_price=max_pain_price if max_pain_price > 0.0 else None,
                     prev_max_pain=max_pain_price if max_pain_price > 0.0 else 0.0,
-                    skew_percentile=float(
-                        skew_metrics.get("skew_percentile", 50.0) / 100.0
-                    ),
+                    skew_percentile=skew_per_for_decision,
                     put_call_ratio=1.0,
                     prev_close=float(
                         cache_price if cache_price > 0.0 else current_price
@@ -1319,19 +1338,38 @@ class OrderUICog(commands.Cog):
             gain_loss_pct = (
                 (live_price - avg_cost) / avg_cost * 100.0 if avg_cost > 0.0 else 0.0
             )
-            put_wall = max_pain_price if max_pain_price > 0.0 else live_price
+            put_wall = max_pain_price if max_pain_price > 0.0 else None
             wall_dist_pct = (
                 (live_price - put_wall) / live_price * 100.0
-                if live_price > 0.0
-                else 0.0
+                if put_wall is not None and live_price > 0.0
+                else None
             )
 
-            skew_val = float(skew_metrics.get("skew", 0.0) or 0.0)
-            skew_pct = float(skew_metrics.get("skew_percentile", 0.0) or 0.0)
-            skew_status = str(skew_metrics.get("state", "平穩"))
-            iv_val = float(iv_metrics.current_iv * 100.0)
-            iv_rank = float(iv_metrics.iv_rank)
-            iv_status = str(iv_metrics.iv_status)
+            skew_val = (
+                float(skew_val)
+                if skew_metrics and (skew_val := skew_metrics.get("skew")) is not None
+                else None
+            )
+            skew_pct = (
+                float(skew_per)
+                if skew_metrics
+                and (skew_per := skew_metrics.get("skew_percentile")) is not None
+                else None
+            )
+            skew_status = (
+                str(skew_metrics.get("state", "N/A")) if skew_metrics else "N/A"
+            )
+            iv_val = (
+                float(iv_metrics.current_iv * 100.0)
+                if iv_metrics and iv_metrics.current_iv is not None
+                else None
+            )
+            iv_rank = (
+                float(iv_metrics.iv_rank)
+                if iv_metrics and iv_metrics.iv_rank is not None
+                else None
+            )
+            iv_status = str(iv_metrics.iv_status) if iv_metrics else "UNAVAILABLE"
 
             proximity = (
                 abs(live_price - current_price) / live_price * 100.0
@@ -1350,7 +1388,13 @@ class OrderUICog(commands.Cog):
                 holding_type_label = "LEVERAGED"
 
             holding_status = "空倉待命" if holding_shares <= 0 else "持倉中"
-            wall_status = "上方緩衝" if wall_dist_pct >= 0 else "跌破支撐"
+            wall_status = (
+                "上方緩衝"
+                if wall_dist_pct is not None and wall_dist_pct >= 0
+                else "跌破支撐"
+                if wall_dist_pct is not None
+                else "待確認"
+            )
             system_status_flag = (
                 decision.system_status_flag
                 if decision.system_status_flag
@@ -1521,7 +1565,11 @@ class OrderUICog(commands.Cog):
                 iv_metrics = await SentimentEngine.fetch_and_calculate_iv_metrics(
                     symbol
                 )
-                if iv_metrics and iv_metrics.current_iv > 0:
+                if (
+                    iv_metrics
+                    and iv_metrics.current_iv is not None
+                    and iv_metrics.current_iv > 0
+                ):
                     iv = iv_metrics.current_iv
                     hist_iv = iv / 1.1
             except Exception as e:

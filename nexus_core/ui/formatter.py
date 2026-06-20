@@ -110,7 +110,9 @@ def generate_ansi_watchlist_report(
     )
     rs_color = C_GREEN if metrics.relative_strength_spy >= 0 else C_RED
     skew_color = (
-        C_RED
+        C_RESET
+        if metrics.option_skew is None
+        else C_RED
         if metrics.option_skew >= 5
         else C_GREEN
         if metrics.option_skew <= -2

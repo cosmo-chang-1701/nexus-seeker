@@ -345,6 +345,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     title_suffix = ""
     is_premarket = False
     iv_source = None
+    current_iv_val = None
     if iv_data:
         if hasattr(iv_data, "is_premarket"):
             is_premarket = iv_data.is_premarket
@@ -354,23 +355,35 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         current_iv_val = (
             iv_data.current_iv
             if hasattr(iv_data, "current_iv")
-            else iv_data.get("current_iv", 0.0)
+            else iv_data.get("current_iv")
         )
         iv_source = (
             iv_data.iv_source
             if hasattr(iv_data, "iv_source")
             else (iv_data.get("iv_source") if isinstance(iv_data, dict) else None)
         )
-        if iv_source is None and is_premarket and current_iv_val > 0.0:
+        if (
+            iv_source is None
+            and is_premarket
+            and current_iv_val is not None
+            and current_iv_val > 0.0
+        ):
             iv_source = "STORED_IV"
 
         if is_premarket:
-            if current_iv_val > 0.0:
+            if current_iv_val is not None and current_iv_val > 0.0:
                 title_suffix = (
                     " [盤前/HV代理]" if iv_source == "HV_PROXY" else " [盤前/前日收盤]"
                 )
             else:
-                title_suffix = " [盤前數據未更新]"
+                title_suffix = " [盤前數據未更新/降級模式]"
+
+    skew_percentile = data.get("skew_percentile")
+    is_degraded = (
+        iv_source == "UNAVAILABLE" or current_iv_val is None or skew_percentile is None
+    )
+    if is_degraded and not title_suffix:
+        title_suffix = " [數據未更新/降級模式]"
 
     embed = discord.Embed(
         title=f"🌌 標的分析中心: {symbol}{title_suffix}",
@@ -427,41 +440,42 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     )
 
     # 2. 📐 情緒與邊緣偵測 (Edge Detection)
-    skew_val = data.get("skew", 0.0)
-    skew_percentile = data.get("skew_percentile", 50.0)
+    skew_val_raw = data.get("skew")
+    skew_val = float(skew_val_raw) if skew_val_raw is not None else None
+    skew_percentile = data.get("skew_percentile")
     poly_odds = data.get("polymarket_odds", "N/A")
     reddit_score = data.get("reddit_sentiment_score", "中性")
 
     _raw_pcr = data.get("pcr")
     pcr_data_for_div: dict = _raw_pcr if isinstance(_raw_pcr, dict) else {}
-    pcr_val_for_div = float(
-        pcr_data_for_div.get("volume_pcr", pcr_data_for_div.get("pcr", 0.0))
-    )
+    pcr_val_raw = pcr_data_for_div.get("volume_pcr", pcr_data_for_div.get("pcr"))
+    pcr_val_for_div = float(pcr_val_raw) if pcr_val_raw is not None else None
 
-    iv_data = data.get("iv_data")
-    iv_rank_val = 0.0
+    iv_rank_val = None
     if iv_data:
         if hasattr(iv_data, "iv_rank"):
             iv_rank_val = iv_data.iv_rank
         elif isinstance(iv_data, dict):
-            iv_rank_val = iv_data.get("iv_rank", 0.0)
+            iv_rank_val = iv_data.get("iv_rank")
+    iv_rank_val = float(iv_rank_val) if iv_rank_val is not None else None
 
     is_structural_divergence = False
     divergence_level = ""
 
     # 防止盤前(0.0) 觸發背離誤報
-    if skew_percentile > 85.0 and 0.0 < pcr_val_for_div < 0.4:
-        is_structural_divergence = True
-        divergence_level = "High Divergence"
-    elif skew_percentile < 15.0 and pcr_val_for_div > 1.5:
-        is_structural_divergence = True
-        divergence_level = "High Divergence"
-    elif dp_val > 0.0 and skew_percentile > 90.0:
-        is_structural_divergence = True
-        divergence_level = "Warning"
-    elif dp_val < -3.0 and iv_rank_val < 15.0:
-        is_structural_divergence = True
-        divergence_level = "IV Suppression"
+    if skew_percentile is not None and pcr_val_for_div is not None:
+        if skew_percentile > 85.0 and 0.0 < pcr_val_for_div < 0.4:
+            is_structural_divergence = True
+            divergence_level = "High Divergence"
+        elif skew_percentile < 15.0 and pcr_val_for_div > 1.5:
+            is_structural_divergence = True
+            divergence_level = "High Divergence"
+        elif dp_val > 0.0 and skew_percentile > 90.0:
+            is_structural_divergence = True
+            divergence_level = "Warning"
+        elif dp_val < -3.0 and iv_rank_val is not None and iv_rank_val < 15.0:
+            is_structural_divergence = True
+            divergence_level = "IV Suppression"
 
     divergence = "同步"
     action = "保持觀察"
@@ -476,22 +490,34 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 action = "High Divergence：避免追價買權；僅允許小倉位收租並搭配保護"
             else:
                 action = "留意結構性背離：建議降槓桿、以保護性結構防禦"
-    elif skew_percentile > 80 and (
-        "樂觀" in str(reddit_score)
-        or "🚀" in str(reddit_score)
-        or "Bullish" in str(reddit_score)
+    elif (
+        skew_percentile is not None
+        and skew_percentile > 80
+        and (
+            "樂觀" in str(reddit_score)
+            or "🚀" in str(reddit_score)
+            or "Bullish" in str(reddit_score)
+        )
     ):
         divergence = "情緒背離 (散戶樂觀 vs 專業避險)"
         action = "建立保護性賣權或減碼"
-    elif skew_percentile < 20 and (
-        "悲觀" in str(reddit_score)
-        or "💀" in str(reddit_score)
-        or "Bearish" in str(reddit_score)
+    elif (
+        skew_percentile is not None
+        and skew_percentile < 20
+        and (
+            "悲觀" in str(reddit_score)
+            or "💀" in str(reddit_score)
+            or "Bearish" in str(reddit_score)
+        )
     ):
         divergence = "情緒背離 (散戶恐慌 vs 權利金便宜)"
         action = "考慮賣出賣權 (Cash Secured Put)"
 
-    skew_color = "\u001b[1;35m" if skew_percentile > 80 else "\u001b[1;36m"
+    skew_color = (
+        "\u001b[1;35m"
+        if skew_percentile is not None and skew_percentile > 80
+        else "\u001b[1;36m"
+    )
     sentiment_color = (
         "\u001b[1;32m"
         if "🚀" in str(reddit_score)
@@ -507,12 +533,15 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     )
     divergence_color = "\u001b[1;31m" if divergence != "同步" else "\u001b[1;32m"
 
+    skew_val_str = f"{skew_val:.2f}%" if skew_val is not None else "--%"
+    skew_per_str = f"{skew_percentile:.1f}%" if skew_percentile is not None else "--%"
+
     edge_lines = [
         "```ansi",
         " Option Skew (期權偏斜)",
-        f" └─ Skew 值: {skew_color}{skew_val:.2f}%\u001b[0m (分位點: {skew_color}{skew_percentile:.1f}%\u001b[0m)",
+        f" └─ Skew 值: {skew_color}{skew_val_str}\u001b[0m (分位點: {skew_color}{skew_per_str}\u001b[0m)",
     ]
-    if skew_percentile > 90:
+    if skew_percentile is not None and skew_percentile > 90:
         edge_lines.append(
             "    \u001b[1;33m⚠️ 市場下行保護需求極高，隱含避險情緒升溫。\u001b[0m"
         )
@@ -543,10 +572,10 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             expected_move_weekly = iv_data.expected_move_weekly
             iv_status = iv_data.iv_status
         else:
-            current_iv = iv_data.get("current_iv", 0.0)
-            iv_rank = iv_data.get("iv_rank", 0.0)
-            iv_percentile = iv_data.get("iv_percentile", 0.0)
-            expected_move_weekly = iv_data.get("expected_move_weekly", 0.0)
+            current_iv = iv_data.get("current_iv")
+            iv_rank = iv_data.get("iv_rank")
+            iv_percentile = iv_data.get("iv_percentile")
+            expected_move_weekly = iv_data.get("expected_move_weekly")
             iv_status = iv_data.get("iv_status", "Normal")
 
         iv_status_map = {
@@ -555,7 +584,9 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             "High": "高 / 昂貴",
             "Extreme": "極高 / 泡沫",
         }
-        status_tw = iv_status_map.get(iv_status, "正常 / 公允")
+        status_tw = (
+            iv_status_map.get(iv_status, "正常 / 公允") if iv_status else "正常 / 公允"
+        )
         event_loading = False
         if hasattr(iv_data, "has_event_loading_applied"):
             event_loading = iv_data.has_event_loading_applied
@@ -583,11 +614,15 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
         iv_status_str = f"狀態: {status_tw}"
 
-        if is_premarket and current_iv == 0.0:
+        if (
+            iv_source == "UNAVAILABLE"
+            or current_iv is None
+            or (is_premarket and current_iv == 0.0)
+        ):
             iv_lines = [
                 "```ansi",
                 " Implied Volatility (IV)",
-                " └─ 值: \u001b[1;30m--%\u001b[0m (等待開盤 / 盤前未開市)",
+                " └─ 值: \u001b[1;30m--%\u001b[0m (數據未更新 / 降級模式)",
                 " IV Rank / IV Percentile",
                 " └─ IV Rank: \u001b[1;30m--%\u001b[0m | IV Percentile: \u001b[1;30m--%\u001b[0m (狀態: 待開盤)",
                 " Expected Move (預期區間)",
@@ -624,25 +659,37 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                     else "基於快取 IV 計算"
                 )
 
+            iv_val_str = f"{current_iv * 100:.1f}%" if current_iv is not None else "--%"
+            iv_rank_str = f"{iv_rank:.1f}%" if iv_rank is not None else "--%"
+            iv_per_str = f"{iv_percentile:.1f}%" if iv_percentile is not None else "--%"
+
             iv_lines = [
                 "```ansi",
                 vol_title,
-                f" └─ 值: {current_iv * 100:.1f}% ({vol_note})",
+                f" └─ 值: {iv_val_str} ({vol_note})",
                 " IV Rank / IV Percentile",
-                f" └─ IV Rank: {iv_rank:.1f}% | IV Percentile: {iv_percentile:.1f}% ({iv_status_str})",
+                f" └─ IV Rank: {iv_rank_str} | IV Percentile: {iv_per_str} ({iv_status_str})",
                 " Expected Move (預期區間)",
             ]
             if event_loading:
+                expected_move_weekly_str = (
+                    f"±${expected_move_weekly:.2f}"
+                    if expected_move_weekly is not None
+                    else "--"
+                )
                 iv_lines.extend(
                     [
-                        f" ├─ 本週預期: ±${expected_move_weekly:.2f} ({em_note})",
+                        f" ├─ 本週預期: {expected_move_weekly_str} ({em_note})",
                         " └─ 備註: 實盤請預留 1.4x 波動邊界以防範 IV Crush。",
                     ]
                 )
             else:
-                iv_lines.append(
-                    f" └─ 本週預期: ±${expected_move_weekly:.2f} ({em_note})"
+                expected_move_weekly_str = (
+                    f"±${expected_move_weekly:.2f}"
+                    if expected_move_weekly is not None
+                    else "--"
                 )
+                iv_lines.append(f" └─ 本週預期: {expected_move_weekly_str} ({em_note})")
             iv_lines.append("```")
         embed.add_field(
             name="📊 隱含波動率與預期區間 (IV Context)",
@@ -677,16 +724,27 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     ddp_status = "符合 (符合 DDP 盈餘/估值雙擊)" if data.get("is_ddp") else "不符合"
     ddp_color = "\u001b[1;32m" if data.get("is_ddp") else "\u001b[1;30m"
 
-    ivr = data.get("iv_rank", 0.0)
-    ivr_color = "\u001b[1;35m" if ivr > 50 else "\u001b[1;36m"
+    ivr_val = data.get("iv_rank")
+    if ivr_val is None:
+        ivr_str = "--"
+        ivr_color = "\u001b[1;30m"
+        ivr_comp = 0.0
+    else:
+        ivr_num = float(ivr_val)
+        ivr_str = f"{ivr_num:.1f}%"
+        ivr_color = "\u001b[1;35m" if ivr_num > 50.0 else "\u001b[1;36m"
+        ivr_comp = ivr_num
 
     _raw_pcr = data.get("pcr")
     pcr_dict: dict = _raw_pcr if isinstance(_raw_pcr, dict) else {}
-    vol_pcr = pcr_dict.get("volume_pcr", 0.0)
-    oi_pcr = pcr_dict.get("oi_pcr", pcr_dict.get("pcr", 0.0))
+    vol_pcr_raw = pcr_dict.get("volume_pcr") if pcr_dict else None
+    vol_pcr = float(vol_pcr_raw) if vol_pcr_raw is not None else 0.0
+
+    oi_pcr_raw = pcr_dict.get("oi_pcr", pcr_dict.get("pcr")) if pcr_dict else None
+    oi_pcr = float(oi_pcr_raw) if oi_pcr_raw is not None else 0.0
 
     if pcr_dict:
-        if is_premarket or vol_pcr == 0.0:
+        if is_premarket or vol_pcr_raw is None or vol_pcr == 0.0:
             volume_state = "⚖️ 封盤中 (盤前未更新)"
             vol_pcr_str = "--"
             vol_pcr_color = "\u001b[1;30m"
@@ -706,7 +764,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 else ("\u001b[1;31m" if vol_pcr > 1.10 else "\u001b[1;36m")
             )
 
-        if oi_pcr == 0.0:
+        if oi_pcr_raw is None or oi_pcr == 0.0:
             oi_state = "N/A (結構缺失)"
             oi_pcr_str = "--"
             oi_pcr_color = "\u001b[1;30m"
@@ -757,7 +815,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         scenario_overlays.append(
             "⚠️ 結構性情緒背離：Skew 避險分位極端，且 PCR 落在相反極端，請以防守為主。"
         )
-    if ivr >= 90.0:
+    if ivr_comp >= 90.0:
         scenario_overlays.append(
             "⚠️ IV Rank 極高：避免追價單腿多方；優先定義風險的價差/保護性結構，並縮小口數。"
         )
@@ -771,7 +829,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         f" └─ Max Pain價位: \u001b[1;33m{mp_str}\u001b[0m (當前價差: {dist_color}{dist_str}\u001b[0m)",
         " DDP 與期權風控 (DDP & Risk Metrics)",
         f" ├─ DDP 估值雙擊: {ddp_color}{ddp_status}\u001b[0m",
-        f" ├─ IV Rank: {ivr_color}{ivr:.1f}%\u001b[0m",
+        f" ├─ IV Rank: {ivr_color}{ivr_str}\u001b[0m",
         f" ├─ Volume PCR (即時情緒): {vol_pcr_color}{vol_pcr_str}\u001b[0m ({vol_pcr_color}{volume_state}\u001b[0m)",
         f" └─ OI PCR (結構防禦): {oi_pcr_color}{oi_pcr_str}\u001b[0m ({oi_pcr_color}{oi_state}\u001b[0m)",
         " 結算價操作指引 (Scenario Analysis)",

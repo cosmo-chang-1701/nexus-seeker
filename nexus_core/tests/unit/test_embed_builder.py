@@ -457,7 +457,9 @@ def test_create_watchlist_signal_embed():
         sell_rationale="分批減碼 25%",
     )
 
-    assert embed.title == "標的分析中心 2.0: NVDA 每半小時戰場心跳"
+    assert (
+        embed.title == "標的分析中心 2.0: NVDA 每半小時戰場心跳 [數據未更新/降級模式]"
+    )
     assert "當前現價 (Current Price)" in embed.description
     assert "物理籌碼牆與邊緣偵測 (Market Footprints)" in embed.description
     assert "隱含波動率與預期空間 (IV Context)" in embed.description
@@ -507,7 +509,9 @@ def test_create_watchlist_signal_embed_covered_call():
         sell_rationale="全數出清現貨避險",
     )
 
-    assert embed.title == "標的分析中心 2.0: INTC 每半小時戰場心跳"
+    assert (
+        embed.title == "標的分析中心 2.0: INTC 每半小時戰場心跳 [數據未更新/降級模式]"
+    )
     assert (
         "既有現貨持倉: 100 股 ｜ 平均成本: $113.50 ｜ 當前損益: -3.97%"
         in embed.description
@@ -1209,3 +1213,64 @@ def test_create_watchlist_signal_embed_event_loading():
     assert "備註: 實盤請預留 1.4x 波動邊界以防範 IV Crush。" in embed.description
     assert "Volume PCR (即時情緒): 0.78" in embed.description
     assert "OI PCR (結構防禦): 1.55" in embed.description
+
+
+def test_create_watchlist_signal_embed_non_degraded():
+    from models.schemas import EnhancedWatchlistMetrics
+    from models.quant import IVMetrics
+
+    metrics = EnhancedWatchlistMetrics(
+        symbol="AAPL",
+        exchange="NASDAQ",
+        current_price=150.0,
+        buy_zone_status="🟢 買點支撐",
+        buy_price_phase1=140.0,
+        buy_price_phase2=135.0,
+        buy_price_phase3=130.0,
+        sell_zone_status="🟢 賣點壓力",
+        sell_price_phase1=160.0,
+        sell_price_phase2=165.0,
+        sell_price_phase3=170.0,
+        pe_ratio=30.0,
+        rsi_14=50.0,
+        atr_14=3.0,
+        beta=1.0,
+        ma20=148.0,
+        ma50=145.0,
+        ma200=140.0,
+        iv_rank=25.0,
+        iv_percentile=30.0,
+        option_skew=2.5,
+        skew_percentile=60.0,
+        option_skew_state="正常",
+        pcr=0.8,
+        volume_poc=145.0,
+        gex_max_put_wall=130.0,
+        vanna_sensitivity=0.05,
+        relative_strength_spy=1.0,
+        iv_source="LIVE_IV",
+        is_premarket=False,
+        volume_pcr=0.8,
+        oi_pcr=0.9,
+    )
+
+    iv_metrics = IVMetrics(
+        symbol="AAPL",
+        current_iv=0.35,
+        iv_rank=25.0,
+        iv_percentile=30.0,
+        expected_move_weekly=5.0,
+        iv_status="Normal",
+        is_premarket=False,
+        iv_source="LIVE_IV",
+        reference_spot_price=150.0,
+    )
+
+    embed = create_watchlist_signal_embed(
+        symbol="AAPL",
+        metrics=metrics,
+        iv_metrics=iv_metrics,
+        alert_level="green",
+    )
+
+    assert embed.title == "標的分析中心 2.0: AAPL 每半小時戰場心跳"
