@@ -77,6 +77,8 @@ def find_matching_polymarket_odds(symbol: str, poly_markets: list) -> str:
 
         if matches_ticker:
             tokens = m.get("tokens", [])
+            if not tokens:
+                tokens = m.get("odds_distribution", [])
             if tokens:
                 yes_token = None
                 for t in tokens:
@@ -85,7 +87,9 @@ def find_matching_polymarket_odds(symbol: str, poly_markets: list) -> str:
                         break
                 target_token = yes_token if yes_token else tokens[0]
                 outcome = target_token.get("outcome", "Yes")
-                price_val = target_token.get("price", 0)
+                price_val = target_token.get("price")
+                if price_val is None:
+                    price_val = target_token.get("odds", 0)
                 try:
                     price_float = float(price_val)
                     odds_pct = price_float * 100.0
