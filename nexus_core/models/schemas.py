@@ -42,25 +42,25 @@ class EnhancedWatchlistMetrics(BaseModel):
     ma200: float = Field(default=1.0, gt=0.0)
     bias_ma20: float = 0.0
 
-    iv_rank: float = Field(ge=0.0, le=100.0)
-    iv_percentile: float = Field(ge=0.0, le=100.0)
+    iv_rank: float | None = Field(default=None, ge=0.0, le=100.0)
+    iv_percentile: float | None = Field(default=None, ge=0.0, le=100.0)
 
     # Option Skew = IV(OTM Put) - IV(OTM Call) in percentage points
-    option_skew: float
-    skew_percentile: float = Field(ge=0.0, le=100.0)
+    option_skew: float | None = None
+    skew_percentile: float | None = Field(default=None, ge=0.0, le=100.0)
     option_skew_state: str = Field(min_length=1)
 
     # Put/Call Ratio (volume-based), used for skew consistency checks
-    pcr: float = Field(ge=0.0)
+    pcr: float | None = Field(default=None, ge=0.0)
 
     volume_poc: float = Field(gt=0.0)
-    gex_max_put_wall: float = Field(gt=0.0)
-    vanna_sensitivity: float
+    gex_max_put_wall: float | None = Field(default=None)
+    vanna_sensitivity: float | None = None
     relative_strength_spy: float
     iv_source: str = "LIVE_IV"
     is_premarket: bool = False
-    volume_pcr: float = 0.0
-    oi_pcr: float = 0.0
+    volume_pcr: float | None = None
+    oi_pcr: float | None = None
     has_event_loading_applied: bool = False
 
     @field_validator("symbol")
@@ -89,7 +89,12 @@ class EnhancedWatchlistMetrics(BaseModel):
 
     @property
     def distance_to_absolute_support(self) -> float:
-        support = min(self.buy_price_phase3, self.gex_max_put_wall)
+        support = (
+            self.gex_max_put_wall
+            if self.gex_max_put_wall is not None
+            else self.buy_price_phase3
+        )
+        support = min(self.buy_price_phase3, support)
         return (self.current_price - support) / self.current_price
 
 

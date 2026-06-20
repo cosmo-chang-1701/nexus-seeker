@@ -213,15 +213,49 @@ class SentimentEngine:
         邏輯：取最近一個月 (Monthly) 的 OTM Put IV 與 OTM Call IV 之差。
         Skew = IV (25-Delta Put) - IV (25-Delta Call)
         """
+
+        def _get_skew_fallback(reason: str) -> Dict[str, Any]:
+            last_skew = SentimentEngine.get_last_stored_sentiment(symbol, "SKEW")
+            if last_skew is not None:
+                skew_percentile = SentimentEngine.get_indicator_percentile(
+                    symbol, "SKEW", last_skew
+                )
+                state = (
+                    "左偏 (Put 昂貴) [歷史快取]"
+                    if last_skew > 0
+                    else "右偏 (Call 昂貴) [歷史快取]"
+                    if last_skew < 0
+                    else "平穩 [歷史快取]"
+                )
+                logger.warning(
+                    f"[{symbol}] Skew 計算降級 (原因: {reason})，使用歷史快取值: {last_skew:.2f}% (分位點 {skew_percentile:.1f}%)"
+                )
+                return {
+                    "symbol": symbol,
+                    "skew": round(last_skew, 2),
+                    "skew_percentile": float(round(skew_percentile, 2)),
+                    "state": state,
+                    "expiry": "CACHE",
+                    "is_fallback": True,
+                }
+            logger.error(
+                f"[{symbol}] Skew 計算失敗且無歷史快取 (原因: {reason})，回傳降級空數據"
+            )
+            return {
+                "symbol": symbol,
+                "skew": None,
+                "skew_percentile": None,
+                "state": "數據不足"
+                if "Insufficient" in reason or "數據不足" in reason
+                else "N/A",
+                "is_fallback": False,
+                "error": reason,
+            }
+
         try:
             expiries = await market_data_service.get_all_option_expiries(symbol)
             if not expiries:
-                return {
-                    "symbol": symbol,
-                    "skew": 0,
-                    "state": "N/A",
-                    "error": "No expiries",
-                }
+                return _get_skew_fallback("No option expiries returned")
 
             # 尋找最近的月期權 (假設距離今天 20-45 天)
             today = datetime.now()
@@ -238,12 +272,14 @@ class SentimentEngine:
 
             chain = await market_data_service.get_option_chain(symbol, target_expiry)
             if not chain:
-                return {"symbol": symbol, "skew": 0, "state": "N/A"}
+                return _get_skew_fallback(
+                    f"No option chain returned for expiry {target_expiry}"
+                )
 
             quote = await market_data_service.get_quote(symbol)
-            spot_price = quote.get("c", 0)
+            spot_price = quote.get("c", 0) if quote else 0
             if spot_price == 0:
-                return {"symbol": symbol, "skew": 0, "state": "N/A"}
+                return _get_skew_fallback("Spot price is 0")
 
             calls = chain.calls
             puts = chain.puts
@@ -265,7 +301,9 @@ class SentimentEngine:
             )
 
             if otm_call is None or otm_put is None:
-                return {"symbol": symbol, "skew": 0, "state": "數據不足"}
+                return _get_skew_fallback(
+                    "Insufficient OTM Call/Put options to compute Skew"
+                )
 
             iv_call = float(otm_call["impliedVolatility"])
             iv_put = float(otm_put["impliedVolatility"])
@@ -307,26 +345,53 @@ class SentimentEngine:
             }
 
         except Exception as e:
-            logger.error(f"[{symbol}] Skew 計算失敗: {e}")
-            return {"symbol": symbol, "skew": 0, "state": "ERROR"}
+            return _get_skew_fallback(f"Exception during skew calculation: {str(e)}")
 
     @staticmethod
     async def calculate_pcr(symbol: str) -> Dict[str, Any]:
         """
         計算買賣權比率 (Put/Call Ratio)，拆分為成交量 (Volume) 與未平倉量 (Open Interest) 比率。
         """
+
+        def _get_pcr_fallback(reason: str) -> Dict[str, Any]:
+            last_pcr = SentimentEngine.get_last_stored_sentiment(symbol, "PCR")
+            if last_pcr is not None:
+                volume_state = "平衡 [歷史快取]"
+                if last_pcr < 0.90:
+                    volume_state = "中性偏多/看漲主導 [歷史快取]"
+                elif last_pcr > 1.10:
+                    volume_state = "🐻 偏向空頭/看空主導 [歷史快取]"
+                logger.warning(
+                    f"[{symbol}] PCR 計算降級 (原因: {reason})，使用歷史快取值: {last_pcr:.2f}"
+                )
+                return {
+                    "symbol": symbol,
+                    "pcr": round(last_pcr, 2),
+                    "volume_pcr": round(last_pcr, 2),
+                    "oi_pcr": None,
+                    "state": volume_state,
+                    "volume_pcr_state": volume_state,
+                    "oi_pcr_state": "N/A",
+                }
+            logger.error(
+                f"[{symbol}] PCR 計算失敗且無歷史快取 (原因: {reason})，回傳降級空數據"
+            )
+            state_val = "ERROR" if "Exception" in reason or "Error" in reason else "N/A"
+            return {
+                "symbol": symbol,
+                "pcr": None,
+                "volume_pcr": None,
+                "oi_pcr": None,
+                "state": state_val,
+                "volume_pcr_state": state_val,
+                "oi_pcr_state": state_val,
+                "error": reason,
+            }
+
         try:
             expiries = await market_data_service.get_all_option_expiries(symbol)
             if not expiries:
-                return {
-                    "symbol": symbol,
-                    "pcr": 0.0,
-                    "volume_pcr": 0.0,
-                    "oi_pcr": 0.0,
-                    "state": "N/A",
-                    "volume_pcr_state": "N/A",
-                    "oi_pcr_state": "N/A",
-                }
+                return _get_pcr_fallback("No option expiries returned")
 
             # 彙整前三個到期日的數據
             total_put_vol = 0.0
@@ -344,6 +409,14 @@ class SentimentEngine:
                 if chain.calls is not None and not chain.calls.empty:
                     total_call_vol += float(chain.calls["volume"].sum())
                     total_call_oi += float(chain.calls["openInterest"].sum())
+
+            if (
+                total_put_vol == 0.0
+                and total_call_vol == 0.0
+                and total_put_oi == 0.0
+                and total_call_oi == 0.0
+            ):
+                return _get_pcr_fallback("No option chain data retrieved")
 
             volume_pcr = total_put_vol / total_call_vol if total_call_vol > 0 else 0.0
             oi_pcr = total_put_oi / total_call_oi if total_call_oi > 0 else 0.0
@@ -376,16 +449,7 @@ class SentimentEngine:
                 "oi_pcr_state": oi_state,
             }
         except Exception as e:
-            logger.error(f"[{symbol}] PCR 計算失敗: {e}")
-            return {
-                "symbol": symbol,
-                "pcr": 0.0,
-                "volume_pcr": 0.0,
-                "oi_pcr": 0.0,
-                "state": "ERROR",
-                "volume_pcr_state": "ERROR",
-                "oi_pcr_state": "ERROR",
-            }
+            return _get_pcr_fallback(f"Exception during PCR calculation: {str(e)}")
 
     @staticmethod
     async def calculate_max_pain(
@@ -1085,6 +1149,30 @@ class SentimentEngine:
         return None
 
     @staticmethod
+    def get_last_stored_sentiment(symbol: str, indicator: str) -> Optional[float]:
+        """從 sentiment_history 中取得最後一次記錄的情緒指標值。"""
+        try:
+            from database.connection import get_read_connection
+
+            conn = get_read_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT value FROM sentiment_history
+                WHERE symbol = ? AND indicator = ?
+                ORDER BY timestamp DESC LIMIT 1
+                """,
+                (symbol, indicator),
+            )
+            row = cursor.fetchone()
+            conn.close()
+            if row:
+                return float(row[0])
+        except Exception as e:
+            logger.error(f"取得資料庫最後情緒歷史失敗 ({indicator}): {e}")
+        return None
+
+    @staticmethod
     async def save_historical_iv(symbol: str, iv: float, date_str: str):
         """將每日 IV 存入 database。"""
         try:
@@ -1524,10 +1612,10 @@ class SentimentEngine:
             logger.warning(f"[{symbol}] IV 指標計算退級: {ve}")
             return IVMetrics(
                 symbol=symbol,
-                current_iv=0.0,
-                iv_rank=0.0,
-                iv_percentile=0.0,
-                expected_move_weekly=0.0,
+                current_iv=None,
+                iv_rank=None,
+                iv_percentile=None,
+                expected_move_weekly=None,
                 iv_status="Normal",
                 is_premarket=True,
                 iv_source="UNAVAILABLE",
@@ -1537,10 +1625,10 @@ class SentimentEngine:
             logger.error(f"[{symbol}] IV 指標計算失敗: {e}")
             return IVMetrics(
                 symbol=symbol,
-                current_iv=0.0,
-                iv_rank=0.0,
-                iv_percentile=0.0,
-                expected_move_weekly=0.0,
+                current_iv=None,
+                iv_rank=None,
+                iv_percentile=None,
+                expected_move_weekly=None,
                 iv_status="Normal",
                 is_premarket=True,
                 iv_source="UNAVAILABLE",

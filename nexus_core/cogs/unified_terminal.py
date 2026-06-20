@@ -1288,7 +1288,11 @@ class UnifiedTerminalCog(commands.Cog):
             iv_m = await SentimentEngine.fetch_and_calculate_iv_metrics(sym)
             mp_d = await SentimentEngine.calculate_max_pain(sym)
 
-            em_weekly = iv_m.expected_move_weekly if iv_m else 0.0
+            em_weekly = (
+                iv_m.expected_move_weekly
+                if (iv_m and iv_m.expected_move_weekly is not None)
+                else 0.0
+            )
             max_pain = (
                 mp_d.get("max_pain", 0.0) if (mp_d and isinstance(mp_d, dict)) else 0.0
             )
@@ -1394,15 +1398,19 @@ class UnifiedTerminalCog(commands.Cog):
             # IV Rank 仍可以從 fetch_and_calculate_iv_metrics 快速取（因為它有快取）
             iv_m = await SentimentEngine.fetch_and_calculate_iv_metrics(sym)
             if iv_m:
-                iv_rank_val = iv_m.iv_rank
+                iv_rank_val = iv_m.iv_rank if iv_m.iv_rank is not None else 0.0
         else:
             # Cache-Aside: 快取不存在或已過期，進行即時計算並存回 SQLite
             iv_m = await SentimentEngine.fetch_and_calculate_iv_metrics(sym)
             mp_d = await SentimentEngine.calculate_max_pain(sym)
 
             if iv_m:
-                iv_rank_val = iv_m.iv_rank
-                em_weekly = iv_m.expected_move_weekly
+                iv_rank_val = iv_m.iv_rank if iv_m.iv_rank is not None else 0.0
+                em_weekly = (
+                    iv_m.expected_move_weekly
+                    if iv_m.expected_move_weekly is not None
+                    else 0.0
+                )
             if mp_d and isinstance(mp_d, dict):
                 max_pain = mp_d.get("max_pain", 0.0)
 

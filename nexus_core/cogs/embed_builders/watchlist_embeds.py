@@ -105,10 +105,10 @@ def create_watchlist_signal_embed(
         skew_per = metrics.skew_percentile
     else:
         live_price = suitable_buy_price or suitable_sell_price or 100.0
-        gex_putwall = 100.0
+        gex_putwall = None
         vol_poc = 100.0
-        skew_val = 0.0
-        skew_per = 50.0
+        skew_val = None
+        skew_per = None
 
     # Extract Finnhub Quote Data
     if quote is not None:
@@ -130,17 +130,19 @@ def create_watchlist_signal_embed(
     event_loading = False
     iv_source = "UNAVAILABLE"
     if iv_metrics is not None:
-        iv_val = iv_metrics.current_iv * 100.0
+        iv_val = (
+            iv_metrics.current_iv * 100.0 if iv_metrics.current_iv is not None else None
+        )
         iv_rank = iv_metrics.iv_rank
-        iv_status = iv_metrics.iv_status.upper()
+        iv_status = iv_metrics.iv_status.upper() if iv_metrics.iv_status else "NORMAL"
         expected_move = iv_metrics.expected_move_weekly
         event_loading = iv_metrics.has_event_loading_applied
         iv_source = iv_metrics.iv_source
     else:
-        iv_val = 30.0
-        iv_rank = 50.0
+        iv_val = None
+        iv_rank = None
         iv_status = "NORMAL"
-        expected_move = 5.0
+        expected_move = None
 
     if metrics is not None:
         if (
@@ -185,15 +187,15 @@ def create_watchlist_signal_embed(
     else:
         max_pain_str = "N/A (⚠️ 數據源缺失)"
 
-    vol_pcr_val = metrics.volume_pcr if metrics else 1.0
-    oi_pcr_val = metrics.oi_pcr if metrics else 0.0
+    vol_pcr_val = metrics.volume_pcr if metrics else None
+    oi_pcr_val = metrics.oi_pcr if metrics else None
 
     pcr_dict = pcr_data if isinstance(pcr_data, dict) else {}
     if pcr_dict:
         vol_pcr_val = pcr_dict.get("volume_pcr", vol_pcr_val)
         oi_pcr_val = pcr_dict.get("oi_pcr", pcr_dict.get("pcr", oi_pcr_val))
 
-    if is_premarket or vol_pcr_val == 0.0:
+    if is_premarket or vol_pcr_val == 0.0 or vol_pcr_val is None:
         vol_pcr_status = "⚖️ 封盤中 (盤前未更新)"
         vol_pcr_str = "--"
     else:
@@ -207,7 +209,7 @@ def create_watchlist_signal_embed(
         else:
             vol_pcr_status = "⚖️ 結構平衡"
 
-    if oi_pcr_val == 0.0:
+    if oi_pcr_val == 0.0 or oi_pcr_val is None:
         oi_pcr_status = "N/A (結構缺失)"
         oi_pcr_str = "--"
     else:
@@ -222,7 +224,9 @@ def create_watchlist_signal_embed(
             oi_pcr_status = "⚖️ 籌碼結構中性"
 
     gex_dist = (
-        ((live_price - gex_putwall) / gex_putwall * 100.0) if gex_putwall else 0.0
+        ((live_price - gex_putwall) / gex_putwall * 100.0)
+        if gex_putwall and gex_putwall > 0
+        else None
     )
     change_emoji = "📈" if change_raw >= 0.0 else "📉"
 
@@ -258,9 +262,36 @@ def create_watchlist_signal_embed(
         or "價格仍在防守框架內，維持現貨 $1.00×$ 零槓桿死守，將雙手嚴格離開期權開倉鍵。"
     )
 
+    is_degraded = (
+        is_premarket
+        or iv_source == "UNAVAILABLE"
+        or iv_val is None
+        or iv_rank is None
+        or gex_putwall is None
+        or skew_val is None
+        or skew_per is None
+    )
+
+    gex_putwall_str = (
+        f"${gex_putwall:.2f}" if gex_putwall is not None and gex_putwall > 0 else "N/A"
+    )
+    gex_dist_str = f"{gex_dist:+.2f}%" if gex_dist is not None else "--%"
+    vol_poc_str = f"${vol_poc:.2f}" if vol_poc is not None else "N/A"
+    skew_val_str = f"{skew_val:+.2f}%" if skew_val is not None else "--%"
+    skew_per_str = f"{skew_per:.1f}%" if skew_per is not None else "--%"
+    iv_val_str = f"{iv_val:.1f}%" if iv_val is not None else "--%"
+    iv_rank_str = f"{iv_rank:.1f}%" if iv_rank is not None else "--%"
+    expected_move_str = (
+        f"±${expected_move:.2f}"
+        if expected_move is not None and expected_move > 0
+        else "N/A"
+    )
+
+    degraded_tag = " [數據未更新/降級模式]" if is_degraded else ""
+
     lines = [
         "```ansi",
-        f" 標的分析中心 2.0: {symbol} 每半小時戰場心跳 (Watchlist Heartbeat)",
+        f" 標的分析中心 2.0: {symbol} 每半小時戰場心跳 (Watchlist Heartbeat){degraded_tag}",
         f" [{timestamp_str} - UTC+8] ｜ 系統狀態: {sys_status}",
         "",
         " 當前現價 (Current Price)",
@@ -268,23 +299,23 @@ def create_watchlist_signal_embed(
         f" └─ 今日區間: 開盤: {open_val:.2f} | 最高: {high_val:.2f} | 最低: {low_val:.2f} | 前收: {prev_close:.2f}",
         "",
         " 物理籌碼牆與邊緣偵測 (Market Footprints)",
-        f" ├─ GEX PutWall (做市商底牆): ${gex_putwall:.2f} (當前價差: {gex_dist:+.2f}%)",
-        f" ├─ Vol POC (籌碼控制中心): ${vol_poc:.2f}",
-        f" └─ Option Skew (期權偏斜): {skew_val:+.2f}% (分位點: {skew_per:.1f}%)",
+        f" ├─ GEX PutWall (做市商底牆): {gex_putwall_str} (當前價差: {gex_dist_str})",
+        f" ├─ Vol POC (籌碼控制中心): {vol_poc_str}",
+        f" └─ Option Skew (期權偏斜): {skew_val_str} (分位點: {skew_per_str})",
         "",
         " 隱含波動率與預期空間 (IV Context)",
-        f" ├─ Implied Volatility (IV): {iv_val:.1f}% ｜ IV Rank: {iv_rank:.1f}% ({iv_status_str})",
+        f" ├─ Implied Volatility (IV): {iv_val_str} ｜ IV Rank: {iv_rank_str} ({iv_status_str})",
     ]
 
     if event_loading:
         lines.extend(
             [
-                f" ├─ 本週預期波幅 (Expected Move): ±${expected_move:.2f}",
+                f" ├─ 本週預期波幅 (Expected Move): {expected_move_str}",
                 " └─ 備註: 實盤請預留 1.4x 波動邊界以防範 IV Crush。",
             ]
         )
     else:
-        lines.append(f" └─ 本週預期波幅 (Expected Move): ±${expected_move:.2f}")
+        lines.append(f" └─ 本週預期波幅 (Expected Move): {expected_move_str}")
 
     lines.extend(
         [
@@ -317,10 +348,14 @@ def create_watchlist_signal_embed(
         "green": discord.Color.green(),
     }.get(alert_level, discord.Color.blurple())
 
+    embed_title = f"標的分析中心 2.0: {symbol} 每半小時戰場心跳"
+    if is_degraded:
+        embed_title += " [數據未更新/降級模式]"
+
     embed: discord.Embed
     try:
         embed = NexusEmbed(
-            title=f"標的分析中心 2.0: {symbol} 每半小時戰場心跳",
+            title=embed_title,
             description=description,
             color=color_val,
             timestamp=datetime.now(timezone.utc),

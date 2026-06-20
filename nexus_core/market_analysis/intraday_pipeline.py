@@ -110,18 +110,18 @@ async def _estimate_options_wall_metrics(
     symbol: str,
     current_price: float,
     dividend_yield: float,
-) -> tuple[float, float]:
+) -> tuple[float | None, float | None]:
     from market_analysis.greeks import calculate_greeks, calculate_vanna
     from services import market_data_service
 
     expiries = await market_data_service.get_all_option_expiries(symbol)
     if not expiries:
-        return current_price, 0.0
+        return None, None
 
     expiry = expiries[0]
     chain = await market_data_service.get_option_chain(symbol, expiry)
     if chain is None or chain.puts.empty:
-        return current_price, 0.0
+        return None, None
 
     expiry_dt = datetime.strptime(expiry, "%Y-%m-%d")
     t_years = max((expiry_dt - datetime.now()).days / 365.0, 7.0 / 365.0)
@@ -129,7 +129,7 @@ async def _estimate_options_wall_metrics(
     puts = chain.puts.copy()
     puts = puts.dropna(subset=["strike", "openInterest", "impliedVolatility"])
     if puts.empty:
-        return current_price, 0.0
+        return None, None
 
     max_wall_score = -1.0
     max_wall_strike = current_price
@@ -269,20 +269,21 @@ async def build_enhanced_watchlist_metrics(
         volume_poc = cached_poc if cached_poc else current_price
 
     # 2. GEX PutWall via SQLite cache fallback
-    gex_max_put_wall = 0.0
-    vanna_sensitivity = 0.0
+    gex_max_put_wall = None
+    vanna_sensitivity = None
     try:
         gex_max_put_wall, vanna_sensitivity = await _estimate_options_wall_metrics(
             symbol,
             current_price,
             dividend_yield,
         )
-        await asyncio.to_thread(save_cached_gex_putwall, symbol, gex_max_put_wall)
+        if gex_max_put_wall is not None and gex_max_put_wall > 0.0:
+            await asyncio.to_thread(save_cached_gex_putwall, symbol, gex_max_put_wall)
     except Exception as e:
         logger.warning(f"Error calculating GEX PutWall for {symbol}: {e}")
-    if gex_max_put_wall <= 0.0:
+    if gex_max_put_wall is None or gex_max_put_wall <= 0.0:
         cached_wall = get_cached_gex_putwall(symbol)
-        gex_max_put_wall = cached_wall if cached_wall else current_price
+        gex_max_put_wall = cached_wall if cached_wall else None
 
     # Legacy retail indicators are completely removed from pipeline
     rsi_14 = 50.0
@@ -303,13 +304,18 @@ async def build_enhanced_watchlist_metrics(
         else 0.0
     )
 
+    gex_max_put_wall_for_calc = (
+        gex_max_put_wall
+        if gex_max_put_wall is not None and gex_max_put_wall > 0.0
+        else current_price
+    )
     buy_phase1, buy_phase2, buy_phase3 = _derive_buy_levels(
         current_price,
         0.0,
         0.0,
         0.0,
         volume_poc,
-        max(gex_max_put_wall, 0.01),
+        max(gex_max_put_wall_for_calc, 0.01),
         0.0,
     )
     sell_phase1, sell_phase2, sell_phase3 = _derive_sell_levels(
@@ -319,7 +325,7 @@ async def build_enhanced_watchlist_metrics(
         0.0,
         0.0,
         volume_poc=volume_poc,
-        gex_max_put_wall=max(gex_max_put_wall, 0.01),
+        gex_max_put_wall=max(gex_max_put_wall_for_calc, 0.01),
     )
 
     pe_raw = _extract_pe_ratio(financials)
@@ -352,26 +358,33 @@ async def build_enhanced_watchlist_metrics(
         ma20=ma20,
         ma50=ma50,
         ma200=ma200,
-        iv_rank=iv_metrics.iv_rank if iv_metrics else 50.0,
-        iv_percentile=iv_metrics.iv_percentile if iv_metrics else 50.0,
-        option_skew=float(skew_metrics.get("skew", 0.0)) if skew_metrics else 0.0,
-        skew_percentile=float(skew_metrics.get("skew_percentile", 50.0))
+        iv_rank=iv_metrics.iv_rank if iv_metrics else None,
+        iv_percentile=iv_metrics.iv_percentile if iv_metrics else None,
+        option_skew=float(skew_val)
+        if skew_metrics and (skew_val := skew_metrics.get("skew")) is not None
+        else None,
+        skew_percentile=float(skew_per)
         if skew_metrics
-        else 50.0,
+        and (skew_per := skew_metrics.get("skew_percentile")) is not None
+        else None,
         option_skew_state=str(skew_metrics.get("state") or "N/A")
         if skew_metrics
         else "N/A",
-        pcr=float(pcr_metrics.get("pcr", 0.0)) if pcr_metrics else 0.0,
+        pcr=float(pcr_val)
+        if pcr_metrics and (pcr_val := pcr_metrics.get("pcr")) is not None
+        else None,
         volume_poc=volume_poc,
-        gex_max_put_wall=max(gex_max_put_wall, 0.01),
+        gex_max_put_wall=gex_max_put_wall,
         vanna_sensitivity=vanna_sensitivity,
         relative_strength_spy=relative_strength_spy,
         iv_source=iv_metrics.iv_source if iv_metrics else "UNAVAILABLE",
         is_premarket=iv_metrics.is_premarket if iv_metrics else False,
-        volume_pcr=float(pcr_metrics.get("volume_pcr", pcr_metrics.get("pcr", 0.0)))
-        if pcr_metrics
-        else 0.0,
-        oi_pcr=float(pcr_metrics.get("oi_pcr", 0.0)) if pcr_metrics else 0.0,
+        volume_pcr=float(vol_pcr)
+        if pcr_metrics and (vol_pcr := pcr_metrics.get("volume_pcr")) is not None
+        else None,
+        oi_pcr=float(oi_pcr_val)
+        if pcr_metrics and (oi_pcr_val := pcr_metrics.get("oi_pcr")) is not None
+        else None,
         has_event_loading_applied=iv_metrics.has_event_loading_applied
         if iv_metrics
         else False,
@@ -535,8 +548,13 @@ async def evaluate_watchlist_symbol(
         logger.warning(f"評估市場 Regime 時發生錯誤: {e}")
 
     # Structural divergence check (Skew vs PCR extremes)
-    if (metrics.skew_percentile > 85.0 and 0.0 < metrics.pcr < 0.4) or (
-        metrics.skew_percentile < 15.0 and metrics.pcr > 1.5
+    if (
+        metrics.skew_percentile is not None
+        and metrics.pcr is not None
+        and (
+            (metrics.skew_percentile > 85.0 and 0.0 < metrics.pcr < 0.4)
+            or (metrics.skew_percentile < 15.0 and metrics.pcr > 1.5)
+        )
     ):
         tactical = WatchlistTacticalPlan(
             scenario="wait",
@@ -560,7 +578,7 @@ async def evaluate_watchlist_symbol(
         quote = await market_data_service.get_quote(symbol)
         dp_raw = quote.get("dp") if quote else None
         dp_val = float(dp_raw) if dp_raw is not None else 0.0
-        if dp_val < -3.0 and metrics.iv_rank < 15.0:
+        if dp_val < -3.0 and metrics.iv_rank is not None and metrics.iv_rank < 15.0:
             tactical = WatchlistTacticalPlan(
                 scenario="wait",
                 sddm_route="WAIT (IV 壓抑背離)",

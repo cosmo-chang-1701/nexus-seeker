@@ -247,21 +247,70 @@ def _build_telemetry_alignment_ansi_card(item: Dict[str, Any]) -> str:
     """建構 Telemetry 實時對齊快照卡片。"""
     sym = str(item.get("symbol") or "").upper()
     current_price = float(item.get("live_price") or item.get("current_price") or 0.0)
-    avg_cost = float(item.get("avg_cost") or 0.0)
-    gain_loss_pct = float(item.get("gain_loss_pct") or 0.0)
-    put_wall = float(item.get("put_wall") or 0.0)
-    wall_dist_pct = float(item.get("wall_dist_pct") or 0.0)
+
+    avg_cost_val = item.get("avg_cost")
+    avg_cost = float(avg_cost_val) if avg_cost_val is not None else None
+
+    gain_loss_pct_val = item.get("gain_loss_pct")
+    gain_loss_pct = float(gain_loss_pct_val) if gain_loss_pct_val is not None else None
+
+    put_wall_val = item.get("put_wall")
+    put_wall = (
+        float(put_wall_val)
+        if put_wall_val is not None and float(put_wall_val) > 0.0
+        else None
+    )
+
+    wall_dist_pct_val = item.get("wall_dist_pct")
+    wall_dist_pct = float(wall_dist_pct_val) if wall_dist_pct_val is not None else None
+
     order_id = int(item.get("order_id") or 0)
     limit_price = float(item.get("current_price") or 0.0)
     shares = int(round(float(item.get("original_qty") or 0.0)))
     proximity_pct = float(item.get("proximity_pct") or 0.0)
-    skew_val = float(item.get("skew_val") or 0.0)
-    skew_pct = float(item.get("skew_pct") or 0.0)
-    iv_val = float(item.get("iv_val") or 0.0)
-    iv_rank = float(item.get("iv_rank") or 0.0)
+
+    skew_val_val = item.get("skew_val")
+    skew_val = float(skew_val_val) if skew_val_val is not None else None
+
+    skew_pct_val = item.get("skew_pct")
+    skew_pct = float(skew_pct_val) if skew_pct_val is not None else None
+
+    iv_val_val = item.get("iv_val")
+    iv_val = float(iv_val_val) if iv_val_val is not None else None
+
+    iv_rank_val = item.get("iv_rank")
+    iv_rank = float(iv_rank_val) if iv_rank_val is not None else None
+
+    # Format output strings
+    avg_cost_str = f"${avg_cost:.2f}" if avg_cost is not None else "N/A"
+    gain_loss_pct_str = f"{gain_loss_pct:+.2f}%" if gain_loss_pct is not None else "--%"
+    put_wall_str = f"${put_wall:.2f}" if put_wall is not None else "N/A"
+    wall_dist_pct_str = (
+        f"{wall_dist_pct:+.2f}%"
+        if wall_dist_pct is not None and put_wall is not None
+        else "--%"
+    )
+
+    skew_val_str = f"{skew_val:+.2f}%" if skew_val is not None else "--%"
+    skew_pct_str = f"{skew_pct:.2f}%" if skew_pct is not None else "--%"
+
+    iv_val_str = f"{iv_val:.2f}%" if iv_val is not None else "--%"
+    iv_rank_str = f"{iv_rank:.2f}%" if iv_rank is not None else "--%"
+
+    is_degraded = (
+        put_wall is None
+        or skew_val is None
+        or iv_val is None
+        or item.get("iv_status") == "UNAVAILABLE"
+        or item.get("skew_status") == "ERROR"
+        or item.get("skew_status") == "N/A"
+    )
+    degraded_suffix = " [數據未更新/降級模式]" if is_degraded else ""
 
     lines = ["```text"]
-    lines.append(f"🌌 Nexus Seeker • Watchlist Heartbeat [{sym} 實時對齊快照]")
+    lines.append(
+        f"🌌 Nexus Seeker • Watchlist Heartbeat [{sym} 實時對齊快照]{degraded_suffix}"
+    )
     lines.append("─────────────────────────────────────────────────────────────")
     lines.append("🛡️ 【物理防線 (The Shield)】")
     lines.append(
@@ -271,22 +320,22 @@ def _build_telemetry_alignment_ansi_card(item: Dict[str, Any]) -> str:
     )
     lines.append(
         " ├─ 成本對齊: "
-        f"平均成本 ${avg_cost:.2f} ｜ 當前現價: ${current_price:.2f} (損益: {gain_loss_pct:+.2f}%)"
+        f"平均成本 {avg_cost_str} ｜ 當前現價: ${current_price:.2f} (損益: {gain_loss_pct_str})"
     )
     lines.append(
         " └─ 做市商牆: "
-        f"GEX PutWall ${put_wall:.2f} ｜ 距離硬支撐: {wall_dist_pct:+.2f}% "
+        f"GEX PutWall {put_wall_str} ｜ 距離硬支撐: {wall_dist_pct_str} "
         f"({item.get('wall_status', '待確認')})"
     )
     lines.append("")
     lines.append("📐 【籌碼偏斜 (Market Intention)】")
     lines.append(
         " ├─ Option Skew: "
-        f"{skew_val:+.2f}% (分位點 {skew_pct:.2f}%) ── [狀態: {item.get('skew_status', '平穩')}]"
+        f"{skew_val_str} (分位點 {skew_pct_str}) ── [狀態: {item.get('skew_status', '平穩')}]"
     )
     lines.append(
         " └─ 實時平值 IV: "
-        f"{iv_val:.2f}% (IV Rank: {iv_rank:.2f}%) ── [狀態: {item.get('iv_status', 'Normal')}]"
+        f"{iv_val_str} (IV Rank: {iv_rank_str}) ── [狀態: {item.get('iv_status', 'Normal')}]"
     )
     lines.append("")
     lines.append("⚔️ 【捕獸夾雷達 (Order Radar)】")

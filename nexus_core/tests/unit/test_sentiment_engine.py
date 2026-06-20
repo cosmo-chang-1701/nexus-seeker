@@ -150,7 +150,7 @@ async def test_sentiment_edge_cases():
     ) as mock_expiries:
         mock_expiries.return_value = []
         res = await SentimentEngine.calculate_skew("AAPL")
-        assert res["error"] == "No expiries"
+        assert res["error"] == "No option expiries returned"
 
     # Test skew data insufficient (chain=None)
     with patch(
@@ -169,7 +169,7 @@ async def test_sentiment_edge_cases():
     ) as mock_expiries:
         mock_expiries.return_value = []
         res = await SentimentEngine.calculate_pcr("AAPL")
-        assert res["pcr"] == 0
+        assert res["pcr"] is None
 
     # Test PCR with chain=None
     with patch(
@@ -180,7 +180,7 @@ async def test_sentiment_edge_cases():
         mock_expiries.return_value = [MOCK_EXPIRY]
         mock_chain.return_value = None
         res = await SentimentEngine.calculate_pcr("AAPL")
-        assert res["pcr"] == 0
+        assert res["pcr"] is None
 
     # Test detect_uoa exception
     with patch(

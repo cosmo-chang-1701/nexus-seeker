@@ -273,10 +273,10 @@ async def test_fetch_and_calculate_iv_metrics_failure_graceful_degrade():
 
         assert isinstance(metrics, IVMetrics)
         assert metrics.symbol == symbol
-        assert metrics.current_iv == 0.0
-        assert metrics.iv_rank == 0.0
-        assert metrics.iv_percentile == 0.0
-        assert metrics.expected_move_weekly == 0.0
+        assert metrics.current_iv is None
+        assert metrics.iv_rank is None
+        assert metrics.iv_percentile is None
+        assert metrics.expected_move_weekly is None
         assert metrics.iv_status == "Normal"
 
 
@@ -373,10 +373,10 @@ async def test_fetch_and_calculate_iv_metrics_value_error_warning():
         metrics = await SentimentEngine.fetch_and_calculate_iv_metrics(symbol)
         assert isinstance(metrics, IVMetrics)
         assert metrics.symbol == symbol
-        assert metrics.current_iv == 0.0
-        assert metrics.iv_rank == 0.0
-        assert metrics.iv_percentile == 0.0
-        assert metrics.expected_move_weekly == 0.0
+        assert metrics.current_iv is None
+        assert metrics.iv_rank is None
+        assert metrics.iv_percentile is None
+        assert metrics.expected_move_weekly is None
         assert metrics.iv_status == "Normal"
         assert metrics.is_premarket is True
 
@@ -459,5 +459,5 @@ async def test_fetch_and_calculate_iv_metrics_premarket_degraded():
         assert isinstance(metrics, IVMetrics)
         assert metrics.symbol == symbol
         assert metrics.is_premarket is True
-        assert metrics.current_iv == 0.0
-        assert metrics.iv_rank == 0.0
+        assert metrics.current_iv is None
+        assert metrics.iv_rank is None
