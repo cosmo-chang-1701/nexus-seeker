@@ -2,7 +2,9 @@ import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 import pandas as pd
 import sqlite3
-from market_analysis.sentiment_engine import SentimentEngine
+from market_analysis.sentiment_engine import SentimentEngine, _current_week_friday
+
+MOCK_EXPIRY = _current_week_friday().strftime("%Y-%m-%d")
 
 
 @pytest.mark.asyncio
@@ -14,7 +16,7 @@ async def test_calculate_skew_full():
     ) as mock_chain, patch(
         "services.market_data_service.get_quote", new_callable=AsyncMock
     ) as mock_quote:
-        mock_expiries.return_value = ["2026-06-19"]
+        mock_expiries.return_value = [MOCK_EXPIRY]
         mock_quote.return_value = {"c": 100.0}
 
         calls_df = pd.DataFrame(
@@ -57,7 +59,7 @@ async def test_calculate_pcr():
     ) as mock_expiries, patch(
         "services.market_data_service.get_option_chain", new_callable=AsyncMock
     ) as mock_chain:
-        mock_expiries.return_value = ["2026-06-19"]
+        mock_expiries.return_value = [MOCK_EXPIRY]
 
         calls_df = pd.DataFrame(
             {"strike": [100], "openInterest": [100], "volume": [50]}
@@ -84,7 +86,7 @@ async def test_detect_uoa():
     ) as mock_chain, patch(
         "services.market_data_service.get_quote", new_callable=AsyncMock
     ) as mock_quote:
-        mock_expiries.return_value = ["2026-06-19"]
+        mock_expiries.return_value = [MOCK_EXPIRY]
         mock_quote.return_value = {"c": 100.0}
 
         calls_df = pd.DataFrame(
@@ -156,7 +158,7 @@ async def test_sentiment_edge_cases():
     ) as mock_expiries, patch(
         "services.market_data_service.get_option_chain", new_callable=AsyncMock
     ) as mock_chain:
-        mock_expiries.return_value = ["2026-06-19"]
+        mock_expiries.return_value = [MOCK_EXPIRY]
         mock_chain.return_value = None
         res = await SentimentEngine.calculate_skew("AAPL")
         assert res["state"] == "N/A"
@@ -175,7 +177,7 @@ async def test_sentiment_edge_cases():
     ) as mock_expiries, patch(
         "services.market_data_service.get_option_chain", new_callable=AsyncMock
     ) as mock_chain:
-        mock_expiries.return_value = ["2026-06-19"]
+        mock_expiries.return_value = [MOCK_EXPIRY]
         mock_chain.return_value = None
         res = await SentimentEngine.calculate_pcr("AAPL")
         assert res["pcr"] == 0
@@ -196,7 +198,7 @@ async def test_sentiment_edge_cases():
     ) as mock_chain, patch(
         "services.market_data_service.get_quote", new_callable=AsyncMock
     ) as mock_quote:
-        mock_expiries.return_value = ["2026-06-19"]
+        mock_expiries.return_value = [MOCK_EXPIRY]
         mock_chain.return_value = MagicMock()
         mock_quote.return_value = {"c": 0}
         res = await SentimentEngine.calculate_skew("AAPL")
@@ -210,7 +212,7 @@ async def test_sentiment_edge_cases():
     ) as mock_chain, patch(
         "services.market_data_service.get_quote", new_callable=AsyncMock
     ) as mock_quote:
-        mock_expiries.return_value = ["2026-06-19"]
+        mock_expiries.return_value = [MOCK_EXPIRY]
         mock_quote.return_value = {"c": 100.0}
 
         class MockChainShort:
@@ -229,7 +231,7 @@ async def test_sentiment_edge_cases():
     ) as mock_expiries, patch(
         "services.market_data_service.get_option_chain", new_callable=AsyncMock
     ) as mock_chain:
-        mock_expiries.return_value = ["2026-06-19"]
+        mock_expiries.return_value = [MOCK_EXPIRY]
         mock_chain.return_value = None
         res = await SentimentEngine.detect_uoa("AAPL")
         assert res == []
@@ -250,7 +252,7 @@ async def test_sentiment_edge_cases():
     ) as mock_chain, patch(
         "services.market_data_service.get_quote", new_callable=AsyncMock
     ) as mock_quote:
-        mock_expiries.return_value = ["2026-06-19"]
+        mock_expiries.return_value = [MOCK_EXPIRY]
         mock_quote.return_value = {"c": 100.0}
 
         class MockChainNoCall:
@@ -284,7 +286,7 @@ async def test_calculate_max_pain_full():
     ) as mock_chain, patch(
         "services.market_data_service.get_quote", new_callable=AsyncMock
     ) as mock_quote:
-        mock_expiries.return_value = ["2026-06-19"]
+        mock_expiries.return_value = [MOCK_EXPIRY]
         mock_quote.return_value = {"c": 100.0}
 
         calls_df = pd.DataFrame(
@@ -316,7 +318,7 @@ async def test_calculate_max_pain_split_adjustment():
     ) as mock_quote, patch(
         "services.market_data_service.get_stock_splits", new_callable=AsyncMock
     ) as mock_splits:
-        mock_expiries.return_value = ["2026-06-19"]
+        mock_expiries.return_value = [MOCK_EXPIRY]
         mock_quote.return_value = {"c": 80.0}
         mock_splits.return_value = pd.Series([10.0], index=[pd.Timestamp("2024-06-10")])
 
@@ -427,7 +429,7 @@ async def test_max_pain_anomaly_warning_and_retry():
         "services.market_data_service.check_and_reconcile_max_pain_anomaly",
         return_value=True,
     ) as mock_anomaly:
-        mock_expiries.return_value = ["2026-06-19"]
+        mock_expiries.return_value = [MOCK_EXPIRY]
         mock_quote.return_value = {"c": 100.0}
 
         calls_df = pd.DataFrame(
@@ -485,7 +487,7 @@ async def test_calculate_max_pain_incomplete_oi_fallback():
     ) as mock_chain, patch(
         "services.market_data_service.get_quote", new_callable=AsyncMock
     ) as mock_quote:
-        mock_expiries.return_value = ["2026-06-19"]
+        mock_expiries.return_value = [MOCK_EXPIRY]
         mock_quote.return_value = {"c": 100.0}
 
         # 12 contracts in total. Only 1 has openInterest > 0.
@@ -565,7 +567,7 @@ async def test_iv_fallback_earnings_event_loading_factor():
 async def test_detect_uoa_sanity_filters():
     from market_analysis.sentiment_engine import SentimentEngine
 
-    exp = ["2026-06-19"]
+    exp = [MOCK_EXPIRY]
 
     # Create calls DataFrame containing:
     # 1. Normal trade: volume=1000, OI=100, strike=100 (passes filters)
@@ -684,7 +686,7 @@ async def test_calculate_max_pain_split_anomaly_and_degradation():
     ) as mock_quote, patch("database.cache.get_kv_cache", return_value=None), patch(
         "market_analysis.sentiment_engine.logger.warning"
     ) as mock_logger_warning:
-        mock_expiries.return_value = ["2026-06-19"]
+        mock_expiries.return_value = [MOCK_EXPIRY]
         mock_quote.return_value = {"c": 100.0}
 
         # 12 contracts total.
