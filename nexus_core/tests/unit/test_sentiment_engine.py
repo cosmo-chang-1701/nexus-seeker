@@ -663,6 +663,18 @@ def test_polymarket_fuzzy_matching_and_odds_format():
     odds = find_matching_polymarket_odds("MU", poly_markets)
     assert odds == "Yes: 98.0%"
 
+    poly_markets_new = [
+        {
+            "question": "Will Micron's Q3 revenue exceed $6.6 billion?",
+            "odds_distribution": [
+                {"outcome": "Yes", "odds": 0.98},
+                {"outcome": "No", "odds": 0.02},
+            ],
+        }
+    ]
+    odds_new = find_matching_polymarket_odds("MU", poly_markets_new)
+    assert odds_new == "Yes: 98.0%"
+
     poly_markets_other = [
         {
             "question": "Will mutual fund interest rates drop?",
