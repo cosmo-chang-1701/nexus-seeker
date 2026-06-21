@@ -1077,9 +1077,40 @@ class UnifiedTerminalCog(commands.Cog):
         from market_analysis.ddp_inspector import DDPInspector
         from services.polymarket_service import PolymarketService
         from services import reddit_service
+        from market_time import ny_tz
+        from datetime import datetime
 
         ddp_inspector = DDPInspector(self.bot)
         poly_service = PolymarketService(self.bot)
+
+        # 1. 取得所有到期日以規劃一個月內的所有 Max Pain 計算任務
+        expiries = []
+        try:
+            expiries = await market_data_service.get_all_option_expiries(symbol)
+        except Exception as e:
+            logger.warning(f"[{symbol}] Failed to fetch expiries: {e}")
+
+        today = datetime.now(ny_tz).date()
+        valid_expiries = []
+        if expiries:
+            for exp in expiries:
+                try:
+                    exp_dt = datetime.strptime(exp, "%Y-%m-%d").date()
+                    # 篩選一個月 (30天) 內的到期日
+                    if 0 <= (exp_dt - today).days <= 30:
+                        valid_expiries.append(exp)
+                except ValueError:
+                    continue
+
+        # 針對這一個月內的所有到期日，建立獨立的 Max Pain 計算任務
+        mp_month_tasks = {}
+        for exp in valid_expiries:
+            mp_month_tasks[exp] = SentimentEngine._calculate_max_pain_raw(
+                symbol, expiry=exp
+            )
+
+        keys_mp = list(mp_month_tasks.keys())
+        tasks_mp = list(mp_month_tasks.values())
 
         spy_task = market_data_service.get_spy_history_df("1y")
         macro_task = market_data_service.get_macro_environment()
@@ -1098,20 +1129,7 @@ class UnifiedTerminalCog(commands.Cog):
             symbol, period="1y", interval="1d"
         )
 
-        (
-            df_spy,
-            macro_raw,
-            quote,
-            skew_data,
-            pcr_data,
-            uoa_data,
-            max_pain_data,
-            iv_metrics,
-            reddit_text,
-            poly_markets,
-            ddp_report,
-            df_hist_1d,
-        ) = await asyncio.gather(
+        base_results_task = asyncio.gather(
             spy_task,
             macro_task,
             quote_task,
@@ -1126,6 +1144,43 @@ class UnifiedTerminalCog(commands.Cog):
             df_hist_task,
         )
 
+        if tasks_mp:
+            results_all = await asyncio.gather(
+                base_results_task, asyncio.gather(*tasks_mp)
+            )
+            base_results, mp_month_results = results_all
+        else:
+            base_results = await base_results_task
+            mp_month_results = []
+
+        (
+            df_spy,
+            macro_raw,
+            quote,
+            skew_data,
+            pcr_data,
+            uoa_data,
+            max_pain_data,
+            iv_metrics,
+            reddit_text,
+            poly_markets,
+            ddp_report,
+            df_hist_1d,
+        ) = base_results
+
+        month_max_pains = []
+        for exp, res in zip(keys_mp, mp_month_results):
+            if res and isinstance(res, dict) and "error" not in res:
+                month_max_pains.append(
+                    {
+                        "expiry": exp,
+                        "max_pain": res.get("max_pain"),
+                        "distance_pct": res.get("distance_pct", 0.0),
+                        "is_degraded": bool(res.get("is_degraded", 0)),
+                        "calculation_mode": res.get("calculation_mode", "OI"),
+                    }
+                )
+
         return {
             "df_spy": df_spy,
             "macro_raw": macro_raw,
@@ -1139,6 +1194,7 @@ class UnifiedTerminalCog(commands.Cog):
             "poly_markets": poly_markets,
             "ddp_report": ddp_report,
             "df_hist_1d": df_hist_1d,
+            "month_max_pains": month_max_pains,
         }
 
     async def _run_single_symbol_hub(
@@ -1238,6 +1294,7 @@ class UnifiedTerminalCog(commands.Cog):
 
             safe_mp = max_pain_data or {}
             result["max_pain"] = safe_mp.get("max_pain", 0.0)
+            result["month_max_pains"] = data.get("month_max_pains", [])
 
             result["is_ddp"] = ddp_report.get("is_ddp", False) if ddp_report else False
             result["vix"] = macro_data.vix
