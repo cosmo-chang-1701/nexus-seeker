@@ -11,7 +11,7 @@ from typing import Dict, Any, List, Literal, Optional
 from services import market_data_service
 from services.market_data_service import BoundedCache
 from models.quant import IVMetrics
-from market_time import is_market_open
+from market_time import is_market_open, ny_tz
 from market_analysis.uoa_telemetry import UOATradeInput, classify_uoa_trade
 from market_analysis.greeks import calculate_greeks
 
@@ -24,11 +24,16 @@ logger = logging.getLogger(__name__)
 
 
 def _current_week_friday() -> date:
-    """取得本週五日期。若今天已過週五（週六/週日），則取下週五。"""
-    today = date.today()
-    days_ahead = 4 - today.weekday()  # Friday = 4
-    if days_ahead < 0:  # Today is Saturday or Sunday
-        days_ahead += 7
+    """取得本週五日期。若今天已過週五（週六/週日）或今天是週五且已收盤（美東時間 16:00 後），則取下週五。"""
+    now_ny = datetime.now(ny_tz)
+    today = now_ny.date()
+    weekday = today.weekday()
+    if weekday > 4:  # Saturday or Sunday
+        days_ahead = 4 - weekday + 7
+    elif weekday == 4 and now_ny.hour >= 16:  # Friday after market close (16:00 ET)
+        days_ahead = 7
+    else:
+        days_ahead = 4 - weekday
     return today + timedelta(days=days_ahead)
 
 
@@ -494,6 +499,12 @@ class SentimentEngine:
 
             # 若快取未被標記 stale 且有參考股價
             if is_stale_flag == 0 and ref_price and ref_price > 0 and spot_price > 0:
+                cached_mp = cache_data.get("max_pain")
+                cb_triggered = cache_data.get("circuit_breaker_triggered", 0)
+                is_mp_valid = (
+                    cached_mp is not None and cached_mp > 0.0 and cb_triggered == 0
+                )
+
                 deviation = abs(spot_price - ref_price) / ref_price
 
                 # 平滑快取防護（MIN_TTL=30秒強制冷卻）
@@ -512,7 +523,7 @@ class SentimentEngine:
                     except Exception as ts_err:
                         logger.error(f"[{symbol}] 解析快取時間戳記失敗: {ts_err}")
 
-                if is_cooldown or deviation <= 0.03:
+                if is_cooldown or (is_mp_valid and deviation <= 0.03):
                     is_cache_valid = True
 
         if is_cache_valid and cache_data:
@@ -678,7 +689,9 @@ class SentimentEngine:
         except Exception as e:
             logger.warning(f"[{symbol}] calculate_max_pain 預先取得現價失敗: {e}")
 
-        today = datetime.now().date()
+        from market_time import ny_tz
+
+        today = datetime.now(ny_tz).date()
         today_str = today.strftime("%Y-%m-%d")
         cache_key = f"max_pain_{symbol.upper()}_{expiry or 'first'}_{today_str}"
         cached = get_kv_cache(cache_key)

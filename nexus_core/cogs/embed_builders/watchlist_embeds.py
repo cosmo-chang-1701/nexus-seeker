@@ -174,12 +174,12 @@ def create_watchlist_signal_embed(
 
     if max_pain_data is not None:
         mp_val = max_pain_data.get("max_pain")
-        if mp_val is None or (
+        if max_pain_data.get("circuit_breaker_triggered", False):
+            max_pain_str = "N/A (已觸發斷路器, ⚠️ 偏離度過高 >30%)"
+        elif mp_val is None or (
             isinstance(mp_val, (int, float)) and float(mp_val) <= 0.0
         ):
             max_pain_str = "N/A (⚠️ 數據源缺失)"
-        elif max_pain_data.get("circuit_breaker_triggered", False):
-            max_pain_str = "N/A (已觸發斷路器, ⚠️ 偏離度過高 >30%)"
         else:
             max_pain = float(mp_val)
             pain_dist = float(max_pain_data.get("distance_pct") or 0.0)

@@ -3,7 +3,6 @@ import click
 import logging
 import os
 import sys
-import json
 from unittest.mock import MagicMock
 from rich.console import Console
 from rich.table import Table
@@ -174,9 +173,8 @@ def watch_list(ctx):
     table = Table(title=f"🔭 {uid} 觀察清單")
     table.add_column("標的", style="cyan")
     table.add_column("AI 分析", style="magenta")
-    for _, sym, meta_json in user_watch:
-        meta = json.loads(meta_json) if meta_json else {}
-        table.add_row(sym, "Enabled" if meta.get("use_llm", True) else "Disabled")
+    for _, sym, use_llm in user_watch:
+        table.add_row(sym, "Enabled" if use_llm else "Disabled")
     console.print(table)
 
 
