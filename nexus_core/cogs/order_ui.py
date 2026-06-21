@@ -1255,12 +1255,15 @@ class OrderUICog(commands.Cog):
                 macro_event_dates.add(earnings_event.date)
 
             # Safeguard: If Max Pain is marked as stale, avoid using it in critical pricing calculations
-            is_mp_stale = max_pain_metrics.get("is_stale", False) or (
-                max_pain_metrics.get("data_status") == "Stale"
+            is_mp_stale = (
+                max_pain_metrics.get("is_stale", False)
+                or (max_pain_metrics.get("data_status") == "Stale")
+                or max_pain_metrics.get("max_pain") is None
+                or max_pain_metrics.get("circuit_breaker_triggered", False)
             )
             if is_mp_stale:
                 logger.warning(
-                    f"[{symbol}] Max Pain data is stale, resetting max_pain_price to 0.0 to prevent pricing calculation errors."
+                    f"[{symbol}] Max Pain data is stale or invalid, resetting max_pain_price to 0.0 to prevent pricing calculation errors."
                 )
                 max_pain_price = 0.0
             else:
