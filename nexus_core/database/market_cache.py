@@ -10,18 +10,28 @@ def save_market_cache(
     expected_move_upper: float,
     reference_spot_price: Optional[float] = None,
     is_stale: int = 0,
+    calculation_mode: str = "OI",
+    is_degraded: int = 0,
+    circuit_breaker_triggered: int = 0,
 ) -> bool:
     try:
         execute_write(
             """
-            INSERT INTO market_cache (symbol, max_pain, expected_move_lower, expected_move_upper, reference_spot_price, is_stale, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            INSERT INTO market_cache (
+                symbol, max_pain, expected_move_lower, expected_move_upper,
+                reference_spot_price, is_stale, calculation_mode, is_degraded,
+                circuit_breaker_triggered, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(symbol) DO UPDATE SET
             max_pain = excluded.max_pain,
             expected_move_lower = excluded.expected_move_lower,
             expected_move_upper = excluded.expected_move_upper,
             reference_spot_price = excluded.reference_spot_price,
             is_stale = excluded.is_stale,
+            calculation_mode = excluded.calculation_mode,
+            is_degraded = excluded.is_degraded,
+            circuit_breaker_triggered = excluded.circuit_breaker_triggered,
             updated_at = CURRENT_TIMESTAMP
         """,
             (
@@ -31,6 +41,9 @@ def save_market_cache(
                 expected_move_upper,
                 reference_spot_price,
                 is_stale,
+                calculation_mode,
+                is_degraded,
+                circuit_breaker_triggered,
             ),
         )
         return True
