@@ -448,16 +448,20 @@ Current repository rule:
 - `nexus_core/cogs/embed_builder.py` — single source of truth for embeds
 - `nexus_core/database/orders.py` — active orders SQLite database state CRUD operations
 - `nexus_core/database/migrations/v038_add_active_orders.py` — migration registering the active_orders table in SQLite
-- `nexus_core/database/migrations/v047_add_macro_events_columns.py` — migration adding economic calendar columns consensus_value and fedwatch_probability
+- `nexus_core/database/migrations/v047_remediate_missing_structures.py` — migration remediating/adding economic calendar columns consensus_value and fedwatch_probability
 - `nexus_core/database/migrations/v048_add_escape_window_settings.py` — migration adding escape window configuration columns to user settings
 - `nexus_core/market_analysis/intraday_pipeline.py` — watchlist evaluation, option-plan logic, intraday engine helpers
 - `nexus_core/market_analysis/index_microstructure.py` — market regime determination (SHORT_GAMMA_CRITICAL) using VIX, VIX3M, and zero-gamma line GEX
 - `nexus_core/market_analysis/sentiment_engine.py` — skew / UOA / IV stack
+- `nexus_core/market_analysis/telemetry_pricing_engine.py` — central alignment alert pipeline and decision gating logic (stale-lock, deep sea gap limits, pure stock gate, UOA squeeze classification)
+- `nexus_core/market_analysis/ghost_trader.py` — GhostTrader Virtual Trading Room execution and monitoring logic
 - `nexus_core/services/calendar_service.py` — shared event cache entrypoint
 - `nexus_core/services/llm_service.py` — structured LLM outputs and memory-safe degradation
 - `nexus_core/services/trading_service.py` — scan / report / validation data orchestration
 - `nexus_core/services/telemetry_pricing_engine.py` — dynamic telemetry pricing calculation covering Max Pain, EM, Skew, IV Spikes, and psychological round numbers
 - `nexus_core/database/notifications.py` — custom user notification preferences database operations
+- `nexus_core/database/virtual_trading.py` — Database interface for virtual trades (VTR)
+- `nexus_core/database/watchlist.py` — Database CRUD operations for user watchlist symbols
 - `nexus_core/database/migrations/v039_add_notification_toggles.py` — migration registering the user_notification_settings table in SQLite
 - `nexus_core/tests/unit/test_intraday_pipeline.py` — heartbeat and phase-B gating tests
 - `nexus_core/tests/unit/test_embed_builder.py` — embed contract tests
@@ -466,6 +470,7 @@ Current repository rule:
 - `nexus_core/tests/unit/test_settings_interactive.py` — unit tests for interactive settings view and modals
 - `nexus_core/tests/unit/test_notification_toggles.py` — unit tests for notification preferences database toggles and views
 - `nexus_core/tests/unit/test_macro_risk_upgrade.py` — unit tests for macro risk upgrade, index microstructure, and covered call unlocking
+- `nexus_core/tests/unit/test_telemetry_pricing_engine.py` — unit tests for telemetry pricing alignment pipeline and gating
 
 ---
 
