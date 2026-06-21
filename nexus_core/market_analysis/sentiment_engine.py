@@ -24,7 +24,9 @@ logger = logging.getLogger(__name__)
 
 
 def _current_week_friday() -> date:
-    """取得本週五日期。若今天已過週五（週六/週日）或今天是週五且已收盤（美東時間 16:00 後），則取下週五。"""
+    """取得本週五日期。若今天已過週五（週六/週日）或今天是週五且已收盤（美東時間 16:00 後），則取下週五。
+    若該週五是 NYSE 交易休假日，則向前調整至該週四。
+    """
     now_ny = datetime.now(ny_tz)
     today = now_ny.date()
     weekday = today.weekday()
@@ -34,7 +36,19 @@ def _current_week_friday() -> date:
         days_ahead = 7
     else:
         days_ahead = 4 - weekday
-    return today + timedelta(days=days_ahead)
+
+    friday = today + timedelta(days=days_ahead)
+
+    try:
+        from market_time import nyse_calendar
+
+        schedule = nyse_calendar.schedule(start_date=friday, end_date=friday)
+        if schedule.empty:
+            return friday - timedelta(days=1)
+    except Exception as e:
+        logger.warning(f"Failed to check NYSE calendar for Friday holiday: {e}")
+
+    return friday
 
 
 def _calculate_max_pain_with_weights(
