@@ -1281,28 +1281,11 @@ class UnifiedTerminalCog(commands.Cog):
 
     async def _async_revalidate_market_cache(self, sym: str, price: float):
         try:
-            from database import save_market_cache
             from market_analysis.sentiment_engine import SentimentEngine
 
             logger.info(f"🔄 [SWR] Background revalidating market cache for {sym}...")
-            iv_m = await SentimentEngine.fetch_and_calculate_iv_metrics(sym)
-            mp_d = await SentimentEngine.calculate_max_pain(sym)
-
-            em_weekly = (
-                iv_m.expected_move_weekly
-                if (iv_m and iv_m.expected_move_weekly is not None)
-                else 0.0
-            )
-            max_pain = (
-                mp_d.get("max_pain", 0.0) if (mp_d and isinstance(mp_d, dict)) else 0.0
-            )
-
-            em_lower = price - em_weekly if price > 0 else 0.0
-            em_upper = price + em_weekly if price > 0 else 0.0
-
-            await asyncio.to_thread(
-                save_market_cache, sym, max_pain, em_lower, em_upper, price, 0
-            )
+            # This calls the unified method, calculates, saves to SQLite cache, and handles CB/degradation:
+            await SentimentEngine.get_unified_max_pain(sym, force_refresh=True)
             logger.info(f"✅ [SWR] Background revalidation complete for {sym}")
         except Exception as e:
             logger.error(f"❌ [SWR] Background revalidation failed for {sym}: {e}")
@@ -1317,13 +1300,8 @@ class UnifiedTerminalCog(commands.Cog):
     async def _fetch_sym_radar_data_raw(self, sym: str):
         """
         獲取單一標的的雷達量化數據。
-        採用 Cache-Aside 設計，直接物理性從 SQLite 中的 market_cache 讀取，快取未命中則進行退級即時計算。
+        採用統一的 get_unified_max_pain 方法讀取與重算快取。
         """
-        from database import (
-            get_market_cache,
-            save_market_cache,
-            mark_market_cache_stale,
-        )
         from market_analysis.sentiment_engine import SentimentEngine
         from services import market_data_service
 
@@ -1345,85 +1323,25 @@ class UnifiedTerminalCog(commands.Cog):
         except Exception as e:
             logger.error(f"[{sym}] Batch Scan 獲取 UOA 失敗: {e}")
 
-        # 3. 讀取 market_cache 快取
-        cache_data = await asyncio.to_thread(get_market_cache, sym)
-        if cache_data and price > 0:
-            ref_price = cache_data.get("reference_spot_price")
-            if ref_price and ref_price > 0:
-                deviation = abs(price - ref_price) / ref_price
+        # 3. 呼叫統一的 get_unified_max_pain (自動處理快取、過期、偏離與降級狀態)
+        mp_data = await SentimentEngine.get_unified_max_pain(sym)
 
-                # 平滑快取防護（強制冷卻機制）
-                is_cooldown = False
-                updated_str = cache_data.get("updated_at")
-                if updated_str:
-                    try:
-                        from datetime import datetime, timezone
+        # 異步預警：若返回資料標記為 stale，啟動背景重新驗證
+        if mp_data.get("is_stale"):
+            asyncio.create_task(self._async_revalidate_market_cache(sym, price))
 
-                        updated_dt = datetime.strptime(
-                            updated_str, "%Y-%m-%d %H:%M:%S"
-                        ).replace(tzinfo=timezone.utc)
-                        elapsed = (
-                            datetime.now(timezone.utc) - updated_dt
-                        ).total_seconds()
-                        if elapsed < 30.0:
-                            is_cooldown = True
-                            logger.info(
-                                f"[{sym}] 快取更新距今 {elapsed:.1f} 秒 (小於 MIN_TTL=30秒)，觸發平滑快取防護，強制判定快取依然可用。"
-                            )
-                    except Exception as ts_err:
-                        logger.error(f"[{sym}] 解析快取時間戳記失敗: {ts_err}")
-
-                if is_cooldown:
-                    cache_data["is_stale"] = False
-                elif deviation > 0.03:  # 3% 偏離度閾值
-                    logger.warning(
-                        f"[{sym}] Spot price shifted from {ref_price} to {price} "
-                        f"(dev={deviation:.2%}), marking stale & triggering revalidation."
-                    )
-                    cache_data["is_stale"] = True
-                    await asyncio.to_thread(mark_market_cache_stale, sym)
-                    asyncio.create_task(self._async_revalidate_market_cache(sym, price))
-
+        # 取得 IV 數據
         iv_rank_val = 0.0
         em_weekly = 0.0
-        max_pain = 0.0
+        em_lower = mp_data.get("expected_move_lower", 0.0)
+        em_upper = mp_data.get("expected_move_upper", 0.0)
+        if em_upper > em_lower and price > 0:
+            em_weekly = (em_upper - em_lower) / 2.0
 
-        if cache_data and not cache_data.get("is_stale", False):
-            max_pain = cache_data.get("max_pain", 0.0)
-            em_lower = cache_data.get("expected_move_lower", 0.0)
-            em_upper = cache_data.get("expected_move_upper", 0.0)
-            # 從上下緣反推 em_weekly
-            if em_upper > em_lower and price > 0:
-                em_weekly = (em_upper - em_lower) / 2.0
-            # IV Rank 仍可以從 fetch_and_calculate_iv_metrics 快速取（因為它有快取）
-            iv_m = await SentimentEngine.fetch_and_calculate_iv_metrics(sym)
-            if iv_m:
-                iv_rank_val = iv_m.iv_rank if iv_m.iv_rank is not None else 0.0
-        else:
-            # Cache-Aside: 快取不存在或已過期，進行即時計算並存回 SQLite
-            iv_m = await SentimentEngine.fetch_and_calculate_iv_metrics(sym)
-            mp_d = await SentimentEngine.calculate_max_pain(sym)
+        iv_m = await SentimentEngine.fetch_and_calculate_iv_metrics(sym)
+        if iv_m:
+            iv_rank_val = iv_m.iv_rank if iv_m.iv_rank is not None else 0.0
 
-            if iv_m:
-                iv_rank_val = iv_m.iv_rank if iv_m.iv_rank is not None else 0.0
-                em_weekly = (
-                    iv_m.expected_move_weekly
-                    if iv_m.expected_move_weekly is not None
-                    else 0.0
-                )
-            if mp_d and isinstance(mp_d, dict):
-                max_pain = mp_d.get("max_pain", 0.0)
-
-            em_lower = price - em_weekly if price > 0 else 0.0
-            em_upper = price + em_weekly if price > 0 else 0.0
-
-            # 寫回快取
-            await asyncio.to_thread(
-                save_market_cache, sym, max_pain, em_lower, em_upper, price
-            )
-
-        # 將模擬資料庫回傳包裝成可以傳給 build_radar_scan_embed 的字典
-        # 以便不管是否快取，都具有相同的 iv_metrics 結構
         mock_iv = {
             "iv_rank": iv_rank_val,
             "expected_move_weekly": em_weekly,
@@ -1435,9 +1353,7 @@ class UnifiedTerminalCog(commands.Cog):
             "iv_metrics": mock_iv,
             "skew": skew_val,
             "skew_percentile": skew_percentile,
-            "max_pain": {
-                "max_pain": max_pain,
-            },
+            "max_pain": mp_data,
             "uoa": uoa_data,
         }
 

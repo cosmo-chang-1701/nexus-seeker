@@ -717,7 +717,12 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             dist_str = "⚠️ 偏離度過高 (>30%)"
             dist_color = "\u001b[1;31m"
         else:
-            mp_str = f"${max_pain:.2f}"
+            calc_mode = data.get("calculation_mode", "OI")
+            is_deg = data.get("is_degraded", False)
+            if calc_mode == "Volume" or is_deg:
+                mp_str = f"${max_pain:.2f} (Volume 降級)"
+            else:
+                mp_str = f"${max_pain:.2f}"
             dist_str = f"{distance:+.1f}%"
             dist_color = "\u001b[1;31m" if abs(distance) > 5.0 else "\u001b[1;32m"
 

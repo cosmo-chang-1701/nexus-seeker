@@ -72,9 +72,28 @@ def db_conn():
 
 @pytest.fixture(autouse=True)
 def clean_db(db_conn):
-    # Clear tables before each test if needed,
-    # but since it's :memory: and we might want to test persistence between some calls,
-    # we can just clear specific tables.
+    # Clear memory caches to avoid cross-test contamination
+    try:
+        from market_analysis.sentiment_engine import _iv_cache
+
+        _iv_cache.clear()
+    except Exception:
+        pass
+    try:
+        from services.market_data_service import (
+            _option_chain_cache,
+            _option_expiries_cache,
+            _quote_cache,
+        )
+
+        _option_chain_cache.clear()
+        _option_expiries_cache.clear()
+        if hasattr(_quote_cache, "clear"):
+            _quote_cache.clear()
+    except Exception:
+        pass
+
+    # Clear tables before each test if needed
     cursor = db_conn.cursor()
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
     tables = cursor.fetchall()

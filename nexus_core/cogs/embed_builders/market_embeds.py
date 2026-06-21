@@ -452,9 +452,16 @@ def build_radar_scan_embed(
             # 4. Max Pain 與與痛點價差
             max_pain_strike = 0.0
             dist_pct = 0.0
+            cb_triggered = False
+            calculation_mode = "OI"
+            is_degraded = False
+
             if isinstance(mp_data, dict):
                 mp_val = mp_data.get("max_pain")
                 max_pain_strike = float(mp_val) if mp_val is not None else 0.0
+                cb_triggered = mp_data.get("circuit_breaker_triggered", False)
+                calculation_mode = mp_data.get("calculation_mode", "OI")
+                is_degraded = mp_data.get("is_degraded", False)
                 if max_pain_strike > 0 and price_val > 0:
                     dist_pct = (max_pain_strike - price_val) / price_val * 100
 
@@ -583,7 +590,15 @@ def build_radar_scan_embed(
             price_cell = price_ansi + (" " * max(0, 16 - len(price_str)))
             ivr_cell = ivr_str + (" " * max(0, 8 - len(ivr_str)))
             em_cell = em_ansi + (" " * max(0, 22 - len(em_str)))
-            mp_str_val = f"${max_pain_strike:.2f}"
+            if cb_triggered:
+                mp_str_val = "CB ⚠️"
+            elif max_pain_strike > 0:
+                if calculation_mode == "Volume" or is_degraded:
+                    mp_str_val = f"${max_pain_strike:.2f}(V)"
+                else:
+                    mp_str_val = f"${max_pain_strike:.2f}"
+            else:
+                mp_str_val = "N/A"
             mp_cell = mp_str_val + (" " * max(0, 11 - len(mp_str_val)))
 
             dmp_cell = dmp_ansi + (" " * max(0, 12 - len(dmp_str)))
@@ -596,7 +611,8 @@ def build_radar_scan_embed(
         ansi_table = f"```ansi\n============================= 核心 AI 暨持倉量化雷達 =============================\n{header}\n{divider}\n"
         ansi_table += "\n".join(ansi_lines)
         ansi_table += "\n=================================================================================\n"
-        ansi_table += "提示: ⚠️ 代表與最大痛點偏離度過高（>10%）或具備異常籌碼結構，需點擊穿透審查。\n```"
+        ansi_table += "提示: ⚠️ 代表與最大痛點偏離度過高（>10%）或具備異常籌碼結構，需點擊穿透審查。\n"
+        ansi_table += "備註: (V) 代表期權OI資料毀損，降級為Volume權重計算。CB 代表偏離現貨過高(>30%)觸發自癒斷路器。\n```"
 
         embed.description = ansi_table
 
