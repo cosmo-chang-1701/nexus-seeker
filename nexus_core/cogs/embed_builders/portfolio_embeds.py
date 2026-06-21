@@ -828,19 +828,68 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         scenario = f"{scenario} " + " ".join(scenario_overlays)
         scen_color = "\u001b[1;31m" if is_structural_divergence else "\u001b[1;33m"
 
+    month_mps = data.get("month_max_pains", [])
+    mp_lines = []
+    if month_mps:
+        try:
+            month_mps_sorted = sorted(month_mps, key=lambda x: x.get("expiry", ""))
+        except Exception:
+            month_mps_sorted = month_mps
+
+        for i, item in enumerate(month_mps_sorted):
+            exp = item.get("expiry", "N/A")
+            mp_val = item.get("max_pain")
+            dist = item.get("distance_pct", 0.0)
+            is_deg = item.get("is_degraded", False)
+            calc_mode = item.get("calculation_mode", "OI")
+
+            try:
+                from market_time import ny_tz
+
+                today_ny = datetime.now(ny_tz).date()
+                exp_dt = datetime.strptime(exp, "%Y-%m-%d").date()
+                dte = (exp_dt - today_ny).days
+            except Exception:
+                dte = 0
+
+            if dte <= 7:
+                label = "週五即期" if dte >= 4 and dte <= 6 else "短線週線"
+            elif dte <= 14:
+                label = "次週主力"
+            else:
+                label = "月線主力"
+
+            deg_tag = " (V)" if is_deg or calc_mode == "Volume" else ""
+            mp_price_str = f"${mp_val:.2f}{deg_tag}" if mp_val is not None else "N/A"
+            dist_val_str = f"{dist:+.1f}%" if mp_val is not None else "N/A"
+            color_item = "\u001b[1;31m" if abs(dist) > 5.0 else "\u001b[1;32m"
+            prefix = " ├─ " if i < len(month_mps_sorted) - 1 else " └─ "
+
+            mp_lines.append(
+                f"{prefix}{exp} (DTE {dte} / {label}): \u001b[1;33m{mp_price_str}\u001b[0m (當前價差: {color_item}{dist_val_str}\u001b[0m)"
+            )
+    else:
+        mp_lines.append(
+            f" └─ Max Pain價位: \u001b[1;33m{mp_str}\u001b[0m (當前價差: {dist_color}{dist_str}\u001b[0m)"
+        )
+
     target_lines = [
         "```ansi",
         " 最大痛點結算 (Max Pain Settlement)",
-        f" └─ Max Pain價位: \u001b[1;33m{mp_str}\u001b[0m (當前價差: {dist_color}{dist_str}\u001b[0m)",
-        " DDP 與期權風控 (DDP & Risk Metrics)",
-        f" ├─ DDP 估值雙擊: {ddp_color}{ddp_status}\u001b[0m",
-        f" ├─ IV Rank: {ivr_color}{ivr_str}\u001b[0m",
-        f" ├─ Volume PCR (即時情緒): {vol_pcr_color}{vol_pcr_str}\u001b[0m ({vol_pcr_color}{volume_state}\u001b[0m)",
-        f" └─ OI PCR (結構防禦): {oi_pcr_color}{oi_pcr_str}\u001b[0m ({oi_pcr_color}{oi_state}\u001b[0m)",
-        " 結算價操作指引 (Scenario Analysis)",
-        f" └─ 操作指引: {scen_color}{scenario}\u001b[0m",
-        "```",
     ]
+    target_lines.extend(mp_lines)
+    target_lines.extend(
+        [
+            " DDP 與期權風控 (DDP & Risk Metrics)",
+            f" ├─ DDP 估值雙擊: {ddp_color}{ddp_status}\u001b[0m",
+            f" ├─ IV Rank: {ivr_color}{ivr_str}\u001b[0m",
+            f" ├─ Volume PCR (即時情緒): {vol_pcr_color}{vol_pcr_str}\u001b[0m ({vol_pcr_color}{volume_state}\u001b[0m)",
+            f" └─ OI PCR (結構防禦): {oi_pcr_color}{oi_pcr_str}\u001b[0m ({oi_pcr_color}{oi_state}\u001b[0m)",
+            " 結算價操作指引 (Scenario Analysis)",
+            f" └─ 操作指引: {scen_color}{scenario}\u001b[0m",
+            "```",
+        ]
+    )
     embed.add_field(
         name="🎯 結算與目標 (Target Lock)", value="\n".join(target_lines), inline=False
     )
