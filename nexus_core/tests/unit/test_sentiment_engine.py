@@ -241,7 +241,7 @@ async def test_sentiment_edge_cases():
         "services.market_data_service.get_all_option_expiries",
         side_effect=Exception("API Error"),
     ):
-        res = await SentimentEngine.calculate_max_pain("AAPL")
+        res = await SentimentEngine._calculate_max_pain_raw("AAPL")
         assert "error" in res
 
     # Test skew with missing OTM call (branch 74-75)
@@ -712,8 +712,8 @@ async def test_calculate_max_pain_split_anomaly_and_degradation():
         calls_df = pd.DataFrame(
             {
                 "strike": [90.0, 95.0, 100.0, 105.0, 110.0, 115.0],
-                "openInterest": [100.0, 5.0, 5.0, 5.0, 5.0, 5.0],
-                "volume": [600.0, 10.0, 10.0, 10.0, 10.0, 10.0],
+                "openInterest": [50.0, 5.0, 5.0, 5.0, 5.0, 5.0],
+                "volume": [300.0, 10.0, 10.0, 10.0, 10.0, 10.0],
             }
         )
 
@@ -721,14 +721,14 @@ async def test_calculate_max_pain_split_anomaly_and_degradation():
         # - Strike 90 (OTM Put): volume=10, openInterest=5 (kept)
         # - Strike 95 (OTM Put): volume=10, openInterest=5 (kept)
         # - Strike 100 (ATM Put): volume=10, openInterest=5 (kept)
-        # - Strike 105 (ITM Put): volume=600, openInterest=100 (6x, suspect split anomaly, should be excluded!)
+        # - Strike 105 (ITM Put): volume=300, openInterest=50 (6x, suspect split anomaly, should be excluded!)
         # - Strike 110 (ITM Put): volume=10, openInterest=5 (kept)
         # - Strike 115 (ITM Put): volume=10, openInterest=5 (kept)
         puts_df = pd.DataFrame(
             {
                 "strike": [90.0, 95.0, 100.0, 105.0, 110.0, 115.0],
-                "openInterest": [5.0, 5.0, 5.0, 100.0, 5.0, 5.0],
-                "volume": [10.0, 10.0, 10.0, 600.0, 10.0, 10.0],
+                "openInterest": [5.0, 5.0, 5.0, 50.0, 5.0, 5.0],
+                "volume": [10.0, 10.0, 10.0, 300.0, 10.0, 10.0],
             }
         )
 
@@ -741,7 +741,7 @@ async def test_calculate_max_pain_split_anomaly_and_degradation():
         mock_chain.return_value = MockChain(calls_df, puts_df)
 
         # Call calculate_max_pain
-        result = await SentimentEngine.calculate_max_pain("MU")
+        result = await SentimentEngine.calculate_max_pain("MU", _retry=True)
         assert result is not None
 
         # Verify logger warning for split anomaly exclusion was printed
@@ -755,15 +755,15 @@ async def test_calculate_max_pain_split_anomaly_and_degradation():
         # But wait, is valid_oi_count <= 3? No, it's 10. So it shouldn't trigger "Valid OI too low" downgrade here.
         # Now let's test the "Valid OI too low" condition:
         # If we change calls_df and puts_df to have almost all openInterest = 0.
-        calls_df["openInterest"] = [100.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-        puts_df["openInterest"] = [0.0, 0.0, 0.0, 100.0, 0.0, 0.0]
+        calls_df["openInterest"] = [50.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        puts_df["openInterest"] = [0.0, 0.0, 0.0, 50.0, 0.0, 0.0]
 
         mock_chain.return_value = MockChain(calls_df, puts_df)
 
         # Clear mock calls log
         mock_logger_warning.reset_mock()
 
-        result2 = await SentimentEngine.calculate_max_pain("MU")
+        result2 = await SentimentEngine.calculate_max_pain("MU", _retry=True)
         assert result2 is not None
 
         # Excluded split warning should still run (since ITM calls/puts still have volume > 5*OI and OI > 0)
@@ -773,21 +773,21 @@ async def test_calculate_max_pain_split_anomaly_and_degradation():
         calls_df = pd.DataFrame(
             {
                 "strike": [90.0, 92.0, 95.0, 98.0, 100.0, 105.0, 110.0, 115.0],
-                "openInterest": [100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-                "volume": [600.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0],
+                "openInterest": [50.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                "volume": [300.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0],
             }
         )
         puts_df = pd.DataFrame(
             {
                 "strike": [90.0, 92.0, 95.0, 98.0, 100.0, 105.0, 110.0, 115.0],
-                "openInterest": [0.0, 0.0, 0.0, 0.0, 0.0, 100.0, 0.0, 0.0],
-                "volume": [10.0, 10.0, 10.0, 10.0, 10.0, 600.0, 10.0, 10.0],
+                "openInterest": [0.0, 0.0, 0.0, 0.0, 0.0, 50.0, 0.0, 0.0],
+                "volume": [10.0, 10.0, 10.0, 10.0, 10.0, 300.0, 10.0, 10.0],
             }
         )
         mock_chain.return_value = MockChain(calls_df, puts_df)
         mock_logger_warning.reset_mock()
 
-        result3 = await SentimentEngine.calculate_max_pain("MU")
+        result3 = await SentimentEngine.calculate_max_pain("MU", _retry=True)
         # Verify downgrading warning log is printed
         any_downgrading = any(
             "Data integrity degraded (Valid OI too low)" in args[0]
