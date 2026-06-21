@@ -80,6 +80,7 @@ from cogs.embed_builders.scan_embeds import (
     create_covered_call_unlock_embed,
     create_earnings_report_embed,
     create_sector_flow_report_embed,
+    create_cc_recovery_embed,
 )
 
 # ── Alert Embeds ──────────────────────────────────────────────────────────────
@@ -232,6 +233,7 @@ __all__ = [
     "create_covered_call_unlock_embed",
     "create_earnings_report_embed",
     "create_sector_flow_report_embed",
+    "create_cc_recovery_embed",
     # Alert embeds
     "create_scan_embed",
     "create_psq_embed",
