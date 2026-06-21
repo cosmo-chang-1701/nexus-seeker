@@ -354,8 +354,8 @@ Configurations are strictly segregated into two functional areas to maximize sep
 - **Notification Preferences (`/notif_settings`)**: Manages individual toggles stored in a key-value style `user_notification_settings` table (designed with composite primary key `(user_id, notification_key)` for infinite schema-less extensibility).
 - **Polymarket Settings Migration**: To keep `/settings` focused entirely on portfolio financial metrics, Polymarket monitoring preferences (whale alert toggler `polymarket_whale_alert`, threshold `polymarket_threshold`, AI analysis switch `polymarket_use_llm`, and slippage threshold `polymarket_slippage`) are migrated to `/notif_settings` under their own dedicated selector.
 
-### 2. UI Component Pipeline (`cogs/terminal.py`)
-Both `/settings` and `/notif_settings` utilize ephemeral Discord Views. Interactive flows are built as follows:
+### 2. UI Component Pipeline (`cogs/settings_ui.py` & `cogs/terminal.py`)
+Both `/settings` and `/notif_settings` (defined in `cogs/terminal.py`) utilize ephemeral Discord Views defined in `cogs/settings_ui.py`. Interactive flows are built as follows:
 - **Boolean Switches & Toggles**: Selecting a boolean setting (e.g., `enable_vtr` or notification toggles) instantly flips the state in the SQLite database, triggers `.refresh_items()` to regenerate the select choices (with state emojis: `🟢` for ON, `🔴` for OFF), and edits the active Discord message with the updated embed.
 - **Dynamic Text Input Modals**: Selecting a numeric field triggers a Discord Modal popup (`AccountSettingsModal` or `NotificationSettingsModal`).
   - **Client-Side Validation & Sanitization**: The Modal's `on_submit()` performs rigorous validation. E.g., verifying numerical bounds, verifying `capital > 0`, and sanitizing user inputs (such as automatically dividing percentages if a user enters `20` instead of `0.20` for `tax_reserve_rate`).
@@ -445,6 +445,8 @@ Current repository rule:
 - `nexus_core/cogs/trading.py` — active runtime scheduler and watchlist heartbeat sender
 - `nexus_core/cogs/analyst_agent.py` — analyst report scheduler and dispatcher
 - `nexus_core/cogs/order_ui.py` — active orders setting panel, list views, cancellation/adjustment modals, and telemetry alignment buttons
+- `nexus_core/cogs/settings_ui.py` — interactive account and notification settings views and modals
+- `nexus_core/cogs/terminal.py` — terminal command entrypoints (including settings and runway analysis)
 - `nexus_core/cogs/embed_builder.py` — single source of truth for embeds
 - `nexus_core/database/orders.py` — active orders SQLite database state CRUD operations
 - `nexus_core/database/migrations/v038_add_active_orders.py` — migration registering the active_orders table in SQLite
