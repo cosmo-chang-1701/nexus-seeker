@@ -14,7 +14,9 @@ def migrate_data(conn):
     ]
     for col_name, col_type in columns_to_add:
         try:
-            cursor.execute(f"ALTER TABLE market_cache ADD COLUMN {col_name} {col_type}")
+            cursor.execute(  # nosemgrep
+                f"ALTER TABLE market_cache ADD COLUMN {col_name} {col_type}"
+            )
         except Exception as e:
             if (
                 "duplicate column name" in str(e).lower()
