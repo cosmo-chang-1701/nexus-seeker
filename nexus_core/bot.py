@@ -193,6 +193,7 @@ class NexusBot(commands.Bot):
         await self.load_extension("cogs.hedging")
         await self.load_extension("cogs.calendar")
         await self.load_extension("cogs.order_ui")
+        await self.load_extension("cogs.cc_recovery")
 
         # 啟動背景任務與服務
         self.loop.create_task(self._message_worker())

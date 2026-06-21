@@ -10,7 +10,12 @@ from config import RISK_FREE_RATE
 from database.holdings import get_user_holdings
 from database.orders import get_user_active_orders
 from market_analysis.sentiment_engine import SentimentEngine
-from services.market_data_service import get_history_df, get_quote
+from services.market_data_service import (
+    get_history_df,
+    get_quote,
+    get_all_option_expiries,
+    get_option_chain,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -223,6 +228,154 @@ async def recommend_covered_calls(
         "current_price": current_price,
         "fallback_iv": fallback_iv,
         "recommendations": recommendations[:3],  # 最多推薦前 3 個合約
+    }
+
+
+async def filter_cc_recovery_targets(symbol: str) -> Optional[Dict[str, Any]]:
+    """
+    執行單獨的 Covered Call 篩選與排名，用於 /cc_recovery 指令。
+    """
+    symbol = symbol.upper()
+
+    # 1. 獲取現貨價格 (優先從 market_cache 中讀取)
+    from database.market_cache import get_market_cache
+
+    cache_data = await asyncio.to_thread(get_market_cache, symbol)
+
+    current_price = 0.0
+    if cache_data:
+        current_price = cache_data.get("reference_spot_price") or 0.0
+
+    # 若快取無現價或現價無效，則向 API 請求最新價格
+    if current_price <= 0:
+        quote = await get_quote(symbol)
+        current_price = quote.get("c", 0.0) if quote else 0.0
+
+    if current_price <= 0:
+        # yfinance fallback
+        try:
+            df_temp = await get_history_df(symbol, period="2d")
+            if not df_temp.empty:
+                current_price = float(df_temp["Close"].iloc[-1])
+        except Exception:
+            pass
+
+    if current_price <= 0:
+        logger.warning(f"無法獲取 {symbol} 即時現貨價格，無法進行篩選。")
+        return None
+
+    # 2. 獲取波動率 (IV 優先，儲存之歷史 IV 次之，最後以 30天 HV 代理)
+    stored_iv = SentimentEngine.get_last_stored_iv(symbol)
+    if stored_iv and stored_iv > 0.01:
+        fallback_iv = stored_iv
+    else:
+        fallback_iv = await get_hv_30(symbol)
+
+    # 3. 獲取所有期權到期日並篩選 DTE 30-50 天的合約
+    try:
+        expirations = await get_all_option_expiries(symbol)
+    except Exception as e:
+        logger.error(f"獲取 {symbol} 期權到期日失敗: {e}")
+        return None
+
+    today = datetime.now().date()
+    target_expirations = []
+    for exp in expirations:
+        try:
+            exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
+            dte = (exp_date - today).days
+            if 30 <= dte <= 50:
+                target_expirations.append(exp)
+        except ValueError:
+            continue
+
+    # Fallback：若 30-50 天區間無到期日，取最近一個 DTE >= 30 的到期日以保持系統運作
+    if not target_expirations and expirations:
+        for exp in expirations:
+            try:
+                exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
+                if (exp_date - today).days >= 30:
+                    target_expirations.append(exp)
+                    break
+            except ValueError:
+                continue
+
+    recommendations = []
+    today_dt = datetime.now()
+
+    for exp in target_expirations:
+        try:
+            exp_date = datetime.strptime(exp, "%Y-%m-%d")
+            t_years = (exp_date - today_dt).days / 365.0
+            if t_years <= 0:
+                continue
+
+            opt_chain = await get_option_chain(symbol, exp)
+            if not opt_chain or opt_chain.calls is None:
+                continue
+            calls = opt_chain.calls
+
+            for _, row in calls.iterrows():
+                strike = float(row["strike"])
+
+                # 估計合約 Delta 值
+                iv = float(row.get("impliedVolatility", 0.0))
+                if pd.isna(iv) or iv <= 0.01:
+                    iv = fallback_iv
+
+                try:
+                    d_val = delta(
+                        "c", current_price, strike, t_years, RISK_FREE_RATE, iv, q=0.0
+                    )
+                except Exception:
+                    d_val = 0.0
+
+                # 篩選條件
+                # Risk Boundary: Option Type == CALL and 0 < Delta < 0.15
+                if 0.0 < d_val < 0.15:
+                    premium = float(row.get("lastPrice", 0.0))
+                    bid = float(row.get("bid", 0.0))
+                    ask = float(row.get("ask", 0.0))
+
+                    ref_premium = (
+                        (bid + ask) / 2.0 if (bid > 0 and ask > bid) else premium
+                    )
+                    if ref_premium <= 0:
+                        ref_premium = premium
+
+                    # 計算年化收益率
+                    ann_yield = (
+                        (ref_premium / current_price) / t_years * 100.0
+                        if current_price > 0
+                        else 0.0
+                    )
+
+                    # Performance Hurdle: Annualized Yield >= 10.0%
+                    if ann_yield >= 10.0:
+                        recommendations.append(
+                            {
+                                "expiration": exp,
+                                "strike": strike,
+                                "delta": round(d_val, 3),
+                                "premium": round(ref_premium, 2),
+                                "bid": bid,
+                                "ask": ask,
+                                "annualized_yield": round(ann_yield, 2),
+                                "contractSymbol": row.get("contractSymbol", ""),
+                            }
+                        )
+        except Exception as ex:
+            logger.warning(f"處理期權到期日 {exp} 鏈失敗: {ex}")
+            continue
+
+    # 按年化收益率遞減排序 (Sort the qualifying contracts by annualized_yield in descending order)
+    recommendations.sort(key=lambda x: x["annualized_yield"], reverse=True)
+
+    return {
+        "symbol": symbol,
+        "current_price": current_price,
+        "fallback_iv": fallback_iv,
+        "recommendations": recommendations[:3],  # 限制為前 3 個最優合約
     }
 
 

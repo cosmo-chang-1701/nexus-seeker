@@ -978,3 +978,92 @@ def create_sector_flow_report_embed(
         )
     embed.set_footer(text="Nexus Seeker AI Analyst | 收盤資金流向與板塊輪動")
     return embed
+
+
+def create_cc_recovery_embed(data: dict) -> discord.Embed:
+    """建立 Covered Call 備兌合約防禦性收租指引 Embed (繁體中文)"""
+    symbol = data.get("symbol", "")
+    current_price = data.get("current_price", 0.0)
+    recs = data.get("recommendations", [])
+    fallback_iv = data.get("fallback_iv", 0.0)
+
+    # Note: color parameter triggers appropriate NexusEmbed palette mapping automatically
+    embed = NexusEmbed(
+        title=f"🛡️ {symbol} Covered Call 防禦性收租篩選結果",
+        color=discord.Color.blue() if recs else discord.Color.orange(),
+    )
+
+    spot_lines = [
+        "```ansi",
+        " 標的現貨狀態 (Spot Asset Status)",
+        f" ├─ 當前現價: \u001b[1;32m${current_price:,.2f}\u001b[0m",
+        f" └─ 波動率參考值: \u001b[1;35m{fallback_iv * 100.0:.2f}%\u001b[0m",
+        "```",
+    ]
+
+    embed.add_field(
+        name="💼 標的行情 (Spot Market)",
+        value="\n".join(spot_lines),
+        inline=False,
+    )
+
+    if recs:
+        # 建立 ANSI 備兌推薦合約表格
+        rec_table_lines = [
+            "```ansi",
+            " 到期日     | 履約價    | 預估 Delta | 參考權利金 | 年化收益率",
+            " -----------------------------------------------------------",
+        ]
+        for r in recs:
+            exp = r.get("expiration", "")
+            strike = r.get("strike", 0.0)
+            d_val = r.get("delta", 0.0)
+            premium = r.get("premium", 0.0)
+            ann_yield = r.get("annualized_yield", 0.0)
+
+            # 預先格式化字串，保持欄位對齊
+            exp_str = f"{exp:<10}"
+            strike_str = f"${strike:<7.2f}"
+            delta_str = f"{d_val:<10.3f}"
+            premium_str = f"${premium:<9.2f}"
+
+            yield_str = f"{ann_yield:>9.2f}%"
+            color_yield = "\u001b[1;32m" if ann_yield >= 10.0 else "\u001b[1;35m"
+
+            rec_table_lines.append(
+                f" {exp_str} | \u001b[1;33m{strike_str}\u001b[0m | \u001b[1;36m{delta_str}\u001b[0m | \u001b[1;32m{premium_str}\u001b[0m | {color_yield}{yield_str}\u001b[0m"
+            )
+        rec_table_lines.append("```")
+
+        embed.add_field(
+            name="🎯 推薦 Covered Call 備兌合約 (Recommended Contracts)",
+            value="\n".join(rec_table_lines),
+            inline=False,
+        )
+
+        embed.add_field(
+            name="💡 防禦性收租指引 (Defensive Yield Guidance)",
+            value="篩選出滿足 **DTE 30-50 天、預估 Delta < 0.15 且年化收益率 >= 10%** 的極虛值 Covered Call 合約。此策略適合持股套牢或欲進行防禦性收租之交易，在安全保護現貨（降低被平價收回機率）的同時收取權利金，藉以降低持股成本。",
+            inline=False,
+        )
+    else:
+        status_lines = [
+            "```ansi",
+            " ⚠️ 篩選警告 (Filter Alert)",
+            " └─ 狀態: \u001b[1;31m未尋獲符合條件之極虛值 Covered Call 合約\u001b[0m",
+            "",
+            " 篩選門檻 (Criteria)",
+            " ├─ 到期天數 (DTE) 介於 30 至 50 天之間",
+            " ├─ 預估 Delta < 0.15",
+            " └─ 年化收益率 >= 10.0%",
+            "```",
+            "💡 **策略建議**：目前市場隱含波動率低迷或無符合條件的期權合約，不宜盲目開倉。建議等待現貨反彈或波動率回升，拉開空間後再行評估。",
+        ]
+        embed.add_field(
+            name="⚠️ 篩選狀態與策略建議 (Status & Strategy)",
+            value="\n".join(status_lines),
+            inline=False,
+        )
+
+    embed.set_footer(text="Covered Call 收租策略模組")
+    return embed
