@@ -49,6 +49,21 @@ def test_disallow_duplicate_assets(db_conn):
     )
     assert manager.add_asset(asset3) is True
 
+    # 4. 嘗試新增第二個相同標的至 TRADE (因為是 TRADE 情境，預期也成功以支援多個不同期權部位)
+    asset4 = Asset(
+        user_id=user_id,
+        symbol=symbol,
+        context_type=ContextType.TRADE,
+        metadata={
+            "opt_type": "put",
+            "strike": 190.0,
+            "expiry": "2026-06-18",
+            "entry_price": 4.0,
+            "quantity": -1,
+        },
+    )
+    assert manager.add_asset(asset4) is True
+
 
 def test_add_watchlist_symbol_disallows_duplicates(db_conn):
     """測試 database.watchlist 模組底下的輔助函式也能阻擋重複標的"""
