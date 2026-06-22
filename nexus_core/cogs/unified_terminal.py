@@ -1105,7 +1105,7 @@ class UnifiedTerminalCog(commands.Cog):
         # 針對這一個月內的所有到期日，建立獨立的 Max Pain 計算任務
         mp_month_tasks = {}
         for exp in valid_expiries:
-            mp_month_tasks[exp] = SentimentEngine._calculate_max_pain_raw(
+            mp_month_tasks[exp] = SentimentEngine.get_unified_max_pain(
                 symbol, expiry=exp
             )
 

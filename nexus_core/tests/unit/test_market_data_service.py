@@ -401,7 +401,7 @@ async def test_validate_symbol(mock_symbol_validation):
             "CREATE TABLE IF NOT EXISTS market_cache (symbol TEXT PRIMARY KEY, max_pain REAL)"
         )
         cursor.execute(
-            "INSERT OR REPLACE INTO market_cache (symbol, max_pain) VALUES ('XYZ', 10.0)"
+            "INSERT OR REPLACE INTO market_cache (symbol, expiry, max_pain) VALUES ('XYZ', 'WEEKLY', 10.0)"
         )
         conn.commit()
         conn.close()
