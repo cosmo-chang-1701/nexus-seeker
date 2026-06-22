@@ -1612,6 +1612,10 @@ class SentimentEngine:
             if not current_iv or current_iv <= 0:
                 raise ValueError(f"無法獲取 {symbol} 的 IV，且歷史波動率數據不足")
 
+            # 3. 儲存至 database historical_iv (儲存原始 IV，防範閉市期間重複乘算與歷史數據污染)
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            await SentimentEngine.save_historical_iv(symbol, current_iv, today_str)
+
             # Apply Event Loading Factor (1.4x) if fallback used and event near
             if iv_source in ["STORED_IV", "HV_PROXY"]:
                 has_high_impact_event = False
@@ -1665,10 +1669,6 @@ class SentimentEngine:
                     logger.warning(
                         f"[{symbol}] Real-time IV missing. Applied 1.4x Event Loading Factor to {iv_source}: {orig:.4f} -> {current_iv:.4f}"
                     )
-
-            # 3. 儲存至 database historical_iv
-            today_str = datetime.now().strftime("%Y-%m-%d")
-            await SentimentEngine.save_historical_iv(symbol, current_iv, today_str)
 
             # 4. 取得 DB 歷史 IV
             db_ivs = {}
