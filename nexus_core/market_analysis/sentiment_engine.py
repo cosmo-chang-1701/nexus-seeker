@@ -492,7 +492,7 @@ class SentimentEngine:
         # 2. 讀取 SQLite 快取
         import sys
 
-        cache_data = await asyncio.to_thread(get_market_cache, symbol)
+        cache_data = await asyncio.to_thread(get_market_cache, symbol, expiry)
 
         # Check if get_market_cache is mocked
         is_mock = (
@@ -537,7 +537,8 @@ class SentimentEngine:
                     except Exception as ts_err:
                         logger.error(f"[{symbol}] 解析快取時間戳記失敗: {ts_err}")
 
-                if is_cooldown or (is_mp_valid and deviation <= 0.03):
+                # 統一對齊為 2% 價格偏離閥值
+                if is_cooldown or (is_mp_valid and deviation <= 0.02):
                     is_cache_valid = True
 
         if is_cache_valid and cache_data:
@@ -551,6 +552,7 @@ class SentimentEngine:
 
             return {
                 "symbol": symbol,
+                "expiry": cache_data.get("expiry") or expiry,
                 "max_pain": max_pain,
                 "expected_move_lower": cache_data.get("expected_move_lower", 0.0),
                 "expected_move_upper": cache_data.get("expected_move_upper", 0.0),
@@ -596,6 +598,8 @@ class SentimentEngine:
             circuit_breaker_triggered = int(mp_res.get("circuit_breaker_triggered", 0))
             is_stale = 1 if mp_res.get("is_stale") else 0
             fallback_source = mp_res.get("fallback_source")
+            if "expiry" in mp_res and mp_res["expiry"]:
+                expiry = mp_res["expiry"]
         else:
             if cache_data and cache_data.get("max_pain") is not None:
                 max_pain = cache_data.get("max_pain")
@@ -606,6 +610,8 @@ class SentimentEngine:
                 )
                 is_stale = 1
                 fallback_source = "SQLite"
+                if cache_data.get("expiry"):
+                    expiry = cache_data.get("expiry")
                 logger.info(
                     f"[{symbol}] 即時計算失敗，降級回退至 SQLite 舊快取最大痛點: ${max_pain}"
                 )
@@ -651,6 +657,7 @@ class SentimentEngine:
                 calculation_mode,
                 is_degraded,
                 circuit_breaker_triggered,
+                expiry,
             )
         )
 
@@ -660,6 +667,7 @@ class SentimentEngine:
 
         return {
             "symbol": symbol,
+            "expiry": expiry,
             "max_pain": max_pain,
             "expected_move_lower": em_lower,
             "expected_move_upper": em_upper,
