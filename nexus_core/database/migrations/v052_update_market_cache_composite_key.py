@@ -54,7 +54,8 @@ def migrate_data(conn):
             if "symbol" in valid_cols:
                 col_list_str = ", ".join(valid_cols)
                 # Since the old table didn't have expiry, default to 'WEEKLY'
-                cursor.execute(f"""  # nosemgrep
+                # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
+                cursor.execute(f"""
                     INSERT OR REPLACE INTO market_cache (expiry, {col_list_str})
                     SELECT 'WEEKLY', {col_list_str} FROM market_cache_old;
                 """)
