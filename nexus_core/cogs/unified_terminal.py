@@ -29,6 +29,7 @@ from cogs.embed_builder import (
     create_polymarket_list_embed,
     build_radar_scan_embed,
     build_market_macro_overview_embed,
+    chunk_embeds,
 )
 
 logger = logging.getLogger(__name__)
@@ -182,10 +183,9 @@ class BatchScanWarningButton(discord.ui.Button):
                 except Exception as e:
                     logger.error(f"Batch analysis failed for {symbol}: {e}")
 
-            # Chunk embeds and send them (5-8 embeds per message, using 5 here)
-            chunk_size = 5
-            for i in range(0, len(accumulated_embeds), chunk_size):
-                chunk = accumulated_embeds[i : i + chunk_size]
+            # Chunk embeds safely by cumulative character length (under 5,500 characters) and size limits (max 10 embeds)
+            chunks = chunk_embeds(accumulated_embeds, max_size=5500, max_count=10)
+            for chunk in chunks:
                 try:
                     await interaction.followup.send(embeds=chunk, ephemeral=True)
                 except Exception as send_err:
