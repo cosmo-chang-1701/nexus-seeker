@@ -606,7 +606,7 @@ def _format_to_target_center_style(text: str) -> str:
 
 def _format_to_target_center_style_with_title(title: str, text: str) -> str:
     if not text:
-        return ""
+        return f"**{title}**\n\n```text\n暫無數據\n```"
 
     raw_lines = text.split("\n")
     cleaned_lines = []
@@ -619,16 +619,13 @@ def _format_to_target_center_style_with_title(title: str, text: str) -> str:
         cleaned = re.sub(r"^[\-\*\•\d+\.\s]+", "", line_str).strip()
         cleaned = _clean_ansi(cleaned)
         if cleaned:
-            cleaned_lines.append(cleaned)
+            cleaned_lines.append(f"* {cleaned}")
 
     if not cleaned_lines:
-        return f"**{title}**\n* 暫無數據"
+        return f"**{title}**\n\n```text\n暫無數據\n```"
 
-    formatted_lines = [f"**{title}**"]
-    for line in cleaned_lines:
-        formatted_lines.append(f"* {line}")
-
-    return "\n".join(formatted_lines)
+    content = "\n".join(cleaned_lines)
+    return f"**{title}**\n\n```text\n{content}\n```"
 
 
 def build_post_market_intelligence_embed(
@@ -709,10 +706,12 @@ def build_post_market_intelligence_embed(
         cleaned_macro = [line.strip() for line in macro_lines if line.strip()]
         formatted_macro_lines = []
         for line in cleaned_macro:
-            formatted_macro_lines.append(f"* {line}")
-        macro_value = "\n".join(formatted_macro_lines)
+            clean_line = re.sub(r"^[\-\*\•\s]+", "", line).strip()
+            formatted_macro_lines.append(f"* {clean_line}")
+        macro_content = "\n".join(formatted_macro_lines)
+        macro_value = f"\n```text\n{macro_content}\n```"
     else:
-        macro_value = "目前無宏觀風險數據。"
+        macro_value = "\n```text\n目前無宏觀風險數據。\n```"
 
     # Process positions text to extract financial summary and chunk positions
     if positions_list and positions_text and positions_text != "目前無持倉部位。":
@@ -743,7 +742,25 @@ def build_post_market_intelligence_embed(
 
         positions_text = positions_text.strip().strip("`").strip()
         blocks = [b.strip() for b in positions_text.split("\n\n") if b.strip()]
-        chunks = _chunk_text_blocks(blocks, max_len=1024)
+
+        transformed_blocks = []
+        for block in blocks:
+            lines = [line.strip() for line in block.split("\n") if line.strip()]
+            if not lines:
+                continue
+            heading = lines[0]
+            detail_lines = []
+            for line in lines[1:]:
+                cleaned_line = re.sub(r"^[\-\*\•\s]+", "", line).strip()
+                cleaned_line = cleaned_line.replace("`", "").replace("*", "")
+                detail_lines.append(f"* {cleaned_line}")
+            detail_content = "\n".join(detail_lines)
+            transformed_block = (
+                f"{heading}\n\n" f"```text\n" f"{detail_content}\n" f"```"
+            )
+            transformed_blocks.append(transformed_block)
+
+        chunks = _chunk_text_blocks(transformed_blocks, max_len=1024)
 
         for i, chunk in enumerate(chunks):
             name = (
@@ -766,7 +783,7 @@ def build_post_market_intelligence_embed(
     else:
         embed.add_field(
             name="📊 投資組合收盤持倉明細",
-            value="目前無持倉部位。",
+            value="```text\n目前無持倉部位。\n```",
             inline=False,
         )
 
@@ -776,27 +793,37 @@ def build_post_market_intelligence_embed(
         inline=False,
     )
 
-    if sectors_data:
-        sector_lines = ["**🔄 行業板塊資金輪動 (Sector Rotation)**"]
-        sorted_sectors = sorted(
-            sectors_data,
-            key=lambda item: abs(_safe_float(item.get("pct_change"))),
-            reverse=True,
-        )
-        for item in sorted_sectors:
-            symbol = item.get("symbol", "N/A")
-            name = item.get("name", "N/A")
-            change = _safe_float(item.get("pct_change"))
-            rel_vol = _safe_float(item.get("rel_vol"))
-            skew = _safe_float(item.get("skew"))
-            uoa_count = int(item.get("uoa_count", 0))
-
-            change_emoji = "🟢" if change > 0 else "🚨" if change < 0 else "⚖️"
-
-            sector_lines.append(
-                f"* **{symbol}** ({name})：{change_emoji} `{change:+.2f}%` | 量比 `{rel_vol:.2f}x` | Skew `{skew:+.1f}` | UOA `{uoa_count}`"
+    if sectors_data is not None:
+        if sectors_data:
+            sorted_sectors = sorted(
+                sectors_data,
+                key=lambda item: abs(_safe_float(item.get("pct_change"))),
+                reverse=True,
             )
-        sector_value = "\n".join(sector_lines)
+            sector_content_lines = []
+            for item in sorted_sectors:
+                symbol = item.get("symbol", "N/A")
+                name = item.get("name", "N/A")
+                change = _safe_float(item.get("pct_change"))
+                rel_vol = _safe_float(item.get("rel_vol"))
+                skew = _safe_float(item.get("skew"))
+                uoa_count = int(item.get("uoa_count", 0))
+
+                change_emoji = "🟢" if change > 0 else "🚨" if change < 0 else "⚖️"
+                sector_content_lines.append(
+                    f"* {symbol} ({name})：{change_emoji} {change:+.2f}% | 量比 {rel_vol:.2f}x | Skew {skew:+.1f} | UOA {uoa_count}"
+                )
+            sector_content = "\n".join(sector_content_lines)
+            sector_value = (
+                "**🔄 行業板塊資金輪動 (Sector Rotation)**\n\n"
+                f"```text\n{sector_content}\n```"
+            )
+        else:
+            sector_value = (
+                "**🔄 行業板塊資金輪動 (Sector Rotation)**\n\n"
+                "```text\n暫無行業資金輪動數據。\n```"
+            )
+
         embed.add_field(
             name="🔄 行業板塊資金輪動 (Sector Rotation)",
             value=_safe_embed_field_value(sector_value, "無數據"),
