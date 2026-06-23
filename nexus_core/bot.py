@@ -487,7 +487,7 @@ class NexusBot(commands.Bot):
                     if view_info.startswith("ApplyTelemetryView:"):
                         sug_str = view_info.split(":", 1)[1]
                         try:
-                            from cogs.order_ui import ApplyTelemetryView
+                            from cogs.order_views import ApplyTelemetryView
 
                             sug_raw = json.loads(sug_str)
                             suggestions = {
