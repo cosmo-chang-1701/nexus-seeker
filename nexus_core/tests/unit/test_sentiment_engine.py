@@ -400,7 +400,7 @@ async def test_kv_cache_invalidation_on_price_deviation():
         "iv_source": "LIVE_IV",
         "reference_spot_price": 100.0,
     }
-    save_kv_cache(cache_key, cached_data)
+    await save_kv_cache(cache_key, cached_data)
 
     # Mock get_quote to return 105.0 (> 2% deviation)
     with patch(

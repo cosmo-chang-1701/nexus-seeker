@@ -1057,7 +1057,7 @@ class SentimentEngine:
                 "is_degraded": is_degraded,
                 "circuit_breaker_triggered": 0,
             }
-            save_kv_cache(cache_key, result)
+            await save_kv_cache(cache_key, result)
             return result
         except Exception as e:
             logger.error(f"[{symbol}] Max Pain 計算失敗: {e}")
@@ -1593,9 +1593,9 @@ class SentimentEngine:
                         )
 
             # B. Fallback path
-            if not current_iv or current_iv <= 0:
+            if not current_iv or math.isnan(current_iv) or current_iv <= 0:
                 last_db_iv = SentimentEngine.get_last_stored_iv(symbol)
-                if last_db_iv and last_db_iv > 0:
+                if last_db_iv and not math.isnan(last_db_iv) and last_db_iv > 0:
                     current_iv = last_db_iv
                     iv_source = "STORED_IV"
                 else:
@@ -1609,7 +1609,7 @@ class SentimentEngine:
                         current_iv = float(df_temp["Log_Ret"].std() * np.sqrt(252))
                         iv_source = "HV_PROXY"
 
-            if not current_iv or current_iv <= 0:
+            if not current_iv or math.isnan(current_iv) or current_iv <= 0:
                 raise ValueError(f"無法獲取 {symbol} 的 IV，且歷史波動率數據不足")
 
             # 3. 儲存至 database historical_iv (儲存原始 IV，防範閉市期間重複乘算與歷史數據污染)
@@ -1796,7 +1796,7 @@ class SentimentEngine:
             # 12. 寫入快取
             _iv_cache[symbol] = (metrics, current_time + _IV_CACHE_TTL)
             try:
-                save_kv_cache(cache_key, metrics.model_dump())
+                await save_kv_cache(cache_key, metrics.model_dump())
             except Exception as e:
                 logger.warning(f"[{symbol}] Failed to save IVMetrics to kv_cache: {e}")
             return metrics
