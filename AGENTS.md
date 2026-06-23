@@ -436,6 +436,18 @@ Current repository rule:
     - Secondary: Curated blurple `0x5865F2`
   - **Standardized Footer Signature**: Every embed footer is dynamically formatted as `"🌌 Nexus Seeker • [Module Description]"`, clean of duplicate prefixes, and synchronized with a system timestamp.
   - **Pagination Compatibility (`from_dict`)**: The `.from_dict()` classmethod is overridden to seamlessly convert serialized dictionary payloads back into fully styled `NexusEmbed` instances.
+- **量化控制台與多模組 Embed 排版原則 (Quantitative Console & Multi-Module Embed Layout Principles)**:
+  - **控制台美學 (ANSI Wrapping)**：所有包含實時行情、量化數據、持倉或風險精算的內容，必須使用 ````ansi` 程式碼區塊包裹以進行控制台渲染。
+  - **樹狀縮排與結構標籤**：子項目統一使用分叉角 ` ├─ ` 與結尾角 ` └─ ` 符號進行多級縮排，輔以長度適配的 `-` 分隔線，以維護純文字網格的視覺層級。
+  - **欄位模組化與欄位分離 (Field-based Modularization)**：除了概覽摘要（Overview）或特定心跳大圖使用單一 Description 整合外，任何包含多個邏輯子模組的 Embed 必須以多個 Discord Embed Fields 進行物理隔離。各欄位 Title 應搭配適當的 Emoji 作為首碼，而其 Value 則獨立包裹各自的 ````ansi` 程式碼區塊，避免混雜。
+  - **數據狀態後綴與降級防禦 (Data Suffix & Degradation Fallbacks)**：
+    - 當非交易時段、市場封盤或網路/API 異常導致即時數據不可用時，Embed Title 必須追加狀態後綴（如 ` [盤前數據未更新/降級模式]`），且受影響的指標應自動降級顯示為公允的預設字元（如 `--%`、`--`、`N/A`、`封盤中`）。
+    - 若成功讀取本地 SQLite 資料庫快取或歷史代理數據（如歷史波動率 proxy），Title 應註明來源屬性（如 ` [盤前/前日收盤]` 或 ` [盤前/HV代理]`），數值旁應附加 `(前日收盤 / 歷史波動率代理)` 標記，確保數據透明度。
+    - 若核心比對數值偏離公允區間超出特定閥值（例如價格偏離痛點 >30% 觸發斷路器），下游的執行或操作指南需自動顯示 `N/A (已觸發斷路器)` 或相關警告，暫停輸出特定交易建議。
+  - **結構化網格與戰術意圖映射 (Structured Grid & Tactical Intent Mapping)**：數據表格（如異常交易流、委託單列表、持倉明細）必須動態計算每列的最大字元寬度以對齊網格。底層的原始數據流或交易類別應被映射轉換為直觀的戰術意圖描述，使終端使用者能迅速判讀意圖與支撐/阻力物理界線。
+  - **字數上限與分頁保護 (Pagination & Message Splitting)**：
+    - **批次分頁限制**：當批次掃描或查詢的標的/項目數量過大時，為避免超出 Discord 的 4096 (Description) 與 6000 (Total Size) 字元上限而導致 `400 Bad Request` 系統錯誤，單一頁面最多僅能承載 **15 個標的**。
+    - **動態頁碼與分流投遞**：分頁後 Title 後方應標註 `(第 X/Y 頁)`。呼叫端對於互動指令應透過 Ephemeral 迭代發送，排程背景任務則應經由 `queue_dm` 作為獨立訊息進行分開投遞，嚴禁在單一訊息中過度堆疊。
 
 ---
 

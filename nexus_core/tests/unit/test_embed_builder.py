@@ -1274,3 +1274,85 @@ def test_create_watchlist_signal_embed_non_degraded():
     )
 
     assert embed.title == "標的分析中心 2.0: AAPL 每半小時戰場心跳"
+
+
+def test_create_telemetry_alignment_embeds():
+    from cogs.embed_builders.order_embeds import create_telemetry_alignment_embeds
+
+    # Define a normal item
+    item = {
+        "symbol": "AAPL",
+        "order_id": 123,
+        "order_type": "LIMIT",
+        "price_label": "掛單限價",
+        "current_price": 145.0,  # limit price
+        "original_qty": 10.0,
+        "suggested_price": 142.0,
+        "suggested_qty": 10,
+        "is_size_down": False,
+        "holding_type_label": "LEVERAGED",
+        "holding_shares": 50,
+        "holding_status": "持倉中",
+        "avg_cost": 140.0,
+        "live_price": 146.5,
+        "gain_loss_pct": 4.64,
+        "put_wall": 130.0,
+        "wall_dist_pct": 11.26,
+        "wall_status": "上方緩衝",
+        "skew_val": 2.5,
+        "skew_pct": 60.0,
+        "skew_status": "平穩",
+        "iv_val": 35.0,
+        "iv_rank": 25.0,
+        "iv_status": "Normal",
+        "proximity_pct": 1.02,
+        "radar_status": "雷達鎖定中",
+        "system_status_flag": "TELEMETRY ACTIVE",
+        "system_instruction_directive": "通過實時防線，維持紀律掛單。",
+        "is_premarket": False,
+        "iv_source": "LIVE_IV",
+        "side": "BUY",
+    }
+
+    # 1. Test single normal item
+    embeds = create_telemetry_alignment_embeds([item])
+    assert len(embeds) == 1
+    val = embeds[0].fields[0].value
+    assert "```ansi" in val
+    assert "\u001b[1;36m【物理防線 (The Shield)】\u001b[0m" in val
+    assert "選擇權偏斜 (Option Skew)" in val
+    assert "隱含波動率 (IV)" in val
+
+    # 2. Test pre-market degraded (no IV/Option data)
+    pm_degraded_item = dict(
+        item, is_premarket=True, iv_val=0.0, iv_source="UNAVAILABLE"
+    )
+    embeds_pm_degraded = create_telemetry_alignment_embeds([pm_degraded_item])
+    assert len(embeds_pm_degraded) == 1
+    val_pm_degraded = embeds_pm_degraded[0].fields[0].value
+    assert "[盤前數據未更新]" in val_pm_degraded
+    assert "等待開盤" in val_pm_degraded
+    assert "--%" in val_pm_degraded
+
+    # 3. Test pre-market with STORED_IV fallback
+    pm_stored_item = dict(item, is_premarket=True, iv_val=35.0, iv_source="STORED_IV")
+    embeds_pm_stored = create_telemetry_alignment_embeds([pm_stored_item])
+    assert len(embeds_pm_stored) == 1
+    val_pm_stored = embeds_pm_stored[0].fields[0].value
+    assert "[盤前/前日收盤]" in val_pm_stored
+    assert "(前日收盤)" in val_pm_stored
+
+    # 4. Test pre-market with HV_PROXY fallback
+    pm_hv_item = dict(item, is_premarket=True, iv_val=42.0, iv_source="HV_PROXY")
+    embeds_pm_hv = create_telemetry_alignment_embeds([pm_hv_item])
+    assert len(embeds_pm_hv) == 1
+    val_pm_hv = embeds_pm_hv[0].fields[0].value
+    assert "[盤前/HV代理]" in val_pm_hv
+    assert "(歷史波動率代理)" in val_pm_hv
+
+    # 5. Test pagination (16 items -> should produce at least 2 embeds if split or chunked)
+    items_16 = [dict(item, order_id=i) for i in range(16)]
+    embeds_16 = create_telemetry_alignment_embeds(items_16)
+    assert len(embeds_16) >= 2
+    assert "(第 1/" in embeds_16[0].title
+    assert "頁)" in embeds_16[0].title
