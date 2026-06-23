@@ -872,3 +872,51 @@ def _add_sentiment_fields(embed, data):
         value=f"`{iv_rank:.1f}%` {ivr_label}\n\u200b",
         inline=True,
     )
+
+
+def get_embed_length(embed: discord.Embed) -> int:
+    """計算 Embed 的總字元數，用以評估是否超出 Discord 的 6000 字元限制。"""
+    total = 0
+    if embed.title:
+        total += len(embed.title)
+    if embed.description:
+        total += len(embed.description)
+    if embed.footer and embed.footer.text:
+        total += len(embed.footer.text)
+    if embed.author and embed.author.name:
+        total += len(embed.author.name)
+    for field in embed.fields:
+        if field.name:
+            total += len(field.name)
+        if field.value:
+            total += len(field.value)
+    return total
+
+
+def chunk_embeds(
+    embeds: list[discord.Embed], max_size: int = 5500, max_count: int = 10
+) -> list[list[discord.Embed]]:
+    """
+    將一組 Embed 依照總字元長度限制與最大數量限制，切分成多個符合 Discord 限制的子列表（Chunks）。
+    每組子列表的累計字元數不超過 max_size，且 Embed 數量不超過 max_count。
+    """
+    chunks: list[list[discord.Embed]] = []
+    current_chunk: list[discord.Embed] = []
+    current_size = 0
+
+    for embed in embeds:
+        embed_len = get_embed_length(embed)
+        if current_chunk and (
+            current_size + embed_len > max_size or len(current_chunk) >= max_count
+        ):
+            chunks.append(current_chunk)
+            current_chunk = [embed]
+            current_size = embed_len
+        else:
+            current_chunk.append(embed)
+            current_size += embed_len
+
+    if current_chunk:
+        chunks.append(current_chunk)
+
+    return chunks

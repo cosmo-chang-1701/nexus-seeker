@@ -454,18 +454,16 @@ async def test_batch_scan_warning_button_chunking(mock_interaction, mock_bot):
     mock_interaction.followup.send.reset_mock()
     await btn.callback(mock_interaction)
 
-    # 12 embeds total. With chunk_size=5, it should send chunks of sizes: 5, 5, 2.
-    # So followup.send should be called 1 (initial progress message) + 3 (chunks) = 4 times.
-    assert mock_interaction.followup.send.call_count == 4
+    # 12 embeds total. Under our dynamic chunking logic with default max_count=10:
+    # They should be split into 2 chunks of sizes: 10, 2.
+    # So followup.send should be called 1 (initial progress message) + 2 (chunks) = 3 times.
+    assert mock_interaction.followup.send.call_count == 3
 
     calls = mock_interaction.followup.send.call_args_list
     assert "正在批次分析以下 12 個警示標的" in calls[0][0][0]
 
     assert "embeds" in calls[1][1]
-    assert len(calls[1][1]["embeds"]) == 5
+    assert len(calls[1][1]["embeds"]) == 10
 
     assert "embeds" in calls[2][1]
-    assert len(calls[2][1]["embeds"]) == 5
-
-    assert "embeds" in calls[3][1]
-    assert len(calls[3][1]["embeds"]) == 2
+    assert len(calls[2][1]["embeds"]) == 2
