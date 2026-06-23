@@ -13,15 +13,17 @@ from database.orders import (
     update_active_order_price,
 )
 from services.telemetry_pricing_engine import calculate_telemetry_price
-from cogs.order_ui import (
+from cogs.order_modals import (
     DynamicOrderModal,
-    OrderSetupView,
-    OrderUICog,
     CancelOrderModal,
     EditOrderModal,
+)
+from cogs.order_views import (
+    OrderSetupView,
     OrderItemView,
     ApplyTelemetryView,
 )
+from cogs.order_ui import OrderUICog
 
 
 @pytest.mark.asyncio
@@ -478,7 +480,7 @@ async def test_telemetry_alert_and_alignment(mock_interaction, db_conn):
         iv_status="Normal",
     )
     with patch(
-        "cogs.order_ui._fetch_cache_and_live_price",
+        "services.order_telemetry_service.fetch_cache_and_live_price",
         new=AsyncMock(return_value=(101.0, 102.0)),
     ), patch(
         "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
@@ -517,7 +519,7 @@ async def test_telemetry_alert_and_alignment(mock_interaction, db_conn):
     mock_btn_interaction.followup = AsyncMock()
 
     with patch(
-        "cogs.order_ui._fetch_cache_and_live_price",
+        "services.order_telemetry_service.fetch_cache_and_live_price",
         new=AsyncMock(return_value=(101.0, 102.0)),
     ):
         await view.apply_telemetry_button.callback(mock_btn_interaction)
@@ -912,7 +914,7 @@ async def test_telemetry_alert_ignores_stale_max_pain(mock_interaction, db_conn)
     mock_telemetry_spy = AsyncMock(return_value=(100.0, 20, ["Telemetry Mock"]))
 
     with patch(
-        "cogs.order_ui._fetch_cache_and_live_price",
+        "services.order_telemetry_service.fetch_cache_and_live_price",
         new=AsyncMock(return_value=(101.0, 102.0)),
     ), patch(
         "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
