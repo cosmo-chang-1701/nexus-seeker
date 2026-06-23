@@ -3,15 +3,15 @@ import json
 from typing import Any, Optional
 from .financials import get_cached_financials, save_financials_cache, purge_old_cache
 
-from database.connection import get_read_connection, execute_write
+from database.connection import get_read_connection, execute_write_async
 
 logger = logging.getLogger(__name__)
 
 
-def save_kv_cache(key: str, value: Any) -> bool:
+async def save_kv_cache(key: str, value: Any) -> bool:
     try:
         val_str = json.dumps(value)
-        execute_write(
+        await execute_write_async(
             """
             INSERT INTO kv_cache (key, value, updated_at)
             VALUES (?, ?, CURRENT_TIMESTAMP)

@@ -14,7 +14,7 @@ import config
 def clear_iv_cache():
     _iv_cache.clear()
     with patch("database.cache.get_kv_cache", return_value=None), patch(
-        "database.cache.save_kv_cache", return_value=None
+        "database.cache.save_kv_cache", new_callable=AsyncMock
     ):
         yield
     _iv_cache.clear()

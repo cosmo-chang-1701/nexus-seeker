@@ -58,10 +58,10 @@ def get_cached_volume_poc(symbol: str) -> float | None:
     return float(val) if val is not None else None
 
 
-def save_cached_volume_poc(symbol: str, poc: float) -> None:
+async def save_cached_volume_poc(symbol: str, poc: float) -> None:
     from database.cache import save_kv_cache
 
-    save_kv_cache(f"volume_poc_{symbol.upper()}", poc)
+    await save_kv_cache(f"volume_poc_{symbol.upper()}", poc)
 
 
 def get_cached_gex_putwall(symbol: str) -> float | None:
@@ -71,10 +71,10 @@ def get_cached_gex_putwall(symbol: str) -> float | None:
     return float(val) if val is not None else None
 
 
-def save_cached_gex_putwall(symbol: str, wall: float) -> None:
+async def save_cached_gex_putwall(symbol: str, wall: float) -> None:
     from database.cache import save_kv_cache
 
-    save_kv_cache(f"gex_putwall_{symbol.upper()}", wall)
+    await save_kv_cache(f"gex_putwall_{symbol.upper()}", wall)
 
 
 def _estimate_volume_poc(df: pd.DataFrame, bins: int = 24) -> float:
@@ -261,7 +261,7 @@ async def build_enhanced_watchlist_metrics(
     if not df_stock.empty and len(df_stock) >= 60:
         try:
             volume_poc = max(_estimate_volume_poc(df_stock), 0.01)
-            await asyncio.to_thread(save_cached_volume_poc, symbol, volume_poc)
+            await save_cached_volume_poc(symbol, volume_poc)
         except Exception as e:
             logger.warning(f"Error calculating Vol POC for {symbol}: {e}")
     if volume_poc <= 0.0:
@@ -278,7 +278,7 @@ async def build_enhanced_watchlist_metrics(
             dividend_yield,
         )
         if gex_max_put_wall is not None and gex_max_put_wall > 0.0:
-            await asyncio.to_thread(save_cached_gex_putwall, symbol, gex_max_put_wall)
+            await save_cached_gex_putwall(symbol, gex_max_put_wall)
     except Exception as e:
         logger.warning(f"Error calculating GEX PutWall for {symbol}: {e}")
     if gex_max_put_wall is None or gex_max_put_wall <= 0.0:

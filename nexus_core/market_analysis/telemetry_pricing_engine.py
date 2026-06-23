@@ -129,10 +129,8 @@ async def _log_decision_to_sqlite(
     # Use kv_cache as a lightweight SQLite-backed audit trail without schema changes.
     # We only keep the latest decision per (user, symbol, order).
     try:
-        import asyncio
-
         key = f"telemetry:alignment_decision:{user_id}:{symbol.upper()}:{order_id}"
-        await asyncio.to_thread(save_kv_cache, key, payload)
+        await save_kv_cache(key, payload)
     except Exception as e:
         logger.debug(f"SYSTEM_LOG: kv_cache write skipped: {e}")
 

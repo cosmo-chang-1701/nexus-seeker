@@ -64,9 +64,6 @@ _finnhub_controls_by_loop: weakref.WeakKeyDictionary[
 # （單元測試也會 patch 這個變數以驗證行為）
 _rate_limit_until = 0.0
 
-# module-level rate limiter semaphore
-_limiter: Optional[asyncio.Semaphore] = None
-
 _clients: List[finnhub.Client] = []
 _client_idx = 0
 
@@ -132,17 +129,10 @@ async def _execute_api_call(func, *args, **kwargs) -> Any:
     注意：limiter 以 event loop 維度維護；429 cooldown 以全局 `_rate_limit_until` 維護。
     """
 
-    global _rate_limit_until, _limiter
-
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-
-    if _limiter is None or (loop and getattr(_limiter, "_loop", None) != loop):
-        _limiter = asyncio.Semaphore(3)
+    global _rate_limit_until
 
     controls = _get_finnhub_controls()
+    sem = controls["sem"]
 
     max_retries = 3
 
@@ -158,7 +148,7 @@ async def _execute_api_call(func, *args, **kwargs) -> Any:
             logger.info(f"⏳ 檢測到全局頻率限制中，主動等待 {wait_time:.1f} 秒...")
             await asyncio.sleep(wait_time)
 
-        async with _limiter:
+        async with sem:
             async with controls["limiter_per_second"]:
                 async with controls["limiter"]:
                     # 1) 進入限流鎖後再確認一次（防止排隊期間被其他 task 更新 cooldown）

@@ -414,11 +414,10 @@ class CalendarService:
         import config
         from database.cache import save_kv_cache
         from database.connection import execute_write_async
-        import asyncio
 
         if not getattr(config, "TUNNEL_URL", ""):
             logger.info("未配置 TUNNEL_URL，跳過 FedWatch 爬取。")
-            await asyncio.to_thread(save_kv_cache, "macro_fedwatch_is_fallback", 1)
+            await save_kv_cache("macro_fedwatch_is_fallback", 1)
             return
 
         try:
@@ -439,14 +438,12 @@ class CalendarService:
                         logger.info(
                             f"成功更新 CME FedWatch FOMC 利率維持/加息機率: {prob * 100:.1f}%"
                         )
-                        await asyncio.to_thread(
-                            save_kv_cache, "macro_fedwatch_is_fallback", 0
-                        )
+                        await save_kv_cache("macro_fedwatch_is_fallback", 0)
                         return
         except Exception as e:
             logger.error(f"更新 FedWatch 概率失敗: {e}")
 
-        await asyncio.to_thread(save_kv_cache, "macro_fedwatch_is_fallback", 1)
+        await save_kv_cache("macro_fedwatch_is_fallback", 1)
 
 
 # Singleton instance

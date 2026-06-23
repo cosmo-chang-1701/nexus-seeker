@@ -2,7 +2,6 @@ import httpx
 import logging
 import config
 from typing import Dict
-import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +12,7 @@ async def fetch_gex_metrics() -> Dict[str, float]:
     from database.cache import save_kv_cache
 
     if not getattr(config, "TUNNEL_URL", ""):
-        await asyncio.to_thread(save_kv_cache, "macro_gex_is_fallback", 1)
+        await save_kv_cache("macro_gex_is_fallback", 1)
         return fallback
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -22,24 +21,22 @@ async def fetch_gex_metrics() -> Dict[str, float]:
                 data = res.json()
                 if data.get("status") == "success":
                     gex_data = data["data"]
-                    await asyncio.to_thread(
-                        save_kv_cache, "macro_spy_spot", gex_data.get("spy_spot", 510.0)
+                    await save_kv_cache(
+                        "macro_spy_spot", gex_data.get("spy_spot", 510.0)
                     )
-                    await asyncio.to_thread(
-                        save_kv_cache,
+                    await save_kv_cache(
                         "macro_spy_gamma_flip",
                         gex_data.get("gamma_flip", 515.0),
                     )
-                    await asyncio.to_thread(
-                        save_kv_cache,
+                    await save_kv_cache(
                         "macro_gamma_flip_line",
                         gex_data.get("gamma_flip", 515.0) * 10.0,
                     )
-                    await asyncio.to_thread(save_kv_cache, "macro_gex_is_fallback", 0)
+                    await save_kv_cache("macro_gex_is_fallback", 0)
                     return gex_data
     except Exception as e:
         logger.warning(f"無法從 Tunnel Scraper 獲取 GEX 數據: {e}")
-    await asyncio.to_thread(save_kv_cache, "macro_gex_is_fallback", 1)
+    await save_kv_cache("macro_gex_is_fallback", 1)
     return fallback
 
 

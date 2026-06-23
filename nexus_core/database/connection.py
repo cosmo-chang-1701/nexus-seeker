@@ -178,10 +178,11 @@ class DatabaseWriteQueue:
         if task_type == "save_historical_iv":
             # Task 4 self-healing and fallback logic!
             symbol, iv, date_str = data
+            import math
 
-            if iv is None:
+            if iv is None or (isinstance(iv, float) and math.isnan(iv)):
                 logger.warning(
-                    f"[{symbol}] save_historical_iv received None IV. Triggering fallback/self-healing."
+                    f"[{symbol}] save_historical_iv received invalid IV ({iv}). Triggering fallback/self-healing."
                 )
 
                 # Fallback 1: Yesterday's closing IV
@@ -191,7 +192,11 @@ class DatabaseWriteQueue:
                         (symbol,),
                     )
                     row = cursor.fetchone()
-                    if row and row[0] is not None:
+                    if (
+                        row
+                        and row[0] is not None
+                        and not (isinstance(row[0], float) and math.isnan(row[0]))
+                    ):
                         iv = row[0]
                         logger.info(
                             f"[{symbol}] Fallback 1: Loaded last closing IV ({iv}) from historical_iv."
@@ -200,7 +205,7 @@ class DatabaseWriteQueue:
                     logger.error(f"[{symbol}] Fallback 1 query failed: {db_err}")
 
                 # Fallback 2: 30-day Historical Volatility (HV)
-                if iv is None:
+                if iv is None or (isinstance(iv, float) and math.isnan(iv)):
                     try:
                         from services.market_data_service import get_history_df
                         import pandas as pd
@@ -223,7 +228,7 @@ class DatabaseWriteQueue:
                             f"[{symbol}] Fallback 2 calculation failed: {hv_err}"
                         )
 
-            if iv is None:
+            if iv is None or (isinstance(iv, float) and math.isnan(iv)):
                 logger.warning(
                     f"⚠️ [{symbol}] All IV fallbacks failed. Skipping writing to historical_iv to prevent NOT NULL constraint error."
                 )
@@ -266,16 +271,22 @@ class DatabaseWriteQueue:
         try:
             if task_type == "save_historical_iv":
                 symbol, iv, date_str = data
-                if iv is None:
+                import math
+
+                if iv is None or (isinstance(iv, float) and math.isnan(iv)):
                     # Fallback 1: DB
                     cursor.execute(
                         "SELECT iv FROM historical_iv WHERE symbol = ? ORDER BY date DESC LIMIT 1",
                         (symbol,),
                     )
                     row = cursor.fetchone()
-                    if row and row[0] is not None:
+                    if (
+                        row
+                        and row[0] is not None
+                        and not (isinstance(row[0], float) and math.isnan(row[0]))
+                    ):
                         iv = row[0]
-                if iv is None:
+                if iv is None or (isinstance(iv, float) and math.isnan(iv)):
                     # Try fallback 2 (Historical Volatility) synchronously
                     try:
                         from services.market_data_service import get_history_df
@@ -306,7 +317,7 @@ class DatabaseWriteQueue:
                     except Exception as e:
                         logger.error(f"Direct write fallback 2 failed: {e}")
 
-                if iv is None:
+                if iv is None or (isinstance(iv, float) and math.isnan(iv)):
                     logger.warning(
                         f"⚠️ [{symbol}] All IV fallbacks failed in direct write. Skipping."
                     )
