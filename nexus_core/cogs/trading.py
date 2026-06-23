@@ -338,6 +338,9 @@ class SchedulerCog(commands.Cog):
                         "suggested_qty": suggested_qty,
                         "is_size_down": is_size_down,
                         "alert_text": getattr(decision, "alert_text", None),
+                        "is_premarket": False,
+                        "iv_source": "UNAVAILABLE",
+                        "side": o.get("side", "BUY"),
                     }
                 )
 

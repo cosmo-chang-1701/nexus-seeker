@@ -1449,6 +1449,13 @@ class OrderUICog(commands.Cog):
                     "radar_status": radar_status,
                     "system_status_flag": system_status_flag,
                     "system_instruction_directive": directive,
+                    "is_premarket": iv_metrics.is_premarket
+                    if (iv_metrics and hasattr(iv_metrics, "is_premarket"))
+                    else False,
+                    "iv_source": iv_metrics.iv_source
+                    if (iv_metrics and hasattr(iv_metrics, "iv_source"))
+                    else "UNAVAILABLE",
+                    "side": o.get("side", "BUY"),
                 }
             )
 
