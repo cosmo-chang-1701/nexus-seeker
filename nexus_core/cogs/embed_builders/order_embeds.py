@@ -803,15 +803,13 @@ def build_post_market_intelligence_embed(
             if survival_runway >= 9999
             else f"{survival_runway:,.1f} 天"
         )
-        runway_ansi = (
-            "```ansi\n"
-            f" ├─ 預估剩餘天數: \u001b[1;36m{runway_text}\u001b[0m\n"
-            " └─ 計算基準: 基於現有現金儲備與 Theta 收益\n"
-            "```"
+        runway_val = (
+            f"預估剩餘天數: **{runway_text}**\n"
+            f"計算基準: *基於現有現金儲備與 Theta 收益*"
         )
         embed.add_field(
             name="🏁 財務生存跑道 (Financial Runway)",
-            value=runway_ansi,
+            value=runway_val,
             inline=False,
         )
 
@@ -939,36 +937,32 @@ def build_post_market_intelligence_embed(
             )
             embed.add_field(name=name, value=f"```ansi\n{chunk}\n```", inline=False)
 
-        # Strip markdown bold & codeblock residues from summary strings before ANSI wrapping
+        # Strip markdown bold & codeblock residues from summary strings before formatting
         debit_cost_clean = debit_cost_val.replace("`", "").replace("**", "").strip()
         credit_cash_clean = credit_cash_val.replace("`", "").replace("**", "").strip()
         pnl_val_clean = pnl_val_str.replace("`", "").replace("**", "").strip()
 
-        pnl_color = ""
+        pnl_emoji = "⚖️"
         if "🟢" in pnl_val_clean or "+" in pnl_val_clean:
-            pnl_color = "\u001b[0;32m"
+            pnl_emoji = "🟢"
         elif "🚨" in pnl_val_clean or "🔴" in pnl_val_clean or "-" in pnl_val_clean:
-            pnl_color = "\u001b[0;31m"
-
-        pnl_val_ansi = (
-            f"```ansi\n{pnl_color}{pnl_val_clean}\u001b[0m\n```"
-            if pnl_color
-            else f"```ansi\n{pnl_val_clean}\n```"
-        )
+            pnl_emoji = "🔴"
 
         # Add inline fields for financial summary
         embed.add_field(
             name="💰 實質暴露 (Debit Cost)",
-            value=f"```ansi\n{debit_cost_clean}\n```",
+            value=f"**{debit_cost_clean}**",
             inline=True,
         )
         embed.add_field(
             name="💵 收取權利金 (Credit Cash)",
-            value=f"```ansi\n{credit_cash_clean}\n```",
+            value=f"**{credit_cash_clean}**",
             inline=True,
         )
         embed.add_field(
-            name="📊 未實現損益 (Unrealized PnL)", value=pnl_val_ansi, inline=True
+            name="📊 未實現損益 (Unrealized PnL)",
+            value=f"{pnl_emoji} **{pnl_val_clean}**",
+            inline=True,
         )
     else:
         embed.add_field(
@@ -1031,10 +1025,7 @@ def build_post_market_intelligence_embed(
                 embed.add_field(
                     name="📊 AI 多空大盤交叉驗證解讀",
                     value=_safe_embed_field_value(
-                        _format_to_target_center_style_with_title(
-                            "多空大盤交叉驗證 (Market Cross-Validation)",
-                            parsed["market"],
-                        ),
+                        parsed["market"],
                         "暫無分析",
                     ),
                     inline=False,
@@ -1043,10 +1034,7 @@ def build_post_market_intelligence_embed(
                 embed.add_field(
                     name="⚠️ AI 潛在陷阱與風險提示",
                     value=_safe_embed_field_value(
-                        _format_to_target_center_style_with_title(
-                            "潛在陷阱與風險提示 (Risk Warning & Trap Alert)",
-                            parsed["risk"],
-                        ),
+                        parsed["risk"],
                         "暫無分析",
                     ),
                     inline=False,
@@ -1055,10 +1043,7 @@ def build_post_market_intelligence_embed(
                 embed.add_field(
                     name="🛡️ AI 高勝率交易策略推薦",
                     value=_safe_embed_field_value(
-                        _format_to_target_center_style_with_title(
-                            "高勝率交易策略推薦 (Recommended Trading Strategies)",
-                            parsed["strategy"],
-                        ),
+                        parsed["strategy"],
                         "暫無分析",
                     ),
                     inline=False,
@@ -1067,10 +1052,7 @@ def build_post_market_intelligence_embed(
             embed.add_field(
                 name="🧠 AI 損益歸因與次日策略點評",
                 value=_safe_embed_field_value(
-                    _format_to_target_center_style_with_title(
-                        "AI 損益歸因與次日策略 (AI Attribution & Strategy)",
-                        ai_commentary,
-                    ),
+                    ai_commentary,
                     "暫無分析",
                 ),
                 inline=False,
