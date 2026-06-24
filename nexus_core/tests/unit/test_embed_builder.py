@@ -1111,7 +1111,7 @@ def test_build_post_market_intelligence_embed_parsed_ai_commentary():
     market_field = next(
         f for f in embed.fields if f.name == "📊 AI 多空大盤交叉驗證解讀"
     )
-    assert "```ansi" in market_field.value
+    assert "```ansi" not in market_field.value
     assert "第一點分析" in market_field.value
     assert "第二點分析" in market_field.value
 
