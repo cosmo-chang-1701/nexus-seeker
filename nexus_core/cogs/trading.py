@@ -16,7 +16,6 @@ from services.alert_filter import should_send_priority_alert
 from services.market_data_service import (
     get_macro_environment,
     get_quote,
-    batch_get_quotes,
 )
 from services.llm_service import generate_analyst_report
 from cogs.embed_builder import (
@@ -219,21 +218,27 @@ class SchedulerCog(commands.Cog):
 
     async def _dispatch_order_telemetry_alignment_alert(self) -> None:
         from database.orders import get_all_active_orders
-        from market_analysis.telemetry_pricing_engine import generate_alignment_decision
+        from services.calendar_service import calendar_service
+        from services.order_telemetry_service import (
+            build_telemetry_alignment_items,
+            resolve_holding_type_and_rows,
+        )
+        from datetime import datetime
 
         all_orders = await asyncio.to_thread(get_all_active_orders)
         if not all_orders:
             return
 
-        # 盤中風險條件：用 VIX 作為簡化的「尾端風險」開關（避免每 30 分鐘做大量深度期權掃描）
-        vix_quote = await get_quote("VIX")
-        vix_level = float(vix_quote.get("c", 0) or 0)
-        is_tail_risk = vix_level >= 25.0
-
-        symbols = sorted(
-            {str(o.get("symbol") or "").upper() for o in all_orders if o.get("symbol")}
-        )
-        quotes = await batch_get_quotes(symbols) if symbols else {}
+        macro_events = await calendar_service.get_high_impact_events(days=14)
+        macro_event_dates: set[str] = set()
+        for event in macro_events:
+            try:
+                event_date = datetime.fromisoformat(
+                    str(event.time).replace("Z", "+00:00")
+                ).date()
+                macro_event_dates.add(event_date.isoformat())
+            except ValueError:
+                continue
 
         orders_by_uid: dict[int, list[dict[str, Any]]] = {}
         for o in all_orders:
@@ -248,107 +253,39 @@ class SchedulerCog(commands.Cog):
             ):
                 continue
 
-            alignment_items: list[dict[str, Any]] = []
-            truncated = False
+            user_holdings = await asyncio.to_thread(database.get_user_holdings, uid)
+            user_trades = await asyncio.to_thread(database.get_user_portfolio, uid)
+            holding_type, holding_map = resolve_holding_type_and_rows(
+                holdings=user_holdings, trades=user_trades
+            )
 
-            for o in orders:
-                sym = str(o.get("symbol") or "").upper()
-                if not sym:
-                    continue
+            alignment_items, truncated = await build_telemetry_alignment_items(
+                user_id=uid,
+                orders=orders,
+                holding_type=holding_type,
+                holding_map=holding_map,
+                macro_event_dates=macro_event_dates,
+            )
 
-                order_type = str(o.get("order_type") or "").upper()
+            # Filter for items that actually need price or quantity adjustment
+            filtered_items = []
+            for item in alignment_items:
+                suggested_price = float(item["suggested_price"])
+                suggested_qty = int(item["suggested_qty"])
+                current_price = float(item["current_price"])
+                original_qty = int(item["original_qty"])
 
-                # Trailing stop 的 trailing_value 並非「固定掛單價格」，不適用價格對齊警報。
-                if order_type in ("TRAILING_STOP_USD", "TRAILING_STOP_PCT"):
-                    continue
-
-                limit_p = float(o.get("limit_price") or 0)
-                stop_p = float(o.get("stop_price") or 0)
-
-                price_label = "掛單價格"
-                if order_type in ("LIMIT", "STOP_LIMIT") and limit_p > 0:
-                    current_price = limit_p
-                    price_label = "掛單限價"
-                elif order_type in ("STOP", "STOP_LIMIT") and stop_p > 0:
-                    current_price = stop_p
-                    price_label = "掛單停損價"
-                else:
-                    current_price = limit_p if limit_p > 0 else stop_p
-
-                if current_price <= 0:
-                    continue
-
-                original_qty = int(round(float(o.get("quantity") or 1.0)))
-                original_qty = max(1, original_qty)
-
-                q = quotes.get(sym, {})
-                spot_price = float(q.get("c") or 0) or current_price
-                prev_close = float(q.get("pc") or 0)
-
-                # Telemetry 引擎：目前以輕量化模式運行（由 VIX 高低控制尾端風險參數）
-                iv = 0.55 if is_tail_risk else 0.35
-                hist_iv = 0.35
-                skew_percentile = 0.98 if is_tail_risk else 0.50
-
-                decision = await generate_alignment_decision(
-                    user_id=uid,
-                    order_id=int(o.get("id") or 0),
-                    symbol=sym,
-                    current_order_price=float(current_price),
-                    spot_price=float(spot_price),
-                    original_qty=original_qty,
-                    iv=iv,
-                    hist_iv=hist_iv,
-                    iv_rank=None,  # risk-averse default: unknown IVR locks PRICE_UP
-                    max_pain_price=None,  # will fallback to Expected Move boundary only
-                    prev_max_pain=0.0,
-                    skew_percentile=skew_percentile,
-                    put_call_ratio=1.0,
-                    prev_close=prev_close,
-                )
-
-                if decision is None:
-                    continue
-
-                suggested_price = float(decision.suggested_price)
-                suggested_qty = int(decision.suggested_qty)
-
-                # 只有在價格或數量真的需要調整時才推播，避免每 30 分鐘噪音轟炸
                 if (
-                    abs(suggested_price - current_price) < 0.01
-                    and suggested_qty == original_qty
+                    abs(suggested_price - current_price) >= 0.01
+                    or suggested_qty != original_qty
                 ):
-                    continue
+                    filtered_items.append(item)
 
-                is_size_down = suggested_qty < original_qty
-
-                if len(alignment_items) * 500 > 3500:
-                    truncated = True
-                    break
-
-                alignment_items.append(
-                    {
-                        "symbol": sym,
-                        "order_id": o.get("id"),
-                        "order_type": order_type,
-                        "price_label": price_label,
-                        "current_price": current_price,
-                        "original_qty": original_qty,
-                        "suggested_price": suggested_price,
-                        "suggested_qty": suggested_qty,
-                        "is_size_down": is_size_down,
-                        "alert_text": getattr(decision, "alert_text", None),
-                        "is_premarket": False,
-                        "iv_source": "UNAVAILABLE",
-                        "side": o.get("side", "BUY"),
-                    }
-                )
-
-            if not alignment_items:
+            if not filtered_items:
                 continue
 
             embeds = create_telemetry_alignment_embeds(
-                alignment_items,
+                filtered_items,
                 truncated=truncated,
                 include_apply_button_hint=False,
                 scheduled_mode=True,

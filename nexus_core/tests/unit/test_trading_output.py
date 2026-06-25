@@ -318,3 +318,87 @@ async def test_monitor_vtr_task_handles_missing_trade_info():
     # Verify only the valid trade (uid 2) triggered an alert and queued a DM
     mock_builder.assert_called_once()
     bot.queue_dm.assert_awaited_once_with(2, embed=embed)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_order_telemetry_alignment_alert_success():
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+
+    with patch("discord.ext.tasks.Loop.start"):
+        cog = SchedulerCog(bot)
+
+    mock_orders = [
+        {
+            "id": 100,
+            "user_id": 1,
+            "symbol": "AAPL",
+            "quantity": 10.0,
+            "order_type": "LIMIT",
+            "limit_price": 150.0,
+            "side": "BUY",
+        }
+    ]
+
+    mock_alignment_item = {
+        "symbol": "AAPL",
+        "order_id": 100,
+        "order_type": "LIMIT",
+        "price_label": "掛單限價",
+        "current_price": 150.0,
+        "original_qty": 10,
+        "suggested_price": 145.0,
+        "suggested_qty": 8,
+        "is_size_down": True,
+        "holding_type_label": "LEVERAGED",
+        "holding_shares": 0,
+        "holding_status": "空倉待命",
+        "avg_cost": 0.0,
+        "live_price": 152.0,
+        "gain_loss_pct": 0.0,
+        "put_wall": 140.0,
+        "wall_dist_pct": 7.89,
+        "wall_status": "上方緩衝",
+        "skew_val": 1.2,
+        "skew_pct": 50.0,
+        "skew_status": "平穩",
+        "iv_val": 35.0,
+        "iv_rank": 30.0,
+        "iv_status": "Normal",
+        "proximity_pct": 1.31,
+        "radar_status": "偏離擴大",
+        "system_status_flag": "TELEMETRY ACTIVE",
+        "system_instruction_directive": "通過實時防線，維持紀律掛單。",
+        "is_premarket": False,
+        "iv_source": "LIVE_IV",
+        "side": "BUY",
+    }
+
+    mock_embed = object()
+
+    with patch(
+        "database.orders.get_all_active_orders", return_value=mock_orders
+    ), patch(
+        "services.calendar_service.calendar_service.get_high_impact_events",
+        new=AsyncMock(return_value=[]),
+    ), patch("database.is_notification_enabled", return_value=True), patch(
+        "database.get_user_holdings", return_value=[]
+    ), patch("database.get_user_portfolio", return_value=[]), patch(
+        "services.order_telemetry_service.resolve_holding_type_and_rows",
+        return_value=("LEVERAGED", {}),
+    ), patch(
+        "services.order_telemetry_service.build_telemetry_alignment_items",
+        new=AsyncMock(return_value=([mock_alignment_item], False)),
+    ), patch(
+        "cogs.trading.create_telemetry_alignment_embeds",
+        return_value=[mock_embed],
+    ) as mock_embed_builder:
+        await cog._dispatch_order_telemetry_alignment_alert()
+
+    mock_embed_builder.assert_called_once_with(
+        [mock_alignment_item],
+        truncated=False,
+        include_apply_button_hint=False,
+        scheduled_mode=True,
+    )
+    bot.queue_dm.assert_awaited_once_with(1, embed=mock_embed)
