@@ -996,7 +996,7 @@ class SentimentEngine:
                 # SWR: Try to read old cache from DB and return it directly, marked as is_stale = True
                 from database import get_market_cache
 
-                old_cache = get_market_cache(symbol)
+                old_cache = get_market_cache(symbol, expiry)
                 if old_cache:
                     logger.info(
                         f"[{symbol}] SWR: Returning old cached Max Pain data to avoid cache avalanche."
