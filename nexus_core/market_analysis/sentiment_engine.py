@@ -1485,18 +1485,25 @@ class SentimentEngine:
         if symbol in _iv_cache:
             cached_val, expiry = _iv_cache[symbol]
             if current_time < expiry:
-                ref_price = getattr(cached_val, "reference_spot_price", None)
-                if ref_price and ref_price > 0 and spot_price > 0:
-                    deviation = abs(spot_price - ref_price) / ref_price
-                    if deviation <= 0.02:
-                        return cached_val
-                    else:
-                        logger.warning(
-                            f"[{symbol}] Spot price shifted from {ref_price} to {spot_price} "
-                            f"(dev={deviation:.2%}), invalidating memory cache"
-                        )
+                # If cached during pre-market, but now the market is open, bypass memory cache
+                if getattr(cached_val, "is_premarket", False) and is_market_open():
+                    logger.info(
+                        f"[{symbol}] Cached IV metrics are from pre-market, but market is now open. "
+                        f"Bypassing memory cache to get fresh live IV."
+                    )
                 else:
-                    return cached_val
+                    ref_price = getattr(cached_val, "reference_spot_price", None)
+                    if ref_price and ref_price > 0 and spot_price > 0:
+                        deviation = abs(spot_price - ref_price) / ref_price
+                        if deviation <= 0.02:
+                            return cached_val
+                        else:
+                            logger.warning(
+                                f"[{symbol}] Spot price shifted from {ref_price} to {spot_price} "
+                                f"(dev={deviation:.2%}), invalidating memory cache"
+                            )
+                    else:
+                        return cached_val
 
         # Check SQLite kv_cache next for same-day warm cache
         from database.cache import get_kv_cache, save_kv_cache
@@ -1508,16 +1515,24 @@ class SentimentEngine:
         if cached is not None:
             try:
                 metrics = IVMetrics(**cached)
-                ref_price = getattr(metrics, "reference_spot_price", None)
-                use_cache = True
-                if ref_price and ref_price > 0 and spot_price > 0:
-                    deviation = abs(spot_price - ref_price) / ref_price
-                    if deviation > 0.02:
-                        logger.warning(
-                            f"[{symbol}] Spot price shifted from {ref_price} to {spot_price} "
-                            f"(dev={deviation:.2%}), invalidating kv_cache"
-                        )
-                        use_cache = False
+                # If cached during pre-market, but now the market is open, bypass kv_cache
+                if getattr(metrics, "is_premarket", False) and is_market_open():
+                    logger.info(
+                        f"[{symbol}] Cached IV metrics in SQLite are from pre-market, but market is now open. "
+                        f"Bypassing kv_cache to get fresh live IV."
+                    )
+                    use_cache = False
+                else:
+                    ref_price = getattr(metrics, "reference_spot_price", None)
+                    use_cache = True
+                    if ref_price and ref_price > 0 and spot_price > 0:
+                        deviation = abs(spot_price - ref_price) / ref_price
+                        if deviation > 0.02:
+                            logger.warning(
+                                f"[{symbol}] Spot price shifted from {ref_price} to {spot_price} "
+                                f"(dev={deviation:.2%}), invalidating kv_cache"
+                            )
+                            use_cache = False
                 if use_cache:
                     _iv_cache[symbol] = (metrics, current_time + 1800)
                     return metrics

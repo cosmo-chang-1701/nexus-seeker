@@ -461,3 +461,50 @@ async def test_fetch_and_calculate_iv_metrics_premarket_degraded():
         assert metrics.is_premarket is True
         assert metrics.current_iv is None
         assert metrics.iv_rank is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_and_calculate_iv_metrics_premarket_cache_bypassed_when_market_opens():
+    """Verify that cached pre-market IV metrics are bypassed if the market is now open."""
+    symbol = "TEST_BYPASS"
+    mock_quote = {"c": 100.0}
+
+    # 252 days of historical data for HV
+    dates = pd.date_range(end="2026-05-21", periods=252, freq="D")
+    df_hist = pd.DataFrame(
+        {"Close": [100.0 + i * 0.1 for i in range(252)]}, index=dates
+    )
+
+    with patch(
+        "services.market_data_service.get_quote", new_callable=AsyncMock
+    ) as m_quote, patch("yfinance.Ticker") as m_ticker, patch(
+        "services.market_data_service.get_history_df", new_callable=AsyncMock
+    ) as m_hist, patch(
+        "market_analysis.sentiment_engine.is_market_open"
+    ) as m_market_open, patch(
+        "market_analysis.sentiment_engine.SentimentEngine.get_last_stored_iv",
+        return_value=0.40,
+    ):
+        # 1. First call: Premarket (is_market_open = False)
+        m_market_open.return_value = False
+        m_quote.return_value = mock_quote
+        m_hist.return_value = df_hist
+
+        # Call under premarket conditions
+        metrics1 = await SentimentEngine.fetch_and_calculate_iv_metrics(symbol)
+        assert metrics1.is_premarket is True
+        assert metrics1.current_iv == pytest.approx(0.40)
+
+        # 2. Second call: Market open (is_market_open = True)
+        m_market_open.return_value = True
+
+        # Mock yfinance.Ticker info to return live IV
+        mock_ticker_instance = MagicMock()
+        mock_ticker_instance.info = {"impliedVolatility": 0.45}
+        m_ticker.return_value = mock_ticker_instance
+
+        metrics2 = await SentimentEngine.fetch_and_calculate_iv_metrics(symbol)
+
+        # It should bypass cache and fetch the new live IV (0.45)
+        assert metrics2.is_premarket is False
+        assert metrics2.current_iv == pytest.approx(0.45)
