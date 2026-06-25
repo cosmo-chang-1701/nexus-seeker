@@ -75,16 +75,30 @@ def test_create_trades_embed():
                 "current_price": 6.50,
                 "unrealized_pnl": 150.0,
                 "pnl_pct": 0.3,
-            }
+            },
+            {
+                "id": 2,
+                "symbol": "MSFT",
+                "opt_type": "put",
+                "strike": 400.0,
+                "expiry": "2026-06-19",
+                "quantity": -1,
+                "entry_price": 10.0,
+                "current_price": 8.00,
+                "unrealized_pnl": 200.0,
+                "pnl_pct": 0.2,
+            },
         ],
-        "total_unrealized_pnl": 150.0,
+        "total_unrealized_pnl": 350.0,
     }
     embed = create_trades_embed(pnl_data, total_capital=100000.0)
     assert embed.title == "📊 Nexus Seeker | 實單持倉清單 (包含帳面損益)"
 
     desc_field = embed.fields[0].value
+    assert "數量" in desc_field
     assert "現價" in desc_field
     assert "  6.50" in desc_field  # Visual formatting check
+    assert "  -1" in desc_field  # Visual formatting check for negative quantity
 
 
 def test_create_portfolio_report_embed():

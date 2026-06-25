@@ -191,8 +191,8 @@ def create_trades_embed(
 
     data_lines = []
     # 標頭 (調整 Python len 以匹配可見寬度)
-    header = f"{'ID'.ljust(2)} | {'標的'.ljust(4)} | {'到期日'.ljust(7)} | {'履約'.ljust(5)} | {'數'.rjust(1)} | {'成本'.rjust(4)} | {'現價'.rjust(4)} | {'帳面損益'.rjust(10)}"
-    divider = "-" * 75
+    header = f"{'ID'.ljust(2)} | {'標的'.ljust(4)} | {'到期日'.ljust(7)} | {'履約'.ljust(5)} | {'數量'.rjust(2)} | {'成本'.rjust(4)} | {'現價'.rjust(4)} | {'帳面損益'.rjust(10)}"
+    divider = "-" * 77
 
     total_cost = 0.0
     for t in trades:
@@ -215,7 +215,7 @@ def create_trades_embed(
         st_type_fmt = f"{strike}{o_type[0].upper()}".ljust(7)
 
         color_code = "\x1b[0;32m" if qty > 0 else "\x1b[0;31m"
-        qty_val = f"{abs(qty):>2}"
+        qty_val = f"{qty:>4}"
         qty_fmt = f"{color_code}{qty_val}\x1b[0m"
 
         cost_fmt = f"{entry_p:6.2f}"
