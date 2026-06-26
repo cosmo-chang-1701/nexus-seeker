@@ -154,10 +154,10 @@ class CalendarService:
         return parsed_dates[-1]
 
     async def _ensure_macro_month_cached(
-        self, month_key: str, force_fresh: bool = True
+        self, month_key: str, force_fresh: bool = True, force_fetch: bool = False
     ) -> None:
         status = get_macro_month_status(month_key)
-        if status:
+        if status and not force_fetch:
             if not force_fresh or self._is_timestamp_fresh(
                 status.get("checked_at"), self._macro_cache_hours
             ):
@@ -203,7 +203,10 @@ class CalendarService:
         replace_macro_month_events(month_key, high_impact)
 
     async def prefetch_monthly_macro_cache(
-        self, reference: Optional[datetime] = None, months_ahead: int = 0
+        self,
+        reference: Optional[datetime] = None,
+        months_ahead: int = 0,
+        force_fetch: bool = False,
     ) -> None:
         now = reference or datetime.now()
         target = date(now.year, now.month, 1)
@@ -217,7 +220,10 @@ class CalendarService:
             month_keys.append(cursor.strftime("%Y-%m"))
 
         await asyncio.gather(
-            *(self._ensure_macro_month_cached(key) for key in month_keys)
+            *(
+                self._ensure_macro_month_cached(key, force_fetch=force_fetch)
+                for key in month_keys
+            )
         )
 
     async def get_high_impact_events(self, days: int = 7) -> List[EconomicEvent]:

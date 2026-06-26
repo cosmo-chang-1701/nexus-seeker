@@ -463,7 +463,9 @@ def force_macro_update(ctx):
         # 3. Macro Calendar
         rprint("正在向 edge scraper 請求 Investing.com 總經日曆...")
         try:
-            await calendar_service.prefetch_monthly_macro_cache(months_ahead=1)
+            await calendar_service.prefetch_monthly_macro_cache(
+                months_ahead=1, force_fetch=True
+            )
             rprint("[bold green]✅ 總經日曆更新並寫入快取完成。[/bold green]")
         except Exception as e:
             rprint(f"[bold red]❌ 總經日曆更新失敗: {e}[/bold red]")
