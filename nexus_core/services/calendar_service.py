@@ -237,6 +237,9 @@ class CalendarService:
                 cursor = date(cursor.year, cursor.month + 1, 1)
             month_keys.append(cursor.strftime("%Y-%m"))
 
+        if force_fetch:
+            self._economic_cache.clear()
+
         await asyncio.gather(
             *(
                 self._ensure_macro_month_cached(key, force_fetch=force_fetch)
