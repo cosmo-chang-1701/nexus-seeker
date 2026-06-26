@@ -4,7 +4,7 @@
 
 Nexus Seeker is a multi-tenant **Discord-first options risk-control and trading operations platform**. It combines technical structure, Black-Scholes-Merton pricing, Greeks-based portfolio risk, event-aware calendar defenses, and LLM-assisted structured commentary.
 
-Current released core version: **`1.8.9`**
+Current released core version: **`1.8.10`**
 
 The codebase is optimized for:
 
@@ -459,6 +459,7 @@ Current repository rule:
 - `nexus_core/cogs/order_ui.py` — active orders setting panel, list views, cancellation/adjustment modals, and telemetry alignment buttons
 - `nexus_core/cogs/settings_ui.py` — interactive account and notification settings views and modals
 - `nexus_core/cogs/terminal.py` — terminal command entrypoints (including settings and runway analysis)
+- `nexus_core/cogs/calendar.py` — upgraded macro and earnings calendar command with event caching
 - `nexus_core/cogs/embed_builder.py` — single source of truth for embeds
 - `nexus_core/database/orders.py` — active orders SQLite database state CRUD operations
 - `nexus_core/database/migrations/v038_add_active_orders.py` — migration registering the active_orders table in SQLite
