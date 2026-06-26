@@ -393,93 +393,68 @@ async def scrape_fedwatch():
 
 @app.get("/api/v1/macro/calendar")
 async def scrape_macro_calendar(year: int, month: int):
-    import re
+    import requests
+    import calendar
     import asyncio
+    from datetime import datetime
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"]
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:
+        import pytz
+
+        def ZoneInfo(x):
+            return pytz.timezone(x)
+
+    try:
+        _, last_day = calendar.monthrange(year, month)
+        from_date = f"{year}-{month:02d}-01T00:00:00.000Z"
+        to_date = f"{year}-{month:02d}-{last_day}T23:59:59.000Z"
+
+        url = f"https://economic-calendar.tradingview.com/events?from={from_date}&to={to_date}&countries=US"
+        headers = {
+            "Origin": "https://www.tradingview.com",
+            "Referer": "https://www.tradingview.com/",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+        }
+
+        response = await asyncio.to_thread(
+            requests.get, url, headers=headers, timeout=15
         )
-        try:
-            # Explicitly set timezone to Eastern Time for US macro events
-            context = await browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-                timezone_id="America/New_York",
-            )
-            await Stealth().apply_stealth_async(context)
-            await context.route(
-                "**/*",
-                lambda route: route.abort()
-                if route.request.resource_type in ["image", "stylesheet", "font"]
-                else route.continue_(),
-            )
-            page = await context.new_page()
-
-            # Navigate to the economic calendar
-            await page.goto(
-                "https://www.investing.com/economic-calendar/",
-                timeout=25000,
-                wait_until="domcontentloaded",
-            )
-
-            await asyncio.sleep(2)
-
-            html = await page.content()
-            soup = BeautifulSoup(html, "lxml")
-
-            events = []
-            rows = soup.select("tr")
-
-            from datetime import datetime
-
-            current_date_str = f"{year}-{month:02d}-01"
-
-            for row in rows:
-                tds = row.select("td")
-
-                # Check for date header (usually 1 TD)
-                if len(tds) == 1:
-                    header_text = tds[0].text.strip()
-                    try:
-                        # Try to parse 'Friday, June 26, 2026'
-                        dt = datetime.strptime(header_text, "%A, %B %d, %Y")
-                        current_date_str = dt.strftime("%Y-%m-%d")
-                    except ValueError:
-                        pass
-                    continue
-
-                if len(tds) < 5:
-                    continue
-
-                country_code = tds[2].text.strip()
-                row_id = row.get("id", "")
-                # 1. US Country Filter
-                if "UnitedStates" not in row_id and country_code != "US":
-                    continue
-
-                raw_event_name = tds[3].text.strip()
-                clean_event_name = re.sub(
-                    r"(Act:|Cons:|Prev\.:|Forecast:|Previous:).*", "", raw_event_name
-                ).strip()
-
-                # Extract time
-                time_str = tds[1].text.strip()
-                # Clean time_str if it contains duplicate/malformed time (e.g. 08:3008:30)
-                if len(time_str) > 5 and ":" in time_str:
-                    time_str = time_str[-5:]
-
-                events.append(
-                    {
-                        "date": current_date_str,
-                        "time": time_str,
-                        "event_name": clean_event_name,
-                    }
-                )
-
-            return events
-
-        except Exception as e:
-            logger.error(f"Macro calendar scrape failed: {e}")
+        if response.status_code != 200:
+            logger.error(f"TradingView API returned {response.status_code}")
             return []
-        finally:
-            await browser.close()
+
+        data = response.json()
+        if data.get("status") != "ok":
+            return []
+
+        events = []
+        ny_tz = ZoneInfo("America/New_York")
+
+        for item in data.get("result", []):
+            date_str = item.get("date")
+            if not date_str:
+                continue
+
+            try:
+                dt_utc = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+                dt_est = dt_utc.astimezone(ny_tz)
+            except ValueError:
+                continue
+
+            clean_event_name = item.get("title", "").strip()
+
+            events.append(
+                {
+                    "date": dt_est.strftime("%Y-%m-%d"),
+                    "time": dt_est.strftime("%H:%M"),
+                    "event_name": clean_event_name,
+                }
+            )
+
+        return events
+
+    except Exception as e:
+        logger.error(f"Macro calendar scrape failed: {e}")
+        return []
