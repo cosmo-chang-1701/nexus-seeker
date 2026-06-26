@@ -540,6 +540,12 @@ class SchedulerCog(commands.Cog):
         except Exception as e:
             errors.append(f"FedWatch 更新失敗: {e}")
 
+        # 3. Update Macro Calendar (Investing.com)
+        try:
+            await calendar_service.prefetch_monthly_macro_cache(months_ahead=1)
+        except Exception as e:
+            errors.append(f"總經日曆更新失敗: {e}")
+
         if errors:
             err_msg = "\n".join(errors)
             await interaction.followup.send(
@@ -552,7 +558,7 @@ class SchedulerCog(commands.Cog):
             await interaction.followup.send(
                 embed=create_info_embed(
                     "系統控制",
-                    f"✅ 大盤與總經數據更新成功！\n- **GEX**: {gex_info}\n- **FedWatch**: 已寫入資料庫",
+                    f"✅ 大盤與總經數據更新成功！\n- **GEX**: {gex_info}\n- **FedWatch**: 已寫入資料庫\n- **Calendar**: Edge Scraper 動態抓取更新完畢",
                 ),
                 ephemeral=True,
             )

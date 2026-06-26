@@ -153,6 +153,6 @@ def test_cli_force_macro_update():
         assert result.exit_code == 0
         assert "開始手動觸發大盤總經爬蟲" in result.output
         assert "GEX 數據更新完成" in result.output
-        assert "FedWatch 機率更新完成" in result.output
+        assert "FedWatch 數據更新並寫入資料庫完成" in result.output
         mock_fetch.assert_called_once()
         mock_update.assert_called_once()

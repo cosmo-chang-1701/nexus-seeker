@@ -163,7 +163,7 @@ docker compose up -d --build
 - `/dash`：交易員主控板（持倉、跑道天數、Theta 每日收租額度及 `/stress_test` 摘要）。
 - `/stress_test`：委託單壓力測試與現金赤字警報。
 - `/market`：大盤事件日曆與當日宏觀狀態。
-- `/calendar`：當月總經與個股財報事件日曆，具備 FedWatch 利率降息/升息防護聯動與警報。
+- `/calendar`：當月總經與個股財報事件日曆，具備 FedWatch 利率降息/升息防護聯動與警報。總經事件由 Edge Scraper 從 Investing.com 自動抓取與快取。
 - `/skew_scan`：期權波動率偏斜、PCR、UOA 與 Max Pain 當前解析。
 - `/order_panel`：彈出動態 Modal 以新增現股/期權委託單。
 - `/list_orders`：列出當前活躍委託單，支援 symbol 篩選，並附帶「編輯」與「取消」按鈕。

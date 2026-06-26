@@ -16,23 +16,19 @@ async def test_get_high_impact_events():
         mock_datetime.combine = datetime.combine
         mock_datetime.min = datetime.min
 
-        with patch(
-            "services.market_data_service.get_economic_calendar", autospec=True
-        ) as mock_cal:
-            mock_cal.return_value = [
+        from unittest.mock import MagicMock
+
+        with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = [
                 {
-                    "event": "CPI Report",
-                    "impact": "high",
-                    "time": "2026-05-15T12:30:00Z",
-                    "country": "US",
-                },
-                {
-                    "event": "Unimportant Data",
-                    "impact": "low",
-                    "time": "2026-05-15T13:00:00Z",
-                    "country": "US",
-                },
+                    "event_name": "CPI Report",
+                    "date": "2026-05-15",
+                    "time": "12:30",
+                }
             ]
+            mock_get.return_value = mock_response
 
             service = CalendarService()
             events = await service.get_high_impact_events(days=7)
@@ -44,7 +40,7 @@ async def test_get_high_impact_events():
     assert events[0].event == "CPI Report"
     assert events[0].impact == "high"
     assert len(cached_events) == 1
-    assert mock_cal.call_count == 1
+    assert mock_get.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -115,98 +111,6 @@ async def test_get_symbol_earnings_timezone_robustness():
 
 
 @pytest.mark.asyncio
-async def test_get_high_impact_events_filters_non_us():
-    fixed_now = datetime(2026, 5, 12, 12, 0, 0)
-    with patch("services.calendar_service.datetime") as mock_datetime:
-        mock_datetime.now.side_effect = (
-            lambda tz=None: fixed_now if tz is None else fixed_now.replace(tzinfo=tz)
-        )
-        mock_datetime.fromisoformat = datetime.fromisoformat
-        mock_datetime.strptime = datetime.strptime
-        mock_datetime.combine = datetime.combine
-        mock_datetime.min = datetime.min
-
-        with patch(
-            "services.market_data_service.get_economic_calendar", autospec=True
-        ) as mock_cal:
-            mock_cal.return_value = [
-                {
-                    "event": "US CPI Report",
-                    "impact": "high",
-                    "time": "2026-05-15T12:30:00Z",
-                    "country": "US",
-                },
-                {
-                    "event": "CA Retail Sales",
-                    "impact": "high",
-                    "time": "2026-05-15T13:00:00Z",
-                    "country": "CA",
-                },
-            ]
-
-            service = CalendarService()
-            events = await service.get_high_impact_events(days=7)
-
-    # Asserts that the CA event was filtered out and only the US event remains
-    assert len(events) == 1
-    assert isinstance(events[0], EconomicEvent)
-    assert events[0].event == "US CPI Report"
-    assert events[0].country == "US"
-
-
-@pytest.mark.asyncio
-async def test_get_high_impact_events_filters_empty_or_invalid_country():
-    fixed_now = datetime(2026, 5, 12, 12, 0, 0)
-    with patch("services.calendar_service.datetime") as mock_datetime:
-        mock_datetime.now.side_effect = (
-            lambda tz=None: fixed_now if tz is None else fixed_now.replace(tzinfo=tz)
-        )
-        mock_datetime.fromisoformat = datetime.fromisoformat
-        mock_datetime.strptime = datetime.strptime
-        mock_datetime.combine = datetime.combine
-        mock_datetime.min = datetime.min
-
-        with patch(
-            "services.market_data_service.get_economic_calendar", autospec=True
-        ) as mock_cal:
-            mock_cal.return_value = [
-                {
-                    "event": "Valid US CPI",
-                    "impact": "high",
-                    "time": "2026-05-15T12:30:00Z",
-                    "country": "US",
-                },
-                {
-                    "event": "Invalid Empty CPI",
-                    "impact": "high",
-                    "time": "2026-05-15T13:00:00Z",
-                    "country": "",
-                },
-                {
-                    "event": "Invalid None CPI",
-                    "impact": "high",
-                    "time": "2026-05-15T13:30:00Z",
-                    "country": None,
-                },
-                {
-                    "event": "Invalid Type CPI",
-                    "impact": "high",
-                    "time": "2026-05-15T14:00:00Z",
-                    "country": 123,
-                },
-            ]
-
-            service = CalendarService()
-            events = await service.get_high_impact_events(days=7)
-
-    # Verify that only the Valid US CPI remains and all empty/invalid country ones are skipped
-    assert len(events) == 1
-    assert isinstance(events[0], EconomicEvent)
-    assert events[0].event == "Valid US CPI"
-    assert events[0].country == "US"
-
-
-@pytest.mark.asyncio
 async def test_calendar_service_cold_start_policy():
     """Test that CalendarService cold-start cache-first policy bypasses API calls if cache exists."""
     fixed_now = datetime(2026, 5, 12, 12, 0, 0)
@@ -225,8 +129,8 @@ async def test_calendar_service_cold_start_policy():
         ) as mock_status, patch(
             "services.calendar_service.get_macro_events_between"
         ) as mock_events_between, patch(
-            "services.market_data_service.get_economic_calendar"
-        ) as mock_finnhub:
+            "httpx.AsyncClient.get", new_callable=AsyncMock
+        ) as mock_get:
             mock_status.return_value = {
                 "month_key": "2026-05",
                 "checked_at": "2026-05-01 00:00:00",
@@ -246,7 +150,7 @@ async def test_calendar_service_cold_start_policy():
             events = await service.get_high_impact_events(days=3)
             assert service._cold_start_complete is True
 
-            mock_finnhub.assert_not_called()
+            mock_get.assert_not_called()
             assert len(events) == 1
             assert events[0].event == "FOMC"
 

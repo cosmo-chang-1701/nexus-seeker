@@ -453,12 +453,22 @@ def force_macro_update(ctx):
             rprint(f"[bold red]❌ GEX 數據更新失敗: {e}[/bold red]")
 
         # 2. FedWatch
-        rprint("正在向 edge scraper 請求 FedWatch 機率...")
+        rprint("正在向 edge scraper 請求 FedWatch 利率機率數據...")
         try:
             await calendar_service.update_fedwatch_probability()
-            rprint("[bold green]✅ FedWatch 機率更新完成。[/bold green]")
+            rprint("[bold green]✅ FedWatch 數據更新並寫入資料庫完成。[/bold green]")
         except Exception as e:
-            rprint(f"[bold red]❌ FedWatch 機率更新失敗: {e}[/bold red]")
+            rprint(f"[bold red]❌ FedWatch 數據更新失敗: {e}[/bold red]")
+
+        # 3. Macro Calendar
+        rprint("正在向 edge scraper 請求 Investing.com 總經日曆...")
+        try:
+            await calendar_service.prefetch_monthly_macro_cache(months_ahead=1)
+            rprint("[bold green]✅ 總經日曆更新並寫入快取完成。[/bold green]")
+        except Exception as e:
+            rprint(f"[bold red]❌ 總經日曆更新失敗: {e}[/bold red]")
+
+        rprint("[bold blue]🎯 所有手動更新流程結束。[/bold blue]")
 
     run_async(_run())
 

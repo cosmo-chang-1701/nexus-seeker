@@ -163,40 +163,42 @@ class CalendarService:
             ):
                 return
 
-        start_date, end_date = self._month_bounds(month_key)
-        raw_events = await market_data_service.get_economic_calendar(
-            start_date, end_date
-        )
+        import httpx
+        import config
+
+        try:
+            year_str, month_str = month_key.split("-")
+            year = int(year_str)
+            month = int(month_str)
+        except ValueError:
+            return
+
+        tunnel_url = getattr(config, "TUNNEL_URL", "http://nexus_edge_scraper:8000")
+        url = f"{tunnel_url}/api/v1/macro/calendar?year={year}&month={month}"
 
         high_impact: list[dict[str, str]] = []
-        for event in raw_events:
-            raw_country = event.get("country")
-            if not raw_country or not isinstance(raw_country, str):
-                continue
-            country = raw_country.strip().upper()
-            if country != "US":
-                continue
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                res = await client.get(url)
+                if res.status_code == 200:
+                    events = res.json()
+                    for ev in events:
+                        date_val = ev.get("date", f"{year}-{month:02d}-01")
+                        time_val = ev.get("time", "00:00")
+                        event_name = ev.get("event_name", "Unknown Event")
 
-            impact = str(event.get("impact", "low"))
-            name = str(event.get("event", ""))
-            is_high = impact.lower() == "high" or any(
-                kw in name for kw in self._high_impact_keywords
-            )
-            if not is_high:
-                continue
+                        iso_time = f"{date_val}T{time_val}:00Z"
 
-            event_time_str = str(event.get("time", ""))
-            if not event_time_str:
-                continue
-
-            high_impact.append(
-                {
-                    "event": name,
-                    "time": event_time_str,
-                    "impact": impact,
-                    "country": country,
-                }
-            )
+                        high_impact.append(
+                            {
+                                "event": event_name,
+                                "time": iso_time,
+                                "impact": "high",
+                                "country": "US",
+                            }
+                        )
+        except Exception as e:
+            logger.error(f"Edge Scraper API request failed for macro calendar: {e}")
 
         replace_macro_month_events(month_key, high_impact)
 
