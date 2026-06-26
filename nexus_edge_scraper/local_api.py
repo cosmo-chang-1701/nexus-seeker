@@ -396,19 +396,6 @@ async def scrape_macro_calendar(year: int, month: int):
     import re
     import asyncio
 
-    target_keywords = [
-        "CPI",
-        "PPI",
-        "PCE",
-        "ADP",
-        "Nonfarm Payrolls",
-        "Unemployment Rate",
-        "FOMC",
-        "Interest Rate",
-        "Fed Chair",
-    ]
-    target_pattern = re.compile("|".join(target_keywords), re.IGNORECASE)
-
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"]
@@ -443,16 +430,29 @@ async def scrape_macro_calendar(year: int, month: int):
             events = []
             rows = soup.select("tr")
 
+            from datetime import datetime
+
+            current_date_str = f"{year}-{month:02d}-01"
+
             for row in rows:
-                row_id = row.get("id", "")
-                if not row_id:
+                tds = row.select("td")
+
+                # Check for date header (usually 1 TD)
+                if len(tds) == 1:
+                    header_text = tds[0].text.strip()
+                    try:
+                        # Try to parse 'Friday, June 26, 2026'
+                        dt = datetime.strptime(header_text, "%A, %B %d, %Y")
+                        current_date_str = dt.strftime("%Y-%m-%d")
+                    except ValueError:
+                        pass
                     continue
 
-                tds = row.select("td")
                 if len(tds) < 5:
                     continue
 
                 country_code = tds[2].text.strip()
+                row_id = row.get("id", "")
                 # 1. US Country Filter
                 if "UnitedStates" not in row_id and country_code != "US":
                     continue
@@ -462,20 +462,18 @@ async def scrape_macro_calendar(year: int, month: int):
                     r"(Act:|Cons:|Prev\.:|Forecast:|Previous:).*", "", raw_event_name
                 ).strip()
 
-                # 2. Keyword Filter
-                if not target_pattern.search(clean_event_name):
-                    continue
-
-                # We skip the 3-star DOM-based filter because Investing.com's new DOM uses identical SVGs
-                # for all impact levels with varying opacity/CSS classes that are hard to reliably parse
-                # without stylesheet context. The keyword filter is strict enough.
-
                 # Extract time
                 time_str = tds[1].text.strip()
-                date_str = f"{year}-{month:02d}-01"
+                # Clean time_str if it contains duplicate/malformed time (e.g. 08:3008:30)
+                if len(time_str) > 5 and ":" in time_str:
+                    time_str = time_str[-5:]
 
                 events.append(
-                    {"date": date_str, "time": time_str, "event_name": clean_event_name}
+                    {
+                        "date": current_date_str,
+                        "time": time_str,
+                        "event_name": clean_event_name,
+                    }
                 )
 
             return events
