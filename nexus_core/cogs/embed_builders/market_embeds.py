@@ -19,6 +19,7 @@ from typing import Any, Dict, List
 
 from cogs.embed_builders._ansi_utils import _safe_float
 from cogs.embed_builders.settings_embeds import create_info_embed
+from cogs.embed_builders._core import NexusEmbed
 
 
 def create_max_pain_embed(symbol: str, data: Dict[str, Any]) -> discord.Embed:
@@ -766,7 +767,7 @@ def build_calendar_embed(
 
     color = discord.Color(0xE74C3C) if rate_high else discord.Color(0x3498DB)
 
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title=f"🗓️ 總經與財報事件日曆 ({month_str})",
         color=color,
         timestamp=now_utc,
@@ -794,18 +795,20 @@ def build_calendar_embed(
                 time_dt = datetime.fromisoformat(
                     str(getattr(ev, "time", "")).replace("Z", "+00:00")
                 )
-                date_str = time_dt.strftime("%m-%d")
+                date_str = time_dt.strftime("%m-%d %H:%M")
             except Exception:
-                date_str = "??-??"
+                date_str = "??-?? ??:??"
 
             macro_text += f"* 🗓️ [{date_str}] {name}\n"
 
-        macro_text += "*(註：以上總經事件由 Finnhub 動態獲取，時間依 API 回傳為準)*\n"
+        macro_text += (
+            "*(註：總經事件由邊緣爬蟲引擎自動從 Investing.com 非同步抓取更新)*\n"
+        )
     else:
-        macro_text = "📭 本月無重大事件。"
+        macro_text = "📭 [總經數據暫時無法獲取] 或當月無重大事件。\n*(註：總經事件由邊緣爬蟲引擎自動從 Investing.com 非同步抓取更新)*\n"
 
     embed.add_field(
-        name="💡 當月重要總經事件 (Macro Events) — 數據源: Finnhub",
+        name="💡 當月重要總經事件 (Macro Events) — 數據源: Edge Scraper",
         value=macro_text,
         inline=False,
     )

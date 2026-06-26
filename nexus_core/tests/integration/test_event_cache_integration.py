@@ -21,17 +21,19 @@ async def test_calendar_service_reuses_sqlite_macro_cache_across_instances(db_co
         mock_datetime.combine = datetime.combine
         mock_datetime.min = datetime.min
 
-        with patch(
-            "services.market_data_service.get_economic_calendar", new_callable=AsyncMock
-        ) as mock_calendar:
-            mock_calendar.return_value = [
+        from unittest.mock import MagicMock
+
+        with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = [
                 {
-                    "event": "FOMC Rate Decision",
-                    "impact": "high",
-                    "time": "2026-05-15T18:00:00Z",
-                    "country": "US",
+                    "event_name": "FOMC Rate Decision",
+                    "date": "2026-05-15",
+                    "time": "18:00",
                 }
             ]
+            mock_get.return_value = mock_response
 
             first_service = CalendarService()
             first_events = await first_service.get_high_impact_events(days=7)
@@ -43,7 +45,7 @@ async def test_calendar_service_reuses_sqlite_macro_cache_across_instances(db_co
     assert len(second_events) == 1
     assert first_events[0].event == "FOMC Rate Decision"
     assert second_events[0].event == "FOMC Rate Decision"
-    assert mock_calendar.await_count == 1
+    assert mock_get.await_count == 1
 
 
 @pytest.mark.asyncio

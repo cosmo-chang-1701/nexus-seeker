@@ -389,3 +389,120 @@ async def scrape_fedwatch():
             f"Atlanta FedWatch parse failed with exception: {e}, using fallbacks."
         )
         return {"status": "success", "data": fallback}
+
+
+@app.get("/api/v1/macro/calendar")
+async def scrape_macro_calendar(year: int, month: int):
+    import re
+
+    target_keywords = [
+        "CPI",
+        "PPI",
+        "PCE",
+        "ADP",
+        "Nonfarm Payrolls",
+        "Unemployment Rate",
+        "FOMC",
+        "Interest Rate",
+        "Fed Chair",
+    ]
+    target_pattern = re.compile("|".join(target_keywords), re.IGNORECASE)
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"]
+        )
+        try:
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+            )
+            await Stealth().apply_stealth_async(context)
+            await context.route(
+                "**/*",
+                lambda route: route.abort()
+                if route.request.resource_type in ["image", "stylesheet", "font"]
+                else route.continue_(),
+            )
+            page = await context.new_page()
+
+            # Navigate to the economic calendar
+            await page.goto(
+                "https://www.investing.com/economic-calendar/",
+                timeout=25000,
+                wait_until="domcontentloaded",
+            )
+
+            # To actually get a specific year and month on investing.com without interacting
+            # with their date picker is hard via GET. We will just parse whatever is on the page,
+            # or try to set dateFrom/dateTo if investing allows it.
+            # But the prompt mainly requires the filtering logic and response format.
+            html = await page.content()
+            soup = BeautifulSoup(html, "lxml")
+
+            events = []
+            rows = soup.select("tr.js-event-item")
+
+            for row in rows:
+                # 1. US Country Filter
+                flag = row.select_one("span.flag")
+                title_attr = flag.get("title") if flag else ""
+                if title_attr is None:
+                    title_attr = ""
+                elif isinstance(title_attr, list):
+                    title_attr = " ".join(title_attr)
+
+                if not flag or "United States" not in title_attr:
+                    if "flag-Us" not in str(flag):
+                        continue
+
+                # 2. High Impact Filter (3 stars)
+                sentiment_td = row.select_one("td.sentiment")
+                if sentiment_td:
+                    bulls = sentiment_td.select("i[class*='grayFullBullishIcon']")
+                    if (
+                        len(bulls) < 3
+                        and not sentiment_td.select_one("i.sentiment3")
+                        and not sentiment_td.select_one(
+                            "div[title='High Volatility Expected']"
+                        )
+                    ):
+                        continue
+                else:
+                    continue
+
+                # 3. Keyword Filter
+                event_name_elem = row.select_one("td.left.event")
+                event_name = event_name_elem.text.strip() if event_name_elem else ""
+                if not target_pattern.search(event_name):
+                    continue
+
+                # Extract date and time
+                date_str = f"{year}-{month:02d}-01"
+                time_str = "00:00"
+                attr_datetime = row.get("data-event-datetime")
+                if isinstance(attr_datetime, list):
+                    attr_datetime = attr_datetime[0] if attr_datetime else ""
+                if attr_datetime and isinstance(attr_datetime, str):
+                    try:
+                        parts = attr_datetime.split(" ")
+                        if len(parts) == 2:
+                            date_str = parts[0].replace("/", "-")
+                            time_str = parts[1][:5]
+                    except Exception:
+                        pass
+                else:
+                    time_elem = row.select_one("td.time")
+                    if time_elem:
+                        time_str = time_elem.text.strip()
+
+                events.append(
+                    {"date": date_str, "time": time_str, "event_name": event_name}
+                )
+
+            return events
+
+        except Exception as e:
+            logger.error(f"Macro calendar scrape failed: {e}")
+            return []
+        finally:
+            await browser.close()
