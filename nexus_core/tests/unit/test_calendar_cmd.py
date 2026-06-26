@@ -56,8 +56,8 @@ async def test_calendar_command_high_rate(
     call_args = mock_interaction.followup.send.call_args[1]
     embed = call_args["embed"]
 
-    assert embed.title == "📅 【 總經與財報事件日曆 】"
-    assert embed.color == discord.Color.red()
+    assert "🗓️ 總經與財報事件日曆" in embed.title
+    assert embed.color == discord.Color(0xE74C3C)
     assert any("逃頂窗口已動態前移" in f.value for f in embed.fields)
     assert any("FOMC" in f.value for f in embed.fields)
     assert any("AAPL" in f.value for f in embed.fields)
@@ -96,5 +96,5 @@ async def test_calendar_command_rate_cut(
     call_args = mock_interaction.followup.send.call_args[1]
     embed = call_args["embed"]
 
-    assert embed.color == discord.Color.blue()
+    assert embed.color == discord.Color(0x3498DB)
     assert any("逃頂窗口已後推 5 天" in f.value for f in embed.fields)
