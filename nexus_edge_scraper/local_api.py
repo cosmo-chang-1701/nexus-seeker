@@ -394,6 +394,7 @@ async def scrape_fedwatch():
 @app.get("/api/v1/macro/calendar")
 async def scrape_macro_calendar(year: int, month: int):
     import re
+    import asyncio
 
     target_keywords = [
         "CPI",
@@ -413,8 +414,10 @@ async def scrape_macro_calendar(year: int, month: int):
             headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"]
         )
         try:
+            # Explicitly set timezone to Eastern Time for US macro events
             context = await browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+                timezone_id="America/New_York",
             )
             await Stealth().apply_stealth_async(context)
             await context.route(
@@ -432,71 +435,47 @@ async def scrape_macro_calendar(year: int, month: int):
                 wait_until="domcontentloaded",
             )
 
-            # To actually get a specific year and month on investing.com without interacting
-            # with their date picker is hard via GET. We will just parse whatever is on the page,
-            # or try to set dateFrom/dateTo if investing allows it.
-            # But the prompt mainly requires the filtering logic and response format.
+            await asyncio.sleep(2)
+
             html = await page.content()
             soup = BeautifulSoup(html, "lxml")
 
             events = []
-            rows = soup.select("tr.js-event-item")
+            rows = soup.select("tr")
 
             for row in rows:
+                row_id = row.get("id", "")
+                if not row_id:
+                    continue
+
+                tds = row.select("td")
+                if len(tds) < 5:
+                    continue
+
+                country_code = tds[2].text.strip()
                 # 1. US Country Filter
-                flag = row.select_one("span.flag")
-                title_attr = flag.get("title") if flag else ""
-                if title_attr is None:
-                    title_attr = ""
-                elif isinstance(title_attr, list):
-                    title_attr = " ".join(title_attr)
-
-                if not flag or "United States" not in title_attr:
-                    if "flag-Us" not in str(flag):
-                        continue
-
-                # 2. High Impact Filter (3 stars)
-                sentiment_td = row.select_one("td.sentiment")
-                if sentiment_td:
-                    bulls = sentiment_td.select("i[class*='grayFullBullishIcon']")
-                    if (
-                        len(bulls) < 3
-                        and not sentiment_td.select_one("i.sentiment3")
-                        and not sentiment_td.select_one(
-                            "div[title='High Volatility Expected']"
-                        )
-                    ):
-                        continue
-                else:
+                if "UnitedStates" not in row_id and country_code != "US":
                     continue
 
-                # 3. Keyword Filter
-                event_name_elem = row.select_one("td.left.event")
-                event_name = event_name_elem.text.strip() if event_name_elem else ""
-                if not target_pattern.search(event_name):
+                raw_event_name = tds[3].text.strip()
+                clean_event_name = re.sub(
+                    r"(Act:|Cons:|Prev\.:|Forecast:|Previous:).*", "", raw_event_name
+                ).strip()
+
+                # 2. Keyword Filter
+                if not target_pattern.search(clean_event_name):
                     continue
 
-                # Extract date and time
+                # We skip the 3-star DOM-based filter because Investing.com's new DOM uses identical SVGs
+                # for all impact levels with varying opacity/CSS classes that are hard to reliably parse
+                # without stylesheet context. The keyword filter is strict enough.
+
+                # Extract time
+                time_str = tds[1].text.strip()
                 date_str = f"{year}-{month:02d}-01"
-                time_str = "00:00"
-                attr_datetime = row.get("data-event-datetime")
-                if isinstance(attr_datetime, list):
-                    attr_datetime = attr_datetime[0] if attr_datetime else ""
-                if attr_datetime and isinstance(attr_datetime, str):
-                    try:
-                        parts = attr_datetime.split(" ")
-                        if len(parts) == 2:
-                            date_str = parts[0].replace("/", "-")
-                            time_str = parts[1][:5]
-                    except Exception:
-                        pass
-                else:
-                    time_elem = row.select_one("td.time")
-                    if time_elem:
-                        time_str = time_elem.text.strip()
 
                 events.append(
-                    {"date": date_str, "time": time_str, "event_name": event_name}
+                    {"date": date_str, "time": time_str, "event_name": clean_event_name}
                 )
 
             return events

@@ -165,6 +165,8 @@ class CalendarService:
 
         import httpx
         import config
+        from datetime import datetime
+        import zoneinfo
 
         try:
             year_str, month_str = month_key.split("-")
@@ -182,12 +184,28 @@ class CalendarService:
                 res = await client.get(url)
                 if res.status_code == 200:
                     events = res.json()
+                    ny_tz = zoneinfo.ZoneInfo("America/New_York")
+                    utc_tz = zoneinfo.ZoneInfo("UTC")
+
                     for ev in events:
                         date_val = ev.get("date", f"{year}-{month:02d}-01")
                         time_val = ev.get("time", "00:00")
                         event_name = ev.get("event_name", "Unknown Event")
 
-                        iso_time = f"{date_val}T{time_val}:00Z"
+                        try:
+                            # Parse as US Eastern Time
+                            dt_naive = datetime.strptime(
+                                f"{date_val} {time_val}", "%Y-%m-%d %H:%M"
+                            )
+                            dt_aware = dt_naive.replace(tzinfo=ny_tz)
+                            # Convert to UTC
+                            dt_utc = dt_aware.astimezone(utc_tz)
+                            iso_time = dt_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+                        except Exception as parse_e:
+                            logger.error(
+                                f"Failed to parse time {date_val} {time_val}: {parse_e}"
+                            )
+                            iso_time = f"{date_val}T{time_val}:00Z"
 
                         high_impact.append(
                             {
