@@ -542,7 +542,9 @@ class SchedulerCog(commands.Cog):
 
         # 3. Update Macro Calendar (Investing.com)
         try:
-            await calendar_service.prefetch_monthly_macro_cache(months_ahead=1)
+            await calendar_service.prefetch_monthly_macro_cache(
+                months_ahead=1, force_fetch=True
+            )
         except Exception as e:
             errors.append(f"總經日曆更新失敗: {e}")
 
