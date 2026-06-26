@@ -761,12 +761,15 @@ def build_calendar_embed(
         else:
             rate_cut = True
 
-    color = discord.Color.red() if rate_high else discord.Color.blue()
+    now_utc = datetime.now(timezone.utc)
+    month_str = now_utc.strftime("%Y年%m月")
+
+    color = discord.Color(0xE74C3C) if rate_high else discord.Color(0x3498DB)
 
     embed = discord.Embed(
-        title="📅 【 總經與財報事件日曆 】",
+        title=f"🗓️ 總經與財報事件日曆 ({month_str})",
         color=color,
-        timestamp=datetime.now(timezone.utc),
+        timestamp=now_utc,
     )
 
     if rate_high:
@@ -783,55 +786,46 @@ def build_calendar_embed(
         )
 
     # Format Macro Events
-    macro_lines = [
-        " 🏛️ 當月重要總經事件 (Macro Events)",
-        " ----------------------------------",
-    ]
+    macro_text = ""
     if macro_events:
-        for i, ev in enumerate(macro_events[:15]):
-            prefix = " └─ " if i == len(macro_events[:15]) - 1 else " ├─ "
+        for ev in macro_events[:15]:
             name = getattr(ev, "event", "Unknown")
-            country = getattr(ev, "country", "US")
-            impact = str(getattr(ev, "impact", "")).lower()
-            icon = "🔴" if impact == "high" else "🟡"
-            tte = getattr(ev, "tte_hours", "N/A")
             try:
                 time_dt = datetime.fromisoformat(
                     str(getattr(ev, "time", "")).replace("Z", "+00:00")
                 )
-                time_str = time_dt.strftime("%m/%d %H:%M")
+                date_str = time_dt.strftime("%m-%d")
             except Exception:
-                time_str = str(getattr(ev, "time", "N/A"))
+                date_str = "??-??"
 
-            color_ansi = "\u001b[1;31m" if impact == "high" else "\u001b[1;33m"
-            macro_lines.append(
-                f"{prefix}{icon} {color_ansi}{name:<12}\u001b[0m ({country}) | ⏰ {time_str} (TTE: \u001b[1;36m{tte}h\u001b[0m)"
-            )
+            macro_text += f"* 🗓️ [{date_str}] {name}\n"
+
+        macro_text += "*(註：以上總經事件由 Finnhub 動態獲取，時間依 API 回傳為準)*\n"
     else:
-        macro_lines.append(" └─ 📭 本月無重大事件。")
+        macro_text = "📭 本月無重大事件。"
 
-    macro_panel = "```ansi\n" + "\n".join(macro_lines) + "\n```"
-    embed.add_field(name="🏛️ 當月重要總經事件", value=macro_panel, inline=False)
+    embed.add_field(
+        name="💡 當月重要總經事件 (Macro Events) — 數據源: Finnhub",
+        value=macro_text,
+        inline=False,
+    )
 
     # Format Earnings Events
-    earn_lines = [
-        " 💼 自選標的財報 (Earnings Calendar)",
-        " ----------------------------------",
-    ]
+    earn_text = ""
     if earnings_events:
-        for i, ev in enumerate(earnings_events[:15]):
-            prefix = " └─ " if i == len(earnings_events[:15]) - 1 else " ├─ "
+        for ev in earnings_events[:15]:
             sym = getattr(ev, "symbol", "Unknown")
             tte = getattr(ev, "tte_hours", "N/A")
             date_val = getattr(ev, "date", "N/A")
-            earn_lines.append(
-                f"{prefix}📊 \u001b[1;34m{sym:<6}\u001b[0m 財報發布 | 📅 {date_val} (TTE: \u001b[1;36m{tte}h\u001b[0m)"
-            )
+            earn_text += f"* 📅 **{sym}** 財報發布 | {date_val} (TTE: {tte}h)\n"
     else:
-        earn_lines.append(" └─ 📭 您的自選標的近期無財報。")
+        earn_text = "📭 您的自選標的近期無財報。"
 
-    earn_panel = "```ansi\n" + "\n".join(earn_lines) + "\n```"
-    embed.add_field(name="💼 自選標的財報", value=earn_panel, inline=False)
+    embed.add_field(
+        name="📊 自選標的財報 (Earnings Calendar) — 數據源: Finnhub",
+        value=earn_text,
+        inline=False,
+    )
 
     embed.set_footer(text="Calendar-Aware Guard | Nexus Seeker")
     return embed
