@@ -21,8 +21,8 @@ logger = logging.getLogger(__name__)
 
 
 # ==========================================
-# 📊 Pydantic Models for Type Safety
-# ==========================================
+
+CUSTOM_MACRO_EVENTS: List[dict] = []
 
 
 class CalendarEvent(BaseModel):
@@ -275,6 +275,51 @@ class CalendarService:
                     high_impact.append(ev)
                 except Exception as ve:
                     logger.warning(f"Skipping malformed economic event: {ve}")
+
+            # Inject Custom Events
+            start_dt_aware = datetime.strptime(start_date, "%Y-%m-%d").replace(
+                tzinfo=ZoneInfo("UTC")
+            )
+            end_dt_aware = datetime.strptime(end_date, "%Y-%m-%d").replace(
+                tzinfo=ZoneInfo("UTC")
+            ) + timedelta(days=1)
+
+            for c_event in CUSTOM_MACRO_EVENTS:
+                c_time_str = c_event["time"]
+                c_event_dt = datetime.fromisoformat(c_time_str.replace("Z", "+00:00"))
+                if start_dt_aware <= c_event_dt <= end_dt_aware:
+                    # Remove Finnhub events that overlap in time (within 4 hours) to avoid duplicates like "US CPI" and "美國6月 CPI"
+                    high_impact = [
+                        e
+                        for e in high_impact
+                        if abs(
+                            (
+                                datetime.fromisoformat(e.time.replace("Z", "+00:00"))
+                                - c_event_dt
+                            ).total_seconds()
+                        )
+                        > 14400
+                    ]
+
+                    now_aware = datetime.now(c_event_dt.tzinfo)
+                    tte_hours = (c_event_dt - now_aware).total_seconds() / 3600
+
+                    if (
+                        tte_hours > -24
+                    ):  # Only add if it hasn't passed for more than 24h
+                        ev = EconomicEvent(
+                            event=c_event["event"],
+                            time=c_time_str,
+                            impact="high",
+                            country="US",
+                            tte_hours=round(tte_hours, 1),
+                        )
+                        high_impact.append(ev)
+
+            # Sort all events chronologically
+            high_impact.sort(
+                key=lambda x: datetime.fromisoformat(x.time.replace("Z", "+00:00"))
+            )
 
             self._economic_cache[cache_key] = high_impact
             return high_impact

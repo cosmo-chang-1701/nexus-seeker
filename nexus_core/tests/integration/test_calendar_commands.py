@@ -9,14 +9,21 @@ async def test_command_calendar(mock_interaction, db_conn):
     bot.wait_until_ready = AsyncMock()
     cog = CalendarCog(bot)
 
-    # Mock calendar_service.get_portfolio_events
+    # Mock calendar_service
     with patch(
-        "services.calendar_service.calendar_service.get_portfolio_events",
+        "services.calendar_service.calendar_service.get_high_impact_events",
         new_callable=AsyncMock,
-    ) as mock_events:
+    ) as mock_macro, patch(
+        "services.calendar_service.calendar_service.get_symbol_earnings_batch",
+        new_callable=AsyncMock,
+    ) as mock_earnings, patch(
+        "database.watchlist.get_user_watchlist"
+    ) as mock_watchlist:
         from services.calendar_service import EconomicEvent, EarningsEvent
 
-        mock_events.return_value = [
+        mock_watchlist.return_value = [("AAPL", 1)]
+
+        mock_macro.return_value = [
             EconomicEvent(
                 type="ECONOMIC",
                 event="FOMC",
@@ -24,22 +31,24 @@ async def test_command_calendar(mock_interaction, db_conn):
                 country="US",
                 tte_hours=24.0,
                 time="2026-05-15T18:00:00Z",
-            ),
-            EarningsEvent(
+            )
+        ]
+        mock_earnings.return_value = {
+            "AAPL": EarningsEvent(
                 type="EARNINGS",
                 symbol="AAPL",
                 date="2026-05-16",
                 tte_hours=48.0,
-            ),
-        ]
+            )
+        }
 
         await cog.calendar.callback(cog, mock_interaction)
 
         mock_interaction.followup.send.assert_called_once()
         embed = mock_interaction.followup.send.call_args[1]["embed"]
-        assert "重大市場事件 & 財報日曆" in embed.title
-        assert "FOMC" in embed.fields[0].name
-        assert "AAPL" in embed.fields[1].name
+        assert "總經與財報事件日曆" in embed.title
+        assert "FOMC" in embed.fields[0].value
+        assert "AAPL" in embed.fields[1].value
 
 
 @pytest.mark.asyncio
@@ -51,7 +60,7 @@ async def test_command_calendar_uses_builder(mock_interaction, db_conn):
     from services.calendar_service import EconomicEvent
 
     with patch(
-        "cogs.calendar.calendar_service.get_portfolio_events",
+        "cogs.calendar.calendar_service.get_high_impact_events",
         new_callable=AsyncMock,
         return_value=[
             EconomicEvent(
@@ -63,7 +72,13 @@ async def test_command_calendar_uses_builder(mock_interaction, db_conn):
                 time="2026-05-15T18:00:00Z",
             )
         ],
-    ), patch("cogs.calendar.create_market_calendar_embed") as mock_builder:
+    ), patch(
+        "cogs.calendar.calendar_service.get_symbol_earnings_batch",
+        new_callable=AsyncMock,
+        return_value={},
+    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
+        "cogs.calendar.build_calendar_embed"
+    ) as mock_builder:
         mock_builder.return_value = MagicMock()
 
         await cog.calendar.callback(cog, mock_interaction)

@@ -745,3 +745,91 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
 
     embed.set_footer(text="Nexus Risk Engine | 總經大盤全局防禦系統")
     return embed
+
+
+def build_calendar_embed(
+    macro_events: List[Any],
+    earnings_events: List[Any],
+    fedwatch_prob: float | None,
+) -> discord.Embed:
+    """建立總經與財報事件日曆 Embed。"""
+    rate_high = False
+    rate_cut = False
+    if fedwatch_prob is not None:
+        if fedwatch_prob > 0.70:
+            rate_high = True
+        else:
+            rate_cut = True
+
+    color = discord.Color.red() if rate_high else discord.Color.blue()
+
+    embed = discord.Embed(
+        title="📅 【 總經與財報事件日曆 】",
+        color=color,
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    if rate_high:
+        embed.add_field(
+            name="⚠️ 總經防護聯動 (Macro Defense)",
+            value="`[風險預警] 利率維持高位，逃頂窗口已動態前移 5 個交易日`",
+            inline=False,
+        )
+    elif rate_cut:
+        embed.add_field(
+            name="🟢 總經防護聯動 (Macro Defense)",
+            value="`[動態調整] 預期降息，逃頂窗口已後推 5 天，風險偏好增強`",
+            inline=False,
+        )
+
+    # Format Macro Events
+    if macro_events:
+        macro_text = ""
+        for ev in macro_events[:15]:
+            name = getattr(ev, "event", "Unknown")
+            country = getattr(ev, "country", "US")
+            impact = str(getattr(ev, "impact", "")).lower()
+            icon = "🔴" if impact == "high" else "🟡"
+            tte = getattr(ev, "tte_hours", "N/A")
+            try:
+                time_dt = datetime.fromisoformat(
+                    str(getattr(ev, "time", "")).replace("Z", "+00:00")
+                )
+                time_str = time_dt.strftime("%m/%d %H:%M")
+            except Exception:
+                time_str = str(getattr(ev, "time", "N/A"))
+            macro_text += (
+                f"{icon} **{name}** ({country}) | ⏰ `{time_str}` (TTE: `{tte}h`)\n"
+            )
+
+        embed.add_field(
+            name="🏛️ 當月重要總經事件 (Macro Events)", value=macro_text, inline=False
+        )
+    else:
+        embed.add_field(
+            name="🏛️ 當月重要總經事件 (Macro Events)",
+            value="📭 本月無重大事件。",
+            inline=False,
+        )
+
+    # Format Earnings Events
+    if earnings_events:
+        earn_text = ""
+        for ev in earnings_events[:15]:
+            sym = getattr(ev, "symbol", "Unknown")
+            tte = getattr(ev, "tte_hours", "N/A")
+            date_val = getattr(ev, "date", "N/A")
+            earn_text += f"📊 **{sym}** 財報發布 | 📅 `{date_val}` (TTE: `{tte}h`)\n"
+
+        embed.add_field(
+            name="💼 自選標的財報 (Earnings Calendar)", value=earn_text, inline=False
+        )
+    else:
+        embed.add_field(
+            name="💼 自選標的財報 (Earnings Calendar)",
+            value="📭 您的自選標的近期無財報。",
+            inline=False,
+        )
+
+    embed.set_footer(text="Calendar-Aware Guard | Nexus Seeker")
+    return embed

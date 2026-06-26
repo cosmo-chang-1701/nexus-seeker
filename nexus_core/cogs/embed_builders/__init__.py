@@ -152,6 +152,7 @@ from cogs.embed_builders.market_embeds import (
     create_iv_risk_scan_embed,
     build_radar_scan_embed,
     build_market_macro_overview_embed,
+    build_calendar_embed,
 )
 
 # ── Hedge & Risk Alert Embeds ─────────────────────────────────────────────────
@@ -289,6 +290,7 @@ __all__ = [
     "create_iv_risk_scan_embed",
     "build_radar_scan_embed",
     "build_market_macro_overview_embed",
+    "build_calendar_embed",
     # Hedge embeds
     "create_event_impact_embed",
     "create_hedge_settlement_embed",

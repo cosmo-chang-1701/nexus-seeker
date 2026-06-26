@@ -2,7 +2,7 @@ from cogs.embed_builder import (
     create_event_impact_embed,
     create_info_embed,
     create_iv_risk_scan_embed,
-    create_market_calendar_embed,
+    build_calendar_embed,
 )
 import discord
 from discord.ext import commands, tasks
@@ -47,28 +47,49 @@ class CalendarCog(commands.Cog):
         await self.bot.wait_until_ready()
 
     @app_commands.command(
-        name="calendar", description="顯示影響目前投資組合的即時重大事件"
+        name="calendar",
+        description="顯示當月份的「重要總經事件」與觀察清單的「個股財報」",
     )
     async def calendar(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         user_id = interaction.user.id
 
-        events = await calendar_service.get_portfolio_events(user_id)
+        # 1. 解析當前用戶的自選股清單 (Watchlist)
+        from database.watchlist import get_user_watchlist
 
-        if not events:
-            return await interaction.followup.send(
-                embed=create_info_embed(
-                    title="查無資料",
-                    message="📭 未來 7 日內無影響持倉標的的重大事件或財報。",
-                )
-            )
+        watchlist_rows = get_user_watchlist(user_id)
+        symbols = [row[0] for row in watchlist_rows]
 
-        embed = create_market_calendar_embed(
-            events,
-            max_items=20,
-            empty_message="📭 未來 7 日內無影響持倉標的的重大事件或財報。",
+        # 2. 獲取總經數據 (30 天) 與財報快取數據
+        from typing import Any
+
+        macro_events = await calendar_service.get_high_impact_events(days=30)
+
+        earnings_events: list[Any] = []
+        if symbols:
+            earnings_map = await calendar_service.get_symbol_earnings_batch(symbols)
+            for ev in earnings_map.values():
+                if ev is not None:
+                    earnings_events.append(ev)
+
+            # Sort by tte_hours
+            earnings_events.sort(key=lambda x: getattr(x, "tte_hours", float("inf")))
+
+        # 3. 讀取 CME FedWatch 概率
+        fedwatch_prob = None
+        for macro_ev in macro_events:
+            prob = getattr(macro_ev, "fedwatch_probability", None)
+            if prob is not None:
+                fedwatch_prob = float(prob)
+                break
+
+        # 4. 生成 Embed
+        embed = build_calendar_embed(
+            macro_events=macro_events,
+            earnings_events=earnings_events,
+            fedwatch_prob=fedwatch_prob,
         )
-        embed.set_footer(text="Calendar-Aware Guard | Nexus Seeker")
+
         await interaction.followup.send(embed=embed)
 
     @app_commands.command(
