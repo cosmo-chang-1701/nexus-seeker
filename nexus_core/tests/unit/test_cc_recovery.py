@@ -20,9 +20,9 @@ async def test_filter_cc_recovery_targets_success():
         [
             {
                 "strike": 115.0,
-                "lastPrice": 1.2,
-                "bid": 1.1,
-                "ask": 1.3,
+                "lastPrice": 2.0,
+                "bid": 1.9,
+                "ask": 2.1,
                 "impliedVolatility": 0.3,
                 "contractSymbol": "TEST115C",
             }
@@ -45,9 +45,7 @@ async def test_filter_cc_recovery_targets_success():
         "market_analysis.trading_orchestration.SentimentEngine.get_last_stored_iv",
         return_value=0.35,
     ):
-        mock_expiries.return_value = [
-            "2026-07-25"
-        ]  # 34 days from 2026-06-21 (DTE = 34)
+        mock_expiries.return_value = ["2026-08-15"]  # >30 days from 2026-06-26
         mock_chain.return_value = MockOptionChain(mock_calls)
 
         res = await filter_cc_recovery_targets("AAPL")
@@ -79,7 +77,7 @@ async def test_cc_recovery_slash_command():
         "fallback_iv": 0.35,
         "recommendations": [
             {
-                "expiration": "2026-07-25",
+                "expiration": "2026-08-15",
                 "strike": 105.0,
                 "delta": 0.12,
                 "premium": 2.0,
