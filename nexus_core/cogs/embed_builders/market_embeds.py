@@ -795,11 +795,11 @@ def build_calendar_embed(
                 time_dt = datetime.fromisoformat(
                     str(getattr(ev, "time", "")).replace("Z", "+00:00")
                 )
-                date_str = time_dt.strftime("%m-%d %H:%M")
+                date_str = f"<t:{int(time_dt.timestamp())}:f>"
             except Exception:
-                date_str = "??-?? ??:??"
+                date_str = "`??-?? ??:??`"
 
-            macro_text += f"* 🗓️ [{date_str}] {name}\n"
+            macro_text += f"* 🗓️ {date_str} {name}\n"
 
         macro_text += (
             "*(註：總經事件由邊緣爬蟲引擎自動從 Investing.com 非同步抓取更新)*\n"
