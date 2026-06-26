@@ -783,9 +783,13 @@ def build_calendar_embed(
         )
 
     # Format Macro Events
+    macro_lines = [
+        " 🏛️ 當月重要總經事件 (Macro Events)",
+        " ----------------------------------",
+    ]
     if macro_events:
-        macro_text = ""
-        for ev in macro_events[:15]:
+        for i, ev in enumerate(macro_events[:15]):
+            prefix = " └─ " if i == len(macro_events[:15]) - 1 else " ├─ "
             name = getattr(ev, "event", "Unknown")
             country = getattr(ev, "country", "US")
             impact = str(getattr(ev, "impact", "")).lower()
@@ -798,38 +802,36 @@ def build_calendar_embed(
                 time_str = time_dt.strftime("%m/%d %H:%M")
             except Exception:
                 time_str = str(getattr(ev, "time", "N/A"))
-            macro_text += (
-                f"{icon} **{name}** ({country}) | ⏰ `{time_str}` (TTE: `{tte}h`)\n"
-            )
 
-        embed.add_field(
-            name="🏛️ 當月重要總經事件 (Macro Events)", value=macro_text, inline=False
-        )
+            color_ansi = "\u001b[1;31m" if impact == "high" else "\u001b[1;33m"
+            macro_lines.append(
+                f"{prefix}{icon} {color_ansi}{name:<12}\u001b[0m ({country}) | ⏰ {time_str} (TTE: \u001b[1;36m{tte}h\u001b[0m)"
+            )
     else:
-        embed.add_field(
-            name="🏛️ 當月重要總經事件 (Macro Events)",
-            value="📭 本月無重大事件。",
-            inline=False,
-        )
+        macro_lines.append(" └─ 📭 本月無重大事件。")
+
+    macro_panel = "```ansi\n" + "\n".join(macro_lines) + "\n```"
+    embed.add_field(name="🏛️ 當月重要總經事件", value=macro_panel, inline=False)
 
     # Format Earnings Events
+    earn_lines = [
+        " 💼 自選標的財報 (Earnings Calendar)",
+        " ----------------------------------",
+    ]
     if earnings_events:
-        earn_text = ""
-        for ev in earnings_events[:15]:
+        for i, ev in enumerate(earnings_events[:15]):
+            prefix = " └─ " if i == len(earnings_events[:15]) - 1 else " ├─ "
             sym = getattr(ev, "symbol", "Unknown")
             tte = getattr(ev, "tte_hours", "N/A")
             date_val = getattr(ev, "date", "N/A")
-            earn_text += f"📊 **{sym}** 財報發布 | 📅 `{date_val}` (TTE: `{tte}h`)\n"
-
-        embed.add_field(
-            name="💼 自選標的財報 (Earnings Calendar)", value=earn_text, inline=False
-        )
+            earn_lines.append(
+                f"{prefix}📊 \u001b[1;34m{sym:<6}\u001b[0m 財報發布 | 📅 {date_val} (TTE: \u001b[1;36m{tte}h\u001b[0m)"
+            )
     else:
-        embed.add_field(
-            name="💼 自選標的財報 (Earnings Calendar)",
-            value="📭 您的自選標的近期無財報。",
-            inline=False,
-        )
+        earn_lines.append(" └─ 📭 您的自選標的近期無財報。")
+
+    earn_panel = "```ansi\n" + "\n".join(earn_lines) + "\n```"
+    embed.add_field(name="💼 自選標的財報", value=earn_panel, inline=False)
 
     embed.set_footer(text="Calendar-Aware Guard | Nexus Seeker")
     return embed
