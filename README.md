@@ -6,7 +6,7 @@
 
 Nexus Seeker 是一個 **Discord-first 的多租戶選擇權風控與交易營運平台**。本平台深度結合了技術指標分析、Black-Scholes-Merton 期權定價、希臘字母（Greeks）投資組合風險管理、事件日曆防禦及大型語言模型（LLM）輔助分析，旨在低內存 VPS 部署環境下，為實盤交易者提供最即時、可持續、自動化的高勝率風控操作指南。
 
-> 核心版本（nexus_core）：**v1.8.9**
+> 核心版本（nexus_core）：**v1.8.10**
 
 ---
 
@@ -163,6 +163,7 @@ docker compose up -d --build
 - `/dash`：交易員主控板（持倉、跑道天數、Theta 每日收租額度及 `/stress_test` 摘要）。
 - `/stress_test`：委託單壓力測試與現金赤字警報。
 - `/market`：大盤事件日曆與當日宏觀狀態。
+- `/calendar`：當月總經與個股財報事件日曆，具備 FedWatch 利率降息/升息防護聯動與警報。
 - `/skew_scan`：期權波動率偏斜、PCR、UOA 與 Max Pain 當前解析。
 - `/order_panel`：彈出動態 Modal 以新增現股/期權委託單。
 - `/list_orders`：列出當前活躍委託單，支援 symbol 篩選，並附帶「編輯」與「取消」按鈕。
