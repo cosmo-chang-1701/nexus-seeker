@@ -802,10 +802,10 @@ def build_calendar_embed(
             macro_text += f"* 🗓️ {date_str} {name}\n"
 
         macro_text += (
-            "*(註：總經事件由邊緣爬蟲引擎自動從 Investing.com 非同步抓取更新)*\n"
+            "*(註：總經事件由邊緣爬蟲引擎自動從 TradingView 非同步抓取更新)*\n"
         )
     else:
-        macro_text = "📭 [總經數據暫時無法獲取] 或當月無重大事件。\n*(註：總經事件由邊緣爬蟲引擎自動從 Investing.com 非同步抓取更新)*\n"
+        macro_text = "📭 [總經數據暫時無法獲取] 或當月無重大事件。\n*(註：總經事件由邊緣爬蟲引擎自動從 TradingView 非同步抓取更新)*\n"
 
     embed.add_field(
         name="💡 當月重要總經事件 (Macro Events) — 數據源: Edge Scraper",
@@ -820,7 +820,14 @@ def build_calendar_embed(
             sym = getattr(ev, "symbol", "Unknown")
             tte = getattr(ev, "tte_hours", "N/A")
             date_val = getattr(ev, "date", "N/A")
-            earn_text += f"* 📅 **{sym}** 財報發布 | {date_val} (TTE: {tte}h)\n"
+            try:
+                date_dt = datetime.strptime(str(date_val), "%Y-%m-%d")
+                date_str = f"<t:{int(date_dt.timestamp())}:D>"
+                relative_str = f"<t:{int(date_dt.timestamp())}:R>"
+                earn_text += f"* 🗓️ {date_str} **{sym}** 財報發布 ({relative_str})\n"
+            except Exception:
+                date_str = f"`{date_val}`"
+                earn_text += f"* 🗓️ {date_str} **{sym}** 財報發布 (TTE: {tte}h)\n"
     else:
         earn_text = "📭 您的自選標的近期無財報。"
 

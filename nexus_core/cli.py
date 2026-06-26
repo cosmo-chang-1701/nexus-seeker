@@ -461,7 +461,7 @@ def force_macro_update(ctx):
             rprint(f"[bold red]❌ FedWatch 數據更新失敗: {e}[/bold red]")
 
         # 3. Macro Calendar
-        rprint("正在向 edge scraper 請求 Investing.com 總經日曆...")
+        rprint("正在向 edge scraper 請求 TradingView 總經日曆...")
         try:
             await calendar_service.prefetch_monthly_macro_cache(
                 months_ahead=1, force_fetch=True

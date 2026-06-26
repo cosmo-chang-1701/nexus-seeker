@@ -402,7 +402,7 @@ When documenting notification behavior, treat the DM queue as **persistent and r
 
 Current design:
 
-- macro events are cached by **month** (fetched dynamically from `nexus_edge_scraper` querying Investing.com)
+- macro events are cached by **month** (fetched dynamically from `nexus_edge_scraper` querying TradingView)
 - earnings are cached by **symbol** (fetched via Finnhub API)
 - watchlist heartbeat, calendar views, pre-market alerting, and analyst flows all share the same SQLite-backed cache path
 

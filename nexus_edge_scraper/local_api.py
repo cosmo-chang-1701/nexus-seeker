@@ -397,6 +397,7 @@ async def scrape_macro_calendar(year: int, month: int):
     import calendar
     import asyncio
     from datetime import datetime
+    import re
 
     try:
         from zoneinfo import ZoneInfo
@@ -432,6 +433,74 @@ async def scrape_macro_calendar(year: int, month: int):
         events = []
         ny_tz = ZoneInfo("America/New_York")
 
+        TRANSLATIONS = {
+            "Non Farm Payrolls": "非農就業人數",
+            "Unemployment Rate": "失業率",
+            "Core CPI YoY": "核心 CPI 年增率",
+            "Core CPI MoM": "核心 CPI 月增率",
+            "Core CPI": "核心 CPI",
+            "CPI YoY": "CPI 年增率",
+            "CPI MoM": "CPI 月增率",
+            "CPI": "CPI (消費者物價指數)",
+            "Core PCE Price Index YoY": "核心 PCE 年增率",
+            "Core PCE Price Index MoM": "核心 PCE 月增率",
+            "Core PCE Price Index": "核心 PCE",
+            "PCE Price Index YoY": "PCE 年增率",
+            "PCE Price Index MoM": "PCE 月增率",
+            "PCE Price Index": "PCE (個人消費支出物價指數)",
+            "GDP Growth Rate": "GDP 成長率",
+            "GDP": "GDP 成長率",
+            "Retail Inventories Ex Autos MoM Adv": "除汽車外零售庫存月增率 (初值)",
+            "Retail Sales MoM": "零售銷售月增率",
+            "Core Retail Sales MoM": "核心零售銷售月增率",
+            "Retail Sales": "零售銷售",
+            "Core Retail Sales": "核心零售銷售",
+            "ISM Manufacturing PMI": "ISM 製造業 PMI",
+            "ISM Non-Manufacturing PMI": "ISM 非製造業 PMI",
+            "ISM Services PMI": "ISM 服務業 PMI",
+            "S&P Global Manufacturing PMI": "S&P 全球製造業 PMI",
+            "S&P Global Services PMI": "S&P 全球服務業 PMI",
+            "S&P Global Composite PMI": "S&P 全球綜合 PMI",
+            "Initial Jobless Claims": "初領失業救濟金",
+            "Continuing Jobless Claims": "連續申請失業救濟金",
+            "Fed Interest Rate Decision": "聯準會利率決策",
+            "FOMC Meeting Minutes": "FOMC 會議紀要",
+            "JOLTs Job Openings": "JOLTs 職位空缺",
+            "PPI YoY": "PPI 年增率",
+            "PPI MoM": "PPI 月增率",
+            "PPI": "PPI (生產者物價指數)",
+            "Core PPI YoY": "核心 PPI 年增率",
+            "Core PPI MoM": "核心 PPI 月增率",
+            "Core PPI": "核心 PPI",
+            "Michigan Current Conditions Final": "密大現況指數 (終值)",
+            "Michigan Consumer Sentiment Final": "密大消費者信心 (終值)",
+            "Michigan Consumer Expectations Final": "密大消費者預期指數 (終值)",
+            "Michigan Inflation Expectations Final": "密大通膨預期 (終值)",
+            "Michigan 5 Year Inflation Expectations Final": "密大 5 年通膨預期 (終值)",
+            "Michigan Consumer Sentiment": "密大消費者信心",
+            "CB Consumer Confidence": "CB 消費者信心",
+            "Building Permits": "營建許可",
+            "Housing Starts": "新屋開工",
+            "Existing Home Sales": "成屋銷售",
+            "New Home Sales": "新屋銷售",
+            "Crude Oil Inventories": "原油庫存",
+            "Average Hourly Earnings MoM": "平均時薪月增率",
+            "Average Hourly Earnings YoY": "平均時薪年增率",
+            "ADP Employment Change": "ADP 就業人數",
+            "Goods Trade Balance Adv": "商品貿易收支 (初值)",
+            "Trade Balance": "貿易收支",
+            "Industrial Production MoM": "工業生產月增率",
+            "Capacity Utilization": "產能利用率",
+            "Fed Chair Powell Speaks": "聯準會主席鮑爾發言",
+            "Durable Goods Orders MoM": "耐久財訂單月增率",
+            "Core Durable Goods Orders MoM": "核心耐久財訂單月增率",
+            "Wholesale Inventories MoM Adv": "批發庫存月增率 (初值)",
+            "Baker Hughes Total Rigs Count": "貝克休斯總鑽井數",
+            "Baker Hughes Oil Rig Count": "貝克休斯原油鑽井數",
+            "Dallas Fed Manufacturing Index": "達拉斯聯儲製造業指數",
+            "6-Month Bill Auction": "6 個月期國庫券拍賣",
+        }
+
         for item in data.get("result", []):
             date_str = item.get("date")
             if not date_str:
@@ -445,11 +514,29 @@ async def scrape_macro_calendar(year: int, month: int):
 
             clean_event_name = item.get("title", "").strip()
 
+            translated_name = clean_event_name
+            for eng_key, chi_val in sorted(
+                TRANSLATIONS.items(), key=lambda x: len(x[0]), reverse=True
+            ):
+                if eng_key in clean_event_name:
+                    translated_name = clean_event_name.replace(eng_key, chi_val)
+                    break
+
+            if translated_name == clean_event_name:
+                fed_speaker_match = re.search(
+                    r"Fed\s+(.+?)\s+(Speech|Speaks)", translated_name, re.IGNORECASE
+                )
+                if fed_speaker_match:
+                    speaker_name = fed_speaker_match.group(1)
+                    translated_name = translated_name.replace(
+                        fed_speaker_match.group(0), f"聯準會 {speaker_name} 發言"
+                    )
+
             events.append(
                 {
                     "date": dt_est.strftime("%Y-%m-%d"),
                     "time": dt_est.strftime("%H:%M"),
-                    "event_name": clean_event_name,
+                    "event_name": translated_name,
                 }
             )
 

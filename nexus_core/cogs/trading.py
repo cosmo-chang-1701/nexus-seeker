@@ -540,7 +540,7 @@ class SchedulerCog(commands.Cog):
         except Exception as e:
             errors.append(f"FedWatch 更新失敗: {e}")
 
-        # 3. Update Macro Calendar (Investing.com)
+        # 3. Update Macro Calendar (TradingView)
         try:
             await calendar_service.prefetch_monthly_macro_cache(
                 months_ahead=1, force_fetch=True
