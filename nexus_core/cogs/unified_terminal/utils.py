@@ -1,0 +1,141 @@
+import psutil
+from services.market_data_service import BoundedCache
+
+_macro_overview_cache = BoundedCache(max_size=10)
+
+
+def get_macro_overview_data(user_id: int) -> dict:
+    ram_usage = psutil.virtual_memory().percent
+    is_degraded = ram_usage > 85.0
+    cache_key = f"overview_{user_id}"
+
+    if is_degraded and cache_key in _macro_overview_cache:
+        data = _macro_overview_cache[cache_key].copy()
+        data["is_degraded"] = True
+        return data
+
+    # Read from SQLite kv_cache
+    from database import get_kv_cache
+    from market_analysis.trading_orchestration import get_safety_payout_threshold
+
+    spx = get_kv_cache("macro_spx") or 5150.0
+    vix = get_kv_cache("macro_vix") or 18.0
+    us10y = get_kv_cache("macro_us10y") or 4.25
+    # Normalize US10Y if needed
+    if us10y > 10.0:
+        us10y = us10y / 10.0
+
+    wti = get_kv_cache("macro_wti") or 75.0
+    rrp = get_kv_cache("macro_rrp") or 420.5
+    fed_balance = get_kv_cache("macro_fed_balance") or 7.25
+    cpi_nfp_calendar = (
+        get_kv_cache("macro_cpi_nfp_calendar") or "2026-06-18 (CPI), 2026-07-03 (NFP)"
+    )
+    fear_greed = get_kv_cache("macro_fear_greed") or 48.0
+    gamma_flip_line = get_kv_cache("macro_gamma_flip_line") or 5180.0
+    uer = get_kv_cache("macro_uer") or 4.0
+    sahm_rule = get_kv_cache("macro_sahm_rule") or 0.35
+    rrp_change_30d = get_kv_cache("macro_rrp_change_30d") or 5.0
+
+    gex_fallback_val = get_kv_cache("macro_gex_is_fallback")
+    gex_is_fallback = gex_fallback_val is None or int(gex_fallback_val) == 1
+
+    # 零 Gamma 踩踏 Regime 判定
+    # SPX 跌破 Gamma Flip Line 且 VIX > 20
+    short_gamma_critical = (spx < gamma_flip_line) and (vix > 20.0)
+
+    # 衰退警告 RECESSION_WARNING
+    recession_warning = (sahm_rule >= 0.5) or (us10y > 4.5 and vix > 20.0)
+
+    payout_threshold = get_safety_payout_threshold()
+
+    data = {
+        "spx": spx,
+        "vix": vix,
+        "us10y": us10y,
+        "wti": wti,
+        "rrp": rrp,
+        "fed_balance": fed_balance,
+        "cpi_nfp_calendar": cpi_nfp_calendar,
+        "fear_greed": fear_greed,
+        "gamma_flip_line": gamma_flip_line,
+        "uer": uer,
+        "sahm_rule": sahm_rule,
+        "rrp_change_30d": rrp_change_30d,
+        "short_gamma_critical": short_gamma_critical,
+        "recession_warning": recession_warning,
+        "payout_threshold": payout_threshold,
+        "is_degraded": is_degraded,
+        "gex_is_fallback": gex_is_fallback,
+    }
+
+    # Save to memory cache
+    _macro_overview_cache[cache_key] = data
+    return data
+
+
+def find_matching_polymarket_odds(symbol: str, poly_markets: list) -> str:
+    import re
+
+    symbol = symbol.upper()
+    ticker_map = {
+        "MU": ["micron"],
+        "NVDA": ["nvidia"],
+        "AAPL": ["apple"],
+        "TSLA": ["tesla"],
+        "MSFT": ["microsoft"],
+        "GOOG": ["google", "alphabet"],
+        "GOOGL": ["google", "alphabet"],
+        "AMZN": ["amazon"],
+        "META": ["meta", "facebook"],
+        "NFLX": ["netflix"],
+    }
+    alts = ticker_map.get(symbol, [])
+
+    for m in poly_markets or []:
+        if not isinstance(m, dict):
+            continue
+        question = m.get("question", "")
+        question_lower = question.lower()
+
+        matches_ticker = False
+        if re.search(rf"\b{re.escape(symbol.lower())}\b", question_lower):
+            matches_ticker = True
+        else:
+            for alt in alts:
+                if alt in question_lower:
+                    matches_ticker = True
+                    break
+
+        if not matches_ticker and symbol == "MU":
+            if "micron" in question_lower and (
+                "eps" in question_lower
+                or "revenue" in question_lower
+                or "earnings" in question_lower
+            ):
+                matches_ticker = True
+
+        if matches_ticker:
+            tokens = m.get("tokens", [])
+            if not tokens:
+                tokens = m.get("odds_distribution", [])
+            if tokens:
+                yes_token = None
+                for t in tokens:
+                    if str(t.get("outcome", "")).strip().lower() == "yes":
+                        yes_token = t
+                        break
+                target_token = yes_token if yes_token else tokens[0]
+                outcome = target_token.get("outcome", "Yes")
+                price_val = target_token.get("price")
+                if price_val is None:
+                    price_val = target_token.get("odds", 0)
+                try:
+                    price_float = float(price_val)
+                    odds_pct = price_float * 100.0
+                    return f"{outcome}: {odds_pct:.1f}%"
+                except Exception:
+                    pass
+                return f"{outcome}: {price_val}"
+
+    return "N/A"

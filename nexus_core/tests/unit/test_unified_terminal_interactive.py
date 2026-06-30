@@ -74,7 +74,9 @@ async def test_symbol_hub_hedge_uses_builder(mock_interaction, mock_bot):
     view = SymbolHubView(symbol="AAPL", user_id=123, bot=mock_bot)
     view.base_data = {"symbol": "AAPL", "iv_rank": 55.0}
 
-    with patch("cogs.unified_terminal.create_tactical_hedge_embed") as mock_builder:
+    with patch(
+        "cogs.unified_terminal.symbol_view.create_tactical_hedge_embed"
+    ) as mock_builder:
         mock_builder.return_value = MagicMock(spec=discord.Embed)
 
         await view.btn_hedge.callback(mock_interaction)
@@ -149,7 +151,9 @@ async def test_portfolio_hub_runway_uses_builder(mock_interaction, mock_bot):
         return_value=MagicMock(
             cash_reserve=20000.0, monthly_expense=5000.0, total_theta=25.0
         ),
-    ), patch("cogs.unified_terminal.create_financial_runway_embed") as mock_builder:
+    ), patch(
+        "cogs.unified_terminal.portfolio_view.create_financial_runway_embed"
+    ) as mock_builder:
         mock_builder.return_value = MagicMock(spec=discord.Embed)
 
         await view.btn_runway.callback(mock_interaction)
@@ -170,7 +174,9 @@ async def test_pulse_hub_interactions(mock_interaction, mock_bot):
         {"question": "Test?", "tokens": []}
     ]
 
-    with patch("cogs.unified_terminal.create_polymarket_list_embed") as mock_embed_gen:
+    with patch(
+        "cogs.unified_terminal.pulse_view.create_polymarket_list_embed"
+    ) as mock_embed_gen:
         mock_embed_gen.return_value = MagicMock(spec=discord.Embed)
 
         await view.btn_poly.callback(mock_interaction)
@@ -189,7 +195,9 @@ async def test_pulse_hub_calendar_uses_builder(mock_interaction, mock_bot):
         "services.calendar_service.calendar_service.get_portfolio_events",
         new_callable=AsyncMock,
         return_value=[],
-    ), patch("cogs.unified_terminal.create_market_calendar_embed") as mock_builder:
+    ), patch(
+        "cogs.unified_terminal.pulse_view.create_market_calendar_embed"
+    ) as mock_builder:
         mock_builder.return_value = MagicMock(spec=discord.Embed)
 
         await view.btn_calendar.callback(mock_interaction)
@@ -206,7 +214,7 @@ async def test_pulse_hub_iv_uses_builder_for_empty_watchlist(
     view = PulseHubView(user_id=123, bot=mock_bot)
 
     with patch("database.get_all_watchlist", return_value=[]), patch(
-        "cogs.unified_terminal.create_info_embed"
+        "cogs.unified_terminal.pulse_view.create_info_embed"
     ) as mock_builder:
         mock_builder.return_value = MagicMock(spec=discord.Embed)
 
