@@ -228,11 +228,12 @@ def create_sentiment_scan_embed(
         macro_loading = getattr(iv_data, "has_macro_event", False) or (
             isinstance(iv_data, dict) and iv_data.get("has_macro_event", False)
         )
-        legacy_event_loading = getattr(iv_data, "has_event_loading_applied", False) or (
-            isinstance(iv_data, dict) and iv_data.get("has_event_loading_applied", False)
+        legacy_event_warning = getattr(iv_data, "has_event_warning_applied", False) or (
+            isinstance(iv_data, dict)
+            and iv_data.get("has_event_warning_applied", False)
         )
 
-        if legacy_event_loading and not earnings_loading and not macro_loading:
+        if legacy_event_warning and not earnings_loading and not macro_loading:
             macro_loading = True
 
         if iv_source in ["STORED_IV", "HV_PROXY"] and not earnings_loading:
@@ -304,7 +305,7 @@ def create_sentiment_scan_embed(
                 f" └─ IV Rank: {iv_rank:.1f}% | IV Percentile: {iv_percentile:.1f}% ({iv_status_str})",
                 " Expected Move (預期震盪區間)",
             ]
-            if event_loading:
+            if earnings_loading or macro_loading:
                 iv_lines.extend(
                     [
                         f" ├─ 本週預期: ±${expected_move_weekly:.2f} ({em_note})",

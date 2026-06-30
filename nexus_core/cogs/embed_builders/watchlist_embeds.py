@@ -129,7 +129,7 @@ def create_watchlist_signal_embed(
     # Extract IV metrics
     earnings_loading = False
     macro_loading = False
-    legacy_event_loading = False
+    legacy_event_warning = False
     iv_source = "UNAVAILABLE"
 
     if iv_metrics is not None:
@@ -141,7 +141,7 @@ def create_watchlist_signal_embed(
         expected_move = iv_metrics.expected_move_weekly
         earnings_loading = getattr(iv_metrics, "has_earnings_event", False)
         macro_loading = getattr(iv_metrics, "has_macro_event", False)
-        legacy_event_loading = getattr(iv_metrics, "has_event_loading_applied", False)
+        legacy_event_warning = getattr(iv_metrics, "has_event_warning_applied", False)
         iv_source = iv_metrics.iv_source
     else:
         iv_val = None
@@ -154,13 +154,16 @@ def create_watchlist_signal_embed(
             earnings_loading = True
         if hasattr(metrics, "has_macro_event") and metrics.has_macro_event:
             macro_loading = True
-        if hasattr(metrics, "has_event_loading_applied") and metrics.has_event_loading_applied:
-            legacy_event_loading = True
+        if (
+            hasattr(metrics, "has_event_warning_applied")
+            and metrics.has_event_warning_applied
+        ):
+            legacy_event_warning = True
 
         if hasattr(metrics, "iv_source") and metrics.iv_source:
             iv_source = metrics.iv_source
 
-    if legacy_event_loading and not earnings_loading and not macro_loading:
+    if legacy_event_warning and not earnings_loading and not macro_loading:
         macro_loading = True
 
     if iv_source in ["STORED_IV", "HV_PROXY"] and not earnings_loading:
@@ -319,7 +322,7 @@ def create_watchlist_signal_embed(
         f" ├─ Implied Volatility (IV): {iv_val_str} ｜ IV Rank: {iv_rank_str} ({iv_status_str})",
     ]
 
-    if event_loading:
+    if earnings_loading or macro_loading:
         lines.extend(
             [
                 f" ├─ 本週預期波幅 (Expected Move): {expected_move_str}",

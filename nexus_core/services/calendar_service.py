@@ -188,7 +188,7 @@ class CalendarService:
             return False, False
 
         tunnel_url = getattr(config, "TUNNEL_URL", "http://nexus_edge_scraper:8000")
-        url = f"{tunnel_url}/api/v1/macro/calendar?year={year}&month={month}"
+        url = f"{tunnel_url}/api/v1/macro/calendar?year={year}&month={month}&high_impact_only=true"
 
         high_impact: list[dict[str, str]] = []
         api_success = False
@@ -488,7 +488,7 @@ class CalendarService:
 
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                res = await client.get(f"{config.TUNNEL_URL}/scrape/macro/fedwatch")
+                res = await client.get(f"{config.TUNNEL_URL}/api/v1/scrape/macro/fedwatch")
                 if res.status_code == 200:
                     payload = res.json()
                     if payload.get("status") == "success":

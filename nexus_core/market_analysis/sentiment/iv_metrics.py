@@ -184,7 +184,6 @@ async def fetch_and_calculate_iv_metrics(symbol: str) -> IVMetrics:
             "UNAVAILABLE"
         )
         is_market_active = is_market_open()
-        has_high_impact_event = False
 
         # A. Live IV Calculation (Preferred)
         if is_market_active:
@@ -286,9 +285,7 @@ async def fetch_and_calculate_iv_metrics(symbol: str) -> IVMetrics:
 
                 start_date_str = today_dt.strftime("%Y-%m-%d")
                 end_date_str = (today_dt + timedelta(days=14)).strftime("%Y-%m-%d")
-                macro_events = get_macro_events_between(
-                    start_date_str, end_date_str
-                )
+                macro_events = get_macro_events_between(start_date_str, end_date_str)
                 for evt in macro_events:
                     event_name = evt.get("event", "").upper()
                     if evt.get("impact", "").upper() == "HIGH" or any(

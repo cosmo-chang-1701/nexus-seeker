@@ -11,7 +11,7 @@ app = FastAPI()
 logger = logging.getLogger(__name__)
 
 
-@app.get("/scrape/reddit/{symbol}")
+@app.get("/api/v1/scrape/reddit/{symbol}")
 async def scrape_reddit(
     symbol: str, limit: int = Query(5, description="回傳的貼文數量上限")
 ):
@@ -83,7 +83,7 @@ async def scrape_reddit(
             await browser.close()
 
 
-@app.get("/scrape/macro/gex")
+@app.get("/api/v1/scrape/macro/gex")
 async def scrape_gex():
     import math
     import re
@@ -279,7 +279,7 @@ async def scrape_gex():
             await browser.close()
 
 
-@app.get("/scrape/macro/fedwatch")
+@app.get("/api/v1/scrape/macro/fedwatch")
 async def scrape_fedwatch():
     import re
     import requests
@@ -392,7 +392,7 @@ async def scrape_fedwatch():
 
 
 @app.get("/api/v1/macro/calendar")
-async def scrape_macro_calendar(year: int, month: int):
+async def scrape_macro_calendar(year: int, month: int, high_impact_only: bool = False):
     import requests
     import calendar
     import asyncio
@@ -413,6 +413,8 @@ async def scrape_macro_calendar(year: int, month: int):
         to_date = f"{year}-{month:02d}-{last_day}T23:59:59.000Z"
 
         url = f"https://economic-calendar.tradingview.com/events?from={from_date}&to={to_date}&countries=US"
+        if high_impact_only:
+            url += "&minImportance=1"
         headers = {
             "Origin": "https://www.tradingview.com",
             "Referer": "https://www.tradingview.com/",
@@ -487,31 +489,7 @@ async def scrape_macro_calendar(year: int, month: int):
             "Average Hourly Earnings MoM": "平均時薪月增率",
             "Average Hourly Earnings YoY": "平均時薪年增率",
             "ADP Employment Change": "ADP 就業人數",
-            "Goods Trade Balance Adv": "商品貿易收支 (初值)",
-            "Trade Balance": "貿易收支",
-            "Industrial Production MoM": "工業生產月增率",
-            "Capacity Utilization": "產能利用率",
             "Fed Chair Powell Speaks": "聯準會主席鮑爾發言",
-            "Durable Goods Orders MoM": "耐久財訂單月增率",
-            "Core Durable Goods Orders MoM": "核心耐久財訂單月增率",
-            "Wholesale Inventories MoM Adv": "批發庫存月增率 (初值)",
-            "Baker Hughes Total Rigs Count": "貝克休斯總鑽井數",
-            "Baker Hughes Oil Rig Count": "貝克休斯原油鑽井數",
-            "Dallas Fed Manufacturing Index": "達拉斯聯儲製造業指數",
-            "Dallas Fed Services Index": "達拉斯聯儲服務業指數",
-            "Dallas Fed Services Revenues Index": "達拉斯聯儲服務業營收指數",
-            "6-Month Bill Auction": "6 個月期國庫券拍賣",
-            "6-Week Bill Auction": "6 星期期國庫券拍賣",
-            "Redbook YoY": "紅皮書商業零售銷售年增率",
-            "House Price Index YoY": "房價指數年增率",
-            "House Price Index MoM": "房價指數月增率",
-            "House Price Index": "房價指數",
-            "S&P/Case-Shiller Home Price YoY": "S&P/凱斯-席勒房價指數年增率",
-            "S&P/Case-Shiller Home Price MoM": "S&P/凱斯-席勒房價指數月增率",
-            "Chicago PMI": "芝加哥採購經理人指數",
-            "JOLTs Job Quits": "JOLTs 自願離職人數",
-            "Quarterly Grain Stocks - Soy": "季度糧食庫存 - 大豆",
-            "Quarterly Grain Stocks - Corn": "季度糧食庫存 - 玉米",
         }
 
         for item in data.get("result", []):
