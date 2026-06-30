@@ -1468,7 +1468,7 @@ class AnalystAgent(commands.Cog):
                     logger.error(f"Error generating analyst report for user {uid}: {e}")
                     ai_commentary = "⚠️ 無法生成 AI 報告分析。"
 
-            embed = build_post_market_intelligence_embed(
+            embeds = build_post_market_intelligence_embed(
                 report_lines=report_lines,
                 hedge_analysis=hedge_analysis,
                 survival_runway=survival_runway,
@@ -1476,7 +1476,8 @@ class AnalystAgent(commands.Cog):
                 ai_commentary=ai_commentary,
             )
 
-            await self.bot.queue_dm(uid, embed=embed)
+            for emb in embeds:
+                await self.bot.queue_dm(uid, embed=emb)
 
 
 async def setup(bot):
