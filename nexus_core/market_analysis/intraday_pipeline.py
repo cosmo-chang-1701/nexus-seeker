@@ -385,9 +385,8 @@ async def build_enhanced_watchlist_metrics(
         oi_pcr=float(oi_pcr_val)
         if pcr_metrics and (oi_pcr_val := pcr_metrics.get("oi_pcr")) is not None
         else None,
-        has_event_loading_applied=iv_metrics.has_event_loading_applied
-        if iv_metrics
-        else False,
+        has_earnings_event=iv_metrics.has_earnings_event if iv_metrics else False,
+        has_macro_event=iv_metrics.has_macro_event if iv_metrics else False,
     )
     _WATCHLIST_METRICS_CACHE[symbol] = (metrics, now_ts + _WATCHLIST_METRICS_TTL)
     return metrics
