@@ -1073,13 +1073,14 @@ def test_build_radar_scan_embed():
 
 def test_build_post_market_intelligence_embed_empty():
     """Verify that build_post_market_intelligence_embed correctly renders when there are no report lines."""
-    embed = build_post_market_intelligence_embed(
+    embeds = build_post_market_intelligence_embed(
         report_lines=[],
         hedge_analysis={},
         survival_runway=9999.0,
         sectors_data=[],
         ai_commentary="Test AI commentary",
     )
+    embed = embeds[0]
     assert embed.title == "📋 Nexus Seeker | 盤後綜合風險與 AI 策略報告"
 
     field_names = [f.name for f in embed.fields]
@@ -1109,13 +1110,14 @@ def test_build_post_market_intelligence_embed_parsed_ai_commentary():
         "- 第一個策略\n"
         "- 第二個策略\n"
     )
-    embed = build_post_market_intelligence_embed(
+    embeds = build_post_market_intelligence_embed(
         report_lines=[],
         hedge_analysis={},
         survival_runway=9999.0,
         sectors_data=[],
         ai_commentary=ai_commentary,
     )
+    embed = embeds[0]
     field_names = [f.name for f in embed.fields]
     assert "📊 AI 多空大盤交叉驗證解讀" in field_names
     assert "⚠️ AI 潛在陷阱與風險提示" in field_names

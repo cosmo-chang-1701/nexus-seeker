@@ -781,7 +781,7 @@ def build_post_market_intelligence_embed(
     survival_runway: Optional[float] = None,
     sectors_data: Optional[List[Dict[str, Any]]] = None,
     ai_commentary: Optional[str] = None,
-) -> discord.Embed:
+) -> List[discord.Embed]:
     """建立盤後綜合風險與 AI 策略報告 Embed (📋 盤後綜合風險與 AI 策略報告)"""
     embed_color = discord.Color.blue()
     if ai_commentary:
@@ -1059,4 +1059,13 @@ def build_post_market_intelligence_embed(
             )
 
     embed.set_footer(text="🌌 Nexus Seeker • 盤後綜合策略簡報")
-    return embed
+    all_embeds = split_embed_by_fields(embed)
+
+    if len(all_embeds) > 1:
+        for idx, emb in enumerate(all_embeds, start=1):
+            base_title = emb.title or ""
+            # 移除 split_embed_by_fields 自帶的 "(index/total)" 尾碼
+            base_title = re.sub(r"\s*\(\d+/\d+\)$", "", base_title).rstrip()
+            emb.title = f"{base_title} (第 {idx}/{len(all_embeds)} 頁)"
+
+    return all_embeds
