@@ -173,3 +173,141 @@ async def test_calendar_service_cold_start_policy():
             mock_earnings_finnhub.assert_not_called()
             assert earnings is not None
             assert earnings.date == "2026-05-20"
+
+
+@pytest.mark.asyncio
+async def test_calendar_service_swr_fallback(db_conn):
+    """Test SWR fallback: when scraper fails, keep existing cache and mark fallback=True."""
+    fixed_now = datetime(2026, 5, 12, 12, 0, 0)
+    month_key = "2026-05"
+
+    # Pre-populate database cache
+    from database.calendar_cache import replace_macro_month_events
+
+    pre_events = [
+        {
+            "event": "Cached FOMC",
+            "time": "2026-05-15T18:00:00Z",
+            "impact": "high",
+            "country": "US",
+        }
+    ]
+    replace_macro_month_events(month_key, pre_events)
+
+    # Manually make the cache stale relative to fixed_now
+    import sqlite3
+    import config
+
+    conn = sqlite3.connect(config.DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE economic_calendar_month_cache SET checked_at = '2026-05-01 00:00:00' WHERE month_key = ?",
+        (month_key,),
+    )
+    conn.commit()
+    conn.close()
+
+    with patch("services.calendar_service.datetime") as mock_datetime:
+        mock_datetime.now.side_effect = (
+            lambda tz=None: fixed_now if tz is None else fixed_now.replace(tzinfo=tz)
+        )
+        mock_datetime.fromisoformat = datetime.fromisoformat
+        mock_datetime.strptime = datetime.strptime
+        mock_datetime.combine = datetime.combine
+        mock_datetime.min = datetime.min
+
+        # Mock API request to fail (e.g. status code 500)
+        from unittest.mock import MagicMock
+
+        with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+            mock_response = MagicMock()
+            mock_response.status_code = 500
+            mock_get.return_value = mock_response
+
+            service = CalendarService()
+            service._cold_start_complete = True
+            # Force cache refresh so it tries to fetch from API
+            events = await service.get_high_impact_events(days=7)
+
+    # 1. Assert existing cache was NOT wiped out
+    assert len(events) == 1
+    assert events[0].event == "Cached FOMC"
+
+    # 2. Assert is_fallback attribute is True
+    assert getattr(events, "is_fallback", False) is True
+
+
+@pytest.mark.asyncio
+async def test_calendar_service_swr_no_cache_failure(db_conn):
+    """Test SWR fallback when no cache is available: returns empty list with fallback=False."""
+    fixed_now = datetime(2026, 5, 12, 12, 0, 0)
+    month_key = "2026-05"
+
+    # Clear cache state completely
+    import sqlite3
+    import config
+
+    conn = sqlite3.connect(config.DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute(
+        "DELETE FROM economic_calendar_month_cache WHERE month_key = ?", (month_key,)
+    )
+    cursor.execute(
+        "DELETE FROM economic_calendar_events WHERE month_key = ?", (month_key,)
+    )
+    conn.commit()
+    conn.close()
+
+    with patch("services.calendar_service.datetime") as mock_datetime:
+        mock_datetime.now.side_effect = (
+            lambda tz=None: fixed_now if tz is None else fixed_now.replace(tzinfo=tz)
+        )
+        mock_datetime.fromisoformat = datetime.fromisoformat
+        mock_datetime.strptime = datetime.strptime
+        mock_datetime.combine = datetime.combine
+        mock_datetime.min = datetime.min
+
+        from unittest.mock import MagicMock
+
+        with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+            mock_response = MagicMock()
+            mock_response.status_code = 500
+            mock_get.return_value = mock_response
+
+            service = CalendarService()
+            # Must force fresh checking behavior
+            service._cold_start_complete = True
+            events = await service.get_high_impact_events(days=7)
+
+    # Assert empty list and fallback is False
+    assert len(events) == 0
+    assert getattr(events, "is_fallback", False) is False
+
+
+@pytest.mark.asyncio
+async def test_calendar_embed_with_fallback():
+    """Test build_calendar_embed correctly displays fallback suffix in title."""
+    from services.calendar_service import EconomicEventList, EconomicEvent
+    from cogs.embed_builders import build_calendar_embed
+
+    macro_events = EconomicEventList(
+        [
+            EconomicEvent(
+                type="ECONOMIC",
+                event="FOMC",
+                time="2026-05-15T18:00:00Z",
+                impact="high",
+                country="US",
+                tte_hours=24.0,
+            )
+        ]
+    )
+    macro_events.is_fallback = True
+
+    embed = build_calendar_embed(
+        macro_events=macro_events,
+        earnings_events=[],
+        fedwatch_prob=0.75,
+    )
+
+    assert "總經數據暫時無法獲取，正使用本地歷史快取" in embed.title

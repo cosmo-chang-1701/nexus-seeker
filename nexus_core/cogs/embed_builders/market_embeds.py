@@ -767,8 +767,10 @@ def build_calendar_embed(
 
     color = discord.Color(0xE74C3C) if rate_high else discord.Color(0x3498DB)
 
+    is_fallback = getattr(macro_events, "is_fallback", False)
+    title_suffix = " [總經數據暫時無法獲取，正使用本地歷史快取]" if is_fallback else ""
     embed = NexusEmbed(
-        title=f"🗓️ 總經與財報事件日曆 ({month_str})",
+        title=f"🗓️ 總經與財報事件日曆 ({month_str}){title_suffix}",
         color=color,
         timestamp=now_utc,
     )
