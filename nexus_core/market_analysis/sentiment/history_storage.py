@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 INDEX_SYMBOLS = {"SPY", "QQQ", "DIA", "IWM", "SPX", "NDX", "RUT", "VIX"}
-_revalidating_symbols = set()
+_revalidating_symbols: set[str] = set()
 
 
 def _trigger_background_cache_clear(symbol: str):
