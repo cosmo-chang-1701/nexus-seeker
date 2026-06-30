@@ -99,4 +99,5 @@ class IVMetrics(BaseModel):
     is_premarket: bool = False
     iv_source: Literal["LIVE_IV", "STORED_IV", "HV_PROXY", "UNAVAILABLE"] = "LIVE_IV"
     reference_spot_price: float | None = None
-    has_event_loading_applied: bool = False
+    has_earnings_event: bool = False
+    has_macro_event: bool = False

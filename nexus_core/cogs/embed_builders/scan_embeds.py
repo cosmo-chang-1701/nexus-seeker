@@ -222,13 +222,20 @@ def create_sentiment_scan_embed(
             "Extreme": "極高 / 泡沫",
         }
         status_tw = iv_status_map.get(iv_status, "正常 / 公允")
-        event_loading = False
-        if hasattr(iv_data, "has_event_loading_applied"):
-            event_loading = iv_data.has_event_loading_applied
-        elif isinstance(iv_data, dict):
-            event_loading = iv_data.get("has_event_loading_applied", False)
+        earnings_loading = getattr(iv_data, "has_earnings_event", False) or (
+            isinstance(iv_data, dict) and iv_data.get("has_earnings_event", False)
+        )
+        macro_loading = getattr(iv_data, "has_macro_event", False) or (
+            isinstance(iv_data, dict) and iv_data.get("has_macro_event", False)
+        )
+        legacy_event_loading = getattr(iv_data, "has_event_loading_applied", False) or (
+            isinstance(iv_data, dict) and iv_data.get("has_event_loading_applied", False)
+        )
 
-        if iv_source in ["STORED_IV", "HV_PROXY"]:
+        if legacy_event_loading and not earnings_loading and not macro_loading:
+            macro_loading = True
+
+        if iv_source in ["STORED_IV", "HV_PROXY"] and not earnings_loading:
             try:
                 from database.calendar_cache import get_cached_earnings
                 from datetime import timedelta
@@ -240,12 +247,14 @@ def create_sentiment_scan_embed(
                         earnings["earnings_date"][:10], "%Y-%m-%d"
                     ).date()
                     if today_dt <= earn_date <= today_dt + timedelta(days=14):
-                        event_loading = True
+                        earnings_loading = True
             except Exception:
                 pass
 
-        if event_loading:
+        if earnings_loading:
             status_tw = "⚠️ 臨近財報/快取波動率可能低估"
+        elif macro_loading:
+            status_tw = "⚠️ 臨近總經大事件/快取波動率已校正"
 
         iv_status_str = f"狀態: {status_tw}"
 

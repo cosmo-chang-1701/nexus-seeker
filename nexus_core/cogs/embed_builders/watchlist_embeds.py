@@ -127,8 +127,11 @@ def create_watchlist_signal_embed(
         change_pct = 0.0
 
     # Extract IV metrics
-    event_loading = False
+    earnings_loading = False
+    macro_loading = False
+    legacy_event_loading = False
     iv_source = "UNAVAILABLE"
+
     if iv_metrics is not None:
         iv_val = (
             iv_metrics.current_iv * 100.0 if iv_metrics.current_iv is not None else None
@@ -136,7 +139,9 @@ def create_watchlist_signal_embed(
         iv_rank = iv_metrics.iv_rank
         iv_status = iv_metrics.iv_status.upper() if iv_metrics.iv_status else "NORMAL"
         expected_move = iv_metrics.expected_move_weekly
-        event_loading = iv_metrics.has_event_loading_applied
+        earnings_loading = getattr(iv_metrics, "has_earnings_event", False)
+        macro_loading = getattr(iv_metrics, "has_macro_event", False)
+        legacy_event_loading = getattr(iv_metrics, "has_event_loading_applied", False)
         iv_source = iv_metrics.iv_source
     else:
         iv_val = None
@@ -145,15 +150,20 @@ def create_watchlist_signal_embed(
         expected_move = None
 
     if metrics is not None:
-        if (
-            hasattr(metrics, "has_event_loading_applied")
-            and metrics.has_event_loading_applied
-        ):
-            event_loading = True
+        if hasattr(metrics, "has_earnings_event") and metrics.has_earnings_event:
+            earnings_loading = True
+        if hasattr(metrics, "has_macro_event") and metrics.has_macro_event:
+            macro_loading = True
+        if hasattr(metrics, "has_event_loading_applied") and metrics.has_event_loading_applied:
+            legacy_event_loading = True
+
         if hasattr(metrics, "iv_source") and metrics.iv_source:
             iv_source = metrics.iv_source
 
-    if iv_source in ["STORED_IV", "HV_PROXY"]:
+    if legacy_event_loading and not earnings_loading and not macro_loading:
+        macro_loading = True
+
+    if iv_source in ["STORED_IV", "HV_PROXY"] and not earnings_loading:
         try:
             from database.calendar_cache import get_cached_earnings
 
@@ -164,13 +174,15 @@ def create_watchlist_signal_embed(
                     earnings["earnings_date"][:10], "%Y-%m-%d"
                 ).date()
                 if today_dt <= earn_date <= today_dt + timedelta(days=14):
-                    event_loading = True
+                    earnings_loading = True
         except Exception:
             pass
 
     iv_status_str = f"狀態: {iv_status}"
-    if event_loading:
+    if earnings_loading:
         iv_status_str = "狀態: ⚠️ 臨近財報/快取波動率可能低估"
+    elif macro_loading:
+        iv_status_str = "狀態: ⚠️ 臨近總經大事件/快取波動率已校正"
 
     if max_pain_data is not None:
         mp_val = max_pain_data.get("max_pain")

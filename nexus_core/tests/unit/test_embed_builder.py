@@ -1214,7 +1214,8 @@ def test_create_watchlist_signal_embed_event_loading():
         is_premarket=False,
         volume_pcr=0.78,
         oi_pcr=1.55,
-        has_event_loading_applied=True,
+        has_earnings_event=True,
+        has_macro_event=False,
     )
 
     embed = create_watchlist_signal_embed(

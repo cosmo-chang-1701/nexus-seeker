@@ -260,9 +260,11 @@ async def fetch_and_calculate_iv_metrics(symbol: str) -> IVMetrics:
         today_str = datetime.now().strftime("%Y-%m-%d")
         await save_historical_iv(symbol, current_iv, today_str)
 
+        has_earnings_event = False
+        has_macro_event = False
+
         # Apply Event Loading Factor (1.4x) if fallback used and event near
         if iv_source in ["STORED_IV", "HV_PROXY"]:
-            has_high_impact_event = False
             try:
                 from database.calendar_cache import (
                     get_cached_earnings,
@@ -278,34 +280,33 @@ async def fetch_and_calculate_iv_metrics(symbol: str) -> IVMetrics:
                             earnings["earnings_date"][:10], "%Y-%m-%d"
                         ).date()
                         if today_dt <= earn_date <= today_dt + timedelta(days=14):
-                            has_high_impact_event = True
+                            has_earnings_event = True
                     except Exception:
                         pass
 
-                if not has_high_impact_event:
-                    start_date_str = today_dt.strftime("%Y-%m-%d")
-                    end_date_str = (today_dt + timedelta(days=14)).strftime("%Y-%m-%d")
-                    macro_events = get_macro_events_between(
-                        start_date_str, end_date_str
-                    )
-                    for evt in macro_events:
-                        event_name = evt.get("event", "").upper()
-                        if evt.get("impact", "").upper() == "HIGH" or any(
-                            term in event_name
-                            for term in [
-                                "FOMC",
-                                "INTEREST RATE",
-                                "CPI",
-                                "NFP",
-                                "FED DECISION",
-                            ]
-                        ):
-                            has_high_impact_event = True
-                            break
+                start_date_str = today_dt.strftime("%Y-%m-%d")
+                end_date_str = (today_dt + timedelta(days=14)).strftime("%Y-%m-%d")
+                macro_events = get_macro_events_between(
+                    start_date_str, end_date_str
+                )
+                for evt in macro_events:
+                    event_name = evt.get("event", "").upper()
+                    if evt.get("impact", "").upper() == "HIGH" or any(
+                        term in event_name
+                        for term in [
+                            "FOMC",
+                            "INTEREST RATE",
+                            "CPI",
+                            "NFP",
+                            "FED DECISION",
+                        ]
+                    ):
+                        has_macro_event = True
+                        break
             except Exception:
                 pass
 
-            if has_high_impact_event:
+            if has_earnings_event or has_macro_event:
                 orig = current_iv
                 current_iv = current_iv * 1.4
                 logger.warning(
@@ -428,7 +429,8 @@ async def fetch_and_calculate_iv_metrics(symbol: str) -> IVMetrics:
             is_premarket=not is_market_active,
             iv_source=iv_source,
             reference_spot_price=spot_price,
-            has_event_loading_applied=has_high_impact_event,
+            has_earnings_event=has_earnings_event,
+            has_macro_event=has_macro_event,
         )
 
         # 12. 寫入快取
@@ -451,6 +453,8 @@ async def fetch_and_calculate_iv_metrics(symbol: str) -> IVMetrics:
             is_premarket=True,
             iv_source="UNAVAILABLE",
             reference_spot_price=spot_price,
+            has_earnings_event=False,
+            has_macro_event=False,
         )
     except Exception as e:
         logger.error(f"[{symbol}] IV 指標計算失敗: {e}")
@@ -464,4 +468,6 @@ async def fetch_and_calculate_iv_metrics(symbol: str) -> IVMetrics:
             is_premarket=True,
             iv_source="UNAVAILABLE",
             reference_spot_price=spot_price,
+            has_earnings_event=False,
+            has_macro_event=False,
         )
