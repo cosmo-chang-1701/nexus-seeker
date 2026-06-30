@@ -4,7 +4,7 @@
 
 Nexus Seeker is a multi-tenant **Discord-first options risk-control and trading operations platform**. It combines technical structure, Black-Scholes-Merton pricing, Greeks-based portfolio risk, event-aware calendar defenses, and LLM-assisted structured commentary.
 
-Current released core version: **`1.8.20`**
+Current released core version: **`1.8.21`**
 
 The codebase is optimized for:
 
@@ -230,12 +230,12 @@ The platform implements an advanced macro risk-control layer that dynamically ad
 ### 1. Index Microstructure & Gamma Flip Gating (`index_microstructure.py`)
 - **Regime Evaluation**: Evaluates index liquidity conditions via `get_market_regime()`.
 - **SHORT_GAMMA_CRITICAL Detection**:
-  - Triggers when: $VIX > 20$ AND $vts\_ratio = \frac{VIX}{VIX3M} \ge 1.0$ (in backwardation) AND $\text{SPY Spot} < \text{Gamma Flip Line}$ (as estimated by the Playwright edge scraper `/scrape/macro/gex` route).
+  - Triggers when: $VIX > 20$ AND $vts\_ratio = \frac{VIX}{VIX3M} \ge 1.0$ (in backwardation) AND $\text{SPY Spot} < \text{Gamma Flip Line}$ (as estimated by the Playwright edge scraper `/api/v1/scrape/macro/gex` route).
 - **Tactical Scaling**:
   - Under `SHORT_GAMMA_CRITICAL`, the watchlist scanner in `intraday_pipeline.py` automatically scales `dynamic_grid_step` by **$1.5\times$** to slow down capital depletion during market washouts.
 
 ### 2. CME FedWatch Forecasting & Escape Windows
-- **Rate Probabilities**: Crawls FOMC rate probabilities via `/scrape/macro/fedwatch` and saves to SQLite (`consensus_value` and `fedwatch_probability` fields in `economic_calendar_events`).
+- **Rate Probabilities**: Crawls FOMC rate probabilities via `/api/v1/scrape/macro/fedwatch` and saves to SQLite (`consensus_value` and `fedwatch_probability` fields in `economic_calendar_events`).
 - **Dynamic Escape Window**:
   - The pre-market analyst loop (`analyst_agent.py`) evaluates the probability of rates remaining high ($> 70\%$).
   - If rates remain high (hawkish), it dynamically offsets the user's customized "rebound escape window" (反彈逃頂窗口，支援自訂並自動判定「上/中/下旬」) by **5** business days.

@@ -16,7 +16,7 @@ async def fetch_gex_metrics() -> Dict[str, float]:
         return fallback
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            res = await client.get(f"{config.TUNNEL_URL}/scrape/macro/gex")
+            res = await client.get(f"{config.TUNNEL_URL}/api/v1/scrape/macro/gex")
             if res.status_code == 200:
                 data = res.json()
                 if data.get("status") == "success":
