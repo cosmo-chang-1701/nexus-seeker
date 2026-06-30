@@ -459,6 +459,7 @@ Current repository rule:
 - `nexus_core/cogs/order_ui.py` — active orders setting panel, list views, cancellation/adjustment modals, and telemetry alignment buttons
 - `nexus_core/cogs/settings_ui.py` — interactive account and notification settings views and modals
 - `nexus_core/cogs/terminal.py` — terminal command entrypoints (including settings and runway analysis)
+- `nexus_core/cogs/unified_terminal/` — modular trader terminal and radar hubs (`cog.py`, `symbol_view.py`, `portfolio_view.py`, `batch_scan_view.py`, `pulse_view.py`, `utils.py`)
 - `nexus_core/cogs/calendar.py` — upgraded macro and earnings calendar command with event caching
 - `nexus_core/cogs/embed_builder.py` — single source of truth for embeds
 - `nexus_core/database/orders.py` — active orders SQLite database state CRUD operations

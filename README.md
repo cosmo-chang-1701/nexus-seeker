@@ -196,7 +196,7 @@ python cli.py admin force-macro-update
 
 ### 1. 模組結構速覽
 - `bot.py`：Bot 入口、Leader Lock 競爭、持久化 DM 佇列管理、健康監控。
-- `cogs/`：Discord 交互入口與背景排程。
+- `cogs/`：Discord 交互入口與背景排程。其中 `cogs/unified_terminal/` 已將終端雷達與各類看板拆分為模組化架構（包含 `symbol_view`、`portfolio_view`、`batch_scan_view` 等）。
 - `market_analysis/`：核心量化引擎，包括 `IntradayScanPipeline`、`NexusGammaSqueezeEngine`。其中 `sentiment_engine.py` 採 Facade 模式，底層實作已拆分至 `sentiment/` 子目錄（包含 IV、Max Pain、UOA 等模組）。
 - `services/`：外部 API 封裝與服務（`calendar_service.py` 共享事件快取、`llm_service.py` 等）。
 - `database/`：SQLite schema 與 migrations 引擎，所有資料庫變更皆需在此撰寫 migration 腳本。
