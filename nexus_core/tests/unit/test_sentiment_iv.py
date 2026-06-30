@@ -67,7 +67,7 @@ async def test_fetch_and_calculate_iv_metrics_success():
     ) as m_quote, patch("yfinance.Ticker") as m_ticker, patch(
         "services.market_data_service.get_history_df", new_callable=AsyncMock
     ) as m_hist, patch(
-        "market_analysis.sentiment_engine.is_market_open", return_value=True
+        "market_analysis.sentiment.iv_metrics.is_market_open", return_value=True
     ):
         m_quote.return_value = mock_quote
         m_hist.return_value = df_hist
@@ -105,7 +105,7 @@ async def test_fetch_and_calculate_iv_metrics_cache():
     ) as m_quote, patch("yfinance.Ticker") as m_ticker, patch(
         "services.market_data_service.get_history_df", new_callable=AsyncMock
     ) as m_hist, patch(
-        "market_analysis.sentiment_engine.is_market_open", return_value=True
+        "market_analysis.sentiment.iv_metrics.is_market_open", return_value=True
     ):
         m_quote.return_value = mock_quote
         m_hist.return_value = pd.DataFrame()
@@ -159,7 +159,7 @@ async def test_fetch_and_calculate_iv_metrics_fallback_option_chain():
     ) as m_chain, patch(
         "services.market_data_service.get_history_df", new_callable=AsyncMock
     ) as m_hist, patch(
-        "market_analysis.sentiment_engine.is_market_open", return_value=True
+        "market_analysis.sentiment.iv_metrics.is_market_open", return_value=True
     ):
         m_quote.return_value = mock_quote
         m_expiries.return_value = mock_expiries
@@ -310,7 +310,7 @@ async def test_iv_rank_and_percentile_math():
     ) as m_quote, patch("yfinance.Ticker") as m_ticker, patch(
         "services.market_data_service.get_history_df", new_callable=AsyncMock
     ) as m_hist, patch(
-        "market_analysis.sentiment_engine.is_market_open", return_value=True
+        "market_analysis.sentiment.iv_metrics.is_market_open", return_value=True
     ):
         m_quote.return_value = mock_quote
         m_hist.return_value = pd.DataFrame()  # empty so we only use DB data
@@ -404,7 +404,7 @@ async def test_fetch_and_calculate_iv_metrics_premarket_success():
     with patch(
         "services.market_data_service.get_quote", new_callable=AsyncMock
     ) as m_quote, patch(
-        "market_analysis.sentiment_engine.is_market_open", return_value=False
+        "market_analysis.sentiment.iv_metrics.is_market_open", return_value=False
     ), patch(
         "services.market_data_service.get_history_df", new_callable=AsyncMock
     ) as m_hist:
@@ -445,7 +445,7 @@ async def test_fetch_and_calculate_iv_metrics_premarket_degraded():
     with patch(
         "services.market_data_service.get_quote", new_callable=AsyncMock
     ) as m_quote, patch(
-        "market_analysis.sentiment_engine.is_market_open", return_value=False
+        "market_analysis.sentiment.iv_metrics.is_market_open", return_value=False
     ), patch(
         "services.market_data_service.get_history_df", new_callable=AsyncMock
     ) as m_hist, patch("yfinance.Ticker") as m_ticker:
@@ -480,9 +480,9 @@ async def test_fetch_and_calculate_iv_metrics_premarket_cache_bypassed_when_mark
     ) as m_quote, patch("yfinance.Ticker") as m_ticker, patch(
         "services.market_data_service.get_history_df", new_callable=AsyncMock
     ) as m_hist, patch(
-        "market_analysis.sentiment_engine.is_market_open"
+        "market_analysis.sentiment.iv_metrics.is_market_open"
     ) as m_market_open, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.get_last_stored_iv",
+        "market_analysis.sentiment.iv_metrics.get_last_stored_iv",
         return_value=0.40,
     ):
         # 1. First call: Premarket (is_market_open = False)

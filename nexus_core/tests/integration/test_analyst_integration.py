@@ -30,13 +30,13 @@ async def test_analyst_agent_integration_with_sentiment_engine():
     ) as mock_quote, patch(
         "cogs.analyst_agent.get_history_df", new_callable=AsyncMock
     ) as mock_hist, patch(
-        "market_analysis.sentiment_engine.market_data_service.get_all_option_expiries",
+        "market_analysis.sentiment.max_pain.market_data_service.get_all_option_expiries",
         new_callable=AsyncMock,
     ) as mock_exp, patch(
-        "market_analysis.sentiment_engine.market_data_service.get_option_chain",
+        "market_analysis.sentiment.max_pain.market_data_service.get_option_chain",
         new_callable=AsyncMock,
     ) as mock_chain, patch(
-        "market_analysis.sentiment_engine.market_data_service.get_quote",
+        "market_analysis.sentiment.max_pain.market_data_service.get_quote",
         new_callable=AsyncMock,
     ) as mock_quote_svc, patch(
         "httpx.AsyncClient.get", new_callable=AsyncMock
