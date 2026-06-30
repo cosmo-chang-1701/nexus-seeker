@@ -336,6 +336,15 @@ def create_watchlist_signal_embed(
             "",
             " 賬戶股權防護指引 (Holding & Risk Alignment Guide)",
             f" ├─ 既有現貨持倉: {shares_str} 股 ｜ 平均成本: {avg_cost_str} ｜ 當前損益: {pnl_str}",
+        ]
+    )
+    if not has_position and buy_rationale:
+        lines.append(f" ├─ 量化建倉解讀: {buy_rationale}")
+    if has_position and sell_rationale:
+        lines.append(f" ├─ 量化止盈解讀: {sell_rationale}")
+
+    lines.extend(
+        [
             f" └─ 操盤執行指南: {inst_str}",
             "```",
         ]

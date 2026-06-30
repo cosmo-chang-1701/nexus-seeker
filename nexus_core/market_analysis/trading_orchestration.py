@@ -300,6 +300,16 @@ async def filter_cc_recovery_targets(symbol: str) -> Optional[Dict[str, Any]]:
             except ValueError:
                 continue
 
+    from services.calendar_service import calendar_service
+
+    earnings_event = await calendar_service.get_symbol_earnings(symbol)
+    earnings_date = None
+    if earnings_event and hasattr(earnings_event, "date"):
+        try:
+            earnings_date = datetime.strptime(earnings_event.date, "%Y-%m-%d").date()
+        except Exception:
+            pass
+
     recommendations = []
     today_dt = datetime.now()
 
@@ -352,6 +362,15 @@ async def filter_cc_recovery_targets(symbol: str) -> Optional[Dict[str, Any]]:
 
                     # Performance Hurdle: Annualized Yield >= 10.0%
                     if ann_yield >= 10.0:
+                        has_earnings_risk = False
+                        if earnings_date:
+                            exp_d = datetime.strptime(exp, "%Y-%m-%d").date()
+                            if (
+                                exp_d >= earnings_date
+                                and (earnings_date - today).days <= 3
+                            ):
+                                has_earnings_risk = True
+
                         recommendations.append(
                             {
                                 "expiration": exp,
@@ -362,6 +381,7 @@ async def filter_cc_recovery_targets(symbol: str) -> Optional[Dict[str, Any]]:
                                 "ask": ask,
                                 "annualized_yield": round(ann_yield, 2),
                                 "contractSymbol": row.get("contractSymbol", ""),
+                                "has_earnings_risk": has_earnings_risk,
                             }
                         )
         except Exception as ex:
@@ -411,4 +431,21 @@ def get_safety_payout_threshold() -> float:
 
     if rrp_change > 0.20 or rrp_spike:
         return 10000.0
+
+    try:
+        from database.calendar_cache import get_macro_events_between
+        from datetime import datetime, timedelta
+
+        start_date = datetime.now().strftime("%Y-%m-%d")
+        end_date = (datetime.now() + timedelta(days=4)).strftime("%Y-%m-%d")
+        events = get_macro_events_between(start_date, end_date)
+        for ev in events:
+            name = ev.get("event", "").upper()
+            if "FOMC" in name or "CPI" in name or "PCE" in name:
+                return 16500.0
+    except Exception as e:
+        import logging
+
+        logging.getLogger(__name__).warning(f"動態閾值查詢總經事件失敗: {e}")
+
     return 13000.0

@@ -779,6 +779,12 @@ class IntradayScanPipeline:
                 user_capital = base_capital
         user_risk_limit = float(getattr(user_context, "risk_limit", 15.0))
 
+        has_upcoming_earnings = False
+        if evaluation.event_context is not None:
+            earnings_tte = getattr(evaluation.event_context, "earnings_tte_hours", None)
+            if earnings_tte is not None and earnings_tte <= 7 * 24:
+                has_upcoming_earnings = True
+
         # 計算動態買賣點現貨及對齊的期權操盤建議
         signals = calculate_dynamic_trading_signals(
             evaluation.metrics,
@@ -788,6 +794,7 @@ class IntradayScanPipeline:
             holding_avg_cost=holding_avg_cost,
             capital=user_capital,
             risk_limit=user_risk_limit,
+            has_upcoming_earnings=has_upcoming_earnings,
         )
 
         option_guidance = derive_watchlist_option_guidance(
