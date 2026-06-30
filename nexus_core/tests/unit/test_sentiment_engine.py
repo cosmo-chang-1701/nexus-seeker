@@ -407,7 +407,7 @@ async def test_kv_cache_invalidation_on_price_deviation():
         "services.market_data_service.get_quote", new_callable=AsyncMock
     ) as mock_quote, patch(
         "services.market_data_service.get_all_option_expiries", new_callable=AsyncMock
-    ) as mock_expiries, patch("market_analysis.sentiment_engine._iv_cache", {}):
+    ) as mock_expiries, patch("market_analysis.sentiment.cache._iv_cache", {}):
         mock_quote.return_value = {"c": 105.0}
         mock_expiries.return_value = []
 
@@ -535,7 +535,7 @@ async def test_iv_fallback_earnings_event_loading_factor():
 
     # Mock fallback sequence and earnings event within 14 days
     with patch(
-        "market_analysis.sentiment_engine.SentimentEngine.get_last_stored_iv",
+        "market_analysis.sentiment.iv_metrics.get_last_stored_iv",
         return_value=0.50,
     ), patch("database.calendar_cache.get_cached_earnings") as mock_earn, patch(
         "services.market_data_service.get_quote",
@@ -552,7 +552,7 @@ async def test_iv_fallback_earnings_event_loading_factor():
     ), patch("yfinance.Ticker") as mock_ticker, patch(
         "market_time.is_market_open", return_value=True
     ), patch("database.cache.get_kv_cache", return_value=None), patch(
-        "market_analysis.sentiment_engine.sqlite3.connect"
+        "market_analysis.sentiment.history_storage.sqlite3.connect"
     ):
         mock_earn.return_value = {"earnings_date": earnings_date_str}
         mock_ticker.return_value.info = {}
@@ -696,7 +696,7 @@ async def test_calculate_max_pain_split_anomaly_and_degradation():
     ) as mock_chain, patch(
         "services.market_data_service.get_quote", new_callable=AsyncMock
     ) as mock_quote, patch("database.cache.get_kv_cache", return_value=None), patch(
-        "market_analysis.sentiment_engine.logger.warning"
+        "market_analysis.sentiment.max_pain.logger.warning"
     ) as mock_logger_warning:
         mock_expiries.return_value = [MOCK_EXPIRY]
         mock_quote.return_value = {"c": 100.0}
