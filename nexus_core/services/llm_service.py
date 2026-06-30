@@ -350,7 +350,23 @@ async def generate_watchlist_skew_commentary(symbol: str, raw_data: dict) -> str
         )
         return _deterministic_commentary()
 
-    # 2. 呼叫 LLM 進行智能診斷
+    from services.calendar_service import calendar_service
+    import asyncio
+
+    # 2. 獲取總經與財報事件 (日曆聯動)
+    earnings_event, macro_event = await asyncio.gather(
+        calendar_service.get_symbol_earnings(symbol),
+        calendar_service.get_next_high_impact_event(days=7),
+    )
+    calendar_info = {}
+    if earnings_event and hasattr(earnings_event, "date"):
+        calendar_info["近期財報日"] = earnings_event.date
+    if macro_event and hasattr(macro_event, "event"):
+        calendar_info["本周重大總經事件"] = (
+            f"{macro_event.event} (於 {macro_event.time})"
+        )
+
+    # 3. 呼叫 LLM 進行智能診斷
     system_prompt = """
     你是 Nexus Seeker 的期權與波動率分析專家。
     請分析給定的個股期權 skew、IV 階數與事件風險，提供簡短的診斷與策略指引。
@@ -360,10 +376,12 @@ async def generate_watchlist_skew_commentary(symbol: str, raw_data: dict) -> str
     3. 必須嚴格遵循台灣期權交易術語，例如：選擇權 (Options)、履約價 (Strike)、權利金 (Premium)、價差期權/價差策略 (Spreads)、隱含波動率 (Implied Volatility)、乖離率 (Deviation)。絕對不要使用簡體字、期權、執行價、期權費、偏差等大陸用語。
     4. 絕對不可輸出任何 ANSI 轉義字元或殘留碼如 [0;31m, [0m。
     5. 絕對不可在分析與策略指引中使用 ├─, └─ 等樹狀分支字元，使用標準 Markdown 項目符號。
+    6. 必須優先結合即將到來的重大總經事件與該個股財報日，評估其對市場波動率偏斜（Skew）的潛在衝擊，產出更具總經前瞻性的精簡分析。
     """
 
     user_prompt = (
-        f"標的: {symbol}\n期權與市場數據: {json.dumps(raw_data, ensure_ascii=False)}"
+        f"標的: {symbol}\n期權與市場數據: {json.dumps(raw_data, ensure_ascii=False)}\n"
+        f"日曆與事件數據: {json.dumps(calendar_info, ensure_ascii=False)}"
     )
 
     try:

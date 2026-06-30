@@ -1035,9 +1035,13 @@ def create_cc_recovery_embed(data: dict) -> discord.Embed:
             )
         rec_table_lines.append("```")
 
+        rec_table_str = "\n".join(rec_table_lines)
+        if any(r.get("has_earnings_risk") for r in recs):
+            rec_table_str += "\n🔴 **警示標籤**：此合約橫跨財報日，隱含波動率（IV）可能於選後崩跌（IV Crush），請謹慎開倉。"
+
         embed.add_field(
             name="🎯 推薦 Covered Call 備兌合約 (Recommended Contracts)",
-            value="\n".join(rec_table_lines),
+            value=rec_table_str,
             inline=False,
         )
 

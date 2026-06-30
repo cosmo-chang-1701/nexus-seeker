@@ -167,6 +167,7 @@ def calculate_dynamic_trading_signals(
     holding_avg_cost: float | None = None,
     capital: float,
     risk_limit: float,
+    has_upcoming_earnings: bool = False,
 ) -> dict[str, Any]:
     """
     依據現價、期權偏斜 Skew 及技術指標，計算適合的買入/賣出價位與股數。
@@ -239,8 +240,12 @@ def calculate_dynamic_trading_signals(
         skew_discount = max(-0.05, min(0.15, (skew_val / 100.0) * 0.5))
         suitable_buy = base_buy * (1.0 - skew_discount)
 
-        # 限制範圍在 buy_price_phase3*0.9 到 buy_price_phase1 之間
         suitable_buy = max(buy_price_phase3 * 0.9, min(suitable_buy, buy_price_phase1))
+
+        if has_upcoming_earnings:
+            suitable_buy *= 0.90
+            result["buy_rationale"] = "[⚠️ 財報前夜防護啟動] " + result["buy_rationale"]
+
         result["suitable_buy_price"] = round(suitable_buy, 2)
 
         # Position Sizing
