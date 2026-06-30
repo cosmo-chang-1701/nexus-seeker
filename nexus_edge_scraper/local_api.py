@@ -498,7 +498,20 @@ async def scrape_macro_calendar(year: int, month: int):
             "Baker Hughes Total Rigs Count": "貝克休斯總鑽井數",
             "Baker Hughes Oil Rig Count": "貝克休斯原油鑽井數",
             "Dallas Fed Manufacturing Index": "達拉斯聯儲製造業指數",
+            "Dallas Fed Services Index": "達拉斯聯儲服務業指數",
+            "Dallas Fed Services Revenues Index": "達拉斯聯儲服務業營收指數",
             "6-Month Bill Auction": "6 個月期國庫券拍賣",
+            "6-Week Bill Auction": "6 星期期國庫券拍賣",
+            "Redbook YoY": "紅皮書商業零售銷售年增率",
+            "House Price Index YoY": "房價指數年增率",
+            "House Price Index MoM": "房價指數月增率",
+            "House Price Index": "房價指數",
+            "S&P/Case-Shiller Home Price YoY": "S&P/凱斯-席勒房價指數年增率",
+            "S&P/Case-Shiller Home Price MoM": "S&P/凱斯-席勒房價指數月增率",
+            "Chicago PMI": "芝加哥採購經理人指數",
+            "JOLTs Job Quits": "JOLTs 自願離職人數",
+            "Quarterly Grain Stocks - Soy": "季度糧食庫存 - 大豆",
+            "Quarterly Grain Stocks - Corn": "季度糧食庫存 - 玉米",
         }
 
         for item in data.get("result", []):
