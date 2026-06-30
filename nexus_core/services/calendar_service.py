@@ -488,7 +488,9 @@ class CalendarService:
 
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                res = await client.get(f"{config.TUNNEL_URL}/api/v1/scrape/macro/fedwatch")
+                res = await client.get(
+                    f"{config.TUNNEL_URL}/api/v1/scrape/macro/fedwatch"
+                )
                 if res.status_code == 200:
                     payload = res.json()
                     if payload.get("status") == "success":

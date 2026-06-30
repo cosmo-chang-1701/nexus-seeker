@@ -22,7 +22,7 @@ class AsyncContextManagerMock:
 def test_scrape_reddit_fallback():
     # Mock playwright to fail at context creation inside try-except
     with patch("local_api.async_playwright", return_value=AsyncContextManagerMock()):
-        response = client.get("/scrape/reddit/AAPL")
+        response = client.get("/api/v1/scrape/reddit/AAPL")
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "error"
@@ -32,7 +32,7 @@ def test_scrape_reddit_fallback():
 def test_scrape_gex_fallback():
     # Mock playwright to fail at context creation inside try-except
     with patch("local_api.async_playwright", return_value=AsyncContextManagerMock()):
-        response = client.get("/scrape/macro/gex")
+        response = client.get("/api/v1/scrape/macro/gex")
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "success"
@@ -45,7 +45,7 @@ def test_scrape_gex_fallback():
 def test_scrape_fedwatch_fallback():
     # Mock requests.get to fail
     with patch("requests.get", side_effect=Exception("Mock requests failure")):
-        response = client.get("/scrape/macro/fedwatch")
+        response = client.get("/api/v1/scrape/macro/fedwatch")
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "success"
