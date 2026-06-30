@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from datetime import date, datetime, timedelta
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Tuple
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, computed_field, field_validator
@@ -76,6 +76,12 @@ class EarningsEvent(CalendarEvent):
     @property
     def days_to_earnings(self) -> float:
         return round(self.tte_hours / 24.0, 2)
+
+
+class EconomicEventList(list):
+    """Subclass of list that allows tracking whether fallback data was used."""
+
+    is_fallback: bool = False
 
 
 class CalendarService:
@@ -155,13 +161,19 @@ class CalendarService:
 
     async def _ensure_macro_month_cached(
         self, month_key: str, force_fresh: bool = True, force_fetch: bool = False
-    ) -> None:
+    ) -> Tuple[bool, bool]:
+        """
+        Ensures macro month events are cached in SQLite.
+        Returns a tuple: (success: bool, is_fallback: bool)
+        - success: True if fetch succeeded or if existing cache was fresh.
+        - is_fallback: True if fetch failed but we fell back to existing cache.
+        """
         status = get_macro_month_status(month_key)
         if status and not force_fetch:
             if not force_fresh or self._is_timestamp_fresh(
                 status.get("checked_at"), self._macro_cache_hours
             ):
-                return
+                return True, False
 
         import httpx
         import config
@@ -173,52 +185,70 @@ class CalendarService:
             year = int(year_str)
             month = int(month_str)
         except ValueError:
-            return
+            return False, False
 
         tunnel_url = getattr(config, "TUNNEL_URL", "http://nexus_edge_scraper:8000")
         url = f"{tunnel_url}/api/v1/macro/calendar?year={year}&month={month}"
 
         high_impact: list[dict[str, str]] = []
+        api_success = False
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 res = await client.get(url)
                 if res.status_code == 200:
                     events = res.json()
-                    ny_tz = zoneinfo.ZoneInfo("America/New_York")
-                    utc_tz = zoneinfo.ZoneInfo("UTC")
+                    if isinstance(events, list) and len(events) > 0:
+                        ny_tz = zoneinfo.ZoneInfo("America/New_York")
+                        utc_tz = zoneinfo.ZoneInfo("UTC")
 
-                    for ev in events:
-                        date_val = ev.get("date", f"{year}-{month:02d}-01")
-                        time_val = ev.get("time", "00:00")
-                        event_name = ev.get("event_name", "Unknown Event")
+                        for ev in events:
+                            date_val = ev.get("date", f"{year}-{month:02d}-01")
+                            time_val = ev.get("time", "00:00")
+                            event_name = ev.get("event_name", "Unknown Event")
 
-                        try:
-                            # Parse as US Eastern Time
-                            dt_naive = datetime.strptime(
-                                f"{date_val} {time_val}", "%Y-%m-%d %H:%M"
+                            try:
+                                # Parse as US Eastern Time
+                                dt_naive = datetime.strptime(
+                                    f"{date_val} {time_val}", "%Y-%m-%d %H:%M"
+                                )
+                                dt_aware = dt_naive.replace(tzinfo=ny_tz)
+                                # Convert to UTC
+                                dt_utc = dt_aware.astimezone(utc_tz)
+                                iso_time = dt_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+                            except Exception as parse_e:
+                                logger.error(
+                                    f"Failed to parse time {date_val} {time_val}: {parse_e}"
+                                )
+                                iso_time = f"{date_val}T{time_val}:00Z"
+
+                            high_impact.append(
+                                {
+                                    "event": event_name,
+                                    "time": iso_time,
+                                    "impact": "high",
+                                    "country": "US",
+                                }
                             )
-                            dt_aware = dt_naive.replace(tzinfo=ny_tz)
-                            # Convert to UTC
-                            dt_utc = dt_aware.astimezone(utc_tz)
-                            iso_time = dt_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
-                        except Exception as parse_e:
-                            logger.error(
-                                f"Failed to parse time {date_val} {time_val}: {parse_e}"
-                            )
-                            iso_time = f"{date_val}T{time_val}:00Z"
-
-                        high_impact.append(
-                            {
-                                "event": event_name,
-                                "time": iso_time,
-                                "impact": "high",
-                                "country": "US",
-                            }
-                        )
+                        api_success = True
         except Exception as e:
             logger.error(f"Edge Scraper API request failed for macro calendar: {e}")
 
-        replace_macro_month_events(month_key, high_impact)
+        # SWR: Only replace cache if scraper explicitly returned a valid non-empty list of events
+        if api_success and len(high_impact) > 0:
+            replace_macro_month_events(month_key, high_impact)
+            return True, False
+        else:
+            # Fallback to existing SQLite cached events (if they exist)
+            if status is not None:
+                logger.warning(
+                    f"API request failed for macro calendar ({month_key}). Falling back to existing SQLite cache."
+                )
+                return False, True
+            else:
+                logger.warning(
+                    f"API request failed for macro calendar ({month_key}) and no SQLite cache exists."
+                )
+                return False, False
 
     async def prefetch_monthly_macro_cache(
         self,
@@ -277,10 +307,14 @@ class CalendarService:
             if not self._cold_start_complete:
                 self._cold_start_complete = True
 
-            await asyncio.gather(*tasks)
+            results = await asyncio.gather(*tasks)
+            any_fallback = any(r[1] for r in results if r is not None)
+
             raw_events = get_macro_events_between(start_date, end_date)
 
-            high_impact = []
+            high_impact = EconomicEventList()
+            high_impact.is_fallback = any_fallback
+
             for event in raw_events:
                 event_time_str = str(event.get("event_time", ""))
                 if not event_time_str:
