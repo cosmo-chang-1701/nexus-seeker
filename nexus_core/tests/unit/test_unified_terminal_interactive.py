@@ -138,32 +138,6 @@ async def test_portfolio_hub_interactions(mock_interaction, mock_bot):
 
 
 @pytest.mark.asyncio
-async def test_portfolio_hub_runway_uses_builder(mock_interaction, mock_bot):
-    view = PortfolioHubView(user_id=123, bot=mock_bot)
-
-    with patch(
-        "market_analysis.portfolio.refresh_portfolio_greeks", new_callable=AsyncMock
-    ), patch(
-        "market_analysis.pro_management.calculate_financial_runway",
-        side_effect=[120.0, 180.0],
-    ), patch("services.asset_manager.AssetManager.get_assets", return_value=[]), patch(
-        "database.get_full_user_context",
-        return_value=MagicMock(
-            cash_reserve=20000.0, monthly_expense=5000.0, total_theta=25.0
-        ),
-    ), patch(
-        "cogs.unified_terminal.portfolio_view.create_financial_runway_embed"
-    ) as mock_builder:
-        mock_builder.return_value = MagicMock(spec=discord.Embed)
-
-        await view.btn_runway.callback(mock_interaction)
-
-        mock_builder.assert_called_once()
-        _, last_kwargs = mock_interaction.edit_original_response.call_args
-        assert last_kwargs["embed"] is mock_builder.return_value
-
-
-@pytest.mark.asyncio
 async def test_pulse_hub_interactions(mock_interaction, mock_bot):
     """測試 /market 指令互動與讀取狀態"""
     view = PulseHubView(user_id=123, bot=mock_bot)

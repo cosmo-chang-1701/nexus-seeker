@@ -12,7 +12,6 @@ from services import market_data_service
 from cogs.embed_builder import (
     create_asset_promotion_embed,
     create_error_embed,
-    create_financial_runway_embed,
     create_info_embed,
     create_scan_embed,
     create_system_health_embed,
@@ -211,78 +210,6 @@ class TerminalCog(commands.Cog):
         await interaction.followup.send(
             embed=create_info_embed(title="系統資訊", message=msg), ephemeral=True
         )
-
-    @app_commands.command(
-        name="runway_check", description="執行財務生存跑道與 Theta 收益分析"
-    )
-    async def runway_check(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        user_id = interaction.user.id
-
-        # 🚀 執行即時 Greeks 刷新，確保數據最新
-        from market_analysis.portfolio import refresh_portfolio_greeks
-
-        await refresh_portfolio_greeks(user_id)
-
-        ctx = get_full_user_context(user_id)
-
-        if ctx.monthly_expense <= 0:
-            return await interaction.followup.send(
-                embed=create_error_embed(
-                    "請先使用 `/settings` 配置您的每月支出 (monthly_expense)，才能計算跑道。",
-                    title="系統警告",
-                ),
-                ephemeral=True,
-            )
-
-        from market_analysis.pro_management import calculate_financial_runway
-
-        runway_days = calculate_financial_runway(
-            cash_reserve=ctx.cash_reserve,
-            monthly_expense=ctx.monthly_expense,
-            daily_theta=ctx.total_theta,
-        )
-
-        # 🚀 [Unified Asset Lifecycle] 計算 HOLDING 資產的備用流動性 (含 20% Haircut)
-        from services.asset_manager import AssetManager
-        from models.asset import ContextType, HoldingMetadata
-
-        manager = AssetManager()
-        holdings = manager.get_assets(user_id, ContextType.HOLDING)
-
-        total_holding_value = 0.0
-        for h in holdings:
-            meta = HoldingMetadata(**h.metadata)
-            quote = await market_data_service.get_quote(h.symbol)
-            price = quote.get("c", 0.0) if quote else 0.0
-            total_holding_value += price * meta.quantity
-
-        backup_liquidity = total_holding_value * 0.8  # 20% Haircut
-
-        # 計算含備用流動性的跑道
-        extended_runway = calculate_financial_runway(
-            cash_reserve=ctx.cash_reserve + backup_liquidity,
-            monthly_expense=ctx.monthly_expense,
-            daily_theta=ctx.total_theta,
-        )
-
-        ratio = (
-            (ctx.total_theta * 30) / ctx.monthly_expense
-            if ctx.monthly_expense > 0
-            else 0
-        )
-        embed = create_financial_runway_embed(
-            cash_reserve=ctx.cash_reserve,
-            monthly_expense=ctx.monthly_expense,
-            total_theta=ctx.total_theta,
-            runway_days=runway_days,
-            backup_liquidity=backup_liquidity,
-            extended_runway=extended_runway,
-            total_holding_value=total_holding_value,
-            ratio=ratio,
-            footer_text="Nexus Risk Engine | 跑道計算含 20% 流動性折價",
-        )
-        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="add_trade", description="將新的選擇權部位加入監控管線")
     @app_commands.choices(

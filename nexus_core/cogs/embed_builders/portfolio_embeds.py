@@ -250,7 +250,11 @@ def create_trades_embed(
 
 
 def create_strategic_dash_embed(
-    user_ctx: Any, pnl_data: Dict[str, Any], vix_spot: float = 18.0
+    user_ctx: Any,
+    pnl_data: Dict[str, Any],
+    vix_spot: float = 18.0,
+    backup_liquidity: float = 0.0,
+    extended_runway: float | None = None,
 ) -> discord.Embed:
     """
     建構戰略看板 (Strategic Dashboard) Embed.
@@ -285,10 +289,19 @@ def create_strategic_dash_embed(
 
     runway_info = (
         f"* **總資產 (NAV):** `${nav:,.0f}` ({status_mode})\n"
-        f"* **目前跑道:** {runway_days} 天 (由現有現金與 Theta 收益推算)\n"
+        f"* **現金儲備:** `${cash_reserve:,.2f}` | **月支出:** `${monthly_expense:,.2f}`\n"
+        f"* **核心跑道:** {runway_days} 天 (由現金與 Theta 推算)\n"
+    )
+
+    if backup_liquidity > 0 and extended_runway is not None:
+        extended_text = f"{extended_runway:,.1f}" if extended_runway < 9999 else "∞"
+        runway_info += f"* **極限跑道:** {extended_text} 天 (含備用流動性 `${backup_liquidity:,.0f}`)\n"
+
+    runway_info += (
         f"* **收租效率:** 每日 Theta `${daily_theta:,.2f}` (覆蓋率 {coverage_pct:.1f}%)\n"
         f"* **安全提領紅線:** `${payout_threshold:,.0f}` (流動性防守限制)\n"
     )
+
     if coverage_pct < 100 and daily_expense > 0:
         runway_info += f"> 💡 警訊：現金流覆蓋不足，每日收租缺口為 `${gap:,.2f}`。"
 

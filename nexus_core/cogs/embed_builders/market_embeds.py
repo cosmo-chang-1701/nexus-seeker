@@ -88,61 +88,6 @@ def create_max_pain_embed(symbol: str, data: Dict[str, Any]) -> discord.Embed:
     return embed
 
 
-def create_financial_runway_embed(
-    cash_reserve: float,
-    monthly_expense: float,
-    total_theta: float,
-    runway_days: float,
-    backup_liquidity: float = 0.0,
-    extended_runway: float | None = None,
-    total_holding_value: float = 0.0,
-    ratio: float | None = None,
-    footer_text: str = "Nexus Seeker | Financial Runway",
-) -> discord.Embed:
-    """建立財務生存跑道 Embed。"""
-    color = discord.Color.green() if runway_days > 180 else discord.Color.orange()
-    embed = discord.Embed(
-        title="🏁 財務生存跑道分析",
-        color=color,
-        timestamp=datetime.now(timezone.utc),
-    )
-    embed.add_field(name="💰 現金儲備", value=f"`${cash_reserve:,.2f}`", inline=True)
-    embed.add_field(name="📉 每月支出", value=f"`${monthly_expense:,.2f}`", inline=True)
-    embed.add_field(
-        name="💸 每日 Theta",
-        value=f"`+${total_theta:,.2f}/day`",
-        inline=True,
-    )
-    runway_text = (
-        f"**{runway_days:,.1f} 天**"
-        if runway_days < 9999
-        else "**♾️ 無限 (收益已覆蓋支出)**"
-    )
-    embed.add_field(
-        name="⌛ 核心生存跑道",
-        value=runway_text,
-        inline=False,
-    )
-    if backup_liquidity > 0 and extended_runway is not None:
-        extended_text = (
-            f"**{extended_runway:,.1f} 天**" if extended_runway < 9999 else "**♾️ 無限**"
-        )
-        embed.add_field(
-            name="🛡️ 備用流動性",
-            value=(
-                f"`${total_holding_value:,.2f}` (折價後: `${backup_liquidity:,.2f}`)\n"
-                f"預計可將跑道延長至: {extended_text}"
-            ),
-            inline=False,
-        )
-    if ratio is not None:
-        embed.add_field(
-            name="📊 收益支出比 (Theta/Expense)", value=f"`{ratio:.2%}`", inline=True
-        )
-    embed.set_footer(text=footer_text)
-    return embed
-
-
 def create_system_health_embed(
     *,
     memory_percent: float,
