@@ -312,6 +312,14 @@ async def generate_watchlist_skew_commentary(symbol: str, raw_data: dict) -> str
                 f"期權偏斜（Skew {skew:+.2f}%）平穩，多空籌碼均衡，無明顯單向偏好。"
             )
 
+        dp_skew = float(raw_data.get("dark_pool_skew", 0.0))
+        if dp_skew > 0.3:
+            commentary_parts.append(
+                "技術面或許弱勢，但暗池大舉吸籌，出現高勝率反轉徵兆。"
+            )
+        elif dp_skew < -0.3:
+            commentary_parts.append("暗池呈現強烈派發跡象，機構偷出貨，上方承壓沉重。")
+
         iv_rank = float(raw_data.get("iv_rank", 50.0))
         scenario = str(raw_data.get("scenario", "wait"))
         if iv_rank > 65.0:
@@ -377,6 +385,7 @@ async def generate_watchlist_skew_commentary(symbol: str, raw_data: dict) -> str
     4. 絕對不可輸出任何 ANSI 轉義字元或殘留碼如 [0;31m, [0m。
     5. 絕對不可在分析與策略指引中使用 ├─, └─ 等樹狀分支字元，使用標準 Markdown 項目符號。
     6. 必須優先結合即將到來的重大總經事件與該個股財報日，評估其對市場波動率偏斜（Skew）的潛在衝擊，產出更具總經前瞻性的精簡分析。
+    7. 若資料包含暗池偏斜度 (dark_pool_skew)，請綜合判斷：例如若 RSI 等技術面超賣，但暗池顯示機構在此價位大量吸籌，請指出這是一個高勝率的反轉點；若暗池為強烈負值，則警示派發風險。
     """
 
     user_prompt = (

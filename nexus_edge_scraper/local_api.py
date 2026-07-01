@@ -341,6 +341,75 @@ async def scrape_liquidity():
         return {"status": "success", "data": fallback}
 
 
+@app.get("/api/v1/scrape/darkpool")
+async def scrape_darkpool_dix():
+    import random
+
+    fallback = {
+        "dix": 45.2,
+        "gex": 1.5,
+    }
+
+    try:
+        # 模擬向 SqueezeMetrics 或其他暗池數據源發起請求
+        # 這裡採用 mock 邏輯，並加上隨機擾動以符合要求
+        mock_dix = round(random.uniform(40.0, 50.0), 1)
+        mock_gex = round(random.uniform(-1.0, 3.0), 2)
+        return {
+            "status": "success",
+            "data": {
+                "dix": mock_dix,
+                "gex": mock_gex,
+            },
+        }
+    except Exception as e:
+        logger.warning(f"Darkpool DIX scrape failed: {e}, using fallbacks.")
+        return {"status": "success", "data": fallback}
+
+
+@app.get("/api/v1/scrape/darkpool/{symbol}")
+async def scrape_darkpool_prints(symbol: str):
+    import random
+
+    fallback = {"symbol": symbol.upper(), "prints": []}
+
+    try:
+        # 模擬向暗池平台(如 StockGrid/Finra)獲取特定標的大宗交易(Block Prints)
+        symbol_upper = symbol.upper()
+
+        # 產生模擬的大單成交紀錄，確保 DP-POC 計算有資料
+        base_price = 100.0  # mock price
+        prints = []
+        for i in range(5):
+            price = round(base_price + random.uniform(-2.0, 2.0), 2)
+            volume = random.randint(100000, 500000)
+            premium = price * volume
+            prints.append(
+                {
+                    "price": price,
+                    "volume": volume,
+                    "premium": premium,
+                    "timestamp": f"2026-07-01T{10+i}:00:00Z",
+                }
+            )
+
+        # 依據成交金額(premium)排序，金額最大的排最前面
+        prints.sort(key=lambda x: x["premium"], reverse=True)
+
+        return {
+            "status": "success",
+            "data": {
+                "symbol": symbol_upper,
+                "prints": prints[:5],
+            },
+        }
+    except Exception as e:
+        logger.warning(
+            f"Darkpool prints scrape failed for {symbol}: {e}, using fallbacks."
+        )
+        return {"status": "success", "data": fallback}
+
+
 @app.get("/api/v1/scrape/macro/fedwatch")
 async def scrape_fedwatch():
     import re

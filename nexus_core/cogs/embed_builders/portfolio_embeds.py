@@ -860,8 +860,15 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             dist_str = f"{distance:+.1f}%"
             dist_color = "\u001b[1;31m" if abs(distance) > 5.0 else "\u001b[1;32m"
 
-    ddp_status = "符合 (符合 DDP 盈餘/估值雙擊)" if data.get("is_ddp") else "不符合"
-    ddp_color = "\u001b[1;32m" if data.get("is_ddp") else "\u001b[1;30m"
+    if data.get("tdp_activated"):
+        ddp_status = "✨ TDP 估值三擊 (Triple Discount Pricing)"
+        ddp_color = "\u001b[1;36m"
+    elif data.get("is_ddp"):
+        ddp_status = "符合 (符合 DDP 盈餘/估值雙擊)"
+        ddp_color = "\u001b[1;32m"
+    else:
+        ddp_status = "不符合"
+        ddp_color = "\u001b[1;30m"
 
     ivr_val = data.get("iv_rank")
     if ivr_val is None:
@@ -1051,6 +1058,56 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     embed.add_field(
         name="🎯 結算與目標 (Target Lock)", value="\n".join(target_lines), inline=False
     )
+
+    # 4.5. 🦇 暗池與大宗交易跡象 (Dark Pool Prints)
+    dp_data = data.get("darkpool")
+    if dp_data:
+        dp_lines = ["```ansi"]
+        prints = dp_data.get("prints", [])
+        if prints:
+            dp_lines.append(" 💰 近期最大暗池成交 (Top 3 Block Prints)")
+            top3 = sorted(prints, key=lambda x: x.get("premium", 0), reverse=True)[:3]
+            for i, p in enumerate(top3):
+                pr = p.get("price", 0)
+                vol = p.get("volume", 0)
+                prem = p.get("premium", 0)
+                prem_m = prem / 1000000.0
+                prefix = " ├─" if i < len(top3) - 1 else " └─"
+                dp_lines.append(
+                    f"{prefix} \u001b[1;36m${pr:>7.2f}\u001b[0m | 量: {vol:>8,} | 金額: \u001b[1;33m${prem_m:>6.2f}M\u001b[0m"
+                )
+        else:
+            dp_lines.append(" 💰 近期最大暗池成交 (Top 3 Block Prints)")
+            dp_lines.append(" └─ 近 24 小時無顯著大宗交易。")
+
+        dp_poc = dp_data.get("dp_poc")
+        if dp_poc is not None and float(dp_poc) > 0:
+            dp_lines.append("")
+            dp_lines.append(" 🌊 籌碼與防禦共振 (Support Resonance)")
+            dp_lines.append(
+                f" ├─ 暗池磁吸價 (DP-POC): \u001b[1;35m${float(dp_poc):.2f}\u001b[0m"
+            )
+
+            gex_putwall = data.get("gex", {}).get("put_wall")
+            if gex_putwall is not None and float(gex_putwall) > 0:
+                is_overlap = (
+                    abs(float(dp_poc) - float(gex_putwall)) / float(gex_putwall) <= 0.01
+                )
+                if is_overlap:
+                    dp_lines.append(
+                        " └─ 狀態: \u001b[1;31m🛡️ 絕對防禦共振\u001b[0m (與 PutWall 高度重疊)"
+                    )
+                else:
+                    dp_lines.append(" └─ 狀態: \u001b[1;30m⚪ 無顯著重疊\u001b[0m")
+            else:
+                dp_lines.append(" └─ 狀態: \u001b[1;30m⚪ 缺乏 PutWall 數據\u001b[0m")
+
+        dp_lines.append("```")
+        embed.add_field(
+            name="🦇 暗池大宗交易與支撐 (Dark Pool)",
+            value="\n".join(dp_lines),
+            inline=False,
+        )
 
     # 5. 🐋 異常活動 (UOA)
     uoa_data = data.get("uoa", [])
