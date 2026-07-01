@@ -136,6 +136,51 @@ async def fetch_liquidity_metrics() -> dict:
     return fallback
 
 
+async def fetch_core_macro_metrics() -> dict:
+    """呼叫邊緣爬蟲獲取 RRP, Fed Balance, UER, Sahm Rule, Fear & Greed 等核心總經指標。"""
+    fallback = {
+        "rrp": 420.5,
+        "fed_balance": 7.25,
+        "uer": 4.0,
+        "sahm_rule": 0.35,
+        "fear_greed": 48.0,
+    }
+    from database.cache import save_kv_cache
+
+    if not getattr(config, "TUNNEL_URL", ""):
+        await save_kv_cache("macro_core_is_fallback", 1)
+        return fallback
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.get(
+                f"{config.TUNNEL_URL}/api/v1/scrape/macro/core_metrics"
+            )
+            if res.status_code == 200:
+                data = res.json()
+                if data.get("status") == "success":
+                    core_data = data.get("data", fallback)
+                    await save_kv_cache("macro_rrp", core_data.get("rrp", 420.5))
+                    await save_kv_cache(
+                        "macro_rrp_change_30d", core_data.get("rrp_change_30d", 5.0)
+                    )
+                    await save_kv_cache(
+                        "macro_fed_balance", core_data.get("fed_balance", 7.25)
+                    )
+                    await save_kv_cache("macro_uer", core_data.get("uer", 4.0))
+                    await save_kv_cache(
+                        "macro_sahm_rule", core_data.get("sahm_rule", 0.35)
+                    )
+                    await save_kv_cache(
+                        "macro_fear_greed", core_data.get("fear_greed", 48.0)
+                    )
+                    await save_kv_cache("macro_core_is_fallback", 0)
+                    return core_data
+    except Exception as e:
+        logger.warning(f"無法從 Tunnel Scraper 獲取核心總經數據: {e}")
+    await save_kv_cache("macro_core_is_fallback", 1)
+    return fallback
+
+
 async def fetch_symbol_gex_metrics(symbol: str) -> dict:
     """呼叫邊緣爬蟲獲取個股的 Net GEX, Call Wall, Put Wall 與 GEX Profile。"""
     import time

@@ -442,18 +442,33 @@ def force_macro_update(ctx):
 
         rprint("[bold yellow]🚀 開始手動觸發大盤總經爬蟲...[/bold yellow]")
 
-        # 1. GEX & Liquidity
-        rprint("正在向 edge scraper 請求 GEX 與流動性數據...")
+        # 1. GEX & Liquidity & VIX Term Structure & Core Metrics
+        rprint("正在向 edge scraper 請求 GEX, 流動性與核心總經數據...")
         try:
-            from market_analysis.index_microstructure import fetch_liquidity_metrics
+            from market_analysis.index_microstructure import (
+                fetch_liquidity_metrics,
+                fetch_core_macro_metrics,
+            )
+            from services.market_data_service import get_vix_term_structure
+            import database
 
-            gex_data, liq_data = await asyncio.gather(
-                fetch_gex_metrics(), fetch_liquidity_metrics(), return_exceptions=True
+            gex_data, liq_data, vts_data, core_data = await asyncio.gather(
+                fetch_gex_metrics(),
+                fetch_liquidity_metrics(),
+                get_vix_term_structure(),
+                fetch_core_macro_metrics(),
+                return_exceptions=True,
             )
             if isinstance(gex_data, Exception):
                 raise gex_data
+
+            if not isinstance(vts_data, Exception) and vts_data.get("vts_ratio"):
+                await database.save_kv_cache(
+                    "macro_vts_ratio", vts_data.get("vts_ratio")
+                )
+
             rprint(
-                f"[bold green]✅ GEX & 流動性數據更新完成。[/bold green] (SPY: {gex_data.get('spy_spot')}, Flip: {gex_data.get('gamma_flip')}, TED Spread: {liq_data.get('ted_spread') if not isinstance(liq_data, Exception) else 'Error'})"
+                f"[bold green]✅ GEX, 流動性, VTS與核心總經數據更新完成。[/bold green] (SPY: {gex_data.get('spy_spot')}, Flip: {gex_data.get('gamma_flip')}, TED Spread: {liq_data.get('ted_spread') if not isinstance(liq_data, Exception) else 'Error'}, RRP: {core_data.get('rrp') if not isinstance(core_data, Exception) else 'Error'})"
             )
         except Exception as e:
             rprint(f"[bold red]❌ GEX & 流動性數據更新失敗: {e}[/bold red]")
