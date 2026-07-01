@@ -801,9 +801,12 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                     if v > 0:
                         color_prefix = "\u001b[1;32m"
                         sign = "+"
-                    else:
+                    elif v < 0:
                         color_prefix = "\u001b[1;31m"
                         sign = "-"
+                    else:
+                        color_prefix = "\u001b[1;30m"
+                        sign = " "
 
                     spot_marker = "📍" if abs(k - c_val) < (c_val * 0.01) else "  "
                     formatted_val = f"{sign}{abs(v)/1000:.0f}K"

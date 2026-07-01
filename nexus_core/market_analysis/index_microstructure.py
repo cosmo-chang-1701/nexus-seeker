@@ -138,6 +138,20 @@ async def fetch_liquidity_metrics() -> dict:
 
 async def fetch_symbol_gex_metrics(symbol: str) -> dict:
     """呼叫邊緣爬蟲獲取個股的 Net GEX, Call Wall, Put Wall 與 GEX Profile。"""
+    import time
+    import asyncio
+    from database.cache import get_kv_cache, save_kv_cache
+
+    cache_key = f"gex_metrics_{symbol.upper()}"
+    try:
+        cached_obj = await asyncio.to_thread(get_kv_cache, cache_key)
+        if cached_obj and isinstance(cached_obj, dict):
+            # 快取有效期設定為 4 小時 (14400 秒)
+            if time.time() - cached_obj.get("timestamp", 0) < 14400:
+                return cached_obj.get("data")
+    except Exception as e:
+        logger.warning(f"讀取 GEX 快取失敗 ({symbol}): {e}")
+
     fallback = {
         "spot": 0.0,
         "net_gex": 0.0,
@@ -156,7 +170,14 @@ async def fetch_symbol_gex_metrics(symbol: str) -> dict:
             if res.status_code == 200:
                 data = res.json()
                 if data.get("status") == "success":
-                    return data.get("data", fallback)
+                    result_data = data.get("data", fallback)
+                    try:
+                        await save_kv_cache(
+                            cache_key, {"data": result_data, "timestamp": time.time()}
+                        )
+                    except Exception as e:
+                        logger.warning(f"寫入 GEX 快取失敗 ({symbol}): {e}")
+                    return result_data
     except Exception as e:
         logger.warning(f"無法從 Tunnel Scraper 獲取 {symbol} GEX 數據: {e}")
     return fallback

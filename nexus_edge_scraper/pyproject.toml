@@ -16,4 +16,5 @@ dependencies = [
     "playwright-stealth",
     "openpyxl",
     "requests",
+    "httpx",
 ]

@@ -408,9 +408,12 @@ def create_watchlist_signal_embed(
                     if v > 0:
                         color_prefix = "\u001b[1;32m"
                         sign = "+"
-                    else:
+                    elif v < 0:
                         color_prefix = "\u001b[1;31m"
                         sign = "-"
+                    else:
+                        color_prefix = "\u001b[1;30m"
+                        sign = " "
 
                     spot_marker = (
                         "📍" if abs(k - live_price) < (live_price * 0.01) else "  "
