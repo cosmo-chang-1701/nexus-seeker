@@ -80,6 +80,7 @@ def create_watchlist_signal_embed(
     max_pain_data: dict | None = None,
     pcr_data: dict | None = None,
     uoa_list: list[dict] | None = None,
+    symbol_gex: dict | None = None,
 ) -> discord.Embed:
     """建立標的分析中心 2.0 • 戰場心跳快照 (Watchlist Heartbeat) 的 Markdown-ASCII 統一模板。"""
     from services.llm_service import is_memory_safe
@@ -143,11 +144,15 @@ def create_watchlist_signal_embed(
         macro_loading = getattr(iv_metrics, "has_macro_event", False)
         legacy_event_warning = getattr(iv_metrics, "has_event_warning_applied", False)
         iv_source = iv_metrics.iv_source
+        iv_term_status = getattr(iv_metrics, "iv_term_structure_status", None)
+        iv_term_ratio = getattr(iv_metrics, "term_structure_ratio", None)
     else:
         iv_val = None
         iv_rank = None
         iv_status = "NORMAL"
         expected_move = None
+        iv_term_status = None
+        iv_term_ratio = None
 
     if metrics is not None:
         if hasattr(metrics, "has_earnings_event") and metrics.has_earnings_event:
@@ -333,10 +338,76 @@ def create_watchlist_signal_embed(
         f" ├─ GEX PutWall (做市商底牆): {gex_putwall_str} (當前價差: {gex_dist_str})",
         f" ├─ Vol POC (籌碼控制中心): {vol_poc_str}",
         f" └─ Option Skew (期權偏斜): {skew_val_str} (分位點: {skew_per_str})",
-        "",
-        " 隱含波動率與預期空間 (IV Context)",
-        f" ├─ Implied Volatility (IV): {iv_val_str} ｜ IV Rank: {iv_rank_str} ({iv_status_str})",
     ]
+
+    if (
+        symbol_gex
+        and "gex_profile" in symbol_gex
+        and isinstance(symbol_gex["gex_profile"], dict)
+        and symbol_gex["gex_profile"]
+    ):
+        try:
+            gex_prof = symbol_gex["gex_profile"]
+            strike_keys = sorted([float(k) for k in gex_prof.keys()])
+            if strike_keys:
+                closest_idx = min(
+                    range(len(strike_keys)),
+                    key=lambda i: abs(strike_keys[i] - live_price),
+                )
+                start_idx = max(0, closest_idx - 3)
+                end_idx = min(len(strike_keys), closest_idx + 4)
+                display_strikes = strike_keys[start_idx:end_idx]
+
+                max_abs_gex = max(
+                    [
+                        abs(float(gex_prof.get(str(k), gex_prof.get(k, 0.0))))
+                        for k in display_strikes
+                    ]
+                )
+                max_abs_gex = max(max_abs_gex, 1.0)
+
+                lines.append("")
+                lines.append(" Gamma 曝險分布面板 (GEX Profile Matrix)")
+                for i, k in enumerate(reversed(display_strikes)):
+                    v = float(gex_prof.get(str(k), gex_prof.get(k, 0.0)))
+                    bars = int((abs(v) / max_abs_gex) * 10)
+                    bar_str = "█" * bars + "░" * (10 - bars)
+                    if v > 0:
+                        color_prefix = "\u001b[1;32m"
+                        sign = "+"
+                    else:
+                        color_prefix = "\u001b[1;31m"
+                        sign = "-"
+
+                    spot_marker = (
+                        "📍" if abs(k - live_price) < (live_price * 0.01) else "  "
+                    )
+                    formatted_val = f"{sign}{abs(v)/1000:.0f}K"
+                    prefix = " ├─" if i < len(display_strikes) - 1 else " └─"
+                    lines.append(
+                        f"{prefix} {spot_marker}{k:>7.2f} | {color_prefix}{bar_str}\u001b[0m | {formatted_val:>8}"
+                    )
+        except Exception as e:
+            lines.append(f" └─ [GEX 面板載入失敗: {e}]")
+
+    lines.extend(
+        [
+            "",
+            " 隱含波動率與預期空間 (IV Context)",
+            f" ├─ Implied Volatility (IV): {iv_val_str} ｜ IV Rank: {iv_rank_str} ({iv_status_str})",
+        ]
+    )
+
+    if iv_term_status and iv_term_ratio is not None:
+        if iv_term_status == "Backwardation":
+            term_prefix = "⚠️ [Backwardation]"
+        elif iv_term_status == "Contango":
+            term_prefix = "🟩 [Contango]"
+        else:
+            term_prefix = "⚖️ [Normal]"
+        lines.append(
+            f" ├─ IV Term Structure (期限結構): {term_prefix} (近遠月比: {iv_term_ratio:.2f})"
+        )
 
     if earnings_loading or macro_loading:
         lines.extend(

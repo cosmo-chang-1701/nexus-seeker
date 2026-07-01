@@ -63,6 +63,8 @@ class EnhancedWatchlistMetrics(BaseModel):
     oi_pcr: float | None = None
     has_earnings_event: bool = False
     has_macro_event: bool = False
+    iv_term_structure_status: str | None = None
+    term_structure_ratio: float | None = None
 
     @field_validator("symbol")
     @classmethod
@@ -163,3 +165,4 @@ class WatchlistEvaluation(BaseModel):
     metrics: EnhancedWatchlistMetrics
     tactical: WatchlistTacticalPlan
     event_context: WatchlistEventContext
+    symbol_gex: dict | None = Field(default=None)

@@ -270,6 +270,7 @@ async def test_build_watchlist_heartbeat_embed_includes_option_plan(intraday_pip
             sddm_route="SHIELD",
         ),
         event_context=SimpleNamespace(summary="財報前風控"),
+        symbol_gex=None,
     )
     user_context = SimpleNamespace(user_id=42, capital=120000.0, risk_limit=12.0)
 

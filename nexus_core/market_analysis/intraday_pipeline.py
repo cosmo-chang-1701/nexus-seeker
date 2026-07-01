@@ -378,15 +378,23 @@ async def build_enhanced_watchlist_metrics(
         vanna_sensitivity=vanna_sensitivity,
         relative_strength_spy=relative_strength_spy,
         iv_source=iv_metrics.iv_source if iv_metrics else "UNAVAILABLE",
-        is_premarket=iv_metrics.is_premarket if iv_metrics else False,
-        volume_pcr=float(vol_pcr)
-        if pcr_metrics and (vol_pcr := pcr_metrics.get("volume_pcr")) is not None
+        is_premarket=getattr(iv_metrics, "is_premarket", False)
+        if iv_metrics
+        else False,
+        volume_pcr=pcr_metrics.get("volume_pcr") if pcr_metrics else None,
+        oi_pcr=pcr_metrics.get("oi_pcr") if pcr_metrics else None,
+        has_earnings_event=getattr(iv_metrics, "has_earnings_event", False)
+        if iv_metrics
+        else False,
+        has_macro_event=getattr(iv_metrics, "has_macro_event", False)
+        if iv_metrics
+        else False,
+        iv_term_structure_status=getattr(iv_metrics, "iv_term_structure_status", None)
+        if iv_metrics
         else None,
-        oi_pcr=float(oi_pcr_val)
-        if pcr_metrics and (oi_pcr_val := pcr_metrics.get("oi_pcr")) is not None
+        term_structure_ratio=getattr(iv_metrics, "term_structure_ratio", None)
+        if iv_metrics
         else None,
-        has_earnings_event=iv_metrics.has_earnings_event if iv_metrics else False,
-        has_macro_event=iv_metrics.has_macro_event if iv_metrics else False,
     )
     _WATCHLIST_METRICS_CACHE[symbol] = (metrics, now_ts + _WATCHLIST_METRICS_TTL)
     return metrics
@@ -528,6 +536,7 @@ async def evaluate_watchlist_symbol(
     if metrics is None:
         return None
     tactical = WatchlistRiskController.process_metrics(metrics)
+    symbol_gex = None
 
     # 零 Gamma 踩踏 Regime 檢查並自動調整網格間距
     try:
@@ -537,7 +546,18 @@ async def evaluate_watchlist_symbol(
         )
 
         regime = await get_market_regime()
-        if regime == "SHORT_GAMMA_CRITICAL":
+        if regime == "SYSTEMIC_LIQUIDITY_CRISIS":
+            from database.cache import get_kv_cache
+
+            gex_fb = get_kv_cache("macro_gex_is_fallback")
+            is_fb = gex_fb is None or int(gex_fb) == 1
+            fb_tag = " [備援估算]" if is_fb else ""
+
+            tactical.scenario = "wait"
+            tactical.sddm_route = "SYSTEMIC RISK FREEZE"
+            tactical.action_guideline = f"⛔ 【系統性流動性危機】TED Spread 飆升且大盤陷入 Negative Gamma 負螺旋{fb_tag}。已啟動最高層級防火牆：凍結所有網格左側買單，強制保留 BOXX 現金水位以防範系統性衰退。"
+            tactical.alert_level = "red"
+        elif regime == "SHORT_GAMMA_CRITICAL":
             from database.cache import get_kv_cache
 
             gex_fb = get_kv_cache("macro_gex_is_fallback")
@@ -616,7 +636,10 @@ async def evaluate_watchlist_symbol(
         )
 
     return WatchlistEvaluation(
-        metrics=metrics, tactical=tactical, event_context=event_context
+        metrics=metrics,
+        tactical=tactical,
+        event_context=event_context,
+        symbol_gex=symbol_gex,
     )
 
 
@@ -857,6 +880,7 @@ class IntradayScanPipeline:
             buy_rationale=signals.get("buy_rationale"),
             sell_rationale=signals.get("sell_rationale"),
             metrics=evaluation.metrics,
+            symbol_gex=evaluation.symbol_gex,
         )
 
     async def _run_loop(self):
