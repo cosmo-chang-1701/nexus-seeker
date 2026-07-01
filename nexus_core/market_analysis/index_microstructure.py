@@ -85,6 +85,19 @@ async def get_market_regime() -> str:
         spy_spot = float(spy_spot_gex) if spy_spot_gex is not None else 510.0
 
     # 5. Regime 條件判定 (繁體中文回傳說明，內部邏輯以英文代號)
+    # 獲取跨資產流動性指標
+    try:
+        liquidity = await fetch_liquidity_metrics()
+        ted_spread = liquidity.get("ted_spread", 0.0)
+    except Exception as e:
+        logger.warning(f"獲取流動性指標失敗: {e}")
+        ted_spread = 0.0
+
+    # 系統性流動性危機 (TED Spread > 0.5 且處於 Negative Gamma)
+    # 這裡 0.5 (50 bps) 為 TED Spread 歷史上的警戒水位
+    if ted_spread > 0.5 and spy_spot < gamma_flip:
+        return "SYSTEMIC_LIQUIDITY_CRISIS"
+
     # 條件：VIX > 20 且 vts_ratio >= 1.0 (Backwardation) 且 SPY 現貨價 < Gamma Flip Line
     if vix > 20.0 and vts_ratio >= 1.0 and spy_spot < gamma_flip:
         return "SHORT_GAMMA_CRITICAL"
@@ -92,9 +105,37 @@ async def get_market_regime() -> str:
     return "NORMAL"
 
 
-async def fetch_symbol_gex_metrics(symbol: str) -> Dict[str, float]:
-    """呼叫邊緣爬蟲獲取個股的 Net GEX, Call Wall 與 Put Wall。"""
-    fallback = {"spot": 0.0, "net_gex": 0.0, "call_wall": 0.0, "put_wall": 0.0}
+async def fetch_liquidity_metrics() -> dict:
+    """呼叫邊緣爬蟲獲取 TED Spread, SOFR, DTB3 與 High Yield Spread 等跨資產流動性指標。"""
+    fallback = {
+        "ted_spread": 0.15,
+        "sofr_90": 5.3,
+        "dtb3": 5.15,
+        "high_yield_spread": 3.1,
+    }
+    if not getattr(config, "TUNNEL_URL", ""):
+        return fallback
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.get(f"{config.TUNNEL_URL}/api/v1/scrape/macro/liquidity")
+            if res.status_code == 200:
+                data = res.json()
+                if data.get("status") == "success":
+                    return data.get("data", fallback)
+    except Exception as e:
+        logger.warning(f"無法從 Tunnel Scraper 獲取流動性數據: {e}")
+    return fallback
+
+
+async def fetch_symbol_gex_metrics(symbol: str) -> dict:
+    """呼叫邊緣爬蟲獲取個股的 Net GEX, Call Wall, Put Wall 與 GEX Profile。"""
+    fallback = {
+        "spot": 0.0,
+        "net_gex": 0.0,
+        "call_wall": 0.0,
+        "put_wall": 0.0,
+        "gex_profile": {},
+    }
 
     if not getattr(config, "TUNNEL_URL", ""):
         return fallback

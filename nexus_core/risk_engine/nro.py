@@ -9,9 +9,10 @@ class WatchlistRiskController:
     @staticmethod
     def process_metrics(metrics: EnhancedWatchlistMetrics) -> WatchlistTacticalPlan:
         dynamic_grid_step = round(metrics.atr_14 * 0.5, 2)
+        plan = None
 
         if metrics.current_price <= metrics.buy_price_phase2:
-            return WatchlistTacticalPlan(
+            plan = WatchlistTacticalPlan(
                 scenario="hard-hedge",
                 sddm_route="SHIELD (全面防禦中)",
                 action_guideline=(
@@ -24,13 +25,12 @@ class WatchlistRiskController:
                 hedge_allocation_shares=0,
                 alert_level="red",
             )
-
-        if (
+        elif (
             metrics.current_price <= metrics.buy_price_phase1
             and metrics.iv_rank is not None
             and metrics.iv_rank > 65.0
         ):
-            return WatchlistTacticalPlan(
+            plan = WatchlistTacticalPlan(
                 scenario="premium-harvest",
                 sddm_route="SHIELD (防禦網格 - 左側權利金收集)",
                 action_guideline=(
@@ -44,16 +44,21 @@ class WatchlistRiskController:
                 hedge_allocation_shares=0,
                 alert_level="yellow",
             )
+        else:
+            plan = WatchlistTacticalPlan(
+                scenario="wait",
+                sddm_route="WAIT (觀望 / 待機)",
+                action_guideline=(
+                    "價格仍在防守框架內，維持現貨 $1.00×$ 零槓桿死守，將雙手嚴格離開期權開倉鍵。"
+                ),
+                dynamic_grid_step=dynamic_grid_step,
+                hidden_delta_risk=0.0,
+                hedge_instruction=None,
+                hedge_allocation_shares=0,
+                alert_level="green",
+            )
 
-        return WatchlistTacticalPlan(
-            scenario="wait",
-            sddm_route="WAIT (觀望 / 待機)",
-            action_guideline=(
-                "價格仍在防守框架內，維持現貨 $1.00×$ 零槓桿死守，將雙手嚴格離開期權開倉鍵。"
-            ),
-            dynamic_grid_step=dynamic_grid_step,
-            hidden_delta_risk=0.0,
-            hedge_instruction=None,
-            hedge_allocation_shares=0,
-            alert_level="green",
-        )
+        if getattr(metrics, "iv_term_structure_status", None) == "Backwardation":
+            plan.action_guideline += " ⚠️ [IV Crush 警告] 期限結構呈現 Backwardation (倒掛)，短天期波動率定價極端昂貴，強烈建議避開單腿買方策略 (Long Call/Put) 避免開牌後遭波動率潰縮重擊。"
+
+        return plan

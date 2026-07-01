@@ -279,6 +279,68 @@ async def scrape_gex():
             await browser.close()
 
 
+@app.get("/api/v1/scrape/macro/liquidity")
+async def scrape_liquidity():
+    import httpx
+    import asyncio
+
+    fallback = {
+        "ted_spread": 0.15,
+        "sofr_90": 5.3,
+        "dtb3": 5.15,
+        "high_yield_spread": 3.1,
+    }
+
+    async def fetch_fred_csv(series_id: str) -> float | None:
+        url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                res = await client.get(url, headers=headers)
+                if res.status_code == 200:
+                    lines = res.text.strip().split("\n")
+                    for line in reversed(lines):
+                        parts = line.split(",")
+                        if len(parts) >= 2:
+                            try:
+                                val = float(parts[1].strip())
+                                return val
+                            except ValueError:
+                                continue
+        except Exception:
+            pass
+        return None
+
+    try:
+        sofr_90, dtb3, hy_spread = await asyncio.gather(
+            fetch_fred_csv("SOFR90DAYAVG"),
+            fetch_fred_csv("DTB3"),
+            fetch_fred_csv("BAMLH0A0HYM2"),
+        )
+
+        if sofr_90 is None or dtb3 is None:
+            return {"status": "success", "data": fallback}
+
+        ted_spread = round(sofr_90 - dtb3, 4)
+
+        return {
+            "status": "success",
+            "data": {
+                "ted_spread": ted_spread,
+                "sofr_90": round(sofr_90, 4),
+                "dtb3": round(dtb3, 4),
+                "high_yield_spread": round(hy_spread, 4)
+                if hy_spread is not None
+                else fallback["high_yield_spread"],
+            },
+        }
+    except Exception as e:
+        logger.warning(
+            f"Macro liquidity scrape failed with exception: {e}, using fallbacks."
+        )
+        return {"status": "success", "data": fallback}
+
+
 @app.get("/api/v1/scrape/macro/fedwatch")
 async def scrape_fedwatch():
     import re
@@ -398,7 +460,13 @@ async def scrape_symbol_gex(symbol: str):
     from datetime import date
 
     symbol_upper = symbol.upper()
-    fallback = {"spot": 0.0, "net_gex": 0.0, "call_wall": 0.0, "put_wall": 0.0}
+    fallback = {
+        "spot": 0.0,
+        "net_gex": 0.0,
+        "call_wall": 0.0,
+        "put_wall": 0.0,
+        "gex_profile": {},
+    }
 
     # Black-Scholes math helper
     def ndtr_prime(x):
@@ -563,6 +631,7 @@ async def scrape_symbol_gex(symbol: str):
                     "net_gex": round(net_gex, 2),
                     "call_wall": round(call_wall, 2),
                     "put_wall": round(put_wall, 2),
+                    "gex_profile": {k: round(v, 2) for k, v in gex_by_strike.items()},
                 },
             }
         except Exception as e:

@@ -95,6 +95,81 @@ async def _calculate_straddle_implied_em(
         return None
 
 
+async def _calculate_iv_term_structure(
+    symbol: str, spot_price: float
+) -> tuple[str | None, float | None]:
+    """計算 IV 期限結構 (Term Structure)。
+
+    提取近月 (Near Term: <= 14 days) 與遠月 (Far Term: 15-60 days) 的 ATM IV。
+    若 Near IV > Far IV * 1.05，視為 Backwardation (倒掛，短期風險極高，買 Call 易受 IV Crush)。
+    若 Near IV < Far IV * 0.95，視為 Contango (正價差)。
+    否則為 Normal。
+    """
+    try:
+        expiries = await market_data_service.get_all_option_expiries(symbol)
+        if not expiries:
+            return None, None
+
+        today_dt = datetime.now().date()
+        near_expiry = None
+        far_expiry = None
+
+        for exp in expiries:
+            try:
+                exp_dt = datetime.strptime(exp, "%Y-%m-%d").date()
+                days = (exp_dt - today_dt).days
+                if 0 <= days <= 14 and not near_expiry:
+                    near_expiry = exp
+                elif 15 <= days <= 60 and not far_expiry:
+                    far_expiry = exp
+            except ValueError:
+                continue
+
+        if not near_expiry or not far_expiry:
+            return None, None
+
+        near_chain, far_chain = await asyncio.gather(
+            market_data_service.get_option_chain(symbol, near_expiry),
+            market_data_service.get_option_chain(symbol, far_expiry),
+        )
+
+        def _get_atm_iv(chain) -> float | None:
+            if chain is None or chain.calls.empty or chain.puts.empty:
+                return None
+            call_idx = (chain.calls["strike"] - spot_price).abs().idxmin()
+            put_idx = (chain.puts["strike"] - spot_price).abs().idxmin()
+            call_iv = float(
+                chain.calls.loc[call_idx].get("impliedVolatility", 0.0) or 0.0
+            )
+            put_iv = float(chain.puts.loc[put_idx].get("impliedVolatility", 0.0) or 0.0)
+            if call_iv > 0 and put_iv > 0:
+                return (call_iv + put_iv) / 2.0
+            return call_iv if call_iv > 0 else (put_iv if put_iv > 0 else None)
+
+        near_iv = _get_atm_iv(near_chain)
+        far_iv = _get_atm_iv(far_chain)
+
+        if not near_iv or not far_iv:
+            return None, None
+
+        ratio = near_iv / far_iv
+        if ratio > 1.05:
+            status = "Backwardation"
+        elif ratio < 0.95:
+            status = "Contango"
+        else:
+            status = "Normal"
+
+        logger.info(
+            f"[{symbol}] IV Term Structure: Near({near_expiry})={near_iv:.1%}, Far({far_expiry})={far_iv:.1%}, Ratio={ratio:.2f} -> {status}"
+        )
+        return status, ratio
+
+    except Exception as e:
+        logger.warning(f"[{symbol}] IV Term Structure calculation failed: {e}")
+        return None, None
+
+
 async def fetch_and_calculate_iv_metrics(symbol: str) -> IVMetrics:
     """
     獲取並計算隱含波動率 (IV) 相關指標，包括 IV Rank, IV Percentile, 週預期震盪區間。
@@ -380,7 +455,10 @@ async def fetch_and_calculate_iv_metrics(symbol: str) -> IVMetrics:
             else 0.0
         )
 
-        straddle_em = await _calculate_straddle_implied_em(symbol, spot_price)
+        straddle_em, (term_status, term_ratio) = await asyncio.gather(
+            _calculate_straddle_implied_em(symbol, spot_price),
+            _calculate_iv_term_structure(symbol, spot_price),
+        )
 
         if straddle_em and straddle_em > 0:
             expected_move_weekly = straddle_em
@@ -428,6 +506,8 @@ async def fetch_and_calculate_iv_metrics(symbol: str) -> IVMetrics:
             reference_spot_price=spot_price,
             has_earnings_event=has_earnings_event,
             has_macro_event=has_macro_event,
+            iv_term_structure_status=term_status,
+            term_structure_ratio=term_ratio,
         )
 
         # 12. 寫入快取
@@ -452,6 +532,8 @@ async def fetch_and_calculate_iv_metrics(symbol: str) -> IVMetrics:
             reference_spot_price=spot_price,
             has_earnings_event=False,
             has_macro_event=False,
+            iv_term_structure_status=None,
+            term_structure_ratio=None,
         )
     except Exception as e:
         logger.error(f"[{symbol}] IV 指標計算失敗: {e}")
@@ -467,4 +549,6 @@ async def fetch_and_calculate_iv_metrics(symbol: str) -> IVMetrics:
             reference_spot_price=spot_price,
             has_earnings_event=False,
             has_macro_event=False,
+            iv_term_structure_status=None,
+            term_structure_ratio=None,
         )

@@ -101,3 +101,5 @@ class IVMetrics(BaseModel):
     reference_spot_price: float | None = None
     has_earnings_event: bool = False
     has_macro_event: bool = False
+    iv_term_structure_status: str | None = None
+    term_structure_ratio: float | None = None
