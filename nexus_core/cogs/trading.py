@@ -899,53 +899,60 @@ class SchedulerCog(commands.Cog):
             return
 
         for uid, symbols in user_symbols.items():
-            notif_settings = database.get_user_notification_settings(uid)
-            hb_keys = [
-                "hb_live_price",
-                "hb_options_structure",
-                "hb_uoa",
-                "hb_execution_risk",
-            ]
-            hb_enabled = any(notif_settings.get(k, True) for k in hb_keys)
+            try:
+                notif_settings = database.get_user_notification_settings(uid)
+                hb_keys = [
+                    "hb_live_price",
+                    "hb_options_structure",
+                    "hb_uoa",
+                    "hb_execution_risk",
+                ]
+                hb_enabled = any(notif_settings.get(k, True) for k in hb_keys)
 
-            if not hb_enabled:
-                logger.info(f"使用者 {uid} 已關閉所有心跳模組訂閱，略過心跳推送。")
-                continue
-
-            user_context = database.get_full_user_context(uid)
-            option_alert_mode = int(getattr(user_context, "option_alert_mode", 1))
-
-            deliverable_symbols = []
-            for sym in symbols:
-                has_position = database.is_symbol_in_portfolio(uid, sym)
-                if option_alert_mode == 2 and not has_position:
+                if not hb_enabled:
+                    logger.info(f"使用者 {uid} 已關閉所有心跳模組訂閱，略過心跳推送。")
                     continue
-                deliverable_symbols.append(sym)
 
-            if not deliverable_symbols:
+                user_context = database.get_full_user_context(uid)
+                option_alert_mode = int(getattr(user_context, "option_alert_mode", 1))
+
+                deliverable_symbols = []
+                for sym in symbols:
+                    has_position = database.is_symbol_in_portfolio(uid, sym)
+                    if option_alert_mode == 2 and not has_position:
+                        continue
+                    deliverable_symbols.append(sym)
+
+                if not deliverable_symbols:
+                    continue
+
+                # 獲取所有自選標的的雷達數據
+                import random
+
+                scan_results = []
+                for idx, s in enumerate(deliverable_symbols):
+                    if idx > 0:
+                        await asyncio.sleep(random.uniform(1.5, 2.0))
+                    try:
+                        res = await terminal_cog._fetch_sym_radar_data(s)
+                        scan_results.append(res)
+                    except Exception as ex:
+                        logger.error(f"Error fetching radar data for {s}: {ex}")
+                        scan_results.append(ex)
+                valid_results = [r for r in scan_results if isinstance(r, dict)]
+
+                if valid_results:
+                    embeds = build_radar_scan_embed(valid_results, "WATCHLIST", uid)
+                    if not isinstance(embeds, list):
+                        embeds = [embeds]
+                    for embed in embeds:
+                        await self.bot.queue_dm(uid, embed=embed)
+            except Exception as user_err:
+                logger.error(
+                    f"❌ 用戶 {uid} 心跳推送處理失敗: {user_err}",
+                    exc_info=True,
+                )
                 continue
-
-            # 獲取所有自選標的的雷達數據
-            import random
-
-            scan_results = []
-            for idx, s in enumerate(deliverable_symbols):
-                if idx > 0:
-                    await asyncio.sleep(random.uniform(1.5, 2.0))
-                try:
-                    res = await terminal_cog._fetch_sym_radar_data(s)
-                    scan_results.append(res)
-                except Exception as ex:
-                    logger.error(f"Error fetching radar data for {s}: {ex}")
-                    scan_results.append(ex)
-            valid_results = [r for r in scan_results if isinstance(r, dict)]
-
-            if valid_results:
-                embeds = build_radar_scan_embed(valid_results, "WATCHLIST", uid)
-                if not isinstance(embeds, list):
-                    embeds = [embeds]
-                for embed in embeds:
-                    await self.bot.queue_dm(uid, embed=embed)
 
     async def _run_market_scan_logic(self, is_auto=True, triggered_by=None):
         """共用的掃描核心邏輯，協調 Service 計算與 Discord 訊息發送。"""

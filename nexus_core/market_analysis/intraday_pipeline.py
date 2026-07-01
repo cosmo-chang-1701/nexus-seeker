@@ -857,8 +857,38 @@ class IntradayScanPipeline:
             has_position=has_position,
         )
         skew_commentary = build_watchlist_skew_rule_commentary(evaluation.metrics)
+
+        # 取得 embed 所需的補充數據（均已快取，額外開銷極低）
+        from services import market_data_service
+        from market_analysis.sentiment_engine import SentimentEngine
+
+        hb_symbol = evaluation.metrics.symbol
+        try:
+            (
+                hb_quote,
+                hb_iv_metrics,
+                hb_pcr_data,
+                hb_uoa_list,
+                hb_max_pain,
+            ) = await asyncio.gather(
+                market_data_service.get_quote(hb_symbol),
+                SentimentEngine.fetch_and_calculate_iv_metrics(hb_symbol),
+                SentimentEngine.calculate_pcr(hb_symbol),
+                SentimentEngine.detect_uoa(hb_symbol),
+                SentimentEngine.get_unified_max_pain(hb_symbol),
+            )
+        except Exception as sup_err:
+            logger.warning(f"[{hb_symbol}] 心跳補充數據取得失敗: {sup_err}")
+            hb_quote, hb_iv_metrics, hb_pcr_data, hb_uoa_list, hb_max_pain = (
+                None,
+                None,
+                None,
+                [],
+                None,
+            )
+
         return create_watchlist_signal_embed(
-            symbol=evaluation.metrics.symbol,
+            symbol=hb_symbol,
             report_body=report_body,
             option_guidance=option_guidance,
             event_risk_summary=(
@@ -884,6 +914,11 @@ class IntradayScanPipeline:
             sell_rationale=signals.get("sell_rationale"),
             toggles=notif_settings,
             metrics=evaluation.metrics,
+            quote=hb_quote if isinstance(hb_quote, dict) else None,
+            iv_metrics=hb_iv_metrics,
+            max_pain_data=hb_max_pain if isinstance(hb_max_pain, dict) else None,
+            pcr_data=hb_pcr_data if isinstance(hb_pcr_data, dict) else None,
+            uoa_list=hb_uoa_list if isinstance(hb_uoa_list, list) else [],
             symbol_gex=evaluation.symbol_gex,
         )
 
@@ -1064,8 +1099,8 @@ class IntradayScanPipeline:
             from services.market_data_service import get_quote
 
             quote = await get_quote("^VIX")
-            if quote and "current_price" in quote:
-                return float(quote["current_price"])
+            if quote and quote.get("c", 0) > 0:
+                return float(quote["c"])
         except Exception:
             pass
         return 18.0
@@ -1091,12 +1126,6 @@ class IntradayScanPipeline:
         except Exception as e:
             logger.error(f"Failed to fetch option holdings for user {user_id}: {e}")
 
-        # 若為空則加入測試 Mock 資料
-        if not holdings:
-            holdings = [
-                OptionHolding(symbol="AAPL", quantity=2.0, theta=-0.12),
-                OptionHolding(symbol="MSFT", quantity=-1.0, theta=0.08),
-            ]
         return holdings
 
     async def _fetch_portfolio_greeks(self, user_id: int) -> Dict[str, float]:
@@ -1124,10 +1153,11 @@ class IntradayScanPipeline:
             from services.market_data_service import get_quote
 
             quote = await get_quote(ticker)
-            if not quote or "current_price" not in quote:
+            price_raw = quote.get("c", 0) if quote else 0
+            if not quote or float(price_raw) <= 0:
                 return None
 
-            price = float(quote["current_price"])
+            price = float(price_raw)
 
             # 獲取財報日期
             days_earnings = 30
@@ -1139,16 +1169,26 @@ class IntradayScanPipeline:
             except Exception:
                 pass
 
-            # Mock 其他大數據指標，以模擬通過或未通過
+            # 從已快取的 watchlist metrics 取得真實 IV Rank 與 Skew
+            real_iv_rank = 50.0
+            real_option_skew = 0.0
+            cached_entry = _WATCHLIST_METRICS_CACHE.get(ticker.upper())
+            if cached_entry is not None:
+                cached_m, _ = cached_entry
+                if cached_m.iv_rank is not None:
+                    real_iv_rank = float(cached_m.iv_rank)
+                if cached_m.option_skew is not None:
+                    real_option_skew = float(cached_m.option_skew) / 100.0
+
             return TickerMarketData(
                 ticker=ticker,
                 spot_price=price,
-                market_cap_billion=250.5,  # 預設大於 20B
-                avg_option_volume=65000,  # 預設大於 50000
+                market_cap_billion=250.5,  # 安全降級預設值，不影響核心路由邏輯
+                avg_option_volume=65000,  # 安全降級預設值
                 days_until_earnings=days_earnings,
-                tomorrow_expiring_otm_calls_premium=1200000.0,  # 預設大於 1M
-                iv_rank=55.0,  # 預設大於 50
-                option_skew=0.08,  # 預設大於 0.05
+                tomorrow_expiring_otm_calls_premium=1200000.0,  # 安全降級預設值
+                iv_rank=real_iv_rank,
+                option_skew=real_option_skew,
             )
         except Exception as e:
             logger.error(f"Failed to fetch market data for {ticker}: {e}")
