@@ -431,7 +431,7 @@ class UnifiedTerminalCog(commands.Cog):
                 result["reddit_sentiment_score"] = "⚖️ 中性"
 
             # Polymarket odds
-            poly_odds = find_matching_polymarket_odds(symbol, poly_markets)
+            poly_odds = await find_matching_polymarket_odds(symbol, poly_markets)
             result["polymarket_odds"] = poly_odds
 
             main_embed = create_tactical_symbol_embed(result)

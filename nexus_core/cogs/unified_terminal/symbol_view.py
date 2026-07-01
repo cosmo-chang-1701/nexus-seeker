@@ -246,7 +246,7 @@ class SymbolHubView(discord.ui.View):
                 result["reddit_sentiment_score"] = "⚖️ 中性"
 
             # Polymarket odds
-            poly_odds = find_matching_polymarket_odds(self.symbol, poly_markets)
+            poly_odds = await find_matching_polymarket_odds(self.symbol, poly_markets)
             result["polymarket_odds"] = poly_odds
             result["catalysts"] = catalysts
             result["volume_profile"] = vp_data

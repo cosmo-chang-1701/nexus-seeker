@@ -647,8 +647,12 @@ async def test_detect_uoa_sanity_filters():
         assert uoa_results[0]["strike"] == 100.0
 
 
-def test_polymarket_fuzzy_matching_and_odds_format():
+@pytest.mark.asyncio
+@patch("services.market_data_service.get_company_profile", new_callable=AsyncMock)
+async def test_polymarket_fuzzy_matching_and_odds_format(mock_get_company):
     from cogs.unified_terminal import find_matching_polymarket_odds
+
+    mock_get_company.return_value = {"name": "Micron Technology, Inc."}
 
     poly_markets = [
         {
@@ -660,7 +664,7 @@ def test_polymarket_fuzzy_matching_and_odds_format():
         }
     ]
 
-    odds = find_matching_polymarket_odds("MU", poly_markets)
+    odds = await find_matching_polymarket_odds("MU", poly_markets)
     assert odds == "Yes: 98.0%"
 
     poly_markets_new = [
@@ -672,7 +676,7 @@ def test_polymarket_fuzzy_matching_and_odds_format():
             ],
         }
     ]
-    odds_new = find_matching_polymarket_odds("MU", poly_markets_new)
+    odds_new = await find_matching_polymarket_odds("MU", poly_markets_new)
     assert odds_new == "Yes: 98.0%"
 
     poly_markets_other = [
@@ -681,7 +685,7 @@ def test_polymarket_fuzzy_matching_and_odds_format():
             "tokens": [{"outcome": "Yes", "price": 0.50}],
         }
     ]
-    odds_other = find_matching_polymarket_odds("MU", poly_markets_other)
+    odds_other = await find_matching_polymarket_odds("MU", poly_markets_other)
     assert odds_other == "N/A"
 
 
