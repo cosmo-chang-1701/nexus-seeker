@@ -527,12 +527,29 @@ class SchedulerCog(commands.Cog):
         errors = []
         gex_info = ""
 
-        # 1. Update GEX
+        # 1. Update GEX & Liquidity
         try:
-            gex_data = await fetch_gex_metrics()
-            gex_info = f"SPY: ${gex_data.get('spy_spot', 0.0):.2f} / Flip: {gex_data.get('gamma_flip', 0.0):.2f}"
+            from market_analysis.index_microstructure import fetch_liquidity_metrics
+
+            import typing
+
+            results = await asyncio.gather(
+                fetch_gex_metrics(), fetch_liquidity_metrics(), return_exceptions=True
+            )
+            gex_data = typing.cast(typing.Any, results[0])
+            liq_data = typing.cast(typing.Any, results[1])
+            if isinstance(gex_data, Exception):
+                raise gex_data
+
+            ted_spread: float | str = "Error"
+            if not isinstance(liq_data, Exception):
+                assert isinstance(liq_data, dict)
+                ted_spread = liq_data.get("ted_spread", 0.0)
+
+            assert isinstance(gex_data, dict)
+            gex_info = f"SPY: ${gex_data.get('spy_spot', 0.0):.2f} / Flip: {gex_data.get('gamma_flip', 0.0):.2f} / TED Spread: {ted_spread}"
         except Exception as e:
-            errors.append(f"GEX 爬取失敗: {e}")
+            errors.append(f"GEX & 流動性爬取失敗: {e}")
 
         # 2. Update FedWatch
         try:

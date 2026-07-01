@@ -249,6 +249,9 @@ class UnifiedTerminalCog(commands.Cog):
         df_hist_task = market_data_service.get_history_df(
             symbol, period="1y", interval="1d"
         )
+        from market_analysis.index_microstructure import fetch_symbol_gex_metrics
+
+        gex_profile_task = fetch_symbol_gex_metrics(symbol)
 
         base_results_task = asyncio.gather(
             spy_task,
@@ -263,6 +266,7 @@ class UnifiedTerminalCog(commands.Cog):
             poly_task,
             ddp_task,
             df_hist_task,
+            gex_profile_task,
         )
 
         if tasks_mp:
@@ -287,6 +291,7 @@ class UnifiedTerminalCog(commands.Cog):
             poly_markets,
             ddp_report,
             df_hist_1d,
+            gex_profile_data,
         ) = base_results
 
         month_max_pains = []
@@ -316,6 +321,7 @@ class UnifiedTerminalCog(commands.Cog):
             "ddp_report": ddp_report,
             "df_hist_1d": df_hist_1d,
             "month_max_pains": month_max_pains,
+            "gex_profile_data": gex_profile_data,
         }
 
     async def _run_single_symbol_hub(
@@ -374,6 +380,7 @@ class UnifiedTerminalCog(commands.Cog):
             poly_markets = data["poly_markets"]
             ddp_report = data["ddp_report"]
             df_hist_1d = data["df_hist_1d"]
+            gex_profile_data = data.get("gex_profile_data")
 
             spy_price = df_spy["Close"].iloc[-1] if not df_spy.empty else 670.0
             safe_macro = macro_raw or {}
@@ -416,6 +423,7 @@ class UnifiedTerminalCog(commands.Cog):
             safe_mp = max_pain_data or {}
             result["max_pain"] = safe_mp.get("max_pain", 0.0)
             result["month_max_pains"] = data.get("month_max_pains", [])
+            result["gex_profile_data"] = gex_profile_data
 
             result["is_ddp"] = ddp_report.get("is_ddp", False) if ddp_report else False
             result["vix"] = macro_data.vix

@@ -143,16 +143,21 @@ def test_cli_force_macro_update():
     with patch("database.init_db"), patch(
         "market_analysis.index_microstructure.fetch_gex_metrics", new_callable=AsyncMock
     ) as mock_fetch, patch(
+        "market_analysis.index_microstructure.fetch_liquidity_metrics",
+        new_callable=AsyncMock,
+    ) as mock_fetch_liq, patch(
         "services.calendar_service.calendar_service.update_fedwatch_probability",
         new_callable=AsyncMock,
     ) as mock_update:
         mock_fetch.return_value = {"spy_spot": 510.0, "gamma_flip": 515.0}
+        mock_fetch_liq.return_value = {"ted_spread": 0.15}
 
         runner = CliRunner()
         result = runner.invoke(cli, ["admin", "force-macro-update"])
         assert result.exit_code == 0
         assert "開始手動觸發大盤總經爬蟲" in result.output
-        assert "GEX 數據更新完成" in result.output
+        assert "GEX & 流動性數據更新完成" in result.output
         assert "FedWatch 數據更新並寫入資料庫完成" in result.output
         mock_fetch.assert_called_once()
+        mock_fetch_liq.assert_called_once()
         mock_update.assert_called_once()
