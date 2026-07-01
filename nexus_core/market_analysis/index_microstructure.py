@@ -148,7 +148,9 @@ async def fetch_symbol_gex_metrics(symbol: str) -> dict:
         if cached_obj and isinstance(cached_obj, dict):
             # 快取有效期設定為 4 小時 (14400 秒)
             if time.time() - cached_obj.get("timestamp", 0) < 14400:
-                return cached_obj.get("data")
+                data = cached_obj.get("data")
+                if isinstance(data, dict):
+                    return data
     except Exception as e:
         logger.warning(f"讀取 GEX 快取失敗 ({symbol}): {e}")
 
