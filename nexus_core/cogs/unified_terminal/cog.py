@@ -244,7 +244,7 @@ class UnifiedTerminalCog(commands.Cog):
         reddit_task = reddit_service.get_reddit_context(
             symbol, enable_tunnel=enable_local_tunnel
         )
-        poly_task = poly_service.get_market_snapshot(limit=10)
+        poly_task = poly_service.get_market_snapshot(limit=0)
         ddp_task = ddp_inspector.inspect_symbol(symbol)
         df_hist_task = market_data_service.get_history_df(
             symbol, period="1y", interval="1d"

@@ -147,7 +147,7 @@ class SymbolHubView(discord.ui.View):
             reddit_task = reddit_service.get_reddit_context(
                 self.symbol, enable_tunnel=ctx.enable_local_tunnel
             )
-            poly_task = poly_service.get_market_snapshot(limit=10)
+            poly_task = poly_service.get_market_snapshot(limit=0)
             ddp_task = ddp_inspector.inspect_symbol(self.symbol)
             from services.calendar_service import calendar_service
 

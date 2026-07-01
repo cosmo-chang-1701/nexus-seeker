@@ -123,7 +123,10 @@ class PolymarketService:
         """
         async with self._cache_lock:
             snapshot = []
-            for m in self._active_markets[:limit]:
+            target_markets = (
+                self._active_markets if limit <= 0 else self._active_markets[:limit]
+            )
+            for m in target_markets:
                 tokens = m.get("tokens", [])
                 token_snapshots = []
                 for t in tokens:
