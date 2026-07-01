@@ -7,44 +7,6 @@ from cogs.terminal import TerminalCog
 
 
 @pytest.mark.asyncio
-async def test_runway_check_uses_builder(mock_interaction):
-    bot = MagicMock()
-    cog = TerminalCog(bot)
-    embed = object()
-    ctx = SimpleNamespace(
-        monthly_expense=5000.0, cash_reserve=20000.0, total_theta=100.0
-    )
-    holding = SimpleNamespace(
-        symbol="AAPL", metadata={"quantity": 10, "avg_cost": 150.0}
-    )
-
-    with (
-        patch("market_analysis.portfolio.refresh_portfolio_greeks", new=AsyncMock()),
-        patch("cogs.terminal.get_full_user_context", return_value=ctx),
-        patch(
-            "market_analysis.pro_management.calculate_financial_runway",
-            side_effect=[120.0, 180.0],
-        ),
-        patch("services.asset_manager.AssetManager") as mock_manager_cls,
-        patch(
-            "services.market_data_service.get_quote",
-            new=AsyncMock(return_value={"c": 200.0}),
-        ),
-        patch(
-            "cogs.terminal.create_financial_runway_embed", return_value=embed
-        ) as mock_builder,
-    ):
-        mock_manager_cls.return_value.get_assets.return_value = [holding]
-        await cog.runway_check.callback(cog, mock_interaction)
-
-    mock_builder.assert_called_once()
-    kwargs = mock_builder.call_args.kwargs
-    assert kwargs["backup_liquidity"] == 1600.0
-    assert kwargs["total_holding_value"] == 2000.0
-    assert kwargs["ratio"] == pytest.approx(0.6)
-    mock_interaction.followup.send.assert_called_once_with(embed=embed, ephemeral=True)
-
-
 @pytest.mark.asyncio
 async def test_sys_health_uses_builder(mock_interaction):
     bot = MagicMock()

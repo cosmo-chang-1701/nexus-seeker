@@ -4,7 +4,7 @@
 
 Nexus Seeker is a multi-tenant **Discord-first options risk-control and trading operations platform**. It combines technical structure, Black-Scholes-Merton pricing, Greeks-based portfolio risk, event-aware calendar defenses, and LLM-assisted structured commentary.
 
-Current released core version: **`1.9.8`**
+Current released core version: **`1.9.9`**
 
 The codebase is optimized for:
 
@@ -254,7 +254,7 @@ The platform implements an advanced macro risk-control layer that dynamically ad
 - **BOXX Buffer and Alerts**:
   - Compares the total cash deficit with the user's available cash + maximum liquidatable $BOXX$ position (capped at 180 shares $\approx \$21,000$).
   - If the potential deficit exceeds the $BOXX$ liquidation limit ($21,000 USD), a critical warning embed is dispatched alerting the user that the payout threshold ($13,000 USD) is endangered.
-  - Results are rendered in Traditional Chinese using `NexusEmbed` and integrated into the `/dash` workspace panel.
+  - Results are rendered in Traditional Chinese using `NexusEmbed` and integrated into the `/dash` workspace panel (which now unifies the strategic dashboard and financial survival runway analysis).
 
 ### 4. Average Cost Basis & Covered Call Recovery Rules
 - **New Cost Basis Calculation**:

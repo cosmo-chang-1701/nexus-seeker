@@ -32,27 +32,6 @@ async def test_command_settings(mock_interaction, db_conn):
 
 
 @pytest.mark.asyncio
-async def test_command_runway_check(mock_interaction, db_conn):
-    bot = MagicMock()
-    cog = TerminalCog(bot)
-
-    # First set some settings
-    await cog.update_settings.callback(
-        cog, mock_interaction, monthly_expense=5000.0, cash_reserve=20000.0
-    )
-
-    # Execute /runway_check
-    await cog.runway_check.callback(cog, mock_interaction)
-
-    # It might use response.send_message or followup.send depending on logic
-    sent = (
-        mock_interaction.response.send_message.called
-        or mock_interaction.followup.send.called
-    )
-    assert sent
-
-
-@pytest.mark.asyncio
 async def test_command_add_holding(mock_interaction, db_conn, mock_market_data):
     bot = MagicMock()
     cog = TerminalCog(bot)

@@ -144,7 +144,6 @@ from cogs.embed_builders.settings_embeds import (
 # ── Market Embeds ─────────────────────────────────────────────────────────────
 from cogs.embed_builders.market_embeds import (
     create_max_pain_embed,
-    create_financial_runway_embed,
     create_system_health_embed,
     create_asset_promotion_embed,
     create_transition_simulation_embed,
@@ -282,7 +281,6 @@ __all__ = [
     "create_error_embed",
     # Market embeds
     "create_max_pain_embed",
-    "create_financial_runway_embed",
     "create_system_health_embed",
     "create_asset_promotion_embed",
     "create_transition_simulation_embed",

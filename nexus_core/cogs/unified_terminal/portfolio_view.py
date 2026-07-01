@@ -8,7 +8,6 @@ from cogs.embed_builder import (
     create_strategic_dash_embed,
     create_trades_embed,
     create_holdings_embed,
-    create_financial_runway_embed,
     build_vtr_stats_embed,
 )
 
@@ -50,15 +49,38 @@ class PortfolioHubView(discord.ui.View):
         embed = None
         try:
             from services.trading_service import TradingService
+            from services.asset_manager import AssetManager
+            from models.asset import ContextType, HoldingMetadata
+            from market_analysis.pro_management import calculate_financial_runway
 
             trading_service = TradingService(self.bot)
             pnl_data = await trading_service.get_portfolio_pnl(self.user_id)
             ctx = database.get_full_user_context(self.user_id)
 
+            manager = AssetManager()
+            holdings = manager.get_assets(self.user_id, ContextType.HOLDING)
+            total_holding_value = 0.0
+            for h in holdings:
+                meta = HoldingMetadata(**h.metadata)
+                quote = await market_data_service.get_quote(h.symbol)
+                total_holding_value += (
+                    quote.get("c", 0.0) if quote else 0.0
+                ) * meta.quantity
+            backup_liq = total_holding_value * 0.8
+            ext_runway = calculate_financial_runway(
+                ctx.cash_reserve + backup_liq, ctx.monthly_expense, ctx.total_theta
+            )
+
             macro_raw = await market_data_service.get_macro_environment()
             vix_spot = macro_raw.get("vix", 18.0)
 
-            embed = create_strategic_dash_embed(ctx, pnl_data, vix_spot=vix_spot)
+            embed = create_strategic_dash_embed(
+                ctx,
+                pnl_data,
+                vix_spot=vix_spot,
+                backup_liquidity=backup_liq,
+                extended_runway=ext_runway,
+            )
         except Exception as e:
             await interaction.followup.send(
                 embed=create_error_embed(f"恢復戰略看板失敗: {e}"),
@@ -116,52 +138,6 @@ class PortfolioHubView(discord.ui.View):
         except Exception as e:
             await interaction.followup.send(
                 embed=create_error_embed(f"獲取現貨失敗: {e}"), ephemeral=True
-            )
-        finally:
-            await self._reset_loading(interaction, embed=embed)
-
-    @discord.ui.button(label="🏁 財務跑道", style=discord.ButtonStyle.secondary)
-    async def btn_runway(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
-        await interaction.response.defer()
-        await self._set_loading(interaction)
-        embed = None
-        try:
-            from market_analysis.portfolio import refresh_portfolio_greeks
-            from market_analysis.pro_management import calculate_financial_runway
-            from services.asset_manager import AssetManager
-            from models.asset import ContextType, HoldingMetadata
-
-            await refresh_portfolio_greeks(self.user_id)
-            ctx = database.get_full_user_context(self.user_id)
-            runway_days = calculate_financial_runway(
-                ctx.cash_reserve, ctx.monthly_expense, ctx.total_theta
-            )
-            manager = AssetManager()
-            holdings = manager.get_assets(self.user_id, ContextType.HOLDING)
-            total_holding_value = 0.0
-            for h in holdings:
-                meta = HoldingMetadata(**h.metadata)
-                quote = await market_data_service.get_quote(h.symbol)
-                total_holding_value += (
-                    quote.get("c", 0.0) if quote else 0.0
-                ) * meta.quantity
-            backup_liq = total_holding_value * 0.8
-            ext_runway = calculate_financial_runway(
-                ctx.cash_reserve + backup_liq, ctx.monthly_expense, ctx.total_theta
-            )
-            embed = create_financial_runway_embed(
-                cash_reserve=ctx.cash_reserve,
-                monthly_expense=ctx.monthly_expense,
-                total_theta=ctx.total_theta,
-                runway_days=runway_days,
-                backup_liquidity=backup_liq,
-                extended_runway=ext_runway,
-            )
-        except Exception as e:
-            await interaction.followup.send(
-                embed=create_error_embed(f"計算跑道失敗: {e}"), ephemeral=True
             )
         finally:
             await self._reset_loading(interaction, embed=embed)
