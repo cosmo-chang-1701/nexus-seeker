@@ -117,7 +117,7 @@ async def scrape_gex():
             is_call = contract["is_call"]
 
             gamma = calculate_gamma(S, strike, t, r, iv)
-            gex = oi * gamma * S * S * 0.01
+            gex = oi * gamma * S * S
             if not is_call:
                 gex = -gex
             total_gex += gex
@@ -673,7 +673,7 @@ async def scrape_symbol_gex(symbol: str):
                 is_call = contract["is_call"]
 
                 gamma = calculate_gamma(spot_price, strike, t, 0.04, iv)
-                gex = oi * gamma * spot_price * spot_price * 0.01
+                gex = oi * gamma * spot_price * spot_price
                 if not is_call:
                     gex = -gex
 

@@ -235,6 +235,8 @@ The platform implements an advanced macro risk-control layer that dynamically ad
 - **Regime Evaluation**: Evaluates index liquidity conditions via `get_market_regime()`.
 - **SHORT_GAMMA_CRITICAL Detection**:
   - Triggers when: $VIX > 20$ AND $vts\_ratio = \frac{VIX}{VIX3M} \ge 1.0$ (in backwardation) AND $\text{SPY Spot} < \text{Gamma Flip Line}$ (as estimated by the Playwright edge scraper `/api/v1/scrape/macro/gex` route).
+- **Symbol GEX Profile Caching**:
+  - Individual symbol GEX profiles (Put Wall, Call Wall, Net GEX) fetched from `/api/v1/scrape/options/{symbol}/gex` are cached in `kv_cache` with a 4-hour TTL (`14400` seconds) to optimize rendering speed for the `/x` terminal and reduce edge scraper overhead.
 - **Tactical Scaling**:
   - Under `SHORT_GAMMA_CRITICAL`, the watchlist scanner in `intraday_pipeline.py` automatically scales `dynamic_grid_step` by **$1.5\times$** to slow down capital depletion during market washouts.
 
