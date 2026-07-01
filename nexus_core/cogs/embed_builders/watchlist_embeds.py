@@ -388,19 +388,21 @@ def create_watchlist_signal_embed(
                 end_idx = min(len(strike_keys), closest_idx + 4)
                 display_strikes = strike_keys[start_idx:end_idx]
 
-                max_abs_gex = max(
-                    [
-                        abs(float(gex_prof.get(str(k), gex_prof.get(k, 0.0))))
-                        for k in display_strikes
-                    ]
-                )
+                def _safe_gex(k_val: float) -> float:
+                    val = gex_prof.get(str(k_val), gex_prof.get(k_val))
+                    try:
+                        return float(val) if val is not None else 0.0
+                    except (ValueError, TypeError):
+                        return 0.0
+
+                max_abs_gex = max([abs(_safe_gex(k)) for k in display_strikes])
                 max_abs_gex = max(max_abs_gex, 1.0)
 
                 lines.append("")
                 lines.append(" 🧲 Gamma 曝險分布 (GEX Profile Matrix)")
                 lines.append(" ┌─ 履約價(Strike) ─ 曝險熱力圖 ─ [K]")
                 for i, k in enumerate(reversed(display_strikes)):
-                    v = float(gex_prof.get(str(k), gex_prof.get(k, 0.0)))
+                    v = _safe_gex(k)
                     bars = int((abs(v) / max_abs_gex) * 10)
                     bar_str = "█" * bars + "░" * (10 - bars)
                     if v > 0:
