@@ -389,15 +389,20 @@ def build_radar_scan_embed(
             color=discord.Color.blue(),
         )
 
-        # 讀取全域快取指標 (TED Spread & GEX Flip)
+        # 讀取全域快取指標 (TED Spread & GEX Flip & Darkpool DIX)
         macro_ansi_header = []
         try:
             from database.cache import get_kv_cache
 
             gex_flip = get_kv_cache("macro_spy_gamma_flip")
             ted_spread = get_kv_cache("macro_ted_spread")
+            darkpool_dix = get_kv_cache("macro_darkpool_dix")
 
-            if gex_flip is not None or ted_spread is not None:
+            if (
+                gex_flip is not None
+                or ted_spread is not None
+                or darkpool_dix is not None
+            ):
                 gex_str = (
                     f"SPY 零 Gamma 線 (GEX Flip): \u001b[1;35m{gex_flip:.2f}\u001b[0m"
                     if gex_flip is not None
@@ -419,12 +424,24 @@ def build_radar_scan_embed(
                     else ""
                 )
 
-                macro_parts = [p for p in (gex_str, ted_str) if p]
+                dix_str = ""
+                if darkpool_dix is not None:
+                    dix_val = float(darkpool_dix)
+                    dix_alert = (
+                        " (\u001b[1;31m🔥 機構逢低建倉\u001b[0m)"
+                        if dix_val > 45.0
+                        else ""
+                    )
+                    dix_str = f"DIX (暗池吸籌指數): \u001b[1;36m{dix_val:.1f}%\u001b[0m{dix_alert}"
+
+                macro_parts = [p for p in (gex_str, ted_str, dix_str) if p]
                 if macro_parts:
                     macro_ansi_header.append(
                         " 🌍 總經與微觀結構警戒 (Macro & Liquidity Edge)"
                     )
-                    macro_ansi_header.append(" └─ " + " | ".join(macro_parts))
+                    for i, part in enumerate(macro_parts):
+                        prefix = " ├─ " if i < len(macro_parts) - 1 else " └─ "
+                        macro_ansi_header.append(prefix + part)
                     macro_ansi_header.append("")
         except Exception:
             pass

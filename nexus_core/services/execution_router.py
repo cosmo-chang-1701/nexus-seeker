@@ -76,6 +76,17 @@ class ExecutionRouter:
                     exit_strategy=self._define_trailing_stop(condition, "SHIELD"),
                 )
 
+            # 新增 Dark Pool Skew 負向降級防禦
+            dp_skew = getattr(condition, "dark_pool_skew", 0.0)
+            if dp_skew < -0.3:
+                return ExecutionDecision(
+                    decision_type="SHIELD",
+                    trigger_reason=f"暗池呈現強烈派發 (DP Skew: {dp_skew:.2f})，機構逢高出貨跡象明確，強制降級為網格防禦。",
+                    grid_params=self._calculate_atr_grid(condition),
+                    position_sizing=None,
+                    exit_strategy=self._define_trailing_stop(condition, "SHIELD"),
+                )
+
             # --- SPEAR 戰術路由優先判定 (極端強勢標的) ---
             # 價格/MA20 Deviation > 10% 且 RSI > 65，但相對強度 RS > 1.2
             is_overextended_bullish = (

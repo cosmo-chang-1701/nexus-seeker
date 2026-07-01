@@ -24,6 +24,7 @@ class MarketCondition(BaseModel):
     relative_strength: float = Field(
         1.0, description="相對強度 (Relative Strength) 指標"
     )
+    dark_pool_skew: float = Field(0.0, description="暗池偏度 (DP Skew)")
 
     @field_validator(
         "vix",
@@ -33,6 +34,7 @@ class MarketCondition(BaseModel):
         "atr_14",
         "rsi_14",
         "relative_strength",
+        "dark_pool_skew",
         mode="before",
     )
     @classmethod

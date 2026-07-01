@@ -4,7 +4,7 @@
 
 Nexus Seeker is a multi-tenant **Discord-first options risk-control and trading operations platform**. It combines technical structure, Black-Scholes-Merton pricing, Greeks-based portfolio risk, event-aware calendar defenses, and LLM-assisted structured commentary.
 
-Current released core version: **`1.9.5`**
+Current released core version: **`1.9.6`**
 
 The codebase is optimized for:
 
@@ -159,6 +159,7 @@ Current sections:
   - ANSI snapshot and enriched Unusual Option Activity (UOA) table:
     - UOA entries are processed with `trade_type` (`SWEEP` or `BLOCK`) and `oi_change_net`.
     - Presentational layer tags UOA records visually with `🔥 SWEEP` or `📦 BLOCK` and the corresponding daily Open Interest net change.
+    - Top 3 Dark Pool block prints are displayed along with absolute support resonance (DP-POC overlapping with PutWall).
   - skew / IV structure interpretation
   - event risk summary
   - executable option plan
@@ -215,6 +216,7 @@ Relative Strength (RS) & Tactical Routing:
   $$RS_{Ticker} = \frac{Price_{Ticker}(t) / Price_{Ticker}(t-n)}{Price_{Benchmark}(t) / Price_{Benchmark}(t-n)}$$
   using sectoral ETFs (e.g., `SMH` for semiconductor tickers) as benchmarks.
 - In `ExecutionRouter`, overextended bullish assets (Price/MA20 Deviation > 10% AND RSI > 65) with high Relative Strength (RS > 1.2) are routed to **SPEAR** mode (suggesting Bull Put Spreads or OTM Covered Calls) instead of SHIELD grid shorting.
+- **Dark Pool Skew Override**: If the derived Dark Pool Skew is strongly negative (`dark_pool_skew < -0.3`), indicating heavy institutional distribution, the router overrides all aggressive strategies and forces a downgrade to **SHIELD** mode.
 
 Important current rule inside `IntradayScanPipeline`:
 
@@ -266,9 +268,10 @@ The platform implements an advanced macro risk-control layer that dynamically ad
   python cli.py admin force-macro-update
   ```
 
-### 6. Volume Profile & Double Discount Pricing (DDP)
-- **V-POC Calculation**: The engine calculates the Volume Point of Control (POC) using `pandas-ta` volume profile functions.
-- **DDP Signal**: When the current spot price falls below the EMA 21, the option Max Pain level, AND the V-POC, a `DDP 估值雙擊` signal is activated. This highlights a highly discounted structural entry point for long setups.
+### 6. Volume Profile, Dark Pool & Triple Discount Pricing (TDP)
+- **V-POC & DP-POC Calculation**: The engine calculates the Volume Point of Control (POC) using `pandas-ta` volume profile functions, and fetches the Dark Pool Point of Control (DP-POC).
+- **Absolute Support Resonance**: If the DP-POC closely overlaps with the Market Maker's PutWall (< 1% deviation), an absolute support resonance alert is flagged.
+- **TDP Signal**: When the current spot price falls below the EMA 21, the option Max Pain level, the V-POC, AND the DP-POC, a `✨ TDP 估值三擊 (Triple Discount Pricing)` signal is activated. This highlights an immensely discounted structural entry point backed by both volume profile and dark pool support.
 
 ### 7. Kelly Criterion Risk Sizing
 - **Dynamic Allocations**: Utilizing user-configured `capital` and `risk_limit`, the system uses `risk_engine.optimize_position_risk` to calculate the safe number of contracts to buy.

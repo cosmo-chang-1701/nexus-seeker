@@ -200,6 +200,7 @@ class TradingService:
                     rsi_14=clean_rsi,
                     uoa_detected=uoa_detected,
                     relative_strength=relative_strength,
+                    dark_pool_skew=0.0,
                 )
                 return self.execution_router.evaluate_market(condition)
             except Exception as e:
@@ -533,6 +534,7 @@ class TradingService:
                                 rsi_14=clean_rsi,
                                 uoa_detected=uoa_detected,
                                 relative_strength=relative_strength,
+                                dark_pool_skew=0.0,
                             )
                             res["execution_decision"] = (
                                 self.execution_router.evaluate_market(condition)

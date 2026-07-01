@@ -382,10 +382,13 @@ class SchedulerCog(commands.Cog):
 
         # 1. 抓取 SPX, VIX, US10Y 數據並存入 SQLite
         try:
-            spx_q, vix_q, tnx_q = await asyncio.gather(
+            from market_analysis.dark_pool_engine import fetch_and_cache_darkpool_dix
+
+            spx_q, vix_q, tnx_q, _ = await asyncio.gather(
                 get_quote("^SPX"),
                 get_quote("^VIX"),
                 get_quote("^TNX"),
+                fetch_and_cache_darkpool_dix(),
                 return_exceptions=True,
             )
 
@@ -401,7 +404,7 @@ class SchedulerCog(commands.Cog):
                 await database.save_kv_cache("macro_us10y", tnx_val)
 
             logger.info(
-                f"🕒 [盤中總經快取更新完成] SPX: {spx_val}, VIX: {vix_val}, US10Y: {tnx_val}"
+                f"🕒 [盤中總經快取更新完成] SPX: {spx_val}, VIX: {vix_val}, US10Y: {tnx_val}, DarkPool DIX updated"
             )
         except Exception as e:
             logger.error(f"🕒 [盤中總經快取更新失敗]: {e}")
@@ -527,17 +530,23 @@ class SchedulerCog(commands.Cog):
         errors = []
         gex_info = ""
 
-        # 1. Update GEX & Liquidity
+        # 1. Update GEX, Liquidity, and Dark Pool DIX
         try:
             from market_analysis.index_microstructure import fetch_liquidity_metrics
+            from market_analysis.dark_pool_engine import fetch_and_cache_darkpool_dix
 
             import typing
 
             results = await asyncio.gather(
-                fetch_gex_metrics(), fetch_liquidity_metrics(), return_exceptions=True
+                fetch_gex_metrics(),
+                fetch_liquidity_metrics(),
+                fetch_and_cache_darkpool_dix(),
+                return_exceptions=True,
             )
             gex_data = typing.cast(typing.Any, results[0])
             liq_data = typing.cast(typing.Any, results[1])
+            _ = typing.cast(typing.Any, results[2])
+
             if isinstance(gex_data, Exception):
                 raise gex_data
 
