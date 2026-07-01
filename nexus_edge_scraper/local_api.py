@@ -391,6 +391,189 @@ async def scrape_fedwatch():
         return {"status": "success", "data": fallback}
 
 
+@app.get("/api/v1/scrape/options/{symbol}/gex")
+async def scrape_symbol_gex(symbol: str):
+    import math
+    import re
+    from datetime import date
+
+    symbol_upper = symbol.upper()
+    fallback = {"spot": 0.0, "net_gex": 0.0, "call_wall": 0.0, "put_wall": 0.0}
+
+    # Black-Scholes math helper
+    def ndtr_prime(x):
+        return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
+
+    def calculate_gamma(S, K, t, r, sigma):
+        if S <= 0 or K <= 0 or t <= 0 or sigma <= 0:
+            return 0.0
+        try:
+            d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * t) / (
+                sigma * math.sqrt(t)
+            )
+            return ndtr_prime(d1) / (S * sigma * math.sqrt(t))
+        except Exception:
+            return 0.0
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"]
+        )
+        try:
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+            )
+            await Stealth().apply_stealth_async(context)
+            # Speed up loading by blocking images and CSS
+            await context.route(
+                "**/*",
+                lambda route: route.abort()
+                if route.request.resource_type in ["image", "stylesheet", "font"]
+                else route.continue_(),
+            )
+            page = await context.new_page()
+            await page.goto(
+                f"https://finance.yahoo.com/quote/{symbol_upper}/options",
+                timeout=25000,
+                wait_until="domcontentloaded",
+            )
+            await page.wait_for_timeout(3000)
+
+            html = await page.content()
+            soup = BeautifulSoup(html, "lxml")
+
+            # Parse spot price
+            spot_elem = soup.select_one('[data-testid="qsp-price"]')
+            spot_price = 0.0
+            if spot_elem and spot_elem.text:
+                try:
+                    spot_price = float(spot_elem.text.replace(",", ""))
+                except ValueError:
+                    pass
+
+            if spot_price <= 0:
+                logger.warning(
+                    f"{symbol_upper} spot price parsed <= 0 from Yahoo Finance, using fallbacks."
+                )
+                return {"status": "success", "data": fallback}
+
+            # Parse option tables
+            tables = soup.select("table")
+            if len(tables) < 2:
+                logger.warning(
+                    f"Yahoo Finance options tables not found for {symbol_upper}, using fallbacks."
+                )
+                return {"status": "success", "data": fallback}
+
+            option_chain = []
+            today = date.today()
+
+            def parse_table(table, is_call):
+                rows = table.select("tr")
+                for r in rows[1:]:
+                    cols = [td.text.strip() for td in r.select("td")]
+                    if len(cols) < 11:
+                        continue
+                    try:
+                        contract_name = cols[0]
+                        strike = float(cols[2].replace(",", ""))
+
+                        oi_text = cols[9].replace(",", "")
+                        oi = int(oi_text) if oi_text and oi_text != "-" else 0
+
+                        iv_text = cols[10].replace("%", "").replace(",", "")
+                        iv = (
+                            float(iv_text) / 100.0
+                            if iv_text and iv_text != "-"
+                            else 0.20
+                        )
+                        if iv <= 0:
+                            iv = 0.20
+
+                        match = re.match(
+                            r"[A-Za-z]+(\d{2})(\d{2})(\d{2})[CP]", contract_name
+                        )
+                        if match:
+                            exp_yr = 2000 + int(match.group(1))
+                            exp_mo = int(match.group(2))
+                            exp_dy = int(match.group(3))
+                            exp_date = date(exp_yr, exp_mo, exp_dy)
+                            days_to_exp = (exp_date - today).days
+                        else:
+                            days_to_exp = 7
+
+                        t = max(days_to_exp, 0.5) / 365.0
+
+                        option_chain.append(
+                            {
+                                "strike": strike,
+                                "oi": oi,
+                                "iv": iv,
+                                "t": t,
+                                "is_call": is_call,
+                            }
+                        )
+                    except Exception:
+                        pass
+
+            parse_table(tables[0], is_call=True)
+            parse_table(tables[1], is_call=False)
+
+            if not option_chain:
+                logger.warning(
+                    f"No option chain parsed for {symbol_upper}, using fallbacks."
+                )
+                return {"status": "success", "data": fallback}
+
+            net_gex = 0.0
+            gex_by_strike = {}
+
+            for contract in option_chain:
+                strike = contract["strike"]
+                oi = contract["oi"]
+                iv = contract["iv"]
+                t = contract["t"]
+                is_call = contract["is_call"]
+
+                gamma = calculate_gamma(spot_price, strike, t, 0.04, iv)
+                gex = oi * gamma * spot_price * spot_price * 0.01
+                if not is_call:
+                    gex = -gex
+
+                net_gex += gex
+                gex_by_strike[strike] = gex_by_strike.get(strike, 0.0) + gex
+
+            call_wall = spot_price
+            put_wall = spot_price
+
+            if gex_by_strike:
+                # Call wall: strike with max positive GEX
+                call_wall_candidates = {k: v for k, v in gex_by_strike.items() if v > 0}
+                if call_wall_candidates:
+                    call_wall = max(call_wall_candidates, key=call_wall_candidates.get)
+                # Put wall: strike with max negative GEX (minimum value)
+                put_wall_candidates = {k: v for k, v in gex_by_strike.items() if v < 0}
+                if put_wall_candidates:
+                    put_wall = min(put_wall_candidates, key=put_wall_candidates.get)
+
+            return {
+                "status": "success",
+                "data": {
+                    "spot": round(spot_price, 2),
+                    "net_gex": round(net_gex, 2),
+                    "call_wall": round(call_wall, 2),
+                    "put_wall": round(put_wall, 2),
+                },
+            }
+        except Exception as e:
+            logger.warning(
+                f"Symbol GEX scrape failed with exception: {e}, using fallbacks."
+            )
+            return {"status": "success", "data": fallback}
+        finally:
+            await browser.close()
+
+
 @app.get("/api/v1/macro/calendar")
 async def scrape_macro_calendar(year: int, month: int, high_impact_only: bool = False):
     import requests

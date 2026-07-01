@@ -4,7 +4,7 @@
 
 Nexus Seeker is a multi-tenant **Discord-first options risk-control and trading operations platform**. It combines technical structure, Black-Scholes-Merton pricing, Greeks-based portfolio risk, event-aware calendar defenses, and LLM-assisted structured commentary.
 
-Current released core version: **`1.8.22`**
+Current released core version: **`1.8.23`**
 
 The codebase is optimized for:
 
@@ -263,6 +263,18 @@ The platform implements an advanced macro risk-control layer that dynamically ad
   ```bash
   python cli.py admin force-macro-update
   ```
+
+### 6. Volume Profile & Double Discount Pricing (DDP)
+- **V-POC Calculation**: The engine calculates the Volume Point of Control (POC) using `pandas-ta` volume profile functions.
+- **DDP Signal**: When the current spot price falls below the EMA 21, the option Max Pain level, AND the V-POC, a `DDP 估值雙擊` signal is activated. This highlights a highly discounted structural entry point for long setups.
+
+### 7. Kelly Criterion Risk Sizing
+- **Dynamic Allocations**: Utilizing user-configured `capital` and `risk_limit`, the system uses `risk_engine.optimize_position_risk` to calculate the safe number of contracts to buy.
+- **Volatility Scaling**: Under extreme VIX conditions, the Kelly fraction is dynamically reduced (e.g., from 0.5 to 0.25), and a scaling penalty is applied to the final contract count. The system outputs these warnings directly into the terminal's `Target Lock` embed.
+
+### 8. Bid-Ask Spread Liquidity Gate
+- **Spread Ratio**: Evaluates the option spread against the mid-price: `Spread Ratio = (Ask - Bid) / Mid`.
+- **Illiquidity Block**: If the ratio exceeds 15.0%, the contract is flagged as illiquid (`is_illiquid = True`). This prevents execution routing, adds a `⚠️ 流動性警告` (Liquidity Warning) overlay to the tactical terminal, and updates the watchlist heartbeat's Option Plan to a strict `WAIT` state to prevent severe slippage.
 
 ---
 

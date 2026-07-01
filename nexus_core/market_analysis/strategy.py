@@ -962,6 +962,8 @@ async def find_best_contract(symbol, strategy_type, target_delta, min_dte, max_d
             "strike": float(best_contract.get("strike", 0.0)),
             "expiry": target_expiry_date,
             "mid": mid,
+            "bid": bid,
+            "ask": ask,
         }
     except Exception as e:
         logger.error(f"find_best_contract error for {symbol}: {e}")

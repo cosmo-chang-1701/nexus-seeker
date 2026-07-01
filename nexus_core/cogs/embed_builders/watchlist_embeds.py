@@ -277,6 +277,22 @@ def create_watchlist_signal_embed(
         or "價格仍在防守框架內，維持現貨 $1.00×$ 零槓桿死守，將雙手嚴格離開期權開倉鍵。"
     )
 
+    if option_plan:
+        strat_name = getattr(option_plan, "strategy_name", "")
+        if strat_name:
+            inst_str += f"\n\n【動態期權計畫 (僅供參考)】\n ├─ 策略路由: {strat_name}"
+            legs = getattr(option_plan, "legs", [])
+            for leg in legs:
+                action = getattr(leg, "action", "")
+                opt_type = getattr(leg, "opt_type", "")
+                strike = getattr(leg, "strike", 0.0)
+                mid = getattr(leg, "mid_price", 0.0)
+                expiry = getattr(leg, "expiry", "")
+                inst_str += f"\n ├─ 合約: {action} {opt_type} {expiry} ${strike:.2f} (Mid: ${mid:.2f})"
+            contracts = getattr(option_plan, "suggested_contracts", 0)
+            risk = getattr(option_plan, "max_risk_amount", 0.0)
+            inst_str += f"\n └─ 建議口數上限: {contracts} 口 (風險配額: ${risk:.2f})"
+
     is_degraded = (
         is_premarket
         or iv_source == "UNAVAILABLE"

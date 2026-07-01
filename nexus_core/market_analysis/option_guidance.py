@@ -191,6 +191,8 @@ async def _pick_watchlist_cover_leg(
         "strike": float(leg["strike"]),
         "expiry": expiry,
         "mid": _mid_price_from_row(leg),
+        "bid": float(leg.get("bid", 0.0) or 0.0),
+        "ask": float(leg.get("ask", 0.0) or 0.0),
     }
 
 
@@ -309,6 +311,13 @@ async def build_watchlist_option_plan(
             and mid_val >= distance_val * 0.7
             and metrics.iv_rank == 0.0
         ):
+            is_illiquid = True
+
+    bid_val = float(primary_leg.get("bid", 0.0))
+    ask_val = float(primary_leg.get("ask", 0.0))
+    if bid_val > 0 and ask_val > bid_val:
+        spread_ratio = (ask_val - bid_val) / ((ask_val + bid_val) / 2)
+        if spread_ratio > 0.15:
             is_illiquid = True
 
     if is_illiquid:

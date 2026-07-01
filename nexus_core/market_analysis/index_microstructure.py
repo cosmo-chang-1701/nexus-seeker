@@ -90,3 +90,23 @@ async def get_market_regime() -> str:
         return "SHORT_GAMMA_CRITICAL"
 
     return "NORMAL"
+
+
+async def fetch_symbol_gex_metrics(symbol: str) -> Dict[str, float]:
+    """呼叫邊緣爬蟲獲取個股的 Net GEX, Call Wall 與 Put Wall。"""
+    fallback = {"spot": 0.0, "net_gex": 0.0, "call_wall": 0.0, "put_wall": 0.0}
+
+    if not getattr(config, "TUNNEL_URL", ""):
+        return fallback
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            res = await client.get(
+                f"{config.TUNNEL_URL}/api/v1/scrape/options/{symbol}/gex"
+            )
+            if res.status_code == 200:
+                data = res.json()
+                if data.get("status") == "success":
+                    return data.get("data", fallback)
+    except Exception as e:
+        logger.warning(f"無法從 Tunnel Scraper 獲取 {symbol} GEX 數據: {e}")
+    return fallback

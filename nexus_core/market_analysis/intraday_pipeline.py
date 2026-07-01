@@ -531,7 +531,10 @@ async def evaluate_watchlist_symbol(
 
     # 零 Gamma 踩踏 Regime 檢查並自動調整網格間距
     try:
-        from market_analysis.index_microstructure import get_market_regime
+        from market_analysis.index_microstructure import (
+            get_market_regime,
+            fetch_symbol_gex_metrics,
+        )
 
         regime = await get_market_regime()
         if regime == "SHORT_GAMMA_CRITICAL":
@@ -543,8 +546,22 @@ async def evaluate_watchlist_symbol(
 
             tactical.dynamic_grid_step = round(tactical.dynamic_grid_step * 1.5, 2)
             tactical.action_guideline += f" (⚠️ 偵測到大盤進入 SHORT_GAMMA_CRITICAL 極端踩踏恐慌軌道{fb_tag}，個股網格單觸發間距已自動放大 1.5 倍以防禦資金被過早抽乾。)"
+
+        # 個股 Net GEX 與牆位解析
+        symbol_gex = await fetch_symbol_gex_metrics(symbol)
+        net_gex = symbol_gex.get("net_gex", 0.0)
+        call_wall = symbol_gex.get("call_wall", 0.0)
+        put_wall = symbol_gex.get("put_wall", 0.0)
+        spot = metrics.current_price
+
+        if call_wall > 0 and put_wall > 0:
+            if spot > call_wall and net_gex < 0:
+                tactical.action_guideline += f"\n🚨 【軋空預警】現價 ({spot:.2f}) 突破 Call Wall ({call_wall:.2f}) 且處於 Short Gamma ({net_gex:+.0f})，隨時可能觸發造市商被迫回補引發暴漲軋空。"
+            elif spot < put_wall:
+                tactical.action_guideline += f"\n⚠️ 【流動性枯竭預警】現價 ({spot:.2f}) 跌破 Put Wall ({put_wall:.2f})，期權造市商支撐消失，存在嚴重賣壓與流動性真空風險。"
+
     except Exception as e:
-        logger.warning(f"評估市場 Regime 時發生錯誤: {e}")
+        logger.warning(f"評估市場 Regime 與 GEX 時發生錯誤: {e}")
 
     # Structural divergence check (Skew vs PCR extremes)
     if (
