@@ -4,7 +4,7 @@ from services.market_data_service import BoundedCache
 _macro_overview_cache = BoundedCache(max_size=10)
 
 
-def get_macro_overview_data(user_id: int) -> dict:
+async def get_macro_overview_data(user_id: int) -> dict:
     ram_usage = psutil.virtual_memory().percent
     is_degraded = ram_usage > 85.0
     cache_key = f"overview_{user_id}"
@@ -15,50 +15,111 @@ def get_macro_overview_data(user_id: int) -> dict:
         return data
 
     # Read from SQLite kv_cache
-    from database import get_kv_cache
+    from database import get_kv_cache, save_kv_cache
     from market_analysis.trading_orchestration import get_safety_payout_threshold
+    from services.market_data_service import get_quote
+    import asyncio
 
-    spx = get_kv_cache("macro_spx") or 5150.0
-    vix = get_kv_cache("macro_vix") or 18.0
-    us10y = get_kv_cache("macro_us10y") or 4.25
+    try:
+        results = await asyncio.gather(
+            get_quote("^SPX"),
+            get_quote("^VIX"),
+            get_quote("^TNX"),
+            get_quote("CL=F"),
+            return_exceptions=True,
+        )
+
+        def _parse(res, key, fallback):
+            if isinstance(res, dict) and res.get("c", 0) > 0:
+                val = res["c"]
+                asyncio.create_task(save_kv_cache(key, val))
+                return val
+            return get_kv_cache(key) or fallback
+
+        spx = _parse(results[0], "macro_spx", 5150.0)
+        vix = _parse(results[1], "macro_vix", 18.0)
+        us10y = _parse(results[2], "macro_us10y", 4.25)
+        wti = _parse(results[3], "macro_wti", 75.0)
+
+    except Exception:
+        spx = get_kv_cache("macro_spx") or 5150.0
+        vix = get_kv_cache("macro_vix") or 18.0
+        us10y = get_kv_cache("macro_us10y") or 4.25
+        wti = get_kv_cache("macro_wti") or 75.0
+
     # Normalize US10Y if needed
     if us10y > 10.0:
         us10y = us10y / 10.0
 
-    wti = get_kv_cache("macro_wti") or 75.0
-    rrp = get_kv_cache("macro_rrp") or 420.5
-    fed_balance = get_kv_cache("macro_fed_balance") or 7.25
-    cpi_nfp_calendar = get_kv_cache("macro_cpi_nfp_calendar")
-    if not cpi_nfp_calendar:
-        from datetime import datetime, timedelta
-        from database.calendar_cache import get_macro_events_between
+    rrp = get_kv_cache("macro_rrp")
+    fed_balance = get_kv_cache("macro_fed_balance")
+    from datetime import datetime, timedelta
+    from database.calendar_cache import get_macro_events_between
+    from services.calendar_service import calendar_service
 
-        start_date = datetime.now().strftime("%Y-%m-%d")
-        end_date = (datetime.now() + timedelta(days=60)).strftime("%Y-%m-%d")
-        events = get_macro_events_between(start_date, end_date)
+    start_date = datetime.now().strftime("%Y-%m-%d")
+    end_date = (datetime.now() + timedelta(days=60)).strftime("%Y-%m-%d")
+    events = get_macro_events_between(start_date, end_date)
 
-        cpi_date = ""
-        nfp_date = ""
-        for ev in events:
-            if not cpi_date and "CPI" in ev["event"].upper():
-                cpi_date = f"{ev['time'][:10]} (CPI)"
-            if not nfp_date and (
-                "NFP" in ev["event"].upper() or "NONFARM" in ev["event"].upper()
-            ):
-                nfp_date = f"{ev['time'][:10]} (NFP)"
+    if not events:
+        try:
+            await calendar_service.prefetch_monthly_macro_cache(months_ahead=2)
+            events = get_macro_events_between(start_date, end_date)
+        except Exception:
+            pass
 
-        cal_parts = []
-        if cpi_date:
-            cal_parts.append(cpi_date)
-        if nfp_date:
-            cal_parts.append(nfp_date)
-        cpi_nfp_calendar = ", ".join(cal_parts) if cal_parts else "近期無重大數據"
+    cal_parts = []
+    for ev in events[:4]:
+        dt_str = ev.get("event_time", "")
+        event_name = ev.get("event", "")
+        if len(dt_str) >= 10:
+            mm_dd = dt_str[5:10].replace("-", "/")
+            cal_parts.append(f"{mm_dd} {event_name}")
+        else:
+            cal_parts.append(f"{dt_str} {event_name}")
 
-    fear_greed = get_kv_cache("macro_fear_greed") or 48.0
-    gamma_flip_line = get_kv_cache("macro_gamma_flip_line") or 5180.0
-    uer = get_kv_cache("macro_uer") or 4.0
-    sahm_rule = get_kv_cache("macro_sahm_rule") or 0.35
-    rrp_change_30d = get_kv_cache("macro_rrp_change_30d") or 5.0
+    if cal_parts:
+        cpi_nfp_calendar = "\n └─ ".join(cal_parts)
+    else:
+        cpi_nfp_calendar = "近期無重大數據"
+
+    fear_greed = get_kv_cache("macro_fear_greed")
+    gamma_flip_line = get_kv_cache("macro_gamma_flip_line")
+    uer = get_kv_cache("macro_uer")
+    sahm_rule = get_kv_cache("macro_sahm_rule")
+    rrp_change_30d = get_kv_cache("macro_rrp_change_30d")
+
+    if not rrp or not fed_balance or not fear_greed:
+        try:
+            from market_analysis.index_microstructure import fetch_core_macro_metrics
+
+            core_data = await fetch_core_macro_metrics()
+            rrp = core_data.get("rrp") or 420.5
+            fed_balance = core_data.get("fed_balance") or 7.25
+            fear_greed = core_data.get("fear_greed") or 48.0
+            uer = core_data.get("uer") or 4.0
+            sahm_rule = core_data.get("sahm_rule") or 0.35
+            rrp_change_30d = core_data.get("rrp_change_30d") or 5.0
+        except Exception:
+            pass
+
+    rrp = rrp or 420.5
+    fed_balance = fed_balance or 7.25
+    fear_greed = fear_greed or 48.0
+    uer = uer or 4.0
+    sahm_rule = sahm_rule or 0.35
+    rrp_change_30d = rrp_change_30d or 5.0
+
+    if not gamma_flip_line:
+        try:
+            from market_analysis.index_microstructure import fetch_gex_metrics
+
+            gex_data = await fetch_gex_metrics()
+            gamma_flip_line = (gex_data.get("gamma_flip") or 515.0) * 10.0
+        except Exception:
+            pass
+
+    gamma_flip_line = gamma_flip_line or 5180.0
 
     gex_fallback_val = get_kv_cache("macro_gex_is_fallback")
     gex_is_fallback = gex_fallback_val is None or int(gex_fallback_val) == 1
