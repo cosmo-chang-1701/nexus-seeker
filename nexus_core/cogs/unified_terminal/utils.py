@@ -74,10 +74,36 @@ def get_macro_overview_data(user_id: int) -> dict:
     return data
 
 
-def find_matching_polymarket_odds(symbol: str, poly_markets: list) -> str:
+async def find_matching_polymarket_odds(symbol: str, poly_markets: list) -> str:
     import re
+    from services.market_data_service import get_company_profile
 
     symbol = symbol.upper()
+    alts = []
+
+    try:
+        profile = await get_company_profile(symbol)
+        if profile and "name" in profile:
+            company_name = profile.get("name", "")
+            if company_name:
+                full_clean = (
+                    company_name.lower()
+                    .replace(" inc.", "")
+                    .replace(" corp.", "")
+                    .replace(" ltd.", "")
+                    .replace(" corporation", "")
+                    .replace(" company", "")
+                    .strip()
+                )
+                if full_clean and full_clean not in alts:
+                    alts.append(full_clean)
+                first_word = company_name.split()[0].lower()
+                first_word = re.sub(r"[^a-z0-9]", "", first_word)
+                if first_word and first_word not in alts:
+                    alts.append(first_word)
+    except Exception:
+        pass
+
     ticker_map = {
         "MU": ["micron"],
         "NVDA": ["nvidia"],
@@ -90,7 +116,10 @@ def find_matching_polymarket_odds(symbol: str, poly_markets: list) -> str:
         "META": ["meta", "facebook"],
         "NFLX": ["netflix"],
     }
-    alts = ticker_map.get(symbol, [])
+
+    for fallback in ticker_map.get(symbol, []):
+        if fallback not in alts:
+            alts.append(fallback)
 
     for m in poly_markets or []:
         if not isinstance(m, dict):
