@@ -442,15 +442,21 @@ def force_macro_update(ctx):
 
         rprint("[bold yellow]🚀 開始手動觸發大盤總經爬蟲...[/bold yellow]")
 
-        # 1. GEX
-        rprint("正在向 edge scraper 請求 GEX 數據...")
+        # 1. GEX & Liquidity
+        rprint("正在向 edge scraper 請求 GEX 與流動性數據...")
         try:
-            gex_data = await fetch_gex_metrics()
+            from market_analysis.index_microstructure import fetch_liquidity_metrics
+
+            gex_data, liq_data = await asyncio.gather(
+                fetch_gex_metrics(), fetch_liquidity_metrics(), return_exceptions=True
+            )
+            if isinstance(gex_data, Exception):
+                raise gex_data
             rprint(
-                f"[bold green]✅ GEX 數據更新完成。[/bold green] (SPY: {gex_data.get('spy_spot')}, Flip: {gex_data.get('gamma_flip')})"
+                f"[bold green]✅ GEX & 流動性數據更新完成。[/bold green] (SPY: {gex_data.get('spy_spot')}, Flip: {gex_data.get('gamma_flip')}, TED Spread: {liq_data.get('ted_spread') if not isinstance(liq_data, Exception) else 'Error'})"
             )
         except Exception as e:
-            rprint(f"[bold red]❌ GEX 數據更新失敗: {e}[/bold red]")
+            rprint(f"[bold red]❌ GEX & 流動性數據更新失敗: {e}[/bold red]")
 
         # 2. FedWatch
         rprint("正在向 edge scraper 請求 FedWatch 利率機率數據...")

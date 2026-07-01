@@ -691,8 +691,34 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 f" └─ 值: {iv_val_str} ({vol_note})",
                 " IV Rank / IV Percentile",
                 f" └─ IV Rank: {iv_rank_str} | IV Percentile: {iv_per_str} ({iv_status_str})",
-                " Expected Move (預期區間)",
             ]
+
+            iv_term_status = (
+                getattr(iv_data, "iv_term_structure_status", None) if iv_data else None
+            )
+            iv_term_ratio = (
+                getattr(iv_data, "term_structure_ratio", None) if iv_data else None
+            )
+            if isinstance(iv_data, dict):
+                iv_term_status = (
+                    iv_data.get("iv_term_structure_status") or iv_term_status
+                )
+                iv_term_ratio = iv_data.get("term_structure_ratio") or iv_term_ratio
+
+            if iv_term_status and iv_term_ratio is not None:
+                try:
+                    ratio_val = float(iv_term_ratio)
+                    term_prefix = (
+                        "⚠️ 逆價差 (Backwardation)"
+                        if str(iv_term_status) == "Backwardation"
+                        else "✅ 正價差 (Contango)"
+                    )
+                    iv_lines.append(" IV 期限結構 (Term Structure)")
+                    iv_lines.append(f" └─ {term_prefix} (近遠月比: {ratio_val:.2f})")
+                except (ValueError, TypeError):
+                    pass
+
+            iv_lines.append(" Expected Move (預期區間)")
             if earnings_loading or macro_loading:
                 expected_move_weekly_str = (
                     f"±${expected_move_weekly:.2f}"
@@ -736,6 +762,74 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             value="\n".join(iv_lines),
             inline=False,
         )
+
+    # 3.5 🧲 Gamma 曝險分布 (GEX Profile)
+    gex_data = data.get("gex_profile_data", {})
+    if (
+        gex_data
+        and "gex_profile" in gex_data
+        and isinstance(gex_data["gex_profile"], dict)
+        and gex_data["gex_profile"]
+    ):
+        try:
+            gex_prof = gex_data["gex_profile"]
+            strike_keys = sorted([float(k) for k in gex_prof.keys()])
+            if strike_keys:
+                closest_idx = min(
+                    range(len(strike_keys)),
+                    key=lambda i: abs(strike_keys[i] - c_val),
+                )
+                start_idx = max(0, closest_idx - 3)
+                end_idx = min(len(strike_keys), closest_idx + 4)
+                display_strikes = strike_keys[start_idx:end_idx]
+
+                def _safe_gex(k_val: float) -> float:
+                    val = gex_prof.get(str(k_val), gex_prof.get(k_val))
+                    try:
+                        return float(val) if val is not None else 0.0
+                    except (ValueError, TypeError):
+                        return 0.0
+
+                max_abs_gex = max([abs(_safe_gex(k)) for k in display_strikes])
+                max_abs_gex = max(max_abs_gex, 1.0)
+
+                gex_lines = ["```ansi", " ┌─ 履約價(Strike) ─ 曝險熱力圖 ─ [K]"]
+                for i, k in enumerate(reversed(display_strikes)):
+                    v = _safe_gex(k)
+                    bars = int((abs(v) / max_abs_gex) * 10)
+                    bar_str = "█" * bars + "░" * (10 - bars)
+                    if v > 0:
+                        color_prefix = "\u001b[1;32m"
+                        sign = "+"
+                    else:
+                        color_prefix = "\u001b[1;31m"
+                        sign = "-"
+
+                    spot_marker = "📍" if abs(k - c_val) < (c_val * 0.01) else "  "
+                    formatted_val = f"{sign}{abs(v)/1000:.0f}K"
+                    prefix = " ├─" if i < len(display_strikes) - 1 else " └─"
+                    gex_lines.append(
+                        f"{prefix} {spot_marker}{k:>7.2f} | {color_prefix}{bar_str}\u001b[0m | {formatted_val:>8}"
+                    )
+
+                gex_putwall = gex_data.get("put_wall")
+                try:
+                    if gex_putwall and float(gex_putwall) > 0:
+                        gex_lines.append("")
+                        gex_lines.append(
+                            f" 🛡️ GEX PutWall (做市商底牆): ${float(gex_putwall):.2f}"
+                        )
+                except (ValueError, TypeError):
+                    pass
+
+                gex_lines.append("```")
+                embed.add_field(
+                    name="🧲 Gamma 曝險分布 (GEX Profile)",
+                    value="\n".join(gex_lines),
+                    inline=False,
+                )
+        except Exception:
+            pass
 
     # 4. 🎯 結算與目標 (Target Lock)
     _mp_val = data.get("max_pain")

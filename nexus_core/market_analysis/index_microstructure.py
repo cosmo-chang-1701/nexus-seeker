@@ -113,7 +113,10 @@ async def fetch_liquidity_metrics() -> dict:
         "dtb3": 5.15,
         "high_yield_spread": 3.1,
     }
+    from database.cache import save_kv_cache
+
     if not getattr(config, "TUNNEL_URL", ""):
+        await save_kv_cache("macro_liquidity_is_fallback", 1)
         return fallback
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -121,9 +124,15 @@ async def fetch_liquidity_metrics() -> dict:
             if res.status_code == 200:
                 data = res.json()
                 if data.get("status") == "success":
-                    return data.get("data", fallback)
+                    liq_data = data.get("data", fallback)
+                    await save_kv_cache(
+                        "macro_ted_spread", liq_data.get("ted_spread", 0.15)
+                    )
+                    await save_kv_cache("macro_liquidity_is_fallback", 0)
+                    return liq_data
     except Exception as e:
         logger.warning(f"無法從 Tunnel Scraper 獲取流動性數據: {e}")
+    await save_kv_cache("macro_liquidity_is_fallback", 1)
     return fallback
 
 

@@ -389,11 +389,53 @@ def build_radar_scan_embed(
             color=discord.Color.blue(),
         )
 
+        # 讀取全域快取指標 (TED Spread & GEX Flip)
+        macro_ansi_header = []
+        try:
+            from database.cache import get_kv_cache
+
+            gex_flip = get_kv_cache("macro_spy_gamma_flip")
+            ted_spread = get_kv_cache("macro_ted_spread")
+
+            if gex_flip is not None or ted_spread is not None:
+                gex_str = (
+                    f"SPY 零 Gamma 線 (GEX Flip): \u001b[1;35m{gex_flip:.2f}\u001b[0m"
+                    if gex_flip is not None
+                    else ""
+                )
+                ted_alert = (
+                    "\u001b[1;31m⚠️ 流動性警戒\u001b[0m"
+                    if ted_spread is not None and float(ted_spread) > 0.5
+                    else ""
+                )
+                ted_color = (
+                    "\u001b[1;31m"
+                    if ted_spread is not None and float(ted_spread) > 0.5
+                    else "\u001b[1;36m"
+                )
+                ted_str = (
+                    f"TED Spread (流動性指標): {ted_color}{ted_spread:.2f}\u001b[0m {ted_alert}"
+                    if ted_spread is not None
+                    else ""
+                )
+
+                macro_parts = [p for p in (gex_str, ted_str) if p]
+                if macro_parts:
+                    macro_ansi_header.append(
+                        " 🌍 總經與微觀結構警戒 (Macro & Liquidity Edge)"
+                    )
+                    macro_ansi_header.append(" └─ " + " | ".join(macro_parts))
+                    macro_ansi_header.append("")
+        except Exception:
+            pass
+
         # 寬度與格式對齊範例
         header = f"{'標的':<8}{'價格 (漲跌)':<16}{'IVR':<8}{'本週預期區間 (EM)':<22}{'Max Pain':<11}{'與痛點價差 (D-MP)'}"
         divider = "-" * 81
 
         ansi_lines = []
+        if macro_ansi_header:
+            ansi_lines.extend(macro_ansi_header)
         insights = []
 
         for r in chunk:
