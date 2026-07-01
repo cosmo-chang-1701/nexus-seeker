@@ -240,8 +240,9 @@ The platform implements an advanced macro risk-control layer that dynamically ad
 - **Tactical Scaling**:
   - Under `SHORT_GAMMA_CRITICAL`, the watchlist scanner in `intraday_pipeline.py` automatically scales `dynamic_grid_step` by **$1.5\times$** to slow down capital depletion during market washouts.
 
-### 2. CME FedWatch Forecasting & Escape Windows
+### 2. CME FedWatch Forecasting, FRED Metrics & Escape Windows
 - **Rate Probabilities**: Crawls FOMC rate probabilities via `/api/v1/scrape/macro/fedwatch` and saves to SQLite (`consensus_value` and `fedwatch_probability` fields in `economic_calendar_events`).
+- **Core Macro Metrics**: The Edge API (`/api/v1/scrape/macro/core_metrics`) actively fetches live FRED data (RRP, Fed Balance, Unemployment Rate, Sahm Rule Recession Indicator) and CNN Fear & Greed index. This fully automates the Macro Risk Intelligence Center and resolves all static fallback values.
 - **Dynamic Escape Window**:
   - The pre-market analyst loop (`analyst_agent.py`) evaluates the probability of rates remaining high ($> 70\%$).
   - If rates remain high (hawkish), it dynamically offsets the user's customized "rebound escape window" (反彈逃頂窗口，支援自訂並自動判定「上/中/下旬」) by **5** business days.

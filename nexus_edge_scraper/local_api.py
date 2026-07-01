@@ -279,6 +279,102 @@ async def scrape_gex():
             await browser.close()
 
 
+@app.get("/api/v1/scrape/macro/core_metrics")
+async def scrape_core_macro_metrics():
+    import httpx
+    import asyncio
+
+    fallback = {
+        "rrp": 420.5,
+        "fed_balance": 7.25,
+        "uer": 4.0,
+        "sahm_rule": 0.35,
+        "fear_greed": 48.0,
+    }
+
+    async def fetch_fred_csv_all(series_id: str) -> list[tuple[str, float]]:
+        url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        data = []
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                res = await client.get(url, headers=headers)
+                if res.status_code == 200:
+                    lines = res.text.strip().split("\n")
+                    for line in reversed(lines):
+                        parts = line.split(",")
+                        if len(parts) >= 2:
+                            try:
+                                data.append((parts[0].strip(), float(parts[1].strip())))
+                            except ValueError:
+                                continue
+        except Exception:
+            pass
+        return data
+
+    async def fetch_fred_csv(series_id: str) -> float | None:
+        data = await fetch_fred_csv_all(series_id)
+        return data[0][1] if data else None
+
+    async def fetch_cnn_fgi() -> float | None:
+        url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+            "Referer": "https://edition.cnn.com/",
+            "Origin": "https://edition.cnn.com",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                res = await client.get(url, headers=headers)
+                if res.status_code == 200:
+                    data = res.json()
+                    return float(data["fear_and_greed"]["score"])
+        except Exception:
+            pass
+        return None
+
+    try:
+        rrp_data, walcl, unrate, sahm, fgi = await asyncio.gather(
+            fetch_fred_csv_all("RRPONTSYD"),
+            fetch_fred_csv("WALCL"),
+            fetch_fred_csv("UNRATE"),
+            fetch_fred_csv("SAHMREALTIME"),
+            fetch_cnn_fgi(),
+        )
+
+        rrp = rrp_data[0][1] if rrp_data else None
+        rrp_change = 0.0
+        if rrp_data and len(rrp_data) > 30:
+            # RRPONTSYD is daily, so index 30 is roughly 30 days ago
+            past_rrp = rrp_data[30][1]
+            if past_rrp > 0:
+                rrp_change = round(((rrp - past_rrp) / past_rrp) * 100.0, 1)
+
+        return {
+            "status": "success",
+            "data": {
+                "rrp": round(rrp, 1) if rrp is not None else fallback["rrp"],
+                "rrp_change_30d": rrp_change,
+                "fed_balance": round(walcl / 1000000.0, 2)
+                if walcl is not None
+                else fallback["fed_balance"],
+                "uer": round(unrate, 1) if unrate is not None else fallback["uer"],
+                "sahm_rule": round(sahm, 2)
+                if sahm is not None
+                else fallback["sahm_rule"],
+                "fear_greed": round(fgi, 1)
+                if fgi is not None
+                else fallback["fear_greed"],
+            },
+        }
+    except Exception as e:
+        logger.warning(
+            f"Macro core metrics scrape failed with exception: {e}, using fallbacks."
+        )
+        return {"status": "success", "data": fallback}
+
+
 @app.get("/api/v1/scrape/macro/liquidity")
 async def scrape_liquidity():
     import httpx

@@ -28,9 +28,32 @@ def get_macro_overview_data(user_id: int) -> dict:
     wti = get_kv_cache("macro_wti") or 75.0
     rrp = get_kv_cache("macro_rrp") or 420.5
     fed_balance = get_kv_cache("macro_fed_balance") or 7.25
-    cpi_nfp_calendar = (
-        get_kv_cache("macro_cpi_nfp_calendar") or "2026-06-18 (CPI), 2026-07-03 (NFP)"
-    )
+    cpi_nfp_calendar = get_kv_cache("macro_cpi_nfp_calendar")
+    if not cpi_nfp_calendar:
+        from datetime import datetime, timedelta
+        from database.calendar_cache import get_macro_events_between
+
+        start_date = datetime.now().strftime("%Y-%m-%d")
+        end_date = (datetime.now() + timedelta(days=60)).strftime("%Y-%m-%d")
+        events = get_macro_events_between(start_date, end_date)
+
+        cpi_date = ""
+        nfp_date = ""
+        for ev in events:
+            if not cpi_date and "CPI" in ev["event"].upper():
+                cpi_date = f"{ev['time'][:10]} (CPI)"
+            if not nfp_date and (
+                "NFP" in ev["event"].upper() or "NONFARM" in ev["event"].upper()
+            ):
+                nfp_date = f"{ev['time'][:10]} (NFP)"
+
+        cal_parts = []
+        if cpi_date:
+            cal_parts.append(cpi_date)
+        if nfp_date:
+            cal_parts.append(nfp_date)
+        cpi_nfp_calendar = ", ".join(cal_parts) if cal_parts else "近期無重大數據"
+
     fear_greed = get_kv_cache("macro_fear_greed") or 48.0
     gamma_flip_line = get_kv_cache("macro_gamma_flip_line") or 5180.0
     uer = get_kv_cache("macro_uer") or 4.0
@@ -40,9 +63,13 @@ def get_macro_overview_data(user_id: int) -> dict:
     gex_fallback_val = get_kv_cache("macro_gex_is_fallback")
     gex_is_fallback = gex_fallback_val is None or int(gex_fallback_val) == 1
 
+    vts_ratio = get_kv_cache("macro_vts_ratio") or 0.95
+
     # 零 Gamma 踩踏 Regime 判定
-    # SPX 跌破 Gamma Flip Line 且 VIX > 20
-    short_gamma_critical = (spx < gamma_flip_line) and (vix > 20.0)
+    # SPX 跌破 Gamma Flip Line 且 VIX > 20 且 vts_ratio >= 1.0 (Backwardation)
+    short_gamma_critical = (
+        (spx < gamma_flip_line) and (vix > 20.0) and (vts_ratio >= 1.0)
+    )
 
     # 衰退警告 RECESSION_WARNING
     recession_warning = (sahm_rule >= 0.5) or (us10y > 4.5 and vix > 20.0)

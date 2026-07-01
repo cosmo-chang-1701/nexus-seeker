@@ -380,21 +380,28 @@ class SchedulerCog(commands.Cog):
 
         logger.info("🕒 [盤中掃描] 美股交易時段內，啟動動態雷達並更新大盤總經快取...")
 
-        # 1. 抓取 SPX, VIX, US10Y 數據並存入 SQLite
+        # 1. 抓取 SPX, VIX, US10Y, WTI 數據並存入 SQLite
         try:
             from market_analysis.dark_pool_engine import fetch_and_cache_darkpool_dix
+            from services.market_data_service import get_vix_term_structure
+            from market_analysis.index_microstructure import fetch_core_macro_metrics
 
-            spx_q, vix_q, tnx_q, _ = await asyncio.gather(
+            spx_q, vix_q, tnx_q, wti_q, vts_q, _, _ = await asyncio.gather(
                 get_quote("^SPX"),
                 get_quote("^VIX"),
                 get_quote("^TNX"),
+                get_quote("CL=F"),
+                get_vix_term_structure(),
                 fetch_and_cache_darkpool_dix(),
+                fetch_core_macro_metrics(),
                 return_exceptions=True,
             )
 
             spx_val = spx_q.get("c", 0.0) if isinstance(spx_q, dict) else 0.0
             vix_val = vix_q.get("c", 0.0) if isinstance(vix_q, dict) else 0.0
             tnx_val = tnx_q.get("c", 0.0) if isinstance(tnx_q, dict) else 0.0
+            wti_val = wti_q.get("c", 0.0) if isinstance(wti_q, dict) else 0.0
+            vts_val = vts_q.get("vts_ratio", 0.0) if isinstance(vts_q, dict) else 0.0
 
             if spx_val > 0.0:
                 await database.save_kv_cache("macro_spx", spx_val)
@@ -402,9 +409,13 @@ class SchedulerCog(commands.Cog):
                 await database.save_kv_cache("macro_vix", vix_val)
             if tnx_val > 0.0:
                 await database.save_kv_cache("macro_us10y", tnx_val)
+            if wti_val > 0.0:
+                await database.save_kv_cache("macro_wti", wti_val)
+            if vts_val > 0.0:
+                await database.save_kv_cache("macro_vts_ratio", vts_val)
 
             logger.info(
-                f"🕒 [盤中總經快取更新完成] SPX: {spx_val}, VIX: {vix_val}, US10Y: {tnx_val}, DarkPool DIX updated"
+                f"🕒 [盤中總經快取更新完成] SPX: {spx_val}, VIX: {vix_val}, US10Y: {tnx_val}, WTI: {wti_val}, VTS: {vts_val}, DarkPool DIX & Core Metrics updated"
             )
         except Exception as e:
             logger.error(f"🕒 [盤中總經快取更新失敗]: {e}")
