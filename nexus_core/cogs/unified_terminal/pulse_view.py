@@ -46,7 +46,7 @@ class PulseHubView(discord.ui.View):
         try:
             from cogs.embed_builder import build_market_macro_overview_embed
 
-            macro_data = get_macro_overview_data(self.user_id)
+            macro_data = await get_macro_overview_data(self.user_id)
             embed = build_market_macro_overview_embed(macro_data)
         except Exception as e:
             await interaction.followup.send(

@@ -732,7 +732,7 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
     ]
     macro_panel = "```ansi\n" + "\n".join(macro_lines) + "\n```"
 
-    calendar_panel = f"```\n 📅 總經公布日程 (CPI / NFP Schedule)\n ----------------------------------\n └─ {cpi_nfp_calendar}\n```"
+    calendar_panel = f"```\n 📅 總經公布日程\n ----------------------------------\n └─ {cpi_nfp_calendar}\n```"
 
     # 4. 加入 Fields 到 Embed
     embed.add_field(name="🏁 核心大盤與收益指標", value=core_panel, inline=False)

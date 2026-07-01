@@ -224,10 +224,15 @@ async def test_recommend_covered_calls_filtering():
             assert recs[0]["annualized_yield"] >= 10.0
 
 
-def test_is_covered_call_unlock_allowed_logic():
+@pytest.mark.asyncio
+async def test_is_covered_call_unlock_allowed_logic():
     from market_analysis.trading_orchestration import is_covered_call_unlock_allowed
 
-    with patch("database.get_kv_cache") as mock_kv:
+    with patch("database.get_kv_cache") as mock_kv, patch(
+        "services.market_data_service.get_quote"
+    ) as mock_quote:
+        # We simulate get_quote throwing an Exception so it falls back to mock_kv
+        mock_quote.side_effect = Exception("Mocked error")
         # Case 1: Normal
         mock_kv.side_effect = lambda key: {
             "macro_uer": 4.0,
@@ -235,7 +240,7 @@ def test_is_covered_call_unlock_allowed_logic():
             "macro_us10y": 4.25,
             "macro_vix": 18.0,
         }.get(key)
-        assert is_covered_call_unlock_allowed() is True
+        assert await is_covered_call_unlock_allowed() is True
 
         # Case 2: Sahm Rule triggered (recession warning)
         mock_kv.side_effect = lambda key: {
@@ -244,7 +249,7 @@ def test_is_covered_call_unlock_allowed_logic():
             "macro_us10y": 4.25,
             "macro_vix": 18.0,
         }.get(key)
-        assert is_covered_call_unlock_allowed() is False
+        assert await is_covered_call_unlock_allowed() is False
 
         # Case 3: Yield > 4.5% and VIX > 20 (recession warning)
         mock_kv.side_effect = lambda key: {
@@ -253,7 +258,7 @@ def test_is_covered_call_unlock_allowed_logic():
             "macro_us10y": 4.65,
             "macro_vix": 22.0,
         }.get(key)
-        assert is_covered_call_unlock_allowed() is False
+        assert await is_covered_call_unlock_allowed() is False
 
 
 def test_safety_payout_threshold_logic():
@@ -282,12 +287,15 @@ def test_safety_payout_threshold_logic():
         assert get_safety_payout_threshold() == 10000.0
 
 
-def test_get_macro_overview_data_logic():
+@pytest.mark.asyncio
+async def test_get_macro_overview_data_logic():
     from cogs.unified_terminal import get_macro_overview_data
 
     with patch("psutil.virtual_memory") as mock_mem, patch(
         "database.get_kv_cache"
-    ) as mock_kv:
+    ) as mock_kv, patch("services.market_data_service.get_quote") as mock_quote:
+        # We simulate get_quote throwing an Exception so it falls back to mock_kv
+        mock_quote.side_effect = Exception("Mocked error")
         # Case 1: RAM normal
         mock_mem.return_value.percent = 70.0
         mock_kv.side_effect = lambda key: {
@@ -297,12 +305,12 @@ def test_get_macro_overview_data_logic():
             "macro_gamma_flip_line": 5180.0,
         }.get(key)
 
-        data = get_macro_overview_data(1)
+        data = await get_macro_overview_data(1)
         assert data["is_degraded"] is False
         assert data["spx"] == 5150.0
         assert data["short_gamma_critical"] is False
 
         # Case 2: RAM high (>85%) -> Degraded mode
         mock_mem.return_value.percent = 90.0
-        data_degraded = get_macro_overview_data(1)
+        data_degraded = await get_macro_overview_data(1)
         assert data_degraded["is_degraded"] is True

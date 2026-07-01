@@ -69,7 +69,7 @@ async def recommend_covered_calls(
     user_id: int, symbol: str
 ) -> Optional[Dict[str, Any]]:
     """尋找 7 月中下旬到期、符合 Strike > New Cost Basis 且 Delta < 0.15 的 Covered Call 推薦合約。"""
-    if not is_covered_call_unlock_allowed():
+    if not await is_covered_call_unlock_allowed():
         logger.warning("偵測到 RECESSION_WARNING 狀態，Covered Call 解鎖策略已被阻斷")
         return None
 
@@ -399,19 +399,48 @@ async def filter_cc_recovery_targets(symbol: str) -> Optional[Dict[str, Any]]:
     }
 
 
-def is_covered_call_unlock_allowed() -> bool:
+async def is_covered_call_unlock_allowed() -> bool:
     """判斷當前是否允許解鎖 Covered Call。"""
     from database import get_kv_cache
+    from services.market_data_service import get_quote
+    from market_analysis.index_microstructure import fetch_core_macro_metrics
 
     # 1. 取得薩姆規則指標
-    sahm_rule = get_kv_cache("macro_sahm_rule") or 0.35
+    sahm_rule = get_kv_cache("macro_sahm_rule")
+    if sahm_rule is None:
+        try:
+            core_data = await fetch_core_macro_metrics()
+            sahm_rule = core_data.get("sahm_rule", 0.35)
+        except Exception:
+            sahm_rule = 0.35
 
     # 2. 取得國債收益率與 VIX
-    us10y = get_kv_cache("macro_us10y") or 4.25
+    try:
+        q = await get_quote("^TNX")
+        us10y = (
+            q.get("c", 4.25)
+            if isinstance(q, dict) and q.get("c", 0) > 0
+            else get_kv_cache("macro_us10y")
+        )
+    except Exception:
+        us10y = get_kv_cache("macro_us10y")
+
+    us10y = us10y or 4.25
+
     if us10y > 10.0:
         us10y = us10y / 10.0  # 確保百分比格式 (e.g. 43.5 -> 4.35)
 
-    vix = get_kv_cache("macro_vix") or 18.0
+    try:
+        q = await get_quote("^VIX")
+        vix = (
+            q.get("c", 18.0)
+            if isinstance(q, dict) and q.get("c", 0) > 0
+            else get_kv_cache("macro_vix")
+        )
+    except Exception:
+        vix = get_kv_cache("macro_vix")
+
+    vix = vix or 18.0
 
     # 3. 判定 RECESSION_WARNING
     # 失業率上升觸及薩姆規則 (>= 0.5) 或 US10Y > 4.5% 且 VIX > 20

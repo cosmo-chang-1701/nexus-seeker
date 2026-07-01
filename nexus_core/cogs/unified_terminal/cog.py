@@ -606,7 +606,7 @@ class UnifiedTerminalCog(commands.Cog):
             if asyncio.iscoroutine(coro):
                 asyncio.create_task(coro)
 
-        macro_data = get_macro_overview_data(interaction.user.id)
+        macro_data = await get_macro_overview_data(interaction.user.id)
         embed = build_market_macro_overview_embed(macro_data)
 
         view = PulseHubView(interaction.user.id, self.bot)
