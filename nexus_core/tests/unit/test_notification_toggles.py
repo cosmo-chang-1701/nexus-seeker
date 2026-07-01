@@ -33,7 +33,7 @@ def test_default_all_enabled(db_conn):
 def test_toggle_single_setting(db_conn):
     """測試單一通知項目的切換 (ON/OFF)"""
     user_id = 999111
-    target_key = "watchlist_heartbeat_alignment"
+    target_key = "hb_live_price"
 
     # 1. 切換為關閉 (False)
     set_user_notification_setting(user_id, target_key, False)
@@ -92,7 +92,7 @@ async def test_notification_settings_view_structure(db_conn):
     select_polymarket = next(
         c for c in view.children if c.custom_id == "select_polymarket"
     )
-    assert len(select_scheduled.options) == 5
+    assert len(select_scheduled.options) == 8
     assert len(select_realtime.options) == 6
     assert len(select_polymarket.options) == 4
 
