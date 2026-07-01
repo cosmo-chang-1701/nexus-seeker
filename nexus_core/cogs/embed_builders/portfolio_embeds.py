@@ -431,8 +431,20 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             f" └─ 現價: {color_code}${c_val:.2f}\u001b[0m ({price_emoji} {color_code}{dp_val:+.2f}%\u001b[0m / {color_code}{d_val:+.2f}\u001b[0m)",
             " 今日區間 (Daily Range)",
             f" └─ 開盤: \u001b[1;36m{o_val:.2f}\u001b[0m | 最高: \u001b[1;31m{h_val:.2f}\u001b[0m | 最低: \u001b[1;32m{l_val:.2f}\u001b[0m | 前收: \u001b[1;30m{pc_val:.2f}\u001b[0m",
-            "```",
         ]
+
+        vp = data.get("volume_profile")
+        if vp:
+            hvn = vp.get("hvn", 0.0)
+            lvn = vp.get("lvn", 0.0)
+            quote_lines.extend(
+                [
+                    " 近期成交量分佈 (Volume Profile, 20D)",
+                    f" └─ 高密集區 (HVN): \u001b[1;35m${hvn:.2f}\u001b[0m | 籌碼真空區 (LVN): \u001b[1;33m${lvn:.2f}\u001b[0m",
+                ]
+            )
+
+        quote_lines.append("```")
     embed.add_field(
         name="💹 即時報價 (Real-time Quote)",
         value="\n".join(quote_lines),
@@ -700,6 +712,24 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                     else "--"
                 )
                 iv_lines.append(f" └─ 本週預期: {expected_move_weekly_str} ({em_note})")
+
+            catalysts = data.get("catalysts")
+            if catalysts:
+                iv_lines.append(" 事件日曆防護 (Catalyst Calendar)")
+                for cat in catalysts:
+                    if hasattr(cat, "date"):
+                        date_str = cat.date
+                        days = cat.days_to_earnings
+                        iv_lines.append(
+                            f" └─ \u001b[1;33m⚠️ 距離財報 ({date_str[5:]}) 僅剩 {days:.1f} 天，嚴禁雙賣策略\u001b[0m"
+                        )
+                    elif hasattr(cat, "time"):
+                        date_str = cat.time[:10]
+                        days = round(cat.tte_hours / 24.0, 1)
+                        iv_lines.append(
+                            f" └─ \u001b[1;33m⚠️ 距離 {cat.event} ({date_str[5:]}) 僅剩 {days:.1f} 天，留意波動擴大\u001b[0m"
+                        )
+
             iv_lines.append("```")
         embed.add_field(
             name="📊 隱含波動率與預期區間 (IV Context)",
@@ -834,6 +864,12 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         scenario_overlays.append(
             "⚠️ IV Rank 極高：避免追價單腿多方；優先定義風險的價差/保護性結構，並縮小口數。"
         )
+
+    spread_ratio = data.get("spread_ratio")
+    if spread_ratio is not None and spread_ratio > 15.0:
+        scenario_overlays.append(
+            f"⚠️ 流動性警告：當前期權買賣點差高達 {spread_ratio:.1f}%，滑價風險大，請勿掛市價單。"
+        )
     if scenario_overlays:
         scenario = f"{scenario} " + " ".join(scenario_overlays)
         scen_color = "\u001b[1;31m" if is_structural_divergence else "\u001b[1;33m"
@@ -897,9 +933,27 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             f" └─ OI PCR (結構防禦): {oi_pcr_color}{oi_pcr_str}\u001b[0m ({oi_pcr_color}{oi_state}\u001b[0m)",
             " 結算價操作指引 (Scenario Analysis)",
             f" └─ 操作指引: {scen_color}{scenario}\u001b[0m",
-            "```",
         ]
     )
+    kelly_sizing = data.get("kelly_sizing")
+    if kelly_sizing:
+        contracts = kelly_sizing.suggested_contracts
+        exposure = kelly_sizing.exposure_pct
+        warnings = (
+            " | ".join(kelly_sizing.warnings)
+            if getattr(kelly_sizing, "warnings", None)
+            else "安全/符合風控"
+        )
+        target_lines.extend(
+            [
+                " 安全建倉額度 (Kelly Risk Sizing)",
+                f" ├─ 建議上限: \u001b[1;36m{contracts} 口\u001b[0m (佔總資金 {exposure}%)",
+                f" └─ 系統風控: \u001b[1;33m{warnings}\u001b[0m",
+            ]
+        )
+
+    target_lines.append("```")
+
     embed.add_field(
         name="🎯 結算與目標 (Target Lock)", value="\n".join(target_lines), inline=False
     )

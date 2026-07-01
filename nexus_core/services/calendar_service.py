@@ -442,6 +442,31 @@ class CalendarService:
             return event
         return None
 
+    async def get_symbol_catalysts(
+        self, symbol: str, days: int = 14
+    ) -> List[Union[EconomicEvent, EarningsEvent]]:
+        """
+        Get all high-impact events and earnings affecting a specific symbol.
+        """
+        events_task = self.get_high_impact_events(days)
+        earnings_task = self.get_symbol_earnings(symbol)
+
+        economic_events, earnings_event = await asyncio.gather(
+            events_task, earnings_task
+        )
+
+        from typing import cast
+
+        economic_events = cast(List[EconomicEvent], economic_events)
+
+        all_events: List[Union[EconomicEvent, EarningsEvent]] = []
+        all_events.extend(economic_events)
+        if earnings_event is not None and earnings_event.tte_hours <= days * 24:
+            all_events.append(earnings_event)
+
+        combined = sorted(all_events, key=lambda x: x.tte_hours)
+        return combined
+
     async def get_portfolio_events(
         self, user_id: int, days: int = 7
     ) -> List[Union[EconomicEvent, EarningsEvent]]:

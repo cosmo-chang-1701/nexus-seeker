@@ -149,9 +149,15 @@ class SymbolHubView(discord.ui.View):
             )
             poly_task = poly_service.get_market_snapshot(limit=10)
             ddp_task = ddp_inspector.inspect_symbol(self.symbol)
+            from services.calendar_service import calendar_service
+
+            catalyst_task = calendar_service.get_symbol_catalysts(self.symbol, days=14)
             df_hist_task = market_data_service.get_history_df(
                 self.symbol, period="1y", interval="1d"
             )
+            from market_analysis.volume_profile import calculate_volume_profile
+
+            vp_task = asyncio.to_thread(calculate_volume_profile, self.symbol)
 
             (
                 df_spy,
@@ -166,6 +172,8 @@ class SymbolHubView(discord.ui.View):
                 poly_markets,
                 ddp_report,
                 df_hist_1d,
+                catalysts,
+                vp_data,
             ) = await asyncio.gather(
                 spy_task,
                 macro_task,
@@ -179,6 +187,8 @@ class SymbolHubView(discord.ui.View):
                 poly_task,
                 ddp_task,
                 df_hist_task,
+                catalyst_task,
+                vp_task,
             )
 
             spy_price = df_spy["Close"].iloc[-1] if not df_spy.empty else 670.0
@@ -238,6 +248,39 @@ class SymbolHubView(discord.ui.View):
             # Polymarket odds
             poly_odds = find_matching_polymarket_odds(self.symbol, poly_markets)
             result["polymarket_odds"] = poly_odds
+            result["catalysts"] = catalysts
+            result["volume_profile"] = vp_data
+
+            from market_analysis.risk_engine import optimize_position_risk
+
+            stock_iv = (
+                iv_metrics.current_iv
+                if iv_metrics
+                and hasattr(iv_metrics, "current_iv")
+                and iv_metrics.current_iv
+                else 0.40
+            )
+            vol_pcr = (
+                float(pcr_data.get("volume_pcr", 0.8))
+                if isinstance(pcr_data, dict) and pcr_data.get("volume_pcr")
+                else 0.8
+            )
+            skew_val = float(safe_skew.get("skew", 0.0))
+
+            opt_result = optimize_position_risk(
+                current_delta=0.0,
+                unit_weighted_delta=0.16,
+                user_capital=ctx.capital,
+                spy_price=spy_price,
+                stock_iv=stock_iv,
+                strategy="STO",
+                macro_data=macro_data,
+                risk_limit=ctx.risk_limit,
+                vix_spot=macro_data.vix,
+                pcr=vol_pcr,
+                skew=skew_val,
+            )
+            result["kelly_sizing"] = opt_result
 
             self.base_data = result
             embed = create_tactical_symbol_embed(self.base_data)
