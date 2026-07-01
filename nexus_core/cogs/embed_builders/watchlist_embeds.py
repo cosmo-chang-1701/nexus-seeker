@@ -330,11 +330,11 @@ def create_watchlist_signal_embed(
         f" 標的分析中心 2.0: {symbol} 每半小時戰場心跳 (Watchlist Heartbeat){degraded_tag}",
         f" [{timestamp_str} - UTC+8] ｜ 系統狀態: {sys_status}",
         "",
-        " 當前現價 (Current Price)",
+        " 🏷️ 當前現價 (Current Price)",
         f" ├─ 現價: ${live_price:.2f} ({change_emoji} {change_pct:+.2f}% / ${change_raw:+.2f})",
         f" └─ 今日區間: 開盤: {open_val:.2f} | 最高: {high_val:.2f} | 最低: {low_val:.2f} | 前收: {prev_close:.2f}",
         "",
-        " 物理籌碼牆與邊緣偵測 (Market Footprints)",
+        " 🧱 物理籌碼牆與邊緣偵測 (Market Footprints)",
         f" ├─ GEX PutWall (做市商底牆): {gex_putwall_str} (當前價差: {gex_dist_str})",
         f" ├─ Vol POC (籌碼控制中心): {vol_poc_str}",
         f" └─ Option Skew (期權偏斜): {skew_val_str} (分位點: {skew_per_str})",
@@ -367,7 +367,8 @@ def create_watchlist_signal_embed(
                 max_abs_gex = max(max_abs_gex, 1.0)
 
                 lines.append("")
-                lines.append(" Gamma 曝險分布面板 (GEX Profile Matrix)")
+                lines.append(" 🧲 Gamma 曝險分布 (GEX Profile Matrix)")
+                lines.append(" ┌─ 履約價(Strike) ─ 曝險熱力圖 ─ [K]")
                 for i, k in enumerate(reversed(display_strikes)):
                     v = float(gex_prof.get(str(k), gex_prof.get(k, 0.0)))
                     bars = int((abs(v) / max_abs_gex) * 10)
@@ -393,7 +394,7 @@ def create_watchlist_signal_embed(
     lines.extend(
         [
             "",
-            " 隱含波動率與預期空間 (IV Context)",
+            " 📉 隱含波動率與預期空間 (IV Context)",
             f" ├─ Implied Volatility (IV): {iv_val_str} ｜ IV Rank: {iv_rank_str} ({iv_status_str})",
         ]
     )
@@ -422,12 +423,12 @@ def create_watchlist_signal_embed(
     lines.extend(
         [
             "",
-            " 結算與目標 (Target Lock)",
+            " 🎯 結算與目標 (Target Lock)",
             f" ├─ 最大痛點結算 (Max Pain): {max_pain_str}",
             f" ├─ Volume PCR (即時情緒): {vol_pcr_str} (狀態: {vol_pcr_status})",
             f" └─ OI PCR (結構防禦): {oi_pcr_str} (狀態: {oi_pcr_status})",
             "",
-            " 異常活動穿透 (Directional UOA - Bid/Ask Track)",
+            " 🔎 異常活動穿透 (Directional UOA - Bid/Ask Track)",
             " 到期日     | 履約價      | 類型 | 交易流向 [買/賣]      | 機構/OI    | 比例   | 戰略意圖映射",
             " ---------------------------------------------------------------------------------------",
         ]
@@ -436,7 +437,7 @@ def create_watchlist_signal_embed(
     lines.extend(
         [
             "",
-            " 賬戶股權防護指引 (Holding & Risk Alignment Guide)",
+            " 💼 賬戶股權防護指引 (Holding & Risk Alignment Guide)",
             f" ├─ 既有現貨持倉: {shares_str} 股 ｜ 平均成本: {avg_cost_str} ｜ 當前損益: {pnl_str}",
         ]
     )
