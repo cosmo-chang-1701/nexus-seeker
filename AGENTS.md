@@ -140,6 +140,8 @@ The heartbeat currently reuses logic from `market_analysis/intraday_pipeline.py`
 
 The active embed builder is `create_watchlist_signal_embed()` in `cogs/embed_builder.py`.
 
+The visibility of these sections is controlled by 4 granular notification toggles in `/notif_settings`: `hb_live_price`, `hb_options_structure`, `hb_uoa`, and `hb_execution_risk`.
+
 Current sections:
 
 1. **📊 技術 / 期權快照** (Technical/Options Snapshot ANSI Panel)
@@ -364,6 +366,7 @@ Configurations are strictly segregated into two functional areas to maximize sep
   - `tax_reserve_rate` (Tax reserve ratio, bounded between `0.0` and `1.0`)
   - `cash_reserve` (Cash reserve value for runway calculation)
 - **Notification Preferences (`/notif_settings`)**: Manages individual toggles stored in a key-value style `user_notification_settings` table (designed with composite primary key `(user_id, notification_key)` for infinite schema-less extensibility).
+  - **Granular Heartbeat Toggles**: The watchlist heartbeat is divided into 4 modular switches (`hb_live_price`, `hb_options_structure`, `hb_uoa`, `hb_execution_risk`), allowing users to completely customize which analysis blocks are rendered in their 30-minute updates.
 - **Polymarket Settings Migration**: To keep `/settings` focused entirely on portfolio financial metrics, Polymarket monitoring preferences (whale alert toggler `polymarket_whale_alert`, threshold `polymarket_threshold`, AI analysis switch `polymarket_use_llm`, and slippage threshold `polymarket_slippage`) are migrated to `/notif_settings` under their own dedicated selector.
 
 ### 2. UI Component Pipeline (`cogs/settings_ui.py` & `cogs/terminal.py`)

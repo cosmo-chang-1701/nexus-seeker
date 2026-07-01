@@ -873,12 +873,17 @@ class SchedulerCog(commands.Cog):
             return
 
         for uid, symbols in user_symbols.items():
-            if not database.is_notification_enabled(
-                uid, "watchlist_heartbeat_alignment"
-            ):
-                logger.info(
-                    f"使用者 {uid} 已關閉 watchlist_heartbeat_alignment 訂閱，略過心跳推送。"
-                )
+            notif_settings = database.get_user_notification_settings(uid)
+            hb_keys = [
+                "hb_live_price",
+                "hb_options_structure",
+                "hb_uoa",
+                "hb_execution_risk",
+            ]
+            hb_enabled = any(notif_settings.get(k, True) for k in hb_keys)
+
+            if not hb_enabled:
+                logger.info(f"使用者 {uid} 已關閉所有心跳模組訂閱，略過心跳推送。")
                 continue
 
             user_context = database.get_full_user_context(uid)

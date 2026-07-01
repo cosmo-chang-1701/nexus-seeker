@@ -98,7 +98,10 @@ def get_pending_count() -> int:
 
 ALL_NOTIFICATION_KEYS = [
     # 定時與掃描背景通知 (Scheduled & Scan)
-    "watchlist_heartbeat_alignment",
+    "hb_live_price",
+    "hb_options_structure",
+    "hb_uoa",
+    "hb_execution_risk",
     "pre_market_briefing",
     "intraday_decision_scan",
     "post_market_intelligence",

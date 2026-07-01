@@ -81,12 +81,30 @@ def create_watchlist_signal_embed(
     pcr_data: dict | None = None,
     uoa_list: list[dict] | None = None,
     symbol_gex: dict | None = None,
+    toggles: dict[str, bool] | None = None,
 ) -> discord.Embed:
     """建立標的分析中心 2.0 • 戰場心跳快照 (Watchlist Heartbeat) 的 Markdown-ASCII 統一模板。"""
     from services.llm_service import is_memory_safe
 
     taipei_tz = timezone(timedelta(hours=8))
     timestamp_str = datetime.now(taipei_tz).strftime("%Y-%m-%d %H:%M:%S")
+
+    toggles = toggles or {}
+    show_live_price = toggles.get("hb_live_price", True)
+
+    # 整合 2, 3, 4 -> hb_options_structure
+    hb_options = toggles.get("hb_options_structure", True)
+    show_market_footprints = hb_options
+    show_iv_context = hb_options
+    show_target_lock = hb_options
+
+    # 獨立 5 -> hb_uoa
+    show_uoa = toggles.get("hb_uoa", True)
+
+    # 整合 6, 7 -> hb_execution_risk
+    hb_exec = toggles.get("hb_execution_risk", True)
+    show_risk_alignment = hb_exec
+    show_telemetry = hb_exec
 
     sys_status = "TELEMETRY RUNNING"
     if not is_memory_safe():
@@ -329,18 +347,30 @@ def create_watchlist_signal_embed(
         "```ansi",
         f" 標的分析中心 2.0: {symbol} 每半小時戰場心跳 (Watchlist Heartbeat){degraded_tag}",
         f" [{timestamp_str} - UTC+8] ｜ 系統狀態: {sys_status}",
-        "",
-        " 🏷️ 當前現價 (Current Price)",
-        f" ├─ 現價: ${live_price:.2f} ({change_emoji} {change_pct:+.2f}% / ${change_raw:+.2f})",
-        f" └─ 今日區間: 開盤: {open_val:.2f} | 最高: {high_val:.2f} | 最低: {low_val:.2f} | 前收: {prev_close:.2f}",
-        "",
-        " 🧱 物理籌碼牆與邊緣偵測 (Market Footprints)",
-        f" ├─ GEX PutWall (做市商底牆): {gex_putwall_str} (當前價差: {gex_dist_str})",
-        f" ├─ Vol POC (籌碼控制中心): {vol_poc_str}",
-        f" └─ Option Skew (期權偏斜): {skew_val_str} (分位點: {skew_per_str})",
     ]
 
-    if (
+    if show_live_price:
+        lines.extend(
+            [
+                "",
+                " 🏷️ 當前現價 (Current Price)",
+                f" ├─ 現價: ${live_price:.2f} ({change_emoji} {change_pct:+.2f}% / ${change_raw:+.2f})",
+                f" └─ 今日區間: 開盤: {open_val:.2f} | 最高: {high_val:.2f} | 最低: {low_val:.2f} | 前收: {prev_close:.2f}",
+            ]
+        )
+
+    if show_market_footprints:
+        lines.extend(
+            [
+                "",
+                " 🧱 物理籌碼牆與邊緣偵測 (Market Footprints)",
+                f" ├─ GEX PutWall (做市商底牆): {gex_putwall_str} (當前價差: {gex_dist_str})",
+                f" ├─ Vol POC (籌碼控制中心): {vol_poc_str}",
+                f" └─ Option Skew (期權偏斜): {skew_val_str} (分位點: {skew_per_str})",
+            ]
+        )
+
+    if show_market_footprints and (
         symbol_gex
         and "gex_profile" in symbol_gex
         and isinstance(symbol_gex["gex_profile"], dict)
@@ -391,67 +421,78 @@ def create_watchlist_signal_embed(
         except Exception as e:
             lines.append(f" └─ [GEX 面板載入失敗: {e}]")
 
-    lines.extend(
-        [
-            "",
-            " 📉 隱含波動率與預期空間 (IV Context)",
-            f" ├─ Implied Volatility (IV): {iv_val_str} ｜ IV Rank: {iv_rank_str} ({iv_status_str})",
-        ]
-    )
-
-    if iv_term_status and iv_term_ratio is not None:
-        if iv_term_status == "Backwardation":
-            term_prefix = "⚠️ [Backwardation]"
-        elif iv_term_status == "Contango":
-            term_prefix = "🟩 [Contango]"
-        else:
-            term_prefix = "⚖️ [Normal]"
-        lines.append(
-            f" ├─ IV Term Structure (期限結構): {term_prefix} (近遠月比: {iv_term_ratio:.2f})"
-        )
-
-    if earnings_loading or macro_loading:
+    if show_iv_context:
         lines.extend(
             [
-                f" ├─ 本週預期波幅 (Expected Move): {expected_move_str}",
-                " └─ 備註: 實盤請預留 1.4x 波動邊界以防範 IV Crush。",
+                "",
+                " 📉 隱含波動率與預期空間 (IV Context)",
+                f" ├─ Implied Volatility (IV): {iv_val_str} ｜ IV Rank: {iv_rank_str} ({iv_status_str})",
             ]
         )
-    else:
-        lines.append(f" └─ 本週預期波幅 (Expected Move): {expected_move_str}")
 
-    lines.extend(
-        [
-            "",
-            " 🎯 結算與目標 (Target Lock)",
-            f" ├─ 最大痛點結算 (Max Pain): {max_pain_str}",
-            f" ├─ Volume PCR (即時情緒): {vol_pcr_str} (狀態: {vol_pcr_status})",
-            f" └─ OI PCR (結構防禦): {oi_pcr_str} (狀態: {oi_pcr_status})",
-            "",
-            " 🔎 異常活動穿透 (Directional UOA - Bid/Ask Track)",
-            " 到期日     | 履約價      | 類型 | 交易流向 [買/賣]      | 機構/OI    | 比例   | 戰略意圖映射",
-            " ---------------------------------------------------------------------------------------",
-        ]
-    )
-    lines.extend(uoa_table_lines)
-    lines.extend(
-        [
-            "",
-            " 💼 賬戶股權防護指引 (Holding & Risk Alignment Guide)",
-            f" ├─ 既有現貨持倉: {shares_str} 股 ｜ 平均成本: {avg_cost_str} ｜ 當前損益: {pnl_str}",
-        ]
-    )
-    if not has_position and buy_rationale:
-        lines.append(f" ├─ 量化建倉解讀: {buy_rationale}")
-    if has_position and sell_rationale:
-        lines.append(f" ├─ 量化止盈解讀: {sell_rationale}")
+        if iv_term_status and iv_term_ratio is not None:
+            if iv_term_status == "Backwardation":
+                term_prefix = "⚠️ [Backwardation]"
+            elif iv_term_status == "Contango":
+                term_prefix = "🟩 [Contango]"
+            else:
+                term_prefix = "⚖️ [Normal]"
+            lines.append(
+                f" ├─ IV Term Structure (期限結構): {term_prefix} (近遠月比: {iv_term_ratio:.2f})"
+            )
 
-    lines.extend(
-        [
-            f" └─ 操盤執行指南: {inst_str}",
-            "```",
-        ]
-    )
+        if earnings_loading or macro_loading:
+            lines.extend(
+                [
+                    f" ├─ 本週預期波幅 (Expected Move): {expected_move_str}",
+                    " └─ 備註: 實盤請預留 1.4x 波動邊界以防範 IV Crush。",
+                ]
+            )
+        else:
+            lines.append(f" └─ 本週預期波幅 (Expected Move): {expected_move_str}")
+
+    if show_target_lock:
+        lines.extend(
+            [
+                "",
+                " 🎯 結算與目標 (Target Lock)",
+                f" ├─ 最大痛點結算 (Max Pain): {max_pain_str}",
+                f" ├─ Volume PCR (即時情緒): {vol_pcr_str} (狀態: {vol_pcr_status})",
+                f" └─ OI PCR (結構防禦): {oi_pcr_str} (狀態: {oi_pcr_status})",
+            ]
+        )
+
+    if show_uoa:
+        lines.extend(
+            [
+                "",
+                " 🔎 異常活動穿透 (Directional UOA - Bid/Ask Track)",
+                " 到期日     | 履約價      | 類型 | 交易流向 [買/賣]      | 機構/OI    | 比例   | 戰略意圖映射",
+                " ---------------------------------------------------------------------------------------",
+            ]
+        )
+        lines.extend(uoa_table_lines)
+
+    if show_risk_alignment:
+        lines.extend(
+            [
+                "",
+                " 💼 賬戶股權防護指引 (Holding & Risk Alignment Guide)",
+                f" ├─ 既有現貨持倉: {shares_str} 股 ｜ 平均成本: {avg_cost_str} ｜ 當前損益: {pnl_str}",
+            ]
+        )
+        if not has_position and buy_rationale:
+            lines.append(f" ├─ 量化建倉解讀: {buy_rationale}")
+        if has_position and sell_rationale:
+            lines.append(f" ├─ 量化止盈解讀: {sell_rationale}")
+
+        lines.extend(
+            [
+                f" └─ 操盤執行指南: {inst_str}",
+            ]
+        )
+
+    lines.append("```")
     description = "\n".join(lines)
 
     color_val = {
@@ -480,7 +521,7 @@ def create_watchlist_signal_embed(
             timestamp=datetime.now(timezone.utc),
         )
 
-    if telemetry_alignment_note:
+    if show_telemetry and telemetry_alignment_note:
         try:
             val = _safe_embed_field_value(telemetry_alignment_note, "暫無對齊建議")
         except NameError:
@@ -583,11 +624,27 @@ def create_watchlist_overview_embed(
         overview_lines.append(
             f"{icon} {item.get('symbol', 'N/A')}｜{item.get('skew_state', 'N/A')}｜{scenario_label}{pnl_suffix}"
         )
-    embed.add_field(
-        name="📋 全標的速覽",
-        value=_safe_embed_field_value("\n".join(overview_lines), "暫無總覽"),
-        inline=False,
-    )
+    if not overview_lines:
+        embed.add_field(
+            name="📋 全標的速覽",
+            value=_safe_embed_field_value("", "暫無總覽"),
+            inline=False,
+        )
+    else:
+        chunk_size = 15
+        total_chunks = (len(overview_lines) + chunk_size - 1) // chunk_size
+        for i in range(total_chunks):
+            chunk = overview_lines[i * chunk_size : (i + 1) * chunk_size]
+            field_name = (
+                "📋 全標的速覽"
+                if total_chunks == 1
+                else f"📋 全標的速覽 ({i+1}/{total_chunks})"
+            )
+            embed.add_field(
+                name=field_name,
+                value=_safe_embed_field_value("\n".join(chunk), "暫無總覽"),
+                inline=False,
+            )
     embed.add_field(
         name="🤖 LLM 本輪摘要",
         value=_safe_embed_field_value(

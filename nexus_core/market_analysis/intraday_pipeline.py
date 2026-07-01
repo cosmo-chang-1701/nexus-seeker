@@ -772,7 +772,10 @@ class IntradayScanPipeline:
         self._intraday_scan_sent.add((user_id, ticker, trading_date))
 
     async def _build_watchlist_heartbeat_embed(
-        self, evaluation: WatchlistEvaluation, user_context: Any
+        self,
+        evaluation: WatchlistEvaluation,
+        user_context: Any,
+        notif_settings: dict | None = None,
     ) -> Any:
         import database
         from cogs.embed_builder import create_watchlist_signal_embed
@@ -879,6 +882,7 @@ class IntradayScanPipeline:
             suitable_sell_shares=signals.get("suitable_sell_shares"),
             buy_rationale=signals.get("buy_rationale"),
             sell_rationale=signals.get("sell_rationale"),
+            toggles=notif_settings,
             metrics=evaluation.metrics,
             symbol_gex=evaluation.symbol_gex,
         )
@@ -974,11 +978,22 @@ class IntradayScanPipeline:
                                 watchlist_eval is not None
                                 and watchlist_eval.tactical.alert_level != "green"
                             ):
-                                if database.is_notification_enabled(
-                                    uid, "watchlist_heartbeat_alignment"
-                                ):
+                                notif_settings = (
+                                    database.get_user_notification_settings(uid)
+                                )
+                                hb_keys = [
+                                    "hb_live_price",
+                                    "hb_options_structure",
+                                    "hb_uoa",
+                                    "hb_execution_risk",
+                                ]
+                                hb_enabled = any(
+                                    notif_settings.get(k, True) for k in hb_keys
+                                )
+
+                                if hb_enabled:
                                     embed = await self._build_watchlist_heartbeat_embed(
-                                        watchlist_eval, ctx
+                                        watchlist_eval, ctx, notif_settings
                                     )
                                     await self.bot.queue_dm(
                                         uid,
@@ -986,7 +1001,7 @@ class IntradayScanPipeline:
                                     )
                                 else:
                                     logger.info(
-                                        f"使用者 {uid} 已關閉 watchlist_heartbeat_alignment 訂閱，略過心跳推送。"
+                                        f"使用者 {uid} 已關閉所有心跳模組訂閱，略過心跳推送。"
                                     )
                             market_data = await self._fetch_ticker_market_data(ticker)
                             if not market_data:

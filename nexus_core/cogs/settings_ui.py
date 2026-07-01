@@ -16,7 +16,10 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 SCHEDULED_LABELS = {
-    "watchlist_heartbeat_alignment": "📊 自選心跳與委託對齊",
+    "hb_live_price": "🏷️ 心跳：基礎現價與區間",
+    "hb_options_structure": "🧱 心跳：期權結構與波動率",
+    "hb_uoa": "🔎 心跳：異常大單穿透 (UOA)",
+    "hb_execution_risk": "🛡️ 心跳：操盤指引與委託風控",
     "pre_market_briefing": "🌅 盤前綜合宏觀與自選股報告",
     "intraday_decision_scan": "⚡ 盤中量化掃描與執行指南",
     "post_market_intelligence": "📋 盤後綜合風險與 AI 策略報告",
