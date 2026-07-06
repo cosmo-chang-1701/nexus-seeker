@@ -4,7 +4,7 @@
 
 Nexus Seeker is a multi-tenant **Discord-first options risk-control and trading operations platform**. It combines technical structure, Black-Scholes-Merton pricing, Greeks-based portfolio risk, event-aware calendar defenses, and LLM-assisted structured commentary.
 
-Current released core version: **`1.9.12`**
+Current released core version: **`1.9.13`**
 
 The codebase is optimized for:
 
@@ -372,7 +372,7 @@ Configurations are strictly segregated into two functional areas to maximize sep
   - `tax_reserve_rate` (Tax reserve ratio, bounded between `0.0` and `1.0`)
   - `cash_reserve` (Cash reserve value for runway calculation)
 - **Notification Preferences (`/notif_settings`)**: Manages individual toggles stored in a key-value style `user_notification_settings` table (designed with composite primary key `(user_id, notification_key)` for infinite schema-less extensibility).
-  - **Granular Heartbeat Toggles**: The watchlist heartbeat is divided into 4 modular switches (`hb_live_price`, `hb_options_structure`, `hb_uoa`, `hb_execution_risk`), allowing users to completely customize which analysis blocks are rendered in their 30-minute updates.
+  - **Granular Heartbeat Toggles**: The watchlist heartbeat is divided into 4 modular switches (`hb_live_price`, `hb_options_structure`, `hb_uoa`, `hb_execution_risk`), allowing users to completely customize which analysis blocks are rendered in their 30-minute updates. Order Telemetry Alignment is completely decoupled into its own independent toggle (`order_telemetry_alignment_alert`).
 - **Polymarket Settings Migration**: To keep `/settings` focused entirely on portfolio financial metrics, Polymarket monitoring preferences (whale alert toggler `polymarket_whale_alert`, threshold `polymarket_threshold`, AI analysis switch `polymarket_use_llm`, and slippage threshold `polymarket_slippage`) are migrated to `/notif_settings` under their own dedicated selector.
 
 ### 2. UI Component Pipeline (`cogs/settings_ui.py` & `cogs/terminal.py`)
@@ -381,7 +381,7 @@ Both `/settings` and `/notif_settings` (defined in `cogs/terminal.py`) utilize e
 - **Dynamic Text Input Modals**: Selecting a numeric field triggers a Discord Modal popup (`AccountSettingsModal` or `NotificationSettingsModal`).
   - **Client-Side Validation & Sanitization**: The Modal's `on_submit()` performs rigorous validation. E.g., verifying numerical bounds, verifying `capital > 0`, and sanitizing user inputs (such as automatically dividing percentages if a user enters `20` instead of `0.20` for `tax_reserve_rate`).
   - **View Refreshing**: On successful validation and persistence, the modal dynamically triggers a re-draw on the parent View to refresh the dashboard instantly without sending extra message blocks.
-- **Global Preferences Control**: `/notif_settings` features global helper buttons `⚡ 全部開啟 (Enable All)` and `💤 全部關閉 (Disable All)` to turn all 18+ alert switches on or off in a single batch query.
+- **Global Preferences Control**: `/notif_settings` features global helper buttons `⚡ 全部開啟 (Enable All)` and `💤 全部關閉 (Disable All)` to turn all 16 alert switches on or off in a single batch query.
 
 ### 3. Integration Test Compatibility Design
 Discord slash command callbacks in `discord.app_commands.Command` are read-only. To allow the slash command to be parameter-free for Discord UI users while retaining fully-parameterized programmatic execution for integration tests, we dynamically wrap the command's private `_callback` reference during `TerminalCog` initialization:
