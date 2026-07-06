@@ -643,30 +643,6 @@ async def evaluate_watchlist_symbol(
     )
 
 
-def build_watchlist_skew_commentary_payload(
-    evaluation: WatchlistEvaluation,
-) -> dict[str, Any]:
-    """Legacy payload used by LLM commentary (kept for backward compatibility)."""
-    event_risk_summary = (
-        evaluation.event_context.summary
-        if evaluation.event_context is not None
-        else "未偵測到近期重大事件"
-    )
-    return {
-        "symbol": evaluation.metrics.symbol,
-        "current_price": evaluation.metrics.current_price,
-        "iv_rank": evaluation.metrics.iv_rank,
-        "option_skew": evaluation.metrics.option_skew,
-        "option_skew_state": evaluation.metrics.option_skew_state,
-        "alert_level": evaluation.tactical.alert_level,
-        "scenario": evaluation.tactical.scenario,
-        "sddm_route": evaluation.tactical.sddm_route,
-        "buy_zone_status": evaluation.metrics.buy_zone_status,
-        "sell_zone_status": evaluation.metrics.sell_zone_status,
-        "event_risk_summary": event_risk_summary,
-    }
-
-
 _SKEW_PCR_DIVERGENCE_WARNING = (
     "[⚠️ WARNING: Structural Sentiment Divergence] Skew 分位極端且 PCR 指向相反極端，"
     "代表市場結構分裂（常見為機構對沖 vs 散戶追逐買權）。"

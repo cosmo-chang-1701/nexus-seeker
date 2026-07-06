@@ -398,8 +398,10 @@ def create_watchlist_signal_embed(
                 max_abs_gex = max([abs(_safe_gex(k)) for k in display_strikes])
                 max_abs_gex = max(max_abs_gex, 1.0)
 
+                is_stale = bool(symbol_gex.get("_is_stale_cache", False))
+                stale_suffix = " [快取 / API 降級]" if is_stale else ""
                 lines.append("")
-                lines.append(" 🧲 Gamma 曝險分布 (GEX Profile Matrix)")
+                lines.append(f" 🧲 Gamma 曝險分布 (GEX Profile Matrix){stale_suffix}")
                 lines.append(" ┌─ 履約價(Strike) ─ 曝險熱力圖 ─ [K]")
                 for i, k in enumerate(reversed(display_strikes)):
                     v = _safe_gex(k)

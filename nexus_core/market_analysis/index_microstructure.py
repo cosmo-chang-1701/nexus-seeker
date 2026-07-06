@@ -188,14 +188,17 @@ async def fetch_symbol_gex_metrics(symbol: str) -> dict:
     from database.cache import get_kv_cache, save_kv_cache
 
     cache_key = f"gex_metrics_{symbol.upper()}"
+    stale_cached_data: dict | None = None
     try:
         cached_obj = await asyncio.to_thread(get_kv_cache, cache_key)
         if cached_obj and isinstance(cached_obj, dict):
-            # 快取有效期設定為 4 小時 (14400 秒)
-            if time.time() - cached_obj.get("timestamp", 0) < 14400:
-                data = cached_obj.get("data")
-                if isinstance(data, dict):
+            data = cached_obj.get("data")
+            if isinstance(data, dict):
+                # 快取有效期設定為 4 小時 (14400 秒)
+                if time.time() - cached_obj.get("timestamp", 0) < 14400:
                     return data
+                # 快取已過期，保留作為 API 失敗時的降級備援
+                stale_cached_data = data
     except Exception as e:
         logger.warning(f"讀取 GEX 快取失敗 ({symbol}): {e}")
 
@@ -208,6 +211,9 @@ async def fetch_symbol_gex_metrics(symbol: str) -> dict:
     }
 
     if not getattr(config, "TUNNEL_URL", ""):
+        if stale_cached_data is not None:
+            logger.warning(f"[{symbol}] TUNNEL_URL 未設定，回傳過期 GEX 快取資料。")
+            return {**stale_cached_data, "_is_stale_cache": True}
         return fallback
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -227,4 +233,8 @@ async def fetch_symbol_gex_metrics(symbol: str) -> dict:
                     return result_data
     except Exception as e:
         logger.warning(f"無法從 Tunnel Scraper 獲取 {symbol} GEX 數據: {e}")
+
+    if stale_cached_data is not None:
+        logger.warning(f"[{symbol}] API 不可用，回傳過期 GEX 快取資料作為降級備援。")
+        return {**stale_cached_data, "_is_stale_cache": True}
     return fallback
