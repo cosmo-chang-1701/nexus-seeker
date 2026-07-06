@@ -92,7 +92,7 @@ async def test_notification_settings_view_structure(db_conn):
     select_polymarket = next(
         c for c in view.children if c.custom_id == "select_polymarket"
     )
-    assert len(select_scheduled.options) == 8
+    assert len(select_scheduled.options) == 9
     assert len(select_realtime.options) == 6
     assert len(select_polymarket.options) == 4
 
