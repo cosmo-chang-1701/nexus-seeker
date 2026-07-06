@@ -20,24 +20,25 @@ SCHEDULED_LABELS = {
     "hb_options_structure": "🧱 心跳：期權結構與波動率",
     "hb_uoa": "🔎 心跳：異常大單穿透 (UOA)",
     "hb_execution_risk": "🛡️ 心跳：操盤指引與委託風控",
-    "pre_market_briefing": "🌅 盤前綜合宏觀與自選股報告",
-    "intraday_decision_scan": "⚡ 盤中量化掃描與執行指南",
-    "post_market_intelligence": "📋 盤後綜合風險與 AI 策略報告",
-    "weekly_vtr_report": "📅 每週 VTR 績效週報",
+    "pre_market_briefing": "🌅 Nexus Seeker | 盤前綜合宏觀與自選股報告",
+    "intraday_decision_scan": "📊 Nexus Seeker | 盤中量化掃描 & 避險執行指南",
+    "post_market_intelligence": "📋 Nexus Seeker | 盤後綜合風險與 AI 策略報告",
+    "weekly_vtr_report": "📈 Nexus Seeker | 虛擬交易室 (VTR) 績效總結",
+    "order_telemetry_alignment_alert": "🌌 Nexus Seeker | 待成交委託單實時對齊快照",
 }
 
 REALTIME_LABELS = {
-    "profit_lock_alert": "💰 期權實單利潤鎖定警報",
-    "gamma_fragility_alert": "⚠️ 組合 Gamma 脆弱性警報",
+    "profit_lock_alert": "🚨 DITM 凸性防護：獲利鎖定已觸發",
+    "gamma_fragility_alert": "🆘 Gamma 脆弱性警告",
     "option_defense_alert": "🛡️ 期權轉倉防禦與結算警報",
-    "ddp_cheap_vol_alert": "🌌 雙擊與便宜波動率預警",
-    "volatility_risk_alert": "🌪️ 波動率與重大事件對沖警報",
+    "ddp_cheap_vol_alert": "🌌 Nexus 戴維斯雙擊預警",
+    "volatility_risk_alert": "🛡️ 【 預警：重大事件即時防護 】",
     "deadlock_recovery_alert": "🔓 物理死鎖解除與備兌建單指引",
 }
 
 POLYMARKET_SETTINGS_LABELS = {
     "polymarket_whale_alert": (
-        "🐳 巨鯨交易異動警報",
+        "🐋 Polymarket 巨鯨意圖與戰報警報",
         "切換巨鯨交易異動警報開啟/關閉狀態",
         None,
     ),

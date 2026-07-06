@@ -346,7 +346,7 @@ class SchedulerCog(commands.Cog):
             )
 
             for uid, data in results.items():
-                if not database.is_notification_enabled(uid, "pre_market_earnings"):
+                if not database.is_notification_enabled(uid, "pre_market_briefing"):
                     continue
                 user = await self.bot.fetch_user(uid)
                 if user:
@@ -755,13 +755,15 @@ class SchedulerCog(commands.Cog):
             try:
                 # 如果有 AI 報告，先發送 AI 報告 Embed
                 if ai_enabled and "ai_report" in locals() and ai_report:
-                    if database.is_notification_enabled(uid, "post_market_ai"):
+                    if database.is_notification_enabled(
+                        uid, "post_market_intelligence"
+                    ):
                         ai_embed = create_ai_analysis_embed(ai_report)
                         await self.bot.queue_dm(uid, embed=ai_embed)
                         logger.info(f"盤後 AI 深度分析 Embed 已排入 DM 佇列，uid={uid}")
 
                 # 發送標準風險結算報告 Embed
-                if database.is_notification_enabled(uid, "post_market_risk"):
+                if database.is_notification_enabled(uid, "post_market_intelligence"):
                     await self.bot.queue_dm(uid, embed=embed)
                     stats["users_queued"] += 1
                     logger.info(f"盤後風險結算報告已排入 DM 佇列，uid={uid}")

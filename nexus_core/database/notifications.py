@@ -106,6 +106,7 @@ ALL_NOTIFICATION_KEYS = [
     "intraday_decision_scan",
     "post_market_intelligence",
     "weekly_vtr_report",
+    "order_telemetry_alignment_alert",
     # 即時風險與事件警報 (Real-time & Events)
     "profit_lock_alert",
     "gamma_fragility_alert",
