@@ -23,19 +23,26 @@ async def test_run_sector_flow_report():
 
     # Mock dependencies
     with patch(
-        "cogs.analyst_agent.get_macro_environment", new_callable=AsyncMock
+        "market_analysis.analyst_runners.sector_runner.get_macro_environment",
+        new_callable=AsyncMock,
     ) as mock_macro, patch(
-        "cogs.analyst_agent.get_quote", new_callable=AsyncMock
+        "market_analysis.analyst_runners.sector_runner.get_quote",
+        new_callable=AsyncMock,
     ) as mock_quote, patch(
-        "cogs.analyst_agent.get_history_df", new_callable=AsyncMock
+        "market_analysis.analyst_runners.sector_runner.get_history_df",
+        new_callable=AsyncMock,
     ) as mock_hist, patch(
-        "cogs.analyst_agent.SentimentEngine.calculate_skew", new_callable=AsyncMock
+        "market_analysis.analyst_runners.sector_runner.SentimentEngine.calculate_skew",
+        new_callable=AsyncMock,
     ) as mock_skew, patch(
-        "cogs.analyst_agent.SentimentEngine.detect_uoa", new_callable=AsyncMock
+        "market_analysis.analyst_runners.sector_runner.SentimentEngine.detect_uoa",
+        new_callable=AsyncMock,
     ) as mock_uoa, patch(
-        "cogs.analyst_agent.SentimentEngine.calculate_max_pain", new_callable=AsyncMock
+        "market_analysis.analyst_runners.sector_runner.SentimentEngine.calculate_max_pain",
+        new_callable=AsyncMock,
     ) as mock_max_pain, patch(
-        "cogs.analyst_agent.generate_analyst_report", new_callable=AsyncMock
+        "market_analysis.analyst_runners.sector_runner.generate_analyst_report",
+        new_callable=AsyncMock,
     ) as mock_gen_report, patch(
         "httpx.AsyncClient.get", new_callable=AsyncMock
     ) as mock_httpx_get:
@@ -169,9 +176,11 @@ async def test_run_next_day_strategy_success():
     agent._fetch_macro_data = AsyncMock(return_value={"vix": 14.5})
 
     with patch(
-        "cogs.analyst_agent.get_vix_term_structure", new_callable=AsyncMock
+        "market_analysis.analyst_runners.strategy_runner.get_vix_term_structure",
+        new_callable=AsyncMock,
     ) as mock_vts, patch(
-        "cogs.analyst_agent.SentimentEngine.calculate_skew", new_callable=AsyncMock
+        "market_analysis.analyst_runners.strategy_runner.SentimentEngine.calculate_skew",
+        new_callable=AsyncMock,
     ) as mock_skew:
         mock_vts.return_value = {
             "vts_ratio": 0.85,
@@ -201,9 +210,11 @@ async def test_run_next_day_strategy_failure_fallbacks():
     agent._fetch_macro_data = AsyncMock(return_value={"vix": 20.0})
 
     with patch(
-        "cogs.analyst_agent.get_vix_term_structure", new_callable=AsyncMock
+        "market_analysis.analyst_runners.strategy_runner.get_vix_term_structure",
+        new_callable=AsyncMock,
     ) as mock_vts, patch(
-        "cogs.analyst_agent.SentimentEngine.calculate_skew", new_callable=AsyncMock
+        "market_analysis.analyst_runners.strategy_runner.SentimentEngine.calculate_skew",
+        new_callable=AsyncMock,
     ) as mock_skew:
         mock_vts.side_effect = Exception("VTS failed")
         mock_skew.side_effect = Exception("Skew failed")
@@ -242,26 +253,33 @@ async def test_run_premarket_earnings_sorting_and_filtering():
     }
 
     with patch(
-        "cogs.analyst_agent.get_all_watchlist", return_value=mock_watchlist
+        "market_analysis.analyst_runners.earnings_runner.get_all_watchlist",
+        return_value=mock_watchlist,
     ) as mock_get_wl, patch(
-        "cogs.analyst_agent.database.get_all_portfolio", return_value=mock_portfolio
+        "market_analysis.analyst_runners.earnings_runner.database.get_all_portfolio",
+        return_value=mock_portfolio,
     ) as mock_get_pf, patch(
         "services.calendar_service.calendar_service.get_symbol_earnings_batch",
         new_callable=AsyncMock,
     ) as mock_get_batch, patch(
-        "cogs.analyst_agent.fetch_recent_news", new_callable=AsyncMock
+        "market_analysis.analyst_runners.earnings_runner.fetch_recent_news",
+        new_callable=AsyncMock,
     ) as mock_fetch_news, patch(
-        "cogs.analyst_agent.get_reddit_context", new_callable=AsyncMock
+        "market_analysis.analyst_runners.earnings_runner.get_reddit_context",
+        new_callable=AsyncMock,
     ) as mock_fetch_reddit, patch(
-        "cogs.analyst_agent.generate_analyst_report", new_callable=AsyncMock
+        "market_analysis.analyst_runners.earnings_runner.generate_analyst_report",
+        new_callable=AsyncMock,
     ) as mock_gen_report, patch(
-        "cogs.analyst_agent.create_earnings_report_embed"
+        "market_analysis.analyst_runners.earnings_runner.create_earnings_report_embed"
     ) as mock_create_embed, patch(
-        "cogs.analyst_agent.evaluate_watchlist_symbol", new_callable=AsyncMock
+        "market_analysis.analyst_runners.earnings_runner.evaluate_watchlist_symbol",
+        new_callable=AsyncMock,
     ) as mock_eval_symbol, patch(
-        "cogs.analyst_agent.SentimentEngine.calculate_pcr", new_callable=AsyncMock
+        "market_analysis.analyst_runners.earnings_runner.SentimentEngine.calculate_pcr",
+        new_callable=AsyncMock,
     ) as mock_calc_pcr, patch(
-        "cogs.analyst_agent.market_data_service.get_company_profile",
+        "market_analysis.analyst_runners.earnings_runner.market_data_service.get_company_profile",
         new_callable=AsyncMock,
     ) as mock_get_profile:
         mock_get_batch.return_value = mock_earnings

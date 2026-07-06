@@ -24,11 +24,14 @@ async def test_analyst_agent_integration_with_sentiment_engine():
 
     # Mock 底層數據服務
     with patch(
-        "cogs.analyst_agent.get_macro_environment", new_callable=AsyncMock
+        "market_analysis.analyst_runners.sector_runner.get_macro_environment",
+        new_callable=AsyncMock,
     ) as mock_macro, patch(
-        "cogs.analyst_agent.get_quote", new_callable=AsyncMock
+        "market_analysis.analyst_runners.sector_runner.get_quote",
+        new_callable=AsyncMock,
     ) as mock_quote, patch(
-        "cogs.analyst_agent.get_history_df", new_callable=AsyncMock
+        "market_analysis.analyst_runners.sector_runner.get_history_df",
+        new_callable=AsyncMock,
     ) as mock_hist, patch(
         "market_analysis.sentiment.max_pain.market_data_service.get_all_option_expiries",
         new_callable=AsyncMock,
@@ -41,7 +44,8 @@ async def test_analyst_agent_integration_with_sentiment_engine():
     ) as mock_quote_svc, patch(
         "httpx.AsyncClient.get", new_callable=AsyncMock
     ) as mock_httpx_get, patch(
-        "cogs.analyst_agent.generate_analyst_report", new_callable=AsyncMock
+        "market_analysis.analyst_runners.sector_runner.generate_analyst_report",
+        new_callable=AsyncMock,
     ) as mock_gen_report:
         # Mock AnalystAgent 的巨觀數據
         mock_macro.return_value = {"vix": 15.0}
