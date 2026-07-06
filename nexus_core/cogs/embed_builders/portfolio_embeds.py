@@ -839,8 +839,12 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                     pass
 
                 gex_lines.append("```")
+
+                is_stale = bool(gex_data.get("_is_stale_cache", False))
+                stale_suffix = " [快取 / API 降級]" if is_stale else ""
+
                 embed.add_field(
-                    name="🧲 Gamma 曝險分布 (GEX Profile)",
+                    name=f"🧲 Gamma 曝險分布 (GEX Profile){stale_suffix}",
                     value="\n".join(gex_lines),
                     inline=False,
                 )
