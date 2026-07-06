@@ -29,9 +29,11 @@ async def test_dispatch_intraday_guide_uses_builder():
     ), patch("database.get_all_user_ids", return_value=[1]), patch(
         "database.get_full_user_context"
     ) as mock_ctx, patch(
-        "cogs.analyst_agent.create_intraday_execution_guide_embed",
+        "market_analysis.analyst_runners.intraday_runner.create_intraday_execution_guide_embed",
         return_value=embed,
-    ) as mock_builder, patch("cogs.analyst_agent.datetime") as mock_datetime:
+    ) as mock_builder, patch(
+        "market_analysis.analyst_runners.intraday_runner.datetime"
+    ) as mock_datetime:
         mock_now = datetime.datetime(2024, 1, 1, 10, 0, 0)
         mock_datetime.now.return_value = mock_now
         mock_datetime.side_effect = lambda *args, **kwargs: datetime.datetime(
@@ -90,7 +92,7 @@ async def test_dispatch_intraday_guide_memory_gate_uses_builder():
     with patch("psutil.virtual_memory") as mock_vmem, patch(
         "database.get_all_user_ids", return_value=[1]
     ), patch("database.get_full_user_context") as mock_ctx, patch(
-        "cogs.analyst_agent.create_intraday_execution_guide_embed",
+        "market_analysis.analyst_runners.intraday_runner.create_intraday_execution_guide_embed",
         return_value=embed,
     ) as mock_builder:
         mock_mem = MagicMock()

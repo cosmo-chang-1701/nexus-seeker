@@ -33,7 +33,9 @@ async def test_dispatch_intraday_guide_phases(mock_bot):
         new_callable=AsyncMock,
     ) as mock_skew, patch("database.get_all_user_ids") as mock_users, patch(
         "database.get_full_user_context"
-    ) as mock_ctx, patch("cogs.analyst_agent.datetime") as mock_datetime:
+    ) as mock_ctx, patch(
+        "market_analysis.analyst_runners.intraday_runner.datetime"
+    ) as mock_datetime:
         # Mock standard data
         mock_mem = MagicMock()
         mock_mem.percent = 50.0  # Normal memory
