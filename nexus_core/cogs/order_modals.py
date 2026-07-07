@@ -5,13 +5,15 @@ from business logic (now in services/order_telemetry_service.py).
 """
 
 import asyncio
+from typing import Any
 import discord
 import logging
 from cogs.embed_builder import create_info_embed, create_error_embed
 from database.orders import (
     add_active_order,
     delete_active_order,
-    update_active_order_price,
+    get_active_order,
+    update_active_order_fields,
 )
 
 logger = logging.getLogger(__name__)
@@ -363,6 +365,8 @@ class CancelOrderModal(discord.ui.Modal):
 
 class EditOrderModal(discord.ui.Modal):
     order_id: discord.ui.TextInput
+    new_symbol: discord.ui.TextInput
+    new_quantity: discord.ui.TextInput
     new_side: discord.ui.TextInput
     new_price: discord.ui.TextInput
 
@@ -374,17 +378,30 @@ class EditOrderModal(discord.ui.Modal):
             default=str(order_id) if order_id is not None else None,
             required=True,
         )
+        self.new_symbol = discord.ui.TextInput(
+            label="新標的代碼",
+            placeholder="例如: AAPL（留空則不變更）",
+            required=False,
+            max_length=10,
+        )
+        self.new_quantity = discord.ui.TextInput(
+            label="新數量",
+            placeholder="例如: 100（留空則不變更）",
+            required=False,
+        )
         self.new_side = discord.ui.TextInput(
             label="委託方向 (BUY/SELL)",
-            placeholder="例如: BUY 或 SELL（留空則不變）",
+            placeholder="例如: BUY 或 SELL（留空則不變更）",
             required=False,
         )
         self.new_price = discord.ui.TextInput(
-            label="新限價 / 新價格 / 新追蹤值",
+            label="新限價 / 新停損價 / 新追蹤值",
             placeholder="例如: 82.5（留空則不變更價格）",
             required=False,
         )
         self.add_item(self.order_id)
+        self.add_item(self.new_symbol)
+        self.add_item(self.new_quantity)
         self.add_item(self.new_side)
         self.add_item(self.new_price)
 
@@ -400,6 +417,28 @@ class EditOrderModal(discord.ui.Modal):
                 ephemeral=True,
             )
             return
+
+        symbol_to_apply = (
+            self.new_symbol.value.strip().upper() if self.new_symbol.value else None
+        )
+
+        quantity_to_apply = None
+        if self.new_quantity.value:
+            qty_text = self.new_quantity.value.strip()
+            try:
+                if "." in qty_text:
+                    raise ValueError()
+                quantity_to_apply = int(qty_text)
+                if quantity_to_apply <= 0:
+                    raise ValueError()
+            except Exception:
+                await interaction.followup.send(
+                    embed=create_error_embed(
+                        "❌ 錯誤：請輸入有效的正整數作為新數量（或留空不變更）。"
+                    ),
+                    ephemeral=True,
+                )
+                return
 
         price_text = self.new_price.value.strip() if self.new_price.value else ""
         price: float | None = None
@@ -417,7 +456,7 @@ class EditOrderModal(discord.ui.Modal):
                 )
                 return
 
-        new_side = self.new_side.value.strip().upper()
+        new_side = self.new_side.value.strip().upper() if self.new_side.value else ""
         side_to_apply: str | None = None
         if new_side:
             if new_side not in ("BUY", "SELL"):
@@ -430,35 +469,67 @@ class EditOrderModal(discord.ui.Modal):
                 return
             side_to_apply = new_side
 
-        if price is None and side_to_apply is None:
+        if (
+            price is None
+            and side_to_apply is None
+            and symbol_to_apply is None
+            and quantity_to_apply is None
+        ):
             await interaction.followup.send(
-                embed=create_error_embed(
-                    "❌ 錯誤：請至少填寫『新價格』或『方向』其中一項。"
-                ),
+                embed=create_error_embed("❌ 錯誤：請至少填寫一個要變更的欄位。"),
                 ephemeral=True,
             )
             return
 
         try:
+            # 取出訂單以判斷 order_type (用以 mapping price)
+            order = await asyncio.to_thread(get_active_order, oid)
+            if not order:
+                await interaction.followup.send(
+                    embed=create_error_embed(
+                        f"❌ 錯誤：找不到委託單 ID `{oid}`，請確認 ID 是否正確。"
+                    ),
+                    ephemeral=True,
+                )
+                return
+
+            update_kwargs: dict[str, Any] = {}
+            if symbol_to_apply:
+                update_kwargs["symbol"] = symbol_to_apply
+            if quantity_to_apply:
+                update_kwargs["quantity"] = quantity_to_apply
+            if side_to_apply:
+                update_kwargs["side"] = side_to_apply
+
+            if price is not None:
+                o_type = order.get("order_type", "")
+                if o_type in ("LIMIT", "STOP_LIMIT"):
+                    update_kwargs["limit_price"] = price
+                if o_type in ("STOP", "STOP_LIMIT"):
+                    update_kwargs["stop_price"] = price
+                if o_type in ("TRAILING_STOP_USD", "TRAILING_STOP_PCT"):
+                    update_kwargs["trailing_value"] = price
+
             # 2. 將同步的資料庫操作交給執行緒，避免阻塞事件循環
             success = await asyncio.to_thread(
-                update_active_order_price, oid, price, None, side_to_apply
+                update_active_order_fields, oid, **update_kwargs
             )
             if success:
-                side_msg = (
-                    f"方向更新為 `{side_to_apply}`" if side_to_apply else "方向未變更"
-                )
-                price_msg = (
-                    f"新價格: `${price:.2f}` (或 {price:.2f}%)"
-                    if price is not None
-                    else "價格未變更"
-                )
+                updates_msg = []
+                if symbol_to_apply:
+                    updates_msg.append(f"標的: `{symbol_to_apply}`")
+                if quantity_to_apply:
+                    updates_msg.append(f"數量: `{quantity_to_apply}`")
+                if side_to_apply:
+                    updates_msg.append(f"方向: `{side_to_apply}`")
+                if price is not None:
+                    updates_msg.append(f"新價格/追蹤值: `{price}`")
+
                 embed = create_info_embed(
                     title="編輯委託單成功",
                     message=(
                         f"✅ **成功更新委託單**：委託單 ID `{oid}`\n"
-                        f"• {price_msg}\n"
-                        f"• {side_msg}"
+                        f"• 更新項目: " + ", ".join(updates_msg)
                     ),
                 )
             else:

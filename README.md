@@ -183,6 +183,7 @@ docker compose up -d --build
 - `/skew_scan`：期權波動率偏斜、PCR、UOA 與 Max Pain 當前解析。
 - `/order_panel`：彈出動態 Modal 以新增現股/期權委託單。
 - `/list_orders`：列出當前活躍委託單，支援 symbol 篩選，並附帶「編輯」與「取消」按鈕。
+- `/edit_order`：編輯指定的待成交委託單。支援以引數直接修改所有欄位（標的、數量、類型、效期、方向、價格），或留空喚起互動式表單進行編輯。
 - `/cc_recovery [symbol]`：為指定標的篩選並展示前 3 個最優防禦性收租 Covered Call 期權合約 (篩選條件為 DTE 30-50, Delta < 0.15, 年化收益率 >= 10.0%)。
 - `/telemetry_alert`：遙測偏離提醒，支援「一鍵套用遙測建議價與安全倉位」，自動於極端 Skew 下打 75 折並微調掛單價格。
 - `/force_macro_update`：`[Admin]` 強制爬蟲重爬並更新大盤 GEX 與 FedWatch 快取。

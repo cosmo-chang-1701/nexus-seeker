@@ -6,6 +6,7 @@ This module retains only the Cog class (slash command routing) and backward-comp
 """
 
 import discord
+from typing import Any
 from discord import app_commands
 from discord.ext import commands
 import logging
@@ -20,7 +21,8 @@ from database.orders import (
     add_active_order,
     get_user_active_orders,
     delete_active_order,
-    update_active_order_price,
+    get_active_order,
+    update_active_order_fields,
 )
 
 logger = logging.getLogger(__name__)
@@ -473,31 +475,73 @@ class OrderUICog(commands.Cog):
     )
     @app_commands.describe(
         order_id="委託單 ID (留空則彈出對話框輸入)",
-        price="新限價 / 新價格 / 新追蹤值 (留空則不變更價格)",
-        side="新委託方向 (BUY 買入 / SELL 賣出，留空則不變)",
+        symbol="新標的代碼 (例如 AAPL，留空不變)",
+        quantity="新委託數量 (留空不變)",
+        order_type="新訂單類型 (留空不變)",
+        validity="新有效期限 (留空不變)",
+        side="新委託方向 (BUY/SELL，留空不變)",
+        price="新價格/追蹤值 (自動對應到限價/停損/追蹤值)",
     )
     @app_commands.choices(
+        order_type=[
+            app_commands.Choice(name="市價單 (MARKET)", value="MARKET"),
+            app_commands.Choice(name="限價單 (LIMIT)", value="LIMIT"),
+            app_commands.Choice(name="停損單 (STOP)", value="STOP"),
+            app_commands.Choice(name="停損限價單 (STOP_LIMIT)", value="STOP_LIMIT"),
+            app_commands.Choice(
+                name="追蹤停損單 USD (TRAILING_STOP_USD)", value="TRAILING_STOP_USD"
+            ),
+            app_commands.Choice(
+                name="追蹤停損單 PCT (TRAILING_STOP_PCT)", value="TRAILING_STOP_PCT"
+            ),
+        ],
+        validity=[
+            app_commands.Choice(name="當日有效 (DAY)", value="DAY"),
+            app_commands.Choice(name="盤前+當日+盤後 (EXT_DAY)", value="EXT_DAY"),
+            app_commands.Choice(name="夜盤 (NIGHT)", value="NIGHT"),
+            app_commands.Choice(name="90天長期有效 (GTC_90)", value="GTC_90"),
+        ],
         side=[
             app_commands.Choice(name="買入 (BUY)", value="BUY"),
             app_commands.Choice(name="賣出 (SELL)", value="SELL"),
-        ]
+        ],
     )
     async def edit_order(
         self,
         interaction: discord.Interaction,
         order_id: int | None = None,
-        price: float | None = None,
+        symbol: str | None = None,
+        quantity: float | None = None,
+        order_type: str | None = None,
+        validity: str | None = None,
         side: str | None = None,
+        price: float | None = None,
     ):
         if order_id is None:
             await interaction.response.send_modal(EditOrderModal())
             return
 
-        if price is None and side is None:
+        if (
+            symbol is None
+            and quantity is None
+            and order_type is None
+            and validity is None
+            and side is None
+            and price is None
+        ):
             await interaction.response.send_modal(EditOrderModal(order_id=order_id))
             return
 
         await interaction.response.defer(ephemeral=True)
+
+        if quantity is not None:
+            if quantity <= 0 or not quantity.is_integer():
+                await interaction.followup.send(
+                    embed=create_error_embed("❌ 錯誤：請輸入有效的正整數作為新數量。"),
+                    ephemeral=True,
+                )
+                return
+
         if price is not None and price <= 0:
             await interaction.followup.send(
                 embed=create_error_embed("❌ 錯誤：請輸入有效的正數作為新價格。"),
@@ -505,35 +549,57 @@ class OrderUICog(commands.Cog):
             )
             return
 
-        side_to_apply = None
-        if side:
-            side_to_apply = side.strip().upper()
-            if side_to_apply not in ("BUY", "SELL"):
+        try:
+            # 取得原始訂單資料以進行價格對應邏輯判斷
+            order = await asyncio.to_thread(get_active_order, order_id)
+            if not order:
                 await interaction.followup.send(
-                    embed=create_error_embed("❌ 錯誤：方向請輸入 BUY 或 SELL。"),
+                    embed=create_error_embed(
+                        f"❌ 錯誤：找不到委託單 ID `{order_id}`，請確認 ID 是否正確。"
+                    ),
                     ephemeral=True,
                 )
                 return
 
-        try:
+            update_kwargs: dict[str, Any] = {}
+            if symbol is not None:
+                update_kwargs["symbol"] = symbol.strip().upper()
+            if quantity is not None:
+                update_kwargs["quantity"] = int(quantity)
+            if order_type is not None:
+                update_kwargs["order_type"] = order_type
+            if validity is not None:
+                update_kwargs["validity"] = validity
+            if side is not None:
+                update_kwargs["side"] = side
+
+            if price is not None:
+                # 決定當前的訂單類型（若有更新則以新類型為主，否則用原來的）
+                current_order_type = (
+                    order_type
+                    if order_type is not None
+                    else order.get("order_type", "")
+                )
+                if current_order_type in ("LIMIT", "STOP_LIMIT"):
+                    update_kwargs["limit_price"] = price
+                if current_order_type in ("STOP", "STOP_LIMIT"):
+                    update_kwargs["stop_price"] = price
+                if current_order_type in ("TRAILING_STOP_USD", "TRAILING_STOP_PCT"):
+                    update_kwargs["trailing_value"] = price
+
             success = await asyncio.to_thread(
-                update_active_order_price, order_id, price, None, side_to_apply
+                update_active_order_fields, order_id, **update_kwargs
             )
             if success:
-                side_msg = (
-                    f"方向更新為 `{side_to_apply}`" if side_to_apply else "方向未變更"
-                )
-                price_msg = (
-                    f"新價格: `${price:.2f}` (或 {price:.2f}%)"
-                    if price is not None
-                    else "價格未變更"
-                )
+                updates_msg = []
+                for k, v in update_kwargs.items():
+                    updates_msg.append(f"{k}: `{v}`")
+
                 embed = create_info_embed(
                     title="編輯委託單成功",
                     message=(
                         f"✅ **成功更新委託單**：委託單 ID `{order_id}`\n"
-                        f"• {price_msg}\n"
-                        f"• {side_msg}"
+                        f"• 更新項目: " + ", ".join(updates_msg)
                     ),
                 )
             else:

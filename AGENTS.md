@@ -341,7 +341,7 @@ Users manage setup, adjustment, and cancellation of pending orders directly via 
 - **Order Setup Panel (`/order_panel`)**: Populates a dynamic dropdown view. Selecting an order type triggers a customized `DynamicOrderModal` containing base fields (Symbol, Quantity, Validity) and conditional price fields (Limit, Stop, or Trailing values).
 - **Active Orders Listing (`/list_orders`)**: Displays current active orders in a detailed Traditional Chinese embed, equipped with:
   - `❌ 取消委託 (Cancel Order)` button: Triggers `CancelOrderModal` for low-latency cancellation.
-  - `✏️ 編輯委託單 (Edit Order)` button: Triggers `EditOrderModal` to edit pending order price and side (BUY/SELL).
+  - `✏️ 編輯委託單 (Edit Order)` button: Triggers `EditOrderModal` to edit pending order fields including symbol, quantity, side, and price. (Note: The direct `/edit_order` slash command additionally supports updating `order_type` and `validity`).
 - **Telemetry Price & Size Alignment (`/telemetry_alert`)**: Implements dynamic telemetry price and size alignment alerts, offering:
   - `⚡ 一鍵套用遙測建議價 (Apply Telemetry Price)` button: Automatically updates **both** the price and the quantity/shares of active orders to safer alignments in SQLite, matching the telemetry pricing engine's latest calculations. It features built-in `[⚠️ Tail Risk Mitigation]` log notification if size downscaling was triggered.
 

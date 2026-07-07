@@ -290,6 +290,8 @@ async def test_edit_order_modal_success(mock_interaction, db_conn):
 
     modal = EditOrderModal()
     modal.order_id._value = str(order_id)
+    modal.new_symbol._value = ""
+    modal.new_quantity._value = ""
     modal.new_side._value = "SELL"
     modal.new_price._value = "145.50"
 
@@ -322,6 +324,8 @@ async def test_edit_order_modal_side_only_success(mock_interaction, db_conn):
 
     modal = EditOrderModal()
     modal.order_id._value = str(order_id)
+    modal.new_symbol._value = ""
+    modal.new_quantity._value = ""
     modal.new_side._value = "SELL"
     modal.new_price._value = ""  # 留空：不變更價格
 
