@@ -721,11 +721,13 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             if iv_term_status and iv_term_ratio is not None:
                 try:
                     ratio_val = float(iv_term_ratio)
-                    term_prefix = (
-                        "⚠️ 逆價差 (Backwardation)"
-                        if str(iv_term_status) == "Backwardation"
-                        else "✅ 正價差 (Contango)"
-                    )
+                    status_str = str(iv_term_status)
+                    if status_str == "Backwardation":
+                        term_prefix = "⚠️ 逆價差 (Backwardation)"
+                    elif status_str == "Contango":
+                        term_prefix = "✅ 正價差 (Contango)"
+                    else:
+                        term_prefix = "⚖️ 正常 (Normal)"
                     iv_lines.append(" IV 期限結構 (Term Structure)")
                     iv_lines.append(f" └─ {term_prefix} (近遠月比: {ratio_val:.2f})")
                 except (ValueError, TypeError):

@@ -36,11 +36,14 @@ async def _calculate_straddle_implied_em(
         # 選擇最近且尚未到期的到期日
         today_dt = datetime.now().date()
         target_expiry = None
+        target_dte = 1
         for exp in expiries:
             try:
                 exp_dt = datetime.strptime(exp, "%Y-%m-%d").date()
-                if exp_dt >= today_dt and (exp_dt - today_dt).days <= 14:
+                dte = (exp_dt - today_dt).days
+                if dte >= 0 and dte <= 14:
                     target_expiry = exp
+                    target_dte = max(1, dte)
                     break
             except ValueError:
                 continue
@@ -81,12 +84,16 @@ async def _calculate_straddle_implied_em(
         if straddle_price <= 0:
             return None
 
-        # 業界標準 0.85 因子（1-sigma 近似）
-        em = straddle_price * 0.85
+        # 業界標準 0.85 因子（1-sigma 近似），並依據實際 DTE 時間平移至週預期 (7 days)
+        # 修正：為了防止 DTE < 7 且包含財報等事件時被開根號錯誤放大 (Event-Jump Extrapolation)，
+        # 分母使用 max(7.0, target_dte)，即只對 DTE > 7 的區間進行壓縮，小於 7 天則保持原值。
+        # 不足的天數方差會由後續的 max(straddle_em, em_from_iv) 透過 30天期 IV 自動補足。
+        raw_em = straddle_price * 0.85
+        em = raw_em * math.sqrt(7.0 / max(7.0, target_dte))
 
         logger.info(
-            f"[{symbol}] Straddle-Implied EM: Call_mid=${call_mid:.2f} + "
-            f"Put_mid=${put_mid:.2f} = Straddle ${straddle_price:.2f} × 0.85 = ±${em:.2f}"
+            f"[{symbol}] Straddle-Implied EM (Normalized): Call_mid=${call_mid:.2f} + "
+            f"Put_mid=${put_mid:.2f} = Straddle ${straddle_price:.2f} × 0.85 (DTE: {target_dte}) -> Weekly EM ±${em:.2f}"
         )
         return em
 
@@ -292,13 +299,13 @@ async def fetch_and_calculate_iv_metrics(symbol: str) -> IVMetrics:
                                         oi = float(row.get("openInterest", 0.0))
                                         vol = float(row.get("volume", 0.0))
                                         if iv_val > 0.01 and strike_val > 0.0:
-                                            if (
+                                            distance_pct = (
                                                 abs(strike_val - spot_price)
                                                 / spot_price
-                                                <= 0.20
-                                            ):
+                                            )
+                                            if distance_pct <= 0.20:
                                                 weight = (oi + vol + 1.0) / (
-                                                    abs(strike_val - spot_price) + 1.0
+                                                    distance_pct * 100.0 + 1.0
                                                 )
                                                 all_options.append((iv_val, weight))
                             if all_options:
