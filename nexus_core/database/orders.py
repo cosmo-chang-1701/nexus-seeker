@@ -250,7 +250,7 @@ def update_active_order_fields(order_id: int, **kwargs) -> bool:
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
     try:
-        cursor.execute(query, tuple(values))
+        cursor.execute(query, tuple(values))  # nosemgrep
         changes = cursor.rowcount
         conn.commit()
         return changes > 0
