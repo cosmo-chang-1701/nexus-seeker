@@ -38,6 +38,19 @@ class InsightsEngine:
         ) or context.cb_triggered
         is_near_max_pain = abs(context.max_pain_deviation_pct) <= 0.05
 
+        # 底牆保衛 (Narrative Trap Override)
+        if context.put_wall > 0 and context.current_price > 0:
+            distance = (
+                context.current_price - context.put_wall
+            ) / context.current_price
+            if distance <= 0.02 and context.net_gex_status == "NEGATIVE_GAMMA_ZONE":
+                # 強制覆蓋所有磁吸回升標籤
+                return (
+                    "[底牆保衛 / 嚴防破位踩踏]",
+                    "🛑 底牆保衛 / 嚴防破位踩踏",
+                    "STOP_ALL_BUY",
+                )
+
         if is_near_max_pain:
             status_label = "價格接近最大痛點，維持震盪"
 
