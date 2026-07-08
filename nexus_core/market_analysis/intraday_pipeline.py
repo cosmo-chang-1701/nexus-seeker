@@ -574,6 +574,9 @@ async def evaluate_watchlist_symbol(
         put_wall = symbol_gex.get("put_wall", 0.0)
         spot = metrics.current_price
 
+        if put_wall > 0:
+            metrics.gex_max_put_wall = put_wall
+
         if call_wall > 0 and put_wall > 0:
             if spot > call_wall and net_gex < 0:
                 tactical.action_guideline += f"\n🚨 【軋空預警】現價 ({spot:.2f}) 突破 Call Wall ({call_wall:.2f}) 且處於 Short Gamma ({net_gex:+.0f})，隨時可能觸發造市商被迫回補引發暴漲軋空。"

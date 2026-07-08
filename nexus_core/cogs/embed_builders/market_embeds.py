@@ -508,6 +508,8 @@ def build_radar_scan_embed(
             put_wall = 0.0
             if "gex_metrics" in r and isinstance(r["gex_metrics"], dict):
                 put_wall = float(r["gex_metrics"].get("put_wall", 0.0))
+            elif "gex_profile_data" in r and isinstance(r["gex_profile_data"], dict):
+                put_wall = float(r["gex_profile_data"].get("put_wall", 0.0))
             elif "put_wall" in r:
                 put_wall = float(r["put_wall"])
             else:
