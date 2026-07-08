@@ -583,6 +583,17 @@ async def evaluate_watchlist_symbol(
             elif spot < put_wall:
                 tactical.action_guideline += f"\n⚠️ 【流動性枯竭預警】現價 ({spot:.2f}) 跌破 Put Wall ({put_wall:.2f})，期權造市商支撐消失，存在嚴重賣壓與流動性真空風險。"
 
+        if put_wall > 0 and spot > 0:
+            distance = (spot - put_wall) / spot
+            if distance <= 0.02 and net_gex < 0:
+                warning_text = "⚠️ 做市商 Delta 剛性拋壓風險全面壓倒遠期痛點磁吸，執行路由解鎖已全面受限。"
+                tactical.action_guideline = (
+                    f"{warning_text}\n{tactical.action_guideline}"
+                )
+                tactical.alert_level = "red"
+                tactical.sddm_route = "SHIELD 網格防禦"
+                tactical.scenario = "wait"
+
     except Exception as e:
         logger.warning(f"評估市場 Regime 與 GEX 時發生錯誤: {e}")
 
