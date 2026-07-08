@@ -109,6 +109,7 @@ from cogs.embed_builders.portfolio_embeds import (
     create_trades_embed,
     create_strategic_dash_embed,
     create_tactical_symbol_embed,
+    create_tactical_uoa_embed,
     create_tactical_hedge_embed,
 )
 
@@ -258,6 +259,7 @@ __all__ = [
     "create_trades_embed",
     "create_strategic_dash_embed",
     "create_tactical_symbol_embed",
+    "create_tactical_uoa_embed",
     "create_tactical_hedge_embed",
     # Watchlist embeds
     "create_watchlist_embed",
