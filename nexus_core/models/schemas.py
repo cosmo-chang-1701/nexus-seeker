@@ -65,6 +65,9 @@ class EnhancedWatchlistMetrics(BaseModel):
     has_macro_event: bool = False
     iv_term_structure_status: str | None = None
     term_structure_ratio: float | None = None
+    squeeze_status: bool | None = None
+    squeeze_momentum: float | None = None
+    squeeze_direction: str | None = None
 
     @field_validator("symbol")
     @classmethod

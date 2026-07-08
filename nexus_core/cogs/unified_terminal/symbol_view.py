@@ -282,6 +282,15 @@ class SymbolHubView(discord.ui.View):
                         result["is_ddp"] = True
                         result["tdp_activated"] = True
 
+                        psq_res = result.get("psq_result", {})
+                        is_sqz = (
+                            psq_res.get("is_squeezing", False)
+                            if isinstance(psq_res, dict)
+                            else getattr(psq_res, "is_squeezing", False)
+                        )
+                        if is_sqz:
+                            result["tdpq_activated"] = True
+
             result["darkpool"] = dp_data
 
             from market_analysis.risk_engine import optimize_position_risk

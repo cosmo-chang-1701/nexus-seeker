@@ -900,7 +900,10 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             dist_str = f"{distance:+.1f}%"
             dist_color = "\u001b[1;31m" if abs(distance) > 5.0 else "\u001b[1;32m"
 
-    if data.get("tdp_activated"):
+    if data.get("tdpq_activated"):
+        ddp_status = "⚡ TDPQ 突破共振 (Triple Discount + Squeeze)"
+        ddp_color = "\u001b[1;36m"
+    elif data.get("tdp_activated"):
         ddp_status = "✨ TDP 估值三擊 (Triple Discount Pricing)"
         ddp_color = "\u001b[1;36m"
     elif data.get("is_ddp"):

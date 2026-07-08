@@ -134,17 +134,37 @@ def generate_ansi_watchlist_report(
         f" ├─ 現價: {price_color}${metrics.current_price:.2f}{C_RESET} | PE: {pe_str} | Beta: {metrics.beta:.2f}",
         f" ├─ RSI 14: {C_YELLOW if metrics.rsi_14 > 65 else C_GREEN}{metrics.rsi_14:.1f}{C_RESET} | ATR 14: {metrics.atr_14:.2f} | Option Skew: {skew_color}{metrics.option_skew:+.2f}%{C_RESET}",
         f" ├─ MA200 支撐: ${metrics.ma200:.2f} | 相對 SPY: {rs_color}{metrics.relative_strength_spy * 100:+.2f}%{C_RESET}",
-        f" └─ 均線乖離: MA20: ${metrics.ma20:.2f} / MA50: ${metrics.ma50:.2f} | MA20 偏離: {bias_color}{metrics.bias_ma20 * 100:+.2f}%{C_RESET}",
-        " ----------------------------------",
-        " 🛡️ 技術 / 防禦牆 (Technical & Defense Walls)",
-        f" ├─ 狀態判讀: 買點狀態: {metrics.buy_zone_status} | 賣出狀態: {metrics.sell_zone_status} | 距離絕對支撐: {support_color}{metrics.distance_to_absolute_support * 100:+.2f}%{C_RESET}",
-        f" ├─ 買點支撐: P1: ${metrics.buy_price_phase1:.2f} | P2: ${metrics.buy_price_phase2:.2f} | P3: ${metrics.buy_price_phase3:.2f}",
-        f" ├─ 賣出阻力: P1: ${metrics.sell_price_phase1:.2f} | P2: ${metrics.sell_price_phase2:.2f} | P3: ${metrics.sell_price_phase3:.2f}",
-        f" └─ 關鍵位與敏感度: Vol POC: ${metrics.volume_poc:.2f} | GEX PutWall: ${metrics.gex_max_put_wall:.2f} | Vanna: {metrics.vanna_sensitivity:+.4f}",
-        " ----------------------------------",
-        " ⚙️ SDDM / 對沖 (SDDM Routing & Hedge Control)",
-        f" ├─ 路由機制: {route_color}{tactical_model.sddm_route}{C_RESET} | 網格步長: {tactical_model.dynamic_grid_step:.2f}",
     ]
+
+    bias_line = f" └─ 均線乖離: MA20: ${metrics.ma20:.2f} / MA50: ${metrics.ma50:.2f} | MA20 偏離: {bias_color}{metrics.bias_ma20 * 100:+.2f}%{C_RESET}"
+    if getattr(metrics, "squeeze_status", False):
+        lines.append(bias_line.replace("└─", "├─"))
+        sqz_dir = getattr(metrics, "squeeze_direction", "⚪")
+        sqz_mom = getattr(metrics, "squeeze_momentum", 0.0)
+        direction_arrow = "↗" if sqz_mom > 0 else ("↘" if sqz_mom < 0 else "→")
+        momentum_color = C_GREEN if sqz_mom > 0 else (C_RED if sqz_mom < 0 else C_RESET)
+        state_tw = (
+            "蓄勢突破" if sqz_mom > 0 else ("弱勢下行" if sqz_mom < 0 else "橫盤整理")
+        )
+        lines.append(
+            f" └─ [🔮 PowerSqueeze] {sqz_dir} SQUEEZING | 動能: {momentum_color}{sqz_mom:+.2f} {direction_arrow} ({state_tw}){C_RESET}"
+        )
+    else:
+        lines.append(bias_line)
+
+    lines.extend(
+        [
+            " ----------------------------------",
+            " 🛡️ 技術 / 防禦牆 (Technical & Defense Walls)",
+            f" ├─ 狀態判讀: 買點狀態: {metrics.buy_zone_status} | 賣出狀態: {metrics.sell_zone_status} | 距離絕對支撐: {support_color}{metrics.distance_to_absolute_support * 100:+.2f}%{C_RESET}",
+            f" ├─ 買點支撐: P1: ${metrics.buy_price_phase1:.2f} | P2: ${metrics.buy_price_phase2:.2f} | P3: ${metrics.buy_price_phase3:.2f}",
+            f" ├─ 賣出阻力: P1: ${metrics.sell_price_phase1:.2f} | P2: ${metrics.sell_price_phase2:.2f} | P3: ${metrics.sell_price_phase3:.2f}",
+            f" └─ 關鍵位與敏感度: Vol POC: ${metrics.volume_poc:.2f} | GEX PutWall: ${metrics.gex_max_put_wall:.2f} | Vanna: {metrics.vanna_sensitivity:+.4f}",
+            " ----------------------------------",
+            " ⚙️ SDDM / 對沖 (SDDM Routing & Hedge Control)",
+            f" ├─ 路由機制: {route_color}{tactical_model.sddm_route}{C_RESET} | 網格步長: {tactical_model.dynamic_grid_step:.2f}",
+        ]
+    )
     if tactical_model.scenario == "hard-hedge":
         lines.append(
             " ├─ Delta 曝險: Hidden Δ: 0.00 (由於觸發 Hard-Hedge 出清，全面關閉對沖)"

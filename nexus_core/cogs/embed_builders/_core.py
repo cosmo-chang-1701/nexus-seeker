@@ -112,6 +112,30 @@ class NexusEmbed(discord.Embed):
             )
         return nexus_embed
 
+    def to_dict(self):
+        # 實作字數截斷防護 (5800字元上限)
+        total_len = len(self.title or "") + len(self.description or "")
+        if self.footer and self.footer.text:
+            total_len += len(self.footer.text)
+        if self.author and self.author.name:
+            total_len += len(self.author.name)
+        for field in self.fields:
+            total_len += len(field.name or "") + len(field.value or "")
+
+        if total_len > 5800:
+            warning = "⚠️ (因自選標的過多，已啟用自動截斷防護，僅保留核心數據)"
+            while total_len > 5800 and self._fields:
+                field = self._fields.pop()
+                total_len -= len(field.name or "") + len(field.value or "")
+
+            if self.description:
+                if warning not in self.description:
+                    self.description += f"\n\n{warning}"
+            else:
+                self.description = warning
+
+        return super().to_dict()
+
 
 def install_nexus_embed() -> None:
     """將 discord.Embed 替換為 NexusEmbed，攔截全站 Embed 建立。
