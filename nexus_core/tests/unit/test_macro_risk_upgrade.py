@@ -314,3 +314,23 @@ async def test_get_macro_overview_data_logic():
         mock_mem.return_value.percent = 90.0
         data_degraded = await get_macro_overview_data(1)
         assert data_degraded["is_degraded"] is True
+
+
+def test_putwall_crisis_textual_martial_law():
+    from market_analysis import insight_generator
+
+    test_data = {
+        "symbol": "SPY",
+        "spot": 246.75,
+        "max_pain": 277.50,
+        "put_wall": 250.00,
+        "gex_status": "NEGATIVE",
+    }
+
+    insights = insight_generator.compute_realtime_insights(test_data)
+
+    assert "磁吸" not in insights, "錯誤：在底牆危機下仍釋放痛點磁吸信號！"
+    assert "逢低吸納" not in insights, "錯誤：在負 Gamma 拋壓下誘導用戶接刀！"
+    assert (
+        "剛性拋壓" in insights or "嚴禁" in insights
+    ), "錯誤：未正確提示做市商對沖風險！"
