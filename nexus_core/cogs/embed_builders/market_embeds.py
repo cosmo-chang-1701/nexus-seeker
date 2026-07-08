@@ -604,6 +604,18 @@ def build_radar_scan_embed(
                             f"• 🚀 **{sym}**: 價格已極度逼近本週波動下緣 (${em_low:.2f})，且距離 Max Pain 有 +{dist_pct:.1f}% 的多頭磁吸引力，建議部署限價捕獵。"
                         )
 
+            # 連動 GEX PutWall (做市商底牆)
+            if put_wall > 0 and price_val > 0:
+                pw_dist = (price_val - put_wall) / put_wall * 100
+                if 0 <= pw_dist <= 2.0:
+                    insights.append(
+                        f"• 🛡️ **{sym}**: 價格已逼近 GEX PutWall 做市商底牆 (${put_wall:.2f})，此處具備強大流動性支撐，若有效跌破將觸發 Delta 負向螺旋。"
+                    )
+                elif -3.0 <= pw_dist < 0:
+                    insights.append(
+                        f"• 🚨 **{sym}**: 價格已跌破 GEX PutWall 做市商底牆 (${put_wall:.2f})，進入 Delta 負向螺旋高風險區間，嚴防流動性踩踏。"
+                    )
+
                 # 穿透式 UOA 與偏離度聯動判定：當偏離度顯著時 (例如 |dist_pct| > 10%)
                 if abs(dist_pct) > 10.0:
                     # 解析 UOA
