@@ -634,3 +634,21 @@ class AccountSettingsView(discord.ui.View):
         return create_account_settings_embed(
             basic_settings=basic_settings, runway_settings=runway_settings
         )
+
+    @discord.ui.button(
+        label="🏷️ 編輯自選標籤",
+        style=discord.ButtonStyle.secondary,
+        custom_id="btn_edit_watchlist_tags",
+        row=1,
+    )
+    async def edit_watchlist_tags_btn(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        from ui.watchlist_tags import WatchlistTagSelectView
+        from cogs.embed_builders.settings_embeds import create_info_embed
+
+        view = WatchlistTagSelectView(self.user_id)
+        embed = create_info_embed(
+            title="編輯自選標籤", message="請從下方選單選擇一個自選標的來編輯它的標籤。"
+        )
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)

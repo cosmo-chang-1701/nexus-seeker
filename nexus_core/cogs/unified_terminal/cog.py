@@ -45,6 +45,7 @@ class UnifiedTerminalCog(commands.Cog):
     @app_commands.describe(
         symbol="股票代號 (如 NVDA，與 scan_type 二擇一)",
         scan_type="批次掃描類型 (HOLDINGS:持倉, ORDERS:掛單, OPTIONS:持有期權, WATCHLIST:自選, ALL:四者全部)",
+        tag="Watchlist 標籤過濾 (僅在 scan_type 為 WATCHLIST 時生效)",
     )
     @app_commands.choices(
         scan_type=[
@@ -64,6 +65,7 @@ class UnifiedTerminalCog(commands.Cog):
         interaction: discord.Interaction,
         symbol: Optional[str] = None,
         scan_type: Optional[app_commands.Choice[str]] = None,
+        tag: Optional[str] = None,
     ):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -122,12 +124,20 @@ class UnifiedTerminalCog(commands.Cog):
 
             if scan_value == "WATCHLIST":
                 import database
+                from database.watchlist_tags import get_watchlist_tags
 
                 watchlist_items = await asyncio.to_thread(
                     database.get_user_watchlist, user_id
                 )
                 for item in watchlist_items:
-                    target_symbols.add(item[0].upper())
+                    sym = item[0].upper()
+                    if tag:
+                        tags = await asyncio.to_thread(
+                            get_watchlist_tags, str(user_id), sym
+                        )
+                        if tag.upper() not in tags:
+                            continue
+                    target_symbols.add(sym)
 
             unique_symbols = sorted(list(target_symbols))
 
@@ -188,6 +198,28 @@ class UnifiedTerminalCog(commands.Cog):
                 )
             except Exception as follow_err:
                 logger.error(f"Failed to send outer error followup: {follow_err}")
+
+    @symbol_hub.autocomplete("tag")
+    async def tag_autocomplete(
+        self,
+        interaction: discord.Interaction,
+        current: str,
+    ) -> list[app_commands.Choice[str]]:
+        from database.watchlist_tags import get_user_unique_tags
+        import asyncio
+
+        user_id_str = str(interaction.user.id)
+
+        try:
+            tags = await asyncio.to_thread(get_user_unique_tags, user_id_str)
+        except Exception:
+            tags = []
+
+        return [
+            app_commands.Choice(name=t, value=t)
+            for t in tags
+            if current.lower() in t.lower()
+        ][:25]
 
     async def _fetch_single_symbol_data_raw(
         self, symbol: str, enable_local_tunnel: bool
