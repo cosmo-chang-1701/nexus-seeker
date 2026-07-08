@@ -223,30 +223,44 @@ def calculate_dynamic_trading_signals(
 
     if not has_position:
         # === 未持倉：計算適合買入的價位與股數 ===
-        if rsi < 30:
-            # 極度超賣，優先第一支撐進場
-            base_buy = buy_price_phase1
-            result["buy_rationale"] = "RSI 極度超賣，優先於第一支撐位布局"
-        elif rsi > 70:
-            # 超買區，要求最高安全邊際 (第三支撐)
-            base_buy = buy_price_phase3
-            result["buy_rationale"] = "RSI 超買，要求最高安全邊際 (第三防線)"
+        # RiskContext: 底牆危機與風控戒嚴
+        is_crisis = (
+            tactical_model.scenario == "wait" and "SHIELD" in tactical_model.sddm_route
+        )
+        if is_crisis:
+            result["suitable_buy_price"] = "N/A（風控鎖定，暫不推薦開倉買方策略）"
+            result["buy_rationale"] = (
+                "⚠️ 底牆破位或負 Gamma 風險主導，風控戒嚴已啟動，禁止任何左側接刀。"
+            )
         else:
-            # 常態整理以第二支撐為基準
-            base_buy = buy_price_phase2
-            result["buy_rationale"] = "技術面常態整理，以第二支撐位為基準"
+            if rsi < 30:
+                # 極度超賣，優先第一支撐進場
+                base_buy = buy_price_phase1
+                result["buy_rationale"] = "RSI 極度超賣，優先於第一支撐位布局"
+            elif rsi > 70:
+                # 超買區，要求最高安全邊際 (第三支撐)
+                base_buy = buy_price_phase3
+                result["buy_rationale"] = "RSI 超買，要求最高安全邊際 (第三防線)"
+            else:
+                # 常態整理以第二支撐為基準
+                base_buy = buy_price_phase2
+                result["buy_rationale"] = "技術面常態整理，以第二支撐位為基準"
 
-        # Skew 折價調整：每 1% positive skew 增加 0.5% 折讓
-        skew_discount = max(-0.05, min(0.15, (skew_val / 100.0) * 0.5))
-        suitable_buy = base_buy * (1.0 - skew_discount)
+            # Skew 折價調整：每 1% positive skew 增加 0.5% 折讓
+            skew_discount = max(-0.05, min(0.15, (skew_val / 100.0) * 0.5))
+            suitable_buy = base_buy * (1.0 - skew_discount)
 
-        suitable_buy = max(buy_price_phase3 * 0.9, min(suitable_buy, buy_price_phase1))
+            suitable_buy = max(
+                buy_price_phase3 * 0.9, min(suitable_buy, buy_price_phase1)
+            )
 
-        if has_upcoming_earnings:
-            suitable_buy *= 0.90
-            result["buy_rationale"] = "[⚠️ 財報前夜防護啟動] " + result["buy_rationale"]
+            if has_upcoming_earnings:
+                suitable_buy *= 0.90
+                result["buy_rationale"] = (
+                    "[⚠️ 財報前夜防護啟動] " + result["buy_rationale"]
+                )
 
-        result["suitable_buy_price"] = round(suitable_buy, 2)
+            result["suitable_buy_price"] = round(suitable_buy, 2)
 
         # Position Sizing
         base_allocation = capital * 0.05
@@ -257,17 +271,20 @@ def calculate_dynamic_trading_signals(
         allocated_budget = (
             base_allocation * risk_limit_mult * skew_size_mult * rsi_size_mult
         )
-        shares = int(allocated_budget // result["suitable_buy_price"])
-        result["suitable_buy_shares"] = max(1, shares)
-
-        if skew_val > 3.0:
-            result["buy_rationale"] += (
-                f" (已隨 Skew 避險情緒折價 {skew_discount*100:+.1f}% 並控管口數)"
-            )
+        if is_crisis:
+            result["suitable_buy_shares"] = 0
         else:
-            result["buy_rationale"] += (
-                f" (Skew 情緒平穩，折價調整 {skew_discount*100:+.1f}%)"
-            )
+            shares = int(allocated_budget // result["suitable_buy_price"])
+            result["suitable_buy_shares"] = max(1, shares)
+
+            if skew_val > 3.0:
+                result["buy_rationale"] += (
+                    f" (已隨 Skew 避險情緒折價 {skew_discount*100:+.1f}% 並控管口數)"
+                )
+            else:
+                result["buy_rationale"] += (
+                    f" (Skew 情緒平穩，折價調整 {skew_discount*100:+.1f}%)"
+                )
 
     else:
         # === 已持倉：計算適合賣出的價位與股數 ===

@@ -135,11 +135,16 @@ def derive_watchlist_option_guidance(
 
     # 1.00x pure equity cash-backed strategy option guidance
     if has_position:
+        sell_val = (
+            suitable_sell_price if not isinstance(suitable_sell_price, str) else 0.0
+        )
         return (
-            f"已持有現貨部位，建議於阻力位 ${float(suitable_sell_price or 0.0):.2f} "
+            f"已持有現貨部位，建議於阻力位 ${float(sell_val or 0.0):.2f} "
             f"建立 Covered Call (拋補看漲選擇權) 進行鎖利收租，並嚴格執行 1.00x 純現貨無槓桿防守。"
         )
     else:
+        if isinstance(suitable_buy_price, str):
+            return f"⚠️ {suitable_buy_price}"
         return (
             f"目前未持倉，建議於安全買點 ${float(suitable_buy_price or 0.0):.2f} "
             f"建立 Cash-Secured Put (現金擔保賣出賣權) 進行建倉收租，嚴禁任何單邊買入或價差期權策略。"

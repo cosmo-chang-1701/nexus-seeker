@@ -123,7 +123,10 @@ def create_watchlist_signal_embed(
         skew_val = metrics.option_skew
         skew_per = metrics.skew_percentile
     else:
-        live_price = suitable_buy_price or suitable_sell_price or 100.0
+        live_price_val = (
+            suitable_buy_price if not isinstance(suitable_buy_price, str) else None
+        )
+        live_price = live_price_val or suitable_sell_price or 100.0
         gex_putwall = None
         vol_poc = 100.0
         skew_val = None
