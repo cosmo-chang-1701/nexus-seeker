@@ -320,7 +320,7 @@ def build_radar_scan_embed(
     if not chunks:
         chunks = [[]]
 
-    embeds = []
+    embeds: List[discord.Embed] = []
     total_pages = len(chunks)
 
     for page_idx, chunk in enumerate(chunks):
@@ -329,9 +329,9 @@ def build_radar_scan_embed(
         if total_pages > 1:
             page_title += f" (第 {page_num}/{total_pages} 頁)"
 
-        embed = discord.Embed(
+        embed = NexusEmbed(
             title=page_title,
-            color=discord.Color.blue(),
+            color=0x3498DB,  # Default to 資訊藍
         )
 
         # 讀取全域快取指標 (TED Spread & GEX Flip & Darkpool DIX)
@@ -470,7 +470,7 @@ def build_radar_scan_embed(
                 if max_pain_strike > 0 and price_val > 0:
                     dist_pct = (max_pain_strike - price_val) / price_val * 100
 
-            # 判定狀態標籤
+            # 判定狀態標籤 (透過 InsightsEngine 核心風控鐵律)
             status_label = ""
             if max_pain_strike > 0:
                 if dist_pct >= 0:
@@ -494,6 +494,87 @@ def build_radar_scan_embed(
                 dmp_str = "[0.00%]"
                 dmp_ansi = "[0.00%]"
                 status_label = "正常運行"
+
+            # -- D-MP 動態阻斷機制與 InsightsEngine --
+            from market_analysis.insights_engine import (
+                InsightsEngine,
+                RiskInsightsContext,
+            )
+            import database
+
+            ctx_db = database.get_full_user_context(user_id)
+
+            # 解析 PutWall
+            put_wall = 0.0
+            if "gex_metrics" in r and isinstance(r["gex_metrics"], dict):
+                put_wall = float(r["gex_metrics"].get("put_wall", 0.0))
+            elif "put_wall" in r:
+                put_wall = float(r["put_wall"])
+            else:
+                # 嘗試從 metrics 提取 (如果是 Watchlist pipeline 的輸出)
+                put_wall = float(
+                    r.get("max_pain", {}).get("max_pain", 0.0) * 0.9
+                )  # Fallback 僅供安全
+                if r.get("iv_metrics") and hasattr(r["iv_metrics"], "gex_max_put_wall"):
+                    val = getattr(r["iv_metrics"], "gex_max_put_wall", 0.0)
+                put_wall = float(val) if val is not None else 0.0
+
+            # 解析 UOA
+            uoa_list = r.get("uoa") or []
+            uoa_calls_vol = sum(
+                u.get("volume", 0) for u in uoa_list if u.get("type") == "CALL"
+            )
+            uoa_puts_vol = sum(
+                u.get("volume", 0) for u in uoa_list if u.get("type") == "PUT"
+            )
+            uoa_institutional_short_call = (
+                uoa_puts_vol > (uoa_calls_vol * 1.5) and uoa_puts_vol > 0
+            )
+
+            # 解析 Term Structure
+            term_structure = 1.0
+            if (
+                iv_metrics
+                and hasattr(iv_metrics, "term_structure_ratio")
+                and getattr(iv_metrics, "term_structure_ratio")
+            ):
+                term_structure = float(getattr(iv_metrics, "term_structure_ratio"))
+            elif isinstance(iv_metrics, dict) and iv_metrics.get(
+                "term_structure_ratio"
+            ):
+                term_structure = float(iv_metrics.get("term_structure_ratio"))
+
+            risk_ctx = RiskInsightsContext(
+                symbol=sym,
+                current_price=price_val,
+                put_wall=put_wall,
+                net_gex_status="UNKNOWN",
+                term_structure=term_structure,
+                uoa_institutional_short_call=uoa_institutional_short_call,
+                iv_rank=iv_rank_val / 100.0 if iv_rank_val > 1.0 else iv_rank_val,
+                max_pain_deviation_pct=dist_pct / 100.0,
+                can_trade_spreads=ctx_db.can_trade_spreads,
+                cash_reserve_protection=ctx_db.cash_reserve_protection,
+            )
+
+            override_dmp, override_status, suggestion = (
+                InsightsEngine.generate_cro_insight(risk_ctx)
+            )
+
+            if override_dmp:
+                dmp_str = override_dmp
+                dmp_ansi = (
+                    "[\u001b[1;31m底牆破位\u001b[0m]"
+                    if "底牆破位" in override_dmp
+                    else override_dmp
+                )
+            if override_status:
+                status_label = override_status
+                if "🛑" in status_label:
+                    embed.color = 0xE74C3C  # 高危警報紅色
+                elif "⚖️" in status_label:
+                    if embed.color.value != 0xE74C3C:
+                        embed.color = 0x3498DB  # 資訊藍色
 
             # Local Rules: 聯動警示 insights
             if max_pain_strike > 0 and price_val > 0:
