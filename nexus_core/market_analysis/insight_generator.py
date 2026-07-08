@@ -27,7 +27,7 @@ def compute_realtime_insights(data: Dict[str, Any]) -> str:
 
     if is_put_wall_crisis:
         max_pain_diff = round(abs(dist_pct), 1)
-        return f"⚠️ {sym}: 雖然股價遠低於 Max Pain ({max_pain_diff}%)，但因現價已穿透/逼近做市商 PutWall 防線，進入負 Gamma 禁區。做市商 Delta 剛性拋壓（Delta Negative Feedback Loop）已全面主導盤面。此處散戶搶購 Call 的偏斜亢奮將加劇做市商的對沖拋售壓力，嚴禁任何左側接刀行為，靜待底牆企穩。"
+        return f"• ⚠️ **{sym}**: 雖然股價遠低於 Max Pain ({max_pain_diff}%)，但因現價已穿透/逼近做市商 PutWall 防線，進入負 Gamma 禁區。做市商 Delta 剛性拋壓（Delta Negative Feedback Loop）已全面主導盤面。此處散戶搶購 Call 的偏斜亢奮將加劇做市商的對沖拋售壓力，嚴禁任何左側接刀行為，靜待底牆企穩。"
 
     # 1. 籌碼狀態
     chip_status = "⚖️ 籌碼結構與情緒波動相對均衡"
@@ -73,4 +73,4 @@ def compute_realtime_insights(data: Dict[str, Any]) -> str:
     elif dist_pct < -10.0:
         guidance = "；操作上建議保持現貨防禦，嚴禁單腿操作。"
 
-    return f"• {chip_status}{dev_fact}{guidance}"
+    return f"• **{sym}**: {chip_status}{dev_fact}{guidance}"
