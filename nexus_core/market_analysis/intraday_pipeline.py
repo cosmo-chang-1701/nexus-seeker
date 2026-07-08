@@ -336,6 +336,21 @@ async def build_enhanced_watchlist_metrics(
     else:
         pe_ratio = pe_raw
 
+    from database.squeeze_cache import get_squeeze_cache, save_squeeze_cache
+    from market_analysis.squeeze_engine import calculate_power_squeeze
+
+    squeeze_cache = get_squeeze_cache(symbol)
+    if squeeze_cache:
+        squeeze_status = squeeze_cache.get("is_squeezing", False)
+        squeeze_momentum = squeeze_cache.get("momentum", 0.0)
+        squeeze_direction = squeeze_cache.get("direction", "⚪")
+    else:
+        psq_res = calculate_power_squeeze(df_stock)
+        squeeze_status = psq_res.get("is_squeezing", False)
+        squeeze_momentum = psq_res.get("momentum", 0.0)
+        squeeze_direction = psq_res.get("direction", "⚪")
+        save_squeeze_cache(symbol, squeeze_status, squeeze_momentum, squeeze_direction)
+
     metrics = EnhancedWatchlistMetrics(
         symbol=symbol,
         exchange=str(
@@ -395,6 +410,9 @@ async def build_enhanced_watchlist_metrics(
         term_structure_ratio=getattr(iv_metrics, "term_structure_ratio", None)
         if iv_metrics
         else None,
+        squeeze_status=squeeze_status,
+        squeeze_momentum=squeeze_momentum,
+        squeeze_direction=squeeze_direction,
     )
     _WATCHLIST_METRICS_CACHE[symbol] = (metrics, now_ts + _WATCHLIST_METRICS_TTL)
     return metrics

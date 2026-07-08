@@ -392,8 +392,8 @@ def build_radar_scan_embed(
             pass
 
         # 寬度與格式對齊範例
-        header = f"{'標的':<8}{'價格 (漲跌)':<16}{'IVR':<8}{'本週預期區間 (EM)':<22}{'Max Pain':<11}{'與痛點價差 (D-MP)'}"
-        divider = "-" * 81
+        header = f"{'標的':<8}{'價格 (漲跌)':<16}{'IVR':<8}{'本週預期區間 (EM)':<22}{'Max Pain':<11}{'SQZ':<4}{'MOM':<7}{'與痛點價差 (D-MP)'}"
+        divider = "-" * 91
 
         ansi_lines = []
         if macro_ansi_header:
@@ -685,8 +685,27 @@ def build_radar_scan_embed(
             dmp_cell = dmp_ansi + (" " * max(0, 12 - len(dmp_str)))
             label_cell = status_label
 
+            psq_result = r.get("psq_result", {})
+            sqz_dir = psq_result.get("direction", "⚪")
+            sqz_str = f"{sqz_dir}"
+            sqz_cell = sqz_str + (" " * max(0, 4 - len(sqz_str)))
+
+            sqz_mom = psq_result.get("momentum", 0.0)
+            if psq_result.get("is_squeezing", False):
+                mom_str = f"{sqz_mom:+.1f}"
+                if sqz_mom > 0:
+                    mom_ansi = f"\u001b[1;32m{mom_str}\u001b[0m"
+                elif sqz_mom < 0:
+                    mom_ansi = f"\u001b[1;31m{mom_str}\u001b[0m"
+                else:
+                    mom_ansi = mom_str
+            else:
+                mom_str = "---"
+                mom_ansi = "\u001b[1;30m---\u001b[0m"
+            mom_cell = mom_ansi + (" " * max(0, 7 - len(mom_str)))
+
             ansi_lines.append(
-                f"{sym_cell}{price_cell}{ivr_cell}{em_cell}{mp_cell}{dmp_cell}{label_cell}"
+                f"{sym_cell}{price_cell}{ivr_cell}{em_cell}{mp_cell}{sqz_cell}{mom_cell}{dmp_cell}{label_cell}"
             )
 
         ansi_table = f"```ansi\n============================= 核心 AI 暨持倉量化雷達 =============================\n{header}\n{divider}\n"

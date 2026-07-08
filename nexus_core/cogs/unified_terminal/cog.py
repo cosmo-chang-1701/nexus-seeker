@@ -46,6 +46,7 @@ class UnifiedTerminalCog(commands.Cog):
         symbol="股票代號 (如 NVDA，與 scan_type 二擇一)",
         scan_type="批次掃描類型 (HOLDINGS:持倉, ORDERS:掛單, OPTIONS:持有期權, WATCHLIST:自選, ALL:四者全部)",
         tag="Watchlist 標籤過濾 (僅在 scan_type 為 WATCHLIST 時生效)",
+        squeeze="僅顯示正處於擠壓狀態的標的",
     )
     @app_commands.choices(
         scan_type=[
@@ -66,6 +67,7 @@ class UnifiedTerminalCog(commands.Cog):
         symbol: Optional[str] = None,
         scan_type: Optional[app_commands.Choice[str]] = None,
         tag: Optional[str] = None,
+        squeeze: Optional[bool] = None,
     ):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -165,6 +167,21 @@ class UnifiedTerminalCog(commands.Cog):
                 )
                 # 過濾 Exception 並確保是 dict 類型以滿足 mypy
                 valid_results = [r for r in scan_results if isinstance(r, dict)]
+
+                if squeeze:
+                    valid_results = [
+                        r
+                        for r in valid_results
+                        if r.get("psq_result", {}).get("is_squeezing", False)
+                    ]
+
+                if not valid_results:
+                    return await interaction.followup.send(
+                        embed=create_error_embed(
+                            "掃描完成，但無符合條件的標的。", title="無結果"
+                        ),
+                        ephemeral=True,
+                    )
 
                 embeds = build_radar_scan_embed(valid_results, scan_value, user_id)
                 if not isinstance(embeds, list):
@@ -285,6 +302,12 @@ class UnifiedTerminalCog(commands.Cog):
 
         gex_profile_task = fetch_symbol_gex_metrics(symbol)
 
+        from market_analysis.volume_profile import calculate_volume_profile
+        from market_analysis.dark_pool_engine import fetch_darkpool_prints
+
+        vp_task = asyncio.to_thread(calculate_volume_profile, symbol)
+        dp_task = fetch_darkpool_prints(symbol)
+
         base_results_task = asyncio.gather(
             spy_task,
             macro_task,
@@ -299,6 +322,8 @@ class UnifiedTerminalCog(commands.Cog):
             ddp_task,
             df_hist_task,
             gex_profile_task,
+            vp_task,
+            dp_task,
         )
 
         if tasks_mp:
@@ -324,6 +349,8 @@ class UnifiedTerminalCog(commands.Cog):
             ddp_report,
             df_hist_1d,
             gex_profile_data,
+            vp_data,
+            dp_data,
         ) = base_results
 
         month_max_pains = []
@@ -354,6 +381,8 @@ class UnifiedTerminalCog(commands.Cog):
             "df_hist_1d": df_hist_1d,
             "month_max_pains": month_max_pains,
             "gex_profile_data": gex_profile_data,
+            "volume_profile": vp_data,
+            "darkpool": dp_data,
         }
 
     async def _run_single_symbol_hub(
@@ -413,6 +442,8 @@ class UnifiedTerminalCog(commands.Cog):
             ddp_report = data["ddp_report"]
             df_hist_1d = data["df_hist_1d"]
             gex_profile_data = data.get("gex_profile_data")
+            vp_data = data.get("volume_profile")
+            dp_data = data.get("darkpool")
 
             spy_price = df_spy["Close"].iloc[-1] if not df_spy.empty else 670.0
             safe_macro = macro_raw or {}
@@ -473,6 +504,45 @@ class UnifiedTerminalCog(commands.Cog):
             # Polymarket odds
             poly_odds = await find_matching_polymarket_odds(symbol, poly_markets)
             result["polymarket_odds"] = poly_odds
+            result["volume_profile"] = vp_data
+            result["darkpool"] = dp_data
+
+            # TDP 估值三擊判斷: 現價 < EMA 21 且 現價 < Max Pain 且 現價 < V-POC 且 現價 < DP-POC
+            ema_21 = (
+                df_hist_1d["Close"].ewm(span=21, adjust=False).mean().iloc[-1]
+                if df_hist_1d is not None and not df_hist_1d.empty
+                else 0.0
+            )
+            vpoc = vp_data.get("hvn", 0.0) if vp_data else 0.0
+            dp_poc = dp_data.get("dp_poc", 0.0) if dp_data else 0.0
+            max_pain = result.get("max_pain", 0.0)
+            price = result.get("price", 0.0)
+
+            if result.get("is_ddp"):
+                if (
+                    price > 0
+                    and ema_21 > 0
+                    and max_pain > 0
+                    and vpoc > 0
+                    and dp_poc > 0
+                ):
+                    if (
+                        price < ema_21
+                        and price < max_pain
+                        and price < vpoc
+                        and price < dp_poc
+                    ):
+                        result["is_ddp"] = True
+                        result["tdp_activated"] = True
+
+                        psq_res = result.get("psq_result", {})
+                        is_sqz = (
+                            psq_res.get("is_squeezing", False)
+                            if isinstance(psq_res, dict)
+                            else getattr(psq_res, "is_squeezing", False)
+                        )
+                        if is_sqz:
+                            result["tdpq_activated"] = True
 
             main_embed = create_tactical_symbol_embed(result)
 
@@ -571,6 +641,31 @@ class UnifiedTerminalCog(commands.Cog):
             "expected_move_weekly": em_weekly,
         }
 
+        # 取得 PSQ
+        from services.market_data_service import get_history_df
+
+        df_hist = await get_history_df(sym, period="1y", interval="1d")
+        psq_res = {}
+        if df_hist is not None and not df_hist.empty:
+            from database.squeeze_cache import get_squeeze_cache, save_squeeze_cache
+            from market_analysis.squeeze_engine import calculate_power_squeeze
+
+            sc = get_squeeze_cache(sym)
+            if sc:
+                psq_res = {
+                    "is_squeezing": sc.get("is_squeezing", False),
+                    "momentum": sc.get("momentum", 0.0),
+                    "direction": sc.get("direction", "⚪"),
+                }
+            else:
+                psq_res = calculate_power_squeeze(df_hist)
+                save_squeeze_cache(
+                    sym,
+                    psq_res.get("is_squeezing", False),
+                    psq_res.get("momentum", 0.0),
+                    psq_res.get("direction", "⚪"),
+                )
+
         return {
             "symbol": sym,
             "quote": quote,
@@ -580,6 +675,7 @@ class UnifiedTerminalCog(commands.Cog):
             "max_pain": mp_data,
             "uoa": uoa_data,
             "gex_profile_data": gex_data,
+            "psq_result": psq_res,
         }
 
     @app_commands.command(
