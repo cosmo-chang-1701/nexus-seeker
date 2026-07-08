@@ -1174,7 +1174,7 @@ class TerminalCog(commands.Cog):
 
         from ui.watchlist import WatchlistPagination
 
-        view = WatchlistPagination(symbols_data)
+        view = WatchlistPagination(symbols_data, original_interaction=interaction)
         view.update_buttons()
         await interaction.followup.send(
             embed=view.create_embed(), view=view, ephemeral=True

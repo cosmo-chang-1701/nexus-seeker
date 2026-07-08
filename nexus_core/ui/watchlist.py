@@ -4,9 +4,10 @@ from cogs.embed_builder import create_watchlist_embed
 
 
 class WatchlistPagination(discord.ui.View):
-    def __init__(self, data):
+    def __init__(self, data, original_interaction: discord.Interaction = None):
         super().__init__(timeout=180)  # 3 分鐘後按鈕失效
         self.data = data
+        self.original_interaction = original_interaction
         self.current_page = 1
         self.items_per_page = 50  # 每頁顯示數量
         self.total_pages = math.ceil(len(data) / self.items_per_page) if data else 1
@@ -79,8 +80,18 @@ class WatchlistPagination(discord.ui.View):
             self.update_buttons()
 
             # 更新原來的 list_watch 訊息
-            if original_message:
-                await original_message.edit(embed=self.create_embed(), view=self)
+            if self.original_interaction:
+                try:
+                    await self.original_interaction.edit_original_response(
+                        embed=self.create_embed(), view=self
+                    )
+                except discord.HTTPException:
+                    pass
+            elif original_message:
+                try:
+                    await original_message.edit(embed=self.create_embed(), view=self)
+                except discord.HTTPException:
+                    pass
 
             # 將互動標籤表單更新為成功提示，製造原地更新的平滑體驗
             from cogs.embed_builders.settings_embeds import create_info_embed
