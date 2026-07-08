@@ -21,11 +21,18 @@ class AssetManager:
         self, user_id: int, context_type: Optional[ContextType] = None
     ) -> List[Asset]:
         """獲取指定使用者的資產清單"""
-        query = "SELECT * FROM assets WHERE user_id = ?"
+        query = """
+            SELECT a.*, GROUP_CONCAT(t.tag_name, ', ') as tags
+            FROM assets a
+            LEFT JOIN watchlist_tags t ON a.user_id = t.user_id AND a.symbol = t.symbol
+            WHERE a.user_id = ?
+        """
         params: list[Any] = [user_id]
         if context_type:
-            query += " AND context_type = ?"
+            query += " AND a.context_type = ?"
             params.append(context_type.value)
+
+        query += " GROUP BY a.id"
 
         assets = []
         with self._get_conn() as conn:

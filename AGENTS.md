@@ -140,6 +140,8 @@ The heartbeat currently reuses logic from `market_analysis/intraday_pipeline.py`
 
 The active embed builder is `create_watchlist_signal_embed()` in `cogs/embed_builder.py`.
 
+The embed title is dynamically injected with the ticker's active tags fetched from the multi-tenant `watchlist_tags` table (e.g. `標的分析中心 2.0: AAPL 每半小時戰場心跳 🏷️ TECH | CORE`).
+
 The visibility of these sections is controlled by 4 granular notification toggles in `/notif_settings`: `hb_live_price`, `hb_options_structure`, `hb_uoa`, and `hb_execution_risk`.
 
 Current sections:
@@ -366,11 +368,8 @@ Configurations are strictly segregated into two functional areas to maximize sep
 - **Core Account Settings (`/settings`)**: Tracks high-level financial parameters saved in the `user_settings` table:
   - `capital` (Total capital, must be `> 0`)
   - `risk_limit` (Base risk percentage limit, bounded between `1.0` and `50.0`)
-  - `enable_vtr` (GhostTrader Virtual Trading Room toggler)
-  - `enable_psq_watchlist` (PowerSqueeze watch tracker toggler)
-  - `monthly_expense` (Monthly survival expense for runway metrics)
-  - `tax_reserve_rate` (Tax reserve ratio, bounded between `0.0` and `1.0`)
-  - `cash_reserve` (Cash reserve value for runway calculation)
+  - `enable_vtr`, `enable_psq_watchlist`, `monthly_expense`, `tax_reserve_rate`, and `cash_reserve`.
+  - Also integrates the **Watchlist Tagging System**: Allows users to attach custom categorization tags (e.g., `TECH`, `CORE`) to watchlist assets via an interactive dropdown and modal (`ui/watchlist_tags.py`).
 - **Notification Preferences (`/notif_settings`)**: Manages individual toggles stored in a key-value style `user_notification_settings` table (designed with composite primary key `(user_id, notification_key)` for infinite schema-less extensibility).
   - **Granular Heartbeat Toggles**: The watchlist heartbeat is divided into 4 modular switches (`hb_live_price`, `hb_options_structure`, `hb_uoa`, `hb_execution_risk`), allowing users to completely customize which analysis blocks are rendered in their 30-minute updates. Order Telemetry Alignment is completely decoupled into its own independent toggle (`order_telemetry_alignment_alert`).
 - **Polymarket Settings Migration**: To keep `/settings` focused entirely on portfolio financial metrics, Polymarket monitoring preferences (whale alert toggler `polymarket_whale_alert`, threshold `polymarket_threshold`, AI analysis switch `polymarket_use_llm`, and slippage threshold `polymarket_slippage`) are migrated to `/notif_settings` under their own dedicated selector.

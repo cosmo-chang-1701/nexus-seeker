@@ -782,7 +782,11 @@ class IntradayScanPipeline:
             else False
         )
         holding_row = None
+        symbol_tags = []
         if user_id:
+            from database.watchlist_tags import get_watchlist_tags
+
+            symbol_tags = get_watchlist_tags(str(user_id), evaluation.metrics.symbol)
             user_holdings = {
                 str(row.get("symbol", "")).upper(): row
                 for row in database.get_user_holdings(user_id)
@@ -908,8 +912,9 @@ class IntradayScanPipeline:
             iv_metrics=hb_iv_metrics,
             max_pain_data=hb_max_pain if isinstance(hb_max_pain, dict) else None,
             pcr_data=hb_pcr_data if isinstance(hb_pcr_data, dict) else None,
-            uoa_list=hb_uoa_list if isinstance(hb_uoa_list, list) else [],
+            uoa_list=hb_uoa_list if isinstance(hb_uoa_list, list) else None,
             symbol_gex=evaluation.symbol_gex,
+            symbol_tags=symbol_tags,
         )
 
     async def _run_loop(self):

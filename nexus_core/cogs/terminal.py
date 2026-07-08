@@ -1167,7 +1167,10 @@ class TerminalCog(commands.Cog):
             )
             return
 
-        symbols_data = [(a.symbol, a.metadata.get("use_llm", True)) for a in assets]
+        symbols_data = [
+            (a.symbol, a.metadata.get("use_llm", True), getattr(a, "tags", None))
+            for a in assets
+        ]
 
         from ui.watchlist import WatchlistPagination
 

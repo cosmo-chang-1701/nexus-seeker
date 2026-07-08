@@ -24,16 +24,15 @@ def create_watchlist_embed(page_data, current_page, total_pages, total_items):
     else:
         lines = ["```ansi"]
         # 1. 標頭修改為兩欄
-        header = (
-            f"{_pad_string('標的', 12)} | {_pad_string('AI 分析 (LLM)', 12, 'right')}"
-        )
+        header = f"{_pad_string('標的 [標籤]', 20)} | {_pad_string('AI 分析 (LLM)', 12, 'right')}"
         lines.append(header)
 
         # 2. 分隔線
-        lines.append("-" * 27)
+        lines.append("-" * 35)
 
-        for sym, use_llm in page_data:
-            sym_fmt = _pad_string(sym, 12)
+        for sym, use_llm, tags in page_data:
+            display_sym = f"{sym} [{tags}]" if tags else sym
+            sym_fmt = _pad_string(display_sym, 20)
             llm_text = "開啟 (ON)" if use_llm else "關閉 (OFF)"
             llm_fmt = _pad_string(llm_text, 12, "right")
             lines.append(f"{sym_fmt} | {llm_fmt}")
@@ -82,6 +81,7 @@ def create_watchlist_signal_embed(
     uoa_list: list[dict] | None = None,
     symbol_gex: dict | None = None,
     toggles: dict[str, bool] | None = None,
+    symbol_tags: list[str] | None = None,
 ) -> discord.Embed:
     """建立標的分析中心 2.0 • 戰場心跳快照 (Watchlist Heartbeat) 的 Markdown-ASCII 統一模板。"""
     from services.llm_service import is_memory_safe
@@ -511,7 +511,8 @@ def create_watchlist_signal_embed(
         "green": discord.Color.green(),
     }.get(alert_level, discord.Color.blurple())
 
-    embed_title = f"標的分析中心 2.0: {symbol} 每半小時戰場心跳"
+    tag_str = f" 🏷️ {' | '.join(symbol_tags)}" if symbol_tags else ""
+    embed_title = f"標的分析中心 2.0: {symbol} 每半小時戰場心跳{tag_str}"
     if is_degraded:
         embed_title += " [數據未更新/降級模式]"
 
@@ -525,7 +526,7 @@ def create_watchlist_signal_embed(
         )
     except NameError:
         embed = discord.Embed(
-            title=f"標的分析中心 2.0: {symbol} 每半小時戰場心跳",
+            title=embed_title,
             description=description,
             color=color_val,
             timestamp=datetime.now(timezone.utc),

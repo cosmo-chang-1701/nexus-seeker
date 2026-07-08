@@ -60,6 +60,7 @@ class Asset(BaseModel):
     risk_weight: float = 1.0  # Beta
     entry_price: Optional[float] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    tags: Optional[str] = None
     last_scan_id: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
