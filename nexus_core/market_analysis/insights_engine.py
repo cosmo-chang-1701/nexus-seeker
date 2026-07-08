@@ -18,7 +18,9 @@ class RiskInsightsContext:
 
 class InsightsEngine:
     @staticmethod
-    def generate_cro_insight(context: RiskInsightsContext) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    def generate_cro_insight(
+        context: RiskInsightsContext,
+    ) -> Tuple[Optional[str], Optional[str], Optional[str]]:
         """
         核心風控鐵律代碼邏輯：
         回傳 (dmp_label, status_label, suggestion_override)
