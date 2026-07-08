@@ -467,3 +467,33 @@ async def test_evaluate_watchlist_symbol_iv_suppression():
         assert res is not None
         assert res.tactical.alert_level == "red"
         assert "IV 壓抑背離" in res.tactical.sddm_route
+
+
+def test_avgo_positive_gamma_support_avoids_forbidden_zone():
+    from market_analysis.insights_engine import RiskInsightsContext, InsightsEngine
+
+    # Mocking AVGO data (現價 $370.78, PutWall $372.50, 有大額正 Gamma, 預期區間 $363.75 ~ $377.81)
+    context = RiskInsightsContext(
+        symbol="AVGO",
+        current_price=370.78,
+        put_wall=372.50,
+        net_gex_status="POSITIVE_GAMMA",
+        term_structure=1.0,
+        uoa_institutional_short_call=False,
+        iv_rank=0.5,
+        max_pain_deviation_pct=-0.04,  # -4% means it's within +-5%
+        can_trade_spreads=True,
+        cash_reserve_protection=True,
+        expected_move_lower=363.75,
+        has_positive_gamma_support=True,
+        cb_triggered=False,
+    )
+
+    dmp_label, status_label, suggestion = InsightsEngine.generate_cro_insight(context)
+
+    # 斷言 該標的在批次雷達中不會觸發 🛑 觸發鐵律一：左側禁區 0%
+    if status_label:
+        assert "🛑 觸發鐵律一：左側禁區 0%" not in status_label
+
+    # 斷言 該標的的風控指引顯示為 價格接近最大痛點，維持震盪
+    assert status_label == "價格接近最大痛點，維持震盪"
