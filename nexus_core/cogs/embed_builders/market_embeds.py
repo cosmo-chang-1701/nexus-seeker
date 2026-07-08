@@ -652,15 +652,19 @@ def build_radar_scan_embed(
 
             # 連動 GEX PutWall (做市商底牆)
             if put_wall > 0 and price_val > 0:
-                pw_dist = (price_val - put_wall) / put_wall * 100
-                if 0 <= pw_dist <= 2.0:
-                    insights.append(
-                        f"• 🛡️ **{sym}**: 價格已逼近 GEX PutWall 做市商底牆 (${put_wall:.2f})，此處具備強大流動性支撐，若有效跌破將觸發 Delta 負向螺旋。"
-                    )
-                elif pw_dist < 0:
-                    insights.append(
-                        f"• 🚨 **{sym}**: 價格已跌破 GEX PutWall 做市商底牆 (${put_wall:.2f})，進入 Delta 負向螺旋高風險區間，嚴防流動性踩踏。"
-                    )
+                has_putwall_warning = any(
+                    "PutWall" in msg for msg in insights if sym in msg
+                )
+                if not has_putwall_warning:
+                    pw_dist = (price_val - put_wall) / put_wall * 100
+                    if 0 <= pw_dist <= 2.0:
+                        insights.append(
+                            f"• 🛡️ **{sym}**: 價格已逼近 GEX PutWall 做市商底牆 (${put_wall:.2f})，此處具備強大流動性支撐，若有效跌破將觸發 Delta 負向螺旋。"
+                        )
+                    elif pw_dist < 0:
+                        insights.append(
+                            f"• 🚨 **{sym}**: 價格已跌破 GEX PutWall 做市商底牆 (${put_wall:.2f})，進入 Delta 負向螺旋高風險區間，嚴防流動性踩踏。"
+                        )
 
             # 格式化一列 ANSI 表格
             sym_cell = f"\u001b[1;34m{sym:<6}\u001b[0m"
