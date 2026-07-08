@@ -512,12 +512,18 @@ def build_radar_scan_embed(
                 put_wall = float(r["put_wall"])
             else:
                 # 嘗試從 metrics 提取 (如果是 Watchlist pipeline 的輸出)
-                put_wall = float(
-                    r.get("max_pain", {}).get("max_pain", 0.0) * 0.9
+                mp_val = (
+                    r.get("max_pain", {}).get("max_pain")
+                    if isinstance(r.get("max_pain"), dict)
+                    else None
+                )
+                put_wall = (
+                    float(mp_val) * 0.9 if mp_val is not None else 0.0
                 )  # Fallback 僅供安全
                 if r.get("iv_metrics") and hasattr(r["iv_metrics"], "gex_max_put_wall"):
                     val = getattr(r["iv_metrics"], "gex_max_put_wall", 0.0)
-                put_wall = float(val) if val is not None else 0.0
+                    if val is not None:
+                        put_wall = float(val)
 
             # 解析 UOA
             uoa_list = r.get("uoa") or []
@@ -542,7 +548,8 @@ def build_radar_scan_embed(
             elif isinstance(iv_metrics, dict) and iv_metrics.get(
                 "term_structure_ratio"
             ):
-                term_structure = float(iv_metrics.get("term_structure_ratio"))
+                val = iv_metrics.get("term_structure_ratio")
+                term_structure = float(val) if val is not None else 1.0
 
             risk_ctx = RiskInsightsContext(
                 symbol=sym,
