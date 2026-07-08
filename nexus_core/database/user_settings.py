@@ -33,6 +33,8 @@ class UserContext:
     cash_reserve: float = 0.0  # 現金儲備 (用於生存天數計算)
     escape_window_start: str = "07-15"
     escape_window_end: str = "07-31"
+    can_trade_spreads: bool = False  # 是否具備複式選擇權 (Spread) 交易權限
+    cash_reserve_protection: bool = True  # 是否啟動備用金與新資金動用率的風控防禦
 
 
 # ==========================================
@@ -85,6 +87,8 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:
             "cash_reserve",
             "escape_window_start",
             "escape_window_end",
+            "can_trade_spreads",
+            "cash_reserve_protection",
         }
         update_pairs = []
         values = []
@@ -337,6 +341,8 @@ def get_full_user_context(user_id: int) -> UserContext:
             cash_reserve=_get_val("cash_reserve", 0.0),
             escape_window_start=_get_val("escape_window_start", "07-15"),
             escape_window_end=_get_val("escape_window_end", "07-31"),
+            can_trade_spreads=bool(_get_val("can_trade_spreads", False)),
+            cash_reserve_protection=bool(_get_val("cash_reserve_protection", True)),
         )
 
     except Exception as e:

@@ -403,6 +403,16 @@ SETTINGS_LABELS = {
         "現金儲備金額 (USD, 用於生存天數計算)",
         "輸入大於等於 0 的現金儲備",
     ),
+    "can_trade_spreads": (
+        "📈 期權 Spread 權限",
+        "是否具備複式選擇權 (Spread) 交易權限",
+        None,
+    ),
+    "cash_reserve_protection": (
+        "🛡️ 備用金防護",
+        "是否啟動備用金與新資金動用率風控防禦",
+        None,
+    ),
 }
 
 
@@ -577,6 +587,8 @@ class AccountSettingsView(discord.ui.View):
             "enable_psq_watchlist",
             "enable_local_tunnel",
             "polymarket_use_llm",
+            "can_trade_spreads",
+            "cash_reserve_protection",
         ]:
             current_val = getattr(ctx, key, False)
             new_val = not current_val
@@ -609,6 +621,8 @@ class AccountSettingsView(discord.ui.View):
             f"👻 **虛擬交易室 (VTR) 跟單**: `{'🟢 開啟' if ctx.enable_vtr else '🔴 關閉'}`",
             f"⚡ **PowerSqueeze 追蹤**: `{'🟢 開啟' if ctx.enable_psq_watchlist else '🔴 關閉'}`",
             f"🛜 **本地 Tunnel 呼叫**: `{'🟢 開啟' if ctx.enable_local_tunnel else '🔴 關閉'}`",
+            f"📈 **期權 Spread 權限**: `{'🟢 開啟' if ctx.can_trade_spreads else '🔴 關閉'}`",
+            f"🛡️ **備用金防護**: `{'🟢 開啟' if ctx.cash_reserve_protection else '🔴 關閉'}`",
         ]
 
         runway_settings = [
