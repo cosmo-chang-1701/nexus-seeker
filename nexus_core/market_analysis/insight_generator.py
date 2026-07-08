@@ -73,4 +73,5 @@ def compute_realtime_insights(data: Dict[str, Any]) -> str:
     elif dist_pct < -10.0:
         guidance = "；操作上建議保持現貨防禦，嚴禁單腿操作。"
 
-    return f"• **{sym}**: {chip_status}{dev_fact}{guidance}"
+    emoji, text = chip_status.split(" ", 1)
+    return f"• {emoji} **{sym}**: {text}{dev_fact}{guidance}"
