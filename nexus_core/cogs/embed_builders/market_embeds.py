@@ -553,17 +553,30 @@ def build_radar_scan_embed(
                 val = iv_metrics.get("term_structure_ratio")
                 term_structure = float(val) if val is not None else 1.0
 
+            # 判斷 has_positive_gamma_support:
+            net_gex = 0.0
+            if "gex_profile_data" in r and isinstance(r["gex_profile_data"], dict):
+                net_gex = float(r.get("gex_profile_data", {}).get("net_gex", 0.0))
+            elif "gex_metrics" in r and isinstance(r["gex_metrics"], dict):
+                net_gex = float(r.get("gex_metrics", {}).get("net_gex", 0.0))
+            has_positive_gamma_support = net_gex > 10_000_000
+
             risk_ctx = RiskInsightsContext(
                 symbol=sym,
                 current_price=price_val,
                 put_wall=put_wall,
-                net_gex_status="UNKNOWN",
+                net_gex_status="POSITIVE_GAMMA"
+                if net_gex > 0
+                else "NEGATIVE_GAMMA_ZONE",
                 term_structure=term_structure,
                 uoa_institutional_short_call=uoa_institutional_short_call,
                 iv_rank=iv_rank_val / 100.0 if iv_rank_val > 1.0 else iv_rank_val,
                 max_pain_deviation_pct=dist_pct / 100.0,
                 can_trade_spreads=ctx_db.can_trade_spreads,
                 cash_reserve_protection=ctx_db.cash_reserve_protection,
+                expected_move_lower=em_low if em_weekly > 0 else None,
+                has_positive_gamma_support=has_positive_gamma_support,
+                cb_triggered=cb_triggered,
             )
 
             override_dmp, override_status, suggestion = (

@@ -14,6 +14,9 @@ class RiskInsightsContext:
     max_pain_deviation_pct: float
     can_trade_spreads: bool
     cash_reserve_protection: bool
+    expected_move_lower: Optional[float] = None
+    has_positive_gamma_support: bool = False
+    cb_triggered: bool = False
 
 
 class InsightsEngine:
@@ -30,14 +33,39 @@ class InsightsEngine:
         status_label = None
         suggestion = None
 
+        can_overwrite_dmp = (
+            abs(context.max_pain_deviation_pct) > 0.10
+        ) or context.cb_triggered
+        is_near_max_pain = abs(context.max_pain_deviation_pct) <= 0.05
+
+        if is_near_max_pain:
+            status_label = "價格接近最大痛點，維持震盪"
+
         # 鐵律一：左側禁區破位
         if context.current_price < context.put_wall:
-            dmp_label = "[底牆破位]"
-            if context.cash_reserve_protection:
-                status_label = "🛑 觸發鐵律一：左側禁區 0%"
+            if context.has_positive_gamma_support:
+                if can_overwrite_dmp:
+                    dmp_label = "[底牆測試 / 強支撐共振]"
+                # 不觸發極端禁區停損指引，維持原本的 status_label
+            elif (
+                context.expected_move_lower is not None
+                and context.current_price >= context.expected_move_lower
+            ):
+                if can_overwrite_dmp:
+                    dmp_label = "[底牆測試 / 區間震盪]"
+                # 不觸發極端停損
+            elif is_near_max_pain:
+                if can_overwrite_dmp:
+                    dmp_label = "[底牆測試 / 痛點區間]"
+                # 在痛點 +- 5% 內，同步為接近痛點，而非粗暴歸入底牆破位的極端清單
             else:
-                status_label = "🛑 觸發鐵律一：物理封印 0%"
-            suggestion = "STOP_ALL_BUY"
+                if can_overwrite_dmp:
+                    dmp_label = "[底牆破位]"
+                if context.cash_reserve_protection:
+                    status_label = "🛑 觸發鐵律一：左側禁區 0%"
+                else:
+                    status_label = "🛑 觸發鐵律一：物理封印 0%"
+                suggestion = "STOP_ALL_BUY"
         # 鐵律二：高位避險與獲利鎖利牆
         elif (
             context.max_pain_deviation_pct > 0.05
