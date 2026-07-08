@@ -524,7 +524,13 @@ class UnifiedTerminalCog(commands.Cog):
         if em_upper > em_lower and price > 0:
             em_weekly = (em_upper - em_lower) / 2.0
 
-        iv_m = await SentimentEngine.fetch_and_calculate_iv_metrics(sym)
+        iv_task = SentimentEngine.fetch_and_calculate_iv_metrics(sym)
+        from market_analysis.index_microstructure import fetch_symbol_gex_metrics
+
+        gex_task = fetch_symbol_gex_metrics(sym)
+
+        iv_m, gex_data = await asyncio.gather(iv_task, gex_task)
+
         if iv_m:
             iv_rank_val = iv_m.iv_rank if iv_m.iv_rank is not None else 0.0
 
@@ -541,6 +547,7 @@ class UnifiedTerminalCog(commands.Cog):
             "skew_percentile": skew_percentile,
             "max_pain": mp_data,
             "uoa": uoa_data,
+            "gex_profile_data": gex_data,
         }
 
     @app_commands.command(

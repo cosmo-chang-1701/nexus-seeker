@@ -1131,11 +1131,24 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             inline=False,
         )
 
-    # 5. 🐋 異常活動 (UOA)
+    embed.set_footer(
+        text="🔗 使用 /settle_hedge 紀錄對沖或 /event_impact 進行曝險模擬。"
+    )
+    return embed
+
+
+def create_tactical_uoa_embed(data: Dict[str, Any]) -> discord.Embed:
+    """建構標的異常活動 (UOA) 獨立看板 Embed"""
+    symbol = data.get("symbol", "UNKNOWN")
+    embed = discord.Embed(
+        title=f"🐋 異常活動追蹤: {symbol}",
+        color=discord.Color.dark_magenta(),
+        timestamp=datetime.now(timezone.utc),
+    )
+
     uoa_data = data.get("uoa", [])
     if uoa_data:
         try:
-            # 確保外部已載入 _format_uoa_field，或這裡安全呼叫
             table_str = _format_uoa_field(uoa_data)
             embed.add_field(
                 name="🐋 異常活動 (UOA)",
@@ -1154,10 +1167,6 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             value="```ansi\n目前無顯著異常活動\n```",
             inline=False,
         )
-
-    embed.set_footer(
-        text="🔗 使用 /settle_hedge 紀錄對沖或 /event_impact 進行曝險模擬。"
-    )
     return embed
 
 
