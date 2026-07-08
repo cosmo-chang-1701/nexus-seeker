@@ -11,10 +11,8 @@ import market_math
 import database
 from cogs.embed_builder import (
     create_error_embed,
-    create_info_embed,
     create_media_sentiment_embed,
     create_tactical_symbol_embed,
-    create_tactical_uoa_embed,
     create_tactical_hedge_embed,
 )
 from .utils import find_matching_polymarket_odds
@@ -63,24 +61,6 @@ class SymbolHubView(discord.ui.View):
         except Exception as e:
             await interaction.followup.send(
                 embed=create_error_embed(f"恢復主頁失敗: {e}"), ephemeral=True
-            )
-        finally:
-            await self._reset_loading(interaction, embed=embed)
-
-    @discord.ui.button(
-        label="🐋 異常活動", style=discord.ButtonStyle.primary, custom_id="btn_uoa"
-    )
-    async def btn_uoa(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
-        await interaction.response.defer()
-        await self._set_loading(interaction)
-        embed = None
-        try:
-            embed = create_tactical_uoa_embed(self.base_data)
-        except Exception as e:
-            await interaction.followup.send(
-                embed=create_error_embed(f"載入異常活動資料失敗: {e}"), ephemeral=True
             )
         finally:
             await self._reset_loading(interaction, embed=embed)
@@ -337,13 +317,6 @@ class SymbolHubView(discord.ui.View):
 
             self.base_data = result
             embed = create_tactical_symbol_embed(self.base_data)
-            await interaction.followup.send(
-                embed=create_info_embed(
-                    title="更新成功",
-                    message=f"✨ `{self.symbol}` 最新數據已重整並更新！",
-                ),
-                ephemeral=True,
-            )
         except Exception as e:
             await interaction.followup.send(
                 embed=create_error_embed(f"重整數據失敗: {e}"), ephemeral=True
