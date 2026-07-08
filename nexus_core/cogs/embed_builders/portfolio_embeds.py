@@ -757,7 +757,12 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             catalysts = data.get("catalysts")
             if catalysts:
                 iv_lines.append(" 事件日曆防護 (Catalyst Calendar)")
-                for cat in catalysts:
+                for idx, cat in enumerate(catalysts):
+                    if idx >= 3:
+                        iv_lines.append(
+                            " └─ \u001b[1;30m...及其他事件 (已省略)\u001b[0m"
+                        )
+                        break
                     if hasattr(cat, "date"):
                         date_str = cat.date
                         days = cat.days_to_earnings
@@ -767,14 +772,27 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                     elif hasattr(cat, "time"):
                         date_str = cat.time[:10]
                         days = round(cat.tte_hours / 24.0, 1)
+                        # Ensure the event name is not excessively long
+                        event_name = (
+                            cat.event
+                            if len(cat.event) <= 20
+                            else cat.event[:17] + "..."
+                        )
                         iv_lines.append(
-                            f" └─ \u001b[1;33m⚠️ 距離 {cat.event} ({date_str[5:]}) 僅剩 {days:.1f} 天，留意波動擴大\u001b[0m"
+                            f" └─ \u001b[1;33m⚠️ 距離 {event_name} ({date_str[5:]}) 僅剩 {days:.1f} 天，留意波動擴大\u001b[0m"
                         )
 
             iv_lines.append("```")
+
+        # Double check length and gracefully truncate if still too long
+        iv_text = "\n".join(iv_lines)
+        if len(iv_text) > 1024:
+            # 1024 - len("\n```") - len("...") = 1024 - 4 - 3 = 1017
+            iv_text = iv_text[:1017] + "...\n```"
+
         embed.add_field(
             name="📊 隱含波動率與預期區間 (IV Context)",
-            value="\n".join(iv_lines),
+            value=iv_text,
             inline=False,
         )
 
@@ -1005,6 +1023,9 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         except Exception:
             month_mps_sorted = month_mps
 
+        # Limit to nearest 4 expirations to prevent Discord embed field limit error (1024 chars)
+        month_mps_sorted = month_mps_sorted[:4]
+
         for i, item in enumerate(month_mps_sorted):
             exp = item.get("expiry", "N/A")
             mp_val = item.get("max_pain")
@@ -1081,6 +1102,24 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         name="🎯 結算與目標 (Target Lock)", value="\n".join(target_lines), inline=False
     )
 
+    uoa_data = data.get("uoa", [])
+    if uoa_data:
+        try:
+            table_str = _format_uoa_field(uoa_data)
+            embed.add_field(
+                name="🐋 異常活動 (UOA)",
+                value=f"```ansi\n{table_str}\n```",
+                inline=False,
+            )
+        except Exception:
+            pass
+    else:
+        embed.add_field(
+            name="🐋 異常活動 (UOA)",
+            value="```ansi\n目前無顯著異常活動\n```",
+            inline=False,
+        )
+
     # 4.5. 🦇 暗池與大宗交易跡象 (Dark Pool Prints)
     dp_data = data.get("darkpool")
     if dp_data:
@@ -1134,39 +1173,6 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     embed.set_footer(
         text="🔗 使用 /settle_hedge 紀錄對沖或 /event_impact 進行曝險模擬。"
     )
-    return embed
-
-
-def create_tactical_uoa_embed(data: Dict[str, Any]) -> discord.Embed:
-    """建構標的異常活動 (UOA) 獨立看板 Embed"""
-    symbol = data.get("symbol", "UNKNOWN")
-    embed = discord.Embed(
-        title=f"🐋 異常活動追蹤: {symbol}",
-        color=discord.Color.dark_magenta(),
-        timestamp=datetime.now(timezone.utc),
-    )
-
-    uoa_data = data.get("uoa", [])
-    if uoa_data:
-        try:
-            table_str = _format_uoa_field(uoa_data)
-            embed.add_field(
-                name="🐋 異常活動 (UOA)",
-                value=f"```ansi\n{table_str}\n```",
-                inline=False,
-            )
-        except NameError:
-            embed.add_field(
-                name="🐋 異常活動 (UOA)",
-                value="```ansi\n無法渲染異常活動資料\n```",
-                inline=False,
-            )
-    else:
-        embed.add_field(
-            name="🐋 異常活動 (UOA)",
-            value="```ansi\n目前無顯著異常活動\n```",
-            inline=False,
-        )
     return embed
 
 
