@@ -15,6 +15,8 @@ class RiskInsightsContext:
     can_trade_spreads: bool
     cash_reserve_protection: bool
     expected_move_lower: Optional[float] = None
+    expected_move_upper: Optional[float] = None
+    sqz_mom: float = 0.0
     has_positive_gamma_support: bool = False
     cb_triggered: bool = False
 
@@ -33,16 +35,40 @@ class InsightsEngine:
         status_label = None
         suggestion = None
 
+        FIXED_INCOME_WHITE_LIST = ["BOXX", "BIL", "SHV"]
+        if context.symbol.upper() in FIXED_INCOME_WHITE_LIST:
+            return "(避險資產)", "現金避險部位，風控豁免 🛡️", None
+
         can_overwrite_dmp = (
             abs(context.max_pain_deviation_pct) > 0.10
         ) or context.cb_triggered
         is_near_max_pain = abs(context.max_pain_deviation_pct) <= 0.05
+
+        # 多頭推進 / 蓄力突破 判斷
+        is_bullish_breakout = False
+        if (
+            context.expected_move_lower is not None
+            and context.expected_move_upper is not None
+        ):
+            em_midpoint = (
+                context.expected_move_lower + context.expected_move_upper
+            ) / 2.0
+            if context.current_price >= em_midpoint and context.sqz_mom > 0:
+                is_bullish_breakout = True
+
+        if is_bullish_breakout:
+            return (
+                "[多頭推進 / 蓄力突破]",
+                "🟢 多頭推進 / 蓄力突破",
+                None,
+            )
 
         # 底牆保衛 (Narrative Trap Override)
         if context.put_wall > 0 and context.current_price > 0:
             distance = (
                 context.current_price - context.put_wall
             ) / context.current_price
+
             if distance <= 0.02 and context.net_gex_status == "NEGATIVE_GAMMA_ZONE":
                 # 強制覆蓋所有磁吸回升標籤
                 return (

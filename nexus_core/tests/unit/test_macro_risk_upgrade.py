@@ -316,6 +316,28 @@ async def test_get_macro_overview_data_logic():
         assert data_degraded["is_degraded"] is True
 
 
+def test_fixed_income_hedging_whitelist():
+    """測試 BOXX 在 InsightsEngine 等級的白名單豁免"""
+    from market_analysis.insights_engine import RiskInsightsContext, InsightsEngine
+
+    context = RiskInsightsContext(
+        symbol="BIL",
+        current_price=91.4,
+        put_wall=91.4,
+        net_gex_status="NEGATIVE_GAMMA_ZONE",
+        term_structure=1.0,
+        uoa_institutional_short_call=False,
+        iv_rank=0.0,
+        max_pain_deviation_pct=0.0,
+        can_trade_spreads=False,
+        cash_reserve_protection=True,
+    )
+
+    dmp_label, status_label, suggestion = InsightsEngine.generate_cro_insight(context)
+    assert status_label == "現金避險部位，風控豁免 🛡️"
+    assert dmp_label == "(避險資產)"
+
+
 def test_putwall_crisis_textual_martial_law():
     from market_analysis import insight_generator
 

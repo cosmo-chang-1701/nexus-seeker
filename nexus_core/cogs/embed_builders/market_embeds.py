@@ -17,7 +17,7 @@ import discord
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
-from cogs.embed_builders._ansi_utils import _safe_float
+from cogs.embed_builders._ansi_utils import _safe_float, _pad_string
 from cogs.embed_builders.settings_embeds import create_info_embed
 from cogs.embed_builders._core import NexusEmbed
 
@@ -392,8 +392,8 @@ def build_radar_scan_embed(
             pass
 
         # 寬度與格式對齊範例
-        header = f"{'標的':<8}{'價格 (漲跌)':<16}{'IVR':<8}{'本週預期區間 (EM)':<22}{'Max Pain':<11}{'SQZ':<4}{'MOM':<7}{'與痛點價差 (D-MP)'}"
-        divider = "-" * 91
+        header = f"{'標的':<8}{'價格 (漲跌)':<16}{'IVR':<8}{'本週預期區間 (EM)':<22}{'Max Pain':<11}{'SQZ MOM':<14}{'與痛點價差 (D-MP)'}"
+        divider = "-" * 94
 
         ansi_lines = []
         if macro_ansi_header:
@@ -442,7 +442,12 @@ def build_radar_scan_embed(
             ivr_str = f"{iv_rank_val:.1f}%"
 
             # 3. 本週預期區間 (EM)
-            if price_val > 0 and em_weekly > 0:
+            is_fixed_income = sym.upper() in ["BOXX", "BIL", "SHV"]
+            if is_fixed_income:
+                em_low = em_high = price_val
+                em_str = "N/A (避險資產)"
+                em_ansi = "\u001b[1;30mN/A (避險資產)\u001b[0m"
+            elif price_val > 0 and em_weekly > 0:
                 em_low = price_val - em_weekly
                 em_high = price_val + em_weekly
                 em_str = f"${em_low:.2f} ~ ${em_high:.2f}"
@@ -461,34 +466,38 @@ def build_radar_scan_embed(
             calculation_mode = "OI"
             is_degraded = False
 
-            if isinstance(mp_data, dict):
+            if is_fixed_income:
+                max_pain_strike = 0.0
+                dist_pct = 0.0
+                cb_triggered = False
+            elif isinstance(mp_data, dict):
                 mp_val = mp_data.get("max_pain")
                 max_pain_strike = float(mp_val) if mp_val is not None else 0.0
                 cb_triggered = mp_data.get("circuit_breaker_triggered", False)
                 calculation_mode = mp_data.get("calculation_mode", "OI")
                 is_degraded = mp_data.get("is_degraded", False)
                 if max_pain_strike > 0 and price_val > 0:
-                    dist_pct = (max_pain_strike - price_val) / price_val * 100
+                    dist_pct = (price_val - max_pain_strike) / max_pain_strike * 100
 
             # 判定狀態標籤 (透過 InsightsEngine 核心風控鐵律)
             status_label = ""
             if max_pain_strike > 0:
                 if dist_pct >= 0:
-                    dmp_str = f"[+{dist_pct:.2f}%]"
-                    dmp_ansi = f"[\u001b[1;32m+{dist_pct:.2f}%\u001b[0m]"
+                    dmp_str = f"[{dist_pct:+.2f}%]"
+                    dmp_ansi = f"[\u001b[1;32m{dist_pct:+.2f}%\u001b[0m]"
                 else:
-                    dmp_str = f"[{dist_pct:.2f}%]"
-                    dmp_ansi = f"[\u001b[1;31m{dist_pct:.2f}%\u001b[0m]"
+                    dmp_str = f"[{dist_pct:+.2f}%]"
+                    dmp_ansi = f"[\u001b[1;31m{dist_pct:+.2f}%\u001b[0m]"
 
-                if dist_pct > 10.0:
+                if dist_pct < -10.0:
                     status_label = "超跌磁吸 🚀"
-                elif 5.0 <= dist_pct <= 10.0:
+                elif -10.0 <= dist_pct <= -5.0:
                     status_label = "超跌磁吸 🚀" if sym == "AMD" else "磁吸回升"
-                elif 0.0 <= dist_pct < 5.0:
+                elif -5.0 < dist_pct < 0.0:
                     status_label = "磁吸回升"
-                elif -15.0 <= dist_pct < 0.0:
+                elif 0.0 <= dist_pct <= 15.0:
                     status_label = "需防壓回 ⚠️"
-                else:  # < -15.0
+                else:  # > 15.0
                     status_label = "籌碼斷層 ⚠️"
             else:
                 dmp_str = "[0.00%]"
@@ -561,6 +570,8 @@ def build_radar_scan_embed(
                 net_gex = float(r.get("gex_metrics", {}).get("net_gex", 0.0))
             has_positive_gamma_support = net_gex > 10_000_000
 
+            sqz_mom_val = r.get("psq_result", {}).get("momentum", 0.0)
+
             risk_ctx = RiskInsightsContext(
                 symbol=sym,
                 current_price=price_val,
@@ -575,6 +586,8 @@ def build_radar_scan_embed(
                 can_trade_spreads=ctx_db.can_trade_spreads,
                 cash_reserve_protection=ctx_db.cash_reserve_protection,
                 expected_move_lower=em_low if em_weekly > 0 else None,
+                expected_move_upper=em_high if em_weekly > 0 else None,
+                sqz_mom=sqz_mom_val,
                 has_positive_gamma_support=has_positive_gamma_support,
                 cb_triggered=cb_triggered,
             )
@@ -600,7 +613,7 @@ def build_radar_scan_embed(
 
             # Local Rules: 聯動警示 insights
             if max_pain_strike > 0 and price_val > 0:
-                if price_val <= em_low * 1.02 and dist_pct > 3.0:
+                if price_val <= em_low * 1.02 and dist_pct < -3.0:
                     matched_order = next(
                         (
                             o
@@ -612,11 +625,11 @@ def build_radar_scan_embed(
                     )
                     if matched_order:
                         insights.append(
-                            f"• 🚀 **{sym}**: 價格已極度逼近本週波動下緣 (${em_low:.2f})，且距離 Max Pain 有 +{dist_pct:.1f}% 的多頭磁吸引力，系統已自動激活 ID: {matched_order['id']} 坑底捕獸夾 (${matched_order['limit_price']:.2f})。"
+                            f"• 🚀 **{sym}**: 價格已極度逼近本週波動下緣 (${em_low:.2f})，且距離 Max Pain 有 {dist_pct:+.1f}% 的多頭磁吸引力，系統已自動激活 ID: {matched_order['id']} 坑底捕獸夾 (${matched_order['limit_price']:.2f})。"
                         )
                     else:
                         insights.append(
-                            f"• 🚀 **{sym}**: 價格已極度逼近本週波動下緣 (${em_low:.2f})，且距離 Max Pain 有 +{dist_pct:.1f}% 的多頭磁吸引力，建議部署限價捕獵。"
+                            f"• 🚀 **{sym}**: 價格已極度逼近本週波動下緣 (${em_low:.2f})，且距離 Max Pain 有 {dist_pct:+.1f}% 的多頭磁吸引力，建議部署限價捕獵。"
                         )
 
                 # 穿透式 UOA 與偏離度聯動判定：當偏離度顯著時 (例如 |dist_pct| > 10%)
@@ -650,6 +663,12 @@ def build_radar_scan_embed(
                     insight_str = compute_realtime_insights(data)
                     insights.append(insight_str)
 
+            # 連動 SQZ MOM 擠壓蓄力 (Squeeze Momentum)
+            psq_result = r.get("psq_result", {})
+            sqz_dir = psq_result.get("direction", "⚪")
+            sqz_is_squeezing = psq_result.get("is_squeezing", False)
+            sqz_mom = psq_result.get("momentum", 0.0)
+
             # 連動 GEX PutWall (做市商底牆)
             if put_wall > 0 and price_val > 0:
                 has_putwall_warning = any(
@@ -661,10 +680,20 @@ def build_radar_scan_embed(
                         insights.append(
                             f"• 🛡️ **{sym}**: 價格已逼近 GEX PutWall 做市商底牆 (${put_wall:.2f})，此處具備強大流動性支撐，若有效跌破將觸發 Delta 負向螺旋。"
                         )
-                    elif pw_dist < 0:
+                    elif pw_dist < 0 and net_gex < 0 and sqz_dir == "🔴":
                         insights.append(
                             f"• 🚨 **{sym}**: 價格已跌破 GEX PutWall 做市商底牆 (${put_wall:.2f})，進入 Delta 負向螺旋高風險區間，嚴防流動性踩踏。"
                         )
+
+            if sqz_is_squeezing:
+                if sqz_mom_val > 0:
+                    insights.append(
+                        f"• ⏱️ **{sym}**: SQZ 正處於動能擠壓蓄力期 (Squeezing)，當前動能偏多 ({sqz_mom_val:+.1f})，建議關注向上突破機會。"
+                    )
+                elif sqz_mom_val < 0:
+                    insights.append(
+                        f"• ⏱️ **{sym}**: SQZ 正處於動能擠壓蓄力期 (Squeezing)，當前動能偏空 ({sqz_mom_val:+.1f})，建議嚴防向下殺跌風險。"
+                    )
 
             # 格式化一列 ANSI 表格
             sym_cell = f"\u001b[1;34m{sym:<6}\u001b[0m"
@@ -682,37 +711,46 @@ def build_radar_scan_embed(
                 mp_str_val = "N/A"
             mp_cell = mp_str_val + (" " * max(0, 11 - len(mp_str_val)))
 
-            dmp_cell = dmp_ansi + (" " * max(0, 12 - len(dmp_str)))
+            dmp_padded_raw = _pad_string(dmp_str, 12)
+            dmp_cell = dmp_padded_raw.replace(dmp_str, dmp_ansi)
             label_cell = status_label
 
-            psq_result = r.get("psq_result", {})
-            sqz_dir = psq_result.get("direction", "⚪")
-            sqz_str = f"{sqz_dir}"
-            sqz_cell = sqz_str + (" " * max(0, 4 - len(sqz_str)))
+            if sqz_mom > 0:
+                sqz_text = f"{sqz_dir} 多頭"
+            elif sqz_mom < 0:
+                sqz_text = f"{sqz_dir} 空頭"
+            else:
+                sqz_text = f"{sqz_dir} 中性"
 
-            sqz_mom = psq_result.get("momentum", 0.0)
-            if psq_result.get("is_squeezing", False):
+            if sqz_is_squeezing:
                 mom_str = f"{sqz_mom:+.1f}"
                 if sqz_mom > 0:
-                    mom_ansi = f"\u001b[1;32m{mom_str}\u001b[0m"
+                    combined_ansi = f"\u001b[1;32m{sqz_text} {mom_str}\u001b[0m"
                 elif sqz_mom < 0:
-                    mom_ansi = f"\u001b[1;31m{mom_str}\u001b[0m"
+                    combined_ansi = f"\u001b[1;31m{sqz_text} {mom_str}\u001b[0m"
                 else:
-                    mom_ansi = mom_str
+                    combined_ansi = f"{sqz_text} {mom_str}"
             else:
                 mom_str = "---"
-                mom_ansi = "\u001b[1;30m---\u001b[0m"
-            mom_cell = mom_ansi + (" " * max(0, 7 - len(mom_str)))
+                combined_ansi = f"\u001b[1;30m{sqz_text} {mom_str}\u001b[0m"
+
+            # Use _pad_string with visual length calculation. width is 14
+            # (Header 'SQZ MOM       ' is 14 spaces wide)
+            combined_raw = f"{sqz_text} {mom_str}"
+            padded_raw = _pad_string(combined_raw, 14)
+            # Replace the raw part with ANSI inside the padded string
+            sqz_mom_cell = padded_raw.replace(combined_raw, combined_ansi)
 
             ansi_lines.append(
-                f"{sym_cell}{price_cell}{ivr_cell}{em_cell}{mp_cell}{sqz_cell}{mom_cell}{dmp_cell}{label_cell}"
+                f"{sym_cell}{price_cell}{ivr_cell}{em_cell}{mp_cell}{sqz_mom_cell}{dmp_cell}{label_cell}"
             )
 
         ansi_table = f"```ansi\n============================= 核心 AI 暨持倉量化雷達 =============================\n{header}\n{divider}\n"
         ansi_table += "\n".join(ansi_lines)
         ansi_table += "\n=================================================================================\n"
         ansi_table += "提示: ⚠️ 代表與最大痛點偏離度過高（>10%）或具備異常籌碼結構，需點擊穿透審查。\n"
-        ansi_table += "備註: (V) 代表期權OI資料毀損，降級為Volume權重計算。CB 代表偏離現貨過高(>30%)觸發自癒斷路器。\n```"
+        ansi_table += "備註: (V) 期權OI毀損降級Volume。CB 偏離現貨過高觸發斷路。\n"
+        ansi_table += "指標: SQZ 🟢多頭動能/🔴空頭動能。MOM 顯示數值代表處於擠壓蓄力期，需防突破或殺跌。\n```"
 
         embed.description = ansi_table
 

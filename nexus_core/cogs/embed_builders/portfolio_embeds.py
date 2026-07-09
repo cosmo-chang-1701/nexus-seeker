@@ -823,42 +823,55 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                     except (ValueError, TypeError):
                         return 0.0
 
-                max_abs_gex = max([abs(_safe_gex(k)) for k in display_strikes])
-                max_abs_gex = max(max_abs_gex, 1.0)
-
-                gex_lines = ["```ansi", " ┌─ 履約價(Strike) ─ 曝險熱力圖 ─ [K]"]
-                for i, k in enumerate(reversed(display_strikes)):
-                    v = _safe_gex(k)
-                    bars = int((abs(v) / max_abs_gex) * 10)
-                    bar_str = "█" * bars + "░" * (10 - bars)
-                    if v > 0:
-                        color_prefix = "\u001b[1;32m"
-                        sign = "+"
-                    elif v < 0:
-                        color_prefix = "\u001b[1;31m"
-                        sign = "-"
-                    else:
-                        color_prefix = "\u001b[1;30m"
-                        sign = " "
-
-                    spot_marker = "📍" if abs(k - c_val) < (c_val * 0.01) else "  "
-                    formatted_val = f"{sign}{abs(v)/1000:.0f}K"
-                    prefix = " ├─" if i < len(display_strikes) - 1 else " └─"
-                    gex_lines.append(
-                        f"{prefix} {spot_marker}{k:>7.2f} | {color_prefix}{bar_str}\u001b[0m | {formatted_val:>8}"
-                    )
-
+                is_gex_empty = all(abs(_safe_gex(k)) == 0.0 for k in display_strikes)
                 gex_putwall = gex_data.get("put_wall")
+                has_putwall = False
                 try:
                     if gex_putwall and float(gex_putwall) > 0:
+                        has_putwall = True
+                except (ValueError, TypeError):
+                    pass
+
+                if is_gex_empty and has_putwall:
+                    gex_lines = [
+                        "```ansi",
+                        " ⚠️ [GEX 鏈盤前未刷新] 期權鏈造市商曝險尚未更新",
+                        f" 🛡️ 靜態 GEX PutWall (快取底牆): ${float(gex_putwall):.2f}",
+                        "```",
+                    ]
+                else:
+                    max_abs_gex = max([abs(_safe_gex(k)) for k in display_strikes])
+                    max_abs_gex = max(max_abs_gex, 1.0)
+
+                    gex_lines = ["```ansi", " ┌─ 履約價(Strike) ─ 曝險熱力圖 ─ [K]"]
+                    for i, k in enumerate(reversed(display_strikes)):
+                        v = _safe_gex(k)
+                        bars = int((abs(v) / max_abs_gex) * 10)
+                        bar_str = "█" * bars + "░" * (10 - bars)
+                        if v > 0:
+                            color_prefix = "\u001b[1;32m"
+                            sign = "+"
+                        elif v < 0:
+                            color_prefix = "\u001b[1;31m"
+                            sign = "-"
+                        else:
+                            color_prefix = "\u001b[1;30m"
+                            sign = " "
+
+                        spot_marker = "📍" if abs(k - c_val) < (c_val * 0.01) else "  "
+                        formatted_val = f"{sign}{abs(v)/1000:.0f}K"
+                        prefix = " ├─" if i < len(display_strikes) - 1 else " └─"
+                        gex_lines.append(
+                            f"{prefix} {spot_marker}{k:>7.2f} | {color_prefix}{bar_str}\u001b[0m | {formatted_val:>8}"
+                        )
+
+                    if has_putwall:
                         gex_lines.append("")
                         gex_lines.append(
                             f" 🛡️ GEX PutWall (做市商底牆): ${float(gex_putwall):.2f}"
                         )
-                except (ValueError, TypeError):
-                    pass
 
-                gex_lines.append("```")
+                    gex_lines.append("```")
 
                 is_stale = bool(gex_data.get("_is_stale_cache", False))
                 stale_suffix = " [快取 / API 降級]" if is_stale else ""
@@ -1042,11 +1055,16 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 today_ny = datetime.now(ny_tz).date()
                 exp_dt = datetime.strptime(exp, "%Y-%m-%d").date()
                 dte = (exp_dt - today_ny).days
+                is_friday = exp_dt.weekday() == 4
             except Exception:
                 dte = 0
+                is_friday = False
 
             if dte <= 7:
-                label = "週五即期" if dte >= 4 and dte <= 6 else "短線週線"
+                if is_friday:
+                    label = "週五即期"
+                else:
+                    label = "期中特約/末日週線"
             elif dte <= 14:
                 label = "次週主力"
             else:
@@ -1126,11 +1144,17 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     # 4.5. 🦇 暗池與大宗交易跡象 (Dark Pool Prints)
     dp_data = data.get("darkpool")
     if dp_data:
+        from market_analysis.dark_pool_engine import sanitize_darkpool_prints
+
         dp_lines = ["```ansi"]
         prints = dp_data.get("prints", [])
-        if prints:
+        valid_prints = sanitize_darkpool_prints(symbol, prints, c_val, 0.05)
+
+        if valid_prints:
             dp_lines.append(" 💰 近期最大暗池成交 (Top 3 Block Prints)")
-            top3 = sorted(prints, key=lambda x: x.get("premium", 0), reverse=True)[:3]
+            top3 = sorted(
+                valid_prints, key=lambda x: x.get("premium", 0), reverse=True
+            )[:3]
             for i, p in enumerate(top3):
                 pr = p.get("price", 0)
                 vol = p.get("volume", 0)

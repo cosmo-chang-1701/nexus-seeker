@@ -57,6 +57,7 @@ async def scrape_reddit(
                 return {"status": "success", "data": "過去 24 小時內無相關討論。"}
 
             html_content = await page.content()
+            await context.unroute_all(behavior="ignoreErrors")
             soup = BeautifulSoup(html_content, "lxml")
             results = soup.select("div.search-result-link")[:limit]
 
@@ -169,6 +170,7 @@ async def scrape_gex():
             await page.wait_for_timeout(3000)
 
             html = await page.content()
+            await context.unroute_all(behavior="ignoreErrors")
             soup = BeautifulSoup(html, "lxml")
 
             # Parse spot price
@@ -673,6 +675,7 @@ async def scrape_symbol_gex(symbol: str):
             await page.wait_for_timeout(3000)
 
             html = await page.content()
+            await context.unroute_all(behavior="ignoreErrors")
             soup = BeautifulSoup(html, "lxml")
 
             # Parse spot price
