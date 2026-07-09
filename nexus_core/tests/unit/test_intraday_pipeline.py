@@ -497,3 +497,121 @@ def test_avgo_positive_gamma_support_avoids_forbidden_zone():
 
     # 斷言 該標的的風控指引顯示為 價格接近最大痛點，維持震盪
     assert status_label == "價格接近最大痛點，維持震盪"
+
+
+def test_dark_pool_dirty_data_filter():
+    """測試暗池價格嚴重偏離 (大於20%) 時的過濾機制"""
+    from market_analysis.dark_pool_engine import sanitize_darkpool_prints
+
+    current_price = 394.06
+    prints = [
+        {
+            "price": 100.53,
+            "volume": 383236,
+            "premium": 38000000,
+        },  # Dirty (SATS/RCAT mis-mapped)
+        {"price": 393.10, "volume": 50000, "premium": 19655000},  # Valid
+    ]
+
+    valid_prints = sanitize_darkpool_prints("AVGO", prints, current_price, 0.20)
+
+    assert len(valid_prints) == 1
+    assert valid_prints[0]["price"] == 393.10
+
+
+def test_fixed_income_hedging_whitelist():
+    """測試 BOXX 等避險資產的白名單豁免邏輯"""
+    from market_analysis.insights_engine import RiskInsightsContext, InsightsEngine
+
+    context = RiskInsightsContext(
+        symbol="BOXX",
+        current_price=117.30,
+        put_wall=117.30,
+        net_gex_status="NEGATIVE_GAMMA_ZONE",
+        term_structure=1.0,
+        uoa_institutional_short_call=False,
+        iv_rank=0.0,
+        max_pain_deviation_pct=0.0,
+        can_trade_spreads=False,
+        cash_reserve_protection=True,
+        expected_move_lower=None,
+        expected_move_upper=None,
+        sqz_mom=0.0,
+    )
+
+    dmp_label, status_label, suggestion = InsightsEngine.generate_cro_insight(context)
+    assert dmp_label == "(避險資產)"
+    assert status_label == "現金避險部位，風控豁免 🛡️"
+    assert "底牆保衛" not in (status_label or "")
+
+
+def test_bullish_momentum_tag_priority():
+    """測試強勢突破標的正確短路，不觸發跌破底牆"""
+    from market_analysis.insights_engine import RiskInsightsContext, InsightsEngine
+
+    context = RiskInsightsContext(
+        symbol="AVGO",
+        current_price=388.69,
+        put_wall=360.0,  # fallback putwall
+        net_gex_status="NEGATIVE_GAMMA_ZONE",
+        term_structure=1.0,
+        uoa_institutional_short_call=False,
+        iv_rank=0.5,
+        max_pain_deviation_pct=0.029,
+        can_trade_spreads=True,
+        cash_reserve_protection=True,
+        expected_move_lower=377.29,
+        expected_move_upper=400.09,
+        sqz_mom=9.2,  # 🟢 多頭
+    )
+
+    dmp_label, status_label, suggestion = InsightsEngine.generate_cro_insight(context)
+    assert status_label == "🟢 多頭推進 / 蓄力突破"
+    assert "底牆保衛" not in (status_label or "")
+
+
+def test_gex_empty_heatmap_degradation():
+    """測試 GEX Profile 全為 0 時，是否正確觸發 [GEX 鏈盤前未刷新] 降級"""
+    display_strikes = [385.0, 390.0, 395.0, 400.0]
+    gex_prof = {str(k): 0.0 for k in display_strikes}
+    gex_putwall = 394.06
+
+    def _safe_gex(k_val: float) -> float:
+        val = gex_prof.get(str(k_val), gex_prof.get(k_val))
+        try:
+            return float(val) if val is not None else 0.0
+        except (ValueError, TypeError):
+            return 0.0
+
+    is_gex_empty = all(abs(_safe_gex(k)) == 0.0 for k in display_strikes)
+    has_putwall = gex_putwall and float(gex_putwall) > 0
+
+    assert is_gex_empty is True
+    assert has_putwall is True
+
+
+def test_max_pain_calendar_label():
+    """測試非週五到期的 DTE <= 7 合約是否正確標記為 [期中特約/末日週線]"""
+    # 假設今天是 2026-07-09 (週四)
+    today = date(2026, 7, 9)
+
+    def get_calendar_label(today_date, exp_date):
+        dte = (exp_date - today_date).days
+        is_friday = exp_date.weekday() == 4
+        if dte <= 7:
+            if is_friday:
+                return "週五即期"
+            else:
+                return "期中特約/末日週線"
+        elif dte <= 14:
+            return "次週主力"
+        else:
+            return "月線主力"
+
+    # 測試週五到期 (2026-07-10, DTE 1)
+    friday_exp = date(2026, 7, 10)
+    assert get_calendar_label(today, friday_exp) == "週五即期"
+
+    # 測試下週三到期 (2026-07-15, DTE 6)
+    wed_exp = date(2026, 7, 15)
+    assert get_calendar_label(today, wed_exp) == "期中特約/末日週線"

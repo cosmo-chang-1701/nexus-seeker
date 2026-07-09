@@ -57,6 +57,36 @@ async def fetch_darkpool_prints(symbol: str) -> Dict[str, Any]:
     return fallback
 
 
+def sanitize_darkpool_prints(
+    symbol: str,
+    prints: List[Dict[str, Any]],
+    current_price: float,
+    deviation_threshold: float = 0.05,
+) -> List[Dict[str, Any]]:
+    """
+    實施滑價與偏離度防禦機制，過濾掉與現價背離過大的暗池髒數據。
+    """
+    valid_prints = []
+    if current_price <= 0:
+        return prints
+
+    for p in prints:
+        pr = float(p.get("price", 0.0))
+        if pr <= 0:
+            continue
+
+        deviation_ratio = abs(pr - current_price) / current_price
+        if deviation_ratio > deviation_threshold:
+            logger.warning(
+                f"Dirty Dark Pool data detected for {symbol}: {pr}, dropping."
+            )
+            continue
+
+        valid_prints.append(p)
+
+    return valid_prints
+
+
 def calculate_dark_pool_skew(prints: List[Dict[str, Any]]) -> float:
     """
     計算暗池偏斜度 (Dark Pool Skew)。

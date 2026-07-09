@@ -553,6 +553,13 @@ async def evaluate_watchlist_symbol(
     )
     if metrics is None:
         return None
+
+    # 2. 將避險資產（BOXX/BIL）白名單風控防線下沉至 Ingress 層
+    is_hedging = symbol.upper() in ["BOXX", "BIL"]
+    if is_hedging:
+        metrics.gex_max_put_wall = None
+        metrics.oi_pcr = None
+
     tactical = WatchlistRiskController.process_metrics(metrics)
     symbol_gex = None
 
@@ -586,10 +593,17 @@ async def evaluate_watchlist_symbol(
             tactical.action_guideline += f" (⚠️ 偵測到大盤進入 SHORT_GAMMA_CRITICAL 極端踩踏恐慌軌道{fb_tag}，個股網格單觸發間距已自動放大 1.5 倍以防禦資金被過早抽乾。)"
 
         # 個股 Net GEX 與牆位解析
-        symbol_gex = await fetch_symbol_gex_metrics(symbol)
-        net_gex = symbol_gex.get("net_gex", 0.0)
-        call_wall = symbol_gex.get("call_wall", 0.0)
-        put_wall = symbol_gex.get("put_wall", 0.0)
+        if is_hedging:
+            symbol_gex = {}
+            net_gex = 0.0
+            call_wall = 0.0
+            put_wall = 0.0
+        else:
+            symbol_gex = await fetch_symbol_gex_metrics(symbol)
+            net_gex = symbol_gex.get("net_gex", 0.0)
+            call_wall = symbol_gex.get("call_wall", 0.0)
+            put_wall = symbol_gex.get("put_wall", 0.0)
+
         spot = metrics.current_price
 
         if put_wall > 0:
@@ -875,20 +889,30 @@ class IntradayScanPipeline:
         from market_analysis.sentiment_engine import SentimentEngine
 
         hb_symbol = evaluation.metrics.symbol
+        is_hedging = hb_symbol.upper() in ["BOXX", "BIL"]
         try:
-            (
-                hb_quote,
-                hb_iv_metrics,
-                hb_pcr_data,
-                hb_uoa_list,
-                hb_max_pain,
-            ) = await asyncio.gather(
-                market_data_service.get_quote(hb_symbol),
-                SentimentEngine.fetch_and_calculate_iv_metrics(hb_symbol),
-                SentimentEngine.calculate_pcr(hb_symbol),
-                SentimentEngine.detect_uoa(hb_symbol),
-                SentimentEngine.get_unified_max_pain(hb_symbol),
-            )
+            if is_hedging:
+                from services import market_data_service
+
+                hb_quote = await market_data_service.get_quote(hb_symbol)
+                hb_iv_metrics = None
+                hb_pcr_data = None
+                hb_uoa_list = []
+                hb_max_pain = None
+            else:
+                (
+                    hb_quote,
+                    hb_iv_metrics,
+                    hb_pcr_data,
+                    hb_uoa_list,
+                    hb_max_pain,
+                ) = await asyncio.gather(
+                    market_data_service.get_quote(hb_symbol),
+                    SentimentEngine.fetch_and_calculate_iv_metrics(hb_symbol),
+                    SentimentEngine.calculate_pcr(hb_symbol),
+                    SentimentEngine.detect_uoa(hb_symbol),
+                    SentimentEngine.get_unified_max_pain(hb_symbol),
+                )
         except Exception as sup_err:
             logger.warning(f"[{hb_symbol}] 心跳補充數據取得失敗: {sup_err}")
             hb_quote, hb_iv_metrics, hb_pcr_data, hb_uoa_list, hb_max_pain = (

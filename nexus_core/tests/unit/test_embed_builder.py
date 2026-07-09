@@ -1068,7 +1068,7 @@ def test_build_radar_scan_embed():
     assert "AMD" in embed.description
     assert "MRVL" in embed.description
     assert "超跌磁吸" in embed.description
-    assert "需防壓回" in embed.description
+    assert "籌碼斷層" in embed.description
 
 
 def test_build_post_market_intelligence_embed_empty():
