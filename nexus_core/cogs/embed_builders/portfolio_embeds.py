@@ -20,6 +20,22 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+def get_scenario_guidance(
+    current_price: float, max_pain: float, threshold: float = 0.03
+) -> str:
+    """Generate Max Pain settlement guidance from the spot/Max Pain spread."""
+    if max_pain <= 0.0:
+        return "期權未平倉量數據不足，無法評估結算磁吸效應。"
+
+    spread_pct = (current_price - max_pain) / max_pain
+
+    if spread_pct > threshold:
+        return "價格高於最大痛點，結算日前需防範向痛點震盪拉回的壓制力。"
+    if spread_pct < -threshold:
+        return "價格遠低於最大痛點，具備磁吸效應回升動能。"
+    return "目前價差適中，依技術指標操作為主。"
+
+
 def _format_uoa_field(uoa_data: list) -> str:
     """將 uoa_data 列表轉換為動態對齊的標準 ASCII 表格。"""
     trades = []
@@ -894,6 +910,9 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     # 4. 🎯 結算與目標 (Target Lock)
     _mp_val = data.get("max_pain")
     cb_triggered = data.get("circuit_breaker_triggered", False)
+    # Initialize price here so all branches below (including the _mp_val is None
+    # branch) can safely reference it (e.g. in get_scenario_guidance calls).
+    price = c_val
 
     if _mp_val is None or (isinstance(_mp_val, (int, float)) and float(_mp_val) <= 0.0):
         max_pain = 0.0
@@ -903,7 +922,6 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         dist_color = "\u001b[1;30m"
     else:
         max_pain = float(_mp_val)
-        price = c_val
         distance = (((price - max_pain) / max_pain) * 100) if price > 0 else 0.0
 
         if cb_triggered:
@@ -1004,20 +1022,19 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         scenario = "⚠️ 最大痛點偏離度過高 (>30%) 已啟動斷路器，暫停輸出結算操作指引，請以技術指標為準。"
         scen_color = "\u001b[1;31m"
     elif _mp_val is None or max_pain == 0.0:
-        scenario = "期權未平倉量數據不足，無法評估結算磁吸效應。"
+        scenario = get_scenario_guidance(price, max_pain)
         scen_color = "\u001b[1;30m"
-    elif abs(distance) < 2.0:
-        scenario = "價格接近最大痛點，結算日前可能維持震盪。"
-        scen_color = "\u001b[1;33m"
-    elif distance > 5.0:
-        scenario = "價格遠低於最大痛點，具備磁吸效應回升動能。"
-        scen_color = "\u001b[1;32m"
-    elif distance < -5.0:
-        scenario = "價格遠高於最大痛點，需留意結算日前壓回風險。"
-        scen_color = "\u001b[1;31m"
     else:
-        scenario = "目前價差適中，依技術指標操作為主。"
-        scen_color = "\u001b[1;36m"
+        scenario = get_scenario_guidance(price, max_pain)
+        spread_pct = ((price - max_pain) / max_pain) if max_pain > 0 else 0.0
+        if spread_pct > 0.03:
+            scen_color = "\u001b[1;31m"
+        elif spread_pct < -0.03:
+            scen_color = "\u001b[1;32m"
+        elif abs(spread_pct) < 0.02:
+            scen_color = "\u001b[1;33m"
+        else:
+            scen_color = "\u001b[1;36m"
 
     scenario_overlays: list[str] = []
     if is_structural_divergence:
