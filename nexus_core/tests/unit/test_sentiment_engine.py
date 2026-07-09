@@ -473,7 +473,7 @@ async def test_calculate_max_pain_sqlite_fallback():
         assert result["max_pain"] == 120.0
         assert result["is_stale"] is True
         assert result["fallback_source"] == "SQLite"
-        assert result["distance_pct"] == 20.0
+        assert result["distance_pct"] == pytest.approx(-16.67, abs=0.01)
 
 
 @pytest.mark.asyncio

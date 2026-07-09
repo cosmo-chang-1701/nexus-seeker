@@ -260,6 +260,65 @@ async def test_fetch_and_calculate_iv_metrics_fallback_hv():
 
 
 @pytest.mark.asyncio
+async def test_iv_context_expected_move_uses_previous_close():
+    from market_analysis.sentiment.iv_metrics import IVContext
+
+    metrics = IVMetrics(
+        symbol="AVGO",
+        current_iv=0.42,
+        iv_rank=55.0,
+        iv_percentile=58.0,
+        expected_move_weekly=14.18,
+        iv_status="Normal",
+        is_premarket=False,
+        iv_source="LIVE_IV",
+        reference_spot_price=394.08,
+    )
+
+    context = await IVContext.get_expected_move(
+        "AVGO",
+        quote={"c": 394.08, "pc": 388.69},
+        iv_metrics=metrics,
+    )
+
+    assert context["reference_price"] == pytest.approx(388.69)
+    assert context["expected_move_lower"] == pytest.approx(374.51, abs=0.01)
+    assert context["expected_move_upper"] == pytest.approx(402.87, abs=0.01)
+
+
+@pytest.mark.asyncio
+async def test_iv_term_structure_guard_on_tiny_far_iv():
+    from market_analysis.sentiment.iv_metrics import _calculate_iv_term_structure
+
+    class MockChain:
+        def __init__(self, calls, puts):
+            self.calls = calls
+            self.puts = puts
+
+    near_calls = pd.DataFrame({"strike": [100.0], "impliedVolatility": [0.45]})
+    near_puts = pd.DataFrame({"strike": [100.0], "impliedVolatility": [0.43]})
+    far_calls = pd.DataFrame({"strike": [100.0], "impliedVolatility": [0.009]})
+    far_puts = pd.DataFrame({"strike": [100.0], "impliedVolatility": [0.008]})
+
+    with patch(
+        "services.market_data_service.get_all_option_expiries",
+        new_callable=AsyncMock,
+        return_value=["2026-07-10", "2026-08-21"],
+    ), patch(
+        "services.market_data_service.get_option_chain",
+        new_callable=AsyncMock,
+        side_effect=[
+            MockChain(near_calls, near_puts),
+            MockChain(far_calls, far_puts),
+        ],
+    ):
+        status, ratio = await _calculate_iv_term_structure("TEST_TERM_GUARD", 100.0)
+
+    assert status is None
+    assert ratio is None
+
+
+@pytest.mark.asyncio
 async def test_fetch_and_calculate_iv_metrics_failure_graceful_degrade():
     """Test that engine gracefully returns degraded default model on complete failure."""
     symbol = "TEST_FAILURE"

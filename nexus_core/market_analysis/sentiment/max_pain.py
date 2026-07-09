@@ -1,4 +1,4 @@
-from .iv_metrics import fetch_and_calculate_iv_metrics
+from .iv_metrics import IVContext, fetch_and_calculate_iv_metrics
 from .history_storage import _trigger_background_cache_clear
 import logging
 import pandas as pd
@@ -210,8 +210,8 @@ async def get_unified_max_pain(
         max_pain = None if cb_triggered else max_pain_val
 
         dist_pct = 0.0
-        if max_pain is not None and spot_price > 0:
-            dist_pct = (max_pain - spot_price) / spot_price * 100
+        if max_pain is not None and max_pain > 0 and spot_price > 0:
+            dist_pct = (spot_price - max_pain) / max_pain * 100
 
         return {
             "symbol": symbol,
@@ -290,21 +290,11 @@ async def get_unified_max_pain(
                 _trigger_background_cache_clear(symbol)
 
     # 6. 計算本週預期區間
-    em_weekly = 0.0
-    if iv_metrics:
-        if (
-            hasattr(iv_metrics, "expected_move_weekly")
-            and iv_metrics.expected_move_weekly is not None
-        ):
-            em_weekly = float(iv_metrics.expected_move_weekly)
-        elif (
-            isinstance(iv_metrics, dict)
-            and iv_metrics.get("expected_move_weekly") is not None
-        ):
-            em_weekly = float(iv_metrics["expected_move_weekly"])
-
-    em_lower = spot_price - em_weekly if spot_price > 0 else 0.0
-    em_upper = spot_price + em_weekly if spot_price > 0 else 0.0
+    em_context = await IVContext.get_expected_move(
+        symbol, quote=quote if "quote" in locals() else None, iv_metrics=iv_metrics
+    )
+    em_lower = float(em_context.get("expected_move_lower") or 0.0)
+    em_upper = float(em_context.get("expected_move_upper") or 0.0)
 
     # 7. 寫回 SQLite 快取
     await asyncio.to_thread(
@@ -323,8 +313,8 @@ async def get_unified_max_pain(
     )
 
     dist_pct = 0.0
-    if max_pain is not None and spot_price > 0:
-        dist_pct = (max_pain - spot_price) / spot_price * 100
+    if max_pain is not None and max_pain > 0 and spot_price > 0:
+        dist_pct = (spot_price - max_pain) / max_pain * 100
 
     return {
         "symbol": symbol,
@@ -654,8 +644,8 @@ async def _calculate_max_pain_raw(
                 )
                 cached_mp = old_cache.get("max_pain")
                 dist_pct = (
-                    (float(cached_mp) - spot_price) / spot_price * 100
-                    if cached_mp is not None and spot_price > 0
+                    (spot_price - float(cached_mp)) / float(cached_mp) * 100
+                    if cached_mp is not None and float(cached_mp) > 0 and spot_price > 0
                     else 0.0
                 )
                 return {
@@ -679,8 +669,8 @@ async def _calculate_max_pain_raw(
                     "max_pain": max_pain_strike,
                     "current_price": spot_price,
                     "distance_pct": (
-                        (max_pain_strike - spot_price) / spot_price * 100
-                        if spot_price > 0
+                        (spot_price - max_pain_strike) / max_pain_strike * 100
+                        if max_pain_strike > 0 and spot_price > 0
                         else 0.0
                     ),
                     "is_converging": False,
@@ -692,7 +682,9 @@ async def _calculate_max_pain_raw(
                 }
 
         dist_pct = (
-            (max_pain_strike - spot_price) / spot_price * 100 if spot_price > 0 else 0
+            (spot_price - max_pain_strike) / max_pain_strike * 100
+            if max_pain_strike > 0 and spot_price > 0
+            else 0
         )
 
         result = {

@@ -18,6 +18,103 @@ from .cache import _iv_cache, _IV_CACHE_TTL
 
 
 logger = logging.getLogger(__name__)
+_TERM_STRUCTURE_MIN_IV = 0.01
+
+
+class IVContext:
+    """Centralized Expected Move context builder shared by UI surfaces."""
+
+    @staticmethod
+    def _safe_float(value) -> float:
+        try:
+            return float(value) if value is not None else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+
+    @classmethod
+    def resolve_reference_price(
+        cls, quote: dict | None = None, iv_metrics=None
+    ) -> float:
+        if isinstance(quote, dict):
+            prev_close = cls._safe_float(quote.get("pc"))
+            if prev_close > 0.0:
+                return prev_close
+
+        if iv_metrics is not None:
+            if hasattr(iv_metrics, "reference_spot_price"):
+                ref_price = cls._safe_float(getattr(iv_metrics, "reference_spot_price"))
+            elif isinstance(iv_metrics, dict):
+                ref_price = cls._safe_float(iv_metrics.get("reference_spot_price"))
+            else:
+                ref_price = 0.0
+
+            if ref_price > 0.0:
+                return ref_price
+
+        if isinstance(quote, dict):
+            current_price = cls._safe_float(quote.get("c"))
+            if current_price > 0.0:
+                return current_price
+
+        return 0.0
+
+    @classmethod
+    def build_expected_move(
+        cls,
+        symbol: str,
+        *,
+        expected_move_weekly: float | None,
+        reference_price: float | None,
+        current_price: float | None = None,
+    ) -> dict:
+        em_weekly = cls._safe_float(expected_move_weekly)
+        ref_price = cls._safe_float(reference_price)
+        spot_price = cls._safe_float(current_price)
+
+        if ref_price > 0.0 and em_weekly > 0.0:
+            lower = ref_price - em_weekly
+            upper = ref_price + em_weekly
+        else:
+            lower = 0.0
+            upper = 0.0
+
+        return {
+            "symbol": symbol.upper(),
+            "reference_price": ref_price,
+            "current_price": spot_price,
+            "expected_move_weekly": em_weekly,
+            "expected_move_lower": lower,
+            "expected_move_upper": upper,
+        }
+
+    @classmethod
+    async def get_expected_move(
+        cls, symbol: str, *, quote: dict | None = None, iv_metrics=None
+    ) -> dict:
+        symbol = symbol.upper()
+        if quote is None:
+            quote = await market_data_service.get_quote(symbol)
+        if iv_metrics is None:
+            iv_metrics = await fetch_and_calculate_iv_metrics(symbol)
+
+        if hasattr(iv_metrics, "expected_move_weekly"):
+            em_weekly = getattr(iv_metrics, "expected_move_weekly", None)
+        elif isinstance(iv_metrics, dict):
+            em_weekly = iv_metrics.get("expected_move_weekly")
+        else:
+            em_weekly = None
+
+        reference_price = cls.resolve_reference_price(quote, iv_metrics)
+        current_price = (
+            cls._safe_float(quote.get("c")) if isinstance(quote, dict) else 0.0
+        )
+
+        return cls.build_expected_move(
+            symbol,
+            expected_move_weekly=em_weekly,
+            reference_price=reference_price,
+            current_price=current_price,
+        )
 
 
 async def _calculate_straddle_implied_em(
@@ -156,7 +253,14 @@ async def _calculate_iv_term_structure(
         near_iv = _get_atm_iv(near_chain)
         far_iv = _get_atm_iv(far_chain)
 
-        if not near_iv or not far_iv:
+        if not near_iv or near_iv < _TERM_STRUCTURE_MIN_IV:
+            return None, None
+
+        if not far_iv or far_iv < _TERM_STRUCTURE_MIN_IV:
+            logger.warning(
+                f"[{symbol}] IV Term Structure degraded: far IV missing or below threshold "
+                f"({far_iv if far_iv is not None else 'None'} < {_TERM_STRUCTURE_MIN_IV:.2f})"
+            )
             return None, None
 
         ratio = near_iv / far_iv
