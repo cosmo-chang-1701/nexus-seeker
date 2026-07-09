@@ -59,9 +59,9 @@ def create_max_pain_embed(symbol: str, data: Dict[str, Any]) -> discord.Embed:
     else:
         distance_pct = _safe_float(data.get("distance_pct"))
         distance_text = (
-            f"現價低於痛點 `{distance_pct:.2f}%`"
+            f"現價高於痛點 `{distance_pct:.2f}%`"
             if distance_pct > 0
-            else f"現價高於痛點 `{abs(distance_pct):.2f}%`"
+            else f"現價低於痛點 `{abs(distance_pct):.2f}%`"
             if distance_pct < 0
             else "現價貼近最大痛點 `0.00%`"
         )
@@ -448,8 +448,14 @@ def build_radar_scan_embed(
                 em_str = "N/A (避險資產)"
                 em_ansi = "\u001b[1;30mN/A (避險資產)\u001b[0m"
             elif price_val > 0 and em_weekly > 0:
-                em_low = price_val - em_weekly
-                em_high = price_val + em_weekly
+                em_low = float(iv_metrics.get("expected_move_lower") or 0.0)
+                em_high = float(iv_metrics.get("expected_move_upper") or 0.0)
+                if em_high <= em_low:
+                    reference_price = float(
+                        iv_metrics.get("reference_price") or price_val
+                    )
+                    em_low = reference_price - em_weekly
+                    em_high = reference_price + em_weekly
                 em_str = f"${em_low:.2f} ~ ${em_high:.2f}"
                 em_ansi = f"\u001b[1;33m${em_low:.2f} ~ ${em_high:.2f}\u001b[0m"
             else:

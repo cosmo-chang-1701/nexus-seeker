@@ -19,7 +19,11 @@ from .max_pain import (
     _current_week_friday,
 )
 from .uoa_detector import detect_uoa
-from .iv_metrics import fetch_and_calculate_iv_metrics, _calculate_straddle_implied_em
+from .iv_metrics import (
+    IVContext,
+    fetch_and_calculate_iv_metrics,
+    _calculate_straddle_implied_em,
+)
 
 __all__ = ["SentimentEngine", "_current_week_friday"]
 
@@ -83,3 +87,7 @@ class SentimentEngine:
     @staticmethod
     async def _calculate_straddle_implied_em(*args, **kwargs):
         return await _calculate_straddle_implied_em(*args, **kwargs)
+
+    @staticmethod
+    async def get_expected_move(*args, **kwargs):
+        return await IVContext.get_expected_move(*args, **kwargs)

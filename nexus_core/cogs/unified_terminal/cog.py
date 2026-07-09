@@ -482,6 +482,9 @@ class UnifiedTerminalCog(commands.Cog):
 
             result["iv_data"] = iv_metrics
             result["iv_rank"] = iv_metrics.iv_rank if iv_metrics else 0.0
+            result["expected_move_context"] = await SentimentEngine.get_expected_move(
+                symbol, quote=quote, iv_metrics=iv_metrics
+            )
 
             safe_mp = max_pain_data or {}
             result["max_pain"] = safe_mp.get("max_pain", 0.0)
@@ -611,27 +614,27 @@ class UnifiedTerminalCog(commands.Cog):
         except Exception as e:
             logger.error(f"[{sym}] Batch Scan 獲取 UOA 失敗: {e}")
 
-        # 3. 呼叫統一的 get_unified_max_pain (自動處理快取、過期、偏離與降級狀態)
-        mp_data = await SentimentEngine.get_unified_max_pain(sym)
+        iv_task = SentimentEngine.fetch_and_calculate_iv_metrics(sym)
+        mp_task = SentimentEngine.get_unified_max_pain(sym)
+        from market_analysis.index_microstructure import fetch_symbol_gex_metrics
+
+        gex_task = fetch_symbol_gex_metrics(sym)
+
+        iv_m, mp_data, gex_data = await asyncio.gather(iv_task, mp_task, gex_task)
 
         # 異步預警：若返回資料標記為 stale，啟動背景重新驗證
         if mp_data.get("is_stale"):
             asyncio.create_task(self._async_revalidate_market_cache(sym, price))
 
+        em_context = await SentimentEngine.get_expected_move(
+            sym, quote=quote, iv_metrics=iv_m
+        )
+
         # 取得 IV 數據
         iv_rank_val = 0.0
-        em_weekly = 0.0
-        em_lower = mp_data.get("expected_move_lower", 0.0)
-        em_upper = mp_data.get("expected_move_upper", 0.0)
-        if em_upper > em_lower and price > 0:
-            em_weekly = (em_upper - em_lower) / 2.0
-
-        iv_task = SentimentEngine.fetch_and_calculate_iv_metrics(sym)
-        from market_analysis.index_microstructure import fetch_symbol_gex_metrics
-
-        gex_task = fetch_symbol_gex_metrics(sym)
-
-        iv_m, gex_data = await asyncio.gather(iv_task, gex_task)
+        em_weekly = float(em_context.get("expected_move_weekly") or 0.0)
+        em_lower = float(em_context.get("expected_move_lower") or 0.0)
+        em_upper = float(em_context.get("expected_move_upper") or 0.0)
 
         if iv_m:
             iv_rank_val = iv_m.iv_rank if iv_m.iv_rank is not None else 0.0
@@ -639,6 +642,9 @@ class UnifiedTerminalCog(commands.Cog):
         mock_iv = {
             "iv_rank": iv_rank_val,
             "expected_move_weekly": em_weekly,
+            "reference_price": em_context.get("reference_price", 0.0),
+            "expected_move_lower": em_lower,
+            "expected_move_upper": em_upper,
         }
 
         # 取得 PSQ
@@ -670,6 +676,7 @@ class UnifiedTerminalCog(commands.Cog):
             "symbol": sym,
             "quote": quote,
             "iv_metrics": mock_iv,
+            "expected_move_context": em_context,
             "skew": skew_val,
             "skew_percentile": skew_percentile,
             "max_pain": mp_data,

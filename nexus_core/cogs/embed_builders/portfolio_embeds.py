@@ -589,6 +589,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     )
 
     # 3. 📊 隱含波動率與預期區間 (IV Context)
+    em_context = data.get("expected_move_context") or {}
     if iv_data:
         if hasattr(iv_data, "current_iv"):
             current_iv = iv_data.current_iv
@@ -718,6 +719,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 )
                 iv_term_ratio = iv_data.get("term_structure_ratio") or iv_term_ratio
 
+            iv_lines.append(" IV 期限結構 (Term Structure)")
             if iv_term_status and iv_term_ratio is not None:
                 try:
                     ratio_val = float(iv_term_ratio)
@@ -728,23 +730,20 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         term_prefix = "✅ 正價差 (Contango)"
                     else:
                         term_prefix = "⚖️ 正常 (Normal)"
-                    iv_lines.append(" IV 期限結構 (Term Structure)")
                     iv_lines.append(f" └─ {term_prefix} (近遠月比: {ratio_val:.2f})")
                 except (ValueError, TypeError):
-                    pass
+                    iv_lines.append(" └─ --")
+            else:
+                iv_lines.append(" └─ --")
 
             iv_lines.append(" Expected Move (預期區間)")
-            if earnings_loading or macro_loading:
+            em_reference = float(em_context.get("reference_price") or 0.0)
+            em_low = float(em_context.get("expected_move_lower") or 0.0)
+            em_high = float(em_context.get("expected_move_upper") or 0.0)
+            if em_reference > 0 and expected_move_weekly is not None:
                 expected_move_weekly_str = (
-                    f"±${expected_move_weekly:.2f}"
-                    if expected_move_weekly is not None
-                    else "--"
-                )
-                iv_lines.extend(
-                    [
-                        f" ├─ 本週預期: {expected_move_weekly_str} ({em_note})",
-                        " └─ 備註: 實盤請預留 1.4x 波動邊界以防範 IV Crush。",
-                    ]
+                    f"前收 ${em_reference:.2f} ±${expected_move_weekly:.2f} "
+                    f"(${em_low:.2f} ~ ${em_high:.2f})"
                 )
             else:
                 expected_move_weekly_str = (
@@ -752,6 +751,14 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                     if expected_move_weekly is not None
                     else "--"
                 )
+            if earnings_loading or macro_loading:
+                iv_lines.extend(
+                    [
+                        f" ├─ 本週預期: {expected_move_weekly_str} ({em_note})",
+                        " └─ 備註: 實盤請預留 1.4x 波動邊界以防範 IV Crush。",
+                    ]
+                )
+            else:
                 iv_lines.append(f" └─ 本週預期: {expected_move_weekly_str} ({em_note})")
 
             catalysts = data.get("catalysts")
@@ -897,7 +904,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     else:
         max_pain = float(_mp_val)
         price = c_val
-        distance = (((max_pain - price) / price) * 100) if price > 0 else 0.0
+        distance = (((price - max_pain) / max_pain) * 100) if price > 0 else 0.0
 
         if cb_triggered:
             mp_str = "N/A (已觸發斷路器)"

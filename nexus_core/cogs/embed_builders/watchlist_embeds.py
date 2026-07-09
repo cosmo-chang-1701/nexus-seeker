@@ -450,6 +450,8 @@ def create_watchlist_signal_embed(
             lines.append(
                 f" ├─ IV Term Structure (期限結構): {term_prefix} (近遠月比: {iv_term_ratio:.2f})"
             )
+        else:
+            lines.append(" ├─ IV Term Structure (期限結構): --")
 
         if earnings_loading or macro_loading:
             lines.extend(
