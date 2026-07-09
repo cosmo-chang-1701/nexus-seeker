@@ -11,6 +11,7 @@ from market_analysis.models import (
     AdvancedTraderOutput,
 )
 from market_analysis.gamma_squeeze_engine import NexusGammaSqueezeEngine
+from cogs.embed_builders.portfolio_embeds import get_scenario_guidance
 
 
 @pytest.fixture
@@ -615,3 +616,13 @@ def test_max_pain_calendar_label():
     # 測試下週三到期 (2026-07-15, DTE 6)
     wed_exp = date(2026, 7, 15)
     assert get_calendar_label(today, wed_exp) == "期中特約/末日週線"
+
+
+def test_scenario_guidance_above_max_pain():
+    guidance = get_scenario_guidance(394.39, 375.00)
+    assert "價格高於最大痛點，結算日前需防範向痛點震盪拉回" in guidance
+
+
+def test_scenario_guidance_below_max_pain():
+    guidance = get_scenario_guidance(350.00, 375.00)
+    assert "價格遠低於最大痛點，具備磁吸效應回升動能" in guidance
