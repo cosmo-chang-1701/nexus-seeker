@@ -391,9 +391,32 @@ def build_radar_scan_embed(
         except Exception:
             pass
 
-        # 寬度與格式對齊範例
-        header = f"{'標的':<8}{'價格 (漲跌)':<16}{'IVR':<8}{'本週預期區間 (EM)':<22}{'Max Pain':<11}{'SQZ MOM':<14}{'與痛點價差 (D-MP)'}"
-        divider = "-" * 94
+        # 動態計算本頁最具代表性的 Max Pain DTE，用於在表頭標注到期語境
+        # 以本頁第一個有效的 max_pain expiry 為準
+        _mp_header_dte_label = ""
+        try:
+            import datetime as _dt_mod
+
+            _today = _dt_mod.datetime.now().date()
+            for _r in chunk:
+                _mp_d = _r.get("max_pain") or {}
+                _expiry_str = _mp_d.get("expiry") if isinstance(_mp_d, dict) else None
+                if _expiry_str and isinstance(_expiry_str, str):
+                    _exp_dt = _dt_mod.datetime.strptime(_expiry_str, "%Y-%m-%d").date()
+                    _dte_days = (_exp_dt - _today).days
+                    if _dte_days <= 7:
+                        _mp_header_dte_label = " (本週)"
+                    else:
+                        _mp_header_dte_label = f" (DTE {_dte_days})"
+                    break
+        except Exception:
+            _mp_header_dte_label = ""
+
+        _max_pain_col_header = f"Max Pain{_mp_header_dte_label}"
+        # 寬度與格式對齊範例 (Max Pain 欄固定 11 字元寬以保持對齊)
+        # 價格欄擴展至 17 chars，以容納 .2f 精度 (e.g. $1234.56 (+3.65%))
+        header = f"{'標的':<8}{'價格 (漲跌)':<17}{'IVR':<8}{'本週預期區間 (EM)':<22}{_max_pain_col_header:<11}{'SQZ MOM':<14}{'與痛點價差 (D-MP)'}"
+        divider = "-" * 95
 
         ansi_lines = []
         if macro_ansi_header:
@@ -412,11 +435,11 @@ def build_radar_scan_embed(
             dp_raw = quote.get("dp")
             dp_val = float(dp_raw) if dp_raw is not None else 0.0
             if dp_val >= 0:
-                price_str = f"${price_val:.2f} (+{dp_val:.1f}%)"
-                price_ansi = f"${price_val:.2f} (\u001b[1;32m+{dp_val:.1f}%\u001b[0m)"
+                price_str = f"${price_val:.2f} (+{dp_val:.2f}%)"
+                price_ansi = f"${price_val:.2f} (\u001b[1;32m+{dp_val:.2f}%\u001b[0m)"
             else:
-                price_str = f"${price_val:.2f} ({dp_val:.1f}%)"
-                price_ansi = f"${price_val:.2f} (\u001b[1;31m{dp_val:.1f}%\u001b[0m)"
+                price_str = f"${price_val:.2f} ({dp_val:.2f}%)"
+                price_ansi = f"${price_val:.2f} (\u001b[1;31m{dp_val:.2f}%\u001b[0m)"
 
             # 2. IV Rank
             iv_rank_val = 0.0
@@ -703,7 +726,7 @@ def build_radar_scan_embed(
 
             # 格式化一列 ANSI 表格
             sym_cell = f"\u001b[1;34m{sym:<6}\u001b[0m"
-            price_cell = price_ansi + (" " * max(0, 16 - len(price_str)))
+            price_cell = price_ansi + (" " * max(0, 17 - len(price_str)))
             ivr_cell = ivr_str + (" " * max(0, 8 - len(ivr_str)))
             em_cell = em_ansi + (" " * max(0, 22 - len(em_str)))
             if cb_triggered:
@@ -742,10 +765,20 @@ def build_radar_scan_embed(
 
             # Use _pad_string with visual length calculation. width is 14
             # (Header 'SQZ MOM       ' is 14 spaces wide)
+            # Truncate to 15 chars max to prevent ANSI table UI overflow
+            _MAX_SQZ_MOM_CHARS = 15
             combined_raw = f"{sqz_text} {mom_str}"
-            padded_raw = _pad_string(combined_raw, 14)
+            combined_raw_truncated = combined_raw[:_MAX_SQZ_MOM_CHARS]
+            combined_ansi_truncated = (
+                combined_ansi
+                if len(combined_raw) <= _MAX_SQZ_MOM_CHARS
+                else combined_raw_truncated
+            )
+            padded_raw = _pad_string(combined_raw_truncated, 14)
             # Replace the raw part with ANSI inside the padded string
-            sqz_mom_cell = padded_raw.replace(combined_raw, combined_ansi)
+            sqz_mom_cell = padded_raw.replace(
+                combined_raw_truncated, combined_ansi_truncated
+            )
 
             ansi_lines.append(
                 f"{sym_cell}{price_cell}{ivr_cell}{em_cell}{mp_cell}{sqz_mom_cell}{dmp_cell}{label_cell}"
