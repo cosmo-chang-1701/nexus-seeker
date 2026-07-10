@@ -43,10 +43,12 @@ _WATCHLIST_METRICS_CACHE = BoundedCache(max_size=128)
 _WATCHLIST_METRICS_TTL = 20 * 60
 
 
-def _quote_price(quote: Dict[str, Any], fallback: float = 0.0) -> float:
+def _quote_price(quote: Dict[str, Any] | None, fallback: float = 0.0) -> float:
+    if not quote:
+        return fallback
     for key in ("c", "current_price", "price"):
         value = quote.get(key)
-        if value:
+        if value and float(value) > 0.0:
             return float(value)
     return fallback
 
@@ -254,7 +256,12 @@ async def build_enhanced_watchlist_metrics(
         last_close = float(quote.get("pc", 0.0) or quote.get("c", 0.0) or 0.0)
     if last_close <= 0.0 and not df_stock.empty:
         last_close = float(df_stock["Close"].iloc[-1])
+    
     current_price = _quote_price(quote, fallback=last_close)
+    if current_price <= 0.0 or current_price is None:
+        current_price = last_close
+    if current_price <= 0.0 and not df_stock.empty:
+        current_price = float(df_stock["Close"].iloc[-1])
 
     # 1. Vol POC (Volume Point of Control) via SQLite cache fallback
     volume_poc = 0.0

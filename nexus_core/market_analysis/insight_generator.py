@@ -61,17 +61,25 @@ def compute_realtime_insights(data: Dict[str, Any]) -> str:
         )
 
     # 3. 實盤防禦指引
-    guidance = "；操作上建議於支撐區間分批逢低吸納，降低建倉成本。"
-    if dist_pct < -10.0 and skew_percentile >= 70.0:
-        guidance = "；操作上應嚴禁單腿追高，建議以現貨持有搭配賣出 OTM Call（備兌看漲）進行防禦保護，或買入 Put 鎖定下行風險。"
-    elif dist_pct < -10.0 and skew_percentile <= 30.0:
-        guidance = "；此時散戶搶購情緒極端，防範主力拉回殺多，嚴禁盲目單腿裸買 Call，建議逢高分批鎖定利潤。"
-    elif dist_pct > 10.0 and uoa_calls_vol > uoa_puts_vol * 1.5:
-        guidance = "；量化磁吸與多頭籌碼共振，可於波動下緣分批逢低吸納，或部署 Bull Put Spread 策略。"
-    elif dist_pct > 10.0 and skew_percentile >= 70.0:
-        guidance = "；雖有磁吸引力但避險情緒仍重，建議透過賣出 CSP（備兌看跌）分批建倉，避免單腿買入。"
-    elif dist_pct < -10.0:
-        guidance = "；操作上建議保持現貨防禦，嚴禁單腿操作。"
+    iv_rank = data.get("iv_rank", 50.0)
+    
+    if iv_rank < 15.0:
+        if dist_pct > 0:
+            guidance = "；IVR 處於絕對低位，具備高盈虧比的買方建倉條件。建議透過買入看漲期權 (Long Call) 或構建借方價差 (Debit Spread) 捕捉磁吸效應，避免 Vega 擴張風險。"
+        else:
+            guidance = "；IVR 處於絕對低位，建議以買入看跌期權 (Long Put) 或借方價差 (Debit Spread) 防禦，避免賣出期權的 Vega 擴張風險。"
+    else:
+        guidance = "；操作上建議於支撐區間分批逢低吸納，降低建倉成本。"
+        if dist_pct < -10.0 and skew_percentile >= 70.0:
+            guidance = "；操作上應嚴禁單腿追高，建議以現貨持有搭配賣出 OTM Call（備兌看漲）進行防禦保護，或買入 Put 鎖定下行風險。"
+        elif dist_pct < -10.0 and skew_percentile <= 30.0:
+            guidance = "；此時散戶搶購情緒極端，防範主力拉回殺多，嚴禁盲目單腿裸買 Call，建議逢高分批鎖定利潤。"
+        elif dist_pct > 10.0 and uoa_calls_vol > uoa_puts_vol * 1.5:
+            guidance = "；量化磁吸與多頭籌碼共振，可於波動下緣分批逢低吸納，或部署 Bull Put Spread 策略。"
+        elif dist_pct > 10.0 and skew_percentile >= 70.0:
+            guidance = "；雖有磁吸引力但避險情緒仍重，建議透過賣出 CSP（備兌看跌）分批建倉，避免單腿買入。"
+        elif dist_pct < -10.0:
+            guidance = "；操作上建議保持現貨防禦，嚴禁單腿操作。"
 
     emoji, text = chip_status.split(" ", 1)
     return f"• {emoji} **{sym}**: {text}{dev_fact}{guidance}"
