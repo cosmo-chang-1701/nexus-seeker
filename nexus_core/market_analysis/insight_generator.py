@@ -62,7 +62,7 @@ def compute_realtime_insights(data: Dict[str, Any]) -> str:
 
     # 3. 實盤防禦指引
     iv_rank = data.get("iv_rank", 50.0)
-    
+
     if iv_rank < 15.0:
         if dist_pct > 0:
             guidance = "；IVR 處於絕對低位，具備高盈虧比的買方建倉條件。建議透過買入看漲期權 (Long Call) 或構建借方價差 (Debit Spread) 捕捉磁吸效應，避免 Vega 擴張風險。"
