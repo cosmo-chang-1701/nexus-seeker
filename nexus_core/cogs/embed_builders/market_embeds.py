@@ -678,6 +678,7 @@ def build_radar_scan_embed(
                         "uoa_calls_vol": uoa_calls_vol,
                         "uoa_puts_vol": uoa_puts_vol,
                         "skew_percentile": r.get("skew_percentile"),
+                        "iv_rank": iv_rank_val,
                     }
 
                     if data["skew_percentile"] is None:
@@ -744,41 +745,31 @@ def build_radar_scan_embed(
             dmp_cell = dmp_padded_raw.replace(dmp_str, dmp_ansi)
             label_cell = status_label
 
+            sqz_icon = sqz_dir[0] if sqz_dir else "⚪"
             if sqz_mom > 0:
-                sqz_text = f"{sqz_dir} 多頭"
+                sqz_text = f"{sqz_icon} 多頭"
             elif sqz_mom < 0:
-                sqz_text = f"{sqz_dir} 空頭"
+                sqz_text = f"{sqz_icon} 空頭"
             else:
-                sqz_text = f"{sqz_dir} 中性"
+                sqz_text = f"{sqz_icon} 中性"
 
             if sqz_is_squeezing:
                 mom_str = f"{sqz_mom:+.1f}"
-                if sqz_mom > 0:
-                    combined_ansi = f"\u001b[1;32m{sqz_text} {mom_str}\u001b[0m"
-                elif sqz_mom < 0:
-                    combined_ansi = f"\u001b[1;31m{sqz_text} {mom_str}\u001b[0m"
-                else:
-                    combined_ansi = f"{sqz_text} {mom_str}"
             else:
                 mom_str = "---"
-                combined_ansi = f"\u001b[1;30m{sqz_text} {mom_str}\u001b[0m"
 
-            # Use _pad_string with visual length calculation. width is 14
-            # (Header 'SQZ MOM       ' is 14 spaces wide)
-            # Truncate to 15 chars max to prevent ANSI table UI overflow
-            _MAX_SQZ_MOM_CHARS = 15
-            combined_raw = f"{sqz_text} {mom_str}"
-            combined_raw_truncated = combined_raw[:_MAX_SQZ_MOM_CHARS]
-            combined_ansi_truncated = (
-                combined_ansi
-                if len(combined_raw) <= _MAX_SQZ_MOM_CHARS
-                else combined_raw_truncated
-            )
-            padded_raw = _pad_string(combined_raw_truncated, 14)
-            # Replace the raw part with ANSI inside the padded string
-            sqz_mom_cell = padded_raw.replace(
-                combined_raw_truncated, combined_ansi_truncated
-            )
+            combined_raw = f"{sqz_text} {mom_str}"[:15]
+            padded_raw = _pad_string(combined_raw, 14)
+
+            if sqz_is_squeezing:
+                if sqz_mom > 0:
+                    sqz_mom_cell = f"\u001b[1;32m{padded_raw}\u001b[0m"
+                elif sqz_mom < 0:
+                    sqz_mom_cell = f"\u001b[1;31m{padded_raw}\u001b[0m"
+                else:
+                    sqz_mom_cell = padded_raw
+            else:
+                sqz_mom_cell = f"\u001b[1;30m{padded_raw}\u001b[0m"
 
             ansi_lines.append(
                 f"{sym_cell}{price_cell}{ivr_cell}{em_cell}{mp_cell}{sqz_mom_cell}{dmp_cell}{label_cell}"
