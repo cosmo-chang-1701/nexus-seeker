@@ -256,7 +256,7 @@ async def build_enhanced_watchlist_metrics(
         last_close = float(quote.get("pc", 0.0) or quote.get("c", 0.0) or 0.0)
     if last_close <= 0.0 and not df_stock.empty:
         last_close = float(df_stock["Close"].iloc[-1])
-    
+
     current_price = _quote_price(quote, fallback=last_close)
     if current_price <= 0.0 or current_price is None:
         current_price = last_close

@@ -112,10 +112,12 @@ class SymbolHubView(discord.ui.View):
                 logger.info(f"[{self.symbol}] 按鈕觸發：已清除 IV 數據快取")
 
             from market_analysis.intraday_pipeline import _WATCHLIST_METRICS_CACHE
+
             if self.symbol in _WATCHLIST_METRICS_CACHE:
                 del _WATCHLIST_METRICS_CACHE[self.symbol]
 
             from services.market_data_service import _quote_cache, _history_cache
+
             if self.symbol in _quote_cache:
                 del _quote_cache[self.symbol]
             keys_to_delete = [k for k in _history_cache if k[0] == self.symbol]
@@ -124,6 +126,7 @@ class SymbolHubView(discord.ui.View):
 
             from database import mark_market_cache_stale
             import asyncio
+
             await asyncio.to_thread(mark_market_cache_stale, self.symbol)
 
             # 獲取 stock_cost
