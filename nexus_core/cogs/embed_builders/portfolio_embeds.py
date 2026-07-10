@@ -120,6 +120,38 @@ def _format_uoa_field(uoa_data: list) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _add_ansi_field_safely(embed: discord.Embed, name: str, lines: list) -> None:
+    """將包含 ANSI 碼的字串陣列安全地加入 embed，若超過長度限制則自動切分為多個 Field。"""
+    current_chunk = ["```ansi"]
+    current_length = 8  # len("```ansi\n")
+    part = 1
+
+    for line in lines:
+        if line == "```ansi" or line == "```":
+            continue
+
+        line_len = len(line) + 1
+
+        if current_length + line_len > 1018:
+            current_chunk.append("```")
+            field_name = name if part == 1 else f"{name} (續 {part})"
+            embed.add_field(
+                name=field_name, value="\n".join(current_chunk), inline=False
+            )
+
+            part += 1
+            current_chunk = ["```ansi", line]
+            current_length = 8 + line_len
+        else:
+            current_chunk.append(line)
+            current_length += line_len
+
+    if len(current_chunk) > 1:
+        current_chunk.append("```")
+        field_name = name if part == 1 else f"{name} (續 {part})"
+        embed.add_field(name=field_name, value="\n".join(current_chunk), inline=False)
+
+
 def create_holdings_embed(
     holdings_data: List[Dict[str, Any]], total_capital: float
 ) -> discord.Embed:
@@ -474,11 +506,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             )
 
         quote_lines.append("```")
-    embed.add_field(
-        name="💹 即時報價 (Real-time Quote)",
-        value="\n".join(quote_lines),
-        inline=False,
-    )
+
+    _add_ansi_field_safely(embed, "💹 即時報價 (Real-time Quote)", quote_lines)
 
     # 2. 📐 情緒與邊緣偵測 (Edge Detection)
     skew_val_raw = data.get("skew")
@@ -598,11 +627,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             "```",
         ]
     )
-    embed.add_field(
-        name="📐 情緒與邊緣偵測 (Edge Detection)",
-        value="\n".join(edge_lines),
-        inline=False,
-    )
+    _add_ansi_field_safely(embed, "📐 情緒與邊緣偵測 (Edge Detection)", edge_lines)
 
     # 3. 📊 隱含波動率與預期區間 (IV Context)
     em_context = data.get("expected_move_context") or {}
@@ -807,17 +832,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
             iv_lines.append("```")
 
-        # Double check length and gracefully truncate if still too long
-        iv_text = "\n".join(iv_lines)
-        if len(iv_text) > 1024:
-            # 1024 - len("\n```") - len("...") = 1024 - 4 - 3 = 1017
-            iv_text = iv_text[:1017] + "...\n```"
-
-        embed.add_field(
-            name="📊 隱含波動率與預期區間 (IV Context)",
-            value=iv_text,
-            inline=False,
-        )
+        _add_ansi_field_safely(embed, "📊 隱含波動率與預期區間 (IV Context)", iv_lines)
 
     # 3.5 🧲 Gamma 曝險分布 (GEX Profile)
     gex_data = data.get("gex_profile_data", {})
@@ -899,10 +914,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 is_stale = bool(gex_data.get("_is_stale_cache", False))
                 stale_suffix = " [快取 / API 降級]" if is_stale else ""
 
-                embed.add_field(
-                    name=f"🧲 Gamma 曝險分布 (GEX Profile){stale_suffix}",
-                    value="\n".join(gex_lines),
-                    inline=False,
+                _add_ansi_field_safely(
+                    embed, f"🧲 Gamma 曝險分布 (GEX Profile){stale_suffix}", gex_lines
                 )
         except Exception:
             pass
@@ -987,11 +1000,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             sqz_lines.append(f" 💡 時框建議: {sqz_vix_note}")
 
         sqz_lines.append("```")
-
-        embed.add_field(
-            name="🌊 動能與擠壓狀態 (Momentum & Squeeze)",
-            value="\n".join(sqz_lines),
-            inline=False,
+        _add_ansi_field_safely(
+            embed, "🌊 動能與擠壓狀態 (Momentum & Squeeze)", sqz_lines
         )
 
     # 4. 🎯 結算與目標 (Target Lock)
@@ -1231,19 +1241,13 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
     target_lines.append("```")
 
-    embed.add_field(
-        name="🎯 結算與目標 (Target Lock)", value="\n".join(target_lines), inline=False
-    )
+    _add_ansi_field_safely(embed, "🎯 結算與目標 (Target Lock)", target_lines)
 
     uoa_data = data.get("uoa", [])
     if uoa_data:
         try:
             table_str = _format_uoa_field(uoa_data)
-            embed.add_field(
-                name="🐋 異常活動 (UOA)",
-                value=f"```ansi\n{table_str}\n```",
-                inline=False,
-            )
+            _add_ansi_field_safely(embed, "🐋 異常活動 (UOA)", table_str.split("\n"))
         except Exception:
             pass
     else:
@@ -1303,11 +1307,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 dp_lines.append(" └─ 狀態: \u001b[1;30m⚪ 缺乏 PutWall 數據\u001b[0m")
 
         dp_lines.append("```")
-        embed.add_field(
-            name="🦇 暗池大宗交易與支撐 (Dark Pool)",
-            value="\n".join(dp_lines),
-            inline=False,
-        )
+
+        _add_ansi_field_safely(embed, "🦇 暗池大宗交易與支撐 (Dark Pool)", dp_lines)
 
     embed.set_footer(
         text="🔗 使用 /settle_hedge 紀錄對沖或 /event_impact 進行曝險模擬。"
