@@ -907,7 +907,95 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         except Exception:
             pass
 
+    # 3.8 🌊 動能與擠壓狀態 (Momentum & Squeeze)
+    # Exposes the identical SQZ MOM value and directional status used in the
+    # batch radar summary, ensuring data symmetry for the trader.
+    psq_raw = data.get("psq_result") or {}
+    # Support both PSQResult dataclass and plain dict (e.g. from squeeze cache)
+    if hasattr(psq_raw, "is_squeezing"):
+        sqz_is_squeezing: bool = bool(getattr(psq_raw, "is_squeezing", False))
+        sqz_momentum: float = float(getattr(psq_raw, "momentum_value", 0.0) or 0.0)
+        sqz_squeeze_level: str = str(getattr(psq_raw, "squeeze_level", "Release"))
+        sqz_signal_dir: str = str(getattr(psq_raw, "signal_direction", "Neutral"))
+        sqz_vix_label: str = str(getattr(psq_raw, "vix_momentum_label", "NORMAL"))
+        sqz_vix_note: str = str(getattr(psq_raw, "vix_timeframe_note", ""))
+    else:
+        sqz_is_squeezing = bool(psq_raw.get("is_squeezing", False))
+        sqz_momentum = float(
+            psq_raw.get("momentum", psq_raw.get("momentum_value", 0.0)) or 0.0
+        )
+        sqz_squeeze_level = str(psq_raw.get("squeeze_level", "Release"))
+        sqz_signal_dir = str(
+            psq_raw.get("direction", psq_raw.get("signal_direction", "Neutral"))
+        )
+        sqz_vix_label = str(psq_raw.get("vix_momentum_label", "NORMAL"))
+        sqz_vix_note = str(psq_raw.get("vix_timeframe_note", ""))
+
+    if psq_raw:
+        # Map squeeze level to a human-readable label
+        _squeeze_level_map: dict[str, str] = {
+            "High": "🔴 高強度擠壓 (High)",
+            "Mid": "🟠 中強度擠壓 (Mid)",
+            "Normal": "🟡 一般擠壓 (Normal)",
+            "Release": "⚪ 解除擠壓 (Release)",
+        }
+        sqz_level_label = _squeeze_level_map.get(
+            sqz_squeeze_level, f"⚪ {sqz_squeeze_level}"
+        )
+
+        # Directional status matching batch radar display logic
+        # Reuses the identical logic from build_radar_scan_embed for symmetry
+        _dir_to_icon: dict[str, str] = {
+            "Long": "🟢",
+            "Short": "🔴",
+            "Neutral": "⚪",
+        }
+        dir_icon = _dir_to_icon.get(sqz_signal_dir, "⚪")
+        mom_str = f"{sqz_momentum:+.2f}"
+
+        if sqz_is_squeezing:
+            if sqz_momentum > 0:
+                directional_status = f"🟢 多頭推進 / 蓄力突破 (SQZ MOM: {mom_str})"
+                sqz_ansi_color = "\u001b[1;32m"
+            elif sqz_momentum < 0:
+                directional_status = f"🔴 空頭推進 / 蓄力下殺 (SQZ MOM: {mom_str})"
+                sqz_ansi_color = "\u001b[1;31m"
+            else:
+                directional_status = f"⚪ 擠壓中 / 方向待確認 (SQZ MOM: {mom_str})"
+                sqz_ansi_color = "\u001b[1;30m"
+        else:
+            directional_status = (
+                f"{dir_icon} {sqz_signal_dir} / 無擠壓 (SQZ MOM: {mom_str})"
+            )
+            sqz_ansi_color = "\u001b[1;30m"
+
+        sqz_lines = [
+            "```ansi",
+            " 動能與擠壓狀態 (Momentum & Squeeze)",
+            f" ├─ 擠壓強度: {sqz_level_label}",
+            f" ├─ 方向狀態: {sqz_ansi_color}{directional_status}\u001b[0m",
+            f" └─ 動能數值 (SQZ MOM): {sqz_ansi_color}{mom_str}\u001b[0m",
+        ]
+
+        if sqz_vix_label != "NORMAL":
+            if sqz_vix_label == "OVEREXTENDED_RISK":
+                sqz_lines.append(" ⚠️ VIX 標記: 低波過度延伸風險，謹慎追多")
+            elif sqz_vix_label == "HIGH_CONVICTION_RECOVERY":
+                sqz_lines.append(" 🔥 VIX 標記: 高波動期高確信反彈訊號")
+
+        if sqz_vix_note:
+            sqz_lines.append(f" 💡 時框建議: {sqz_vix_note}")
+
+        sqz_lines.append("```")
+
+        embed.add_field(
+            name="🌊 動能與擠壓狀態 (Momentum & Squeeze)",
+            value="\n".join(sqz_lines),
+            inline=False,
+        )
+
     # 4. 🎯 結算與目標 (Target Lock)
+
     _mp_val = data.get("max_pain")
     cb_triggered = data.get("circuit_breaker_triggered", False)
     # Initialize price here so all branches below (including the _mp_val is None

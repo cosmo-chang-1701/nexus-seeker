@@ -90,10 +90,19 @@ def derive_watchlist_option_guidance(
         return "⚠️ 盤前或波動率數據退化，為防範風險，嚴禁輸出任何確定性期權策略建議（如 Short Straddle / Iron Butterfly / 賣方收租）。請以現貨無槓桿死守為主。"
 
     # 金融常識約束模組 (Financial Sanity Guardrails)
-    # High IV Bubble Defense: IV Rank/Percentile > 80% 時禁止單腿買方策略
+    # Low IV Buyer's Edge: IV Rank < 15% 時強制封鎖賣方收租策略，避免 Vega 擴張風險
     iv_rank = float(getattr(metrics, "iv_rank", 0.0) or 0.0)
     iv_percentile = float(getattr(metrics, "iv_percentile", 0.0) or 0.0)
 
+    _LOW_IVR_THRESHOLD = 15.0
+    if iv_rank > 0.0 and iv_rank < _LOW_IVR_THRESHOLD:
+        return (
+            f"IVR 處於絕對低位 ({iv_rank:.1f}%)，具備高盈虧比的買方建倉條件。"
+            "建議透過買入看漲期權 (Long Call) 或構建借方價差 (Debit Spread) 捕捉磁吸效應，"
+            "避免 Vega 擴張風險。嚴禁部署任何賣方收租策略 (CSP / Credit Spread)。"
+        )
+
+    # High IV Bubble Defense: IV Rank/Percentile > 80% 時禁止單腿買方策略
     if iv_rank > 80.0 or iv_percentile > 80.0:
         iv_warning = (
             f"⚠️ IV 泡沫警告 (IV Rank: {iv_rank:.1f}% / IV Pctl: {iv_percentile:.1f}%)："
@@ -257,11 +266,19 @@ async def build_watchlist_option_plan(
         metrics, tactical_model, event_context=event_context, has_position=has_position
     )
 
+    iv_rank_raw = float(getattr(metrics, "iv_rank", 0.0) or 0.0)
     iv_percentile = float(getattr(metrics, "iv_percentile", 0.0) or 0.0)
+
+    # Low IVR block: IVR < 15% 時禁止路由任何賣方收租合約 (CSP / Credit Spread)
+    # 此時應使用買方策略 (Long Call / Debit Spread)，但此函式不負責買方選約。
+    _LOW_IVR_THRESHOLD = 15.0
+    if iv_rank_raw > 0.0 and iv_rank_raw < _LOW_IVR_THRESHOLD:
+        return None
+
     iv_bubble = iv_percentile > 90.0
 
     # 單腿裸賣防禦：當 IV Rank 極端 (> 90%) 時，提示 assignment 風險
-    iv_rank_val = float(getattr(metrics, "iv_rank", 0.0) or 0.0)
+    iv_rank_val = iv_rank_raw
     naked_sell_warning = iv_rank_val > 90.0 and not has_position
 
     strategy_name: str | None = None
