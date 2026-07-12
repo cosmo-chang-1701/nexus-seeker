@@ -223,7 +223,6 @@ def create_psq_embed(data: dict) -> discord.Embed:
     vix_label = (
         psq.vix_momentum_label if hasattr(psq, "vix_momentum_label") else "NORMAL"
     )
-    vix_tf_note = psq.vix_timeframe_note if hasattr(psq, "vix_timeframe_note") else ""
 
     if vix_label != "NORMAL":
         label_map = {
@@ -232,9 +231,6 @@ def create_psq_embed(data: dict) -> discord.Embed:
         }
         label_text = label_map.get(vix_label, vix_label)
         embed.add_field(name="🏅 VIX 動能判定", value=label_text, inline=False)
-
-    if vix_tf_note:
-        embed.add_field(name="⏱️ 時間框架建議", value=f"`{vix_tf_note}`", inline=False)
 
     # 最新新聞
     add_news_field(embed, data.get("news_text"))

@@ -22,6 +22,45 @@ from cogs.embed_builders._ansi_utils import (
 
 
 # ============================================================================
+# Shared Embed Formatting Helpers
+# ============================================================================
+
+
+def get_sqz_status_string(
+    is_squeezing: bool | None, momentum: float | None, signal_dir: str
+) -> tuple[str, str]:
+    """Returns a unified (directional_status, ansi_color_code) for Squeeze momentum."""
+    if is_squeezing is None:
+        is_squeezing = False
+    if momentum is None:
+        momentum = 0.0
+
+    dir_to_icon = {
+        "Long": "🟢",
+        "Short": "🔴",
+        "Neutral": "⚪",
+    }
+    dir_icon = dir_to_icon.get(signal_dir, "⚪")
+    mom_str = f"{momentum:+.2f}"
+
+    if is_squeezing:
+        if momentum > 0:
+            return f"🟢 多頭推進 / 蓄力突破 (SQZ MOM: {mom_str})", "\u001b[1;32m"
+        elif momentum < 0:
+            return f"🔴 空頭推進 / 蓄力下殺 (SQZ MOM: {mom_str})", "\u001b[1;31m"
+        else:
+            return f"⚪ 擠壓中 / 方向待確認 (SQZ MOM: {mom_str})", "\u001b[1;30m"
+    else:
+        # Unify non-squeezing string output to ensure consistency
+        tw_dir = {"Long": "多頭", "Short": "空頭", "Neutral": "中性"}.get(
+            signal_dir, "中性"
+        )
+        if signal_dir == "Neutral":
+            tw_dir = "中性"
+        return f"{dir_icon} {tw_dir} / 無擠壓 (SQZ MOM: {mom_str})", "\u001b[1;30m"
+
+
+# ============================================================================
 # Embed field value safety utilities
 # ============================================================================
 

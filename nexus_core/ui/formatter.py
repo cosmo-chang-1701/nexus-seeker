@@ -136,21 +136,27 @@ def generate_ansi_watchlist_report(
         f" ├─ MA200 支撐: ${metrics.ma200:.2f} | 相對 SPY: {rs_color}{metrics.relative_strength_spy * 100:+.2f}%{C_RESET}",
     ]
 
-    bias_line = f" └─ 均線乖離: MA20: ${metrics.ma20:.2f} / MA50: ${metrics.ma50:.2f} | MA20 偏離: {bias_color}{metrics.bias_ma20 * 100:+.2f}%{C_RESET}"
-    if getattr(metrics, "squeeze_status", False):
-        lines.append(bias_line.replace("└─", "├─"))
-        sqz_dir = getattr(metrics, "squeeze_direction", "⚪")
-        sqz_mom = getattr(metrics, "squeeze_momentum", 0.0)
-        direction_arrow = "↗" if sqz_mom > 0 else ("↘" if sqz_mom < 0 else "→")
-        momentum_color = C_GREEN if sqz_mom > 0 else (C_RED if sqz_mom < 0 else C_RESET)
-        state_tw = (
-            "蓄勢突破" if sqz_mom > 0 else ("弱勢下行" if sqz_mom < 0 else "橫盤整理")
-        )
-        lines.append(
-            f" └─ [🔮 PowerSqueeze] {sqz_dir} SQUEEZING | 動能: {momentum_color}{sqz_mom:+.2f} {direction_arrow} ({state_tw}){C_RESET}"
-        )
-    else:
-        lines.append(bias_line)
+    bias_line = f" ├─ 均線乖離: MA20: ${metrics.ma20:.2f} / MA50: ${metrics.ma50:.2f} | MA20 偏離: {bias_color}{metrics.bias_ma20 * 100:+.2f}%{C_RESET}"
+    lines.append(bias_line)
+
+    sqz_status = getattr(metrics, "squeeze_status", False)
+    sqz_mom = getattr(metrics, "squeeze_momentum", 0.0)
+    raw_dir = getattr(metrics, "squeeze_direction", "Neutral")
+    if raw_dir is None:
+        raw_dir = "Neutral"
+
+    # Handle both old emojis from cache and new explicit direction strings
+    signal_dir = "Neutral"
+    if "Long" in raw_dir or "🟢" in raw_dir:
+        signal_dir = "Long"
+    elif "Short" in raw_dir or "🔴" in raw_dir:
+        signal_dir = "Short"
+
+    from cogs.embed_builders._embed_helpers import get_sqz_status_string
+
+    status_str, color_code = get_sqz_status_string(sqz_status, sqz_mom, signal_dir)
+
+    lines.append(f" └─ [🔮 PowerSqueeze] {color_code}{status_str}{C_RESET}")
 
     lines.extend(
         [
