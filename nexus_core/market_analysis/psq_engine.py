@@ -19,10 +19,7 @@ class PSQResult:
     sma_distance_pct: float
     sma_20: float  # 20SMA 價格
     # VIX 戰情標記
-    vix_momentum_label: str = (
-        "NORMAL"  # "NORMAL", "OVEREXTENDED_RISK", "HIGH_CONVICTION_RECOVERY"
-    )
-    vix_timeframe_note: str = ""  # 低 VIX 時建議使用的時間框架
+    vix_momentum_label: str = "NORMAL"  # VIX 短期動能標籤
 
     @property
     def is_breakout_high(self) -> bool:
@@ -158,7 +155,6 @@ def analyze_psq(
 
         # ---------- VIX 動能標記 (VIX Momentum Labeling) ----------
         vix_momentum_label = "NORMAL"
-        vix_timeframe_note = ""
 
         if vix_spot is not None:
             # 匯入分位數邊界
@@ -174,9 +170,6 @@ def analyze_psq(
             elif vix_spot > upper_3 and mom_color == "Golden":
                 vix_momentum_label = "HIGH_CONVICTION_RECOVERY"
 
-            # 低波環境時間框架建議
-            if vix_spot < 18.0:
-                vix_timeframe_note = "低波期，建議以日K/4H為主，忽略30m雜訊"
         # -----------------------------------------------------------
 
         return PSQResult(
@@ -191,7 +184,6 @@ def analyze_psq(
             sma_distance_pct=float(sma_distance_pct.iloc[-1]),
             sma_20=float(basis.iloc[-1]),
             vix_momentum_label=vix_momentum_label,
-            vix_timeframe_note=vix_timeframe_note,
         )
     except Exception as e:
         import logging

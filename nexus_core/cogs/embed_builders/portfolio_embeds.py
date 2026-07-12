@@ -956,31 +956,12 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             sqz_squeeze_level, f"⚪ {sqz_squeeze_level}"
         )
 
-        # Directional status matching batch radar display logic
-        # Reuses the identical logic from build_radar_scan_embed for symmetry
-        _dir_to_icon: dict[str, str] = {
-            "Long": "🟢",
-            "Short": "🔴",
-            "Neutral": "⚪",
-        }
-        dir_icon = _dir_to_icon.get(sqz_signal_dir, "⚪")
-        mom_str = f"{sqz_momentum:+.2f}"
+        from cogs.embed_builders._embed_helpers import get_sqz_status_string
 
-        if sqz_is_squeezing:
-            if sqz_momentum > 0:
-                directional_status = f"🟢 多頭推進 / 蓄力突破 (SQZ MOM: {mom_str})"
-                sqz_ansi_color = "\u001b[1;32m"
-            elif sqz_momentum < 0:
-                directional_status = f"🔴 空頭推進 / 蓄力下殺 (SQZ MOM: {mom_str})"
-                sqz_ansi_color = "\u001b[1;31m"
-            else:
-                directional_status = f"⚪ 擠壓中 / 方向待確認 (SQZ MOM: {mom_str})"
-                sqz_ansi_color = "\u001b[1;30m"
-        else:
-            directional_status = (
-                f"{dir_icon} {sqz_signal_dir} / 無擠壓 (SQZ MOM: {mom_str})"
-            )
-            sqz_ansi_color = "\u001b[1;30m"
+        directional_status, sqz_ansi_color = get_sqz_status_string(
+            sqz_is_squeezing, sqz_momentum, sqz_signal_dir
+        )
+        mom_str = f"{sqz_momentum:+.2f}"
 
         sqz_lines = [
             "```ansi",
@@ -995,6 +976,17 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 sqz_lines.append(" ⚠️ VIX 標記: 低波過度延伸風險，謹慎追多")
             elif sqz_vix_label == "HIGH_CONVICTION_RECOVERY":
                 sqz_lines.append(" 🔥 VIX 標記: 高波動期高確信反彈訊號")
+
+        # Dynamic timeframe volatility regime evaluation
+        iv_val_num = float(current_iv * 100) if current_iv is not None else 0.0
+        iv_rank_num = float(iv_rank) if iv_rank is not None else 0.0
+
+        if iv_rank_num > 50.0 or iv_val_num > 80.0:
+            sqz_vix_note = "極端高波環境 (IVR > 50%)，提防劇烈洗盤，建議縮小部位或使用期權賣方策略保護。"
+        elif iv_rank_num < 30.0 and abs(sqz_momentum) < 0.5:
+            sqz_vix_note = "低波期，建議以日K/4H為主，忽略30m雜訊"
+        else:
+            sqz_vix_note = ""
 
         if sqz_vix_note:
             sqz_lines.append(f" 💡 時框建議: {sqz_vix_note}")
