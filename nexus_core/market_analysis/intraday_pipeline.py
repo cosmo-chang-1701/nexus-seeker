@@ -98,14 +98,9 @@ def _estimate_volume_poc(df: pd.DataFrame, bins: int = 24) -> float:
 
 
 def _relative_strength_vs_spy(df_stock: pd.DataFrame, df_spy: pd.DataFrame) -> float:
-    stock_tail = df_stock["Close"].tail(21)
-    spy_tail = df_spy["Close"].tail(21)
-    if len(stock_tail) < 2 or len(spy_tail) < 2:
-        return 0.0
+    from market_analysis.risk_engine import calculate_relative_strength_index
 
-    stock_return = float(stock_tail.iloc[-1] / stock_tail.iloc[0] - 1.0)
-    spy_return = float(spy_tail.iloc[-1] / spy_tail.iloc[0] - 1.0)
-    return round(stock_return - spy_return, 4)
+    return round(calculate_relative_strength_index(df_stock, df_spy, n=20), 4)
 
 
 async def _estimate_options_wall_metrics(
@@ -279,11 +274,12 @@ async def build_enhanced_watchlist_metrics(
     gex_max_put_wall = None
     vanna_sensitivity = None
     try:
-        gex_max_put_wall, vanna_sensitivity = await _estimate_options_wall_metrics(
-            symbol,
-            current_price,
-            dividend_yield,
-        )
+        from market_analysis.index_microstructure import fetch_symbol_gex_metrics
+
+        gex_data = await fetch_symbol_gex_metrics(symbol)
+        if gex_data:
+            gex_max_put_wall = gex_data.get("put_wall", 0.0)
+            vanna_sensitivity = 0.0
         if gex_max_put_wall is not None and gex_max_put_wall > 0.0:
             await save_cached_gex_putwall(symbol, gex_max_put_wall)
     except Exception as e:
@@ -292,10 +288,13 @@ async def build_enhanced_watchlist_metrics(
         cached_wall = get_cached_gex_putwall(symbol)
         gex_max_put_wall = cached_wall if cached_wall else None
 
-    # Legacy retail indicators are completely removed from pipeline
-    rsi_14 = 50.0
+    # Restore essential indicators for pricing engine (AGENTS.md)
+    from market_analysis.strategy import _calculate_technical_indicators
+
+    indicators = _calculate_technical_indicators(df_stock)
+    rsi_14 = indicators.get("rsi", 50.0) if indicators else 50.0
     atr_14 = 0.01
-    ma20 = current_price
+    ma20 = indicators.get("sma20", current_price) if indicators else current_price
     ma50 = current_price
     ma200 = current_price
     beta = (
@@ -318,18 +317,18 @@ async def build_enhanced_watchlist_metrics(
     )
     buy_phase1, buy_phase2, buy_phase3 = _derive_buy_levels(
         current_price,
-        0.0,
-        0.0,
-        0.0,
+        ma20,
+        ma50,
+        ma200,
         volume_poc,
         max(gex_max_put_wall_for_calc, 0.01),
         0.0,
     )
     sell_phase1, sell_phase2, sell_phase3 = _derive_sell_levels(
         current_price,
-        0.0,
-        0.0,
-        0.0,
+        ma20,
+        ma50,
+        ma200,
         0.0,
         volume_poc=volume_poc,
         gex_max_put_wall=max(gex_max_put_wall_for_calc, 0.01),
@@ -344,7 +343,7 @@ async def build_enhanced_watchlist_metrics(
         pe_ratio = pe_raw
 
     from database.squeeze_cache import get_squeeze_cache, save_squeeze_cache
-    from market_analysis.squeeze_engine import calculate_power_squeeze
+    from market_analysis.psq_engine import analyze_psq
 
     squeeze_cache = get_squeeze_cache(symbol)
     if squeeze_cache:
@@ -352,10 +351,19 @@ async def build_enhanced_watchlist_metrics(
         squeeze_momentum = squeeze_cache.get("momentum", 0.0)
         squeeze_direction = squeeze_cache.get("direction", "⚪")
     else:
-        psq_res = calculate_power_squeeze(df_stock)
-        squeeze_status = psq_res.get("is_squeezing", False)
-        squeeze_momentum = psq_res.get("momentum", 0.0)
-        squeeze_direction = psq_res.get("direction", "⚪")
+        psq_obj = analyze_psq(df_stock, vix_spot=18.0)
+        if psq_obj:
+            squeeze_status = psq_obj.is_squeezing
+            squeeze_momentum = psq_obj.momentum_value
+            squeeze_direction = (
+                "🟢"
+                if psq_obj.signal_direction == "Long"
+                else ("🔴" if psq_obj.signal_direction == "Short" else "⚪")
+            )
+        else:
+            squeeze_status = False
+            squeeze_momentum = 0.0
+            squeeze_direction = "⚪"
         save_squeeze_cache(symbol, squeeze_status, squeeze_momentum, squeeze_direction)
 
     metrics = EnhancedWatchlistMetrics(
