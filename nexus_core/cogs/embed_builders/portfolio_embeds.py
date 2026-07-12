@@ -956,9 +956,9 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             sqz_squeeze_level, f"⚪ {sqz_squeeze_level}"
         )
 
-        from cogs.embed_builders._embed_helpers import get_sqz_status_string
+        from cogs.embed_builders._embed_helpers import get_sqz_status_display
 
-        directional_status, sqz_ansi_color = get_sqz_status_string(
+        directional_status, sqz_ansi_color = get_sqz_status_display(
             sqz_is_squeezing, sqz_momentum, sqz_signal_dir
         )
         mom_str = f"{sqz_momentum:+.2f}"

@@ -26,8 +26,11 @@ from cogs.embed_builders._ansi_utils import (
 # ============================================================================
 
 
-def get_sqz_status_string(
-    is_squeezing: bool | None, momentum: float | None, signal_dir: str
+def get_sqz_status_display(
+    is_squeezing: bool | None,
+    momentum: float | None,
+    signal_dir: str,
+    short: bool = False,
 ) -> tuple[str, str]:
     """Returns a unified (directional_status, ansi_color_code) for Squeeze momentum."""
     if is_squeezing is None:
@@ -43,21 +46,41 @@ def get_sqz_status_string(
     dir_icon = dir_to_icon.get(signal_dir, "⚪")
     mom_str = f"{momentum:+.2f}"
 
+    tw_dir = {"Long": "多頭", "Short": "空頭", "Neutral": "中性"}.get(
+        signal_dir, "中性"
+    )
+
     if is_squeezing:
         if momentum > 0:
-            return f"🟢 多頭推進 / 蓄力突破 (SQZ MOM: {mom_str})", "\u001b[1;32m"
+            text = (
+                f"🟢 多頭 {mom_str}"
+                if short
+                else f"🟢 多頭推進 / 蓄力突破 (SQZ MOM: {mom_str})"
+            )
+            color = "\u001b[1;32m"
         elif momentum < 0:
-            return f"🔴 空頭推進 / 蓄力下殺 (SQZ MOM: {mom_str})", "\u001b[1;31m"
+            text = (
+                f"🔴 空頭 {mom_str}"
+                if short
+                else f"🔴 空頭推進 / 蓄力下殺 (SQZ MOM: {mom_str})"
+            )
+            color = "\u001b[1;31m"
         else:
-            return f"⚪ 擠壓中 / 方向待確認 (SQZ MOM: {mom_str})", "\u001b[1;30m"
+            text = (
+                f"⚪ 中性 {mom_str}"
+                if short
+                else f"⚪ 擠壓中 / 方向待確認 (SQZ MOM: {mom_str})"
+            )
+            color = "\u001b[1;30m"
     else:
-        # Unify non-squeezing string output to ensure consistency
-        tw_dir = {"Long": "多頭", "Short": "空頭", "Neutral": "中性"}.get(
-            signal_dir, "中性"
+        text = (
+            f"{dir_icon} {tw_dir} {mom_str}"
+            if short
+            else f"{dir_icon} {tw_dir} / 無擠壓 (SQZ MOM: {mom_str})"
         )
-        if signal_dir == "Neutral":
-            tw_dir = "中性"
-        return f"{dir_icon} {tw_dir} / 無擠壓 (SQZ MOM: {mom_str})", "\u001b[1;30m"
+        color = "\u001b[1;30m"
+
+    return text, color
 
 
 # ============================================================================

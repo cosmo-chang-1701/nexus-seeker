@@ -152,11 +152,12 @@ def generate_ansi_watchlist_report(
     elif "Short" in raw_dir or "🔴" in raw_dir:
         signal_dir = "Short"
 
-    from cogs.embed_builders._embed_helpers import get_sqz_status_string
+    from cogs.embed_builders._embed_helpers import get_sqz_status_display
 
-    status_str, color_code = get_sqz_status_string(sqz_status, sqz_mom, signal_dir)
-
-    lines.append(f" └─ [🔮 PowerSqueeze] {color_code}{status_str}{C_RESET}")
+    directional_status, sqz_ansi_color = get_sqz_status_display(
+        sqz_status, sqz_mom, signal_dir
+    )
+    lines.append(f" └─ [🔮 PowerSqueeze] {sqz_ansi_color}{directional_status}{C_RESET}")
 
     lines.extend(
         [
