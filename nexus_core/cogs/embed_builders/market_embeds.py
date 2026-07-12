@@ -695,9 +695,29 @@ def build_radar_scan_embed(
 
             # 連動 SQZ MOM 擠壓蓄力 (Squeeze Momentum)
             psq_result = r.get("psq_result", {})
-            sqz_dir = psq_result.get("direction", "⚪")
-            sqz_is_squeezing = psq_result.get("is_squeezing", False)
-            sqz_mom = psq_result.get("momentum", 0.0)
+            if not psq_result:
+                sqz_dir = "⚪"
+                sqz_is_squeezing = False
+                sqz_mom = 0.0
+                sqz_mom_cell = (
+                    f"\u001b[1;30m{_pad_string('⚪ 數據計算中', 14)}\u001b[0m"
+                )
+            else:
+                sqz_dir_raw = psq_result.get(
+                    "direction", psq_result.get("signal_direction", "⚪")
+                )
+                if sqz_dir_raw == "Long":
+                    sqz_dir = "🟢"
+                elif sqz_dir_raw == "Short":
+                    sqz_dir = "🔴"
+                elif sqz_dir_raw == "Neutral":
+                    sqz_dir = "⚪"
+                else:
+                    sqz_dir = sqz_dir_raw
+                sqz_is_squeezing = psq_result.get("is_squeezing", False)
+                sqz_mom = float(
+                    psq_result.get("momentum", psq_result.get("momentum_value", 0.0))
+                )
 
             # 連動 GEX PutWall (做市商底牆)
             if put_wall > 0 and price_val > 0:
@@ -715,14 +735,14 @@ def build_radar_scan_embed(
                             f"• 🚨 **{sym}**: 價格已跌破 GEX PutWall 做市商底牆 (${put_wall:.2f})，進入 Delta 負向螺旋高風險區間，嚴防流動性踩踏。"
                         )
 
-            if sqz_is_squeezing:
-                if sqz_mom_val > 0:
+            if psq_result and sqz_is_squeezing:
+                if sqz_mom > 0:
                     insights.append(
-                        f"• ⏱️ **{sym}**: SQZ 正處於動能擠壓蓄力期 (Squeezing)，當前動能偏多 ({sqz_mom_val:+.1f})，建議關注向上突破機會。"
+                        f"• ⏱️ **{sym}**: SQZ 正處於動能擠壓蓄力期 (Squeezing)，當前動能偏多 ({sqz_mom:+.1f})，建議關注向上突破機會。"
                     )
-                elif sqz_mom_val < 0:
+                elif sqz_mom < 0:
                     insights.append(
-                        f"• ⏱️ **{sym}**: SQZ 正處於動能擠壓蓄力期 (Squeezing)，當前動能偏空 ({sqz_mom_val:+.1f})，建議嚴防向下殺跌風險。"
+                        f"• ⏱️ **{sym}**: SQZ 正處於動能擠壓蓄力期 (Squeezing)，當前動能偏空 ({sqz_mom:+.1f})，建議嚴防向下殺跌風險。"
                     )
 
             # 格式化一列 ANSI 表格
@@ -745,31 +765,28 @@ def build_radar_scan_embed(
             dmp_cell = dmp_padded_raw.replace(dmp_str, dmp_ansi)
             label_cell = status_label
 
-            sqz_icon = sqz_dir[0] if sqz_dir else "⚪"
-            if sqz_mom > 0:
-                sqz_text = f"{sqz_icon} 多頭"
-            elif sqz_mom < 0:
-                sqz_text = f"{sqz_icon} 空頭"
-            else:
-                sqz_text = f"{sqz_icon} 中性"
-
-            if sqz_is_squeezing:
-                mom_str = f"{sqz_mom:+.1f}"
-            else:
-                mom_str = "---"
-
-            combined_raw = f"{sqz_text} {mom_str}"[:15]
-            padded_raw = _pad_string(combined_raw, 14)
-
-            if sqz_is_squeezing:
+            if psq_result:
+                sqz_icon = sqz_dir[0] if sqz_dir else "⚪"
                 if sqz_mom > 0:
-                    sqz_mom_cell = f"\u001b[1;32m{padded_raw}\u001b[0m"
+                    sqz_text = f"{sqz_icon} 多頭"
                 elif sqz_mom < 0:
-                    sqz_mom_cell = f"\u001b[1;31m{padded_raw}\u001b[0m"
+                    sqz_text = f"{sqz_icon} 空頭"
                 else:
-                    sqz_mom_cell = padded_raw
-            else:
-                sqz_mom_cell = f"\u001b[1;30m{padded_raw}\u001b[0m"
+                    sqz_text = f"{sqz_icon} 中性"
+
+                mom_str = f"{sqz_mom:+.2f}"
+                combined_raw = f"{sqz_text} {mom_str}"[:15]
+                padded_raw = _pad_string(combined_raw, 14)
+
+                if sqz_is_squeezing:
+                    if sqz_mom > 0:
+                        sqz_mom_cell = f"\u001b[1;32m{padded_raw}\u001b[0m"
+                    elif sqz_mom < 0:
+                        sqz_mom_cell = f"\u001b[1;31m{padded_raw}\u001b[0m"
+                    else:
+                        sqz_mom_cell = padded_raw
+                else:
+                    sqz_mom_cell = f"\u001b[1;30m{padded_raw}\u001b[0m"
 
             ansi_lines.append(
                 f"{sym_cell}{price_cell}{ivr_cell}{em_cell}{mp_cell}{sqz_mom_cell}{dmp_cell}{label_cell}"

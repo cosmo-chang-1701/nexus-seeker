@@ -654,23 +654,32 @@ class UnifiedTerminalCog(commands.Cog):
         psq_res = {}
         if df_hist is not None and not df_hist.empty:
             from database.squeeze_cache import get_squeeze_cache, save_squeeze_cache
-            from market_analysis.squeeze_engine import calculate_power_squeeze
+            from market_analysis.psq_engine import analyze_psq
 
             sc = get_squeeze_cache(sym)
             if sc:
                 psq_res = {
                     "is_squeezing": sc.get("is_squeezing", False),
-                    "momentum": sc.get("momentum", 0.0),
-                    "direction": sc.get("direction", "⚪"),
+                    "momentum_value": sc.get("momentum", 0.0),
+                    "signal_direction": sc.get("direction", "⚪"),
                 }
             else:
-                psq_res = calculate_power_squeeze(df_hist)
-                save_squeeze_cache(
-                    sym,
-                    psq_res.get("is_squeezing", False),
-                    psq_res.get("momentum", 0.0),
-                    psq_res.get("direction", "⚪"),
-                )
+                psq_obj = analyze_psq(df_hist, vix_spot=18.0)
+                if psq_obj:
+                    psq_res = {
+                        "is_squeezing": psq_obj.is_squeezing,
+                        "momentum_value": psq_obj.momentum_value,
+                        "signal_direction": "🟢"
+                        if psq_obj.signal_direction == "Long"
+                        else ("🔴" if psq_obj.signal_direction == "Short" else "⚪"),
+                        "squeeze_level": psq_obj.squeeze_level,
+                    }
+                    save_squeeze_cache(
+                        sym,
+                        psq_res["is_squeezing"],
+                        psq_res["momentum_value"],
+                        psq_res["signal_direction"],
+                    )
 
         return {
             "symbol": sym,

@@ -408,9 +408,9 @@ async def test_build_enhanced_watchlist_metrics_assembles_quant_fields():
         new_callable=AsyncMock,
         return_value={"symbol": "MSFT", "pcr": 0.92, "state": "平衡"},
     ), patch(
-        "market_analysis.intraday_pipeline._estimate_options_wall_metrics",
+        "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
         new_callable=AsyncMock,
-        return_value=(165.0, 0.44),
+        return_value={"put_wall": 165.0, "call_wall": 180.0, "net_gex": 1000000.0},
     ), patch(
         "market_analysis.risk_engine.calculate_beta",
         return_value=1.23,
@@ -429,7 +429,7 @@ async def test_build_enhanced_watchlist_metrics_assembles_quant_fields():
     assert metrics.option_skew_state == "左偏 (Put 昂貴)"
     assert metrics.pcr == 0.92
     assert metrics.gex_max_put_wall == 165.0
-    assert metrics.vanna_sensitivity == 0.44
+    assert metrics.vanna_sensitivity == 0.0
     assert metrics.beta == 1.23
     assert (
         metrics.buy_price_phase1 >= metrics.buy_price_phase2 >= metrics.buy_price_phase3

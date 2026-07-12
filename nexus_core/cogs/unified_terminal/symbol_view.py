@@ -174,9 +174,11 @@ class SymbolHubView(discord.ui.View):
             )
             from market_analysis.volume_profile import calculate_volume_profile
             from market_analysis.dark_pool_engine import fetch_darkpool_prints
+            from market_analysis.index_microstructure import fetch_symbol_gex_metrics
 
             vp_task = asyncio.to_thread(calculate_volume_profile, self.symbol)
             dp_task = fetch_darkpool_prints(self.symbol)
+            gex_task = fetch_symbol_gex_metrics(self.symbol)
 
             (
                 df_spy,
@@ -194,6 +196,7 @@ class SymbolHubView(discord.ui.View):
                 catalysts,
                 vp_data,
                 dp_data,
+                gex_data,
             ) = await asyncio.gather(
                 spy_task,
                 macro_task,
@@ -210,6 +213,7 @@ class SymbolHubView(discord.ui.View):
                 catalyst_task,
                 vp_task,
                 dp_task,
+                gex_task,
             )
 
             spy_price = df_spy["Close"].iloc[-1] if not df_spy.empty else 670.0
@@ -256,6 +260,7 @@ class SymbolHubView(discord.ui.View):
             safe_mp = max_pain_data or {}
             result["max_pain"] = safe_mp.get("max_pain", 0.0)
 
+            result["gex_profile_data"] = gex_data
             result["is_ddp"] = ddp_report.get("is_ddp", False) if ddp_report else False
             result["vix"] = macro_data.vix
             result["spy_price"] = spy_price
