@@ -105,7 +105,7 @@ Instead of invoking LLM on the first-level radar panel, a lightweight rules engi
 - **Real-time Insights**: Automatically matches active pending orders or option protection strategies (e.g., triggering pull-back alerts or tail-risk warnings).
 
 ### 3. Rendering Layer (`build_radar_scan_embed`)
-The ANSI terminal radar card is built inside `cogs/embed_builder.py` using `build_radar_scan_embed()`, keeping with the **Single Source of Truth** for embeds. It prints an interactive ANSI plain-text grid showing current price, IVR, Expected Move range, Max Pain, and D-MP% deviation.
+The ANSI terminal radar card is built inside `cogs/embed_builders/` using `build_radar_scan_embed()`, keeping with the **Single Source of Truth** for embeds. It prints an interactive ANSI plain-text grid showing current price, IVR, Expected Move range, Max Pain, and D-MP% deviation.
 
 ### 4. 避免 Discord 回應錯誤的長度分段與分頁原則
 為防範當自選標的 (Watchlist) 或持倉 (Holdings) 數量過大時，因 Embed Description 超過 Discord 的 4096 字元上限而導致 `400 Bad Request (error code: 50035): Invalid Form Body` 系統錯誤，系統實施以下長度分段與分頁原則：
@@ -138,7 +138,7 @@ The heartbeat currently reuses logic from `market_analysis/intraday_pipeline.py`
 
 ### Current heartbeat output
 
-The active embed builder is `create_watchlist_signal_embed()` in `cogs/embed_builder.py`.
+The active embed builder is `create_watchlist_signal_embed()` in `cogs/embed_builders/`.
 
 The embed title is dynamically injected with the ticker's active tags fetched from the multi-tenant `watchlist_tags` table (e.g. `標的分析中心 2.0: AAPL 每半小時戰場心跳 🏷️ TECH | CORE`).
 
@@ -196,7 +196,7 @@ We resolve this via a comprehensive pre-market optimization workflow:
 2. **Database Fallback**: If the market is closed (`not is_market_open()`), it automatically queries the SQLite database `historical_iv` table for the last known closing IV of the symbol and sets it as `current_iv`.
 3. **Historical Volatility (HV) Fallback**: If the DB has no history for the symbol, the engine calculates the standard 30-day Historical Volatility (HV) using historical stock close prices as a proxy.
 4. **Degradation Gating**: If all options and historical data are unavailable, the engine gracefully degrades and sets the `is_premarket` flag to `True` on the returned `IVMetrics` model.
-5. **Presentation Layer Customization**: In `embed_builder.py`, if `is_premarket` is `True`:
+5. **Presentation Layer Customization**: In `cogs/embed_builders/`, if `is_premarket` is `True`:
    - **Complete Data Absence (`current_iv == 0.0`)**: Appends ` [盤前數據未更新]` to the title and displays friendly placeholders (`--%` and `等待開盤`) to prevent user confusion.
    - **Successful Fallback (`current_iv > 0.0`)**: Appends ` [盤前/前日收盤]` to the title and tags the IV values with `(前日收盤 / 歷史波動率代理)` to clearly report that the data reflects previous closing levels.
 
@@ -394,7 +394,7 @@ This elegant shim dynamically routes test-driven calls passing keyword arguments
 ### 4. Output Centralization
 To adhere to output centralization rules and prevent `test_output_centralization.py` failures:
 - Neither cogs, views, nor modals construct `discord.Embed` objects directly.
-- The entire presentation layer is centralized under `cogs/embed_builder.py` using standard wrappers:
+- The entire presentation layer is centralized under `cogs/embed_builders/` (with `embed_builder.py` acting purely as a backwards-compatibility shim):
   - `create_account_settings_embed(details_list: list[str]) -> discord.Embed`
   - `create_notification_settings_embed(scheduled_list: list[str], realtime_list: list[str], polymarket_list: list[str]) -> discord.Embed`
 
@@ -434,7 +434,7 @@ Do **not** add raw market-calendar API calls directly to feature code when calen
 
 All production embed construction should remain centralized in:
 
-- `nexus_core/cogs/embed_builder.py`
+- `nexus_core/cogs/embed_builders/` (with `embed_builder.py` as shim)
 
 This is enforced by:
 
@@ -447,7 +447,7 @@ Current repository rule:
 - push/report messages should prefer **field-based embeds**
 - ANSI tables belong inside a field, not dumped into the full description when avoidable
 - **Visual Consistency & Subclassing (`NexusEmbed`)**:
-  - To maintain absolute visual consistency across all modules, all instantiated embeds in `cogs/embed_builder.py` are dynamically wrapped via the `NexusEmbed` subclass.
+  - To maintain absolute visual consistency across all modules, all instantiated embeds in `cogs/embed_builders/` are dynamically wrapped via the `NexusEmbed` subclass.
   - **Curated Color Palette**: All standard colors are mapped to cohesive, premium palettes:
     - Primary system/info: Curated blue `0x3498DB`
     - Danger/risk alerts: Curated red `0xE74C3C`
@@ -476,12 +476,16 @@ Current repository rule:
 - `nexus_core/bot.py` — bot bootstrap, DM queue, service lifecycle
 - `nexus_core/cogs/trading.py` — active runtime scheduler and watchlist heartbeat sender
 - `nexus_core/cogs/analyst_agent.py` — analyst report scheduler and dispatcher
-- `nexus_core/cogs/order_ui.py` — active orders setting panel, list views, cancellation/adjustment modals, and telemetry alignment buttons
+- `nexus_core/cogs/order_ui.py` — active orders entrypoints
+- `nexus_core/cogs/order_views.py` — interactive list views and telemetry alignment buttons
+- `nexus_core/cogs/order_modals.py` — cancellation/adjustment modals
 - `nexus_core/cogs/settings_ui.py` — interactive account and notification settings views and modals
 - `nexus_core/cogs/terminal.py` — terminal command entrypoints (including settings and runway analysis)
 - `nexus_core/cogs/unified_terminal/` — modular trader terminal and radar hubs (`cog.py`, `symbol_view.py`, `portfolio_view.py`, `batch_scan_view.py`, `pulse_view.py`, `utils.py`)
 - `nexus_core/cogs/calendar.py` — upgraded macro and earnings calendar command with event caching
-- `nexus_core/cogs/embed_builder.py` — single source of truth for embeds
+- `nexus_core/cogs/embed_builders/` — single source of truth for embeds (`embed_builder.py` is shim)
+- `nexus_core/cogs/intelligence.py` — Market Intelligence & Edge Detection Terminal (news, reddit, polymarket)
+- `nexus_core/cogs/hedging.py` — automated hedging tracking and settlement interface
 - `nexus_core/database/orders.py` — active orders SQLite database state CRUD operations
 - `nexus_core/database/migrations/v038_add_active_orders.py` — migration registering the active_orders table in SQLite
 - `nexus_core/database/migrations/v047_remediate_missing_structures.py` — migration remediating/adding economic calendar columns consensus_value and fedwatch_probability
@@ -496,6 +500,8 @@ Current repository rule:
 - `nexus_core/services/llm_service.py` — structured LLM outputs and memory-safe degradation
 - `nexus_core/services/trading_service.py` — scan / report / validation data orchestration
 - `nexus_core/services/telemetry_pricing_engine.py` — dynamic telemetry pricing calculation covering Max Pain, EM, Skew, IV Spikes, and psychological round numbers
+- `nexus_core/services/polymarket_service.py` — Polymarket whale tracking and AI summary service
+- `nexus_core/services/order_telemetry_service.py` — Order telemetry scanning service
 - `nexus_core/database/notifications.py` — custom user notification preferences database operations
 - `nexus_core/database/virtual_trading.py` — Database interface for virtual trades (VTR)
 - `nexus_core/database/watchlist.py` — Database CRUD operations for user watchlist symbols

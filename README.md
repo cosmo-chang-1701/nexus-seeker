@@ -6,7 +6,7 @@
 
 Nexus Seeker 是一個 **Discord-first 的多租戶選擇權風控與交易營運平台**。本平台深度結合了技術指標分析、Black-Scholes-Merton 期權定價、希臘字母（Greeks）投資組合風險管理、事件日曆防禦及大型語言模型（LLM）輔助分析，旨在低內存 VPS 部署環境下，為實盤交易者提供最即時、可持續、自動化的高勝率風控操作指南。
 
-> 核心版本（nexus_core）：**v1.10.3**
+> 核心版本（nexus_core）：**v1.10.7**
 
 ---
 
@@ -189,6 +189,10 @@ docker compose up -d --build
 - `/cc_recovery [symbol]`：為指定標的篩選並展示前 3 個最優防禦性收租 Covered Call 期權合約 (篩選條件為 DTE 30-50, Delta < 0.15, 年化收益率 >= 10.0%)。
 - `/telemetry_alert`：遙測偏離提醒，支援「一鍵套用遙測建議價與安全倉位」，自動於極端 Skew 下打 75 折並微調掛單價格。
 - `/force_macro_update`：`[Admin]` 強制爬蟲重爬並更新大盤 GEX 與 FedWatch 快取。
+- `/poly_list` / `/poly_status`：顯示與管理 Polymarket 活躍市場與連線狀態。
+- `/scan_news` / `/scan_reddit`：掃描標的最新新聞與散戶情緒。
+- `/quote`：獲取標的即時報價。
+- `/settle_hedge` / `/hedge_list`：確認並記錄已執行的對沖操作，查看對沖警報狀態。
 
 ### 開發者本地 CLI (`cli.py`) 指令
 於伺服器主機的 `nexus_core/` 目錄下，可以直接執行以下指令：
@@ -215,14 +219,14 @@ python cli.py admin force-macro-update
 
 ### 1. 模組結構速覽
 - `bot.py`：Bot 入口、Leader Lock 競爭、持久化 DM 佇列管理、健康監控。
-- `cogs/`：Discord 交互入口與背景排程。其中 `cogs/unified_terminal/` 已將終端雷達與各類看板拆分為模組化架構（包含 `symbol_view`、`portfolio_view`、`batch_scan_view` 等）。
+- `cogs/`：Discord 交互入口與背景排程。其中 `cogs/unified_terminal/` 已將終端雷達與各類看板拆分為模組化架構。UI 相關元件已進一步拆分，例如 `order_ui.py` 已分離出 `order_views.py` 與 `order_modals.py`。新增了 `intelligence.py` 處理情報與輿情，`hedging.py` 處理對沖紀錄。
 - `market_analysis/`：核心量化引擎，包括 `IntradayScanPipeline`、`NexusGammaSqueezeEngine`。其中 `sentiment_engine.py` 採 Facade 模式，底層實作已拆分至 `sentiment/` 子目錄（包含 IV、Max Pain、UOA 等模組）。
 - `services/`：外部 API 封裝與服務（`calendar_service.py` 共享事件快取、`llm_service.py` 等）。
 - `database/`：SQLite schema 與 migrations 引擎，所有資料庫變更皆需在此撰寫 migration 腳本。
 - `ui/`：ANSI 字符格式化與表格渲染。
 
 ### 2. 開發規範與型別安全
-- **中央化 Embed 輸出防線**：為了避免輸出版面混亂，所有 Cogs、Views、Modals 不得直接宣告 `discord.Embed`。必須統一經由 `cogs/embed_builder.py`（或 `cogs/embed_builders/` 套件）構造，且所有 Embed 皆需繼承 `NexusEmbed` 類，確保色彩風格（如 `0x3498DB` 資訊藍、`0xE74C3C` 警報紅）與頁尾標註一致。
+- **中央化 Embed 輸出防線**：為了避免輸出版面混亂，所有 Cogs、Views、Modals 不得直接宣告 `discord.Embed`。必須統一經由 `cogs/embed_builders/` 套件構造（`cogs/embed_builder.py` 僅保留作為向後相容的轉接層 Shim），且所有 Embed 皆需繼承 `NexusEmbed` 類，確保色彩風格（如 `0x3498DB` 資訊藍、`0xE74C3C` 警報紅）與頁尾標註一致。
 - **持久化 DM 佇列**：主動推送訊息必須透過 `queue_dm` 進行。此佇列會自動對超過 2000 字元的超長訊息進行程式碼區塊（code block）友善的拆分，並在 Bot 啟動/關閉時保存與復原隊列，以確保高可靠交付。
 - **型別自我檢測 (Mypy Check)**：在提交代碼前，請務必在 Docker 中運行：
   ```bash
