@@ -766,27 +766,15 @@ def build_radar_scan_embed(
             label_cell = status_label
 
             if psq_result:
-                sqz_icon = sqz_dir[0] if sqz_dir else "⚪"
-                if sqz_mom > 0:
-                    sqz_text = f"{sqz_icon} 多頭"
-                elif sqz_mom < 0:
-                    sqz_text = f"{sqz_icon} 空頭"
-                else:
-                    sqz_text = f"{sqz_icon} 中性"
+                from cogs.embed_builders._embed_helpers import get_sqz_status_display
 
-                mom_str = f"{sqz_mom:+.2f}"
-                combined_raw = f"{sqz_text} {mom_str}"[:15]
+                sqz_text, sqz_color = get_sqz_status_display(
+                    sqz_is_squeezing, sqz_mom, sqz_dir_raw, short=True
+                )
+
+                combined_raw = sqz_text[:15]
                 padded_raw = _pad_string(combined_raw, 14)
-
-                if sqz_is_squeezing:
-                    if sqz_mom > 0:
-                        sqz_mom_cell = f"\u001b[1;32m{padded_raw}\u001b[0m"
-                    elif sqz_mom < 0:
-                        sqz_mom_cell = f"\u001b[1;31m{padded_raw}\u001b[0m"
-                    else:
-                        sqz_mom_cell = padded_raw
-                else:
-                    sqz_mom_cell = f"\u001b[1;30m{padded_raw}\u001b[0m"
+                sqz_mom_cell = f"{sqz_color}{padded_raw}\u001b[0m"
 
             ansi_lines.append(
                 f"{sym_cell}{price_cell}{ivr_cell}{em_cell}{mp_cell}{sqz_mom_cell}{dmp_cell}{label_cell}"
