@@ -454,6 +454,10 @@ async def test_evaluate_watchlist_symbol_returns_wait_snapshot():
         "market_analysis.intraday_pipeline.build_watchlist_event_context",
         new_callable=AsyncMock,
         return_value=event_context,
+    ), patch(
+        "market_analysis.intraday_pipeline.fetch_symbol_gex_metrics",
+        new_callable=AsyncMock,
+        return_value={"net_gex": 0.0, "call_wall": 0.0, "put_wall": 0.0},
     ):
         evaluation = await evaluate_watchlist_symbol("NVDA")
 
