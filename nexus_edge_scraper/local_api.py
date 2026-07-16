@@ -34,13 +34,21 @@ async def scrape_reddit(
                 java_script_enabled=False,
             )
 
-            await context.route(
-                "**/*",
-                lambda route: route.abort()
-                if route.request.resource_type
-                in ["image", "stylesheet", "font", "script"]
-                else route.continue_(),
-            )
+            async def safe_route(route):
+                try:
+                    if route.request.resource_type in [
+                        "image",
+                        "stylesheet",
+                        "font",
+                        "script",
+                    ]:
+                        await route.abort()
+                    else:
+                        await route.continue_()
+                except Exception:
+                    pass
+
+            await context.route("**/*", safe_route)
 
             page = await context.new_page()
             await page.goto(url, wait_until="domcontentloaded", timeout=15000)
@@ -154,13 +162,18 @@ async def scrape_gex():
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
             )
             await Stealth().apply_stealth_async(context)
+
             # Speed up loading by blocking images and CSS
-            await context.route(
-                "**/*",
-                lambda route: route.abort()
-                if route.request.resource_type in ["image", "stylesheet", "font"]
-                else route.continue_(),
-            )
+            async def safe_route(route):
+                try:
+                    if route.request.resource_type in ["image", "stylesheet", "font"]:
+                        await route.abort()
+                    else:
+                        await route.continue_()
+                except Exception:
+                    pass
+
+            await context.route("**/*", safe_route)
             page = await context.new_page()
             await page.goto(
                 "https://finance.yahoo.com/quote/SPY/options",
@@ -659,13 +672,18 @@ async def scrape_symbol_gex(symbol: str):
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
             )
             await Stealth().apply_stealth_async(context)
+
             # Speed up loading by blocking images and CSS
-            await context.route(
-                "**/*",
-                lambda route: route.abort()
-                if route.request.resource_type in ["image", "stylesheet", "font"]
-                else route.continue_(),
-            )
+            async def safe_route(route):
+                try:
+                    if route.request.resource_type in ["image", "stylesheet", "font"]:
+                        await route.abort()
+                    else:
+                        await route.continue_()
+                except Exception:
+                    pass
+
+            await context.route("**/*", safe_route)
             page = await context.new_page()
             await page.goto(
                 f"https://finance.yahoo.com/quote/{symbol_upper}/options",
