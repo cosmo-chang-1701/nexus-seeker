@@ -45,7 +45,10 @@ async def test_filter_cc_recovery_targets_success():
         "market_analysis.trading_orchestration.SentimentEngine.get_last_stored_iv",
         return_value=0.35,
     ):
-        mock_expiries.return_value = ["2026-08-15"]  # >30 days from 2026-06-26
+        from datetime import datetime, timedelta
+
+        mock_date = (datetime.now() + timedelta(days=40)).strftime("%Y-%m-%d")
+        mock_expiries.return_value = [mock_date]  # >30 days from now
         mock_chain.return_value = MockOptionChain(mock_calls)
 
         res = await filter_cc_recovery_targets("AAPL")
