@@ -44,7 +44,7 @@ class UnifiedTerminalCog(commands.Cog):
     )
     @app_commands.describe(
         symbol="股票代號 (如 NVDA，與 scan_type 二擇一)",
-        scan_type="批次掃描類型 (HOLDINGS:持倉, ORDERS:掛單, OPTIONS:持有期權, WATCHLIST:自選, ALL:四者全部)",
+        scan_type="批次掃描類型 (留空則開啟量化雷達面板)",
         tag="Watchlist 標籤過濾 (僅在 scan_type 為 WATCHLIST 時生效)",
         squeeze="僅顯示正處於擠壓狀態的標的",
     )
@@ -80,14 +80,7 @@ class UnifiedTerminalCog(commands.Cog):
                     asyncio.create_task(coro)
 
             # 1. 參數驗證
-            if not symbol and not scan_type:
-                return await interaction.followup.send(
-                    embed=create_error_embed(
-                        "請輸入 `symbol` 參數，或選擇 `scan_type` 進行批次掃描。",
-                        title="輸入錯誤",
-                    ),
-                    ephemeral=True,
-                )
+            # (移除了 symbol 與 scan_type 的強制驗證，因為現在沒有帶參數會開啟控制面板)
 
             # 2. 單一標的深度分析
             if symbol:
@@ -95,12 +88,58 @@ class UnifiedTerminalCog(commands.Cog):
                 await self._run_single_symbol_hub(interaction, symbol, user_id)
                 return
 
-            # 3. 批次掃描邏輯
+            # 3. 批次掃描邏輯 / 開啟面板
             if not scan_type:
-                return
-            scan_value = scan_type.value
-            target_symbols = set()
+                from .radar_view import UnifiedRadarView
+                from cogs.embed_builders.scan_embeds import (
+                    build_unified_radar_panel_embed,
+                )
 
+                view = UnifiedRadarView(self, user_id)
+                embed = build_unified_radar_panel_embed(view.get_state_dict())
+                return await interaction.followup.send(
+                    embed=embed, view=view, ephemeral=True
+                )
+
+            scan_value = scan_type.value
+
+            # 建立相容舊參數的 State Dict 供引擎使用
+            state = {
+                "scope": scan_value,
+                "quant_filters": ["require_tdp_signal"] if squeeze else [],
+                "params": {
+                    "max_pain_threshold": 10.0,
+                    "abs_support_tolerance": 1.0,
+                    "silent_period_days": 5,
+                },
+                "selected_tag": tag,
+            }
+
+            await self.execute_unified_scan(interaction, state, user_id)
+
+        except Exception as outer_err:
+            logger.error(f"Outer Symbol Hub Error: {outer_err}")
+            try:
+                await interaction.followup.send(
+                    embed=create_error_embed(
+                        f"執行 `/x` 指令時發生未預期錯誤: {outer_err}"
+                    ),
+                    ephemeral=True,
+                )
+            except Exception as follow_err:
+                logger.error(f"Failed to send outer error followup: {follow_err}")
+
+    async def execute_unified_scan(
+        self, interaction: discord.Interaction, state: dict, user_id: int
+    ):
+        scan_value = state.get("scope", "WATCHLIST")
+        tag = state.get("selected_tag")
+        quant_filters = set(state.get("quant_filters", []))
+        params = state.get("params", {})
+
+        target_symbols = set()
+
+        try:
             if scan_value in ("HOLDINGS", "ALL"):
                 from services.asset_manager import AssetManager
                 from models.asset import ContextType
@@ -159,62 +198,77 @@ class UnifiedTerminalCog(commands.Cog):
                     ephemeral=True,
                 )
 
-            try:
-                # 並行獲取所有標的的雷達數據 (Cache-Aside)
-                scan_results = await asyncio.gather(
-                    *(self._fetch_sym_radar_data(s) for s in unique_symbols),
-                    return_exceptions=True,
-                )
-                # 過濾 Exception 並確保是 dict 類型以滿足 mypy
-                valid_results = [r for r in scan_results if isinstance(r, dict)]
+            # 並行獲取所有標的的雷達數據 (Cache-Aside)
+            scan_results = await asyncio.gather(
+                *(self._fetch_sym_radar_data(s) for s in unique_symbols),
+                return_exceptions=True,
+            )
+            # 過濾 Exception 並確保是 dict 類型以滿足 mypy
+            valid_results = [r for r in scan_results if isinstance(r, dict)]
 
-                if squeeze:
-                    valid_results = [
-                        r
-                        for r in valid_results
-                        if r.get("psq_result", {}).get("is_squeezing", False)
-                    ]
+            # 根據 Unified Radar Panel 的量化過濾條件進行篩選
+            filtered_results = []
+            max_pain_threshold = params.get("max_pain_threshold", 10.0) / 100.0
 
-                if not valid_results:
-                    return await interaction.followup.send(
-                        embed=create_error_embed(
-                            "掃描完成，但無符合條件的標的。", title="無結果"
-                        ),
-                        ephemeral=True,
-                    )
+            for r in valid_results:
+                passed = True
 
-                embeds = build_radar_scan_embed(valid_results, scan_value, user_id)
-                if not isinstance(embeds, list):
-                    embeds = [embeds]
+                # 1. require_tdp_signal (舊有的 squeeze 邏輯)
+                if "require_tdp_signal" in quant_filters:
+                    psq_res = r.get("psq_result", {})
+                    is_sqz = psq_res.get("is_squeezing", False)
+                    # TODO: 若未來需要真正的 TDP 三擊，請補上 is_ddp 與價位比對
+                    if not is_sqz:
+                        passed = False
 
-                chunk_size = 15
-                for idx, emb in enumerate(embeds):
-                    chunk_results = valid_results[
-                        idx * chunk_size : (idx + 1) * chunk_size
-                    ]
-                    chunk_symbols = [r["symbol"].upper() for r in chunk_results]
-                    page_view = BatchScanView(chunk_symbols, self, self.bot)
-                    await interaction.followup.send(
-                        embed=emb, view=page_view, ephemeral=True
-                    )
+                # 2. dp_skew_defense
+                if "dp_skew_defense" in quant_filters:
+                    skew_val = r.get("skew", 0.0)
+                    if skew_val >= -0.3:
+                        passed = False
 
-            except Exception as e:
-                logger.error(f"Batch Scan Error for {scan_value}: {e}")
-                await interaction.followup.send(
-                    embed=create_error_embed(f"執行批次掃描時發生錯誤: {e}"),
-                    ephemeral=True,
-                )
-        except Exception as outer_err:
-            logger.error(f"Outer Symbol Hub Error: {outer_err}")
-            try:
-                await interaction.followup.send(
+                # 3. exclude_martial_law
+                if "exclude_martial_law" in quant_filters:
+                    mp_data = r.get("max_pain")
+                    if isinstance(mp_data, dict):
+                        dist = mp_data.get("distance_pct", 0.0)
+                        if abs(dist) > max_pain_threshold:
+                            passed = False
+
+                # TODO: strict_liquidity 及 avoid_silent_period 可在後端數據到位後加入過濾
+
+                if passed:
+                    filtered_results.append(r)
+
+            if not filtered_results:
+                return await interaction.followup.send(
                     embed=create_error_embed(
-                        f"執行 `/x` 指令時發生未預期錯誤: {outer_err}"
+                        "掃描完成，但無符合條件的標的。", title="無結果"
                     ),
                     ephemeral=True,
                 )
-            except Exception as follow_err:
-                logger.error(f"Failed to send outer error followup: {follow_err}")
+
+            embeds = build_radar_scan_embed(filtered_results, scan_value, user_id)
+            if not isinstance(embeds, list):
+                embeds = [embeds]
+
+            chunk_size = 15
+            for idx, emb in enumerate(embeds):
+                chunk_results = filtered_results[
+                    idx * chunk_size : (idx + 1) * chunk_size
+                ]
+                chunk_symbols = [r["symbol"].upper() for r in chunk_results]
+                page_view = BatchScanView(chunk_symbols, self, self.bot)
+                await interaction.followup.send(
+                    embed=emb, view=page_view, ephemeral=True
+                )
+
+        except Exception as e:
+            logger.error(f"Batch Scan Error for {scan_value}: {e}")
+            await interaction.followup.send(
+                embed=create_error_embed(f"執行批次掃描時發生錯誤: {e}"),
+                ephemeral=True,
+            )
 
     @symbol_hub.autocomplete("tag")
     async def tag_autocomplete(

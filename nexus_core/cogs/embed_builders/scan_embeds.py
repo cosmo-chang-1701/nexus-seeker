@@ -1081,3 +1081,47 @@ def create_cc_recovery_embed(data: dict) -> discord.Embed:
 
     embed.set_footer(text="Covered Call 收租策略模組")
     return embed
+
+
+def build_unified_radar_panel_embed(state: dict) -> NexusEmbed:
+    """
+    Constructs the state display embed for the Unified Radar Panel.
+    """
+    embed = NexusEmbed(
+        title="🎛️ 批次量化雷達 (Unified Radar Panel)",
+        description="請設定您的掃描範圍與量化過濾條件，完成後點擊「🚀 執行量化雷達」。\n\n**當前設定狀態：**",
+    )
+
+    # Format and display Scope
+    scope_display = state.get("scope", "WATCHLIST")
+    embed.add_field(
+        name="🎯 掃描範圍 (Scope)", value=f"`{scope_display}`", inline=False
+    )
+
+    # Format and display Quant Filters and Params
+    filters = state.get("quant_filters", [])
+    filters_display = (
+        "\n".join([f"✅ {f}" for f in filters])
+        if filters
+        else "無 (顯示所有符合範圍之標的)"
+    )
+
+    params = state.get("params", {})
+    params_str = (
+        f"• Max Pain > `{params.get('max_pain_threshold')}%`\n"
+        f"• 支撐容錯率: `{params.get('abs_support_tolerance')}%`\n"
+        f"• 靜默期: `{params.get('silent_period_days')} 天`"
+    )
+
+    embed.add_field(name="⚙️ 量化過濾條件 (Filters)", value=filters_display, inline=True)
+    embed.add_field(name="📐 微調參數 (Params)", value=params_str, inline=True)
+
+    # Render selected tag if any
+    selected_tag = state.get("selected_tag")
+    if selected_tag:
+        embed.add_field(
+            name="🏷️ 選擇標籤 (Tag)", value=f"`{selected_tag}`", inline=False
+        )
+
+    embed.set_footer(text="Nexus Seeker • 量化雷達面板")
+    return embed
