@@ -802,10 +802,14 @@ def evaluate_advanced_filters(
         return False, []
 
     if uoa_data:
+
+        def safe_float(v):
+            return float(v) if v is not None else 0.0
+
         net_uoa_delta = sum(
-            float(item.get("delta", 0))
+            safe_float(item.get("delta", 0))
             if item.get("trade_type", "").upper() == "SWEEP"
-            else -float(item.get("delta", 0))
+            else -safe_float(item.get("delta", 0))
             for item in uoa_data
         )
         if net_uoa_delta < params.min_net_uoa_delta:
