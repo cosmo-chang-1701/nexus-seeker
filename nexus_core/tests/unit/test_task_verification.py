@@ -113,5 +113,6 @@ async def test_memory_manager_alert_uses_embed_builder():
         process_memory_mb=640.0,
         sma_cache_size=2,
         ema_cache_size=1,
+        swap_usage=0.0,
     )
     bot.queue_dm.assert_awaited_once_with(999, embed=embed)
