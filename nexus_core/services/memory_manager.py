@@ -76,9 +76,10 @@ class MemoryManager:
             return
 
         mem = psutil.virtual_memory()
-        if mem.percent > 85.0:
+        swap = psutil.swap_memory()
+        if mem.percent > 85.0 or swap.percent > 60.0:
             logger.warning(
-                f"🚨 [Warmup Gate] RAM usage ({mem.percent}%) too high, skipping cache warmup."
+                f"🚨 [Warmup Gate] Resource usage too high (RAM: {mem.percent}%, Swap: {swap.percent}%), skipping cache warmup."
             )
             return
 
@@ -117,25 +118,28 @@ class MemoryManager:
 
     async def _perform_health_check(self):
         mem = psutil.virtual_memory()
+        swap = psutil.swap_memory()
         process = psutil.Process(os.getpid())
         proc_mem = process.memory_info().rss / (1024 * 1024)
 
         # 1. 定期垃圾回收 (基本維護)
-        if mem.percent > 80:
+        if mem.percent > 80 or swap.percent > 40:
             gc.collect()
             logger.info(
-                f"🧹 [記憶體維護] 檢測到 RAM 使用率為 {mem.percent}%，已手動觸發 GC。"
+                f"🧹 [記憶體維護] 檢測到 RAM 使用率為 {mem.percent}% (Swap: {swap.percent}%)，已手動觸發 GC。"
             )
 
         # 2. 觸發警報
-        if mem.percent > self.threshold:
+        if mem.percent > self.threshold or swap.percent > 80:
             now = datetime.now(timezone.utc).timestamp()
             # 限制警報頻率 (1 小時一次)
             if now - self._last_alert_at > 3600:
-                await self._trigger_emergency_alert(mem.percent, proc_mem)
+                await self._trigger_emergency_alert(mem.percent, proc_mem, swap.percent)
                 self._last_alert_at = now
 
-    async def _trigger_emergency_alert(self, total_usage: float, proc_mem: float):
+    async def _trigger_emergency_alert(
+        self, total_usage: float, proc_mem: float, swap_usage: float = 0.0
+    ):
         from config import DISCORD_ADMIN_USER_ID
 
         if not DISCORD_ADMIN_USER_ID:
@@ -152,7 +156,10 @@ class MemoryManager:
             process_memory_mb=proc_mem,
             sma_cache_size=sma_count,
             ema_cache_size=ema_count,
+            swap_usage=swap_usage,
         )
 
         await self.bot.queue_dm(DISCORD_ADMIN_USER_ID, embed=embed)
-        logger.warning(f"🚨 [OOM 警報] 記憶體使用率過高: {total_usage}%")
+        logger.warning(
+            f"🚨 [OOM 警報] 記憶體使用率過高 (RAM: {total_usage}%, Swap: {swap_usage}%)"
+        )
