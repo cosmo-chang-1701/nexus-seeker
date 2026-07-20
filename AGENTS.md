@@ -102,6 +102,7 @@ During the market session, `/x` command reads from this local cache. If a cache 
 Instead of invoking LLM on the first-level radar panel, a lightweight rules engine evaluates spot prices against the SQLite cache bounds:
 - **超跌磁吸 🚀**: Triggered if `price <= expected_move_lower` and `Delta MP% > 5%`.
 - **需防壓回 ⚠️ / 籌碼斷層 ⚠️**: Triggered if `abs(Delta MP%) > 10%`.
+- **高階磁吸過濾 (Magnetic Filters)**: A composite filter identifying high-deviation symbols (`min_max_pain_dev`) that haven't breached their Maker Maker PutWall, coupled with absolute dark pool support resonance (`abs_support_tolerance`).
 - **Real-time Insights**: Automatically matches active pending orders or option protection strategies (e.g., triggering pull-back alerts or tail-risk warnings).
 
 ### 3. Rendering Layer (`build_radar_scan_embed`)

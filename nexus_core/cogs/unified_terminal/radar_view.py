@@ -15,6 +15,9 @@ class FilterParamsModal(discord.ui.Modal, title="微調進階量化參數"):
     silent_period_days: discord.ui.TextInput = discord.ui.TextInput(
         label="靜默期規避 (天)", default="5", placeholder="例如: 5"
     )
+    min_max_pain_dev: discord.ui.TextInput = discord.ui.TextInput(
+        label="磁吸偏離度門檻 (%)", default="10", placeholder="例如: 10"
+    )
 
     def __init__(self, view: "UnifiedRadarView"):
         super().__init__()
@@ -30,6 +33,9 @@ class FilterParamsModal(discord.ui.Modal, title="微調進階量化參數"):
             )
             self.radar_view.params["silent_period_days"] = int(
                 self.silent_period_days.value
+            )
+            self.radar_view.params["min_max_pain_dev"] = (
+                float(self.min_max_pain_dev.value) / 100.0
             )
         except ValueError:
             return await interaction.response.send_message(
@@ -52,6 +58,7 @@ class UnifiedRadarView(discord.ui.View):
             "max_pain_threshold": 10.0,
             "abs_support_tolerance": 1.0,
             "silent_period_days": 5,
+            "min_max_pain_dev": 0.10,
         }
         self.selected_tag: Optional[str] = None
         self.tag_selector_added = False
@@ -106,6 +113,11 @@ class UnifiedRadarView(discord.ui.View):
             ),
             discord.SelectOption(
                 label="避開財報/總經靜默期", value="avoid_silent_period"
+            ),
+            discord.SelectOption(
+                label="🧲 高階磁吸過濾 (Magnetic Filters)",
+                value="magnetic_filters",
+                description="偏離大於10% + 站穩底牆 + 暗池共振",
             ),
         ]
         self.filter_select = discord.ui.Select(
@@ -207,6 +219,9 @@ class UnifiedRadarView(discord.ui.View):
         modal.max_pain_threshold.default = str(self.params["max_pain_threshold"])
         modal.abs_support_tolerance.default = str(self.params["abs_support_tolerance"])
         modal.silent_period_days.default = str(self.params["silent_period_days"])
+        modal.min_max_pain_dev.default = str(
+            self.params.get("min_max_pain_dev", 0.10) * 100
+        )
         await interaction.response.send_modal(modal)
 
     async def update_state_message(self, interaction: discord.Interaction):

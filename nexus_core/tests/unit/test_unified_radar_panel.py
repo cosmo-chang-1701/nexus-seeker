@@ -209,3 +209,91 @@ async def test_execute_unified_scan_filters(mock_bot, mock_interaction):
                     filtered_results = mock_builder.call_args.args[0]
                     assert len(filtered_results) == 1
                     assert filtered_results[0]["symbol"] == "AAPL"
+
+
+@pytest.mark.asyncio
+async def test_execute_unified_scan_magnetic_filters(mock_bot, mock_interaction):
+    """
+    測試 execute_unified_scan 是否正確根據 magnetic_filters 條件過濾標的
+    """
+    cog = UnifiedTerminalCog(mock_bot)
+
+    state = {
+        "scope": "ALL",
+        "quant_filters": ["magnetic_filters"],
+        "params": {
+            "min_max_pain_dev": 0.10,
+            "abs_support_tolerance": 1.0,
+        },
+        "selected_tag": None,
+    }
+
+    with patch("cogs.unified_terminal.cog.asyncio.to_thread") as mock_thread:
+
+        def mock_to_thread_side_effect(func, *args, **kwargs):
+            if "get_user_portfolio" in func.__name__:
+                return [(123, "AAPL"), (123, "NVDA")]
+            return [
+                {"symbol": "AAPL"},
+                {"symbol": "NVDA"},
+                {"symbol": "TSLA"},
+                {"symbol": "AMD"},
+            ]
+
+        mock_thread.side_effect = mock_to_thread_side_effect
+
+        with patch("services.asset_manager.AssetManager.get_assets", return_value=[]):
+
+            async def fake_fetch(sym):
+                if sym == "AAPL":
+                    # 符合條件：dev > 0.10, price >= putwall, abs(dp_poc - putwall)/putwall < 0.01
+                    return {
+                        "symbol": "AAPL",
+                        "quote": {"c": 115.0},
+                        "max_pain": {"max_pain": 100.0},  # dev = 15.0/100 = 0.15 > 0.10
+                        "gex_profile_data": {"put_wall": 110.0},  # price 115 >= 110
+                        "dp_poc": 110.5,  # abs(110.5 - 110)/110 = 0.0045 < 0.01
+                    }
+                elif sym == "NVDA":
+                    # 違反 min_max_pain_dev：dev <= 0.10
+                    return {
+                        "symbol": "NVDA",
+                        "quote": {"c": 105.0},
+                        "max_pain": {"max_pain": 100.0},  # dev = 5/100 = 0.05 <= 0.10
+                        "gex_profile_data": {"put_wall": 100.0},
+                        "dp_poc": 100.5,
+                    }
+                elif sym == "TSLA":
+                    # 違反 exclude_putwall_breach：price < putwall
+                    return {
+                        "symbol": "TSLA",
+                        "quote": {"c": 95.0},
+                        "max_pain": {"max_pain": 80.0},  # dev = 15/80 > 0.10
+                        "gex_profile_data": {"put_wall": 100.0},  # price 95 < 100
+                        "dp_poc": 100.5,
+                    }
+                elif sym == "AMD":
+                    # 違反 require_absolute_support：dp_poc 差距 >= 1%
+                    return {
+                        "symbol": "AMD",
+                        "quote": {"c": 115.0},
+                        "max_pain": {"max_pain": 100.0},  # dev = 0.15 > 0.10
+                        "gex_profile_data": {"put_wall": 110.0},
+                        "dp_poc": 115.0,  # abs(115 - 110)/110 = 5/110 = 0.045 >= 0.01
+                    }
+                return None
+
+            cog._fetch_sym_radar_data = fake_fetch
+
+            with patch(
+                "cogs.unified_terminal.cog.build_radar_scan_embed"
+            ) as mock_builder:
+                mock_builder.return_value = discord.Embed(title="Radar Scan")
+                with patch("cogs.unified_terminal.cog.BatchScanView") as MockView:
+                    MockView.return_value = discord.ui.View()
+                    await cog.execute_unified_scan(mock_interaction, state, 12345)
+
+                    mock_builder.assert_called_once()
+                    filtered_results = mock_builder.call_args.args[0]
+                    assert len(filtered_results) == 1
+                    assert filtered_results[0]["symbol"] == "AAPL"
