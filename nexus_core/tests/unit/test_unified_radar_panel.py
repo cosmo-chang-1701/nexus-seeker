@@ -138,7 +138,7 @@ async def test_execute_unified_scan_filters(mock_bot, mock_interaction):
 
     state = {
         "scope": "ALL",  # 使用 ALL 避免針對 WATCHLIST 等特定情境進行 mock
-        "quant_filters": ["require_tdp_signal", "exclude_martial_law"],
+        "quant_filters": ["dp_skew_defense", "exclude_martial_law"],
         "params": {
             "max_pain_threshold": 10.0,  # 10% 限制
             "abs_support_tolerance": 1.0,
@@ -168,24 +168,24 @@ async def test_execute_unified_scan_filters(mock_bot, mock_interaction):
             # Setup fetch radar data responses
             async def fake_fetch(sym):
                 if sym == "AAPL":
-                    # 符合條件：有 squeeze, max_pain distance < 10%
+                    # 符合條件：無極端派發 (skew >= -0.3), max_pain distance < 10%
                     return {
                         "symbol": "AAPL",
-                        "psq_result": {"is_squeezing": True},
+                        "skew": -0.2,
                         "max_pain": {"distance_pct": 0.05},  # 5% < 10%
                     }
                 elif sym == "NVDA":
-                    # 違反 require_tdp_signal (is_squeezing == False)
+                    # 違反 dp_skew_defense (skew < -0.3)
                     return {
                         "symbol": "NVDA",
-                        "psq_result": {"is_squeezing": False},
+                        "skew": -0.4,
                         "max_pain": {"distance_pct": 0.05},
                     }
                 elif sym == "TSLA":
                     # 違反 exclude_martial_law (distance_pct == 0.15 > 0.10)
                     return {
                         "symbol": "TSLA",
-                        "psq_result": {"is_squeezing": True},
+                        "skew": -0.2,
                         "max_pain": {"distance_pct": 0.15},
                     }
                 return None

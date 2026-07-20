@@ -102,7 +102,9 @@ During the market session, `/x` command reads from this local cache. If a cache 
 Instead of invoking LLM on the first-level radar panel, a lightweight rules engine evaluates spot prices against the SQLite cache bounds:
 - **超跌磁吸 🚀**: Triggered if `price <= expected_move_lower` and `Delta MP% > 5%`.
 - **需防壓回 ⚠️ / 籌碼斷層 ⚠️**: Triggered if `abs(Delta MP%) > 10%`.
-- **高階磁吸過濾 (Magnetic Filters)**: A composite filter identifying high-deviation symbols (`min_max_pain_dev`) that haven't breached their Maker Maker PutWall, coupled with absolute dark pool support resonance (`abs_support_tolerance`).
+- **Unified Radar Filters**: The terminal UI consolidates Risk Defense and Alpha Signal filters into a single dropdown, fully integrated with `ScanParams` for deep evaluation:
+  - **Risk Defenses**: Excludes martial law bounds (`exclude_martial_law`), prevents silent period events (`avoid_silent_period`), and shields against extreme dark pool distribution (`dp_skew_defense` filtering `skew < -0.3`).
+  - **Alpha Signals**: Filters for Triple Discount Pricing (`tdp_mode`), Volatility Squeeze firing (`squeeze_mode`), Strict UOA institutional activity (`uoa_mode`), and High-Deviation Magnetic Filters (`magnetic_filters`).
 - **Real-time Insights**: Automatically matches active pending orders or option protection strategies (e.g., triggering pull-back alerts or tail-risk warnings).
 
 ### 3. Rendering Layer (`build_radar_scan_embed`)
