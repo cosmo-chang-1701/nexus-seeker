@@ -255,16 +255,21 @@ class UnifiedTerminalCog(commands.Cog):
                 # 4. magnetic_filters (高階磁吸過濾)
                 if "magnetic_filters" in quant_filters:
                     quote = r.get("quote", {})
-                    current_price = float(quote.get("c", 0.0)) if quote else 0.0
+                    c_val = quote.get("c") if quote else 0.0
+                    current_price = float(c_val) if c_val is not None else 0.0
+
                     mp_data = r.get("max_pain")
-                    max_pain_val = (
-                        float(mp_data.get("max_pain", 0.0))
-                        if isinstance(mp_data, dict)
-                        else 0.0
+                    mp_val = (
+                        mp_data.get("max_pain") if isinstance(mp_data, dict) else 0.0
                     )
+                    max_pain_val = float(mp_val) if mp_val is not None else 0.0
+
                     gex_data = r.get("gex_profile_data", {})
-                    putwall = float(gex_data.get("put_wall", 0.0)) if gex_data else 0.0
-                    dp_poc = float(r.get("dp_poc", 0.0))
+                    pw_val = gex_data.get("put_wall") if gex_data else 0.0
+                    putwall = float(pw_val) if pw_val is not None else 0.0
+
+                    dp_val = r.get("dp_poc")
+                    dp_poc = float(dp_val) if dp_val is not None else 0.0
 
                     min_dev = params.get("min_max_pain_dev", 0.10)
                     tolerance = params.get("abs_support_tolerance", 1.0) / 100.0
@@ -287,12 +292,14 @@ class UnifiedTerminalCog(commands.Cog):
                 # 5. Advanced Filters (ScanParams)
                 if passed and advanced_filters:
                     quote = r.get("quote", {})
-                    current_price = float(quote.get("c", 0.0)) if quote else 0.0
+                    c_val = quote.get("c") if quote else 0.0
+                    current_price = float(c_val) if c_val is not None else 0.0
+
                     psq_res = r.get("psq_result", {})
                     gex_data = r.get("gex_profile_data", {})
-                    put_wall = (
-                        float(gex_data.get("put_wall", 0.0)) if gex_data else None
-                    )
+
+                    pw_val = gex_data.get("put_wall") if gex_data else None
+                    put_wall = float(pw_val) if pw_val is not None else None
 
                     pseudo_metrics = types.SimpleNamespace(
                         squeeze_status=psq_res.get("is_squeezing", False),
