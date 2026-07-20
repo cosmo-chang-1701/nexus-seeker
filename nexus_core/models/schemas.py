@@ -169,3 +169,18 @@ class WatchlistEvaluation(BaseModel):
     tactical: WatchlistTacticalPlan
     event_context: WatchlistEventContext
     symbol_gex: dict | None = Field(default=None)
+
+
+class RadarFilterOptions(BaseModel):
+    """進階量化與磁吸過濾參數模型"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_pain_threshold: float = 10.0
+    abs_support_tolerance: float = 1.0
+    silent_period_days: int = 5
+
+    # 新增磁吸過濾參數
+    min_max_pain_dev: float = 0.10
+    exclude_putwall_breach: bool = False
+    require_absolute_support: bool = False

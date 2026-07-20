@@ -508,9 +508,52 @@ def build_radar_scan_embed(
                 if max_pain_strike > 0 and price_val > 0:
                     dist_pct = (price_val - max_pain_strike) / max_pain_strike * 100
 
+            # 解析 PutWall
+            put_wall = 0.0
+            if "gex_metrics" in r and isinstance(r["gex_metrics"], dict):
+                put_wall = float(r["gex_metrics"].get("put_wall", 0.0))
+            elif "gex_profile_data" in r and isinstance(r["gex_profile_data"], dict):
+                put_wall = float(r["gex_profile_data"].get("put_wall", 0.0))
+            elif "put_wall" in r:
+                put_wall = float(r["put_wall"])
+            else:
+                # 嘗試從 metrics 提取 (如果是 Watchlist pipeline 的輸出)
+                mp_val = (
+                    r.get("max_pain", {}).get("max_pain")
+                    if isinstance(r.get("max_pain"), dict)
+                    else None
+                )
+                put_wall = (
+                    float(mp_val) * 0.9 if mp_val is not None else 0.0
+                )  # Fallback 僅供安全
+                if r.get("iv_metrics") and hasattr(r["iv_metrics"], "gex_max_put_wall"):
+                    val = getattr(r["iv_metrics"], "gex_max_put_wall", 0.0)
+                    if val is not None:
+                        put_wall = float(val)
+
+            # 動態判定共振狀態
+            dp_poc = float(r.get("dp_poc", 0.0))
+            is_magnetic = False
+            if price_val > 0 and max_pain_strike > 0 and put_wall > 0 and dp_poc > 0:
+                dev = abs(price_val - max_pain_strike) / max_pain_strike
+                if (
+                    dev > 0.10
+                    and price_val >= put_wall
+                    and abs(dp_poc - put_wall) / put_wall < 0.01
+                ):
+                    is_magnetic = True
+
             # 判定狀態標籤 (透過 InsightsEngine 核心風控鐵律)
             status_label = ""
-            if max_pain_strike > 0:
+            if is_magnetic:
+                status_label = "[🧲 共振磁吸]"
+                if dist_pct >= 0:
+                    dmp_str = f"[{dist_pct:+.2f}%]"
+                    dmp_ansi = f"[\u001b[1;32m{dist_pct:+.2f}%\u001b[0m]"
+                else:
+                    dmp_str = f"[{dist_pct:+.2f}%]"
+                    dmp_ansi = f"[\u001b[1;31m{dist_pct:+.2f}%\u001b[0m]"
+            elif max_pain_strike > 0:
                 if dist_pct >= 0:
                     dmp_str = f"[{dist_pct:+.2f}%]"
                     dmp_ansi = f"[\u001b[1;32m{dist_pct:+.2f}%\u001b[0m]"
@@ -541,29 +584,6 @@ def build_radar_scan_embed(
             import database
 
             ctx_db = database.get_full_user_context(user_id)
-
-            # 解析 PutWall
-            put_wall = 0.0
-            if "gex_metrics" in r and isinstance(r["gex_metrics"], dict):
-                put_wall = float(r["gex_metrics"].get("put_wall", 0.0))
-            elif "gex_profile_data" in r and isinstance(r["gex_profile_data"], dict):
-                put_wall = float(r["gex_profile_data"].get("put_wall", 0.0))
-            elif "put_wall" in r:
-                put_wall = float(r["put_wall"])
-            else:
-                # 嘗試從 metrics 提取 (如果是 Watchlist pipeline 的輸出)
-                mp_val = (
-                    r.get("max_pain", {}).get("max_pain")
-                    if isinstance(r.get("max_pain"), dict)
-                    else None
-                )
-                put_wall = (
-                    float(mp_val) * 0.9 if mp_val is not None else 0.0
-                )  # Fallback 僅供安全
-                if r.get("iv_metrics") and hasattr(r["iv_metrics"], "gex_max_put_wall"):
-                    val = getattr(r["iv_metrics"], "gex_max_put_wall", 0.0)
-                    if val is not None:
-                        put_wall = float(val)
 
             # 解析 UOA
             uoa_list = r.get("uoa") or []

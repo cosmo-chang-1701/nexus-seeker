@@ -50,7 +50,16 @@ async def fetch_darkpool_prints(symbol: str) -> Dict[str, Any]:
             if res.status_code == 200:
                 data = res.json()
                 if data.get("status") == "success":
-                    return data.get("data", fallback)
+                    dp_data = data.get("data", fallback)
+                    dp_poc = dp_data.get("dp_poc")
+                    if dp_poc is not None:
+                        import asyncio
+                        from database.cache import save_kv_cache
+
+                        asyncio.create_task(
+                            save_kv_cache(f"dp_poc_{symbol.upper()}", float(dp_poc))
+                        )
+                    return dp_data
     except Exception as e:
         logger.warning(f"無法從 Tunnel Scraper 獲取 {symbol} 暗池大宗明細: {e}")
 

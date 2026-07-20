@@ -235,6 +235,41 @@ class UnifiedTerminalCog(commands.Cog):
                         if abs(dist) > max_pain_threshold:
                             passed = False
 
+                # 4. magnetic_filters (高階磁吸過濾)
+                if "magnetic_filters" in quant_filters:
+                    quote = r.get("quote", {})
+                    current_price = float(quote.get("c", 0.0)) if quote else 0.0
+                    mp_data = r.get("max_pain")
+                    max_pain_val = (
+                        float(mp_data.get("max_pain", 0.0))
+                        if isinstance(mp_data, dict)
+                        else 0.0
+                    )
+                    gex_data = r.get("gex_profile_data", {})
+                    putwall = float(gex_data.get("put_wall", 0.0)) if gex_data else 0.0
+                    dp_poc = float(r.get("dp_poc", 0.0))
+
+                    min_dev = params.get("min_max_pain_dev", 0.10)
+                    tolerance = params.get("abs_support_tolerance", 1.0) / 100.0
+
+                    # 4.1 min_max_pain_dev
+                    if current_price > 0 and max_pain_val > 0:
+                        if abs(current_price - max_pain_val) / max_pain_val <= min_dev:
+                            passed = False
+                    else:
+                        passed = False
+
+                    # 4.2 exclude_putwall_breach
+                    if current_price > 0 and putwall > 0 and current_price < putwall:
+                        passed = False
+
+                    # 4.3 require_absolute_support
+                    if dp_poc > 0 and putwall > 0:
+                        if abs(dp_poc - putwall) / putwall >= tolerance:
+                            passed = False
+                    else:
+                        passed = False
+
                 # TODO: strict_liquidity 及 avoid_silent_period 可在後端數據到位後加入過濾
 
                 if passed:
@@ -735,6 +770,12 @@ class UnifiedTerminalCog(commands.Cog):
                         psq_res["signal_direction"],
                     )
 
+        # 讀取 DP-POC (暗池共振)
+        from database.cache import get_kv_cache
+
+        dp_poc_val = get_kv_cache(f"dp_poc_{sym.upper()}")
+        dp_poc = float(dp_poc_val) if dp_poc_val is not None else 0.0
+
         return {
             "symbol": sym,
             "quote": quote,
@@ -746,6 +787,7 @@ class UnifiedTerminalCog(commands.Cog):
             "uoa": uoa_data,
             "gex_profile_data": gex_data,
             "psq_result": psq_res,
+            "dp_poc": dp_poc,
         }
 
     @app_commands.command(
