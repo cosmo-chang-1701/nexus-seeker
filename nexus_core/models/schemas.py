@@ -184,3 +184,32 @@ class RadarFilterOptions(BaseModel):
     min_max_pain_dev: float = 0.10
     exclude_putwall_breach: bool = False
     require_absolute_support: bool = False
+
+
+class ScanParams(BaseModel):
+    """進階量化與微觀結構過濾參數 (Advanced Quant Filters)"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # 1. 波動擠壓與動能引擎 (Volatility Squeeze & Momentum)
+    require_squeeze_firing: bool = Field(
+        default=False, description="僅允許擠壓蓄力期末端且動能為正"
+    )
+    momentum_decay_rejection: bool = Field(
+        default=True, description="動能衰竭保護，剔除高檔死叉"
+    )
+
+    # 2. 造市商微觀結構 (Gamma Exposure)
+    proximity_to_gex_flip: float | None = Field(
+        default=None, description="距離零Gamma線百分比"
+    )
+    positive_gamma_regime_only: bool = Field(
+        default=False, description="嚴格要求標的處於正 Gamma 區間"
+    )
+
+    # 3. 機構暗池與異常期權追蹤 (UOA & Dark Pool)
+    min_net_uoa_delta: float = Field(default=0.0, description="UOA 買方淨 Delta 門檻")
+    dark_pool_skew_floor: float = Field(default=-0.2, description="暗池偏斜度防護下限")
+
+    # 4. 終極價值共振 (Triple Discount Pricing - TDP)
+    require_tdp_signal: bool = Field(default=False, description="要求觸發 TDP 估值三擊")

@@ -209,15 +209,32 @@ class UnifiedTerminalCog(commands.Cog):
             # 根據 Unified Radar Panel 的量化過濾條件進行篩選
             filtered_results = []
             max_pain_threshold = params.get("max_pain_threshold", 10.0) / 100.0
+            advanced_filters = set(state.get("advanced_filters", []))
+
+            from models.schemas import ScanParams
+            from market_analysis.intraday_pipeline import evaluate_advanced_filters
+            import types
+
+            from typing import Any
+
+            scan_params_kwargs: dict[str, Any] = {}
+            if "tdp_mode" in advanced_filters:
+                scan_params_kwargs["require_tdp_signal"] = True
+            if "squeeze_mode" in advanced_filters:
+                scan_params_kwargs["require_squeeze_firing"] = True
+            if "uoa_mode" in advanced_filters:
+                scan_params_kwargs["min_net_uoa_delta"] = 1.0
+                scan_params_kwargs["dark_pool_skew_floor"] = -0.2
+
+            adv_params = ScanParams(**scan_params_kwargs)
 
             for r in valid_results:
                 passed = True
 
-                # 1. require_tdp_signal (舊有的 squeeze 邏輯)
+                # 1. require_tdp_signal (舊有的 squeeze 邏輯，保留給 quant_filters)
                 if "require_tdp_signal" in quant_filters:
                     psq_res = r.get("psq_result", {})
                     is_sqz = psq_res.get("is_squeezing", False)
-                    # TODO: 若未來需要真正的 TDP 三擊，請補上 is_ddp 與價位比對
                     if not is_sqz:
                         passed = False
 
@@ -252,25 +269,53 @@ class UnifiedTerminalCog(commands.Cog):
                     min_dev = params.get("min_max_pain_dev", 0.10)
                     tolerance = params.get("abs_support_tolerance", 1.0) / 100.0
 
-                    # 4.1 min_max_pain_dev
                     if current_price > 0 and max_pain_val > 0:
                         if abs(current_price - max_pain_val) / max_pain_val <= min_dev:
                             passed = False
                     else:
                         passed = False
 
-                    # 4.2 exclude_putwall_breach
                     if current_price > 0 and putwall > 0 and current_price < putwall:
                         passed = False
 
-                    # 4.3 require_absolute_support
                     if dp_poc > 0 and putwall > 0:
                         if abs(dp_poc - putwall) / putwall >= tolerance:
                             passed = False
                     else:
                         passed = False
 
-                # TODO: strict_liquidity 及 avoid_silent_period 可在後端數據到位後加入過濾
+                # 5. Advanced Filters (ScanParams)
+                if passed and advanced_filters:
+                    quote = r.get("quote", {})
+                    current_price = float(quote.get("c", 0.0)) if quote else 0.0
+                    psq_res = r.get("psq_result", {})
+                    gex_data = r.get("gex_profile_data", {})
+                    put_wall = (
+                        float(gex_data.get("put_wall", 0.0)) if gex_data else None
+                    )
+
+                    pseudo_metrics = types.SimpleNamespace(
+                        squeeze_status=psq_res.get("is_squeezing", False),
+                        squeeze_momentum=psq_res.get(
+                            "momentum_value", psq_res.get("momentum", 0.0)
+                        ),
+                        current_price=current_price,
+                        dark_pool_skew=r.get("skew", 0.0),
+                        volume_poc=None,  # volume profile may not be fully available in batch scan
+                        gex_max_put_wall=put_wall,
+                        ma20=None,
+                    )
+
+                    is_adv_passed, adv_tags = evaluate_advanced_filters(
+                        metrics=pseudo_metrics,
+                        symbol_gex=gex_data,
+                        uoa_data=r.get("uoa", []),
+                        params=adv_params,
+                    )
+                    if not is_adv_passed:
+                        passed = False
+                    else:
+                        r["advanced_tags"] = adv_tags
 
                 if passed:
                     filtered_results.append(r)
