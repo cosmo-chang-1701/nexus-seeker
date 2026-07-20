@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, patch, MagicMock, ANY
 import sys
 import os
 import pandas as pd
+import discord
 
 # Ensure we can import from nexus_core
 sys.path.append(os.path.join(os.getcwd(), "nexus_core"))
@@ -177,12 +178,21 @@ async def test_pulse_hub_command(mock_interaction, mock_bot):
 @pytest.mark.asyncio
 async def test_symbol_hub_command_no_params(mock_interaction, mock_bot):
     cog = UnifiedTerminalCog(mock_bot)
-    await cog.symbol_hub.callback(cog, mock_interaction, symbol=None, scan_type=None)
+
+    with patch(
+        "cogs.embed_builders.scan_embeds.build_unified_radar_panel_embed"
+    ) as mock_build_embed:
+        mock_build_embed.return_value = discord.Embed(title="Panel Embed")
+        await cog.symbol_hub.callback(
+            cog, mock_interaction, symbol=None, scan_type=None
+        )
 
     assert mock_interaction.followup.send.called
     _, kwargs = mock_interaction.followup.send.call_args
-    embed = kwargs["embed"]
-    assert "請輸入 `symbol` 參數" in embed.description
+    assert "view" in kwargs
+    from cogs.unified_terminal.radar_view import UnifiedRadarView
+
+    assert isinstance(kwargs["view"], UnifiedRadarView)
 
 
 @pytest.mark.asyncio

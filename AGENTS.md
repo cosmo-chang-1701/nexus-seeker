@@ -82,7 +82,7 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 
 ## Quantitative Radar Terminal & Cache-Aside Architecture
 
-The system features a low-latency, high-information-density **Trader Terminal Radar Panel** (accessed via `/x scan_type: ALL | HOLDINGS | ORDERS | OPTIONS | WATCHLIST`). To ensure Discord response times are strictly under **100ms** and prevent 3-second timeouts, the first-level radar panel runs completely **without LLM calls** or real-time option chain requests.
+The system features a low-latency, high-information-density **Trader Terminal Radar Panel** (accessed via `/x`). To ensure Discord response times are strictly under **100ms** and prevent 3-second timeouts, the `/x` command initially renders an interactive **Unified Radar Panel** UI with scope selection and quant filters. It completely avoids LLM calls and real-time database queries during UI initialization. For power users, the legacy parameter bypass (`/x scan_type: ALL | HOLDINGS | ORDERS | OPTIONS | WATCHLIST`) remains available.
 
 ### 1. Pre-market SQLite Pre-warming & Database Schema
 A daily pre-market task runs asynchronously (at 18:00 UTC+8) to fetch option Open Interest (OI), Implied Volatility (IV), and compute weekly expected moves and max pain for all watchlist symbols. These values are cached locally in the `market_cache` table:
