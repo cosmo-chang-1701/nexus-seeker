@@ -209,7 +209,6 @@ class UnifiedTerminalCog(commands.Cog):
             # 根據 Unified Radar Panel 的量化過濾條件進行篩選
             filtered_results = []
             max_pain_threshold = params.get("max_pain_threshold", 10.0) / 100.0
-            advanced_filters = set(state.get("advanced_filters", []))
 
             from models.schemas import ScanParams
             from market_analysis.intraday_pipeline import evaluate_advanced_filters
@@ -218,38 +217,49 @@ class UnifiedTerminalCog(commands.Cog):
             from typing import Any
 
             scan_params_kwargs: dict[str, Any] = {}
-            if "tdp_mode" in advanced_filters:
+            if "tdp_mode" in quant_filters:
                 scan_params_kwargs["require_tdp_signal"] = True
-            if "squeeze_mode" in advanced_filters:
+            if "squeeze_mode" in quant_filters:
                 scan_params_kwargs["require_squeeze_firing"] = True
-            if "uoa_mode" in advanced_filters:
+            if "uoa_mode" in quant_filters:
                 scan_params_kwargs["min_net_uoa_delta"] = 1.0
                 scan_params_kwargs["dark_pool_skew_floor"] = -0.2
 
+            advanced_active = bool(scan_params_kwargs)
             adv_params = ScanParams(**scan_params_kwargs)
 
             for r in valid_results:
                 passed = True
 
-                # 1. require_tdp_signal (舊有的 squeeze 邏輯，保留給 quant_filters)
-                if "require_tdp_signal" in quant_filters:
-                    psq_res = r.get("psq_result", {})
-                    is_sqz = psq_res.get("is_squeezing", False)
-                    if not is_sqz:
-                        passed = False
-
-                # 2. dp_skew_defense
+                # 1. dp_skew_defense (防護派發風險)
                 if "dp_skew_defense" in quant_filters:
                     skew_val = r.get("skew", 0.0)
-                    if skew_val >= -0.3:
+                    if skew_val < -0.3:
                         passed = False
 
-                # 3. exclude_martial_law
+                # 2. exclude_martial_law
                 if "exclude_martial_law" in quant_filters:
                     mp_data = r.get("max_pain")
                     if isinstance(mp_data, dict):
                         dist = mp_data.get("distance_pct", 0.0)
                         if abs(dist) > max_pain_threshold:
+                            passed = False
+
+                # 3. avoid_silent_period (規避財報/總經靜默期)
+                if "avoid_silent_period" in quant_filters:
+                    iv_data = r.get("iv_data")
+                    if iv_data:
+                        earnings_loading = getattr(
+                            iv_data, "has_earnings_event", False
+                        ) or (
+                            isinstance(iv_data, dict)
+                            and iv_data.get("has_earnings_event", False)
+                        )
+                        macro_loading = getattr(iv_data, "has_macro_event", False) or (
+                            isinstance(iv_data, dict)
+                            and iv_data.get("has_macro_event", False)
+                        )
+                        if earnings_loading or macro_loading:
                             passed = False
 
                 # 4. magnetic_filters (高階磁吸過濾)
@@ -290,7 +300,7 @@ class UnifiedTerminalCog(commands.Cog):
                         passed = False
 
                 # 5. Advanced Filters (ScanParams)
-                if passed and advanced_filters:
+                if passed and advanced_active:
                     quote = r.get("quote", {})
                     c_val = quote.get("c") if quote else 0.0
                     current_price = float(c_val) if c_val is not None else 0.0
