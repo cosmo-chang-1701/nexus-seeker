@@ -13,6 +13,7 @@ from models.schemas import (
     WatchlistEventContext,
     WatchlistRiskMode,
     WatchlistTacticalPlan,
+    ScanParams,
 )
 from risk_engine.nro import WatchlistRiskController
 from services.market_data_service import BoundedCache
@@ -753,6 +754,89 @@ def build_watchlist_skew_rule_commentary(metrics: EnhancedWatchlistMetrics) -> s
         f"Skew {skew_val:+.2f}%（百分位 {skew_percentile:.0f}%）屬常態區；"
         "建議以價位牆與事件風控為主，避免對單一指標過度解讀。"
     )
+
+
+def evaluate_advanced_filters(
+    metrics: Any,
+    symbol_gex: Optional[dict],
+    uoa_data: Optional[list],
+    params: ScanParams,
+) -> tuple[bool, list[str]]:
+    """
+    快速在記憶體中比對高階過濾條件 (<100ms)。
+    回傳 (是否通過過濾, 觸發的高階標籤列表)。
+    """
+    tags = []
+
+    # 1. Volatility Squeeze & Momentum
+    squeeze_status = getattr(metrics, "squeeze_status", False)
+    squeeze_momentum = getattr(metrics, "squeeze_momentum", 0.0) or 0.0
+    is_firing = bool(squeeze_status) and squeeze_momentum > 0
+    if params.require_squeeze_firing and not is_firing:
+        return False, []
+    if is_firing:
+        tags.append("[🔥 SQZ Firing]")
+
+    if params.momentum_decay_rejection:
+        # 動能衰竭保護：若處於極端衰竭 (這裡以 momentum < 0 或其他技術指標模擬) 予以剔除
+        if squeeze_momentum < -5.0:
+            return False, []
+
+    # 2. Gamma Exposure
+    current_price = getattr(metrics, "current_price", 0.0) or 0.0
+    zero_gamma_price = symbol_gex.get("zero_gamma") if symbol_gex else None
+    if zero_gamma_price is not None and zero_gamma_price > 0:
+        if params.positive_gamma_regime_only and current_price <= zero_gamma_price:
+            return False, []
+
+        if params.proximity_to_gex_flip is not None:
+            dist = abs(current_price - zero_gamma_price) / zero_gamma_price
+            if dist > params.proximity_to_gex_flip:
+                return False, []
+            else:
+                tags.append("[☢️ GEX 臨界]")
+
+    # 3. UOA & Dark Pool
+    dp_skew = getattr(metrics, "dark_pool_skew", None)
+    if dp_skew is not None and dp_skew < params.dark_pool_skew_floor:
+        return False, []
+
+    if uoa_data:
+        net_uoa_delta = sum(
+            float(item.get("delta", 0))
+            if item.get("trade_type", "").upper() == "SWEEP"
+            else -float(item.get("delta", 0))
+            for item in uoa_data
+        )
+        if net_uoa_delta < params.min_net_uoa_delta:
+            return False, []
+    elif params.min_net_uoa_delta > 0:
+        # 無 UOA 資料但要求了最低 delta
+        return False, []
+
+    # 4. TDP Signal
+    ma20 = getattr(metrics, "ma20", None)
+    gex_max_put_wall = getattr(metrics, "gex_max_put_wall", None)
+    volume_poc = getattr(metrics, "volume_poc", None)
+
+    is_tdp = True
+    if ma20 is not None and current_price >= ma20:
+        is_tdp = False
+    if gex_max_put_wall is not None and current_price >= gex_max_put_wall:
+        is_tdp = False
+    if volume_poc is not None and current_price >= volume_poc:
+        is_tdp = False
+
+    # 若所有參數都缺失，則不算 TDP (避免誤判)
+    if ma20 is None and gex_max_put_wall is None and volume_poc is None:
+        is_tdp = False
+
+    if params.require_tdp_signal and not is_tdp:
+        return False, []
+    if is_tdp:
+        tags.append("[🔵 TDP 三擊]")
+
+    return True, tags
 
 
 class IntradayScanPipeline:

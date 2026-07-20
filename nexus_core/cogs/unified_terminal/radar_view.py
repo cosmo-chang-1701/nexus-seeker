@@ -54,6 +54,7 @@ class UnifiedRadarView(discord.ui.View):
         # State tracking
         self.scope = "WATCHLIST"
         self.quant_filters: Set[str] = set()
+        self.advanced_filters: Set[str] = set()
         self.params = {
             "max_pain_threshold": 10.0,
             "abs_support_tolerance": 1.0,
@@ -70,6 +71,7 @@ class UnifiedRadarView(discord.ui.View):
         return {
             "scope": self.scope,
             "quant_filters": list(self.quant_filters),
+            "advanced_filters": list(self.advanced_filters),
             "params": self.params,
             "selected_tag": self.selected_tag,
         }
@@ -130,15 +132,43 @@ class UnifiedRadarView(discord.ui.View):
         self.filter_select.callback = self.on_filter_change
         self.add_item(self.filter_select)
 
-        # 3. Action Buttons
+        # 3. Advanced Quant Settings Selector
+        advanced_modes = [
+            discord.SelectOption(
+                label="🔵 TDP 價值共振模式 (TDP Mode)",
+                value="tdp_mode",
+                description="嚴格過濾出估值三擊標的",
+            ),
+            discord.SelectOption(
+                label="🔥 動能擠壓爆發 (Gamma Squeeze)",
+                value="squeeze_mode",
+                description="尋找 Squeeze Firing 且動能轉正標的",
+            ),
+            discord.SelectOption(
+                label="🐋 嚴格機構籌碼 (Strict UOA)",
+                value="uoa_mode",
+                description="要求極高的 UOA 買方 Delta 與暗池支撐",
+            ),
+        ]
+        self.advanced_select = discord.ui.Select(
+            placeholder="⚙️ 量化引擎進階設定 (預設組合)...",
+            min_values=0,
+            max_values=3,
+            options=advanced_modes,
+            row=2,
+        )
+        self.advanced_select.callback = self.on_advanced_change
+        self.add_item(self.advanced_select)
+
+        # 4. Action Buttons
         self.adjust_params_btn = discord.ui.Button(
-            label="微調參數", style=discord.ButtonStyle.secondary, row=3
+            label="微調參數", style=discord.ButtonStyle.secondary, row=4
         )
         self.adjust_params_btn.callback = self.on_adjust_params
         self.add_item(self.adjust_params_btn)
 
         self.execute_scan_btn = discord.ui.Button(
-            label="🚀 執行量化雷達", style=discord.ButtonStyle.primary, row=3
+            label="🚀 執行量化雷達", style=discord.ButtonStyle.primary, row=4
         )
         self.execute_scan_btn.callback = self.on_execute_scan
         self.add_item(self.execute_scan_btn)
@@ -175,7 +205,7 @@ class UnifiedRadarView(discord.ui.View):
                         min_values=1,
                         max_values=1,
                         options=tag_options,
-                        row=2,
+                        row=3,
                     )
                     self.tag_select.callback = self.on_tag_change  # type: ignore[method-assign]
                     self.add_item(self.tag_select)
@@ -198,6 +228,12 @@ class UnifiedRadarView(discord.ui.View):
         self.quant_filters = set(self.filter_select.values)
         for opt in self.filter_select.options:
             opt.default = opt.value in self.quant_filters
+        await self.update_state_message(interaction)
+
+    async def on_advanced_change(self, interaction: discord.Interaction):
+        self.advanced_filters = set(self.advanced_select.values)
+        for opt in self.advanced_select.options:
+            opt.default = opt.value in self.advanced_filters
         await self.update_state_message(interaction)
 
     async def on_tag_change(self, interaction: discord.Interaction):

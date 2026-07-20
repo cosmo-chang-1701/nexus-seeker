@@ -796,6 +796,10 @@ def build_radar_scan_embed(
                 padded_raw = _pad_string(combined_raw, 14)
                 sqz_mom_cell = f"{sqz_color}{padded_raw}\u001b[0m"
 
+            adv_tags = r.get("advanced_tags", [])
+            if adv_tags:
+                label_cell += " " + " ".join(adv_tags)
+
             ansi_lines.append(
                 f"{sym_cell}{price_cell}{ivr_cell}{em_cell}{mp_cell}{sqz_mom_cell}{dmp_cell}{label_cell}"
             )
