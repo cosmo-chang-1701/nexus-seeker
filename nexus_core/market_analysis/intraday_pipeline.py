@@ -820,19 +820,22 @@ def evaluate_advanced_filters(
 
     # 4. TDP Signal
     ma20 = getattr(metrics, "ma20", None)
-    gex_max_put_wall = getattr(metrics, "gex_max_put_wall", None)
+    max_pain = getattr(metrics, "max_pain", None)
     volume_poc = getattr(metrics, "volume_poc", None)
+    dp_poc = getattr(metrics, "dp_poc", None)
 
     is_tdp = True
     if ma20 is not None and current_price >= ma20:
         is_tdp = False
-    if gex_max_put_wall is not None and current_price >= gex_max_put_wall:
+    if max_pain is not None and current_price >= max_pain:
         is_tdp = False
     if volume_poc is not None and current_price >= volume_poc:
         is_tdp = False
+    if dp_poc is not None and current_price >= dp_poc:
+        is_tdp = False
 
-    # 若所有參數都缺失，則不算 TDP (避免誤判)
-    if ma20 is None and gex_max_put_wall is None and volume_poc is None:
+    # 若關鍵指標全為 None，避免誤判
+    if ma20 is None and max_pain is None and dp_poc is None:
         is_tdp = False
 
     if params.require_tdp_signal and not is_tdp:
