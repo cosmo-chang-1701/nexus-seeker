@@ -555,9 +555,9 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             divergence = "情緒背離 (現價暴跌但波動率極低)"
             action = "異常背離：現價大跌但 IV Rank 極低，警惕快取異常或非理性低波"
         else:
-            divergence = "⚠️ WARNING: Structural Sentiment Divergence"
+            divergence = "⚠️ 警告：結構性情緒背離"
             if divergence_level == "High Divergence":
-                action = "High Divergence：避免追價買權；僅允許小倉位收租並搭配保護"
+                action = "高度背離：避免追價買權；僅允許小倉位收租並搭配保護"
             else:
                 action = "留意結構性背離：建議降槓桿、以保護性結構防禦"
     elif (
