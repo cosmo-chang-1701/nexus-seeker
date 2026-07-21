@@ -474,17 +474,19 @@ def build_radar_scan_embed(
                 em_low = float(iv_metrics.get("expected_move_lower") or 0.0)
                 em_high = float(iv_metrics.get("expected_move_upper") or 0.0)
                 if em_high <= em_low:
-                    reference_price = float(
-                        iv_metrics.get("reference_price") or price_val
+                    reference_price = round(
+                        float(iv_metrics.get("reference_price") or price_val), 2
                     )
-                    em_low = reference_price - em_weekly
-                    em_high = reference_price + em_weekly
+                    em_weekly_rounded = round(em_weekly, 2)
+                    em_low = reference_price - em_weekly_rounded
+                    em_high = reference_price + em_weekly_rounded
                 em_str = f"${em_low:.2f} ~ ${em_high:.2f}"
                 em_ansi = f"\u001b[1;33m${em_low:.2f} ~ ${em_high:.2f}\u001b[0m"
             else:
-                fallback_em = price_val * 0.05
-                em_low = price_val - fallback_em
-                em_high = price_val + fallback_em
+                price_val_rounded = round(price_val, 2)
+                fallback_em = round(price_val_rounded * 0.05, 2)
+                em_low = price_val_rounded - fallback_em
+                em_high = price_val_rounded + fallback_em
                 em_str = f"${em_low:.2f} ~ ${em_high:.2f}"
                 em_ansi = f"${em_low:.2f} ~ ${em_high:.2f}"
 
@@ -741,7 +743,7 @@ def build_radar_scan_embed(
                 )
 
             # 連動 GEX PutWall (做市商底牆)
-            if put_wall > 0 and price_val > 0:
+            if put_wall > 0 and price_val > 0 and not is_fixed_income:
                 has_putwall_warning = any(
                     "PutWall" in msg for msg in insights if sym in msg
                 )
