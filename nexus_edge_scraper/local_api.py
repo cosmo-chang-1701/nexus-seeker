@@ -298,6 +298,8 @@ async def scrape_gex():
 async def scrape_core_macro_metrics():
     import httpx
     import asyncio
+    from playwright.async_api import async_playwright
+    from playwright_stealth import Stealth
 
     fallback = {
         "rrp": 420.5,
@@ -307,28 +309,35 @@ async def scrape_core_macro_metrics():
         "fear_greed": 48.0,
     }
 
-    async def fetch_fred_csv_all(series_id: str) -> list[tuple[str, float]]:
+    async def fetch_fred_csv_all(series_id: str, context) -> list[tuple[str, float]]:
         url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
-        headers = {"User-Agent": "Mozilla/5.0"}
         data = []
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                res = await client.get(url, headers=headers)
-                if res.status_code == 200:
-                    lines = res.text.strip().split("\n")
-                    for line in reversed(lines):
-                        parts = line.split(",")
-                        if len(parts) >= 2:
-                            try:
-                                data.append((parts[0].strip(), float(parts[1].strip())))
-                            except ValueError:
-                                continue
+            page = await context.new_page()
+            async with page.expect_download(timeout=15000) as download_info:
+                try:
+                    await page.goto(url)
+                except Exception as e:
+                    if "Download is starting" not in str(e):
+                        raise e
+            download = await download_info.value
+            path = await download.path()
+            with open(path, "r") as f:
+                lines = f.readlines()
+                for line in reversed(lines):
+                    parts = line.strip().split(",")
+                    if len(parts) >= 2:
+                        try:
+                            data.append((parts[0].strip(), float(parts[1].strip())))
+                        except ValueError:
+                            continue
+            await page.close()
         except Exception:
             pass
         return data
 
-    async def fetch_fred_csv(series_id: str) -> float | None:
-        data = await fetch_fred_csv_all(series_id)
+    async def fetch_fred_csv(series_id: str, context) -> float | None:
+        data = await fetch_fred_csv_all(series_id, context)
         return data[0][1] if data else None
 
     async def fetch_cnn_fgi() -> float | None:
@@ -350,13 +359,24 @@ async def scrape_core_macro_metrics():
         return None
 
     try:
-        rrp_data, walcl, unrate, sahm, fgi = await asyncio.gather(
-            fetch_fred_csv_all("RRPONTSYD"),
-            fetch_fred_csv("WALCL"),
-            fetch_fred_csv("UNRATE"),
-            fetch_fred_csv("SAHMREALTIME"),
-            fetch_cnn_fgi(),
-        )
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"]
+            )
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+                accept_downloads=True,
+            )
+            await Stealth().apply_stealth_async(context)
+
+            rrp_data, walcl, unrate, sahm, fgi = await asyncio.gather(
+                fetch_fred_csv_all("RRPONTSYD", context),
+                fetch_fred_csv("WALCL", context),
+                fetch_fred_csv("UNRATE", context),
+                fetch_fred_csv("SAHMREALTIME", context),
+                fetch_cnn_fgi(),
+            )
+            await browser.close()
 
         rrp = rrp_data[0][1] if rrp_data else None
         rrp_change = 0.0
@@ -392,8 +412,9 @@ async def scrape_core_macro_metrics():
 
 @app.get("/api/v1/scrape/macro/liquidity")
 async def scrape_liquidity():
-    import httpx
     import asyncio
+    from playwright.async_api import async_playwright
+    from playwright_stealth import Stealth
 
     fallback = {
         "ted_spread": 0.15,
@@ -402,32 +423,52 @@ async def scrape_liquidity():
         "high_yield_spread": 3.1,
     }
 
-    async def fetch_fred_csv(series_id: str) -> float | None:
+    async def fetch_fred_csv(series_id: str, context) -> float | None:
         url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
-        headers = {"User-Agent": "Mozilla/5.0"}
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                res = await client.get(url, headers=headers)
-                if res.status_code == 200:
-                    lines = res.text.strip().split("\n")
-                    for line in reversed(lines):
-                        parts = line.split(",")
-                        if len(parts) >= 2:
-                            try:
-                                val = float(parts[1].strip())
-                                return val
-                            except ValueError:
-                                continue
+            page = await context.new_page()
+            async with page.expect_download(timeout=15000) as download_info:
+                try:
+                    await page.goto(url)
+                except Exception as e:
+                    if "Download is starting" not in str(e):
+                        raise e
+            download = await download_info.value
+            path = await download.path()
+            val = None
+            with open(path, "r") as f:
+                lines = f.readlines()
+                for line in reversed(lines):
+                    parts = line.strip().split(",")
+                    if len(parts) >= 2:
+                        try:
+                            val = float(parts[1].strip())
+                            break
+                        except ValueError:
+                            continue
+            await page.close()
+            return val
         except Exception:
             pass
         return None
 
     try:
-        sofr_90, dtb3, hy_spread = await asyncio.gather(
-            fetch_fred_csv("SOFR90DAYAVG"),
-            fetch_fred_csv("DTB3"),
-            fetch_fred_csv("BAMLH0A0HYM2"),
-        )
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"]
+            )
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+                accept_downloads=True,
+            )
+            await Stealth().apply_stealth_async(context)
+
+            sofr_90, dtb3, hy_spread = await asyncio.gather(
+                fetch_fred_csv("SOFR90DAYAVG", context),
+                fetch_fred_csv("DTB3", context),
+                fetch_fred_csv("BAMLH0A0HYM2", context),
+            )
+            await browser.close()
 
         if sofr_90 is None or dtb3 is None:
             return {"status": "success", "data": fallback}
