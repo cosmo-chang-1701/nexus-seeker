@@ -64,6 +64,7 @@ repos:
         name: docker-test-commit
         entry: bash scripts/docker_test.sh
         language: system
-        stages: [commit]
-        always_run: true
+        stages: [pre-commit]
+        always_run: false
+        files: \.py$
         pass_filenames: false
