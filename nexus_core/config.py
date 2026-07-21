@@ -3,8 +3,9 @@ import math
 from typing import List, TypedDict, Optional
 from dotenv import load_dotenv
 
-# 載入 .env 檔案
-load_dotenv()
+# 載入 .env 檔案（若非正式環境）
+if os.getenv("NEXUS_ENV") != "production":
+    load_dotenv()
 
 
 class VixTier(TypedDict):

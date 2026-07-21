@@ -12,7 +12,8 @@ from dotenv import load_dotenv
 
 # 環境變數與路徑設定
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-load_dotenv()
+if os.getenv("NEXUS_ENV") != "production":
+    load_dotenv()
 
 # 設定 Logging 為 Quiet 模式
 logging.basicConfig(level=logging.ERROR)
