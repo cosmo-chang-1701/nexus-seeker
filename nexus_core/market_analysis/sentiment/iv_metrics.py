@@ -72,17 +72,13 @@ class IVContext:
         spot_price = cls._safe_float(current_price)
 
         if ref_price > 0.0 and em_weekly > 0.0:
-            from decimal import Decimal, ROUND_HALF_UP
-
-            # Fix floating point precision error ($0.01 deviation) by using Decimal
-            ref_d = Decimal(str(ref_price)).quantize(
-                Decimal("0.01"), rounding=ROUND_HALF_UP
-            )
-            em_d = Decimal(str(em_weekly)).quantize(
-                Decimal("0.01"), rounding=ROUND_HALF_UP
-            )
-            lower = float(ref_d - em_d)
-            upper = float(ref_d + em_d)
+            # Fix floating point precision error ($0.01 deviation) by explicitly rounding
+            # to 2 decimal places using Python's native banker's rounding (ROUND_HALF_EVEN).
+            # This exactly matches the behavior of `.2f` string formatters in the UI layer.
+            ref_rounded = round(ref_price, 2)
+            em_rounded = round(em_weekly, 2)
+            lower = round(ref_rounded - em_rounded, 2)
+            upper = round(ref_rounded + em_rounded, 2)
         else:
             lower = 0.0
             upper = 0.0
