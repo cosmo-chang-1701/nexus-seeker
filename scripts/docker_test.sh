@@ -9,7 +9,7 @@ echo "🔍 [Docker] 正在啟動容器化測試環境..."
 
 # 使用 Docker Compose 執行測試
 # --rm 確保測試完後刪除暫時容器
-docker compose run --rm nexus-seeker python -m pytest tests
+docker compose run --rm nexus-seeker python -m pytest tests -p no:cacheprovider
 
 EXIT_CODE=$?
 
