@@ -4,8 +4,6 @@ services:
     container_name: nexus-seeker-discord-bot
     restart: unless-stopped
     stop_grace_period: 1m
-    env_file:
-      - .env
     volumes:
       - nexus_data:/app/data
       - .:/app
