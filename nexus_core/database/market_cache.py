@@ -87,7 +87,7 @@ def get_market_cache(
             )
         else:
             cursor.execute(
-                "SELECT * FROM market_cache WHERE symbol = ? ORDER BY expiry ASC",
+                "SELECT * FROM market_cache WHERE symbol = ? ORDER BY updated_at DESC LIMIT 1",
                 (symbol.upper(),),
             )
         row = cursor.fetchone()
