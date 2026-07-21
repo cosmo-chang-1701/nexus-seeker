@@ -531,7 +531,7 @@ def build_radar_scan_embed(
                     mp_val = mp_raw
                 else:
                     mp_val = None
-                
+
                 put_wall = (
                     float(mp_val) * 0.9 if mp_val is not None else 0.0
                 )  # Fallback 僅供安全
