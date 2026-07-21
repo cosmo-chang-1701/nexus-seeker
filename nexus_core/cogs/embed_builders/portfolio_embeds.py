@@ -779,16 +779,18 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
             iv_lines.append(" Expected Move (預期區間)")
             em_reference = float(em_context.get("reference_price") or 0.0)
-            em_low = float(em_context.get("expected_move_lower") or 0.0)
-            em_high = float(em_context.get("expected_move_upper") or 0.0)
             if em_reference > 0 and expected_move_weekly is not None:
+                em_ref_rounded = round(em_reference, 2)
+                em_weekly_rounded = round(expected_move_weekly, 2)
+                em_low_calc = round(em_ref_rounded - em_weekly_rounded, 2)
+                em_high_calc = round(em_ref_rounded + em_weekly_rounded, 2)
                 expected_move_weekly_str = (
-                    f"前收 ${em_reference:.2f} ±${expected_move_weekly:.2f} "
-                    f"(${em_low:.2f} ~ ${em_high:.2f})"
+                    f"前收 ${em_ref_rounded:.2f} ±${em_weekly_rounded:.2f} "
+                    f"(${em_low_calc:.2f} ~ ${em_high_calc:.2f})"
                 )
             else:
                 expected_move_weekly_str = (
-                    f"±${expected_move_weekly:.2f}"
+                    f"±${round(expected_move_weekly, 2):.2f}"
                     if expected_move_weekly is not None
                     else "--"
                 )
