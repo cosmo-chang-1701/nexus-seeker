@@ -658,7 +658,7 @@ async def evaluate_watchlist_symbol(
             scenario="wait",
             sddm_route="WAIT (觀望 / 待機)",
             action_guideline=(
-                "⚠️ WARNING: Structural Sentiment Divergence｜Skew 分位極端但 PCR 指向相反極端，"
+                "⚠️ 警告：結構性情緒背離｜Skew 分位極端但 PCR 指向相反極端，"
                 "可能是機構大幅對沖、散戶追逐買權的結構性分裂。建議停止追價單腿，"
                 "僅允許小倉位收租並搭配保護性 Put/Collar 或使用價差結構。"
             ),
@@ -706,7 +706,7 @@ async def evaluate_watchlist_symbol(
 
 
 _SKEW_PCR_DIVERGENCE_WARNING = (
-    "[⚠️ WARNING: Structural Sentiment Divergence] Skew 分位極端且 PCR 指向相反極端，"
+    "[⚠️ 警告：結構性情緒背離] Skew 分位極端且 PCR 指向相反極端，"
     "代表市場結構分裂（常見為機構對沖 vs 散戶追逐買權）。"
     "此情境不宜解讀為『同步』，建議降槓桿、避免追價單腿，優先採用定義風險的價差/保護性結構。"
 )
