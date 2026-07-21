@@ -509,6 +509,10 @@ def build_radar_scan_embed(
                 is_degraded = mp_data.get("is_degraded", False)
                 if max_pain_strike > 0 and price_val > 0:
                     dist_pct = (price_val - max_pain_strike) / max_pain_strike * 100
+            elif isinstance(mp_data, (float, int)):
+                max_pain_strike = float(mp_data)
+                if max_pain_strike > 0 and price_val > 0:
+                    dist_pct = (price_val - max_pain_strike) / max_pain_strike * 100
 
             # 解析 PutWall
             put_wall = 0.0
@@ -520,11 +524,14 @@ def build_radar_scan_embed(
                 put_wall = float(r["put_wall"])
             else:
                 # 嘗試從 metrics 提取 (如果是 Watchlist pipeline 的輸出)
-                mp_val = (
-                    r.get("max_pain", {}).get("max_pain")
-                    if isinstance(r.get("max_pain"), dict)
-                    else None
-                )
+                mp_raw = r.get("max_pain")
+                if isinstance(mp_raw, dict):
+                    mp_val = mp_raw.get("max_pain")
+                elif isinstance(mp_raw, (float, int)):
+                    mp_val = mp_raw
+                else:
+                    mp_val = None
+                
                 put_wall = (
                     float(mp_val) * 0.9 if mp_val is not None else 0.0
                 )  # Fallback 僅供安全
