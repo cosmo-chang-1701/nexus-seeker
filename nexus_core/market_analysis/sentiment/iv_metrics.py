@@ -72,8 +72,17 @@ class IVContext:
         spot_price = cls._safe_float(current_price)
 
         if ref_price > 0.0 and em_weekly > 0.0:
-            lower = ref_price - em_weekly
-            upper = ref_price + em_weekly
+            from decimal import Decimal, ROUND_HALF_UP
+
+            # Fix floating point precision error ($0.01 deviation) by using Decimal
+            ref_d = Decimal(str(ref_price)).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
+            em_d = Decimal(str(em_weekly)).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
+            lower = float(ref_d - em_d)
+            upper = float(ref_d + em_d)
         else:
             lower = 0.0
             upper = 0.0

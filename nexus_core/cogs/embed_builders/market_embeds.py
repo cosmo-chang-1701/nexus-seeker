@@ -646,12 +646,13 @@ def build_radar_scan_embed(
             )
 
             if override_dmp:
-                dmp_str = override_dmp
-                dmp_ansi = (
-                    "[\u001b[1;31m底牆破位\u001b[0m]"
-                    if "底牆破位" in override_dmp
-                    else override_dmp
-                )
+                if override_status:
+                    # Append the warning if it's not already somewhat present
+                    if override_dmp.strip("[]") not in override_status:
+                        override_status = f"{override_status} {override_dmp}"
+                else:
+                    override_status = override_dmp
+
             if override_status:
                 status_label = override_status
                 if "🛑" in status_label:
