@@ -244,15 +244,15 @@ async def _safe_yf_history(
 
     - 捕捉 yfinance 的 HTTP 400 / delisted / 空資料等狀況
     - 若回傳空 DataFrame，統一回傳 None（呼叫端再做 fallback/降級）
+    - 強制開啟 auto_adjust=True 進行除權息校正，並開啟 repair=True 修復極端異常報價
     """
 
     try:
-        if interval is None:
-            df = await asyncio.to_thread(ticker.history, period=period)
-        else:
-            df = await asyncio.to_thread(
-                ticker.history, period=period, interval=interval
-            )
+        kwargs = {"period": period, "auto_adjust": True, "repair": True}
+        if interval is not None:
+            kwargs["interval"] = interval
+
+        df = await asyncio.to_thread(ticker.history, **kwargs)
 
         if df is None or getattr(df, "empty", True):
             return None

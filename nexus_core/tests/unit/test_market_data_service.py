@@ -90,7 +90,9 @@ async def test_get_history_df_caching_success():
         assert not df1.empty
         assert df1.loc["2026-05-25", "Close"] == 102.0
         mock_yf_ticker.assert_called_once_with("AAPL")
-        mock_ticker.history.assert_called_once_with(period="1y", interval="1d")
+        mock_ticker.history.assert_called_once_with(
+            period="1y", auto_adjust=True, repair=True, interval="1d"
+        )
 
         # Second call: cache hit
         mock_yf_ticker.reset_mock()
