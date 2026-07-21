@@ -800,6 +800,7 @@ def build_radar_scan_embed(
             if adv_tags:
                 label_cell += " " + " ".join(adv_tags)
 
+            # 確保第5列明確使用 mp_cell (Max Pain)，防止 put_wall 或其他變數錯位
             ansi_lines.append(
                 f"{sym_cell}{price_cell}{ivr_cell}{em_cell}{mp_cell}{sqz_mom_cell}{dmp_cell}{label_cell}"
             )
