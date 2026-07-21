@@ -311,6 +311,12 @@ class UnifiedTerminalCog(commands.Cog):
                     pw_val = gex_data.get("put_wall") if gex_data else None
                     put_wall = float(pw_val) if pw_val is not None else None
 
+                    mp_data = r.get("max_pain")
+                    mp_val = (
+                        mp_data.get("max_pain") if isinstance(mp_data, dict) else 0.0
+                    )
+                    max_pain_val = float(mp_val) if mp_val is not None else 0.0
+
                     pseudo_metrics = types.SimpleNamespace(
                         squeeze_status=psq_res.get("is_squeezing", False),
                         squeeze_momentum=psq_res.get(
@@ -320,7 +326,9 @@ class UnifiedTerminalCog(commands.Cog):
                         dark_pool_skew=r.get("skew", 0.0),
                         volume_poc=None,  # volume profile may not be fully available in batch scan
                         gex_max_put_wall=put_wall,
-                        ma20=None,
+                        ma20=r.get("ma20"),
+                        max_pain=max_pain_val,
+                        dp_poc=r.get("dp_poc", 0.0),
                     )
 
                     is_adv_passed, adv_tags = evaluate_advanced_filters(
@@ -798,12 +806,14 @@ class UnifiedTerminalCog(commands.Cog):
             "expected_move_upper": em_upper,
         }
 
-        # 取得 PSQ
+        # 取得 PSQ 與簡易 EMA 21
         from services.market_data_service import get_history_df
 
         df_hist = await get_history_df(sym, period="1y", interval="1d")
         psq_res = {}
+        ema_21 = 0.0
         if df_hist is not None and not df_hist.empty:
+            ema_21 = df_hist["Close"].ewm(span=21, adjust=False).mean().iloc[-1]
             from database.squeeze_cache import get_squeeze_cache, save_squeeze_cache
             from market_analysis.psq_engine import analyze_psq
 
@@ -850,6 +860,7 @@ class UnifiedTerminalCog(commands.Cog):
             "gex_profile_data": gex_data,
             "psq_result": psq_res,
             "dp_poc": dp_poc,
+            "ma20": ema_21,
         }
 
     @app_commands.command(

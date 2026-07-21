@@ -1,4 +1,11 @@
 repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.3.0
+    hooks:
+      - id: ruff
+        args: [ --fix ]
+      - id: ruff-format
+
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.5.0
     hooks:
@@ -10,13 +17,6 @@ repos:
       - id: debug-statements
       - id: check-ast
       - id: check-merge-conflict
-
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.3.0
-    hooks:
-      - id: ruff
-        args: [ --fix ]
-      - id: ruff-format
 
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.9.0
@@ -58,4 +58,12 @@ repos:
         stages: [pre-push]
         always_run: false
         files: ^nexus_edge_scraper/.*\.py$
+        pass_filenames: false
+
+      - id: docker-test-commit
+        name: docker-test-commit
+        entry: bash scripts/docker_test.sh
+        language: system
+        stages: [commit]
+        always_run: true
         pass_filenames: false
