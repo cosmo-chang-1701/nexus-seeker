@@ -51,21 +51,27 @@ async def scrape_reddit(
             await context.route("**/*", safe_route)
 
             page = await context.new_page()
-            await page.goto(url, wait_until="domcontentloaded", timeout=15000)
-
             try:
-                await page.wait_for_selector("div.search-result-link", timeout=5000)
-            except PlaywrightTimeoutError:
-                page_title = await page.title()
-                if "Blocked" in page_title:
-                    logger.warning(f"[{symbol}] 被 Reddit 阻擋 (IP Blocked)")
-                    return {"status": "error", "data": "被 Reddit 防火牆攔截 (Blocked)"}
+                await page.goto(url, wait_until="domcontentloaded", timeout=15000)
 
-                logger.info(f"[{symbol}] 搜尋完成，過去 24 小時無相關討論。")
-                return {"status": "success", "data": "過去 24 小時內無相關討論。"}
+                try:
+                    await page.wait_for_selector("div.search-result-link", timeout=5000)
+                except PlaywrightTimeoutError:
+                    page_title = await page.title()
+                    if "Blocked" in page_title:
+                        logger.warning(f"[{symbol}] 被 Reddit 阻擋 (IP Blocked)")
+                        return {
+                            "status": "error",
+                            "data": "被 Reddit 防火牆攔截 (Blocked)",
+                        }
 
-            html_content = await page.content()
-            await context.unroute_all(behavior="ignoreErrors")
+                    logger.info(f"[{symbol}] 搜尋完成，過去 24 小時無相關討論。")
+                    return {"status": "success", "data": "過去 24 小時內無相關討論。"}
+
+                html_content = await page.content()
+            finally:
+                await context.unroute_all(behavior="ignoreErrors")
+                await page.close()
             soup = BeautifulSoup(html_content, "lxml")
             results = soup.select("div.search-result-link")[:limit]
 
@@ -175,15 +181,18 @@ async def scrape_gex():
 
             await context.route("**/*", safe_route)
             page = await context.new_page()
-            await page.goto(
-                "https://finance.yahoo.com/quote/SPY/options",
-                timeout=25000,
-                wait_until="domcontentloaded",
-            )
-            await page.wait_for_timeout(3000)
+            try:
+                await page.goto(
+                    "https://finance.yahoo.com/quote/SPY/options",
+                    timeout=25000,
+                    wait_until="domcontentloaded",
+                )
+                await page.wait_for_timeout(3000)
 
-            html = await page.content()
-            await context.unroute_all(behavior="ignoreErrors")
+                html = await page.content()
+            finally:
+                await context.unroute_all(behavior="ignoreErrors")
+                await page.close()
             soup = BeautifulSoup(html, "lxml")
 
             # Parse spot price
@@ -314,24 +323,26 @@ async def scrape_core_macro_metrics():
         data = []
         try:
             page = await context.new_page()
-            async with page.expect_download(timeout=15000) as download_info:
-                try:
-                    await page.goto(url)
-                except Exception as e:
-                    if "Download is starting" not in str(e):
-                        raise e
-            download = await download_info.value
-            path = await download.path()
-            with open(path, "r") as f:
-                lines = f.readlines()
-                for line in reversed(lines):
-                    parts = line.strip().split(",")
-                    if len(parts) >= 2:
-                        try:
-                            data.append((parts[0].strip(), float(parts[1].strip())))
-                        except ValueError:
-                            continue
-            await page.close()
+            try:
+                async with page.expect_download(timeout=15000) as download_info:
+                    try:
+                        await page.goto(url)
+                    except Exception as e:
+                        if "Download is starting" not in str(e):
+                            raise e
+                download = await download_info.value
+                path = await download.path()
+                with open(path, "r") as f:
+                    lines = f.readlines()
+                    for line in reversed(lines):
+                        parts = line.strip().split(",")
+                        if len(parts) >= 2:
+                            try:
+                                data.append((parts[0].strip(), float(parts[1].strip())))
+                            except ValueError:
+                                continue
+            finally:
+                await page.close()
         except Exception:
             pass
         return data
@@ -427,26 +438,28 @@ async def scrape_liquidity():
         url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
         try:
             page = await context.new_page()
-            async with page.expect_download(timeout=15000) as download_info:
-                try:
-                    await page.goto(url)
-                except Exception as e:
-                    if "Download is starting" not in str(e):
-                        raise e
-            download = await download_info.value
-            path = await download.path()
-            val = None
-            with open(path, "r") as f:
-                lines = f.readlines()
-                for line in reversed(lines):
-                    parts = line.strip().split(",")
-                    if len(parts) >= 2:
-                        try:
-                            val = float(parts[1].strip())
-                            break
-                        except ValueError:
-                            continue
-            await page.close()
+            try:
+                async with page.expect_download(timeout=15000) as download_info:
+                    try:
+                        await page.goto(url)
+                    except Exception as e:
+                        if "Download is starting" not in str(e):
+                            raise e
+                download = await download_info.value
+                path = await download.path()
+                val = None
+                with open(path, "r") as f:
+                    lines = f.readlines()
+                    for line in reversed(lines):
+                        parts = line.strip().split(",")
+                        if len(parts) >= 2:
+                            try:
+                                val = float(parts[1].strip())
+                                break
+                            except ValueError:
+                                continue
+            finally:
+                await page.close()
             return val
         except Exception:
             pass
@@ -726,15 +739,18 @@ async def scrape_symbol_gex(symbol: str):
 
             await context.route("**/*", safe_route)
             page = await context.new_page()
-            await page.goto(
-                f"https://finance.yahoo.com/quote/{symbol_upper}/options",
-                timeout=25000,
-                wait_until="domcontentloaded",
-            )
-            await page.wait_for_timeout(3000)
+            try:
+                await page.goto(
+                    f"https://finance.yahoo.com/quote/{symbol_upper}/options",
+                    timeout=25000,
+                    wait_until="domcontentloaded",
+                )
+                await page.wait_for_timeout(3000)
 
-            html = await page.content()
-            await context.unroute_all(behavior="ignoreErrors")
+                html = await page.content()
+            finally:
+                await context.unroute_all(behavior="ignoreErrors")
+                await page.close()
             soup = BeautifulSoup(html, "lxml")
 
             # Parse spot price
