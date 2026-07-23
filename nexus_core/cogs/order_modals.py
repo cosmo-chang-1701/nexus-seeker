@@ -12,7 +12,6 @@ from cogs.embed_builder import create_info_embed, create_error_embed
 from database.orders import (
     add_active_order,
     delete_active_order,
-    get_active_order,
     update_active_order_fields,
 )
 
@@ -364,20 +363,18 @@ class CancelOrderModal(discord.ui.Modal):
 
 
 class EditOrderModal(discord.ui.Modal):
-    order_id: discord.ui.TextInput
     new_symbol: discord.ui.TextInput
     new_quantity: discord.ui.TextInput
     new_side: discord.ui.TextInput
-    new_price: discord.ui.TextInput
+    new_limit_price: discord.ui.TextInput | None = None
+    new_stop_price: discord.ui.TextInput | None = None
+    new_price: discord.ui.TextInput | None = None
 
-    def __init__(self, order_id: int | None = None):
-        super().__init__(title="編輯委託單")
-        self.order_id = discord.ui.TextInput(
-            label="委託單 ID (Order ID)",
-            placeholder="例如: 1",
-            default=str(order_id) if order_id is not None else None,
-            required=True,
-        )
+    def __init__(self, order_id: int, order_type: str):
+        super().__init__(title=f"編輯委託單 #{order_id}")
+        self.order_id_val = order_id
+        self.order_type = order_type
+
         self.new_symbol = discord.ui.TextInput(
             label="新標的代碼",
             placeholder="例如: AAPL（留空則不變更）",
@@ -394,29 +391,36 @@ class EditOrderModal(discord.ui.Modal):
             placeholder="例如: BUY 或 SELL（留空則不變更）",
             required=False,
         )
-        self.new_price = discord.ui.TextInput(
-            label="新限價 / 新停損價 / 新追蹤值",
-            placeholder="例如: 82.5（留空則不變更價格）",
-            required=False,
-        )
-        self.add_item(self.order_id)
         self.add_item(self.new_symbol)
         self.add_item(self.new_quantity)
         self.add_item(self.new_side)
-        self.add_item(self.new_price)
+
+        if self.order_type == "STOP_LIMIT":
+            self.new_limit_price = discord.ui.TextInput(
+                label="新限價 (Limit Price)",
+                placeholder="例如: 85.5（留空則不變更價格）",
+                required=False,
+            )
+            self.new_stop_price = discord.ui.TextInput(
+                label="新停損價 (Stop Price)",
+                placeholder="例如: 80.0（留空則不變更價格）",
+                required=False,
+            )
+            self.add_item(self.new_limit_price)
+            self.add_item(self.new_stop_price)
+        else:
+            self.new_price = discord.ui.TextInput(
+                label="新限價/停損價/追蹤值",
+                placeholder="例如: 82.5（留空則不變更價格）",
+                required=False,
+            )
+            self.add_item(self.new_price)
 
     async def on_submit(self, interaction: discord.Interaction):
         # 1. 立即延遲回應，以防止任何資料庫/網絡延遲導致的 3 秒超時「此交互失敗」
         await interaction.response.defer(ephemeral=True)
 
-        try:
-            oid = int(self.order_id.value.strip())
-        except Exception:
-            await interaction.followup.send(
-                embed=create_error_embed("❌ 錯誤：請輸入有效的整數作為委託單 ID。"),
-                ephemeral=True,
-            )
-            return
+        oid = self.order_id_val
 
         symbol_to_apply = (
             self.new_symbol.value.strip().upper() if self.new_symbol.value else None
@@ -440,21 +444,52 @@ class EditOrderModal(discord.ui.Modal):
                 )
                 return
 
-        price_text = self.new_price.value.strip() if self.new_price.value else ""
-        price: float | None = None
-        if price_text:
-            try:
-                price = float(price_text)
-                if price <= 0:
-                    raise ValueError()
-            except Exception:
-                await interaction.followup.send(
-                    embed=create_error_embed(
-                        "❌ 錯誤：請輸入有效的正數作為新價格（或留空不變更）。"
-                    ),
-                    ephemeral=True,
-                )
-                return
+        limit_price_to_apply: float | None = None
+        stop_price_to_apply: float | None = None
+        price_to_apply: float | None = None
+
+        if self.order_type == "STOP_LIMIT":
+            if self.new_limit_price is not None and self.new_limit_price.value:
+                try:
+                    limit_price_to_apply = float(self.new_limit_price.value.strip())
+                    if limit_price_to_apply <= 0:
+                        raise ValueError()
+                except Exception:
+                    await interaction.followup.send(
+                        embed=create_error_embed(
+                            "❌ 錯誤：請輸入有效的正數作為新限價。"
+                        ),
+                        ephemeral=True,
+                    )
+                    return
+
+            if self.new_stop_price is not None and self.new_stop_price.value:
+                try:
+                    stop_price_to_apply = float(self.new_stop_price.value.strip())
+                    if stop_price_to_apply <= 0:
+                        raise ValueError()
+                except Exception:
+                    await interaction.followup.send(
+                        embed=create_error_embed(
+                            "❌ 錯誤：請輸入有效的正數作為新停損價。"
+                        ),
+                        ephemeral=True,
+                    )
+                    return
+        else:
+            if self.new_price is not None and self.new_price.value:
+                try:
+                    price_to_apply = float(self.new_price.value.strip())
+                    if price_to_apply <= 0:
+                        raise ValueError()
+                except Exception:
+                    await interaction.followup.send(
+                        embed=create_error_embed(
+                            "❌ 錯誤：請輸入有效的正數作為新價格。"
+                        ),
+                        ephemeral=True,
+                    )
+                    return
 
         new_side = self.new_side.value.strip().upper() if self.new_side.value else ""
         side_to_apply: str | None = None
@@ -470,7 +505,9 @@ class EditOrderModal(discord.ui.Modal):
             side_to_apply = new_side
 
         if (
-            price is None
+            price_to_apply is None
+            and limit_price_to_apply is None
+            and stop_price_to_apply is None
             and side_to_apply is None
             and symbol_to_apply is None
             and quantity_to_apply is None
@@ -482,17 +519,6 @@ class EditOrderModal(discord.ui.Modal):
             return
 
         try:
-            # 取出訂單以判斷 order_type (用以 mapping price)
-            order = await asyncio.to_thread(get_active_order, oid)
-            if not order:
-                await interaction.followup.send(
-                    embed=create_error_embed(
-                        f"❌ 錯誤：找不到委託單 ID `{oid}`，請確認 ID 是否正確。"
-                    ),
-                    ephemeral=True,
-                )
-                return
-
             update_kwargs: dict[str, Any] = {}
             if symbol_to_apply:
                 update_kwargs["symbol"] = symbol_to_apply
@@ -501,14 +527,19 @@ class EditOrderModal(discord.ui.Modal):
             if side_to_apply:
                 update_kwargs["side"] = side_to_apply
 
-            if price is not None:
-                o_type = order.get("order_type", "")
-                if o_type in ("LIMIT", "STOP_LIMIT"):
-                    update_kwargs["limit_price"] = price
-                if o_type in ("STOP", "STOP_LIMIT"):
-                    update_kwargs["stop_price"] = price
-                if o_type in ("TRAILING_STOP_USD", "TRAILING_STOP_PCT"):
-                    update_kwargs["trailing_value"] = price
+            if self.order_type == "STOP_LIMIT":
+                if limit_price_to_apply is not None:
+                    update_kwargs["limit_price"] = limit_price_to_apply
+                if stop_price_to_apply is not None:
+                    update_kwargs["stop_price"] = stop_price_to_apply
+            else:
+                if price_to_apply is not None:
+                    if self.order_type == "LIMIT":
+                        update_kwargs["limit_price"] = price_to_apply
+                    elif self.order_type == "STOP":
+                        update_kwargs["stop_price"] = price_to_apply
+                    elif self.order_type in ("TRAILING_STOP_USD", "TRAILING_STOP_PCT"):
+                        update_kwargs["trailing_value"] = price_to_apply
 
             # 2. 將同步的資料庫操作交給執行緒，避免阻塞事件循環
             success = await asyncio.to_thread(
@@ -522,8 +553,12 @@ class EditOrderModal(discord.ui.Modal):
                     updates_msg.append(f"數量: `{quantity_to_apply}`")
                 if side_to_apply:
                     updates_msg.append(f"方向: `{side_to_apply}`")
-                if price is not None:
-                    updates_msg.append(f"新價格/追蹤值: `{price}`")
+                if limit_price_to_apply is not None:
+                    updates_msg.append(f"新限價: `{limit_price_to_apply}`")
+                if stop_price_to_apply is not None:
+                    updates_msg.append(f"新停損價: `{stop_price_to_apply}`")
+                if price_to_apply is not None:
+                    updates_msg.append(f"新價格/追蹤值: `{price_to_apply}`")
 
                 embed = create_info_embed(
                     title="編輯委託單成功",
