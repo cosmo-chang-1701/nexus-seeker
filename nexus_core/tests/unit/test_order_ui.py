@@ -288,8 +288,7 @@ async def test_edit_order_modal_success(mock_interaction, db_conn):
         limit_price=150.0,
     )
 
-    modal = EditOrderModal()
-    modal.order_id._value = str(order_id)
+    modal = EditOrderModal(order_id=order_id, order_type="LIMIT")
     modal.new_symbol._value = ""
     modal.new_quantity._value = ""
     modal.new_side._value = "SELL"
@@ -322,8 +321,7 @@ async def test_edit_order_modal_side_only_success(mock_interaction, db_conn):
         limit_price=150.0,
     )
 
-    modal = EditOrderModal()
-    modal.order_id._value = str(order_id)
+    modal = EditOrderModal(order_id=order_id, order_type="LIMIT")
     modal.new_symbol._value = ""
     modal.new_quantity._value = ""
     modal.new_side._value = "SELL"
@@ -606,14 +604,14 @@ async def test_edit_order_command_with_id_and_params(mock_interaction, db_conn):
 
 @pytest.mark.asyncio
 async def test_edit_order_command_no_id(mock_interaction):
-    """測試 edit_order 未傳入 ID 時喚起 Modal"""
+    """測試 edit_order 未傳入 ID 時回傳錯誤訊息"""
     bot = MagicMock()
     cog = OrderUICog(bot)
     await cog.edit_order.callback(cog, mock_interaction, order_id=None)
 
-    assert mock_interaction.response.send_modal.called
-    modal = mock_interaction.response.send_modal.call_args[0][0]
-    assert isinstance(modal, EditOrderModal)
+    assert mock_interaction.response.send_message.called
+    embed = mock_interaction.response.send_message.call_args[1]["embed"]
+    assert "請輸入委託單 ID" in embed.description
 
 
 @pytest.mark.asyncio
@@ -637,7 +635,8 @@ async def test_edit_order_command_id_only(mock_interaction, db_conn):
     assert mock_interaction.response.send_modal.called
     modal = mock_interaction.response.send_modal.call_args[0][0]
     assert isinstance(modal, EditOrderModal)
-    assert modal.order_id.default == str(order_id)
+    assert modal.order_id_val == order_id
+    assert modal.order_type == "LIMIT"
 
 
 @pytest.mark.asyncio
@@ -652,10 +651,12 @@ async def test_order_item_view_buttons_prefill_order_id(mock_interaction):
 
     mock_interaction.response.send_modal.reset_mock()
 
-    await view.edit_order_button.callback(mock_interaction)
+    with patch("database.orders.get_active_order", return_value={"order_type": "STOP"}):
+        await view.edit_order_button.callback(mock_interaction)
     modal_edit = mock_interaction.response.send_modal.call_args[0][0]
     assert isinstance(modal_edit, EditOrderModal)
-    assert modal_edit.order_id.default == "99"
+    assert modal_edit.order_id_val == 99
+    assert modal_edit.order_type == "STOP"
 
 
 @pytest.mark.asyncio

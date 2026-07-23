@@ -44,14 +44,25 @@ class OrderItemView(discord.ui.View):
         self, interaction: discord.Interaction, button: discord.ui.Button
     ):
         try:
+            # 撈取訂單取得 order_type
+            from database.orders import get_active_order
+
+            order = await asyncio.to_thread(get_active_order, self.order_id)
+            if not order:
+                await interaction.response.send_message(
+                    embed=create_error_embed("❌ 找不到該委託單"), ephemeral=True
+                )
+                return
             await interaction.response.send_modal(
-                EditOrderModal(order_id=self.order_id)
+                EditOrderModal(
+                    order_id=self.order_id, order_type=order.get("order_type", "")
+                )
             )
         except Exception as e:
             logger.error(
                 f"Failed to send EditOrderModal(order_id={self.order_id}): {e}"
             )
-            await interaction.followup.send(
+            await interaction.response.send_message(
                 embed=create_error_embed(f"❌ 無法開啟編輯委託單視窗：{e}"),
                 ephemeral=True,
             )

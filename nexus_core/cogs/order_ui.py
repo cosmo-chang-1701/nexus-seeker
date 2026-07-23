@@ -269,6 +269,7 @@ class OrderUICog(commands.Cog):
         side="委託方向 (BUY 買入 / SELL 賣出)",
         validity="有效期限制 (預設 DAY) - 可選: DAY, EXT_DAY, NIGHT, GTC_90",
         price="限價/停損價/追蹤值 (可選，未填時自動呼叫遙測定價進行高安全邊際折價)",
+        stop_price="停損價 (僅停損限價單適用)",
     )
     @app_commands.choices(
         order_type=[
@@ -303,6 +304,7 @@ class OrderUICog(commands.Cog):
         side: str = "BUY",
         validity: str = "DAY",
         price: float = 0.0,
+        stop_price: float = 0.0,
     ):
         await interaction.response.defer(ephemeral=True)
 
@@ -363,7 +365,7 @@ class OrderUICog(commands.Cog):
                 stop_val = price
             elif order_type == "STOP_LIMIT":
                 limit_val = price
-                stop_val = price
+                stop_val = stop_price if stop_price > 0 else price
             elif order_type in ("TRAILING_STOP_USD", "TRAILING_STOP_PCT"):
                 trailing_val = price
 
@@ -474,13 +476,14 @@ class OrderUICog(commands.Cog):
         description="編輯指定的待成交委託單",
     )
     @app_commands.describe(
-        order_id="委託單 ID (留空則彈出對話框輸入)",
+        order_id="委託單 ID",
         symbol="新標的代碼 (例如 AAPL，留空不變)",
         quantity="新委託數量 (留空不變)",
         order_type="新訂單類型 (留空不變)",
         validity="新有效期限 (留空不變)",
         side="新委託方向 (BUY/SELL，留空不變)",
-        price="新價格/追蹤值 (自動對應到限價/停損/追蹤值)",
+        price="新價格/限價/追蹤值 (自動對應)",
+        stop_price="新停損價 (僅停損限價單適用)",
     )
     @app_commands.choices(
         order_type=[
@@ -516,9 +519,15 @@ class OrderUICog(commands.Cog):
         validity: str | None = None,
         side: str | None = None,
         price: float | None = None,
+        stop_price: float | None = None,
     ):
         if order_id is None:
-            await interaction.response.send_modal(EditOrderModal())
+            await interaction.response.send_message(
+                embed=create_error_embed(
+                    "❌ 請輸入委託單 ID (`order_id`)，或透過 `/list_orders` 面板點擊編輯按鈕。"
+                ),
+                ephemeral=True,
+            )
             return
 
         if (
@@ -528,8 +537,22 @@ class OrderUICog(commands.Cog):
             and validity is None
             and side is None
             and price is None
+            and stop_price is None
         ):
-            await interaction.response.send_modal(EditOrderModal(order_id=order_id))
+            order = await asyncio.to_thread(get_active_order, order_id)
+            if not order:
+                await interaction.response.send_message(
+                    embed=create_error_embed(
+                        f"❌ 錯誤：找不到委託單 ID `{order_id}`，請確認 ID 是否正確。"
+                    ),
+                    ephemeral=True,
+                )
+                return
+            await interaction.response.send_modal(
+                EditOrderModal(
+                    order_id=order_id, order_type=order.get("order_type", "")
+                )
+            )
             return
 
         await interaction.response.defer(ephemeral=True)
@@ -545,6 +568,13 @@ class OrderUICog(commands.Cog):
         if price is not None and price <= 0:
             await interaction.followup.send(
                 embed=create_error_embed("❌ 錯誤：請輸入有效的正數作為新價格。"),
+                ephemeral=True,
+            )
+            return
+
+        if stop_price is not None and stop_price <= 0:
+            await interaction.followup.send(
+                embed=create_error_embed("❌ 錯誤：請輸入有效的正數作為新停損價。"),
                 ephemeral=True,
             )
             return
@@ -573,19 +603,29 @@ class OrderUICog(commands.Cog):
             if side is not None:
                 update_kwargs["side"] = side
 
-            if price is not None:
+            if price is not None or stop_price is not None:
                 # 決定當前的訂單類型（若有更新則以新類型為主，否則用原來的）
                 current_order_type = (
                     order_type
                     if order_type is not None
                     else order.get("order_type", "")
                 )
-                if current_order_type in ("LIMIT", "STOP_LIMIT"):
-                    update_kwargs["limit_price"] = price
-                if current_order_type in ("STOP", "STOP_LIMIT"):
-                    update_kwargs["stop_price"] = price
-                if current_order_type in ("TRAILING_STOP_USD", "TRAILING_STOP_PCT"):
-                    update_kwargs["trailing_value"] = price
+                if current_order_type == "STOP_LIMIT":
+                    if price is not None:
+                        update_kwargs["limit_price"] = price
+                    if stop_price is not None:
+                        update_kwargs["stop_price"] = stop_price
+                else:
+                    if price is not None:
+                        if current_order_type == "LIMIT":
+                            update_kwargs["limit_price"] = price
+                        elif current_order_type == "STOP":
+                            update_kwargs["stop_price"] = price
+                        elif current_order_type in (
+                            "TRAILING_STOP_USD",
+                            "TRAILING_STOP_PCT",
+                        ):
+                            update_kwargs["trailing_value"] = price
 
             success = await asyncio.to_thread(
                 update_active_order_fields, order_id, **update_kwargs
