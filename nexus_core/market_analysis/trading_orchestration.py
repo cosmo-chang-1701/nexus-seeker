@@ -459,7 +459,8 @@ def get_safety_payout_threshold() -> float:
     rrp_spike = get_kv_cache("macro_rrp_spike") or False
 
     if rrp_change > 0.20 or rrp_spike:
-        return 10000.0
+        # 發生流動性結構異常，拉高保留現金底線至最高戒備狀態
+        return 18000.0
 
     try:
         from database.calendar_cache import get_macro_events_between
