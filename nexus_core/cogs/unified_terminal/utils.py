@@ -124,13 +124,12 @@ async def get_macro_overview_data(user_id: int) -> dict:
     gex_fallback_val = get_kv_cache("macro_gex_is_fallback")
     gex_is_fallback = gex_fallback_val is None or int(gex_fallback_val) == 1
 
-    vts_ratio = get_kv_cache("macro_vts_ratio") or 0.95
+    vts_raw = get_kv_cache("macro_vts_ratio")
+    is_backwardation = (float(vts_raw) >= 1.0) if vts_raw else (vix > 25.0)
 
     # 零 Gamma 踩踏 Regime 判定
-    # SPX 跌破 Gamma Flip Line 且 VIX > 20 且 vts_ratio >= 1.0 (Backwardation)
-    short_gamma_critical = (
-        (spx < gamma_flip_line) and (vix > 20.0) and (vts_ratio >= 1.0)
-    )
+    # SPX 跌破 Gamma Flip Line 且 VIX > 20 且 is_backwardation (倒掛或極端恐慌)
+    short_gamma_critical = (spx < gamma_flip_line) and (vix > 20.0) and is_backwardation
 
     # 衰退警告 RECESSION_WARNING
     recession_warning = (sahm_rule >= 0.5) or (us10y > 4.5 and vix > 20.0)

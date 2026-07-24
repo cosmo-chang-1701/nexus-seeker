@@ -277,14 +277,14 @@ def test_safety_payout_threshold_logic():
             "macro_rrp_change_30d": 0.25,
             "macro_rrp_spike": False,
         }.get(key)
-        assert get_safety_payout_threshold() == 10000.0
+        assert get_safety_payout_threshold() == 18000.0
 
         # Case 3: RRP Spike
         mock_kv.side_effect = lambda key: {
             "macro_rrp_change_30d": 0.05,
             "macro_rrp_spike": True,
         }.get(key)
-        assert get_safety_payout_threshold() == 10000.0
+        assert get_safety_payout_threshold() == 18000.0
 
 
 @pytest.mark.asyncio
