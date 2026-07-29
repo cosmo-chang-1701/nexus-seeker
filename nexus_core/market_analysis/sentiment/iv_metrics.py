@@ -1,3 +1,4 @@
+from typing import Any
 from .history_storage import get_last_stored_iv, save_historical_iv
 import logging
 import pandas as pd
@@ -25,7 +26,7 @@ class IVContext:
     """Centralized Expected Move context builder shared by UI surfaces."""
 
     @staticmethod
-    def _safe_float(value) -> float:
+    def _safe_float(value: Any) -> float:
         try:
             return float(value) if value is not None else 0.0
         except (TypeError, ValueError):
@@ -33,7 +34,7 @@ class IVContext:
 
     @classmethod
     def resolve_reference_price(
-        cls, quote: dict | None = None, iv_metrics=None
+        cls, quote: dict | None = None, iv_metrics: Any = None
     ) -> float:
         if isinstance(quote, dict):
             prev_close = cls._safe_float(quote.get("pc"))
@@ -93,7 +94,7 @@ class IVContext:
         }
 
     @classmethod
-    async def get_expected_move(
+    async def get_expected_move(  # type: ignore
         cls, symbol: str, *, quote: dict | None = None, iv_metrics=None
     ) -> dict:
         symbol = symbol.upper()
@@ -169,7 +170,7 @@ async def _calculate_straddle_implied_em(
         put_atm = puts.loc[put_atm_idx]
 
         # 使用 mid price (bid+ask)/2，若無 bid/ask 則用 lastPrice
-        def _mid(row):
+        def _mid(row: Any):  # type: ignore
             bid = float(row.get("bid", 0.0) or 0.0)
             ask = float(row.get("ask", 0.0) or 0.0)
             if bid > 0 and ask > 0:
@@ -197,7 +198,7 @@ async def _calculate_straddle_implied_em(
             f"[{symbol}] Straddle-Implied EM (Normalized): Call_mid=${call_mid:.2f} + "
             f"Put_mid=${put_mid:.2f} = Straddle ${straddle_price:.2f} × 0.85 (DTE: {target_dte}) -> Weekly EM ±${em:.2f}"
         )
-        return em
+        return em  # type: ignore
 
     except Exception as e:
         logger.warning(f"[{symbol}] Straddle-Implied EM calculation failed: {e}")
@@ -242,7 +243,7 @@ async def _calculate_iv_term_structure(
             market_data_service.get_option_chain(symbol, far_expiry),
         )
 
-        def _get_atm_iv(chain) -> float | None:
+        def _get_atm_iv(chain: Any) -> float | None:
             if chain is None or chain.calls.empty or chain.puts.empty:
                 return None
             call_idx = (chain.calls["strike"] - spot_price).abs().idxmin()
@@ -322,14 +323,14 @@ async def fetch_and_calculate_iv_metrics(symbol: str) -> IVMetrics:
                 if ref_price and ref_price > 0 and spot_price > 0:
                     deviation = abs(spot_price - ref_price) / ref_price
                     if deviation <= 0.02:
-                        return cached_val
+                        return cached_val  # type: ignore
                     else:
                         logger.warning(
                             f"[{symbol}] Spot price shifted from {ref_price} to {spot_price} "
                             f"(dev={deviation:.2%}), invalidating memory cache"
                         )
                 else:
-                    return cached_val
+                    return cached_val  # type: ignore
 
     # Check SQLite kv_cache next for same-day warm cache
     from database.cache import get_kv_cache, save_kv_cache

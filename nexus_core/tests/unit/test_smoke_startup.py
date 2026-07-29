@@ -7,11 +7,11 @@ from unittest.mock import MagicMock, patch
 sys.path.append(os.path.join(os.getcwd(), "nexus_core"))
 
 
-def test_imports():
+def test_imports() -> None:
     """Verify that all core modules and services can be imported without error."""
 
 
-def test_bot_initialization():
+def test_bot_initialization() -> None:
     """Verify that NexusBot can be instantiated and cogs can be loaded (initially)."""
     from bot import NexusBot
 
@@ -24,7 +24,7 @@ def test_bot_initialization():
 
 
 @pytest.mark.asyncio
-async def test_cog_loading_structure():
+async def test_cog_loading_structure() -> None:
     """Verify Cog classes are structurally valid by trying to instantiate them with a mock bot."""
     from cogs.unified_terminal import UnifiedTerminalCog
     from cogs.terminal import TerminalCog

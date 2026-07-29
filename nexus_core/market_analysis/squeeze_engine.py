@@ -1,8 +1,9 @@
+from typing import Any
 import numpy as np
 import pandas as pd
 import psutil
 import logging
-from typing import Dict, Any
+from typing import Dict
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ def calculate_power_squeeze(df: pd.DataFrame) -> Dict[str, Any]:
         diff = df["Close"] - sma_20
 
         # 計算近 4 期的線性迴歸斜率
-        def linreg_slope(y):
+        def linreg_slope(y: Any):  # type: ignore
             if len(y) < 4:
                 return 0.0
             x = np.arange(len(y))

@@ -1,3 +1,4 @@
+from typing import Any
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 import discord
@@ -6,13 +7,13 @@ from cogs.calendar import CalendarCog
 
 
 @pytest.fixture
-def mock_bot():
+def mock_bot() -> Any:
     bot = MagicMock()
     return bot
 
 
 @pytest.fixture
-def mock_interaction():
+def mock_interaction() -> Any:
     interaction = MagicMock(spec=discord.Interaction)
     interaction.user.id = 12345
     interaction.response.defer = AsyncMock()
@@ -24,8 +25,12 @@ def mock_interaction():
 @patch("database.watchlist.get_user_watchlist")
 @patch("cogs.calendar.calendar_service.get_high_impact_events")
 @patch("cogs.calendar.calendar_service.get_symbol_earnings_batch")
-async def test_calendar_command_high_rate(
-    mock_get_earnings, mock_get_macro, mock_get_watchlist, mock_bot, mock_interaction
+async def test_calendar_command_high_rate(  # type: ignore
+    mock_get_earnings: Any,
+    mock_get_macro: Any,
+    mock_get_watchlist: Any,
+    mock_bot: Any,
+    mock_interaction: Any,
 ):
     cog = CalendarCog(mock_bot)
 
@@ -48,7 +53,7 @@ async def test_calendar_command_high_rate(
         "TSLA": None,
     }
 
-    await cog.calendar.callback(cog, mock_interaction)
+    await cog.calendar.callback(cog, mock_interaction)  # type: ignore
 
     mock_interaction.response.defer.assert_awaited_once_with(ephemeral=True)
     mock_interaction.followup.send.assert_awaited_once()
@@ -67,8 +72,12 @@ async def test_calendar_command_high_rate(
 @patch("database.watchlist.get_user_watchlist")
 @patch("cogs.calendar.calendar_service.get_high_impact_events")
 @patch("cogs.calendar.calendar_service.get_symbol_earnings_batch")
-async def test_calendar_command_rate_cut(
-    mock_get_earnings, mock_get_macro, mock_get_watchlist, mock_bot, mock_interaction
+async def test_calendar_command_rate_cut(  # type: ignore
+    mock_get_earnings: Any,
+    mock_get_macro: Any,
+    mock_get_watchlist: Any,
+    mock_bot: Any,
+    mock_interaction: Any,
 ):
     cog = CalendarCog(mock_bot)
 
@@ -88,7 +97,7 @@ async def test_calendar_command_rate_cut(
 
     mock_get_earnings.return_value = {}
 
-    await cog.calendar.callback(cog, mock_interaction)
+    await cog.calendar.callback(cog, mock_interaction)  # type: ignore
 
     mock_interaction.response.defer.assert_awaited_once_with(ephemeral=True)
     mock_interaction.followup.send.assert_awaited_once()

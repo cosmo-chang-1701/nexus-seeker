@@ -1,3 +1,4 @@
+from typing import Any
 import pytest
 import math
 import pandas as pd
@@ -11,7 +12,7 @@ import config
 
 
 @pytest.fixture(autouse=True)
-def clear_iv_cache():
+def clear_iv_cache() -> Any:
     _iv_cache.clear()
     with patch("database.cache.get_kv_cache", return_value=None), patch(
         "database.cache.save_kv_cache", new_callable=AsyncMock
@@ -21,7 +22,7 @@ def clear_iv_cache():
 
 
 @pytest.mark.asyncio
-async def test_save_and_get_last_stored_iv():
+async def test_save_and_get_last_stored_iv() -> None:
     """Verify that IV values can be saved to and retrieved from the database."""
     symbol = "TEST_SAVE"
     # Ensure any previous records are cleared
@@ -49,7 +50,7 @@ async def test_save_and_get_last_stored_iv():
 
 
 @pytest.mark.asyncio
-async def test_fetch_and_calculate_iv_metrics_success():
+async def test_fetch_and_calculate_iv_metrics_success() -> None:
     """Test fetch_and_calculate_iv_metrics when yfinance successfully returns impliedVolatility."""
     symbol = "TEST_SUCCESS"
 
@@ -86,13 +87,13 @@ async def test_fetch_and_calculate_iv_metrics_success():
         assert metrics.expected_move_weekly == pytest.approx(
             100.0 * 0.40 * math.sqrt(7.0 / 365.0)
         )
-        assert 0.0 <= metrics.iv_rank <= 100.0
-        assert 0.0 <= metrics.iv_percentile <= 100.0
+        assert 0.0 <= metrics.iv_rank <= 100.0  # type: ignore
+        assert 0.0 <= metrics.iv_percentile <= 100.0  # type: ignore
         assert metrics.iv_status in ["Low", "Normal", "High", "Extreme"]
 
 
 @pytest.mark.asyncio
-async def test_fetch_and_calculate_iv_metrics_cache():
+async def test_fetch_and_calculate_iv_metrics_cache() -> None:
     """Verify that cached IV metrics are returned without executing logic again."""
     symbol = "TEST_CACHE"
 
@@ -128,12 +129,12 @@ async def test_fetch_and_calculate_iv_metrics_cache():
 
 
 @pytest.mark.asyncio
-async def test_fetch_and_calculate_iv_metrics_fallback_option_chain():
+async def test_fetch_and_calculate_iv_metrics_fallback_option_chain() -> None:
     """Test ATM option chain impliedVolatility fallback when ticker.info doesn't return it."""
     symbol = "TEST_FALLBACK_OPT"
 
     mock_quote = {"c": 100.0}
-    mock_info = {}  # Empty yfinance info
+    mock_info: dict[str, Any] = {}  # Empty yfinance info  # type: ignore
 
     # Mock expiries and option chain
     mock_expiries = ["2026-06-19"]
@@ -146,7 +147,7 @@ async def test_fetch_and_calculate_iv_metrics_fallback_option_chain():
     )
 
     class MockChain:
-        def __init__(self, calls):
+        def __init__(self, calls: Any):
             self.calls = calls
             self.puts = pd.DataFrame()
 
@@ -179,12 +180,12 @@ async def test_fetch_and_calculate_iv_metrics_fallback_option_chain():
 
 
 @pytest.mark.asyncio
-async def test_fetch_and_calculate_iv_metrics_fallback_db():
+async def test_fetch_and_calculate_iv_metrics_fallback_db() -> None:
     """Test database fallback when both yfinance and options chain fail."""
     symbol = "TEST_FALLBACK_DB"
 
     mock_quote = {"c": 80.0}
-    mock_info = {}
+    mock_info = {}  # type: ignore
 
     # Save a record in DB to trigger DB fallback
     conn = sqlite3.connect(config.DB_NAME)
@@ -219,12 +220,12 @@ async def test_fetch_and_calculate_iv_metrics_fallback_db():
 
 
 @pytest.mark.asyncio
-async def test_fetch_and_calculate_iv_metrics_fallback_hv():
+async def test_fetch_and_calculate_iv_metrics_fallback_hv() -> None:
     """Test Historical Volatility fallback when yfinance, options chain, and DB have no data."""
     symbol = "TEST_FALLBACK_HV"
 
     mock_quote = {"c": 50.0}
-    mock_info = {}
+    mock_info = {}  # type: ignore
 
     # 30 days of stock history with simple return values
     dates = pd.date_range(end="2026-05-21", periods=30, freq="D")
@@ -260,7 +261,7 @@ async def test_fetch_and_calculate_iv_metrics_fallback_hv():
 
 
 @pytest.mark.asyncio
-async def test_iv_context_expected_move_uses_previous_close():
+async def test_iv_context_expected_move_uses_previous_close() -> None:
     from market_analysis.sentiment.iv_metrics import IVContext
 
     metrics = IVMetrics(
@@ -287,11 +288,11 @@ async def test_iv_context_expected_move_uses_previous_close():
 
 
 @pytest.mark.asyncio
-async def test_iv_term_structure_guard_on_tiny_far_iv():
+async def test_iv_term_structure_guard_on_tiny_far_iv() -> None:
     from market_analysis.sentiment.iv_metrics import _calculate_iv_term_structure
 
     class MockChain:
-        def __init__(self, calls, puts):
+        def __init__(self, calls: Any, puts: Any) -> None:
             self.calls = calls
             self.puts = puts
 
@@ -319,7 +320,7 @@ async def test_iv_term_structure_guard_on_tiny_far_iv():
 
 
 @pytest.mark.asyncio
-async def test_fetch_and_calculate_iv_metrics_failure_graceful_degrade():
+async def test_fetch_and_calculate_iv_metrics_failure_graceful_degrade() -> None:
     """Test that engine gracefully returns degraded default model on complete failure."""
     symbol = "TEST_FAILURE"
 
@@ -340,7 +341,7 @@ async def test_fetch_and_calculate_iv_metrics_failure_graceful_degrade():
 
 
 @pytest.mark.asyncio
-async def test_iv_rank_and_percentile_math():
+async def test_iv_rank_and_percentile_math() -> None:
     """Explicitly verify IV Rank and IV Percentile calculations with specific test values."""
     symbol = "TEST_MATH"
 
@@ -418,7 +419,7 @@ async def test_iv_rank_and_percentile_math():
 
 
 @pytest.mark.asyncio
-async def test_fetch_and_calculate_iv_metrics_value_error_warning():
+async def test_fetch_and_calculate_iv_metrics_value_error_warning() -> None:
     """Test that a ValueError raised during calculation is handled as warning and returns default metrics."""
     symbol = "TEST_VALUE_ERROR"
     with patch(
@@ -441,7 +442,7 @@ async def test_fetch_and_calculate_iv_metrics_value_error_warning():
 
 
 @pytest.mark.asyncio
-async def test_fetch_and_calculate_iv_metrics_premarket_success():
+async def test_fetch_and_calculate_iv_metrics_premarket_success() -> None:
     """Test pre-market IV calculation falling back to previous day's close in DB."""
     symbol = "TEST_PREMARKET_OK"
     mock_quote = {"c": 120.0}
@@ -490,7 +491,7 @@ async def test_fetch_and_calculate_iv_metrics_premarket_success():
 
 
 @pytest.mark.asyncio
-async def test_fetch_and_calculate_iv_metrics_premarket_degraded():
+async def test_fetch_and_calculate_iv_metrics_premarket_degraded() -> None:
     """Test pre-market IV calculation when DB is empty and options data fails, causing graceful degrade."""
     symbol = "TEST_PREMARKET_FAIL"
     mock_quote = {"c": 120.0}
@@ -523,7 +524,9 @@ async def test_fetch_and_calculate_iv_metrics_premarket_degraded():
 
 
 @pytest.mark.asyncio
-async def test_fetch_and_calculate_iv_metrics_premarket_cache_bypassed_when_market_opens():
+async def test_fetch_and_calculate_iv_metrics_premarket_cache_bypassed_when_market_opens() -> (
+    None
+):
     """Verify that cached pre-market IV metrics are bypassed if the market is now open."""
     symbol = "TEST_BYPASS"
     mock_quote = {"c": 100.0}

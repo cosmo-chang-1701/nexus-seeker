@@ -1,3 +1,4 @@
+from typing import Any
 import discord
 import re
 from typing import List, Callable, Awaitable, Optional
@@ -49,7 +50,7 @@ class WatchlistTagModal(discord.ui.Modal):
         )
         self.add_item(self.tags_input)
 
-    async def on_submit(self, interaction: discord.Interaction):
+    async def on_submit(self, interaction: discord.Interaction) -> Any:
         raw_tags = self.tags_input.value
         clean_tags = sanitize_tags(raw_tags)
 
@@ -86,7 +87,7 @@ class WatchlistTagSelect(discord.ui.Select):
         self.user_id = user_id
         self.on_success_callback = on_success_callback
 
-    async def callback(self, interaction: discord.Interaction):
+    async def callback(self, interaction: discord.Interaction) -> Any:
         if interaction.data is None or not isinstance(interaction.data, dict):
             return
         select_values = interaction.data.get("values")

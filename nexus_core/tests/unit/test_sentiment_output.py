@@ -1,3 +1,4 @@
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -6,7 +7,7 @@ from cogs.sentiment import SentimentCog
 
 
 @pytest.mark.asyncio
-async def test_max_pain_uses_builder(mock_interaction):
+async def test_max_pain_uses_builder(mock_interaction: Any):  # type: ignore
     bot = MagicMock()
     cog = SentimentCog(bot)
     embed = object()
@@ -24,7 +25,7 @@ async def test_max_pain_uses_builder(mock_interaction):
     ), patch(
         "cogs.sentiment.create_max_pain_embed", return_value=embed
     ) as mock_builder:
-        await cog.max_pain.callback(cog, mock_interaction, symbol="spy")
+        await cog.max_pain.callback(cog, mock_interaction, symbol="spy")  # type: ignore
 
     mock_builder.assert_called_once_with("SPY", data)
     mock_interaction.followup.send.assert_called_once_with(embed=embed)

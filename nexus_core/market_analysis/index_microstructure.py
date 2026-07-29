@@ -33,7 +33,7 @@ async def fetch_gex_metrics() -> Dict[str, float]:
                         gex_data.get("gamma_flip", 515.0) * 10.0,
                     )
                     await save_kv_cache("macro_gex_is_fallback", 0)
-                    return gex_data
+                    return gex_data  # type: ignore
     except Exception as e:
         logger.warning(f"無法從 Tunnel Scraper 獲取 GEX 數據: {e}")
     await save_kv_cache("macro_gex_is_fallback", 1)
@@ -129,7 +129,7 @@ async def fetch_liquidity_metrics() -> dict:
                         "macro_ted_spread", liq_data.get("ted_spread", 0.15)
                     )
                     await save_kv_cache("macro_liquidity_is_fallback", 0)
-                    return liq_data
+                    return liq_data  # type: ignore
     except Exception as e:
         logger.warning(f"無法從 Tunnel Scraper 獲取流動性數據: {e}")
     await save_kv_cache("macro_liquidity_is_fallback", 1)
@@ -174,7 +174,7 @@ async def fetch_core_macro_metrics() -> dict:
                         "macro_fear_greed", core_data.get("fear_greed", 48.0)
                     )
                     await save_kv_cache("macro_core_is_fallback", 0)
-                    return core_data
+                    return core_data  # type: ignore
     except Exception as e:
         logger.warning(f"無法從 Tunnel Scraper 獲取核心總經數據: {e}")
     await save_kv_cache("macro_core_is_fallback", 1)
@@ -230,7 +230,7 @@ async def fetch_symbol_gex_metrics(symbol: str) -> dict:
                         )
                     except Exception as e:
                         logger.warning(f"寫入 GEX 快取失敗 ({symbol}): {e}")
-                    return result_data
+                    return result_data  # type: ignore
     except Exception as e:
         logger.warning(f"無法從 Tunnel Scraper 獲取 {symbol} GEX 數據: {e}")
 

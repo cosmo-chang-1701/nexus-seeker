@@ -1,10 +1,11 @@
+from typing import Any
 import pytest
 from unittest.mock import AsyncMock, patch
 from cogs.trading import SchedulerCog
 
 
 @pytest.mark.asyncio
-async def test_alert_filtering_logic(mock_interaction, db_conn):
+async def test_alert_filtering_logic(mock_interaction: Any, db_conn: Any):  # type: ignore
     bot = AsyncMock()
     bot.wait_until_ready = AsyncMock()
     bot.queue_dm = AsyncMock()
@@ -43,7 +44,7 @@ async def test_alert_filtering_logic(mock_interaction, db_conn):
 
 
 @pytest.mark.asyncio
-async def test_run_market_scan_logic_filtering(mock_interaction, db_conn):
+async def test_run_market_scan_logic_filtering(mock_interaction: Any, db_conn: Any):  # type: ignore
     bot = AsyncMock()
     bot.wait_until_ready = AsyncMock()
     bot.queue_dm = AsyncMock()

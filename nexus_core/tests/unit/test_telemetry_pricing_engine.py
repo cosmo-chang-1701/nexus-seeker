@@ -1,3 +1,4 @@
+from typing import Any
 import pytest
 import sys
 import os
@@ -15,7 +16,7 @@ from market_analysis.telemetry_pricing_engine import (
 
 
 @pytest.mark.asyncio
-async def test_iv_rank_fuse_suppresses_price_up(caplog, db_conn):
+async def test_iv_rank_fuse_suppresses_price_up(caplog: Any, db_conn: Any):  # type: ignore
     """IV Rank > 0.70 must suppress any PRICE_UP suggestion."""
     user_id = 42
     symbol = "SPY"
@@ -53,7 +54,7 @@ async def test_iv_rank_fuse_suppresses_price_up(caplog, db_conn):
 
 
 @pytest.mark.asyncio
-async def test_max_pain_expected_move_clamp(db_conn):
+async def test_max_pain_expected_move_clamp(db_conn: Any):  # type: ignore
     """Suggested PRICE_UP must be clamped to upper_bound = min(max_pain, spot - EM)."""
     user_id = 43
     symbol = "SPY"
@@ -91,7 +92,7 @@ async def test_max_pain_expected_move_clamp(db_conn):
 
 
 @pytest.mark.asyncio
-async def test_no_alignment_needed_when_clamp_not_above_current(db_conn):
+async def test_no_alignment_needed_when_clamp_not_above_current(db_conn: Any):  # type: ignore
     """If clamp results in <= current order price, suppress entirely."""
     user_id = 44
     symbol = "SPY"
@@ -126,7 +127,7 @@ async def test_no_alignment_needed_when_clamp_not_above_current(db_conn):
 
 
 @pytest.mark.asyncio
-async def test_recent_clear_position_suppresses_buy_alignment(db_conn):
+async def test_recent_clear_position_suppresses_buy_alignment(db_conn: Any):  # type: ignore
     """If holdings quantity == 0 updated within 24h, suppress buy/alignment alerts."""
     user_id = 45
     symbol = "TSLA"
@@ -165,7 +166,7 @@ async def test_recent_clear_position_suppresses_buy_alignment(db_conn):
 
 
 @pytest.mark.asyncio
-async def test_data_contamination_raises_and_aborts(db_conn):
+async def test_data_contamination_raises_and_aborts(db_conn: Any):  # type: ignore
     user_id = 46
     symbol = "TSM"
     order_id = add_active_order(
@@ -198,7 +199,7 @@ async def test_data_contamination_raises_and_aborts(db_conn):
 
 
 @pytest.mark.asyncio
-async def test_deep_sea_buy_relock_returns_suppressed_decision(db_conn):
+async def test_deep_sea_buy_relock_returns_suppressed_decision(db_conn: Any):  # type: ignore
     user_id = 47
     symbol = "TSM"
     order_id = add_active_order(
@@ -237,7 +238,7 @@ async def test_deep_sea_buy_relock_returns_suppressed_decision(db_conn):
 
 
 @pytest.mark.asyncio
-async def test_pure_stock_sovereign_gate_returns_suppressed_decision(db_conn):
+async def test_pure_stock_sovereign_gate_returns_suppressed_decision(db_conn: Any):  # type: ignore
     user_id = 48
     symbol = "TSM"
     order_id = add_active_order(
@@ -277,7 +278,7 @@ async def test_pure_stock_sovereign_gate_returns_suppressed_decision(db_conn):
 
 
 @pytest.mark.asyncio
-async def test_uoa_macro_alignment_triggers_defensive_suppression(db_conn):
+async def test_uoa_macro_alignment_triggers_defensive_suppression(db_conn: Any):  # type: ignore
     user_id = 49
     symbol = "TSM"
     order_id = add_active_order(

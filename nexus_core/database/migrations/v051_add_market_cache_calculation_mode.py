@@ -1,3 +1,5 @@
+from typing import Any
+
 version = 51
 description = (
     "Add calculation_mode, is_degraded, and circuit_breaker_triggered to market_cache"
@@ -5,7 +7,7 @@ description = (
 sql = "SELECT 1;"  # Placeholder SQL to satisfy database core runner, actual migration done in migrate_data
 
 
-def migrate_data(conn):
+def migrate_data(conn: Any):  # type: ignore
     cursor = conn.cursor()
     columns_to_add = [
         ("calculation_mode", "TEXT DEFAULT 'OI'"),

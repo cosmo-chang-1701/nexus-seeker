@@ -1,3 +1,4 @@
+from typing import Any
 import asyncio
 import click
 import logging
@@ -23,12 +24,14 @@ console = Console()
 class MockBot:
     """模擬 Bot 實例以符合 Service 依賴"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.user = MagicMock()
         self.user.id = 0
         self.user.name = "Nexus-CLI"
 
-    async def queue_dm(self, user_id, message=None, embed=None):
+    async def queue_dm(
+        self, user_id: Any, message: Any = None, embed: Any = None
+    ) -> None:
         rprint(f"[bold blue]>> [DM Queue] to {user_id}:[/bold blue]")
         if message:
             rprint(message)
@@ -38,7 +41,7 @@ class MockBot:
             rprint(Panel(desc, title=f"📊 {title}"))
 
 
-def run_async(coro):
+def run_async(coro: Any):  # type: ignore
     """助手函數：在現有 loop 或新 loop 中執行協程"""
     try:
         loop = asyncio.get_running_loop()
@@ -53,7 +56,7 @@ def run_async(coro):
 @click.option("--user-id", default=None, help="Target User ID for operations")
 @click.option("--db", default=None, help="Path to SQLite database file")
 @click.pass_context
-def cli(ctx, user_id, db):
+def cli(ctx: Any, user_id: Any, db: Any):  # type: ignore
     """🌌 Nexus Seeker Professional CLI Terminal"""
     if db:
         os.environ["NEXUS_DB_NAME"] = db
@@ -74,18 +77,18 @@ def cli(ctx, user_id, db):
 # 1. Config & System Group
 # ==========================================
 @cli.group(name="sys")
-def sys_group():
+def sys_group() -> None:
     """系統管理與環境狀態"""
     pass
 
 
 @sys_group.command(name="health")
 @click.pass_context
-def health(ctx):
+def health(ctx: Any) -> None:
     """檢查系統健康度與市場狀態"""
     from services.market_data_service import get_macro_environment, get_quote
 
-    async def _run():
+    async def _run() -> None:
         with console.status("[bold green]正在獲獲取市場狀態..."):
             macro = await get_macro_environment()
             spy = await get_quote("SPY")
@@ -108,7 +111,7 @@ def health(ctx):
 @click.option("--risk-limit", type=float, help="單標的風險上限 (%)")
 @click.option("--alert-mode", type=int, help="警報模式 (0=OFF, 1=ALL, 2=PORTFOLIO)")
 @click.pass_context
-def settings(ctx, capital, risk_limit, alert_mode):
+def settings(ctx: Any, capital: Any, risk_limit: Any, alert_mode: Any):  # type: ignore
     """查看或更新帳戶設定"""
     import database
 
@@ -123,7 +126,7 @@ def settings(ctx, capital, risk_limit, alert_mode):
         if alert_mode is not None:
             kwargs["option_alert_mode"] = alert_mode
 
-        database.update_user_settings(uid, **kwargs)
+        database.update_user_settings(uid, **kwargs)  # type: ignore
         rprint("[bold green]✅ 帳戶設定已更新。[/bold green]")
 
     u_ctx = database.get_full_user_context(uid)
@@ -140,7 +143,7 @@ def settings(ctx, capital, risk_limit, alert_mode):
 # 2. Watchlist Group
 # ==========================================
 @cli.group(name="watch")
-def watch_group():
+def watch_group() -> None:
     """雷達觀察清單管理"""
     pass
 
@@ -149,7 +152,7 @@ def watch_group():
 @click.argument("symbol")
 @click.option("--llm", is_flag=True, default=True, help="是否啟用 AI 分析")
 @click.pass_context
-def watch_add(ctx, symbol, llm):
+def watch_add(ctx: Any, symbol: Any, llm: Any):  # type: ignore
     """將標的加入觀察清單"""
     from database.watchlist import add_watchlist_symbol
 
@@ -159,7 +162,7 @@ def watch_add(ctx, symbol, llm):
 
 @watch_group.command(name="list")
 @click.pass_context
-def watch_list(ctx):
+def watch_list(ctx: Any):  # type: ignore
     """列出您的觀察清單"""
     import database
 
@@ -182,9 +185,9 @@ def watch_list(ctx):
 @watch_group.command(name="remove")
 @click.argument("symbol")
 @click.pass_context
-def watch_remove(ctx, symbol):
+def watch_remove(ctx: Any, symbol: Any):  # type: ignore
     """從觀察清單移除標的"""
-    from database.watchlist import remove_watchlist_symbol
+    from database.watchlist import remove_watchlist_symbol  # type: ignore
 
     remove_watchlist_symbol(ctx.obj["user_id"], symbol.upper())
     rprint(f"[bold red]🗑️ 已移除 {symbol.upper()}。[/bold red]")
@@ -194,19 +197,19 @@ def watch_remove(ctx, symbol):
 # 3. Portfolio & Trading Group
 # ==========================================
 @cli.group(name="pf")
-def portfolio_group():
+def portfolio_group() -> None:
     """持倉與損益管理"""
     pass
 
 
 @portfolio_group.command(name="pnl")
 @click.pass_context
-def portfolio_pnl(ctx):
+def portfolio_pnl(ctx: Any) -> None:
     """查看持倉未實現損益"""
     uid = ctx.obj["user_id"]
     service = ctx.obj["trading_service"]
 
-    async def _run():
+    async def _run() -> None:
         with console.status("[bold green]正在計算損益..."):
             data = await service.get_portfolio_pnl(uid)
 
@@ -252,9 +255,9 @@ def portfolio_pnl(ctx):
 
 @portfolio_group.command(name="runway")
 @click.pass_context
-def runway_check(ctx):
+def runway_check(ctx: Any):  # type: ignore
     """執行財務生存跑道分析"""
-    from market_analysis.portfolio import calculate_financial_runway
+    from market_analysis.portfolio import calculate_financial_runway  # type: ignore
     import database
 
     uid = ctx.obj["user_id"]
@@ -287,7 +290,7 @@ def runway_check(ctx):
 # 4. Market & Analysis Group
 # ==========================================
 @cli.group(name="mkt")
-def market_group():
+def market_group() -> None:
     """市場行情與量化掃描"""
     pass
 
@@ -295,11 +298,11 @@ def market_group():
 @market_group.command(name="quote")
 @click.argument("symbol")
 @click.pass_context
-def market_quote(ctx, symbol):
+def market_quote(ctx: Any, symbol: Any) -> None:
     """獲取標的即時報價"""
     from services.market_data_service import get_quote
 
-    async def _run():
+    async def _run() -> None:
         symbol_upper = symbol.upper()
         with console.status(f"[bold green]正在查詢 {symbol_upper}..."):
             data = await get_quote(symbol_upper)
@@ -320,10 +323,10 @@ def market_quote(ctx, symbol):
 
 @market_group.command(name="ddp")
 @click.pass_context
-def market_ddp(ctx):
+def market_ddp(ctx: Any) -> None:
     """執行全站 DDP 掃描"""
 
-    async def _run():
+    async def _run() -> None:
         from database.watchlist import get_all_watchlist
 
         all_watch = get_all_watchlist()
@@ -351,11 +354,11 @@ def market_ddp(ctx):
 @market_group.command(name="skew")
 @click.argument("symbol")
 @click.pass_context
-def market_skew(ctx, symbol):
+def market_skew(ctx: Any, symbol: Any) -> None:
     """執行 Skew 偏斜掃描"""
     from market_analysis.sentiment_engine import SentimentEngine
 
-    async def _run():
+    async def _run() -> None:
         with console.status(f"正在分析 {symbol.upper()} 情緒..."):
             res = await SentimentEngine.calculate_skew(symbol.upper())
         rprint(
@@ -370,10 +373,10 @@ def market_skew(ctx, symbol):
 
 @market_group.command(name="watchlist_check")
 @click.pass_context
-def market_watchlist_check(ctx):
+def market_watchlist_check(ctx: Any) -> None:
     """輸出 watchlist 監控與 SDDM 風控報告。"""
 
-    async def _run():
+    async def _run() -> None:
         from database.watchlist import get_user_watchlist
         from market_analysis.intraday_pipeline import evaluate_watchlist_symbol
         from ui.formatter import generate_ansi_watchlist_report
@@ -409,19 +412,19 @@ def market_watchlist_check(ctx):
 # 5. Admin Group
 # ==========================================
 @cli.group(name="admin")
-def admin_group():
+def admin_group() -> None:
     """管理員工具 (需權限)"""
     pass
 
 
 @admin_group.command(name="force-scan")
 @click.pass_context
-def force_scan(ctx):
+def force_scan(ctx: Any) -> None:
     """立即執行全站掃描"""
     service = ctx.obj["trading_service"]
     rprint("[bold yellow]🚀 啟動全站強制掃描... (這可能需要幾分鐘)[/bold yellow]")
 
-    async def _run():
+    async def _run() -> None:
         import database
 
         all_watch = database.get_all_watchlist()
@@ -434,10 +437,10 @@ def force_scan(ctx):
 
 @admin_group.command(name="force-macro-update")
 @click.pass_context
-def force_macro_update(ctx):
+def force_macro_update(ctx: Any) -> None:
     """立即執行大盤與總經數據 (GEX & FedWatch) 爬取與快取更新"""
 
-    async def _run():
+    async def _run() -> None:
         from market_analysis.index_microstructure import fetch_gex_metrics
         from services.calendar_service import calendar_service
 

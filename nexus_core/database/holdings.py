@@ -1,3 +1,4 @@
+from typing import Any
 import sqlite3
 import json
 import config
@@ -52,7 +53,7 @@ def add_holding(user_id: int, symbol: str, quantity: float, avg_cost: float) -> 
         conn.close()
 
 
-def get_user_holdings(user_id: int):
+def get_user_holdings(user_id: int) -> Any:
     """取得特定使用者的所有現貨持倉"""
     conn = sqlite3.connect(config.DB_NAME)
     conn.row_factory = sqlite3.Row
@@ -91,7 +92,7 @@ def delete_holding(user_id: int, symbol: str) -> bool:
         conn.close()
 
 
-def get_all_holdings():
+def get_all_holdings() -> Any:
     """取得全站所有現貨持倉 (供背景任務使用)"""
     conn = sqlite3.connect(config.DB_NAME)
     conn.row_factory = sqlite3.Row
@@ -112,7 +113,7 @@ def get_all_holdings():
         conn.close()
 
 
-def update_holding_greeks(holding_id: int, weighted_delta: float):
+def update_holding_greeks(holding_id: int, weighted_delta: float) -> Any:
     """更新現貨持倉的加權 Delta"""
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()

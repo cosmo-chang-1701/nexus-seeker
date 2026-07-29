@@ -41,7 +41,7 @@ from cogs.embed_builder import (
 from models.schemas import WatchlistOptionLeg, WatchlistOptionPlan
 
 
-def test_create_holdings_embed():
+def test_create_holdings_embed() -> None:
     holdings_data = [
         {
             "symbol": "AAPL",
@@ -55,13 +55,13 @@ def test_create_holdings_embed():
 
     # Extract lines in code block
     desc_field = embed.fields[0].value
-    assert "標的" in desc_field
-    assert "現價" in desc_field
-    assert "AAPL" in desc_field
-    assert "$160.00" in desc_field
+    assert "標的" in desc_field  # type: ignore
+    assert "現價" in desc_field  # type: ignore
+    assert "AAPL" in desc_field  # type: ignore
+    assert "$160.00" in desc_field  # type: ignore
 
 
-def test_create_trades_embed():
+def test_create_trades_embed() -> None:
     pnl_data = {
         "trades": [
             {
@@ -95,13 +95,16 @@ def test_create_trades_embed():
     assert embed.title == "📊 Nexus Seeker | 實單持倉清單 (包含帳面損益)"
 
     desc_field = embed.fields[0].value
-    assert "數量" in desc_field
-    assert "現價" in desc_field
-    assert "  6.50" in desc_field  # Visual formatting check
-    assert "  -1" in desc_field  # Visual formatting check for negative quantity
+    assert desc_field is not None
+    assert "數量" in desc_field  # type: ignore
+    assert "現價" in desc_field  # type: ignore
+    assert "  6.50" in desc_field  # Visual formatting check  # type: ignore
+    assert (
+        "  -1" in desc_field
+    )  # Visual formatting check for negative quantity  # type: ignore
 
 
-def test_create_portfolio_report_embed():
+def test_create_portfolio_report_embed() -> None:
     report_lines = [
         "🔹 **AAPL** ｜ `2026-06-19` ｜ `$150.0` **CALL**\n├─ 💰 成本: `$5.00` ｜ 📈 現價: `$6.50`\n├─ 🟢 損益: **+30.00%**\n├─ ⏳ DTE: `29` 天 ｜ 秤⚖️ SPY Δ: `+32.50`\n└─ 🎯 動作: HOLD",
         "🌐 【宏觀風險與資金水位報告】",
@@ -130,7 +133,7 @@ def test_create_portfolio_report_embed():
     assert "+30.00%" in positions_value
 
 
-def test_create_earnings_report_embed():
+def test_create_earnings_report_embed() -> None:
     embed = create_earnings_report_embed(
         "[08:30 UTC+8] 盤前財報與估值調整",
         "1. **📌 核心觀察**\nMU 與 NVDA 進入財報前壓縮區。\n"
@@ -154,13 +157,13 @@ def test_create_earnings_report_embed():
     assert embed.title == "📊 Nexus Seeker 盤前財報與估值調整"
     assert "更新批次" in (embed.description or "")
     assert embed.fields[0].name == "📅 即將發布財報標的"
-    assert "MU" in embed.fields[0].value
+    assert "MU" in embed.fields[0].value  # type: ignore
     assert embed.fields[1].name == "🧠 情緒 / 估值快照"
-    assert "HBM" in embed.fields[1].value
+    assert "HBM" in embed.fields[1].value  # type: ignore
     assert any(field.name == "📌 核心觀察" for field in embed.fields)
 
 
-def test_create_sector_flow_report_embed():
+def test_create_sector_flow_report_embed() -> None:
     embed = create_sector_flow_report_embed(
         "[04:15 UTC+8] 收盤資金流向與板塊輪動報告",
         "1. **🔄 板塊主線**\n科技與金融為今日主導。\n"
@@ -195,13 +198,13 @@ def test_create_sector_flow_report_embed():
     assert embed.title == "📊 Nexus Seeker 收盤資金流向與板塊輪動報告"
     assert "SPY 現價" in (embed.description or "")
     assert embed.fields[0].name == "🌐 收盤市場快照"
-    assert "Ready" in embed.fields[0].value
+    assert "Ready" in embed.fields[0].value  # type: ignore
     assert embed.fields[1].name == "🔄 板塊輪動快照"
-    assert "XLK" in embed.fields[1].value
+    assert "XLK" in embed.fields[1].value  # type: ignore
     assert any(field.name == "🔄 板塊主線" for field in embed.fields)
 
 
-def test_split_embed_by_fields_creates_one_message_per_block():
+def test_split_embed_by_fields_creates_one_message_per_block() -> None:
     embed = create_sector_flow_report_embed(
         "[04:15 UTC+8] 收盤資金流向與板塊輪動報告",
         "1. **🔄 板塊主線**\n科技與金融為今日主導。\n"
@@ -231,21 +234,21 @@ def test_split_embed_by_fields_creates_one_message_per_block():
     assert split_embeds[0].description
     assert split_embeds[1].description is None
     assert split_embeds[0].fields[0].name == embed.fields[0].name
-    assert split_embeds[-1].title.endswith(f"({len(embed.fields)}/{len(embed.fields)})")
+    assert split_embeds[-1].title.endswith(f"({len(embed.fields)}/{len(embed.fields)})")  # type: ignore
 
 
-def test_build_vtr_stats_embed():
+def test_build_vtr_stats_embed() -> None:
     stats = {"win_rate": 65, "total_trades": 12, "total_pnl": 1500.0, "avg_pnl": 125.0}
     embed = build_vtr_stats_embed("TestUser", stats, ["對沖效能極佳"])
-    assert "VTR" in embed.title and "績效總結" in embed.title
-    assert "績效指標" in embed.fields[0].value
-    assert "總結算次數" in embed.fields[0].value
-    assert "12" in embed.fields[0].value
-    assert "勝率" in embed.fields[0].value
-    assert "65%" in embed.fields[0].value
+    assert "VTR" in embed.title and "績效總結" in embed.title  # type: ignore
+    assert "績效指標" in embed.fields[0].value  # type: ignore
+    assert "總結算次數" in embed.fields[0].value  # type: ignore
+    assert "12" in embed.fields[0].value  # type: ignore
+    assert "勝率" in embed.fields[0].value  # type: ignore
+    assert "65%" in embed.fields[0].value  # type: ignore
 
 
-def test_build_scan_report():
+def test_build_scan_report() -> None:
     result = {
         "symbol": "AAPL",
         "strategy": "Bull Put Spread",
@@ -279,7 +282,7 @@ def test_build_scan_report():
     assert "+8.5%" in nro_val
 
 
-def test_create_ddp_embed():
+def test_create_ddp_embed() -> None:
     report = {
         "symbol": "AAPL",
         "current_pe": 18.5,
@@ -290,17 +293,17 @@ def test_create_ddp_embed():
         "forward_pe": 16.0,
     }
     embed = create_ddp_embed(report)
-    assert "戴維斯雙擊預警: AAPL" in embed.title
+    assert "戴維斯雙擊預警: AAPL" in embed.title  # type: ignore
 
     ddp_val = embed.fields[0].value
-    assert "DDP 量化指標" in ddp_val
-    assert "目前本益比 (TTM P/E)" in ddp_val
-    assert "18.50" in ddp_val
-    assert "+29.7%" in ddp_val
-    assert "85/100" in ddp_val
+    assert "DDP 量化指標" in ddp_val  # type: ignore
+    assert "目前本益比 (TTM P/E)" in ddp_val  # type: ignore
+    assert "18.50" in ddp_val  # type: ignore
+    assert "+29.7%" in ddp_val  # type: ignore
+    assert "85/100" in ddp_val  # type: ignore
 
 
-def test_create_volatility_embed():
+def test_create_volatility_embed() -> None:
     report = {
         "symbol": "AAPL",
         "price": 175.0,
@@ -316,45 +319,45 @@ def test_create_volatility_embed():
         "runway_impact": 2,
     }
     embed = create_volatility_embed(report)
-    assert "波動率優勢偵測" in embed.title
+    assert "波動率優勢偵測" in embed.title  # type: ignore
 
     eval_val = embed.fields[0].value
-    assert "評估指標" in eval_val
-    assert "當前價格 (Price)" in eval_val
-    assert "$175.00" in eval_val
+    assert "評估指標" in eval_val  # type: ignore
+    assert "當前價格 (Price)" in eval_val  # type: ignore
+    assert "$175.00" in eval_val  # type: ignore
 
     catalyst_val = embed.fields[1].value
-    assert "建議策略 (Strategy)" in catalyst_val
-    assert "Long Call" in catalyst_val
+    assert "建議策略 (Strategy)" in catalyst_val  # type: ignore
+    assert "Long Call" in catalyst_val  # type: ignore
 
     nro_val = embed.fields[2].value
-    assert "風控指標" in nro_val
-    assert "建議停損 (Stop Loss)" in nro_val
-    assert "$160.00" in nro_val
+    assert "風控指標" in nro_val  # type: ignore
+    assert "建議停損 (Stop Loss)" in nro_val  # type: ignore
+    assert "$160.00" in nro_val  # type: ignore
 
 
-def test_create_hedge_settlement_embed():
+def test_create_hedge_settlement_embed() -> None:
     embed = create_hedge_settlement_embed(12, "SPY", 8)
     assert embed.title == "✅ 對沖結算完成"
-    assert "#12" in embed.description
+    assert "#12" in embed.description  # type: ignore
     assert embed.fields[0].value == "`SPY`"
     assert embed.fields[1].value == "`8`"
 
 
-def test_create_hedge_list_embed():
+def test_create_hedge_list_embed() -> None:
     rows = [
         (1, 22.5, 8, "PENDING", "2026-05-21 10:00:00"),
         (2, 18.0, 5, "EXECUTED", "2026-05-20 09:00:00"),
     ]
     embed = create_hedge_list_embed(rows)
     assert embed.title == "📜 最近對沖警報列表"
-    assert "#1" in embed.description
-    assert "22.50" in embed.description
-    assert "⏳" in embed.description
-    assert "✅" in embed.description
+    assert "#1" in embed.description  # type: ignore
+    assert "22.50" in embed.description  # type: ignore
+    assert "⏳" in embed.description  # type: ignore
+    assert "✅" in embed.description  # type: ignore
 
 
-def test_create_hedge_alert_embed():
+def test_create_hedge_alert_embed() -> None:
     embed = create_hedge_alert_embed(
         vix=24.5,
         stage_move=2,
@@ -379,13 +382,13 @@ def test_create_hedge_alert_embed():
         ],
     )
     assert embed.title == "🚨 【戰位報告：自動化對沖警報】"
-    assert "Aggressive" in embed.description
-    assert "140.0" in embed.fields[0].value
-    assert "SPY" in embed.fields[3].value
+    assert "Aggressive" in embed.description  # type: ignore
+    assert "140.0" in embed.fields[0].value  # type: ignore
+    assert "SPY" in embed.fields[3].value  # type: ignore
     assert embed.footer.text == "🌌 Nexus Seeker • Battle Station | Alert ID: 7"
 
 
-def test_create_proactive_event_alert_embed():
+def test_create_proactive_event_alert_embed() -> None:
     events = [
         {
             "name": "🔴 經濟數據: CPI",
@@ -405,10 +408,10 @@ def test_create_proactive_event_alert_embed():
     embed = embeds[0]
     assert embed.title == "🛡️ 【 預警：重大事件即時防護 】"
     assert len(embed.fields) == 2
-    assert "CPI" in embed.fields[0].name
-    assert "AAPL" in embed.fields[1].name
-    assert "持倉風險狀態" in embed.fields[0].value
-    assert "NRO 指令" in embed.fields[1].value
+    assert "CPI" in embed.fields[0].name  # type: ignore
+    assert "AAPL" in embed.fields[1].name  # type: ignore
+    assert "持倉風險狀態" in embed.fields[0].value  # type: ignore
+    assert "NRO 指令" in embed.fields[1].value  # type: ignore
 
     # 3. Test pagination (30 events)
     many_events = []
@@ -424,10 +427,10 @@ def test_create_proactive_event_alert_embed():
     embeds_many = create_proactive_event_alert_embed(many_events)
     assert len(embeds_many) > 1
     assert sum(len(e.fields) for e in embeds_many) == 30
-    assert " (1/" in embeds_many[0].title
+    assert " (1/" in embeds_many[0].title  # type: ignore
 
 
-def test_create_watchlist_signal_embed():
+def test_create_watchlist_signal_embed() -> None:
     option_plan = WatchlistOptionPlan(
         strategy_name="Bull Put Spread",
         premium_type="credit",
@@ -474,19 +477,19 @@ def test_create_watchlist_signal_embed():
     assert (
         embed.title == "標的分析中心 2.0: NVDA 每半小時戰場心跳 [數據未更新/降級模式]"
     )
-    assert "當前現價 (Current Price)" in embed.description
-    assert "物理籌碼牆與邊緣偵測 (Market Footprints)" in embed.description
-    assert "隱含波動率與預期空間 (IV Context)" in embed.description
-    assert "結算與目標 (Target Lock)" in embed.description
-    assert "異常活動穿透 (Directional UOA - Bid/Ask Track)" in embed.description
+    assert "當前現價 (Current Price)" in embed.description  # type: ignore
+    assert "物理籌碼牆與邊緣偵測 (Market Footprints)" in embed.description  # type: ignore
+    assert "隱含波動率與預期空間 (IV Context)" in embed.description  # type: ignore
+    assert "結算與目標 (Target Lock)" in embed.description  # type: ignore
+    assert "異常活動穿透 (Directional UOA - Bid/Ask Track)" in embed.description  # type: ignore
     assert (
-        "既有現貨持倉: 120 股 ｜ 平均成本: $150.00 ｜ 當前損益: +10.00%"
+        "既有現貨持倉: 120 股 ｜ 平均成本: $150.00 ｜ 當前損益: +10.00%"  # type: ignore
         in embed.description
     )
-    assert "操盤執行指南: 可先以 Bull Put Spread 佈局。" in embed.description
+    assert "操盤執行指南: 可先以 Bull Put Spread 佈局。" in embed.description  # type: ignore
 
 
-def test_create_watchlist_signal_embed_covered_call():
+def test_create_watchlist_signal_embed_covered_call() -> None:
     option_plan = WatchlistOptionPlan(
         strategy_name="Covered Call",
         premium_type="credit",
@@ -527,13 +530,13 @@ def test_create_watchlist_signal_embed_covered_call():
         embed.title == "標的分析中心 2.0: INTC 每半小時戰場心跳 [數據未更新/降級模式]"
     )
     assert (
-        "既有現貨持倉: 100 股 ｜ 平均成本: $113.50 ｜ 當前損益: -3.97%"
+        "既有現貨持倉: 100 股 ｜ 平均成本: $113.50 ｜ 當前損益: -3.97%"  # type: ignore
         in embed.description
     )
-    assert "操盤執行指南: Covered Call 鎖利。" in embed.description
+    assert "操盤執行指南: Covered Call 鎖利。" in embed.description  # type: ignore
 
 
-def test_create_watchlist_overview_embed():
+def test_create_watchlist_overview_embed() -> None:
     embed = create_watchlist_overview_embed(
         [
             {
@@ -542,7 +545,7 @@ def test_create_watchlist_overview_embed():
                 "skew_state": "+6.20% ｜ ⚠️ 預警性對沖 (Put 昂貴)",
                 "scenario": "premium-harvest",
                 "event_risk_summary": "CPI 倒數 12.0 小時 ｜ 先縮口數，優先定義風險的 Debit Spread / 保護性部位。",
-                "holding_pnl_pct": 0.15,
+                "holding_pnl_pct": 0.15,  # type: ignore
             },
             {
                 "symbol": "AAPL",
@@ -558,29 +561,29 @@ def test_create_watchlist_overview_embed():
     assert embed.title == "🧭 本輪 Watchlist 總覽"
     assert "追蹤標的" in (embed.description or "")
     assert embed.fields[0].name == "🎯 本輪焦點"
-    assert "NVDA" in embed.fields[0].value
-    assert "權利金佈局" in embed.fields[0].value
-    assert "現貨損益" in embed.fields[0].value
-    assert "+15.00%" in embed.fields[0].value
+    assert "NVDA" in embed.fields[0].value  # type: ignore
+    assert "權利金佈局" in embed.fields[0].value  # type: ignore
+    assert "現貨損益" in embed.fields[0].value  # type: ignore
+    assert "+15.00%" in embed.fields[0].value  # type: ignore
     assert embed.fields[1].name == "📋 全標的速覽"
-    assert "AAPL" in embed.fields[1].value
-    assert "觀望待機" in embed.fields[1].value
-    assert "NVDA" in embed.fields[1].value
-    assert "+15.00%" in embed.fields[1].value
+    assert "AAPL" in embed.fields[1].value  # type: ignore
+    assert "觀望待機" in embed.fields[1].value  # type: ignore
+    assert "NVDA" in embed.fields[1].value  # type: ignore
+    assert "+15.00%" in embed.fields[1].value  # type: ignore
     assert embed.fields[2].name == "🤖 LLM 本輪摘要"
-    assert "NVDA" in embed.fields[2].value
+    assert "NVDA" in embed.fields[2].value  # type: ignore
 
 
-def test_create_memory_alert_embed():
+def test_create_memory_alert_embed() -> None:
     embed = create_memory_alert_embed(91.2, 512.4, 120, 87)
     assert embed.title == "🆘 【系統緊急警報：記憶體不足】"
-    assert "91.2%" in embed.description
+    assert "91.2%" in embed.description  # type: ignore
     assert embed.fields[0].value == "`91.2%`"
     assert embed.fields[1].value == "`512.4 MB`"
     assert embed.fields[2].value == "SMA/EMA: `120/87` 筆"
 
 
-def test_create_polymarket_whale_alert_embed():
+def test_create_polymarket_whale_alert_embed() -> None:
     embed = create_polymarket_whale_alert_embed(
         intent_emoji="🟢",
         intent_label="強力看多",
@@ -606,14 +609,14 @@ def test_create_polymarket_whale_alert_embed():
             },
         },
     )
-    assert "高信心訊號" in embed.title
-    assert "Will NVDA beat earnings?" in embed.description
-    assert "方向性押注" in embed.description
-    assert "預測性對沖建議" in embed.description
-    assert "nvda-earnings" in embed.description
+    assert "高信心訊號" in embed.title  # type: ignore
+    assert "Will NVDA beat earnings?" in embed.description  # type: ignore
+    assert "方向性押注" in embed.description  # type: ignore
+    assert "預測性對沖建議" in embed.description  # type: ignore
+    assert "nvda-earnings" in embed.description  # type: ignore
 
 
-def test_create_polymarket_status_embed():
+def test_create_polymarket_status_embed() -> None:
     embed = create_polymarket_status_embed(
         {
             "connected": True,
@@ -623,23 +626,23 @@ def test_create_polymarket_status_embed():
             "errors": 1,
         }
     )
-    assert "Polymarket 服務狀態" in embed.title
-    assert "✅ 運行中" in embed.description
-    assert "`42`" in embed.description
+    assert "Polymarket 服務狀態" in embed.title  # type: ignore
+    assert "✅ 運行中" in embed.description  # type: ignore
+    assert "`42`" in embed.description  # type: ignore
 
 
-def test_create_quote_embed():
+def test_create_quote_embed() -> None:
     embed = create_quote_embed(
         "AAPL",
         {"c": 150.0, "dp": 1.3, "h": 155.0, "l": 145.0, "pc": 148.0},
     )
-    assert "AAPL" in embed.title
+    assert "AAPL" in embed.title  # type: ignore
     assert embed.fields[0].value == "**$150.0**"
     assert embed.fields[1].value == "`1.3%`"
-    assert "155.0" in embed.fields[2].value
+    assert "155.0" in embed.fields[2].value  # type: ignore
 
 
-def test_create_max_pain_embed_with_guidance():
+def test_create_max_pain_embed_with_guidance() -> None:
     embed = create_max_pain_embed(
         "TSLA",
         {
@@ -650,11 +653,11 @@ def test_create_max_pain_embed_with_guidance():
             "is_converging": True,
         },
     )
-    assert "TSLA" in embed.title
+    assert "TSLA" in embed.title  # type: ignore
     assert "收斂中" in (embed.description or "")
 
 
-def test_create_max_pain_embed_with_short_dte_guidance():
+def test_create_max_pain_embed_with_short_dte_guidance() -> None:
     near_expiry = datetime.now().strftime("%Y-%m-%d")
     embed = create_max_pain_embed(
         "SPY",
@@ -669,7 +672,7 @@ def test_create_max_pain_embed_with_short_dte_guidance():
     assert any(field.name == "🚀 執行建議" for field in embed.fields)
 
 
-def test_create_system_health_embed():
+def test_create_system_health_embed() -> None:
     embed = create_system_health_embed(
         memory_percent=96.0,
         memory_available_mb=256.0,
@@ -683,19 +686,19 @@ def test_create_system_health_embed():
         orderbook_size=5,
     )
     assert embed.title == "🖥️ Nexus Seeker 系統健康診斷"
-    assert "120/87" in embed.fields[4].value
-    assert "🆘 **極度危險**" in embed.fields[5].value
+    assert "120/87" in embed.fields[4].value  # type: ignore
+    assert "🆘 **極度危險**" in embed.fields[5].value  # type: ignore
 
 
-def test_create_asset_promotion_embed():
+def test_create_asset_promotion_embed() -> None:
     embed = create_asset_promotion_embed("AAPL", "2026-06-19", 150.0, "call", 2, 5.5)
     assert embed.title == "🌌 Nexus | 資產晉升成功"
-    assert "AAPL" in embed.description
-    assert "2026-06-19" in embed.fields[0].value
-    assert "CALL" in embed.fields[0].value
+    assert "AAPL" in embed.description  # type: ignore
+    assert "2026-06-19" in embed.fields[0].value  # type: ignore
+    assert "CALL" in embed.fields[0].value  # type: ignore
 
 
-def test_create_transition_simulation_embed():
+def test_create_transition_simulation_embed() -> None:
     embed = create_transition_simulation_embed(
         symbol="NVDA",
         current_price=100.0,
@@ -707,29 +710,29 @@ def test_create_transition_simulation_embed():
         projected_aroc=18.0,
         capital_efficiency_gain=2.7,
     )
-    assert "NVDA" in embed.title
-    assert "$100.00" in embed.fields[0].value
-    assert "7,500.00" in embed.fields[2].value
-    assert "符合 15% 門檻" in embed.fields[3].value
+    assert "NVDA" in embed.title  # type: ignore
+    assert "$100.00" in embed.fields[0].value  # type: ignore
+    assert "7,500.00" in embed.fields[2].value  # type: ignore
+    assert "符合 15% 門檻" in embed.fields[3].value  # type: ignore
 
 
-def test_create_profit_lock_alert_embed():
+def test_create_profit_lock_alert_embed() -> None:
     embed = create_profit_lock_alert_embed(
         {"symbol": "AAPL", "pnl_pct": 180, "dte": 5, "reason": "Delta 已接近 1.0"}
     )
-    assert "獲利鎖定" in embed.title
-    assert "AAPL" in embed.description
-    assert "180%" in embed.fields[0].value
+    assert "獲利鎖定" in embed.title  # type: ignore
+    assert "AAPL" in embed.description  # type: ignore
+    assert "180%" in embed.fields[0].value  # type: ignore
 
 
-def test_create_gamma_fragility_embed():
+def test_create_gamma_fragility_embed() -> None:
     embed = create_gamma_fragility_embed({"net_gamma": -25.5, "threshold": -20})
-    assert "Gamma 脆弱性警告" in embed.title
+    assert "Gamma 脆弱性警告" in embed.title  # type: ignore
     assert "`-25.5`" == embed.fields[0].value
     assert "`-20`" == embed.fields[1].value
 
 
-def test_create_pre_market_earnings_embed_with_alerts():
+def test_create_pre_market_earnings_embed_with_alerts() -> None:
     embed = create_pre_market_earnings_embed(
         [
             {
@@ -742,17 +745,17 @@ def test_create_pre_market_earnings_embed_with_alerts():
         ["NVDA"],
         14,
     )
-    assert "盤前財報季雷達預警" in embed.title
-    assert "NVDA" in embed.description
+    assert "盤前財報季雷達預警" in embed.title  # type: ignore
+    assert "NVDA" in embed.description  # type: ignore
 
 
-def test_create_pre_market_earnings_embed_without_alerts():
+def test_create_pre_market_earnings_embed_without_alerts() -> None:
     embed = create_pre_market_earnings_embed([], ["AAPL", "MSFT"], 14)
-    assert "盤前財報季雷達掃描完畢" in embed.title
-    assert "`AAPL`" in embed.description
+    assert "盤前財報季雷達掃描完畢" in embed.title  # type: ignore
+    assert "`AAPL`" in embed.description  # type: ignore
 
 
-def test_create_ditm_transition_alert_embed():
+def test_create_ditm_transition_alert_embed() -> None:
     embed = create_ditm_transition_alert_embed(
         symbol="TSLA",
         exit_reason="Delta 接近 1.0",
@@ -761,13 +764,13 @@ def test_create_ditm_transition_alert_embed():
         exposure_pct=12.5,
         hedge={"action": "賣出 10 股 SPY", "gap": 10},
     )
-    assert "DITM 凸性防禦" in embed.title
-    assert "TSLA" in embed.description
-    assert "12.50%" in embed.fields[3].value
-    assert "賣出 10 股 SPY" in embed.fields[4].value
+    assert "DITM 凸性防禦" in embed.title  # type: ignore
+    assert "TSLA" in embed.description  # type: ignore
+    assert "12.50%" in embed.fields[3].value  # type: ignore
+    assert "賣出 10 股 SPY" in embed.fields[4].value  # type: ignore
 
 
-def test_create_intraday_execution_guide_embed():
+def test_create_intraday_execution_guide_embed() -> None:
     embed = create_intraday_execution_guide_embed(
         phase_name="Phase B",
         vix=18.5,
@@ -781,26 +784,26 @@ def test_create_intraday_execution_guide_embed():
         sma_cache_size=12,
         ema_cache_size=8,
     )
-    assert "Phase B" in embed.title
-    assert "Ready" in embed.fields[0].value
-    assert "365.0" in embed.fields[1].value
-    assert "板塊輪動" in embed.fields[2].value
-    assert "12/8" in embed.fields[3].value
+    assert "Phase B" in embed.title  # type: ignore
+    assert "Ready" in embed.fields[0].value  # type: ignore
+    assert "365.0" in embed.fields[1].value  # type: ignore
+    assert "板塊輪動" in embed.fields[2].value  # type: ignore
+    assert "12/8" in embed.fields[3].value  # type: ignore
 
 
-def test_create_intraday_execution_guide_embed_memory_gate():
+def test_create_intraday_execution_guide_embed_memory_gate() -> None:
     embed = create_intraday_execution_guide_embed(
         phase_name="Phase A",
         vix=15.0,
         memory_percent=90.0,
         is_memory_gated=True,
     )
-    assert "Phase A" in embed.title
+    assert "Phase A" in embed.title  # type: ignore
     assert "Memory Safety Gate Active" in (embed.description or "")
-    assert "90.0%" in embed.fields[0].value
+    assert "90.0%" in embed.fields[0].value  # type: ignore
 
 
-def test_create_vtr_settlement_notice_embed():
+def test_create_vtr_settlement_notice_embed() -> None:
     embed = create_vtr_settlement_notice_embed(
         status_icon="🔄 [轉倉完成]",
         symbol="TSLA",
@@ -810,13 +813,13 @@ def test_create_vtr_settlement_notice_embed():
         target_delta=12.0,
         hedge={"action": "買入 5 股 SPY", "gap": 5},
     )
-    assert "TSLA" in embed.title
-    assert "`9.50%`" in embed.fields[1].value
-    assert "`Balanced`" in embed.fields[2].value
-    assert "買入 5 股 SPY" in embed.fields[4].value
+    assert "TSLA" in embed.title  # type: ignore
+    assert "`9.50%`" in embed.fields[1].value  # type: ignore
+    assert "`Balanced`" in embed.fields[2].value  # type: ignore
+    assert "買入 5 股 SPY" in embed.fields[4].value  # type: ignore
 
 
-def test_create_holdings_embed_chunking():
+def test_create_holdings_embed_chunking() -> None:
     # Create 30 holdings to force chunking
     holdings_data = []
     for i in range(30):
@@ -830,17 +833,17 @@ def test_create_holdings_embed_chunking():
         )
     embed = create_holdings_embed(holdings_data, total_capital=100000.0)
     # Check that it split into multiple fields
-    holding_fields = [f for f in embed.fields if "持倉明細" in f.name]
+    holding_fields = [f for f in embed.fields if "持倉明細" in f.name]  # type: ignore
     assert len(holding_fields) > 1
-    assert "持倉明細 (1/" in holding_fields[0].name
+    assert "持倉明細 (1/" in holding_fields[0].name  # type: ignore
     for f in holding_fields:
-        assert len(f.value) <= 1024
-        assert "SYM" in f.value
-        assert "```ansi" in f.value
-        assert "```" in f.value
+        assert len(f.value) <= 1024  # type: ignore
+        assert "SYM" in f.value  # type: ignore
+        assert "```ansi" in f.value  # type: ignore
+        assert "```" in f.value  # type: ignore
 
 
-def test_create_trades_embed_chunking():
+def test_create_trades_embed_chunking() -> None:
     # Create 30 trades to force chunking
     trades = []
     for i in range(30):
@@ -863,16 +866,16 @@ def test_create_trades_embed_chunking():
         "total_unrealized_pnl": 1500.0,
     }
     embed = create_trades_embed(pnl_data, total_capital=100000.0)
-    trade_fields = [f for f in embed.fields if "持倉明細" in f.name]
+    trade_fields = [f for f in embed.fields if "持倉明細" in f.name]  # type: ignore
     assert len(trade_fields) > 1
-    assert "持倉明細 (1/" in trade_fields[0].name
+    assert "持倉明細 (1/" in trade_fields[0].name  # type: ignore
     for f in trade_fields:
-        assert len(f.value) <= 1024
-        assert "```ansi" in f.value
-        assert "```" in f.value
+        assert len(f.value) <= 1024  # type: ignore
+        assert "```ansi" in f.value  # type: ignore
+        assert "```" in f.value  # type: ignore
 
 
-def test_create_portfolio_report_embed_chunking():
+def test_create_portfolio_report_embed_chunking() -> None:
     # Create a large number of positions to force chunking in create_portfolio_report_embed
     report_lines = []
     for i in range(30):
@@ -892,12 +895,12 @@ def test_create_portfolio_report_embed_chunking():
         assert "```ansi" not in f.value
 
 
-def test_create_sentiment_scan_embed_premarket():
+def test_create_sentiment_scan_embed_premarket() -> None:
     """Verify that create_sentiment_scan_embed renders correct UI components for pre-market and regular paths."""
     symbol = "AAPL"
     skew_data = {"skew": 2.5, "state": "Bullish"}
     pcr_data = {"pcr": 0.8, "state": "Normal"}
-    uoa_data = []
+    uoa_data = []  # type: ignore
     max_pain_data = {"max_pain": 150.0, "is_converging": True}
 
     # Path A: Pre-market Scan with Complete Failure (current_iv = 0.0, is_premarket = True)
@@ -912,10 +915,10 @@ def test_create_sentiment_scan_embed_premarket():
     embed_degraded = create_sentiment_scan_embed(
         symbol, skew_data, pcr_data, uoa_data, max_pain_data, iv_data_degraded
     )
-    assert "[盤前數據未更新]" in embed_degraded.title
+    assert "[盤前數據未更新]" in embed_degraded.title  # type: ignore
     iv_field_value_degraded = embed_degraded.fields[0].value
-    assert "--%" in iv_field_value_degraded
-    assert "等待開盤" in iv_field_value_degraded
+    assert "--%" in iv_field_value_degraded  # type: ignore
+    assert "等待開盤" in iv_field_value_degraded  # type: ignore
 
     # Path B: Pre-market Scan with Fallback Success (current_iv = 0.45, is_premarket = True)
     iv_data_fallback = {
@@ -929,10 +932,10 @@ def test_create_sentiment_scan_embed_premarket():
     embed_fallback = create_sentiment_scan_embed(
         symbol, skew_data, pcr_data, uoa_data, max_pain_data, iv_data_fallback
     )
-    assert "[盤前/前日收盤]" in embed_fallback.title
+    assert "[盤前/前日收盤]" in embed_fallback.title  # type: ignore
     iv_field_value_fallback = embed_fallback.fields[0].value
-    assert "前日收盤 IV / SQLite 快取" in iv_field_value_fallback
-    assert "45.0%" in iv_field_value_fallback
+    assert "前日收盤 IV / SQLite 快取" in iv_field_value_fallback  # type: ignore
+    assert "45.0%" in iv_field_value_fallback  # type: ignore
 
     # Path C: Regular Scan (is_premarket = False)
     iv_data_regular = {
@@ -946,12 +949,12 @@ def test_create_sentiment_scan_embed_premarket():
     embed_regular = create_sentiment_scan_embed(
         symbol, skew_data, pcr_data, uoa_data, max_pain_data, iv_data_regular
     )
-    assert "[盤前" not in embed_regular.title
+    assert "[盤前" not in embed_regular.title  # type: ignore
     iv_field_value_regular = embed_regular.fields[0].value
-    assert "當前 30 天平值期權隱含波動率" in iv_field_value_regular
+    assert "當前 30 天平值期權隱含波動率" in iv_field_value_regular  # type: ignore
 
 
-def test_create_media_sentiment_embed():
+def test_create_media_sentiment_embed() -> None:
     """Verify that create_media_sentiment_embed renders institutional news and reddit consensus correctly."""
     symbol = "TSLA"
     news_text = "Tesla stock spikes on earnings beat"
@@ -965,13 +968,13 @@ def test_create_media_sentiment_embed():
     assert reddit_text in embed.fields[1].value
 
 
-def test_create_active_orders_embed():
+def test_create_active_orders_embed() -> None:
     """Verify that create_active_orders_embed correctly renders active orders with premium ANSI card formatting."""
     # 1. Test empty state
     embeds_empty = create_active_orders_embed([])
     assert len(embeds_empty) == 1
-    assert "待成交委託單列表" in embeds_empty[0].title
-    assert "目前沒有任何活躍的待成交委託單" in embeds_empty[0].description
+    assert "待成交委託單列表" in embeds_empty[0].title  # type: ignore
+    assert "目前沒有任何活躍的待成交委託單" in embeds_empty[0].description  # type: ignore
 
     # 2. Test populated state
     orders = [
@@ -1001,15 +1004,15 @@ def test_create_active_orders_embed():
     embed = embeds[0]
     assert embed.title == "📋 Nexus Seeker | 待成交委託單列表"
     assert len(embed.fields) == 2
-    assert "委託單 #1" in embed.fields[0].name
-    assert "AAPL" in embed.fields[0].value
-    assert "限價單 (LIMIT)" in embed.fields[0].value
-    assert "175.50" in embed.fields[0].value
+    assert "委託單 #1" in embed.fields[0].name  # type: ignore
+    assert "AAPL" in embed.fields[0].value  # type: ignore
+    assert "限價單 (LIMIT)" in embed.fields[0].value  # type: ignore
+    assert "175.50" in embed.fields[0].value  # type: ignore
 
-    assert "委託單 #2" in embed.fields[1].name
-    assert "TSLA" in embed.fields[1].value
-    assert "停損單 (STOP)" in embed.fields[1].value
-    assert "180.00" in embed.fields[1].value
+    assert "委託單 #2" in embed.fields[1].name  # type: ignore
+    assert "TSLA" in embed.fields[1].value  # type: ignore
+    assert "停損單 (STOP)" in embed.fields[1].value  # type: ignore
+    assert "180.00" in embed.fields[1].value  # type: ignore
 
     # 3. Test pagination (30 orders)
     many_orders = []
@@ -1029,10 +1032,10 @@ def test_create_active_orders_embed():
     embeds_many = create_active_orders_embed(many_orders)
     assert len(embeds_many) > 1
     assert sum(len(e.fields) for e in embeds_many) == 30
-    assert " (1/" in embeds_many[0].title
+    assert " (1/" in embeds_many[0].title  # type: ignore
 
 
-def test_build_radar_scan_embed():
+def test_build_radar_scan_embed() -> None:
     """Verify that build_radar_scan_embed correctly renders batch scan results with premium ANSI card formatting."""
     scan_results = [
         {
@@ -1062,16 +1065,16 @@ def test_build_radar_scan_embed():
     embed = embeds[0]
     assert embed.title == "🌌 交易員終端: 核心 AI 暨持倉批次量化雷達 (ALL)"
     assert (
-        "============================= 核心 AI 暨持倉量化雷達 ============================="
+        "============================= 核心 AI 暨持倉量化雷達 ============================="  # type: ignore
         in embed.description
     )
-    assert "AMD" in embed.description
-    assert "MRVL" in embed.description
-    assert "超跌磁吸" in embed.description
-    assert "籌碼斷層" in embed.description
+    assert "AMD" in embed.description  # type: ignore
+    assert "MRVL" in embed.description  # type: ignore
+    assert "超跌磁吸" in embed.description  # type: ignore
+    assert "籌碼斷層" in embed.description  # type: ignore
 
 
-def test_build_post_market_intelligence_embed_empty():
+def test_build_post_market_intelligence_embed_empty() -> None:
     """Verify that build_post_market_intelligence_embed correctly renders when there are no report lines."""
     embeds = build_post_market_intelligence_embed(
         report_lines=[],
@@ -1085,27 +1088,27 @@ def test_build_post_market_intelligence_embed_empty():
 
     assert embed.title == "📋 Nexus Seeker | 盤後綜合風險與 AI 策略報告"
 
-    assert "🏁 財務生存跑道 (Financial Runway)" in embed.description
+    assert "🏁 財務生存跑道 (Financial Runway)" in embed.description  # type: ignore
 
-    field_values = [f.value for f in embed.fields]
+    field_values = [f.value for f in embed.fields if f.value is not None]
 
-    assert any("📊 投資組合收盤持倉明細" in val for val in field_values)
-    assert any("🌐 投資組合收盤宏觀風險" in val for val in field_values)
-    assert any("🧠 AI 損益歸因與次日策略點評" in val for val in field_values)
+    assert any("📊 投資組合收盤持倉明細" in val for val in field_values)  # type: ignore
+    assert any("🌐 投資組合收盤宏觀風險" in val for val in field_values)  # type: ignore
+    assert any("🧠 AI 損益歸因與次日策略點評" in val for val in field_values)  # type: ignore
 
     assert any(
-        "目前無持倉部位。" in val
+        "目前無持倉部位。" in val  # type: ignore
         for val in field_values
-        if "投資組合收盤持倉明細" in val
+        if "投資組合收盤持倉明細" in val  # type: ignore
     )
     assert any(
-        "目前無宏觀風險數據。" in val
+        "目前無宏觀風險數據。" in val  # type: ignore
         for val in field_values
-        if "投資組合收盤宏觀風險" in val
+        if "投資組合收盤宏觀風險" in val  # type: ignore
     )
 
 
-def test_build_post_market_intelligence_embed_parsed_ai_commentary():
+def test_build_post_market_intelligence_embed_parsed_ai_commentary() -> None:
     """Verify that build_post_market_intelligence_embed correctly parses and formats the AI commentary into three fields in Target Center style."""
     ai_commentary = (
         "1. 📊 多空大盤交叉驗證解讀\n"
@@ -1126,22 +1129,24 @@ def test_build_post_market_intelligence_embed_parsed_ai_commentary():
         ai_commentary=ai_commentary,
     )
     embed = embeds[0]
-    field_values = [f.value for f in embed.fields]
+    field_values = [f.value for f in embed.fields if f.value is not None]
 
-    assert any("📊 AI 多空大盤交叉驗證解讀" in val for val in field_values)
-    assert any("⚠️ AI 潛在陷阱與風險提示" in val for val in field_values)
-    assert any("🛡️ AI 高勝率交易策略推薦" in val for val in field_values)
-    assert not any("🧠 AI 損益歸因與次日策略點評" in val for val in field_values)
+    assert any("📊 AI 多空大盤交叉驗證解讀" in val for val in field_values)  # type: ignore
+    assert any("⚠️ AI 潛在陷阱與風險提示" in val for val in field_values)  # type: ignore
+    assert any("🛡️ AI 高勝率交易策略推薦" in val for val in field_values)  # type: ignore
+    assert not any("🧠 AI 損益歸因與次日策略點評" in val for val in field_values)  # type: ignore
 
     market_field_val = next(
-        val for val in field_values if "📊 AI 多空大盤交叉驗證解讀" in val
+        val
+        for val in field_values
+        if "📊 AI 多空大盤交叉驗證解讀" in val  # type: ignore
     )
-    assert "```ansi" in market_field_val
-    assert "第一點分析" in market_field_val
-    assert "第二點分析" in market_field_val
+    assert "```ansi" in market_field_val  # type: ignore
+    assert "第一點分析" in market_field_val  # type: ignore
+    assert "第二點分析" in market_field_val  # type: ignore
 
 
-def test_create_covered_call_unlock_embed():
+def test_create_covered_call_unlock_embed() -> None:
     """Verify that create_covered_call_unlock_embed correctly renders deadlock release embed."""
     # 1. With recommendations
     data_with_recs = {
@@ -1163,14 +1168,14 @@ def test_create_covered_call_unlock_embed():
     embed_with_recs = create_covered_call_unlock_embed(data_with_recs)
     assert embed_with_recs.title == "🔓 NVDA 物理死鎖解除與備兌建單指引"
     assert len(embed_with_recs.fields) == 3
-    assert "現貨與吸籌模擬" in embed_with_recs.fields[0].name
-    assert "100 股" in embed_with_recs.fields[0].value
-    assert "$120.00" in embed_with_recs.fields[0].value
-    assert "$115.00" in embed_with_recs.fields[0].value
-    assert "推薦 Covered Call 備兌合約" in embed_with_recs.fields[1].name
-    assert "2026-07-17" in embed_with_recs.fields[1].value
-    assert "$125.00" in embed_with_recs.fields[1].value
-    assert "18.50%" in embed_with_recs.fields[1].value
+    assert "現貨與吸籌模擬" in embed_with_recs.fields[0].name  # type: ignore
+    assert "100 股" in embed_with_recs.fields[0].value  # type: ignore
+    assert "$120.00" in embed_with_recs.fields[0].value  # type: ignore
+    assert "$115.00" in embed_with_recs.fields[0].value  # type: ignore
+    assert "推薦 Covered Call 備兌合約" in embed_with_recs.fields[1].name  # type: ignore
+    assert "2026-07-17" in embed_with_recs.fields[1].value  # type: ignore
+    assert "$125.00" in embed_with_recs.fields[1].value  # type: ignore
+    assert "18.50%" in embed_with_recs.fields[1].value  # type: ignore
 
     # 2. Without recommendations
     data_no_recs = {
@@ -1184,11 +1189,11 @@ def test_create_covered_call_unlock_embed():
     embed_no_recs = create_covered_call_unlock_embed(data_no_recs)
     assert embed_no_recs.title == "🔓 AAPL 物理死鎖解除與備兌建單指引"
     assert len(embed_no_recs.fields) == 2
-    assert "解鎖狀態與策略建議" in embed_no_recs.fields[1].name
-    assert "未尋獲符合條件之極虛值" in embed_no_recs.fields[1].value
+    assert "解鎖狀態與策略建議" in embed_no_recs.fields[1].name  # type: ignore
+    assert "未尋獲符合條件之極虛值" in embed_no_recs.fields[1].value  # type: ignore
 
 
-def test_create_watchlist_signal_embed_event_loading():
+def test_create_watchlist_signal_embed_event_loading() -> None:
     """Verify that event loading formatting displays status and expected move note correctly."""
     from models.schemas import EnhancedWatchlistMetrics
 
@@ -1235,13 +1240,13 @@ def test_create_watchlist_signal_embed_event_loading():
         alert_level="yellow",
     )
 
-    assert "(狀態: ⚠️ 臨近財報/快取波動率可能低估)" in embed.description
-    assert "備註: 實盤請預留 1.4x 波動邊界以防範 IV Crush。" in embed.description
-    assert "Volume PCR (即時情緒): 0.78" in embed.description
-    assert "OI PCR (結構防禦): 1.55" in embed.description
+    assert "(狀態: ⚠️ 臨近財報/快取波動率可能低估)" in embed.description  # type: ignore
+    assert "備註: 實盤請預留 1.4x 波動邊界以防範 IV Crush。" in embed.description  # type: ignore
+    assert "Volume PCR (即時情緒): 0.78" in embed.description  # type: ignore
+    assert "OI PCR (結構防禦): 1.55" in embed.description  # type: ignore
 
 
-def test_create_watchlist_signal_embed_non_degraded():
+def test_create_watchlist_signal_embed_non_degraded() -> None:
     from models.schemas import EnhancedWatchlistMetrics
     from models.quant import IVMetrics
 
@@ -1313,7 +1318,7 @@ def test_create_watchlist_signal_embed_non_degraded():
     assert "OI PCR (結構防禦): 0.90" in desc
 
 
-def test_create_telemetry_alignment_embeds():
+def test_create_telemetry_alignment_embeds() -> None:
     from cogs.embed_builders.order_embeds import create_telemetry_alignment_embeds
 
     # Define a normal item
@@ -1355,10 +1360,10 @@ def test_create_telemetry_alignment_embeds():
     embeds = create_telemetry_alignment_embeds([item])
     assert len(embeds) == 1
     val = embeds[0].fields[0].value
-    assert "```ansi" in val
-    assert "\u001b[1;36m【物理防線 (The Shield)】\u001b[0m" in val
-    assert "選擇權偏斜 (Option Skew)" in val
-    assert "隱含波動率 (IV)" in val
+    assert "```ansi" in val  # type: ignore
+    assert "\u001b[1;36m【物理防線 (The Shield)】\u001b[0m" in val  # type: ignore
+    assert "選擇權偏斜 (Option Skew)" in val  # type: ignore
+    assert "隱含波動率 (IV)" in val  # type: ignore
 
     # 2. Test pre-market degraded (no IV/Option data)
     pm_degraded_item = dict(
@@ -1367,29 +1372,29 @@ def test_create_telemetry_alignment_embeds():
     embeds_pm_degraded = create_telemetry_alignment_embeds([pm_degraded_item])
     assert len(embeds_pm_degraded) == 1
     val_pm_degraded = embeds_pm_degraded[0].fields[0].value
-    assert "[盤前數據未更新]" in val_pm_degraded
-    assert "等待開盤" in val_pm_degraded
-    assert "--%" in val_pm_degraded
+    assert "[盤前數據未更新]" in val_pm_degraded  # type: ignore
+    assert "等待開盤" in val_pm_degraded  # type: ignore
+    assert "--%" in val_pm_degraded  # type: ignore
 
     # 3. Test pre-market with STORED_IV fallback
     pm_stored_item = dict(item, is_premarket=True, iv_val=35.0, iv_source="STORED_IV")
     embeds_pm_stored = create_telemetry_alignment_embeds([pm_stored_item])
     assert len(embeds_pm_stored) == 1
     val_pm_stored = embeds_pm_stored[0].fields[0].value
-    assert "[盤前/前日收盤]" in val_pm_stored
-    assert "(前日收盤)" in val_pm_stored
+    assert "[盤前/前日收盤]" in val_pm_stored  # type: ignore
+    assert "(前日收盤)" in val_pm_stored  # type: ignore
 
     # 4. Test pre-market with HV_PROXY fallback
     pm_hv_item = dict(item, is_premarket=True, iv_val=42.0, iv_source="HV_PROXY")
     embeds_pm_hv = create_telemetry_alignment_embeds([pm_hv_item])
     assert len(embeds_pm_hv) == 1
     val_pm_hv = embeds_pm_hv[0].fields[0].value
-    assert "[盤前/HV代理]" in val_pm_hv
-    assert "(歷史波動率代理)" in val_pm_hv
+    assert "[盤前/HV代理]" in val_pm_hv  # type: ignore
+    assert "(歷史波動率代理)" in val_pm_hv  # type: ignore
 
     # 5. Test pagination (16 items -> should produce at least 2 embeds if split or chunked)
     items_16 = [dict(item, order_id=i) for i in range(16)]
     embeds_16 = create_telemetry_alignment_embeds(items_16)
     assert len(embeds_16) >= 2
-    assert "(第 1/" in embeds_16[0].title
-    assert "頁)" in embeds_16[0].title
+    assert "(第 1/" in embeds_16[0].title  # type: ignore
+    assert "頁)" in embeds_16[0].title  # type: ignore

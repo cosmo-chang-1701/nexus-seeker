@@ -1,3 +1,4 @@
+from typing import Any
 import pytest
 from unittest.mock import patch, MagicMock
 import pandas as pd
@@ -10,7 +11,7 @@ from market_analysis.trading_orchestration import (
 )
 
 
-def _create_sample_metrics(**overrides):
+def _create_sample_metrics(**overrides):  # type: ignore
     payload = {
         "symbol": "AAPL",
         "exchange": "NASDAQ",
@@ -43,10 +44,10 @@ def _create_sample_metrics(**overrides):
         "relative_strength_spy": 1.0,
     }
     payload.update(overrides)
-    return EnhancedWatchlistMetrics(**payload)
+    return EnhancedWatchlistMetrics(**payload)  # type: ignore
 
 
-def _create_sample_event_context(**overrides):
+def _create_sample_event_context(**overrides):  # type: ignore
     payload = {
         "earnings_date": None,
         "earnings_tte_hours": None,
@@ -57,11 +58,11 @@ def _create_sample_event_context(**overrides):
         "summary": "無重大事件",
     }
     payload.update(overrides)
-    return WatchlistEventContext(**payload)
+    return WatchlistEventContext(**payload)  # type: ignore
 
 
 @pytest.mark.asyncio
-async def test_get_market_regime_critical():
+async def test_get_market_regime_critical() -> None:
     # 情境 1：VIX 飆升與 Gamma Flip 踩踏
     # 輸入：現有 VIX = 22.22, VIX3M = 21.0 (vts_ratio = 1.058)，SPY 現貨價 = 510，爬取之 Gamma Flip Line = 515。
     # 預期輸出：get_market_regime() 回傳 SHORT_GAMMA_CRITICAL
@@ -86,7 +87,7 @@ async def test_get_market_regime_critical():
 
 
 @pytest.mark.asyncio
-async def test_grid_step_scaling_critical():
+async def test_grid_step_scaling_critical() -> None:
     # 當觸發 SHORT_GAMMA_CRITICAL 時，網格間距自動等比放大 1.5x
     with patch(
         "market_analysis.index_microstructure.get_market_regime"
@@ -111,7 +112,7 @@ async def test_grid_step_scaling_critical():
         assert evaluation.tactical.dynamic_grid_step == 1.5
 
 
-def test_boxx_stress_test_math():
+def test_boxx_stress_test_math() -> None:
     # 情境 2：BOXX 水壩極限壓力測試
     # 輸入：常規現金 = $150，BOXX 持倉 = 213 股（最大套現 $21,000）。SQLite 中有 18 筆 GTC 網格單，若全成交總計需消耗 $22,500。
     # 預期輸出：計算出總赤字淨值為 -$1,350，且 is_critical 觸發 (大於 BOXX 清算極限)
@@ -129,7 +130,7 @@ def test_boxx_stress_test_math():
     assert is_critical is True
 
 
-def test_new_cost_basis_math():
+def test_new_cost_basis_math() -> None:
     # 測試模擬吸籌後的加權平均成本
     grid_orders = [
         {"validity": "GTC", "side": "BUY", "limit_price": 140.0, "quantity": 10.0},
@@ -143,7 +144,7 @@ def test_new_cost_basis_math():
 
 
 @pytest.mark.asyncio
-async def test_recommend_covered_calls_filtering():
+async def test_recommend_covered_calls_filtering() -> Any:
     # 測試 Covered Call 篩選邏輯：
     # DTE 必須在 30-50 天內，Strike > New Cost Basis，且年化收益率 >= 10.0% 或單次收租權利金大於現貨的 1%
     with patch(
@@ -225,7 +226,7 @@ async def test_recommend_covered_calls_filtering():
 
 
 @pytest.mark.asyncio
-async def test_is_covered_call_unlock_allowed_logic():
+async def test_is_covered_call_unlock_allowed_logic() -> Any:
     from market_analysis.trading_orchestration import is_covered_call_unlock_allowed
 
     with patch("database.get_kv_cache") as mock_kv, patch(
@@ -261,7 +262,7 @@ async def test_is_covered_call_unlock_allowed_logic():
         assert await is_covered_call_unlock_allowed() is False
 
 
-def test_safety_payout_threshold_logic():
+def test_safety_payout_threshold_logic() -> Any:
     from market_analysis.trading_orchestration import get_safety_payout_threshold
 
     with patch("database.get_kv_cache") as mock_kv:
@@ -288,7 +289,7 @@ def test_safety_payout_threshold_logic():
 
 
 @pytest.mark.asyncio
-async def test_get_macro_overview_data_logic():
+async def test_get_macro_overview_data_logic() -> Any:
     from cogs.unified_terminal import get_macro_overview_data
 
     with patch("psutil.virtual_memory") as mock_mem, patch(
@@ -316,7 +317,7 @@ async def test_get_macro_overview_data_logic():
         assert data_degraded["is_degraded"] is True
 
 
-def test_fixed_income_hedging_whitelist():
+def test_fixed_income_hedging_whitelist() -> None:
     """測試 BOXX 在 InsightsEngine 等級的白名單豁免"""
     from market_analysis.insights_engine import RiskInsightsContext, InsightsEngine
 
@@ -338,7 +339,7 @@ def test_fixed_income_hedging_whitelist():
     assert dmp_label == "(避險資產)"
 
 
-def test_putwall_crisis_textual_martial_law():
+def test_putwall_crisis_textual_martial_law() -> None:
     from market_analysis import insight_generator
 
     test_data = {

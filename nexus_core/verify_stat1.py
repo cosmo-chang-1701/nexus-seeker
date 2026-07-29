@@ -1,4 +1,7 @@
-def check_trigger(usd_value, dynamic_threshold, static_threshold):
+from typing import Any
+
+
+def check_trigger(usd_value: Any, dynamic_threshold: Any, static_threshold: Any):  # type: ignore
     meets_dynamic = usd_value >= dynamic_threshold
     meets_static = static_threshold <= 0 or usd_value >= static_threshold
     return meets_dynamic and meets_static

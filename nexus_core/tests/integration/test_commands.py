@@ -1,3 +1,4 @@
+from typing import Any
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 import discord
@@ -10,13 +11,16 @@ from database.user_settings import get_full_user_context
 
 
 @pytest.mark.asyncio
-async def test_command_settings(mock_interaction, db_conn):
+async def test_command_settings(mock_interaction: Any, db_conn: Any):  # type: ignore
     bot = MagicMock()
     cog = TerminalCog(bot)
 
     # Execute /settings command using .callback
-    await cog.update_settings.callback(
-        cog, mock_interaction, risk_limit=15.0, enable_vtr=True
+    await cog.update_settings.callback(  # type: ignore
+        cog,  # type: ignore
+        mock_interaction,
+        risk_limit=15.0,
+        enable_vtr=True,  # type: ignore
     )
 
     # Verify response
@@ -32,13 +36,19 @@ async def test_command_settings(mock_interaction, db_conn):
 
 
 @pytest.mark.asyncio
-async def test_command_add_holding(mock_interaction, db_conn, mock_market_data):
+async def test_command_add_holding(  # type: ignore
+    mock_interaction: Any, db_conn: Any, mock_market_data: Any
+):  # type: ignore
     bot = MagicMock()
     cog = TerminalCog(bot)
 
     # Execute /add_holding
-    await cog.add_holding.callback(
-        cog, mock_interaction, symbol="AAPL", quantity=10, avg_cost=150.0
+    await cog.add_holding.callback(  # type: ignore
+        cog,  # type: ignore
+        mock_interaction,
+        symbol="AAPL",
+        quantity=10,
+        avg_cost=150.0,  # type: ignore
     )
 
     mock_interaction.followup.send.assert_called_once()
@@ -54,7 +64,9 @@ async def test_command_add_holding(mock_interaction, db_conn, mock_market_data):
 
 
 @pytest.mark.asyncio
-async def test_command_skew_scan(mock_interaction, db_conn, mock_market_data):
+async def test_command_skew_scan(  # type: ignore
+    mock_interaction: Any, db_conn: Any, mock_market_data: Any
+):  # type: ignore
     bot = MagicMock()
     cog = SentimentCog(bot)
 
@@ -77,14 +89,16 @@ async def test_command_skew_scan(mock_interaction, db_conn, mock_market_data):
         mock_uoa.return_value = []
         mock_mp.return_value = {"max_pain": 500}
 
-        await cog.skew_scan.callback(cog, mock_interaction, symbol="SPY")
+        await cog.skew_scan.callback(cog, mock_interaction, symbol="SPY")  # type: ignore
 
         mock_interaction.followup.send.assert_called_once()
         assert "embed" in mock_interaction.followup.send.call_args[1]
 
 
 @pytest.mark.asyncio
-async def test_command_ddp_scan(mock_interaction, db_conn, mock_market_data):
+async def test_command_ddp_scan(  # type: ignore
+    mock_interaction: Any, db_conn: Any, mock_market_data: Any
+):  # type: ignore
     bot = MagicMock()
     cog = SchedulerCog(bot)
 
@@ -109,7 +123,7 @@ async def test_command_ddp_scan(mock_interaction, db_conn, mock_market_data):
             }
         ]
 
-        await cog.ddp_scan.callback(cog, mock_interaction)
+        await cog.ddp_scan.callback(cog, mock_interaction)  # type: ignore
         assert (
             mock_interaction.response.send_message.called
             or mock_interaction.followup.send.called
@@ -117,7 +131,7 @@ async def test_command_ddp_scan(mock_interaction, db_conn, mock_market_data):
 
 
 @pytest.mark.asyncio
-async def test_command_poly_list(mock_interaction, db_conn):
+async def test_command_poly_list(mock_interaction: Any, db_conn: Any):  # type: ignore
     bot = MagicMock()
     bot.polymarket_service = MagicMock()
     bot.polymarket_service.get_active_markets.return_value = [
@@ -125,14 +139,14 @@ async def test_command_poly_list(mock_interaction, db_conn):
     ]
 
     cog = IntelligenceCog(bot)
-    await cog.poly_list.callback(cog, mock_interaction)
+    await cog.poly_list.callback(cog, mock_interaction)  # type: ignore
 
     mock_interaction.followup.send.assert_called_once()
     assert "embed" in mock_interaction.followup.send.call_args[1]
 
 
 @pytest.mark.asyncio
-async def test_command_settle_hedge(mock_interaction, db_conn):
+async def test_command_settle_hedge(mock_interaction: Any, db_conn: Any):  # type: ignore
     cursor = db_conn.cursor()
     # Correct columns for hedge_alerts
     # vix_level is at index 2, hedge_contracts at index 7, status at index 10
@@ -151,8 +165,11 @@ async def test_command_settle_hedge(mock_interaction, db_conn):
     bot = MagicMock()
     cog = HedgingCog(bot)
 
-    await cog.settle_hedge.callback(
-        cog, mock_interaction, alert_id=alert_id, actual_qty=12
+    await cog.settle_hedge.callback(  # type: ignore
+        cog,  # type: ignore
+        mock_interaction,
+        alert_id=alert_id,
+        actual_qty=12,  # type: ignore
     )
 
     mock_interaction.followup.send.assert_called_once()
@@ -167,7 +184,7 @@ async def test_command_settle_hedge(mock_interaction, db_conn):
 
 
 @pytest.mark.asyncio
-async def test_command_hedge_list(mock_interaction, db_conn):
+async def test_command_hedge_list(mock_interaction: Any, db_conn: Any):  # type: ignore
     cursor = db_conn.cursor()
     cursor.execute(
         """
@@ -181,7 +198,7 @@ async def test_command_hedge_list(mock_interaction, db_conn):
     bot = MagicMock()
     cog = HedgingCog(bot)
 
-    await cog.hedge_list.callback(cog, mock_interaction)
+    await cog.hedge_list.callback(cog, mock_interaction)  # type: ignore
 
     mock_interaction.followup.send.assert_called_once()
     embed = mock_interaction.followup.send.call_args[1]["embed"]
@@ -191,11 +208,11 @@ async def test_command_hedge_list(mock_interaction, db_conn):
 
 
 @pytest.mark.asyncio
-async def test_command_vtr_stats(mock_interaction, db_conn):
+async def test_command_vtr_stats(mock_interaction: Any, db_conn: Any):  # type: ignore
     bot = MagicMock()
     cog = TerminalCog(bot)
 
-    await cog.vtr_stats.callback(cog, mock_interaction)
+    await cog.vtr_stats.callback(cog, mock_interaction)  # type: ignore
     assert (
         mock_interaction.response.send_message.called
         or mock_interaction.followup.send.called
@@ -203,7 +220,7 @@ async def test_command_vtr_stats(mock_interaction, db_conn):
 
 
 @pytest.mark.asyncio
-async def test_command_sys_health(mock_interaction):
+async def test_command_sys_health(mock_interaction: Any):  # type: ignore
     bot = MagicMock()
     cog = TerminalCog(bot)
 
@@ -217,7 +234,7 @@ async def test_command_sys_health(mock_interaction):
         mock_disk.return_value.free = 10 * 1024 * 1024 * 1024
         mock_cpu.return_value = 10.0
 
-        await cog.sys_health.callback(cog, mock_interaction)
+        await cog.sys_health.callback(cog, mock_interaction)  # type: ignore
         mock_interaction.followup.send.assert_called()
         args, kwargs = mock_interaction.followup.send.call_args
         embed = kwargs["embed"]
@@ -227,7 +244,7 @@ async def test_command_sys_health(mock_interaction):
         # Case 2: Disk Full Danger
         mock_interaction.followup.send.reset_mock()
         mock_disk.return_value.percent = 96.0
-        await cog.sys_health.callback(cog, mock_interaction)
+        await cog.sys_health.callback(cog, mock_interaction)  # type: ignore
         args, kwargs = mock_interaction.followup.send.call_args
         embed = kwargs["embed"]
         assert "🆘 **極度危險**" in embed.fields[-1].value

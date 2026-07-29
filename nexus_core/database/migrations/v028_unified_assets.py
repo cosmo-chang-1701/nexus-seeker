@@ -1,3 +1,4 @@
+from typing import Any
 import sqlite3
 import json
 import logging
@@ -28,11 +29,11 @@ CREATE INDEX IF NOT EXISTS idx_assets_symbol ON assets(symbol);
 """
 
 
-def migrate_data(conn: sqlite3.Connection):
+def migrate_data(conn: sqlite3.Connection) -> Any:
     cursor = conn.cursor()
 
     # Helper to check if table exists
-    def table_exists(name):
+    def table_exists(name: Any) -> Any:
         cursor.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (name,)
         )

@@ -1,3 +1,4 @@
+from typing import Any
 import pytest
 import discord
 from unittest.mock import AsyncMock, patch, MagicMock
@@ -16,14 +17,14 @@ from cogs.unified_terminal import (
 
 
 @pytest.fixture
-def mock_bot():
+def mock_bot() -> Any:
     bot = MagicMock()
     bot.wait_until_ready = AsyncMock()
     return bot
 
 
 @pytest.mark.asyncio
-async def test_symbol_hub_interactions(mock_interaction, mock_bot):
+async def test_symbol_hub_interactions(mock_interaction: Any, mock_bot: Any):  # type: ignore
     """測試 /x 指令按鈕互動與讀取狀態"""
     view = SymbolHubView(symbol="AAPL", user_id=123, bot=mock_bot)
     # 準備 base_data 以供 btn_home 使用
@@ -69,7 +70,7 @@ async def test_symbol_hub_interactions(mock_interaction, mock_bot):
 
 
 @pytest.mark.asyncio
-async def test_symbol_hub_hedge_uses_builder(mock_interaction, mock_bot):
+async def test_symbol_hub_hedge_uses_builder(mock_interaction: Any, mock_bot: Any):  # type: ignore
     """測試一鍵對沖按鈕引導是否調用了 create_tactical_hedge_embed"""
     view = SymbolHubView(symbol="AAPL", user_id=123, bot=mock_bot)
     view.base_data = {"symbol": "AAPL", "iv_rank": 55.0}
@@ -89,8 +90,8 @@ async def test_symbol_hub_hedge_uses_builder(mock_interaction, mock_bot):
 
 
 @pytest.mark.asyncio
-async def test_symbol_hub_invalid_symbol_returns_error_embed(
-    mock_interaction, mock_bot
+async def test_symbol_hub_invalid_symbol_returns_error_embed(  # type: ignore
+    mock_interaction: Any, mock_bot: Any
 ):
     cog = UnifiedTerminalCog(mock_bot)
 
@@ -99,7 +100,7 @@ async def test_symbol_hub_invalid_symbol_returns_error_embed(
         new_callable=AsyncMock,
         return_value=False,
     ):
-        await cog.symbol_hub.callback(cog, mock_interaction, symbol="bad!")
+        await cog.symbol_hub.callback(cog, mock_interaction, symbol="bad!")  # type: ignore
 
     _, kwargs = mock_interaction.followup.send.call_args
     assert "embed" in kwargs
@@ -107,7 +108,7 @@ async def test_symbol_hub_invalid_symbol_returns_error_embed(
 
 
 @pytest.mark.asyncio
-async def test_portfolio_hub_interactions(mock_interaction, mock_bot):
+async def test_portfolio_hub_interactions(mock_interaction: Any, mock_bot: Any):  # type: ignore
     """測試 /dash 指令分頁互動與讀取狀態"""
     view = PortfolioHubView(user_id=123, bot=mock_bot)
 
@@ -138,7 +139,7 @@ async def test_portfolio_hub_interactions(mock_interaction, mock_bot):
 
 
 @pytest.mark.asyncio
-async def test_pulse_hub_interactions(mock_interaction, mock_bot):
+async def test_pulse_hub_interactions(mock_interaction: Any, mock_bot: Any):  # type: ignore
     """測試 /market 指令互動與讀取狀態"""
     view = PulseHubView(user_id=123, bot=mock_bot)
 
@@ -162,7 +163,7 @@ async def test_pulse_hub_interactions(mock_interaction, mock_bot):
 
 
 @pytest.mark.asyncio
-async def test_pulse_hub_calendar_uses_builder(mock_interaction, mock_bot):
+async def test_pulse_hub_calendar_uses_builder(mock_interaction: Any, mock_bot: Any):  # type: ignore
     view = PulseHubView(user_id=123, bot=mock_bot)
 
     with patch(
@@ -182,8 +183,8 @@ async def test_pulse_hub_calendar_uses_builder(mock_interaction, mock_bot):
 
 
 @pytest.mark.asyncio
-async def test_pulse_hub_iv_uses_builder_for_empty_watchlist(
-    mock_interaction, mock_bot
+async def test_pulse_hub_iv_uses_builder_for_empty_watchlist(  # type: ignore
+    mock_interaction: Any, mock_bot: Any
 ):
     view = PulseHubView(user_id=123, bot=mock_bot)
 
@@ -200,8 +201,8 @@ async def test_pulse_hub_iv_uses_builder_for_empty_watchlist(
 
 
 @pytest.mark.asyncio
-async def test_pulse_hub_poly_without_service_returns_error_embed(
-    mock_interaction, mock_bot
+async def test_pulse_hub_poly_without_service_returns_error_embed(  # type: ignore
+    mock_interaction: Any, mock_bot: Any
 ):
     view = PulseHubView(user_id=123, bot=mock_bot)
     if hasattr(mock_bot, "polymarket_service"):

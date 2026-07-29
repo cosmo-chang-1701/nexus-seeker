@@ -1,3 +1,4 @@
+from typing import Any
 import discord
 import logging
 
@@ -85,7 +86,7 @@ class NotificationSettingsModal(discord.ui.Modal):
         )
         self.add_item(self.input_field)
 
-    async def on_submit(self, interaction: discord.Interaction):
+    async def on_submit(self, interaction: discord.Interaction) -> Any:
         value_str = self.input_field.value.strip()
         try:
             val = float(value_str)
@@ -146,12 +147,12 @@ class NotificationSettingsModal(discord.ui.Modal):
 
 
 class NotificationSettingsView(discord.ui.View):
-    def __init__(self, user_id: int):
+    def __init__(self, user_id: int) -> None:
         super().__init__(timeout=180)
         self.user_id = user_id
         self.refresh_items()
 
-    def refresh_items(self):
+    def refresh_items(self) -> None:
         self.clear_items()
         settings = database.get_user_notification_settings(self.user_id)
         ctx = database.get_full_user_context(self.user_id)
@@ -167,13 +168,13 @@ class NotificationSettingsView(discord.ui.View):
                     description="點擊切換開啟/關閉狀態",
                 )
             )
-        scheduled_select = discord.ui.Select(
+        scheduled_select = discord.ui.Select(  # type: ignore
             placeholder="⚙️ 設定 定時與掃描背景通知...",
             options=scheduled_options,
             custom_id="select_scheduled",
             row=0,
         )
-        scheduled_select.callback = self.on_select_callback
+        scheduled_select.callback = self.on_select_callback  # type: ignore
         self.add_item(scheduled_select)
 
         # 2. 即時風險與事件警報下拉選單
@@ -187,13 +188,13 @@ class NotificationSettingsView(discord.ui.View):
                     description="點擊切換開啟/關閉狀態",
                 )
             )
-        realtime_select = discord.ui.Select(
+        realtime_select = discord.ui.Select(  # type: ignore
             placeholder="🚨 設定 即時風險與事件警報...",
             options=realtime_options,
             custom_id="select_realtime",
             row=1,
         )
-        realtime_select.callback = self.on_select_callback
+        realtime_select.callback = self.on_select_callback  # type: ignore
         self.add_item(realtime_select)
 
         # 3. Polymarket 巨鯨與 AI 監控設定下拉選單
@@ -249,35 +250,35 @@ class NotificationSettingsView(discord.ui.View):
             )
         )
 
-        polymarket_select = discord.ui.Select(
+        polymarket_select = discord.ui.Select(  # type: ignore
             placeholder="🐳 設定 Polymarket 巨鯨與 AI 監控...",
             options=polymarket_options,
             custom_id="select_polymarket",
             row=2,
         )
-        polymarket_select.callback = self.on_select_callback
+        polymarket_select.callback = self.on_select_callback  # type: ignore
         self.add_item(polymarket_select)
 
         # 4. 按鈕
-        btn_enable_all = discord.ui.Button(
+        btn_enable_all = discord.ui.Button(  # type: ignore
             label="⚡ 全部開啟",
             style=discord.ButtonStyle.green,
             custom_id="btn_enable_all",
             row=3,
         )
-        btn_enable_all.callback = self.on_enable_all
+        btn_enable_all.callback = self.on_enable_all  # type: ignore
         self.add_item(btn_enable_all)
 
-        btn_disable_all = discord.ui.Button(
+        btn_disable_all = discord.ui.Button(  # type: ignore
             label="💤 全部關閉",
             style=discord.ButtonStyle.red,
             custom_id="btn_disable_all",
             row=3,
         )
-        btn_disable_all.callback = self.on_disable_all
+        btn_disable_all.callback = self.on_disable_all  # type: ignore
         self.add_item(btn_disable_all)
 
-    async def on_select_callback(self, interaction: discord.Interaction):
+    async def on_select_callback(self, interaction: discord.Interaction) -> Any:
         if interaction.data is None or not isinstance(interaction.data, dict):
             return
         select_values = interaction.data.get("values")
@@ -323,13 +324,13 @@ class NotificationSettingsView(discord.ui.View):
             embed = self.build_embed()
             await interaction.response.edit_message(embed=embed, view=self)
 
-    async def on_enable_all(self, interaction: discord.Interaction):
+    async def on_enable_all(self, interaction: discord.Interaction) -> Any:
         database.set_all_user_notification_settings(self.user_id, True)
         self.refresh_items()
         embed = self.build_embed()
         await interaction.response.edit_message(embed=embed, view=self)
 
-    async def on_disable_all(self, interaction: discord.Interaction):
+    async def on_disable_all(self, interaction: discord.Interaction) -> Any:
         database.set_all_user_notification_settings(self.user_id, False)
         self.refresh_items()
         embed = self.build_embed()
@@ -441,7 +442,7 @@ class AccountSettingsModal(discord.ui.Modal):
         )
         self.add_item(self.input_field)
 
-    async def on_submit(self, interaction: discord.Interaction):
+    async def on_submit(self, interaction: discord.Interaction) -> Any:
         value_str = self.input_field.value.strip()
         try:
             val = float(value_str)
@@ -523,12 +524,12 @@ class AccountSettingsModal(discord.ui.Modal):
 
 
 class AccountSettingsView(discord.ui.View):
-    def __init__(self, user_id: int):
+    def __init__(self, user_id: int) -> None:
         super().__init__(timeout=180)
         self.user_id = user_id
         self.refresh_items()
 
-    def refresh_items(self):
+    def refresh_items(self) -> None:
         self.clear_items()
         ctx = database.get_full_user_context(self.user_id)
 
@@ -546,7 +547,7 @@ class AccountSettingsView(discord.ui.View):
             elif key == "risk_limit":
                 val_display = f"{raw_val}%"
             elif key in ["polymarket_threshold", "monthly_expense", "cash_reserve"]:
-                val_display = f"${raw_val:,.0f}" if raw_val > 0 else "關閉/未設定"
+                val_display = f"${raw_val:,.0f}" if raw_val > 0 else "關閉/未設定"  # type: ignore
             elif key == "polymarket_slippage":
                 val_display = f"{raw_val}%"
             elif key == "tax_reserve_rate":
@@ -562,16 +563,16 @@ class AccountSettingsView(discord.ui.View):
                 )
             )
 
-        select = discord.ui.Select(
+        select = discord.ui.Select(  # type: ignore
             placeholder="⚙️ 請選擇要配置的帳戶全域參數...",
             options=options,
             custom_id="select_account_settings",
             row=0,
         )
-        select.callback = self.on_select_callback
+        select.callback = self.on_select_callback  # type: ignore
         self.add_item(select)
 
-    async def on_select_callback(self, interaction: discord.Interaction):
+    async def on_select_callback(self, interaction: discord.Interaction) -> Any:
         if interaction.data is None or not isinstance(interaction.data, dict):
             return
         select_values = interaction.data.get("values")
@@ -643,7 +644,7 @@ class AccountSettingsView(discord.ui.View):
     )
     async def edit_watchlist_tags_btn(
         self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+    ) -> Any:
         from ui.watchlist_tags import WatchlistTagSelectView
         from cogs.embed_builders.settings_embeds import create_info_embed
 

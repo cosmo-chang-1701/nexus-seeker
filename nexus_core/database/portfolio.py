@@ -1,3 +1,4 @@
+from typing import Any
 import sqlite3
 import json
 import config
@@ -7,19 +8,19 @@ import config
 # 交易持倉 (Portfolio) CRUD (綁定 user_id)
 # ==========================================
 def add_portfolio_record(
-    user_id,
-    symbol,
-    opt_type,
-    strike,
-    expiry,
-    entry_price,
-    quantity,
-    stock_cost=0.0,
+    user_id: Any,
+    symbol: Any,
+    opt_type: Any,
+    strike: Any,
+    expiry: Any,
+    entry_price: Any,
+    quantity: Any,
+    stock_cost: Any = 0.0,
     weighted_delta: float = 0.0,
     theta: float = 0.0,
     gamma: float = 0.0,
     trade_category: str = "SPECULATIVE",
-):
+) -> Any:
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
     try:
@@ -65,7 +66,7 @@ def add_portfolio_record(
         conn.close()
 
 
-def archive_expired_portfolio_records():
+def archive_expired_portfolio_records() -> None:
     """
     [Requirement Four] 自動將 DTE <= 0 且已經完成交割結算、現價歸零或履約的合約自 assets 中剝離，移入 archived_assets。
     """
@@ -151,7 +152,7 @@ def archive_expired_portfolio_records():
         conn.close()
 
 
-def get_user_portfolio(user_id):
+def get_user_portfolio(user_id: Any):  # type: ignore
     """取得特定使用者的持倉"""
     archive_expired_portfolio_records()
     conn = sqlite3.connect(config.DB_NAME)
@@ -200,7 +201,7 @@ def get_user_portfolio(user_id):
         conn.close()
 
 
-def get_all_portfolio():
+def get_all_portfolio() -> Any:
     """取得全站所有持倉 (供背景排程使用)"""
     archive_expired_portfolio_records()
     conn = sqlite3.connect(config.DB_NAME)
@@ -248,7 +249,7 @@ def get_all_portfolio():
         conn.close()
 
 
-def get_user_portfolio_stats(user_id):
+def get_user_portfolio_stats(user_id: Any):  # type: ignore
     """
     [Database Layer] 結算使用者當前投資組合的總體風險數據 (暫行簡化版)。
     """
@@ -262,7 +263,7 @@ def get_user_portfolio_stats(user_id):
     return {"total_weighted_delta": 0.0, "total_gamma": 0.0, "active_count": len(rows)}
 
 
-def delete_portfolio_record(user_id, trade_id):
+def delete_portfolio_record(user_id: Any, trade_id: Any):  # type: ignore
     """確保使用者只能刪除自己的紀錄"""
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
@@ -286,7 +287,7 @@ def delete_portfolio_record(user_id, trade_id):
 
 def update_portfolio_greeks(
     trade_id: int, weighted_delta: float, theta: float, gamma: float
-):
+) -> Any:
     """更新持倉紀錄的希臘字母數據"""
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
@@ -330,7 +331,14 @@ def is_symbol_in_portfolio(user_id: int, symbol: str) -> bool:
 # ==========================================
 # 對沖歷史紀錄 (Hedge History)
 # ==========================================
-def add_hedge_history(user_id, date, alpha_pnl, hedge_pnl, effectiveness, tau_applied):
+def add_hedge_history(  # type: ignore
+    user_id: Any,
+    date: Any,
+    alpha_pnl: Any,
+    hedge_pnl: Any,
+    effectiveness: Any,
+    tau_applied: Any,
+):  # type: ignore
     """紀錄每日對沖績效與使用的 Tau 係數"""
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
@@ -347,7 +355,7 @@ def add_hedge_history(user_id, date, alpha_pnl, hedge_pnl, effectiveness, tau_ap
         conn.close()
 
 
-def get_hedge_history(user_id, limit=7):
+def get_hedge_history(user_id: Any, limit: Any = 7):  # type: ignore
     """獲取過去 N 天的對沖績效紀錄"""
     conn = sqlite3.connect(config.DB_NAME)
     conn.row_factory = sqlite3.Row

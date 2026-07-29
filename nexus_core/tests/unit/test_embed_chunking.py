@@ -2,7 +2,7 @@ import discord
 from cogs.embed_builder import get_embed_length, chunk_embeds
 
 
-def test_get_embed_length():
+def test_get_embed_length() -> None:
     # 1. Create an embed with title, description, footer, author, and fields
     embed = discord.Embed(title="Hello", description="World")
     embed.set_author(name="AuthorName")
@@ -25,7 +25,7 @@ def test_get_embed_length():
     assert get_embed_length(empty_embed) == 0
 
 
-def test_chunk_embeds_by_size():
+def test_chunk_embeds_by_size() -> None:
     embeds = [
         discord.Embed(description="A" * 2000),  # 2000
         discord.Embed(description="B" * 2000),  # 2000
@@ -45,7 +45,7 @@ def test_chunk_embeds_by_size():
     assert len(chunks2[1]) == 1
 
 
-def test_chunk_embeds_by_count():
+def test_chunk_embeds_by_count() -> None:
     embeds = [discord.Embed(description="A") for _ in range(15)]
     # Under max_count=5, 15 embeds should be split into 3 chunks of 5
     chunks = chunk_embeds(embeds, max_count=5)
@@ -53,7 +53,7 @@ def test_chunk_embeds_by_count():
     assert all(len(c) == 5 for c in chunks)
 
 
-def test_single_oversized_embed():
+def test_single_oversized_embed() -> None:
     embeds = [
         discord.Embed(description="A" * 6000),  # 6000 (oversized)
         discord.Embed(description="B" * 100),  # 100

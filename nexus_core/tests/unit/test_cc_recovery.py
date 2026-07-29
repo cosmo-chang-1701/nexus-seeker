@@ -1,3 +1,4 @@
+from typing import Any
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 import pandas as pd
@@ -7,7 +8,7 @@ from market_analysis.trading_orchestration import filter_cc_recovery_targets
 
 
 @pytest.mark.asyncio
-async def test_filter_cc_recovery_targets_success():
+async def test_filter_cc_recovery_targets_success() -> None:
     # Mock database and market data services
     mock_market_cache = {
         "reference_spot_price": 100.0,
@@ -30,7 +31,7 @@ async def test_filter_cc_recovery_targets_success():
     )
 
     class MockOptionChain:
-        def __init__(self, calls):
+        def __init__(self, calls: Any):
             self.calls = calls
             self.puts = pd.DataFrame()
 
@@ -63,7 +64,7 @@ async def test_filter_cc_recovery_targets_success():
 
 
 @pytest.mark.asyncio
-async def test_cc_recovery_slash_command():
+async def test_cc_recovery_slash_command() -> None:
     bot = MagicMock()
     cog = CoveredCallRecoveryCog(bot)
 
@@ -97,7 +98,7 @@ async def test_cc_recovery_slash_command():
         new_callable=AsyncMock,
         return_value=mock_res,
     ):
-        await cog.cc_recovery.callback(cog, interaction, "AAPL")
+        await cog.cc_recovery.callback(cog, interaction, "AAPL")  # type: ignore
 
         interaction.response.defer.assert_called_once_with(ephemeral=False)
         interaction.followup.send.assert_called_once()

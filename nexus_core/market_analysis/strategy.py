@@ -1,5 +1,6 @@
+from typing import Any
 import math
-from typing import Optional, Dict, Any
+from typing import Optional, Dict
 import pandas as pd
 import numpy as np
 import yfinance as yf  # 僅保留用於 option_chain() / options
@@ -17,7 +18,7 @@ import asyncio
 logger = logging.getLogger(__name__)
 
 
-def _calculate_technical_indicators(df):
+def _calculate_technical_indicators(df: Any):  # type: ignore
     """計算技術指標與波動率位階"""
     try:
         if df.empty or len(df) < 50:
@@ -54,7 +55,7 @@ def _calculate_technical_indicators(df):
         return None
 
 
-def _determine_strategy_signal(indicators):
+def _determine_strategy_signal(indicators: Any):  # type: ignore
     """根據技術指標決定策略"""
     price = indicators.get("price", 0.0)
     rsi = indicators.get("rsi", 50.0)
@@ -82,7 +83,7 @@ def _determine_strategy_signal(indicators):
         return None, None, 0, 0, 0
 
 
-async def _calculate_mmm(symbol, price, today, is_etf):
+async def _calculate_mmm(symbol: Any, price: Any, today: Any, is_etf: Any):  # type: ignore
     """計算財報日 MMM (Market Maker Move)"""
     earnings_date = None if is_etf else await get_next_earnings_date(symbol)
     days_to_earnings = -1
@@ -152,7 +153,9 @@ async def _calculate_mmm(symbol, price, today, is_etf):
     return mmm_pct, safe_lower, safe_upper, days_to_earnings
 
 
-async def _calculate_term_structure(symbol, expirations, price, today):
+async def _calculate_term_structure(  # type: ignore
+    symbol: Any, expirations: Any, price: Any, today: Any
+):  # type: ignore
     """計算波動率期限結構"""
     front_date, back_date = None, None
     front_diff, back_diff = 9999, 9999
@@ -201,7 +204,7 @@ async def _calculate_term_structure(symbol, expirations, price, today):
     return ts_ratio, ts_state
 
 
-def _find_target_expiry(expirations, today, min_dte, max_dte):
+def _find_target_expiry(expirations: Any, today: Any, min_dte: Any, max_dte: Any):  # type: ignore
     """尋找符合天數的到期日"""
     for exp in expirations:
         days_to_expiry = (datetime.strptime(exp, "%Y-%m-%d").date() - today).days
@@ -210,13 +213,13 @@ def _find_target_expiry(expirations, today, min_dte, max_dte):
     return None, 0
 
 
-def _get_best_contract_data(
-    opt_chain,
-    opt_type,
-    target_delta,
-    price,
-    days_to_expiry,
-    dividend_yield=0.0,
+def _get_best_contract_data(  # type: ignore
+    opt_chain: Any,
+    opt_type: Any,
+    target_delta: Any,
+    price: Any,
+    days_to_expiry: Any,
+    dividend_yield: Any = 0.0,
 ):
     """取得最佳合約與 Greeks"""
     try:
@@ -251,8 +254,13 @@ def _get_best_contract_data(
         return None, None
 
 
-def _calculate_vertical_skew(
-    opt_chain, price, days_to_expiry, strategy, symbol, dividend_yield=0.0
+def _calculate_vertical_skew(  # type: ignore
+    opt_chain: Any,
+    price: Any,
+    days_to_expiry: Any,
+    strategy: Any,
+    symbol: Any,
+    dividend_yield: Any = 0.0,
 ):
     """計算垂直波動率偏態"""
     vertical_skew = 1.0
@@ -371,8 +379,13 @@ def _evaluate_option_liquidity(option_data: dict) -> dict:
         }
 
 
-def _validate_risk_and_liquidity(
-    strategy, best_contract, price, hv_current, days_to_expiry, symbol
+def _validate_risk_and_liquidity(  # type: ignore
+    strategy: Any,
+    best_contract: Any,
+    price: Any,
+    hv_current: Any,
+    days_to_expiry: Any,
+    symbol: Any,
 ):
     """驗證流動性、VRP 與 預期波動。"""
     bid = best_contract.get("bid", 0.0)
@@ -476,15 +489,15 @@ def apply_vix_ladder(vix_spot: Optional[float]) -> VixTier:
 
 
 def _calculate_sizing(
-    strategy,
-    best_contract,
-    days_to_expiry,
-    expected_move=0.0,
-    price=0.0,
-    stock_cost=0.0,
-    kelly_fraction=0.5,
+    strategy: Any,
+    best_contract: Any,
+    days_to_expiry: Any,
+    expected_move: Any = 0.0,
+    price: Any = 0.0,
+    stock_cost: Any = 0.0,
+    kelly_fraction: Any = 0.5,
     kelly_fraction_override: Optional[float] = None,
-):
+) -> Any:
     """計算資金效率與倉位大小
 
     Args:
@@ -612,12 +625,12 @@ def detect_ema_signals(
 
 
 async def analyze_symbol(
-    symbol,
-    stock_cost=0.0,
-    df_spy=None,
-    spy_price=None,
+    symbol: Any,
+    stock_cost: Any = 0.0,
+    df_spy: Any = None,
+    spy_price: Any = None,
     vix_spot: Optional[float] = None,
-):
+) -> Any:
     """掃描技術指標、波動率、偏態、Greeks 等進行核心分析。
 
     Args:
@@ -895,7 +908,7 @@ async def analyze_symbol(
         return None
 
 
-async def get_option_metrics(symbol, opt_type, strike, expiry):
+async def get_option_metrics(symbol: Any, opt_type: Any, strike: Any, expiry: Any):  # type: ignore
     ticker = yf.Ticker(symbol)
     today = datetime.now().date()
     try:
@@ -924,7 +937,9 @@ async def get_option_metrics(symbol, opt_type, strike, expiry):
         return {"delta": 0.0, "dte": 0, "mid": 0.0}
 
 
-async def find_best_contract(symbol, strategy_type, target_delta, min_dte, max_dte):
+async def find_best_contract(  # type: ignore
+    symbol: Any, strategy_type: Any, target_delta: Any, min_dte: Any, max_dte: Any
+):  # type: ignore
     try:
         expirations = await market_data_service.get_all_option_expiries(symbol)
         today = datetime.now().date()

@@ -1,8 +1,9 @@
+from typing import Any
 import sqlite3
 import logging
 import asyncio
 import threading
-from typing import Any, Optional
+from typing import Optional
 import config
 
 logger = logging.getLogger(__name__)
@@ -27,7 +28,7 @@ class DatabaseWriteQueue:
     _lock = threading.Lock()
 
     @classmethod
-    def initialize(cls, loop: asyncio.AbstractEventLoop):
+    def initialize(cls, loop: asyncio.AbstractEventLoop) -> Any:
         with cls._lock:
             cls._loop = loop
             cls._loop_thread = threading.current_thread()
@@ -44,7 +45,7 @@ class DatabaseWriteQueue:
             return cls._running and cls._loop is not None and cls._queue is not None
 
     @classmethod
-    async def stop_worker(cls):
+    async def stop_worker(cls) -> None:
         with cls._lock:
             cls._running = False
             task = cls._worker_task
@@ -101,7 +102,7 @@ class DatabaseWriteQueue:
         assert cls._queue is not None
         assert cls._loop is not None
 
-        def enqueue():
+        def enqueue() -> None:
             assert cls._queue is not None
             cls._queue.put_nowait((task_type, data, commit, None, (event, result)))
 
@@ -117,7 +118,7 @@ class DatabaseWriteQueue:
         return result["data"]
 
     @classmethod
-    async def _worker_loop(cls):
+    async def _worker_loop(cls) -> None:
         conn = None
         try:
             conn = sqlite3.connect(config.DB_NAME, timeout=30.0)
@@ -127,7 +128,7 @@ class DatabaseWriteQueue:
 
             while cls._running:
                 try:
-                    task = await cls._queue.get()
+                    task = await cls._queue.get()  # type: ignore
                 except asyncio.CancelledError:
                     break
 
@@ -160,7 +161,7 @@ class DatabaseWriteQueue:
                         result["error"] = e
                         event.set()
                 finally:
-                    cls._queue.task_done()
+                    cls._queue.task_done()  # type: ignore
         except Exception as e:
             logger.critical(
                 f"DatabaseWriteQueue worker loop encountered critical error: {e}"

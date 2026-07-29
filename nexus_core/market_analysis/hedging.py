@@ -1,7 +1,8 @@
+from typing import Any
 import logging
 import asyncio
 import numpy as np
-from typing import Dict, Any, Optional
+from typing import Dict, Optional
 from services import market_data_service
 from database.user_settings import UserContext
 from services.alert_filter import TrendState, MTFResult
@@ -129,7 +130,7 @@ async def get_market_regime_target(
 
 def calculate_autonomous_hedge(
     current_delta: float, target_delta: float, spy_price: float
-):
+) -> Any:
     delta_gap = target_delta - current_delta
     if abs(delta_gap) < 50:
         return None
@@ -246,7 +247,7 @@ async def analyze_hedge_performance(user_id: int) -> Dict[str, Any]:
     }
 
 
-async def calculate_daily_effectiveness(user_id: int):
+async def calculate_daily_effectiveness(user_id: int) -> Any:
     perf = await analyze_hedge_performance(user_id)
     u_ctx = await asyncio.to_thread(database.get_full_user_context, user_id)
     await asyncio.to_thread(

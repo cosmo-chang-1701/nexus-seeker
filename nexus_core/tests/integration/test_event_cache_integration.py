@@ -1,3 +1,4 @@
+from typing import Any
 from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
@@ -9,7 +10,9 @@ from services.trading_service import TradingService
 
 
 @pytest.mark.asyncio
-async def test_calendar_service_reuses_sqlite_macro_cache_across_instances(db_conn):
+async def test_calendar_service_reuses_sqlite_macro_cache_across_instances(  # type: ignore
+    db_conn: Any,
+):  # type: ignore
     fixed_now = datetime(2026, 5, 12, 12, 0, 0)
 
     with patch("services.calendar_service.datetime") as mock_datetime:
@@ -49,7 +52,7 @@ async def test_calendar_service_reuses_sqlite_macro_cache_across_instances(db_co
 
 
 @pytest.mark.asyncio
-async def test_pre_market_alerts_use_sqlite_earnings_cache(db_conn):
+async def test_pre_market_alerts_use_sqlite_earnings_cache(db_conn: Any):  # type: ignore
     uid = 1001
     database.add_watchlist_symbol(uid, "AAPL")
 

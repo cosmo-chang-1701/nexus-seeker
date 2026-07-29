@@ -1,3 +1,5 @@
+from typing import Any
+
 version = 46
 description = (
     "Add reference_spot_price column to market_cache table for invalidation checking"
@@ -15,7 +17,7 @@ CREATE TABLE IF NOT EXISTS market_cache (
 """
 
 
-def migrate_data(conn):
+def migrate_data(conn: Any):  # type: ignore
     cursor = conn.cursor()
     # 1. Add reference_spot_price to market_cache
     try:

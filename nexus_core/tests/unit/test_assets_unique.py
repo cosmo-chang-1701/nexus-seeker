@@ -1,3 +1,4 @@
+from typing import Any
 import sys
 import os
 
@@ -9,7 +10,7 @@ from models.asset import Asset, ContextType
 from database.watchlist import add_watchlist_symbol
 
 
-def test_disallow_duplicate_assets(db_conn):
+def test_disallow_duplicate_assets(db_conn: Any):  # type: ignore
     """測試同一使用者不能在同一個情境 (ContextType) 下加入重複的標的，但不同情境允許並存"""
     user_id = 999888
     symbol = "TSLA"
@@ -65,7 +66,7 @@ def test_disallow_duplicate_assets(db_conn):
     assert manager.add_asset(asset4) is True
 
 
-def test_add_watchlist_symbol_disallows_duplicates(db_conn):
+def test_add_watchlist_symbol_disallows_duplicates(db_conn: Any):  # type: ignore
     """測試 database.watchlist 模組底下的輔助函式也能阻擋重複標的"""
     user_id = 999888
     symbol = "AAPL"

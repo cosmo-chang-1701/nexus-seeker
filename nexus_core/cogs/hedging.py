@@ -1,3 +1,4 @@
+from typing import Any
 from cogs.embed_builder import (
     create_error_embed,
     create_hedge_list_embed,
@@ -19,7 +20,7 @@ class HedgingCog(commands.Cog):
     Handles hedge confirmation and risk attribution.
     """
 
-    def __init__(self, bot):
+    def __init__(self, bot: Any):
         self.bot = bot
         logger.info("HedgingCog loaded.")
 
@@ -32,7 +33,7 @@ class HedgingCog(commands.Cog):
         interaction: discord.Interaction,
         alert_id: int,
         actual_qty: Optional[int] = None,
-    ):
+    ) -> Any:
         await interaction.response.defer(ephemeral=True)
         user_id = interaction.user.id
 
@@ -96,7 +97,7 @@ class HedgingCog(commands.Cog):
             )
 
     @app_commands.command(name="hedge_list", description="查看最近的對沖警報與執行狀態")
-    async def hedge_list(self, interaction: discord.Interaction):
+    async def hedge_list(self, interaction: discord.Interaction) -> Any:
         await interaction.response.defer(ephemeral=True)
         user_id = interaction.user.id
 
@@ -136,5 +137,5 @@ class HedgingCog(commands.Cog):
             )
 
 
-async def setup(bot):
+async def setup(bot: Any):  # type: ignore
     await bot.add_cog(HedgingCog(bot))

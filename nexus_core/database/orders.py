@@ -213,7 +213,7 @@ def get_active_order(order_id: int) -> dict | None:
         conn.close()
 
 
-def update_active_order_fields(order_id: int, **kwargs) -> bool:
+def update_active_order_fields(order_id: int, **kwargs) -> bool:  # type: ignore
     """動態更新委託單的多個欄位"""
     if not kwargs:
         return False

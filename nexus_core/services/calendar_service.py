@@ -90,7 +90,7 @@ class CalendarService:
     Implements LRU Bounded Cache for 1GB RAM optimization and Pydantic for type safety.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         # LRU Bounded Cache with 500 entries
         self._economic_cache = BoundedCache(max_size=500)
         self._earnings_cache = BoundedCache(max_size=500)
@@ -289,7 +289,7 @@ class CalendarService:
 
         cache_key = f"economic_{start_date}_{end_date}"
         if cache_key in self._economic_cache:
-            return self._economic_cache[cache_key]
+            return self._economic_cache[cache_key]  # type: ignore
 
         try:
             month_keys = self._iter_month_keys(start_day, end_day)
@@ -355,7 +355,7 @@ class CalendarService:
         """
         symbol = symbol.upper()
         if symbol in self._earnings_cache:
-            return self._earnings_cache[symbol]
+            return self._earnings_cache[symbol]  # type: ignore
 
         try:
             cached = get_cached_earnings(symbol)

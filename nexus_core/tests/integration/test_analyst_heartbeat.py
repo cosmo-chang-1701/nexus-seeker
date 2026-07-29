@@ -1,3 +1,4 @@
+from typing import Any
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 import sys
@@ -11,7 +12,7 @@ from cogs.analyst_agent import AnalystAgent
 
 
 @pytest.fixture
-def mock_bot():
+def mock_bot() -> Any:
     bot = MagicMock()
     bot.wait_until_ready = AsyncMock()
     bot.queue_dm = AsyncMock()
@@ -19,7 +20,7 @@ def mock_bot():
 
 
 @pytest.mark.asyncio
-async def test_dispatch_intraday_guide_phases(mock_bot):
+async def test_dispatch_intraday_guide_phases(mock_bot: Any):  # type: ignore
     cog = AnalystAgent(mock_bot)
 
     with patch("psutil.virtual_memory") as mock_vmem, patch(
@@ -70,7 +71,7 @@ async def test_dispatch_intraday_guide_phases(mock_bot):
         mock_ctx.return_value = mock_user_ctx
 
         # Override _fetch_macro_data on the cog instance
-        cog._fetch_macro_data = AsyncMock(return_value={"vix": 15.0})
+        cog._fetch_macro_data = AsyncMock(return_value={"vix": 15.0})  # type: ignore
 
         # Test Phase A (hour < 11)
         mock_now = datetime.datetime(2024, 1, 1, 10, 0, 0)
@@ -120,7 +121,7 @@ async def test_dispatch_intraday_guide_phases(mock_bot):
 
 
 @pytest.mark.asyncio
-async def test_dispatch_intraday_guide_memory_gate(mock_bot):
+async def test_dispatch_intraday_guide_memory_gate(mock_bot: Any):  # type: ignore
     cog = AnalystAgent(mock_bot)
 
     with patch("psutil.virtual_memory") as mock_vmem, patch(
@@ -136,7 +137,7 @@ async def test_dispatch_intraday_guide_memory_gate(mock_bot):
         mock_user_ctx.enable_analyst_agent = True
         mock_ctx.return_value = mock_user_ctx
 
-        cog._fetch_macro_data = AsyncMock(return_value={"vix": 15.0})
+        cog._fetch_macro_data = AsyncMock(return_value={"vix": 15.0})  # type: ignore
 
         await cog.dispatch_intraday_guide()
 

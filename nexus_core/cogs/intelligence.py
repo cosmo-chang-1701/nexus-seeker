@@ -1,8 +1,8 @@
+from typing import Any
 import discord
 from discord.ext import commands
 from discord import app_commands
 import logging
-from typing import Any
 
 import database
 from services import reddit_service, news_service, market_data_service, llm_service
@@ -26,14 +26,14 @@ class IntelligenceCog(commands.Cog):
     Handles Polymarket whale tracking, social sentiment, and news intelligence.
     """
 
-    def __init__(self, bot):
+    def __init__(self, bot: Any):
         self.bot = bot
         logger.info("IntelligenceCog loaded.")
 
     @app_commands.command(
         name="poly_list", description="顯示目前監控中的 Polymarket 活躍市場清單"
     )
-    async def poly_list(self, interaction: discord.Interaction):
+    async def poly_list(self, interaction: discord.Interaction) -> Any:
         await interaction.response.defer(ephemeral=True)
         try:
             if not hasattr(self.bot, "polymarket_service"):
@@ -59,7 +59,7 @@ class IntelligenceCog(commands.Cog):
     @app_commands.command(
         name="poly_status", description="🛠️ [開發者] 查看 Polymarket WebSocket 連線狀態"
     )
-    async def poly_status(self, interaction: discord.Interaction):
+    async def poly_status(self, interaction: discord.Interaction) -> Any:
         if not hasattr(self.bot, "polymarket_service"):
             await interaction.response.send_message(
                 embed=create_error_embed("Polymarket 服務未初始化。", title="系統錯誤"),
@@ -80,7 +80,7 @@ class IntelligenceCog(commands.Cog):
         interaction: discord.Interaction,
         usd_value: float = 50000.0,
         side: str = "BUY",
-    ):
+    ) -> Any:
         await interaction.response.defer(ephemeral=True)
 
         try:
@@ -141,7 +141,7 @@ class IntelligenceCog(commands.Cog):
     @app_commands.command(
         name="test_risk_ui", description="🛠️ [開發者] 模擬高風險 LMND 掃描視覺成果"
     )
-    async def test_risk_ui(self, interaction: discord.Interaction):
+    async def test_risk_ui(self, interaction: discord.Interaction) -> Any:
         await interaction.response.defer(ephemeral=True)
 
         # 1. 準備基礎 Mock Data
@@ -217,7 +217,7 @@ class IntelligenceCog(commands.Cog):
     @app_commands.command(name="scan_news", description="掃描特定標的之最新官方新聞")
     async def scan_news(
         self, interaction: discord.Interaction, symbol: str, limit: int = 5
-    ):
+    ) -> Any:
         await interaction.response.defer(ephemeral=True)
         symbol = symbol.upper()
         try:
@@ -239,7 +239,7 @@ class IntelligenceCog(commands.Cog):
     )
     async def scan_reddit(
         self, interaction: discord.Interaction, symbol: str, limit: int = 5
-    ):
+    ) -> Any:
         await interaction.response.defer(ephemeral=True)
         symbol = symbol.upper()
         try:
@@ -260,7 +260,7 @@ class IntelligenceCog(commands.Cog):
             )
 
     @app_commands.command(name="quote", description="獲取標的即時報價 (Finnhub)")
-    async def quote(self, interaction: discord.Interaction, symbol: str):
+    async def quote(self, interaction: discord.Interaction, symbol: str) -> Any:
         symbol = symbol.upper()
         await interaction.response.defer(ephemeral=True)
         data = await market_data_service.get_quote(symbol)
@@ -277,5 +277,5 @@ class IntelligenceCog(commands.Cog):
         await interaction.followup.send(embed=embed, ephemeral=True)
 
 
-async def setup(bot):
+async def setup(bot: Any):  # type: ignore
     await bot.add_cog(IntelligenceCog(bot))

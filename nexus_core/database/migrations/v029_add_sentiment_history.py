@@ -1,3 +1,4 @@
+from typing import Any
 import sqlite3
 
 version = 29
@@ -16,5 +17,5 @@ CREATE INDEX IF NOT EXISTS idx_sentiment_symbol_indicator ON sentiment_history(s
 """
 
 
-def migrate_data(conn: sqlite3.Connection):
+def migrate_data(conn: sqlite3.Connection) -> Any:
     pass

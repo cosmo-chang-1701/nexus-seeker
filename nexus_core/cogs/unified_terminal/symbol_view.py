@@ -1,7 +1,8 @@
+from typing import Any
 import discord
 import asyncio
 import logging
-from typing import Dict, Any
+from typing import Dict
 
 from services import market_data_service, news_service, reddit_service
 from market_analysis.sentiment_engine import SentimentEngine
@@ -26,21 +27,23 @@ class SymbolHubView(discord.ui.View):
     Updates the original message in-place and provides loading feedback.
     """
 
-    def __init__(self, symbol: str, user_id: int, bot):
+    def __init__(self, symbol: str, user_id: int, bot: Any):
         super().__init__(timeout=300)
         self.symbol = symbol.upper()
         self.user_id = user_id
         self.bot = bot
         self.base_data: Dict[str, Any] = {}
 
-    async def _set_loading(self, interaction: discord.Interaction):
+    async def _set_loading(self, interaction: discord.Interaction) -> Any:
         """將所有按鈕設為禁用狀態以表示讀取中"""
         for child in self.children:
             if isinstance(child, discord.ui.Button):
                 child.disabled = True
         await interaction.edit_original_response(view=self)
 
-    async def _reset_loading(self, interaction: discord.Interaction, embed=None):
+    async def _reset_loading(
+        self, interaction: discord.Interaction, embed: Any = None
+    ) -> Any:
         """恢復按鈕狀態並更新內容"""
         for child in self.children:
             if isinstance(child, discord.ui.Button):
@@ -52,7 +55,7 @@ class SymbolHubView(discord.ui.View):
     )
     async def btn_home(
         self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+    ) -> Any:
         await interaction.response.defer()
         await self._set_loading(interaction)
         embed = None
@@ -72,7 +75,7 @@ class SymbolHubView(discord.ui.View):
     )
     async def btn_media(
         self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+    ) -> Any:
         await interaction.response.defer()
         await self._set_loading(interaction)
         embed = None
@@ -99,7 +102,7 @@ class SymbolHubView(discord.ui.View):
     )
     async def btn_refresh(
         self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+    ) -> Any:
         await interaction.response.defer()
         await self._set_loading(interaction)
         embed = None
@@ -366,7 +369,7 @@ class SymbolHubView(discord.ui.View):
     )
     async def btn_hedge(
         self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+    ) -> Any:
         await interaction.response.defer()
         await self._set_loading(interaction)
         try:

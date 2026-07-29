@@ -1,3 +1,4 @@
+from typing import Any
 import pytest
 from unittest.mock import AsyncMock
 from database.notifications import (
@@ -10,7 +11,7 @@ from database.notifications import (
 
 
 @pytest.fixture(autouse=True)
-def clean_db(db_conn):
+def clean_db(db_conn: Any):  # type: ignore
     """每個測試前清理 user_notification_settings"""
     cursor = db_conn.cursor()
     cursor.execute("DELETE FROM user_notification_settings")
@@ -18,7 +19,7 @@ def clean_db(db_conn):
     yield
 
 
-def test_default_all_enabled(db_conn):
+def test_default_all_enabled(db_conn: Any):  # type: ignore
     """測試全新用戶通知預設值（預設全部開啟）"""
     user_id = 999111
     settings = get_user_notification_settings(user_id)
@@ -30,7 +31,7 @@ def test_default_all_enabled(db_conn):
         assert is_notification_enabled(user_id, key) is expected
 
 
-def test_toggle_single_setting(db_conn):
+def test_toggle_single_setting(db_conn: Any):  # type: ignore
     """測試單一通知項目的切換 (ON/OFF)"""
     user_id = 999111
     target_key = "hb_live_price"
@@ -54,7 +55,7 @@ def test_toggle_single_setting(db_conn):
     assert get_user_notification_settings(user_id)[target_key] is True
 
 
-def test_toggle_all_settings(db_conn):
+def test_toggle_all_settings(db_conn: Any):  # type: ignore
     """測試一鍵全部開啟與一鍵全部關閉"""
     user_id = 999222
 
@@ -74,7 +75,7 @@ def test_toggle_all_settings(db_conn):
 
 
 @pytest.mark.asyncio
-async def test_notification_settings_view_structure(db_conn):
+async def test_notification_settings_view_structure(db_conn: Any):  # type: ignore
     """測試 NotificationSettingsView 結構與一鍵全部開啟/關閉的反應"""
     from cogs.terminal import NotificationSettingsView
 
@@ -86,18 +87,22 @@ async def test_notification_settings_view_structure(db_conn):
 
     # 預期下拉選單長度正確
     select_scheduled = next(
-        c for c in view.children if c.custom_id == "select_scheduled"
+        c
+        for c in view.children
+        if c.custom_id == "select_scheduled"  # type: ignore
     )
-    select_realtime = next(c for c in view.children if c.custom_id == "select_realtime")
+    select_realtime = next(c for c in view.children if c.custom_id == "select_realtime")  # type: ignore
     select_polymarket = next(
-        c for c in view.children if c.custom_id == "select_polymarket"
+        c
+        for c in view.children
+        if c.custom_id == "select_polymarket"  # type: ignore
     )
-    assert len(select_scheduled.options) == 9
-    assert len(select_realtime.options) == 6
-    assert len(select_polymarket.options) == 4
+    assert len(select_scheduled.options) == 9  # type: ignore
+    assert len(select_realtime.options) == 6  # type: ignore
+    assert len(select_polymarket.options) == 4  # type: ignore
 
     # 預期預設選項前綴為 🟢
-    assert select_scheduled.options[0].label.startswith("🟢")
+    assert select_scheduled.options[0].label.startswith("🟢")  # type: ignore
 
     # 模擬點擊「全部關閉」按鈕
     mock_interaction = AsyncMock()
@@ -106,16 +111,18 @@ async def test_notification_settings_view_structure(db_conn):
 
     # 驗證狀態皆關閉且 View 重新載入，下拉選單前綴變為 🔴 (需要獲取最新的 child 物件)
     select_scheduled_new = next(
-        c for c in view.children if c.custom_id == "select_scheduled"
+        c
+        for c in view.children
+        if c.custom_id == "select_scheduled"  # type: ignore
     )
     settings = get_user_notification_settings(user_id)
     for key in ALL_NOTIFICATION_KEYS:
         assert settings[key] is False
-    assert select_scheduled_new.options[0].label.startswith("🔴")
+    assert select_scheduled_new.options[0].label.startswith("🔴")  # type: ignore
 
 
 @pytest.mark.asyncio
-async def test_notification_settings_polymarket_toggle(db_conn):
+async def test_notification_settings_polymarket_toggle(db_conn: Any):  # type: ignore
     """測試在通知中心點選 🐳 巨鯨交易異動警報，是否能成功切換其通知狀態"""
     from cogs.terminal import NotificationSettingsView
 
@@ -139,7 +146,7 @@ async def test_notification_settings_polymarket_toggle(db_conn):
 
 
 @pytest.mark.asyncio
-async def test_notification_settings_polymarket_use_llm_toggle(db_conn):
+async def test_notification_settings_polymarket_use_llm_toggle(db_conn: Any):  # type: ignore
     """測試在通知中心切換 Polymarket AI 分析 (Polymarket Settings)，是否能成功更新資料庫"""
     from cogs.terminal import NotificationSettingsView
     import database
@@ -165,7 +172,7 @@ async def test_notification_settings_polymarket_use_llm_toggle(db_conn):
 
 
 @pytest.mark.asyncio
-async def test_notification_settings_polymarket_modal_trigger(db_conn):
+async def test_notification_settings_polymarket_modal_trigger(db_conn: Any):  # type: ignore
     """測試在通知中心選擇 Polymarket 監控門檻，是否會正確彈出專屬 Modal"""
     from cogs.terminal import NotificationSettingsView, NotificationSettingsModal
 
@@ -188,7 +195,7 @@ async def test_notification_settings_polymarket_modal_trigger(db_conn):
 
 
 @pytest.mark.asyncio
-async def test_notification_settings_modal_successful_submission(db_conn):
+async def test_notification_settings_modal_successful_submission(db_conn: Any):  # type: ignore
     """測試通知中心 Modal 正常提交更新時，資料庫更新與畫面渲染"""
     from cogs.terminal import NotificationSettingsView, NotificationSettingsModal
     import database

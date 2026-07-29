@@ -1,9 +1,10 @@
+from typing import Any
 import logging
 import asyncio
 import pandas as pd
 import numpy as np
 import yfinance as yf
-from typing import Dict, Any, Optional, List
+from typing import Dict, Optional, List
 
 from services import market_data_service
 from .psq_engine import analyze_psq
@@ -19,7 +20,7 @@ class VolatilityInspector:
     Mission: Identify "Cheap Volatility" in the watchlist.
     """
 
-    def __init__(self, bot=None):
+    def __init__(self, bot: Any = None):
         self.bot = bot
 
     async def run_scan(self, symbols: List[str], user_id: int) -> List[Dict[str, Any]]:

@@ -66,7 +66,7 @@ async def get_reddit_context(
             response_json = res.json()
             if response_json.get("status") == "success":
                 logger.info(f"[{symbol}] 成功從本地端取得 Reddit 資料！")
-                return response_json.get("data")
+                return response_json.get("data")  # type: ignore
             else:
                 logger.warning(
                     f"[{symbol}] 本地端爬取發生內部錯誤: {response_json.get('data')}"

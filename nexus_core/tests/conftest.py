@@ -1,3 +1,4 @@
+from typing import Any
 import os
 import pytest
 import sqlite3
@@ -15,7 +16,7 @@ os.environ["NEXUS_DB_NAME"] = TEST_DB_NAME
 _original_connect = sqlite3.connect
 
 
-def _patched_connect(database, *args, **kwargs):
+def _patched_connect(database: Any, *args, **kwargs):  # type: ignore
     if isinstance(database, str) and database.startswith("file:"):
         kwargs["uri"] = True
     if "timeout" not in kwargs:
@@ -27,21 +28,21 @@ sqlite3.connect = _patched_connect
 
 
 @pytest.fixture(scope="session", autouse=True)
-def mock_tasks_loop_start():
+def mock_tasks_loop_start() -> Any:
     """Globally prevent background loop tasks from starting and leaking in tests."""
     with patch("discord.ext.tasks.Loop.start") as mock:
         yield mock
 
 
 @pytest.fixture(scope="session", autouse=True)
-def mock_finnhub_client():
+def mock_finnhub_client() -> Any:
     """Globally mock finnhub.Client to avoid real API calls."""
     with patch("finnhub.Client") as mock:
         yield mock
 
 
 @pytest.fixture(scope="session", autouse=True)
-def mock_symbol_validation():
+def mock_symbol_validation() -> Any:
     """Globally mock validate_symbol to return True for common test symbols."""
     from services.market_data_service import validate_symbol as _real_validate_symbol
 
@@ -54,13 +55,13 @@ def mock_symbol_validation():
 
 
 @pytest.fixture(scope="session", autouse=True)
-def mock_db_name():
+def mock_db_name() -> Any:
     with patch("config.DB_NAME", TEST_DB_NAME):
         yield
 
 
 @pytest.fixture(scope="session")
-def db_conn():
+def db_conn() -> Any:
     conn = sqlite3.connect(TEST_DB_NAME)
     # Run migrations
     from database.core import run_migrations
@@ -71,7 +72,7 @@ def db_conn():
 
 
 @pytest.fixture(autouse=True)
-def clean_db(db_conn):
+def clean_db(db_conn: Any):  # type: ignore
     # Clear memory caches to avoid cross-test contamination
     try:
         from market_analysis.sentiment_engine import _iv_cache
@@ -116,7 +117,7 @@ def clean_db(db_conn):
 
 
 @pytest.fixture
-def mock_interaction():
+def mock_interaction() -> Any:
     interaction = AsyncMock()
     interaction.response = AsyncMock()
     interaction.followup = AsyncMock()
@@ -127,7 +128,7 @@ def mock_interaction():
 
 
 @pytest.fixture
-def mock_market_data():
+def mock_market_data() -> Any:
     with patch(
         "services.market_data_service.get_quote", autospec=True
     ) as mock_price, patch(
@@ -138,7 +139,7 @@ def mock_market_data():
 
 
 @pytest.fixture
-def mock_llm():
+def mock_llm() -> Any:
     with patch(
         "services.llm_service.generate_market_report", autospec=True
     ) as mock_report:

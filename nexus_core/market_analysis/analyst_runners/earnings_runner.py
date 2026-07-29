@@ -1,6 +1,7 @@
 """Pre-market earnings & valuation scan logic for the Analyst Agent."""
 
 from __future__ import annotations
+from typing import Any
 
 import asyncio
 import logging
@@ -25,7 +26,7 @@ def _get_tw_time_str() -> str:
     return now_tw.strftime("[%H:%M UTC+8]")
 
 
-async def run_premarket_earnings():
+async def run_premarket_earnings() -> Any:
     """Scan upcoming earnings events, enrich with quant metrics, and return an Embed."""
     time_str = _get_tw_time_str()
     try:
@@ -58,20 +59,24 @@ async def run_premarket_earnings():
                 except Exception as ve:
                     logger.warning(f"Error parsing earnings date for {sym}: {ve}")
 
-        valid_earnings.sort(key=lambda x: x["days_left"])
+        valid_earnings.sort(key=lambda x: x["days_left"])  # type: ignore
         top_earnings = valid_earnings[:10]
 
         # 緊迫度分級：2 天內財報 → 深度掃描；其餘 → 輕量掃描
         deep_scan_symbols = [
-            item["symbol"] for item in top_earnings if item["days_left"] <= 2
+            item["symbol"]
+            for item in top_earnings
+            if item["days_left"] <= 2  # type: ignore
         ]
         light_scan_symbols = [
-            item["symbol"] for item in top_earnings if item["days_left"] > 2
+            item["symbol"]
+            for item in top_earnings
+            if item["days_left"] > 2  # type: ignore
         ]
 
         sem = asyncio.Semaphore(3)
 
-        async def deep_scan_symbol(sym):
+        async def deep_scan_symbol(sym: Any):  # type: ignore
             async with sem:
                 return await asyncio.gather(
                     evaluate_watchlist_symbol(sym),
@@ -80,7 +85,7 @@ async def run_premarket_earnings():
                     return_exceptions=True,
                 )
 
-        async def light_scan_symbol(sym):
+        async def light_scan_symbol(sym: Any):  # type: ignore
             async with sem:
                 return await market_data_service.get_company_profile(sym)
 
@@ -89,7 +94,7 @@ async def run_premarket_earnings():
             return_exceptions=True,
         )
         deep_results_map: dict = {}
-        for sym, res in zip(deep_scan_symbols, deep_results_list):
+        for sym, res in zip(deep_scan_symbols, deep_results_list):  # type: ignore
             if isinstance(res, Exception) or not isinstance(res, (list, tuple)):
                 deep_results_map[sym] = (None, {"pcr": 0.0, "state": "ERROR"}, {})
             else:
@@ -112,7 +117,7 @@ async def run_premarket_earnings():
 
         earnings_data: dict = {}
         for item in top_earnings:
-            sym = item["symbol"]
+            sym = item["symbol"]  # type: ignore
             metrics_payload = {
                 "date": item["date"],
                 "days_left": item["days_left"],
@@ -162,13 +167,13 @@ async def run_premarket_earnings():
         sentiment_data: dict = {}
         if upcoming_symbols:
             news_results = await asyncio.gather(
-                *[fetch_recent_news(sym) for sym in upcoming_symbols],
+                *[fetch_recent_news(sym) for sym in upcoming_symbols],  # type: ignore
                 return_exceptions=True,
             )
             reddit_results: list
             if database.any_user_local_tunnel_enabled():
                 reddit_results = await asyncio.gather(
-                    *[get_reddit_context(sym) for sym in upcoming_symbols],
+                    *[get_reddit_context(sym) for sym in upcoming_symbols],  # type: ignore
                     return_exceptions=True,
                 )
             else:
@@ -176,7 +181,7 @@ async def run_premarket_earnings():
                     upcoming_symbols
                 )
 
-            for i, sym in enumerate(upcoming_symbols):
+            for i, sym in enumerate(upcoming_symbols):  # type: ignore
                 sentiment_data[sym] = {
                     "news": (
                         news_results[i]

@@ -1,7 +1,8 @@
+from typing import Any
 import logging
 import asyncio
 from datetime import date, datetime
-from typing import List, Optional, Dict, Any, Set
+from typing import List, Optional, Dict, Set
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -199,7 +200,7 @@ async def build_enhanced_watchlist_metrics(
     if symbol in _WATCHLIST_METRICS_CACHE:
         cached_metrics, expiry = _WATCHLIST_METRICS_CACHE[symbol]
         if now_ts < expiry:
-            return cached_metrics
+            return cached_metrics  # type: ignore
 
     quote_task = market_data_service.get_quote(symbol)
     stock_history_task = market_data_service.get_history_df(symbol, period="1y")
@@ -208,7 +209,7 @@ async def build_enhanced_watchlist_metrics(
         spy_history_task = market_data_service.get_spy_history_df(period="1y")
     else:
 
-        async def _get_provided_spy():
+        async def _get_provided_spy() -> Any:
             return df_spy
 
         spy_history_task = _get_provided_spy()
@@ -803,7 +804,7 @@ def evaluate_advanced_filters(
 
     if uoa_data:
 
-        def safe_float(v):
+        def safe_float(v: Any):  # type: ignore
             return float(v) if v is not None else 0.0
 
         net_uoa_delta = sum(
@@ -852,7 +853,7 @@ class IntradayScanPipeline:
     每 30 分鐘執行一次，驅動 Squeeze 決策引擎並發送通知。
     """
 
-    def __init__(self, bot, engine: NexusGammaSqueezeEngine):
+    def __init__(self, bot: Any, engine: NexusGammaSqueezeEngine):
         self.bot = bot
         self.engine = engine
         self.is_running = False
@@ -860,14 +861,14 @@ class IntradayScanPipeline:
         self.scan_interval_seconds = 30 * 60  # 30 minutes
         self._intraday_scan_sent: Set[tuple[int, str, date]] = set()
 
-    def start(self):
+    def start(self) -> None:
         """啟動異步監控管道"""
         if not self.is_running:
             self.is_running = True
             self._task = asyncio.create_task(self._run_loop())
             logger.info("✅ IntradayScanPipeline 異步掃描管道啟動。")
 
-    def stop(self):
+    def stop(self) -> None:
         """停止異步監控管道"""
         self.is_running = False
         if self._task:
@@ -1065,7 +1066,7 @@ class IntradayScanPipeline:
             symbol_tags=symbol_tags,
         )
 
-    async def _run_loop(self):
+    async def _run_loop(self) -> None:
         while self.is_running:
             try:
                 # 1. 取得當下美東時間與交易時段 phase
@@ -1198,7 +1199,7 @@ class IntradayScanPipeline:
                             # 如果是 SPEAR 訊號或是 Vanna 偏離警戒，則發送 Discord 私訊通知
                             if (
                                 output.sddm_route == "SPEAR"
-                                or "偏離" in output.vanna_hedging_instruction
+                                or "偏離" in output.vanna_hedging_instruction  # type: ignore
                             ):
                                 import database
 

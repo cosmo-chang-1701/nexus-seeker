@@ -10,7 +10,7 @@ def _read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_cogs_do_not_construct_embeds_outside_builder():
+def test_cogs_do_not_construct_embeds_outside_builder() -> None:
     offenders = []
 
     for path in sorted(COGS_DIR.glob("*.py")):
@@ -22,7 +22,7 @@ def test_cogs_do_not_construct_embeds_outside_builder():
     assert offenders == []
 
 
-def test_cogs_do_not_use_queue_dm_message_shortcut():
+def test_cogs_do_not_use_queue_dm_message_shortcut() -> None:
     offenders = []
 
     for path in sorted(COGS_DIR.glob("*.py")):

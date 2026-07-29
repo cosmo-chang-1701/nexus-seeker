@@ -1,3 +1,4 @@
+from typing import Any
 import pytest
 from unittest.mock import patch
 from bot import NexusBot, DISCORD_EMBED_DESCRIPTION_LIMIT, _split_discord_text
@@ -6,7 +7,7 @@ from cogs.embed_builder import create_info_embed
 
 
 @pytest.fixture
-def bot():
+def bot() -> Any:
     # 測試 queue_dm/worker 行為時，需允許寫入通知佇列（避免 follower gate 直接跳過）
     inst = NexusBot()
     setattr(inst, "_is_leader_instance", True)
@@ -14,7 +15,7 @@ def bot():
 
 
 @pytest.mark.asyncio
-async def test_bot_queue_dm_auto_wraps_text(bot):
+async def test_bot_queue_dm_auto_wraps_text(bot: Any):  # type: ignore
     """測試 bot.queue_dm 是否會將純文字自動包裝進 Embed"""
     user_id = 12345
     test_message = "Hello, this is a test message"
@@ -31,7 +32,7 @@ async def test_bot_queue_dm_auto_wraps_text(bot):
 
 
 @pytest.mark.asyncio
-async def test_bot_queue_dm_keeps_embed(bot):
+async def test_bot_queue_dm_keeps_embed(bot: Any):  # type: ignore
     """測試 bot.queue_dm 如果已經有 Embed，則保持原樣"""
     user_id = 12345
     test_embed = create_info_embed("Custom Title", "Custom Message")
@@ -48,7 +49,7 @@ async def test_bot_queue_dm_keeps_embed(bot):
 
 
 @pytest.mark.asyncio
-async def test_bot_queue_dm_splits_long_text(bot):
+async def test_bot_queue_dm_splits_long_text(bot: Any):  # type: ignore
     """測試超長純文字通知會自動切成多個安全 Embed。"""
     user_id = 12345
     test_message = "A" * (DISCORD_EMBED_DESCRIPTION_LIMIT + 100)
@@ -72,7 +73,7 @@ async def test_bot_queue_dm_splits_long_text(bot):
 
 
 @pytest.mark.asyncio
-async def test_split_discord_text_preserves_code_blocks():
+async def test_split_discord_text_preserves_code_blocks() -> None:
     """測試超長 ANSI code block 仍會維持合法 fence 格式。"""
     body = "A" * (DISCORD_EMBED_DESCRIPTION_LIMIT + 100)
     message = f"```ansi\n{body}\n```"
@@ -86,10 +87,10 @@ async def test_split_discord_text_preserves_code_blocks():
 
 
 @pytest.mark.asyncio
-async def test_terminal_cog_uses_embeds(mock_interaction, bot):
+async def test_terminal_cog_uses_embeds(mock_interaction: Any, bot: Any):  # type: ignore
     """測試 TerminalCog 的指令是否使用 Embed 輸出"""
     terminal = TerminalCog(bot)
-    await terminal.update_settings.callback(terminal, mock_interaction, risk_limit=-100)
+    await terminal.update_settings.callback(terminal, mock_interaction, risk_limit=-100)  # type: ignore
 
     assert mock_interaction.followup.send.called
     _, kwargs = mock_interaction.followup.send.call_args
@@ -99,10 +100,12 @@ async def test_terminal_cog_uses_embeds(mock_interaction, bot):
 
 
 @pytest.mark.asyncio
-async def test_terminal_cog_success_embed(mock_interaction, bot, db_conn):
+async def test_terminal_cog_success_embed(  # type: ignore
+    mock_interaction: Any, bot: Any, db_conn: Any
+):  # type: ignore
     """測試 TerminalCog 指令成功時是否也使用 Embed"""
     terminal = TerminalCog(bot)
-    await terminal.update_settings.callback(terminal, mock_interaction, risk_limit=25.0)
+    await terminal.update_settings.callback(terminal, mock_interaction, risk_limit=25.0)  # type: ignore
 
     assert mock_interaction.followup.send.called
     _, kwargs = mock_interaction.followup.send.call_args
@@ -112,7 +115,7 @@ async def test_terminal_cog_success_embed(mock_interaction, bot, db_conn):
 
 
 @pytest.mark.asyncio
-async def test_bot_queue_dm_splits_large_embed(bot):
+async def test_bot_queue_dm_splits_large_embed(bot: Any):  # type: ignore
     """測試當 Embed 總長度大於 5500 字元時，queue_dm 會自動將其拆分為多個通知並存入資料庫。"""
     import discord
 
@@ -147,7 +150,7 @@ async def test_bot_queue_dm_splits_large_embed(bot):
 
 
 @pytest.mark.asyncio
-async def test_message_worker_unblocks_on_http_400(bot):
+async def test_message_worker_unblocks_on_http_400(bot: Any):  # type: ignore
     """測試當 _message_worker 遭遇 HTTP 400 Bad Request 時，會將該永久失敗的通知從資料庫刪除，以防阻塞佇列。"""
     import discord
     from unittest.mock import MagicMock, AsyncMock

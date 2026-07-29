@@ -1,3 +1,4 @@
+from typing import Any
 import pytest
 import pandas as pd
 from unittest.mock import AsyncMock, patch, MagicMock
@@ -5,12 +6,12 @@ from services.trading_service import TradingService
 
 
 @pytest.fixture
-def trading_service():
+def trading_service() -> Any:
     bot = MagicMock()
     return TradingService(bot)
 
 
-def test_clean_market_condition_inputs(trading_service):
+def test_clean_market_condition_inputs(trading_service: Any) -> Any:
     # Test normal inputs
     ma20, atr, rsi = trading_service._clean_market_condition_inputs(
         100.0, 98.5, 2.5, 65.0
@@ -45,7 +46,7 @@ def test_clean_market_condition_inputs(trading_service):
 
 
 @pytest.mark.asyncio
-async def test_run_market_scan_unpacks_correctly(trading_service):
+async def test_run_market_scan_unpacks_correctly(trading_service: Any):  # type: ignore
     # Mock database watchlist to return a list of 3-element tuples
     # (user_id, symbol, use_llm)
     mock_watchlists = [(1, "AAPL", 1)]

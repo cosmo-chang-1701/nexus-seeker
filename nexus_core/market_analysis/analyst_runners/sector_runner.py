@@ -1,6 +1,7 @@
 """Sector rotation, deep research, and market-open liquidity runners."""
 
 from __future__ import annotations
+from typing import Any
 
 import asyncio
 import logging
@@ -47,7 +48,7 @@ def _get_tw_time_str() -> str:
     return now_tw.strftime("[%H:%M UTC+8]")
 
 
-async def _fetch_poly_events(bot) -> list[dict]:
+async def _fetch_poly_events(bot: Any) -> list[dict]:
     """Fetch up to 5 relevant Polymarket events."""
     events: list[dict] = []
     try:
@@ -75,7 +76,7 @@ async def _fetch_poly_events(bot) -> list[dict]:
     return events
 
 
-async def gather_sector_rotation_data(bot) -> dict:
+async def gather_sector_rotation_data(bot: Any) -> dict:
     """Collect sector performance, skew, UOA, Polymarket events, and SPY max pain."""
     macro = await get_macro_environment()
     vix = macro.get("vix", 18.0)
@@ -139,7 +140,7 @@ async def gather_sector_rotation_data(bot) -> dict:
     }
 
 
-async def run_sector_flow_report(bot):
+async def run_sector_flow_report(bot: Any):  # type: ignore
     """Build and return a sector-flow report Embed using LLM analysis."""
     time_str = _get_tw_time_str()
     try:

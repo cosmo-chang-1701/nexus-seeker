@@ -1,3 +1,4 @@
+from typing import Any
 import pytest
 import sys
 import os
@@ -27,7 +28,7 @@ from cogs.order_ui import OrderUICog
 
 
 @pytest.mark.asyncio
-async def test_active_orders_db_operations(db_conn):
+async def test_active_orders_db_operations(db_conn: Any):  # type: ignore
     """測試待成交委託單資料庫 CRUD 運作"""
     user_id = 999999
     symbol = "TSLA"
@@ -74,7 +75,7 @@ async def test_active_orders_db_operations(db_conn):
 
 
 @pytest.mark.asyncio
-async def test_calculate_telemetry_pricing_engine():
+async def test_calculate_telemetry_pricing_engine() -> None:
     """測試「捕獸夾」遙測訂價引擎的三大維度決策樹算法"""
 
     # 維度一：最大痛點上移
@@ -141,7 +142,9 @@ async def test_calculate_telemetry_pricing_engine():
 
 
 @pytest.mark.asyncio
-async def test_dynamic_order_modal_on_submit_limit_success(mock_interaction, db_conn):
+async def test_dynamic_order_modal_on_submit_limit_success(  # type: ignore
+    mock_interaction: Any, db_conn: Any
+):  # type: ignore
     """測試限價訂單 Modal 成功送出與資料庫寫入"""
     modal = DynamicOrderModal(
         order_type="LIMIT", title="新增限價訂單", validity_db="DAY"
@@ -173,7 +176,7 @@ async def test_dynamic_order_modal_on_submit_limit_success(mock_interaction, db_
 
 
 @pytest.mark.asyncio
-async def test_dynamic_order_modal_validation_failure_quantity(mock_interaction):
+async def test_dynamic_order_modal_validation_failure_quantity(mock_interaction: Any):  # type: ignore
     """測試數量欄位輸入非數字的驗證失敗"""
     modal = DynamicOrderModal(
         order_type="LIMIT", title="新增限價訂單", validity_db="DAY"
@@ -193,7 +196,7 @@ async def test_dynamic_order_modal_validation_failure_quantity(mock_interaction)
 
 
 @pytest.mark.asyncio
-async def test_dynamic_order_modal_validation_failure_price(mock_interaction):
+async def test_dynamic_order_modal_validation_failure_price(mock_interaction: Any):  # type: ignore
     """測試限價價格輸入非數字的驗證失敗"""
     modal = DynamicOrderModal(
         order_type="LIMIT", title="新增限價訂單", validity_db="DAY"
@@ -213,8 +216,8 @@ async def test_dynamic_order_modal_validation_failure_price(mock_interaction):
 
 
 @pytest.mark.asyncio
-async def test_dynamic_order_modal_on_submit_trailing_pct_success(
-    mock_interaction, db_conn
+async def test_dynamic_order_modal_on_submit_trailing_pct_success(  # type: ignore
+    mock_interaction: Any, db_conn: Any
 ):
     """測試百分比追蹤停損單的成功提交"""
     modal = DynamicOrderModal(
@@ -248,7 +251,7 @@ async def test_dynamic_order_modal_on_submit_trailing_pct_success(
 
 
 @pytest.mark.asyncio
-async def test_cancel_order_modal_success(mock_interaction, db_conn):
+async def test_cancel_order_modal_success(mock_interaction: Any, db_conn: Any):  # type: ignore
     """測試取消委託單表單送出"""
     user_id = mock_interaction.user.id
     order_id = add_active_order(
@@ -276,7 +279,7 @@ async def test_cancel_order_modal_success(mock_interaction, db_conn):
 
 
 @pytest.mark.asyncio
-async def test_edit_order_modal_success(mock_interaction, db_conn):
+async def test_edit_order_modal_success(mock_interaction: Any, db_conn: Any):  # type: ignore
     """測試編輯委託單表單送出 (更新價格 + 方向)"""
     user_id = mock_interaction.user.id
     order_id = add_active_order(
@@ -292,7 +295,7 @@ async def test_edit_order_modal_success(mock_interaction, db_conn):
     modal.new_symbol._value = ""
     modal.new_quantity._value = ""
     modal.new_side._value = "SELL"
-    modal.new_price._value = "145.50"
+    modal.new_price._value = "145.50"  # type: ignore
 
     await modal.on_submit(mock_interaction)
 
@@ -309,7 +312,7 @@ async def test_edit_order_modal_success(mock_interaction, db_conn):
 
 
 @pytest.mark.asyncio
-async def test_edit_order_modal_side_only_success(mock_interaction, db_conn):
+async def test_edit_order_modal_side_only_success(mock_interaction: Any, db_conn: Any):  # type: ignore
     """測試編輯委託單表單送出 (僅更新方向，價格留空)"""
     user_id = mock_interaction.user.id
     order_id = add_active_order(
@@ -325,7 +328,8 @@ async def test_edit_order_modal_side_only_success(mock_interaction, db_conn):
     modal.new_symbol._value = ""
     modal.new_quantity._value = ""
     modal.new_side._value = "SELL"
-    modal.new_price._value = ""  # 留空：不變更價格
+    assert modal.new_price is not None
+    modal.new_price._value = ""  # 留空：不變更價格  # type: ignore
 
     await modal.on_submit(mock_interaction)
 
@@ -341,12 +345,12 @@ async def test_edit_order_modal_side_only_success(mock_interaction, db_conn):
 
 
 @pytest.mark.asyncio
-async def test_order_panel_command(mock_interaction):
+async def test_order_panel_command(mock_interaction: Any):  # type: ignore
     """測試喚起訂單設定面板命令"""
     bot = MagicMock()
     cog = OrderUICog(bot)
 
-    await cog.order_panel.callback(cog, mock_interaction)
+    await cog.order_panel.callback(cog, mock_interaction)  # type: ignore
 
     assert mock_interaction.response.defer.called
     assert mock_interaction.followup.send.called
@@ -359,7 +363,7 @@ async def test_order_panel_command(mock_interaction):
 
 
 @pytest.mark.asyncio
-async def test_orders_list_command(mock_interaction, db_conn):
+async def test_orders_list_command(mock_interaction: Any, db_conn: Any):  # type: ignore
     """測試查詢待成交委託單清單命令（預設：全部）"""
     user_id = mock_interaction.user.id
     add_active_order(
@@ -374,7 +378,7 @@ async def test_orders_list_command(mock_interaction, db_conn):
     bot = MagicMock()
     cog = OrderUICog(bot)
     # 不傳任何下拉參數時，預設視為全部
-    await cog.list_orders.callback(cog, mock_interaction)
+    await cog.list_orders.callback(cog, mock_interaction)  # type: ignore
 
     assert mock_interaction.response.defer.called
     assert mock_interaction.followup.send.called
@@ -396,7 +400,7 @@ async def test_orders_list_command(mock_interaction, db_conn):
 
 
 @pytest.mark.asyncio
-async def test_orders_list_command_filters(mock_interaction, db_conn):
+async def test_orders_list_command_filters(mock_interaction: Any, db_conn: Any):  # type: ignore
     """測試 /list_orders 下拉篩選：方向與條件"""
     user_id = mock_interaction.user.id
 
@@ -423,7 +427,7 @@ async def test_orders_list_command_filters(mock_interaction, db_conn):
     cog = OrderUICog(bot)
 
     # 篩選：只看 SELL
-    await cog.list_orders.callback(cog, mock_interaction, side="SELL")
+    await cog.list_orders.callback(cog, mock_interaction, side="SELL")  # type: ignore
 
     assert mock_interaction.followup.send.called
     kwargs = mock_interaction.followup.send.call_args_list[-1].kwargs
@@ -442,7 +446,7 @@ async def test_orders_list_command_filters(mock_interaction, db_conn):
 
     # 篩選：含停損 (HAS_STOP) + SELL
     await cog.list_orders.callback(
-        cog,
+        cog,  # type: ignore
         mock_interaction,
         side="SELL",
         condition="HAS_STOP",
@@ -460,7 +464,7 @@ async def test_orders_list_command_filters(mock_interaction, db_conn):
 
 
 @pytest.mark.asyncio
-async def test_telemetry_alert_and_alignment(mock_interaction, db_conn):
+async def test_telemetry_alert_and_alignment(mock_interaction: Any, db_conn: Any):  # type: ignore
     """測試半小時遙測偏離警報以及一鍵價格對齊功能"""
     user_id = mock_interaction.user.id
     add_active_order(
@@ -505,7 +509,7 @@ async def test_telemetry_alert_and_alignment(mock_interaction, db_conn):
         "services.calendar_service.calendar_service.get_symbol_earnings",
         new=AsyncMock(return_value=None),
     ):
-        await cog.telemetry_alert.callback(cog, mock_interaction)
+        await cog.telemetry_alert.callback(cog, mock_interaction)  # type: ignore
     assert mock_interaction.response.defer.called
     assert mock_interaction.followup.send.called
     kwargs = mock_interaction.followup.send.call_args[1]
@@ -536,7 +540,7 @@ async def test_telemetry_alert_and_alignment(mock_interaction, db_conn):
 
 
 @pytest.mark.asyncio
-async def test_remove_order_command_with_id(mock_interaction, db_conn):
+async def test_remove_order_command_with_id(mock_interaction: Any, db_conn: Any):  # type: ignore
     """測試 remove_order 傳入 ID 直接取消"""
     user_id = mock_interaction.user.id
     order_id = add_active_order(
@@ -549,7 +553,7 @@ async def test_remove_order_command_with_id(mock_interaction, db_conn):
     )
     bot = MagicMock()
     cog = OrderUICog(bot)
-    await cog.remove_order.callback(cog, mock_interaction, order_id=order_id)
+    await cog.remove_order.callback(cog, mock_interaction, order_id=order_id)  # type: ignore
 
     assert mock_interaction.response.defer.called
     assert mock_interaction.followup.send.called
@@ -562,11 +566,11 @@ async def test_remove_order_command_with_id(mock_interaction, db_conn):
 
 
 @pytest.mark.asyncio
-async def test_remove_order_command_no_id(mock_interaction):
+async def test_remove_order_command_no_id(mock_interaction: Any):  # type: ignore
     """測試 remove_order 未傳入 ID 時喚起 Modal"""
     bot = MagicMock()
     cog = OrderUICog(bot)
-    await cog.remove_order.callback(cog, mock_interaction, order_id=None)
+    await cog.remove_order.callback(cog, mock_interaction, order_id=None)  # type: ignore
 
     assert mock_interaction.response.send_modal.called
     modal = mock_interaction.response.send_modal.call_args[0][0]
@@ -574,7 +578,9 @@ async def test_remove_order_command_no_id(mock_interaction):
 
 
 @pytest.mark.asyncio
-async def test_edit_order_command_with_id_and_params(mock_interaction, db_conn):
+async def test_edit_order_command_with_id_and_params(  # type: ignore
+    mock_interaction: Any, db_conn: Any
+):  # type: ignore
     """測試 edit_order 傳入 ID 與參數直接更新"""
     user_id = mock_interaction.user.id
     order_id = add_active_order(
@@ -587,8 +593,12 @@ async def test_edit_order_command_with_id_and_params(mock_interaction, db_conn):
     )
     bot = MagicMock()
     cog = OrderUICog(bot)
-    await cog.edit_order.callback(
-        cog, mock_interaction, order_id=order_id, price=145.5, side="SELL"
+    await cog.edit_order.callback(  # type: ignore
+        cog,  # type: ignore
+        mock_interaction,
+        order_id=order_id,
+        price=145.5,
+        side="SELL",  # type: ignore
     )
 
     assert mock_interaction.response.defer.called
@@ -603,11 +613,11 @@ async def test_edit_order_command_with_id_and_params(mock_interaction, db_conn):
 
 
 @pytest.mark.asyncio
-async def test_edit_order_command_no_id(mock_interaction):
+async def test_edit_order_command_no_id(mock_interaction: Any):  # type: ignore
     """測試 edit_order 未傳入 ID 時回傳錯誤訊息"""
     bot = MagicMock()
     cog = OrderUICog(bot)
-    await cog.edit_order.callback(cog, mock_interaction, order_id=None)
+    await cog.edit_order.callback(cog, mock_interaction, order_id=None)  # type: ignore
 
     assert mock_interaction.response.send_message.called
     embed = mock_interaction.response.send_message.call_args[1]["embed"]
@@ -615,7 +625,7 @@ async def test_edit_order_command_no_id(mock_interaction):
 
 
 @pytest.mark.asyncio
-async def test_edit_order_command_id_only(mock_interaction, db_conn):
+async def test_edit_order_command_id_only(mock_interaction: Any, db_conn: Any):  # type: ignore
     """測試 edit_order 僅傳入 ID 時喚起預填的 Modal"""
     user_id = mock_interaction.user.id
     order_id = add_active_order(
@@ -628,8 +638,12 @@ async def test_edit_order_command_id_only(mock_interaction, db_conn):
     )
     bot = MagicMock()
     cog = OrderUICog(bot)
-    await cog.edit_order.callback(
-        cog, mock_interaction, order_id=order_id, price=None, side=None
+    await cog.edit_order.callback(  # type: ignore
+        cog,  # type: ignore
+        mock_interaction,
+        order_id=order_id,
+        price=None,
+        side=None,  # type: ignore
     )
 
     assert mock_interaction.response.send_modal.called
@@ -640,7 +654,7 @@ async def test_edit_order_command_id_only(mock_interaction, db_conn):
 
 
 @pytest.mark.asyncio
-async def test_order_item_view_buttons_prefill_order_id(mock_interaction):
+async def test_order_item_view_buttons_prefill_order_id(mock_interaction: Any):  # type: ignore
     """測試單筆委託單卡片按鈕會自動預填 order_id 到 Modal"""
     view = OrderItemView(order_id=99)
 
@@ -660,7 +674,7 @@ async def test_order_item_view_buttons_prefill_order_id(mock_interaction):
 
 
 @pytest.mark.asyncio
-async def test_order_setup_view_shortcut_buttons(mock_interaction):
+async def test_order_setup_view_shortcut_buttons(mock_interaction: Any):  # type: ignore
     """測試 OrderSetupView 中的限價、停損與市價單快捷按鈕是否正常觸發 Modal"""
     view = OrderSetupView()
 
@@ -690,8 +704,8 @@ async def test_order_setup_view_shortcut_buttons(mock_interaction):
 
 
 @pytest.mark.asyncio
-async def test_dynamic_order_modal_telemetry_fallback(
-    mock_interaction, db_conn, monkeypatch
+async def test_dynamic_order_modal_telemetry_fallback(  # type: ignore
+    mock_interaction: Any, db_conn: Any, monkeypatch: Any
 ):
     """測試當限價留空/為 0 時，Modal 能否自動套用遙測定價 fallback"""
     modal = DynamicOrderModal(
@@ -703,36 +717,36 @@ async def test_dynamic_order_modal_telemetry_fallback(
     modal.limit_price._value = ""  # 留空以觸發遙測
 
     # 模擬外部 API 調用，防範測試無網路
-    async def mock_get_quote(symbol):
+    async def mock_get_quote(symbol: Any):  # type: ignore
         return {"c": 150.0, "pc": 148.0}
 
-    async def mock_get_history_df(symbol, period):
+    async def mock_get_history_df(symbol: Any, period: Any):  # type: ignore
         import pandas as pd
 
         return pd.DataFrame({"Close": [150.0]})
 
     # Mock SentimentEngine & calculate_telemetry_price
-    async def mock_fetch_iv(symbol):
+    async def mock_fetch_iv(symbol: Any):  # type: ignore
         class MockIV:
             current_iv = 0.3
             iv_rank = 30.0
 
         return MockIV()
 
-    async def mock_calculate_skew(symbol):
+    async def mock_calculate_skew(symbol: Any):  # type: ignore
         return {"skew": 1.0}
 
-    async def mock_telemetry(
-        symbol,
-        base_price,
-        spot_price,
-        iv,
-        hist_iv,
-        max_pain,
-        prev_max_pain,
-        skew_percentile,
-        prev_close,
-        base_quantity,
+    async def mock_telemetry(  # type: ignore
+        symbol: Any,
+        base_price: Any,
+        spot_price: Any,
+        iv: Any,
+        hist_iv: Any,
+        max_pain: Any,
+        prev_max_pain: Any,
+        skew_percentile: Any,
+        prev_close: Any,
+        base_quantity: Any,
     ):
         return 145.0, base_quantity, ["Mocked Telemetry Price Resolved"]
 
@@ -772,14 +786,14 @@ async def test_dynamic_order_modal_telemetry_fallback(
 
 
 @pytest.mark.asyncio
-async def test_add_order_slash_command_manual(mock_interaction, db_conn):
+async def test_add_order_slash_command_manual(mock_interaction: Any, db_conn: Any):  # type: ignore
     """測試直接下單 Slash Command，帶手動價格"""
     bot = MagicMock()
     cog = OrderUICog(bot)
 
     # 測試手動帶價格的限價單
-    await cog.add_order.callback(
-        cog,
+    await cog.add_order.callback(  # type: ignore
+        cog,  # type: ignore
         mock_interaction,
         symbol="TSLA",
         quantity=5,
@@ -806,38 +820,38 @@ async def test_add_order_slash_command_manual(mock_interaction, db_conn):
 
 
 @pytest.mark.asyncio
-async def test_add_order_slash_command_telemetry(
-    mock_interaction, db_conn, monkeypatch
+async def test_add_order_slash_command_telemetry(  # type: ignore
+    mock_interaction: Any, db_conn: Any, monkeypatch: Any
 ):
     """測試直接下單 Slash Command，留空/價格為0時自動對齊遙測"""
     bot = MagicMock()
     cog = OrderUICog(bot)
 
     # Mock Telemetry dependencies
-    async def mock_get_quote(symbol):
+    async def mock_get_quote(symbol: Any):  # type: ignore
         return {"c": 100.0, "pc": 99.0}
 
-    async def mock_fetch_iv(symbol):
+    async def mock_fetch_iv(symbol: Any):  # type: ignore
         class MockIV:
             current_iv = 0.3
             iv_rank = 30.0
 
         return MockIV()
 
-    async def mock_calculate_skew(symbol):
+    async def mock_calculate_skew(symbol: Any):  # type: ignore
         return {"skew": 1.0}
 
-    async def mock_telemetry(
-        symbol,
-        base_price,
-        spot_price,
-        iv,
-        hist_iv,
-        max_pain,
-        prev_max_pain,
-        skew_percentile,
-        prev_close,
-        base_quantity,
+    async def mock_telemetry(  # type: ignore
+        symbol: Any,
+        base_price: Any,
+        spot_price: Any,
+        iv: Any,
+        hist_iv: Any,
+        max_pain: Any,
+        prev_max_pain: Any,
+        skew_percentile: Any,
+        prev_close: Any,
+        base_quantity: Any,
     ):
         return 95.5, base_quantity, ["Mocked Telemetry Command Price Resolved"]
 
@@ -855,8 +869,8 @@ async def test_add_order_slash_command_telemetry(
     )
 
     # 帶價格為 0 以觸發遙測
-    await cog.add_order.callback(
-        cog,
+    await cog.add_order.callback(  # type: ignore
+        cog,  # type: ignore
         mock_interaction,
         symbol="BABA",
         quantity=10,
@@ -884,7 +898,9 @@ async def test_add_order_slash_command_telemetry(
 
 
 @pytest.mark.asyncio
-async def test_telemetry_alert_ignores_stale_max_pain(mock_interaction, db_conn):
+async def test_telemetry_alert_ignores_stale_max_pain(  # type: ignore
+    mock_interaction: Any, db_conn: Any
+):  # type: ignore
     """測試當 Max Pain 快取過期時，遙測對齊警報能安全過濾不採用它進行調價計算"""
     user_id = mock_interaction.user.id
     # Clear orders first
@@ -945,7 +961,7 @@ async def test_telemetry_alert_ignores_stale_max_pain(mock_interaction, db_conn)
         "services.telemetry_pricing_engine.calculate_telemetry_price",
         new=mock_telemetry_spy,
     ):
-        await cog.telemetry_alert.callback(cog, mock_interaction)
+        await cog.telemetry_alert.callback(cog, mock_interaction)  # type: ignore
 
     # Verify that the max_pain parameter passed to calculate_telemetry_price is None or 0.0,
     # indicating the stale value 120.0 was successfully overridden to 0.0/None.

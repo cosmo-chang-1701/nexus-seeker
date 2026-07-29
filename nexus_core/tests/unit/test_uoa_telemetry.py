@@ -5,7 +5,7 @@ from market_analysis.uoa_telemetry import (
 )
 
 
-def test_classify_uoa_trade_bto_mu():
+def test_classify_uoa_trade_bto_mu() -> None:
     """測試案例 1：激進買入 (MU $1050 Call)"""
     trade = UOATradeInput(
         strike_price=1050.0,
@@ -31,7 +31,7 @@ def test_classify_uoa_trade_bto_mu():
     assert "Gamma" in result.intent
 
 
-def test_classify_uoa_trade_sto_nvda():
+def test_classify_uoa_trade_sto_nvda() -> None:
     """測試案例 2：波動率賣出/壓制 (NVDA $220 Call)"""
     trade = UOATradeInput(
         strike_price=220.0,
@@ -57,7 +57,7 @@ def test_classify_uoa_trade_sto_nvda():
     assert "天花板" in result.intent
 
 
-def test_spacex_intent_and_ascii_table():
+def test_spacex_intent_and_ascii_table() -> None:
     """測試 2026-06-12 $790 Call BTO (SpaceX 週大吸籌) 及 ASCII 表格生成與對齊"""
     trade1 = UOATradeInput(
         strike_price=1050.0,
@@ -122,7 +122,7 @@ def test_spacex_intent_and_ascii_table():
     assert "2026-06-12" in lines[4] and "$1100.0" in lines[4] and "🔴" in lines[4]
 
 
-def test_classify_uoa_trade_moneyness():
+def test_classify_uoa_trade_moneyness() -> None:
     """測試 UOA ITM/OTM 精確意圖分類"""
     from market_analysis.uoa_telemetry import check_uoa_moneyness
 

@@ -1,3 +1,4 @@
+from typing import Any
 import discord
 from typing import List
 import logging
@@ -11,7 +12,7 @@ class BatchScanWarningButton(discord.ui.Button):
     按鈕：點擊後解析即時聯動警示列出的所有標的並批次執行深入分析。
     """
 
-    def __init__(self, cog, bot):
+    def __init__(self, cog: Any, bot: Any):
         super().__init__(
             label="⚡ 批次分析警示標的",
             style=discord.ButtonStyle.primary,
@@ -20,7 +21,7 @@ class BatchScanWarningButton(discord.ui.Button):
         self.cog = cog
         self.bot = bot
 
-    async def callback(self, interaction: discord.Interaction):
+    async def callback(self, interaction: discord.Interaction) -> Any:
         if not interaction.message or not interaction.message.embeds:
             await interaction.response.send_message(
                 embed=create_error_embed(
@@ -116,6 +117,6 @@ class BatchScanView(discord.ui.View):
     已移除「選擇單一標的深入分析」下拉選單。
     """
 
-    def __init__(self, symbols: List[str], cog, bot):
+    def __init__(self, symbols: List[str], cog: Any, bot: Any):
         super().__init__(timeout=300)
         self.add_item(BatchScanWarningButton(cog, bot))

@@ -1,10 +1,12 @@
+from typing import Any
+
 version = 45
 description = "Consolidate 13 legacy notification keys into 6 core notification keys"
 
 sql = "SELECT 1;"
 
 
-def migrate_data(conn):
+def migrate_data(conn: Any):  # type: ignore
     cursor = conn.cursor()
     # 1. Get all user_ids currently having any notification settings
     cursor.execute("SELECT DISTINCT user_id FROM user_notification_settings")

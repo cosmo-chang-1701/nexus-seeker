@@ -5,7 +5,7 @@ from market_analysis.intraday_pipeline import (
 )
 
 
-def _sample_metrics(**overrides):
+def _sample_metrics(**overrides):  # type: ignore
     payload = {
         "symbol": "AAPL",
         "exchange": "NASDAQ",
@@ -38,10 +38,10 @@ def _sample_metrics(**overrides):
         "relative_strength_spy": 0.02,
     }
     payload.update(overrides)
-    return EnhancedWatchlistMetrics(**payload)
+    return EnhancedWatchlistMetrics(**payload)  # type: ignore
 
 
-def _sample_tactical(**overrides):
+def _sample_tactical(**overrides):  # type: ignore
     payload = {
         "scenario": "premium-harvest",
         "sddm_route": "SPEAR",
@@ -53,10 +53,10 @@ def _sample_tactical(**overrides):
         "alert_level": "green",
     }
     payload.update(overrides)
-    return WatchlistTacticalPlan(**payload)
+    return WatchlistTacticalPlan(**payload)  # type: ignore
 
 
-def test_unheld_oversold_signals():
+def test_unheld_oversold_signals() -> None:
     # RSI < 30 (oversold) -> Base buy at buy_price_phase1 (170.0)
     metrics = _sample_metrics(rsi_14=25.0, option_skew=0.0)
     tactical = _sample_tactical()
@@ -74,7 +74,7 @@ def test_unheld_oversold_signals():
     assert "RSI 極度超賣" in signals["buy_rationale"]
 
 
-def test_unheld_overbought_signals():
+def test_unheld_overbought_signals() -> None:
     # RSI > 70 (overbought) -> Base buy at buy_price_phase3 (160.0)
     metrics = _sample_metrics(rsi_14=75.0, option_skew=0.0)
     tactical = _sample_tactical()
@@ -91,7 +91,7 @@ def test_unheld_overbought_signals():
     assert "RSI 超買" in signals["buy_rationale"]
 
 
-def test_unheld_skew_discount():
+def test_unheld_skew_discount() -> None:
     # High positive skew (e.g. 10.0%) -> Expect discount on suitable buy price
     metrics = _sample_metrics(rsi_14=50.0, option_skew=10.0)
     tactical = _sample_tactical()
@@ -112,7 +112,7 @@ def test_unheld_skew_discount():
     assert "Skew 避險情緒折價" in signals["buy_rationale"]
 
 
-def test_held_overbought_signals():
+def test_held_overbought_signals() -> None:
     # RSI > 70 -> Base sell is sell_price_phase1 (180.0)
     # RSI > 75 -> 50% scale out
     metrics = _sample_metrics(rsi_14=78.0, option_skew=0.0)
@@ -133,7 +133,7 @@ def test_held_overbought_signals():
     assert "RSI 超買過熱" in signals["sell_rationale"]
 
 
-def test_held_hard_hedge_signals():
+def test_held_hard_hedge_signals() -> None:
     metrics = _sample_metrics(rsi_14=50.0)
     tactical = _sample_tactical(scenario="hard-hedge")
 
@@ -152,7 +152,7 @@ def test_held_hard_hedge_signals():
     assert "硬避險" in signals["sell_rationale"]
 
 
-def test_option_guidance_includes_strikes():
+def test_option_guidance_includes_strikes() -> None:
     metrics = _sample_metrics(rsi_14=50.0, option_skew=6.0)
     tactical = _sample_tactical(scenario="premium-harvest")
 

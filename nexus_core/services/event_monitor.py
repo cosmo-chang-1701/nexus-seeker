@@ -1,8 +1,9 @@
+from typing import Any
 import asyncio
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from typing import Any, List
+from typing import List
 
 from cogs.embed_builder import create_proactive_event_alert_embed
 from database import get_full_user_context
@@ -171,14 +172,14 @@ class EventMonitor:
     Detects upcoming high-impact events and pushes proactive alerts.
     """
 
-    def __init__(self, bot):
+    def __init__(self, bot: Any):
         self.bot = bot
         # Cache to track alerted events to prevent spam
         # Key: (user_id, event_type, event_id, event_date)
         # Max 2000 entries should be enough for many users and events
         self._alerted_cache = BoundedCache(max_size=2000)
 
-    async def check_upcoming_events(self):
+    async def check_upcoming_events(self) -> None:
         """
         Scan all users' portfolios for upcoming high-impact events.
         """
@@ -221,7 +222,7 @@ class EventMonitor:
             except Exception as e:
                 logger.error(f"Error checking events for user {uid}: {e}")
 
-    async def _send_event_alert(self, user_id: int, events: List[Any]):
+    async def _send_event_alert(self, user_id: int, events: List[Any]) -> Any:
         """
         Send a proactive hedging alert based on upcoming events.
         """
@@ -253,7 +254,7 @@ class EventMonitor:
 
 
 # Helper to start the monitor
-async def start_event_monitor(bot):
+async def start_event_monitor(bot: Any):  # type: ignore
     monitor = EventMonitor(bot)
     while True:
         await monitor.check_upcoming_events()

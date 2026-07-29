@@ -5,7 +5,7 @@ from market_analysis.volatility_inspector import VolatilityInspector
 
 
 @pytest.mark.asyncio
-async def test_volatility_inspector_inspect_symbol():
+async def test_volatility_inspector_inspect_symbol() -> None:
     # Arrange
     inspector = VolatilityInspector()
     symbol = "AAPL"

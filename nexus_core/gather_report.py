@@ -1,3 +1,4 @@
+from typing import Any
 import asyncio
 import logging
 
@@ -24,7 +25,7 @@ SECTORS = {
 }
 
 
-async def gather_report_data():
+async def gather_report_data() -> Any:
     # 1. Market Snapshot
     macro = await market_data_service.get_macro_environment()
     vix = macro.get("vix", 18.0)

@@ -1,3 +1,4 @@
+from typing import Any
 import pytest
 from datetime import date
 from types import SimpleNamespace
@@ -15,17 +16,17 @@ from cogs.embed_builders.portfolio_embeds import get_scenario_guidance
 
 
 @pytest.fixture
-def squeeze_engine():
+def squeeze_engine() -> Any:
     return NexusGammaSqueezeEngine(base_gate_3_threshold=1000000.0)
 
 
 @pytest.fixture
-def intraday_pipeline(squeeze_engine):
+def intraday_pipeline(squeeze_engine: Any) -> Any:
     return IntradayScanPipeline(MagicMock(), squeeze_engine)
 
 
 @pytest.fixture
-def default_account_state():
+def default_account_state() -> Any:
     return TraderAccountState(
         capital=100000.0,
         cash_reserve=25000.0,
@@ -35,7 +36,7 @@ def default_account_state():
 
 
 @pytest.fixture
-def default_market_data():
+def default_market_data() -> Any:
     return TickerMarketData(
         ticker="AAPL",
         spot_price=173.5,
@@ -49,7 +50,7 @@ def default_market_data():
 
 
 @pytest.fixture
-def default_holdings():
+def default_holdings() -> Any:
     return [
         OptionHolding(symbol="AAPL", quantity=2.0, theta=-0.12),
         OptionHolding(symbol="MSFT", quantity=-1.0, theta=0.08),
@@ -57,17 +58,17 @@ def default_holdings():
 
 
 @pytest.fixture
-def default_greeks():
+def default_greeks() -> Any:
     return {"vanna": 1.5, "beta": 1.2}
 
 
-def test_validate_gates_all_pass(squeeze_engine, default_market_data):
+def test_validate_gates_all_pass(squeeze_engine: Any, default_market_data: Any) -> Any:
     passed, failed = squeeze_engine.validate_gates(default_market_data, "Phase B")
     assert passed is True
     assert len(failed) == 0
 
 
-def test_validate_gates_failures(squeeze_engine):
+def test_validate_gates_failures(squeeze_engine: Any):  # type: ignore
     bad_data = TickerMarketData(
         ticker="LOW_LIQ",
         spot_price=50.0,
@@ -83,7 +84,7 @@ def test_validate_gates_failures(squeeze_engine):
     assert len(failed) == 4  # Liquidity, Event, Efficiency, Cross-Market
 
 
-def test_validate_gates_phase_a_reduction(squeeze_engine):
+def test_validate_gates_phase_a_reduction(squeeze_engine: Any):  # type: ignore
     # In Phase A, threshold is reduced to 70% ($700,000)
     # If premium is $800,000, it should pass in Phase A but fail in Phase B
     borderline_data = TickerMarketData(
@@ -107,12 +108,12 @@ def test_validate_gates_phase_a_reduction(squeeze_engine):
     assert "資金效率不足" in failed_b[0]
 
 
-def test_analyze_ticker_spear_route(
-    squeeze_engine,
-    default_market_data,
-    default_account_state,
-    default_holdings,
-    default_greeks,
+def test_analyze_ticker_spear_route(  # type: ignore
+    squeeze_engine: Any,
+    default_market_data: Any,
+    default_account_state: Any,
+    default_holdings: Any,
+    default_greeks: Any,
 ):
     output = squeeze_engine.analyze_ticker(
         data=default_market_data,
@@ -133,12 +134,12 @@ def test_analyze_ticker_spear_route(
     assert output.magnet_target == 175.0
 
 
-def test_analyze_ticker_shield_vix_gated(
-    squeeze_engine,
-    default_market_data,
-    default_account_state,
-    default_holdings,
-    default_greeks,
+def test_analyze_ticker_shield_vix_gated(  # type: ignore
+    squeeze_engine: Any,
+    default_market_data: Any,
+    default_account_state: Any,
+    default_holdings: Any,
+    default_greeks: Any,
 ):
     # If VIX is high, forced to SHIELD and Kelly scaled to 0.1
     default_account_state.current_vix = 28.0
@@ -156,12 +157,12 @@ def test_analyze_ticker_shield_vix_gated(
     assert "高波動警戒區" in output.recommended_actions[1]
 
 
-def test_financial_runway_calculation(
-    squeeze_engine,
-    default_market_data,
-    default_account_state,
-    default_holdings,
-    default_greeks,
+def test_financial_runway_calculation(  # type: ignore
+    squeeze_engine: Any,
+    default_market_data: Any,
+    default_account_state: Any,
+    default_holdings: Any,
+    default_greeks: Any,
 ):
     # Monthly burn rate = 6000 -> Daily burn rate = 200
     # Holdings theta yield = 2 * (-0.12) * 100 + (-1) * 0.08 * 100 = -24 - 8 = -32
@@ -181,12 +182,12 @@ def test_financial_runway_calculation(
     assert "🟡" in output.runway_status_msg
 
 
-def test_vanna_hedging_instruction(
-    squeeze_engine,
-    default_market_data,
-    default_account_state,
-    default_holdings,
-    default_greeks,
+def test_vanna_hedging_instruction(  # type: ignore
+    squeeze_engine: Any,
+    default_market_data: Any,
+    default_account_state: Any,
+    default_holdings: Any,
+    default_greeks: Any,
 ):
     # Vanna = 1.5, Beta = 1.2
     # d_vol = 0.10
@@ -204,7 +205,7 @@ def test_vanna_hedging_instruction(
     assert "SELL 賣出 18 單位 SPY" in output.vanna_hedging_instruction
 
 
-def test_post_market_attribution_evolution(squeeze_engine):
+def test_post_market_attribution_evolution(squeeze_engine: Any):  # type: ignore
     # Case 1: High protection score (portfolio suffered loss, hedge avoided it)
     # Portfolio PnL = -1000, Hedge PnL = +800 -> Score = 80% (>= 70)
     # Gate 3 threshold should be reduced by 10%
@@ -228,7 +229,7 @@ def test_post_market_attribution_evolution(squeeze_engine):
     assert "調升明日 Gate 3" in res2["evolution_msg"]
 
 
-def test_intraday_scan_report_only_sends_once_in_phase_b(intraday_pipeline):
+def test_intraday_scan_report_only_sends_once_in_phase_b(intraday_pipeline: Any):  # type: ignore
     trading_date = date(2026, 5, 22)
 
     assert intraday_pipeline._should_send_intraday_scan_report(
@@ -242,7 +243,7 @@ def test_intraday_scan_report_only_sends_once_in_phase_b(intraday_pipeline):
     )
 
 
-def test_intraday_scan_report_skips_non_mid_session(intraday_pipeline):
+def test_intraday_scan_report_skips_non_mid_session(intraday_pipeline: Any):  # type: ignore
     trading_date = date(2026, 5, 22)
 
     assert not intraday_pipeline._should_send_intraday_scan_report(
@@ -254,7 +255,9 @@ def test_intraday_scan_report_skips_non_mid_session(intraday_pipeline):
 
 
 @pytest.mark.asyncio
-async def test_build_watchlist_heartbeat_embed_includes_option_plan(intraday_pipeline):
+async def test_build_watchlist_heartbeat_embed_includes_option_plan(  # type: ignore
+    intraday_pipeline: Any,
+):  # type: ignore
     evaluation = SimpleNamespace(
         metrics=SimpleNamespace(
             symbol="MU",
@@ -337,7 +340,7 @@ async def test_build_watchlist_heartbeat_embed_includes_option_plan(intraday_pip
 
 
 @pytest.mark.asyncio
-async def test_run_loop_exception_isolation(intraday_pipeline):
+async def test_run_loop_exception_isolation(intraday_pipeline: Any):  # type: ignore
     from datetime import datetime
     from zoneinfo import ZoneInfo
 
@@ -347,7 +350,7 @@ async def test_run_loop_exception_isolation(intraday_pipeline):
 
     called_tickers = []
 
-    async def mock_evaluate(ticker):
+    async def mock_evaluate(ticker: Any):  # type: ignore
         called_tickers.append(ticker)
         if ticker == "AAPL":
             raise ValueError("Mock AAPL Exception")
@@ -376,7 +379,7 @@ async def test_run_loop_exception_isolation(intraday_pipeline):
         )
         mock_ctx.return_value = user_ctx
 
-        async def mock_sleep(secs):
+        async def mock_sleep(secs: Any):  # type: ignore
             intraday_pipeline.is_running = False
 
         with patch("asyncio.sleep", side_effect=mock_sleep):
@@ -388,7 +391,7 @@ async def test_run_loop_exception_isolation(intraday_pipeline):
 
 
 @pytest.mark.asyncio
-async def test_evaluate_watchlist_symbol_iv_suppression():
+async def test_evaluate_watchlist_symbol_iv_suppression() -> None:
     from market_analysis.intraday_pipeline import evaluate_watchlist_symbol
     from unittest.mock import AsyncMock, patch
     from models.schemas import (
@@ -470,7 +473,7 @@ async def test_evaluate_watchlist_symbol_iv_suppression():
         assert "IV 壓抑背離" in res.tactical.sddm_route
 
 
-def test_avgo_positive_gamma_support_avoids_forbidden_zone():
+def test_avgo_positive_gamma_support_avoids_forbidden_zone() -> None:
     from market_analysis.insights_engine import RiskInsightsContext, InsightsEngine
 
     # Mocking AVGO data (現價 $370.78, PutWall $372.50, 有大額正 Gamma, 預期區間 $363.75 ~ $377.81)
@@ -500,7 +503,7 @@ def test_avgo_positive_gamma_support_avoids_forbidden_zone():
     assert status_label == "價格接近最大痛點，維持震盪"
 
 
-def test_dark_pool_dirty_data_filter():
+def test_dark_pool_dirty_data_filter() -> None:
     """測試暗池價格嚴重偏離 (大於20%) 時的過濾機制"""
     from market_analysis.dark_pool_engine import sanitize_darkpool_prints
 
@@ -520,7 +523,7 @@ def test_dark_pool_dirty_data_filter():
     assert valid_prints[0]["price"] == 393.10
 
 
-def test_fixed_income_hedging_whitelist():
+def test_fixed_income_hedging_whitelist() -> None:
     """測試 BOXX 等避險資產的白名單豁免邏輯"""
     from market_analysis.insights_engine import RiskInsightsContext, InsightsEngine
 
@@ -546,7 +549,7 @@ def test_fixed_income_hedging_whitelist():
     assert "底牆保衛" not in (status_label or "")
 
 
-def test_bullish_momentum_tag_priority():
+def test_bullish_momentum_tag_priority() -> None:
     """測試強勢突破標的正確短路，不觸發跌破底牆"""
     from market_analysis.insights_engine import RiskInsightsContext, InsightsEngine
 
@@ -571,14 +574,14 @@ def test_bullish_momentum_tag_priority():
     assert "底牆保衛" not in (status_label or "")
 
 
-def test_gex_empty_heatmap_degradation():
+def test_gex_empty_heatmap_degradation() -> Any:
     """測試 GEX Profile 全為 0 時，是否正確觸發 [GEX 鏈盤前未刷新] 降級"""
     display_strikes = [385.0, 390.0, 395.0, 400.0]
     gex_prof = {str(k): 0.0 for k in display_strikes}
     gex_putwall = 394.06
 
     def _safe_gex(k_val: float) -> float:
-        val = gex_prof.get(str(k_val), gex_prof.get(k_val))
+        val = gex_prof.get(str(k_val), gex_prof.get(k_val))  # type: ignore
         try:
             return float(val) if val is not None else 0.0
         except (ValueError, TypeError):
@@ -591,12 +594,12 @@ def test_gex_empty_heatmap_degradation():
     assert has_putwall is True
 
 
-def test_max_pain_calendar_label():
+def test_max_pain_calendar_label() -> Any:
     """測試非週五到期的 DTE <= 7 合約是否正確標記為 [期中特約/末日週線]"""
     # 假設今天是 2026-07-09 (週四)
     today = date(2026, 7, 9)
 
-    def get_calendar_label(today_date, exp_date):
+    def get_calendar_label(today_date: Any, exp_date: Any) -> Any:
         dte = (exp_date - today_date).days
         is_friday = exp_date.weekday() == 4
         if dte <= 7:
@@ -618,11 +621,11 @@ def test_max_pain_calendar_label():
     assert get_calendar_label(today, wed_exp) == "期中特約/末日週線"
 
 
-def test_scenario_guidance_above_max_pain():
+def test_scenario_guidance_above_max_pain() -> None:
     guidance = get_scenario_guidance(394.39, 375.00)
     assert "價格高於最大痛點，結算日前需防範向痛點震盪拉回" in guidance
 
 
-def test_scenario_guidance_below_max_pain():
+def test_scenario_guidance_below_max_pain() -> None:
     guidance = get_scenario_guidance(350.00, 375.00)
     assert "價格遠低於最大痛點，具備磁吸效應回升動能" in guidance

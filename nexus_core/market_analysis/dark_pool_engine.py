@@ -27,7 +27,7 @@ async def fetch_and_cache_darkpool_dix() -> Dict[str, float]:
                     dp_data = data.get("data", fallback)
                     dix = float(dp_data.get("dix", 45.2))
                     await save_kv_cache("macro_darkpool_dix", dix)
-                    return dp_data
+                    return dp_data  # type: ignore
     except Exception as e:
         logger.warning(f"無法從 Tunnel Scraper 獲取 DIX 數據: {e}")
 
@@ -59,7 +59,7 @@ async def fetch_darkpool_prints(symbol: str) -> Dict[str, Any]:
                         asyncio.create_task(
                             save_kv_cache(f"dp_poc_{symbol.upper()}", float(dp_poc))
                         )
-                    return dp_data
+                    return dp_data  # type: ignore
     except Exception as e:
         logger.warning(f"無法從 Tunnel Scraper 獲取 {symbol} 暗池大宗明細: {e}")
 

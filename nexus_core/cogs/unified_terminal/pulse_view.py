@@ -1,3 +1,4 @@
+from typing import Any
 import discord
 import logging
 import database
@@ -19,18 +20,20 @@ class PulseHubView(discord.ui.View):
     Interactive view for the Pulse Hub (/market).
     """
 
-    def __init__(self, user_id: int, bot):
+    def __init__(self, user_id: int, bot: Any) -> Any:  # type: ignore
         super().__init__(timeout=300)
         self.user_id = user_id
         self.bot = bot
 
-    async def _set_loading(self, interaction: discord.Interaction):
+    async def _set_loading(self, interaction: discord.Interaction) -> Any:
         for child in self.children:
             if isinstance(child, discord.ui.Button):
                 child.disabled = True
         await interaction.edit_original_response(view=self)
 
-    async def _reset_loading(self, interaction: discord.Interaction, embed=None):
+    async def _reset_loading(
+        self, interaction: discord.Interaction, embed: Any = None
+    ) -> Any:
         for child in self.children:
             if isinstance(child, discord.ui.Button):
                 child.disabled = False
@@ -39,7 +42,7 @@ class PulseHubView(discord.ui.View):
     @discord.ui.button(label="📊 總經風控", style=discord.ButtonStyle.success)
     async def btn_macro_overview(
         self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+    ) -> Any:
         await interaction.response.defer()
         await self._set_loading(interaction)
         embed = None
@@ -58,7 +61,7 @@ class PulseHubView(discord.ui.View):
     @discord.ui.button(label="📅 市場日曆", style=discord.ButtonStyle.primary)
     async def btn_calendar(
         self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+    ) -> Any:
         await interaction.response.defer()
         await self._set_loading(interaction)
         embed = None
@@ -81,7 +84,7 @@ class PulseHubView(discord.ui.View):
     @discord.ui.button(label="🐋 預測市場", style=discord.ButtonStyle.primary)
     async def btn_poly(
         self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+    ) -> Any:
         await interaction.response.defer()
         await self._set_loading(interaction)
         embed = None
@@ -102,7 +105,9 @@ class PulseHubView(discord.ui.View):
             await self._reset_loading(interaction, embed=embed)
 
     @discord.ui.button(label="🔥 高波動掃描", style=discord.ButtonStyle.secondary)
-    async def btn_iv(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def btn_iv(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> Any:
         await interaction.response.defer()
         await self._set_loading(interaction)
         embed = None

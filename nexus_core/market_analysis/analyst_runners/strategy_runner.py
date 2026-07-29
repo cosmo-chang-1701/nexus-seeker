@@ -1,6 +1,7 @@
 """Next-day strategy and FOMC escape-window analysis runners."""
 
 from __future__ import annotations
+from typing import Any
 
 import logging
 import math
@@ -31,7 +32,7 @@ def _get_period_label(day: int) -> str:
         return "下旬"
 
 
-async def run_next_day_strategy(fetch_macro_fn) -> str:
+async def run_next_day_strategy(fetch_macro_fn: Any) -> str:
     """Build next-day tactical strategy report string.
 
     Args:

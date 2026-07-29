@@ -1,3 +1,5 @@
+from typing import Any
+
 """Discord Cog for order management slash commands.
 
 Refactored: Modal/View UI components moved to cogs/order_modals.py and cogs/order_views.py.
@@ -6,7 +8,6 @@ This module retains only the Cog class (slash command routing) and backward-comp
 """
 
 import discord
-from typing import Any
 from discord import app_commands
 from discord.ext import commands
 import logging
@@ -32,11 +33,11 @@ logger = logging.getLogger(__name__)
 # Discord Cog 模組
 # ==========================================
 class OrderUICog(commands.Cog):
-    def __init__(self, bot):
+    def __init__(self, bot: Any) -> Any:  # type: ignore
         self.bot = bot
 
     @app_commands.command(name="order_panel", description="喚起交易委託單設定面板")
-    async def order_panel(self, interaction: discord.Interaction):
+    async def order_panel(self, interaction: discord.Interaction) -> Any:
         await interaction.response.defer(ephemeral=True)
         embed = create_info_embed(
             title="📥 交易委託單設定面版",
@@ -98,7 +99,7 @@ class OrderUICog(commands.Cog):
         side: str | None = None,
         validity: str | None = None,
         condition: str | None = None,
-    ):
+    ) -> Any:
         await interaction.response.defer(ephemeral=True)
 
         orders = await asyncio.to_thread(get_user_active_orders, interaction.user.id)
@@ -192,7 +193,7 @@ class OrderUICog(commands.Cog):
         name="telemetry_alert",
         description="喚起半小時心跳遙測價格偏離警報（含實時對齊防線）",
     )
-    async def telemetry_alert(self, interaction: discord.Interaction):
+    async def telemetry_alert(self, interaction: discord.Interaction) -> Any:
         await interaction.response.defer(ephemeral=True)
         orders = await asyncio.to_thread(get_user_active_orders, interaction.user.id)
 
@@ -305,7 +306,7 @@ class OrderUICog(commands.Cog):
         validity: str = "DAY",
         price: float = 0.0,
         stop_price: float = 0.0,
-    ):
+    ) -> Any:
         await interaction.response.defer(ephemeral=True)
 
         # 1. 驗證數量（股數只能是整數）
@@ -446,7 +447,7 @@ class OrderUICog(commands.Cog):
         self,
         interaction: discord.Interaction,
         order_id: int | None = None,
-    ):
+    ) -> Any:
         if order_id is None:
             await interaction.response.send_modal(CancelOrderModal())
             return
@@ -520,7 +521,7 @@ class OrderUICog(commands.Cog):
         side: str | None = None,
         price: float | None = None,
         stop_price: float | None = None,
-    ):
+    ) -> Any:
         if order_id is None:
             await interaction.response.send_message(
                 embed=create_error_embed(
@@ -655,7 +656,7 @@ class OrderUICog(commands.Cog):
             )
 
 
-async def setup(bot):
+async def setup(bot: Any):  # type: ignore
     await bot.add_cog(OrderUICog(bot))
 
 

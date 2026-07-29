@@ -1,10 +1,11 @@
+from typing import Any
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from cogs.calendar import CalendarCog
 
 
 @pytest.mark.asyncio
-async def test_command_calendar(mock_interaction, db_conn):
+async def test_command_calendar(mock_interaction: Any, db_conn: Any):  # type: ignore
     bot = AsyncMock()
     bot.wait_until_ready = AsyncMock()
     cog = CalendarCog(bot)
@@ -42,7 +43,7 @@ async def test_command_calendar(mock_interaction, db_conn):
             )
         }
 
-        await cog.calendar.callback(cog, mock_interaction)
+        await cog.calendar.callback(cog, mock_interaction)  # type: ignore
 
         mock_interaction.followup.send.assert_called_once()
         embed = mock_interaction.followup.send.call_args[1]["embed"]
@@ -52,7 +53,7 @@ async def test_command_calendar(mock_interaction, db_conn):
 
 
 @pytest.mark.asyncio
-async def test_command_calendar_uses_builder(mock_interaction, db_conn):
+async def test_command_calendar_uses_builder(mock_interaction: Any, db_conn: Any):  # type: ignore
     bot = AsyncMock()
     bot.wait_until_ready = AsyncMock()
     cog = CalendarCog(bot)
@@ -81,7 +82,7 @@ async def test_command_calendar_uses_builder(mock_interaction, db_conn):
     ) as mock_builder:
         mock_builder.return_value = MagicMock()
 
-        await cog.calendar.callback(cog, mock_interaction)
+        await cog.calendar.callback(cog, mock_interaction)  # type: ignore
 
     mock_builder.assert_called_once()
     assert (
@@ -91,7 +92,7 @@ async def test_command_calendar_uses_builder(mock_interaction, db_conn):
 
 
 @pytest.mark.asyncio
-async def test_command_iv_rank(mock_interaction, db_conn):
+async def test_command_iv_rank(mock_interaction: Any, db_conn: Any):  # type: ignore
     bot = AsyncMock()
     bot.wait_until_ready = AsyncMock()
     cog = CalendarCog(bot)
@@ -121,7 +122,7 @@ async def test_command_iv_rank(mock_interaction, db_conn):
             }
         ]
 
-        await cog.iv_rank.callback(cog, mock_interaction)
+        await cog.iv_rank.callback(cog, mock_interaction)  # type: ignore
 
         mock_interaction.followup.send.assert_called_once()
         embed = mock_interaction.followup.send.call_args[1]["embed"]
@@ -131,7 +132,7 @@ async def test_command_iv_rank(mock_interaction, db_conn):
 
 
 @pytest.mark.asyncio
-async def test_command_iv_rank_uses_builder(mock_interaction, db_conn):
+async def test_command_iv_rank_uses_builder(mock_interaction: Any, db_conn: Any):  # type: ignore
     bot = AsyncMock()
     bot.wait_until_ready = AsyncMock()
     cog = CalendarCog(bot)
@@ -154,7 +155,7 @@ async def test_command_iv_rank_uses_builder(mock_interaction, db_conn):
         ]
         mock_builder.return_value = MagicMock()
 
-        await cog.iv_rank.callback(cog, mock_interaction)
+        await cog.iv_rank.callback(cog, mock_interaction)  # type: ignore
 
     mock_builder.assert_called_once()
     assert (
@@ -164,7 +165,7 @@ async def test_command_iv_rank_uses_builder(mock_interaction, db_conn):
 
 
 @pytest.mark.asyncio
-async def test_command_event_impact(mock_interaction, db_conn):
+async def test_command_event_impact(mock_interaction: Any, db_conn: Any):  # type: ignore
     bot = AsyncMock()
     bot.wait_until_ready = AsyncMock()
     cog = CalendarCog(bot)
@@ -195,8 +196,11 @@ async def test_command_event_impact(mock_interaction, db_conn):
         mock_quote.return_value = {"c": 155.0}
         mock_vanna.return_value = 2.5  # Simulated Vanna
 
-        await cog.event_impact.callback(
-            cog, mock_interaction, symbol=symbol, vol_move=20.0
+        await cog.event_impact.callback(  # type: ignore
+            cog,  # type: ignore
+            mock_interaction,
+            symbol=symbol,
+            vol_move=20.0,  # type: ignore
         )
 
         mock_interaction.followup.send.assert_called_once()
@@ -207,7 +211,7 @@ async def test_command_event_impact(mock_interaction, db_conn):
 
 
 @pytest.mark.asyncio
-async def test_command_event_impact_uses_builder(mock_interaction, db_conn):
+async def test_command_event_impact_uses_builder(mock_interaction: Any, db_conn: Any):  # type: ignore
     bot = AsyncMock()
     bot.wait_until_ready = AsyncMock()
     cog = CalendarCog(bot)
@@ -238,8 +242,11 @@ async def test_command_event_impact_uses_builder(mock_interaction, db_conn):
         mock_quote.return_value = {"c": 155.0}
         mock_builder.return_value = MagicMock()
 
-        await cog.event_impact.callback(
-            cog, mock_interaction, symbol=symbol, vol_move=20.0
+        await cog.event_impact.callback(  # type: ignore
+            cog,  # type: ignore
+            mock_interaction,
+            symbol=symbol,
+            vol_move=20.0,  # type: ignore
         )
 
     mock_builder.assert_called_once()

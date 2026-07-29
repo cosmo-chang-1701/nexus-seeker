@@ -5,7 +5,7 @@ import sys
 HEALTH_FILE = "/tmp/bot_healthy"
 
 
-def main():
+def main() -> None:
     if not os.path.exists(HEALTH_FILE):
         print("Health file not found.", file=sys.stderr)
         sys.exit(1)

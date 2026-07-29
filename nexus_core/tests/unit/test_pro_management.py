@@ -7,7 +7,7 @@ sys.path.append(os.path.join(os.getcwd(), "nexus_core"))
 from market_analysis.pro_management import calculate_financial_runway
 
 
-def test_calculate_financial_runway():
+def test_calculate_financial_runway() -> None:
     # Case 1: Positive burn rate (expenses > theta)
     cash_reserve = 10000.0
     monthly_expense = 3000.0

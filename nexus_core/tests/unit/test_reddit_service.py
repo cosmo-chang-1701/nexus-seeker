@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 
 @pytest.mark.asyncio
-async def test_tunnel_disabled_by_caller_skips_http_call():
+async def test_tunnel_disabled_by_caller_skips_http_call() -> None:
     """Gate 1: When the caller explicitly passes enable_tunnel=False,
     the function must return None immediately without any HTTP call."""
 
@@ -26,7 +26,7 @@ async def test_tunnel_disabled_by_caller_skips_http_call():
 
 
 @pytest.mark.asyncio
-async def test_tunnel_disabled_by_db_global_check_skips_http_call():
+async def test_tunnel_disabled_by_db_global_check_skips_http_call() -> None:
     """Gate 2: When enable_tunnel defaults to True but the DB reports
     all users have tunnel disabled, no HTTP call should be made."""
 
@@ -46,7 +46,7 @@ async def test_tunnel_disabled_by_db_global_check_skips_http_call():
 
 
 @pytest.mark.asyncio
-async def test_tunnel_db_query_failure_conservative_skip():
+async def test_tunnel_db_query_failure_conservative_skip() -> None:
     """Gate 2 fallback: If the DB query itself raises an exception,
     we conservatively skip (no HTTP call) rather than risk a 530 error."""
 
@@ -66,7 +66,7 @@ async def test_tunnel_db_query_failure_conservative_skip():
 
 
 @pytest.mark.asyncio
-async def test_tunnel_enabled_makes_http_call():
+async def test_tunnel_enabled_makes_http_call() -> None:
     """Happy path: When tunnel is globally enabled and TUNNEL_URL is set,
     the function should actually make an HTTP call to the edge scraper."""
 
@@ -108,7 +108,7 @@ async def test_tunnel_enabled_makes_http_call():
 
 
 @pytest.mark.asyncio
-async def test_tunnel_disabled_returns_none_not_string():
+async def test_tunnel_disabled_returns_none_not_string() -> None:
     """Regression: Verify the return type is None (not a string message)
     when the tunnel is disabled, matching the updated Optional[str] contract."""
 

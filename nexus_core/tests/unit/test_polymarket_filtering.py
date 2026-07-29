@@ -1,23 +1,24 @@
+from typing import Any
 import pytest
 from unittest.mock import patch
 from services.polymarket_service import PolymarketService
 
 
 class MockBot:
-    def __init__(self):
-        self.queued_dms = []
+    def __init__(self) -> None:
+        self.queued_dms = []  # type: ignore
 
-    async def queue_dm(self, user_id, embed):
+    async def queue_dm(self, user_id: Any, embed: Any) -> None:
         self.queued_dms.append((user_id, embed))
 
 
 @pytest.fixture
-def poly_service():
+def poly_service() -> Any:
     bot = MockBot()
     return PolymarketService(bot)
 
 
-def test_is_relevant_market_whitelist(poly_service):
+def test_is_relevant_market_whitelist(poly_service: Any) -> Any:
     # Test items in whitelist
     market_info = {
         "question": "Will the FED raise interest rates in June?",
@@ -32,7 +33,7 @@ def test_is_relevant_market_whitelist(poly_service):
     assert poly_service._is_relevant_market(market_info) is True
 
 
-def test_is_relevant_market_blacklist(poly_service):
+def test_is_relevant_market_blacklist(poly_service: Any):  # type: ignore
     # Test items in blacklist
     market_info = {
         "question": "Who will win the NBA Finals?",
@@ -47,7 +48,7 @@ def test_is_relevant_market_blacklist(poly_service):
     assert poly_service._is_relevant_market(market_info) is False
 
 
-def test_is_relevant_market_symbol_detection(poly_service):
+def test_is_relevant_market_symbol_detection(poly_service: Any):  # type: ignore
     # Test symbol detection
     market_info = {
         "question": "Will NVDA reach $1000 before July?",
@@ -63,7 +64,7 @@ def test_is_relevant_market_symbol_detection(poly_service):
     assert poly_service._is_relevant_market(market_info) is False
 
 
-def test_is_relevant_market_mixed(poly_service):
+def test_is_relevant_market_mixed(poly_service: Any):  # type: ignore
     # Mix of keywords
     market_info = {
         "question": "NVIDIA stock vs Apple stock in 2024",
@@ -81,7 +82,7 @@ def test_is_relevant_market_mixed(poly_service):
 
 
 @pytest.mark.asyncio
-async def test_push_notification_uses_embed_builder(poly_service):
+async def test_push_notification_uses_embed_builder(poly_service: Any):  # type: ignore
     embed = object()
     market_info = {
         "question": "Will NVDA beat earnings?",

@@ -1,6 +1,7 @@
 """Macro data fetching and market scan logic for the Analyst Agent."""
 
 from __future__ import annotations
+from typing import Any
 
 import asyncio
 import logging
@@ -14,7 +15,7 @@ logger = logging.getLogger(__name__)
 async def fetch_macro_data() -> dict:
     """Fetch general macro proxies: VIX, DXY, TNX, IRX."""
 
-    def _fetch():
+    def _fetch() -> Any:
         tickers = yf.Tickers("^VIX DX-Y.NYB ^TNX ^IRX")
         return tickers.history(period="2d")
 
@@ -102,7 +103,7 @@ def build_macro_alerts(macro_data: dict) -> list[str]:
     return alerts
 
 
-async def run_macro_scan():
+async def run_macro_scan() -> Any:
     """Fetch macro data, evaluate alerts, and return a styled Embed."""
     macro_data = await fetch_macro_data()
 

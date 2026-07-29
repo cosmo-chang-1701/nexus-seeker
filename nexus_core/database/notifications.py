@@ -1,3 +1,4 @@
+from typing import Any
 import sqlite3
 import json
 import logging
@@ -9,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 def add_pending_notification(
     user_id: int, content: Optional[str] = None, embed_dict: Optional[dict] = None
-):
+) -> Any:
     """將待發送通知存入資料庫"""
     conn = None
     try:
@@ -62,7 +63,7 @@ def get_pending_notifications(
     return results
 
 
-def delete_notification(notif_id: int):
+def delete_notification(notif_id: int) -> Any:
     """刪除已處理的通知"""
     conn = None
     try:
@@ -84,7 +85,7 @@ def get_pending_count() -> int:
         conn = sqlite3.connect(config.DB_NAME)
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM pending_notifications")
-        return cursor.fetchone()[0]
+        return cursor.fetchone()[0]  # type: ignore
     except Exception:
         return 0
     finally:
@@ -150,7 +151,7 @@ def get_user_notification_settings(user_id: int) -> dict[str, bool]:
     return settings
 
 
-def set_user_notification_setting(user_id: int, key: str, enabled: bool):
+def set_user_notification_setting(user_id: int, key: str, enabled: bool) -> Any:
     """新增或更新單一通知設定"""
     if key not in ALL_NOTIFICATION_KEYS:
         logger.warning(f"未知通知 key: {key}")
@@ -176,7 +177,7 @@ def set_user_notification_setting(user_id: int, key: str, enabled: bool):
             conn.close()
 
 
-def set_all_user_notification_settings(user_id: int, enabled: bool):
+def set_all_user_notification_settings(user_id: int, enabled: bool) -> Any:
     """一鍵開啟或關閉所有通知項目"""
     conn = None
     try:

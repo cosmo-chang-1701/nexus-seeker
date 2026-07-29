@@ -1,3 +1,4 @@
+from typing import Any
 import logging
 import datetime
 import yfinance as yf
@@ -22,12 +23,12 @@ logger = logging.getLogger(__name__)
 class GhostTrader:
     """虛擬交易室核心邏輯 (Async)"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.today = datetime.datetime.now().date()
 
     async def get_option_mid_price(
         self, symbol: str, opt_type: str, strike: float, expiry: str
-    ):
+    ) -> Any:
         """獲取特定期權合約的 Mid 價格 (用 to_thread)"""
         try:
             ticker = yf.Ticker(symbol)
@@ -63,10 +64,10 @@ class GhostTrader:
         weighted_delta: float = 0.0,
         theta: float = 0.0,
         gamma: float = 0.0,
-        tags: list = None,
-        parent_trade_id: int = None,
+        tags: list | None = None,
+        parent_trade_id: int | None = None,
         trade_category: str = "SPECULATIVE",
-    ):
+    ) -> Any:
         """自動建倉"""
         mid, _ = await self.get_option_mid_price(symbol, opt_type, strike, expiry)
         if mid is None:
@@ -99,13 +100,13 @@ class GhostTrader:
         )
         return trade_id
 
-    async def manage_virtual_positions(self):
+    async def manage_virtual_positions(self) -> None:
         """自動平倉邏輯 (Async)"""
         open_trades = await asyncio.to_thread(get_all_open_virtual_trades)
         for trade in open_trades:
             await self._check_and_exit_trade(trade)
 
-    async def _check_and_exit_trade(self, trade):
+    async def _check_and_exit_trade(self, trade: Any):  # type: ignore
         trade_id, symbol, opt_type, strike, expiry, entry_price, quantity = (
             trade["id"],
             trade["symbol"],
@@ -220,8 +221,12 @@ class GhostTrader:
                 await self._close_position(trade, "Buyer Stop Loss (>=50%)", mid)
 
     async def _close_position(
-        self, trade, reason: str, exit_price: float = None, status: str = "CLOSED"
-    ):
+        self,
+        trade: Any,
+        reason: str,
+        exit_price: float | None = None,
+        status: str = "CLOSED",
+    ) -> Any:
         """執行平倉"""
         if exit_price is None:
             exit_price, _ = await self.get_option_mid_price(
@@ -260,7 +265,7 @@ class GhostTrader:
                 f"🔴 VTR 自動平倉 [{trade['id']}] {trade['symbol']} {trade['opt_type']} {trade['strike']} 原因:{reason} Exit:{actual_exit_price:.2f}"
             )
 
-    async def get_transition_candidates(self):
+    async def get_transition_candidates(self) -> Any:
         """
         找出適合從投機部位演進至現股/Covered Call 的候選交易。
         候選條件：SPECULATIVE 類別、買方部位、獲利率 > 30%
@@ -291,7 +296,7 @@ class GhostTrader:
                 )
         return candidates
 
-    async def execute_virtual_roll(self):
+    async def execute_virtual_roll(self) -> None:
         """自動轉倉邏輯 (Async)"""
         open_trades = await asyncio.to_thread(get_all_open_virtual_trades)
         for trade in open_trades:
@@ -334,7 +339,7 @@ class GhostTrader:
             except Exception:
                 continue
 
-    async def _roll_position(self, old_trade, current_stock_price):
+    async def _roll_position(self, old_trade: Any, current_stock_price: Any):  # type: ignore
         """平掉舊部位，尋找並開啟新部位 (Async)"""
         await self._close_position(
             old_trade,
@@ -362,13 +367,13 @@ class GhostTrader:
                 parent_trade_id=old_trade["id"],
             )
 
-    async def _find_target_contract(
+    async def _find_target_contract(  # type: ignore
         self,
-        symbol,
-        opt_type,
-        current_stock_price,
-        target_dte=(30, 45),
-        target_delta=0.20,
+        symbol: Any,
+        opt_type: Any,
+        current_stock_price: Any,
+        target_dte: Any = (30, 45),
+        target_delta: Any = 0.20,
     ):
         """尋找符合 DTE 與 Delta 條件的合約 (Async)"""
         ticker = yf.Ticker(symbol)

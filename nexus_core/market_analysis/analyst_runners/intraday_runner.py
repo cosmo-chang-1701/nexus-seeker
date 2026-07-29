@@ -1,6 +1,7 @@
 """Intraday execution guide dispatch logic for the Analyst Agent."""
 
 from __future__ import annotations
+from typing import Any
 
 import logging
 from datetime import datetime
@@ -16,7 +17,7 @@ from cogs.embed_builder import create_intraday_execution_guide_embed
 logger = logging.getLogger(__name__)
 
 
-async def run_intraday_guide(bot, fetch_macro_fn=None) -> None:
+async def run_intraday_guide(bot: Any, fetch_macro_fn: Any = None) -> None:
     """Build and queue per-user intraday execution guide DMs.
 
     Args:

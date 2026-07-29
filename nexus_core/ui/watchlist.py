@@ -1,10 +1,13 @@
+from typing import Any
 import discord
 import math
 from cogs.embed_builder import create_watchlist_embed
 
 
 class WatchlistPagination(discord.ui.View):
-    def __init__(self, data, original_interaction: discord.Interaction = None):
+    def __init__(
+        self, data: Any, original_interaction: discord.Interaction | None = None
+    ):
         super().__init__(timeout=180)  # 3 分鐘後按鈕失效
         self.data = data
         self.original_interaction = original_interaction
@@ -13,7 +16,7 @@ class WatchlistPagination(discord.ui.View):
         self.total_pages = math.ceil(len(data) / self.items_per_page) if data else 1
 
     # 生成當前頁面的 Embed
-    def create_embed(self):
+    def create_embed(self) -> Any:
         # 切片取得當前頁面的資料
         start_idx = (self.current_page - 1) * self.items_per_page
         end_idx = start_idx + self.items_per_page
@@ -24,7 +27,7 @@ class WatchlistPagination(discord.ui.View):
         )
 
     # 更新按鈕狀態 (如果在第一頁就禁用上一頁，以此類推)
-    def update_buttons(self):
+    def update_buttons(self) -> None:
         self.prev_button.disabled = self.current_page == 1
         self.next_button.disabled = self.current_page == self.total_pages
 
@@ -33,7 +36,7 @@ class WatchlistPagination(discord.ui.View):
     )
     async def prev_button(
         self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+    ) -> Any:
         self.current_page -= 1
         self.update_buttons()
         await interaction.response.edit_message(embed=self.create_embed(), view=self)
@@ -43,7 +46,7 @@ class WatchlistPagination(discord.ui.View):
     )
     async def next_button(
         self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+    ) -> Any:
         self.current_page += 1
         self.update_buttons()
         await interaction.response.edit_message(embed=self.create_embed(), view=self)
@@ -56,7 +59,7 @@ class WatchlistPagination(discord.ui.View):
     )
     async def edit_tags_button(
         self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+    ) -> Any:
         from ui.watchlist_tags import WatchlistTagSelectView
         from services.asset_manager import AssetManager
         from models.asset import ContextType
@@ -64,7 +67,7 @@ class WatchlistPagination(discord.ui.View):
 
         original_message = interaction.message
 
-        async def on_success(modal_interaction: discord.Interaction):
+        async def on_success(modal_interaction: discord.Interaction) -> Any:
             # 重新計算清單資料
             manager = AssetManager()
             assets = manager.get_assets(modal_interaction.user.id, ContextType.WATCH)

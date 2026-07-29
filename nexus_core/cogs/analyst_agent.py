@@ -10,6 +10,7 @@ Business logic for each report domain lives in the runner sub-modules under
 """
 
 from __future__ import annotations
+from typing import Any
 
 import asyncio
 import logging
@@ -44,14 +45,14 @@ logger = logging.getLogger(__name__)
 
 
 class AnalystAgent(commands.Cog):
-    def __init__(self, bot):
+    def __init__(self, bot: Any):
         self.bot = bot
         self.pre_market_loop.start()
         # intra_day_loop is integrated into trading.py's intraday_decision_scan
         # self.intra_day_loop.start()
         self.post_market_loop.start()
 
-    def cog_unload(self):
+    def cog_unload(self) -> None:  # type: ignore
         self.pre_market_loop.cancel()
         # self.intra_day_loop.cancel()
         self.post_market_loop.cancel()
@@ -77,7 +78,7 @@ class AnalystAgent(commands.Cog):
     # 🚀 1. 盤前總覽：開盤前 30 分鐘啟動
     # ==========================================
     @tasks.loop(count=1)
-    async def pre_market_loop(self):
+    async def pre_market_loop(self) -> None:
         await self.bot.wait_until_ready()
         while True:
             target = get_next_market_target_time("open", offset_minutes=-30)
@@ -102,7 +103,7 @@ class AnalystAgent(commands.Cog):
     # 🚀 2. 盤中監測：每 120 分鐘心跳掃描 (僅開盤時)
     # ==========================================
     @tasks.loop(count=1)
-    async def intra_day_loop(self):
+    async def intra_day_loop(self) -> None:
         await self.bot.wait_until_ready()
         while True:
             if is_market_open():
@@ -129,7 +130,7 @@ class AnalystAgent(commands.Cog):
     # 🚀 3. 盤後策略：收盤後 15 分鐘啟動
     # ==========================================
     @tasks.loop(count=1)
-    async def post_market_loop(self):
+    async def post_market_loop(self) -> None:
         await self.bot.wait_until_ready()
         while True:
             target = get_next_market_target_time("close", offset_minutes=15)
@@ -157,8 +158,8 @@ class AnalystAgent(commands.Cog):
     # ──────────────────────────────────────────────────────────────────────────
 
     async def dispatch_report(
-        self, report_content: discord.Embed, notification_key: str = None
-    ):
+        self, report_content: discord.Embed, notification_key: str | None = None
+    ) -> Any:
         """Broadcast an embed to all users who have the given notification key enabled."""
         report_embeds = split_embed_by_fields(report_content)
         user_ids = database.get_all_user_ids()
@@ -183,7 +184,7 @@ class AnalystAgent(commands.Cog):
     # Intraday execution guide
     # ──────────────────────────────────────────────────────────────────────────
 
-    async def dispatch_intraday_guide(self):
+    async def dispatch_intraday_guide(self) -> None:
         """Delegate per-user intraday execution guide to intraday_runner."""
         await intraday_runner.run_intraday_guide(
             self.bot, fetch_macro_fn=self._fetch_macro_data
@@ -193,7 +194,7 @@ class AnalystAgent(commands.Cog):
     # Pre-market briefing
     # ──────────────────────────────────────────────────────────────────────────
 
-    async def dispatch_pre_market_briefing(self):
+    async def dispatch_pre_market_briefing(self) -> None:
         # 0. 盤前更新 FedWatch 數據
         try:
             from services.calendar_service import calendar_service
@@ -272,7 +273,7 @@ class AnalystAgent(commands.Cog):
     # Post-market intelligence
     # ──────────────────────────────────────────────────────────────────────────
 
-    async def dispatch_post_market_intelligence(self):
+    async def dispatch_post_market_intelligence(self) -> None:
         # 1. 清除舊快取
         try:
             purged_rows = database.purge_old_cache(days=30)
@@ -391,28 +392,28 @@ class AnalystAgent(commands.Cog):
     # Runner wrappers — thin delegates to runner sub-modules
     # ──────────────────────────────────────────────────────────────────────────
 
-    async def run_macro_scan(self):
+    async def run_macro_scan(self) -> Any:
         return await macro_runner.run_macro_scan()
 
-    async def run_premarket_earnings(self):
+    async def run_premarket_earnings(self) -> Any:
         return await earnings_runner.run_premarket_earnings()
 
-    async def run_market_open_liquidity(self):
+    async def run_market_open_liquidity(self) -> Any:
         return await sector_runner.run_market_open_liquidity()
 
-    async def run_deep_research(self):
+    async def run_deep_research(self) -> Any:
         return await sector_runner.run_deep_research()
 
-    async def run_portfolio_hedging(self):
+    async def run_portfolio_hedging(self) -> Any:
         return await portfolio_runner.run_portfolio_hedging()
 
-    async def run_postmarket_summary(self):
+    async def run_postmarket_summary(self) -> Any:
         return await portfolio_runner.run_postmarket_summary()
 
-    async def run_sector_flow_report(self):
+    async def run_sector_flow_report(self) -> Any:
         return await sector_runner.run_sector_flow_report(self.bot)
 
-    async def run_next_day_strategy(self):
+    async def run_next_day_strategy(self) -> Any:
         return await strategy_runner.run_next_day_strategy(self._fetch_macro_data)
 
     async def run_fomc_escape_window_analysis(
@@ -424,5 +425,5 @@ class AnalystAgent(commands.Cog):
         return await sector_runner.gather_sector_rotation_data(self.bot)
 
 
-async def setup(bot):
+async def setup(bot: Any):  # type: ignore
     await bot.add_cog(AnalystAgent(bot))

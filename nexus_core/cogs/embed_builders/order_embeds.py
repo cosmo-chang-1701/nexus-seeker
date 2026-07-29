@@ -1,3 +1,5 @@
+from typing import Any
+
 """委託單管理、盤中掃描與盤前/盤後報告 Embed 建構函式。
 
 包含：
@@ -19,7 +21,7 @@ import re
 import discord
 
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from cogs.embed_builders._ansi_utils import _pad_string, _clean_ansi, _safe_float
 from cogs.embed_builders._ansi_utils import (
@@ -33,7 +35,7 @@ from cogs.embed_builders._embed_helpers import (
 )
 
 
-def create_intraday_scan_embed(output) -> discord.Embed:
+def create_intraday_scan_embed(output: Any) -> discord.Embed:
     """建立盤中量化掃描與避險執行指南的 Discord Embed"""
     route_icon = (
         "🏹 SPEAR"
@@ -1031,7 +1033,7 @@ def build_post_market_intelligence_embed(
                 inline=False,
             )
 
-    def _add_ai_section(header: str, content: str, icon: str):
+    def _add_ai_section(header: str, content: str, icon: str) -> Any:
         if not content or content == "暫無分析":
             embed.add_field(
                 name="\u200b",
@@ -1045,7 +1047,9 @@ def build_post_market_intelligence_embed(
         total_blocks = len(blocks)
 
         for b_idx, block in enumerate(blocks):
-            lines = [line_str.strip() for line_str in block.split('\n') if line_str.strip()]
+            lines = [
+                line_str.strip() for line_str in block.split("\n") if line_str.strip()
+            ]
             formatted_lines = []
             for l_idx, line in enumerate(lines):
                 line = line.replace("**", "")

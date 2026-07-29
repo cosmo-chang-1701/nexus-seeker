@@ -1,3 +1,4 @@
+from typing import Any
 import pytest
 import sqlite3
 import config
@@ -5,7 +6,7 @@ from database.watchlist_tags import set_watchlist_tags, get_watchlist_tags
 
 
 @pytest.fixture(autouse=True)
-def isolated_db(monkeypatch, tmp_path):
+def isolated_db(monkeypatch: Any, tmp_path: Any):  # type: ignore
     db_file = tmp_path / "test_nexus.db"
     monkeypatch.setattr(config, "DB_NAME", str(db_file))
 
@@ -29,7 +30,7 @@ def isolated_db(monkeypatch, tmp_path):
         db_file.unlink()
 
 
-def test_multi_tenant_isolation():
+def test_multi_tenant_isolation() -> None:
     user_a = "12345"
     user_b = "67890"
     symbol = "TSLA"
@@ -62,7 +63,7 @@ def test_multi_tenant_isolation():
     assert fetched_b_new == sorted(tags_b)
 
 
-def test_set_empty_tags_clears():
+def test_set_empty_tags_clears() -> None:
     user_id = "111"
     symbol = "AAPL"
 

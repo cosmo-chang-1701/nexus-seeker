@@ -1,8 +1,9 @@
+from typing import Any
 import logging
 import asyncio
 import numpy as np
 import yfinance as yf
-from typing import Dict, Any, Optional, List
+from typing import Dict, Optional, List
 
 from services import market_data_service
 
@@ -20,7 +21,7 @@ class DDPInspector:
     4. Confirmation: Revenue growth acceleration (last 2 periods)
     """
 
-    def __init__(self, bot=None):
+    def __init__(self, bot: Any = None):
         self.bot = bot
 
     async def run_scan(self, symbols: List[str]) -> List[Dict[str, Any]]:
@@ -165,7 +166,7 @@ class DDPInspector:
             logger.info(f"[{symbol}] DDP 深度分析跳過: {e}")
             return None
 
-    async def record_signal(self, report: Dict[str, Any]):
+    async def record_signal(self, report: Dict[str, Any]) -> Any:
         """將信號存入資料庫"""
         try:
             from database.connection import execute_write_async

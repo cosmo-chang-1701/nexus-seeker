@@ -1,3 +1,4 @@
+from typing import Any
 import discord
 import logging
 from discord.ext import commands
@@ -5,7 +6,7 @@ import asyncio
 import os
 import json
 import uuid
-from typing import Optional, Dict, Any, cast
+from typing import Optional, Dict, cast
 import database
 from database.leader_lock import (
     LOCK_NAME_DISCORD_BOT,
@@ -100,7 +101,7 @@ class NexusBot(commands.Bot):
     _instance = None
 
     @classmethod
-    def get_instance(cls):
+    def get_instance(cls) -> Any:
         return cls._instance
 
     def __init__(self) -> None:
@@ -127,8 +128,11 @@ class NexusBot(commands.Bot):
         self._setup_done = False
 
     async def queue_dm(
-        self, user_id: int, message: str = None, embed: discord.Embed = None
-    ):
+        self,
+        user_id: int,
+        message: str | None = None,
+        embed: discord.Embed | None = None,
+    ) -> Any:
         """將私訊任務加入持久化佇列，並喚醒發送工人
 
         為了支援 Swarm start-first / 藍綠部署，本方法僅允許 leader instance 寫入列隊。
@@ -179,7 +183,7 @@ class NexusBot(commands.Bot):
         # 2. 喚醒發送工人
         self.message_signal.set()
 
-    async def setup_hook(self):
+    async def setup_hook(self) -> None:
         if self._setup_done:
             return
         self._setup_done = True
@@ -227,7 +231,7 @@ class NexusBot(commands.Bot):
         except Exception as e:
             logger.error(f"❌ 同步指令失敗: {e}")
 
-    async def on_ready(self):
+    async def on_ready(self) -> None:
         if self._has_notified_ready:
             logger.info("Bot 已重連，跳過啟動通知。")
             return
@@ -292,7 +296,7 @@ class NexusBot(commands.Bot):
 
         logger.info("✅ on_ready 流程處理完畢，機器人進入運行狀態。")
 
-    async def close(self):
+    async def close(self) -> None:
         if self._is_closing:
             return
         self._is_closing = True
@@ -387,7 +391,7 @@ class NexusBot(commands.Bot):
         except Exception:
             pass
 
-    async def _leader_lock_loop(self):
+    async def _leader_lock_loop(self) -> None:
         """Maintain a SQLite leader lease to support Swarm start-first blue/green deploy."""
         ttl = int(os.getenv("NEXUS_LEADER_LOCK_TTL", "30"))
         interval = int(os.getenv("NEXUS_LEADER_LOCK_INTERVAL", "10"))
@@ -431,7 +435,7 @@ class NexusBot(commands.Bot):
 
             await asyncio.sleep(interval)
 
-    async def _health_worker(self):
+    async def _health_worker(self) -> None:
         """定期更新健康狀態檔案，讓 Docker 能夠識別機器人的健康度。"""
         import time
 
@@ -453,7 +457,7 @@ class NexusBot(commands.Bot):
                 logger.error(f"寫入 bot_healthy 檔案失敗: {e}")
             await asyncio.sleep(60)
 
-    async def _message_worker(self):
+    async def _message_worker(self) -> None:
         """專職負責發送訊息的工人，從資料庫讀取待發送清單"""
         await self.wait_until_ready()
 
@@ -504,14 +508,14 @@ class NexusBot(commands.Bot):
                         message_chunks = (
                             _split_discord_text(message, DISCORD_CONTENT_LIMIT)
                             if message
-                            else [None]
+                            else [None]  # type: ignore
                         )
 
                         for index, chunk in enumerate(message_chunks):
                             await user.send(
                                 content=chunk or None,
-                                embed=embed if index == 0 else None,
-                                view=view if (index == 0 and view) else None,
+                                embed=embed if index == 0 else None,  # type: ignore
+                                view=view if (index == 0 and view) else None,  # type: ignore
                             )
                         # 發送成功才從資料庫刪除
                         await asyncio.to_thread(delete_notification, notif_id)
@@ -541,7 +545,7 @@ class NexusBot(commands.Bot):
                 # 間隔 0.2 秒再寄下一封，避免觸發速率限制
                 await asyncio.sleep(0.2)
 
-    async def notify_all_users(self, message):
+    async def notify_all_users(self, message: Any):  # type: ignore
         """一次將所有訊息排入背景寄發列隊 (優化為非阻塞)"""
         if not self._is_leader_instance:
             return

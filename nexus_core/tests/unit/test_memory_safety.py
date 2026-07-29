@@ -3,7 +3,7 @@ from services.market_data_service import BoundedCache
 from services.llm_service import is_memory_safe
 
 
-def test_bounded_cache_lru():
+def test_bounded_cache_lru() -> None:
     cache = BoundedCache(max_size=3)
     cache["a"] = 1
     cache["b"] = 2
@@ -26,7 +26,7 @@ def test_bounded_cache_lru():
     assert list(cache.keys()) == ["d", "b", "e"]
 
 
-def test_is_memory_safe_logic():
+def test_is_memory_safe_logic() -> None:
     with patch("psutil.virtual_memory") as mock_mem:
         # Case 1: Safe (70%)
         mock_mem.return_value.percent = 70.0

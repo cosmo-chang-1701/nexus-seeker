@@ -1,3 +1,4 @@
+from typing import Any
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock, ANY
 import sys
@@ -18,14 +19,14 @@ from cogs.unified_terminal import (
 
 
 @pytest.fixture
-def mock_bot():
+def mock_bot() -> Any:
     bot = MagicMock()
     bot.wait_until_ready = AsyncMock()
     return bot
 
 
 @pytest.mark.asyncio
-async def test_symbol_hub_command(mock_interaction, mock_bot):
+async def test_symbol_hub_command(mock_interaction: Any, mock_bot: Any):  # type: ignore
     cog = UnifiedTerminalCog(mock_bot)
 
     with patch(
@@ -111,7 +112,7 @@ async def test_symbol_hub_command(mock_interaction, mock_bot):
         mock_ctx.capital = 100000.0
         mock_user_ctx.return_value = mock_ctx
 
-        await cog.symbol_hub.callback(cog, mock_interaction, symbol="NVDA")
+        await cog.symbol_hub.callback(cog, mock_interaction, symbol="NVDA")  # type: ignore
 
         assert mock_interaction.followup.send.called
         _, kwargs = mock_interaction.followup.send.call_args
@@ -122,7 +123,7 @@ async def test_symbol_hub_command(mock_interaction, mock_bot):
 
 
 @pytest.mark.asyncio
-async def test_portfolio_hub_command(mock_interaction, mock_bot):
+async def test_portfolio_hub_command(mock_interaction: Any, mock_bot: Any):  # type: ignore
     cog = UnifiedTerminalCog(mock_bot)
 
     with patch(
@@ -145,7 +146,7 @@ async def test_portfolio_hub_command(mock_interaction, mock_bot):
 
         mock_user_ctx.return_value = mock_ctx
 
-        await cog.portfolio_hub.callback(cog, mock_interaction)
+        await cog.portfolio_hub.callback(cog, mock_interaction)  # type: ignore
 
         mock_interaction.followup.send.assert_called_once()
         _, kwargs = mock_interaction.followup.send.call_args
@@ -158,7 +159,7 @@ async def test_portfolio_hub_command(mock_interaction, mock_bot):
 
 
 @pytest.mark.asyncio
-async def test_pulse_hub_command(mock_interaction, mock_bot):
+async def test_pulse_hub_command(mock_interaction: Any, mock_bot: Any):  # type: ignore
     cog = UnifiedTerminalCog(mock_bot)
 
     with patch(
@@ -167,7 +168,7 @@ async def test_pulse_hub_command(mock_interaction, mock_bot):
     ) as mock_events:
         mock_events.return_value = []
 
-        await cog.pulse_hub.callback(cog, mock_interaction)
+        await cog.pulse_hub.callback(cog, mock_interaction)  # type: ignore
 
         mock_interaction.followup.send.assert_called_once()
         _, kwargs = mock_interaction.followup.send.call_args
@@ -176,15 +177,18 @@ async def test_pulse_hub_command(mock_interaction, mock_bot):
 
 
 @pytest.mark.asyncio
-async def test_symbol_hub_command_no_params(mock_interaction, mock_bot):
+async def test_symbol_hub_command_no_params(mock_interaction: Any, mock_bot: Any):  # type: ignore
     cog = UnifiedTerminalCog(mock_bot)
 
     with patch(
         "cogs.embed_builders.scan_embeds.build_unified_radar_panel_embed"
     ) as mock_build_embed:
         mock_build_embed.return_value = discord.Embed(title="Panel Embed")
-        await cog.symbol_hub.callback(
-            cog, mock_interaction, symbol=None, scan_type=None
+        await cog.symbol_hub.callback(  # type: ignore
+            cog,  # type: ignore
+            mock_interaction,
+            symbol=None,
+            scan_type=None,  # type: ignore
         )
 
     assert mock_interaction.followup.send.called
@@ -196,7 +200,7 @@ async def test_symbol_hub_command_no_params(mock_interaction, mock_bot):
 
 
 @pytest.mark.asyncio
-async def test_symbol_hub_batch_scan_holdings(mock_interaction, mock_bot):
+async def test_symbol_hub_batch_scan_holdings(mock_interaction: Any, mock_bot: Any):  # type: ignore
     cog = UnifiedTerminalCog(mock_bot)
 
     # 模擬 scan_type Choice
@@ -235,8 +239,11 @@ async def test_symbol_hub_batch_scan_holdings(mock_interaction, mock_bot):
         mock_mp.return_value = {"max_pain": 145.0, "distance_pct": 3.4}
         mock_skew_p.return_value = 75.0
 
-        await cog.symbol_hub.callback(
-            cog, mock_interaction, symbol=None, scan_type=mock_choice
+        await cog.symbol_hub.callback(  # type: ignore
+            cog,  # type: ignore
+            mock_interaction,
+            symbol=None,
+            scan_type=mock_choice,  # type: ignore
         )
 
         assert mock_interaction.followup.send.called
@@ -248,7 +255,7 @@ async def test_symbol_hub_batch_scan_holdings(mock_interaction, mock_bot):
 
 
 @pytest.mark.asyncio
-async def test_symbol_hub_batch_scan_all(mock_interaction, mock_bot):
+async def test_symbol_hub_batch_scan_all(mock_interaction: Any, mock_bot: Any):  # type: ignore
     cog = UnifiedTerminalCog(mock_bot)
 
     # 模擬 scan_type Choice
@@ -310,8 +317,11 @@ async def test_symbol_hub_batch_scan_all(mock_interaction, mock_bot):
         mock_mp.return_value = {"max_pain": 145.0, "distance_pct": 3.4}
         mock_skew_p.return_value = 75.0
 
-        await cog.symbol_hub.callback(
-            cog, mock_interaction, symbol=None, scan_type=mock_choice
+        await cog.symbol_hub.callback(  # type: ignore
+            cog,  # type: ignore
+            mock_interaction,
+            symbol=None,
+            scan_type=mock_choice,  # type: ignore
         )
 
         assert mock_interaction.followup.send.called
@@ -323,7 +333,7 @@ async def test_symbol_hub_batch_scan_all(mock_interaction, mock_bot):
 
 
 @pytest.mark.asyncio
-async def test_symbol_hub_batch_scan_watchlist(mock_interaction, mock_bot):
+async def test_symbol_hub_batch_scan_watchlist(mock_interaction: Any, mock_bot: Any):  # type: ignore
     cog = UnifiedTerminalCog(mock_bot)
 
     # 模擬 scan_type Choice
@@ -356,8 +366,11 @@ async def test_symbol_hub_batch_scan_watchlist(mock_interaction, mock_bot):
         mock_mp.return_value = {"max_pain": 145.0, "distance_pct": 3.4}
         mock_skew_p.return_value = 75.0
 
-        await cog.symbol_hub.callback(
-            cog, mock_interaction, symbol=None, scan_type=mock_choice
+        await cog.symbol_hub.callback(  # type: ignore
+            cog,  # type: ignore
+            mock_interaction,
+            symbol=None,
+            scan_type=mock_choice,  # type: ignore
         )
 
         assert mock_interaction.followup.send.called
@@ -369,11 +382,11 @@ async def test_symbol_hub_batch_scan_watchlist(mock_interaction, mock_bot):
 
 
 @pytest.mark.asyncio
-async def test_batch_scan_warning_button_callback(mock_interaction, mock_bot):
+async def test_batch_scan_warning_button_callback(mock_interaction: Any, mock_bot: Any):  # type: ignore
     from cogs.unified_terminal import BatchScanWarningButton
 
     cog = UnifiedTerminalCog(mock_bot)
-    cog._run_single_symbol_hub = AsyncMock()
+    cog._run_single_symbol_hub = AsyncMock()  # type: ignore
 
     # Case 1: No message or embeds
     btn = BatchScanWarningButton(cog, mock_bot)
@@ -434,17 +447,19 @@ async def test_batch_scan_warning_button_callback(mock_interaction, mock_bot):
 
 
 @pytest.mark.asyncio
-async def test_batch_scan_warning_button_chunking(mock_interaction, mock_bot):
+async def test_batch_scan_warning_button_chunking(mock_interaction: Any, mock_bot: Any):  # type: ignore
     from cogs.unified_terminal import BatchScanWarningButton
     import discord
 
     cog = UnifiedTerminalCog(mock_bot)
 
-    async def mock_run_hub(interaction, symbol, user_id, embeds_accumulator=None):
+    async def mock_run_hub(  # type: ignore
+        interaction: Any, symbol: Any, user_id: Any, embeds_accumulator: Any = None
+    ):  # type: ignore
         if embeds_accumulator is not None:
             embeds_accumulator.append(discord.Embed(title=f"Mock Embed for {symbol}"))
 
-    cog._run_single_symbol_hub = mock_run_hub
+    cog._run_single_symbol_hub = mock_run_hub  # type: ignore
 
     btn = BatchScanWarningButton(cog, mock_bot)
     mock_msg = MagicMock()

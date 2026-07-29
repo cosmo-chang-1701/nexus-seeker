@@ -1,3 +1,4 @@
+from typing import Any
 import logging
 import sqlite3  # noqa: F401
 import asyncio
@@ -13,7 +14,7 @@ INDEX_SYMBOLS = {"SPY", "QQQ", "DIA", "IWM", "SPX", "NDX", "RUT", "VIX"}
 _revalidating_symbols: set[str] = set()
 
 
-def _trigger_background_cache_clear(symbol: str):
+def _trigger_background_cache_clear(symbol: str) -> Any:
     symbol_upper = symbol.upper()
     if symbol_upper in _revalidating_symbols:
         logger.info(
@@ -23,7 +24,7 @@ def _trigger_background_cache_clear(symbol: str):
 
     _revalidating_symbols.add(symbol_upper)
 
-    async def _async_clear_and_revalidate():
+    async def _async_clear_and_revalidate() -> None:
         try:
             logger.info(
                 f"🔄 [Self-Healing] Clearing SQLite/yfinance cache for {symbol_upper} due to circuit breaker breach..."
@@ -90,7 +91,7 @@ def _trigger_background_cache_clear(symbol: str):
     asyncio.create_task(_async_clear_and_revalidate())
 
 
-async def save_sentiment_history(symbol: str, indicator: str, value: float):
+async def save_sentiment_history(symbol: str, indicator: str, value: float) -> Any:
     """將情緒指標存入資料庫。"""
     try:
         from database.connection import execute_write_async
@@ -149,7 +150,7 @@ def get_last_stored_iv(symbol: str) -> Optional[float]:
         row = cursor.fetchone()
         conn.close()
         if row:
-            return row[0]
+            return row[0]  # type: ignore
     except Exception as e:
         logger.error(f"取得資料庫最後 IV 失敗: {e}")
     return None
@@ -179,7 +180,7 @@ def get_last_stored_sentiment(symbol: str, indicator: str) -> Optional[float]:
     return None
 
 
-async def save_historical_iv(symbol: str, iv: float, date_str: str):
+async def save_historical_iv(symbol: str, iv: float, date_str: str) -> Any:
     """將每日 IV 存入 database。"""
     try:
         from bot import NexusBot

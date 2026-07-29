@@ -1,3 +1,4 @@
+from typing import Any
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -21,7 +22,7 @@ class SentimentCog(commands.Cog):
     Handles Skew, PCR, Max Pain, and UOA detection.
     """
 
-    def __init__(self, bot):
+    def __init__(self, bot: Any):
         self.bot = bot
         logger.info("SentimentCog loaded.")
 
@@ -29,7 +30,7 @@ class SentimentCog(commands.Cog):
         name="skew_scan", description="執行期權偏斜 (Skew) 與市場情緒掃描"
     )
     @app_commands.describe(symbol="股票代碼 (例如: TSLA)")
-    async def skew_scan(self, interaction: discord.Interaction, symbol: str):
+    async def skew_scan(self, interaction: discord.Interaction, symbol: str) -> Any:
         symbol = symbol.upper()
         await interaction.response.defer(ephemeral=False)
 
@@ -81,7 +82,7 @@ class SentimentCog(commands.Cog):
         interaction: discord.Interaction,
         symbol: str,
         expiry: Optional[str] = None,
-    ):
+    ) -> Any:
         symbol = symbol.upper()
         await interaction.response.defer(ephemeral=False)
 
@@ -105,5 +106,5 @@ class SentimentCog(commands.Cog):
             )
 
 
-async def setup(bot):
+async def setup(bot: Any):  # type: ignore
     await bot.add_cog(SentimentCog(bot))

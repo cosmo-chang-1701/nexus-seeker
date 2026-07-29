@@ -1,10 +1,11 @@
+from typing import Any
 import discord
 from discord.ext import commands
 from discord import app_commands
 import asyncio
 import logging
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict
 
 import database
 import market_math
@@ -38,13 +39,13 @@ class TerminalCog(commands.Cog):
     Retains only the high-impact commands for professional operations.
     """
 
-    def __init__(self, bot):
+    def __init__(self, bot: Any):
         self.bot = bot
         logger.info("TerminalCog loaded.")
 
         # 為了相容集成測試與 Embed 驗證，我們動態將 update_settings.callback 包裝成支援關鍵字參數的形式
         # 這樣一來，斜線指令在 Discord 註冊時仍然是完全不帶參數的（使用者點選即可喚起面板），但 Python 測試可以直接傳參
-        async def compat_callback(cog, interaction, **kwargs):
+        async def compat_callback(cog: Any, interaction: Any, **kwargs):  # type: ignore
             return await cog._update_settings_impl(interaction, **kwargs)
 
         self.update_settings._callback = compat_callback
@@ -52,7 +53,7 @@ class TerminalCog(commands.Cog):
     @app_commands.command(
         name="settings", description="配置帳戶全域參數 (資金、風險與專業營運指標)"
     )
-    async def update_settings(self, interaction: discord.Interaction):
+    async def update_settings(self, interaction: discord.Interaction) -> Any:
         """喚起帳戶設定互動式面板"""
         await self._update_settings_impl(interaction)
 
@@ -70,7 +71,7 @@ class TerminalCog(commands.Cog):
         monthly_expense: Optional[float] = None,
         tax_reserve_rate: Optional[float] = None,
         cash_reserve: Optional[float] = None,
-    ):
+    ) -> Any:
         """喚起帳戶設定互動式面板，或直接配置特定參數"""
         await interaction.response.defer(ephemeral=True)
         user_id = interaction.user.id
@@ -235,7 +236,7 @@ class TerminalCog(commands.Cog):
         expiry: str,
         entry_price: float,
         quantity: int,
-    ):
+    ) -> Any:
         symbol = symbol.upper()
         user_id = interaction.user.id
         await interaction.response.defer(ephemeral=True)
@@ -373,7 +374,7 @@ class TerminalCog(commands.Cog):
         price: Optional[float] = None,
         quantity: Optional[int] = None,
         category: Optional[app_commands.Choice[str]] = None,
-    ):
+    ) -> Any:
         await interaction.response.defer(ephemeral=True)
         from services.asset_manager import AssetManager
 
@@ -434,7 +435,7 @@ class TerminalCog(commands.Cog):
     @app_commands.command(
         name="scan", description="手動執行量化掃描與 What-if 曝險模擬"
     )
-    async def manual_scan(self, interaction: discord.Interaction, symbol: str):
+    async def manual_scan(self, interaction: discord.Interaction, symbol: str) -> Any:
         await interaction.response.defer(ephemeral=True)
         user_id, symbol = interaction.user.id, symbol.upper()
 
@@ -602,7 +603,7 @@ class TerminalCog(commands.Cog):
     @app_commands.command(
         name="vtr_stats", description="檢視虛擬交易室的績效統計與對沖歸因"
     )
-    async def vtr_stats(self, interaction: discord.Interaction):
+    async def vtr_stats(self, interaction: discord.Interaction) -> Any:
         await interaction.response.defer(ephemeral=True)
         try:
             from market_analysis.ghost_trader import GhostTrader
@@ -637,7 +638,7 @@ class TerminalCog(commands.Cog):
     @app_commands.command(
         name="sys_health", description="[Hidden] 檢查系統資源狀態與記憶體健康度"
     )
-    async def sys_health(self, interaction: discord.Interaction):
+    async def sys_health(self, interaction: discord.Interaction) -> Any:
         await interaction.response.defer(ephemeral=True)
         import psutil
         import os
@@ -679,7 +680,7 @@ class TerminalCog(commands.Cog):
     @app_commands.command(
         name="vtr_list", description="列出虛擬交易室中的所有持倉與歷史紀錄"
     )
-    async def vtr_list(self, interaction: discord.Interaction):
+    async def vtr_list(self, interaction: discord.Interaction) -> Any:
         await interaction.response.defer(ephemeral=True)
         from database.virtual_trading import get_all_virtual_trades
 
@@ -725,7 +726,7 @@ class TerminalCog(commands.Cog):
         expiry: str,
         price: float,
         qty: int,
-    ):
+    ) -> Any:
         await interaction.response.defer(ephemeral=True)
         symbol = symbol.upper()
 
@@ -785,7 +786,7 @@ class TerminalCog(commands.Cog):
     )
     async def settle_trade(
         self, interaction: discord.Interaction, asset_id: int, execution_price: float
-    ):
+    ) -> Any:
         await interaction.response.defer(ephemeral=True)
         from services.asset_manager import AssetManager
 
@@ -821,7 +822,7 @@ class TerminalCog(commands.Cog):
     @app_commands.describe(symbol="股票代號 (如 TSLA)", use_llm="是否啟用 AI 輔助分析")
     async def add_watch(
         self, interaction: discord.Interaction, symbol: str, use_llm: bool = True
-    ):
+    ) -> Any:
         symbol = symbol.upper()
         await interaction.response.defer(ephemeral=True)
 
@@ -873,7 +874,7 @@ class TerminalCog(commands.Cog):
         interaction: discord.Interaction,
         symbol: str,
         use_llm: Optional[bool] = None,
-    ):
+    ) -> Any:
         symbol = symbol.upper()
         if use_llm is None:
             return await interaction.response.send_message(
@@ -919,7 +920,7 @@ class TerminalCog(commands.Cog):
         symbol: str,
         quantity: float,
         avg_cost: float,
-    ):
+    ) -> Any:
         symbol = symbol.upper()
         user_id = interaction.user.id
         await interaction.response.defer(ephemeral=True)
@@ -1000,7 +1001,7 @@ class TerminalCog(commands.Cog):
         symbol: str,
         quantity: Optional[float] = None,
         avg_cost: Optional[float] = None,
-    ):
+    ) -> Any:
         symbol = symbol.upper()
         if quantity is None and avg_cost is None:
             return await interaction.response.send_message(
@@ -1047,7 +1048,7 @@ class TerminalCog(commands.Cog):
     @app_commands.command(
         name="list_holdings", description="列出目前所有現貨持倉、分配比例與即時損益估計"
     )
-    async def list_holdings(self, interaction: discord.Interaction):
+    async def list_holdings(self, interaction: discord.Interaction) -> Any:
         await interaction.response.defer(ephemeral=True)
         user_id = interaction.user.id
 
@@ -1092,7 +1093,9 @@ class TerminalCog(commands.Cog):
         name="remove_holding", description="從資產清單中移除特定的現貨紀錄"
     )
     @app_commands.describe(symbol="要移除的股票代號")
-    async def remove_holding(self, interaction: discord.Interaction, symbol: str):
+    async def remove_holding(
+        self, interaction: discord.Interaction, symbol: str
+    ) -> Any:
         await interaction.response.defer(ephemeral=True)
         symbol = symbol.upper()
         from services.asset_manager import AssetManager
@@ -1123,7 +1126,7 @@ class TerminalCog(commands.Cog):
             )
 
     @app_commands.command(name="remove_watch", description="將標的從觀察清單中移除")
-    async def remove_watch(self, interaction: discord.Interaction, symbol: str):
+    async def remove_watch(self, interaction: discord.Interaction, symbol: str) -> Any:
         await interaction.response.defer(ephemeral=True)
         symbol = symbol.upper()
         from services.asset_manager import AssetManager
@@ -1150,7 +1153,7 @@ class TerminalCog(commands.Cog):
             )
 
     @app_commands.command(name="list_watch", description="列出您的雷達觀察清單")
-    async def list_watch(self, interaction: discord.Interaction):
+    async def list_watch(self, interaction: discord.Interaction) -> Any:
         await interaction.response.defer(ephemeral=True)
         from services.asset_manager import AssetManager
         from models.asset import ContextType
@@ -1183,7 +1186,7 @@ class TerminalCog(commands.Cog):
     @app_commands.command(
         name="list_trades", description="列出目前資料庫中的所有實單持倉與未實現損益"
     )
-    async def list_trades(self, interaction: discord.Interaction):
+    async def list_trades(self, interaction: discord.Interaction) -> Any:
         await interaction.response.defer(ephemeral=True)
         user_id = interaction.user.id
 
@@ -1218,7 +1221,9 @@ class TerminalCog(commands.Cog):
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="remove_trade", description="將部位從監控管線中移除")
-    async def remove_trade(self, interaction: discord.Interaction, trade_id: int):
+    async def remove_trade(
+        self, interaction: discord.Interaction, trade_id: int
+    ) -> Any:
         await interaction.response.defer(ephemeral=True)
         user_id = interaction.user.id
         from services.asset_manager import AssetManager
@@ -1260,7 +1265,7 @@ class TerminalCog(commands.Cog):
         current_option_pnl: float,
         target_cc_strike: float,
         target_cc_premium: float,
-    ):
+    ) -> Any:
         await interaction.response.defer(ephemeral=True)
         symbol = symbol.upper()
 
@@ -1311,7 +1316,7 @@ class TerminalCog(commands.Cog):
         name="notif_settings",
         description="自訂通知偏好設定中心 (開啟或關閉背景定時報告與即時風控警報)",
     )
-    async def notif_settings(self, interaction: discord.Interaction):
+    async def notif_settings(self, interaction: discord.Interaction) -> Any:
         """喚起自訂通知設定面板"""
         await interaction.response.defer(ephemeral=True)
         user_id = interaction.user.id
@@ -1320,5 +1325,5 @@ class TerminalCog(commands.Cog):
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
 
-async def setup(bot):
+async def setup(bot: Any):  # type: ignore
     await bot.add_cog(TerminalCog(bot))

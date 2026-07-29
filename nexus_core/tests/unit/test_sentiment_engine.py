@@ -1,3 +1,4 @@
+from typing import Any
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 import pandas as pd
@@ -8,7 +9,7 @@ MOCK_EXPIRY = _current_week_friday().strftime("%Y-%m-%d")
 
 
 @pytest.mark.asyncio
-async def test_calculate_skew_full():
+async def test_calculate_skew_full() -> None:
     with patch(
         "services.market_data_service.get_all_option_expiries", new_callable=AsyncMock
     ) as mock_expiries, patch(
@@ -37,7 +38,7 @@ async def test_calculate_skew_full():
         )
 
         class MockChain:
-            def __init__(self, calls, puts):
+            def __init__(self, calls: Any, puts: Any):
                 self.calls = calls
                 self.puts = puts
 
@@ -53,7 +54,7 @@ async def test_calculate_skew_full():
 
 
 @pytest.mark.asyncio
-async def test_calculate_pcr():
+async def test_calculate_pcr() -> None:
     with patch(
         "services.market_data_service.get_all_option_expiries", new_callable=AsyncMock
     ) as mock_expiries, patch(
@@ -67,7 +68,7 @@ async def test_calculate_pcr():
         puts_df = pd.DataFrame({"strike": [100], "openInterest": [120], "volume": [60]})
 
         class MockChain:
-            def __init__(self, calls, puts):
+            def __init__(self, calls: Any, puts: Any):
                 self.calls = calls
                 self.puts = puts
 
@@ -78,7 +79,7 @@ async def test_calculate_pcr():
 
 
 @pytest.mark.asyncio
-async def test_detect_uoa():
+async def test_detect_uoa() -> None:
     with patch(
         "services.market_data_service.get_all_option_expiries", new_callable=AsyncMock
     ) as mock_expiries, patch(
@@ -103,7 +104,7 @@ async def test_detect_uoa():
         puts_df = pd.DataFrame({"strike": [90], "volume": [10], "openInterest": [100]})
 
         class MockChain:
-            def __init__(self, calls, puts):
+            def __init__(self, calls: Any, puts: Any):
                 self.calls = calls
                 self.puts = puts
 
@@ -128,7 +129,7 @@ async def test_detect_uoa():
 
 
 @pytest.mark.asyncio
-async def test_save_sentiment_history():
+async def test_save_sentiment_history() -> None:
     with patch("sqlite3.connect") as mock_connect:
         mock_conn = MagicMock()
         mock_connect.return_value = mock_conn
@@ -143,7 +144,7 @@ async def test_save_sentiment_history():
 
 
 @pytest.mark.asyncio
-async def test_sentiment_edge_cases():
+async def test_sentiment_edge_cases() -> None:
     # Test skew with no expiries
     with patch(
         "services.market_data_service.get_all_option_expiries", new_callable=AsyncMock
@@ -216,7 +217,7 @@ async def test_sentiment_edge_cases():
         mock_quote.return_value = {"c": 100.0}
 
         class MockChainShort:
-            def __init__(self):
+            def __init__(self) -> None:
                 self.calls = pd.DataFrame({"strike": [101]})
                 self.puts = pd.DataFrame({"strike": [99]})
 
@@ -256,7 +257,7 @@ async def test_sentiment_edge_cases():
         mock_quote.return_value = {"c": 100.0}
 
         class MockChainNoCall:
-            def __init__(self):
+            def __init__(self) -> None:
                 self.calls = pd.DataFrame({"strike": []})
                 self.puts = pd.DataFrame({"strike": [90], "impliedVolatility": [0.2]})
 
@@ -278,7 +279,7 @@ async def test_sentiment_edge_cases():
 
 
 @pytest.mark.asyncio
-async def test_calculate_max_pain_full():
+async def test_calculate_max_pain_full() -> None:
     with patch(
         "services.market_data_service.get_all_option_expiries", new_callable=AsyncMock
     ) as mock_expiries, patch(
@@ -297,7 +298,7 @@ async def test_calculate_max_pain_full():
         )
 
         class MockChain:
-            def __init__(self, calls, puts):
+            def __init__(self, calls: Any, puts: Any):
                 self.calls = calls
                 self.puts = puts
 
@@ -308,7 +309,7 @@ async def test_calculate_max_pain_full():
 
 
 @pytest.mark.asyncio
-async def test_calculate_max_pain_split_adjustment():
+async def test_calculate_max_pain_split_adjustment() -> None:
     with patch(
         "services.market_data_service.get_all_option_expiries", new_callable=AsyncMock
     ) as mock_expiries, patch(
@@ -331,7 +332,7 @@ async def test_calculate_max_pain_split_adjustment():
         )
 
         class MockChain:
-            def __init__(self, calls, puts):
+            def __init__(self, calls: Any, puts: Any):
                 self.calls = calls
                 self.puts = puts
 
@@ -345,7 +346,7 @@ async def test_calculate_max_pain_split_adjustment():
 
 
 @pytest.mark.asyncio
-async def test_iv_metrics_cache_invalidation_on_price_deviation():
+async def test_iv_metrics_cache_invalidation_on_price_deviation() -> None:
     from market_analysis.sentiment_engine import _iv_cache, SentimentEngine
     from models.quant import IVMetrics
     import time
@@ -380,7 +381,7 @@ async def test_iv_metrics_cache_invalidation_on_price_deviation():
 
 
 @pytest.mark.asyncio
-async def test_kv_cache_invalidation_on_price_deviation():
+async def test_kv_cache_invalidation_on_price_deviation() -> None:
     from market_analysis.sentiment_engine import SentimentEngine
     from database.cache import save_kv_cache
     from datetime import datetime
@@ -416,7 +417,7 @@ async def test_kv_cache_invalidation_on_price_deviation():
 
 
 @pytest.mark.asyncio
-async def test_max_pain_anomaly_warning_and_retry():
+async def test_max_pain_anomaly_warning_and_retry() -> None:
     from market_analysis.sentiment_engine import SentimentEngine
 
     with patch(
@@ -441,7 +442,7 @@ async def test_max_pain_anomaly_warning_and_retry():
         puts_df = pd.DataFrame({"strike": [50.0], "openInterest": [100.0]})
 
         class MockChain:
-            def __init__(self, calls, puts):
+            def __init__(self, calls: Any, puts: Any):
                 self.calls = calls
                 self.puts = puts
 
@@ -453,7 +454,7 @@ async def test_max_pain_anomaly_warning_and_retry():
 
 
 @pytest.mark.asyncio
-async def test_calculate_max_pain_sqlite_fallback():
+async def test_calculate_max_pain_sqlite_fallback() -> None:
     # Test fallback to SQLite market_cache when raw calculation fails / returns Data_Missing
     with patch(
         "services.market_data_service.get_all_option_expiries",
@@ -477,7 +478,7 @@ async def test_calculate_max_pain_sqlite_fallback():
 
 
 @pytest.mark.asyncio
-async def test_calculate_max_pain_incomplete_oi_fallback():
+async def test_calculate_max_pain_incomplete_oi_fallback() -> None:
     from market_analysis.sentiment_engine import SentimentEngine
 
     with patch(
@@ -508,7 +509,7 @@ async def test_calculate_max_pain_incomplete_oi_fallback():
         )
 
         class MockChain:
-            def __init__(self, calls, puts):
+            def __init__(self, calls: Any, puts: Any):
                 self.calls = calls
                 self.puts = puts
 
@@ -526,7 +527,7 @@ async def test_calculate_max_pain_incomplete_oi_fallback():
 
 
 @pytest.mark.asyncio
-async def test_iv_fallback_earnings_event_loading_factor():
+async def test_iv_fallback_earnings_event_loading_factor() -> None:
     from market_analysis.sentiment_engine import SentimentEngine
     from datetime import datetime, timedelta
 
@@ -564,7 +565,7 @@ async def test_iv_fallback_earnings_event_loading_factor():
 
 
 @pytest.mark.asyncio
-async def test_detect_uoa_sanity_filters():
+async def test_detect_uoa_sanity_filters() -> None:
     from market_analysis.sentiment_engine import SentimentEngine
 
     exp = [MOCK_EXPIRY]
@@ -627,7 +628,7 @@ async def test_detect_uoa_sanity_filters():
     puts_df = pd.DataFrame([])
 
     class MockChain:
-        def __init__(self, calls, puts):
+        def __init__(self, calls: Any, puts: Any):
             self.calls = calls
             self.puts = puts
 
@@ -649,7 +650,7 @@ async def test_detect_uoa_sanity_filters():
 
 @pytest.mark.asyncio
 @patch("services.market_data_service.get_company_profile", new_callable=AsyncMock)
-async def test_polymarket_fuzzy_matching_and_odds_format(mock_get_company):
+async def test_polymarket_fuzzy_matching_and_odds_format(mock_get_company: Any):  # type: ignore
     from cogs.unified_terminal import find_matching_polymarket_odds
 
     mock_get_company.return_value = {"name": "Micron Technology, Inc."}
@@ -690,7 +691,7 @@ async def test_polymarket_fuzzy_matching_and_odds_format(mock_get_company):
 
 
 @pytest.mark.asyncio
-async def test_calculate_max_pain_split_anomaly_and_degradation():
+async def test_calculate_max_pain_split_anomaly_and_degradation() -> None:
     from market_analysis.sentiment_engine import SentimentEngine
 
     with patch(
@@ -737,7 +738,7 @@ async def test_calculate_max_pain_split_anomaly_and_degradation():
         )
 
         class MockChain:
-            def __init__(self, calls, puts):
+            def __init__(self, calls: Any, puts: Any):
                 self.calls = calls
                 self.puts = puts
                 self.underlying = {"price": 100.0}

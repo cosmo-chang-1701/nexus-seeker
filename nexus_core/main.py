@@ -29,7 +29,7 @@ except Exception as e:
 # --------------------------
 
 
-async def main():
+async def main() -> None:
     if not DISCORD_TOKEN:
         logger.error("❌ 錯誤：找不到 DISCORD_TOKEN。")
         return
@@ -40,7 +40,7 @@ async def main():
     loop = asyncio.get_running_loop()
 
     # 定義訊號處理器
-    def handle_signal():
+    def handle_signal() -> None:
         if bot._is_closing:
             return
         logger.info("收到停止訊號 (SIGINT/SIGTERM)，正在啟動關閉流程...")

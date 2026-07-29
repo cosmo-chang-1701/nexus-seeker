@@ -1,3 +1,4 @@
+from typing import Any
 import pytest
 import sys
 import os
@@ -11,7 +12,7 @@ from ui.watchlist import WatchlistPagination
 
 @pytest.mark.asyncio
 @patch("services.asset_manager.AssetManager")
-async def test_watchlist_pagination_ephemeral_edit(mock_asset_manager_class):
+async def test_watchlist_pagination_ephemeral_edit(mock_asset_manager_class: Any):  # type: ignore
     """
     Test that WatchlistPagination handles ephemeral message limitations correctly.
     Specifically checks that HTTPExceptions are caught and original_interaction is prioritized.
@@ -48,7 +49,9 @@ async def test_watchlist_pagination_ephemeral_edit(mock_asset_manager_class):
     # Simulate the user clicking "Edit Tags" button
     with patch("ui.watchlist_tags.WatchlistTagSelectView") as MockSelectView:
         edit_tags_btn = [
-            x for x in pagination_view.children if x.custom_id == "edit_tags"
+            x
+            for x in pagination_view.children
+            if x.custom_id == "edit_tags"  # type: ignore
         ][0]
         await edit_tags_btn.callback(mock_button_interaction)
 
@@ -82,7 +85,9 @@ async def test_watchlist_pagination_ephemeral_edit(mock_asset_manager_class):
 
     with patch("ui.watchlist_tags.WatchlistTagSelectView") as MockSelectViewFallback:
         edit_tags_btn_fallback = [
-            x for x in pagination_view_fallback.children if x.custom_id == "edit_tags"
+            x
+            for x in pagination_view_fallback.children
+            if x.custom_id == "edit_tags"  # type: ignore
         ][0]
         await edit_tags_btn_fallback.callback(mock_button_interaction_fallback)
 

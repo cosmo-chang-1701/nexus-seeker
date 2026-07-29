@@ -1,3 +1,5 @@
+from typing import Any
+
 """
 財報日期查詢 — 透過 Finnhub Earnings Calendar API (Async)。
 """
@@ -12,7 +14,7 @@ from services.calendar_service import calendar_service
 logger = logging.getLogger(__name__)
 
 
-async def get_next_earnings_date(symbol: str):
+async def get_next_earnings_date(symbol: str) -> Any:
     """取得下一次財報發布日期。"""
     try:
         earnings_info = await calendar_service.get_symbol_earnings(symbol)
@@ -24,7 +26,7 @@ async def get_next_earnings_date(symbol: str):
         return None
 
 
-def get_option_chain(symbol: str, expiry: str):
+def get_option_chain(symbol: str, expiry: str) -> Any:
     """透過 yfinance 獲取選擇權鏈 (同步)。"""
     try:
         ticker = yf.Ticker(symbol)

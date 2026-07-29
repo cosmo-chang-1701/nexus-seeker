@@ -1,3 +1,4 @@
+from typing import Any
 import discord
 from typing import Optional, Set
 import asyncio
@@ -19,11 +20,11 @@ class FilterParamsModal(discord.ui.Modal, title="微調進階量化參數"):
         label="磁吸偏離度門檻 (%)", default="10", placeholder="例如: 10"
     )
 
-    def __init__(self, view: "UnifiedRadarView"):
+    def __init__(self, view: "UnifiedRadarView") -> Any:  # type: ignore
         super().__init__()
         self.radar_view = view
 
-    async def on_submit(self, interaction: discord.Interaction):
+    async def on_submit(self, interaction: discord.Interaction) -> Any:
         try:
             self.radar_view.params["max_pain_threshold"] = float(
                 self.max_pain_threshold.value
@@ -46,7 +47,7 @@ class FilterParamsModal(discord.ui.Modal, title="微調進階量化參數"):
 
 
 class UnifiedRadarView(discord.ui.View):
-    def __init__(self, cog, user_id: int):
+    def __init__(self, cog: Any, user_id: int):
         super().__init__(timeout=300)
         self.cog = cog
         self.user_id = user_id
@@ -74,7 +75,7 @@ class UnifiedRadarView(discord.ui.View):
             "selected_tag": self.selected_tag,
         }
 
-    def _add_static_components(self):
+    def _add_static_components(self) -> None:
         # 1. Scope Selector
         scope_options = [
             discord.SelectOption(
@@ -89,14 +90,14 @@ class UnifiedRadarView(discord.ui.View):
                 label="📜 掃描期權持倉標的 (Option Holdings)", value="OPTIONS"
             ),
         ]
-        self.scope_select = discord.ui.Select(
+        self.scope_select = discord.ui.Select(  # type: ignore
             placeholder="請選擇掃描範圍...",
             min_values=1,
             max_values=1,
             options=scope_options,
             row=0,
         )
-        self.scope_select.callback = self.on_scope_change
+        self.scope_select.callback = self.on_scope_change  # type: ignore
         self.add_item(self.scope_select)
 
         # 2. Quant Filters Selector (Merged)
@@ -131,30 +132,30 @@ class UnifiedRadarView(discord.ui.View):
                 description="偏離大於10% + 站穩底牆 + 暗池共振",
             ),
         ]
-        self.filter_select = discord.ui.Select(
+        self.filter_select = discord.ui.Select(  # type: ignore
             placeholder="請選擇量化與進階引擎過濾條件 (可多選)...",
             min_values=0,
             max_values=7,
             options=filter_options,
             row=1,
         )
-        self.filter_select.callback = self.on_filter_change
+        self.filter_select.callback = self.on_filter_change  # type: ignore
         self.add_item(self.filter_select)
 
         # 3. Action Buttons
-        self.adjust_params_btn = discord.ui.Button(
+        self.adjust_params_btn = discord.ui.Button(  # type: ignore
             label="微調參數", style=discord.ButtonStyle.secondary, row=3
         )
-        self.adjust_params_btn.callback = self.on_adjust_params
+        self.adjust_params_btn.callback = self.on_adjust_params  # type: ignore
         self.add_item(self.adjust_params_btn)
 
-        self.execute_scan_btn = discord.ui.Button(
+        self.execute_scan_btn = discord.ui.Button(  # type: ignore
             label="🚀 執行量化雷達", style=discord.ButtonStyle.primary, row=3
         )
-        self.execute_scan_btn.callback = self.on_execute_scan
+        self.execute_scan_btn.callback = self.on_execute_scan  # type: ignore
         self.add_item(self.execute_scan_btn)
 
-    async def on_scope_change(self, interaction: discord.Interaction):
+    async def on_scope_change(self, interaction: discord.Interaction) -> Any:
         self.scope = self.scope_select.values[0]
         for opt in self.scope_select.options:
             opt.default = opt.value == self.scope
@@ -205,13 +206,13 @@ class UnifiedRadarView(discord.ui.View):
                 self.tag_selector_added = False
             await self.update_state_message(interaction)
 
-    async def on_filter_change(self, interaction: discord.Interaction):
+    async def on_filter_change(self, interaction: discord.Interaction) -> Any:
         self.quant_filters = set(self.filter_select.values)
         for opt in self.filter_select.options:
             opt.default = opt.value in self.quant_filters
         await self.update_state_message(interaction)
 
-    async def on_tag_change(self, interaction: discord.Interaction):
+    async def on_tag_change(self, interaction: discord.Interaction) -> Any:
         if not self.tag_select:
             return
         val = self.tag_select.values[0]
@@ -225,7 +226,7 @@ class UnifiedRadarView(discord.ui.View):
 
         await self.update_state_message(interaction)
 
-    async def on_adjust_params(self, interaction: discord.Interaction):
+    async def on_adjust_params(self, interaction: discord.Interaction) -> Any:
         modal = FilterParamsModal(self)
         modal.max_pain_threshold.default = str(self.params["max_pain_threshold"])
         modal.abs_support_tolerance.default = str(self.params["abs_support_tolerance"])
@@ -235,7 +236,7 @@ class UnifiedRadarView(discord.ui.View):
         )
         await interaction.response.send_modal(modal)
 
-    async def update_state_message(self, interaction: discord.Interaction):
+    async def update_state_message(self, interaction: discord.Interaction) -> Any:
         embed = build_unified_radar_panel_embed(self.get_state_dict())
         try:
             if not interaction.response.is_done():
@@ -245,14 +246,16 @@ class UnifiedRadarView(discord.ui.View):
         except Exception:
             pass
 
-    async def update_state_message_deferred(self, interaction: discord.Interaction):
+    async def update_state_message_deferred(
+        self, interaction: discord.Interaction
+    ) -> Any:
         embed = build_unified_radar_panel_embed(self.get_state_dict())
         try:
             await interaction.edit_original_response(embed=embed, view=self)
         except Exception:
             pass
 
-    async def on_execute_scan(self, interaction: discord.Interaction):
+    async def on_execute_scan(self, interaction: discord.Interaction) -> Any:
         await interaction.response.defer(ephemeral=True)
         for item in self.children:
             if hasattr(item, "disabled"):

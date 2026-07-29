@@ -11,7 +11,7 @@ from cogs.analyst_agent import AnalystAgent
 
 
 @pytest.mark.asyncio
-async def test_analyst_agent_integration_with_sentiment_engine():
+async def test_analyst_agent_integration_with_sentiment_engine() -> None:
     """
     驗證 AnalystAgent 與 SentimentEngine 之間的集成。
     不直接 Mock SentimentEngine 的方法，而是 Mock 底層的數據服務，

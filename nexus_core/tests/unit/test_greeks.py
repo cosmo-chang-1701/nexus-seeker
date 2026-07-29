@@ -5,7 +5,7 @@ from market_analysis.greeks import (
 )
 
 
-def test_calculate_vanna_basic():
+def test_calculate_vanna_basic() -> None:
     # Test vanna calculation with some realistic values
     # Call option, S=100, K=100, T=0.1 (36.5 days), IV=0.2, r=0.05, q=0.0
     vanna = calculate_vanna("c", 100, 100, 0.1, 0.2, 0.0)
@@ -14,7 +14,7 @@ def test_calculate_vanna_basic():
     assert vanna != 0.0
 
 
-def test_greeks_dividend_correction():
+def test_greeks_dividend_correction() -> None:
     # Test that dividend rate 'q' affects greeks
     stock_price = 100
     strike = 100
@@ -32,7 +32,7 @@ def test_greeks_dividend_correction():
     assert greeks_with_div["delta"] > 0
 
 
-def test_calculate_contract_delta_merton():
+def test_calculate_contract_delta_merton() -> None:
     # Test Merton model correction (q) in calculate_contract_delta
     row = {"strike": 100, "impliedVolatility": 0.2}
     stock_price = 100
@@ -44,7 +44,7 @@ def test_calculate_contract_delta_merton():
     assert delta_with_div < delta_no_div
 
 
-def test_greeks_edge_cases():
+def test_greeks_edge_cases() -> None:
     # IV = 0
     res = calculate_greeks("call", 100, 100, 0.5, 0.0, 0.0)
     assert res["delta"] == 0.0

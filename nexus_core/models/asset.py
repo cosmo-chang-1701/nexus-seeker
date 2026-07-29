@@ -1,5 +1,6 @@
+from typing import Any
 from enum import Enum
-from typing import Optional, Dict, Any
+from typing import Optional, Dict
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 from datetime import datetime
 
@@ -45,7 +46,7 @@ class HoldingMetadata(BaseModel):
 
     @field_validator("weighted_delta", mode="before")
     @classmethod
-    def default_weighted_delta(cls, v):
+    def default_weighted_delta(cls, v: Any):  # type: ignore
         if v is None:
             return 0.0
         return v
@@ -65,7 +66,7 @@ class Asset(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    def get_metadata_model(self):
+    def get_metadata_model(self) -> Any:
         if self.context_type == ContextType.WATCH:
             return WatchMetadata(**self.metadata)
         elif self.context_type == ContextType.TRADE:

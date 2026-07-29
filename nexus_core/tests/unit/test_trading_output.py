@@ -1,3 +1,4 @@
+from typing import Any
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -7,14 +8,14 @@ from cogs.trading import SchedulerCog
 
 
 @pytest.mark.asyncio
-async def test_monitor_real_portfolio_task_uses_helpers():
+async def test_monitor_real_portfolio_task_uses_helpers() -> None:
     bot = MagicMock()
     bot.queue_dm = AsyncMock()
 
     with patch("discord.ext.tasks.Loop.start"):
         cog = SchedulerCog(bot)
 
-    cog.trading_service.audit_real_portfolio_risk = AsyncMock(
+    cog.trading_service.audit_real_portfolio_risk = AsyncMock(  # type: ignore
         return_value=[
             {
                 "uid": 1,
@@ -44,7 +45,7 @@ async def test_monitor_real_portfolio_task_uses_helpers():
 
 
 @pytest.mark.asyncio
-async def test_pre_market_risk_monitor_uses_helper():
+async def test_pre_market_risk_monitor_uses_helper() -> None:
     bot = MagicMock()
     bot.queue_dm = AsyncMock()
     bot.fetch_user = AsyncMock(return_value=SimpleNamespace(id=1))
@@ -52,7 +53,7 @@ async def test_pre_market_risk_monitor_uses_helper():
     with patch("discord.ext.tasks.Loop.start"):
         cog = SchedulerCog(bot)
 
-    cog.trading_service.get_pre_market_alerts_data = AsyncMock(
+    cog.trading_service.get_pre_market_alerts_data = AsyncMock(  # type: ignore
         return_value={
             1: {
                 "alerts": [
@@ -93,14 +94,14 @@ async def test_pre_market_risk_monitor_uses_helper():
 
 
 @pytest.mark.asyncio
-async def test_monitor_vtr_task_uses_ditm_helper():
+async def test_monitor_vtr_task_uses_ditm_helper() -> None:
     bot = MagicMock()
     bot.queue_dm = AsyncMock()
 
     with patch("discord.ext.tasks.Loop.start"):
         cog = SchedulerCog(bot)
 
-    cog.trading_service.monitor_vtr_and_calculate_hedging = AsyncMock(
+    cog.trading_service.monitor_vtr_and_calculate_hedging = AsyncMock(  # type: ignore
         return_value=[
             {
                 "uid": 1,
@@ -134,14 +135,14 @@ async def test_monitor_vtr_task_uses_ditm_helper():
 
 
 @pytest.mark.asyncio
-async def test_monitor_vtr_task_uses_settlement_helper_for_non_ditm():
+async def test_monitor_vtr_task_uses_settlement_helper_for_non_ditm() -> None:
     bot = MagicMock()
     bot.queue_dm = AsyncMock()
 
     with patch("discord.ext.tasks.Loop.start"):
         cog = SchedulerCog(bot)
 
-    cog.trading_service.monitor_vtr_and_calculate_hedging = AsyncMock(
+    cog.trading_service.monitor_vtr_and_calculate_hedging = AsyncMock(  # type: ignore
         return_value=[
             {
                 "uid": 1,
@@ -177,7 +178,7 @@ async def test_monitor_vtr_task_uses_settlement_helper_for_non_ditm():
 
 
 @pytest.mark.asyncio
-async def test_dispatch_watchlist_heartbeat_sends_all_watchlist_symbols():
+async def test_dispatch_watchlist_heartbeat_sends_all_watchlist_symbols() -> Any:
     bot = MagicMock()
     bot.queue_dm = AsyncMock()
 
@@ -224,7 +225,7 @@ async def test_dispatch_watchlist_heartbeat_sends_all_watchlist_symbols():
 
 
 @pytest.mark.asyncio
-async def test_dispatch_watchlist_heartbeat_honors_portfolio_only_mode():
+async def test_dispatch_watchlist_heartbeat_honors_portfolio_only_mode() -> Any:
     bot = MagicMock()
     bot.queue_dm = AsyncMock()
 
@@ -272,7 +273,7 @@ async def test_dispatch_watchlist_heartbeat_honors_portfolio_only_mode():
 
 
 @pytest.mark.asyncio
-async def test_monitor_vtr_task_handles_missing_trade_info():
+async def test_monitor_vtr_task_handles_missing_trade_info() -> None:
     bot = MagicMock()
     bot.queue_dm = AsyncMock()
 
@@ -281,7 +282,7 @@ async def test_monitor_vtr_task_handles_missing_trade_info():
 
     # Mock the return value to contain a transition suggestion (which lacks trade_info)
     # and a valid VTR hedging result.
-    cog.trading_service.monitor_vtr_and_calculate_hedging = AsyncMock(
+    cog.trading_service.monitor_vtr_and_calculate_hedging = AsyncMock(  # type: ignore
         return_value=[
             {
                 "uid": 1,
@@ -321,7 +322,7 @@ async def test_monitor_vtr_task_handles_missing_trade_info():
 
 
 @pytest.mark.asyncio
-async def test_dispatch_order_telemetry_alignment_alert_success():
+async def test_dispatch_order_telemetry_alignment_alert_success() -> None:
     bot = MagicMock()
     bot.queue_dm = AsyncMock()
 

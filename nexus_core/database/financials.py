@@ -54,7 +54,7 @@ def get_cached_financials(
         row = cursor.fetchone()
         if not row or not row["payload"]:
             return None
-        return json.loads(row["payload"])
+        return json.loads(row["payload"])  # type: ignore
     except Exception as e:
         logger.error("[%s] 讀取 financials_cache 失敗: %s", symbol, e)
         return None

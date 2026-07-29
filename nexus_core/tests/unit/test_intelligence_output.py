@@ -1,3 +1,4 @@
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -6,7 +7,7 @@ from cogs.intelligence import IntelligenceCog
 
 
 @pytest.mark.asyncio
-async def test_poly_status_uses_builder(mock_interaction):
+async def test_poly_status_uses_builder(mock_interaction: Any):  # type: ignore
     bot = MagicMock()
     bot.polymarket_service = MagicMock()
     bot.polymarket_service.get_status.return_value = {
@@ -23,7 +24,7 @@ async def test_poly_status_uses_builder(mock_interaction):
         "cogs.intelligence.create_polymarket_status_embed",
         return_value=embed,
     ) as mock_builder:
-        await cog.poly_status.callback(cog, mock_interaction)
+        await cog.poly_status.callback(cog, mock_interaction)  # type: ignore
 
     mock_builder.assert_called_once_with(bot.polymarket_service.get_status.return_value)
     mock_interaction.response.send_message.assert_called_once_with(
@@ -32,7 +33,7 @@ async def test_poly_status_uses_builder(mock_interaction):
 
 
 @pytest.mark.asyncio
-async def test_quote_uses_builder(mock_interaction):
+async def test_quote_uses_builder(mock_interaction: Any):  # type: ignore
     bot = MagicMock()
     cog = IntelligenceCog(bot)
     embed = object()
@@ -44,7 +45,7 @@ async def test_quote_uses_builder(mock_interaction):
     ), patch(
         "cogs.intelligence.create_quote_embed", return_value=embed
     ) as mock_builder:
-        await cog.quote.callback(cog, mock_interaction, symbol="aapl")
+        await cog.quote.callback(cog, mock_interaction, symbol="aapl")  # type: ignore
 
     mock_builder.assert_called_once_with("AAPL", quote)
     mock_interaction.followup.send.assert_called_once_with(embed=embed, ephemeral=True)

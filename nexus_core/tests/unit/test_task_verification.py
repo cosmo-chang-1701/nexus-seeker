@@ -16,7 +16,7 @@ from services.memory_manager import MemoryManager
 from models.quant import MacroRiskMetrics
 
 
-def test_task1_spy_delta_calculation():
+def test_task1_spy_delta_calculation() -> None:
     """驗證 Task 1: SPY Delta 換算邏輯 (1.0 vs 0.5)"""
     # 以前的錯誤邏輯是 qty = round(abs(adj_delta) / 0.5)
     # 現在應該是 qty = round(abs(adj_delta) / 1.0)
@@ -31,7 +31,7 @@ def test_task1_spy_delta_calculation():
     assert qty_long == -167  # 代表反向操作
 
 
-def test_task1_nro_telemetry():
+def test_task1_nro_telemetry() -> None:
     """驗證 Task 1: NRO Telemetry 增強欄位 (現在已整合到 MacroRiskMetrics)"""
     metrics = get_macro_risk_metrics(
         total_beta_delta=166.94,
@@ -53,7 +53,7 @@ def test_task1_nro_telemetry():
 
 
 @pytest.mark.asyncio
-async def test_task2_warmup_idempotency():
+async def test_task2_warmup_idempotency() -> None:
     """驗證 Task 2: 快取預熱冪等性"""
     bot = MagicMock()
     mm = MemoryManager(bot)
@@ -78,7 +78,7 @@ async def test_task2_warmup_idempotency():
 
 
 @pytest.mark.asyncio
-async def test_task2_warmup_memory_gate():
+async def test_task2_warmup_memory_gate() -> None:
     """驗證 Task 2: 快取預熱記憶體保護門檻"""
     bot = MagicMock()
     mm = MemoryManager(bot)
@@ -95,7 +95,7 @@ async def test_task2_warmup_memory_gate():
 
 
 @pytest.mark.asyncio
-async def test_memory_manager_alert_uses_embed_builder():
+async def test_memory_manager_alert_uses_embed_builder() -> None:
     bot = MagicMock()
     bot.queue_dm = AsyncMock()
     mm = MemoryManager(bot)

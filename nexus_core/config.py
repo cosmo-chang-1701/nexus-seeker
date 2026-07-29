@@ -1,3 +1,4 @@
+from typing import Any
 import os
 import math
 from typing import List, TypedDict, Optional
@@ -21,7 +22,7 @@ class VixTier(TypedDict):
     color_hex: int
 
 
-def get_env_or_secret(key, default=None):
+def get_env_or_secret(key: Any, default: Any = None):  # type: ignore
     """取得環境變數，若不存在則嘗試從 Docker Secret 讀取。"""
     value = os.getenv(key)
     if value:

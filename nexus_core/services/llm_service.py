@@ -86,7 +86,7 @@ class WatchlistRoundupCommentary(BaseModel):
 
 
 async def classify_uoa_intent(
-    symbol: str, uoa_data: dict, whale_intent: str = None
+    symbol: str, uoa_data: dict, whale_intent: str | None = None
 ) -> dict:
     """
     結合 UOA 數據與 Polymarket 巨鯨意圖，判定異常活動性質。
@@ -119,7 +119,7 @@ async def classify_uoa_intent(
         parsed = response.choices[0].message.parsed
         if parsed is None:
             raise ValueError("Parsed result is None")
-        return parsed.model_dump()
+        return parsed.model_dump()  # type: ignore
     except Exception as e:
         logger.error(f"UOA 分類失敗: {e}")
         return {
@@ -276,7 +276,7 @@ async def generate_analyst_report(report_type: str, raw_data: dict) -> str:
         result = response.choices[0].message.parsed
         if result is None:
             raise ValueError("Parsed result is None")
-        return result.report_content
+        return result.report_content  # type: ignore
     except Exception as e:
         logger.error(f"Failed to generate analyst report: {e}")
         return f"**{report_type}**\n--------------------------------------------------\n⚠️ LLM 生成失敗或伺服器離線: {str(e)}"
@@ -335,7 +335,10 @@ async def generate_watchlist_roundup_commentary(raw_data: dict) -> str:
 
 
 async def generate_polymarket_summary(
-    market_info: dict, trade_data: dict, usd_value: float, trade_details: dict = None
+    market_info: dict,
+    trade_data: dict,
+    usd_value: float,
+    trade_details: dict | None = None,
 ) -> str:
     """
     針對 Polymarket 巨鯨交易生成高度結構化的 Markdown 分析報告。

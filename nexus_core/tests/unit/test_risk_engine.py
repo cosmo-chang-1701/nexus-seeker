@@ -12,7 +12,7 @@ from market_analysis.risk_engine import (
 from models.quant import OptimizationResult, MacroRiskMetrics
 
 
-def test_evaluate_ditm_defense():
+def test_evaluate_ditm_defense() -> None:
     # Case 1: Not DITM
     assert evaluate_ditm_defense(1, 0.5, 30, 0.5) == DITMDefenseAction.HOLD
 
@@ -29,7 +29,7 @@ def test_evaluate_ditm_defense():
     assert evaluate_ditm_defense(-1, 0.9, 5, 2.0) == DITMDefenseAction.HOLD
 
 
-def test_calculate_vega_adjusted_delta():
+def test_calculate_vega_adjusted_delta() -> None:
     # Delta_adj = Delta + Vanna * Delta_Vol
     total_delta = 100.0
     total_vanna = 50.0
@@ -40,7 +40,7 @@ def test_calculate_vega_adjusted_delta():
     assert adj_delta == 105.0
 
 
-def test_get_macro_risk_metrics():
+def test_get_macro_risk_metrics() -> None:
     metrics = get_macro_risk_metrics(
         total_beta_delta=10.0,
         total_theta=50.0,
@@ -61,7 +61,7 @@ def test_get_macro_risk_metrics():
     assert metrics.total_vanna == 20.0
 
 
-def test_get_macro_modifiers_all_cases():
+def test_get_macro_modifiers_all_cases() -> None:
     # VIX tiers
     assert (
         get_macro_modifiers(MacroContext(vix=35.0, oil_price=70.0, vix_change=0.0))[0]
@@ -123,7 +123,7 @@ def test_get_macro_modifiers_all_cases():
     assert w_regime == 0.6
 
 
-def test_optimize_position_risk_all_branches():
+def test_optimize_position_risk_all_branches() -> None:
     # BTO strategy with market heat (low PCR)
     macro = MacroContext(vix=20.0, oil_price=70.0, vix_change=0.0, vts_ratio=0.9)
     res = optimize_position_risk(
@@ -156,7 +156,7 @@ def test_optimize_position_risk_all_branches():
     assert res_extreme.suggested_contracts > 0
 
 
-def test_evaluate_defense_status():
+def test_evaluate_defense_status() -> None:
     from market_analysis.risk_engine import evaluate_defense_status
 
     # Short position (quantity < 0)
@@ -174,7 +174,7 @@ def test_evaluate_defense_status():
     assert "繼續持有" in evaluate_defense_status(1, "call", 0.1, 0.5, 30)
 
 
-def test_calculate_beta():
+def test_calculate_beta() -> None:
     import pandas as pd
     import numpy as np
 
@@ -195,7 +195,7 @@ def test_calculate_beta():
     assert 1.4 <= beta <= 1.6
 
 
-def test_simulate_exposure_impact():
+def test_simulate_exposure_impact() -> None:
     from market_analysis.risk_engine import simulate_exposure_impact
 
     new_trade = {"strategy": "BTO_CALL", "weighted_delta": 0.5}
@@ -212,7 +212,7 @@ def test_simulate_exposure_impact():
 
 
 @pytest.mark.asyncio
-async def test_analyze_sector_correlation():
+async def test_analyze_sector_correlation() -> None:
     from market_analysis.risk_engine import analyze_sector_correlation
     import pandas as pd
     import numpy as np
@@ -243,7 +243,7 @@ async def test_analyze_sector_correlation():
         assert pairs[0][2] > 0.75
 
 
-def test_sector_benchmark_mapping():
+def test_sector_benchmark_mapping() -> None:
     from market_analysis.risk_engine import get_sector_benchmark
 
     assert get_sector_benchmark("MU") == "SMH"
@@ -252,7 +252,7 @@ def test_sector_benchmark_mapping():
     assert get_sector_benchmark("UNKNOWN_TICKER") == "SPY"
 
 
-def test_calculate_relative_strength_index():
+def test_calculate_relative_strength_index() -> None:
     import pandas as pd
     from market_analysis.risk_engine import calculate_relative_strength_index
 
@@ -269,7 +269,7 @@ def test_calculate_relative_strength_index():
 
 
 @pytest.mark.asyncio
-async def test_boxx_capital_adjustment_and_beta():
+async def test_boxx_capital_adjustment_and_beta() -> None:
     """測試持倉中有 BOXX 時，可用資本折算（套用 90% 折價）的計算是否正確"""
     from unittest.mock import patch, AsyncMock
     from services.trading_service import get_adjusted_user_capital

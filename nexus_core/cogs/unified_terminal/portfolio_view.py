@@ -1,3 +1,4 @@
+from typing import Any
 import discord
 import logging
 import database
@@ -19,18 +20,20 @@ class PortfolioHubView(discord.ui.View):
     Interactive view for the Portfolio Hub (/dash).
     """
 
-    def __init__(self, user_id: int, bot):
+    def __init__(self, user_id: int, bot: Any) -> Any:  # type: ignore
         super().__init__(timeout=300)
         self.user_id = user_id
         self.bot = bot
 
-    async def _set_loading(self, interaction: discord.Interaction):
+    async def _set_loading(self, interaction: discord.Interaction) -> Any:
         for child in self.children:
             if isinstance(child, discord.ui.Button):
                 child.disabled = True
         await interaction.edit_original_response(view=self)
 
-    async def _reset_loading(self, interaction: discord.Interaction, embed=None):
+    async def _reset_loading(
+        self, interaction: discord.Interaction, embed: Any = None
+    ) -> Any:
         for child in self.children:
             if isinstance(child, discord.ui.Button):
                 child.disabled = False
@@ -43,7 +46,7 @@ class PortfolioHubView(discord.ui.View):
     )
     async def btn_home(
         self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+    ) -> Any:
         await interaction.response.defer()
         await self._set_loading(interaction)
         embed = None
@@ -92,7 +95,7 @@ class PortfolioHubView(discord.ui.View):
     @discord.ui.button(label="📋 實單持倉", style=discord.ButtonStyle.primary)
     async def btn_trades(
         self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+    ) -> Any:
         await interaction.response.defer()
         await self._set_loading(interaction)
         embed = None
@@ -113,7 +116,7 @@ class PortfolioHubView(discord.ui.View):
     @discord.ui.button(label="📦 現貨持倉", style=discord.ButtonStyle.primary)
     async def btn_holdings(
         self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+    ) -> Any:
         await interaction.response.defer()
         await self._set_loading(interaction)
         embed = None
@@ -145,7 +148,7 @@ class PortfolioHubView(discord.ui.View):
     @discord.ui.button(label="👻 VTR 績效", style=discord.ButtonStyle.secondary)
     async def btn_vtr(
         self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+    ) -> Any:
         await interaction.response.defer()
         await self._set_loading(interaction)
         embed = None
@@ -170,7 +173,7 @@ class PortfolioHubView(discord.ui.View):
     @discord.ui.button(label="🚨 壓力測試", style=discord.ButtonStyle.danger)
     async def btn_stress_test(
         self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+    ) -> Any:
         await interaction.response.defer()
         await self._set_loading(interaction)
         embed = None

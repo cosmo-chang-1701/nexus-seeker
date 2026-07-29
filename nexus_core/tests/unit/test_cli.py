@@ -15,7 +15,7 @@ from models.schemas import (
 )
 
 
-def test_cli_help():
+def test_cli_help() -> None:
     """測試 CLI 說明文字"""
     runner = CliRunner()
     result = runner.invoke(cli, ["--help"])
@@ -23,7 +23,7 @@ def test_cli_help():
     assert "Nexus Seeker Professional CLI Terminal" in result.output
 
 
-def test_cli_health():
+def test_cli_health() -> None:
     """測試 health 指令"""
     with patch(
         "services.market_data_service.get_macro_environment", new_callable=AsyncMock
@@ -40,7 +40,7 @@ def test_cli_health():
         assert "18.5" in result.output
 
 
-def test_cli_quote():
+def test_cli_quote() -> None:
     """測試 quote 指令"""
     with patch(
         "services.market_data_service.get_quote", new_callable=AsyncMock
@@ -60,7 +60,7 @@ def test_cli_quote():
         assert "$200.0" in result.output
 
 
-def test_cli_portfolio_empty():
+def test_cli_portfolio_empty() -> None:
     """測試 portfolio 指令 (無持倉)"""
     with patch(
         "services.trading_service.TradingService.get_portfolio_pnl",
@@ -74,7 +74,7 @@ def test_cli_portfolio_empty():
         assert "目前無持倉紀錄" in result.output
 
 
-def test_cli_watchlist_check():
+def test_cli_watchlist_check() -> None:
     metrics = EnhancedWatchlistMetrics(
         symbol="AAPL",
         exchange="NASDAQ",
@@ -138,7 +138,7 @@ def test_cli_watchlist_check():
         assert "```ansi" in result.output
 
 
-def test_cli_force_macro_update():
+def test_cli_force_macro_update() -> None:
     """測試 force-macro-update 指令"""
     with patch("database.init_db"), patch(
         "market_analysis.index_microstructure.fetch_gex_metrics", new_callable=AsyncMock

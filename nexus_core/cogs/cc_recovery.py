@@ -1,3 +1,4 @@
+from typing import Any
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -23,7 +24,7 @@ class CoveredCallRecoveryCog(commands.Cog):
         description="Filter and display optimal OTM Covered Call contracts (DTE 30-50, Delta < 0.15, Yield >= 10%)",
     )
     @app_commands.describe(symbol="The target equity ticker symbol (e.g., NVDA, AMD)")
-    async def cc_recovery(self, interaction: discord.Interaction, symbol: str):
+    async def cc_recovery(self, interaction: discord.Interaction, symbol: str) -> Any:
         """
         Executes isolated quantitative filtering and renders the results via NexusEmbed.
         """
@@ -63,5 +64,5 @@ class CoveredCallRecoveryCog(commands.Cog):
             await interaction.followup.send(embed=embed)
 
 
-async def setup(bot: commands.Bot):
+async def setup(bot: commands.Bot) -> Any:
     await bot.add_cog(CoveredCallRecoveryCog(bot))

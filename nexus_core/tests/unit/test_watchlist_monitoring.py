@@ -1,3 +1,4 @@
+from typing import Any
 import pytest
 import pandas as pd
 from pydantic import ValidationError
@@ -17,7 +18,7 @@ from risk_engine.nro import WatchlistRiskController
 from ui.formatter import generate_ansi_watchlist_report
 
 
-def _sample_metrics(**overrides):
+def _sample_metrics(**overrides):  # type: ignore
     payload = {
         "symbol": "NVDA",
         "exchange": "NASDAQ",
@@ -50,10 +51,10 @@ def _sample_metrics(**overrides):
         "relative_strength_spy": 0.08,
     }
     payload.update(overrides)
-    return EnhancedWatchlistMetrics(**payload)
+    return EnhancedWatchlistMetrics(**payload)  # type: ignore
 
 
-def _sample_event_context(**overrides):
+def _sample_event_context(**overrides):  # type: ignore
     payload = {
         "earnings_date": None,
         "earnings_tte_hours": None,
@@ -64,17 +65,17 @@ def _sample_event_context(**overrides):
         "summary": "未偵測到近期需調整參數的重大事件。",
     }
     payload.update(overrides)
-    return WatchlistEventContext(**payload)
+    return WatchlistEventContext(**payload)  # type: ignore
 
 
 @pytest.fixture(autouse=True)
-def clear_watchlist_metrics_cache():
+def clear_watchlist_metrics_cache() -> Any:
     _WATCHLIST_METRICS_CACHE.clear()
     yield
     _WATCHLIST_METRICS_CACHE.clear()
 
 
-def test_enhanced_watchlist_metrics_computes_bias_and_support_distance():
+def test_enhanced_watchlist_metrics_computes_bias_and_support_distance() -> None:
     metrics = _sample_metrics()
     assert metrics.bias_ma20 == 0.0
     assert metrics.distance_to_absolute_support == pytest.approx(
@@ -82,12 +83,12 @@ def test_enhanced_watchlist_metrics_computes_bias_and_support_distance():
     )
 
 
-def test_enhanced_watchlist_metrics_rejects_invalid_phase_order():
+def test_enhanced_watchlist_metrics_rejects_invalid_phase_order() -> None:
     with pytest.raises(ValidationError):
         _sample_metrics(buy_price_phase1=120.0, buy_price_phase2=124.0)
 
 
-def test_watchlist_risk_controller_routes_premium_harvest():
+def test_watchlist_risk_controller_routes_premium_harvest() -> None:
     tactical = WatchlistRiskController.process_metrics(
         _sample_metrics(current_price=129.0, iv_rank=78.0)
     )
@@ -97,7 +98,7 @@ def test_watchlist_risk_controller_routes_premium_harvest():
     assert tactical.dynamic_grid_step == 3.0
 
 
-def test_watchlist_risk_controller_routes_hard_hedge():
+def test_watchlist_risk_controller_routes_hard_hedge() -> None:
     tactical = WatchlistRiskController.process_metrics(
         _sample_metrics(current_price=123.0, beta=1.5, vanna_sensitivity=0.4)
     )
@@ -108,7 +109,7 @@ def test_watchlist_risk_controller_routes_hard_hedge():
     assert tactical.hedge_instruction is None
 
 
-def test_watchlist_risk_controller_routes_wait():
+def test_watchlist_risk_controller_routes_wait() -> None:
     tactical = WatchlistRiskController.process_metrics(
         _sample_metrics(current_price=136.0, iv_rank=40.0)
     )
@@ -118,7 +119,7 @@ def test_watchlist_risk_controller_routes_wait():
     assert tactical.hedge_instruction is None
 
 
-def test_generate_ansi_watchlist_report_contains_sections():
+def test_generate_ansi_watchlist_report_contains_sections() -> None:
     metrics = _sample_metrics(current_price=123.0, beta=1.5, vanna_sensitivity=0.4)
     tactical = WatchlistRiskController.process_metrics(metrics)
     report = generate_ansi_watchlist_report(metrics, tactical)
@@ -129,7 +130,7 @@ def test_generate_ansi_watchlist_report_contains_sections():
     assert "NVDA | NASDAQ" in report
 
 
-def test_derive_watchlist_option_guidance_mentions_skew_and_strategy():
+def test_derive_watchlist_option_guidance_mentions_skew_and_strategy() -> None:
     metrics = _sample_metrics(current_price=129.0, iv_rank=78.0, option_skew=-7.2)
     tactical = WatchlistRiskController.process_metrics(metrics)
 
@@ -138,7 +139,9 @@ def test_derive_watchlist_option_guidance_mentions_skew_and_strategy():
     assert "Cash-Secured Put" in guidance
 
 
-def test_derive_watchlist_option_guidance_switches_to_position_management_copy():
+def test_derive_watchlist_option_guidance_switches_to_position_management_copy() -> (
+    None
+):
     metrics = _sample_metrics(current_price=129.0, iv_rank=78.0, option_skew=-7.2)
     tactical = WatchlistRiskController.process_metrics(metrics)
 
@@ -148,7 +151,7 @@ def test_derive_watchlist_option_guidance_switches_to_position_management_copy()
     assert "Covered Call" in guidance
 
 
-def test_derive_watchlist_option_guidance_prioritizes_event_guard():
+def test_derive_watchlist_option_guidance_prioritizes_event_guard() -> None:
     metrics = _sample_metrics(current_price=129.0, iv_rank=78.0, option_skew=-7.2)
     tactical = WatchlistRiskController.process_metrics(metrics)
     event_context = _sample_event_context(
@@ -165,7 +168,9 @@ def test_derive_watchlist_option_guidance_prioritizes_event_guard():
     assert "Cash-Secured Put" in guidance
 
 
-def test_derive_watchlist_option_guidance_uses_position_copy_during_event_guard():
+def test_derive_watchlist_option_guidance_uses_position_copy_during_event_guard() -> (
+    None
+):
     metrics = _sample_metrics(current_price=129.0, iv_rank=78.0, option_skew=-7.2)
     tactical = WatchlistRiskController.process_metrics(metrics)
     event_context = _sample_event_context(
@@ -187,7 +192,7 @@ def test_derive_watchlist_option_guidance_uses_position_copy_during_event_guard(
 
 
 @pytest.mark.asyncio
-async def test_build_watchlist_option_plan_builds_credit_spread():
+async def test_build_watchlist_option_plan_builds_credit_spread() -> None:
     metrics = _sample_metrics(current_price=129.0, iv_rank=78.0, option_skew=7.2)
     tactical = WatchlistRiskController.process_metrics(metrics)
     chain = type(
@@ -228,7 +233,7 @@ async def test_build_watchlist_option_plan_builds_credit_spread():
 
 
 @pytest.mark.asyncio
-async def test_build_watchlist_option_plan_switches_to_debit_before_earnings():
+async def test_build_watchlist_option_plan_switches_to_debit_before_earnings() -> None:
     metrics = _sample_metrics(current_price=129.0, iv_rank=78.0, option_skew=7.2)
     tactical = WatchlistRiskController.process_metrics(metrics)
     event_context = _sample_event_context(
@@ -280,7 +285,7 @@ async def test_build_watchlist_option_plan_switches_to_debit_before_earnings():
 
 
 @pytest.mark.asyncio
-async def test_build_watchlist_option_plan_reduces_size_before_macro_event():
+async def test_build_watchlist_option_plan_reduces_size_before_macro_event() -> None:
     metrics = _sample_metrics(current_price=130.0, iv_rank=72.0, option_skew=1.2)
     tactical = WatchlistRiskController.process_metrics(metrics)
     normal_context = _sample_event_context()
@@ -336,7 +341,7 @@ async def test_build_watchlist_option_plan_reduces_size_before_macro_event():
 
 
 @pytest.mark.asyncio
-async def test_build_enhanced_watchlist_metrics_assembles_quant_fields():
+async def test_build_enhanced_watchlist_metrics_assembles_quant_fields() -> None:
     dates = pd.date_range("2025-01-01", periods=90, freq="D")
     stock_df = pd.DataFrame(
         {
@@ -442,7 +447,7 @@ async def test_build_enhanced_watchlist_metrics_assembles_quant_fields():
 
 
 @pytest.mark.asyncio
-async def test_evaluate_watchlist_symbol_returns_wait_snapshot():
+async def test_evaluate_watchlist_symbol_returns_wait_snapshot() -> None:
     metrics = _sample_metrics(current_price=136.0, iv_rank=40.0)
     event_context = _sample_event_context()
 
@@ -469,7 +474,7 @@ async def test_evaluate_watchlist_symbol_returns_wait_snapshot():
 
 
 @pytest.mark.asyncio
-async def test_build_watchlist_event_context_marks_earnings_lock():
+async def test_build_watchlist_event_context_marks_earnings_lock() -> None:
     earnings_event = type(
         "EarningsEvent", (), {"date": "2026-05-24", "tte_hours": 36.0}
     )()
@@ -490,7 +495,7 @@ async def test_build_watchlist_event_context_marks_earnings_lock():
     assert "禁做賣方" in context.summary
 
 
-def test_watchlist_risk_controller_hard_hedge_suppresses_spy_hedging():
+def test_watchlist_risk_controller_hard_hedge_suppresses_spy_hedging() -> None:
     """Rule 1: Hard-Hedge triggers suppression of index short hedging."""
     metrics = _sample_metrics(current_price=95.0, iv_rank=74.7)
     metrics.buy_price_phase2 = 100.0  # spot < phase2 triggers hard-hedge
@@ -506,7 +511,7 @@ def test_watchlist_risk_controller_hard_hedge_suppresses_spy_hedging():
 
 
 @pytest.mark.asyncio
-async def test_rule2_premium_selling_option_strategy_routing():
+async def test_rule2_premium_selling_option_strategy_routing() -> None:
     """Rule 2: IV_Rank > 50% and Option_Skew < 0% routes to Premium Selling Strategies and bans Debit Spreads."""
     from models.schemas import WatchlistTacticalPlan
 
@@ -556,7 +561,7 @@ async def test_rule2_premium_selling_option_strategy_routing():
 
 
 @pytest.mark.asyncio
-async def test_rule3_macro_timer_cache_invalidation():
+async def test_rule3_macro_timer_cache_invalidation() -> None:
     """Rule 3: Macro event release time in the past invalidates countdown and switches to published state."""
     from datetime import datetime, timedelta
     from zoneinfo import ZoneInfo
@@ -581,7 +586,7 @@ async def test_rule3_macro_timer_cache_invalidation():
     assert "宏觀不確定性逐步落地" in context.summary
 
 
-def test_rule5_support_distance_formula_correctness():
+def test_rule5_support_distance_formula_correctness() -> None:
     """Rule 5 & Bug 4: Support distance is defined as (current - support) / current."""
     metrics = _sample_metrics(current_price=108.99, iv_rank=74.7)
     metrics.buy_price_phase3 = 49.60

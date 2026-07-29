@@ -1,3 +1,4 @@
+from typing import Any
 import discord
 from discord.ext import tasks, commands
 from discord import app_commands
@@ -5,7 +6,7 @@ import asyncio
 import time as _time
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
-from typing import Dict, Any
+from typing import Dict
 import logging
 
 import database
@@ -104,7 +105,7 @@ class SchedulerCog(commands.Cog):
     # 🚀 Reddit 散戶情緒每日非同步更新 (08:30 ET)
     # ==========================================
     @tasks.loop(time=time(hour=8, minute=30, tzinfo=ny_tz))
-    async def daily_reddit_update(self):
+    async def daily_reddit_update(self) -> None:
         """08:30：每日更新 Reddit 散戶情緒快取 (低頻率任務)"""
         if not getattr(self.bot, "_is_leader_instance", True):
             return
@@ -132,14 +133,14 @@ class SchedulerCog(commands.Cog):
                 logger.error(f"[{sym}] 每日 Reddit 更新失敗: {e}")
 
     @daily_reddit_update.before_loop
-    async def before_daily_reddit_update(self):
+    async def before_daily_reddit_update(self) -> None:
         await self.bot.wait_until_ready()
 
     # ==========================================
     # 🚀 真實持倉風險動態審計
     # ==========================================
     @tasks.loop(minutes=30)
-    async def monitor_real_portfolio_task(self):
+    async def monitor_real_portfolio_task(self) -> None:
         """每 30 分鐘審計真實持倉風險 (DITM & Gamma Fragility)"""
         if not getattr(self.bot, "_is_leader_instance", True):
             return
@@ -171,7 +172,7 @@ class SchedulerCog(commands.Cog):
                 from cogs.embed_builder import create_covered_call_unlock_embed
 
                 all_holdings = get_all_holdings()
-                user_symbols = {}
+                user_symbols = {}  # type: ignore
                 for h in all_holdings:
                     u_id = h["user_id"]
                     sym = h["symbol"].upper()
@@ -193,14 +194,14 @@ class SchedulerCog(commands.Cog):
             logger.error(f"真實持倉風險審計錯誤: {e}")
 
     @monitor_real_portfolio_task.before_loop
-    async def before_monitor_real_portfolio_task(self):
+    async def before_monitor_real_portfolio_task(self) -> None:
         await self.bot.wait_until_ready()
 
     # ==========================================
     # 📡 待成交委託單 Telemetry 對齊警報 (盤中每 30 分鐘)
     # ==========================================
     @tasks.loop(minutes=30)
-    async def monitor_order_telemetry_alignment_task(self):
+    async def monitor_order_telemetry_alignment_task(self) -> None:
         """盤中每 30 分鐘推播委託單 Telemetry 對齊警報（需於 /notif_settings 手動開啟）"""
         if not getattr(self.bot, "_is_leader_instance", True):
             return
@@ -213,7 +214,7 @@ class SchedulerCog(commands.Cog):
             logger.error(f"委託單 Telemetry 對齊警報執行錯誤: {e}")
 
     @monitor_order_telemetry_alignment_task.before_loop
-    async def before_monitor_order_telemetry_alignment_task(self):
+    async def before_monitor_order_telemetry_alignment_task(self) -> None:
         await self.bot.wait_until_ready()
 
     async def _dispatch_order_telemetry_alignment_alert(self) -> None:
@@ -297,7 +298,7 @@ class SchedulerCog(commands.Cog):
     # 🚀 每週 VTR 績效週報 (美東週五 17:05)
     # ==========================================
     @tasks.loop(time=time(hour=17, minute=5, tzinfo=ny_tz))
-    async def weekly_vtr_report_task(self):
+    async def weekly_vtr_report_task(self) -> None:
         """每週五收盤後：自動推送 VTR 績效週報"""
         if not getattr(self.bot, "_is_leader_instance", True):
             return
@@ -327,7 +328,7 @@ class SchedulerCog(commands.Cog):
     # 動態排程任務 (私訊分發引擎)
     # ==========================================
     @tasks.loop(time=time(hour=9, minute=0, tzinfo=ny_tz))
-    async def pre_market_risk_monitor(self):
+    async def pre_market_risk_monitor(self) -> None:
         """09:00：盤前財報警報 (依使用者分發私訊)"""
         if not getattr(self.bot, "_is_leader_instance", True):
             return
@@ -367,11 +368,11 @@ class SchedulerCog(commands.Cog):
             logger.error(f"盤前掃描執行錯誤: {e}")
 
     @pre_market_risk_monitor.before_loop
-    async def before_pre_market_risk_monitor(self):
+    async def before_pre_market_risk_monitor(self) -> None:
         await self.bot.wait_until_ready()
 
     @tasks.loop(time=scanner_times)
-    async def dynamic_market_scanner(self):
+    async def dynamic_market_scanner(self) -> None:
         """盤中動態巡邏：每 30 分鐘心跳檢查，僅在盤中執行掃描"""
         if not getattr(self.bot, "_is_leader_instance", True):
             return
@@ -425,14 +426,14 @@ class SchedulerCog(commands.Cog):
         await self._run_market_scan_logic(is_auto=True)
 
     @dynamic_market_scanner.before_loop
-    async def before_dynamic_market_scanner(self):
+    async def before_dynamic_market_scanner(self) -> None:
         await self.bot.wait_until_ready()
         logger.info("盤中動態巡邏機已掛載，將每 30 分鐘偵測一次開盤狀態。")
 
     @app_commands.command(
         name="force_scan", description="[Admin] 立即手動執行全站掃描 (不論開盤時間)"
     )
-    async def force_scan(self, interaction: discord.Interaction):
+    async def force_scan(self, interaction: discord.Interaction) -> Any:
         if not getattr(self.bot, "_is_leader_instance", True):
             await interaction.response.send_message(
                 embed=create_info_embed(
@@ -472,7 +473,7 @@ class SchedulerCog(commands.Cog):
     @app_commands.describe(dry_run="true=只做計算與建構，不發送 DM")
     async def force_after_report(
         self, interaction: discord.Interaction, dry_run: bool = True
-    ):
+    ) -> Any:
         if interaction.user.id != DISCORD_ADMIN_USER_ID:
             await interaction.response.send_message(
                 embed=create_error_embed(
@@ -517,7 +518,7 @@ class SchedulerCog(commands.Cog):
         name="force_macro_update",
         description="[Admin] 立即手動更新大盤總經數據 (GEX & FedWatch)",
     )
-    async def force_macro_update(self, interaction: discord.Interaction):
+    async def force_macro_update(self, interaction: discord.Interaction) -> Any:
         if interaction.user.id != DISCORD_ADMIN_USER_ID:
             await interaction.response.send_message(
                 embed=create_error_embed(
@@ -603,8 +604,8 @@ class SchedulerCog(commands.Cog):
             )
 
     async def _run_after_market_report_pipeline(
-        self, dry_run: bool = False, triggered_by=None
-    ):
+        self, dry_run: bool = False, triggered_by: Any = None
+    ) -> Any:
         """共用盤後報告流程：支援排程與手動 dry-run。"""
         mode = "DRY-RUN" if dry_run else "SEND"
         stats: dict[str, Any] = {
@@ -799,7 +800,7 @@ class SchedulerCog(commands.Cog):
     @app_commands.command(
         name="ddp_scan", description="立即對觀察清單執行 Davis Double Play (DDP) 掃描"
     )
-    async def ddp_scan(self, interaction: discord.Interaction):
+    async def ddp_scan(self, interaction: discord.Interaction) -> Any:
         await interaction.response.defer(ephemeral=False)
         all_watchlists = database.get_all_watchlist()
         symbols = sorted(list(set(row[1] for row in all_watchlists)))
@@ -833,7 +834,7 @@ class SchedulerCog(commands.Cog):
     @app_commands.command(
         name="iv_scan", description="立即對觀察清單執行波動率優勢 (Cheap IV) 偵測"
     )
-    async def iv_scan(self, interaction: discord.Interaction):
+    async def iv_scan(self, interaction: discord.Interaction) -> Any:
         await interaction.response.defer(ephemeral=False)
         all_watchlists = database.get_all_watchlist()
         # 為每個用戶獨立掃描 (因為 Runway Impact 不同)
@@ -967,7 +968,9 @@ class SchedulerCog(commands.Cog):
                 )
                 continue
 
-    async def _run_market_scan_logic(self, is_auto=True, triggered_by=None):
+    async def _run_market_scan_logic(  # type: ignore
+        self, is_auto: Any = True, triggered_by: Any = None
+    ):  # type: ignore
         """共用的掃描核心邏輯，協調 Service 計算與 Discord 訊息發送。"""
         try:
             if not is_auto and triggered_by:
@@ -1147,7 +1150,7 @@ class SchedulerCog(commands.Cog):
         except Exception as e:
             logger.error(f"掃描邏輯執行錯誤: {e}")
 
-    def _update_macro_state(self, user_results: Dict[int, list]):
+    def _update_macro_state(self, user_results: Dict[int, list]) -> Any:
         """
         從本輪掃描結果中提取宏觀環境快照 (VIX)，
         存入 prev_macro_state 供下一輪 AlertFilter 比對變動幅度。
@@ -1161,7 +1164,7 @@ class SchedulerCog(commands.Cog):
                     return  # VIX 是全域值，取到一筆即可
 
     @tasks.loop(time=time(hour=16, minute=15, tzinfo=ny_tz))
-    async def dynamic_after_market_report(self):
+    async def dynamic_after_market_report(self) -> None:
         """16:15：持倉結算與防禦建議 (依使用者分發私訊)"""
         if not getattr(self.bot, "_is_leader_instance", True):
             return
@@ -1187,14 +1190,14 @@ class SchedulerCog(commands.Cog):
         await self._run_after_market_report_pipeline(dry_run=False)
 
     @dynamic_after_market_report.before_loop
-    async def before_dynamic_after_market_report(self):
+    async def before_dynamic_after_market_report(self) -> None:
         await self.bot.wait_until_ready()
 
     # ==========================================
     # ⚡ 盤中量化掃描與執行指南 (Scheduled Audit)
     # ==========================================
     @tasks.loop(minutes=120)
-    async def scheduled_intraday_audit(self):
+    async def scheduled_intraday_audit(self) -> None:
         """每 120 分鐘執行盤中 Scheduled Audit (Active Execution Guide)"""
         if not getattr(self.bot, "_is_leader_instance", True):
             return
@@ -1212,14 +1215,14 @@ class SchedulerCog(commands.Cog):
             logger.error(f"120分鐘盤中 Scheduled Audit 掃描錯誤: {e}")
 
     @scheduled_intraday_audit.before_loop
-    async def before_scheduled_intraday_audit(self):
+    async def before_scheduled_intraday_audit(self) -> None:
         await self.bot.wait_until_ready()
 
     # ==========================================
     # 🚀 VTR 監控與風險即時預警
     # ==========================================
     @tasks.loop(minutes=30)
-    async def monitor_vtr_task(self):
+    async def monitor_vtr_task(self) -> None:
         """每 30 分鐘檢查 VTR，並在轉倉/平倉時即時通知"""
         if not getattr(self.bot, "_is_leader_instance", True):
             return
@@ -1313,10 +1316,10 @@ class SchedulerCog(commands.Cog):
             logger.error(f"VTR 對沖連動任務錯誤: {e}")
 
     @monitor_vtr_task.before_loop
-    async def before_monitor_vtr_task(self):
+    async def before_monitor_vtr_task(self) -> None:
         await self.bot.wait_until_ready()
 
-    async def _pre_warm_all_targets(self):
+    async def _pre_warm_all_targets(self) -> None:
         """盤前預熱所有自選標的、持倉標的及掛單標的之量化/期權快取。"""
         logger.info("🚀 [盤前預熱] 開始計算並快取所有相關標的指標...")
         symbols = set()
@@ -1347,7 +1350,7 @@ class SchedulerCog(commands.Cog):
             f"[盤前預熱] 收集到 {len(unique_symbols)} 個獨特標的: {unique_symbols}"
         )
 
-        async def _warm_one(sym):
+        async def _warm_one(sym: Any):  # type: ignore
             try:
                 from market_analysis.sentiment_engine import SentimentEngine
 
@@ -1361,7 +1364,7 @@ class SchedulerCog(commands.Cog):
         # 使用 semaphore 控制並行請求數量，防止 API 被鎖
         sem = asyncio.Semaphore(3)
 
-        async def _throttled_warm(sym):
+        async def _throttled_warm(sym: Any):  # type: ignore
             async with sem:
                 await _warm_one(sym)
 
@@ -1371,5 +1374,5 @@ class SchedulerCog(commands.Cog):
         logger.info("✅ [盤前預熱] 量化/期權數據快取預熱完成。")
 
 
-async def setup(bot):
+async def setup(bot: Any):  # type: ignore
     await bot.add_cog(SchedulerCog(bot))

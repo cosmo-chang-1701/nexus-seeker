@@ -1,3 +1,5 @@
+from typing import Any
+
 """Alert and notification Discord embed builders for Nexus Seeker.
 
 This module contains embed-building functions for:
@@ -23,7 +25,7 @@ source and must not alter any business logic.
 import discord
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from cogs.embed_builders._embed_helpers import (
     add_news_field,
@@ -51,7 +53,7 @@ from cogs.embed_builders._embed_helpers import (
 # ============================================================================
 
 
-def create_scan_embed(data, user_capital=100000.0):
+def create_scan_embed(data: Any, user_capital: Any = 100000.0):  # type: ignore
     strategy = data.get("strategy", "UNKNOWN")
     stock_cost = data.get("stock_cost", 0.0)
 
@@ -255,7 +257,7 @@ def create_psq_embed(data: dict) -> discord.Embed:
 # ============================================================================
 
 
-def create_news_scan_embed(symbol, news_text):
+def create_news_scan_embed(symbol: Any, news_text: Any):  # type: ignore
     """建構新聞掃描結果的 Embed"""
     embed = discord.Embed(title=f"📰 {symbol} 官方新聞掃描", color=discord.Color.blue())
     add_news_field(embed, news_text)
@@ -263,7 +265,7 @@ def create_news_scan_embed(symbol, news_text):
     return embed
 
 
-def create_reddit_scan_embed(symbol, reddit_text):
+def create_reddit_scan_embed(symbol: Any, reddit_text: Any):  # type: ignore
     """建構 Reddit 情緒掃描結果的 Embed"""
     embed = discord.Embed(
         title=f"🔥 {symbol} 散戶情緒優勢 (Reddit 同步)", color=discord.Color.orange()
@@ -276,7 +278,7 @@ def create_reddit_scan_embed(symbol, reddit_text):
     return embed
 
 
-def create_media_sentiment_embed(symbol, news_text, reddit_text):
+def create_media_sentiment_embed(symbol: Any, news_text: Any, reddit_text: Any):  # type: ignore
     """建構輿情與社群 (Media & Social) 掃描結果的統一 Embed"""
     embed = discord.Embed(
         title=f"🎭 {symbol} 輿情與社群大盤掃描 (Media & Social)",
@@ -295,7 +297,7 @@ def create_media_sentiment_embed(symbol, news_text, reddit_text):
 # ============================================================================
 
 
-def create_polymarket_list_embed(markets: List[Dict[str, Any]]):
+def create_polymarket_list_embed(markets: List[Dict[str, Any]]) -> Any:
     """建構 Polymarket 監控中的熱門市場 Embed"""
     embed = discord.Embed(
         title="🐋 Polymarket 巨鯨意圖圖譜",

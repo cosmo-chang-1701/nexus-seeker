@@ -1,3 +1,4 @@
+from typing import Any
 import sqlite3
 import logging
 import pkgutil
@@ -15,7 +16,7 @@ logger = logging.getLogger(__name__)
 # ==========================================
 # 每次需要更改資料庫結構時，請在 database/migrations 目錄下新增自立的 python 檔案。
 # 系統啟動時會自動掃描該目錄下的所有模組並載入。
-def get_migrations():
+def get_migrations() -> Any:
     migration_list = []
     # 預期模組名稱格式: v001_init 等
     module_pattern = re.compile(r"^[a-z0-9_]+$")
@@ -47,7 +48,7 @@ def get_migrations():
 MIGRATIONS = get_migrations()
 
 
-def run_migrations():
+def run_migrations() -> None:
     """執行資料庫版本控管與遷移邏輯"""
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
@@ -129,5 +130,5 @@ def run_migrations():
 
 
 # 為了向下相容，您可以保留 init_db 的名稱，並讓它直接呼叫 run_migrations
-def init_db():
+def init_db() -> None:
     run_migrations()

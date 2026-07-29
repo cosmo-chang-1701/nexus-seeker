@@ -1,3 +1,4 @@
+from typing import Any
 import pandas_market_calendars as mcal
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -9,7 +10,9 @@ ny_tz = ZoneInfo("America/New_York")
 nyse_calendar = mcal.get_calendar("NYSE")
 
 
-def get_next_market_target_time(reference="open", offset_minutes=0, skip_today=False):
+def get_next_market_target_time(  # type: ignore
+    reference: Any = "open", offset_minutes: Any = 0, skip_today: Any = False
+):  # type: ignore
     """獲取下一個市場的目標時間"""
     now = datetime.now(ny_tz)
 
@@ -40,7 +43,7 @@ def get_next_market_target_time(reference="open", offset_minutes=0, skip_today=F
     return None
 
 
-def get_sleep_seconds(target_time):
+def get_sleep_seconds(target_time: Any):  # type: ignore
     if not target_time:
         return 3600
 
@@ -48,7 +51,7 @@ def get_sleep_seconds(target_time):
     return max(0.0, sleep_secs)
 
 
-def is_market_open():
+def is_market_open() -> Any:
     """
     判斷當下這一秒，美股是否正在常規交易時間內。
     (精準避開週末、國定假日，以及如感恩節前夕的提前收市)

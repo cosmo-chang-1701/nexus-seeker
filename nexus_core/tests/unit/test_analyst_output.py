@@ -1,3 +1,4 @@
+from typing import Any
 import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -7,7 +8,7 @@ from cogs.analyst_agent import AnalystAgent
 
 
 @pytest.mark.asyncio
-async def test_dispatch_intraday_guide_uses_builder():
+async def test_dispatch_intraday_guide_uses_builder() -> Any:
     bot = MagicMock()
     bot.queue_dm = AsyncMock()
 
@@ -67,7 +68,7 @@ async def test_dispatch_intraday_guide_uses_builder():
         user_ctx.total_theta = 50.0
         mock_ctx.return_value = user_ctx
 
-        cog._fetch_macro_data = AsyncMock(return_value={"vix": 15.0})
+        cog._fetch_macro_data = AsyncMock(return_value={"vix": 15.0})  # type: ignore
 
         await cog.dispatch_intraday_guide()
 
@@ -80,7 +81,7 @@ async def test_dispatch_intraday_guide_uses_builder():
 
 
 @pytest.mark.asyncio
-async def test_dispatch_intraday_guide_memory_gate_uses_builder():
+async def test_dispatch_intraday_guide_memory_gate_uses_builder() -> None:
     bot = MagicMock()
     bot.queue_dm = AsyncMock()
 
@@ -103,7 +104,7 @@ async def test_dispatch_intraday_guide_memory_gate_uses_builder():
         user_ctx.enable_analyst_agent = True
         mock_ctx.return_value = user_ctx
 
-        cog._fetch_macro_data = AsyncMock(return_value={"vix": 15.0})
+        cog._fetch_macro_data = AsyncMock(return_value={"vix": 15.0})  # type: ignore
 
         await cog.dispatch_intraday_guide()
 

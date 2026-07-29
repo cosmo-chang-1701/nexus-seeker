@@ -1,3 +1,4 @@
+from typing import Any
 import sqlite3
 
 version = 34
@@ -14,5 +15,5 @@ UPDATE user_settings SET option_alert_mode = 1 WHERE enable_option_alerts = 1;
 """
 
 
-def migrate_data(conn: sqlite3.Connection):
+def migrate_data(conn: sqlite3.Connection) -> Any:
     pass

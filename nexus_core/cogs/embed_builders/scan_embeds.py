@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 class NexusEmbed(discord.Embed):
     """自訂 Embed 子類別，用以動態實現一致的版面設計、精緻調色盤與標準 Footer 排版。"""
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, **kwargs):  # type: ignore
         # 1. 統一對齊和諧且精美的高級調色盤 (Curated Aesthetic Palette)
         color = kwargs.get("color")
         if color is not None:

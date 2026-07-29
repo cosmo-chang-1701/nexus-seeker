@@ -7,7 +7,7 @@ from services.event_monitor import EventMonitor
 
 
 @pytest.mark.asyncio
-async def test_send_event_alert_uses_embed_builder():
+async def test_send_event_alert_uses_embed_builder() -> None:
     bot = MagicMock()
     bot.queue_dm = AsyncMock()
     monitor = EventMonitor(bot)
@@ -42,7 +42,7 @@ async def test_send_event_alert_uses_embed_builder():
 
 
 @pytest.mark.asyncio
-async def test_check_upcoming_events_deduplicates_alerts():
+async def test_check_upcoming_events_deduplicates_alerts() -> None:
     bot = MagicMock()
     bot.queue_dm = AsyncMock()
     monitor = EventMonitor(bot)

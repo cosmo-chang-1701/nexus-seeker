@@ -1,3 +1,4 @@
+from typing import Any
 import asyncio
 import psutil
 import logging
@@ -16,7 +17,7 @@ class MemoryManager:
     專為 1GB RAM 環境優化。
     """
 
-    def __init__(self, bot, threshold: float = 90.0):
+    def __init__(self, bot: Any, threshold: float = 90.0):
         self.bot = bot
         self.threshold = threshold
         self.running = False
@@ -26,15 +27,15 @@ class MemoryManager:
         self._last_alert_at = 0
         self._last_warmup_date = None
 
-    def start(self):
+    def start(self) -> None:
         if self.running:
             return
         self.running = True
-        self._monitor_task = asyncio.create_task(self._monitor_loop())
-        self._warmup_task = asyncio.create_task(self._warmup_loop())
+        self._monitor_task = asyncio.create_task(self._monitor_loop())  # type: ignore
+        self._warmup_task = asyncio.create_task(self._warmup_loop())  # type: ignore
         logger.info("🧠 Memory Manager Service started.")
 
-    def stop(self):
+    def stop(self) -> None:
         self.running = False
         if self._monitor_task:
             self._monitor_task.cancel()
@@ -42,7 +43,7 @@ class MemoryManager:
             self._warmup_task.cancel()
         logger.info("🛑 Memory Manager Service stopped.")
 
-    async def _monitor_loop(self):
+    async def _monitor_loop(self) -> None:
         while self.running:
             try:
                 await self._perform_health_check()
@@ -50,7 +51,7 @@ class MemoryManager:
                 logger.error(f"Health check error: {e}")
             await asyncio.sleep(self._check_interval)
 
-    async def _warmup_loop(self):
+    async def _warmup_loop(self) -> None:
         """🚀 Task 2: 定期檢查盤前預熱視窗 (08:30 - 09:30 ET)"""
         while self.running:
             try:
@@ -69,7 +70,7 @@ class MemoryManager:
                 logger.error(f"Warmup loop error: {e}")
             await asyncio.sleep(600)  # 每 10 分鐘檢查一次
 
-    async def proactive_warmup(self):
+    async def proactive_warmup(self) -> None:
         """執行快取預熱，具備冪等性與記憶體保護門檻。"""
         today_str = datetime.now().strftime("%Y-%m-%d")
         if self._last_warmup_date == today_str:
@@ -109,14 +110,14 @@ class MemoryManager:
                 # 每個標的間隔一下，避免 CPU 瞬間飆升
                 await asyncio.sleep(0.5)
 
-            self._last_warmup_date = today_str
+            self._last_warmup_date = today_str  # type: ignore
             logger.info(
                 f"✅ [Warmup] 快取預熱完成。共處理 {len(symbols[:20])} 檔標的。"
             )
         except Exception as e:
             logger.error(f"Cache warmup failed: {e}")
 
-    async def _perform_health_check(self):
+    async def _perform_health_check(self) -> None:
         mem = psutil.virtual_memory()
         swap = psutil.swap_memory()
         process = psutil.Process(os.getpid())
@@ -135,11 +136,11 @@ class MemoryManager:
             # 限制警報頻率 (1 小時一次)
             if now - self._last_alert_at > 3600:
                 await self._trigger_emergency_alert(mem.percent, proc_mem, swap.percent)
-                self._last_alert_at = now
+                self._last_alert_at = now  # type: ignore
 
     async def _trigger_emergency_alert(
         self, total_usage: float, proc_mem: float, swap_usage: float = 0.0
-    ):
+    ) -> Any:
         from config import DISCORD_ADMIN_USER_ID
 
         if not DISCORD_ADMIN_USER_ID:

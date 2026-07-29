@@ -1,3 +1,4 @@
+from typing import Any
 from click.testing import CliRunner
 from unittest.mock import patch, AsyncMock
 import sys
@@ -16,7 +17,7 @@ from models.schemas import (
 )
 
 
-def test_cli_health_integration(mock_market_data):
+def test_cli_health_integration(mock_market_data: Any):  # type: ignore
     """測試 CLI health 指令與市場數據服務的整合"""
     mock_price, _ = mock_market_data
     mock_price.return_value = {"c": 510.0}
@@ -35,7 +36,7 @@ def test_cli_health_integration(mock_market_data):
         assert "$510.0" in result.output
 
 
-def test_cli_portfolio_integration(db_conn, mock_market_data):
+def test_cli_portfolio_integration(db_conn: Any, mock_market_data: Any):  # type: ignore
     """測試 CLI portfolio 指令與資料庫及 PnL 計算的整合"""
     from database.portfolio import add_portfolio_record
 
@@ -60,7 +61,7 @@ def test_cli_portfolio_integration(db_conn, mock_market_data):
         assert "$100.00" in result.output
 
 
-def test_cli_scan_ddp_integration(db_conn):
+def test_cli_scan_ddp_integration(db_conn: Any):  # type: ignore
     """測試 CLI scan-ddp 指令與 Watchlist 的整合"""
     from database.watchlist import add_watchlist_symbol
 
@@ -81,7 +82,7 @@ def test_cli_scan_ddp_integration(db_conn):
         assert "MSFT" in result.output
 
 
-def test_cli_watchlist_check_integration(db_conn):
+def test_cli_watchlist_check_integration(db_conn: Any):  # type: ignore
     """測試 CLI watchlist_check 指令與資料庫 watchlist 的整合。"""
     from database.watchlist import add_watchlist_symbol
 

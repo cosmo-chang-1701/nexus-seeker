@@ -1,3 +1,5 @@
+from typing import Any
+
 version = 47
 description = (
     "Remediate missing structures (market_cache and economic_calendar_events columns)"
@@ -11,7 +13,7 @@ CREATE TABLE IF NOT EXISTS market_cache (
 """
 
 
-def migrate_data(conn):
+def migrate_data(conn: Any):  # type: ignore
     cursor = conn.cursor()
 
     # 1. Remediate columns in market_cache

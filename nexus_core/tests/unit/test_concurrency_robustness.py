@@ -1,3 +1,4 @@
+from typing import Any
 import asyncio
 import pytest
 from unittest.mock import AsyncMock, patch
@@ -12,11 +13,11 @@ from database.connection import (
 
 
 @pytest.mark.asyncio
-async def test_single_flight_coalescing():
+async def test_single_flight_coalescing() -> Any:
     """Test that SingleFlightManager coalesces multiple concurrent requests for the same key."""
     call_count = 0
 
-    async def mock_analysis_task(symbol: str):
+    async def mock_analysis_task(symbol: str) -> Any:
         nonlocal call_count
         call_count += 1
         await asyncio.sleep(0.1)  # Simulate some processing time
@@ -44,7 +45,7 @@ async def test_single_flight_coalescing():
 
 
 @pytest.mark.asyncio
-async def test_database_write_queue_integration(db_conn):
+async def test_database_write_queue_integration(db_conn: Any):  # type: ignore
     """Test that DatabaseWriteQueue processes queries sequentially and correctly."""
     loop = asyncio.get_running_loop()
 
@@ -87,7 +88,7 @@ async def test_database_write_queue_integration(db_conn):
 
 
 @pytest.mark.asyncio
-async def test_historical_iv_self_healing_fallback(db_conn):
+async def test_historical_iv_self_healing_fallback(db_conn: Any):  # type: ignore
     """Test that save_historical_iv performs fallback self-healing when IV is None."""
     loop = asyncio.get_running_loop()
     DatabaseWriteQueue.initialize(loop)

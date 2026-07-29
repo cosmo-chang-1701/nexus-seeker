@@ -1,3 +1,4 @@
+from typing import Any
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock, PropertyMock
 import discord
@@ -13,13 +14,13 @@ from cogs.unified_terminal.radar_view import UnifiedRadarView, FilterParamsModal
 
 
 @pytest.fixture
-def mock_bot():
+def mock_bot() -> Any:
     bot = MagicMock()
     return bot
 
 
 @pytest.fixture
-def mock_interaction():
+def mock_interaction() -> Any:
     interaction = AsyncMock()
     interaction.user.id = 12345
     interaction.response = MagicMock()
@@ -33,7 +34,7 @@ def mock_interaction():
 
 
 @pytest.mark.asyncio
-async def test_symbol_hub_opens_radar_panel(mock_bot, mock_interaction):
+async def test_symbol_hub_opens_radar_panel(mock_bot: Any, mock_interaction: Any):  # type: ignore
     """
     測試當 `/x` 未帶任何參數時，正確展開 Unified Radar Panel (UI 模式)
     """
@@ -44,8 +45,13 @@ async def test_symbol_hub_opens_radar_panel(mock_bot, mock_interaction):
     ) as mock_build_embed:
         mock_build_embed.return_value = discord.Embed(title="Panel Embed")
 
-        await cog.symbol_hub.callback(
-            cog, mock_interaction, symbol=None, scan_type=None, tag=None, squeeze=None
+        await cog.symbol_hub.callback(  # type: ignore
+            cog,  # type: ignore
+            mock_interaction,
+            symbol=None,
+            scan_type=None,
+            tag=None,
+            squeeze=None,  # type: ignore
         )
 
         mock_interaction.response.defer.assert_called_once_with(ephemeral=True)
@@ -57,16 +63,16 @@ async def test_symbol_hub_opens_radar_panel(mock_bot, mock_interaction):
 
 
 @pytest.mark.asyncio
-async def test_symbol_hub_bypass_ui(mock_bot, mock_interaction):
+async def test_symbol_hub_bypass_ui(mock_bot: Any, mock_interaction: Any):  # type: ignore
     """
     測試當 `/x` 帶有 scan_type 參數時，能跳過 UI 面板並直接執行 execute_unified_scan (進階用戶 Bypass)
     """
     cog = UnifiedTerminalCog(mock_bot)
-    cog.execute_unified_scan = AsyncMock()
+    cog.execute_unified_scan = AsyncMock()  # type: ignore
 
     scan_type = Choice(name="ALL", value="ALL")
-    await cog.symbol_hub.callback(
-        cog,
+    await cog.symbol_hub.callback(  # type: ignore
+        cog,  # type: ignore
         mock_interaction,
         symbol=None,
         scan_type=scan_type,
@@ -84,7 +90,7 @@ async def test_symbol_hub_bypass_ui(mock_bot, mock_interaction):
 
 
 @pytest.mark.asyncio
-async def test_radar_view_interactions(mock_bot, mock_interaction):
+async def test_radar_view_interactions(mock_bot: Any, mock_interaction: Any):  # type: ignore
     """
     測試 UnifiedRadarView 介面互動與狀態更新邏輯
     """
@@ -118,7 +124,7 @@ async def test_radar_view_interactions(mock_bot, mock_interaction):
     assert isinstance(modal, FilterParamsModal)
 
     # 4. Execute Scan Route
-    cog.execute_unified_scan = AsyncMock()
+    cog.execute_unified_scan = AsyncMock()  # type: ignore
     mock_interaction.response.is_done.return_value = (
         True  # 假設在 interaction 中被 defer
     )
@@ -130,7 +136,7 @@ async def test_radar_view_interactions(mock_bot, mock_interaction):
 
 
 @pytest.mark.asyncio
-async def test_execute_unified_scan_filters(mock_bot, mock_interaction):
+async def test_execute_unified_scan_filters(mock_bot: Any, mock_interaction: Any):  # type: ignore
     """
     測試 execute_unified_scan 是否正確根據 state 的進階條件過濾標的
     """
@@ -151,7 +157,7 @@ async def test_execute_unified_scan_filters(mock_bot, mock_interaction):
     with patch("cogs.unified_terminal.cog.asyncio.to_thread") as mock_thread:
         # Mock active orders, holdings, portfolio
         # Active orders uses dict access (o["symbol"]), portfolio uses tuple index (row[1])
-        def mock_to_thread_side_effect(func, *args, **kwargs):
+        def mock_to_thread_side_effect(func: Any, *args, **kwargs):  # type: ignore
             if "get_user_portfolio" in func.__name__:
                 return [(123, "AAPL"), (123, "TSLA")]
             return [{"symbol": "AAPL"}, {"symbol": "TSLA"}]
@@ -166,7 +172,7 @@ async def test_execute_unified_scan_filters(mock_bot, mock_interaction):
             "services.asset_manager.AssetManager.get_assets", return_value=[FakeAsset()]
         ):
             # Setup fetch radar data responses
-            async def fake_fetch(sym):
+            async def fake_fetch(sym: Any):  # type: ignore
                 if sym == "AAPL":
                     # 符合條件：無極端派發 (skew >= -0.3), max_pain distance < 10%
                     return {
@@ -190,7 +196,7 @@ async def test_execute_unified_scan_filters(mock_bot, mock_interaction):
                     }
                 return None
 
-            cog._fetch_sym_radar_data = fake_fetch
+            cog._fetch_sym_radar_data = fake_fetch  # type: ignore
 
             # Mock build_radar_scan_embed to capture the filtered result
             with patch(
@@ -212,7 +218,9 @@ async def test_execute_unified_scan_filters(mock_bot, mock_interaction):
 
 
 @pytest.mark.asyncio
-async def test_execute_unified_scan_magnetic_filters(mock_bot, mock_interaction):
+async def test_execute_unified_scan_magnetic_filters(  # type: ignore
+    mock_bot: Any, mock_interaction: Any
+):  # type: ignore
     """
     測試 execute_unified_scan 是否正確根據 magnetic_filters 條件過濾標的
     """
@@ -230,7 +238,7 @@ async def test_execute_unified_scan_magnetic_filters(mock_bot, mock_interaction)
 
     with patch("cogs.unified_terminal.cog.asyncio.to_thread") as mock_thread:
 
-        def mock_to_thread_side_effect(func, *args, **kwargs):
+        def mock_to_thread_side_effect(func: Any, *args, **kwargs):  # type: ignore
             if "get_user_portfolio" in func.__name__:
                 return [(123, "AAPL"), (123, "NVDA")]
             return [
@@ -244,7 +252,7 @@ async def test_execute_unified_scan_magnetic_filters(mock_bot, mock_interaction)
 
         with patch("services.asset_manager.AssetManager.get_assets", return_value=[]):
 
-            async def fake_fetch(sym):
+            async def fake_fetch(sym: Any):  # type: ignore
                 if sym == "AAPL":
                     # 符合條件：dev > 0.10, price >= putwall, abs(dp_poc - putwall)/putwall < 0.01
                     return {
@@ -283,7 +291,7 @@ async def test_execute_unified_scan_magnetic_filters(mock_bot, mock_interaction)
                     }
                 return None
 
-            cog._fetch_sym_radar_data = fake_fetch
+            cog._fetch_sym_radar_data = fake_fetch  # type: ignore
 
             with patch(
                 "cogs.unified_terminal.cog.build_radar_scan_embed"

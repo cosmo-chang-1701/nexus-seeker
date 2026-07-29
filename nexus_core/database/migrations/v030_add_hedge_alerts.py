@@ -1,3 +1,4 @@
+from typing import Any
 import sqlite3
 
 version = 30
@@ -24,5 +25,5 @@ CREATE INDEX IF NOT EXISTS idx_hedge_alerts_user_status ON hedge_alerts(user_id,
 """
 
 
-def migrate_data(conn: sqlite3.Connection):
+def migrate_data(conn: sqlite3.Connection) -> Any:
     pass

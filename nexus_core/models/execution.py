@@ -1,4 +1,5 @@
-from typing import Literal, Optional, Any
+from typing import Any
+from typing import Literal, Optional
 from enum import Enum
 from pydantic import BaseModel, Field, ConfigDict, model_validator, field_validator
 
@@ -38,7 +39,7 @@ class MarketCondition(BaseModel):
         mode="before",
     )
     @classmethod
-    def clean_indicators(cls, v: Any, info) -> Any:
+    def clean_indicators(cls, v: Any, info: Any) -> Any:
         import math
         import pandas as pd
         import numpy as np

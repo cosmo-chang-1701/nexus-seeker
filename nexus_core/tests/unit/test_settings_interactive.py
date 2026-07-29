@@ -1,3 +1,4 @@
+from typing import Any
 import pytest
 import discord
 from unittest.mock import AsyncMock
@@ -6,7 +7,7 @@ from cogs.terminal import AccountSettingsView, AccountSettingsModal
 
 
 @pytest.fixture(autouse=True)
-def clean_db(db_conn):
+def clean_db(db_conn: Any):  # type: ignore
     """每個測試前清理 user_settings，並置入預設資料以防萬一"""
     cursor = db_conn.cursor()
     cursor.execute("DELETE FROM user_settings")
@@ -15,7 +16,7 @@ def clean_db(db_conn):
 
 
 @pytest.mark.asyncio
-async def test_settings_view_structure(db_conn):
+async def test_settings_view_structure(db_conn: Any):  # type: ignore
     """測試 AccountSettingsView 的基礎結構與下拉選單項目"""
     user_id = 12345
     view = AccountSettingsView(user_id)
@@ -36,7 +37,7 @@ async def test_settings_view_structure(db_conn):
 
 
 @pytest.mark.asyncio
-async def test_settings_toggle_boolean(db_conn):
+async def test_settings_toggle_boolean(db_conn: Any):  # type: ignore
     """測試在下拉選單選中布林值設定時，是否能直接切換狀態並儲存至資料庫"""
     user_id = 555666
     view = AccountSettingsView(user_id)
@@ -69,7 +70,7 @@ async def test_settings_toggle_boolean(db_conn):
 
 
 @pytest.mark.asyncio
-async def test_settings_numeric_modal_trigger(db_conn):
+async def test_settings_numeric_modal_trigger(db_conn: Any):  # type: ignore
     """測試選擇數值類型參數時，是否會正確彈出 Modal 視窗"""
     user_id = 777888
     view = AccountSettingsView(user_id)
@@ -91,7 +92,7 @@ async def test_settings_numeric_modal_trigger(db_conn):
 
 
 @pytest.mark.asyncio
-async def test_settings_modal_validation_cash_reserve(db_conn):
+async def test_settings_modal_validation_cash_reserve(db_conn: Any):  # type: ignore
     """測試 Modal 針對 cash_reserve (現金儲備) 的輸入邊界驗證"""
     user_id = 999000
     view = AccountSettingsView(user_id)
@@ -130,7 +131,7 @@ async def test_settings_modal_validation_cash_reserve(db_conn):
 
 
 @pytest.mark.asyncio
-async def test_settings_modal_validation_risk_limit(db_conn):
+async def test_settings_modal_validation_risk_limit(db_conn: Any):  # type: ignore
     """測試 Modal 針對 risk_limit (風險上限) 的 1% ~ 50% 範圍驗證"""
     user_id = 999001
     view = AccountSettingsView(user_id)
@@ -156,7 +157,7 @@ async def test_settings_modal_validation_risk_limit(db_conn):
 
 
 @pytest.mark.asyncio
-async def test_settings_modal_validation_tax_reserve_rate(db_conn):
+async def test_settings_modal_validation_tax_reserve_rate(db_conn: Any):  # type: ignore
     """測試 Modal 針對 tax_reserve_rate (稅務比例) 的輸入百分比支援與驗證"""
     user_id = 999002
     view = AccountSettingsView(user_id)
@@ -193,7 +194,7 @@ async def test_settings_modal_validation_tax_reserve_rate(db_conn):
 
 
 @pytest.mark.asyncio
-async def test_settings_modal_successful_submission(db_conn):
+async def test_settings_modal_successful_submission(db_conn: Any):  # type: ignore
     """測試 Modal 正常送出時，更新資料庫並渲染重新更新的 settings view / embed"""
     user_id = 999003
     view = AccountSettingsView(user_id)
@@ -224,7 +225,7 @@ async def test_settings_modal_successful_submission(db_conn):
 
 
 @pytest.mark.asyncio
-async def test_settings_capital_auto_calculation(db_conn):
+async def test_settings_capital_auto_calculation(db_conn: Any):  # type: ignore
     """測試總資金自動計算：加總持倉 (HOLDING)、期權 (TRADE) 與現金儲備 (cash_reserve)"""
     user_id = 999111
 

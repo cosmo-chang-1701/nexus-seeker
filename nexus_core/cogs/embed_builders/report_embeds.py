@@ -1,3 +1,5 @@
+from typing import Any
+
 """Report-type Discord embed builders for Nexus Seeker.
 
 This module groups all report-oriented embed construction functions, including:
@@ -21,7 +23,7 @@ import logging
 import re
 
 from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Optional
 
 from cogs.embed_builders._ansi_utils import (
     _clean_ansi,
@@ -44,8 +46,8 @@ from cogs.embed_builders._embed_helpers import (
 logger = logging.getLogger(__name__)
 
 
-def create_portfolio_report_embed(
-    report_lines, hedge_analysis=None, survival_runway=None
+def create_portfolio_report_embed(  # type: ignore
+    report_lines: Any, hedge_analysis: Any = None, survival_runway: Any = None
 ):
     """
     將 check_portfolio_status_logic 產出的 report_lines 轉換為漂亮的 Discord Embed
@@ -337,7 +339,7 @@ def build_vtr_stats_embed(
     return embed
 
 
-def build_scan_report(result: Dict[str, Any]):
+def build_scan_report(result: Dict[str, Any]) -> Any:
     """
     量化掃描報告Embed，整合 Greeks, NRO 與 EMA 訊號。
     """
@@ -621,7 +623,7 @@ def create_volatility_embed(report: Dict[str, Any]) -> discord.Embed:
     return embed
 
 
-def build_hedge_analysis_field(embed, analysis):
+def build_hedge_analysis_field(embed: Any, analysis: Any):  # type: ignore
     """
     在 embed 中加入對沖分析區塊。
     """

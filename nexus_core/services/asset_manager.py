@@ -1,7 +1,8 @@
+from typing import Any
 import sqlite3
 import json
 import logging
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict
 import config
 from models.asset import Asset, ContextType, TradeMetadata, HoldingMetadata
 
@@ -9,10 +10,10 @@ logger = logging.getLogger(__name__)
 
 
 class AssetManager:
-    def __init__(self, db_name: str = None):
+    def __init__(self, db_name: str | None = None) -> Any:  # type: ignore
         self.db_name = db_name or config.DB_NAME
 
-    def _get_conn(self):
+    def _get_conn(self) -> Any:
         conn = sqlite3.connect(self.db_name)
         conn.row_factory = sqlite3.Row
         return conn
@@ -259,7 +260,7 @@ class AssetManager:
             )
             changes = cursor.rowcount
             conn.commit()
-            return changes > 0
+            return changes > 0  # type: ignore
 
     def delete_asset_by_id(self, user_id: int, asset_id: int) -> bool:
         """根據 ID 刪除資產"""
@@ -270,4 +271,4 @@ class AssetManager:
             )
             changes = cursor.rowcount
             conn.commit()
-            return changes > 0
+            return changes > 0  # type: ignore

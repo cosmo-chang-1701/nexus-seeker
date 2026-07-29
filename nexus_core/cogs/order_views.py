@@ -1,3 +1,5 @@
+from typing import Any
+
 """Discord View and Select UI components for order management.
 
 Extracted from cogs/order_ui.py to isolate interactive UI components
@@ -18,14 +20,14 @@ logger = logging.getLogger(__name__)
 class OrderItemView(discord.ui.View):
     """單筆委託單卡片的操作按鈕（每一筆訂單底下都有獨立按鈕）。"""
 
-    def __init__(self, order_id: int):
+    def __init__(self, order_id: int) -> Any:  # type: ignore
         super().__init__(timeout=180)
         self.order_id = int(order_id)
 
     @discord.ui.button(label="❌ 取消委託單", style=discord.ButtonStyle.danger)
     async def cancel_order_button(
         self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+    ) -> Any:
         try:
             await interaction.response.send_modal(
                 CancelOrderModal(order_id=self.order_id)
@@ -42,7 +44,7 @@ class OrderItemView(discord.ui.View):
     @discord.ui.button(label="✏️ 編輯委託單", style=discord.ButtonStyle.primary)
     async def edit_order_button(
         self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+    ) -> Any:
         try:
             # 撈取訂單取得 order_type
             from database.orders import get_active_order
@@ -69,14 +71,14 @@ class OrderItemView(discord.ui.View):
 
 
 class ApplyTelemetryView(discord.ui.View):
-    def __init__(self, suggestions: dict[int, tuple[float, int]] = None):
+    def __init__(self, suggestions: dict[int, tuple[float, int]] | None = None) -> Any:  # type: ignore
         super().__init__(timeout=180)
         self.suggestions = suggestions or {}
 
     @discord.ui.button(label="⚡ 一鍵套用遙測建議價", style=discord.ButtonStyle.success)
     async def apply_telemetry_button(
         self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+    ) -> Any:
         import database
         from services.order_telemetry_service import (
             apply_telemetry_to_orders,
@@ -137,7 +139,7 @@ class ApplyTelemetryView(discord.ui.View):
 # 4. 前端委託單面版下拉選單
 # ==========================================
 class OrderSideSelect(discord.ui.Select):
-    def __init__(self):
+    def __init__(self) -> None:
         options = [
             discord.SelectOption(
                 label="買入 (BUY)",
@@ -158,7 +160,7 @@ class OrderSideSelect(discord.ui.Select):
             options=options,
         )
 
-    async def callback(self, interaction: discord.Interaction):
+    async def callback(self, interaction: discord.Interaction) -> Any:
         selected = self.values[0]
         if self.view is not None:
             setattr(self.view, "selected_side", selected)
@@ -170,7 +172,7 @@ class OrderSideSelect(discord.ui.Select):
 
 
 class OrderValiditySelect(discord.ui.Select):
-    def __init__(self):
+    def __init__(self) -> None:
         options = [
             discord.SelectOption(
                 label="當日有效 (DAY)",
@@ -201,7 +203,7 @@ class OrderValiditySelect(discord.ui.Select):
             options=options,
         )
 
-    async def callback(self, interaction: discord.Interaction):
+    async def callback(self, interaction: discord.Interaction) -> Any:
         selected = self.values[0]
         if self.view is not None:
             setattr(self.view, "selected_validity", selected)
@@ -214,7 +216,7 @@ class OrderValiditySelect(discord.ui.Select):
 
 
 class OrderSetupSelect(discord.ui.Select):
-    def __init__(self):
+    def __init__(self) -> None:
         options = [
             discord.SelectOption(
                 label="市價 (MARKET)",
@@ -254,7 +256,7 @@ class OrderSetupSelect(discord.ui.Select):
             options=options,
         )
 
-    async def callback(self, interaction: discord.Interaction):
+    async def callback(self, interaction: discord.Interaction) -> Any:
         order_type = self.values[0]
         modal_title = {
             "MARKET": "新增市價訂單",
@@ -278,7 +280,7 @@ class OrderSetupSelect(discord.ui.Select):
 
 
 class OrderSetupView(discord.ui.View):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(timeout=180)
         self.selected_side = "BUY"
         self.selected_validity = "DAY"
@@ -291,7 +293,7 @@ class OrderSetupView(discord.ui.View):
     )
     async def limit_shortcut(
         self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+    ) -> Any:
         modal = DynamicOrderModal(
             order_type="LIMIT",
             title="新增限價訂單",
@@ -303,7 +305,7 @@ class OrderSetupView(discord.ui.View):
     @discord.ui.button(label="停損單 (Stop)", style=discord.ButtonStyle.primary, row=2)
     async def stop_shortcut(
         self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+    ) -> Any:
         modal = DynamicOrderModal(
             order_type="STOP",
             title="新增停損價訂單",
@@ -317,7 +319,7 @@ class OrderSetupView(discord.ui.View):
     )
     async def market_shortcut(
         self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+    ) -> Any:
         modal = DynamicOrderModal(
             order_type="MARKET",
             title="新增市價訂單",

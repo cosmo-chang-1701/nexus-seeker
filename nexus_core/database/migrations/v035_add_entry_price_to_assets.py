@@ -1,3 +1,4 @@
+from typing import Any
 import sqlite3
 import json
 import logging
@@ -15,7 +16,7 @@ ALTER TABLE assets ADD COLUMN entry_price REAL;
 """
 
 
-def migrate_data(conn: sqlite3.Connection):
+def migrate_data(conn: sqlite3.Connection) -> Any:
     cursor = conn.cursor()
     try:
         # Fetch all assets with TRADE or HOLDING context

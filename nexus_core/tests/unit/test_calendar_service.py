@@ -1,3 +1,4 @@
+from typing import Any
 import pytest
 from unittest.mock import AsyncMock, patch
 from services.calendar_service import CalendarService, EconomicEvent, EarningsEvent
@@ -5,7 +6,7 @@ from datetime import datetime, date
 
 
 @pytest.mark.asyncio
-async def test_get_high_impact_events():
+async def test_get_high_impact_events() -> Any:
     fixed_now = datetime(2026, 5, 12, 12, 0, 0)
     with patch("services.calendar_service.datetime") as mock_datetime:
         mock_datetime.now.side_effect = (
@@ -44,7 +45,7 @@ async def test_get_high_impact_events():
 
 
 @pytest.mark.asyncio
-async def test_get_symbol_earnings():
+async def test_get_symbol_earnings() -> Any:
     fixed_now = datetime(2026, 5, 18, 12, 0, 0)
     with patch("services.calendar_service.datetime") as mock_datetime:
         mock_datetime.now.side_effect = (
@@ -78,7 +79,7 @@ async def test_get_symbol_earnings():
 
 
 @pytest.mark.asyncio
-async def test_get_symbol_earnings_timezone_robustness():
+async def test_get_symbol_earnings_timezone_robustness() -> Any:
     from zoneinfo import ZoneInfo
 
     ny_tz = ZoneInfo("America/New_York")
@@ -111,7 +112,7 @@ async def test_get_symbol_earnings_timezone_robustness():
 
 
 @pytest.mark.asyncio
-async def test_calendar_service_cold_start_policy():
+async def test_calendar_service_cold_start_policy() -> Any:
     """Test that CalendarService cold-start cache-first policy bypasses API calls if cache exists."""
     fixed_now = datetime(2026, 5, 12, 12, 0, 0)
     with patch("services.calendar_service.datetime") as mock_datetime:
@@ -176,7 +177,7 @@ async def test_calendar_service_cold_start_policy():
 
 
 @pytest.mark.asyncio
-async def test_calendar_service_swr_fallback(db_conn):
+async def test_calendar_service_swr_fallback(db_conn: Any):  # type: ignore
     """Test SWR fallback: when scraper fails, keep existing cache and mark fallback=True."""
     fixed_now = datetime(2026, 5, 12, 12, 0, 0)
     month_key = "2026-05"
@@ -238,7 +239,7 @@ async def test_calendar_service_swr_fallback(db_conn):
 
 
 @pytest.mark.asyncio
-async def test_calendar_service_swr_no_cache_failure(db_conn):
+async def test_calendar_service_swr_no_cache_failure(db_conn: Any):  # type: ignore
     """Test SWR fallback when no cache is available: returns empty list with fallback=False."""
     fixed_now = datetime(2026, 5, 12, 12, 0, 0)
     month_key = "2026-05"
@@ -285,7 +286,7 @@ async def test_calendar_service_swr_no_cache_failure(db_conn):
 
 
 @pytest.mark.asyncio
-async def test_calendar_embed_with_fallback():
+async def test_calendar_embed_with_fallback() -> None:
     """Test build_calendar_embed correctly displays fallback suffix in title."""
     from services.calendar_service import EconomicEventList, EconomicEvent
     from cogs.embed_builders import build_calendar_embed
@@ -310,4 +311,4 @@ async def test_calendar_embed_with_fallback():
         fedwatch_prob=0.75,
     )
 
-    assert "總經數據暫時無法獲取，正使用本地歷史快取" in embed.title
+    assert "總經數據暫時無法獲取，正使用本地歷史快取" in embed.title  # type: ignore

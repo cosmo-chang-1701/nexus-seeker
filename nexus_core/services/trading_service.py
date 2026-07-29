@@ -1,9 +1,10 @@
+from typing import Any
 import asyncio
 import logging
 import time
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
-from typing import Dict, List, Any, Optional, Tuple, Set, TypedDict
+from typing import Dict, List, Optional, Tuple, Set, TypedDict
 
 import database
 import market_math
@@ -49,7 +50,7 @@ async def get_adjusted_user_capital(user_id: int, base_capital: float) -> float:
 
             # Apply 90% collateral haircut
             boxx_cash_value = qty * price * 0.90
-            return base_capital + boxx_cash_value
+            return base_capital + boxx_cash_value  # type: ignore
     except Exception as e:
         logger.warning(f"計算 BOXX 折算資本時發生錯誤: {e}")
 
@@ -68,7 +69,7 @@ class TradingService:
     提供核心交易業務邏輯，將 Discord 機器人的介面與底層計算/資料處理分離。
     """
 
-    def __init__(self, bot):
+    def __init__(self, bot: Any):
         self.bot = bot
         self.vtr_engine = GhostTrader()
         self.ddp_inspector = DDPInspector(bot)
@@ -419,7 +420,7 @@ class TradingService:
 
         unique_targets = list(set(scan_targets))
 
-        async def _scan_single_target(target):
+        async def _scan_single_target(target: Any):  # type: ignore
             sym, stock_cost, use_llm = target
             # ... (rest of scan logic)
             try:
@@ -778,7 +779,7 @@ class TradingService:
 
         return user_alerts_results
 
-    async def execute_vtr_auto_entry(self, data: Dict[str, Any]):
+    async def execute_vtr_auto_entry(self, data: Dict[str, Any]) -> Any:
         """
         執行 VTR 自動建倉。
         """

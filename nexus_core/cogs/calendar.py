@@ -1,3 +1,4 @@
+from typing import Any
 from cogs.embed_builder import (
     create_event_impact_embed,
     create_info_embed,
@@ -25,7 +26,7 @@ class CalendarCog(commands.Cog):
     Monitors high-impact events and provides proactive alerts.
     """
 
-    def __init__(self, bot):
+    def __init__(self, bot: Any):
         self.bot = bot
         self.vol_inspector = VolatilityInspector(bot)
         from services.event_monitor import EventMonitor
@@ -33,24 +34,24 @@ class CalendarCog(commands.Cog):
         self.monitor = EventMonitor(bot)
         self.event_checker.start()
 
-    def cog_unload(self):
+    def cog_unload(self) -> None:  # type: ignore
         self.event_checker.cancel()
 
     @tasks.loop(hours=4)
-    async def event_checker(self):
+    async def event_checker(self) -> None:
         """NYSE Dynamic Scheduler heartbeat for events."""
         logger.info("🕒 [EventMonitor] 執行重大事件週期檢查...")
         await self.monitor.check_upcoming_events()
 
     @event_checker.before_loop
-    async def before_event_checker(self):
+    async def before_event_checker(self) -> None:
         await self.bot.wait_until_ready()
 
     @app_commands.command(
         name="calendar",
         description="顯示當月份的「重要總經事件」與觀察清單的「個股財報」",
     )
-    async def calendar(self, interaction: discord.Interaction):
+    async def calendar(self, interaction: discord.Interaction) -> Any:
         await interaction.response.defer(ephemeral=True)
         user_id = interaction.user.id
 
@@ -95,7 +96,7 @@ class CalendarCog(commands.Cog):
     @app_commands.command(
         name="iv_rank", description="掃描觀察清單中具備高 IV Rank 或財報前夕的標的"
     )
-    async def iv_rank(self, interaction: discord.Interaction):
+    async def iv_rank(self, interaction: discord.Interaction) -> Any:
         await interaction.response.defer(ephemeral=True)
         all_watchlists = database.get_all_watchlist()
         user_id = interaction.user.id
@@ -135,7 +136,7 @@ class CalendarCog(commands.Cog):
     )
     async def event_impact(
         self, interaction: discord.Interaction, symbol: str, vol_move: float = 20.0
-    ):
+    ) -> Any:
         await interaction.response.defer(ephemeral=True)
         symbol = symbol.upper()
         user_id = interaction.user.id
@@ -207,5 +208,5 @@ class CalendarCog(commands.Cog):
         await interaction.followup.send(embed=embed)
 
 
-async def setup(bot):
+async def setup(bot: Any):  # type: ignore
     await bot.add_cog(CalendarCog(bot))

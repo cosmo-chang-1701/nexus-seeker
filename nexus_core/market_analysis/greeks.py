@@ -1,3 +1,4 @@
+from typing import Any
 import logging
 import math
 import pandas as pd
@@ -18,7 +19,9 @@ logger = logging.getLogger(__name__)
 MIN_IV_THRESHOLD = 0.01
 
 
-def calculate_vanna(flag, stock_price, strike, t_years, iv, q):
+def calculate_vanna(  # type: ignore
+    flag: Any, stock_price: Any, strike: Any, t_years: Any, iv: Any, q: Any
+):  # type: ignore
     """
     計算 Vanna (dDelta / dVol)。
     """
@@ -37,7 +40,9 @@ def calculate_vanna(flag, stock_price, strike, t_years, iv, q):
         return 0.0
 
 
-def calculate_contract_delta(row, current_price, t_years, flag, q=0.0):
+def calculate_contract_delta(  # type: ignore
+    row: Any, current_price: Any, t_years: Any, flag: Any, q: Any = 0.0
+):  # type: ignore
     """
     計算單一選擇權合約的理論 Delta 值 (Merton 模型校正股息率 q)。
     """
@@ -58,7 +63,9 @@ def calculate_contract_delta(row, current_price, t_years, flag, q=0.0):
         return 0.0
 
 
-def calculate_greeks(opt_type, stock_price, strike, t_years, iv, q):
+def calculate_greeks(  # type: ignore
+    opt_type: Any, stock_price: Any, strike: Any, t_years: Any, iv: Any, q: Any
+):  # type: ignore
     """計算單一選擇權的 Greeks (Delta, Theta, Gamma, Vega, Vanna)。"""
     flag = "c" if opt_type == "call" else "p"
     try:

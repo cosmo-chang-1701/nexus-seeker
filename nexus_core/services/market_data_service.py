@@ -1,3 +1,5 @@
+from typing import Any
+
 """
 Finnhub Service — 集中式 Finnhub API client wrapper (Async Optimized)。
 
@@ -14,7 +16,7 @@ import time
 import random
 import math
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict
 from collections import OrderedDict, namedtuple
 import gc
 import weakref
@@ -118,7 +120,7 @@ def _rotate_client() -> finnhub.Client:
 # ---------------------------------------------------------------------------
 # Core Async API Call (Thread-safe Wrapper)
 # ---------------------------------------------------------------------------
-async def _execute_api_call(func, *args, **kwargs) -> Any:
+async def _execute_api_call(func: Any, *args, **kwargs) -> Any:  # type: ignore
     """執行 Finnhub API 呼叫的異步封裝（生產等級防禦）。
 
     目標：
@@ -308,9 +310,9 @@ async def get_quote(symbol: str) -> Dict[str, Any]:
     if symbol in _quote_cache:
         val, expiry = _quote_cache[symbol]
         if now < expiry:
-            return val
+            return val  # type: ignore
 
-    async def _fetch():
+    async def _fetch() -> Any:
         if symbol.startswith("^") or symbol == "VIX":
             return await get_yfinance_quote(symbol)
 
@@ -337,7 +339,7 @@ async def get_quote(symbol: str) -> Dict[str, Any]:
     res = await _fetch()
     if res and res.get("c", 0) > 0:
         _quote_cache[symbol] = (res, now + _QUOTE_CACHE_TTL)
-    return res
+    return res  # type: ignore
 
 
 async def validate_symbol(symbol: str) -> bool:
@@ -628,16 +630,16 @@ MAX_CACHE_SIZE = 500
 class BoundedCache(OrderedDict):
     """具備容量上限的快取 (LRU 邏輯)。"""
 
-    def __init__(self, max_size=MAX_CACHE_SIZE):
+    def __init__(self, max_size: Any = MAX_CACHE_SIZE):
         super().__init__()
         self.max_size = max_size
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: Any):  # type: ignore
         value = super().__getitem__(key)
         self.move_to_end(key)
         return value
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key: Any, value: Any):  # type: ignore
         if key in self:
             self.move_to_end(key)
         super().__setitem__(key, value)
@@ -680,27 +682,27 @@ _option_chain_cache = BoundedCache(max_size=MAX_CACHE_SIZE)
 _OPTION_CHAIN_CACHE_TTL = 1200  # 20 分鐘
 
 
-def clear_quote_cache():
+def clear_quote_cache() -> None:
     _quote_cache.clear()
     logger.info("Clarified quote cache")
 
 
-def clear_profile_cache():
+def clear_profile_cache() -> None:
     _profile_cache.clear()
     logger.info("Clarified profile cache")
 
 
-def clear_etf_cache():
+def clear_etf_cache() -> None:
     _etf_cache.clear()
     logger.info("Clarified ETF cache")
 
 
-def clear_history_cache():
+def clear_history_cache() -> None:
     _history_cache.clear()
     logger.info("Clarified history cache")
 
 
-def clear_options_cache():
+def clear_options_cache() -> None:
     _option_expiries_cache.clear()
     _option_chain_cache.clear()
     logger.info("Clarified options cache")
@@ -714,7 +716,7 @@ async def get_sma(symbol: str, window: int = 200) -> Optional[float]:
     if cache_key in _sma_cache:
         cached_val, expiry = _sma_cache[cache_key]
         if current_time < expiry:
-            return cached_val
+            return cached_val  # type: ignore
 
     try:
         period = "1y" if window <= 200 else "2y"
@@ -735,7 +737,7 @@ async def get_sma(symbol: str, window: int = 200) -> Optional[float]:
         return None
 
 
-def clear_sma_cache():
+def clear_sma_cache() -> None:
     _sma_cache.clear()
     logger.info("Clarified SMA cache")
 
@@ -755,7 +757,7 @@ async def get_ema(symbol: str, window: int = 21) -> Optional[float]:
     if cache_key in _ema_cache:
         val, expiry = _ema_cache[cache_key]
         if now < expiry:
-            return val
+            return val  # type: ignore
 
     try:
         period = "1mo" if window <= 21 else "1y"
@@ -775,12 +777,12 @@ async def get_ema(symbol: str, window: int = 21) -> Optional[float]:
         return None
 
 
-def clear_ema_cache():
+def clear_ema_cache() -> None:
     _ema_cache.clear()
     logger.info("Clarified EMA cache")
 
 
-def run_garbage_collection():
+def run_garbage_collection() -> None:
     """手動觸發垃圾回收 (用於大規模掃描後)。"""
     gc.collect()
     logger.info("🧹 [系統優化] 已手動執行垃圾回收機制。")
@@ -812,7 +814,7 @@ async def get_basic_financials(symbol: str, expiry_hours: int = 24) -> Dict[str,
                 db_financials.save_financials_cache, symbol, metrics
             )
 
-        return metrics
+        return metrics  # type: ignore
     except Exception as e:
         logger.error(f"[{symbol}] Finnhub financials 失敗: {e}")
         return {}
@@ -837,7 +839,7 @@ async def get_company_profile(symbol: str) -> Dict[str, Any]:
     if symbol in _profile_cache:
         val, expiry = _profile_cache[symbol]
         if now < expiry:
-            return val
+            return val  # type: ignore
 
     client = _get_client()
     try:
@@ -845,7 +847,7 @@ async def get_company_profile(symbol: str) -> Dict[str, Any]:
         res = data if data else {}
         if res:
             _profile_cache[symbol] = (res, now + _PROFILE_CACHE_TTL)
-        return res
+        return res  # type: ignore
     except Exception as e:
         logger.error(f"[{symbol}] Finnhub company profile 失敗: {e}")
         return {}
@@ -858,7 +860,7 @@ async def is_etf(symbol: str) -> bool:
     if symbol in _etf_cache:
         val, expiry = _etf_cache[symbol]
         if now < expiry:
-            return val
+            return val  # type: ignore
 
     client = _get_client()
     try:
@@ -881,7 +883,7 @@ async def get_economic_calendar(from_date: str, to_date: str) -> List[Dict[str, 
         data = await _execute_api_call(
             client.calendar_economic, _from=from_date, to=to_date
         )
-        return data.get("economicCalendar", []) if data else []
+        return data.get("economicCalendar", []) if data else []  # type: ignore
     except Exception as e:
         logger.error(f"Finnhub economic calendar 失敗: {e}")
         return []
@@ -907,7 +909,7 @@ async def get_earnings_calendar(
         )
         earnings = data.get("earningsCalendar", []) if data else []
         earnings.sort(key=lambda x: x.get("date", ""))
-        return earnings
+        return earnings  # type: ignore
     except Exception as e:
         logger.error(f"[{symbol}] Finnhub earnings calendar 失敗: {e}")
         return []
@@ -1074,7 +1076,7 @@ def check_and_reconcile_max_pain_anomaly(
             mark_market_cache_stale(symbol)
 
             # Trigger background revalidation task
-            async def _async_revalidate_max_pain():
+            async def _async_revalidate_max_pain() -> None:
                 try:
                     logger.info(
                         f"🔄 [SWR] Background revalidating option chain/max pain for {symbol}..."

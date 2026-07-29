@@ -1,7 +1,7 @@
 from market_analysis.risk_engine import optimize_position_risk
 
 
-def test_optimize_position_risk_with_calendar():
+def test_optimize_position_risk_with_calendar() -> None:
     # Base case: No event
     res_base = optimize_position_risk(
         current_delta=0.0,
@@ -33,7 +33,7 @@ def test_optimize_position_risk_with_calendar():
     assert qty_event > 0
 
 
-def test_optimize_position_risk_very_near_event():
+def test_optimize_position_risk_very_near_event() -> None:
     # TTE = 1h should have higher weight than TTE = 71h
     res_71h = optimize_position_risk(
         0.0, 1.0, 100000.0, 500.0, 0.2, "BTO_CALL", event_tte_hours=71.0

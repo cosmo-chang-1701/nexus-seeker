@@ -1,3 +1,4 @@
+from typing import Any
 import sqlite3
 
 version = 36
@@ -16,5 +17,5 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_historical_iv_symbol_date ON historical_iv
 """
 
 
-def migrate_data(conn: sqlite3.Connection):
+def migrate_data(conn: sqlite3.Connection) -> Any:
     pass

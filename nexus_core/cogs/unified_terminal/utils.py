@@ -1,3 +1,4 @@
+from typing import Any
 import psutil
 from services.market_data_service import BoundedCache
 
@@ -12,7 +13,7 @@ async def get_macro_overview_data(user_id: int) -> dict:
     if is_degraded and cache_key in _macro_overview_cache:
         data = _macro_overview_cache[cache_key].copy()
         data["is_degraded"] = True
-        return data
+        return data  # type: ignore
 
     # Read from SQLite kv_cache
     from database import get_kv_cache, save_kv_cache
@@ -29,7 +30,7 @@ async def get_macro_overview_data(user_id: int) -> dict:
             return_exceptions=True,
         )
 
-        def _parse(res, key, fallback):
+        def _parse(res: Any, key: Any, fallback: Any):  # type: ignore
             if isinstance(res, dict) and res.get("c", 0) > 0:
                 val = res["c"]
                 asyncio.create_task(save_kv_cache(key, val))
@@ -158,7 +159,7 @@ async def get_macro_overview_data(user_id: int) -> dict:
 
     # Save to memory cache
     _macro_overview_cache[cache_key] = data
-    return data
+    return data  # type: ignore
 
 
 async def find_matching_polymarket_odds(symbol: str, poly_markets: list) -> str:

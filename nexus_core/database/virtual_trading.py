@@ -1,7 +1,8 @@
+from typing import Any
 import sqlite3
 import datetime
 import json
-from typing import List, Any
+from typing import List
 import config
 
 # ==========================================
@@ -20,10 +21,10 @@ def add_virtual_trade(
     weighted_delta: float = 0.0,
     theta: float = 0.0,
     gamma: float = 0.0,
-    tags: list = None,
-    parent_trade_id: int = None,
+    tags: list | None = None,
+    parent_trade_id: int | None = None,
     trade_category: str = "SPECULATIVE",
-):
+) -> Any:
     tags_str = json.dumps(tags) if tags else None
 
     conn = sqlite3.connect(config.DB_NAME)
@@ -58,7 +59,7 @@ def add_virtual_trade(
         conn.close()
 
 
-def get_virtual_trades(user_id: int = None, status: str = None):
+def get_virtual_trades(user_id: int | None = None, status: str | None = None) -> Any:
     """
     獲取虛擬交易紀錄
     若傳入 user_id，則只過濾特定用戶
@@ -94,12 +95,12 @@ def get_virtual_trades(user_id: int = None, status: str = None):
         conn.close()
 
 
-def get_all_open_virtual_trades():
+def get_all_open_virtual_trades() -> Any:
     """獲取全站所有開啟的虛擬交易"""
     return get_virtual_trades(status="OPEN")
 
 
-def get_virtual_trade_by_id(trade_id: int):
+def get_virtual_trade_by_id(trade_id: int) -> Any:
     """根據 trade_id 獲取虛擬交易"""
     conn = sqlite3.connect(config.DB_NAME)
     conn.row_factory = sqlite3.Row
@@ -123,7 +124,7 @@ def get_virtual_trade_by_id(trade_id: int):
 
 def close_virtual_trade(
     trade_id: int, exit_price: float, status: str = "CLOSED", pnl: float = 0.0
-):
+) -> Any:
     """平倉虛擬交易"""
     conn = sqlite3.connect(config.DB_NAME)
     conn.row_factory = sqlite3.Row
@@ -160,7 +161,7 @@ def close_virtual_trade(
         conn.close()
 
 
-def get_open_virtual_trades(user_id: int = None):
+def get_open_virtual_trades(user_id: int | None = None) -> Any:
     """
     抓取所有開放中的虛擬部位。如果 user_id 為 None，則抓取全系統部位 (用於背景排程)。
     """
@@ -183,7 +184,7 @@ def get_open_virtual_trades(user_id: int = None):
 
 def update_virtual_trade_greeks(
     trade_id: int, weighted_delta: float, theta: float, gamma: float
-):
+) -> Any:
     """更新虛擬交易紀錄的希臘字母數據"""
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
@@ -202,7 +203,7 @@ def update_virtual_trade_greeks(
         conn.close()
 
 
-def get_all_virtual_trades(user_id: int):
+def get_all_virtual_trades(user_id: int) -> Any:
     """
     抓取該使用者的所有虛擬交易紀錄 (不限狀態)，用於績效統計。
     """

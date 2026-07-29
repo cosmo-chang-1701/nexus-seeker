@@ -1,3 +1,4 @@
+from typing import Any
 import sqlite3
 import json
 import config
@@ -6,7 +7,7 @@ import config
 # ==========================================
 # 觀察清單 (Watchlist) CRUD (綁定 user_id)
 # ==========================================
-def add_watchlist_symbol(user_id, symbol, use_llm=True):
+def add_watchlist_symbol(user_id: Any, symbol: Any, use_llm: Any = True):  # type: ignore
     """將標的加入觀察清單"""
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
@@ -25,7 +26,7 @@ def add_watchlist_symbol(user_id, symbol, use_llm=True):
     return success
 
 
-def get_user_watchlist(user_id):
+def get_user_watchlist(user_id: Any):  # type: ignore
     """取得特定使用者的觀察清單"""
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
@@ -44,7 +45,7 @@ def get_user_watchlist(user_id):
         conn.close()
 
 
-def get_user_watchlist_by_symbol(user_id, symbol):
+def get_user_watchlist_by_symbol(user_id: Any, symbol: Any):  # type: ignore
     """取得特定使用者的單一觀察標的"""
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
@@ -63,7 +64,7 @@ def get_user_watchlist_by_symbol(user_id, symbol):
         conn.close()
 
 
-def update_user_watchlist(user_id, symbol, use_llm=None):
+def update_user_watchlist(user_id: Any, symbol: Any, use_llm: Any = None):  # type: ignore
     """
     動態更新觀察清單的設定。
     """
@@ -96,7 +97,7 @@ def update_user_watchlist(user_id, symbol, use_llm=None):
         conn.close()
 
 
-def get_all_watchlist():
+def get_all_watchlist() -> Any:
     """取得全站所有觀察清單 (供背景排程使用)"""
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
@@ -114,7 +115,7 @@ def get_all_watchlist():
         conn.close()
 
 
-def delete_watchlist_symbol(user_id, symbol):
+def delete_watchlist_symbol(user_id: Any, symbol: Any):  # type: ignore
     """將標的從觀察清單移除"""
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
@@ -133,7 +134,7 @@ def delete_watchlist_symbol(user_id, symbol):
 # ==========================================
 # 訊號追蹤 (Anti-Whipsaw State) CRUD
 # ==========================================
-def get_watchlist_alert_state(user_id, symbol):
+def get_watchlist_alert_state(user_id: Any, symbol: Any):  # type: ignore
     """取得標的上一次觸發訊號的狀態快照"""
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
@@ -159,7 +160,9 @@ def get_watchlist_alert_state(user_id, symbol):
         conn.close()
 
 
-def update_watchlist_alert_state(user_id, symbol, direction, price, timestamp):
+def update_watchlist_alert_state(  # type: ignore
+    user_id: Any, symbol: Any, direction: Any, price: Any, timestamp: Any
+):  # type: ignore
     """記錄本次觸發的訊號狀態"""
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()

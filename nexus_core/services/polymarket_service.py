@@ -1,10 +1,11 @@
+from typing import Any
 import asyncio
 import json
 import logging
 import datetime
 import websockets
 import httpx
-from typing import Dict, Any, List, Optional
+from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 
 from cogs.embed_builder import create_polymarket_whale_alert_embed
@@ -28,16 +29,16 @@ MAX_CACHE_SIZE = 2000
 class BoundedCache(OrderedDict):
     """具備容量上限的快取 (LRU 邏輯)。"""
 
-    def __init__(self, max_size=MAX_CACHE_SIZE):
+    def __init__(self, max_size: Any = MAX_CACHE_SIZE):
         super().__init__()
         self.max_size = max_size
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: Any):  # type: ignore
         value = super().__getitem__(key)
         self.move_to_end(key)
         return value
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key: Any, value: Any):  # type: ignore
         if key in self:
             self.move_to_end(key)
         super().__setitem__(key, value)
@@ -54,7 +55,7 @@ class OrderBook:
         default_factory=lambda: datetime.datetime.now(datetime.timezone.utc)
     )
 
-    def update(self, side: str, price: float, size: float):
+    def update(self, side: str, price: float, size: float) -> Any:
         target = self.bids if side.lower() in ["buy", "bid"] else self.asks
         if size <= 0:
             target.pop(price, None)
@@ -99,11 +100,13 @@ class OrderBook:
 
 
 class PolymarketService:
-    def __init__(self, bot):
+    def __init__(self, bot: Any):
         self.bot = bot
         self.running = False
         self._market_cache = BoundedCache(max_size=MAX_CACHE_SIZE)
-        self._active_markets = []  # 儲存目前活躍市場的詳細資訊
+        self._active_markets: list[
+            dict[str, Any]
+        ] = []  # 儲存目前活躍市場的詳細資訊  # type: ignore
         self._order_books = BoundedCache(max_size=MAX_CACHE_SIZE)
         self._monitor_task = None
         self._ping_task = None
@@ -371,17 +374,17 @@ class PolymarketService:
 
         return False
 
-    def start(self):
+    def start(self) -> None:
         if self.running:
             return
         self.running = True
-        self._monitor_task = asyncio.create_task(self._monitor_loop())
-        self._cleanup_task = asyncio.create_task(self._periodic_cleanup())
+        self._monitor_task = asyncio.create_task(self._monitor_loop())  # type: ignore
+        self._cleanup_task = asyncio.create_task(self._periodic_cleanup())  # type: ignore
         logger.info(
             "🐋 Polymarket Whale Monitor Service started with Memory-Safe Bounded Cache."
         )
 
-    def stop(self):
+    def stop(self) -> None:
         self.running = False
         self.is_connected = False
         if self._monitor_task:
@@ -392,7 +395,7 @@ class PolymarketService:
             self._cleanup_task.cancel()
         logger.info("🛑 Polymarket Whale Monitor Service stopped.")
 
-    async def _periodic_cleanup(self):
+    async def _periodic_cleanup(self) -> None:
         """每 15 分鐘執行一次強制垃圾回收與過期快取清理。"""
         while self.running:
             await asyncio.sleep(900)  # 15 min
@@ -418,7 +421,7 @@ class PolymarketService:
             except Exception as e:
                 logger.error(f"Cleanup error: {e}")
 
-    async def _monitor_loop(self):
+    async def _monitor_loop(self) -> None:
         retry_delay = 5
         max_delay = 60
 
@@ -470,13 +473,13 @@ class PolymarketService:
                     )
 
                     # 啟動 PING 任務
-                    self._ping_task = asyncio.create_task(self._ping_loop(ws))
+                    self._ping_task = asyncio.create_task(self._ping_loop(ws))  # type: ignore
 
                     async for message in ws:
                         if not self.running:
                             break
 
-                        self.last_message_at = datetime.datetime.now(
+                        self.last_message_at = datetime.datetime.now(  # type: ignore
                             datetime.timezone.utc
                         )
                         retry_delay = 5  # 成功通訊後重設延遲
@@ -525,7 +528,7 @@ class PolymarketService:
                 await asyncio.sleep(retry_delay)
                 retry_delay = min(retry_delay * 2, max_delay)
 
-    async def _initialize_order_books(self, asset_ids: List[str]):
+    async def _initialize_order_books(self, asset_ids: List[str]) -> Any:
         """從 CLOB API 抓取初始 Order Book 快照"""
         async with httpx.AsyncClient(timeout=10.0) as client:
             for aid in asset_ids:
@@ -546,7 +549,7 @@ class PolymarketService:
                 # 避免過快請求
                 await asyncio.sleep(0.1)
 
-    def _handle_order_book_update(self, data: Dict[str, Any]):
+    def _handle_order_book_update(self, data: Dict[str, Any]) -> Any:
         """處理增量 Order Book 更新"""
         asset_id = data.get("asset_id")
         if not asset_id:
@@ -575,7 +578,7 @@ class PolymarketService:
         classification = await classify_uoa_intent(symbol, uoa_data[0], whale_intent)
         return {"uoa": uoa_data[0], "classification": classification}
 
-    async def _handle_trade(self, trade: Dict[str, Any]):
+    async def _handle_trade(self, trade: Dict[str, Any]) -> Any:
         """
         處理單筆交易：動態滑價門檻判定 -> 獲取背景 -> LLM 總結 -> 推播
         """
@@ -707,7 +710,7 @@ class PolymarketService:
         usd_value: float,
         dynamic_threshold: float,
         uoa_correlation: Optional[Dict[str, Any]] = None,
-    ):
+    ) -> Any:
         """
         封裝 Discord Embed (專業分析師格式) 並排入私訊佇列
         """
@@ -867,7 +870,7 @@ class PolymarketService:
             logger.error(f"Failed to fetch active asset IDs via Gamma API: {e}")
         return []
 
-    async def _ping_loop(self, ws):
+    async def _ping_loop(self, ws: Any):  # type: ignore
         try:
             while self.running and self.is_connected:
                 await ws.send("PING")
@@ -876,16 +879,16 @@ class PolymarketService:
             pass
 
     async def _get_market_info(
-        self, asset_id: str, condition_id: str = None
+        self, asset_id: str, condition_id: str | None = None
     ) -> Optional[Dict[str, Any]]:
         """
         獲取市場背景資訊。優先從快取讀取，若無則嘗試從 Gamma API 抓取。
         支援使用 asset_id 或 condition_id 查詢。
         """
         if asset_id in self._market_cache:
-            return self._market_cache[asset_id]
+            return self._market_cache[asset_id]  # type: ignore
         if condition_id and condition_id in self._market_cache:
-            return self._market_cache[condition_id]
+            return self._market_cache[condition_id]  # type: ignore
 
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:

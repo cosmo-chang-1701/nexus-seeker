@@ -3,7 +3,7 @@ from market_analysis.insights_engine import InsightsEngine, RiskInsightsContext
 
 
 @pytest.mark.asyncio
-async def test_narrative_trap_override():
+async def test_narrative_trap_override() -> None:
     context = RiskInsightsContext(
         symbol="SPY",
         current_price=254.30,

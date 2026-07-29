@@ -1,3 +1,4 @@
+from typing import Any
 from .cog import UnifiedTerminalCog
 from .symbol_view import SymbolHubView
 from .portfolio_view import PortfolioHubView
@@ -31,5 +32,5 @@ __all__ = [
 ]
 
 
-async def setup(bot):
+async def setup(bot: Any):  # type: ignore
     await bot.add_cog(UnifiedTerminalCog(bot))

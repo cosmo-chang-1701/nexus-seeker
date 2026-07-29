@@ -1,6 +1,7 @@
+from typing import Any
 import asyncio
 import logging
-from typing import Dict, Any, Callable, Coroutine
+from typing import Dict, Callable, Coroutine
 
 logger = logging.getLogger(__name__)
 
@@ -10,7 +11,7 @@ class SingleFlightManager:
     _lock = asyncio.Lock()
 
     @classmethod
-    async def run(
+    async def run(  # type: ignore
         cls,
         key: str,
         coro_func: Callable[..., Coroutine[Any, Any, Any]],
@@ -34,8 +35,8 @@ class SingleFlightManager:
                 cls._active_tasks[key] = task
 
                 # Cleanup the task from active dict when it finishes
-                def cleanup(t):
-                    async def do_cleanup():
+                def cleanup(t: Any) -> None:
+                    async def do_cleanup() -> None:
                         async with cls._lock:
                             if cls._active_tasks.get(key) is t:
                                 cls._active_tasks.pop(key, None)

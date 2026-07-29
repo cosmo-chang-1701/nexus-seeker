@@ -4,7 +4,7 @@ from services.llm_service import generate_analyst_report
 
 
 @pytest.mark.asyncio
-async def test_generate_analyst_report_prompt_and_constraints():
+async def test_generate_analyst_report_prompt_and_constraints() -> None:
     # Mock OpenAI client beta.chat.completions.parse
     with patch(
         "services.llm_service.client.beta.chat.completions.parse",
@@ -59,7 +59,7 @@ async def test_generate_analyst_report_prompt_and_constraints():
 
 
 @pytest.mark.asyncio
-async def test_generate_watchlist_roundup_commentary():
+async def test_generate_watchlist_roundup_commentary() -> None:
     from services.llm_service import generate_watchlist_roundup_commentary
 
     # Test case 1: Empty symbols

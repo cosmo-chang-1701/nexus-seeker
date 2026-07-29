@@ -1,3 +1,4 @@
+from typing import Any
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from cogs.terminal import TerminalCog
@@ -10,14 +11,16 @@ from cogs.unified_terminal import UnifiedTerminalCog
 
 
 @pytest.fixture
-def mock_bot():
+def mock_bot() -> Any:
     bot = MagicMock()
     bot.wait_until_ready = AsyncMock()
     return bot
 
 
 @pytest.mark.asyncio
-async def test_all_commands_structure(mock_interaction, db_conn, mock_bot):
+async def test_all_commands_structure(  # type: ignore
+    mock_interaction: Any, db_conn: Any, mock_bot: Any
+):  # type: ignore
     """
     Smoke test to ensure command callbacks are structurally correct and compatible with parameters.
     """
@@ -30,15 +33,18 @@ async def test_all_commands_structure(mock_interaction, db_conn, mock_bot):
     unified = UnifiedTerminalCog(mock_bot)
 
     # --- Terminal Commands ---
-    await terminal.update_settings.callback(terminal, mock_interaction, risk_limit=25.0)
+    await terminal.update_settings.callback(terminal, mock_interaction, risk_limit=25.0)  # type: ignore
     assert (
         "帳戶設定已更新"
         in mock_interaction.followup.send.call_args.kwargs["embed"].description
     )
     mock_interaction.followup.send.reset_mock()
 
-    await terminal.add_watch.callback(
-        terminal, mock_interaction, symbol="NVDA", use_llm=True
+    await terminal.add_watch.callback(  # type: ignore
+        terminal,  # type: ignore
+        mock_interaction,
+        symbol="NVDA",
+        use_llm=True,  # type: ignore
     )
     assert (
         "已加入觀察清單"
@@ -46,7 +52,7 @@ async def test_all_commands_structure(mock_interaction, db_conn, mock_bot):
     )
     mock_interaction.followup.send.reset_mock()
 
-    await terminal.list_watch.callback(terminal, mock_interaction)
+    await terminal.list_watch.callback(terminal, mock_interaction)  # type: ignore
     assert mock_interaction.followup.send.called
     mock_interaction.followup.send.reset_mock()
 
@@ -58,7 +64,7 @@ async def test_all_commands_structure(mock_interaction, db_conn, mock_bot):
         disk.return_value.percent = 30.0
         disk.return_value.free = 50 * 1024 * 1024 * 1024
         cpu.return_value = 5.0
-        await terminal.sys_health.callback(terminal, mock_interaction)
+        await terminal.sys_health.callback(terminal, mock_interaction)  # type: ignore
         assert mock_interaction.followup.send.called
     mock_interaction.followup.send.reset_mock()
 
@@ -80,7 +86,7 @@ async def test_all_commands_structure(mock_interaction, db_conn, mock_bot):
         m_pcr.return_value = {"symbol": "TSLA", "pcr": 1.0, "state": "Normal"}
         m_uoa.return_value = []
         m_mp.return_value = {"max_pain": 200}
-        await sentiment.skew_scan.callback(sentiment, mock_interaction, symbol="TSLA")
+        await sentiment.skew_scan.callback(sentiment, mock_interaction, symbol="TSLA")  # type: ignore
         assert mock_interaction.followup.send.called
     mock_interaction.followup.send.reset_mock()
 
@@ -98,7 +104,7 @@ async def test_all_commands_structure(mock_interaction, db_conn, mock_bot):
             "o": 148.0,
             "pc": 148.0,
         }
-        await intelligence.quote.callback(intelligence, mock_interaction, symbol="AAPL")
+        await intelligence.quote.callback(intelligence, mock_interaction, symbol="AAPL")  # type: ignore
         assert mock_interaction.followup.send.called
     mock_interaction.followup.send.reset_mock()
 
@@ -106,8 +112,10 @@ async def test_all_commands_structure(mock_interaction, db_conn, mock_bot):
         "services.news_service.fetch_recent_news", new_callable=AsyncMock
     ) as m_news:
         m_news.return_value = "Test News Content"
-        await intelligence.scan_news.callback(
-            intelligence, mock_interaction, symbol="AAPL"
+        await intelligence.scan_news.callback(  # type: ignore
+            intelligence,  # type: ignore
+            mock_interaction,
+            symbol="AAPL",  # type: ignore
         )
         assert mock_interaction.followup.send.called
     mock_interaction.followup.send.reset_mock()
@@ -117,7 +125,7 @@ async def test_all_commands_structure(mock_interaction, db_conn, mock_bot):
         "services.market_data_service.get_earnings_calendar", new_callable=AsyncMock
     ) as m_cal:
         m_cal.return_value = [{"date": "2026-05-15", "symbol": "AAPL"}]
-        await calendar.calendar.callback(calendar, mock_interaction)
+        await calendar.calendar.callback(calendar, mock_interaction)  # type: ignore
         assert mock_interaction.followup.send.called
     mock_interaction.followup.send.reset_mock()
 
@@ -128,12 +136,12 @@ async def test_all_commands_structure(mock_interaction, db_conn, mock_bot):
         "services.market_data_service.get_quote", new_callable=AsyncMock
     ) as m_quote:
         m_quote.return_value = {"c": 500.0}
-        await unified.symbol_hub.callback(unified, mock_interaction, symbol="SPY")
+        await unified.symbol_hub.callback(unified, mock_interaction, symbol="SPY")  # type: ignore
         assert mock_interaction.followup.send.called
     mock_interaction.followup.send.reset_mock()
 
     # --- Hedging Commands ---
-    await hedging.hedge_list.callback(hedging, mock_interaction)
+    await hedging.hedge_list.callback(hedging, mock_interaction)  # type: ignore
     assert mock_interaction.followup.send.called
     mock_interaction.followup.send.reset_mock()
 
@@ -142,12 +150,12 @@ async def test_all_commands_structure(mock_interaction, db_conn, mock_bot):
         "market_analysis.ddp_inspector.DDPInspector.run_scan", new_callable=AsyncMock
     ) as m_ddp:
         m_ddp.return_value = []
-        await trading.ddp_scan.callback(trading, mock_interaction)
+        await trading.ddp_scan.callback(trading, mock_interaction)  # type: ignore
         assert mock_interaction.followup.send.called
     mock_interaction.followup.send.reset_mock()
 
     # Test force_macro_update admin check failure
-    await trading.force_macro_update.callback(trading, mock_interaction)
+    await trading.force_macro_update.callback(trading, mock_interaction)  # type: ignore
     assert mock_interaction.response.send_message.called
     mock_interaction.response.send_message.reset_mock()
 
@@ -162,7 +170,7 @@ async def test_all_commands_structure(mock_interaction, db_conn, mock_bot):
         new_callable=AsyncMock,
     ) as m_fw:
         m_gex.return_value = {"spy_spot": 510.0, "gamma_flip": 515.0}
-        await trading.force_macro_update.callback(trading, mock_interaction)
+        await trading.force_macro_update.callback(trading, mock_interaction)  # type: ignore
         assert mock_interaction.followup.send.called
         m_gex.assert_called_once()
         m_fw.assert_called_once()
@@ -170,12 +178,12 @@ async def test_all_commands_structure(mock_interaction, db_conn, mock_bot):
 
 
 @pytest.mark.asyncio
-async def test_command_remove_watch(mock_interaction, db_conn, mock_bot):
+async def test_command_remove_watch(mock_interaction: Any, db_conn: Any, mock_bot: Any):  # type: ignore
     terminal = TerminalCog(mock_bot)
     from database.watchlist import add_watchlist_symbol
 
     add_watchlist_symbol(mock_interaction.user.id, "AMD")
-    await terminal.remove_watch.callback(terminal, mock_interaction, symbol="AMD")
+    await terminal.remove_watch.callback(terminal, mock_interaction, symbol="AMD")  # type: ignore
     assert (
         "已移除觀察標的"
         in mock_interaction.followup.send.call_args.kwargs["embed"].description
@@ -183,7 +191,7 @@ async def test_command_remove_watch(mock_interaction, db_conn, mock_bot):
 
 
 @pytest.mark.asyncio
-async def test_command_event_impact(mock_interaction, db_conn, mock_bot):
+async def test_command_event_impact(mock_interaction: Any, db_conn: Any, mock_bot: Any):  # type: ignore
     cal_cog = CalendarCog(mock_bot)
     from database.portfolio import add_portfolio_record
 
@@ -206,7 +214,10 @@ async def test_command_event_impact(mock_interaction, db_conn, mock_bot):
         "services.market_data_service.get_quote", new_callable=AsyncMock
     ) as m_quote:
         m_quote.return_value = {"c": 100.0}
-        await cal_cog.event_impact.callback(
-            cal_cog, mock_interaction, symbol="AAPL", vol_move=25.0
+        await cal_cog.event_impact.callback(  # type: ignore
+            cal_cog,  # type: ignore
+            mock_interaction,
+            symbol="AAPL",
+            vol_move=25.0,  # type: ignore
         )
         assert mock_interaction.followup.send.called

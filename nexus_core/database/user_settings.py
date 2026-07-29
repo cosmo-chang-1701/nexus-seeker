@@ -1,6 +1,6 @@
+from typing import Any
 import sqlite3
 import logging
-from typing import Any
 from dataclasses import dataclass
 import config
 
@@ -42,7 +42,7 @@ class UserContext:
 # ==========================================
 
 
-def upsert_user_config(user_id: int, **kwargs) -> bool:
+def upsert_user_config(user_id: int, **kwargs) -> bool:  # type: ignore
     """
     單一更新路徑 (Single Update Path)：
     根據傳入的關鍵字參數動態更新 user_settings 表中的欄位。
@@ -135,7 +135,9 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:
             conn.close()
 
 
-def calculate_auto_capital(user_id: int, conn: sqlite3.Connection = None) -> float:
+def calculate_auto_capital(
+    user_id: int, conn: sqlite3.Connection | None = None
+) -> float:
     """
     自動計算總資金：加總持倉 (HOLDING)、期權 (TRADE) 與現金儲備 (cash_reserve)
     持倉價值 = avg_cost * quantity
@@ -215,7 +217,7 @@ def get_user_risk_limit(user_id: int) -> float:
             conn.close()
 
 
-def get_all_user_ids():
+def get_all_user_ids() -> Any:
     """取得資料庫中所有出現過的使用者 ID"""
     conn = None
     try:

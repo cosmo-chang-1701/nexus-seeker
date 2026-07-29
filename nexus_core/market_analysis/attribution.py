@@ -1,3 +1,4 @@
+from typing import Any
 import logging
 import json
 from typing import List, Optional
@@ -14,7 +15,9 @@ class AttributionEngine:
 
     @staticmethod
     def calculate_protection_score(
-        loss_avoided: float, cost_of_hedge: float, event_snapshot: List[dict] = None
+        loss_avoided: float,
+        cost_of_hedge: float,
+        event_snapshot: List[dict] | None = None,
     ) -> float:
         """
         計算對沖保護評分 (0-100)。
@@ -45,8 +48,8 @@ class AttributionEngine:
         user_id: int,
         strategy_tag: str,
         pre_hedge_greeks: dict,
-        poly_snapshot: List[dict] = None,
-    ):
+        poly_snapshot: List[dict] | None = None,
+    ) -> Any:
         """
         [Snapshot Mechanism] 記錄 VTR 對沖執行瞬間的 Greeks 與 Polymarket 機率快照。
         """
@@ -74,7 +77,7 @@ class AttributionEngine:
             logger.error(f"Failed to log VTR hedge snapshot: {e}")
 
     @staticmethod
-    async def finalize_vtr_attribution(user_id: int, window_hours: int = 24):
+    async def finalize_vtr_attribution(user_id: int, window_hours: int = 24) -> Any:
         """
         針對已平倉的 VTR 對沖進行歸因分析。
         """
@@ -199,7 +202,7 @@ class AttributionEngine:
                 max_tokens=250,
             )
             content = response.choices[0].message.content
-            return content.strip() if content else "AI 歸因分析生成空白。"
+            return content.strip() if content else "AI 歸因分析生成空白。"  # type: ignore
         except Exception as e:
             logger.error(f"Failed to generate attribution narration: {e}")
             return "AI 歸因分析暫不可用。"

@@ -1,5 +1,6 @@
 # Facade for SentimentEngine
-from typing import Dict, Any
+from typing import Any
+from typing import Dict
 
 from .history_storage import (
     _trigger_background_cache_clear,
@@ -33,7 +34,7 @@ class SentimentEngine:
     _revalidating_symbols = _revalidating_symbols
 
     @staticmethod
-    def _trigger_background_cache_clear(symbol: str):
+    def _trigger_background_cache_clear(symbol: str) -> Any:
         return _trigger_background_cache_clear(symbol)
 
     @staticmethod
@@ -45,49 +46,49 @@ class SentimentEngine:
         return await calculate_pcr(symbol)
 
     @staticmethod
-    async def get_unified_max_pain(*args, **kwargs):
+    async def get_unified_max_pain(*args, **kwargs):  # type: ignore
         return await get_unified_max_pain(*args, **kwargs)
 
     @staticmethod
-    async def calculate_max_pain(*args, **kwargs):
+    async def calculate_max_pain(*args, **kwargs):  # type: ignore
         return await calculate_max_pain(*args, **kwargs)
 
     @staticmethod
-    async def _calculate_max_pain_raw(*args, **kwargs):
+    async def _calculate_max_pain_raw(*args, **kwargs):  # type: ignore
         return await _calculate_max_pain_raw(*args, **kwargs)
 
     @staticmethod
-    async def detect_uoa(*args, **kwargs):
+    async def detect_uoa(*args, **kwargs):  # type: ignore
         return await detect_uoa(*args, **kwargs)
 
     @staticmethod
-    async def save_sentiment_history(*args, **kwargs):
+    async def save_sentiment_history(*args, **kwargs):  # type: ignore
         return await save_sentiment_history(*args, **kwargs)
 
     @staticmethod
-    def get_indicator_percentile(*args, **kwargs):
+    def get_indicator_percentile(*args, **kwargs):  # type: ignore
         return get_indicator_percentile(*args, **kwargs)
 
     @staticmethod
-    def get_last_stored_iv(*args, **kwargs):
+    def get_last_stored_iv(*args, **kwargs):  # type: ignore
         return get_last_stored_iv(*args, **kwargs)
 
     @staticmethod
-    def get_last_stored_sentiment(*args, **kwargs):
+    def get_last_stored_sentiment(*args, **kwargs):  # type: ignore
         return get_last_stored_sentiment(*args, **kwargs)
 
     @staticmethod
-    async def save_historical_iv(*args, **kwargs):
+    async def save_historical_iv(*args, **kwargs):  # type: ignore
         return await save_historical_iv(*args, **kwargs)
 
     @staticmethod
-    async def fetch_and_calculate_iv_metrics(*args, **kwargs):
+    async def fetch_and_calculate_iv_metrics(*args, **kwargs):  # type: ignore
         return await fetch_and_calculate_iv_metrics(*args, **kwargs)
 
     @staticmethod
-    async def _calculate_straddle_implied_em(*args, **kwargs):
+    async def _calculate_straddle_implied_em(*args, **kwargs):  # type: ignore
         return await _calculate_straddle_implied_em(*args, **kwargs)
 
     @staticmethod
-    async def get_expected_move(*args, **kwargs):
+    async def get_expected_move(*args, **kwargs):  # type: ignore
         return await IVContext.get_expected_move(*args, **kwargs)

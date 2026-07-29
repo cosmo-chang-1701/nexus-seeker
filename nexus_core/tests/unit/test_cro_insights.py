@@ -11,7 +11,7 @@ class RadarRenderer:
         return f"{context.symbol} {context.current_price} {context.iv_rank} {context.put_wall} {dmp_label} {status_label}"
 
 
-def test_d_mp_logic_blocking_on_put_wall_breach():
+def test_d_mp_logic_blocking_on_put_wall_breach() -> None:
     # 測試當現價跌破 PutWall 時，D-MP 是否成功阻斷，且防守狀態正確觸發
     context = RiskInsightsContext(
         symbol="RKLB",

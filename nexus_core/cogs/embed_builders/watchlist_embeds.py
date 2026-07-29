@@ -1,3 +1,5 @@
+from typing import Any
+
 """Watchlist 心跳與總覽 Embed 建構函式。
 
 包含：
@@ -9,14 +11,16 @@
 import discord
 
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List
+from typing import Dict, List
 
 from cogs.embed_builders._ansi_utils import _pad_string
 from cogs.embed_builders._embed_helpers import _safe_embed_field_value
 from cogs.embed_builders._core import NexusEmbed
 
 
-def create_watchlist_embed(page_data, current_page, total_pages, total_items):
+def create_watchlist_embed(  # type: ignore
+    page_data: Any, current_page: Any, total_pages: Any, total_items: Any
+):  # type: ignore
     """生成觀察清單的分頁 Embed (移除成本欄位)"""
 
     if not page_data:

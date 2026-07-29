@@ -1,3 +1,4 @@
+from typing import Any
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -35,7 +36,7 @@ class UnifiedTerminalCog(commands.Cog):
     Consolidates 20+ commands into 3 core hubs: /x, /dash, /market.
     """
 
-    def __init__(self, bot):
+    def __init__(self, bot: Any):
         self.bot = bot
         logger.info("UnifiedTerminalCog loaded.")
 
@@ -68,7 +69,7 @@ class UnifiedTerminalCog(commands.Cog):
         scan_type: Optional[app_commands.Choice[str]] = None,
         tag: Optional[str] = None,
         squeeze: Optional[bool] = None,
-    ):
+    ) -> Any:
         await interaction.response.defer(ephemeral=True)
         try:
             user_id = interaction.user.id
@@ -131,7 +132,7 @@ class UnifiedTerminalCog(commands.Cog):
 
     async def execute_unified_scan(
         self, interaction: discord.Interaction, state: dict, user_id: int
-    ):
+    ) -> Any:
         scan_value = state.get("scope", "WATCHLIST")
         tag = state.get("selected_tag")
         quant_filters = set(state.get("quant_filters", []))
@@ -550,7 +551,7 @@ class UnifiedTerminalCog(commands.Cog):
         symbol: str,
         user_id: int,
         embeds_accumulator: Optional[List[discord.Embed]] = None,
-    ):
+    ) -> Any:
         symbol = symbol.upper()
         if not await market_data_service.validate_symbol(symbol):
             error_emb = create_error_embed(
@@ -729,7 +730,7 @@ class UnifiedTerminalCog(commands.Cog):
                     ephemeral=True,
                 )
 
-    async def _async_revalidate_market_cache(self, sym: str, price: float):
+    async def _async_revalidate_market_cache(self, sym: str, price: float) -> Any:
         try:
             from market_analysis.sentiment_engine import SentimentEngine
 
@@ -740,14 +741,14 @@ class UnifiedTerminalCog(commands.Cog):
         except Exception as e:
             logger.error(f"❌ [SWR] Background revalidation failed for {sym}: {e}")
 
-    async def _fetch_sym_radar_data(self, sym: str):
+    async def _fetch_sym_radar_data(self, sym: str) -> Any:
         from services.single_flight import SingleFlightManager
 
         return await SingleFlightManager.run(
             f"analyze_{sym}", self._fetch_sym_radar_data_raw, sym
         )
 
-    async def _fetch_sym_radar_data_raw(self, sym: str):
+    async def _fetch_sym_radar_data_raw(self, sym: str) -> Any:
         """
         獲取單一標的的雷達量化數據。
         採用統一的 get_unified_max_pain 方法讀取與重算快取。
@@ -866,7 +867,7 @@ class UnifiedTerminalCog(commands.Cog):
     @app_commands.command(
         name="dash", description="📊 交易員看板：一站式監控持倉、跑道與 VTR 績效"
     )
-    async def portfolio_hub(self, interaction: discord.Interaction):
+    async def portfolio_hub(self, interaction: discord.Interaction) -> Any:
         await interaction.response.defer(ephemeral=True)
         user_id = interaction.user.id
 
@@ -917,7 +918,7 @@ class UnifiedTerminalCog(commands.Cog):
     @app_commands.command(
         name="market", description="🌌 市場情報中心：監控日曆、預測市場與高波動標的"
     )
-    async def pulse_hub(self, interaction: discord.Interaction):
+    async def pulse_hub(self, interaction: discord.Interaction) -> Any:
         await interaction.response.defer(ephemeral=True)
 
         # 🚀 Task 2 Hook: Proactive Warmup during pre-market window
@@ -936,7 +937,7 @@ class UnifiedTerminalCog(commands.Cog):
         name="stress_test",
         description="🚨 GTC 掛單現金赤字壓力測試 (Worst-Case Stress Test)",
     )
-    async def stress_test(self, interaction: discord.Interaction):
+    async def stress_test(self, interaction: discord.Interaction) -> Any:
         await interaction.response.defer(ephemeral=True)
         user_id = interaction.user.id
 

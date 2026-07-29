@@ -1,3 +1,4 @@
+from typing import Any
 import pytest
 import time
 from unittest.mock import AsyncMock, patch, MagicMock
@@ -5,7 +6,7 @@ from services.market_data_service import _execute_api_call
 
 
 @pytest.mark.asyncio
-async def test_execute_api_call_success():
+async def test_execute_api_call_success() -> None:
     """Test _execute_api_call runs successfully under normal conditions."""
     mock_func = MagicMock(return_value="success")
     res = await _execute_api_call(mock_func, "arg1", kwarg1="val")
@@ -14,7 +15,7 @@ async def test_execute_api_call_success():
 
 
 @pytest.mark.asyncio
-async def test_execute_api_call_cooperative_backoff():
+async def test_execute_api_call_cooperative_backoff() -> None:
     """Test that _execute_api_call cooperative backoff delay occurs if _rate_limit_until is set in the future."""
     mock_func = MagicMock(return_value="delayed_success")
     future_time = time.time() + 1.0
@@ -34,7 +35,7 @@ async def test_execute_api_call_cooperative_backoff():
 
 
 @pytest.mark.asyncio
-async def test_execute_api_call_sets_rate_limit_on_429():
+async def test_execute_api_call_sets_rate_limit_on_429() -> None:
     """Test that _execute_api_call sets _rate_limit_until when hitting a 429."""
     mock_func = MagicMock()
     # Raise a 429 Exception on first call, succeed on second call
@@ -60,7 +61,7 @@ async def test_execute_api_call_sets_rate_limit_on_429():
 
 
 @pytest.mark.asyncio
-async def test_get_history_df_caching_success():
+async def test_get_history_df_caching_success() -> None:
     """Test that get_history_df caches results and returns cached copies on subsequent calls."""
     import pandas as pd
     from services.market_data_service import get_history_df, clear_history_cache
@@ -107,7 +108,7 @@ async def test_get_history_df_caching_success():
 
 
 @pytest.mark.asyncio
-async def test_get_history_df_cache_expiry():
+async def test_get_history_df_cache_expiry() -> None:
     """Test that cache expires correctly after TTL."""
     import pandas as pd
     from services.market_data_service import get_history_df, clear_history_cache
@@ -148,7 +149,7 @@ async def test_get_history_df_cache_expiry():
 
 
 @pytest.mark.asyncio
-async def test_get_history_df_copy_isolation():
+async def test_get_history_df_copy_isolation() -> None:
     """Test that modifying a returned dataframe does not mutate the cached dataframe."""
     import pandas as pd
     from services.market_data_service import get_history_df, clear_history_cache
@@ -183,7 +184,7 @@ async def test_get_history_df_copy_isolation():
 
 
 @pytest.mark.asyncio
-async def test_clear_history_cache():
+async def test_clear_history_cache() -> None:
     """Test that clear_history_cache properly invalidates the cache."""
     import pandas as pd
     from services.market_data_service import get_history_df, clear_history_cache
@@ -222,7 +223,7 @@ async def test_clear_history_cache():
 
 
 @pytest.mark.asyncio
-async def test_get_all_option_expiries_caching():
+async def test_get_all_option_expiries_caching() -> None:
     """Test that get_all_option_expiries caches the returned expiry dates list."""
     from services.market_data_service import (
         get_all_option_expiries,
@@ -256,7 +257,7 @@ async def test_get_all_option_expiries_caching():
 
 
 @pytest.mark.asyncio
-async def test_get_option_chain_caching():
+async def test_get_option_chain_caching() -> None:
     """Test that get_option_chain caches the chain and enforces copy-isolation on dataframes."""
     import pandas as pd
     from services.market_data_service import get_option_chain, clear_options_cache
@@ -301,19 +302,19 @@ async def test_get_option_chain_caching():
         # Mutate chain1 dataframe and check copy isolation
         chain1.calls["strike"] = [999.0]
         chain3 = await get_option_chain("MSFT", "2026-06-19")
-        assert list(chain3.calls["strike"]) == [150.0]
+        assert list(chain3.calls["strike"]) == [150.0]  # type: ignore
 
 
 @pytest.mark.asyncio
-async def test_execute_api_call_respects_retry_after():
+async def test_execute_api_call_respects_retry_after() -> None:
     """Test that _execute_api_call respects Retry-After header when a 429 occurs."""
 
     class MockResponse:
-        def __init__(self, headers):
+        def __init__(self, headers: Any) -> None:
             self.headers = headers
 
     class MockException(Exception):
-        def __init__(self, message, response):
+        def __init__(self, message: Any, response: Any) -> None:
             super().__init__(message)
             self.response = response
 
@@ -335,7 +336,7 @@ async def test_execute_api_call_respects_retry_after():
 
 
 @pytest.mark.asyncio
-async def test_execute_api_call_rotates_keys():
+async def test_execute_api_call_rotates_keys() -> None:
     """Test that _execute_api_call rotates keys when hitting a 429 and multiple keys exist."""
     import services.market_data_service as mds
     from unittest.mock import MagicMock
@@ -373,7 +374,7 @@ async def test_execute_api_call_rotates_keys():
 
 
 @pytest.mark.asyncio
-async def test_validate_symbol(mock_symbol_validation):
+async def test_validate_symbol(mock_symbol_validation: Any):  # type: ignore
     validate_symbol = mock_symbol_validation.real_fn
     import sqlite3
     import config

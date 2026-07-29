@@ -1,3 +1,4 @@
+from typing import Any
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 import sys
@@ -11,7 +12,7 @@ from cogs.unified_terminal import UnifiedTerminalCog
 
 
 @pytest.mark.asyncio
-async def test_symbol_hub_full_integration(mock_interaction, db_conn):
+async def test_symbol_hub_full_integration(mock_interaction: Any, db_conn: Any):  # type: ignore
     """
     整合測試：驗證 /x 指令從資料庫獲取用戶上下文、調用市場數據服務、
     並最終生成包含所有量化指標的 Embed。
@@ -95,7 +96,7 @@ async def test_symbol_hub_full_integration(mock_interaction, db_conn):
         mock_chain.return_value = mock_chain_obj
 
         # 執行指令
-        await cog.symbol_hub.callback(cog, mock_interaction, symbol="AAPL")
+        await cog.symbol_hub.callback(cog, mock_interaction, symbol="AAPL")  # type: ignore
 
         # 驗證結果
         mock_interaction.followup.send.assert_called_once()

@@ -1,7 +1,8 @@
+from typing import Any
 import sqlite3
 
 
-def run(conn: sqlite3.Connection):
+def run(conn: sqlite3.Connection) -> Any:
     cursor = conn.cursor()
 
     cursor.execute("PRAGMA table_info(user_settings)")

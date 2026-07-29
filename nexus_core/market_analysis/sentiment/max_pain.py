@@ -1,3 +1,4 @@
+from typing import Any
 from .iv_metrics import IVContext, fetch_and_calculate_iv_metrics
 from .history_storage import _trigger_background_cache_clear
 import logging
@@ -5,7 +6,7 @@ import pandas as pd
 import sqlite3  # noqa: F401
 import asyncio
 from datetime import datetime, timedelta, date
-from typing import Dict, Any, Optional
+from typing import Dict, Optional
 from services import market_data_service
 from services.market_data_service import BoundedCache
 from market_time import ny_tz
@@ -46,8 +47,8 @@ def _current_week_friday() -> date:
     return friday
 
 
-def _calculate_max_pain_with_weights(
-    option_chain, weight_key="volume", spot_price=None
+def _calculate_max_pain_with_weights(  # type: ignore
+    option_chain: Any, weight_key: Any = "volume", spot_price: Any = None
 ):
     """
     Helper function to calculate Max Pain based on custom weight key (e.g. 'volume' or 'openInterest').
@@ -377,7 +378,7 @@ async def _calculate_max_pain_raw(
                 )
                 cached = None
         if cached is not None:
-            return cached
+            return cached  # type: ignore
 
     try:
         if expiry:

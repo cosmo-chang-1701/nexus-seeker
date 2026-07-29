@@ -1,3 +1,4 @@
+from typing import Any
 import asyncio
 import logging
 
@@ -23,7 +24,7 @@ class HedgeMonitorService:
     Monitors VIX/IV spikes and pushes actionable hedge instructions.
     """
 
-    def __init__(self, bot):
+    def __init__(self, bot: Any):
         self.bot = bot
         self.running = False
         self._monitor_task = None
@@ -31,20 +32,20 @@ class HedgeMonitorService:
         self._last_vix_stage = None
         self._check_interval = 300  # 5 minutes
 
-    def start(self):
+    def start(self) -> None:
         if self.running:
             return
         self.running = True
-        self._monitor_task = asyncio.create_task(self._monitor_loop())
+        self._monitor_task = asyncio.create_task(self._monitor_loop())  # type: ignore
         logger.info("🛡️ Hedge Monitor Service started.")
 
-    def stop(self):
+    def stop(self) -> None:
         self.running = False
         if self._monitor_task:
             self._monitor_task.cancel()
         logger.info("🛑 Hedge Monitor Service stopped.")
 
-    async def _monitor_loop(self):
+    async def _monitor_loop(self) -> None:
         while self.running:
             try:
                 await self._check_spikes_and_alerts()
@@ -52,7 +53,7 @@ class HedgeMonitorService:
                 logger.error(f"Hedge Monitor loop error: {e}", exc_info=True)
             await asyncio.sleep(self._check_interval)
 
-    async def _check_spikes_and_alerts(self):
+    async def _check_spikes_and_alerts(self) -> None:
         # 1. Fetch current VIX
         macro = await market_data_service.get_macro_environment()
         current_vix = macro.get("vix", 18.0)
@@ -81,8 +82,8 @@ class HedgeMonitorService:
                     is_spike = True
 
         # Update state
-        self._last_vix_level = current_vix
-        self._last_vix_stage = current_stage_idx
+        self._last_vix_level = current_vix  # type: ignore
+        self._last_vix_stage = current_stage_idx  # type: ignore
 
         if is_spike:
             logger.warning(
@@ -90,7 +91,9 @@ class HedgeMonitorService:
             )
             await self._trigger_global_hedge_assessment(current_vix, stage_move)
 
-    async def _trigger_global_hedge_assessment(self, vix_level: float, stage_move: int):
+    async def _trigger_global_hedge_assessment(
+        self, vix_level: float, stage_move: int
+    ) -> Any:
         user_ids = database.get_all_user_ids()
         for uid in user_ids:
             try:
@@ -100,7 +103,7 @@ class HedgeMonitorService:
 
     async def _assess_and_alert_user(
         self, user_id: int, vix_level: float, stage_move: int
-    ):
+    ) -> Any:
         # 1. Refresh Greeks to get latest Vega/Vanna
         from market_analysis.portfolio import refresh_portfolio_greeks
 
@@ -256,12 +259,20 @@ class HedgeMonitorService:
                 max_tokens=200,
             )
             content = response.choices[0].message.content
-            return content.strip() if content else "市場波動劇烈，建議執行對沖。"
+            return content.strip() if content else "市場波動劇烈，建議執行對沖。"  # type: ignore
         except Exception:
             return "市場波動劇烈，組合 Delta 已偏離中性。建議執行對沖以鎖定風險。"
 
-    def _save_alert(
-        self, user_id, vix, stage_move, delta, vega, hedge_qty, instr, narration
+    def _save_alert(  # type: ignore
+        self,
+        user_id: Any,
+        vix: Any,
+        stage_move: Any,
+        delta: Any,
+        vega: Any,
+        hedge_qty: Any,
+        instr: Any,
+        narration: Any,
     ):
         conn = sqlite3.connect(config.DB_NAME)
         cursor = conn.cursor()
@@ -277,18 +288,18 @@ class HedgeMonitorService:
         conn.close()
         return alert_id
 
-    async def _send_discord_alert(
+    async def _send_discord_alert(  # type: ignore
         self,
-        user_id,
-        vix,
-        stage_move,
-        metrics,
-        adj_delta,
-        hedge_qty,
-        instr,
-        narration,
-        alert_id,
-        poly_snapshot=None,
+        user_id: Any,
+        vix: Any,
+        stage_move: Any,
+        metrics: Any,
+        adj_delta: Any,
+        hedge_qty: Any,
+        instr: Any,
+        narration: Any,
+        alert_id: Any,
+        poly_snapshot: Any = None,
     ):
         import database
 

@@ -36,7 +36,7 @@ def analyze_psq(
     bb_mult: float = 2.0,
     kc_mults: list = [1.0, 1.5, 2.0],
     near_pct: float = 1.5,
-    vix_spot: float = None,
+    vix_spot: float | None = None,
 ) -> Optional[PSQResult]:
     """
     計算 PowerSqueeze (PSQ) 量化指標 (Ultimate Edition v2)。

@@ -1,9 +1,11 @@
+from typing import Any
+
 version = 52
 description = "Change market_cache primary key to composite (symbol, expiry)"
 sql = "SELECT 1;"
 
 
-def migrate_data(conn):
+def migrate_data(conn: Any):  # type: ignore
     cursor = conn.cursor()
     # 1. Rename existing table if it exists
     try:

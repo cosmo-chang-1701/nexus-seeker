@@ -1,3 +1,4 @@
+from typing import Any
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -8,7 +9,7 @@ from cogs.terminal import TerminalCog
 
 @pytest.mark.asyncio
 @pytest.mark.asyncio
-async def test_sys_health_uses_builder(mock_interaction):
+async def test_sys_health_uses_builder(mock_interaction: Any):  # type: ignore
     bot = MagicMock()
     bot.polymarket_service = SimpleNamespace(
         _market_cache={1: 1}, _order_books={1: 1, 2: 2}
@@ -33,7 +34,7 @@ async def test_sys_health_uses_builder(mock_interaction):
         mock_disk.return_value.free = 10 * 1024 * 1024 * 1024
         mock_process.return_value.memory_info.return_value.rss = 256 * 1024 * 1024
 
-        await cog.sys_health.callback(cog, mock_interaction)
+        await cog.sys_health.callback(cog, mock_interaction)  # type: ignore
 
     mock_builder.assert_called_once()
     kwargs = mock_builder.call_args.kwargs
@@ -44,7 +45,7 @@ async def test_sys_health_uses_builder(mock_interaction):
 
 
 @pytest.mark.asyncio
-async def test_promote_watch_uses_builder(mock_interaction):
+async def test_promote_watch_uses_builder(mock_interaction: Any):  # type: ignore
     bot = MagicMock()
     cog = TerminalCog(bot)
     embed = object()
@@ -61,8 +62,8 @@ async def test_promote_watch_uses_builder(mock_interaction):
         ) as mock_builder,
     ):
         mock_manager_cls.return_value.promote_to_trade.return_value = True
-        await cog.promote_watch.callback(
-            cog,
+        await cog.promote_watch.callback(  # type: ignore
+            cog,  # type: ignore
             mock_interaction,
             symbol="aapl",
             opt_type="call",
@@ -84,7 +85,7 @@ async def test_promote_watch_uses_builder(mock_interaction):
 
 
 @pytest.mark.asyncio
-async def test_transition_sim_uses_builder(mock_interaction):
+async def test_transition_sim_uses_builder(mock_interaction: Any):  # type: ignore
     bot = MagicMock()
     cog = TerminalCog(bot)
     embed = object()
@@ -109,8 +110,8 @@ async def test_transition_sim_uses_builder(mock_interaction):
             "cogs.terminal.create_transition_simulation_embed", return_value=embed
         ) as mock_builder,
     ):
-        await cog.transition_sim.callback(
-            cog,
+        await cog.transition_sim.callback(  # type: ignore
+            cog,  # type: ignore
             mock_interaction,
             symbol="nvda",
             current_option_pnl=2500.0,

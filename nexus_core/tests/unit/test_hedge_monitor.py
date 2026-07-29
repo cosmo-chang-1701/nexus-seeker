@@ -5,7 +5,7 @@ from services.hedge_monitor_service import HedgeMonitorService
 
 
 @pytest.mark.asyncio
-async def test_vix_spike_detection():
+async def test_vix_spike_detection() -> None:
     bot = MagicMock()
     service = HedgeMonitorService(bot)
 
@@ -31,7 +31,7 @@ async def test_vix_spike_detection():
 
 
 @pytest.mark.asyncio
-async def test_vix_stage_move_detection():
+async def test_vix_stage_move_detection() -> None:
     bot = MagicMock()
     service = HedgeMonitorService(bot)
 
@@ -56,7 +56,7 @@ async def test_vix_stage_move_detection():
 
 
 @pytest.mark.asyncio
-async def test_send_discord_alert_uses_embed_builder():
+async def test_send_discord_alert_uses_embed_builder() -> None:
     bot = MagicMock()
     bot.queue_dm = AsyncMock()
     service = HedgeMonitorService(bot)

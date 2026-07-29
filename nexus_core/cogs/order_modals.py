@@ -1,3 +1,5 @@
+from typing import Any
+
 """Discord Modal UI components for order management.
 
 Extracted from cogs/order_ui.py to isolate UI form definitions
@@ -5,7 +7,6 @@ from business logic (now in services/order_telemetry_service.py).
 """
 
 import asyncio
-from typing import Any
 import discord
 import logging
 from cogs.embed_builder import create_info_embed, create_error_embed
@@ -99,7 +100,7 @@ class DynamicOrderModal(discord.ui.Modal):
             )
             self.add_item(self.trailing_value)
 
-    async def on_submit(self, interaction: discord.Interaction):
+    async def on_submit(self, interaction: discord.Interaction) -> Any:
         # 1. 驗證並解析數量
         try:
             qty_str = self.quantity.value.strip()
@@ -124,7 +125,7 @@ class DynamicOrderModal(discord.ui.Modal):
         trailing_val = 0.0
         auto_telemetry_triggered = False
 
-        def is_empty_or_zero(field) -> bool:
+        def is_empty_or_zero(field: Any) -> bool:
             if not field or not getattr(field, "value", "").strip():
                 return True
             try:
@@ -328,7 +329,7 @@ class CancelOrderModal(discord.ui.Modal):
         )
         self.add_item(self.order_id)
 
-    async def on_submit(self, interaction: discord.Interaction):
+    async def on_submit(self, interaction: discord.Interaction) -> Any:
         # 1. 立即延遲回應，以防止任何資料庫/網絡延遲導致的 3 秒超時「此交互失敗」
         await interaction.response.defer(ephemeral=True)
 
@@ -416,7 +417,7 @@ class EditOrderModal(discord.ui.Modal):
             )
             self.add_item(self.new_price)
 
-    async def on_submit(self, interaction: discord.Interaction):
+    async def on_submit(self, interaction: discord.Interaction) -> Any:
         # 1. 立即延遲回應，以防止任何資料庫/網絡延遲導致的 3 秒超時「此交互失敗」
         await interaction.response.defer(ephemeral=True)
 

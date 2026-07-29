@@ -1,3 +1,5 @@
+from typing import Any
+
 """NexusEmbed — 全站統一 Discord Embed 子類別。
 
 負責強制執行一致的調色盤、時間戳記與 Footer 排版。
@@ -16,7 +18,7 @@ _OriginalEmbed = discord.Embed
 class NexusEmbed(discord.Embed):
     """自訂 Embed 子類別，用以動態實現一致的版面設計、精緻調色盤與標準 Footer 排版。"""
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, **kwargs):  # type: ignore
         # 1. 統一對齊和諧且精美的高級調色盤 (Curated Aesthetic Palette)
         color = kwargs.get("color")
         if color is not None:
@@ -40,11 +42,11 @@ class NexusEmbed(discord.Embed):
             self.timestamp = datetime.now(timezone.utc)
 
     @property
-    def color(self):
+    def color(self) -> Any:
         return super().color
 
     @color.setter
-    def color(self, value):
+    def color(self, value: Any) -> Any:
         if value is not None:
             if value == discord.Color.blue():
                 value = discord.Color(0x3498DB)
@@ -56,17 +58,19 @@ class NexusEmbed(discord.Embed):
                 value = discord.Color(0xF39C12)
             elif value == discord.Color.blurple():
                 value = discord.Color(0x5865F2)
-        _OriginalEmbed.color.fset(self, value)
+        _OriginalEmbed.color.fset(self, value)  # type: ignore
 
     @property
-    def colour(self):
+    def colour(self) -> Any:
         return self.color
 
     @colour.setter
-    def colour(self, value):
+    def colour(self, value: Any) -> Any:
         self.color = value
 
-    def set_footer(self, *, text: str = None, icon_url: str = None):
+    def set_footer(
+        self, *, text: str | None = None, icon_url: str | None = None
+    ) -> Any:
         if text:
             # 3. 統一版面 Footer 排版 signature
             prefix = "🌌 Nexus Seeker • "
@@ -83,7 +87,7 @@ class NexusEmbed(discord.Embed):
         super().set_footer(text=text, icon_url=icon_url)
 
     @classmethod
-    def from_dict(cls, data):
+    def from_dict(cls, data: Any):  # type: ignore
         embed = _OriginalEmbed.from_dict(data)
         nexus_embed = cls(
             title=embed.title,
@@ -112,7 +116,7 @@ class NexusEmbed(discord.Embed):
             )
         return nexus_embed
 
-    def to_dict(self):
+    def to_dict(self) -> Any:
         # 實作字數截斷防護 (5800字元上限)
         total_len = len(self.title or "") + len(self.description or "")
         if self.footer and self.footer.text:
@@ -125,7 +129,7 @@ class NexusEmbed(discord.Embed):
         if total_len > 5800:
             warning = "⚠️ (因自選標的過多，已啟用自動截斷防護，僅保留核心數據)"
             while total_len > 5800 and self._fields:
-                field = self._fields.pop()
+                field = self._fields.pop()  # type: ignore
                 total_len -= len(field.name or "") + len(field.value or "")
 
             if self.description:
