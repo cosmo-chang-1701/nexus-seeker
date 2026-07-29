@@ -44,7 +44,7 @@ repos:
     hooks:
       - id: core-test
         name: core-test
-        entry: bash -c "docker build -t nexus-seeker-test -f Dockerfile.test . && docker run --rm nexus-seeker-test python -m pytest tests"
+        entry: bash scripts/docker_test.sh
         language: system
         stages: [pre-push]
         always_run: false
@@ -58,13 +58,4 @@ repos:
         stages: [pre-push]
         always_run: false
         files: ^nexus_edge_scraper/.*\.py$
-        pass_filenames: false
-
-      - id: docker-test-commit
-        name: docker-test-commit
-        entry: bash scripts/docker_test.sh
-        language: system
-        stages: [pre-commit]
-        always_run: false
-        files: \.py$
         pass_filenames: false

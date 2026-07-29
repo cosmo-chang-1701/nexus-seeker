@@ -546,7 +546,7 @@ Current repository rule:
 - **Union & Nullability Safety**: Always perform explicit check-guards (e.g. `if obj is not None:`) before accessing properties on optional/nullable objects (like `interaction.message` or `self.view` on Discord items) to avoid Mypy `union-attr` check failures.
 - **Dynamic Property Reflection**: Use safe dynamic helpers `getattr(obj, "attr", default)` or `setattr(obj, "attr", val)` when passing or querying dynamic custom states across UI components (e.g. tracking pre-selected states in views before triggering modals).
 - **Mypy Exclusion Configuration**: Stale build directories (`build/`, `dist/`) must be kept clean and explicitly ignored in `[tool.mypy]` `exclude` configuration under `pyproject.toml` to prevent build-pipeline duplicate scans.
-- **型別自我檢測 (Pre-commit Type Check)**：在提交程式碼前，開發人員應在包含完整依賴的 Docker 容器中手動跑一次全域型別檢查（在 `nexus_core` 目錄下執行 `docker compose run --rm nexus-seeker python -m mypy --config-file pyproject.toml .`），以確保所有第三方套件（如 `discord.py`）的型別解析正確無誤，避免型別錯誤進入遠端倉庫。
+- **型別自我檢測 (Pre-commit Type Check)**：Mypy 已開啟嚴格模式（Strict Mode）。在提交程式碼前，開發人員應在包含完整依賴的 Docker 容器中手動跑一次全域型別檢查（在 `nexus_core` 目錄下執行 `docker compose run --rm nexus-seeker python -m mypy --config-file pyproject.toml .`），以確保所有第三方套件（如 `discord.py`）的型別解析正確無誤，避免型別錯誤進入遠端倉庫。
 
 ### Security
 
@@ -584,7 +584,8 @@ docker compose run --rm nexus-seeker python -m pytest tests/unit/test_macro_risk
 - `nexus_core/docker-compose.yml` currently defines the core bot service
 - `nexus_edge_scraper/docker-compose.yml` defines the optional edge scraper + cloudflared sidecar
 - production release flow is tag-driven (`v*`)
-- post-push hooks run lint, mypy, semgrep, and dockerized tests
+- pre-commit hooks run ruff lint/format, strict mypy, and general quality checks
+- pre-push hooks run semgrep and dockerized tests (core-test and scraper-test)
 
 ---
 

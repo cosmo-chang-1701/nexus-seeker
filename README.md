@@ -228,7 +228,7 @@ python cli.py admin force-macro-update
 ### 2. 開發規範與型別安全
 - **中央化 Embed 輸出防線**：為了避免輸出版面混亂，所有 Cogs、Views、Modals 不得直接宣告 `discord.Embed`。必須統一經由 `cogs/embed_builders/` 套件構造（`cogs/embed_builder.py` 僅保留作為向後相容的轉接層 Shim），且所有 Embed 皆需繼承 `NexusEmbed` 類，確保色彩風格（如 `0x3498DB` 資訊藍、`0xE74C3C` 警報紅）與頁尾標註一致。
 - **持久化 DM 佇列**：主動推送訊息必須透過 `queue_dm` 進行。此佇列會自動對超過 2000 字元的超長訊息進行程式碼區塊（code block）友善的拆分，並在 Bot 啟動/關閉時保存與復原隊列，以確保高可靠交付。
-- **型別自我檢測 (Mypy Check)**：在提交代碼前，請務必在 Docker 中運行：
+- **型別自我檢測 (Mypy Check)**：專案已啟用 Mypy 嚴格模式。在提交代碼前，請務必在 Docker 中運行：
   ```bash
   docker compose run --rm nexus-seeker python -m mypy --config-file pyproject.toml .
   ```
