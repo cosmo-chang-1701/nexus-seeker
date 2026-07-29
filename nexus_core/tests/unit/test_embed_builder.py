@@ -1083,18 +1083,26 @@ def test_build_post_market_intelligence_embed_empty():
     embed = embeds[0]
     assert embed.title == "📋 Nexus Seeker | 盤後綜合風險與 AI 策略報告"
 
-    field_names = [f.name for f in embed.fields]
-    assert "🏁 財務生存跑道 (Financial Runway)" in field_names
-    assert "📊 投資組合收盤持倉明細" in field_names
-    assert "🌐 投資組合收盤宏觀風險" in field_names
-    assert "🧠 AI 損益歸因與次日策略點評" in field_names
+    assert embed.title == "📋 Nexus Seeker | 盤後綜合風險與 AI 策略報告"
 
-    positions_field = next(
-        f for f in embed.fields if f.name == "📊 投資組合收盤持倉明細"
+    assert "🏁 財務生存跑道 (Financial Runway)" in embed.description
+
+    field_values = [f.value for f in embed.fields]
+
+    assert any("📊 投資組合收盤持倉明細" in val for val in field_values)
+    assert any("🌐 投資組合收盤宏觀風險" in val for val in field_values)
+    assert any("🧠 AI 損益歸因與次日策略點評" in val for val in field_values)
+
+    assert any(
+        "目前無持倉部位。" in val
+        for val in field_values
+        if "投資組合收盤持倉明細" in val
     )
-    macro_field = next(f for f in embed.fields if f.name == "🌐 投資組合收盤宏觀風險")
-    assert "目前無持倉部位。" in positions_field.value
-    assert "目前無宏觀風險數據。" in macro_field.value
+    assert any(
+        "目前無宏觀風險數據。" in val
+        for val in field_values
+        if "投資組合收盤宏觀風險" in val
+    )
 
 
 def test_build_post_market_intelligence_embed_parsed_ai_commentary():
@@ -1118,18 +1126,19 @@ def test_build_post_market_intelligence_embed_parsed_ai_commentary():
         ai_commentary=ai_commentary,
     )
     embed = embeds[0]
-    field_names = [f.name for f in embed.fields]
-    assert "📊 AI 多空大盤交叉驗證解讀" in field_names
-    assert "⚠️ AI 潛在陷阱與風險提示" in field_names
-    assert "🛡️ AI 高勝率交易策略推薦" in field_names
-    assert "🧠 AI 損益歸因與次日策略點評" not in field_names
+    field_values = [f.value for f in embed.fields]
 
-    market_field = next(
-        f for f in embed.fields if f.name == "📊 AI 多空大盤交叉驗證解讀"
+    assert any("📊 AI 多空大盤交叉驗證解讀" in val for val in field_values)
+    assert any("⚠️ AI 潛在陷阱與風險提示" in val for val in field_values)
+    assert any("🛡️ AI 高勝率交易策略推薦" in val for val in field_values)
+    assert not any("🧠 AI 損益歸因與次日策略點評" in val for val in field_values)
+
+    market_field_val = next(
+        val for val in field_values if "📊 AI 多空大盤交叉驗證解讀" in val
     )
-    assert "```ansi" not in market_field.value
-    assert "第一點分析" in market_field.value
-    assert "第二點分析" in market_field.value
+    assert "```ansi" in market_field_val
+    assert "第一點分析" in market_field_val
+    assert "第二點分析" in market_field_val
 
 
 def test_create_covered_call_unlock_embed():

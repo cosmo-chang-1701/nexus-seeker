@@ -18,7 +18,7 @@
 import re
 import discord
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
 from cogs.embed_builders._ansi_utils import _pad_string, _clean_ansi, _safe_float
@@ -792,10 +792,18 @@ def build_post_market_intelligence_embed(
 
     embed = discord.Embed(
         title="📋 Nexus Seeker | 盤後綜合風險與 AI 策略報告",
-        description="每日收盤結算、行業資金輪動、AI attribution 歸因與次日對沖決策綜合簡報。",
         color=embed_color,
         timestamp=datetime.now(timezone.utc),
     )
+
+    taipei_tz = timezone(timedelta(hours=8))
+    timestamp_str = datetime.now(taipei_tz).strftime("%Y-%m-%d %H:%M:%S")
+
+    desc_lines = [
+        "```ansi",
+        " 📋 盤後綜合風險與 AI 策略報告 (Post-Market Intelligence)",
+        f" [{timestamp_str} - UTC+8] ｜ 系統狀態: 結算完成",
+    ]
 
     if survival_runway is not None:
         runway_text = (
@@ -803,14 +811,13 @@ def build_post_market_intelligence_embed(
             if survival_runway >= 9999
             else f"{survival_runway:,.1f} 天"
         )
-        runway_val = (
-            f"預估剩餘天數: **{runway_text}**\n"
-            f"計算基準: *基於現有現金儲備與 Theta 收益*"
-        )
-        embed.add_field(
-            name="🏁 財務生存跑道 (Financial Runway)",
-            value=runway_val,
-            inline=False,
+        desc_lines.extend(
+            [
+                "",
+                " 🏁 財務生存跑道 (Financial Runway)",
+                f" ├─ 預估剩餘天數: {runway_text}",
+                " └─ 計算基準: 基於現有現金儲備與 Theta 收益",
+            ]
         )
 
     positions_list = []
@@ -844,32 +851,6 @@ def build_post_market_intelligence_embed(
         positions_text = "目前無持倉部位。"
         macro_text = "目前無宏觀風險數據。"
 
-    if (
-        macro_text
-        and macro_text.strip()
-        and macro_text.strip() != "目前無宏觀風險數據。"
-    ):
-        macro_lines = macro_text.split("\n")
-        cleaned_macro = [line.strip() for line in macro_lines if line.strip()]
-        formatted_macro_lines = []
-        for idx, line in enumerate(cleaned_macro):
-            clean_line = re.sub(r"^[\-\*\•\s]+", "", line).strip()
-            clean_line = clean_line.replace("`", "").replace("*", "")
-            prefix = " ├─ " if idx < len(cleaned_macro) - 1 else " └─ "
-
-            # Apply color to key indicators
-            if "Beta-Weighted Delta" in clean_line or "曝險" in clean_line:
-                clean_line = f"\u001b[0;33m{clean_line}\u001b[0m"
-            elif "警告" in clean_line or "危險" in clean_line or "🚨" in clean_line:
-                clean_line = f"\u001b[0;31m{clean_line}\u001b[0m"
-
-            formatted_macro_lines.append(f"{prefix}{clean_line}")
-        macro_content = "\n".join(formatted_macro_lines)
-        macro_value = f"```ansi\n{macro_content}\n```"
-    else:
-        macro_value = "```ansi\n └─ 目前無宏觀風險數據。\n```"
-
-    # Process positions text to extract financial summary and chunk positions
     if positions_list and positions_text and positions_text != "目前無持倉部位。":
         if "財務摘要 (Financial Summary)" in positions_text:
             table_part, summary_part = positions_text.split(
@@ -893,12 +874,37 @@ def build_post_market_intelligence_embed(
             pnl_val_str = (
                 _clean_ansi(pnl_match.group(1).strip()) if pnl_match else "$0.00 USD"
             )
-
             positions_text = table_part.strip()
 
+        debit_cost_clean = debit_cost_val.replace("`", "").replace("**", "").strip()
+        credit_cash_clean = credit_cash_val.replace("`", "").replace("**", "").strip()
+        pnl_val_clean = pnl_val_str.replace("`", "").replace("**", "").strip()
+
+        pnl_color = ""
+        pnl_reset = "\u001b[0m"
+        if "🟢" in pnl_val_clean or "+" in pnl_val_clean:
+            pnl_color = "\u001b[0;32m"
+        elif "🚨" in pnl_val_clean or "🔴" in pnl_val_clean or "-" in pnl_val_clean:
+            pnl_color = "\u001b[0;31m"
+        else:
+            pnl_reset = ""
+
+        desc_lines.extend(
+            [
+                "",
+                " 💰 資金與實質暴露 (Financial Summary)",
+                f" ├─ 實質暴露 (Debit Cost): {debit_cost_clean}",
+                f" ├─ 收取權利金 (Credit Cash): {credit_cash_clean}",
+                f" └─ 未實現損益 (Unrealized PnL): {pnl_color}{pnl_val_clean}{pnl_reset}",
+            ]
+        )
+
+    desc_lines.append("```")
+    embed.description = "\n".join(desc_lines)
+
+    if positions_list and positions_text and positions_text != "目前無持倉部位。":
         positions_text = positions_text.strip().strip("`").strip()
         blocks = [b.strip() for b in positions_text.split("\n\n") if b.strip()]
-
         transformed_blocks = []
         for block in blocks:
             lines = [line.strip() for line in block.split("\n") if line.strip()]
@@ -923,59 +929,60 @@ def build_post_market_intelligence_embed(
                     elif "🚨" in dl or "🔴" in dl or "-" in dl:
                         dl = f"\u001b[0;31m{dl}\u001b[0m"
                 ansi_lines.append(f"{prefix}{dl}")
-
-            transformed_block = "\n".join(ansi_lines)
-            transformed_blocks.append(transformed_block)
+            transformed_blocks.append("\n".join(ansi_lines))
 
         chunks = _chunk_text_blocks(transformed_blocks, max_len=1000)
-
         for i, chunk in enumerate(chunks):
             name = (
-                f"📊 投資組合收盤持倉明細 ({i+1}/{len(chunks)})"
+                f" 📊 投資組合收盤持倉明細 (Positions) ({i+1}/{len(chunks)})"
                 if len(chunks) > 1
-                else "📊 投資組合收盤持倉明細"
+                else " 📊 投資組合收盤持倉明細 (Positions)"
             )
-            embed.add_field(name=name, value=f"```ansi\n{chunk}\n```", inline=False)
-
-        # Strip markdown bold & codeblock residues from summary strings before formatting
-        debit_cost_clean = debit_cost_val.replace("`", "").replace("**", "").strip()
-        credit_cash_clean = credit_cash_val.replace("`", "").replace("**", "").strip()
-        pnl_val_clean = pnl_val_str.replace("`", "").replace("**", "").strip()
-
-        pnl_emoji = "⚖️"
-        if "🟢" in pnl_val_clean or "+" in pnl_val_clean:
-            pnl_emoji = "🟢"
-        elif "🚨" in pnl_val_clean or "🔴" in pnl_val_clean or "-" in pnl_val_clean:
-            pnl_emoji = "🔴"
-
-        # Add inline fields for financial summary
-        embed.add_field(
-            name="💰 實質暴露 (Debit Cost)",
-            value=f"**{debit_cost_clean}**",
-            inline=True,
-        )
-        embed.add_field(
-            name="💵 收取權利金 (Credit Cash)",
-            value=f"**{credit_cash_clean}**",
-            inline=True,
-        )
-        embed.add_field(
-            name="📊 未實現損益 (Unrealized PnL)",
-            value=f"{pnl_emoji} **{pnl_val_clean}**",
-            inline=True,
-        )
+            embed.add_field(
+                name="\u200b", value=f"```ansi\n{name}\n{chunk}\n```", inline=False
+            )
     else:
         embed.add_field(
-            name="📊 投資組合收盤持倉明細",
-            value="```ansi\n └─ 目前無持倉部位。\n```",
+            name="\u200b",
+            value="```ansi\n 📊 投資組合收盤持倉明細 (Positions)\n └─ 目前無持倉部位。\n```",
             inline=False,
         )
 
-    embed.add_field(
-        name="🌐 投資組合收盤宏觀風險",
-        value=_safe_embed_field_value(macro_value, "無數據"),
-        inline=False,
-    )
+    if (
+        macro_text
+        and macro_text.strip()
+        and macro_text.strip() != "目前無宏觀風險數據。"
+    ):
+        macro_lines = macro_text.split("\n")
+        cleaned_macro = [line.strip() for line in macro_lines if line.strip()]
+        formatted_macro_lines = []
+        for idx, line in enumerate(cleaned_macro):
+            clean_line = re.sub(r"^[\-\*\•\s]+", "", line).strip()
+            clean_line = clean_line.replace("`", "").replace("*", "")
+            prefix = " ├─ " if idx < len(cleaned_macro) - 1 else " └─ "
+            if "Beta-Weighted Delta" in clean_line or "曝險" in clean_line:
+                clean_line = f"\u001b[0;33m{clean_line}\u001b[0m"
+            elif "警告" in clean_line or "危險" in clean_line or "🚨" in clean_line:
+                clean_line = f"\u001b[0;31m{clean_line}\u001b[0m"
+            formatted_macro_lines.append(f"{prefix}{clean_line}")
+        macro_content = "\n".join(formatted_macro_lines)
+
+        macro_chunks = _chunk_text_blocks([macro_content], max_len=1000)
+        for i, chunk in enumerate(macro_chunks):
+            name = (
+                f" 🌐 投資組合收盤宏觀風險 (Macro Risks) ({i+1}/{len(macro_chunks)})"
+                if len(macro_chunks) > 1
+                else " 🌐 投資組合收盤宏觀風險 (Macro Risks)"
+            )
+            embed.add_field(
+                name="\u200b", value=f"```ansi\n{name}\n{chunk}\n```", inline=False
+            )
+    else:
+        embed.add_field(
+            name="\u200b",
+            value="```ansi\n 🌐 投資組合收盤宏觀風險 (Macro Risks)\n └─ 目前無宏觀風險數據。\n```",
+            inline=False,
+        )
 
     if sectors_data is not None:
         if sectors_data:
@@ -1002,61 +1009,89 @@ def build_post_market_intelligence_embed(
                     else "\u001b[0;37m"
                 )
                 reset_code = "\u001b[0m"
-
                 prefix = " ├─ " if idx < len(sorted_sectors) - 1 else " └─ "
                 sector_content_lines.append(
                     f"{prefix}{symbol} ({name})：{color_code}{change_emoji} {change:+.2f}%{reset_code} ｜ 量比 {rel_vol:.2f}x ｜ Skew {skew:+.1f} ｜ UOA {uoa_count}"
                 )
             sector_content = "\n".join(sector_content_lines)
-            sector_value = f"```ansi\n{sector_content}\n```"
+            sector_chunks = _chunk_text_blocks([sector_content], max_len=1000)
+            for i, chunk in enumerate(sector_chunks):
+                name = (
+                    f" 🔄 行業板塊資金輪動 (Sector Rotation) ({i+1}/{len(sector_chunks)})"
+                    if len(sector_chunks) > 1
+                    else " 🔄 行業板塊資金輪動 (Sector Rotation)"
+                )
+                embed.add_field(
+                    name="\u200b", value=f"```ansi\n{name}\n{chunk}\n```", inline=False
+                )
         else:
-            sector_value = "```ansi\n └─ 暫無行業資金輪動數據。\n```"
+            embed.add_field(
+                name="\u200b",
+                value="```ansi\n 🔄 行業板塊資金輪動 (Sector Rotation)\n └─ 暫無行業資金輪動數據。\n```",
+                inline=False,
+            )
 
-        embed.add_field(
-            name="🔄 行業板塊資金輪動 (Sector Rotation)",
-            value=_safe_embed_field_value(sector_value, "無數據"),
-            inline=False,
-        )
+    def _add_ai_section(header: str, content: str, icon: str):
+        if not content or content == "暫無分析":
+            embed.add_field(
+                name="\u200b",
+                value=f"```ansi\n {icon} {header}\n └─ 暫無分析\n```",
+                inline=False,
+            )
+            return
+
+        blocks = [b.strip() for b in content.split("\n\n") if b.strip()]
+        transformed_blocks = []
+        total_blocks = len(blocks)
+
+        for b_idx, block in enumerate(blocks):
+            lines = [line_str.strip() for line_str in block.split('\n') if line_str.strip()]
+            formatted_lines = []
+            for l_idx, line in enumerate(lines):
+                line = line.replace("**", "")
+
+                color_prefix = ""
+                reset_suffix = ""
+                if "🚨" in line or "⚠️" in line or icon == "⚠️":
+                    color_prefix = "\u001b[0;31m"
+                    reset_suffix = "\u001b[0m"
+                elif icon == "🛡️":
+                    color_prefix = "\u001b[0;32m"
+                    reset_suffix = "\u001b[0m"
+                elif icon == "📊":
+                    color_prefix = "\u001b[0;36m"
+                    reset_suffix = "\u001b[0m"
+
+                line = re.sub(r"^[\-\*\•\d\.]+\s*", "", line)
+                is_last = (b_idx == total_blocks - 1) and (l_idx == len(lines) - 1)
+                prefix = " └─ " if is_last else " ├─ "
+                formatted_lines.append(f"{prefix}{color_prefix}{line}{reset_suffix}")
+            transformed_blocks.append("\n".join(formatted_lines))
+
+        chunks = _chunk_text_blocks(transformed_blocks, max_len=1000)
+        for i, chunk in enumerate(chunks):
+            chunk_header = (
+                f" {icon} {header} ({i+1}/{len(chunks)})"
+                if len(chunks) > 1
+                else f" {icon} {header}"
+            )
+            embed.add_field(
+                name="\u200b",
+                value=f"```ansi\n{chunk_header}\n{chunk}\n```",
+                inline=False,
+            )
 
     if ai_commentary:
         parsed = _parse_post_market_ai_commentary(ai_commentary)
         if parsed:
             if parsed.get("market"):
-                embed.add_field(
-                    name="📊 AI 多空大盤交叉驗證解讀",
-                    value=_safe_embed_field_value(
-                        parsed["market"],
-                        "暫無分析",
-                    ),
-                    inline=False,
-                )
+                _add_ai_section("AI 多空大盤交叉驗證解讀", parsed["market"], "📊")
             if parsed.get("risk"):
-                embed.add_field(
-                    name="⚠️ AI 潛在陷阱與風險提示",
-                    value=_safe_embed_field_value(
-                        parsed["risk"],
-                        "暫無分析",
-                    ),
-                    inline=False,
-                )
+                _add_ai_section("AI 潛在陷阱與風險提示", parsed["risk"], "⚠️")
             if parsed.get("strategy"):
-                embed.add_field(
-                    name="🛡️ AI 高勝率交易策略推薦",
-                    value=_safe_embed_field_value(
-                        parsed["strategy"],
-                        "暫無分析",
-                    ),
-                    inline=False,
-                )
+                _add_ai_section("AI 高勝率交易策略推薦", parsed["strategy"], "🛡️")
         else:
-            embed.add_field(
-                name="🧠 AI 損益歸因與次日策略點評",
-                value=_safe_embed_field_value(
-                    ai_commentary,
-                    "暫無分析",
-                ),
-                inline=False,
-            )
+            _add_ai_section("AI 損益歸因與次日策略點評", ai_commentary, "🧠")
 
     embed.set_footer(text="🌌 Nexus Seeker • 盤後綜合策略簡報")
     all_embeds = split_embed_by_fields(embed)
@@ -1064,7 +1099,6 @@ def build_post_market_intelligence_embed(
     if len(all_embeds) > 1:
         for idx, emb in enumerate(all_embeds, start=1):
             base_title = emb.title or ""
-            # 移除 split_embed_by_fields 自帶的 "(index/total)" 尾碼
             base_title = re.sub(r"\s*\(\d+/\d+\)$", "", base_title).rstrip()
             emb.title = f"{base_title} (第 {idx}/{len(all_embeds)} 頁)"
 
