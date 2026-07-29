@@ -1,5 +1,3 @@
-from typing import Any
-
 """Discord Cog for order management slash commands.
 
 Refactored: Modal/View UI components moved to cogs/order_modals.py and cogs/order_views.py.
@@ -7,6 +5,7 @@ Business logic moved to services/order_telemetry_service.py.
 This module retains only the Cog class (slash command routing) and backward-compatible re-exports.
 """
 
+from typing import Any
 import discord
 from discord import app_commands
 from discord.ext import commands

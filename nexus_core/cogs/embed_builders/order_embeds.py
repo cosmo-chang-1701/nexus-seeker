@@ -1,5 +1,3 @@
-from typing import Any
-
 """委託單管理、盤中掃描與盤前/盤後報告 Embed 建構函式。
 
 包含：
@@ -17,6 +15,7 @@ from typing import Any
 - build_post_market_intelligence_embed：盤後綜合風險與 AI 策略報告
 """
 
+from typing import Any
 import re
 import discord
 

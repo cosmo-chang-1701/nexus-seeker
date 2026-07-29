@@ -1,5 +1,3 @@
-from typing import Any
-
 """Report-type Discord embed builders for Nexus Seeker.
 
 This module groups all report-oriented embed construction functions, including:
@@ -18,6 +16,7 @@ All embed rendering logic is centralized here; callers should only supply
 pre-assembled data dicts / lists and receive a ready-to-send discord.Embed.
 """
 
+from typing import Any
 import discord
 import logging
 import re

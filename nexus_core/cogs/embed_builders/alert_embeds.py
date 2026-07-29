@@ -1,5 +1,3 @@
-from typing import Any
-
 """Alert and notification Discord embed builders for Nexus Seeker.
 
 This module contains embed-building functions for:
@@ -22,6 +20,7 @@ All functions copy their embed bodies exactly from the canonical embed_builder.p
 source and must not alter any business logic.
 """
 
+from typing import Any
 import discord
 
 from datetime import datetime, timezone

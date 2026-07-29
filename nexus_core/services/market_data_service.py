@@ -1,5 +1,3 @@
-from typing import Any
-
 """
 Finnhub Service — 集中式 Finnhub API client wrapper (Async Optimized)。
 
@@ -10,6 +8,7 @@ Finnhub Service — 集中式 Finnhub API client wrapper (Async Optimized)。
 4. 回傳格式與既有程式碼相容（pandas DataFrame）
 """
 
+from typing import Any
 import asyncio
 import logging
 import time

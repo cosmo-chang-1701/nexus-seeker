@@ -1,5 +1,3 @@
-from typing import Any
-
 """Watchlist 心跳與總覽 Embed 建構函式。
 
 包含：
@@ -8,6 +6,7 @@ from typing import Any
 - create_watchlist_overview_embed：本輪 Watchlist 總覽摘要
 """
 
+from typing import Any
 import discord
 
 from datetime import datetime, timezone, timedelta

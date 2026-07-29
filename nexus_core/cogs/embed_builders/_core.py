@@ -1,11 +1,10 @@
-from typing import Any
-
 """NexusEmbed — 全站統一 Discord Embed 子類別。
 
 負責強制執行一致的調色盤、時間戳記與 Footer 排版。
 所有子模組都從本模組 import `discord.Embed`（已被 NexusEmbed 替換）。
 """
 
+from typing import Any
 import discord
 
 from datetime import datetime, timezone

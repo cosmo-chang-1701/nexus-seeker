@@ -1,5 +1,3 @@
-from typing import Any
-
 """Discord Embed 通用工具函式。
 
 收錄跨多種 Embed 類型共用的 helper，包含：
@@ -11,6 +9,7 @@ from typing import Any
 - 共用欄位 helper (_add_vix_battle_status_field, _add_market_overview_fields…)
 """
 
+from typing import Any
 import re
 import discord
 

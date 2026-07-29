@@ -1,9 +1,8 @@
-from typing import Any
-
 """
 財報日期查詢 — 透過 Finnhub Earnings Calendar API (Async)。
 """
 
+from typing import Any
 import logging
 from datetime import date
 import pandas as pd

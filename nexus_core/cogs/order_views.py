@@ -1,5 +1,3 @@
-from typing import Any
-
 """Discord View and Select UI components for order management.
 
 Extracted from cogs/order_ui.py to isolate interactive UI components
@@ -7,6 +5,7 @@ from business logic (now in services/order_telemetry_service.py)
 and modal definitions (now in cogs/order_modals.py).
 """
 
+from typing import Any
 import asyncio
 import discord
 import logging

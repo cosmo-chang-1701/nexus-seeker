@@ -1,11 +1,10 @@
-from typing import Any
-
 """Discord Modal UI components for order management.
 
 Extracted from cogs/order_ui.py to isolate UI form definitions
 from business logic (now in services/order_telemetry_service.py).
 """
 
+from typing import Any
 import asyncio
 import discord
 import logging
