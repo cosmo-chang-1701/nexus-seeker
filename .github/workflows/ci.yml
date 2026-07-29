@@ -1,0 +1,30 @@
+name: Nexus Seeker CI
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+jobs:
+  test-and-lint:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+    - name: Run Pytest
+      run: |
+        cd nexus_core
+        # Create a dummy .env file for tests if needed
+        cp .env.example .env
+        docker compose run --rm nexus-seeker python -m pytest tests
+
+    - name: Run Mypy (Type Check)
+      run: |
+        cd nexus_core
+        docker compose run --rm nexus-seeker python -m mypy --config-file pyproject.toml .
