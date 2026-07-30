@@ -97,16 +97,16 @@ def classify_uoa_trade(
     # 2. 規則分類 (Midpoint/Spread Matrix)
     midpoint = (trade.bid_price + trade.ask_price) / 2.0
 
-    # 規則 A (🟢 BUY to OPEN / Ask Side)
+    # 規則 A (🟢 買入開倉 / Ask Side)
     if trade.trade_price >= trade.ask_price or (
         trade.trade_price > midpoint and trade.trade_price < trade.ask_price
     ):
-        action = "🟢 BUY to OPEN (Ask)"
-    # 規則 B (🔴 SELL to OPEN / Bid Side)
+        action = "🟢 買入開倉 (BTO - Ask)"
+    # 規則 B (🔴 賣出開倉 / Bid Side)
     elif trade.trade_price <= trade.bid_price or (
         trade.trade_price < midpoint and trade.trade_price > trade.bid_price
     ):
-        action = "🔴 SELL to OPEN (Bid)"
+        action = "🔴 賣出開倉 (STO - Bid)"
     # 規則 C (⚖️ MIDPOINT / Cross Side)
     else:
         action = "⚖️ MIDPOINT (Cross)"
@@ -140,7 +140,7 @@ def classify_uoa_trade(
     if use_moneyness and current_price is not None:
         moneyness = check_uoa_moneyness(is_call, trade.strike_price, current_price)
 
-    if action == "🟢 BUY to OPEN (Ask)":
+    if action == "🟢 買入開倉 (BTO - Ask)":
         if is_call:
             if use_moneyness and moneyness == "OTM_Speculation":
                 intent = (
@@ -186,7 +186,7 @@ def classify_uoa_trade(
                         f" PUT (DTE={dte}, OI={oi_str})，加碼下行防護"
                     )
 
-    elif action == "🔴 SELL to OPEN (Bid)":
+    elif action == "🔴 賣出開倉 (STO - Bid)":
         if is_call:
             intent = (
                 f"🛡️ {ticker_tag}機構在 {strike_str} 開倉賣出 {volume_str} 口 CALL"

@@ -21,7 +21,7 @@ def test_classify_uoa_trade_bto_mu() -> None:
     # reference_date 為 2026-06-05，DTE = 0 <= 3
     result = classify_uoa_trade(trade, reference_date="2026-06-05")
 
-    assert result.action == "🟢 BUY to OPEN (Ask)"
+    assert result.action == "🟢 買入開倉 (BTO - Ask)"
     assert result.ratio_str == "5.16x"
     # Dynamic intent now includes ticker, strike, volume, OI, DTE
     assert "🔥" in result.intent
@@ -47,7 +47,7 @@ def test_classify_uoa_trade_sto_nvda() -> None:
     # reference_date 為 2026-06-05，DTE = 7 > 3
     result = classify_uoa_trade(trade, reference_date="2026-06-05")
 
-    assert result.action == "🔴 SELL to OPEN (Bid)"
+    assert result.action == "🔴 賣出開倉 (STO - Bid)"
     assert result.ratio_str == "6.20x"
     # Dynamic intent now includes ticker, strike, volume, OI
     assert "🛡️" in result.intent
@@ -97,7 +97,7 @@ def test_spacex_intent_and_ascii_table() -> None:
     r2 = classify_uoa_trade(trade2, reference_date="2026-06-05")
     r3 = classify_uoa_trade(trade3, reference_date="2026-06-05")
 
-    assert r2.action == "🟢 BUY to OPEN (Ask)"
+    assert r2.action == "🟢 買入開倉 (BTO - Ask)"
     assert r2.ratio_str == "19.82x"
     # Dynamic intent: no more hardcoded SpaceX string, now uses data binding
     assert "🚀" in r2.intent
@@ -105,7 +105,7 @@ def test_spacex_intent_and_ascii_table() -> None:
     assert "$790.00" in r2.intent
     assert "13,741" in r2.intent
 
-    assert r3.action == "🔴 SELL to OPEN (Bid)"
+    assert r3.action == "🔴 賣出開倉 (STO - Bid)"
     assert "🛡️" in r3.intent
     assert "[NVDA]" in r3.intent
     assert "$1100.00" in r3.intent

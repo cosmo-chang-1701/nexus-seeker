@@ -111,9 +111,9 @@ def create_watchlist_signal_embed(
     show_risk_alignment = hb_exec
     show_telemetry = hb_exec
 
-    sys_status = "TELEMETRY RUNNING"
+    sys_status = "遙測運行中 (TELEMETRY RUNNING)"
     if not is_memory_safe():
-        sys_status = "TELEMETRY RUNNING (⚠️ LOW RAM DEGRADED)"
+        sys_status = "遙測運行中 (TELEMETRY RUNNING - ⚠️ LOW RAM DEGRADED)"
 
     # 🛡️ 提取盤前狀態 (為後續 PCR 與 IV 降級防禦做準備)
     is_premarket = False
@@ -164,7 +164,16 @@ def create_watchlist_signal_embed(
             iv_metrics.current_iv * 100.0 if iv_metrics.current_iv is not None else None
         )
         iv_rank = iv_metrics.iv_rank
-        iv_status = iv_metrics.iv_status.upper() if iv_metrics.iv_status else "NORMAL"
+        iv_status_raw = (
+            iv_metrics.iv_status.upper() if iv_metrics.iv_status else "NORMAL"
+        )
+        iv_status_map = {
+            "LOW": "低 / 便宜",
+            "NORMAL": "正常 / 公允",
+            "HIGH": "高 / 昂貴",
+            "EXTREME": "極高 / 泡沫",
+        }
+        iv_status = iv_status_map.get(iv_status_raw, "正常 / 公允")
         expected_move = iv_metrics.expected_move_weekly
         earnings_loading = getattr(iv_metrics, "has_earnings_event", False)
         macro_loading = getattr(iv_metrics, "has_macro_event", False)

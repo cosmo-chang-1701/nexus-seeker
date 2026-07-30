@@ -1314,7 +1314,9 @@ def test_create_watchlist_signal_embed_non_degraded() -> None:
     assert "GEX PutWall (做市商底牆): $130.00 (當前價差: +15.38%)" in desc
     assert "Vol POC (籌碼控制中心): $145.00" in desc
     assert "Option Skew (期權偏斜): +2.50% (分位點: 60.0%)" in desc
-    assert "Implied Volatility (IV): 35.0% ｜ IV Rank: 25.0% (狀態: NORMAL)" in desc
+    assert (
+        "Implied Volatility (IV): 35.0% ｜ IV Rank: 25.0% (狀態: 正常 / 公允)" in desc
+    )
     assert "本週預期波幅 (Expected Move): ±$5.00" in desc
     assert "Volume PCR (即時情緒): 0.80" in desc
     assert "OI PCR (結構防禦): 0.90" in desc

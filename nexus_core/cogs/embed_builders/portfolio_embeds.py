@@ -65,9 +65,9 @@ def _format_uoa_field(uoa_data: list) -> str:
             ratio_val = float(item.get("ratio", 0.0))
             trade_type = str(item.get("trade_type", "SWEEP")).upper()
             action = (
-                "🟢 BUY to OPEN (Ask)"
+                "🟢 買入開倉 (BTO - Ask)"
                 if trade_type == "SWEEP"
-                else "🔴 SELL to OPEN (Bid)"
+                else "🔴 賣出開倉 (STO - Bid)"
             )
             # 動態意圖生成：綁定真實交易數據
             symbol_tag = f"[{item.get('symbol')}] " if item.get("symbol") else ""
@@ -1143,9 +1143,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         scenario_overlays.append(
             f"⚠️ 流動性警告：當前期權買賣點差高達 {spread_ratio:.1f}%，滑價風險大，請勿掛市價單。"
         )
-    if scenario_overlays:
-        scenario = f"{scenario} " + " ".join(scenario_overlays)
-        scen_color = "\u001b[1;31m" if is_structural_divergence else "\u001b[1;33m"
+    # Removed concatenation to allow structured multi-line formatting below
 
     month_mps = data.get("month_max_pains", [])
     mp_lines = []
@@ -1213,9 +1211,27 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             f" ├─ Volume PCR (即時情緒): {vol_pcr_color}{vol_pcr_str}\u001b[0m ({vol_pcr_color}{volume_state}\u001b[0m)",
             f" └─ OI PCR (結構防禦): {oi_pcr_color}{oi_pcr_str}\u001b[0m ({oi_pcr_color}{oi_state}\u001b[0m)",
             " 結算價操作指引 (Scenario Analysis)",
-            f" └─ 操作指引: {scen_color}{scenario}\u001b[0m",
         ]
     )
+    if not scenario_overlays:
+        target_lines.append(f" └─ 操作指引: {scen_color}{scenario}\u001b[0m")
+    else:
+        target_lines.append(f" ├─ 基本指引: {scen_color}{scenario}\u001b[0m")
+        for i, overlay in enumerate(scenario_overlays):
+            prefix = " ├─" if i < len(scenario_overlays) - 1 else " └─"
+            if "結構性情緒背離" in overlay:
+                label = "結構背離"
+                ov_color = "\u001b[1;31m"
+            elif "IV Rank" in overlay:
+                label = "高波預警"
+                ov_color = "\u001b[1;33m"
+            elif "流動性警告" in overlay:
+                label = "流動風險"
+                ov_color = "\u001b[1;31m"
+            else:
+                label = "附加預警"
+                ov_color = "\u001b[1;33m"
+            target_lines.append(f"{prefix} {label}: {ov_color}{overlay}\u001b[0m")
     kelly_sizing = data.get("kelly_sizing")
     if kelly_sizing:
         contracts = kelly_sizing.suggested_contracts

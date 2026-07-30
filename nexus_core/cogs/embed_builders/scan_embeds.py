@@ -93,9 +93,9 @@ def _format_uoa_field(uoa_data: list) -> str:
             ratio_val = float(item.get("ratio", 0.0))
             trade_type = str(item.get("trade_type", "SWEEP")).upper()
             action = (
-                "🟢 BUY to OPEN (Ask)"
+                "🟢 買入開倉 (BTO - Ask)"
                 if trade_type == "SWEEP"
-                else "🔴 SELL to OPEN (Bid)"
+                else "🔴 賣出開倉 (STO - Bid)"
             )
             # 動態意圖生成：綁定真實交易數據
             symbol_tag = f"[{item.get('symbol')}] " if item.get("symbol") else ""
