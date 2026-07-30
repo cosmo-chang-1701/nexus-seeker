@@ -1174,10 +1174,11 @@ class IntradayScanPipeline:
                                     embed = await self._build_watchlist_heartbeat_embed(
                                         watchlist_eval, ctx, notif_settings
                                     )
-                                    await self.bot.queue_dm(
-                                        uid,
-                                        embed=embed,
-                                    )
+                                    if embed is not None:
+                                        await self.bot.queue_dm(
+                                            uid,
+                                            embed=embed,
+                                        )
                                 else:
                                     logger.info(
                                         f"使用者 {uid} 已關閉所有心跳模組訂閱，略過心跳推送。"

@@ -474,6 +474,7 @@ def test_create_watchlist_signal_embed() -> None:
         sell_rationale="分批減碼 25%",
     )
 
+    assert embed is not None
     assert (
         embed.title == "標的分析中心 2.0: NVDA 每半小時戰場心跳 [數據未更新/降級模式]"
     )
@@ -481,7 +482,6 @@ def test_create_watchlist_signal_embed() -> None:
     assert "物理籌碼牆與邊緣偵測 (Market Footprints)" in embed.description  # type: ignore
     assert "隱含波動率與預期空間 (IV Context)" in embed.description  # type: ignore
     assert "結算與目標 (Target Lock)" in embed.description  # type: ignore
-    assert "異常活動穿透 (Directional UOA - Bid/Ask Track)" in embed.description  # type: ignore
     assert (
         "既有現貨持倉: 120 股 ｜ 平均成本: $150.00 ｜ 當前損益: +10.00%"  # type: ignore
         in embed.description
@@ -526,6 +526,7 @@ def test_create_watchlist_signal_embed_covered_call() -> None:
         sell_rationale="全數出清現貨避險",
     )
 
+    assert embed is not None
     assert (
         embed.title == "標的分析中心 2.0: INTC 每半小時戰場心跳 [數據未更新/降級模式]"
     )
@@ -1304,6 +1305,7 @@ def test_create_watchlist_signal_embed_non_degraded() -> None:
         alert_level="green",
     )
 
+    assert embed is not None
     assert embed.title == "標的分析中心 2.0: AAPL 每半小時戰場心跳"
 
     desc = embed.description or ""

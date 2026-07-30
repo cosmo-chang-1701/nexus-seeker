@@ -85,9 +85,11 @@ def create_watchlist_signal_embed(
     symbol_gex: dict | None = None,
     toggles: dict[str, bool] | None = None,
     symbol_tags: list[str] | None = None,
-) -> discord.Embed:
+) -> discord.Embed | None:
     """建立標的分析中心 2.0 • 戰場心跳快照 (Watchlist Heartbeat) 的 Markdown-ASCII 統一模板。"""
     from services.llm_service import is_memory_safe
+
+    has_meaningful_content = False
 
     taipei_tz = timezone(timedelta(hours=8))
     timestamp_str = datetime.now(taipei_tz).strftime("%Y-%m-%d %H:%M:%S")
@@ -289,8 +291,6 @@ def create_watchlist_signal_embed(
             uoa_table_lines.append(
                 f" {exp:<10} | ${strike_val:<9.2f} | {opt_type:<4} | {action:<21} | +{vol_val:<8,} | {ratio_str:<6} | {intent}"
             )
-    if not uoa_table_lines:
-        uoa_table_lines.append(" (目前未偵測到符合篩選標準的異常期權交易流量)")
 
     # Holding status
     shares_str = f"{int(holding_quantity)}" if holding_quantity is not None else "0"
@@ -356,6 +356,7 @@ def create_watchlist_signal_embed(
     ]
 
     if show_live_price:
+        has_meaningful_content = True
         lines.extend(
             [
                 "",
@@ -366,6 +367,7 @@ def create_watchlist_signal_embed(
         )
 
     if show_market_footprints:
+        has_meaningful_content = True
         lines.extend(
             [
                 "",
@@ -435,6 +437,7 @@ def create_watchlist_signal_embed(
             lines.append(f" └─ [GEX 面板載入失敗: {e}]")
 
     if show_iv_context:
+        has_meaningful_content = True
         lines.extend(
             [
                 "",
@@ -467,6 +470,7 @@ def create_watchlist_signal_embed(
             lines.append(f" └─ 本週預期波幅 (Expected Move): {expected_move_str}")
 
     if show_target_lock:
+        has_meaningful_content = True
         lines.extend(
             [
                 "",
@@ -477,7 +481,8 @@ def create_watchlist_signal_embed(
             ]
         )
 
-    if show_uoa:
+    if show_uoa and uoa_table_lines:
+        has_meaningful_content = True
         lines.extend(
             [
                 "",
@@ -489,6 +494,7 @@ def create_watchlist_signal_embed(
         lines.extend(uoa_table_lines)
 
     if show_risk_alignment:
+        has_meaningful_content = True
         lines.extend(
             [
                 "",
@@ -506,6 +512,9 @@ def create_watchlist_signal_embed(
                 f" └─ 操盤執行指南: {inst_str}",
             ]
         )
+
+    if not has_meaningful_content and not (show_telemetry and telemetry_alignment_note):
+        return None
 
     lines.append("```")
     description = "\n".join(lines)
