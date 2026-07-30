@@ -21,10 +21,10 @@ TRADING_MODULES: Dict[str, Dict[str, Any]] = {
         "title": "🛡️ 部位管理與執行風控",
         "description": "專注於買賣點的動態對齊、持倉防禦與物理狀態管理。",
         "items": {
-            "order_telemetry_alignment_alert": "🌌 待成交委託單實時對齊快照",
+            "order_telemetry_alignment_alert": "🌌 快照：待成交委託單實時對齊",
             "hb_execution_risk": "🛡️ 心跳：操盤指引與委託風控",
             "radar_risk_defenses": "🛡️ 雷達：量化風控與避險屏障",
-            "deadlock_recovery_alert": "🔓 物理死鎖解除與備兌建單指引",
+            "deadlock_recovery_alert": "🔓 警報：物理死鎖解除與備兌建單",
         },
     },
     "macro": {
@@ -32,7 +32,7 @@ TRADING_MODULES: Dict[str, Dict[str, Any]] = {
         "description": "專注於市場水位、Gamma 脆弱性與機構暗池流動性。",
         "items": {
             "radar_macro_edge": "🌍 雷達：總經與微觀結構警戒",
-            "gamma_fragility_alert": "🆘 Gamma 脆弱性警告",
+            "gamma_fragility_alert": "🆘 警報：Gamma 脆弱性與斷層",
             "hb_options_structure": "🧱 心跳：期權結構與波動率",
             "hb_live_price": "🏷️ 心跳：基礎現價與區間",
         },
@@ -43,36 +43,36 @@ TRADING_MODULES: Dict[str, Dict[str, Any]] = {
         "items": {
             "hb_uoa": "🔎 心跳：異常大單穿透 (UOA)",
             "radar_alpha_signals": "🎯 雷達：期權 Alpha 與異常訊號",
-            "ddp_cheap_vol_alert": "🌌 Nexus 戴維斯雙擊預警",
+            "ddp_cheap_vol_alert": "🌌 警報：Nexus 戴維斯雙擊",
         },
     },
     "defense": {
         "title": "🚨 極端風險防禦系統",
         "description": "專注於保護既有獲利與規避毀滅性黑天鵝。",
         "items": {
-            "profit_lock_alert": "🚨 DITM 凸性防護：獲利鎖定已觸發",
-            "option_defense_alert": "🛡️ 期權轉倉防禦與結算警報",
-            "volatility_risk_alert": "🛡️ 重大事件即時防護",
+            "profit_lock_alert": "🚨 警報：DITM 凸性防護與獲利鎖定",
+            "option_defense_alert": "🛡️ 警報：期權轉倉防禦與結算",
+            "volatility_risk_alert": "🛡️ 警報：重大事件即時防護",
         },
     },
     "briefings": {
         "title": "📋 每日綜整戰報",
         "description": "專注於每日復盤與盤前/盤後的結構化梳理。",
         "items": {
-            "pre_market_briefing": "🌅 盤前綜合宏觀與自選股報告",
-            "intraday_decision_scan": "📊 盤中量化掃描 & 避險執行指南",
-            "post_market_intelligence": "📋 盤後綜合風險與 AI 策略報告",
-            "weekly_vtr_report": "📈 虛擬交易室 (VTR) 績效總結",
+            "pre_market_briefing": "🌅 報告：盤前綜合宏觀與自選股",
+            "intraday_decision_scan": "📊 報告：盤中量化掃描與避險執行",
+            "post_market_intelligence": "📋 報告：盤後綜合風險與 AI 策略",
+            "weekly_vtr_report": "📈 報告：虛擬交易室 (VTR) 績效總結",
         },
     },
     "polymarket": {
         "title": "🐳 Polymarket 巨鯨與 AI 監控",
-        "description": "Polymarket 特定門檻與設定",
+        "description": "專注於 Polymarket 巨鯨動向監控與 AI 預測分析。",
         "items": {
-            "polymarket_whale_alert": "🐳 巨鯨交易異動警報",
-            "polymarket_threshold": "🐋 巨鯨監控門檻",
-            "polymarket_use_llm": "🧠 Polymarket AI 分析",
-            "polymarket_slippage": "🌊 Polymarket 滑價門檻",
+            "polymarket_whale_alert": "🐳 警報：巨鯨交易異動",
+            "polymarket_threshold": "🐋 設定：巨鯨監控門檻",
+            "polymarket_use_llm": "🧠 設定：Polymarket AI 分析",
+            "polymarket_slippage": "🌊 設定：Polymarket 滑價門檻",
         },
     },
 }
@@ -243,7 +243,7 @@ class NotificationSettingsView(discord.ui.View):
             whale_alert = settings.get("polymarket_whale_alert", True)
             polymarket_options.append(
                 discord.SelectOption(
-                    label="🐳 巨鯨交易異動警報",
+                    label=module_items["polymarket_whale_alert"],
                     value="polymarket_whale_alert",
                     description=f"目前: {'🟢 開啟' if whale_alert else '🔴 關閉'} | 切換開關"[
                         :100
@@ -252,7 +252,7 @@ class NotificationSettingsView(discord.ui.View):
             )
             polymarket_options.append(
                 discord.SelectOption(
-                    label="🐋 巨鯨監控門檻",
+                    label=module_items["polymarket_threshold"],
                     value="polymarket_threshold",
                     description=f"目前: {'🟢 $' + f'{ctx.polymarket_threshold:,.0f}' if ctx.polymarket_threshold > 0 else '🔴 關閉'} | 設定門檻"[
                         :100
@@ -261,7 +261,7 @@ class NotificationSettingsView(discord.ui.View):
             )
             polymarket_options.append(
                 discord.SelectOption(
-                    label="🧠 Polymarket AI 分析",
+                    label=module_items["polymarket_use_llm"],
                     value="polymarket_use_llm",
                     description=f"目前: {'🟢 開啟' if ctx.polymarket_use_llm else '🔴 關閉'} | 切換開關"[
                         :100
@@ -270,7 +270,7 @@ class NotificationSettingsView(discord.ui.View):
             )
             polymarket_options.append(
                 discord.SelectOption(
-                    label="🌊 Polymarket 滑價門檻",
+                    label=module_items["polymarket_slippage"],
                     value="polymarket_slippage",
                     description=f"目前: {ctx.polymarket_slippage}% | 設定滑價"[:100],
                 )
@@ -325,13 +325,13 @@ class NotificationSettingsView(discord.ui.View):
             current_val = getattr(ctx, key, 0.0)
             if key == "polymarket_threshold":
                 label, _, placeholder = (
-                    "🐋 巨鯨監控門檻",
+                    TRADING_MODULES["polymarket"]["items"]["polymarket_threshold"],
                     "Polymarket 巨鯨監控門檻 (USD, 0=關閉)",
                     "輸入大於等於 0 的金額",
                 )
             else:
                 label, _, placeholder = (
-                    "🌊 Polymarket 滑價門檻",
+                    TRADING_MODULES["polymarket"]["items"]["polymarket_slippage"],
                     "Polymarket 巨鯨判定目標滑價百分比 (0.1% - 10.0%)",
                     "輸入 0.1 - 10.0 之間的百分比",
                 )
@@ -369,15 +369,17 @@ class NotificationSettingsView(discord.ui.View):
             if mod_key == "polymarket":
                 pm_alerts = settings.get("polymarket_whale_alert", True)
                 lines.append(
-                    f"* 🐳 巨鯨交易異動警報: **{'🟢 開啟' if pm_alerts else '🔴 關閉'}**"
+                    f"* {mod_data['items']['polymarket_whale_alert']}: **{'🟢 開啟' if pm_alerts else '🔴 關閉'}**"
                 )
                 lines.append(
-                    f"* 🐋 巨鯨監控門檻金額: **{'🟢 $' + f'{ctx.polymarket_threshold:,.0f}' if ctx.polymarket_threshold > 0 else '🔴 關閉'}**"
+                    f"* {mod_data['items']['polymarket_threshold']}: **{'🟢 $' + f'{ctx.polymarket_threshold:,.0f}' if ctx.polymarket_threshold > 0 else '🔴 關閉'}**"
                 )
                 lines.append(
-                    f"* 🧠 Polymarket AI 深度分析: **{'🟢 開啟' if ctx.polymarket_use_llm else '🔴 關閉'}**"
+                    f"* {mod_data['items']['polymarket_use_llm']}: **{'🟢 開啟' if ctx.polymarket_use_llm else '🔴 關閉'}**"
                 )
-                lines.append(f"* 🌊 巨鯨判定滑價門檻: **`{ctx.polymarket_slippage}%`**")
+                lines.append(
+                    f"* {mod_data['items']['polymarket_slippage']}: **`{ctx.polymarket_slippage}%`**"
+                )
             else:
                 for item_key, item_label in mod_data["items"].items():
                     status = "🟢 開啟" if settings.get(item_key, True) else "🔴 關閉"
