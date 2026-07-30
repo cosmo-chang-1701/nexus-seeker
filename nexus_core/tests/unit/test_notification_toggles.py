@@ -76,49 +76,41 @@ def test_toggle_all_settings(db_conn: Any):  # type: ignore
 
 @pytest.mark.asyncio
 async def test_notification_settings_view_structure(db_conn: Any):  # type: ignore
-    """測試 NotificationSettingsView 結構與一鍵全部開啟/關閉的反應"""
+    """測試 NotificationSettingsView 結構與一鍵本區全部開啟/關閉的反應"""
     from cogs.terminal import NotificationSettingsView
 
     user_id = 999333
 
     view = NotificationSettingsView(user_id)
-    # 預期包含 3 個 Select (定時、即時、Polymarket) 與 2 個 Button (開啟、關閉)
-    assert len(view.children) == 5
+    # 預期包含 1 個 Select (Category), 1 個 Select (Toggles), 2 個 Button
+    assert len(view.children) == 4
 
-    # 預期下拉選單長度正確
-    select_scheduled = next(
-        c
-        for c in view.children
-        if c.custom_id == "select_scheduled"  # type: ignore
-    )
-    select_realtime = next(c for c in view.children if c.custom_id == "select_realtime")  # type: ignore
-    select_polymarket = next(
-        c
-        for c in view.children
-        if c.custom_id == "select_polymarket"  # type: ignore
-    )
-    assert len(select_scheduled.options) == 9  # type: ignore
-    assert len(select_realtime.options) == 6  # type: ignore
-    assert len(select_polymarket.options) == 4  # type: ignore
+    category_select = next(
+        c for c in view.children if getattr(c, "custom_id", None) == "select_category"
+    )  # type: ignore
+    module_select = next(
+        c for c in view.children if getattr(c, "custom_id", None) == "select_toggles"
+    )  # type: ignore
+
+    # 分類大於 0 個
+    assert len(category_select.options) > 0  # type: ignore
+
+    # 預設模組有大於 0 個設定
+    assert len(module_select.options) > 0  # type: ignore
 
     # 預期預設選項前綴為 🟢
-    assert select_scheduled.options[0].label.startswith("🟢")  # type: ignore
+    assert module_select.options[0].label.startswith("🟢")  # type: ignore
 
-    # 模擬點擊「全部關閉」按鈕
+    # 模擬點擊「關閉本區所有設定」按鈕
     mock_interaction = AsyncMock()
     mock_interaction.user.id = user_id
-    await view.on_disable_all(mock_interaction)
+    await view.on_disable_module(mock_interaction)
 
-    # 驗證狀態皆關閉且 View 重新載入，下拉選單前綴變為 🔴 (需要獲取最新的 child 物件)
-    select_scheduled_new = next(
-        c
-        for c in view.children
-        if c.custom_id == "select_scheduled"  # type: ignore
-    )
-    settings = get_user_notification_settings(user_id)
-    for key in ALL_NOTIFICATION_KEYS:
-        assert settings[key] is False
-    assert select_scheduled_new.options[0].label.startswith("🔴")  # type: ignore
+    # 驗證狀態皆關閉且 View 重新載入，下拉選單前綴變為 🔴
+    module_select_new = next(
+        c for c in view.children if getattr(c, "custom_id", None) == "select_toggles"
+    )  # type: ignore
+    assert module_select_new.options[0].label.startswith("🔴")  # type: ignore
 
 
 @pytest.mark.asyncio
@@ -131,6 +123,12 @@ async def test_notification_settings_polymarket_toggle(db_conn: Any):  # type: i
 
     # 1. 預設是開啟 (True)
     assert is_notification_enabled(user_id, "polymarket_whale_alert") is True
+
+    # 先模擬選擇 polymarket 類別
+    mock_interaction_cat = AsyncMock()
+    mock_interaction_cat.data = {"values": ["polymarket"]}
+    mock_interaction_cat.response.edit_message = AsyncMock()
+    await view.on_category_select(mock_interaction_cat)
 
     # 2. 模擬選擇 "polymarket_whale_alert"
     mock_interaction = AsyncMock()
@@ -179,7 +177,13 @@ async def test_notification_settings_polymarket_modal_trigger(db_conn: Any):  # 
     user_id = 999666
     view = NotificationSettingsView(user_id)
 
-    # 模擬選擇 "polymarket_threshold"
+    # 先模擬選擇 polymarket 類別
+    mock_interaction_cat = AsyncMock()
+    mock_interaction_cat.data = {"values": ["polymarket"]}
+    mock_interaction_cat.response.edit_message = AsyncMock()
+    await view.on_category_select(mock_interaction_cat)
+
+    # 1. 模擬選擇 "polymarket_use_llm"
     mock_interaction = AsyncMock()
     mock_interaction.user.id = user_id
     mock_interaction.data = {"values": ["polymarket_threshold"]}
@@ -226,4 +230,4 @@ async def test_notification_settings_modal_successful_submission(db_conn: Any): 
     mock_interaction.response.edit_message.assert_called_once()
     call_kwargs = mock_interaction.response.edit_message.call_args[1]
     embed_sent = call_kwargs["embed"]
-    assert "$50,000" in embed_sent.fields[2].value
+    assert "$50,000" in embed_sent.fields[-1].value

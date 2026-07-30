@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Dict
 import discord
 import logging
 
@@ -16,48 +16,65 @@ logger = logging.getLogger(__name__)
 # 🔔 使用者自訂通知開關 UI (Notification Toggles UI)
 # ============================================================================
 
-SCHEDULED_LABELS = {
-    "hb_live_price": "🏷️ 心跳：基礎現價與區間",
-    "hb_options_structure": "🧱 心跳：期權結構與波動率",
-    "hb_uoa": "🔎 心跳：異常大單穿透 (UOA)",
-    "hb_execution_risk": "🛡️ 心跳：操盤指引與委託風控",
-    "pre_market_briefing": "🌅 Nexus Seeker | 盤前綜合宏觀與自選股報告",
-    "intraday_decision_scan": "📊 Nexus Seeker | 盤中量化掃描 & 避險執行指南",
-    "post_market_intelligence": "📋 Nexus Seeker | 盤後綜合風險與 AI 策略報告",
-    "weekly_vtr_report": "📈 Nexus Seeker | 虛擬交易室 (VTR) 績效總結",
-    "order_telemetry_alignment_alert": "🌌 Nexus Seeker | 待成交委託單實時對齊快照",
-}
-
-REALTIME_LABELS = {
-    "profit_lock_alert": "🚨 DITM 凸性防護：獲利鎖定已觸發",
-    "gamma_fragility_alert": "🆘 Gamma 脆弱性警告",
-    "option_defense_alert": "🛡️ 期權轉倉防禦與結算警報",
-    "ddp_cheap_vol_alert": "🌌 Nexus 戴維斯雙擊預警",
-    "volatility_risk_alert": "🛡️ 【 預警：重大事件即時防護 】",
-    "deadlock_recovery_alert": "🔓 物理死鎖解除與備兌建單指引",
-}
-
-POLYMARKET_SETTINGS_LABELS = {
-    "polymarket_whale_alert": (
-        "🐋 Polymarket 巨鯨意圖與戰報警報",
-        "切換巨鯨交易異動警報開啟/關閉狀態",
-        None,
-    ),
-    "polymarket_threshold": (
-        "🐋 巨鯨監控門檻",
-        "Polymarket 巨鯨監控門檻 (USD, 0=關閉)",
-        "輸入大於等於 0 的金額",
-    ),
-    "polymarket_use_llm": (
-        "🧠 Polymarket AI 分析",
-        "Polymarket 交易是否使用 AI 分析總結",
-        None,
-    ),
-    "polymarket_slippage": (
-        "🌊 Polymarket 滑價門檻",
-        "Polymarket 巨鯨判定目標滑價百分比 (0.1% - 10.0%)",
-        "輸入 0.1 - 10.0 之間的百分比",
-    ),
+TRADING_MODULES: Dict[str, Dict[str, Any]] = {
+    "portfolio": {
+        "title": "🛡️ 部位管理與執行風控",
+        "description": "專注於買賣點的動態對齊、持倉防禦與物理狀態管理。",
+        "items": {
+            "order_telemetry_alignment_alert": "🌌 待成交委託單實時對齊快照",
+            "hb_execution_risk": "🛡️ 心跳：操盤指引與委託風控",
+            "radar_risk_defenses": "🛡️ 雷達：量化風控與避險屏障",
+            "deadlock_recovery_alert": "🔓 物理死鎖解除與備兌建單指引",
+        },
+    },
+    "macro": {
+        "title": "🌍 總經與微觀結構警戒",
+        "description": "專注於市場水位、Gamma 脆弱性與機構暗池流動性。",
+        "items": {
+            "radar_macro_edge": "🌍 雷達：總經與微觀結構警戒",
+            "gamma_fragility_alert": "🆘 Gamma 脆弱性警告",
+            "hb_options_structure": "🧱 心跳：期權結構與波動率",
+            "hb_live_price": "🏷️ 心跳：基礎現價與區間",
+        },
+    },
+    "alpha": {
+        "title": "🎯 Alpha 獵取與異常數據",
+        "description": "專注於發掘高勝率結構與機構異常行為。",
+        "items": {
+            "hb_uoa": "🔎 心跳：異常大單穿透 (UOA)",
+            "radar_alpha_signals": "🎯 雷達：期權 Alpha 與異常訊號",
+            "ddp_cheap_vol_alert": "🌌 Nexus 戴維斯雙擊預警",
+        },
+    },
+    "defense": {
+        "title": "🚨 極端風險防禦系統",
+        "description": "專注於保護既有獲利與規避毀滅性黑天鵝。",
+        "items": {
+            "profit_lock_alert": "🚨 DITM 凸性防護：獲利鎖定已觸發",
+            "option_defense_alert": "🛡️ 期權轉倉防禦與結算警報",
+            "volatility_risk_alert": "🛡️ 重大事件即時防護",
+        },
+    },
+    "briefings": {
+        "title": "📋 每日綜整戰報",
+        "description": "專注於每日復盤與盤前/盤後的結構化梳理。",
+        "items": {
+            "pre_market_briefing": "🌅 盤前綜合宏觀與自選股報告",
+            "intraday_decision_scan": "📊 盤中量化掃描 & 避險執行指南",
+            "post_market_intelligence": "📋 盤後綜合風險與 AI 策略報告",
+            "weekly_vtr_report": "📈 虛擬交易室 (VTR) 績效總結",
+        },
+    },
+    "polymarket": {
+        "title": "🐳 Polymarket 巨鯨與 AI 監控",
+        "description": "Polymarket 特定門檻與設定",
+        "items": {
+            "polymarket_whale_alert": "🐳 巨鯨交易異動警報",
+            "polymarket_threshold": "🐋 巨鯨監控門檻",
+            "polymarket_use_llm": "🧠 Polymarket AI 分析",
+            "polymarket_slippage": "🌊 Polymarket 滑價門檻",
+        },
+    },
 }
 
 
@@ -150,6 +167,7 @@ class NotificationSettingsView(discord.ui.View):
     def __init__(self, user_id: int) -> None:
         super().__init__(timeout=180)
         self.user_id = user_id
+        self.current_module = "portfolio"
         self.refresh_items()
 
     def refresh_items(self) -> None:
@@ -157,126 +175,141 @@ class NotificationSettingsView(discord.ui.View):
         settings = database.get_user_notification_settings(self.user_id)
         ctx = database.get_full_user_context(self.user_id)
 
-        # 1. 定時與掃描背景通知下拉選單
-        scheduled_options = []
-        for key, label in SCHEDULED_LABELS.items():
-            state_emoji = "🟢" if settings.get(key, True) else "🔴"
-            scheduled_options.append(
+        # 1. 模組分類導航選單 (Category Selector)
+        category_options = []
+        for mod_key, mod_data in TRADING_MODULES.items():
+            is_selected = mod_key == self.current_module
+            category_options.append(
                 discord.SelectOption(
-                    label=f"{state_emoji} {label}",
-                    value=key,
-                    description="點擊切換開啟/關閉狀態",
+                    label=mod_data["title"],
+                    value=mod_key,
+                    description=mod_data["description"][:100],
+                    default=is_selected,
                 )
             )
-        scheduled_select = discord.ui.Select(  # type: ignore
-            placeholder="⚙️ 設定 定時與掃描背景通知...",
-            options=scheduled_options,
-            custom_id="select_scheduled",
+
+        category_select = discord.ui.Select(  # type: ignore
+            placeholder="請選擇戰術模組...",
+            options=category_options,
+            custom_id="select_category",
             row=0,
         )
-        scheduled_select.callback = self.on_select_callback  # type: ignore
-        self.add_item(scheduled_select)
+        category_select.callback = self.on_category_select  # type: ignore
+        self.add_item(category_select)
 
-        # 2. 即時風險與事件警報下拉選單
-        realtime_options = []
-        for key, label in REALTIME_LABELS.items():
-            state_emoji = "🟢" if settings.get(key, True) else "🔴"
-            realtime_options.append(
+        # 2. 當前模組的設定開關 (Toggle Select)
+        module_items = TRADING_MODULES[self.current_module]["items"]
+        if self.current_module != "polymarket":
+            toggle_options = []
+            for key, label in module_items.items():
+                state_emoji = "🟢" if settings.get(key, True) else "🔴"
+                toggle_options.append(
+                    discord.SelectOption(
+                        label=f"{state_emoji} {label}",
+                        value=key,
+                        description="點擊切換開啟/關閉狀態",
+                    )
+                )
+            if toggle_options:
+                toggle_select = discord.ui.Select(  # type: ignore
+                    placeholder=f"設定 {TRADING_MODULES[self.current_module]['title']}...",
+                    options=toggle_options,
+                    custom_id="select_toggles",
+                    row=1,
+                )
+                toggle_select.callback = self.on_select_callback  # type: ignore
+                self.add_item(toggle_select)
+
+            # 3. 按鈕 (Enable All / Disable All for current module)
+            btn_enable = discord.ui.Button(  # type: ignore
+                label="⚡ 開啟本區所有設定",
+                style=discord.ButtonStyle.green,
+                custom_id="btn_enable_module",
+                row=2,
+            )
+            btn_enable.callback = self.on_enable_module  # type: ignore
+            self.add_item(btn_enable)
+
+            btn_disable = discord.ui.Button(  # type: ignore
+                label="💤 關閉本區所有設定",
+                style=discord.ButtonStyle.red,
+                custom_id="btn_disable_module",
+                row=2,
+            )
+            btn_disable.callback = self.on_disable_module  # type: ignore
+            self.add_item(btn_disable)
+        else:
+            polymarket_options = []
+            whale_alert = settings.get("polymarket_whale_alert", True)
+            polymarket_options.append(
                 discord.SelectOption(
-                    label=f"{state_emoji} {label}",
-                    value=key,
-                    description="點擊切換開啟/關閉狀態",
+                    label="🐳 巨鯨交易異動警報",
+                    value="polymarket_whale_alert",
+                    description=f"目前: {'🟢 開啟' if whale_alert else '🔴 關閉'} | 切換開關"[
+                        :100
+                    ],
                 )
             )
-        realtime_select = discord.ui.Select(  # type: ignore
-            placeholder="🚨 設定 即時風險與事件警報...",
-            options=realtime_options,
-            custom_id="select_realtime",
-            row=1,
-        )
-        realtime_select.callback = self.on_select_callback  # type: ignore
-        self.add_item(realtime_select)
-
-        # 3. Polymarket 巨鯨與 AI 監控設定下拉選單
-        polymarket_options = []
-
-        # (a) 巨鯨交易異動警報
-        whale_alert_enabled = settings.get("polymarket_whale_alert", True)
-        whale_alert_emoji = "🟢" if whale_alert_enabled else "🔴"
-        polymarket_options.append(
-            discord.SelectOption(
-                label="🐳 巨鯨交易異動警報",
-                value="polymarket_whale_alert",
-                description=f"目前: {whale_alert_emoji} {'開啟' if whale_alert_enabled else '關閉'} | 切換開關狀態"[
-                    :100
-                ],
+            polymarket_options.append(
+                discord.SelectOption(
+                    label="🐋 巨鯨監控門檻",
+                    value="polymarket_threshold",
+                    description=f"目前: {'🟢 $' + f'{ctx.polymarket_threshold:,.0f}' if ctx.polymarket_threshold > 0 else '🔴 關閉'} | 設定門檻"[
+                        :100
+                    ],
+                )
             )
-        )
-
-        # (b) 巨鯨監控門檻
-        threshold_val = ctx.polymarket_threshold
-        threshold_emoji = "🟢" if threshold_val > 0 else "🔴"
-        threshold_display = f"${threshold_val:,.0f}" if threshold_val > 0 else "關閉"
-        polymarket_options.append(
-            discord.SelectOption(
-                label="🐋 巨鯨監控門檻",
-                value="polymarket_threshold",
-                description=f"目前: {threshold_emoji} {threshold_display} | 設定門檻金額"[
-                    :100
-                ],
+            polymarket_options.append(
+                discord.SelectOption(
+                    label="🧠 Polymarket AI 分析",
+                    value="polymarket_use_llm",
+                    description=f"目前: {'🟢 開啟' if ctx.polymarket_use_llm else '🔴 關閉'} | 切換開關"[
+                        :100
+                    ],
+                )
             )
-        )
-
-        # (c) AI 分析
-        use_llm_val = ctx.polymarket_use_llm
-        use_llm_emoji = "🟢" if use_llm_val else "🔴"
-        polymarket_options.append(
-            discord.SelectOption(
-                label="🧠 Polymarket AI 分析",
-                value="polymarket_use_llm",
-                description=f"目前: {use_llm_emoji} {'開啟' if use_llm_val else '關閉'} | 切換開關狀態"[
-                    :100
-                ],
+            polymarket_options.append(
+                discord.SelectOption(
+                    label="🌊 Polymarket 滑價門檻",
+                    value="polymarket_slippage",
+                    description=f"目前: {ctx.polymarket_slippage}% | 設定滑價"[:100],
+                )
             )
-        )
 
-        # (d) 滑價門檻
-        slippage_val = ctx.polymarket_slippage
-        polymarket_options.append(
-            discord.SelectOption(
-                label="🌊 Polymarket 滑價門檻",
-                value="polymarket_slippage",
-                description=f"目前: {slippage_val}% | 設定判定滑價門檻"[:100],
+            pm_select = discord.ui.Select(  # type: ignore
+                placeholder="🐳 設定 Polymarket 巨鯨與 AI 監控...",
+                options=polymarket_options,
+                custom_id="select_polymarket",
+                row=1,
             )
-        )
+            pm_select.callback = self.on_select_callback  # type: ignore
+            self.add_item(pm_select)
 
-        polymarket_select = discord.ui.Select(  # type: ignore
-            placeholder="🐳 設定 Polymarket 巨鯨與 AI 監控...",
-            options=polymarket_options,
-            custom_id="select_polymarket",
-            row=2,
-        )
-        polymarket_select.callback = self.on_select_callback  # type: ignore
-        self.add_item(polymarket_select)
+    async def on_category_select(self, interaction: discord.Interaction) -> Any:
+        if not interaction.data or not isinstance(interaction.data, dict):
+            return
+        select_values = interaction.data.get("values")
+        if not select_values or not isinstance(select_values, list):
+            return
 
-        # 4. 按鈕
-        btn_enable_all = discord.ui.Button(  # type: ignore
-            label="⚡ 全部開啟",
-            style=discord.ButtonStyle.green,
-            custom_id="btn_enable_all",
-            row=3,
-        )
-        btn_enable_all.callback = self.on_enable_all  # type: ignore
-        self.add_item(btn_enable_all)
+        self.current_module = str(select_values[0])
+        self.refresh_items()
+        embed = self.build_embed()
+        await interaction.response.edit_message(embed=embed, view=self)
 
-        btn_disable_all = discord.ui.Button(  # type: ignore
-            label="💤 全部關閉",
-            style=discord.ButtonStyle.red,
-            custom_id="btn_disable_all",
-            row=3,
-        )
-        btn_disable_all.callback = self.on_disable_all  # type: ignore
-        self.add_item(btn_disable_all)
+    async def on_enable_module(self, interaction: discord.Interaction) -> Any:
+        module_items = TRADING_MODULES[self.current_module]["items"]
+        for key in module_items.keys():
+            database.set_user_notification_setting(self.user_id, key, True)
+        self.refresh_items()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def on_disable_module(self, interaction: discord.Interaction) -> Any:
+        module_items = TRADING_MODULES[self.current_module]["items"]
+        for key in module_items.keys():
+            database.set_user_notification_setting(self.user_id, key, False)
+        self.refresh_items()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
     async def on_select_callback(self, interaction: discord.Interaction) -> Any:
         if interaction.data is None or not isinstance(interaction.data, dict):
@@ -288,50 +321,40 @@ class NotificationSettingsView(discord.ui.View):
         key = str(select_values[0])
         ctx = database.get_full_user_context(self.user_id)
 
-        # 1. 處理 Polymarket 的非開關設定 (Modal)
         if key in ["polymarket_threshold", "polymarket_slippage"]:
             current_val = getattr(ctx, key, 0.0)
-            label, desc, placeholder = POLYMARKET_SETTINGS_LABELS[key]
+            if key == "polymarket_threshold":
+                label, _, placeholder = (
+                    "🐋 巨鯨監控門檻",
+                    "Polymarket 巨鯨監控門檻 (USD, 0=關閉)",
+                    "輸入大於等於 0 的金額",
+                )
+            else:
+                label, _, placeholder = (
+                    "🌊 Polymarket 滑價門檻",
+                    "Polymarket 巨鯨判定目標滑價百分比 (0.1% - 10.0%)",
+                    "輸入 0.1 - 10.0 之間的百分比",
+                )
+
             modal = NotificationSettingsModal(
                 user_id=self.user_id,
                 key=key,
                 label=label,
                 current_value=current_val,
-                placeholder=placeholder or "",
+                placeholder=placeholder,
                 view=self,
             )
             await interaction.response.send_modal(modal)
             return
 
-        # 2. 處理 Polymarket AI 分析 (User settings boolean toggle)
-        elif key == "polymarket_use_llm":
-            current_val = getattr(ctx, key, False)
-            new_val = not current_val
-            database.upsert_user_config(self.user_id, **{key: new_val})
-
-            self.refresh_items()
-            embed = self.build_embed()
-            await interaction.response.edit_message(embed=embed, view=self)
-            return
-
-        # 3. 處理一般的通知 ON/OFF 開關
+        if key == "polymarket_use_llm":
+            new_val = not ctx.polymarket_use_llm
+            database.upsert_user_config(self.user_id, polymarket_use_llm=new_val)
         else:
             settings = database.get_user_notification_settings(self.user_id)
-            new_state = not settings.get(key, True)
-            database.set_user_notification_setting(self.user_id, key, new_state)
+            current_val = settings.get(key, True)
+            database.set_user_notification_setting(self.user_id, key, not current_val)
 
-            self.refresh_items()
-            embed = self.build_embed()
-            await interaction.response.edit_message(embed=embed, view=self)
-
-    async def on_enable_all(self, interaction: discord.Interaction) -> Any:
-        database.set_all_user_notification_settings(self.user_id, True)
-        self.refresh_items()
-        embed = self.build_embed()
-        await interaction.response.edit_message(embed=embed, view=self)
-
-    async def on_disable_all(self, interaction: discord.Interaction) -> Any:
-        database.set_all_user_notification_settings(self.user_id, False)
         self.refresh_items()
         embed = self.build_embed()
         await interaction.response.edit_message(embed=embed, view=self)
@@ -340,28 +363,31 @@ class NotificationSettingsView(discord.ui.View):
         settings = database.get_user_notification_settings(self.user_id)
         ctx = database.get_full_user_context(self.user_id)
 
-        scheduled_list = []
-        for key, label in SCHEDULED_LABELS.items():
-            status = "🟢 開啟" if settings.get(key, True) else "🔴 關閉"
-            scheduled_list.append(f"* {label}: **{status}**")
+        module_fields = []
+        for mod_key, mod_data in TRADING_MODULES.items():
+            lines = []
+            if mod_key == "polymarket":
+                pm_alerts = settings.get("polymarket_whale_alert", True)
+                lines.append(
+                    f"* 🐳 巨鯨交易異動警報: **{'🟢 開啟' if pm_alerts else '🔴 關閉'}**"
+                )
+                lines.append(
+                    f"* 🐋 巨鯨監控門檻金額: **{'🟢 $' + f'{ctx.polymarket_threshold:,.0f}' if ctx.polymarket_threshold > 0 else '🔴 關閉'}**"
+                )
+                lines.append(
+                    f"* 🧠 Polymarket AI 深度分析: **{'🟢 開啟' if ctx.polymarket_use_llm else '🔴 關閉'}**"
+                )
+                lines.append(f"* 🌊 巨鯨判定滑價門檻: **`{ctx.polymarket_slippage}%`**")
+            else:
+                for item_key, item_label in mod_data["items"].items():
+                    status = "🟢 開啟" if settings.get(item_key, True) else "🔴 關閉"
+                    lines.append(f"* {item_label}: **{status}**")
 
-        realtime_list = []
-        for key, label in REALTIME_LABELS.items():
-            status = "🟢 開啟" if settings.get(key, True) else "🔴 關閉"
-            realtime_list.append(f"* {label}: **{status}**")
+            # Show a marker for current module
+            marker = "🔹 " if mod_key == self.current_module else ""
+            module_fields.append((f"{marker}{mod_data['title']}", "\n".join(lines)))
 
-        polymarket_list = [
-            f"* 🐳 巨鯨交易異動警報: **{'🟢 開啟' if settings.get('polymarket_whale_alert', True) else '🔴 關閉'}**",
-            f"* 🐋 巨鯨監控門檻金額: **{'🟢 $' + f'{ctx.polymarket_threshold:,.0f}' if ctx.polymarket_threshold > 0 else '🔴 關閉'}**",
-            f"* 🧠 Polymarket AI 深度分析: **{'🟢 開啟' if ctx.polymarket_use_llm else '🔴 關閉'}**",
-            f"* 🌊 巨鯨判定滑價門檻: **`{ctx.polymarket_slippage}%`**",
-        ]
-
-        return create_notification_settings_embed(
-            scheduled_list=scheduled_list,
-            realtime_list=realtime_list,
-            polymarket_list=polymarket_list,
-        )
+        return create_notification_settings_embed(module_fields)
 
 
 # ============================================================================

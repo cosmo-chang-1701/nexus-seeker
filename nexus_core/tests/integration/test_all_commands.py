@@ -68,6 +68,18 @@ async def test_all_commands_structure(  # type: ignore
         assert mock_interaction.followup.send.called
     mock_interaction.followup.send.reset_mock()
 
+    await terminal.notif_settings.callback(terminal, mock_interaction)  # type: ignore
+    assert mock_interaction.response.defer.called
+    assert mock_interaction.followup.send.called
+    kwargs = mock_interaction.followup.send.call_args.kwargs
+    assert "embed" in kwargs
+    assert "view" in kwargs
+    from cogs.settings_ui import NotificationSettingsView
+
+    assert isinstance(kwargs["view"], NotificationSettingsView)
+    mock_interaction.response.defer.reset_mock()
+    mock_interaction.followup.send.reset_mock()
+
     # --- Sentiment Commands ---
     with patch(
         "market_analysis.sentiment_engine.SentimentEngine.calculate_skew",

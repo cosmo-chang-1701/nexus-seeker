@@ -20,9 +20,6 @@ from cogs.embed_builder import (
 )
 from database.user_settings import get_full_user_context
 from cogs.settings_ui import (
-    SCHEDULED_LABELS,  # noqa: F401
-    REALTIME_LABELS,  # noqa: F401
-    POLYMARKET_SETTINGS_LABELS,  # noqa: F401
     SETTINGS_LABELS,  # noqa: F401
     NotificationSettingsModal,  # noqa: F401
     NotificationSettingsView,  # noqa: F401

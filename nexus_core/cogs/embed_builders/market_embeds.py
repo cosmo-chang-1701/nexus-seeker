@@ -293,6 +293,17 @@ def build_radar_scan_embed(
     建構持倉/掛單/期權標的的批次掃描量化與情緒彙總 Embed 列表。
     為防止 Discord embed description 超過 4096 個字元限制，每頁最多顯示 15 個標的。
     """
+    try:
+        from database.notifications import get_user_notification_settings
+
+        settings = get_user_notification_settings(user_id)
+    except Exception:
+        settings = {}
+
+    show_macro = settings.get("radar_macro_edge", True)
+    show_alpha = settings.get("radar_alpha_signals", True)
+    show_defense = settings.get("radar_risk_defenses", True)
+
     title_map = {
         "HOLDINGS": "現貨持倉批次量化雷達 (Holdings)",
         "ORDERS": "待成交掛單批次量化雷達 (Pending Orders)",
@@ -337,7 +348,8 @@ def build_radar_scan_embed(
         # 讀取全域快取指標 (TED Spread & GEX Flip & Darkpool DIX)
         macro_ansi_header = []
         try:
-            from database.cache import get_kv_cache
+            if show_macro:
+                from database.cache import get_kv_cache
 
             gex_flip = get_kv_cache("macro_spy_gamma_flip")
             ted_spread = get_kv_cache("macro_ted_spread")
@@ -823,6 +835,25 @@ def build_radar_scan_embed(
         ansi_table += "指標: SQZ 🟢多頭動能/🔴空頭動能。MOM 顯示數值代表處於擠壓蓄力期，需防突破或殺跌。\n```"
 
         embed.description = ansi_table
+
+        if not show_alpha:
+            insights = [
+                msg
+                for msg in insights
+                if "🚀" not in msg
+                and "✨" not in msg
+                and "⏱️" not in msg
+                and "UOA" not in msg
+            ]
+        if not show_defense:
+            insights = [
+                msg
+                for msg in insights
+                if "🚨" not in msg
+                and "🛡️" not in msg
+                and "⚠️" not in msg
+                and "🆘" not in msg
+            ]
 
         if insights:
             embed.add_field(

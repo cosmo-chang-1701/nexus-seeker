@@ -12,32 +12,19 @@ import discord
 from datetime import datetime, timezone
 
 
-def create_notification_settings_embed(
-    scheduled_list: list, realtime_list: list, polymarket_list: list
-) -> discord.Embed:
+def create_notification_settings_embed(module_fields: list) -> discord.Embed:
     """建立自訂通知設定偏好中心 Embed"""
     embed = discord.Embed(
-        title="🌌 Nexus Seeker ｜ 通知偏好設定中心",
-        description="請使用下方下拉選單點擊要切換的項目，或使用一鍵按鈕管理所有通知。\n🟢 代表開啟，🔴 代表關閉。",
+        title="🌌 Nexus Seeker ｜ 戰術儀表板與通知偏好",
+        description="請使用下方「戰術模組」選單切換分類，並管理個別模組內的開關。\n🟢 代表開啟，🔴 代表關閉。",
         color=discord.Color.dark_magenta(),
         timestamp=datetime.now(timezone.utc),
     )
-    embed.add_field(
-        name="📅 定時與掃描背景通知 (Scheduled & Scan)",
-        value="\n".join(scheduled_list),
-        inline=False,
-    )
-    embed.add_field(
-        name="⚡ 即時風險與事件警報 (Real-time & Events)",
-        value="\n".join(realtime_list),
-        inline=False,
-    )
-    embed.add_field(
-        name="🐳 Polymarket 巨鯨與 AI 監控 (Polymarket Settings)",
-        value="\n".join(polymarket_list),
-        inline=False,
-    )
-    embed.set_footer(text="Quantitative Preferences | Ephemeral Configuration")
+    for name, value in module_fields:
+        if value.strip():
+            embed.add_field(name=name, value=value, inline=False)
+
+    embed.set_footer(text="Quantitative Preferences | Tactical Dashboard")
     return embed
 
 
