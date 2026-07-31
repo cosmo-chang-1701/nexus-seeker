@@ -816,8 +816,8 @@ def build_post_market_intelligence_embed(
             [
                 "",
                 " 🏁 財務生存跑道 (Financial Runway)",
-                f" ├─ 預估剩餘天數: {runway_text}",
-                " └─ 計算基準: 基於現有現金儲備與 Theta 收益",
+                f" • 預估剩餘天數: {runway_text}",
+                " • 計算基準: 基於現有現金儲備與 Theta 收益",
             ]
         )
 
@@ -881,22 +881,13 @@ def build_post_market_intelligence_embed(
         credit_cash_clean = credit_cash_val.replace("`", "").replace("**", "").strip()
         pnl_val_clean = pnl_val_str.replace("`", "").replace("**", "").strip()
 
-        pnl_color = ""
-        pnl_reset = "\u001b[0m"
-        if "🟢" in pnl_val_clean or "+" in pnl_val_clean:
-            pnl_color = "\u001b[0;32m"
-        elif "🚨" in pnl_val_clean or "🔴" in pnl_val_clean or "-" in pnl_val_clean:
-            pnl_color = "\u001b[0;31m"
-        else:
-            pnl_reset = ""
-
         desc_lines.extend(
             [
                 "",
                 " 💰 資金與實質暴露 (Financial Summary)",
-                f" ├─ 實質暴露 (Debit Cost): {debit_cost_clean}",
-                f" ├─ 收取權利金 (Credit Cash): {credit_cash_clean}",
-                f" └─ 未實現損益 (Unrealized PnL): {pnl_color}{pnl_val_clean}{pnl_reset}",
+                f" • 實質暴露 (Debit Cost): {debit_cost_clean}",
+                f" • 收取權利金 (Credit Cash): {credit_cash_clean}",
+                f" • 未實現損益 (Unrealized PnL): {pnl_val_clean}",
             ]
         )
 
@@ -923,12 +914,7 @@ def build_post_market_intelligence_embed(
 
             ansi_lines = [f" {heading_colored}"]
             for idx, dl in enumerate(detail_lines):
-                prefix = " ├─ " if idx < len(detail_lines) - 1 else " └─ "
-                if "損益：" in dl:
-                    if "🟢" in dl or "+" in dl:
-                        dl = f"\u001b[0;32m{dl}\u001b[0m"
-                    elif "🚨" in dl or "🔴" in dl or "-" in dl:
-                        dl = f"\u001b[0;31m{dl}\u001b[0m"
+                prefix = " • "
                 ansi_lines.append(f"{prefix}{dl}")
             transformed_blocks.append("\n".join(ansi_lines))
 
@@ -945,7 +931,7 @@ def build_post_market_intelligence_embed(
     else:
         embed.add_field(
             name="\u200b",
-            value="```ansi\n 📊 投資組合收盤持倉明細 (Positions)\n └─ 目前無持倉部位。\n```",
+            value="```ansi\n 📊 投資組合收盤持倉明細 (Positions)\n • 目前無持倉部位。\n```",
             inline=False,
         )
 
@@ -960,11 +946,7 @@ def build_post_market_intelligence_embed(
         for idx, line in enumerate(cleaned_macro):
             clean_line = re.sub(r"^[\-\*\•\s]+", "", line).strip()
             clean_line = clean_line.replace("`", "").replace("*", "")
-            prefix = " ├─ " if idx < len(cleaned_macro) - 1 else " └─ "
-            if "Beta-Weighted Delta" in clean_line or "曝險" in clean_line:
-                clean_line = f"\u001b[0;33m{clean_line}\u001b[0m"
-            elif "警告" in clean_line or "危險" in clean_line or "🚨" in clean_line:
-                clean_line = f"\u001b[0;31m{clean_line}\u001b[0m"
+            prefix = " • "
             formatted_macro_lines.append(f"{prefix}{clean_line}")
         macro_content = "\n".join(formatted_macro_lines)
 
@@ -981,7 +963,7 @@ def build_post_market_intelligence_embed(
     else:
         embed.add_field(
             name="\u200b",
-            value="```ansi\n 🌐 投資組合收盤宏觀風險 (Macro Risks)\n └─ 目前無宏觀風險數據。\n```",
+            value="```ansi\n 🌐 投資組合收盤宏觀風險 (Macro Risks)\n • 目前無宏觀風險數據。\n```",
             inline=False,
         )
 
@@ -1002,17 +984,9 @@ def build_post_market_intelligence_embed(
                 uoa_count = int(item.get("uoa_count", 0))
 
                 change_emoji = "🟢" if change > 0 else "🚨" if change < 0 else "⚖️"
-                color_code = (
-                    "\u001b[0;32m"
-                    if change > 0
-                    else "\u001b[0;31m"
-                    if change < 0
-                    else "\u001b[0;37m"
-                )
-                reset_code = "\u001b[0m"
-                prefix = " ├─ " if idx < len(sorted_sectors) - 1 else " └─ "
+                prefix = " • "
                 sector_content_lines.append(
-                    f"{prefix}{symbol} ({name})：{color_code}{change_emoji} {change:+.2f}%{reset_code} ｜ 量比 {rel_vol:.2f}x ｜ Skew {skew:+.1f} ｜ UOA {uoa_count}"
+                    f"{prefix}{symbol} ({name})：{change_emoji} {change:+.2f}% ｜ 量比 {rel_vol:.2f}x ｜ Skew {skew:+.1f} ｜ UOA {uoa_count}"
                 )
             sector_content = "\n".join(sector_content_lines)
             sector_chunks = _chunk_text_blocks([sector_content], max_len=1000)
@@ -1028,7 +1002,7 @@ def build_post_market_intelligence_embed(
         else:
             embed.add_field(
                 name="\u200b",
-                value="```ansi\n 🔄 行業板塊資金輪動 (Sector Rotation)\n └─ 暫無行業資金輪動數據。\n```",
+                value="```ansi\n 🔄 行業板塊資金輪動 (Sector Rotation)\n • 暫無行業資金輪動數據。\n```",
                 inline=False,
             )
 
@@ -1036,14 +1010,13 @@ def build_post_market_intelligence_embed(
         if not content or content == "暫無分析":
             embed.add_field(
                 name="\u200b",
-                value=f"```ansi\n {icon} {header}\n └─ 暫無分析\n```",
+                value=f"```ansi\n {icon} {header}\n • 暫無分析\n```",
                 inline=False,
             )
             return
 
         blocks = [b.strip() for b in content.split("\n\n") if b.strip()]
         transformed_blocks = []
-        total_blocks = len(blocks)
 
         for b_idx, block in enumerate(blocks):
             lines = [
@@ -1053,22 +1026,9 @@ def build_post_market_intelligence_embed(
             for l_idx, line in enumerate(lines):
                 line = line.replace("**", "")
 
-                color_prefix = ""
-                reset_suffix = ""
-                if "🚨" in line or "⚠️" in line or icon == "⚠️":
-                    color_prefix = "\u001b[0;31m"
-                    reset_suffix = "\u001b[0m"
-                elif icon == "🛡️":
-                    color_prefix = "\u001b[0;32m"
-                    reset_suffix = "\u001b[0m"
-                elif icon == "📊":
-                    color_prefix = "\u001b[0;36m"
-                    reset_suffix = "\u001b[0m"
-
                 line = re.sub(r"^[\-\*\•\d\.]+\s*", "", line)
-                is_last = (b_idx == total_blocks - 1) and (l_idx == len(lines) - 1)
-                prefix = " └─ " if is_last else " ├─ "
-                formatted_lines.append(f"{prefix}{color_prefix}{line}{reset_suffix}")
+                prefix = " • "
+                formatted_lines.append(f"{prefix}{line}")
             transformed_blocks.append("\n".join(formatted_lines))
 
         chunks = _chunk_text_blocks(transformed_blocks, max_len=1000)
