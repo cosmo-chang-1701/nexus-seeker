@@ -507,7 +507,8 @@ The platform features an automated **Dynamic Rollover Engine** (`market_analysis
 4. **Leverage & Margin Defense (槓桿與維持率防禦)**: Monitors macro VIX conditions and account margin levels. If a structural washout is imminent, automatically sends a Buy-To-Close (BTC) or Sell-To-Close (STC) signal for high-beta assets to release margin.
 
 ### Integration
-- **Hybrid Triage Strategy**: Heavy LLM/Edge tasks (Scenario 1) run during pre/post-market phases in `AnalystAgent`. Lightweight rule-based tasks (Scenarios 2, 3, 4) execute during the intraday 30-minute `monitor_real_portfolio_task` to ensure zero API blocking.
+- **Manual LLM Trigger (Scenario 1)**: Due to heavy memory and API overhead, Fundamental Thesis evaluation is NOT scheduled. It is strictly triggered manually by the user via the `/verify_thesis <symbol> <news_context>` Discord slash command. This ensures 1GB VPS stability and puts the analyst directly in control of invoking the LLM SDK.
+- **Lightweight Triage Strategy (Scenarios 2, 3, 4)**: Lightweight rule-based tasks execute during the intraday 30-minute `monitor_real_portfolio_task` to ensure zero API blocking.
 - **Discord UI**: All rollover actions generate a stylized embed (`create_dynamic_rollover_embed`) packed with terminal execution guidelines, highlighting Net Debit/Credit types and strict buy/sell directions (e.g., BTC for short puts).
 - **Toggle Settings**: Users can opt out via `/notif_settings` under the Defense module (`rollover_rebalance_alert`).
 

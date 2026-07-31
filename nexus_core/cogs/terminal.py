@@ -1321,6 +1321,56 @@ class TerminalCog(commands.Cog):
         embed = view.build_embed()
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
+    @app_commands.command(
+        name="verify_thesis",
+        description="[動態轉倉引擎] 手動驗證基本面假設是否破滅 (LLM)",
+    )
+    @app_commands.describe(
+        symbol="欲驗證之標的代號 (例如 AMD)",
+        news_context="最新的重大新聞或法說會關鍵摘要",
+    )
+    async def verify_thesis(
+        self, interaction: discord.Interaction, symbol: str, news_context: str
+    ) -> Any:
+        """手動觸發動態轉倉：情境 1 (原型假設破滅)"""
+        await interaction.response.defer(ephemeral=False)
+        from market_analysis.dynamic_rollover import DynamicRolloverEngine
+        from cogs.embed_builders.rollover_embeds import (
+            create_dynamic_rollover_embed,
+            RolloverActionView,
+        )
+
+        engine = DynamicRolloverEngine()
+        result = await engine.evaluate_fundamental_thesis(symbol, news_context)
+
+        if not result:
+            await interaction.followup.send(
+                "⚠️ 記憶體防禦機制觸發 (RAM > 85%)，或 LLM 呼叫失敗，已中止驗證。"
+            )
+            return
+
+        if result.is_broken:
+            embed = create_dynamic_rollover_embed(
+                rollover_type="原型假設破滅",
+                sell_symbol=symbol.upper(),
+                sell_ratio=1.0,
+                buy_symbol="VOO",
+                reason=result.reasoning,
+                suggested_strategy="Buy Shares (防禦避風港)",
+                suggested_price="Market",
+                strike="N/A",
+                expiry="N/A",
+                direction="BTO",
+            )
+            view = RolloverActionView(target_symbol=symbol.upper())
+            await interaction.followup.send(embed=embed, view=view)
+        else:
+            await interaction.followup.send(
+                f"✅ **{symbol.upper()} 基本面驗證通過**\n"
+                f"護城河評估結果：依然穩固。無需轉倉。\n\n"
+                f"> {result.reasoning}"
+            )
+
 
 async def setup(bot: Any):  # type: ignore
     await bot.add_cog(TerminalCog(bot))
