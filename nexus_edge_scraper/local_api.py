@@ -1036,29 +1036,74 @@ async def scrape_macro_calendar(year: int, month: int, high_impact_only: bool = 
 @app.get("/api/v1/scrape/fundamental/{symbol}")
 async def scrape_fundamental_text(symbol: str):
     """
-    獲取標的最新財報或法說會重點文本。
-    (此處為模擬爬蟲，實務上可串接如 SeekingAlpha 或透過 Playwright 爬取)
+    獲取標的最新新聞與重點文本 (Yahoo Finance)
     """
-
     symbol_clean = symbol.upper().replace("$", "")
+    url = f"https://finance.yahoo.com/quote/{symbol_clean}/news/"
 
-    # 針對幾個大型權值股給予假造文本以滿足 Scenario 1 測試，其餘則隨機回傳
-    mock_transcripts = {
-        "AMD": "AI PC 需求展望不如預期，資料中心營收雖成長但面臨激烈競爭，成長護城河出現流失跡象。",
-        "NVDA": "資料中心晶片供不應求，下一代架構毛利率突破預期，成長護城河堅若磐石。",
-        "PLTR": "政府訂單成長放緩，商業部門增長雖符合預期但估值過高，短期缺乏新動能。",
-        "SMCI": "液冷伺服器訂單大爆發，預期下一季營收將倍增，具備強烈突破條件。",
-    }
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"]
+        )
+        try:
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+                java_script_enabled=False,
+            )
 
-    text = mock_transcripts.get(symbol_clean)
-    if not text:
-        text = "本季財報表現符合市場預期，毛利率微幅上升，並未出現重大基本面改變。"
+            async def safe_route(route):
+                try:
+                    if route.request.resource_type in [
+                        "image",
+                        "stylesheet",
+                        "font",
+                        "media",
+                    ]:
+                        await route.abort()
+                    else:
+                        await route.continue_()
+                except Exception:
+                    pass
 
-    return {
-        "status": "success",
-        "data": {
-            "symbol": symbol_clean,
-            "text": text,
-            "source": "mock_fundamental_scraper",
-        },
-    }
+            await context.route("**/*", safe_route)
+
+            page = await context.new_page()
+            try:
+                await page.goto(url, wait_until="domcontentloaded", timeout=15000)
+                await page.wait_for_timeout(2000)
+                html_content = await page.content()
+            except PlaywrightTimeoutError:
+                logger.warning(f"[{symbol_clean}] Yahoo Finance timeout")
+                return {"status": "error", "data": "Scrape timeout"}
+            finally:
+                await context.unroute_all(behavior="ignoreErrors")
+                await page.close()
+
+            soup = BeautifulSoup(html_content, "lxml")
+
+            text_content = ""
+            for el in soup.find_all(["h3", "p"]):
+                text = el.get_text(strip=True)
+                # Ignore very short nav texts and filter out generic error messages
+                if len(text) > 20 and "Oops, something went wrong" not in text:
+                    text_content += text + "\\n"
+
+            # Cap the text length to avoid token explosion (e.g. 5000 characters)
+            final_text = text_content[:5000]
+
+            if not final_text:
+                final_text = "無法獲取最新基本面新聞或標的不存在。"
+
+            return {
+                "status": "success",
+                "data": {
+                    "symbol": symbol_clean,
+                    "text": final_text,
+                    "source": "yahoo_finance_playwright",
+                },
+            }
+        except Exception as e:
+            logger.error(f"Playwright fundamental scrape failed: {e}")
+            return {"status": "error", "data": str(e)}
+        finally:
+            await browser.close()
