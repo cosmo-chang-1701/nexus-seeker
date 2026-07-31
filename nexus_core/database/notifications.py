@@ -113,6 +113,7 @@ ALL_NOTIFICATION_KEYS = [
     "option_defense_alert",
     "ddp_cheap_vol_alert",
     "volatility_risk_alert",
+    "rollover_rebalance_alert",
     "polymarket_whale_alert",
     "deadlock_recovery_alert",
     # 自選批次量化雷達 (Batch Radar)

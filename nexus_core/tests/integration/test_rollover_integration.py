@@ -1,0 +1,70 @@
+import pytest
+from market_analysis.dynamic_rollover import DynamicRolloverEngine
+import discord
+from cogs.embed_builders.rollover_embeds import (
+    create_dynamic_rollover_embed,
+    RolloverActionView,
+)
+
+
+@pytest.mark.asyncio
+async def test_integration_rollover_embed_generation() -> None:
+    """
+    Test that the output of DynamicRolloverEngine can correctly be pipelined
+    into the Discord Embed builder (Scenario 3: Rebalancing).
+    """
+    engine = DynamicRolloverEngine()
+
+    # 1. Simulate DB query returning portfolio
+    portfolio = [
+        {
+            "symbol": "TSLA",
+            "asset_class": "SATELLITE",
+            "current_value": 6000.0,
+            "target_allocation_pct": 0.15,
+            "max_allocation_pct": 0.25,
+        },
+        {
+            "symbol": "VOO",
+            "asset_class": "CORE",
+            "current_value": 4000.0,
+            "target_allocation_pct": 0.85,
+            "max_allocation_pct": 1.0,
+        },
+    ]
+    total_val = 10000.0
+
+    # 2. Engine processing
+    instructions = engine.check_satellite_rebalancing(portfolio, total_val)
+
+    assert len(instructions) == 1
+    ins = instructions[0]
+
+    assert ins["symbol"] == "TSLA"
+    assert ins["sell_ratio"] == 0.75  # (0.6 - 0.15)=0.45, 0.45*10k=4500, 4500/6000=0.75
+
+    # 3. Embed building
+    embed = create_dynamic_rollover_embed(
+        rollover_type="再平衡 (Rebalancing)",
+        sell_symbol=ins["symbol"],
+        sell_ratio=ins["sell_ratio"],
+        buy_symbol=ins["target_core"],
+        reason=ins["reason"],
+        suggested_strategy="Buy Shares",
+        suggested_price="Market",
+        strike="N/A",
+        expiry="N/A",
+        direction="BTO",
+    )
+
+    assert isinstance(embed, discord.Embed)
+    assert embed.title == "🔄 動態轉倉指令: 再平衡 (Rebalancing)"
+    assert len(embed.fields) == 4
+    assert "TSLA" in str(embed.fields[1].value)
+    assert "VOO" in str(embed.fields[2].value)
+
+    # 4. View initialization
+    view = RolloverActionView(target_symbol=ins["symbol"])
+    assert len(view.children) == 2
+    assert getattr(view.children[0], "label", None) == "執行試算"
+    assert getattr(view.children[1], "label", None) == "忽略"

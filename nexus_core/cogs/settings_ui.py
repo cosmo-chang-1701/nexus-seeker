@@ -51,6 +51,7 @@ TRADING_MODULES: Dict[str, Dict[str, Any]] = {
         "items": {
             "profit_lock_alert": "🚨 警報：DITM 凸性防護與獲利鎖定",
             "option_defense_alert": "🛡️ 警報：期權轉倉防禦與結算",
+            "rollover_rebalance_alert": "🔄 警報：動態轉倉與再平衡防禦",
             "volatility_risk_alert": "🛡️ 警報：重大事件即時防護",
         },
     },

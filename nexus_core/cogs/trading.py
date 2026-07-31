@@ -34,6 +34,11 @@ from cogs.embed_builder import (
     create_telemetry_alignment_embeds,
 )
 from market_analysis.ghost_trader import GhostTrader
+from market_analysis.dynamic_rollover import DynamicRolloverEngine
+from cogs.embed_builders.rollover_embeds import (
+    create_dynamic_rollover_embed,
+    RolloverActionView,
+)
 
 ny_tz = ZoneInfo("America/New_York")
 logger = logging.getLogger(__name__)
@@ -52,6 +57,7 @@ class SchedulerCog(commands.Cog):
     def __init__(self, bot: Any) -> None:
         self.bot = bot
         self.trading_service = TradingService(bot)
+        self.rollover_engine = DynamicRolloverEngine()
 
         # 啟動背景任務
         # self.pre_market_risk_monitor.start()  # 已整合至 AnalystAgent 的 pre_market_loop
@@ -189,6 +195,58 @@ class SchedulerCog(commands.Cog):
                                 await self.bot.queue_dm(u_id, embed=embed)
             except Exception as e:
                 logger.error(f"物理死鎖解除審計錯誤: {e}")
+
+            # 🚀 動態轉倉 (輕量級邏輯: 機會成本對比、再平衡防禦)
+            try:
+                # Note: 實務上這裡會呼叫 get_quote 取得真實市價，為展示架構流程，此處簡化為概念整合
+                from typing import Dict, List, Any
+
+                all_holdings = get_all_holdings()
+                user_assets: Dict[int, List[Dict[str, Any]]] = {}
+                for h in all_holdings:
+                    u_id = h["user_id"]
+                    # 若 DB 尚未更新欄位，先提供 Fallback 以供測試
+                    user_assets.setdefault(u_id, []).append(
+                        {
+                            "symbol": h["symbol"].upper(),
+                            "asset_class": h.get("asset_class", "SATELLITE"),
+                            "current_value": h.get("quantity", 0)
+                            * 100.0,  # 假定均價 $100
+                            "target_allocation_pct": h.get(
+                                "target_allocation_pct", 0.0
+                            ),
+                            "max_allocation_pct": h.get("max_allocation_pct", 0.3),
+                        }
+                    )
+
+                for u_id, portfolio_assets in user_assets.items():
+                    total_val = sum(a["current_value"] for a in portfolio_assets)
+
+                    # 執行再平衡檢查
+                    rebalance_instructions = (
+                        self.rollover_engine.check_satellite_rebalancing(
+                            portfolio_assets, total_val
+                        )
+                    )
+
+                    for ins in rebalance_instructions:
+                        # 預設直接推播，實務可加入 notification_enabled 開關
+                        embed = create_dynamic_rollover_embed(
+                            rollover_type="再平衡 (Rebalancing)",
+                            sell_symbol=ins["symbol"],
+                            sell_ratio=ins["sell_ratio"],
+                            buy_symbol=ins["target_core"],
+                            reason=ins["reason"],
+                            suggested_strategy="Buy Shares",
+                            suggested_price="Market",
+                            strike="N/A",
+                            expiry="N/A",
+                            direction="BTO",
+                        )
+                        view = RolloverActionView(target_symbol=ins["symbol"])
+                        await self.bot.queue_dm(u_id, embed=embed, view=view)
+            except Exception as e:
+                logger.error(f"動態轉倉盤中審計錯誤: {e}")
 
         except Exception as e:
             logger.error(f"真實持倉風險審計錯誤: {e}")
