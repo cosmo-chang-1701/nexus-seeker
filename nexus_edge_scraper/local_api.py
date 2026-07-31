@@ -8,6 +8,7 @@ import logging
 from playwright_stealth import Stealth
 import httpx
 import warnings
+import re
 
 # Suppress BS4 XML warning for SEC filings
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
@@ -1104,9 +1105,14 @@ async def scrape_fundamental_text(symbol: str):
             doc_resp = await client.get(doc_url, timeout=15.0)
             doc_resp.raise_for_status()
 
-            # 4. 抽取純文字並限制長度
+            # 4. 抽取純文字並過濾無效 XBRL 會計標籤
             soup = BeautifulSoup(doc_resp.text, "lxml")
             text_content = soup.get_text(separator="\\n", strip=True)
+
+            # 移除 SEC 財報中無意義的會計標籤 (如 us-gaap:, tsla:, ix: 等)
+            text_content = re.sub(
+                r"([a-zA-Z0-9\-]+:[A-Za-z0-9]+[\n\s]+)+", "\\n", text_content
+            )
 
             # 限制長度避免 Token 爆炸 (抓取前 10000 字元通常足以包含 Management Discussion 或摘要)
             final_text = text_content[:10000]
