@@ -62,9 +62,7 @@ def classify_market_scenario(
         # [ 黃金波段止盈 ]
         # 點位驗證: 現價推升至 CallWall，且 CallWall 與 HVN 重疊 (上檔天花板)
         if is_near(price, call_wall) and is_near(call_wall, hvn):
-            # 工具匹配: 高 IVR (> 50%，基於流程圖對高 IVR 的定義)
-            if ivr > 50.0:
-                return MarketScenario.GOLDEN_TAKE_PROFIT
+            return MarketScenario.GOLDEN_TAKE_PROFIT
 
         # [ 強勢突破加碼 ]
         # 點位驗證: 帶量突破 CallWall，且落在 LVN (紙糊牆/真空區，提供無阻力加速)
@@ -76,8 +74,8 @@ def classify_market_scenario(
         # --- NO (負 Gamma/暴高) 進入防守狀態，嚴禁左側抄底 ---
 
         # [ 假性支撐陷阱 ]
-        # 點位驗證: 現價看似回測 PutWall，但 PutWall 與 LVN 重疊 (紙糊牆)
-        if is_near(price, put_wall) and is_near(put_wall, lvn):
+        # 點位驗證: 現價觸及 PutWall (不論是 LVN 或 HVN)
+        if is_near(price, put_wall):
             return MarketScenario.FAKE_SUPPORT_TRAP
 
     return None

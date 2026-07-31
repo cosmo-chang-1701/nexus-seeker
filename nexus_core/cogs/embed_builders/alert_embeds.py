@@ -648,8 +648,12 @@ def create_scenario_alert_embed(
         tool = "Buy Call Debit Spread或 現貨追擊"
         action = "【順勢加碼】做市商進入 Call Squeeze（軋空追買），LVN 提供無阻力加速區，利用便宜期權進行高槓桿動能追擊。"
     elif scenario == MarketScenario.GOLDEN_TAKE_PROFIT:
-        tool = "分批賣出現貨或 Sell Call Spread"
-        action = "【分批減碼】果斷減碼 30%~50% 部位鎖定利潤。做市商拋售賣壓與 HVN 籌碼牆將形成巨大上檔天花板。"
+        if ivr > 50.0:
+            tool = "分批賣出現貨 或 Sell Call Spread"
+            action = "【分批減碼 30%~50%】鎖定利潤；因 IVR > 50%，可疊加 Sell Call Spread 賺取波動率退潮紅利。"
+        else:
+            tool = "分批賣出現貨"
+            action = "【分批減碼 30%~50%】鎖定利潤。做市商拋售賣壓與 HVN 籌碼牆將形成巨大上檔天花板。"
     elif scenario == MarketScenario.FAKE_SUPPORT_TRAP:
         tool = "禁止開多（可佈局 Bear Spread）"
         action = "【觀望 / 嚴禁抄底】紙糊的牆。做市商在負 Gamma 區會追砍現貨，LVN 會加速下挫。基本面再好也不可在此處左側接刀。"
