@@ -14,7 +14,7 @@ Nexus Seeker 是一個 **Discord-first 的多租戶選擇權風控與交易營�
 
 - **自動化戰場心跳 (Watchlist Heartbeat)**：盤中每半小時主動推送自選標的之技術與期權快照，包含 UOA (異動期權)、暗池 (Dark Pool) 磁吸點位與 LLM 分析解說。
 - **戰場情境轉折警報 (Market Scenario Alerts)**：整合獨立的事件驅動引擎，基於 **5 階 GEX 決策矩陣 (5-State Matrix)**，結合 Gamma Flip, IV Rank 與 Zero-Latency 的 Volume Profile (HVN/LVN) 邊界檢測。具備 K 棒影線 (High/Low) 誤差穿透檢測與 >1.5x 爆量動能過濾，精準捕捉「結構破位轉倉」、「假性支撐陷阱」、「黃金波段止盈」、「強勢突破加碼」與「黃金左側加碼」，給予極致精準的資金派發指令。
-- **動態轉倉引擎 (Dynamic Rollover)**：支援四大情境（原型假設破滅、機會成本轉換、核心與衛星比例再平衡、維持率防禦）的全自動計算。無縫整合本地量化指標 (PowerSqueeze) 與遠端 LLM 財報基本面驗證，並推播極致視覺化的 Discord 執行引導指令卡片。
+- **動態轉倉與基本面全域防禦閘門 (Dynamic Rollover & Global Defense Gate)**：支援手動觸發 (`/verify_thesis`) 的 SEC EDGAR 財報文本抓取，交由 LLM 進行護城河破滅驗證並寫入 `fundamental_cache` 快取。盤中心跳掃描會強制讀取此防禦閘門，若基本面破滅將無條件攔截所有量化買入訊號，強制執行清算與轉倉至 CORE 資產的指令。
 - **動態量化避險引擎**：依據現價與 RSI、Skew 等指標，動態計算適合的建倉/出場價格，並於大盤極端行情時啟動網格防禦 (Shield) 與流動性滑價保護閘門。
 - **總體經濟與事件日曆防護**：自動抓取 CME FedWatch 利率機率、FRED 關鍵總經數據與財報日曆，結合避險邏輯進行動態逃頂窗口前置。
 - **大盤微觀結構解析**：計算零 Gamma 線 (Gamma Flip Line) 與 GEX 分佈，在市場進入高壓 $VIX > 20$ 時動態縮小合約建倉口數（Kelly Criterion 調節）與拉大網格距離。
