@@ -41,7 +41,11 @@ def get_env_or_secret(key: Any, default: Any = None):  # type: ignore
 
 
 DISCORD_TOKEN = get_env_or_secret("DISCORD_TOKEN")
-DISCORD_ADMIN_USER_ID = int(get_env_or_secret("DISCORD_ADMIN_USER_ID", 0))
+_raw_admin_id = get_env_or_secret("DISCORD_ADMIN_USER_ID", 0)
+try:
+    DISCORD_ADMIN_USER_ID = int(_raw_admin_id)
+except ValueError:
+    DISCORD_ADMIN_USER_ID = 0
 LOG_LEVEL = get_env_or_secret("LOG_LEVEL", "WARNING").upper()
 
 # 系統與模型參數
