@@ -144,8 +144,7 @@ The heartbeat currently reuses logic from `market_analysis/intraday_pipeline.py`
 The active embed builder is `create_watchlist_signal_embed()` in `cogs/embed_builders/`.
 
 The embed title is dynamically injected with the ticker's active tags fetched from the multi-tenant `watchlist_tags` table (e.g. `標的分析中心 2.0: AAPL 每半小時戰場心跳 🏷️ TECH | CORE`).
-
-The visibility of these sections is controlled by 4 granular notification toggles in `/notif_settings`: `hb_live_price`, `hb_options_structure`, `hb_uoa`, and `hb_execution_risk`.
+The visibility of these sections is controlled by 3 granular notification toggles in `/notif_settings`: `hb_options_structure`, `hb_uoa`, and `hb_execution_risk`.
 
 Current sections:
 
@@ -397,7 +396,7 @@ Configurations are strictly segregated into two functional areas to maximize sep
 - **Notification Preferences (`/notif_settings`)**: Manages individual toggles stored in a key-value style `user_notification_settings` table (designed with composite primary key `(user_id, notification_key)` for infinite schema-less extensibility). Redesigned as a **Trader-centric Tactical Dashboard**.
   - **Dynamic Two-Tier Architecture**: To bypass Discord's 5-row component limits, the UI uses a modular structure. Row 0 features a Category Selector (`portfolio`, `radar`, `alpha`, `defense`, `briefings`, `polymarket`), which dynamically reloads the corresponding specific toggles into Row 1 (`module_select`).
   - **Radar Insight Coupling**: Filter settings such as `radar_macro_edge`, `radar_alpha_signals`, and `radar_risk_defenses` directly control the verbosity and warning thresholds rendered in the `/x` Batch Radar terminal and heartbeat embeds.
-  - **Granular Heartbeat Toggles**: The watchlist heartbeat is divided into 4 modular switches (`hb_live_price`, `hb_options_structure`, `hb_uoa`, `hb_execution_risk`), allowing users to completely customize which analysis blocks are rendered in their 30-minute updates. Order Telemetry Alignment is decoupled into its own independent toggle (`order_telemetry_alignment_alert`).
+  - **Granular Heartbeat Toggles**: The watchlist heartbeat is divided into 3 modular switches (`hb_options_structure`, `hb_uoa`, `hb_execution_risk`), allowing users to completely customize which analysis blocks are rendered in their 30-minute updates. Order Telemetry Alignment is decoupled into its own independent toggle (`order_telemetry_alignment_alert`).
   - **Polymarket Settings Integration**: Polymarket monitoring preferences (whale alert toggler `polymarket_whale_alert`, threshold `polymarket_threshold`, AI analysis switch `polymarket_use_llm`, and slippage threshold `polymarket_slippage`) are cleanly housed under their dedicated Category.
   - **Module Preferences Control**: Each category screen features helper buttons `🟢 開啟本區所有設定 (Enable Module)` and `💤 關閉本區所有設定 (Disable Module)` to batch-toggle all switches within that specific active module.
 

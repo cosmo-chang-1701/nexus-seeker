@@ -478,7 +478,7 @@ def test_create_watchlist_signal_embed() -> None:
     assert (
         embed.title == "標的分析中心 2.0: NVDA 每半小時戰場心跳 [數據未更新/降級模式]"
     )
-    assert "當前現價 (Current Price)" in embed.description  # type: ignore
+
     assert "物理籌碼牆與邊緣偵測 (Market Footprints)" in embed.description  # type: ignore
     assert "隱含波動率與預期空間 (IV Context)" in embed.description  # type: ignore
     assert "結算與目標 (Target Lock)" in embed.description  # type: ignore
@@ -1310,7 +1310,7 @@ def test_create_watchlist_signal_embed_non_degraded() -> None:
 
     desc = embed.description or ""
     # Verify exact numeric formatting
-    assert "現價: $150.00" in desc
+
     assert "GEX PutWall (做市商底牆): $130.00 (當前價差: +15.38%)" in desc
     assert "Vol POC (籌碼控制中心): $145.00" in desc
     assert "Option Skew (期權偏斜): +2.50% (分位點: 60.0%)" in desc

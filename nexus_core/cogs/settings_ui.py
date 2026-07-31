@@ -34,7 +34,6 @@ TRADING_MODULES: Dict[str, Dict[str, Any]] = {
             "radar_macro_edge": "🌍 雷達：總經與微觀結構警戒",
             "gamma_fragility_alert": "🆘 警報：Gamma 脆弱性與斷層",
             "hb_options_structure": "🧱 心跳：期權結構與波動率",
-            "hb_live_price": "🏷️ 心跳：基礎現價與區間",
         },
     },
     "alpha": {

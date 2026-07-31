@@ -34,7 +34,7 @@ def test_default_all_enabled(db_conn: Any):  # type: ignore
 def test_toggle_single_setting(db_conn: Any):  # type: ignore
     """測試單一通知項目的切換 (ON/OFF)"""
     user_id = 999111
-    target_key = "hb_live_price"
+    target_key = "hb_options_structure"
 
     # 1. 切換為關閉 (False)
     set_user_notification_setting(user_id, target_key, False)

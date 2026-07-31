@@ -95,8 +95,6 @@ def create_watchlist_signal_embed(
     timestamp_str = datetime.now(taipei_tz).strftime("%Y-%m-%d %H:%M:%S")
 
     toggles = toggles or {}
-    show_live_price = toggles.get("hb_live_price", True)
-
     # 整合 2, 3, 4 -> hb_options_structure
     hb_options = toggles.get("hb_options_structure", True)
     show_market_footprints = hb_options
@@ -136,22 +134,6 @@ def create_watchlist_signal_embed(
         vol_poc = 100.0
         skew_val = None
         skew_per = None
-
-    # Extract Finnhub Quote Data
-    if quote is not None:
-        open_val = float(quote.get("o") or 0.0)
-        high_val = float(quote.get("h") or 0.0)
-        low_val = float(quote.get("l") or 0.0)
-        prev_close = float(quote.get("pc") or 0.0)
-        change_raw = float(quote.get("d") or 0.0)
-        change_pct = float(quote.get("dp") or 0.0)
-    else:
-        open_val = live_price
-        high_val = live_price
-        low_val = live_price
-        prev_close = live_price
-        change_raw = 0.0
-        change_pct = 0.0
 
     # Extract IV metrics
     earnings_loading = False
@@ -283,7 +265,6 @@ def create_watchlist_signal_embed(
         if gex_putwall and gex_putwall > 0
         else None
     )
-    change_emoji = "📈" if change_raw >= 0.0 else "📉"
 
     # Unusual Options Activity (UOA) table formatting
     uoa_table_lines = []
@@ -363,17 +344,6 @@ def create_watchlist_signal_embed(
         f" 標的分析中心 2.0: {symbol} 每半小時戰場心跳 (Watchlist Heartbeat){degraded_tag}",
         f" [{timestamp_str} - UTC+8] ｜ 系統狀態: {sys_status}",
     ]
-
-    if show_live_price:
-        has_meaningful_content = True
-        lines.extend(
-            [
-                "",
-                " 🏷️ 當前現價 (Current Price)",
-                f" ├─ 現價: ${live_price:.2f} ({change_emoji} {change_pct:+.2f}% / ${change_raw:+.2f})",
-                f" └─ 今日區間: 開盤: {open_val:.2f} | 最高: {high_val:.2f} | 最低: {low_val:.2f} | 前收: {prev_close:.2f}",
-            ]
-        )
 
     if show_market_footprints:
         has_meaningful_content = True

@@ -916,7 +916,6 @@ class SchedulerCog(commands.Cog):
             try:
                 notif_settings = database.get_user_notification_settings(uid)
                 hb_keys = [
-                    "hb_live_price",
                     "hb_options_structure",
                     "hb_uoa",
                     "hb_execution_risk",
