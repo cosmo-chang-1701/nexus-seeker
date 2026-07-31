@@ -99,3 +99,45 @@ def get_market_cache(
         if conn:
             conn.close()
     return None
+
+
+def save_fundamental_cache(
+    symbol: str, is_broken: bool, confidence: float, reasoning: str
+) -> bool:
+    try:
+        execute_write(
+            """
+            INSERT INTO fundamental_cache (symbol, is_broken, confidence, reasoning, updated_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(symbol) DO UPDATE SET
+            is_broken = excluded.is_broken,
+            confidence = excluded.confidence,
+            reasoning = excluded.reasoning,
+            updated_at = CURRENT_TIMESTAMP
+            """,
+            (symbol.upper(), int(is_broken), confidence, reasoning),
+        )
+        return True
+    except Exception:
+        return False
+
+
+def get_fundamental_cache(symbol: str) -> Optional[Dict[str, Any]]:
+    conn = None
+    try:
+        conn = get_read_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT is_broken, confidence, reasoning, updated_at FROM fundamental_cache WHERE symbol = ?",
+            (symbol.upper(),),
+        )
+        row = cursor.fetchone()
+        if row:
+            return dict(row)
+    except Exception:
+        pass
+    finally:
+        if conn:
+            conn.close()
+    return None

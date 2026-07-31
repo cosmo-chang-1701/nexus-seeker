@@ -48,7 +48,17 @@ class DynamicRolloverEngine:
                 response_format=FundamentalThesisResult,
                 temperature=0.1,
             )
-            return response.choices[0].message.parsed  # type: ignore
+            parsed = response.choices[0].message.parsed  # type: ignore
+
+            # 寫入 SQLite 全域防禦閘門
+            if parsed:
+                from database.market_cache import save_fundamental_cache
+
+                save_fundamental_cache(
+                    symbol, parsed.is_broken, parsed.confidence, parsed.reasoning
+                )
+
+            return parsed  # type: ignore
         except Exception as e:
             logger.error(f"[{symbol}] Fundamental thesis evaluation failed: {e}")
             return None

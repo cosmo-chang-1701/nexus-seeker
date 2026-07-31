@@ -580,6 +580,19 @@ async def evaluate_watchlist_symbol(
     tactical = WatchlistRiskController.process_metrics(metrics)
     symbol_gex = None
 
+    # 🛑 動態轉倉引擎全域防禦閘門 (Fundamental Thesis)
+    try:
+        from database.market_cache import get_fundamental_cache
+
+        fc = get_fundamental_cache(symbol)
+        if fc and fc.get("is_broken"):
+            tactical.scenario = "wait"  # Override to wait to block all buys
+            tactical.sddm_route = "LIQUIDATE (基本面破滅強制清算)"
+            tactical.action_guideline = f"⛔ 【LLM 護城河破滅警告】根據最新基本面分析，護城河已遭結構性破壞。\n> {fc.get('reasoning', '')}\n\n⚠️ 已觸發全域防禦閘門，強制封鎖所有買入與網格建倉策略，建議立即清算並轉倉至 CORE 資產。"
+            tactical.alert_level = "red"
+    except Exception as e:
+        logger.warning(f"全域防禦閘門查詢錯誤: {e}")
+
     # 零 Gamma 踩踏 Regime 檢查並自動調整網格間距
     try:
         from market_analysis.index_microstructure import (
