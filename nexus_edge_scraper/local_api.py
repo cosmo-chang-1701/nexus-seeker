@@ -3,12 +3,34 @@ from playwright.async_api import (
     async_playwright,
     TimeoutError as PlaywrightTimeoutError,
 )
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 import logging
 from playwright_stealth import Stealth
+import httpx
+import warnings
+
+# Suppress BS4 XML warning for SEC filings
+warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
 app = FastAPI()
 logger = logging.getLogger(__name__)
+
+SEC_USER_AGENT = "NexusSeekerBot (nexusseeker@example.com)"
+cik_cache = {}
+
+
+async def _get_sec_cik(client: httpx.AsyncClient, symbol: str) -> str | None:
+    if not cik_cache:
+        try:
+            resp = await client.get("https://www.sec.gov/files/company_tickers.json")
+            resp.raise_for_status()
+            data = resp.json()
+            for key, value in data.items():
+                cik_cache[value["ticker"]] = str(value["cik_str"]).zfill(10)
+        except Exception as e:
+            logger.error(f"Failed to fetch SEC CIK dictionary: {e}")
+            return None
+    return cik_cache.get(symbol.upper())
 
 
 @app.get("/api/v1/scrape/reddit/{symbol}")
@@ -1036,74 +1058,67 @@ async def scrape_macro_calendar(year: int, month: int, high_impact_only: bool = 
 @app.get("/api/v1/scrape/fundamental/{symbol}")
 async def scrape_fundamental_text(symbol: str):
     """
-    獲取標的最新新聞與重點文本 (Yahoo Finance)
+    獲取標的最新財報與基本面文本 (SEC EDGAR 8-K / 10-Q)
     """
     symbol_clean = symbol.upper().replace("$", "")
-    url = f"https://finance.yahoo.com/quote/{symbol_clean}/news/"
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"]
-        )
-        try:
-            context = await browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-                java_script_enabled=False,
-            )
+    try:
+        async with httpx.AsyncClient(headers={"User-Agent": SEC_USER_AGENT}) as client:
+            cik = await _get_sec_cik(client, symbol_clean)
+            if not cik:
+                return {
+                    "status": "error",
+                    "data": f"無法在 SEC 資料庫中找到 {symbol_clean} 的 CIK",
+                }
 
-            async def safe_route(route):
-                try:
-                    if route.request.resource_type in [
-                        "image",
-                        "stylesheet",
-                        "font",
-                        "media",
-                    ]:
-                        await route.abort()
-                    else:
-                        await route.continue_()
-                except Exception:
-                    pass
+            # 1. 取得近期申報列表
+            url = f"https://data.sec.gov/submissions/CIK{cik}.json"
+            resp = await client.get(url, timeout=10.0)
+            resp.raise_for_status()
+            data = resp.json()
 
-            await context.route("**/*", safe_route)
+            recent = data.get("filings", {}).get("recent", {})
+            forms = recent.get("form", [])
+            accessions = recent.get("accessionNumber", [])
+            primary_docs = recent.get("primaryDocument", [])
 
-            page = await context.new_page()
-            try:
-                await page.goto(url, wait_until="domcontentloaded", timeout=15000)
-                await page.wait_for_timeout(2000)
-                html_content = await page.content()
-            except PlaywrightTimeoutError:
-                logger.warning(f"[{symbol_clean}] Yahoo Finance timeout")
-                return {"status": "error", "data": "Scrape timeout"}
-            finally:
-                await context.unroute_all(behavior="ignoreErrors")
-                await page.close()
+            # 2. 尋找最新的 8-K 或 10-Q
+            target_idx = -1
+            for i, form in enumerate(forms):
+                if form in ["8-K", "10-Q"]:
+                    target_idx = i
+                    break
 
-            soup = BeautifulSoup(html_content, "lxml")
+            if target_idx == -1:
+                return {
+                    "status": "error",
+                    "data": f"近期無 8-K 或 10-Q 申報記錄 ({symbol_clean})",
+                }
 
-            text_content = ""
-            for el in soup.find_all(["h3", "p"]):
-                text = el.get_text(strip=True)
-                # Ignore very short nav texts and filter out generic error messages
-                if len(text) > 20 and "Oops, something went wrong" not in text:
-                    text_content += text + "\\n"
+            accession_num = accessions[target_idx]
+            accession_no_dash = accession_num.replace("-", "")
+            primary_doc = primary_docs[target_idx]
 
-            # Cap the text length to avoid token explosion (e.g. 5000 characters)
-            final_text = text_content[:5000]
+            # 3. 獲取文件原始碼
+            doc_url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession_no_dash}/{primary_doc}"
+            doc_resp = await client.get(doc_url, timeout=15.0)
+            doc_resp.raise_for_status()
 
-            if not final_text:
-                final_text = "無法獲取最新基本面新聞或標的不存在。"
+            # 4. 抽取純文字並限制長度
+            soup = BeautifulSoup(doc_resp.text, "lxml")
+            text_content = soup.get_text(separator="\\n", strip=True)
+
+            # 限制長度避免 Token 爆炸 (抓取前 10000 字元通常足以包含 Management Discussion 或摘要)
+            final_text = text_content[:10000]
 
             return {
                 "status": "success",
                 "data": {
                     "symbol": symbol_clean,
                     "text": final_text,
-                    "source": "yahoo_finance_playwright",
+                    "source": "sec_edgar",
                 },
             }
-        except Exception as e:
-            logger.error(f"Playwright fundamental scrape failed: {e}")
-            return {"status": "error", "data": str(e)}
-        finally:
-            await browser.close()
+    except Exception as e:
+        logger.error(f"SEC EDGAR scrape failed for {symbol_clean}: {e}")
+        return {"status": "error", "data": str(e)}
