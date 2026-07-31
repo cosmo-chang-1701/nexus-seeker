@@ -496,6 +496,23 @@ Current repository rule:
 
 ---
 
+## Dynamic Rollover Engine (動態轉倉引擎)
+
+The platform features an automated **Dynamic Rollover Engine** (`market_analysis/dynamic_rollover.py`) that monitors the real portfolio every 30 minutes. It evaluates holdings across four core scenarios to defensively rebalance assets or shift momentum based on Specification by Example (SBE) guidelines.
+
+### Scenarios
+1. **Fundamental Thesis Broken (原型假設破滅)**: Leverages `nexus_edge_scraper` to pull the latest news/financials and validates the moat via `llm_service`. If broken, completely liquidates the asset into the Core holding (e.g., VOO).
+2. **Opportunity Cost & EV Comparison (機會成本轉換)**: Compares the `PowerSqueeze` indicator and Expected Value (EV) between a decaying holding and a breakout watchlist target. Recommends tactical option spreads (e.g., Bull Call Spreads) to roll the capital.
+3. **Core vs Satellite Rebalancing (核心與衛星比例再平衡)**: Prevents concentration risk. If a SATELLITE asset (e.g., NVDA) exceeds its `max_allocation_pct` due to a rally, the engine partially sells it back to the `target_allocation_pct` and buys the CORE asset.
+4. **Leverage & Margin Defense (槓桿與維持率防禦)**: Monitors macro VIX conditions and account margin levels. If a structural washout is imminent, automatically sends a Buy-To-Close (BTC) or Sell-To-Close (STC) signal for high-beta assets to release margin.
+
+### Integration
+- **Hybrid Triage Strategy**: Heavy LLM/Edge tasks (Scenario 1) run during pre/post-market phases in `AnalystAgent`. Lightweight rule-based tasks (Scenarios 2, 3, 4) execute during the intraday 30-minute `monitor_real_portfolio_task` to ensure zero API blocking.
+- **Discord UI**: All rollover actions generate a stylized embed (`create_dynamic_rollover_embed`) packed with terminal execution guidelines, highlighting Net Debit/Credit types and strict buy/sell directions (e.g., BTC for short puts).
+- **Toggle Settings**: Users can opt out via `/notif_settings` under the Defense module (`rollover_rebalance_alert`).
+
+---
+
 ## Core Modules to Know
 
 - `nexus_core/bot.py` — bot bootstrap, DM queue, service lifecycle
