@@ -43,39 +43,41 @@ def classify_market_scenario(
             return False
         return abs(val1 - val2) / val2 <= tolerance
 
-    # 5. 結構破位轉倉 (Structural Breakdown Roll)
-    if price < gamma_flip and price < put_wall and is_near(price, lvn):
+    # [ Step 4: 轉倉觸發 ]
+    # 現價貫穿 PutWall 且跌破 Gamma Flip ──► 100% 資金動態轉倉至 QQQ / SPY
+    if price < put_wall and price < gamma_flip:
         return MarketScenario.STRUCTURAL_BREAKDOWN
 
-    # 4. 假性支撐陷阱 (Fake Support Trap)
-    if (
-        price < gamma_flip
-        and is_near(price, put_wall)
-        and lvn < put_wall
-        and ivr > 80.0
-    ):
-        return MarketScenario.FAKE_SUPPORT_TRAP
+    # [ Step 1: 體質檢查 ] ──現價是否 > Gamma Flip？
+    if price > gamma_flip:
+        # --- YES (正 Gamma/平穩) 允許進行均值回歸與逢低加碼 ---
 
-    # 3. 黃金波段止盈 (Golden Swing Take-Profit)
-    if (
-        price > gamma_flip
-        and is_near(price, call_wall)
-        and is_near(price, hvn)
-        and ivr > 70.0
-    ):
-        return MarketScenario.GOLDEN_TAKE_PROFIT
+        # [ 黃金左側加碼 ]
+        # 點位驗證: 現價回測 PutWall，且 PutWall 與 HVN 重疊 (鋼鐵牆成型)
+        if is_near(price, put_wall) and is_near(put_wall, hvn):
+            # 工具匹配: 高 IVR (> 50%)
+            if ivr > 50.0:
+                return MarketScenario.GOLDEN_LEFT
 
-    # 2. 強勢突破加碼 (Strong Breakout Scaling)
-    if price > gamma_flip and price > call_wall and is_near(price, lvn) and ivr < 30.0:
-        return MarketScenario.STRONG_BREAKOUT
+        # [ 黃金波段止盈 ]
+        # 點位驗證: 現價推升至 CallWall，且 CallWall 與 HVN 重疊 (上檔天花板)
+        if is_near(price, call_wall) and is_near(call_wall, hvn):
+            # 工具匹配: 高 IVR (> 50%，基於流程圖對高 IVR 的定義)
+            if ivr > 50.0:
+                return MarketScenario.GOLDEN_TAKE_PROFIT
 
-    # 1. 黃金左側加碼 (Golden Left-Side Scaling)
-    if (
-        price > gamma_flip
-        and is_near(price, put_wall)
-        and is_near(price, hvn)
-        and ivr > 50.0
-    ):
-        return MarketScenario.GOLDEN_LEFT
+        # [ 強勢突破加碼 ]
+        # 點位驗證: 帶量突破 CallWall，且落在 LVN (紙糊牆/真空區，提供無阻力加速)
+        if price > call_wall and is_near(price, lvn):
+            # 工具匹配: 低 IVR (< 30%)
+            if ivr < 30.0:
+                return MarketScenario.STRONG_BREAKOUT
+    else:
+        # --- NO (負 Gamma/暴高) 進入防守狀態，嚴禁左側抄底 ---
+
+        # [ 假性支撐陷阱 ]
+        # 點位驗證: 現價看似回測 PutWall，但 PutWall 與 LVN 重疊 (紙糊牆)
+        if is_near(price, put_wall) and is_near(put_wall, lvn):
+            return MarketScenario.FAKE_SUPPORT_TRAP
 
     return None
