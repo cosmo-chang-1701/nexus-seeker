@@ -961,6 +961,42 @@ class SchedulerCog(commands.Cog):
                         embeds = [embeds]
                     for embed in embeds:
                         await self.bot.queue_dm(uid, embed=embed)
+
+                    # --- Scenario Alert Logic ---
+                    from market_analysis.scenario_classifier import (
+                        classify_market_scenario,
+                    )
+                    from cogs.embed_builders.alert_embeds import (
+                        create_scenario_alert_embed,
+                    )
+                    from datetime import datetime
+                    import market_time
+
+                    today_str = datetime.now(market_time.ny_tz).strftime("%Y-%m-%d")
+
+                    for res in valid_results:
+                        symbol = res.get("symbol")
+                        scenario = classify_market_scenario(
+                            price=res.get("live_price", 0.0),
+                            put_wall=res.get("gex_max_put_wall", 0.0),
+                            call_wall=res.get("gex_max_call_wall", 0.0),
+                            gamma_flip=res.get("gamma_flip", 0.0),
+                            is_squeezing=res.get("is_squeezing", False),
+                            uoa_skew=res.get("uoa_skew", 0.0),
+                        )
+                        if scenario:
+                            cache_key = f"scenario_alert_{uid}_{symbol}_{today_str}_{scenario.name}"
+                            if not database.get_kv_cache(cache_key):
+                                alert_embed = create_scenario_alert_embed(
+                                    symbol=symbol,
+                                    scenario=scenario,
+                                    price=res.get("live_price", 0.0),
+                                    put_wall=res.get("gex_max_put_wall", 0.0),
+                                    gamma_flip=res.get("gamma_flip", 0.0),
+                                )
+                                await self.bot.queue_dm(uid, embed=alert_embed)
+                                await database.save_kv_cache(cache_key, True)
+                    # ----------------------------
             except Exception as user_err:
                 logger.error(
                     f"❌ 用戶 {uid} 心跳推送處理失敗: {user_err}",

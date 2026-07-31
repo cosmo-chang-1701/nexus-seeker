@@ -205,6 +205,21 @@ We resolve this via a comprehensive pre-market optimization workflow:
 
 ---
 
+### Event-Driven Market Scenario Alerts
+
+The `dynamic_market_scanner` in `cogs/trading.py` now includes an independent, event-driven alert system that triggers when a symbol enters one of four specific market scenarios:
+- **區間抽取時間價值 (Range Bound)**: Spot price between PutWall and CallWall, above Gamma Flip.
+- **多頭支撐建倉 (Support Buildup)**: Spot price tests PutWall (within 1.5% error margin) and remains above Gamma Flip.
+- **動能軋空爆發 (Momentum Squeeze)**: Spot price breaks CallWall and UOA skew is positive (or currently squeezing).
+- **結構破位與轉倉 (Structural Breakdown)**: Spot price falls below PutWall and below Gamma Flip.
+
+**Architecture & Rate Limiting**:
+- **Classifier**: `market_analysis/scenario_classifier.py` mathematically evaluates the market state using live price, PutWall, CallWall, Gamma Flip, and UOA skew.
+- **Embed**: `cogs/embed_builders/alert_embeds.py` generates `create_scenario_alert_embed()`.
+- **KV Cache Protection**: To prevent spam during high-volatility boundary oscillations, the system sets an SQLite cache key (`scenario_alert_{user_id}_{symbol}_{date}_{scenario}`) to guarantee a maximum of **one alert per scenario, per symbol, per day**.
+
+---
+
 ## Intraday Quant / Execution Logic
 
 `market_analysis/intraday_pipeline.py` contains:

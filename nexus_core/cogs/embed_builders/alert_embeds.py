@@ -22,7 +22,7 @@ source and must not alter any business logic.
 
 from typing import Any
 import discord
-
+from market_analysis.scenario_classifier import MarketScenario
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
@@ -609,4 +609,53 @@ def create_vtr_settlement_notice_embed(
             inline=False,
         )
     embed.set_footer(text="GhostTrader | Settlement Notice")
+    return embed
+
+
+def create_scenario_alert_embed(
+    symbol: str,
+    scenario: MarketScenario,
+    price: float,
+    put_wall: float,
+    gamma_flip: float,
+) -> discord.Embed:
+    """建立戰場情境轉折警報 Embed"""
+
+    color_map = {
+        MarketScenario.STRUCTURAL_BREAKDOWN: discord.Color.red(),
+        MarketScenario.MOMENTUM_SQUEEZE: discord.Color.green(),
+        MarketScenario.SUPPORT_BUILD: discord.Color.gold(),
+        MarketScenario.RANGE_BOUND: discord.Color.blue(),
+    }
+
+    embed = discord.Embed(
+        title=f"🚨 戰場情境轉折警報 | {symbol}",
+        description=f"**🧭 觸發情境：{scenario.value}**",
+        color=color_map.get(scenario, discord.Color.default()),
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    # 根據情境給予不同的敘述與決策命令
+    if scenario == MarketScenario.STRUCTURAL_BREAKDOWN:
+        detail = "負 Gamma 區下行連環賣壓"
+        action = "絕對執行動態轉倉：個股護盤結構失效。果斷砍單，將資金轉移至大盤 ETF（如 QQQ/SPY）避風港，等待市場重築籌碼結構。"
+    elif scenario == MarketScenario.MOMENTUM_SQUEEZE:
+        detail = "負 Gamma 轉折 Call Squeeze"
+        action = "全力投入動能部位（Long Debit Spread）。做市商買盤成為推升燃料，享受高資產運轉效率。"
+    elif scenario == MarketScenario.SUPPORT_BUILD:
+        detail = "正 Gamma 區機構護盤"
+        action = "腳尖試水溫（現貨/看多價差）。以 PutWall 作為嚴格停損線，博弈做市商對沖買盤引發的反彈。"
+    else:
+        detail = "正 Gamma 區震盪收斂"
+        action = "佈局賣方價差（Sell Iron Condor / Credit Spread）。利用 PutWall / CallWall 作為防禦邊界，抽取高 IV 回歸紅利。"
+
+    embed.add_field(
+        name="📊 關鍵觸發條件",
+        value=f"• 現價 (${price:.2f})\n• 做市商 PutWall (${put_wall:.2f})\n• 大盤 Gamma Flip Line (${gamma_flip:.2f})",
+        inline=False,
+    )
+    embed.add_field(name="🛡️ 市場屬性", value=detail, inline=False)
+    embed.add_field(name="⚔️ 資金效率與操作決策", value=f"└─ {action}", inline=False)
+    embed.set_footer(text="Nexus Risk Optimizer | 戰場情境決策矩陣")
+
     return embed
