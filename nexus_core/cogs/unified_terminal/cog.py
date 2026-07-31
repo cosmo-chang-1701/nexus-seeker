@@ -858,6 +858,18 @@ class UnifiedTerminalCog(commands.Cog):
             else None
         )
 
+        # 計算 20 日均量與當前 K 棒成交量
+        vol_data = {"current_volume": 0.0, "avg_volume_20": 0.0}
+        if df_hist is not None and not df_hist.empty and "Volume" in df_hist.columns:
+            try:
+                vol_data["current_volume"] = float(df_hist["Volume"].iloc[-1])
+                if len(df_hist) >= 20:
+                    vol_data["avg_volume_20"] = float(df_hist["Volume"].tail(20).mean())
+                else:
+                    vol_data["avg_volume_20"] = float(df_hist["Volume"].mean())
+            except Exception:
+                pass
+
         return {
             "symbol": sym,
             "quote": quote,
@@ -872,6 +884,7 @@ class UnifiedTerminalCog(commands.Cog):
             "dp_poc": dp_poc,
             "ma20": ema_21,
             "vp_data": vp_data or {},
+            "vol_data": vol_data,
         }
 
     @app_commands.command(

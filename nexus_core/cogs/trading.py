@@ -994,9 +994,19 @@ class SchedulerCog(commands.Cog):
 
                         quote_data = res.get("quote") or {}
                         price = quote_data.get("c", 0.0)
+                        high = quote_data.get("h", 0.0)
+                        low = quote_data.get("l", 0.0)
+
+                        vol_data = res.get("vol_data") or {}
+                        current_volume = vol_data.get("current_volume", 0.0)
+                        avg_volume_20 = vol_data.get("avg_volume_20", 0.0)
 
                         scenario = classify_market_scenario(
                             price=price,
+                            high=high,
+                            low=low,
+                            current_volume=current_volume,
+                            avg_volume_20=avg_volume_20,
                             put_wall=put_wall,
                             call_wall=call_wall,
                             gamma_flip=gamma_flip,
