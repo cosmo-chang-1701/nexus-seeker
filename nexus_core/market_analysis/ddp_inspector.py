@@ -82,12 +82,17 @@ class DDPInspector:
             rev_curr = rev.iloc[0]
             rev_1 = rev.iloc[1]
             rev_4 = rev.iloc[4]
-            rev_5 = rev.iloc[5]
 
             curr_rev_growth = (rev_curr - rev_4) / rev_4 if rev_4 != 0 else 0
-            prev_rev_growth = (rev_1 - rev_5) / rev_5 if rev_5 != 0 else 0
 
-            rev_accel = curr_rev_growth > prev_rev_growth
+            if q_inc.shape[1] >= 6:
+                rev_5 = rev.iloc[5]
+                prev_rev_growth = (rev_1 - rev_5) / rev_5 if rev_5 != 0 else 0
+                rev_accel = curr_rev_growth > prev_rev_growth
+            else:
+                prev_rev_growth = 0
+                rev_accel = curr_rev_growth > 0.10
+
             if not rev_accel:
                 logger.info(
                     f"[{symbol}] DDP Fail: Revenue growth not accelerating (Curr: {curr_rev_growth:.2%}, Prev: {prev_rev_growth:.2%})"
