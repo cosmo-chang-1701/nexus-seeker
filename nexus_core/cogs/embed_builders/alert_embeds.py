@@ -642,11 +642,11 @@ def create_scenario_alert_embed(
 
     # 根據情境給予不同的敘述與決策命令
     if scenario == MarketScenario.GOLDEN_LEFT:
-        tool = "現貨分批或 Sell Put Spread"
-        action = "【試水溫加碼】動用 20%~30% 資金建倉；做市商對沖盤與現貨買盤雙重護航，抽取 Theta 與 IV 回歸利潤。"
+        tool = "現貨分批 或 Sell Put Spread (吃高 IV + Theta)"
+        action = "【試水溫加碼 20%~30%】鋼鐵牆成型，做市商對沖盤與現貨買盤雙重護航。"
     elif scenario == MarketScenario.STRONG_BREAKOUT:
-        tool = "Buy Call Debit Spread或 現貨追擊"
-        action = "【順勢加碼】做市商進入 Call Squeeze（軋空追買），LVN 提供無阻力加速區，利用便宜期權進行高槓桿動能追擊。"
+        tool = "Buy Call Debit Spread 或 現貨追擊 (軋空行情)"
+        action = "【順勢追擊加碼】做市商進入 Call Squeeze（軋空追買），LVN 提供無阻力加速區。"
     elif scenario == MarketScenario.GOLDEN_TAKE_PROFIT:
         if ivr > 50.0:
             tool = "分批賣出現貨 或 Sell Call Spread"
