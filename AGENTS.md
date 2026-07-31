@@ -207,14 +207,20 @@ We resolve this via a comprehensive pre-market optimization workflow:
 
 ### Event-Driven Market Scenario Alerts
 
-The `dynamic_market_scanner` in `cogs/trading.py` now includes an independent, event-driven alert system that triggers when a symbol enters one of four specific market scenarios:
-- **區間抽取時間價值 (Range Bound)**: Spot price between PutWall and CallWall, above Gamma Flip.
-- **多頭支撐建倉 (Support Buildup)**: Spot price tests PutWall (within 1.5% error margin) and remains above Gamma Flip.
-- **動能軋空爆發 (Momentum Squeeze)**: Spot price breaks CallWall and UOA skew is positive (or currently squeezing).
-- **結構破位與轉倉 (Structural Breakdown)**: Spot price falls below PutWall and below Gamma Flip.
+The `dynamic_market_scanner` in `cogs/trading.py` now includes an independent, event-driven alert system that dynamically triggers when a symbol enters one of five highly specific quantitative market scenarios based on a precise decision tree:
+
+**Branch A: Positive Gamma (Spot > Gamma Flip)**
+- **黃金左側加碼 (Golden Left-Side)**: Spot tests PutWall (within 1.5% margin), PutWall overlaps with HVN, and IV Rank > 50%.
+- **黃金波段止盈 (Golden Take-Profit)**: Spot tests CallWall (within 1.5% margin), and CallWall overlaps with HVN. (Suggests Sell Call Spread if IVR > 50%).
+- **強勢突破加碼 (Strong Breakout)**: Spot breaks CallWall, lands in an LVN (vacuum acceleration zone), and IV Rank < 30%.
+
+**Branch B: Negative Gamma / Defense Mode (Spot < Gamma Flip)**
+- **假性支撐陷阱 (Fake Support Trap)**: Spot touches PutWall, strictly blocking narrative "buy the dip" logic.
+- **結構破位與轉倉 (Structural Breakdown)**: Spot falls below PutWall AND Gamma Flip, triggering an absolute 100% liquidation directive to QQQ/SPY ETFs.
 
 **Architecture & Rate Limiting**:
-- **Classifier**: `market_analysis/scenario_classifier.py` mathematically evaluates the market state using live price, PutWall, CallWall, Gamma Flip, and UOA skew.
+- **Classifier**: `market_analysis/scenario_classifier.py` mathematically evaluates the market state using live price, PutWall, CallWall, Gamma Flip, IV Rank (IVR), and Volume Profile (HVN/LVN).
+- **Zero-Latency VP**: Reuses the `df_hist` fetched for PSQ/EMA via `calculate_volume_profile_from_df` to avoid redundant `yfinance` network requests.
 - **Embed**: `cogs/embed_builders/alert_embeds.py` generates `create_scenario_alert_embed()`.
 - **KV Cache Protection**: To prevent spam during high-volatility boundary oscillations, the system sets an SQLite cache key (`scenario_alert_{user_id}_{symbol}_{date}_{scenario}`) to guarantee a maximum of **one alert per scenario, per symbol, per day**.
 
