@@ -1165,7 +1165,7 @@ class SchedulerCog(commands.Cog):
 
             now = datetime.now(ny_tz)
             for uid, alerts_data in user_results.items():
-                user_cooldowns = self.signal_cooldowns.setdefault(uid, {})
+                user_cooldowns = self.signal_cooldowns.setdefault(str(uid), {})
                 valid_alerts = []
 
                 user_context = database.get_full_user_context(uid)

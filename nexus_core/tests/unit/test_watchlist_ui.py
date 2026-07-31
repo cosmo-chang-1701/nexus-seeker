@@ -93,6 +93,7 @@ async def test_watchlist_pagination_ephemeral_edit(mock_asset_manager_class: Any
 
         kwargs = MockSelectViewFallback.call_args.kwargs
         on_success_fallback = kwargs.get("on_success_callback")
+        assert on_success_fallback is not None
 
         # This will trigger mock_original_message.edit() which raises discord.NotFound
         # The test verifies that the exception is swallowed and execution continues

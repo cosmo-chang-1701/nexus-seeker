@@ -16,7 +16,7 @@ MEMORY_SAFETY_THRESHOLD = 85.0
 def is_memory_safe() -> bool:
     """檢查系統記憶體是否高於安全閾值。"""
     mem = psutil.virtual_memory()
-    return mem.percent < MEMORY_SAFETY_THRESHOLD
+    return bool(mem.percent < MEMORY_SAFETY_THRESHOLD)
 
 
 # ==========================================
