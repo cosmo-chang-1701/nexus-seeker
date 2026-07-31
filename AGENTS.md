@@ -210,12 +210,12 @@ We resolve this via a comprehensive pre-market optimization workflow:
 The `dynamic_market_scanner` in `cogs/trading.py` now includes an independent, event-driven alert system that dynamically triggers when a symbol enters one of five highly specific quantitative market scenarios based on a precise decision tree:
 
 **Branch A: Positive Gamma (Spot > Gamma Flip)**
-- **黃金左側加碼 (Golden Left-Side)**: Spot tests PutWall (within 1.5% margin), PutWall overlaps with HVN, and IV Rank > 50%.
-- **黃金波段止盈 (Golden Take-Profit)**: Spot tests CallWall (within 1.5% margin), and CallWall overlaps with HVN. (Suggests Sell Call Spread if IVR > 50%).
-- **強勢突破加碼 (Strong Breakout)**: Spot breaks CallWall, lands in an LVN (vacuum acceleration zone), and IV Rank < 30%.
+- **黃金左側加碼 (Golden Left-Side)**: Candle High/Low tests PutWall (within 1.5% margin), PutWall overlaps with HVN, and IV Rank > 50%.
+- **黃金波段止盈 (Golden Take-Profit)**: Candle High/Low tests CallWall (within 1.5% margin), and CallWall overlaps with HVN. (Suggests Sell Call Spread if IVR > 50%).
+- **強勢突破加碼 (Strong Breakout)**: Spot breaks CallWall, lands in an LVN (vacuum acceleration zone), Volume > 1.5x MA20, and IV Rank < 30%.
 
 **Branch B: Negative Gamma / Defense Mode (Spot < Gamma Flip)**
-- **假性支撐陷阱 (Fake Support Trap)**: Spot touches PutWall, strictly blocking narrative "buy the dip" logic.
+- **假性支撐陷阱 (Fake Support Trap)**: Candle High/Low touches PutWall, strictly blocking narrative "buy the dip" logic.
 - **結構破位與轉倉 (Structural Breakdown)**: Spot falls below PutWall AND Gamma Flip, triggering an absolute 100% liquidation directive to QQQ/SPY ETFs.
 
 **Architecture & Rate Limiting**:
