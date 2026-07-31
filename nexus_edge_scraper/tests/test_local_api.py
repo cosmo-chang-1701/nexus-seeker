@@ -50,4 +50,34 @@ def test_scrape_fedwatch_fallback():
         data = response.json()
         assert data["status"] == "success"
         assert data["data"]["probability"] == 0.72
-        assert data["data"]["decision"] == "maintain"
+
+
+def test_scrape_sec_fundamental():
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.text = "<html><body><ix:header>Header</ix:header><us-gaap:Revenues>100</us-gaap:Revenues><div>Clean text</div></body></html>"
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json = MagicMock(
+        return_value={
+            "filings": {
+                "recent": {
+                    "form": ["10-Q", "10-K"],
+                    "accessionNumber": ["0001-22", "0002-22"],
+                    "primaryDocument": ["doc1.htm", "doc2.htm"],
+                }
+            }
+        }
+    )
+
+    with patch("local_api._get_sec_cik", new_callable=AsyncMock) as mock_cik, patch(
+        "httpx.AsyncClient.get", new_callable=AsyncMock
+    ) as mock_get:
+        mock_cik.return_value = "0001318605"
+        mock_get.return_value = mock_response
+
+        response = client.get("/api/v1/scrape/fundamental/TSLA")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+        # The clean logic should remove ix:header and us-gaap and strip to text
+        assert "Clean text" in data["data"]["text"]

@@ -106,8 +106,12 @@ def test_check_satellite_rebalancing(engine: DynamicRolloverEngine) -> None:
 @pytest.mark.asyncio
 @patch("market_analysis.dynamic_rollover.is_memory_safe", return_value=True)
 @patch("market_analysis.dynamic_rollover.client")
+@patch("database.market_cache.save_fundamental_cache")
 async def test_evaluate_fundamental_thesis(
-    mock_client: MagicMock, mock_mem: MagicMock, engine: DynamicRolloverEngine
+    mock_save_cache: MagicMock,
+    mock_client: MagicMock,
+    mock_mem: MagicMock,
+    engine: DynamicRolloverEngine,
 ) -> None:
     # Mock LLM Response
     mock_parsed = FundamentalThesisResult(
@@ -126,6 +130,9 @@ async def test_evaluate_fundamental_thesis(
     assert res is not None
     assert res.is_broken is True
     assert res.reasoning == "Test reason"
+
+    # Verify the result is cached
+    mock_save_cache.assert_called_once_with("AMD", True, 0.9, "Test reason")
 
 
 @pytest.mark.asyncio

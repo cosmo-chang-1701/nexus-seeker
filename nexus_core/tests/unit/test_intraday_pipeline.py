@@ -629,3 +629,68 @@ def test_scenario_guidance_above_max_pain() -> None:
 def test_scenario_guidance_below_max_pain() -> None:
     guidance = get_scenario_guidance(350.00, 375.00)
     assert "價格遠低於最大痛點，具備磁吸效應回升動能" in guidance
+
+
+@pytest.mark.asyncio
+@patch("database.market_cache.get_fundamental_cache")
+@patch("market_analysis.intraday_pipeline.build_enhanced_watchlist_metrics")
+@patch("market_analysis.index_microstructure.get_market_regime")
+async def test_global_defense_gate_blocks_bullish_signals(
+    mock_get_regime: AsyncMock, mock_build_metrics: AsyncMock, mock_get_fc: MagicMock
+) -> None:
+    from market_analysis.intraday_pipeline import evaluate_watchlist_symbol
+
+    from models.schemas import EnhancedWatchlistMetrics
+
+    # Set up mock metrics that would normally trigger a bullish "spear" mode
+    mock_metrics = EnhancedWatchlistMetrics(
+        symbol="TSLA",
+        exchange="NASDAQ",
+        current_price=200.0,
+        buy_zone_status="buy",
+        buy_price_phase1=195.0,
+        buy_price_phase2=190.0,
+        buy_price_phase3=185.0,
+        sell_zone_status="wait",
+        sell_price_phase1=210.0,
+        sell_price_phase2=220.0,
+        sell_price_phase3=230.0,
+        atr_14=5.0,
+        skew_percentile=50.0,
+        pcr=1.0,
+        beta=1.2,
+        option_skew_state="normal",
+        volume_poc=195.0,
+        relative_strength_spy=1.1,
+        gex_max_put_wall=180.0,
+        iv_rank=30.0,
+        is_premarket=False,
+    )
+
+    mock_build_metrics.return_value = mock_metrics
+    mock_get_regime.return_value = "NORMAL"
+
+    # CASE 1: Thesis is NOT broken
+    mock_get_fc.return_value = {"is_broken": 0, "reasoning": "Still good"}
+
+    res_healthy = await evaluate_watchlist_symbol("TSLA")
+
+    assert res_healthy is not None
+    # Should normally not be "wait" if it passes conditions (it might be Spear or Shield, but definitely not LIQUIDATE)
+    assert "LIQUIDATE (基本面破滅強制清算)" not in res_healthy.tactical.sddm_route
+
+    # CASE 2: Thesis IS broken
+    mock_get_fc.return_value = {
+        "is_broken": 1,
+        "reasoning": "Deteriorating margins and lost market share.",
+    }
+
+    res_broken = await evaluate_watchlist_symbol("TSLA")
+
+    assert res_broken is not None
+    # Global Defense Gate should override
+    assert res_broken.tactical.scenario == "wait"
+    assert res_broken.tactical.sddm_route == "LIQUIDATE (基本面破滅強制清算)"
+    assert "LLM 護城河破滅警告" in res_broken.tactical.action_guideline
+    assert "Deteriorating margins" in res_broken.tactical.action_guideline
+    assert res_broken.tactical.alert_level == "red"
