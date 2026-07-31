@@ -2,6 +2,7 @@ from typing import Any
 import math
 from typing import Optional, Dict
 import pandas as pd
+import pandas_ta as ta  # noqa: F401
 import numpy as np
 import yfinance as yf  # 僅保留用於 option_chain() / options
 from services import market_data_service

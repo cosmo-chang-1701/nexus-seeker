@@ -326,14 +326,11 @@ async def get_quote(symbol: str) -> Dict[str, Any]:
             logger.warning(f"[{symbol}] Finnhub quote 無效，嘗試 yfinance fallback")
             return await get_yfinance_quote(symbol)
         except Exception as e:
-            # 如果是明確的權限錯誤，也轉向 yfinance
-            error_msg = str(e).lower()
-            if "subscription required" in error_msg or "market data" in error_msg:
-                logger.info(f"[{symbol}] Finnhub 權限受限，強制轉向 yfinance")
-                return await get_yfinance_quote(symbol)
-
-            logger.error(f"[{symbol}] Finnhub quote 失敗: {e}")
-            return {}
+            # 任何 Finnhub 錯誤（包含限流 429、權限問題等）皆強制轉向 yfinance fallback，避免回傳 {} 導致下游算式崩潰
+            logger.warning(
+                f"[{symbol}] Finnhub quote 失敗: {e}，強制轉向 yfinance fallback"
+            )
+            return await get_yfinance_quote(symbol)
 
     res = await _fetch()
     if res and res.get("c", 0) > 0:
