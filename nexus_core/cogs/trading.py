@@ -976,13 +976,35 @@ class SchedulerCog(commands.Cog):
 
                     for res in valid_results:
                         symbol = res.get("symbol")
+                        if not symbol:
+                            continue
+
+                        iv_rank = res.get("iv_metrics", {}).get("iv_rank", 0.0)
+                        vp_data = res.get("vp_data", {})
+                        hvn = vp_data.get("hvn", 0.0)
+                        lvn = vp_data.get("lvn", 0.0)
+
+                        gex_data = res.get("gex_profile_data") or {}
+                        call_wall = gex_data.get("call_wall", 0.0)
+                        put_wall = gex_data.get("put_wall", 0.0)
+                        gamma_flip = gex_data.get("gamma_flip", 0.0)
+
+                        psq_data = res.get("psq_result") or {}
+                        is_squeezing = psq_data.get("is_squeezing", False)
+
+                        quote_data = res.get("quote") or {}
+                        price = quote_data.get("c", 0.0)
+
                         scenario = classify_market_scenario(
-                            price=res.get("live_price", 0.0),
-                            put_wall=res.get("gex_max_put_wall", 0.0),
-                            call_wall=res.get("gex_max_call_wall", 0.0),
-                            gamma_flip=res.get("gamma_flip", 0.0),
-                            is_squeezing=res.get("is_squeezing", False),
-                            uoa_skew=res.get("uoa_skew", 0.0),
+                            price=price,
+                            put_wall=put_wall,
+                            call_wall=call_wall,
+                            gamma_flip=gamma_flip,
+                            is_squeezing=is_squeezing,
+                            uoa_skew=res.get("skew", 0.0),
+                            ivr=iv_rank,
+                            hvn=hvn,
+                            lvn=lvn,
                         )
                         if scenario:
                             cache_key = f"scenario_alert_{uid}_{symbol}_{today_str}_{scenario.name}"
@@ -990,9 +1012,13 @@ class SchedulerCog(commands.Cog):
                                 alert_embed = create_scenario_alert_embed(
                                     symbol=symbol,
                                     scenario=scenario,
-                                    price=res.get("live_price", 0.0),
-                                    put_wall=res.get("gex_max_put_wall", 0.0),
-                                    gamma_flip=res.get("gamma_flip", 0.0),
+                                    price=price,
+                                    put_wall=put_wall,
+                                    call_wall=call_wall,
+                                    gamma_flip=gamma_flip,
+                                    ivr=iv_rank,
+                                    hvn=hvn,
+                                    lvn=lvn,
                                 )
                                 await self.bot.queue_dm(uid, embed=alert_embed)
                                 await database.save_kv_cache(cache_key, True)

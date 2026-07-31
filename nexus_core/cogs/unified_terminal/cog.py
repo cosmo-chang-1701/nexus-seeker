@@ -849,6 +849,15 @@ class UnifiedTerminalCog(commands.Cog):
         dp_poc_val = get_kv_cache(f"dp_poc_{sym.upper()}")
         dp_poc = float(dp_poc_val) if dp_poc_val is not None else 0.0
 
+        # 重複利用 df_hist 計算 Volume Profile (HVN/LVN)
+        from market_analysis.volume_profile import calculate_volume_profile_from_df
+
+        vp_data = (
+            calculate_volume_profile_from_df(df_hist, days=20, is_hourly=False)
+            if df_hist is not None
+            else None
+        )
+
         return {
             "symbol": sym,
             "quote": quote,
@@ -862,6 +871,7 @@ class UnifiedTerminalCog(commands.Cog):
             "psq_result": psq_res,
             "dp_poc": dp_poc,
             "ma20": ema_21,
+            "vp_data": vp_data or {},
         }
 
     @app_commands.command(

@@ -617,15 +617,20 @@ def create_scenario_alert_embed(
     scenario: MarketScenario,
     price: float,
     put_wall: float,
+    call_wall: float,
     gamma_flip: float,
+    ivr: float,
+    hvn: float,
+    lvn: float,
 ) -> discord.Embed:
     """建立戰場情境轉折警報 Embed"""
 
     color_map = {
+        MarketScenario.GOLDEN_LEFT: discord.Color.gold(),
+        MarketScenario.STRONG_BREAKOUT: discord.Color.green(),
+        MarketScenario.GOLDEN_TAKE_PROFIT: discord.Color.teal(),
+        MarketScenario.FAKE_SUPPORT_TRAP: discord.Color.orange(),
         MarketScenario.STRUCTURAL_BREAKDOWN: discord.Color.red(),
-        MarketScenario.MOMENTUM_SQUEEZE: discord.Color.green(),
-        MarketScenario.SUPPORT_BUILD: discord.Color.gold(),
-        MarketScenario.RANGE_BOUND: discord.Color.blue(),
     }
 
     embed = discord.Embed(
@@ -636,26 +641,32 @@ def create_scenario_alert_embed(
     )
 
     # 根據情境給予不同的敘述與決策命令
-    if scenario == MarketScenario.STRUCTURAL_BREAKDOWN:
-        detail = "負 Gamma 區下行連環賣壓"
-        action = "絕對執行動態轉倉：個股護盤結構失效。果斷砍單，將資金轉移至大盤 ETF（如 QQQ/SPY）避風港，等待市場重築籌碼結構。"
-    elif scenario == MarketScenario.MOMENTUM_SQUEEZE:
-        detail = "負 Gamma 轉折 Call Squeeze"
-        action = "全力投入動能部位（Long Debit Spread）。做市商買盤成為推升燃料，享受高資產運轉效率。"
-    elif scenario == MarketScenario.SUPPORT_BUILD:
-        detail = "正 Gamma 區機構護盤"
-        action = "腳尖試水溫（現貨/看多價差）。以 PutWall 作為嚴格停損線，博弈做市商對沖買盤引發的反彈。"
+    if scenario == MarketScenario.GOLDEN_LEFT:
+        tool = "現貨分批或 Sell Put Spread"
+        action = "【試水溫加碼】動用 20%~30% 資金建倉；做市商對沖盤與現貨買盤雙重護航，抽取 Theta 與 IV 回歸利潤。"
+    elif scenario == MarketScenario.STRONG_BREAKOUT:
+        tool = "Buy Call Debit Spread或 現貨追擊"
+        action = "【順勢加碼】做市商進入 Call Squeeze（軋空追買），LVN 提供無阻力加速區，利用便宜期權進行高槓桿動能追擊。"
+    elif scenario == MarketScenario.GOLDEN_TAKE_PROFIT:
+        tool = "分批賣出現貨或 Sell Call Spread"
+        action = "【分批減碼】果斷減碼 30%~50% 部位鎖定利潤。做市商拋售賣壓與 HVN 籌碼牆將形成巨大上檔天花板。"
+    elif scenario == MarketScenario.FAKE_SUPPORT_TRAP:
+        tool = "禁止開多（可佈局 Bear Spread）"
+        action = "【觀望 / 嚴禁抄底】紙糊的牆。做市商在負 Gamma 區會追砍現貨，LVN 會加速下挫。基本面再好也不可在此處左側接刀。"
+    elif scenario == MarketScenario.STRUCTURAL_BREAKDOWN:
+        tool = "清空個股多頭轉入 大盤 ETF"
+        action = "【絕對執行轉倉】個股數據優勢完全喪失，做市商開啟連環賣壓。果斷砍單，將 100% 資金轉轉移至 QQQ/SPY 作為避風港。"
     else:
-        detail = "正 Gamma 區震盪收斂"
-        action = "佈局賣方價差（Sell Iron Condor / Credit Spread）。利用 PutWall / CallWall 作為防禦邊界，抽取高 IV 回歸紅利。"
+        tool = "未定義"
+        action = "未知操作"
 
     embed.add_field(
-        name="📊 關鍵觸發條件",
-        value=f"• 現價 (${price:.2f})\n• 做市商 PutWall (${put_wall:.2f})\n• 大盤 Gamma Flip Line (${gamma_flip:.2f})",
+        name="📊 關鍵風控指標",
+        value=f"• 現價: `${price:.2f}`\n• Gamma Flip: `${gamma_flip:.2f}`\n• PutWall/CallWall: `${put_wall:.2f}` / `${call_wall:.2f}`\n• HVN/LVN: `${hvn:.2f}` / `${lvn:.2f}`\n• IV Rank: `{ivr:.1f}%`",
         inline=False,
     )
-    embed.add_field(name="🛡️ 市場屬性", value=detail, inline=False)
-    embed.add_field(name="⚔️ 資金效率與操作決策", value=f"└─ {action}", inline=False)
-    embed.set_footer(text="Nexus Risk Optimizer | 戰場情境決策矩陣")
+    embed.add_field(name="🛠️ 最優交易工具", value=tool, inline=False)
+    embed.add_field(name="⚔️ 資金處置與加減碼指令", value=f"└─ {action}", inline=False)
+    embed.set_footer(text="Nexus Risk Optimizer | 戰場情境決策矩陣 (v2.0)")
 
     return embed

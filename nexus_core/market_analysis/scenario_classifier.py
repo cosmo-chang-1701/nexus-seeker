@@ -3,10 +3,11 @@ from typing import Optional
 
 
 class MarketScenario(Enum):
-    RANGE_BOUND = "區間抽取時間價值"
-    SUPPORT_BUILD = "多頭支撐建倉"
-    MOMENTUM_SQUEEZE = "動能軋空爆發"
-    STRUCTURAL_BREAKDOWN = "結構破位與轉倉"
+    GOLDEN_LEFT = "黃金左側加碼"
+    STRONG_BREAKOUT = "強勢突破加碼"
+    GOLDEN_TAKE_PROFIT = "黃金波段止盈"
+    FAKE_SUPPORT_TRAP = "假性支撐陷阱"
+    STRUCTURAL_BREAKDOWN = "結構破位轉倉"
 
 
 def classify_market_scenario(
@@ -16,12 +17,11 @@ def classify_market_scenario(
     gamma_flip: float,
     is_squeezing: bool,
     uoa_skew: float,
+    ivr: float,
+    hvn: float,
+    lvn: float,
 ) -> Optional[MarketScenario]:
-    """
-    Classifies the current market scenario based on quant parameters.
-    Returns None if the market is in a normal state that does not warrant an alert.
-    """
-    if not all([price, put_wall, call_wall]):
+    if not all([price, put_wall, call_wall, gamma_flip]):
         return None
 
     try:
@@ -29,28 +29,53 @@ def classify_market_scenario(
         put_wall = float(put_wall)
         call_wall = float(call_wall)
         gamma_flip = float(gamma_flip) if gamma_flip is not None else 0.0
-        uoa_skew = float(uoa_skew) if uoa_skew is not None else 0.0
+        ivr = float(ivr) if ivr is not None else 0.0
+        hvn = float(hvn) if hvn is not None else 0.0
+        lvn = float(lvn) if lvn is not None else 0.0
     except (ValueError, TypeError):
         return None
 
     if price == 0.0 or put_wall == 0.0 or call_wall == 0.0:
         return None
 
-    # 4. 結構破位與轉倉: 現價跌破 PutWall 且 現價 < Gamma Flip
-    if price < put_wall and price < gamma_flip:
+    def is_near(val1: float, val2: float, tolerance: float = 0.015) -> bool:
+        if val1 == 0 or val2 == 0:
+            return False
+        return abs(val1 - val2) / val2 <= tolerance
+
+    # 5. 結構破位轉倉 (Structural Breakdown Roll)
+    if price < gamma_flip and price < put_wall and is_near(price, lvn):
         return MarketScenario.STRUCTURAL_BREAKDOWN
 
-    # 3. 動能軋空爆發: 突破 CallWall 且 UOA 偏向 Call (或正在擠壓)
-    if price > call_wall and (is_squeezing or uoa_skew > 0.0):
-        return MarketScenario.MOMENTUM_SQUEEZE
+    # 4. 假性支撐陷阱 (Fake Support Trap)
+    if (
+        price < gamma_flip
+        and is_near(price, put_wall)
+        and lvn < put_wall
+        and ivr > 80.0
+    ):
+        return MarketScenario.FAKE_SUPPORT_TRAP
 
-    # 2. 多頭支撐建倉: 現價回測 PutWall (誤差 1.5% 內) 且 未跌破 Gamma Flip
-    if abs(price - put_wall) / put_wall <= 0.015 and price >= gamma_flip:
-        return MarketScenario.SUPPORT_BUILD
+    # 3. 黃金波段止盈 (Golden Swing Take-Profit)
+    if (
+        price > gamma_flip
+        and is_near(price, call_wall)
+        and is_near(price, hvn)
+        and ivr > 70.0
+    ):
+        return MarketScenario.GOLDEN_TAKE_PROFIT
 
-    # 1. 區間抽取時間價值: PutWall < 現價 < CallWall 且 現價 > Gamma Flip
-    # 由於這是一個較為常態的區間，我們可選擇加上 IVR 條件限制，或預設直接回傳
-    if put_wall < price < call_wall and price > gamma_flip:
-        return MarketScenario.RANGE_BOUND
+    # 2. 強勢突破加碼 (Strong Breakout Scaling)
+    if price > gamma_flip and price > call_wall and is_near(price, lvn) and ivr < 30.0:
+        return MarketScenario.STRONG_BREAKOUT
+
+    # 1. 黃金左側加碼 (Golden Left-Side Scaling)
+    if (
+        price > gamma_flip
+        and is_near(price, put_wall)
+        and is_near(price, hvn)
+        and ivr > 50.0
+    ):
+        return MarketScenario.GOLDEN_LEFT
 
     return None
