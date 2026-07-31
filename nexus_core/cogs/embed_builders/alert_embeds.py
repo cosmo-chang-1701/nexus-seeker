@@ -655,11 +655,11 @@ def create_scenario_alert_embed(
             tool = "分批賣出現貨"
             action = "【分批減碼 30%~50%】鎖定利潤。做市商拋售賣壓與 HVN 籌碼牆將形成巨大上檔天花板。"
     elif scenario == MarketScenario.FAKE_SUPPORT_TRAP:
-        tool = "禁止開多（可佈局 Bear Spread）"
-        action = "【觀望 / 嚴禁抄底】紙糊的牆。做市商在負 Gamma 區會追砍現貨，LVN 會加速下挫。基本面再好也不可在此處左側接刀。"
+        tool = "禁止開多 (可佈局 Bear Spread)"
+        action = "【嚴禁抄底 / 觀望】紙糊牆或連環砍單區，基本面再好也不接刀。"
     elif scenario == MarketScenario.STRUCTURAL_BREAKDOWN:
-        tool = "清空個股多頭轉入 大盤 ETF"
-        action = "【絕對執行轉倉】個股數據優勢完全喪失，做市商開啟連環賣壓。果斷砍單，將 100% 資金轉轉移至 QQQ/SPY 作為避風港。"
+        tool = "清空個股多頭，資金轉入 QQQ / SPY 大盤 ETF 避風港"
+        action = "【100% 絕對執行轉倉】個股護盤結構失效，停止對個股抱有幻想。"
     else:
         tool = "未定義"
         action = "未知操作"
