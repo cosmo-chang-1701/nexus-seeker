@@ -473,7 +473,7 @@ def create_ddp_embed(report: Dict[str, Any]) -> discord.Embed:
     pe_upside = (pe_mean / curr_pe - 1) * 100 if curr_pe > 0 else 0
 
     embed = discord.Embed(
-        title=f"🌌 Nexus 戴維斯雙擊預警: {sym}",
+        title=f"🌌 警報：Nexus 戴維斯雙擊 (DDP) | {sym}",
         description="偵測到標的符合 **Davis Double Play (DDP)** 條件：盈餘增長與估值擴張的雙重共振。",
         color=0x00FF7F,  # SpringGreen
         timestamp=datetime.now(timezone.utc),
@@ -546,7 +546,7 @@ def create_volatility_embed(report: Dict[str, Any]) -> discord.Embed:
     color = 0x00FF00 if status == "波動率極低" else 0xFFFF00
 
     embed = discord.Embed(
-        title="📊 Nexus Seeker | 波動率優勢偵測",
+        title=f"🌌 警報：Nexus 戴維斯雙擊 (波動率優勢) | {sym}",
         color=color,
         timestamp=datetime.now(timezone.utc),
     )

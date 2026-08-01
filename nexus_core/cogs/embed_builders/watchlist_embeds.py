@@ -420,7 +420,7 @@ def create_watchlist_signal_embed(
         lines.extend(
             [
                 "",
-                " 📉 隱含波動率與預期空間 (IV Context)",
+                " 🧱 心跳：期權結構與波動率",
                 f" ├─ Implied Volatility (IV): {iv_val_str} ｜ IV Rank: {iv_rank_str} ({iv_status_str})",
             ]
         )
@@ -465,7 +465,7 @@ def create_watchlist_signal_embed(
         lines.extend(
             [
                 "",
-                " 🔎 異常活動穿透 (Directional UOA - Bid/Ask Track)",
+                " 🔎 心跳：異常大單穿透 (UOA)",
                 " 到期日     | 履約價      | 類型 | 交易流向 [買/賣]      | 機構/OI    | 比例   | 戰略意圖映射",
                 " ---------------------------------------------------------------------------------------",
             ]
@@ -477,7 +477,7 @@ def create_watchlist_signal_embed(
         lines.extend(
             [
                 "",
-                " 💼 賬戶股權防護指引 (Holding & Risk Alignment Guide)",
+                " 🛡️ 心跳：操盤指引與委託風控",
                 f" ├─ 既有現貨持倉: {shares_str} 股 ｜ 平均成本: {avg_cost_str} ｜ 當前損益: {pnl_str}",
             ]
         )

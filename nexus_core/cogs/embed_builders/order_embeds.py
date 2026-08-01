@@ -51,7 +51,8 @@ def create_intraday_scan_embed(output: Any) -> discord.Embed:
         embed_color = discord.Color.blue()
 
     embed = discord.Embed(
-        title=f"📊 Nexus Seeker | 盤中量化掃描 & 避險執行指南 ({output.ticker})",
+        title=f"📊 報告：盤中量化掃描與避險執行 | {output.ticker}",
+        description="本掃描資料由 Nexus Seeker 量化避險引擎產生。\n\u200b",
         color=embed_color,
         timestamp=output.timestamp.astimezone(timezone.utc),
     )
@@ -490,7 +491,7 @@ def create_telemetry_alignment_embeds(
     - scheduled_mode=True: 盤中每半小時自動推播版本（不含按鈕）
     """
 
-    title = "🌌 Nexus Seeker | 待成交委託單實時對齊快照"
+    title = "🌌 快照：待成交委託單實時對齊"
     if scheduled_mode:
         title += " (盤中每半小時)"
 
@@ -579,7 +580,7 @@ def create_telemetry_alignment_embed(
         include_apply_button_hint=include_apply_button_hint,
         scheduled_mode=scheduled_mode,
     )
-    return embeds[0] if embeds else discord.Embed(title="Telemetry 對齊警報")
+    return embeds[0] if embeds else discord.Embed(title="🌌 快照：待成交委託單實時對齊")
 
 
 def build_pre_market_briefing_embed(
@@ -594,7 +595,7 @@ def build_pre_market_briefing_embed(
     base_color = discord.Color.red() if is_risky else discord.Color.blue()
 
     embed = discord.Embed(
-        title="🌅 Nexus Seeker | 盤前綜合宏觀與自選股報告",
+        title="🌅 報告：盤前綜合宏觀與自選股",
         description="盤前 30 分鐘市場狀態與自選股財報季預警快速簡報。",
         color=base_color,
         timestamp=datetime.now(timezone.utc),
@@ -792,7 +793,8 @@ def build_post_market_intelligence_embed(
             embed_color = discord.Color.orange()
 
     embed = discord.Embed(
-        title="📋 Nexus Seeker | 盤後綜合風險與 AI 策略報告",
+        title="📋 報告：盤後綜合風險與 AI 策略",
+        description="由 Nexus Seeker 風險引擎生成之每日風險控制結算報告。",
         color=embed_color,
         timestamp=datetime.now(timezone.utc),
     )

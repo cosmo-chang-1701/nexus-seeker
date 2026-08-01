@@ -417,7 +417,7 @@ def create_quote_embed(symbol: str, data: Dict[str, Any]) -> discord.Embed:
 def create_profit_lock_alert_embed(event: Dict[str, Any]) -> discord.Embed:
     """建立 DITM 獲利鎖定警報 Embed。"""
     embed = discord.Embed(
-        title="🚨 DITM 凸性防護：獲利鎖定已觸發",
+        title=f"🚨 警報：DITM 凸性防護與獲利鎖定 | {event.get('symbol', 'UNKNOWN')}",
         description=(
             f"偵測到標的 **{event['symbol']}** 已進入深價內 (DITM)，"
             "凸性消失且風險報酬比惡化。"
@@ -439,7 +439,7 @@ def create_profit_lock_alert_embed(event: Dict[str, Any]) -> discord.Embed:
 def create_gamma_fragility_embed(event: Dict[str, Any]) -> discord.Embed:
     """建立 Gamma 脆弱性警告 Embed。"""
     embed = discord.Embed(
-        title="🆘 Gamma 脆弱性警告 (Net Gamma < -20)",
+        title="🆘 警報：Gamma 脆弱性與斷層",
         description="偵測到投資組合淨 Gamma 已跌破臨界點，曝險加速度呈非線性擴張。",
         color=discord.Color.dark_red(),
         timestamp=datetime.now(timezone.utc),
@@ -495,7 +495,7 @@ def create_ditm_transition_alert_embed(
 ) -> discord.Embed:
     """建立 VTR DITM 防禦通知 Embed。"""
     embed = discord.Embed(
-        title="🚨 NRO 優先指令：Profit Lock (DITM 凸性防禦)",
+        title=f"🚨 警報：DITM 凸性防護與獲利鎖定 | {symbol}",
         description=f"偵測到標的 **{symbol}** 已進入深價內 (DITM)，凸性消失且風險報酬比惡化。",
         color=discord.Color.gold(),
         timestamp=datetime.now(timezone.utc),
@@ -586,7 +586,7 @@ def create_vtr_settlement_notice_embed(
 ) -> discord.Embed:
     """建立 VTR 轉倉/平倉結算通知 Embed。"""
     embed = discord.Embed(
-        title=f"{status_icon} {symbol} 結算通知",
+        title=f"📈 報告：虛擬交易室 (VTR) 績效總結 | {symbol}",
         color=discord.Color.blue() if "轉倉" in status_icon else discord.Color.red(),
         timestamp=datetime.now(timezone.utc),
     )

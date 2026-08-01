@@ -296,8 +296,7 @@ def create_polymarket_whale_alert_embed(
 ) -> discord.Embed:
     """建立 Polymarket 巨鯨戰報 Embed。"""
     embed = discord.Embed(
-        title="【 🐋 Polymarket 巨鯨戰報 】"
-        + (" 🔥 高信心訊號" if is_high_conviction else ""),
+        title="🐳 警報：巨鯨交易異動" + (" (高信心訊號)" if is_high_conviction else ""),
         color=(
             discord.Color.gold()
             if is_high_conviction
@@ -378,8 +377,8 @@ def create_option_defense_alert_embed(
         color = discord.Color.green()
 
     embed = discord.Embed(
-        title=f"{title_prefix} {symbol} 轉倉防禦與結算",
-        description=f"標的 **{symbol}** 已執行平倉或防禦性轉倉處置。\n\u200b",
+        title=f"🛡️ 警報：期權轉倉防禦與結算 | {symbol}",
+        description=f"**{title_prefix}**\n標的 **{symbol}** 已執行平倉或防禦性轉倉處置。\n\u200b",
         color=color,
         timestamp=datetime.now(timezone.utc),
     )
@@ -426,7 +425,7 @@ def create_volatility_risk_alert_embed(
 ) -> discord.Embed:
     """建立波動率與重大事件對沖警報 Embed (合併主動與被動)"""
     embed = discord.Embed(
-        title=title_text,
+        title=f"🛡️ 警報：重大事件即時防護 | {title_text}",
         description=description_text,
         color=discord.Color(color_hex),
         timestamp=datetime.now(timezone.utc),

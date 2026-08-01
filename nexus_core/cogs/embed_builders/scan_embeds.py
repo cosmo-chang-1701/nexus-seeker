@@ -626,7 +626,7 @@ def create_covered_call_unlock_embed(data: dict) -> discord.Embed:
     recs = data.get("recommendations", [])
 
     embed = NexusEmbed(
-        title=f"🔓 {symbol} 物理死鎖解除與備兌建單指引",
+        title=f"🔓 警報：物理死鎖解除與備兌建單 | {symbol}",
         color=discord.Color.green() if recs else discord.Color.orange(),
     )
 
