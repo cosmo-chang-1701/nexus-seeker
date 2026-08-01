@@ -148,11 +148,11 @@ The visibility of these sections is controlled by 3 granular notification toggle
 
 Current sections:
 
-1. **📊 技術 / 期權快照** (Technical/Options Snapshot ANSI Panel)
+1. **🧱 心跳：期權結構與波動率** (Technical/Options Snapshot ANSI Panel)
 2. **📐 Skew 與市場判讀** (Skew Interpretation ANSI Panel - aligned with Sentiment Scan style)
 3. **🤖 LLM Skew 解說** (LLM Skew Commentary)
 4. **🗓️ 事件風控** (Event Risk Management Summary)
-5. **💼 持倉與操作指引** (Holdings & Trading Guide ANSI Panel - dynamically calculates suitable entry/exit prices and shares sizing)
+5. **🛡️ 心跳：操盤指引與委託風控** (Holdings & Trading Guide ANSI Panel - dynamically calculates suitable entry/exit prices and shares sizing)
 6. **🎯 執行建議** (Execution Suggestions - with options suggestions aligned with calculated pricing strikes)
 7. **🧾 可執行期權合約** (Executable Options Contracts)
 
