@@ -293,7 +293,7 @@ def test_create_ddp_embed() -> None:
         "forward_pe": 16.0,
     }
     embed = create_ddp_embed(report)
-    assert "戴維斯雙擊預警: AAPL" in embed.title  # type: ignore
+    assert "警報：Nexus 戴維斯雙擊 (DDP) | AAPL" in embed.title  # type: ignore
 
     ddp_val = embed.fields[0].value
     assert "DDP 量化指標" in ddp_val  # type: ignore
@@ -319,7 +319,7 @@ def test_create_volatility_embed() -> None:
         "runway_impact": 2,
     }
     embed = create_volatility_embed(report)
-    assert "波動率優勢偵測" in embed.title  # type: ignore
+    assert "警報：Nexus 戴維斯雙擊 (波動率優勢) | AAPL" in embed.title  # type: ignore
 
     eval_val = embed.fields[0].value
     assert "評估指標" in eval_val  # type: ignore
@@ -480,7 +480,7 @@ def test_create_watchlist_signal_embed() -> None:
     )
 
     assert "物理籌碼牆與邊緣偵測 (Market Footprints)" in embed.description  # type: ignore
-    assert "隱含波動率與預期空間 (IV Context)" in embed.description  # type: ignore
+    assert "心跳：期權結構與波動率" in embed.description  # type: ignore
     assert "結算與目標 (Target Lock)" in embed.description  # type: ignore
     assert (
         "既有現貨持倉: 120 股 ｜ 平均成本: $150.00 ｜ 當前損益: +10.00%"  # type: ignore
@@ -728,7 +728,7 @@ def test_create_profit_lock_alert_embed() -> None:
 
 def test_create_gamma_fragility_embed() -> None:
     embed = create_gamma_fragility_embed({"net_gamma": -25.5, "threshold": -20})
-    assert "Gamma 脆弱性警告" in embed.title  # type: ignore
+    assert "🆘 警報：Gamma 脆弱性與斷層" in embed.title  # type: ignore
     assert "`-25.5`" == embed.fields[0].value
     assert "`-20`" == embed.fields[1].value
 
@@ -765,7 +765,7 @@ def test_create_ditm_transition_alert_embed() -> None:
         exposure_pct=12.5,
         hedge={"action": "賣出 10 股 SPY", "gap": 10},
     )
-    assert "DITM 凸性防禦" in embed.title  # type: ignore
+    assert "🚨 警報：DITM 凸性防護與獲利鎖定 | TSLA" in embed.title  # type: ignore
     assert "TSLA" in embed.description  # type: ignore
     assert "12.50%" in embed.fields[3].value  # type: ignore
     assert "賣出 10 股 SPY" in embed.fields[4].value  # type: ignore
@@ -1085,9 +1085,9 @@ def test_build_post_market_intelligence_embed_empty() -> None:
         ai_commentary="Test AI commentary",
     )
     embed = embeds[0]
-    assert embed.title == "📋 Nexus Seeker | 盤後綜合風險與 AI 策略報告"
+    assert embed.title == "📋 報告：盤後綜合風險與 AI 策略"
 
-    assert embed.title == "📋 Nexus Seeker | 盤後綜合風險與 AI 策略報告"
+    assert embed.title == "📋 報告：盤後綜合風險與 AI 策略"
 
     assert "🏁 財務生存跑道 (Financial Runway)" in embed.description  # type: ignore
 
@@ -1167,7 +1167,7 @@ def test_create_covered_call_unlock_embed() -> None:
         ],
     }
     embed_with_recs = create_covered_call_unlock_embed(data_with_recs)
-    assert embed_with_recs.title == "🔓 NVDA 物理死鎖解除與備兌建單指引"
+    assert embed_with_recs.title == "🔓 警報：物理死鎖解除與備兌建單 | NVDA"
     assert len(embed_with_recs.fields) == 3
     assert "現貨與吸籌模擬" in embed_with_recs.fields[0].name  # type: ignore
     assert "100 股" in embed_with_recs.fields[0].value  # type: ignore
@@ -1188,7 +1188,7 @@ def test_create_covered_call_unlock_embed() -> None:
         "recommendations": [],
     }
     embed_no_recs = create_covered_call_unlock_embed(data_no_recs)
-    assert embed_no_recs.title == "🔓 AAPL 物理死鎖解除與備兌建單指引"
+    assert embed_no_recs.title == "🔓 警報：物理死鎖解除與備兌建單 | AAPL"
     assert len(embed_no_recs.fields) == 2
     assert "解鎖狀態與策略建議" in embed_no_recs.fields[1].name  # type: ignore
     assert "未尋獲符合條件之極虛值" in embed_no_recs.fields[1].value  # type: ignore

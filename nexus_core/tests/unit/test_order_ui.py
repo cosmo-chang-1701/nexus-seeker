@@ -515,7 +515,7 @@ async def test_telemetry_alert_and_alignment(mock_interaction: Any, db_conn: Any
     kwargs = mock_interaction.followup.send.call_args[1]
     embed = kwargs["embed"]
     view = kwargs["view"]
-    assert "實時對齊快照" in embed.title
+    assert "快照：待成交委託單實時對齊" in embed.title
     assert isinstance(view, ApplyTelemetryView)
 
     # 2. 一鍵套用遙測建議價
