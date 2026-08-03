@@ -975,7 +975,6 @@ class SchedulerCog(commands.Cog):
                 notif_settings = database.get_user_notification_settings(uid)
                 hb_keys = [
                     "hb_options_structure",
-                    "hb_uoa",
                     "hb_execution_risk",
                 ]
                 hb_enabled = any(notif_settings.get(k, True) for k in hb_keys)
