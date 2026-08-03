@@ -14,9 +14,18 @@ MEMORY_SAFETY_THRESHOLD = 85.0
 
 
 def is_memory_safe() -> bool:
-    """檢查系統記憶體是否高於安全閾值。"""
+    """檢查系統總記憶體 (實體 RAM + 虛擬 Swap) 使用率是否高於安全閾值。"""
     mem = psutil.virtual_memory()
-    return bool(mem.percent < MEMORY_SAFETY_THRESHOLD)
+    swap = psutil.swap_memory()
+
+    total_memory = mem.total + swap.total
+    used_memory = mem.used + swap.used
+
+    if total_memory == 0:
+        return True
+
+    combined_percent = (used_memory / total_memory) * 100.0
+    return combined_percent < MEMORY_SAFETY_THRESHOLD
 
 
 # ==========================================
