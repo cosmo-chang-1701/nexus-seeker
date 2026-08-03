@@ -27,11 +27,16 @@ def test_bounded_cache_lru() -> None:
 
 
 def test_is_memory_safe_logic() -> None:
-    with patch("psutil.virtual_memory") as mock_mem:
+    with patch("psutil.virtual_memory") as mock_mem, patch(
+        "psutil.swap_memory"
+    ) as mock_swap:
         # Case 1: Safe (70%)
-        mock_mem.return_value.percent = 70.0
+        mock_mem.return_value.total = 1000
+        mock_mem.return_value.used = 700
+        mock_swap.return_value.total = 0
+        mock_swap.return_value.used = 0
         assert is_memory_safe() is True
 
         # Case 2: Unsafe (90%)
-        mock_mem.return_value.percent = 90.0
+        mock_mem.return_value.used = 900
         assert is_memory_safe() is False

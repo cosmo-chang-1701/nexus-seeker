@@ -299,13 +299,13 @@ async def test_build_watchlist_heartbeat_embed_includes_option_plan(  # type: ig
         return_value="rule-skew-commentary",
     ) as mock_skew_commentary, patch(
         "cogs.embed_builder.create_watchlist_signal_embed",
-        return_value="watchlist-embed",
+        return_value=MagicMock(),
     ) as mock_create_embed:
         embed = await intraday_pipeline._build_watchlist_heartbeat_embed(
             evaluation, user_context
         )
 
-    assert embed == "watchlist-embed"
+    assert embed == mock_create_embed.return_value
     mock_build_plan.assert_awaited_once_with(
         evaluation.metrics,
         evaluation.tactical,
