@@ -406,6 +406,7 @@ class WatchlistHeartbeatView(discord.ui.View):
     async def analyze_button(
         self, interaction: discord.Interaction, button: discord.ui.Button[Any]
     ) -> None:
+        await interaction.response.defer(ephemeral=True)
         cog = interaction.client.get_cog("UnifiedTerminalCog")  # type: ignore
         if cog and hasattr(cog, "_run_single_symbol_hub"):
             # 呼叫 UnifiedTerminalCog 執行標的深度分析
@@ -415,7 +416,7 @@ class WatchlistHeartbeatView(discord.ui.View):
         else:
             from cogs.embed_builder import create_error_embed
 
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 embed=create_error_embed(
                     "無法找到終端模組 (UnifiedTerminalCog) 或方法遺失。"
                 ),
