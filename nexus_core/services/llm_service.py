@@ -25,7 +25,7 @@ def is_memory_safe() -> bool:
         return True
 
     combined_percent = (used_memory / total_memory) * 100.0
-    return combined_percent < MEMORY_SAFETY_THRESHOLD
+    return bool(combined_percent < MEMORY_SAFETY_THRESHOLD)
 
 
 # ==========================================
