@@ -1075,6 +1075,35 @@ def test_build_radar_scan_embed() -> None:
     assert "籌碼斷層" in embed.description  # type: ignore
 
 
+def test_build_radar_scan_embed_with_none_values() -> None:
+    """Verify that build_radar_scan_embed handles None values in dictionaries gracefully."""
+    scan_results = [
+        {
+            "symbol": "CRASH",
+            "quote": {"c": 100.0, "dp": 0.0},
+            "iv_metrics": {
+                "iv_rank": None,
+                "expected_move_weekly": None,
+            },
+            "skew": None,
+            "max_pain": {"max_pain": None},
+            "gex_metrics": {
+                "put_wall": None,
+                "call_wall": None,
+                "zero_gamma": None,
+                "net_gex": None,
+            },
+            "psq_result": {"momentum": None},
+        },
+    ]
+
+    # Should not raise TypeError: float() argument must be a string or a real number, not 'NoneType'
+    embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
+    assert len(embeds) == 1
+    embed = embeds[0]
+    assert "CRASH" in embed.description  # type: ignore
+
+
 def test_build_post_market_intelligence_embed_empty() -> None:
     """Verify that build_post_market_intelligence_embed correctly renders when there are no report lines."""
     embeds = build_post_market_intelligence_embed(

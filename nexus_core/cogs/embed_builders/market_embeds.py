@@ -478,8 +478,8 @@ def build_radar_scan_embed(
             if is_fixed_income:
                 em_low = em_high = price_val
             elif price_val > 0 and em_weekly > 0:
-                em_low = float(iv_metrics.get("expected_move_lower") or 0.0)
-                em_high = float(iv_metrics.get("expected_move_upper") or 0.0)
+                em_low = _safe_float(iv_metrics.get("expected_move_lower"))
+                em_high = _safe_float(iv_metrics.get("expected_move_upper"))
                 if em_high <= em_low:
                     reference_price = round(
                         float(iv_metrics.get("reference_price") or price_val), 2
@@ -516,11 +516,11 @@ def build_radar_scan_embed(
             # 解析 PutWall
             put_wall = 0.0
             if "gex_metrics" in r and isinstance(r["gex_metrics"], dict):
-                put_wall = float(r["gex_metrics"].get("put_wall", 0.0))
+                put_wall = _safe_float(r["gex_metrics"].get("put_wall"))
             elif "gex_profile_data" in r and isinstance(r["gex_profile_data"], dict):
-                put_wall = float(r["gex_profile_data"].get("put_wall", 0.0))
+                put_wall = _safe_float(r["gex_profile_data"].get("put_wall"))
             elif "put_wall" in r:
-                put_wall = float(r["put_wall"])
+                put_wall = _safe_float(r.get("put_wall"))
             else:
                 # 嘗試從 metrics 提取 (如果是 Watchlist pipeline 的輸出)
                 mp_raw = r.get("max_pain")
@@ -607,9 +607,9 @@ def build_radar_scan_embed(
             # 判斷 has_positive_gamma_support:
             net_gex = 0.0
             if "gex_profile_data" in r and isinstance(r["gex_profile_data"], dict):
-                net_gex = float(r.get("gex_profile_data", {}).get("net_gex", 0.0))
+                net_gex = _safe_float(r.get("gex_profile_data", {}).get("net_gex"))
             elif "gex_metrics" in r and isinstance(r["gex_metrics"], dict):
-                net_gex = float(r.get("gex_metrics", {}).get("net_gex", 0.0))
+                net_gex = _safe_float(r.get("gex_metrics", {}).get("net_gex"))
             has_positive_gamma_support = net_gex > 10_000_000
 
             sqz_mom_val = r.get("psq_result", {}).get("momentum", 0.0)
@@ -726,8 +726,8 @@ def build_radar_scan_embed(
                 else:
                     sqz_dir = sqz_dir_raw
                 sqz_is_squeezing = psq_result.get("is_squeezing", False)
-                sqz_mom = float(
-                    psq_result.get("momentum", psq_result.get("momentum_value", 0.0))
+                sqz_mom = _safe_float(
+                    psq_result.get("momentum", psq_result.get("momentum_value"))
                 )
 
             # 連動 GEX PutWall (做市商底牆)
@@ -820,11 +820,11 @@ def build_radar_scan_embed(
             call_wall = 0.0
             gf_line = 0.0
             if "gex_metrics" in r and isinstance(r["gex_metrics"], dict):
-                call_wall = float(r["gex_metrics"].get("call_wall", 0.0))
-                gf_line = float(r["gex_metrics"].get("zero_gamma", 0.0))
+                call_wall = _safe_float(r["gex_metrics"].get("call_wall"))
+                gf_line = _safe_float(r["gex_metrics"].get("zero_gamma"))
             elif "gex_profile_data" in r and isinstance(r["gex_profile_data"], dict):
-                call_wall = float(r["gex_profile_data"].get("call_wall", 0.0))
-                gf_line = float(r["gex_profile_data"].get("zero_gamma", 0.0))
+                call_wall = _safe_float(r["gex_profile_data"].get("call_wall"))
+                gf_line = _safe_float(r["gex_profile_data"].get("zero_gamma"))
 
             if price_val > 0:
                 dists = []
@@ -885,7 +885,7 @@ def build_radar_scan_embed(
             dmp_cell = dmp_display_ansi + (" " * max(0, 18 - dmp_len))
 
             # 7. Alerts
-            skew_val = float(r.get("skew", 0.0))
+            skew_val = _safe_float(r.get("skew"))
             skew_str = "Call-Skew" if skew_val > 0 else "Put-Skew"
             label_cell = status_label
             adv_tags = r.get("advanced_tags", [])

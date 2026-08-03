@@ -529,7 +529,7 @@ async def test_telemetry_alert_and_alignment(mock_interaction: Any, db_conn: Any
         new=AsyncMock(return_value=(101.0, 102.0)),
     ):
         await view.apply_telemetry_button.callback(mock_btn_interaction)
-    assert mock_btn_interaction.response.defer.called
+    assert mock_btn_interaction.response.edit_message.called
     assert mock_btn_interaction.followup.send.called
 
     # 驗證資料庫已被調整：依據實時對齊建議，價格調整為 99.25，數量維持 20 股
