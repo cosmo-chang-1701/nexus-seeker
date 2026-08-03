@@ -17,7 +17,7 @@ import discord
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
-from cogs.embed_builders._ansi_utils import _safe_float, _pad_string
+from cogs.embed_builders._ansi_utils import _safe_float
 from cogs.embed_builders.settings_embeds import create_info_embed
 from cogs.embed_builders._core import NexusEmbed
 
@@ -423,9 +423,8 @@ def build_radar_scan_embed(
             _mp_header_dte_label = ""
 
         _max_pain_col_header = f"Max Pain{_mp_header_dte_label}"
-        # 寬度與格式對齊範例 (Max Pain 欄固定 11 字元寬以保持對齊)
-        # 價格欄擴展至 17 chars，以容納 .2f 精度 (e.g. $1234.56 (+3.65%))
-        header = f"{'標的':<8}{'價格 (漲跌)':<17}{'IVR':<8}{'本週預期區間 (EM)':<22}{_max_pain_col_header:<11}{'SQZ MOM':<14}{'與痛點價差 (D-MP)'}"
+        header = f"{'標的':<6}  {'價格 (漲跌)':<17}{'IVR / IV TS':<26}{'DTE / Event Prem':<17}{'預期區間 (EM Pos %)'}"
+        header2 = f" └─ {'結構與訊號 (GEX/Wall)':<26}{'SQZ Stage & MOM':<24}{'與痛點價差 (D-MP)':<18}{'雷達警示標籤'}"
         divider = "-" * 95
 
         ansi_lines = []
@@ -478,8 +477,6 @@ def build_radar_scan_embed(
             is_fixed_income = sym.upper() in ["BOXX", "BIL", "SHV"]
             if is_fixed_income:
                 em_low = em_high = price_val
-                em_str = "N/A (避險資產)"
-                em_ansi = "\u001b[1;30mN/A (避險資產)\u001b[0m"
             elif price_val > 0 and em_weekly > 0:
                 em_low = float(iv_metrics.get("expected_move_lower") or 0.0)
                 em_high = float(iv_metrics.get("expected_move_upper") or 0.0)
@@ -490,22 +487,16 @@ def build_radar_scan_embed(
                     em_weekly_rounded = round(em_weekly, 2)
                     em_low = reference_price - em_weekly_rounded
                     em_high = reference_price + em_weekly_rounded
-                em_str = f"${em_low:.2f} ~ ${em_high:.2f}"
-                em_ansi = f"\u001b[1;33m${em_low:.2f} ~ ${em_high:.2f}\u001b[0m"
             else:
                 price_val_rounded = round(price_val, 2)
                 fallback_em = round(price_val_rounded * 0.05, 2)
                 em_low = price_val_rounded - fallback_em
                 em_high = price_val_rounded + fallback_em
-                em_str = f"${em_low:.2f} ~ ${em_high:.2f}"
-                em_ansi = f"${em_low:.2f} ~ ${em_high:.2f}"
 
             # 4. Max Pain 與與痛點價差
             max_pain_strike = 0.0
             dist_pct = 0.0
             cb_triggered = False
-            calculation_mode = "OI"
-            is_degraded = False
 
             if is_fixed_income:
                 max_pain_strike = 0.0
@@ -515,8 +506,6 @@ def build_radar_scan_embed(
                 mp_val = mp_data.get("max_pain")
                 max_pain_strike = float(mp_val) if mp_val is not None else 0.0
                 cb_triggered = mp_data.get("circuit_breaker_triggered", False)
-                calculation_mode = mp_data.get("calculation_mode", "OI")
-                is_degraded = mp_data.get("is_degraded", False)
                 if max_pain_strike > 0 and price_val > 0:
                     dist_pct = (price_val - max_pain_strike) / max_pain_strike * 100
             elif isinstance(mp_data, (float, int)):
@@ -566,20 +555,7 @@ def build_radar_scan_embed(
             status_label = ""
             if is_magnetic:
                 status_label = "[🧲 共振磁吸]"
-                if dist_pct >= 0:
-                    dmp_str = f"[{dist_pct:+.2f}%]"
-                    dmp_ansi = f"[\u001b[1;32m{dist_pct:+.2f}%\u001b[0m]"
-                else:
-                    dmp_str = f"[{dist_pct:+.2f}%]"
-                    dmp_ansi = f"[\u001b[1;31m{dist_pct:+.2f}%\u001b[0m]"
             elif max_pain_strike > 0:
-                if dist_pct >= 0:
-                    dmp_str = f"[{dist_pct:+.2f}%]"
-                    dmp_ansi = f"[\u001b[1;32m{dist_pct:+.2f}%\u001b[0m]"
-                else:
-                    dmp_str = f"[{dist_pct:+.2f}%]"
-                    dmp_ansi = f"[\u001b[1;31m{dist_pct:+.2f}%\u001b[0m]"
-
                 if dist_pct < -10.0:
                     status_label = "超跌磁吸 🚀"
                 elif -10.0 <= dist_pct <= -5.0:
@@ -591,8 +567,6 @@ def build_radar_scan_embed(
                 else:  # > 15.0
                     status_label = "籌碼斷層 ⚠️"
             else:
-                dmp_str = "[0.00%]"
-                dmp_ansi = "[0.00%]"
                 status_label = "正常運行"
 
             # -- D-MP 動態阻斷機制與 InsightsEngine --
@@ -739,9 +713,6 @@ def build_radar_scan_embed(
                 sqz_dir = "⚪"
                 sqz_is_squeezing = False
                 sqz_mom = 0.0
-                sqz_mom_cell = (
-                    f"\u001b[1;30m{_pad_string('⚪ 數據計算中', 14)}\u001b[0m"
-                )
             else:
                 sqz_dir_raw = psq_result.get(
                     "direction", psq_result.get("signal_direction", "⚪")
@@ -785,51 +756,163 @@ def build_radar_scan_embed(
                         f"• ⏱️ **{sym}**: SQZ 正處於動能擠壓蓄力期 (Squeezing)，當前動能偏空 ({sqz_mom:+.1f})，建議嚴防向下殺跌風險。"
                     )
 
-            # 格式化一列 ANSI 表格
+            # 格式化一列 ANSI 表格 (Two-Line Tree-Style)
             sym_cell = f"\u001b[1;34m{sym:<6}\u001b[0m"
             price_cell = price_ansi + (" " * max(0, 17 - len(price_str)))
-            ivr_cell = ivr_str + (" " * max(0, 8 - len(ivr_str)))
-            em_cell = em_ansi + (" " * max(0, 22 - len(em_str)))
-            if cb_triggered:
-                mp_str_val = "CB ⚠️"
-            elif max_pain_strike > 0:
-                if calculation_mode == "Volume" or is_degraded:
-                    mp_str_val = f"${max_pain_strike:.2f}(V)"
-                else:
-                    mp_str_val = f"${max_pain_strike:.2f}"
-            else:
-                mp_str_val = "N/A"
-            mp_cell = mp_str_val + (" " * max(0, 11 - len(mp_str_val)))
 
-            dmp_padded_raw = _pad_string(dmp_str, 12)
-            dmp_cell = dmp_padded_raw.replace(dmp_str, dmp_ansi)
-            label_cell = status_label
-
-            if psq_result:
-                from cogs.embed_builders._embed_helpers import get_sqz_status_display
-
-                sqz_text, sqz_color = get_sqz_status_display(
-                    sqz_is_squeezing, sqz_mom, sqz_dir_raw, short=True
+            # 1. IV TS
+            ts_status_raw = "Normal"
+            term_ratio = None
+            if isinstance(iv_metrics, dict):
+                ts_status_raw = iv_metrics.get("iv_term_structure_status") or "Normal"
+                term_ratio = iv_metrics.get("term_structure_ratio")
+            elif hasattr(iv_metrics, "iv_term_structure_status"):
+                ts_status_raw = (
+                    getattr(iv_metrics, "iv_term_structure_status") or "Normal"
                 )
+                term_ratio = getattr(iv_metrics, "term_structure_ratio", None)
 
-                combined_raw = sqz_text[:15]
-                padded_raw = _pad_string(combined_raw, 14)
-                sqz_mom_cell = f"{sqz_color}{padded_raw}\u001b[0m"
+            iv_ts_cell_str = f"{ivr_str} / {ts_status_raw}"
+            if ts_status_raw == "Backwardation":
+                iv_ts_cell_str += " ⚠️"
+            iv_ts_len = len(iv_ts_cell_str)
 
+            if ts_status_raw == "Backwardation":
+                iv_ts_ansi = f"{ivr_str} / \u001b[1;31m{ts_status_raw} ⚠️\u001b[0m"
+            else:
+                iv_ts_ansi = f"{ivr_str} / {ts_status_raw}"
+
+            iv_ts_cell = iv_ts_ansi + (" " * max(0, 26 - iv_ts_len))
+
+            # 2. DTE / Event Prem
+            dte_er = r.get("dte_er")
+            dte_str = f"{dte_er}D" if dte_er is not None else "--"
+
+            if term_ratio is not None:
+                ratio_val = float(term_ratio)
+                ratio_str = f"{ratio_val:.1f}x"
+                if ratio_val > 1.3:
+                    ratio_str = f"{ratio_str} ⚠️"
+            else:
+                ratio_str = "--"
+
+            dte_prem_str = f"{dte_str} / {ratio_str}"
+            dte_prem_cell = dte_prem_str + (" " * max(0, 17 - len(dte_prem_str)))
+
+            # 3. EM Pos %
+            em_pos_str = "EM: N/A"
+            if em_weekly > 0 and (em_high - em_low) > 0 and not is_fixed_income:
+                pos_pct = (price_val - em_low) / (em_high - em_low) * 100
+                em_pos_str = f"EM: {pos_pct:.1f}%"
+            em_pos_cell = em_pos_str
+
+            # 4. GEX Zone & Key Wall
+            gex_zone_str = "+Gamma" if net_gex > 0 else "-Gamma"
+            gex_zone_ansi = (
+                f"\u001b[1;32m{gex_zone_str}\u001b[0m"
+                if net_gex > 0
+                else f"\u001b[1;31m{gex_zone_str}\u001b[0m"
+            )
+
+            closest_wall = "Put Wall"
+            closest_wall_val = put_wall
+
+            call_wall = 0.0
+            gf_line = 0.0
+            if "gex_metrics" in r and isinstance(r["gex_metrics"], dict):
+                call_wall = float(r["gex_metrics"].get("call_wall", 0.0))
+                gf_line = float(r["gex_metrics"].get("zero_gamma", 0.0))
+            elif "gex_profile_data" in r and isinstance(r["gex_profile_data"], dict):
+                call_wall = float(r["gex_profile_data"].get("call_wall", 0.0))
+                gf_line = float(r["gex_profile_data"].get("zero_gamma", 0.0))
+
+            if price_val > 0:
+                dists = []
+                if put_wall > 0:
+                    dists.append(("Put Wall", put_wall, abs(price_val - put_wall)))
+                if call_wall > 0:
+                    dists.append(("Call Wall", call_wall, abs(price_val - call_wall)))
+                if gf_line > 0:
+                    dists.append(("Gamma Flip", gf_line, abs(price_val - gf_line)))
+                if dists:
+                    dists.sort(key=lambda x: x[2])
+                    closest_wall = dists[0][0]
+                    closest_wall_val = dists[0][1]
+
+            wall_dist = 0.0
+            if closest_wall_val > 0:
+                wall_dist = (price_val - closest_wall_val) / closest_wall_val * 100
+
+            wall_str = (
+                f"${closest_wall_val:.0f} {closest_wall} ({wall_dist:+.1f}%)"
+                if closest_wall_val > 0
+                else "N/A"
+            )
+            struct_str = f"{gex_zone_str} / {wall_str}"
+            struct_ansi = f"{gex_zone_ansi} / {wall_str}"
+            struct_len = len(struct_str)
+            # Adjust padding depending on Chinese char width estimation, we'll use 30 as base length
+            struct_cell = struct_ansi + (" " * max(0, 31 - struct_len))
+
+            # 5. SQZ Stage & MOM
+            if not psq_result:
+                sqz_mom_str = "⚪ 計算中"
+                sqz_mom_ansi = "\u001b[1;30m⚪ 計算中\u001b[0m"
+            else:
+                sqz_stage = (
+                    "Squeezing"
+                    if sqz_is_squeezing
+                    else (
+                        "Fired-Up"
+                        if sqz_dir == "🟢"
+                        else ("Fired-Down" if sqz_dir == "🔴" else "Neutral")
+                    )
+                )
+                sqz_mom_str = f"{sqz_stage} / {sqz_dir} {sqz_mom:+.2f}"
+                sqz_mom_ansi = f"{sqz_stage} / {sqz_dir} {sqz_mom:+.2f}"
+
+            sqz_len = len(sqz_mom_str)
+            sqz_cell = sqz_mom_ansi + (" " * max(0, 24 - sqz_len))
+
+            # 6. D-MP %
+            dmp_display = f"D-MP: {dist_pct:+.2f}%"
+            dmp_display_ansi = (
+                f"D-MP: \u001b[1;32m{dist_pct:+.2f}%\u001b[0m"
+                if dist_pct >= 0
+                else f"D-MP: \u001b[1;31m{dist_pct:+.2f}%\u001b[0m"
+            )
+            dmp_len = len(dmp_display)
+            dmp_cell = dmp_display_ansi + (" " * max(0, 18 - dmp_len))
+
+            # 7. Alerts
+            skew_val = float(r.get("skew", 0.0))
+            skew_str = "Call-Skew" if skew_val > 0 else "Put-Skew"
+            label_cell = status_label
             adv_tags = r.get("advanced_tags", [])
             if adv_tags:
                 label_cell += " " + " ".join(adv_tags)
 
-            # 確保第5列明確使用 mp_cell (Max Pain)，防止 put_wall 或其他變數錯位
-            ansi_lines.append(
-                f"{sym_cell}{price_cell}{ivr_cell}{em_cell}{mp_cell}{sqz_mom_cell}{dmp_cell}{label_cell}"
-            )
+            # 將 IV Skew 標籤串接在警示後面
+            if label_cell and label_cell != "正常運行":
+                label_cell += f" | {skew_str}"
+            else:
+                label_cell = skew_str
 
-        ansi_table = f"```ansi\n============================= 核心 AI 暨持倉量化雷達 =============================\n{header}\n{divider}\n"
+            # 組合雙行
+            line1 = f"{sym_cell}  {price_cell}{iv_ts_cell}{dte_prem_cell}{em_pos_cell}"
+            line2 = f" └─ {struct_cell}{sqz_cell}{dmp_cell}{label_cell}"
+
+            ansi_lines.append(line1)
+            ansi_lines.append(line2)
+            ansi_lines.append("")  # 加上空行讓每個標的層級更分明
+
+        ansi_table = f"```ansi\n============================= 核心 AI 暨持倉量化雷達 =============================\n{header}\n{header2}\n{divider}\n"
         ansi_table += "\n".join(ansi_lines)
-        ansi_table += "\n=================================================================================\n"
+        ansi_table += "=================================================================================\n"
         ansi_table += "提示: ⚠️ 代表與最大痛點偏離度過高（>10%）或具備異常籌碼結構，需點擊穿透審查。\n"
-        ansi_table += "備註: (V) 期權OI毀損降級Volume。CB 偏離現貨過高觸發斷路。\n"
+        ansi_table += (
+            "備註: EM Pos % 代表價格處於預期波動區間之下緣(0%)或上緣(100%)。\n"
+        )
         ansi_table += "指標: SQZ 🟢多頭動能/🔴空頭動能。MOM 顯示數值代表處於擠壓蓄力期，需防突破或殺跌。\n```"
 
         embed.description = ansi_table

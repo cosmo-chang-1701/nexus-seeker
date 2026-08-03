@@ -805,7 +805,27 @@ class UnifiedTerminalCog(commands.Cog):
             "reference_price": em_context.get("reference_price", 0.0),
             "expected_move_lower": em_lower,
             "expected_move_upper": em_upper,
+            "term_structure_ratio": iv_m.term_structure_ratio if iv_m else None,
+            "iv_term_structure_status": iv_m.iv_term_structure_status if iv_m else None,
         }
+
+        # 取得 DTE-ER (距離財報天數)
+        dte_er = None
+        try:
+            from database.calendar_cache import get_cached_earnings
+
+            earnings = get_cached_earnings(sym)
+            if earnings and earnings.get("earnings_date"):
+                from datetime import datetime
+
+                earn_date_str = earnings["earnings_date"][:10]
+                earn_date = datetime.strptime(earn_date_str, "%Y-%m-%d").date()
+                today_dt = datetime.now().date()
+                days = (earn_date - today_dt).days
+                if days >= 0:
+                    dte_er = days
+        except Exception:
+            pass
 
         # 取得 PSQ 與簡易 EMA 21
         from services.market_data_service import get_history_df
@@ -874,6 +894,7 @@ class UnifiedTerminalCog(commands.Cog):
             "symbol": sym,
             "quote": quote,
             "iv_metrics": mock_iv,
+            "dte_er": dte_er,
             "expected_move_context": em_context,
             "skew": skew_val,
             "skew_percentile": skew_percentile,
