@@ -1056,6 +1056,46 @@ async def scrape_macro_calendar(year: int, month: int, high_impact_only: bool = 
         return []
 
 
+@app.get("/api/v1/scrape/fundamental/{symbol}/metadata")
+async def scrape_fundamental_metadata(symbol: str):
+    """
+    獲取標的最新財報的 Metadata (用於輕量級快取驗證)
+    """
+    symbol_clean = symbol.upper().replace("$", "")
+    try:
+        async with httpx.AsyncClient(headers={"User-Agent": SEC_USER_AGENT}) as client:
+            cik = await _get_sec_cik(client, symbol_clean)
+            if not cik:
+                return {"status": "error", "data": f"無法找到 {symbol_clean} 的 CIK"}
+
+            url = f"https://data.sec.gov/submissions/CIK{cik}.json"
+            resp = await client.get(url, timeout=10.0)
+            resp.raise_for_status()
+            data = resp.json()
+
+            recent = data.get("filings", {}).get("recent", {})
+            forms = recent.get("form", [])
+            accessions = recent.get("accessionNumber", [])
+
+            for i, form in enumerate(forms):
+                if form in ["10-K", "10-Q", "8-K"]:
+                    return {
+                        "status": "success",
+                        "data": {
+                            "symbol": symbol_clean,
+                            "form": form,
+                            "accession_number": accessions[i],
+                        },
+                    }
+            return {
+                "status": "error",
+                "data": f"近期無 10-K, 10-Q 或 8-K ({symbol_clean})",
+            }
+    except Exception as e:
+        logger.error(f"SEC EDGAR metadata scrape failed for {symbol_clean}: {e}")
+        return {"status": "error", "data": str(e)}
+
+
 @app.get("/api/v1/scrape/fundamental/{symbol}")
 async def scrape_fundamental_text(symbol: str):
     """
@@ -1083,17 +1123,17 @@ async def scrape_fundamental_text(symbol: str):
             accessions = recent.get("accessionNumber", [])
             primary_docs = recent.get("primaryDocument", [])
 
-            # 2. 尋找最新的 8-K 或 10-Q
+            # 2. 尋找最新的 10-K, 10-Q 或 8-K (依時間排序，取最新者)
             target_idx = -1
             for i, form in enumerate(forms):
-                if form in ["8-K", "10-Q"]:
+                if form in ["10-K", "10-Q", "8-K"]:
                     target_idx = i
                     break
 
             if target_idx == -1:
                 return {
                     "status": "error",
-                    "data": f"近期無 8-K 或 10-Q 申報記錄 ({symbol_clean})",
+                    "data": f"近期無 10-K, 10-Q 或 8-K 申報記錄 ({symbol_clean})",
                 }
 
             accession_num = accessions[target_idx]
@@ -1114,8 +1154,16 @@ async def scrape_fundamental_text(symbol: str):
                 r"([a-zA-Z0-9\-]+:[A-Za-z0-9]+[\n\s]+)+", "\\n", text_content
             )
 
-            # 限制長度避免 Token 爆炸 (抓取前 10000 字元通常足以包含 Management Discussion 或摘要)
-            final_text = text_content[:10000]
+            # 精準擷取 MD&A 或 Risk Factors 段落
+            match = re.search(
+                r"(?i)(item\s*7\.\s*management['’]s\s*discussion|item\s*1a\.\s*risk\s*factors)",
+                text_content,
+            )
+            if match:
+                start_idx = match.start()
+                final_text = text_content[start_idx : start_idx + 10000]
+            else:
+                final_text = text_content[:10000]
 
             return {
                 "status": "success",
@@ -1123,6 +1171,8 @@ async def scrape_fundamental_text(symbol: str):
                     "symbol": symbol_clean,
                     "text": final_text,
                     "source": "sec_edgar",
+                    "source_url": doc_url,
+                    "accession_number": accession_num,
                 },
             }
     except Exception as e:
