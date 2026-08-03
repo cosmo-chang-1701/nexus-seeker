@@ -486,7 +486,7 @@ class NexusBot(commands.Bot):
 
                 view_info = embed_dict.pop("_view", None) if embed_dict else None
                 embed = discord.Embed.from_dict(embed_dict) if embed_dict else None
-                view = None
+                view: discord.ui.View | None = None
                 if view_info:
                     if view_info.startswith("ApplyTelemetryView:"):
                         sug_str = view_info.split(":", 1)[1]
@@ -501,6 +501,18 @@ class NexusBot(commands.Bot):
                             view = ApplyTelemetryView(suggestions)
                         except Exception as e:
                             logger.error(f"Failed to rebuild ApplyTelemetryView: {e}")
+                    elif view_info.startswith("WatchlistHeartbeatView:"):
+                        symbol = view_info.split(":", 1)[1]
+                        try:
+                            from cogs.unified_terminal.symbol_view import (
+                                WatchlistHeartbeatView,
+                            )
+
+                            view = WatchlistHeartbeatView(symbol)
+                        except Exception as e:
+                            logger.error(
+                                f"Failed to rebuild WatchlistHeartbeatView: {e}"
+                            )
 
                 try:
                     user = await self.fetch_user(user_id)

@@ -389,3 +389,35 @@ class SymbolHubView(discord.ui.View):
             )
         finally:
             await self._reset_loading(interaction)
+
+
+class WatchlistHeartbeatView(discord.ui.View):
+    """
+    附掛在 Watchlist Heartbeat 訊息下方的 View，包含執行標的分析中心的按鈕。
+    """
+
+    def __init__(self, symbol: str) -> None:
+        super().__init__(timeout=86400)
+        self.symbol = symbol
+
+    @discord.ui.button(
+        label="標的分析中心", style=discord.ButtonStyle.primary, emoji="🌌"
+    )
+    async def analyze_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button[Any]
+    ) -> None:
+        cog = interaction.client.get_cog("UnifiedTerminalCog")  # type: ignore
+        if cog and hasattr(cog, "_run_single_symbol_hub"):
+            # 呼叫 UnifiedTerminalCog 執行標的深度分析
+            await getattr(cog, "_run_single_symbol_hub")(
+                interaction, self.symbol, interaction.user.id
+            )
+        else:
+            from cogs.embed_builder import create_error_embed
+
+            await interaction.response.send_message(
+                embed=create_error_embed(
+                    "無法找到終端模組 (UnifiedTerminalCog) 或方法遺失。"
+                ),
+                ephemeral=True,
+            )

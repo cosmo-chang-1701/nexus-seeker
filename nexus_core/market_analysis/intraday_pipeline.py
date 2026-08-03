@@ -1043,7 +1043,7 @@ class IntradayScanPipeline:
                 None,
             )
 
-        return create_watchlist_signal_embed(
+        embed = create_watchlist_signal_embed(
             symbol=hb_symbol,
             report_body=report_body,
             option_guidance=option_guidance,
@@ -1078,6 +1078,10 @@ class IntradayScanPipeline:
             symbol_gex=evaluation.symbol_gex,
             symbol_tags=symbol_tags,
         )
+
+        if embed is not None:
+            setattr(embed, "_view", f"WatchlistHeartbeatView:{hb_symbol}")
+        return embed
 
     async def _run_loop(self) -> None:
         while self.is_running:
