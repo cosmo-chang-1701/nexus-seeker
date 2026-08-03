@@ -84,54 +84,66 @@ class ApplyTelemetryView(discord.ui.View):
             resolve_holding_type_and_rows,
         )
 
-        # 延遲回覆以防計算超時
-        await interaction.response.defer(ephemeral=True)
+        # 禁用按鈕以防止重複點擊
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = True
+        await interaction.response.edit_message(view=self)
 
-        user_orders = await asyncio.to_thread(
-            get_user_active_orders, interaction.user.id
-        )
-        if not user_orders:
-            await interaction.followup.send(
-                embed=create_error_embed("❌ 您目前沒有任何活躍的待成交委託單。"),
-                ephemeral=True,
+        try:
+            user_orders = await asyncio.to_thread(
+                get_user_active_orders, interaction.user.id
             )
-            return
+            if not user_orders:
+                await interaction.followup.send(
+                    embed=create_error_embed("❌ 您目前沒有任何活躍的待成交委託單。"),
+                    ephemeral=True,
+                )
+                return
 
-        user_holdings = await asyncio.to_thread(
-            database.get_user_holdings, interaction.user.id
-        )
-        user_trades = await asyncio.to_thread(
-            database.get_user_portfolio, interaction.user.id
-        )
-        holding_type, holding_map = resolve_holding_type_and_rows(
-            holdings=user_holdings, trades=user_trades
-        )
-
-        updated_count, details = await apply_telemetry_to_orders(
-            user_id=interaction.user.id,
-            orders=user_orders,
-            suggestions=self.suggestions,
-            holding_type=holding_type,
-            holding_map=holding_map,
-        )
-
-        if updated_count > 0:
-            msg = (
-                f"✅ **成功套用動態遙測建議價！**\n\n"
-                f"已成功為您自動安全防禦更新 `{updated_count}` 筆待成交委託防線：\n\n"
-                + "\n".join(details)
+            user_holdings = await asyncio.to_thread(
+                database.get_user_holdings, interaction.user.id
             )
-            embed = create_info_embed(
-                title="動態遙測對齊完成",
-                message=msg,
+            user_trades = await asyncio.to_thread(
+                database.get_user_portfolio, interaction.user.id
             )
-        else:
-            embed = create_info_embed(
-                title="遙測狀態同步完成",
-                message="✅ 您的所有待成交委託單皆處於絕對安全的遙測震盪疆界內，暫無須微調。",
+            holding_type, holding_map = resolve_holding_type_and_rows(
+                holdings=user_holdings, trades=user_trades
             )
 
-        await interaction.followup.send(embed=embed, ephemeral=True)
+            updated_count, details = await apply_telemetry_to_orders(
+                user_id=interaction.user.id,
+                orders=user_orders,
+                suggestions=self.suggestions,
+                holding_type=holding_type,
+                holding_map=holding_map,
+            )
+
+            if updated_count > 0:
+                msg = (
+                    f"✅ **成功套用動態遙測建議價！**\n\n"
+                    f"已成功為您自動安全防禦更新 `{updated_count}` 筆待成交委託防線：\n\n"
+                    + "\n".join(details)
+                )
+                embed = create_info_embed(
+                    title="動態遙測對齊完成",
+                    message=msg,
+                )
+            else:
+                embed = create_info_embed(
+                    title="遙測狀態同步完成",
+                    message="✅ 您的所有待成交委託單皆處於絕對安全的遙測震盪疆界內，暫無須微調。",
+                )
+
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        finally:
+            for child in self.children:
+                if isinstance(child, discord.ui.Button):
+                    child.disabled = False
+            try:
+                await interaction.edit_original_response(view=self)
+            except Exception:
+                pass
 
 
 # ==========================================
