@@ -336,41 +336,25 @@ async def test_execute_api_call_respects_retry_after() -> None:
 
 
 @pytest.mark.asyncio
-async def test_execute_api_call_rotates_keys() -> None:
-    """Test that _execute_api_call rotates keys when hitting a 429 and multiple keys exist."""
+async def test_get_quote_fast_fail_to_yfinance() -> None:
+    """Test that get_quote bypasses Finnhub and directly calls yfinance when in rate limit cooldown."""
     import services.market_data_service as mds
-    from unittest.mock import MagicMock
 
-    orig_api_key = mds.FINNHUB_API_KEY
-    orig_clients = mds._clients
-    orig_idx = mds._client_idx
+    with patch(
+        "services.market_data_service.is_finnhub_rate_limited", return_value=True
+    ), patch(
+        "services.market_data_service.get_yfinance_quote", new_callable=AsyncMock
+    ) as mock_yf_quote, patch(
+        "services.market_data_service._execute_api_call", new_callable=AsyncMock
+    ) as mock_exec_api:
+        mock_yf_quote.return_value = {"c": 120.0}
 
-    try:
-        mds.FINNHUB_API_KEY = "dummy-key-1,dummy-key-2"
-        mds._clients = []
-        mds._client_idx = 0
+        res = await mds.get_quote("AAPL")
+        assert res == {"c": 120.0}
 
-        client1 = mds._get_client()
-        client2 = mds._get_client()
-
-        mds._client_idx = 0
-
-        client1.quote = MagicMock(side_effect=Exception("429 Too Many Requests"))
-        client2.quote = MagicMock(return_value={"c": 150.0})
-
-        with patch("services.market_data_service._rate_limit_until", 0.0), patch(
-            "asyncio.sleep", new_callable=AsyncMock
-        ):
-            res = await mds.get_quote("AAPL")
-            assert res == {"c": 150.0}
-
-            client1.quote.assert_called_once()
-            client2.quote.assert_called_once()
-
-    finally:
-        mds.FINNHUB_API_KEY = orig_api_key
-        mds._clients = orig_clients
-        mds._client_idx = orig_idx
+        # Verify yfinance was called and Finnhub was bypassed
+        mock_yf_quote.assert_called_once_with("AAPL")
+        mock_exec_api.assert_not_called()
 
 
 @pytest.mark.asyncio

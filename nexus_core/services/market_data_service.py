@@ -65,8 +65,7 @@ _finnhub_controls_by_loop: weakref.WeakKeyDictionary[
 # （單元測試也會 patch 這個變數以驗證行為）
 _rate_limit_until = 0.0
 
-_clients: List[finnhub.Client] = []
-_client_idx = 0
+_client: Optional[finnhub.Client] = None
 
 
 def _get_finnhub_controls() -> dict[str, Any]:
@@ -86,34 +85,25 @@ def _get_finnhub_controls() -> dict[str, Any]:
 
 
 def _get_client() -> finnhub.Client:
-    """取得或初始化 Finnhub client (輪詢取得)。"""
-    global _clients, _client_idx
-    if not _clients:
+    """取得或初始化 Finnhub client。"""
+    global _client
+    if _client is None:
         if not FINNHUB_API_KEY:
             raise RuntimeError("FINNHUB_API_KEY 未設定，請在 .env 中配置")
         keys = [k.strip() for k in FINNHUB_API_KEY.split(",") if k.strip()]
-        for key in keys:
-            _clients.append(finnhub.Client(api_key=key))
-        logger.info(f"Finnhub Client Pool 初始化完成，共載入 {len(_clients)} 個金鑰")
+        _client = finnhub.Client(api_key=keys[0])
+        if len(keys) > 1:
+            logger.warning(
+                "檢測到多組 FINNHUB_API_KEY，為避免被封鎖，系統已強制僅使用第一組金鑰。"
+            )
+        logger.info("Finnhub Client 初始化完成")
 
-    if not _clients:
-        raise RuntimeError("金鑰池為空，請確認 FINNHUB_API_KEY 配置")
-
-    client = _clients[_client_idx]
-    if len(_clients) > 1:
-        _client_idx = (_client_idx + 1) % len(_clients)
-    return client
+    return _client
 
 
-def _rotate_client() -> finnhub.Client:
-    """將金鑰池輪替至下一個金鑰並回傳。"""
-    global _clients, _client_idx
-    if not _clients:
-        _get_client()
-    if len(_clients) > 1:
-        _client_idx = (_client_idx + 1) % len(_clients)
-        logger.info(f"🔄 偵測到頻率限制或重試，輪替 Finnhub 金鑰至索引 {_client_idx}")
-    return _clients[_client_idx]
+def is_finnhub_rate_limited() -> bool:
+    """檢查 Finnhub 是否正處於全域頻率限制冷卻中"""
+    return time.time() < _rate_limit_until
 
 
 # ---------------------------------------------------------------------------
@@ -210,14 +200,6 @@ async def _execute_api_call(func: Any, *args, **kwargs) -> Any:  # type: ignore
                         else:
                             delay = (2**attempt) + random.uniform(0.1, 1.0)
 
-                        # Rotate Finnhub Client for retry if multiple keys are configured
-                        if _clients and len(_clients) > 1 and hasattr(func, "__name__"):
-                            try:
-                                next_client = _rotate_client()
-                                func = getattr(next_client, func.__name__)
-                            except Exception as ex:
-                                logger.warning(f"輪替 Finnhub 實例失敗: {ex}")
-
                         if is_rate_limit:
                             # 使用 max() 保留最長冷卻時間，避免被較短 delay 覆蓋
                             _rate_limit_until = max(
@@ -313,6 +295,12 @@ async def get_quote(symbol: str) -> Dict[str, Any]:
 
     async def _fetch() -> Any:
         if symbol.startswith("^") or symbol == "VIX":
+            return await get_yfinance_quote(symbol)
+
+        if is_finnhub_rate_limited():
+            logger.warning(
+                f"[{symbol}] Finnhub 處於限流冷卻中，直接轉向 yfinance fallback，避免堆積等待"
+            )
             return await get_yfinance_quote(symbol)
 
         client = _get_client()
