@@ -8,9 +8,13 @@ logger = logging.getLogger(__name__)
 
 
 class FundamentalThesisResult(BaseModel):
-    is_broken: bool = Field(description="護城河是否流失或基本面假設已破滅")
-    confidence: float = Field(description="判斷信心指數 (0.0 ~ 1.0)")
-    reasoning: str = Field(description="簡短的判斷理由，以繁體中文說明")
+    # 讓模型先進行思考與文字輸出
+    reasoning: str = Field(description="Step-by-step reasoning in Traditional Chinese")
+    # 思考完後再給出最終判斷
+    is_broken: bool = Field(
+        description="True if structural thesis is broken, False if just macro/temporary"
+    )
+    confidence: float = Field(description="Confidence score from 0.0 to 1.0")
 
 
 class DynamicRolloverEngine:
@@ -29,17 +33,27 @@ class DynamicRolloverEngine:
             return None
 
         prompt = (
-            f"You are a senior Wall Street quantitative analyst and fundamental researcher.\n"
+            f"You are a senior Wall Street quantitative analyst and fundamental research director.\n"
             f"Please analyze the following latest earnings report and conference call highlights for {symbol}.\n\n"
-            f"Your objective is to determine whether the company's 'growth moat' has been lost or if its original bullish fundamental thesis is structurally broken.\n\n"
-            f"Please evaluate based on the following strict criteria:\n"
+            f"Your objective is to determine whether the company's long-term 'growth moat' has been lost or if its original bullish fundamental thesis is structurally broken.\n\n"
+            f"### 🧠 Analytical Framework (Think step-by-step before finalizing fields):\n"
+            f"Evaluate based on these four strict criteria:\n"
             f"1. Forward Guidance: Are there significant downward revisions or withdrawal of future guidance?\n"
             f"2. Margin Compression: Is there a structural contraction in gross/operating margins indicating lost pricing power?\n"
             f"3. Market Share & Competition: Is there clear evidence of the company losing core market share to rivals?\n"
             f"4. Core Strategy: Has management pivoted away from their primary growth engine due to failure?\n\n"
-            f"⚠️ IMPORTANT EXCLUSION:\n"
-            f"Do not classify the thesis as broken (is_broken = false) if the weakness is solely driven by temporary macroeconomic headwinds, FX headwinds, or a minor single-quarter EPS/Revenue miss while the long-term structural advantage remains intact.\n\n"
-            f"IMPORTANT: You must provide your step-by-step reasoning strictly in Traditional Chinese (繁體中文).\n\n"
+            f"### ⚠️ STRICT EXCLUSION RULE (Crucial for `is_broken` decision):\n"
+            f"DO NOT classify the thesis as broken (is_broken = false) if the weakness is primarily driven by:\n"
+            f"- Cyclical / Macroeconomic headwinds (e.g., interest rates, inflation).\n"
+            f"- Foreign exchange (FX) fluctuations.\n"
+            f"- General industry downturns.\n"
+            f"- A minor single-quarter EPS/Revenue miss where the long-term structural advantage remains intact.\n"
+            f"A thesis is ONLY broken (is_broken = true) due to company-specific structural degradation (e.g., lost pricing power, technological obsolescence, permanent market share loss).\n\n"
+            f"### 📝 Output Field Instructions:\n"
+            f"You must strictly populate the required structured output fields based on the following logic:\n"
+            f"- `reasoning`: (CRITICAL) You must perform a Chain-of-Thought analysis here BEFORE concluding. Explicitly state the evidence extracted, categorize if the headwinds are macro (A) or structural (B), and explain how it triggers or avoids the strict exclusion rule. This field MUST be highly analytical, actionable, and written in Traditional Chinese (繁體中文).\n"
+            f"- `is_broken`: Set to `true` ONLY IF the thesis is structurally broken based on the exclusion rule. Otherwise, `false`.\n"
+            f"- `confidence`: Provide a float from 0.0 to 1.0 reflecting your confidence in this assessment based on the density and clarity of the provided text.\n\n"
             f"Context:\n{fundamental_text}"
         )
 
