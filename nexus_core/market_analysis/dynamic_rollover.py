@@ -30,9 +30,16 @@ class DynamicRolloverEngine:
 
         prompt = (
             f"You are a senior Wall Street quantitative analyst and fundamental researcher.\n"
-            f"Please analyze the following latest earnings report and conference call highlights for {symbol}.\n"
-            f"Determine whether the company's 'growth moat' has been lost, or if its original bullish fundamental thesis is broken.\n"
-            f"IMPORTANT: You must provide your reasoning strictly in Traditional Chinese (繁體中文).\n\n"
+            f"Please analyze the following latest earnings report and conference call highlights for {symbol}.\n\n"
+            f"Your objective is to determine whether the company's 'growth moat' has been lost or if its original bullish fundamental thesis is structurally broken.\n\n"
+            f"Please evaluate based on the following strict criteria:\n"
+            f"1. Forward Guidance: Are there significant downward revisions or withdrawal of future guidance?\n"
+            f"2. Margin Compression: Is there a structural contraction in gross/operating margins indicating lost pricing power?\n"
+            f"3. Market Share & Competition: Is there clear evidence of the company losing core market share to rivals?\n"
+            f"4. Core Strategy: Has management pivoted away from their primary growth engine due to failure?\n\n"
+            f"⚠️ IMPORTANT EXCLUSION:\n"
+            f"Do not classify the thesis as broken (is_broken = false) if the weakness is solely driven by temporary macroeconomic headwinds, FX headwinds, or a minor single-quarter EPS/Revenue miss while the long-term structural advantage remains intact.\n\n"
+            f"IMPORTANT: You must provide your step-by-step reasoning strictly in Traditional Chinese (繁體中文).\n\n"
             f"Context:\n{fundamental_text}"
         )
 
