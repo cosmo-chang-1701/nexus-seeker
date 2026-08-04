@@ -29,10 +29,11 @@ class DynamicRolloverEngine:
             return None
 
         prompt = (
-            f"你是一位華爾街資深量化分析師與基本面研究員。\n"
-            f"請分析以下關於 {symbol} 的最新財報與法說會重點文本，"
-            f"並判斷該公司的「成長護城河」是否流失，或者其原本的多頭基本面假設是否已經破滅。\n\n"
-            f"文本內容:\n{fundamental_text}"
+            f"You are a senior Wall Street quantitative analyst and fundamental researcher.\n"
+            f"Please analyze the following latest earnings report and conference call highlights for {symbol}.\n"
+            f"Determine whether the company's 'growth moat' has been lost, or if its original bullish fundamental thesis is broken.\n"
+            f"IMPORTANT: You must provide your reasoning strictly in Traditional Chinese (繁體中文).\n\n"
+            f"Context:\n{fundamental_text}"
         )
 
         try:
