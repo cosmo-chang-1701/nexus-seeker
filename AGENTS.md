@@ -112,7 +112,7 @@ The ANSI terminal radar card is built inside `cogs/embed_builders/` using `build
 
 ### 4. 避免 Discord 回應錯誤的長度分段與分頁原則
 為防範當自選標的 (Watchlist) 或持倉 (Holdings) 數量過大時，因 Embed Description 超過 Discord 的 4096 字元上限而導致 `400 Bad Request (error code: 50035): Invalid Form Body` 系統錯誤，系統實施以下長度分段與分頁原則：
-- **最大分段間距 (Chunk Size)**：批次掃描結果一律以每頁最多 **15 個標的**進行分組封裝。
+- **最大分段間距 (Chunk Size)**：批次掃描結果一律以每頁最多 **10 個標的**進行分組封裝。
 - **返回多個 Embed 列表**：`build_radar_scan_embed()` 的返回型別升級為 `List[discord.Embed]`。
 - **動態分頁標題**：若分頁數量大於 1，系統會在每個 Embed 的 Title 後方自動標註頁碼，格式為 `(第 X/Y 頁)`（例如：`(第 1/2 頁)`）。
 - **呼叫端分流處理**：
@@ -491,7 +491,7 @@ Current repository rule:
     - 若核心比對數值偏離公允區間超出特定閥值（例如價格偏離痛點 >30% 觸發斷路器），下游的執行或操作指南需自動顯示 `N/A (已觸發斷路器)` 或相關警告，暫停輸出特定交易建議。
   - **結構化網格與戰術意圖映射 (Structured Grid & Tactical Intent Mapping)**：數據表格（如異常交易流、委託單列表、持倉明細）必須動態計算每列的最大字元寬度以對齊網格。底層的原始數據流或交易類別應被映射轉換為直觀的戰術意圖描述，使終端使用者能迅速判讀意圖與支撐/阻力物理界線。
   - **字數上限與分頁保護 (Pagination & Message Splitting)**：
-    - **批次分頁限制**：當批次掃描或查詢的標的/項目數量過大時，為避免超出 Discord 的 4096 (Description) 與 6000 (Total Size) 字元上限而導致 `400 Bad Request` 系統錯誤，單一頁面最多僅能承載 **15 個標的**。
+    - **批次分頁限制**：當批次掃描或查詢的標的/項目數量過大時，為避免超出 Discord 的 4096 (Description) 與 6000 (Total Size) 字元上限而導致 `400 Bad Request` 系統錯誤，單一頁面最多僅能承載 **10 個標的**。
     - **動態頁碼與分流投遞**：分頁後 Title 後方應標註 `(第 X/Y 頁)`。呼叫端對於互動指令應透過 Ephemeral 迭代發送，排程背景任務則應經由 `queue_dm` 作為獨立訊息進行分開投遞，嚴禁在單一訊息中過度堆疊。
 
 ---

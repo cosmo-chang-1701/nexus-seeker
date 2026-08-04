@@ -358,7 +358,7 @@ class UnifiedTerminalCog(commands.Cog):
             if not isinstance(embeds, list):
                 embeds = [embeds]
 
-            chunk_size = 15
+            chunk_size = 10
             for idx, emb in enumerate(embeds):
                 chunk_results = filtered_results[
                     idx * chunk_size : (idx + 1) * chunk_size

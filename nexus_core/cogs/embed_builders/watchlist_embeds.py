@@ -635,7 +635,7 @@ def create_watchlist_overview_embed(
             inline=False,
         )
     else:
-        chunk_size = 15
+        chunk_size = 10
         total_chunks = (len(overview_lines) + chunk_size - 1) // chunk_size
         for i in range(total_chunks):
             chunk = overview_lines[i * chunk_size : (i + 1) * chunk_size]

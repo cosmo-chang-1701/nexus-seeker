@@ -322,8 +322,8 @@ def build_radar_scan_embed(
     except Exception:
         pass
 
-    # 將 scan_results 分組，每組最多 15 個標的
-    chunk_size = 15
+    # 將 scan_results 分組，每組最多 10 個標的
+    chunk_size = 10
     chunks = [
         scan_results[i : i + chunk_size]
         for i in range(0, len(scan_results), chunk_size)
