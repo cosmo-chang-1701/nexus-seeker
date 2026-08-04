@@ -40,46 +40,6 @@ class PortfolioHubView(discord.ui.View):
         await interaction.edit_original_response(embed=embed, view=self)
 
     @discord.ui.button(
-        label="📋 複製數據",
-        style=discord.ButtonStyle.secondary,
-        custom_id="btn_copy_port",
-    )
-    async def btn_copy(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ) -> Any:
-        if not interaction.message or not interaction.message.embeds:
-            return await interaction.response.send_message(
-                embed=create_error_embed("無數據可複製"), ephemeral=True
-            )
-        await interaction.response.defer(ephemeral=True)
-        try:
-            for emb in interaction.message.embeds:
-                content = ""
-                if emb.title:
-                    content += f"**{emb.title}**\n"
-                if emb.description:
-                    content += emb.description + "\n"
-                for field in emb.fields:
-                    if field.name and field.value:
-                        content += f"**{field.name}**\n{field.value}\n"
-
-                chunks = [content[i : i + 1900] for i in range(0, len(content), 1900)]
-                for chunk in chunks:
-                    if (
-                        "```ansi" in chunk
-                        and "```" not in chunk[chunk.find("```ansi") + 7 :]
-                    ):
-                        chunk += "\n```"
-                    elif "```" in chunk and chunk.count("```") % 2 != 0:
-                        chunk += "\n```"
-                    await interaction.followup.send(chunk, ephemeral=True)
-        except Exception as e:
-            logger.error(f"Copy Button error: {e}")
-            await interaction.followup.send(
-                embed=create_error_embed(f"複製數據失敗: {e}"), ephemeral=True
-            )
-
-    @discord.ui.button(
         label="🏠 戰略看板",
         style=discord.ButtonStyle.success,
         custom_id="btn_home_port",
