@@ -46,7 +46,6 @@ class DynamicRolloverEngine:
                     {"role": "user", "content": prompt},
                 ],
                 response_format=FundamentalThesisResult,
-                temperature=0.1,
             )
             parsed = response.choices[0].message.parsed  # type: ignore
 

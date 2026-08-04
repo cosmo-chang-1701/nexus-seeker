@@ -1378,9 +1378,16 @@ class TerminalCog(commands.Cog):
         result = await engine.evaluate_fundamental_thesis(symbol, combined_text)
 
         if not result:
-            await interaction.edit_original_response(
-                content="⚠️ 記憶體防禦機制觸發 (RAM > 85%)，或 LLM 呼叫失敗，已中止驗證。"
-            )
+            from services.llm_service import is_memory_safe
+
+            if not is_memory_safe():
+                await interaction.edit_original_response(
+                    content="⚠️ 記憶體防禦機制觸發 (RAM > 85%)，已中止驗證。"
+                )
+            else:
+                await interaction.edit_original_response(
+                    content="⚠️ LLM 呼叫失敗，已中止驗證。"
+                )
             return
 
         source_info = f"\n\n🔗 參照資料來源: {source_url}" if source_url else ""

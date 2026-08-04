@@ -74,8 +74,8 @@ async def get_reddit_context(
                 return "本地備援節點發生錯誤，暫無情緒資料。"
 
     except httpx.ReadTimeout:
-        logger.error(f"[{symbol}] Tunnel 請求超時，本地端無回應。")
+        logger.warning(f"[{symbol}] Tunnel 請求超時，本地端無回應。")
         return "本地節點連線超時。"
     except Exception as e:
-        logger.error(f"[{symbol}] 呼叫本地 Tunnel 失敗: {e}")
+        logger.warning(f"[{symbol}] 呼叫本地 Tunnel 失敗: {e}")
         return "邊緣運算節點連線異常。"
