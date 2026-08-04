@@ -7,6 +7,55 @@ from cogs.embed_builder import create_error_embed, chunk_embeds
 logger = logging.getLogger(__name__)
 
 
+class BatchScanCopyAllButton(discord.ui.Button):
+    """
+    按鈕：點擊後將所有頁數的數據轉換為文字區塊並發送，以便使用者複製。
+    """
+
+    def __init__(self, all_embeds: List[discord.Embed]):
+        super().__init__(
+            label="📋 複製全部數據",
+            style=discord.ButtonStyle.secondary,
+            row=0,
+        )
+        self.all_embeds = all_embeds
+
+    async def callback(self, interaction: discord.Interaction) -> Any:
+        await interaction.response.defer(ephemeral=True)
+        try:
+            for emb in self.all_embeds:
+                content = ""
+                if emb.title:
+                    content += f"**{emb.title}**\n"
+                if emb.description:
+                    content += emb.description + "\n"
+                for field in emb.fields:
+                    if field.name and field.value:
+                        content += f"**{field.name}**\n{field.value}\n"
+
+                # Split content into chunks of 1900 chars to avoid Discord's 2000 char limit.
+                # However, since the description might be wrapped in ```ansi, splitting blindly will break formatting.
+                # Usually a single radar embed description is around 2000-3000 chars, so sending as discord.File is actually safer for large text.
+                # Wait, if we send it as text, Discord might reject > 2000 chars.
+                # Let's chunk the text by taking chunks of 1900 chars.
+                chunks = [content[i : i + 1900] for i in range(0, len(content), 1900)]
+                for chunk in chunks:
+                    # check if the chunk is mostly ansi block
+                    if (
+                        "```ansi" in chunk
+                        and "```" not in chunk[chunk.find("```ansi") + 7 :]
+                    ):
+                        chunk += "\n```"
+                    elif "```" in chunk and chunk.count("```") % 2 != 0:
+                        chunk += "\n```"
+                    await interaction.followup.send(chunk, ephemeral=True)
+        except Exception as e:
+            logger.error(f"Copy All Button error: {e}")
+            await interaction.followup.send(
+                embed=create_error_embed(f"複製數據失敗: {e}"), ephemeral=True
+            )
+
+
 class BatchScanWarningButton(discord.ui.Button):
     """
     按鈕：點擊後解析即時聯動警示列出的所有標的並批次執行深入分析。
@@ -117,6 +166,14 @@ class BatchScanView(discord.ui.View):
     已移除「選擇單一標的深入分析」下拉選單。
     """
 
-    def __init__(self, symbols: List[str], cog: Any, bot: Any):
+    def __init__(
+        self,
+        symbols: List[str],
+        cog: Any,
+        bot: Any,
+        all_embeds: List[discord.Embed] | None = None,
+    ):
         super().__init__(timeout=300)
         self.add_item(BatchScanWarningButton(cog, bot))
+        if all_embeds:
+            self.add_item(BatchScanCopyAllButton(all_embeds))

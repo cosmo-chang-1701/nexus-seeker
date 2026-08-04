@@ -364,7 +364,15 @@ class UnifiedTerminalCog(commands.Cog):
                     idx * chunk_size : (idx + 1) * chunk_size
                 ]
                 chunk_symbols = [r["symbol"].upper() for r in chunk_results]
-                page_view = BatchScanView(chunk_symbols, self, self.bot)
+                is_last_page = idx == len(embeds) - 1
+                page_view = BatchScanView(
+                    chunk_symbols,
+                    self,
+                    self.bot,
+                    all_embeds=embeds
+                    if (is_last_page and scan_value == "ALL")
+                    else None,
+                )
                 await interaction.followup.send(
                     embed=emb, view=page_view, ephemeral=True
                 )
