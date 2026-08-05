@@ -1342,6 +1342,7 @@ class TerminalCog(commands.Cog):
         from services.fundamental_service import get_fundamental_context
         from cogs.embed_builders.rollover_embeds import (
             create_dynamic_rollover_embed,
+            create_thesis_passed_embed,
             RolloverActionView,
         )
 
@@ -1408,13 +1409,12 @@ class TerminalCog(commands.Cog):
             view = RolloverActionView(target_symbol=symbol.upper())
             await interaction.edit_original_response(content="", embed=embed, view=view)
         else:
-            await interaction.edit_original_response(
-                content=(
-                    f"✅ **{symbol.upper()} 基本面驗證通過**\n"
-                    f"護城河評估結果：依然穩固。無需轉倉。\n\n"
-                    f"> {result.reasoning}{source_info}"
-                )
+            embed = create_thesis_passed_embed(
+                symbol=symbol.upper(),
+                reasoning=result.reasoning,
+                source_url=source_url,
             )
+            await interaction.edit_original_response(content="", embed=embed)
 
 
 async def setup(bot: Any):  # type: ignore

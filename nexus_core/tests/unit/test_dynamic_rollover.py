@@ -4,6 +4,10 @@ from market_analysis.dynamic_rollover import (
     DynamicRolloverEngine,
     FundamentalThesisResult,
 )
+from cogs.embed_builders.rollover_embeds import (
+    create_dynamic_rollover_embed,
+    create_thesis_passed_embed,
+)
 
 
 @pytest.fixture
@@ -142,3 +146,50 @@ async def test_evaluate_fundamental_thesis_memory_unsafe(
 ) -> None:
     res = await engine.evaluate_fundamental_thesis("AMD", "Bad news")
     assert res is None
+
+
+def test_create_thesis_passed_embed_truncates_long_reasoning() -> None:
+    """reasoning 超過 4000 字元時被正確截斷，且 Embed description ≤ 4096。"""
+    long_reasoning = "護城河分析" * 1000  # 5000 chars
+    embed = create_thesis_passed_embed(
+        symbol="AMD",
+        reasoning=long_reasoning,
+        source_url="https://example.com/sec",
+    )
+    assert embed.description is not None
+    assert len(embed.description) <= 4096
+    assert embed.title == "✅ AMD 基本面驗證通過"
+    assert len(embed.fields) == 1
+    assert embed.fields[0].value is not None
+    assert "example.com" in embed.fields[0].value
+
+
+def test_create_thesis_passed_embed_short_reasoning() -> None:
+    """短 reasoning 原樣通過，不會被截斷，也不產生 source_url 欄位。"""
+    embed = create_thesis_passed_embed(
+        symbol="NVDA",
+        reasoning="護城河穩固，無異常。",
+    )
+    assert embed.description is not None
+    assert "護城河穩固" in embed.description
+    assert len(embed.fields) == 0  # 無 source_url 欄位
+
+
+def test_create_dynamic_rollover_embed_truncates_long_reason() -> None:
+    """rollover embed 的 reason field value ≤ 1024 字元上限。"""
+    long_reason = "A" * 2000
+    embed = create_dynamic_rollover_embed(
+        rollover_type="原型假設破滅",
+        sell_symbol="AMD",
+        sell_ratio=1.0,
+        buy_symbol="VOO",
+        reason=long_reason,
+        suggested_strategy="Buy Shares",
+        suggested_price="Market",
+        strike="N/A",
+        expiry="N/A",
+        direction="BTO",
+    )
+    reason_field = embed.fields[0]
+    assert reason_field.value is not None
+    assert len(reason_field.value) <= 1024

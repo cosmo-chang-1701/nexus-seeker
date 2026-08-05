@@ -2,6 +2,12 @@ import discord
 from typing import Optional
 
 from cogs.embed_builders._core import NexusEmbed
+from ui.panel_renderer import truncate_with_boundary
+
+# Discord API 字元上限常數
+_EMBED_FIELD_VALUE_LIMIT = 1024
+_CODE_FENCE_OVERHEAD = 6  # len("```") * 2
+_EMBED_DESCRIPTION_SAFE_LIMIT = 4000
 
 
 class RolloverActionView(discord.ui.View):
@@ -77,8 +83,13 @@ def create_dynamic_rollover_embed(
 
     embed = NexusEmbed(title=title, color=color)
 
-    # 1. 核心原因區塊
-    embed.add_field(name="🚨 轉倉動機 (Reason)", value=f"```{reason}```", inline=False)
+    # 1. 核心原因區塊 — 截斷保護避免超過 Discord Field Value 1024 字元上限
+    safe_reason = truncate_with_boundary(
+        reason, _EMBED_FIELD_VALUE_LIMIT - _CODE_FENCE_OVERHEAD
+    )
+    embed.add_field(
+        name="🚨 轉倉動機 (Reason)", value=f"```{safe_reason}```", inline=False
+    )
 
     # 2. 賣出/平倉指令區塊
     sell_action_full = (
@@ -113,5 +124,35 @@ def create_dynamic_rollover_embed(
     embed.set_footer(
         text="Nexus Risk & Rollover Engine • 請點擊下方 [執行試算] 以推估保證金佔用與預期報酬"
     )
+
+    return embed
+
+
+def create_thesis_passed_embed(
+    symbol: str,
+    reasoning: str,
+    source_url: str = "",
+) -> discord.Embed:
+    """
+    產生基本面驗證通過（護城河穩固）的 Embed。
+
+    使用 truncate_with_boundary 防止 Discord API 字元溢出，
+    將 reasoning 放入 Embed description（上限 4096 字元）而非
+    message content（上限 2000 字元）。
+    """
+    embed = NexusEmbed(
+        title=f"✅ {symbol} 基本面驗證通過",
+        color=discord.Color.green(),
+    )
+
+    safe_reasoning = truncate_with_boundary(reasoning, _EMBED_DESCRIPTION_SAFE_LIMIT)
+    embed.description = f"護城河評估結果：依然穩固。無需轉倉。\n\n> {safe_reasoning}"
+
+    if source_url:
+        embed.add_field(
+            name="🔗 參照資料來源",
+            value=source_url,
+            inline=False,
+        )
 
     return embed
