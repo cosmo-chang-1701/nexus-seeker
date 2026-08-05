@@ -83,13 +83,9 @@ def create_dynamic_rollover_embed(
 
     embed = NexusEmbed(title=title, color=color)
 
-    # 1. 核心原因區塊 — 截斷保護避免超過 Discord Field Value 1024 字元上限
-    safe_reason = truncate_with_boundary(
-        reason, _EMBED_FIELD_VALUE_LIMIT - _CODE_FENCE_OVERHEAD
-    )
-    embed.add_field(
-        name="🚨 轉倉動機 (Reason)", value=f"```{safe_reason}```", inline=False
-    )
+    # 1. 核心原因區塊 — 由於字數可能會超過 Discord Field Value 1024 字元上限，改置於 Description
+    safe_reason = truncate_with_boundary(reason, _EMBED_DESCRIPTION_SAFE_LIMIT)
+    embed.description = f"**🚨 量化轉倉分析**\n\n{safe_reason}"
 
     # 2. 賣出/平倉指令區塊
     sell_action_full = (

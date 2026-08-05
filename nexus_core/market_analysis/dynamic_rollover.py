@@ -21,6 +21,73 @@ class DynamicRolloverEngine:
     def __init__(self) -> None:
         pass
 
+    def _generate_rule_based_rebalance_report(
+        self, symbol: str, metrics: dict, system_action: str
+    ) -> dict:
+        """
+        Evaluates rebalancing rules and generates the strict 4-part markdown report.
+        Returns a dict containing the final action, target asset, and markdown string.
+        """
+        spot = metrics.get("spot_price", 0.0)
+        ivr = metrics.get("ivr", 0.0)
+        put_wall = metrics.get("put_wall", 0.0)
+        call_wall = metrics.get("call_wall", 0.0)
+        max_pain = metrics.get("max_pain", 0.0)
+        is_uoa_sweep = metrics.get("is_uoa_sweep", False)
+        sqz_mom = metrics.get("sqz_mom", 0.0)
+        skew = metrics.get("skew", 0.0)
+
+        final_target = "VOO"
+        final_action = system_action
+
+        # 邏輯 1: 資金效率最大化 & 邏輯 6: 指示不相符處置
+        system_conflict_note = ""
+        if (
+            final_action in ["BUY", "REDUCE", "HOLD"]
+            and not is_uoa_sweep
+            and (put_wall > 0 and spot < put_wall)
+        ):
+            final_action = "LIQUIDATE"
+            final_target = "VOO"
+            system_conflict_note = "⚠️ **系統算式瑕疵攔截**：原建議留倉或加碼，但缺乏 UOA 支持且跌穿 PutWall，已強制推翻並要求撤退至 VOO。"
+
+        # 邏輯 2 & 3: IV Context 與 試水溫
+        options_strategy = "N/A (觀望現股)"
+        if ivr < 25.0 and put_wall > 0 and spot >= put_wall and is_uoa_sweep:
+            options_strategy = "Buy OTM Call (低 IV 佈局 Vega 擴張)"
+        elif ivr > 50.0:
+            options_strategy = "嚴禁買方 (IV 過高，規避 Gamma 陷阱)"
+
+        # 邏輯 4: 動態停損 (依託 GEX)
+        stop_loss = put_wall * 0.995 if put_wall > 0 else spot * 0.95
+
+        # 邏輯 5: 數據真實性校正
+        data_note = ""
+        if ivr == 0.0 or spot == 0.0:
+            data_note = " (⚠️ 數據失真或快取未更新，請留意風險)"
+
+        # 建構 4 段式 Markdown
+        markdown_report = f"""
+1. **盤勢定調**
+   - 現價: ${spot:.2f} | IV 位階: {ivr:.1f}%{data_note}
+   - 相對位置: Max Pain ${max_pain}
+2. **主力意圖拆解 (UOA/GEX)**
+   - 做市商護盤牆: PutWall @ ${put_wall} | 壓制區: CallWall @ ${call_wall}
+   - 巨鯨掃貨: {'✅ 偵測到 UOA Sweep' if is_uoa_sweep else '❌ 無明顯 UOA'}
+3. **動能與擠壓狀態**
+   - SQZ MOM: {sqz_mom:.2f} | Skew: {skew:.2f}
+4. **具體的動態轉倉建議**
+   - {system_conflict_note if system_conflict_note else '常規執行：依系統建議比例調節'}
+   - 處置計畫: 轉入 `{final_target}` ({final_action})
+   - 期權策略: {options_strategy}
+   - 精確停損: 跌破 ${stop_loss:.2f} 絕對停損
+"""
+        return {
+            "final_action": final_action,
+            "final_target": final_target,
+            "markdown_report": markdown_report.strip(),
+        }
+
     async def evaluate_fundamental_thesis(
         self, symbol: str, fundamental_text: str
     ) -> Optional[FundamentalThesisResult]:
@@ -176,10 +243,21 @@ class DynamicRolloverEngine:
                 max_alloc = asset.get("max_allocation_pct", 0.3)
 
                 # --- 新增：深度量化數據 (Fallback = None/0.0) ---
-                spot = asset.get("spot_price", 0.0)
-                call_wall = asset.get("call_wall", 0.0)
-                max_pain = asset.get("max_pain", 0.0)
-                ivr = asset.get("ivr", 0.0)
+                metrics = {
+                    "spot_price": asset.get("spot_price", 0.0),
+                    "call_wall": asset.get("call_wall", 0.0),
+                    "max_pain": asset.get("max_pain", 0.0),
+                    "ivr": asset.get("ivr", 0.0),
+                    "put_wall": asset.get("put_wall", 0.0),
+                    "is_uoa_sweep": asset.get("is_uoa_sweep", False),
+                    "sqz_mom": asset.get("sqz_mom", 0.0),
+                    "skew": asset.get("skew", 0.0),
+                }
+
+                spot = metrics["spot_price"]
+                call_wall = metrics["call_wall"]
+                max_pain = metrics["max_pain"]
+                ivr = metrics["ivr"]
 
                 # 計算比例
                 current_alloc = (
@@ -202,23 +280,17 @@ class DynamicRolloverEngine:
                 )
 
                 if is_iv_bubble or touch_call_wall or deviate_max_pain:
-                    reason = []
-                    if is_iv_bubble:
-                        reason.append(f"高波動泡沫 (IVR={ivr:.1f}%)")
-                    if touch_call_wall:
-                        reason.append(f"碰觸或突破 CallWall 天花板 (${call_wall})")
-                    if deviate_max_pain:
-                        reason.append(f"大幅偏離 Max Pain (${max_pain})")
+                    report = self._generate_rule_based_rebalance_report(
+                        symbol, metrics, system_action="LIQUIDATE"
+                    )
 
                     rebalance_instructions.append(
                         {
                             "symbol": symbol,
-                            "action": "LIQUIDATE",
+                            "action": report["final_action"],
                             "sell_ratio": 1.0,
-                            "target_core": "VOO",
-                            "reason": "🚨 雜訊避險觸發: "
-                            + "、".join(reason)
-                            + "。強烈建議 100% 資金回流 VOO 避風港。",
+                            "target_core": report["final_target"],
+                            "reason": report["markdown_report"],
                             "suggested_strategy": "N/A",
                         }
                     )
@@ -238,13 +310,19 @@ class DynamicRolloverEngine:
                     excess_value = excess_alloc * total_account_value
                     sell_ratio = excess_value / current_value
 
+                    report = self._generate_rule_based_rebalance_report(
+                        symbol, metrics, system_action="REDUCE"
+                    )
+
                     rebalance_instructions.append(
                         {
                             "symbol": symbol,
-                            "action": "REDUCE",
-                            "sell_ratio": round(sell_ratio, 2),
-                            "target_core": "VOO",
-                            "reason": f"SATELLITE asset {symbol} allocation ({current_alloc*100:.1f}%) exceeds max ({max_alloc*100:.1f}%).",
+                            "action": report["final_action"],
+                            "sell_ratio": round(sell_ratio, 2)
+                            if report["final_action"] != "LIQUIDATE"
+                            else 1.0,
+                            "target_core": report["final_target"],
+                            "reason": report["markdown_report"],
                             "suggested_strategy": "N/A",
                         }
                     )

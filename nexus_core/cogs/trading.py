@@ -211,6 +211,8 @@ class SchedulerCog(commands.Cog):
                         "put_wall": 0.0,
                         "call_wall": 0.0,
                         "is_uoa_sweep": False,
+                        "sqz_mom": 0.0,
+                        "skew": 0.0,
                     }
                     try:
                         conn = sqlite3.connect(config.DB_NAME)
@@ -239,6 +241,21 @@ class SchedulerCog(commands.Cog):
                         row = cursor.fetchone()
                         if row and row[0]:
                             res["ivr"] = float(row[0])
+
+                        cursor.execute(
+                            "SELECT value FROM kv_cache WHERE key = ?",
+                            (f"sqz_mom_{sym}",),
+                        )
+                        row = cursor.fetchone()
+                        if row and row[0]:
+                            res["sqz_mom"] = float(row[0])
+
+                        cursor.execute(
+                            "SELECT value FROM kv_cache WHERE key = ?", (f"skew_{sym}",)
+                        )
+                        row = cursor.fetchone()
+                        if row and row[0]:
+                            res["skew"] = float(row[0])
                     except Exception:
                         pass
                     finally:
