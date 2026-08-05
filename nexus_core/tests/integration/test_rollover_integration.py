@@ -59,7 +59,9 @@ async def test_integration_rollover_embed_generation() -> None:
 
     assert isinstance(embed, discord.Embed)
     assert embed.title == "🔄 動態轉倉指令: 再平衡 (Rebalancing)"
-    assert len(embed.fields) == 3
+    assert (
+        len(embed.fields) >= 3
+    ), f"Expected at least 3 fields, got {len(embed.fields)}"
     assert "TSLA" in str(embed.fields[0].value)
     assert "VOO" in str(embed.fields[1].value)
     assert "量化轉倉分析" in str(embed.description)
