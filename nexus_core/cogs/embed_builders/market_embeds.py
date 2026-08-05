@@ -976,15 +976,6 @@ def build_radar_scan_embed(
             ansi_lines.append(line2)
             ansi_lines.append("")  # 加上空行讓每個標的層級更分明
 
-        ansi_table = f"```ansi\n============================= 核心 AI 暨持倉量化雷達 =============================\n{header}\n{header2}\n{divider}\n"
-        ansi_table += "\n".join(ansi_lines)
-        ansi_table += "=================================================================================\n"
-        ansi_table += "提示: ⚠️ 代表與最大痛點偏離度過高（>10%）或具備異常籌碼結構，需點擊穿透審查。\n"
-        ansi_table += (
-            "備註: EM Pos % 代表價格處於預期波動區間之下緣(0%)或上緣(100%)。\n"
-        )
-        ansi_table += "指標: SQZ 🟢多頭動能/🔴空頭動能。MOM 顯示數值代表處於擠壓蓄力期，需防突破或殺跌。\n```"
-
         if not show_alpha:
             insights = [
                 msg
@@ -1005,15 +996,24 @@ def build_radar_scan_embed(
             ]
 
         if insights:
-            insights_str = "\n".join(insights[:5])
+            insights_str = "\n".join(insights[:5]).replace("**", "")
         else:
             insights_str = (
                 "• ✨ 所有標的當前價格與 Max Pain 及波動邊界皆無極端異常偏離。"
             )
 
-        embed.description = (
-            f"{ansi_table}\n\n**💡 即時聯動警示 (Real-time Insights)**\n{insights_str}"
+        ansi_table = f"```ansi\n============================= 核心 AI 暨持倉量化雷達 =============================\n{header}\n{header2}\n{divider}\n"
+        ansi_table += "\n".join(ansi_lines)
+        ansi_table += "=================================================================================\n"
+        ansi_table += "提示: ⚠️ 代表與最大痛點偏離度過高（>10%）或具備異常籌碼結構，需點擊穿透審查。\n"
+        ansi_table += (
+            "備註: EM Pos % 代表價格處於預期波動區間之下緣(0%)或上緣(100%)。\n"
         )
+        ansi_table += "指標: SQZ 🟢多頭動能/🔴空頭動能。MOM 顯示數值代表處於擠壓蓄力期，需防突破或殺跌。\n"
+        ansi_table += "---------------------------------------------------------------------------------\n"
+        ansi_table += f"\u001b[1;33m💡 即時聯動警示 (Real-time Insights)\u001b[0m\n{insights_str}\n```"
+
+        embed.description = ansi_table
 
         embeds.append(embed)
 
