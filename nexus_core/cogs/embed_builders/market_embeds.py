@@ -1003,7 +1003,7 @@ def build_radar_scan_embed(
             )
 
         ansi_table = (
-            f"**核心 AI 暨持倉量化雷達**\n```ansi\n{header}\n{header2}\n{divider}\n"
+            f"**🧠 核心 AI 暨持倉量化雷達**\n```ansi\n{header}\n{header2}\n{divider}\n"
         )
         ansi_table += "\n".join(ansi_lines)
         ansi_table += "\n\n"
