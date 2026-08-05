@@ -32,28 +32,31 @@ class DynamicRolloverEngine:
             logger.warning("記憶體水位過高，跳過 vLLM 基本面護城河判定")
             return None
 
-        prompt = (
-            f"You are a senior Wall Street quantitative analyst and fundamental research director.\n"
+        system_prompt = (
+            "You are a senior Wall Street quantitative analyst and fundamental research director.\n"
+            "Your objective is to determine whether a company's long-term 'growth moat' has been lost or if its original bullish fundamental thesis is structurally broken.\n\n"
+            "### 🧠 Analytical Framework (Think step-by-step before finalizing fields):\n"
+            "Evaluate based on these four strict criteria:\n"
+            "1. Forward Guidance: Are there significant downward revisions or withdrawal of future guidance?\n"
+            "2. Margin Compression: Is there a structural contraction in gross/operating margins indicating lost pricing power?\n"
+            "3. Market Share & Competition: Is there clear evidence of the company losing core market share to rivals?\n"
+            "4. Core Strategy: Has management pivoted away from their primary growth engine due to failure?\n\n"
+            "### ⚠️ STRICT EXCLUSION RULE (Crucial for `is_broken` decision):\n"
+            "DO NOT classify the thesis as broken (is_broken = false) if the weakness is primarily driven by:\n"
+            "- Cyclical / Macroeconomic headwinds (e.g., interest rates, inflation).\n"
+            "- Foreign exchange (FX) fluctuations.\n"
+            "- General industry downturns.\n"
+            "- A minor single-quarter EPS/Revenue miss where the long-term structural advantage remains intact.\n"
+            "A thesis is ONLY broken (is_broken = true) due to company-specific structural degradation (e.g., lost pricing power, technological obsolescence, permanent market share loss).\n\n"
+            "### 📝 Output Field Instructions:\n"
+            "You must strictly populate the required structured output fields based on the following logic:\n"
+            "- `reasoning`: (CRITICAL) You must perform a Chain-of-Thought analysis here BEFORE concluding. Explicitly state the evidence extracted, categorize if the headwinds are macro (A) or structural (B), and explain how it triggers or avoids the strict exclusion rule. This field MUST be highly analytical, actionable, and written in Traditional Chinese (繁體中文).\n"
+            "- `is_broken`: Set to `true` ONLY IF the thesis is structurally broken based on the exclusion rule. Otherwise, `false`.\n"
+            "- `confidence`: Provide a float from 0.0 to 1.0 reflecting your confidence in this assessment based on the density and clarity of the provided text."
+        )
+
+        user_prompt = (
             f"Please analyze the following latest earnings report and conference call highlights for {symbol}.\n\n"
-            f"Your objective is to determine whether the company's long-term 'growth moat' has been lost or if its original bullish fundamental thesis is structurally broken.\n\n"
-            f"### 🧠 Analytical Framework (Think step-by-step before finalizing fields):\n"
-            f"Evaluate based on these four strict criteria:\n"
-            f"1. Forward Guidance: Are there significant downward revisions or withdrawal of future guidance?\n"
-            f"2. Margin Compression: Is there a structural contraction in gross/operating margins indicating lost pricing power?\n"
-            f"3. Market Share & Competition: Is there clear evidence of the company losing core market share to rivals?\n"
-            f"4. Core Strategy: Has management pivoted away from their primary growth engine due to failure?\n\n"
-            f"### ⚠️ STRICT EXCLUSION RULE (Crucial for `is_broken` decision):\n"
-            f"DO NOT classify the thesis as broken (is_broken = false) if the weakness is primarily driven by:\n"
-            f"- Cyclical / Macroeconomic headwinds (e.g., interest rates, inflation).\n"
-            f"- Foreign exchange (FX) fluctuations.\n"
-            f"- General industry downturns.\n"
-            f"- A minor single-quarter EPS/Revenue miss where the long-term structural advantage remains intact.\n"
-            f"A thesis is ONLY broken (is_broken = true) due to company-specific structural degradation (e.g., lost pricing power, technological obsolescence, permanent market share loss).\n\n"
-            f"### 📝 Output Field Instructions:\n"
-            f"You must strictly populate the required structured output fields based on the following logic:\n"
-            f"- `reasoning`: (CRITICAL) You must perform a Chain-of-Thought analysis here BEFORE concluding. Explicitly state the evidence extracted, categorize if the headwinds are macro (A) or structural (B), and explain how it triggers or avoids the strict exclusion rule. This field MUST be highly analytical, actionable, and written in Traditional Chinese (繁體中文).\n"
-            f"- `is_broken`: Set to `true` ONLY IF the thesis is structurally broken based on the exclusion rule. Otherwise, `false`.\n"
-            f"- `confidence`: Provide a float from 0.0 to 1.0 reflecting your confidence in this assessment based on the density and clarity of the provided text.\n\n"
             f"Context:\n{fundamental_text}"
         )
 
@@ -63,9 +66,9 @@ class DynamicRolloverEngine:
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are a quantitative fundamentals analyst.",
+                        "content": system_prompt,
                     },
-                    {"role": "user", "content": prompt},
+                    {"role": "user", "content": user_prompt},
                 ],
                 response_format=FundamentalThesisResult,
             )
