@@ -1065,10 +1065,7 @@ def test_build_radar_scan_embed() -> None:
     assert len(embeds) == 1
     embed = embeds[0]
     assert embed.title == "🌌 交易員終端: 核心 AI 暨持倉批次量化雷達 (ALL)"
-    assert (
-        "============================= 核心 AI 暨持倉量化雷達 ============================="  # type: ignore
-        in embed.description
-    )
+    assert "**核心 AI 暨持倉量化雷達**" in embed.description  # type: ignore
     assert "AMD" in embed.description  # type: ignore
     assert "MRVL" in embed.description  # type: ignore
     assert "超跌磁吸" in embed.description  # type: ignore

@@ -1002,9 +1002,10 @@ def build_radar_scan_embed(
                 "• ✨ 所有標的當前價格與 Max Pain 及波動邊界皆無極端異常偏離。"
             )
 
-        ansi_table = f"```ansi\n============================= 核心 AI 暨持倉量化雷達 =============================\n{header}\n{header2}\n{divider}\n"
+        ansi_table = (
+            f"**核心 AI 暨持倉量化雷達**\n```ansi\n{header}\n{header2}\n{divider}\n"
+        )
         ansi_table += "\n".join(ansi_lines)
-        ansi_table += "=================================================================================\n"
         ansi_table += "提示: ⚠️ 代表與最大痛點偏離度過高（>10%）或具備異常籌碼結構，需點擊穿透審查。\n"
         ansi_table += (
             "備註: EM Pos % 代表價格處於預期波動區間之下緣(0%)或上緣(100%)。\n"
@@ -1015,7 +1016,7 @@ def build_radar_scan_embed(
 
         embed.add_field(
             name="💡 即時聯動警示 (Real-time Insights)",
-            value=insights_str,
+            value=f"```md\n{insights_str}\n```",
             inline=False,
         )
 
