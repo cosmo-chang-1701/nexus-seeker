@@ -996,7 +996,7 @@ def build_radar_scan_embed(
             ]
 
         if insights:
-            insights_str = "\n".join(insights[:5]).replace("**", "")
+            insights_str = "\n".join(insights[:5])
         else:
             insights_str = (
                 "• ✨ 所有標的當前價格與 Max Pain 及波動邊界皆無極端異常偏離。"
@@ -1009,11 +1009,15 @@ def build_radar_scan_embed(
         ansi_table += (
             "備註: EM Pos % 代表價格處於預期波動區間之下緣(0%)或上緣(100%)。\n"
         )
-        ansi_table += "指標: SQZ 🟢多頭動能/🔴空頭動能。MOM 顯示數值代表處於擠壓蓄力期，需防突破或殺跌。\n"
-        ansi_table += "---------------------------------------------------------------------------------\n"
-        ansi_table += f"\u001b[1;33m💡 即時聯動警示 (Real-time Insights)\u001b[0m\n{insights_str}\n```"
+        ansi_table += "指標: SQZ 🟢多頭動能/🔴空頭動能。MOM 顯示數值代表處於擠壓蓄力期，需防突破或殺跌。\n```"
 
         embed.description = ansi_table
+
+        embed.add_field(
+            name="💡 即時聯動警示 (Real-time Insights)",
+            value=insights_str,
+            inline=False,
+        )
 
         embeds.append(embed)
 

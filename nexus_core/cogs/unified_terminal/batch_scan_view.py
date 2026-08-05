@@ -44,15 +44,15 @@ class BatchScanWarningButton(discord.ui.Button):
             embed = interaction.message.embeds[0]
             warning_symbols = []
 
-            if embed.description and "即時聯動警示" in embed.description:
-                idx = embed.description.find("即時聯動警示")
-                if idx != -1:
-                    insights_text = embed.description[idx:]
-                    import re
+            for field in embed.fields:
+                if field.name and "即時聯動警示" in field.name:
+                    if field.value:
+                        import re
 
-                    # 尋找雙星號包裹的粗體標的代號，例如 **AAPL**
-                    symbols = re.findall(r"\*\*([A-Za-z0-9.-]+)\*\*", insights_text)
-                    warning_symbols.extend([s.upper() for s in symbols])
+                        # 尋找雙星號包裹的粗體標的代號，例如 **AAPL**
+                        symbols = re.findall(r"\*\*([A-Za-z0-9.-]+)\*\*", field.value)
+                        warning_symbols.extend([s.upper() for s in symbols])
+                    break
 
             if not warning_symbols:
                 await interaction.followup.send(
