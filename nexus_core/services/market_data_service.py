@@ -73,12 +73,12 @@ def _get_finnhub_controls() -> dict[str, Any]:
     controls = _finnhub_controls_by_loop.get(loop)
     if controls is None:
         controls = {
-            # 1) 每分鐘 55 次請求（保留緩衝以容納重試）
-            "limiter": AsyncLimiter(55, 60),
-            # 2) 每秒 8 次請求（抑制突發 burst，避免 Finnhub 以秒級限流回 429）
-            "limiter_per_second": AsyncLimiter(8, 1),
-            # 3) 併發上限（避免同時間大量 to_thread 造成碰撞與資源抖動）
-            "sem": asyncio.Semaphore(3),
+            # 1) 每分鐘 40 次請求（保留更大緩衝以容納重試，避免觸發硬性 60 次上限）
+            "limiter": AsyncLimiter(40, 60),
+            # 2) 每秒 2 次請求（嚴格抑制突發 burst，避免 Finnhub 內部防護攔截）
+            "limiter_per_second": AsyncLimiter(2, 1),
+            # 3) 併發上限（降低併發，避免 API 同時連線造成 429）
+            "sem": asyncio.Semaphore(2),
         }
         _finnhub_controls_by_loop[loop] = controls
     return controls
@@ -196,9 +196,9 @@ async def _execute_api_call(func: Any, *args, **kwargs) -> Any:  # type: ignore
                             if retry_after is not None:
                                 delay = retry_after
                             else:
-                                delay = (2**attempt) + random.uniform(0.1, 1.0)
+                                delay = (3**attempt) * 2 + random.uniform(1.0, 3.0)
                         else:
-                            delay = (2**attempt) + random.uniform(0.1, 1.0)
+                            delay = (2**attempt) + random.uniform(0.5, 1.5)
 
                         if is_rate_limit:
                             # 使用 max() 保留最長冷卻時間，避免被較短 delay 覆蓋
