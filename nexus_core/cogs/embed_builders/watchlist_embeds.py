@@ -87,12 +87,7 @@ def create_watchlist_signal_embed(
     symbol_tags: list[str] | None = None,
 ) -> discord.Embed | None:
     """建立標的分析中心 2.0 • 戰場心跳快照 (Watchlist Heartbeat) 的 Markdown-ASCII 統一模板。"""
-    from services.llm_service import is_memory_safe
-
     has_meaningful_content = False
-
-    taipei_tz = timezone(timedelta(hours=8))
-    timestamp_str = datetime.now(taipei_tz).strftime("%Y-%m-%d %H:%M:%S")
 
     toggles = toggles or {}
     # 整合 2, 3, 4 -> hb_options_structure
@@ -108,10 +103,6 @@ def create_watchlist_signal_embed(
     hb_exec = toggles.get("hb_execution_risk", True)
     show_risk_alignment = hb_exec
     show_telemetry = hb_exec
-
-    sys_status = "遙測運行中 (TELEMETRY RUNNING)"
-    if not is_memory_safe():
-        sys_status = "遙測運行中 (TELEMETRY RUNNING - ⚠️ LOW RAM DEGRADED)"
 
     # 🛡️ 提取盤前狀態 (為後續 PCR 與 IV 降級防禦做準備)
     is_premarket = False
@@ -337,13 +328,7 @@ def create_watchlist_signal_embed(
         else "N/A"
     )
 
-    degraded_tag = " [數據未更新/降級模式]" if is_degraded else ""
-
-    lines = [
-        "```ansi",
-        f" 標的分析中心 2.0: {symbol} 每半小時戰場心跳 (Watchlist Heartbeat){degraded_tag}",
-        f" [{timestamp_str} - UTC+8] ｜ 系統狀態: {sys_status}",
-    ]
+    lines = []
 
     if show_market_footprints:
         has_meaningful_content = True
@@ -462,15 +447,6 @@ def create_watchlist_signal_embed(
 
     if show_uoa and uoa_table_lines:
         has_meaningful_content = True
-        lines.extend(
-            [
-                "",
-                " 🔎 心跳：異常大單穿透 (UOA)",
-                " 到期日     | 履約價      | 類型 | 交易流向 [買/賣]      | 機構/OI    | 比例   | 戰略意圖映射",
-                " ---------------------------------------------------------------------------------------",
-            ]
-        )
-        lines.extend(uoa_table_lines)
 
     if show_risk_alignment:
         has_meaningful_content = True
@@ -495,8 +471,9 @@ def create_watchlist_signal_embed(
     if not has_meaningful_content and not (show_telemetry and telemetry_alignment_note):
         return None
 
-    lines.append("```")
-    description = "\n".join(lines)
+    description = ""
+    if lines:
+        description = "```ansi\n" + "\n".join(lines).strip() + "\n```"
 
     color_val = {
         "red": discord.Color.red(),
@@ -509,18 +486,19 @@ def create_watchlist_signal_embed(
     if is_degraded:
         embed_title += " [數據未更新/降級模式]"
 
+    embed_desc = description if description else None
     embed: discord.Embed
     try:
         embed = NexusEmbed(
             title=embed_title,
-            description=description,
+            description=embed_desc,
             color=color_val,
             timestamp=datetime.now(timezone.utc),
         )
     except NameError:
         embed = NexusEmbed(
             title=embed_title,
-            description=description,
+            description=embed_desc,
             color=color_val,
             timestamp=datetime.now(timezone.utc),
         )
@@ -538,6 +516,20 @@ def create_watchlist_signal_embed(
         embed.add_field(
             name="📡 Telemetry 待成交委託單實時對齊建議",
             value=val,
+            inline=False,
+        )
+
+    if show_uoa and uoa_table_lines:
+        uoa_content = (
+            "```ansi\n"
+            " 到期日     | 履約價      | 類型 | 交易流向 [買/賣]      | 機構/OI    | 比例   | 戰略意圖映射\n"
+            " ---------------------------------------------------------------------------------------\n"
+            + "\n".join(uoa_table_lines)
+            + "\n```"
+        )
+        embed.add_field(
+            name="🔎 心跳：異常大單穿透 (UOA)",
+            value=_safe_embed_field_value(uoa_content, "無異常大單"),
             inline=False,
         )
 
