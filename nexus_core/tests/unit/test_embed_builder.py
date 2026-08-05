@@ -1113,26 +1113,30 @@ def test_build_post_market_intelligence_embed_empty() -> None:
     embed = embeds[0]
     assert embed.title == "📋 報告：盤後綜合風險與 AI 策略"
 
-    assert embed.title == "📋 報告：盤後綜合風險與 AI 策略"
-
     assert "🏁 財務生存跑道 (Financial Runway)" in embed.description  # type: ignore
 
-    field_values = [f.value for f in embed.fields if f.value is not None]
+    # Section titles are now in Field names (semantic), not in ANSI block values
+    field_names = [f.name for f in embed.fields]
 
-    assert any("📊 投資組合收盤持倉明細" in val for val in field_values)  # type: ignore
-    assert any("🌐 投資組合收盤宏觀風險" in val for val in field_values)  # type: ignore
-    assert any("🧠 AI 損益歸因與次日策略點評" in val for val in field_values)  # type: ignore
+    assert any("持倉明細" in name for name in field_names)  # type: ignore
+    assert any("宏觀風險" in name for name in field_names)  # type: ignore
+    assert any("對沖績效歸因" in name for name in field_names)  # type: ignore
+    assert any("🧠 AI 損益歸因與次日策略點評" in name for name in field_names)  # type: ignore
 
-    assert any(
-        "目前無持倉部位。" in val  # type: ignore
-        for val in field_values
-        if "投資組合收盤持倉明細" in val  # type: ignore
+    # Verify empty-state placeholder text in field values
+    positions_val = next(
+        f.value
+        for f in embed.fields
+        if "持倉明細" in f.name  # type: ignore
     )
-    assert any(
-        "目前無宏觀風險數據。" in val  # type: ignore
-        for val in field_values
-        if "投資組合收盤宏觀風險" in val  # type: ignore
+    assert "目前無持倉部位。" in positions_val  # type: ignore
+
+    macro_val = next(
+        f.value
+        for f in embed.fields
+        if "宏觀風險" in f.name  # type: ignore
     )
+    assert "目前無宏觀風險數據。" in macro_val  # type: ignore
 
 
 def test_build_post_market_intelligence_embed_parsed_ai_commentary() -> None:
@@ -1156,21 +1160,65 @@ def test_build_post_market_intelligence_embed_parsed_ai_commentary() -> None:
         ai_commentary=ai_commentary,
     )
     embed = embeds[0]
-    field_values = [f.value for f in embed.fields if f.value is not None]
+    field_names = [f.name for f in embed.fields]
 
-    assert any("📊 AI 多空大盤交叉驗證解讀" in val for val in field_values)  # type: ignore
-    assert any("⚠️ AI 潛在陷阱與風險提示" in val for val in field_values)  # type: ignore
-    assert any("🛡️ AI 高勝率交易策略推薦" in val for val in field_values)  # type: ignore
-    assert not any("🧠 AI 損益歸因與次日策略點評" in val for val in field_values)  # type: ignore
+    # AI section titles should now be in Field names
+    assert any("📊 AI 多空大盤交叉驗證解讀" in name for name in field_names)  # type: ignore
+    assert any("⚠️ AI 潛在陷阱與風險提示" in name for name in field_names)  # type: ignore
+    assert any("🛡️ AI 高勝率交易策略推薦" in name for name in field_names)  # type: ignore
+    assert not any("🧠 AI 損益歸因與次日策略點評" in name for name in field_names)  # type: ignore
 
+    # Verify content in the corresponding field value
     market_field_val = next(
-        val
-        for val in field_values
-        if "📊 AI 多空大盤交叉驗證解讀" in val  # type: ignore
+        f.value
+        for f in embed.fields
+        if "📊 AI 多空大盤交叉驗證解讀" in f.name  # type: ignore
     )
     assert "```ansi" in market_field_val  # type: ignore
     assert "第一點分析" in market_field_val  # type: ignore
     assert "第二點分析" in market_field_val  # type: ignore
+
+
+def test_build_post_market_intelligence_embed_hedge_attribution() -> None:
+    """Verify hedge_analysis data is correctly consumed and rendered in the Hedge Attribution field."""
+    hedge_data = {
+        "net_pnl": -150.50,
+        "alpha_contribution": 200.00,
+        "hedge_contribution": -350.50,
+        "hedge_ratio": 0.85,
+        "effectiveness": 0.75,
+        "status": "OPTIMAL",
+        "dynamic_tau": 0.0312,
+    }
+    embeds = build_post_market_intelligence_embed(
+        report_lines=[],
+        hedge_analysis=hedge_data,
+        survival_runway=9999.0,
+        sectors_data=[],
+        ai_commentary="Test",
+    )
+    all_field_names: list[str] = []
+    all_field_values: list[str] = []
+    for emb in embeds:
+        all_field_names.extend(f.name for f in emb.fields)  # type: ignore
+        all_field_values.extend((f.value or "") for f in emb.fields)
+
+    # Hedge Attribution section must exist
+    assert any("對沖績效歸因" in name for name in all_field_names)  # type: ignore
+
+    hedge_field_val = next(
+        val
+        for name, val in zip(all_field_names, all_field_values)
+        if "對沖績效歸因" in name  # type: ignore
+    )
+    # Verify all key hedge metrics are rendered
+    assert "+200.00" in hedge_field_val
+    assert "-350.50" in hedge_field_val
+    assert "-150.50" in hedge_field_val
+    assert "OPTIMAL" in hedge_field_val
+    assert "0.0312" in hedge_field_val
+    assert "85.00%" in hedge_field_val
+    assert "75.0%" in hedge_field_val
 
 
 def test_create_covered_call_unlock_embed() -> None:

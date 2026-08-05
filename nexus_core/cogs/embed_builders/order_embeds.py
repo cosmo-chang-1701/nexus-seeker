@@ -805,8 +805,7 @@ def build_post_market_intelligence_embed(
 
     desc_lines = [
         "```ansi",
-        " 📋 盤後綜合風險與 AI 策略報告 (Post-Market Intelligence)",
-        f" [{timestamp_str} - UTC+8] ｜ 系統狀態: 結算完成",
+        f" 📅 {timestamp_str} (UTC+8) ｜ 系統狀態: 結算完成",
     ]
 
     if survival_runway is not None:
@@ -923,18 +922,67 @@ def build_post_market_intelligence_embed(
 
         chunks = _chunk_text_blocks(transformed_blocks, max_len=1000)
         for i, chunk in enumerate(chunks):
-            name = (
-                f" 📊 投資組合收盤持倉明細 (Positions) ({i+1}/{len(chunks)})"
+            field_name = (
+                f"📊 持倉明細 (Positions) ({i+1}/{len(chunks)})"
                 if len(chunks) > 1
-                else " 📊 投資組合收盤持倉明細 (Positions)"
+                else "📊 持倉明細 (Positions)"
             )
             embed.add_field(
-                name="\u200b", value=f"```ansi\n{name}\n{chunk}\n```", inline=False
+                name=field_name, value=f"```ansi\n{chunk}\n```", inline=False
             )
     else:
         embed.add_field(
-            name="\u200b",
-            value="```ansi\n 📊 投資組合收盤持倉明細 (Positions)\n • 目前無持倉部位。\n```",
+            name="📊 持倉明細 (Positions)",
+            value="```ansi\n • 目前無持倉部位。\n```",
+            inline=False,
+        )
+
+    # ── 🛡️ 對沖績效歸因 (Hedge Attribution) ──
+    if hedge_analysis:
+        ha_net_pnl = hedge_analysis.get("net_pnl", 0.0)
+        ha_alpha_pnl = hedge_analysis.get("alpha_contribution", 0.0)
+        ha_hedge_pnl = hedge_analysis.get("hedge_contribution", 0.0)
+        ha_effectiveness = hedge_analysis.get("effectiveness", 0.0)
+        ha_hedge_ratio = hedge_analysis.get("hedge_ratio", 0.0)
+        ha_status = hedge_analysis.get("status", "N/A")
+        ha_dynamic_tau = hedge_analysis.get("dynamic_tau")
+
+        # Semantic ANSI coloring based on hedge status
+        ha_status_color = (
+            "\033[1;32m"
+            if ha_status == "OPTIMAL"
+            else "\033[1;33m"
+            if ha_status == "OVER_HEDGED"
+            else "\033[1;31m"
+        )
+        ha_pnl_color = "\033[1;32m" if ha_net_pnl >= 0 else "\033[1;31m"
+        ha_eff_pct = ha_effectiveness * 100
+
+        hedge_lines = [
+            "```ansi",
+            f" Alpha 選股 PnL   : {ha_pnl_color}${ha_alpha_pnl:+,.2f}\033[0m",
+            f" 對沖避險 PnL     : {ha_pnl_color}${ha_hedge_pnl:+,.2f}\033[0m",
+            f" 淨損益 (Net PnL)  : {ha_pnl_color}${ha_net_pnl:+,.2f}\033[0m",
+            " --------------------------------------------------",
+            f" 對沖比率 (Hedge Ratio)  : {ha_hedge_ratio:.2%}",
+            f" 對沖有效性 (Effectiveness): {ha_eff_pct:.1f}%",
+            f" 對沖狀態 : {ha_status_color}{ha_status}\033[0m",
+        ]
+
+        if ha_dynamic_tau is not None:
+            hedge_lines.append(f" 動態 Tau (τ)      : {ha_dynamic_tau:.4f}")
+
+        hedge_lines.append("```")
+
+        embed.add_field(
+            name="🛡️ 對沖績效歸因 (Hedge Attribution)",
+            value="\n".join(hedge_lines),
+            inline=False,
+        )
+    else:
+        embed.add_field(
+            name="🛡️ 對沖績效歸因 (Hedge Attribution)",
+            value="```ansi\n • 暫無對沖績效數據。\n```",
             inline=False,
         )
 
@@ -955,18 +1003,18 @@ def build_post_market_intelligence_embed(
 
         macro_chunks = _chunk_text_blocks([macro_content], max_len=1000)
         for i, chunk in enumerate(macro_chunks):
-            name = (
-                f" 🌐 投資組合收盤宏觀風險 (Macro Risks) ({i+1}/{len(macro_chunks)})"
+            field_name = (
+                f"🌐 宏觀風險 (Macro Risks) ({i+1}/{len(macro_chunks)})"
                 if len(macro_chunks) > 1
-                else " 🌐 投資組合收盤宏觀風險 (Macro Risks)"
+                else "🌐 宏觀風險 (Macro Risks)"
             )
             embed.add_field(
-                name="\u200b", value=f"```ansi\n{name}\n{chunk}\n```", inline=False
+                name=field_name, value=f"```ansi\n{chunk}\n```", inline=False
             )
     else:
         embed.add_field(
-            name="\u200b",
-            value="```ansi\n 🌐 投資組合收盤宏觀風險 (Macro Risks)\n • 目前無宏觀風險數據。\n```",
+            name="🌐 宏觀風險 (Macro Risks)",
+            value="```ansi\n • 目前無宏觀風險數據。\n```",
             inline=False,
         )
 
@@ -980,7 +1028,7 @@ def build_post_market_intelligence_embed(
             sector_content_lines = []
             for idx, item in enumerate(sorted_sectors):
                 symbol = item.get("symbol", "N/A")
-                name = item.get("name", "N/A")
+                sec_name = item.get("name", "N/A")
                 change = _safe_float(item.get("pct_change"))
                 rel_vol = _safe_float(item.get("rel_vol"))
                 skew = _safe_float(item.get("skew"))
@@ -989,31 +1037,31 @@ def build_post_market_intelligence_embed(
                 change_emoji = "🟢" if change > 0 else "🚨" if change < 0 else "⚖️"
                 prefix = " • "
                 sector_content_lines.append(
-                    f"{prefix}{symbol} ({name})：{change_emoji} {change:+.2f}% ｜ 量比 {rel_vol:.2f}x ｜ Skew {skew:+.1f} ｜ UOA {uoa_count}"
+                    f"{prefix}{symbol} ({sec_name})：{change_emoji} {change:+.2f}% ｜ 量比 {rel_vol:.2f}x ｜ Skew {skew:+.1f} ｜ UOA {uoa_count}"
                 )
             sector_content = "\n".join(sector_content_lines)
             sector_chunks = _chunk_text_blocks([sector_content], max_len=1000)
             for i, chunk in enumerate(sector_chunks):
-                name = (
-                    f" 🔄 行業板塊資金輪動 (Sector Rotation) ({i+1}/{len(sector_chunks)})"
+                field_name = (
+                    f"🔄 板塊輪動 (Sector Rotation) ({i+1}/{len(sector_chunks)})"
                     if len(sector_chunks) > 1
-                    else " 🔄 行業板塊資金輪動 (Sector Rotation)"
+                    else "🔄 板塊輪動 (Sector Rotation)"
                 )
                 embed.add_field(
-                    name="\u200b", value=f"```ansi\n{name}\n{chunk}\n```", inline=False
+                    name=field_name, value=f"```ansi\n{chunk}\n```", inline=False
                 )
         else:
             embed.add_field(
-                name="\u200b",
-                value="```ansi\n 🔄 行業板塊資金輪動 (Sector Rotation)\n • 暫無行業資金輪動數據。\n```",
+                name="🔄 板塊輪動 (Sector Rotation)",
+                value="```ansi\n • 暫無行業資金輪動數據。\n```",
                 inline=False,
             )
 
     def _add_ai_section(header: str, content: str, icon: str) -> Any:
         if not content or content == "暫無分析":
             embed.add_field(
-                name="\u200b",
-                value=f"```ansi\n {icon} {header}\n • 暫無分析\n```",
+                name=f"{icon} {header}",
+                value="```ansi\n • 暫無分析\n```",
                 inline=False,
             )
             return
@@ -1036,14 +1084,14 @@ def build_post_market_intelligence_embed(
 
         chunks = _chunk_text_blocks(transformed_blocks, max_len=1000)
         for i, chunk in enumerate(chunks):
-            chunk_header = (
-                f" {icon} {header} ({i+1}/{len(chunks)})"
+            field_name = (
+                f"{icon} {header} ({i+1}/{len(chunks)})"
                 if len(chunks) > 1
-                else f" {icon} {header}"
+                else f"{icon} {header}"
             )
             embed.add_field(
-                name="\u200b",
-                value=f"```ansi\n{chunk_header}\n{chunk}\n```",
+                name=field_name,
+                value=f"```ansi\n{chunk}\n```",
                 inline=False,
             )
 
