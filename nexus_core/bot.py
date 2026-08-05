@@ -513,6 +513,16 @@ class NexusBot(commands.Bot):
                             logger.error(
                                 f"Failed to rebuild WatchlistHeartbeatView: {e}"
                             )
+                    elif view_info.startswith("RolloverActionView:"):
+                        symbol = view_info.split(":", 1)[1]
+                        try:
+                            from cogs.embed_builders.rollover_embeds import (
+                                RolloverActionView,
+                            )
+
+                            view = RolloverActionView(symbol)
+                        except Exception as e:
+                            logger.error(f"Failed to rebuild RolloverActionView: {e}")
 
                 try:
                     user = await self.fetch_user(user_id)

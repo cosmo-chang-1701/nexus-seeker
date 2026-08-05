@@ -93,9 +93,13 @@ class DynamicRolloverEngine:
         target_power_squeeze: float,
         target_expected_value: float,
         current_holding_expected_value: float,
+        target_ivr: float = 0.0,
+        target_uoa_sweep: bool = False,
+        target_spot: float = 0.0,
+        target_put_wall: float = 0.0,
     ) -> Dict[str, Any]:
         """
-        邏輯 (2): 機會成本與期望值比對
+        邏輯 (2): 機會成本與期望值比對 (包含勝率傾斜)
         結合 PowerSqueeze 動能指標，當持倉動能衰退且 Watchlist 具備突破條件時，
         計算期望值並給出轉倉建議。
         """
@@ -108,6 +112,7 @@ class DynamicRolloverEngine:
 
         should_rollover = False
         rollover_ratio = 0.0
+        strategy = "Buy Shares"
 
         if holding_momentum_decaying and target_breakout_ready and ev_spread > 0.05:
             should_rollover = True
@@ -118,63 +123,127 @@ class DynamicRolloverEngine:
                 # 獲利一般或虧損，轉換 30% 或全轉，視風險偏好而定
                 rollover_ratio = 0.3
 
-        return {
-            "should_rollover": should_rollover,
-            "rollover_ratio": rollover_ratio,
-            "reason": (
-                f"Holding {current_holding_symbol} momentum decaying (PSQ={current_holding_power_squeeze}). "
-                f"Target {target_watchlist_symbol} showing breakout potential (PSQ={target_power_squeeze}) "
-                f"with EV spread +{ev_spread*100:.1f}%."
+            # ----------------------------------------------------
+            # [ 勝率傾斜 ] (Win-rate skew)
+            # 條件: 低 IVR (< 30) + 巨量 GEX 防線 (靠近 PutWall) + UOA 巨鯨掃貨
+            # 動作: 現貨打底 + ITM Call 槓桿
+            # ----------------------------------------------------
+            is_near_put_wall = (target_put_wall > 0 and target_spot > 0) and (
+                abs(target_spot - target_put_wall) / target_put_wall < 0.015
             )
-            if should_rollover
-            else "No action required.",
+            is_low_ivr = 0 < target_ivr < 30.0
+
+            if is_low_ivr and is_near_put_wall and target_uoa_sweep:
+                strategy = "Shares + ITM Call"
+                reason_suffix = f" (🎯 勝率傾斜觸發: 低IVR({target_ivr:.1f}%) + PutWall防線 + UOA掃貨，建議 ITM Call 槓桿)"
+            else:
+                reason_suffix = ""
+
+            return {
+                "should_rollover": should_rollover,
+                "rollover_ratio": rollover_ratio,
+                "strategy": strategy,
+                "reason": (
+                    f"Holding {current_holding_symbol} momentum decaying (PSQ={current_holding_power_squeeze}). "
+                    f"Target {target_watchlist_symbol} showing breakout potential (PSQ={target_power_squeeze}) "
+                    f"with EV spread +{ev_spread*100:.1f}%." + reason_suffix
+                ),
+            }
+
+        return {
+            "should_rollover": False,
+            "rollover_ratio": 0.0,
+            "strategy": "N/A",
+            "reason": "No action required.",
         }
 
     def check_satellite_rebalancing(
         self, portfolio_assets: List[Dict[str, Any]], total_account_value: float
     ) -> List[Dict[str, Any]]:
         """
-        邏輯 (3): 核心與衛星比例再平衡
-        監控 SQLite 中的持倉配比，當高 Beta 衛星部位超過最大佔比上限時，
-        觸發轉倉至核心資產 (如 SPY/QQQ) 的指令。
-
-        portfolio_assets 每個元素應包含:
-        - symbol: str
-        - asset_class: str ('CORE' 或 'SATELLITE')
-        - current_value: float
-        - target_allocation_pct: float
-        - max_allocation_pct: float
+        邏輯 (3): 核心與衛星比例再平衡 + 深度微觀結構與選擇權籌碼驅動
+        包含勝率傾斜與雜訊避險等高階戰術。
         """
         rebalance_instructions = []
 
-        # 這裡的邏輯可以是單一資產檢查，也可以是整體 Satellite 比例檢查
-        # 依照 Step 1 的 Scenario 3，這是一個單一資產上限或 Satellite 總上限的問題
-        # 此處實作：單一衛星資產超過 max_allocation_pct，即建議賣出超額部分
-
         for asset in portfolio_assets:
             if asset.get("asset_class") == "SATELLITE":
+                symbol = asset["symbol"]
                 current_value = asset.get("current_value", 0.0)
-                max_alloc = asset.get("max_allocation_pct", 0.0)
+                max_alloc = asset.get("max_allocation_pct", 0.3)
 
-                if max_alloc > 0.0 and total_account_value > 0.0:
-                    current_alloc = current_value / total_account_value
-                    if current_alloc > max_alloc:
-                        excess_alloc = current_alloc - asset.get(
-                            "target_allocation_pct", max_alloc
-                        )
-                        excess_value = excess_alloc * total_account_value
+                # --- 新增：深度量化數據 (Fallback = None/0.0) ---
+                spot = asset.get("spot_price", 0.0)
+                call_wall = asset.get("call_wall", 0.0)
+                max_pain = asset.get("max_pain", 0.0)
+                ivr = asset.get("ivr", 0.0)
 
-                        # 建議賣出比例 = 超出金額 / 當前部位總額
-                        sell_ratio = excess_value / current_value
+                # 計算比例
+                current_alloc = (
+                    current_value / total_account_value
+                    if total_account_value > 0
+                    else 0.0
+                )
 
-                        rebalance_instructions.append(
-                            {
-                                "symbol": asset["symbol"],
-                                "action": "REDUCE",
-                                "sell_ratio": round(sell_ratio, 2),
-                                "target_core": "VOO",  # 預設核心資產
-                                "reason": f"SATELLITE asset {asset['symbol']} allocation ({current_alloc*100:.1f}%) exceeds max ({max_alloc*100:.1f}%).",
-                            }
-                        )
+                # ----------------------------------------------------
+                # [ 雜訊避險 ] (Noise hedge)
+                # 條件: 高波泡沫 (IVR > 80)、碰觸 CallWall，或大幅偏離 Max Pain (>10%)
+                # 動作: 100% 撤退回 VOO
+                # ----------------------------------------------------
+                is_iv_bubble = ivr > 80.0
+                touch_call_wall = (call_wall > 0 and spot > 0) and (
+                    abs(spot - call_wall) / call_wall < 0.015 or spot >= call_wall
+                )
+                deviate_max_pain = (max_pain > 0 and spot > 0) and (
+                    abs(spot - max_pain) / max_pain > 0.1
+                )
+
+                if is_iv_bubble or touch_call_wall or deviate_max_pain:
+                    reason = []
+                    if is_iv_bubble:
+                        reason.append(f"高波動泡沫 (IVR={ivr:.1f}%)")
+                    if touch_call_wall:
+                        reason.append(f"碰觸或突破 CallWall 天花板 (${call_wall})")
+                    if deviate_max_pain:
+                        reason.append(f"大幅偏離 Max Pain (${max_pain})")
+
+                    rebalance_instructions.append(
+                        {
+                            "symbol": symbol,
+                            "action": "LIQUIDATE",
+                            "sell_ratio": 1.0,
+                            "target_core": "VOO",
+                            "reason": "🚨 雜訊避險觸發: "
+                            + "、".join(reason)
+                            + "。強烈建議 100% 資金回流 VOO 避風港。",
+                            "suggested_strategy": "N/A",
+                        }
+                    )
+                    continue  # 已經100%撤退，不需進行後續常規再平衡
+
+                # ----------------------------------------------------
+                # [ 常規比例控管 ]
+                # ----------------------------------------------------
+                if (
+                    max_alloc > 0.0
+                    and total_account_value > 0.0
+                    and current_alloc > max_alloc
+                ):
+                    excess_alloc = current_alloc - asset.get(
+                        "target_allocation_pct", max_alloc
+                    )
+                    excess_value = excess_alloc * total_account_value
+                    sell_ratio = excess_value / current_value
+
+                    rebalance_instructions.append(
+                        {
+                            "symbol": symbol,
+                            "action": "REDUCE",
+                            "sell_ratio": round(sell_ratio, 2),
+                            "target_core": "VOO",
+                            "reason": f"SATELLITE asset {symbol} allocation ({current_alloc*100:.1f}%) exceeds max ({max_alloc*100:.1f}%).",
+                            "suggested_strategy": "N/A",
+                        }
+                    )
 
         return rebalance_instructions

@@ -37,7 +37,6 @@ from market_analysis.ghost_trader import GhostTrader
 from market_analysis.dynamic_rollover import DynamicRolloverEngine
 from cogs.embed_builders.rollover_embeds import (
     create_dynamic_rollover_embed,
-    RolloverActionView,
 )
 
 ny_tz = ZoneInfo("America/New_York")
@@ -200,22 +199,77 @@ class SchedulerCog(commands.Cog):
             try:
                 # Note: 實務上這裡會呼叫 get_quote 取得真實市價，為展示架構流程，此處簡化為概念整合
                 from typing import Dict, List, Any
+                import sqlite3
+                import json
+                import config
+
+                def get_cached_symbol_metrics(sym: str) -> dict:
+                    res = {
+                        "spot_price": 100.0,
+                        "ivr": 0.0,
+                        "max_pain": 0.0,
+                        "put_wall": 0.0,
+                        "call_wall": 0.0,
+                        "is_uoa_sweep": False,
+                    }
+                    try:
+                        conn = sqlite3.connect(config.DB_NAME)
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            "SELECT max_pain FROM market_cache WHERE symbol = ?", (sym,)
+                        )
+                        row = cursor.fetchone()
+                        if row and row[0]:
+                            res["max_pain"] = float(row[0])
+
+                        cursor.execute(
+                            "SELECT value FROM kv_cache WHERE key = ?",
+                            (f"gex_profile_{sym}",),
+                        )
+                        row = cursor.fetchone()
+                        if row and row[0]:
+                            gex_data = json.loads(row[0])
+                            res["spot_price"] = float(gex_data.get("spot_price", 100.0))
+                            res["put_wall"] = float(gex_data.get("put_wall", 0.0))
+                            res["call_wall"] = float(gex_data.get("call_wall", 0.0))
+
+                        cursor.execute(
+                            "SELECT value FROM kv_cache WHERE key = ?", (f"ivr_{sym}",)
+                        )
+                        row = cursor.fetchone()
+                        if row and row[0]:
+                            res["ivr"] = float(row[0])
+                    except Exception:
+                        pass
+                    finally:
+                        if "conn" in locals():
+                            conn.close()
+                    return res
 
                 all_holdings = get_all_holdings()
                 user_assets: Dict[int, List[Dict[str, Any]]] = {}
                 for h in all_holdings:
                     u_id = h["user_id"]
+                    sym = h["symbol"].upper()
+                    metrics = get_cached_symbol_metrics(sym)
+
                     # 若 DB 尚未更新欄位，先提供 Fallback 以供測試
                     user_assets.setdefault(u_id, []).append(
                         {
-                            "symbol": h["symbol"].upper(),
+                            "symbol": sym,
                             "asset_class": h.get("asset_class", "SATELLITE"),
                             "current_value": h.get("quantity", 0)
-                            * 100.0,  # 假定均價 $100
+                            * metrics["spot_price"],
                             "target_allocation_pct": h.get(
                                 "target_allocation_pct", 0.0
                             ),
                             "max_allocation_pct": h.get("max_allocation_pct", 0.3),
+                            "spot_price": metrics["spot_price"],
+                            "ivr": metrics["ivr"],
+                            "max_pain": metrics["max_pain"],
+                            "put_wall": metrics["put_wall"],
+                            "call_wall": metrics["call_wall"],
+                            "is_uoa_sweep": metrics["is_uoa_sweep"],
                         }
                     )
 
@@ -230,21 +284,27 @@ class SchedulerCog(commands.Cog):
                     )
 
                     for ins in rebalance_instructions:
-                        # 預設直接推播，實務可加入 notification_enabled 開關
+                        if not database.is_notification_enabled(
+                            u_id, "rollover_rebalance_alert"
+                        ):
+                            continue
+
                         embed = create_dynamic_rollover_embed(
                             rollover_type="再平衡 (Rebalancing)",
                             sell_symbol=ins["symbol"],
                             sell_ratio=ins["sell_ratio"],
                             buy_symbol=ins["target_core"],
                             reason=ins["reason"],
-                            suggested_strategy="Buy Shares",
+                            suggested_strategy=ins.get(
+                                "suggested_strategy", "Buy Shares"
+                            ),
                             suggested_price="Market",
                             strike="N/A",
                             expiry="N/A",
                             direction="BTO",
                         )
-                        view = RolloverActionView(target_symbol=ins["symbol"])
-                        await self.bot.queue_dm(u_id, embed=embed, view=view)
+                        setattr(embed, "_view", f"RolloverActionView:{ins['symbol']}")
+                        await self.bot.queue_dm(u_id, embed=embed)
             except Exception as e:
                 logger.error(f"動態轉倉盤中審計錯誤: {e}")
 
