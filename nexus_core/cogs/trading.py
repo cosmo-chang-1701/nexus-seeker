@@ -248,22 +248,41 @@ class SchedulerCog(commands.Cog):
 
                 all_holdings = get_all_holdings()
                 user_assets: Dict[int, List[Dict[str, Any]]] = {}
+                CORE_ETF_SYMBOLS = {"VOO", "SPY", "QQQ", "IVV", "VTI"}
+
                 for h in all_holdings:
                     u_id = h["user_id"]
                     sym = h["symbol"].upper()
                     metrics = get_cached_symbol_metrics(sym)
 
-                    # 若 DB 尚未更新欄位，先提供 Fallback 以供測試
+                    is_core = sym in CORE_ETF_SYMBOLS
+                    default_class = "CORE" if is_core else "SATELLITE"
+
+                    meta_asset_class = None
+                    try:
+                        meta = json.loads(h.get("metadata", "{}") or "{}")
+                        if meta:
+                            meta_asset_class = meta.get("asset_class")
+                    except Exception:
+                        pass
+
+                    final_asset_class = (
+                        meta_asset_class if meta_asset_class else default_class
+                    )
+                    default_max_alloc = 1.0 if final_asset_class == "CORE" else 0.3
+
                     user_assets.setdefault(u_id, []).append(
                         {
                             "symbol": sym,
-                            "asset_class": h.get("asset_class", "SATELLITE"),
+                            "asset_class": final_asset_class,
                             "current_value": h.get("quantity", 0)
                             * metrics["spot_price"],
                             "target_allocation_pct": h.get(
                                 "target_allocation_pct", 0.0
                             ),
-                            "max_allocation_pct": h.get("max_allocation_pct", 0.3),
+                            "max_allocation_pct": h.get(
+                                "max_allocation_pct", default_max_alloc
+                            ),
                             "spot_price": metrics["spot_price"],
                             "ivr": metrics["ivr"],
                             "max_pain": metrics["max_pain"],
