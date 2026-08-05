@@ -49,8 +49,8 @@ class BatchScanWarningButton(discord.ui.Button):
                     if field.value:
                         import re
 
-                        # 尋找雙星號包裹的粗體標的代號，例如 **AAPL**
-                        symbols = re.findall(r"\*\*([A-Za-z0-9.-]+)\*\*", field.value)
+                        # 尋找類似 "• 🚀 TSLA:" 的標的代號
+                        symbols = re.findall(r"•.*?([A-Za-z0-9.-]+):", field.value)
                         warning_symbols.extend([s.upper() for s in symbols])
                     break
 

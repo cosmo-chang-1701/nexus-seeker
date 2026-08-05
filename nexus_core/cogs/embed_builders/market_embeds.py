@@ -668,11 +668,11 @@ def build_radar_scan_embed(
                     )
                     if matched_order:
                         insights.append(
-                            f"• 🚀 **{sym}**: 價格已極度逼近本週波動下緣 (${em_low:.2f})，且距離 Max Pain 有 {dist_pct:+.1f}% 的多頭磁吸引力，系統已自動激活 ID: {matched_order['id']} 坑底捕獸夾 (${matched_order['limit_price']:.2f})。"
+                            f"• 🚀 {sym}: 價格已極度逼近本週波動下緣 (${em_low:.2f})，且距離 Max Pain 有 {dist_pct:+.1f}% 的多頭磁吸引力，系統已自動激活 ID: {matched_order['id']} 坑底捕獸夾 (${matched_order['limit_price']:.2f})。"
                         )
                     else:
                         insights.append(
-                            f"• 🚀 **{sym}**: 價格已極度逼近本週波動下緣 (${em_low:.2f})，且距離 Max Pain 有 {dist_pct:+.1f}% 的多頭磁吸引力，建議部署限價捕獵。"
+                            f"• 🚀 {sym}: 價格已極度逼近本週波動下緣 (${em_low:.2f})，且距離 Max Pain 有 {dist_pct:+.1f}% 的多頭磁吸引力，建議部署限價捕獵。"
                         )
 
                 # 穿透式 UOA 與偏離度聯動判定：當偏離度顯著時 (例如 |dist_pct| > 10%)
@@ -752,7 +752,7 @@ def build_radar_scan_embed(
                 if sqz_dir == "🟢":
                     sqz_dir = "⚪"
                 insights.append(
-                    f"• 🧱 **{sym}**: 偵測到上方 ${uoa_barrier_cap:.2f} 存在實質硬封頂 (Volume > 5x OI)，SQZ 多頭動能評級已強制下調。"
+                    f"• 🧱 {sym}: 偵測到上方 ${uoa_barrier_cap:.2f} 存在實質硬封頂 (Volume > 5x OI)，SQZ 多頭動能評級已強制下調。"
                 )
 
             if uoa_barrier_floor and sqz_mom < 0:
@@ -760,7 +760,7 @@ def build_radar_scan_embed(
                 if sqz_dir == "🔴":
                     sqz_dir = "⚪"
                 insights.append(
-                    f"• 🧱 **{sym}**: 偵測到下方 ${uoa_barrier_floor:.2f} 存在實質硬地板 (Volume > 5x OI)，SQZ 空頭動能評級已強制下調。"
+                    f"• 🧱 {sym}: 偵測到下方 ${uoa_barrier_floor:.2f} 存在實質硬地板 (Volume > 5x OI)，SQZ 空頭動能評級已強制下調。"
                 )
 
             # --- 新增：多週期 Max Pain 引力階梯 (Multi-DTE Gravity Filter) ---
@@ -778,7 +778,7 @@ def build_radar_scan_embed(
                                     dev = (price_val - mp_val) / mp_val * 100
                                     if dev > 10.0:
                                         insights.append(
-                                            f"• 🧲 **{sym}**: 遠期痛點 (DTE {dte}, ${mp_val:.2f}) 正乖離高達 +{dev:.1f}%，上方空間受限，觸發【下行磁吸預警】。"
+                                            f"• 🧲 {sym}: 遠期痛點 (DTE {dte}, ${mp_val:.2f}) 正乖離高達 +{dev:.1f}%，上方空間受限，觸發【下行磁吸預警】。"
                                         )
                                         if (
                                             "正常運行" in status_label
@@ -797,7 +797,7 @@ def build_radar_scan_embed(
                 status_label = "🚫 偽突破 (嚴禁單腿看多)"
                 embed.color = 0xE74C3C
                 insights.append(
-                    f"• 🚨 **{sym}**: SQZ 呈現多頭但 Skew 分位極端 ({skew_percentile_val:.1f}%)，判定為散戶追高/機構偷買 Put 防禦之偽突破，【已封鎖單腿看多建議】。"
+                    f"• 🚨 {sym}: SQZ 呈現多頭但 Skew 分位極端 ({skew_percentile_val:.1f}%)，判定為散戶追高/機構偷買 Put 防禦之偽突破，【已封鎖單腿看多建議】。"
                 )
 
             # 連動 GEX PutWall (做市商底牆)
@@ -809,21 +809,21 @@ def build_radar_scan_embed(
                     pw_dist = (price_val - put_wall) / put_wall * 100
                     if 0 <= pw_dist <= 2.0:
                         insights.append(
-                            f"• 🛡️ **{sym}**: 價格已逼近 GEX PutWall 做市商底牆 (${put_wall:.2f})，此處具備強大流動性支撐，若有效跌破將觸發 Delta 負向螺旋。"
+                            f"• 🛡️ {sym}: 價格已逼近 GEX PutWall 做市商底牆 (${put_wall:.2f})，此處具備強大流動性支撐，若有效跌破將觸發 Delta 負向螺旋。"
                         )
                     elif pw_dist < 0 and net_gex < 0 and sqz_dir == "🔴":
                         insights.append(
-                            f"• 🚨 **{sym}**: 價格已跌破 GEX PutWall 做市商底牆 (${put_wall:.2f})，進入 Delta 負向螺旋高風險區間，嚴防流動性踩踏。"
+                            f"• 🚨 {sym}: 價格已跌破 GEX PutWall 做市商底牆 (${put_wall:.2f})，進入 Delta 負向螺旋高風險區間，嚴防流動性踩踏。"
                         )
 
             if psq_result and sqz_is_squeezing:
                 if sqz_mom > 0:
                     insights.append(
-                        f"• ⏱️ **{sym}**: SQZ 正處於動能擠壓蓄力期 (Squeezing)，當前動能偏多 ({sqz_mom:+.1f})，建議關注向上突破機會。"
+                        f"• ⏱️ {sym}: SQZ 正處於動能擠壓蓄力期 (Squeezing)，當前動能偏多 ({sqz_mom:+.1f})，建議關注向上突破機會。"
                     )
                 elif sqz_mom < 0:
                     insights.append(
-                        f"• ⏱️ **{sym}**: SQZ 正處於動能擠壓蓄力期 (Squeezing)，當前動能偏空 ({sqz_mom:+.1f})，建議嚴防向下殺跌風險。"
+                        f"• ⏱️ {sym}: SQZ 正處於動能擠壓蓄力期 (Squeezing)，當前動能偏空 ({sqz_mom:+.1f})，建議嚴防向下殺跌風險。"
                     )
 
             # 格式化一列 ANSI 表格 (Two-Line Tree-Style)
@@ -1006,6 +1006,7 @@ def build_radar_scan_embed(
             f"**核心 AI 暨持倉量化雷達**\n```ansi\n{header}\n{header2}\n{divider}\n"
         )
         ansi_table += "\n".join(ansi_lines)
+        ansi_table += "\n\n"
         ansi_table += "提示: ⚠️ 代表與最大痛點偏離度過高（>10%）或具備異常籌碼結構，需點擊穿透審查。\n"
         ansi_table += (
             "備註: EM Pos % 代表價格處於預期波動區間之下緣(0%)或上緣(100%)。\n"
@@ -1016,7 +1017,7 @@ def build_radar_scan_embed(
 
         embed.add_field(
             name="💡 即時聯動警示 (Real-time Insights)",
-            value=f"```md\n{insights_str}\n```",
+            value=f"```ansi\n{insights_str}\n```",
             inline=False,
         )
 

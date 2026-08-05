@@ -408,7 +408,7 @@ async def test_batch_scan_warning_button_callback(mock_interaction: Any, mock_bo
     mock_field = MagicMock()
     mock_field.name = "💡 即時聯動警示 (Real-time Insights)"
     mock_field.value = (
-        "```md\n" "• 🚀 **AAPL**: 價格接近下緣\n" "• ⚠️ **TSLA**: 籌碼面異常\n" "```"
+        "```ansi\n" "• 🚀 AAPL: 價格接近下緣\n" "• ⚠️ TSLA: 籌碼面異常\n" "```"
     )
     mock_embed.fields = [mock_field]
     mock_embed.description = "```ansi\n```"
@@ -442,7 +442,7 @@ async def test_batch_scan_warning_button_callback(mock_interaction: Any, mock_bo
     cog._run_single_symbol_hub.reset_mock()
     mock_interaction.followup.send.reset_mock()
     mock_field.value = (
-        "```md\n• ✨ 所有標的當前價格與 Max Pain 及波動邊界皆無極端異常偏離。\n```"
+        "```ansi\n• ✨ 所有標的當前價格與 Max Pain 及波動邊界皆無極端異常偏離。\n```"
     )
     await btn.callback(mock_interaction)
     assert mock_interaction.followup.send.called
@@ -472,7 +472,7 @@ async def test_batch_scan_warning_button_chunking(mock_interaction: Any, mock_bo
     mock_field = MagicMock()
     mock_field.name = "💡 即時聯動警示 (Real-time Insights)"
     mock_field.value = (
-        "```md\n" + "\n".join([f"• 🚀 **SYM{i}**: Test" for i in range(12)]) + "\n```"
+        "```ansi\n" + "\n".join([f"• 🚀 SYM{i}: Test" for i in range(12)]) + "\n```"
     )
     mock_embed.fields = [mock_field]
     mock_embed.description = "```ansi\n```"
