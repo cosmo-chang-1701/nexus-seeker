@@ -730,6 +730,76 @@ def build_radar_scan_embed(
                     psq_result.get("momentum", psq_result.get("momentum_value"))
                 )
 
+            # --- 新增：UOA Barrier Index (做市商實質封頂/地板) ---
+            uoa_list_safe = r.get("uoa") or []
+            uoa_barrier_cap = None
+            uoa_barrier_floor = None
+
+            for u in uoa_list_safe:
+                u_vol = float(u.get("volume", 0) or 0)
+                u_oi = float(u.get("oi", 0) or 0)
+                u_type = u.get("type", "")
+                u_strike = float(u.get("strike", 0.0) or 0.0)
+
+                if u_oi > 0 and u_vol > 5 * u_oi and u_vol > 10000:
+                    if u_type == "CALL":
+                        uoa_barrier_cap = u_strike
+                    elif u_type == "PUT":
+                        uoa_barrier_floor = u_strike
+
+            if uoa_barrier_cap and sqz_mom > 0:
+                sqz_mom = max(0.0, sqz_mom - 1.0)
+                if sqz_dir == "🟢":
+                    sqz_dir = "⚪"
+                insights.append(
+                    f"• 🧱 **{sym}**: 偵測到上方 ${uoa_barrier_cap:.2f} 存在實質硬封頂 (Volume > 5x OI)，SQZ 多頭動能評級已強制下調。"
+                )
+
+            if uoa_barrier_floor and sqz_mom < 0:
+                sqz_mom = min(0.0, sqz_mom + 1.0)
+                if sqz_dir == "🔴":
+                    sqz_dir = "⚪"
+                insights.append(
+                    f"• 🧱 **{sym}**: 偵測到下方 ${uoa_barrier_floor:.2f} 存在實質硬地板 (Volume > 5x OI)，SQZ 空頭動能評級已強制下調。"
+                )
+
+            # --- 新增：多週期 Max Pain 引力階梯 (Multi-DTE Gravity Filter) ---
+            month_max_pains = r.get("month_max_pains") or []
+            if price_val > 0:
+                for mp_entry in month_max_pains:
+                    exp_str = mp_entry.get("expiry")
+                    if exp_str:
+                        try:
+                            exp_dt = datetime.strptime(exp_str, "%Y-%m-%d").date()
+                            dte = (exp_dt - datetime.now().date()).days
+                            if 1 <= dte <= 14:
+                                mp_val = float(mp_entry.get("max_pain", 0.0) or 0.0)
+                                if mp_val > 0:
+                                    dev = (price_val - mp_val) / mp_val * 100
+                                    if dev > 10.0:
+                                        insights.append(
+                                            f"• 🧲 **{sym}**: 遠期痛點 (DTE {dte}, ${mp_val:.2f}) 正乖離高達 +{dev:.1f}%，上方空間受限，觸發【下行磁吸預警】。"
+                                        )
+                                        if (
+                                            "正常運行" in status_label
+                                            or "磁吸回升" in status_label
+                                        ):
+                                            status_label = "下行磁吸預警 ⚠️"
+                                        break
+                        except Exception:
+                            pass
+
+            # --- 新增：SQZ - Skew 結構背離過濾器 (Micro-Divergence Gate) ---
+            skew_raw = r.get("skew_percentile")
+            skew_percentile_val = float(skew_raw) if skew_raw is not None else 50.0
+
+            if sqz_mom > 0 and skew_percentile_val > 85.0:
+                status_label = "🚫 偽突破 (嚴禁單腿看多)"
+                embed.color = 0xE74C3C
+                insights.append(
+                    f"• 🚨 **{sym}**: SQZ 呈現多頭但 Skew 分位極端 ({skew_percentile_val:.1f}%)，判定為散戶追高/機構偷買 Put 防禦之偽突破，【已封鎖單腿看多建議】。"
+                )
+
             # 連動 GEX PutWall (做市商底牆)
             if put_wall > 0 and price_val > 0 and not is_fixed_income:
                 has_putwall_warning = any(
