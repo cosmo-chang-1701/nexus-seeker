@@ -4,7 +4,7 @@
 
 Nexus Seeker is a multi-tenant **Discord-first options risk-control and trading operations platform**. It combines technical structure, Black-Scholes-Merton pricing, Greeks-based portfolio risk, event-aware calendar defenses, and LLM-assisted structured commentary.
 
-Current released core version: **`1.11.21`**
+Current released core version: **`1.11.25`**
 
 The codebase is optimized for:
 
@@ -104,8 +104,8 @@ Instead of invoking LLM on the first-level radar panel, a lightweight rules engi
 - **需防壓回 ⚠️ / 籌碼斷層 ⚠️**: Triggered if `abs(Delta MP%) > 10%`.
 - **Unified Radar Filters**: The terminal UI consolidates Risk Defense and Alpha Signal filters into a single dropdown, fully integrated with `ScanParams` for deep evaluation:
   - **Risk Defenses**: Excludes martial law bounds (`exclude_martial_law`), prevents silent period events (`avoid_silent_period`), and shields against extreme dark pool distribution (`dp_skew_defense` filtering `skew < -0.3`).
-  - **Alpha Signals**: Filters for Triple Discount Pricing (`tdp_mode`), Volatility Squeeze firing (`squeeze_mode`), Strict UOA institutional activity (`uoa_mode`), and High-Deviation Magnetic Filters (`magnetic_filters`).
-- **Real-time Insights**: Automatically matches active pending orders or option protection strategies (e.g., triggering pull-back alerts or tail-risk warnings).
+  - **Alpha Signals & Advanced Gates**: Filters for Triple Discount Pricing (`tdp_mode`), Volatility Squeeze firing (`squeeze_mode`), Strict UOA institutional activity (`uoa_mode`), High-Deviation Magnetic Filters (`magnetic_filters`), plus new defensive layers including **UOA Barrier, Gravity Filter, and Divergence Gate**.
+- **Real-time Insights**: Automatically matches active pending orders or option protection strategies (e.g., triggering pull-back alerts or tail-risk warnings). Now rendered inside a dedicated ANSI markdown code block for easy one-click copying.
 
 ### 3. Rendering Layer (`build_radar_scan_embed`)
 The ANSI terminal radar card is built inside `cogs/embed_builders/` using `build_radar_scan_embed()`, keeping with the **Single Source of Truth** for embeds. It prints an interactive ANSI plain-text grid showing current price, IVR, Expected Move range, Max Pain, and D-MP% deviation.
@@ -501,7 +501,7 @@ Current repository rule:
 The platform features an automated **Dynamic Rollover Engine** (`market_analysis/dynamic_rollover.py`) that monitors the real portfolio every 30 minutes. It evaluates holdings across four core scenarios to defensively rebalance assets or shift momentum based on Specification by Example (SBE) guidelines.
 
 ### Scenarios
-1. **Fundamental Thesis Broken (原型假設破滅)**: Leverages `nexus_edge_scraper` via the SEC EDGAR API (`httpx` + BS4 decomposition + Regex tag filtering) to pull the latest 8-K or 10-Q report directly from the source. The LLM validates the moat. If broken, completely liquidates the asset into the Core holding (e.g., VOO).
+1. **Fundamental Thesis Broken (原型假設破滅)**: Leverages `nexus_edge_scraper` via the SEC EDGAR API (`httpx` + BS4 decomposition + Regex tag filtering). Specifically, `section_extractor.py` provides **structured extraction** (Forward Guidance, Margin & Cost, Market Share, Financial Results, Operational Disruption) to prevent token explosion. It uses an **Advanced CoT** (Chain of Thought) system prompt to validate the moat. If broken, completely liquidates the asset into the Core holding (e.g., VOO).
 2. **Opportunity Cost & EV Comparison (機會成本轉換)**: Compares the `PowerSqueeze` indicator and Expected Value (EV) between a decaying holding and a breakout watchlist target. Recommends tactical option spreads (e.g., Bull Call Spreads) to roll the capital.
 3. **Core vs Satellite Rebalancing (核心與衛星比例再平衡)**: Prevents concentration risk. If a SATELLITE asset (e.g., NVDA) exceeds its `max_allocation_pct` due to a rally, the engine partially sells it back to the `target_allocation_pct` and buys the CORE asset.
 4. **Leverage & Margin Defense (槓桿與維持率防禦)**: Monitors macro VIX conditions and account margin levels. If a structural washout is imminent, automatically sends a Buy-To-Close (BTC) or Sell-To-Close (STC) signal for high-beta assets to release margin.
@@ -527,6 +527,7 @@ The platform features an automated **Dynamic Rollover Engine** (`market_analysis
 - `nexus_core/cogs/terminal.py` — terminal command entrypoints (including settings and runway analysis)
 - `nexus_core/cogs/unified_terminal/` — modular trader terminal and radar hubs (`cog.py`, `symbol_view.py`, `portfolio_view.py`, `batch_scan_view.py`, `pulse_view.py`, `utils.py`)
 - `nexus_core/cogs/calendar.py` — upgraded macro and earnings calendar command with event caching
+- `nexus_core/cogs/cc_recovery.py` — filter and display optimal OTM Covered Call contracts
 - `nexus_core/cogs/embed_builders/` — single source of truth for embeds (`embed_builder.py` is shim)
 - `nexus_core/cogs/intelligence.py` — Market Intelligence & Edge Detection Terminal (news, reddit, polymarket)
 - `nexus_core/cogs/hedging.py` — automated hedging tracking and settlement interface
@@ -539,6 +540,8 @@ The platform features an automated **Dynamic Rollover Engine** (`market_analysis
 - `nexus_core/market_analysis/sentiment_engine.py` — Facade entrypoint for skew / UOA / IV stack
 - `nexus_core/market_analysis/sentiment/` — Dedicated submodules (`iv_metrics`, `max_pain`, `options_flow`, `uoa_detector`, `history_storage`, `cache`)
 - `nexus_core/market_analysis/telemetry_pricing_engine.py` — central alignment alert pipeline and decision gating logic (stale-lock, deep sea gap limits, pure stock gate, UOA squeeze classification)
+- `nexus_core/risk_engine/nro.py` — WatchlistRiskController translating technical status to SDDM tactical routes (SHIELD, SPEAR, STANDBY)
+- `nexus_core/formatters/execution_embeds.py` — embeds formatter separating execution decision view logic
 - `nexus_core/market_analysis/ghost_trader.py` — GhostTrader Virtual Trading Room execution and monitoring logic
 - `nexus_core/services/calendar_service.py` — shared event cache entrypoint
 - `nexus_core/services/llm_service.py` — structured LLM outputs and memory-safe degradation
@@ -558,6 +561,7 @@ The platform features an automated **Dynamic Rollover Engine** (`market_analysis
 - `nexus_core/tests/unit/test_notification_toggles.py` — unit tests for notification preferences database toggles and views
 - `nexus_core/tests/unit/test_macro_risk_upgrade.py` — unit tests for macro risk upgrade, index microstructure, and covered call unlocking
 - `nexus_core/tests/unit/test_telemetry_pricing_engine.py` — unit tests for telemetry pricing alignment pipeline and gating
+- `nexus_edge_scraper/section_extractor.py` — SEC filings structured section extraction module
 
 ---
 
