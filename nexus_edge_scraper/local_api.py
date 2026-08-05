@@ -205,12 +205,25 @@ async def scrape_gex():
             await context.route("**/*", safe_route)
             page = await context.new_page()
             try:
-                await page.goto(
-                    "https://finance.yahoo.com/quote/SPY/options",
-                    timeout=25000,
-                    wait_until="domcontentloaded",
-                )
-                await page.wait_for_timeout(3000)
+                try:
+                    await page.goto(
+                        "https://finance.yahoo.com/quote/SPY/options",
+                        timeout=10000,
+                        wait_until="commit",
+                    )
+                except PlaywrightTimeoutError:
+                    logger.info(
+                        "Page.goto timeout for SPY, attempting to proceed with loaded content..."
+                    )
+
+                try:
+                    # 等待關鍵資料(表格)出現，最多等待 10 秒
+                    await page.wait_for_selector("table", timeout=10000)
+                except PlaywrightTimeoutError:
+                    pass
+
+                # 短暫等待以確保動態渲染(React/Client-side)完成
+                await page.wait_for_timeout(1500)
 
                 html = await page.content()
             finally:
@@ -763,12 +776,25 @@ async def scrape_symbol_gex(symbol: str):
             await context.route("**/*", safe_route)
             page = await context.new_page()
             try:
-                await page.goto(
-                    f"https://finance.yahoo.com/quote/{symbol_upper}/options",
-                    timeout=25000,
-                    wait_until="domcontentloaded",
-                )
-                await page.wait_for_timeout(3000)
+                try:
+                    await page.goto(
+                        f"https://finance.yahoo.com/quote/{symbol_upper}/options",
+                        timeout=10000,
+                        wait_until="commit",
+                    )
+                except PlaywrightTimeoutError:
+                    logger.info(
+                        f"Page.goto timeout for {symbol_upper}, attempting to proceed with loaded content..."
+                    )
+
+                try:
+                    # 等待關鍵資料(表格)出現，最多等待 10 秒
+                    await page.wait_for_selector("table", timeout=10000)
+                except PlaywrightTimeoutError:
+                    pass
+
+                # 短暫等待以確保動態渲染(React/Client-side)完成
+                await page.wait_for_timeout(1500)
 
                 html = await page.content()
             finally:
