@@ -13,6 +13,7 @@
 """
 
 import discord
+from cogs.embed_builders._core import NexusEmbed
 
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -30,7 +31,7 @@ def create_event_impact_embed(
     exposure_shift_dollars: float,
 ) -> discord.Embed:
     """建立事件風險 What-if 模擬 Embed。"""
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title=f"🎲 【 {symbol} 事件風險模擬 (What-if) 】",
         description=f"假設波動率變動 `{vol_move}%` 時，部位 Greeks 的動態偏移：",
         color=discord.Color.gold(),
@@ -69,7 +70,7 @@ def create_hedge_settlement_embed(
     alert_id: int, hedge_instrument: str, executed_quantity: int
 ) -> discord.Embed:
     """建立對沖結算完成 Embed。"""
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title="✅ 對沖結算完成",
         description=f"已成功記錄警報 `#{alert_id}` 的對沖執行紀錄。",
         color=discord.Color.green(),
@@ -83,7 +84,7 @@ def create_hedge_settlement_embed(
 
 def create_hedge_list_embed(rows: List[Any]) -> discord.Embed:
     """建立最近對沖警報列表 Embed。"""
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title="📜 最近對沖警報列表",
         color=discord.Color.blue(),
         timestamp=datetime.now(timezone.utc),
@@ -120,7 +121,7 @@ def create_hedge_alert_embed(
     poly_snapshot: Optional[List[Dict[str, Any]]] = None,
 ) -> discord.Embed:
     """建立自動化對沖警報 Embed。"""
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title="🚨 【戰位報告：自動化對沖警報】",
         description=f"**警報等級：** {tier_emoji} {tier_name} (移動 `{stage_move:+} 階`)",
         color=discord.Color(color_hex),
@@ -177,7 +178,7 @@ def create_hedge_alert_embed(
 
 def create_proactive_event_alert_embed(events: List[Any]) -> List[discord.Embed]:
     """建立重大事件主動預警 Embed。"""
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title="🛡️ 【 預警：重大事件即時防護 】",
         description=(
             "偵測到您的持倉標的即將迎來重大波動事件；以下 NRO 指令已依事件類型、"
@@ -256,7 +257,7 @@ def create_memory_alert_embed(
     swap_usage: float = 0.0,
 ) -> discord.Embed:
     """建立記憶體不足緊急警報 Embed。"""
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title="🆘 【系統緊急警報：記憶體不足】",
         description=(
             f"VPS 記憶體與 Swap 使用量已達臨界值 (RAM: `{total_usage}%`, Swap: `{swap_usage}%`)，"
@@ -295,7 +296,7 @@ def create_polymarket_whale_alert_embed(
     uoa_correlation: Optional[Dict[str, Any]] = None,
 ) -> discord.Embed:
     """建立 Polymarket 巨鯨戰報 Embed。"""
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title="🐳 警報：巨鯨交易異動" + (" (高信心訊號)" if is_high_conviction else ""),
         color=(
             discord.Color.gold()
@@ -376,7 +377,7 @@ def create_option_defense_alert_embed(
     elif pnl > 0:
         color = discord.Color.green()
 
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title=f"🛡️ 警報：期權轉倉防禦與結算 | {symbol}",
         description=f"**{title_prefix}**\n標的 **{symbol}** 已執行平倉或防禦性轉倉處置。\n\u200b",
         color=color,
@@ -424,7 +425,7 @@ def create_volatility_risk_alert_embed(
     footer_text: str = "Nexus Seeker Volatility Risk Alert",
 ) -> discord.Embed:
     """建立波動率與重大事件對沖警報 Embed (合併主動與被動)"""
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title=f"🛡️ 警報：重大事件即時防護 | {title_text}",
         description=description_text,
         color=discord.Color(color_hex),

@@ -24,7 +24,7 @@ from cogs.embed_builders._core import NexusEmbed
 
 def create_max_pain_embed(symbol: str, data: Dict[str, Any]) -> discord.Embed:
     """建立最大痛點分析 Embed。"""
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title=f"📍 {symbol} 最大痛點分析 (Max Pain)",
         color=discord.Color.blue(),
         timestamp=datetime.now(timezone.utc),
@@ -103,7 +103,7 @@ def create_system_health_embed(
 ) -> discord.Embed:
     """建立系統健康診斷 Embed。"""
     is_healthy = memory_percent < 80 and disk_percent < 85
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title="🖥️ Nexus Seeker 系統健康診斷",
         color=discord.Color.green() if is_healthy else discord.Color.red(),
         timestamp=datetime.now(timezone.utc),
@@ -158,7 +158,7 @@ def create_asset_promotion_embed(
     price: float,
 ) -> discord.Embed:
     """建立 WATCH -> TRADE 晉升成功 Embed。"""
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title="🌌 Nexus | 資產晉升成功",
         description=f"標的 **{symbol}** 已從「觀察」提升為「實單交易」。",
         color=0x00FF7F,
@@ -185,7 +185,7 @@ def create_transition_simulation_embed(
     capital_efficiency_gain: float,
 ) -> discord.Embed:
     """建立戰略轉軌模擬 Embed。"""
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title=f"🔄 戰略轉軌模擬 (演進) | {symbol}",
         description=f"模擬將 `{symbol}` 投機期權部位演進為 **核心現股 + 備兌買權 (Covered Call)** 模型。",
         color=discord.Color.blue(),
@@ -223,7 +223,7 @@ def create_market_calendar_embed(
     if not events:
         return create_info_embed("查無資料", empty_message)
 
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title="📅 【 重大市場事件 & 財報日曆 】",
         color=discord.Color.blue(),
         timestamp=datetime.now(timezone.utc),
@@ -265,7 +265,7 @@ def create_iv_risk_scan_embed(results: List[Dict[str, Any]]) -> discord.Embed:
     if not results:
         return create_info_embed("系統資訊", "🔎 未發現 IV Rank > 80% 的高波動標的。")
 
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title="🔥 【 高波動 & IV Crush 風險掃描 】",
         color=discord.Color.red(),
         timestamp=datetime.now(timezone.utc),
@@ -971,7 +971,7 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
     elif is_degraded:
         color = discord.Color.orange()
 
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title="🌌 全局宏觀風控情報中心 (Macro Risk Control Hub)",
         description="本面板整合全套美股總量指標、薩姆衰退防衛線與系統級流動性壓力測試紅線，為高安全邊際期權賣方提供核心營運決策指引。\n\u200b",
         color=color,

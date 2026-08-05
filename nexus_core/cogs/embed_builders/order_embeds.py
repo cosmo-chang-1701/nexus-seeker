@@ -18,6 +18,7 @@
 from typing import Any
 import re
 import discord
+from cogs.embed_builders._core import NexusEmbed
 
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional
@@ -50,7 +51,7 @@ def create_intraday_scan_embed(output: Any) -> discord.Embed:
     elif output.sddm_route == "WAIT":
         embed_color = discord.Color.blue()
 
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title=f"📊 報告：盤中量化掃描與避險執行 | {output.ticker}",
         description="本掃描資料由 Nexus Seeker 量化避險引擎產生。\n\u200b",
         color=embed_color,
@@ -199,7 +200,7 @@ def _build_active_order_ansi_card(order: Dict[str, Any]) -> str:
 def create_active_order_card_embed(order: Dict[str, Any]) -> discord.Embed:
     """建構單筆待成交委託單卡片（每筆訂單對應一則訊息，以便掛載獨立按鈕）。"""
 
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title=f"📦 待成交委託單 (ID: {order['id']})",
         description=f"標的：`{order['symbol']}`\n\u200b",
         color=discord.Color.orange(),
@@ -218,7 +219,7 @@ def create_active_order_card_embed(order: Dict[str, Any]) -> discord.Embed:
 
 def create_active_orders_embed(orders: List[Dict[str, Any]]) -> List[discord.Embed]:
     """建構待成交委託單列表報告 Embed (清單整合；超過字數限制自動拆訊息)。"""
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title="📋 Nexus Seeker | 待成交委託單列表",
         description=(
             f"共 `{len(orders)}` 筆待成交委託單。\n"
@@ -524,7 +525,7 @@ def create_telemetry_alignment_embeds(
     all_embeds = []
 
     for chunk_idx, chunk in enumerate(chunked_groups):
-        embed = discord.Embed(
+        embed = NexusEmbed(
             title=title,
             description="\n".join(description_lines) + "\n\u200b",
             color=color,
@@ -580,7 +581,7 @@ def create_telemetry_alignment_embed(
         include_apply_button_hint=include_apply_button_hint,
         scheduled_mode=scheduled_mode,
     )
-    return embeds[0] if embeds else discord.Embed(title="🌌 快照：待成交委託單實時對齊")
+    return embeds[0] if embeds else NexusEmbed(title="🌌 快照：待成交委託單實時對齊")
 
 
 def build_pre_market_briefing_embed(
@@ -594,7 +595,7 @@ def build_pre_market_briefing_embed(
     is_risky = bool(alerts) or bool(earnings_alerts)
     base_color = discord.Color.red() if is_risky else discord.Color.blue()
 
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title="🌅 報告：盤前綜合宏觀與自選股",
         description="盤前 30 分鐘市場狀態與自選股財報季預警快速簡報。",
         color=base_color,
@@ -792,7 +793,7 @@ def build_post_market_intelligence_embed(
         elif "⚠️" in ai_commentary:
             embed_color = discord.Color.orange()
 
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title="📋 報告：盤後綜合風險與 AI 策略",
         description="由 Nexus Seeker 風險引擎生成之每日風險控制結算報告。",
         color=embed_color,

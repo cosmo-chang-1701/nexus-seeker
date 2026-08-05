@@ -18,6 +18,7 @@ pre-assembled data dicts / lists and receive a ready-to-send discord.Embed.
 
 from typing import Any
 import discord
+from cogs.embed_builders._core import NexusEmbed
 import logging
 import re
 
@@ -53,7 +54,7 @@ def create_portfolio_report_embed(  # type: ignore
     """
     # 處理完全為空的狀況
     if not report_lines:
-        embed = discord.Embed(
+        embed = NexusEmbed(
             title="📊 Nexus Seeker 盤後風險結算報告",
             description="目前無持倉部位，亦無風險數據。\n\u200b",
             color=discord.Color.blue(),
@@ -102,7 +103,7 @@ def create_portfolio_report_embed(  # type: ignore
     elif "⚠️" in macro_text:
         embed_color = discord.Color.orange()
 
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title="📊 Nexus Seeker 盤後風險結算報告",
         color=embed_color,
         timestamp=datetime.now(timezone.utc),
@@ -218,7 +219,7 @@ def create_transition_suggestion_embed(data: Dict[str, Any]) -> discord.Embed:
     res = data["transition_result"]
     stock_p = data["stock_price"]
 
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title=f"🔄 倉位演進建議 | {sym}",
         description="偵測到投機部位獲利豐厚，建議轉向「收租模式」以鎖定長期收益。",
         color=discord.Color.gold(),
@@ -276,7 +277,7 @@ def build_vtr_stats_embed(
         color = 0xE74C3C  # 紅色 (Danger)
         status_icon = "🔴"
 
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title="📈 Nexus Seeker | 虛擬交易室 (VTR) 績效總結",
         description=f"{status_icon} 使用者: **{user_name}** 的系統歸因分析",
         color=color,
@@ -349,7 +350,7 @@ def build_scan_report(result: Dict[str, Any]) -> Any:
         else (0xE74C3C if ai_decision == "VETO" else 0x3498DB)
     )
 
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title=f"📡 量化掃描報告: {result['symbol']}",
         description=f"策略: `{result.get('strategy', 'N/A')}` | 履約價: `${result.get('strike', 'N/A')}` | 到期日: `{result.get('target_date', 'N/A')}`",
         color=color,
@@ -439,7 +440,7 @@ def create_rehedge_embed(rehedge_info: Dict[str, Any]) -> discord.Embed:
     suggested_qty = rehedge_info.get("suggested_spy_qty", 0)
     reason = rehedge_info.get("reason", "偵測到曝險異常或市場轉弱")
 
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title="🛡️ 防禦啟動：自動避險回補建議",
         color=color,
         description=f"標的: **{symbol}**",
@@ -472,7 +473,7 @@ def create_ddp_embed(report: Dict[str, Any]) -> discord.Embed:
     # 計算 P/E 均值回歸空間 (預期漲幅)
     pe_upside = (pe_mean / curr_pe - 1) * 100 if curr_pe > 0 else 0
 
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title=f"🌌 警報：Nexus 戴維斯雙擊 (DDP) | {sym}",
         description="偵測到標的符合 **Davis Double Play (DDP)** 條件：盈餘增長與估值擴張的雙重共振。",
         color=0x00FF7F,  # SpringGreen
@@ -545,7 +546,7 @@ def create_volatility_embed(report: Dict[str, Any]) -> discord.Embed:
     # 決定顏色 (Buy Signal = Green, Watchlist Alert = Yellow)
     color = 0x00FF00 if status == "波動率極低" else 0xFFFF00
 
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title=f"🌌 警報：Nexus 戴維斯雙擊 (波動率優勢) | {sym}",
         color=color,
         timestamp=datetime.now(timezone.utc),
@@ -674,7 +675,7 @@ def create_ai_analysis_embed(
     將 AI 產出的盤後深度分析轉換為 Discord Embed 格式。
     參考盤後風險結算報告風格。
     """
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title=title,
         color=_report_embed_color(ai_report_text),
         timestamp=datetime.now(timezone.utc),
@@ -706,7 +707,7 @@ def create_next_day_strategy_embed(strategy_text: str) -> discord.Embed:
     elif "⚠️" in strategy_text:
         embed_color = discord.Color.orange()
 
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title="🎯 Nexus Seeker 次日策略制定",
         color=embed_color,
         timestamp=datetime.now(timezone.utc),

@@ -12,6 +12,7 @@
 from typing import Any
 import re
 import discord
+from cogs.embed_builders._core import NexusEmbed
 
 from typing import List, Dict
 
@@ -467,7 +468,7 @@ def _build_embed_base(data: Any, strategy: Any, stock_cost: Any):  # type: ignor
         titles["STO_CALL"] = "🛡️ 掩護性買權 (Covered Call)"
         colors["STO_CALL"] = discord.Color.teal()
 
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title=f"{titles.get(strategy, strategy)} | {data.get('symbol', 'UNKNOWN')}",
         description=f"📅 **到期日:** `{data.get('target_date', 'UNKNOWN')}` ｜ 🎯 **履約價:** `${data.get('strike', 'UNKNOWN')}`\n\u200b",
         color=colors.get(strategy, discord.Color.default()),

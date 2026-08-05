@@ -22,6 +22,7 @@ source and must not alter any business logic.
 
 from typing import Any
 import discord
+from cogs.embed_builders._core import NexusEmbed
 from market_analysis.scenario_classifier import MarketScenario
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
@@ -148,7 +149,7 @@ def create_psq_embed(data: dict) -> discord.Embed:
     psq = data.get("psq_result")
 
     if not psq:  # fallback
-        return discord.Embed(
+        return NexusEmbed(
             title=f"⚡ PowerSqueeze 戰情報告 | {sym}",
             description="無可用數據",
             color=discord.Color.dark_grey(),
@@ -160,7 +161,7 @@ def create_psq_embed(data: dict) -> discord.Embed:
     elif psq.is_breakout_short:
         color = discord.Color.red()
 
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title=f"⚡ PowerSqueeze 戰情報告 | {sym}",
         description=f"💰 最新股價: `${data.get('price', 0.0):.2f}`\n\u200b",
         color=color,
@@ -258,7 +259,7 @@ def create_psq_embed(data: dict) -> discord.Embed:
 
 def create_news_scan_embed(symbol: Any, news_text: Any):  # type: ignore
     """建構新聞掃描結果的 Embed"""
-    embed = discord.Embed(title=f"📰 {symbol} 官方新聞掃描", color=discord.Color.blue())
+    embed = NexusEmbed(title=f"📰 {symbol} 官方新聞掃描", color=discord.Color.blue())
     add_news_field(embed, news_text)
     embed.set_footer(text="Nexus Seeker 研報系統 • 資料來源: Yahoo Finance")
     return embed
@@ -266,7 +267,7 @@ def create_news_scan_embed(symbol: Any, news_text: Any):  # type: ignore
 
 def create_reddit_scan_embed(symbol: Any, reddit_text: Any):  # type: ignore
     """建構 Reddit 情緒掃描結果的 Embed"""
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title=f"🔥 {symbol} 散戶情緒優勢 (Reddit 同步)", color=discord.Color.orange()
     )
     add_reddit_text = reddit_text
@@ -279,7 +280,7 @@ def create_reddit_scan_embed(symbol: Any, reddit_text: Any):  # type: ignore
 
 def create_media_sentiment_embed(symbol: Any, news_text: Any, reddit_text: Any):  # type: ignore
     """建構輿情與社群 (Media & Social) 掃描結果的統一 Embed"""
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title=f"🎭 {symbol} 輿情與社群大盤掃描 (Media & Social)",
         color=discord.Color.blue(),
     )
@@ -298,7 +299,7 @@ def create_media_sentiment_embed(symbol: Any, news_text: Any, reddit_text: Any):
 
 def create_polymarket_list_embed(markets: List[Dict[str, Any]]) -> Any:
     """建構 Polymarket 監控中的熱門市場 Embed"""
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title="🐋 Polymarket 巨鯨意圖圖譜",
         color=discord.Color.blue(),
         timestamp=datetime.now(timezone.utc),
@@ -364,7 +365,7 @@ def create_polymarket_list_embed(markets: List[Dict[str, Any]]) -> Any:
 
 def create_polymarket_status_embed(status: Dict[str, Any]) -> discord.Embed:
     """建構 Polymarket 服務狀態 Embed。"""
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title="【 🐋 Polymarket 服務狀態 】",
         color=discord.Color.green() if status["connected"] else discord.Color.red(),
         timestamp=datetime.now(timezone.utc),
@@ -394,7 +395,7 @@ def create_polymarket_status_embed(status: Dict[str, Any]) -> discord.Embed:
 
 def create_quote_embed(symbol: str, data: Dict[str, Any]) -> discord.Embed:
     """建構即時報價 Embed。"""
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title=f"💹 {symbol} 即時報價 (Real-time Quote)",
         color=discord.Color.blue() if data["dp"] >= 0 else discord.Color.red(),
         timestamp=datetime.now(timezone.utc),
@@ -416,7 +417,7 @@ def create_quote_embed(symbol: str, data: Dict[str, Any]) -> discord.Embed:
 
 def create_profit_lock_alert_embed(event: Dict[str, Any]) -> discord.Embed:
     """建立 DITM 獲利鎖定警報 Embed。"""
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title=f"🚨 警報：DITM 凸性防護與獲利鎖定 | {event.get('symbol', 'UNKNOWN')}",
         description=(
             f"偵測到標的 **{event['symbol']}** 已進入深價內 (DITM)，"
@@ -438,7 +439,7 @@ def create_profit_lock_alert_embed(event: Dict[str, Any]) -> discord.Embed:
 
 def create_gamma_fragility_embed(event: Dict[str, Any]) -> discord.Embed:
     """建立 Gamma 脆弱性警告 Embed。"""
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title="🆘 警報：Gamma 脆弱性與斷層",
         description="偵測到投資組合淨 Gamma 已跌破臨界點，曝險加速度呈非線性擴張。",
         color=discord.Color.dark_red(),
@@ -468,7 +469,7 @@ def create_pre_market_earnings_embed(
             )
             for item in alerts
         )
-        return discord.Embed(
+        return NexusEmbed(
             title="🚨 【盤前財報季雷達預警】",
             description=description,
             color=discord.Color.red(),
@@ -476,7 +477,7 @@ def create_pre_market_earnings_embed(
         )
 
     scanned_list = "、".join(f"`{symbol}`" for symbol in scanned_symbols)
-    return discord.Embed(
+    return NexusEmbed(
         title="✅ 【盤前財報季雷達掃描完畢】",
         description=f"已掃描：{scanned_list}\n\n近 {warning_days} 日內無財報風險，安全過關！",
         color=discord.Color.green(),
@@ -494,7 +495,7 @@ def create_ditm_transition_alert_embed(
     hedge: Optional[Dict[str, Any]] = None,
 ) -> discord.Embed:
     """建立 VTR DITM 防禦通知 Embed。"""
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title=f"🚨 警報：DITM 凸性防護與獲利鎖定 | {symbol}",
         description=f"偵測到標的 **{symbol}** 已進入深價內 (DITM)，凸性消失且風險報酬比惡化。",
         color=discord.Color.gold(),
@@ -533,7 +534,7 @@ def create_intraday_execution_guide_embed(
     ema_cache_size: int = 0,
 ) -> discord.Embed:
     """建立盤中量化執行指引 Embed。"""
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title=f"🛡️ 盤中量化執行指引 - {phase_name}",
         color=discord.Color.red() if vix > 25 else discord.Color.blue(),
         timestamp=datetime.now(timezone.utc),
@@ -585,7 +586,7 @@ def create_vtr_settlement_notice_embed(
     hedge: Optional[Dict[str, Any]] = None,
 ) -> discord.Embed:
     """建立 VTR 轉倉/平倉結算通知 Embed。"""
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title=f"📈 報告：虛擬交易室 (VTR) 績效總結 | {symbol}",
         color=discord.Color.blue() if "轉倉" in status_icon else discord.Color.red(),
         timestamp=datetime.now(timezone.utc),
@@ -633,7 +634,7 @@ def create_scenario_alert_embed(
         MarketScenario.STRUCTURAL_BREAKDOWN: discord.Color.red(),
     }
 
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title=f"🚨 戰場情境轉折警報 | {symbol}",
         description=f"**🧭 觸發情境：{scenario.value}**",
         color=color_map.get(scenario, discord.Color.default()),

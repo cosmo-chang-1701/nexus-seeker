@@ -43,7 +43,7 @@ def create_watchlist_embed(  # type: ignore
         lines.append("```")
         description = "\n".join(lines)
 
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title="📡 【您的專屬觀察清單】",
         description=f"目前監控中的標的清單。系統將每 30 分鐘自動執行量化掃描。\n\n{description}",
         color=discord.Color.blurple(),
@@ -518,7 +518,7 @@ def create_watchlist_signal_embed(
             timestamp=datetime.now(timezone.utc),
         )
     except NameError:
-        embed = discord.Embed(
+        embed = NexusEmbed(
             title=embed_title,
             description=description,
             color=color_val,
@@ -576,7 +576,7 @@ def create_watchlist_overview_embed(
         else discord.Color.green()
     )
 
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title="🧭 本輪 Watchlist 總覽",
         description=(
             f"**追蹤標的：** `{len(ordered_items)}` ｜ "

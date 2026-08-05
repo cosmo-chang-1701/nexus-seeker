@@ -27,6 +27,7 @@ from cogs.embed_builders._embed_helpers import (
     _parse_ai_report_sections,
     _append_ai_report_fields,
 )
+from cogs.embed_builders._core import NexusEmbed
 
 logger = logging.getLogger(__name__)
 
@@ -35,29 +36,7 @@ logger = logging.getLogger(__name__)
 # Visual Consistency Embed Subclass
 # ============================================================================
 
-
-class NexusEmbed(discord.Embed):
-    """自訂 Embed 子類別，用以動態實現一致的版面設計、精緻調色盤與標準 Footer 排版。"""
-
-    def __init__(self, *args, **kwargs):  # type: ignore
-        # 1. 統一對齊和諧且精美的高級調色盤 (Curated Aesthetic Palette)
-        color = kwargs.get("color")
-        if color is not None:
-            if color == discord.Color.blue():
-                kwargs["color"] = discord.Color(0x3498DB)
-            elif color == discord.Color.red() or color == discord.Color.dark_red():
-                kwargs["color"] = discord.Color(0xE74C3C)
-            elif color == discord.Color.green():
-                kwargs["color"] = discord.Color(0x2ECC71)
-            elif color == discord.Color.orange():
-                kwargs["color"] = discord.Color(0xF39C12)
-            elif color == discord.Color.blurple():
-                kwargs["color"] = discord.Color(0x5865F2)
-        else:
-            kwargs["color"] = discord.Color(0x3498DB)
-
-        super().__init__(*args, **kwargs)
-
+# ============================================================================
 
 # ============================================================================
 # UOA Formatter
@@ -195,7 +174,7 @@ def create_sentiment_scan_embed(
             else:
                 title_suffix = " [盤前數據未更新]"
 
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title=f"📊 {symbol} 期權情緒掃描 (Sentiment Scan){title_suffix}",
         color=discord.Color.dark_magenta(),
         timestamp=datetime.now(timezone.utc),
@@ -444,7 +423,7 @@ def create_macro_scan_embed(
 ) -> discord.Embed:
     """建立巨觀環境與隔夜市場掃描 Embed (繁體中文)"""
     base_color = discord.Color.red() if alerts else discord.Color.blue()
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title="🌍 巨觀環境與隔夜市場掃描 (Macro Scan)",
         color=base_color,
         timestamp=datetime.now(timezone.utc),
@@ -739,7 +718,7 @@ def create_earnings_report_embed(
     analyzed_symbols = int(raw_data.get("analyzed_symbols", 0) or 0)
     batch_label = _extract_report_batch(report_type)
 
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title="📊 Nexus Seeker 盤前財報與估值調整",
         description=(
             f"**更新批次：** {batch_label}\n"
@@ -837,7 +816,7 @@ def create_sector_flow_report_embed(
     poly_events = raw_data.get("poly_events", []) or []
     spy_max_pain = raw_data.get("spy_max_pain", {}) or {}
 
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title="📊 Nexus Seeker 收盤資金流向與板塊輪動報告",
         description=(
             f"**更新批次：** {batch_label}\n"

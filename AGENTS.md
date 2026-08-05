@@ -471,8 +471,8 @@ Current repository rule:
 - cogs should **not** use the `queue_dm(message=...)` shortcut
 - push/report messages should prefer **field-based embeds**
 - ANSI tables belong inside a field, not dumped into the full description when avoidable
-- **Visual Consistency & Subclassing (`NexusEmbed`)**:
-  - To maintain absolute visual consistency across all modules, all instantiated embeds in `cogs/embed_builders/` are dynamically wrapped via the `NexusEmbed` subclass.
+- **Visual Consistency & Explicit Subclassing (`NexusEmbed`)**:
+  - To maintain absolute visual consistency and truncation protection across all modules, **all builders in `cogs/embed_builders/` MUST explicitly import and construct `NexusEmbed` instead of `discord.Embed`.** (e.g. `from cogs.embed_builders._core import NexusEmbed`). Monkey patching is deprecated.
   - **Curated Color Palette**: All standard colors are mapped to cohesive, premium palettes:
     - Primary system/info: Curated blue `0x3498DB`
     - Danger/risk alerts: Curated red `0xE74C3C`

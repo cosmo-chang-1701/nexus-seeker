@@ -1,6 +1,7 @@
 """Portfolio and trading position embed builders"""
 
 import discord
+from cogs.embed_builders._core import NexusEmbed
 import logging
 import psutil
 
@@ -156,7 +157,7 @@ def create_holdings_embed(
     holdings_data: List[Dict[str, Any]], total_capital: float
 ) -> discord.Embed:
     """建構現貨持倉 (Holdings) 狀態報告 Embed"""
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title="📊 Nexus Seeker | 現貨持倉清單",
         description="追蹤您的長期股權資產與成本分佈。\n\u200b",
         color=discord.Color.blue(),
@@ -225,7 +226,7 @@ def create_trades_embed(
     total_capital: float = 0.0,
 ) -> discord.Embed:
     """建構實單持倉 (Portfolio) 狀態與未實現損益報告 Embed"""
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title="📊 Nexus Seeker | 實單持倉清單 (包含帳面損益)",
         description="追蹤您的期權實單持倉與即時未實現損益 (Unrealized PnL)。\n\u200b",
         color=discord.Color.green(),
@@ -308,7 +309,7 @@ def create_strategic_dash_embed(
     建構戰略看板 (Strategic Dashboard) Embed.
     遵循 Task 1 的 Traditional Chinese 模板。
     """
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title="📊 Nexus 交易員戰略看板",
         color=discord.Color.dark_blue(),
         timestamp=datetime.now(timezone.utc),
@@ -446,7 +447,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     if is_degraded and not title_suffix:
         title_suffix = " [數據未更新/降級模式]"
 
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title=f"🌌 標的分析中心: {symbol}{title_suffix}",
         color=discord.Color.dark_magenta(),
         timestamp=datetime.now(timezone.utc),
@@ -1330,7 +1331,7 @@ def create_tactical_hedge_embed(
     symbol: str, ivr: float, rec_strategy: str
 ) -> discord.Embed:
     """建構標的對沖防禦中心的 Embed"""
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title=f"🛡️ {symbol} 對沖防禦中心 (Tactical Hedging)",
         color=discord.Color.red(),
     )

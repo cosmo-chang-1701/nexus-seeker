@@ -8,13 +8,14 @@
 """
 
 import discord
+from cogs.embed_builders._core import NexusEmbed
 
 from datetime import datetime, timezone
 
 
 def create_notification_settings_embed(module_fields: list) -> discord.Embed:
     """建立自訂通知設定偏好中心 Embed"""
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title="🌌 Nexus Seeker ｜ 戰術儀表板與通知偏好",
         description="請使用下方「戰術模組」選單切換分類，並管理個別模組內的開關。\n🟢 代表開啟，🔴 代表關閉。",
         color=discord.Color.dark_magenta(),
@@ -32,7 +33,7 @@ def create_account_settings_embed(
     basic_settings: list, runway_settings: list
 ) -> discord.Embed:
     """建立帳戶全域參數配置中心 Embed"""
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title="🌌 Nexus Seeker ｜ 帳戶全域參數配置中心",
         description="請使用下方下拉選單選擇想要更改的參數。\n布林值項目將會立即切換，數值項目將會彈出輸入框供您修改。",
         color=discord.Color.blue(),
@@ -54,7 +55,7 @@ def create_account_settings_embed(
 
 def create_info_embed(title: str, message: str) -> discord.Embed:
     """建立標準資訊通知 Embed"""
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title=f"ℹ️ {title}",
         description=message,
         color=discord.Color.blue(),
@@ -66,7 +67,7 @@ def create_info_embed(title: str, message: str) -> discord.Embed:
 
 def create_error_embed(message: str, title: str = "系統錯誤") -> discord.Embed:
     """建立標準錯誤通知 Embed"""
-    embed = discord.Embed(
+    embed = NexusEmbed(
         title=f"❌ {title}",
         description=message,
         color=discord.Color.red(),
