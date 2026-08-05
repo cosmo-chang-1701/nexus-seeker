@@ -9,6 +9,7 @@ from playwright_stealth import Stealth
 import httpx
 import warnings
 import re
+from section_extractor import extract_sections
 
 # Suppress BS4 XML warning for SEC filings
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
@@ -1191,14 +1192,19 @@ async def scrape_fundamental_text(symbol: str):
             else:
                 final_text = text_content[:10000]
 
+            # 5. 結構化段落擷取 (Forward Guidance / Margin / Market Share / Financials / Ops)
+            extracted = extract_sections(text_content)
+
             return {
                 "status": "success",
                 "data": {
                     "symbol": symbol_clean,
                     "text": final_text,
+                    "sections": extracted.to_dict(),
                     "source": "sec_edgar",
                     "source_url": doc_url,
                     "accession_number": accession_num,
+                    "form_type": forms[target_idx],
                 },
             }
     except Exception as e:
