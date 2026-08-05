@@ -915,8 +915,6 @@ def build_radar_scan_embed(
         )
         ansi_table += "指標: SQZ 🟢多頭動能/🔴空頭動能。MOM 顯示數值代表處於擠壓蓄力期，需防突破或殺跌。\n```"
 
-        embed.description = ansi_table
-
         if not show_alpha:
             insights = [
                 msg
@@ -937,17 +935,15 @@ def build_radar_scan_embed(
             ]
 
         if insights:
-            embed.add_field(
-                name="💡 即時聯動警示 (Real-time Insights)",
-                value="\n".join(insights[:5]),
-                inline=False,
-            )
+            insights_str = "\n".join(insights[:5])
         else:
-            embed.add_field(
-                name="💡 即時聯動警示 (Real-time Insights)",
-                value="• ✨ 所有標的當前價格與 Max Pain 及波動邊界皆無極端異常偏離。",
-                inline=False,
+            insights_str = (
+                "• ✨ 所有標的當前價格與 Max Pain 及波動邊界皆無極端異常偏離。"
             )
+
+        embed.description = (
+            f"{ansi_table}\n\n**💡 即時聯動警示 (Real-time Insights)**\n{insights_str}"
+        )
 
         embeds.append(embed)
 
