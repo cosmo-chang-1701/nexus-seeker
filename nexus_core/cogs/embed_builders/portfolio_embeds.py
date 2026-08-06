@@ -402,8 +402,22 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     """
     symbol = data.get("symbol", "UNKNOWN")
 
+    def _to_float_or_none(value: Any) -> float | None:
+        try:
+            return float(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    def _to_float(value: Any, default: float = 0.0) -> float:
+        casted = _to_float_or_none(value)
+        return casted if casted is not None else default
+
     # 處理盤前狀態與波動率 degradation
     iv_data = data.get("iv_data")
+    current_iv: Any = None
+    iv_rank: Any = None
+    iv_percentile: Any = None
+    expected_move_weekly: Any = None
     title_suffix = ""
     is_premarket = False
     iv_source = None
@@ -424,25 +438,27 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             if hasattr(iv_data, "iv_source")
             else (iv_data.get("iv_source") if isinstance(iv_data, dict) else None)
         )
+        current_iv_num = _to_float_or_none(current_iv_val)
         if (
             iv_source is None
             and is_premarket
-            and current_iv_val is not None
-            and current_iv_val > 0.0
+            and current_iv_num is not None
+            and current_iv_num > 0.0
         ):
             iv_source = "STORED_IV"
 
         if is_premarket:
-            if current_iv_val is not None and current_iv_val > 0.0:
+            if current_iv_num is not None and current_iv_num > 0.0:
                 title_suffix = (
                     " [盤前/HV代理]" if iv_source == "HV_PROXY" else " [盤前/前日收盤]"
                 )
             else:
                 title_suffix = " [盤前數據未更新/降級模式]"
 
-    skew_percentile = data.get("skew_percentile")
+    current_iv_num = _to_float_or_none(current_iv_val)
+    skew_percentile = _to_float_or_none(data.get("skew_percentile"))
     is_degraded = (
-        iv_source == "UNAVAILABLE" or current_iv_val is None or skew_percentile is None
+        iv_source == "UNAVAILABLE" or current_iv_num is None or skew_percentile is None
     )
     if is_degraded and not title_suffix:
         title_suffix = " [數據未更新/降級模式]"
@@ -457,25 +473,25 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     quote = data.get("quote") or {}
 
     c_raw = quote.get("c") if quote.get("c") is not None else data.get("price")
-    c_val = float(c_raw) if c_raw is not None else 0.0
+    c_val = _to_float(c_raw)
 
     dp_raw = quote.get("dp")
-    dp_val = float(dp_raw) if dp_raw is not None else 0.0
+    dp_val = _to_float(dp_raw)
 
     d_raw = quote.get("d")
-    d_val = float(d_raw) if d_raw is not None else 0.0
+    d_val = _to_float(d_raw)
 
     o_raw = quote.get("o")
-    o_val = float(o_raw) if o_raw is not None else 0.0
+    o_val = _to_float(o_raw)
 
     h_raw = quote.get("h")
-    h_val = float(h_raw) if h_raw is not None else 0.0
+    h_val = _to_float(h_raw)
 
     l_raw = quote.get("l")
-    l_val = float(l_raw) if l_raw is not None else 0.0
+    l_val = _to_float(l_raw)
 
     pc_raw = quote.get("pc")
-    pc_val = float(pc_raw) if pc_raw is not None else 0.0
+    pc_val = _to_float(pc_raw)
 
     price_emoji = "📈" if dp_val >= 0 else "📉"
     if not quote or c_val == 0.0:
@@ -497,8 +513,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
         vp = data.get("volume_profile")
         if vp:
-            hvn = vp.get("hvn", 0.0)
-            lvn = vp.get("lvn", 0.0)
+            hvn = _to_float(vp.get("hvn"))
+            lvn = _to_float(vp.get("lvn"))
             quote_lines.extend(
                 [
                     " 近期成交量分佈 (Volume Profile, 20D)",
@@ -512,15 +528,15 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
     # 2. 📐 情緒與邊緣偵測 (Edge Detection)
     skew_val_raw = data.get("skew")
-    skew_val = float(skew_val_raw) if skew_val_raw is not None else None
-    skew_percentile = data.get("skew_percentile")
+    skew_val = _to_float_or_none(skew_val_raw)
+    skew_percentile = _to_float_or_none(data.get("skew_percentile"))
     poly_odds = data.get("polymarket_odds", "N/A")
     reddit_score = data.get("reddit_sentiment_score", "中性")
 
     _raw_pcr = data.get("pcr")
     pcr_data_for_div: dict = _raw_pcr if isinstance(_raw_pcr, dict) else {}
     pcr_val_raw = pcr_data_for_div.get("volume_pcr", pcr_data_for_div.get("pcr"))
-    pcr_val_for_div = float(pcr_val_raw) if pcr_val_raw is not None else None
+    pcr_val_for_div = _to_float_or_none(pcr_val_raw)
 
     iv_rank_val = None
     if iv_data:
@@ -528,7 +544,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             iv_rank_val = iv_data.iv_rank
         elif isinstance(iv_data, dict):
             iv_rank_val = iv_data.get("iv_rank")
-    iv_rank_val = float(iv_rank_val) if iv_rank_val is not None else None
+    iv_rank_val = _to_float_or_none(iv_rank_val)
 
     is_structural_divergence = False
     divergence_level = ""
@@ -631,7 +647,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     _add_ansi_field_safely(embed, "📐 情緒與邊緣偵測 (Edge Detection)", edge_lines)
 
     # 3. 📊 隱含波動率與預期區間 (IV Context)
-    em_context = data.get("expected_move_context") or {}
+    raw_em_context = data.get("expected_move_context")
+    em_context = raw_em_context if isinstance(raw_em_context, dict) else {}
     if iv_data:
         if hasattr(iv_data, "current_iv"):
             current_iv = iv_data.current_iv
@@ -645,6 +662,11 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             iv_percentile = iv_data.get("iv_percentile")
             expected_move_weekly = iv_data.get("expected_move_weekly")
             iv_status = iv_data.get("iv_status", "Normal")
+
+        current_iv_num = _to_float_or_none(current_iv)
+        iv_rank_num = _to_float_or_none(iv_rank)
+        iv_percentile_num = _to_float_or_none(iv_percentile)
+        expected_move_weekly_num = _to_float_or_none(expected_move_weekly)
 
         iv_status_map = {
             "Low": "低 / 便宜",
@@ -694,8 +716,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
         if (
             iv_source == "UNAVAILABLE"
-            or current_iv is None
-            or (is_premarket and current_iv == 0.0)
+            or current_iv_num is None
+            or (is_premarket and current_iv_num == 0.0)
         ):
             iv_lines = [
                 "```ansi",
@@ -737,9 +759,13 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                     else "基於快取 IV 計算"
                 )
 
-            iv_val_str = f"{current_iv * 100:.1f}%" if current_iv is not None else "--%"
-            iv_rank_str = f"{iv_rank:.1f}%" if iv_rank is not None else "--%"
-            iv_per_str = f"{iv_percentile:.1f}%" if iv_percentile is not None else "--%"
+            iv_val_str = (
+                f"{current_iv_num * 100:.1f}%" if current_iv_num is not None else "--%"
+            )
+            iv_rank_str = f"{iv_rank_num:.1f}%" if iv_rank_num is not None else "--%"
+            iv_per_str = (
+                f"{iv_percentile_num:.1f}%" if iv_percentile_num is not None else "--%"
+            )
 
             iv_lines = [
                 "```ansi",
@@ -780,14 +806,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
             iv_lines.append(" Expected Move (預期區間)")
 
-            def _to_float_or_none(value: Any) -> float | None:
-                try:
-                    return float(value) if value is not None else None
-                except (TypeError, ValueError):
-                    return None
-
             em_reference = _to_float_or_none(em_context.get("reference_price"))
-            safe_em_weekly = _to_float_or_none(expected_move_weekly)
+            safe_em_weekly = expected_move_weekly_num
 
             if (
                 em_reference is not None
@@ -944,15 +964,15 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     # Support both PSQResult dataclass and plain dict (e.g. from squeeze cache)
     if hasattr(psq_raw, "is_squeezing"):
         sqz_is_squeezing: bool = bool(getattr(psq_raw, "is_squeezing", False))
-        sqz_momentum: float = float(getattr(psq_raw, "momentum_value", 0.0) or 0.0)
+        sqz_momentum: float = _to_float(getattr(psq_raw, "momentum_value", 0.0))
         sqz_squeeze_level: str = str(getattr(psq_raw, "squeeze_level", "Release"))
         sqz_signal_dir: str = str(getattr(psq_raw, "signal_direction", "Neutral"))
         sqz_vix_label: str = str(getattr(psq_raw, "vix_momentum_label", "NORMAL"))
         sqz_vix_note: str = str(getattr(psq_raw, "vix_timeframe_note", ""))
     else:
         sqz_is_squeezing = bool(psq_raw.get("is_squeezing", False))
-        sqz_momentum = float(
-            psq_raw.get("momentum", psq_raw.get("momentum_value", 0.0)) or 0.0
+        sqz_momentum = _to_float(
+            psq_raw.get("momentum", psq_raw.get("momentum_value", 0.0))
         )
         sqz_squeeze_level = str(psq_raw.get("squeeze_level", "Release"))
         sqz_signal_dir = str(
@@ -995,8 +1015,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 sqz_lines.append(" 🔥 VIX 標記: 高波動期高確信反彈訊號")
 
         # Dynamic timeframe volatility regime evaluation
-        iv_val_num = float(current_iv * 100) if current_iv is not None else 0.0
-        iv_rank_num = float(iv_rank) if iv_rank is not None else 0.0
+        iv_val_num = _to_float(current_iv, default=0.0) * 100
+        iv_rank_num = _to_float(iv_rank, default=0.0)
 
         if iv_rank_num > 50.0 or iv_val_num > 80.0:
             sqz_vix_note = "極端高波環境 (IVR > 50%)，提防劇烈洗盤，建議縮小部位或使用期權賣方策略保護。"
@@ -1021,14 +1041,15 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     # branch) can safely reference it (e.g. in get_scenario_guidance calls).
     price = c_val
 
-    if _mp_val is None or (isinstance(_mp_val, (int, float)) and float(_mp_val) <= 0.0):
+    max_pain_raw = _to_float_or_none(_mp_val)
+    if max_pain_raw is None or max_pain_raw <= 0.0:
         max_pain = 0.0
         distance = 0.0
         mp_str = "N/A"
         dist_str = "⚠️ 數據源缺失"
         dist_color = "\u001b[1;30m"
     else:
-        max_pain = float(_mp_val)
+        max_pain = max_pain_raw
         distance = (((price - max_pain) / max_pain) * 100) if price > 0 else 0.0
 
         if cb_triggered:
@@ -1059,12 +1080,12 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         ddp_color = "\u001b[1;30m"
 
     ivr_val = data.get("iv_rank")
-    if ivr_val is None:
+    ivr_num = _to_float_or_none(ivr_val)
+    if ivr_num is None:
         ivr_str = "--"
         ivr_color = "\u001b[1;30m"
         ivr_comp = 0.0
     else:
-        ivr_num = float(ivr_val)
         ivr_str = f"{ivr_num:.1f}%"
         ivr_color = "\u001b[1;35m" if ivr_num > 50.0 else "\u001b[1;36m"
         ivr_comp = ivr_num
@@ -1072,10 +1093,10 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     _raw_pcr = data.get("pcr")
     pcr_dict: dict = _raw_pcr if isinstance(_raw_pcr, dict) else {}
     vol_pcr_raw = pcr_dict.get("volume_pcr") if pcr_dict else None
-    vol_pcr = float(vol_pcr_raw) if vol_pcr_raw is not None else 0.0
+    vol_pcr = _to_float(vol_pcr_raw)
 
     oi_pcr_raw = pcr_dict.get("oi_pcr", pcr_dict.get("pcr")) if pcr_dict else None
-    oi_pcr = float(oi_pcr_raw) if oi_pcr_raw is not None else 0.0
+    oi_pcr = _to_float(oi_pcr_raw)
 
     if pcr_dict:
         if is_premarket or vol_pcr_raw is None or vol_pcr == 0.0:
@@ -1294,12 +1315,12 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         if valid_prints:
             dp_lines.append(" 💰 近期最大暗池成交 (Top 3 Block Prints)")
             top3 = sorted(
-                valid_prints, key=lambda x: x.get("premium", 0), reverse=True
+                valid_prints, key=lambda x: _to_float(x.get("premium", 0)), reverse=True
             )[:3]
             for i, p in enumerate(top3):
-                pr = p.get("price", 0)
-                vol = p.get("volume", 0)
-                prem = p.get("premium", 0)
+                pr = _to_float(p.get("price", 0))
+                vol = int(_to_float(p.get("volume", 0)))
+                prem = _to_float(p.get("premium", 0))
                 prem_m = prem / 1000000.0
                 prefix = " ├─" if i < len(top3) - 1 else " └─"
                 dp_lines.append(
@@ -1309,19 +1330,17 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             dp_lines.append(" 💰 近期最大暗池成交 (Top 3 Block Prints)")
             dp_lines.append(" └─ 近 24 小時無顯著大宗交易。")
 
-        dp_poc = dp_data.get("dp_poc")
-        if dp_poc is not None and float(dp_poc) > 0:
+        dp_poc = _to_float_or_none(dp_data.get("dp_poc"))
+        if dp_poc is not None and dp_poc > 0:
             dp_lines.append("")
             dp_lines.append(" 🌊 籌碼與防禦共振 (Support Resonance)")
             dp_lines.append(
-                f" ├─ 暗池磁吸價 (DP-POC): \u001b[1;35m${float(dp_poc):.2f}\u001b[0m"
+                f" ├─ 暗池磁吸價 (DP-POC): \u001b[1;35m${dp_poc:.2f}\u001b[0m"
             )
 
-            gex_putwall = data.get("gex", {}).get("put_wall")
-            if gex_putwall is not None and float(gex_putwall) > 0:
-                is_overlap = (
-                    abs(float(dp_poc) - float(gex_putwall)) / float(gex_putwall) <= 0.01
-                )
+            gex_putwall = _to_float_or_none(data.get("gex", {}).get("put_wall"))
+            if gex_putwall is not None and gex_putwall > 0:
+                is_overlap = abs(dp_poc - gex_putwall) / gex_putwall <= 0.01
                 if is_overlap:
                     dp_lines.append(
                         " └─ 狀態: \u001b[1;31m🛡️ 絕對防禦共振\u001b[0m (與 PutWall 高度重疊)"

@@ -256,8 +256,11 @@ class SymbolHubView(discord.ui.View):
 
             result["iv_data"] = iv_metrics
             result["iv_rank"] = iv_metrics.iv_rank if iv_metrics else 0.0
-            result["expected_move_context"] = await SentimentEngine.get_expected_move(
+            raw_em_context = await SentimentEngine.get_expected_move(
                 self.symbol, quote=quote, iv_metrics=iv_metrics
+            )
+            result["expected_move_context"] = (
+                raw_em_context if isinstance(raw_em_context, dict) else {}
             )
 
             safe_mp = max_pain_data or {}
