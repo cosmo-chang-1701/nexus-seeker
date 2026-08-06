@@ -883,9 +883,17 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             gex_prof = gex_data["gex_profile"]
             strike_keys = sorted([float(k) for k in gex_prof.keys()])
             if strike_keys:
+                effective_c_val = (
+                    c_val if c_val > 0.0 else float(gex_data.get("spot", 0.0))
+                )
+                if effective_c_val <= 0.0 and strike_keys:
+                    effective_c_val = strike_keys[
+                        len(strike_keys) // 2
+                    ]  # Fallback to middle strike
+
                 closest_idx = min(
                     range(len(strike_keys)),
-                    key=lambda i: abs(strike_keys[i] - c_val),
+                    key=lambda i: abs(strike_keys[i] - effective_c_val),
                 )
                 start_idx = max(0, closest_idx - 3)
                 end_idx = min(len(strike_keys), closest_idx + 4)
@@ -933,7 +941,11 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                             color_prefix = "\u001b[1;30m"
                             sign = " "
 
-                        spot_marker = "📍" if abs(k - c_val) < (c_val * 0.01) else "  "
+                        spot_marker = (
+                            "📍"
+                            if abs(k - effective_c_val) < (effective_c_val * 0.01)
+                            else "  "
+                        )
                         formatted_val = f"{sign}{abs(v)/1000:.0f}K"
                         prefix = " ├─" if i < len(display_strikes) - 1 else " └─"
                         gex_lines.append(

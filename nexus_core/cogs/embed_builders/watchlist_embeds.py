@@ -352,9 +352,17 @@ def create_watchlist_signal_embed(
             gex_prof = symbol_gex["gex_profile"]
             strike_keys = sorted([float(k) for k in gex_prof.keys()])
             if strike_keys:
+                effective_c_val = (
+                    live_price
+                    if live_price > 0.0
+                    else float(symbol_gex.get("spot", 0.0))
+                )
+                if effective_c_val <= 0.0 and strike_keys:
+                    effective_c_val = strike_keys[len(strike_keys) // 2]
+
                 closest_idx = min(
                     range(len(strike_keys)),
-                    key=lambda i: abs(strike_keys[i] - live_price),
+                    key=lambda i: abs(strike_keys[i] - effective_c_val),
                 )
                 start_idx = max(0, closest_idx - 3)
                 end_idx = min(len(strike_keys), closest_idx + 4)
@@ -390,7 +398,9 @@ def create_watchlist_signal_embed(
                         sign = " "
 
                     spot_marker = (
-                        "📍" if abs(k - live_price) < (live_price * 0.01) else "  "
+                        "📍"
+                        if abs(k - effective_c_val) < (effective_c_val * 0.01)
+                        else "  "
                     )
                     formatted_val = f"{sign}{abs(v)/1000:.0f}K"
                     prefix = " ├─" if i < len(display_strikes) - 1 else " └─"

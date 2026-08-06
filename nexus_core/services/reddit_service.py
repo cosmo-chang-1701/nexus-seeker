@@ -55,10 +55,11 @@ async def get_reddit_context(
             f"[{symbol}] 啟動邊緣運算呼叫，透過 Tunnel 要求本地端爬取 Reddit..."
         )
 
+        base_url = config.TUNNEL_URL.rstrip("/")
         # 設定 25 秒超時，給予本地端足夠的渲染時間
-        async with httpx.AsyncClient(timeout=25.0) as client:
+        async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
             res = await client.get(
-                f"{config.TUNNEL_URL}/api/v1/scrape/reddit/{symbol}?limit={limit}"
+                f"{base_url}/api/v1/scrape/reddit/{symbol}?limit={limit}"
             )
             res.raise_for_status()
 

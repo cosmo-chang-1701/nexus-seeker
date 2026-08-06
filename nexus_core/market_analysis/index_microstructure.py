@@ -216,10 +216,9 @@ async def fetch_symbol_gex_metrics(symbol: str) -> dict:
             return {**stale_cached_data, "_is_stale_cache": True}
         return fallback
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            res = await client.get(
-                f"{config.TUNNEL_URL}/api/v1/scrape/options/{symbol}/gex"
-            )
+        base_url = config.TUNNEL_URL.rstrip("/")
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            res = await client.get(f"{base_url}/api/v1/scrape/options/{symbol}/gex")
             if res.status_code == 200:
                 data = res.json()
                 if data.get("status") == "success":
