@@ -1529,3 +1529,36 @@ def test_create_tactical_symbol_embed_string_reference_price() -> None:
         assert "DDOG" in embed.title
     except (TypeError, ValueError) as e:
         pytest.fail(f"Embed creation failed with malformed reference price: {e}")
+
+
+def test_create_tactical_symbol_embed_tolerates_string_iv_and_macro_tte() -> None:
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+    import pytest
+    import types
+
+    data = {
+        "symbol": "NVDA",
+        "iv_data": {
+            "current_iv": "--",
+            "iv_rank": "--",
+            "iv_percentile": "--",
+            "expected_move_weekly": "--",
+            "iv_status": "Normal",
+        },
+        "expected_move_context": "--",
+        "catalysts": [
+            types.SimpleNamespace(
+                time="2026-08-10T12:30:00Z",
+                event="Nonfarm Payrolls",
+                tte_hours="--",
+            )
+        ],
+    }
+
+    try:
+        embed = create_tactical_symbol_embed(data)
+        assert embed is not None
+        assert isinstance(embed.title, str)
+        assert "NVDA" in embed.title
+    except Exception as e:
+        pytest.fail(f"Embed creation failed with degraded string payloads: {e}")
