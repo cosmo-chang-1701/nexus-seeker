@@ -14,7 +14,7 @@ Nexus Seeker 是一個 **Discord-first 的多租戶選擇權風控與交易營�
 
 - **自動化戰場心跳 (Watchlist Heartbeat)**：盤中每半小時主動推送自選標的之技術與期權快照，包含 UOA (異動期權)、暗池 (Dark Pool) 磁吸點位與 LLM 分析解說。
 - **戰場情境轉折警報與進階雷達 (Market Scenario & Advanced Radar)**：整合獨立事件驅動引擎（5 階 GEX 決策矩陣）與進階雷達過濾器 (UOA Barrier, Gravity Filter, Divergence Gate)。具備 K 棒影線誤差穿透檢測與爆量動能過濾，精準捕捉「結構破位」、「假性支撐」、「黃金波段止盈」等轉折點。
-- **動態轉倉與基本面防禦閘門 (Dynamic Rollover & Global Defense Gate)**：支援手動觸發 (`/verify_thesis`)。Edge Scraper 現具備 **SEC 財報結構化區塊擷取** 能力，能針對 Forward Guidance、Margin 等 5 大區塊進行抽取。並以 Advanced CoT (Chain of Thought) 系統提示詞引導 LLM 進行護城河破滅驗證。若基本面破滅，將無條件攔截量化買入訊號，強制執行清算與轉倉。
+- **動態轉倉與基本面防禦閘門 (Dynamic Rollover & Global Defense Gate)**：支援透過 `/verify_thesis` 手動觸發，並新增**互動式 SEC 財報選擇介面**，讓使用者自由選擇近期 (10-K, 10-Q, 8-K) 進行分析（若超時未選則自動分析最新報告）。Edge Scraper 現具備 **SEC 財報結構化區塊擷取** 能力，能針對 Forward Guidance、Margin 等 5 大區塊進行抽取。並以 Advanced CoT (Chain of Thought) 系統提示詞引導 LLM 進行護城河破滅驗證。若基本面破滅，將無條件攔截量化買入訊號，強制執行清算與轉倉。
 - **動態量化避險引擎**：依據現價與 RSI、Skew 等指標，動態計算適合的建倉/出場價格，並於大盤極端行情時啟動網格防禦 (Shield) 與流動性滑價保護閘門。
 - **總體經濟與事件日曆防護**：自動抓取 CME FedWatch 利率機率、FRED 關鍵總經數據與財報日曆，結合避險邏輯進行動態逃頂窗口前置。
 - **大盤微觀結構解析**：計算零 Gamma 線 (Gamma Flip Line) 與 GEX 分佈，在市場進入高壓 $VIX > 20$ 時動態縮小合約建倉口數（Kelly Criterion 調節）與拉大網格距離。
