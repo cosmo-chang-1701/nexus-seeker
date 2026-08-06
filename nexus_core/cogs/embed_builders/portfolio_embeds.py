@@ -780,9 +780,17 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
             iv_lines.append(" Expected Move (預期區間)")
             em_reference = float(em_context.get("reference_price") or 0.0)
-            if em_reference > 0 and expected_move_weekly is not None:
+
+            safe_em_weekly = None
+            if expected_move_weekly is not None:
+                try:
+                    safe_em_weekly = float(expected_move_weekly)
+                except (ValueError, TypeError):
+                    safe_em_weekly = None
+
+            if em_reference > 0 and safe_em_weekly is not None:
                 em_ref_rounded = round(em_reference, 2)
-                em_weekly_rounded = round(expected_move_weekly, 2)
+                em_weekly_rounded = round(safe_em_weekly, 2)
                 em_low_calc = round(em_ref_rounded - em_weekly_rounded, 2)
                 em_high_calc = round(em_ref_rounded + em_weekly_rounded, 2)
                 expected_move_weekly_str = (
@@ -791,8 +799,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 )
             else:
                 expected_move_weekly_str = (
-                    f"±${round(expected_move_weekly, 2):.2f}"
-                    if expected_move_weekly is not None
+                    f"±${round(safe_em_weekly, 2):.2f}"
+                    if safe_em_weekly is not None
                     else "--"
                 )
             if earnings_loading or macro_loading:

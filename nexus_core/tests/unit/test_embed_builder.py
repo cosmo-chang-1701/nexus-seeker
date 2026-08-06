@@ -1476,3 +1476,29 @@ def test_create_telemetry_alignment_embeds() -> None:
     assert len(embeds_16) >= 2
     assert "(第 1/" in embeds_16[0].title  # type: ignore
     assert "頁)" in embeds_16[0].title  # type: ignore
+
+
+def test_create_tactical_symbol_embed_string_expected_move() -> None:
+    # 測試傳入字串型別的 expected_move_weekly 不會導致 __round__ 錯誤
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+    import pytest
+
+    data = {
+        "symbol": "NVDA",
+        "iv_data": {
+            "current_iv": 0.5,
+            "iv_rank": 50.0,
+            "iv_percentile": 60.0,
+            "expected_move_weekly": "--",  # Invalid type for round()
+            "iv_status": "Normal",
+        },
+        "expected_move_context": {"reference_price": 100.0},
+    }
+
+    try:
+        embed = create_tactical_symbol_embed(data)
+        assert embed is not None
+        assert isinstance(embed.title, str)
+        assert "NVDA" in embed.title
+    except TypeError as e:
+        pytest.fail(f"Embed creation failed with type error: {e}")
