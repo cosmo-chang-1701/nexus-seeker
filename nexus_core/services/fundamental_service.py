@@ -1,6 +1,6 @@
 import httpx
 import logging
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
 
 import config
 
@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 
 async def get_fundamental_context(
-    symbol: str, enable_tunnel: bool = True
+    symbol: str, enable_tunnel: bool = True, accession_number: Optional[str] = None
 ) -> Optional[Dict[str, str]]:
     """透過 Cloudflare Tunnel 呼叫本地端爬取 10-K/10-Q/8-K 基本面文本。
 
@@ -40,7 +40,11 @@ async def get_fundamental_context(
     # ======= 檢查快取 =======
     from database.cache import get_kv_cache, save_kv_cache
 
-    cache_key = f"fundamental_report_{symbol.upper()}"
+    cache_key = (
+        f"fundamental_report_{symbol.upper()}_{accession_number}"
+        if accession_number
+        else f"fundamental_report_{symbol.upper()}"
+    )
     cached_data = get_kv_cache(cache_key)
 
     if not getattr(config, "TUNNEL_URL", ""):
@@ -92,7 +96,10 @@ async def get_fundamental_context(
     try:
         logger.info(f"[{symbol}] 啟動邊緣運算呼叫，透過 Tunnel 抓取基本面財報全文...")
         async with httpx.AsyncClient(timeout=30.0) as client:
-            res = await client.get(f"{tunnel_url}/api/v1/scrape/fundamental/{symbol}")
+            req_url = f"{tunnel_url}/api/v1/scrape/fundamental/{symbol}"
+            if accession_number:
+                req_url += f"?accession_number={accession_number}"
+            res = await client.get(req_url)
             res.raise_for_status()
 
             response_json = res.json()
@@ -123,3 +130,38 @@ async def get_fundamental_context(
     except Exception as e:
         logger.error(f"[{symbol}] 呼叫本地 Tunnel 財報失敗: {e}")
         return {"error": "邊緣運算節點連線異常。"}
+
+
+async def get_fundamental_reports_list(
+    symbol: str, enable_tunnel: bool = True
+) -> Optional[list[Dict[str, Any]]]:
+    """獲取近期財報清單"""
+    if not enable_tunnel:
+        return None
+    try:
+        from database.user_settings import any_user_local_tunnel_enabled
+
+        if not any_user_local_tunnel_enabled():
+            return None
+    except Exception:
+        return None
+
+    if not getattr(config, "TUNNEL_URL", ""):
+        return None
+
+    tunnel_url = config.TUNNEL_URL
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.get(
+                f"{tunnel_url}/api/v1/scrape/fundamental/{symbol}/list"
+            )
+            res.raise_for_status()
+
+            response_json = res.json()
+            if response_json.get("status") == "success":
+                return response_json.get("data", [])  # type: ignore
+            else:
+                return None
+    except Exception as e:
+        logger.error(f"[{symbol}] 取得財報清單失敗: {e}")
+        return None

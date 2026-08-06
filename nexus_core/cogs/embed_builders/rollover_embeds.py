@@ -1,5 +1,5 @@
 import discord
-from typing import Optional
+from typing import Optional, Any, Callable, Coroutine, Dict
 
 from cogs.embed_builders._core import NexusEmbed
 from ui.panel_renderer import truncate_with_boundary
@@ -8,6 +8,72 @@ from ui.panel_renderer import truncate_with_boundary
 _EMBED_FIELD_VALUE_LIMIT = 1024
 _CODE_FENCE_OVERHEAD = 6  # len("```") * 2
 _EMBED_DESCRIPTION_SAFE_LIMIT = 4000
+
+
+class ReportSelect(discord.ui.Select["ReportSelectionView"]):
+    def __init__(self, options: list[discord.SelectOption]):
+        super().__init__(
+            placeholder="請選擇要分析的財報 (60 秒未選將自動取最新)",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        assert self.view is not None
+        self.view.selected = True
+        accession_num = self.values[0]
+        self.disabled = True
+        await interaction.response.edit_message(view=self.view)
+        await self.view.on_selected_callback(interaction, accession_num)
+
+
+class ReportSelectionView(discord.ui.View):
+    """
+    財報選擇互動選單
+    提供下拉式選單讓使用者選擇特定財報，超時自動執行最新報告。
+    """
+
+    def __init__(
+        self,
+        target_symbol: str,
+        reports: list[Dict[str, Any]],
+        on_selected_callback: Callable[
+            [Optional[discord.Interaction], str], Coroutine[Any, Any, None]
+        ],
+        timeout: Optional[float] = 60.0,
+    ):
+        super().__init__(timeout=timeout)
+        self.target_symbol = target_symbol
+        self.reports = reports
+        self.on_selected_callback = on_selected_callback
+        self.selected = False
+
+        options = []
+        for rep in reports:
+            options.append(
+                discord.SelectOption(
+                    label=f"{rep['form']} ({rep.get('report_date', 'N/A')})",
+                    value=rep["accession_number"],
+                    description=f"Accession: {rep['accession_number'][:12]}...",
+                )
+            )
+
+        self.select_menu = ReportSelect(options=options)
+        self.add_item(self.select_menu)
+
+    async def on_timeout(self) -> None:
+        if not self.selected and self.reports:
+            latest_accession = self.reports[0]["accession_number"]
+            self.select_menu.disabled = True
+            try:
+                await self.on_selected_callback(None, latest_accession)
+            except Exception as e:
+                import logging
+
+                logging.getLogger(__name__).error(
+                    f"ReportSelectionView timeout error: {e}"
+                )
 
 
 class RolloverActionView(discord.ui.View):
