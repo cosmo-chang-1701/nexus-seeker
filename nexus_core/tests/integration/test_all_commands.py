@@ -4,7 +4,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from cogs.terminal import TerminalCog
 from cogs.sentiment import SentimentCog
 from cogs.hedging import HedgingCog
-from cogs.trading import SchedulerCog
+from cogs.trading.scanner_commands import ScannerCommandsCog
+from cogs.trading.admin_commands import AdminCommandsCog
 from cogs.intelligence import IntelligenceCog
 from cogs.calendar import CalendarCog
 from cogs.unified_terminal import UnifiedTerminalCog
@@ -27,7 +28,8 @@ async def test_all_commands_structure(  # type: ignore
     terminal = TerminalCog(mock_bot)
     sentiment = SentimentCog(mock_bot)
     hedging = HedgingCog(mock_bot)
-    trading = SchedulerCog(mock_bot)
+    scanner = ScannerCommandsCog(mock_bot)
+    admin = AdminCommandsCog(mock_bot)
     intelligence = IntelligenceCog(mock_bot)
     calendar = CalendarCog(mock_bot)
     unified = UnifiedTerminalCog(mock_bot)
@@ -162,12 +164,12 @@ async def test_all_commands_structure(  # type: ignore
         "market_analysis.ddp_inspector.DDPInspector.run_scan", new_callable=AsyncMock
     ) as m_ddp:
         m_ddp.return_value = []
-        await trading.ddp_scan.callback(trading, mock_interaction)  # type: ignore
+        await scanner.ddp_scan.callback(scanner, mock_interaction)  # type: ignore
         assert mock_interaction.followup.send.called
     mock_interaction.followup.send.reset_mock()
 
     # Test force_macro_update admin check failure
-    await trading.force_macro_update.callback(trading, mock_interaction)  # type: ignore
+    await admin.force_macro_update.callback(admin, mock_interaction)  # type: ignore
     assert mock_interaction.response.send_message.called
     mock_interaction.response.send_message.reset_mock()
 
@@ -182,7 +184,7 @@ async def test_all_commands_structure(  # type: ignore
         new_callable=AsyncMock,
     ) as m_fw:
         m_gex.return_value = {"spy_spot": 510.0, "gamma_flip": 515.0}
-        await trading.force_macro_update.callback(trading, mock_interaction)  # type: ignore
+        await admin.force_macro_update.callback(admin, mock_interaction)  # type: ignore
         assert mock_interaction.followup.send.called
         m_gex.assert_called_once()
         m_fw.assert_called_once()

@@ -1,7 +1,7 @@
 from typing import Any
 import pytest
 from unittest.mock import AsyncMock, patch
-from cogs.trading import SchedulerCog
+from cogs.trading.scan import MarketScanCog
 
 
 @pytest.mark.asyncio
@@ -9,7 +9,7 @@ async def test_alert_filtering_logic(mock_interaction: Any, db_conn: Any):  # ty
     bot = AsyncMock()
     bot.wait_until_ready = AsyncMock()
     bot.queue_dm = AsyncMock()
-    cog = SchedulerCog(bot)
+    cog = MarketScanCog(bot)
 
     user_id = 12345
     symbol_in_port = "AAPL"
@@ -48,7 +48,7 @@ async def test_run_market_scan_logic_filtering(mock_interaction: Any, db_conn: A
     bot = AsyncMock()
     bot.wait_until_ready = AsyncMock()
     bot.queue_dm = AsyncMock()
-    cog = SchedulerCog(bot)
+    cog = MarketScanCog(bot)
 
     user_id = mock_interaction.user.id
     symbol_watch = "TSLA"
@@ -76,7 +76,7 @@ async def test_run_market_scan_logic_filtering(mock_interaction: Any, db_conn: A
 
     # Mock should_send_priority_alert to return True
     with patch(
-        "cogs.trading.should_send_priority_alert", new_callable=AsyncMock
+        "cogs.trading.scan.should_send_priority_alert", new_callable=AsyncMock
     ) as mock_priority:
         mock_priority.return_value = (True, "Priority")
 

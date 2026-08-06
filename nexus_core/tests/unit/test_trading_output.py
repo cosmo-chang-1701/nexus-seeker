@@ -4,7 +4,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from cogs.trading import SchedulerCog
+from cogs.trading.portfolio_monitor import PortfolioMonitorCog
+from cogs.trading.pre_market import PreMarketCog
 
 
 @pytest.mark.asyncio
@@ -13,7 +14,7 @@ async def test_monitor_real_portfolio_task_uses_helpers() -> None:
     bot.queue_dm = AsyncMock()
 
     with patch("discord.ext.tasks.Loop.start"):
-        cog = SchedulerCog(bot)
+        cog = PortfolioMonitorCog(bot)
 
     cog.trading_service.audit_real_portfolio_risk = AsyncMock(  # type: ignore
         return_value=[
@@ -31,10 +32,14 @@ async def test_monitor_real_portfolio_task_uses_helpers() -> None:
     embed1 = object()
     embed2 = object()
 
-    with patch("cogs.trading.market_time.is_market_open", return_value=True), patch(
-        "cogs.trading.create_profit_lock_alert_embed", return_value=embed1
+    with patch(
+        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
+    ), patch(
+        "cogs.trading.portfolio_monitor.create_profit_lock_alert_embed",
+        return_value=embed1,
     ) as mock_profit, patch(
-        "cogs.trading.create_gamma_fragility_embed", return_value=embed2
+        "cogs.trading.portfolio_monitor.create_gamma_fragility_embed",
+        return_value=embed2,
     ) as mock_gamma:
         await cog.monitor_real_portfolio_task()
 
@@ -51,7 +56,7 @@ async def test_pre_market_risk_monitor_uses_helper() -> None:
     bot.fetch_user = AsyncMock(return_value=SimpleNamespace(id=1))
 
     with patch("discord.ext.tasks.Loop.start"):
-        cog = SchedulerCog(bot)
+        cog = PreMarketCog(bot)
 
     cog.trading_service.get_pre_market_alerts_data = AsyncMock(  # type: ignore
         return_value={
@@ -71,10 +76,10 @@ async def test_pre_market_risk_monitor_uses_helper() -> None:
     embed = object()
 
     with patch(
-        "cogs.trading.market_time.nyse_calendar.schedule",
+        "cogs.trading.pre_market.market_time.nyse_calendar.schedule",
         return_value=SimpleNamespace(empty=False),
     ), patch(
-        "cogs.trading.create_pre_market_earnings_embed", return_value=embed
+        "cogs.trading.pre_market.create_pre_market_earnings_embed", return_value=embed
     ) as mock_builder:
         await cog.pre_market_risk_monitor()
 
@@ -99,7 +104,7 @@ async def test_monitor_vtr_task_uses_ditm_helper() -> None:
     bot.queue_dm = AsyncMock()
 
     with patch("discord.ext.tasks.Loop.start"):
-        cog = SchedulerCog(bot)
+        cog = PortfolioMonitorCog(bot)
 
     cog.trading_service.monitor_vtr_and_calculate_hedging = AsyncMock(  # type: ignore
         return_value=[
@@ -120,8 +125,11 @@ async def test_monitor_vtr_task_uses_ditm_helper() -> None:
     )
     embed = object()
 
-    with patch("cogs.trading.market_time.is_market_open", return_value=True), patch(
-        "cogs.trading.create_option_defense_alert_embed", return_value=embed
+    with patch(
+        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
+    ), patch(
+        "cogs.trading.portfolio_monitor.create_option_defense_alert_embed",
+        return_value=embed,
     ) as mock_builder:
         await cog.monitor_vtr_task()
 
@@ -140,7 +148,7 @@ async def test_monitor_vtr_task_uses_settlement_helper_for_non_ditm() -> None:
     bot.queue_dm = AsyncMock()
 
     with patch("discord.ext.tasks.Loop.start"):
-        cog = SchedulerCog(bot)
+        cog = PortfolioMonitorCog(bot)
 
     cog.trading_service.monitor_vtr_and_calculate_hedging = AsyncMock(  # type: ignore
         return_value=[
@@ -163,8 +171,11 @@ async def test_monitor_vtr_task_uses_settlement_helper_for_non_ditm() -> None:
     )
     embed = object()
 
-    with patch("cogs.trading.market_time.is_market_open", return_value=True), patch(
-        "cogs.trading.create_option_defense_alert_embed", return_value=embed
+    with patch(
+        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
+    ), patch(
+        "cogs.trading.portfolio_monitor.create_option_defense_alert_embed",
+        return_value=embed,
     ) as mock_builder:
         await cog.monitor_vtr_task()
 
@@ -196,9 +207,6 @@ async def test_dispatch_watchlist_heartbeat_sends_all_watchlist_symbols() -> Any
     )
     bot.get_cog.return_value = mock_terminal
 
-    with patch("discord.ext.tasks.Loop.start"):
-        cog = SchedulerCog(bot)
-
     with patch(
         "database.get_full_user_context",
         return_value=SimpleNamespace(
@@ -214,8 +222,10 @@ async def test_dispatch_watchlist_heartbeat_sends_all_watchlist_symbols() -> Any
         "cogs.embed_builder.build_radar_scan_embed",
         return_value=object(),
     ) as mock_builder:
-        await cog._dispatch_watchlist_heartbeat(
-            [(1, "AAPL", 1), (1, "NVDA", 1), (1, "AAPL", 1)]
+        from cogs.trading.heartbeat import dispatch_watchlist_heartbeat
+
+        await dispatch_watchlist_heartbeat(
+            bot, [(1, "AAPL", 1), (1, "NVDA", 1), (1, "AAPL", 1)]
         )
 
     # AAPL is duplicate in list, so unique AAPL and NVDA are fetched
@@ -243,9 +253,6 @@ async def test_dispatch_watchlist_heartbeat_honors_portfolio_only_mode() -> Any:
     )
     bot.get_cog.return_value = mock_terminal
 
-    with patch("discord.ext.tasks.Loop.start"):
-        cog = SchedulerCog(bot)
-
     with patch(
         "database.get_full_user_context",
         return_value=SimpleNamespace(
@@ -264,7 +271,9 @@ async def test_dispatch_watchlist_heartbeat_honors_portfolio_only_mode() -> Any:
         "cogs.embed_builder.build_radar_scan_embed",
         return_value=object(),
     ) as mock_builder:
-        await cog._dispatch_watchlist_heartbeat([(1, "AAPL", 1), (1, "NVDA", 1)])
+        from cogs.trading.heartbeat import dispatch_watchlist_heartbeat
+
+        await dispatch_watchlist_heartbeat(bot, [(1, "AAPL", 1), (1, "NVDA", 1)])
 
     # Only NVDA has position, so only NVDA should be fetched and scanned
     mock_terminal._fetch_sym_radar_data.assert_called_once_with("NVDA")
@@ -278,10 +287,8 @@ async def test_monitor_vtr_task_handles_missing_trade_info() -> None:
     bot.queue_dm = AsyncMock()
 
     with patch("discord.ext.tasks.Loop.start"):
-        cog = SchedulerCog(bot)
+        cog = PortfolioMonitorCog(bot)
 
-    # Mock the return value to contain a transition suggestion (which lacks trade_info)
-    # and a valid VTR hedging result.
     cog.trading_service.monitor_vtr_and_calculate_hedging = AsyncMock(  # type: ignore
         return_value=[
             {
@@ -310,10 +317,12 @@ async def test_monitor_vtr_task_handles_missing_trade_info() -> None:
     )
     embed = object()
 
-    with patch("cogs.trading.market_time.is_market_open", return_value=True), patch(
-        "cogs.trading.create_option_defense_alert_embed", return_value=embed
+    with patch(
+        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
+    ), patch(
+        "cogs.trading.portfolio_monitor.create_option_defense_alert_embed",
+        return_value=embed,
     ) as mock_builder:
-        # This call should execute successfully and not crash with KeyError
         await cog.monitor_vtr_task()
 
     # Verify only the valid trade (uid 2) triggered an alert and queued a DM
@@ -325,9 +334,6 @@ async def test_monitor_vtr_task_handles_missing_trade_info() -> None:
 async def test_dispatch_order_telemetry_alignment_alert_success() -> None:
     bot = MagicMock()
     bot.queue_dm = AsyncMock()
-
-    with patch("discord.ext.tasks.Loop.start"):
-        cog = SchedulerCog(bot)
 
     mock_orders = [
         {
@@ -391,10 +397,12 @@ async def test_dispatch_order_telemetry_alignment_alert_success() -> None:
         "services.order_telemetry_service.build_telemetry_alignment_items",
         new=AsyncMock(return_value=([mock_alignment_item], False)),
     ), patch(
-        "cogs.trading.create_telemetry_alignment_embeds",
+        "cogs.trading.telemetry.create_telemetry_alignment_embeds",
         return_value=[mock_embed],
     ) as mock_embed_builder:
-        await cog._dispatch_order_telemetry_alignment_alert()
+        from cogs.trading.telemetry import _dispatch_order_telemetry_alignment_alert
+
+        await _dispatch_order_telemetry_alignment_alert(bot)
 
     mock_embed_builder.assert_called_once_with(
         [mock_alignment_item],
@@ -403,3 +411,4 @@ async def test_dispatch_order_telemetry_alignment_alert_success() -> None:
         scheduled_mode=True,
     )
     bot.queue_dm.assert_awaited_once_with(1, embed=mock_embed)
+    bot = MagicMock()

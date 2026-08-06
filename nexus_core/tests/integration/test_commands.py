@@ -5,7 +5,7 @@ import discord
 from cogs.terminal import TerminalCog
 from cogs.sentiment import SentimentCog
 from cogs.hedging import HedgingCog
-from cogs.trading import SchedulerCog
+from cogs.trading.scanner_commands import ScannerCommandsCog
 from cogs.intelligence import IntelligenceCog
 from database.user_settings import get_full_user_context
 
@@ -100,7 +100,7 @@ async def test_command_ddp_scan(  # type: ignore
     mock_interaction: Any, db_conn: Any, mock_market_data: Any
 ):  # type: ignore
     bot = MagicMock()
-    cog = SchedulerCog(bot)
+    cog = ScannerCommandsCog(bot)
 
     # Add something to watchlist
     from database.watchlist import add_watchlist_symbol
