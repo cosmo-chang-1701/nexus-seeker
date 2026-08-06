@@ -139,7 +139,7 @@ class PolymarketService:
                         price = self._order_books[tid].get_mid_price()
 
                     token_snapshots.append(
-                        {"outcome": t.get("outcome"), "odds": round(price, 4)}
+                        {"outcome": t.get("outcome"), "odds": round(float(price), 4)}
                     )
 
                 snapshot.append(
