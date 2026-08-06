@@ -234,6 +234,7 @@ class SchedulerCog(commands.Cog):
                             res["spot_price"] = float(gex_data.get("spot_price", 100.0))
                             res["put_wall"] = float(gex_data.get("put_wall", 0.0))
                             res["call_wall"] = float(gex_data.get("call_wall", 0.0))
+                            res["gamma_flip"] = float(gex_data.get("gamma_flip", 0.0))
 
                         cursor.execute(
                             "SELECT value FROM kv_cache WHERE key = ?", (f"ivr_{sym}",)
@@ -306,6 +307,9 @@ class SchedulerCog(commands.Cog):
                             "put_wall": metrics["put_wall"],
                             "call_wall": metrics["call_wall"],
                             "is_uoa_sweep": metrics["is_uoa_sweep"],
+                            "gamma_flip": metrics.get("gamma_flip", 0.0),
+                            "sqz_mom": metrics.get("sqz_mom", 0.0),
+                            "skew": metrics.get("skew", 0.0),
                         }
                     )
 

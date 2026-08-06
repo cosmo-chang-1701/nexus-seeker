@@ -194,20 +194,34 @@ class DynamicRolloverEngine:
                 rollover_ratio = 0.3
 
             # ----------------------------------------------------
-            # [ 勝率傾斜 ] (Win-rate skew)
-            # 條件: 低 IVR (< 30) + 巨量 GEX 防線 (靠近 PutWall) + UOA 巨鯨掃貨
-            # 動作: 現貨打底 + ITM Call 槓桿
+            # 條件二：新標的出現「極致不對稱勝率」
             # ----------------------------------------------------
-            is_near_put_wall = (target_put_wall > 0 and target_spot > 0) and (
-                abs(target_spot - target_put_wall) / target_put_wall < 0.015
-            )
             is_low_ivr = 0 < target_ivr < 30.0
+            is_near_put_wall = (target_put_wall > 0 and target_spot > 0) and (
+                abs(target_spot - target_put_wall) / target_put_wall <= 0.01
+            )
+            is_extreme_asymmetric = is_low_ivr and is_near_put_wall and target_uoa_sweep
 
-            if is_low_ivr and is_near_put_wall and target_uoa_sweep:
+            if is_extreme_asymmetric:
                 strategy = "Shares + ITM Call"
-                reason_suffix = f" (🎯 勝率傾斜觸發: 低IVR({target_ivr:.1f}%) + PutWall防線 + UOA掃貨，建議 ITM Call 槓桿)"
+                reason_suffix = f" (🎯 條件二極致勝率觸發: 低IVR({target_ivr:.1f}%) + 鋼鐵牆築底 + 巨鯨掃貨，強制啟動轉倉)"
             else:
                 reason_suffix = ""
+
+            # 強制優先採用極致不對稱勝率條件
+            if holding_momentum_decaying and is_extreme_asymmetric:
+                should_rollover = True
+                rollover_ratio = 1.0  # 條件三要求 100% 滿載運算 / 不留戀
+                return {
+                    "should_rollover": should_rollover,
+                    "rollover_ratio": rollover_ratio,
+                    "strategy": strategy,
+                    "reason": (
+                        f"Holding {current_holding_symbol} momentum decaying (PSQ={current_holding_power_squeeze}). "
+                        f"Target {target_watchlist_symbol} hit asymmetric win-rate. "
+                        + reason_suffix
+                    ),
+                }
 
             return {
                 "should_rollover": should_rollover,
@@ -252,12 +266,16 @@ class DynamicRolloverEngine:
                     "is_uoa_sweep": asset.get("is_uoa_sweep", False),
                     "sqz_mom": asset.get("sqz_mom", 0.0),
                     "skew": asset.get("skew", 0.0),
+                    "gamma_flip": asset.get("gamma_flip", 0.0),
                 }
 
                 spot = metrics["spot_price"]
                 call_wall = metrics["call_wall"]
-                max_pain = metrics["max_pain"]
                 ivr = metrics["ivr"]
+                put_wall = metrics["put_wall"]
+                gamma_flip = metrics["gamma_flip"]
+                sqz_mom = metrics["sqz_mom"]
+                skew = metrics["skew"]
 
                 # 計算比例
                 current_alloc = (
@@ -267,19 +285,28 @@ class DynamicRolloverEngine:
                 )
 
                 # ----------------------------------------------------
-                # [ 雜訊避險 ] (Noise hedge)
-                # 條件: 高波泡沫 (IVR > 80)、碰觸 CallWall，或大幅偏離 Max Pain (>10%)
-                # 動作: 100% 撤退回 VOO
+                # 條件一：現有持倉結構劣化（護衛牆破位 / 主力物理蓋頂 / 目標區獲利解鎖完成）
                 # ----------------------------------------------------
-                is_iv_bubble = ivr > 80.0
-                touch_call_wall = (call_wall > 0 and spot > 0) and (
-                    abs(spot - call_wall) / call_wall < 0.015 or spot >= call_wall
+                # 1. 做市商 GEX 防線失守
+                is_structural_breakdown = (put_wall > 0 and gamma_flip > 0) and (
+                    spot < put_wall and spot < gamma_flip
                 )
-                deviate_max_pain = (max_pain > 0 and spot > 0) and (
-                    abs(spot - max_pain) / max_pain > 0.1
+                # 2. 主力巨量 STO 實體蓋頂
+                is_whale_sto_block = (sqz_mom < 0.0) and (skew < -0.3)
+                # 3. 目標區獲利解鎖完成
+                is_profit_unlocked = (call_wall > 0 and spot > 0) and (
+                    spot >= call_wall or abs(spot - call_wall) / call_wall < 0.015
                 )
 
-                if is_iv_bubble or touch_call_wall or deviate_max_pain:
+                # 條件三 (部分)：擺脫高波洗籌泥淖 (IV Crush 威脅)
+                is_iv_bubble = ivr > 80.0
+
+                if (
+                    is_structural_breakdown
+                    or is_whale_sto_block
+                    or is_profit_unlocked
+                    or is_iv_bubble
+                ):
                     report = self._generate_rule_based_rebalance_report(
                         symbol, metrics, system_action="LIQUIDATE"
                     )
