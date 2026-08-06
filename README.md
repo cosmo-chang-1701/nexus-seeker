@@ -79,6 +79,7 @@ nexus-seeker/
 │   └── tests/               # 單元與整合測試
 ├── nexus_edge_scraper/      # 邊緣爬蟲服務 (Playwright)
 │   ├── local_api.py         # FastAPI 應用程式路由
+│   ├── section_extractor.py # SEC 財報結構化區塊擷取邏輯
 │   └── tests/               # 爬蟲端測試
 ├── scripts/                 # 輔助腳本與部署工具
 ├── docs/                    # 附加文件

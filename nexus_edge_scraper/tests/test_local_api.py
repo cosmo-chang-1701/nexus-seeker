@@ -55,7 +55,7 @@ def test_scrape_fedwatch_fallback():
 def test_scrape_sec_fundamental():
     mock_response = MagicMock()
     mock_response.status_code = 200
-    mock_response.text = "<html><body><ix:header>Header</ix:header><us-gaap:Revenues>100</us-gaap:Revenues><div>Clean text</div></body></html>"
+    mock_response.text = "<html><body><ix:header>Header</ix:header><us-gaap:Revenues>100</us-gaap:Revenues><div>Clean text. Revenue grew by 10% year-over-year.</div></body></html>"
     mock_response.raise_for_status = MagicMock()
     mock_response.json = MagicMock(
         return_value={
@@ -81,3 +81,7 @@ def test_scrape_sec_fundamental():
         assert data["status"] == "success"
         # The clean logic should remove ix:header and us-gaap and strip to text
         assert "Clean text" in data["data"]["text"]
+        # Verify sections are extracted and returned
+        assert "sections" in data["data"]
+        assert "quarterly_financials" in data["data"]["sections"]
+        assert "Revenue grew" in data["data"]["sections"]["quarterly_financials"]

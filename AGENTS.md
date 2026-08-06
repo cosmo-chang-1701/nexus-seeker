@@ -25,7 +25,7 @@ The codebase is optimized for:
 
 2. **`nexus_edge_scraper`**
    - Optional FastAPI + Playwright edge service
-   - Used for Reddit scraping without exposing the bot runtime directly
+   - Used for Reddit scraping, macro data fetching, and SEC structured section extraction (`section_extractor.py`) without exposing the bot runtime directly
 
 ### Important Runtime Distinction
 
