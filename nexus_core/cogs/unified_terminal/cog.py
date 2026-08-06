@@ -30,6 +30,13 @@ from .pulse_view import PulseHubView
 logger = logging.getLogger(__name__)
 
 
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value) if value is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
 class UnifiedTerminalCog(commands.Cog):
     """
     Unified Hubs for Nexus Seeker.
@@ -578,10 +585,11 @@ class UnifiedTerminalCog(commands.Cog):
 
             manager = AssetManager()
             assets = manager.get_assets(user_id, ContextType.HOLDING)
-            stock_cost = next(
+            stock_cost_raw = next(
                 (a.metadata.get("avg_cost", 0.0) for a in assets if a.symbol == symbol),
                 0.0,
             )
+            stock_cost = _safe_float(stock_cost_raw, 0.0)
 
             ctx = database.get_full_user_context(user_id)
 
@@ -611,18 +619,21 @@ class UnifiedTerminalCog(commands.Cog):
             vp_data = data.get("volume_profile")
             dp_data = data.get("darkpool")
 
-            spy_price = df_spy["Close"].iloc[-1] if not df_spy.empty else 670.0
+            spy_price = _safe_float(
+                (df_spy["Close"].iloc[-1] if not df_spy.empty else 670.0),
+                670.0,
+            )
             safe_macro = macro_raw or {}
             macro_data = MacroContext(
-                vix=safe_macro.get("vix", 18.0),
-                oil_price=safe_macro.get("oil", 75.0),
-                vix_change=safe_macro.get("vix_change", 0.0),
+                vix=_safe_float(safe_macro.get("vix"), 18.0),
+                oil_price=_safe_float(safe_macro.get("oil"), 75.0),
+                vix_change=_safe_float(safe_macro.get("vix_change"), 0.0),
             )
 
             result = await market_math.analyze_symbol(
                 symbol, stock_cost, df_spy, spy_price, vix_spot=macro_data.vix
             )
-            if not result:
+            if not isinstance(result, dict) or not result:
                 result = {"symbol": symbol, "stock_cost": stock_cost, "price": 0.0}
 
             psq_result = analyze_psq(df_hist_1d, vix_spot=macro_data.vix)
@@ -630,15 +641,15 @@ class UnifiedTerminalCog(commands.Cog):
                 result["psq_result"] = psq_result
                 is_df_valid = df_hist_1d is not None and not df_hist_1d.empty
                 result["price"] = (
-                    df_hist_1d["Close"].iloc[-1]
+                    _safe_float(df_hist_1d["Close"].iloc[-1], 0.0)
                     if is_df_valid
-                    else result.get("price", 0.0)
+                    else _safe_float(result.get("price"), 0.0)
                 )
 
             result["quote"] = quote
 
-            safe_skew = skew_data or {}
-            result["skew"] = safe_skew.get("skew", 0.0)
+            safe_skew = skew_data if isinstance(skew_data, dict) else {}
+            result["skew"] = _safe_float(safe_skew.get("skew"), 0.0)
             result["skew_percentile"] = SentimentEngine.get_indicator_percentile(
                 symbol, "SKEW", result["skew"]
             )
@@ -647,7 +658,12 @@ class UnifiedTerminalCog(commands.Cog):
             result["uoa"] = uoa_data if uoa_data is not None else []
 
             result["iv_data"] = iv_metrics
-            result["iv_rank"] = iv_metrics.iv_rank if iv_metrics else 0.0
+            iv_rank_raw = (
+                iv_metrics.get("iv_rank")
+                if isinstance(iv_metrics, dict)
+                else getattr(iv_metrics, "iv_rank", None)
+            )
+            result["iv_rank"] = _safe_float(iv_rank_raw, 0.0)
             raw_em_context = await SentimentEngine.get_expected_move(
                 symbol, quote=quote, iv_metrics=iv_metrics
             )
@@ -655,12 +671,13 @@ class UnifiedTerminalCog(commands.Cog):
                 raw_em_context if isinstance(raw_em_context, dict) else {}
             )
 
-            safe_mp = max_pain_data or {}
-            result["max_pain"] = safe_mp.get("max_pain", 0.0)
+            safe_mp = max_pain_data if isinstance(max_pain_data, dict) else {}
+            result["max_pain"] = _safe_float(safe_mp.get("max_pain"), 0.0)
             result["month_max_pains"] = data.get("month_max_pains", [])
             result["gex_profile_data"] = gex_profile_data
 
-            result["is_ddp"] = ddp_report.get("is_ddp", False) if ddp_report else False
+            safe_ddp = ddp_report if isinstance(ddp_report, dict) else {}
+            result["is_ddp"] = bool(safe_ddp.get("is_ddp", False))
             result["vix"] = macro_data.vix
             result["spy_price"] = spy_price
 
@@ -680,8 +697,10 @@ class UnifiedTerminalCog(commands.Cog):
             # Polymarket odds
             poly_odds = await find_matching_polymarket_odds(symbol, poly_markets)
             result["polymarket_odds"] = poly_odds
-            result["volume_profile"] = vp_data
-            result["darkpool"] = dp_data
+            safe_vp = vp_data if isinstance(vp_data, dict) else {}
+            safe_dp = dp_data if isinstance(dp_data, dict) else {}
+            result["volume_profile"] = safe_vp
+            result["darkpool"] = safe_dp
 
             # TDP 估值三擊判斷: 現價 < EMA 21 且 現價 < Max Pain 且 現價 < V-POC 且 現價 < DP-POC
             ema_21 = (
@@ -689,10 +708,10 @@ class UnifiedTerminalCog(commands.Cog):
                 if df_hist_1d is not None and not df_hist_1d.empty
                 else 0.0
             )
-            vpoc = vp_data.get("hvn", 0.0) if vp_data else 0.0
-            dp_poc = dp_data.get("dp_poc", 0.0) if dp_data else 0.0
-            max_pain = result.get("max_pain", 0.0)
-            price = result.get("price", 0.0)
+            vpoc = _safe_float(safe_vp.get("hvn"), 0.0)
+            dp_poc = _safe_float(safe_dp.get("dp_poc"), 0.0)
+            max_pain = _safe_float(result.get("max_pain"), 0.0)
+            price = _safe_float(result.get("price"), 0.0)
 
             if result.get("is_ddp"):
                 if (
@@ -733,7 +752,7 @@ class UnifiedTerminalCog(commands.Cog):
                 )
 
         except Exception as e:
-            logger.error(f"Symbol Hub Error for {symbol}: {e}")
+            logger.exception(f"Symbol Hub Error for {symbol}: {e}")
             error_emb = create_error_embed(f"載入 `{symbol}` 資料時發生錯誤: {e}")
             if embeds_accumulator is not None:
                 embeds_accumulator.append(error_emb)
@@ -799,9 +818,10 @@ class UnifiedTerminalCog(commands.Cog):
         if mp_data.get("is_stale"):
             asyncio.create_task(self._async_revalidate_market_cache(sym, price))
 
-        em_context = await SentimentEngine.get_expected_move(
+        raw_em_context = await SentimentEngine.get_expected_move(
             sym, quote=quote, iv_metrics=iv_m
         )
+        em_context = raw_em_context if isinstance(raw_em_context, dict) else {}
 
         # 取得 IV 數據
         def _safe_em_float(value: Any) -> float:

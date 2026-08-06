@@ -90,6 +90,27 @@ async def test_symbol_hub_hedge_uses_builder(mock_interaction: Any, mock_bot: An
 
 
 @pytest.mark.asyncio
+async def test_symbol_hub_hedge_tolerates_string_iv_rank(  # type: ignore
+    mock_interaction: Any, mock_bot: Any
+):
+    view = SymbolHubView(symbol="AAPL", user_id=123, bot=mock_bot)
+    view.base_data = {"symbol": "AAPL", "iv_rank": "--"}
+
+    with patch(
+        "cogs.unified_terminal.symbol_view.create_tactical_hedge_embed"
+    ) as mock_builder:
+        mock_builder.return_value = MagicMock(spec=discord.Embed)
+
+        await view.btn_hedge.callback(mock_interaction)
+
+        mock_builder.assert_called_once_with(
+            "AAPL", 50.0, "Bear Debits / Put Protection (買入保護性認沽)"
+        )
+        _, last_kwargs = mock_interaction.followup.send.call_args
+        assert last_kwargs["embed"] is mock_builder.return_value
+
+
+@pytest.mark.asyncio
 async def test_symbol_hub_invalid_symbol_returns_error_embed(  # type: ignore
     mock_interaction: Any, mock_bot: Any
 ):

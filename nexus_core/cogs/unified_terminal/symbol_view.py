@@ -21,6 +21,13 @@ from .utils import find_matching_polymarket_odds
 logger = logging.getLogger(__name__)
 
 
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value) if value is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
 class SymbolHubView(discord.ui.View):
     """
     Interactive view for the Unified Symbol Hub (/x).
@@ -138,7 +145,7 @@ class SymbolHubView(discord.ui.View):
 
             manager = AssetManager()
             assets = manager.get_assets(self.user_id, ContextType.HOLDING)
-            stock_cost = next(
+            stock_cost_raw = next(
                 (
                     a.metadata.get("avg_cost", 0.0)
                     for a in assets
@@ -146,6 +153,7 @@ class SymbolHubView(discord.ui.View):
                 ),
                 0.0,
             )
+            stock_cost = _safe_float(stock_cost_raw, 0.0)
 
             # 用於 DDP 與 Polymarket 等服務
             from market_analysis.ddp_inspector import DDPInspector
@@ -219,18 +227,21 @@ class SymbolHubView(discord.ui.View):
                 gex_task,
             )
 
-            spy_price = df_spy["Close"].iloc[-1] if not df_spy.empty else 670.0
+            spy_price = _safe_float(
+                (df_spy["Close"].iloc[-1] if not df_spy.empty else 670.0),
+                670.0,
+            )
             safe_macro = macro_raw or {}
             macro_data = MacroContext(
-                vix=safe_macro.get("vix", 18.0),
-                oil_price=safe_macro.get("oil", 75.0),
-                vix_change=safe_macro.get("vix_change", 0.0),
+                vix=_safe_float(safe_macro.get("vix"), 18.0),
+                oil_price=_safe_float(safe_macro.get("oil"), 75.0),
+                vix_change=_safe_float(safe_macro.get("vix_change"), 0.0),
             )
 
             result = await market_math.analyze_symbol(
                 self.symbol, stock_cost, df_spy, spy_price, vix_spot=macro_data.vix
             )
-            if not result:
+            if not isinstance(result, dict) or not result:
                 result = {"symbol": self.symbol, "stock_cost": stock_cost, "price": 0.0}
 
             psq_result = analyze_psq(df_hist_1d, vix_spot=macro_data.vix)
@@ -238,15 +249,15 @@ class SymbolHubView(discord.ui.View):
                 result["psq_result"] = psq_result
                 is_df_valid = df_hist_1d is not None and not df_hist_1d.empty
                 result["price"] = (
-                    df_hist_1d["Close"].iloc[-1]
+                    _safe_float(df_hist_1d["Close"].iloc[-1], 0.0)
                     if is_df_valid
-                    else result.get("price", 0.0)
+                    else _safe_float(result.get("price"), 0.0)
                 )
 
             result["quote"] = quote
 
-            safe_skew = skew_data or {}
-            result["skew"] = safe_skew.get("skew", 0.0)
+            safe_skew = skew_data if isinstance(skew_data, dict) else {}
+            result["skew"] = _safe_float(safe_skew.get("skew"), 0.0)
             result["skew_percentile"] = SentimentEngine.get_indicator_percentile(
                 self.symbol, "SKEW", result["skew"]
             )
@@ -255,7 +266,12 @@ class SymbolHubView(discord.ui.View):
             result["uoa"] = uoa_data if uoa_data is not None else []
 
             result["iv_data"] = iv_metrics
-            result["iv_rank"] = iv_metrics.iv_rank if iv_metrics else 0.0
+            iv_rank_raw = (
+                iv_metrics.get("iv_rank")
+                if isinstance(iv_metrics, dict)
+                else getattr(iv_metrics, "iv_rank", None)
+            )
+            result["iv_rank"] = _safe_float(iv_rank_raw, 0.0)
             raw_em_context = await SentimentEngine.get_expected_move(
                 self.symbol, quote=quote, iv_metrics=iv_metrics
             )
@@ -263,11 +279,12 @@ class SymbolHubView(discord.ui.View):
                 raw_em_context if isinstance(raw_em_context, dict) else {}
             )
 
-            safe_mp = max_pain_data or {}
-            result["max_pain"] = safe_mp.get("max_pain", 0.0)
+            safe_mp = max_pain_data if isinstance(max_pain_data, dict) else {}
+            result["max_pain"] = _safe_float(safe_mp.get("max_pain"), 0.0)
 
             result["gex_profile_data"] = gex_data
-            result["is_ddp"] = ddp_report.get("is_ddp", False) if ddp_report else False
+            safe_ddp = ddp_report if isinstance(ddp_report, dict) else {}
+            result["is_ddp"] = bool(safe_ddp.get("is_ddp", False))
             result["vix"] = macro_data.vix
             result["spy_price"] = spy_price
 
@@ -284,7 +301,9 @@ class SymbolHubView(discord.ui.View):
             poly_odds = await find_matching_polymarket_odds(self.symbol, poly_markets)
             result["polymarket_odds"] = poly_odds
             result["catalysts"] = catalysts
-            result["volume_profile"] = vp_data
+            safe_vp = vp_data if isinstance(vp_data, dict) else {}
+            safe_dp = dp_data if isinstance(dp_data, dict) else {}
+            result["volume_profile"] = safe_vp
 
             # TDP 估值三擊判斷: 現價 < EMA 21 且 現價 < Max Pain 且 現價 < V-POC 且 現價 < DP-POC
             ema_21 = (
@@ -292,10 +311,10 @@ class SymbolHubView(discord.ui.View):
                 if df_hist_1d is not None and not df_hist_1d.empty
                 else 0.0
             )
-            vpoc = vp_data.get("hvn", 0.0) if vp_data else 0.0
-            dp_poc = dp_data.get("dp_poc", 0.0) if dp_data else 0.0
-            max_pain = result["max_pain"]
-            price = result["price"]
+            vpoc = _safe_float(safe_vp.get("hvn"), 0.0)
+            dp_poc = _safe_float(safe_dp.get("dp_poc"), 0.0)
+            max_pain = _safe_float(result["max_pain"], 0.0)
+            price = _safe_float(result["price"], 0.0)
 
             if result.get("is_ddp"):
                 if (
@@ -323,23 +342,23 @@ class SymbolHubView(discord.ui.View):
                         if is_sqz:
                             result["tdpq_activated"] = True
 
-            result["darkpool"] = dp_data
+            result["darkpool"] = safe_dp
 
             from market_analysis.risk_engine import optimize_position_risk
 
-            stock_iv = (
-                iv_metrics.current_iv
-                if iv_metrics
-                and hasattr(iv_metrics, "current_iv")
-                and iv_metrics.current_iv
-                else 0.40
+            raw_stock_iv = (
+                iv_metrics.get("current_iv")
+                if isinstance(iv_metrics, dict)
+                else getattr(iv_metrics, "current_iv", None)
             )
+            stock_iv_val = _safe_float(raw_stock_iv, 0.0)
+            stock_iv = stock_iv_val if stock_iv_val > 0 else 0.40
             vol_pcr = (
-                float(pcr_data.get("volume_pcr", 0.8))
-                if isinstance(pcr_data, dict) and pcr_data.get("volume_pcr")
+                _safe_float(pcr_data.get("volume_pcr"), 0.8)
+                if isinstance(pcr_data, dict)
                 else 0.8
             )
-            skew_val = float(safe_skew.get("skew", 0.0))
+            skew_val = _safe_float(safe_skew.get("skew"), 0.0)
 
             opt_result = optimize_position_risk(
                 current_delta=0.0,
@@ -377,7 +396,7 @@ class SymbolHubView(discord.ui.View):
         await self._set_loading(interaction)
         try:
             # 根據目前波動率與情緒自動引導對沖操作
-            ivr = self.base_data.get("iv_rank", 50.0)
+            ivr = _safe_float(self.base_data.get("iv_rank"), 50.0)
             rec_strategy = (
                 "Bull Put Spread (賣出認沽價差策略)"
                 if ivr > 50.0
