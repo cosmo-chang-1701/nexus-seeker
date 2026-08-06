@@ -1502,3 +1502,30 @@ def test_create_tactical_symbol_embed_string_expected_move() -> None:
         assert "NVDA" in embed.title
     except TypeError as e:
         pytest.fail(f"Embed creation failed with type error: {e}")
+
+
+def test_create_tactical_symbol_embed_string_reference_price() -> None:
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+    import pytest
+
+    data = {
+        "symbol": "DDOG",
+        "iv_data": {
+            "current_iv": 0.45,
+            "iv_rank": 35.0,
+            "iv_percentile": 40.0,
+            "expected_move_weekly": "5.2",
+            "iv_status": "Normal",
+        },
+        "expected_move_context": {
+            "reference_price": "--",
+        },
+    }
+
+    try:
+        embed = create_tactical_symbol_embed(data)
+        assert embed is not None
+        assert isinstance(embed.title, str)
+        assert "DDOG" in embed.title
+    except (TypeError, ValueError) as e:
+        pytest.fail(f"Embed creation failed with malformed reference price: {e}")
