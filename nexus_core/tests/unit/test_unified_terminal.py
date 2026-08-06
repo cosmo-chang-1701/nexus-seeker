@@ -22,6 +22,8 @@ from cogs.unified_terminal import (
 def mock_bot() -> Any:
     bot = MagicMock()
     bot.wait_until_ready = AsyncMock()
+    bot.polymarket_service = MagicMock()
+    bot.polymarket_service.get_market_snapshot = AsyncMock(return_value=[])
     return bot
 
 

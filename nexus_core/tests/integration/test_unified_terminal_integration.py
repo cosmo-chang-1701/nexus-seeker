@@ -18,6 +18,8 @@ async def test_symbol_hub_full_integration(mock_interaction: Any, db_conn: Any):
     並最終生成包含所有量化指標的 Embed。
     """
     bot = MagicMock()
+    bot.polymarket_service = MagicMock()
+    bot.polymarket_service.get_market_snapshot = AsyncMock(return_value=[])
     cog = UnifiedTerminalCog(bot)
 
     # 準備測試數據
