@@ -8,7 +8,8 @@ on:
   workflow_call:
 
 jobs:
-  🧹 test-and-lint:
+  test-and-lint:
+    name: 🧹 Test and Lint
     runs-on: ubuntu-latest
 
     steps:
