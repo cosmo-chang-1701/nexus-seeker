@@ -1450,20 +1450,20 @@ class TerminalCog(commands.Cog):
         async def on_selected(
             select_interaction: discord.Interaction | None, accession_number: str
         ) -> None:
-            if select_interaction:
-                await select_interaction.followup.send(
-                    f"🔍 正在獲取財報 `{accession_number}` 進行驗證，請稍候...",
-                    ephemeral=True,
-                )
-            else:
-                try:
-                    original = await interaction.original_response()
+            try:
+                original = await interaction.original_response()
+                if select_interaction:
+                    await original.edit(
+                        content=f"🔍 正在獲取財報 `{accession_number}` 進行驗證，請稍候...",
+                        view=None,
+                    )
+                else:
                     await original.edit(
                         content=f"⚠️ 選擇超時，自動獲取最新財報 `{accession_number}` 進行驗證，請稍候...",
                         view=None,
                     )
-                except Exception:
-                    pass
+            except Exception:
+                pass
 
             fundamental_data = await get_fundamental_context(
                 symbol, accession_number=accession_number
