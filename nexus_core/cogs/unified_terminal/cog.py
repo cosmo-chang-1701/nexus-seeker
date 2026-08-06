@@ -406,12 +406,11 @@ class UnifiedTerminalCog(commands.Cog):
         供 SingleFlightManager 調度使用。
         """
         from market_analysis.ddp_inspector import DDPInspector
-        from services.polymarket_service import PolymarketService
         from market_time import ny_tz
         from datetime import datetime
 
         ddp_inspector = DDPInspector(self.bot)
-        poly_service = PolymarketService(self.bot)
+        poly_service = getattr(self.bot, "polymarket_service", None)
 
         # 1. 取得所有到期日以規劃一個月內的所有 Max Pain 計算任務
         expiries = []
@@ -453,7 +452,14 @@ class UnifiedTerminalCog(commands.Cog):
         reddit_task = reddit_service.get_reddit_context(
             symbol, enable_tunnel=enable_local_tunnel
         )
-        poly_task = poly_service.get_market_snapshot(limit=0)
+
+        async def _safe_get_poly_markets() -> list:
+            if poly_service:
+                return await poly_service.get_market_snapshot(limit=0)  # type: ignore
+            return []
+
+        poly_task = _safe_get_poly_markets()
+
         ddp_task = ddp_inspector.inspect_symbol(symbol)
         df_hist_task = market_data_service.get_history_df(
             symbol, period="1y", interval="1d"
@@ -657,7 +663,11 @@ class UnifiedTerminalCog(commands.Cog):
 
             # Reddit sentiment score
             safe_reddit_text = reddit_text or ""
-            if "看多" in safe_reddit_text or "Bullish" in safe_reddit_text:
+            if any(
+                err in safe_reddit_text for err in ["錯誤", "異常", "超時", "尚未配置"]
+            ):
+                result["reddit_sentiment_score"] = "⚠️ 抓取失敗 (邊緣節點異常)"
+            elif "看多" in safe_reddit_text or "Bullish" in safe_reddit_text:
                 result["reddit_sentiment_score"] = "🚀 樂觀 (Bullish)"
             elif "看空" in safe_reddit_text or "Bearish" in safe_reddit_text:
                 result["reddit_sentiment_score"] = "💀 恐慌 (Bearish)"
