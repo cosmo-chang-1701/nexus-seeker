@@ -801,10 +801,16 @@ class UnifiedTerminalCog(commands.Cog):
         )
 
         # 取得 IV 數據
+        def _safe_em_float(value: Any) -> float:
+            try:
+                return float(value) if value is not None else 0.0
+            except (TypeError, ValueError):
+                return 0.0
+
         iv_rank_val = 0.0
-        em_weekly = float(em_context.get("expected_move_weekly") or 0.0)
-        em_lower = float(em_context.get("expected_move_lower") or 0.0)
-        em_upper = float(em_context.get("expected_move_upper") or 0.0)
+        em_weekly = _safe_em_float(em_context.get("expected_move_weekly"))
+        em_lower = _safe_em_float(em_context.get("expected_move_lower"))
+        em_upper = _safe_em_float(em_context.get("expected_move_upper"))
 
         if iv_m:
             iv_rank_val = iv_m.iv_rank if iv_m.iv_rank is not None else 0.0
@@ -812,7 +818,7 @@ class UnifiedTerminalCog(commands.Cog):
         mock_iv = {
             "iv_rank": iv_rank_val,
             "expected_move_weekly": em_weekly,
-            "reference_price": em_context.get("reference_price", 0.0),
+            "reference_price": _safe_em_float(em_context.get("reference_price")),
             "expected_move_lower": em_lower,
             "expected_move_upper": em_upper,
             "term_structure_ratio": iv_m.term_structure_ratio if iv_m else None,
