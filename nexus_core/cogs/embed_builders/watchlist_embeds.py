@@ -228,7 +228,7 @@ def create_watchlist_signal_embed(
         vol_pcr_str = "--"
     else:
         vol_pcr_str = f"{vol_pcr_val:.2f}"
-        if "volume_pcr_state" in pcr_dict:
+        if pcr_dict.get("volume_pcr_state"):
             vol_pcr_status = pcr_dict["volume_pcr_state"]
         elif vol_pcr_val < 0.90:
             vol_pcr_status = "🐂 中性偏多/看漲主導"
@@ -242,7 +242,7 @@ def create_watchlist_signal_embed(
         oi_pcr_str = "--"
     else:
         oi_pcr_str = f"{oi_pcr_val:.2f}"
-        if "oi_pcr_state" in pcr_dict:
+        if pcr_dict.get("oi_pcr_state"):
             oi_pcr_status = pcr_dict["oi_pcr_state"]
         elif oi_pcr_val < 0.90:
             oi_pcr_status = "🏹 結構激進/看漲多頭沉澱"

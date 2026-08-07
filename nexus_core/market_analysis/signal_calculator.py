@@ -274,8 +274,12 @@ def calculate_dynamic_trading_signals(
         if is_crisis:
             result["suitable_buy_shares"] = 0
         else:
-            shares = int(allocated_budget // result["suitable_buy_price"])
-            result["suitable_buy_shares"] = max(1, shares)
+            buy_price = result["suitable_buy_price"]
+            if isinstance(buy_price, (int, float)) and buy_price > 0.0:
+                shares = int(allocated_budget // buy_price)
+            else:
+                shares = 0
+            result["suitable_buy_shares"] = max(1, shares) if shares > 0 else 0
 
             if skew_val > 3.0:
                 result["buy_rationale"] += (

@@ -1562,3 +1562,122 @@ def test_create_tactical_symbol_embed_tolerates_string_iv_and_macro_tte() -> Non
         assert "NVDA" in embed.title
     except Exception as e:
         pytest.fail(f"Embed creation failed with degraded string payloads: {e}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 欄位數據驗算測試 (Field Accuracy Audit)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_holding_pnl_pct_displayed_correctly() -> None:
+    """holding_pnl_pct 應正確計算並顯示損益百分比（而非永遠 0.00%）。"""
+    embed = create_watchlist_signal_embed(
+        symbol="AAPL",
+        has_position=True,
+        holding_quantity=100.0,
+        holding_avg_cost=150.0,
+        holding_pnl_pct=0.1333,  # +13.33% = (170 - 150) / 150 * 100
+        suitable_sell_price=170.0,
+        suitable_sell_shares=25,
+        sell_rationale="分批減碼 25%",
+    )
+    assert embed is not None
+    assert embed.description is not None
+    assert "+13.33%" in embed.description
+
+
+def test_holding_pnl_pct_negative_displayed_correctly() -> None:
+    """持倉虧損時，損益應顯示負號。"""
+    embed = create_watchlist_signal_embed(
+        symbol="TSLA",
+        has_position=True,
+        holding_quantity=50.0,
+        holding_avg_cost=200.0,
+        holding_pnl_pct=-0.10,  # -10.00%
+        suitable_sell_price=185.0,
+        suitable_sell_shares=12,
+        sell_rationale="止損",
+    )
+    assert embed is not None
+    assert embed.description is not None
+    assert "-10.00%" in embed.description
+
+
+def test_holding_pnl_pct_none_shows_zero() -> None:
+    """holding_pnl_pct=None 時，顯示為 0.00%（向後相容的 fallback）。"""
+    embed = create_watchlist_signal_embed(
+        symbol="NVDA",
+        has_position=True,
+        holding_quantity=10.0,
+        holding_avg_cost=100.0,
+        holding_pnl_pct=None,
+        suitable_sell_price=110.0,
+        suitable_sell_shares=2,
+        sell_rationale="觀望",
+    )
+    assert embed is not None
+    assert embed.description is not None
+    assert "0.00%" in embed.description
+
+
+def test_pcr_state_empty_string_falls_back_to_numeric_logic() -> None:
+    """pcr_dict 中 volume_pcr_state 為空字串時，應 fallback 至數值閾值判斷，不顯示空字串。"""
+    from models.quant import IVMetrics
+
+    iv_m = IVMetrics(
+        symbol="AAPL",
+        current_iv=0.25,
+        iv_rank=45.0,
+        iv_percentile=50.0,
+        expected_move_weekly=4.5,
+        iv_status="Normal",
+        iv_source="LIVE_IV",
+    )
+    pcr_data_with_empty_state = {
+        "volume_pcr": 0.75,  # < 0.90 → should resolve to 🐂 中性偏多/看漲主導
+        "volume_pcr_state": "",  # empty string — should NOT be used
+        "oi_pcr": 1.05,  # between 0.90–1.20 → ⚖️ 籌碼結構中性
+        "oi_pcr_state": "",  # empty string — should NOT be used
+    }
+
+    embed = create_watchlist_signal_embed(
+        symbol="AAPL",
+        iv_metrics=iv_m,
+        pcr_data=pcr_data_with_empty_state,
+    )
+    assert embed is not None
+    assert embed.description is not None
+    # volume_pcr_state="" should not appear; numeric branch should activate
+    assert "🐂 中性偏多/看漲主導" in embed.description
+    assert "⚖️ 籌碼結構中性" in embed.description
+
+
+def test_pcr_state_valid_string_is_used() -> None:
+    """pcr_dict 中有效的 volume_pcr_state 應直接使用。"""
+    from models.quant import IVMetrics
+
+    iv_m = IVMetrics(
+        symbol="MSFT",
+        current_iv=0.20,
+        iv_rank=55.0,
+        iv_percentile=60.0,
+        expected_move_weekly=3.0,
+        iv_status="Normal",
+        iv_source="LIVE_IV",
+    )
+    pcr_data_with_custom_state = {
+        "volume_pcr": 0.95,
+        "volume_pcr_state": "🔵 自訂狀態標籤",
+        "oi_pcr": 1.10,
+        "oi_pcr_state": "🟣 OI 自訂狀態",
+    }
+
+    embed = create_watchlist_signal_embed(
+        symbol="MSFT",
+        iv_metrics=iv_m,
+        pcr_data=pcr_data_with_custom_state,
+    )
+    assert embed is not None
+    assert embed.description is not None
+    assert "🔵 自訂狀態標籤" in embed.description
+    assert "🟣 OI 自訂狀態" in embed.description

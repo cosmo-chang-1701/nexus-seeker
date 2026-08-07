@@ -946,9 +946,13 @@ class IntradayScanPipeline:
             holding_row = user_holdings.get(evaluation.metrics.symbol.upper())
         holding_quantity = None
         holding_avg_cost = None
+        holding_pnl_pct = None
         if holding_row is not None and float(holding_row.get("quantity", 0.0)) > 0.0:
             holding_quantity = float(holding_row["quantity"])
             holding_avg_cost = float(holding_row.get("avg_cost", 0.0))
+            if holding_avg_cost > 0.0:
+                current_px = evaluation.metrics.current_price
+                holding_pnl_pct = (current_px - holding_avg_cost) / holding_avg_cost
 
         base_capital = float(
             getattr(
@@ -1062,6 +1066,7 @@ class IntradayScanPipeline:
             has_position=has_position,
             holding_quantity=holding_quantity,
             holding_avg_cost=holding_avg_cost,
+            holding_pnl_pct=holding_pnl_pct,
             suitable_buy_price=signals.get("suitable_buy_price"),
             suitable_buy_shares=signals.get("suitable_buy_shares"),
             suitable_sell_price=signals.get("suitable_sell_price"),

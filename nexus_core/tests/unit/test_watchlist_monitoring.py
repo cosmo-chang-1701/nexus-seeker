@@ -596,3 +596,149 @@ def test_rule5_support_distance_formula_correctness() -> None:
     # distance = (108.99 - 49.60) / 108.99 = 0.544912...
     dist = metrics.distance_to_absolute_support
     assert abs(dist - 0.5449) < 0.001
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# calculate_dynamic_trading_signals 欄位驗算測試
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_buy_shares_zero_div_protection() -> None:
+    """suitable_buy_price 極小值或邊界不應觸發 ZeroDivisionError，shares 應為 0。"""
+    from market_analysis.signal_calculator import calculate_dynamic_trading_signals
+    from models.schemas import WatchlistTacticalPlan
+
+    # 建構一組會讓 buy_price_phase3 接近 0 的 metrics
+    metrics = _sample_metrics(
+        current_price=0.01,
+        buy_price_phase1=0.001,
+        buy_price_phase2=0.0005,
+        buy_price_phase3=0.00001,
+        rsi_14=50.0,
+        option_skew=0.0,
+    )
+    tactical = WatchlistTacticalPlan(
+        scenario="premium-harvest",
+        sddm_route="SPEAR",
+        action_guideline="Normal",
+        dynamic_grid_step=3.0,
+    )
+    result = calculate_dynamic_trading_signals(
+        metrics,
+        tactical,
+        has_position=False,
+        capital=10000.0,
+        risk_limit=15.0,
+    )
+    # 不應拋出異常，shares 應為非負整數
+    assert isinstance(result["suitable_buy_shares"], int)
+    assert result["suitable_buy_shares"] >= 0
+
+
+def test_buy_shares_normal_case() -> None:
+    """正常情況下 buy_shares 應大於 0 且符合 budget 計算邏輯。"""
+    from market_analysis.signal_calculator import calculate_dynamic_trading_signals
+    from models.schemas import WatchlistTacticalPlan
+
+    metrics = _sample_metrics(
+        current_price=132.0,
+        rsi_14=50.0,
+        option_skew=0.0,
+    )
+    tactical = WatchlistTacticalPlan(
+        scenario="premium-harvest",
+        sddm_route="SPEAR",
+        action_guideline="Normal",
+        dynamic_grid_step=3.0,
+    )
+    result = calculate_dynamic_trading_signals(
+        metrics,
+        tactical,
+        has_position=False,
+        capital=100000.0,
+        risk_limit=15.0,
+    )
+    assert result["suitable_buy_shares"] > 0
+    assert isinstance(result["suitable_buy_price"], float)
+    assert result["suitable_buy_price"] > 0.0
+
+
+def test_buy_shares_is_zero_in_crisis_mode() -> None:
+    """風控鎖定 (SHIELD 底牆破位) 時 shares 應強制為 0，且 buy_price 為字串說明。"""
+    from market_analysis.signal_calculator import calculate_dynamic_trading_signals
+    from models.schemas import WatchlistTacticalPlan
+
+    metrics = _sample_metrics(current_price=132.0, rsi_14=50.0)
+    tactical = WatchlistTacticalPlan(
+        scenario="wait",
+        sddm_route="SHIELD 網格防禦",
+        action_guideline="Crisis",
+        dynamic_grid_step=3.0,
+    )
+    result = calculate_dynamic_trading_signals(
+        metrics,
+        tactical,
+        has_position=False,
+        capital=100000.0,
+        risk_limit=15.0,
+    )
+    assert result["suitable_buy_shares"] == 0
+    assert isinstance(result["suitable_buy_price"], str)
+    assert "風控鎖定" in result["suitable_buy_price"]
+
+
+def test_sell_shares_25pct_normal_rsi() -> None:
+    """RSI 常態時 (40 < rsi < 60)，sell_shares 應為持倉的 25%。"""
+    from market_analysis.signal_calculator import calculate_dynamic_trading_signals
+    from models.schemas import WatchlistTacticalPlan
+
+    metrics = _sample_metrics(
+        current_price=140.0,
+        rsi_14=55.0,
+        option_skew=0.0,
+        sell_price_phase1=136.0,
+        sell_price_phase2=142.0,
+        sell_price_phase3=148.0,
+    )
+    tactical = WatchlistTacticalPlan(
+        scenario="premium-harvest",
+        sddm_route="SPEAR",
+        action_guideline="Normal",
+        dynamic_grid_step=3.0,
+    )
+    result = calculate_dynamic_trading_signals(
+        metrics,
+        tactical,
+        has_position=True,
+        holding_quantity=100.0,
+        holding_avg_cost=130.0,
+        capital=100000.0,
+        risk_limit=15.0,
+    )
+    # 25% of 100 = 25
+    assert result["suitable_sell_shares"] == 25
+
+
+def test_sell_shares_hard_hedge_full_exit() -> None:
+    """硬避險模式下 sell_shares 應為全部持倉。"""
+    from market_analysis.signal_calculator import calculate_dynamic_trading_signals
+    from models.schemas import WatchlistTacticalPlan
+
+    metrics = _sample_metrics(current_price=100.0, rsi_14=50.0)
+    tactical = WatchlistTacticalPlan(
+        scenario="hard-hedge",
+        sddm_route="SHIELD",
+        action_guideline="Hard hedge",
+        dynamic_grid_step=3.0,
+    )
+    result = calculate_dynamic_trading_signals(
+        metrics,
+        tactical,
+        has_position=True,
+        holding_quantity=200.0,
+        holding_avg_cost=110.0,
+        capital=100000.0,
+        risk_limit=15.0,
+    )
+    assert result["suitable_sell_shares"] == 200
+    assert "硬避險" in result["sell_rationale"] or "Hard" in result["sell_rationale"]
