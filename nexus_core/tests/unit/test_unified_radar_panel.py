@@ -373,3 +373,72 @@ async def test_execute_unified_scan_magnetic_filters(  # type: ignore
                     filtered_results = mock_builder.call_args.args[0]
                     assert len(filtered_results) == 1
                     assert filtered_results[0]["symbol"] == "AAPL"
+
+
+@pytest.mark.asyncio
+async def test_batch_scan_alpha_filters_and_pagination(
+    mock_bot: Any, mock_interaction: Any
+) -> None:  # type: ignore
+    """
+    測試:
+    1. Alpha 訊號 (TDP, UOA) 正確過濾標的。
+    2. 當符合條件的標的超過 10 個時，cog 能夠正確迭代 embeds 列表並進行多次 followup.send，
+       成功繞過 Discord 長度限制。
+    """
+    cog = UnifiedTerminalCog(mock_bot)
+
+    state = {
+        "scope": "WATCHLIST",
+        "quant_filters": ["tdp_mode", "uoa_mode"],
+        "params": {},
+        "selected_tag": None,
+    }
+
+    # 模擬 15 檔標的資料，前 12 檔符合 Alpha 條件
+    async def mock_fetch_sym(sym: str) -> dict[str, Any]:
+        idx = int(sym.replace("SYM_", ""))
+        is_valid = idx <= 12
+        return {
+            "symbol": sym,
+            "quote": {"c": 90.0 if is_valid else 110.0},
+            "ma20": 100.0,
+            "max_pain": {"max_pain": 100.0},
+            "dp_poc": 100.0,
+            "uoa": [{"trade_type": "SWEEP", "delta": 1.5 if is_valid else 0.5}],
+            "skew": -0.1,  # 符合 dark_pool_skew_floor (-0.2)
+        }
+
+    cog._fetch_sym_radar_data = mock_fetch_sym  # type: ignore
+
+    with patch("cogs.unified_terminal.cog.asyncio.to_thread") as mock_thread:
+        # 模擬 WATCHLIST 有 15 檔
+
+        def mock_to_thread_side_effect(func: Any, *args: Any, **kwargs: Any):  # type: ignore
+            if "get_user_watchlist" in func.__name__:
+                return [[f"SYM_{i}"] for i in range(1, 16)]
+            return []
+
+        mock_thread.side_effect = mock_to_thread_side_effect
+
+        with patch("cogs.unified_terminal.cog.build_radar_scan_embed") as mock_builder:
+            mock_builder.return_value = [
+                discord.Embed(title="Radar Scan (第 1/2 頁)"),
+                discord.Embed(title="Radar Scan (第 2/2 頁)"),
+            ]
+
+            with patch("cogs.unified_terminal.cog.BatchScanView") as MockView:
+                MockView.return_value = discord.ui.View()
+                await cog.execute_unified_scan(mock_interaction, state, 12345)
+
+                mock_builder.assert_called_once()
+                filtered_results = mock_builder.call_args.args[0]
+                assert len(filtered_results) == 12
+                assert filtered_results[0]["symbol"] == "SYM_1"
+
+                assert mock_interaction.followup.send.call_count == 2
+
+                call_1 = mock_interaction.followup.send.call_args_list[0]
+                assert call_1.kwargs["embed"].title == "Radar Scan (第 1/2 頁)"
+
+                call_2 = mock_interaction.followup.send.call_args_list[1]
+                assert call_2.kwargs["embed"].title == "Radar Scan (第 2/2 頁)"
