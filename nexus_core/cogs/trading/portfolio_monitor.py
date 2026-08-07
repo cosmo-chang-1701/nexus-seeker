@@ -81,6 +81,16 @@ def _get_cached_symbol_metrics(sym: str) -> dict:  # type: ignore
         row = cursor.fetchone()
         if row and row[0]:
             res["skew"] = float(row[0])
+
+        cursor.execute("SELECT value FROM kv_cache WHERE key = ?", (f"uoa_{sym}",))
+        row = cursor.fetchone()
+        if row and row[0]:
+            try:
+                uoa_list = json.loads(row[0])
+                if uoa_list and len(uoa_list) > 0:
+                    res["is_uoa_sweep"] = True
+            except Exception:
+                pass
     except Exception:
         pass
     finally:

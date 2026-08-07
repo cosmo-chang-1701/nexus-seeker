@@ -85,6 +85,7 @@ class DynamicRolloverEngine:
         return {
             "final_action": final_action,
             "final_target": final_target,
+            "options_strategy": options_strategy,
             "markdown_report": markdown_report.strip(),
         }
 
@@ -318,7 +319,7 @@ class DynamicRolloverEngine:
                             "sell_ratio": 1.0,
                             "target_core": report["final_target"],
                             "reason": report["markdown_report"],
-                            "suggested_strategy": "N/A",
+                            "suggested_strategy": report["options_strategy"],
                         }
                     )
                     continue  # 已經100%撤退，不需進行後續常規再平衡
@@ -350,7 +351,7 @@ class DynamicRolloverEngine:
                             else 1.0,
                             "target_core": report["final_target"],
                             "reason": report["markdown_report"],
-                            "suggested_strategy": "N/A",
+                            "suggested_strategy": report["options_strategy"],
                         }
                     )
 

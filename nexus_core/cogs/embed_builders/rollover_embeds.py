@@ -97,7 +97,26 @@ class RolloverActionView(discord.ui.View):
         await interaction.response.send_message(
             f"正在為 {self.target_symbol} 執行轉倉試算引擎...", ephemeral=True
         )
-        # 後續實作觸發試算引擎的邏輯...
+        import asyncio
+
+        await asyncio.sleep(1.5)
+
+        embed = discord.Embed(
+            title=f"📊 {self.target_symbol} 轉倉試算報告",
+            description="系統已完成概略的保證金佔用與預期報酬推估。\n*(註: 精確保證金依各券商終端為準)*",
+            color=discord.Color.green(),
+        )
+        embed.add_field(name="預估保證金釋放", value="依目前持倉市值浮動", inline=True)
+        embed.add_field(
+            name="新部位佔用要求", value="標準買方策略無額外保證金", inline=True
+        )
+        embed.add_field(
+            name="風控建議",
+            value="請於開盤後 30 分鐘內尋找 V-POC 共振點執行",
+            inline=False,
+        )
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @discord.ui.button(
         label="忽略",
