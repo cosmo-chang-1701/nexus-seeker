@@ -223,6 +223,38 @@ async def fetch_symbol_gex_metrics(symbol: str) -> dict:
                 data = res.json()
                 if data.get("status") == "success":
                     result_data = data.get("data", fallback)
+
+                    # 檢查 API 傳回的 gex_profile 是否為空或全為 0
+                    gex_prof = result_data.get("gex_profile", {})
+                    is_valid_profile = False
+                    if isinstance(gex_prof, dict) and gex_prof:
+                        for v in gex_prof.values():
+                            try:
+                                if abs(float(v)) > 0.0001:
+                                    is_valid_profile = True
+                                    break
+                            except Exception:
+                                pass
+
+                    # 若 API 傳回的 profile 無效 (盤前未刷新)，且我們有舊快取
+                    if not is_valid_profile and stale_cached_data is not None:
+                        stale_prof = stale_cached_data.get("gex_profile", {})
+                        stale_valid = False
+                        if isinstance(stale_prof, dict) and stale_prof:
+                            for v in stale_prof.values():
+                                try:
+                                    if abs(float(v)) > 0.0001:
+                                        stale_valid = True
+                                        break
+                                except Exception:
+                                    pass
+                        if stale_valid:
+                            logger.info(
+                                f"[{symbol}] API 回傳空 GEX 曝險，自動延展並使用上一份有效歷史快取"
+                            )
+                            result_data = stale_cached_data
+                            result_data["_is_stale_cache"] = True
+
                     try:
                         await save_kv_cache(
                             cache_key, {"data": result_data, "timestamp": time.time()}
