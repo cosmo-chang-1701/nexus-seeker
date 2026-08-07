@@ -17,6 +17,13 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 TRADING_MODULES: Dict[str, Dict[str, Any]] = {
+    "system": {
+        "title": "🔐 帳戶與系統安全層級",
+        "description": "專注於物理防禦，如保證金警戒與 API 連線狀態。",
+        "items": {
+            "margin_and_api_alert": "🚨 警報：保證金水位警戒與 API 斷線 (Critical)",
+        },
+    },
     "portfolio": {
         "title": "🛡️ 部位管理與執行風控",
         "description": "專注於買賣點的動態對齊、持倉防禦與物理狀態管理。",
@@ -52,6 +59,7 @@ TRADING_MODULES: Dict[str, Dict[str, Any]] = {
             "profit_lock_alert": "🚨 警報：DITM 凸性防護與獲利鎖定",
             "option_defense_alert": "🔄 警報：動態轉倉、再平衡與結算防護",
             "volatility_risk_alert": "🛡️ 警報：重大事件即時防護",
+            "vix_tail_risk_alert": "🦇 雷達：VIX 期限結構倒掛與黑天鵝預警",
         },
     },
     "briefings": {
@@ -69,6 +77,7 @@ TRADING_MODULES: Dict[str, Dict[str, Any]] = {
         "description": "專注於 Polymarket 巨鯨動向監控與 AI 預測分析。",
         "items": {
             "polymarket_whale_alert": "🐳 警報：巨鯨交易異動與 AI 監控",
+            "polymarket_prob_shift_alert": "⚡ 警報：Polymarket 預測機率閃崩 / 暴拉 (Delta 突變)",
         },
         "advanced_params": {
             "polymarket_threshold": "🐋 設定：巨鯨監控門檻",
@@ -251,6 +260,16 @@ class NotificationSettingsView(discord.ui.View):
                     ],
                 )
             )
+            prob_alert = settings.get("polymarket_prob_shift_alert", True)
+            polymarket_options.append(
+                discord.SelectOption(
+                    label=module_items["polymarket_prob_shift_alert"],
+                    value="polymarket_prob_shift_alert",
+                    description=f"目前: {'🟢 開啟' if prob_alert else '🔴 關閉'} | 切換開關"[
+                        :100
+                    ],
+                )
+            )
 
             pm_select = discord.ui.Select(  # type: ignore
                 placeholder="🐳 設定 Polymarket 警報...",
@@ -385,8 +404,12 @@ class NotificationSettingsView(discord.ui.View):
             lines = []
             if mod_key == "polymarket":
                 pm_alerts = settings.get("polymarket_whale_alert", True)
+                pm_prob_alerts = settings.get("polymarket_prob_shift_alert", True)
                 lines.append(
                     f"* {mod_data['items']['polymarket_whale_alert']}: **{'🟢 開啟' if pm_alerts else '🔴 關閉'}**"
+                )
+                lines.append(
+                    f"* {mod_data['items']['polymarket_prob_shift_alert']}: **{'🟢 開啟' if pm_prob_alerts else '🔴 關閉'}**"
                 )
                 lines.append(
                     f"* {mod_data['advanced_params']['polymarket_threshold']}: **{'🟢 $' + f'{ctx.polymarket_threshold:,.0f}' if ctx.polymarket_threshold > 0 else '🔴 關閉'}**"

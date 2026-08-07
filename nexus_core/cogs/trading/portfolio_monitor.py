@@ -130,6 +130,15 @@ class PortfolioMonitorCog(commands.Cog):
                         embed = create_gamma_fragility_embed(event)
                         await self.bot.queue_dm(uid, embed=embed)
 
+                elif event["type"] == "MARGIN_API":
+                    if database.is_notification_enabled(uid, "margin_and_api_alert"):
+                        from cogs.embed_builders.alert_embeds import (
+                            create_margin_api_alert_embed,
+                        )
+
+                        embed = create_margin_api_alert_embed(event["ratio"])
+                        await self.bot.queue_dm(uid, embed=embed)
+
             # 🚀 物理死鎖解除與備兌建單指引主動推播
             try:
                 from database.holdings import get_all_holdings

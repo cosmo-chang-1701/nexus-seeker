@@ -144,6 +144,36 @@ async def test_notification_settings_polymarket_toggle(db_conn: Any):  # type: i
 
 
 @pytest.mark.asyncio
+async def test_notification_settings_polymarket_prob_shift_toggle(db_conn: Any):  # type: ignore
+    """測試在通知中心點選 ⚡ Polymarket 預測機率閃崩 / 暴拉，是否能成功切換其通知狀態"""
+    from cogs.terminal import NotificationSettingsView
+
+    user_id = 999445
+    view = NotificationSettingsView(user_id)
+
+    # 1. 預設是開啟 (True)
+    assert is_notification_enabled(user_id, "polymarket_prob_shift_alert") is True
+
+    # 先模擬選擇 polymarket 類別
+    mock_interaction_cat = AsyncMock()
+    mock_interaction_cat.data = {"values": ["polymarket"]}
+    mock_interaction_cat.response.edit_message = AsyncMock()
+    await view.on_category_select(mock_interaction_cat)
+
+    # 2. 模擬選擇 "polymarket_prob_shift_alert"
+    mock_interaction = AsyncMock()
+    mock_interaction.user.id = user_id
+    mock_interaction.data = {"values": ["polymarket_prob_shift_alert"]}
+    mock_interaction.response.edit_message = AsyncMock()
+
+    await view.on_select_callback(mock_interaction)
+
+    # 驗證狀態已成功更新為 False
+    assert is_notification_enabled(user_id, "polymarket_prob_shift_alert") is False
+    mock_interaction.response.edit_message.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_notification_settings_polymarket_use_llm_toggle(db_conn: Any):  # type: ignore
     """測試在通知中心切換 Polymarket AI 分析 (Polymarket Settings)，是否能成功更新資料庫"""
     from cogs.terminal import NotificationSettingsView

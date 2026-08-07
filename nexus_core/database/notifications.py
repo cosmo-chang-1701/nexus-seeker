@@ -114,11 +114,14 @@ ALL_NOTIFICATION_KEYS = [
     "volatility_alert",
     "volatility_risk_alert",
     "polymarket_whale_alert",
+    "polymarket_prob_shift_alert",
     "deadlock_recovery_alert",
+    "margin_and_api_alert",
     # 自選批次量化雷達 (Batch Radar)
     "radar_macro_edge",
     "radar_alpha_signals",
     "radar_risk_defenses",
+    "vix_tail_risk_alert",
 ]
 
 # 預設通知狀態：大多數維持預設開啟

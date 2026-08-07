@@ -958,6 +958,22 @@ class TradingService:
                     }
                 )
 
+            # 1.5 檢查保證金水位與 API 連線狀態
+            # [NRO Simulated] 實體券商 API (如 IBKR / Schwab) 可在此掛載 Ping 與 Margin Check
+            simulated_margin_ratio = min(
+                1.0, abs(user_ctx.total_weighted_delta) * 100 / (user_ctx.capital + 1)
+            )
+            api_disconnected = False
+            if simulated_margin_ratio > 0.85 or api_disconnected:
+                results.append(
+                    {
+                        "uid": uid,
+                        "type": "MARGIN_API",
+                        "ratio": simulated_margin_ratio,
+                        "api_status": not api_disconnected,
+                    }
+                )
+
             # 2. 檢查各部位 Profit Lock (DITM)
             # row: (symbol, opt_type, strike, expiry, entry_price, quantity, stock_cost, weighted_delta, theta, gamma, trade_category)
             for row in rows:

@@ -673,5 +673,71 @@ def create_scenario_alert_embed(
     embed.add_field(name="🛠️ 最優交易工具", value=tool, inline=False)
     embed.add_field(name="⚔️ 資金處置與加減碼指令", value=f"└─ {action}", inline=False)
     embed.set_footer(text="Nexus Risk Optimizer | 戰場情境決策矩陣 (v2.0)")
+    return embed
 
+
+def create_margin_api_alert_embed(ratio: float) -> discord.Embed:
+    """建立保證金警戒與 API 斷線警告 Embed。"""
+    embed = NexusEmbed(
+        title="🚨 警報：保證金水位警戒與 API 斷線",
+        description="偵測到帳戶保證金水位異常或券商 API 連線中斷，請立即確認！",
+        color=discord.Color.dark_red(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.add_field(name="目前保證金使用率", value=f"`{ratio*100:.2f}%`", inline=True)
+    embed.add_field(
+        name="優先指令",
+        value="🛡️ **立即降低曝險或補足保證金，避免面臨平倉 (Margin Call)**",
+        inline=False,
+    )
+    embed.set_footer(text="System & Margin Guard | Nexus Seeker")
+    return embed
+
+
+def create_vix_tail_risk_embed(vts_ratio: float, vix: float) -> discord.Embed:
+    """建立 VIX 期限結構倒掛與黑天鵝預警 Embed。"""
+    embed = NexusEmbed(
+        title="🦇 雷達：VIX 期限結構倒掛與黑天鵝預警",
+        description="偵測到 VIX 期限結構嚴重倒掛或 VIX 數值飆升，市場陷入極端恐慌。",
+        color=discord.Color.purple(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.add_field(
+        name="VIX 期限結構比 (VTS)", value=f"`{vts_ratio:.2f}`", inline=True
+    )
+    embed.add_field(name="目前 VIX", value=f"`{vix:.1f}`", inline=True)
+    embed.add_field(
+        name="優先指令",
+        value="🛡️ **全面啟動尾部風險防禦 (Tail Risk Hedging) 並縮減部位規模**",
+        inline=False,
+    )
+    embed.set_footer(text="Macro Risk Intelligence | Nexus Seeker")
+    return embed
+
+
+def create_polymarket_prob_shift_embed(
+    market: str, old_prob: float, new_prob: float
+) -> discord.Embed:
+    """建立 Polymarket 預測機率閃崩/暴拉警報 Embed。"""
+    delta = (new_prob - old_prob) * 100
+    emoji = "📈" if delta > 0 else "📉"
+    embed = NexusEmbed(
+        title="⚡ 警報：Polymarket 預測機率閃崩 / 暴拉",
+        description=f"偵測到 Polymarket 特定事件預測機率發生 {emoji} **劇烈波動** (> 15%)，Delta 突變！",
+        color=discord.Color.orange(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.add_field(name="市場名稱", value=f"**{market}**", inline=False)
+    embed.add_field(
+        name="機率變化",
+        value=f"`{old_prob*100:.1f}%` ➔ `{new_prob*100:.1f}%`",
+        inline=True,
+    )
+    embed.add_field(name="Delta", value=f"`{delta:+.1f}%`", inline=True)
+    embed.add_field(
+        name="可能原因",
+        value="📰 **突發新聞、重大事件落地、或大戶倒貨重新定價**",
+        inline=False,
+    )
+    embed.set_footer(text="Polymarket AI Monitor | Nexus Seeker")
     return embed

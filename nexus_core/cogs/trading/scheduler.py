@@ -144,6 +144,20 @@ class SchedulerCog(commands.Cog):
                 f"US10Y: {tnx_val}, WTI: {wti_val}, VTS: {vts_val}, "
                 "DarkPool DIX & Core Metrics updated"
             )
+
+            # 🚨 偵測 VIX 期限結構倒掛與黑天鵝預警
+            if vix_val >= 30.0 or vts_val >= 1.0:
+                from database import get_all_user_ids, is_notification_enabled
+                from cogs.embed_builders.alert_embeds import create_vix_tail_risk_embed
+
+                uids = get_all_user_ids()
+                for uid in uids:
+                    if is_notification_enabled(uid, "vix_tail_risk_alert"):
+                        embed = create_vix_tail_risk_embed(
+                            vts_ratio=vts_val, vix=vix_val
+                        )
+                        await self.bot.queue_dm(uid, embed=embed)
+
         except Exception as e:
             logger.error(f"🕒 [盤中總經快取更新失敗]: {e}")
 

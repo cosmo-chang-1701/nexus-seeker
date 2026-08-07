@@ -9,7 +9,7 @@ from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 
 from cogs.embed_builder import create_polymarket_whale_alert_embed
-from database.user_settings import get_full_user_context, get_all_user_ids
+from database.user_settings import get_full_user_context
 from services.llm_service import generate_polymarket_summary, classify_uoa_intent
 from market_analysis.sentiment_engine import SentimentEngine
 
@@ -108,6 +108,7 @@ class PolymarketService:
             dict[str, Any]
         ] = []  # 儲存目前活躍市場的詳細資訊  # type: ignore
         self._order_books = BoundedCache(max_size=MAX_CACHE_SIZE)
+        self._last_prices = BoundedCache(max_size=MAX_CACHE_SIZE)
         self._monitor_task = None
         self._ping_task = None
         self._cleanup_task = None
@@ -593,6 +594,36 @@ class PolymarketService:
 
             if usd_value <= 0:
                 return
+
+            # 🚨 檢查 Probability Shift (>15% Delta)
+            old_price = self._last_prices.get(asset_id)
+            if old_price is not None and abs(price - old_price) > 0.15:
+                # 取得問題與結果名稱
+                market_desc = None
+                for m in self._active_markets:
+                    for t in m.get("tokens", []):
+                        if t.get("token_id") == asset_id:
+                            market_desc = f"{m.get('question')} - {t.get('outcome')}"
+                            break
+                    if market_desc:
+                        break
+
+                if market_desc:
+                    from database import get_all_user_ids, is_notification_enabled
+                    from cogs.embed_builders.alert_embeds import (
+                        create_polymarket_prob_shift_embed,
+                    )
+
+                    uids = get_all_user_ids()
+                    for uid in uids:
+                        if is_notification_enabled(uid, "polymarket_prob_shift_alert"):
+                            embed = create_polymarket_prob_shift_embed(
+                                market_desc, old_price, price
+                            )
+                            # 使用 asyncio.create_task 避免阻塞
+                            asyncio.create_task(self.bot.queue_dm(uid, embed=embed))
+
+            self._last_prices[asset_id] = price
 
             # 1. 計算動態門檻 (基於 2% 滑價所需金額)
             ob = self._order_books.get(asset_id)
