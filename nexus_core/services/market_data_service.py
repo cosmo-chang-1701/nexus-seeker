@@ -260,6 +260,13 @@ async def get_yfinance_quote(symbol: str) -> Dict[str, Any]:
         df = await _safe_yf_history(ticker, period="2d")
         if df is None:
             logger.warning(f"[{yf_symbol}] yfinance quote 回傳資料為空")
+            import yfinance as yf_module
+
+            if hasattr(yf_module, "shared") and hasattr(yf_module.shared, "_ERRORS"):
+                if yf_symbol in yf_module.shared._ERRORS:
+                    err_msg = str(yf_module.shared._ERRORS[yf_symbol]).lower()
+                    if "no data found" in err_msg or "delisted" in err_msg:
+                        raise ValueError("SYMBOL_NOT_FOUND")
             return {}
 
         latest = df.iloc[-1]
@@ -280,6 +287,8 @@ async def get_yfinance_quote(symbol: str) -> Dict[str, Any]:
             "t": int(df.index[-1].timestamp()),
         }
     except Exception as e:
+        if "SYMBOL_NOT_FOUND" in str(e):
+            raise
         logger.error(f"[{yf_symbol}] yfinance quote 失敗: {e}")
         return {}
 
@@ -310,10 +319,18 @@ async def get_quote(symbol: str) -> Dict[str, Any]:
                 return data
 
             # 若 Finnhub 回傳無效或報權限錯誤 (c=0 有可能是權限問題或標的不存在)
+            # 快速驗證標的是否存在，避免在無效標的上耗費 yfinance 的長時間請求
+            lookup = await _execute_api_call(client.symbol_lookup, symbol)
+            if lookup and lookup.get("count", 0) == 0:
+                logger.warning(f"[{symbol}] Finnhub 確認標的不存在，直接中斷")
+                raise ValueError("SYMBOL_NOT_FOUND")
+
             # 嘗試作為 fallback 轉向 yfinance
             logger.warning(f"[{symbol}] Finnhub quote 無效，嘗試 yfinance fallback")
             return await get_yfinance_quote(symbol)
         except Exception as e:
+            if "SYMBOL_NOT_FOUND" in str(e):
+                raise
             # 任何 Finnhub 錯誤（包含限流 429、權限問題等）皆強制轉向 yfinance fallback，避免回傳 {} 導致下游算式崩潰
             logger.warning(
                 f"[{symbol}] Finnhub quote 失敗: {e}，強制轉向 yfinance fallback"
@@ -345,6 +362,9 @@ async def validate_symbol(symbol: str) -> bool:
         if quote and quote.get("c", 0) > 0:
             return True
     except Exception as e:
+        if "SYMBOL_NOT_FOUND" in str(e):
+            logger.warning(f"[{symbol}] API 回傳標的不存在，直接中斷後續動作")
+            return False
         logger.warning(f"validate_symbol 獲取報價異常: {e}")
 
     # 3. 後備機制 A：當 API 因限流、盤前/週末或網路波動而失效時，比對本地資料庫中是否已有該標的之運作紀錄
