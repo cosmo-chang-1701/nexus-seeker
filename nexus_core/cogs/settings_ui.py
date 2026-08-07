@@ -42,7 +42,8 @@ TRADING_MODULES: Dict[str, Dict[str, Any]] = {
         "items": {
             "hb_uoa": "🔎 心跳：異常大單穿透 (UOA)",
             "radar_alpha_signals": "🎯 雷達：期權 Alpha 與異常訊號",
-            "ddp_cheap_vol_alert": "🌌 警報：Nexus 戴維斯雙擊",
+            "ddp_alert": "🌌 警報：Nexus 戴維斯雙擊 (基本面估值)",
+            "volatility_alert": "🌌 警報：Nexus 波動率優勢 (廉價選擇權)",
         },
     },
     "defense": {

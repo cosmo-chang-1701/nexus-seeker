@@ -324,7 +324,7 @@ def test_create_volatility_embed() -> None:
         "runway_impact": 2,
     }
     embed = create_volatility_embed(report)
-    assert "警報：Nexus 戴維斯雙擊 (波動率優勢) | AAPL" in embed.title  # type: ignore
+    assert "警報：Nexus 波動率優勢 (廉價選擇權) | AAPL" in embed.title  # type: ignore
 
     eval_val = embed.fields[0].value
     assert "評估指標" in eval_val  # type: ignore

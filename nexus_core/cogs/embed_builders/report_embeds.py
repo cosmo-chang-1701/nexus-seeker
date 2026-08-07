@@ -591,7 +591,7 @@ def create_volatility_embed(report: Dict[str, Any]) -> discord.Embed:
     color = 0x00FF00 if status == "波動率極低" else 0xFFFF00
 
     embed = NexusEmbed(
-        title=f"🌌 警報：Nexus 戴維斯雙擊 (波動率優勢) | {sym}",
+        title=f"🌌 警報：Nexus 波動率優勢 (廉價選擇權) | {sym}",
         color=color,
         timestamp=datetime.now(timezone.utc),
     )
