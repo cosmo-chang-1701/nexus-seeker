@@ -394,7 +394,7 @@ Configurations are strictly segregated into two functional areas to maximize sep
   - `enable_vtr`, `enable_psq_watchlist`, `monthly_expense`, `tax_reserve_rate`, and `cash_reserve`.
   - Also integrates the **Watchlist Tagging System**: Allows users to attach custom categorization tags (e.g., `TECH`, `CORE`) to watchlist assets via an interactive dropdown and modal (`ui/watchlist_tags.py`). This tagging engine is also fully exposed in the `/list_watch` command output via a localized "🏷️ 原地編輯標籤" shortcut button, enabling direct in-place editing that automatically rebuilds and replaces the original Discord view for a seamless, SPA-like experience.
 - **Notification Preferences (`/notif_settings`)**: Manages individual toggles stored in a key-value style `user_notification_settings` table (designed with composite primary key `(user_id, notification_key)` for infinite schema-less extensibility). Redesigned as a **Trader-centric Tactical Dashboard**.
-  - **Dynamic Two-Tier Architecture**: To bypass Discord's 5-row component limits, the UI uses a modular structure. Row 0 features a Category Selector (`portfolio`, `radar`, `alpha`, `defense`, `briefings`, `polymarket`), which dynamically reloads the corresponding specific toggles into Row 1 (`module_select`).
+  - **Dynamic Two-Tier Architecture**: To bypass Discord's 5-row component limits, the UI uses a modular structure. Row 0 features a Category Selector (`system`, `portfolio`, `macro`, `alpha`, `defense`, `briefings`, `polymarket`), which dynamically reloads the corresponding specific toggles into Row 1 (`module_select`).
   - **Radar Insight Coupling**: Filter settings such as `radar_macro_edge`, `radar_alpha_signals`, and `radar_risk_defenses` directly control the verbosity and warning thresholds rendered in the `/x` Batch Radar terminal and heartbeat embeds.
   - **Granular Heartbeat Toggles**: The watchlist heartbeat is divided into modular switches (`hb_options_structure`, `hb_execution_risk`, etc.), allowing users to completely customize which analysis blocks are rendered in their 30-minute updates. Order Telemetry Alignment is decoupled into its own independent toggle (`order_telemetry_alignment_alert`).
   - **Polymarket Settings Integration**: Polymarket monitoring preferences (whale alert toggler `polymarket_whale_alert`, threshold `polymarket_threshold`, AI analysis switch `polymarket_use_llm`, and slippage threshold `polymarket_slippage`) are cleanly housed under their dedicated Category.
@@ -421,7 +421,7 @@ To adhere to output centralization rules and prevent `test_output_centralization
 - Neither cogs, views, nor modals construct `discord.Embed` objects directly.
 - The entire presentation layer is centralized under `cogs/embed_builders/` (with `embed_builder.py` acting purely as a backwards-compatibility shim):
   - `create_account_settings_embed(details_list: list[str]) -> discord.Embed`
-  - `create_notification_settings_embed(scheduled_list: list[str], realtime_list: list[str], polymarket_list: list[str]) -> discord.Embed`
+  - `create_notification_settings_embed(module_fields: list[tuple[str, str]]) -> discord.Embed`
 
 ---
 
