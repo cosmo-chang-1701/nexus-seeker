@@ -505,6 +505,26 @@ def create_rehedge_embed(rehedge_info: Dict[str, Any]) -> discord.Embed:
     return embed
 
 
+def _draw_ascii_progress_bar(
+    current: float, min_val: float, max_val: float, length: int = 12
+) -> str:
+    """繪製 ASCII 進度條，並處理超出邊界的防呆機制"""
+    if max_val <= min_val:
+        return f"Low [{'=' * length}] High"
+
+    clamped_curr = max(min_val, min(current, max_val))
+    ratio = (clamped_curr - min_val) / (max_val - min_val)
+    pos = int(ratio * length)
+    pos = max(0, min(pos, length - 1))
+
+    bar = ["-"] * length
+    bar[pos] = "o"
+    for i in range(pos):
+        bar[i] = "="
+
+    return f"Low [{''.join(bar)}] High"
+
+
 def create_ddp_embed(report: Dict[str, Any]) -> discord.Embed:
     """建構 Davis Double Play (DDP) 預警 Embed"""
     sym = report["symbol"]
@@ -542,6 +562,14 @@ def create_ddp_embed(report: Dict[str, Any]) -> discord.Embed:
         f"{_pad_string('本益比估值回歸空間', widths[0])} | {_pad_string(upside_str, widths[1]).replace(upside_str, f'\033[0;32m{upside_str}\033[0m' if pe_upside >= 0 else f'\033[0;31m{upside_str}\033[0m')}"
     )
 
+    # ASCII 進度條
+    pe_min = pe_mean * 0.3 if pe_mean > 0 else 0
+    pe_max = pe_mean * 1.3 if pe_mean > 0 else curr_pe * 1.5
+    bar_str = _draw_ascii_progress_bar(curr_pe, pe_min, pe_max, 12)
+    ddp_lines.append(
+        f"{_pad_string('估值壓縮位階 (P/E Bar)', widths[0])} | {_pad_string(bar_str, widths[1])}"
+    )
+
     growth_str = f"{eps_growth:+.1f}%"
     ddp_lines.append(
         f"{_pad_string('預估 EPS 成長率', widths[0])} | {_pad_string(growth_str, widths[1]).replace(growth_str, f'\033[0;32m{growth_str}\033[0m' if eps_growth >= 0 else f'\033[0;31m{growth_str}\033[0m')}"
@@ -560,11 +588,18 @@ def create_ddp_embed(report: Dict[str, Any]) -> discord.Embed:
     embed.add_field(name="📊 DDP 量化指標", value="\n".join(ddp_lines), inline=False)
 
     # 邏輯解釋
+    has_margin = report.get("has_margin_bonus", False)
+    rvol = report.get("rvol", 0.0)
     logic_text = (
-        f"1. **盈餘動能**: YoY 成長率 `{eps_growth:.1f}%` 超過 15% 門檻。\n"
-        f"2. **估值壓縮**: 目前 P/E 處於 3 年歷史低位 (25% 分位數以下)。\n"
-        f"3. **前瞻預期**: Forward P/E `{report['forward_pe']:.2f}` 低於目前 TTM P/E。\n"
-        f"4. **動能確認**: 營收成長較前一週期加速。"
+        f"1. **盈餘動能**: 稀釋 EPS YoY 成長 `{eps_growth:.1f}%` > 15%。\n"
+        f"2. **估值壓縮**: 當前 P/E 低於 5 年歷史均值之 80% (或股價相對低位)。\n"
+        f"3. **前瞻預期**: Forward P/E `{report['forward_pe']:.2f}` < TTM P/E (或 OCF>0)。\n"
+        f"4. **動能確認**: 營收成長加速"
+        + (" `(+營業利益率升)`" if has_margin else "")
+        + "。\n"
+        f"5. **市場資金**: RVOL `{rvol:.2f}x`"
+        + (" `(動能點火)`" if rvol > 1.5 else " `(量能平穩)`")
+        + "。"
     )
     embed.add_field(name="🧐 量化篩選邏輯", value=logic_text, inline=False)
 
