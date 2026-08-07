@@ -68,7 +68,9 @@ TRADING_MODULES: Dict[str, Dict[str, Any]] = {
         "title": "🐳 Polymarket 巨鯨與 AI 監控",
         "description": "專注於 Polymarket 巨鯨動向監控與 AI 預測分析。",
         "items": {
-            "polymarket_whale_alert": "🐳 警報：巨鯨交易異動",
+            "polymarket_whale_alert": "🐳 警報：巨鯨交易異動與 AI 監控",
+        },
+        "advanced_params": {
             "polymarket_threshold": "🐋 設定：巨鯨監控門檻",
             "polymarket_use_llm": "🧠 設定：Polymarket AI 分析",
             "polymarket_slippage": "🌊 設定：Polymarket 滑價門檻",
@@ -249,40 +251,52 @@ class NotificationSettingsView(discord.ui.View):
                     ],
                 )
             )
-            polymarket_options.append(
-                discord.SelectOption(
-                    label=module_items["polymarket_threshold"],
-                    value="polymarket_threshold",
-                    description=f"目前: {'🟢 $' + f'{ctx.polymarket_threshold:,.0f}' if ctx.polymarket_threshold > 0 else '🔴 關閉'} | 設定門檻"[
-                        :100
-                    ],
-                )
-            )
-            polymarket_options.append(
-                discord.SelectOption(
-                    label=module_items["polymarket_use_llm"],
-                    value="polymarket_use_llm",
-                    description=f"目前: {'🟢 開啟' if ctx.polymarket_use_llm else '🔴 關閉'} | 切換開關"[
-                        :100
-                    ],
-                )
-            )
-            polymarket_options.append(
-                discord.SelectOption(
-                    label=module_items["polymarket_slippage"],
-                    value="polymarket_slippage",
-                    description=f"目前: {ctx.polymarket_slippage}% | 設定滑價"[:100],
-                )
-            )
 
             pm_select = discord.ui.Select(  # type: ignore
-                placeholder="🐳 設定 Polymarket 巨鯨與 AI 監控...",
+                placeholder="🐳 設定 Polymarket 警報...",
                 options=polymarket_options,
                 custom_id="select_polymarket",
                 row=1,
             )
             pm_select.callback = self.on_select_callback  # type: ignore
             self.add_item(pm_select)
+
+            advanced_items = TRADING_MODULES["polymarket"]["advanced_params"]
+            advanced_options = []
+            advanced_options.append(
+                discord.SelectOption(
+                    label=advanced_items["polymarket_threshold"],
+                    value="polymarket_threshold",
+                    description=f"目前: {'🟢 $' + f'{ctx.polymarket_threshold:,.0f}' if ctx.polymarket_threshold > 0 else '🔴 關閉'} | 設定門檻"[
+                        :100
+                    ],
+                )
+            )
+            advanced_options.append(
+                discord.SelectOption(
+                    label=advanced_items["polymarket_use_llm"],
+                    value="polymarket_use_llm",
+                    description=f"目前: {'🟢 開啟' if ctx.polymarket_use_llm else '🔴 關閉'} | 切換開關"[
+                        :100
+                    ],
+                )
+            )
+            advanced_options.append(
+                discord.SelectOption(
+                    label=advanced_items["polymarket_slippage"],
+                    value="polymarket_slippage",
+                    description=f"目前: {ctx.polymarket_slippage}% | 設定滑價"[:100],
+                )
+            )
+
+            pm_advanced_select = discord.ui.Select(  # type: ignore
+                placeholder="⚙️ 進階參數 (點擊展開)...",
+                options=advanced_options,
+                custom_id="select_polymarket_advanced",
+                row=2,
+            )
+            pm_advanced_select.callback = self.on_select_callback  # type: ignore
+            self.add_item(pm_advanced_select)
 
     async def on_category_select(self, interaction: discord.Interaction) -> Any:
         if not interaction.data or not isinstance(interaction.data, dict):
@@ -324,13 +338,17 @@ class NotificationSettingsView(discord.ui.View):
             current_val = getattr(ctx, key, 0.0)
             if key == "polymarket_threshold":
                 label, _, placeholder = (
-                    TRADING_MODULES["polymarket"]["items"]["polymarket_threshold"],
+                    TRADING_MODULES["polymarket"]["advanced_params"][
+                        "polymarket_threshold"
+                    ],
                     "Polymarket 巨鯨監控門檻 (USD, 0=關閉)",
                     "輸入大於等於 0 的金額",
                 )
             else:
                 label, _, placeholder = (
-                    TRADING_MODULES["polymarket"]["items"]["polymarket_slippage"],
+                    TRADING_MODULES["polymarket"]["advanced_params"][
+                        "polymarket_slippage"
+                    ],
                     "Polymarket 巨鯨判定目標滑價百分比 (0.1% - 10.0%)",
                     "輸入 0.1 - 10.0 之間的百分比",
                 )
@@ -371,13 +389,13 @@ class NotificationSettingsView(discord.ui.View):
                     f"* {mod_data['items']['polymarket_whale_alert']}: **{'🟢 開啟' if pm_alerts else '🔴 關閉'}**"
                 )
                 lines.append(
-                    f"* {mod_data['items']['polymarket_threshold']}: **{'🟢 $' + f'{ctx.polymarket_threshold:,.0f}' if ctx.polymarket_threshold > 0 else '🔴 關閉'}**"
+                    f"* {mod_data['advanced_params']['polymarket_threshold']}: **{'🟢 $' + f'{ctx.polymarket_threshold:,.0f}' if ctx.polymarket_threshold > 0 else '🔴 關閉'}**"
                 )
                 lines.append(
-                    f"* {mod_data['items']['polymarket_use_llm']}: **{'🟢 開啟' if ctx.polymarket_use_llm else '🔴 關閉'}**"
+                    f"* {mod_data['advanced_params']['polymarket_use_llm']}: **{'🟢 開啟' if ctx.polymarket_use_llm else '🔴 關閉'}**"
                 )
                 lines.append(
-                    f"* {mod_data['items']['polymarket_slippage']}: **`{ctx.polymarket_slippage}%`**"
+                    f"* {mod_data['advanced_params']['polymarket_slippage']}: **`{ctx.polymarket_slippage}%`**"
                 )
             else:
                 for item_key, item_label in mod_data["items"].items():
