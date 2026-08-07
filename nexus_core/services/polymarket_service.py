@@ -9,7 +9,8 @@ from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 
 from cogs.embed_builder import create_polymarket_whale_alert_embed
-from database.user_settings import get_full_user_context
+from database.user_settings import get_full_user_context, get_all_user_ids
+from database.notifications import is_notification_enabled
 from services.llm_service import generate_polymarket_summary, classify_uoa_intent
 from market_analysis.sentiment_engine import SentimentEngine
 
@@ -609,7 +610,6 @@ class PolymarketService:
                         break
 
                 if market_desc:
-                    from database import get_all_user_ids, is_notification_enabled
                     from cogs.embed_builders.alert_embeds import (
                         create_polymarket_prob_shift_embed,
                     )
