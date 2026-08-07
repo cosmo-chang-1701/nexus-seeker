@@ -635,9 +635,14 @@ def test_scenario_guidance_below_max_pain() -> None:
 @patch("database.market_cache.get_fundamental_cache")
 @patch("market_analysis.intraday_pipeline.build_enhanced_watchlist_metrics")
 @patch("market_analysis.index_microstructure.get_market_regime")
+@patch("market_analysis.index_microstructure.fetch_symbol_gex_metrics")
 async def test_global_defense_gate_blocks_bullish_signals(
-    mock_get_regime: AsyncMock, mock_build_metrics: AsyncMock, mock_get_fc: MagicMock
+    mock_fetch_gex: AsyncMock,
+    mock_get_regime: AsyncMock,
+    mock_build_metrics: AsyncMock,
+    mock_get_fc: MagicMock,
 ) -> None:
+    mock_fetch_gex.return_value = {"net_gex": 0.0, "call_wall": 0.0, "put_wall": 0.0}
     from market_analysis.intraday_pipeline import evaluate_watchlist_symbol
 
     from models.schemas import EnhancedWatchlistMetrics

@@ -426,14 +426,6 @@ async def validate_symbol(symbol: str) -> bool:
     except Exception as e:
         logger.error(f"validate_symbol 資料庫後備驗證失敗: {e}")
 
-    # 4. 後備機制 B：若 API 與資料庫皆查無紀錄（如新添加標的但遇到 API 故障），若符合典型美股/指數格式則放行容錯
-    clean_sym = symbol.lstrip("^")
-    if re.match(r"^[A-Z0-9.-]{1,6}$", clean_sym):
-        logger.warning(
-            f"[{symbol}] 報價失敗且資料庫無紀錄，但符合典型美股/指數格式，寬鬆放行"
-        )
-        return True
-
     return False
 
 

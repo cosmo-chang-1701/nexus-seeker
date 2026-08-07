@@ -408,11 +408,4 @@ async def test_validate_symbol(mock_symbol_validation: Any):  # type: ignore
         conn.commit()
         conn.close()
 
-        assert await validate_symbol("ABC")
-
-    # 5. Failed quote, missing in DB, doesn't match standard ticker format (too long)
-    with patch(
-        "services.market_data_service.get_quote", new_callable=AsyncMock
-    ) as mock_get_quote:
-        mock_get_quote.return_value = {}
-        assert not await validate_symbol("ABC-XYZ-LONG")
+        assert not await validate_symbol("ABC")
