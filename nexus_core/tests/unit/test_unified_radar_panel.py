@@ -386,8 +386,7 @@ async def test_batch_scan_alpha_filters_and_pagination(
        成功繞過 Discord 長度限制。
     """
     cog = UnifiedTerminalCog(mock_bot)
-
-    state = {
+    state: dict[str, Any] = {
         "scope": "WATCHLIST",
         "quant_filters": ["tdp_mode", "uoa_mode"],
         "params": {},
