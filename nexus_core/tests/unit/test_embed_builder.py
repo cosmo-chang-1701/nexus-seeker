@@ -115,18 +115,21 @@ def test_create_portfolio_report_embed() -> None:
 
     embed = create_portfolio_report_embed(report_lines, survival_runway=120)
     assert embed.title == "📊 Nexus Seeker 盤後風險結算報告"
-    assert "🏁 財務生存跑道" in embed.fields[0].name
+    assert "🏁 財務生存跑道 (Financial Runway)" in (embed.description or "")
+    assert "實質暴露 (Debit Cost): $500.00 USD" in (embed.description or "")
+    assert "收取權利金 (Credit Cash): $0.00 USD" in (embed.description or "")
+    assert "未實現損益 (Unrealized PnL): +$150.00 USD" in (embed.description or "")
 
-    assert embed.fields[1].name == "💰 實質暴露 (Debit Cost)"
-    assert "$500.00" in embed.fields[1].value
-    assert embed.fields[2].name == "💵 收取權利金 (Credit Cash)"
-    assert "$0.00" in embed.fields[2].value
-    assert embed.fields[3].name == "📊 未實現損益 (Unrealized PnL)"
-    assert "+$150.00" in embed.fields[3].value
+    field_names = [f.name for f in embed.fields]
+    assert any("持倉明細 (Positions)" in name for name in field_names)
+    assert any("宏觀風險 (Macro Risks)" in name for name in field_names)
+    assert any("對沖績效歸因 (Hedge Attribution)" in name for name in field_names)
 
-    assert "當前持倉明細" in embed.fields[4].name
-
-    positions_value = embed.fields[4].value
+    positions_value = next(
+        f.value
+        for f in embed.fields
+        if "持倉明細 (Positions)" in f.name  # type: ignore
+    )
     assert "標的" in positions_value
     assert "AAPL" in positions_value
     assert "2026-06-19" in positions_value
@@ -890,12 +893,12 @@ def test_create_portfolio_report_embed_chunking() -> None:
     report_lines.append("Beta-Weighted Delta: +150.0")
 
     embed = create_portfolio_report_embed(report_lines, survival_runway=120)
-    pos_fields = [f for f in embed.fields if "當前持倉明細" in f.name]
+    pos_fields = [f for f in embed.fields if "持倉明細 (Positions)" in f.name]
     assert len(pos_fields) > 1
-    assert "當前持倉明細 (1/" in pos_fields[0].name
+    assert "持倉明細 (Positions) (1/" in pos_fields[0].name
     for f in pos_fields:
         assert len(f.value) <= 1024
-        assert "```ansi" not in f.value
+        assert "```ansi" in f.value
 
 
 def test_create_sentiment_scan_embed_premarket() -> None:

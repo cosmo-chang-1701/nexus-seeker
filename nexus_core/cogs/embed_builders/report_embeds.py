@@ -22,7 +22,7 @@ from cogs.embed_builders._core import NexusEmbed
 import logging
 import re
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Optional
 
 from cogs.embed_builders._ansi_utils import (
@@ -49,29 +49,23 @@ logger = logging.getLogger(__name__)
 def create_portfolio_report_embed(  # type: ignore
     report_lines: Any, hedge_analysis: Any = None, survival_runway: Any = None
 ):
-    """
-    將 check_portfolio_status_logic 產出的 report_lines 轉換為漂亮的 Discord Embed
-    """
-    # 處理完全為空的狀況
+    """將盤後持倉結算資料渲染為欄位化、ANSI 友善的結算報告。"""
     if not report_lines:
         embed = NexusEmbed(
             title="📊 Nexus Seeker 盤後風險結算報告",
-            description="目前無持倉部位，亦無風險數據。\n\u200b",
+            description="```ansi\n 📅 系統狀態: 無持倉資料\n └─ 目前無持倉部位，亦無風險數據。\n```",
             color=discord.Color.blue(),
             timestamp=datetime.now(timezone.utc),
         )
-        embed.set_footer(text="Argo Risk Engine v2.6 | 基準標的: SPY")
+        embed.set_footer(text="盤後風險結算報告")
         return embed
 
-    # 1. 分割資料：將個別持倉與宏觀報告分開
-    # 尋找分割點：🌐 【宏觀風險與資金水位報告】
     macro_index = -1
     for i, line in enumerate(report_lines):
         if _is_macro_report_marker(line):
             macro_index = i
             break
 
-    # 2. 處理持倉細節與宏觀報告區隔
     if macro_index != -1:
         positions_list = [
             line.strip() for line in report_lines[:macro_index] if line.strip()
@@ -80,134 +74,184 @@ def create_portfolio_report_embed(  # type: ignore
             line.strip() for line in report_lines[macro_index:] if line.strip()
         )
     else:
-        # 如果找不到宏觀報告區塊，將所有內容視為持倉明細
         positions_list = [line.strip() for line in report_lines if line.strip()]
         macro_text = "目前無宏觀風險數據。"
 
-    # 使用 \n\n 分隔部位
-    if positions_list:
-        positions_text = _parse_and_format_positions_table(
-            positions_list, survival_runway
-        )
-    else:
-        positions_text = "目前無持倉部位。"
+    positions_text = (
+        _parse_and_format_positions_table(positions_list, survival_runway)
+        if positions_list
+        else "目前無持倉部位。"
+    )
 
-    # 二次確認，防止 macro_text 全空或只包含空白，Discord Embed value 必須為非空字串
-    if not macro_text:
-        macro_text = "無宏觀風險數據。"
+    summary_text = ""
+    table_part = positions_text
+    if "財務摘要 (Financial Summary)" in positions_text:
+        table_part, tail = positions_text.split("財務摘要 (Financial Summary)", 1)
+        summary_text = f"財務摘要 (Financial Summary){tail}"
 
-    # 4. 判斷顏色：如果有任何 "🚨" 或 "🆘"，就用紅色，否則用藍色
-    embed_color = discord.Color.blue()
-    if "🚨" in macro_text or "🆘" in macro_text:
-        embed_color = discord.Color.red()
-    elif "⚠️" in macro_text:
-        embed_color = discord.Color.orange()
+    debit_cost_val = "$0.00 USD"
+    credit_cash_val = "$0.00 USD"
+    pnl_val_str = "$0.00 USD"
+    if summary_text:
+        debit_match = re.search(r"Debit Cost.*:\s*(.*)", summary_text)
+        credit_match = re.search(r"Credit Cash.*:\s*(.*)", summary_text)
+        pnl_match = re.search(r"Unrealized PnL.*:\s*(.*)", summary_text)
+        if debit_match:
+            debit_cost_val = _clean_ansi(debit_match.group(1).strip())
+        if credit_match:
+            credit_cash_val = _clean_ansi(credit_match.group(1).strip())
+        if pnl_match:
+            pnl_val_str = _clean_ansi(pnl_match.group(1).strip())
 
+    color_probe = "\n".join([macro_text, pnl_val_str, str(hedge_analysis or "")])
+    embed_color = _report_embed_color(color_probe)
     embed = NexusEmbed(
         title="📊 Nexus Seeker 盤後風險結算報告",
+        description="由 Nexus Seeker 風險引擎生成之每日持倉結算與風險控管摘要。",
         color=embed_color,
         timestamp=datetime.now(timezone.utc),
     )
 
-    # 🚀 [Professional Investor] 財務生存跑道 (Priority Header)
+    taipei_tz = timezone(timedelta(hours=8))
+    timestamp_str = datetime.now(taipei_tz).strftime("%Y-%m-%d %H:%M:%S")
+    desc_lines = [
+        "```ansi",
+        f" 📅 {timestamp_str} (UTC+8) ｜ 系統狀態: 結算完成",
+    ]
+
     if survival_runway is not None:
         runway_text = (
             "無限 (收益已覆蓋支出)"
             if survival_runway >= 9999
-            else f"`{survival_runway:,.1f}` 天"
+            else f"{survival_runway:,.1f} 天"
         )
+        desc_lines.extend(
+            [
+                "",
+                " 🏁 財務生存跑道 (Financial Runway)",
+                f" • 預估剩餘天數: {runway_text}",
+                " • 計算基準: 基於現有現金儲備與 Theta 收益",
+            ]
+        )
+
+    desc_lines.extend(
+        [
+            "",
+            " 💰 資金與實質暴露 (Financial Summary)",
+            f" • 實質暴露 (Debit Cost): {debit_cost_val.replace('`', '').replace('**', '').strip()}",
+            f" • 收取權利金 (Credit Cash): {credit_cash_val.replace('`', '').replace('**', '').strip()}",
+            f" • 未實現損益 (Unrealized PnL): {pnl_val_str.replace('`', '').replace('**', '').strip()}",
+            "```",
+        ]
+    )
+    embed.description = "\n".join(desc_lines)
+
+    # 持倉區塊：維持 ANSI 呈現與欄位 chunking（單一 embed 模式）
+    if positions_list and table_part.strip():
+        blocks = [b.strip() for b in table_part.strip().split("\n\n") if b.strip()]
+        transformed_blocks = []
+        for block in blocks:
+            lines = [line.strip() for line in block.split("\n") if line.strip()]
+            if not lines:
+                continue
+
+            heading = lines[0].replace("**", "").replace("🔹 ", "").strip()
+            heading_colored = f"\u001b[1;36m{heading}\u001b[0m"
+
+            ansi_lines = [f" {heading_colored}"]
+            for raw_line in lines[1:]:
+                clean_line = re.sub(r"^[\-\*\•\s]+", "", raw_line).strip()
+                clean_line = clean_line.replace("`", "").replace("*", "")
+                ansi_lines.append(f" • {clean_line}")
+            transformed_blocks.append("\n".join(ansi_lines))
+
+        chunks = _chunk_text_blocks(transformed_blocks, max_len=1000)
+        for i, chunk in enumerate(chunks):
+            field_name = (
+                f"📊 持倉明細 (Positions) ({i+1}/{len(chunks)})"
+                if len(chunks) > 1
+                else "📊 持倉明細 (Positions)"
+            )
+            embed.add_field(
+                name=field_name,
+                value=_safe_embed_codeblock_value(
+                    chunk, " • 目前無持倉部位。", lang="ansi"
+                ),
+                inline=False,
+            )
+    else:
         embed.add_field(
-            name="🏁 財務生存跑道 (Financial Runway)",
-            value=f"```yaml\n預估剩餘天數: {runway_text}\n(基於現有現金儲備與 Theta 收益)\n```\n\u200b",
+            name="📊 持倉明細 (Positions)",
+            value="```ansi\n • 目前無持倉部位。\n```",
             inline=False,
         )
 
-    # 🚀 欄位一：個別持倉細節
     if (
-        positions_list
-        and "positions_text" in locals()
-        and positions_text != "目前無持倉部位。"
+        macro_text
+        and macro_text.strip()
+        and macro_text.strip() != "目前無宏觀風險數據。"
     ):
-        # 如果包含財務摘要，將其分離出來單獨處理
-        if "財務摘要 (Financial Summary)" in positions_text:
-            table_part, summary_part = positions_text.split(
-                "財務摘要 (Financial Summary)"
-            )
-            summary_text = "財務摘要 (Financial Summary)" + summary_part
-            debit_match = re.search(r"Debit Cost.*:\s*(.*)", summary_text)
-            credit_match = re.search(r"Credit Cash.*:\s*(.*)", summary_text)
-            pnl_match = re.search(r"Unrealized PnL.*:\s*(.*)", summary_text)
-
-            debit_cost_val = (
-                _clean_ansi(debit_match.group(1).strip())
-                if debit_match
-                else "$0.00 USD"
-            )
-            credit_cash_val = (
-                _clean_ansi(credit_match.group(1).strip())
-                if credit_match
-                else "$0.00 USD"
-            )
-            pnl_val_str = (
-                _clean_ansi(pnl_match.group(1).strip()) if pnl_match else "$0.00 USD"
-            )
-
-            # Add inline fields for financial summary
-            embed.add_field(
-                name="💰 實質暴露 (Debit Cost)", value=debit_cost_val, inline=True
-            )
-            embed.add_field(
-                name="💵 收取權利金 (Credit Cash)", value=credit_cash_val, inline=True
-            )
-            embed.add_field(
-                name="📊 未實現損益 (Unrealized PnL)", value=pnl_val_str, inline=True
-            )
-        else:
-            table_part = positions_text
-            summary_text = ""
-
-        # Remove any formatting wrappers
-        table_part = table_part.strip().strip("`").strip()
-        summary_text = summary_text.strip().strip("`").strip()
-
-        # Split positions_text by double-newline to get individual position blocks
-        blocks = [b.strip() for b in table_part.split("\n\n") if b.strip()]
-        chunks = _chunk_text_blocks(blocks, max_len=1024)
-
-        for i, chunk in enumerate(chunks):
-            name = (
-                f"📦 當前持倉明細 ({i+1}/{len(chunks)})"
-                if len(chunks) > 1
-                else "📦 當前持倉明細"
-            )
-            embed.add_field(name=name, value=chunk, inline=False)
+        macro_lines = [line.strip() for line in macro_text.split("\n") if line.strip()]
+        rendered = []
+        for line in macro_lines:
+            clean_line = re.sub(r"^[\-\*\•\s]+", "", line).strip()
+            clean_line = clean_line.replace("`", "").replace("*", "")
+            rendered.append(f" • {clean_line}")
+        macro_panel = "\n".join(rendered)
     else:
-        embed.add_field(name="📦 當前持倉明細", value="目前無持倉部位。", inline=False)
+        macro_panel = " • 目前無宏觀風險數據。"
 
-    # 🚀 欄位二：全帳戶宏觀風險與對沖指令 (核心！)
-    macro_text = _safe_embed_field_value(macro_text, "無宏觀風險數據。")
-    embed.add_field(name="🛡️ 風控管線評估與對沖決策", value=macro_text, inline=False)
+    embed.add_field(
+        name="🌐 宏觀風險 (Macro Risks)",
+        value=_safe_embed_codeblock_value(
+            macro_panel, " • 目前無宏觀風險數據。", lang="ansi"
+        ),
+        inline=False,
+    )
 
-    # 🚀 欄位三：對沖有效性分析 (新增)
-    if hedge_analysis:
-        build_hedge_analysis_field(embed, hedge_analysis)
+    if isinstance(hedge_analysis, dict) and hedge_analysis:
+        ha_net_pnl = _safe_float(hedge_analysis.get("net_pnl"), 0.0)
+        ha_alpha_pnl = _safe_float(hedge_analysis.get("alpha_contribution"), 0.0)
+        ha_hedge_pnl = _safe_float(hedge_analysis.get("hedge_contribution"), 0.0)
+        ha_effectiveness = _safe_float(hedge_analysis.get("effectiveness"), 0.0)
+        ha_hedge_ratio = _safe_float(hedge_analysis.get("hedge_ratio"), 0.0)
+        ha_status = str(hedge_analysis.get("status", "N/A"))
+        ha_dynamic_tau = hedge_analysis.get("dynamic_tau")
 
-        # 如果有 Tau 係數更新資訊，則額外提示
-        dynamic_tau = getattr(embed, "dynamic_tau", None) or (
-            hedge_analysis.get("dynamic_tau")
-            if isinstance(hedge_analysis, dict)
-            else None
+        ha_status_color = (
+            "\033[1;32m"
+            if ha_status == "OPTIMAL"
+            else "\033[1;33m"
+            if ha_status == "OVER_HEDGED"
+            else "\033[1;31m"
         )
-        if dynamic_tau is not None:
-            dynamic_tau = _safe_float(dynamic_tau, 1.0)
-            embed.add_field(
-                name="🧬 STHE 自動優化狀態",
-                value=f"目前對沖調教因子 τ: `{dynamic_tau:.2f}`",
-                inline=False,
+        ha_pnl_color = "\033[1;32m" if ha_net_pnl >= 0 else "\033[1;31m"
+        hedge_lines = [
+            f" Alpha 選股 PnL   : {ha_pnl_color}${ha_alpha_pnl:+,.2f}\033[0m",
+            f" 對沖避險 PnL     : {ha_pnl_color}${ha_hedge_pnl:+,.2f}\033[0m",
+            f" 淨損益 (Net PnL)  : {ha_pnl_color}${ha_net_pnl:+,.2f}\033[0m",
+            " --------------------------------------------------",
+            f" 對沖比率 (Hedge Ratio)  : {ha_hedge_ratio:.2%}",
+            f" 對沖有效性 (Effectiveness): {ha_effectiveness*100:.1f}%",
+            f" 對沖狀態 : {ha_status_color}{ha_status}\033[0m",
+        ]
+        if ha_dynamic_tau is not None:
+            hedge_lines.append(
+                f" 動態 Tau (τ)      : {_safe_float(ha_dynamic_tau, 0.0):.4f}"
             )
+        hedge_panel = "\n".join(hedge_lines)
+    else:
+        hedge_panel = " • 暫無對沖績效數據。"
 
-    embed.set_footer(text="Argo Risk Engine v2.6 | 基準標的: SPY")
+    embed.add_field(
+        name="🛡️ 對沖績效歸因 (Hedge Attribution)",
+        value=_safe_embed_codeblock_value(
+            hedge_panel, " • 暫無對沖績效數據。", lang="ansi"
+        ),
+        inline=False,
+    )
 
+    embed.set_footer(text="盤後風險結算報告")
     return embed
 
 
