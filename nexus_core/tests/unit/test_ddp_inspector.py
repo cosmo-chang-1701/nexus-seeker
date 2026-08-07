@@ -38,7 +38,9 @@ async def test_ddp_inspector_pass() -> None:
     # If trailingEps = 10.0, then historical prices should be higher so historical P/E > 15.0.
     # E.g., prices around 200 => P/E = 20.
     dates = pd.date_range(end="2026-05-21", periods=156, freq="W")
-    df_hist = pd.DataFrame({"Close": [200.0] * 156}, index=dates)
+    df_hist = pd.DataFrame(
+        {"Close": [200.0] * 156, "Volume": [1000] * 156}, index=dates
+    )
 
     with patch("yfinance.Ticker") as m_ticker, patch(
         "services.market_data_service.get_history_df", new_callable=AsyncMock
