@@ -144,7 +144,7 @@ The heartbeat currently reuses logic from `market_analysis/intraday_pipeline.py`
 The active embed builder is `create_watchlist_signal_embed()` in `cogs/embed_builders/`.
 
 The embed title is dynamically injected with the ticker's active tags fetched from the multi-tenant `watchlist_tags` table (e.g. `標的分析中心 2.0: AAPL 每半小時戰場心跳 🏷️ TECH | CORE`).
-The visibility of these sections is controlled by 3 granular notification toggles in `/notif_settings`: `hb_options_structure`, `hb_uoa`, and `hb_execution_risk`.
+The visibility of these sections is controlled by 2 granular notification toggles in `/notif_settings`: `hb_options_structure` and `hb_execution_risk`.
 
 Current sections:
 
@@ -396,7 +396,7 @@ Configurations are strictly segregated into two functional areas to maximize sep
 - **Notification Preferences (`/notif_settings`)**: Manages individual toggles stored in a key-value style `user_notification_settings` table (designed with composite primary key `(user_id, notification_key)` for infinite schema-less extensibility). Redesigned as a **Trader-centric Tactical Dashboard**.
   - **Dynamic Two-Tier Architecture**: To bypass Discord's 5-row component limits, the UI uses a modular structure. Row 0 features a Category Selector (`portfolio`, `radar`, `alpha`, `defense`, `briefings`, `polymarket`), which dynamically reloads the corresponding specific toggles into Row 1 (`module_select`).
   - **Radar Insight Coupling**: Filter settings such as `radar_macro_edge`, `radar_alpha_signals`, and `radar_risk_defenses` directly control the verbosity and warning thresholds rendered in the `/x` Batch Radar terminal and heartbeat embeds.
-  - **Granular Heartbeat Toggles**: The watchlist heartbeat is divided into 3 modular switches (`hb_options_structure`, `hb_uoa`, `hb_execution_risk`), allowing users to completely customize which analysis blocks are rendered in their 30-minute updates. Order Telemetry Alignment is decoupled into its own independent toggle (`order_telemetry_alignment_alert`).
+  - **Granular Heartbeat Toggles**: The watchlist heartbeat is divided into modular switches (`hb_options_structure`, `hb_execution_risk`, etc.), allowing users to completely customize which analysis blocks are rendered in their 30-minute updates. Order Telemetry Alignment is decoupled into its own independent toggle (`order_telemetry_alignment_alert`).
   - **Polymarket Settings Integration**: Polymarket monitoring preferences (whale alert toggler `polymarket_whale_alert`, threshold `polymarket_threshold`, AI analysis switch `polymarket_use_llm`, and slippage threshold `polymarket_slippage`) are cleanly housed under their dedicated Category.
   - **Module Preferences Control**: Each category screen features helper buttons `🟢 開啟本區所有設定 (Enable Module)` and `💤 關閉本區所有設定 (Disable Module)` to batch-toggle all switches within that specific active module.
 
@@ -511,7 +511,7 @@ The platform features an automated **Dynamic Rollover Engine** (`market_analysis
 - **Global Defense Gate (全域防禦閘門)**: LLM moat verdicts (`is_broken`, `confidence`, `reasoning`) are written to the SQLite `fundamental_cache` table (via migration `v057`). During the intraday 30-minute heartbeat (`intraday_pipeline.py`), the `evaluate_watchlist_symbol` engine acts as a **Global Defense Gate**. If a symbol is flagged as broken, the engine forcefully intercepts and overwrites any quantitative BTO (Buy-To-Open) or Grid Accumulation signals, replacing them with a strict `wait` scenario and a `LIQUIDATE` directive. This guarantees that technical blindspots (e.g., heavily oversold RSI traps) cannot override fundamentally deteriorating assets.
 - **Lightweight Triage Strategy (Scenarios 2, 3, 4)**: Lightweight rule-based tasks execute during the intraday 30-minute `monitor_real_portfolio_task` to ensure zero API blocking.
 - **Discord UI**: All rollover actions generate a stylized embed (`create_dynamic_rollover_embed`) packed with terminal execution guidelines, highlighting Net Debit/Credit types and strict buy/sell directions (e.g., BTC for short puts).
-- **Toggle Settings**: Users can opt out via `/notif_settings` under the Defense module (`rollover_rebalance_alert`).
+- **Toggle Settings**: Users can opt out via `/notif_settings` under the Defense module (`option_defense_alert`).
 
 ---
 

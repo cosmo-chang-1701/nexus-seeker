@@ -1184,7 +1184,7 @@ class IntradayScanPipeline:
                                 )
                                 hb_keys = [
                                     "hb_options_structure",
-                                    "hb_uoa",
+                                    "radar_alpha_signals",
                                     "hb_execution_risk",
                                 ]
                                 hb_enabled = any(

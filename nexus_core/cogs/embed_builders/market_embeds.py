@@ -393,7 +393,7 @@ def build_radar_scan_embed(
 
                 macro_parts = [p for p in (gex_str, ted_str, dix_str) if p]
                 if macro_parts:
-                    macro_ansi_header.append(" 🌍 雷達：總經與微觀結構警戒")
+                    macro_ansi_header.append(" 🌍 雷達：宏觀數據發布與流動性枯竭警告")
                     for i, part in enumerate(macro_parts):
                         prefix = " ├─ " if i < len(macro_parts) - 1 else " └─ "
                         macro_ansi_header.append(prefix + part)

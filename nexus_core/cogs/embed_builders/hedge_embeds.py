@@ -378,7 +378,7 @@ def create_option_defense_alert_embed(
         color = discord.Color.green()
 
     embed = NexusEmbed(
-        title=f"🛡️ 警報：期權轉倉防禦與結算 | {symbol}",
+        title=f"🔄 警報：動態轉倉、再平衡與結算防護 | {symbol}",
         description=f"**{title_prefix}**\n標的 **{symbol}** 已執行平倉或防禦性轉倉處置。\n\u200b",
         color=color,
         timestamp=datetime.now(timezone.utc),

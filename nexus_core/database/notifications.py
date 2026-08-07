@@ -100,7 +100,6 @@ def get_pending_count() -> int:
 ALL_NOTIFICATION_KEYS = [
     # 定時與掃描背景通知 (Scheduled & Scan)
     "hb_options_structure",
-    "hb_uoa",
     "hb_execution_risk",
     "pre_market_briefing",
     "intraday_decision_scan",
@@ -114,7 +113,6 @@ ALL_NOTIFICATION_KEYS = [
     "ddp_alert",
     "volatility_alert",
     "volatility_risk_alert",
-    "rollover_rebalance_alert",
     "polymarket_whale_alert",
     "deadlock_recovery_alert",
     # 自選批次量化雷達 (Batch Radar)

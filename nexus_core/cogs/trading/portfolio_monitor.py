@@ -221,7 +221,7 @@ class PortfolioMonitorCog(commands.Cog):
 
                     for ins in rebalance_instructions:
                         if not database.is_notification_enabled(
-                            u_id, "rollover_rebalance_alert"
+                            u_id, "option_defense_alert"
                         ):
                             continue
 

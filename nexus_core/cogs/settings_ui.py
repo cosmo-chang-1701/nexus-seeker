@@ -31,7 +31,7 @@ TRADING_MODULES: Dict[str, Dict[str, Any]] = {
         "title": "🌍 總經與微觀結構警戒",
         "description": "專注於市場水位、Gamma 脆弱性與機構暗池流動性。",
         "items": {
-            "radar_macro_edge": "🌍 雷達：總經與微觀結構警戒",
+            "radar_macro_edge": "🌍 雷達：宏觀數據發布與流動性枯竭警告",
             "gamma_fragility_alert": "🆘 警報：Gamma 脆弱性與斷層",
             "hb_options_structure": "🧱 心跳：期權結構與波動率",
         },
@@ -40,8 +40,7 @@ TRADING_MODULES: Dict[str, Dict[str, Any]] = {
         "title": "🎯 Alpha 獵取與異常數據",
         "description": "專注於發掘高勝率結構與機構異常行為。",
         "items": {
-            "hb_uoa": "🔎 心跳：異常大單穿透 (UOA)",
-            "radar_alpha_signals": "🎯 雷達：期權 Alpha 與異常訊號",
+            "radar_alpha_signals": "🎯 雷達：期權 Alpha 與 UOA 異常穿透",
             "ddp_alert": "🌌 警報：Nexus 戴維斯雙擊 (基本面估值)",
             "volatility_alert": "🌌 警報：Nexus 波動率優勢 (廉價選擇權)",
         },
@@ -51,8 +50,7 @@ TRADING_MODULES: Dict[str, Dict[str, Any]] = {
         "description": "專注於保護既有獲利與規避毀滅性黑天鵝。",
         "items": {
             "profit_lock_alert": "🚨 警報：DITM 凸性防護與獲利鎖定",
-            "option_defense_alert": "🛡️ 警報：期權轉倉防禦與結算",
-            "rollover_rebalance_alert": "🔄 警報：動態轉倉與再平衡防禦",
+            "option_defense_alert": "🔄 警報：動態轉倉、再平衡與結算防護",
             "volatility_risk_alert": "🛡️ 警報：重大事件即時防護",
         },
     },

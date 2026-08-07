@@ -96,8 +96,8 @@ def create_watchlist_signal_embed(
     show_iv_context = hb_options
     show_target_lock = hb_options
 
-    # 獨立 5 -> hb_uoa
-    show_uoa = toggles.get("hb_uoa", True)
+    # 獨立 5 -> radar_alpha_signals
+    show_uoa = toggles.get("radar_alpha_signals", True)
 
     # 整合 6, 7 -> hb_execution_risk
     hb_exec = toggles.get("hb_execution_risk", True)
@@ -538,7 +538,7 @@ def create_watchlist_signal_embed(
             + "\n```"
         )
         embed.add_field(
-            name="🔎 心跳：異常大單穿透 (UOA)",
+            name="🎯 雷達：期權 Alpha 與 UOA 異常穿透",
             value=_safe_embed_field_value(uoa_content, "無異常大單"),
             inline=False,
         )
