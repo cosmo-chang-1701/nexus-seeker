@@ -114,7 +114,7 @@ class UnifiedTerminalCog(commands.Cog):
             # 建立相容舊參數的 State Dict 供引擎使用
             state = {
                 "scope": scan_value,
-                "quant_filters": ["require_tdp_signal"] if squeeze else [],
+                "quant_filters": ["squeeze_mode"] if squeeze else [],
                 "params": {
                     "max_pain_threshold": 10.0,
                     "abs_support_tolerance": 1.0,
@@ -225,7 +225,7 @@ class UnifiedTerminalCog(commands.Cog):
             from typing import Any
 
             scan_params_kwargs: dict[str, Any] = {}
-            if "tdp_mode" in quant_filters:
+            if "tdp_mode" in quant_filters or "require_tdp_signal" in quant_filters:
                 scan_params_kwargs["require_tdp_signal"] = True
             if "squeeze_mode" in quant_filters:
                 scan_params_kwargs["require_squeeze_firing"] = True

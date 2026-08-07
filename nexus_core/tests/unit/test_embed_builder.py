@@ -1,4 +1,6 @@
 from datetime import datetime
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from cogs.embed_builder import (
     create_holdings_embed,
@@ -1099,6 +1101,137 @@ def test_build_radar_scan_embed_with_none_values() -> None:
     assert len(embeds) == 1
     embed = embeds[0]
     assert "CRASH" in embed.description  # type: ignore
+
+
+def test_build_radar_scan_embed_renders_field_formulas_consistently() -> None:
+    """驗算雷達主欄位算式：EM Pos%、D-MP%、DTE/Event Prem、最近結構牆位距離。"""
+    scan_results = [
+        {
+            "symbol": "AAPL",
+            "quote": {"c": 105.0, "dp": 1.5},
+            "iv_metrics": {
+                "iv_rank": 60.0,
+                "expected_move_weekly": 10.0,
+                "expected_move_lower": 95.0,
+                "expected_move_upper": 115.0,
+                "iv_term_structure_status": "Backwardation",
+                "term_structure_ratio": 1.2,
+            },
+            "dte_er": 7,
+            "skew": 1.1,
+            "skew_percentile": 80.0,
+            "max_pain": {"max_pain": 100.0},
+            "uoa": [],
+            "gex_profile_data": {
+                "put_wall": 104.0,
+                "call_wall": 130.0,
+                "zero_gamma": 102.0,
+                "net_gex": 20_000_000.0,
+            },
+            "psq_result": {
+                "is_squeezing": True,
+                "momentum": 2.5,
+                "momentum_value": 2.5,
+                "signal_direction": "🟢",
+            },
+            "dp_poc": 104.0,
+            "month_max_pains": [],
+        }
+    ]
+
+    with patch(
+        "database.notifications.get_user_notification_settings",
+        return_value={
+            "radar_macro_edge": False,
+            "radar_alpha_signals": True,
+            "radar_risk_defenses": True,
+        },
+    ), patch("database.orders.get_user_active_orders", return_value=[]), patch(
+        "database.get_full_user_context",
+        return_value=SimpleNamespace(
+            can_trade_spreads=True, cash_reserve_protection=True
+        ),
+    ), patch(
+        "market_analysis.insights_engine.InsightsEngine.generate_cro_insight",
+        return_value=(None, None, None),
+    ):
+        embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
+
+    assert len(embeds) == 1
+    desc = embeds[0].description or ""
+
+    # EM Pos% = (105 - 95) / (115 - 95) = 50.0%
+    assert "EM: 50.0%" in desc
+    # D-MP% = (105 - 100) / 100 = +5.00%
+    assert "D-MP:" in desc and "+5.00%" in desc
+    # DTE / Event Premium ratio 直接來自 dte_er 與 term_structure_ratio
+    assert "7D / 1.2x" in desc
+    # 最近牆位應為 Put Wall 104，距離約 +1.0%
+    assert "Put Wall (+1.0%)" in desc
+    # 狀態標籤 + skew 標籤
+    assert "需防壓回" in desc and "Call-Skew" in desc
+
+
+def test_build_radar_scan_embed_rebuilds_expected_move_bounds_from_reference_price() -> (
+    None
+):
+    """當 EM 上下緣缺失或無效時，應以 reference_price ± expected_move_weekly 回推。"""
+    scan_results = [
+        {
+            "symbol": "MSFT",
+            "quote": {"c": 100.0, "dp": 0.5},
+            "iv_metrics": {
+                "iv_rank": 40.0,
+                "expected_move_weekly": 8.0,
+                "expected_move_lower": 0.0,
+                "expected_move_upper": 0.0,
+                "reference_price": 100.0,
+                "iv_term_structure_status": "Normal",
+                "term_structure_ratio": 1.0,
+            },
+            "dte_er": 5,
+            "skew": -0.8,
+            "skew_percentile": 30.0,
+            "max_pain": {"max_pain": 100.0},
+            "uoa": [],
+            "gex_profile_data": {
+                "put_wall": 95.0,
+                "call_wall": 120.0,
+                "zero_gamma": 98.0,
+                "net_gex": 5_000_000.0,
+            },
+            "psq_result": {
+                "is_squeezing": False,
+                "momentum": 0.0,
+                "momentum_value": 0.0,
+                "signal_direction": "⚪",
+            },
+            "dp_poc": 96.0,
+            "month_max_pains": [],
+        }
+    ]
+
+    with patch(
+        "database.notifications.get_user_notification_settings",
+        return_value={
+            "radar_macro_edge": False,
+            "radar_alpha_signals": True,
+            "radar_risk_defenses": True,
+        },
+    ), patch("database.orders.get_user_active_orders", return_value=[]), patch(
+        "database.get_full_user_context",
+        return_value=SimpleNamespace(
+            can_trade_spreads=True, cash_reserve_protection=True
+        ),
+    ), patch(
+        "market_analysis.insights_engine.InsightsEngine.generate_cro_insight",
+        return_value=(None, None, None),
+    ):
+        embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
+
+    desc = embeds[0].description or ""
+    # 由 reference_price=100 和 EM=8 回推上下緣 92/108，EM Pos% 應為 50%
+    assert "EM: 50.0%" in desc
 
 
 def test_build_post_market_intelligence_embed_empty() -> None:

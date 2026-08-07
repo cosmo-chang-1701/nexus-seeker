@@ -291,7 +291,7 @@ def build_radar_scan_embed(
 ) -> List[discord.Embed]:
     """
     建構持倉/掛單/期權標的的批次掃描量化與情緒彙總 Embed 列表。
-    為防止 Discord embed description 超過 4096 個字元限制，每頁最多顯示 15 個標的。
+    為防止 Discord embed description 超過 4096 個字元限制，每頁最多顯示 10 個標的。
     """
     try:
         from database.notifications import get_user_notification_settings

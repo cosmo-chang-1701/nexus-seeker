@@ -478,6 +478,59 @@ async def test_calculate_max_pain_sqlite_fallback() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_expected_move_rebuilds_bounds_from_reference_price() -> None:
+    from market_analysis.sentiment.iv_metrics import IVContext
+
+    result = await IVContext.get_expected_move(
+        "AAPL",
+        quote={"c": 101.0, "pc": 100.0},
+        iv_metrics={"expected_move_weekly": 7.25},
+    )
+
+    assert result["reference_price"] == 100.0
+    assert result["expected_move_weekly"] == 7.25
+    assert result["expected_move_lower"] == 92.75
+    assert result["expected_move_upper"] == 107.25
+
+
+@pytest.mark.asyncio
+async def test_get_unified_max_pain_sets_circuit_breaker_on_large_deviation() -> None:
+    from market_analysis.sentiment.max_pain import get_unified_max_pain
+
+    with patch(
+        "services.market_data_service.get_quote",
+        new_callable=AsyncMock,
+        return_value={"c": 100.0},
+    ), patch("database.get_market_cache", return_value=None), patch(
+        "market_analysis.sentiment.max_pain.fetch_and_calculate_iv_metrics",
+        new_callable=AsyncMock,
+        return_value=MagicMock(expected_move_weekly=5.0),
+    ), patch(
+        "market_analysis.sentiment.max_pain._calculate_max_pain_raw",
+        new_callable=AsyncMock,
+        return_value={
+            "symbol": "AAPL",
+            "expiry": MOCK_EXPIRY,
+            "max_pain": 200.0,
+            "calculation_mode": "OI",
+            "is_degraded": 0,
+            "circuit_breaker_triggered": 0,
+        },
+    ), patch(
+        "market_analysis.sentiment.max_pain.IVContext.get_expected_move",
+        new_callable=AsyncMock,
+        return_value={
+            "expected_move_lower": 95.0,
+            "expected_move_upper": 105.0,
+        },
+    ), patch("database.save_market_cache"):
+        result = await get_unified_max_pain("AAPL", force_refresh=True)
+
+    assert result["max_pain"] is None
+    assert result["circuit_breaker_triggered"] is True
+
+
+@pytest.mark.asyncio
 async def test_calculate_max_pain_incomplete_oi_fallback() -> None:
     from market_analysis.sentiment_engine import SentimentEngine
 

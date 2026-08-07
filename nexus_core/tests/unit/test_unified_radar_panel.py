@@ -86,7 +86,7 @@ async def test_symbol_hub_bypass_ui(mock_bot: Any, mock_interaction: Any):  # ty
 
     assert state["scope"] == "ALL"
     assert state["selected_tag"] == "TECH"
-    assert "require_tdp_signal" in state["quant_filters"]
+    assert "squeeze_mode" in state["quant_filters"]
 
 
 @pytest.mark.asyncio
@@ -211,6 +211,74 @@ async def test_execute_unified_scan_filters(mock_bot: Any, mock_interaction: Any
                     await cog.execute_unified_scan(mock_interaction, state, 12345)
 
                     # Assert what was passed to build_radar_scan_embed
+                    mock_builder.assert_called_once()
+                    filtered_results = mock_builder.call_args.args[0]
+                    assert len(filtered_results) == 1
+                    assert filtered_results[0]["symbol"] == "AAPL"
+
+
+@pytest.mark.asyncio
+async def test_execute_unified_scan_squeeze_mode_filter(
+    mock_bot: Any, mock_interaction: Any
+) -> None:  # type: ignore
+    """
+    測試 execute_unified_scan 的 squeeze_mode 會正確套用為 require_squeeze_firing 過濾。
+    """
+    cog = UnifiedTerminalCog(mock_bot)
+
+    state = {
+        "scope": "ALL",
+        "quant_filters": ["squeeze_mode"],
+        "params": {
+            "max_pain_threshold": 10.0,
+            "abs_support_tolerance": 1.0,
+            "silent_period_days": 5,
+        },
+        "selected_tag": None,
+    }
+
+    with patch("cogs.unified_terminal.cog.asyncio.to_thread") as mock_thread:
+
+        def mock_to_thread_side_effect(func: Any, *args, **kwargs):  # type: ignore
+            if "get_user_portfolio" in func.__name__:
+                return [(123, "AAPL"), (123, "TSLA")]
+            return [{"symbol": "AAPL"}, {"symbol": "TSLA"}]
+
+        mock_thread.side_effect = mock_to_thread_side_effect
+
+        with patch("services.asset_manager.AssetManager.get_assets", return_value=[]):
+
+            async def fake_fetch(sym: Any):  # type: ignore
+                if sym == "AAPL":
+                    return {
+                        "symbol": "AAPL",
+                        "quote": {"c": 105.0},
+                        "max_pain": {"max_pain": 100.0},
+                        "psq_result": {"is_squeezing": True, "momentum_value": 1.2},
+                        "gex_profile_data": {"put_wall": 100.0},
+                        "uoa": [],
+                    }
+                if sym == "TSLA":
+                    return {
+                        "symbol": "TSLA",
+                        "quote": {"c": 105.0},
+                        "max_pain": {"max_pain": 100.0},
+                        "psq_result": {"is_squeezing": False, "momentum_value": 1.2},
+                        "gex_profile_data": {"put_wall": 100.0},
+                        "uoa": [],
+                    }
+                return None
+
+            cog._fetch_sym_radar_data = fake_fetch  # type: ignore
+
+            with patch(
+                "cogs.unified_terminal.cog.build_radar_scan_embed"
+            ) as mock_builder:
+                mock_builder.return_value = discord.Embed(title="Radar Scan")
+                with patch("cogs.unified_terminal.cog.BatchScanView") as MockView:
+                    MockView.return_value = discord.ui.View()
+                    await cog.execute_unified_scan(mock_interaction, state, 12345)
+
                     mock_builder.assert_called_once()
                     filtered_results = mock_builder.call_args.args[0]
                     assert len(filtered_results) == 1
