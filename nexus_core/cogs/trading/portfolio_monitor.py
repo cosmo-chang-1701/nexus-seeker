@@ -7,13 +7,11 @@ cogs/trading/portfolio_monitor.py
 from typing import Any, Dict, List
 import json
 import logging
-import sqlite3
 from datetime import time
 from zoneinfo import ZoneInfo
 
 from discord.ext import tasks, commands
 
-import config
 import database
 import market_time
 from services.trading_service import TradingService
@@ -29,74 +27,6 @@ from cogs.embed_builders.rollover_embeds import create_dynamic_rollover_embed
 
 ny_tz = ZoneInfo("America/New_York")
 logger = logging.getLogger(__name__)
-
-
-def _get_cached_symbol_metrics(sym: str) -> dict:  # type: ignore
-    """從 SQLite 快取讀取標的指標，供動態轉倉盤中審計使用。"""
-    res: dict[str, Any] = {
-        "spot_price": 100.0,
-        "ivr": 0.0,
-        "max_pain": 0.0,
-        "put_wall": 0.0,
-        "call_wall": 0.0,
-        "is_uoa_sweep": False,
-        "sqz_mom": 0.0,
-        "skew": 0.0,
-    }
-    conn = None
-    try:
-        conn = sqlite3.connect(config.DB_NAME)
-        cursor = conn.cursor()
-        cursor.execute("SELECT max_pain FROM market_cache WHERE symbol = ?", (sym,))
-        row = cursor.fetchone()
-        if row and row[0]:
-            res["max_pain"] = float(row[0])
-
-        cursor.execute(
-            "SELECT value FROM kv_cache WHERE key = ?",
-            (f"gex_profile_{sym}",),
-        )
-        row = cursor.fetchone()
-        if row and row[0]:
-            gex_data = json.loads(row[0])
-            res["spot_price"] = float(gex_data.get("spot_price", 100.0))
-            res["put_wall"] = float(gex_data.get("put_wall", 0.0))
-            res["call_wall"] = float(gex_data.get("call_wall", 0.0))
-            res["gamma_flip"] = float(gex_data.get("gamma_flip", 0.0))
-
-        cursor.execute("SELECT value FROM kv_cache WHERE key = ?", (f"ivr_{sym}",))
-        row = cursor.fetchone()
-        if row and row[0]:
-            res["ivr"] = float(row[0])
-
-        cursor.execute(
-            "SELECT value FROM kv_cache WHERE key = ?",
-            (f"sqz_mom_{sym}",),
-        )
-        row = cursor.fetchone()
-        if row and row[0]:
-            res["sqz_mom"] = float(row[0])
-
-        cursor.execute("SELECT value FROM kv_cache WHERE key = ?", (f"skew_{sym}",))
-        row = cursor.fetchone()
-        if row and row[0]:
-            res["skew"] = float(row[0])
-
-        cursor.execute("SELECT value FROM kv_cache WHERE key = ?", (f"uoa_{sym}",))
-        row = cursor.fetchone()
-        if row and row[0]:
-            try:
-                uoa_list = json.loads(row[0])
-                if uoa_list and len(uoa_list) > 0:
-                    res["is_uoa_sweep"] = True
-            except Exception:
-                pass
-    except Exception:
-        pass
-    finally:
-        if conn is not None:
-            conn.close()
-    return res
 
 
 class PortfolioMonitorCog(commands.Cog):
@@ -184,10 +114,127 @@ class PortfolioMonitorCog(commands.Cog):
                 user_assets: Dict[int, List[Dict[str, Any]]] = {}
                 CORE_ETF_SYMBOLS = {"VOO", "SPY", "QQQ", "IVV", "VTI"}
 
+                # --- 參照標的分析中心，抓取完整雷達數據以修正數據缺失 ---
+                import asyncio
+
+                terminal_cog = getattr(self, "bot", None) and self.bot.get_cog(
+                    "UnifiedTerminalCog"
+                )
+                radar_cache_map: Dict[str, Any] = {}
+
                 for h in all_holdings:
                     u_id = h["user_id"]
                     sym = h["symbol"].upper()
-                    metrics = _get_cached_symbol_metrics(sym)
+
+                    if sym not in radar_cache_map:
+                        if terminal_cog:
+                            try:
+                                # 節流保護：若已抓取過其他標的，先休息 1.5 秒
+                                if radar_cache_map:
+                                    await asyncio.sleep(1.5)
+                                radar_cache_map[
+                                    sym
+                                ] = await terminal_cog._fetch_sym_radar_data_slow(sym)
+                            except Exception as ex:
+                                logger.error(
+                                    f"Failed to fetch radar data for {sym}: {ex}"
+                                )
+                                radar_cache_map[sym] = None
+                        else:
+                            radar_cache_map[sym] = None
+
+                    r_data = radar_cache_map[sym]
+                    if r_data:
+                        try:
+                            metrics = {
+                                "spot_price": float(
+                                    r_data.get("quote", {}).get("c", 0.0)
+                                    if r_data.get("quote")
+                                    else 0.0
+                                ),
+                                "ivr": float(
+                                    r_data.get("iv_metrics", {}).get("iv_rank", 0.0)
+                                    if r_data.get("iv_metrics")
+                                    else 0.0
+                                ),
+                                "max_pain": float(
+                                    r_data.get("max_pain", {}).get("max_pain") or 0.0
+                                )
+                                if isinstance(r_data.get("max_pain"), dict)
+                                else (
+                                    float(r_data.get("max_pain"))
+                                    if r_data.get("max_pain")
+                                    else 0.0
+                                ),
+                                "put_wall": float(
+                                    r_data.get("gex_profile_data", {}).get(
+                                        "put_wall", 0.0
+                                    )
+                                    or 0.0
+                                )
+                                if isinstance(r_data.get("gex_profile_data"), dict)
+                                else 0.0,
+                                "call_wall": float(
+                                    r_data.get("gex_profile_data", {}).get(
+                                        "call_wall", 0.0
+                                    )
+                                    or 0.0
+                                )
+                                if isinstance(r_data.get("gex_profile_data"), dict)
+                                else 0.0,
+                                "is_uoa_sweep": len(r_data.get("uoa", [])) > 0
+                                if r_data.get("uoa")
+                                else False,
+                                "gamma_flip": float(
+                                    r_data.get("gex_profile_data", {}).get(
+                                        "gamma_flip", 0.0
+                                    )
+                                    or 0.0
+                                )
+                                if isinstance(r_data.get("gex_profile_data"), dict)
+                                else 0.0,
+                                "sqz_mom": float(
+                                    r_data.get("psq_result", {}).get(
+                                        "momentum_value", 0.0
+                                    )
+                                    if r_data.get("psq_result")
+                                    else 0.0
+                                ),
+                                "skew": float(
+                                    r_data.get("skew", 0.0)
+                                    if r_data.get("skew")
+                                    else 0.0
+                                ),
+                            }
+                        except Exception as parse_ex:
+                            logger.error(
+                                f"Failed to parse radar data for {sym}: {parse_ex}"
+                            )
+                            fallback_metrics = {
+                                "spot_price": 0.0,
+                                "ivr": 0.0,
+                                "max_pain": 0.0,
+                                "put_wall": 0.0,
+                                "call_wall": 0.0,
+                                "is_uoa_sweep": False,
+                                "gamma_flip": 0.0,
+                                "sqz_mom": 0.0,
+                                "skew": 0.0,
+                            }
+                            metrics = fallback_metrics
+                    else:
+                        fallback_metrics = {
+                            "spot_price": 0.0,
+                            "ivr": 0.0,
+                            "max_pain": 0.0,
+                            "put_wall": 0.0,
+                            "call_wall": 0.0,
+                            "is_uoa_sweep": False,
+                            "gamma_flip": 0.0,
+                            "sqz_mom": 0.0,
+                            "skew": 0.0,
+                        }
+                        metrics = fallback_metrics
 
                     is_core = sym in CORE_ETF_SYMBOLS
                     default_class = "CORE" if is_core else "SATELLITE"
