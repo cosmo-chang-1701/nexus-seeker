@@ -789,55 +789,68 @@ class UnifiedTerminalCog(commands.Cog):
 
     async def _fetch_sym_radar_data_fast_raw(self, sym: str) -> Any:
         """
-        Fast Track 讀取：只抓取即時報價與 SQLite radar_terminal_cache。
+        Fast Track 讀取：抓取即時報價並從多個 SQLite 快取 (radar, market, kv, squeeze) 縫合數據。
         """
         from services import market_data_service
-        from database.market_cache import get_radar_cache
+        from database.market_cache import get_market_cache
+        from database.squeeze_cache import get_squeeze_cache
+        from database.cache import get_kv_cache
+        from datetime import datetime
 
         quote = await market_data_service.get_quote(sym)
         price = quote.get("c", 0.0) if quote else 0.0
         current_volume = quote.get("volume", 0) if quote else 0
 
-        radar_cache = get_radar_cache(sym) or {}
+        radar_cache = get_kv_cache(f"radar_terminal_{sym.upper()}") or {}
+        market_cache = get_market_cache(sym) or {}
+        squeeze_cache = get_squeeze_cache(sym) or {}
+
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        iv_metrics = get_kv_cache(f"iv_metrics_{sym.upper()}_{today_str}") or {}
+
+        if "expected_move_lower" not in iv_metrics:
+            iv_metrics["expected_move_lower"] = market_cache.get(
+                "expected_move_lower", 0.0
+            )
+        if "expected_move_upper" not in iv_metrics:
+            iv_metrics["expected_move_upper"] = market_cache.get(
+                "expected_move_upper", 0.0
+            )
 
         avg_vol_20d = radar_cache.get("avg_vol_20d", 0.0)
         rvol = (current_volume / avg_vol_20d) if avg_vol_20d > 0 else 0.0
 
-        # 返回給 radar embed builder 需要的相容結構
+        mp_near = radar_cache.get("mp_near") or market_cache.get("max_pain")
+
         return {
             "symbol": sym,
             "quote": quote,
             "rvol": rvol,
             "radar_cache": radar_cache,
-            "skew": -0.5
-            if radar_cache.get("is_skew_extreme")
-            else 0.0,  # Dummy for dp_skew_defense backward compatibility
+            "skew": -0.5 if radar_cache.get("is_skew_extreme") else 0.0,
             "max_pain": {
-                "max_pain": radar_cache.get("mp_near"),
-                "distance_pct": (
-                    (price - radar_cache.get("mp_near", price))
-                    / radar_cache.get("mp_near", price)
-                )
-                * 100
-                if radar_cache.get("mp_near")
+                "max_pain": mp_near,
+                "distance_pct": ((price - mp_near) / mp_near) * 100
+                if mp_near and mp_near > 0
                 else 0.0,
             },
-            "iv_metrics": {},  # mock empty to satisfy KeyError
-            "iv_data": {},  # mock empty to satisfy KeyError
-            "uoa": [],  # mock empty
+            "iv_metrics": iv_metrics,
+            "iv_data": iv_metrics,
+            "uoa": [],
             "psq_result": {
-                "is_squeezing": False,
-                "momentum_value": 0.0,
+                "is_squeezing": squeeze_cache.get("is_squeezing", False),
+                "momentum_value": squeeze_cache.get("momentum", 0.0),
+                "signal_direction": squeeze_cache.get("direction", "⚪"),
             },
             "gex_metrics": {"put_wall": radar_cache.get("put_wall_strike")},
             "gex_profile_data": {"put_wall": radar_cache.get("put_wall_strike")},
             "vp_data": {
-                "hvn": radar_cache.get("hvn_price"),
+                "hvn": radar_cache.get("hvn_price")
+                or get_kv_cache(f"volume_poc_{sym.upper()}"),
                 "lvn": radar_cache.get("lvn_price"),
             },
-            "dp_poc": radar_cache.get(
-                "hvn_price"
-            ),  # Fallback for absolute support resonance
+            "dp_poc": radar_cache.get("hvn_price")
+            or get_kv_cache(f"volume_poc_{sym.upper()}"),
         }
 
     async def _fetch_sym_radar_data_slow_raw(self, sym: str) -> Any:
@@ -872,7 +885,39 @@ class UnifiedTerminalCog(commands.Cog):
 
         gex_task = fetch_symbol_gex_metrics(sym)
 
-        iv_m, mp_data, gex_data = await asyncio.gather(iv_task, mp_task, gex_task)
+        async def _get_far_mp(symbol: str) -> float:
+            try:
+                exp = await market_data_service.get_all_option_expiries(symbol)
+                if not exp:
+                    return 0.0
+                from datetime import datetime
+
+                today_dt = datetime.now().date()
+                target = None
+                for e in exp:
+                    try:
+                        if (
+                            datetime.strptime(e, "%Y-%m-%d").date() - today_dt
+                        ).days >= 7:
+                            target = e
+                            break
+                    except ValueError:
+                        pass
+                if target:
+                    from market_analysis.sentiment.max_pain import calculate_max_pain
+
+                    res = await calculate_max_pain(symbol, target)
+                    if res and res.get("max_pain"):
+                        return float(res["max_pain"])
+            except Exception:
+                pass
+            return 0.0
+
+        far_mp_task = _get_far_mp(sym)
+
+        iv_m, mp_data, gex_data, far_mp_val = await asyncio.gather(
+            iv_task, mp_task, gex_task, far_mp_task
+        )
 
         # 異步預警：若返回資料標記為 stale，啟動背景重新驗證
         if mp_data.get("is_stale"):
@@ -1007,11 +1052,12 @@ class UnifiedTerminalCog(commands.Cog):
             "vol_data": vol_data,
         }
 
-        # Save to radar cache
-        from database.market_cache import save_radar_cache
+        # Save to kv_cache
+        from database.cache import save_kv_cache
+        from datetime import datetime, timezone
 
-        save_radar_cache(
-            sym,
+        await save_kv_cache(
+            f"radar_terminal_{sym.upper()}",
             {
                 "put_wall_strike": gex_data.get("put_wall")
                 if isinstance(gex_data, dict)
@@ -1019,13 +1065,14 @@ class UnifiedTerminalCog(commands.Cog):
                 "mp_near": mp_data.get("max_pain")
                 if isinstance(mp_data, dict)
                 else 0.0,
-                "mp_far": 0.0,  # Will be implemented later if far-term MP is queried in slow track
+                "mp_far": far_mp_val,
                 "is_divergence": skew_percentile > 85.0
                 and psq_res.get("momentum_value", 0.0) > 0,
                 "is_skew_extreme": skew_percentile > 85.0 or skew_percentile < 15.0,
                 "hvn_price": (vp_data or {}).get("hvn", 0.0),
                 "lvn_price": (vp_data or {}).get("lvn", 0.0),
                 "avg_vol_20d": vol_data.get("avg_volume_20", 0.0),
+                "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
             },
         )
 

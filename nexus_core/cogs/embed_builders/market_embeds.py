@@ -930,9 +930,27 @@ def build_radar_scan_embed(
                 else:
                     trend = " (遠期 →)"
 
-            dmp_display = f"D-MP: {dist_pct:+.2f}%{trend}"
+            updated_at_str = radar_cache.get("updated_at")
+            sync_tag = ""
+            if updated_at_str:
+                try:
+                    # SQLite CURRENT_TIMESTAMP is UTC
+                    updated_dt = datetime.strptime(
+                        updated_at_str, "%Y-%m-%d %H:%M:%S"
+                    ).replace(tzinfo=timezone.utc)
+                    diff_mins = int(
+                        (datetime.now(timezone.utc) - updated_dt).total_seconds() / 60
+                    )
+                    if diff_mins > 30:
+                        sync_tag = f" [過期 {diff_mins}m 🔴]"
+                    else:
+                        sync_tag = f" [{diff_mins}m 🟢]"
+                except Exception:
+                    pass
+
+            dmp_display = f"D-MP: {dist_pct:+.2f}%{trend}{sync_tag}"
             color_ansi = "[1;32m" if dist_pct >= 0 else "[1;31m"
-            dmp_display_ansi = f"D-MP: {color_ansi}{dist_pct:+.2f}%[0m{trend}"
+            dmp_display_ansi = f"D-MP: {color_ansi}{dist_pct:+.2f}%[0m{trend}{sync_tag}"
 
             dmp_len = len(dmp_display)
             dmp_cell = dmp_display_ansi + (" " * max(0, 21 - dmp_len))
