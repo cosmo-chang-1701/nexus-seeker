@@ -328,18 +328,44 @@ def create_watchlist_signal_embed(
         else "N/A"
     )
 
-    lines = []
+    color_val = {
+        "red": discord.Color.red(),
+        "yellow": discord.Color.orange(),
+        "green": discord.Color.green(),
+    }.get(alert_level, discord.Color.blurple())
+
+    tag_str = f" 🏷️ {' | '.join(symbol_tags)}" if symbol_tags else ""
+    embed_title = f"標的分析中心 2.0: {symbol} 每半小時戰場心跳{tag_str}"
+    if is_degraded:
+        embed_title += " [數據未更新/降級模式]"
+
+    embed: discord.Embed
+    try:
+        embed = NexusEmbed(
+            title=embed_title,
+            description=None,
+            color=color_val,
+            timestamp=datetime.now(timezone.utc),
+        )
+    except NameError:
+        embed = NexusEmbed(
+            title=embed_title,
+            description=None,
+            color=color_val,
+            timestamp=datetime.now(timezone.utc),
+        )
 
     if show_market_footprints:
         has_meaningful_content = True
-        lines.extend(
-            [
-                "",
-                " 🧱 物理籌碼牆與邊緣偵測 (Market Footprints)",
-                f" ├─ GEX PutWall (做市商底牆): {gex_putwall_str} (當前價差: {gex_dist_str})",
-                f" ├─ Vol POC (籌碼控制中心): {vol_poc_str}",
-                f" └─ Option Skew (期權偏斜): {skew_val_str} (分位點: {skew_per_str})",
-            ]
+        footprint_lines = [
+            f" ├─ GEX PutWall (做市商底牆): {gex_putwall_str} (當前價差: {gex_dist_str})",
+            f" ├─ Vol POC (籌碼控制中心): {vol_poc_str}",
+            f" └─ Option Skew (期權偏斜): {skew_val_str} (分位點: {skew_per_str})",
+        ]
+        embed.add_field(
+            name="🧱 物理籌碼牆與邊緣偵測 (Market Footprints)",
+            value="```ansi\n" + "\n".join(footprint_lines) + "\n```",
+            inline=False,
         )
 
     if show_market_footprints and (
@@ -380,9 +406,7 @@ def create_watchlist_signal_embed(
 
                 is_stale = bool(symbol_gex.get("_is_stale_cache", False))
                 stale_suffix = " [快取 / API 降級]" if is_stale else ""
-                lines.append("")
-                lines.append(f" 🧲 Gamma 曝險分布 (GEX Profile Matrix){stale_suffix}")
-                lines.append(" ┌─ 履約價(Strike) ─ 曝險熱力圖 ─ [K]")
+                gex_lines = [" ┌─ 履約價(Strike) ─ 曝險熱力圖 ─ [K]"]
                 for i, k in enumerate(reversed(display_strikes)):
                     v = _safe_gex(k)
                     bars = int((abs(v) / max_abs_gex) * 10)
@@ -404,21 +428,26 @@ def create_watchlist_signal_embed(
                     )
                     formatted_val = f"{sign}{abs(v)/1000:.0f}K"
                     prefix = " ├─" if i < len(display_strikes) - 1 else " └─"
-                    lines.append(
+                    gex_lines.append(
                         f"{prefix} {spot_marker}{k:>7.2f} | {color_prefix}{bar_str}\u001b[0m | {formatted_val:>8}"
                     )
+                embed.add_field(
+                    name=f"🧲 Gamma 曝險分布 (GEX Profile Matrix){stale_suffix}",
+                    value="```ansi\n" + "\n".join(gex_lines) + "\n```",
+                    inline=False,
+                )
         except Exception as e:
-            lines.append(f" └─ [GEX 面板載入失敗: {e}]")
+            embed.add_field(
+                name="🧲 Gamma 曝險分布 (GEX Profile Matrix)",
+                value=f"```ansi\n └─ [GEX 面板載入失敗: {e}]\n```",
+                inline=False,
+            )
 
     if show_iv_context:
         has_meaningful_content = True
-        lines.extend(
-            [
-                "",
-                " 🧱 心跳：期權結構與波動率",
-                f" ├─ Implied Volatility (IV): {iv_val_str} ｜ IV Rank: {iv_rank_str} ({iv_status_str})",
-            ]
-        )
+        iv_lines = [
+            f" ├─ Implied Volatility (IV): {iv_val_str} ｜ IV Rank: {iv_rank_str} ({iv_status_str})",
+        ]
 
         if iv_term_status and iv_term_ratio is not None:
             if iv_term_status == "Backwardation":
@@ -427,32 +456,39 @@ def create_watchlist_signal_embed(
                 term_prefix = "🟩 [Contango]"
             else:
                 term_prefix = "⚖️ [Normal]"
-            lines.append(
+            iv_lines.append(
                 f" ├─ IV Term Structure (期限結構): {term_prefix} (近遠月比: {iv_term_ratio:.2f})"
             )
         else:
-            lines.append(" ├─ IV Term Structure (期限結構): --")
+            iv_lines.append(" ├─ IV Term Structure (期限結構): --")
 
         if earnings_loading or macro_loading:
-            lines.extend(
+            iv_lines.extend(
                 [
                     f" ├─ 本週預期波幅 (Expected Move): {expected_move_str}",
                     " └─ 備註: 實盤請預留 1.4x 波動邊界以防範 IV Crush。",
                 ]
             )
         else:
-            lines.append(f" └─ 本週預期波幅 (Expected Move): {expected_move_str}")
+            iv_lines.append(f" └─ 本週預期波幅 (Expected Move): {expected_move_str}")
+
+        embed.add_field(
+            name="🧱 心跳：期權結構與波動率",
+            value="```ansi\n" + "\n".join(iv_lines) + "\n```",
+            inline=False,
+        )
 
     if show_target_lock:
         has_meaningful_content = True
-        lines.extend(
-            [
-                "",
-                " 🎯 結算與目標 (Target Lock)",
-                f" ├─ 最大痛點結算 (Max Pain): {max_pain_str}",
-                f" ├─ Volume PCR (即時情緒): {vol_pcr_str} (狀態: {vol_pcr_status})",
-                f" └─ OI PCR (結構防禦): {oi_pcr_str} (狀態: {oi_pcr_status})",
-            ]
+        target_lines = [
+            f" ├─ 最大痛點結算 (Max Pain): {max_pain_str}",
+            f" ├─ Volume PCR (即時情緒): {vol_pcr_str} (狀態: {vol_pcr_status})",
+            f" └─ OI PCR (結構防禦): {oi_pcr_str} (狀態: {oi_pcr_status})",
+        ]
+        embed.add_field(
+            name="🎯 結算與目標 (Target Lock)",
+            value="```ansi\n" + "\n".join(target_lines) + "\n```",
+            inline=False,
         )
 
     if show_uoa and uoa_table_lines:
@@ -460,58 +496,43 @@ def create_watchlist_signal_embed(
 
     if show_risk_alignment:
         has_meaningful_content = True
-        lines.extend(
-            [
-                "",
-                " 🛡️ 心跳：操盤指引與委託風控",
-                f" ├─ 既有現貨持倉: {shares_str} 股 ｜ 平均成本: {avg_cost_str} ｜ 當前損益: {pnl_str}",
-            ]
-        )
+        risk_lines = [
+            f" ├─ 既有現貨持倉: {shares_str} 股 ｜ 平均成本: {avg_cost_str} ｜ 當前損益: {pnl_str}",
+        ]
         if not has_position and buy_rationale:
-            lines.append(f" ├─ 量化建倉解讀: {buy_rationale}")
+            risk_lines.append(f" ├─ 量化建倉解讀: {buy_rationale}")
         if has_position and sell_rationale:
-            lines.append(f" ├─ 量化止盈解讀: {sell_rationale}")
+            risk_lines.append(f" ├─ 量化止盈解讀: {sell_rationale}")
 
-        lines.extend(
+        risk_lines.extend(
             [
                 f" └─ 操盤執行指南: {inst_str}",
             ]
         )
+        embed.add_field(
+            name="🛡️ 心跳：操盤指引與委託風控",
+            value="```ansi\n" + "\n".join(risk_lines) + "\n```",
+            inline=False,
+        )
+
+    if skew_commentary:
+        has_meaningful_content = True
+        embed.add_field(
+            name="🤖 LLM Skew 解說",
+            value=_safe_embed_field_value(skew_commentary, "無解說"),
+            inline=False,
+        )
+
+    if event_risk_summary:
+        has_meaningful_content = True
+        embed.add_field(
+            name="🗓️ 事件風控",
+            value=_safe_embed_field_value(event_risk_summary, "無重大事件"),
+            inline=False,
+        )
 
     if not has_meaningful_content and not (show_telemetry and telemetry_alignment_note):
         return None
-
-    description = ""
-    if lines:
-        description = "```ansi\n" + "\n".join(lines).strip() + "\n```"
-
-    color_val = {
-        "red": discord.Color.red(),
-        "yellow": discord.Color.orange(),
-        "green": discord.Color.green(),
-    }.get(alert_level, discord.Color.blurple())
-
-    tag_str = f" 🏷️ {' | '.join(symbol_tags)}" if symbol_tags else ""
-    embed_title = f"標的分析中心 2.0: {symbol} 每半小時戰場心跳{tag_str}"
-    if is_degraded:
-        embed_title += " [數據未更新/降級模式]"
-
-    embed_desc = description if description else None
-    embed: discord.Embed
-    try:
-        embed = NexusEmbed(
-            title=embed_title,
-            description=embed_desc,
-            color=color_val,
-            timestamp=datetime.now(timezone.utc),
-        )
-    except NameError:
-        embed = NexusEmbed(
-            title=embed_title,
-            description=embed_desc,
-            color=color_val,
-            timestamp=datetime.now(timezone.utc),
-        )
 
     if show_telemetry and telemetry_alignment_note:
         try:
