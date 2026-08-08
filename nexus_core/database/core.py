@@ -90,6 +90,7 @@ def run_migrations() -> None:
                 conn.commit()
                 logger.info(f"✅ V{v} 遷移成功！")
             except Exception as e:
+                logger.error(f"Migration {v} failed: {e}", exc_info=True)
                 conn.rollback()
 
                 # 🚀 [Self-Healing] 嘗試自動清理殘留的 _new 暫存表，防止下次遷移因表已存在而死鎖

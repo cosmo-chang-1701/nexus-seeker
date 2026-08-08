@@ -424,7 +424,7 @@ def build_radar_scan_embed(
 
         _max_pain_col_header = f"Max Pain{_mp_header_dte_label}"
         header = f"{'標的':<6}  {'價格 (漲跌)':<17}{'IVR / IV TS':<26}{'DTE / Event Prem':<17}{'預期區間 (EM Pos %)'}"
-        header2 = f" └─ {'結構與訊號 (GEX/Wall)':<26}{'SQZ Stage & MOM':<24}{'與痛點價差 (D-MP)':<18}{'雷達警示標籤'}"
+        header2 = f" └─ {'底牆防禦 (D-Wall)':<24}{'動能指標 (RVOL/MOM)':<24}{'多期痛點 (D-MP)':<20}{'結構標籤'}"
         divider = "-" * 95
 
         ansi_lines = []
@@ -435,7 +435,7 @@ def build_radar_scan_embed(
         for r in chunk:
             sym = r["symbol"]
             quote = r["quote"] or {}
-            iv_metrics = r["iv_metrics"]
+            iv_metrics = r.get("iv_metrics", {})
             mp_data = r["max_pain"] or {}
 
             # 1. 價格與漲跌幅
@@ -540,7 +540,8 @@ def build_radar_scan_embed(
                         put_wall = float(val)
 
             # 動態判定共振狀態
-            dp_poc = float(r.get("dp_poc", 0.0))
+            dp_poc_raw = r.get("dp_poc")
+            dp_poc = float(dp_poc_raw) if dp_poc_raw is not None else 0.0
             is_magnetic = False
             if price_val > 0 and max_pain_strike > 0 and put_wall > 0 and dp_poc > 0:
                 dev = abs(price_val - max_pain_strike) / max_pain_strike
@@ -876,97 +877,90 @@ def build_radar_scan_embed(
                 em_pos_str = f"EM: {pos_pct:.1f}%"
             em_pos_cell = em_pos_str
 
-            # 4. GEX Zone & Key Wall
-            gex_zone_str = "+Gamma" if net_gex > 0 else "-Gamma"
-            gex_zone_ansi = (
-                f"\u001b[1;32m{gex_zone_str}\u001b[0m"
-                if net_gex > 0
-                else f"\u001b[1;31m{gex_zone_str}\u001b[0m"
+            # 4. D-Wall (Bottom Wall Defense)
+            radar_cache = r.get("radar_cache", {})
+            put_wall_strike = radar_cache.get("put_wall_strike", put_wall)
+
+            d_wall_dist = 0.0
+            if put_wall_strike and put_wall_strike > 0 and price_val > 0:
+                d_wall_dist = (price_val - put_wall_strike) / price_val * 100
+
+            d_wall_alert = " ⚠️" if d_wall_dist < 1.0 and d_wall_dist != 0 else ""
+            struct_str = (
+                f"D-Wall: {d_wall_dist:+.1f}%{d_wall_alert}"
+                if put_wall_strike
+                else "D-Wall: N/A"
             )
-
-            closest_wall = "Put Wall"
-            closest_wall_val = put_wall
-
-            call_wall = 0.0
-            gf_line = 0.0
-            if "gex_metrics" in r and isinstance(r["gex_metrics"], dict):
-                call_wall = _safe_float(r["gex_metrics"].get("call_wall"))
-                gf_line = _safe_float(r["gex_metrics"].get("zero_gamma"))
-            elif "gex_profile_data" in r and isinstance(r["gex_profile_data"], dict):
-                call_wall = _safe_float(r["gex_profile_data"].get("call_wall"))
-                gf_line = _safe_float(r["gex_profile_data"].get("zero_gamma"))
-
-            if price_val > 0:
-                dists = []
-                if put_wall > 0:
-                    dists.append(("Put Wall", put_wall, abs(price_val - put_wall)))
-                if call_wall > 0:
-                    dists.append(("Call Wall", call_wall, abs(price_val - call_wall)))
-                if gf_line > 0:
-                    dists.append(("Gamma Flip", gf_line, abs(price_val - gf_line)))
-                if dists:
-                    dists.sort(key=lambda x: x[2])
-                    closest_wall = dists[0][0]
-                    closest_wall_val = dists[0][1]
-
-            wall_dist = 0.0
-            if closest_wall_val > 0:
-                wall_dist = (price_val - closest_wall_val) / closest_wall_val * 100
-
-            wall_str = (
-                f"${closest_wall_val:.0f} {closest_wall} ({wall_dist:+.1f}%)"
-                if closest_wall_val > 0
-                else "N/A"
+            struct_ansi = (
+                f"D-Wall: [1;31m{d_wall_dist:+.1f}%[0m{d_wall_alert}"
+                if d_wall_dist < 1.0
+                else f"D-Wall: [1;32m{d_wall_dist:+.1f}%[0m"
             )
-            struct_str = f"{gex_zone_str} / {wall_str}"
-            struct_ansi = f"{gex_zone_ansi} / {wall_str}"
+            if not put_wall_strike:
+                struct_ansi = struct_str
             struct_len = len(struct_str)
-            # Adjust padding depending on Chinese char width estimation, we'll use 30 as base length
-            struct_cell = struct_ansi + (" " * max(0, 31 - struct_len))
+            struct_cell = struct_ansi + (" " * max(0, 25 - struct_len))
 
-            # 5. SQZ Stage & MOM
-            if not psq_result:
-                sqz_mom_str = "⚪ 計算中"
-                sqz_mom_ansi = "\u001b[1;30m⚪ 計算中\u001b[0m"
-            else:
-                sqz_stage = (
-                    "Squeezing"
-                    if sqz_is_squeezing
-                    else (
-                        "Fired-Up"
-                        if sqz_dir == "🟢"
-                        else ("Fired-Down" if sqz_dir == "🔴" else "Neutral")
-                    )
-                )
-                sqz_mom_str = f"{sqz_stage} / {sqz_dir} {sqz_mom:+.2f}"
-                sqz_mom_ansi = f"{sqz_stage} / {sqz_dir} {sqz_mom:+.2f}"
-
-            sqz_len = len(sqz_mom_str)
-            sqz_cell = sqz_mom_ansi + (" " * max(0, 24 - sqz_len))
-
-            # 6. D-MP %
-            dmp_display = f"D-MP: {dist_pct:+.2f}%"
-            dmp_display_ansi = (
-                f"D-MP: \u001b[1;32m{dist_pct:+.2f}%\u001b[0m"
-                if dist_pct >= 0
-                else f"D-MP: \u001b[1;31m{dist_pct:+.2f}%\u001b[0m"
+            # 5. RVOL & MOM
+            rvol = r.get("rvol", 0.0)
+            rvol_alert = " 🚀" if rvol > 2.0 else ""
+            rvol_str = f"RVOL {rvol:.1f}x{rvol_alert}"
+            rvol_ansi = (
+                f"RVOL [1;33m{rvol:.1f}x[0m{rvol_alert}" if rvol > 2.0 else rvol_str
             )
+
+            mom_str = f"MOM {sqz_dir} {sqz_mom:+.1f}" if psq_result else "MOM ⚪"
+
+            sqz_mom_str = f"{rvol_str} | {mom_str}"
+            sqz_mom_ansi = f"{rvol_ansi} | {mom_str}"
+            sqz_len = len(sqz_mom_str)
+            sqz_cell = sqz_mom_ansi + (" " * max(0, 25 - sqz_len))
+
+            # 6. D-MP % (Multi-DTE Trend)
+            radar_cache = r.get("radar_cache", {})
+            mp_near = radar_cache.get("mp_near", 0.0)
+            mp_far = radar_cache.get("mp_far", 0.0)
+
+            trend = ""
+            if mp_near and mp_far and mp_near > 0 and mp_far > 0:
+                if mp_far > mp_near:
+                    trend = " (遠期 ↗)"
+                elif mp_far < mp_near:
+                    trend = " (遠期 ↘)"
+                else:
+                    trend = " (遠期 →)"
+
+            dmp_display = f"D-MP: {dist_pct:+.2f}%{trend}"
+            color_ansi = "[1;32m" if dist_pct >= 0 else "[1;31m"
+            dmp_display_ansi = f"D-MP: {color_ansi}{dist_pct:+.2f}%[0m{trend}"
+
             dmp_len = len(dmp_display)
-            dmp_cell = dmp_display_ansi + (" " * max(0, 18 - dmp_len))
+            dmp_cell = dmp_display_ansi + (" " * max(0, 21 - dmp_len))
 
-            # 7. Alerts
-            skew_val = _safe_float(r.get("skew"))
-            skew_str = "Call-Skew" if skew_val > 0 else "Put-Skew"
-            label_cell = status_label
-            adv_tags = r.get("advanced_tags", [])
-            if adv_tags:
-                label_cell += " " + " ".join(adv_tags)
+            # 7. Alerts (Divergence & Skew Flags)
+            radar_cache = r.get("radar_cache", {})
+            labels = []
+            if radar_cache.get("is_divergence"):
+                labels.append("🚨 結構背離")
+            if radar_cache.get("is_skew_extreme"):
+                labels.append("⚠️ 極端避險")
 
-            # 將 IV Skew 標籤串接在警示後面
-            if label_cell and label_cell != "正常運行":
-                label_cell += f" | {skew_str}"
-            else:
-                label_cell = skew_str
+            if not labels and status_label != "正常運行":
+                labels.append(status_label)
+
+            label_cell = " | ".join(labels) if labels else "正常運行"
+
+            # Volume Profile Level (hvn_price/lvn_price)
+            hvn = radar_cache.get("hvn_price", 0.0)
+            lvn = radar_cache.get("lvn_price", 0.0)
+            if lvn > 0 and abs(price_val - lvn) / lvn < 0.01:
+                insights.append(
+                    f"• 📉 {sym}: 價格接近 LVN 真空區 (${lvn:.2f})，注意突破或無支撐風險。"
+                )
+            if hvn > 0 and abs(price_val - hvn) / hvn < 0.01:
+                insights.append(
+                    f"• 📈 {sym}: 價格接近 HVN 密集區 (${hvn:.2f})，此處為籌碼換手重要支撐/壓力。"
+                )
 
             # 組合雙行
             line1 = f"{sym_cell}  {price_cell}{iv_ts_cell}{dte_prem_cell}{em_pos_cell}"

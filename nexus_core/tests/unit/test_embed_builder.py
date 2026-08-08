@@ -1170,9 +1170,9 @@ def test_build_radar_scan_embed_renders_field_formulas_consistently() -> None:
     # DTE / Event Premium ratio 直接來自 dte_er 與 term_structure_ratio
     assert "7D / 1.2x" in desc
     # 最近牆位應為 Put Wall 104，距離約 +1.0%
-    assert "Put Wall (+1.0%)" in desc
-    # 狀態標籤 + skew 標籤
-    assert "需防壓回" in desc and "Call-Skew" in desc
+    assert "D-Wall:" in desc and "+1.0%" in desc
+    # 狀態標籤
+    assert "需防壓回" in desc
 
 
 def test_build_radar_scan_embed_rebuilds_expected_move_bounds_from_reference_price() -> (

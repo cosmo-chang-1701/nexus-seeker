@@ -194,7 +194,7 @@ async def test_dispatch_watchlist_heartbeat_sends_all_watchlist_symbols() -> Any
     bot.queue_dm = AsyncMock()
 
     mock_terminal = MagicMock()
-    mock_terminal._fetch_sym_radar_data = AsyncMock(
+    mock_terminal._fetch_sym_radar_data_slow = AsyncMock(
         side_effect=lambda sym: {
             "symbol": sym,
             "quote": {"c": 150.0, "dp": 1.2},
@@ -229,7 +229,7 @@ async def test_dispatch_watchlist_heartbeat_sends_all_watchlist_symbols() -> Any
         )
 
     # AAPL is duplicate in list, so unique AAPL and NVDA are fetched
-    assert mock_terminal._fetch_sym_radar_data.call_count == 2
+    assert mock_terminal._fetch_sym_radar_data_slow.call_count == 2
     mock_builder.assert_called_once()
     assert bot.queue_dm.await_count == 1
 
@@ -240,7 +240,7 @@ async def test_dispatch_watchlist_heartbeat_honors_portfolio_only_mode() -> Any:
     bot.queue_dm = AsyncMock()
 
     mock_terminal = MagicMock()
-    mock_terminal._fetch_sym_radar_data = AsyncMock(
+    mock_terminal._fetch_sym_radar_data_slow = AsyncMock(
         side_effect=lambda sym: {
             "symbol": sym,
             "quote": {"c": 150.0, "dp": 1.2},
@@ -276,7 +276,7 @@ async def test_dispatch_watchlist_heartbeat_honors_portfolio_only_mode() -> Any:
         await dispatch_watchlist_heartbeat(bot, [(1, "AAPL", 1), (1, "NVDA", 1)])
 
     # Only NVDA has position, so only NVDA should be fetched and scanned
-    mock_terminal._fetch_sym_radar_data.assert_called_once_with("NVDA")
+    mock_terminal._fetch_sym_radar_data_slow.assert_called_once_with("NVDA")
     mock_builder.assert_called_once()
     assert bot.queue_dm.await_count == 1
 

@@ -141,3 +141,61 @@ def get_fundamental_cache(symbol: str) -> Optional[Dict[str, Any]]:
         if conn:
             conn.close()
     return None
+
+
+def save_radar_cache(symbol: str, data: Dict[str, Any]) -> bool:
+    try:
+        execute_write(
+            """
+            INSERT INTO radar_terminal_cache (
+                symbol, put_wall_strike, mp_near, mp_far, is_divergence, is_skew_extreme,
+                hvn_price, lvn_price, avg_vol_20d, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(symbol) DO UPDATE SET
+            put_wall_strike = excluded.put_wall_strike,
+            mp_near = excluded.mp_near,
+            mp_far = excluded.mp_far,
+            is_divergence = excluded.is_divergence,
+            is_skew_extreme = excluded.is_skew_extreme,
+            hvn_price = excluded.hvn_price,
+            lvn_price = excluded.lvn_price,
+            avg_vol_20d = excluded.avg_vol_20d,
+            updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                symbol.upper(),
+                data.get("put_wall_strike", 0.0),
+                data.get("mp_near", 0.0),
+                data.get("mp_far", 0.0),
+                int(data.get("is_divergence", False)),
+                int(data.get("is_skew_extreme", False)),
+                data.get("hvn_price", 0.0),
+                data.get("lvn_price", 0.0),
+                data.get("avg_vol_20d", 0.0),
+            ),
+        )
+        return True
+    except Exception as e:
+        print(f"Error saving radar cache for {symbol}: {e}")
+        return False
+
+
+def get_radar_cache(symbol: str) -> Optional[Dict[str, Any]]:
+    conn = None
+    try:
+        conn = get_read_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM radar_terminal_cache WHERE symbol = ?", (symbol.upper(),)
+        )
+        row = cursor.fetchone()
+        if row:
+            return dict(row)
+    except Exception:
+        pass
+    finally:
+        if conn:
+            conn.close()
+    return None

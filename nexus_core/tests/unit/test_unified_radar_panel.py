@@ -196,7 +196,7 @@ async def test_execute_unified_scan_filters(mock_bot: Any, mock_interaction: Any
                     }
                 return None
 
-            cog._fetch_sym_radar_data = fake_fetch  # type: ignore
+            cog._fetch_sym_radar_data_fast = fake_fetch  # type: ignore
 
             # Mock build_radar_scan_embed to capture the filtered result
             with patch(
@@ -269,7 +269,7 @@ async def test_execute_unified_scan_squeeze_mode_filter(
                     }
                 return None
 
-            cog._fetch_sym_radar_data = fake_fetch  # type: ignore
+            cog._fetch_sym_radar_data_fast = fake_fetch  # type: ignore
 
             with patch(
                 "cogs.unified_terminal.cog.build_radar_scan_embed"
@@ -359,7 +359,7 @@ async def test_execute_unified_scan_magnetic_filters(  # type: ignore
                     }
                 return None
 
-            cog._fetch_sym_radar_data = fake_fetch  # type: ignore
+            cog._fetch_sym_radar_data_fast = fake_fetch  # type: ignore
 
             with patch(
                 "cogs.unified_terminal.cog.build_radar_scan_embed"
@@ -407,7 +407,7 @@ async def test_batch_scan_alpha_filters_and_pagination(
             "skew": -0.1,  # 符合 dark_pool_skew_floor (-0.2)
         }
 
-    cog._fetch_sym_radar_data = mock_fetch_sym  # type: ignore
+    cog._fetch_sym_radar_data_fast = mock_fetch_sym  # type: ignore
 
     with patch("cogs.unified_terminal.cog.asyncio.to_thread") as mock_thread:
         # 模擬 WATCHLIST 有 15 檔

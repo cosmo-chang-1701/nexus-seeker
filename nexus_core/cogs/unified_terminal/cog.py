@@ -208,7 +208,7 @@ class UnifiedTerminalCog(commands.Cog):
 
             # 並行獲取所有標的的雷達數據 (Cache-Aside)
             scan_results = await asyncio.gather(
-                *(self._fetch_sym_radar_data(s) for s in unique_symbols),
+                *(self._fetch_sym_radar_data_fast(s) for s in unique_symbols),
                 return_exceptions=True,
             )
             # 過濾 Exception 並確保是 dict 類型以滿足 mypy
@@ -773,14 +773,74 @@ class UnifiedTerminalCog(commands.Cog):
         except Exception as e:
             logger.error(f"❌ [SWR] Background revalidation failed for {sym}: {e}")
 
-    async def _fetch_sym_radar_data(self, sym: str) -> Any:
+    async def _fetch_sym_radar_data_fast(self, sym: str) -> Any:
         from services.single_flight import SingleFlightManager
 
         return await SingleFlightManager.run(
-            f"analyze_{sym}", self._fetch_sym_radar_data_raw, sym
+            f"analyze_{sym}_fast", self._fetch_sym_radar_data_fast_raw, sym
         )
 
-    async def _fetch_sym_radar_data_raw(self, sym: str) -> Any:
+    async def _fetch_sym_radar_data_slow(self, sym: str) -> Any:
+        from services.single_flight import SingleFlightManager
+
+        return await SingleFlightManager.run(
+            f"analyze_{sym}_slow", self._fetch_sym_radar_data_slow_raw, sym
+        )
+
+    async def _fetch_sym_radar_data_fast_raw(self, sym: str) -> Any:
+        """
+        Fast Track 讀取：只抓取即時報價與 SQLite radar_terminal_cache。
+        """
+        from services import market_data_service
+        from database.market_cache import get_radar_cache
+
+        quote = await market_data_service.get_quote(sym)
+        price = quote.get("c", 0.0) if quote else 0.0
+        current_volume = quote.get("volume", 0) if quote else 0
+
+        radar_cache = get_radar_cache(sym) or {}
+
+        avg_vol_20d = radar_cache.get("avg_vol_20d", 0.0)
+        rvol = (current_volume / avg_vol_20d) if avg_vol_20d > 0 else 0.0
+
+        # 返回給 radar embed builder 需要的相容結構
+        return {
+            "symbol": sym,
+            "quote": quote,
+            "rvol": rvol,
+            "radar_cache": radar_cache,
+            "skew": -0.5
+            if radar_cache.get("is_skew_extreme")
+            else 0.0,  # Dummy for dp_skew_defense backward compatibility
+            "max_pain": {
+                "max_pain": radar_cache.get("mp_near"),
+                "distance_pct": (
+                    (price - radar_cache.get("mp_near", price))
+                    / radar_cache.get("mp_near", price)
+                )
+                * 100
+                if radar_cache.get("mp_near")
+                else 0.0,
+            },
+            "iv_metrics": {},  # mock empty to satisfy KeyError
+            "iv_data": {},  # mock empty to satisfy KeyError
+            "uoa": [],  # mock empty
+            "psq_result": {
+                "is_squeezing": False,
+                "momentum_value": 0.0,
+            },
+            "gex_metrics": {"put_wall": radar_cache.get("put_wall_strike")},
+            "gex_profile_data": {"put_wall": radar_cache.get("put_wall_strike")},
+            "vp_data": {
+                "hvn": radar_cache.get("hvn_price"),
+                "lvn": radar_cache.get("lvn_price"),
+            },
+            "dp_poc": radar_cache.get(
+                "hvn_price"
+            ),  # Fallback for absolute support resonance
+        }
+
+    async def _fetch_sym_radar_data_slow_raw(self, sym: str) -> Any:
         """
         獲取單一標的的雷達量化數據。
         採用統一的 get_unified_max_pain 方法讀取與重算快取。
@@ -929,7 +989,7 @@ class UnifiedTerminalCog(commands.Cog):
             except Exception:
                 pass
 
-        return {
+        result = {
             "symbol": sym,
             "quote": quote,
             "iv_metrics": mock_iv,
@@ -946,6 +1006,30 @@ class UnifiedTerminalCog(commands.Cog):
             "vp_data": vp_data or {},
             "vol_data": vol_data,
         }
+
+        # Save to radar cache
+        from database.market_cache import save_radar_cache
+
+        save_radar_cache(
+            sym,
+            {
+                "put_wall_strike": gex_data.get("put_wall")
+                if isinstance(gex_data, dict)
+                else 0.0,
+                "mp_near": mp_data.get("max_pain")
+                if isinstance(mp_data, dict)
+                else 0.0,
+                "mp_far": 0.0,  # Will be implemented later if far-term MP is queried in slow track
+                "is_divergence": skew_percentile > 85.0
+                and psq_res.get("momentum_value", 0.0) > 0,
+                "is_skew_extreme": skew_percentile > 85.0 or skew_percentile < 15.0,
+                "hvn_price": (vp_data or {}).get("hvn", 0.0),
+                "lvn_price": (vp_data or {}).get("lvn", 0.0),
+                "avg_vol_20d": vol_data.get("avg_volume_20", 0.0),
+            },
+        )
+
+        return result
 
     @app_commands.command(
         name="dash", description="📊 交易員看板：一站式監控持倉、跑道與 VTR 績效"

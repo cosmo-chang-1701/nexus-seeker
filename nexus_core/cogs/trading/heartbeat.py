@@ -74,7 +74,7 @@ async def dispatch_watchlist_heartbeat(
                 if idx > 0:
                     await asyncio.sleep(random.uniform(1.5, 2.0))
                 try:
-                    res = await terminal_cog._fetch_sym_radar_data(s)
+                    res = await terminal_cog._fetch_sym_radar_data_slow(s)
                     scan_results.append(res)
                 except Exception as ex:
                     logger.error(f"Error fetching radar data for {s}: {ex}")
