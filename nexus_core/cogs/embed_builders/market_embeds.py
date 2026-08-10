@@ -588,6 +588,27 @@ def build_radar_scan_embed(
                     if val is not None:
                         put_wall = float(val)
 
+            # 解析 CallWall
+            call_wall = 0.0
+            if "gex_metrics" in r and isinstance(r["gex_metrics"], dict):
+                c_wall_raw = r["gex_metrics"].get("call_wall")
+                call_wall = float(c_wall_raw) if c_wall_raw is not None else 0.0
+            if (
+                call_wall == 0.0
+                and "gex_profile_data" in r
+                and isinstance(r["gex_profile_data"], dict)
+            ):
+                c_wall_raw = r["gex_profile_data"].get("call_wall")
+                call_wall = float(c_wall_raw) if c_wall_raw is not None else 0.0
+            if (
+                call_wall == 0.0
+                and r.get("iv_metrics")
+                and hasattr(r["iv_metrics"], "gex_max_call_wall")
+            ):
+                val = getattr(r["iv_metrics"], "gex_max_call_wall", 0.0)
+                if val is not None:
+                    call_wall = float(val)
+
             # 動態判定共振狀態
             dp_poc_raw = r.get("dp_poc")
             dp_poc = float(dp_poc_raw) if dp_poc_raw is not None else 0.0
@@ -866,6 +887,17 @@ def build_radar_scan_embed(
                             f"• 🚨 {sym}: 價格已跌破 GEX PutWall 做市商底牆 (${put_wall:.2f})，進入 Delta 負向螺旋高風險區間，嚴防流動性踩踏。"
                         )
 
+            # 連動 GEX CallWall (做市商頂牆)
+            if call_wall > 0 and price_val > 0 and not is_fixed_income:
+                if price_val >= call_wall * 0.98 and sqz_mom > 0:
+                    insights.append(
+                        f"• 🟢 {sym}: 價格強勢逼近或突破 Call Wall (${call_wall:.1f})，且 SQZ 動能偏多 ({sqz_mom:+.1f})，提防軋空發動，現貨重砲攻擊。"
+                    )
+                elif price_val >= call_wall and sqz_mom <= 0:
+                    insights.append(
+                        f"• 🔴 {sym}: 價格已觸及 Call Wall (${call_wall:.1f}) 且 SQZ 動能轉弱 ({sqz_mom:+.1f})，面臨物理封頂壓力，建議 Sell Put 獲利落袋。"
+                    )
+
             if psq_result and sqz_is_squeezing:
                 if sqz_mom > 0:
                     insights.append(
@@ -1061,14 +1093,6 @@ def build_radar_scan_embed(
                     em_pos_str_md = f"**{em_pos_str_md}** ⚠️"
 
             # 4. G-Wall / P-Wall
-            call_wall = 0.0
-            _gex_m = r.get("gex_metrics")
-            if isinstance(_gex_m, dict):
-                c_wall_raw = _gex_m.get("call_wall")
-                call_wall = float(c_wall_raw) if c_wall_raw is not None else 0.0
-            if call_wall == 0.0:
-                cw_fallback = r.get("gex_profile_data", {}).get("call_wall")
-                call_wall = float(cw_fallback) if cw_fallback is not None else 0.0
             p_wall = float(put_wall)
             if call_wall > 0 or p_wall > 0:
                 g_p_wall_str = f"**${call_wall:.1f} / ${p_wall:.1f}**"
