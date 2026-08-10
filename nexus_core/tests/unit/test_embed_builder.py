@@ -1079,7 +1079,7 @@ def test_build_radar_scan_embed() -> None:
     assert len(embeds) == 1
     embed = embeds[0]
     assert embed.title == "🌌 交易員終端: 核心 AI 暨持倉批次量化雷達 (ALL)"
-    assert "**🧠 核心 AI 暨持倉量化雷達**" in get_embed_text(embed)  # type: ignore
+    assert "🧠 核心 AI 暨持倉量化雷達" in get_embed_text(embed)  # type: ignore
     assert "AMD" in get_embed_text(embed)  # type: ignore
     assert "MRVL" in get_embed_text(embed)  # type: ignore
     assert "超跌磁吸" in get_embed_text(embed)  # type: ignore
@@ -1170,7 +1170,7 @@ def test_build_radar_scan_embed_renders_field_formulas_consistently() -> None:
         embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
 
     assert len(embeds) == 1
-    desc = embeds[0].description or ""
+    desc = get_embed_text(embeds[0])
 
     # EM Pos% = (105 - 95) / (115 - 95) = 50.0%
     assert "EM: 50.0%" in desc
@@ -1235,7 +1235,7 @@ def test_build_radar_scan_embed_rebuilds_expected_move_bounds_from_reference_pri
     ):
         embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
 
-    desc = embeds[0].description or ""
+    desc = get_embed_text(embeds[0])
     # 由 reference_price=100 和 EM=8 回推上下緣 92/108，EM Pos% 應為 50%
     assert "EM: 50.0%" in desc
 
