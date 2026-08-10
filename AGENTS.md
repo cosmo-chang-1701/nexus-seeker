@@ -108,7 +108,7 @@ Instead of invoking LLM on the first-level radar panel, a lightweight rules engi
 - **Real-time Insights**: Automatically matches active pending orders or option protection strategies (e.g., triggering pull-back alerts or tail-risk warnings). Now rendered inside a dedicated ANSI markdown code block for easy one-click copying.
 
 ### 3. Rendering Layer (`build_radar_scan_embed`)
-The ANSI terminal radar card is built inside `cogs/embed_builders/` using `build_radar_scan_embed()`, keeping with the **Single Source of Truth** for embeds. It prints an interactive ANSI plain-text grid showing current price, IVR, Expected Move range, Max Pain, and D-MP% deviation.
+The terminal radar card is built inside `cogs/embed_builders/` using `build_radar_scan_embed()`, keeping with the **Single Source of Truth** for embeds. It prints an interactive Markdown table (which replaced the legacy ANSI format for better aesthetics) showing the 5 Alpha fields: G-Wall / P-Wall, D-MP %, IVR / Skew, EM Pos %, and Top UOA Flag, alongside dynamic Gray-scale Tactical Suggestions (灰階戰術建議).
 
 ### 4. 避免 Discord 回應錯誤的長度分段與分頁原則
 為防範當自選標的 (Watchlist) 或持倉 (Holdings) 數量過大時，因 Embed Description 超過 Discord 的 4096 字元上限而導致 `400 Bad Request (error code: 50035): Invalid Form Body` 系統錯誤，系統實施以下長度分段與分頁原則：

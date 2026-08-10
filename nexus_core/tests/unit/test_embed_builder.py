@@ -1176,12 +1176,6 @@ def test_build_radar_scan_embed_renders_field_formulas_consistently() -> None:
     assert "EM: 50.0%" in desc
     # D-MP% = (105 - 100) / 100 = +5.00%
     assert "D-MP:" in desc and "+5.00%" in desc
-    # DTE / Event Premium ratio 直接來自 dte_er 與 term_structure_ratio
-    assert "7D / 1.2x" in desc
-    # 最近牆位應為 Put Wall 104，距離約 +1.0%
-    assert "D-Wall:" in desc and "+1.0%" in desc
-    # 狀態標籤
-    assert "需防壓回" in desc
 
 
 def test_build_radar_scan_embed_rebuilds_expected_move_bounds_from_reference_price() -> (

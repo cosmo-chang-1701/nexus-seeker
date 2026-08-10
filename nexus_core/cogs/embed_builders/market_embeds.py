@@ -474,14 +474,12 @@ def build_radar_scan_embed(
             _mp_header_dte_label = ""
 
         _max_pain_col_header = f"Max Pain{_mp_header_dte_label}"
-        header = f"{'標的':<6}  {'價格 (漲跌)':<17}{'IVR / IV TS':<26}{'DTE / Event Prem':<17}{'預期區間 (EM Pos %)'}"
-        header2 = f" └─ {'底牆防禦 (D-Wall)':<24}{'動能指標 (RVOL/MOM)':<24}{'多期痛點 (D-MP)':<20}{'結構標籤'}"
-        divider = "-" * 95
 
         ansi_lines = []
         if macro_ansi_header:
             ansi_lines.extend(macro_ansi_header)
         insights = []
+        md_lines = []
 
         for r in chunk:
             sym = r["symbol"]
@@ -1038,6 +1036,101 @@ def build_radar_scan_embed(
             ansi_lines.append(line1)
             ansi_lines.append(line2)
             ansi_lines.append("")  # 加上空行讓每個標的層級更分明
+            # ---- 產生 Markdown 行 (5 大高 Alpha 欄位) ----
+            # 2. IV Rank & Skew
+            iv_rank_val = 0.0
+            if iv_metrics:
+                if hasattr(iv_metrics, "iv_rank"):
+                    iv_rank_val = (
+                        float(iv_metrics.iv_rank)
+                        if iv_metrics.iv_rank is not None
+                        else 0.0
+                    )
+                elif isinstance(iv_metrics, dict):
+                    ivr_raw = iv_metrics.get("iv_rank")
+                    iv_rank_val = float(ivr_raw) if ivr_raw is not None else 0.0
+            skew_val = float(r.get("skew", 0.0) or 0.0)
+            ivr_skew_str = f"{iv_rank_val:.1f}% / {skew_val:.1f}%"
+
+            # 3. EM Pos %
+            em_pos_str_md = "N/A"
+            if em_weekly > 0 and (em_high - em_low) > 0 and not is_fixed_income:
+                pos_pct = (price_val - em_low) / (em_high - em_low) * 100
+                em_pos_str_md = f"EM: {pos_pct:.1f}%"
+                if pos_pct > 95.0 or pos_pct < 5.0:
+                    em_pos_str_md = f"**{em_pos_str_md}** ⚠️"
+
+            # 4. G-Wall / P-Wall
+            call_wall = 0.0
+            _gex_m = r.get("gex_metrics")
+            if isinstance(_gex_m, dict):
+                call_wall = float(_gex_m.get("call_wall", 0.0))
+            if call_wall == 0.0:
+                call_wall = float(r.get("gex_profile_data", {}).get("call_wall", 0.0))
+            p_wall = float(put_wall)
+            if call_wall > 0 or p_wall > 0:
+                g_p_wall_str = f"**${call_wall:.1f} / ${p_wall:.1f}**"
+            else:
+                g_p_wall_str = "N/A"
+
+            # 5. Top UOA
+            uoa_list = r.get("uoa") or []
+            top_uoa_str = "N/A"
+            if uoa_list:
+                top_u = uoa_list[0]
+                u_type = str(top_u.get("type", "C"))[0]
+                u_strike = float(top_u.get("strike", 0.0) or 0.0)
+                u_vol = float(top_u.get("volume", 0.0) or 0.0)
+                u_action = top_u.get("action", "BTO")
+                expiry_raw = top_u.get("expiry", "")
+                expiry_short = (
+                    expiry_raw[5:].replace("-", "/")
+                    if len(expiry_raw) >= 10
+                    else expiry_raw
+                )
+                vol_k = f"{u_vol/1000.0:.0f}k" if u_vol >= 1000 else f"{u_vol:.0f}"
+                icon = "🔥" if "BTO" in u_action else "🛡️"
+                if u_action == "ITM":
+                    icon = "🚀"
+                top_uoa_str = f"{icon} {expiry_short} ${u_strike:.1f}{u_type} ({u_action} {vol_k})"
+
+            # 6. 灰階戰術建議
+            dp_poc = float(r.get("dp_poc", 0.0) or 0.0)
+            is_magnetic = False
+            if price_val > 0 and max_pain_strike > 0 and put_wall > 0 and dp_poc > 0:
+                dev = abs(price_val - max_pain_strike) / max_pain_strike
+                if (
+                    dev > 0.10
+                    and price_val >= put_wall
+                    and abs(dp_poc - put_wall) / put_wall < 0.01
+                ):
+                    is_magnetic = True
+
+            tactical_adv = "⚪ 區間震盪，觀察籌碼堆疊"
+            if em_pos_str_md != "N/A" and "⚠️" in em_pos_str_md:
+                tactical_adv = "🟡 貼近 EM 頂/底緣，停損墊高或觀察突破"
+            elif call_wall > 0 and price_val >= call_wall * 0.98 and sqz_mom > 0:
+                tactical_adv = f"🟢 撕裂 ${call_wall:.1f} 發動軋空，現貨重砲"
+            elif call_wall > 0 and price_val >= call_wall and sqz_mom <= 0:
+                tactical_adv = f"🔴 ${call_wall:.1f} 物理封頂，Sell Put 獲利落袋"
+            elif put_wall > 0 and price_val < put_wall:
+                if iv_rank_val >= 80.0:
+                    tactical_adv = f"🟡 跌破底牆，善用 {iv_rank_val:.0f}% IVR 做 Spread 防禦或暫泊 VOO"
+                else:
+                    tactical_adv = f"🔴 跌破底牆 ${put_wall:.1f}，無 UOA 護航，資金轉移"
+            elif dist_pct <= -5.0:
+                tactical_adv = f"🟢 超跌磁吸，預期向 ${max_pain_strike:.1f} 收斂"
+            elif dist_pct >= 10.0:
+                tactical_adv = f"⚠️ 籌碼斷層，防範向 ${max_pain_strike:.1f} 壓回"
+
+            price_str_md = (
+                f"${price_val:.2f} ({'+' if dp_val >= 0 else ''}{dp_val:.2f}%)"
+            )
+            dmp_str_md = f"D-MP: {dist_pct:+.2f}%"
+
+            md_line = f"| **{sym}** | {price_str_md} | {g_p_wall_str} | {dmp_str_md} | {ivr_skew_str} | {em_pos_str_md} | {top_uoa_str} | {tactical_adv} |"
+            md_lines.append(md_line)
+            # ---- 產生 Markdown 行結束 ----
 
         if not show_alpha:
             insights = [
@@ -1065,18 +1158,19 @@ def build_radar_scan_embed(
                 "• ✨ 所有標的當前價格與 Max Pain 及波動邊界皆無極端異常偏離。"
             )
 
-        ansi_table = (
-            f"**🧠 核心 AI 暨持倉量化雷達**\n```ansi\n{header}\n{header2}\n{divider}\n"
-        )
-        ansi_table += "\n".join(ansi_lines)
-        ansi_table += "\n\n"
-        ansi_table += "提示: ⚠️ 代表與最大痛點偏離度過高（>10%）或具備異常籌碼結構，需點擊穿透審查。\n"
-        ansi_table += (
-            "備註: EM Pos % 代表價格處於預期波動區間之下緣(0%)或上緣(100%)。\n"
-        )
-        ansi_table += "指標: SQZ 🟢多頭動能/🔴空頭動能。MOM 顯示數值代表處於擠壓蓄力期，需防突破或殺跌。\n```"
+        md_table_header = "| 標的 | 現價 (漲跌%) | 做市商雙牆 (G/P-Wall) | D-MP % | IVR/Skew | EM Pos % | 單一最強巨鯨異動 (Top UOA) | 灰階戰術建議 |\n| --- | --- | --- | --- | --- | --- | --- | --- |"
+        desc_parts = []
+        if macro_ansi_header:
+            desc_parts.append("```ansi\n" + "\n".join(macro_ansi_header) + "\n```")
 
-        embed.description = ansi_table
+        desc_parts.append("**🧠 核心 AI 暨持倉量化雷達**")
+        desc_parts.append(md_table_header)
+        desc_parts.append("\n".join(md_lines))
+        desc_parts.append(
+            "\n提示: ⚠️ 代表與最大痛點偏離度過高（>10%）或具備異常籌碼結構，需點擊穿透審查。\n備註: EM Pos % 代表價格處於預期波動區間之下緣(0%)或上緣(100%)。\n指標: SQZ 🟢多頭動能/🔴空頭動能。MOM 顯示數值代表處於擠壓蓄力期，需防突破或殺跌。"
+        )
+
+        embed.description = "\n".join(desc_parts)
 
         embed.add_field(
             name="💡 即時聯動警示 (Real-time Insights)",

@@ -592,8 +592,34 @@ async def get_option_chain(symbol: str, expiry: str) -> Optional[Any]:
         ticker = yf.Ticker(symbol)
         chain = await asyncio.to_thread(ticker.option_chain, expiry)
         if chain is not None:
+            # 優雅降級：嘗試獲取報價，若失敗或超時，則不執行 Pruning
+            try:
+                quote = await get_quote(symbol)
+                spot_price = quote.get("c", 0.0) if quote else 0.0
+            except Exception as e:
+                logger.warning(
+                    f"[{symbol}] Strike Pruning 報價獲取失敗 ({e})，降級為不裁減全量資料。"
+                )
+                spot_price = 0.0
+
             calls_copy = chain.calls.copy() if chain.calls is not None else None
             puts_copy = chain.puts.copy() if chain.puts is not None else None
+
+            # 根據現價上下 10% 進行 Strike Pruning，大幅降低算力負載
+            if spot_price > 0:
+                lower_bound = spot_price * 0.9
+                upper_bound = spot_price * 1.1
+                if calls_copy is not None and not calls_copy.empty:
+                    calls_copy = calls_copy[
+                        (calls_copy["strike"] >= lower_bound)
+                        & (calls_copy["strike"] <= upper_bound)
+                    ]
+                if puts_copy is not None and not puts_copy.empty:
+                    puts_copy = puts_copy[
+                        (puts_copy["strike"] >= lower_bound)
+                        & (puts_copy["strike"] <= upper_bound)
+                    ]
+
             underlying_copy = (
                 chain.underlying.copy()
                 if hasattr(chain.underlying, "copy")

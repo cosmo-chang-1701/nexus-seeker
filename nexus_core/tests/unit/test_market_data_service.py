@@ -282,7 +282,11 @@ async def test_get_option_chain_caching() -> None:
 
     with patch(
         "services.market_data_service.yf.Ticker", return_value=mock_ticker
-    ) as mock_yf_ticker:
+    ) as mock_yf_ticker, patch(
+        "services.market_data_service.get_quote",
+        new_callable=AsyncMock,
+        return_value={"c": 145.0},
+    ):
         # First call: cache miss
         chain1 = await get_option_chain("MSFT", "2026-06-19")
         assert chain1 is not None

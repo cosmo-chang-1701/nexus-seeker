@@ -123,9 +123,12 @@ async def detect_uoa(
                     else 0.0
                 )
 
-                # 風控檢驗 2：非指數虛擬名義價值過濾
-                is_index = symbol in INDEX_SYMBOLS or symbol.startswith("^")
+                # 風控檢驗 2：非指數虛擬名義價值過濾與 UOA 絕對門檻 ( > $100k)
                 nominal_val = vol * trade_price * 100.0
+                if nominal_val < 100_000.0:
+                    continue
+
+                is_index = symbol in INDEX_SYMBOLS or symbol.startswith("^")
                 if nominal_val > max_non_index_nominal and not is_index:
                     logger.warning(
                         f"[{symbol}] UOA 名義價值 ${nominal_val:,.2f} 超過限制。予以剔除。"
