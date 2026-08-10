@@ -265,12 +265,21 @@ def create_watchlist_signal_embed(
             strike_val = float(item.get("strike", 0.0))
             opt_type = str(item.get("type", "")).upper()
             action = item.get("action", "")
+
+            trade_type = str(item.get("trade_type", "SWEEP")).upper()
+            oi_change = int(item.get("oi_change_net", 0))
+            trade_tag = "🔥 SWEEP" if trade_type == "SWEEP" else "📦 BLOCK"
+
+            action_display = f"{trade_tag} {action}"
+
             vol_val = int(item.get("volume", 0))
+            oi_str = f"{vol_val:,}({oi_change:+})"
+
             ratio_str = item.get("ratio_str", "0.00x")
             intent = item.get("intent", "")
 
             uoa_table_lines.append(
-                f" {exp:<10} | ${strike_val:<9.2f} | {opt_type:<4} | {action:<21} | +{vol_val:<8,} | {ratio_str:<6} | {intent}"
+                f" {exp:<10} | ${strike_val:<9.2f} | {opt_type:<4} | {action_display:<32} | {oi_str:<14} | {ratio_str:<6} | {intent}"
             )
 
     # Holding status
@@ -553,8 +562,8 @@ def create_watchlist_signal_embed(
     if show_uoa and uoa_table_lines:
         uoa_content = (
             "```ansi\n"
-            " 到期日     | 履約價      | 類型 | 交易流向 [買/賣]      | 機構/OI    | 比例   | 戰略意圖映射\n"
-            " ---------------------------------------------------------------------------------------\n"
+            " 到期日     | 履約價      | 類型 | 標籤 & 交易流向 [買/賣]          | 機構/OI(ΔOI)   | 比例   | 戰略意圖映射\n"
+            " ------------------------------------------------------------------------------------------------------\n"
             + "\n".join(uoa_table_lines)
             + "\n```"
         )
