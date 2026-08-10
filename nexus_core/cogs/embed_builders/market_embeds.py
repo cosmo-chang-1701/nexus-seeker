@@ -1064,9 +1064,11 @@ def build_radar_scan_embed(
             call_wall = 0.0
             _gex_m = r.get("gex_metrics")
             if isinstance(_gex_m, dict):
-                call_wall = float(_gex_m.get("call_wall", 0.0))
+                c_wall_raw = _gex_m.get("call_wall")
+                call_wall = float(c_wall_raw) if c_wall_raw is not None else 0.0
             if call_wall == 0.0:
-                call_wall = float(r.get("gex_profile_data", {}).get("call_wall", 0.0))
+                cw_fallback = r.get("gex_profile_data", {}).get("call_wall")
+                call_wall = float(cw_fallback) if cw_fallback is not None else 0.0
             p_wall = float(put_wall)
             if call_wall > 0 or p_wall > 0:
                 g_p_wall_str = f"**${call_wall:.1f} / ${p_wall:.1f}**"
