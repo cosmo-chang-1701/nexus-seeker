@@ -591,7 +591,7 @@ def test_create_watchlist_overview_embed() -> None:
 
 def test_create_memory_alert_embed() -> None:
     embed = create_memory_alert_embed(91.2, 512.4, 120, 87)
-    assert embed.title == "🆘 【系統緊急警報：記憶體不足】"
+    assert embed.title == "🆘 【系統緊急警報：記憶體不足】 - Droplet (主節點)"
     assert "91.2%" in get_embed_text(embed)  # type: ignore
     assert embed.fields[0].value == "`91.2%`"
     assert embed.fields[1].value == "`512.4 MB`"
@@ -700,9 +700,9 @@ def test_create_system_health_embed() -> None:
         poly_cache_size=10,
         orderbook_size=5,
     )
-    assert embed.title == "🖥️ Nexus Seeker 系統健康診斷"
+    assert embed.title == "🖥️ Nexus Seeker 分散式系統健康診斷"
     assert "120/87" in embed.fields[4].value  # type: ignore
-    assert "🆘 **極度危險**" in embed.fields[5].value  # type: ignore
+    assert "🆘 **極度危險 (OOM 警告)**" in embed.fields[-1].value  # type: ignore
 
 
 def test_create_asset_promotion_embed() -> None:

@@ -247,6 +247,5 @@ async def test_command_sys_health(mock_interaction: Any):  # type: ignore
         await cog.sys_health.callback(cog, mock_interaction)  # type: ignore
         args, kwargs = mock_interaction.followup.send.call_args
         embed = kwargs["embed"]
-        assert "🆘 **極度危險**" in embed.fields[-1].value
-        assert "(磁碟即將滿載)" in embed.fields[-1].value
+        assert "🆘 **極度危險 (OOM 警告)**" in embed.fields[-1].value
         assert discord.Color.red() == embed.color

@@ -114,5 +114,6 @@ async def test_memory_manager_alert_uses_embed_builder() -> None:
         sma_cache_size=2,
         ema_cache_size=1,
         swap_usage=0.0,
+        source="Droplet (主節點)",
     )
     bot.queue_dm.assert_awaited_once_with(999, embed=embed)
