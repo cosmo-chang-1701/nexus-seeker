@@ -19,3 +19,6 @@ dependencies = [
     "httpx",
     "psutil",
 ]
+
+[tool.setuptools]
+py-modules = ["local_api", "section_extractor"]
