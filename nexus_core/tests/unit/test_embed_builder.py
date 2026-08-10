@@ -701,7 +701,7 @@ def test_create_system_health_embed() -> None:
         orderbook_size=5,
     )
     assert embed.title == "🖥️ Nexus Seeker 分散式系統健康診斷"
-    assert "120/87" in embed.fields[4].value  # type: ignore
+    assert "120/87" in embed.fields[0].value  # type: ignore
     assert "🆘 **極度危險 (OOM 警告)**" in embed.fields[-1].value  # type: ignore
 
 

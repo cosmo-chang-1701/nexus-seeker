@@ -159,6 +159,7 @@ docker compose up -d --build
 - **`/list_orders` / `/order_panel`**：檢視活躍委託單與新增委託單。
 - **`/cc_recovery`**：根據現有持倉自動過濾與顯示最佳的 OTM Covered Call 合約 (收租解套策略)。
 - **`/calendar` / `/market`**：查詢總經與個股財報事件日曆、大盤宏觀狀態。
+- **`/sys_health`**：`(Hidden)` 系統健康診斷面板，檢視主節點與邊緣節點的即時硬體資源 (RAM, CPU, RSS, Swap) 與快取狀態。
 - **`/force_macro_update`**：`(Admin 專用)` 強制更新大盤 GEX 與 FedWatch 數據快取。
 
 > 在主機本機端也提供 `cli.py` 開發者工具，供管理員手動觸發爬蟲或強制執行掃描任務。

@@ -4,7 +4,7 @@
 
 Nexus Seeker is a multi-tenant **Discord-first options risk-control and trading operations platform**. It combines technical structure, Black-Scholes-Merton pricing, Greeks-based portfolio risk, event-aware calendar defenses, and LLM-assisted structured commentary.
 
-Current released core version: **`1.11.53`**
+Current released core version: **`1.11.60`**
 
 The codebase is optimized for:
 
@@ -471,6 +471,7 @@ Current repository rule:
 - cogs should **not** use the `queue_dm(message=...)` shortcut
 - push/report messages should prefer **field-based embeds**
 - ANSI tables belong inside a field, not dumped into the full description when avoidable
+- **Discord Embed Layout Best Practices**: When presenting multiline stats or dashboard metrics (e.g., `/sys_health`), prefer using a **Single Field Block List** (where `name` acts as the section header and `value` holds the multiline markdown stats with `inline=False`) instead of a 3-column `inline=True` grid. This prevents breaking on mobile devices and eliminates the need for empty `\u200b` filler fields.
 - **Visual Consistency & Explicit Subclassing (`NexusEmbed`)**:
   - To maintain absolute visual consistency and truncation protection across all modules, **all builders in `cogs/embed_builders/` MUST explicitly import and construct `NexusEmbed` instead of `discord.Embed`.** (e.g. `from cogs.embed_builders._core import NexusEmbed`). Monkey patching is deprecated.
   - **Curated Color Palette**: All standard colors are mapped to cohesive, premium palettes:

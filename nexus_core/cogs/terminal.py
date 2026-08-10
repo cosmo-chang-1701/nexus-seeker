@@ -644,7 +644,11 @@ class TerminalCog(commands.Cog):
         import config
 
         # 1. 取得主節點 (Droplet) 系統資源
+        import platform
+
+        main_os = platform.system()
         mem = psutil.virtual_memory()
+        swap = psutil.swap_memory()
         cpu_load = psutil.cpu_percent()
         disk = psutil.disk_usage("/")
         process = psutil.Process(os.getpid())
@@ -676,8 +680,10 @@ class TerminalCog(commands.Cog):
             orderbook_count = len(self.bot.polymarket_service._order_books)
 
         embed = create_system_health_embed(
+            main_os=main_os,
             memory_percent=mem.percent,
             memory_available_mb=mem.available / (1024**2),
+            swap_percent=swap.percent,
             cpu_percent=cpu_load,
             process_memory_mb=proc_mem,
             disk_percent=disk.percent,
