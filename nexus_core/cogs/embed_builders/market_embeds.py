@@ -1193,7 +1193,7 @@ def build_radar_scan_embed(
         desc_parts.append(md_table_header)
         desc_parts.append("\n".join(md_lines))
         desc_parts.append(
-            "\n提示: ⚠️ 代表與最大痛點偏離度過高（>10%）或具備異常籌碼結構，需點擊穿透審查。\n備註: EM Pos % 代表價格處於預期波動區間之下緣(0%)或上緣(100%)。\n指標: SQZ 🟢多頭動能/🔴空頭動能。MOM 顯示數值代表處於擠壓蓄力期，需防突破或殺跌。"
+            "```ansi\n提示: ⚠️ 代表與最大痛點偏離度過高（>10%）或具備異常籌碼結構，需點擊穿透審查。\n備註: EM Pos % 代表價格處於預期波動區間之下緣(0%)或上緣(100%)。\n指標: SQZ 🟢多頭動能/🔴空頭動能。MOM 顯示數值代表處於擠壓蓄力期，需防突破或殺跌。\n```"
         )
 
         embed.description = "\n".join(desc_parts)
