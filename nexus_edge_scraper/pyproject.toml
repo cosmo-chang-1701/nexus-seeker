@@ -17,4 +17,5 @@ dependencies = [
     "openpyxl",
     "requests",
     "httpx",
+    "psutil",
 ]

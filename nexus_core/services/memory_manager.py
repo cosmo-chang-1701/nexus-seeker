@@ -130,16 +130,51 @@ class MemoryManager:
                 f"🧹 [記憶體維護] 檢測到 RAM 使用率為 {mem.percent}% (Swap: {swap.percent}%)，已手動觸發 GC。"
             )
 
-        # 2. 觸發警報
+        # 2. 觸發主節點警報
+        now = datetime.now(timezone.utc).timestamp()
         if mem.percent > self.threshold or swap.percent > 80:
-            now = datetime.now(timezone.utc).timestamp()
             # 限制警報頻率 (1 小時一次)
             if now - self._last_alert_at > 3600:
-                await self._trigger_emergency_alert(mem.percent, proc_mem, swap.percent)
+                await self._trigger_emergency_alert(
+                    mem.percent, proc_mem, swap.percent, source="Droplet (主節點)"
+                )
                 self._last_alert_at = now  # type: ignore
 
+        # 3. 觸發邊緣節點警報
+        import config
+
+        tunnel_url = getattr(config, "TUNNEL_URL", "")
+        if tunnel_url:
+            import httpx
+
+            try:
+                async with httpx.AsyncClient(timeout=3.0) as client:
+                    res = await client.get(
+                        f"{tunnel_url.rstrip('/')}/api/v1/health/sys"
+                    )
+                    if res.status_code == 200:
+                        edge = res.json()
+                        edge_mem_pct = edge.get("memory_percent", 0)
+                        edge_swap_pct = edge.get("swap_percent", 0)
+                        if edge_mem_pct > self.threshold or edge_swap_pct > 80:
+                            if now - self._last_alert_at > 3600:
+                                edge_os = edge.get("os_system", "Edge")
+                                await self._trigger_emergency_alert(
+                                    edge_mem_pct,
+                                    edge.get("process_memory_mb", 0),
+                                    edge_swap_pct,
+                                    source=f"{edge_os} (邊緣節點)",
+                                )
+                                self._last_alert_at = now  # type: ignore
+            except Exception:
+                pass  # Edge offline, ignore for background alerts
+
     async def _trigger_emergency_alert(
-        self, total_usage: float, proc_mem: float, swap_usage: float = 0.0
+        self,
+        total_usage: float,
+        proc_mem: float,
+        swap_usage: float = 0.0,
+        source: str = "Droplet (主節點)",
     ) -> Any:
         from config import DISCORD_ADMIN_USER_ID
 
@@ -158,9 +193,10 @@ class MemoryManager:
             sma_cache_size=sma_count,
             ema_cache_size=ema_count,
             swap_usage=swap_usage,
+            source=source,
         )
 
         await self.bot.queue_dm(DISCORD_ADMIN_USER_ID, embed=embed)
         logger.warning(
-            f"🚨 [OOM 警報] 記憶體使用率過高 (RAM: {total_usage}%, Swap: {swap_usage}%)"
+            f"🚨 [OOM 警報 - {source}] 記憶體使用率過高 (RAM: {total_usage}%, Swap: {swap_usage}%)"
         )

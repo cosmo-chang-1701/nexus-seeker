@@ -100,16 +100,26 @@ def create_system_health_embed(
     ema_cache_size: int,
     poly_cache_size: int = 0,
     orderbook_size: int = 0,
+    edge_stats: dict | None = None,
 ) -> discord.Embed:
     """建立系統健康診斷 Embed。"""
     is_healthy = memory_percent < 80 and disk_percent < 85
+    if edge_stats:
+        is_healthy = (
+            is_healthy
+            and edge_stats.get("memory_percent", 0) < 80
+            and edge_stats.get("disk_percent", 0) < 85
+        )
+
     embed = NexusEmbed(
-        title="🖥️ Nexus Seeker 系統健康診斷",
+        title="🖥️ Nexus Seeker 分散式系統健康診斷",
         color=discord.Color.green() if is_healthy else discord.Color.red(),
         timestamp=datetime.now(timezone.utc),
     )
+
+    # ── [主節點 Droplet] ──
     embed.add_field(
-        name="VPS 記憶體",
+        name="【主節點 Droplet】VPS 記憶體",
         value=f"`{memory_percent}%` (可用: {memory_available_mb:.1f}MB)",
         inline=True,
     )
@@ -127,25 +137,80 @@ def create_system_health_embed(
         f"• Poly Markets: `{poly_cache_size}`\n"
         f"• OrderBooks: `{orderbook_size}`"
     )
-    embed.add_field(name="📦 快取統計 (LRU/Bounded)", value=cache_info, inline=False)
+    embed.add_field(name="📦 快取統計 (LRU/Bounded)", value=cache_info, inline=True)
+
+    # Empty field for layout alignment
+    embed.add_field(name="\u200b", value="\u200b", inline=True)
+
+    # ── [邊緣節點] ──
+    if edge_stats:
+        edge_os = edge_stats.get("os_system", "Edge")
+        embed.add_field(
+            name=f"【邊緣節點 {edge_os}】記憶體",
+            value=f"`{edge_stats.get('memory_percent', 0)}%` (可用: {edge_stats.get('memory_available_mb', 0):.1f}MB)",
+            inline=True,
+        )
+        embed.add_field(
+            name="CPU 負載", value=f"`{edge_stats.get('cpu_percent', 0)}%`", inline=True
+        )
+
+        proc_mem_str = (
+            f"`{edge_stats.get('process_memory_mb', 0):.1f} MB`"
+            if "process_memory_mb" in edge_stats
+            else "`N/A`"
+        )
+        embed.add_field(name="Edge程序 (RSS)", value=proc_mem_str, inline=True)
+
+        embed.add_field(
+            name="💿 硬碟空間",
+            value=f"`{edge_stats.get('disk_percent', 0)}%` (可用: {edge_stats.get('disk_free_gb', 0):.1f}GB)",
+            inline=True,
+        )
+        embed.add_field(
+            name="Swap 占用",
+            value=f"`{edge_stats.get('swap_percent', 0)}%`",
+            inline=True,
+        )
+        embed.add_field(name="\u200b", value="\u200b", inline=True)
+    else:
+        embed.add_field(
+            name="【邊緣節點 Edge】", value="⚠️ `離線或無法連線`", inline=False
+        )
 
     health_status = "✅ 狀態優良"
-    if memory_percent > 85 or disk_percent > 85:
+    if not is_healthy:
         health_status = "⚠️ **資源吃緊**"
+
+        msgs = []
         if memory_percent > 85:
-            health_status += " (記憶體閾值已達)"
+            msgs.append("主節點記憶體吃緊")
         if disk_percent > 85:
-            health_status += " (磁碟空間不足)"
+            msgs.append("主節點硬碟空間不足")
 
-    if memory_percent > 95 or disk_percent > 95:
-        health_status = "🆘 **極度危險**"
-        if memory_percent > 95:
-            health_status += " (OOM 警告)"
-        if disk_percent > 95:
-            health_status += " (磁碟即將滿載)"
+        if edge_stats:
+            if edge_stats.get("memory_percent", 0) > 85:
+                msgs.append("邊緣記憶體吃緊")
+            if edge_stats.get("disk_percent", 0) > 85:
+                msgs.append("邊緣硬碟不足")
 
-    embed.add_field(name="🩺 健康評級", value=health_status, inline=False)
-    embed.set_footer(text="Argo Optimization Engine | Low-RAM VPS Edition")
+        if msgs:
+            health_status += f" ({', '.join(msgs)})"
+
+    if (
+        memory_percent > 95
+        or disk_percent > 95
+        or (
+            edge_stats
+            and (
+                edge_stats.get("memory_percent", 0) > 95
+                or edge_stats.get("disk_percent", 0) > 95
+            )
+        )
+    ):
+        health_status = "🆘 **極度危險 (OOM 警告)**"
+
+    embed.add_field(name="🩺 整體健康評級", value=health_status, inline=False)
+    embed.set_footer(text="Argo Optimization Engine | Low-RAM VPS & Edge Architecture")
     return embed
 
 

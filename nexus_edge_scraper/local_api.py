@@ -9,6 +9,8 @@ from playwright_stealth import Stealth
 import httpx
 import warnings
 import re
+import os
+import psutil
 from section_extractor import extract_sections
 
 # Suppress BS4 XML warning for SEC filings
@@ -1261,3 +1263,28 @@ async def scrape_fundamental_text(symbol: str, accession_number: str | None = No
     except Exception as e:
         logger.error(f"SEC EDGAR scrape failed for {symbol_clean}: {e}")
         return {"status": "error", "data": str(e)}
+
+
+@app.get("/api/v1/health/sys")
+async def sys_health():
+    """Return OS-level resource usage of the Edge Node"""
+    import platform
+
+    mem = psutil.virtual_memory()
+    cpu_load = psutil.cpu_percent()
+    disk = psutil.disk_usage("/")
+    process = psutil.Process(os.getpid())
+    proc_mem = process.memory_info().rss / (1024 * 1024)
+    swap = psutil.swap_memory()
+
+    return {
+        "os_system": platform.system(),
+        "os_release": platform.release(),
+        "memory_percent": mem.percent,
+        "memory_available_mb": mem.available / (1024**2),
+        "cpu_percent": cpu_load,
+        "process_memory_mb": proc_mem,
+        "disk_percent": disk.percent,
+        "disk_free_gb": disk.free / (1024**3),
+        "swap_percent": swap.percent,
+    }

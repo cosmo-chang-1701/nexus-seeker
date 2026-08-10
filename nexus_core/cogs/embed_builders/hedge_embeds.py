@@ -255,12 +255,13 @@ def create_memory_alert_embed(
     sma_cache_size: int,
     ema_cache_size: int,
     swap_usage: float = 0.0,
+    source: str = "Droplet (主節點)",
 ) -> discord.Embed:
     """建立記憶體不足緊急警報 Embed。"""
     embed = NexusEmbed(
-        title="🆘 【系統緊急警報：記憶體不足】",
+        title=f"🆘 【系統緊急警報：記憶體不足】 - {source}",
         description=(
-            f"VPS 記憶體與 Swap 使用量已達臨界值 (RAM: `{total_usage}%`, Swap: `{swap_usage}%`)，"
+            f"{source} 記憶體與 Swap 使用量已達臨界值 (RAM: `{total_usage}%`, Swap: `{swap_usage}%`)，"
             "可能導致程序被 OOM Killer 終止。"
         ),
         color=discord.Color.red(),
@@ -269,9 +270,12 @@ def create_memory_alert_embed(
     embed.add_field(name="當前總占用", value=f"`{total_usage}%`", inline=True)
     if swap_usage > 0:
         embed.add_field(name="Swap 占用", value=f"`{swap_usage}%`", inline=True)
-    embed.add_field(
-        name="程序占用 (RSS)", value=f"`{process_memory_mb:.1f} MB`", inline=True
-    )
+
+    if process_memory_mb > 0:
+        embed.add_field(
+            name="程序占用 (RSS)", value=f"`{process_memory_mb:.1f} MB`", inline=True
+        )
+
     embed.add_field(
         name="📦 快取消費者",
         value=f"SMA/EMA: `{sma_cache_size}/{ema_cache_size}` 筆",
