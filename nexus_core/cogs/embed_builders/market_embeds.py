@@ -1184,19 +1184,43 @@ def build_radar_scan_embed(
                 "• ✨ 所有標的當前價格與 Max Pain 及波動邊界皆無極端異常偏離。"
             )
 
-        md_table_header = "| 標的 | 現價 (漲跌%) | 做市商雙牆 (G/P-Wall) | D-MP % | IVR/Skew | EM Pos % | 單一最強巨鯨異動 (Top UOA) | 灰階戰術建議 |\n| --- | --- | --- | --- | --- | --- | --- | --- |"
-        desc_parts = []
         if macro_ansi_header:
-            desc_parts.append("```ansi\n" + "\n".join(macro_ansi_header) + "\n```")
+            # macro_ansi_header[0] is the title, macro_ansi_header[1:-1] is the content
+            macro_content = "\n".join(macro_ansi_header[1:-1])
+            embed.add_field(
+                name="🌍 雷達：宏觀數據發布與流動性枯竭警告",
+                value=f"```ansi\n{macro_content}\n```",
+                inline=False,
+            )
 
-        desc_parts.append("**🧠 核心 AI 暨持倉量化雷達**")
-        desc_parts.append(md_table_header)
-        desc_parts.append("\n".join(md_lines))
-        desc_parts.append(
-            "```ansi\n提示: ⚠️ 代表與最大痛點偏離度過高（>10%）或具備異常籌碼結構，需點擊穿透審查。\n備註: EM Pos % 代表價格處於預期波動區間之下緣(0%)或上緣(100%)。\n指標: SQZ 🟢多頭動能/🔴空頭動能。MOM 顯示數值代表處於擠壓蓄力期，需防突破或殺跌。\n```"
-        )
+        radar_title = "🧠 核心 AI 暨持倉量化雷達"
+        md_table_header = "| 標的 | 現價 (漲跌%) | 做市商雙牆 (G/P-Wall) | D-MP % | IVR/Skew | EM Pos % | 單一最強巨鯨異動 (Top UOA) | 灰階戰術建議 |\n| --- | --- | --- | --- | --- | --- | --- | --- |"
 
-        embed.description = "\n".join(desc_parts)
+        chunk_size_md = 5
+        md_chunks = [
+            md_lines[i : i + chunk_size_md]
+            for i in range(0, len(md_lines), chunk_size_md)
+        ]
+
+        for idx, md_chunk in enumerate(md_chunks):
+            field_name = (
+                radar_title
+                if len(md_chunks) == 1
+                else f"{radar_title} ({idx + 1}/{len(md_chunks)})"
+            )
+
+            ansi_content = md_table_header + "\n" + "\n".join(md_chunk)
+
+            if idx == len(md_chunks) - 1:
+                ansi_content += "\n\n提示: ⚠️ 代表與最大痛點偏離度過高（>10%）或具備異常籌碼結構，需點擊穿透審查。\n備註: EM Pos % 代表價格處於預期波動區間之下緣(0%)或上緣(100%)。\n指標: SQZ 🟢多頭動能/🔴空頭動能。MOM 顯示數值代表處於擠壓蓄力期，需防突破或殺跌。"
+
+            embed.add_field(
+                name=field_name,
+                value=f"```ansi\n{ansi_content}\n```",
+                inline=False,
+            )
+
+        embed.description = ""
 
         embed.add_field(
             name="💡 即時聯動警示 (Real-time Insights)",
