@@ -285,6 +285,32 @@ def create_memory_alert_embed(
     return embed
 
 
+def create_power_alert_embed(
+    percent: float,
+    secsleft: float,
+    source: str = "邊緣節點",
+) -> discord.Embed:
+    """建立邊緣節點電力不足警報 Embed。"""
+    time_left_str = "未知"
+    if secsleft > 0:
+        mins = int(secsleft // 60)
+        time_left_str = f"約 {mins} 分鐘"
+
+    embed = NexusEmbed(
+        title=f"🔋 【系統緊急警報：電力不足】 - {source}",
+        description=(
+            f"{source} 目前處於未插電狀態，且剩餘電量過低。\n"
+            "若節點斷電，將無法執行依賴該節點的自動化任務（如 Playwright 爬蟲、SEC 財報解析等）。"
+        ),
+        color=discord.Color.orange(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.add_field(name="剩餘電量", value=f"`{percent}%`", inline=True)
+    embed.add_field(name="預估剩餘時間", value=f"`{time_left_str}`", inline=True)
+
+    return embed
+
+
 def create_polymarket_whale_alert_embed(
     *,
     intent_emoji: str,

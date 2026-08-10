@@ -25,6 +25,7 @@ class MemoryManager:
         self._warmup_task = None
         self._check_interval = 300  # 5 分鐘檢查一次
         self._last_alert_at = 0
+        self._last_power_alert_level = 100
         self._last_warmup_date = None
 
     def start(self) -> None:
@@ -166,6 +167,51 @@ class MemoryManager:
                                     source=f"{edge_os} (邊緣節點)",
                                 )
                                 self._last_alert_at = now  # type: ignore
+
+                        # Check battery (0%, 25%, 50%, 75% thresholds)
+                        battery = edge.get("battery")
+                        if battery:
+                            if not battery.get("power_plugged"):
+                                percent = battery.get("percent", 100)
+                                alert_level = None
+                                last_level = getattr(
+                                    self, "_last_power_alert_level", 100
+                                )
+
+                                if (
+                                    percent <= 5 and last_level > 0
+                                ):  # 0% is usually dead, alert at <= 5% for the 0% level
+                                    alert_level = 0
+                                elif percent <= 25 and last_level > 25:
+                                    alert_level = 25
+                                elif percent <= 50 and last_level > 50:
+                                    alert_level = 50
+                                elif percent <= 75 and last_level > 75:
+                                    alert_level = 75
+
+                                if alert_level is not None:
+                                    from cogs.embed_builder import (
+                                        create_power_alert_embed,
+                                    )
+                                    from config import DISCORD_ADMIN_USER_ID
+
+                                    if DISCORD_ADMIN_USER_ID:
+                                        edge_os = edge.get("os_system", "Edge")
+                                        embed = create_power_alert_embed(
+                                            percent=percent,
+                                            secsleft=battery.get("secsleft", -1),
+                                            source=f"{edge_os} (邊緣節點)",
+                                        )
+                                        await self.bot.queue_dm(
+                                            DISCORD_ADMIN_USER_ID, embed=embed
+                                        )
+                                        logger.warning(
+                                            f"🚨 [電力警報 - {edge_os}] 邊緣節點電量下降至 {percent}% (警報層級: {alert_level}%)"
+                                        )
+                                    self._last_power_alert_level = alert_level
+                            else:
+                                # Reset tracking when plugged in
+                                self._last_power_alert_level = 100
             except Exception:
                 pass  # Edge offline, ignore for background alerts
 

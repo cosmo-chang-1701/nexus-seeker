@@ -1277,6 +1277,15 @@ async def sys_health():
     proc_mem = process.memory_info().rss / (1024 * 1024)
     swap = psutil.swap_memory()
 
+    battery = psutil.sensors_battery()
+    battery_data = None
+    if battery is not None:
+        battery_data = {
+            "percent": round(battery.percent, 1),
+            "power_plugged": battery.power_plugged,
+            "secsleft": battery.secsleft,
+        }
+
     return {
         "os_system": platform.system(),
         "os_release": platform.release(),
@@ -1287,4 +1296,5 @@ async def sys_health():
         "disk_percent": disk.percent,
         "disk_free_gb": disk.free / (1024**3),
         "swap_percent": swap.percent,
+        "battery": battery_data,
     }

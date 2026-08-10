@@ -171,7 +171,18 @@ def create_system_health_embed(
             value=f"`{edge_stats.get('swap_percent', 0)}%`",
             inline=True,
         )
-        embed.add_field(name="\u200b", value="\u200b", inline=True)
+
+        battery = edge_stats.get("battery")
+        if battery:
+            status_icon = "🔌" if battery.get("power_plugged") else "🔋"
+            plugged_text = "插電中" if battery.get("power_plugged") else "未插電"
+            embed.add_field(
+                name=f"{status_icon} 電力狀態",
+                value=f"`{battery.get('percent', 0)}%` ({plugged_text})",
+                inline=True,
+            )
+        else:
+            embed.add_field(name="\u200b", value="\u200b", inline=True)
     else:
         embed.add_field(
             name="【邊緣節點 Edge】", value="⚠️ `離線或無法連線`", inline=False
