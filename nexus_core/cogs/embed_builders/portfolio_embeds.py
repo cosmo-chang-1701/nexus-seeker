@@ -1325,18 +1325,30 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         valid_prints = sanitize_darkpool_prints(symbol, prints, c_val, 0.05)
 
         if valid_prints:
-            dp_lines.append(" 💰 近期最大暗池成交 (Top 3 Block Prints)")
             top3 = sorted(
                 valid_prints, key=lambda x: _to_float(x.get("premium", 0)), reverse=True
             )[:3]
+            actual_count = len(top3)
+            dp_lines.append(f" 💰 近期最大暗池成交 (Top {actual_count} Block Prints)")
+
+            filtered_count = len(prints) - len(valid_prints)
+
             for i, p in enumerate(top3):
                 pr = _to_float(p.get("price", 0))
                 vol = int(_to_float(p.get("volume", 0)))
                 prem = _to_float(p.get("premium", 0))
                 prem_m = prem / 1000000.0
-                prefix = " ├─" if i < len(top3) - 1 else " └─"
+
+                is_last_item = (i == len(top3) - 1) and (filtered_count == 0)
+                prefix = " └─" if is_last_item else " ├─"
+
                 dp_lines.append(
                     f"{prefix} \u001b[1;36m${pr:>7.2f}\u001b[0m | 量: {vol:>8,} | 金額: \u001b[1;33m${prem_m:>6.2f}M\u001b[0m"
+                )
+
+            if filtered_count > 0:
+                dp_lines.append(
+                    f" └─ ⚠️ 已過濾 {filtered_count} 筆偏離現價大於 5% 的髒數據"
                 )
         else:
             dp_lines.append(" 💰 近期最大暗池成交 (Top 3 Block Prints)")
