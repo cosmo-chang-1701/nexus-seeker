@@ -108,7 +108,7 @@ Instead of invoking LLM on the first-level radar panel, a lightweight rules engi
 - **Real-time Insights**: Automatically matches active pending orders or option protection strategies (e.g., triggering pull-back alerts or tail-risk warnings). Now rendered inside a dedicated ANSI markdown code block for easy one-click copying.
 
 ### 3. Rendering Layer (`build_radar_scan_embed`)
-The terminal radar card is built inside `cogs/embed_builders/` using `build_radar_scan_embed()`, keeping with the **Single Source of Truth** for embeds. It prints an interactive Markdown table (which replaced the legacy ANSI format for better aesthetics) showing the 5 Alpha fields: G-Wall / P-Wall, D-MP %, IVR / Skew, EM Pos %, and Top UOA Flag, alongside dynamic Gray-scale Tactical Suggestions (灰階戰術建議).
+The terminal radar card is built inside `cogs/embed_builders/` using `build_radar_scan_embed()`, keeping with the **Single Source of Truth** for embeds. It prints an interactive Markdown table (which replaced the legacy ANSI format for better aesthetics) showing the 5 Alpha fields: G/P-Wall, Neg-GEX, STO 鎖死 (Straddle STO Density), IV 策略 (IV Strategy Match), EM Z-Score, and Top UOA Flag, alongside dynamic Gray-scale Tactical Suggestions (灰階戰術建議). Redundant markdown bold formatting has been removed for consistent ANSI rendering.
 
 ### 4. 避免 Discord 回應錯誤的長度分段與分頁原則
 為防範當自選標的 (Watchlist) 或持倉 (Holdings) 數量過大時，因 Embed Description 超過 Discord 的 4096 字元上限而導致 `400 Bad Request (error code: 50035): Invalid Form Body` 系統錯誤，系統實施以下長度分段與分頁原則：
@@ -163,7 +163,7 @@ Current sections:
   - ANSI snapshot and enriched Unusual Option Activity (UOA) table:
     - UOA entries are processed with `trade_type` (`SWEEP` or `BLOCK`) and `oi_change_net`.
     - Presentational layer tags UOA records visually with `🔥 SWEEP` or `📦 BLOCK` and the corresponding daily Open Interest net change.
-    - Top 3 Dark Pool block prints are displayed along with absolute support resonance (DP-POC overlapping with PutWall).
+    - Top Dark Pool block prints are dynamically displayed along with absolute support resonance (DP-POC overlapping with PutWall). Dirty data (price deviation > 5%) is explicitly filtered out, and the number of filtered records is reported.
   - skew / IV structure interpretation
   - event risk summary
   - executable option plan
@@ -215,7 +215,7 @@ The `dynamic_market_scanner` in `cogs/trading.py` now includes an independent, e
 
 **Branch B: Negative Gamma / Defense Mode (Spot < Gamma Flip)**
 - **假性支撐陷阱 (Fake Support Trap)**: Candle High/Low touches PutWall, strictly blocking narrative "buy the dip" logic.
-- **結構破位與轉倉 (Structural Breakdown)**: Spot falls below PutWall AND Gamma Flip, triggering an absolute 100% liquidation directive to QQQ/SPY ETFs.
+- **結構破位與轉倉 (Structural Breakdown)**: Spot falls below PutWall AND Gamma Flip, triggering an absolute 100% liquidation directive to QQQ/SPY ETFs. This is protected by the **Gamma Cliff Confirmation Engine**, which requires multiple consecutive 1-minute candle closes below the cliff line (a minimum confirmation window) to confirm the breakdown and reject noise.
 
 **Architecture & Rate Limiting**:
 - **Classifier**: `market_analysis/scenario_classifier.py` mathematically evaluates the market state using live price, PutWall, CallWall, Gamma Flip, IV Rank (IVR), and Volume Profile (HVN/LVN).
@@ -242,6 +242,7 @@ Relative Strength (RS) & Tactical Routing:
   using sectoral ETFs (e.g., `SMH` for semiconductor tickers) as benchmarks.
 - In `ExecutionRouter`, overextended bullish assets (Price/MA20 Deviation > 10% AND RSI > 65) with high Relative Strength (RS > 1.2) are routed to **SPEAR** mode (suggesting Bull Put Spreads or OTM Covered Calls) instead of SHIELD grid shorting.
 - **Dark Pool Skew Override**: If the derived Dark Pool Skew is strongly negative (`dark_pool_skew < -0.3`), indicating heavy institutional distribution, the router overrides all aggressive strategies and forces a downgrade to **SHIELD** mode.
+- **IVR Strategy Gate (IVR 硬鎖閘門)**: If the Implied Volatility Rank (IVR) drops strictly below 10.0%, all selling strategies are hard-locked. The router forces a downgrade to `STANDBY` for sellers or restricts operations to Spot Buy, ITM Call BTO, or Debit Spreads, explicitly preventing physically deadlocked short premium entries in a zero-premium environment.
 
 Important current rule inside `IntradayScanPipeline`:
 
@@ -288,6 +289,7 @@ The platform implements an advanced macro risk-control layer that dynamically ad
   - When assets are locked up, the system generates covered call guidelines to help rebuild runway.
   - Filters option chains for: DTE 30-50 days, Strike > `New Cost Basis`, Delta < 0.15, and annualized yield >= 10.0% (or single premium >= 1.0% of spot).
   - Utilizes 30-day Historical Volatility (HV) or last closing IV as fallback pricing inputs if live option chains are unavailable.
+  - **Zero IV Premium & Strong Bullish Momentum Block**: Covered Call alerts are physically blocked if `IVR <= 5.0`, `Squeeze Momentum > 10.0`, and `Spot > PutWall`. This prevents locking up shares against strong momentum rallies when option premiums are artificially cheap.
 
 ### 5. Manual Macro Update Controls (Added in v1.7.3)
 - **Discord Slash Command**: Administrators can manually update GEX and FedWatch data via `/force_macro_update` in Discord.
