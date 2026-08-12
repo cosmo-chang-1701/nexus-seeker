@@ -1172,10 +1172,8 @@ def test_build_radar_scan_embed_renders_field_formulas_consistently() -> None:
     assert len(embeds) == 1
     desc = get_embed_text(embeds[0])
 
-    # EM Pos% = (105 - 95) / (115 - 95) = 50.0%
-    assert "EM: 50.0%" in desc
-    # D-MP% = (105 - 100) / 100 = +5.00%
-    assert "D-MP:" in desc and "+5.00%" in desc
+    # Z-Score = (50 - 50) / 50 = +0.00σ
+    assert "+0.00σ" in desc
 
 
 def test_build_radar_scan_embed_rebuilds_expected_move_bounds_from_reference_price() -> (
@@ -1236,8 +1234,8 @@ def test_build_radar_scan_embed_rebuilds_expected_move_bounds_from_reference_pri
         embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
 
     desc = get_embed_text(embeds[0])
-    # 由 reference_price=100 和 EM=8 回推上下緣 92/108，EM Pos% 應為 50%
-    assert "EM: 50.0%" in desc
+    # 由 reference_price=100 和 EM=8 回推上下緣 92/108，EM Pos% 應為 50%，對應 Z-Score +0.00σ
+    assert "+0.00σ" in desc
 
 
 def test_build_post_market_intelligence_embed_empty() -> None:

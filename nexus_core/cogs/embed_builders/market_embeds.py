@@ -1082,22 +1082,40 @@ def build_radar_scan_embed(
                     ivr_raw = iv_metrics.get("iv_rank")
                     iv_rank_val = float(ivr_raw) if ivr_raw is not None else 0.0
             skew_val = float(r.get("skew", 0.0) or 0.0)
-            ivr_skew_str = f"{iv_rank_val:.1f}% / {skew_val:.1f}%"
 
-            # 3. EM Pos %
-            em_pos_str_md = "N/A"
+            # 3. EM Z-Score
+            em_z_score_str = "N/A"
+            z_score = None
             if em_weekly > 0 and (em_high - em_low) > 0 and not is_fixed_income:
                 pos_pct = (price_val - em_low) / (em_high - em_low) * 100
-                em_pos_str_md = f"EM: {pos_pct:.1f}%"
-                if pos_pct > 95.0 or pos_pct < 5.0:
-                    em_pos_str_md = f"**{em_pos_str_md}** ⚠️"
+                z_score = (pos_pct - 50.0) / 50.0
+                em_z_score_str = f"{z_score:+.2f}σ"
 
-            # 4. G-Wall / P-Wall
+            # 4. G-Wall / P-Wall & Neg-GEX Distance
             p_wall = float(put_wall)
             if call_wall > 0 or p_wall > 0:
-                g_p_wall_str = f"**${call_wall:.1f} / ${p_wall:.1f}**"
+                g_p_wall_str = f"${call_wall:.1f} / ${p_wall:.1f}"
             else:
                 g_p_wall_str = "N/A"
+
+            if p_wall > 0 and price_val > 0:
+                neg_gex_dist = (price_val - p_wall) / p_wall * 100
+                neg_gex_str = f"{neg_gex_dist:+.1f}%"
+            else:
+                neg_gex_str = "N/A"
+
+            # 4.1 STO Density
+            sto_density = r.get("radar_cache", {}).get("straddle_sto_density")
+            if sto_density is not None:
+                sto_str = f"{float(sto_density) * 100:.1f}%"
+            else:
+                sto_str = "N/A"
+
+            # 4.2 IV-Strategy Match
+            if iv_rank_val < 15.0:
+                iv_strategy_str = "🔴CSP 禁售"
+            else:
+                iv_strategy_str = "🟢適宜賣方"
 
             # 5. Top UOA
             uoa_list = r.get("uoa") or []
@@ -1133,7 +1151,7 @@ def build_radar_scan_embed(
                     is_magnetic = True
 
             tactical_adv = "⚪ 區間震盪，觀察籌碼堆疊"
-            if em_pos_str_md != "N/A" and "⚠️" in em_pos_str_md:
+            if z_score is not None and (z_score > 0.9 or z_score < -0.9):
                 tactical_adv = "🟡 貼近 EM 頂/底緣，停損墊高或觀察突破"
             elif call_wall > 0 and price_val >= call_wall * 0.98 and sqz_mom > 0:
                 tactical_adv = f"🟢 撕裂 ${call_wall:.1f} 發動軋空，現貨重砲"
@@ -1152,9 +1170,8 @@ def build_radar_scan_embed(
             price_str_md = (
                 f"${price_val:.2f} ({'+' if dp_val >= 0 else ''}{dp_val:.2f}%)"
             )
-            dmp_str_md = f"D-MP: {dist_pct:+.2f}%"
 
-            md_line = f"| **{sym}** | {price_str_md} | {g_p_wall_str} | {dmp_str_md} | {ivr_skew_str} | {em_pos_str_md} | {top_uoa_str} | {tactical_adv} |"
+            md_line = f"| {sym} | {price_str_md} | {g_p_wall_str} | {neg_gex_str} | {sto_str} | {iv_strategy_str} | {em_z_score_str} | {top_uoa_str} | {tactical_adv} |"
             md_lines.append(md_line)
             # ---- 產生 Markdown 行結束 ----
 
@@ -1194,7 +1211,7 @@ def build_radar_scan_embed(
             )
 
         radar_title = "🧠 核心 AI 暨持倉量化雷達"
-        md_table_header = "| 標的 | 現價 (漲跌%) | 做市商雙牆 (G/P-Wall) | D-MP % | IVR/Skew | EM Pos % | 單一最強巨鯨異動 (Top UOA) | 灰階戰術建議 |\n| --- | --- | --- | --- | --- | --- | --- | --- |"
+        md_table_header = "| 標的 | 現價 (漲跌%) | G/P-Wall | Neg-GEX | STO 鎖死 | IV 策略 | EM Z-Score | 單一最強巨鯨異動 (Top UOA) | 灰階戰術建議 |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
 
         chunk_size_md = 5
         md_chunks = [
