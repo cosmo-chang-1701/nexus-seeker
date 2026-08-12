@@ -79,15 +79,41 @@ class PortfolioMonitorCog(commands.Cog):
                         embed = create_margin_api_alert_embed(event["ratio"])
                         await self.bot.queue_dm(uid, embed=embed)
 
+            import asyncio
+            from database.holdings import get_all_holdings
+
+            all_holdings = get_all_holdings()
+
+            # --- 提前抓取雷達數據，供後續模組共用 ---
+            terminal_cog = getattr(self, "bot", None) and self.bot.get_cog(
+                "UnifiedTerminalCog"
+            )
+            radar_cache_map: Dict[str, Any] = {}
+
+            for h in all_holdings:
+                sym = h["symbol"].upper()
+                if sym not in radar_cache_map:
+                    if terminal_cog:
+                        try:
+                            # 節流保護：若已抓取過其他標的，先休息 1.5 秒
+                            if radar_cache_map:
+                                await asyncio.sleep(1.5)
+                            radar_cache_map[
+                                sym
+                            ] = await terminal_cog._fetch_sym_radar_data_slow(sym)
+                        except Exception as ex:
+                            logger.error(f"Failed to fetch radar data for {sym}: {ex}")
+                            radar_cache_map[sym] = None
+                    else:
+                        radar_cache_map[sym] = None
+
             # 🚀 物理死鎖解除與備兌建單指引主動推播
             try:
-                from database.holdings import get_all_holdings
                 from market_analysis.trading_orchestration import (
                     recommend_covered_calls,
                 )
                 from cogs.embed_builder import create_covered_call_unlock_embed
 
-                all_holdings = get_all_holdings()
                 user_symbols: dict[int, list[str]] = {}
                 for h in all_holdings:
                     u_id = h["user_id"]
@@ -95,7 +121,37 @@ class PortfolioMonitorCog(commands.Cog):
                     user_symbols.setdefault(u_id, []).append(sym)
 
                 for u_id, syms in user_symbols.items():
-                    for sym in syms:
+                    for sym in set(syms):
+                        # 檢查雷達數據，若符合強勢多頭+低IV+強支撐條件則阻斷
+                        r_data = radar_cache_map.get(sym)
+                        if r_data:
+                            ivr = float(
+                                r_data.get("iv_metrics", {}).get("iv_rank", 0.0)
+                                if r_data.get("iv_metrics")
+                                else 0.0
+                            )
+                            spot = float(
+                                r_data.get("quote", {}).get("c", 0.0)
+                                if r_data.get("quote")
+                                else 0.0
+                            )
+                            put_wall = float(
+                                r_data.get("gex_profile_data", {}).get("put_wall", 0.0)
+                                if isinstance(r_data.get("gex_profile_data"), dict)
+                                else 0.0
+                            )
+                            sqz_mom = float(
+                                r_data.get("psq_result", {}).get("momentum_value", 0.0)
+                                if r_data.get("psq_result")
+                                else 0.0
+                            )
+
+                            if ivr <= 5.0 and sqz_mom > 10.0 and spot > put_wall:
+                                logger.info(
+                                    f"[{sym}] 處於零溢價與多頭強勢巡航形態 (IVR: {ivr}%, SQZ: {sqz_mom}, Spot: {spot} > PutWall: {put_wall})，拒絕物理死鎖解除與備兌建單。"
+                                )
+                                continue
+
                         res = await recommend_covered_calls(u_id, sym)
                         if res and res.get("recommendations"):
                             if database.is_notification_enabled(
@@ -108,42 +164,14 @@ class PortfolioMonitorCog(commands.Cog):
 
             # 🚀 動態轉倉 (輕量級邏輯: 機會成本對比、再平衡防禦)
             try:
-                from database.holdings import get_all_holdings
-
-                all_holdings = get_all_holdings()
                 user_assets: Dict[int, List[Dict[str, Any]]] = {}
                 CORE_ETF_SYMBOLS = {"VOO", "SPY", "QQQ", "IVV", "VTI"}
-
-                # --- 參照標的分析中心，抓取完整雷達數據以修正數據缺失 ---
-                import asyncio
-
-                terminal_cog = getattr(self, "bot", None) and self.bot.get_cog(
-                    "UnifiedTerminalCog"
-                )
-                radar_cache_map: Dict[str, Any] = {}
 
                 for h in all_holdings:
                     u_id = h["user_id"]
                     sym = h["symbol"].upper()
 
-                    if sym not in radar_cache_map:
-                        if terminal_cog:
-                            try:
-                                # 節流保護：若已抓取過其他標的，先休息 1.5 秒
-                                if radar_cache_map:
-                                    await asyncio.sleep(1.5)
-                                radar_cache_map[
-                                    sym
-                                ] = await terminal_cog._fetch_sym_radar_data_slow(sym)
-                            except Exception as ex:
-                                logger.error(
-                                    f"Failed to fetch radar data for {sym}: {ex}"
-                                )
-                                radar_cache_map[sym] = None
-                        else:
-                            radar_cache_map[sym] = None
-
-                    r_data = radar_cache_map[sym]
+                    r_data = radar_cache_map.get(sym)
                     if r_data:
                         try:
                             metrics = {
