@@ -280,8 +280,8 @@ class PortfolioMonitorCog(commands.Cog):
                     total_val = sum(a["current_value"] for a in portfolio_assets)
 
                     rebalance_instructions = (
-                        self.rollover_engine.check_satellite_rebalancing(
-                            portfolio_assets, total_val
+                        await self.rollover_engine.check_satellite_rebalancing(
+                            u_id, portfolio_assets, total_val
                         )
                     )
 
@@ -305,7 +305,14 @@ class PortfolioMonitorCog(commands.Cog):
                             expiry="N/A",
                             direction="BTO",
                         )
-                        setattr(embed, "_view", f"RolloverActionView:{ins['symbol']}")
+                        if ins.get("is_manual_override_required"):
+                            setattr(
+                                embed, "_view", f"ManualOverrideView:{ins['symbol']}"
+                            )
+                        else:
+                            setattr(
+                                embed, "_view", f"RolloverActionView:{ins['symbol']}"
+                            )
                         await self.bot.queue_dm(u_id, embed=embed)
             except Exception as e:
                 logger.error(f"動態轉倉盤中審計錯誤: {e}")

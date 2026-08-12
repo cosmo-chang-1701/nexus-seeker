@@ -1,4 +1,5 @@
 import pytest
+from unittest.mock import AsyncMock, patch
 from market_analysis.dynamic_rollover import DynamicRolloverEngine
 import discord
 from cogs.embed_builders.rollover_embeds import (
@@ -8,7 +9,14 @@ from cogs.embed_builders.rollover_embeds import (
 
 
 @pytest.mark.asyncio
-async def test_integration_rollover_embed_generation() -> None:
+@patch(
+    "market_analysis.dynamic_rollover.is_gamma_cliff_confirmed",
+    new_callable=AsyncMock,
+    return_value=False,
+)
+async def test_integration_rollover_embed_generation(
+    mock_cliff: AsyncMock,
+) -> None:
     """
     Test that the output of DynamicRolloverEngine can correctly be pipelined
     into the Discord Embed builder (Scenario 3: Rebalancing).
@@ -35,7 +43,7 @@ async def test_integration_rollover_embed_generation() -> None:
     total_val = 10000.0
 
     # 2. Engine processing
-    instructions = engine.check_satellite_rebalancing(portfolio, total_val)
+    instructions = await engine.check_satellite_rebalancing(1, portfolio, total_val)
 
     assert len(instructions) == 1
     ins = instructions[0]

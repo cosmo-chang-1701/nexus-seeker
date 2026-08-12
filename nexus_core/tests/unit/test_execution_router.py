@@ -180,3 +180,40 @@ def test_gatekeeper_spear_on_overextended_bullish_and_high_rs(router: Any):  # t
     decision_shield = router.evaluate_market(condition_shield)
     assert decision_shield.decision_type == "SHIELD"
     assert "乖離" in decision_shield.trigger_reason
+
+
+def test_ivr_lockout_returns_standby(router: Any) -> None:
+    """IVR < 10% 時 ExecutionRouter 應返回 STANDBY 並鎖死賣方策略"""
+    from models.execution import ExecutionDecision
+
+    condition = MarketCondition(  # type: ignore
+        vix=18.0,
+        skew_percent=0.01,
+        asset_price=150.0,
+        ma20=148.0,
+        atr_14=3.0,
+        rsi_14=45.0,
+        ivr=5.0,  # 低於 10% 鎖死門檻
+    )
+    result = router.evaluate_market(condition)
+    assert isinstance(result, ExecutionDecision)
+    assert result.decision_type == "STANDBY"
+    assert "IVR" in result.trigger_reason
+    assert "鎖" in result.trigger_reason
+
+
+def test_ivr_above_lockout_does_not_affect_routing(router: Any) -> None:
+    """IVR >= 10% 時 ExecutionRouter 正常路由，不受 IVR 閘門影響"""
+    condition = MarketCondition(  # type: ignore
+        vix=18.0,
+        skew_percent=0.01,
+        asset_price=150.0,
+        ma20=148.0,
+        atr_14=3.0,
+        rsi_14=45.0,
+        ivr=50.0,  # 正常 IVR
+        uoa_detected=True,
+    )
+    result = router.evaluate_market(condition)
+    # IVR 正常，UOA 偵測到，應路由至 SPEAR
+    assert result.decision_type == "SPEAR"

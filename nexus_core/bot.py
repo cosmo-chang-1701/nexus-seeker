@@ -523,6 +523,16 @@ class NexusBot(commands.Bot):
                             view = RolloverActionView(symbol)
                         except Exception as e:
                             logger.error(f"Failed to rebuild RolloverActionView: {e}")
+                    elif view_info.startswith("ManualOverrideView:"):
+                        symbol = view_info.split(":", 1)[1]
+                        try:
+                            from cogs.embed_builders.rollover_embeds import (
+                                ManualOverrideView,
+                            )
+
+                            view = ManualOverrideView(symbol)
+                        except Exception as e:
+                            logger.error(f"Failed to rebuild ManualOverrideView: {e}")
 
                 try:
                     user = await self.fetch_user(user_id)

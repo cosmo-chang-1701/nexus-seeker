@@ -4,6 +4,13 @@ from pydantic import BaseModel, Field
 from services.llm_service import client, is_memory_safe
 from config import LLM_MODEL_NAME
 
+from market_analysis.gamma_cliff_confirmation import is_gamma_cliff_confirmed
+from market_analysis.ivr_strategy_gate import is_selling_locked_by_ivr
+from database.user_settings import get_full_user_context
+from market_analysis.sentiment.history_storage import get_indicator_percentile
+import sqlite3
+import config
+
 logger = logging.getLogger(__name__)
 
 
@@ -22,7 +29,12 @@ class DynamicRolloverEngine:
         pass
 
     def _generate_rule_based_rebalance_report(
-        self, symbol: str, metrics: dict, system_action: str
+        self,
+        symbol: str,
+        metrics: dict,
+        system_action: str,
+        target: str = "VOO",
+        strategy_override: str = "",
     ) -> dict:
         """
         Evaluates rebalancing rules and generates the strict 4-part markdown report.
@@ -37,7 +49,7 @@ class DynamicRolloverEngine:
         sqz_mom = metrics.get("sqz_mom", 0.0)
         skew = metrics.get("skew", 0.0)
 
-        final_target = "VOO"
+        final_target = target
         final_action = system_action
 
         # 邏輯 1: 資金效率最大化 & 邏輯 6: 指示不相符處置
@@ -53,7 +65,15 @@ class DynamicRolloverEngine:
 
         # 邏輯 2 & 3: IV Context 與 試水溫
         options_strategy = "N/A (觀望現股)"
-        if ivr < 25.0 and put_wall > 0 and spot >= put_wall and is_uoa_sweep:
+        # ━━━ IVR 賣方策略硬鎖 ━━━
+        if strategy_override:
+            options_strategy = strategy_override
+        elif is_selling_locked_by_ivr(ivr):
+            options_strategy = (
+                f"⚠️ IVR 極低位 ({ivr:.1f}%): 賣方策略已鎖死。"
+                f"僅允許現貨操作或 ITM Call BTO (Delta ≥ 0.70)。"
+            )
+        elif ivr < 25.0 and put_wall > 0 and spot >= put_wall and is_uoa_sweep:
             options_strategy = "Buy OTM Call (低 IV 佈局 Vega 擴張)"
         elif ivr > 50.0:
             options_strategy = "嚴禁買方 (IV 過高，規避 Gamma 陷阱)"
@@ -88,6 +108,38 @@ class DynamicRolloverEngine:
             "options_strategy": options_strategy,
             "markdown_report": markdown_report.strip(),
         }
+
+    def _find_best_rollover_target(self) -> str:
+        """掃描快取尋找下一個高 EV 衛星標的，若無則回傳 VOO"""
+        conn = None
+        try:
+            conn = sqlite3.connect(config.DB_NAME)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            cursor.execute(
+                "SELECT symbol, max_pain, expected_move_lower, expected_move_upper FROM market_cache"
+            )
+            rows = cursor.fetchall()
+
+            for row in rows:
+                sym = row["symbol"]
+                if sym in ["QQQ", "SPY", "VOO", "VXX"]:
+                    continue
+                # 此處應整合各項指標掃描 (IVR < 30%, EV > 0.05 等)，
+                # 簡化起見，實作上可與 SentimentEngine 或 intraday_pipeline 的 radar cache 連動。
+                # 目前假設若資料齊全且符合初步過濾則視為標的：
+                # (此為架構骨架，後續可接上真實的 Screener)
+                # 假設有抓到，回傳該 sym
+                pass
+
+            return "VOO"
+        except Exception as e:
+            logger.error(f"尋找 Rollover Target 失敗: {e}")
+            return "VOO"
+        finally:
+            if conn:
+                conn.close()
 
     async def evaluate_fundamental_thesis(
         self, symbol: str, fundamental_text: str
@@ -242,8 +294,11 @@ class DynamicRolloverEngine:
             "reason": "No action required.",
         }
 
-    def check_satellite_rebalancing(
-        self, portfolio_assets: List[Dict[str, Any]], total_account_value: float
+    async def check_satellite_rebalancing(
+        self,
+        user_id: int,
+        portfolio_assets: List[Dict[str, Any]],
+        total_account_value: float,
     ) -> List[Dict[str, Any]]:
         """
         邏輯 (3): 核心與衛星比例再平衡 + 深度微觀結構與選擇權籌碼驅動
@@ -267,6 +322,7 @@ class DynamicRolloverEngine:
                     "is_uoa_sweep": asset.get("is_uoa_sweep", False),
                     "sqz_mom": asset.get("sqz_mom", 0.0),
                     "skew": asset.get("skew", 0.0),
+                    "skew_percentile": asset.get("skew_percentile", None),
                     "gamma_flip": asset.get("gamma_flip", 0.0),
                 }
 
@@ -277,6 +333,9 @@ class DynamicRolloverEngine:
                 gamma_flip = metrics["gamma_flip"]
                 sqz_mom = metrics["sqz_mom"]
                 skew = metrics["skew"]
+                skew_percentile = metrics["skew_percentile"]
+                if skew_percentile is None:
+                    skew_percentile = get_indicator_percentile(symbol, "SKEW", skew)
 
                 # 計算比例
                 current_alloc = (
@@ -289,9 +348,18 @@ class DynamicRolloverEngine:
                 # 條件一：現有持倉結構劣化（護衛牆破位 / 主力物理蓋頂 / 目標區獲利解鎖完成）
                 # ----------------------------------------------------
                 # 1. 做市商 GEX 防線失守
-                is_structural_breakdown = (put_wall > 0 and gamma_flip > 0) and (
-                    spot < put_wall and spot < gamma_flip
-                )
+                # Phase 1: 瞬時判定 (spot < put_wall and spot < gamma_flip)
+                is_structural_breakdown_pending = (
+                    put_wall > 0 and gamma_flip > 0
+                ) and (spot < put_wall and spot < gamma_flip)
+
+                # Phase 2: 負 Gamma 懸崖連續 15 分鐘實體 K 線貫穿確認
+                is_structural_breakdown = False
+                if is_structural_breakdown_pending:
+                    gamma_cliff_level = min(put_wall, gamma_flip)
+                    is_structural_breakdown = await is_gamma_cliff_confirmed(
+                        symbol, gamma_cliff_level
+                    )
                 # 2. 主力巨量 STO 實體蓋頂
                 is_whale_sto_block = (sqz_mom < 0.0) and (skew < -0.3)
                 # 3. 目標區獲利解鎖完成
@@ -299,17 +367,67 @@ class DynamicRolloverEngine:
                     spot >= call_wall or abs(spot - call_wall) / call_wall < 0.015
                 )
 
+                # 目標解鎖與極端亢奮 (Euphoria)
+                is_euphoria_skew = skew < 0 and skew_percentile <= 20.0
+                is_euphoria = is_profit_unlocked or is_euphoria_skew
+
                 # 條件三 (部分)：擺脫高波洗籌泥淖 (IV Crush 威脅)
                 is_iv_bubble = ivr > 80.0
 
                 if (
                     is_structural_breakdown
                     or is_whale_sto_block
-                    or is_profit_unlocked
+                    or is_euphoria
                     or is_iv_bubble
                 ):
+                    next_target = self._find_best_rollover_target()
+
+                    if is_euphoria:
+                        user_ctx = get_full_user_context(user_id)
+                        if user_ctx.can_trade_spreads:
+                            # 90/10 權限資金拆分
+                            # 90% 轉入新標的
+                            report_90 = self._generate_rule_based_rebalance_report(
+                                symbol,
+                                metrics,
+                                system_action="LIQUIDATE",
+                                target=next_target,
+                            )
+                            rebalance_instructions.append(
+                                {
+                                    "symbol": symbol,
+                                    "action": report_90["final_action"],
+                                    "sell_ratio": 0.9,
+                                    "target_core": report_90["final_target"],
+                                    "reason": report_90["markdown_report"],
+                                    "suggested_strategy": report_90["options_strategy"],
+                                }
+                            )
+                            # 10% 留存原標的做 Bear Call Spread 反向收租
+                            report_10 = self._generate_rule_based_rebalance_report(
+                                symbol,
+                                metrics,
+                                system_action="LIQUIDATE",
+                                target=symbol,
+                                strategy_override=f"Bear Call Spread (Short Call @ ${call_wall * 1.02:.2f})",
+                            )
+                            rebalance_instructions.append(
+                                {
+                                    "symbol": symbol,
+                                    "action": "REDUCE",
+                                    "sell_ratio": 0.1,
+                                    "target_core": symbol,
+                                    "reason": report_10["markdown_report"]
+                                    + "\n⚠️ **【緊急裁決】Bear Call Spread 反向收租，請交易員手動執行防滑價**",
+                                    "suggested_strategy": report_10["options_strategy"],
+                                    "is_manual_override_required": True,
+                                }
+                            )
+                            continue
+
+                    # 一般清倉
                     report = self._generate_rule_based_rebalance_report(
-                        symbol, metrics, system_action="LIQUIDATE"
+                        symbol, metrics, system_action="LIQUIDATE", target=next_target
                     )
 
                     rebalance_instructions.append(
@@ -322,7 +440,7 @@ class DynamicRolloverEngine:
                             "suggested_strategy": report["options_strategy"],
                         }
                     )
-                    continue  # 已經100%撤退，不需進行後續常規再平衡
+                    continue  # 已經撤退，不需進行後續常規再平衡
 
                 # ----------------------------------------------------
                 # [ 常規比例控管 ]

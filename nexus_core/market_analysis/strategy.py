@@ -12,6 +12,7 @@ from .greeks import calculate_contract_delta, calculate_greeks
 from .data import get_next_earnings_date
 
 from .risk_engine import calculate_beta
+from .ivr_strategy_gate import is_selling_locked_by_ivr, _ITM_CALL_MIN_DELTA
 
 import logging
 import asyncio
@@ -56,7 +57,7 @@ def _calculate_technical_indicators(df: Any):  # type: ignore
         return None
 
 
-def _determine_strategy_signal(indicators: Any):  # type: ignore
+def _determine_strategy_signal(indicators: Any, ivr: float = 0.0):  # type: ignore
     """根據技術指標決定策略"""
     price = indicators.get("price", 0.0)
     rsi = indicators.get("rsi", 50.0)
@@ -65,6 +66,16 @@ def _determine_strategy_signal(indicators: Any):  # type: ignore
     macd_hist = indicators.get("macd_hist", 0.0)
 
     deltas = TARGET_DELTAS if TARGET_DELTAS else {}
+
+    # ━━━ IVR < 10% 底層賣方策略硬鎖 ━━━
+    # 當 IVR 極低時，期權權利金過於廉價，賣方策略的 risk/reward 嚴重不利。
+    # 鎖死所有 STO 策略，僅允許現貨或 ITM Call BTO。
+    if is_selling_locked_by_ivr(ivr):
+        logger.info(
+            f"IVR 賣方硬鎖啟動 (IVR={ivr:.1f}%): "
+            f"封鎖所有 STO 策略，僅路由 ITM Call BTO"
+        )
+        return "BTO_CALL", "call", _ITM_CALL_MIN_DELTA, 30, 60
 
     if rsi < 35 and hv_rank >= 30:
         return "STO_PUT", "put", deltas.get("STO_PUT", -0.20), 30, 45
@@ -677,7 +688,7 @@ async def analyze_symbol(
         price = indicators["price"]
 
         strategy, opt_type, target_delta, min_dte, max_dte = _determine_strategy_signal(
-            indicators
+            indicators, ivr=0.0
         )
         if not strategy:
             return None

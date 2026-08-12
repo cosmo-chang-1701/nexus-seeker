@@ -26,6 +26,11 @@ class MarketCondition(BaseModel):
         1.0, description="相對強度 (Relative Strength) 指標"
     )
     dark_pool_skew: float = Field(0.0, description="暗池偏度 (DP Skew)")
+    ivr: float = Field(default=0.0, description="IV Rank (0-100)", ge=0.0, le=100.0)
+    sqz_mom: float = Field(default=0.0, description="Squeeze Momentum")
+    skew_percentile: float = Field(
+        default=50.0, description="Skew 分位點 (0-100)", ge=0.0, le=100.0
+    )
 
     @field_validator(
         "vix",
@@ -36,6 +41,9 @@ class MarketCondition(BaseModel):
         "rsi_14",
         "relative_strength",
         "dark_pool_skew",
+        "ivr",
+        "sqz_mom",
+        "skew_percentile",
         mode="before",
     )
     @classmethod
@@ -74,19 +82,27 @@ class MarketCondition(BaseModel):
             return 50.0
         if info.field_name == "relative_strength" and val <= 0:
             return 1.0
+        if info.field_name == "ivr" and (val < 0 or val > 100):
+            return 0.0
+        if info.field_name == "skew_percentile" and (val < 0 or val > 100):
+            return 50.0
 
         return val
 
     @classmethod
     def _get_safe_default(cls, field_name: str) -> float:
         defaults = {
-            "vix": 18.0,
+            "vix": 15.0,
             "skew_percent": 0.0,
             "asset_price": 100.0,
             "ma20": 100.0,
-            "atr_14": 2.0,
+            "atr_14": 1.0,
             "rsi_14": 50.0,
             "relative_strength": 1.0,
+            "dark_pool_skew": 0.0,
+            "ivr": 0.0,
+            "sqz_mom": 0.0,
+            "skew_percentile": 50.0,
         }
         return defaults.get(field_name, 0.0)
 

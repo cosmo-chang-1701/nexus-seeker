@@ -56,7 +56,17 @@ def test_evaluate_opportunity_cost(engine: DynamicRolloverEngine) -> None:
     assert res3["should_rollover"] is False
 
 
-def test_check_satellite_rebalancing(engine: DynamicRolloverEngine) -> None:
+@pytest.mark.asyncio
+@patch("market_analysis.dynamic_rollover.get_full_user_context")
+@patch(
+    "market_analysis.dynamic_rollover.is_gamma_cliff_confirmed",
+    new_callable=AsyncMock,
+    return_value=False,
+)
+async def test_check_satellite_rebalancing(
+    mock_cliff: AsyncMock, mock_get_user: MagicMock, engine: DynamicRolloverEngine
+) -> None:
+    mock_get_user.return_value = MagicMock(can_trade_spreads=False)
     portfolio = [
         {
             "symbol": "NVDA",
@@ -79,7 +89,7 @@ def test_check_satellite_rebalancing(engine: DynamicRolloverEngine) -> None:
     # Let's check logic: excess_alloc = current_alloc (0.45) - target_alloc (0.20) = 0.25
     # sell ratio = (0.25 * 10000) / 4500 = 2500 / 4500 = 0.555
 
-    instructions = engine.check_satellite_rebalancing(portfolio, total_val)
+    instructions = await engine.check_satellite_rebalancing(1, portfolio, total_val)
     assert len(instructions) == 1
     assert instructions[0]["symbol"] == "NVDA"
     assert instructions[0]["action"] == "REDUCE"
@@ -103,8 +113,87 @@ def test_check_satellite_rebalancing(engine: DynamicRolloverEngine) -> None:
             "max_allocation_pct": 1.0,
         },
     ]
-    instructions2 = engine.check_satellite_rebalancing(portfolio2, 10000.0)
+    instructions2 = await engine.check_satellite_rebalancing(1, portfolio2, 10000.0)
     assert len(instructions2) == 0
+
+
+@pytest.mark.asyncio
+@patch("market_analysis.dynamic_rollover.get_full_user_context")
+@patch(
+    "market_analysis.dynamic_rollover.is_gamma_cliff_confirmed",
+    new_callable=AsyncMock,
+    return_value=False,
+)
+async def test_satellite_rebalancing_breakdown_not_confirmed(
+    mock_cliff: AsyncMock,
+    mock_get_user: MagicMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    mock_get_user.return_value = MagicMock(can_trade_spreads=False)
+    """結構破位待確認：15 分鐘確認未通過時不觸發清倉"""
+    portfolio = [
+        {
+            "symbol": "NVDA",
+            "asset_class": "SATELLITE",
+            "current_value": 5000.0,
+            "target_allocation_pct": 0.20,
+            "max_allocation_pct": 0.50,
+            "spot_price": 200.0,
+            "put_wall": 210.0,
+            "gamma_flip": 215.0,
+            "call_wall": 250.0,
+            "ivr": 30.0,
+            "is_uoa_sweep": False,
+            "max_pain": 220.0,
+            "sqz_mom": 0.5,
+            "skew": -0.1,
+        },
+    ]
+    instructions = await engine.check_satellite_rebalancing(1, portfolio, 10000.0)
+    # is_gamma_cliff_confirmed returned False → structural breakdown NOT confirmed
+    # Allocation is 50% == max 50%, so no regular rebalance either
+    assert all(ins.get("action") != "LIQUIDATE" for ins in instructions)
+
+
+@pytest.mark.asyncio
+@patch("market_analysis.dynamic_rollover.get_full_user_context")
+@patch(
+    "market_analysis.dynamic_rollover.is_gamma_cliff_confirmed",
+    new_callable=AsyncMock,
+    return_value=True,
+)
+async def test_satellite_rebalancing_breakdown_confirmed(
+    mock_cliff: AsyncMock,
+    mock_get_user: MagicMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    mock_get_user.return_value = MagicMock(can_trade_spreads=False)
+    """結構破位確認：15 分鐘確認通過時觸發清倉"""
+    portfolio = [
+        {
+            "symbol": "NVDA",
+            "asset_class": "SATELLITE",
+            "current_value": 5000.0,
+            "target_allocation_pct": 0.20,
+            "max_allocation_pct": 0.50,
+            "spot_price": 200.0,
+            "put_wall": 210.0,
+            "gamma_flip": 215.0,
+            "call_wall": 250.0,
+            "ivr": 30.0,
+            "is_uoa_sweep": False,
+            "max_pain": 220.0,
+            "sqz_mom": 0.5,
+            "skew": -0.1,
+        },
+    ]
+    instructions = await engine.check_satellite_rebalancing(1, portfolio, 10000.0)
+    # is_gamma_cliff_confirmed returned True → structural breakdown confirmed → LIQUIDATE
+    liquidate_instructions = [
+        ins for ins in instructions if ins.get("action") == "LIQUIDATE"
+    ]
+    assert len(liquidate_instructions) == 1
+    assert liquidate_instructions[0]["symbol"] == "NVDA"
 
 
 @pytest.mark.asyncio
@@ -193,3 +282,49 @@ def test_create_dynamic_rollover_embed_truncates_long_reason() -> None:
     reason_field = embed.fields[0]
     assert reason_field.value is not None
     assert len(reason_field.value) <= 1024
+
+
+@pytest.mark.asyncio
+@patch("market_analysis.dynamic_rollover.get_full_user_context")
+@patch(
+    "market_analysis.dynamic_rollover.DynamicRolloverEngine._find_best_rollover_target",
+    return_value="AMD",
+)
+async def test_satellite_rebalancing_euphoria_spread(
+    mock_target: MagicMock,
+    mock_get_user: MagicMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """Euphoria 清倉且使用者有 Spread 權限，觸發 90/10 拆分"""
+    mock_get_user.return_value = MagicMock(can_trade_spreads=True)
+    portfolio = [
+        {
+            "symbol": "NVDA",
+            "asset_class": "SATELLITE",
+            "current_value": 5000.0,
+            "target_allocation_pct": 0.20,
+            "max_allocation_pct": 0.50,
+            "spot_price": 249.0,
+            "put_wall": 210.0,
+            "gamma_flip": 215.0,
+            "call_wall": 250.0,  # 距離現價 < 1.5%
+            "ivr": 30.0,
+            "is_uoa_sweep": False,
+            "max_pain": 220.0,
+            "sqz_mom": 0.5,
+            "skew": -0.1,
+            "skew_percentile": 50.0,
+        },
+    ]
+    instructions = await engine.check_satellite_rebalancing(1, portfolio, 10000.0)
+    assert len(instructions) == 2
+
+    ins_90 = [i for i in instructions if i["sell_ratio"] == 0.9][0]
+    assert ins_90["target_core"] == "AMD"
+    assert ins_90["action"] == "LIQUIDATE"
+
+    ins_10 = [i for i in instructions if i["sell_ratio"] == 0.1][0]
+    assert ins_10["target_core"] == "NVDA"
+    assert ins_10["action"] == "REDUCE"
+    assert "Bear Call Spread" in ins_10["suggested_strategy"]
+    assert ins_10.get("is_manual_override_required") is True

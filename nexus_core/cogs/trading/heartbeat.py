@@ -90,7 +90,10 @@ async def dispatch_watchlist_heartbeat(
                     await bot.queue_dm(uid, embed=embed)
 
                 # --- Scenario Alert Logic ---
-                from market_analysis.scenario_classifier import classify_market_scenario
+                from market_analysis.scenario_classifier import (
+                    classify_market_scenario,
+                    MarketScenario,
+                )
                 from cogs.embed_builders.alert_embeds import create_scenario_alert_embed
 
                 today_str = datetime.now(market_time.ny_tz).strftime("%Y-%m-%d")
@@ -138,6 +141,27 @@ async def dispatch_watchlist_heartbeat(
                         lvn=lvn,
                     )
                     if scenario:
+                        # 二階段確認：PENDING 狀態需經 15 分鐘實體 K 線確認
+                        if scenario == MarketScenario.STRUCTURAL_BREAKDOWN_PENDING:
+                            from market_analysis.gamma_cliff_confirmation import (
+                                is_gamma_cliff_confirmed,
+                            )
+
+                            gamma_cliff_level = min(
+                                put_wall if put_wall > 0 else float("inf"),
+                                gamma_flip if gamma_flip > 0 else float("inf"),
+                            )
+                            if gamma_cliff_level < float("inf"):
+                                is_confirmed = await is_gamma_cliff_confirmed(
+                                    symbol, gamma_cliff_level
+                                )
+                                if is_confirmed:
+                                    scenario = MarketScenario.STRUCTURAL_BREAKDOWN
+                                else:
+                                    scenario = MarketScenario.FAKE_SUPPORT_TRAP
+                            else:
+                                scenario = MarketScenario.FAKE_SUPPORT_TRAP
+
                         cache_key = (
                             f"scenario_alert_{uid}_{symbol}_{today_str}_{scenario.name}"
                         )

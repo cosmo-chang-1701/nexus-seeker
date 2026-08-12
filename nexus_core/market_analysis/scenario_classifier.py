@@ -8,6 +8,7 @@ class MarketScenario(Enum):
     GOLDEN_TAKE_PROFIT = "黃金波段止盈"
     FAKE_SUPPORT_TRAP = "假性支撐陷阱"
     STRUCTURAL_BREAKDOWN = "結構破位轉倉"
+    STRUCTURAL_BREAKDOWN_PENDING = "結構破位轉倉_待確認"
 
 
 def classify_market_scenario(
@@ -67,7 +68,7 @@ def classify_market_scenario(
     # [ Step 4: 轉倉觸發 ]
     # 現價貫穿 PutWall 且跌破 Gamma Flip ──► 100% 資金動態轉倉至 QQQ / SPY
     if price < put_wall and price < gamma_flip:
-        return MarketScenario.STRUCTURAL_BREAKDOWN
+        return MarketScenario.STRUCTURAL_BREAKDOWN_PENDING
 
     # [ Step 1: 體質檢查 ] ──現價是否 > Gamma Flip？
     if price > gamma_flip:

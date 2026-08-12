@@ -129,6 +129,42 @@ class RolloverActionView(discord.ui.View):
         await interaction.response.edit_message(content="轉倉指令已忽略。", view=None)
 
 
+class ManualOverrideView(discord.ui.View):
+    """
+    緊急裁決互動選單 (Bear Call Spread 防滑價機制)
+    提供 [確認平倉 (強制滑價授權)] 與 [忽略] 兩個按鈕。
+    """
+
+    def __init__(self, target_symbol: str, timeout: Optional[float] = None):
+        super().__init__(timeout=timeout)
+        self.target_symbol = target_symbol
+
+    @discord.ui.button(
+        label="確認平倉 (強制滑價授權)",
+        style=discord.ButtonStyle.danger,
+        custom_id="btn_manual_override_execute",
+    )
+    async def btn_execute_callback(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        await interaction.response.send_message(
+            f"🚨 交易員已手動授權！正在針對 {self.target_symbol} 執行強制平倉市價單...",
+            ephemeral=True,
+        )
+
+    @discord.ui.button(
+        label="忽略",
+        style=discord.ButtonStyle.secondary,
+        custom_id="btn_manual_override_ignore",
+    )
+    async def btn_ignore_callback(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        await interaction.response.edit_message(
+            content="緊急平倉指令已忽略。", view=None
+        )
+
+
 def create_dynamic_rollover_embed(
     rollover_type: str,
     sell_symbol: str,

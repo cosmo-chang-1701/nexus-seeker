@@ -7,6 +7,7 @@ from models.execution import (
     ExitStrategy,
     Signal,
 )
+from market_analysis.ivr_strategy_gate import is_selling_locked_by_ivr
 
 
 class ExecutionRouter:
@@ -57,6 +58,44 @@ class ExecutionRouter:
             # 1. 高波動 (VIX > 25)
             # 2. 尾端風險增加 (Skew 絕對值 > 5%)
             # 3. 超買超賣導致的均線偏離 (> 10%)
+
+            # ━━━ 微觀背離防護攔截 (Micro-Divergence Gate) ━━━
+            sqz_mom = getattr(condition, "sqz_mom", 0.0) or 0.0
+            skew_percentile = getattr(condition, "skew_percentile", 50.0) or 50.0
+            if sqz_mom > 0 and skew_percentile >= 85.0:
+                logger.warning(
+                    f"Micro-Divergence Gate 觸發 (SQZ={sqz_mom:.2f}, Skew_Pct={skew_percentile:.1f}%): "
+                    f"散戶追高/機構買 Put 防禦之偽突破。"
+                )
+                return ExecutionDecision(
+                    decision_type="STANDBY",
+                    trigger_reason=(
+                        f"⚠️ 微觀背離：散戶追高/機構買 Put 防禦 (Skew 分位={skew_percentile:.1f}%)。"
+                        f"判定為假突破，已封鎖單腿看多建議。"
+                    ),
+                    grid_params=None,
+                    position_sizing=None,
+                    exit_strategy=None,
+                )
+
+            # ━━━ IVR 賣方策略鎖死閘門 ━━━
+            ivr = getattr(condition, "ivr", 0.0) or 0.0
+            if is_selling_locked_by_ivr(ivr):
+                logger.info(
+                    f"IVR 底層硬鎖啟動 (IVR={ivr:.1f}%): "
+                    f"ExecutionRouter 拒絕所有 SPEAR/SHIELD STO 路由，"
+                    f"僅允許現貨或 ITM Call BTO"
+                )
+                return ExecutionDecision(
+                    decision_type="STANDBY",
+                    trigger_reason=(
+                        f"⚠️ IVR 極低位硬鎖 ({ivr:.1f}%): "
+                        f"所有賣方策略已被系統封鎖。僅允許現貨買入或 ITM Call BTO。"
+                    ),
+                    grid_params=None,
+                    position_sizing=None,
+                    exit_strategy=None,
+                )
 
             if condition.vix > 25:
                 return ExecutionDecision(
