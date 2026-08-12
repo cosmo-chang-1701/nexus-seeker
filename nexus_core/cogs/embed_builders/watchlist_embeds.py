@@ -348,18 +348,36 @@ def create_watchlist_signal_embed(
     if is_degraded:
         embed_title += " [數據未更新/降級模式]"
 
+    description_lines = []
+
+    if event_risk_summary:
+        has_meaningful_content = True
+        description_lines.append("**🗓️ 事件風控**")
+        description_lines.append(f"```ansi\n{event_risk_summary}\n```")
+
+    if skew_commentary:
+        has_meaningful_content = True
+        if event_risk_summary:
+            description_lines.append("")
+        description_lines.append("**🤖 LLM Skew 解說**")
+        description_lines.append(f"```ansi\n{skew_commentary}\n```")
+
+    embed_description = (
+        "\n".join(description_lines).strip() if description_lines else None
+    )
+
     embed: discord.Embed
     try:
         embed = NexusEmbed(
             title=embed_title,
-            description=None,
+            description=embed_description,
             color=color_val,
             timestamp=datetime.now(timezone.utc),
         )
     except NameError:
         embed = NexusEmbed(
             title=embed_title,
-            description=None,
+            description=embed_description,
             color=color_val,
             timestamp=datetime.now(timezone.utc),
         )
@@ -521,22 +539,6 @@ def create_watchlist_signal_embed(
         embed.add_field(
             name="🛡️ 心跳：操盤指引與委託風控",
             value="```ansi\n" + "\n".join(risk_lines) + "\n```",
-            inline=False,
-        )
-
-    if skew_commentary:
-        has_meaningful_content = True
-        embed.add_field(
-            name="🤖 LLM Skew 解說",
-            value=_safe_embed_field_value(skew_commentary, "無解說"),
-            inline=False,
-        )
-
-    if event_risk_summary:
-        has_meaningful_content = True
-        embed.add_field(
-            name="🗓️ 事件風控",
-            value=_safe_embed_field_value(event_risk_summary, "無重大事件"),
             inline=False,
         )
 
