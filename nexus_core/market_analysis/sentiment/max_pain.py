@@ -452,7 +452,9 @@ async def _calculate_max_pain_raw(
                     "error": "Data_Missing",
                 }
 
-        chain = await market_data_service.get_option_chain(symbol, expiry)
+        chain = await market_data_service.get_option_chain(
+            symbol, expiry, prune_pct=None
+        )
         if not chain:
             return {
                 "symbol": symbol,

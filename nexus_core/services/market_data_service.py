@@ -566,11 +566,39 @@ async def get_all_option_expiries(symbol: str) -> List[str]:
         return []
 
 
-async def get_option_chain(symbol: str, expiry: str) -> Optional[Any]:
+async def get_option_chain(
+    symbol: str, expiry: str, prune_pct: Optional[float] = 0.1
+) -> Optional[Any]:
     """取得指定到期日的期權鏈 (支援 40 分鐘快取與 Copy 隔離)。"""
     symbol = _sanitize_ticker(symbol)
     cache_key = (symbol, expiry)
     now = time.time()
+
+    async def _get_spot() -> float:
+        try:
+            quote = await get_quote(symbol)
+            return float(quote.get("c", 0.0)) if quote else 0.0
+        except Exception as e:
+            logger.warning(
+                f"[{symbol}] Strike Pruning 報價獲取失敗 ({e})，降級為不裁減全量資料。"
+            )
+            return 0.0
+
+    def _prune(
+        calls: Optional[pd.DataFrame],
+        puts: Optional[pd.DataFrame],
+        spot: float,
+        pct: Optional[float],
+    ) -> tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+        if spot <= 0.0 or pct is None:
+            return calls, puts
+        lower = spot * (1.0 - pct)
+        upper = spot * (1.0 + pct)
+        if calls is not None and not calls.empty:
+            calls = calls[(calls["strike"] >= lower) & (calls["strike"] <= upper)]
+        if puts is not None and not puts.empty:
+            puts = puts[(puts["strike"] >= lower) & (puts["strike"] <= upper)]
+        return calls, puts
 
     if cache_key in _option_chain_cache:
         cached_val, expiry_time = _option_chain_cache[cache_key]
@@ -579,6 +607,10 @@ async def get_option_chain(symbol: str, expiry: str) -> Optional[Any]:
                 cached_val.calls.copy() if cached_val.calls is not None else None
             )
             puts_copy = cached_val.puts.copy() if cached_val.puts is not None else None
+
+            spot_price = await _get_spot()
+            calls_copy, puts_copy = _prune(calls_copy, puts_copy, spot_price, prune_pct)
+
             underlying_copy = (
                 cached_val.underlying.copy()
                 if hasattr(cached_val.underlying, "copy")
@@ -592,52 +624,34 @@ async def get_option_chain(symbol: str, expiry: str) -> Optional[Any]:
         ticker = yf.Ticker(symbol)
         chain = await asyncio.to_thread(ticker.option_chain, expiry)
         if chain is not None:
-            # 優雅降級：嘗試獲取報價，若失敗或超時，則不執行 Pruning
-            try:
-                quote = await get_quote(symbol)
-                spot_price = quote.get("c", 0.0) if quote else 0.0
-            except Exception as e:
-                logger.warning(
-                    f"[{symbol}] Strike Pruning 報價獲取失敗 ({e})，降級為不裁減全量資料。"
-                )
-                spot_price = 0.0
-
-            calls_copy = chain.calls.copy() if chain.calls is not None else None
-            puts_copy = chain.puts.copy() if chain.puts is not None else None
-
-            # 根據現價上下 10% 進行 Strike Pruning，大幅降低算力負載
-            if spot_price > 0:
-                lower_bound = spot_price * 0.9
-                upper_bound = spot_price * 1.1
-                if calls_copy is not None and not calls_copy.empty:
-                    calls_copy = calls_copy[
-                        (calls_copy["strike"] >= lower_bound)
-                        & (calls_copy["strike"] <= upper_bound)
-                    ]
-                if puts_copy is not None and not puts_copy.empty:
-                    puts_copy = puts_copy[
-                        (puts_copy["strike"] >= lower_bound)
-                        & (puts_copy["strike"] <= upper_bound)
-                    ]
-
-            underlying_copy = (
+            # 快取完整未裁減的資料
+            calls_full = chain.calls.copy() if chain.calls is not None else None
+            puts_full = chain.puts.copy() if chain.puts is not None else None
+            underlying_full = (
                 chain.underlying.copy()
                 if hasattr(chain.underlying, "copy")
                 else chain.underlying
             )
             cached_entry = OptionChainData(
-                calls=calls_copy, puts=puts_copy, underlying=underlying_copy
+                calls=calls_full, puts=puts_full, underlying=underlying_full
             )
             _option_chain_cache[cache_key] = (
                 cached_entry,
                 now + _OPTION_CHAIN_CACHE_TTL,
             )
+
+            # 對回傳的副本進行裁減
+            spot_price = await _get_spot()
+            calls_copy = calls_full.copy() if calls_full is not None else None
+            puts_copy = puts_full.copy() if puts_full is not None else None
+            calls_copy, puts_copy = _prune(calls_copy, puts_copy, spot_price, prune_pct)
+
             return OptionChainData(
-                calls=calls_copy.copy() if calls_copy is not None else None,
-                puts=puts_copy.copy() if puts_copy is not None else None,
-                underlying=underlying_copy.copy()
-                if hasattr(underlying_copy, "copy")
-                else underlying_copy,
+                calls=calls_copy,
+                puts=puts_copy,
+                underlying=underlying_full.copy()
+                if hasattr(underlying_full, "copy")
+                else underlying_full,
             )
         return None
     except Exception as e:
