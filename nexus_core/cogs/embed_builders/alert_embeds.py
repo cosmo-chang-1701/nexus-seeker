@@ -456,35 +456,6 @@ def create_gamma_fragility_embed(event: Dict[str, Any]) -> discord.Embed:
     return embed
 
 
-def create_pre_market_earnings_embed(
-    alerts: List[Dict[str, Any]], scanned_symbols: List[str], warning_days: int
-) -> discord.Embed:
-    """建立盤前財報雷達通知 Embed。"""
-    if alerts:
-        description = "\n\n".join(
-            (
-                f"**{item['symbol']}** "
-                f"({'⚠️ **持倉高風險**' if item['is_portfolio'] else '👀 觀察清單'})\n"
-                f"└ 📅 財報日: `{item['earnings_date']}` (倒數 **{item['days_left']}** 天)"
-            )
-            for item in alerts
-        )
-        return NexusEmbed(
-            title="🚨 【盤前財報季雷達預警】",
-            description=description,
-            color=discord.Color.red(),
-            timestamp=datetime.now(timezone.utc),
-        )
-
-    scanned_list = "、".join(f"`{symbol}`" for symbol in scanned_symbols)
-    return NexusEmbed(
-        title="✅ 【盤前財報季雷達掃描完畢】",
-        description=f"已掃描：{scanned_list}\n\n近 {warning_days} 日內無財報風險，安全過關！",
-        color=discord.Color.green(),
-        timestamp=datetime.now(timezone.utc),
-    )
-
-
 def create_ditm_transition_alert_embed(
     *,
     symbol: str,

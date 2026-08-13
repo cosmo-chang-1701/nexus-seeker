@@ -15,7 +15,6 @@ from discord.ext import tasks, commands
 import database
 import market_time
 from services.trading_service import TradingService
-from cogs.embed_builder import create_pre_market_earnings_embed
 
 ny_tz = ZoneInfo("America/New_York")
 logger = logging.getLogger(__name__)
@@ -27,7 +26,6 @@ class PreMarketCog(commands.Cog):
     def __init__(self, bot: Any) -> None:
         self.bot = bot
         self.trading_service = TradingService(bot)
-        self.EARNINGS_WARNING_DAYS = 14
         self.pre_market_risk_monitor.start()
 
     async def cog_unload(self) -> None:
@@ -47,25 +45,6 @@ class PreMarketCog(commands.Cog):
 
         logger.info("Starting pre_market_risk_monitor task.")
         try:
-            results = await self.trading_service.get_pre_market_alerts_data(
-                self.EARNINGS_WARNING_DAYS
-            )
-
-            for uid, data in results.items():
-                if not database.is_notification_enabled(uid, "pre_market_briefing"):
-                    continue
-                user = await self.bot.fetch_user(uid)
-                if user:
-                    embed = create_pre_market_earnings_embed(
-                        data["alerts"],
-                        data["scanned_symbols"],
-                        self.EARNINGS_WARNING_DAYS,
-                    )
-                    try:
-                        await self.bot.queue_dm(uid, embed=embed)
-                    except Exception:
-                        pass
-
             asyncio.create_task(self._pre_warm_all_targets())
         except Exception as e:
             logger.error(f"盤前掃描執行錯誤: {e}")

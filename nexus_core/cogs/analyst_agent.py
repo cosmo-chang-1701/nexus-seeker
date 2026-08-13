@@ -219,7 +219,7 @@ class AnalystAgent(commands.Cog):
         macro_alerts = macro_runner.build_macro_alerts(macro_data)
 
         # 2. 財報預警資料
-        warning_days = 2
+        warning_days = 14
         from services.trading_service import TradingService
 
         ts = TradingService(self.bot)

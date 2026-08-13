@@ -50,52 +50,22 @@ async def test_monitor_real_portfolio_task_uses_helpers() -> None:
 
 
 @pytest.mark.asyncio
-async def test_pre_market_risk_monitor_uses_helper() -> None:
+async def test_pre_market_risk_monitor_triggers_pre_warm() -> None:
     bot = MagicMock()
-    bot.queue_dm = AsyncMock()
-    bot.fetch_user = AsyncMock(return_value=SimpleNamespace(id=1))
 
     with patch("discord.ext.tasks.Loop.start"):
         cog = PreMarketCog(bot)
 
-    cog.trading_service.get_pre_market_alerts_data = AsyncMock(  # type: ignore
-        return_value={
-            1: {
-                "alerts": [
-                    {
-                        "symbol": "NVDA",
-                        "is_portfolio": True,
-                        "earnings_date": "2026-06-01",
-                        "days_left": 3,
-                    }
-                ],
-                "scanned_symbols": ["NVDA"],
-            }
-        }
-    )
-    embed = object()
-
     with patch(
         "cogs.trading.pre_market.market_time.nyse_calendar.schedule",
         return_value=SimpleNamespace(empty=False),
-    ), patch(
-        "cogs.trading.pre_market.create_pre_market_earnings_embed", return_value=embed
-    ) as mock_builder:
+    ), patch.object(cog, "_pre_warm_all_targets") as mock_pre_warm:
         await cog.pre_market_risk_monitor()
-
-    mock_builder.assert_called_once_with(
-        [
-            {
-                "symbol": "NVDA",
-                "is_portfolio": True,
-                "earnings_date": "2026-06-01",
-                "days_left": 3,
-            }
-        ],
-        ["NVDA"],
-        cog.EARNINGS_WARNING_DAYS,
-    )
-    bot.queue_dm.assert_awaited_once_with(1, embed=embed)
+        # Since it's created as a task, we need to let the event loop run a bit or assert it was called.
+        # However, asyncio.create_task wraps the coroutine. We can just patch `asyncio.create_task` directly if needed,
+        # but mocking the method itself is simpler.
+        # When mocked, _pre_warm_all_targets() returns a MagicMock, which is fine for create_task.
+        mock_pre_warm.assert_called_once()
 
 
 @pytest.mark.asyncio

@@ -17,7 +17,6 @@ from cogs.embed_builder import (
     create_intraday_execution_guide_embed,
     create_memory_alert_embed,
     create_max_pain_embed,
-    create_pre_market_earnings_embed,
     create_polymarket_whale_alert_embed,
     create_polymarket_status_embed,
     create_profit_lock_alert_embed,
@@ -745,29 +744,6 @@ def test_create_gamma_fragility_embed() -> None:
     assert "🆘 警報：Gamma 脆弱性與斷層" in embed.title  # type: ignore
     assert "`-25.5`" == embed.fields[0].value
     assert "`-20`" == embed.fields[1].value
-
-
-def test_create_pre_market_earnings_embed_with_alerts() -> None:
-    embed = create_pre_market_earnings_embed(
-        [
-            {
-                "symbol": "NVDA",
-                "is_portfolio": True,
-                "earnings_date": "2026-06-01",
-                "days_left": 3,
-            }
-        ],
-        ["NVDA"],
-        14,
-    )
-    assert "盤前財報季雷達預警" in embed.title  # type: ignore
-    assert "NVDA" in get_embed_text(embed)  # type: ignore
-
-
-def test_create_pre_market_earnings_embed_without_alerts() -> None:
-    embed = create_pre_market_earnings_embed([], ["AAPL", "MSFT"], 14)
-    assert "盤前財報季雷達掃描完畢" in embed.title  # type: ignore
-    assert "`AAPL`" in get_embed_text(embed)  # type: ignore
 
 
 def test_create_ditm_transition_alert_embed() -> None:
