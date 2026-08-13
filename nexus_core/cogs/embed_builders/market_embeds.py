@@ -685,13 +685,17 @@ def build_radar_scan_embed(
 
             sqz_mom_val = r.get("psq_result", {}).get("momentum", 0.0)
 
+            is_neg_gamma = net_gex < 0 or (
+                put_wall > 0 and price_val > 0 and price_val < put_wall
+            )
+
             risk_ctx = RiskInsightsContext(
                 symbol=sym,
                 current_price=price_val,
                 put_wall=put_wall,
-                net_gex_status="POSITIVE_GAMMA"
-                if net_gex > 0
-                else "NEGATIVE_GAMMA_ZONE",
+                net_gex_status="NEGATIVE_GAMMA_ZONE"
+                if is_neg_gamma
+                else "POSITIVE_GAMMA",
                 term_structure=term_structure,
                 uoa_institutional_short_call=uoa_institutional_short_call,
                 iv_rank=iv_rank_val / 100.0 if iv_rank_val > 1.0 else iv_rank_val,
@@ -757,9 +761,9 @@ def build_radar_scan_embed(
                         "spot": price_val,
                         "max_pain": max_pain_strike,
                         "put_wall": put_wall,
-                        "gex_status": "POSITIVE_GAMMA"
-                        if net_gex > 0
-                        else "NEGATIVE_GAMMA_ZONE",
+                        "gex_status": "NEGATIVE_GAMMA_ZONE"
+                        if is_neg_gamma
+                        else "POSITIVE_GAMMA",
                         "uoa_calls_vol": uoa_calls_vol,
                         "uoa_puts_vol": uoa_puts_vol,
                         "skew_percentile": r.get("skew_percentile"),
@@ -1180,8 +1184,11 @@ def build_radar_scan_embed(
             price_str_md = (
                 f"${price_val:.2f} ({'+' if dp_val >= 0 else ''}{dp_val:.2f}%)"
             )
-            gex_pol = "+" if net_gex >= 0 else "-"
-            g_p_wall_str = f"({gex_pol}) {g_p_wall_str}"
+            is_below_put_wall = p_wall > 0 and price_val > 0 and price_val < p_wall
+            gex_pol = "-" if (net_gex < 0 or is_below_put_wall) else "+"
+            g_p_wall_str = (
+                f"({gex_pol}) {g_p_wall_str}" if g_p_wall_str != "N/A" else "N/A"
+            )
             skew_pct_str = f"{skew_percentile_val:.0f}%"
             sqz_mom_val = _safe_float(r.get("psq_result", {}).get("momentum", 0.0))
             sqz_vec_str = f"{sqz_dir}{sqz_mom_val:+.1f}"
