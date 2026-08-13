@@ -108,7 +108,20 @@ Instead of invoking LLM on the first-level radar panel, a lightweight rules engi
 - **Real-time Insights**: Automatically matches active pending orders or option protection strategies (e.g., triggering pull-back alerts or tail-risk warnings). Now rendered inside a dedicated ANSI markdown code block for easy one-click copying.
 
 ### 3. Rendering Layer (`build_radar_scan_embed`)
-The terminal radar card is built inside `cogs/embed_builders/` using `build_radar_scan_embed()`, keeping with the **Single Source of Truth** for embeds. It prints an interactive Markdown table (which replaced the legacy ANSI format for better aesthetics) showing key quantitative and Alpha fields: `標的` (with dynamic `⚠️` prefix for >10% deviation, negative gamma, or structural anomalies for instant visual triage), `G/P-Wall(±)` (with dynamic Net GEX and PutWall break polarity: automatically switching to `(-)` when price breaks below PutWall or global Net GEX is negative, alongside `N/A` fallback when CallWall or PutWall lacks significant open interest data, 100% harmonized with Neg-GEX and negative gamma insights), `Skw%` (Skew Percentile), `SQZ向量` (Squeeze Momentum Vector, e.g. `🟢+2.3` or `🔴-1.5`), `Neg-GEX`, `STO 鎖死` (Straddle STO Density), `IV 策略` (IV Strategy Match with strict Negative Gamma circuit breaker forcing `🔴賣方禁售` during dealer sell-off cascades), `EM Z-Score`, and `Top UOA` Flag, alongside dynamic Gray-scale Tactical Suggestions (灰階戰術建議, including Skew Percentile > 90% anti-washout alerts: `"🛑 防洗盤處置，嚴守 15 分鐘實體 K 線撤退線"`). Redundant markdown bold formatting has been removed for consistent ANSI rendering.
+The terminal radar card is built inside `cogs/embed_builders/` using `build_radar_scan_embed()`, keeping with the **Single Source of Truth** for embeds. It prints an interactive Markdown table (which replaced the legacy ANSI format for better aesthetics) showing key quantitative and Alpha fields:
+- **`標的`**: Dynamic `⚠️` prefix for >10% deviation, negative gamma, or structural anomalies for instant visual triage.
+- **`G/P-Wall(±)`**: Call Wall + Put Wall with dynamic Net GEX and PutWall break polarity (e.g. `(+) $227.5 / $220.0` or `(-) $109.0 / $108.0`), automatically switching to `(-)` when price breaks below PutWall or global Net GEX is negative, with `N/A` fallback when open interest data is unavailable.
+- **`Skw%`**: True Skew percentile alongside actual Skew value (e.g. `51% (-0.29%)`), accurately evaluating dealer tail-risk pricing.
+- **`SQZ向量`**: Squeeze Momentum Vector with timer/squeezing indicator (e.g. `⏱️🟢+12.7`, `🟢+19.6`, or `⚪+0.0`), dynamically integrated with **UOA Barrier Index** (downgrading bullish vectors to `⚪` if massive institutional call walls block upside).
+- **`Neg-GEX`**: Net GEX deviation distance percentage.
+- **`STO 鎖死`**: Formatted Short-to-Open strikes (e.g. `C$227.5 / P$237.5` or `P$110.0`) or Straddle STO density.
+- **`IV 策略`**: IV Strategy Match with strict Negative Gamma circuit breaker forcing `🔴賣方禁售` during dealer sell-off cascades, `🔴CSP 禁售` for $IVR < 15\%$, and `🟢適宜賣方` for healthy environments.
+- **`EM Z-Score`**: Normalized Expected Move standard deviation position (e.g. `+0.00σ`, `+0.05σ`).
+- **`Top UOA`**: Single strongest whale print (e.g. `🛡️ 08/15 $227.5C (STO 261k)` or `🔥 08/15 $220.0C (BTO 15k)`).
+- **`暗池大宗交易 (Dark Pool Block Prints)`**: Automatically alerts users in Real-time Insights when block prints $\ge \$5\text{M}$ appear (e.g. `• 🧱 CRWV: 暗池在 $101.68 爆出 $48.85M 巨額大宗買盤，形成籌碼水泥牆支撐。`).
+- **`防洗盤絕對防守位 (Anti-Washout Stop)`**: Dynamically calculated as $PutWall - 1.5 \times ATR_{14}$, providing solid buffers against liquidity grabs.
+- **`離場判定鐵律`**: Enforces `"🛑 離場判定鐵律：嚴守 15 分鐘實體 K 線收盤撤退線 (過濾下影線流動性獵殺)"` in table notes.
+- **`灰階戰術建議 (Gray-scale Tactical Guidance)`**: Multi-dimensional evaluation engine preventing binary stop-outs (e.g. if price breaks PutWall but remains above anti-washout stop with positive gamma support, recommends `🟡 護航網支撐，現貨續抱，防守退至 $103.80 (嚴守15分K收盤)`). Redundant markdown bold formatting has been removed for consistent ANSI rendering.
 
 ### 4. 避免 Discord 回應錯誤的長度分段與分頁原則
 為防範當自選標的 (Watchlist) 或持倉 (Holdings) 數量過大時，因 Embed Description 超過 Discord 的 4096 字元上限而導致 `400 Bad Request (error code: 50035): Invalid Form Body` 系統錯誤，系統實施以下長度分段與分頁原則：
