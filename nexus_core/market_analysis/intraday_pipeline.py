@@ -648,7 +648,7 @@ async def evaluate_watchlist_symbol(
         if put_wall > 0 and spot > 0:
             distance = (spot - put_wall) / spot
             if distance <= 0.02 and net_gex < 0:
-                warning_text = "⚠️ 做市商 Delta 剛性拋壓風險全面壓倒遠期痛點磁吸，執行路由解鎖已全面受限。"
+                warning_text = "⚠️ 負 Gamma 踩踏/波動放大區 (做市商 Delta 剛性拋壓風險全面壓倒遠期痛點磁吸，執行路由解鎖已全面受限)"
                 tactical.action_guideline = (
                     f"{warning_text}\n{tactical.action_guideline}"
                 )
@@ -675,6 +675,43 @@ async def evaluate_watchlist_symbol(
                 "⚠️ 警告：結構性情緒背離｜Skew 分位極端但 PCR 指向相反極端，"
                 "可能是機構大幅對沖、散戶追逐買權的結構性分裂。建議停止追價單腿，"
                 "僅允許小倉位收租並搭配保護性 Put/Collar 或使用價差結構。"
+            ),
+            dynamic_grid_step=tactical.dynamic_grid_step,
+            hidden_delta_risk=0.0,
+            hedge_instruction=None,
+            hedge_allocation_shares=0,
+            alert_level="red",
+        )
+
+    # Skew Divergence Gate (機構避險背離/尾部風險警戒)
+    if metrics.skew_percentile is not None and metrics.skew_percentile > 90.0:
+        tactical = WatchlistTacticalPlan(
+            scenario="wait",
+            sddm_route="WAIT (機構避險背離/尾部風險警戒)",
+            action_guideline=(
+                "⚠️ 機構避險背離/尾部風險警戒｜Skew 分位處於極端高位 (>90%)，顯示真金白銀大量避險。"
+                "已自動阻斷任何樂觀評級，建議立即提高現金比重或退守大盤流動性資產。"
+            ),
+            dynamic_grid_step=tactical.dynamic_grid_step,
+            hidden_delta_risk=0.0,
+            hedge_instruction=None,
+            hedge_allocation_shares=0,
+            alert_level="red",
+        )
+
+    # Momentum Vector Gate (SQZ MOM + Negative Gamma)
+    if (
+        symbol_gex
+        and symbol_gex.get("net_gex", 0.0) < 0
+        and metrics.squeeze_momentum is not None
+        and metrics.squeeze_momentum < 0
+    ):
+        tactical = WatchlistTacticalPlan(
+            scenario="wait",
+            sddm_route="WAIT (空頭動能發散)",
+            action_guideline=(
+                "⚠️ 負 Gamma 疊加空頭動能發散 (SQZ MOM < 0)，禁止輸出「區間震盪防守」或買入訊號。"
+                "價格極易產生踩踏效應，建議保持觀望。"
             ),
             dynamic_grid_step=tactical.dynamic_grid_step,
             hidden_delta_risk=0.0,

@@ -254,6 +254,15 @@ def calculate_dynamic_trading_signals(
                 buy_price_phase3 * 0.9, min(suitable_buy, buy_price_phase1)
             )
 
+            # ATR 防洗盤動態緩衝
+            atr = getattr(metrics, "atr_14", 0.0) or 0.0
+            if atr > 0:
+                suitable_buy -= atr * 1.5
+
+            # 避開整數與特定關卡
+            if round(suitable_buy % 1.0, 2) in [0.00, 0.50, 0.99]:
+                suitable_buy -= 0.03
+
             if has_upcoming_earnings:
                 suitable_buy *= 0.90
                 result["buy_rationale"] = (
@@ -261,6 +270,10 @@ def calculate_dynamic_trading_signals(
                 )
 
             result["suitable_buy_price"] = round(suitable_buy, 2)
+            if atr > 0:
+                result["buy_rationale"] += (
+                    " (已疊加 1.5x ATR 防洗盤緩衝，請以「15 分鐘 K 線實體跌破」作為最終撤退線)"
+                )
 
         # Position Sizing
         base_allocation = capital * 0.05
@@ -271,6 +284,19 @@ def calculate_dynamic_trading_signals(
         allocated_budget = (
             base_allocation * risk_limit_mult * skew_size_mult * rsi_size_mult
         )
+
+        # 動態資金藍圖演算法 (Capital Allocation Model)
+        if (
+            "機構避險背離" in tactical_model.sddm_route
+            or "負 Gamma" in tactical_model.sddm_route
+        ):
+            # 70%~85% 退守大盤流動性資產，僅保留 10%~15% 戰術/套利資金
+            allocated_budget = min(allocated_budget, capital * 0.15)
+            result["buy_rationale"] = (
+                "⚠️ 負 Gamma 疊加機構避險背離：70%~85% 資金強制退守大盤流動性資產 (如 VOO)，僅保留 10%~15% 戰術套利。 "
+                + result["buy_rationale"]
+            )
+
         if is_crisis:
             result["suitable_buy_shares"] = 0
         else:
@@ -320,7 +346,20 @@ def calculate_dynamic_trading_signals(
         if avg_cost > 0.0 and tactical_model.scenario != "hard-hedge":
             suitable_sell = max(suitable_sell, avg_cost * 1.01)
 
+        # ATR 防洗盤動態緩衝 (向上)
+        atr = getattr(metrics, "atr_14", 0.0) or 0.0
+        if atr > 0:
+            suitable_sell += atr * 1.5
+
+        # 避開整數關卡
+        if round(suitable_sell % 1.0, 2) in [0.00, 0.50, 0.99]:
+            suitable_sell -= 0.03
+
         result["suitable_sell_price"] = round(suitable_sell, 2)
+        if atr > 0:
+            result["sell_rationale"] += (
+                " (已疊加 1.5x ATR 防洗盤緩衝避開整數，請以「15 分鐘 K 線實體跌破」作為最終離場確認)"
+            )
 
         # 賣出比例
         if tactical_model.scenario == "hard-hedge":

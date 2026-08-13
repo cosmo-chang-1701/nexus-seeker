@@ -843,10 +843,18 @@ def build_radar_scan_embed(
                         try:
                             exp_dt = datetime.strptime(exp_str, "%Y-%m-%d").date()
                             dte = (exp_dt - datetime.now().date()).days
-                            if 1 <= dte <= 14:
-                                mp_val = float(mp_entry.get("max_pain", 0.0) or 0.0)
-                                if mp_val > 0:
-                                    dev = (price_val - mp_val) / mp_val * 100
+                            mp_val = float(mp_entry.get("max_pain", 0.0) or 0.0)
+                            if mp_val > 0:
+                                dev = (price_val - mp_val) / mp_val * 100
+                                if 0 <= dte <= 1 and abs(dev) > 8.0:
+                                    dir_text = "向下" if dev > 0 else "向上"
+                                    insights.append(
+                                        f"• 🧲 {sym}: 末日痛點 (DTE {dte}, ${mp_val:.2f}) 偏離高達 {dev:+.1f}%，觸發【做市商末日對沖{dir_text}磁吸力】，避免逆勢防守。"
+                                    )
+                                    status_label = f"{dir_text}末日磁吸 ⚠️"
+                                    embed.color = 0xE74C3C
+                                    break
+                                elif 1 < dte <= 14:
                                     if dev > 10.0:
                                         insights.append(
                                             f"• 🧲 {sym}: 遠期痛點 (DTE {dte}, ${mp_val:.2f}) 正乖離高達 +{dev:.1f}%，上方空間受限，觸發【下行磁吸預警】。"
@@ -1151,7 +1159,9 @@ def build_radar_scan_embed(
                     is_magnetic = True
 
             tactical_adv = "⚪ 區間震盪，觀察籌碼堆疊"
-            if z_score is not None and (z_score > 0.9 or z_score < -0.9):
+            if skew_percentile_val > 90.0:
+                tactical_adv = "🛑 防洗盤處置，嚴守 15 分鐘實體 K 線撤退線"
+            elif z_score is not None and (z_score > 0.9 or z_score < -0.9):
                 tactical_adv = "🟡 貼近 EM 頂/底緣，停損墊高或觀察突破"
             elif call_wall > 0 and price_val >= call_wall * 0.98 and sqz_mom > 0:
                 tactical_adv = f"🟢 撕裂 ${call_wall:.1f} 發動軋空，現貨重砲"
@@ -1170,8 +1180,13 @@ def build_radar_scan_embed(
             price_str_md = (
                 f"${price_val:.2f} ({'+' if dp_val >= 0 else ''}{dp_val:.2f}%)"
             )
+            gex_pol = "+" if net_gex >= 0 else "-"
+            g_p_wall_str = f"({gex_pol}) {g_p_wall_str}"
+            skew_pct_str = f"{skew_percentile_val:.0f}%"
+            sqz_mom_val = _safe_float(r.get("psq_result", {}).get("momentum", 0.0))
+            sqz_vec_str = f"{sqz_dir}{sqz_mom_val:+.1f}"
 
-            md_line = f"| {sym} | {price_str_md} | {g_p_wall_str} | {neg_gex_str} | {sto_str} | {iv_strategy_str} | {em_z_score_str} | {top_uoa_str} | {tactical_adv} |"
+            md_line = f"| {sym} | {price_str_md} | {g_p_wall_str} | {skew_pct_str} | {sqz_vec_str} | {neg_gex_str} | {sto_str} | {iv_strategy_str} | {em_z_score_str} | {top_uoa_str} | {tactical_adv} |"
             md_lines.append(md_line)
             # ---- 產生 Markdown 行結束 ----
 
@@ -1211,7 +1226,7 @@ def build_radar_scan_embed(
             )
 
         radar_title = "🧠 核心 AI 暨持倉量化雷達"
-        md_table_header = "| 標的 | 現價 (漲跌%) | G/P-Wall | Neg-GEX | STO 鎖死 | IV 策略 | EM Z-Score | 單一最強巨鯨異動 (Top UOA) | 灰階戰術建議 |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+        md_table_header = "| 標的 | 現價 (漲跌%) | G/P-Wall(±) | Skw% | SQZ向量 | Neg-GEX | STO 鎖死 | IV 策略 | EM Z-Score | 單一最強巨鯨異動 (Top UOA) | 灰階戰術建議 |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
 
         chunk_size_md = 5
         md_chunks = [
