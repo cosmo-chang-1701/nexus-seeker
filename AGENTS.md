@@ -4,7 +4,7 @@
 
 Nexus Seeker is a multi-tenant **Discord-first options risk-control and trading operations platform**. It combines technical structure, Black-Scholes-Merton pricing, Greeks-based portfolio risk, event-aware calendar defenses, and LLM-assisted structured commentary.
 
-Current released core version: **`1.11.60`**
+Current released core version: **`1.11.67`**
 
 The codebase is optimized for:
 
@@ -68,7 +68,6 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 ### In `cogs/analyst_agent.py`
 
 - `pre_market_loop` — **30 minutes before market open**
-- `intra_day_loop` — **every 120 minutes while market is open**
 - `post_market_loop` — **post-market report flow**
 
 ### In `bot.py`
@@ -109,7 +108,7 @@ Instead of invoking LLM on the first-level radar panel, a lightweight rules engi
 - **Real-time Insights**: Automatically matches active pending orders or option protection strategies (e.g., triggering pull-back alerts or tail-risk warnings). Now rendered inside a dedicated ANSI markdown code block for easy one-click copying.
 
 ### 3. Rendering Layer (`build_radar_scan_embed`)
-The terminal radar card is built inside `cogs/embed_builders/` using `build_radar_scan_embed()`, keeping with the **Single Source of Truth** for embeds. It prints an interactive Markdown table (which replaced the legacy ANSI format for better aesthetics) showing the 5 Alpha fields: G/P-Wall, Neg-GEX, STO 鎖死 (Straddle STO Density), IV 策略 (IV Strategy Match), EM Z-Score, and Top UOA Flag, alongside dynamic Gray-scale Tactical Suggestions (灰階戰術建議). Redundant markdown bold formatting has been removed for consistent ANSI rendering.
+The terminal radar card is built inside `cogs/embed_builders/` using `build_radar_scan_embed()`, keeping with the **Single Source of Truth** for embeds. It prints an interactive Markdown table (which replaced the legacy ANSI format for better aesthetics) showing key quantitative and Alpha fields: `G/P-Wall(±)` (with Net GEX polarity), `Skw%` (Skew Percentile), `SQZ向量` (Squeeze Momentum Vector, e.g. `🟢+2.3` or `🔴-1.5`), `Neg-GEX`, `STO 鎖死` (Straddle STO Density), `IV 策略` (IV Strategy Match), `EM Z-Score`, and `Top UOA` Flag, alongside dynamic Gray-scale Tactical Suggestions (灰階戰術建議, including Skew Percentile > 90% anti-washout alerts: `"🛑 防洗盤處置，嚴守 15 分鐘實體 K 線撤退線"`). Redundant markdown bold formatting has been removed for consistent ANSI rendering.
 
 ### 4. 避免 Discord 回應錯誤的長度分段與分頁原則
 為防範當自選標的 (Watchlist) 或持倉 (Holdings) 數量過大時，因 Embed Description 超過 Discord 的 4096 字元上限而導致 `400 Bad Request (error code: 50035): Invalid Form Body` 系統錯誤，系統實施以下長度分段與分頁原則：
@@ -169,9 +168,12 @@ Current sections:
   - event risk summary
   - executable option plan
   - deterministic rule-based skew commentary
-  - **Dynamic Stock Pricing & Share Sizing**:
-    - Unheld tickers: Calculates a dynamic `suitable_buy_price` based on RSI and Skew (downside fear discount factor) and corresponding shares budget based on user `capital` and `risk_limit`. **(Textual Martial Law)**: If spot drops below the Market Maker PutWall into Negative Gamma, `suitable_buy_price` is locked to N/A, shares size to 0, and all "buy the dip" (Narrative Trap) optimistic wording is forcefully blocked and overwritten with strict "Delta Negative Feedback" warnings.
+  - **Dynamic Stock Pricing, Share Sizing & Capital Allocation**:
+    - Unheld tickers: Calculates a dynamic `suitable_buy_price` based on RSI and Skew (downside fear discount factor) and corresponding shares budget based on user `capital` and `risk_limit`.
     - Held tickers: Calculates a dynamic `suitable_sell_price` and recommended sell shares (25%, 33%, 50%, or 100% exit ratio depending on RSI and scenario like `hard-hedge`).
+    - **1.5x ATR 防洗盤緩衝與關卡避開**: Both buy and sell price calculations dynamically apply a `1.5 * atr_14` anti-washout buffer (warning users to enforce the 15-minute candle closing break as final exit line) and automatically avoid psychological round numbers (`.00`, `.50`, `.99`).
+    - **動態資金藍圖演算法 (Capital Allocation Model)**: If "機構避險背離" (Skew Divergence) or "負 Gamma" is active in the tactical route, capital allocation dynamically caps the budget and forces 70%~85% of funds to retreat to broad market liquidity assets (such as VOO), reserving only 10%~15% for tactical/arbitrage trading.
+    - **(Textual Martial Law)**: If spot drops below the Market Maker PutWall into Negative Gamma, `suitable_buy_price` is locked to N/A, shares size to 0, and all "buy the dip" (Narrative Trap) optimistic wording is forcefully blocked and overwritten with strict "Delta Negative Feedback" warnings.
   - **Strike-Aligned Options Guidance**:
     - Option guidelines are dynamically mapped to target strikes (e.g. CSP at `suitable_buy_price` or Covered Call at `suitable_sell_price`).
   - **Visual Panel Consistency**:
@@ -206,19 +208,20 @@ We resolve this via a comprehensive pre-market optimization workflow:
 
 ### Event-Driven Market Scenario Alerts
 
-The `dynamic_market_scanner` in `cogs/trading.py` now includes an independent, event-driven alert system that dynamically triggers when a symbol enters one of five highly specific quantitative market scenarios based on a precise decision tree:
+The `dynamic_market_scanner` in `cogs/trading.py` now includes an independent, event-driven alert system that dynamically triggers when a symbol enters one of six highly specific quantitative market scenarios based on a precise decision tree:
 
 **Branch A: Positive Gamma (Spot > Gamma Flip)**
+- **💎 巨鯨護航共振 (Whale Escort Resonance)**: Candle High/Low tests PutWall (GEX Positive Gamma Wall confirmed), Skew Percentile < 50.0% (downside fear is minimal), and UOA institutional flow is aligned (`BTO CALL` or `STO PUT`). Dispatches a dedicated purple alert embed (`discord.Color.purple()`) recommending high win-rate defensive positioning: spot scale-in or Sell Put Spread ("【勝率極值共振】巨鯨實質硬地板成型，建議可於此防禦水位建倉做多或賣出 Put Spread。").
 - **黃金左側加碼 (Golden Left-Side)**: Candle High/Low tests PutWall (within 1.5% margin), PutWall overlaps with HVN, and IV Rank > 50%.
 - **黃金波段止盈 (Golden Take-Profit)**: Candle High/Low tests CallWall (within 1.5% margin), and CallWall overlaps with HVN. (Suggests Sell Call Spread if IVR > 50%).
 - **強勢突破加碼 (Strong Breakout)**: Spot breaks CallWall, lands in an LVN (vacuum acceleration zone), Volume > 1.5x MA20, and IV Rank < 30%.
 
 **Branch B: Negative Gamma / Defense Mode (Spot < Gamma Flip)**
 - **假性支撐陷阱 (Fake Support Trap)**: Candle High/Low touches PutWall, strictly blocking narrative "buy the dip" logic.
-- **結構破位與轉倉 (Structural Breakdown)**: Spot falls below PutWall AND Gamma Flip, triggering an absolute 100% liquidation directive to QQQ/SPY ETFs. This is protected by the **Gamma Cliff Confirmation Engine**, which requires multiple consecutive 1-minute candle closes below the cliff line (a minimum confirmation window) to confirm the breakdown and reject noise.
+- **結構破位與轉倉 (Structural Breakdown)**: Spot falls below PutWall AND Gamma Flip, triggering an absolute 100% liquidation directive to QQQ/SPY ETFs. This is protected by the **Gamma Cliff Confirmation Engine** with 15-minute candle close confirmation.
 
 **Architecture & Rate Limiting**:
-- **Classifier**: `market_analysis/scenario_classifier.py` mathematically evaluates the market state using live price, PutWall, CallWall, Gamma Flip, IV Rank (IVR), and Volume Profile (HVN/LVN).
+- **Classifier**: `market_analysis/scenario_classifier.py` mathematically evaluates the market state using live price, PutWall, CallWall, Gamma Flip, IV Rank (IVR), Volume Profile (HVN/LVN), Skew Percentile, and UOA intent alignment.
 - **Zero-Latency VP**: Reuses the `df_hist` fetched for PSQ/EMA via `calculate_volume_profile_from_df` to avoid redundant `yfinance` network requests.
 - **Embed**: `cogs/embed_builders/alert_embeds.py` generates `create_scenario_alert_embed()`.
 - **KV Cache Protection**: To prevent spam during high-volatility boundary oscillations, the system sets an SQLite cache key (`scenario_alert_{user_id}_{symbol}_{date}_{scenario}`) to guarantee a maximum of **one alert per scenario, per symbol, per day**.
@@ -243,13 +246,8 @@ Relative Strength (RS) & Tactical Routing:
 - In `ExecutionRouter`, overextended bullish assets (Price/MA20 Deviation > 10% AND RSI > 65) with high Relative Strength (RS > 1.2) are routed to **SPEAR** mode (suggesting Bull Put Spreads or OTM Covered Calls) instead of SHIELD grid shorting.
 - **Dark Pool Skew Override**: If the derived Dark Pool Skew is strongly negative (`dark_pool_skew < -0.3`), indicating heavy institutional distribution, the router overrides all aggressive strategies and forces a downgrade to **SHIELD** mode.
 - **IVR Strategy Gate (IVR 硬鎖閘門)**: If the Implied Volatility Rank (IVR) drops strictly below 10.0%, all selling strategies are hard-locked. The router forces a downgrade to `STANDBY` for sellers or restricts operations to Spot Buy, ITM Call BTO, or Debit Spreads, explicitly preventing physically deadlocked short premium entries in a zero-premium environment.
-
-Important current rule inside `IntradayScanPipeline`:
-
-- `盤中量化掃描 & 避險執行指南` is gated to **Phase B only**
-- it is sent **at most once per user + ticker + trading day**
-
-This gating is tested in `tests/unit/test_intraday_pipeline.py`.
+- **Skew Divergence Gate (機構避險背離/尾部風險警戒)**: If `metrics.skew_percentile > 90.0`, the pipeline automatically sets `sddm_route = "WAIT (機構避險背離/尾部風險警戒)"` and `alert_level = "red"`, blocking all optimistic ratings and enforcing defensive capital allocation (70%~85% back to broad market assets).
+- **Momentum Vector Gate (負 Gamma 疊加空頭動能發散)**: If `net_gex < 0` and `metrics.squeeze_momentum < 0`, the pipeline forces `sddm_route = "WAIT (空頭動能發散)"` and `alert_level = "red"`, strictly forbidding range-bound defense or buy signals due to risk of cascade selloffs.
 
 ---
 
@@ -317,14 +315,14 @@ The platform implements an advanced macro risk-control layer that dynamically ad
 
 `cogs/analyst_agent.py` is responsible for:
 
-- macro scan
+- macro scan (with integrated 14-day forward earnings risk window)
 - pre-market earnings / valuation adjustment report
-- intraday execution guide
 - post-market summary
 - sector flow / rotation report
 - next-day strategy report
 
 ### Pre-Market Earnings & Valuation Data Integration & Concurrency Optimizations
+- **14-Day Forward Earnings Risk Window**: The pre-market earnings scan window has been extended to **14 days** (`warning_days = 14`) and consolidated directly into the macro report, deprecating standalone earnings radar embeds.
 - **Data Source Integration**: The pre-market earnings scan automatically resolves technical evaluations (`evaluate_watchlist_symbol`), option PCR metrics (`SentimentEngine.calculate_pcr`), and company profile details (`get_company_profile`) for all target tickers.
 - **Resource Triage Scan (資源分級掃描)**: To avoid redundant computations and API limits, deep scans (calculating technical indicators, IV rank, option skew, and PCR) are strictly gated to near-term tickers (`days_left <= 2`). Long-dated tickers (`days_left > 2`) are lightweight scanned to resolve company sector profiles only.
 - **LLM Context Pruning (Token 裁剪)**: Non-essential presentational data (like buy/sell zone statuses) are stripped from the payload fed to the LLM, leaving only critical validation indicators to save up to 40% of Prompt Token overhead.
@@ -509,6 +507,17 @@ The platform features an automated **Dynamic Rollover Engine** (`market_analysis
 3. **Core vs Satellite Rebalancing (核心與衛星比例再平衡)**: Prevents concentration risk. If a SATELLITE asset (e.g., NVDA) exceeds its `max_allocation_pct` due to a rally, the engine partially sells it back to the `target_allocation_pct` and buys the CORE asset.
 4. **Leverage & Margin Defense (槓桿與維持率防禦)**: Monitors macro VIX conditions and account margin levels. If a structural washout is imminent, automatically sends a Buy-To-Close (BTC) or Sell-To-Close (STC) signal for high-beta assets to release margin.
 
+### GEX Mapping & Anti-Washout Stop Engine
+- **GEX & Market Maker Intent Mapping Engine (`index_microstructure.classify_gex_wall`)**: Evaluates individual strike GEX exposures against the maximum positive GEX wall across the option chain. Classifies levels into `SUPPORT_GEX_WALL` (MM support floor / dip buying hedging), `RESISTANCE_CALL_WALL` (overhead resistance ceiling / negative gamma pinning / heavy OTM call clusters), or `NEUTRAL`.
+- **Anti-Washout Stop Engine (防洗盤動態停損引擎)**:
+  - **Anchor Wall Priority**: Dynamic stop loss anchors to `support_wall` > `gex_put_wall` > `hvn` > `spot`.
+  - **15m ATR Buffer & Bounds**: Base stop is calculated as `anchor_wall - 1.5 * atr_15m`, bounded strictly within `[spot * 0.95, spot * 0.98]` (2%~5% boundary).
+  - **LVN Trap Avoidance**: If the calculated stop falls within 1.5% of an LVN, shifts below the next defensive wall or pushes down by 1.5%.
+  - **Expiry Day (DTE 0/1) Tolerance**: Expands stop loss buffer by `1.5 * atr_15m` to prevent premature liquidation from settlement washouts.
+- **Asset Class Bifurcation & 15m Candle Close Confirmation (資產分流與 15 分 K 實體確認)**:
+  - **SPOT Assets**: A liquidation (`LIQUIDATE`) directive is strictly executed only if the 15-minute candle close (`price_15m_close`) falls below the calculated stop loss. If price has not broken the defense line on 15m close and `IVR > 80%`, the engine holds with `SET_15M_CLOSING_STOP` (啟動 15 分 K 實體防守) or `HOLD_WITH_TRAILING_STOP` (續抱並拉高鎖利線).
+  - **OPTIONS Contracts**: If `IVR > 80%`, the engine triggers `REDUCE` / `REDUCE_LEVERAGE` (降低合約槓桿 / 買方平倉) to mitigate extreme Vega/Gamma collapse risk.
+
 ### Integration & Global Defense Gate
 - **Manual LLM Trigger (Scenario 1)**: Due to heavy memory and API overhead, Fundamental Thesis evaluation is NOT scheduled. It is strictly triggered manually by the user via the `/verify_thesis <symbol>` Discord slash command. This command now features an interactive UI: it first triggers the Edge Scraper to fetch a list of recent SEC filings (10-K, 10-Q, 8-K), and presents them in a dropdown menu. If the user selects one, or if the 60-second timeout expires, it fetches the specified (or latest) SEC EDGAR report (up to 10,000 characters) and sends it to the LLM.
 - **Global Defense Gate (全域防禦閘門)**: LLM moat verdicts (`is_broken`, `confidence`, `reasoning`) are written to the SQLite `fundamental_cache` table (via migration `v057`). During the intraday 30-minute heartbeat (`intraday_pipeline.py`), the `evaluate_watchlist_symbol` engine acts as a **Global Defense Gate**. If a symbol is flagged as broken, the engine forcefully intercepts and overwrites any quantitative BTO (Buy-To-Open) or Grid Accumulation signals, replacing them with a strict `wait` scenario and a `LIQUIDATE` directive. This guarantees that technical blindspots (e.g., heavily oversold RSI traps) cannot override fundamentally deteriorating assets.
@@ -554,7 +563,10 @@ The platform features an automated **Dynamic Rollover Engine** (`market_analysis
 - `nexus_core/services/order_telemetry_service.py` — Order telemetry scanning service
 - `nexus_core/database/notifications.py` — custom user notification preferences database operations
 - `nexus_core/database/virtual_trading.py` — Database interface for virtual trades (VTR)
-- `nexus_core/database/watchlist.py` — Database CRUD operations for user watchlist symbols
+- `nexus_core/market_analysis/dynamic_rollover.py` — Dynamic rollover engine, anti-washout stop engine, and asset class bifurcation logic
+- `nexus_core/market_analysis/signal_calculator.py` — Dynamic trading signal calculator (1.5x ATR buffers, capital allocation models)
+- `nexus_core/market_analysis/scenario_classifier.py` — Event-driven quantitative scenario classifier (6 market scenarios including Whale Escort Resonance)
+- `nexus_core/database/watchlist.py` — Database CRUD operations for user watchlist symbols (100% deterministic rule-based zero-LLM architecture)
 - `nexus_core/database/migrations/v039_add_notification_toggles.py` — migration registering the user_notification_settings table in SQLite
 - `nexus_core/tests/unit/test_intraday_pipeline.py` — heartbeat and phase-B gating tests
 - `nexus_core/tests/unit/test_embed_builder.py` — embed contract tests

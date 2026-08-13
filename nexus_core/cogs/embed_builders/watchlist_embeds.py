@@ -355,8 +355,6 @@ def create_watchlist_signal_embed(
 
     if skew_commentary:
         has_meaningful_content = True
-        if event_risk_summary:
-            description_lines.append("")
         description_lines.append("**⚙️ 量化 Skew 解析**")
         description_lines.append(f"```ansi\n{skew_commentary}\n```")
 

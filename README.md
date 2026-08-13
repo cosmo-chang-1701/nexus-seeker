@@ -6,17 +6,17 @@
 
 Nexus Seeker 是一個 **Discord-first 的多租戶選擇權風控與交易營運平台**。本平台深度結合了技術指標分析、Black-Scholes-Merton 期權定價、希臘字母（Greeks）投資組合風險管理、事件日曆防禦及大型語言模型（LLM）輔助分析，旨在低內存 VPS 部署環境下，為實盤交易者提供最即時、可持續、自動化的高勝率風控操作指南。
 
-> 核心版本（nexus_core）：**v1.11.45** (請參考最新 Release)
+> 核心版本（nexus_core）：**v1.11.67** (請參考最新 Release)
 
 ---
 
 ## ✨ 核心特色 (Key Features)
 
-- **自動化戰場心跳 (Watchlist Heartbeat)**：盤中每半小時主動推送自選標的之技術與期權快照，包含 UOA (異動期權)、暗池 (Dark Pool) 磁吸點位（已整合 5% 髒數據過濾）與 LLM 分析解說。
-- **戰場情境轉折警報與進階雷達 (Market Scenario & Advanced Radar)**：整合獨立事件驅動引擎（5 階 GEX 決策矩陣）與進階雷達過濾器 (UOA Barrier, Gravity Filter, Divergence Gate)。全新量化雷達支援 EM Z-Score、Neg-GEX、STO 鎖死等多維度指標。具備 K 棒影線誤差穿透檢測、爆量動能過濾與 **IVR 策略閘門與備兌阻斷機制**，精準捕捉「結構破位」、「假性支撐」、「黃金波段止盈」等轉折點，並防止在極端零溢價行情下建倉。
-- **動態轉倉與基本面防禦閘門 (Dynamic Rollover & Global Defense Gate)**：支援透過 `/verify_thesis` 手動觸發，並新增**互動式 SEC 財報選擇介面**，讓使用者自由選擇近期 (10-K, 10-Q, 8-K) 進行分析（若超時未選則自動分析最新報告）。Edge Scraper 現具備 **SEC 財報結構化區塊擷取** 能力，能針對 Forward Guidance、Margin 等 5 大區塊進行抽取。並以 Advanced CoT (Chain of Thought) 系統提示詞引導 LLM 進行護城河破滅驗證。若基本面破滅，將無條件攔截量化買入訊號，強制執行清算與轉倉。
+- **自動化戰場心跳 (Watchlist Heartbeat)**：盤中每半小時主動推送自選標的之技術與期權快照，包含 UOA (異動期權)、暗池 (Dark Pool) 磁吸點位（已整合 5% 髒數據過濾）與 100% 確定性量化 Skew 解析與決策指引。
+- **戰場情境轉折警報與進階雷達 (Market Scenario & Advanced Radar)**：整合獨立事件驅動引擎（6 階 GEX 決策矩陣，新增「巨鯨護航共振」）與進階雷達過濾器 (UOA Barrier, Gravity Filter, Divergence Gate)。全新量化雷達支援 `G/P-Wall(±)`、`Skw%`、`SQZ向量`、`Neg-GEX`、`STO 鎖死`、`EM Z-Score` 等多維度指標，並具備 `1.5x ATR 防洗盤緩衝` 與動態資金藍圖演算法。具備 K 棒影線誤差穿透檢測、爆量動能過濾與 **IVR 策略閘門與備兌阻斷機制**，精準捕捉「巨鯨護航共振」、「結構破位」、「假性支撐」、「黃金波段止盈」等轉折點，並防止在極端零溢價行情下建倉。
+- **動態轉倉與防洗盤風控 (Dynamic Rollover & Anti-Washout Defense)**：搭載全新「防洗盤動態停損引擎」與「GEX 做市商意圖映射引擎」，動態鎖定支撐錨定牆並給予 1.5x 15m ATR 緩衝；現貨 (SPOT) 必須經 15 分鐘實體 K 線跌破才確認清倉（高 IVR 啟動收盤價防守），選擇權合約 (OPTIONS) 則於高 IVR 啟動降槓桿平倉。支援透過 `/verify_thesis` 手動觸發，並新增**互動式 SEC 財報選擇介面**，讓使用者自由選擇近期 (10-K, 10-Q, 8-K) 進行分析。Edge Scraper 現具備 **SEC 財報結構化區塊擷取** 能力，若基本面破滅，將無條件攔截量化買入訊號，強制執行清算與轉倉。
 - **動態量化避險引擎**：依據現價與 RSI、Skew 等指標，動態計算適合的建倉/出場價格，並於大盤極端行情時啟動網格防禦 (Shield) 與流動性滑價保護閘門。
-- **總體經濟與事件日曆防護**：自動抓取 CME FedWatch 利率機率、FRED 關鍵總經數據與財報日曆，結合避險邏輯進行動態逃頂窗口前置。
+- **總體經濟與事件日曆防護**：自動抓取 CME FedWatch 利率機率、FRED 關鍵總經數據與財報日曆（已擴展至 14 日前瞻預警並深度整併至總經風險報告），結合避險邏輯進行動態逃頂窗口前置。
 - **大盤微觀結構解析**：計算零 Gamma 線 (Gamma Flip Line) 與 GEX 分佈，在市場進入高壓 $VIX > 20$ 時動態縮小合約建倉口數（Kelly Criterion 調節）與拉大網格距離。
 - **互動式 UI 介面**：所有交易參數（資本、風險上限、虛擬交易室等）與推送偏好均透過 Discord 內建的 Buttons / Select Menu / Modal 進行管理。
 
@@ -153,7 +153,7 @@ docker compose up -d --build
 
 - **`/settings`**：帳戶核心參數面板（資本、風險上限設定、虛擬交易室等）。
 - **`/notif_settings`**：戰術型通知管理中控台，支援以 7 大模組分類自訂雷達與推播偏好（系統安全、部位風控、總經警戒、Alpha 獵取、極端防禦、每日戰報、Polymarket 監控）。
-- **`/x`**：批次量化雷達掃描，支援統一雷達面板進行多層次過濾 (現已升級為高 Alpha 精簡 Markdown 報表，直擊 G/P-Wall、Neg-GEX、STO 鎖死、IV 策略、EM Z-Score 與 Top UOA)。
+- **`/x`**：批次量化雷達掃描，支援統一雷達面板進行多層次過濾 (現已升級為高 Alpha 精簡 Markdown 報表，直擊 G/P-Wall(±)、Skw%、SQZ向量、Neg-GEX、STO 鎖死、IV 策略、EM Z-Score 與 Top UOA)。
 - **`/dash`**：交易員主控板，檢視持倉、備用流動性與極限跑道天數。
 - **`/stress_test`**：委託單壓力測試與現金赤字警報。
 - **`/list_orders` / `/order_panel`**：檢視活躍委託單與新增委託單。
