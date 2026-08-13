@@ -15,7 +15,7 @@ Nexus Seeker 是一個 **Discord-first 的多租戶選擇權風控與交易營�
 - **自動化戰場心跳 (Watchlist Heartbeat)**：盤中每半小時主動推送自選標的之技術與期權快照，預設完整整合 UOA 巨鯨異動大單、暗池 (Dark Pool) 磁吸點位（已整合 5% 髒數據過濾）、100% 確定性量化 Skew 解析與動態買賣定價指引。
 - **4 大戰術維度通知中樞與快捷情境 (Tactical Notifications & 1-Click Presets)**：`/notif_settings` 全面收斂為 4 大戰術維度（定時戰報、盤中遙測、持倉防禦、Alpha 策略）與 10 大核心通知頻道，並提供「🛡️ 戰備全開」、「🎯 精準交易」、「🔕 盤中靜音」三大 1-Click Preset 情境模式，徹底告別零碎雜訊。
 - **盤後綜合風險與 AI 策略報告 (Post-Market Intelligence)**：每日收盤後主動推送盤後結算報告，全面支援**現貨持倉 (`HOLDING`) 與期權 (`TRADE`) 混合結算**。搭載 Target Center 2.0 樹狀 ANSI 儀表板、財務生存跑道 (Financial Runway)、對沖績效 Brinson 歸因 (OPTIMAL 狀態標註)、板塊焦點矩陣 (Top Inflows vs Outflows) 與 100% 現金空狀態行動引導。
-- **戰場情境轉折警報與進階雷達 (Market Scenario & Advanced Radar)**：整合獨立事件驅動引擎（6 階 GEX 決策矩陣，新增「巨鯨護航共振」）與進階雷達過濾器 (UOA Barrier, Gravity Filter, Divergence Gate)。全新量化雷達支援 `G/P-Wall(±)`、`Skw%`、`SQZ向量`、`Neg-GEX`、`STO 鎖死`、`EM Z-Score` 等多維度指標，並具備 `1.5x ATR 防洗盤緩衝` 與動態資金藍圖演算法。具備 K 棒影線誤差穿透檢測、爆量動能過濾與 **IVR 策略閘門與備兌阻斷機制**，精準捕捉「巨鯨護航共振」、「結構破位」、「假性支撐」、「黃金波段止盈」等轉折點，並防止在極端零溢價行情下建倉。
+- **戰場情境轉折警報與進階雷達 (Market Scenario & Advanced Radar)**：整合獨立事件驅動引擎（6 階 GEX 決策矩陣，新增「巨鯨護航共振」）與進階雷達過濾器 (UOA Barrier, Gravity Filter, Divergence Gate)。全新量化雷達支援 `G/P-Wall(±)`（支援現價跌破 PutWall 之負 Gamma 動態極性連動）、`Skw%`、`SQZ向量`、`Neg-GEX`、`STO 鎖死`、`EM Z-Score` 等多維度指標，並具備 `1.5x ATR 防洗盤緩衝` 與動態資金藍圖演算法。具備 K 棒影線誤差穿透檢測、爆量動能過濾與 **IVR 策略閘門與備兌阻斷機制**，精準捕捉「巨鯨護航共振」、「結構破位」、「假性支撐」、「黃金波段止盈」等轉折點，並防止在極端零溢價行情下建倉。
 - **動態轉倉與防洗盤風控 (Dynamic Rollover & Anti-Washout Defense)**：搭載全新「防洗盤動態停損引擎」與「GEX 做市商意圖映射引擎」，動態鎖定支撐錨定牆並給予 1.5x 15m ATR 緩衝；現貨 (SPOT) 必須經 15 分鐘實體 K 線跌破才確認清倉（高 IVR 啟動收盤價防守），選擇權合約 (OPTIONS) 則於高 IVR 啟動降槓桿平倉。支援透過 `/verify_thesis` 手動觸發，並新增**互動式 SEC 財報選擇介面**，讓使用者自由選擇近期 (10-K, 10-Q, 8-K) 進行分析。Edge Scraper 現具備 **SEC 財報結構化區塊擷取** 能力，若基本面破滅，將無條件攔截量化買入訊號，強制執行清算與轉倉。
 - **動態量化避險引擎**：依據現價與 RSI、Skew 等指標，動態計算適合的建倉/出場價格，並於大盤極端行情時啟動網格防禦 (Shield) 與流動性滑價保護閘門。
 - **總體經濟與事件日曆防護**：自動抓取 CME FedWatch 利率機率、FRED 關鍵總經數據與財報日曆（已擴展至 14 日前瞻預警並深度整併至總經風險報告），結合避險邏輯進行動態逃頂窗口前置。
@@ -155,7 +155,7 @@ docker compose up -d --build
 
 - **`/settings`**：帳戶全域參數配置中心（資本、風險上限設定、虛擬交易室、Polymarket 巨鯨門檻與 AI 分析開關等）。
 - **`/notif_settings`**：戰術型通知管理中控台，支援以 4 大戰術維度（定時戰報、盤中遙測、持倉防禦、Alpha 策略）自訂 10 項核心通知頻道，並提供 3 大 1-Click Preset 模式（🛡️ 戰備全開、🎯 精準交易、🔕 盤中靜音）。
-- **`/x`**：批次量化雷達掃描，支援統一雷達面板進行多層次過濾 (現已升級為高 Alpha 精簡 Markdown 報表，直擊 G/P-Wall(±)、Skw%、SQZ向量、Neg-GEX、STO 鎖死、IV 策略、EM Z-Score 與 Top UOA)。
+- **`/x`**：批次量化雷達掃描，支援統一雷達面板進行多層次過濾 (現已升級為高 Alpha 精簡 Markdown 報表，直擊 G/P-Wall(±) 動態極性連動、Skw%、SQZ向量、Neg-GEX、STO 鎖死、IV 策略、EM Z-Score 與 Top UOA)。
 - **`/dash`**：交易員主控板，檢視持倉、備用流動性與極限跑道天數。
 - **`/stress_test`**：委託單壓力測試與現金赤字警報。
 - **`/list_orders` / `/order_panel`**：檢視活躍委託單與新增委託單。
