@@ -269,3 +269,28 @@ async def fetch_symbol_gex_metrics(symbol: str) -> dict:
         logger.warning(f"[{symbol}] API 不可用，回傳過期 GEX 快取資料作為降級備援。")
         return {**stale_cached_data, "_is_stale_cache": True}
     return fallback
+
+
+def classify_gex_wall(
+    strike_gex: float, max_positive_gex: float, is_heavy_otm_call: bool = False
+) -> str:
+    """
+    GEX 與做市商意圖映射引擎 (GEX Mapping Engine)
+
+    Args:
+        strike_gex: 該履約價的 GEX 曝險值
+        max_positive_gex: 該標的整體選擇權鏈中的最大正 GEX 值
+        is_heavy_otm_call: 是否為深度價外大量 Call 的異常堆積
+
+    Returns:
+        str: 映射出的對沖屬性分類 (SUPPORT_GEX_WALL, RESISTANCE_CALL_WALL, 或 NEUTRAL)
+    """
+    # 當 GEX 為正，且數值等於最大正 GEX 牆時，視為底牆
+    if strike_gex > 0 and abs(strike_gex - max_positive_gex) < 1e-6:
+        return "SUPPORT_GEX_WALL"  # 做市商護盤底牆 (逢低對沖買盤)
+
+    # 當 GEX 為負 (造市商呈負 Gamma 需追漲殺跌)，或是出現價外 Call 異常堆積時，視為天花板壓制
+    elif strike_gex < 0 or is_heavy_otm_call:
+        return "RESISTANCE_CALL_WALL"  # 上方壓制天花板
+
+    return "NEUTRAL"

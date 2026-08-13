@@ -35,12 +35,14 @@ class DynamicRolloverEngine:
         system_action: str,
         target: str = "VOO",
         strategy_override: str = "",
+        asset_class: str = "SPOT",
     ) -> dict:
         """
         Evaluates rebalancing rules and generates the strict 4-part markdown report.
         Returns a dict containing the final action, target asset, and markdown string.
         """
         spot = metrics.get("spot_price", 0.0)
+        price_15m_close = metrics.get("price_15m_close", spot)
         ivr = metrics.get("ivr", 0.0)
         put_wall = metrics.get("put_wall", 0.0)
         call_wall = metrics.get("call_wall", 0.0)
@@ -79,12 +81,25 @@ class DynamicRolloverEngine:
             options_strategy = "嚴禁買方 (IV 過高，規避 Gamma 陷阱)"
 
         # 邏輯 4: 動態停損 (依託 GEX 與 4 大實戰法則)
-        atr_14 = metrics.get("atr_14", 0.0)
+        atr_15m = metrics.get("atr_15m", metrics.get("atr_14", 0.0))
         hvn = metrics.get("hvn", 0.0)
         lvn = metrics.get("lvn", 0.0)
         dte = metrics.get("dte", 99)
+        gex_put_wall = put_wall
+        support_wall = metrics.get("support_wall", 0.0)
 
-        base_stop_loss = (put_wall - 1.5 * atr_14) if put_wall > 0 else (spot * 0.95)
+        # Anti-Washout Stop Engine: Anchor Wall Priority
+        anchor_wall = (
+            support_wall
+            if support_wall > 0
+            else (gex_put_wall if gex_put_wall > 0 else (hvn if hvn > 0 else spot))
+        )
+        raw_stop_loss = anchor_wall - (1.5 * atr_15m)
+
+        # 邊界條件 (Boundary Condition): 2% ~ 5%
+        max_stop = spot * 0.98
+        min_stop = spot * 0.95
+        base_stop_loss = max(min(raw_stop_loss, max_stop), min_stop)
 
         # 法則 1: 避開 LVN 陷阱
         if lvn > 0 and abs(base_stop_loss - lvn) / lvn <= 0.015:
@@ -93,18 +108,52 @@ class DynamicRolloverEngine:
                 min(hvn, put_wall) if (hvn > 0 and put_wall > 0) else max(hvn, put_wall)
             )
             if defensive_wall > 0 and defensive_wall < lvn:
-                base_stop_loss = defensive_wall - 1.5 * atr_14
+                base_stop_loss = max(
+                    min(defensive_wall - 1.5 * atr_15m, max_stop), min_stop
+                )
             else:
                 base_stop_loss = base_stop_loss * 0.985  # 強制往下推
 
         # 法則 4: 末日結算容忍度
         if dte <= 1:
-            base_stop_loss = base_stop_loss - 1.5 * atr_14
+            base_stop_loss = max(
+                min(base_stop_loss - 1.5 * atr_15m, max_stop), min_stop
+            )
             options_strategy += (
                 " | ⚠️ 結算日 (DTE 0/1)：降低部位槓桿，擴大末日洗盤容忍度"
             )
 
         stop_loss = base_stop_loss
+
+        # 轉倉觸發條件重構 & 高 IVR 分流
+        if final_action == "LIQUIDATE":
+            if asset_class == "SPOT":
+                if price_15m_close < stop_loss:
+                    pass  # 實體跌破，允許清倉
+                else:
+                    if ivr > 80.0:
+                        final_action = "HOLD"
+                        options_strategy = "SET_15M_CLOSING_STOP (啟動15分K實體防守)"
+                        system_conflict_note = (
+                            "⚠️ **高 IVR 處置**：未破防守線，現貨啟動收盤價防守。"
+                        )
+                    else:
+                        final_action = "HOLD"
+                        options_strategy = "HOLD_WITH_TRAILING_STOP (續抱並拉高鎖利線)"
+                        system_conflict_note = (
+                            "⚠️ **防洗盤驗證攔截**：未破防守線，退回續抱狀態。"
+                        )
+            else:
+                if ivr > 80.0:
+                    final_action = "REDUCE"
+                    options_strategy = "REDUCE_LEVERAGE (降低合約槓桿 / 買方平倉)"
+                    system_conflict_note = "⚠️ **高 IVR 處置**：期權啟動降槓桿保護。"
+
+        # Consistency Check
+        if final_action == "LIQUIDATE" or final_action == "LIQUIDATE_TO_VOO":
+            stop_loss_str = "N/A"
+        else:
+            stop_loss_str = f"${stop_loss:.2f}"
 
         # 邏輯 5: 數據真實性校正
         data_note = ""
@@ -125,7 +174,7 @@ class DynamicRolloverEngine:
    - {system_conflict_note if system_conflict_note else '常規執行：依系統建議比例調節'}
    - 處置計畫: 轉入 `{final_target}` ({final_action})
    - 期權策略: {options_strategy}
-   - 精確停損: 跌破 ${stop_loss:.2f} 絕對停損
+   - 精確停損: 跌破 {stop_loss_str} 絕對停損
 """
         return {
             "final_action": final_action,
@@ -373,6 +422,58 @@ class DynamicRolloverEngine:
                     else 0.0
                 )
 
+                asset_class = str(
+                    asset.get("instrument_type", asset.get("asset_type", "SPOT"))
+                ).upper()
+                if "OPT" in asset_class or "CONTRACT" in asset_class:
+                    asset_class = "OPTIONS"
+                else:
+                    asset_class = "SPOT"
+
+                metrics["price_15m_close"] = asset.get("price_15m_close", spot)
+                metrics["atr_15m"] = asset.get("atr_15m", metrics["atr_14"])
+
+                from market_analysis.index_microstructure import classify_gex_wall
+
+                gex_profile_data = asset.get("gex_profile_data", {})
+                support_wall = 0.0
+                resistance_wall = 0.0
+                if (
+                    gex_profile_data
+                    and "gex_profile" in gex_profile_data
+                    and isinstance(gex_profile_data["gex_profile"], dict)
+                ):
+                    gex_prof = gex_profile_data["gex_profile"]
+                    max_positive = 0.0
+                    for k, v in gex_prof.items():
+                        try:
+                            val = float(v)
+                            if val > max_positive:
+                                max_positive = val
+                        except Exception:
+                            pass
+                    for k, v in gex_prof.items():
+                        try:
+                            val = float(v)
+                            strike = float(k)
+                            wall_type = classify_gex_wall(
+                                val, max_positive, is_heavy_otm_call=False
+                            )
+                            if (
+                                wall_type == "SUPPORT_GEX_WALL"
+                                and strike > support_wall
+                            ):
+                                support_wall = strike
+                            elif (
+                                wall_type == "RESISTANCE_CALL_WALL"
+                                and strike > resistance_wall
+                            ):
+                                resistance_wall = strike
+                        except Exception:
+                            pass
+                metrics["support_wall"] = support_wall
+                metrics["resistance_wall"] = resistance_wall
+
                 # ----------------------------------------------------
                 # 條件一：現有持倉結構劣化（護衛牆破位 / 主力物理蓋頂 / 目標區獲利解鎖完成）
                 # ----------------------------------------------------
@@ -424,12 +525,19 @@ class DynamicRolloverEngine:
                                 metrics,
                                 system_action="LIQUIDATE",
                                 target=next_target,
+                                asset_class=asset_class,
                             )
                             rebalance_instructions.append(
                                 {
                                     "symbol": symbol,
                                     "action": report_90["final_action"],
-                                    "sell_ratio": 0.9,
+                                    "sell_ratio": 0.9
+                                    if report_90["final_action"] == "LIQUIDATE"
+                                    else (
+                                        0.5
+                                        if report_90["final_action"] == "REDUCE"
+                                        else 0.0
+                                    ),
                                     "target_core": report_90["final_target"],
                                     "reason": report_90["markdown_report"],
                                     "suggested_strategy": report_90["options_strategy"],
@@ -442,12 +550,19 @@ class DynamicRolloverEngine:
                                 system_action="LIQUIDATE",
                                 target=symbol,
                                 strategy_override=f"Bear Call Spread (Short Call @ ${call_wall * 1.02:.2f})",
+                                asset_class=asset_class,
                             )
                             rebalance_instructions.append(
                                 {
                                     "symbol": symbol,
-                                    "action": "REDUCE",
-                                    "sell_ratio": 0.1,
+                                    "action": "REDUCE"
+                                    if report_10["final_action"]
+                                    in ["LIQUIDATE", "REDUCE"]
+                                    else "HOLD",
+                                    "sell_ratio": 0.1
+                                    if report_10["final_action"]
+                                    in ["LIQUIDATE", "REDUCE"]
+                                    else 0.0,
                                     "target_core": symbol,
                                     "reason": report_10["markdown_report"]
                                     + "\n⚠️ **【緊急裁決】Bear Call Spread 反向收租，請交易員手動執行防滑價**",
@@ -459,14 +574,20 @@ class DynamicRolloverEngine:
 
                     # 一般清倉
                     report = self._generate_rule_based_rebalance_report(
-                        symbol, metrics, system_action="LIQUIDATE", target=next_target
+                        symbol,
+                        metrics,
+                        system_action="LIQUIDATE",
+                        target=next_target,
+                        asset_class=asset_class,
                     )
 
                     rebalance_instructions.append(
                         {
                             "symbol": symbol,
                             "action": report["final_action"],
-                            "sell_ratio": 1.0,
+                            "sell_ratio": 1.0
+                            if report["final_action"] == "LIQUIDATE"
+                            else (0.5 if report["final_action"] == "REDUCE" else 0.0),
                             "target_core": report["final_target"],
                             "reason": report["markdown_report"],
                             "suggested_strategy": report["options_strategy"],
@@ -489,7 +610,7 @@ class DynamicRolloverEngine:
                     sell_ratio = excess_value / current_value
 
                     report = self._generate_rule_based_rebalance_report(
-                        symbol, metrics, system_action="REDUCE"
+                        symbol, metrics, system_action="REDUCE", asset_class=asset_class
                     )
 
                     rebalance_instructions.append(
