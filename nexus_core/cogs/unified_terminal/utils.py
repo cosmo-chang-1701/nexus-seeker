@@ -244,6 +244,9 @@ async def find_matching_polymarket_odds(symbol: str, poly_markets: list) -> str:
                 short_q = question[:35] + "..." if len(question) > 35 else question
                 results.append(f"{short_q} ({val_str})")
 
+                if len(results) >= 2:
+                    break
+
     if results:
         # Join multiple matches with a divider
         return " | ".join(results)
