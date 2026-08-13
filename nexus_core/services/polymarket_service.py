@@ -889,6 +889,7 @@ class PolymarketService:
                                     "description": m.get("description"),
                                     "end_date": m.get("endDate"),
                                     "tokens": current_market_tokens,
+                                    "volumeNum": float(m.get("volumeNum", 0.0)),
                                 }
                             )
 

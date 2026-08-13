@@ -242,12 +242,13 @@ async def find_matching_polymarket_odds(symbol: str, poly_markets: list) -> str:
 
                 # Format to a compact string
                 short_q = question[:35] + "..." if len(question) > 35 else question
-                results.append(f"{short_q} ({val_str})")
-
-                if len(results) >= 2:
-                    break
+                vol = float(m.get("volumeNum", 0.0))
+                results.append((f"{short_q} ({val_str})", vol))
 
     if results:
+        # Sort by volume descending and take top 2
+        results.sort(key=lambda x: x[1], reverse=True)
+        top_results = results[:2]
         # Join multiple matches with a divider
-        return " | ".join(results)
+        return " | ".join(r[0] for r in top_results)
     return "N/A"
