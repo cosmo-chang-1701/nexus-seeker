@@ -1342,7 +1342,213 @@ def test_build_radar_scan_embed_gp_wall_polarity_dynamics() -> None:
     assert "(-) N/A / $108.0" in desc_crwv
     assert "🔴賣方禁售" in desc_crwv
     assert "-1.6%" in desc_crwv
-    assert "🔴 跌破底牆 $108.0" in desc_crwv
+    assert "現貨續抱" in desc_crwv
+    assert "嚴守15分K收盤" in desc_crwv
+
+
+def test_build_radar_scan_embed_all_enhanced_fields() -> None:
+    """全面驗證交易員終端雷達補足之欄位：GEX Call/Put Wall、Top UOA、STO 鎖死、暗池水泥牆、真實 Skew、SQZ 向量、防洗盤防守位。"""
+    scan_results = [
+        {
+            "symbol": "NVDA",
+            "quote": {"c": 224.50, "dp": 2.35},
+            "iv_metrics": {
+                "iv_rank": 10.1,
+                "expected_move_weekly": 12.0,
+                "expected_move_lower": 212.5,
+                "expected_move_upper": 236.5,
+                "term_structure_ratio": 0.94,
+                "iv_term_structure_status": "Contango",
+            },
+            "dte_er": 12,
+            "skew": -0.29,
+            "skew_percentile": 51.0,
+            "max_pain": {"max_pain": 215.0},
+            "uoa": [
+                {
+                    "symbol": "NVDA",
+                    "expiry": "2026-08-15",
+                    "strike": 227.5,
+                    "type": "CALL",
+                    "action": "STO",
+                    "volume": 261000,
+                    "oi": 15000,
+                },
+                {
+                    "symbol": "NVDA",
+                    "expiry": "2026-08-15",
+                    "strike": 237.5,
+                    "type": "PUT",
+                    "action": "STO",
+                    "volume": 7014,
+                    "oi": 2000,
+                },
+            ],
+            "gex_metrics": {
+                "put_wall": 220.0,
+                "call_wall": 227.5,
+                "net_gex": 281300.0,
+            },
+            "gex_profile_data": {
+                "put_wall": 220.0,
+                "call_wall": 227.5,
+                "net_gex": 281300.0,
+            },
+            "psq_result": {
+                "is_squeezing": False,
+                "momentum": 12.69,
+                "signal_direction": "🟢",
+            },
+            "atr_14": 3.5,
+            "darkpool": {
+                "prints": [
+                    {
+                        "price": 220.50,
+                        "premium": 48_850_000.0,
+                        "volume": 220000,
+                    }
+                ]
+            },
+            "dp_poc": 220.50,
+        },
+        {
+            "symbol": "CRWV",
+            "quote": {"c": 106.29, "dp": -1.34},
+            "iv_metrics": {
+                "iv_rank": 51.3,
+                "expected_move_weekly": 6.0,
+                "expected_move_lower": 100.0,
+                "expected_move_upper": 112.0,
+                "term_structure_ratio": 0.94,
+                "iv_term_structure_status": "Contango",
+            },
+            "dte_er": 5,
+            "skew": -3.06,
+            "skew_percentile": 62.0,
+            "max_pain": {"max_pain": 95.0},
+            "uoa": [
+                {
+                    "symbol": "CRWV",
+                    "expiry": "2026-08-28",
+                    "strike": 110.0,
+                    "type": "PUT",
+                    "action": "STO",
+                    "volume": 955,
+                    "oi": 120,
+                }
+            ],
+            "gex_metrics": {
+                "put_wall": 108.0,
+                "call_wall": 109.0,
+                "net_gex": 9144000.0,
+            },
+            "gex_profile_data": {
+                "put_wall": 108.0,
+                "call_wall": 109.0,
+                "net_gex": 9144000.0,
+                "gex_profile": {"104.0": 3000000, "105.0": 3000000, "106.0": 3144000},
+            },
+            "psq_result": {
+                "is_squeezing": False,
+                "momentum": 19.62,
+                "signal_direction": "🟢",
+            },
+            "atr_14": 2.8,
+            "darkpool": {
+                "prints": [
+                    {
+                        "price": 101.68,
+                        "premium": 48_850_000.0,
+                        "volume": 480000,
+                    }
+                ]
+            },
+            "dp_poc": 101.68,
+        },
+        {
+            "symbol": "AAPL",
+            "quote": {"c": 230.00, "dp": 0.50},
+            "iv_metrics": {
+                "iv_rank": 45.0,
+                "expected_move_weekly": 5.0,
+                "expected_move_lower": 225.0,
+                "expected_move_upper": 235.0,
+                "term_structure_ratio": 0.98,
+                "iv_term_structure_status": "Contango",
+            },
+            "dte_er": 40,
+            "skew": 0.1,
+            "skew_percentile": 50.0,
+            "max_pain": {"max_pain": 230.0},
+            "uoa": [],
+            "gex_metrics": {
+                "put_wall": 220.0,
+                "call_wall": 240.0,
+                "net_gex": 5000000.0,
+            },
+            "psq_result": {
+                "is_squeezing": False,
+                "momentum": 1.0,
+                "signal_direction": "🟢",
+            },
+        },
+    ]
+
+    with patch(
+        "database.notifications.get_user_notification_settings",
+        return_value={
+            "radar_macro_edge": False,
+            "radar_alpha_signals": True,
+            "radar_risk_defenses": True,
+        },
+    ), patch("database.orders.get_user_active_orders", return_value=[]), patch(
+        "database.get_full_user_context",
+        return_value=SimpleNamespace(
+            can_trade_spreads=True, cash_reserve_protection=True
+        ),
+    ), patch(
+        "market_analysis.insights_engine.InsightsEngine.generate_cro_insight",
+        return_value=(None, None, None),
+    ):
+        embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
+
+    assert len(embeds) == 1
+    desc = get_embed_text(embeds[0])
+
+    # 1. 頂部 Gamma 牆驗證
+    assert "(+) $227.5 / $220.0" in desc
+    assert "(-) $109.0 / $108.0" in desc
+    assert "(+) $240.0 / $220.0" in desc
+
+    # 2. Top UOA 巨鯨開倉驗證
+    assert "$227.5C (STO 261k)" in desc
+    assert "$110.0P (STO 955)" in desc
+
+    # 3. STO 鎖死履約價驗證
+    assert "C$227.5 / P$237.5" in desc
+    assert "P$110.0" in desc
+
+    # 4. 真實 Skew 與分位點驗證
+    assert "51% (-0.29%)" in desc
+    assert "62% (-3.06%)" in desc
+
+    # 5. SQZ 動能向量驗證 (NVDA 觸發上方 227.5 硬封頂降級為 ⚪，CRWV 維持 🟢)
+    assert "+12.7" in desc
+    assert "🟢+19.6" in desc
+    assert "偵測到上方 $227.50 存在實質硬封頂" in desc
+
+    # 6. IV 策略驗證
+    assert "🔴CSP 禁售" in desc
+    assert "🔴賣方禁售" in desc
+    assert "🟢適宜賣方" in desc
+
+    # 7. 暗池水泥牆大宗交易警示驗證
+    assert "暗池在 $101.68 爆出 $48.85M 巨額大宗買盤" in desc
+
+    # 8. 防洗盤絕對防守位與離場判定鐵律驗證
+    # CRWV PutWall 108.0 - 1.5 * 2.8 = $103.80
+    assert "$103.80" in desc
+    assert "嚴守 15 分鐘實體 K 線收盤撤退線" in desc
 
 
 def test_build_post_market_intelligence_embed_empty() -> None:

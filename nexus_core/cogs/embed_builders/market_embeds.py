@@ -920,6 +920,24 @@ def build_radar_scan_embed(
                         f"• ⏱️ {sym}: SQZ 正處於動能擠壓蓄力期 (Squeezing)，當前動能偏空 ({sqz_mom:+.1f})，建議嚴防向下殺跌風險。"
                     )
 
+            # 暗池大宗交易 (Dark Pool Block Prints) 警示
+            dp_prints = (
+                r.get("darkpool", {}).get("prints", [])
+                if isinstance(r.get("darkpool"), dict)
+                else []
+            )
+            if dp_prints:
+                max_print = max(
+                    dp_prints,
+                    key=lambda p: float(p.get("premium", 0.0) or 0.0),
+                )
+                dp_p_prem = float(max_print.get("premium", 0.0) or 0.0)
+                dp_p_price = float(max_print.get("price", 0.0) or 0.0)
+                if dp_p_prem >= 5_000_000.0 and dp_p_price > 0:
+                    insights.append(
+                        f"• 🧱 {sym}: 暗池在 ${dp_p_price:.2f} 爆出 ${dp_p_prem/1_000_000:.2f}M 巨額大宗買盤，形成籌碼水泥牆支撐。"
+                    )
+
             # 格式化一列 ANSI 表格 (Two-Line Tree-Style)
             sym_cell = f"\u001b[1;34m{sym:<6}\u001b[0m"
             price_cell = price_ansi + (" " * max(0, 17 - len(price_str)))
@@ -985,9 +1003,9 @@ def build_radar_scan_embed(
                 else "D-Wall: N/A"
             )
             struct_ansi = (
-                f"D-Wall: [1;31m{d_wall_dist:+.1f}%[0m{d_wall_alert}"
+                f"D-Wall:  [1;31m{d_wall_dist:+.1f}% [0m{d_wall_alert}"
                 if d_wall_dist < 1.0
-                else f"D-Wall: [1;32m{d_wall_dist:+.1f}%[0m"
+                else f"D-Wall:  [1;32m{d_wall_dist:+.1f}% [0m"
             )
             if not put_wall_strike:
                 struct_ansi = struct_str
@@ -999,7 +1017,7 @@ def build_radar_scan_embed(
             rvol_alert = " 🚀" if rvol > 2.0 else ""
             rvol_str = f"RVOL {rvol:.1f}x{rvol_alert}"
             rvol_ansi = (
-                f"RVOL [1;33m{rvol:.1f}x[0m{rvol_alert}" if rvol > 2.0 else rvol_str
+                f"RVOL  [1;33m{rvol:.1f}x [0m{rvol_alert}" if rvol > 2.0 else rvol_str
             )
 
             mom_str = f"MOM {sqz_dir} {sqz_mom:+.1f}" if psq_result else "MOM ⚪"
@@ -1042,8 +1060,10 @@ def build_radar_scan_embed(
                     pass
 
             dmp_display = f"D-MP: {dist_pct:+.2f}%{trend}{sync_tag}"
-            color_ansi = "[1;32m" if dist_pct >= 0 else "[1;31m"
-            dmp_display_ansi = f"D-MP: {color_ansi}{dist_pct:+.2f}%[0m{trend}{sync_tag}"
+            color_ansi = " [1;32m" if dist_pct >= 0 else " [1;31m"
+            dmp_display_ansi = (
+                f"D-MP: {color_ansi}{dist_pct:+.2f}% [0m{trend}{sync_tag}"
+            )
 
             dmp_len = len(dmp_display)
             dmp_cell = dmp_display_ansi + (" " * max(0, 21 - dmp_len))
@@ -1080,7 +1100,8 @@ def build_radar_scan_embed(
             ansi_lines.append(line1)
             ansi_lines.append(line2)
             ansi_lines.append("")  # 加上空行讓每個標的層級更分明
-            # ---- 產生 Markdown 行 (5 大高 Alpha 欄位) ----
+
+            # ---- 產生 Markdown 行 (高 Alpha 欄位) ----
             # 2. IV Rank & Skew
             iv_rank_val = 0.0
             if iv_metrics:
@@ -1093,7 +1114,8 @@ def build_radar_scan_embed(
                 elif isinstance(iv_metrics, dict):
                     ivr_raw = iv_metrics.get("iv_rank")
                     iv_rank_val = float(ivr_raw) if ivr_raw is not None else 0.0
-            skew_val = float(r.get("skew", 0.0) or 0.0)
+            skew_val = _safe_float(r.get("skew"), 0.0)
+            skew_percentile_val = _safe_float(r.get("skew_percentile"), 50.0)
 
             # 3. EM Z-Score
             em_z_score_str = "N/A"
@@ -1118,14 +1140,27 @@ def build_radar_scan_embed(
             else:
                 neg_gex_str = "N/A"
 
-            # 4.1 STO Density
-            sto_density = r.get("radar_cache", {}).get("straddle_sto_density")
-            if sto_density is not None:
-                sto_str = f"{float(sto_density) * 100:.1f}%"
+            # 4.1 STO 鎖死履約價 (STO Strikes & Density)
+            sto_str = "N/A"
+            uoa_list = r.get("uoa") or []
+            sto_uoa_items = [
+                u for u in uoa_list if "STO" in str(u.get("action", "")).upper()
+            ]
+            if sto_uoa_items:
+                sto_parts = []
+                for u in sto_uoa_items[:2]:
+                    u_t = "C" if str(u.get("type", "")).upper().startswith("C") else "P"
+                    u_k = float(u.get("strike", 0.0) or 0.0)
+                    sto_parts.append(f"{u_t}${u_k:.1f}")
+                sto_str = " / ".join(sto_parts)
+            elif r.get("radar_cache", {}).get("sto_strikes"):
+                sto_str = str(r["radar_cache"]["sto_strikes"])
             else:
-                sto_str = "N/A"
+                sto_density = r.get("radar_cache", {}).get("straddle_sto_density")
+                if sto_density is not None:
+                    sto_str = f"{float(sto_density) * 100:.1f}%"
 
-            # 4.2 IV-Strategy Match (具備負 Gamma 踩踏區風控熔斷)
+            # 4.2 IV 階級、期限結構與策略匹配 (具備負 Gamma 踩踏區風控熔斷)
             if is_neg_gamma:
                 iv_strategy_str = "🔴賣方禁售"
             elif iv_rank_val < 15.0:
@@ -1134,38 +1169,37 @@ def build_radar_scan_embed(
                 iv_strategy_str = "🟢適宜賣方"
 
             # 5. Top UOA
-            uoa_list = r.get("uoa") or []
             top_uoa_str = "N/A"
             if uoa_list:
                 top_u = uoa_list[0]
-                u_type = str(top_u.get("type", "C"))[0]
+                u_type = (
+                    "C" if str(top_u.get("type", "C")).upper().startswith("C") else "P"
+                )
                 u_strike = float(top_u.get("strike", 0.0) or 0.0)
                 u_vol = float(top_u.get("volume", 0.0) or 0.0)
-                u_action = top_u.get("action", "BTO")
-                expiry_raw = top_u.get("expiry", "")
+                u_action = str(top_u.get("action", "BTO"))
+                expiry_raw = str(top_u.get("expiry", ""))
                 expiry_short = (
                     expiry_raw[5:].replace("-", "/")
                     if len(expiry_raw) >= 10
                     else expiry_raw
                 )
                 vol_k = f"{u_vol/1000.0:.0f}k" if u_vol >= 1000 else f"{u_vol:.0f}"
-                icon = "🔥" if "BTO" in u_action else "🛡️"
-                if u_action == "ITM":
-                    icon = "🚀"
+                icon = (
+                    "🔥" if "BTO" in u_action else ("🛡️" if "STO" in u_action else "🚀")
+                )
                 top_uoa_str = f"{icon} {expiry_short} ${u_strike:.1f}{u_type} ({u_action} {vol_k})"
 
-            # 6. 灰階戰術建議
-            dp_poc = float(r.get("dp_poc", 0.0) or 0.0)
-            is_magnetic = False
-            if price_val > 0 and max_pain_strike > 0 and put_wall > 0 and dp_poc > 0:
-                dev = abs(price_val - max_pain_strike) / max_pain_strike
-                if (
-                    dev > 0.10
-                    and price_val >= put_wall
-                    and abs(dp_poc - put_wall) / put_wall < 0.01
-                ):
-                    is_magnetic = True
+            # 6. 防洗盤絕對防守位 (Anti-Washout Stop Loss)
+            atr_14 = float(r.get("atr_14", 0.0) or 0.0)
+            if put_wall > 0 and atr_14 > 0:
+                anti_washout_stop = round(put_wall - 1.5 * atr_14, 2)
+            elif put_wall > 0:
+                anti_washout_stop = round(put_wall * 0.96, 2)
+            else:
+                anti_washout_stop = 0.0
 
+            # 7. 灰階戰術建議 (Multi-dimensional Gray-scale Evaluation)
             tactical_adv = "⚪ 區間震盪，觀察籌碼堆疊"
             if skew_percentile_val > 90.0:
                 tactical_adv = "🛑 防洗盤處置，嚴守 15 分鐘實體 K 線撤退線"
@@ -1176,7 +1210,14 @@ def build_radar_scan_embed(
             elif call_wall > 0 and price_val >= call_wall and sqz_mom <= 0:
                 tactical_adv = f"🔴 ${call_wall:.1f} 物理封頂，Sell Put 獲利落袋"
             elif put_wall > 0 and price_val < put_wall:
-                if iv_rank_val >= 80.0:
+                has_gex_prof = bool(r.get("gex_profile_data", {}).get("gex_profile"))
+                if price_val >= anti_washout_stop and (
+                    has_positive_gamma_support
+                    or (iv_rank_val < 60.0 and term_structure <= 1.05)
+                    or has_gex_prof
+                ):
+                    tactical_adv = f"🟡 護航網支撐，現貨續抱，防守退至 ${anti_washout_stop:.2f} (嚴守15分K收盤)"
+                elif iv_rank_val >= 80.0:
                     tactical_adv = f"🟡 跌破底牆，善用 {iv_rank_val:.0f}% IVR 做 Spread 防禦或暫泊 VOO"
                 else:
                     tactical_adv = f"🔴 跌破底牆 ${put_wall:.1f}，無 UOA 護航，資金轉移"
@@ -1193,9 +1234,19 @@ def build_radar_scan_embed(
             g_p_wall_str = (
                 f"({gex_pol}) {g_p_wall_str}" if g_p_wall_str != "N/A" else "N/A"
             )
-            skew_pct_str = f"{skew_percentile_val:.0f}%"
-            sqz_mom_val = _safe_float(r.get("psq_result", {}).get("momentum", 0.0))
-            sqz_vec_str = f"{sqz_dir}{sqz_mom_val:+.1f}"
+            skew_pct_str = (
+                f"{skew_percentile_val:.0f}% ({skew_val:+.2f}%)"
+                if skew_val != 0.0
+                else f"{skew_percentile_val:.0f}%"
+            )
+            sqz_mom_val = _safe_float(
+                r.get("psq_result", {}).get(
+                    "momentum", r.get("psq_result", {}).get("momentum_value", 0.0)
+                )
+            )
+            sqz_vec_str = (
+                f"{'⏱️' if sqz_is_squeezing else ''}{sqz_dir}{sqz_mom_val:+.1f}"
+            )
 
             # 標的異常與偏離度視覺強連動標示 (⚠️ 快速識別)
             is_high_risk_or_anomaly = (
@@ -1266,7 +1317,7 @@ def build_radar_scan_embed(
             ansi_content = md_table_header + "\n" + "\n".join(md_chunk)
 
             if idx == len(md_chunks) - 1:
-                ansi_content += "\n\n提示: ⚠️ 代表與最大痛點偏離度過高（>10%）或具備異常籌碼結構，需點擊穿透審查。\n備註: EM Pos % 代表價格處於預期波動區間之下緣(0%)或上緣(100%)。\n指標: SQZ 🟢多頭動能/🔴空頭動能。MOM 顯示數值代表處於擠壓蓄力期，需防突破或殺跌。"
+                ansi_content += "\n\n提示: ⚠️ 代表與最大痛點偏離度過高（>10%）或具備異常籌碼結構，需點擊穿透審查。\n備註: EM Pos % 代表價格處於預期波動區間之下緣(0%)或上緣(100%)。\n指標: SQZ 🟢多頭動能/🔴空頭動能。MOM 顯示數值代表處於擠壓蓄力期，需防突破或殺跌。\n風控: 🛑 離場判定鐵律：嚴守 15 分鐘實體 K 線收盤撤退線 (過濾下影線流動性獵殺)。"
 
             embed.add_field(
                 name=field_name,

@@ -804,9 +804,42 @@ class UnifiedTerminalCog(commands.Cog):
         radar_cache = get_kv_cache(f"radar_terminal_{sym.upper()}") or {}
         market_cache = get_market_cache(sym) or {}
         squeeze_cache = get_squeeze_cache(sym) or {}
+        gex_cached = get_kv_cache(f"gex_metrics_{sym.upper()}") or {}
+        gex_data = gex_cached.get("data", {}) if isinstance(gex_cached, dict) else {}
+
+        uoa_cached = get_kv_cache(f"uoa_{sym.upper()}")
+        uoa_data = (
+            uoa_cached
+            if isinstance(uoa_cached, list)
+            else (radar_cache.get("uoa") or [])
+        )
+
+        darkpool_cached = get_kv_cache(f"darkpool_{sym.upper()}") or {}
+        dp_poc_val = get_kv_cache(f"dp_poc_{sym.upper()}")
+        if dp_poc_val is None:
+            dp_poc_val = (
+                darkpool_cached.get("dp_poc")
+                or radar_cache.get("hvn_price")
+                or get_kv_cache(f"volume_poc_{sym.upper()}")
+            )
+        dp_poc = float(dp_poc_val) if dp_poc_val is not None else 0.0
 
         today_str = datetime.now().strftime("%Y-%m-%d")
         iv_metrics = get_kv_cache(f"iv_metrics_{sym.upper()}_{today_str}") or {}
+
+        from market_analysis.sentiment.history_storage import (
+            get_last_stored_sentiment,
+            get_indicator_percentile,
+            get_last_stored_iv,
+        )
+
+        if not iv_metrics or "iv_rank" not in iv_metrics:
+            last_iv = get_last_stored_iv(sym)
+            if last_iv is not None and not iv_metrics:
+                iv_metrics = {
+                    "current_iv": last_iv,
+                    "iv_rank": radar_cache.get("iv_rank", 50.0),
+                }
 
         if "expected_move_lower" not in iv_metrics:
             iv_metrics["expected_move_lower"] = market_cache.get(
@@ -816,18 +849,62 @@ class UnifiedTerminalCog(commands.Cog):
             iv_metrics["expected_move_upper"] = market_cache.get(
                 "expected_move_upper", 0.0
             )
+        if "term_structure_ratio" not in iv_metrics and radar_cache.get(
+            "term_structure_ratio"
+        ):
+            iv_metrics["term_structure_ratio"] = radar_cache.get("term_structure_ratio")
+        if "iv_term_structure_status" not in iv_metrics and radar_cache.get(
+            "iv_term_structure_status"
+        ):
+            iv_metrics["iv_term_structure_status"] = radar_cache.get(
+                "iv_term_structure_status"
+            )
 
         avg_vol_20d = radar_cache.get("avg_vol_20d", 0.0)
         rvol = (current_volume / avg_vol_20d) if avg_vol_20d > 0 else 0.0
 
         mp_near = radar_cache.get("mp_near") or market_cache.get("max_pain")
 
+        # 讀取真實 Skew 與分位點
+        skew_val = get_last_stored_sentiment(sym, "SKEW")
+        if skew_val is not None:
+            skew_percentile = get_indicator_percentile(sym, "SKEW", skew_val)
+        elif "skew" in radar_cache:
+            skew_val = radar_cache.get("skew", 0.0)
+            skew_percentile = radar_cache.get("skew_percentile", 50.0)
+        else:
+            skew_val = -0.5 if radar_cache.get("is_skew_extreme") else 0.0
+            skew_percentile = 50.0
+
+        # GEX Wall 解析（優先從 gex_metrics 快取讀取）
+        put_wall = gex_data.get("put_wall") or radar_cache.get("put_wall_strike")
+        call_wall = gex_data.get("call_wall") or radar_cache.get("call_wall_strike")
+        net_gex = (
+            gex_data.get("net_gex")
+            if gex_data.get("net_gex") is not None
+            else radar_cache.get("net_gex")
+        )
+
+        atr_14 = float(radar_cache.get("atr_14", 0.0) or 0.0)
+
+        # SQZ 動能與方向
+        sqz_mom = squeeze_cache.get(
+            "momentum", radar_cache.get("squeeze_momentum", 0.0)
+        )
+        sqz_is_squeezing = squeeze_cache.get(
+            "is_squeezing", radar_cache.get("is_squeezing", False)
+        )
+        sqz_dir = squeeze_cache.get(
+            "direction", radar_cache.get("squeeze_direction", "⚪")
+        )
+
         return {
             "symbol": sym,
             "quote": quote,
             "rvol": rvol,
             "radar_cache": radar_cache,
-            "skew": -0.5 if radar_cache.get("is_skew_extreme") else 0.0,
+            "skew": skew_val,
+            "skew_percentile": skew_percentile,
             "max_pain": {
                 "max_pain": mp_near,
                 "distance_pct": ((price - mp_near) / mp_near) * 100
@@ -836,29 +913,33 @@ class UnifiedTerminalCog(commands.Cog):
             },
             "iv_metrics": iv_metrics,
             "iv_data": iv_metrics,
-            "uoa": [],
+            "uoa": uoa_data,
+            "darkpool": darkpool_cached,
+            "atr_14": atr_14,
             "psq_result": {
-                "is_squeezing": squeeze_cache.get("is_squeezing", False),
-                "momentum_value": squeeze_cache.get("momentum", 0.0),
-                "signal_direction": squeeze_cache.get("direction", "⚪"),
+                "is_squeezing": sqz_is_squeezing,
+                "momentum": sqz_mom,
+                "momentum_value": sqz_mom,
+                "signal_direction": sqz_dir,
+                "direction": sqz_dir,
             },
             "gex_metrics": {
-                "put_wall": radar_cache.get("put_wall_strike"),
-                "call_wall": radar_cache.get("call_wall_strike"),
-                "net_gex": radar_cache.get("net_gex"),
+                "put_wall": put_wall,
+                "call_wall": call_wall,
+                "net_gex": net_gex,
             },
             "gex_profile_data": {
-                "put_wall": radar_cache.get("put_wall_strike"),
-                "call_wall": radar_cache.get("call_wall_strike"),
-                "net_gex": radar_cache.get("net_gex"),
+                "put_wall": put_wall,
+                "call_wall": call_wall,
+                "net_gex": net_gex,
+                "gex_profile": gex_data.get("gex_profile", {}),
             },
             "vp_data": {
                 "hvn": radar_cache.get("hvn_price")
                 or get_kv_cache(f"volume_poc_{sym.upper()}"),
                 "lvn": radar_cache.get("lvn_price"),
             },
-            "dp_poc": radar_cache.get("hvn_price")
-            or get_kv_cache(f"volume_poc_{sym.upper()}"),
+            "dp_poc": dp_poc,
         }
 
     async def _fetch_sym_radar_data_slow_raw(self, sym: str) -> Any:
@@ -1082,6 +1163,9 @@ class UnifiedTerminalCog(commands.Cog):
         from database.cache import save_kv_cache
         from datetime import datetime, timezone
 
+        if uoa_data:
+            await save_kv_cache(f"uoa_{sym.upper()}", uoa_data)
+
         await save_kv_cache(
             f"radar_terminal_{sym.upper()}",
             {
@@ -1104,6 +1188,18 @@ class UnifiedTerminalCog(commands.Cog):
                 "hvn_price": (vp_data or {}).get("hvn", 0.0),
                 "lvn_price": (vp_data or {}).get("lvn", 0.0),
                 "avg_vol_20d": vol_data.get("avg_volume_20", 0.0),
+                "skew": skew_val,
+                "skew_percentile": skew_percentile,
+                "atr_14": atr_14,
+                "iv_rank": iv_rank_val,
+                "term_structure_ratio": iv_m.term_structure_ratio if iv_m else None,
+                "iv_term_structure_status": iv_m.iv_term_structure_status
+                if iv_m
+                else None,
+                "squeeze_momentum": psq_res.get("momentum_value", 0.0),
+                "is_squeezing": psq_res.get("is_squeezing", False),
+                "squeeze_direction": psq_res.get("signal_direction", "⚪"),
+                "uoa": uoa_data,
                 "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
             },
         )
