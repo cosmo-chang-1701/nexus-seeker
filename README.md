@@ -29,7 +29,7 @@ Nexus Seeker 是一個 **Discord-first 的多租戶選擇權風控與交易營�
 本專案採用雙服務（Microservices）架構，透過 API 與資料庫非同步通信：
 
 - **`nexus_core/`**：主 Discord Bot。管理所有的 slash commands、背景排程、量化策略引擎、主動推播佇列與 SQLite 資料庫。
-- **`nexus_edge_scraper/`**：邊緣爬蟲服務 (FastAPI + Playwright)。負責隔離高耗能的網頁渲染作業（如 Reddit 輿情監控、SPY 選擇權鏈抓取），並透過 Cloudflare Tunnel 暴露給 Core 調用。
+- **`nexus_edge_scraper/`**：邊緣爬蟲服務 (FastAPI + Playwright)。負責隔離高耗能的網頁渲染與容易遭受防火牆封鎖的作業（如 Reddit RSS 輿情監控、SEC 財報抽取），並提供**優雅降級方案 (Graceful Degradation)**（當核心端 `yfinance` 遭遇機房 IP 封鎖時，自動將歷史 K 線與期權鏈抓取任務轉交給 Edge 端突破防護），最後透過 Cloudflare Tunnel 安全地暴露給 Core 調用。
 
 ```mermaid
 graph TD

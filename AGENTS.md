@@ -25,7 +25,8 @@ The codebase is optimized for:
 
 2. **`nexus_edge_scraper`**
    - Optional FastAPI + Playwright edge service
-   - Used for Reddit scraping, macro data fetching, and SEC structured section extraction (`section_extractor.py`) without exposing the bot runtime directly
+   - Used for Reddit RSS fetching, macro data fetching, and SEC structured section extraction (`section_extractor.py`) without exposing the bot runtime directly.
+   - **Graceful Degradation Proxy**: Acts as a local proxy tunnel for `yfinance` requests (history K-lines, options expiries, options chains) to seamlessly bypass datacenter IP blocks (e.g., DigitalOcean) when Yahoo Finance triggers HTTP 403/429.
 
 ### Important Runtime Distinction
 
