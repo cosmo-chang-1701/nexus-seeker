@@ -125,6 +125,19 @@ async def dispatch_watchlist_heartbeat(
                     current_volume = vol_data.get("current_volume", 0.0)
                     avg_volume_20 = vol_data.get("avg_volume_20", 0.0)
 
+                    skew_percentile = float(res.get("skew_percentile", 50.0))
+                    uoa_data = res.get("uoa", [])
+                    is_uoa_aligned = False
+                    for uoa_item in uoa_data:
+                        if isinstance(uoa_item, dict):
+                            action_str = uoa_item.get("action", "")
+                            opt_type = str(uoa_item.get("type", "")).upper()
+                            if ("BTO" in action_str and opt_type == "CALL") or (
+                                "STO" in action_str and opt_type == "PUT"
+                            ):
+                                is_uoa_aligned = True
+                                break
+
                     scenario = classify_market_scenario(
                         price=price,
                         high=high,
@@ -139,6 +152,8 @@ async def dispatch_watchlist_heartbeat(
                         ivr=iv_rank,
                         hvn=hvn,
                         lvn=lvn,
+                        skew_percentile=skew_percentile,
+                        is_uoa_aligned=is_uoa_aligned,
                     )
                     if scenario:
                         # 二階段確認：PENDING 狀態需經 15 分鐘實體 K 線確認
@@ -176,6 +191,7 @@ async def dispatch_watchlist_heartbeat(
                                 ivr=iv_rank,
                                 hvn=hvn,
                                 lvn=lvn,
+                                skew_percentile=skew_percentile,
                             )
                             await bot.queue_dm(uid, embed=alert_embed)
                             await database.save_kv_cache(cache_key, True)

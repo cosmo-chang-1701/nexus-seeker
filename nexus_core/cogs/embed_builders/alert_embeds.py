@@ -623,6 +623,7 @@ def create_scenario_alert_embed(
     ivr: float,
     hvn: float,
     lvn: float,
+    skew_percentile: float = 50.0,
 ) -> discord.Embed:
     """建立戰場情境轉折警報 Embed"""
 
@@ -632,17 +633,20 @@ def create_scenario_alert_embed(
         MarketScenario.GOLDEN_TAKE_PROFIT: discord.Color.teal(),
         MarketScenario.FAKE_SUPPORT_TRAP: discord.Color.orange(),
         MarketScenario.STRUCTURAL_BREAKDOWN: discord.Color.red(),
+        MarketScenario.WHALE_ESCORT_RESONANCE: discord.Color.purple(),
     }
 
-    embed = NexusEmbed(
-        title=f"🚨 戰場情境轉折警報 | {symbol}",
-        description=f"**🧭 觸發情境：{scenario.value}**",
-        color=color_map.get(scenario, discord.Color.default()),
-        timestamp=datetime.now(timezone.utc),
-    )
+    title = f"🚨 戰場情境轉折警報 | {symbol}"
+    desc = f"**🧭 觸發情境：{scenario.value}**"
+    action = "未知操作"
+    tool = "未定義"
 
-    # 根據情境給予不同的敘述與決策命令
-    if scenario == MarketScenario.GOLDEN_LEFT:
+    if scenario == MarketScenario.WHALE_ESCORT_RESONANCE:
+        title = f"💎 巨鯨護航共振觸發：{symbol}"
+        desc = f"偵測到 **GEX 正 Gamma 牆 (${put_wall:.2f})** 確立，配合 **Skew 避險分位 ({skew_percentile:.1f}%) < 50%**，以及 **UOA 巨鯨大單方向一致 (STO Put / BTO Call)**。"
+        tool = "現貨分批 或 Sell Put Spread (高勝率防禦建倉)"
+        action = "【勝率極值共振】巨鯨實質硬地板成型，建議可於此防禦水位建倉做多或賣出 Put Spread。"
+    elif scenario == MarketScenario.GOLDEN_LEFT:
         tool = "現貨分批 或 Sell Put Spread (吃高 IV + Theta)"
         action = "【試水溫加碼 20%~30%】鋼鐵牆成型，做市商對沖盤與現貨買盤雙重護航。"
     elif scenario == MarketScenario.STRONG_BREAKOUT:
@@ -664,6 +668,13 @@ def create_scenario_alert_embed(
     else:
         tool = "未定義"
         action = "未知操作"
+
+    embed = NexusEmbed(
+        title=title,
+        description=desc,
+        color=color_map.get(scenario, discord.Color.default()),
+        timestamp=datetime.now(timezone.utc),
+    )
 
     embed.add_field(
         name="📊 關鍵風控指標",

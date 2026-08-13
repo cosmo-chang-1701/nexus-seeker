@@ -9,6 +9,7 @@ class MarketScenario(Enum):
     FAKE_SUPPORT_TRAP = "假性支撐陷阱"
     STRUCTURAL_BREAKDOWN = "結構破位轉倉"
     STRUCTURAL_BREAKDOWN_PENDING = "結構破位轉倉_待確認"
+    WHALE_ESCORT_RESONANCE = "巨鯨護航共振"
 
 
 def classify_market_scenario(
@@ -25,6 +26,8 @@ def classify_market_scenario(
     ivr: float,
     hvn: float,
     lvn: float,
+    skew_percentile: float = 50.0,
+    is_uoa_aligned: bool = False,
 ) -> Optional[MarketScenario]:
     if not all([price, put_wall, call_wall, gamma_flip]):
         return None
@@ -73,6 +76,16 @@ def classify_market_scenario(
     # [ Step 1: 體質檢查 ] ──現價是否 > Gamma Flip？
     if price > gamma_flip:
         # --- YES (正 Gamma/平穩) 允許進行均值回歸與逢低加碼 ---
+
+        # [ 巨鯨護航共振 ]
+        # 點位驗證: K棒高低點回測 PutWall (GEX 正 Gamma 牆確立)
+        # 且 Skew 避險分位 < 50.0，且 UOA 方向一致 (STO Put / BTO Call)
+        if (
+            is_price_near_wall(high, low, put_wall)
+            and skew_percentile < 50.0
+            and is_uoa_aligned
+        ):
+            return MarketScenario.WHALE_ESCORT_RESONANCE
 
         # [ 黃金左側加碼 ]
         # 點位驗證: K棒高低點回測 PutWall，且 PutWall 與 HVN 重疊 (鋼鐵牆成型)
