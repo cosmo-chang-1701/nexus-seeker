@@ -102,7 +102,6 @@ ALL_NOTIFICATION_KEYS = [
     "hb_options_structure",
     "hb_execution_risk",
     "pre_market_briefing",
-    "intraday_decision_scan",
     "post_market_intelligence",
     "weekly_vtr_report",
     "order_telemetry_alignment_alert",

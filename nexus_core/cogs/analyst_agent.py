@@ -4,7 +4,6 @@ Business logic for each report domain lives in the runner sub-modules under
 ``market_analysis/analyst_runners/``.  This cog owns:
   - Task loop scheduling (pre-market, intraday, post-market)
   - dispatch_report  : generic multi-user embed broadcast
-  - dispatch_intraday_guide : delegates to intraday_runner
   - dispatch_pre_market_briefing : orchestrates macro + earnings embed delivery
   - dispatch_post_market_intelligence : orchestrates sector + LLM post-market delivery
 """
@@ -24,7 +23,6 @@ import database
 from market_time import (
     get_next_market_target_time,
     get_sleep_seconds,
-    is_market_open,
 )
 from services.llm_service import generate_analyst_report
 from cogs.embed_builder import split_embed_by_fields
@@ -35,7 +33,6 @@ from market_analysis.analyst_runners import earnings_runner
 from market_analysis.analyst_runners import sector_runner
 from market_analysis.analyst_runners import portfolio_runner
 from market_analysis.analyst_runners import strategy_runner
-from market_analysis.analyst_runners import intraday_runner
 
 # Re-export SECTORS so existing tests and callers can still do
 # ``from cogs.analyst_agent import SECTORS``
@@ -48,13 +45,10 @@ class AnalystAgent(commands.Cog):
     def __init__(self, bot: Any):
         self.bot = bot
         self.pre_market_loop.start()
-        # intra_day_loop is integrated into trading.py's intraday_decision_scan
-        # self.intra_day_loop.start()
         self.post_market_loop.start()
 
     def cog_unload(self) -> None:  # type: ignore
         self.pre_market_loop.cancel()
-        # self.intra_day_loop.cancel()
         self.post_market_loop.cancel()
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -98,33 +92,6 @@ class AnalystAgent(commands.Cog):
                 logger.error(f"Analyst Pre-Market loop error: {e}")
 
             await asyncio.sleep(60)
-
-    # ==========================================
-    # 🚀 2. 盤中監測：每 120 分鐘心跳掃描 (僅開盤時)
-    # ==========================================
-    @tasks.loop(count=1)
-    async def intra_day_loop(self) -> None:
-        await self.bot.wait_until_ready()
-        while True:
-            if is_market_open():
-                if not getattr(self.bot, "_is_leader_instance", True):
-                    await asyncio.sleep(30)
-                    continue
-                logger.info(
-                    "🤖 [Analyst Intra-Day] 偵測到開盤，執行 120 分鐘心跳掃描..."
-                )
-                try:
-                    await self.dispatch_intraday_guide()
-                except Exception as e:
-                    logger.error(f"Analyst Intra-Day loop error: {e}")
-                await asyncio.sleep(120 * 60)
-            else:
-                target = get_next_market_target_time("open", offset_minutes=0)
-                sleep_secs = get_sleep_seconds(target)
-                logger.info(
-                    f"🤖 [Analyst Intra-Day] 市場休市。下次開盤心跳: {target} (倒數 {sleep_secs/3600:.2f} 小時)"
-                )
-                await asyncio.sleep(min(sleep_secs, 3600))
 
     # ==========================================
     # 🚀 3. 盤後策略：收盤後 15 分鐘啟動
@@ -179,16 +146,6 @@ class AnalystAgent(commands.Cog):
             except Exception as e:
                 logger.error(f"Failed to dispatch report to {uid}: {e}")
         logger.info(f"Dispatched report to {dispatched_count} users.")
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # Intraday execution guide
-    # ──────────────────────────────────────────────────────────────────────────
-
-    async def dispatch_intraday_guide(self) -> None:
-        """Delegate per-user intraday execution guide to intraday_runner."""
-        await intraday_runner.run_intraday_guide(
-            self.bot, fetch_macro_fn=self._fetch_macro_data
-        )
 
     # ──────────────────────────────────────────────────────────────────────────
     # Pre-market briefing

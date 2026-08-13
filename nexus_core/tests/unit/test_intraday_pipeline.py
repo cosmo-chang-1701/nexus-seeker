@@ -229,31 +229,6 @@ def test_post_market_attribution_evolution(squeeze_engine: Any):  # type: ignore
     assert "調升明日 Gate 3" in res2["evolution_msg"]
 
 
-def test_intraday_scan_report_only_sends_once_in_phase_b(intraday_pipeline: Any):  # type: ignore
-    trading_date = date(2026, 5, 22)
-
-    assert intraday_pipeline._should_send_intraday_scan_report(
-        42, "MU", "Phase B", trading_date
-    )
-
-    intraday_pipeline._mark_intraday_scan_report_sent(42, "MU", trading_date)
-
-    assert not intraday_pipeline._should_send_intraday_scan_report(
-        42, "MU", "Phase B", trading_date
-    )
-
-
-def test_intraday_scan_report_skips_non_mid_session(intraday_pipeline: Any):  # type: ignore
-    trading_date = date(2026, 5, 22)
-
-    assert not intraday_pipeline._should_send_intraday_scan_report(
-        42, "MU", "Phase A", trading_date
-    )
-    assert not intraday_pipeline._should_send_intraday_scan_report(
-        42, "MU", "Phase C", trading_date
-    )
-
-
 @pytest.mark.asyncio
 async def test_build_watchlist_heartbeat_embed_includes_option_plan(  # type: ignore
     intraday_pipeline: Any,

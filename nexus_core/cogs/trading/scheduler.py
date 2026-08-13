@@ -47,14 +47,12 @@ class SchedulerCog(commands.Cog):
 
         self.dynamic_market_scanner.start()
         self.daily_reddit_update.start()
-        self.scheduled_intraday_audit.start()
 
         logger.info("SchedulerCog loaded. Background tasks started.")
 
     async def cog_unload(self) -> None:
         self.dynamic_market_scanner.cancel()
         self.daily_reddit_update.cancel()
-        self.scheduled_intraday_audit.cancel()
         self.intraday_pipeline.stop()
         logger.info("SchedulerCog unloaded. Background tasks cancelled.")
 
@@ -179,31 +177,6 @@ class SchedulerCog(commands.Cog):
     async def before_dynamic_market_scanner(self) -> None:
         await self.bot.wait_until_ready()
         logger.info("盤中動態巡邏機已掛載，將每 30 分鐘偵測一次開盤狀態。")
-
-    # ==========================================
-    # ⚡ 盤中量化掃描與執行指南 (每 120 分鐘)
-    # ==========================================
-    @tasks.loop(minutes=120)
-    async def scheduled_intraday_audit(self) -> None:
-        """每 120 分鐘執行盤中 Scheduled Audit (Active Execution Guide)"""
-        if not getattr(self.bot, "_is_leader_instance", True):
-            return
-        if not market_time.is_market_open():
-            return
-
-        logger.info("⚡ [Scheduled Audit] 啟動 120 分鐘盤中 Scheduled Audit 掃描...")
-        try:
-            analyst_cog = self.bot.get_cog("AnalystAgent")
-            if analyst_cog:
-                await analyst_cog.dispatch_intraday_guide()
-            else:
-                logger.warning("未找到 AnalystAgent Cog，跳過執行指南分發。")
-        except Exception as e:
-            logger.error(f"120分鐘盤中 Scheduled Audit 掃描錯誤: {e}")
-
-    @scheduled_intraday_audit.before_loop
-    async def before_scheduled_intraday_audit(self) -> None:
-        await self.bot.wait_until_ready()
 
 
 async def setup(bot: Any) -> None:  # type: ignore

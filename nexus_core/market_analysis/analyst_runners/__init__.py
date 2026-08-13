@@ -6,5 +6,4 @@ Each module owns one logical reporting domain:
 - sector_runner    : sector rotation, deep research, open-liquidity
 - portfolio_runner : portfolio hedging & post-market summary
 - strategy_runner  : next-day strategy + FOMC escape-window analysis
-- intraday_runner  : intraday execution guide dispatch
 """

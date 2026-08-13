@@ -1,8 +1,8 @@
 from typing import Any
 import logging
 import asyncio
-from datetime import date, datetime
-from typing import List, Optional, Dict, Set
+from datetime import datetime
+from typing import List, Optional, Dict
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -909,7 +909,6 @@ class IntradayScanPipeline:
         self.is_running = False
         self._task: Optional[asyncio.Task] = None
         self.scan_interval_seconds = 30 * 60  # 30 minutes
-        self._intraday_scan_sent: Set[tuple[int, str, date]] = set()
 
     def start(self) -> None:
         """啟動異步監控管道"""
@@ -929,26 +928,6 @@ class IntradayScanPipeline:
         self, symbol: str
     ) -> Optional[WatchlistEvaluation]:
         return await evaluate_watchlist_symbol(symbol)
-
-    def _prune_intraday_scan_cache(self, trading_date: date) -> None:
-        self._intraday_scan_sent = {
-            key for key in self._intraday_scan_sent if key[2] == trading_date
-        }
-
-    def _should_send_intraday_scan_report(
-        self, user_id: int, ticker: str, phase: str, trading_date: date
-    ) -> bool:
-        if phase != "Phase B":
-            return False
-
-        self._prune_intraday_scan_cache(trading_date)
-        return (user_id, ticker, trading_date) not in self._intraday_scan_sent
-
-    def _mark_intraday_scan_report_sent(
-        self, user_id: int, ticker: str, trading_date: date
-    ) -> None:
-        self._prune_intraday_scan_cache(trading_date)
-        self._intraday_scan_sent.add((user_id, ticker, trading_date))
 
     async def _build_watchlist_heartbeat_embed(
         self,
@@ -1246,7 +1225,7 @@ class IntradayScanPipeline:
                                 continue
 
                             # 執行核心量化引擎
-                            output = self.engine.analyze_ticker(
+                            _ = self.engine.analyze_ticker(
                                 data=market_data,
                                 account_state=account_state,
                                 options_holdings=holdings,
@@ -1255,31 +1234,6 @@ class IntradayScanPipeline:
                                 current_time=now_ny,
                             )
 
-                            # 如果是 SPEAR 訊號或是 Vanna 偏離警戒，則發送 Discord 私訊通知
-                            if (
-                                output.sddm_route == "SPEAR"
-                                or "偏離" in output.vanna_hedging_instruction  # type: ignore
-                            ):
-                                import database
-
-                                if database.is_notification_enabled(
-                                    uid, "intraday_decision_scan"
-                                ):
-                                    from cogs.embed_builder import (
-                                        create_intraday_scan_embed,
-                                    )
-
-                                    if self._should_send_intraday_scan_report(
-                                        uid, ticker, phase, now_ny.date()
-                                    ):
-                                        embed = create_intraday_scan_embed(output)
-                                        await self.bot.queue_dm(uid, embed=embed)
-                                    self._mark_intraday_scan_report_sent(
-                                        uid, ticker, now_ny.date()
-                                    )
-                                    logger.info(
-                                        f"Sent Intraday Decision report for {ticker} to user {uid}"
-                                    )
                         except Exception as ticker_err:
                             logger.error(
                                 f"❌ IntradayScanPipeline 處理標的 {ticker} 時發生錯誤: {ticker_err}",

@@ -98,7 +98,6 @@ from cogs.embed_builders.alert_embeds import (
     create_profit_lock_alert_embed,
     create_gamma_fragility_embed,
     create_ditm_transition_alert_embed,
-    create_intraday_execution_guide_embed,
     create_vtr_settlement_notice_embed,
 )
 
@@ -169,7 +168,6 @@ from cogs.embed_builders.hedge_embeds import (
 
 # ── Order & Timing Embeds ─────────────────────────────────────────────────────
 from cogs.embed_builders.order_embeds import (
-    create_intraday_scan_embed,
     _build_active_order_ansi_card,
     create_active_order_card_embed,
     create_active_orders_embed,
@@ -250,7 +248,6 @@ __all__ = [
     "create_profit_lock_alert_embed",
     "create_gamma_fragility_embed",
     "create_ditm_transition_alert_embed",
-    "create_intraday_execution_guide_embed",
     "create_vtr_settlement_notice_embed",
     # Portfolio embeds
     "create_holdings_embed",
@@ -300,7 +297,6 @@ __all__ = [
     "create_option_defense_alert_embed",
     "create_volatility_risk_alert_embed",
     # Order embeds
-    "create_intraday_scan_embed",
     "_build_active_order_ansi_card",
     "create_active_order_card_embed",
     "create_active_orders_embed",

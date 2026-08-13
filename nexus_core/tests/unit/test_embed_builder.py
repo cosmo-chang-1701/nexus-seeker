@@ -14,7 +14,6 @@ from cogs.embed_builder import (
     create_asset_promotion_embed,
     create_ditm_transition_alert_embed,
     create_gamma_fragility_embed,
-    create_intraday_execution_guide_embed,
     create_memory_alert_embed,
     create_max_pain_embed,
     create_polymarket_whale_alert_embed,
@@ -759,39 +758,6 @@ def test_create_ditm_transition_alert_embed() -> None:
     assert "TSLA" in get_embed_text(embed)  # type: ignore
     assert "12.50%" in embed.fields[3].value  # type: ignore
     assert "賣出 10 股 SPY" in embed.fields[4].value  # type: ignore
-
-
-def test_create_intraday_execution_guide_embed() -> None:
-    embed = create_intraday_execution_guide_embed(
-        phase_name="Phase B",
-        vix=18.5,
-        memory_percent=50.0,
-        is_memory_gated=False,
-        vix_level_name="Ready",
-        greeks_status="Δ: `100.00` | 隱含 Δ (Vanna): `110.00`",
-        runway_days=365.0,
-        theta_cov=150.0,
-        active_signal_content="**板塊輪動:** 關注科技與金融板塊資金流向。",
-        sma_cache_size=12,
-        ema_cache_size=8,
-    )
-    assert "Phase B" in embed.title  # type: ignore
-    assert "Ready" in embed.fields[0].value  # type: ignore
-    assert "365.0" in embed.fields[1].value  # type: ignore
-    assert "板塊輪動" in embed.fields[2].value  # type: ignore
-    assert "12/8" in embed.fields[3].value  # type: ignore
-
-
-def test_create_intraday_execution_guide_embed_memory_gate() -> None:
-    embed = create_intraday_execution_guide_embed(
-        phase_name="Phase A",
-        vix=15.0,
-        memory_percent=90.0,
-        is_memory_gated=True,
-    )
-    assert "Phase A" in embed.title  # type: ignore
-    assert "Memory Safety Gate Active" in (get_embed_text(embed) or "")
-    assert "90.0%" in embed.fields[0].value  # type: ignore
 
 
 def test_create_vtr_settlement_notice_embed() -> None:

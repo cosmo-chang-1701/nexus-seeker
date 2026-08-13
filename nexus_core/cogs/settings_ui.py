@@ -67,7 +67,6 @@ TRADING_MODULES: Dict[str, Dict[str, Any]] = {
         "description": "專注於每日復盤與盤前/盤後的結構化梳理。",
         "items": {
             "pre_market_briefing": "🌅 報告：盤前綜合宏觀與自選股",
-            "intraday_decision_scan": "📊 報告：盤中量化掃描與避險執行",
             "post_market_intelligence": "📋 報告：盤後綜合風險與 AI 策略",
             "weekly_vtr_report": "📈 報告：虛擬交易室 (VTR) 績效總結",
         },

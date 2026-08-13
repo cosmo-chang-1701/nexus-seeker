@@ -490,62 +490,6 @@ def create_ditm_transition_alert_embed(
     return embed
 
 
-def create_intraday_execution_guide_embed(
-    *,
-    phase_name: str,
-    vix: float,
-    memory_percent: float,
-    is_memory_gated: bool,
-    vix_level_name: str = "",
-    greeks_status: str = "",
-    runway_days: float = 0.0,
-    theta_cov: float = 0.0,
-    active_signal_content: str = "",
-    sma_cache_size: int = 0,
-    ema_cache_size: int = 0,
-) -> discord.Embed:
-    """建立盤中量化執行指引 Embed。"""
-    embed = NexusEmbed(
-        title=f"🛡️ 盤中量化執行指引 - {phase_name}",
-        color=discord.Color.red() if vix > 25 else discord.Color.blue(),
-        timestamp=datetime.now(timezone.utc),
-    )
-
-    if is_memory_gated:
-        embed.description = (
-            "⚠️ **Memory Safety Gate Active**: VPS RAM > 85%。"
-            "已暫停部分耗能分析以保證風控引擎穩定。"
-        )
-        embed.add_field(
-            name="系統狀態", value=f"RAM: `{memory_percent}%`", inline=False
-        )
-        embed.set_footer(text="Nexus Seeker | NRO Vanna-Aware Intelligence")
-        return embed
-
-    embed.add_field(
-        name="1️⃣ 風險狀態 (Risk Status)",
-        value=f"**VIX 階級:** {vix_level_name} ({vix:.1f})\n**Greeks 完整性:** {greeks_status}",
-        inline=False,
-    )
-    embed.add_field(
-        name="2️⃣ 財務健康 (Financial Health)",
-        value=f"**剩餘跑道:** `{runway_days:.1f}` 天\n**Theta 覆蓋率:** `{theta_cov:.1f}%`",
-        inline=False,
-    )
-    embed.add_field(
-        name="3️⃣ 活躍信號 (Active Signal)",
-        value=active_signal_content,
-        inline=False,
-    )
-    embed.add_field(
-        name="4️⃣ 系統狀態 (System Health)",
-        value=f"RAM: `{memory_percent}%` | BoundedCache (SMA/EMA): `{sma_cache_size}/{ema_cache_size}`",
-        inline=False,
-    )
-    embed.set_footer(text="Nexus Seeker | NRO Vanna-Aware Intelligence")
-    return embed
-
-
 def create_vtr_settlement_notice_embed(
     *,
     status_icon: str,
