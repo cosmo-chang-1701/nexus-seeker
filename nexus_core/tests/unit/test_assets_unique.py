@@ -72,7 +72,7 @@ def test_add_watchlist_symbol_disallows_duplicates(db_conn: Any):  # type: ignor
     symbol = "AAPL"
 
     # 1. 第一加入 WATCH (應該成功)
-    assert add_watchlist_symbol(user_id, symbol, use_llm=True) is True
+    assert add_watchlist_symbol(user_id, symbol) is True
 
     # 2. 第二加入同標的 WATCH (應該失敗)
-    assert add_watchlist_symbol(user_id, symbol, use_llm=False) is False
+    assert add_watchlist_symbol(user_id, symbol) is False

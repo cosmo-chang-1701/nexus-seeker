@@ -150,13 +150,12 @@ def watch_group() -> None:
 
 @watch_group.command(name="add")
 @click.argument("symbol")
-@click.option("--llm", is_flag=True, default=True, help="是否啟用 AI 分析")
 @click.pass_context
-def watch_add(ctx: Any, symbol: Any, llm: Any):  # type: ignore
+def watch_add(ctx: Any, symbol: Any):  # type: ignore
     """將標的加入觀察清單"""
     from database.watchlist import add_watchlist_symbol
 
-    add_watchlist_symbol(ctx.obj["user_id"], symbol.upper(), use_llm=llm)
+    add_watchlist_symbol(ctx.obj["user_id"], symbol.upper())
     rprint(f"[bold green]✅ 已將 {symbol.upper()} 加入觀察清單。[/bold green]")
 
 
