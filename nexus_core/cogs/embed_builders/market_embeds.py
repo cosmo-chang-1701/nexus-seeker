@@ -351,9 +351,9 @@ def build_radar_scan_embed(
     except Exception:
         settings = {}
 
-    show_macro = settings.get("radar_macro_edge", True)
-    show_alpha = settings.get("radar_alpha_signals", True)
-    show_defense = settings.get("radar_risk_defenses", True)
+    show_macro = settings.get("defense_macro_tail_risk", True)
+    show_alpha = settings.get("alpha_market_signals", True)
+    show_defense = settings.get("defense_portfolio_risk", True)
 
     title_map = {
         "HOLDINGS": "現貨持倉批次量化雷達 (Holdings)",

@@ -3,7 +3,7 @@ import pytest
 import discord
 from unittest.mock import AsyncMock
 import database
-from cogs.terminal import AccountSettingsView, AccountSettingsModal
+from cogs.terminal import AccountSettingsView, AccountSettingsModal, SETTINGS_LABELS
 
 
 @pytest.fixture(autouse=True)
@@ -27,8 +27,8 @@ async def test_settings_view_structure(db_conn: Any):  # type: ignore
     assert isinstance(select, discord.ui.Select)
     assert select.custom_id == "select_account_settings"
 
-    # 驗證包含 9 個設定選項
-    assert len(select.options) == 9
+    # 驗證包含設定選項
+    assert len(select.options) == len(SETTINGS_LABELS)
     labels = [opt.label for opt in select.options]
     assert "💰 現金儲備金額" in labels
     assert "🛡️ 基準風險上限 %" in labels

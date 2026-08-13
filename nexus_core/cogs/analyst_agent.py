@@ -188,7 +188,7 @@ class AnalystAgent(commands.Cog):
         from cogs.embed_builder import build_pre_market_briefing_embed
 
         for uid in user_ids:
-            if not database.is_notification_enabled(uid, "pre_market_briefing"):
+            if not database.is_notification_enabled(uid, "briefing_pre_market"):
                 continue
             u_data = user_earnings_data.get(uid, {"alerts": [], "scanned_symbols": []})
 
@@ -258,7 +258,7 @@ class AnalystAgent(commands.Cog):
         from cogs.embed_builder import build_post_market_intelligence_embed
 
         for uid in user_ids:
-            if not database.is_notification_enabled(uid, "post_market_intelligence"):
+            if not database.is_notification_enabled(uid, "briefing_post_market"):
                 continue
 
             user_ctx = database.get_full_user_context(uid)
@@ -297,12 +297,14 @@ class AnalystAgent(commands.Cog):
                         "spy_price": sector_rotation_data["spy_price"],
                     },
                     "brinson_attribution_proxy": {
-                        "total_net_pnl": round(hedge_analysis.get("net_pnl", 0), 2),
+                        "total_net_pnl": round(
+                            float(hedge_analysis.get("net_pnl") or 0.0), 2
+                        ),
                         "alpha_selection_pnl": round(
-                            hedge_analysis.get("alpha_contribution", 0), 2
+                            float(hedge_analysis.get("alpha_contribution") or 0.0), 2
                         ),
                         "market_hedge_pnl": round(
-                            hedge_analysis.get("hedge_contribution", 0), 2
+                            float(hedge_analysis.get("hedge_contribution") or 0.0), 2
                         ),
                     },
                     "aggregate_risk_metrics": {

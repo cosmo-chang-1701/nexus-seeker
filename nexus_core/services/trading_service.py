@@ -976,7 +976,10 @@ class TradingService:
                     row
                 )
 
-                # 僅針對買方 (quantity > 0)
+                # 僅針對買方期權 (quantity > 0 且非現貨)
+                if str(opt_t).lower() == "stock" or exp == "PERPETUAL":
+                    continue
+
                 if qty > 0 and w_delta != 0:
                     exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
                     dte = (exp_date - datetime.now().date()).days

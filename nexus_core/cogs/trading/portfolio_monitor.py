@@ -61,17 +61,17 @@ class PortfolioMonitorCog(commands.Cog):
             for event in risk_events:
                 uid = event["uid"]
                 if event["type"] == "PROFIT_LOCK":
-                    if database.is_notification_enabled(uid, "profit_lock_alert"):
+                    if database.is_notification_enabled(uid, "defense_portfolio_risk"):
                         embed = create_profit_lock_alert_embed(event)
                         await self.bot.queue_dm(uid, embed=embed)
 
                 elif event["type"] == "GAMMA_FRAGILITY":
-                    if database.is_notification_enabled(uid, "gamma_fragility_alert"):
+                    if database.is_notification_enabled(uid, "defense_portfolio_risk"):
                         embed = create_gamma_fragility_embed(event)
                         await self.bot.queue_dm(uid, embed=embed)
 
                 elif event["type"] == "MARGIN_API":
-                    if database.is_notification_enabled(uid, "margin_and_api_alert"):
+                    if database.is_notification_enabled(uid, "defense_portfolio_risk"):
                         from cogs.embed_builders.alert_embeds import (
                             create_margin_api_alert_embed,
                         )
@@ -155,7 +155,7 @@ class PortfolioMonitorCog(commands.Cog):
                         res = await recommend_covered_calls(u_id, sym)
                         if res and res.get("recommendations"):
                             if database.is_notification_enabled(
-                                u_id, "deadlock_recovery_alert"
+                                u_id, "defense_option_rollover"
                             ):
                                 embed = create_covered_call_unlock_embed(res)
                                 await self.bot.queue_dm(u_id, embed=embed)
@@ -337,7 +337,7 @@ class PortfolioMonitorCog(commands.Cog):
 
                     for ins in rebalance_instructions:
                         if not database.is_notification_enabled(
-                            u_id, "option_defense_alert"
+                            u_id, "defense_option_rollover"
                         ):
                             continue
 
@@ -427,7 +427,7 @@ class PortfolioMonitorCog(commands.Cog):
                         else "已自動轉倉 (向上/向後轉倉)"
                     )
 
-                    if database.is_notification_enabled(uid, "option_defense_alert"):
+                    if database.is_notification_enabled(uid, "defense_option_rollover"):
                         embed = create_option_defense_alert_embed(
                             is_live=False,
                             symbol=trade_info.get("symbol", "N/A"),
@@ -442,7 +442,7 @@ class PortfolioMonitorCog(commands.Cog):
                         )
                         await self.bot.queue_dm(uid, embed=embed)
                 else:
-                    if database.is_notification_enabled(uid, "option_defense_alert"):
+                    if database.is_notification_enabled(uid, "defense_option_rollover"):
                         status_icon = (
                             "🔄" if trade_info.get("status") == "ROLLED" else "🔴"
                         )
@@ -494,7 +494,7 @@ class PortfolioMonitorCog(commands.Cog):
 
         for uid in unique_users:
             try:
-                if not database.is_notification_enabled(uid, "weekly_vtr_report"):
+                if not database.is_notification_enabled(uid, "briefing_weekly_vtr"):
                     continue
                 stats = await GhostTrader.get_vtr_performance_stats(uid)
                 if stats["total_trades"] > 0:

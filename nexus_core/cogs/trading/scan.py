@@ -83,7 +83,9 @@ class MarketScanCog(commands.Cog):
 
                     for uid, watch_sym, _ in all_watchlists:
                         if watch_sym == sym:
-                            if not database.is_notification_enabled(uid, "ddp_alert"):
+                            if not database.is_notification_enabled(
+                                uid, "alpha_market_signals"
+                            ):
                                 continue
                             ctx = database.get_full_user_context(uid)
                             if await self._should_send_alert(
@@ -96,7 +98,7 @@ class MarketScanCog(commands.Cog):
             # 🚀 2. 執行 IV 優勢掃描 (Volatility Strategist)
             uids = sorted(list(set(row[0] for row in all_watchlists)))
             for uid in uids:
-                if not database.is_notification_enabled(uid, "volatility_alert"):
+                if not database.is_notification_enabled(uid, "alpha_market_signals"):
                     continue
                 user_context = database.get_full_user_context(uid)
                 user_watch = [row[1] for row in all_watchlists if row[0] == uid]

@@ -202,21 +202,43 @@ def get_user_portfolio(user_id: Any):  # type: ignore
 
 
 def get_all_portfolio() -> Any:
-    """取得全站所有持倉 (供背景排程使用)"""
+    """取得全站所有持倉 (包含 TRADE 與 HOLDING，供背景排程使用)"""
     archive_expired_portfolio_records()
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
     try:
-        # 🚀 自動抓取全站所有持倉數據 (HOLDING)
+        # 1. 抓取全站所有現貨持倉數據 (HOLDING)
         cursor.execute(
-            "SELECT user_id, symbol, metadata FROM assets WHERE context_type = 'HOLDING'"
+            "SELECT id, user_id, symbol, metadata FROM assets WHERE context_type = 'HOLDING'"
         )
         holding_map = {}
+        holding_rows = []
         for h_row in cursor.fetchall():
-            uid, sym, meta_json = h_row
+            asset_id, uid, sym, meta_json = h_row
             m_hold = json.loads(meta_json) if meta_json else {}
-            holding_map[(uid, sym.upper())] = float(m_hold.get("avg_cost", 0.0))
+            avg_cost = float(m_hold.get("avg_cost", 0.0))
+            qty = float(m_hold.get("quantity", 0.0))
+            holding_map[(uid, sym.upper())] = avg_cost
+            if qty > 0:
+                holding_rows.append(
+                    (
+                        uid,
+                        asset_id,
+                        sym,
+                        "stock",
+                        avg_cost,
+                        "PERPETUAL",
+                        avg_cost,
+                        qty,
+                        avg_cost,
+                        m_hold.get("weighted_delta", 0.0),
+                        0.0,
+                        0.0,
+                        "HOLDING",
+                    )
+                )
 
+        # 2. 抓取全站所有期權持倉 (TRADE)
         cursor.execute(
             "SELECT user_id, id, symbol, metadata FROM assets WHERE context_type = 'TRADE'"
         )
@@ -244,6 +266,7 @@ def get_all_portfolio() -> Any:
                     m.get("category", "SPECULATIVE"),
                 )
             )
+        rows.extend(holding_rows)
         return rows
     finally:
         conn.close()

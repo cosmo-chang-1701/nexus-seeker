@@ -88,19 +88,13 @@ def create_watchlist_signal_embed(
     has_meaningful_content = False
 
     toggles = toggles or {}
-    # 整合 2, 3, 4 -> hb_options_structure
-    hb_options = toggles.get("hb_options_structure", True)
-    show_market_footprints = hb_options
-    show_iv_context = hb_options
-    show_target_lock = hb_options
-
-    # 獨立 5 -> radar_alpha_signals
-    show_uoa = toggles.get("radar_alpha_signals", True)
-
-    # 整合 6, 7 -> hb_execution_risk
-    hb_exec = toggles.get("hb_execution_risk", True)
-    show_risk_alignment = hb_exec
-    show_telemetry = hb_exec
+    hb_enabled = toggles.get("heartbeat_watchlist", True)
+    show_market_footprints = hb_enabled
+    show_iv_context = hb_enabled
+    show_target_lock = hb_enabled
+    show_uoa = hb_enabled
+    show_risk_alignment = hb_enabled
+    show_telemetry = hb_enabled
 
     # 🛡️ 提取盤前狀態 (為後續 PCR 與 IV 降級防禦做準備)
     is_premarket = False

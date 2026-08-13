@@ -16,8 +16,13 @@ from datetime import datetime, timezone
 def create_notification_settings_embed(module_fields: list) -> discord.Embed:
     """建立自訂通知設定偏好中心 Embed"""
     embed = NexusEmbed(
-        title="🌌 Nexus Seeker ｜ 戰術儀表板與通知偏好",
-        description="請使用下方「戰術模組」選單切換分類，並管理個別模組內的開關。\n🟢 代表開啟，🔴 代表關閉。",
+        title="🌌 Nexus Seeker ｜ 戰術通知管理中樞 (4 大戰術維度)",
+        description=(
+            "點擊下方選單切換模組設定，或直接點擊快捷情境按鈕：\n"
+            "• **🛡️ 戰備全開**：開啟所有 10 項風控與戰報頻道\n"
+            "• **🎯 精準交易**：保留定時戰報與持倉防禦，關閉盤中 Alpha 雜訊\n"
+            "• **🔕 盤中靜音**：僅保留盤前/盤後戰報與保證金警戒"
+        ),
         color=discord.Color.dark_magenta(),
         timestamp=datetime.now(timezone.utc),
     )

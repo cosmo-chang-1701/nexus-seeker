@@ -78,7 +78,7 @@ async def _dispatch_order_telemetry_alignment_alert(bot: Any) -> None:
         orders_by_uid.setdefault(uid, []).append(o)
 
     for uid, orders in orders_by_uid.items():
-        if not database.is_notification_enabled(uid, "order_telemetry_alignment_alert"):
+        if not database.is_notification_enabled(uid, "telemetry_orders"):
             continue
 
         user_holdings = await asyncio.to_thread(database.get_user_holdings, uid)

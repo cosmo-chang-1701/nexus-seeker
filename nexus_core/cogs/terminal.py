@@ -21,7 +21,6 @@ from cogs.embed_builder import (
 from database.user_settings import get_full_user_context
 from cogs.settings_ui import (
     SETTINGS_LABELS,  # noqa: F401
-    NotificationSettingsModal,  # noqa: F401
     NotificationSettingsView,  # noqa: F401
     AccountSettingsModal,  # noqa: F401
     AccountSettingsView,  # noqa: F401

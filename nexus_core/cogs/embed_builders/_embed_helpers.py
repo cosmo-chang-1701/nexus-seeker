@@ -334,8 +334,8 @@ def _parse_and_format_positions_table(
     for pos_item in positions_list:
         # Regex parsing
         sym_match = re.search(r"🔹\s*\*\*(.*?)\*\*", pos_item)
-        exp_match = re.search(r"`(\d{4}-\d{2}-\d{2})`", pos_item)
-        strike_type_match = re.search(r"`?\$([\d\.]+)`?\s*\*\*(.*?)\*\*", pos_item)
+        exp_match = re.search(r"`(\d{4}-\d{2}-\d{2}|PERPETUAL|現貨|N/A)`", pos_item)
+        strike_type_match = re.search(r"`?\$([\d\.,]+)`?\s*\*\*(.*?)\*\*", pos_item)
 
         cost_match = re.search(r"成本:\s*`\$?([\d\.,\-]+)`", pos_item)
         price_match = re.search(r"現價:\s*`\$?([\d\.,\-]+)`", pos_item)
@@ -355,6 +355,8 @@ def _parse_and_format_positions_table(
             if "CALL" in opt_type.upper()
             else "PUT"
             if "PUT" in opt_type.upper()
+            else "STOCK"
+            if "STOCK" in opt_type.upper()
             else opt_type
         )
 
@@ -368,14 +370,17 @@ def _parse_and_format_positions_table(
             float(price_match.group(1).strip().replace(",", "")) if price_match else 0.0
         )
 
+        is_stock = "STOCK" in opt_type.upper() or type_letter.upper() == "STOCK"
+        multiplier = 1.0 if is_stock else 100.0
+
         if direction == "BTO":
-            debit_cost = cost_val * 100 * qty
+            debit_cost = cost_val * multiplier * qty
             total_debit_cost += debit_cost
-            pnl_val = (price_val - cost_val) * 100 * qty
+            pnl_val = (price_val - cost_val) * multiplier * qty
         else:
-            credit_cash = cost_val * 100 * qty
+            credit_cash = cost_val * multiplier * qty
             total_credit_cash += credit_cash
-            pnl_val = (cost_val - price_val) * 100 * qty
+            pnl_val = (cost_val - price_val) * multiplier * qty
 
         total_unrealized_pnl += pnl_val
 
@@ -403,12 +408,20 @@ def _parse_and_format_positions_table(
             f"**{pnl_sign}${pnl_abs_usd:,.2f} ({pnl_pct*100:+.2f}%)** {pnl_emoji}"
         )
 
-        pos_block = (
-            f"**當前持倉明細 (標的: {symbol})**\n"
-            f"* 部位：`{direction} {type_letter}` | 數量：`{qty_str}` | {expiry} (**{dte_val}d DTE**)\n"
-            f"* 價格：履約價 `${strike_val}` | 現價 `${price_val:.2f}` *(成本 ${cost_val:.2f})* | IV/IVR: `{iv_ivr_str}`\n"
-            f"* 損益：{pnl_formatted} *{status}*"
-        )
+        if is_stock:
+            pos_block = (
+                f"**當前持倉明細 (標的: {symbol})**\n"
+                f"* 部位：`現貨 (HOLDING)` | 數量：`{qty_str} 股` | 永久持有 (PERPETUAL)\n"
+                f"* 價格：買入成本 `${cost_val:.2f}` | 現價 `${price_val:.2f}` | IV/IVR: `{iv_ivr_str}`\n"
+                f"* 損益：{pnl_formatted} *{status}*"
+            )
+        else:
+            pos_block = (
+                f"**當前持倉明細 (標的: {symbol})**\n"
+                f"* 部位：`{direction} {type_letter}` | 數量：`{qty_str}` | {expiry} (**{dte_val}d DTE**)\n"
+                f"* 價格：履約價 `${strike_val}` | 現價 `${price_val:.2f}` *(成本 ${cost_val:.2f})* | IV/IVR: `{iv_ivr_str}`\n"
+                f"* 損益：{pnl_formatted} *{status}*"
+            )
         parsed_blocks.append(pos_block)
 
     positions_part = "\n\n".join(parsed_blocks)

@@ -214,14 +214,12 @@ class AfterMarketCog(commands.Cog):
 
             try:
                 if ai_enabled and ai_report:
-                    if database.is_notification_enabled(
-                        uid, "post_market_intelligence"
-                    ):
+                    if database.is_notification_enabled(uid, "briefing_post_market"):
                         ai_embed = create_ai_analysis_embed(ai_report)
                         await self.bot.queue_dm(uid, embed=ai_embed)
                         logger.info(f"盤後 AI 深度分析 Embed 已排入 DM 佇列，uid={uid}")
 
-                if database.is_notification_enabled(uid, "post_market_intelligence"):
+                if database.is_notification_enabled(uid, "briefing_post_market"):
                     await self.bot.queue_dm(uid, embed=embed)
                     stats["users_queued"] += 1
                     logger.info(f"盤後風險結算報告已排入 DM 佇列，uid={uid}")

@@ -1192,7 +1192,7 @@ def test_build_post_market_intelligence_embed_empty() -> None:
     embed = embeds[0]
     assert embed.title == "📋 報告：盤後綜合風險與 AI 策略"
 
-    assert "🏁 財務生存跑道 (Financial Runway)" in get_embed_text(embed)  # type: ignore
+    assert "🏁 財務生存跑道" in get_embed_text(embed)  # type: ignore
 
     # Section titles are now in Field names (semantic), not in ANSI block values
     field_names = [f.name for f in embed.fields]
@@ -1208,7 +1208,7 @@ def test_build_post_market_intelligence_embed_empty() -> None:
         for f in embed.fields
         if "持倉明細" in f.name  # type: ignore
     )
-    assert "目前無持倉部位。" in positions_val  # type: ignore
+    assert "100% 現金防禦/觀望狀態" in positions_val  # type: ignore
 
     macro_val = next(
         f.value
@@ -1296,8 +1296,74 @@ def test_build_post_market_intelligence_embed_hedge_attribution() -> None:
     assert "-150.50" in hedge_field_val
     assert "OPTIMAL" in hedge_field_val
     assert "0.0312" in hedge_field_val
-    assert "85.00%" in hedge_field_val
     assert "75.0%" in hedge_field_val
+
+
+def test_build_post_market_intelligence_embed_markdown_headers_and_independent_colors() -> (
+    None
+):
+    """Verify that build_post_market_intelligence_embed correctly strips markdown ### headers and renders independent PnL colors."""
+    ai_commentary = (
+        "### 1. 📊 多空大盤交叉驗證解讀\n"
+        "- 多空交叉解讀分析點 A\n"
+        "- 多空交叉解讀分析點 B\n\n"
+        "### 2. ⚠️ 潛在陷阱與風險提示\n"
+        "- 風險提示點 A\n\n"
+        "### 3. 🛡️ 高勝率交易策略推薦\n"
+        "- 推薦策略 A\n"
+    )
+    hedge_data = {
+        "net_pnl": 100.0,
+        "alpha_contribution": 300.0,
+        "hedge_contribution": -200.0,
+        "hedge_ratio": 0.6667,
+        "effectiveness": 0.8,
+        "status": "OPTIMAL",
+        "dynamic_tau": None,
+    }
+    embeds = build_post_market_intelligence_embed(
+        report_lines=[],
+        hedge_analysis=hedge_data,
+        survival_runway=120.0,
+        sectors_data=[
+            {
+                "symbol": "XLK",
+                "name": "Technology",
+                "pct_change": 1.5,
+                "rel_vol": 1.2,
+                "skew": 0.5,
+                "uoa_count": 3,
+            }
+        ],
+        ai_commentary=ai_commentary,
+    )
+    embed = embeds[0]
+    field_dict: dict[str, str] = {str(f.name): str(f.value or "") for f in embed.fields}
+
+    # 1. AI Sections must not contain ###
+    market_val = field_dict.get("📊 AI 多空大盤交叉驗證解讀", "")
+    assert "###" not in market_val
+    assert "多空交叉解讀分析點 A" in market_val
+
+    risk_val = field_dict.get("⚠️ AI 潛在陷阱與風險提示", "")
+    assert "###" not in risk_val
+    assert "風險提示點 A" in risk_val
+
+    strat_val = field_dict.get("🛡️ AI 高勝率交易策略推薦", "")
+    assert "###" not in strat_val
+    assert "推薦策略 A" in strat_val
+
+    # 2. Hedge Attribution ANSI colors
+    hedge_val = field_dict.get("🛡️ 對沖績效歸因 (Hedge Attribution)", "")
+    # Alpha (+300.00) is green (32m), Hedge (-200.00) is red (31m), Net (+100.00) is green (32m)
+    assert "\033[1;32m$+300.00\033[0m" in hedge_val
+    assert "\033[1;31m$-200.00\033[0m" in hedge_val
+    assert "\033[1;32m$+100.00\033[0m" in hedge_val
+
+    # 3. Sector rotation
+    sector_val = field_dict.get("🔄 板塊輪動 (Sector Rotation)", "")
+    assert "XLK" in sector_val
+    assert "+1.50%" in sector_val
 
 
 def test_create_covered_call_unlock_embed() -> None:
@@ -1699,6 +1765,47 @@ def test_holding_pnl_pct_none_shows_zero() -> None:
     assert "0.00%" in get_embed_text(embed)
 
 
+def test_build_post_market_intelligence_embed_with_stock_holdings() -> None:
+    """Verify that build_post_market_intelligence_embed correctly parses and renders STOCK holdings."""
+    stock_report_line = (
+        "🔹 **NVDA** ｜ `PERPETUAL` ｜ `$120.00` **STOCK**\n"
+        "├─ 💰 成本: `$120.00` ｜ 📈 現價: `$130.00`\n"
+        "├─ 🟢 損益: **+8.33%**\n"
+        "├─ ⏳ DTE: `0` 天 ｜ 秤⚖️ SPY Δ: `+5.20`\n"
+        "├─ ⚙️ 方向: `BTO` ｜ 📦 數量: `10.0`\n"
+        "├─ 📊 IV/IVR: `0.0%/35.0%`\n"
+        "└─ 🎯 動作: HOLD\n"
+    )
+    macro_report_line = (
+        "🌐 **【宏觀風險與資金水位報告】**\n"
+        "✅ **風險中性** (`5.2%` 內)\n"
+        "   👉 目前系統性曝險在安全範圍，無需執行對沖。\n"
+    )
+    embeds = build_post_market_intelligence_embed(
+        report_lines=[stock_report_line, macro_report_line],
+        hedge_analysis={"net_pnl": 100.0, "status": "OPTIMAL"},
+        survival_runway=500.0,
+        sectors_data=[],
+        ai_commentary="1. 📊 多空大盤交叉驗證解讀\n無異常",
+    )
+    embed = embeds[0]
+    field_dict: dict[str, str] = {str(f.name): str(f.value or "") for f in embed.fields}
+
+    pos_val = field_dict.get("📊 持倉明細 (Positions)", "")
+    assert "NVDA" in pos_val
+    assert "現貨 (HOLDING)" in pos_val
+    assert "10 股" in pos_val
+    assert "$120.00" in pos_val
+    assert "$130.00" in pos_val
+
+    macro_val = field_dict.get("🌐 宏觀風險 (Macro Risks)", "")
+    assert "風險中性" in macro_val
+
+    desc = embed.description or ""
+    # Debit cost for 10 shares of $120.00 should be $1,200.00 USD
+    assert "$1,200.00 USD" in desc
+
+
 def test_pcr_state_empty_string_falls_back_to_numeric_logic() -> None:
     """pcr_dict 中 volume_pcr_state 為空字串時，應 fallback 至數值閾值判斷，不顯示空字串。"""
     from models.quant import IVMetrics
@@ -1760,3 +1867,126 @@ def test_pcr_state_valid_string_is_used() -> None:
     assert get_embed_text(embed)
     assert "🔵 自訂狀態標籤" in get_embed_text(embed)
     assert "🟣 OI 自訂狀態" in get_embed_text(embed)
+
+
+def test_build_post_market_intelligence_embed_target_center_styling_and_sector_matrix() -> (
+    None
+):
+    """Verify Target Center 2.0 aesthetics, tree structures, and focus sector matrix in post-market embed."""
+    stock_line = (
+        "🔹 **NVDA** ｜ `PERPETUAL` ｜ `$120.00` **STOCK**\n"
+        "├─ 💰 成本: `$120.00` ｜ 📈 現價: `$130.00`\n"
+        "├─ 🟢 損益: **+8.33%**\n"
+        "├─ ⏳ DTE: `0` 天 ｜ 秤⚖️ SPY Δ: `+5.20`\n"
+        "├─ ⚙️ 方向: `BTO` ｜ 📦 數量: `10.0`\n"
+        "├─ 📊 IV/IVR: `0.0%/35.0%`\n"
+        "└─ 🎯 動作: HOLD\n"
+    )
+    option_line = (
+        "🔹 **AAPL** ｜ `2026-09-18` ｜ `$220.00` **CALL**\n"
+        "├─ 💰 成本: `$5.00` ｜ 📈 現價: `$6.50`\n"
+        "├─ 🟢 損益: **+30.00%**\n"
+        "├─ ⏳ DTE: `35` 天 ｜ 秤⚖️ SPY Δ: `+32.50`\n"
+        "├─ ⚙️ 方向: `BTO` ｜ 📦 數量: `1.0`\n"
+        "├─ 📊 IV/IVR: `28.5%/45.0%`\n"
+        "└─ 🎯 動作: HOLD\n"
+    )
+    macro_line = (
+        "🌐 **【宏觀風險與資金水位報告】**\n"
+        "🚨 **多頭曝險過高** (`25.0%` > `15.0%`)\n"
+        "   👉 目前系統性曝險偏高，建議執行對沖保護。\n"
+        "📊 **資產指標概覽**\n"
+        "   👉 組合 Delta: +37.70\n"
+    )
+    hedge_data = {
+        "net_pnl": 150.00,
+        "alpha_contribution": 350.00,
+        "hedge_contribution": -200.00,
+        "hedge_ratio": 0.5714,
+        "effectiveness": 0.85,
+        "status": "OPTIMAL",
+        "dynamic_tau": 0.0312,
+    }
+    sectors_data = [
+        {
+            "symbol": "XLK",
+            "name": "科技",
+            "pct_change": 1.52,
+            "rel_vol": 1.45,
+            "skew": 0.8,
+            "uoa_count": 4,
+        },
+        {
+            "symbol": "XLY",
+            "name": "非必",
+            "pct_change": 0.95,
+            "rel_vol": 1.10,
+            "skew": 0.3,
+            "uoa_count": 1,
+        },
+        {
+            "symbol": "XLE",
+            "name": "能源",
+            "pct_change": -1.85,
+            "rel_vol": 1.60,
+            "skew": -0.9,
+            "uoa_count": 3,
+        },
+        {
+            "symbol": "XLF",
+            "name": "金融",
+            "pct_change": -0.65,
+            "rel_vol": 0.90,
+            "skew": -0.4,
+            "uoa_count": 1,
+        },
+    ]
+    ai_commentary = (
+        "1. 📊 多空大盤交叉驗證解讀\n"
+        "- 大盤處於高檔震盪整理\n"
+        "2. ⚠️ 潛在陷阱與風險提示\n"
+        "- 留意科技股獲利了結賣壓\n"
+        "3. 🛡️ 高勝率交易策略推薦\n"
+        "- 建議逢高佈置 Bear Call Spread\n"
+    )
+    embeds = build_post_market_intelligence_embed(
+        report_lines=[stock_line, option_line, macro_line],
+        hedge_analysis=hedge_data,
+        survival_runway=500.0,
+        sectors_data=sectors_data,
+        ai_commentary=ai_commentary,
+    )
+    embed = embeds[0]
+    field_dict: dict[str, str] = {str(f.name): str(f.value or "") for f in embed.fields}
+
+    # 1. Description contains compact header and runway
+    desc = embed.description or ""
+    assert "📅" in desc
+    assert "盤後結算完成" in desc
+    assert "500.0 天" in desc
+    assert "實質暴露 (Debit)" in desc
+    assert "未實現損益 (PnL)" in desc
+
+    # 2. Positions tree styling
+    pos_val = field_dict.get("📊 持倉明細 (Positions)", "")
+    assert "NVDA" in pos_val
+    assert "AAPL" in pos_val
+    assert "├─" in pos_val
+    assert "└─" in pos_val
+
+    # 3. Hedge attribution
+    hedge_val = field_dict.get("🛡️ 對沖績效歸因 (Hedge Attribution)", "")
+    assert "OPTIMAL (對沖結構健康)" in hedge_val
+    assert "0.0312" in hedge_val
+    assert "85.0%" in hedge_val
+
+    # 4. Macro risks
+    macro_val = field_dict.get("🌐 宏觀風險 (Macro Risks)", "")
+    assert "多頭曝險過高" in macro_val
+
+    # 5. Sector rotation focus matrix
+    sector_val = field_dict.get("🔄 板塊輪動 (Sector Rotation)", "")
+    assert "領漲板塊 (Top Inflows)" in sector_val
+    assert "領跌板塊 (Top Outflows)" in sector_val
+    assert "XLK" in sector_val
+    assert "XLE" in sector_val

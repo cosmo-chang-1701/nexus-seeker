@@ -616,7 +616,7 @@ class PolymarketService:
 
                     uids = get_all_user_ids()
                     for uid in uids:
-                        if is_notification_enabled(uid, "polymarket_prob_shift_alert"):
+                        if is_notification_enabled(uid, "alpha_polymarket"):
                             embed = create_polymarket_prob_shift_embed(
                                 market_desc, old_price, price
                             )
@@ -747,10 +747,8 @@ class PolymarketService:
         """
         import database
 
-        if not database.is_notification_enabled(user_id, "polymarket_whale_alert"):
-            logger.info(
-                f"使用者 {user_id} 已關閉 polymarket_whale_alert，略過巨鯨交易警報。"
-            )
+        if not database.is_notification_enabled(user_id, "alpha_polymarket"):
+            logger.info(f"使用者 {user_id} 已關閉 alpha_polymarket，略過巨鯨交易警報。")
             return
         details = self._resolve_trade_details(trade, market_info)
         win_rate = details["p_yes"] * 100

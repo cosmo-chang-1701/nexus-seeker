@@ -150,7 +150,7 @@ class SchedulerCog(commands.Cog):
 
                 uids = get_all_user_ids()
                 for uid in uids:
-                    if is_notification_enabled(uid, "vix_tail_risk_alert"):
+                    if is_notification_enabled(uid, "defense_macro_tail_risk"):
                         embed = create_vix_tail_risk_embed(
                             vts_ratio=vts_val, vix=vix_val
                         )

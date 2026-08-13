@@ -1195,16 +1195,11 @@ class IntradayScanPipeline:
                                 watchlist_eval is not None
                                 and watchlist_eval.tactical.alert_level != "green"
                             ):
+                                hb_enabled = database.is_notification_enabled(
+                                    uid, "heartbeat_watchlist"
+                                )
                                 notif_settings = (
                                     database.get_user_notification_settings(uid)
-                                )
-                                hb_keys = [
-                                    "hb_options_structure",
-                                    "radar_alpha_signals",
-                                    "hb_execution_risk",
-                                ]
-                                hb_enabled = any(
-                                    notif_settings.get(k, True) for k in hb_keys
                                 )
 
                                 if hb_enabled:

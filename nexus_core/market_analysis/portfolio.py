@@ -118,6 +118,43 @@ class PortfolioStatusOrchestrator:
             for row in rows:
                 _, opt_type, strike, expiry, entry_price, quantity, stock_cost, *_ = row
 
+                # 🚀 處理現貨持倉 (HOLDING / STOCK)
+                if str(opt_type).lower() == "stock" or expiry == "PERPETUAL":
+                    current_price = current_stock_price
+                    pnl_pct = (
+                        (current_price - entry_price) / entry_price
+                        if entry_price > 0
+                        else 0.0
+                    )
+                    weight_factor = (
+                        beta * (current_stock_price / self.spy_price)
+                        if self.spy_price > 0
+                        else 0.0
+                    )
+                    spx_weighted_delta = (quantity / 100.0) * 100 * weight_factor
+                    self.total_beta_delta += spx_weighted_delta
+                    self.report_lines.append(
+                        format_position_report(
+                            symbol,
+                            "PERPETUAL",
+                            entry_price,
+                            "stock",
+                            "",
+                            entry_price,
+                            current_price,
+                            pnl_pct,
+                            0,
+                            spx_weighted_delta,
+                            "HOLD",
+                            quantity=quantity,
+                            iv=0.0,
+                            iv_rank=iv_metrics.iv_rank
+                            if (iv_metrics and iv_metrics.iv_rank is not None)
+                            else 0.0,
+                        )
+                    )
+                    continue
+
                 if expiry not in option_chains_cache:
                     option_chains_cache[expiry] = await asyncio.to_thread(
                         get_option_chain, symbol, expiry

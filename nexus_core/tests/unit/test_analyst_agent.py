@@ -502,3 +502,56 @@ async def test_run_fomc_escape_window_analysis_dynamic_period_labels() -> None:
         assert "10月上旬" in kwargs["adjusted_start"]
         assert "10月中旬" in kwargs["adjusted_end"]
         assert "10月中旬至10月下旬" in kwargs["reason"]
+
+
+def test_get_all_portfolio_includes_holdings() -> None:
+    """Verify that get_all_portfolio returns both TRADE and HOLDING assets."""
+    from database.portfolio import get_all_portfolio
+    import json
+
+    with patch("database.portfolio.archive_expired_portfolio_records"), patch(
+        "sqlite3.connect"
+    ) as mock_conn:
+        mock_cursor = mock_conn.return_value.cursor.return_value
+
+        # First execute: HOLDING
+        # Second execute: TRADE
+        mock_cursor.fetchall.side_effect = [
+            [
+                (
+                    1,
+                    1001,
+                    "NVDA",
+                    json.dumps(
+                        {"quantity": 10.0, "avg_cost": 120.0, "weighted_delta": 5.0}
+                    ),
+                )
+            ],
+            [
+                (
+                    1001,
+                    2,
+                    "AAPL",
+                    json.dumps(
+                        {
+                            "opt_type": "call",
+                            "strike": 200.0,
+                            "expiry": "2026-09-18",
+                            "entry_price": 5.0,
+                            "quantity": 1.0,
+                            "stock_cost": 0.0,
+                        }
+                    ),
+                )
+            ],
+        ]
+
+        results = get_all_portfolio()
+        assert len(results) == 2
+        trade_syms = [r[2] for r in results]
+        assert "NVDA" in trade_syms
+        assert "AAPL" in trade_syms
+        nvda_row = next(r for r in results if r[2] == "NVDA")
+        assert nvda_row[3] == "stock"
+        assert nvda_row[5] == "PERPETUAL"
+        assert nvda_row[7] == 10.0
