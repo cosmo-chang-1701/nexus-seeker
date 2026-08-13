@@ -46,7 +46,6 @@ async def test_all_commands_structure(  # type: ignore
         terminal,  # type: ignore
         mock_interaction,
         symbol="NVDA",
-        use_llm=True,  # type: ignore
     )
     assert (
         "已加入觀察清單"

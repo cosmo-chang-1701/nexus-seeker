@@ -26,19 +26,17 @@ def create_watchlist_embed(  # type: ignore
         description = "目前沒有追蹤任何項目"
     else:
         lines = ["```ansi"]
-        # 1. 標頭修改為兩欄
-        header = f"{_pad_string('標的 [標籤]', 20)} | {_pad_string('AI 分析 (LLM)', 12, 'right')}"
+        # 1. 標頭修改為單欄
+        header = f"{_pad_string('標的 [標籤]', 32)}"
         lines.append(header)
 
         # 2. 分隔線
         lines.append("-" * 35)
 
-        for sym, use_llm, tags in page_data:
+        for sym, tags in page_data:
             display_sym = f"{sym} [{tags}]" if tags else sym
-            sym_fmt = _pad_string(display_sym, 20)
-            llm_text = "開啟 (ON)" if use_llm else "關閉 (OFF)"
-            llm_fmt = _pad_string(llm_text, 12, "right")
-            lines.append(f"{sym_fmt} | {llm_fmt}")
+            sym_fmt = _pad_string(display_sym, 32)
+            lines.append(f"{sym_fmt}")
 
         lines.append("```")
         description = "\n".join(lines)

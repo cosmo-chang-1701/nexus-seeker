@@ -71,10 +71,7 @@ class WatchlistPagination(discord.ui.View):
             # 重新計算清單資料
             manager = AssetManager()
             assets = manager.get_assets(modal_interaction.user.id, ContextType.WATCH)
-            self.data = [
-                (a.symbol, a.metadata.get("use_llm", True), getattr(a, "tags", None))
-                for a in assets
-            ]
+            self.data = [(a.symbol, getattr(a, "tags", None)) for a in assets]
             self.total_pages = (
                 math.ceil(len(self.data) / self.items_per_page) if self.data else 1
             )

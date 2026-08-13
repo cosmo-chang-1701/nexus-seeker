@@ -839,10 +839,8 @@ class TerminalCog(commands.Cog):
     @app_commands.command(
         name="add_watch", description="將標的加入自動化量化監控清單 (WATCH)"
     )
-    @app_commands.describe(symbol="股票代號 (如 TSLA)", use_llm="是否啟用 AI 輔助分析")
-    async def add_watch(
-        self, interaction: discord.Interaction, symbol: str, use_llm: bool = True
-    ) -> Any:
+    @app_commands.describe(symbol="股票代號 (如 TSLA)")
+    async def add_watch(self, interaction: discord.Interaction, symbol: str) -> Any:
         symbol = symbol.upper()
         await interaction.response.defer(ephemeral=True)
 
@@ -865,7 +863,7 @@ class TerminalCog(commands.Cog):
             user_id=interaction.user.id,
             symbol=symbol,
             context_type=ContextType.WATCH,
-            metadata={"use_llm": use_llm},
+            metadata={},
         )
 
         success = manager.add_asset(asset)
@@ -873,7 +871,7 @@ class TerminalCog(commands.Cog):
             await interaction.followup.send(
                 embed=create_info_embed(
                     title="操作成功",
-                    message=f"✅ **已加入觀察清單**: `{symbol}` (AI 分析: `{'開啟' if use_llm else '關閉'}`)",
+                    message=f"✅ **已加入觀察清單**: `{symbol}`",
                 ),
                 ephemeral=True,
             )
@@ -881,51 +879,6 @@ class TerminalCog(commands.Cog):
             await interaction.followup.send(
                 embed=create_error_embed(
                     f"`{symbol}` 已在您的資產清單中或發生錯誤。", title="系統警告"
-                ),
-                ephemeral=True,
-            )
-
-    @app_commands.command(name="edit_watch", description="修改觀察清單中的標的參數")
-    @app_commands.describe(
-        symbol="要修改的股票代號", use_llm="更新 AI 輔助分析開關 (選填)"
-    )
-    async def edit_watch(
-        self,
-        interaction: discord.Interaction,
-        symbol: str,
-        use_llm: Optional[bool] = None,
-    ) -> Any:
-        symbol = symbol.upper()
-        if use_llm is None:
-            return await interaction.response.send_message(
-                embed=create_info_embed(
-                    title="系統資訊", message=" 請提供要修改的參數 (如 use_llm)。"
-                ),
-                ephemeral=True,
-            )
-
-        await interaction.response.defer(ephemeral=True)
-        from services.asset_manager import AssetManager
-        from models.asset import ContextType
-
-        manager = AssetManager()
-
-        success = manager.update_asset_metadata_by_symbol(
-            interaction.user.id, symbol, ContextType.WATCH, {"use_llm": use_llm}
-        )
-
-        if success:
-            await interaction.followup.send(
-                embed=create_info_embed(
-                    title="操作成功",
-                    message=f"✅ **已更新觀察設定**: `{symbol}` (AI 分析: `{'開啟' if use_llm else '關閉'}`)",
-                ),
-                ephemeral=True,
-            )
-        else:
-            await interaction.followup.send(
-                embed=create_error_embed(
-                    f"找不到標的 `{symbol}` 或發生錯誤。", title="系統錯誤"
                 ),
                 ephemeral=True,
             )
@@ -1190,10 +1143,7 @@ class TerminalCog(commands.Cog):
             )
             return
 
-        symbols_data = [
-            (a.symbol, a.metadata.get("use_llm", True), getattr(a, "tags", None))
-            for a in assets
-        ]
+        symbols_data = [(a.symbol, getattr(a, "tags", None)) for a in assets]
 
         from ui.watchlist import WatchlistPagination
 

@@ -14,7 +14,7 @@ from market_analysis.gap_analysis import GapAnalyzer
 from market_analysis.pro_management import simulate_cc_transition
 from market_analysis.ghost_trader import GhostTrader
 from market_analysis.risk_engine import optimize_position_risk
-from services import market_data_service, news_service, llm_service
+from services import market_data_service, news_service
 from market_analysis.ddp_inspector import DDPInspector
 from market_analysis.volatility_inspector import VolatilityInspector
 from services.execution_router import ExecutionRouter
@@ -412,16 +412,16 @@ class TradingService:
         vix_tier = get_vix_tier(vix_spot)
 
         # 2. 提取不重複標的進行「併行批次掃描」
-        # 標的聚合鍵：(代號, 成本, 是否用LLM)
+        # 標的聚合鍵：(代號, 成本)
         scan_targets = []
-        for uid, sym, use_llm in all_watchlists:
+        for uid, sym, _ in all_watchlists:
             cost = holding_map.get((uid, sym), 0.0)
-            scan_targets.append((sym, cost, use_llm))
+            scan_targets.append((sym, cost))
 
         unique_targets = list(set(scan_targets))
 
         async def _scan_single_target(target: Any):  # type: ignore
-            sym, stock_cost, use_llm = target
+            sym, stock_cost = target
             # ... (rest of scan logic)
             try:
                 # analyze_symbol 已經是 async，若沒有 Option 訊號，res 會是 None
@@ -575,16 +575,11 @@ class TradingService:
 
                     news_text = await news_task
 
-                    if use_llm:
-                        strategy_text = res.get("strategy", "PowerSqueeze Trigger")
-                        ai_verdict = await llm_service.evaluate_trade_risk(
-                            sym, strategy_text, news_text, reddit_text
-                        )
-                        res["ai_decision"] = ai_verdict.get("decision", "APPROVE")
-                        res["ai_reasoning"] = ai_verdict.get("reasoning", "無資料")
-                    else:
-                        res["ai_decision"] = "SKIP"
-                        res["ai_reasoning"] = "未啟用 LLM 語意風控"
+                    # 直接略過 AI 判斷，確保 0 延遲與低成本
+                    res["ai_decision"] = "SKIP"
+                    res["ai_reasoning"] = (
+                        "系統已全面升級為量化規則引擎，停用舊版 LLM 語意風控"
+                    )
 
                     res.update({"news_text": news_text, "reddit_text": reddit_text})
 
@@ -611,10 +606,10 @@ class TradingService:
 
         # 3. 準備使用者分發與「個人化 NRO 優化」
         user_alerts_results = {}
-        user_watchlists: Dict[int, List[Tuple[str, float, bool]]] = {}
-        for uid, sym, use_llm in all_watchlists:
+        user_watchlists: Dict[int, List[Tuple[str, float]]] = {}
+        for uid, sym, _ in all_watchlists:
             stock_cost = holding_map.get((uid, sym), 0.0)
-            user_watchlists.setdefault(uid, []).append((sym, stock_cost, use_llm))
+            user_watchlists.setdefault(uid, []).append((sym, stock_cost))
 
         for uid, watchlist_items in user_watchlists.items():
             valid_user_alerts = []
@@ -627,9 +622,9 @@ class TradingService:
             user_capital = user_context.capital
             current_total_delta = user_context.total_weighted_delta
 
-            for sym, stock_cost, use_llm in watchlist_items:
-                if (sym, stock_cost, use_llm) in scan_results:
-                    base_data = scan_results[(sym, stock_cost, use_llm)].copy()
+            for sym, stock_cost in watchlist_items:
+                if (sym, stock_cost) in scan_results:
+                    base_data = scan_results[(sym, stock_cost)].copy()
                     base_data["uid"] = uid
                     base_data["spy_price"] = spy_price
                     base_data["macro_vix"] = macro_data.vix

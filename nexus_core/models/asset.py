@@ -18,8 +18,8 @@ class HoldingType(str, Enum):
 
 
 class WatchMetadata(BaseModel):
-    model_config = ConfigDict()
-    use_llm: bool = True
+    model_config = ConfigDict(extra="ignore")
+    pass
 
 
 class TradeMetadata(BaseModel):

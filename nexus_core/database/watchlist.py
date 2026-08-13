@@ -7,11 +7,11 @@ import config
 # ==========================================
 # 觀察清單 (Watchlist) CRUD (綁定 user_id)
 # ==========================================
-def add_watchlist_symbol(user_id: Any, symbol: Any, use_llm: Any = True):  # type: ignore
+def add_watchlist_symbol(user_id: Any, symbol: Any):  # type: ignore
     """將標的加入觀察清單"""
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()
-    metadata = json.dumps({"use_llm": bool(use_llm)})
+    metadata = json.dumps({})
     try:
         cursor.execute(
             "INSERT INTO assets (user_id, symbol, context_type, metadata) VALUES (?, ?, 'WATCH', ?)",
@@ -37,9 +37,7 @@ def get_user_watchlist(user_id: Any):  # type: ignore
         )
         rows = []
         for sym, meta_json in cursor.fetchall():
-            meta = json.loads(meta_json) if meta_json else {}
-            use_llm = 1 if meta.get("use_llm", True) else 0
-            rows.append((sym, use_llm))
+            rows.append((sym, True))
         return rows
     finally:
         conn.close()
@@ -56,43 +54,8 @@ def get_user_watchlist_by_symbol(user_id: Any, symbol: Any):  # type: ignore
         )
         rows = []
         for sym, meta_json in cursor.fetchall():
-            meta = json.loads(meta_json) if meta_json else {}
-            use_llm = 1 if meta.get("use_llm", True) else 0
-            rows.append((sym, use_llm))
+            rows.append((sym, True))
         return rows
-    finally:
-        conn.close()
-
-
-def update_user_watchlist(user_id: Any, symbol: Any, use_llm: Any = None):  # type: ignore
-    """
-    動態更新觀察清單的設定。
-    """
-    if use_llm is None:
-        return False
-
-    conn = sqlite3.connect(config.DB_NAME)
-    cursor = conn.cursor()
-    try:
-        # 先獲取現有 metadata
-        cursor.execute(
-            "SELECT metadata FROM assets WHERE user_id = ? AND symbol = ? AND context_type = 'WATCH'",
-            (user_id, symbol.upper()),
-        )
-        row = cursor.fetchone()
-        if not row:
-            return False
-
-        meta = json.loads(row[0]) if row[0] else {}
-        meta["use_llm"] = bool(use_llm)
-
-        cursor.execute(
-            "UPDATE assets SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND symbol = ? AND context_type = 'WATCH'",
-            (json.dumps(meta), user_id, symbol.upper()),
-        )
-        rows_affected = cursor.rowcount
-        conn.commit()
-        return rows_affected > 0
     finally:
         conn.close()
 
@@ -107,10 +70,8 @@ def get_all_watchlist() -> Any:
         )
         rows = []
         for uid, sym, meta_json in cursor.fetchall():
-            meta = json.loads(meta_json) if meta_json else {}
-            use_llm = 1 if meta.get("use_llm", True) else 0
-            rows.append((uid, sym, use_llm))
-        return rows  # 格式: [(user_id, symbol, use_llm), ...]
+            rows.append((uid, sym, True))
+        return rows  # 格式: [(user_id, symbol, True), ...]
     finally:
         conn.close()
 
