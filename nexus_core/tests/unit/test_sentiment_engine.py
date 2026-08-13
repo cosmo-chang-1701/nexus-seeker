@@ -719,7 +719,7 @@ async def test_polymarket_fuzzy_matching_and_odds_format(mock_get_company: Any):
     ]
 
     odds = await find_matching_polymarket_odds("MU", poly_markets)
-    assert odds == "Yes: 98.0%"
+    assert odds == "Will Micron's Q3 revenue exceed $6.... (Yes: 98.0%)"
 
     poly_markets_new = [
         {
@@ -731,7 +731,7 @@ async def test_polymarket_fuzzy_matching_and_odds_format(mock_get_company: Any):
         }
     ]
     odds_new = await find_matching_polymarket_odds("MU", poly_markets_new)
-    assert odds_new == "Yes: 98.0%"
+    assert odds_new == "Will Micron's Q3 revenue exceed $6.... (Yes: 98.0%)"
 
     poly_markets_other = [
         {
