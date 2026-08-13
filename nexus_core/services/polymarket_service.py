@@ -781,23 +781,29 @@ class PolymarketService:
     async def _fetch_all_active_asset_ids(self) -> List[str]:
         """
         透過 Gamma API 獲取目前的活躍市場資產 ID，並預熱快取。
+        支援分頁以獲取更多活躍市場。
         """
         asset_ids = []
         active_markets_data = []
 
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                params: Dict[str, Any] = {
-                    "active": "true",
-                    "closed": "false",
-                    "limit": 500,
-                }
-                resp = await client.get(f"{GAMMA_API_BASE}/markets", params=params)
+                for offset in range(0, 1000, 100):
+                    params: Dict[str, Any] = {
+                        "active": "true",
+                        "closed": "false",
+                        "limit": 100,
+                        "offset": offset,
+                    }
+                    resp = await client.get(f"{GAMMA_API_BASE}/markets", params=params)
 
-                if resp.status_code == 200:
-                    markets = resp.json()
-                    for m in markets:
-                        q = m.get("question")
+                    if resp.status_code == 200:
+                        markets = resp.json()
+                        if not markets:
+                            break
+
+                        for m in markets:
+                            q = m.get("question")
                         clob_tokens_raw = m.get("clobTokenIds")
                         if not clob_tokens_raw:
                             continue

@@ -633,11 +633,24 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             "    \u001b[1;33m⚠️ 市場下行保護需求極高，隱含避險情緒升溫。\u001b[0m"
         )
 
+    # 動態決定是否顯示巨鯨/散戶意圖映射
+    has_market_intention = (poly_odds != "N/A") or (
+        "中性" not in reddit_score
+        and "抓取失敗" not in reddit_score
+        and "無法" not in reddit_score
+    )
+
+    if has_market_intention:
+        edge_lines.extend(
+            [
+                " 巨鯨/散戶意圖映射 (Market Intention)",
+                f" ├─ Polymarket 預測勝率: \u001b[1;34m{poly_odds}\u001b[0m",
+                f" └─ Reddit 情緒指數: {sentiment_color}{reddit_score}\u001b[0m",
+            ]
+        )
+
     edge_lines.extend(
         [
-            " 巨鯨/散戶意圖映射 (Market Intention)",
-            f" ├─ Polymarket 預測勝率: \u001b[1;34m{poly_odds}\u001b[0m",
-            f" └─ Reddit 情緒指數: {sentiment_color}{reddit_score}\u001b[0m",
             " 情緒背離偵測 (Divergence Check)",
             f" └─ 狀態: {divergence_color}{divergence}\u001b[0m",
             f" └─ 建議: \u001b[1;32m{action}\u001b[0m",

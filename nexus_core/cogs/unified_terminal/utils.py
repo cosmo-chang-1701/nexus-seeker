@@ -192,23 +192,6 @@ async def find_matching_polymarket_odds(symbol: str, poly_markets: list) -> str:
     except Exception:
         pass
 
-    ticker_map = {
-        "MU": ["micron"],
-        "NVDA": ["nvidia"],
-        "AAPL": ["apple"],
-        "TSLA": ["tesla"],
-        "MSFT": ["microsoft"],
-        "GOOG": ["google", "alphabet"],
-        "GOOGL": ["google", "alphabet"],
-        "AMZN": ["amazon"],
-        "META": ["meta", "facebook"],
-        "NFLX": ["netflix"],
-    }
-
-    for fallback in ticker_map.get(symbol, []):
-        if fallback not in alts:
-            alts.append(fallback)
-
     for m in poly_markets or []:
         if not isinstance(m, dict):
             continue
