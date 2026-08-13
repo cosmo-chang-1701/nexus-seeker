@@ -192,6 +192,7 @@ async def find_matching_polymarket_odds(symbol: str, poly_markets: list) -> str:
     except Exception:
         pass
 
+    results = []
     for m in poly_markets or []:
         if not isinstance(m, dict):
             continue
@@ -230,12 +231,20 @@ async def find_matching_polymarket_odds(symbol: str, poly_markets: list) -> str:
                 price_val = target_token.get("price")
                 if price_val is None:
                     price_val = target_token.get("odds", 0)
+
+                val_str = ""
                 try:
                     price_float = float(price_val)
                     odds_pct = price_float * 100.0
-                    return f"{outcome}: {odds_pct:.1f}%"
+                    val_str = f"{outcome}: {odds_pct:.1f}%"
                 except Exception:
-                    pass
-                return f"{outcome}: {price_val}"
+                    val_str = f"{outcome}: {price_val}"
 
+                # Format to a compact string
+                short_q = question[:35] + "..." if len(question) > 35 else question
+                results.append(f"{short_q} ({val_str})")
+
+    if results:
+        # Join multiple matches with a divider
+        return " | ".join(results)
     return "N/A"

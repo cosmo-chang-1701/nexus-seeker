@@ -94,6 +94,40 @@ class WatchlistRoundupCommentary(BaseModel):
     )
 
 
+class RedditSentimentAnalysis(BaseModel):
+    model_config = ConfigDict()
+    sentiment: Literal["🚀 樂觀 (Bullish)", "💀 恐慌 (Bearish)", "⚖️ 中性"] = Field(
+        description="判讀社群情緒"
+    )
+
+
+async def evaluate_reddit_sentiment(symbol: str, raw_text: str) -> str:
+    """利用 LLM 分析 Reddit 原始文字情緒。"""
+    if not is_memory_safe() or not raw_text or "過去 24 小時內無相關討論" in raw_text:
+        return "⚖️ 中性"
+
+    try:
+        completion = await client.beta.chat.completions.parse(
+            model=LLM_MODEL_NAME,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "你是一個高頻交易情緒分析員。你的任務是判讀散戶在 Reddit 上的貼文標題。若內容包含像是 'Calls', 'YOLO', 'moon', 'betting 50k on' 等賭博性做多行為，代表極度看多。若有 'Puts', 'Crash', 'Bear' 代表看空。若沒有明顯方向性則為中性。請嚴格輸出 JSON。",
+                },
+                {"role": "user", "content": f"標的: {symbol}\n近期貼文:\n{raw_text}"},
+            ],
+            response_format=RedditSentimentAnalysis,
+            temperature=0.0,
+            max_tokens=50,
+        )
+        if completion.choices[0].message.parsed:
+            return str(completion.choices[0].message.parsed.sentiment)
+        return "⚖️ 中性"
+    except Exception as e:
+        logger.warning(f"[{symbol}] 判讀 Reddit 情緒失敗: {e}")
+        return "⚖️ 中性"
+
+
 async def classify_uoa_intent(
     symbol: str, uoa_data: dict, whale_intent: str | None = None
 ) -> dict:

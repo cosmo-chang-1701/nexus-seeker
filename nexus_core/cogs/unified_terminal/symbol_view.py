@@ -4,7 +4,7 @@ import asyncio
 import logging
 from typing import Dict
 
-from services import market_data_service, news_service, reddit_service
+from services import market_data_service, news_service, reddit_service, llm_service
 from market_analysis.sentiment_engine import SentimentEngine
 from market_analysis.psq_engine import analyze_psq
 from market_analysis.risk_engine import MacroContext
@@ -290,12 +290,11 @@ class SymbolHubView(discord.ui.View):
 
             # Reddit sentiment score
             safe_reddit_text = reddit_text or ""
-            if "看多" in safe_reddit_text or "Bullish" in safe_reddit_text:
-                result["reddit_sentiment_score"] = "🚀 樂觀 (Bullish)"
-            elif "看空" in safe_reddit_text or "Bearish" in safe_reddit_text:
-                result["reddit_sentiment_score"] = "💀 恐慌 (Bearish)"
-            else:
-                result["reddit_sentiment_score"] = "⚖️ 中性"
+            result[
+                "reddit_sentiment_score"
+            ] = await llm_service.evaluate_reddit_sentiment(
+                self.symbol, safe_reddit_text
+            )
 
             # Polymarket odds
             poly_odds = await find_matching_polymarket_odds(self.symbol, poly_markets)
