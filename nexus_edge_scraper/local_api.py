@@ -93,7 +93,7 @@ async def scrape_reddit(
                 )
                 sub = sub.replace("r/", "")
 
-                posts_text += f"[{sub} | 共識分數:0] {title_text}\n"
+                posts_text += f"[{sub}] {title_text}\n"
 
             return {"status": "success", "data": posts_text}
 
