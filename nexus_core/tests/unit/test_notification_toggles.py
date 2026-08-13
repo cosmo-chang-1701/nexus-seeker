@@ -225,3 +225,135 @@ async def test_account_settings_polymarket_configuration(db_conn: Any):  # type:
 
     ctx_after = database.get_full_user_context(user_id)
     assert ctx_after.polymarket_threshold == 25000.0
+
+
+@pytest.mark.asyncio
+async def test_category_navigation_and_embed_marker(db_conn: Any):  # type: ignore
+    """測試 NotificationSettingsView 在 4 大戰術維度之間切換導航與 Embed 標記反應"""
+    from cogs.settings_ui import NotificationSettingsView, TRADING_MODULES
+
+    user_id = 999777
+    view = NotificationSettingsView(user_id)
+
+    for mod_key, mod_info in TRADING_MODULES.items():
+        mock_interaction = AsyncMock()
+        mock_interaction.user.id = user_id
+        mock_interaction.data = {"values": [mod_key]}
+        mock_interaction.response.edit_message = AsyncMock()
+
+        await view.on_category_select(mock_interaction)
+        assert view.current_module == mod_key
+
+        # 驗證 Embed 欄位中只有當前選中的維度帶有 🔹 標記
+        embed = view.build_embed()
+        target_field_title = f"🔹 {mod_info['title']}"
+        matched_fields = [f for f in embed.fields if f.name == target_field_title]
+        assert len(matched_fields) == 1
+
+        # 驗證 Row 1 下拉選單項數與模組設定一致
+        module_select = next(
+            c
+            for c in view.children
+            if getattr(c, "custom_id", None) == "select_toggles"
+        )  # type: ignore
+        assert len(module_select.options) == len(mod_info["items"])  # type: ignore
+
+
+@pytest.mark.asyncio
+async def test_toggle_select_callback_interaction(db_conn: Any):  # type: ignore
+    """測試 NotificationSettingsView 透過 on_select_callback 進行單項開關切換"""
+    from cogs.settings_ui import NotificationSettingsView
+
+    user_id = 999888
+    view = NotificationSettingsView(user_id)
+
+    # 切換到 telemetry 維度
+    mock_nav = AsyncMock()
+    mock_nav.user.id = user_id
+    mock_nav.data = {"values": ["telemetry"]}
+    mock_nav.response.edit_message = AsyncMock()
+    await view.on_category_select(mock_nav)
+
+    # 切換 heartbeat_watchlist (預設 True -> 變為 False)
+    mock_toggle = AsyncMock()
+    mock_toggle.user.id = user_id
+    mock_toggle.data = {"values": ["heartbeat_watchlist"]}
+    mock_toggle.response.edit_message = AsyncMock()
+
+    await view.on_select_callback(mock_toggle)
+    assert is_notification_enabled(user_id, "heartbeat_watchlist") is False
+    assert is_notification_enabled(user_id, "telemetry_orders") is True
+
+    # 再次切換 heartbeat_watchlist (變回 True)
+    await view.on_select_callback(mock_toggle)
+    assert is_notification_enabled(user_id, "heartbeat_watchlist") is True
+
+
+@pytest.mark.asyncio
+async def test_module_level_batch_enable_disable_all_categories(db_conn: Any):  # type: ignore
+    """測試 4 大戰術維度各自執行本區開啟/關閉時的獨立性與精確性"""
+    from cogs.settings_ui import NotificationSettingsView, TRADING_MODULES
+
+    user_id = 999999
+    view = NotificationSettingsView(user_id)
+
+    for mod_key, mod_data in TRADING_MODULES.items():
+        # 1. 導航至該模組
+        mock_nav = AsyncMock()
+        mock_nav.user.id = user_id
+        mock_nav.data = {"values": [mod_key]}
+        mock_nav.response.edit_message = AsyncMock()
+        await view.on_category_select(mock_nav)
+
+        # 2. 點擊「關閉本區所有設定」
+        mock_btn = AsyncMock()
+        mock_btn.user.id = user_id
+        mock_btn.response.edit_message = AsyncMock()
+        await view.on_disable_module(mock_btn)
+
+        for item_key in mod_data["items"].keys():
+            assert is_notification_enabled(user_id, item_key) is False
+
+        # 3. 點擊「開啟本區所有設定」
+        await view.on_enable_module(mock_btn)
+        for item_key in mod_data["items"].keys():
+            assert is_notification_enabled(user_id, item_key) is True
+
+
+def test_full_preset_assertions_all_keys(db_conn: Any):  # type: ignore
+    """測試所有 10 個 Key 在 4 大預設情境 (all_on, all_off, focus, mute_intraday) 下的完整狀態"""
+    user_id = 888111
+
+    # 1. all_on
+    s_all_on = apply_preset_settings(user_id, "all_on")
+    assert all(s_all_on[k] is True for k in ALL_NOTIFICATION_KEYS)
+
+    # 2. all_off
+    s_all_off = apply_preset_settings(user_id, "all_off")
+    assert all(s_all_off[k] is False for k in ALL_NOTIFICATION_KEYS)
+
+    # 3. focus
+    s_focus = apply_preset_settings(user_id, "focus")
+    assert s_focus["briefing_pre_market"] is True
+    assert s_focus["briefing_post_market"] is True
+    assert s_focus["briefing_weekly_vtr"] is True
+    assert s_focus["heartbeat_watchlist"] is False
+    assert s_focus["telemetry_orders"] is True
+    assert s_focus["defense_portfolio_risk"] is True
+    assert s_focus["defense_option_rollover"] is True
+    assert s_focus["defense_macro_tail_risk"] is True
+    assert s_focus["alpha_market_signals"] is False
+    assert s_focus["alpha_polymarket"] is False
+
+    # 4. mute_intraday
+    s_mute = apply_preset_settings(user_id, "mute_intraday")
+    assert s_mute["briefing_pre_market"] is True
+    assert s_mute["briefing_post_market"] is True
+    assert s_mute["briefing_weekly_vtr"] is True
+    assert s_mute["heartbeat_watchlist"] is False
+    assert s_mute["telemetry_orders"] is False
+    assert s_mute["defense_portfolio_risk"] is True
+    assert s_mute["defense_option_rollover"] is False
+    assert s_mute["defense_macro_tail_risk"] is True
+    assert s_mute["alpha_market_signals"] is False
+    assert s_mute["alpha_polymarket"] is False
