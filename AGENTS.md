@@ -151,7 +151,7 @@ Current sections:
 
 1. **🧱 心跳：期權結構與波動率** (Technical/Options Snapshot ANSI Panel)
 2. **📐 Skew 與市場判讀** (Skew Interpretation ANSI Panel - aligned with Sentiment Scan style)
-3. **🤖 LLM Skew 解說** (LLM Skew Commentary)
+3. **⚙️ 量化 Skew 解析** (Deterministic Skew Rules)
 4. **🗓️ 事件風控** (Event Risk Management Summary)
 5. **🛡️ 心跳：操盤指引與委託風控** (Holdings & Trading Guide ANSI Panel - dynamically calculates suitable entry/exit prices and shares sizing)
 6. **🎯 執行建議** (Execution Suggestions - with options suggestions aligned with calculated pricing strikes)
@@ -168,7 +168,7 @@ Current sections:
   - skew / IV structure interpretation
   - event risk summary
   - executable option plan
-  - LLM-generated skew commentary
+  - deterministic rule-based skew commentary
   - **Dynamic Stock Pricing & Share Sizing**:
     - Unheld tickers: Calculates a dynamic `suitable_buy_price` based on RSI and Skew (downside fear discount factor) and corresponding shares budget based on user `capital` and `risk_limit`. **(Textual Martial Law)**: If spot drops below the Market Maker PutWall into Negative Gamma, `suitable_buy_price` is locked to N/A, shares size to 0, and all "buy the dip" (Narrative Trap) optimistic wording is forcefully blocked and overwritten with strict "Delta Negative Feedback" warnings.
     - Held tickers: Calculates a dynamic `suitable_sell_price` and recommended sell shares (25%, 33%, 50%, or 100% exit ratio depending on RSI and scenario like `hard-hedge`).
@@ -181,14 +181,13 @@ Current sections:
   - pre-event windows prefer defined-risk structures
   - macro events shrink size / bias toward debit spreads or protection
 
-### LLM skew commentary
+### Deterministic Skew Interpretation
 
-`services.llm_service.generate_watchlist_skew_commentary()`:
+`market_analysis.intraday_pipeline.build_watchlist_skew_rule_commentary()`:
 
-- receives the single-symbol heartbeat snapshot
-- summarizes skew / IV / event risk in short Traditional Chinese
-- is protected by the global memory-safety gate
-- degrades explicitly when RAM usage is too high
+- Replaced legacy LLM commentary to ensure 0-latency execution.
+- Deterministically evaluates `option_skew`, `skew_percentile`, and `pcr`.
+- Triggers absolute tail-risk routes (e.g. Put Panic, Call FOMO) and structural divergence warnings without external API calls.
 
 ### Pre-market IV Sentiment Scan & Fallback
 
