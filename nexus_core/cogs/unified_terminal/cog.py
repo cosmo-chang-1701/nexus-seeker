@@ -885,37 +885,42 @@ class UnifiedTerminalCog(commands.Cog):
 
         gex_task = fetch_symbol_gex_metrics(sym)
 
-        async def _get_far_mp(symbol: str) -> float:
+        async def _get_far_mp_and_dte(symbol: str) -> tuple[float, Optional[int]]:
             try:
                 exp = await market_data_service.get_all_option_expiries(symbol)
                 if not exp:
-                    return 0.0
+                    return 0.0, None
                 from datetime import datetime
 
                 today_dt = datetime.now().date()
-                target = None
+                target_mp = None
+                nearest_dte = None
                 for e in exp:
                     try:
-                        if (
-                            datetime.strptime(e, "%Y-%m-%d").date() - today_dt
-                        ).days >= 7:
-                            target = e
-                            break
+                        diff = (datetime.strptime(e, "%Y-%m-%d").date() - today_dt).days
+                        if diff >= 0:
+                            if nearest_dte is None or diff < nearest_dte:
+                                nearest_dte = diff
+                            if diff >= 7 and target_mp is None:
+                                target_mp = e
                     except ValueError:
                         pass
-                if target:
+
+                far_mp = 0.0
+                if target_mp:
                     from market_analysis.sentiment.max_pain import calculate_max_pain
 
-                    res = await calculate_max_pain(symbol, target)
+                    res = await calculate_max_pain(symbol, target_mp)
                     if res and res.get("max_pain"):
-                        return float(res["max_pain"])
+                        far_mp = float(res["max_pain"])
+                return far_mp, nearest_dte
             except Exception:
                 pass
-            return 0.0
+            return 0.0, None
 
-        far_mp_task = _get_far_mp(sym)
+        far_mp_task = _get_far_mp_and_dte(sym)
 
-        iv_m, mp_data, gex_data, far_mp_val = await asyncio.gather(
+        iv_m, mp_data, gex_data, (far_mp_val, nearest_dte) = await asyncio.gather(
             iv_task, mp_task, gex_task, far_mp_task
         )
 
@@ -977,8 +982,19 @@ class UnifiedTerminalCog(commands.Cog):
         df_hist = await get_history_df(sym, period="1y", interval="1d")
         psq_res = {}
         ema_21 = 0.0
+        atr_14 = 0.0
         if df_hist is not None and not df_hist.empty:
             ema_21 = df_hist["Close"].ewm(span=21, adjust=False).mean().iloc[-1]
+            try:
+                import pandas_ta as ta
+
+                atr_series = ta.atr(
+                    df_hist["High"], df_hist["Low"], df_hist["Close"], length=14
+                )
+                if atr_series is not None and not atr_series.empty:
+                    atr_14 = float(atr_series.iloc[-1])
+            except Exception:
+                pass
             from database.squeeze_cache import get_squeeze_cache, save_squeeze_cache
             from market_analysis.psq_engine import analyze_psq
 
@@ -1048,6 +1064,8 @@ class UnifiedTerminalCog(commands.Cog):
             "psq_result": psq_res,
             "dp_poc": dp_poc,
             "ma20": ema_21,
+            "atr_14": atr_14,
+            "nearest_dte": nearest_dte,
             "vp_data": vp_data or {},
             "vol_data": vol_data,
         }

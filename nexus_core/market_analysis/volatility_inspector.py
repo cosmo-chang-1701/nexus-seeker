@@ -138,6 +138,61 @@ class VolatilityInspector:
             daily_burn = user_ctx.monthly_expense / 30.0
             runway_impact_days = (daily_theta / daily_burn) if daily_burn > 0 else 0
 
+        # 9. 動態停損 (套用四大實戰防守法則)
+        atr_14 = 0.0
+        try:
+            import pandas_ta as ta
+
+            atr_series = ta.atr(df["High"], df["Low"], df["Close"], length=14)
+            if atr_series is not None and not atr_series.empty:
+                atr_14 = float(atr_series.iloc[-1])
+        except Exception:
+            pass
+
+        from .volume_profile import calculate_volume_profile_from_df
+
+        vp_data = calculate_volume_profile_from_df(df, days=20, is_hourly=False)
+        hvn = (vp_data or {}).get("hvn", 0.0)
+        lvn = (vp_data or {}).get("lvn", 0.0)
+
+        from market_analysis.index_microstructure import fetch_symbol_gex_metrics
+
+        gex_data = await fetch_symbol_gex_metrics(symbol)
+        put_wall = float(
+            gex_data.get("put_wall", 0.0) if isinstance(gex_data, dict) else 0.0
+        )
+
+        dte = 99
+        try:
+            exp = await market_data_service.get_all_option_expiries(symbol)
+            if exp:
+                from datetime import datetime
+
+                today_dt = datetime.now().date()
+                for e in exp:
+                    try:
+                        diff = (datetime.strptime(e, "%Y-%m-%d").date() - today_dt).days
+                        if diff >= 0:
+                            dte = diff if dte == 99 else min(dte, diff)
+                    except ValueError:
+                        pass
+        except Exception:
+            pass
+
+        base_stop_loss = (put_wall - 1.5 * atr_14) if put_wall > 0 else (price * 0.95)
+        if lvn > 0 and abs(base_stop_loss - lvn) / lvn <= 0.015:
+            defensive_wall = (
+                min(hvn, put_wall) if (hvn > 0 and put_wall > 0) else max(hvn, put_wall)
+            )
+            if defensive_wall > 0 and defensive_wall < lvn:
+                base_stop_loss = defensive_wall - 1.5 * atr_14
+            else:
+                base_stop_loss = base_stop_loss * 0.985
+        if dte <= 1:
+            base_stop_loss = base_stop_loss - 1.5 * atr_14
+
+        final_stop_loss = round(base_stop_loss, 2)
+
         return {
             "symbol": symbol,
             "price": price,
@@ -160,6 +215,6 @@ class VolatilityInspector:
             if is_high_risk_vol
             else ("波動率極低" if is_opportunity else "波動率正常"),
             "days_to_earnings": round(days_to_earnings, 1),
-            "stop_loss": round(price * 0.9, 2),
+            "stop_loss": final_stop_loss,
             "daily_theta": round(daily_theta, 2),
         }

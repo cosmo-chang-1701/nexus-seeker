@@ -15,10 +15,15 @@ async def test_volatility_inspector_inspect_symbol() -> None:
     mock_user_ctx.cash_reserve = 10000.0
     mock_user_ctx.monthly_expense = 3000.0
 
-    # Mock historical data (252 days)
     dates = pd.date_range(end="2026-05-21", periods=252, freq="D")
     df_hist = pd.DataFrame(
-        {"Close": [150.0 + i * 0.1 for i in range(252)]}, index=dates
+        {
+            "Close": [150.0 + i * 0.1 for i in range(252)],
+            "High": [151.0 + i * 0.1 for i in range(252)],
+            "Low": [149.0 + i * 0.1 for i in range(252)],
+            "Volume": [1000 for _ in range(252)],
+        },
+        index=dates,
     )
 
     # Mock earnings info (within 24 hours to trigger high risk)
@@ -33,7 +38,16 @@ async def test_volatility_inspector_inspect_symbol() -> None:
     ) as m_earnings, patch(
         "market_analysis.volatility_inspector.evaluate_ema_trend",
         new_callable=AsyncMock,
-    ) as m_ema, patch("market_analysis.volatility_inspector.analyze_psq") as m_psq:
+    ) as m_ema, patch(
+        "market_analysis.volatility_inspector.analyze_psq"
+    ) as m_psq, patch(
+        "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
+        new_callable=AsyncMock,
+    ) as m_gex, patch(
+        "services.market_data_service.get_all_option_expiries", new_callable=AsyncMock
+    ) as m_exp, patch(
+        "market_analysis.volume_profile.calculate_volume_profile_from_df"
+    ) as m_vp, patch("pandas_ta.atr") as m_atr:
         # Mock yfinance.Ticker
         mock_ticker_instance = MagicMock()
         mock_ticker_instance.info = {
@@ -49,6 +63,16 @@ async def test_volatility_inspector_inspect_symbol() -> None:
         mock_psq_res = MagicMock()
         mock_psq_res.signal_direction = "Long"
         m_psq.return_value = mock_psq_res
+
+        m_gex.return_value = {"put_wall": 170.0}
+        m_exp.return_value = ["2099-12-31"]
+        m_vp.return_value = {"hvn": 165.0, "lvn": 167.5}
+        # mock atr series returning 2.0
+        mock_atr_series = MagicMock()
+        mock_atr_series.empty = False
+        mock_atr_series.iloc = [-1, 2.0]  # last element 2.0
+        mock_atr_series.iloc[-1] = 2.0
+        m_atr.return_value = mock_atr_series
 
         # Act
         report = await inspector.inspect_symbol(symbol, mock_user_ctx)
@@ -70,7 +94,10 @@ async def test_volatility_inspector_inspect_symbol() -> None:
         # Check specific values
         assert report["status"] == "高風險事件"
         assert report["days_to_earnings"] == pytest.approx(0.5)
-        assert report["stop_loss"] == pytest.approx(175.0 * 0.9)
+        # Expected calculation: base_stop_loss = 170 - 1.5 * 2 = 167
+        # lvn = 167.5, diff = 0.5 <= 167.5 * 0.015 (2.5125) -> triggers LVN avoidance
+        # defensive_wall = min(165, 170) = 165 < 167.5 -> base_stop_loss = 165 - 1.5 * 2 = 162.0
+        assert report["stop_loss"] == pytest.approx(162.0)
 
 
 @pytest.mark.asyncio
@@ -89,7 +116,13 @@ async def test_volatility_inspector_ddp_opportunity() -> None:
     # Let's say HV_20 min is 0.2, max is 0.6.
     dates = pd.date_range(end="2026-05-21", periods=252, freq="D")
     df_hist = pd.DataFrame(
-        {"Close": [100.0 + i * 0.05 for i in range(252)]}, index=dates
+        {
+            "Close": [100.0 + i * 0.05 for i in range(252)],
+            "High": [101.0 + i * 0.05 for i in range(252)],
+            "Low": [99.0 + i * 0.05 for i in range(252)],
+            "Volume": [1000 for _ in range(252)],
+        },
+        index=dates,
     )
     # We will just patch the rolling calculation for easier exact mocking
     # Or just let pandas calculate it. For simplicity, we patch df calculation? No, it calculates in the code:
@@ -110,7 +143,16 @@ async def test_volatility_inspector_ddp_opportunity() -> None:
     ) as m_earnings, patch(
         "market_analysis.volatility_inspector.evaluate_ema_trend",
         new_callable=AsyncMock,
-    ) as m_ema, patch("market_analysis.volatility_inspector.analyze_psq") as m_psq:
+    ) as m_ema, patch(
+        "market_analysis.volatility_inspector.analyze_psq"
+    ) as m_psq, patch(
+        "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
+        new_callable=AsyncMock,
+    ) as m_gex, patch(
+        "services.market_data_service.get_all_option_expiries", new_callable=AsyncMock
+    ) as m_exp, patch(
+        "market_analysis.volume_profile.calculate_volume_profile_from_df"
+    ) as m_vp, patch("pandas_ta.atr") as m_atr:
         # Calculate expected HV_current from mock data so we can set IV appropriately
         # Let's mock the df to just have a preset HV column instead, but the code calculates it.
         # So let's provide a df with prices, and just mock info["impliedVolatility"] to be extremely low (0.01).
@@ -122,6 +164,14 @@ async def test_volatility_inspector_ddp_opportunity() -> None:
         mock_psq_res = MagicMock()
         mock_psq_res.signal_direction = "Long"
         m_psq.return_value = mock_psq_res
+
+        m_gex.return_value = {"put_wall": 0.0}
+        m_exp.return_value = ["2099-12-31"]
+        m_vp.return_value = {"hvn": 0.0, "lvn": 0.0}
+        mock_atr_series = MagicMock()
+        mock_atr_series.empty = False
+        mock_atr_series.iloc[-1] = 0.0
+        m_atr.return_value = mock_atr_series
 
         # Need to know exactly what the max and min HV will be to set IV.
         # But wait, if we set IV = 0.000018, it's very likely to be < hv_current and IVR < 25%.

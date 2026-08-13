@@ -78,8 +78,33 @@ class DynamicRolloverEngine:
         elif ivr > 50.0:
             options_strategy = "嚴禁買方 (IV 過高，規避 Gamma 陷阱)"
 
-        # 邏輯 4: 動態停損 (依託 GEX)
-        stop_loss = put_wall * 0.995 if put_wall > 0 else spot * 0.95
+        # 邏輯 4: 動態停損 (依託 GEX 與 4 大實戰法則)
+        atr_14 = metrics.get("atr_14", 0.0)
+        hvn = metrics.get("hvn", 0.0)
+        lvn = metrics.get("lvn", 0.0)
+        dte = metrics.get("dte", 99)
+
+        base_stop_loss = (put_wall - 1.5 * atr_14) if put_wall > 0 else (spot * 0.95)
+
+        # 法則 1: 避開 LVN 陷阱
+        if lvn > 0 and abs(base_stop_loss - lvn) / lvn <= 0.015:
+            # 停損落在 LVN，退避到 HVN 或 PutWall 背後
+            defensive_wall = (
+                min(hvn, put_wall) if (hvn > 0 and put_wall > 0) else max(hvn, put_wall)
+            )
+            if defensive_wall > 0 and defensive_wall < lvn:
+                base_stop_loss = defensive_wall - 1.5 * atr_14
+            else:
+                base_stop_loss = base_stop_loss * 0.985  # 強制往下推
+
+        # 法則 4: 末日結算容忍度
+        if dte <= 1:
+            base_stop_loss = base_stop_loss - 1.5 * atr_14
+            options_strategy += (
+                " | ⚠️ 結算日 (DTE 0/1)：降低部位槓桿，擴大末日洗盤容忍度"
+            )
+
+        stop_loss = base_stop_loss
 
         # 邏輯 5: 數據真實性校正
         data_note = ""
@@ -324,6 +349,10 @@ class DynamicRolloverEngine:
                     "skew": asset.get("skew", 0.0),
                     "skew_percentile": asset.get("skew_percentile", None),
                     "gamma_flip": asset.get("gamma_flip", 0.0),
+                    "atr_14": asset.get("atr_14", 0.0),
+                    "hvn": asset.get("hvn", 0.0),
+                    "lvn": asset.get("lvn", 0.0),
+                    "dte": asset.get("dte", 99),
                 }
 
                 spot = metrics["spot_price"]
@@ -356,7 +385,10 @@ class DynamicRolloverEngine:
                 # Phase 2: 負 Gamma 懸崖連續 15 分鐘實體 K 線貫穿確認
                 is_structural_breakdown = False
                 if is_structural_breakdown_pending:
-                    gamma_cliff_level = min(put_wall, gamma_flip)
+                    # 法則 2 & 3: 15分鐘收盤確認 + 1.5x ATR 防護墊片
+                    gamma_cliff_level = min(put_wall, gamma_flip) - (
+                        1.5 * metrics["atr_14"]
+                    )
                     is_structural_breakdown = await is_gamma_cliff_confirmed(
                         symbol, gamma_cliff_level
                     )

@@ -31,6 +31,10 @@ class MarketCondition(BaseModel):
     skew_percentile: float = Field(
         default=50.0, description="Skew 分位點 (0-100)", ge=0.0, le=100.0
     )
+    put_wall: float = Field(default=0.0, description="做市商 PutWall 防守線")
+    hvn: float = Field(default=0.0, description="高籌碼密集區 (HVN)")
+    lvn: float = Field(default=0.0, description="籌碼真空區 (LVN)")
+    dte: int = Field(default=99, description="最近期權到期天數 (DTE)")
 
     @field_validator(
         "vix",
@@ -44,6 +48,9 @@ class MarketCondition(BaseModel):
         "ivr",
         "sqz_mom",
         "skew_percentile",
+        "put_wall",
+        "hvn",
+        "lvn",
         mode="before",
     )
     @classmethod

@@ -226,9 +226,34 @@ class ExecutionRouter:
                 condition_type="MA20_BREAK",
             )
         else:
-            # 攻擊模式：RSI 轉弱 (超買回落) 或跌破支撐止損
+            # 攻擊模式：RSI 轉弱 (超買回落) 或跌破支撐止損 (套用四大實戰法則)
+            base_stop_loss = (
+                (condition.put_wall - 1.5 * condition.atr_14)
+                if condition.put_wall > 0
+                else (condition.asset_price * 0.94)
+            )
+
+            # 法則 1: LVN 避險
+            if (
+                condition.lvn > 0
+                and abs(base_stop_loss - condition.lvn) / condition.lvn <= 0.015
+            ):
+                defensive_wall = (
+                    min(condition.hvn, condition.put_wall)
+                    if (condition.hvn > 0 and condition.put_wall > 0)
+                    else max(condition.hvn, condition.put_wall)
+                )
+                if defensive_wall > 0 and defensive_wall < condition.lvn:
+                    base_stop_loss = defensive_wall - 1.5 * condition.atr_14
+                else:
+                    base_stop_loss = base_stop_loss * 0.985
+
+            # 法則 4: 末日結算容忍度
+            if condition.dte <= 1:
+                base_stop_loss = base_stop_loss - 1.5 * condition.atr_14
+
             return ExitStrategy(
                 trailing_stop_active=True,
-                trigger_price=condition.asset_price * 0.94,  # 6% 硬止損
+                trigger_price=base_stop_loss,
                 condition_type="RSI_DROP",
             )

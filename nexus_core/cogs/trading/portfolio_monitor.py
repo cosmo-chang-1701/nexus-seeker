@@ -233,6 +233,16 @@ class PortfolioMonitorCog(commands.Cog):
                                     if r_data.get("skew")
                                     else 0.0
                                 ),
+                                "atr_14": float(r_data.get("atr_14", 0.0)),
+                                "hvn": float(r_data.get("vp_data", {}).get("hvn", 0.0))
+                                if isinstance(r_data.get("vp_data"), dict)
+                                else 0.0,
+                                "lvn": float(r_data.get("vp_data", {}).get("lvn", 0.0))
+                                if isinstance(r_data.get("vp_data"), dict)
+                                else 0.0,
+                                "dte": int(r_data.get("nearest_dte"))
+                                if r_data.get("nearest_dte") is not None
+                                else 99,
                             }
                         except Exception as parse_ex:
                             logger.error(
@@ -248,6 +258,10 @@ class PortfolioMonitorCog(commands.Cog):
                                 "gamma_flip": 0.0,
                                 "sqz_mom": 0.0,
                                 "skew": 0.0,
+                                "atr_14": 0.0,
+                                "hvn": 0.0,
+                                "lvn": 0.0,
+                                "dte": 99,
                             }
                             metrics = fallback_metrics
                     else:
@@ -261,6 +275,10 @@ class PortfolioMonitorCog(commands.Cog):
                             "gamma_flip": 0.0,
                             "sqz_mom": 0.0,
                             "skew": 0.0,
+                            "atr_14": 0.0,
+                            "hvn": 0.0,
+                            "lvn": 0.0,
+                            "dte": 99,
                         }
                         metrics = fallback_metrics
 
@@ -301,6 +319,10 @@ class PortfolioMonitorCog(commands.Cog):
                             "gamma_flip": metrics.get("gamma_flip", 0.0),
                             "sqz_mom": metrics.get("sqz_mom", 0.0),
                             "skew": metrics.get("skew", 0.0),
+                            "atr_14": metrics.get("atr_14", 0.0),
+                            "hvn": metrics.get("hvn", 0.0),
+                            "lvn": metrics.get("lvn", 0.0),
+                            "dte": metrics.get("dte", 99),
                         }
                     )
 
