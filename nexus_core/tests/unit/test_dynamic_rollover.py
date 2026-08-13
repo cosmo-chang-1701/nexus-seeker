@@ -185,6 +185,7 @@ async def test_satellite_rebalancing_breakdown_confirmed(
             "max_pain": 220.0,
             "sqz_mom": 0.5,
             "skew": -0.1,
+            "price_15m_close": 185.0,
         },
     ]
     instructions = await engine.check_satellite_rebalancing(1, portfolio, 10000.0)

@@ -36,6 +36,7 @@ class DynamicRolloverEngine:
         target: str = "VOO",
         strategy_override: str = "",
         asset_class: str = "SPOT",
+        is_take_profit: bool = False,
     ) -> dict:
         """
         Evaluates rebalancing rules and generates the strict 4-part markdown report.
@@ -128,8 +129,8 @@ class DynamicRolloverEngine:
         # 轉倉觸發條件重構 & 高 IVR 分流
         if final_action == "LIQUIDATE":
             if asset_class == "SPOT":
-                if price_15m_close < stop_loss:
-                    pass  # 實體跌破，允許清倉
+                if is_take_profit or price_15m_close < stop_loss:
+                    pass  # 實體跌破或獲利解鎖/轉倉，允許清倉
                 else:
                     if ivr > 80.0:
                         final_action = "HOLD"
@@ -526,6 +527,7 @@ class DynamicRolloverEngine:
                                 system_action="LIQUIDATE",
                                 target=next_target,
                                 asset_class=asset_class,
+                                is_take_profit=True,
                             )
                             rebalance_instructions.append(
                                 {
@@ -551,6 +553,7 @@ class DynamicRolloverEngine:
                                 target=symbol,
                                 strategy_override=f"Bear Call Spread (Short Call @ ${call_wall * 1.02:.2f})",
                                 asset_class=asset_class,
+                                is_take_profit=True,
                             )
                             rebalance_instructions.append(
                                 {
@@ -579,6 +582,7 @@ class DynamicRolloverEngine:
                         system_action="LIQUIDATE",
                         target=next_target,
                         asset_class=asset_class,
+                        is_take_profit=is_euphoria,
                     )
 
                     rebalance_instructions.append(

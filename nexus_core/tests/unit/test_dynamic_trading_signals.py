@@ -58,6 +58,7 @@ def _sample_tactical(**overrides):  # type: ignore
 
 def test_unheld_oversold_signals() -> None:
     # RSI < 30 (oversold) -> Base buy at buy_price_phase1 (170.0)
+    # With 1.5x ATR buffer (5.0 * 1.5 = 7.5) and avoiding .50: 170.0 - 7.5 = 162.5 -> 162.47
     metrics = _sample_metrics(rsi_14=25.0, option_skew=0.0)
     tactical = _sample_tactical()
 
@@ -69,13 +70,14 @@ def test_unheld_oversold_signals() -> None:
         risk_limit=15.0,
     )
 
-    assert signals["suitable_buy_price"] == 170.0
+    assert signals["suitable_buy_price"] == 162.47
     assert signals["suitable_buy_shares"] > 0
     assert "RSI 極度超賣" in signals["buy_rationale"]
 
 
 def test_unheld_overbought_signals() -> None:
     # RSI > 70 (overbought) -> Base buy at buy_price_phase3 (160.0)
+    # With 1.5x ATR buffer (5.0 * 1.5 = 7.5) and avoiding .50: 160.0 - 7.5 = 152.5 -> 152.47
     metrics = _sample_metrics(rsi_14=75.0, option_skew=0.0)
     tactical = _sample_tactical()
 
@@ -87,7 +89,7 @@ def test_unheld_overbought_signals() -> None:
         risk_limit=15.0,
     )
 
-    assert signals["suitable_buy_price"] == 160.0
+    assert signals["suitable_buy_price"] == 152.47
     assert "RSI 超買" in signals["buy_rationale"]
 
 
@@ -106,14 +108,15 @@ def test_unheld_skew_discount() -> None:
 
     # Base buy is buy_price_phase2 (165.0)
     # Skew discount = max(-0.05, min(0.15, (10 / 100) * 0.5)) = 5%
-    # Expected buy = 165.0 * 0.95 = 156.75 -> capped at buy_price_phase3 * 0.9 = 144.0
-    # So suitable_buy_price should be 156.75
-    assert signals["suitable_buy_price"] == 156.75
+    # Discounted buy = 165.0 * 0.95 = 156.75
+    # With 1.5x ATR buffer (5.0 * 1.5 = 7.5): 156.75 - 7.5 = 149.25
+    assert signals["suitable_buy_price"] == 149.25
     assert "Skew 避險情緒折價" in signals["buy_rationale"]
 
 
 def test_held_overbought_signals() -> None:
     # RSI > 70 -> Base sell is sell_price_phase1 (180.0)
+    # With 1.5x ATR buffer (5.0 * 1.5 = 7.5) and avoiding .50: 180.0 + 7.5 = 187.5 -> 187.47
     # RSI > 75 -> 50% scale out
     metrics = _sample_metrics(rsi_14=78.0, option_skew=0.0)
     tactical = _sample_tactical()
@@ -128,7 +131,7 @@ def test_held_overbought_signals() -> None:
         risk_limit=15.0,
     )
 
-    assert signals["suitable_sell_price"] == 180.0
+    assert signals["suitable_sell_price"] == 187.47
     assert signals["suitable_sell_shares"] == 50  # 50% scale out since RSI > 75
     assert "RSI 超買過熱" in signals["sell_rationale"]
 
