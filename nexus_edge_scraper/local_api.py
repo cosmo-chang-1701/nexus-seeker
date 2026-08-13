@@ -19,6 +19,13 @@ warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 app = FastAPI()
 logger = logging.getLogger(__name__)
 
+try:
+    from yf_api import router as yf_router
+
+    app.include_router(yf_router)
+except ImportError as e:
+    logger.warning(f"Failed to import yf_api: {e}")
+
 SEC_USER_AGENT = "NexusSeekerBot (nexusseeker@example.com)"
 cik_cache = {}
 

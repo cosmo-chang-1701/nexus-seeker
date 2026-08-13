@@ -223,26 +223,60 @@ async def _safe_yf_history(
     period: str,
     interval: Optional[str] = None,
 ) -> Optional[pd.DataFrame]:
-    """安全包裝 yfinance history。
+    """安全包裝 yfinance history，並加入 Edge 節點優雅降級。"""
 
-    - 捕捉 yfinance 的 HTTP 400 / delisted / 空資料等狀況
-    - 若回傳空 DataFrame，統一回傳 None（呼叫端再做 fallback/降級）
-    - 強制開啟 auto_adjust=True 進行除權息校正，並開啟 repair=True 修復極端異常報價
-    """
-
+    df = None
     try:
         kwargs = {"period": period, "auto_adjust": True, "repair": True}
         if interval is not None:
             kwargs["interval"] = interval
 
         df = await asyncio.to_thread(ticker.history, **kwargs)
-
-        if df is None or getattr(df, "empty", True):
-            return None
-        return df
     except Exception as e:
-        logger.warning(f"yfinance history 失敗: {e}")
+        logger.warning(f"yfinance history 直接呼叫失敗: {e}")
+
+    if df is None or getattr(df, "empty", True):
+        # 降級方案：透過 Edge 節點抓取
+        symbol = getattr(ticker, "ticker", "")
+        if symbol:
+            logger.info(f"[{symbol}] yfinance 失敗，啟動 Edge 降級方案抓取 K 線...")
+            from config import TUNNEL_URL
+            import httpx
+            import urllib.parse
+
+            base_url = (
+                getattr(TUNNEL_URL, "rstrip", lambda x: TUNNEL_URL)("/")
+                if TUNNEL_URL
+                else ""
+            )
+            if base_url:
+                req_url = f"{base_url}/api/v1/scrape/yf/history/{urllib.parse.quote(symbol)}?period={period}"
+                if interval:
+                    req_url += f"&interval={interval}"
+
+                try:
+                    async with httpx.AsyncClient(timeout=15.0) as client:
+                        res = await client.get(req_url)
+                        if res.status_code == 200:
+                            data = res.json()
+                            if data.get("status") == "success" and data.get("data"):
+                                df_fallback = pd.DataFrame(data["data"])
+                                if "Date" in df_fallback.columns:
+                                    df_fallback["Date"] = pd.to_datetime(
+                                        df_fallback["Date"]
+                                    )
+                                    df_fallback.set_index("Date", inplace=True)
+                                elif "Datetime" in df_fallback.columns:
+                                    df_fallback["Datetime"] = pd.to_datetime(
+                                        df_fallback["Datetime"]
+                                    )
+                                    df_fallback.set_index("Datetime", inplace=True)
+                                return df_fallback
+                except Exception as ex:
+                    logger.warning(f"[{symbol}] Edge 降級抓取 K 線也失敗: {ex}")
+
         return None
+    return df
 
 
 async def get_yfinance_quote(symbol: str) -> Dict[str, Any]:
@@ -551,19 +585,43 @@ async def get_all_option_expiries(symbol: str) -> List[str]:
         if now < expiry:
             return list(cached_val)
 
+    res = []
     try:
         ticker = yf.Ticker(symbol)
         expiries = await asyncio.to_thread(lambda: ticker.options)
         res = list(expiries)
-        if res:
-            _option_expiries_cache[symbol] = (
-                list(res),
-                now + _OPTION_EXPIRIES_CACHE_TTL,
-            )
-        return res
     except Exception as e:
-        logger.error(f"[{symbol}] 獲取期權到期日失敗: {e}")
-        return []
+        logger.warning(f"[{symbol}] yfinance 獲取期權到期日失敗: {e}")
+
+    if not res:
+        logger.info(f"[{symbol}] 啟動 Edge 降級方案抓取期權到期日...")
+        from config import TUNNEL_URL
+        import httpx
+        import urllib.parse
+
+        base_url = (
+            getattr(TUNNEL_URL, "rstrip", lambda x: TUNNEL_URL)("/")
+            if TUNNEL_URL
+            else ""
+        )
+        if base_url:
+            req_url = f"{base_url}/api/v1/scrape/yf/options/{urllib.parse.quote(symbol)}/expiries"
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    resp = await client.get(req_url)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if data.get("status") == "success":
+                            res = data.get("data", [])
+            except Exception as ex:
+                logger.warning(f"[{symbol}] Edge 降級抓取期權到期日也失敗: {ex}")
+
+    if res:
+        _option_expiries_cache[symbol] = (
+            list(res),
+            now + _OPTION_EXPIRIES_CACHE_TTL,
+        )
+    return res
 
 
 async def get_option_chain(
@@ -620,11 +678,13 @@ async def get_option_chain(
                 calls=calls_copy, puts=puts_copy, underlying=underlying_copy
             )
 
+    calls_full = None
+    puts_full = None
+    underlying_full = None
     try:
         ticker = yf.Ticker(symbol)
         chain = await asyncio.to_thread(ticker.option_chain, expiry)
         if chain is not None:
-            # 快取完整未裁減的資料
             calls_full = chain.calls.copy() if chain.calls is not None else None
             puts_full = chain.puts.copy() if chain.puts is not None else None
             underlying_full = (
@@ -632,31 +692,67 @@ async def get_option_chain(
                 if hasattr(chain.underlying, "copy")
                 else chain.underlying
             )
-            cached_entry = OptionChainData(
-                calls=calls_full, puts=puts_full, underlying=underlying_full
-            )
-            _option_chain_cache[cache_key] = (
-                cached_entry,
-                now + _OPTION_CHAIN_CACHE_TTL,
-            )
-
-            # 對回傳的副本進行裁減
-            spot_price = await _get_spot()
-            calls_copy = calls_full.copy() if calls_full is not None else None
-            puts_copy = puts_full.copy() if puts_full is not None else None
-            calls_copy, puts_copy = _prune(calls_copy, puts_copy, spot_price, prune_pct)
-
-            return OptionChainData(
-                calls=calls_copy,
-                puts=puts_copy,
-                underlying=underlying_full.copy()
-                if hasattr(underlying_full, "copy")
-                else underlying_full,
-            )
-        return None
     except Exception as e:
-        logger.error(f"[{symbol}] 獲取期權鏈失敗 (expiry={expiry}): {e}")
-        return None
+        logger.warning(f"[{symbol}] 獲取期權鏈失敗 (expiry={expiry}): {e}")
+
+    if (
+        calls_full is None
+        or puts_full is None
+        or (calls_full.empty and puts_full.empty)
+    ):
+        logger.info(f"[{symbol}] 啟動 Edge 降級方案抓取期權鏈 (expiry={expiry})...")
+        from config import TUNNEL_URL
+        import httpx
+        import urllib.parse
+
+        base_url = (
+            getattr(TUNNEL_URL, "rstrip", lambda x: TUNNEL_URL)("/")
+            if TUNNEL_URL
+            else ""
+        )
+        if base_url:
+            req_url = f"{base_url}/api/v1/scrape/yf/options/{urllib.parse.quote(symbol)}/chain?expiry={expiry}"
+            try:
+                async with httpx.AsyncClient(timeout=20.0) as client:
+                    resp = await client.get(req_url)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if data.get("status") == "success" and data.get("data"):
+                            calls_full = pd.DataFrame(data["data"].get("calls", []))
+                            puts_full = pd.DataFrame(data["data"].get("puts", []))
+                            underlying_full = {}
+            except Exception as ex:
+                logger.warning(f"[{symbol}] Edge 降級抓取期權鏈也失敗: {ex}")
+
+    if (
+        calls_full is not None
+        and puts_full is not None
+        and not (calls_full.empty and puts_full.empty)
+    ):
+        cached_entry = OptionChainData(
+            calls=calls_full, puts=puts_full, underlying=underlying_full
+        )
+        _option_chain_cache[cache_key] = (
+            cached_entry,
+            now + _OPTION_CHAIN_CACHE_TTL,
+        )
+
+        # 對回傳的副本進行裁減
+        spot_price = await _get_spot()
+        calls_copy = calls_full.copy() if calls_full is not None else None
+        puts_copy = puts_full.copy() if puts_full is not None else None
+        calls_copy, puts_copy = _prune(calls_copy, puts_copy, spot_price, prune_pct)
+
+        return OptionChainData(
+            calls=calls_copy,
+            puts=puts_copy,
+            underlying=(
+                underlying_full.copy()
+                if underlying_full is not None and hasattr(underlying_full, "copy")
+                else underlying_full
+            ),
+        )
+    return None
 
 
 # 限制快取大小以節省記憶體 (1GB RAM VPS 優化)
