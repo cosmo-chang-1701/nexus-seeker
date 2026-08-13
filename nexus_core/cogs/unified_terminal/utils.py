@@ -246,9 +246,9 @@ async def find_matching_polymarket_odds(symbol: str, poly_markets: list) -> str:
                 results.append((f"{short_q} ({val_str})", vol))
 
     if results:
-        # Sort by volume descending and take top 2
+        # Sort by volume descending and take top 3
         results.sort(key=lambda x: x[1], reverse=True)
-        top_results = results[:2]
-        # Join multiple matches with a divider
-        return " | ".join(r[0] for r in top_results)
+        top_results = results[:3]
+        # Join multiple matches with vertical tree layout
+        return "\n │    └─ ".join(r[0] for r in top_results)
     return "N/A"
