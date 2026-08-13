@@ -842,8 +842,16 @@ class UnifiedTerminalCog(commands.Cog):
                 "momentum_value": squeeze_cache.get("momentum", 0.0),
                 "signal_direction": squeeze_cache.get("direction", "⚪"),
             },
-            "gex_metrics": {"put_wall": radar_cache.get("put_wall_strike")},
-            "gex_profile_data": {"put_wall": radar_cache.get("put_wall_strike")},
+            "gex_metrics": {
+                "put_wall": radar_cache.get("put_wall_strike"),
+                "call_wall": radar_cache.get("call_wall_strike"),
+                "net_gex": radar_cache.get("net_gex"),
+            },
+            "gex_profile_data": {
+                "put_wall": radar_cache.get("put_wall_strike"),
+                "call_wall": radar_cache.get("call_wall_strike"),
+                "net_gex": radar_cache.get("net_gex"),
+            },
             "vp_data": {
                 "hvn": radar_cache.get("hvn_price")
                 or get_kv_cache(f"volume_poc_{sym.upper()}"),
@@ -1078,6 +1086,12 @@ class UnifiedTerminalCog(commands.Cog):
             f"radar_terminal_{sym.upper()}",
             {
                 "put_wall_strike": gex_data.get("put_wall")
+                if isinstance(gex_data, dict)
+                else 0.0,
+                "call_wall_strike": gex_data.get("call_wall")
+                if isinstance(gex_data, dict)
+                else 0.0,
+                "net_gex": gex_data.get("net_gex")
                 if isinstance(gex_data, dict)
                 else 0.0,
                 "mp_near": mp_data.get("max_pain")

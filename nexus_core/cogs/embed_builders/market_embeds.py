@@ -1105,8 +1105,10 @@ def build_radar_scan_embed(
 
             # 4. G-Wall / P-Wall & Neg-GEX Distance
             p_wall = float(put_wall)
+            c_wall_str = f"${call_wall:.1f}" if call_wall > 0 else "N/A"
+            p_wall_str = f"${p_wall:.1f}" if p_wall > 0 else "N/A"
             if call_wall > 0 or p_wall > 0:
-                g_p_wall_str = f"${call_wall:.1f} / ${p_wall:.1f}"
+                g_p_wall_str = f"{c_wall_str} / {p_wall_str}"
             else:
                 g_p_wall_str = "N/A"
 
@@ -1123,8 +1125,10 @@ def build_radar_scan_embed(
             else:
                 sto_str = "N/A"
 
-            # 4.2 IV-Strategy Match
-            if iv_rank_val < 15.0:
+            # 4.2 IV-Strategy Match (具備負 Gamma 踩踏區風控熔斷)
+            if is_neg_gamma:
+                iv_strategy_str = "🔴賣方禁售"
+            elif iv_rank_val < 15.0:
                 iv_strategy_str = "🔴CSP 禁售"
             else:
                 iv_strategy_str = "🟢適宜賣方"
@@ -1193,7 +1197,18 @@ def build_radar_scan_embed(
             sqz_mom_val = _safe_float(r.get("psq_result", {}).get("momentum", 0.0))
             sqz_vec_str = f"{sqz_dir}{sqz_mom_val:+.1f}"
 
-            md_line = f"| {sym} | {price_str_md} | {g_p_wall_str} | {skew_pct_str} | {sqz_vec_str} | {neg_gex_str} | {sto_str} | {iv_strategy_str} | {em_z_score_str} | {top_uoa_str} | {tactical_adv} |"
+            # 標的異常與偏離度視覺強連動標示 (⚠️ 快速識別)
+            is_high_risk_or_anomaly = (
+                abs(dist_pct) > 10.0
+                or is_neg_gamma
+                or bool(radar_cache.get("is_divergence"))
+                or bool(radar_cache.get("is_skew_extreme"))
+                or any(mark in status_label for mark in ["⚠️", "🚨", "🛑"])
+                or cb_triggered
+            )
+            sym_cell_md = f"⚠️ {sym}" if is_high_risk_or_anomaly else sym
+
+            md_line = f"| {sym_cell_md} | {price_str_md} | {g_p_wall_str} | {skew_pct_str} | {sqz_vec_str} | {neg_gex_str} | {sto_str} | {iv_strategy_str} | {em_z_score_str} | {top_uoa_str} | {tactical_adv} |"
             md_lines.append(md_line)
             # ---- 產生 Markdown 行結束 ----
 

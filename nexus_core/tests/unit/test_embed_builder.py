@@ -1181,8 +1181,8 @@ def test_build_radar_scan_embed_rebuilds_expected_move_bounds_from_reference_pri
 
 
 def test_build_radar_scan_embed_gp_wall_polarity_dynamics() -> None:
-    """驗證 G/P-Wall(±) 欄位極性與負 Gamma 踩踏區的動態連動（以 SPCX 為驗證標的）。"""
-    # 案例 A: SPCX 現價 $106.29 實體跌破 PutWall $108.0 (即使 net_gex 預設為 0.0)
+    """驗證 G/P-Wall(±) 欄位極性、N/A Fallback、IV 策略負 Gamma 熔斷與 ⚠️ 標記（以 SPCX 與 CRWV 為驗證標的）。"""
+    # 案例 A: SPCX 現價 $106.29 實體跌破 PutWall $108.0，無 CallWall
     scan_results_below_pw = [
         {
             "symbol": "SPCX",
@@ -1229,10 +1229,14 @@ def test_build_radar_scan_embed_gp_wall_polarity_dynamics() -> None:
         embeds_a = build_radar_scan_embed(scan_results_below_pw, "ALL", 12345)
 
     desc_a = get_embed_text(embeds_a[0])
-    # 現價跌破 PutWall，G/P-Wall 應切換為 (-) 負 Gamma 極性
-    assert "(-) $0.0 / $108.0" in desc_a
-    # Neg-GEX 欄位為 -1.6%
+    # 1. 現價跌破 PutWall，G/P-Wall 應切換為 (-) 負 Gamma 極性，且 CallWall 無數據時顯示 N/A
+    assert "(-) N/A / $108.0" in desc_a
+    # 2. Neg-GEX 欄位為 -1.6%
     assert "-1.6%" in desc_a
+    # 3. 負 Gamma 踩踏區 IV 策略啟動風控熔斷，強制顯示「🔴賣方禁售」
+    assert "🔴賣方禁售" in desc_a
+    # 4. 觸發負 Gamma 踩踏/異常，標的欄位動態渲染為「⚠️ SPCX」
+    assert "⚠️ SPCX" in desc_a
 
     # 案例 B: SPCX 現價 $110.0 高於 PutWall $108.0 且 net_gex > 0
     scan_results_above_pw = [
@@ -1284,32 +1288,33 @@ def test_build_radar_scan_embed_gp_wall_polarity_dynamics() -> None:
     desc_b = get_embed_text(embeds_b[0])
     assert "(+) $120.0 / $108.0" in desc_b
     assert "+1.9%" in desc_b
+    assert "🟢適宜賣方" in desc_b
 
-    # 案例 C: SPCX 現價 $110.0 高於 PutWall $108.0，但全域 net_gex < 0
-    scan_results_neg_gex = [
+    # 案例 C: CRWV 實盤極端偏離與跌破底牆場景驗證
+    scan_results_crwv = [
         {
-            "symbol": "SPCX",
-            "quote": {"c": 110.0, "dp": -0.5},
+            "symbol": "CRWV",
+            "quote": {"c": 106.29, "dp": -1.34},
             "iv_metrics": {
                 "iv_rank": 35.0,
-                "expected_move_weekly": 5.0,
-                "expected_move_lower": 105.0,
-                "expected_move_upper": 115.0,
+                "expected_move_weekly": 6.0,
+                "expected_move_lower": 100.0,
+                "expected_move_upper": 112.0,
             },
             "dte_er": 5,
-            "skew": 0.5,
-            "skew_percentile": 60.0,
-            "max_pain": {"max_pain": 110.0},
+            "skew": 0.0,
+            "skew_percentile": 50.0,
+            "max_pain": {"max_pain": 139.15},  # 偏離 > 20%
             "uoa": [],
-            "gex_profile_data": {
+            "gex_metrics": {
                 "put_wall": 108.0,
-                "call_wall": 120.0,
-                "net_gex": -5_000_000.0,
+                "call_wall": 0.0,
+                "net_gex": 0.0,
             },
             "psq_result": {
                 "is_squeezing": False,
-                "momentum": -0.5,
-                "signal_direction": "🔴",
+                "momentum": 0.0,
+                "signal_direction": "⚪",
             },
         }
     ]
@@ -1330,10 +1335,14 @@ def test_build_radar_scan_embed_gp_wall_polarity_dynamics() -> None:
         "market_analysis.insights_engine.InsightsEngine.generate_cro_insight",
         return_value=(None, None, None),
     ):
-        embeds_c = build_radar_scan_embed(scan_results_neg_gex, "ALL", 12345)
+        embeds_crwv = build_radar_scan_embed(scan_results_crwv, "ALL", 12345)
 
-    desc_c = get_embed_text(embeds_c[0])
-    assert "(-) $120.0 / $108.0" in desc_c
+    desc_crwv = get_embed_text(embeds_crwv[0])
+    assert "⚠️ CRWV" in desc_crwv
+    assert "(-) N/A / $108.0" in desc_crwv
+    assert "🔴賣方禁售" in desc_crwv
+    assert "-1.6%" in desc_crwv
+    assert "🔴 跌破底牆 $108.0" in desc_crwv
 
 
 def test_build_post_market_intelligence_embed_empty() -> None:
