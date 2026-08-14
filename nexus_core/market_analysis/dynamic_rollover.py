@@ -484,42 +484,38 @@ class DynamicRolloverEngine:
 
         for asset in portfolio_assets:
             if asset.get("asset_class") == "SATELLITE":
-                symbol = asset["symbol"]
-                current_value = float(asset.get("current_value", 0.0))
-                quantity = float(asset.get("quantity", 0.0))
-                max_alloc = float(asset.get("max_allocation_pct", 0.3))
+                symbol: str = str(asset.get("symbol", ""))
+                current_value: float = float(asset.get("current_value", 0.0))
+                quantity: float = float(asset.get("quantity", 0.0))
+                max_alloc: float = float(asset.get("max_allocation_pct", 0.3))
 
                 # --- 新增：深度量化數據 (Fallback = None/0.0) ---
-                metrics = {
-                    "spot_price": float(asset.get("spot_price", 0.0)),
-                    "call_wall": float(asset.get("call_wall", 0.0)),
-                    "max_pain": float(asset.get("max_pain", 0.0)),
-                    "ivr": float(asset.get("ivr", 0.0)),
-                    "put_wall": float(asset.get("put_wall", 0.0)),
-                    "is_uoa_sweep": bool(asset.get("is_uoa_sweep", False)),
-                    "sqz_mom": float(asset.get("sqz_mom", 0.0)),
-                    "skew": float(asset.get("skew", 0.0)),
-                    "skew_percentile": asset.get("skew_percentile", None),
-                    "gamma_flip": float(asset.get("gamma_flip", 0.0)),
-                    "atr_14": float(asset.get("atr_14", 0.0)),
-                    "hvn": float(asset.get("hvn", 0.0)),
-                    "lvn": float(asset.get("lvn", 0.0)),
-                    "dte": int(asset.get("dte", 99)),
-                }
+                spot: float = float(asset.get("spot_price", 0.0))
+                call_wall: float = float(asset.get("call_wall", 0.0))
+                max_pain: float = float(asset.get("max_pain", 0.0))
+                ivr: float = float(asset.get("ivr", 0.0))
+                put_wall: float = float(asset.get("put_wall", 0.0))
+                is_uoa_sweep: bool = bool(asset.get("is_uoa_sweep", False))
+                sqz_mom: float = float(asset.get("sqz_mom", 0.0))
+                skew: float = float(asset.get("skew", 0.0))
 
-                spot = metrics["spot_price"]
-                call_wall = metrics["call_wall"]
-                ivr = metrics["ivr"]
-                put_wall = metrics["put_wall"]
-                gamma_flip = metrics["gamma_flip"]
-                sqz_mom = metrics["sqz_mom"]
-                skew = metrics["skew"]
-                skew_percentile = metrics["skew_percentile"]
-                if skew_percentile is None:
+                raw_skew_perc = asset.get("skew_percentile", None)
+                skew_percentile: float
+                if raw_skew_perc is not None:
+                    skew_percentile = float(raw_skew_perc)
+                else:
                     skew_percentile = get_indicator_percentile(symbol, "SKEW", skew)
 
+                gamma_flip: float = float(asset.get("gamma_flip", 0.0))
+                atr_14: float = float(asset.get("atr_14", 0.0))
+                hvn: float = float(asset.get("hvn", 0.0))
+                lvn: float = float(asset.get("lvn", 0.0))
+                dte: int = int(asset.get("dte", 99))
+                price_15m_close: float = float(asset.get("price_15m_close", spot))
+                atr_15m: float = float(asset.get("atr_15m", atr_14))
+
                 # 計算比例
-                current_alloc = (
+                current_alloc: float = (
                     current_value / total_account_value
                     if total_account_value > 0
                     else 0.0
@@ -533,21 +529,20 @@ class DynamicRolloverEngine:
                 else:
                     asset_class = "SPOT"
 
-                metrics["price_15m_close"] = float(asset.get("price_15m_close", spot))
-                metrics["atr_15m"] = float(asset.get("atr_15m", metrics["atr_14"]))
-
                 from market_analysis.index_microstructure import classify_gex_wall
 
                 gex_profile_data = asset.get("gex_profile_data", {})
-                support_wall = 0.0
-                resistance_wall = 0.0
+                support_wall: float = 0.0
+                resistance_wall: float = 0.0
+                support_gex: float = 0.0
+                resistance_gex: float = 0.0
                 if (
                     gex_profile_data
                     and "gex_profile" in gex_profile_data
                     and isinstance(gex_profile_data["gex_profile"], dict)
                 ):
                     gex_prof = gex_profile_data["gex_profile"]
-                    max_positive = 0.0
+                    max_positive: float = 0.0
                     for k, v in gex_prof.items():
                         try:
                             val = float(v)
@@ -555,8 +550,6 @@ class DynamicRolloverEngine:
                                 max_positive = val
                         except Exception:
                             pass
-                    support_gex = 0.0
-                    resistance_gex = 0.0
                     for k, v in gex_prof.items():
                         try:
                             val = float(v)
@@ -578,17 +571,36 @@ class DynamicRolloverEngine:
                                 resistance_gex = val
                         except Exception:
                             pass
-                    metrics["support_gex"] = support_gex
-                    metrics["resistance_gex"] = resistance_gex
-                metrics["support_wall"] = support_wall
-                metrics["resistance_wall"] = resistance_wall
+
+                metrics: Dict[str, Any] = {
+                    "spot_price": spot,
+                    "call_wall": call_wall,
+                    "max_pain": max_pain,
+                    "ivr": ivr,
+                    "put_wall": put_wall,
+                    "is_uoa_sweep": is_uoa_sweep,
+                    "sqz_mom": sqz_mom,
+                    "skew": skew,
+                    "skew_percentile": skew_percentile,
+                    "gamma_flip": gamma_flip,
+                    "atr_14": atr_14,
+                    "hvn": hvn,
+                    "lvn": lvn,
+                    "dte": dte,
+                    "price_15m_close": price_15m_close,
+                    "atr_15m": atr_15m,
+                    "support_wall": support_wall,
+                    "resistance_wall": resistance_wall,
+                    "support_gex": support_gex,
+                    "resistance_gex": resistance_gex,
+                }
 
                 # ----------------------------------------------------
                 # 條件一：現有持倉結構劣化（護衛牆破位 / 主力物理蓋頂 / 目標區獲利解鎖完成）
                 # ----------------------------------------------------
                 # 1. 做市商 GEX 防線失守
                 # 灰階思考防洗盤：若多頭動能充足且未破 15m 收盤價防守位，不預先標記破位
-                anchor_base = (
+                anchor_base: float = (
                     support_wall
                     if support_wall > 0
                     else (
@@ -597,14 +609,14 @@ class DynamicRolloverEngine:
                         else (put_wall if put_wall > 0 else gamma_flip)
                     )
                 )
-                gamma_cliff_level = (
-                    anchor_base - (1.5 * metrics["atr_14"]) if anchor_base > 0 else 0.0
+                gamma_cliff_level: float = (
+                    anchor_base - (1.5 * atr_14) if anchor_base > 0 else 0.0
                 )
 
-                is_structural_breakdown_pending = (
+                is_structural_breakdown_pending: bool = (
                     anchor_base > 0
                     and spot < anchor_base
-                    and (metrics["price_15m_close"] < gamma_cliff_level or sqz_mom <= 0)
+                    and (price_15m_close < gamma_cliff_level or sqz_mom <= 0)
                 )
 
                 # Phase 2: 負 Gamma 懸崖連續 15 分鐘實體 K 線貫穿確認
