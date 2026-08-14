@@ -83,10 +83,15 @@ class PreMarketCog(commands.Cog):
 
         async def _warm_one(sym: Any) -> None:  # type: ignore
             try:
-                from market_analysis.sentiment_engine import SentimentEngine
+                terminal_cog = self.bot.get_cog("UnifiedTerminalCog")
+                if terminal_cog and hasattr(terminal_cog, "_fetch_sym_radar_data_slow"):
+                    await terminal_cog._fetch_sym_radar_data_slow(sym)
+                else:
+                    from market_analysis.sentiment_engine import SentimentEngine
 
-                await SentimentEngine.fetch_and_calculate_iv_metrics(sym)
-                await SentimentEngine.calculate_max_pain(sym)
+                    await SentimentEngine.fetch_and_calculate_iv_metrics(sym)
+                    await SentimentEngine.calculate_max_pain(sym)
+                    await SentimentEngine.detect_uoa(sym)
             except Exception as err:
                 logger.warning(f"[盤前預熱] 標的 {sym} 預熱失敗: {err}")
 

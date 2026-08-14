@@ -803,16 +803,65 @@ class UnifiedTerminalCog(commands.Cog):
 
         radar_cache = get_kv_cache(f"radar_terminal_{sym.upper()}") or {}
         market_cache = get_market_cache(sym) or {}
-        squeeze_cache = get_squeeze_cache(sym) or {}
+        squeeze_cache = get_squeeze_cache(sym)
         gex_cached = get_kv_cache(f"gex_metrics_{sym.upper()}") or {}
         gex_data = gex_cached.get("data", {}) if isinstance(gex_cached, dict) else {}
 
+        uoa_data: list[Any] = []
         uoa_cached = get_kv_cache(f"uoa_{sym.upper()}")
-        uoa_data = (
-            uoa_cached
-            if isinstance(uoa_cached, list)
-            else (radar_cache.get("uoa") or [])
-        )
+        if uoa_cached is not None and isinstance(uoa_cached, list):
+            uoa_data = list(uoa_cached)
+        elif radar_cache.get("uoa") is not None and isinstance(
+            radar_cache.get("uoa"), list
+        ):
+            uoa_data = list(radar_cache["uoa"])
+        else:
+            # UOA 快取未命中，觸發自癒偵測並寫入快取
+            try:
+                from market_analysis.sentiment_engine import SentimentEngine
+                from database.cache import save_kv_cache
+
+                uoa_res = await SentimentEngine.detect_uoa(sym)
+                uoa_data = list(uoa_res) if uoa_res else []
+                await save_kv_cache(f"uoa_{sym.upper()}", uoa_data)
+            except Exception as e:
+                logger.warning(f"[{sym}] Fast-Track UOA 快取自癒失敗: {e}")
+
+        # Squeeze Cache 自癒檢查：若完全未命中或已過期且無歷史數值
+        if (
+            not squeeze_cache
+            or squeeze_cache.get("is_expired", False)
+            or "momentum" not in squeeze_cache
+        ):
+            try:
+                from database.squeeze_cache import save_squeeze_cache
+                from market_analysis.psq_engine import analyze_psq
+
+                df_hist = await market_data_service.get_history_df(
+                    sym, period="6mo", interval="1d"
+                )
+                if df_hist is not None and not df_hist.empty:
+                    psq_obj = analyze_psq(df_hist, vix_spot=18.0)
+                    if psq_obj:
+                        sqz_is_sq = psq_obj.is_squeezing
+                        sqz_m = psq_obj.momentum_value
+                        sqz_d = (
+                            "🟢"
+                            if psq_obj.signal_direction == "Long"
+                            else ("🔴" if psq_obj.signal_direction == "Short" else "⚪")
+                        )
+                        save_squeeze_cache(sym, sqz_is_sq, sqz_m, sqz_d)
+                        squeeze_cache = {
+                            "is_squeezing": sqz_is_sq,
+                            "momentum": sqz_m,
+                            "direction": sqz_d,
+                            "is_expired": False,
+                        }
+            except Exception as e:
+                logger.warning(f"[{sym}] Fast-Track SQZ 快取自癒計算失敗: {e}")
+
+        if not squeeze_cache:
+            squeeze_cache = {}
 
         darkpool_cached = get_kv_cache(f"darkpool_{sym.upper()}") or {}
         dp_poc_val = get_kv_cache(f"dp_poc_{sym.upper()}")
@@ -1163,8 +1212,7 @@ class UnifiedTerminalCog(commands.Cog):
         from database.cache import save_kv_cache
         from datetime import datetime, timezone
 
-        if uoa_data:
-            await save_kv_cache(f"uoa_{sym.upper()}", uoa_data)
+        await save_kv_cache(f"uoa_{sym.upper()}", uoa_data or [])
 
         await save_kv_cache(
             f"radar_terminal_{sym.upper()}",

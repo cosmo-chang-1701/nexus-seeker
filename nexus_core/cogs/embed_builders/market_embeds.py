@@ -1179,7 +1179,16 @@ def build_radar_scan_embed(
                 )
                 u_strike = float(top_u.get("strike", 0.0) or 0.0)
                 u_vol = float(top_u.get("volume", 0.0) or 0.0)
-                u_action = str(top_u.get("action", "BTO"))
+                u_action_raw = str(top_u.get("action", "BTO"))
+                if "STO" in u_action_raw.upper():
+                    u_action = "STO"
+                    icon = "🛡️"
+                elif "BTO" in u_action_raw.upper():
+                    u_action = "BTO"
+                    icon = "🔥"
+                else:
+                    u_action = str(top_u.get("trade_type", "SWEEP")).upper()
+                    icon = "🚀"
                 expiry_raw = str(top_u.get("expiry", ""))
                 expiry_short = (
                     expiry_raw[5:].replace("-", "/")
@@ -1187,9 +1196,6 @@ def build_radar_scan_embed(
                     else expiry_raw
                 )
                 vol_k = f"{u_vol / 1000.0:.0f}k" if u_vol >= 1000 else f"{u_vol:.0f}"
-                icon = (
-                    "🔥" if "BTO" in u_action else ("🛡️" if "STO" in u_action else "🚀")
-                )
                 top_uoa_str = f"{icon} {expiry_short} ${u_strike:.1f}{u_type} ({u_action} {vol_k})"
 
             # 6. 防洗盤絕對防守位 (Anti-Washout Stop Loss)

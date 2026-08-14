@@ -16,12 +16,13 @@ logger = logging.getLogger(__name__)
 async def detect_uoa(
     symbol: str,
     max_expiries: int = 4,
-    vol_oi_ratio: float = 5.0,
-    min_volume: int = 500,
+    vol_oi_ratio: float = 3.0,
+    min_volume: int = 300,
     max_non_index_nominal: float = 500_000_000.0,
 ) -> List[Dict[str, Any]]:
     """
     偵測異常期權活動 (Unusual Options Activity)。
+    支援雙軌判定：(1) 高量與未平倉比 (Sweep 異動), (2) 巨額名義價值機構大單 (Whale Block)。
     經過高並發 I/O 與 Pandas 向量化優化，並加入異常數據風控機制。
     """
     try:
@@ -83,12 +84,27 @@ async def detect_uoa(
             df_combined = pd.concat(dfs, ignore_index=True)
 
             # 4. 效能優化：利用 Pandas 向量化直接篩選符合 UOA 門檻的資料 (拋棄慢速 iterrows 預篩)
-            # 排除 openInterest <= 0 的情況
-            filter_mask = (
+            # 雙軌機制：
+            # 軌道 1 (Sweep 異動)：Volume > vol_oi_ratio * OI 且 Volume >= min_volume
+            # 軌道 2 (Whale Block 巨鯨大單)：名義價值 >= $250,000 且 Volume >= 500
+            price_col = (
+                df_combined["lastPrice"].fillna(0.0)
+                if "lastPrice" in df_combined.columns
+                else pd.Series(0.0, index=df_combined.index)
+            )
+            nominal_proxy = df_combined["volume"] * price_col * 100.0
+
+            sweep_mask = (
                 (df_combined["openInterest"] > 0)
                 & (df_combined["volume"] > vol_oi_ratio * df_combined["openInterest"])
-                & (df_combined["volume"] > min_volume)
+                & (df_combined["volume"] >= min_volume)
             )
+            whale_block_mask = (
+                (df_combined["openInterest"] > 0)
+                & (df_combined["volume"] >= 500)
+                & (nominal_proxy >= 250_000.0)
+            )
+            filter_mask = sweep_mask | whale_block_mask
             df_uoa_candidates = df_combined[filter_mask]
 
             if df_uoa_candidates.empty:
@@ -119,13 +135,26 @@ async def detect_uoa(
 
                 trade_price = (
                     float(row["lastPrice"])
-                    if "lastPrice" in row and pd.notna(row["lastPrice"])
-                    else 0.0
+                    if "lastPrice" in row
+                    and pd.notna(row["lastPrice"])
+                    and float(row["lastPrice"]) > 0
+                    else (
+                        (float(row["bid"]) + float(row["ask"])) / 2.0
+                        if "bid" in row
+                        and "ask" in row
+                        and pd.notna(row["bid"])
+                        and pd.notna(row["ask"])
+                        and float(row["ask"]) > 0
+                        else (
+                            float(row.get("ask", 0.0) or 0.0)
+                            or float(row.get("bid", 0.0) or 0.0)
+                        )
+                    )
                 )
 
-                # 風控檢驗 2：非指數虛擬名義價值過濾與 UOA 絕對門檻 ( > $100k)
+                # 風控檢驗 2：非指數虛擬名義價值過濾與 UOA 絕對門檻 ( > $50k)
                 nominal_val = vol * trade_price * 100.0
-                if nominal_val < 100_000.0:
+                if nominal_val < 50_000.0:
                     continue
 
                 is_index = symbol in INDEX_SYMBOLS or symbol.startswith("^")

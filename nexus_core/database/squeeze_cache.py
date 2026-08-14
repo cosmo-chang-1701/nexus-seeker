@@ -24,26 +24,45 @@ def save_squeeze_cache(
         return False
 
 
-def get_squeeze_cache(symbol: str) -> Optional[Dict[str, Any]]:
+def get_squeeze_cache(
+    symbol: str, max_age_minutes: int = 30, fallback_to_latest: bool = True
+) -> Optional[Dict[str, Any]]:
     conn = None
     try:
         conn = get_read_connection()
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-        # TTL = 30 minutes
+        # 1. 優先查詢指定 TTL 內的最新快取 (預設 30 分鐘)
         cursor.execute(
-            """
+            f"""
             SELECT * FROM squeeze_cache
-            WHERE symbol = ? AND datetime(updated_at, '+30 minutes') > CURRENT_TIMESTAMP
+            WHERE symbol = ? AND datetime(updated_at, '+{int(max_age_minutes)} minutes') > CURRENT_TIMESTAMP
             """,
             (symbol.upper(),),
         )
         row = cursor.fetchone()
         if row:
-            # Convert SQLite row to dictionary and handle boolean casting if necessary
             data = dict(row)
             data["is_squeezing"] = bool(data.get("is_squeezing", 0))
+            data["is_expired"] = False
             return data
+
+        # 2. 若允許 fallback_to_latest 且有歷史數據，返回帶有 is_expired=True 的最新紀錄
+        if fallback_to_latest:
+            cursor.execute(
+                """
+                SELECT * FROM squeeze_cache
+                WHERE symbol = ?
+                ORDER BY updated_at DESC LIMIT 1
+                """,
+                (symbol.upper(),),
+            )
+            row = cursor.fetchone()
+            if row:
+                data = dict(row)
+                data["is_squeezing"] = bool(data.get("is_squeezing", 0))
+                data["is_expired"] = True
+                return data
     except Exception:
         pass
     finally:
