@@ -121,15 +121,15 @@ def create_system_health_embed(
 
     # ── [主節點] ──
     main_value = (
-        f"**VPS 記憶體**: `{memory_percent}%` (可用: {memory_available_mb:.1f} MB)\n"
-        f"**CPU 負載**: `{cpu_percent}%`\n"
-        f"**程序占用 (RSS)**: `{process_memory_mb:.1f} MB`\n"
-        f"**💿 硬碟空間**: `{disk_percent}%` (可用: {disk_free_gb:.1f} GB)\n"
-        f"**Swap 占用**: `{swap_percent}%`\n"
-        f"**📦 快取統計**:\n"
-        f"　• SMA/EMA Cache: `{sma_cache_size}/{ema_cache_size}`\n"
-        f"　• Poly Markets: `{poly_cache_size}`\n"
-        f"　• OrderBooks: `{orderbook_size}`"
+        f"🧠 **記憶體 (RAM)**: `{memory_percent}%` (可用: {memory_available_mb:.1f} MB)\n"
+        f"⚡ **CPU 負載**: `{cpu_percent}%`\n"
+        f"📌 **程序占用 (RSS)**: `{process_memory_mb:.1f} MB`\n"
+        f"💿 **硬碟空間**: `{disk_percent}%` (可用: {disk_free_gb:.1f} GB)\n"
+        f"🔄 **Swap 占用**: `{swap_percent}%`\n"
+        f"📦 **快取統計**:\n"
+        f"　• 🔹 SMA/EMA 快取: `{sma_cache_size}/{ema_cache_size}`\n"
+        f"　• 🔹 Polymarket 快取: `{poly_cache_size}`\n"
+        f"　• 🔹 訂單簿 (OrderBooks): `{orderbook_size}`"
     )
     embed.add_field(name=f"🖥️ 【主節點 {main_os}】", value=main_value, inline=False)
 
@@ -142,28 +142,30 @@ def create_system_health_embed(
             else "`N/A`"
         )
         edge_value = (
-            f"**記憶體**: `{edge_stats.get('memory_percent', 0)}%` (可用: {edge_stats.get('memory_available_mb', 0):.1f} MB)\n"
-            f"**CPU 負載**: `{edge_stats.get('cpu_percent', 0)}%`\n"
-            f"**程序占用 (RSS)**: {proc_mem_str}\n"
-            f"**💿 硬碟空間**: `{edge_stats.get('disk_percent', 0)}%` (可用: {edge_stats.get('disk_free_gb', 0):.1f} GB)\n"
-            f"**Swap 占用**: `{edge_stats.get('swap_percent', 0)}%`"
+            f"🧠 **記憶體 (RAM)**: `{edge_stats.get('memory_percent', 0)}%` (可用: {edge_stats.get('memory_available_mb', 0):.1f} MB)\n"
+            f"⚡ **CPU 負載**: `{edge_stats.get('cpu_percent', 0)}%`\n"
+            f"📌 **程序占用 (RSS)**: {proc_mem_str}\n"
+            f"💿 **硬碟空間**: `{edge_stats.get('disk_percent', 0)}%` (可用: {edge_stats.get('disk_free_gb', 0):.1f} GB)\n"
+            f"🔄 **Swap 占用**: `{edge_stats.get('swap_percent', 0)}%`"
         )
 
         battery = edge_stats.get("battery")
         if battery:
             status_icon = "🔌" if battery.get("power_plugged") else "🔋"
             plugged_text = "插電中" if battery.get("power_plugged") else "未插電"
-            edge_value += f"\n**{status_icon} 電力狀態**: `{battery.get('percent', 0)}%` ({plugged_text})"
+            edge_value += f"\n{status_icon} **電力狀態**: `{battery.get('percent', 0)}%` ({plugged_text})"
 
         embed.add_field(
             name=f"💻 【邊緣節點 {edge_os}】", value=edge_value, inline=False
         )
     else:
         embed.add_field(
-            name="💻 【邊緣節點 Edge】", value="⚠️ `離線或無法連線`", inline=False
+            name="💻 【邊緣節點 Edge】",
+            value="⚠️ **連線狀態**: `離線或無法連線`",
+            inline=False,
         )
 
-    health_status = "✅ 狀態優良"
+    health_status = "✅ **狀態優良**"
     if not is_healthy:
         health_status = "⚠️ **資源吃緊**"
 
@@ -195,7 +197,7 @@ def create_system_health_embed(
     ):
         health_status = "🆘 **極度危險 (OOM 警告)**"
 
-    embed.add_field(name="🩺 整體健康評級", value=health_status, inline=False)
+    embed.add_field(name="🩺 【整體健康評級】", value=health_status, inline=False)
     embed.set_footer(text="Argo Optimization Engine | Low-RAM VPS & Edge Architecture")
     return embed
 
@@ -935,7 +937,7 @@ def build_radar_scan_embed(
                 dp_p_price = float(max_print.get("price", 0.0) or 0.0)
                 if dp_p_prem >= 5_000_000.0 and dp_p_price > 0:
                     insights.append(
-                        f"• 🧱 {sym}: 暗池在 ${dp_p_price:.2f} 爆出 ${dp_p_prem/1_000_000:.2f}M 巨額大宗買盤，形成籌碼水泥牆支撐。"
+                        f"• 🧱 {sym}: 暗池在 ${dp_p_price:.2f} 爆出 ${dp_p_prem / 1_000_000:.2f}M 巨額大宗買盤，形成籌碼水泥牆支撐。"
                     )
 
             # 格式化一列 ANSI 表格 (Two-Line Tree-Style)
@@ -1184,7 +1186,7 @@ def build_radar_scan_embed(
                     if len(expiry_raw) >= 10
                     else expiry_raw
                 )
-                vol_k = f"{u_vol/1000.0:.0f}k" if u_vol >= 1000 else f"{u_vol:.0f}"
+                vol_k = f"{u_vol / 1000.0:.0f}k" if u_vol >= 1000 else f"{u_vol:.0f}"
                 icon = (
                     "🔥" if "BTO" in u_action else ("🛡️" if "STO" in u_action else "🚀")
                 )

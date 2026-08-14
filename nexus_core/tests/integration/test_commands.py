@@ -71,19 +71,24 @@ async def test_command_skew_scan(  # type: ignore
     cog = SentimentCog(bot)
 
     # Mock all 4 tasks called in gather
-    with patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_skew",
-        new_callable=AsyncMock,
-    ) as mock_skew, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
-        new_callable=AsyncMock,
-    ) as mock_pcr, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
-        new_callable=AsyncMock,
-    ) as mock_uoa, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_max_pain",
-        new_callable=AsyncMock,
-    ) as mock_mp:
+    with (
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_skew",
+            new_callable=AsyncMock,
+        ) as mock_skew,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
+            new_callable=AsyncMock,
+        ) as mock_pcr,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
+            new_callable=AsyncMock,
+        ) as mock_uoa,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_max_pain",
+            new_callable=AsyncMock,
+        ) as mock_mp,
+    ):
         mock_skew.return_value = {"symbol": "SPY", "skew": 5.0, "state": "Normal"}
         mock_pcr.return_value = {"symbol": "SPY", "pcr": 0.8, "state": "Normal"}
         mock_uoa.return_value = []
@@ -224,9 +229,11 @@ async def test_command_sys_health(mock_interaction: Any):  # type: ignore
     bot = MagicMock()
     cog = TerminalCog(bot)
 
-    with patch("psutil.virtual_memory") as mock_mem, patch(
-        "psutil.disk_usage"
-    ) as mock_disk, patch("psutil.cpu_percent") as mock_cpu:
+    with (
+        patch("psutil.virtual_memory") as mock_mem,
+        patch("psutil.disk_usage") as mock_disk,
+        patch("psutil.cpu_percent") as mock_cpu,
+    ):
         # Case 1: Healthy
         mock_mem.return_value.percent = 50.0
         mock_mem.return_value.available = 512 * 1024 * 1024
@@ -238,7 +245,7 @@ async def test_command_sys_health(mock_interaction: Any):  # type: ignore
         mock_interaction.followup.send.assert_called()
         args, kwargs = mock_interaction.followup.send.call_args
         embed = kwargs["embed"]
-        assert "✅ 狀態優良" in embed.fields[-1].value
+        assert "✅ **狀態優良**" in embed.fields[-1].value
         assert discord.Color.green() == embed.color
 
         # Case 2: Disk Full Danger

@@ -686,7 +686,8 @@ def test_create_max_pain_embed_with_short_dte_guidance() -> None:
 
 
 def test_create_system_health_embed() -> None:
-    embed = create_system_health_embed(
+    # 1. 主節點 + 邊緣節點在線測試 (極度危險)
+    embed_danger = create_system_health_embed(
         memory_percent=96.0,
         memory_available_mb=256.0,
         cpu_percent=33.0,
@@ -697,10 +698,47 @@ def test_create_system_health_embed() -> None:
         ema_cache_size=87,
         poly_cache_size=10,
         orderbook_size=5,
+        edge_stats={
+            "os_system": "Darwin",
+            "memory_percent": 45.0,
+            "memory_available_mb": 8192.0,
+            "cpu_percent": 12.0,
+            "process_memory_mb": 110.0,
+            "disk_percent": 60.0,
+            "disk_free_gb": 150.0,
+            "swap_percent": 0.0,
+            "battery": {"percent": 90.0, "power_plugged": True},
+        },
     )
-    assert embed.title == "🖥️ Nexus Seeker 分散式系統健康診斷"
-    assert "120/87" in embed.fields[0].value  # type: ignore
-    assert "🆘 **極度危險 (OOM 警告)**" in embed.fields[-1].value  # type: ignore
+    assert embed_danger.title == "🖥️ Nexus Seeker 分散式系統健康診斷"
+    main_val = embed_danger.fields[0].value
+    assert "🧠 **記憶體 (RAM)**: `96.0%`" in main_val  # type: ignore
+    assert "⚡ **CPU 負載**: `33.0%`" in main_val  # type: ignore
+    assert "📌 **程序占用 (RSS)**: `512.0 MB`" in main_val  # type: ignore
+    assert "💿 **硬碟空間**: `97.0%`" in main_val  # type: ignore
+    assert "🔄 **Swap 占用**: `0.0%`" in main_val  # type: ignore
+    assert "📦 **快取統計**:" in main_val  # type: ignore
+    assert "🔹 SMA/EMA 快取: `120/87`" in main_val  # type: ignore
+
+    edge_val = embed_danger.fields[1].value
+    assert "🧠 **記憶體 (RAM)**: `45.0%`" in edge_val  # type: ignore
+    assert "🔌 **電力狀態**: `90.0%` (插電中)" in edge_val  # type: ignore
+    assert "🆘 **極度危險 (OOM 警告)**" in embed_danger.fields[-1].value  # type: ignore
+
+    # 2. 邊緣節點離線 + 健康狀態優良測試
+    embed_healthy = create_system_health_embed(
+        memory_percent=50.0,
+        memory_available_mb=1024.0,
+        cpu_percent=15.0,
+        process_memory_mb=150.0,
+        disk_percent=40.0,
+        disk_free_gb=20.0,
+        sma_cache_size=10,
+        ema_cache_size=10,
+        edge_stats=None,
+    )
+    assert "⚠️ **連線狀態**: `離線或無法連線`" in embed_healthy.fields[1].value  # type: ignore
+    assert "✅ **狀態優良**" in embed_healthy.fields[-1].value  # type: ignore
 
 
 def test_create_asset_promotion_embed() -> None:
@@ -1093,21 +1131,26 @@ def test_build_radar_scan_embed_renders_field_formulas_consistently() -> None:
         }
     ]
 
-    with patch(
-        "database.notifications.get_user_notification_settings",
-        return_value={
-            "radar_macro_edge": False,
-            "radar_alpha_signals": True,
-            "radar_risk_defenses": True,
-        },
-    ), patch("database.orders.get_user_active_orders", return_value=[]), patch(
-        "database.get_full_user_context",
-        return_value=SimpleNamespace(
-            can_trade_spreads=True, cash_reserve_protection=True
+    with (
+        patch(
+            "database.notifications.get_user_notification_settings",
+            return_value={
+                "radar_macro_edge": False,
+                "radar_alpha_signals": True,
+                "radar_risk_defenses": True,
+            },
         ),
-    ), patch(
-        "market_analysis.insights_engine.InsightsEngine.generate_cro_insight",
-        return_value=(None, None, None),
+        patch("database.orders.get_user_active_orders", return_value=[]),
+        patch(
+            "database.get_full_user_context",
+            return_value=SimpleNamespace(
+                can_trade_spreads=True, cash_reserve_protection=True
+            ),
+        ),
+        patch(
+            "market_analysis.insights_engine.InsightsEngine.generate_cro_insight",
+            return_value=(None, None, None),
+        ),
     ):
         embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
 
@@ -1157,21 +1200,26 @@ def test_build_radar_scan_embed_rebuilds_expected_move_bounds_from_reference_pri
         }
     ]
 
-    with patch(
-        "database.notifications.get_user_notification_settings",
-        return_value={
-            "radar_macro_edge": False,
-            "radar_alpha_signals": True,
-            "radar_risk_defenses": True,
-        },
-    ), patch("database.orders.get_user_active_orders", return_value=[]), patch(
-        "database.get_full_user_context",
-        return_value=SimpleNamespace(
-            can_trade_spreads=True, cash_reserve_protection=True
+    with (
+        patch(
+            "database.notifications.get_user_notification_settings",
+            return_value={
+                "radar_macro_edge": False,
+                "radar_alpha_signals": True,
+                "radar_risk_defenses": True,
+            },
         ),
-    ), patch(
-        "market_analysis.insights_engine.InsightsEngine.generate_cro_insight",
-        return_value=(None, None, None),
+        patch("database.orders.get_user_active_orders", return_value=[]),
+        patch(
+            "database.get_full_user_context",
+            return_value=SimpleNamespace(
+                can_trade_spreads=True, cash_reserve_protection=True
+            ),
+        ),
+        patch(
+            "market_analysis.insights_engine.InsightsEngine.generate_cro_insight",
+            return_value=(None, None, None),
+        ),
     ):
         embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
 
@@ -1210,21 +1258,26 @@ def test_build_radar_scan_embed_gp_wall_polarity_dynamics() -> None:
         }
     ]
 
-    with patch(
-        "database.notifications.get_user_notification_settings",
-        return_value={
-            "radar_macro_edge": False,
-            "radar_alpha_signals": True,
-            "radar_risk_defenses": True,
-        },
-    ), patch("database.orders.get_user_active_orders", return_value=[]), patch(
-        "database.get_full_user_context",
-        return_value=SimpleNamespace(
-            can_trade_spreads=True, cash_reserve_protection=True
+    with (
+        patch(
+            "database.notifications.get_user_notification_settings",
+            return_value={
+                "radar_macro_edge": False,
+                "radar_alpha_signals": True,
+                "radar_risk_defenses": True,
+            },
         ),
-    ), patch(
-        "market_analysis.insights_engine.InsightsEngine.generate_cro_insight",
-        return_value=(None, None, None),
+        patch("database.orders.get_user_active_orders", return_value=[]),
+        patch(
+            "database.get_full_user_context",
+            return_value=SimpleNamespace(
+                can_trade_spreads=True, cash_reserve_protection=True
+            ),
+        ),
+        patch(
+            "market_analysis.insights_engine.InsightsEngine.generate_cro_insight",
+            return_value=(None, None, None),
+        ),
     ):
         embeds_a = build_radar_scan_embed(scan_results_below_pw, "ALL", 12345)
 
@@ -1267,21 +1320,26 @@ def test_build_radar_scan_embed_gp_wall_polarity_dynamics() -> None:
         }
     ]
 
-    with patch(
-        "database.notifications.get_user_notification_settings",
-        return_value={
-            "radar_macro_edge": False,
-            "radar_alpha_signals": True,
-            "radar_risk_defenses": True,
-        },
-    ), patch("database.orders.get_user_active_orders", return_value=[]), patch(
-        "database.get_full_user_context",
-        return_value=SimpleNamespace(
-            can_trade_spreads=True, cash_reserve_protection=True
+    with (
+        patch(
+            "database.notifications.get_user_notification_settings",
+            return_value={
+                "radar_macro_edge": False,
+                "radar_alpha_signals": True,
+                "radar_risk_defenses": True,
+            },
         ),
-    ), patch(
-        "market_analysis.insights_engine.InsightsEngine.generate_cro_insight",
-        return_value=(None, None, None),
+        patch("database.orders.get_user_active_orders", return_value=[]),
+        patch(
+            "database.get_full_user_context",
+            return_value=SimpleNamespace(
+                can_trade_spreads=True, cash_reserve_protection=True
+            ),
+        ),
+        patch(
+            "market_analysis.insights_engine.InsightsEngine.generate_cro_insight",
+            return_value=(None, None, None),
+        ),
     ):
         embeds_b = build_radar_scan_embed(scan_results_above_pw, "ALL", 12345)
 
@@ -1319,21 +1377,26 @@ def test_build_radar_scan_embed_gp_wall_polarity_dynamics() -> None:
         }
     ]
 
-    with patch(
-        "database.notifications.get_user_notification_settings",
-        return_value={
-            "radar_macro_edge": False,
-            "radar_alpha_signals": True,
-            "radar_risk_defenses": True,
-        },
-    ), patch("database.orders.get_user_active_orders", return_value=[]), patch(
-        "database.get_full_user_context",
-        return_value=SimpleNamespace(
-            can_trade_spreads=True, cash_reserve_protection=True
+    with (
+        patch(
+            "database.notifications.get_user_notification_settings",
+            return_value={
+                "radar_macro_edge": False,
+                "radar_alpha_signals": True,
+                "radar_risk_defenses": True,
+            },
         ),
-    ), patch(
-        "market_analysis.insights_engine.InsightsEngine.generate_cro_insight",
-        return_value=(None, None, None),
+        patch("database.orders.get_user_active_orders", return_value=[]),
+        patch(
+            "database.get_full_user_context",
+            return_value=SimpleNamespace(
+                can_trade_spreads=True, cash_reserve_protection=True
+            ),
+        ),
+        patch(
+            "market_analysis.insights_engine.InsightsEngine.generate_cro_insight",
+            return_value=(None, None, None),
+        ),
     ):
         embeds_crwv = build_radar_scan_embed(scan_results_crwv, "ALL", 12345)
 
@@ -1494,21 +1557,26 @@ def test_build_radar_scan_embed_all_enhanced_fields() -> None:
         },
     ]
 
-    with patch(
-        "database.notifications.get_user_notification_settings",
-        return_value={
-            "radar_macro_edge": False,
-            "radar_alpha_signals": True,
-            "radar_risk_defenses": True,
-        },
-    ), patch("database.orders.get_user_active_orders", return_value=[]), patch(
-        "database.get_full_user_context",
-        return_value=SimpleNamespace(
-            can_trade_spreads=True, cash_reserve_protection=True
+    with (
+        patch(
+            "database.notifications.get_user_notification_settings",
+            return_value={
+                "radar_macro_edge": False,
+                "radar_alpha_signals": True,
+                "radar_risk_defenses": True,
+            },
         ),
-    ), patch(
-        "market_analysis.insights_engine.InsightsEngine.generate_cro_insight",
-        return_value=(None, None, None),
+        patch("database.orders.get_user_active_orders", return_value=[]),
+        patch(
+            "database.get_full_user_context",
+            return_value=SimpleNamespace(
+                can_trade_spreads=True, cash_reserve_protection=True
+            ),
+        ),
+        patch(
+            "market_analysis.insights_engine.InsightsEngine.generate_cro_insight",
+            return_value=(None, None, None),
+        ),
     ):
         embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
 
