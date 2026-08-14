@@ -298,6 +298,11 @@ SETTINGS_LABELS = {
         "Polymarket 巨鯨判定目標滑價百分比 (0.1% - 10.0%)",
         "輸入 0.1 - 10.0 之間的百分比",
     ),
+    "escape_window": (
+        "📅 宏觀逃頂窗口 (起~訖)",
+        "設定自訂逃頂窗口 (MM-DD ~ MM-DD，如 09-15 ~ 09-30)",
+        "09-15 ~ 09-30",
+    ),
 }
 
 
@@ -307,7 +312,7 @@ class AccountSettingsModal(discord.ui.Modal):
         user_id: int,
         key: str,
         label: str,
-        current_value: float,
+        current_value: Any,
         placeholder: str,
         view: discord.ui.View,
     ):
@@ -328,6 +333,59 @@ class AccountSettingsModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction) -> Any:
         value_str = self.input_field.value.strip()
+
+        if self.key == "escape_window":
+            import re
+
+            m = re.search(
+                r"(\d{1,2})-(\d{1,2})\s*[\~\,\-至到]\s*(\d{1,2})-(\d{1,2})",
+                value_str,
+            )
+            if not m:
+                await interaction.response.send_message(
+                    embed=create_error_embed(
+                        "逃頂窗口格式錯誤，請使用 MM-DD ~ MM-DD 格式 (例如 09-15 ~ 09-30)",
+                        title="輸入錯誤",
+                    ),
+                    ephemeral=True,
+                )
+                return
+            sm, sd, em, ed = map(int, m.groups())
+            if not (
+                1 <= sm <= 12 and 1 <= sd <= 31 and 1 <= em <= 12 and 1 <= ed <= 31
+            ):
+                await interaction.response.send_message(
+                    embed=create_error_embed(
+                        "月份 (1-12) 或日期 (1-31) 超出有效範圍",
+                        title="驗證失敗",
+                    ),
+                    ephemeral=True,
+                )
+                return
+            start_str = f"{sm:02d}-{sd:02d}"
+            end_str = f"{em:02d}-{ed:02d}"
+            database.upsert_user_config(
+                self.user_id,
+                escape_window_start=start_str,
+                escape_window_end=end_str,
+            )
+            if (
+                self.view is not None
+                and hasattr(self.view, "refresh_items")
+                and hasattr(self.view, "build_embed")
+            ):
+                getattr(self.view, "refresh_items")()
+                embed = getattr(self.view, "build_embed")()
+                await interaction.response.edit_message(embed=embed, view=self.view)
+            else:
+                await interaction.response.send_message(
+                    embed=create_info_embed(
+                        title="系統資訊", message="✅ 逃頂窗口已成功更新！"
+                    ),
+                    ephemeral=True,
+                )
+            return
+
         try:
             val = float(value_str)
         except ValueError:
@@ -436,6 +494,8 @@ class AccountSettingsView(discord.ui.View):
                 val_display = f"{raw_val}%"
             elif key == "tax_reserve_rate":
                 val_display = f"{raw_val:.1%}"
+            elif key == "escape_window":
+                val_display = f"{ctx.escape_window_start} ~ {ctx.escape_window_end}"
             else:
                 val_display = str(raw_val)
 
@@ -475,22 +535,26 @@ class AccountSettingsView(discord.ui.View):
             "can_trade_spreads",
             "cash_reserve_protection",
         ]:
-            current_val = getattr(ctx, key, False)
-            new_val = not current_val
+            current_bool = getattr(ctx, key, False)
+            new_val = not current_bool
             database.upsert_user_config(self.user_id, **{key: new_val})
 
             self.refresh_items()
             embed = self.build_embed()
             await interaction.response.edit_message(embed=embed, view=self)
         else:
-            # 針對數值類型，彈出 Modal 視窗
-            current_val = getattr(ctx, key, 0.0)
+            # 針對數值/字串類型，彈出 Modal 視窗
+            modal_val: Any
+            if key == "escape_window":
+                modal_val = f"{ctx.escape_window_start} ~ {ctx.escape_window_end}"
+            else:
+                modal_val = getattr(ctx, key, 0.0)
             label, desc, placeholder = SETTINGS_LABELS[key]
             modal = AccountSettingsModal(
                 user_id=self.user_id,
                 key=key,
                 label=label,
-                current_value=current_val,
+                current_value=modal_val,
                 placeholder=placeholder or "",
                 view=self,
             )
@@ -503,6 +567,7 @@ class AccountSettingsView(discord.ui.View):
         basic_settings = [
             f"💰 **總資金**: `${ctx.capital:,.2f}` *(自動計算)*",
             f"🛡️ **基準風險上限**: `{ctx.risk_limit}%`",
+            f"📅 **宏觀逃頂窗口**: `{ctx.escape_window_start} ~ {ctx.escape_window_end}`",
             f"👻 **虛擬交易室 (VTR) 跟單**: `{'🟢 開啟' if ctx.enable_vtr else '🔴 關閉'}`",
             f"⚡ **PowerSqueeze 追蹤**: `{'🟢 開啟' if ctx.enable_psq_watchlist else '🔴 關閉'}`",
             f"🛜 **本地 Tunnel 呼叫**: `{'🟢 開啟' if ctx.enable_local_tunnel else '🔴 關閉'}`",

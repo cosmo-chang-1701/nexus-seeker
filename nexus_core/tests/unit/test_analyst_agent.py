@@ -463,45 +463,105 @@ async def test_run_fomc_escape_window_analysis_dynamic_period_labels() -> None:
     user_ctx.escape_window_start = "10-15"  # 15th is "中旬"
     user_ctx.escape_window_end = "10-25"  # 25th is "下旬"
 
-    # Case 1: Hawkish (prob = 0.85 > 0.70)
+    # Case 1: Hawkish / Tightening (prob = 0.85 > 0.70, negative gamma critical)
     with patch("sqlite3.connect") as mock_conn, patch(
         "database.user_settings.get_full_user_context", return_value=user_ctx
-    ), patch("cogs.embed_builder.create_fomc_escape_window_embed") as mock_create_embed:
-        # Mock DB select to return prob = 0.85
+    ), patch(
+        "cogs.embed_builder.create_fomc_escape_window_embed"
+    ) as mock_create_embed, patch(
+        "database.cache.get_kv_cache",
+        side_effect=lambda k: 1 if k == "macro_short_gamma_critical" else None,
+    ), patch(
+        "market_analysis.analyst_runners.strategy_runner.get_vix_term_structure",
+        new_callable=AsyncMock,
+        return_value={"vts_ratio": 1.05, "vts_state": "Backwardation"},
+    ):
         mock_cursor = mock_conn.return_value.__enter__.return_value.cursor.return_value
         mock_cursor.fetchone.return_value = {"fedwatch_probability": 0.85}
 
         await agent.run_fomc_escape_window_analysis(12345)
 
-        # Verify dynamic labels for adjusted dates
-        # start: 15 + 5 = 20 -> "中旬"
-        # end: 25 + 5 = 30 -> "下旬"
-        mock_create_embed.assert_called_once()
-        kwargs = mock_create_embed.call_args.kwargs
-        assert kwargs["direction"] == "後推"
-        assert "10月中旬" in kwargs["adjusted_start"]
-        assert "10月下旬" in kwargs["adjusted_end"]
-        assert "10月中旬至10月下旬" in kwargs["reason"]
-
-    # Case 2: Dovish (prob = 0.45 <= 0.70)
-    with patch("sqlite3.connect") as mock_conn, patch(
-        "database.user_settings.get_full_user_context", return_value=user_ctx
-    ), patch("cogs.embed_builder.create_fomc_escape_window_embed") as mock_create_embed:
-        # Mock DB select to return prob = 0.45
-        mock_cursor = mock_conn.return_value.__enter__.return_value.cursor.return_value
-        mock_cursor.fetchone.return_value = {"fedwatch_probability": 0.45}
-
-        await agent.run_fomc_escape_window_analysis(12345)
-
-        # Verify dynamic labels for adjusted dates
-        # start: 15 - 5 = 10 -> "上旬"
-        # end: 25 - 5 = 20 -> "中旬"
         mock_create_embed.assert_called_once()
         kwargs = mock_create_embed.call_args.kwargs
         assert kwargs["direction"] == "前移"
-        assert "10月上旬" in kwargs["adjusted_start"]
-        assert "10月中旬" in kwargs["adjusted_end"]
-        assert "10月中旬至10月下旬" in kwargs["reason"]
+        assert "🚨 收縮警戒" in kwargs["tier_title"]
+        assert "10月" in kwargs["adjusted_start"]
+        assert kwargs["shift_days"] in [5, 8]
+        assert "前移" in kwargs["reason"]
+
+    # Case 2: Dovish / Expansion (prob = 0.35 <= 0.40, cool inflation, positive gamma)
+    with patch("sqlite3.connect") as mock_conn, patch(
+        "database.user_settings.get_full_user_context", return_value=user_ctx
+    ), patch(
+        "cogs.embed_builder.create_fomc_escape_window_embed"
+    ) as mock_create_embed, patch(
+        "database.cache.get_kv_cache",
+        side_effect=lambda k: 70.0
+        if k == "macro_wti"
+        else (0.0 if k == "macro_cpi_deviation" else None),
+    ), patch(
+        "market_analysis.analyst_runners.strategy_runner.get_vix_term_structure",
+        new_callable=AsyncMock,
+        return_value={"vts_ratio": 0.82, "vts_state": "Contango"},
+    ):
+        mock_cursor = mock_conn.return_value.__enter__.return_value.cursor.return_value
+        mock_cursor.fetchone.return_value = {"fedwatch_probability": 0.35}
+
+        await agent.run_fomc_escape_window_analysis(12345)
+
+        mock_create_embed.assert_called_once()
+        kwargs = mock_create_embed.call_args.kwargs
+        assert kwargs["direction"] == "後推"
+        assert "🟢 寬鬆擴張" in kwargs["tier_title"]
+        assert kwargs["shift_days"] == 5
+        assert "後推" in kwargs["reason"]
+
+    # Case 3: Neutral Balance (prob = 0.55)
+    with patch("sqlite3.connect") as mock_conn, patch(
+        "database.user_settings.get_full_user_context", return_value=user_ctx
+    ), patch(
+        "cogs.embed_builder.create_fomc_escape_window_embed"
+    ) as mock_create_embed, patch(
+        "database.cache.get_kv_cache", return_value=None
+    ), patch(
+        "market_analysis.analyst_runners.strategy_runner.get_vix_term_structure",
+        new_callable=AsyncMock,
+        return_value={"vts_ratio": 0.92, "vts_state": "Contango"},
+    ):
+        mock_cursor = mock_conn.return_value.__enter__.return_value.cursor.return_value
+        mock_cursor.fetchone.return_value = {"fedwatch_probability": 0.55}
+
+        await agent.run_fomc_escape_window_analysis(12345)
+
+        mock_create_embed.assert_called_once()
+        kwargs = mock_create_embed.call_args.kwargs
+        assert kwargs["direction"] == "維持"
+        assert kwargs["shift_days"] == 0
+        assert "🟡 中性平衡" in kwargs["tier_title"]
+
+    # Case 4: Expired setting auto-rollover
+    expired_ctx = MagicMock()
+    expired_ctx.escape_window_start = "01-15"
+    expired_ctx.escape_window_end = "01-31"
+    with patch("sqlite3.connect") as mock_conn, patch(
+        "database.user_settings.get_full_user_context", return_value=expired_ctx
+    ), patch(
+        "cogs.embed_builder.create_fomc_escape_window_embed"
+    ) as mock_create_embed, patch(
+        "database.cache.get_kv_cache", return_value=None
+    ), patch(
+        "market_analysis.analyst_runners.strategy_runner.get_vix_term_structure",
+        new_callable=AsyncMock,
+        return_value={"vts_ratio": 0.92, "vts_state": "Contango"},
+    ):
+        mock_cursor = mock_conn.return_value.__enter__.return_value.cursor.return_value
+        mock_cursor.fetchone.return_value = {"fedwatch_probability": 0.50}
+
+        await agent.run_fomc_escape_window_analysis(12345)
+
+        mock_create_embed.assert_called_once()
+        kwargs = mock_create_embed.call_args.kwargs
+        assert kwargs["was_auto_rolled"] is True
 
 
 def test_get_all_portfolio_includes_holdings() -> None:

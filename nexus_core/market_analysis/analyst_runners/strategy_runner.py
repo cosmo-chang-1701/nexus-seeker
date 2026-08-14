@@ -6,7 +6,7 @@ from typing import Any
 import logging
 import math
 import sqlite3
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 from typing import Optional
 
 import discord
@@ -92,10 +92,73 @@ async def run_next_day_strategy(fetch_macro_fn: Any) -> str:
     return report
 
 
+def _shift_business_days(start_date: date, num_days: int) -> date:
+    """Shift date by a number of business days (positive or negative)."""
+    if num_days == 0:
+        return start_date
+    current = start_date
+    step = 1 if num_days > 0 else -1
+    remaining = abs(num_days)
+    while remaining > 0:
+        current += timedelta(days=step)
+        if current.weekday() < 5:  # Monday to Friday (0-4)
+            remaining -= 1
+    return current
+
+
+def _find_next_window_month(cur_month: int) -> int:
+    """Find the next cyclical liquidity/OpEx month (Mar, Jun, Sep, Dec)."""
+    quarter_months = [3, 6, 9, 12]
+    for qm in quarter_months:
+        if qm >= cur_month:
+            return qm
+    return 3  # next year March
+
+
+def _resolve_escape_window(
+    start_setting: str,
+    end_setting: str,
+    ref_date: date,
+) -> tuple[date, date, bool, str]:
+    """Resolve escape window dates, auto-rolling to next quarterly cycle if expired."""
+    try:
+        start_m, start_d = map(int, start_setting.split("-"))
+        end_m, end_d = map(int, end_setting.split("-"))
+    except Exception:
+        start_m, start_d = 7, 15
+        end_m, end_d = 7, 31
+
+    cur_year = ref_date.year
+    orig_label = (
+        f"{start_m}月{_get_period_label(start_d)}至{end_m}月{_get_period_label(end_d)}"
+    )
+
+    # Determine if current setting is expired (more than 7 days past end date)
+    def _safe_date(year: int, month: int, day: int) -> date:
+        import calendar
+
+        max_day = calendar.monthrange(year, month)[1]
+        return date(year, month, min(day, max_day))
+
+    user_start_date = _safe_date(cur_year, start_m, start_d)
+    user_end_date = _safe_date(cur_year, end_m, end_d)
+
+    was_auto_rolled = False
+    if ref_date > user_end_date + timedelta(days=7):
+        was_auto_rolled = True
+        rolled_month = _find_next_window_month(ref_date.month)
+        roll_year = cur_year if rolled_month >= ref_date.month else cur_year + 1
+        # Maintain user day offset preferences (e.g. 15th to end of month)
+        user_start_date = _safe_date(roll_year, rolled_month, start_d)
+        user_end_date = _safe_date(roll_year, rolled_month, end_d)
+
+    return user_start_date, user_end_date, was_auto_rolled, orig_label
+
+
 async def run_fomc_escape_window_analysis(
     user_id: int,
 ) -> Optional[discord.Embed]:
-    """Dynamically compute FOMC-adjusted escape window and return a styled Embed."""
+    """Dynamically compute Multi-Factor Macro Liquidity Escape Matrix and return a styled Embed."""
     import config
 
     # 1. 取得 FedWatch 概率
@@ -129,27 +192,39 @@ async def run_fomc_escape_window_analysis(
         logger.warning(f"查詢 SQLite FOMC FedWatch 概率失敗: {e}")
         is_fallback = True
 
-    # 2. 載入使用者自訂逃頂窗口
+    # 2. 載入使用者自訂逃頂窗口與自動滾動判定
     from database.user_settings import get_full_user_context
 
     ctx = get_full_user_context(user_id)
     start_setting = ctx.escape_window_start if ctx else "07-15"
     end_setting = ctx.escape_window_end if ctx else "07-31"
 
-    try:
-        start_m, start_d = map(int, start_setting.split("-"))
-        end_m, end_d = map(int, end_setting.split("-"))
-    except Exception:
-        start_m, start_d = 7, 15
-        end_m, end_d = 7, 31
+    now_tw = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
+    ref_date = now_tw.date()
 
-    custom_period_label = (
-        f"{start_m}月{_get_period_label(start_d)}至{end_m}月{_get_period_label(end_d)}"
+    start_date, end_date, was_auto_rolled, orig_label = _resolve_escape_window(
+        start_setting, end_setting, ref_date
     )
 
-    # 3. 通膨 / 油價修飾因子
+    # 3. 收集四大宏觀因子
     from database.cache import get_kv_cache
 
+    tightening_score = 0
+    easing_score = 0
+    factors_summary: list[tuple[str, str]] = []
+
+    # Factor 1: FedWatch 利率定價
+    if prob > 0.70:
+        tightening_score += 1
+        f1_val = f"\u001b[1;31m🚨 鷹派/維持高位 ({prob * 100:.1f}%)\u001b[0m"
+    elif prob <= 0.40:
+        easing_score += 1
+        f1_val = f"\u001b[1;32m🟢 降息預期確立 ({prob * 100:.1f}%)\u001b[0m"
+    else:
+        f1_val = f"\u001b[1;33m🟡 均衡定價 ({prob * 100:.1f}%)\u001b[0m"
+    factors_summary.append(("FOMC 利率定價 (FedWatch)", f1_val))
+
+    # Factor 2: 通膨與能源 (CPI / WTI)
     cpi_actual = get_kv_cache("macro_cpi_actual")
     cpi_expected = get_kv_cache("macro_cpi_expected")
     cpi_dev = (
@@ -158,55 +233,96 @@ async def run_fomc_escape_window_analysis(
         else (get_kv_cache("macro_cpi_deviation") or 0.0)
     )
     wti = get_kv_cache("macro_wti") or 75.0
-    is_inflation_high = (cpi_dev > 0.1) or (wti > 85.0)
 
-    should_advance = is_inflation_high or (prob <= 0.70)
-    shift_days = 5
-
-    if should_advance:
-        adj_start_d = start_d - shift_days
-        adj_end_d = end_d - shift_days
-        adj_start_m = start_m
-        adj_end_m = end_m
-        if adj_start_d <= 0:
-            adj_start_d += 30
-            adj_start_m = 12 if start_m == 1 else start_m - 1
-        if adj_end_d <= 0:
-            adj_end_d += 30
-            adj_end_m = 12 if end_m == 1 else end_m - 1
-
-        adjusted_start = f"{adj_start_m}月{_get_period_label(adj_start_d)} (約 {adj_start_m:02d}-{adj_start_d:02d})"
-        adjusted_end = f"{adj_end_m}月{_get_period_label(adj_end_d)} (約 {adj_end_m:02d}-{adj_end_d:02d})"
-        direction = "前移"
-        if is_inflation_high:
-            reason = (
-                f"由於核心 CPI/PCE 高於預期 ({cpi_dev:+.2f}%) 或 WTI 油價達 ${wti:.1f} 觸及通膨高風險閾值，"
-                f"通膨壓力上升可能導致政策收緊。系統自動將您自訂的 {custom_period_label} 反彈逃頂窗口前移 {shift_days} 個交易日，提示需提前防禦撤退。"
-            )
-        else:
-            reason = (
-                f"由於下週 FOMC 維持高利率/加息機率僅 {prob*100:.1f}%，小於 70% 臨界值，市場預期利空出盡。"
-                f"系統自動將您自訂的 {custom_period_label} 反彈逃頂窗口前移 {shift_days} 個交易日，提示多頭反彈可能提前發酵，需作好提前撤退部署。"
-            )
+    if (cpi_dev > 0.1) or (wti > 85.0):
+        tightening_score += 1
+        f2_val = f"\u001b[1;31m🚨 通膨偏高 (WTI ${wti:.1f}, CPI偏差 {cpi_dev:+.2f}%)\u001b[0m"
+    elif (cpi_dev <= 0.0) and (wti <= 80.0):
+        easing_score += 1
+        f2_val = f"\u001b[1;32m🟢 通膨平穩 (WTI ${wti:.1f}, CPI偏差 {cpi_dev:+.2f}%)\u001b[0m"
     else:
-        adj_start_d = start_d + shift_days
-        adj_end_d = end_d + shift_days
-        adj_start_m = start_m
-        adj_end_m = end_m
-        if adj_start_d > 30:
-            adj_start_d -= 30
-            adj_start_m = 1 if start_m == 12 else start_m + 1
-        if adj_end_d > 30:
-            adj_end_d -= 30
-            adj_end_m = 1 if end_m == 12 else end_m + 1
+        f2_val = f"\u001b[1;33m🟡 通膨受控 (WTI ${wti:.1f}, CPI偏差 {cpi_dev:+.2f}%)\u001b[0m"
+    factors_summary.append(("通膨與油價壓力 (CPI/WTI)", f2_val))
 
-        adjusted_start = f"{adj_start_m}月{_get_period_label(adj_start_d)} (約 {adj_start_m:02d}-{adj_start_d:02d})"
-        adjusted_end = f"{adj_end_m}月{_get_period_label(adj_end_d)} (約 {adj_end_m:02d}-{adj_end_d:02d})"
-        direction = "後推"
-        reason = (
-            f"由於通膨與油價數據放緩 (WTI: ${wti:.1f}, CPI偏差: {cpi_dev:+.2f}%) 且下週 FOMC 維持高利率機率為 {prob*100:.1f}%，"
-            f"市場流動性緊縮預期減弱。系統自動將您自訂的 {custom_period_label} 反彈逃頂窗口後推 {shift_days} 個交易日，建議延後多頭撤退計劃。"
+    # Factor 3: VIX 期限結構 (VTS)
+    vts_ratio = 0.88
+    try:
+        vts_data = await get_vix_term_structure()
+        vts_ratio = vts_data.get("vts_ratio", 0.88)
+    except Exception as e:
+        logger.warning(f"取得 VTS 期限結構失敗: {e}")
+
+    if vts_ratio >= 1.0:
+        tightening_score += 1
+        f3_val = f"\u001b[1;31m🚨 期限倒掛 (VTS: {vts_ratio:.3f})\u001b[0m"
+    elif vts_ratio < 0.90:
+        easing_score += 1
+        f3_val = f"\u001b[1;32m🟢 正價差健康 (VTS: {vts_ratio:.3f})\u001b[0m"
+    else:
+        f3_val = f"\u001b[1;33m🟡 期限正常 (VTS: {vts_ratio:.3f})\u001b[0m"
+    factors_summary.append(("恐慌期限結構 (VIX Term)", f3_val))
+
+    # Factor 4: 大盤 Gamma 翻轉線與微觀結構
+    is_negative_gamma = bool(get_kv_cache("macro_short_gamma_critical"))
+    if is_negative_gamma:
+        tightening_score += 1
+        f4_val = "\u001b[1;31m🚨 負 Gamma 踩踏加速區\u001b[0m"
+    else:
+        easing_score += 1
+        f4_val = "\u001b[1;32m🟢 正 Gamma 護航區\u001b[0m"
+    factors_summary.append(("大盤微觀結構 (SPY GEX)", f4_val))
+
+    # 4. 三階矩陣狀態評估
+    if tightening_score >= 2 or (prob > 0.70 and is_negative_gamma):
+        # 🚨 階梯 1：收縮警戒 (Tightening)
+        direction = "前移"
+        shift_days = 8 if tightening_score >= 3 else 5
+        tier_title = "🚨 收縮警戒 (Tightening Contraction)"
+        tactical_directive = (
+            "🚨 **提前防禦撤退**：宏觀流動性收緊與估值回殺風險加劇，多頭反彈窗口受限，"
+            "建議於窗口初段逢高分批減倉、收緊防守停損線並全面封鎖裸賣策略。"
         )
+        reason = (
+            f"宏觀流動性矩陣偵測到 {tightening_score} 項緊縮特徵（如 FedWatch 維持高利率機率達 {prob * 100:.1f}% 或通膨/結構承壓）。"
+            f"為防範估值回殺與流動性衰竭，系統自動將自訂反彈逃頂窗口前移 {shift_days} 個交易日，提示需提前啟動防禦部署。"
+        )
+        adj_start_date = _shift_business_days(start_date, -shift_days)
+        adj_end_date = _shift_business_days(end_date, -shift_days)
+
+    elif prob <= 0.40 and easing_score >= 2 and tightening_score == 0:
+        # 🟢 階梯 2：寬鬆擴張 (Expansion)
+        direction = "後推"
+        shift_days = 5
+        tier_title = "🟢 寬鬆擴張 (Liquidity Expansion)"
+        tactical_directive = (
+            "🟢 **延後抱牢反彈**：寬鬆流動性預期與正 Gamma 結構護航，多頭動能延續性強，"
+            "建議延後撤退時機、讓利潤奔馳，可適度提高風險偏好。"
+        )
+        reason = (
+            f"宏觀流動性矩陣呈現寬鬆擴張格局（FedWatch 維持高利率機率僅 {prob * 100:.1f}%、通膨放緩且大盤結構健康）。"
+            f"系統自動將自訂反彈逃頂窗口後推 {shift_days} 個交易日，建議延後多頭撤退時機、充分享受流動性溢價。"
+        )
+        adj_start_date = _shift_business_days(start_date, shift_days)
+        adj_end_date = _shift_business_days(end_date, shift_days)
+
+    else:
+        # 🟡 階梯 3：中性平衡 (Neutral)
+        direction = "維持"
+        shift_days = 0
+        tier_title = "🟡 中性平衡 (Neutral Balance)"
+        tactical_directive = (
+            "🟡 **正常波段護航**：各項宏觀流動性因子處於均衡區間，"
+            "建議按原定計畫嚴守關鍵支撐與壓力關卡，執行標準網格防禦。"
+        )
+        reason = (
+            f"當前 FedWatch 利率定價 ({prob * 100:.1f}%) 與各項總經流動性因子處於常態均衡區間。"
+            "系統評估反彈逃頂窗口維持原訂日程 (偏移 0 天)，建議持續監控大盤結構變化。"
+        )
+        adj_start_date = start_date
+        adj_end_date = end_date
+
+    adjusted_start = f"{adj_start_date.month}月{_get_period_label(adj_start_date.day)} ({adj_start_date.strftime('%m-%d')})"
+    adjusted_end = f"{adj_end_date.month}月{_get_period_label(adj_end_date.day)} ({adj_end_date.strftime('%m-%d')})"
 
     from cogs.embed_builder import create_fomc_escape_window_embed
 
@@ -218,4 +334,9 @@ async def run_fomc_escape_window_analysis(
         adjusted_end=adjusted_end,
         reason=reason,
         is_fallback=is_fallback,
+        tier_title=tier_title,
+        tactical_directive=tactical_directive,
+        factors_summary=factors_summary,
+        was_auto_rolled=was_auto_rolled,
+        original_window_label=orig_label,
     )

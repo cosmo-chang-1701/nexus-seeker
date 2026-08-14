@@ -253,3 +253,51 @@ async def test_settings_capital_auto_calculation(db_conn: Any):  # type: ignore
     # 驗證自動計算的總資金：5000.0 (cash) + 1500.0 (holding) + 500.0 (option) = 7000.0
     ctx = database.get_full_user_context(user_id)
     assert ctx.capital == 7000.0
+
+
+@pytest.mark.asyncio
+async def test_settings_modal_escape_window_validation_and_submission(db_conn: Any):  # type: ignore
+    """測試逃頂窗口格式驗證與正常送出"""
+    user_id = 999888
+    view = AccountSettingsView(user_id)
+    modal = AccountSettingsModal(
+        user_id=user_id,
+        key="escape_window",
+        label="📅 宏觀逃頂窗口 (起~訖)",
+        current_value="09-15 ~ 09-30",
+        placeholder="09-15 ~ 09-30",
+        view=view,
+    )
+
+    # 1. 格式不正確
+    modal.input_field._value = "invalid_format"
+    mock_interaction = AsyncMock()
+    mock_interaction.response.send_message = AsyncMock()
+    await modal.on_submit(mock_interaction)
+    mock_interaction.response.send_message.assert_called_once()
+    assert (
+        "格式錯誤"
+        in mock_interaction.response.send_message.call_args[1]["embed"].description
+    )
+
+    # 2. 月份超出範圍 (13月)
+    modal.input_field._value = "13-01 ~ 10-20"
+    mock_interaction = AsyncMock()
+    mock_interaction.response.send_message = AsyncMock()
+    await modal.on_submit(mock_interaction)
+    mock_interaction.response.send_message.assert_called_once()
+    assert (
+        "超出有效範圍"
+        in mock_interaction.response.send_message.call_args[1]["embed"].description
+    )
+
+    # 3. 正常送出
+    modal.input_field._value = "08-20 ~ 09-10"
+    mock_interaction = AsyncMock()
+    mock_interaction.response.edit_message = AsyncMock()
+    await modal.on_submit(mock_interaction)
+
+    ctx = database.get_full_user_context(user_id)
+    assert ctx.escape_window_start == "08-20"
+    assert ctx.escape_window_end == "09-10"
+    mock_interaction.response.edit_message.assert_called_once()

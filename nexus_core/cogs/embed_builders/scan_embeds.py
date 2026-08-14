@@ -512,36 +512,85 @@ def create_fomc_escape_window_embed(
     adjusted_end: str,
     reason: str,
     is_fallback: bool = False,
+    tier_title: str | None = None,
+    tactical_directive: str | None = None,
+    factors_summary: list[tuple[str, str]] | None = None,
+    was_auto_rolled: bool = False,
+    original_window_label: str = "",
 ) -> discord.Embed:
-    """建立方案 C 逃頂窗口推演 Embed (繁體中文)"""
-    color = discord.Color.red() if direction == "後推" else discord.Color.green()
-    title_text = "📅 方案 C 逃頂窗口推演 (FOMC / FedWatch 宏觀警報)"
+    """建立方案 C 全維度宏觀流動性逃頂矩陣 Embed (繁體中文)"""
+    if direction == "前移":
+        color = discord.Color(0xE74C3C)  # Red for tightening risk defense
+    elif direction == "後推":
+        color = discord.Color(0x2ECC71)  # Green for liquidity expansion risk-on
+    else:
+        color = discord.Color(0xF1C40F)  # Yellow/Gold for neutral balance
+
+    title_text = "📅 方案 C 宏觀流動性逃頂矩陣 (Macro Escape Matrix)"
     if is_fallback:
         title_text += " [歷史快取/備援]"
     embed = NexusEmbed(title=title_text, color=color)
 
-    prob_suffix = " *(歷史快取/備援)*" if is_fallback else ""
-    embed.add_field(
-        name="📊 利率機率定價 (FedWatch)",
-        value=f"下週 FOMC 維持高利率/加息機率：**{prob * 100:.1f}%**{prob_suffix}",
-        inline=False,
-    )
+    # 1. 矩陣狀態
+    if tier_title:
+        embed.add_field(
+            name="🧭 宏觀流動性狀態",
+            value=f"**{tier_title}**",
+            inline=False,
+        )
 
+    # 2. 多因子看板 (ANSI format)
+    if factors_summary:
+        lines: list[str] = [
+            " 🌐 宏觀流動性多因子看板 (Liquidity Factors)",
+            " ----------------------------------",
+        ]
+        for name, val in factors_summary:
+            lines.append(f" ├─ {name}: {val}")
+        lines[-1] = lines[-1].replace("├─", "└─")
+        panel = "```ansi\n" + "\n".join(lines) + "\n```"
+        embed.add_field(
+            name="📊 多因子監測結果",
+            value=panel,
+            inline=False,
+        )
+    else:
+        prob_suffix = " *(歷史快取/備援)*" if is_fallback else ""
+        embed.add_field(
+            name="📊 利率機率定價 (FedWatch)",
+            value=f"下週 FOMC 維持高利率/加息機率：**{prob * 100:.1f}%**{prob_suffix}",
+            inline=False,
+        )
+
+    # 3. 調整方向與窗口
+    shift_label = (
+        f"**{direction} {shift_days} 個交易日**"
+        if shift_days > 0
+        else f"**{direction} (偏移 0 天)**"
+    )
     embed.add_field(
         name="🔄 逃頂窗口調整方向",
-        value=f"調整方向：**{direction} {shift_days} 個交易日**",
+        value=f"調整方向：{shift_label}",
         inline=True,
     )
 
+    rollover_note = " *(已自動滾動至下季)*" if was_auto_rolled else ""
     embed.add_field(
         name="📆 調整後逃頂窗口預期",
-        value=f"預估窗口：**{adjusted_start}** 至 **{adjusted_end}**",
+        value=f"預估窗口：**{adjusted_start}** 至 **{adjusted_end}**{rollover_note}",
         inline=True,
     )
 
-    embed.add_field(name="💡 推演邏輯與風險分析", value=reason, inline=False)
+    if tactical_directive:
+        embed.add_field(
+            name="🎯 戰術行動指引",
+            value=tactical_directive,
+            inline=False,
+        )
 
-    embed.set_footer(text="方案 C 逃頂推演引擎")
+    embed.add_field(name="💡 推演邏輯與風控分析", value=reason, inline=False)
+
+    embed.set_footer(text="Nexus Risk Engine | 宏觀流動性逃頂推演矩陣")
     return embed
 
 
