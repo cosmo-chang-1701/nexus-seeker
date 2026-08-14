@@ -197,16 +197,27 @@ def create_dynamic_rollover_embed(
     """
 
     # 決定顏色的前綴
-    title = f"🔄 動態轉倉指令: {rollover_type}"
-    color = discord.Color.gold()
-    if "破滅" in rollover_type or "防禦" in rollover_type:
-        color = discord.Color.red()
+    is_hold = (
+        sell_ratio == 0.0
+        or direction == "HOLD"
+        or "HOLD" in rollover_type
+        or "防守" in rollover_type
+    )
+    if is_hold and ("破滅" not in rollover_type and "防禦" not in rollover_type):
+        title = f"🛡️ 持倉防守評估: {rollover_type}"
+        color = discord.Color.teal()
+    else:
+        title = f"🔄 動態轉倉指令: {rollover_type}"
+        color = discord.Color.gold()
+        if "破滅" in rollover_type or "防禦" in rollover_type:
+            color = discord.Color.red()
 
     embed = NexusEmbed(title=title, color=color)
 
     # 1. 核心原因區塊 — 由於字數可能會超過 Discord Field Value 1024 字元上限，改置於 Description
     safe_reason = truncate_with_boundary(reason, _EMBED_DESCRIPTION_SAFE_LIMIT)
-    embed.description = f"**🚨 量化轉倉分析**\n\n{safe_reason}"
+    desc_header = "**🛡️ 灰階量化與防守分析**" if is_hold else "**🚨 量化轉倉分析**"
+    embed.description = f"{desc_header}\n\n{safe_reason}"
 
     # 2. 賣出/平倉指令區塊
     sell_action_full = (
@@ -214,27 +225,47 @@ def create_dynamic_rollover_embed(
         if sell_action == "STC"
         else ("BTC (Buy To Close)" if sell_action == "BTC" else sell_action)
     )
-    sell_text = f"\u001b[0;31m標的: {sell_symbol}\n比例: {sell_ratio*100:.0f}%\n動作: {sell_action_full}\u001b[0m"
-    embed.add_field(
-        name="📤 撤出資金 / 平倉", value=f"```ansi\n{sell_text}\n```", inline=True
-    )
+    if is_hold:
+        sell_text = f"\u001b[0;32m標的: {sell_symbol}\n狀態: HOLD (維持現狀續抱)\n撤出: 0% (未觸發轉倉)\u001b[0m"
+        embed.add_field(
+            name="🛡️ 持倉狀態 / 防守", value=f"```ansi\n{sell_text}\n```", inline=True
+        )
+    else:
+        sell_text = f"\u001b[0;31m標的: {sell_symbol}\n比例: {sell_ratio*100:.0f}%\n動作: {sell_action_full}\u001b[0m"
+        embed.add_field(
+            name="📤 撤出資金 / 平倉", value=f"```ansi\n{sell_text}\n```", inline=True
+        )
 
     # 3. 買入指令區塊
-    buy_text = f"\u001b[0;32m標的: {buy_symbol}\n動作: {direction} (Buy To Open)\n策略: {suggested_strategy}\u001b[0m"
-    embed.add_field(
-        name="📥 轉入資產 (Buy)", value=f"```ansi\n{buy_text}\n```", inline=True
-    )
+    if is_hold:
+        buy_text = f"\u001b[0;36m標的: {buy_symbol}\n動作: HOLD (維持現狀續抱)\n策略: {suggested_strategy}\u001b[0m"
+        embed.add_field(
+            name="📥 當前資產配置", value=f"```ansi\n{buy_text}\n```", inline=True
+        )
+    else:
+        buy_text = f"\u001b[0;32m標的: {buy_symbol}\n動作: {direction} (Buy To Open)\n策略: {suggested_strategy}\u001b[0m"
+        embed.add_field(
+            name="📥 轉入資產 (Buy)", value=f"```ansi\n{buy_text}\n```", inline=True
+        )
 
     # 4. 券商執行引導 (無腦執行區)
-    execution_guide = (
-        f"**標的:** {buy_symbol}\n"
-        f"**到期日:** {expiry}\n"
-        f"**履約價:** {strike}\n"
-        f"**買賣方向:** {direction}\n"
-        f"**建議限價 (Limit):** {suggested_price}"
-    )
-    if combo_type:
-        execution_guide += f"\n**組合類型:** {combo_type}"
+    if is_hold:
+        execution_guide = (
+            f"**標的:** {sell_symbol}\n"
+            f"**操作狀態:** HOLD (維持現狀續抱)\n"
+            f"**防守機制:** 嚴守 15 分鐘實體 K 線收盤撤退線\n"
+            f"**輪動預備:** 若 15m 實體收盤跌破防守線，全數市價轉入 VOO"
+        )
+    else:
+        execution_guide = (
+            f"**標的:** {buy_symbol}\n"
+            f"**到期日:** {expiry}\n"
+            f"**履約價:** {strike}\n"
+            f"**買賣方向:** {direction}\n"
+            f"**建議限價 (Limit):** {suggested_price}"
+        )
+        if combo_type:
+            execution_guide += f"\n**組合類型:** {combo_type}"
 
     embed.add_field(name="🎯 終端執行引導", value=execution_guide, inline=False)
 

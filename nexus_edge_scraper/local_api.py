@@ -895,14 +895,24 @@ async def scrape_symbol_gex(symbol: str):
             put_wall = spot_price
 
             if gex_by_strike:
-                # Call wall: strike with max positive GEX
-                call_wall_candidates = {k: v for k, v in gex_by_strike.items() if v > 0}
-                if call_wall_candidates:
-                    call_wall = max(call_wall_candidates, key=call_wall_candidates.get)
-                # Put wall: strike with max negative GEX (minimum value)
-                put_wall_candidates = {k: v for k, v in gex_by_strike.items() if v < 0}
-                if put_wall_candidates:
-                    put_wall = min(put_wall_candidates, key=put_wall_candidates.get)
+                # Put Wall (GEX Support Wall): Strike with max positive GEX (dealers long gamma, buying dips)
+                support_candidates = {k: v for k, v in gex_by_strike.items() if v > 0}
+                if support_candidates:
+                    put_wall = max(support_candidates, key=support_candidates.get)
+
+                # Call Wall (Resistance Ceiling): Strike with lowest negative GEX / heavy resistance
+                resistance_candidates = {
+                    k: v for k, v in gex_by_strike.items() if v < 0
+                }
+                if resistance_candidates:
+                    call_wall = min(
+                        resistance_candidates, key=resistance_candidates.get
+                    )
+                elif support_candidates and put_wall > 0:
+                    # Fallback if all GEX is positive: set call_wall to highest strike with positive GEX above spot
+                    otm_calls = [k for k in gex_by_strike.keys() if k > spot_price]
+                    if otm_calls:
+                        call_wall = max(otm_calls)
 
             return {
                 "status": "success",

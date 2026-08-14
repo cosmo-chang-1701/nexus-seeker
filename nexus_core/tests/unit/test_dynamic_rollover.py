@@ -329,3 +329,87 @@ async def test_satellite_rebalancing_euphoria_spread(
     assert ins_10["action"] == "REDUCE"
     assert "Bear Call Spread" in ins_10["suggested_strategy"]
     assert ins_10.get("is_manual_override_required") is True
+
+
+def test_generate_rule_based_rebalance_report_grayscale_hold(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """測試灰階思考架構：$225 正 Gamma 彈簧床完好，盤中插針至 $224.50 但動能多頭，判定 HOLD"""
+    metrics = {
+        "spot_price": 224.50,
+        "price_15m_close": 224.80,
+        "put_wall": 227.50,  # 原始顛倒數據
+        "call_wall": 225.00,  # 原始顛倒數據
+        "support_wall": 225.00,
+        "resistance_wall": 227.50,
+        "max_pain": 217.50,
+        "ivr": 35.0,
+        "sqz_mom": 14.53,
+        "skew": 0.12,
+        "atr_14": 0.80,
+        "atr_15m": 0.80,
+    }
+    active_orders = [
+        {
+            "id": 147,
+            "symbol": "AMD",
+            "order_type": "STOP_LIMIT",
+            "side": "SELL",
+            "stop_price": 223.80,
+            "limit_price": 223.20,
+        }
+    ]
+
+    report = engine._generate_rule_based_rebalance_report(
+        symbol="AMD",
+        metrics=metrics,
+        system_action="HOLD",
+        target="VOO",
+        active_orders=active_orders,
+        position_shares=195.0,
+        current_value=43524.0,
+    )
+
+    assert report["final_action"] == "HOLD"
+    assert report["final_target"] == "AMD"
+    assert "委託單 #147 有效" in report["markdown_report"]
+    assert "停損: $223.80" in report["markdown_report"]
+    assert "限價: $223.20" in report["markdown_report"]
+    assert "15m 實體 K 線過濾" in report["markdown_report"]
+    assert "GEX Wall: $225.00" in report["markdown_report"]
+    assert "N/A 絕對停損" not in report["markdown_report"]
+    assert "$43,524" in report["markdown_report"]
+    assert "VOO" in report["markdown_report"]
+
+
+def test_generate_rule_based_rebalance_report_hard_breakdown(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """測試硬性破位條件：15m 實體收盤跌破 $223.80 觸發 100% 轉入 VOO"""
+    metrics = {
+        "spot_price": 223.10,
+        "price_15m_close": 223.10,
+        "support_wall": 225.00,
+        "resistance_wall": 227.50,
+        "max_pain": 217.50,
+        "ivr": 35.0,
+        "sqz_mom": -2.5,
+        "skew": -0.35,
+        "atr_14": 0.80,
+        "atr_15m": 0.80,
+    }
+
+    report = engine._generate_rule_based_rebalance_report(
+        symbol="AMD",
+        metrics=metrics,
+        system_action="HOLD",
+        target="VOO",
+        position_shares=195.0,
+        current_value=43524.0,
+    )
+
+    assert report["final_action"] == "LIQUIDATE"
+    assert report["final_target"] == "VOO"
+    assert "15m 實體破位確認" in report["markdown_report"]
+    assert "100% LIQUIDATE (轉入 VOO)" in report["options_strategy"]
+    assert "$43,524" in report["markdown_report"]

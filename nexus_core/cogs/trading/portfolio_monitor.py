@@ -302,6 +302,7 @@ class PortfolioMonitorCog(commands.Cog):
                         {
                             "symbol": sym,
                             "asset_class": final_asset_class,
+                            "quantity": h.get("quantity", 0),
                             "current_value": h.get("quantity", 0)
                             * metrics["spot_price"],
                             "target_allocation_pct": h.get(
@@ -311,6 +312,9 @@ class PortfolioMonitorCog(commands.Cog):
                                 "max_allocation_pct", default_max_alloc
                             ),
                             "spot_price": metrics["spot_price"],
+                            "price_15m_close": metrics.get(
+                                "price_15m_close", metrics["spot_price"]
+                            ),
                             "ivr": metrics["ivr"],
                             "max_pain": metrics["max_pain"],
                             "put_wall": metrics["put_wall"],
@@ -320,9 +324,15 @@ class PortfolioMonitorCog(commands.Cog):
                             "sqz_mom": metrics.get("sqz_mom", 0.0),
                             "skew": metrics.get("skew", 0.0),
                             "atr_14": metrics.get("atr_14", 0.0),
+                            "atr_15m": metrics.get(
+                                "atr_15m", metrics.get("atr_14", 0.0)
+                            ),
                             "hvn": metrics.get("hvn", 0.0),
                             "lvn": metrics.get("lvn", 0.0),
                             "dte": metrics.get("dte", 99),
+                            "gex_profile_data": r_data.get("gex_profile_data", {})
+                            if r_data
+                            else {},
                         }
                     )
 
@@ -341,8 +351,18 @@ class PortfolioMonitorCog(commands.Cog):
                         ):
                             continue
 
+                        # 若為 HOLD 狀態且無減倉動作，通常不主動洗版，但若有指示則發送安心防守卡
+                        rollover_type = (
+                            "持倉防守 (Hold Defense)"
+                            if ins["action"] == "HOLD"
+                            else "再平衡 (Rebalancing)"
+                        )
+                        suggested_price = (
+                            "N/A (維持現狀)" if ins["action"] == "HOLD" else "Market"
+                        )
+
                         embed = create_dynamic_rollover_embed(
-                            rollover_type="再平衡 (Rebalancing)",
+                            rollover_type=rollover_type,
                             sell_symbol=ins["symbol"],
                             sell_ratio=ins["sell_ratio"],
                             buy_symbol=ins["target_core"],
@@ -350,10 +370,10 @@ class PortfolioMonitorCog(commands.Cog):
                             suggested_strategy=ins.get(
                                 "suggested_strategy", "Buy Shares"
                             ),
-                            suggested_price="Market",
+                            suggested_price=suggested_price,
                             strike="N/A",
                             expiry="N/A",
-                            direction="BTO",
+                            direction="BTO" if ins["action"] != "HOLD" else "HOLD",
                         )
                         if ins.get("is_manual_override_required"):
                             setattr(
