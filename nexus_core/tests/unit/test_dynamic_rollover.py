@@ -413,3 +413,44 @@ def test_generate_rule_based_rebalance_report_hard_breakdown(
     assert "15m 實體破位確認" in report["markdown_report"]
     assert "100% LIQUIDATE (轉入 VOO)" in report["options_strategy"]
     assert "$43,524" in report["markdown_report"]
+
+
+def test_generate_rule_based_rebalance_report_dynamic_generic_ticker(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """測試完全動態通用標的（例如 NVDA 轉入 SPY，無委託單且自定義 GEX 數據）"""
+    metrics = {
+        "spot_price": 128.50,
+        "price_15m_close": 128.60,
+        "support_wall": 125.00,
+        "resistance_wall": 135.00,
+        "support_gex": 450000000.0,  # +450M
+        "resistance_gex": -80000000.0,  # -80M
+        "max_pain": 120.00,
+        "ivr": 22.0,
+        "sqz_mom": 5.2,
+        "skew": 0.05,
+        "atr_14": 1.20,
+        "atr_15m": 1.20,
+    }
+
+    report = engine._generate_rule_based_rebalance_report(
+        symbol="NVDA",
+        metrics=metrics,
+        system_action="HOLD",
+        target="SPY",
+        active_orders=[],
+        position_shares=100.0,
+        current_value=12850.0,
+    )
+
+    assert report["final_action"] == "HOLD"
+    assert report["final_target"] == "NVDA"
+    assert "建議設置防守委託單" in report["markdown_report"]
+    assert "+450M" in report["markdown_report"]
+    assert "-80M" in report["markdown_report"]
+    assert "GEX Wall: $125.00" in report["markdown_report"]
+    assert "$12,850" in report["markdown_report"]
+    assert "SPY" in report["markdown_report"]
+    assert "AMD" not in report["markdown_report"]
+    assert "#147" not in report["markdown_report"]

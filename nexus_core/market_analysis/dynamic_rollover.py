@@ -126,15 +126,15 @@ class DynamicRolloverEngine:
                     break
 
         if matching_order:
-            order_id = matching_order.get("id", 147)
+            order_id = matching_order.get("id", "")
             ord_stop = float(matching_order.get("stop_price") or stop_loss)
             ord_limit = float(matching_order.get("limit_price") or limit_price)
             order_defense_str = f"**委託單 #{order_id} 有效**\n\n**停損: ${ord_stop:.2f} | 限價: ${ord_limit:.2f}**"
         else:
-            order_defense_str = f"**委託單 #147 有效**\n\n**停損: ${stop_loss:.2f} | 限價: ${limit_price:.2f}**"
+            order_defense_str = f"**建議設置防守委託單**\n\n**停損: ${stop_loss:.2f} | 限價: ${limit_price:.2f}**"
 
         # ━━━ 灰階思考量化裁決 (決策矩陣) ━━━
-        final_target = target
+        final_target = target if target else "VOO"
         final_action = system_action
         system_conflict_note = ""
 
@@ -154,12 +154,12 @@ class DynamicRolloverEngine:
             options_strategy = f"100% LIQUIDATE (轉入 {final_target})"
         elif is_15m_close_broken:
             final_action = "LIQUIDATE"
-            final_target = "VOO"
+            final_target = target if target else "VOO"
             system_conflict_note = (
                 f"🚨 **15m 實體破位確認**：15 分鐘實體收盤價 (${price_15m_close:.2f}) 跌破防守線 (${stop_loss:.2f})，"
-                f"做市商底牆徹底崩塌，負 Gamma 助跌啟動，強制啟動 100% 轉入 VOO 防禦。"
+                f"做市商底牆徹底崩塌，負 Gamma 助跌啟動，強制啟動 100% 轉入 {final_target} 防禦。"
             )
-            options_strategy = "100% LIQUIDATE (轉入 VOO)"
+            options_strategy = f"100% LIQUIDATE (轉入 {final_target})"
         elif system_action == "REDUCE":
             final_action = "REDUCE"
             final_target = target
@@ -191,21 +191,52 @@ class DynamicRolloverEngine:
         if ivr == 0.0 or spot == 0.0:
             data_note = " (⚠️ 數據失真或快取未更新，請留意風險)"
 
-        # ━━━ 資金回收與 VOO 買入預估 ━━━
-        recovered_cash = (
-            current_value
-            if current_value > 0
-            else (position_shares * spot if position_shares > 0 else 43524.0)
-        )
-        voo_est_price = 560.0
-        voo_shares_est = (
-            int(recovered_cash / voo_est_price) if recovered_cash > 0 else 60
-        )
-        voo_shares_low = max(1, voo_shares_est - 1)
-        voo_shares_high = max(1, voo_shares_est + 1)
+        # ━━━ 資金回收與目標核心資產買入預估 ━━━
+        if current_value > 0:
+            recovered_cash = current_value
+        elif position_shares > 0 and spot > 0:
+            recovered_cash = position_shares * spot
+        else:
+            recovered_cash = 0.0
 
-        gex_support_desc = "+776M"
-        gex_res_desc = "-23M"
+        target_core_name = target if target else "VOO"
+        if recovered_cash > 0:
+            cash_str = f"${recovered_cash:,.0f}"
+            target_est_price = (
+                560.0
+                if ("VOO" in target_core_name or "SPY" in target_core_name)
+                else (spot if spot > 0 else 500.0)
+            )
+            target_shares_est = int(recovered_cash / target_est_price)
+            target_shares_low = max(1, target_shares_est - 1)
+            target_shares_high = max(1, target_shares_est + 1)
+            shares_guidance_str = (
+                f"{target_core_name}（約 {target_shares_low}–{target_shares_high} 股）"
+            )
+        else:
+            cash_str = "全數部位資金"
+            shares_guidance_str = f"{target_core_name}（全額買入）"
+
+        # GEX 數值描述格式化
+        supp_gex = metrics.get("support_gex")
+        res_gex = metrics.get("resistance_gex")
+        if supp_gex is not None and supp_gex != 0:
+            gex_support_desc = (
+                f"{supp_gex/1e6:+.0f}M"
+                if abs(supp_gex) >= 1e6
+                else f"{supp_gex/1e3:+.0f}k"
+            )
+        else:
+            gex_support_desc = "做市商強正 Gamma 支撐"
+
+        if res_gex is not None and res_gex != 0:
+            gex_res_desc = (
+                f"{res_gex/1e6:+.0f}M"
+                if abs(res_gex) >= 1e6
+                else f"{res_gex/1e3:+.0f}k"
+            )
+        else:
+            gex_res_desc = "做市商阻力天花板"
 
         # 建構標準 4 段式 Markdown
         markdown_report = f"""
@@ -228,21 +259,15 @@ class DynamicRolloverEngine:
      *(盤中插針至 ${spot:.2f} 屬做市商正常洗盤，未跌破 ${stop_loss_str} 實體收盤前絕不手動干預)*
 
 ---
-## 🚨 動態資金輪動觸發條件（何時才真正轉倉 VOO？）
-只有在以下**硬性量化條件觸發**時，才允許執行 100% 轉入 VOO：
+## 🚨 動態資金輪動觸發條件（何時才真正轉倉 {target_core_name}？）
+只有在以下**硬性量化條件觸發**時，才允許執行 100% 轉入 {target_core_name}：
 1. **實體破位觸發**：
    - 15 分鐘 K 線**實體收盤跌破 ${stop_loss_str}**，或委託單自動觸發成交。
    - **量化含義**：宣告 ${anchor_wall:.2f} 做市商底牆徹底崩塌，負 Gamma 助跌啟動，價格將下探 ${max_pain:.2f} 痛點。
 2. **轉倉執行動作**：
-   - 回收資金約 **${recovered_cash:,.0f}**。
-   - **唯一指令**：立即市價全數買入 **VOO（約 {voo_shares_low}–{voo_shares_high} 股）**，使組合轉為 100% VOO 大盤防禦模式。
+   - 回收資金約 **{cash_str}**。
+   - **唯一指令**：立即市價全數買入 **{shares_guidance_str}**，使組合轉為 100% {target_core_name} 大盤防禦模式。
 """
-        return {
-            "final_action": final_action,
-            "final_target": final_target,
-            "options_strategy": options_strategy,
-            "markdown_report": markdown_report.strip(),
-        }
         return {
             "final_action": final_action,
             "final_target": final_target,
@@ -530,6 +555,8 @@ class DynamicRolloverEngine:
                                 max_positive = val
                         except Exception:
                             pass
+                    support_gex = 0.0
+                    resistance_gex = 0.0
                     for k, v in gex_prof.items():
                         try:
                             val = float(v)
@@ -542,13 +569,17 @@ class DynamicRolloverEngine:
                                 and strike > support_wall
                             ):
                                 support_wall = strike
+                                support_gex = val
                             elif (
                                 wall_type == "RESISTANCE_CALL_WALL"
                                 and strike > resistance_wall
                             ):
                                 resistance_wall = strike
+                                resistance_gex = val
                         except Exception:
                             pass
+                    metrics["support_gex"] = support_gex
+                    metrics["resistance_gex"] = resistance_gex
                 metrics["support_wall"] = support_wall
                 metrics["resistance_wall"] = resistance_wall
 
