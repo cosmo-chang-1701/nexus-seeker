@@ -774,12 +774,16 @@ async def analyze_symbol(
         vix_vts_data = await market_data_service.get_vix_term_structure()
         vix_zscores = await market_data_service.get_vix_zscores()
 
-        vts_ratio = vix_vts_data.get("vts_ratio", 1.0)
+        vts_ratio = vix_vts_data.get("vts_ratio", 0.0)
+        is_vts_valid = (
+            vix_vts_data.get("is_valid", False)
+            and vix_vts_data.get("vts_state") != "UNKNOWN"
+        )
         z30 = vix_zscores.get("zscore_30", 0.0)
         z60 = vix_zscores.get("zscore_60", 0.0)
 
         # Filter #12: VTS Filter
-        if strategy == "STO_PUT" and vts_ratio >= 1.0:
+        if strategy == "STO_PUT" and is_vts_valid and vts_ratio >= 1.0:
             logger.info(
                 f"[{symbol}] 剔除: VIX 目前處於逆價差 Backwardation (VTS >= 1.0)，市場風險極高"
             )

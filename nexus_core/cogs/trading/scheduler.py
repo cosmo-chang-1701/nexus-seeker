@@ -126,35 +126,89 @@ class SchedulerCog(commands.Cog):
             wti_val = wti_q.get("c", 0.0) if isinstance(wti_q, dict) else 0.0
             vts_val = vts_q.get("vts_ratio", 0.0) if isinstance(vts_q, dict) else 0.0
 
+            # 🛡️ 數據合理性檢驗 (Sanity Check) 與快取回退
+            is_vix_valid = 5.0 <= vix_val <= 150.0
+            if not is_vix_valid:
+                cached_vix = database.get_kv_cache("macro_vix")
+                if cached_vix:
+                    try:
+                        cached_vix_val = float(cached_vix)
+                        if 5.0 <= cached_vix_val <= 150.0:
+                            vix_val = cached_vix_val
+                            is_vix_valid = True
+                            logger.info(
+                                f"🕒 [VIX 快取回退] 即時報價異常，使用 SQLite 歷史快取 VIX: {vix_val}"
+                            )
+                    except (ValueError, TypeError):
+                        pass
+
+            is_vts_valid = (
+                isinstance(vts_q, dict)
+                and vts_q.get("is_valid", False)
+                and (0.5 <= vts_val <= 3.0)
+                and (vts_q.get("vts_state") != "UNKNOWN")
+            )
+
             if spx_val > 0.0:
                 await database.save_kv_cache("macro_spx", spx_val)
-            if vix_val > 0.0:
+            if is_vix_valid:
                 await database.save_kv_cache("macro_vix", vix_val)
             if tnx_val > 0.0:
                 await database.save_kv_cache("macro_us10y", tnx_val)
             if wti_val > 0.0:
                 await database.save_kv_cache("macro_wti", wti_val)
-            if vts_val > 0.0:
+            if is_vts_valid:
                 await database.save_kv_cache("macro_vts_ratio", vts_val)
 
             logger.info(
-                f"🕒 [盤中總經快取更新完成] SPX: {spx_val}, VIX: {vix_val}, "
-                f"US10Y: {tnx_val}, WTI: {wti_val}, VTS: {vts_val}, "
+                f"🕒 [盤中總經快取更新完成] SPX: {spx_val}, VIX: {vix_val} (Valid: {is_vix_valid}), "
+                f"US10Y: {tnx_val}, WTI: {wti_val}, VTS: {vts_val} (Valid: {is_vts_valid}), "
                 "DarkPool DIX & Core Metrics updated"
             )
 
-            # 🚨 偵測 VIX 期限結構倒掛與黑天鵝預警
-            if vix_val >= 30.0 or vts_val >= 1.0:
+            # 🚨 偵測 VIX 期限結構倒掛與黑天鵝預警 (嚴格數據把關 + 雙重條件門檻)
+            # 條件 A: VIX 實質飆升 >= 30.0 (且 VIX 數據有效)
+            # 條件 B: VTS 有效且嚴重倒掛 (VTS >= 1.10) 且短期恐慌已顯著升溫 (VIX >= 20.0)
+            is_vix_panic = is_vix_valid and vix_val >= 30.0
+            is_vts_inversion_panic = (
+                is_vix_valid and is_vts_valid and vts_val >= 1.10 and vix_val >= 20.0
+            )
+
+            if is_vix_panic or is_vts_inversion_panic:
+                from datetime import datetime, timezone
                 from database import get_all_user_ids, is_notification_enabled
                 from cogs.embed_builders.alert_embeds import create_vix_tail_risk_embed
 
+                trigger_reason = (
+                    f"VIX 飆升至 {vix_val:.1f} (突破 30.0 極端恐慌線)"
+                    if is_vix_panic
+                    else f"VIX 期限結構嚴重倒掛 (VTS: {vts_val:.2f} >= 1.10) 且 VIX: {vix_val:.1f}"
+                )
+
+                today_str = datetime.now(timezone.utc).strftime("%Y%m%d")
                 uids = get_all_user_ids()
                 for uid in uids:
                     if is_notification_enabled(uid, "defense_macro_tail_risk"):
+                        cooldown_key = f"macro_tail_risk_alert_{uid}_{today_str}"
+                        if database.get_kv_cache(cooldown_key):
+                            continue
+
                         embed = create_vix_tail_risk_embed(
-                            vts_ratio=vts_val, vix=vix_val
+                            vts_ratio=vts_val if is_vts_valid else 0.0,
+                            vix=vix_val,
+                            trigger_reason=trigger_reason,
                         )
                         await self.bot.queue_dm(uid, embed=embed)
+                        await database.save_kv_cache(cooldown_key, 1)
+                        logger.warning(
+                            f"🦇 [黑天鵝/尾部風險警報已發送] 使用者: {uid}, 原因: {trigger_reason}"
+                        )
+            elif not is_vix_valid and (
+                not isinstance(vix_q, dict) or vix_q.get("c", 0.0) <= 0.0
+            ):
+                logger.warning(
+                    f"⚠️ [VIX Tail Risk] VIX 即時報價異常或抓取失敗 (VIX: {vix_val})，安全阻斷黑天鵝預警觸發。"
+                )
 
         except Exception as e:
             logger.error(f"🕒 [盤中總經快取更新失敗]: {e}")

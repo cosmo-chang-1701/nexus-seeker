@@ -413,3 +413,89 @@ async def test_validate_symbol(mock_symbol_validation: Any):  # type: ignore
         conn.close()
 
         assert not await validate_symbol("ABC")
+
+
+@pytest.mark.asyncio
+async def test_get_vix_term_structure_success() -> None:
+    """Test get_vix_term_structure successfully returns valid VTS ratio and state."""
+    import pandas as pd
+    from services.market_data_service import get_vix_term_structure
+
+    vix_df = pd.DataFrame({"Close": [18.5]}, index=pd.to_datetime(["2026-05-25"]))
+    vix3m_df = pd.DataFrame({"Close": [20.0]}, index=pd.to_datetime(["2026-05-25"]))
+
+    with patch(
+        "services.market_data_service.get_history_df",
+        side_effect=[vix_df, vix3m_df],
+    ):
+        res = await get_vix_term_structure()
+        assert res["is_valid"] is True
+        assert res["vts_ratio"] == 0.925
+        assert res["vts_state"] == "Contango"
+        assert res["vix_front"] == 18.5
+        assert res["vix_back"] == 20.0
+
+
+@pytest.mark.asyncio
+async def test_get_vix_term_structure_empty_dfs() -> None:
+    """Test get_vix_term_structure safely handles empty history data."""
+    import pandas as pd
+    from services.market_data_service import get_vix_term_structure
+
+    empty_df = pd.DataFrame()
+
+    with patch(
+        "services.market_data_service.get_history_df",
+        side_effect=[empty_df, empty_df],
+    ):
+        res = await get_vix_term_structure()
+        assert res["is_valid"] is False
+        assert res["vts_ratio"] == 0.0
+        assert res["vts_state"] == "UNKNOWN"
+        assert res["vix_front"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_vix_term_structure_invalid_values() -> None:
+    """Test get_vix_term_structure rejects out-of-bounds or zero VIX values."""
+    import pandas as pd
+    import numpy as np
+    from services.market_data_service import get_vix_term_structure
+
+    # 1. Zero VIX
+    vix_df_zero = pd.DataFrame({"Close": [0.0]}, index=pd.to_datetime(["2026-05-25"]))
+    vix3m_df = pd.DataFrame({"Close": [20.0]}, index=pd.to_datetime(["2026-05-25"]))
+
+    with patch(
+        "services.market_data_service.get_history_df",
+        side_effect=[vix_df_zero, vix3m_df],
+    ):
+        res = await get_vix_term_structure()
+        assert res["is_valid"] is False
+        assert res["vts_ratio"] == 0.0
+        assert res["vts_state"] == "UNKNOWN"
+
+    # 2. NaN value
+    vix_df_nan = pd.DataFrame({"Close": [np.nan]}, index=pd.to_datetime(["2026-05-25"]))
+    with patch(
+        "services.market_data_service.get_history_df",
+        side_effect=[vix_df_nan, vix3m_df],
+    ):
+        res_nan = await get_vix_term_structure()
+        assert res_nan["is_valid"] is False
+        assert res_nan["vts_ratio"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_get_vix_term_structure_exception() -> None:
+    """Test get_vix_term_structure returns safe defaults on exception."""
+    from services.market_data_service import get_vix_term_structure
+
+    with patch(
+        "services.market_data_service.get_history_df",
+        side_effect=Exception("Network error"),
+    ):
+        res = await get_vix_term_structure()
+        assert res["is_valid"] is False
+        assert res["vts_ratio"] == 0.0
+        assert res["vts_state"] == "UNKNOWN"

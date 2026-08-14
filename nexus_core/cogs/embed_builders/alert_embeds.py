@@ -620,7 +620,9 @@ def create_margin_api_alert_embed(ratio: float) -> discord.Embed:
     return embed
 
 
-def create_vix_tail_risk_embed(vts_ratio: float, vix: float) -> discord.Embed:
+def create_vix_tail_risk_embed(
+    vts_ratio: float, vix: float, trigger_reason: Optional[str] = None
+) -> discord.Embed:
     """建立 VIX 期限結構倒掛與黑天鵝預警 Embed。"""
     embed = NexusEmbed(
         title="🦇 雷達：VIX 期限結構倒掛與黑天鵝預警",
@@ -628,10 +630,33 @@ def create_vix_tail_risk_embed(vts_ratio: float, vix: float) -> discord.Embed:
         color=discord.Color.purple(),
         timestamp=datetime.now(timezone.utc),
     )
-    embed.add_field(
-        name="VIX 期限結構比 (VTS)", value=f"`{vts_ratio:.2f}`", inline=True
-    )
-    embed.add_field(name="目前 VIX", value=f"`{vix:.1f}`", inline=True)
+
+    # VTS 呈現
+    if vts_ratio >= 1.10:
+        vts_str = f"`{vts_ratio:.2f}` (嚴重倒掛 🚨)"
+    elif vts_ratio >= 1.00:
+        vts_str = f"`{vts_ratio:.2f}` (期限倒掛 ⚠️)"
+    elif vts_ratio > 0.0:
+        vts_str = f"`{vts_ratio:.2f}` (正價差健康 🟢)"
+    else:
+        vts_str = "`N/A` (數據未更新)"
+
+    # VIX 呈現
+    if vix >= 30.0:
+        vix_str = f"`{vix:.1f}` (極端恐慌 🚨)"
+    elif vix >= 20.0:
+        vix_str = f"`{vix:.1f}` (警戒水位 ⚠️)"
+    elif vix > 0.0:
+        vix_str = f"`{vix:.1f}` (波動平穩 🟢)"
+    else:
+        vix_str = "`N/A` (數據異常)"
+
+    embed.add_field(name="VIX 期限結構比 (VTS)", value=vts_str, inline=True)
+    embed.add_field(name="目前 VIX", value=vix_str, inline=True)
+
+    if trigger_reason:
+        embed.add_field(name="觸發原因", value=f"⚠️ **{trigger_reason}**", inline=False)
+
     embed.add_field(
         name="優先指令",
         value="🛡️ **全面啟動尾部風險防禦 (Tail Risk Hedging) 並縮減部位規模**",

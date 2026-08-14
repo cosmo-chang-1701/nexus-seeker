@@ -48,16 +48,23 @@ async def run_next_day_strategy(fetch_macro_fn: Any) -> str:
 
     try:
         vts_data = await get_vix_term_structure()
-        vts_ratio = vts_data.get("vts_ratio", 1.0)
+        vts_ratio = vts_data.get("vts_ratio", 0.0)
         vts_state = vts_data.get("vts_state", "UNKNOWN")
         vix_front = vts_data.get("vix_front")
         vix_back = vts_data.get("vix_back")
-        vts_detail = (
-            f" (VIX/VIX3M: {vix_front:.2f}/{vix_back:.2f})"
-            if (vix_front is not None and vix_back is not None)
-            else ""
-        )
-        vts_display = f"{vts_ratio:.3f} ({vts_state}){vts_detail}"
+        if (
+            vts_state == "UNKNOWN"
+            or not vts_data.get("is_valid", True)
+            or vts_ratio <= 0.0
+        ):
+            vts_display = "取得失敗 (數據未更新)"
+        else:
+            vts_detail = (
+                f" (VIX/VIX3M: {vix_front:.2f}/{vix_back:.2f})"
+                if (vix_front is not None and vix_back is not None)
+                else ""
+            )
+            vts_display = f"{vts_ratio:.3f} ({vts_state}){vts_detail}"
     except Exception as e:
         logger.error(f"獲取 VIX 期限結構失敗: {e}")
         vts_display = "取得失敗 (Using Default)"
@@ -246,13 +253,18 @@ async def run_fomc_escape_window_analysis(
 
     # Factor 3: VIX 期限結構 (VTS)
     vts_ratio = 0.88
+    is_vts_valid = False
     try:
         vts_data = await get_vix_term_structure()
-        vts_ratio = vts_data.get("vts_ratio", 0.88)
+        if vts_data.get("is_valid", False) and vts_data.get("vts_state") != "UNKNOWN":
+            vts_ratio = vts_data.get("vts_ratio", 0.88)
+            is_vts_valid = True
     except Exception as e:
         logger.warning(f"取得 VTS 期限結構失敗: {e}")
 
-    if vts_ratio >= 1.0:
+    if not is_vts_valid:
+        f3_val = "⚪ 數據未更新 (使用中性預設)"
+    elif vts_ratio >= 1.0:
         tightening_score += 1
         f3_val = f"\u001b[1;31m🚨 期限倒掛 (VTS: {vts_ratio:.3f})\u001b[0m"
     elif vts_ratio < 0.90:

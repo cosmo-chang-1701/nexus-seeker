@@ -23,7 +23,7 @@ class MacroContext:
     vix: float
     oil_price: float
     vix_change: float
-    vts_ratio: float = 1.0
+    vts_ratio: float = 0.9
     vix_trend_up: bool = False
 
 

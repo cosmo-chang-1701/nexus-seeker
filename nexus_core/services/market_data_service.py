@@ -1136,26 +1136,56 @@ async def get_vix_term_structure() -> Dict[str, Any]:
         vix_df, vix3m_df = await asyncio.gather(vix_task, vix3m_task)
 
         if vix_df.empty or vix3m_df.empty:
-            return {"vts_ratio": 1.0, "vts_state": "UNKNOWN"}
+            logger.warning("VIX 或 VIX3M 歷史數據為空，無法計算 VTS 期限結構")
+            return {
+                "vts_ratio": 0.0,
+                "vts_state": "UNKNOWN",
+                "vix_front": None,
+                "vix_back": None,
+                "is_valid": False,
+            }
 
         vix_close = float(vix_df["Close"].iloc[-1])
         vix3m_close = float(vix3m_df["Close"].iloc[-1])
 
-        if vix3m_close > 0:
-            vts_ratio = round(vix_close / vix3m_close, 3)
-        else:
-            vts_ratio = 1.0
+        # 數據合理性驗證 (VIX 與 VIX3M 歷史常態在 5.0 ~ 150.0 之間)
+        if (
+            math.isnan(vix_close)
+            or math.isnan(vix3m_close)
+            or vix_close < 5.0
+            or vix_close > 150.0
+            or vix3m_close < 5.0
+            or vix3m_close > 150.0
+        ):
+            logger.warning(
+                f"VIX 期限結構數據異常 (VIX: {vix_close}, VIX3M: {vix3m_close})，放棄計算"
+            )
+            return {
+                "vts_ratio": 0.0,
+                "vts_state": "UNKNOWN",
+                "vix_front": None,
+                "vix_back": None,
+                "is_valid": False,
+            }
 
+        vts_ratio = round(vix_close / vix3m_close, 3)
         state = "Backwardation" if vts_ratio >= 1.0 else "Contango"
         return {
             "vts_ratio": vts_ratio,
             "vts_state": state,
-            "vix_front": vix_close,
-            "vix_back": vix3m_close,
+            "vix_front": round(vix_close, 2),
+            "vix_back": round(vix3m_close, 2),
+            "is_valid": True,
         }
     except Exception as e:
         logger.error(f"VIX 期限結構計算失敗: {e}")
-        return {"vts_ratio": 1.0, "vts_state": "UNKNOWN"}
+        return {
+            "vts_ratio": 0.0,
+            "vts_state": "UNKNOWN",
+            "vix_front": None,
+            "vix_back": None,
+            "is_valid": False,
+        }
 
 
 async def get_vix_zscores() -> Dict[str, float]:

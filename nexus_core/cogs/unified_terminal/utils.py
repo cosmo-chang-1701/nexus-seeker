@@ -126,7 +126,14 @@ async def get_macro_overview_data(user_id: int) -> dict:
     gex_is_fallback = gex_fallback_val is None or int(gex_fallback_val) == 1
 
     vts_raw = get_kv_cache("macro_vts_ratio")
-    is_backwardation = (float(vts_raw) >= 1.0) if vts_raw else (vix > 25.0)
+    try:
+        vts_val = float(vts_raw) if vts_raw is not None else None
+    except (ValueError, TypeError):
+        vts_val = None
+
+    is_backwardation = (
+        (vts_val >= 1.0) if (vts_val is not None and vts_val > 0.0) else (vix > 25.0)
+    )
 
     # 零 Gamma 踩踏 Regime 判定
     # SPX 跌破 Gamma Flip Line 且 VIX > 20 且 is_backwardation (倒掛或極端恐慌)
