@@ -464,9 +464,11 @@ def create_macro_scan_embed(
         f"{_pad_string('US2Y 2Y 公債', widths[0])} | {_pad_string(f'{us2y:.2f}%', widths[1], 'right')} | {_pad_string(f'利差 {spread:+.2f}%', widths[2], 'right')}"
     )
     # 4. VIX
-    vix_color_start = " [0;31m" if vix > 25 else (" [0;33m" if vix > 20 else " [0;32m")
+    vix_color_start = (
+        "\u001b[0;31m" if vix > 25 else ("\u001b[0;33m" if vix > 20 else "\u001b[0;32m")
+    )
     vix_note = f"{vix_change:+.2f} ({vix_emoji})"
-    vix_note_colored = f"{vix_change:+.2f} ({vix_color_start}{vix_emoji} [0m)"
+    vix_note_colored = f"{vix_color_start}{vix_change:+.2f}\u001b[0m ({vix_emoji})"
     vix_val_str = f"{vix:.2f}"
     lines.append(
         f"{_pad_string('VIX 恐慌指數', widths[0])} | {_pad_string(vix_val_str, widths[1], 'right')} | {_pad_string(vix_note, widths[2], 'right').replace(vix_note, vix_note_colored)}"
@@ -482,9 +484,14 @@ def create_macro_scan_embed(
             name="🚨 風險警示 (Macro Alerts)", value=alert_text, inline=False
         )
     else:
+        from market_analysis.analyst_runners.macro_runner import (
+            build_macro_healthy_status,
+        )
+
+        macro_status_text = build_macro_healthy_status(macro_data)
         embed.add_field(
             name="✅ 巨觀狀態",
-            value="殖利率曲線、匯率與波動率未見極端異常。維持標準市場部位。",
+            value=macro_status_text,
             inline=False,
         )
 

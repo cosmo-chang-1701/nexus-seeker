@@ -103,6 +103,50 @@ def build_macro_alerts(macro_data: dict) -> list[str]:
     return alerts
 
 
+def build_macro_healthy_status(macro_data: dict) -> str:
+    """生成動態四維度宏觀狀態結構化判讀 (4-Dimensional Macro Healthy Status Interpretation)"""
+    vix = macro_data.get("vix", 0.0)
+    vix_change = macro_data.get("vix_change", 0.0)
+    dxy = macro_data.get("dxy", 0.0)
+    tnx = macro_data.get("tnx", 0.0)
+    tnx_change_bps = macro_data.get("tnx_change_bps", 0.0)
+    us2y = macro_data.get("us2y", 0.0)
+    spread = tnx - us2y
+
+    # 1. 波動率環境
+    if vix < 15.0:
+        vol_text = f"VIX {vix:.2f} (變動 {vix_change:+.2f})，處於低波動沉睡區間，恐慌情緒極低，注意權利金較薄。"
+    elif vix <= 20.0:
+        vol_text = f"VIX {vix:.2f} (變動 {vix_change:+.2f})，處於常態健康位階，未見異常避險情緒。"
+    else:
+        vol_text = f"VIX {vix:.2f} (變動 {vix_change:+.2f})，位階略微偏高但波動率平穩，維持正常戒備。"
+
+    # 2. 公債與利差
+    bond_text = f"10Y 美債 {tnx:.2f}% (變動 {tnx_change_bps:+.1f} bps)，殖利率曲線平穩 (利差 {spread:+.2f}%)，未見異常倒掛或惡性陡峭化。"
+
+    # 3. 美元與匯率
+    if dxy <= 103.0:
+        fx_text = f"DXY {dxy:.2f}，美元走勢溫和，跨國資產流動性充裕。"
+    else:
+        fx_text = f"DXY {dxy:.2f}，美元匯率處於平穩區間 (≤ 105.0)，無流動性緊縮壓力。"
+
+    # 4. 操盤風控指引
+    if vix < 15.0:
+        guide_text = (
+            "總經風控指標全數合規，維持常規市場部位；賣方策略留意合約點位與安全邊際。"
+        )
+    else:
+        guide_text = "總經風控指標全數合規，維持常態市場部位與標準網格步長。"
+
+    lines = [
+        f"• 📈 **波動率環境**：{vol_text}",
+        f"• 🏦 **公債與利差**：{bond_text}",
+        f"• 💵 **美元與匯率**：{fx_text}",
+        f"• 🛡️ **操盤風控指引**：{guide_text}",
+    ]
+    return "\n".join(lines)
+
+
 async def run_macro_scan() -> Any:
     """Fetch macro data, evaluate alerts, and return a styled Embed."""
     macro_data = await fetch_macro_data()

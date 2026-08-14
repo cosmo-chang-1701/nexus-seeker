@@ -335,14 +335,14 @@ def build_vtr_stats_embed(
     avg_pnl_str = f"+${avg_pnl:.2f}" if avg_pnl >= 0 else f"-${abs(avg_pnl):.2f}"
 
     if win_rate >= 60:
-        win_color = " \033[0;32m"
+        win_color = "\033[0;32m"
     elif win_rate >= 40:
-        win_color = " \033[0;33m"
+        win_color = "\033[0;33m"
     else:
-        win_color = " \033[0;31m"
+        win_color = "\033[0;31m"
 
-    pnl_color = " \033[0;32m" if pnl >= 0 else " \033[0;31m"
-    avg_pnl_color = " \033[0;32m" if avg_pnl >= 0 else " \033[0;31m"
+    pnl_color = "\033[0;32m" if pnl >= 0 else "\033[0;31m"
+    avg_pnl_color = "\033[0;32m" if avg_pnl >= 0 else "\033[0;31m"
 
     vtr_lines = ["```ansi"]
     headers = ["績效指標", "數據值"]
@@ -435,7 +435,7 @@ def build_scan_report(result: Dict[str, Any]) -> Any:
     projected = result.get("projected_exposure_pct", 0.0)
     risk_limit = result.get("risk_limit", 15.0)
 
-    proj_color = " \033[0;31m" if projected > risk_limit else " \033[0;32m"
+    proj_color = "\033[0;31m" if projected > risk_limit else "\033[0;32m"
     proj_str = f"{projected:+.1f}%"
 
     nro_lines = ["```ansi"]

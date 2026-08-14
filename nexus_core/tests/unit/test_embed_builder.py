@@ -38,7 +38,10 @@ from cogs.embed_builder import (
     build_radar_scan_embed,
     build_post_market_intelligence_embed,
     create_covered_call_unlock_embed,
+    build_pre_market_briefing_embed,
+    create_macro_scan_embed,
 )
+from market_analysis.analyst_runners.macro_runner import build_macro_healthy_status
 from models.schemas import WatchlistOptionLeg, WatchlistOptionPlan
 
 
@@ -2429,3 +2432,137 @@ def test_build_post_market_intelligence_embed_target_center_styling_and_sector_m
     assert "領跌板塊 (Top Outflows)" in sector_val
     assert "XLK" in sector_val
     assert "XLE" in sector_val
+
+
+def test_build_pre_market_briefing_embed_vix_ansi_and_macro_status() -> None:
+    macro_data = {
+        "vix": 14.53,
+        "vix_change": -0.10,
+        "dxy": 104.25,
+        "tnx": 4.25,
+        "tnx_change_bps": 2.1,
+        "us2y": 4.60,
+    }
+
+    embed = build_pre_market_briefing_embed(
+        macro_data=macro_data,
+        alerts=[],
+        earnings_alerts=[],
+        scanned_symbols=["AAPL", "NVDA"],
+        warning_days=14,
+    )
+
+    assert embed.title == "🌅 報告：盤前綜合宏觀與自選股"
+    field_dict = {str(f.name): str(f.value or "") for f in embed.fields}
+
+    # 1. 驗證巨觀數據指標 ANSI 代碼無文字亂碼殘留
+    macro_field = field_dict.get("🌍 巨觀數據指標", "")
+    assert "VIX 恐慌指數" in macro_field
+    assert "14.53" in macro_field
+    assert " [0;31m" not in macro_field
+    assert " [0;32m" not in macro_field
+    assert " [0;33m" not in macro_field
+    assert " [0m" not in macro_field
+    assert "\x1b[0;32m" in macro_field
+    assert "\x1b[0m" in macro_field
+    assert "(🟢)" in macro_field
+
+    # 2. 驗證四維度宏觀狀態解讀
+    direct_status = build_macro_healthy_status(macro_data)
+    assert "📈 **波動率環境**" in direct_status
+    status_field = field_dict.get("✅ 宏觀狀態", "")
+    assert status_field == direct_status
+    assert "低波動沉睡區間" in status_field
+    assert "🏦 **公債與利差**" in status_field
+    assert "10Y 美債 4.25%" in status_field
+    assert "💵 **美元與匯率**" in status_field
+    assert "DXY 104.25" in status_field
+    assert "🛡️ **操盤風控指引**" in status_field
+
+    # 3. 驗證警報狀態分支
+    embed_with_alerts = build_pre_market_briefing_embed(
+        macro_data=macro_data,
+        alerts=["恐慌指數急遽上升，市場避險情緒發酵"],
+        earnings_alerts=[],
+    )
+    alert_field_dict = {
+        str(f.name): str(f.value or "") for f in embed_with_alerts.fields
+    }
+    assert "🚨 宏觀風險警示 (Macro Alerts)" in alert_field_dict
+    assert "恐慌指數急遽上升" in alert_field_dict["🚨 宏觀風險警示 (Macro Alerts)"]
+
+
+def test_build_pre_market_briefing_embed_10_earnings_alerts() -> None:
+    macro_data = {
+        "vix": 16.5,
+        "vix_change": 0.5,
+        "dxy": 102.0,
+        "tnx": 4.1,
+        "tnx_change_bps": 0.0,
+        "us2y": 4.2,
+    }
+
+    # 測試正好 10 檔標的
+    ten_alerts = [
+        {
+            "symbol": f"SYM{i}",
+            "is_portfolio": (i % 2 == 0),
+            "earnings_date": f"2026-08-{20+i}",
+            "days_left": i,
+        }
+        for i in range(1, 11)
+    ]
+    embed_10 = build_pre_market_briefing_embed(
+        macro_data=macro_data,
+        earnings_alerts=ten_alerts,
+    )
+    field_dict_10 = {str(f.name): str(f.value or "") for f in embed_10.fields}
+    earnings_val_10 = field_dict_10.get("🚨 自選股財報季雷達預警 (Earnings Radar)", "")
+    for i in range(1, 11):
+        assert f"**SYM{i}**" in earnings_val_10
+    assert "...等共" not in earnings_val_10
+
+    # 測試超過 10 檔標的 (例如 12 檔)
+    twelve_alerts = [
+        {
+            "symbol": f"TICK{i}",
+            "is_portfolio": False,
+            "earnings_date": f"2026-08-{20+i}",
+            "days_left": i,
+        }
+        for i in range(1, 13)
+    ]
+    embed_12 = build_pre_market_briefing_embed(
+        macro_data=macro_data,
+        earnings_alerts=twelve_alerts,
+    )
+    field_dict_12 = {str(f.name): str(f.value or "") for f in embed_12.fields}
+    earnings_val_12 = field_dict_12.get("🚨 自選股財報季雷達預警 (Earnings Radar)", "")
+    assert "**TICK10**" in earnings_val_12
+    assert "**TICK11**" not in earnings_val_12
+    assert "*...等共 12 檔標的即將發布財報*" in earnings_val_12
+
+
+def test_create_macro_scan_embed_vix_ansi_and_healthy_status() -> None:
+    macro_data = {
+        "vix": 18.20,
+        "vix_change": 0.80,
+        "dxy": 102.50,
+        "tnx": 4.15,
+        "tnx_change_bps": -1.5,
+        "us2y": 4.30,
+    }
+    embed = create_macro_scan_embed(macro_data=macro_data, alerts=[])
+    field_dict = {str(f.name): str(f.value or "") for f in embed.fields}
+
+    # 驗證 ANSI 無字面殘留碼
+    macro_field = field_dict.get("🌍 巨觀數據指標", "")
+    assert " [0;32m" not in macro_field
+    assert " [0m" not in macro_field
+    assert "\x1b[0;32m" in macro_field
+    assert "\x1b[0m" in macro_field
+
+    # 驗證巨觀狀態動態解讀
+    status_field = field_dict.get("✅ 巨觀狀態", "")
+    assert "📈 **波動率環境**" in status_field
+    assert "常態健康位階" in status_field
