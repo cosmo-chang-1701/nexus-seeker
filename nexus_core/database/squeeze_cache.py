@@ -34,11 +34,11 @@ def get_squeeze_cache(
         cursor = conn.cursor()
         # 1. 優先查詢指定 TTL 內的最新快取 (預設 30 分鐘)
         cursor.execute(
-            f"""
+            """
             SELECT * FROM squeeze_cache
-            WHERE symbol = ? AND datetime(updated_at, '+{int(max_age_minutes)} minutes') > CURRENT_TIMESTAMP
+            WHERE symbol = ? AND datetime(updated_at, '+' || ? || ' minutes') > CURRENT_TIMESTAMP
             """,
-            (symbol.upper(),),
+            (symbol.upper(), int(max_age_minutes)),
         )
         row = cursor.fetchone()
         if row:
