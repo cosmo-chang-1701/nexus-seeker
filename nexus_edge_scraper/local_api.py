@@ -682,7 +682,15 @@ async def scrape_fedwatch() -> dict[str, Any]:
         today = date.today()
         future_meetings = [m for m in by_meeting.keys() if m >= today]
         if not future_meetings:
-            next_meeting = sorted(by_meeting.keys())[0]
+            latest_available_meeting = sorted(by_meeting.keys())[-1]
+            if (today - latest_available_meeting).days > 45:
+                logger.warning(
+                    f"FedWatch Excel data is outdated (latest meeting {latest_available_meeting} is > 45 days old). Using fallbacks."
+                )
+                raise ValueError(
+                    f"Stale meeting data: latest meeting {latest_available_meeting}"
+                )
+            next_meeting = latest_available_meeting
         else:
             next_meeting = min(future_meetings)
 
@@ -698,9 +706,11 @@ async def scrape_fedwatch() -> dict[str, Any]:
             high_bps = int(m.group(2))
             current_target = f"{low_bps / 100:.2f}%-{high_bps / 100:.2f}%"
             current_range_low_bps = low_bps
+            current_range_high_bps = high_bps
         else:
             current_target = target_range_str
             current_range_low_bps = 350
+            current_range_high_bps = 375
 
         prob_cut = 0.0
         prob_hike = 0.0
@@ -718,42 +728,69 @@ async def scrape_fedwatch() -> dict[str, Any]:
             except ValueError:
                 continue
 
-            if "Prob: cut" in field:
-                prob_cut = val
-            elif "Prob: hike" in field:
-                prob_hike = val
+            field_lower = field.lower()
+            if (
+                "prob: cut" in field_lower
+                or "prob: <" in field_lower
+                or "probability of cut" in field_lower
+            ):
+                prob_cut += val
+            elif (
+                "prob: hike" in field_lower
+                or "prob: >" in field_lower
+                or "probability of hike" in field_lower
+            ):
+                prob_hike += val
             else:
-                match_prob = re.search(r"Prob:\s*(\d+)bps\s*-\s*(\d+)bps", field)
+                match_prob = re.search(r"(\d+)bps\s*-\s*(\d+)bps", field)
                 if match_prob:
                     bucket_low = int(match_prob.group(1))
-                    if bucket_low == current_range_low_bps:
-                        prob_maintain = val
+                    bucket_high = int(match_prob.group(2))
+                    if (
+                        bucket_low == current_range_low_bps
+                        and bucket_high == current_range_high_bps
+                    ):
+                        prob_maintain += val
                         found_maintain_bucket = True
+                    elif bucket_high <= current_range_low_bps:
+                        prob_cut += val
+                    elif bucket_low >= current_range_high_bps:
+                        prob_hike += val
 
-        if not found_maintain_bucket:
+        if not found_maintain_bucket and (prob_cut > 0 or prob_hike > 0):
             prob_maintain = max(0.0, round(100.0 - prob_cut - prob_hike, 2))
+        elif not found_maintain_bucket and prob_cut == 0 and prob_hike == 0:
+            prob_maintain = 50.0
+            prob_cut = 50.0
+            prob_hike = 0.0
+
+        total_p = prob_cut + prob_hike + prob_maintain
+        if total_p > 0 and abs(total_p - 100.0) > 1.0:
+            prob_cut = round((prob_cut / total_p) * 100.0, 1)
+            prob_hike = round((prob_hike / total_p) * 100.0, 1)
+            prob_maintain = round(max(0.0, 100.0 - prob_cut - prob_hike), 1)
 
         # 精確分類與宏觀緊縮純量計算
         if prob_hike >= 50.0 or (
             prob_hike >= 30.0 and prob_hike > prob_cut and prob_hike > prob_maintain
         ):
             decision = "hike"
-            prob = round(min(1.0, (50.0 + prob_hike / 2.0) / 100.0), 4)
+            prob = round(min(0.95, (50.0 + prob_hike / 2.0) / 100.0), 4)
         elif prob_cut >= 50.0 or (
             prob_cut >= 30.0 and prob_cut > prob_hike and prob_cut > prob_maintain
         ):
             decision = "cut"
-            prob = round(max(0.0, (50.0 - prob_cut / 2.0) / 100.0), 4)
+            prob = round(max(0.05, (50.0 - prob_cut / 2.0) / 100.0), 4)
         elif prob_maintain >= 50.0:
             decision = "maintain"
             prob = round(
-                max(0.0, min(1.0, (50.0 + (prob_hike - prob_cut) / 2.0) / 100.0)),
+                max(0.05, min(0.95, (50.0 + (prob_hike - prob_cut) / 2.0) / 100.0)),
                 4,
             )
         else:
             decision = "split"
             prob = round(
-                max(0.0, min(1.0, (50.0 + (prob_hike - prob_cut) / 2.0) / 100.0)),
+                max(0.05, min(0.95, (50.0 + (prob_hike - prob_cut) / 2.0) / 100.0)),
                 4,
             )
 

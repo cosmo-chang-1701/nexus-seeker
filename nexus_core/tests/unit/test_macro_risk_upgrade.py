@@ -505,6 +505,48 @@ def test_calendar_service_fedwatch_lookup() -> None:
         assert prob == 0.85
         assert is_fallback is True
 
+    # Case 3: kv_cache 包含污染的 1.0 (100.0% 升息) 數據 -> 自動觸發防禦並轉為 fallback
+    with patch("database.cache.get_kv_cache") as mock_kv:
+        mock_kv.side_effect = (
+            lambda k: 1.0
+            if k == "macro_fedwatch_probability"
+            else (0 if k == "macro_fedwatch_is_fallback" else None)
+        )
+        prob, is_fallback = calendar_service.get_latest_fedwatch_probability()
+        assert is_fallback is True
+        p, is_fb, details = calendar_service.get_latest_fedwatch_info()
+        assert is_fb is True
+        assert details.get("prob_hike") == 0.0
+
+
+@pytest.mark.asyncio
+async def test_calendar_service_fedwatch_sanity_rejection() -> None:
+    """測試 calendar_service.update_fedwatch_probability 遇到 100% 升息等污染數據時觸發防禦阻斷"""
+    from services.calendar_service import calendar_service
+    import config
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "status": "success",
+        "data": {
+            "probability": 1.0,
+            "prob_hike": 100.0,
+            "prob_maintain": 0.0,
+            "prob_cut": 0.0,
+            "meeting_date": "03/16",
+        },
+    }
+
+    with patch.object(config, "TUNNEL_URL", "http://mock-tunnel"), patch(
+        "httpx.AsyncClient.get", return_value=mock_resp
+    ), patch("database.cache.save_kv_cache") as mock_save:
+        await calendar_service.update_fedwatch_probability()
+        # 應將 macro_fedwatch_is_fallback 寫入 1，且不應將 1.0 寫入 macro_fedwatch_probability
+        saved_keys = [call.args[0] for call in mock_save.call_args_list]
+        assert "macro_fedwatch_is_fallback" in saved_keys
+        assert "macro_fedwatch_probability" not in saved_keys
+
 
 def test_evaluate_escape_window_regime_matrix() -> None:
     """測試多因子逃頂窗口矩陣評估邏輯 (四因子)"""

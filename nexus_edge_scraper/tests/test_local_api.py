@@ -55,6 +55,91 @@ def test_scrape_fedwatch_fallback() -> None:
         assert data["data"]["decision"] == "maintain"
 
 
+def test_scrape_fedwatch_excel_parsing_and_buckets() -> None:
+    from datetime import date, timedelta
+
+    meeting_date = date.today() + timedelta(days=15)
+    mock_rows = [
+        ("date", "meeting_date", "target", "field", "val"),
+        (
+            "2026-08-15",
+            meeting_date,
+            "525bps - 550bps",
+            "Prob: 500bps - 525bps",
+            "15.0",
+        ),
+        (
+            "2026-08-15",
+            meeting_date,
+            "525bps - 550bps",
+            "Prob: 525bps - 550bps",
+            "80.0",
+        ),
+        (
+            "2026-08-15",
+            meeting_date,
+            "525bps - 550bps",
+            "Prob: 550bps - 575bps",
+            "5.0",
+        ),
+    ]
+
+    mock_ws = MagicMock()
+    mock_ws.iter_rows.return_value = mock_rows
+    mock_wb = MagicMock()
+    mock_wb.__getitem__.return_value = mock_ws
+
+    with patch("requests.get") as mock_req, patch(
+        "openpyxl.load_workbook", return_value=mock_wb
+    ):
+        mock_req.return_value.status_code = 200
+        mock_req.return_value.iter_content.return_value = [b"mock"]
+        response = client.get("/api/v1/scrape/macro/fedwatch")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+        assert data["data"]["decision"] == "maintain"
+        assert data["data"]["prob_maintain"] == 80.0
+        assert data["data"]["prob_cut"] == 15.0
+        assert data["data"]["prob_hike"] == 5.0
+        assert data["data"]["meeting_date"] == meeting_date.strftime("%m/%d")
+
+
+def test_scrape_fedwatch_stale_data_fallback() -> None:
+    from datetime import date, timedelta
+
+    # Meeting date from 100 days ago (stale)
+    old_meeting_date = date.today() - timedelta(days=100)
+    mock_rows = [
+        ("date", "meeting_date", "target", "field", "val"),
+        (
+            "2026-01-01",
+            old_meeting_date,
+            "525bps - 550bps",
+            "Prob: hike",
+            "100.0",
+        ),
+    ]
+
+    mock_ws = MagicMock()
+    mock_ws.iter_rows.return_value = mock_rows
+    mock_wb = MagicMock()
+    mock_wb.__getitem__.return_value = mock_ws
+
+    with patch("requests.get") as mock_req, patch(
+        "openpyxl.load_workbook", return_value=mock_wb
+    ):
+        mock_req.return_value.status_code = 200
+        mock_req.return_value.iter_content.return_value = [b"mock"]
+        response = client.get("/api/v1/scrape/macro/fedwatch")
+        assert response.status_code == 200
+        data = response.json()
+        # Stale data should trigger fallback instead of reporting 100% hike
+        assert data["status"] == "success"
+        assert data["data"]["probability"] == 0.50
+        assert data["data"]["decision"] == "maintain"
+
+
 def test_scrape_sec_fundamental() -> None:
     mock_response = MagicMock()
     mock_response.status_code = 200

@@ -512,11 +512,21 @@ class CalendarService:
                     if payload.get("status") == "success":
                         data = payload.get("data", {})
                         prob = float(data.get("probability", 0.50))
+                        prob_hike = float(data.get("prob_hike", 0.0))
+
+                        # 數值合理性閘門 (Sanity Gating)：阻斷 100% 升息等歷史污染或極端異常值
+                        if prob >= 0.99 or prob_hike >= 99.0 or prob <= 0.01:
+                            logger.warning(
+                                f"FedWatch 返回疑似異常/污染數據 (prob={prob}, prob_hike={prob_hike}%)，觸發防禦阻斷並轉為備援模式。"
+                            )
+                            await save_kv_cache("macro_fedwatch_is_fallback", 1)
+                            return
+
                         await execute_write_async(
                             """
                             UPDATE economic_calendar_events
                             SET fedwatch_probability = ?
-                            WHERE (event LIKE '%FOMC%' OR event LIKE '%Fed Interest Rate%' OR event LIKE '%Federal Funds Rate%')
+                            WHERE (event LIKE '%FOMC%' OR event LIKE '%Fed Interest Rate%' OR event LIKE '%Federal Funds Rate%' OR event LIKE '%利率決策%' OR event LIKE '%聯準會%')
                               AND event_time >= date('now')
                             """,
                             (prob,),
@@ -545,7 +555,11 @@ class CalendarService:
         cached_prob = get_kv_cache("macro_fedwatch_probability")
         if cached_prob is not None:
             try:
-                return float(cached_prob), is_fallback
+                prob_val = float(cached_prob)
+                if 0.01 < prob_val < 0.99:
+                    return prob_val, is_fallback
+                else:
+                    is_fallback = True
             except (ValueError, TypeError):
                 pass
 
@@ -557,8 +571,10 @@ class CalendarService:
                     """
                     SELECT fedwatch_probability
                     FROM economic_calendar_events
-                    WHERE (event LIKE '%FOMC%' OR event LIKE '%Fed Interest Rate%' OR event LIKE '%Federal Funds Rate%')
+                    WHERE (event LIKE '%FOMC%' OR event LIKE '%Fed Interest Rate%' OR event LIKE '%Federal Funds Rate%' OR event LIKE '%利率決策%' OR event LIKE '%聯準會%')
                       AND fedwatch_probability IS NOT NULL
+                      AND fedwatch_probability > 0.01
+                      AND fedwatch_probability < 0.99
                       AND event_time >= date('now')
                     ORDER BY event_time ASC
                     LIMIT 1
@@ -580,7 +596,7 @@ class CalendarService:
         prob, is_fallback = self.get_latest_fedwatch_probability()
         raw_details = get_kv_cache("macro_fedwatch_details")
         details: dict[str, Any] = {}
-        if raw_details:
+        if raw_details and not is_fallback:
             try:
                 if isinstance(raw_details, dict):
                     details = raw_details
@@ -589,21 +605,22 @@ class CalendarService:
             except Exception:
                 details = {}
 
-        if not details:
+        if not details or is_fallback:
+            # 建立安全且結構完整的 Fallback 明細字典
+            p_maintain = round(prob * 100, 1) if prob <= 0.70 else 50.0
+            p_cut = round(max(0.0, 100.0 - p_maintain), 1)
             details = {
                 "probability": prob,
-                "meeting_date": "",
-                "current_target": "3.50%-3.75%",
-                "prob_maintain": round(prob * 100, 1) if prob <= 0.70 else 50.0,
-                "prob_hike": round(max(0.0, (prob - 0.5) * 100 * 2), 1)
-                if prob > 0.5
-                else 0.0,
-                "prob_cut": round(max(0.0, (0.5 - prob) * 100 * 2), 1)
-                if prob < 0.5
-                else (round(max(0.0, (1.0 - prob) * 100), 1) if prob <= 0.7 else 0.0),
-                "decision": "hike"
-                if prob > 0.7
-                else ("cut" if prob <= 0.4 else "maintain"),
+                "meeting_date": details.get("meeting_date", "")
+                if isinstance(details, dict)
+                else "",
+                "current_target": "4.25%-4.50%",
+                "prob_maintain": p_maintain,
+                "prob_hike": 0.0,
+                "prob_cut": p_cut,
+                "decision": "maintain"
+                if 0.40 <= prob <= 0.70
+                else ("cut" if prob < 0.40 else "hike"),
             }
         return prob, is_fallback, details
 
