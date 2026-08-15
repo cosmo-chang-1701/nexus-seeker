@@ -455,10 +455,6 @@ class CalendarService:
             events_task, earnings_task
         )
 
-        from typing import cast
-
-        economic_events = cast(List[EconomicEvent], economic_events)
-
         all_events: List[Union[EconomicEvent, EarningsEvent]] = []
         all_events.extend(economic_events)
         if earnings_event is not None and earnings_event.tte_hours <= days * 24:
@@ -483,13 +479,8 @@ class CalendarService:
 
         economic_events, earnings_map = await asyncio.gather(events_task, earnings_task)
 
-        from typing import cast
-
-        economic_events = cast(List[EconomicEvent], economic_events)
         earnings_events = [
-            cast(EarningsEvent, event)
-            for event in earnings_map.values()
-            if event is not None
+            event for event in earnings_map.values() if event is not None
         ]
 
         all_events: List[Union[EconomicEvent, EarningsEvent]] = []

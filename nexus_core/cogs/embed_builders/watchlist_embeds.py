@@ -17,9 +17,9 @@ from cogs.embed_builders._embed_helpers import _safe_embed_field_value
 from cogs.embed_builders._core import NexusEmbed
 
 
-def create_watchlist_embed(  # type: ignore
+def create_watchlist_embed(
     page_data: Any, current_page: Any, total_pages: Any, total_items: Any
-):  # type: ignore
+) -> discord.Embed:
     """生成觀察清單的分頁 Embed (移除成本欄位)"""
 
     if not page_data:

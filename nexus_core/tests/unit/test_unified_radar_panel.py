@@ -51,7 +51,7 @@ async def test_symbol_hub_opens_radar_panel(mock_bot: Any, mock_interaction: Any
             symbol=None,
             scan_type=None,
             tag=None,
-            squeeze=None,  # type: ignore
+            squeeze=None,
         )
 
         mock_interaction.response.defer.assert_called_once_with(ephemeral=True)
@@ -220,7 +220,7 @@ async def test_execute_unified_scan_filters(mock_bot: Any, mock_interaction: Any
 @pytest.mark.asyncio
 async def test_execute_unified_scan_squeeze_mode_filter(
     mock_bot: Any, mock_interaction: Any
-) -> None:  # type: ignore
+) -> None:
     """
     測試 execute_unified_scan 的 squeeze_mode 會正確套用為 require_squeeze_firing 過濾。
     """
@@ -286,9 +286,9 @@ async def test_execute_unified_scan_squeeze_mode_filter(
 
 
 @pytest.mark.asyncio
-async def test_execute_unified_scan_magnetic_filters(  # type: ignore
+async def test_execute_unified_scan_magnetic_filters(
     mock_bot: Any, mock_interaction: Any
-):  # type: ignore
+) -> None:
     """
     測試 execute_unified_scan 是否正確根據 magnetic_filters 條件過濾標的
     """
@@ -378,7 +378,7 @@ async def test_execute_unified_scan_magnetic_filters(  # type: ignore
 @pytest.mark.asyncio
 async def test_batch_scan_alpha_filters_and_pagination(
     mock_bot: Any, mock_interaction: Any
-) -> None:  # type: ignore
+) -> None:
     """
     測試:
     1. Alpha 訊號 (TDP, UOA) 正確過濾標的。

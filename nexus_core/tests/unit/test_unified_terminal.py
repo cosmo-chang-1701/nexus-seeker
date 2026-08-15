@@ -492,7 +492,7 @@ async def test_symbol_hub_command_no_params(mock_interaction: Any, mock_bot: Any
             cog,  # type: ignore
             mock_interaction,
             symbol=None,
-            scan_type=None,  # type: ignore
+            scan_type=None,
         )
 
     assert mock_interaction.followup.send.called
@@ -547,7 +547,7 @@ async def test_symbol_hub_batch_scan_holdings(mock_interaction: Any, mock_bot: A
             cog,  # type: ignore
             mock_interaction,
             symbol=None,
-            scan_type=mock_choice,  # type: ignore
+            scan_type=mock_choice,
         )
 
         assert mock_interaction.followup.send.called
@@ -625,7 +625,7 @@ async def test_symbol_hub_batch_scan_all(mock_interaction: Any, mock_bot: Any): 
             cog,  # type: ignore
             mock_interaction,
             symbol=None,
-            scan_type=mock_choice,  # type: ignore
+            scan_type=mock_choice,
         )
 
         assert mock_interaction.followup.send.called
@@ -674,7 +674,7 @@ async def test_symbol_hub_batch_scan_watchlist(mock_interaction: Any, mock_bot: 
             cog,  # type: ignore
             mock_interaction,
             symbol=None,
-            scan_type=mock_choice,  # type: ignore
+            scan_type=mock_choice,
         )
 
         assert mock_interaction.followup.send.called
@@ -762,9 +762,9 @@ async def test_batch_scan_warning_button_chunking(mock_interaction: Any, mock_bo
 
     cog = UnifiedTerminalCog(mock_bot)
 
-    async def mock_run_hub(  # type: ignore
+    async def mock_run_hub(
         interaction: Any, symbol: Any, user_id: Any, embeds_accumulator: Any = None
-    ):  # type: ignore
+    ) -> None:
         if embeds_accumulator is not None:
             embeds_accumulator.append(discord.Embed(title=f"Mock Embed for {symbol}"))
 

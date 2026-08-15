@@ -19,9 +19,9 @@ def mock_bot() -> Any:
 
 
 @pytest.mark.asyncio
-async def test_all_commands_structure(  # type: ignore
+async def test_all_commands_structure(
     mock_interaction: Any, db_conn: Any, mock_bot: Any
-):  # type: ignore
+) -> None:
     """
     Smoke test to ensure command callbacks are structurally correct and compatible with parameters.
     """
@@ -128,7 +128,7 @@ async def test_all_commands_structure(  # type: ignore
         await intelligence.scan_news.callback(  # type: ignore
             intelligence,  # type: ignore
             mock_interaction,
-            symbol="AAPL",  # type: ignore
+            symbol="AAPL",
         )
         assert mock_interaction.followup.send.called
     mock_interaction.followup.send.reset_mock()
@@ -231,6 +231,6 @@ async def test_command_event_impact(mock_interaction: Any, db_conn: Any, mock_bo
             cal_cog,  # type: ignore
             mock_interaction,
             symbol="AAPL",
-            vol_move=25.0,  # type: ignore
+            vol_move=25.0,
         )
         assert mock_interaction.followup.send.called

@@ -81,7 +81,7 @@ class PreMarketCog(commands.Cog):
             f"[盤前預熱] 收集到 {len(unique_symbols)} 個獨特標的: {unique_symbols}"
         )
 
-        async def _warm_one(sym: Any) -> None:  # type: ignore
+        async def _warm_one(sym: Any) -> None:
             try:
                 terminal_cog = self.bot.get_cog("UnifiedTerminalCog")
                 if terminal_cog and hasattr(terminal_cog, "_fetch_sym_radar_data_slow"):
@@ -97,7 +97,7 @@ class PreMarketCog(commands.Cog):
 
         sem = asyncio.Semaphore(3)
 
-        async def _throttled_warm(sym: Any) -> None:  # type: ignore
+        async def _throttled_warm(sym: Any) -> None:
             async with sem:
                 await _warm_one(sym)
 
@@ -107,5 +107,5 @@ class PreMarketCog(commands.Cog):
         logger.info("✅ [盤前預熱] 量化/期權數據快取預熱完成。")
 
 
-async def setup(bot: Any) -> None:  # type: ignore
+async def setup(bot: Any) -> None:
     await bot.add_cog(PreMarketCog(bot))

@@ -233,5 +233,5 @@ class SchedulerCog(commands.Cog):
         logger.info("盤中動態巡邏機已掛載，將每 30 分鐘偵測一次開盤狀態。")
 
 
-async def setup(bot: Any) -> None:  # type: ignore
+async def setup(bot: Any) -> None:
     await bot.add_cog(SchedulerCog(bot))

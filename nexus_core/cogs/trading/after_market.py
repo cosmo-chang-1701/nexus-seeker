@@ -182,5 +182,5 @@ class AfterMarketCog(commands.Cog):
         return stats
 
 
-async def setup(bot: Any) -> None:  # type: ignore
+async def setup(bot: Any) -> None:
     await bot.add_cog(AfterMarketCog(bot))

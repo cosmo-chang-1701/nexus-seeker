@@ -1,4 +1,4 @@
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, cast
 import logging
 from pydantic import BaseModel, Field
 from services.llm_service import client, is_memory_safe
@@ -395,7 +395,7 @@ class DynamicRolloverEngine:
                 ],
                 response_format=FundamentalThesisResult,
             )
-            parsed = response.choices[0].message.parsed  # type: ignore
+            parsed = response.choices[0].message.parsed
 
             # 寫入 SQLite 全域防禦閘門
             if parsed:
@@ -405,7 +405,7 @@ class DynamicRolloverEngine:
                     symbol, parsed.is_broken, parsed.confidence, parsed.reasoning
                 )
 
-            return parsed  # type: ignore
+            return cast(FundamentalThesisResult | None, parsed)
         except Exception as e:
             logger.error(f"[{symbol}] Fundamental thesis evaluation failed: {e}")
             return None

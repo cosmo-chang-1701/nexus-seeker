@@ -19,9 +19,9 @@ logger = logging.getLogger(__name__)
 MIN_IV_THRESHOLD = 0.01
 
 
-def calculate_vanna(  # type: ignore
+def calculate_vanna(
     flag: Any, stock_price: Any, strike: Any, t_years: Any, iv: Any, q: Any
-):  # type: ignore
+) -> float:
     """
     計算 Vanna (dDelta / dVol)。
     """
@@ -35,14 +35,14 @@ def calculate_vanna(  # type: ignore
         vanna_val = (
             -((v_val * 100.0) / (stock_price * iv * math.sqrt(t_years))) * d2_val
         )
-        return vanna_val
+        return float(vanna_val)
     except Exception:
         return 0.0
 
 
-def calculate_contract_delta(  # type: ignore
+def calculate_contract_delta(
     row: Any, current_price: Any, t_years: Any, flag: Any, q: Any = 0.0
-):  # type: ignore
+) -> float:
     """
     計算單一選擇權合約的理論 Delta 值 (Merton 模型校正股息率 q)。
     """
@@ -57,15 +57,17 @@ def calculate_contract_delta(  # type: ignore
         return 0.0
 
     try:
-        return delta(flag, current_price, row["strike"], t_years, RISK_FREE_RATE, iv, q)
+        return float(
+            delta(flag, current_price, row["strike"], t_years, RISK_FREE_RATE, iv, q)
+        )
     except Exception as e:
         logger.debug("Delta 計算失敗 (strike=%.2f, iv=%.4f): %s", row["strike"], iv, e)
         return 0.0
 
 
-def calculate_greeks(  # type: ignore
+def calculate_greeks(
     opt_type: Any, stock_price: Any, strike: Any, t_years: Any, iv: Any, q: Any
-):  # type: ignore
+) -> dict[str, float]:
     """計算單一選擇權的 Greeks (Delta, Theta, Gamma, Vega, Vanna)。"""
     flag = "c" if opt_type == "call" else "p"
     try:

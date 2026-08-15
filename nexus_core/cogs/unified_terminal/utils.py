@@ -1,19 +1,21 @@
-from typing import Any
+from typing import Any, cast
 import psutil
 from services.market_data_service import BoundedCache
 
 _macro_overview_cache = BoundedCache(max_size=10)
 
 
-async def get_macro_overview_data(user_id: int) -> dict:
+async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
     ram_usage = psutil.virtual_memory().percent
     is_degraded = ram_usage > 85.0
     cache_key = f"overview_{user_id}"
 
     if is_degraded and cache_key in _macro_overview_cache:
-        data = _macro_overview_cache[cache_key].copy()
-        data["is_degraded"] = True
-        return data  # type: ignore
+        cached_data: dict[str, Any] = cast(
+            dict[str, Any], _macro_overview_cache[cache_key].copy()
+        )
+        cached_data["is_degraded"] = True
+        return cached_data
 
     # Read from SQLite kv_cache
     from database import get_kv_cache, save_kv_cache
@@ -144,7 +146,7 @@ async def get_macro_overview_data(user_id: int) -> dict:
 
     payout_threshold = get_safety_payout_threshold()
 
-    data = {
+    result_data: dict[str, Any] = {
         "spx": spx,
         "vix": vix,
         "us10y": us10y,
@@ -165,8 +167,8 @@ async def get_macro_overview_data(user_id: int) -> dict:
     }
 
     # Save to memory cache
-    _macro_overview_cache[cache_key] = data
-    return data  # type: ignore
+    _macro_overview_cache[cache_key] = result_data
+    return result_data
 
 
 async def find_matching_polymarket_odds(symbol: str, poly_markets: list) -> str:

@@ -1,3 +1,4 @@
+from typing import Any, Dict
 from fastapi import APIRouter, Query
 import yfinance as yf
 
@@ -5,7 +6,9 @@ router = APIRouter()
 
 
 @router.get("/api/v1/scrape/yf/history/{symbol}")
-async def scrape_yf_history(symbol: str, period: str = "1y", interval: str = "1d"):
+async def scrape_yf_history(
+    symbol: str, period: str = "1y", interval: str = "1d"
+) -> Dict[str, Any]:
     try:
         ticker = yf.Ticker(symbol)
         df = ticker.history(
@@ -29,7 +32,7 @@ async def scrape_yf_history(symbol: str, period: str = "1y", interval: str = "1d
 
 
 @router.get("/api/v1/scrape/yf/options/{symbol}/expiries")
-async def scrape_yf_options_expiries(symbol: str):
+async def scrape_yf_options_expiries(symbol: str) -> Dict[str, Any]:
     try:
         ticker = yf.Ticker(symbol)
         expiries = ticker.options
@@ -39,7 +42,9 @@ async def scrape_yf_options_expiries(symbol: str):
 
 
 @router.get("/api/v1/scrape/yf/options/{symbol}/chain")
-async def scrape_yf_options_chain(symbol: str, expiry: str = Query(...)):
+async def scrape_yf_options_chain(
+    symbol: str, expiry: str = Query(...)
+) -> Dict[str, Any]:
     try:
         ticker = yf.Ticker(symbol)
         chain = ticker.option_chain(expiry)

@@ -121,9 +121,9 @@ def get_watchlist_alert_state(user_id: Any, symbol: Any):  # type: ignore
         conn.close()
 
 
-def update_watchlist_alert_state(  # type: ignore
+def update_watchlist_alert_state(
     user_id: Any, symbol: Any, direction: Any, price: Any, timestamp: Any
-):  # type: ignore
+) -> bool:
     """記錄本次觸發的訊號狀態"""
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()

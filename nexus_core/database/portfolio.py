@@ -354,14 +354,14 @@ def is_symbol_in_portfolio(user_id: int, symbol: str) -> bool:
 # ==========================================
 # 對沖歷史紀錄 (Hedge History)
 # ==========================================
-def add_hedge_history(  # type: ignore
+def add_hedge_history(
     user_id: Any,
     date: Any,
     alpha_pnl: Any,
     hedge_pnl: Any,
     effectiveness: Any,
     tau_applied: Any,
-):  # type: ignore
+) -> None:
     """紀錄每日對沖績效與使用的 Tau 係數"""
     conn = sqlite3.connect(config.DB_NAME)
     cursor = conn.cursor()

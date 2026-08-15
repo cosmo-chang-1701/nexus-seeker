@@ -1,3 +1,4 @@
+from typing import Any
 from fastapi import FastAPI, Query
 from playwright.async_api import (
     async_playwright,
@@ -49,7 +50,7 @@ async def scrape_reddit(
     symbol: str,
     company_name: str = Query("", description="公司名稱"),
     limit: int = Query(5, description="回傳的貼文數量上限"),
-):
+) -> dict[str, Any]:
     import xml.etree.ElementTree as ET
     import urllib.parse
 
@@ -110,7 +111,7 @@ async def scrape_reddit(
 
 
 @app.get("/api/v1/scrape/macro/gex")
-async def scrape_gex():
+async def scrape_gex() -> dict[str, Any]:
     import math
     import re
     from datetime import date
@@ -119,10 +120,10 @@ async def scrape_gex():
     fallback = {"spy_spot": 510.0, "gamma_flip": 515.0, "put_wall": 505.0}
 
     # Black-Scholes math helper
-    def ndtr_prime(x):
+    def ndtr_prime(x: float) -> float:
         return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
 
-    def calculate_gamma(S, K, t, r, sigma):
+    def calculate_gamma(S: float, K: float, t: float, r: float, sigma: float) -> float:
         if S <= 0 or K <= 0 or t <= 0 or sigma <= 0:
             return 0.0
         try:
@@ -133,7 +134,9 @@ async def scrape_gex():
         except Exception:
             return 0.0
 
-    def calculate_total_gex(S, option_chain, r=0.04):
+    def calculate_total_gex(
+        S: float, option_chain: list[dict[str, Any]], r: float = 0.04
+    ) -> float:
         total_gex = 0.0
         for contract in option_chain:
             strike = contract["strike"]
@@ -149,7 +152,7 @@ async def scrape_gex():
             total_gex += gex
         return total_gex
 
-    def find_gamma_flip(spot_price, option_chain):
+    def find_gamma_flip(spot_price: float, option_chain: list[dict[str, Any]]) -> float:
         low_price = spot_price * 0.8
         high_price = spot_price * 1.2
         steps = 100
@@ -181,7 +184,7 @@ async def scrape_gex():
             await Stealth().apply_stealth_async(context)
 
             # Speed up loading by blocking images and CSS
-            async def safe_route(route):
+            async def safe_route(route: Any) -> None:
                 try:
                     if route.request.resource_type in ["image", "stylesheet", "font"]:
                         await route.abort()
@@ -242,11 +245,11 @@ async def scrape_gex():
                 )
                 return {"status": "success", "data": fallback}
 
-            option_chain = []
-            put_oi_by_strike = {}
+            option_chain: list[dict[str, Any]] = []
+            put_oi_by_strike: dict[float, int] = {}
             today = date.today()
 
-            def parse_table(table, is_call):
+            def parse_table(table: Any, is_call: bool) -> None:
                 rows = table.select("tr")
                 for r in rows[1:]:
                     cols = [td.text.strip() for td in r.select("td")]
@@ -307,7 +310,7 @@ async def scrape_gex():
             # Calculate Put Wall
             put_wall = spot_price - 5.0
             if put_oi_by_strike:
-                put_wall = max(put_oi_by_strike, key=put_oi_by_strike.get)
+                put_wall = max(put_oi_by_strike, key=lambda k: put_oi_by_strike[k])
 
             # Calculate Gamma Flip
             gamma_flip = find_gamma_flip(spot_price, option_chain)
@@ -328,7 +331,7 @@ async def scrape_gex():
 
 
 @app.get("/api/v1/scrape/macro/core_metrics")
-async def scrape_core_macro_metrics():
+async def scrape_core_macro_metrics() -> dict[str, Any]:
     import httpx
     import asyncio
     from playwright.async_api import async_playwright
@@ -342,9 +345,11 @@ async def scrape_core_macro_metrics():
         "fear_greed": 48.0,
     }
 
-    async def fetch_fred_csv_all(series_id: str, context) -> list[tuple[str, float]]:
+    async def fetch_fred_csv_all(
+        series_id: str, context: Any
+    ) -> list[tuple[str, float]]:
         url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
-        data = []
+        data: list[tuple[str, float]] = []
         try:
             page = await context.new_page()
             try:
@@ -371,7 +376,7 @@ async def scrape_core_macro_metrics():
             pass
         return data
 
-    async def fetch_fred_csv(series_id: str, context) -> float | None:
+    async def fetch_fred_csv(series_id: str, context: Any) -> float | None:
         data = await fetch_fred_csv_all(series_id, context)
         return data[0][1] if data else None
 
@@ -418,7 +423,7 @@ async def scrape_core_macro_metrics():
         if rrp_data and len(rrp_data) > 30:
             # RRPONTSYD is daily, so index 30 is roughly 30 days ago
             past_rrp = rrp_data[30][1]
-            if past_rrp > 0:
+            if past_rrp > 0 and rrp is not None:
                 rrp_change = round(((rrp - past_rrp) / past_rrp) * 100.0, 1)
 
         return {
@@ -446,7 +451,7 @@ async def scrape_core_macro_metrics():
 
 
 @app.get("/api/v1/scrape/macro/liquidity")
-async def scrape_liquidity():
+async def scrape_liquidity() -> dict[str, Any]:
     import asyncio
     from playwright.async_api import async_playwright
     from playwright_stealth import Stealth
@@ -458,7 +463,7 @@ async def scrape_liquidity():
         "high_yield_spread": 3.1,
     }
 
-    async def fetch_fred_csv(series_id: str, context) -> float | None:
+    async def fetch_fred_csv(series_id: str, context: Any) -> float | None:
         url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
         try:
             page = await context.new_page()
@@ -531,7 +536,7 @@ async def scrape_liquidity():
 
 
 @app.get("/api/v1/scrape/darkpool")
-async def scrape_darkpool_dix():
+async def scrape_darkpool_dix() -> dict[str, Any]:
     import random
 
     fallback = {
@@ -557,10 +562,10 @@ async def scrape_darkpool_dix():
 
 
 @app.get("/api/v1/scrape/darkpool/{symbol}")
-async def scrape_darkpool_prints(symbol: str):
+async def scrape_darkpool_prints(symbol: str) -> dict[str, Any]:
     import random
 
-    fallback = {"symbol": symbol.upper(), "prints": []}
+    fallback: dict[str, Any] = {"symbol": symbol.upper(), "prints": []}
 
     try:
         # 模擬向暗池平台(如 StockGrid/Finra)獲取特定標的大宗交易(Block Prints)
@@ -568,7 +573,7 @@ async def scrape_darkpool_prints(symbol: str):
 
         # 產生模擬的大單成交紀錄，確保 DP-POC 計算有資料
         base_price = 100.0  # mock price
-        prints = []
+        prints: list[dict[str, Any]] = []
         for i in range(5):
             price = round(base_price + random.uniform(-2.0, 2.0), 2)
             volume = random.randint(100000, 500000)
@@ -583,7 +588,12 @@ async def scrape_darkpool_prints(symbol: str):
             )
 
         # 依據成交金額(premium)排序，金額最大的排最前面
-        prints.sort(key=lambda x: float(x.get("premium", 0.0)), reverse=True)
+        prints.sort(
+            key=lambda x: float(x["premium"])
+            if "premium" in x and isinstance(x["premium"], (int, float, str))
+            else 0.0,
+            reverse=True,
+        )
 
         return {
             "status": "success",
@@ -600,7 +610,7 @@ async def scrape_darkpool_prints(symbol: str):
 
 
 @app.get("/api/v1/scrape/macro/fedwatch")
-async def scrape_fedwatch():
+async def scrape_fedwatch() -> dict[str, Any]:
     import re
     import requests
     import asyncio
@@ -609,7 +619,7 @@ async def scrape_fedwatch():
 
     fallback = {"probability": 0.72, "decision": "maintain"}
 
-    def _fetch_and_parse_excel():
+    def _fetch_and_parse_excel() -> float:
         url = "https://www.atlantafed.org/-/media/Project/Atlanta/FRBA/Documents/cenfis/market-probability-tracker/mpt_histdata.xlsx"
         local_path = "/tmp/mpt_histdata.xlsx"
 
@@ -623,7 +633,7 @@ async def scrape_fedwatch():
         ws = wb["DATA"]
 
         # 1. Group rows by date
-        data_by_date = {}
+        data_by_date: dict[str, list[Any]] = {}
         for row in ws.iter_rows(max_row=1000000, max_col=5, values_only=True):
             if not row or row[0] == "date" or row[0] is None:
                 continue
@@ -642,7 +652,7 @@ async def scrape_fedwatch():
         latest_rows = data_by_date[latest_date_str]
 
         # 2. Group latest rows by meeting date (reference_start)
-        by_meeting = {}
+        by_meeting: dict[date, list[Any]] = {}
         for r in latest_rows:
             meeting_dt = r[1]
             if not isinstance(meeting_dt, datetime):
@@ -712,7 +722,7 @@ async def scrape_fedwatch():
 
 
 @app.get("/api/v1/scrape/options/{symbol}/gex")
-async def scrape_symbol_gex(symbol: str):
+async def scrape_symbol_gex(symbol: str) -> dict[str, Any]:
     import math
     import re
     from datetime import date
@@ -727,10 +737,10 @@ async def scrape_symbol_gex(symbol: str):
     }
 
     # Black-Scholes math helper
-    def ndtr_prime(x):
+    def ndtr_prime(x: float) -> float:
         return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
 
-    def calculate_gamma(S, K, t, r, sigma):
+    def calculate_gamma(S: float, K: float, t: float, r: float, sigma: float) -> float:
         if S <= 0 or K <= 0 or t <= 0 or sigma <= 0:
             return 0.0
         try:
@@ -752,7 +762,7 @@ async def scrape_symbol_gex(symbol: str):
             await Stealth().apply_stealth_async(context)
 
             # Speed up loading by blocking images and CSS
-            async def safe_route(route):
+            async def safe_route(route: Any) -> None:
                 try:
                     if route.request.resource_type in ["image", "stylesheet", "font"]:
                         await route.abort()
@@ -813,10 +823,10 @@ async def scrape_symbol_gex(symbol: str):
                 )
                 return {"status": "success", "data": fallback}
 
-            option_chain = []
+            option_chain: list[dict[str, Any]] = []
             today = date.today()
 
-            def parse_table(table, is_call):
+            def parse_table(table: Any, is_call: bool) -> None:
                 rows = table.select("tr")
                 for r in rows[1:]:
                     cols = [td.text.strip() for td in r.select("td")]
@@ -938,20 +948,15 @@ async def scrape_symbol_gex(symbol: str):
 
 
 @app.get("/api/v1/macro/calendar")
-async def scrape_macro_calendar(year: int, month: int, high_impact_only: bool = False):
+async def scrape_macro_calendar(
+    year: int, month: int, high_impact_only: bool = False
+) -> list[dict[str, Any]]:
     import requests
     import calendar
     import asyncio
     from datetime import datetime
     import re
-
-    try:
-        from zoneinfo import ZoneInfo
-    except ImportError:
-        import pytz
-
-        def ZoneInfo(x):
-            return pytz.timezone(x)
+    from zoneinfo import ZoneInfo
 
     try:
         _, last_day = calendar.monthrange(year, month)
@@ -978,7 +983,7 @@ async def scrape_macro_calendar(year: int, month: int, high_impact_only: bool = 
         if data.get("status") != "ok":
             return []
 
-        events = []
+        events: list[dict[str, Any]] = []
         ny_tz = ZoneInfo("America/New_York")
 
         TRANSLATIONS = {
@@ -1085,7 +1090,7 @@ async def scrape_macro_calendar(year: int, month: int, high_impact_only: bool = 
 
 
 @app.get("/api/v1/scrape/fundamental/{symbol}/metadata")
-async def scrape_fundamental_metadata(symbol: str):
+async def scrape_fundamental_metadata(symbol: str) -> dict[str, Any]:
     """
     獲取標的最新財報的 Metadata (用於輕量級快取驗證)
     """
@@ -1125,7 +1130,7 @@ async def scrape_fundamental_metadata(symbol: str):
 
 
 @app.get("/api/v1/scrape/fundamental/{symbol}/list")
-async def scrape_fundamental_list(symbol: str):
+async def scrape_fundamental_list(symbol: str) -> dict[str, Any]:
     """
     獲取標的近期財報清單 (10-K, 10-Q, 8-K)
     """
@@ -1170,7 +1175,9 @@ async def scrape_fundamental_list(symbol: str):
 
 
 @app.get("/api/v1/scrape/fundamental/{symbol}")
-async def scrape_fundamental_text(symbol: str, accession_number: str | None = None):
+async def scrape_fundamental_text(
+    symbol: str, accession_number: str | None = None
+) -> dict[str, Any]:
     """
     獲取標的最新財報與基本面文本 (SEC EDGAR 8-K / 10-Q)
     """
@@ -1265,7 +1272,7 @@ async def scrape_fundamental_text(symbol: str, accession_number: str | None = No
 
 
 @app.get("/api/v1/health/sys")
-async def sys_health():
+async def sys_health() -> dict[str, Any]:
     """Return OS-level resource usage of the Edge Node"""
     import platform
 

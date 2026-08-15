@@ -6,7 +6,7 @@ description = "Consolidate notification keys into 10 unified tactical channels"
 sql = "SELECT 1;"
 
 
-def migrate_data(conn: Any) -> None:  # type: ignore
+def migrate_data(conn: Any) -> None:
     cursor = conn.cursor()
     # 1. Get all user_ids currently having any notification settings
     cursor.execute("SELECT DISTINCT user_id FROM user_notification_settings")

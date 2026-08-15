@@ -259,7 +259,7 @@ class HedgeMonitorService:
                 max_tokens=200,
             )
             content = response.choices[0].message.content
-            return content.strip() if content else "市場波動劇烈，建議執行對沖。"  # type: ignore
+            return str(content.strip()) if content else "市場波動劇烈，建議執行對沖。"
         except Exception:
             return "市場波動劇烈，組合 Delta 已偏離中性。建議執行對沖以鎖定風險。"
 

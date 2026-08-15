@@ -15,7 +15,7 @@ import time
 import random
 import math
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, cast
 from collections import OrderedDict, namedtuple
 import gc
 import weakref
@@ -938,7 +938,9 @@ async def get_basic_financials(symbol: str, expiry_hours: int = 24) -> Dict[str,
     client = _get_client()
     try:
         data = await _execute_api_call(client.company_basic_financials, symbol, "all")
-        metrics = data.get("metric", {}) if data else {}
+        metrics: Dict[str, Any] = (
+            cast(Dict[str, Any], data.get("metric", {})) if data else {}
+        )
 
         if metrics:
             # 3. 非同步寫入快取
@@ -946,7 +948,7 @@ async def get_basic_financials(symbol: str, expiry_hours: int = 24) -> Dict[str,
                 db_financials.save_financials_cache, symbol, metrics
             )
 
-        return metrics  # type: ignore
+        return metrics
     except Exception as e:
         logger.error(f"[{symbol}] Finnhub financials 失敗: {e}")
         return {}
@@ -976,10 +978,10 @@ async def get_company_profile(symbol: str) -> Dict[str, Any]:
     client = _get_client()
     try:
         data = await _execute_api_call(client.company_profile2, symbol=symbol)
-        res = data if data else {}
+        res: Dict[str, Any] = cast(Dict[str, Any], data) if data else {}
         if res:
             _profile_cache[symbol] = (res, now + _PROFILE_CACHE_TTL)
-        return res  # type: ignore
+        return res
     except Exception as e:
         logger.error(f"[{symbol}] Finnhub company profile 失敗: {e}")
         return {}
@@ -1015,7 +1017,9 @@ async def get_economic_calendar(from_date: str, to_date: str) -> List[Dict[str, 
         data = await _execute_api_call(
             client.calendar_economic, _from=from_date, to=to_date
         )
-        return data.get("economicCalendar", []) if data else []  # type: ignore
+        return (
+            cast(List[Dict[str, Any]], data.get("economicCalendar", [])) if data else []
+        )
     except Exception as e:
         logger.error(f"Finnhub economic calendar 失敗: {e}")
         return []
@@ -1041,7 +1045,7 @@ async def get_earnings_calendar(
         )
         earnings = data.get("earningsCalendar", []) if data else []
         earnings.sort(key=lambda x: x.get("date", ""))
-        return earnings  # type: ignore
+        return cast(List[Dict[str, Any]], earnings)
     except Exception as e:
         logger.error(f"[{symbol}] Finnhub earnings calendar 失敗: {e}")
         return []

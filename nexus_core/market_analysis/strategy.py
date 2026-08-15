@@ -165,9 +165,9 @@ async def _calculate_mmm(symbol: Any, price: Any, today: Any, is_etf: Any):  # t
     return mmm_pct, safe_lower, safe_upper, days_to_earnings
 
 
-async def _calculate_term_structure(  # type: ignore
+async def _calculate_term_structure(
     symbol: Any, expirations: Any, price: Any, today: Any
-):  # type: ignore
+) -> tuple[float, str]:
     """計算波動率期限結構"""
     front_date, back_date = None, None
     front_diff, back_diff = 9999, 9999
@@ -953,9 +953,9 @@ async def get_option_metrics(symbol: Any, opt_type: Any, strike: Any, expiry: An
         return {"delta": 0.0, "dte": 0, "mid": 0.0}
 
 
-async def find_best_contract(  # type: ignore
+async def find_best_contract(
     symbol: Any, strategy_type: Any, target_delta: Any, min_dte: Any, max_dte: Any
-):  # type: ignore
+) -> Optional[dict[str, Any]]:
     try:
         expirations = await market_data_service.get_all_option_expiries(symbol)
         today = datetime.now().date()

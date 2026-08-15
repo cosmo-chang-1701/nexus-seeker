@@ -24,9 +24,9 @@ from .report_formatter import (
 logger = logging.getLogger(__name__)
 
 
-async def check_portfolio_status_logic(  # type: ignore
-    portfolio_rows: Any, user_capital: Any = 50000.0
-):  # type: ignore
+async def check_portfolio_status_logic(
+    portfolio_rows: Any, user_capital: float = 50000.0
+) -> List[str]:
     """
     [Facade] 盤後動態結算與風險管線編排者 (Orchestrator)
     """
@@ -57,12 +57,12 @@ class PortfolioStatusOrchestrator:
         self.total_vega = 0.0
         self.total_vanna = 0.0
 
-    async def run(self, portfolio_rows: Any):  # type: ignore
+    async def run(self, portfolio_rows: Any) -> List[str]:
         # 1. 預處理：批次下載資料
         await self._prepare_market_data(portfolio_rows)
 
         # 2. 按標的分群處理
-        positions_by_symbol = {}  # type: ignore
+        positions_by_symbol: dict[str, list[Any]] = {}
         for row in portfolio_rows:
             positions_by_symbol.setdefault(row[0], []).append(row)
 
@@ -75,7 +75,7 @@ class PortfolioStatusOrchestrator:
 
         return self.report_lines
 
-    async def _prepare_market_data(self, portfolio_rows: Any):  # type: ignore
+    async def _prepare_market_data(self, portfolio_rows: Any) -> None:
         """下載所有必要的行情資料。"""
         unique_symbols = sorted(list(set([row[0] for row in portfolio_rows])))
         all_targets = unique_symbols + ["SPY"]

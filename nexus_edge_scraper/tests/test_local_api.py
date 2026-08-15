@@ -1,3 +1,4 @@
+from typing import Any
 from unittest.mock import patch, MagicMock, AsyncMock
 from fastapi.testclient import TestClient
 from local_api import app
@@ -7,7 +8,7 @@ client = TestClient(app)
 
 # Mock async context manager for Playwright
 class AsyncContextManagerMock:
-    async def __aenter__(self):
+    async def __aenter__(self) -> Any:
         mock_p = MagicMock()
         mock_browser = AsyncMock()
         # Raise exception inside the try...except block (new_context)
@@ -15,11 +16,11 @@ class AsyncContextManagerMock:
         mock_p.chromium.launch = AsyncMock(return_value=mock_browser)
         return mock_p
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         pass
 
 
-def test_scrape_reddit_fallback():
+def test_scrape_reddit_fallback() -> None:
     # Mock playwright to fail at context creation inside try-except
     with patch("local_api.async_playwright", return_value=AsyncContextManagerMock()):
         response = client.get("/api/v1/scrape/reddit/AAPL")
@@ -28,7 +29,7 @@ def test_scrape_reddit_fallback():
         assert data["status"] in ["error", "success"]
 
 
-def test_scrape_gex_fallback():
+def test_scrape_gex_fallback() -> None:
     # Mock playwright to fail at context creation inside try-except
     with patch("local_api.async_playwright", return_value=AsyncContextManagerMock()):
         response = client.get("/api/v1/scrape/macro/gex")
@@ -41,7 +42,7 @@ def test_scrape_gex_fallback():
         assert data["data"]["put_wall"] == 505.0
 
 
-def test_scrape_fedwatch_fallback():
+def test_scrape_fedwatch_fallback() -> None:
     # Mock requests.get to fail
     with patch("requests.get", side_effect=Exception("Mock requests failure")):
         response = client.get("/api/v1/scrape/macro/fedwatch")
@@ -51,7 +52,7 @@ def test_scrape_fedwatch_fallback():
         assert data["data"]["probability"] == 0.72
 
 
-def test_scrape_sec_fundamental():
+def test_scrape_sec_fundamental() -> None:
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.text = "<html><body><ix:header>Header</ix:header><us-gaap:Revenues>100</us-gaap:Revenues><div>Clean text. Revenue grew by 10% year-over-year.</div></body></html>"

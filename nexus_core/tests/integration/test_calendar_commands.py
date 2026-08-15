@@ -200,7 +200,7 @@ async def test_command_event_impact(mock_interaction: Any, db_conn: Any):  # typ
             cog,  # type: ignore
             mock_interaction,
             symbol=symbol,
-            vol_move=20.0,  # type: ignore
+            vol_move=20.0,
         )
 
         mock_interaction.followup.send.assert_called_once()
@@ -246,7 +246,7 @@ async def test_command_event_impact_uses_builder(mock_interaction: Any, db_conn:
             cog,  # type: ignore
             mock_interaction,
             symbol=symbol,
-            vol_move=20.0,  # type: ignore
+            vol_move=20.0,
         )
 
     mock_builder.assert_called_once()

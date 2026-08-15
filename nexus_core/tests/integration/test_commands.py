@@ -20,7 +20,7 @@ async def test_command_settings(mock_interaction: Any, db_conn: Any):  # type: i
         cog,  # type: ignore
         mock_interaction,
         risk_limit=15.0,
-        enable_vtr=True,  # type: ignore
+        enable_vtr=True,
     )
 
     # Verify response
@@ -36,9 +36,9 @@ async def test_command_settings(mock_interaction: Any, db_conn: Any):  # type: i
 
 
 @pytest.mark.asyncio
-async def test_command_add_holding(  # type: ignore
+async def test_command_add_holding(
     mock_interaction: Any, db_conn: Any, mock_market_data: Any
-):  # type: ignore
+) -> None:
     bot = MagicMock()
     cog = TerminalCog(bot)
 
@@ -48,7 +48,7 @@ async def test_command_add_holding(  # type: ignore
         mock_interaction,
         symbol="AAPL",
         quantity=10,
-        avg_cost=150.0,  # type: ignore
+        avg_cost=150.0,
     )
 
     mock_interaction.followup.send.assert_called_once()
@@ -64,9 +64,9 @@ async def test_command_add_holding(  # type: ignore
 
 
 @pytest.mark.asyncio
-async def test_command_skew_scan(  # type: ignore
+async def test_command_skew_scan(
     mock_interaction: Any, db_conn: Any, mock_market_data: Any
-):  # type: ignore
+) -> None:
     bot = MagicMock()
     cog = SentimentCog(bot)
 
@@ -101,9 +101,9 @@ async def test_command_skew_scan(  # type: ignore
 
 
 @pytest.mark.asyncio
-async def test_command_ddp_scan(  # type: ignore
+async def test_command_ddp_scan(
     mock_interaction: Any, db_conn: Any, mock_market_data: Any
-):  # type: ignore
+) -> None:
     bot = MagicMock()
     cog = ScannerCommandsCog(bot)
 
@@ -174,7 +174,7 @@ async def test_command_settle_hedge(mock_interaction: Any, db_conn: Any):  # typ
         cog,  # type: ignore
         mock_interaction,
         alert_id=alert_id,
-        actual_qty=12,  # type: ignore
+        actual_qty=12,
     )
 
     mock_interaction.followup.send.assert_called_once()

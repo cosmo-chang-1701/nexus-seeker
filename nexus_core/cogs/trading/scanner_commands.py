@@ -101,5 +101,5 @@ class ScannerCommandsCog(commands.Cog):
             )
 
 
-async def setup(bot: Any) -> None:  # type: ignore
+async def setup(bot: Any) -> None:
     await bot.add_cog(ScannerCommandsCog(bot))

@@ -537,11 +537,13 @@ class NexusBot(commands.Bot):
                 try:
                     user = await self.fetch_user(user_id)
                     if user:
-                        message_chunks = (
-                            _split_discord_text(message, DISCORD_CONTENT_LIMIT)
-                            if message
-                            else [None]  # type: ignore
-                        )
+                        message_chunks: list[str | None]
+                        if message:
+                            message_chunks = list(
+                                _split_discord_text(message, DISCORD_CONTENT_LIMIT)
+                            )
+                        else:
+                            message_chunks = [None]
 
                         for index, chunk in enumerate(message_chunks):
                             await user.send(

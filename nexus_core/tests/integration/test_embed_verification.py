@@ -100,9 +100,9 @@ async def test_terminal_cog_uses_embeds(mock_interaction: Any, bot: Any):  # typ
 
 
 @pytest.mark.asyncio
-async def test_terminal_cog_success_embed(  # type: ignore
+async def test_terminal_cog_success_embed(
     mock_interaction: Any, bot: Any, db_conn: Any
-):  # type: ignore
+) -> None:
     """測試 TerminalCog 指令成功時是否也使用 Embed"""
     terminal = TerminalCog(bot)
     await terminal.update_settings.callback(terminal, mock_interaction, risk_limit=25.0)  # type: ignore

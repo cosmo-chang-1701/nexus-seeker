@@ -10,9 +10,9 @@ from services.trading_service import TradingService
 
 
 @pytest.mark.asyncio
-async def test_calendar_service_reuses_sqlite_macro_cache_across_instances(  # type: ignore
+async def test_calendar_service_reuses_sqlite_macro_cache_across_instances(
     db_conn: Any,
-):  # type: ignore
+) -> None:
     fixed_now = datetime(2026, 5, 12, 12, 0, 0)
 
     with patch("services.calendar_service.datetime") as mock_datetime:

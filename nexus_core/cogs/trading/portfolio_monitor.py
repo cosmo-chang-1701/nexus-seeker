@@ -634,5 +634,5 @@ class PortfolioMonitorCog(commands.Cog):
         await self.bot.wait_until_ready()
 
 
-async def setup(bot: Any) -> None:  # type: ignore
+async def setup(bot: Any) -> None:
     await bot.add_cog(PortfolioMonitorCog(bot))

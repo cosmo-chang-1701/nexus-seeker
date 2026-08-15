@@ -21,4 +21,45 @@ dependencies = [
 ]
 
 [tool.setuptools]
-py-modules = ["local_api", "section_extractor"]
+py-modules = ["local_api", "section_extractor", "yf_api"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+ignore_missing_imports = false
+explicit_package_bases = true
+mypy_path = ".:nexus_edge_scraper"
+no_implicit_optional = true
+exclude = ["build", "dist", ".venv"]
+
+[[tool.mypy.overrides]]
+module = [
+    "playwright.*",
+    "playwright_stealth.*",
+    "bs4.*",
+    "lxml.*",
+    "openpyxl.*",
+    "yfinance.*",
+    "pytz.*",
+    "requests.*",
+    "pytest.*"
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]

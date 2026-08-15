@@ -202,7 +202,7 @@ class AttributionEngine:
                 max_tokens=250,
             )
             content = response.choices[0].message.content
-            return content.strip() if content else "AI 歸因分析生成空白。"  # type: ignore
+            return str(content.strip()) if content else "AI 歸因分析生成空白。"
         except Exception as e:
             logger.error(f"Failed to generate attribution narration: {e}")
             return "AI 歸因分析暫不可用。"

@@ -62,7 +62,7 @@ class MarketScanCog(commands.Cog):
                     logger.debug(f"[MacroState] 快照已更新: VIX={vix:.2f}")
                     return
 
-    async def _run_market_scan_logic(  # type: ignore
+    async def _run_market_scan_logic(
         self, is_auto: Any = True, triggered_by: Any = None
     ) -> None:
         """共用的掃描核心邏輯，協調 Service 計算與 Discord 訊息發送。"""
@@ -234,5 +234,5 @@ class MarketScanCog(commands.Cog):
             logger.error(f"掃描邏輯執行錯誤: {e}")
 
 
-async def setup(bot: Any) -> None:  # type: ignore
+async def setup(bot: Any) -> None:
     await bot.add_cog(MarketScanCog(bot))

@@ -22,6 +22,7 @@ repos:
     rev: v1.9.0
     hooks:
       - id: mypy
+        name: mypy-core
         args: [--config-file=nexus_core/pyproject.toml, --explicit-package-bases]
         additional_dependencies: [
           pydantic>=2.13.4,
@@ -32,6 +33,20 @@ repos:
           discord.py>=2.3.0
         ]
         files: ^nexus_core/
+      - id: mypy
+        name: mypy-edge-scraper
+        args: [--config-file=nexus_edge_scraper/pyproject.toml, --explicit-package-bases]
+        additional_dependencies: [
+          pydantic>=2.13.4,
+          rich>=13.0.0,
+          attrs>=23.1.0,
+          fastapi,
+          types-requests,
+          types-psutil,
+          types-beautifulsoup4,
+          httpx,
+        ]
+        files: ^nexus_edge_scraper/
 
   - repo: https://github.com/returntocorp/semgrep
     rev: 'v1.165.0'

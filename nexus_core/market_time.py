@@ -10,9 +10,9 @@ ny_tz = ZoneInfo("America/New_York")
 nyse_calendar = mcal.get_calendar("NYSE")
 
 
-def get_next_market_target_time(  # type: ignore
-    reference: Any = "open", offset_minutes: Any = 0, skip_today: Any = False
-):  # type: ignore
+def get_next_market_target_time(
+    reference: str = "open", offset_minutes: int = 0, skip_today: bool = False
+) -> datetime | None:
     """獲取下一個市場的目標時間"""
     now = datetime.now(ny_tz)
 
@@ -26,15 +26,18 @@ def get_next_market_target_time(  # type: ignore
 
     for index, row in schedule.iterrows():
         if reference == "open":
-            target_utc = row["market_open"].to_pydatetime()
+            raw_target = row["market_open"].to_pydatetime()
         else:
-            target_utc = row["market_close"].to_pydatetime()
+            raw_target = row["market_close"].to_pydatetime()
 
+        target_utc: datetime = raw_target
         # Ensure target_utc is timezone-aware (UTC)
         if target_utc.tzinfo is None:
             target_utc = target_utc.replace(tzinfo=timezone.utc)
 
-        target_ny = target_utc.astimezone(ny_tz) + timedelta(minutes=offset_minutes)
+        target_ny: datetime = target_utc.astimezone(ny_tz) + timedelta(
+            minutes=offset_minutes
+        )
 
         if target_ny > (now - timedelta(seconds=1)):
             logger.info(f"Next market {reference} target: {target_ny}")
@@ -43,9 +46,9 @@ def get_next_market_target_time(  # type: ignore
     return None
 
 
-def get_sleep_seconds(target_time: Any):  # type: ignore
+def get_sleep_seconds(target_time: datetime | None) -> float:
     if not target_time:
-        return 3600
+        return 3600.0
 
     sleep_secs = (target_time - datetime.now(ny_tz)).total_seconds()
     return max(0.0, sleep_secs)

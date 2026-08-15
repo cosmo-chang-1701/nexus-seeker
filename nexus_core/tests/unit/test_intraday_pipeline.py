@@ -230,9 +230,9 @@ def test_post_market_attribution_evolution(squeeze_engine: Any):  # type: ignore
 
 
 @pytest.mark.asyncio
-async def test_build_watchlist_heartbeat_embed_includes_option_plan(  # type: ignore
+async def test_build_watchlist_heartbeat_embed_includes_option_plan(
     intraday_pipeline: Any,
-):  # type: ignore
+) -> None:
     evaluation = SimpleNamespace(
         metrics=SimpleNamespace(
             symbol="MU",

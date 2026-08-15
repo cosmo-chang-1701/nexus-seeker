@@ -142,9 +142,9 @@ async def test_calculate_telemetry_pricing_engine() -> None:
 
 
 @pytest.mark.asyncio
-async def test_dynamic_order_modal_on_submit_limit_success(  # type: ignore
+async def test_dynamic_order_modal_on_submit_limit_success(
     mock_interaction: Any, db_conn: Any
-):  # type: ignore
+) -> None:
     """測試限價訂單 Modal 成功送出與資料庫寫入"""
     modal = DynamicOrderModal(
         order_type="LIMIT", title="新增限價訂單", validity_db="DAY"
@@ -578,9 +578,9 @@ async def test_remove_order_command_no_id(mock_interaction: Any):  # type: ignor
 
 
 @pytest.mark.asyncio
-async def test_edit_order_command_with_id_and_params(  # type: ignore
+async def test_edit_order_command_with_id_and_params(
     mock_interaction: Any, db_conn: Any
-):  # type: ignore
+) -> None:
     """測試 edit_order 傳入 ID 與參數直接更新"""
     user_id = mock_interaction.user.id
     order_id = add_active_order(
@@ -598,7 +598,7 @@ async def test_edit_order_command_with_id_and_params(  # type: ignore
         mock_interaction,
         order_id=order_id,
         price=145.5,
-        side="SELL",  # type: ignore
+        side="SELL",
     )
 
     assert mock_interaction.response.defer.called
@@ -643,7 +643,7 @@ async def test_edit_order_command_id_only(mock_interaction: Any, db_conn: Any): 
         mock_interaction,
         order_id=order_id,
         price=None,
-        side=None,  # type: ignore
+        side=None,
     )
 
     assert mock_interaction.response.send_modal.called
@@ -898,9 +898,9 @@ async def test_add_order_slash_command_telemetry(  # type: ignore
 
 
 @pytest.mark.asyncio
-async def test_telemetry_alert_ignores_stale_max_pain(  # type: ignore
+async def test_telemetry_alert_ignores_stale_max_pain(
     mock_interaction: Any, db_conn: Any
-):  # type: ignore
+) -> None:
     """測試當 Max Pain 快取過期時，遙測對齊警報能安全過濾不採用它進行調價計算"""
     user_id = mock_interaction.user.id
     # Clear orders first

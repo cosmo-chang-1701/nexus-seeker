@@ -3,7 +3,7 @@ import logging
 import psutil
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field, ConfigDict
-from typing import Literal
+from typing import Literal, cast, Any
 
 from config import LLM_API_BASE, LLM_MODEL_NAME, API_KEY
 
@@ -162,7 +162,7 @@ async def classify_uoa_intent(
         parsed = response.choices[0].message.parsed
         if parsed is None:
             raise ValueError("Parsed result is None")
-        return parsed.model_dump()  # type: ignore
+        return cast(dict[Any, Any], parsed.model_dump())
     except Exception as e:
         logger.error(f"UOA 分類失敗: {e}")
         return {
@@ -319,7 +319,7 @@ async def generate_analyst_report(report_type: str, raw_data: dict) -> str:
         result = response.choices[0].message.parsed
         if result is None:
             raise ValueError("Parsed result is None")
-        return result.report_content  # type: ignore
+        return str(result.report_content)
     except Exception as e:
         logger.error(f"Failed to generate analyst report: {e}")
         return f"**{report_type}**\n--------------------------------------------------\n⚠️ LLM 生成失敗或伺服器離線: {str(e)}"

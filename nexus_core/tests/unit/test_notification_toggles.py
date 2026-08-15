@@ -137,10 +137,10 @@ async def test_notification_settings_view_structure(db_conn: Any):  # type: igno
 
     category_select = next(
         c for c in view.children if getattr(c, "custom_id", None) == "select_category"
-    )  # type: ignore
+    )
     module_select = next(
         c for c in view.children if getattr(c, "custom_id", None) == "select_toggles"
-    )  # type: ignore
+    )
 
     # 4 大分類
     assert len(category_select.options) == 4  # type: ignore
@@ -158,7 +158,7 @@ async def test_notification_settings_view_structure(db_conn: Any):  # type: igno
     # 驗證狀態皆關閉且 View 重新載入，下拉選單前綴變為 🔴
     module_select_new = next(
         c for c in view.children if getattr(c, "custom_id", None) == "select_toggles"
-    )  # type: ignore
+    )
     assert module_select_new.options[0].label.startswith("🔴")  # type: ignore
 
 
@@ -255,7 +255,7 @@ async def test_category_navigation_and_embed_marker(db_conn: Any):  # type: igno
             c
             for c in view.children
             if getattr(c, "custom_id", None) == "select_toggles"
-        )  # type: ignore
+        )
         assert len(module_select.options) == len(mod_info["items"])  # type: ignore
 
 

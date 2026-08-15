@@ -121,5 +121,5 @@ async def _dispatch_order_telemetry_alignment_alert(bot: Any) -> None:
             await bot.queue_dm(uid, embed=embed)
 
 
-async def setup(bot: Any) -> None:  # type: ignore
+async def setup(bot: Any) -> None:
     await bot.add_cog(TelemetryMonitorCog(bot))

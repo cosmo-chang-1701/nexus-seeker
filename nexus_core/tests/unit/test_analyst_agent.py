@@ -443,7 +443,8 @@ async def test_dispatch_post_market_intelligence_runway_fallback() -> None:
 
         # Check queue_dm was called with the build embed containing "600"
         assert bot.queue_dm.await_count == 1
-        sent_embed = bot.queue_dm.await_args.kwargs["embed"]  # type: ignore
+        assert bot.queue_dm.await_args is not None
+        sent_embed = bot.queue_dm.await_args.kwargs["embed"]
         # The fields should include the survival runway field with "600"
         # The embed should contain the survival runway "600" somewhere
         embed_content = str(sent_embed.description) + "".join(
