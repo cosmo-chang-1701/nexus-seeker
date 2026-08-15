@@ -14,19 +14,28 @@ jobs:
 
     steps:
     - name: 📥 Checkout repository
-      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      uses: actions/checkout@v4
+
+    - name: 🐍 Set up Python 3.12
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: 🧹 Run Pre-commit Hooks (Ruff, Format, Mypy Core & Scraper)
+      uses: pre-commit/action@v3.0.1
+      with:
+        extra_args: --all-files
+
+    - name: 🕷️ Run Nexus Edge Scraper Unit Tests
+      run: |
+        pip install ./nexus_edge_scraper pytest pytest-asyncio
+        pytest nexus_edge_scraper/tests -v
 
     - name: 🐳 Set up Docker Buildx
-      uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      uses: docker/setup-buildx-action@v3
 
-    - name: 🧪 Run Pytest
+    - name: 🧪 Run Nexus Core Containerized Tests (Pytest)
       run: |
         cd nexus_core
-        # Create a dummy .env file for tests if needed
         cp .env.example .env
-        docker compose run --rm nexus-seeker python -m pytest tests
-
-    - name: 🔍 Run Mypy (Type Check)
-      run: |
-        cd nexus_core
-        docker compose run --rm nexus-seeker python -m mypy --config-file pyproject.toml .
+        docker compose run --rm nexus-seeker python -m pytest tests -p no:cacheprovider
