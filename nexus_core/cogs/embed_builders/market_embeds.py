@@ -1290,8 +1290,23 @@ def build_radar_scan_embed(
                 and "🆘" not in msg
             ]
 
-        if insights:
-            insights_str = "\n".join(insights[:5])
+        safe_insights: List[str] = []
+        cur_insights_len = 0
+        for ins in insights:
+            ins_strip = ins.strip()
+            if not ins_strip:
+                continue
+            if cur_insights_len + len(ins_strip) + 1 > 920:
+                if not safe_insights:
+                    safe_insights.append(ins_strip[:900] + "...")
+                break
+            safe_insights.append(ins_strip)
+            cur_insights_len += len(ins_strip) + 1
+            if len(safe_insights) >= 5:
+                break
+
+        if safe_insights:
+            insights_str = "\n".join(safe_insights)
         else:
             insights_str = (
                 "• ✨ 所有標的當前價格與 Max Pain 及波動邊界皆無極端異常偏離。"
@@ -1309,11 +1324,30 @@ def build_radar_scan_embed(
         radar_title = "🧠 核心 AI 暨持倉量化雷達"
         md_table_header = "| 標的 | 現價 (漲跌%) | G/P-Wall(±) | Skw% | SQZ向量 | Neg-GEX | STO 鎖死 | IV 策略 | EM Z-Score | 單一最強巨鯨異動 (Top UOA) | 灰階戰術建議 |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
 
-        chunk_size_md = 5
-        md_chunks = [
-            md_lines[i : i + chunk_size_md]
-            for i in range(0, len(md_lines), chunk_size_md)
-        ]
+        # 動態安全分塊：確保單一 codeblock 不超過 900 字元 (通常容納 3~4 列)
+        max_chunk_chars = 900
+        md_chunks: List[List[str]] = []
+        current_chunk: List[str] = []
+        current_chunk_len = len(md_table_header) + 12  # 包含 ```ansi\n...\n```
+
+        for line in md_lines:
+            line_len = len(line) + 1
+            if current_chunk and (
+                current_chunk_len + line_len > max_chunk_chars
+                or len(current_chunk) >= 4
+            ):
+                md_chunks.append(current_chunk)
+                current_chunk = [line]
+                current_chunk_len = len(md_table_header) + 12 + line_len
+            else:
+                current_chunk.append(line)
+                current_chunk_len += line_len
+
+        if current_chunk:
+            md_chunks.append(current_chunk)
+
+        if not md_chunks:
+            md_chunks = [[]]
 
         for idx, md_chunk in enumerate(md_chunks):
             field_name = (
@@ -1323,9 +1357,6 @@ def build_radar_scan_embed(
             )
 
             ansi_content = md_table_header + "\n" + "\n".join(md_chunk)
-
-            if idx == len(md_chunks) - 1:
-                ansi_content += "\n\n提示: ⚠️ 代表與最大痛點偏離度過高（>10%）或具備異常籌碼結構，需點擊穿透審查。\n備註: EM Pos % 代表價格處於預期波動區間之下緣(0%)或上緣(100%)。\n指標: SQZ 🟢多頭動能/🔴空頭動能。MOM 顯示數值代表處於擠壓蓄力期，需防突破或殺跌。\n風控: 🛑 離場判定鐵律：嚴守 15 分鐘實體 K 線收盤撤退線 (過濾下影線流動性獵殺)。"
 
             embed.add_field(
                 name=field_name,
@@ -1338,6 +1369,19 @@ def build_radar_scan_embed(
         embed.add_field(
             name="💡 即時聯動警示 (Real-time Insights)",
             value=f"```ansi\n{insights_str}\n```",
+            inline=False,
+        )
+
+        # 獨立風控圖例與指標指引欄位 (避免擠佔表格 codeblock 字元數)
+        legend_notes = (
+            "提示: ⚠️ 代表與最大痛點偏離度過高（>10%）或具備異常籌碼結構，需點擊穿透審查。\n"
+            "備註: EM Pos % 代表價格處於預期波動區間之下緣(0%)或上緣(100%)。\n"
+            "指標: SQZ 🟢多頭動能/🔴空頭動能。MOM 顯示數值代表處於擠壓蓄力期，需防突破或殺跌。\n"
+            "風控: 🛑 離場判定鐵律：嚴守 15 分鐘實體 K 線收盤撤退線 (過濾下影線流動性獵殺)。"
+        )
+        embed.add_field(
+            name="📋 雷達圖例與風控指引",
+            value=f"```ansi\n{legend_notes}\n```",
             inline=False,
         )
 

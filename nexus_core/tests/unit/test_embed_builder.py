@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Dict, List
 from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -1619,6 +1619,163 @@ def test_build_radar_scan_embed_all_enhanced_fields() -> None:
     # CRWV PutWall 108.0 - 1.5 * 2.8 = $103.80
     assert "$103.80" in desc
     assert "嚴守 15 分鐘實體 K 線收盤撤退線" in desc
+
+
+def test_build_radar_scan_embed_10_symbols_no_field_overflow() -> None:
+    """驗證當輸入 10 檔自選標的 (Watchlist) 且包含完整 UOA、暗池與長文字戰術建議時，所有 Field Value 均嚴格 <= 1024 字元。"""
+    symbols = [
+        "NVDA",
+        "AAPL",
+        "MSFT",
+        "TSLA",
+        "AMZN",
+        "GOOGL",
+        "META",
+        "AMD",
+        "CRWV",
+        "SPCX",
+    ]
+    scan_results: List[Dict[str, Any]] = []
+
+    for i, sym in enumerate(symbols):
+        scan_results.append(
+            {
+                "symbol": sym,
+                "quote": {"c": 150.0 + i * 10.0, "dp": -2.5 + i * 0.5},
+                "iv_metrics": {
+                    "iv_rank": 45.0 + i * 2.0,
+                    "expected_move_weekly": 8.0 + i * 0.5,
+                    "expected_move_lower": 140.0 + i * 10.0,
+                    "expected_move_upper": 160.0 + i * 10.0,
+                    "term_structure_ratio": 1.05,
+                    "iv_term_structure_status": "Contango",
+                },
+                "dte_er": 10 + i,
+                "skew": -0.5 - i * 0.1,
+                "skew_percentile": 55.0 + i * 3.0,
+                "max_pain": {"max_pain": 145.0 + i * 10.0},
+                "uoa": [
+                    {
+                        "symbol": sym,
+                        "expiry": "2026-08-28",
+                        "strike": 160.0 + i * 10.0,
+                        "type": "CALL",
+                        "action": "STO",
+                        "volume": 5000 + i * 500,
+                        "oi": 1000,
+                    }
+                ],
+                "gex_metrics": {
+                    "put_wall": 145.0 + i * 10.0,
+                    "call_wall": 165.0 + i * 10.0,
+                    "net_gex": 15000000.0,
+                },
+                "gex_profile_data": {
+                    "put_wall": 145.0 + i * 10.0,
+                    "call_wall": 165.0 + i * 10.0,
+                    "net_gex": 15000000.0,
+                },
+                "psq_result": {
+                    "is_squeezing": i % 2 == 0,
+                    "momentum": 5.0 + i * 1.5,
+                    "signal_direction": "🟢",
+                },
+                "atr_14": 2.5 + i * 0.2,
+                "darkpool": {
+                    "prints": [
+                        {
+                            "price": 148.0 + i * 10.0,
+                            "premium": 60000000.0,
+                            "volume": 400000,
+                        }
+                    ]
+                },
+                "dp_poc": 148.0 + i * 10.0,
+            }
+        )
+
+    with (
+        patch(
+            "database.notifications.get_user_notification_settings",
+            return_value={
+                "defense_macro_tail_risk": True,
+                "alpha_market_signals": True,
+                "defense_portfolio_risk": True,
+            },
+        ),
+        patch("database.orders.get_user_active_orders", return_value=[]),
+        patch(
+            "database.get_full_user_context",
+            return_value=SimpleNamespace(
+                can_trade_spreads=True, cash_reserve_protection=True
+            ),
+        ),
+        patch(
+            "market_analysis.insights_engine.InsightsEngine.generate_cro_insight",
+            return_value=(None, None, None),
+        ),
+    ):
+        embeds = build_radar_scan_embed(scan_results, "WATCHLIST", 12345)
+
+    assert len(embeds) == 1
+    embed = embeds[0]
+
+    # 1. 嚴格驗證每個欄位的 value <= 1024, name <= 256
+    for idx, field in enumerate(embed.fields):
+        name_len = len(field.name or "")
+        val_len = len(field.value or "")
+        assert (
+            name_len <= 256
+        ), f"Field {idx} name exceeds 256 chars: {name_len} ({field.name})"
+        assert (
+            val_len <= 1024
+        ), f"Field {idx} value exceeds 1024 chars: {val_len} ({field.name})"
+
+    # 2. 驗證 to_dict 輸出符合 Discord API 規範
+    embed_dict = embed.to_dict()
+    for idx, f in enumerate(embed_dict.get("fields", [])):
+        assert (
+            len(f.get("value", "")) <= 1024
+        ), f"to_dict Field {idx} value exceeds 1024: {len(f.get('value', ''))}"
+        assert (
+            len(f.get("name", "")) <= 256
+        ), f"to_dict Field {idx} name exceeds 256: {len(f.get('name', ''))}"
+
+    # 3. 驗證所有 10 檔標的均有完整出現在文字中
+    full_text = get_embed_text(embed)
+    for sym in symbols:
+        assert sym in full_text, f"Symbol {sym} missing from embed output"
+
+    # 4. 驗證風控鐵律與即時警示完整保留
+    assert "嚴守 15 分鐘實體 K 線收盤撤退線" in full_text
+    assert "💡 即時聯動警示" in full_text
+    assert "📋 雷達圖例與風控指引" in full_text
+
+
+def test_nexus_embed_clamps_oversized_fields_safely() -> None:
+    """驗證 NexusEmbed 能在超出 1024/256 字元時進行防禦性截斷並維持 codeblock 閉合。"""
+    from cogs.embed_builders._core import NexusEmbed
+
+    embed = NexusEmbed(title="Test Clamp")
+
+    # 測試超長純文字
+    long_name = "N" * 300
+    long_value = "V" * 2000
+    embed.add_field(name=long_name, value=long_value)
+
+    assert len(embed.fields[0].name) == 256  # type: ignore
+    assert embed.fields[0].name.endswith("...")  # type: ignore
+    assert len(embed.fields[0].value) == 1024  # type: ignore
+    assert embed.fields[0].value.endswith("...")  # type: ignore
+
+    # 測試超長 codeblock 安全閉合
+    long_code = "```ansi\n" + "A" * 2000 + "\n```"
+    embed.add_field(name="Code Block", value=long_code)
+
+    code_val = str(embed.fields[1].value)
+    assert len(code_val) <= 1024
+    assert code_val.startswith("```ansi\n")
+    assert code_val.endswith("\n```")
 
 
 def test_build_post_market_intelligence_embed_empty() -> None:

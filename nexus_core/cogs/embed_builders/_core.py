@@ -14,6 +14,29 @@ from datetime import datetime, timezone
 _OriginalEmbed = discord.Embed
 
 
+def _safe_clamp_field_value(value: Any, max_len: int = 1024) -> str:
+    """確保 Field Value 不超過 1024 字元，若為 codeblock 則保持安全閉合。"""
+    val_str = str(value) if value is not None else ""
+    if len(val_str) <= max_len:
+        return val_str
+    if val_str.startswith("```") and val_str.rstrip().endswith("```"):
+        first_line = val_str.split("\n", 1)[0]
+        fence_end = "\n```"
+        max_inner = max_len - len(first_line) - 1 - len(fence_end)
+        if max_inner > 0:
+            inner = val_str[len(first_line) + 1 : -len(fence_end)]
+            return f"{first_line}\n{inner[:max_inner]}{fence_end}"
+    return val_str[: max_len - 3] + "..."
+
+
+def _safe_clamp_field_name(name: Any, max_len: int = 256) -> str:
+    """確保 Field Name 不超過 256 字元。"""
+    name_str = str(name) if name is not None else ""
+    if len(name_str) <= max_len:
+        return name_str
+    return name_str[: max_len - 3] + "..."
+
+
 class NexusEmbed(discord.Embed):
     """自訂 Embed 子類別，用以動態實現一致的版面設計、精緻調色盤與標準 Footer 排版。"""
 
@@ -85,6 +108,28 @@ class NexusEmbed(discord.Embed):
             text = f"{prefix}{clean_text}"
         super().set_footer(text=text, icon_url=icon_url)
 
+    def add_field(self, *, name: Any, value: Any, inline: bool = True) -> "NexusEmbed":
+        safe_name = _safe_clamp_field_name(name)
+        safe_value = _safe_clamp_field_value(value)
+        super().add_field(name=safe_name, value=safe_value, inline=inline)
+        return self
+
+    def insert_field_at(
+        self, index: int, *, name: Any, value: Any, inline: bool = True
+    ) -> "NexusEmbed":
+        safe_name = _safe_clamp_field_name(name)
+        safe_value = _safe_clamp_field_value(value)
+        super().insert_field_at(index, name=safe_name, value=safe_value, inline=inline)
+        return self
+
+    def set_field_at(
+        self, index: int, *, name: Any, value: Any, inline: bool = True
+    ) -> "NexusEmbed":
+        safe_name = _safe_clamp_field_name(name)
+        safe_value = _safe_clamp_field_value(value)
+        super().set_field_at(index, name=safe_name, value=safe_value, inline=inline)
+        return self
+
     @classmethod
     def from_dict(cls, data: Any):  # type: ignore
         embed = _OriginalEmbed.from_dict(data)
@@ -118,6 +163,14 @@ class NexusEmbed(discord.Embed):
     def to_dict(self) -> Any:
         result = super().to_dict()
 
+        # 實作單一 Field 邊界防護 (256/1024字元上限)
+        fields = list(result.get("fields", []))
+        for field in fields:
+            if "name" in field:
+                field["name"] = _safe_clamp_field_name(field["name"])
+            if "value" in field:
+                field["value"] = _safe_clamp_field_value(field["value"])
+
         # 實作字數截斷防護 (5800字元上限)
         total_len = len(result.get("title") or "") + len(
             result.get("description") or ""
@@ -127,7 +180,6 @@ class NexusEmbed(discord.Embed):
         if "author" in result and "name" in result["author"]:
             total_len += len(result["author"]["name"])
 
-        fields = list(result.get("fields", []))
         for field in fields:
             total_len += len(field.get("name") or "") + len(field.get("value") or "")
 
@@ -143,6 +195,8 @@ class NexusEmbed(discord.Embed):
             desc = result.get("description") or ""
             if warning not in desc:
                 result["description"] = f"{desc}\n\n{warning}" if desc else warning
+        else:
+            result["fields"] = fields
 
         return result
 
