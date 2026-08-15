@@ -612,10 +612,12 @@ async def scrape_darkpool_prints(symbol: str) -> dict[str, Any]:
 @app.get("/api/v1/scrape/macro/fedwatch")
 async def scrape_fedwatch() -> dict[str, Any]:
     import re
+    import calendar
     import requests
     import asyncio
     from datetime import datetime, date
     import openpyxl
+    import yfinance as yf
 
     fallback: dict[str, Any] = {
         "probability": 0.50,
@@ -625,7 +627,164 @@ async def scrape_fedwatch() -> dict[str, Any]:
         "prob_hike": 0.0,
         "prob_cut": 50.0,
         "decision": "maintain",
+        "source": "fallback",
     }
+
+    def _fetch_and_calculate_zq_futures() -> dict[str, Any]:
+        """從 CBOT 30 天期聯邦基金期貨 (ZQ) 報價即時計算 CME FedWatch 利率定價機率。"""
+        fomc_schedule: list[date] = [
+            # 2026
+            date(2026, 1, 28),
+            date(2026, 3, 18),
+            date(2026, 5, 6),
+            date(2026, 6, 17),
+            date(2026, 7, 29),
+            date(2026, 9, 16),
+            date(2026, 11, 4),
+            date(2026, 12, 16),
+            # 2027
+            date(2027, 1, 27),
+            date(2027, 3, 17),
+            date(2027, 5, 5),
+            date(2027, 6, 16),
+            date(2027, 7, 28),
+            date(2027, 9, 22),
+            date(2027, 11, 3),
+            date(2027, 12, 15),
+            # 2028
+            date(2028, 1, 26),
+            date(2028, 3, 15),
+            date(2028, 5, 3),
+            date(2028, 6, 14),
+            date(2028, 7, 26),
+            date(2028, 9, 20),
+            date(2028, 11, 1),
+            date(2028, 12, 13),
+        ]
+        month_codes: dict[int, str] = {
+            1: "F",
+            2: "G",
+            3: "H",
+            4: "J",
+            5: "K",
+            6: "M",
+            7: "N",
+            8: "Q",
+            9: "U",
+            10: "V",
+            11: "X",
+            12: "Z",
+        }
+
+        today = date.today()
+        future_meetings = [m for m in fomc_schedule if m >= today]
+        next_meeting = min(future_meetings) if future_meetings else date(2026, 9, 16)
+
+        m_code = month_codes.get(next_meeting.month, "U")
+        y_suffix = str(next_meeting.year)[-2:]
+        ticker_symbol = f"ZQ{m_code}{y_suffix}.CBT"
+
+        # CME 官方定價邏輯：獲取前一個月 (Prior Month) 期貨合約以獲取進入會議月時的精確預期利率 R_start
+        prior_month = 12 if next_meeting.month == 1 else next_meeting.month - 1
+        prior_year = (
+            next_meeting.year - 1 if next_meeting.month == 1 else next_meeting.year
+        )
+        prior_m_code = month_codes.get(prior_month, "Q")
+        prior_y_suffix = str(prior_year)[-2:]
+        prior_ticker_symbol = f"ZQ{prior_m_code}{prior_y_suffix}.CBT"
+
+        ticker = yf.Ticker(ticker_symbol)
+        hist = ticker.history(period="5d")
+        if hist.empty:
+            ticker = yf.Ticker("ZQ=F")
+            hist = ticker.history(period="5d")
+        if hist.empty:
+            raise ValueError(f"Unable to fetch futures data for {ticker_symbol}")
+
+        latest_price = float(hist["Close"].iloc[-1])
+
+        # 動態獲取當前基準目標利率區間與中位數
+        r1 = 3.625
+        current_target = "3.50%-3.75%"
+
+        # 優先從前一個月連續期貨獲取精確 R_start (CME 官方錨定法)
+        prior_price: float | None = None
+        try:
+            prior_ticker = yf.Ticker(prior_ticker_symbol)
+            prior_hist = prior_ticker.history(period="5d")
+            if not prior_hist.empty:
+                prior_price = float(prior_hist["Close"].iloc[-1])
+                r1 = 100.0 - prior_price
+        except Exception:
+            pass
+
+        try:
+            irx_hist = yf.Ticker("^IRX").history(period="5d")
+            if not irx_hist.empty:
+                irx_val = float(irx_hist["Close"].iloc[-1])
+                if irx_val > 0.0:
+                    b_idx = round((irx_val - 0.125) / 0.25)
+                    low_r = b_idx * 0.25
+                    high_r = low_r + 0.25
+                    if prior_price is None:
+                        r1 = (low_r + high_r) / 2.0
+                    current_target = f"{low_r:.2f}%-{high_r:.2f}%"
+        except Exception:
+            pass
+
+        _, days_in_month = calendar.monthrange(next_meeting.year, next_meeting.month)
+        d_prior = next_meeting.day
+        d_post = max(1, days_in_month - d_prior)
+        implied_avg = 100.0 - latest_price
+
+        # CME 階梯權重反推會議後目標利率 R2
+        r2 = (days_in_month * implied_avg - d_prior * r1) / d_post
+        delta_r = r2 - r1
+
+        if delta_r >= 0.0:
+            prob_hike = round(min(100.0, max(0.0, (delta_r / 0.25) * 100.0)), 1)
+            prob_cut = 0.0
+            prob_maintain = round(100.0 - prob_hike, 1)
+        else:
+            prob_cut = round(min(100.0, max(0.0, (-delta_r / 0.25) * 100.0)), 1)
+            prob_hike = 0.0
+            prob_maintain = round(100.0 - prob_cut, 1)
+
+        # 分類與宏觀緊縮純量計算
+        if prob_hike >= 50.0 or (
+            prob_hike >= 30.0 and prob_hike > prob_cut and prob_hike > prob_maintain
+        ):
+            decision = "hike"
+            prob = round(min(0.95, (50.0 + prob_hike / 2.0) / 100.0), 4)
+        elif prob_cut >= 50.0 or (
+            prob_cut >= 30.0 and prob_cut > prob_hike and prob_cut > prob_maintain
+        ):
+            decision = "cut"
+            prob = round(max(0.05, (50.0 - prob_cut / 2.0) / 100.0), 4)
+        elif prob_maintain >= 50.0:
+            decision = "maintain"
+            prob = round(
+                max(0.05, min(0.95, (50.0 + (prob_hike - prob_cut) / 2.0) / 100.0)),
+                4,
+            )
+        else:
+            decision = "split"
+            prob = round(
+                max(0.05, min(0.95, (50.0 + (prob_hike - prob_cut) / 2.0) / 100.0)),
+                4,
+            )
+
+        return {
+            "probability": prob,
+            "meeting_date": next_meeting.strftime("%m/%d"),
+            "current_target": current_target,
+            "prob_maintain": round(prob_maintain, 1),
+            "prob_hike": round(prob_hike, 1),
+            "prob_cut": round(prob_cut, 1),
+            "decision": decision,
+            "futures_price": latest_price,
+            "source": "CME 30-Day Fed Funds Futures (ZQ)",
+        }
 
     def _fetch_and_parse_excel() -> dict[str, Any]:
         url = "https://www.atlantafed.org/-/media/Project/Atlanta/FRBA/Documents/cenfis/market-probability-tracker/mpt_histdata.xlsx"
@@ -712,13 +871,14 @@ async def scrape_fedwatch() -> dict[str, Any]:
             current_range_low_bps = 350
             current_range_high_bps = 375
 
-        prob_cut = 0.0
-        prob_hike = 0.0
-        prob_maintain = 0.0
-        found_maintain_bucket = False
+        direct_cut: float | None = None
+        direct_hike: float | None = None
+        maintain_bucket_val: float | None = None
+        bucket_cut_sum = 0.0
+        bucket_hike_sum = 0.0
 
         for r in meeting_rows:
-            field = str(r[3] or "")
+            field = str(r[3] or "").strip()
             val_str = r[4]
             if not field or val_str is None:
                 continue
@@ -734,13 +894,13 @@ async def scrape_fedwatch() -> dict[str, Any]:
                 or "prob: <" in field_lower
                 or "probability of cut" in field_lower
             ):
-                prob_cut += val
+                direct_cut = val
             elif (
                 "prob: hike" in field_lower
                 or "prob: >" in field_lower
                 or "probability of hike" in field_lower
             ):
-                prob_hike += val
+                direct_hike = val
             else:
                 match_prob = re.search(r"(\d+)bps\s*-\s*(\d+)bps", field)
                 if match_prob:
@@ -750,22 +910,27 @@ async def scrape_fedwatch() -> dict[str, Any]:
                         bucket_low == current_range_low_bps
                         and bucket_high == current_range_high_bps
                     ):
-                        prob_maintain += val
-                        found_maintain_bucket = True
+                        maintain_bucket_val = val
                     elif bucket_high <= current_range_low_bps:
-                        prob_cut += val
+                        bucket_cut_sum += val
                     elif bucket_low >= current_range_high_bps:
-                        prob_hike += val
+                        bucket_hike_sum += val
 
-        if not found_maintain_bucket and (prob_cut > 0 or prob_hike > 0):
+        # 優先使用直接匯總欄位；若無則使用離散區間累加，嚴格杜絕重複累加
+        prob_cut = direct_cut if direct_cut is not None else bucket_cut_sum
+        prob_hike = direct_hike if direct_hike is not None else bucket_hike_sum
+
+        if maintain_bucket_val is not None:
+            prob_maintain = maintain_bucket_val
+        elif prob_cut > 0 or prob_hike > 0:
             prob_maintain = max(0.0, round(100.0 - prob_cut - prob_hike, 2))
-        elif not found_maintain_bucket and prob_cut == 0 and prob_hike == 0:
+        else:
             prob_maintain = 50.0
             prob_cut = 50.0
             prob_hike = 0.0
 
         total_p = prob_cut + prob_hike + prob_maintain
-        if total_p > 0 and abs(total_p - 100.0) > 1.0:
+        if total_p > 0 and abs(total_p - 100.0) > 0.01:
             prob_cut = round((prob_cut / total_p) * 100.0, 1)
             prob_hike = round((prob_hike / total_p) * 100.0, 1)
             prob_maintain = round(max(0.0, 100.0 - prob_cut - prob_hike), 1)
@@ -802,8 +967,22 @@ async def scrape_fedwatch() -> dict[str, Any]:
             "prob_hike": round(prob_hike, 1),
             "prob_cut": round(prob_cut, 1),
             "decision": decision,
+            "source": "Atlanta Fed Market Probability Tracker (MPT)",
         }
 
+    # 1. Primary: CBOT 30-Day Fed Funds Futures (ZQ) 即時階梯算式
+    try:
+        zq_data = await asyncio.to_thread(_fetch_and_calculate_zq_futures)
+        return {
+            "status": "success",
+            "data": zq_data,
+        }
+    except Exception as e:
+        logger.warning(
+            f"Primary CBOT ZQ Fed Funds Futures calc failed: {e}, falling back to Atlanta Fed MPT."
+        )
+
+    # 2. Secondary: Atlanta Fed MPT Excel 解析
     try:
         parsed_data = await asyncio.to_thread(_fetch_and_parse_excel)
         return {
@@ -812,7 +991,7 @@ async def scrape_fedwatch() -> dict[str, Any]:
         }
     except Exception as e:
         logger.warning(
-            f"Atlanta FedWatch parse failed with exception: {e}, using fallbacks."
+            f"Secondary Atlanta FedWatch parse failed with exception: {e}, using static fallbacks."
         )
         return {"status": "success", "data": fallback}
 

@@ -48,7 +48,8 @@ module = [
     "yfinance.*",
     "pytz.*",
     "requests.*",
-    "pytest.*"
+    "pytest.*",
+    "pandas.*",
 ]
 ignore_missing_imports = true
 

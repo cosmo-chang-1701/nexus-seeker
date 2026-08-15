@@ -42,9 +42,50 @@ def test_scrape_gex_fallback() -> None:
         assert data["data"]["put_wall"] == 505.0
 
 
+def test_scrape_fedwatch_realtime_zq_calculation() -> None:
+    import pandas as pd
+
+    mock_df_meeting = pd.DataFrame({"Close": [96.33]}, index=[pd.Timestamp.now()])
+    mock_df_prior = pd.DataFrame({"Close": [96.3675]}, index=[pd.Timestamp.now()])
+    mock_df_irx = pd.DataFrame({"Close": [3.70]}, index=[pd.Timestamp.now()])
+
+    def mock_ticker(sym: str) -> MagicMock:
+        t = MagicMock()
+        if sym == "^IRX":
+            t.history.return_value = mock_df_irx
+        elif "ZQQ" in sym:
+            t.history.return_value = mock_df_prior
+        else:
+            t.history.return_value = mock_df_meeting
+        return t
+
+    with patch("yfinance.Ticker", side_effect=mock_ticker):
+        response = client.get("/api/v1/scrape/macro/fedwatch")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+        res_data = data["data"]
+        assert res_data["source"] == "CME 30-Day Fed Funds Futures (ZQ)"
+        assert res_data["prob_maintain"] == 67.9
+        assert res_data["prob_hike"] == 32.1
+        assert res_data["prob_cut"] == 0.0
+        assert res_data["decision"] == "maintain"
+        assert (
+            round(
+                res_data["prob_maintain"]
+                + res_data["prob_hike"]
+                + res_data["prob_cut"],
+                1,
+            )
+            == 100.0
+        )
+
+
 def test_scrape_fedwatch_fallback() -> None:
-    # Mock requests.get to fail
-    with patch("requests.get", side_effect=Exception("Mock requests failure")):
+    # Mock yfinance and requests.get to fail
+    with patch(
+        "yfinance.Ticker", side_effect=Exception("Mock yfinance failure")
+    ), patch("requests.get", side_effect=Exception("Mock requests failure")):
         response = client.get("/api/v1/scrape/macro/fedwatch")
         assert response.status_code == 200
         data = response.json()
@@ -53,6 +94,7 @@ def test_scrape_fedwatch_fallback() -> None:
         assert data["data"]["prob_maintain"] == 50.0
         assert data["data"]["prob_cut"] == 50.0
         assert data["data"]["decision"] == "maintain"
+        assert data["data"]["source"] == "fallback"
 
 
 def test_scrape_fedwatch_excel_parsing_and_buckets() -> None:
@@ -89,7 +131,9 @@ def test_scrape_fedwatch_excel_parsing_and_buckets() -> None:
     mock_wb = MagicMock()
     mock_wb.__getitem__.return_value = mock_ws
 
-    with patch("requests.get") as mock_req, patch(
+    with patch(
+        "yfinance.Ticker", side_effect=Exception("Mock yfinance failure")
+    ), patch("requests.get") as mock_req, patch(
         "openpyxl.load_workbook", return_value=mock_wb
     ):
         mock_req.return_value.status_code = 200
@@ -103,6 +147,7 @@ def test_scrape_fedwatch_excel_parsing_and_buckets() -> None:
         assert data["data"]["prob_cut"] == 15.0
         assert data["data"]["prob_hike"] == 5.0
         assert data["data"]["meeting_date"] == meeting_date.strftime("%m/%d")
+        assert data["data"]["source"] == "Atlanta Fed Market Probability Tracker (MPT)"
 
 
 def test_scrape_fedwatch_stale_data_fallback() -> None:
@@ -126,7 +171,9 @@ def test_scrape_fedwatch_stale_data_fallback() -> None:
     mock_wb = MagicMock()
     mock_wb.__getitem__.return_value = mock_ws
 
-    with patch("requests.get") as mock_req, patch(
+    with patch(
+        "yfinance.Ticker", side_effect=Exception("Mock yfinance failure")
+    ), patch("requests.get") as mock_req, patch(
         "openpyxl.load_workbook", return_value=mock_wb
     ):
         mock_req.return_value.status_code = 200
@@ -138,6 +185,81 @@ def test_scrape_fedwatch_stale_data_fallback() -> None:
         assert data["status"] == "success"
         assert data["data"]["probability"] == 0.50
         assert data["data"]["decision"] == "maintain"
+
+
+def test_scrape_fedwatch_direct_summary_and_buckets_no_double_count() -> None:
+    from datetime import date, timedelta
+
+    meeting_date = date.today() + timedelta(days=30)
+    mock_rows = [
+        ("date", "meeting_date", "target", "field", "val"),
+        (
+            "2026-08-13",
+            meeting_date,
+            "350bps - 375bps",
+            "Rate: 25th percentile",
+            "371.90",
+        ),
+        ("2026-08-13", meeting_date, "350bps - 375bps", "Rate: mean", "378.52"),
+        ("2026-08-13", meeting_date, "350bps - 375bps", "Prob: cut", "1.36"),
+        ("2026-08-13", meeting_date, "350bps - 375bps", "Prob: hike", "59.06"),
+        (
+            "2026-08-13",
+            meeting_date,
+            "350bps - 375bps",
+            "Prob: 350bps - 375bps",
+            "40.42",
+        ),
+        (
+            "2026-08-13",
+            meeting_date,
+            "350bps - 375bps",
+            "Prob: 375bps - 400bps",
+            "54.67",
+        ),
+        (
+            "2026-08-13",
+            meeting_date,
+            "350bps - 375bps",
+            "Prob: 400bps - 425bps",
+            "4.91",
+        ),
+    ]
+
+    mock_ws = MagicMock()
+    mock_ws.iter_rows.return_value = mock_rows
+    mock_wb = MagicMock()
+    mock_wb.__getitem__.return_value = mock_ws
+
+    with patch(
+        "yfinance.Ticker", side_effect=Exception("Mock yfinance failure")
+    ), patch("requests.get") as mock_req, patch(
+        "openpyxl.load_workbook", return_value=mock_wb
+    ):
+        mock_req.return_value.status_code = 200
+        mock_req.return_value.iter_content.return_value = [b"mock"]
+        response = client.get("/api/v1/scrape/macro/fedwatch")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+        res_data = data["data"]
+        assert res_data["meeting_date"] == meeting_date.strftime("%m/%d")
+        assert res_data["current_target"] == "3.50%-3.75%"
+        assert res_data["decision"] == "hike"
+        # 1.36 / 100.84 -> 1.3%, 59.06 / 100.84 -> 58.6%, 40.1% maintain
+        assert res_data["prob_cut"] == 1.3
+        assert res_data["prob_hike"] == 58.6
+        assert res_data["prob_maintain"] == 40.1
+        assert (
+            round(
+                res_data["prob_cut"]
+                + res_data["prob_hike"]
+                + res_data["prob_maintain"],
+                1,
+            )
+            == 100.0
+        )
+        assert res_data["source"] == "Atlanta Fed Market Probability Tracker (MPT)"
 
 
 def test_scrape_sec_fundamental() -> None:
