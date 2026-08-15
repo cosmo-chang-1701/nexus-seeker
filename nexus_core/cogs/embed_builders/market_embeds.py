@@ -1408,6 +1408,29 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
         else "\u001b[1;32m🟢 NORMAL (CC 開倉正常)\u001b[0m"
     )
 
+    fedwatch_prob = macro_data.get("fedwatch_probability")
+    fedwatch_is_fallback = macro_data.get("fedwatch_is_fallback", False)
+    fedwatch_suffix = " \u001b[1;33m[備援]\u001b[0m" if fedwatch_is_fallback else ""
+
+    if fedwatch_prob is not None:
+        try:
+            fw_val = float(fedwatch_prob)
+            if fw_val > 0.70:
+                fedwatch_desc = f"\u001b[1;31m{fw_val * 100:.1f}% (鷹派高位)\u001b[0m{fedwatch_suffix}"
+                escape_win_status = "\u001b[1;31m⚠️ 前移 5 天 (高利率防護)\u001b[0m"
+            elif fw_val <= 0.40:
+                fedwatch_desc = f"\u001b[1;32m{fw_val * 100:.1f}% (降息確立)\u001b[0m{fedwatch_suffix}"
+                escape_win_status = "\u001b[1;32m🟢 後推 5 天 (流動性擴張)\u001b[0m"
+            else:
+                fedwatch_desc = f"\u001b[1;33m{fw_val * 100:.1f}% (均衡定價)\u001b[0m{fedwatch_suffix}"
+                escape_win_status = "\u001b[1;32m🟢 正常窗口 (均衡定價)\u001b[0m"
+        except (ValueError, TypeError):
+            fedwatch_desc = "暫無數據"
+            escape_win_status = "正常窗口"
+    else:
+        fedwatch_desc = "暫無數據"
+        escape_win_status = "正常窗口"
+
     # 3. 建立 ANSI 面板內容
     core_lines = [
         " 📊 大盤與核心指標 (Market & Core Indices)",
@@ -1424,6 +1447,7 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
         " ----------------------------------",
         f" ├─ 零 Gamma 踩踏: {short_gamma_status}",
         f" ├─ 經濟衰退警告: {recession_status}",
+        f" ├─ 利率逃頂窗口: {escape_win_status}",
         f" └─ 安全提領紅線: \u001b[1;31m${payout_threshold:,.0f}\u001b[0m",
     ]
     risk_panel = "```ansi\n" + "\n".join(risk_lines) + "\n```"
@@ -1434,6 +1458,7 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
         f" ├─ WTI 原油價格: \u001b[1;33m${wti:.2f}\u001b[0m",
         f" ├─ 聯準會逆回購 (RRP): \u001b[1;36m${rrp:,.1f}B\u001b[0m (30天變動: \u001b[1;35m{rrp_change_30d:+.1f}%\u001b[0m)",
         f" ├─ 聯準會資產負債表: \u001b[1;32m${fed_balance:.2f}T\u001b[0m",
+        f" ├─ FOMC 利率定價 (FedWatch): {fedwatch_desc}",
         f" ├─ CNN 恐懼與貪婪指數: \u001b[1;36m{fear_greed:.1f}\u001b[0m",
         f" └─ 美國失業率 (UER): \u001b[1;33m{uer:.1f}%\u001b[0m (薩姆規則值: \u001b[1;31m{sahm_rule:.2f}\u001b[0m)",
     ]

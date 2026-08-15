@@ -18,7 +18,7 @@ Nexus Seeker 是一個 **Discord-first 的多租戶選擇權風控與交易營�
 - **戰場情境轉折警報與進階雷達 (Market Scenario & Advanced Radar)**：整合獨立事件驅動引擎（6 階 GEX 決策矩陣，新增「巨鯨護航共振」）與進階雷達過濾器 (UOA Barrier, Gravity Filter, Divergence Gate)。全新量化雷達支援 `G/P-Wall(±)`（完整展示頂部 Call Wall 與底牆 Put Wall，支援現價跌破負 Gamma 動態極性連動與 N/A 容錯退路）、`IV 策略` 負 Gamma 踩踏區風控熔斷（強制阻斷賣方開倉並標記 `🔴賣方禁售`）、標的偏離度 `⚠️` 強視覺連動、`Skw%`（真實期權偏斜數值與歷史分位點）、`SQZ向量`（動能數值、方向與擠壓計時器，連動 UOA Barrier 硬封頂降級）、`Neg-GEX`、`STO 鎖死`（Short-to-Open 關鍵履約價鎖死）、`EM Z-Score`、`Top UOA` 單一最強巨鯨異動大單、暗池 $\ge \$5\text{M}$ 大宗水泥牆買盤警示，並具備 **$PutWall - 1.5 \times ATR_{14}$ 防洗盤絕對防守位**、15 分鐘實體 K 線收盤離場鐵律與多維度灰階戰術決策樹（多重正 Gamma 護航網支撐現貨續抱），精準防範二元停損與盲目接刀。
 - **動態轉倉與防洗盤風控 (Dynamic Rollover & Anti-Washout Defense)**：搭載全新「防洗盤動態停損引擎」與「GEX 做市商意圖映射引擎」，動態鎖定支撐錨定牆並給予 1.5x 15m ATR 緩衝；現貨 (SPOT) 必須經 15 分鐘實體 K 線跌破才確認清倉（高 IVR 啟動收盤價防守），選擇權合約 (OPTIONS) 則於高 IVR 啟動降槓桿平倉。支援透過 `/verify_thesis` 手動觸發，並新增**互動式 SEC 財報選擇介面**，讓使用者自由選擇近期 (10-K, 10-Q, 8-K) 進行分析。Edge Scraper 現具備 **SEC 財報結構化區塊擷取** 能力，若基本面破滅，將無條件攔截量化買入訊號，強制執行清算與轉倉。
 - **動態量化避險引擎**：依據現價與 RSI、Skew 等指標，動態計算適合的建倉/出場價格，並於大盤極端行情時啟動網格防禦 (Shield) 與流動性滑價保護閘門。
-- **總體經濟與事件日曆防護**：自動抓取 CME FedWatch 利率機率、FRED 關鍵總經數據與財報日曆（已擴展至 14 日前瞻預警並深度整併至總經風險報告），結合避險邏輯進行動態逃頂窗口前置。
+- **總體經濟與事件日曆防護**：自動抓取 CME FedWatch 利率機率、FRED 關鍵總經數據與財報日曆（已擴展至 14 日前瞻預警並深度整併至 `/market` 總經風險情報中心與盤前報告），結合避險邏輯進行動態逃頂窗口前置與 4 小時自動快取維護。
 - **大盤微觀結構解析**：計算零 Gamma 線 (Gamma Flip Line) 與 GEX 分佈，在市場進入高壓 $VIX > 20$ 時動態縮小合約建倉口數（Kelly Criterion 調節）與拉大網格距離。
 - **互動式 UI 介面**：所有交易參數（資本、風險上限、虛擬交易室、Polymarket 巨鯨門檻等）與推送偏好均透過 Discord 內建的 Buttons / Select Menu / Modal 進行管理。
 
@@ -160,7 +160,8 @@ docker compose up -d --build
 - **`/stress_test`**：委託單壓力測試與現金赤字警報。
 - **`/list_orders` / `/order_panel`**：檢視活躍委託單與新增委託單。
 - **`/cc_recovery`**：根據現有持倉自動過濾與顯示最佳的 OTM Covered Call 合約 (收租解套策略)。
-- **`/calendar` / `/market`**：查詢總經與個股財報事件日曆、大盤宏觀狀態。
+- **`/calendar`**：總經與自選股財報事件時間軸日曆，支援 TTE 倒數與發布日程查詢。
+- **`/market`**：全局宏觀風控情報中心，深度整合 SPX、VIX、US10Y、零 Gamma 翻轉線、FedWatch 利率定價、RRP 逆回購、Fed 資產負債表與利率逃頂窗口防禦。
 - **`/sys_health`**：`(Hidden)` 系統健康診斷面板，檢視主節點與邊緣節點的即時硬體資源 (RAM, CPU, RSS, Swap) 與快取狀態。
 - **`/force_macro_update`**：`(Admin 專用)` 強制更新大盤 GEX 與 FedWatch 數據快取。
 

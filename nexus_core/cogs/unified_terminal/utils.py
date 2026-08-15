@@ -146,6 +146,10 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
 
     payout_threshold = get_safety_payout_threshold()
 
+    fedwatch_prob, fedwatch_is_fallback = (
+        calendar_service.get_latest_fedwatch_probability()
+    )
+
     result_data: dict[str, Any] = {
         "spx": spx,
         "vix": vix,
@@ -162,6 +166,8 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         "short_gamma_critical": short_gamma_critical,
         "recession_warning": recession_warning,
         "payout_threshold": payout_threshold,
+        "fedwatch_probability": fedwatch_prob,
+        "fedwatch_is_fallback": fedwatch_is_fallback,
         "is_degraded": is_degraded,
         "gex_is_fallback": gex_is_fallback,
     }

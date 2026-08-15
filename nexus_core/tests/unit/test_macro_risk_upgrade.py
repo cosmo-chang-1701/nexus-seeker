@@ -357,3 +357,79 @@ def test_putwall_crisis_textual_martial_law() -> None:
     assert (
         "剛性拋壓" in insights or "嚴禁" in insights
     ), "錯誤：未正確提示做市商對沖風險！"
+
+
+def test_fedwatch_market_overview_embed_formatting() -> None:
+    """測試 FedWatch 在 /market 總經 Embed 中的 ANSI 面板呈現與逃頂窗口聯動"""
+    from cogs.embed_builders.market_embeds import build_market_macro_overview_embed
+
+    # Case 1: 鷹派維持高位 (> 70%)
+    macro_data_hawkish: dict[str, Any] = {
+        "spx": 5200.0,
+        "vix": 16.5,
+        "us10y": 4.25,
+        "gamma_flip_line": 5150.0,
+        "wti": 75.0,
+        "rrp": 420.5,
+        "fed_balance": 7.25,
+        "cpi_nfp_calendar": "08/20 FOMC",
+        "fear_greed": 55.0,
+        "uer": 4.0,
+        "sahm_rule": 0.35,
+        "rrp_change_30d": 5.0,
+        "short_gamma_critical": False,
+        "recession_warning": False,
+        "payout_threshold": 13000.0,
+        "fedwatch_probability": 0.78,
+        "fedwatch_is_fallback": False,
+    }
+    embed_hawkish = build_market_macro_overview_embed(macro_data_hawkish)
+    # Check fields
+    fields_dict: dict[str, str] = {
+        str(field.name): str(field.value) for field in embed_hawkish.fields
+    }
+    assert "📈 總經與系統流動性指標" in fields_dict
+    assert "FOMC 利率定價 (FedWatch)" in fields_dict["📈 總經與系統流動性指標"]
+    assert "78.0% (鷹派高位)" in fields_dict["📈 總經與系統流動性指標"]
+    assert "利率逃頂窗口" in fields_dict["🛡️ 聯動風控引擎狀態"]
+    assert "前移 5 天 (高利率防護)" in fields_dict["🛡️ 聯動風控引擎狀態"]
+
+    # Case 2: 降息預期確立 (<= 40%)
+    macro_data_dovish: dict[str, Any] = {
+        **macro_data_hawkish,
+        "fedwatch_probability": 0.25,
+        "fedwatch_is_fallback": False,
+    }
+    embed_dovish = build_market_macro_overview_embed(macro_data_dovish)
+    fields_dovish: dict[str, str] = {
+        str(field.name): str(field.value) for field in embed_dovish.fields
+    }
+    assert "25.0% (降息確立)" in fields_dovish["📈 總經與系統流動性指標"]
+    assert "後推 5 天 (流動性擴張)" in fields_dovish["🛡️ 聯動風控引擎狀態"]
+
+
+def test_calendar_service_fedwatch_lookup() -> None:
+    """測試 calendar_service.get_latest_fedwatch_probability 的快取與查詢回退"""
+    from services.calendar_service import calendar_service
+
+    # Case 1: kv_cache 命中
+    with patch("database.cache.get_kv_cache") as mock_kv:
+        mock_kv.side_effect = lambda k: (
+            0.65
+            if k == "macro_fedwatch_probability"
+            else (0 if k == "macro_fedwatch_is_fallback" else None)
+        )
+        prob, is_fallback = calendar_service.get_latest_fedwatch_probability()
+        assert prob == 0.65
+        assert is_fallback is False
+
+    # Case 2: kv_cache miss, fallback to SQLite
+    with patch("database.cache.get_kv_cache", return_value=None), patch(
+        "sqlite3.connect"
+    ) as mock_conn:
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone.return_value = {"fedwatch_probability": 0.85}
+        mock_conn.return_value.__enter__.return_value.cursor.return_value = mock_cursor
+        prob, is_fallback = calendar_service.get_latest_fedwatch_probability()
+        assert prob == 0.85
+        assert is_fallback is True

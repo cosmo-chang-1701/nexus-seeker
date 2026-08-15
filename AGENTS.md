@@ -65,9 +65,13 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - `dynamic_after_market_report` — **16:15 ET**
 - `weekly_vtr_report_task` — **Friday 17:05 ET**
 
+### In `cogs/calendar.py`
+
+- `event_checker` — **every 4 hours** (major events check & periodic FedWatch probability auto-update)
+
 ### In `cogs/analyst_agent.py`
 
-- `pre_market_loop` — **30 minutes before market open**
+- `pre_market_loop` — **30 minutes before market open** (09:00 ET)
 - `post_market_loop` — **post-market report flow**
 
 ### In `bot.py`
@@ -278,12 +282,18 @@ The platform implements an advanced macro risk-control layer that dynamically ad
   - Under `SHORT_GAMMA_CRITICAL`, the watchlist scanner in `intraday_pipeline.py` automatically scales `dynamic_grid_step` by **$1.5\times$** to slow down capital depletion during market washouts.
 
 ### 2. CME FedWatch Forecasting, FRED Metrics & Escape Windows
-- **Rate Probabilities**: Crawls FOMC rate probabilities via `/api/v1/scrape/macro/fedwatch` and saves to SQLite (`consensus_value` and `fedwatch_probability` fields in `economic_calendar_events`).
+- **Rate Probabilities & Dual Caching**:
+  - Crawls FOMC rate probabilities via `/api/v1/scrape/macro/fedwatch` and saves to SQLite (`consensus_value` and `fedwatch_probability` fields in `economic_calendar_events`).
+  - Simultaneously caches the latest probability into `kv_cache` (`macro_fedwatch_probability`), ensuring `< 5ms` zero-latency retrieval during dashboard loads.
+  - Automatically fetched **daily at 09:00 ET** (pre-market analyst loop) and periodically refreshed **every 4 hours** via `CalendarCog.event_checker`.
 - **Core Macro Metrics**: The Edge API (`/api/v1/scrape/macro/core_metrics`) actively fetches live FRED data (RRP, Fed Balance, Unemployment Rate, Sahm Rule Recession Indicator) and CNN Fear & Greed index. This fully automates the Macro Risk Intelligence Center and resolves all static fallback values.
+- **Global Macro Hub Integration (`/market`)**:
+  - `/market` (`build_market_macro_overview_embed`) integrates `FOMC 利率定價 (FedWatch)` directly into its `📈 流動性與總經指標` ANSI panel, dynamically reporting rate stance (`鷹派高位`, `降息確立`, `均衡定價`, or `[備援]`).
+  - Connects rate pricing to `🛡️ 聯動風控引擎狀態` displaying the live `利率逃頂窗口` offset status.
 - **Dynamic Escape Window**:
   - The pre-market analyst loop (`analyst_agent.py`) evaluates the probability of rates remaining high ($> 70\%$).
   - If rates remain high (hawkish), it dynamically offsets the user's customized "rebound escape window" (反彈逃頂窗口，支援自訂並自動判定「上/中/下旬」) by **5** business days.
-  - If rate cuts are expected, the escape window adjusts forward (risk-on) by **5** business days.
+  - If rate cuts are expected ($\le 40\%$), the escape window adjusts forward (risk-on) by **5** business days.
 
 ### 3. Active Order Stress Testing (`/stress_test`)
 - **Risk Math**:

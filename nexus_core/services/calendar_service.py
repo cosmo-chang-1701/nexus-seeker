@@ -519,6 +519,7 @@ class CalendarService:
                             """,
                             (prob,),
                         )
+                        await save_kv_cache("macro_fedwatch_probability", prob)
                         logger.info(
                             f"成功更新 CME FedWatch FOMC 利率維持/加息機率: {prob * 100:.1f}%"
                         )
@@ -528,6 +529,44 @@ class CalendarService:
             logger.error(f"更新 FedWatch 概率失敗: {e}")
 
         await save_kv_cache("macro_fedwatch_is_fallback", 1)
+
+    def get_latest_fedwatch_probability(self) -> tuple[float, bool]:
+        """讀取最新 FedWatch 概率與是否為 Fallback 快取"""
+        import sqlite3
+        import config
+        from database.cache import get_kv_cache
+
+        fallback_val = get_kv_cache("macro_fedwatch_is_fallback")
+        is_fallback = fallback_val is None or int(fallback_val) == 1
+
+        cached_prob = get_kv_cache("macro_fedwatch_probability")
+        if cached_prob is not None:
+            try:
+                return float(cached_prob), is_fallback
+            except (ValueError, TypeError):
+                pass
+
+        try:
+            with sqlite3.connect(config.DB_NAME) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    SELECT fedwatch_probability
+                    FROM economic_calendar_events
+                    WHERE (event LIKE '%FOMC%' OR event LIKE '%Fed Interest Rate%')
+                      AND fedwatch_probability IS NOT NULL
+                    ORDER BY event_time ASC
+                    LIMIT 1
+                    """
+                )
+                row = cursor.fetchone()
+                if row and row["fedwatch_probability"] is not None:
+                    return float(row["fedwatch_probability"]), is_fallback
+        except Exception as e:
+            logger.warning(f"查詢 FedWatch 概率失敗: {e}")
+
+        return 0.72, True
 
 
 # Singleton instance

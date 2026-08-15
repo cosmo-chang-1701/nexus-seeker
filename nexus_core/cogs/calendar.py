@@ -41,6 +41,10 @@ class CalendarCog(commands.Cog):
     async def event_checker(self) -> None:
         """NYSE Dynamic Scheduler heartbeat for events."""
         logger.info("🕒 [EventMonitor] 執行重大事件週期檢查...")
+        try:
+            await calendar_service.update_fedwatch_probability()
+        except Exception as e:
+            logger.warning(f"週期性更新 FedWatch 數據失敗: {e}")
         await self.monitor.check_upcoming_events()
 
     @event_checker.before_loop
