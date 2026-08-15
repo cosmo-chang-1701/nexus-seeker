@@ -1,4 +1,4 @@
-from typing import Dict, Any, List, Optional, cast
+from typing import Dict, Any, List, Optional
 import logging
 from pydantic import BaseModel, Field
 from services.llm_service import client, is_memory_safe
@@ -405,7 +405,9 @@ class DynamicRolloverEngine:
                     symbol, parsed.is_broken, parsed.confidence, parsed.reasoning
                 )
 
-            return cast(FundamentalThesisResult | None, parsed)
+            if isinstance(parsed, FundamentalThesisResult):
+                return parsed
+            return None
         except Exception as e:
             logger.error(f"[{symbol}] Fundamental thesis evaluation failed: {e}")
             return None

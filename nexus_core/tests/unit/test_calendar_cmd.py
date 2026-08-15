@@ -90,7 +90,7 @@ async def test_calendar_command_rate_cut(  # type: ignore
             impact="high",
             tte_hours=48.0,
             time="2026-06-28T14:00:00Z",
-            fedwatch_probability=0.45,
+            fedwatch_probability=0.35,
         )
     ]
     mock_get_macro.return_value = mock_macro

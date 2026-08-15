@@ -1374,7 +1374,7 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
     spx = macro_data.get("spx") or 0.0
     vix = macro_data.get("vix") or 0.0
     us10y = macro_data.get("us10y") or 0.0
-    gamma_flip = macro_data.get("gamma_flip_line") or 0.0
+    gamma_flip_line = macro_data.get("gamma_flip_line") or 0.0
     wti = macro_data.get("wti") or 0.0
     rrp = macro_data.get("rrp") or 0.0
     fed_balance = macro_data.get("fed_balance") or 0.0
@@ -1418,32 +1418,54 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
     prob_m = fedwatch_details.get("prob_maintain")
     prob_h = fedwatch_details.get("prob_hike")
     prob_c = fedwatch_details.get("prob_cut")
+    decision = fedwatch_details.get("decision", "")
 
     if fedwatch_prob is not None:
         try:
             fw_val = float(fedwatch_prob)
-            if fw_val > 0.70:
-                if prob_h is not None and prob_h >= 5.0:
-                    detail_str = (
-                        f"維持 {prob_m:.1f}% / 加息 {prob_h:.1f}% / 降息 {prob_c:.1f}%"
-                    )
-                elif prob_m is not None and prob_c is not None:
-                    detail_str = f"維持 {prob_m:.1f}% / 降息 {prob_c:.1f}%"
+            if prob_m is not None or prob_h is not None or prob_c is not None:
+                p_m = float(prob_m) if prob_m is not None else 0.0
+                p_h = float(prob_h) if prob_h is not None else 0.0
+                p_c = float(prob_c) if prob_c is not None else 0.0
+
+                if p_h >= 1.0:
+                    if p_h >= p_m:
+                        detail_str = (
+                            f"加息 {p_h:.1f}% / 維持 {p_m:.1f}% / 降息 {p_c:.1f}%"
+                        )
+                    else:
+                        detail_str = (
+                            f"維持 {p_m:.1f}% / 加息 {p_h:.1f}% / 降息 {p_c:.1f}%"
+                        )
                 else:
-                    detail_str = f"{fw_val * 100:.1f}%"
-                fedwatch_desc = f"\u001b[1;31m{meeting_prefix}鷹派高位 ({detail_str})\u001b[0m{fedwatch_suffix}"
-            elif fw_val <= 0.40:
-                if prob_c is not None:
-                    detail_str = f"降息機率 {prob_c:.1f}%"
+                    if p_c >= p_m:
+                        detail_str = f"降息 {p_c:.1f}% / 維持 {p_m:.1f}%"
+                    else:
+                        detail_str = f"維持 {p_m:.1f}% / 降息 {p_c:.1f}%"
+
+                if (
+                    p_h >= 50.0
+                    or decision == "hike"
+                    or (p_h >= 30.0 and p_h > p_c and p_h > p_m)
+                ):
+                    fedwatch_desc = f"\u001b[1;31m{meeting_prefix}鷹派加息 ({detail_str})\u001b[0m{fedwatch_suffix}"
+                elif (
+                    p_c >= 50.0
+                    or decision == "cut"
+                    or (p_c >= 30.0 and p_c > p_h and p_c > p_m)
+                ):
+                    fedwatch_desc = f"\u001b[1;32m{meeting_prefix}降息確立 ({detail_str})\u001b[0m{fedwatch_suffix}"
+                elif p_m >= 50.0 or decision == "maintain":
+                    fedwatch_desc = f"\u001b[1;33m{meeting_prefix}維持利率 ({detail_str})\u001b[0m{fedwatch_suffix}"
                 else:
-                    detail_str = f"{fw_val * 100:.1f}%"
-                fedwatch_desc = f"\u001b[1;32m{meeting_prefix}降息確立 ({detail_str})\u001b[0m{fedwatch_suffix}"
+                    fedwatch_desc = f"\u001b[1;33m{meeting_prefix}均衡定價 ({detail_str})\u001b[0m{fedwatch_suffix}"
             else:
-                if prob_m is not None and prob_c is not None:
-                    detail_str = f"維持 {prob_m:.1f}% / 降息 {prob_c:.1f}%"
+                if fw_val > 0.70:
+                    fedwatch_desc = f"\u001b[1;31m{meeting_prefix}鷹派高位 ({fw_val * 100:.1f}%)\u001b[0m{fedwatch_suffix}"
+                elif fw_val <= 0.40:
+                    fedwatch_desc = f"\u001b[1;32m{meeting_prefix}降息確立 ({fw_val * 100:.1f}%)\u001b[0m{fedwatch_suffix}"
                 else:
-                    detail_str = f"{fw_val * 100:.1f}%"
-                fedwatch_desc = f"\u001b[1;33m{meeting_prefix}均衡定價 ({detail_str})\u001b[0m{fedwatch_suffix}"
+                    fedwatch_desc = f"\u001b[1;33m{meeting_prefix}均衡定價 ({fw_val * 100:.1f}%)\u001b[0m{fedwatch_suffix}"
         except (ValueError, TypeError):
             fedwatch_desc = "暫無數據"
     else:
@@ -1470,7 +1492,7 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
         f" ├─ S&P 500 Index (SPX): \u001b[1;32m{spx:,.2f}\u001b[0m",
         f" ├─ 恐慌指數 (VIX): \u001b[1;33m{vix:.2f}\u001b[0m",
         f" ├─ 10年期美債收益率 (US10Y): \u001b[1;36m{us10y:.2f}%\u001b[0m",
-        f" └─ 零 Gamma 翻轉線 (GEX Flip): \u001b[1;35m{gamma_flip:,.2f}\u001b[0m{gex_suffix}",
+        f" └─ 零 Gamma 翻轉線 (GEX Flip): \u001b[1;35m{gamma_flip_line:,.2f}\u001b[0m{gex_suffix}",
     ]
     core_panel = "```ansi\n" + "\n".join(core_lines) + "\n```"
 
@@ -1539,7 +1561,7 @@ def build_calendar_embed(
     if fedwatch_prob is not None:
         if fedwatch_prob > 0.70:
             rate_high = True
-        else:
+        elif fedwatch_prob <= 0.40:
             rate_cut = True
 
     now_utc = datetime.now(timezone.utc)

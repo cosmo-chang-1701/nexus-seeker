@@ -4,7 +4,7 @@ from datetime import date, datetime, timedelta
 from typing import List, Optional, Union, Tuple, Any
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, computed_field, field_validator
+from pydantic import BaseModel, field_validator
 from database.calendar_cache import (
     get_cached_earnings,
     get_macro_events_between,
@@ -72,7 +72,6 @@ class EarningsEvent(CalendarEvent):
             raise ValueError(f"Invalid date format: {v}")
         return v
 
-    @computed_field  # type: ignore[misc]
     @property
     def days_to_earnings(self) -> float:
         return round(self.tte_hours / 24.0, 2)
@@ -512,19 +511,20 @@ class CalendarService:
                     payload = res.json()
                     if payload.get("status") == "success":
                         data = payload.get("data", {})
-                        prob = float(data.get("probability", 0.72))
+                        prob = float(data.get("probability", 0.50))
                         await execute_write_async(
                             """
                             UPDATE economic_calendar_events
                             SET fedwatch_probability = ?
-                            WHERE event LIKE '%FOMC%' OR event LIKE '%Fed Interest Rate%'
+                            WHERE (event LIKE '%FOMC%' OR event LIKE '%Fed Interest Rate%' OR event LIKE '%Federal Funds Rate%')
+                              AND event_time >= date('now')
                             """,
                             (prob,),
                         )
                         await save_kv_cache("macro_fedwatch_probability", prob)
                         await save_kv_cache("macro_fedwatch_details", json.dumps(data))
                         logger.info(
-                            f"成功更新 CME FedWatch FOMC 利率維持/加息機率: {prob * 100:.1f}%, 明細: {data}"
+                            f"成功更新 CME FedWatch FOMC 利率定價: {prob * 100:.1f}%, 明細: {data}"
                         )
                         await save_kv_cache("macro_fedwatch_is_fallback", 0)
                         return
@@ -557,8 +557,9 @@ class CalendarService:
                     """
                     SELECT fedwatch_probability
                     FROM economic_calendar_events
-                    WHERE (event LIKE '%FOMC%' OR event LIKE '%Fed Interest Rate%')
+                    WHERE (event LIKE '%FOMC%' OR event LIKE '%Fed Interest Rate%' OR event LIKE '%Federal Funds Rate%')
                       AND fedwatch_probability IS NOT NULL
+                      AND event_time >= date('now')
                     ORDER BY event_time ASC
                     LIMIT 1
                     """
@@ -569,7 +570,7 @@ class CalendarService:
         except Exception as e:
             logger.warning(f"查詢 FedWatch 概率失敗: {e}")
 
-        return 0.72, True
+        return 0.50, True
 
     def get_latest_fedwatch_info(self) -> tuple[float, bool, dict[str, Any]]:
         """讀取最新 FedWatch 概率、是否為 Fallback 快取，以及詳細期貨機率拆解"""
@@ -593,10 +594,16 @@ class CalendarService:
                 "probability": prob,
                 "meeting_date": "",
                 "current_target": "3.50%-3.75%",
-                "prob_maintain": round(prob * 100, 1),
-                "prob_hike": 0.0,
-                "prob_cut": round(max(0.0, (1.0 - prob) * 100), 1),
-                "decision": "maintain" if prob > 0.4 else "cut",
+                "prob_maintain": round(prob * 100, 1) if prob <= 0.70 else 50.0,
+                "prob_hike": round(max(0.0, (prob - 0.5) * 100 * 2), 1)
+                if prob > 0.5
+                else 0.0,
+                "prob_cut": round(max(0.0, (0.5 - prob) * 100 * 2), 1)
+                if prob < 0.5
+                else (round(max(0.0, (1.0 - prob) * 100), 1) if prob <= 0.7 else 0.0),
+                "decision": "hike"
+                if prob > 0.7
+                else ("cut" if prob <= 0.4 else "maintain"),
             }
         return prob, is_fallback, details
 

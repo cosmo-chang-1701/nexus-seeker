@@ -618,12 +618,12 @@ async def scrape_fedwatch() -> dict[str, Any]:
     import openpyxl
 
     fallback: dict[str, Any] = {
-        "probability": 0.72,
+        "probability": 0.50,
         "meeting_date": "",
         "current_target": "3.50%-3.75%",
-        "prob_maintain": 72.0,
+        "prob_maintain": 50.0,
         "prob_hike": 0.0,
-        "prob_cut": 28.0,
+        "prob_cut": 50.0,
         "decision": "maintain",
     }
 
@@ -733,15 +733,29 @@ async def scrape_fedwatch() -> dict[str, Any]:
         if not found_maintain_bucket:
             prob_maintain = max(0.0, round(100.0 - prob_cut - prob_hike, 2))
 
-        total_tightening = prob_maintain + prob_hike
-        prob = round(total_tightening / 100.0, 4)
-
-        if prob_hike >= 50.0:
+        # 精確分類與宏觀緊縮純量計算
+        if prob_hike >= 50.0 or (
+            prob_hike >= 30.0 and prob_hike > prob_cut and prob_hike > prob_maintain
+        ):
             decision = "hike"
-        elif prob_cut >= 50.0:
+            prob = round(min(1.0, (50.0 + prob_hike / 2.0) / 100.0), 4)
+        elif prob_cut >= 50.0 or (
+            prob_cut >= 30.0 and prob_cut > prob_hike and prob_cut > prob_maintain
+        ):
             decision = "cut"
-        else:
+            prob = round(max(0.0, (50.0 - prob_cut / 2.0) / 100.0), 4)
+        elif prob_maintain >= 50.0:
             decision = "maintain"
+            prob = round(
+                max(0.0, min(1.0, (50.0 + (prob_hike - prob_cut) / 2.0) / 100.0)),
+                4,
+            )
+        else:
+            decision = "split"
+            prob = round(
+                max(0.0, min(1.0, (50.0 + (prob_hike - prob_cut) / 2.0) / 100.0)),
+                4,
+            )
 
         return {
             "probability": prob,

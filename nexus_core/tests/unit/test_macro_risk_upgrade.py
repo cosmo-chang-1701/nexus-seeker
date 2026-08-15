@@ -363,7 +363,7 @@ def test_fedwatch_market_overview_embed_formatting() -> None:
     """測試 FedWatch 在 /market 總經 Embed 中的 ANSI 面板呈現與逃頂窗口聯動"""
     from cogs.embed_builders.market_embeds import build_market_macro_overview_embed
 
-    # Case 1: 鷹派維持高位 (> 70%)，帶有詳細期貨拆解
+    # Case 1: 鷹派加息 (加息 >= 50%)，帶有詳細期貨拆解
     macro_data_hawkish: dict[str, Any] = {
         "spx": 5200.0,
         "vix": 16.5,
@@ -380,13 +380,14 @@ def test_fedwatch_market_overview_embed_formatting() -> None:
         "short_gamma_critical": False,
         "recession_warning": False,
         "payout_threshold": 13000.0,
-        "fedwatch_probability": 0.9948,
+        "fedwatch_probability": 0.7953,
         "fedwatch_is_fallback": False,
         "fedwatch_details": {
             "meeting_date": "09/16",
             "prob_maintain": 40.4,
             "prob_hike": 59.1,
             "prob_cut": 1.4,
+            "decision": "hike",
         },
         "escape_win_status": "🟢 正常窗口 (正Gamma護航中)",
     }
@@ -401,7 +402,7 @@ def test_fedwatch_market_overview_embed_formatting() -> None:
         in fields_dict["📈 流動性與總經指標 (Liquidity & Macro)"]
     )
     assert (
-        "(09/16) 鷹派高位 (維持 40.4% / 加息 59.1% / 降息 1.4%)"
+        "(09/16) 鷹派加息 (加息 59.1% / 維持 40.4% / 降息 1.4%)"
         in fields_dict["📈 流動性與總經指標 (Liquidity & Macro)"]
     )
     assert "利率逃頂窗口" in fields_dict["🛡️ 聯動風控引擎狀態 (Risk Engine Status)"]
@@ -417,7 +418,7 @@ def test_fedwatch_market_overview_embed_formatting() -> None:
         assert " 📈 流動性與總經指標 (Liquidity & Macro)" not in f_val
         assert " 📅 總經公布日程" not in f_val
 
-    # Case 2: 降息預期確立 (<= 40%)
+    # Case 2: 降息預期確立 (降息 >= 50%)
     macro_data_dovish: dict[str, Any] = {
         **macro_data_hawkish,
         "fedwatch_probability": 0.25,
@@ -427,6 +428,7 @@ def test_fedwatch_market_overview_embed_formatting() -> None:
             "prob_maintain": 25.0,
             "prob_hike": 0.0,
             "prob_cut": 75.0,
+            "decision": "cut",
         },
         "escape_win_status": "🟢 後推 5 天 (流動性擴張)",
     }
@@ -435,12 +437,35 @@ def test_fedwatch_market_overview_embed_formatting() -> None:
         str(field.name): str(field.value) for field in embed_dovish.fields
     }
     assert (
-        "(09/16) 降息確立 (降息機率 75.0%)"
+        "(09/16) 降息確立 (降息 75.0% / 維持 25.0%)"
         in fields_dovish["📈 流動性與總經指標 (Liquidity & Macro)"]
     )
     assert (
         "後推 5 天 (流動性擴張)"
         in fields_dovish["🛡️ 聯動風控引擎狀態 (Risk Engine Status)"]
+    )
+
+    # Case 3: 維持利率 (維持 >= 50%)
+    macro_data_maintain: dict[str, Any] = {
+        **macro_data_hawkish,
+        "fedwatch_probability": 0.50,
+        "fedwatch_is_fallback": False,
+        "fedwatch_details": {
+            "meeting_date": "09/16",
+            "prob_maintain": 75.0,
+            "prob_hike": 0.0,
+            "prob_cut": 25.0,
+            "decision": "maintain",
+        },
+        "escape_win_status": "🟢 正常窗口 (均衡定價)",
+    }
+    embed_maintain = build_market_macro_overview_embed(macro_data_maintain)
+    fields_maintain: dict[str, str] = {
+        str(field.name): str(field.value) for field in embed_maintain.fields
+    }
+    assert (
+        "(09/16) 維持利率 (維持 75.0% / 降息 25.0%)"
+        in fields_maintain["📈 流動性與總經指標 (Liquidity & Macro)"]
     )
 
 

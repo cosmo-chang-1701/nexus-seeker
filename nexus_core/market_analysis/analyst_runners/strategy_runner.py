@@ -5,7 +5,6 @@ from typing import Any
 
 import logging
 import math
-import sqlite3
 from datetime import date, datetime, timezone, timedelta
 from typing import Optional
 
@@ -166,38 +165,19 @@ async def run_fomc_escape_window_analysis(
     user_id: int,
 ) -> Optional[discord.Embed]:
     """Dynamically compute Multi-Factor Macro Liquidity Escape Matrix and return a styled Embed."""
-    import config
 
     # 1. 取得 FedWatch 概率
-    prob = 0.72
-    is_fallback = False
     try:
-        from database.cache import get_kv_cache
+        from services.calendar_service import calendar_service
 
-        fedwatch_fallback_val = get_kv_cache("macro_fedwatch_is_fallback")
-        if fedwatch_fallback_val is None or int(fedwatch_fallback_val) == 1:
-            is_fallback = True
-
-        with sqlite3.connect(config.DB_NAME) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT fedwatch_probability
-                FROM economic_calendar_events
-                WHERE event LIKE '%FOMC%' OR event LIKE '%Fed Interest Rate%'
-                ORDER BY event_time ASC
-                LIMIT 1
-                """
-            )
-            row = cursor.fetchone()
-            if row and row["fedwatch_probability"] is not None:
-                prob = row["fedwatch_probability"]
-            else:
-                is_fallback = True
+        prob, is_fallback, fedwatch_details = (
+            calendar_service.get_latest_fedwatch_info()
+        )
     except Exception as e:
-        logger.warning(f"查詢 SQLite FOMC FedWatch 概率失敗: {e}")
+        logger.warning(f"查詢 FedWatch 數據失敗: {e}")
+        prob = 0.50
         is_fallback = True
+        fedwatch_details = {}
 
     # 2. 載入使用者自訂逃頂窗口與自動滾動判定
     from database.user_settings import get_full_user_context
@@ -221,14 +201,62 @@ async def run_fomc_escape_window_analysis(
     factors_summary: list[tuple[str, str]] = []
 
     # Factor 1: FedWatch 利率定價
-    if prob > 0.70:
-        tightening_score += 1
-        f1_val = f"\u001b[1;31m🚨 鷹派/維持高位 ({prob * 100:.1f}%)\u001b[0m"
-    elif prob <= 0.40:
-        easing_score += 1
-        f1_val = f"\u001b[1;32m🟢 降息預期確立 ({prob * 100:.1f}%)\u001b[0m"
+    meeting_date = fedwatch_details.get("meeting_date", "")
+    meeting_prefix = f"({meeting_date}) " if meeting_date else ""
+    prob_m = fedwatch_details.get("prob_maintain")
+    prob_h = fedwatch_details.get("prob_hike")
+    prob_c = fedwatch_details.get("prob_cut")
+    decision = fedwatch_details.get("decision", "")
+
+    if prob_m is not None or prob_h is not None or prob_c is not None:
+        p_m = float(prob_m) if prob_m is not None else 0.0
+        p_h = float(prob_h) if prob_h is not None else 0.0
+        p_c = float(prob_c) if prob_c is not None else 0.0
+
+        if p_h >= 1.0:
+            if p_h >= p_m:
+                detail_str = f"加息 {p_h:.1f}% / 維持 {p_m:.1f}% / 降息 {p_c:.1f}%"
+            else:
+                detail_str = f"維持 {p_m:.1f}% / 加息 {p_h:.1f}% / 降息 {p_c:.1f}%"
+        else:
+            if p_c >= p_m:
+                detail_str = f"降息 {p_c:.1f}% / 維持 {p_m:.1f}%"
+            else:
+                detail_str = f"維持 {p_m:.1f}% / 降息 {p_c:.1f}%"
+
+        if (
+            p_h >= 50.0
+            or decision == "hike"
+            or (p_h >= 30.0 and p_h > p_c and p_h > p_m)
+        ):
+            tightening_score += 1
+            f1_val = f"\u001b[1;31m🚨 {meeting_prefix}鷹派加息 ({detail_str})\u001b[0m"
+        elif (
+            p_c >= 50.0
+            or decision == "cut"
+            or (p_c >= 30.0 and p_c > p_h and p_c > p_m)
+        ):
+            easing_score += 1
+            f1_val = f"\u001b[1;32m🟢 {meeting_prefix}降息確立 ({detail_str})\u001b[0m"
+        elif p_m >= 50.0 or decision == "maintain":
+            f1_val = f"\u001b[1;33m🟡 {meeting_prefix}維持利率 ({detail_str})\u001b[0m"
+        else:
+            f1_val = f"\u001b[1;33m🟡 {meeting_prefix}均衡定價 ({detail_str})\u001b[0m"
     else:
-        f1_val = f"\u001b[1;33m🟡 均衡定價 ({prob * 100:.1f}%)\u001b[0m"
+        if prob > 0.70:
+            tightening_score += 1
+            f1_val = (
+                f"\u001b[1;31m🚨 {meeting_prefix}鷹派高位 ({prob * 100:.1f}%)\u001b[0m"
+            )
+        elif prob <= 0.40:
+            easing_score += 1
+            f1_val = (
+                f"\u001b[1;32m🟢 {meeting_prefix}降息確立 ({prob * 100:.1f}%)\u001b[0m"
+            )
+        else:
+            f1_val = (
+                f"\u001b[1;33m🟡 {meeting_prefix}均衡定價 ({prob * 100:.1f}%)\u001b[0m"
+            )
     factors_summary.append(("FOMC 利率定價 (FedWatch)", f1_val))
 
     # Factor 2: 通膨與能源 (CPI / WTI)
