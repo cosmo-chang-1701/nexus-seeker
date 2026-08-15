@@ -27,7 +27,7 @@ except ImportError as e:
     logger.warning(f"Failed to import yf_api: {e}")
 
 SEC_USER_AGENT = "NexusSeekerBot (nexusseeker@example.com)"
-cik_cache = {}
+cik_cache: dict[str, str] = {}
 
 
 async def _get_sec_cik(client: httpx.AsyncClient, symbol: str) -> str | None:
@@ -583,7 +583,7 @@ async def scrape_darkpool_prints(symbol: str):
             )
 
         # 依據成交金額(premium)排序，金額最大的排最前面
-        prints.sort(key=lambda x: x["premium"], reverse=True)
+        prints.sort(key=lambda x: float(x.get("premium", 0.0)), reverse=True)
 
         return {
             "status": "success",
@@ -874,7 +874,7 @@ async def scrape_symbol_gex(symbol: str):
                 return {"status": "success", "data": fallback}
 
             net_gex = 0.0
-            gex_by_strike = {}
+            gex_by_strike: dict[float, float] = {}
 
             for contract in option_chain:
                 strike = contract["strike"]
@@ -896,17 +896,21 @@ async def scrape_symbol_gex(symbol: str):
 
             if gex_by_strike:
                 # Put Wall (GEX Support Wall): Strike with max positive GEX (dealers long gamma, buying dips)
-                support_candidates = {k: v for k, v in gex_by_strike.items() if v > 0}
+                support_candidates: dict[float, float] = {
+                    k: v for k, v in gex_by_strike.items() if v > 0
+                }
                 if support_candidates:
-                    put_wall = max(support_candidates, key=support_candidates.get)
+                    put_wall = max(
+                        support_candidates, key=lambda k: support_candidates[k]
+                    )
 
                 # Call Wall (Resistance Ceiling): Strike with lowest negative GEX / heavy resistance
-                resistance_candidates = {
+                resistance_candidates: dict[float, float] = {
                     k: v for k, v in gex_by_strike.items() if v < 0
                 }
                 if resistance_candidates:
                     call_wall = min(
-                        resistance_candidates, key=resistance_candidates.get
+                        resistance_candidates, key=lambda k: resistance_candidates[k]
                     )
                 elif support_candidates and put_wall > 0:
                     # Fallback if all GEX is positive: set call_wall to highest strike with positive GEX above spot

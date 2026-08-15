@@ -250,12 +250,21 @@ def create_dynamic_rollover_embed(
 
     # 4. 券商執行引導 (無腦執行區)
     if is_hold:
-        execution_guide = (
-            f"**標的:** {sell_symbol}\n"
-            f"**操作狀態:** HOLD (維持現狀續抱)\n"
-            f"**防守機制:** 嚴守 15 分鐘實體 K 線收盤撤退線\n"
-            f"**輪動預備:** 若 15m 實體收盤跌破防守線，全數市價轉入 VOO"
-        )
+        if "Trailing Stop" in suggested_strategy:
+            execution_guide = (
+                f"**標的:** {sell_symbol}\n"
+                f"**操作狀態:** HOLD (移動止盈 Trailing Stop)\n"
+                f"**策略指引:** {suggested_strategy}\n"
+                f"**防守機制:** 多頭動能強勁，嚴禁做空以防 Gamma Squeeze，持倉讓獲利奔馳\n"
+                f"**輪動預備:** 若跌破移動止盈線，全數市價轉入 VOO"
+            )
+        else:
+            execution_guide = (
+                f"**標的:** {sell_symbol}\n"
+                f"**操作狀態:** HOLD (維持現狀續抱)\n"
+                f"**防守機制:** 嚴守 15 分鐘實體 K 線收盤撤退線 (期權合約依 3-5m 快速通道)\n"
+                f"**輪動預備:** 若 15m 實體收盤跌破防守線，全數市價轉入 VOO"
+            )
     else:
         execution_guide = (
             f"**標的:** {buy_symbol}\n"

@@ -92,21 +92,29 @@ class DynamicRolloverEngine:
 
         base_stop_loss = raw_stop_loss
 
-        # 機制 1: 避開 LVN 陷阱
+        # 機制 1: 避開 LVN 陷阱 (量價拓撲吸附演算法：絕對吸附至次級 HVN 上緣 + 0.2*ATR_15m，禁止固定 % 平移)
         if lvn > 0 and base_stop_loss > 0 and abs(base_stop_loss - lvn) / lvn <= 0.015:
-            defensive_wall = (
-                min(hvn, anchor_wall)
-                if (hvn > 0 and anchor_wall > 0)
-                else max(hvn, anchor_wall)
-            )
-            if defensive_wall > 0 and defensive_wall < lvn:
-                base_stop_loss = defensive_wall - 1.5 * atr_15m
-            else:
-                base_stop_loss = base_stop_loss * 0.985
+            secondary_hvn = float(metrics.get("secondary_hvn", 0.0))
+            target_hvn = 0.0
+            if secondary_hvn > 0 and secondary_hvn < lvn:
+                target_hvn = secondary_hvn
+            elif hvn > 0 and hvn < lvn:
+                target_hvn = hvn
+            elif anchor_wall > 0 and anchor_wall < lvn:
+                target_hvn = anchor_wall
 
-        # 機制 4: 末日結算容忍度 (DTE 0/1)
-        if dte <= 1 and base_stop_loss > 0:
+            if target_hvn > 0:
+                base_stop_loss = target_hvn + (0.2 * atr_15m)
+            else:
+                base_stop_loss = lvn - (1.0 * atr_15m)
+
+        # 機制 4: 末日結算容忍度 (DTE 0/1) 與風險平價口數縮放 (Risk-Parity Sizing)
+        is_01dte_expanded = dte <= 1 and base_stop_loss > 0
+        dte_risk_parity_scale = 1.0
+        if is_01dte_expanded:
             base_stop_loss = base_stop_loss - 1.5 * atr_15m
+            # Risk-Parity 縮放因子: Base Distance / (Base Distance + 1.5 * ATR_15m) = 1.5 / 3.0 = 0.5
+            dte_risk_parity_scale = 0.5
 
         stop_loss = round(base_stop_loss, 2)
         limit_price = round(
@@ -133,12 +141,18 @@ class DynamicRolloverEngine:
         else:
             order_defense_str = f"**建議設置防守委託單**\n\n**停損: ${stop_loss:.2f} | 限價: ${limit_price:.2f}**"
 
-        # ━━━ 灰階思考量化裁決 (決策矩陣) ━━━
+        # ━━━ 灰階思考量化裁決 (決策矩陣 - 雙軌裁決機制 Dual-Track Exit) ━━━
         final_target = target if target else "VOO"
         final_action = system_action
         system_conflict_note = ""
 
-        # 機制 3: 15 分鐘實體 K 線過濾 (非瞬時破位)
+        ivr_drop = float(metrics.get("ivr_drop", metrics.get("ivr_change", 0.0)))
+        is_options_fast_exit = asset_class == "OPTIONS" and (
+            (spot < stop_loss if (stop_loss > 0 and spot > 0) else False)
+            or (ivr_drop >= 20.0)
+        )
+
+        # 機制 3: 15 分鐘實體 K 線過濾 (非瞬時破位，針對現貨 SPOT)
         is_15m_close_broken = (
             (price_15m_close < stop_loss)
             if (stop_loss > 0 and price_15m_close > 0)
@@ -152,6 +166,14 @@ class DynamicRolloverEngine:
                 "🎯 **獲利解鎖達成**：觸及阻力目標位，按計劃獲利了結轉倉。"
             )
             options_strategy = f"100% LIQUIDATE (轉入 {final_target})"
+        elif is_options_fast_exit:
+            final_action = "LIQUIDATE"
+            final_target = target if target else "VOO"
+            system_conflict_note = (
+                f"🚨 **期權雙軌快速通道觸發**：標的現價 (${spot:.2f}) 貫穿防守位 (${stop_loss:.2f}) 或 IV 驟降 (>20%)，"
+                f"啟動 3-5m 快速通道平倉 (拒絕等待 15m 實體收盤以規避 Delta/Vega 雙殺)。"
+            )
+            options_strategy = f"100% LIQUIDATE / STC (快速平倉轉入 {final_target})"
         elif is_15m_close_broken:
             final_action = "LIQUIDATE"
             final_target = target if target else "VOO"
@@ -166,7 +188,7 @@ class DynamicRolloverEngine:
             system_conflict_note = "⚖️ **持倉比例再平衡**：衛星部位超過風險上限，執行常規部分減倉以平衡資產權重。"
             options_strategy = "REDUCE (部分獲利了結/降低持倉比重)"
         else:
-            # 未跌破 15m 實體收盤防守線 -> 一律維持 HOLD
+            # 未跌破防守線 -> 一律維持 HOLD
             final_action = "HOLD"
             final_target = symbol
             system_conflict_note = (
@@ -191,7 +213,7 @@ class DynamicRolloverEngine:
         if ivr == 0.0 or spot == 0.0:
             data_note = " (⚠️ 數據失真或快取未更新，請留意風險)"
 
-        # ━━━ 資金回收與目標核心資產買入預估 ━━━
+        # ━━━ 資金回收與目標核心資產買入預估 (結合風險平價口數縮放) ━━━
         if current_value > 0:
             recovered_cash = current_value
         elif position_shares > 0 and spot > 0:
@@ -208,11 +230,17 @@ class DynamicRolloverEngine:
                 else (spot if spot > 0 else 500.0)
             )
             target_shares_est = int(recovered_cash / target_est_price)
-            target_shares_low = max(1, target_shares_est - 1)
-            target_shares_high = max(1, target_shares_est + 1)
-            shares_guidance_str = (
-                f"{target_core_name}（約 {target_shares_low}–{target_shares_high} 股）"
-            )
+            if is_01dte_expanded:
+                target_shares_est = max(
+                    1, int(target_shares_est * dte_risk_parity_scale)
+                )
+                target_shares_low = max(1, target_shares_est - 1)
+                target_shares_high = max(1, target_shares_est + 1)
+                shares_guidance_str = f"{target_core_name}（0/1 DTE 風險平價縮放: 約 {target_shares_low}–{target_shares_high} 股 / 削減 50% 部位）"
+            else:
+                target_shares_low = max(1, target_shares_est - 1)
+                target_shares_high = max(1, target_shares_est + 1)
+                shares_guidance_str = f"{target_core_name}（約 {target_shares_low}–{target_shares_high} 股）"
         else:
             cash_str = "全數部位資金"
             shares_guidance_str = f"{target_core_name}（全額買入）"
@@ -238,6 +266,16 @@ class DynamicRolloverEngine:
         else:
             gex_res_desc = "做市商阻力天花板"
 
+        dte_scale_note = ""
+        if is_01dte_expanded:
+            dte_scale_note = "\n   - ⚡ **0/1 DTE 風險平價口數縮放**：已啟動 3.0× ATR 緩衝墊片 (停損拉寬)，強制削減 50% 轉倉/開倉部位規模以維持 Dollar Risk 恆定。"
+
+        dual_track_note = (
+            "**3-5m 快速通道監控** (期權合約拒絕等待 15m 實體收盤以規避 Delta/Vega 雙殺)"
+            if asset_class == "OPTIONS"
+            else f"**15m 實體 K 線過濾** (盤中插針至 ${spot:.2f} 屬做市商正常洗盤，未跌破 ${stop_loss_str} 實體收盤前絕不手動干預)"
+        )
+
         # 建構標準 4 段式 Markdown
         markdown_report = f"""
 1. **盤勢定調**
@@ -250,19 +288,18 @@ class DynamicRolloverEngine:
 3. **動能與擠壓狀態**
    - SQZ MOM: {sqz_mom:+.2f} | Skew: {skew:.2f} ({'多頭動能延續' if sqz_mom > 0 else '動能中性/趨緩'})
 4. **具體的動態轉倉建議**
-   - {system_conflict_note if system_conflict_note else '常規執行：依系統建議比例調節'}
+   - {system_conflict_note if system_conflict_note else '常規執行：依系統建議比例調節'}{dte_scale_note}
    - 轉倉決策: **{final_action} ({'維持現狀續抱' if final_action == 'HOLD' else '轉入 ' + final_target})**
    - 微結構判定: GEX Wall ${anchor_wall:.2f} 護城河完好，阻力天花板 ${effective_res_wall:.2f}
    - 防守機制: {order_defense_str}
-     *(避開真空區，依據公式：`Stop = ${anchor_wall:.2f} - (1.5 × ATR_15m) = ${stop_loss_str}`)*
-   - 結算日過濾: **15m 實體 K 線過濾**
-     *(盤中插針至 ${spot:.2f} 屬做市商正常洗盤，未跌破 ${stop_loss_str} 實體收盤前絕不手動干預)*
+     *(避開真空區，依據公式：`Stop = ${anchor_wall:.2f} - ({'3.0' if is_01dte_expanded else '1.5'} × ATR_15m) = ${stop_loss_str}`)*
+   - 出場裁決軌道: {dual_track_note}
 
 ---
 ## 🚨 動態資金輪動觸發條件（何時才真正轉倉 {target_core_name}？）
 只有在以下**硬性量化條件觸發**時，才允許執行 100% 轉入 {target_core_name}：
 1. **實體破位觸發**：
-   - 15 分鐘 K 線**實體收盤跌破 ${stop_loss_str}**，或委託單自動觸發成交。
+   - {'3-5m 快速通道跌破或 IV 崩塌' if asset_class == 'OPTIONS' else f'15 分鐘 K 線**實體收盤跌破 ${stop_loss_str}**'}，或委託單自動觸發成交。
    - **量化含義**：宣告 ${anchor_wall:.2f} 做市商底牆徹底崩塌，負 Gamma 助跌啟動，價格將下探 ${max_pain:.2f} 痛點。
 2. **轉倉執行動作**：
    - 回收資金約 **{cash_str}**。
@@ -619,12 +656,17 @@ class DynamicRolloverEngine:
                     and (price_15m_close < gamma_cliff_level or sqz_mom <= 0)
                 )
 
-                # Phase 2: 負 Gamma 懸崖連續 15 分鐘實體 K 線貫穿確認
+                # Phase 2: 負 Gamma 懸崖連續 15 分鐘實體 K 線貫穿確認 (現貨 SPOT) 或 3-5m 快速通道 (期權 OPTIONS)
                 is_structural_breakdown = False
-                if is_structural_breakdown_pending and gamma_cliff_level > 0:
-                    is_structural_breakdown = await is_gamma_cliff_confirmed(
-                        symbol, gamma_cliff_level
-                    )
+                if asset_class == "OPTIONS":
+                    # 期權快速通道：現價貫穿 anchor_base 或 stop_loss 即時判定破位，拒絕等待 15m 實體收盤
+                    if anchor_base > 0 and spot < anchor_base:
+                        is_structural_breakdown = True
+                else:
+                    if is_structural_breakdown_pending and gamma_cliff_level > 0:
+                        is_structural_breakdown = await is_gamma_cliff_confirmed(
+                            symbol, gamma_cliff_level
+                        )
                 # 2. 主力巨量 STO 實體蓋頂
                 is_whale_sto_block = (sqz_mom < 0.0) and (skew < -0.3)
                 # 3. 目標區獲利解鎖完成
@@ -649,8 +691,15 @@ class DynamicRolloverEngine:
 
                     if is_euphoria:
                         user_ctx = get_full_user_context(user_id)
-                        if user_ctx.can_trade_spreads:
-                            # 90/10 權限資金拆分
+                        # 雙重動能衰竭確認制：
+                        # 1. 15m SQZ MOM 由正轉負 (動能拐頭)
+                        # 2. Skew 脫離極端狂熱 (Percentile 回升至 30% 以上)
+                        is_exhaustion_confirmed = (sqz_mom < 0.0) and (
+                            skew_percentile >= 30.0
+                        )
+
+                        if user_ctx.can_trade_spreads and is_exhaustion_confirmed:
+                            # 90/10 權限資金拆分 - 衰竭確認，建立 Bear Call Spread 反向收租
                             # 90% 轉入新標的
                             report_90 = self._generate_rule_based_rebalance_report(
                                 symbol,
@@ -705,9 +754,67 @@ class DynamicRolloverEngine:
                                     else 0.0,
                                     "target_core": symbol,
                                     "reason": report_10["markdown_report"]
-                                    + "\n⚠️ **【緊急裁決】Bear Call Spread 反向收租，請交易員手動執行防滑價**",
+                                    + "\n⚠️ **【動能衰竭確認】SQZ MOM 拐頭且 Skew 降溫，觸發 Bear Call Spread 反向收租 (手動防滑價)**",
                                     "suggested_strategy": report_10["options_strategy"],
                                     "is_manual_override_required": True,
+                                }
+                            )
+                            continue
+                        elif user_ctx.can_trade_spreads and not is_exhaustion_confirmed:
+                            # 未衰竭 (多頭動能強勁或 Skew 極端狂熱)，嚴禁做空以防 Gamma Squeeze！
+                            # 90% 獲利了結轉入新標的，剩餘 10% 啟動 Trailing Stop 移動止盈
+                            trailing_stop_level = round(
+                                max(call_wall - (0.5 * atr_15m), spot * 0.98), 2
+                            )
+                            report_90 = self._generate_rule_based_rebalance_report(
+                                symbol,
+                                metrics,
+                                system_action="LIQUIDATE",
+                                target=next_target,
+                                asset_class=asset_class,
+                                is_take_profit=True,
+                                active_orders=user_orders,
+                                position_shares=quantity,
+                                current_value=current_value,
+                            )
+                            rebalance_instructions.append(
+                                {
+                                    "symbol": symbol,
+                                    "action": report_90["final_action"],
+                                    "sell_ratio": 0.9
+                                    if report_90["final_action"] == "LIQUIDATE"
+                                    else (
+                                        0.5
+                                        if report_90["final_action"] == "REDUCE"
+                                        else 0.0
+                                    ),
+                                    "target_core": report_90["final_target"],
+                                    "reason": report_90["markdown_report"],
+                                    "suggested_strategy": report_90["options_strategy"],
+                                }
+                            )
+                            report_10 = self._generate_rule_based_rebalance_report(
+                                symbol,
+                                metrics,
+                                system_action="HOLD",
+                                target=symbol,
+                                strategy_override=f"Trailing Stop 移動止盈 (防守位: ${trailing_stop_level:.2f})",
+                                asset_class=asset_class,
+                                is_take_profit=False,
+                                active_orders=user_orders,
+                                position_shares=quantity,
+                                current_value=current_value,
+                            )
+                            rebalance_instructions.append(
+                                {
+                                    "symbol": symbol,
+                                    "action": "HOLD",
+                                    "sell_ratio": 0.0,
+                                    "target_core": symbol,
+                                    "reason": report_10["markdown_report"]
+                                    + f"\n🚀 **【動能延續・移動止盈】**突破 Call Wall 但動能未衰竭 (SQZ MOM {sqz_mom:+.2f} / Skew {skew_percentile:.0f}%)，嚴禁以身擋車做空！剩餘 10% 部位啟動 Trailing Stop (${trailing_stop_level:.2f}) 讓獲利奔馳。",
+                                    "suggested_strategy": report_10["options_strategy"],
+                                    "is_manual_override_required": False,
                                 }
                             )
                             continue

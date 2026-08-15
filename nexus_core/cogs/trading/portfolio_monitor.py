@@ -4,7 +4,7 @@ cogs/trading/portfolio_monitor.py
 真實持倉風險動態審計 (每 30 分鐘)：DITM、Gamma Fragility、動態轉倉，以及 VTR 監控。
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 import json
 import logging
 from datetime import time
@@ -393,6 +393,110 @@ class PortfolioMonitorCog(commands.Cog):
     @monitor_real_portfolio_task.before_loop
     async def before_monitor_real_portfolio_task(self) -> None:
         await self.bot.wait_until_ready()
+
+    async def handle_microstructure_interrupt(
+        self,
+        user_id: int,
+        symbol: str,
+        trigger_type: str,
+        data: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        微觀異動事件中斷器 (Interrupt Handler)：
+        當盤中發生「標的價格穿透 Zero Gamma 轉為負 Gamma 領域」(ZERO_GAMMA_BREAKDOWN) 或
+        「單筆 UOA 溢價暴增」(MASSIVE_WHALE_UOA) 時，即時中斷定時器，
+        秒級觸發該用戶與該標的的再平衡審計並推送緊急防守卡。
+        """
+        if not database.is_notification_enabled(user_id, "defense_option_rollover"):
+            return []
+
+        logger.info(
+            f"⚡ [Microstructure Interrupt] 觸發異動事件中斷: user={user_id}, symbol={symbol}, trigger={trigger_type}"
+        )
+        try:
+            holdings = database.get_user_holdings(user_id)
+            target_holding = next(
+                (h for h in holdings if h.get("symbol", "").upper() == symbol.upper()),
+                None,
+            )
+            if not target_holding:
+                return []
+
+            total_val = sum(float(h.get("current_value", 0.0)) for h in holdings)
+            if total_val <= 0:
+                total_val = 1.0
+
+            r_data = data or {}
+            metrics = r_data.get("metrics", {})
+            asset_entry: Dict[str, Any] = {
+                "symbol": symbol.upper(),
+                "asset_class": target_holding.get("asset_class", "SATELLITE"),
+                "instrument_type": target_holding.get("instrument_type", "SPOT"),
+                "current_value": float(target_holding.get("current_value", 0.0)),
+                "quantity": float(target_holding.get("quantity", 0.0)),
+                "target_allocation_pct": float(
+                    target_holding.get("target_allocation_pct", 0.2)
+                ),
+                "max_allocation_pct": float(
+                    target_holding.get("max_allocation_pct", 0.3)
+                ),
+                "spot_price": metrics.get(
+                    "spot_price", target_holding.get("spot_price", 0.0)
+                ),
+                "put_wall": metrics.get("put_wall", 0.0),
+                "call_wall": metrics.get("call_wall", 0.0),
+                "max_pain": metrics.get("max_pain", 0.0),
+                "ivr": metrics.get("ivr", 0.0),
+                "is_uoa_sweep": metrics.get("is_uoa_sweep", False),
+                "sqz_mom": metrics.get("sqz_mom", 0.0),
+                "skew": metrics.get("skew", 0.0),
+                "skew_percentile": metrics.get("skew_percentile", 50.0),
+                "gamma_flip": metrics.get("gamma_flip", 0.0),
+                "atr_14": metrics.get("atr_14", 0.0),
+                "atr_15m": metrics.get("atr_15m", 0.0),
+                "price_15m_close": metrics.get("price_15m_close", 0.0),
+                "hvn": metrics.get("hvn", 0.0),
+                "lvn": metrics.get("lvn", 0.0),
+                "dte": metrics.get("dte", 99),
+                "gex_profile_data": r_data.get("gex_profile_data", {}),
+            }
+
+            instructions = await self.rollover_engine.check_satellite_rebalancing(
+                user_id, [asset_entry], total_val
+            )
+
+            for ins in instructions:
+                rollover_type = (
+                    f"⚡ 微觀事件防守: {trigger_type}"
+                    if ins["action"] == "HOLD"
+                    else f"⚡ 微觀事件轉倉: {trigger_type}"
+                )
+                suggested_price = (
+                    "N/A (維持現狀)" if ins["action"] == "HOLD" else "Market"
+                )
+
+                embed = create_dynamic_rollover_embed(
+                    rollover_type=rollover_type,
+                    sell_symbol=ins["symbol"],
+                    sell_ratio=ins["sell_ratio"],
+                    buy_symbol=ins["target_core"],
+                    reason=ins["reason"],
+                    suggested_strategy=ins.get("suggested_strategy", "Buy Shares"),
+                    suggested_price=suggested_price,
+                    strike="N/A",
+                    expiry="N/A",
+                    direction="BTO" if ins["action"] != "HOLD" else "HOLD",
+                )
+                if ins.get("is_manual_override_required"):
+                    setattr(embed, "_view", f"ManualOverrideView:{ins['symbol']}")
+                else:
+                    setattr(embed, "_view", f"RolloverActionView:{ins['symbol']}")
+                await self.bot.queue_dm(user_id, embed=embed)
+
+            return instructions
+        except Exception as e:
+            logger.error(f"微觀異動事件中斷處理失敗: {e}")
+            return []
 
     # ==========================================
     # 🚀 VTR 監控與風險即時預警 (每 30 分鐘)
