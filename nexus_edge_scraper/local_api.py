@@ -617,9 +617,17 @@ async def scrape_fedwatch() -> dict[str, Any]:
     from datetime import datetime, date
     import openpyxl
 
-    fallback = {"probability": 0.72, "decision": "maintain"}
+    fallback: dict[str, Any] = {
+        "probability": 0.72,
+        "meeting_date": "",
+        "current_target": "3.50%-3.75%",
+        "prob_maintain": 72.0,
+        "prob_hike": 0.0,
+        "prob_cut": 28.0,
+        "decision": "maintain",
+    }
 
-    def _fetch_and_parse_excel() -> float:
+    def _fetch_and_parse_excel() -> dict[str, Any]:
         url = "https://www.atlantafed.org/-/media/Project/Atlanta/FRBA/Documents/cenfis/market-probability-tracker/mpt_histdata.xlsx"
         local_path = "/tmp/mpt_histdata.xlsx"
 
@@ -655,7 +663,7 @@ async def scrape_fedwatch() -> dict[str, Any]:
         by_meeting: dict[date, list[Any]] = {}
         for r in latest_rows:
             meeting_dt = r[1]
-            if not isinstance(meeting_dt, datetime):
+            if not isinstance(meeting_dt, (datetime, date)):
                 if isinstance(meeting_dt, str):
                     try:
                         meeting_dt = datetime.fromisoformat(meeting_dt)
@@ -663,7 +671,9 @@ async def scrape_fedwatch() -> dict[str, Any]:
                         continue
                 else:
                     continue
-            meeting_date = meeting_dt.date()
+            meeting_date = (
+                meeting_dt.date() if isinstance(meeting_dt, datetime) else meeting_dt
+            )
             if meeting_date not in by_meeting:
                 by_meeting[meeting_date] = []
             by_meeting[meeting_date].append(r)
@@ -678,41 +688,76 @@ async def scrape_fedwatch() -> dict[str, Any]:
 
         meeting_rows = by_meeting[next_meeting]
 
-        # 3. Parse target range and calculate maintain or hike probability
+        # 3. Parse target range and calculate maintain / hike / cut probabilities
         first_row = meeting_rows[0]
         target_range_str = str(first_row[2] or "350bps - 375bps").strip()
 
-        # Extract current target range low
-        m = re.search(r"(\d+)bps", target_range_str)
-        current_range_low_bps = int(m.group(1)) if m else 350
+        m = re.search(r"(\d+)bps\s*-\s*(\d+)bps", target_range_str)
+        if m:
+            low_bps = int(m.group(1))
+            high_bps = int(m.group(2))
+            current_target = f"{low_bps / 100:.2f}%-{high_bps / 100:.2f}%"
+            current_range_low_bps = low_bps
+        else:
+            current_target = target_range_str
+            current_range_low_bps = 350
 
-        maintain_or_hike_prob = 0.0
+        prob_cut = 0.0
+        prob_hike = 0.0
+        prob_maintain = 0.0
+        found_maintain_bucket = False
+
         for r in meeting_rows:
-            field = r[3]
+            field = str(r[3] or "")
             val_str = r[4]
             if not field or val_str is None:
                 continue
 
-            match_prob = re.search(r"Prob:\s*(\d+)bps\s*-\s*(\d+)bps", str(field))
-            if match_prob:
-                low_bps = int(match_prob.group(1))
-                try:
-                    p_val = float(str(val_str).strip()) / 100.0
-                    if low_bps >= current_range_low_bps:
-                        maintain_or_hike_prob += p_val
-                except ValueError:
-                    pass
+            try:
+                val = float(str(val_str).strip())
+            except ValueError:
+                continue
 
-        return maintain_or_hike_prob
+            if "Prob: cut" in field:
+                prob_cut = val
+            elif "Prob: hike" in field:
+                prob_hike = val
+            else:
+                match_prob = re.search(r"Prob:\s*(\d+)bps\s*-\s*(\d+)bps", field)
+                if match_prob:
+                    bucket_low = int(match_prob.group(1))
+                    if bucket_low == current_range_low_bps:
+                        prob_maintain = val
+                        found_maintain_bucket = True
+
+        if not found_maintain_bucket:
+            prob_maintain = max(0.0, round(100.0 - prob_cut - prob_hike, 2))
+
+        total_tightening = prob_maintain + prob_hike
+        prob = round(total_tightening / 100.0, 4)
+
+        if prob_hike >= 50.0:
+            decision = "hike"
+        elif prob_cut >= 50.0:
+            decision = "cut"
+        else:
+            decision = "maintain"
+
+        return {
+            "probability": prob,
+            "meeting_date": next_meeting.strftime("%m/%d"),
+            "current_target": current_target,
+            "prob_maintain": round(prob_maintain, 1),
+            "prob_hike": round(prob_hike, 1),
+            "prob_cut": round(prob_cut, 1),
+            "decision": decision,
+        }
 
     try:
-        prob = await asyncio.to_thread(_fetch_and_parse_excel)
+        parsed_data = await asyncio.to_thread(_fetch_and_parse_excel)
         return {
             "status": "success",
-            "data": {
-                "probability": round(prob, 4),
-                "decision": "maintain",
-            },
+            "data": parsed_data,
         }
     except Exception as e:
         logger.warning(

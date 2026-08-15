@@ -363,7 +363,7 @@ def test_fedwatch_market_overview_embed_formatting() -> None:
     """測試 FedWatch 在 /market 總經 Embed 中的 ANSI 面板呈現與逃頂窗口聯動"""
     from cogs.embed_builders.market_embeds import build_market_macro_overview_embed
 
-    # Case 1: 鷹派維持高位 (> 70%)
+    # Case 1: 鷹派維持高位 (> 70%)，帶有詳細期貨拆解
     macro_data_hawkish: dict[str, Any] = {
         "spx": 5200.0,
         "vix": 16.5,
@@ -380,36 +380,72 @@ def test_fedwatch_market_overview_embed_formatting() -> None:
         "short_gamma_critical": False,
         "recession_warning": False,
         "payout_threshold": 13000.0,
-        "fedwatch_probability": 0.78,
+        "fedwatch_probability": 0.9948,
         "fedwatch_is_fallback": False,
+        "fedwatch_details": {
+            "meeting_date": "09/16",
+            "prob_maintain": 40.4,
+            "prob_hike": 59.1,
+            "prob_cut": 1.4,
+        },
+        "escape_win_status": "🟢 正常窗口 (正Gamma護航中)",
     }
     embed_hawkish = build_market_macro_overview_embed(macro_data_hawkish)
     # Check fields
     fields_dict: dict[str, str] = {
         str(field.name): str(field.value) for field in embed_hawkish.fields
     }
-    assert "📈 總經與系統流動性指標" in fields_dict
-    assert "FOMC 利率定價 (FedWatch)" in fields_dict["📈 總經與系統流動性指標"]
-    assert "78.0% (鷹派高位)" in fields_dict["📈 總經與系統流動性指標"]
-    assert "利率逃頂窗口" in fields_dict["🛡️ 聯動風控引擎狀態"]
-    assert "前移 5 天 (高利率防護)" in fields_dict["🛡️ 聯動風控引擎狀態"]
+    assert "📈 流動性與總經指標 (Liquidity & Macro)" in fields_dict
+    assert (
+        "FOMC 利率定價 (FedWatch)"
+        in fields_dict["📈 流動性與總經指標 (Liquidity & Macro)"]
+    )
+    assert (
+        "(09/16) 鷹派高位 (維持 40.4% / 加息 59.1% / 降息 1.4%)"
+        in fields_dict["📈 流動性與總經指標 (Liquidity & Macro)"]
+    )
+    assert "利率逃頂窗口" in fields_dict["🛡️ 聯動風控引擎狀態 (Risk Engine Status)"]
+    assert (
+        "🟢 正常窗口 (正Gamma護航中)"
+        in fields_dict["🛡️ 聯動風控引擎狀態 (Risk Engine Status)"]
+    )
+
+    # 驗證面板內部無重複標題與多餘虛線
+    for f_val in fields_dict.values():
+        assert " 📊 大盤與核心指標 (Market & Core Indices)" not in f_val
+        assert " 🛡️ 聯動風控引擎狀態 (Risk Engine Status)" not in f_val
+        assert " 📈 流動性與總經指標 (Liquidity & Macro)" not in f_val
+        assert " 📅 總經公布日程" not in f_val
 
     # Case 2: 降息預期確立 (<= 40%)
     macro_data_dovish: dict[str, Any] = {
         **macro_data_hawkish,
         "fedwatch_probability": 0.25,
         "fedwatch_is_fallback": False,
+        "fedwatch_details": {
+            "meeting_date": "09/16",
+            "prob_maintain": 25.0,
+            "prob_hike": 0.0,
+            "prob_cut": 75.0,
+        },
+        "escape_win_status": "🟢 後推 5 天 (流動性擴張)",
     }
     embed_dovish = build_market_macro_overview_embed(macro_data_dovish)
     fields_dovish: dict[str, str] = {
         str(field.name): str(field.value) for field in embed_dovish.fields
     }
-    assert "25.0% (降息確立)" in fields_dovish["📈 總經與系統流動性指標"]
-    assert "後推 5 天 (流動性擴張)" in fields_dovish["🛡️ 聯動風控引擎狀態"]
+    assert (
+        "(09/16) 降息確立 (降息機率 75.0%)"
+        in fields_dovish["📈 流動性與總經指標 (Liquidity & Macro)"]
+    )
+    assert (
+        "後推 5 天 (流動性擴張)"
+        in fields_dovish["🛡️ 聯動風控引擎狀態 (Risk Engine Status)"]
+    )
 
 
 def test_calendar_service_fedwatch_lookup() -> None:
-    """測試 calendar_service.get_latest_fedwatch_probability 的快取與查詢回退"""
+    """測試 calendar_service.get_latest_fedwatch_probability 與 get_latest_fedwatch_info"""
     from services.calendar_service import calendar_service
 
     # Case 1: kv_cache 命中
@@ -417,11 +453,21 @@ def test_calendar_service_fedwatch_lookup() -> None:
         mock_kv.side_effect = lambda k: (
             0.65
             if k == "macro_fedwatch_probability"
-            else (0 if k == "macro_fedwatch_is_fallback" else None)
+            else (
+                '{"meeting_date": "09/16", "prob_maintain": 65.0, "prob_hike": 0.0, "prob_cut": 35.0}'
+                if k == "macro_fedwatch_details"
+                else (0 if k == "macro_fedwatch_is_fallback" else None)
+            )
         )
         prob, is_fallback = calendar_service.get_latest_fedwatch_probability()
         assert prob == 0.65
         assert is_fallback is False
+
+        p, is_fb, details = calendar_service.get_latest_fedwatch_info()
+        assert p == 0.65
+        assert is_fb is False
+        assert details.get("meeting_date") == "09/16"
+        assert details.get("prob_maintain") == 65.0
 
     # Case 2: kv_cache miss, fallback to SQLite
     with patch("database.cache.get_kv_cache", return_value=None), patch(
@@ -433,3 +479,47 @@ def test_calendar_service_fedwatch_lookup() -> None:
         prob, is_fallback = calendar_service.get_latest_fedwatch_probability()
         assert prob == 0.85
         assert is_fallback is True
+
+
+def test_evaluate_escape_window_regime_matrix() -> None:
+    """測試多因子逃頂窗口矩陣評估邏輯 (四因子)"""
+    from market_analysis.index_microstructure import evaluate_escape_window_regime
+
+    # 1. 鷹派利率 + 負 Gamma -> 前移收縮警戒
+    t_score, e_score, direction, shift, tier, status = evaluate_escape_window_regime(
+        prob=0.99,
+        cpi_dev=0.0,
+        wti=75.0,
+        vts_ratio=0.88,
+        is_negative_gamma=True,
+    )
+    assert direction == "前移"
+    assert shift >= 5
+    assert "收縮警戒" in tier
+    assert "⚠️ 前移" in status
+
+    # 2. 鷹派利率 + 正 Gamma 護航 + 通膨穩定 -> 正常窗口
+    t_score, e_score, direction, shift, tier, status = evaluate_escape_window_regime(
+        prob=0.99,
+        cpi_dev=-0.05,
+        wti=72.0,
+        vts_ratio=0.85,
+        is_negative_gamma=False,
+    )
+    assert direction == "維持"
+    assert shift == 0
+    assert "中性平衡" in tier
+    assert "🟢 正常窗口 (正Gamma護航中)" == status
+
+    # 3. 寬鬆降息 + 正價差 -> 後推擴張
+    t_score, e_score, direction, shift, tier, status = evaluate_escape_window_regime(
+        prob=0.25,
+        cpi_dev=-0.1,
+        wti=70.0,
+        vts_ratio=0.82,
+        is_negative_gamma=False,
+    )
+    assert direction == "後推"
+    assert shift == 5
+    assert "寬鬆擴張" in tier
+    assert "🟢 後推 5 天" in status

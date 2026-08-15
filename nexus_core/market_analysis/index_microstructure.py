@@ -294,3 +294,81 @@ def classify_gex_wall(
         return "RESISTANCE_CALL_WALL"  # 上方壓制天花板
 
     return "NEUTRAL"
+
+
+def evaluate_escape_window_regime(
+    prob: float,
+    cpi_dev: float = 0.0,
+    wti: float = 75.0,
+    vts_ratio: float = 0.88,
+    is_negative_gamma: bool = False,
+) -> tuple[int, int, str, int, str, str]:
+    """
+    評估四因子宏觀流動性矩陣與逃頂窗口狀態。
+
+    Args:
+        prob: FedWatch 維持高利率或加息機率 (0.0 ~ 1.0)
+        cpi_dev: CPI 偏差值 (%)
+        wti: WTI 原油價格
+        vts_ratio: VIX 期限結構比例 (VIX / VIX3M)
+        is_negative_gamma: 是否處於負 Gamma 踩踏區間
+
+    Returns:
+        tuple[int, int, str, int, str, str]:
+            (tightening_score, easing_score, direction, shift_days, tier_title, short_status_desc)
+    """
+    tightening_score = 0
+    easing_score = 0
+
+    # Factor 1: FedWatch 利率定價
+    if prob > 0.70:
+        tightening_score += 1
+    elif prob <= 0.40:
+        easing_score += 1
+
+    # Factor 2: 通膨與能源 (CPI / WTI)
+    if (cpi_dev > 0.1) or (wti > 85.0):
+        tightening_score += 1
+    elif (cpi_dev <= 0.0) and (wti <= 80.0):
+        easing_score += 1
+
+    # Factor 3: VIX 期限結構 (VTS)
+    if vts_ratio >= 1.0:
+        tightening_score += 1
+    elif vts_ratio < 0.90:
+        easing_score += 1
+
+    # Factor 4: 大盤微觀結構 Net GEX
+    if is_negative_gamma:
+        tightening_score += 1
+    else:
+        easing_score += 1
+
+    # 三階矩陣狀態評估
+    if tightening_score >= 2 or (prob > 0.70 and is_negative_gamma):
+        direction = "前移"
+        shift_days = 8 if tightening_score >= 3 else 5
+        tier_title = "🚨 收縮警戒 (Tightening Contraction)"
+        short_status_desc = f"⚠️ 前移 {shift_days} 天 (高利率+結構承壓)"
+    elif prob <= 0.40 and easing_score >= 2 and tightening_score == 0:
+        direction = "後推"
+        shift_days = 5
+        tier_title = "🟢 寬鬆擴張 (Liquidity Expansion)"
+        short_status_desc = "🟢 後推 5 天 (流動性擴張)"
+    else:
+        direction = "維持"
+        shift_days = 0
+        tier_title = "🟡 中性平衡 (Neutral Balance)"
+        if not is_negative_gamma and prob > 0.70:
+            short_status_desc = "🟢 正常窗口 (正Gamma護航中)"
+        else:
+            short_status_desc = "🟢 正常窗口 (均衡定價)"
+
+    return (
+        tightening_score,
+        easing_score,
+        direction,
+        shift_days,
+        tier_title,
+        short_status_desc,
+    )

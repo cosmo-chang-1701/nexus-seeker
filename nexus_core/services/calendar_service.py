@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from datetime import date, datetime, timedelta
-from typing import List, Optional, Union, Tuple
+from typing import List, Optional, Union, Tuple, Any
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, computed_field, field_validator
@@ -492,6 +492,7 @@ class CalendarService:
 
     async def update_fedwatch_probability(self) -> None:
         """從 edge scraper 獲取下週 FOMC 最新利率定價機率，並寫入資料庫。"""
+        import json
         import httpx
         import config
         from database.cache import save_kv_cache
@@ -510,7 +511,8 @@ class CalendarService:
                 if res.status_code == 200:
                     payload = res.json()
                     if payload.get("status") == "success":
-                        prob = payload["data"].get("probability", 0.72)
+                        data = payload.get("data", {})
+                        prob = float(data.get("probability", 0.72))
                         await execute_write_async(
                             """
                             UPDATE economic_calendar_events
@@ -520,8 +522,9 @@ class CalendarService:
                             (prob,),
                         )
                         await save_kv_cache("macro_fedwatch_probability", prob)
+                        await save_kv_cache("macro_fedwatch_details", json.dumps(data))
                         logger.info(
-                            f"成功更新 CME FedWatch FOMC 利率維持/加息機率: {prob * 100:.1f}%"
+                            f"成功更新 CME FedWatch FOMC 利率維持/加息機率: {prob * 100:.1f}%, 明細: {data}"
                         )
                         await save_kv_cache("macro_fedwatch_is_fallback", 0)
                         return
@@ -567,6 +570,35 @@ class CalendarService:
             logger.warning(f"查詢 FedWatch 概率失敗: {e}")
 
         return 0.72, True
+
+    def get_latest_fedwatch_info(self) -> tuple[float, bool, dict[str, Any]]:
+        """讀取最新 FedWatch 概率、是否為 Fallback 快取，以及詳細期貨機率拆解"""
+        import json
+        from database.cache import get_kv_cache
+
+        prob, is_fallback = self.get_latest_fedwatch_probability()
+        raw_details = get_kv_cache("macro_fedwatch_details")
+        details: dict[str, Any] = {}
+        if raw_details:
+            try:
+                if isinstance(raw_details, dict):
+                    details = raw_details
+                else:
+                    details = json.loads(str(raw_details))
+            except Exception:
+                details = {}
+
+        if not details:
+            details = {
+                "probability": prob,
+                "meeting_date": "",
+                "current_target": "3.50%-3.75%",
+                "prob_maintain": round(prob * 100, 1),
+                "prob_hike": 0.0,
+                "prob_cut": round(max(0.0, (1.0 - prob) * 100), 1),
+                "decision": "maintain" if prob > 0.4 else "cut",
+            }
+        return prob, is_fallback, details
 
 
 # Singleton instance

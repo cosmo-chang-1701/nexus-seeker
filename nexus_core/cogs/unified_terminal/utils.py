@@ -146,8 +146,35 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
 
     payout_threshold = get_safety_payout_threshold()
 
-    fedwatch_prob, fedwatch_is_fallback = (
-        calendar_service.get_latest_fedwatch_probability()
+    fedwatch_prob, fedwatch_is_fallback, fedwatch_details = (
+        calendar_service.get_latest_fedwatch_info()
+    )
+
+    # 取得 CPI 偏差
+    cpi_actual = get_kv_cache("macro_cpi_actual")
+    cpi_expected = get_kv_cache("macro_cpi_expected")
+    cpi_dev = (
+        cpi_actual - cpi_expected
+        if (cpi_actual is not None and cpi_expected is not None)
+        else (get_kv_cache("macro_cpi_deviation") or 0.0)
+    )
+
+    # 多因子宏觀逃頂窗口狀態判定
+    from market_analysis.index_microstructure import evaluate_escape_window_regime
+
+    (
+        tightening_score,
+        easing_score,
+        escape_dir,
+        escape_shift,
+        escape_tier,
+        escape_win_status,
+    ) = evaluate_escape_window_regime(
+        prob=fedwatch_prob,
+        cpi_dev=float(cpi_dev),
+        wti=float(wti),
+        vts_ratio=float(vts_val) if (vts_val is not None and vts_val > 0) else 0.88,
+        is_negative_gamma=short_gamma_critical or (spx < gamma_flip_line),
     )
 
     result_data: dict[str, Any] = {
@@ -168,6 +195,11 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         "payout_threshold": payout_threshold,
         "fedwatch_probability": fedwatch_prob,
         "fedwatch_is_fallback": fedwatch_is_fallback,
+        "fedwatch_details": fedwatch_details,
+        "escape_win_status": escape_win_status,
+        "escape_window_direction": escape_dir,
+        "escape_window_shift_days": escape_shift,
+        "escape_window_tier": escape_tier,
         "is_degraded": is_degraded,
         "gex_is_fallback": gex_is_fallback,
     }

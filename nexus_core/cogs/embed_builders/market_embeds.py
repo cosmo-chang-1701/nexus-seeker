@@ -1409,32 +1409,64 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
     )
 
     fedwatch_prob = macro_data.get("fedwatch_probability")
+    fedwatch_details = macro_data.get("fedwatch_details") or {}
     fedwatch_is_fallback = macro_data.get("fedwatch_is_fallback", False)
     fedwatch_suffix = " \u001b[1;33m[備援]\u001b[0m" if fedwatch_is_fallback else ""
+
+    meeting_date = fedwatch_details.get("meeting_date", "")
+    meeting_prefix = f"({meeting_date}) " if meeting_date else ""
+    prob_m = fedwatch_details.get("prob_maintain")
+    prob_h = fedwatch_details.get("prob_hike")
+    prob_c = fedwatch_details.get("prob_cut")
 
     if fedwatch_prob is not None:
         try:
             fw_val = float(fedwatch_prob)
             if fw_val > 0.70:
-                fedwatch_desc = f"\u001b[1;31m{fw_val * 100:.1f}% (鷹派高位)\u001b[0m{fedwatch_suffix}"
-                escape_win_status = "\u001b[1;31m⚠️ 前移 5 天 (高利率防護)\u001b[0m"
+                if prob_h is not None and prob_h >= 5.0:
+                    detail_str = (
+                        f"維持 {prob_m:.1f}% / 加息 {prob_h:.1f}% / 降息 {prob_c:.1f}%"
+                    )
+                elif prob_m is not None and prob_c is not None:
+                    detail_str = f"維持 {prob_m:.1f}% / 降息 {prob_c:.1f}%"
+                else:
+                    detail_str = f"{fw_val * 100:.1f}%"
+                fedwatch_desc = f"\u001b[1;31m{meeting_prefix}鷹派高位 ({detail_str})\u001b[0m{fedwatch_suffix}"
             elif fw_val <= 0.40:
-                fedwatch_desc = f"\u001b[1;32m{fw_val * 100:.1f}% (降息確立)\u001b[0m{fedwatch_suffix}"
-                escape_win_status = "\u001b[1;32m🟢 後推 5 天 (流動性擴張)\u001b[0m"
+                if prob_c is not None:
+                    detail_str = f"降息機率 {prob_c:.1f}%"
+                else:
+                    detail_str = f"{fw_val * 100:.1f}%"
+                fedwatch_desc = f"\u001b[1;32m{meeting_prefix}降息確立 ({detail_str})\u001b[0m{fedwatch_suffix}"
             else:
-                fedwatch_desc = f"\u001b[1;33m{fw_val * 100:.1f}% (均衡定價)\u001b[0m{fedwatch_suffix}"
-                escape_win_status = "\u001b[1;32m🟢 正常窗口 (均衡定價)\u001b[0m"
+                if prob_m is not None and prob_c is not None:
+                    detail_str = f"維持 {prob_m:.1f}% / 降息 {prob_c:.1f}%"
+                else:
+                    detail_str = f"{fw_val * 100:.1f}%"
+                fedwatch_desc = f"\u001b[1;33m{meeting_prefix}均衡定價 ({detail_str})\u001b[0m{fedwatch_suffix}"
         except (ValueError, TypeError):
             fedwatch_desc = "暫無數據"
-            escape_win_status = "正常窗口"
     else:
         fedwatch_desc = "暫無數據"
-        escape_win_status = "正常窗口"
 
-    # 3. 建立 ANSI 面板內容
+    escape_win_status = macro_data.get("escape_win_status")
+    if not escape_win_status:
+        if fedwatch_prob is not None:
+            try:
+                fw_val = float(fedwatch_prob)
+                if fw_val > 0.70:
+                    escape_win_status = "\u001b[1;31m⚠️ 前移 5 天 (高利率防護)\u001b[0m"
+                elif fw_val <= 0.40:
+                    escape_win_status = "\u001b[1;32m🟢 後推 5 天 (流動性擴張)\u001b[0m"
+                else:
+                    escape_win_status = "\u001b[1;32m🟢 正常窗口 (均衡定價)\u001b[0m"
+            except (ValueError, TypeError):
+                escape_win_status = "正常窗口"
+        else:
+            escape_win_status = "正常窗口"
+
+    # 3. 建立 ANSI 面板內容 (精簡緊湊，無重複標題)
     core_lines = [
-        " 📊 大盤與核心指標 (Market & Core Indices)",
-        " ----------------------------------",
         f" ├─ S&P 500 Index (SPX): \u001b[1;32m{spx:,.2f}\u001b[0m",
         f" ├─ 恐慌指數 (VIX): \u001b[1;33m{vix:.2f}\u001b[0m",
         f" ├─ 10年期美債收益率 (US10Y): \u001b[1;36m{us10y:.2f}%\u001b[0m",
@@ -1443,8 +1475,6 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
     core_panel = "```ansi\n" + "\n".join(core_lines) + "\n```"
 
     risk_lines = [
-        " 🛡️ 聯動風控引擎狀態 (Risk Engine Status)",
-        " ----------------------------------",
         f" ├─ 零 Gamma 踩踏: {short_gamma_status}",
         f" ├─ 經濟衰退警告: {recession_status}",
         f" ├─ 利率逃頂窗口: {escape_win_status}",
@@ -1453,8 +1483,6 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
     risk_panel = "```ansi\n" + "\n".join(risk_lines) + "\n```"
 
     macro_lines = [
-        " 📈 流動性與總經指標 (Liquidity & Macro)",
-        " ----------------------------------",
         f" ├─ WTI 原油價格: \u001b[1;33m${wti:.2f}\u001b[0m",
         f" ├─ 聯準會逆回購 (RRP): \u001b[1;36m${rrp:,.1f}B\u001b[0m (30天變動: \u001b[1;35m{rrp_change_30d:+.1f}%\u001b[0m)",
         f" ├─ 聯準會資產負債表: \u001b[1;32m${fed_balance:.2f}T\u001b[0m",
@@ -1464,13 +1492,29 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
     ]
     macro_panel = "```ansi\n" + "\n".join(macro_lines) + "\n```"
 
-    calendar_panel = f"```\n 📅 總經公布日程\n ----------------------------------\n └─ {cpi_nfp_calendar}\n```"
+    calendar_panel = f"```\n └─ {cpi_nfp_calendar}\n```"
 
     # 4. 加入 Fields 到 Embed
-    embed.add_field(name="🏁 核心大盤與收益指標", value=core_panel, inline=False)
-    embed.add_field(name="🛡️ 聯動風控引擎狀態", value=risk_panel, inline=False)
-    embed.add_field(name="📈 總經與系統流動性指標", value=macro_panel, inline=False)
-    embed.add_field(name="🗓️ 總經事件公布日程", value=calendar_panel, inline=False)
+    embed.add_field(
+        name="📊 大盤與核心指標 (Market & Core Indices)",
+        value=core_panel,
+        inline=False,
+    )
+    embed.add_field(
+        name="🛡️ 聯動風控引擎狀態 (Risk Engine Status)",
+        value=risk_panel,
+        inline=False,
+    )
+    embed.add_field(
+        name="📈 流動性與總經指標 (Liquidity & Macro)",
+        value=macro_panel,
+        inline=False,
+    )
+    embed.add_field(
+        name="📅 總經事件公布日程 (Macro Calendar)",
+        value=calendar_panel,
+        inline=False,
+    )
 
     # 如果有降級警告，加入說明
     if is_degraded:

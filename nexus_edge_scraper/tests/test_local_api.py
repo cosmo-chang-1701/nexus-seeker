@@ -50,6 +50,9 @@ def test_scrape_fedwatch_fallback() -> None:
         data = response.json()
         assert data["status"] == "success"
         assert data["data"]["probability"] == 0.72
+        assert data["data"]["prob_maintain"] == 72.0
+        assert data["data"]["prob_cut"] == 28.0
+        assert data["data"]["decision"] == "maintain"
 
 
 def test_scrape_sec_fundamental() -> None:

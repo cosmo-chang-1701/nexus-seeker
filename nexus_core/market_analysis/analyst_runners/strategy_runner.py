@@ -284,12 +284,25 @@ async def run_fomc_escape_window_analysis(
         f4_val = "\u001b[1;32m🟢 正 Gamma 護航區\u001b[0m"
     factors_summary.append(("大盤微觀結構 (SPY GEX)", f4_val))
 
-    # 4. 三階矩陣狀態評估
-    if tightening_score >= 2 or (prob > 0.70 and is_negative_gamma):
-        # 🚨 階梯 1：收縮警戒 (Tightening)
-        direction = "前移"
-        shift_days = 8 if tightening_score >= 3 else 5
-        tier_title = "🚨 收縮警戒 (Tightening Contraction)"
+    # 4. 三階矩陣狀態評估 (使用統一的宏觀流動性矩陣引擎)
+    from market_analysis.index_microstructure import evaluate_escape_window_regime
+
+    (
+        tightening_score,
+        easing_score,
+        direction,
+        shift_days,
+        tier_title,
+        _,
+    ) = evaluate_escape_window_regime(
+        prob=prob,
+        cpi_dev=cpi_dev,
+        wti=wti,
+        vts_ratio=vts_ratio if is_vts_valid else 0.88,
+        is_negative_gamma=is_negative_gamma,
+    )
+
+    if direction == "前移":
         tactical_directive = (
             "🚨 **提前防禦撤退**：宏觀流動性收緊與估值回殺風險加劇，多頭反彈窗口受限，"
             "建議於窗口初段逢高分批減倉、收緊防守停損線並全面封鎖裸賣策略。"
@@ -301,11 +314,7 @@ async def run_fomc_escape_window_analysis(
         adj_start_date = _shift_business_days(start_date, -shift_days)
         adj_end_date = _shift_business_days(end_date, -shift_days)
 
-    elif prob <= 0.40 and easing_score >= 2 and tightening_score == 0:
-        # 🟢 階梯 2：寬鬆擴張 (Expansion)
-        direction = "後推"
-        shift_days = 5
-        tier_title = "🟢 寬鬆擴張 (Liquidity Expansion)"
+    elif direction == "後推":
         tactical_directive = (
             "🟢 **延後抱牢反彈**：寬鬆流動性預期與正 Gamma 結構護航，多頭動能延續性強，"
             "建議延後撤退時機、讓利潤奔馳，可適度提高風險偏好。"
@@ -318,10 +327,6 @@ async def run_fomc_escape_window_analysis(
         adj_end_date = _shift_business_days(end_date, shift_days)
 
     else:
-        # 🟡 階梯 3：中性平衡 (Neutral)
-        direction = "維持"
-        shift_days = 0
-        tier_title = "🟡 中性平衡 (Neutral Balance)"
         tactical_directive = (
             "🟡 **正常波段護航**：各項宏觀流動性因子處於均衡區間，"
             "建議按原定計畫嚴守關鍵支撐與壓力關卡，執行標準網格防禦。"
