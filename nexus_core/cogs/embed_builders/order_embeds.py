@@ -20,13 +20,16 @@ import re
 import discord
 from cogs.embed_builders._core import NexusEmbed
 
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
-from cogs.embed_builders._ansi_utils import _pad_string, _clean_ansi, _safe_float
 from cogs.embed_builders._ansi_utils import (
+    _pad_string,
+    _clean_ansi,
+    _safe_float,
     _is_macro_report_marker,
     _chunk_text_blocks,
+    _format_macro_report_ansi,
 )
 from cogs.embed_builders._embed_helpers import (
     _safe_embed_field_value,
@@ -668,7 +671,7 @@ def _format_to_target_center_style(text: str) -> str:
 
 def _format_to_target_center_style_with_title(title: str, text: str) -> str:
     if not text:
-        return "```ansi\n └─ 暫無數據\n```"
+        return "```ansi\n • 暫無數據\n```"
 
     raw_lines = text.split("\n")
     cleaned_lines = []
@@ -684,12 +687,11 @@ def _format_to_target_center_style_with_title(title: str, text: str) -> str:
             cleaned_lines.append(cleaned)
 
     if not cleaned_lines:
-        return "```ansi\n └─ 暫無數據\n```"
+        return "```ansi\n • 暫無數據\n```"
 
     formatted_lines = [f" {title}"]
-    for idx, line in enumerate(cleaned_lines):
-        prefix = " ├─ " if idx < len(cleaned_lines) - 1 else " └─ "
-        formatted_lines.append(f"{prefix}{line}")
+    for line in cleaned_lines:
+        formatted_lines.append(f" • {line}")
 
     content = "\n".join(formatted_lines)
     return f"```ansi\n{content}\n```"
@@ -717,24 +719,21 @@ def build_post_market_intelligence_embed(
         timestamp=datetime.now(timezone.utc),
     )
 
-    taipei_tz = timezone(timedelta(hours=8))
-    timestamp_str = datetime.now(taipei_tz).strftime("%Y-%m-%d %H:%M:%S")
-
-    desc_lines = [
-        "```ansi",
-        f" \u001b[1;36m📅 {timestamp_str} (UTC+8) ｜ 系統狀態: 盤後結算完成\u001b[0m",
-        " --------------------------------------------------",
-    ]
-
     if survival_runway is not None:
         runway_text = (
             "\u001b[1;32m無限 (收益已覆蓋支出)\u001b[0m"
             if survival_runway >= 9999
             else f"\u001b[1;32m{survival_runway:,.1f} 天\u001b[0m"
         )
-        desc_lines.append(f" 🏁 財務生存跑道 : {runway_text}")
+        embed.description = (
+            "```ansi\n"
+            " 🏁 財務生存跑道 (Financial Runway)\n"
+            f" • 預估剩餘天數: {runway_text}\n"
+            " • 計算基準: 基於現有現金儲備與 Theta 收益\n"
+            "```"
+        )
     else:
-        desc_lines.append(" 🏁 財務生存跑道 : \u001b[1;32m計算中\u001b[0m")
+        embed.description = None
 
     positions_list = []
     debit_cost_val = "$0.00 USD"
@@ -795,36 +794,34 @@ def build_post_market_intelligence_embed(
         debit_cost_clean = debit_cost_val.replace("`", "").replace("**", "").strip()
         credit_cash_clean = credit_cash_val.replace("`", "").replace("**", "").strip()
         pnl_val_clean = pnl_val_str.replace("`", "").replace("**", "").strip()
-
-        pnl_color = (
-            "\u001b[1;32m"
-            if (
-                "+" in pnl_val_clean
-                or ("-" not in pnl_val_clean and pnl_val_clean != "$0.00 USD")
-            )
-            else "\u001b[1;31m"
-        )
-        if pnl_val_clean == "$0.00 USD":
-            pnl_color = "\u001b[1;37m"
-
-        desc_lines.extend(
-            [
-                f" 💰 實質暴露 (Debit) : {debit_cost_clean}",
-                f" 💵 收取權利金 (Credit): {credit_cash_clean}",
-                f" 📈 未實現損益 (PnL)  : {pnl_color}{pnl_val_clean}\u001b[0m",
-            ]
-        )
     else:
-        desc_lines.extend(
-            [
-                " 💰 實質暴露 (Debit) : $0.00 USD",
-                " 💵 收取權利金 (Credit): $0.00 USD",
-                " 📈 未實現損益 (PnL)  : \u001b[1;37m$0.00 USD\u001b[0m",
-            ]
-        )
+        debit_cost_clean = "$0.00 USD"
+        credit_cash_clean = "$0.00 USD"
+        pnl_val_clean = "$0.00 USD"
 
-    desc_lines.append("```")
-    embed.description = "\n".join(desc_lines)
+    pnl_color = (
+        "\u001b[1;32m"
+        if (
+            "+" in pnl_val_clean
+            or ("-" not in pnl_val_clean and pnl_val_clean != "$0.00 USD")
+        )
+        else "\u001b[1;31m"
+    )
+    if pnl_val_clean == "$0.00 USD":
+        pnl_color = "\u001b[1;37m"
+
+    fin_lines = [
+        "```ansi",
+        f" • 實質暴露 (Debit Cost)   : {debit_cost_clean}",
+        f" • 收取權利金 (Credit Cash) : {credit_cash_clean}",
+        f" • 未實現損益 (Unrealized)  : {pnl_color}{pnl_val_clean}\u001b[0m",
+        "```",
+    ]
+    embed.add_field(
+        name="💰 資金與實質暴露 (Financial Summary)",
+        value="\n".join(fin_lines),
+        inline=False,
+    )
 
     if positions_list and positions_text and positions_text != "目前無持倉部位。":
         positions_text = positions_text.strip().strip("`").strip()
@@ -845,9 +842,8 @@ def build_post_market_intelligence_embed(
                 detail_lines.append(cleaned_line)
 
             ansi_lines = [f" {heading_colored}"]
-            for idx, dl in enumerate(detail_lines):
-                prefix = " ├─ " if idx < len(detail_lines) - 1 else " └─ "
-                ansi_lines.append(f"{prefix}{dl}")
+            for dl in detail_lines:
+                ansi_lines.append(f" • {dl}")
             transformed_blocks.append("\n".join(ansi_lines))
 
         chunks = _chunk_text_blocks(transformed_blocks, max_len=1000)
@@ -871,9 +867,9 @@ def build_post_market_intelligence_embed(
         empty_lines = [
             "```ansi",
             " \u001b[1;33m💡 【帳戶處於 100% 現金防禦/觀望狀態】\u001b[0m",
-            " ├─ 🛡️ 實質暴露: $0.00 USD ｜ 無下行 Delta 曝險",
-            f" ├─ 🏁 財務生存天數: {runway_info}",
-            " └─ 🧭 行動建議: 可使用 `/x` 執行即時量化雷達，捕捉超跌磁吸與突破標的。",
+            " • 🛡️ 實質暴露: $0.00 USD ｜ 無下行 Delta 曝險",
+            f" • 🏁 財務生存天數: {runway_info}",
+            " • 🧭 行動建議: 可使用 `/x` 執行即時量化雷達，捕捉超跌磁吸與突破標的。",
             "```",
         ]
         embed.add_field(
@@ -882,8 +878,19 @@ def build_post_market_intelligence_embed(
             inline=False,
         )
 
-    # ── 🛡️ 對沖績效歸因 (Hedge Attribution) ──
-    if hedge_analysis:
+    # ── 🌐 【宏觀風險與資金水位報告】 ──
+    macro_formatted = _format_macro_report_ansi(macro_text)
+    macro_chunks = _chunk_text_blocks([macro_formatted], max_len=1000)
+    for i, chunk in enumerate(macro_chunks):
+        field_name = (
+            f"🌐 【宏觀風險與資金水位報告】 ({i+1}/{len(macro_chunks)})"
+            if len(macro_chunks) > 1
+            else "🌐 【宏觀風險與資金水位報告】"
+        )
+        embed.add_field(name=field_name, value=f"```ansi\n{chunk}\n```", inline=False)
+
+    # ── 🛡️ 對沖績效歸因 (Hedge Attribution) [Dynamic Gating] ──
+    if isinstance(hedge_analysis, dict) and hedge_analysis:
         ha_net_pnl = _safe_float(hedge_analysis.get("net_pnl"), 0.0)
         ha_alpha_pnl = _safe_float(hedge_analysis.get("alpha_contribution"), 0.0)
         ha_hedge_pnl = _safe_float(hedge_analysis.get("hedge_contribution"), 0.0)
@@ -896,105 +903,53 @@ def build_post_market_intelligence_embed(
             else None
         )
 
-        status_desc = {
-            "OPTIMAL": "OPTIMAL (對沖結構健康)",
-            "OVER_HEDGED": "OVER_HEDGED (過度對沖/拖累Alpha)",
-            "UNDER_HEDGED": "UNDER_HEDGED (對沖不足/需防下行)",
-        }.get(ha_status, ha_status)
-
-        ha_status_color = (
-            "\033[1;32m"
-            if ha_status == "OPTIMAL"
-            else "\033[1;33m"
-            if ha_status == "OVER_HEDGED"
-            else "\033[1;31m"
+        has_active_hedge = (
+            ha_hedge_ratio > 0.0
+            or ha_hedge_pnl != 0.0
+            or bool(hedge_analysis.get("has_hedge"))
         )
-        ha_alpha_pnl_color = "\033[1;32m" if ha_alpha_pnl >= 0 else "\033[1;31m"
-        ha_hedge_pnl_color = "\033[1;32m" if ha_hedge_pnl >= 0 else "\033[1;31m"
-        ha_net_pnl_color = "\033[1;32m" if ha_net_pnl >= 0 else "\033[1;31m"
-        ha_eff_pct = ha_effectiveness * 100
 
-        hedge_lines = [
-            "```ansi",
-            f" Alpha 選股 PnL   : {ha_alpha_pnl_color}${ha_alpha_pnl:+,.2f}\033[0m",
-            f" 對沖避險 PnL     : {ha_hedge_pnl_color}${ha_hedge_pnl:+,.2f}\033[0m",
-            f" 淨損益 (Net PnL)  : {ha_net_pnl_color}${ha_net_pnl:+,.2f}\033[0m",
-            " --------------------------------------------------",
-            f" 對沖比率 (Ratio) : {ha_hedge_ratio:.2%} ｜ 有效性: {ha_eff_pct:.1f}%",
-            f" 對沖狀態評估     : {ha_status_color}{status_desc}\033[0m",
-        ]
+        if has_active_hedge:
+            status_desc = {
+                "OPTIMAL": "OPTIMAL (對沖結構健康)",
+                "OVER_HEDGED": "OVER_HEDGED (過度對沖/拖累Alpha)",
+                "UNDER_HEDGED": "UNDER_HEDGED (對沖不足/需防下行)",
+            }.get(ha_status, ha_status)
 
-        if ha_dynamic_tau is not None:
-            hedge_lines.append(
-                f" 動態 Tau (τ)     : {ha_dynamic_tau:.4f} (模型自適應調整)"
+            ha_status_color = (
+                "\033[1;32m"
+                if ha_status == "OPTIMAL"
+                else "\033[1;33m"
+                if ha_status == "OVER_HEDGED"
+                else "\033[1;31m"
             )
+            ha_alpha_pnl_color = "\033[1;32m" if ha_alpha_pnl >= 0 else "\033[1;31m"
+            ha_hedge_pnl_color = "\033[1;32m" if ha_hedge_pnl >= 0 else "\033[1;31m"
+            ha_net_pnl_color = "\033[1;32m" if ha_net_pnl >= 0 else "\033[1;31m"
+            ha_eff_pct = ha_effectiveness * 100
 
-        hedge_lines.append("```")
+            hedge_lines = [
+                "```ansi",
+                f" Alpha 選股 PnL   : {ha_alpha_pnl_color}${ha_alpha_pnl:+,.2f}\033[0m",
+                f" 對沖避險 PnL     : {ha_hedge_pnl_color}${ha_hedge_pnl:+,.2f}\033[0m",
+                f" 淨損益 (Net PnL)  : {ha_net_pnl_color}${ha_net_pnl:+,.2f}\033[0m",
+                " --------------------------------------------------",
+                f" 對沖比率 (Ratio) : {ha_hedge_ratio:.2%} ｜ 有效性: {ha_eff_pct:.1f}%",
+                f" 對沖狀態評估     : {ha_status_color}{status_desc}\033[0m",
+            ]
 
-        embed.add_field(
-            name="🛡️ 對沖績效歸因 (Hedge Attribution)",
-            value="\n".join(hedge_lines),
-            inline=False,
-        )
-    else:
-        embed.add_field(
-            name="🛡️ 對沖績效歸因 (Hedge Attribution)",
-            value="```ansi\n • 暫無對沖部位，目前為 100% 現貨/多頭曝險狀態。\n```",
-            inline=False,
-        )
-
-    if (
-        macro_text
-        and macro_text.strip()
-        and macro_text.strip() != "目前無宏觀風險數據。"
-    ):
-        macro_lines = macro_text.split("\n")
-        cleaned_macro = [line.strip() for line in macro_lines if line.strip()]
-        formatted_macro_lines = []
-        for idx, line in enumerate(cleaned_macro):
-            clean_line = re.sub(r"^[\-\*\•\s]+", "", line).strip()
-            clean_line = clean_line.replace("`", "").replace("*", "")
-            if "【宏觀風險與資金水位報告】" in clean_line:
-                formatted_macro_lines.append(
-                    " \u001b[1;36m🌐 宏觀風險與資金水位\u001b[0m"
+            if ha_dynamic_tau is not None:
+                hedge_lines.append(
+                    f" 動態 Tau (τ)     : {ha_dynamic_tau:.4f} (模型自適應調整)"
                 )
-            elif "資產指標概覽" in clean_line:
-                formatted_macro_lines.append(" \u001b[1;33m📊 資產指標概覽\u001b[0m")
-            elif (
-                "多頭曝險過高" in clean_line
-                or "空頭曝險過高" in clean_line
-                or "對沖指令" in clean_line
-            ):
-                prefix = " ├─ " if idx < len(cleaned_macro) - 1 else " └─ "
-                formatted_macro_lines.append(
-                    f"{prefix}\u001b[1;31m{clean_line}\u001b[0m"
-                )
-            elif "風險中性" in clean_line or "安全範圍" in clean_line:
-                prefix = " ├─ " if idx < len(cleaned_macro) - 1 else " └─ "
-                formatted_macro_lines.append(
-                    f"{prefix}\u001b[1;32m{clean_line}\u001b[0m"
-                )
-            else:
-                prefix = " ├─ " if idx < len(cleaned_macro) - 1 else " └─ "
-                formatted_macro_lines.append(f"{prefix}{clean_line}")
-        macro_content = "\n".join(formatted_macro_lines)
 
-        macro_chunks = _chunk_text_blocks([macro_content], max_len=1000)
-        for i, chunk in enumerate(macro_chunks):
-            field_name = (
-                f"🌐 宏觀風險 (Macro Risks) ({i+1}/{len(macro_chunks)})"
-                if len(macro_chunks) > 1
-                else "🌐 宏觀風險 (Macro Risks)"
-            )
+            hedge_lines.append("```")
+
             embed.add_field(
-                name=field_name, value=f"```ansi\n{chunk}\n```", inline=False
+                name="🛡️ 對沖績效歸因 (Hedge Attribution)",
+                value="\n".join(hedge_lines),
+                inline=False,
             )
-    else:
-        embed.add_field(
-            name="🌐 宏觀風險 (Macro Risks)",
-            value="```ansi\n • 目前無宏觀風險數據。\n```",
-            inline=False,
-        )
 
     if sectors_data is not None:
         if sectors_data:
@@ -1016,16 +971,15 @@ def build_post_market_intelligence_embed(
                 sector_content_lines.append(
                     " \u001b[1;32m🔥 領漲板塊 (Top Inflows)\u001b[0m"
                 )
-                for idx, item in enumerate(inflows):
+                for item in inflows:
                     symbol = item.get("symbol", "N/A")
                     sec_name = item.get("name", "N/A")
                     change = _safe_float(item.get("pct_change"))
                     rel_vol = _safe_float(item.get("rel_vol"))
                     skew = _safe_float(item.get("skew"))
                     uoa_count = int(item.get("uoa_count", 0))
-                    prefix = " ├─ " if idx < len(inflows) - 1 else " └─ "
                     sector_content_lines.append(
-                        f"{prefix}{symbol} ({sec_name})：\u001b[1;32m{change:+.2f}%\u001b[0m ｜ 量比 {rel_vol:.2f}x ｜ Skew {skew:+.1f} ｜ UOA {uoa_count}"
+                        f" • {symbol} ({sec_name})：\u001b[1;32m{change:+.2f}%\u001b[0m ｜ 量比 {rel_vol:.2f}x ｜ Skew {skew:+.1f} ｜ UOA {uoa_count}"
                     )
 
             if outflows:
@@ -1034,20 +988,19 @@ def build_post_market_intelligence_embed(
                 sector_content_lines.append(
                     " \u001b[1;31m❄️ 領跌板塊 (Top Outflows)\u001b[0m"
                 )
-                for idx, item in enumerate(outflows):
+                for item in outflows:
                     symbol = item.get("symbol", "N/A")
                     sec_name = item.get("name", "N/A")
                     change = _safe_float(item.get("pct_change"))
                     rel_vol = _safe_float(item.get("rel_vol"))
                     skew = _safe_float(item.get("skew"))
                     uoa_count = int(item.get("uoa_count", 0))
-                    prefix = " ├─ " if idx < len(outflows) - 1 else " └─ "
                     sector_content_lines.append(
-                        f"{prefix}{symbol} ({sec_name})：\u001b[1;31m{change:+.2f}%\u001b[0m ｜ 量比 {rel_vol:.2f}x ｜ Skew {skew:+.1f} ｜ UOA {uoa_count}"
+                        f" • {symbol} ({sec_name})：\u001b[1;31m{change:+.2f}%\u001b[0m ｜ 量比 {rel_vol:.2f}x ｜ Skew {skew:+.1f} ｜ UOA {uoa_count}"
                     )
 
             if not inflows and not outflows:
-                sector_content_lines.append(" └─ 暫無波動資料")
+                sector_content_lines.append(" • 暫無波動資料")
 
             sector_content = "\n".join(sector_content_lines)
             sector_chunks = _chunk_text_blocks([sector_content], max_len=1000)
@@ -1084,19 +1037,12 @@ def build_post_market_intelligence_embed(
                 line_str.strip() for line_str in block.split("\n") if line_str.strip()
             ]
             formatted_lines = []
-            for l_idx, line in enumerate(lines):
+            for line in lines:
                 line = line.replace("**", "")
                 line = re.sub(r"^[\-\*\•\d\.]+\s*", "", line)
                 if not line:
                     continue
-                prefix = (
-                    " ├─ "
-                    if l_idx < len(lines) - 1
-                    else " └─ "
-                    if len(lines) > 1
-                    else " • "
-                )
-                formatted_lines.append(f"{prefix}{line}")
+                formatted_lines.append(f" • {line}")
             if formatted_lines:
                 transformed_blocks.append("\n".join(formatted_lines))
 

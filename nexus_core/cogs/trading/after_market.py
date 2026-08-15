@@ -14,14 +14,8 @@ from discord.ext import tasks, commands
 
 import database
 import market_time
-from config import get_vix_tier
 from services.trading_service import TradingService
-from services.market_data_service import get_macro_environment, get_quote
-from services.llm_service import generate_analyst_report
-from cogs.embed_builder import (
-    create_portfolio_report_embed,
-    create_ai_analysis_embed,
-)
+from cogs.embed_builder import create_portfolio_report_embed
 
 ny_tz = ZoneInfo("America/New_York")
 logger = logging.getLogger(__name__)
@@ -40,7 +34,7 @@ class AfterMarketCog(commands.Cog):
 
     @tasks.loop(time=time(hour=16, minute=15, tzinfo=ny_tz))
     async def dynamic_after_market_report(self) -> None:
-        """16:15：持倉結算與防禦建議 (依使用者分發私訊)"""
+        """16:15：持倉結算與防禦維護（盤後報告統一由 AnalystAgent.dispatch_post_market_intelligence 發送）"""
         if not getattr(self.bot, "_is_leader_instance", True):
             return
         now_ny = datetime.now(ny_tz)
@@ -50,7 +44,7 @@ class AfterMarketCog(commands.Cog):
         if schedule.empty:
             return
 
-        logger.info("Starting dynamic_after_market_report task.")
+        logger.info("Starting dynamic_after_market_report maintenance task.")
 
         try:
             purged_rows = database.purge_old_cache(days=30)
@@ -58,9 +52,7 @@ class AfterMarketCog(commands.Cog):
                 f"🧹 financials_cache 清理完成，刪除 {purged_rows} 筆 30 天前資料"
             )
         except Exception as e:
-            logger.warning(f"financials_cache 清理失敗，略過不影響盤後報告: {e}")
-
-        await self._run_after_market_report_pipeline(dry_run=False)
+            logger.warning(f"financials_cache 清理失敗: {e}")
 
     @dynamic_after_market_report.before_loop
     async def before_dynamic_after_market_report(self) -> None:
@@ -70,6 +62,19 @@ class AfterMarketCog(commands.Cog):
         self, dry_run: bool = False, triggered_by: Any = None
     ) -> Any:
         """共用盤後報告流程：支援排程與手動 dry-run。"""
+        if not dry_run:
+            analyst_cog = self.bot.get_cog("AnalystAgent")
+            if analyst_cog and hasattr(
+                analyst_cog, "dispatch_post_market_intelligence"
+            ):
+                await analyst_cog.dispatch_post_market_intelligence()
+                return {
+                    "users_total": len(database.get_all_user_ids()),
+                    "users_queued": len(database.get_all_user_ids()),
+                    "users_skipped": 0,
+                    "users_failed": 0,
+                    "errors": [],
+                }
         mode = "DRY-RUN" if dry_run else "SEND"
         stats: dict[str, Any] = {
             "users_total": 0,
@@ -80,20 +85,6 @@ class AfterMarketCog(commands.Cog):
         }
 
         logger.info(f"[AfterMarketReport] Start pipeline mode={mode}")
-
-        try:
-            macro: dict[str, Any] = await get_macro_environment()
-            vix = macro.get("vix", 18.0)
-            vix_tier = get_vix_tier(vix)
-            spy_data = await get_quote("SPY")
-            spy_price = spy_data.get("c", 500.0)
-            time_str = datetime.now().strftime("%Y-%m-%d")
-        except Exception as e:
-            logger.warning(f"Macro 數據獲取失敗，部分 AI 功能可能受限: {e}")
-            vix = 18.0
-            vix_tier = get_vix_tier(vix)
-            spy_price = 500.0
-            time_str = datetime.now().strftime("%Y-%m-%d")
 
         try:
             user_reports = await self.trading_service.get_after_market_report_data()
@@ -111,65 +102,9 @@ class AfterMarketCog(commands.Cog):
             hedge_analysis = data.get("hedge_analysis", {})
             survival_runway = data.get("survival_runway")
 
-            ai_enabled = False
-            ai_report = None
-            if not dry_run:
-                try:
-                    user_ctx = database.get_full_user_context(uid)
-                    if user_ctx.enable_analyst_agent:
-                        ai_enabled = True
-                        raw_data = {
-                            "macro_snapshot": {
-                                "vix": vix,
-                                "vix_tier": vix_tier,
-                                "spy_price": spy_price,
-                            },
-                            "brinson_attribution_proxy": {
-                                "total_net_pnl": round(
-                                    hedge_analysis.get("net_pnl", 0), 2
-                                ),
-                                "alpha_selection_pnl": round(
-                                    hedge_analysis.get("alpha_contribution", 0), 2
-                                ),
-                                "market_hedge_pnl": round(
-                                    hedge_analysis.get("hedge_contribution", 0), 2
-                                ),
-                            },
-                            "aggregate_risk_metrics": {
-                                "total_theta": round(user_ctx.total_theta, 2),
-                                "total_beta_delta": round(
-                                    user_ctx.total_weighted_delta, 2
-                                ),
-                                "portfolio_heat_pct": round(
-                                    (
-                                        abs(user_ctx.total_weighted_delta)
-                                        * spy_price
-                                        / user_ctx.capital
-                                        * 100
-                                    )
-                                    if user_ctx.capital > 0
-                                    else 0,
-                                    2,
-                                ),
-                                "avg_financial_runway_days": round(
-                                    survival_runway
-                                    if survival_runway is not None
-                                    else 0,
-                                    1,
-                                ),
-                            },
-                            "sector_correlation": "Stable",
-                        }
-                        report_type = f"{time_str} 盤後交易與每日總結"
-                        logger.info(f"正在為用戶 {uid} 生成 AI 盤後分析報告...")
-                        ai_report = await generate_analyst_report(report_type, raw_data)
-                except Exception as ai_e:
-                    logger.error(f"AI 報告生成失敗 (uid={uid})，改用預設標題: {ai_e}")
-
             try:
-                embed_runway = None if ai_enabled else survival_runway
                 embed = create_portfolio_report_embed(
-                    report_lines, hedge_analysis, embed_runway
+                    report_lines, hedge_analysis, survival_runway
                 )
             except Exception:
                 stats["users_failed"] += 1
@@ -213,12 +148,6 @@ class AfterMarketCog(commands.Cog):
                 continue
 
             try:
-                if ai_enabled and ai_report:
-                    if database.is_notification_enabled(uid, "briefing_post_market"):
-                        ai_embed = create_ai_analysis_embed(ai_report)
-                        await self.bot.queue_dm(uid, embed=ai_embed)
-                        logger.info(f"盤後 AI 深度分析 Embed 已排入 DM 佇列，uid={uid}")
-
                 if database.is_notification_enabled(uid, "briefing_post_market"):
                     await self.bot.queue_dm(uid, embed=embed)
                     stats["users_queued"] += 1

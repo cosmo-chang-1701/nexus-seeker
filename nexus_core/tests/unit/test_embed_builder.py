@@ -126,14 +126,15 @@ def test_create_portfolio_report_embed() -> None:
     embed = create_portfolio_report_embed(report_lines, survival_runway=120)
     assert embed.title == "📊 Nexus Seeker 盤後風險結算報告"
     assert "🏁 財務生存跑道 (Financial Runway)" in (get_embed_text(embed) or "")
-    assert "實質暴露 (Debit Cost): $500.00 USD" in (get_embed_text(embed) or "")
-    assert "收取權利金 (Credit Cash): $0.00 USD" in (get_embed_text(embed) or "")
-    assert "未實現損益 (Unrealized PnL): +$150.00 USD" in (get_embed_text(embed) or "")
+    assert "Debit Cost" in (get_embed_text(embed) or "")
+    assert "Credit Cash" in (get_embed_text(embed) or "")
+    assert "Unrealized PnL" in (get_embed_text(embed) or "")
+    assert "$500.00 USD" in (get_embed_text(embed) or "")
 
     field_names = [f.name for f in embed.fields]
+    assert any("資金與實質暴露 (Financial Summary)" in name for name in field_names)
     assert any("持倉明細 (Positions)" in name for name in field_names)
-    assert any("宏觀風險 (Macro Risks)" in name for name in field_names)
-    assert any("對沖績效歸因 (Hedge Attribution)" in name for name in field_names)
+    assert any("【宏觀風險與資金水位報告】" in name for name in field_names)
 
     positions_value = next(
         f.value
@@ -1634,23 +1635,18 @@ def test_build_post_market_intelligence_embed_empty() -> None:
     embed = embeds[0]
     assert embed.title == "📋 報告：盤後綜合風險與 AI 策略"
 
-    assert "🏁 財務生存跑道" in get_embed_text(embed)  # type: ignore
+    field_names: list[str] = [str(f.name or "") for f in embed.fields]
 
-    # Section titles are now in Field names (semantic), not in ANSI block values
-    field_names = [f.name for f in embed.fields]
-
-    assert any("持倉明細" in name for name in field_names)  # type: ignore
-    assert any("宏觀風險" in name for name in field_names)  # type: ignore
-    assert any("對沖績效歸因" in name for name in field_names)  # type: ignore
-    assert any("🧠 AI 損益歸因與次日策略點評" in name for name in field_names)  # type: ignore
+    assert any("持倉明細" in name for name in field_names)
+    assert any("宏觀風險" in name for name in field_names)
+    assert not any("對沖績效歸因" in name for name in field_names)
+    assert any("🧠 AI 損益歸因與次日策略點評" in name for name in field_names)
 
     # Verify empty-state placeholder text in field values
     positions_val = next(
-        f.value
-        for f in embed.fields
-        if "持倉明細" in f.name  # type: ignore
+        str(f.value or "") for f in embed.fields if "持倉明細" in str(f.name or "")
     )
-    assert "100% 現金防禦/觀望狀態" in positions_val  # type: ignore
+    assert "100% 現金防禦/觀望狀態" in positions_val
 
     macro_val = next(
         f.value
@@ -2240,12 +2236,12 @@ def test_build_post_market_intelligence_embed_with_stock_holdings() -> None:
     assert "$120.00" in pos_val
     assert "$130.00" in pos_val
 
-    macro_val = field_dict.get("🌐 宏觀風險 (Macro Risks)", "")
+    macro_val = field_dict.get("🌐 【宏觀風險與資金水位報告】", "")
     assert "風險中性" in macro_val
 
-    desc = embed.description or ""
+    fin_val = field_dict.get("💰 資金與實質暴露 (Financial Summary)", "")
     # Debit cost for 10 shares of $120.00 should be $1,200.00 USD
-    assert "$1,200.00 USD" in desc
+    assert "$1,200.00 USD" in fin_val
 
 
 def test_pcr_state_empty_string_falls_back_to_numeric_logic() -> None:
@@ -2401,20 +2397,21 @@ def test_build_post_market_intelligence_embed_target_center_styling_and_sector_m
     embed = embeds[0]
     field_dict: dict[str, str] = {str(f.name): str(f.value or "") for f in embed.fields}
 
-    # 1. Description contains compact header and runway
+    # 1. Description contains runway (without timestamp or pnl)
     desc = embed.description or ""
-    assert "📅" in desc
-    assert "盤後結算完成" in desc
+    assert "🏁 財務生存跑道" in desc
     assert "500.0 天" in desc
-    assert "實質暴露 (Debit)" in desc
-    assert "未實現損益 (PnL)" in desc
 
-    # 2. Positions tree styling
+    fin_val = field_dict.get("💰 資金與實質暴露 (Financial Summary)", "")
+    assert "Debit Cost" in fin_val
+    assert "Credit Cash" in fin_val
+    assert "Unrealized" in fin_val
+
+    # 2. Positions clean bullet styling
     pos_val = field_dict.get("📊 持倉明細 (Positions)", "")
     assert "NVDA" in pos_val
     assert "AAPL" in pos_val
-    assert "├─" in pos_val
-    assert "└─" in pos_val
+    assert "•" in pos_val
 
     # 3. Hedge attribution
     hedge_val = field_dict.get("🛡️ 對沖績效歸因 (Hedge Attribution)", "")
@@ -2423,7 +2420,7 @@ def test_build_post_market_intelligence_embed_target_center_styling_and_sector_m
     assert "85.0%" in hedge_val
 
     # 4. Macro risks
-    macro_val = field_dict.get("🌐 宏觀風險 (Macro Risks)", "")
+    macro_val = field_dict.get("🌐 【宏觀風險與資金水位報告】", "")
     assert "多頭曝險過高" in macro_val
 
     # 5. Sector rotation focus matrix

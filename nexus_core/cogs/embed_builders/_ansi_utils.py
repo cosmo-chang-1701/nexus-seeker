@@ -101,3 +101,106 @@ def _is_macro_report_marker(line: str) -> bool:
     if not normalized.startswith("🌐"):
         return False
     return ("宏觀風險" in normalized) or ("資金水位報告" in normalized)
+
+
+def _format_macro_report_ansi(macro_text: str) -> str:
+    """
+    將宏觀風險與資金水位報告文字格式化為 Target Center 2.0 樹狀 ANSI 排版。
+    - 過濾重複的標題行
+    - 移除多餘的 ` • ` 前綴
+    - 每一主項目 (🔹 或 🕸️) 與前一項目之間插入一行空行
+    - 次級項目採用 ├─ 與 └─ 樹狀結構
+    - 針對狀態 (✅, ⚠️, 🚨, 🆘, 🛡️) 進行 ANSI 顏色標註
+    """
+    if (
+        not macro_text
+        or not macro_text.strip()
+        or macro_text.strip() == "目前無宏觀風險數據。"
+    ):
+        return " • 目前無宏觀風險數據。"
+
+    raw_lines = [line.strip() for line in macro_text.split("\n") if line.strip()]
+    grouped_items: List[dict[str, Any]] = []
+    current_item: dict[str, Any] | None = None
+
+    for line in raw_lines:
+        clean = re.sub(r"^[\-\*\•\s]+", "", line).strip()
+        clean = clean.replace("`", "").replace("*", "")
+        if not clean:
+            continue
+        if "【宏觀風險與資金水位報告】" in clean:
+            continue
+
+        is_primary = clean.startswith("🔹") or clean.startswith("🕸️")
+        if is_primary:
+            if current_item:
+                grouped_items.append(current_item)
+            icon = "🕸️" if clean.startswith("🕸️") else "🔹"
+            heading_content = re.sub(r"^[🔹🕸️\s]+", "", clean).strip()
+            current_item = {"icon": icon, "heading": heading_content, "sublines": []}
+        else:
+            sub = re.sub(r"^(?:├─|└─|[\-\*\•\s])+", "", clean).strip()
+            if sub:
+                if current_item is not None:
+                    current_item["sublines"].append(sub)
+                else:
+                    current_item = {
+                        "icon": "🔹",
+                        "heading": "宏觀指標",
+                        "sublines": [sub],
+                    }
+
+    if current_item:
+        grouped_items.append(current_item)
+
+    if not grouped_items:
+        return " • 目前無宏觀風險數據。"
+
+    formatted_blocks: List[str] = []
+    for item in grouped_items:
+        icon = item["icon"]
+        heading = item["heading"]
+        sublines: List[str] = item["sublines"]
+
+        block_lines: List[str] = []
+        # 主項目標題高亮
+        if ":" in heading or "：" in heading:
+            parts = re.split(r"[:：]", heading, 1)
+            metric_name = parts[0].strip()
+            rest = f": {parts[1].strip()}" if len(parts) > 1 else ""
+            block_lines.append(f" {icon} \u001b[1;36m{metric_name}\u001b[0m{rest}")
+        else:
+            block_lines.append(f" {icon} \u001b[1;36m{heading}\u001b[0m")
+
+        for sub in sublines:
+            prefix = "   • "
+            # 狀態著色
+            if (
+                "🚨" in sub
+                or "🆘" in sub
+                or "多頭曝險過高" in sub
+                or "空頭曝險過高" in sub
+                or "脆性警告" in sub
+                or "過度收租" in sub
+                or "高度正相關" in sub
+            ):
+                colored_sub = f"\u001b[1;31m{sub}\u001b[0m"
+            elif "⚠️" in sub or "收益率過低" in sub or "水位警戒" in sub:
+                colored_sub = f"\u001b[1;33m{sub}\u001b[0m"
+            elif (
+                "✅" in sub
+                or "🛡️" in sub
+                or "風險中性" in sub
+                or "反脆弱" in sub
+                or "健康" in sub
+                or "正常" in sub
+                or "分散性良好" in sub
+            ):
+                colored_sub = f"\u001b[1;32m{sub}\u001b[0m"
+            else:
+                colored_sub = sub
+            block_lines.append(f"{prefix}{colored_sub}")
+
+        formatted_blocks.append("\n".join(block_lines))
+
+    return "\n\n".join(formatted_blocks)

@@ -262,8 +262,6 @@ class AnalystAgent(commands.Cog):
                 continue
 
             user_ctx = database.get_full_user_context(uid)
-            if not user_ctx.enable_analyst_agent:
-                continue
 
             u_report = user_reports.get(uid, {})
             report_lines = u_report.get("report_lines", [])
@@ -278,64 +276,72 @@ class AnalystAgent(commands.Cog):
                     daily_theta=user_ctx.total_theta,
                 )
 
-            # 4. 記憶體安全閘
-            mem = psutil.virtual_memory()
-            if mem.percent > 85.0:
-                logger.warning(
-                    f"🚨 [Memory Gate] RAM usage ({mem.percent}%) > 85%, "
-                    f"AI Commentary suspended for user {uid}"
-                )
-                ai_commentary = (
-                    "⚠️ [Memory Gate] 系統記憶體使用率高於 85%，"
-                    "為確保系統穩定，盤後 AI 深度分析與歸因點評已暫停。"
-                )
-            else:
-                raw_data = {
-                    "macro_snapshot": {
-                        "vix": sector_rotation_data["vix"],
-                        "vix_tier": sector_rotation_data["vix_tier_name"],
-                        "spy_price": sector_rotation_data["spy_price"],
-                    },
-                    "brinson_attribution_proxy": {
-                        "total_net_pnl": round(
-                            float(hedge_analysis.get("net_pnl") or 0.0), 2
-                        ),
-                        "alpha_selection_pnl": round(
-                            float(hedge_analysis.get("alpha_contribution") or 0.0), 2
-                        ),
-                        "market_hedge_pnl": round(
-                            float(hedge_analysis.get("hedge_contribution") or 0.0), 2
-                        ),
-                    },
-                    "aggregate_risk_metrics": {
-                        "total_theta": round(user_ctx.total_theta, 2),
-                        "total_beta_delta": round(user_ctx.total_weighted_delta, 2),
-                        "portfolio_heat_pct": round(
-                            (
-                                abs(user_ctx.total_weighted_delta)
-                                * sector_rotation_data["spy_price"]
-                                / user_ctx.capital
-                                * 100
-                            )
-                            if user_ctx.capital > 0
-                            else 0,
-                            2,
-                        ),
-                        "avg_financial_runway_days": round(
-                            survival_runway if survival_runway is not None else 0, 1
-                        ),
-                    },
-                    "sectors": sector_rotation_data["sectors"],
-                    "poly_events": sector_rotation_data["poly_events"],
-                    "spy_max_pain": sector_rotation_data["spy_max_pain"],
-                }
-                time_str = datetime.now().strftime("%Y-%m-%d")
-                report_type = f"{time_str} 盤後綜合風險與 AI 策略報告"
-                try:
-                    ai_commentary = await generate_analyst_report(report_type, raw_data)
-                except Exception as e:
-                    logger.error(f"Error generating analyst report for user {uid}: {e}")
-                    ai_commentary = "⚠️ 無法生成 AI 報告分析。"
+            ai_commentary = None
+            if user_ctx.enable_analyst_agent:
+                # 4. 記憶體安全閘
+                mem = psutil.virtual_memory()
+                if mem.percent > 85.0:
+                    logger.warning(
+                        f"🚨 [Memory Gate] RAM usage ({mem.percent}%) > 85%, "
+                        f"AI Commentary suspended for user {uid}"
+                    )
+                    ai_commentary = (
+                        "⚠️ [Memory Gate] 系統記憶體使用率高於 85%，"
+                        "為確保系統穩定，盤後 AI 深度分析與歸因點評已暫停。"
+                    )
+                else:
+                    raw_data = {
+                        "macro_snapshot": {
+                            "vix": sector_rotation_data["vix"],
+                            "vix_tier": sector_rotation_data["vix_tier_name"],
+                            "spy_price": sector_rotation_data["spy_price"],
+                        },
+                        "brinson_attribution_proxy": {
+                            "total_net_pnl": round(
+                                float(hedge_analysis.get("net_pnl") or 0.0), 2
+                            ),
+                            "alpha_selection_pnl": round(
+                                float(hedge_analysis.get("alpha_contribution") or 0.0),
+                                2,
+                            ),
+                            "market_hedge_pnl": round(
+                                float(hedge_analysis.get("hedge_contribution") or 0.0),
+                                2,
+                            ),
+                        },
+                        "aggregate_risk_metrics": {
+                            "total_theta": round(user_ctx.total_theta, 2),
+                            "total_beta_delta": round(user_ctx.total_weighted_delta, 2),
+                            "portfolio_heat_pct": round(
+                                (
+                                    abs(user_ctx.total_weighted_delta)
+                                    * sector_rotation_data["spy_price"]
+                                    / user_ctx.capital
+                                    * 100
+                                )
+                                if user_ctx.capital > 0
+                                else 0,
+                                2,
+                            ),
+                            "avg_financial_runway_days": round(
+                                survival_runway if survival_runway is not None else 0, 1
+                            ),
+                        },
+                        "sectors": sector_rotation_data["sectors"],
+                        "poly_events": sector_rotation_data["poly_events"],
+                        "spy_max_pain": sector_rotation_data["spy_max_pain"],
+                    }
+                    time_str = datetime.now().strftime("%Y-%m-%d")
+                    report_type = f"{time_str} 盤後綜合風險與 AI 策略報告"
+                    try:
+                        ai_commentary = await generate_analyst_report(
+                            report_type, raw_data
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"Error generating analyst report for user {uid}: {e}"
+                        )
+                        ai_commentary = "⚠️ 無法生成 AI 報告分析。"
 
             embeds = build_post_market_intelligence_embed(
                 report_lines=report_lines,

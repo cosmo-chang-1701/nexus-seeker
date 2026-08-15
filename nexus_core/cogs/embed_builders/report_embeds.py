@@ -22,7 +22,7 @@ from cogs.embed_builders._core import NexusEmbed
 import logging
 import re
 
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import List, Dict, Optional
 
 from cogs.embed_builders._ansi_utils import (
@@ -32,6 +32,7 @@ from cogs.embed_builders._ansi_utils import (
     _truncate_with_boundary,
     _safe_float,
     _pad_string,
+    _format_macro_report_ansi,
 )
 from cogs.embed_builders._embed_helpers import (
     _safe_embed_field_value,
@@ -112,41 +113,42 @@ def create_portfolio_report_embed(  # type: ignore
         timestamp=datetime.now(timezone.utc),
     )
 
-    taipei_tz = timezone(timedelta(hours=8))
-    timestamp_str = datetime.now(taipei_tz).strftime("%Y-%m-%d %H:%M:%S")
-    desc_lines = [
-        "```ansi",
-        f" 📅 {timestamp_str} (UTC+8) ｜ 系統狀態: 結算完成",
-    ]
-
     if survival_runway is not None:
         runway_text = (
             "無限 (收益已覆蓋支出)"
             if survival_runway >= 9999
             else f"{survival_runway:,.1f} 天"
         )
-        desc_lines.extend(
-            [
-                "",
-                " 🏁 財務生存跑道 (Financial Runway)",
-                f" • 預估剩餘天數: {runway_text}",
-                " • 計算基準: 基於現有現金儲備與 Theta 收益",
-            ]
-        )
-
-    desc_lines.extend(
-        [
-            "",
-            " 💰 資金與實質暴露 (Financial Summary)",
-            f" • 實質暴露 (Debit Cost): {debit_cost_val.replace('`', '').replace('**', '').strip()}",
-            f" • 收取權利金 (Credit Cash): {credit_cash_val.replace('`', '').replace('**', '').strip()}",
-            f" • 未實現損益 (Unrealized PnL): {pnl_val_str.replace('`', '').replace('**', '').strip()}",
+        desc_lines = [
+            "```ansi",
+            " 🏁 財務生存跑道 (Financial Runway)",
+            f" • 預估剩餘天數: {runway_text}",
+            " • 計算基準: 基於現有現金儲備與 Theta 收益",
             "```",
         ]
-    )
-    embed.description = "\n".join(desc_lines)
+        embed.description = "\n".join(desc_lines)
+    else:
+        embed.description = None
 
-    # 持倉區塊：維持 ANSI 呈現與欄位 chunking（單一 embed 模式）
+    # 1. 資金與實質暴露 (Financial Summary) 獨立欄位
+    debit_cost_clean = debit_cost_val.replace("`", "").replace("**", "").strip()
+    credit_cash_clean = credit_cash_val.replace("`", "").replace("**", "").strip()
+    pnl_val_clean = pnl_val_str.replace("`", "").replace("**", "").strip()
+
+    financial_lines = [
+        f" • 實質暴露 (Debit Cost)   : {debit_cost_clean}",
+        f" • 收取權利金 (Credit Cash) : {credit_cash_clean}",
+        f" • 未實現損益 (Unrealized PnL): {pnl_val_clean}",
+    ]
+    embed.add_field(
+        name="💰 資金與實質暴露 (Financial Summary)",
+        value=_safe_embed_codeblock_value(
+            "\n".join(financial_lines), " • 無財務暴露數據。", lang="ansi"
+        ),
+        inline=False,
+    )
+
+    # 2. 持倉區塊：維持 ANSI 呈現與欄位 chunking（單一 embed 模式）
     if positions_list and table_part.strip():
         blocks = [b.strip() for b in table_part.strip().split("\n\n") if b.strip()]
         transformed_blocks = []
@@ -186,29 +188,24 @@ def create_portfolio_report_embed(  # type: ignore
             inline=False,
         )
 
-    if (
-        macro_text
-        and macro_text.strip()
-        and macro_text.strip() != "目前無宏觀風險數據。"
-    ):
-        macro_lines = [line.strip() for line in macro_text.split("\n") if line.strip()]
-        rendered = []
-        for line in macro_lines:
-            clean_line = re.sub(r"^[\-\*\•\s]+", "", line).strip()
-            clean_line = clean_line.replace("`", "").replace("*", "")
-            rendered.append(f" • {clean_line}")
-        macro_panel = "\n".join(rendered)
-    else:
-        macro_panel = " • 目前無宏觀風險數據。"
+    # 3. 🌐 【宏觀風險與資金水位報告】
+    macro_formatted = _format_macro_report_ansi(macro_text)
+    macro_chunks = _chunk_text_blocks([macro_formatted], max_len=1000)
+    for i, chunk in enumerate(macro_chunks):
+        field_name = (
+            f"🌐 【宏觀風險與資金水位報告】 ({i+1}/{len(macro_chunks)})"
+            if len(macro_chunks) > 1
+            else "🌐 【宏觀風險與資金水位報告】"
+        )
+        embed.add_field(
+            name=field_name,
+            value=_safe_embed_codeblock_value(
+                chunk, " • 目前無宏觀風險數據。", lang="ansi"
+            ),
+            inline=False,
+        )
 
-    embed.add_field(
-        name="🌐 宏觀風險 (Macro Risks)",
-        value=_safe_embed_codeblock_value(
-            macro_panel, " • 目前無宏觀風險數據。", lang="ansi"
-        ),
-        inline=False,
-    )
-
+    # 4. 🛡️ 對沖績效歸因 (Hedge Attribution) [Dynamic Gating]
     if isinstance(hedge_analysis, dict) and hedge_analysis:
         ha_net_pnl = _safe_float(hedge_analysis.get("net_pnl"), 0.0)
         ha_alpha_pnl = _safe_float(hedge_analysis.get("alpha_contribution"), 0.0)
@@ -218,38 +215,43 @@ def create_portfolio_report_embed(  # type: ignore
         ha_status = str(hedge_analysis.get("status", "N/A"))
         ha_dynamic_tau = hedge_analysis.get("dynamic_tau")
 
-        ha_status_color = (
-            "\033[1;32m"
-            if ha_status == "OPTIMAL"
-            else "\033[1;33m"
-            if ha_status == "OVER_HEDGED"
-            else "\033[1;31m"
+        has_active_hedge = (
+            ha_hedge_ratio > 0.0
+            or ha_hedge_pnl != 0.0
+            or bool(hedge_analysis.get("has_hedge"))
         )
-        ha_pnl_color = "\033[1;32m" if ha_net_pnl >= 0 else "\033[1;31m"
-        hedge_lines = [
-            f" Alpha 選股 PnL   : {ha_pnl_color}${ha_alpha_pnl:+,.2f}\033[0m",
-            f" 對沖避險 PnL     : {ha_pnl_color}${ha_hedge_pnl:+,.2f}\033[0m",
-            f" 淨損益 (Net PnL)  : {ha_pnl_color}${ha_net_pnl:+,.2f}\033[0m",
-            " --------------------------------------------------",
-            f" 對沖比率 (Hedge Ratio)  : {ha_hedge_ratio:.2%}",
-            f" 對沖有效性 (Effectiveness): {ha_effectiveness*100:.1f}%",
-            f" 對沖狀態 : {ha_status_color}{ha_status}\033[0m",
-        ]
-        if ha_dynamic_tau is not None:
-            hedge_lines.append(
-                f" 動態 Tau (τ)      : {_safe_float(ha_dynamic_tau, 0.0):.4f}"
-            )
-        hedge_panel = "\n".join(hedge_lines)
-    else:
-        hedge_panel = " • 暫無對沖績效數據。"
 
-    embed.add_field(
-        name="🛡️ 對沖績效歸因 (Hedge Attribution)",
-        value=_safe_embed_codeblock_value(
-            hedge_panel, " • 暫無對沖績效數據。", lang="ansi"
-        ),
-        inline=False,
-    )
+        if has_active_hedge:
+            ha_status_color = (
+                "\033[1;32m"
+                if ha_status == "OPTIMAL"
+                else "\033[1;33m"
+                if ha_status == "OVER_HEDGED"
+                else "\033[1;31m"
+            )
+            ha_pnl_color = "\033[1;32m" if ha_net_pnl >= 0 else "\033[1;31m"
+            hedge_lines = [
+                f" Alpha 選股 PnL   : {ha_pnl_color}${ha_alpha_pnl:+,.2f}\033[0m",
+                f" 對沖避險 PnL     : {ha_pnl_color}${ha_hedge_pnl:+,.2f}\033[0m",
+                f" 淨損益 (Net PnL)  : {ha_pnl_color}${ha_net_pnl:+,.2f}\033[0m",
+                " --------------------------------------------------",
+                f" 對沖比率 (Hedge Ratio)  : {ha_hedge_ratio:.2%}",
+                f" 對沖有效性 (Effectiveness): {ha_effectiveness*100:.1f}%",
+                f" 對沖狀態 : {ha_status_color}{ha_status}\033[0m",
+            ]
+            if ha_dynamic_tau is not None:
+                hedge_lines.append(
+                    f" 動態 Tau (τ)      : {_safe_float(ha_dynamic_tau, 0.0):.4f}"
+                )
+            hedge_panel = "\n".join(hedge_lines)
+
+            embed.add_field(
+                name="🛡️ 對沖績效歸因 (Hedge Attribution)",
+                value=_safe_embed_codeblock_value(
+                    hedge_panel, " • 暫無對沖績效數據。", lang="ansi"
+                ),
+                inline=False,
+            )
 
     embed.set_footer(text="盤後風險結算報告")
     return embed
