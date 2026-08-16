@@ -95,7 +95,13 @@ class PulseHubView(discord.ui.View):
                 )
             else:
                 markets = self.bot.polymarket_service.get_active_markets(limit=20)
-                embed = create_polymarket_list_embed(markets)
+                embeds = create_polymarket_list_embed(markets)
+                if embeds:
+                    embed = embeds[0]
+                    for extra_emb in embeds[1:]:
+                        await interaction.followup.send(embed=extra_emb, ephemeral=True)
+                else:
+                    embed = None
         except Exception as e:
             await interaction.followup.send(
                 embed=create_error_embed(f"獲取預測市場失敗: {e}"),

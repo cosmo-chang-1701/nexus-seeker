@@ -45,8 +45,11 @@ class IntelligenceCog(commands.Cog):
                 )
 
             markets = self.bot.polymarket_service.get_active_markets(limit=20)
-            embed = create_polymarket_list_embed(markets)
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            embeds = create_polymarket_list_embed(markets)
+            if not isinstance(embeds, list):
+                embeds = [embeds]
+            for emb in embeds:
+                await interaction.followup.send(embed=emb, ephemeral=True)
         except Exception as e:
             logger.error(f"獲取 Polymarket 清單失敗: {e}")
             await interaction.followup.send(

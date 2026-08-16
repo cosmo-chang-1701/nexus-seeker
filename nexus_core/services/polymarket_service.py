@@ -842,18 +842,18 @@ class PolymarketService:
                                 outcome_prices = []
 
                             current_market_tokens = []
+                            event_slug = None
+                            if (
+                                "events" in m
+                                and m["events"]
+                                and isinstance(m["events"], list)
+                            ):
+                                event_slug = m["events"][0].get("slug")
+                            elif "event" in m and m["event"]:
+                                event_slug = m["event"].get("slug")
+
                             for i, tid in enumerate(t_ids):
                                 asset_ids.append(tid)
-
-                                event_slug = None
-                                if (
-                                    "events" in m
-                                    and m["events"]
-                                    and isinstance(m["events"], list)
-                                ):
-                                    event_slug = m["events"][0].get("slug")
-                                elif "event" in m and m["event"]:
-                                    event_slug = m["event"].get("slug")
 
                                 outcome_name = (
                                     str(outcomes[i]).strip().strip('"')
@@ -888,6 +888,8 @@ class PolymarketService:
                                     "end_date": m.get("endDate"),
                                     "tokens": current_market_tokens,
                                     "volumeNum": float(m.get("volumeNum", 0.0)),
+                                    "slug": m.get("slug"),
+                                    "event_slug": event_slug,
                                 }
                             )
 

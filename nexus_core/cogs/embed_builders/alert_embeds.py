@@ -297,70 +297,88 @@ def create_media_sentiment_embed(symbol: Any, news_text: Any, reddit_text: Any):
 # ============================================================================
 
 
-def create_polymarket_list_embed(markets: List[Dict[str, Any]]) -> Any:
-    """建構 Polymarket 監控中的熱門市場 Embed"""
-    embed = NexusEmbed(
-        title="🐋 Polymarket 巨鯨意圖圖譜",
-        color=discord.Color.blue(),
-        timestamp=datetime.now(timezone.utc),
-    )
-
+def create_polymarket_list_embed(
+    markets: List[Dict[str, Any]], chunk_size: int = 8
+) -> List[discord.Embed]:
+    """建構 Polymarket 監控中的熱門市場 Embed 清單 (支援多頁分頁與完整文字 Markdown 連結)。"""
     if not markets:
+        embed = NexusEmbed(
+            title="🐋 Polymarket 巨鯨意圖圖譜",
+            color=discord.Color.blue(),
+            timestamp=datetime.now(timezone.utc),
+        )
         embed.description = "目前沒有監控中的市場。"
-        return embed
+        return [embed]
 
-    description_lines = ["```ansi"]
-    for i, m in enumerate(markets, 1):
-        question = m.get("question", "未知市場")
-        # 截斷過長的標題
-        if len(question) > 55:
-            question = question[:52] + "..."
+    chunks: List[List[Dict[str, Any]]] = [
+        markets[i : i + chunk_size] for i in range(0, len(markets), chunk_size)
+    ]
+    total_pages = len(chunks)
+    embeds: List[discord.Embed] = []
 
-        # 取得 token 價格資訊 (如果有的話)
-        tokens = m.get("tokens", [])
-        price_info = ""
-        if tokens:
-            # 顯示前兩個 outcome 的價格
-            p_list = []
-            for t in tokens[:2]:
-                outcome = str(t.get("outcome", "")).strip()
-                price = t.get("price", 0)
+    global_index = 1
+    for page_idx, chunk in enumerate(chunks, 1):
+        page_title = "🐋 Polymarket 巨鯨意圖圖譜"
+        if total_pages > 1:
+            page_title += f" (第 {page_idx}/{total_pages} 頁)"
 
-                # 排除單字元的雜訊 (例如 [ or " )
-                if len(outcome) <= 1 and outcome not in ["?", "是", "否"]:
-                    continue
+        embed = NexusEmbed(
+            title=page_title,
+            color=discord.Color.blue(),
+            timestamp=datetime.now(timezone.utc),
+        )
 
-                # 簡單格式化價格 (0-1)
-                try:
-                    price_val = float(price)
-                    price_str = f"{price_val:.2f}"
-                except Exception:
-                    price_str = str(price)
+        lines: List[str] = []
+        for m in chunk:
+            question = str(m.get("question", "未知市場")).strip()
+            event_slug = m.get("event_slug") or m.get("slug")
+            url = (
+                f"https://polymarket.com/event/{event_slug}"
+                if event_slug
+                else "https://polymarket.com"
+            )
 
-                if outcome:
-                    p_list.append(f"{outcome}: {price_str}")
+            # 取得 token 價格資訊 (如果有的話)
+            tokens = m.get("tokens", [])
+            price_info_parts: List[str] = []
+            if tokens:
+                for t in tokens[:2]:
+                    outcome = str(t.get("outcome", "")).strip()
+                    price = t.get("price", 0)
 
-            if p_list:
-                price_info = " | ".join(p_list)
+                    # 排除單字元的雜訊 (例如 [ or " )
+                    if len(outcome) <= 1 and outcome not in ["?", "是", "否"]:
+                        continue
 
-        description_lines.append(f"{i:2d}. {question}")
-        if price_info:
-            description_lines.append(f"    └─ {price_info}")
-        else:
-            description_lines.append("")
+                    try:
+                        price_val = float(price)
+                        prob_pct = f"{price_val * 100:.0f}%"
+                        price_info_parts.append(
+                            f"**{outcome}**: `{prob_pct}` (${price_val:.2f})"
+                        )
+                    except Exception:
+                        price_info_parts.append(f"**{outcome}**: `{price}`")
 
-    if len(description_lines) > 1 and description_lines[-1] == "":
-        description_lines.pop()
-    description_lines.append("```")
+            odds_str = (
+                " │ ".join(price_info_parts) if price_info_parts else "等待流動性"
+            )
 
-    full_desc = "\n".join(description_lines)
-    # 檢查總長度，避免超過 Discord 限制
-    if len(full_desc) > 3900:
-        full_desc = full_desc[:3890] + "\n...\n```"
+            lines.append(f"`{global_index:02d}.` **[{question}]({url})**")
+            lines.append(f"    └─ 📊 {odds_str}\n")
+            global_index += 1
 
-    embed.description = full_desc
-    embed.set_footer(text="Nexus Seeker | Polymarket Monitor (Top 20 Active Markets)")
-    return embed
+        full_desc = "\n".join(lines).strip()
+        # 檢查總長度，避免超過 Discord 限制
+        if len(full_desc) > 3900:
+            full_desc = full_desc[:3890] + "\n..."
+
+        embed.description = full_desc
+        embed.set_footer(
+            text=f"Nexus Seeker | Polymarket Monitor • 共 {len(markets)} 個活躍市場"
+        )
+        embeds.append(embed)
+
+    return embeds
 
 
 def create_polymarket_status_embed(status: Dict[str, Any]) -> discord.Embed:

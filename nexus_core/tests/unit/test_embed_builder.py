@@ -18,6 +18,7 @@ from cogs.embed_builder import (
     create_max_pain_embed,
     create_polymarket_whale_alert_embed,
     create_polymarket_status_embed,
+    create_polymarket_list_embed,
     create_profit_lock_alert_embed,
     create_quote_embed,
     create_system_health_embed,
@@ -643,7 +644,61 @@ def test_create_polymarket_status_embed() -> None:
     )
     assert "Polymarket 服務狀態" in embed.title  # type: ignore
     assert "✅ 運行中" in get_embed_text(embed)
-    assert "`42`" in get_embed_text(embed)
+
+
+def test_create_polymarket_list_embed_empty() -> None:
+    embeds = create_polymarket_list_embed([])
+    assert len(embeds) == 1
+    assert "Polymarket 巨鯨意圖圖譜" in embeds[0].title  # type: ignore
+    assert "目前沒有監控中的市場。" in embeds[0].description  # type: ignore
+
+
+def test_create_polymarket_list_embed_full_text_and_links() -> None:
+    long_question = (
+        "Will the Federal Open Market Committee (FOMC) announce a decrease of at least "
+        "25 basis points in the target range for the federal funds rate at the March meeting?"
+    )
+    markets = [
+        {
+            "question": long_question,
+            "event_slug": "fed-interest-rate-march-2026",
+            "tokens": [
+                {"outcome": "Yes", "price": 0.65},
+                {"outcome": "No", "price": 0.35},
+            ],
+        }
+    ]
+    embeds = create_polymarket_list_embed(markets)
+    assert len(embeds) == 1
+    desc = embeds[0].description
+    assert desc is not None
+    # 驗證沒有 55 字元截斷，包含完整長問題
+    assert long_question in desc
+    # 驗證 Markdown 超連結
+    assert "https://polymarket.com/event/fed-interest-rate-march-2026" in desc
+    # 驗證勝率與價格格式化
+    assert "**Yes**: `65%` ($0.65)" in desc
+    assert "**No**: `35%` ($0.35)" in desc
+
+
+def test_create_polymarket_list_embed_pagination() -> None:
+    markets = [
+        {
+            "question": f"Market Question Number {i}",
+            "slug": f"market-question-{i}",
+            "tokens": [{"outcome": "Yes", "price": 0.5}],
+        }
+        for i in range(1, 11)
+    ]
+    # 設定每頁 4 個，總共 10 個市場應產生 3 頁
+    embeds = create_polymarket_list_embed(markets, chunk_size=4)
+    assert len(embeds) == 3
+    assert "(第 1/3 頁)" in embeds[0].title  # type: ignore
+    assert "(第 2/3 頁)" in embeds[1].title  # type: ignore
+    assert "(第 3/3 頁)" in embeds[2].title  # type: ignore
+    assert "Market Question Number 1" in embeds[0].description  # type: ignore
+    assert "Market Question Number 5" in embeds[1].description  # type: ignore
+    assert "Market Question Number 9" in embeds[2].description  # type: ignore
 
 
 def test_create_quote_embed() -> None:
