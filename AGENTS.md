@@ -4,7 +4,7 @@
 
 Nexus Seeker is a multi-tenant **Discord-first options risk-control and trading operations platform**. It combines technical structure, Black-Scholes-Merton pricing, Greeks-based portfolio risk, event-aware calendar defenses, and LLM-assisted structured commentary.
 
-Current released core version: **`1.12.16`**
+Current released core version: **`1.12.17`**
 
 
 The codebase is optimized for:
@@ -271,7 +271,8 @@ To prevent keyword fragmentation across prediction markets, retail sentiment scr
 - **Edge API Integration**: Passes `custom_query` to `/api/v1/scrape/reddit/{symbol}`, ensuring Reddit RSS search matches actual company discussions rather than noisy single-word stems (e.g. searching "Super" for `SMCI`).
 
 ### 4. Interactive Commands & Unified Terminal Integration
-- **`/poly_list [query]`**: Supports ticker/keyword prediction market queries with volume tags (`💵 $12.5M`, `💵 $54.2k`) and paginated embeds.
+- **`/poly_list [query]`**: Supports ticker/keyword prediction market queries with volume tags (`💵 $12.5M`, `💵 $54.2k`) and paginated embeds. When results exceed `chunk_size=8`, a `PolymarketPaginatedView` (◀ page indicator ▶) is attached to a **single ephemeral message**, enabling in-place `edit_message()` page navigation instead of sending multiple separate messages.
+- **`/market` → 🐋 預測市場 按鈕 (`PulseHubView`)**: Multi-page results are dispatched as a single `followup.send()` with `PolymarketPaginatedView`, preserving the original `PulseHubView` buttons (📊 📅 🔥) on the parent message. `_reset_loading()` includes an `embed=None` guard to prevent accidentally clearing the original embed when the Polymarket result is sent as a separate message.
 - **`/x` Terminal Odds Lookup**: `find_matching_polymarket_odds` evaluates multi-alias matches with fallback to online `get_symbol_markets` search.
 
 ---

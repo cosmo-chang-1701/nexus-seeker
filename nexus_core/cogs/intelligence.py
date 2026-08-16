@@ -58,8 +58,19 @@ class IntelligenceCog(commands.Cog):
             embeds = create_polymarket_list_embed(markets, query=query)
             if not isinstance(embeds, list):
                 embeds = [embeds]
-            for emb in embeds:
-                await interaction.followup.send(embed=emb, ephemeral=True)
+
+            # 單頁直送；多頁掛載翻頁 View，僅發送一則訊息
+            if len(embeds) == 1:
+                await interaction.followup.send(embed=embeds[0], ephemeral=True)
+            else:
+                from cogs.unified_terminal.polymarket_views import (
+                    PolymarketPaginatedView,
+                )
+
+                view = PolymarketPaginatedView(embeds)
+                await interaction.followup.send(
+                    embed=embeds[0], view=view, ephemeral=True
+                )
         except Exception as e:
             logger.error(f"獲取 Polymarket 清單失敗: {e}")
             await interaction.followup.send(

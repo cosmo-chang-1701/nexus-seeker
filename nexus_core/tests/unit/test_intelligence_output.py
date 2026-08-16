@@ -95,3 +95,32 @@ async def test_poly_list_with_query(mock_interaction: Any) -> None:
         [{"question": "Will NVIDIA beat earnings?"}], query="NVDA"
     )
     mock_interaction.followup.send.assert_called_once_with(embed=embed, ephemeral=True)
+
+
+@pytest.mark.asyncio
+async def test_poly_list_multi_page_uses_paginated_view(mock_interaction: Any) -> None:
+    """多頁結果應只發送一則訊息，並附帶 PolymarketPaginatedView。"""
+    bot = MagicMock()
+    bot.polymarket_service = MagicMock()
+    bot.polymarket_service.get_active_markets.return_value = [
+        {"question": f"Market {i}"} for i in range(12)
+    ]
+    cog = IntelligenceCog(bot)
+    embed_page1 = MagicMock()
+    embed_page2 = MagicMock()
+
+    with patch(
+        "cogs.intelligence.create_polymarket_list_embed",
+        return_value=[embed_page1, embed_page2],
+    ), patch(
+        "cogs.unified_terminal.polymarket_views.PolymarketPaginatedView"
+    ) as MockView:
+        mock_view_instance = MagicMock()
+        MockView.return_value = mock_view_instance
+
+        await cog.poly_list.callback(cog, mock_interaction, query=None)  # type: ignore
+
+    # 應只呼叫一次 followup.send，且帶 view 參數
+    mock_interaction.followup.send.assert_called_once_with(
+        embed=embed_page1, view=mock_view_instance, ephemeral=True
+    )

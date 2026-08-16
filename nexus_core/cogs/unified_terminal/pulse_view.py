@@ -37,7 +37,11 @@ class PulseHubView(discord.ui.View):
         for child in self.children:
             if isinstance(child, discord.ui.Button):
                 child.disabled = False
-        await interaction.edit_original_response(embed=embed, view=self)
+        # 守衛：embed=None 時不傳 embed 參數，避免意外清空原始 Embed
+        kwargs: dict[str, Any] = {"view": self}
+        if embed is not None:
+            kwargs["embed"] = embed
+        await interaction.edit_original_response(**kwargs)
 
     @discord.ui.button(label="📊 總經風控", style=discord.ButtonStyle.success)
     async def btn_macro_overview(
@@ -97,9 +101,20 @@ class PulseHubView(discord.ui.View):
                 markets = self.bot.polymarket_service.get_active_markets(limit=20)
                 embeds = create_polymarket_list_embed(markets)
                 if embeds:
-                    embed = embeds[0]
-                    for extra_emb in embeds[1:]:
-                        await interaction.followup.send(embed=extra_emb, ephemeral=True)
+                    if len(embeds) == 1:
+                        embed = embeds[0]  # 單頁：就地替換原始 Embed
+                    else:
+                        # 多頁：用 followup 送出帶翻頁 View 的獨立訊息，
+                        # 原始訊息保留 PulseHubView 不動
+                        from cogs.unified_terminal.polymarket_views import (
+                            PolymarketPaginatedView,
+                        )
+
+                        view = PolymarketPaginatedView(embeds)
+                        await interaction.followup.send(
+                            embed=embeds[0], view=view, ephemeral=True
+                        )
+                        embed = None  # 不修改原始 Embed
                 else:
                     embed = None
         except Exception as e:
