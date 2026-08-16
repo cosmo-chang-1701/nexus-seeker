@@ -116,6 +116,44 @@ async def test_tunnel_disabled_returns_none_not_string() -> None:
         from services.reddit_service import get_reddit_context
 
         result = await get_reddit_context("AMD", enable_tunnel=False)
-
         assert result is None
         assert not isinstance(result, str)
+
+
+@pytest.mark.asyncio
+async def test_custom_query_passed_to_edge_scraper() -> None:
+    """驗證 Reddit 服務正確傳入 StockAliasMatrix 構建之 custom_query 參數至邊緣端點。"""
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "status": "success",
+        "data": "Reddit post for NVDA",
+    }
+    mock_response.raise_for_status = MagicMock()
+
+    mock_client_instance = AsyncMock()
+    mock_client_instance.get = AsyncMock(return_value=mock_response)
+    mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
+    mock_client_instance.__aexit__ = AsyncMock(return_value=False)
+
+    with (
+        patch(
+            "database.user_settings.any_user_local_tunnel_enabled",
+            return_value=True,
+        ),
+        patch(
+            "services.reddit_service.httpx.AsyncClient",
+            return_value=mock_client_instance,
+        ),
+        patch("services.reddit_service.config") as mock_config,
+    ):
+        mock_config.TUNNEL_URL = "http://localhost:8000"
+
+        from services.reddit_service import get_reddit_context
+
+        result = await get_reddit_context("NVDA", enable_tunnel=True)
+
+        assert result == "Reddit post for NVDA"
+        call_url = mock_client_instance.get.call_args[0][0]
+        assert "custom_query=" in call_url
+        assert "NVDA" in call_url

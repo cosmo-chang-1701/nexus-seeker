@@ -1,12 +1,12 @@
-from typing import Any
+from typing import Any, Dict, List, Optional, cast
 import asyncio
 import json
 import logging
 import datetime
 import websockets
 import httpx
-from typing import Dict, List, Optional
 from dataclasses import dataclass, field
+
 
 from cogs.embed_builder import create_polymarket_whale_alert_embed
 from database.user_settings import get_full_user_context, get_all_user_ids
@@ -110,6 +110,7 @@ class PolymarketService:
         ] = []  # 儲存目前活躍市場的詳細資訊  # type: ignore
         self._order_books = BoundedCache(max_size=MAX_CACHE_SIZE)
         self._last_prices = BoundedCache(max_size=MAX_CACHE_SIZE)
+        self._search_cache = BoundedCache(max_size=200)
         self._monitor_task = None
         self._ping_task = None
         self._cleanup_task = None
@@ -185,16 +186,19 @@ class PolymarketService:
     def _is_relevant_market(self, market_info: Dict[str, Any]) -> bool:
         """
         [Category Hard Gate] 篩選無關市場。
-        採用「黑名單優先」策略，確保娛樂、遊戲等非相關標的被絕對攔截。
+        採用「黑名單優先」策略，確保娛樂、體育等非財經標的被絕對攔截，
+        同時保護正牌美股（如 NFLX, SONY）、科技發布會與總經利率合約。
         """
         import re
+        from market_analysis.stock_alias_matrix import STOCK_ALIAS_MAP
 
         question = market_info.get("question", "").upper()
         description = (market_info.get("description") or "").upper()
         full_text = f"{question} {description}"
 
-        # 1. 絕對排除黑名單 (優先檢查)
+        # 1. 絕對排除黑名單 (精準定位體育、娛樂八卦與純天氣預測)
         deny_keywords = [
+            # 體育賽事
             "NBA",
             "FINALS",
             "SUPER BOWL",
@@ -206,91 +210,204 @@ class PolymarketService:
             "BASKETBALL",
             "BASEBALL",
             "CHAMPIONS LEAGUE",
+            "PREMIER LEAGUE",
             "WORLD CUP",
-            "OSCAR",
-            "GRAMMY",
-            "EMMY",
-            "BOX OFFICE",
-            "ENTERTAINMENT",
-            "MOVIE",
-            "TEMPERATURE",
-            "WEATHER",
-            "SPORTS",
-            "TOURNAMENT",
-            "PLAYOFFS",
-            "FIGHT",
+            "FIFA",
             "UFC",
             "BOXING",
             "WRESTLING",
-            "CELEBRITY",
-            "MUSIC",
-            "ALBUM",
-            "GTA",
-            "GTA VI",
-            "GTA 6",
-            "GAME",
-            "GAMES",
-            "SONG",
-            "SINGLE",
-            "SINGLES",
-            "TOUR",
-            "CONCERT",
-            "FESTIVAL",
-            "RELEASE",
-            "TRAILER",
-            "NETFLIX",
-            "YOUTUBE",
-            "TIKTOK",
-            "STREAMER",
-            "RIHANNA",
-            "BEYONCE",
-            "TAYLOR",
-            "SWIFT",
-            "KANYE",
-            "ELON MUSK",
+            "WWE",
+            "FIGHT NIGHT",
+            "FORMULA 1",
+            "F1",
+            "NASCAR",
+            "PGA",
+            "TENNIS",
+            "WIMBLEDON",
+            "OLYMPICS",
+            "BALLON D'OR",
+            # 娛樂頒獎與演藝八卦
+            "OSCAR",
+            "ACADEMY AWARDS",
+            "GRAMMY",
+            "EMMY",
+            "GOLDEN GLOBE",
+            "BAFTA",
+            "EUROVISION",
+            "MET GALA",
+            "BOX OFFICE",
+            "BILLBOARD",
+            "REALITY TV",
+            "SURVIVOR",
+            "BACHELOR",
+            "BACHELORETTE",
+            "KARDASHIAN",
+            "JENNER",
             "MRBEAST",
-            "FORNITE",
-            "MINECRAFT",
-            "NINTENDO",
-            "SONY",
-            "PLAYSTATION",
-            "XBOX",
-            "ACTOR",
-            "ACTRESS",
-            "MARVEL",
-            "DC",
+            "DRAKE",
+            "KENDRICK LAMAR",
+            "CELEBRITY DEATH",
+            "DIVORCE",
+            "DATING",
+            "BREAKUP",
+            # 天氣雜項
+            "TEMPERATURE IN",
+            "WEATHER IN",
+            "RAIN IN",
+            "SNOW IN",
         ]
 
         for kw in deny_keywords:
             if re.search(rf"\b{re.escape(kw)}\b", full_text):
                 return False
 
-        # 2. 關鍵字白名單 (包含這些通常是相關的)
+        # 2. 關鍵字白名單 (包含宏觀政策、美股個股、科技生態與財報)
         allow_keywords = [
-            "MICRON",
-            "MU",
-            "EPS",
-            "REVENUE",
+            # 宏觀政策與經濟指標
             "FED",
+            "FEDERAL RESERVE",
+            "POWELL",
+            "FOMC",
             "INTEREST RATE",
+            "RATE CUT",
+            "RATE HIKE",
+            "FED FUNDS",
             "INFLATION",
             "CPI",
+            "CORE CPI",
+            "PCE",
+            "PPI",
             "GDP",
+            "RECESSION",
+            "TREASURY",
+            "YIELD",
+            "10-YEAR",
+            "2-YEAR",
+            "PAYROLLS",
+            "NONFARM",
+            "NFP",
+            "UNEMPLOYMENT",
+            "JOBLESS CLAIMS",
+            "DEBT CEILING",
+            "SHUTDOWN",
+            "TARIFF",
+            "TRADE WAR",
+            "SANCTIONS",
+            "VIX",
+            # 美股市場與指數
+            "STOCK",
+            "STOCKS",
+            "EQUITIES",
+            "MARKET CAP",
+            "S&P",
+            "S&P 500",
+            "SPY",
+            "NASDAQ",
+            "QQQ",
+            "DJIA",
+            "DOW JONES",
+            "RUSSELL",
+            "IWM",
+            "EARNINGS",
+            "REVENUE",
+            "EPS",
+            "GUIDANCE",
+            "BUYBACK",
+            "DIVIDEND",
+            "STOCK SPLIT",
+            "GROSS MARGIN",
+            "IPO",
+            "BANKRUPTCY",
+            "ACQUISITION",
+            "MERGER",
+            "ANTITRUST",
+            "DOJ",
+            "FTC",
             "SEC",
+            # 主要美股公司與生態
+            "NVIDIA",
+            "NVDA",
+            "APPLE",
+            "AAPL",
+            "MICROSOFT",
+            "MSFT",
+            "GOOGLE",
+            "GOOGL",
+            "ALPHABET",
+            "AMAZON",
+            "AMZN",
+            "META",
+            "FACEBOOK",
+            "TESLA",
+            "TSLA",
+            "BROADCOM",
+            "AVGO",
+            "AMD",
+            "TAIWAN SEMICONDUCTOR",
+            "TSMC",
+            "TSM",
+            "ASML",
+            "MICRON",
+            "MU",
+            "INTEL",
+            "INTC",
+            "QUALCOMM",
+            "QCOM",
+            "ARM",
+            "SUPERMICRO",
+            "SUPER MICRO",
+            "SMCI",
+            "PALANTIR",
+            "PLTR",
+            "COINBASE",
+            "COIN",
+            "MICROSTRATEGY",
+            "MSTR",
+            "CROWDSTRIKE",
+            "CRWD",
+            "NETFLIX",
+            "NFLX",
+            "DISNEY",
+            "DIS",
+            "ORACLE",
+            "ORCL",
+            "SALESFORCE",
+            "CRM",
+            "BOEING",
+            "BA",
+            "ELI LILLY",
+            "LLY",
+            "WALMART",
+            "WMT",
+            "COSTCO",
+            "COST",
+            "BERKSHIRE",
+            "JPMORGAN",
+            "JPM",
+            "GOLDMAN SACHS",
+            "GS",
             "BITCOIN",
             "ETH",
             "CRYPTO",
             "SOLANA",
-            "AI",
-            "CHATGPT",
+            # AI 科技與前沿突破
             "OPENAI",
-            "NVIDIA",
-            "TSMC",
-            "APPLE",
-            "GOOGLE",
-            "META",
-            "AMAZON",
-            "TESLA",
+            "CHATGPT",
+            "ANTHROPIC",
+            "CLAUDE",
+            "GEMINI",
+            "DEEPMIND",
+            "LLAMA",
+            "BLACKWELL",
+            "HOPPER",
+            "H100",
+            "B200",
+            "CUDA",
+            "ROBOTAXI",
+            "FSD",
+            "CYBERTRUCK",
+            "OPTIMUS",
+            # 政治與大選宏觀
             "ELECTION",
             "PRESIDENT",
             "TRUMP",
@@ -298,33 +415,20 @@ class PolymarketService:
             "HARRIS",
             "REPUBLICAN",
             "DEMOCRAT",
-            "STOCK",
-            "MARKET",
-            "S&P",
-            "NASDAQ",
-            "DJIA",
-            "VIX",
-            "RECESSION",
-            "ECONOMIC",
-            "TREASURY",
-            "YIELD",
-            "CURRENCY",
-            "DOLLAR",
-            "OIL",
-            "GOLD",
-            "STRIKE",
-            "LABOR",
-            "TARIFF",
-            "TRADE WAR",
         ]
 
         for kw in allow_keywords:
             if re.search(rf"\b{re.escape(kw)}\b", full_text):
                 return True
 
-        # 3. 股票代碼偵測 (包含 2-5 個連續大寫字母且非常見縮寫)
-        # 這裡用原始 question 檢查真正的全大寫單字
-        symbols = re.findall(r"\b([A-Z]{2,5})\b", market_info.get("question", ""))
+        # 3. 股票代碼庫檢查 (直接檢查 STOCK_ALIAS_MAP 鍵值)
+        raw_question = market_info.get("question", "")
+        for sym in STOCK_ALIAS_MAP.keys():
+            if re.search(rf"\b{re.escape(sym)}\b", raw_question):
+                return True
+
+        # 4. 一般股票代碼偵測 (包含 2-5 個連續大寫字母且非常見縮寫)
+        symbols = re.findall(r"\b([A-Z]{2,5})\b", raw_question)
         common_non_stock_caps = [
             "USA",
             "US",
@@ -375,6 +479,177 @@ class PolymarketService:
                 return True
 
         return False
+
+    def _format_gamma_market(
+        self, m: Dict[str, Any], event: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """將 Gamma API 回傳之市場資料格式化為系統通用結構。"""
+        q = m.get("question") or (event.get("title") if event else "未知市場")
+        clob_tokens_raw = m.get("clobTokenIds")
+        outcomes_raw = m.get("outcomes", [])
+        prices_raw = m.get("outcomePrices", [])
+
+        try:
+            if isinstance(clob_tokens_raw, str):
+                t_ids = json.loads(clob_tokens_raw)
+            else:
+                t_ids = clob_tokens_raw if isinstance(clob_tokens_raw, list) else []
+
+            if isinstance(outcomes_raw, str):
+                outcomes = json.loads(outcomes_raw)
+            else:
+                outcomes = outcomes_raw if isinstance(outcomes_raw, list) else []
+
+            if isinstance(prices_raw, str):
+                outcome_prices = json.loads(prices_raw)
+            else:
+                outcome_prices = prices_raw if isinstance(prices_raw, list) else []
+        except Exception:
+            t_ids = []
+            outcomes = []
+            outcome_prices = []
+
+        event_slug = None
+        if event and "slug" in event:
+            event_slug = event.get("slug")
+        elif "events" in m and m["events"] and isinstance(m["events"], list):
+            event_slug = m["events"][0].get("slug")
+        elif "event" in m and m["event"]:
+            event_slug = m["event"].get("slug")
+
+        tokens = []
+        for i, tid in enumerate(t_ids):
+            outcome_name = (
+                str(outcomes[i]).strip().strip('"') if i < len(outcomes) else "未知選項"
+            )
+            price_val = outcome_prices[i] if i < len(outcome_prices) else 0
+            tokens.append(
+                {
+                    "token_id": tid,
+                    "outcome": outcome_name,
+                    "price": price_val,
+                }
+            )
+
+        # 若無 clobTokenIds 但有 outcomes/prices，構建基本 token 清單
+        if not tokens and outcomes:
+            for i, out in enumerate(outcomes):
+                price_val = outcome_prices[i] if i < len(outcome_prices) else 0
+                tokens.append(
+                    {
+                        "token_id": str(i),
+                        "outcome": str(out).strip().strip('"'),
+                        "price": price_val,
+                    }
+                )
+
+        return {
+            "question": q,
+            "description": m.get("description"),
+            "end_date": m.get("endDate"),
+            "tokens": tokens,
+            "volumeNum": float(m.get("volumeNum") or m.get("volume") or 0.0),
+            "slug": m.get("slug"),
+            "event_slug": event_slug,
+            "closed": bool(m.get("closed", False)),
+            "active": bool(m.get("active", True)),
+        }
+
+    async def search_markets(
+        self, query: str, limit: int = 10, active_only: bool = True
+    ) -> List[Dict[str, Any]]:
+        """
+        搜尋 Polymarket 市場 (支援本地快取 + Gamma API /public-search 即時回退)。
+        """
+        query_clean = query.strip()
+        if not query_clean:
+            return self.get_active_markets(limit=limit)
+
+        cache_key = f"search_{query_clean.lower()}_{limit}_{active_only}"
+        if cache_key in self._search_cache:
+            return cast(List[Dict[str, Any]], self._search_cache[cache_key])
+
+        matched: List[Dict[str, Any]] = []
+        seen_slugs: set[str] = set()
+
+        # 1. 優先搜尋本地活躍快取
+        query_lower = query_clean.lower()
+        for m in self._active_markets:
+            if active_only and m.get("closed", False):
+                continue
+            q_text = f"{m.get('question', '')} {m.get('description', '')}".lower()
+            if query_lower in q_text and self._is_relevant_market(m):
+                slug = str(m.get("slug") or m.get("question") or "")
+                if slug and slug not in seen_slugs:
+                    seen_slugs.add(slug)
+                    matched.append(m)
+
+        # 2. 若本地匹配數量不足，調用 Gamma API /public-search
+        if len(matched) < limit:
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    resp = await client.get(
+                        f"{GAMMA_API_BASE}/public-search",
+                        params={"q": query_clean, "limit": 20},
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        for ev in data.get("events", []):
+                            for m in ev.get("markets", []):
+                                if active_only and m.get("closed", False):
+                                    continue
+                                formatted = self._format_gamma_market(m, ev)
+                                slug = str(
+                                    formatted.get("slug")
+                                    or formatted.get("question")
+                                    or ""
+                                )
+                                if not slug or slug in seen_slugs:
+                                    continue
+                                if self._is_relevant_market(formatted):
+                                    seen_slugs.add(slug)
+                                    matched.append(formatted)
+            except Exception as e:
+                logger.warning(f"Gamma API search failed for '{query_clean}': {e}")
+
+        # 按成交量降序排列
+        matched.sort(key=lambda x: float(x.get("volumeNum", 0.0)), reverse=True)
+        results = matched[:limit]
+        self._search_cache[cache_key] = results
+        return results
+
+    async def get_symbol_markets(
+        self, symbol: str, limit: int = 5, active_only: bool = True
+    ) -> List[Dict[str, Any]]:
+        """
+        獲取特定美股標的之預測市場清單 (使用 StockAliasMatrix 多別名自動補齊與檢索)。
+        """
+        from market_analysis.stock_alias_matrix import StockAliasMatrix
+
+        aliases = await StockAliasMatrix.get_aliases_for_symbol(symbol)
+        all_results: List[Dict[str, Any]] = []
+        seen_slugs: set[str] = set()
+
+        # 搜尋前 3 個最具代表性的別名 (例如 NVDA, NVIDIA)
+        search_terms = [symbol] + [a for a in aliases if a.upper() != symbol.upper()][
+            :2
+        ]
+
+        for term in search_terms:
+            res = await self.search_markets(term, limit=limit, active_only=active_only)
+            for m in res:
+                slug = str(m.get("slug") or m.get("question") or "")
+                if slug and slug not in seen_slugs:
+                    # 嚴格校驗是否匹配該代碼 (防範模糊搜尋的 False Positive)
+                    q_full = f"{m.get('question', '')} {m.get('description', '')}"
+                    if StockAliasMatrix.is_text_matching_symbol(
+                        q_full, symbol, aliases
+                    ):
+                        seen_slugs.add(slug)
+                        all_results.append(m)
+
+        all_results.sort(key=lambda x: float(x.get("volumeNum", 0.0)), reverse=True)
+        return all_results[:limit]
 
     def start(self) -> None:
         if self.running:

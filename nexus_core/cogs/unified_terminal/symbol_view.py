@@ -157,10 +157,9 @@ class SymbolHubView(discord.ui.View):
 
             # 用於 DDP 與 Polymarket 等服務
             from market_analysis.ddp_inspector import DDPInspector
-            from services.polymarket_service import PolymarketService
 
             ddp_inspector = DDPInspector(self.bot)
-            poly_service = PolymarketService(self.bot)
+            poly_service = getattr(self.bot, "polymarket_service", None)
 
             # 並行抓取所有數據
             spy_task = market_data_service.get_spy_history_df("1y")
@@ -175,7 +174,12 @@ class SymbolHubView(discord.ui.View):
             reddit_task = reddit_service.get_reddit_context(
                 self.symbol, enable_tunnel=ctx.enable_local_tunnel
             )
-            poly_task = poly_service.get_market_snapshot(limit=0)
+            poly_task = (
+                poly_service.get_market_snapshot(limit=0)
+                if poly_service
+                else asyncio.sleep(0, result=[])
+            )
+
             ddp_task = ddp_inspector.inspect_symbol(self.symbol)
             from services.calendar_service import calendar_service
 
@@ -297,8 +301,11 @@ class SymbolHubView(discord.ui.View):
             )
 
             # Polymarket odds
-            poly_odds = await find_matching_polymarket_odds(self.symbol, poly_markets)
+            poly_odds = await find_matching_polymarket_odds(
+                self.symbol, poly_markets, bot=self.bot
+            )
             result["polymarket_odds"] = poly_odds
+
             result["catalysts"] = catalysts
             safe_vp = vp_data if isinstance(vp_data, dict) else {}
             safe_dp = dp_data if isinstance(dp_data, dict) else {}

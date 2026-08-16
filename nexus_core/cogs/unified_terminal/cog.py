@@ -695,8 +695,11 @@ class UnifiedTerminalCog(commands.Cog):
                 result["reddit_sentiment_score"] = "⚖️ 中性"
 
             # Polymarket odds
-            poly_odds = await find_matching_polymarket_odds(symbol, poly_markets)
+            poly_odds = await find_matching_polymarket_odds(
+                symbol, poly_markets, bot=self.bot
+            )
             result["polymarket_odds"] = poly_odds
+
             safe_vp = vp_data if isinstance(vp_data, dict) else {}
             safe_dp = dp_data if isinstance(dp_data, dict) else {}
             result["volume_profile"] = safe_vp

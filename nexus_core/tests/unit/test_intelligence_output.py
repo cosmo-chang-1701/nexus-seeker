@@ -49,3 +49,49 @@ async def test_quote_uses_builder(mock_interaction: Any):  # type: ignore
 
     mock_builder.assert_called_once_with("AAPL", quote)
     mock_interaction.followup.send.assert_called_once_with(embed=embed, ephemeral=True)
+
+
+@pytest.mark.asyncio
+async def test_poly_list_without_query(mock_interaction: Any) -> None:
+    bot = MagicMock()
+    bot.polymarket_service = MagicMock()
+    bot.polymarket_service.get_active_markets.return_value = [
+        {"question": "Fed rate cut?"}
+    ]
+    cog = IntelligenceCog(bot)
+    embed = object()
+
+    with patch(
+        "cogs.intelligence.create_polymarket_list_embed",
+        return_value=[embed],
+    ) as mock_builder:
+        await cog.poly_list.callback(cog, mock_interaction, query=None)  # type: ignore
+
+    bot.polymarket_service.get_active_markets.assert_called_once_with(limit=20)
+    mock_builder.assert_called_once_with([{"question": "Fed rate cut?"}], query=None)
+    mock_interaction.followup.send.assert_called_once_with(embed=embed, ephemeral=True)
+
+
+@pytest.mark.asyncio
+async def test_poly_list_with_query(mock_interaction: Any) -> None:
+    bot = MagicMock()
+    bot.polymarket_service = MagicMock()
+    bot.polymarket_service.search_markets = AsyncMock(
+        return_value=[{"question": "Will NVIDIA beat earnings?"}]
+    )
+    cog = IntelligenceCog(bot)
+    embed = object()
+
+    with patch(
+        "cogs.intelligence.create_polymarket_list_embed",
+        return_value=[embed],
+    ) as mock_builder:
+        await cog.poly_list.callback(cog, mock_interaction, query="NVDA")  # type: ignore
+
+    bot.polymarket_service.search_markets.assert_called_once_with(
+        "NVDA", limit=20, active_only=True
+    )
+    mock_builder.assert_called_once_with(
+        [{"question": "Will NVIDIA beat earnings?"}], query="NVDA"
+    )
+    mock_interaction.followup.send.assert_called_once_with(embed=embed, ephemeral=True)

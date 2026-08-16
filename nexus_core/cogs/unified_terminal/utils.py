@@ -1,6 +1,10 @@
 from typing import Any, cast
+import inspect
+import logging
 import psutil
 from services.market_data_service import BoundedCache
+
+logger = logging.getLogger(__name__)
 
 _macro_overview_cache = BoundedCache(max_size=10)
 
@@ -209,88 +213,84 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
     return result_data
 
 
-async def find_matching_polymarket_odds(symbol: str, poly_markets: list) -> str:
-    import re
-    from services.market_data_service import get_company_profile
+async def find_matching_polymarket_odds(
+    symbol: str, poly_markets: list, bot: Any = None
+) -> str:
+    from market_analysis.stock_alias_matrix import StockAliasMatrix
 
-    symbol = symbol.upper()
-    alts = []
+    symbol_upper = symbol.upper().strip()
+    aliases = await StockAliasMatrix.get_aliases_for_symbol(symbol_upper)
 
-    try:
-        profile = await get_company_profile(symbol)
-        if profile and "name" in profile:
-            company_name = profile.get("name", "")
-            if company_name:
-                full_clean = (
-                    company_name.lower()
-                    .replace(" inc.", "")
-                    .replace(" corp.", "")
-                    .replace(" ltd.", "")
-                    .replace(" corporation", "")
-                    .replace(" company", "")
-                    .strip()
-                )
-                if full_clean and full_clean not in alts:
-                    alts.append(full_clean)
-                first_word = company_name.split()[0].lower()
-                first_word = re.sub(r"[^a-z0-9]", "", first_word)
-                if first_word and first_word not in alts:
-                    alts.append(first_word)
-    except Exception:
-        pass
+    candidate_markets = list(poly_markets) if poly_markets else []
 
-    results = []
-    for m in poly_markets or []:
+    # 1. 優先在 candidate_markets 尋找
+    matched_markets: list[dict[str, Any]] = []
+    seen_questions: set[str] = set()
+
+    for m in candidate_markets:
         if not isinstance(m, dict):
             continue
         question = m.get("question", "")
-        question_lower = question.lower()
+        desc = m.get("description", "")
+        full_text = f"{question} {desc}"
+        if StockAliasMatrix.is_text_matching_symbol(full_text, symbol_upper, aliases):
+            if question not in seen_questions:
+                seen_questions.add(question)
+                matched_markets.append(m)
 
-        matches_ticker = False
-        if re.search(rf"\b{re.escape(symbol.lower())}\b", question_lower):
-            matches_ticker = True
-        else:
-            for alt in alts:
-                if alt in question_lower:
-                    matches_ticker = True
+    # 2. 若快照未命中且有 bot 實例，嘗試透過 polymarket_service 進行在線回退搜尋
+    if not matched_markets and bot is not None:
+        poly_service = getattr(bot, "polymarket_service", None)
+        if poly_service and hasattr(poly_service, "get_symbol_markets"):
+            try:
+                res = poly_service.get_symbol_markets(
+                    symbol_upper, limit=5, active_only=True
+                )
+                if inspect.isawaitable(res):
+                    live_markets = await res
+                else:
+                    live_markets = res
+                for m in live_markets or []:
+                    if isinstance(m, dict):
+                        q = m.get("question", "")
+                        if q not in seen_questions:
+                            seen_questions.add(q)
+                            matched_markets.append(m)
+            except Exception as e:
+                logger.debug(
+                    f"Failed to fetch live polymarket odds for {symbol_upper}: {e}"
+                )
+
+    results = []
+    for m in matched_markets:
+        question = m.get("question", "")
+        tokens = m.get("tokens", [])
+        if not tokens:
+            tokens = m.get("odds_distribution", [])
+        if tokens:
+            yes_token = None
+            for t in tokens:
+                if str(t.get("outcome", "")).strip().lower() == "yes":
+                    yes_token = t
                     break
+            target_token = yes_token if yes_token else tokens[0]
+            outcome = target_token.get("outcome", "Yes")
+            price_val = target_token.get("price")
+            if price_val is None:
+                price_val = target_token.get("odds", 0)
 
-        if not matches_ticker and symbol == "MU":
-            if "micron" in question_lower and (
-                "eps" in question_lower
-                or "revenue" in question_lower
-                or "earnings" in question_lower
-            ):
-                matches_ticker = True
+            val_str = ""
+            try:
+                price_float = float(price_val)
+                odds_pct = price_float * 100.0
+                val_str = f"{outcome}: {odds_pct:.1f}%"
+            except Exception:
+                val_str = f"{outcome}: {price_val}"
 
-        if matches_ticker:
-            tokens = m.get("tokens", [])
-            if not tokens:
-                tokens = m.get("odds_distribution", [])
-            if tokens:
-                yes_token = None
-                for t in tokens:
-                    if str(t.get("outcome", "")).strip().lower() == "yes":
-                        yes_token = t
-                        break
-                target_token = yes_token if yes_token else tokens[0]
-                outcome = target_token.get("outcome", "Yes")
-                price_val = target_token.get("price")
-                if price_val is None:
-                    price_val = target_token.get("odds", 0)
-
-                val_str = ""
-                try:
-                    price_float = float(price_val)
-                    odds_pct = price_float * 100.0
-                    val_str = f"{outcome}: {odds_pct:.1f}%"
-                except Exception:
-                    val_str = f"{outcome}: {price_val}"
-
-                # Format to a compact string
-                short_q = question[:35] + "..." if len(question) > 35 else question
-                vol = float(m.get("volumeNum", 0.0))
-                results.append((f"{short_q} ({val_str})", vol))
+            # Format to a compact string
+            short_q = question[:35] + "..." if len(question) > 35 else question
+            vol = float(m.get("volumeNum") or m.get("volume") or 0.0)
+            results.append((f"{short_q} ({val_str})", vol))
 
     if results:
         # Sort by volume descending and take top 3

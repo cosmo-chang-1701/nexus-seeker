@@ -57,27 +57,17 @@ async def get_reddit_context(
 
         base_url = config.TUNNEL_URL.rstrip("/")
 
-        # 取得公司名稱以提升搜尋精準度
-        from services.market_data_service import get_company_profile
+        # 透過 StockAliasMatrix 取得別名與構建精準 Boolean Search Query
         import urllib.parse
+        from market_analysis.stock_alias_matrix import StockAliasMatrix
 
-        company_name = ""
-
-        try:
-            profile = await get_company_profile(symbol)
-            if profile and "name" in profile:
-                # 只取第一組單字或乾淨的公司名稱，避免名稱太長導致搜尋失效
-                name_raw = profile.get("name", "").split()[0].replace(",", "")
-                if name_raw:
-                    company_name = urllib.parse.quote(name_raw)
-        except Exception:
-            pass
+        aliases = await StockAliasMatrix.get_aliases_for_symbol(symbol)
+        custom_query = StockAliasMatrix.build_reddit_query(symbol, aliases)
+        query_encoded = urllib.parse.quote(custom_query)
 
         # 設定 25 秒超時，給予本地端足夠的渲染時間
         async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
-            req_url = f"{base_url}/api/v1/scrape/reddit/{symbol}?limit={limit}"
-            if company_name:
-                req_url += f"&company_name={company_name}"
+            req_url = f"{base_url}/api/v1/scrape/reddit/{symbol}?limit={limit}&custom_query={query_encoded}"
 
             res = await client.get(req_url)
             res.raise_for_status()

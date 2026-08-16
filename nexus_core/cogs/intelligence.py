@@ -1,4 +1,5 @@
-from typing import Any
+from typing import Any, Optional
+
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -31,9 +32,12 @@ class IntelligenceCog(commands.Cog):
         logger.info("IntelligenceCog loaded.")
 
     @app_commands.command(
-        name="poly_list", description="顯示目前監控中的 Polymarket 活躍市場清單"
+        name="poly_list", description="顯示或搜尋 Polymarket 預測市場活躍清單"
     )
-    async def poly_list(self, interaction: discord.Interaction) -> Any:
+    @app_commands.describe(query="美股代碼或關鍵字 (例如: NVDA, Tesla, Fed, CPI)")
+    async def poly_list(
+        self, interaction: discord.Interaction, query: Optional[str] = None
+    ) -> Any:
         await interaction.response.defer(ephemeral=True)
         try:
             if not hasattr(self.bot, "polymarket_service"):
@@ -44,8 +48,14 @@ class IntelligenceCog(commands.Cog):
                     ephemeral=True,
                 )
 
-            markets = self.bot.polymarket_service.get_active_markets(limit=20)
-            embeds = create_polymarket_list_embed(markets)
+            if query:
+                markets = await self.bot.polymarket_service.search_markets(
+                    query, limit=20, active_only=True
+                )
+            else:
+                markets = self.bot.polymarket_service.get_active_markets(limit=20)
+
+            embeds = create_polymarket_list_embed(markets, query=query)
             if not isinstance(embeds, list):
                 embeds = [embeds]
             for emb in embeds:

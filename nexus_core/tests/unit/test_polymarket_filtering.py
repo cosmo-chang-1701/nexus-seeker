@@ -1,6 +1,7 @@
 from typing import Any
 import pytest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
+
 from services.polymarket_service import PolymarketService
 
 
@@ -124,3 +125,115 @@ async def test_push_notification_uses_embed_builder(poly_service: Any):  # type:
     assert kwargs["is_high_conviction"] is True
     assert kwargs["event_slug"] == "nvda-earnings"
     assert poly_service.bot.queued_dms == [(123, embed)]
+
+
+def test_is_relevant_market_unblocked_stocks(poly_service: Any) -> None:
+    """驗證修復後的黑名單不再誤殺正牌美股、科技產品發布會或財報。"""
+    netflix_market = {
+        "question": "Will Netflix (NFLX) subscriber count grow by 5M in Q3?",
+        "description": "Resolution based on Netflix quarterly earnings report.",
+    }
+    assert poly_service._is_relevant_market(netflix_market) is True
+
+    apple_release_market = {
+        "question": "Will Apple release M4 MacBook Pro at WWDC?",
+        "description": "Official Apple hardware announcement.",
+    }
+    assert poly_service._is_relevant_market(apple_release_market) is True
+
+    sony_market = {
+        "question": "Sony gaming division revenue in 2026",
+        "description": "PlayStation and gaming hardware financials.",
+    }
+    assert poly_service._is_relevant_market(sony_market) is True
+
+    tesla_fsd_market = {
+        "question": "Will Tesla release unsupervised FSD before end of year?",
+        "description": "Full self driving robotaxi milestone.",
+    }
+    assert poly_service._is_relevant_market(tesla_fsd_market) is True
+
+
+def test_is_relevant_market_expanded_whitelist(poly_service: Any) -> None:
+    """驗證擴充後的白名單支援宏觀總經利率、聯準會決策與美股龍頭。"""
+    test_cases = [
+        {"question": "Will FOMC announce a 50bps rate cut in September?"},
+        {"question": "Core PCE Inflation rate below 2.5% in August 2026?"},
+        {"question": "Will Jerome Powell resign as Fed Chair before 2027?"},
+        {"question": "Palantir (PLTR) total AIP customer count above 1000?"},
+        {"question": "Broadcom (AVGO) Q3 AI revenue above $15B?"},
+        {"question": "MicroStrategy (MSTR) Bitcoin holdings exceed 500k BTC?"},
+        {"question": "Super Micro Computer (SMCI) gross margin expansion?"},
+        {"question": "Eli Lilly (LLY) Mounjaro global sales reach $10B?"},
+    ]
+    for case in test_cases:
+        assert (
+            poly_service._is_relevant_market(case) is True
+        ), f"Failed on: {case['question']}"
+
+
+@pytest.mark.asyncio
+async def test_format_gamma_market(poly_service: Any) -> None:
+    """驗證 Gamma API 市場資料格式化結構。"""
+    raw_gamma_market = {
+        "id": "12345",
+        "question": "Will NVIDIA beat quarterly earnings?",
+        "description": "Non-GAAP EPS resolution.",
+        "endDate": "2026-08-26T21:00:00Z",
+        "clobTokenIds": '["tok_yes_1", "tok_no_2"]',
+        "outcomes": '["Yes", "No"]',
+        "outcomePrices": '["0.95", "0.05"]',
+        "volumeNum": 54200.0,
+        "slug": "nvda-beat-earnings-2026",
+        "closed": False,
+        "active": True,
+    }
+    raw_event = {"slug": "nvda-earnings-event", "title": "NVDA Earnings"}
+
+    formatted = poly_service._format_gamma_market(raw_gamma_market, raw_event)
+    assert formatted["question"] == "Will NVIDIA beat quarterly earnings?"
+    assert formatted["event_slug"] == "nvda-earnings-event"
+    assert formatted["volumeNum"] == 54200.0
+    assert len(formatted["tokens"]) == 2
+    assert formatted["tokens"][0]["outcome"] == "Yes"
+    assert formatted["tokens"][0]["price"] == "0.95"
+
+
+@pytest.mark.asyncio
+async def test_search_markets_and_get_symbol_markets(poly_service: Any) -> None:
+    """驗證 search_markets 與 get_symbol_markets 在線檢索與排序。"""
+    mock_search_response = {
+        "events": [
+            {
+                "title": "NVIDIA Stock Target",
+                "slug": "nvda-target-event",
+                "markets": [
+                    {
+                        "question": "Will NVIDIA (NVDA) close above $180?",
+                        "description": "Yahoo Finance close.",
+                        "outcomes": ["Yes", "No"],
+                        "outcomePrices": [0.98, 0.02],
+                        "volumeNum": 120000.0,
+                        "slug": "nvda-180",
+                        "closed": False,
+                        "active": True,
+                    }
+                ],
+            }
+        ]
+    }
+
+    mock_resp = AsyncMock()
+    mock_resp.status_code = 200
+    mock_resp.json = lambda: mock_search_response
+
+    with patch("httpx.AsyncClient.get", return_value=mock_resp):
+        # 1. 測試 search_markets
+        res = await poly_service.search_markets("NVDA", limit=5)
+        assert len(res) >= 1
+        assert "NVIDIA" in res[0]["question"] or "NVDA" in res[0]["question"]
+
+        # 2. 測試 get_symbol_markets (多別名自動補齊)
+        sym_res = await poly_service.get_symbol_markets("NVDA", limit=3)
+        assert len(sym_res) >= 1
+        assert sym_res[0]["slug"] == "nvda-180"

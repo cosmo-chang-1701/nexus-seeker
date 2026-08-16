@@ -298,16 +298,28 @@ def create_media_sentiment_embed(symbol: Any, news_text: Any, reddit_text: Any):
 
 
 def create_polymarket_list_embed(
-    markets: List[Dict[str, Any]], chunk_size: int = 8
+    markets: List[Dict[str, Any]],
+    chunk_size: int = 8,
+    query: Optional[str] = None,
 ) -> List[discord.Embed]:
-    """建構 Polymarket 監控中的熱門市場 Embed 清單 (支援多頁分頁與完整文字 Markdown 連結)。"""
+    """建構 Polymarket 監控中的熱門市場或搜尋結果 Embed 清單 (支援多頁分頁與完整文字 Markdown 連結)。"""
+    base_title = (
+        f"🐋 Polymarket 搜尋結果: {query.upper()}"
+        if query
+        else "🐋 Polymarket 巨鯨意圖圖譜"
+    )
+
     if not markets:
         embed = NexusEmbed(
-            title="🐋 Polymarket 巨鯨意圖圖譜",
+            title=base_title,
             color=discord.Color.blue(),
             timestamp=datetime.now(timezone.utc),
         )
-        embed.description = "目前沒有監控中的市場。"
+        embed.description = (
+            f"查無與 '{query}' 相關之活躍美股預測合約。"
+            if query
+            else "目前沒有監控中的市場。"
+        )
         return [embed]
 
     chunks: List[List[Dict[str, Any]]] = [
@@ -318,7 +330,7 @@ def create_polymarket_list_embed(
 
     global_index = 1
     for page_idx, chunk in enumerate(chunks, 1):
-        page_title = "🐋 Polymarket 巨鯨意圖圖譜"
+        page_title = base_title
         if total_pages > 1:
             page_title += f" (第 {page_idx}/{total_pages} 頁)"
 
@@ -359,12 +371,22 @@ def create_polymarket_list_embed(
                     except Exception:
                         price_info_parts.append(f"**{outcome}**: `{price}`")
 
+            # 加入成交量標籤
+            vol_num = float(m.get("volumeNum") or m.get("volume") or 0.0)
+            vol_str = ""
+            if vol_num > 1000000:
+                vol_str = f" | 💵 `${vol_num / 1000000:.1f}M`"
+            elif vol_num > 1000:
+                vol_str = f" | 💵 `${vol_num / 1000:.1f}k`"
+            elif vol_num > 0:
+                vol_str = f" | 💵 `${vol_num:.0f}`"
+
             odds_str = (
                 " │ ".join(price_info_parts) if price_info_parts else "等待流動性"
             )
 
             lines.append(f"`{global_index:02d}.` **[{question}]({url})**")
-            lines.append(f"    └─ 📊 {odds_str}\n")
+            lines.append(f"    └─ 📊 {odds_str}{vol_str}\n")
             global_index += 1
 
         full_desc = "\n".join(lines).strip()

@@ -51,12 +51,15 @@ module = [
     "lxml.*",
     "openpyxl.*",
     "yfinance.*",
-    "pytz.*",
     "requests.*",
     "pytest.*",
     "pandas.*",
+    "fastapi.*",
+    "psutil.*",
 ]
 ignore_missing_imports = true
+
+
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

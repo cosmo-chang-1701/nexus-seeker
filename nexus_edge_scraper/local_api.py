@@ -49,6 +49,7 @@ async def _get_sec_cik(client: httpx.AsyncClient, symbol: str) -> str | None:
 async def scrape_reddit(
     symbol: str,
     company_name: str = Query("", description="公司名稱"),
+    custom_query: str = Query("", description="自訂搜尋條件"),
     limit: int = Query(5, description="回傳的貼文數量上限"),
 ) -> dict[str, Any]:
     import xml.etree.ElementTree as ET
@@ -56,7 +57,9 @@ async def scrape_reddit(
 
     symbol_clean = symbol.replace("$", "")
 
-    if company_name:
+    if custom_query:
+        q_term = custom_query
+    elif company_name:
         q_term = f'"{symbol_clean}" OR "{company_name}"'
     else:
         q_term = f'"{symbol_clean}"'
