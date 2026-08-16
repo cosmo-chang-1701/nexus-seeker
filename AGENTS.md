@@ -246,7 +246,38 @@ The `dynamic_market_scanner` in `cogs/trading.py` now includes an independent, e
 
 ---
 
+## StockAliasMatrix & Polymarket Intelligence Engine 2.0
+
+### 1. Abstracted Entity & Alias Matrix (`market_analysis/stock_alias_matrix.py`)
+To prevent keyword fragmentation across prediction markets, retail sentiment scrapers, and terminal lookup interfaces, all ticker-to-entity mappings are unified under `StockAliasMatrix`:
+- **4-Tier Auto-Populating Resolution Architecture**:
+  1. **Tier 1 (Static Map - `STOCK_ALIAS_MAP`)**: Pre-compiled dictionary covering 100+ US tech, biotech, energy, financial equities, and broad market ETFs (0ms lookup).
+  2. **Tier 2 (In-Memory LRU Cache - `_dynamic_alias_cache`)**: Caches resolved unlisted symbols in memory for instant subsequent access.
+  3. **Tier 3 (Persistent SQLite Cache - `kv_cache`)**: Persists dynamically populated aliases across service restarts (`stock_aliases_{symbol}`).
+  4. **Tier 4 (Finnhub / yfinance Profile Auto-Derivation)**: When unlisted symbols (e.g. `RKLB`, `ASTS`, `SOFI`) are queried, the engine dynamically fetches the company profile, cleans legal suffixes (`Inc.`, `Corp.`, `Ltd.`, `Holdings`) using `clean_company_name()`, preserves generic two-word brands (`Super Micro`, `Taiwan Semiconductor`), and automatically writes back to memory and SQLite.
+- **Strict Boundary Matching (`is_text_matching_symbol`)**: Uses regex word boundaries (`\b`) for tickers and case-insensitive substring checks for long company aliases to prevent false-positive matching on generic words.
+
+### 2. Polymarket Service Hard Gate & Live Fallback (`services/polymarket_service.py`)
+- **Category Hard Gate Overhaul (`_is_relevant_market`)**:
+  - Purged keyword bans that falsely rejected legitimate US stocks (removed `NETFLIX`, `SONY`, `RELEASE`, `GAME`, `DATE`, `TIME`, `ACTOR`, `TRAILER`).
+  - Retained strict exclusions for pure sports events (NBA, NFL, Premier League, UFC, F1) and entertainment celebrity gossip (Oscar, Grammy, Kardashian, MrBeast).
+  - Expanded whitelists for macro rate decisions (FOMC, Rate Cut, PCE, CPI), financial metrics (EPS, Revenue, Buyback, Dividend, Antitrust, Merger), AI breakthroughs (OpenAI, Blackwell, Robotaxi, FSD), and key equities.
+- **Gamma API Live Online Fallback**:
+  - `search_markets(query, limit, active_only)`: Searches local active markets; if fewer than `limit`, queries `https://gamma-api.polymarket.com/public-search?q={query}`.
+  - `get_symbol_markets(symbol, limit, active_only)`: Uses `StockAliasMatrix` to expand ticker and aliases, filters by `is_text_matching_symbol`, and sorts by trading volume descending (`volumeNum`).
+
+### 3. Reddit Sentiment Boolean Search Optimization (`reddit_service.py` & `local_api.py`)
+- **Boolean OR Query Generator (`build_reddit_query`)**: Formats ticker and aliases into precise Boolean search expressions (e.g. `("NVDA" OR "$NVDA" OR "NVIDIA")`).
+- **Edge API Integration**: Passes `custom_query` to `/api/v1/scrape/reddit/{symbol}`, ensuring Reddit RSS search matches actual company discussions rather than noisy single-word stems (e.g. searching "Super" for `SMCI`).
+
+### 4. Interactive Commands & Unified Terminal Integration
+- **`/poly_list [query]`**: Supports ticker/keyword prediction market queries with volume tags (`💵 $12.5M`, `💵 $54.2k`) and paginated embeds.
+- **`/x` Terminal Odds Lookup**: `find_matching_polymarket_odds` evaluates multi-alias matches with fallback to online `get_symbol_markets` search.
+
+---
+
 ## Intraday Quant / Execution Logic
+
 
 `market_analysis/intraday_pipeline.py` contains:
 
