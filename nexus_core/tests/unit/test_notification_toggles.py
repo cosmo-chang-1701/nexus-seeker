@@ -22,11 +22,11 @@ def clean_db(db_conn: Any):  # type: ignore
 
 
 def test_default_all_enabled(db_conn: Any):  # type: ignore
-    """測試全新用戶 10 大通知頻道預設值（預設全部開啟）"""
+    """測試全新用戶 11 大通知頻道預設值（預設全部開啟）"""
     user_id = 999111
     settings = get_user_notification_settings(user_id)
     assert len(settings) == len(ALL_NOTIFICATION_KEYS)
-    assert len(ALL_NOTIFICATION_KEYS) == 10
+    assert len(ALL_NOTIFICATION_KEYS) == 11
 
     for key in ALL_NOTIFICATION_KEYS:
         expected = True
@@ -344,6 +344,7 @@ def test_full_preset_assertions_all_keys(db_conn: Any):  # type: ignore
     assert s_focus["defense_macro_tail_risk"] is True
     assert s_focus["alpha_market_signals"] is False
     assert s_focus["alpha_polymarket"] is False
+    assert s_focus["alpha_wti_oil"] is False
 
     # 4. mute_intraday
     s_mute = apply_preset_settings(user_id, "mute_intraday")
@@ -357,3 +358,4 @@ def test_full_preset_assertions_all_keys(db_conn: Any):  # type: ignore
     assert s_mute["defense_macro_tail_risk"] is True
     assert s_mute["alpha_market_signals"] is False
     assert s_mute["alpha_polymarket"] is False
+    assert s_mute["alpha_wti_oil"] is False

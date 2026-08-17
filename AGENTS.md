@@ -57,11 +57,12 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 
 ## Active Background Jobs
 
-### In `cogs/trading.py`
+### In `cogs/trading/`
 
 - `daily_reddit_update` — **08:30 ET**
 - `pre_market_risk_monitor` — **09:00 ET**
 - `dynamic_market_scanner` — **every 30 minutes during market hours**
+- `wti_oil_monitor` — **every 30 minutes (24/7, 00:00–06:00 ET quiet hours)**
 - `monitor_real_portfolio_task` — **every 30 minutes during market hours**
 - `dynamic_after_market_report` — **16:15 ET**
 - `weekly_vtr_report_task` — **Friday 17:05 ET**
@@ -465,22 +466,22 @@ Configurations are strictly segregated into two functional areas to maximize sep
   - `risk_limit` (Base risk percentage limit, bounded between `1.0` and `50.0`)
   - `enable_vtr`, `enable_psq_watchlist`, `monthly_expense`, `tax_reserve_rate`, and `cash_reserve`.
   - Also integrates the **Watchlist Tagging System**: Allows users to attach custom categorization tags (e.g., `TECH`, `CORE`) to watchlist assets via an interactive dropdown and modal (`ui/watchlist_tags.py`). This tagging engine is also fully exposed in the `/list_watch` command output via a localized "🏷️ 原地編輯標籤" shortcut button, enabling direct in-place editing that automatically rebuilds and replaces the original Discord view for a seamless, SPA-like experience.
-- **Notification Preferences (`/notif_settings`)**: Manages individual toggles stored in a key-value style `user_notification_settings` table (designed with composite primary key `(user_id, notification_key)` for infinite schema-less extensibility). Fully consolidated into **4 Tactical Dimensions with 10 Core Channels** (Migration `v061`):
+- **Notification Preferences (`/notif_settings`)**: Manages individual toggles stored in a key-value style `user_notification_settings` table (designed with composite primary key `(user_id, notification_key)` for infinite schema-less extensibility). Fully consolidated into **4 Tactical Dimensions with 11 Core Channels** (Migration `v061` + WTI Alert):
   - **4 Tactical Modules**:
     1. `briefings` (📋 定時戰報與覆盤): `briefing_pre_market`, `briefing_post_market`, `briefing_weekly_vtr`
     2. `telemetry` (📡 盤中自選與掛單遙測): `heartbeat_watchlist`, `telemetry_orders`
     3. `defense` (🛡️ 持倉風控與極端防禦): `defense_portfolio_risk`, `defense_option_rollover`, `defense_macro_tail_risk`
-    4. `alpha` (🎯 Alpha 策略與情報): `alpha_market_signals`, `alpha_polymarket`
+    4. `alpha` (🎯 Alpha 策略與情報): `alpha_market_signals`, `alpha_polymarket`, `alpha_wti_oil`
   - **Dynamic Two-Tier Architecture with Preset Modes**: To provide a clean, uncluttered user experience:
     - Row 0 features the Category Selector (`briefings`, `telemetry`, `defense`, `alpha`).
     - Row 1 features toggle choices with real-time `🟢` / `🔴` indicators.
     - Row 2 features module batch controls (`⚡ 開啟本區`, `💤 關閉本區`).
     - Row 3 features 1-click Preset Quick Action buttons:
-      - `🛡️ 戰備全開` (`all_on`): Enables all 10 risk and alpha channels.
+      - `🛡️ 戰備全開` (`all_on`): Enables all 11 risk and alpha channels.
       - `🎯 精準交易` (`focus`): Keeps scheduled briefings and real-time portfolio defenses on, while muting intraday market scanner noise.
       - `🔕 盤中靜音` (`mute_intraday`): Only allows pre/post briefings and margin alerts.
   - **Polymarket Parameter Separation**: Non-boolean account configs (`polymarket_threshold`, `polymarket_use_llm`, `polymarket_slippage`) are cleanly placed in `/settings` (`AccountSettingsView`), keeping `/notif_settings` pure and focused on notification channels.
-  - **100% Backward-Compatible Alias Engine**: Queries or updates using legacy keys (e.g. `hb_options_structure`, `ddp_alert`, `profit_lock_alert`) are transparently resolved to their new consolidated counterparts via `LEGACY_KEY_ALIASES`.
+  - **100% Backward-Compatible Alias Engine**: Queries or updates using legacy keys (e.g. `hb_options_structure`, `ddp_alert`, `profit_lock_alert`, `wti_oil_alert`, `oil_alert`) are transparently resolved to their new consolidated counterparts via `LEGACY_KEY_ALIASES`.
 
 ### 2. UI Component Pipeline (`cogs/settings_ui.py` & `cogs/terminal.py`)
 Both `/settings` and `/notif_settings` (defined in `cogs/terminal.py`) utilize ephemeral Discord Views defined in `cogs/settings_ui.py`. Interactive flows are built as follows:
@@ -613,16 +614,54 @@ The platform features an automated **Dynamic Rollover Engine** (`market_analysis
 
 ---
 
+## WTI Crude Oil Price Alert System (Commodity Intelligence)
+
+### 1. Dual-Trigger Gating Architecture (`wti_monitor.py`)
+To prevent blind spots during high-impact geopolitical turbulence and inflation shocks, Nexus Seeker includes a dedicated 24/7 background scheduler for **WTI Crude Oil Futures (`CL=F`)**:
+- **30-Minute Polling Loop**: Dispatches every 30 minutes at `:00` and `:30` past each hour across all 24 hours.
+- **Overnight Quiet Hours Guard (00:00–06:00 ET)**: Automatically silences DM notifications during overnight hours to protect trader sleep schedules.
+- **Dual Trigger Conditions**:
+  1. **Absolute Price Thresholds**: User-defined `upper_price` (e.g., `$95.00` inflation spike / breakout alert) and `lower_price` (e.g., `$65.00` recession breakdown alert).
+  2. **30-Minute Rolling % Volatility**: Triggers `PCT_SURGE` or `PCT_PLUNGE` when $|(Price_t - Price_{t-30m}) / Price_{t-30m}| \ge pct\_change\_threshold$ (default `±3.0%`).
+- **KV Cache Anti-Spam Deduplication**: Implements daily rate-limiting keys (`wti_alert_{uid}_{YYYYMMDD}_{alert_type}`) to ensure a maximum of **one alert per trigger type, per user, per day**.
+
+### 2. Multi-Dimensional Quant & Geopolitical Engine (`market_analysis/wti_analysis.py`)
+When triggered, `analyze_wti()` executes an end-to-end analytical pipeline without LLM latency:
+- **Technical Indicator Panel (`WtiTechnicals`)**: Calculates RSI(14), MA20, MA50, MA200, ATR(14), daily % change, weekly % change, and 5-level technical trend (`STRONG_BULLISH`, `BULLISH`, `NEUTRAL`, `BEARISH`, `STRONG_BEARISH`).
+- **Energy Correlated Stock Matrix**: Concurrently fetches real-time quotes and daily performance for major energy proxies (`XLE`, `XOM`, `CVX`, `OXY`, `SLB`, `USO`), automatically tagging whether the user holds them in `portfolio` (`[HOLDING]`) or tracks them in `watchlist` (`[WATCH]`).
+- **Geopolitical & OPEC Event Radar**: Dynamically scans high-impact economic/macro calendar events for oil-sensitive keywords (`OPEC`, `crude`, `sanctions`, `EIA`, `drilling`, `Middle East`, `SPR`).
+- **Risk Engine Alignment**: Scales the portfolio oil risk multiplier:
+  - $Price < \$75 \to 1.00\times$ (Safe zone, full seller risk limits)
+  - $\$75 \le Price < \$85 \to 0.90\times$ (Mild compression, seller exposure tightened 10%)
+  - $\$85 \le Price < \$95 \to 0.70\times$ (Moderate compression, seller exposure tightened 30%)
+  - $Price \ge \$95 \to 0.50\times$ (Severe compression 🚨, seller limits halved)
+
+### 3. Strict Field-Based + ANSI Container Presentation (`create_wti_alert_embed`)
+Adheres 100% to the Nexus Seeker field-based embed architecture:
+- `embed.description = None` (Zero loose markdown noise in body).
+- All 4 logical sections are placed in `field.name` with values strictly encapsulated in ````ansi\n...\n```` codeblocks:
+  1. `🚨 觸發事件與即時遙測`: Spot price, threshold value, 30m delta, and colored direction badge (`突破上限`, `跌破下限`, `劇烈飆漲`, `劇烈暴跌`).
+  2. `📊 技術結構與量化指標`: ANSI tree structure showing RSI(14), MA20/50/200, ATR(14), daily/weekly %, and trend.
+  3. `⛽ 能源板塊關聯股衝擊`: ASCII table of `XLE`, `XOM`, `CVX`, `OXY`, `SLB`, `USO` with ANSI color coding and portfolio badges.
+  4. `🛡️ 投資組合風險與總經事件`: Risk weight multiplier, operational directives, and upcoming OPEC/geopolitical events.
+
+### 4. Interactive Configuration (`/wti_config` & `/notif_settings`)
+- `/wti_config`: Direct modal popup (`WtiConfigModal`) allowing users to update upper price, lower price, and 30-min volatility threshold on the fly.
+- `/notif_settings`: Governed by canonical channel `alpha_wti_oil` under the **🎯 Alpha 策略與情報** module, with full legacy alias resolution (`wti_oil_alert`, `oil_alert`).
+
+---
+
 ## Core Modules to Know
 
 - `nexus_core/bot.py` — bot bootstrap, DM queue, service lifecycle
 - `nexus_core/cogs/trading.py` — active runtime scheduler and watchlist heartbeat sender
+- `nexus_core/cogs/trading/wti_monitor.py` — 24/7 background WTI crude oil price monitor loop
 - `nexus_core/cogs/analyst_agent.py` — analyst report scheduler and dispatcher
 - `nexus_core/cogs/order_ui.py` — active orders entrypoints
 - `nexus_core/cogs/order_views.py` — interactive list views and telemetry alignment buttons
 - `nexus_core/cogs/order_modals.py` — cancellation/adjustment modals
-- `nexus_core/cogs/settings_ui.py` — interactive account and notification settings views and modals
-- `nexus_core/cogs/terminal.py` — terminal command entrypoints (including settings and runway analysis)
+- `nexus_core/cogs/settings_ui.py` — interactive account, notification settings views, and WtiConfigModal
+- `nexus_core/cogs/terminal.py` — terminal command entrypoints (including settings, runway analysis, and `/wti_config`)
 - `nexus_core/cogs/unified_terminal/` — modular trader terminal and radar hubs (`cog.py`, `symbol_view.py`, `portfolio_view.py`, `batch_scan_view.py`, `pulse_view.py`, `utils.py`)
 - `nexus_core/cogs/calendar.py` — upgraded macro and earnings calendar command with event caching
 - `nexus_core/cogs/cc_recovery.py` — filter and display optimal OTM Covered Call contracts
@@ -630,9 +669,11 @@ The platform features an automated **Dynamic Rollover Engine** (`market_analysis
 - `nexus_core/cogs/intelligence.py` — Market Intelligence & Edge Detection Terminal (news, reddit, polymarket)
 - `nexus_core/cogs/hedging.py` — automated hedging tracking and settlement interface
 - `nexus_core/database/orders.py` — active orders SQLite database state CRUD operations
+- `nexus_core/database/wti_config.py` — WTI alert user configuration model and kv_cache CRUD
 - `nexus_core/database/migrations/v038_add_active_orders.py` — migration registering the active_orders table in SQLite
 - `nexus_core/database/migrations/v047_remediate_missing_structures.py` — migration remediating/adding economic calendar columns consensus_value and fedwatch_probability
 - `nexus_core/database/migrations/v048_add_escape_window_settings.py` — migration adding escape window configuration columns to user settings
+- `nexus_core/market_analysis/wti_analysis.py` — WTI crude oil technicals, energy correlation, and event analysis engine
 - `nexus_core/market_analysis/intraday_pipeline.py` — watchlist evaluation, option-plan logic, intraday engine helpers
 - `nexus_core/market_analysis/index_microstructure.py` — market regime determination (SHORT_GAMMA_CRITICAL) using VIX, VIX3M, and zero-gamma line GEX
 - `nexus_core/market_analysis/sentiment_engine.py` — Facade entrypoint for skew / UOA / IV stack
@@ -654,6 +695,7 @@ The platform features an automated **Dynamic Rollover Engine** (`market_analysis
 - `nexus_core/market_analysis/scenario_classifier.py` — Event-driven quantitative scenario classifier (6 market scenarios including Whale Escort Resonance)
 - `nexus_core/database/watchlist.py` — Database CRUD operations for user watchlist symbols (100% deterministic rule-based zero-LLM architecture)
 - `nexus_core/database/migrations/v039_add_notification_toggles.py` — migration registering the user_notification_settings table in SQLite
+- `nexus_core/tests/unit/test_wti_alert.py` — unit tests for WTI crude oil price alert system, technicals, and embed rendering
 - `nexus_core/tests/unit/test_intraday_pipeline.py` — heartbeat and phase-B gating tests
 - `nexus_core/tests/unit/test_embed_builder.py` — embed contract tests
 - `nexus_core/tests/unit/test_output_centralization.py` — embed-centralization enforcement

@@ -1293,6 +1293,19 @@ class TerminalCog(commands.Cog):
         embed = view.build_embed()
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
+    @app_commands.command(
+        name="wti_config",
+        description="🛢️ 設定 WTI 原油價格警報閾值 (上限/下限/30分波動%)",
+    )
+    async def wti_config(self, interaction: discord.Interaction) -> Any:
+        """喚起 WTI 原油警報閾值設定彈窗"""
+        from database.wti_config import get_wti_config
+        from cogs.settings_ui import WtiConfigModal
+
+        config = await get_wti_config(interaction.user.id)
+        modal = WtiConfigModal(config)
+        await interaction.response.send_modal(modal)
+
     async def _execute_verify_thesis_logic(
         self,
         interaction: discord.Interaction | None,

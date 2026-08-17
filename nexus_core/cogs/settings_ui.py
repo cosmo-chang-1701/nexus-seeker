@@ -49,10 +49,11 @@ TRADING_MODULES: Dict[str, Dict[str, Any]] = {
     },
     "alpha": {
         "title": "🎯 Alpha 策略與情報",
-        "description": "即時捕捉 Nexus 量化 Alpha 機會與 Polymarket 巨鯨動向。",
+        "description": "即時捕捉 Nexus 量化 Alpha 機會、Polymarket 巨鯨與原油異動。",
         "items": {
             "alpha_market_signals": "✨ Nexus 戴維斯雙擊 (DDP) 與波動率優勢 (廉價期權)",
             "alpha_polymarket": "🐳 Polymarket 巨鯨異動與預測機率突變 (Delta 閃崩/暴拉)",
+            "alpha_wti_oil": "🛢️ WTI 原油價格警報 (閾值突破與劇烈波動)",
         },
     },
 }
@@ -602,3 +603,76 @@ class AccountSettingsView(discord.ui.View):
             title="編輯自選標籤", message="請從下方選單選擇一個自選標的來編輯它的標籤。"
         )
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+
+class WtiConfigModal(discord.ui.Modal, title="🛢️ WTI 原油價格警報閾值設定"):
+    """WTI 油價警報用戶閾值設定 Modal。"""
+
+    upper: discord.ui.TextInput = discord.ui.TextInput(
+        label="價格上限 (美元，留空表示不限制)",
+        placeholder="例如: 95.00",
+        required=False,
+        max_length=10,
+    )
+    lower: discord.ui.TextInput = discord.ui.TextInput(
+        label="價格下限 (美元，留空表示不限制)",
+        placeholder="例如: 65.00",
+        required=False,
+        max_length=10,
+    )
+    pct: discord.ui.TextInput = discord.ui.TextInput(
+        label="30 分鐘波動閾值 (%)",
+        placeholder="例如: 3.0",
+        required=False,
+        max_length=10,
+    )
+
+    def __init__(self, current: Any) -> None:
+        super().__init__()
+        if current.upper_price is not None:
+            self.upper.default = str(current.upper_price)
+        if current.lower_price is not None:
+            self.lower.default = str(current.lower_price)
+        self.pct.default = str(current.pct_change_threshold)
+
+    async def on_submit(self, interaction: discord.Interaction) -> Any:
+        from database.wti_config import WtiAlertConfig, save_wti_config
+        from cogs.embed_builders._core import NexusEmbed
+        from pydantic import ValidationError
+
+        try:
+            upper_val = (
+                float(self.upper.value.strip()) if self.upper.value.strip() else None
+            )
+            lower_val = (
+                float(self.lower.value.strip()) if self.lower.value.strip() else None
+            )
+            pct_val = float(self.pct.value.strip()) if self.pct.value.strip() else 3.0
+
+            config = WtiAlertConfig(
+                upper_price=upper_val,
+                lower_price=lower_val,
+                pct_change_threshold=pct_val,
+            )
+            await save_wti_config(interaction.user.id, config)
+
+            desc_parts: list[str] = [
+                f"• 上限價格: `{f'${config.upper_price:.2f}' if config.upper_price is not None else '未設定'}`",
+                f"• 下限價格: `{f'${config.lower_price:.2f}' if config.lower_price is not None else '未設定'}`",
+                f"• 30分波動: `±{config.pct_change_threshold:.1f}%`",
+                "\n💡 當 WTI 期貨 (`CL=F`) 觸發以上條件時，系統將主動發送富含技術指標與關聯股分析的戰術情報卡片。",
+            ]
+
+            embed = NexusEmbed(
+                title="✅ WTI 原油價格警報閾值已更新",
+                description="\n".join(desc_parts),
+                color=discord.Color.green(),
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        except (ValueError, ValidationError) as e:
+            embed = NexusEmbed(
+                title="❌ 輸入格式錯誤",
+                description=f"請輸入有效的數值格式 (例如 95.00 或 3.0)。\n詳細錯誤: `{e}`",
+                color=discord.Color.red(),
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)

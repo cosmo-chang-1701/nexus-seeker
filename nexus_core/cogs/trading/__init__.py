@@ -18,6 +18,7 @@ async def setup(bot):  # type: ignore
     from cogs.trading.after_market import setup as setup_after_market
     from cogs.trading.admin_commands import setup as setup_admin
     from cogs.trading.scanner_commands import setup as setup_scanner
+    from cogs.trading.wti_monitor import setup as setup_wti_monitor
 
     # MarketScanCog must be added before SchedulerCog so get_cog("MarketScanCog") works
     await setup_scan(bot)
@@ -28,3 +29,4 @@ async def setup(bot):  # type: ignore
     await setup_after_market(bot)
     await setup_admin(bot)
     await setup_scanner(bot)
+    await setup_wti_monitor(bot)

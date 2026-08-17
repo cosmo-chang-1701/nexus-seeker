@@ -112,6 +112,7 @@ ALL_NOTIFICATION_KEYS: list[str] = [
     # 4. 🎯 Alpha 策略與情報 (Alpha & Intelligence)
     "alpha_market_signals",
     "alpha_polymarket",
+    "alpha_wti_oil",
 ]
 
 # 舊版 Key 映射字典，確保向下相容
@@ -132,11 +133,13 @@ LEGACY_KEY_ALIASES: dict[str, str] = {
     "deadlock_recovery_alert": "defense_option_rollover",
     "volatility_risk_alert": "defense_macro_tail_risk",
     "vix_tail_risk_alert": "defense_macro_tail_risk",
-    # Alpha & Polymarket
+    # Alpha & Polymarket & Commodities
     "ddp_alert": "alpha_market_signals",
     "volatility_alert": "alpha_market_signals",
     "polymarket_whale_alert": "alpha_polymarket",
     "polymarket_prob_shift_alert": "alpha_polymarket",
+    "wti_oil_alert": "alpha_wti_oil",
+    "oil_alert": "alpha_wti_oil",
     # Obsolete Radar filters alias to alpha/defense
     "radar_macro_edge": "defense_macro_tail_risk",
     "radar_alpha_signals": "alpha_market_signals",
@@ -163,6 +166,7 @@ PRESET_PROFILES: dict[str, dict[str, bool]] = {
         "defense_macro_tail_risk": True,
         "alpha_market_signals": False,
         "alpha_polymarket": False,
+        "alpha_wti_oil": False,
     },
     "mute_intraday": {
         "briefing_pre_market": True,
@@ -175,6 +179,7 @@ PRESET_PROFILES: dict[str, dict[str, bool]] = {
         "defense_macro_tail_risk": True,
         "alpha_market_signals": False,
         "alpha_polymarket": False,
+        "alpha_wti_oil": False,
     },
 }
 

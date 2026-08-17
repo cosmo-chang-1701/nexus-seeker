@@ -14,7 +14,8 @@ Nexus Seeker 是一個 **Discord-first 的多租戶選擇權風控與交易營�
 ## ✨ 核心特色 (Key Features)
 
 - **自動化戰場心跳 (Watchlist Heartbeat)**：盤中每半小時主動推送自選標的之技術與期權快照，預設完整整合 UOA 巨鯨異動大單、暗池 (Dark Pool) 磁吸點位（已整合 5% 髒數據過濾）、100% 確定性量化 Skew 解析與動態買賣定價指引。
-- **4 大戰術維度通知中樞與快捷情境 (Tactical Notifications & 1-Click Presets)**：`/notif_settings` 全面收斂為 4 大戰術維度（定時戰報、盤中遙測、持倉防禦、Alpha 策略）與 10 大核心通知頻道，並提供「🛡️ 戰備全開」、「🎯 精準交易」、「🔕 盤中靜音」三大 1-Click Preset 情境模式，徹底告別零碎雜訊。
+- **4 大戰術維度通知中樞與快捷情境 (Tactical Notifications & 1-Click Presets)**：`/notif_settings` 全面收斂為 4 大戰術維度（定時戰報、盤中遙測、持倉防禦、Alpha 策略）與 11 大核心通知頻道（含全新 `alpha_wti_oil`），並提供「🛡️ 戰備全開」、「🎯 精準交易」、「🔕 盤中靜音」三大 1-Click Preset 情境模式，徹底告別零碎雜訊。
+- **WTI 原油價格警報與大宗商品情報 (WTI Crude Oil Alert & Commodity Intelligence)**：支援全天候 30 分鐘原油期貨 (`CL=F`) 輪詢，具備「絕對價格上下限」與「30 分鐘波動 %」雙軌觸發機制。嚴格遵循 100% Field-Based + ANSI 代碼塊排版規範，即時整合技術指標 (RSI, MA20/50/200, ATR)、能源關聯股衝擊 (`XLE`, `XOM`, `CVX`, `OXY`, `SLB`, `USO` 自動標註持倉與自選)、地緣政治事件 (OPEC+, EIA, 制裁) 與投資組合風險權重壓縮。支援 `/notif_settings` 與 `/wti_config` 互動式 Modal 配置，具備 00:00–06:00 ET 深夜靜默保護與每日 KV Cache 防重複去重。
 - **盤後綜合風險與 AI 策略報告 (Post-Market Intelligence)**：每日收盤後主動推送盤後結算報告，全面支援**現貨持倉 (`HOLDING`) 與期權 (`TRADE`) 混合結算**。搭載 Target Center 2.0 樹狀 ANSI 儀表板、財務生存跑道 (Financial Runway)、對沖績效 Brinson 歸因 (OPTIMAL 狀態標註)、板塊焦點矩陣 (Top Inflows vs Outflows) 與 100% 現金空狀態行動引導。
 - **戰場情境轉折警報與進階雷達 (Market Scenario & Advanced Radar)**：整合獨立事件驅動引擎（6 階 GEX 決策矩陣，新增「巨鯨護航共振」）與進階雷達過濾器 (UOA Barrier, Gravity Filter, Divergence Gate)。全新量化雷達支援 `G/P-Wall(±)`（完整展示頂部 Call Wall 與底牆 Put Wall，支援現價跌破負 Gamma 動態極性連動與 N/A 容錯退路）、`IV 策略` 負 Gamma 踩踏區風控熔斷（強制阻斷賣方開倉並標記 `🔴賣方禁售`）、標的偏離度 `⚠️` 強視覺連動、`Skw%`（真實期權偏斜數值與歷史分位點）、`SQZ向量`（動能數值、方向與擠壓計時器，連動 UOA Barrier 硬封頂降級）、`Neg-GEX`、`STO 鎖死`（Short-to-Open 關鍵履約價鎖死）、`EM Z-Score`、`Top UOA` 單一最強巨鯨異動大單、暗池 $\ge \$5\text{M}$ 大宗水泥牆買盤警示，並具備 **$PutWall - 1.5 \times ATR_{14}$ 防洗盤絕對防守位**、15 分鐘實體 K 線收盤離場鐵律與多維度灰階戰術決策樹（多重正 Gamma 護航網支撐現貨續抱），精準防範二元停損與盲目接刀。
 - **動態轉倉與防洗盤風控 (Dynamic Rollover & Anti-Washout Defense)**：搭載全新「防洗盤動態停損引擎」與「GEX 做市商意圖映射引擎」，動態鎖定支撐錨定牆並給予 1.5x 15m ATR 緩衝；現貨 (SPOT) 必須經 15 分鐘實體 K 線跌破才確認清倉（高 IVR 啟動收盤價防守），選擇權合約 (OPTIONS) 則於高 IVR 啟動降槓桿平倉。支援透過 `/verify_thesis` 手動觸發，並新增**互動式 SEC 財報選擇介面**，讓使用者自由選擇近期 (10-K, 10-Q, 8-K) 進行分析。Edge Scraper 現具備 **SEC 財報結構化區塊擷取** 能力，若基本面破滅，將無條件攔截量化買入訊號，強制執行清算與轉倉。
@@ -157,7 +158,8 @@ docker compose up -d --build
 透過 Discord 頻道輸入斜線指令即可與機器人互動：
 
 - **`/settings`**：帳戶全域參數配置中心（資本、風險上限設定、虛擬交易室、Polymarket 巨鯨門檻與 AI 分析開關等）。
-- **`/notif_settings`**：戰術型通知管理中控台，支援以 4 大戰術維度（定時戰報、盤中遙測、持倉防禦、Alpha 策略）自訂 10 項核心通知頻道，並提供 3 大 1-Click Preset 模式（🛡️ 戰備全開、🎯 精準交易、🔕 盤中靜音）。
+- **`/notif_settings`**：戰術型通知管理中控台，支援以 4 大戰術維度（定時戰報、盤中遙測、持倉防禦、Alpha 策略）自訂 11 項核心通知頻道（含 WTI 原油價格警報），並提供 3 大 1-Click Preset 模式（🛡️ 戰備全開、🎯 精準交易、🔕 盤中靜音）。
+- **`/wti_config`**：🛢️ WTI 原油價格警報閾值設定彈窗，隨時配置上限價格、下限價格與 30 分鐘波動百分比（支援留空無限制）。
 - **`/x`**：批次量化雷達掃描，支援統一雷達面板進行多層次過濾 (現已升級為高 Alpha 精簡 Markdown 報表，直擊 G/P-Wall(±) 動態極性與 N/A 容錯、IV 策略負 Gamma 熔斷、⚠️ 異常標的視覺連動、Skw%、SQZ向量、Neg-GEX、STO 鎖死、EM Z-Score 與 Top UOA)。
 - **`/dash`**：交易員主控板，檢視持倉、備用流動性與極限跑道天數。
 - **`/stress_test`**：委託單壓力測試與現金赤字警報。
