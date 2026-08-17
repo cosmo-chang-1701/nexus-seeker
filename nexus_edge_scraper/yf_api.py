@@ -11,9 +11,14 @@ async def scrape_yf_history(
 ) -> Dict[str, Any]:
     try:
         ticker = yf.Ticker(symbol)
-        df = ticker.history(
-            period=period, interval=interval, auto_adjust=True, repair=True
-        )
+        try:
+            df = ticker.history(
+                period=period, interval=interval, auto_adjust=True, repair=True
+            )
+        except Exception:
+            df = ticker.history(
+                period=period, interval=interval, auto_adjust=True, repair=False
+            )
         if df is None or df.empty:
             return {"status": "error", "data": "empty"}
 

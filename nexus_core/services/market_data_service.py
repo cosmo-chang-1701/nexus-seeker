@@ -223,17 +223,34 @@ async def _safe_yf_history(
     period: str,
     interval: Optional[str] = None,
 ) -> Optional[pd.DataFrame]:
-    """安全包裝 yfinance history，並加入 Edge 節點優雅降級。"""
+    """安全包裝 yfinance history，加入 repair 容錯與 Edge 節點優雅降級。"""
 
     df = None
     try:
-        kwargs = {"period": period, "auto_adjust": True, "repair": True}
+        kwargs: dict[str, Any] = {
+            "period": period,
+            "auto_adjust": True,
+            "repair": True,
+        }
         if interval is not None:
             kwargs["interval"] = interval
 
         df = await asyncio.to_thread(ticker.history, **kwargs)
     except Exception as e:
-        logger.warning(f"yfinance history 直接呼叫失敗: {e}")
+        logger.warning(
+            f"yfinance history (repair=True) 失敗: {e}，嘗試降級使用 repair=False 重試..."
+        )
+        try:
+            kwargs_fallback: dict[str, Any] = {
+                "period": period,
+                "auto_adjust": True,
+                "repair": False,
+            }
+            if interval is not None:
+                kwargs_fallback["interval"] = interval
+            df = await asyncio.to_thread(ticker.history, **kwargs_fallback)
+        except Exception as e2:
+            logger.warning(f"yfinance history 直接呼叫失敗: {e2}")
 
     if df is None or getattr(df, "empty", True):
         # 降級方案：透過 Edge 節點抓取

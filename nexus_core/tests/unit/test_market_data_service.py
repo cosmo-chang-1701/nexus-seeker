@@ -499,3 +499,103 @@ async def test_get_vix_term_structure_exception() -> None:
         assert res["is_valid"] is False
         assert res["vts_ratio"] == 0.0
         assert res["vts_state"] == "UNKNOWN"
+
+
+@pytest.mark.asyncio
+async def test_safe_yf_history_success_with_repair() -> None:
+    """Test _safe_yf_history returns DataFrame directly when repair=True succeeds."""
+    import pandas as pd
+    from services.market_data_service import _safe_yf_history
+
+    mock_df = pd.DataFrame(
+        {"Close": [150.0], "Open": [148.0]},
+        index=pd.to_datetime(["2026-08-17"]),
+    )
+    mock_ticker = MagicMock()
+    mock_ticker.ticker = "AAPL"
+    mock_ticker.history = MagicMock(return_value=mock_df)
+
+    res = await _safe_yf_history(mock_ticker, period="2d")
+    assert res is not None
+    assert not res.empty
+    assert res.iloc[0]["Close"] == 150.0
+    mock_ticker.history.assert_called_once_with(
+        period="2d", auto_adjust=True, repair=True
+    )
+
+
+@pytest.mark.asyncio
+async def test_safe_yf_history_fallback_when_repair_raises_sklearn_missing() -> None:
+    """Test _safe_yf_history gracefully retries with repair=False if repair=True raises ModuleNotFoundError."""
+    import pandas as pd
+    from services.market_data_service import _safe_yf_history
+
+    mock_df = pd.DataFrame(
+        {"Close": [200.0], "Open": [198.0]},
+        index=pd.to_datetime(["2026-08-17"]),
+    )
+    mock_ticker = MagicMock()
+    mock_ticker.ticker = "TSLA"
+    # First call with repair=True raises ModuleNotFoundError, second with repair=False succeeds
+    mock_ticker.history = MagicMock(
+        side_effect=[
+            ModuleNotFoundError("No module named 'sklearn'"),
+            mock_df,
+        ]
+    )
+
+    res = await _safe_yf_history(mock_ticker, period="5d", interval="1d")
+    assert res is not None
+    assert not res.empty
+    assert res.iloc[0]["Close"] == 200.0
+    assert mock_ticker.history.call_count == 2
+    mock_ticker.history.assert_any_call(
+        period="5d", auto_adjust=True, repair=True, interval="1d"
+    )
+    mock_ticker.history.assert_any_call(
+        period="5d", auto_adjust=True, repair=False, interval="1d"
+    )
+
+
+@pytest.mark.asyncio
+async def test_safe_yf_history_fallback_to_edge_when_both_fail() -> None:
+    """Test _safe_yf_history falls back to Edge tunnel scraper when all direct yfinance calls fail."""
+    from services.market_data_service import _safe_yf_history
+
+    mock_ticker = MagicMock()
+    mock_ticker.ticker = "NVDA"
+    mock_ticker.history = MagicMock(
+        side_effect=[
+            Exception("Direct 403 Forbidden"),
+            Exception("Direct 403 Forbidden"),
+        ]
+    )
+
+    mock_edge_response = MagicMock()
+    mock_edge_response.status_code = 200
+    mock_edge_response.json.return_value = {
+        "status": "success",
+        "data": [
+            {
+                "Date": "2026-08-17 00:00:00+00:00",
+                "Open": 120.0,
+                "High": 125.0,
+                "Low": 119.0,
+                "Close": 124.0,
+                "Volume": 50000,
+            }
+        ],
+    }
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=mock_edge_response)
+    mock_client_cls = MagicMock()
+    mock_client_cls.return_value.__aenter__.return_value = mock_client
+
+    with patch("config.TUNNEL_URL", "http://edge-node:8000"), patch(
+        "httpx.AsyncClient", mock_client_cls
+    ):
+        res = await _safe_yf_history(mock_ticker, period="1mo", interval="1d")
+        assert res is not None
+        assert not res.empty
+        assert res.iloc[0]["Close"] == 124.0

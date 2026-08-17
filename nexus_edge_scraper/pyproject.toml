@@ -20,6 +20,7 @@ dependencies = [
     "psutil",
     "pandas",
     "yfinance",
+    "scikit-learn>=1.3.0",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "pytest-mock>=3.12.0",
@@ -56,6 +57,7 @@ module = [
     "pandas.*",
     "fastapi.*",
     "psutil.*",
+    "sklearn.*",
 ]
 ignore_missing_imports = true
 
