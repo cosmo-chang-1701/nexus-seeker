@@ -8,8 +8,6 @@ from market_analysis.gamma_cliff_confirmation import is_gamma_cliff_confirmed
 from market_analysis.ivr_strategy_gate import is_selling_locked_by_ivr
 from database.user_settings import get_full_user_context
 from market_analysis.sentiment.history_storage import get_indicator_percentile
-import sqlite3
-import config
 
 logger = logging.getLogger(__name__)
 
@@ -312,37 +310,88 @@ class DynamicRolloverEngine:
             "markdown_report": markdown_report.strip(),
         }
 
-    def _find_best_rollover_target(self) -> str:
-        """掃描快取尋找下一個高 EV 衛星標的，若無則回傳 VOO"""
-        conn = None
+    def _calculate_ev_proxy(self, symbol: str) -> float:
+        """
+        EV 代理值：以快取的 expected_move_upper 相對現貨的正規化上緣空間作為期望值近似。
+        ev = (expected_move_upper - reference_spot_price) / reference_spot_price
+        僅使用 market_cache（Cache-Aside），零額外 API 呼叫。
+        is_stale 或 is_degraded 的快取視為不可信，回傳 0.0。
+        """
+        from database.market_cache import get_market_cache
+
+        row = get_market_cache(symbol)
+        if not row or row.get("is_stale") or row.get("is_degraded"):
+            return 0.0
+        spot = float(row.get("reference_spot_price") or 0.0)
+        upper = float(row.get("expected_move_upper") or 0.0)
+        if spot <= 0.0:
+            return 0.0
+        return (upper - spot) / spot
+
+    def _find_best_rollover_target(
+        self, user_id: int, exclude_symbols: Optional[set] = None
+    ) -> str:
+        """掃描使用者 Watchlist 與 market_cache 快取尋找下一個高 EV 衛星標的，若無則回傳 VOO"""
+        from database.watchlist import get_user_watchlist
+
+        exclude = {s.upper() for s in (exclude_symbols or set())} | {
+            "QQQ",
+            "SPY",
+            "VOO",
+            "VXX",
+            "IVV",
+            "VTI",
+        }
         try:
-            conn = sqlite3.connect(config.DB_NAME)
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-
-            cursor.execute(
-                "SELECT symbol, max_pain, expected_move_lower, expected_move_upper FROM market_cache"
-            )
-            rows = cursor.fetchall()
-
-            for row in rows:
-                sym = row["symbol"]
-                if sym in ["QQQ", "SPY", "VOO", "VXX"]:
-                    continue
-                # 此處應整合各項指標掃描 (IVR < 30%, EV > 0.05 等)，
-                # 簡化起見，實作上可與 SentimentEngine 或 intraday_pipeline 的 radar cache 連動。
-                # 目前假設若資料齊全且符合初步過濾則視為標的：
-                # (此為架構骨架，後續可接上真實的 Screener)
-                # 假設有抓到，回傳該 sym
-                pass
-
-            return "VOO"
+            watchlist = get_user_watchlist(user_id)
         except Exception as e:
-            logger.error(f"尋找 Rollover Target 失敗: {e}")
+            logger.error(f"取得 user {user_id} watchlist 失敗: {e}")
             return "VOO"
-        finally:
-            if conn:
-                conn.close()
+
+        best_symbol = "VOO"
+        best_ev = 0.05  # 沿用原始程式碼註解中的門檻 "EV > 0.05"
+        for sym, _ in watchlist:
+            sym_u = str(sym).upper()
+            if sym_u in exclude:
+                continue
+            ev = self._calculate_ev_proxy(sym_u)
+            if ev > best_ev:
+                best_ev = ev
+                best_symbol = sym_u
+        return best_symbol
+
+    def _normalize_power_squeeze(self, psq: Dict[str, Any]) -> float:
+        """
+        將 analyze_psq() 產生的 PSQResult (dict 形式，如 radar cache 中的 psq_result)
+        正規化為 0-100 的 PowerSqueeze 分數，供 evaluate_opportunity_cost() 使用。
+        重用既有的 squeeze_level / signal_direction / momentum_color / is_breakout_long/short
+        分級，而非發明新的量化門檻。
+        """
+        level = str(psq.get("squeeze_level", "Normal"))
+        direction = str(psq.get("signal_direction", "Neutral"))
+        mom_color = str(psq.get("momentum_color", "Neutral"))
+        is_bullish = direction == "Long" or mom_color in ("LightBlue", "Golden")
+        is_bearish = direction == "Short" or mom_color in ("Red", "DarkBlue")
+
+        table = {
+            "Release": {"neutral": 10.0, "bull": 75.0, "bear": 5.0},
+            "Normal": {"neutral": 30.0, "bull": 40.0, "bear": 20.0},
+            "Mid": {"neutral": 60.0, "bull": 70.0, "bear": 45.0},
+            "High": {"neutral": 50.0, "bull": 90.0, "bear": 10.0},
+        }
+        bucket = table.get(level, table["Normal"])
+        score = (
+            bucket["bull"]
+            if is_bullish
+            else (bucket["bear"] if is_bearish else bucket["neutral"])
+        )
+
+        if psq.get("is_breakout_long"):
+            score = max(score, 95.0)
+        elif psq.get("is_breakout_short"):
+            score = min(score, 5.0)
+
+        return float(max(0.0, min(100.0, score)))
 
     async def evaluate_fundamental_thesis(
         self, symbol: str, fundamental_text: str
@@ -498,6 +547,312 @@ class DynamicRolloverEngine:
             "strategy": "N/A",
             "reason": "No action required.",
         }
+
+    async def evaluate_opportunity_cost_for_satellites(
+        self,
+        user_id: int,
+        portfolio_assets: List[Dict[str, Any]],
+        already_flagged_symbols: set,
+        candidate_symbol: str,
+        candidate_radar: Optional[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """
+        邏輯 (2) 批次橋接：對每一個尚未被 Scenario 3 標記的 SATELLITE 持倉，
+        比對其 PowerSqueeze/EV 與單一預篩選候選標的 (candidate_symbol) 的機會成本，
+        產生與 check_satellite_rebalancing 相同結構的 instruction dict。
+
+        candidate_radar: 由呼叫端 (cog 層) 預先透過既有 radar 抓取機制取得的單一候選標的資料，
+        純資料 dict，避免 market_analysis 層依賴 cogs。
+        """
+        instructions: List[Dict[str, Any]] = []
+        if candidate_symbol == "VOO" or not candidate_radar:
+            return instructions  # 沒有找到高 EV 候選標的，不強制轉倉
+
+        target_psq = candidate_radar.get("psq_result", {}) or {}
+        target_power_squeeze = self._normalize_power_squeeze(target_psq)
+        target_expected_value = self._calculate_ev_proxy(candidate_symbol)
+        target_spot = float(
+            candidate_radar.get("quote", {}).get("c", 0.0)
+            if candidate_radar.get("quote")
+            else 0.0
+        )
+        target_ivr = float(
+            candidate_radar.get("iv_metrics", {}).get("iv_rank", 0.0)
+            if candidate_radar.get("iv_metrics")
+            else 0.0
+        )
+        target_put_wall = (
+            float(
+                candidate_radar.get("gex_profile_data", {}).get("put_wall", 0.0) or 0.0
+            )
+            if isinstance(candidate_radar.get("gex_profile_data"), dict)
+            else 0.0
+        )
+        target_uoa_sweep = len(candidate_radar.get("uoa", []) or []) > 0
+
+        for asset in portfolio_assets:
+            symbol = str(asset.get("symbol", "")).upper()
+            if asset.get("asset_class") != "SATELLITE":
+                continue
+            if symbol in already_flagged_symbols or symbol == candidate_symbol:
+                continue
+
+            holding_psq = asset.get("psq_result", {}) or {}
+            current_power_squeeze = self._normalize_power_squeeze(holding_psq)
+            current_ev = self._calculate_ev_proxy(symbol)
+
+            avg_cost = float(asset.get("avg_cost", 0.0))
+            spot = float(asset.get("spot_price", 0.0))
+            profit_pct = (spot - avg_cost) / avg_cost if avg_cost > 0 else 0.0
+
+            result = self.evaluate_opportunity_cost(
+                current_holding_symbol=symbol,
+                current_holding_power_squeeze=current_power_squeeze,
+                current_holding_profit_pct=profit_pct,
+                target_watchlist_symbol=candidate_symbol,
+                target_power_squeeze=target_power_squeeze,
+                target_expected_value=target_expected_value,
+                current_holding_expected_value=current_ev,
+                target_ivr=target_ivr,
+                target_uoa_sweep=target_uoa_sweep,
+                target_spot=target_spot,
+                target_put_wall=target_put_wall,
+            )
+            if not result["should_rollover"]:
+                continue
+
+            instructions.append(
+                {
+                    "symbol": symbol,
+                    "action": "LIQUIDATE"
+                    if result["rollover_ratio"] >= 1.0
+                    else "REDUCE",
+                    "sell_ratio": result["rollover_ratio"],
+                    "target_core": candidate_symbol,
+                    "reason": f"💡 **機會成本轉倉 (Opportunity Cost)**\n{result['reason']}",
+                    "suggested_strategy": result["strategy"],
+                }
+            )
+        return instructions
+
+    async def _evaluate_structural_no_edge(
+        self,
+        symbol: str,
+        spot: float,
+        put_wall: float,
+        gamma_flip: float,
+        atr_14: float,
+        sqz_mom: float,
+        skew: float,
+        price_15m_close: float,
+        gex_profile_data: Optional[Dict[str, Any]],
+        asset_class: str,
+    ) -> bool:
+        """
+        判定該持倉是否已「結構性無勝率」(結構性破位 或 主力空頭封殺)。
+        重用 check_satellite_rebalancing 既有的 anchor_wall / gamma_cliff /
+        whale STO block 門檻，不發明新的量化門檻，供 evaluate_margin_defense
+        在宏觀紅線觸發時逐一檢查每檔 SATELLITE 持倉。
+        """
+        from market_analysis.index_microstructure import classify_gex_wall
+
+        support_wall: float = 0.0
+        if (
+            gex_profile_data
+            and "gex_profile" in gex_profile_data
+            and isinstance(gex_profile_data["gex_profile"], dict)
+        ):
+            gex_prof = gex_profile_data["gex_profile"]
+            max_positive: float = 0.0
+            for _, v in gex_prof.items():
+                try:
+                    val = float(v)
+                    if val > max_positive:
+                        max_positive = val
+                except Exception:
+                    pass
+            for k, v in gex_prof.items():
+                try:
+                    val = float(v)
+                    strike = float(k)
+                    wall_type = classify_gex_wall(
+                        val, max_positive, is_heavy_otm_call=False
+                    )
+                    if wall_type == "SUPPORT_GEX_WALL" and strike > support_wall:
+                        support_wall = strike
+                except Exception:
+                    pass
+
+        anchor_base: float = (
+            support_wall
+            if support_wall > 0
+            else (
+                min(put_wall, gamma_flip)
+                if (put_wall > 0 and gamma_flip > 0)
+                else (put_wall if put_wall > 0 else gamma_flip)
+            )
+        )
+        gamma_cliff_level: float = (
+            anchor_base - (1.5 * atr_14) if anchor_base > 0 else 0.0
+        )
+
+        is_structural_breakdown_pending: bool = (
+            anchor_base > 0
+            and spot < anchor_base
+            and (price_15m_close < gamma_cliff_level or sqz_mom <= 0)
+        )
+
+        is_structural_breakdown = False
+        if asset_class == "OPTIONS":
+            if anchor_base > 0 and spot < anchor_base:
+                is_structural_breakdown = True
+        else:
+            if is_structural_breakdown_pending and gamma_cliff_level > 0:
+                is_structural_breakdown = await is_gamma_cliff_confirmed(
+                    symbol, gamma_cliff_level
+                )
+
+        is_whale_sto_block = (sqz_mom < 0.0) and (skew < -0.3)
+
+        return is_structural_breakdown or is_whale_sto_block
+
+    async def evaluate_margin_defense(
+        self, user_id: int, portfolio_assets: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        邏輯 (4): 槓桿與保證金防禦 (Leverage & Margin Defense)
+        觸發條件: 大盤 Regime 進入 SHORT_GAMMA_CRITICAL / SYSTEMIC_LIQUIDITY_CRISIS
+        (大盤宏觀風控紅線亮起：GEX Flip 實質跌破、做市商轉為負 Gamma 踩踏泥淖)，
+        且帳戶偵測到保證金壓力 (重用 /stress_test 的 GTC 現金赤字算法；
+        若無 GTC 買單造成赤字，退化為「SATELLITE 總市值 > 現金儲備」的保守代理)。
+
+        動作: 逐一檢查每檔 SATELLITE 持倉是否「結構性無勝率」(結構性破位 或 主力空頭封殺)。
+        無勝率者強制 100% 轉倉至 BOXX 鎖定無風險利息 —— 因為大盤系統性風險發生時
+        VOO 本身亦會同向下跌，唯有真正的現金等價物 BOXX 才能提供防禦；
+        仍有勝率的持倉維持不動，不強制減倉。日常的機會成本轉倉與核心衛星再平衡
+        (Scenario 2 / 3) 才以 VOO 作為預設閒置資金停泊區，兩者角色互不重疊。
+
+        此系統為現貨/純現金紙上帳戶模型，沒有真實券商槓桿或維持保證金資料，
+        因此以 /stress_test 既有的現金緩衝算法作為保證金壓力代理指標。
+        """
+        from market_analysis.index_microstructure import get_market_regime
+
+        try:
+            regime = await get_market_regime()
+        except Exception as e:
+            logger.error(f"取得市場 Regime 失敗: {e}")
+            return []
+        if regime not in ("SHORT_GAMMA_CRITICAL", "SYSTEMIC_LIQUIDITY_CRISIS"):
+            return []
+
+        # --- 保證金壓力判定 (重用 /stress_test 邏輯) ---
+        from database.orders import get_user_active_orders
+
+        try:
+            orders = get_user_active_orders(user_id)
+        except Exception:
+            orders = []
+        total_deficit = 0.0
+        for o in orders:
+            if (
+                "GTC" in str(o.get("validity", "")).upper()
+                and str(o.get("side", "")).upper() == "BUY"
+            ):
+                price = o.get("limit_price", 0.0) or o.get("stop_price", 0.0)
+                total_deficit += price * o.get("quantity", 0.0)
+
+        user_ctx = get_full_user_context(user_id)
+        buffer = user_ctx.cash_reserve if user_ctx else 0.0
+
+        if total_deficit > 0.0:
+            is_margin_critical = total_deficit > buffer
+            deficit_desc = (
+                f"GTC 買單現金赤字 ${total_deficit:,.0f} vs 現金儲備 ${buffer:,.0f}"
+            )
+        else:
+            # 退化代理：無 GTC 買單造成赤字時，以 SATELLITE 總市值 vs 現金儲備
+            # 作為「高波動衛星部位超過安全緩衝」的保守保證金壓力訊號。
+            satellite_value = sum(
+                float(a.get("current_value", 0.0))
+                for a in portfolio_assets
+                if a.get("asset_class") == "SATELLITE"
+            )
+            is_margin_critical = satellite_value > buffer
+            deficit_desc = (
+                f"SATELLITE 部位總市值 ${satellite_value:,.0f} vs 現金儲備 ${buffer:,.0f} "
+                "(無 GTC 赤字，採退化代理)"
+            )
+
+        if not is_margin_critical:
+            return []
+
+        # --- 逐一檢查所有 SATELLITE 持倉是否結構性無勝率 ---
+        CORE_ETF_SYMBOLS = {"VOO", "SPY", "QQQ", "IVV", "VTI"}
+        instructions: List[Dict[str, Any]] = []
+
+        for asset in portfolio_assets:
+            symbol = str(asset.get("symbol", "")).upper()
+            quantity = float(asset.get("quantity", 0.0))
+            if (
+                asset.get("asset_class") != "SATELLITE"
+                or symbol in CORE_ETF_SYMBOLS
+                or quantity == 0
+            ):
+                continue
+
+            instrument_type = str(
+                asset.get("instrument_type", asset.get("asset_type", "SPOT"))
+            ).upper()
+            asset_class = (
+                "OPTIONS"
+                if ("OPT" in instrument_type or "CONTRACT" in instrument_type)
+                else "SPOT"
+            )
+
+            is_no_edge = await self._evaluate_structural_no_edge(
+                symbol=symbol,
+                spot=float(asset.get("spot_price", 0.0)),
+                put_wall=float(asset.get("put_wall", 0.0)),
+                gamma_flip=float(asset.get("gamma_flip", 0.0)),
+                atr_14=float(asset.get("atr_14", 0.0)),
+                sqz_mom=float(asset.get("sqz_mom", 0.0)),
+                skew=float(asset.get("skew", 0.0)),
+                price_15m_close=float(
+                    asset.get("price_15m_close", asset.get("spot_price", 0.0))
+                ),
+                gex_profile_data=asset.get("gex_profile_data"),
+                asset_class=asset_class,
+            )
+            if not is_no_edge:
+                continue
+
+            is_short_option = (
+                "OPT" in instrument_type or "CONTRACT" in instrument_type
+            ) and quantity < 0
+            sell_action = "BTC" if is_short_option else "STC"
+
+            instructions.append(
+                {
+                    "symbol": symbol,
+                    "action": "LIQUIDATE",
+                    "sell_ratio": 1.0,
+                    "target_core": "BOXX",
+                    "reason": (
+                        f"🚨 **槓桿與保證金防禦 (Leverage & Margin Defense)**\n"
+                        f"大盤 Regime: `{regime}`\n"
+                        f"保證金壓力判定: {deficit_desc}\n"
+                        f"{symbol} 個股結構無勝率 (結構性破位 或 主力空頭封殺)，"
+                        f"大盤宏觀風控紅線亮起，VOO 亦會同向下跌無法提供防禦，"
+                        f"建議 {sell_action} 100% 部位轉倉至 BOXX 鎖定無風險利息。"
+                    ),
+                    "suggested_strategy": f"{sell_action} 100% 轉倉 BOXX (鎖定無風險利息)",
+                    "sell_action": sell_action,
+                    "buy_action_label": "轉入 BOXX（鎖定無風險利息）",
+                    "is_manual_override_required": True,
+                }
+            )
+
+        return instructions
 
     async def check_satellite_rebalancing(
         self,
@@ -689,7 +1044,14 @@ class DynamicRolloverEngine:
                     or is_euphoria
                     or is_iv_bubble
                 ):
-                    next_target = self._find_best_rollover_target()
+                    satellite_symbols = {
+                        str(a.get("symbol", "")).upper()
+                        for a in portfolio_assets
+                        if a.get("asset_class") == "SATELLITE"
+                    }
+                    next_target = self._find_best_rollover_target(
+                        user_id, exclude_symbols=satellite_symbols
+                    )
 
                     if is_euphoria:
                         user_ctx = get_full_user_context(user_id)

@@ -50,6 +50,53 @@ async def test_monitor_real_portfolio_task_uses_helpers() -> None:
 
 
 @pytest.mark.asyncio
+async def test_monitor_real_portfolio_task_no_rollover_dm_when_no_trigger() -> None:
+    """補足動態轉倉引擎後的硬性要求：三個場景 (再平衡/機會成本/保證金防禦)
+    皆未觸發時，即便持倉非空，也絕不發送任何轉倉相關 DM。"""
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+    bot.get_cog = MagicMock(
+        return_value=None
+    )  # 無 UnifiedTerminalCog -> 跳過 radar 抓取
+
+    with patch("discord.ext.tasks.Loop.start"):
+        cog = PortfolioMonitorCog(bot)
+
+    cog.trading_service.audit_real_portfolio_risk = AsyncMock(return_value=[])  # type: ignore
+
+    holding = {
+        "id": 1,
+        "user_id": 1,
+        "symbol": "NVDA",
+        "metadata": "{}",
+        "quantity": 10.0,
+        "avg_cost": 200.0,
+    }
+
+    cog.rollover_engine.check_satellite_rebalancing = AsyncMock(return_value=[])  # type: ignore
+    cog.rollover_engine.evaluate_opportunity_cost_for_satellites = AsyncMock(  # type: ignore
+        return_value=[]
+    )
+    cog.rollover_engine.evaluate_margin_defense = AsyncMock(return_value=[])  # type: ignore
+
+    with patch(
+        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
+    ), patch("database.holdings.get_all_holdings", return_value=[holding]), patch(
+        "database.watchlist.get_user_watchlist", return_value=[]
+    ), patch(
+        "market_analysis.trading_orchestration.recommend_covered_calls",
+        new_callable=AsyncMock,
+        return_value={"recommendations": []},
+    ):
+        await cog.monitor_real_portfolio_task()
+
+    cog.rollover_engine.check_satellite_rebalancing.assert_awaited_once()
+    cog.rollover_engine.evaluate_opportunity_cost_for_satellites.assert_awaited_once()
+    cog.rollover_engine.evaluate_margin_defense.assert_awaited_once()
+    bot.queue_dm.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_pre_market_risk_monitor_triggers_pre_warm() -> None:
     bot = MagicMock()
 

@@ -586,3 +586,408 @@ def test_dual_track_exit_options_vs_spot(engine: DynamicRolloverEngine) -> None:
     assert report_options["final_action"] == "LIQUIDATE"
     assert "期權雙軌快速通道觸發" in report_options["markdown_report"]
     assert "3-5m 快速通道" in report_options["markdown_report"]
+
+
+# ==========================================
+# 補足缺口測試: _find_best_rollover_target / _normalize_power_squeeze /
+# evaluate_opportunity_cost_for_satellites / evaluate_margin_defense
+# ==========================================
+
+
+@patch("database.market_cache.get_market_cache")
+@patch("database.watchlist.get_user_watchlist")
+def test_find_best_rollover_target_picks_high_ev_candidate(
+    mock_watchlist: MagicMock, mock_cache: MagicMock, engine: DynamicRolloverEngine
+) -> None:
+    mock_watchlist.return_value = [("XYZ", True)]
+    mock_cache.return_value = {
+        "reference_spot_price": 100.0,
+        "expected_move_upper": 110.0,  # EV = 0.10 > 0.05 門檻
+        "is_stale": 0,
+        "is_degraded": 0,
+    }
+    assert engine._find_best_rollover_target(1) == "XYZ"
+
+
+@patch("database.market_cache.get_market_cache")
+@patch("database.watchlist.get_user_watchlist")
+def test_find_best_rollover_target_ignores_stale_or_low_ev(
+    mock_watchlist: MagicMock, mock_cache: MagicMock, engine: DynamicRolloverEngine
+) -> None:
+    mock_watchlist.return_value = [("XYZ", True)]
+
+    # is_stale=1 -> 視為不可信快取
+    mock_cache.return_value = {
+        "reference_spot_price": 100.0,
+        "expected_move_upper": 110.0,
+        "is_stale": 1,
+        "is_degraded": 0,
+    }
+    assert engine._find_best_rollover_target(1) == "VOO"
+
+    # EV 未達 0.05 門檻
+    mock_cache.return_value = {
+        "reference_spot_price": 100.0,
+        "expected_move_upper": 102.0,
+        "is_stale": 0,
+        "is_degraded": 0,
+    }
+    assert engine._find_best_rollover_target(1) == "VOO"
+
+
+def test_find_best_rollover_target_no_watchlist_returns_voo(
+    engine: DynamicRolloverEngine,
+) -> None:
+    with patch("database.watchlist.get_user_watchlist", return_value=[]):
+        assert engine._find_best_rollover_target(1) == "VOO"
+
+
+@pytest.mark.parametrize(
+    "psq,expected",
+    [
+        (
+            {
+                "squeeze_level": "Release",
+                "signal_direction": "Neutral",
+                "momentum_color": "Neutral",
+            },
+            10.0,
+        ),
+        ({"squeeze_level": "Release", "signal_direction": "Long"}, 75.0),
+        ({"squeeze_level": "Release", "signal_direction": "Short"}, 5.0),
+        ({"squeeze_level": "Normal"}, 30.0),
+        ({"squeeze_level": "Mid", "signal_direction": "Long"}, 70.0),
+        ({"squeeze_level": "Mid", "signal_direction": "Short"}, 45.0),
+        ({"squeeze_level": "High", "signal_direction": "Long"}, 90.0),
+        ({"squeeze_level": "High", "signal_direction": "Short"}, 10.0),
+        (
+            {
+                "squeeze_level": "High",
+                "signal_direction": "Neutral",
+                "is_breakout_long": True,
+            },
+            95.0,
+        ),
+        (
+            {
+                "squeeze_level": "High",
+                "signal_direction": "Short",
+                "is_breakout_short": True,
+            },
+            5.0,
+        ),
+        ({"squeeze_level": "UnknownLevel"}, 30.0),
+    ],
+)
+def test_normalize_power_squeeze_mapping(
+    psq: dict, expected: float, engine: DynamicRolloverEngine
+) -> None:
+    assert engine._normalize_power_squeeze(psq) == expected
+
+
+@pytest.mark.asyncio
+async def test_evaluate_opportunity_cost_for_satellites_no_candidate(
+    engine: DynamicRolloverEngine,
+) -> None:
+    # candidate_symbol == "VOO" (未找到高 EV 候選標的) -> 不強制轉倉
+    result = await engine.evaluate_opportunity_cost_for_satellites(
+        1, [{"symbol": "NVDA", "asset_class": "SATELLITE"}], set(), "VOO", None
+    )
+    assert result == []
+
+    # 有候選標的但 radar 資料為空 -> 不強制轉倉
+    result2 = await engine.evaluate_opportunity_cost_for_satellites(
+        1, [{"symbol": "NVDA", "asset_class": "SATELLITE"}], set(), "SMCI", None
+    )
+    assert result2 == []
+
+
+@pytest.mark.asyncio
+@patch("database.market_cache.get_market_cache")
+async def test_evaluate_opportunity_cost_for_satellites_triggers(
+    mock_cache: MagicMock, engine: DynamicRolloverEngine
+) -> None:
+    def cache_side_effect(symbol: str, expiry: str = None):  # type: ignore
+        if symbol.upper() == "NVDA":
+            return {
+                "reference_spot_price": 200.0,
+                "expected_move_upper": 205.0,  # EV ≈ 0.025 (低)
+                "is_stale": 0,
+                "is_degraded": 0,
+            }
+        if symbol.upper() == "SMCI":
+            return {
+                "reference_spot_price": 40.0,
+                "expected_move_upper": 50.0,  # EV = 0.25 (高)
+                "is_stale": 0,
+                "is_degraded": 0,
+            }
+        return None
+
+    mock_cache.side_effect = cache_side_effect
+
+    portfolio = [
+        {
+            "symbol": "NVDA",
+            "asset_class": "SATELLITE",
+            "spot_price": 240.0,
+            "avg_cost": 200.0,  # profit_pct = 0.2 (< 0.3)
+            "psq_result": {
+                "squeeze_level": "Release",
+                "signal_direction": "Neutral",
+            },  # normalized score = 10 (< 20 動能衰退)
+        },
+    ]
+    candidate_radar = {
+        "psq_result": {
+            "squeeze_level": "High",
+            "signal_direction": "Long",
+            "is_breakout_long": True,
+        },  # normalized score = 95 (> 80 突破待發)
+        "quote": {"c": 40.0},
+        "iv_metrics": {"iv_rank": 20.0},
+        "gex_profile_data": {"put_wall": 0.0},
+        "uoa": [],
+    }
+
+    result = await engine.evaluate_opportunity_cost_for_satellites(
+        1, portfolio, set(), "SMCI", candidate_radar
+    )
+    assert len(result) == 1
+    assert result[0]["symbol"] == "NVDA"
+    assert result[0]["target_core"] == "SMCI"
+    assert result[0]["action"] == "REDUCE"
+    assert result[0]["sell_ratio"] == 0.3
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.index_microstructure.get_market_regime",
+    new_callable=AsyncMock,
+    return_value="NORMAL",
+)
+async def test_evaluate_margin_defense_normal_regime_no_action(
+    mock_regime: AsyncMock, engine: DynamicRolloverEngine
+) -> None:
+    result = await engine.evaluate_margin_defense(
+        1, [{"symbol": "NVDA", "asset_class": "SATELLITE", "current_value": 5000.0}]
+    )
+    assert result == []
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.index_microstructure.get_market_regime",
+    new_callable=AsyncMock,
+    return_value="SHORT_GAMMA_CRITICAL",
+)
+@patch("database.orders.get_user_active_orders", return_value=[])
+@patch("market_analysis.dynamic_rollover.get_full_user_context")
+async def test_evaluate_margin_defense_critical_regime_no_margin_pressure(
+    mock_ctx: MagicMock,
+    mock_orders: MagicMock,
+    mock_regime: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    mock_ctx.return_value = MagicMock(cash_reserve=100000.0)
+    portfolio = [
+        {
+            "symbol": "NVDA",
+            "asset_class": "SATELLITE",
+            "current_value": 5000.0,
+            "quantity": 10.0,
+        }
+    ]
+    # 現金儲備 100000 遠大於 SATELLITE 總市值 5000 -> 無保證金壓力
+    result = await engine.evaluate_margin_defense(1, portfolio)
+    assert result == []
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.index_microstructure.get_market_regime",
+    new_callable=AsyncMock,
+    return_value="SHORT_GAMMA_CRITICAL",
+)
+@patch("database.orders.get_user_active_orders", return_value=[])
+@patch("market_analysis.dynamic_rollover.get_full_user_context")
+async def test_evaluate_margin_defense_triggers_boxx_for_no_edge_holding(
+    mock_ctx: MagicMock,
+    mock_orders: MagicMock,
+    mock_regime: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    mock_ctx.return_value = MagicMock(cash_reserve=1000.0)  # 緩衝很小
+
+    portfolio = [
+        {
+            "symbol": "NVDA",
+            "asset_class": "SATELLITE",
+            "current_value": 5000.0,
+            "quantity": 10.0,
+            "instrument_type": "SPOT",
+            "sqz_mom": -5.0,
+            "skew": -0.5,  # 主力空頭封殺 -> 結構性無勝率
+        },
+    ]
+    # SATELLITE 總市值 5000 > 緩衝 1000 -> 保證金壓力觸發
+    result = await engine.evaluate_margin_defense(1, portfolio)
+    assert len(result) == 1
+    assert result[0]["symbol"] == "NVDA"
+    assert result[0]["sell_action"] == "STC"
+    assert result[0]["action"] == "LIQUIDATE"
+    assert result[0]["sell_ratio"] == 1.0
+    assert result[0]["target_core"] == "BOXX"
+    assert "BOXX" in result[0]["buy_action_label"]
+    assert result[0]["is_manual_override_required"] is True
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.index_microstructure.get_market_regime",
+    new_callable=AsyncMock,
+    return_value="SHORT_GAMMA_CRITICAL",
+)
+@patch("database.orders.get_user_active_orders", return_value=[])
+@patch("market_analysis.dynamic_rollover.get_full_user_context")
+async def test_evaluate_margin_defense_holding_with_edge_left_untouched(
+    mock_ctx: MagicMock,
+    mock_orders: MagicMock,
+    mock_regime: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    mock_ctx.return_value = MagicMock(cash_reserve=1000.0)  # 緩衝很小
+
+    portfolio = [
+        {
+            "symbol": "NVDA",
+            "asset_class": "SATELLITE",
+            "current_value": 5000.0,
+            "quantity": 10.0,
+            "instrument_type": "SPOT",
+            "sqz_mom": 8.0,  # 動能仍為正
+            "skew": 0.1,  # 未達主力空頭封殺門檻
+            "put_wall": 0.0,
+            "gamma_flip": 0.0,
+        },
+    ]
+    # 保證金壓力觸發，但該持倉技術面仍有勝率 -> 不強制轉倉
+    result = await engine.evaluate_margin_defense(1, portfolio)
+    assert result == []
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.index_microstructure.get_market_regime",
+    new_callable=AsyncMock,
+    return_value="SHORT_GAMMA_CRITICAL",
+)
+@patch("database.orders.get_user_active_orders", return_value=[])
+@patch("market_analysis.dynamic_rollover.get_full_user_context")
+async def test_evaluate_margin_defense_checks_every_satellite_holding(
+    mock_ctx: MagicMock,
+    mock_orders: MagicMock,
+    mock_regime: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    mock_ctx.return_value = MagicMock(cash_reserve=1000.0)
+
+    portfolio = [
+        {
+            "symbol": "NVDA",
+            "asset_class": "SATELLITE",
+            "current_value": 5000.0,
+            "quantity": 10.0,
+            "instrument_type": "SPOT",
+            "sqz_mom": -5.0,
+            "skew": -0.5,  # 無勝率
+        },
+        {
+            "symbol": "AAPL",
+            "asset_class": "SATELLITE",
+            "current_value": 3000.0,
+            "quantity": 5.0,
+            "instrument_type": "SPOT",
+            "sqz_mom": 5.0,
+            "skew": 0.1,  # 仍有勝率
+        },
+    ]
+    # 逐一檢查每檔 SATELLITE 持倉，而非只挑單一標的
+    result = await engine.evaluate_margin_defense(1, portfolio)
+    assert {ins["symbol"] for ins in result} == {"NVDA"}
+    assert result[0]["target_core"] == "BOXX"
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.index_microstructure.get_market_regime",
+    new_callable=AsyncMock,
+    return_value="SHORT_GAMMA_CRITICAL",
+)
+@patch(
+    "database.orders.get_user_active_orders",
+    return_value=[
+        {"validity": "GTC", "side": "BUY", "limit_price": 500.0, "quantity": 10.0}
+    ],
+)
+@patch("market_analysis.dynamic_rollover.get_full_user_context")
+async def test_evaluate_margin_defense_no_eligible_asset_returns_empty(
+    mock_ctx: MagicMock,
+    mock_orders: MagicMock,
+    mock_regime: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    mock_ctx.return_value = MagicMock(cash_reserve=1000.0)
+    # GTC 買單現金赤字 5000 > 緩衝 1000 -> 保證金壓力觸發，
+    # 但唯一持倉是核心 ETF (非 SATELLITE) -> 找不到候選資產
+    portfolio = [
+        {
+            "symbol": "VOO",
+            "asset_class": "CORE",
+            "current_value": 5000.0,
+            "quantity": 10.0,
+        },
+    ]
+    result = await engine.evaluate_margin_defense(1, portfolio)
+    assert result == []
+
+
+def test_create_dynamic_rollover_embed_buy_action_label_override() -> None:
+    embed_default = create_dynamic_rollover_embed(
+        rollover_type="機會成本",
+        sell_symbol="NVDA",
+        sell_ratio=0.3,
+        buy_symbol="SMCI",
+        reason="test reason",
+        suggested_strategy="Buy Shares",
+        suggested_price="Market",
+        strike="N/A",
+        expiry="N/A",
+        direction="BTO",
+    )
+    buy_field_default = next(
+        f for f in embed_default.fields if f.name and "轉入資產" in f.name
+    )
+    assert buy_field_default.value is not None
+    assert "(Buy To Open)" in buy_field_default.value
+
+    embed_override = create_dynamic_rollover_embed(
+        rollover_type="槓桿與保證金防禦",
+        sell_symbol="NVDA",
+        sell_ratio=0.5,
+        buy_symbol="CASH (保證金緩衝)",
+        reason="test reason",
+        suggested_strategy="STC 降槓桿",
+        suggested_price="Market",
+        strike="N/A",
+        expiry="N/A",
+        direction="BTO",
+        sell_action="STC",
+        buy_action_label="持有現金（保證金緩衝）",
+    )
+    buy_field_override = next(
+        f for f in embed_override.fields if f.name and "轉入資產" in f.name
+    )
+    assert buy_field_override.value is not None
+    assert "持有現金（保證金緩衝）" in buy_field_override.value
+    assert "(Buy To Open)" not in buy_field_override.value

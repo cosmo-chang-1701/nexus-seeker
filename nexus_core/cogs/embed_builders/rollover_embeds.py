@@ -178,6 +178,7 @@ def create_dynamic_rollover_embed(
     direction: str = "BTO",
     sell_action: str = "STC",
     combo_type: Optional[str] = None,
+    buy_action_label: Optional[str] = None,
 ) -> discord.Embed:
     """
     產生動態轉倉 (Dynamic Rollover) 的 Embed 推播訊息。
@@ -194,6 +195,8 @@ def create_dynamic_rollover_embed(
     :param direction: 買賣方向 (如 BTO, STC)
     :param sell_action: 賣出/平倉動作 (如 STC, BTC)，預設為 STC
     :param combo_type: 組合類型 (如 Net Debit, Net Credit)，供多腳位策略使用
+    :param buy_action_label: 覆寫「轉入資產」區塊的動作文字 (例如保證金防禦場景的
+        「持有現金」)，預設為 None 時維持原本的 "{direction} (Buy To Open)" 顯示
     """
 
     # 決定顏色的前綴
@@ -243,7 +246,8 @@ def create_dynamic_rollover_embed(
             name="📥 當前資產配置", value=f"```ansi\n{buy_text}\n```", inline=True
         )
     else:
-        buy_text = f"\u001b[0;32m標的: {buy_symbol}\n動作: {direction} (Buy To Open)\n策略: {suggested_strategy}\u001b[0m"
+        buy_action_display = buy_action_label or f"{direction} (Buy To Open)"
+        buy_text = f"\u001b[0;32m標的: {buy_symbol}\n動作: {buy_action_display}\n策略: {suggested_strategy}\u001b[0m"
         embed.add_field(
             name="📥 轉入資產 (Buy)", value=f"```ansi\n{buy_text}\n```", inline=True
         )

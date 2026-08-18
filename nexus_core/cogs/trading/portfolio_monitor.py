@@ -333,6 +333,10 @@ class PortfolioMonitorCog(commands.Cog):
                             "gex_profile_data": r_data.get("gex_profile_data", {})
                             if r_data
                             else {},
+                            "avg_cost": h.get("avg_cost", 0.0),
+                            "psq_result": r_data.get("psq_result", {})
+                            if r_data
+                            else {},
                         }
                     )
 
@@ -342,6 +346,47 @@ class PortfolioMonitorCog(commands.Cog):
                     rebalance_instructions = (
                         await self.rollover_engine.check_satellite_rebalancing(
                             u_id, portfolio_assets, total_val
+                        )
+                    )
+
+                    # 🚀 邏輯 (2): 機會成本轉倉 — 對尚未被 Scenario 3 標記的
+                    # SATELLITE 持倉，比對單一預篩選高 EV 候選標的的機會成本
+                    already_flagged = {ins["symbol"] for ins in rebalance_instructions}
+                    candidate_symbol = self.rollover_engine._find_best_rollover_target(
+                        u_id, exclude_symbols={a["symbol"] for a in portfolio_assets}
+                    )
+                    candidate_radar = radar_cache_map.get(candidate_symbol)
+                    if (
+                        candidate_symbol != "VOO"
+                        and candidate_radar is None
+                        and terminal_cog
+                    ):
+                        try:
+                            if radar_cache_map:
+                                await asyncio.sleep(1.5)  # 沿用既有節流保護
+                            candidate_radar = (
+                                await terminal_cog._fetch_sym_radar_data_slow(
+                                    candidate_symbol
+                                )
+                            )
+                            radar_cache_map[candidate_symbol] = candidate_radar
+                        except Exception as ex:
+                            logger.error(
+                                f"Failed to fetch candidate radar data for {candidate_symbol}: {ex}"
+                            )
+
+                    rebalance_instructions += await self.rollover_engine.evaluate_opportunity_cost_for_satellites(
+                        u_id,
+                        portfolio_assets,
+                        already_flagged,
+                        candidate_symbol,
+                        candidate_radar,
+                    )
+
+                    # 🚀 邏輯 (4): 槓桿與保證金防禦
+                    rebalance_instructions += (
+                        await self.rollover_engine.evaluate_margin_defense(
+                            u_id, portfolio_assets
                         )
                     )
 
@@ -374,6 +419,8 @@ class PortfolioMonitorCog(commands.Cog):
                             strike="N/A",
                             expiry="N/A",
                             direction="BTO" if ins["action"] != "HOLD" else "HOLD",
+                            sell_action=ins.get("sell_action", "STC"),
+                            buy_action_label=ins.get("buy_action_label"),
                         )
                         if ins.get("is_manual_override_required"):
                             setattr(
@@ -486,6 +533,8 @@ class PortfolioMonitorCog(commands.Cog):
                     strike="N/A",
                     expiry="N/A",
                     direction="BTO" if ins["action"] != "HOLD" else "HOLD",
+                    sell_action=ins.get("sell_action", "STC"),
+                    buy_action_label=ins.get("buy_action_label"),
                 )
                 if ins.get("is_manual_override_required"):
                     setattr(embed, "_view", f"ManualOverrideView:{ins['symbol']}")
