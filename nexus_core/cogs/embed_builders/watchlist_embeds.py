@@ -349,11 +349,11 @@ def create_watchlist_signal_embed(
 
     if skew_commentary:
         has_meaningful_content = True
-        skew_header = "**⚙️ 量化 Skew 解析**"
-        if skew_state:
-            skew_header += f" `{skew_state}`"
-        description_lines.append(skew_header)
-        description_lines.append(f"```ansi\n{skew_commentary}\n```")
+        description_lines.append("**⚙️ 量化 Skew 解析**")
+        skew_body = (
+            f"Skew: {skew_state}\n{skew_commentary}" if skew_state else skew_commentary
+        )
+        description_lines.append(f"```ansi\n{skew_body}\n```")
 
     embed_description = (
         "\n".join(description_lines).strip() if description_lines else None
