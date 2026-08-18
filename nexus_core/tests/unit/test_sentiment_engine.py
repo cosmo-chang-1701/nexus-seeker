@@ -760,6 +760,36 @@ async def test_polymarket_fuzzy_matching_and_odds_format(mock_get_company: Any):
         "… (Yes: 42.0%)"
     )
 
+    # Redundant "Will {Company} (TICKER) hit " prefix on Polymarket's stock
+    # price-target template should be stripped so the truncation budget is
+    # spent on the actually informative tail (strike / period), not on
+    # information already implied by the symbol context in the embed.
+    poly_markets_price_target = [
+        {
+            "question": (
+                "Will Palantir Technologies Inc. (PLTR) hit (LOW) $120 in August?"
+            ),
+            "tokens": [{"outcome": "Yes", "price": 0.031}],
+        },
+        {
+            "question": (
+                "Will Palantir Technologies Inc. (PLTR) hit (HIGH) $192 "
+                "Week of August 17-21?"
+            ),
+            "tokens": [{"outcome": "Yes", "price": 0.045}],
+            "volumeNum": 100.0,
+        },
+    ]
+    odds_price_target = await find_matching_polymarket_odds(
+        "PLTR", poly_markets_price_target
+    )
+    assert odds_price_target == (
+        "Hit (HIGH) $192 Week of August 17-21? (Yes: 4.5%)\n"
+        " │    └─ Hit (LOW) $120 in August? (Yes: 3.1%)"
+    )
+    assert "Palantir" not in odds_price_target
+    assert "…" not in odds_price_target
+
 
 @pytest.mark.asyncio
 async def test_calculate_max_pain_split_anomaly_and_degradation() -> None:

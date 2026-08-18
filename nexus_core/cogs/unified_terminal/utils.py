@@ -1,6 +1,7 @@
 from typing import Any, cast
 import inspect
 import logging
+import re
 import psutil
 from services.market_data_service import BoundedCache
 
@@ -213,6 +214,20 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
     return result_data
 
 
+def _strip_redundant_symbol_prefix(question: str, symbol: str) -> str:
+    """剝除 Polymarket 個股價格目標市場樣板中的冗餘前綴（如 "Will Palantir Technologies
+    Inc. (PLTR) hit "），因為標的代碼已顯示於當前 Embed 情境中，重複資訊只會擠壓截斷預算，
+    導致真正有價值的日期/區間資訊被砍掉。若問題不符合此樣板則原樣傳回。"""
+    pattern = r"^Will\s+.+?\(" + re.escape(symbol) + r"\)\s+"
+    match = re.match(pattern, question, re.IGNORECASE)
+    if not match:
+        return question
+    remainder = question[match.end() :]
+    if not remainder:
+        return question
+    return remainder[0].upper() + remainder[1:]
+
+
 def _smart_truncate_question(text: str, max_len: int = 75) -> str:
     """在詞界（空白處）截斷過長的 Polymarket 問題文字，避免硬切在數字或單字中間。"""
     if len(text) <= max_len:
@@ -298,7 +313,8 @@ async def find_matching_polymarket_odds(
                 val_str = f"{outcome}: {price_val}"
 
             # Format to a compact string
-            short_q = _smart_truncate_question(question)
+            stripped_q = _strip_redundant_symbol_prefix(question, symbol_upper)
+            short_q = _smart_truncate_question(stripped_q)
             vol = float(m.get("volumeNum") or m.get("volume") or 0.0)
             results.append((f"{short_q} ({val_str})", vol))
 
