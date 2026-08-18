@@ -362,6 +362,27 @@ async def test_get_quote_fast_fail_to_yfinance() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_quote_futures_symbol_bypasses_finnhub() -> None:
+    """Yahoo-style futures tickers (e.g. CL=F) must skip Finnhub's quote/symbol_lookup
+    entirely and go straight to yfinance, since Finnhub doesn't recognize the =F suffix
+    and would otherwise fast-fail with SYMBOL_NOT_FOUND."""
+    import services.market_data_service as mds
+
+    with patch(
+        "services.market_data_service.get_yfinance_quote", new_callable=AsyncMock
+    ) as mock_yf_quote, patch(
+        "services.market_data_service._execute_api_call", new_callable=AsyncMock
+    ) as mock_exec_api:
+        mock_yf_quote.return_value = {"c": 65.5}
+
+        res = await mds.get_quote("CL=F")
+        assert res == {"c": 65.5}
+
+        mock_yf_quote.assert_called_once_with("CL=F")
+        mock_exec_api.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_validate_symbol(mock_symbol_validation: Any):  # type: ignore
     validate_symbol = mock_symbol_validation.real_fn
     import sqlite3

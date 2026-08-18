@@ -170,7 +170,7 @@ class TradingService:
             from market_analysis.sentiment_engine import SentimentEngine
 
             skew_res = await SentimentEngine.calculate_skew(symbol)
-            skew_val = skew_res.get("skew", 0.0) / 100.0  # 轉為小數
+            skew_val = (skew_res.get("skew") or 0.0) / 100.0  # 轉為小數
 
             # 偵測 UOA
             uoa_list = await SentimentEngine.detect_uoa(symbol)
@@ -495,7 +495,7 @@ class TradingService:
                         from market_analysis.sentiment_engine import SentimentEngine
 
                         skew_res = await SentimentEngine.calculate_skew(sym)
-                        skew_val = skew_res.get("skew", 0.0) / 100.0
+                        skew_val = (skew_res.get("skew") or 0.0) / 100.0
 
                         uoa_detected = bool(
                             res.get("uoa_list")
@@ -661,8 +661,8 @@ class TradingService:
 
                         skew_data = await SentimentEngine.calculate_skew(sym)
                         pcr_data = await SentimentEngine.calculate_pcr(sym)
-                        pcr_val = pcr_data.get("pcr", 0.8)
-                        skew_val = skew_data.get("skew", 0.0)
+                        pcr_val = pcr_data.get("pcr") or 0.8
+                        skew_val = skew_data.get("skew") or 0.0
 
                         # 🚀 整合核心：注入宏觀背景與日曆事件進行風險優化
                         from services.calendar_service import calendar_service

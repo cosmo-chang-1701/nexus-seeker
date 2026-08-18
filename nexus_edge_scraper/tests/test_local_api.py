@@ -1,5 +1,6 @@
 from typing import Any
 from unittest.mock import patch, MagicMock, AsyncMock
+import httpx
 from fastapi.testclient import TestClient
 from local_api import app
 
@@ -27,6 +28,39 @@ def test_scrape_reddit_fallback() -> None:
         assert response.status_code == 200
         data = response.json()
         assert data["status"] in ["error", "success"]
+
+
+def test_scrape_reddit_retries_on_429_then_caches_result() -> None:
+    import local_api
+
+    local_api._reddit_cache.clear()
+
+    call_count = {"n": 0}
+    xml_text = '<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"></feed>'
+
+    async def fake_get(self: Any, url: str, headers: Any = None) -> httpx.Response:
+        call_count["n"] += 1
+        req = httpx.Request("GET", url)
+        if call_count["n"] == 1:
+            return httpx.Response(429, request=req)
+        return httpx.Response(200, text=xml_text, request=req)
+
+    async def fake_sleep(_delay: float) -> None:
+        return None
+
+    with (
+        patch("httpx.AsyncClient.get", new=fake_get),
+        patch("asyncio.sleep", new=fake_sleep),
+    ):
+        response = client.get("/api/v1/scrape/reddit/TSLA")
+        assert response.status_code == 200
+        assert response.json()["status"] == "success"
+        assert call_count["n"] == 2  # first call hit 429, retry succeeded
+
+        # Second request for the same symbol/query should be served from cache
+        response2 = client.get("/api/v1/scrape/reddit/TSLA")
+        assert response2.status_code == 200
+        assert call_count["n"] == 2  # no additional network call
 
 
 def test_scrape_gex_fallback() -> None:

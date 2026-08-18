@@ -108,3 +108,58 @@ async def test_run_market_scan_unpacks_correctly(trading_service: Any):  # type:
         # Assert no unpacking exception was raised, and it processed successfully
         assert isinstance(res, dict)
         mock_refresh.assert_awaited_once_with(1)
+
+
+@pytest.mark.asyncio
+async def test_get_execution_decision_handles_none_skew_without_crash(
+    trading_service: Any,
+) -> None:
+    """A degraded SentimentEngine.calculate_skew() result (skew=None, e.g. for an
+    illiquid ADR like SBGSY/BXDC with no listed options) must not crash
+    get_execution_decision via `None / float`."""
+    df_hist = pd.DataFrame(
+        {
+            "Open": [100.0 + i * 0.1 for i in range(30)],
+            "High": [101.0 + i * 0.1 for i in range(30)],
+            "Low": [99.0 + i * 0.1 for i in range(30)],
+            "Close": [100.0 + i * 0.1 for i in range(30)],
+            "Volume": [1000] * 30,
+        },
+        index=pd.date_range("2026-06-01", periods=30),
+    )
+
+    sentinel_decision = object()
+
+    with patch(
+        "services.market_data_service.get_macro_environment",
+        new_callable=AsyncMock,
+        return_value={"vix": 18.0},
+    ), patch(
+        "services.market_data_service.get_history_df",
+        new_callable=AsyncMock,
+        return_value=df_hist,
+    ), patch(
+        "market_analysis.sentiment.SentimentEngine.calculate_skew",
+        new_callable=AsyncMock,
+        return_value={
+            "symbol": "SBGSY",
+            "skew": None,
+            "skew_percentile": None,
+            "state": "N/A",
+            "is_fallback": False,
+            "error": "No option expiries returned",
+        },
+    ), patch(
+        "market_analysis.sentiment.SentimentEngine.detect_uoa",
+        new_callable=AsyncMock,
+        return_value=[],
+    ), patch.object(
+        trading_service.execution_router,
+        "evaluate_market",
+        return_value=sentinel_decision,
+    ):
+        result = await trading_service.get_execution_decision("SBGSY")
+
+    # Reaching evaluate_market (rather than the outer except-and-return-None path)
+    # proves the None-skew division didn't raise a TypeError.
+    assert result is sentinel_decision

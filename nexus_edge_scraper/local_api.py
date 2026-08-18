@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any
 from fastapi import FastAPI, Query
 from playwright.async_api import (
@@ -11,6 +12,8 @@ import httpx
 import warnings
 import re
 import os
+import random
+import time
 import psutil
 from section_extractor import extract_sections
 
@@ -29,6 +32,9 @@ except ImportError as e:
 
 SEC_USER_AGENT = "NexusSeekerBot (nexusseeker@example.com)"
 cik_cache: dict[str, str] = {}
+
+_REDDIT_CACHE_TTL = 600  # 10 分鐘，避免短時間內對同一標的重複打 Reddit RSS 觸發 429
+_reddit_cache: dict[str, tuple[dict[str, Any], float]] = {}
 
 
 async def _get_sec_cik(client: httpx.AsyncClient, symbol: str) -> str | None:
@@ -66,6 +72,13 @@ async def scrape_reddit(
 
     q_encoded = urllib.parse.quote(q_term)
 
+    cache_key = f"{q_term}|{limit}"
+    cached = _reddit_cache.get(cache_key)
+    if cached is not None:
+        data, expiry = cached
+        if time.time() < expiry:
+            return data
+
     url = (
         f"https://www.reddit.com/r/wallstreetbets+stocks+options/search.rss"
         f"?q={q_encoded}"
@@ -79,7 +92,21 @@ async def scrape_reddit(
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
             }
+
+            # 最多重試 1 次，避免延遲超出上游 reddit_service.py 的 25s timeout 預算
             resp = await client.get(url, headers=headers)
+            if resp.status_code == 429:
+                retry_after = resp.headers.get("Retry-After")
+                delay = min(
+                    float(retry_after)
+                    if retry_after is not None and retry_after.isdigit()
+                    else 5.0 + random.uniform(1.0, 3.0),
+                    8.0,
+                )
+                logger.warning(f"Reddit RSS 429 Too Many Requests，{delay:.1f}s 後重試")
+                await asyncio.sleep(delay)
+                resp = await client.get(url, headers=headers)
+
             resp.raise_for_status()
 
             root = ET.fromstring(resp.text)
@@ -89,7 +116,9 @@ async def scrape_reddit(
             entries = root.findall("atom:entry", ns)
 
             if not entries:
-                return {"status": "success", "data": "過去 24 小時內無相關討論。"}
+                result = {"status": "success", "data": "過去 24 小時內無相關討論。"}
+                _reddit_cache[cache_key] = (result, time.time() + _REDDIT_CACHE_TTL)
+                return result
 
             posts_text = ""
             for entry in entries[:limit]:
@@ -106,7 +135,9 @@ async def scrape_reddit(
 
                 posts_text += f"[{sub}] {title_text}\n"
 
-            return {"status": "success", "data": posts_text}
+            result = {"status": "success", "data": posts_text}
+            _reddit_cache[cache_key] = (result, time.time() + _REDDIT_CACHE_TTL)
+            return result
 
     except Exception as e:
         logger.error(f"Reddit RSS 執行嚴重例外: {str(e)}")

@@ -354,7 +354,7 @@ async def get_quote(symbol: str) -> Dict[str, Any]:
             return val  # type: ignore
 
     async def _fetch() -> Any:
-        if symbol.startswith("^") or symbol == "VIX":
+        if symbol.startswith("^") or symbol == "VIX" or symbol.endswith("=F"):
             return await get_yfinance_quote(symbol)
 
         if is_finnhub_rate_limited():
