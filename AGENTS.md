@@ -582,7 +582,7 @@ Current repository rule:
 
 ## Dynamic Rollover Engine (動態轉倉引擎)
 
-The platform features an automated **Dynamic Rollover Engine** (`market_analysis/dynamic_rollover.py`) that monitors the real portfolio every 30 minutes. It evaluates holdings across four core scenarios to defensively rebalance assets or shift momentum based on Specification by Example (SBE) guidelines.
+The platform features an automated **Dynamic Rollover Engine** (`market_analysis/dynamic_rollover/`, a package with a facade `__init__.py` assembling `DynamicRolloverEngine` from per-scenario submodules) that monitors the real portfolio every 30 minutes. It evaluates holdings across four core scenarios to defensively rebalance assets or shift momentum based on Specification by Example (SBE) guidelines.
 
 ### Scenarios
 1. **Fundamental Thesis Broken (原型假設破滅)**: Leverages `nexus_edge_scraper` via the SEC EDGAR API (`httpx` + BS4 decomposition + Regex tag filtering). Specifically, `section_extractor.py` provides **structured extraction** (Forward Guidance, Margin & Cost, Market Share, Financial Results, Operational Disruption) to prevent token explosion. It uses an **Advanced CoT** (Chain of Thought) system prompt to validate the moat. If broken, completely liquidates the asset into the Core holding (e.g., VOO).
@@ -690,7 +690,7 @@ Adheres 100% to the Nexus Seeker field-based embed architecture:
 - `nexus_core/services/order_telemetry_service.py` — Order telemetry scanning service
 - `nexus_core/database/notifications.py` — custom user notification preferences database operations
 - `nexus_core/database/virtual_trading.py` — Database interface for virtual trades (VTR)
-- `nexus_core/market_analysis/dynamic_rollover.py` — Dynamic rollover engine, anti-washout stop engine, and asset class bifurcation logic
+- `nexus_core/market_analysis/dynamic_rollover/` — Dynamic rollover engine package (facade `__init__.py` + `fundamental_thesis.py` / `opportunity_cost.py` / `anti_washout.py` / `margin_defense.py` / `structural_signals.py` / `models.py` / `constants.py`), anti-washout stop engine, and asset class bifurcation logic. Public import path stays `market_analysis.dynamic_rollover`.
 - `nexus_core/market_analysis/signal_calculator.py` — Dynamic trading signal calculator (1.5x ATR buffers, capital allocation models)
 - `nexus_core/market_analysis/scenario_classifier.py` — Event-driven quantitative scenario classifier (6 market scenarios including Whale Escort Resonance)
 - `nexus_core/database/watchlist.py` — Database CRUD operations for user watchlist symbols (100% deterministic rule-based zero-LLM architecture)
