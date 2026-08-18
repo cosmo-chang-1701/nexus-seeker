@@ -231,8 +231,6 @@ class UnifiedTerminalCog(commands.Cog):
             from market_analysis.intraday_pipeline import evaluate_advanced_filters
             import types
 
-            from typing import Any
-
             scan_params_kwargs: dict[str, Any] = {}
             if "tdp_mode" in quant_filters or "require_tdp_signal" in quant_filters:
                 scan_params_kwargs["require_tdp_signal"] = True
