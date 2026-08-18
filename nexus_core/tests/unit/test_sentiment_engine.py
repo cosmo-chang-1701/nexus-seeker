@@ -719,7 +719,7 @@ async def test_polymarket_fuzzy_matching_and_odds_format(mock_get_company: Any):
     ]
 
     odds = await find_matching_polymarket_odds("MU", poly_markets)
-    assert odds == "Will Micron's Q3 revenue exceed $6.... (Yes: 98.0%)"
+    assert odds == "Will Micron's Q3 revenue exceed $6.6 billion? (Yes: 98.0%)"
 
     poly_markets_new = [
         {
@@ -731,7 +731,7 @@ async def test_polymarket_fuzzy_matching_and_odds_format(mock_get_company: Any):
         }
     ]
     odds_new = await find_matching_polymarket_odds("MU", poly_markets_new)
-    assert odds_new == "Will Micron's Q3 revenue exceed $6.... (Yes: 98.0%)"
+    assert odds_new == "Will Micron's Q3 revenue exceed $6.6 billion? (Yes: 98.0%)"
 
     poly_markets_other = [
         {
@@ -741,6 +741,24 @@ async def test_polymarket_fuzzy_matching_and_odds_format(mock_get_company: Any):
     ]
     odds_other = await find_matching_polymarket_odds("MU", poly_markets_other)
     assert odds_other == "N/A"
+
+    # Word-boundary truncation: a question over 75 chars should cut at a
+    # space (never mid-word/mid-number) and end with a single ellipsis char.
+    long_question = (
+        "Will Micron's fiscal Q3 2026 revenue exceed $6.6 billion after "
+        "the memory pricing surge continues into next quarter?"
+    )
+    poly_markets_long = [
+        {
+            "question": long_question,
+            "tokens": [{"outcome": "Yes", "price": 0.42}],
+        }
+    ]
+    odds_long = await find_matching_polymarket_odds("MU", poly_markets_long)
+    assert odds_long == (
+        "Will Micron's fiscal Q3 2026 revenue exceed $6.6 billion after the memory"
+        "… (Yes: 42.0%)"
+    )
 
 
 @pytest.mark.asyncio

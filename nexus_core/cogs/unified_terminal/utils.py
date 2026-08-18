@@ -213,6 +213,16 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
     return result_data
 
 
+def _smart_truncate_question(text: str, max_len: int = 75) -> str:
+    """在詞界（空白處）截斷過長的 Polymarket 問題文字，避免硬切在數字或單字中間。"""
+    if len(text) <= max_len:
+        return text
+    cutoff = text.rfind(" ", 0, max_len)
+    if cutoff <= 0:
+        cutoff = max_len
+    return text[:cutoff] + "…"
+
+
 async def find_matching_polymarket_odds(
     symbol: str, poly_markets: list, bot: Any = None
 ) -> str:
@@ -288,7 +298,7 @@ async def find_matching_polymarket_odds(
                 val_str = f"{outcome}: {price_val}"
 
             # Format to a compact string
-            short_q = question[:35] + "..." if len(question) > 35 else question
+            short_q = _smart_truncate_question(question)
             vol = float(m.get("volumeNum") or m.get("volume") or 0.0)
             results.append((f"{short_q} ({val_str})", vol))
 
