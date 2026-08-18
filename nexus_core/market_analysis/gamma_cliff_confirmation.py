@@ -21,6 +21,27 @@ MIN_CONFIRMATION_WINDOW: int = 5
 MAX_CONFIRMATION_WINDOW: int = 30
 
 
+def is_below_gamma_defense_line(
+    price: float, put_wall: float, gamma_flip: float
+) -> bool:
+    """負 Gamma 防線基礎判定：現價是否同時跌破 PutWall 與 Gamma Flip。
+
+    供 scenario_classifier.classify_market_scenario 使用，判定是否進入
+    STRUCTURAL_BREAKDOWN_PENDING（待 15 分鐘實體 K 線確認）。
+
+    注意：此為粗粒度基礎判定，刻意不含 ATR 緩衝。系統中另有兩處各自維護的
+    「gamma_cliff_level」計算方式，三者刻意不同、不應合併：
+      - cogs/trading/heartbeat.py: gamma_cliff_level = min(put_wall, gamma_flip)
+        （自選股 watchlist 進出場信號，無 ATR 緩衝，涵蓋未持有標的）
+      - market_analysis/dynamic_rollover.py 的 _compute_structural_breakdown_signals：
+        gamma_cliff_level = anchor_base - 1.5*atr_14（持倉專用，含 ATR 緩衝 +
+        SQZ 動能疊加 + 現貨/期權雙軌出場邏輯，判定門檻更嚴謹）
+    """
+    if put_wall <= 0.0 or gamma_flip <= 0.0:
+        return False
+    return price < put_wall and price < gamma_flip
+
+
 async def is_gamma_cliff_confirmed(
     symbol: str,
     gamma_cliff_level: float,

@@ -97,6 +97,111 @@ async def test_monitor_real_portfolio_task_no_rollover_dm_when_no_trigger() -> N
 
 
 @pytest.mark.asyncio
+async def test_monitor_real_portfolio_task_omits_unset_target_allocation_pct() -> None:
+    """
+    target_allocation_pct 目前無 DB 欄位持久化、也無 /settings UI 可設定。
+    持倉本身沒有明確數值時，餵給 rollover_engine 的 asset dict 不應強行塞入
+    預設值 (曾為 0.0)，否則 check_satellite_rebalancing 既有的
+    asset.get("target_allocation_pct", max_alloc) fallback 永遠不會生效，
+    導致常規減倉誤判為近乎全清倉。
+    """
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+    bot.get_cog = MagicMock(return_value=None)
+
+    with patch("discord.ext.tasks.Loop.start"):
+        cog = PortfolioMonitorCog(bot)
+
+    cog.trading_service.audit_real_portfolio_risk = AsyncMock(return_value=[])  # type: ignore
+
+    holding = {
+        "id": 1,
+        "user_id": 1,
+        "symbol": "NVDA",
+        "metadata": "{}",
+        "quantity": 10.0,
+        "avg_cost": 200.0,
+        # 刻意不設定 target_allocation_pct，模擬真實生產資料形狀
+    }
+
+    cog.rollover_engine.check_satellite_rebalancing = AsyncMock(return_value=[])  # type: ignore
+    cog.rollover_engine.evaluate_opportunity_cost_for_satellites = AsyncMock(  # type: ignore
+        return_value=[]
+    )
+    cog.rollover_engine.evaluate_margin_defense = AsyncMock(return_value=[])  # type: ignore
+
+    with patch(
+        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
+    ), patch("database.holdings.get_all_holdings", return_value=[holding]), patch(
+        "database.watchlist.get_user_watchlist", return_value=[]
+    ), patch(
+        "market_analysis.trading_orchestration.recommend_covered_calls",
+        new_callable=AsyncMock,
+        return_value={"recommendations": []},
+    ):
+        await cog.monitor_real_portfolio_task()
+
+    cog.rollover_engine.check_satellite_rebalancing.assert_awaited_once()
+    await_args = cog.rollover_engine.check_satellite_rebalancing.await_args
+    assert await_args is not None
+    portfolio_assets = await_args.args[1]
+    assert len(portfolio_assets) == 1
+    assert "target_allocation_pct" not in portfolio_assets[0]
+
+
+@pytest.mark.asyncio
+async def test_monitor_real_portfolio_task_margin_defense_excludes_scenario2_and_3_flags() -> (
+    None
+):
+    """
+    Scenario 4 (槓桿與保證金防禦) 呼叫時傳入的 already_flagged_symbols 必須涵蓋
+    Scenario 3 (核心衛星再平衡) 與 Scenario 2 (機會成本轉倉) 兩者已標記過的標的，
+    避免同一標的同一輪次收到互相矛盾的清倉指令。
+    """
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+    bot.get_cog = MagicMock(return_value=None)
+
+    with patch("discord.ext.tasks.Loop.start"):
+        cog = PortfolioMonitorCog(bot)
+
+    cog.trading_service.audit_real_portfolio_risk = AsyncMock(return_value=[])  # type: ignore
+
+    holding = {
+        "id": 1,
+        "user_id": 1,
+        "symbol": "NVDA",
+        "metadata": "{}",
+        "quantity": 10.0,
+        "avg_cost": 200.0,
+    }
+
+    cog.rollover_engine.check_satellite_rebalancing = AsyncMock(  # type: ignore
+        return_value=[{"symbol": "NVDA", "action": "REDUCE"}]
+    )
+    cog.rollover_engine.evaluate_opportunity_cost_for_satellites = AsyncMock(  # type: ignore
+        return_value=[{"symbol": "AAPL", "action": "LIQUIDATE"}]
+    )
+    cog.rollover_engine.evaluate_margin_defense = AsyncMock(return_value=[])  # type: ignore
+
+    with patch(
+        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
+    ), patch("database.holdings.get_all_holdings", return_value=[holding]), patch(
+        "database.watchlist.get_user_watchlist", return_value=[]
+    ), patch(
+        "market_analysis.trading_orchestration.recommend_covered_calls",
+        new_callable=AsyncMock,
+        return_value={"recommendations": []},
+    ):
+        await cog.monitor_real_portfolio_task()
+
+    cog.rollover_engine.evaluate_margin_defense.assert_awaited_once()
+    await_args = cog.rollover_engine.evaluate_margin_defense.await_args
+    assert await_args is not None
+    assert await_args.kwargs["already_flagged_symbols"] == {"NVDA", "AAPL"}
+
+
+@pytest.mark.asyncio
 async def test_pre_market_risk_monitor_triggers_pre_warm() -> None:
     bot = MagicMock()
 

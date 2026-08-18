@@ -1,6 +1,8 @@
 from enum import Enum
 from typing import Optional
 
+from market_analysis.gamma_cliff_confirmation import is_below_gamma_defense_line
+
 
 class MarketScenario(Enum):
     GOLDEN_LEFT = "黃金左側加碼"
@@ -70,7 +72,7 @@ def classify_market_scenario(
 
     # [ Step 4: 轉倉觸發 ]
     # 現價貫穿 PutWall 且跌破 Gamma Flip ──► 100% 資金動態轉倉至 QQQ / SPY
-    if price < put_wall and price < gamma_flip:
+    if is_below_gamma_defense_line(price, put_wall, gamma_flip):
         return MarketScenario.STRUCTURAL_BREAKDOWN_PENDING
 
     # [ Step 1: 體質檢查 ] ──現價是否 > Gamma Flip？

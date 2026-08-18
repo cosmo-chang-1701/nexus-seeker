@@ -3,7 +3,10 @@ import pytest
 from unittest.mock import patch, MagicMock
 import pandas as pd
 from models.schemas import EnhancedWatchlistMetrics, WatchlistEventContext
-from market_analysis.index_microstructure import get_market_regime
+from market_analysis.index_microstructure import (
+    get_market_regime,
+    estimate_symbol_gamma_flip,
+)
 from market_analysis.intraday_pipeline import evaluate_watchlist_symbol
 from market_analysis.trading_orchestration import (
     calculate_new_cost_basis,
@@ -590,3 +593,38 @@ def test_evaluate_escape_window_regime_matrix() -> None:
     assert shift == 5
     assert "寬鬆擴張" in tier
     assert "🟢 後推 5 天" in status
+
+
+# ---------------------------------------------------------------------------
+# estimate_symbol_gamma_flip：個股 Gamma Flip 輕量客戶端估算 (累積 GEX 零交叉點)
+# ---------------------------------------------------------------------------
+
+
+def test_estimate_symbol_gamma_flip_finds_zero_crossing() -> None:
+    """累積 GEX 由負轉正的履約價視為 Gamma Flip 估計值"""
+    gex_profile = {"90": -50.0, "95": 80.0, "100": 20.0}
+    # 累積: 90 -> -50 (負) ; 95 -> +30 (轉正，交叉點) ; 100 -> +50
+    assert estimate_symbol_gamma_flip(gex_profile, spot=97.0) == 95.0
+
+
+def test_estimate_symbol_gamma_flip_all_positive_no_crossing() -> None:
+    """全數為正 GEX (無負轉正交叉點) -> 回傳 0.0"""
+    gex_profile = {"90": 10.0, "95": 20.0, "100": 30.0}
+    assert estimate_symbol_gamma_flip(gex_profile, spot=95.0) == 0.0
+
+
+def test_estimate_symbol_gamma_flip_all_negative_no_crossing() -> None:
+    """全數為負 GEX (無交叉點) -> 回傳 0.0"""
+    gex_profile = {"90": -10.0, "95": -20.0, "100": -5.0}
+    assert estimate_symbol_gamma_flip(gex_profile, spot=95.0) == 0.0
+
+
+def test_estimate_symbol_gamma_flip_empty_profile_returns_zero() -> None:
+    assert estimate_symbol_gamma_flip({}, spot=100.0) == 0.0
+    assert estimate_symbol_gamma_flip(None, spot=100.0) == 0.0  # type: ignore[arg-type]
+
+
+def test_estimate_symbol_gamma_flip_malformed_profile_returns_zero() -> None:
+    """履約價/GEX 值非數值格式 -> fail-safe 回傳 0.0，不拋例外"""
+    gex_profile = {"not_a_strike": "not_a_number"}
+    assert estimate_symbol_gamma_flip(gex_profile, spot=100.0) == 0.0

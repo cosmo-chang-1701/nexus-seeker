@@ -1,7 +1,7 @@
 import httpx
 import logging
 import config
-from typing import Dict
+from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -294,6 +294,39 @@ def classify_gex_wall(
         return "RESISTANCE_CALL_WALL"  # 上方壓制天花板
 
     return "NEUTRAL"
+
+
+def estimate_symbol_gamma_flip(gex_profile: dict, spot: float) -> float:
+    """
+    個股 Gamma Flip 輕量客戶端估算（累積 GEX 曝險零交叉點）。
+
+    個股 GEX 端點（`fetch_symbol_gex_metrics`）目前不提供現成的 `gamma_flip`
+    欄位（僅 SPY 總經端點 `/api/v1/scrape/macro/gex` 才有）。此函式複用已抓取
+    的 `gex_profile`（履約價 -> GEX 曝險值）估算 Gamma Flip，不發動額外網路
+    請求：依履約價由低到高排序，逐步累加 GEX 曝險，累積值由負轉正的履約價
+    視為做市商由負轉正 Gamma 的臨界點估計值。
+
+    這是輕量估算，非如 SPY 端點那樣與官方數據源比對的精算值。找不到交叉點
+    （例如全數為正、全數為負，或 profile 為空/格式異常）一律回傳 0.0，
+    由呼叫端 fail-safe 處理（視為無法確認，不應作為判斷依據）。
+    """
+    if not gex_profile:
+        return 0.0
+    try:
+        sorted_strikes = sorted((float(k), float(v)) for k, v in gex_profile.items())
+    except (ValueError, TypeError):
+        return 0.0
+    if not sorted_strikes:
+        return 0.0
+
+    cumulative = 0.0
+    prev_cumulative: Optional[float] = None
+    for strike, gex in sorted_strikes:
+        cumulative += gex
+        if prev_cumulative is not None and prev_cumulative < 0 <= cumulative:
+            return strike
+        prev_cumulative = cumulative
+    return 0.0
 
 
 def evaluate_escape_window_regime(

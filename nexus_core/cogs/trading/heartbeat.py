@@ -155,6 +155,12 @@ async def dispatch_watchlist_heartbeat(
                                 is_gamma_cliff_confirmed,
                             )
 
+                            # 注意：此處刻意不含 ATR 緩衝，是自選股 watchlist 進出場
+                            # 信號的粗粒度變體，涵蓋未持有標的。持倉專用、含 ATR 緩衝
+                            # + SQZ 動能疊加的更嚴謹版本見
+                            # market_analysis/dynamic_rollover.py 的
+                            # _compute_structural_breakdown_signals，兩者刻意不同、
+                            # 不應合併（詳見 gamma_cliff_confirmation.is_below_gamma_defense_line docstring）。
                             gamma_cliff_level = min(
                                 put_wall if put_wall > 0 else float("inf"),
                                 gamma_flip if gamma_flip > 0 else float("inf"),

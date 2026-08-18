@@ -160,6 +160,14 @@ def derive_watchlist_option_guidance(
         )
 
 
+def is_spread_illiquid(bid: float, ask: float, threshold: float = 0.15) -> bool:
+    """Bid-Ask 點差流動性閘門：Spread Ratio = (Ask - Bid) / Mid，超過 threshold 判定為不流動。"""
+    if bid <= 0.0 or ask <= bid:
+        return False
+    spread_ratio = (ask - bid) / ((ask + bid) / 2)
+    return spread_ratio > threshold
+
+
 def _mid_price_from_row(row: pd.Series) -> float:
     bid = float(row.get("bid", 0.0) or 0.0)
     ask = float(row.get("ask", 0.0) or 0.0)
@@ -337,10 +345,8 @@ async def build_watchlist_option_plan(
 
     bid_val = float(primary_leg.get("bid", 0.0))
     ask_val = float(primary_leg.get("ask", 0.0))
-    if bid_val > 0 and ask_val > bid_val:
-        spread_ratio = (ask_val - bid_val) / ((ask_val + bid_val) / 2)
-        if spread_ratio > 0.15:
-            is_illiquid = True
+    if is_spread_illiquid(bid_val, ask_val):
+        is_illiquid = True
 
     if is_illiquid:
         return WatchlistOptionPlan(

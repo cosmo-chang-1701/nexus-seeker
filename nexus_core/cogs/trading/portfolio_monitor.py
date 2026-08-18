@@ -300,47 +300,46 @@ class PortfolioMonitorCog(commands.Cog):
                     )
                     default_max_alloc = 1.0 if final_asset_class == "CORE" else 0.3
 
-                    user_assets.setdefault(u_id, []).append(
-                        {
-                            "symbol": sym,
-                            "asset_class": final_asset_class,
-                            "quantity": h.get("quantity", 0),
-                            "current_value": h.get("quantity", 0)
-                            * metrics["spot_price"],
-                            "target_allocation_pct": h.get(
-                                "target_allocation_pct", 0.0
-                            ),
-                            "max_allocation_pct": h.get(
-                                "max_allocation_pct", default_max_alloc
-                            ),
-                            "spot_price": metrics["spot_price"],
-                            "price_15m_close": metrics.get(
-                                "price_15m_close", metrics["spot_price"]
-                            ),
-                            "ivr": metrics["ivr"],
-                            "max_pain": metrics["max_pain"],
-                            "put_wall": metrics["put_wall"],
-                            "call_wall": metrics["call_wall"],
-                            "is_uoa_sweep": metrics["is_uoa_sweep"],
-                            "gamma_flip": metrics.get("gamma_flip", 0.0),
-                            "sqz_mom": metrics.get("sqz_mom", 0.0),
-                            "skew": metrics.get("skew", 0.0),
-                            "atr_14": metrics.get("atr_14", 0.0),
-                            "atr_15m": metrics.get(
-                                "atr_15m", metrics.get("atr_14", 0.0)
-                            ),
-                            "hvn": metrics.get("hvn", 0.0),
-                            "lvn": metrics.get("lvn", 0.0),
-                            "dte": metrics.get("dte", 99),
-                            "gex_profile_data": r_data.get("gex_profile_data", {})
-                            if r_data
-                            else {},
-                            "avg_cost": h.get("avg_cost", 0.0),
-                            "psq_result": r_data.get("psq_result", {})
-                            if r_data
-                            else {},
-                        }
-                    )
+                    # target_allocation_pct 目前無 DB 欄位持久化、也無 /settings UI 可設定，
+                    # 因此只在持倉本身真的帶有明確數值時才寫入該 key，讓
+                    # check_satellite_rebalancing 既有的 asset.get(..., max_alloc) fallback
+                    # 生效（退回「修剪至上限」而非誤判為「目標配置 0%」導致近乎全清倉）。
+                    asset_entry: Dict[str, Any] = {
+                        "symbol": sym,
+                        "asset_class": final_asset_class,
+                        "quantity": h.get("quantity", 0),
+                        "current_value": h.get("quantity", 0) * metrics["spot_price"],
+                        "max_allocation_pct": h.get(
+                            "max_allocation_pct", default_max_alloc
+                        ),
+                        "spot_price": metrics["spot_price"],
+                        "price_15m_close": metrics.get(
+                            "price_15m_close", metrics["spot_price"]
+                        ),
+                        "ivr": metrics["ivr"],
+                        "max_pain": metrics["max_pain"],
+                        "put_wall": metrics["put_wall"],
+                        "call_wall": metrics["call_wall"],
+                        "is_uoa_sweep": metrics["is_uoa_sweep"],
+                        "gamma_flip": metrics.get("gamma_flip", 0.0),
+                        "sqz_mom": metrics.get("sqz_mom", 0.0),
+                        "skew": metrics.get("skew", 0.0),
+                        "atr_14": metrics.get("atr_14", 0.0),
+                        "atr_15m": metrics.get("atr_15m", metrics.get("atr_14", 0.0)),
+                        "hvn": metrics.get("hvn", 0.0),
+                        "lvn": metrics.get("lvn", 0.0),
+                        "dte": metrics.get("dte", 99),
+                        "gex_profile_data": r_data.get("gex_profile_data", {})
+                        if r_data
+                        else {},
+                        "avg_cost": h.get("avg_cost", 0.0),
+                        "psq_result": r_data.get("psq_result", {}) if r_data else {},
+                    }
+                    if h.get("target_allocation_pct") is not None:
+                        asset_entry["target_allocation_pct"] = h.get(
+                            "target_allocation_pct"
+                        )
+                    user_assets.setdefault(u_id, []).append(asset_entry)
 
                 for u_id, portfolio_assets in user_assets.items():
                     total_val = sum(a["current_value"] for a in portfolio_assets)
@@ -385,10 +384,14 @@ class PortfolioMonitorCog(commands.Cog):
                         candidate_radar,
                     )
 
-                    # 🚀 邏輯 (4): 槓桿與保證金防禦
+                    # 🚀 邏輯 (4): 槓桿與保證金防禦 — 排除已被 Scenario 2/3 標記過的
+                    # 標的，避免同一標的同一輪次收到互相矛盾的清倉指令。
+                    already_flagged = {ins["symbol"] for ins in rebalance_instructions}
                     rebalance_instructions += (
                         await self.rollover_engine.evaluate_margin_defense(
-                            u_id, portfolio_assets
+                            u_id,
+                            portfolio_assets,
+                            already_flagged_symbols=already_flagged,
                         )
                     )
 
@@ -497,9 +500,6 @@ class PortfolioMonitorCog(commands.Cog):
                 "instrument_type": target_holding.get("instrument_type", "SPOT"),
                 "current_value": float(target_holding.get("current_value", 0.0)),
                 "quantity": float(target_holding.get("quantity", 0.0)),
-                "target_allocation_pct": float(
-                    target_holding.get("target_allocation_pct", 0.2)
-                ),
                 "max_allocation_pct": float(
                     target_holding.get("max_allocation_pct", 0.3)
                 ),
@@ -523,6 +523,10 @@ class PortfolioMonitorCog(commands.Cog):
                 "dte": metrics.get("dte", 99),
                 "gex_profile_data": r_data.get("gex_profile_data", {}),
             }
+            if target_holding.get("target_allocation_pct") is not None:
+                asset_entry["target_allocation_pct"] = float(
+                    target_holding.get("target_allocation_pct")
+                )
 
             instructions = await self.rollover_engine.check_satellite_rebalancing(
                 user_id, [asset_entry], total_val
