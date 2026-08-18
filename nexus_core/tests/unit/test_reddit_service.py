@@ -157,3 +157,83 @@ async def test_custom_query_passed_to_edge_scraper() -> None:
         call_url = mock_client_instance.get.call_args[0][0]
         assert "custom_query=" in call_url
         assert "NVDA" in call_url
+
+
+@pytest.mark.asyncio
+async def test_batch_skips_http_when_tunnel_globally_disabled() -> None:
+    """get_reddit_context_batch should skip the HTTP call entirely and
+    return None for every symbol when no user has the tunnel enabled."""
+
+    with (
+        patch("services.reddit_service.httpx.AsyncClient") as mock_client_cls,
+        patch(
+            "database.user_settings.any_user_local_tunnel_enabled",
+            return_value=False,
+        ),
+    ):
+        from services.reddit_service import get_reddit_context_batch
+
+        result = await get_reddit_context_batch(["NVDA", "TSLA"])
+
+        assert result == {"NVDA": None, "TSLA": None}
+        mock_client_cls.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_batch_makes_single_feed_request_and_matches_locally() -> None:
+    """Happy path: exactly ONE HTTP call fetches the raw feed, and matching
+    against multiple symbols happens locally against that single payload."""
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "status": "success",
+        "data": [
+            {"title": "NVDA earnings beat expectations", "subreddit": "stocks"},
+            {
+                "title": "Why I'm bullish on Tesla (TSLA) this quarter",
+                "subreddit": "wallstreetbets",
+            },
+            {"title": "Unrelated post about the weather", "subreddit": "stocks"},
+        ],
+    }
+    mock_response.raise_for_status = MagicMock()
+
+    mock_client_instance = AsyncMock()
+    mock_client_instance.get = AsyncMock(return_value=mock_response)
+    mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
+    mock_client_instance.__aexit__ = AsyncMock(return_value=False)
+
+    with (
+        patch(
+            "database.user_settings.any_user_local_tunnel_enabled",
+            return_value=True,
+        ),
+        patch(
+            "services.reddit_service.httpx.AsyncClient",
+            return_value=mock_client_instance,
+        ),
+        patch("services.reddit_service.config") as mock_config,
+    ):
+        mock_config.TUNNEL_URL = "http://localhost:8000"
+
+        from services.reddit_service import get_reddit_context_batch
+
+        result = await get_reddit_context_batch(["NVDA", "TSLA", "ZZZZ_NOMATCH"])
+
+        # Exactly one HTTP request regardless of how many symbols were requested
+        mock_client_instance.get.assert_called_once()
+        call_url = mock_client_instance.get.call_args[0][0]
+        assert "/api/v1/scrape/reddit/feed" in call_url
+
+        assert result["NVDA"] is not None and "NVDA" in result["NVDA"]
+        assert result["TSLA"] is not None and "Tesla" in result["TSLA"]
+        assert result["ZZZZ_NOMATCH"] == "過去 24 小時內無相關討論。"
+
+
+@pytest.mark.asyncio
+async def test_batch_returns_none_for_all_symbols_on_empty_input() -> None:
+    from services.reddit_service import get_reddit_context_batch
+
+    result = await get_reddit_context_batch([])
+    assert result == {}

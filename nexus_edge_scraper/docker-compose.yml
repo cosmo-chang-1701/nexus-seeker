@@ -8,6 +8,7 @@ services:
     restart: unless-stopped
     environment:
       - PYTHONUNBUFFERED=1
+      - REDDIT_USER_AGENT=${REDDIT_USER_AGENT}
 
   # 服務 2：Cloudflare Tunnel (Sidecar Pattern)
   cloudflared:

@@ -74,15 +74,16 @@ class SchedulerCog(commands.Cog):
         all_watchlists = database.get_all_watchlist()
         symbols = sorted(list(set(row[1] for row in all_watchlists)))
 
-        from services.reddit_service import get_reddit_context
+        from services.reddit_service import get_reddit_context_batch
         from database.cache import save_kv_cache
 
-        for sym in symbols:
+        # 一次抓取版塊最新貼文清單、本地端關鍵字比對，取代逐標的各打一次請求，
+        # 大幅降低對 Reddit 的請求數量與 429 風險。
+        results = await get_reddit_context_batch(symbols, limit_per_symbol=5)
+        for sym, sentiment in results.items():
             try:
-                sentiment = await get_reddit_context(sym, limit=5)
                 await save_kv_cache(f"reddit_sentiment_{sym}", sentiment)
                 logger.info(f"✅ [{sym}] Reddit 情緒快取已更新。")
-                await asyncio.sleep(2)
             except Exception as e:
                 logger.error(f"[{sym}] 每日 Reddit 更新失敗: {e}")
 

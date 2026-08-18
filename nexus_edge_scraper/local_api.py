@@ -36,6 +36,50 @@ cik_cache: dict[str, str] = {}
 _REDDIT_CACHE_TTL = 600  # 10 分鐘，避免短時間內對同一標的重複打 Reddit RSS 觸發 429
 _reddit_cache: dict[str, tuple[dict[str, Any], float]] = {}
 
+_REDDIT_UA_PLACEHOLDER = (
+    "script:nexus-seeker-sentiment-tracker:v1.0 "
+    "(by /u/CHANGE_ME_SET_REDDIT_USER_AGENT_ENV)"
+)
+REDDIT_USER_AGENT = os.getenv("REDDIT_USER_AGENT", _REDDIT_UA_PLACEHOLDER)
+if REDDIT_USER_AGENT == _REDDIT_UA_PLACEHOLDER:
+    logger.warning(
+        "⚠️ REDDIT_USER_AGENT 尚未設定，正使用預設佔位字串，"
+        "Reddit 可能因未使用自訂/獨特 UA 而優先限流。"
+        "請在部署環境設定 REDDIT_USER_AGENT（格式：<platform>:<app_id>:<version> (by /u/<username>)）。"
+    )
+
+
+async def _fetch_reddit_rss(
+    client: httpx.AsyncClient, url: str, max_retries: int = 3
+) -> httpx.Response:
+    """帶指數退避與抖動（jitter）的 Reddit RSS 請求，統一處理 429 限流。"""
+    headers = {"User-Agent": REDDIT_USER_AGENT}
+    base_delay = 5.0
+
+    for attempt in range(max_retries + 1):
+        await asyncio.sleep(random.uniform(0.3, 1.0))
+        resp = await client.get(url, headers=headers)
+
+        if resp.status_code != 429:
+            return resp
+
+        if attempt >= max_retries:
+            return resp
+
+        retry_after = resp.headers.get("Retry-After")
+        if retry_after is not None and retry_after.isdigit():
+            delay = float(retry_after)
+        else:
+            delay = base_delay * (2**attempt) + random.uniform(1.0, 3.0)
+        delay = min(delay, 30.0)
+
+        logger.warning(
+            f"Reddit RSS 429 Too Many Requests（第 {attempt + 1} 次），{delay:.1f}s 後重試"
+        )
+        await asyncio.sleep(delay)
+
+    return resp
+
 
 async def _get_sec_cik(client: httpx.AsyncClient, symbol: str) -> str | None:
     if not cik_cache:
@@ -49,6 +93,74 @@ async def _get_sec_cik(client: httpx.AsyncClient, symbol: str) -> str | None:
             logger.error(f"Failed to fetch SEC CIK dictionary: {e}")
             return None
     return cik_cache.get(symbol.upper())
+
+
+@app.get("/api/v1/scrape/reddit/feed")
+async def scrape_reddit_feed(
+    limit: int = Query(100, description="抓取貼文數量上限"),
+) -> dict[str, Any]:
+    """一次性抓取版塊最新貼文清單（不帶關鍵字），交由上游本地端做多標的關鍵字比對。
+
+    相較於逐標的呼叫 /api/v1/scrape/reddit/{symbol}，這個端點讓批次任務
+    （例如每日 watchlist 情緒快取更新）只需對 Reddit 發出 1 次請求，
+    大幅降低請求數量與 429 風險。
+
+    註：此路由必須註冊在 /api/v1/scrape/reddit/{symbol} 之前，
+    否則 "feed" 會被動態路由當成 symbol 攔截。
+    """
+    import xml.etree.ElementTree as ET
+
+    cache_key = f"__feed__|{limit}"
+    cached = _reddit_cache.get(cache_key)
+    if cached is not None:
+        data, expiry = cached
+        if time.time() < expiry:
+            return data
+
+    url = (
+        f"https://www.reddit.com/r/wallstreetbets+stocks+options/new.rss?limit={limit}"
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            resp = await _fetch_reddit_rss(client, url)
+            resp.raise_for_status()
+
+            root = ET.fromstring(resp.text)
+            ns = {"atom": "http://www.w3.org/2005/Atom"}
+            entries = root.findall("atom:entry", ns)
+
+            posts: list[dict[str, str]] = []
+            for entry in entries[:limit]:
+                title = entry.find("atom:title", ns)
+                title_text = title.text if title is not None else "N/A"
+
+                category = entry.find("atom:category", ns)
+                sub = (
+                    category.attrib.get("label", "unknown")
+                    if category is not None
+                    else "unknown"
+                )
+                sub = sub.replace("r/", "")
+
+                published = entry.find("atom:published", ns)
+                published_text = published.text if published is not None else ""
+
+                posts.append(
+                    {
+                        "title": title_text or "N/A",
+                        "subreddit": sub,
+                        "published": published_text or "",
+                    }
+                )
+
+            result = {"status": "success", "data": posts}
+            _reddit_cache[cache_key] = (result, time.time() + _REDDIT_CACHE_TTL)
+            return result
+
+    except Exception as e:
+        logger.error(f"Reddit RSS feed 執行嚴重例外: {str(e)}")
+        return {"status": "error", "data": f"本地端執行例外: {str(e)}"}
 
 
 @app.get("/api/v1/scrape/reddit/{symbol}")
@@ -89,24 +201,7 @@ async def scrape_reddit(
 
     try:
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
-            }
-
-            # 最多重試 1 次，避免延遲超出上游 reddit_service.py 的 25s timeout 預算
-            resp = await client.get(url, headers=headers)
-            if resp.status_code == 429:
-                retry_after = resp.headers.get("Retry-After")
-                delay = min(
-                    float(retry_after)
-                    if retry_after is not None and retry_after.isdigit()
-                    else 5.0 + random.uniform(1.0, 3.0),
-                    8.0,
-                )
-                logger.warning(f"Reddit RSS 429 Too Many Requests，{delay:.1f}s 後重試")
-                await asyncio.sleep(delay)
-                resp = await client.get(url, headers=headers)
-
+            resp = await _fetch_reddit_rss(client, url)
             resp.raise_for_status()
 
             root = ET.fromstring(resp.text)
@@ -617,15 +712,17 @@ async def scrape_darkpool_prints(symbol: str) -> dict[str, Any]:
                     "price": price,
                     "volume": volume,
                     "premium": premium,
-                    "timestamp": f"2026-07-01T{10+i}:00:00Z",
+                    "timestamp": f"2026-07-01T{10 + i}:00:00Z",
                 }
             )
 
         # 依據成交金額(premium)排序，金額最大的排最前面
         prints.sort(
-            key=lambda x: float(x["premium"])
-            if "premium" in x and isinstance(x["premium"], (int, float, str))
-            else 0.0,
+            key=lambda x: (
+                float(x["premium"])
+                if "premium" in x and isinstance(x["premium"], (int, float, str))
+                else 0.0
+            ),
             reverse=True,
         )
 

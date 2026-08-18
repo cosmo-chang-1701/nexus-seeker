@@ -1,4 +1,5 @@
 import asyncio
+import random
 import httpx
 import logging
 from typing import Optional
@@ -70,9 +71,13 @@ async def get_reddit_context(
         custom_query = StockAliasMatrix.build_reddit_query(symbol, aliases)
         query_encoded = urllib.parse.quote(custom_query)
 
-        # 設定 25 秒超時，給予本地端足夠的渲染時間
+        # 45 秒超時，給予本地端 429 重試/退避足夠的時間預算
         async with _reddit_sem:
-            async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
+            # 併發呼叫（如 asyncio.gather 批次掃描）時加入隨機抖動，自然錯開對
+            # edge 端與 Reddit 的請求節奏，避免固定節奏被限流特徵辨識。
+            await asyncio.sleep(random.uniform(0.5, 1.5))
+
+            async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
                 req_url = f"{base_url}/api/v1/scrape/reddit/{symbol}?limit={limit}&custom_query={query_encoded}"
 
                 res = await client.get(req_url)
@@ -95,3 +100,102 @@ async def get_reddit_context(
     except Exception as e:
         logger.warning(f"[{symbol}] 呼叫本地 Tunnel 失敗: {e}")
         return "邊緣運算節點連線異常。"
+
+
+async def get_reddit_context_batch(
+    symbols: list[str], limit_per_symbol: int = 5
+) -> dict[str, Optional[str]]:
+    """一次性抓取版塊最新貼文清單，並在本地端對多個標的做關鍵字比對。
+
+    相較於逐標的呼叫 :func:`get_reddit_context`，本函式只對 Reddit 發出
+    **1 次** HTTP 請求即可覆蓋整批 ``symbols``，大幅降低每日批次任務
+    （如 watchlist 情緒快取更新）的請求數量與 429 風險。適合覆蓋大量標的
+    的低頻批次場景；單一標的的精準查詢仍應使用 :func:`get_reddit_context`。
+
+    Returns:
+        ``{symbol: 情緒摘要文字或 None}``。若整批請求失敗或本地 Tunnel
+        被關閉，所有標的一律回傳 ``None``（維持與 ``get_reddit_context``
+        一致的降級語意）。
+    """
+    no_match_message = "過去 24 小時內無相關討論。"
+    empty_result: dict[str, Optional[str]] = dict.fromkeys(symbols, None)
+
+    if not symbols:
+        return {}
+
+    # ── Gate: 資料庫全域開關防禦 ─────────────────────────────
+    try:
+        from database.user_settings import any_user_local_tunnel_enabled
+
+        if not any_user_local_tunnel_enabled():
+            logger.info(
+                "⏭️ [批次] 根據用戶 settings 設定，已跳過本地 Tunnel (Reddit Scraper) 批次呼叫。"
+            )
+            return empty_result
+    except Exception as e:
+        logger.warning(
+            f"[批次] 無法查詢 Tunnel 開關狀態 ({e})，保守跳過 Reddit 批次呼叫。"
+        )
+        return empty_result
+
+    if not getattr(config, "TUNNEL_URL", ""):
+        return empty_result
+
+    try:
+        logger.info(
+            f"[批次] 啟動邊緣運算呼叫，一次抓取 Reddit 最新貼文清單（{len(symbols)} 個標的）..."
+        )
+
+        base_url = config.TUNNEL_URL.rstrip("/")
+
+        async with _reddit_sem:
+            await asyncio.sleep(random.uniform(0.5, 1.5))
+
+            async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
+                req_url = f"{base_url}/api/v1/scrape/reddit/feed?limit=100"
+                res = await client.get(req_url)
+                res.raise_for_status()
+
+                response_json = res.json()
+                if response_json.get("status") != "success":
+                    logger.warning(
+                        f"[批次] 本地端爬取發生內部錯誤: {response_json.get('data')}"
+                    )
+                    return empty_result
+
+                posts: list[dict[str, str]] = response_json.get("data") or []
+
+        from market_analysis.stock_alias_matrix import StockAliasMatrix
+
+        results: dict[str, Optional[str]] = {}
+        for symbol in symbols:
+            aliases = await StockAliasMatrix.get_aliases_for_symbol(symbol)
+            matched = [
+                post
+                for post in posts
+                if StockAliasMatrix.is_text_matching_symbol(
+                    post.get("title", ""), symbol, aliases
+                )
+            ][:limit_per_symbol]
+
+            if not matched:
+                results[symbol] = no_match_message
+                continue
+
+            posts_text = "".join(
+                f"[{post.get('subreddit', 'unknown')}] {post.get('title', 'N/A')}\n"
+                for post in matched
+            )
+            results[symbol] = posts_text
+
+        logger.info(
+            f"[批次] 成功從本地端取得 Reddit 資料，已對 {len(symbols)} 個標的完成本地關鍵字比對。"
+        )
+        return results
+
+    except httpx.ReadTimeout:
+        logger.warning("[批次] Tunnel 請求超時，本地端無回應。")
+        return empty_result
+    except Exception as e:
+        logger.warning(f"[批次] 呼叫本地 Tunnel 失敗: {e}")
+        return empty_result

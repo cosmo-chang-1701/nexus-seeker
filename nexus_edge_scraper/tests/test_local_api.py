@@ -63,6 +63,94 @@ def test_scrape_reddit_retries_on_429_then_caches_result() -> None:
         assert call_count["n"] == 2  # no additional network call
 
 
+def test_scrape_reddit_uses_configured_user_agent() -> None:
+    import local_api
+
+    local_api._reddit_cache.clear()
+
+    captured_headers: dict[str, Any] = {}
+    xml_text = '<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"></feed>'
+
+    async def fake_get(self: Any, url: str, headers: Any = None) -> httpx.Response:
+        captured_headers.update(headers or {})
+        req = httpx.Request("GET", url)
+        return httpx.Response(200, text=xml_text, request=req)
+
+    with patch("httpx.AsyncClient.get", new=fake_get):
+        response = client.get("/api/v1/scrape/reddit/AAPL")
+        assert response.status_code == 200
+        assert captured_headers.get("User-Agent") == local_api.REDDIT_USER_AGENT
+        # Must not be a generic browser UA string
+        assert "Mozilla" not in captured_headers.get("User-Agent", "")
+
+
+def test_scrape_reddit_feed_returns_structured_posts() -> None:
+    import local_api
+
+    local_api._reddit_cache.clear()
+
+    xml_text = """<?xml version="1.0"?>
+    <feed xmlns="http://www.w3.org/2005/Atom">
+        <entry>
+            <title>NVDA to the moon</title>
+            <category term="wallstreetbets" label="r/wallstreetbets"/>
+            <published>2026-08-18T12:00:00+00:00</published>
+        </entry>
+        <entry>
+            <title>Thoughts on TSLA earnings</title>
+            <category term="stocks" label="r/stocks"/>
+            <published>2026-08-18T11:00:00+00:00</published>
+        </entry>
+    </feed>"""
+
+    async def fake_get(self: Any, url: str, headers: Any = None) -> httpx.Response:
+        req = httpx.Request("GET", url)
+        return httpx.Response(200, text=xml_text, request=req)
+
+    with patch("httpx.AsyncClient.get", new=fake_get):
+        response = client.get("/api/v1/scrape/reddit/feed?limit=100")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+        posts = data["data"]
+        assert len(posts) == 2
+        assert posts[0]["title"] == "NVDA to the moon"
+        assert posts[0]["subreddit"] == "wallstreetbets"
+        assert posts[1]["title"] == "Thoughts on TSLA earnings"
+
+
+def test_scrape_reddit_feed_retries_on_429_then_caches_result() -> None:
+    import local_api
+
+    local_api._reddit_cache.clear()
+
+    call_count = {"n": 0}
+    xml_text = '<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"></feed>'
+
+    async def fake_get(self: Any, url: str, headers: Any = None) -> httpx.Response:
+        call_count["n"] += 1
+        req = httpx.Request("GET", url)
+        if call_count["n"] == 1:
+            return httpx.Response(429, request=req)
+        return httpx.Response(200, text=xml_text, request=req)
+
+    async def fake_sleep(_delay: float) -> None:
+        return None
+
+    with (
+        patch("httpx.AsyncClient.get", new=fake_get),
+        patch("asyncio.sleep", new=fake_sleep),
+    ):
+        response = client.get("/api/v1/scrape/reddit/feed?limit=50")
+        assert response.status_code == 200
+        assert response.json()["status"] == "success"
+        assert call_count["n"] == 2
+
+        response2 = client.get("/api/v1/scrape/reddit/feed?limit=50")
+        assert response2.status_code == 200
+        assert call_count["n"] == 2  # served from cache, no additional network call
+
+
 def test_scrape_gex_fallback() -> None:
     # Mock playwright to fail at context creation inside try-except
     with patch("local_api.async_playwright", return_value=AsyncContextManagerMock()):
@@ -117,9 +205,10 @@ def test_scrape_fedwatch_realtime_zq_calculation() -> None:
 
 def test_scrape_fedwatch_fallback() -> None:
     # Mock yfinance and requests.get to fail
-    with patch(
-        "yfinance.Ticker", side_effect=Exception("Mock yfinance failure")
-    ), patch("requests.get", side_effect=Exception("Mock requests failure")):
+    with (
+        patch("yfinance.Ticker", side_effect=Exception("Mock yfinance failure")),
+        patch("requests.get", side_effect=Exception("Mock requests failure")),
+    ):
         response = client.get("/api/v1/scrape/macro/fedwatch")
         assert response.status_code == 200
         data = response.json()
@@ -165,10 +254,10 @@ def test_scrape_fedwatch_excel_parsing_and_buckets() -> None:
     mock_wb = MagicMock()
     mock_wb.__getitem__.return_value = mock_ws
 
-    with patch(
-        "yfinance.Ticker", side_effect=Exception("Mock yfinance failure")
-    ), patch("requests.get") as mock_req, patch(
-        "openpyxl.load_workbook", return_value=mock_wb
+    with (
+        patch("yfinance.Ticker", side_effect=Exception("Mock yfinance failure")),
+        patch("requests.get") as mock_req,
+        patch("openpyxl.load_workbook", return_value=mock_wb),
     ):
         mock_req.return_value.status_code = 200
         mock_req.return_value.iter_content.return_value = [b"mock"]
@@ -205,10 +294,10 @@ def test_scrape_fedwatch_stale_data_fallback() -> None:
     mock_wb = MagicMock()
     mock_wb.__getitem__.return_value = mock_ws
 
-    with patch(
-        "yfinance.Ticker", side_effect=Exception("Mock yfinance failure")
-    ), patch("requests.get") as mock_req, patch(
-        "openpyxl.load_workbook", return_value=mock_wb
+    with (
+        patch("yfinance.Ticker", side_effect=Exception("Mock yfinance failure")),
+        patch("requests.get") as mock_req,
+        patch("openpyxl.load_workbook", return_value=mock_wb),
     ):
         mock_req.return_value.status_code = 200
         mock_req.return_value.iter_content.return_value = [b"mock"]
@@ -265,10 +354,10 @@ def test_scrape_fedwatch_direct_summary_and_buckets_no_double_count() -> None:
     mock_wb = MagicMock()
     mock_wb.__getitem__.return_value = mock_ws
 
-    with patch(
-        "yfinance.Ticker", side_effect=Exception("Mock yfinance failure")
-    ), patch("requests.get") as mock_req, patch(
-        "openpyxl.load_workbook", return_value=mock_wb
+    with (
+        patch("yfinance.Ticker", side_effect=Exception("Mock yfinance failure")),
+        patch("requests.get") as mock_req,
+        patch("openpyxl.load_workbook", return_value=mock_wb),
     ):
         mock_req.return_value.status_code = 200
         mock_req.return_value.iter_content.return_value = [b"mock"]
@@ -313,9 +402,10 @@ def test_scrape_sec_fundamental() -> None:
         }
     )
 
-    with patch("local_api._get_sec_cik", new_callable=AsyncMock) as mock_cik, patch(
-        "httpx.AsyncClient.get", new_callable=AsyncMock
-    ) as mock_get:
+    with (
+        patch("local_api._get_sec_cik", new_callable=AsyncMock) as mock_cik,
+        patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get,
+    ):
         mock_cik.return_value = "0001318605"
         mock_get.return_value = mock_response
 
