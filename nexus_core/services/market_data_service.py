@@ -84,6 +84,35 @@ def _get_finnhub_controls() -> dict[str, Any]:
     return controls
 
 
+# ---------------------------------------------------------------------------
+# yfinance 節流（與 Finnhub 對稱：yfinance 沒有官方 rate limit API，
+# 但無節流會導致 Yahoo 端 IP 封鎖，故套用保守的 limiter + 併發上限）
+# ---------------------------------------------------------------------------
+_yfinance_controls_by_loop: weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop, dict[str, Any]
+] = weakref.WeakKeyDictionary()
+
+
+def _get_yfinance_controls() -> dict[str, Any]:
+    loop = asyncio.get_running_loop()
+    controls = _yfinance_controls_by_loop.get(loop)
+    if controls is None:
+        controls = {
+            "limiter": AsyncLimiter(30, 60),  # 每分鐘 30 次
+            "sem": asyncio.Semaphore(3),  # 最多 3 個併發
+        }
+        _yfinance_controls_by_loop[loop] = controls
+    return controls
+
+
+async def call_yf(func: Any, *args: Any, **kwargs: Any) -> Any:
+    """統一節流包裝：所有對 yfinance 的 blocking 呼叫都應經過這裡。"""
+    controls = _get_yfinance_controls()
+    async with controls["limiter"]:
+        async with controls["sem"]:
+            return await asyncio.to_thread(func, *args, **kwargs)
+
+
 def _get_client() -> finnhub.Client:
     """取得或初始化 Finnhub client。"""
     global _client
@@ -235,7 +264,7 @@ async def _safe_yf_history(
         if interval is not None:
             kwargs["interval"] = interval
 
-        df = await asyncio.to_thread(ticker.history, **kwargs)
+        df = await call_yf(ticker.history, **kwargs)
     except Exception as e:
         logger.warning(
             f"yfinance history (repair=True) 失敗: {e}，嘗試降級使用 repair=False 重試..."
@@ -248,7 +277,7 @@ async def _safe_yf_history(
             }
             if interval is not None:
                 kwargs_fallback["interval"] = interval
-            df = await asyncio.to_thread(ticker.history, **kwargs_fallback)
+            df = await call_yf(ticker.history, **kwargs_fallback)
         except Exception as e2:
             logger.warning(f"yfinance history 直接呼叫失敗: {e2}")
 
@@ -581,7 +610,7 @@ async def get_stock_splits(symbol: str) -> pd.Series:
     symbol = _sanitize_ticker(symbol)
     try:
         ticker = yf.Ticker(symbol)
-        splits = await asyncio.to_thread(lambda: ticker.splits)
+        splits = await call_yf(lambda: ticker.splits)
         if splits is None:
             return pd.Series(dtype=float)
         return splits
@@ -605,7 +634,7 @@ async def get_all_option_expiries(symbol: str) -> List[str]:
     res = []
     try:
         ticker = yf.Ticker(symbol)
-        expiries = await asyncio.to_thread(lambda: ticker.options)
+        expiries = await call_yf(lambda: ticker.options)
         res = list(expiries)
     except Exception as e:
         logger.warning(f"[{symbol}] yfinance 獲取期權到期日失敗: {e}")
@@ -700,7 +729,7 @@ async def get_option_chain(
     underlying_full = None
     try:
         ticker = yf.Ticker(symbol)
-        chain = await asyncio.to_thread(ticker.option_chain, expiry)
+        chain = await call_yf(ticker.option_chain, expiry)
         if chain is not None:
             calls_full = chain.calls.copy() if chain.calls is not None else None
             puts_full = chain.puts.copy() if chain.puts is not None else None

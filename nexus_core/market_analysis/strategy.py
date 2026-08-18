@@ -928,7 +928,7 @@ async def get_option_metrics(symbol: Any, opt_type: Any, strike: Any, expiry: An
     ticker = yf.Ticker(symbol)
     today = datetime.now().date()
     try:
-        opt_chain = await asyncio.to_thread(ticker.option_chain, expiry)
+        opt_chain = await market_data_service.call_yf(ticker.option_chain, expiry)
         chain_data = opt_chain.calls if opt_type == "call" else opt_chain.puts
         contract = chain_data[chain_data["strike"] == strike]
         if contract.empty:

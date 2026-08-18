@@ -32,7 +32,7 @@ class GhostTrader:
         """獲取特定期權合約的 Mid 價格 (用 to_thread)"""
         try:
             ticker = yf.Ticker(symbol)
-            chain = await asyncio.to_thread(ticker.option_chain, expiry)
+            chain = await market_data_service.call_yf(ticker.option_chain, expiry)
             opts = chain.calls if opt_type == "call" else chain.puts
             contract = opts[opts["strike"] == strike]
             if contract.empty:
@@ -377,7 +377,7 @@ class GhostTrader:
     ):
         """尋找符合 DTE 與 Delta 條件的合約 (Async)"""
         ticker = yf.Ticker(symbol)
-        expirations = await asyncio.to_thread(lambda: ticker.options)
+        expirations = await market_data_service.call_yf(lambda: ticker.options)
 
         valid_expiries = []
         for exp in expirations:
@@ -390,7 +390,7 @@ class GhostTrader:
         best_exp = min(
             valid_expiries, key=lambda x: abs(x[1] - (sum(target_dte) / 2.0))
         )[0]
-        chain = await asyncio.to_thread(ticker.option_chain, best_exp)
+        chain = await market_data_service.call_yf(ticker.option_chain, best_exp)
         opts = chain.calls if opt_type == "call" else chain.puts
 
         best_strike, min_diff = None, 999

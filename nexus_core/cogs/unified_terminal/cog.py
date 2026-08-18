@@ -29,6 +29,10 @@ from .pulse_view import PulseHubView
 
 logger = logging.getLogger(__name__)
 
+# 限制 /x 批次雷達掃描的併發標的數，避免大清單 (ALL) 一次性建立過多完整
+# 分析 pipeline（quote + history + option chain + UOA + reddit）造成資源壅塞。
+_RADAR_SCAN_SEM = asyncio.Semaphore(5)
+
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
     try:
@@ -207,8 +211,13 @@ class UnifiedTerminalCog(commands.Cog):
                 )
 
             # 並行獲取所有標的的雷達數據 (Cache-Aside)
+            # 使用 _RADAR_SCAN_SEM 限制併發數，避免大清單 (ALL) 造成請求洪峰。
+            async def _throttled_fetch(sym: str) -> Any:
+                async with _RADAR_SCAN_SEM:
+                    return await self._fetch_sym_radar_data_fast(sym)
+
             scan_results = await asyncio.gather(
-                *(self._fetch_sym_radar_data_fast(s) for s in unique_symbols),
+                *(_throttled_fetch(s) for s in unique_symbols),
                 return_exceptions=True,
             )
             # 過濾 Exception 並確保是 dict 類型以滿足 mypy

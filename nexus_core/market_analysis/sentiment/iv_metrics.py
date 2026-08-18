@@ -381,7 +381,7 @@ async def fetch_and_calculate_iv_metrics(symbol: str) -> IVMetrics:
         if is_market_active:
             ticker = yf.Ticker(symbol)
             try:
-                info = await asyncio.to_thread(lambda: ticker.info)
+                info = await market_data_service.call_yf(lambda: ticker.info)
                 current_iv = info.get("impliedVolatility")
                 if current_iv and current_iv > 0:
                     iv_source = "LIVE_IV"

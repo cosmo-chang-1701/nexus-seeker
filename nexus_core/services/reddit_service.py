@@ -1,3 +1,4 @@
+import asyncio
 import httpx
 import logging
 from typing import Optional
@@ -5,6 +6,10 @@ from typing import Optional
 import config
 
 logger = logging.getLogger(__name__)
+
+# 限制同時透過 Cloudflare Tunnel 打向 edge scraper 的 Reddit 爬取請求數，
+# 避免多個標的同時掃描時讓 edge 端過載或 Tunnel 逾時。
+_reddit_sem = asyncio.Semaphore(2)
 
 
 async def get_reddit_context(
@@ -66,22 +71,23 @@ async def get_reddit_context(
         query_encoded = urllib.parse.quote(custom_query)
 
         # 設定 25 秒超時，給予本地端足夠的渲染時間
-        async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
-            req_url = f"{base_url}/api/v1/scrape/reddit/{symbol}?limit={limit}&custom_query={query_encoded}"
+        async with _reddit_sem:
+            async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
+                req_url = f"{base_url}/api/v1/scrape/reddit/{symbol}?limit={limit}&custom_query={query_encoded}"
 
-            res = await client.get(req_url)
-            res.raise_for_status()
+                res = await client.get(req_url)
+                res.raise_for_status()
 
-            # 解析本地端回傳的 JSON
-            response_json = res.json()
-            if response_json.get("status") == "success":
-                logger.info(f"[{symbol}] 成功從本地端取得 Reddit 資料！")
-                return response_json.get("data")  # type: ignore
-            else:
-                logger.warning(
-                    f"[{symbol}] 本地端爬取發生內部錯誤: {response_json.get('data')}"
-                )
-                return "本地備援節點發生錯誤，暫無情緒資料。"
+                # 解析本地端回傳的 JSON
+                response_json = res.json()
+                if response_json.get("status") == "success":
+                    logger.info(f"[{symbol}] 成功從本地端取得 Reddit 資料！")
+                    return response_json.get("data")  # type: ignore
+                else:
+                    logger.warning(
+                        f"[{symbol}] 本地端爬取發生內部錯誤: {response_json.get('data')}"
+                    )
+                    return "本地備援節點發生錯誤，暫無情緒資料。"
 
     except httpx.ReadTimeout:
         logger.warning(f"[{symbol}] Tunnel 請求超時，本地端無回應。")

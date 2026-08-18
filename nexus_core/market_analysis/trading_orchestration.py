@@ -15,6 +15,7 @@ from services.market_data_service import (
     get_quote,
     get_all_option_expiries,
     get_option_chain,
+    call_yf,
 )
 
 logger = logging.getLogger(__name__)
@@ -120,7 +121,7 @@ async def recommend_covered_calls(
     today = datetime.now().date()
     ticker = yf.Ticker(symbol)
     try:
-        expirations = await asyncio.to_thread(lambda: ticker.options)
+        expirations = await call_yf(lambda: ticker.options)
     except Exception as e:
         logger.error(f"獲取 {symbol} 期權到期日失敗: {e}")
         return None
@@ -158,7 +159,7 @@ async def recommend_covered_calls(
                 continue
 
             # 抓取 option chain
-            opt_chain = await asyncio.to_thread(lambda: ticker.option_chain(exp))
+            opt_chain = await call_yf(lambda: ticker.option_chain(exp))
             calls = opt_chain.calls
 
             for _, row in calls.iterrows():
