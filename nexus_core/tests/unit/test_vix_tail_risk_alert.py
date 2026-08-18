@@ -31,9 +31,9 @@ def test_create_vix_tail_risk_embed_formatting() -> None:
         for f in embed.fields
         if f.name is not None and f.value is not None
     }
-    assert "`1.15` (嚴重倒掛 🚨)" in fields["VIX 期限結構比 (VTS)"]
-    assert "`32.5` (極端恐慌 🚨)" in fields["目前 VIX"]
-    assert "VIX 飆升至 32.5" in fields["觸發原因"]
+    assert "`1.15` (嚴重倒掛 🚨)" in fields["📐 VIX 期限結構比 (VTS)"]
+    assert "`32.5` (極端恐慌 🚨)" in fields["🌐 目前 VIX"]
+    assert "VIX 飆升至 32.5" in fields["🎯 觸發原因"]
 
     # 2. Defensive fallback on 0.0 or invalid inputs
     embed_invalid = create_vix_tail_risk_embed(vts_ratio=0.0, vix=0.0)
@@ -42,8 +42,8 @@ def test_create_vix_tail_risk_embed_formatting() -> None:
         for f in embed_invalid.fields
         if f.name is not None and f.value is not None
     }
-    assert "`N/A` (數據未更新)" in fields_invalid["VIX 期限結構比 (VTS)"]
-    assert "`N/A` (數據異常)" in fields_invalid["目前 VIX"]
+    assert "`N/A` (數據未更新)" in fields_invalid["📐 VIX 期限結構比 (VTS)"]
+    assert "`N/A` (數據異常)" in fields_invalid["🌐 目前 VIX"]
 
 
 @pytest.mark.asyncio

@@ -66,7 +66,7 @@ def test_create_holdings_embed() -> None:
         }
     ]
     embed = create_holdings_embed(holdings_data, total_capital=100000.0)
-    assert embed.title == "📊 Nexus Seeker | 現貨持倉清單"
+    assert embed.title == "💰 Nexus Seeker | 現貨持倉清單"
 
     # Extract lines in code block
     desc_field = embed.fields[0].value
@@ -107,7 +107,7 @@ def test_create_trades_embed() -> None:
         "total_unrealized_pnl": 350.0,
     }
     embed = create_trades_embed(pnl_data, total_capital=100000.0)
-    assert embed.title == "📊 Nexus Seeker | 實單持倉清單 (包含帳面損益)"
+    assert embed.title == "💰 Nexus Seeker | 實單持倉清單 (包含帳面損益)"
 
     desc_field = embed.fields[0].value
     assert desc_field is not None
@@ -491,7 +491,8 @@ def test_create_watchlist_signal_embed() -> None:
 
     assert embed is not None
     assert (
-        embed.title == "標的分析中心 2.0: NVDA 每半小時戰場心跳 [數據未更新/降級模式]"
+        embed.title
+        == "📊 標的分析中心 2.0: NVDA 每半小時戰場心跳 [數據未更新/降級模式]"
     )
 
     assert "物理籌碼牆與邊緣偵測 (Market Footprints)" in get_embed_text(embed)
@@ -543,7 +544,8 @@ def test_create_watchlist_signal_embed_covered_call() -> None:
 
     assert embed is not None
     assert (
-        embed.title == "標的分析中心 2.0: INTC 每半小時戰場心跳 [數據未更新/降級模式]"
+        embed.title
+        == "📊 標的分析中心 2.0: INTC 每半小時戰場心跳 [數據未更新/降級模式]"
     )
     assert (
         "既有現貨持倉: 100 股 ｜ 平均成本: $113.50 ｜ 當前損益: -3.97%"
@@ -2173,7 +2175,7 @@ def test_create_watchlist_signal_embed_non_degraded() -> None:
     )
 
     assert embed is not None
-    assert embed.title == "標的分析中心 2.0: AAPL 每半小時戰場心跳"
+    assert embed.title == "📊 標的分析中心 2.0: AAPL 每半小時戰場心跳"
 
     desc = get_embed_text(embed) or ""
     # Verify exact numeric formatting

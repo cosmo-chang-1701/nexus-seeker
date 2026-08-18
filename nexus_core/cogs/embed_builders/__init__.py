@@ -4,7 +4,7 @@
 確保所有現有呼叫端（其他 Cog、service、test）在重構期間不需修改任何 import 語句。
 
 模組分工：
-  _core.py            — NexusEmbed 基底類別與 install_nexus_embed()
+  _core.py            — NexusEmbed 基底類別
   _ansi_utils.py      — ANSI/視覺工具函式
   _embed_helpers.py   — 通用 Embed 工具（欄位 helper、split_embed_by_fields 等）
   scan_embeds.py      — Sentiment Scan、Macro Scan、FOMC、Stress Test、Covered Call、Earnings、Sector Flow
@@ -23,7 +23,7 @@
 """
 
 # ── Core ─────────────────────────────────────────────────────────────────────
-from cogs.embed_builders._core import NexusEmbed, install_nexus_embed
+from cogs.embed_builders._core import NexusEmbed
 
 # ── ANSI Utilities ────────────────────────────────────────────────────────────
 from cogs.embed_builders._ansi_utils import (
@@ -185,7 +185,6 @@ from cogs.embed_builders.order_embeds import (
 __all__ = [
     # Core
     "NexusEmbed",
-    "install_nexus_embed",
     # ANSI utils
     "_visual_len",
     "_pad_string",

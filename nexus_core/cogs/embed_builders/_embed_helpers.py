@@ -301,16 +301,14 @@ def split_embed_by_fields(
 
 def add_news_field(embed: Any, news_text: Any):  # type: ignore
     if news_text:
-        if len(news_text) > 1000:
-            news_text = news_text[:997] + "..."
+        news_text = _truncate_with_boundary(str(news_text), 1000)
         news_context = f"```{news_text}\n\u200b```"
         embed.add_field(name="📰 最新新聞", value=news_context, inline=False)
 
 
 def add_reddit_field(embed: Any, reddit_text: Any):  # type: ignore
     if reddit_text:
-        if len(reddit_text) > 1000:
-            reddit_text = reddit_text[:997] + "..."
+        reddit_text = _truncate_with_boundary(str(reddit_text), 1000)
         reddit_context = f"```{reddit_text}\n\u200b```"
         embed.add_field(name="📰 Reddit 討論", value=reddit_context, inline=False)
 

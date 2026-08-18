@@ -17,7 +17,7 @@ import discord
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
-from cogs.embed_builders._ansi_utils import _safe_float
+from cogs.embed_builders._ansi_utils import _safe_float, _truncate_with_boundary
 from cogs.embed_builders.settings_embeds import create_info_embed
 from cogs.embed_builders._core import NexusEmbed
 
@@ -214,11 +214,11 @@ def create_asset_promotion_embed(
     embed = NexusEmbed(
         title="🌌 Nexus | 資產晉升成功",
         description=f"標的 **{symbol}** 已從「觀察」提升為「實單交易」。",
-        color=0x00FF7F,
+        color=discord.Color.green(),
         timestamp=datetime.now(timezone.utc),
     )
     embed.add_field(
-        name="合約細節",
+        name="📄 合約細節",
         value=f"`{expiry}` ${strike} {opt_type.upper()}\n數量: `{quantity}` 口 | 價格: `${price}`",
     )
     embed.set_footer(text="Unified Asset Lifecycle v1.0")
@@ -1298,7 +1298,7 @@ def build_radar_scan_embed(
                 continue
             if cur_insights_len + len(ins_strip) + 1 > 920:
                 if not safe_insights:
-                    safe_insights.append(ins_strip[:900] + "...")
+                    safe_insights.append(_truncate_with_boundary(ins_strip, 900))
                 break
             safe_insights.append(ins_strip)
             cur_insights_len += len(ins_strip) + 1

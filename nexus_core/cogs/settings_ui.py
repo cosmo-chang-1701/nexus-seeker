@@ -637,7 +637,10 @@ class WtiConfigModal(discord.ui.Modal, title="🛢️ WTI 原油價格警報閾�
 
     async def on_submit(self, interaction: discord.Interaction) -> Any:
         from database.wti_config import WtiAlertConfig, save_wti_config
-        from cogs.embed_builders._core import NexusEmbed
+        from cogs.embed_builders.settings_embeds import (
+            create_info_embed,
+            create_error_embed,
+        )
         from pydantic import ValidationError
 
         try:
@@ -663,16 +666,13 @@ class WtiConfigModal(discord.ui.Modal, title="🛢️ WTI 原油價格警報閾�
                 "\n💡 當 WTI 期貨 (`CL=F`) 觸發以上條件時，系統將主動發送富含技術指標與關聯股分析的戰術情報卡片。",
             ]
 
-            embed = NexusEmbed(
-                title="✅ WTI 原油價格警報閾值已更新",
-                description="\n".join(desc_parts),
-                color=discord.Color.green(),
+            embed = create_info_embed(
+                "WTI 原油價格警報閾值已更新", "\n".join(desc_parts)
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
         except (ValueError, ValidationError) as e:
-            embed = NexusEmbed(
-                title="❌ 輸入格式錯誤",
-                description=f"請輸入有效的數值格式 (例如 95.00 或 3.0)。\n詳細錯誤: `{e}`",
-                color=discord.Color.red(),
+            embed = create_error_embed(
+                f"請輸入有效的數值格式 (例如 95.00 或 3.0)。\n詳細錯誤: `{e}`",
+                title="輸入格式錯誤",
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)

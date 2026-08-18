@@ -158,7 +158,7 @@ def create_holdings_embed(
 ) -> discord.Embed:
     """建構現貨持倉 (Holdings) 狀態報告 Embed"""
     embed = NexusEmbed(
-        title="📊 Nexus Seeker | 現貨持倉清單",
+        title="💰 Nexus Seeker | 現貨持倉清單",
         description="追蹤您的長期股權資產與成本分佈。\n\u200b",
         color=discord.Color.blue(),
         timestamp=datetime.now(timezone.utc),
@@ -227,7 +227,7 @@ def create_trades_embed(
 ) -> discord.Embed:
     """建構實單持倉 (Portfolio) 狀態與未實現損益報告 Embed"""
     embed = NexusEmbed(
-        title="📊 Nexus Seeker | 實單持倉清單 (包含帳面損益)",
+        title="💰 Nexus Seeker | 實單持倉清單 (包含帳面損益)",
         description="追蹤您的期權實單持倉與即時未實現損益 (Unrealized PnL)。\n\u200b",
         color=discord.Color.green(),
         timestamp=datetime.now(timezone.utc),

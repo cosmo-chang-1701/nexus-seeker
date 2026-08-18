@@ -336,7 +336,7 @@ def create_watchlist_signal_embed(
     }.get(alert_level, discord.Color.blurple())
 
     tag_str = f" 🏷️ {' | '.join(symbol_tags)}" if symbol_tags else ""
-    embed_title = f"標的分析中心 2.0: {symbol} 每半小時戰場心跳{tag_str}"
+    embed_title = f"📊 標的分析中心 2.0: {symbol} 每半小時戰場心跳{tag_str}"
     if is_degraded:
         embed_title += " [數據未更新/降級模式]"
 
@@ -356,21 +356,12 @@ def create_watchlist_signal_embed(
         "\n".join(description_lines).strip() if description_lines else None
     )
 
-    embed: discord.Embed
-    try:
-        embed = NexusEmbed(
-            title=embed_title,
-            description=embed_description,
-            color=color_val,
-            timestamp=datetime.now(timezone.utc),
-        )
-    except NameError:
-        embed = NexusEmbed(
-            title=embed_title,
-            description=embed_description,
-            color=color_val,
-            timestamp=datetime.now(timezone.utc),
-        )
+    embed = NexusEmbed(
+        title=embed_title,
+        description=embed_description,
+        color=color_val,
+        timestamp=datetime.now(timezone.utc),
+    )
 
     if show_market_footprints:
         has_meaningful_content = True
@@ -536,14 +527,7 @@ def create_watchlist_signal_embed(
         return None
 
     if show_telemetry and telemetry_alignment_note:
-        try:
-            val = _safe_embed_field_value(telemetry_alignment_note, "暫無對齊建議")
-        except NameError:
-            val = (
-                telemetry_alignment_note
-                if len(telemetry_alignment_note) <= 1024
-                else telemetry_alignment_note[:1021] + "..."
-            )
+        val = _safe_embed_field_value(telemetry_alignment_note, "暫無對齊建議")
 
         embed.add_field(
             name="📡 Telemetry 待成交委託單實時對齊建議",

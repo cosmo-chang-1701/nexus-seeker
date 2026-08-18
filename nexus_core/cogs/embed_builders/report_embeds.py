@@ -314,13 +314,13 @@ def build_vtr_stats_embed(
     # 根據勝率決定顏色
     win_rate = stats.get("win_rate", 0)
     if win_rate >= 60:
-        color = 0x2ECC71  # 綠色 (Success)
+        color = discord.Color.green()  # 綠色 (Success)
         status_icon = "🟢"
     elif win_rate >= 40:
-        color = 0xF1C40F  # 黃色 (Warning)
+        color = discord.Color.gold()  # 黃色 (Warning)
         status_icon = "🟡"
     else:
-        color = 0xE74C3C  # 紅色 (Danger)
+        color = discord.Color.red()  # 紅色 (Danger)
         status_icon = "🔴"
 
     embed = NexusEmbed(
@@ -375,9 +375,7 @@ def build_vtr_stats_embed(
     # 對沖歸因報告
     if attribution_lines:
         attr_text = "\n".join(attribution_lines)
-        # 截斷過長內容
-        if len(attr_text) > 1024:
-            attr_text = attr_text[:1021] + "..."
+        attr_text = _truncate_with_boundary(attr_text, 1024)
         embed.add_field(name="🛡️ 對沖效能與自我進化", value=attr_text, inline=False)
 
     embed.set_footer(text="Nexus Sandbox Engine | 數據包含已平倉之虛擬部位")
@@ -391,9 +389,9 @@ def build_scan_report(result: Dict[str, Any]) -> Any:
     """
     ai_decision = result.get("ai_decision", "SKIP")
     color = (
-        0x2ECC71
+        discord.Color.green()
         if ai_decision == "APPROVE"
-        else (0xE74C3C if ai_decision == "VETO" else 0x3498DB)
+        else (discord.Color.red() if ai_decision == "VETO" else discord.Color.blue())
     )
 
     embed = NexusEmbed(
@@ -480,7 +478,9 @@ def create_rehedge_embed(rehedge_info: Dict[str, Any]) -> discord.Embed:
     建構「自動避險回補建議」的 Discord Embed 面板。
     """
     priority = rehedge_info.get("priority", "NORMAL")
-    color = 0xF1C40F if priority == "NORMAL" else 0xE74C3C  # 黃色或紅色
+    color = (
+        discord.Color.gold() if priority == "NORMAL" else discord.Color.red()
+    )  # 黃色或紅色
 
     symbol = rehedge_info.get("symbol", "SPY")
     suggested_qty = rehedge_info.get("suggested_spy_qty", 0)
@@ -540,9 +540,9 @@ def create_ddp_embed(report: Dict[str, Any]) -> discord.Embed:
     pe_upside = (pe_mean / curr_pe - 1) * 100 if curr_pe > 0 else 0
 
     embed = NexusEmbed(
-        title=f"🌌 警報：Nexus 戴維斯雙擊 (DDP) | {sym}",
+        title=f"🚨 警報：Nexus 戴維斯雙擊 (DDP) | {sym}",
         description="偵測到標的符合 **Davis Double Play (DDP)** 條件：盈餘增長與估值擴張的雙重共振。",
-        color=0x00FF7F,  # SpringGreen
+        color=discord.Color.green(),
         timestamp=datetime.now(timezone.utc),
     )
 
@@ -625,10 +625,10 @@ def create_volatility_embed(report: Dict[str, Any]) -> discord.Embed:
     runway_impact = report["runway_impact"]
 
     # 決定顏色 (Buy Signal = Green, Watchlist Alert = Yellow)
-    color = 0x00FF00 if status == "波動率極低" else 0xFFFF00
+    color = discord.Color.green() if status == "波動率極低" else discord.Color.gold()
 
     embed = NexusEmbed(
-        title=f"🌌 警報：Nexus 波動率優勢 (廉價選擇權) | {sym}",
+        title=f"🚨 警報：Nexus 波動率優勢 (廉價選擇權) | {sym}",
         color=color,
         timestamp=datetime.now(timezone.utc),
     )

@@ -27,6 +27,7 @@ from market_analysis.scenario_classifier import MarketScenario
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
+from cogs.embed_builders._ansi_utils import _truncate_with_boundary
 from cogs.embed_builders._embed_helpers import (
     add_news_field,
     add_reddit_field,
@@ -391,8 +392,7 @@ def create_polymarket_list_embed(
 
         full_desc = "\n".join(lines).strip()
         # 檢查總長度，避免超過 Discord 限制
-        if len(full_desc) > 3900:
-            full_desc = full_desc[:3890] + "\n..."
+        full_desc = _truncate_with_boundary(full_desc, 3900)
 
         embed.description = full_desc
         embed.set_footer(
@@ -440,12 +440,14 @@ def create_quote_embed(symbol: str, data: Dict[str, Any]) -> discord.Embed:
         color=discord.Color.blue() if data["dp"] >= 0 else discord.Color.red(),
         timestamp=datetime.now(timezone.utc),
     )
-    embed.add_field(name="現價 (Current)", value=f"**${data['c']}**", inline=True)
-    embed.add_field(name="漲跌幅 (%)", value=f"`{data['dp']}%`", inline=True)
+    embed.add_field(name="💲 現價 (Current)", value=f"**${data['c']}**", inline=True)
+    embed.add_field(name="📈 漲跌幅 (%)", value=f"`{data['dp']}%`", inline=True)
     embed.add_field(
-        name="今日高/低", value=f"H: `${data['h']}` / L: `${data['l']}`", inline=False
+        name="📊 今日高/低",
+        value=f"H: `${data['h']}` / L: `${data['l']}`",
+        inline=False,
     )
-    embed.add_field(name="前收盤 (PC)", value=f"`${data['pc']}`", inline=True)
+    embed.add_field(name="📉 前收盤 (PC)", value=f"`${data['pc']}`", inline=True)
     embed.set_footer(text="Nexus Seeker | Market Intelligence Feed")
     return embed
 
@@ -467,12 +469,14 @@ def create_profit_lock_alert_embed(event: Dict[str, Any]) -> discord.Embed:
         timestamp=datetime.now(timezone.utc),
     )
     embed.add_field(
-        name="觸發指標",
+        name="🎯 觸發指標",
         value=f"```\n未實現損益: {event['pnl_pct']}% | DTE: {event['dte']}\n```",
         inline=False,
     )
-    embed.add_field(name="執行指令", value="✅ **獲利鎖定 (Profit Lock)**", inline=True)
-    embed.add_field(name="核心邏輯", value=event["reason"], inline=False)
+    embed.add_field(
+        name="✅ 執行指令", value="✅ **獲利鎖定 (Profit Lock)**", inline=True
+    )
+    embed.add_field(name="🧠 核心邏輯", value=event["reason"], inline=False)
     embed.set_footer(text="Mission-Critical Risk Environment | Nexus Seeker")
     return embed
 
@@ -485,10 +489,12 @@ def create_gamma_fragility_embed(event: Dict[str, Any]) -> discord.Embed:
         color=discord.Color.dark_red(),
         timestamp=datetime.now(timezone.utc),
     )
-    embed.add_field(name="目前淨 Gamma", value=f"`{event['net_gamma']}`", inline=True)
-    embed.add_field(name="安全臨界點", value=f"`{event['threshold']}`", inline=True)
     embed.add_field(
-        name="優先指令",
+        name="🧮 目前淨 Gamma", value=f"`{event['net_gamma']}`", inline=True
+    )
+    embed.add_field(name="🛡️ 安全臨界點", value=f"`{event['threshold']}`", inline=True)
+    embed.add_field(
+        name="⚡ 優先指令",
         value="🛡️ **注入正 Gamma 緩衝 (買入近月 ATM 期權) 或 立即減倉**",
         inline=False,
     )
@@ -512,11 +518,11 @@ def create_ditm_transition_alert_embed(
         color=discord.Color.gold(),
         timestamp=datetime.now(timezone.utc),
     )
-    embed.add_field(name="觸發指標", value=f"```\n{exit_reason}\n```", inline=False)
-    embed.add_field(name="執行動作", value=f"✅ **{action_taken}**", inline=True)
-    embed.add_field(name="鎖定利潤", value=f"💰 `${pnl:.2f}`", inline=True)
+    embed.add_field(name="🎯 觸發指標", value=f"```\n{exit_reason}\n```", inline=False)
+    embed.add_field(name="✅ 執行動作", value=f"✅ **{action_taken}**", inline=True)
+    embed.add_field(name="💰 鎖定利潤", value=f"💰 `${pnl:.2f}`", inline=True)
     embed.add_field(
-        name="帳戶目前總曝險",
+        name="📊 帳戶目前總曝險",
         value=f"`{exposure_pct:.2f}%` (Beta-Weighted Delta)",
         inline=False,
     )
@@ -546,9 +552,9 @@ def create_vtr_settlement_notice_embed(
         color=discord.Color.blue() if "轉倉" in status_icon else discord.Color.red(),
         timestamp=datetime.now(timezone.utc),
     )
-    embed.add_field(name="損益", value=f"`${pnl:.2f}`", inline=True)
+    embed.add_field(name="💰 損益", value=f"`${pnl:.2f}`", inline=True)
     embed.add_field(
-        name="目前總曝險",
+        name="📊 目前總曝險",
         value=f"`{exposure_pct:.2f}%` (Beta-Weighted Delta)",
         inline=True,
     )
@@ -556,7 +562,7 @@ def create_vtr_settlement_notice_embed(
     if regime is not None and target_delta is not None:
         embed.add_field(name="🧠 系統自主位階判定", value=f"`{regime}`", inline=False)
         embed.add_field(
-            name="理想總曝險目標", value=f"`{target_delta:.1f} Delta`", inline=True
+            name="🎯 理想總曝險目標", value=f"`{target_delta:.1f} Delta`", inline=True
         )
     if hedge:
         embed.add_field(
@@ -650,9 +656,11 @@ def create_margin_api_alert_embed(ratio: float) -> discord.Embed:
         color=discord.Color.dark_red(),
         timestamp=datetime.now(timezone.utc),
     )
-    embed.add_field(name="目前保證金使用率", value=f"`{ratio*100:.2f}%`", inline=True)
     embed.add_field(
-        name="優先指令",
+        name="📊 目前保證金使用率", value=f"`{ratio*100:.2f}%`", inline=True
+    )
+    embed.add_field(
+        name="⚡ 優先指令",
         value="🛡️ **立即降低曝險或補足保證金，避免面臨平倉 (Margin Call)**",
         inline=False,
     )
@@ -691,14 +699,16 @@ def create_vix_tail_risk_embed(
     else:
         vix_str = "`N/A` (數據異常)"
 
-    embed.add_field(name="VIX 期限結構比 (VTS)", value=vts_str, inline=True)
-    embed.add_field(name="目前 VIX", value=vix_str, inline=True)
+    embed.add_field(name="📐 VIX 期限結構比 (VTS)", value=vts_str, inline=True)
+    embed.add_field(name="🌐 目前 VIX", value=vix_str, inline=True)
 
     if trigger_reason:
-        embed.add_field(name="觸發原因", value=f"⚠️ **{trigger_reason}**", inline=False)
+        embed.add_field(
+            name="🎯 觸發原因", value=f"⚠️ **{trigger_reason}**", inline=False
+        )
 
     embed.add_field(
-        name="優先指令",
+        name="⚡ 優先指令",
         value="🛡️ **全面啟動尾部風險防禦 (Tail Risk Hedging) 並縮減部位規模**",
         inline=False,
     )
@@ -718,15 +728,15 @@ def create_polymarket_prob_shift_embed(
         color=discord.Color.orange(),
         timestamp=datetime.now(timezone.utc),
     )
-    embed.add_field(name="市場名稱", value=f"**{market}**", inline=False)
+    embed.add_field(name="🐋 市場名稱", value=f"**{market}**", inline=False)
     embed.add_field(
-        name="機率變化",
+        name="📊 機率變化",
         value=f"`{old_prob*100:.1f}%` ➔ `{new_prob*100:.1f}%`",
         inline=True,
     )
-    embed.add_field(name="Delta", value=f"`{delta:+.1f}%`", inline=True)
+    embed.add_field(name="📐 Delta", value=f"`{delta:+.1f}%`", inline=True)
     embed.add_field(
-        name="可能原因",
+        name="🔍 可能原因",
         value="📰 **突發新聞、重大事件落地、或大戶倒貨重新定價**",
         inline=False,
     )

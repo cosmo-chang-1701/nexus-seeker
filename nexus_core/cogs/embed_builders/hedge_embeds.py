@@ -18,6 +18,7 @@ from cogs.embed_builders._core import NexusEmbed
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from cogs.embed_builders._ansi_utils import _truncate_with_boundary
 from cogs.embed_builders._embed_helpers import split_embed_by_fields
 
 
@@ -143,7 +144,7 @@ def create_hedge_alert_embed(
         snapshot_lines: List[str] = []
         for event in poly_snapshot:
             question = str(event.get("question", "N/A"))
-            truncated = question[:40] + "..." if len(question) > 40 else question
+            truncated = _truncate_with_boundary(question, 40)
             odds = event.get("odds_distribution", [])
             odds_str = " | ".join(
                 f"{item.get('outcome')}: `{item.get('odds', 0.0) * 100:.0f}%`"

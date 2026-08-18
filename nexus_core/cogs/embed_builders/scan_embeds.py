@@ -520,11 +520,11 @@ def create_fomc_escape_window_embed(
 ) -> discord.Embed:
     """建立方案 C 全維度宏觀流動性逃頂矩陣 Embed (繁體中文)"""
     if direction == "前移":
-        color = discord.Color(0xE74C3C)  # Red for tightening risk defense
+        color = discord.Color.red()  # Tightening risk defense
     elif direction == "後推":
-        color = discord.Color(0x2ECC71)  # Green for liquidity expansion risk-on
+        color = discord.Color.green()  # Liquidity expansion risk-on
     else:
-        color = discord.Color(0xF1C40F)  # Yellow/Gold for neutral balance
+        color = discord.Color.gold()  # Neutral balance
 
     title_text = "📅 方案 C 宏觀流動性逃頂矩陣 (Macro Escape Matrix)"
     if is_fallback:

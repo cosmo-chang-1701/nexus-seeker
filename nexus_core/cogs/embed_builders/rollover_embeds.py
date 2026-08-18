@@ -101,7 +101,7 @@ class RolloverActionView(discord.ui.View):
 
         await asyncio.sleep(1.5)
 
-        embed = discord.Embed(
+        embed = NexusEmbed(
             title=f"📊 {self.target_symbol} 轉倉試算報告",
             description="系統已完成概略的保證金佔用與預期報酬推估。\n*(註: 精確保證金依各券商終端為準)*",
             color=discord.Color.green(),

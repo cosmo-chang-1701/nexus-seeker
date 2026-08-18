@@ -1,7 +1,7 @@
 """NexusEmbed — 全站統一 Discord Embed 子類別。
 
 負責強制執行一致的調色盤、時間戳記與 Footer 排版。
-所有子模組都從本模組 import `discord.Embed`（已被 NexusEmbed 替換）。
+所有子模組皆應改用 `NexusEmbed` 取代 `discord.Embed` 來建立 Embed 物件。
 """
 
 from typing import Any
@@ -9,9 +9,66 @@ import discord
 
 from datetime import datetime, timezone
 
+from ui.panel_renderer import truncate_with_boundary
+
 
 # 保存原始 Embed 參照，NexusEmbed.from_dict 內部需要用原生版本解析 dict。
 _OriginalEmbed = discord.Embed
+
+# Discord API 硬限制
+_MAX_FIELD_COUNT = 25
+_MAX_DESCRIPTION_LEN = 4096
+_MAX_TOTAL_LEN = 5800  # 保守值，低於官方 6000 字元總長上限
+
+_OVERFLOW_FIELD_WARNING = "⚠️ (因自選標的過多，已啟用自動截斷防護，僅保留核心數據)"
+_OVERFLOW_DESC_WARNING = "…（內容過長已自動截斷）"
+
+
+# ============================================================================
+# 統一語意調色盤 (Curated Semantic Palette)
+#
+# 每個語意類別對應唯一一個精選色值；所有 discord 原生 Color 工廠函式都會被
+# remap 到這張表，確保「成功／失敗／警示／資訊／防禦／管理／特殊事件／中性」
+# 這些語意在全站的呈現顏色永遠一致。
+# ============================================================================
+_COLOR_SUCCESS = 0x2ECC71  # 成功 / 多頭 / 安全
+_COLOR_ERROR = 0xE74C3C  # 危險 / 錯誤 / 空頭 / 否決
+_COLOR_WARNING = 0xF39C12  # 警示 / 待關注 / 中性偏警戒
+_COLOR_INFO = 0x3498DB  # 一般資訊 / 中性
+_COLOR_BRAND = 0x5865F2  # Nexus 品牌 / 系統框架
+_COLOR_DEFENSE = 0x1ABC9C  # 對沖 / 防禦性倉位
+_COLOR_ADMIN = 0x9B59B6  # 設定 / 管理介面
+_COLOR_SPECIAL = 0x8E44AD  # 罕見市場事件 (擠壓、巨鯨共振、尾部風險)
+_COLOR_NEUTRAL = 0x99AAB5  # 無數據 / 未定義 / 中性
+
+# 原生 discord.Color 工廠函式 → 語意調色盤的映射表。
+# 使用 lambda 延後呼叫，避免模組載入時就建立 discord.Color 實例。
+_COLOR_REMAP: list[tuple[Any, int]] = [
+    (lambda: discord.Color.green(), _COLOR_SUCCESS),
+    (lambda: discord.Color.red(), _COLOR_ERROR),
+    (lambda: discord.Color.dark_red(), _COLOR_ERROR),
+    (lambda: discord.Color.orange(), _COLOR_WARNING),
+    (lambda: discord.Color.gold(), _COLOR_WARNING),
+    (lambda: discord.Color.blue(), _COLOR_INFO),
+    (lambda: discord.Color.dark_blue(), _COLOR_INFO),
+    (lambda: discord.Color.blurple(), _COLOR_BRAND),
+    (lambda: discord.Color.teal(), _COLOR_DEFENSE),
+    (lambda: discord.Color.dark_teal(), _COLOR_DEFENSE),
+    (lambda: discord.Color.dark_magenta(), _COLOR_ADMIN),
+    (lambda: discord.Color.purple(), _COLOR_SPECIAL),
+    (lambda: discord.Color.dark_grey(), _COLOR_NEUTRAL),
+    (lambda: discord.Color.default(), _COLOR_NEUTRAL),
+]
+
+
+def _remap_color(value: Any) -> Any:
+    """將任何原生 discord.Color 語意色，remap 到統一的精選調色盤。"""
+    if value is None:
+        return None
+    for factory, curated_hex in _COLOR_REMAP:
+        if value == factory():
+            return discord.Color(curated_hex)
+    return value
 
 
 def _safe_clamp_field_value(value: Any, max_len: int = 1024) -> str:
@@ -44,18 +101,9 @@ class NexusEmbed(discord.Embed):
         # 1. 統一對齊和諧且精美的高級調色盤 (Curated Aesthetic Palette)
         color = kwargs.get("color")
         if color is not None:
-            if color == discord.Color.blue():
-                kwargs["color"] = discord.Color(0x3498DB)
-            elif color == discord.Color.red() or color == discord.Color.dark_red():
-                kwargs["color"] = discord.Color(0xE74C3C)
-            elif color == discord.Color.green():
-                kwargs["color"] = discord.Color(0x2ECC71)
-            elif color == discord.Color.orange():
-                kwargs["color"] = discord.Color(0xF39C12)
-            elif color == discord.Color.blurple():
-                kwargs["color"] = discord.Color(0x5865F2)
+            kwargs["color"] = _remap_color(color)
         else:
-            kwargs["color"] = discord.Color(0x3498DB)
+            kwargs["color"] = discord.Color(_COLOR_INFO)
 
         super().__init__(*args, **kwargs)
 
@@ -69,18 +117,7 @@ class NexusEmbed(discord.Embed):
 
     @color.setter
     def color(self, value: Any) -> Any:
-        if value is not None:
-            if value == discord.Color.blue():
-                value = discord.Color(0x3498DB)
-            elif value == discord.Color.red() or value == discord.Color.dark_red():
-                value = discord.Color(0xE74C3C)
-            elif value == discord.Color.green():
-                value = discord.Color(0x2ECC71)
-            elif value == discord.Color.orange():
-                value = discord.Color(0xF39C12)
-            elif value == discord.Color.blurple():
-                value = discord.Color(0x5865F2)
-        _OriginalEmbed.color.fset(self, value)  # type: ignore
+        _OriginalEmbed.color.fset(self, _remap_color(value))  # type: ignore
 
     @property
     def colour(self) -> Any:
@@ -163,7 +200,20 @@ class NexusEmbed(discord.Embed):
     def to_dict(self) -> Any:
         result = super().to_dict()
 
-        # 實作單一 Field 邊界防護 (256/1024字元上限)
+        # 0. 保底 Footer：即使呼叫端忘記呼叫 set_footer()，序列化時仍強制附上品牌 Footer。
+        footer = result.get("footer")
+        if not footer or not footer.get("text"):
+            result["footer"] = {"text": "🌌 Nexus Seeker"}
+
+        # 1. 獨立防護 Description 上限 (4096 字元)，避免長描述、少欄位時漏檢。
+        description = result.get("description")
+        if description and len(description) > _MAX_DESCRIPTION_LEN:
+            room = _MAX_DESCRIPTION_LEN - len(_OVERFLOW_DESC_WARNING)
+            result["description"] = (
+                truncate_with_boundary(description, room) + _OVERFLOW_DESC_WARNING
+            )
+
+        # 2. 實作單一 Field 邊界防護 (256/1024字元上限)
         fields = list(result.get("fields", []))
         for field in fields:
             if "name" in field:
@@ -171,7 +221,12 @@ class NexusEmbed(discord.Embed):
             if "value" in field:
                 field["value"] = _safe_clamp_field_value(field["value"])
 
-        # 實作字數截斷防護 (5800字元上限)
+        # 3. 欄位數量防護 (25 個上限)：超過時捨棄尾端欄位並提示。
+        overflowed_by_count = len(fields) > _MAX_FIELD_COUNT
+        if overflowed_by_count:
+            fields = fields[:_MAX_FIELD_COUNT]
+
+        # 4. 實作字數截斷防護 (5800字元總長上限)
         total_len = len(result.get("title") or "") + len(
             result.get("description") or ""
         )
@@ -183,27 +238,23 @@ class NexusEmbed(discord.Embed):
         for field in fields:
             total_len += len(field.get("name") or "") + len(field.get("value") or "")
 
-        if total_len > 5800:
-            warning = "⚠️ (因自選標的過多，已啟用自動截斷防護，僅保留核心數據)"
-            while total_len > 5800 and fields:
+        overflowed_by_length = total_len > _MAX_TOTAL_LEN
+        if overflowed_by_length:
+            while total_len > _MAX_TOTAL_LEN and fields:
                 field = fields.pop()
                 total_len -= len(field.get("name") or "") + len(
                     field.get("value") or ""
                 )
-            result["fields"] = fields
 
+        result["fields"] = fields
+
+        if overflowed_by_count or overflowed_by_length:
             desc = result.get("description") or ""
-            if warning not in desc:
-                result["description"] = f"{desc}\n\n{warning}" if desc else warning
-        else:
-            result["fields"] = fields
+            if _OVERFLOW_FIELD_WARNING not in desc:
+                result["description"] = (
+                    f"{desc}\n\n{_OVERFLOW_FIELD_WARNING}"
+                    if desc
+                    else _OVERFLOW_FIELD_WARNING
+                )
 
         return result
-
-
-def install_nexus_embed() -> None:
-    """將 discord.Embed 替換為 NexusEmbed，攔截全站 Embed 建立。
-
-    只需在 embed_builder 模組層級呼叫一次。子模組不需要重複呼叫。
-    """
-    discord.Embed = NexusEmbed  # type: ignore[misc]
