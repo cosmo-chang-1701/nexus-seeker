@@ -4,7 +4,10 @@ from datetime import date
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from market_analysis.intraday_pipeline import IntradayScanPipeline
+from market_analysis.intraday_pipeline import (
+    IntradayScanPipeline,
+    build_watchlist_skew_rule_commentary,
+)
 from market_analysis.models import (
     TraderAccountState,
     OptionHolding,
@@ -312,6 +315,109 @@ async def test_build_watchlist_heartbeat_embed_includes_option_plan(
     assert create_embed_kwargs["suitable_sell_price"] == 0.0
     assert create_embed_kwargs["suitable_sell_shares"] == 0
     assert "Skew 避險情緒折價" in create_embed_kwargs["buy_rationale"]
+
+
+def _build_skew_test_metrics(**overrides: Any) -> Any:
+    from models.schemas import EnhancedWatchlistMetrics
+
+    payload: dict[str, Any] = dict(
+        symbol="TEST",
+        exchange="NASDAQ",
+        current_price=100.0,
+        buy_zone_status="Wait",
+        buy_price_phase1=90.0,
+        buy_price_phase2=80.0,
+        buy_price_phase3=70.0,
+        sell_zone_status="Wait",
+        sell_price_phase1=110.0,
+        sell_price_phase2=120.0,
+        sell_price_phase3=130.0,
+        rsi_14=50.0,
+        atr_14=2.0,
+        beta=1.0,
+        ma20=100.0,
+        ma50=100.0,
+        ma200=100.0,
+        iv_rank=40.0,
+        iv_percentile=40.0,
+        option_skew=0.0,
+        skew_percentile=50.0,
+        option_skew_state="正常",
+        pcr=1.0,
+        volume_poc=100.0,
+        gex_max_put_wall=100.0,
+        vanna_sensitivity=0.1,
+        relative_strength_spy=1.0,
+        squeeze_momentum=None,
+    )
+    payload.update(overrides)
+    return EnhancedWatchlistMetrics(**payload)
+
+
+def _build_skew_test_tactical(**overrides: Any) -> Any:
+    from models.schemas import WatchlistTacticalPlan
+
+    payload: dict[str, Any] = dict(
+        scenario="wait",
+        sddm_route="WAIT (正常)",
+        action_guideline="指引",
+        dynamic_grid_step=1.0,
+        hidden_delta_risk=0.0,
+        hedge_instruction=None,
+        hedge_allocation_shares=0,
+        alert_level="yellow",
+    )
+    payload.update(overrides)
+    return WatchlistTacticalPlan(**payload)
+
+
+def test_skew_commentary_badge_syncs_with_tactical_route() -> None:
+    metrics = _build_skew_test_metrics(
+        option_skew=6.25, skew_percentile=85.0, option_skew_state="左偏保護"
+    )
+    tactical = _build_skew_test_tactical(
+        scenario="premium-harvest", sddm_route="SHIELD"
+    )
+
+    result = build_watchlist_skew_rule_commentary(metrics, tactical)
+
+    assert "🔴" in result
+    assert "✅ 與操盤路由同向 (SDDM: SHIELD)" in result
+    assert "（Skew 型態：左偏保護）" in result
+
+
+def test_skew_commentary_badge_diverges_from_tactical_route() -> None:
+    metrics = _build_skew_test_metrics(
+        option_skew=6.25, skew_percentile=85.0, option_skew_state="左偏保護"
+    )
+    tactical = _build_skew_test_tactical(scenario="wait", sddm_route="STANDBY")
+
+    result = build_watchlist_skew_rule_commentary(metrics, tactical)
+
+    assert "⚠️ 訊號不同步，建議以操盤路由為準 (SDDM: STANDBY)" in result
+
+
+def test_skew_commentary_flags_momentum_divergence() -> None:
+    metrics = _build_skew_test_metrics(
+        option_skew=-5.0,
+        skew_percentile=15.0,
+        option_skew_state="右偏亢奮",
+        squeeze_momentum=-3.0,
+    )
+
+    result = build_watchlist_skew_rule_commentary(metrics, tactical=None)
+
+    assert "🟢" in result
+    assert "🔻 動能背離：SQZ MOM 轉負，建議降低倉位確認" in result
+
+
+def test_skew_commentary_without_tactical_stays_backward_compatible() -> None:
+    metrics = _build_skew_test_metrics(option_skew=0.5, skew_percentile=50.0)
+
+    result = build_watchlist_skew_rule_commentary(metrics)
+
+    assert "SDDM" not in result
+    assert "🟡" in result
 
 
 @pytest.mark.asyncio

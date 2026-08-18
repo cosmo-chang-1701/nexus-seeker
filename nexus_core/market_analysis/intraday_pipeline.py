@@ -762,13 +762,89 @@ _SKEW_PCR_DIVERGENCE_WARNING = (
     "此情境不宜解讀為『同步』，建議降槓桿、避免追價單腿，優先採用定義風險的價差/保護性結構。"
 )
 
+# Direction badge taxonomy: (ansi_prefix, emoji, label, bias)
+# bias is one of "bullish", "bearish", "neutral" — used for route/momentum cross-checks.
+_SKEW_BADGE_NEUTRAL = ("[1;33m", "🟡", "中性觀望", "neutral")
+_SKEW_BADGE_PREMIUM_HARVEST = ("[1;33m", "🟠", "傾向：賣方收租（不追價）", "bearish")
+_SKEW_BADGE_DEFENSIVE = ("[1;31m", "🔴", "傾向：防禦／避險需求升溫", "bearish")
+_SKEW_BADGE_DIVERGENCE = ("[1;31m", "⚠️", "方向背離／降槓桿", "neutral")
+_SKEW_BADGE_BULLISH = ("[1;32m", "🟢", "偏多／賣方收租", "bullish")
 
-def build_watchlist_skew_rule_commentary(metrics: EnhancedWatchlistMetrics) -> str:
-    """Deterministic skew diagnostics (no LLM).
+
+def _skew_route_sync_note(
+    bias: str, tactical: "WatchlistTacticalPlan | None"
+) -> str | None:
+    """Cross-check the skew-derived bias against the already-computed SDDM tactical route."""
+
+    if tactical is None:
+        return None
+
+    scenario_bias = {
+        "premium-harvest": "bearish",
+        "hard-hedge": "bearish",
+        "wait": "neutral",
+    }.get(tactical.scenario)
+
+    if scenario_bias is None:
+        return None
+
+    if bias == "neutral" or scenario_bias == bias:
+        return f"✅ 與操盤路由同向 (SDDM: {tactical.sddm_route})"
+    return f"⚠️ 訊號不同步，建議以操盤路由為準 (SDDM: {tactical.sddm_route})"
+
+
+def _skew_momentum_note(bias: str, metrics: EnhancedWatchlistMetrics) -> str | None:
+    """Flag a squeeze-momentum divergence against the skew-derived bias."""
+
+    squeeze_momentum = getattr(metrics, "squeeze_momentum", None)
+    if squeeze_momentum is None:
+        return None
+    squeeze_momentum = float(squeeze_momentum)
+
+    if bias == "bullish" and squeeze_momentum < 0:
+        return "🔻 動能背離：SQZ MOM 轉負，建議降低倉位確認"
+    if bias == "bearish" and squeeze_momentum > 0:
+        return "🔺 動能背離：SQZ MOM 仍為正，防禦立場可能過早"
+    return None
+
+
+def _format_skew_commentary(
+    badge: tuple[str, str, str, str],
+    detail: str,
+    metrics: EnhancedWatchlistMetrics,
+    tactical: "WatchlistTacticalPlan | None",
+) -> str:
+    ansi_prefix, emoji, label, bias = badge
+
+    skew_state = getattr(metrics, "option_skew_state", None)
+    if skew_state:
+        detail = f"{detail}（Skew 型態：{skew_state}）"
+
+    lines = [f"{ansi_prefix}{emoji} 操作方向：{label}[0m"]
+
+    sync_note = _skew_route_sync_note(bias, tactical)
+    momentum_note = _skew_momentum_note(bias, metrics)
+    tail_notes = [note for note in (sync_note, momentum_note) if note]
+    body_lines = tail_notes + [detail]
+    for note in body_lines[:-1]:
+        lines.append(f" ├─ {note}")
+    lines.append(f" └─ {body_lines[-1]}")
+
+    return "\n".join(lines)
+
+
+def build_watchlist_skew_rule_commentary(
+    metrics: EnhancedWatchlistMetrics,
+    tactical: "WatchlistTacticalPlan | None" = None,
+) -> str:
+    """Deterministic skew diagnostics with a direction badge (no LLM).
 
     SDD changes:
     - Suppress standard warnings when skew percentile within [30, 70]
     - Only route on absolute tail anomalies per spec
+    - Lead with an explicit direction badge, cross-checked against the
+      already-computed SDDM tactical route and squeeze momentum so users
+      can read the operating direction in the first line.
     """
 
     skew_val = float(getattr(metrics, "option_skew", 0.0) or 0.0)
@@ -778,32 +854,64 @@ def build_watchlist_skew_rule_commentary(metrics: EnhancedWatchlistMetrics) -> s
 
     # High-pass filter: suppress normal-range noise
     if 30.0 <= skew_percentile <= 70.0:
-        return "Skew 分位屬常態 (30-70%)，已抑制警報。"
+        return _format_skew_commentary(
+            _SKEW_BADGE_NEUTRAL,
+            "Skew 分位屬常態 (30-70%)，已抑制警報。",
+            metrics,
+            tactical,
+        )
 
     # Absolute tail-risk routes
     # Left-Tail Explosion (Put Panic)
     if skew_percentile > 90.0 and iv_rank > 70.0:
-        return "[IV 火山爆發 ── 收租主動路由] 市場呈現左尾極端避險，建議優先收租/定義風險的 Premium Extraction。"
+        return _format_skew_commentary(
+            _SKEW_BADGE_PREMIUM_HARVEST,
+            "[IV 火山爆發 ── 收租主動路由] 市場呈現左尾極端避險，建議優先收租/定義風險的 Premium Extraction。",
+            metrics,
+            tactical,
+        )
 
     # Right-Tail Mania (Call FOMO)
     if pcr < 0.35:
-        return "[FOMO 情緒泡沫 ── 靜默防守路由] 檢測到極端追漲行為，強烈封鎖單腿長權利金追價。"
+        return _format_skew_commentary(
+            _SKEW_BADGE_DEFENSIVE,
+            "[FOMO 情緒泡沫 ── 靜默防守路由] 檢測到極端追漲行為，強烈封鎖單腿長權利金追價。",
+            metrics,
+            tactical,
+        )
 
     # Structural divergence check (Skew vs PCR extremes)
     if (skew_percentile > 85.0 and 0.0 < pcr < 0.4) or (
         skew_percentile < 15.0 and pcr > 1.5
     ):
-        return _SKEW_PCR_DIVERGENCE_WARNING
+        return _format_skew_commentary(
+            _SKEW_BADGE_DIVERGENCE, _SKEW_PCR_DIVERGENCE_WARNING, metrics, tactical
+        )
 
     # Rigid skew sign ↔ interpretation mapping
     if skew_val > 0 and skew_percentile >= 80.0:
-        return "⚠️ 市場下行保護需求極高，隱含避險情緒升溫（機構大舉購入 Put 保險）"
+        return _format_skew_commentary(
+            _SKEW_BADGE_DEFENSIVE,
+            "⚠️ 市場下行保護需求極高，隱含避險情緒升溫（機構大舉購入 Put 保險）",
+            metrics,
+            tactical,
+        )
     if skew_val < 0 and skew_percentile <= 20.0:
-        return "🔥 市場上行看漲需求爆發，動能抄底/追高情緒極端亢奮（散戶搶購末日 Call）"
+        return _format_skew_commentary(
+            _SKEW_BADGE_BULLISH,
+            "🔥 市場上行看漲需求爆發，動能抄底/追高情緒極端亢奮（散戶搶購末日 Call）",
+            metrics,
+            tactical,
+        )
 
-    return (
-        f"Skew {skew_val:+.2f}%（百分位 {skew_percentile:.0f}%）屬常態區；"
-        "建議以價位牆與事件風控為主，避免對單一指標過度解讀。"
+    return _format_skew_commentary(
+        _SKEW_BADGE_NEUTRAL,
+        (
+            f"Skew {skew_val:+.2f}%（百分位 {skew_percentile:.0f}%）屬常態區；"
+            "建議以價位牆與事件風控為主，避免對單一指標過度解讀。"
+        ),
+        metrics,
+        tactical,
     )
 
 
@@ -1022,7 +1130,9 @@ class IntradayScanPipeline:
             event_context=evaluation.event_context,
             has_position=has_position,
         )
-        skew_commentary = build_watchlist_skew_rule_commentary(evaluation.metrics)
+        skew_commentary = build_watchlist_skew_rule_commentary(
+            evaluation.metrics, evaluation.tactical
+        )
 
         # 取得 embed 所需的補充數據（均已快取，額外開銷極低）
         from services import market_data_service

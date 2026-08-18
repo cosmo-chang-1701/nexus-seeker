@@ -503,6 +503,9 @@ def test_create_watchlist_signal_embed() -> None:
         in get_embed_text(embed)
     )
     assert "操盤執行指南: 可先以 Bull Put Spread 佈局。" in get_embed_text(embed)
+    assert "**⚙️ 量化 Skew 解析** `+6.20% ｜ ⚠️ 預警性對沖 (Put 昂貴)`" in get_embed_text(
+        embed
+    )
 
 
 def test_create_watchlist_signal_embed_covered_call() -> None:
@@ -552,6 +555,7 @@ def test_create_watchlist_signal_embed_covered_call() -> None:
         in get_embed_text(embed)
     )
     assert "操盤執行指南: Covered Call 鎖利。" in get_embed_text(embed)
+    assert "**⚙️ 量化 Skew 解析** `-5.10% ｜ 右偏 (Call 昂貴)`" in get_embed_text(embed)
 
 
 def test_create_watchlist_overview_embed() -> None:
