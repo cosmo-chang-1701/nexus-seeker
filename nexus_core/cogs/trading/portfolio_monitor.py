@@ -15,7 +15,10 @@ from discord.ext import tasks, commands
 import database
 import market_time
 from services.trading_service import TradingService
-from market_analysis.dynamic_rollover import DynamicRolloverEngine
+from market_analysis.dynamic_rollover import (
+    DynamicRolloverEngine,
+    CORE_DEFENSE_ETF_SYMBOLS,
+)
 from market_analysis.ghost_trader import GhostTrader
 from cogs.embed_builder import (
     build_vtr_stats_embed,
@@ -165,7 +168,6 @@ class PortfolioMonitorCog(commands.Cog):
             # 🚀 動態轉倉 (輕量級邏輯: 機會成本對比、再平衡防禦)
             try:
                 user_assets: Dict[int, List[Dict[str, Any]]] = {}
-                CORE_ETF_SYMBOLS = {"VOO", "SPY", "QQQ", "IVV", "VTI"}
 
                 for h in all_holdings:
                     u_id = h["user_id"]
@@ -282,7 +284,7 @@ class PortfolioMonitorCog(commands.Cog):
                         }
                         metrics = fallback_metrics
 
-                    is_core = sym in CORE_ETF_SYMBOLS
+                    is_core = sym in CORE_DEFENSE_ETF_SYMBOLS
                     default_class = "CORE" if is_core else "SATELLITE"
 
                     meta_asset_class = None
@@ -390,17 +392,28 @@ class PortfolioMonitorCog(commands.Cog):
                         )
                     )
 
+                    # 情境識別碼 → 人類可讀標籤，僅供標題補充說明；顏色/危險等級判斷
+                    # 由 create_dynamic_rollover_embed 依 scenario 明確對照表決定，
+                    # 不再依賴此處字串是否包含特定關鍵字。
+                    _SCENARIO_LABELS = {
+                        "OPPORTUNITY_COST": "機會成本轉倉",
+                        "SATELLITE_REBALANCE": "核心衛星再平衡",
+                        "MARGIN_DEFENSE": "槓桿與保證金防禦",
+                    }
+
                     for ins in rebalance_instructions:
                         if not database.is_notification_enabled(
                             u_id, "defense_option_rollover"
                         ):
                             continue
 
+                        scenario = ins.get("scenario", "UNKNOWN")
+                        scenario_label = _SCENARIO_LABELS.get(scenario, "動態轉倉")
                         # 若為 HOLD 狀態且無減倉動作，通常不主動洗版，但若有指示則發送安心防守卡
                         rollover_type = (
-                            "持倉防守 (Hold Defense)"
+                            f"持倉防守 ({scenario_label})"
                             if ins["action"] == "HOLD"
-                            else "再平衡 (Rebalancing)"
+                            else scenario_label
                         )
                         suggested_price = (
                             "N/A (維持現狀)" if ins["action"] == "HOLD" else "Market"
@@ -421,6 +434,9 @@ class PortfolioMonitorCog(commands.Cog):
                             direction="BTO" if ins["action"] != "HOLD" else "HOLD",
                             sell_action=ins.get("sell_action", "STC"),
                             buy_action_label=ins.get("buy_action_label"),
+                            scenario=scenario,
+                            cash_impact=ins.get("cash_impact"),
+                            trigger_condition_text=ins.get("trigger_condition_text"),
                         )
                         if ins.get("is_manual_override_required"):
                             setattr(
@@ -535,6 +551,9 @@ class PortfolioMonitorCog(commands.Cog):
                     direction="BTO" if ins["action"] != "HOLD" else "HOLD",
                     sell_action=ins.get("sell_action", "STC"),
                     buy_action_label=ins.get("buy_action_label"),
+                    scenario=ins.get("scenario", "SATELLITE_REBALANCE"),
+                    cash_impact=ins.get("cash_impact"),
+                    trigger_condition_text=ins.get("trigger_condition_text"),
                 )
                 if ins.get("is_manual_override_required"):
                     setattr(embed, "_view", f"ManualOverrideView:{ins['symbol']}")

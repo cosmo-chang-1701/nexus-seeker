@@ -50,10 +50,12 @@ async def test_integration_rollover_embed_generation(
 
     assert ins["symbol"] == "TSLA"
     assert ins["sell_ratio"] == 0.75  # (0.6 - 0.15)=0.45, 0.45*10k=4500, 4500/6000=0.75
+    # 情境識別碼必須存在且正確，這是 embed 呈現層正確標色/標題的前提
+    assert ins["scenario"] == "SATELLITE_REBALANCE"
 
-    # 3. Embed building
+    # 3. Embed building (真實呼叫端會將 ins["scenario"] 一併傳入)
     embed = create_dynamic_rollover_embed(
-        rollover_type="再平衡 (Rebalancing)",
+        rollover_type="核心衛星再平衡",
         sell_symbol=ins["symbol"],
         sell_ratio=ins["sell_ratio"],
         buy_symbol=ins["target_core"],
@@ -63,10 +65,11 @@ async def test_integration_rollover_embed_generation(
         strike="N/A",
         expiry="N/A",
         direction="BTO",
+        scenario=ins["scenario"],
     )
 
     assert isinstance(embed, discord.Embed)
-    assert embed.title == "🔄 動態轉倉指令: 再平衡 (Rebalancing)"
+    assert embed.title == "🔄 核心衛星再平衡: 核心衛星再平衡"
     assert (
         len(embed.fields) >= 3
     ), f"Expected at least 3 fields, got {len(embed.fields)}"

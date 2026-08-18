@@ -1,13 +1,38 @@
 import discord
+import logging
 from typing import Optional, Any, Callable, Coroutine, Dict
 
 from cogs.embed_builders._core import NexusEmbed
 from ui.panel_renderer import truncate_with_boundary
 
+logger = logging.getLogger(__name__)
+
 # Discord API 字元上限常數
 _EMBED_FIELD_VALUE_LIMIT = 1024
 _CODE_FENCE_OVERHEAD = 6  # len("```") * 2
 _EMBED_DESCRIPTION_SAFE_LIMIT = 4000
+
+# 動態轉倉四大情境的視覺樣式對照表：MARGIN_DEFENSE / FUNDAMENTAL_BROKEN 恆為紅色危急，
+# 不再依賴呼叫端自由文字 rollover_type 的子字串比對（曾導致最危險的保證金防禦警報
+# 因文字未包含「防禦」二字而無法正確標紅，詳見 market_analysis/dynamic_rollover.py
+# 的 RolloverScenario）。SATELLITE_REBALANCE 依 is_hold 分流顏色/emoji。
+_SCENARIO_STYLE: Dict[str, Dict[str, Any]] = {
+    "MARGIN_DEFENSE": {
+        "emoji": "🚨",
+        "label": "保證金防禦強制平倉",
+        "color": discord.Color.red(),
+    },
+    "FUNDAMENTAL_BROKEN": {
+        "emoji": "💥",
+        "label": "原型假設破滅",
+        "color": discord.Color.red(),
+    },
+    "OPPORTUNITY_COST": {
+        "emoji": "💡",
+        "label": "機會成本轉倉",
+        "color": discord.Color.blue(),
+    },
+}
 
 
 class ReportSelect(discord.ui.Select["ReportSelectionView"]):
@@ -177,13 +202,16 @@ def create_dynamic_rollover_embed(
     expiry: str,
     direction: str = "BTO",
     sell_action: str = "STC",
-    combo_type: Optional[str] = None,
     buy_action_label: Optional[str] = None,
+    scenario: str = "UNKNOWN",
+    cash_impact: Optional[str] = None,
+    trigger_condition_text: Optional[str] = None,
 ) -> discord.Embed:
     """
     產生動態轉倉 (Dynamic Rollover) 的 Embed 推播訊息。
 
-    :param rollover_type: 轉倉類型，例如 '原型假設破滅', '再平衡', '機會成本'
+    :param rollover_type: 轉倉類型的補充描述文字，例如 '原型假設破滅', '再平衡', '機會成本'。
+        僅作為標題的補充說明，顏色/危險等級判斷改由 `scenario` 明確決定。
     :param sell_symbol: 建議賣出的標的 (例如 AMD)
     :param sell_ratio: 建議賣出比例 (例如 1.0 表示全部，0.5 表示 50%)
     :param buy_symbol: 建議買入/轉倉的標的 (例如 SPY)
@@ -194,26 +222,53 @@ def create_dynamic_rollover_embed(
     :param expiry: 建議到期日
     :param direction: 買賣方向 (如 BTO, STC)
     :param sell_action: 賣出/平倉動作 (如 STC, BTC)，預設為 STC
-    :param combo_type: 組合類型 (如 Net Debit, Net Credit)，供多腳位策略使用
     :param buy_action_label: 覆寫「轉入資產」區塊的動作文字 (例如保證金防禦場景的
         「持有現金」)，預設為 None 時維持原本的 "{direction} (Buy To Open)" 顯示
+    :param scenario: 動態轉倉引擎四大情境明確識別碼 (OPPORTUNITY_COST /
+        SATELLITE_REBALANCE / MARGIN_DEFENSE / FUNDAMENTAL_BROKEN)，決定顏色與
+        emoji/標題樣式。呼叫端未傳入時預設 "UNKNOWN"，將退回舊版子字串比對渲染
+        並記錄警告。
+    :param cash_impact: 預估資金回收/曝險影響字串 (例如 "$12,500")，供終端執行
+        引導區塊顯示，None 時不顯示。
+    :param trigger_condition_text: 引擎產生之「動態資金輪動觸發條件」段落，獨立
+        呈現為專屬欄位，避免與其餘敘述一起塞入 description 時被截斷。
     """
 
-    # 決定顏色的前綴
+    # 決定 HOLD/執行 狀態 (與 scenario 無關，純粹決定文案措辭)
     is_hold = (
         sell_ratio == 0.0
         or direction == "HOLD"
         or "HOLD" in rollover_type
         or "防守" in rollover_type
     )
-    if is_hold and ("破滅" not in rollover_type and "防禦" not in rollover_type):
-        title = f"🛡️ 持倉防守評估: {rollover_type}"
-        color = discord.Color.teal()
+
+    # 決定標題/顏色：優先採用明確的 scenario 對照表，避免依賴自由文字子字串比對
+    # (該作法曾導致 MARGIN_DEFENSE 保證金防禦警報因 rollover_type 未包含「防禦」
+    # 二字而無法正確標紅)。
+    if scenario in _SCENARIO_STYLE:
+        style = _SCENARIO_STYLE[scenario]
+        title = f"{style['emoji']} {style['label']}: {rollover_type}"
+        color = style["color"]
+    elif scenario == "SATELLITE_REBALANCE":
+        if is_hold:
+            title = f"🛡️ 持倉防守評估: {rollover_type}"
+            color = discord.Color.teal()
+        else:
+            title = f"🔄 核心衛星再平衡: {rollover_type}"
+            color = discord.Color.gold()
     else:
-        title = f"🔄 動態轉倉指令: {rollover_type}"
-        color = discord.Color.gold()
-        if "破滅" in rollover_type or "防禦" in rollover_type:
-            color = discord.Color.red()
+        logger.warning(
+            f"create_dynamic_rollover_embed 收到未知/缺漏的 scenario={scenario!r}，"
+            f"退回子字串比對渲染 (rollover_type={rollover_type!r})"
+        )
+        if is_hold and ("破滅" not in rollover_type and "防禦" not in rollover_type):
+            title = f"🛡️ 持倉防守評估: {rollover_type}"
+            color = discord.Color.teal()
+        else:
+            title = f"🔄 動態轉倉指令: {rollover_type}"
+            color = discord.Color.gold()
+            if "破滅" in rollover_type or "防禦" in rollover_type:
+                color = discord.Color.red()
 
     embed = NexusEmbed(title=title, color=color)
 
@@ -222,6 +277,11 @@ def create_dynamic_rollover_embed(
     desc_header = "**🛡️ 灰階量化與防守分析**" if is_hold else "**🚨 量化轉倉分析**"
     embed.description = f"{desc_header}\n\n{safe_reason}"
 
+    C_RESET = "[0m"
+    C_GREEN = "[1;32m"
+    C_RED = "[1;31m"
+    C_CYAN = "[1;36m"
+
     # 2. 賣出/平倉指令區塊
     sell_action_full = (
         "STC (Sell To Close)"
@@ -229,58 +289,107 @@ def create_dynamic_rollover_embed(
         else ("BTC (Buy To Close)" if sell_action == "BTC" else sell_action)
     )
     if is_hold:
-        sell_text = f"\u001b[0;32m標的: {sell_symbol}\n狀態: HOLD (維持現狀續抱)\n撤出: 0% (未觸發轉倉)\u001b[0m"
+        sell_lines = [
+            "```ansi",
+            " 🛡️ 持倉狀態",
+            " ----------------------------------",
+            f" ├─ 標的: {C_GREEN}{sell_symbol}{C_RESET}",
+            f" ├─ 狀態: {C_GREEN}HOLD{C_RESET} (維持現狀續抱)",
+            " └─ 撤出: 0% (未觸發轉倉)",
+            "```",
+        ]
         embed.add_field(
-            name="🛡️ 持倉狀態 / 防守", value=f"```ansi\n{sell_text}\n```", inline=True
+            name="🛡️ 持倉狀態 / 防守", value="\n".join(sell_lines), inline=True
         )
     else:
-        sell_text = f"\u001b[0;31m標的: {sell_symbol}\n比例: {sell_ratio*100:.0f}%\n動作: {sell_action_full}\u001b[0m"
+        sell_lines = [
+            "```ansi",
+            " 📤 撤出資金 / 平倉",
+            " ----------------------------------",
+            f" ├─ 標的: {C_RED}{sell_symbol}{C_RESET}",
+            f" ├─ 比例: {C_RED}{sell_ratio*100:.0f}%{C_RESET}",
+            f" └─ 動作: {sell_action_full}",
+            "```",
+        ]
         embed.add_field(
-            name="📤 撤出資金 / 平倉", value=f"```ansi\n{sell_text}\n```", inline=True
+            name="📤 撤出資金 / 平倉", value="\n".join(sell_lines), inline=True
         )
 
     # 3. 買入指令區塊
     if is_hold:
-        buy_text = f"\u001b[0;36m標的: {buy_symbol}\n動作: HOLD (維持現狀續抱)\n策略: {suggested_strategy}\u001b[0m"
-        embed.add_field(
-            name="📥 當前資產配置", value=f"```ansi\n{buy_text}\n```", inline=True
-        )
+        buy_lines = [
+            "```ansi",
+            " 📥 當前資產配置",
+            " ----------------------------------",
+            f" ├─ 標的: {C_CYAN}{buy_symbol}{C_RESET}",
+            f" ├─ 動作: {C_CYAN}HOLD{C_RESET} (維持現狀續抱)",
+            f" └─ 策略: {suggested_strategy}",
+            "```",
+        ]
+        embed.add_field(name="📥 當前資產配置", value="\n".join(buy_lines), inline=True)
     else:
         buy_action_display = buy_action_label or f"{direction} (Buy To Open)"
-        buy_text = f"\u001b[0;32m標的: {buy_symbol}\n動作: {buy_action_display}\n策略: {suggested_strategy}\u001b[0m"
+        buy_lines = [
+            "```ansi",
+            " 📥 轉入資產 (Buy)",
+            " ----------------------------------",
+            f" ├─ 標的: {C_GREEN}{buy_symbol}{C_RESET}",
+            f" ├─ 動作: {C_GREEN}{buy_action_display}{C_RESET}",
+            f" └─ 策略: {suggested_strategy}",
+            "```",
+        ]
         embed.add_field(
-            name="📥 轉入資產 (Buy)", value=f"```ansi\n{buy_text}\n```", inline=True
+            name="📥 轉入資產 (Buy)", value="\n".join(buy_lines), inline=True
         )
 
-    # 4. 券商執行引導 (無腦執行區)
+    # 4. 券商執行引導 (無腦執行區) — ANSI 包裹 + 樹狀縮排，符合量化控制台排版原則
     if is_hold:
         if "Trailing Stop" in suggested_strategy:
-            execution_guide = (
-                f"**標的:** {sell_symbol}\n"
-                f"**操作狀態:** HOLD (移動止盈 Trailing Stop)\n"
-                f"**策略指引:** {suggested_strategy}\n"
-                f"**防守機制:** 多頭動能強勁，嚴禁做空以防 Gamma Squeeze，持倉讓獲利奔馳\n"
-                f"**輪動預備:** 若跌破移動止盈線，全數市價轉入 VOO"
-            )
+            guide_lines = [
+                "```ansi",
+                " 🎯 終端執行引導",
+                " ----------------------------------",
+                f" ├─ 標的: {sell_symbol}",
+                f" ├─ 操作狀態: {C_GREEN}HOLD{C_RESET} (移動止盈 Trailing Stop)",
+                f" ├─ 策略指引: {suggested_strategy}",
+                " ├─ 防守機制: 多頭動能強勁，嚴禁做空以防 Gamma Squeeze，持倉讓獲利奔馳",
+                " └─ 輪動預備: 若跌破移動止盈線，全數市價轉入 VOO",
+                "```",
+            ]
         else:
-            execution_guide = (
-                f"**標的:** {sell_symbol}\n"
-                f"**操作狀態:** HOLD (維持現狀續抱)\n"
-                f"**防守機制:** 嚴守 15 分鐘實體 K 線收盤撤退線 (期權合約依 3-5m 快速通道)\n"
-                f"**輪動預備:** 若 15m 實體收盤跌破防守線，全數市價轉入 VOO"
-            )
+            guide_lines = [
+                "```ansi",
+                " 🎯 終端執行引導",
+                " ----------------------------------",
+                f" ├─ 標的: {sell_symbol}",
+                f" ├─ 操作狀態: {C_GREEN}HOLD{C_RESET} (維持現狀續抱)",
+                " ├─ 防守機制: 嚴守 15 分鐘實體 K 線收盤撤退線 (期權合約依 3-5m 快速通道)",
+                " └─ 輪動預備: 若 15m 實體收盤跌破防守線，全數市價轉入 VOO",
+                "```",
+            ]
     else:
-        execution_guide = (
-            f"**標的:** {buy_symbol}\n"
-            f"**到期日:** {expiry}\n"
-            f"**履約價:** {strike}\n"
-            f"**買賣方向:** {direction}\n"
-            f"**建議限價 (Limit):** {suggested_price}"
+        direction_color = (
+            C_RED if direction.upper() in ("STC", "BTC", "SELL") else C_GREEN
         )
-        if combo_type:
-            execution_guide += f"\n**組合類型:** {combo_type}"
+        guide_lines = [
+            "```ansi",
+            " 🎯 終端執行引導",
+            " ----------------------------------",
+            f" ├─ 標的: {buy_symbol}",
+            f" ├─ 到期日: {expiry}",
+            f" ├─ 履約價: {strike}",
+            f" ├─ 買賣方向: {direction_color}{direction}{C_RESET}",
+        ]
+        if cash_impact:
+            guide_lines.append(f" ├─ 預估資金影響: {cash_impact}")
+        guide_lines.append(f" └─ 建議限價 (Limit): {suggested_price}")
+        guide_lines.append("```")
 
-    embed.add_field(name="🎯 終端執行引導", value=execution_guide, inline=False)
+    embed.add_field(name="🎯 終端執行引導", value="\n".join(guide_lines), inline=False)
+
+    # 5. 觸發條件區塊 (獨立欄位，避免與 description 一起被截斷)
+    if trigger_condition_text and not is_hold:
+        embed.add_field(name="🚨 觸發條件", value=trigger_condition_text, inline=False)
 
     embed.set_footer(
         text="Nexus Risk & Rollover Engine • 請點擊下方 [執行試算] 以推估保證金佔用與預期報酬"

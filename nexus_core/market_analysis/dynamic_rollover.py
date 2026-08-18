@@ -1,4 +1,5 @@
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
+from enum import Enum
 import logging
 from pydantic import BaseModel, Field
 from services.llm_service import client, is_memory_safe
@@ -10,6 +11,29 @@ from database.user_settings import get_full_user_context
 from market_analysis.sentiment.history_storage import get_indicator_percentile
 
 logger = logging.getLogger(__name__)
+
+
+class RolloverScenario(str, Enum):
+    """動態轉倉引擎四大情境的明確識別碼，供 embed 呈現層做顏色/危險等級判斷，
+    避免依賴呼叫端自由文字 rollover_type 的子字串比對（該作法曾導致最危險的
+    MARGIN_DEFENSE 警報無法正確標紅，詳見 rollover_embeds.py）。"""
+
+    OPPORTUNITY_COST = "OPPORTUNITY_COST"
+    SATELLITE_REBALANCE = "SATELLITE_REBALANCE"
+    MARGIN_DEFENSE = "MARGIN_DEFENSE"
+    FUNDAMENTAL_BROKEN = "FUNDAMENTAL_BROKEN"
+
+
+# 核心防禦性 ETF 排除清單：機會成本轉倉 (_find_best_rollover_target) 與槓桿保證金
+# 防禦 (evaluate_margin_defense) 共用同一份定義，避免各自維護造成分歧
+# (曾發生 VXX 在部分清單中被排除、部分清單中未被排除的不一致)。
+CORE_DEFENSE_ETF_SYMBOLS: frozenset[str] = frozenset(
+    {"QQQ", "SPY", "VOO", "VXX", "IVV", "VTI"}
+)
+
+# _generate_rule_based_rebalance_report 在快取與現價皆無法取得目標資產參考價格時
+# 使用的最終備援估計值（僅用於股數建議粗估，非交易執行依據）。
+_FALLBACK_TARGET_PRICE_ESTIMATE = 500.0
 
 
 class FundamentalThesisResult(BaseModel):
@@ -26,51 +50,28 @@ class DynamicRolloverEngine:
     def __init__(self) -> None:
         pass
 
-    def _generate_rule_based_rebalance_report(
-        self,
-        symbol: str,
-        metrics: dict,
-        system_action: str,
-        target: str = "VOO",
-        strategy_override: str = "",
-        asset_class: str = "SPOT",
-        is_take_profit: bool = False,
-        active_orders: Optional[list[dict]] = None,
-        position_shares: float = 0.0,
-        current_value: float = 0.0,
-    ) -> dict:
+    def _correct_wall_topology(self, metrics: dict) -> Tuple[float, float]:
         """
-        Evaluates rebalancing rules under Gray-Scale Quantitative Framework
-        and generates the strict 4-part markdown report.
-        Returns a dict containing the final action, target asset, and markdown string.
+        期權拓撲微結構校正：計算防守錨點 (anchor_base) 與阻力天花板 (effective_res_wall)。
+        若 put_wall 與 call_wall 顛倒，或是已有 GEX 提取之 support_wall / resistance_wall，
+        優先採用後者。
         """
         spot = float(metrics.get("spot_price", 0.0))
-        price_15m_close = float(metrics.get("price_15m_close", spot))
-        ivr = float(metrics.get("ivr", 0.0))
         put_wall = float(metrics.get("put_wall", 0.0))
         call_wall = float(metrics.get("call_wall", 0.0))
-        max_pain = float(metrics.get("max_pain", 0.0))
-        is_uoa_sweep = bool(metrics.get("is_uoa_sweep", False))
-        sqz_mom = float(metrics.get("sqz_mom", 0.0))
-        skew = float(metrics.get("skew", 0.0))
         support_wall = float(metrics.get("support_wall", 0.0))
         resistance_wall = float(metrics.get("resistance_wall", 0.0))
-        atr_15m = float(metrics.get("atr_15m", metrics.get("atr_14", 0.0)))
         hvn = float(metrics.get("hvn", 0.0))
-        lvn = float(metrics.get("lvn", 0.0))
-        dte = int(metrics.get("dte", 99))
 
-        # ━━━ 期權拓撲微結構校正 ━━━
-        # 若 put_wall 與 call_wall 顛倒，或是已有 GEX 提取之 support_wall / resistance_wall
         if support_wall > 0:
-            anchor_wall = support_wall
+            anchor_base = support_wall
         elif put_wall > 0 and call_wall > 0 and put_wall > call_wall:
             # 拓撲逆轉修復：較低價為做市商支撐底牆，較高價為上方阻力天花板
-            anchor_wall = min(put_wall, call_wall)
+            anchor_base = min(put_wall, call_wall)
         elif put_wall > 0:
-            anchor_wall = put_wall
+            anchor_base = put_wall
         else:
-            anchor_wall = hvn if hvn > 0 else spot
+            anchor_base = hvn if hvn > 0 else spot
 
         if resistance_wall > 0:
             effective_res_wall = resistance_wall
@@ -81,10 +82,24 @@ class DynamicRolloverEngine:
         else:
             effective_res_wall = spot * 1.05
 
-        # ━━━ 防洗盤四大機制：計算精確防守位與掛單限價 ━━━
+        return anchor_base, effective_res_wall
+
+    def _compute_anti_washout_stop(
+        self, anchor_base: float, metrics: dict
+    ) -> Tuple[float, float, bool, float]:
+        """
+        防洗盤四大機制：計算精確防守位與掛單限價。
+        回傳 (stop_loss, limit_price, is_01dte_expanded, dte_risk_parity_scale)。
+        """
+        spot = float(metrics.get("spot_price", 0.0))
+        atr_15m = float(metrics.get("atr_15m", metrics.get("atr_14", 0.0)))
+        lvn = float(metrics.get("lvn", 0.0))
+        hvn = float(metrics.get("hvn", 0.0))
+        dte = int(metrics.get("dte", 99))
+
         # 機制 2: 1.5x ATR 防護墊片
-        if anchor_wall > 0:
-            raw_stop_loss = anchor_wall - (1.5 * atr_15m)
+        if anchor_base > 0:
+            raw_stop_loss = anchor_base - (1.5 * atr_15m)
         else:
             raw_stop_loss = spot * 0.96 if spot > 0 else 0.0
 
@@ -98,8 +113,8 @@ class DynamicRolloverEngine:
                 target_hvn = secondary_hvn
             elif hvn > 0 and hvn < lvn:
                 target_hvn = hvn
-            elif anchor_wall > 0 and anchor_wall < lvn:
-                target_hvn = anchor_wall
+            elif anchor_base > 0 and anchor_base < lvn:
+                target_hvn = anchor_base
 
             if target_hvn > 0:
                 base_stop_loss = target_hvn + (0.2 * atr_15m)
@@ -119,8 +134,16 @@ class DynamicRolloverEngine:
             max(stop_loss - (0.5 * atr_15m if atr_15m > 0 else 0.6), stop_loss * 0.995),
             2,
         )
+        return stop_loss, limit_price, is_01dte_expanded, dte_risk_parity_scale
 
-        # ━━━ 委託單聯動 (Active Orders) ━━━
+    def _resolve_active_order_defense(
+        self,
+        symbol: str,
+        active_orders: Optional[list[dict]],
+        stop_loss: float,
+        limit_price: float,
+    ) -> Tuple[str, Optional[dict]]:
+        """委託單聯動 (Active Orders)：比對現有委託單，產生防守機制描述文字。"""
         matching_order: Optional[dict] = None
         if active_orders:
             for ord_entry in active_orders:
@@ -139,9 +162,29 @@ class DynamicRolloverEngine:
         else:
             order_defense_str = f"**建議設置防守委託單**\n\n**停損: ${stop_loss:.2f} | 限價: ${limit_price:.2f}**"
 
-        # ━━━ 灰階思考量化裁決 (決策矩陣 - 雙軌裁決機制 Dual-Track Exit) ━━━
+        return order_defense_str, matching_order
+
+    def _apply_decision_matrix(
+        self,
+        symbol: str,
+        metrics: dict,
+        requested_action: str,
+        target: str,
+        asset_class: str,
+        is_take_profit: bool,
+        stop_loss: float,
+        anchor_base: float,
+    ) -> Tuple[str, str, str, str]:
+        """
+        灰階思考量化裁決 (決策矩陣 - 雙軌裁決機制 Dual-Track Exit)。
+        回傳 (final_action, final_target, options_strategy, system_conflict_note)。
+        """
+        spot = float(metrics.get("spot_price", 0.0))
+        price_15m_close = float(metrics.get("price_15m_close", spot))
+        sqz_mom = float(metrics.get("sqz_mom", 0.0))
+
         final_target = target if target else "VOO"
-        final_action = system_action
+        final_action = requested_action
         system_conflict_note = ""
 
         ivr_drop = float(metrics.get("ivr_drop", metrics.get("ivr_change", 0.0)))
@@ -180,7 +223,7 @@ class DynamicRolloverEngine:
                 f"做市商底牆徹底崩塌，負 Gamma 助跌啟動，強制啟動 100% 轉入 {final_target} 防禦。"
             )
             options_strategy = f"100% LIQUIDATE (轉入 {final_target})"
-        elif system_action == "REDUCE":
+        elif requested_action == "REDUCE":
             final_action = "REDUCE"
             final_target = target
             system_conflict_note = "⚖️ **持倉比例再平衡**：衛星部位超過風險上限，執行常規部分減倉以平衡資產權重。"
@@ -190,28 +233,71 @@ class DynamicRolloverEngine:
             final_action = "HOLD"
             final_target = symbol
             system_conflict_note = (
-                f"🛡️ **灰階量化裁決**：${anchor_wall:.2f} 正 Gamma 護城河完好，"
+                f"🛡️ **灰階量化裁決**：${anchor_base:.2f} 正 Gamma 護城河完好，"
                 f"動能（SQZ MOM {sqz_mom:+.2f}）維持多頭，未觸發轉倉條件，維持現狀續抱。"
             )
             options_strategy = "HOLD (維持現狀續抱)"
 
-        # ━━━ IVR 策略防禦與微調 ━━━
+        return final_action, final_target, options_strategy, system_conflict_note
+
+    def _apply_ivr_strategy_overlay(
+        self, options_strategy: str, strategy_override: str, ivr: float
+    ) -> str:
+        """
+        IVR 策略防禦與微調。
+        NOTE: strategy_override 傳入非空字串時會【完全取代】IVR 鎖定後綴邏輯 (elif，
+        而非疊加)。此設計用於 Bear Call Spread / Trailing Stop 等戰術覆寫場景，
+        該場景下 strategy_override 本身的文字已包含完整防守資訊，故刻意跳過 IVR 後綴。
+        """
         if strategy_override:
-            options_strategy = strategy_override
-        elif is_selling_locked_by_ivr(ivr):
-            options_strategy += f" | ⚠️ IVR 極低位 ({ivr:.1f}%): 賣方策略已鎖死。"
-        elif ivr > 50.0:
-            options_strategy += " | 嚴禁買方 (IV 過高，規避 Gamma 陷阱)"
+            return strategy_override
+        if is_selling_locked_by_ivr(ivr):
+            return options_strategy + f" | ⚠️ IVR 極低位 ({ivr:.1f}%): 賣方策略已鎖死。"
+        if ivr > 50.0:
+            return options_strategy + " | 嚴禁買方 (IV 過高，規避 Gamma 陷阱)"
+        return options_strategy
 
-        # 停損數值字串格式化 (嚴禁輸出 N/A)
-        stop_loss_str = f"${stop_loss:.2f}"
+    def _resolve_target_reference_price(
+        self, target_core_name: str, fallback_spot: float
+    ) -> float:
+        """
+        解析轉倉目標資產的參考價格，用於估算可買入股數 (僅供文字建議粗估)。
+        當目標為 VOO/SPY 等核心資產時，改用與 _calculate_ev_proxy 相同的
+        market_cache 快取讀取 reference_spot_price，取代過期的硬編碼估計值；
+        其餘情況維持原有 fallback 順序 (該資產自身現價 → 具名備援常數)。
+        """
+        if "VOO" in target_core_name or "SPY" in target_core_name:
+            from database.market_cache import get_market_cache
 
-        # 數據異常註記
-        data_note = ""
-        if ivr == 0.0 or spot == 0.0:
-            data_note = " (⚠️ 數據失真或快取未更新，請留意風險)"
+            try:
+                row = get_market_cache(target_core_name)
+                if row:
+                    cached_price = float(row.get("reference_spot_price") or 0.0)
+                    if cached_price > 0:
+                        return cached_price
+            except Exception as e:
+                logger.warning(
+                    f"讀取 {target_core_name} market_cache 參考價格失敗: {e}"
+                )
 
-        # ━━━ 資金回收與目標核心資產買入預估 (結合風險平價口數縮放) ━━━
+            logger.warning(
+                f"{target_core_name} 快取參考價格缺失，退回備援估計值 "
+                f"${_FALLBACK_TARGET_PRICE_ESTIMATE:.2f}"
+            )
+            return _FALLBACK_TARGET_PRICE_ESTIMATE
+
+        return fallback_spot if fallback_spot > 0 else _FALLBACK_TARGET_PRICE_ESTIMATE
+
+    def _estimate_cash_recovery(
+        self,
+        target_core_name: str,
+        spot: float,
+        position_shares: float,
+        current_value: float,
+        is_01dte_expanded: bool,
+        dte_risk_parity_scale: float,
+    ) -> Tuple[str, str]:
+        """資金回收與目標核心資產買入預估 (結合風險平價口數縮放)。"""
         if current_value > 0:
             recovered_cash = current_value
         elif position_shares > 0 and spot > 0:
@@ -219,13 +305,10 @@ class DynamicRolloverEngine:
         else:
             recovered_cash = 0.0
 
-        target_core_name = target if target else "VOO"
         if recovered_cash > 0:
             cash_str = f"${recovered_cash:,.0f}"
-            target_est_price = (
-                560.0
-                if ("VOO" in target_core_name or "SPY" in target_core_name)
-                else (spot if spot > 0 else 500.0)
+            target_est_price = self._resolve_target_reference_price(
+                target_core_name, spot
             )
             target_shares_est = int(recovered_cash / target_est_price)
             if is_01dte_expanded:
@@ -242,6 +325,77 @@ class DynamicRolloverEngine:
         else:
             cash_str = "全數部位資金"
             shares_guidance_str = f"{target_core_name}（全額買入）"
+
+        return cash_str, shares_guidance_str
+
+    def _generate_rule_based_rebalance_report(
+        self,
+        symbol: str,
+        metrics: dict,
+        requested_action: str,
+        target: str = "VOO",
+        strategy_override: str = "",
+        asset_class: str = "SPOT",
+        is_take_profit: bool = False,
+        active_orders: Optional[list[dict]] = None,
+        position_shares: float = 0.0,
+        current_value: float = 0.0,
+    ) -> dict:
+        """
+        Evaluates rebalancing rules under Gray-Scale Quantitative Framework
+        and generates the strict 4-part markdown report.
+        Returns a dict containing the final action, target asset, and markdown string.
+        """
+        spot = float(metrics.get("spot_price", 0.0))
+        ivr = float(metrics.get("ivr", 0.0))
+        max_pain = float(metrics.get("max_pain", 0.0))
+        is_uoa_sweep = bool(metrics.get("is_uoa_sweep", False))
+        sqz_mom = float(metrics.get("sqz_mom", 0.0))
+        skew = float(metrics.get("skew", 0.0))
+
+        anchor_base, effective_res_wall = self._correct_wall_topology(metrics)
+        stop_loss, limit_price, is_01dte_expanded, dte_risk_parity_scale = (
+            self._compute_anti_washout_stop(anchor_base, metrics)
+        )
+        order_defense_str, _matching_order = self._resolve_active_order_defense(
+            symbol, active_orders, stop_loss, limit_price
+        )
+
+        final_action, final_target, options_strategy, system_conflict_note = (
+            self._apply_decision_matrix(
+                symbol=symbol,
+                metrics=metrics,
+                requested_action=requested_action,
+                target=target,
+                asset_class=asset_class,
+                is_take_profit=is_take_profit,
+                stop_loss=stop_loss,
+                anchor_base=anchor_base,
+            )
+        )
+
+        options_strategy = self._apply_ivr_strategy_overlay(
+            options_strategy, strategy_override, ivr
+        )
+
+        # 停損數值字串格式化 (嚴禁輸出 N/A)
+        stop_loss_str = f"${stop_loss:.2f}"
+
+        # 數據異常註記
+        data_note = ""
+        if ivr == 0.0 or spot == 0.0:
+            data_note = " (⚠️ 數據失真或快取未更新，請留意風險)"
+
+        # ━━━ 資金回收與目標核心資產買入預估 (結合風險平價口數縮放) ━━━
+        target_core_name = target if target else "VOO"
+        cash_str, shares_guidance_str = self._estimate_cash_recovery(
+            target_core_name=target_core_name,
+            spot=spot,
+            position_shares=position_shares,
+            current_value=current_value,
+            is_01dte_expanded=is_01dte_expanded,
+            dte_risk_parity_scale=dte_risk_parity_scale,
+        )
 
         # GEX 數值描述格式化
         supp_gex = metrics.get("support_gex")
@@ -275,12 +429,12 @@ class DynamicRolloverEngine:
         )
 
         # 建構標準 4 段式 Markdown
-        markdown_report = f"""
+        core_report = f"""
 1. **盤勢定調**
    - 現價: ${spot:.2f} | IV 位階: {ivr:.1f}%{data_note}
    - 相對位置: Max Pain ${max_pain:.2f}
 2. **主力意圖拆解 (UOA/GEX 微結構)**
-   - 做市商護盤牆: GEX Wall: ${anchor_wall:.2f} ({gex_support_desc}) (強支撐彈簧床)
+   - 做市商護盤牆: GEX Wall: ${anchor_base:.2f} ({gex_support_desc}) (強支撐彈簧床)
    - 阻力天花板: ${effective_res_wall:.2f} ({gex_res_desc})
    - 巨鯨掃貨: {'✅ 偵測到 UOA Sweep' if is_uoa_sweep else '❌ 無明顯 UOA'}
 3. **動能與擠壓狀態**
@@ -288,26 +442,34 @@ class DynamicRolloverEngine:
 4. **具體的動態轉倉建議**
    - {system_conflict_note if system_conflict_note else '常規執行：依系統建議比例調節'}{dte_scale_note}
    - 轉倉決策: **{final_action} ({'維持現狀續抱' if final_action == 'HOLD' else '轉入 ' + final_target})**
-   - 微結構判定: GEX Wall ${anchor_wall:.2f} 護城河完好，阻力天花板 ${effective_res_wall:.2f}
+   - 微結構判定: GEX Wall ${anchor_base:.2f} 護城河完好，阻力天花板 ${effective_res_wall:.2f}
    - 防守機制: {order_defense_str}
-     *(避開真空區，依據公式：`Stop = ${anchor_wall:.2f} - ({'3.0' if is_01dte_expanded else '1.5'} × ATR_15m) = ${stop_loss_str}`)*
+     *(避開真空區，依據公式：`Stop = ${anchor_base:.2f} - ({'3.0' if is_01dte_expanded else '1.5'} × ATR_15m) = ${stop_loss_str}`)*
    - 出場裁決軌道: {dual_track_note}
+""".strip()
 
----
+        # 🚨 動態資金輪動觸發條件：獨立拆分供 embed 呈現層放入專屬欄位，
+        # 避免與其餘段落一起塞入 description 時因 4000 字元上限被截斷，
+        # 導致「何時才真正轉倉」這段最關鍵的判斷依據反而消失。
+        trigger_condition_report = f"""
 ## 🚨 動態資金輪動觸發條件（何時才真正轉倉 {target_core_name}？）
 只有在以下**硬性量化條件觸發**時，才允許執行 100% 轉入 {target_core_name}：
 1. **實體破位觸發**：
    - {'3-5m 快速通道跌破或 IV 崩塌' if asset_class == 'OPTIONS' else f'15 分鐘 K 線**實體收盤跌破 ${stop_loss_str}**'}，或委託單自動觸發成交。
-   - **量化含義**：宣告 ${anchor_wall:.2f} 做市商底牆徹底崩塌，負 Gamma 助跌啟動，價格將下探 ${max_pain:.2f} 痛點。
+   - **量化含義**：宣告 ${anchor_base:.2f} 做市商底牆徹底崩塌，負 Gamma 助跌啟動，價格將下探 ${max_pain:.2f} 痛點。
 2. **轉倉執行動作**：
    - 回收資金約 **{cash_str}**。
    - **唯一指令**：立即市價全數買入 **{shares_guidance_str}**，使組合轉為 100% {target_core_name} 大盤防禦模式。
-"""
+""".strip()
+
+        markdown_report = f"{core_report}\n\n---\n{trigger_condition_report}"
         return {
             "final_action": final_action,
             "final_target": final_target,
             "options_strategy": options_strategy,
             "markdown_report": markdown_report.strip(),
+            "trigger_condition_report": trigger_condition_report,
+            "cash_impact": cash_str,
         }
 
     def _calculate_ev_proxy(self, symbol: str) -> float:
@@ -334,14 +496,9 @@ class DynamicRolloverEngine:
         """掃描使用者 Watchlist 與 market_cache 快取尋找下一個高 EV 衛星標的，若無則回傳 VOO"""
         from database.watchlist import get_user_watchlist
 
-        exclude = {s.upper() for s in (exclude_symbols or set())} | {
-            "QQQ",
-            "SPY",
-            "VOO",
-            "VXX",
-            "IVV",
-            "VTI",
-        }
+        exclude = {
+            s.upper() for s in (exclude_symbols or set())
+        } | CORE_DEFENSE_ETF_SYMBOLS
         try:
             watchlist = get_user_watchlist(user_id)
         except Exception as e:
@@ -631,11 +788,13 @@ class DynamicRolloverEngine:
                     "target_core": candidate_symbol,
                     "reason": f"💡 **機會成本轉倉 (Opportunity Cost)**\n{result['reason']}",
                     "suggested_strategy": result["strategy"],
+                    "scenario": RolloverScenario.OPPORTUNITY_COST.value,
+                    "is_manual_override_required": False,
                 }
             )
         return instructions
 
-    async def _evaluate_structural_no_edge(
+    async def _compute_structural_breakdown_signals(
         self,
         symbol: str,
         spot: float,
@@ -647,16 +806,21 @@ class DynamicRolloverEngine:
         price_15m_close: float,
         gex_profile_data: Optional[Dict[str, Any]],
         asset_class: str,
-    ) -> bool:
+    ) -> Tuple[bool, bool, float, float, float, float]:
         """
-        判定該持倉是否已「結構性無勝率」(結構性破位 或 主力空頭封殺)。
-        重用 check_satellite_rebalancing 既有的 anchor_wall / gamma_cliff /
-        whale STO block 門檻，不發明新的量化門檻，供 evaluate_margin_defense
-        在宏觀紅線觸發時逐一檢查每檔 SATELLITE 持倉。
+        共用結構性破位 / 主力空頭封殺訊號計算：GEX 牆掃描 + anchor_base/gamma_cliff_level
+        判定，供 _evaluate_structural_no_edge (Scenario 4) 與 check_satellite_rebalancing
+        (Scenario 3) 共同呼叫，避免同一段門檻邏輯需要在兩處分別維護。
+
+        回傳 (is_structural_breakdown, is_whale_sto_block, support_wall, resistance_wall,
+              support_gex, resistance_gex)。
         """
         from market_analysis.index_microstructure import classify_gex_wall
 
         support_wall: float = 0.0
+        resistance_wall: float = 0.0
+        support_gex: float = 0.0
+        resistance_gex: float = 0.0
         if (
             gex_profile_data
             and "gex_profile" in gex_profile_data
@@ -680,6 +844,12 @@ class DynamicRolloverEngine:
                     )
                     if wall_type == "SUPPORT_GEX_WALL" and strike > support_wall:
                         support_wall = strike
+                        support_gex = val
+                    elif (
+                        wall_type == "RESISTANCE_CALL_WALL" and strike > resistance_wall
+                    ):
+                        resistance_wall = strike
+                        resistance_gex = val
                 except Exception:
                     pass
 
@@ -704,6 +874,7 @@ class DynamicRolloverEngine:
 
         is_structural_breakdown = False
         if asset_class == "OPTIONS":
+            # 期權快速通道：現價貫穿 anchor_base 即時判定破位，拒絕等待 15m 實體收盤
             if anchor_base > 0 and spot < anchor_base:
                 is_structural_breakdown = True
         else:
@@ -714,6 +885,53 @@ class DynamicRolloverEngine:
 
         is_whale_sto_block = (sqz_mom < 0.0) and (skew < -0.3)
 
+        return (
+            is_structural_breakdown,
+            is_whale_sto_block,
+            support_wall,
+            resistance_wall,
+            support_gex,
+            resistance_gex,
+        )
+
+    async def _evaluate_structural_no_edge(
+        self,
+        symbol: str,
+        spot: float,
+        put_wall: float,
+        gamma_flip: float,
+        atr_14: float,
+        sqz_mom: float,
+        skew: float,
+        price_15m_close: float,
+        gex_profile_data: Optional[Dict[str, Any]],
+        asset_class: str,
+    ) -> bool:
+        """
+        判定該持倉是否已「結構性無勝率」(結構性破位 或 主力空頭封殺)。
+        重用與 check_satellite_rebalancing 共用的 _compute_structural_breakdown_signals，
+        不發明新的量化門檻，供 evaluate_margin_defense 在宏觀紅線觸發時逐一檢查每檔
+        SATELLITE 持倉。
+        """
+        (
+            is_structural_breakdown,
+            is_whale_sto_block,
+            _support_wall,
+            _resistance_wall,
+            _support_gex,
+            _resistance_gex,
+        ) = await self._compute_structural_breakdown_signals(
+            symbol=symbol,
+            spot=spot,
+            put_wall=put_wall,
+            gamma_flip=gamma_flip,
+            atr_14=atr_14,
+            sqz_mom=sqz_mom,
+            skew=skew,
+            price_15m_close=price_15m_close,
+            gex_profile_data=gex_profile_data,
+            asset_class=asset_class,
+        )
         return is_structural_breakdown or is_whale_sto_block
 
     async def evaluate_margin_defense(
@@ -787,7 +1005,6 @@ class DynamicRolloverEngine:
             return []
 
         # --- 逐一檢查所有 SATELLITE 持倉是否結構性無勝率 ---
-        CORE_ETF_SYMBOLS = {"VOO", "SPY", "QQQ", "IVV", "VTI"}
         instructions: List[Dict[str, Any]] = []
 
         for asset in portfolio_assets:
@@ -795,7 +1012,7 @@ class DynamicRolloverEngine:
             quantity = float(asset.get("quantity", 0.0))
             if (
                 asset.get("asset_class") != "SATELLITE"
-                or symbol in CORE_ETF_SYMBOLS
+                or symbol in CORE_DEFENSE_ETF_SYMBOLS
                 or quantity == 0
             ):
                 continue
@@ -849,6 +1066,7 @@ class DynamicRolloverEngine:
                     "sell_action": sell_action,
                     "buy_action_label": "轉入 BOXX（鎖定無風險利息）",
                     "is_manual_override_required": True,
+                    "scenario": RolloverScenario.MARGIN_DEFENSE.value,
                 }
             )
 
@@ -923,48 +1141,33 @@ class DynamicRolloverEngine:
                 else:
                     asset_class = "SPOT"
 
-                from market_analysis.index_microstructure import classify_gex_wall
-
                 gex_profile_data = asset.get("gex_profile_data", {})
-                support_wall: float = 0.0
-                resistance_wall: float = 0.0
-                support_gex: float = 0.0
-                resistance_gex: float = 0.0
-                if (
-                    gex_profile_data
-                    and "gex_profile" in gex_profile_data
-                    and isinstance(gex_profile_data["gex_profile"], dict)
-                ):
-                    gex_prof = gex_profile_data["gex_profile"]
-                    max_positive: float = 0.0
-                    for k, v in gex_prof.items():
-                        try:
-                            val = float(v)
-                            if val > max_positive:
-                                max_positive = val
-                        except Exception:
-                            pass
-                    for k, v in gex_prof.items():
-                        try:
-                            val = float(v)
-                            strike = float(k)
-                            wall_type = classify_gex_wall(
-                                val, max_positive, is_heavy_otm_call=False
-                            )
-                            if (
-                                wall_type == "SUPPORT_GEX_WALL"
-                                and strike > support_wall
-                            ):
-                                support_wall = strike
-                                support_gex = val
-                            elif (
-                                wall_type == "RESISTANCE_CALL_WALL"
-                                and strike > resistance_wall
-                            ):
-                                resistance_wall = strike
-                                resistance_gex = val
-                        except Exception:
-                            pass
+
+                # ----------------------------------------------------
+                # 條件一：現有持倉結構劣化（護衛牆破位 / 主力物理蓋頂 / 目標區獲利解鎖完成）
+                # ----------------------------------------------------
+                # 1. 做市商 GEX 防線失守 (共用 _compute_structural_breakdown_signals，
+                #    與 evaluate_margin_defense/_evaluate_structural_no_edge 同一份門檻邏輯)
+                # 2. 主力巨量 STO 實體蓋頂
+                (
+                    is_structural_breakdown,
+                    is_whale_sto_block,
+                    support_wall,
+                    resistance_wall,
+                    support_gex,
+                    resistance_gex,
+                ) = await self._compute_structural_breakdown_signals(
+                    symbol=symbol,
+                    spot=spot,
+                    put_wall=put_wall,
+                    gamma_flip=gamma_flip,
+                    atr_14=atr_14,
+                    sqz_mom=sqz_mom,
+                    skew=skew,
+                    price_15m_close=price_15m_close,
+                    gex_profile_data=gex_profile_data,
+                    asset_class=asset_class,
+                )
 
                 metrics: Dict[str, Any] = {
                     "spot_price": spot,
@@ -989,43 +1192,6 @@ class DynamicRolloverEngine:
                     "resistance_gex": resistance_gex,
                 }
 
-                # ----------------------------------------------------
-                # 條件一：現有持倉結構劣化（護衛牆破位 / 主力物理蓋頂 / 目標區獲利解鎖完成）
-                # ----------------------------------------------------
-                # 1. 做市商 GEX 防線失守
-                # 灰階思考防洗盤：若多頭動能充足且未破 15m 收盤價防守位，不預先標記破位
-                anchor_base: float = (
-                    support_wall
-                    if support_wall > 0
-                    else (
-                        min(put_wall, gamma_flip)
-                        if (put_wall > 0 and gamma_flip > 0)
-                        else (put_wall if put_wall > 0 else gamma_flip)
-                    )
-                )
-                gamma_cliff_level: float = (
-                    anchor_base - (1.5 * atr_14) if anchor_base > 0 else 0.0
-                )
-
-                is_structural_breakdown_pending: bool = (
-                    anchor_base > 0
-                    and spot < anchor_base
-                    and (price_15m_close < gamma_cliff_level or sqz_mom <= 0)
-                )
-
-                # Phase 2: 負 Gamma 懸崖連續 15 分鐘實體 K 線貫穿確認 (現貨 SPOT) 或 3-5m 快速通道 (期權 OPTIONS)
-                is_structural_breakdown = False
-                if asset_class == "OPTIONS":
-                    # 期權快速通道：現價貫穿 anchor_base 或 stop_loss 即時判定破位，拒絕等待 15m 實體收盤
-                    if anchor_base > 0 and spot < anchor_base:
-                        is_structural_breakdown = True
-                else:
-                    if is_structural_breakdown_pending and gamma_cliff_level > 0:
-                        is_structural_breakdown = await is_gamma_cliff_confirmed(
-                            symbol, gamma_cliff_level
-                        )
-                # 2. 主力巨量 STO 實體蓋頂
-                is_whale_sto_block = (sqz_mom < 0.0) and (skew < -0.3)
                 # 3. 目標區獲利解鎖完成
                 is_profit_unlocked = (call_wall > 0 and spot > 0) and (
                     spot >= call_wall or abs(spot - call_wall) / call_wall < 0.015
@@ -1068,7 +1234,7 @@ class DynamicRolloverEngine:
                             report_90 = self._generate_rule_based_rebalance_report(
                                 symbol,
                                 metrics,
-                                system_action="LIQUIDATE",
+                                requested_action="LIQUIDATE",
                                 target=next_target,
                                 asset_class=asset_class,
                                 is_take_profit=True,
@@ -1090,13 +1256,19 @@ class DynamicRolloverEngine:
                                     "target_core": report_90["final_target"],
                                     "reason": report_90["markdown_report"],
                                     "suggested_strategy": report_90["options_strategy"],
+                                    "scenario": RolloverScenario.SATELLITE_REBALANCE.value,
+                                    "is_manual_override_required": False,
+                                    "trigger_condition_text": report_90[
+                                        "trigger_condition_report"
+                                    ],
+                                    "cash_impact": report_90["cash_impact"],
                                 }
                             )
                             # 10% 留存原標的做 Bear Call Spread 反向收租
                             report_10 = self._generate_rule_based_rebalance_report(
                                 symbol,
                                 metrics,
-                                system_action="LIQUIDATE",
+                                requested_action="LIQUIDATE",
                                 target=symbol,
                                 strategy_override=f"Bear Call Spread (Short Call @ ${call_wall * 1.02:.2f})",
                                 asset_class=asset_class,
@@ -1121,6 +1293,11 @@ class DynamicRolloverEngine:
                                     + "\n⚠️ **【動能衰竭確認】SQZ MOM 拐頭且 Skew 降溫，觸發 Bear Call Spread 反向收租 (手動防滑價)**",
                                     "suggested_strategy": report_10["options_strategy"],
                                     "is_manual_override_required": True,
+                                    "scenario": RolloverScenario.SATELLITE_REBALANCE.value,
+                                    "trigger_condition_text": report_10[
+                                        "trigger_condition_report"
+                                    ],
+                                    "cash_impact": report_10["cash_impact"],
                                 }
                             )
                             continue
@@ -1133,7 +1310,7 @@ class DynamicRolloverEngine:
                             report_90 = self._generate_rule_based_rebalance_report(
                                 symbol,
                                 metrics,
-                                system_action="LIQUIDATE",
+                                requested_action="LIQUIDATE",
                                 target=next_target,
                                 asset_class=asset_class,
                                 is_take_profit=True,
@@ -1155,12 +1332,18 @@ class DynamicRolloverEngine:
                                     "target_core": report_90["final_target"],
                                     "reason": report_90["markdown_report"],
                                     "suggested_strategy": report_90["options_strategy"],
+                                    "scenario": RolloverScenario.SATELLITE_REBALANCE.value,
+                                    "is_manual_override_required": False,
+                                    "trigger_condition_text": report_90[
+                                        "trigger_condition_report"
+                                    ],
+                                    "cash_impact": report_90["cash_impact"],
                                 }
                             )
                             report_10 = self._generate_rule_based_rebalance_report(
                                 symbol,
                                 metrics,
-                                system_action="HOLD",
+                                requested_action="HOLD",
                                 target=symbol,
                                 strategy_override=f"Trailing Stop 移動止盈 (防守位: ${trailing_stop_level:.2f})",
                                 asset_class=asset_class,
@@ -1179,6 +1362,11 @@ class DynamicRolloverEngine:
                                     + f"\n🚀 **【動能延續・移動止盈】**突破 Call Wall 但動能未衰竭 (SQZ MOM {sqz_mom:+.2f} / Skew {skew_percentile:.0f}%)，嚴禁以身擋車做空！剩餘 10% 部位啟動 Trailing Stop (${trailing_stop_level:.2f}) 讓獲利奔馳。",
                                     "suggested_strategy": report_10["options_strategy"],
                                     "is_manual_override_required": False,
+                                    "scenario": RolloverScenario.SATELLITE_REBALANCE.value,
+                                    "trigger_condition_text": report_10[
+                                        "trigger_condition_report"
+                                    ],
+                                    "cash_impact": report_10["cash_impact"],
                                 }
                             )
                             continue
@@ -1187,7 +1375,7 @@ class DynamicRolloverEngine:
                     report = self._generate_rule_based_rebalance_report(
                         symbol,
                         metrics,
-                        system_action="LIQUIDATE"
+                        requested_action="LIQUIDATE"
                         if is_structural_breakdown
                         else "HOLD",
                         target=next_target,
@@ -1208,6 +1396,12 @@ class DynamicRolloverEngine:
                             "target_core": report["final_target"],
                             "reason": report["markdown_report"],
                             "suggested_strategy": report["options_strategy"],
+                            "scenario": RolloverScenario.SATELLITE_REBALANCE.value,
+                            "is_manual_override_required": False,
+                            "trigger_condition_text": report[
+                                "trigger_condition_report"
+                            ],
+                            "cash_impact": report["cash_impact"],
                         }
                     )
                     continue  # 已經處理，不需進行後續常規再平衡
@@ -1229,7 +1423,7 @@ class DynamicRolloverEngine:
                     report = self._generate_rule_based_rebalance_report(
                         symbol,
                         metrics,
-                        system_action="REDUCE",
+                        requested_action="REDUCE",
                         asset_class=asset_class,
                         active_orders=user_orders,
                         position_shares=quantity,
@@ -1246,6 +1440,12 @@ class DynamicRolloverEngine:
                             "target_core": report["final_target"],
                             "reason": report["markdown_report"],
                             "suggested_strategy": report["options_strategy"],
+                            "scenario": RolloverScenario.SATELLITE_REBALANCE.value,
+                            "is_manual_override_required": False,
+                            "trigger_condition_text": report[
+                                "trigger_condition_report"
+                            ],
+                            "cash_impact": report["cash_impact"],
                         }
                     )
 

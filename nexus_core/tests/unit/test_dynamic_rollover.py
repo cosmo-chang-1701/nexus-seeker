@@ -1,8 +1,10 @@
+import discord
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from market_analysis.dynamic_rollover import (
     DynamicRolloverEngine,
     FundamentalThesisResult,
+    CORE_DEFENSE_ETF_SYMBOLS,
 )
 from cogs.embed_builders.rollover_embeds import (
     create_dynamic_rollover_embed,
@@ -95,6 +97,8 @@ async def test_check_satellite_rebalancing(
     assert instructions[0]["action"] == "REDUCE"
     assert instructions[0]["target_core"] == "VOO"
     assert instructions[0]["sell_ratio"] == 0.56
+    assert instructions[0]["scenario"] == "SATELLITE_REBALANCE"
+    assert instructions[0]["is_manual_override_required"] is False
 
     # Test within limits
     portfolio2 = [
@@ -266,8 +270,12 @@ def test_create_thesis_passed_embed_short_reasoning() -> None:
 
 
 def test_create_dynamic_rollover_embed_truncates_long_reason() -> None:
-    """rollover embed 的 reason field value ≤ 1024 字元上限。"""
-    long_reason = "A" * 2000
+    """
+    rollover embed 的 reason 實際落在 embed.description（而非 fields[0]，
+    後者是固定短版型的「撤出資金/平倉」ANSI 區塊，與 reason 內容無關），
+    需確認長 reason 被正確截斷且不超過 Discord description 4096 字元硬上限。
+    """
+    long_reason = "A" * 5000
     embed = create_dynamic_rollover_embed(
         rollover_type="原型假設破滅",
         sell_symbol="AMD",
@@ -279,10 +287,11 @@ def test_create_dynamic_rollover_embed_truncates_long_reason() -> None:
         strike="N/A",
         expiry="N/A",
         direction="BTO",
+        scenario="FUNDAMENTAL_BROKEN",
     )
-    reason_field = embed.fields[0]
-    assert reason_field.value is not None
-    assert len(reason_field.value) <= 1024
+    assert embed.description is not None
+    assert len(embed.description) <= 4096
+    assert "AAAA" in embed.description
 
 
 @pytest.mark.asyncio
@@ -408,7 +417,7 @@ def test_generate_rule_based_rebalance_report_grayscale_hold(
     report = engine._generate_rule_based_rebalance_report(
         symbol="AMD",
         metrics=metrics,
-        system_action="HOLD",
+        requested_action="HOLD",
         target="VOO",
         active_orders=active_orders,
         position_shares=195.0,
@@ -447,7 +456,7 @@ def test_generate_rule_based_rebalance_report_hard_breakdown(
     report = engine._generate_rule_based_rebalance_report(
         symbol="AMD",
         metrics=metrics,
-        system_action="HOLD",
+        requested_action="HOLD",
         target="VOO",
         position_shares=195.0,
         current_value=43524.0,
@@ -482,7 +491,7 @@ def test_generate_rule_based_rebalance_report_dynamic_generic_ticker(
     report = engine._generate_rule_based_rebalance_report(
         symbol="NVDA",
         metrics=metrics,
-        system_action="HOLD",
+        requested_action="HOLD",
         target="SPY",
         active_orders=[],
         position_shares=100.0,
@@ -516,7 +525,7 @@ def test_01dte_risk_parity_position_sizing(engine: DynamicRolloverEngine) -> Non
     report = engine._generate_rule_based_rebalance_report(
         symbol="XYZ",
         metrics=metrics,
-        system_action="HOLD",
+        requested_action="HOLD",
         target="VOO",
         position_shares=100.0,
         current_value=10000.0,
@@ -546,7 +555,7 @@ def test_lvn_secondary_hvn_snapping(engine: DynamicRolloverEngine) -> None:
     report = engine._generate_rule_based_rebalance_report(
         symbol="XYZ",
         metrics=metrics,
-        system_action="HOLD",
+        requested_action="HOLD",
         target="VOO",
         position_shares=100.0,
         current_value=10000.0,
@@ -570,7 +579,7 @@ def test_dual_track_exit_options_vs_spot(engine: DynamicRolloverEngine) -> None:
     report_spot = engine._generate_rule_based_rebalance_report(
         symbol="XYZ",
         metrics=metrics_a,
-        system_action="HOLD",
+        requested_action="HOLD",
         asset_class="SPOT",
     )
     assert report_spot["final_action"] == "HOLD"
@@ -580,7 +589,7 @@ def test_dual_track_exit_options_vs_spot(engine: DynamicRolloverEngine) -> None:
     report_options = engine._generate_rule_based_rebalance_report(
         symbol="XYZ",
         metrics=metrics_a,
-        system_action="HOLD",
+        requested_action="HOLD",
         asset_class="OPTIONS",
     )
     assert report_options["final_action"] == "LIQUIDATE"
@@ -758,6 +767,8 @@ async def test_evaluate_opportunity_cost_for_satellites_triggers(
     assert result[0]["target_core"] == "SMCI"
     assert result[0]["action"] == "REDUCE"
     assert result[0]["sell_ratio"] == 0.3
+    assert result[0]["scenario"] == "OPPORTUNITY_COST"
+    assert result[0]["is_manual_override_required"] is False
 
 
 @pytest.mark.asyncio
@@ -840,6 +851,7 @@ async def test_evaluate_margin_defense_triggers_boxx_for_no_edge_holding(
     assert result[0]["target_core"] == "BOXX"
     assert "BOXX" in result[0]["buy_action_label"]
     assert result[0]["is_manual_override_required"] is True
+    assert result[0]["scenario"] == "MARGIN_DEFENSE"
 
 
 @pytest.mark.asyncio
@@ -991,3 +1003,312 @@ def test_create_dynamic_rollover_embed_buy_action_label_override() -> None:
     assert buy_field_override.value is not None
     assert "持有現金（保證金緩衝）" in buy_field_override.value
     assert "(Buy To Open)" not in buy_field_override.value
+
+
+# ==========================================
+# 全面重構補強測試：情境識別碼視覺樣式 / 統一 ETF 排除清單 /
+# 過期價格修正 / _compute_structural_breakdown_signals / strategy_override 互斥
+# ==========================================
+
+
+@pytest.mark.parametrize(
+    "action,sell_ratio,direction",
+    [
+        ("LIQUIDATE", 1.0, "BTO"),
+        ("HOLD", 0.0, "HOLD"),
+    ],
+)
+def test_margin_defense_scenario_always_renders_red(
+    action: str, sell_ratio: float, direction: str
+) -> None:
+    """
+    安全性回歸測試：MARGIN_DEFENSE (保證金防禦強制平倉) 無論 action/sell_ratio 為何，
+    embed 顏色都必須固定為危急紅色，不可退化為與一般再平衡相同的金色/青色
+    (曾因 rollover_type 自由文字未包含「防禦」二字而導致此問題)。
+    """
+    embed = create_dynamic_rollover_embed(
+        rollover_type="槓桿與保證金防禦",
+        sell_symbol="NVDA",
+        sell_ratio=sell_ratio,
+        buy_symbol="BOXX",
+        reason="大盤宏觀風控紅線亮起，個股結構無勝率",
+        suggested_strategy="STC 100% 轉倉 BOXX",
+        suggested_price="Market",
+        strike="N/A",
+        expiry="N/A",
+        direction=direction,
+        scenario="MARGIN_DEFENSE",
+    )
+    assert embed.color == discord.Color(
+        0xE74C3C
+    ), f"MARGIN_DEFENSE (action={action}) 必須恆為危急紅色，實際為 {embed.color}"
+    assert "保證金防禦強制平倉" in str(embed.title)
+
+
+def test_scenario_style_distinguishes_all_four_scenarios() -> None:
+    """
+    四大情境必須產生彼此不同的標題/顏色組合，讓交易者能一眼分辨是哪個引擎觸發。
+    """
+    embeds = {
+        scenario: create_dynamic_rollover_embed(
+            rollover_type="測試",
+            sell_symbol="NVDA",
+            sell_ratio=0.5,
+            buy_symbol="VOO",
+            reason="test",
+            suggested_strategy="Buy Shares",
+            suggested_price="Market",
+            strike="N/A",
+            expiry="N/A",
+            direction="BTO",
+            scenario=scenario,
+        )
+        for scenario in (
+            "OPPORTUNITY_COST",
+            "SATELLITE_REBALANCE",
+            "MARGIN_DEFENSE",
+            "FUNDAMENTAL_BROKEN",
+        )
+    }
+    combos = {(e.title, e.color) for e in embeds.values()}
+    assert len(combos) == 4, "四大情境的 (標題, 顏色) 組合必須互不相同"
+    # 最危險的兩個情境 (保證金防禦 / 基本面破滅) 必須共享同一種危急紅色
+    assert embeds["MARGIN_DEFENSE"].color == embeds["FUNDAMENTAL_BROKEN"].color
+    assert embeds["MARGIN_DEFENSE"].color == discord.Color(0xE74C3C)
+
+
+def test_create_dynamic_rollover_embed_unknown_scenario_falls_back_gracefully() -> None:
+    """
+    scenario 未傳入 (預設 UNKNOWN) 時應退回舊版子字串比對渲染，維持向下相容，
+    而非拋出例外或渲染出無意義的空白標題。
+    """
+    embed = create_dynamic_rollover_embed(
+        rollover_type="原型假設破滅",
+        sell_symbol="AMD",
+        sell_ratio=1.0,
+        buy_symbol="VOO",
+        reason="test",
+        suggested_strategy="Buy Shares",
+        suggested_price="Market",
+        strike="N/A",
+        expiry="N/A",
+        direction="BTO",
+    )
+    assert embed.color == discord.Color(0xE74C3C)
+    assert "破滅" in str(embed.title)
+
+
+def test_core_defense_etf_symbols_unified_across_engine() -> None:
+    """
+    CORE_DEFENSE_ETF_SYMBOLS 為單一共用常數，VXX 必須存在於其中，
+    確保機會成本轉倉與槓桿保證金防禦不再各自維護分歧的排除清單。
+    """
+    assert CORE_DEFENSE_ETF_SYMBOLS == frozenset(
+        {"QQQ", "SPY", "VOO", "VXX", "IVV", "VTI"}
+    )
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.index_microstructure.get_market_regime",
+    new_callable=AsyncMock,
+    return_value="SHORT_GAMMA_CRITICAL",
+)
+@patch("database.orders.get_user_active_orders", return_value=[])
+@patch("market_analysis.dynamic_rollover.get_full_user_context")
+async def test_evaluate_margin_defense_excludes_vxx_as_core(
+    mock_ctx: MagicMock,
+    mock_orders: MagicMock,
+    mock_regime: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """
+    統一常數修正後，VXX 即使被標記為 SATELLITE 且結構無勝率，
+    也必須被排除在 BOXX 強制平倉候選之外 (VXX 屬避險工具而非戰術標的)。
+    """
+    mock_ctx.return_value = MagicMock(cash_reserve=1000.0)
+    portfolio = [
+        {
+            "symbol": "VXX",
+            "asset_class": "SATELLITE",
+            "current_value": 5000.0,
+            "quantity": 10.0,
+            "instrument_type": "SPOT",
+            "sqz_mom": -5.0,
+            "skew": -0.5,
+        },
+    ]
+    result = await engine.evaluate_margin_defense(1, portfolio)
+    assert result == []
+
+
+def test_resolve_target_reference_price_uses_market_cache_over_stale_constant(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """
+    目標為 VOO/SPY 時應優先讀取 market_cache 的 reference_spot_price，
+    而非沿用過期的硬編碼估計值 (曾為 560.0)。
+    """
+    with patch("database.market_cache.get_market_cache") as mock_cache:
+        mock_cache.return_value = {"reference_spot_price": 612.34}
+        price = engine._resolve_target_reference_price("VOO", fallback_spot=500.0)
+        assert price == 612.34
+        assert price != 560.0
+
+
+def test_resolve_target_reference_price_falls_back_when_cache_missing(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """
+    VOO/SPY 目標快取缺失時，比照原始程式碼行為 (原硬編碼 560.0 的分支從不採用
+    該資產自身現價)，退回具名備援常數，而非誤用不相關的 fallback_spot。
+    """
+    with patch("database.market_cache.get_market_cache", return_value=None):
+        assert engine._resolve_target_reference_price("VOO", fallback_spot=555.0) == (
+            500.0
+        )
+    # 非 VOO/SPY 目標一律使用自身現價 (與快取無關，維持原始 else 分支行為)
+    assert engine._resolve_target_reference_price("SMCI", fallback_spot=40.0) == 40.0
+    # 非 VOO/SPY 且現價也缺失時，使用同一具名備援常數
+    assert engine._resolve_target_reference_price("SMCI", fallback_spot=0.0) == 500.0
+
+
+@pytest.mark.asyncio
+async def test_compute_structural_breakdown_signals_options_fast_path(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """
+    OPTIONS 快速通道：現價貫穿 anchor_base 即時判定破位，不需等待 15m 實體收盤確認
+    (不應呼叫 is_gamma_cliff_confirmed)。
+    """
+    with patch(
+        "market_analysis.dynamic_rollover.is_gamma_cliff_confirmed",
+        new_callable=AsyncMock,
+    ) as mock_confirm:
+        (
+            is_breakdown,
+            is_whale_block,
+            support_wall,
+            resistance_wall,
+            support_gex,
+            resistance_gex,
+        ) = await engine._compute_structural_breakdown_signals(
+            symbol="AMD",
+            spot=90.0,
+            put_wall=100.0,
+            gamma_flip=0.0,
+            atr_14=2.0,
+            sqz_mom=1.0,
+            skew=0.0,
+            price_15m_close=90.0,
+            gex_profile_data=None,
+            asset_class="OPTIONS",
+        )
+        assert is_breakdown is True
+        assert is_whale_block is False
+        mock_confirm.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_compute_structural_breakdown_signals_whale_sto_block_only(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """主力空頭封殺 (sqz_mom<0 且 skew<-0.3) 應獨立於結構性破位觸發。"""
+    (
+        is_breakdown,
+        is_whale_block,
+        *_rest,
+    ) = await engine._compute_structural_breakdown_signals(
+        symbol="AMD",
+        spot=100.0,
+        put_wall=0.0,
+        gamma_flip=0.0,
+        atr_14=2.0,
+        sqz_mom=-2.0,
+        skew=-0.5,
+        price_15m_close=100.0,
+        gex_profile_data=None,
+        asset_class="SPOT",
+    )
+    assert is_breakdown is False  # 無 anchor_base -> 無法判定結構性破位
+    assert is_whale_block is True
+
+
+@pytest.mark.asyncio
+async def test_compute_structural_breakdown_signals_neither_triggered(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """健康部位：無結構性破位、無主力空頭封殺。"""
+    (
+        is_breakdown,
+        is_whale_block,
+        *_rest,
+    ) = await engine._compute_structural_breakdown_signals(
+        symbol="AMD",
+        spot=110.0,
+        put_wall=100.0,
+        gamma_flip=95.0,
+        atr_14=2.0,
+        sqz_mom=5.0,
+        skew=0.1,
+        price_15m_close=110.0,
+        gex_profile_data=None,
+        asset_class="SPOT",
+    )
+    assert is_breakdown is False
+    assert is_whale_block is False
+
+
+def test_evaluate_opportunity_cost_extreme_asymmetric_forces_full_rollover(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """
+    條件二「極致不對稱勝率」(低 IVR + 貼近 put_wall + UOA sweep) 觸發時，
+    應強制 rollover_ratio=1.0 並採用 "Shares + ITM Call" 策略。
+    """
+    res = engine.evaluate_opportunity_cost(
+        current_holding_symbol="PLTR",
+        current_holding_power_squeeze=15.0,  # < 20 (動能衰退)
+        current_holding_profit_pct=0.1,
+        target_watchlist_symbol="SMCI",
+        target_power_squeeze=85.0,  # > 80 (突破待發)
+        target_expected_value=0.25,
+        current_holding_expected_value=0.10,  # EV spread = 15% > 5%
+        target_ivr=20.0,  # 0 < 20 < 30 (低 IVR)
+        target_uoa_sweep=True,
+        target_spot=100.0,
+        target_put_wall=100.5,  # |100-100.5|/100.5 ≈ 0.5% <= 1%
+    )
+    assert res["should_rollover"] is True
+    assert res["rollover_ratio"] == 1.0
+    assert res["strategy"] == "Shares + ITM Call"
+
+
+def test_apply_ivr_strategy_overlay_override_suppresses_ivr_suffix(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """
+    strategy_override 非空時應完全取代 IVR 鎖定後綴邏輯 (elif，而非疊加)，
+    即使 IVR 極低本應觸發賣方鎖定後綴，也不得附加該後綴文字。
+    """
+    with patch(
+        "market_analysis.dynamic_rollover.is_selling_locked_by_ivr", return_value=True
+    ):
+        result = engine._apply_ivr_strategy_overlay(
+            options_strategy="100% LIQUIDATE (轉入 VOO)",
+            strategy_override="Bear Call Spread (Short Call @ $105.00)",
+            ivr=5.0,  # 極低 IVR，若無 override 本應觸發賣方鎖定後綴
+        )
+        assert result == "Bear Call Spread (Short Call @ $105.00)"
+        assert "IVR 極低位" not in result
+
+    # 未傳入 override 時應正常附加 IVR 鎖定後綴
+    with patch(
+        "market_analysis.dynamic_rollover.is_selling_locked_by_ivr", return_value=True
+    ):
+        result_no_override = engine._apply_ivr_strategy_overlay(
+            options_strategy="100% LIQUIDATE (轉入 VOO)",
+            strategy_override="",
+            ivr=5.0,
+        )
+        assert "IVR 極低位" in result_no_override

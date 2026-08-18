@@ -1365,6 +1365,7 @@ class TerminalCog(commands.Cog):
                 strike="N/A",
                 expiry="N/A",
                 direction="BTO",
+                scenario="FUNDAMENTAL_BROKEN",
             )
             view = RolloverActionView(target_symbol=symbol.upper())
             await _send_or_edit("", embed=embed, view=view)
