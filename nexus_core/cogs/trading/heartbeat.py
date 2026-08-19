@@ -29,10 +29,24 @@ async def dispatch_watchlist_heartbeat(
         return
 
     user_symbols: dict[int, list[str]] = {}
+    all_symbols: set[str] = set()
     for uid, sym, _ in all_watchlists:
         user_symbols.setdefault(uid, [])
         if sym not in user_symbols[uid]:
             user_symbols[uid].append(sym)
+        all_symbols.add(sym)
+
+    # Best-effort 同步全體去重後的自選標的清單給 nexus_edge_scraper，
+    # 讓 edge 的背景排程知道該輪詢哪些標的的 GEX / Option Chain。
+    # edge 目前部署不穩定，失敗只記錄 warning，不影響心跳繼續執行。
+    try:
+        from services import edge_cache_client
+
+        await edge_cache_client.sync_watchlist_symbols(list(all_symbols))
+    except Exception as sync_err:
+        logger.warning(
+            f"同步 watchlist 標的清單至 edge 失敗（不影響心跳繼續執行): {sync_err}"
+        )
 
     terminal_cog = bot.get_cog("UnifiedTerminalCog")
     if not terminal_cog:

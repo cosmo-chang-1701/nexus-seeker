@@ -727,19 +727,40 @@ async def get_option_chain(
     calls_full = None
     puts_full = None
     underlying_full = None
-    try:
-        ticker = yf.Ticker(symbol)
-        chain = await call_yf(ticker.option_chain, expiry)
-        if chain is not None:
-            calls_full = chain.calls.copy() if chain.calls is not None else None
-            puts_full = chain.puts.copy() if chain.puts is not None else None
-            underlying_full = (
-                chain.underlying.copy()
-                if hasattr(chain.underlying, "copy")
-                else chain.underlying
-            )
-    except Exception as e:
-        logger.warning(f"[{symbol}] 獲取期權鏈失敗 (expiry={expiry}): {e}")
+
+    # 優先讀取 edge 背景排程寫入的 Option Chain 快照（毫秒級 SQLite 讀取），
+    # 命中且夠新鮮就直接採用，跳過下方 yfinance 即時抓取。edge 目前部署
+    # 不穩定，任何 miss/逾時/離線都會回傳 None，完全不影響下方既有的
+    # yfinance -> edge 即時 scrape fallback 行為（Max Pain / UOA 等下游
+    # 商業邏輯完全不變，只是輸入來源換掉）。
+    from services import edge_cache_client
+
+    edge_cached_chain = await edge_cache_client.get_cached_option_chain(symbol, expiry)
+    if edge_cached_chain is not None:
+        edge_age = edge_cached_chain.get("age_seconds")
+        if edge_age is not None and edge_age < 3600:
+            edge_data = edge_cached_chain["data"]
+            edge_calls = pd.DataFrame(edge_data.get("calls", []))
+            edge_puts = pd.DataFrame(edge_data.get("puts", []))
+            if not (edge_calls.empty and edge_puts.empty):
+                calls_full = edge_calls
+                puts_full = edge_puts
+                underlying_full = {}
+
+    if calls_full is None or puts_full is None:
+        try:
+            ticker = yf.Ticker(symbol)
+            chain = await call_yf(ticker.option_chain, expiry)
+            if chain is not None:
+                calls_full = chain.calls.copy() if chain.calls is not None else None
+                puts_full = chain.puts.copy() if chain.puts is not None else None
+                underlying_full = (
+                    chain.underlying.copy()
+                    if hasattr(chain.underlying, "copy")
+                    else chain.underlying
+                )
+        except Exception as e:
+            logger.warning(f"[{symbol}] 獲取期權鏈失敗 (expiry={expiry}): {e}")
 
     if (
         calls_full is None

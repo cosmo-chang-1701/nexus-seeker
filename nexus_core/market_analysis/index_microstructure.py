@@ -210,6 +210,25 @@ async def fetch_symbol_gex_metrics(symbol: str) -> dict:
         "gex_profile": {},
     }
 
+    # 優先讀取 edge 背景排程寫入的 GEX 快照（毫秒級 SQLite 讀取），
+    # 命中且夠新鮮就直接採用，跳過下方即時 Playwright scrape。
+    # edge 目前部署不穩定，任何 miss/逾時/離線都會回傳 None，
+    # 完全不影響下方既有的 fallback 行為。
+    from services import edge_cache_client
+
+    edge_cached = await edge_cache_client.get_cached_gex(symbol)
+    if edge_cached is not None:
+        edge_age = edge_cached.get("age_seconds")
+        if edge_age is not None and edge_age < 3600:
+            edge_data = edge_cached["data"]
+            try:
+                await save_kv_cache(
+                    cache_key, {"data": edge_data, "timestamp": time.time()}
+                )
+            except Exception as e:
+                logger.warning(f"寫入 GEX kv_cache 失敗 ({symbol}): {e}")
+            return edge_data  # type: ignore
+
     if not getattr(config, "TUNNEL_URL", ""):
         if stale_cached_data is not None:
             logger.warning(f"[{symbol}] TUNNEL_URL 未設定，回傳過期 GEX 快取資料。")

@@ -40,8 +40,12 @@ class DDPInspector:
 
     async def inspect_symbol(self, symbol: str) -> Optional[Dict[str, Any]]:
         """分析單一標的是否符合 DDP 條件"""
-        ticker = yf.Ticker(symbol)
-        info = ticker.info
+
+        def _fetch_info_and_income(sym: str) -> tuple[Dict[str, Any], Any]:
+            t = yf.Ticker(sym)
+            return t.info, t.quarterly_income_stmt
+
+        info, q_inc = await market_data_service.call_yf(_fetch_info_and_income, symbol)
 
         # 1. 產業過濾
         sector = info.get("sector")
@@ -50,7 +54,6 @@ class DDPInspector:
             return None
 
         # 2. 獲取財務報表
-        q_inc = ticker.quarterly_income_stmt
         if q_inc.empty:
             logger.info(f"[{symbol}] DDP Fail: quarterly_income_stmt is empty")
             return None
@@ -127,7 +130,9 @@ class DDPInspector:
             # Forward Alignment
             fwd_pe = info.get("forwardPE")
             if not fwd_pe:
-                q_cash = ticker.quarterly_cashflow
+                q_cash = await market_data_service.call_yf(
+                    lambda sym: yf.Ticker(sym).quarterly_cashflow, symbol
+                )
                 if not q_cash.empty and "Operating Cash Flow" in q_cash.index:
                     ocf = float(q_cash.loc["Operating Cash Flow"].iloc[0])
                     if ocf <= 0:

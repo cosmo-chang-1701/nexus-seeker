@@ -45,7 +45,6 @@ class VolatilityInspector:
         self, symbol: str, user_ctx: Any
     ) -> Optional[Dict[str, Any]]:
         """分析單一標的是否具備波動率優勢或高風險事件"""
-        ticker = yf.Ticker(symbol)
 
         # 1. 獲取歷史數據 (252天) 用於 HV 與 IVP
         df = await market_data_service.get_history_df(symbol, period="1y")
@@ -62,14 +61,23 @@ class VolatilityInspector:
             return None
 
         # 3. 獲取當前 IV (Implied Volatility)
-        info = ticker.info
+        info = await market_data_service.call_yf(
+            lambda sym: yf.Ticker(sym).info, symbol
+        )
         iv_current = info.get("impliedVolatility")
         if not iv_current or iv_current <= 0:
             # Fallback: 嘗試從 ATM 期權鏈獲取
+
+            def _fetch_first_chain(sym: str) -> Optional[Any]:
+                t = yf.Ticker(sym)
+                expirations = t.options
+                if not expirations:
+                    return None
+                return t.option_chain(expirations[0])
+
             try:
-                expirations = ticker.options
-                if expirations:
-                    chain = ticker.option_chain(expirations[0])
+                chain = await market_data_service.call_yf(_fetch_first_chain, symbol)
+                if chain is not None:
                     price = info.get("currentPrice") or df["Close"].iloc[-1]
                     atm_call_idx = (chain.calls["strike"] - price).abs().idxmin()
                     iv_current = chain.calls.loc[atm_call_idx].get(

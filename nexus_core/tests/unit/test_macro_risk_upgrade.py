@@ -628,3 +628,130 @@ def test_estimate_symbol_gamma_flip_malformed_profile_returns_zero() -> None:
     """履約價/GEX 值非數值格式 -> fail-safe 回傳 0.0，不拋例外"""
     gex_profile = {"not_a_strike": "not_a_number"}
     assert estimate_symbol_gamma_flip(gex_profile, spot=100.0) == 0.0
+
+
+@pytest.mark.asyncio
+async def test_fetch_symbol_gex_metrics_prefers_fresh_edge_cache() -> None:
+    """edge 背景排程快取命中且夠新鮮時，應直接採用，完全不觸發即時
+    Playwright scrape（不呼叫 httpx 打向 /api/v1/scrape/options/.../gex）。"""
+    from unittest.mock import AsyncMock
+    from market_analysis.index_microstructure import fetch_symbol_gex_metrics
+
+    edge_payload = {
+        "data": {
+            "spot": 230.0,
+            "net_gex": 500.0,
+            "call_wall": 240.0,
+            "put_wall": 220.0,
+            "gex_profile": {"220.0": 100.0},
+        },
+        "age_seconds": 120.0,
+    }
+
+    with patch("database.cache.get_kv_cache", return_value=None), patch(
+        "database.cache.save_kv_cache", new_callable=AsyncMock
+    ), patch(
+        "services.edge_cache_client.get_cached_gex",
+        new_callable=AsyncMock,
+        return_value=edge_payload,
+    ), patch("httpx.AsyncClient") as mock_client_cls:
+        result = await fetch_symbol_gex_metrics("AAPL")
+
+        assert result["call_wall"] == 240.0
+        assert result["put_wall"] == 220.0
+        mock_client_cls.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_fetch_symbol_gex_metrics_falls_back_when_edge_cache_stale() -> None:
+    """edge 快取過舊 (超過 3600 秒新鮮度門檻) 時，應完全 fallback 回既有的
+    即時 scrape 路徑，行為與 edge 未部署時完全一致。"""
+    from unittest.mock import AsyncMock
+    from market_analysis.index_microstructure import fetch_symbol_gex_metrics
+
+    stale_edge_payload = {
+        "data": {
+            "spot": 1.0,
+            "net_gex": 1.0,
+            "call_wall": 1.0,
+            "put_wall": 1.0,
+            "gex_profile": {},
+        },
+        "age_seconds": 9999.0,
+    }
+    live_scrape_response = {
+        "status": "success",
+        "data": {
+            "spot": 230.0,
+            "net_gex": 500.0,
+            "call_wall": 240.0,
+            "put_wall": 220.0,
+            "gex_profile": {"220.0": 100.0},
+        },
+    }
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = live_scrape_response
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=mock_response)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("database.cache.get_kv_cache", return_value=None), patch(
+        "database.cache.save_kv_cache", new_callable=AsyncMock
+    ), patch(
+        "services.edge_cache_client.get_cached_gex",
+        new_callable=AsyncMock,
+        return_value=stale_edge_payload,
+    ), patch("config.TUNNEL_URL", "http://mock-tunnel"), patch(
+        "httpx.AsyncClient", return_value=mock_client
+    ):
+        result = await fetch_symbol_gex_metrics("AAPL")
+
+        assert result["call_wall"] == 240.0
+        assert result["put_wall"] == 220.0
+        mock_client.get.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_fetch_symbol_gex_metrics_falls_back_when_edge_unreachable() -> None:
+    """edge 連不上/離線 (get_cached_gex 回傳 None) 時，應完全 fallback 回
+    既有的即時 scrape 路徑，watchlist 心跳不受影響。"""
+    from unittest.mock import AsyncMock
+    from market_analysis.index_microstructure import fetch_symbol_gex_metrics
+
+    live_scrape_response = {
+        "status": "success",
+        "data": {
+            "spot": 230.0,
+            "net_gex": 500.0,
+            "call_wall": 240.0,
+            "put_wall": 220.0,
+            "gex_profile": {"220.0": 100.0},
+        },
+    }
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = live_scrape_response
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=mock_response)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("database.cache.get_kv_cache", return_value=None), patch(
+        "database.cache.save_kv_cache", new_callable=AsyncMock
+    ), patch(
+        "services.edge_cache_client.get_cached_gex",
+        new_callable=AsyncMock,
+        return_value=None,
+    ), patch("config.TUNNEL_URL", "http://mock-tunnel"), patch(
+        "httpx.AsyncClient", return_value=mock_client
+    ):
+        result = await fetch_symbol_gex_metrics("AAPL")
+
+        assert result["call_wall"] == 240.0
+        mock_client.get.assert_called_once()

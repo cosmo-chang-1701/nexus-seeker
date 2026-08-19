@@ -310,6 +310,120 @@ async def test_get_option_chain_caching() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_option_chain_prefers_fresh_edge_cache_over_yfinance() -> None:
+    """edge 快取命中且夠新鮮時，應直接採用，完全不呼叫 yfinance。"""
+    from services.market_data_service import get_option_chain, clear_options_cache
+
+    clear_options_cache()
+
+    edge_payload = {
+        "data": {
+            "calls": [{"strike": 200.0, "openInterest": 500}],
+            "puts": [{"strike": 190.0, "openInterest": 300}],
+        },
+        "age_seconds": 60.0,
+    }
+
+    with patch(
+        "services.edge_cache_client.get_cached_option_chain",
+        new_callable=AsyncMock,
+        return_value=edge_payload,
+    ), patch("services.market_data_service.yf.Ticker") as mock_yf_ticker, patch(
+        "services.market_data_service.get_quote",
+        new_callable=AsyncMock,
+        return_value={"c": 195.0},
+    ):
+        chain = await get_option_chain("NVDA", "2026-09-18")
+
+        assert chain is not None
+        assert list(chain.calls["strike"]) == [200.0]
+        assert list(chain.puts["strike"]) == [190.0]
+        mock_yf_ticker.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_option_chain_falls_back_to_yfinance_when_edge_cache_stale() -> None:
+    """edge 快取過舊 (age_seconds 超過新鮮度門檻) 時，應完全 fallback 回既有的
+    yfinance 即時抓取路徑，行為與 edge 未部署時完全一致。"""
+    import pandas as pd
+    from services.market_data_service import get_option_chain, clear_options_cache
+
+    clear_options_cache()
+
+    stale_edge_payload = {
+        "data": {
+            "calls": [{"strike": 999.0, "openInterest": 1}],
+            "puts": [],
+        },
+        "age_seconds": 7200.0,  # 超過 3600 秒新鮮度門檻
+    }
+
+    mock_calls = pd.DataFrame({"strike": [150.0], "impliedVolatility": [0.3]})
+    mock_puts = pd.DataFrame({"strike": [140.0], "impliedVolatility": [0.32]})
+    mock_chain = MagicMock()
+    mock_chain.calls = mock_calls
+    mock_chain.puts = mock_puts
+    mock_chain.underlying = {"symbol": "MSFT", "price": 145.0}
+
+    mock_ticker = MagicMock()
+    mock_ticker.option_chain = MagicMock(return_value=mock_chain)
+
+    with patch(
+        "services.edge_cache_client.get_cached_option_chain",
+        new_callable=AsyncMock,
+        return_value=stale_edge_payload,
+    ), patch(
+        "services.market_data_service.yf.Ticker", return_value=mock_ticker
+    ) as mock_yf_ticker, patch(
+        "services.market_data_service.get_quote",
+        new_callable=AsyncMock,
+        return_value={"c": 145.0},
+    ):
+        chain = await get_option_chain("MSFT", "2026-06-19")
+
+        assert chain is not None
+        assert list(chain.calls["strike"]) == [150.0]
+        mock_yf_ticker.assert_called_once_with("MSFT")
+
+
+@pytest.mark.asyncio
+async def test_get_option_chain_falls_back_to_yfinance_when_edge_unreachable() -> None:
+    """edge 連不上/離線時 (get_cached_option_chain 回傳 None)，應完全
+    fallback 回既有的 yfinance 即時抓取路徑，watchlist 心跳不受影響。"""
+    import pandas as pd
+    from services.market_data_service import get_option_chain, clear_options_cache
+
+    clear_options_cache()
+
+    mock_calls = pd.DataFrame({"strike": [150.0], "impliedVolatility": [0.3]})
+    mock_puts = pd.DataFrame({"strike": [140.0], "impliedVolatility": [0.32]})
+    mock_chain = MagicMock()
+    mock_chain.calls = mock_calls
+    mock_chain.puts = mock_puts
+    mock_chain.underlying = {"symbol": "MSFT", "price": 145.0}
+
+    mock_ticker = MagicMock()
+    mock_ticker.option_chain = MagicMock(return_value=mock_chain)
+
+    with patch(
+        "services.edge_cache_client.get_cached_option_chain",
+        new_callable=AsyncMock,
+        return_value=None,
+    ), patch(
+        "services.market_data_service.yf.Ticker", return_value=mock_ticker
+    ) as mock_yf_ticker, patch(
+        "services.market_data_service.get_quote",
+        new_callable=AsyncMock,
+        return_value={"c": 145.0},
+    ):
+        chain = await get_option_chain("MSFT", "2026-06-19")
+
+        assert chain is not None
+        assert list(chain.calls["strike"]) == [150.0]
+        mock_yf_ticker.assert_called_once_with("MSFT")
+
+
+@pytest.mark.asyncio
 async def test_execute_api_call_respects_retry_after() -> None:
     """Test that _execute_api_call respects Retry-After header when a 429 occurs."""
 

@@ -357,6 +357,75 @@ async def test_dispatch_watchlist_heartbeat_sends_all_watchlist_symbols() -> Any
 
 
 @pytest.mark.asyncio
+async def test_dispatch_watchlist_heartbeat_syncs_symbols_to_edge_cache() -> Any:
+    """心跳前應 best-effort 同步全體去重後的自選標的清單給 edge，
+    讓背景排程知道該輪詢哪些標的。"""
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+
+    mock_terminal = MagicMock()
+    mock_terminal._fetch_sym_radar_data_slow = AsyncMock(
+        side_effect=lambda sym: {"symbol": sym, "quote": {"c": 150.0}}
+    )
+    bot.get_cog.return_value = mock_terminal
+
+    with patch(
+        "database.get_full_user_context",
+        return_value=SimpleNamespace(
+            capital=100000.0, risk_limit=15.0, option_alert_mode=1
+        ),
+    ), patch("database.is_symbol_in_portfolio", return_value=False), patch(
+        "database.is_notification_enabled", return_value=True
+    ), patch("cogs.embed_builder.build_radar_scan_embed", return_value=object()), patch(
+        "services.edge_cache_client.sync_watchlist_symbols", new_callable=AsyncMock
+    ) as mock_sync:
+        from cogs.trading.heartbeat import dispatch_watchlist_heartbeat
+
+        await dispatch_watchlist_heartbeat(
+            bot, [(1, "AAPL", 1), (1, "NVDA", 1), (1, "AAPL", 1)]
+        )
+
+    mock_sync.assert_awaited_once()
+    assert mock_sync.await_args is not None
+    synced_symbols = mock_sync.await_args.args[0]
+    assert set(synced_symbols) == {"AAPL", "NVDA"}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_watchlist_heartbeat_survives_edge_sync_failure() -> Any:
+    """edge 同步呼叫失敗時，心跳仍應照常完成推播，不受影響。"""
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+
+    mock_terminal = MagicMock()
+    mock_terminal._fetch_sym_radar_data_slow = AsyncMock(
+        side_effect=lambda sym: {"symbol": sym, "quote": {"c": 150.0}}
+    )
+    bot.get_cog.return_value = mock_terminal
+
+    with patch(
+        "database.get_full_user_context",
+        return_value=SimpleNamespace(
+            capital=100000.0, risk_limit=15.0, option_alert_mode=1
+        ),
+    ), patch("database.is_symbol_in_portfolio", return_value=False), patch(
+        "database.is_notification_enabled", return_value=True
+    ), patch(
+        "cogs.embed_builder.build_radar_scan_embed", return_value=object()
+    ) as mock_builder, patch(
+        "services.edge_cache_client.sync_watchlist_symbols",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("edge unreachable"),
+    ):
+        from cogs.trading.heartbeat import dispatch_watchlist_heartbeat
+
+        await dispatch_watchlist_heartbeat(bot, [(1, "AAPL", 1)])
+
+    mock_builder.assert_called_once()
+    assert bot.queue_dm.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_dispatch_watchlist_heartbeat_honors_portfolio_only_mode() -> Any:
     bot = MagicMock()
     bot.queue_dm = AsyncMock()

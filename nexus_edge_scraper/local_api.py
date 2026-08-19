@@ -1,6 +1,9 @@
 import asyncio
-from typing import Any
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from typing import Any, AsyncIterator
 from fastapi import FastAPI, Query
+from pydantic import BaseModel
 from playwright.async_api import (
     async_playwright,
     TimeoutError as PlaywrightTimeoutError,
@@ -16,11 +19,24 @@ import random
 import time
 import psutil
 from section_extractor import extract_sections
+import database
+import scheduler
+from gex_scraper import scrape_symbol_gex_core
 
 # Suppress BS4 XML warning for SEC filings
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    scheduler.start()
+    try:
+        yield
+    finally:
+        scheduler.stop()
+
+
+app = FastAPI(lifespan=lifespan)
 logger = logging.getLogger(__name__)
 
 try:
@@ -1148,228 +1164,94 @@ async def scrape_fedwatch() -> dict[str, Any]:
 
 @app.get("/api/v1/scrape/options/{symbol}/gex")
 async def scrape_symbol_gex(symbol: str) -> dict[str, Any]:
-    import math
-    import re
-    from datetime import date
-
-    symbol_upper = symbol.upper()
-    fallback = {
-        "spot": 0.0,
-        "net_gex": 0.0,
-        "call_wall": 0.0,
-        "put_wall": 0.0,
-        "gex_profile": {},
-    }
-
-    # Black-Scholes math helper
-    def ndtr_prime(x: float) -> float:
-        return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
-
-    def calculate_gamma(S: float, K: float, t: float, r: float, sigma: float) -> float:
-        if S <= 0 or K <= 0 or t <= 0 or sigma <= 0:
-            return 0.0
-        try:
-            d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * t) / (
-                sigma * math.sqrt(t)
-            )
-            return ndtr_prime(d1) / (S * sigma * math.sqrt(t))
-        except Exception:
-            return 0.0
-
+    """即時抓取單一標的 GEX(每次請求各自啟動一顆短命 browser)。
+    實際抓取/計算邏輯已抽至 gex_scraper.scrape_symbol_gex_core，供本端點與
+    背景排程 (scheduler.py) 共用。"""
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"]
         )
         try:
-            context = await browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-            )
-            await Stealth().apply_stealth_async(context)
-
-            # Speed up loading by blocking images and CSS
-            async def safe_route(route: Any) -> None:
-                try:
-                    if route.request.resource_type in ["image", "stylesheet", "font"]:
-                        await route.abort()
-                    else:
-                        await route.continue_()
-                except Exception:
-                    pass
-
-            await context.route("**/*", safe_route)
-            page = await context.new_page()
-            try:
-                try:
-                    await page.goto(
-                        f"https://finance.yahoo.com/quote/{symbol_upper}/options",
-                        timeout=10000,
-                        wait_until="commit",
-                    )
-                except PlaywrightTimeoutError:
-                    logger.info(
-                        f"Page.goto timeout for {symbol_upper}, attempting to proceed with loaded content..."
-                    )
-
-                try:
-                    # 等待關鍵資料(表格)出現，最多等待 10 秒
-                    await page.wait_for_selector("table", timeout=10000)
-                except PlaywrightTimeoutError:
-                    pass
-
-                # 短暫等待以確保動態渲染(React/Client-side)完成
-                await page.wait_for_timeout(1500)
-
-                html = await page.content()
-            finally:
-                await context.unroute_all(behavior="ignoreErrors")
-                await page.close()
-            soup = BeautifulSoup(html, "lxml")
-
-            # Parse spot price
-            spot_elem = soup.select_one('[data-testid="qsp-price"]')
-            spot_price = 0.0
-            if spot_elem and spot_elem.text:
-                try:
-                    spot_price = float(spot_elem.text.replace(",", ""))
-                except ValueError:
-                    pass
-
-            if spot_price <= 0:
-                logger.warning(
-                    f"{symbol_upper} spot price parsed <= 0 from Yahoo Finance, using fallbacks."
-                )
-                return {"status": "success", "data": fallback}
-
-            # Parse option tables
-            tables = soup.select("table")
-            if len(tables) < 2:
-                logger.warning(
-                    f"Yahoo Finance options tables not found for {symbol_upper}, using fallbacks."
-                )
-                return {"status": "success", "data": fallback}
-
-            option_chain: list[dict[str, Any]] = []
-            today = date.today()
-
-            def parse_table(table: Any, is_call: bool) -> None:
-                rows = table.select("tr")
-                for r in rows[1:]:
-                    cols = [td.text.strip() for td in r.select("td")]
-                    if len(cols) < 11:
-                        continue
-                    try:
-                        contract_name = cols[0]
-                        strike = float(cols[2].replace(",", ""))
-
-                        oi_text = cols[9].replace(",", "")
-                        oi = int(oi_text) if oi_text and oi_text != "-" else 0
-
-                        iv_text = cols[10].replace("%", "").replace(",", "")
-                        iv = (
-                            float(iv_text) / 100.0
-                            if iv_text and iv_text != "-"
-                            else 0.20
-                        )
-                        if iv <= 0:
-                            iv = 0.20
-
-                        match = re.match(
-                            r"[A-Za-z]+(\d{2})(\d{2})(\d{2})[CP]", contract_name
-                        )
-                        if match:
-                            exp_yr = 2000 + int(match.group(1))
-                            exp_mo = int(match.group(2))
-                            exp_dy = int(match.group(3))
-                            exp_date = date(exp_yr, exp_mo, exp_dy)
-                            days_to_exp = (exp_date - today).days
-                        else:
-                            days_to_exp = 7
-
-                        t = max(days_to_exp, 0.5) / 365.0
-
-                        option_chain.append(
-                            {
-                                "strike": strike,
-                                "oi": oi,
-                                "iv": iv,
-                                "t": t,
-                                "is_call": is_call,
-                            }
-                        )
-                    except Exception:
-                        pass
-
-            parse_table(tables[0], is_call=True)
-            parse_table(tables[1], is_call=False)
-
-            if not option_chain:
-                logger.warning(
-                    f"No option chain parsed for {symbol_upper}, using fallbacks."
-                )
-                return {"status": "success", "data": fallback}
-
-            net_gex = 0.0
-            gex_by_strike: dict[float, float] = {}
-
-            for contract in option_chain:
-                strike = contract["strike"]
-                oi = contract["oi"]
-                iv = contract["iv"]
-                t = contract["t"]
-                is_call = contract["is_call"]
-
-                gamma = calculate_gamma(spot_price, strike, t, 0.04, iv)
-                gex = oi * gamma * spot_price * spot_price
-                if not is_call:
-                    gex = -gex
-
-                net_gex += gex
-                gex_by_strike[strike] = gex_by_strike.get(strike, 0.0) + gex
-
-            call_wall = spot_price
-            put_wall = spot_price
-
-            if gex_by_strike:
-                # Put Wall (GEX Support Wall): Strike with max positive GEX (dealers long gamma, buying dips)
-                support_candidates: dict[float, float] = {
-                    k: v for k, v in gex_by_strike.items() if v > 0
-                }
-                if support_candidates:
-                    put_wall = max(
-                        support_candidates, key=lambda k: support_candidates[k]
-                    )
-
-                # Call Wall (Resistance Ceiling): Strike with lowest negative GEX / heavy resistance
-                resistance_candidates: dict[float, float] = {
-                    k: v for k, v in gex_by_strike.items() if v < 0
-                }
-                if resistance_candidates:
-                    call_wall = min(
-                        resistance_candidates, key=lambda k: resistance_candidates[k]
-                    )
-                elif support_candidates and put_wall > 0:
-                    # Fallback if all GEX is positive: set call_wall to highest strike with positive GEX above spot
-                    otm_calls = [k for k in gex_by_strike.keys() if k > spot_price]
-                    if otm_calls:
-                        call_wall = max(otm_calls)
-
-            return {
-                "status": "success",
-                "data": {
-                    "spot": round(spot_price, 2),
-                    "net_gex": round(net_gex, 2),
-                    "call_wall": round(call_wall, 2),
-                    "put_wall": round(put_wall, 2),
-                    "gex_profile": {k: round(v, 2) for k, v in gex_by_strike.items()},
-                },
-            }
-        except Exception as e:
-            logger.warning(
-                f"Symbol GEX scrape failed with exception: {e}, using fallbacks."
-            )
-            return {"status": "success", "data": fallback}
+            data = await scrape_symbol_gex_core(symbol, browser)
+            return {"status": "success", "data": data}
         finally:
             await browser.close()
+
+
+class WatchlistSyncRequest(BaseModel):
+    symbols: list[str]
+
+
+def _row_age_seconds(updated_at: str | None) -> float | None:
+    if not updated_at:
+        return None
+    try:
+        updated_dt = datetime.strptime(updated_at, "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=timezone.utc
+        )
+        return (datetime.now(timezone.utc) - updated_dt).total_seconds()
+    except Exception:
+        return None
+
+
+@app.post("/api/v1/watchlist/sync")
+async def sync_watchlist_symbols(payload: WatchlistSyncRequest) -> dict[str, Any]:
+    """nexus_core 於每次心跳前 best-effort 呼叫，同步目前全體使用者去重後的
+    自選標的清單，讓背景排程 (scheduler.py) 知道該輪詢哪些標的。"""
+    try:
+        await asyncio.to_thread(database.upsert_tracked_symbols, payload.symbols)
+        return {"status": "success", "data": {"synced": len(payload.symbols)}}
+    except Exception as e:
+        logger.warning(f"同步 watchlist 標的清單失敗: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@app.get("/api/v1/cache/gex/{symbol}")
+async def get_cached_gex(symbol: str) -> dict[str, Any]:
+    """讀取背景排程寫入的 GEX 快照(毫秒級 SQLite 讀取，不觸發即時抓取)。"""
+    try:
+        row = await asyncio.to_thread(database.get_gex_snapshot, symbol)
+        if not row:
+            return {"status": "error", "message": "not_found"}
+        return {
+            "status": "success",
+            "data": {
+                "spot": row.get("spot", 0.0),
+                "net_gex": row.get("net_gex", 0.0),
+                "call_wall": row.get("call_wall", 0.0),
+                "put_wall": row.get("put_wall", 0.0),
+                "gex_profile": row.get("gex_profile", {}),
+            },
+            "age_seconds": _row_age_seconds(row.get("updated_at")),
+        }
+    except Exception as e:
+        logger.warning(f"[{symbol}] 讀取 GEX 快取失敗: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@app.get("/api/v1/cache/options/{symbol}/chain")
+async def get_cached_option_chain(
+    symbol: str, expiry: str | None = None
+) -> dict[str, Any]:
+    """讀取背景排程寫入的 Option Chain 快照(毫秒級 SQLite 讀取)。"""
+    try:
+        row = await asyncio.to_thread(
+            database.get_option_chain_snapshot, symbol, expiry
+        )
+        if not row:
+            return {"status": "error", "message": "not_found"}
+        return {
+            "status": "success",
+            "data": {
+                "expiry": row.get("expiry"),
+                "calls": row.get("calls", []),
+                "puts": row.get("puts", []),
+            },
+            "age_seconds": _row_age_seconds(row.get("updated_at")),
+        }
+    except Exception as e:
+        logger.warning(f"[{symbol}] 讀取 Option Chain 快取失敗: {e}")
+        return {"status": "error", "message": str(e)}
 
 
 @app.get("/api/v1/macro/calendar")
