@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Dict, Optional
 
 import discord
 import pandas as pd
@@ -239,6 +239,14 @@ async def test_evaluate_fundamental_thesis(
     # Verify the result is cached
     mock_save_cache.assert_called_once_with("AMD", True, 0.9, "Test reason")
 
+    # Backward compat: no form_type/sections passed -> prompt has no
+    # filing-type note block and no structured appendix.
+    call_kwargs = mock_client.beta.chat.completions.parse.call_args.kwargs
+    system_prompt = call_kwargs["messages"][0]["content"]
+    user_prompt = call_kwargs["messages"][1]["content"]
+    assert "Filing Context" not in system_prompt
+    assert "Structured Filing Appendix" not in user_prompt
+
 
 @pytest.mark.asyncio
 @patch("market_analysis.dynamic_rollover.is_memory_safe", return_value=False)
@@ -247,6 +255,99 @@ async def test_evaluate_fundamental_thesis_memory_unsafe(
 ) -> None:
     res = await engine.evaluate_fundamental_thesis("AMD", "Bad news")
     assert res is None
+
+
+def _mock_llm_client_for_thesis(mock_client: MagicMock) -> None:
+    mock_parsed = FundamentalThesisResult(
+        is_broken=False, confidence=0.5, reasoning="ok"
+    )
+    mock_message = MagicMock()
+    mock_message.parsed = mock_parsed
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+    mock_response = MagicMock()
+    mock_response.choices = [mock_choice]
+    mock_client.beta.chat.completions.parse = AsyncMock(return_value=mock_response)
+
+
+@pytest.mark.asyncio
+@patch("market_analysis.dynamic_rollover.is_memory_safe", return_value=True)
+@patch("market_analysis.dynamic_rollover.client")
+@patch("database.market_cache.save_fundamental_cache")
+async def test_evaluate_fundamental_thesis_with_form_type_10q(
+    mock_save_cache: MagicMock,
+    mock_client: MagicMock,
+    mock_mem: MagicMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    _mock_llm_client_for_thesis(mock_client)
+
+    await engine.evaluate_fundamental_thesis(
+        "AMD",
+        "some text",
+        form_type="10-Q",
+        sections={"quarterly_financials": "Q3 rev $1B"},
+    )
+
+    call_kwargs = mock_client.beta.chat.completions.parse.call_args.kwargs
+    system_prompt = call_kwargs["messages"][0]["content"]
+    user_prompt = call_kwargs["messages"][1]["content"]
+    assert "Quarterly Report (10-Q)" in system_prompt
+    assert "STRICT EXCLUSION RULE with extra" in system_prompt
+    assert "Structured Filing Appendix" in user_prompt
+    assert "Quarterly Financial Results" in user_prompt
+    assert "Q3 rev $1B" in user_prompt
+
+
+@pytest.mark.asyncio
+@patch("market_analysis.dynamic_rollover.is_memory_safe", return_value=True)
+@patch("market_analysis.dynamic_rollover.client")
+@patch("database.market_cache.save_fundamental_cache")
+async def test_evaluate_fundamental_thesis_with_form_type_8k(
+    mock_save_cache: MagicMock,
+    mock_client: MagicMock,
+    mock_mem: MagicMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    _mock_llm_client_for_thesis(mock_client)
+
+    await engine.evaluate_fundamental_thesis(
+        "AMD",
+        "some text",
+        form_type="8-K",
+        sections={"key_events": "[Item 5.02] CFO resigned"},
+    )
+
+    call_kwargs = mock_client.beta.chat.completions.parse.call_args.kwargs
+    system_prompt = call_kwargs["messages"][0]["content"]
+    user_prompt = call_kwargs["messages"][1]["content"]
+    assert "EVENT-DRIVEN" in system_prompt
+    assert "Item 2.05" in system_prompt
+    assert "Structured Filing Appendix" in user_prompt
+    assert "Key Events (8-K Item Triggers)" in user_prompt
+    assert "CFO resigned" in user_prompt
+
+
+@pytest.mark.asyncio
+@patch("market_analysis.dynamic_rollover.is_memory_safe", return_value=True)
+@patch("market_analysis.dynamic_rollover.client")
+@patch("database.market_cache.save_fundamental_cache")
+async def test_evaluate_fundamental_thesis_empty_sections_no_appendix(
+    mock_save_cache: MagicMock,
+    mock_client: MagicMock,
+    mock_mem: MagicMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    _mock_llm_client_for_thesis(mock_client)
+
+    sections_variants: list[Optional[Dict[str, str]]] = [None, {}]
+    for sections in sections_variants:
+        await engine.evaluate_fundamental_thesis(
+            "AMD", "some text", form_type="10-K", sections=sections
+        )
+        call_kwargs = mock_client.beta.chat.completions.parse.call_args.kwargs
+        user_prompt = call_kwargs["messages"][1]["content"]
+        assert "Structured Filing Appendix" not in user_prompt
 
 
 def test_create_thesis_passed_embed_truncates_long_reasoning() -> None:

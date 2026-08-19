@@ -33,6 +33,25 @@ except ImportError as e:
 SEC_USER_AGENT = "NexusSeekerBot (nexusseeker@example.com)"
 cik_cache: dict[str, str] = {}
 
+# Item-anchor patterns per SEC filing type. Each entry locates the start of
+# the most relevant narrative section in `text_content`; the first ~10k
+# chars from that anchor become "final_text" (the raw context sent to the
+# LLM). 10-K uses Item 7 (MD&A); 10-Q uses Item 2 (MD&A) since 10-Qs don't
+# use 10-K's Item numbering; 8-K has no MD&A at all, so it anchors at the
+# first dotted Item header (e.g. "Item 5.02") since which item(s) fire
+# varies filing to filing. Unknown/missing form types fall back to 10-K.
+_FORM_ANCHOR_PATTERNS: dict[str, "re.Pattern[str]"] = {
+    "10-K": re.compile(
+        r"(?i)(item\s*7\.\s*management['’]s\s*discussion|"
+        r"item\s*1a\.\s*risk\s*factors)"
+    ),
+    "10-Q": re.compile(
+        r"(?i)(item\s*2\.\s*management['’]s\s*discussion|"
+        r"item\s*1a\.\s*risk\s*factors)"
+    ),
+    "8-K": re.compile(r"(?i)item\s*\d+\.\d{2}\b"),
+}
+
 _REDDIT_CACHE_TTL = 600  # 10 分鐘，避免短時間內對同一標的重複打 Reddit RSS 觸發 429
 _reddit_cache: dict[str, tuple[dict[str, Any], float]] = {}
 
@@ -1646,19 +1665,20 @@ async def scrape_fundamental_text(
                 r"([a-zA-Z0-9\-]+:[A-Za-z0-9]+[\n\s]+)+", "\\n", text_content
             )
 
-            # 精準擷取 MD&A 或 Risk Factors 段落
-            match = re.search(
-                r"(?i)(item\s*7\.\s*management['’]s\s*discussion|item\s*1a\.\s*risk\s*factors)",
-                text_content,
+            # 精準擷取 MD&A 或 Risk Factors 段落 (依 form_type 分流錨點正規表達式)
+            form_type = forms[target_idx]
+            anchor_pattern = _FORM_ANCHOR_PATTERNS.get(
+                form_type, _FORM_ANCHOR_PATTERNS["10-K"]
             )
+            match = anchor_pattern.search(text_content)
             if match:
                 start_idx = match.start()
                 final_text = text_content[start_idx : start_idx + 10000]
             else:
                 final_text = text_content[:10000]
 
-            # 5. 結構化段落擷取 (Forward Guidance / Margin / Market Share / Financials / Ops)
-            extracted = extract_sections(text_content)
+            # 5. 結構化段落擷取 (Forward Guidance / Margin / Market Share / Financials / Ops / Key Events)
+            extracted = extract_sections(text_content, form_type=form_type)
 
             return {
                 "status": "success",
@@ -1669,7 +1689,7 @@ async def scrape_fundamental_text(
                     "source": "sec_edgar",
                     "source_url": doc_url,
                     "accession_number": accession_num,
-                    "form_type": forms[target_idx],
+                    "form_type": form_type,
                 },
             }
     except Exception as e:

@@ -1313,6 +1313,8 @@ class TerminalCog(commands.Cog):
         combined_text: str,
         source_url: str,
         target_message: discord.Message | None = None,
+        form_type: str = "",
+        sections: dict[str, str] | None = None,
     ) -> None:
         from market_analysis.dynamic_rollover import DynamicRolloverEngine
         from cogs.embed_builders.rollover_embeds import (
@@ -1322,7 +1324,9 @@ class TerminalCog(commands.Cog):
         )
 
         engine = DynamicRolloverEngine()
-        result = await engine.evaluate_fundamental_thesis(symbol, combined_text)
+        result = await engine.evaluate_fundamental_thesis(
+            symbol, combined_text, form_type=form_type, sections=sections or {}
+        )
 
         async def _send_or_edit(
             content: str,
@@ -1405,7 +1409,7 @@ class TerminalCog(commands.Cog):
             )
             combined_text = f"[使用者補充新聞/資訊]:\n{news_context}\n"
             await self._execute_verify_thesis_logic(
-                interaction, symbol, combined_text, ""
+                interaction, symbol, combined_text, "", form_type="", sections=None
             )
             return
 
@@ -1418,8 +1422,15 @@ class TerminalCog(commands.Cog):
             if fundamental_data and "text" in fundamental_data:
                 combined_text = f"[SEC 財報段落]:\n{fundamental_data['text']}\n\n"
                 source_url = fundamental_data.get("source_url", "")
+                form_type = fundamental_data.get("form_type", "")
+                sections = fundamental_data.get("sections", {})
                 await self._execute_verify_thesis_logic(
-                    interaction, symbol, combined_text, source_url
+                    interaction,
+                    symbol,
+                    combined_text,
+                    source_url,
+                    form_type=form_type,
+                    sections=sections,
                 )
             else:
                 err_msg = (
@@ -1458,8 +1469,16 @@ class TerminalCog(commands.Cog):
             if fundamental_data and "text" in fundamental_data:
                 combined_text = f"[SEC 財報段落]:\n{fundamental_data['text']}\n\n"
                 source_url = fundamental_data.get("source_url", "")
+                form_type = fundamental_data.get("form_type", "")
+                sections = fundamental_data.get("sections", {})
                 await self._execute_verify_thesis_logic(
-                    None, symbol, combined_text, source_url, target_message=target_msg
+                    None,
+                    symbol,
+                    combined_text,
+                    source_url,
+                    target_message=target_msg,
+                    form_type=form_type,
+                    sections=sections,
                 )
             else:
                 err_msg = (

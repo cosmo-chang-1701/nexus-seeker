@@ -385,6 +385,14 @@ def test_scrape_fedwatch_direct_summary_and_buckets_no_double_count() -> None:
         assert res_data["source"] == "Atlanta Fed Market Probability Tracker (MPT)"
 
 
+# NOTE: this mocked HTML contains no "Item 7"/"Item 2"/"Item 1A" anchor text
+# at all, so under both the old single 10-K-only regex and the new
+# per-form-type _FORM_ANCHOR_PATTERNS map, `match` is None and `final_text`
+# falls back to text_content[:10000] either way — the "Clean text" assertion
+# below is unaffected by the form-type-aware anchor change. The form here
+# resolves to "10-Q" (first entry in the mocked `form` list matching
+# ["10-K","10-Q","8-K"]), which still takes the unchanged 5-keyword-category
+# branch in extract_sections(), so the `sections` assertion is unaffected too.
 def test_scrape_sec_fundamental() -> None:
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -419,3 +427,107 @@ def test_scrape_sec_fundamental() -> None:
         assert "sections" in data["data"]
         assert "quarterly_financials" in data["data"]["sections"]
         assert "Revenue grew" in data["data"]["sections"]["quarterly_financials"]
+
+
+def _mock_sec_submission(forms: list[str]) -> MagicMock:
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json = MagicMock(
+        return_value={
+            "filings": {
+                "recent": {
+                    "form": forms,
+                    "accessionNumber": [f"0001-{i}" for i in range(len(forms))],
+                    "primaryDocument": [f"doc{i}.htm" for i in range(len(forms))],
+                }
+            }
+        }
+    )
+    return mock_response
+
+
+def test_scrape_sec_fundamental_10k_anchor() -> None:
+    doc_response = MagicMock()
+    doc_response.status_code = 200
+    doc_response.text = (
+        "<html><body><div>Cover page boilerplate. "
+        "Item 7. Management's Discussion and Analysis of Financial Condition. "
+        "Full year revenue grew significantly.</div></body></html>"
+    )
+    doc_response.raise_for_status = MagicMock()
+
+    submission_response = _mock_sec_submission(["10-K"])
+
+    with (
+        patch("local_api._get_sec_cik", new_callable=AsyncMock) as mock_cik,
+        patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get,
+    ):
+        mock_cik.return_value = "0001318605"
+        mock_get.side_effect = [submission_response, doc_response]
+
+        response = client.get("/api/v1/scrape/fundamental/TSLA")
+        data = response.json()
+        assert data["status"] == "success"
+        assert data["data"]["form_type"] == "10-K"
+        assert "Item 7" in data["data"]["text"]
+        assert "Cover page boilerplate" not in data["data"]["text"]
+
+
+def test_scrape_sec_fundamental_10q_anchor_item2() -> None:
+    """Regression guard: 10-Qs use 'Item 2' MD&A wording, not 10-K's 'Item 7'."""
+    doc_response = MagicMock()
+    doc_response.status_code = 200
+    doc_response.text = (
+        "<html><body><div>Cover page boilerplate. "
+        "Item 2. Management's Discussion and Analysis of Financial Condition. "
+        "Quarterly revenue grew 10% year-over-year.</div></body></html>"
+    )
+    doc_response.raise_for_status = MagicMock()
+
+    submission_response = _mock_sec_submission(["10-Q"])
+
+    with (
+        patch("local_api._get_sec_cik", new_callable=AsyncMock) as mock_cik,
+        patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get,
+    ):
+        mock_cik.return_value = "0001318605"
+        mock_get.side_effect = [submission_response, doc_response]
+
+        response = client.get("/api/v1/scrape/fundamental/TSLA")
+        data = response.json()
+        assert data["status"] == "success"
+        assert data["data"]["form_type"] == "10-Q"
+        assert "Item 2" in data["data"]["text"]
+        assert "Cover page boilerplate" not in data["data"]["text"]
+
+
+def test_scrape_sec_fundamental_8k_key_events() -> None:
+    doc_response = MagicMock()
+    doc_response.status_code = 200
+    doc_response.text = (
+        "<html><body><div>Cover page boilerplate.\n"
+        "Item 5.02. Departure of Directors or Certain Officers\n"
+        "The Chief Financial Officer resigned effective immediately."
+        "</div></body></html>"
+    )
+    doc_response.raise_for_status = MagicMock()
+
+    submission_response = _mock_sec_submission(["8-K"])
+
+    with (
+        patch("local_api._get_sec_cik", new_callable=AsyncMock) as mock_cik,
+        patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get,
+    ):
+        mock_cik.return_value = "0001318605"
+        mock_get.side_effect = [submission_response, doc_response]
+
+        response = client.get("/api/v1/scrape/fundamental/TSLA")
+        data = response.json()
+        assert data["status"] == "success"
+        assert data["data"]["form_type"] == "8-K"
+        assert "5.02" in data["data"]["text"]
+        # 8-K sections should only carry key_events, none of the 5 legacy categories
+        assert "key_events" in data["data"]["sections"]
+        assert "5.02" in data["data"]["sections"]["key_events"]
+        assert "quarterly_financials" not in data["data"]["sections"]

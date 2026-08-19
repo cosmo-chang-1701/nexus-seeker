@@ -117,3 +117,69 @@ class TestContextWindowMerging:
         assert (
             "---" in result.margin_data
         ), "Should have separator between distant windows"
+
+
+# Synthetic 8-K text with two triggering items, roughly mirroring real SEC
+# formatting (soup.get_text(separator="\n") produces line-delimited blocks).
+SAMPLE_8K_TEXT = (
+    "UNITED STATES\nSECURITIES AND EXCHANGE COMMISSION\n"
+    "FORM 8-K\nCURRENT REPORT\n\n"
+    "Item 5.02. Departure of Directors or Certain Officers\n"
+    "On August 15, 2026, John Smith notified the Board of Directors of his "
+    "resignation as Chief Financial Officer, effective immediately.\n\n"
+    "Item 8.01. Other Events\n"
+    "On August 18, 2026, the Company issued a press release announcing "
+    "updated investor relations materials."
+)
+
+
+class TestFormTypeAwareExtraction:
+    def test_no_form_type_matches_legacy_behavior(self) -> None:
+        no_arg = extract_sections(SPCX_MARGIN_SNIPPET)
+        explicit_none = extract_sections(SPCX_MARGIN_SNIPPET, form_type=None)
+        assert no_arg == explicit_none
+        assert no_arg.key_events == ""
+        assert no_arg.margin_data
+
+    def test_10k_10q_behavior_unchanged(self) -> None:
+        baseline = extract_sections(SPCX_QUARTERLY_FINANCIALS_SNIPPET)
+        as_10k = extract_sections(SPCX_QUARTERLY_FINANCIALS_SNIPPET, form_type="10-K")
+        as_10q = extract_sections(SPCX_QUARTERLY_FINANCIALS_SNIPPET, form_type="10-Q")
+        assert baseline == as_10k == as_10q
+        assert as_10k.key_events == ""
+
+    def test_8k_populates_key_events_only(self) -> None:
+        result = extract_sections(SAMPLE_8K_TEXT, form_type="8-K")
+        assert result.key_events
+        assert "5.02" in result.key_events
+        assert "8.01" in result.key_events
+        # Legacy categories are skipped entirely for 8-K
+        assert result.forward_guidance == ""
+        assert result.margin_data == ""
+        assert result.market_share_and_customer == ""
+        assert result.quarterly_financials == ""
+        assert result.operational_disruption == ""
+
+    def test_8k_key_events_preserve_document_order(self) -> None:
+        result = extract_sections(SAMPLE_8K_TEXT, form_type="8-K")
+        assert result.key_events.index("5.02") < result.key_events.index("8.01")
+
+    def test_8k_key_events_do_not_bleed_across_items(self) -> None:
+        result = extract_sections(SAMPLE_8K_TEXT, form_type="8-K")
+        first_item, _, second_item = result.key_events.partition("---")
+        assert "resignation" in first_item
+        assert "press release" not in first_item
+        assert "press release" in second_item
+
+    def test_8k_key_events_char_cap_per_item(self) -> None:
+        long_body = "X" * 5000
+        text = f"Item 2.02. Results of Operations\n{long_body}"
+        result = extract_sections(text, form_type="8-K")
+        assert len(result.key_events) < len(long_body)
+
+    def test_8k_no_item_headers_returns_empty(self) -> None:
+        result = extract_sections(
+            "Just some unrelated cover page text.", form_type="8-K"
+        )
+        assert result.key_events == ""
+        assert result.to_dict() == {}

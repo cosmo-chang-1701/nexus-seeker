@@ -25,6 +25,7 @@ class ExtractedSections:
     market_share_and_customer: str = ""
     quarterly_financials: str = ""
     operational_disruption: str = ""
+    key_events: str = ""  # 8-K only: dotted Item header (1.01/2.02/...) extraction
 
     def to_dict(self) -> dict[str, str]:
         """Serialize to API response format, omitting empty sections."""
@@ -35,6 +36,7 @@ class ExtractedSections:
             "market_share_and_customer",
             "quarterly_financials",
             "operational_disruption",
+            "key_events",
         ]:
             value = getattr(self, field_name)
             if value:
@@ -105,6 +107,17 @@ _OPERATIONAL_DISRUPTION_KEYWORDS: list[re.Pattern[str]] = [
     ),
 ]
 
+# 8-K dotted Item headers (e.g. "Item 5.02", "Item 2.02") — unlike 10-K/10-Q,
+# 8-Ks are event-driven current reports with no MD&A narrative, so they are
+# parsed by locating each triggering Item rather than keyword scanning.
+_8K_ITEM_HEADER_PATTERN: re.Pattern[str] = re.compile(
+    r"(?im)^\s*item\s+(\d+\.\d{2})\.?\s*([^\n]{0,120})"
+)
+
+# Hard cap per key event, distinct from SECTION_CHAR_LIMIT (the overall cap
+# across all captured items), so one bloated item can't crowd out the rest.
+_KEY_EVENT_ITEM_CHAR_LIMIT = 1200
+
 
 def _extract_context_around_matches(
     text: str,
@@ -154,12 +167,57 @@ def _extract_context_around_matches(
     return "\n---\n".join(snippets)
 
 
-def extract_sections(full_text: str) -> ExtractedSections:
+def _extract_key_events(text: str) -> str:
+    """Extract 8-K dotted Item headers and their following context.
+
+    For each `Item X.XX` header found, captures the header + up to
+    `_KEY_EVENT_ITEM_CHAR_LIMIT` characters of following text (or up to the
+    next Item header, whichever comes first). Items are captured header-to-
+    header so, unlike `_extract_context_around_matches`, no overlap merging
+    is needed. Joins all found items with the standard section divider and
+    caps total output at SECTION_CHAR_LIMIT.
+    """
+    headers = list(_8K_ITEM_HEADER_PATTERN.finditer(text))
+    if not headers:
+        return ""
+
+    snippets: list[str] = []
+    total_chars = 0
+    for idx, m in enumerate(headers):
+        item_num = m.group(1)
+        title_hint = m.group(2).strip()
+        start = m.start()
+        next_start = headers[idx + 1].start() if idx + 1 < len(headers) else len(text)
+        hard_end = min(start + _KEY_EVENT_ITEM_CHAR_LIMIT, next_start, len(text))
+        body = text[start:hard_end].strip()
+
+        snippet = f"[Item {item_num}] {title_hint}\n{body}"
+        if total_chars + len(snippet) > SECTION_CHAR_LIMIT:
+            remaining = SECTION_CHAR_LIMIT - total_chars
+            if remaining > 200:
+                snippets.append(snippet[:remaining] + "…")
+            break
+        snippets.append(snippet)
+        total_chars += len(snippet)
+
+    return "\n---\n".join(snippets)
+
+
+def extract_sections(full_text: str, form_type: str | None = None) -> ExtractedSections:
     """Extract structured sections from SEC filing plain text.
 
-    Applies keyword-based contextual extraction for each of the 5
-    target categories. Returns an ExtractedSections dataclass.
+    For 10-K/10-Q (or when `form_type` is None/unrecognized), applies the
+    same keyword-based contextual extraction across the 5 legacy categories
+    as before — this branch is unchanged for backward compatibility.
+
+    For 8-K, the legacy keyword categories are skipped (8-Ks are
+    event-driven current reports and rarely contain MD&A/financial-narrative
+    language) and only `key_events` is populated via dotted Item-header
+    extraction.
     """
+    if form_type == "8-K":
+        return ExtractedSections(key_events=_extract_key_events(full_text))
+
     return ExtractedSections(
         forward_guidance=_extract_context_around_matches(
             full_text, _FORWARD_GUIDANCE_KEYWORDS

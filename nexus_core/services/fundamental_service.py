@@ -9,11 +9,12 @@ logger = logging.getLogger(__name__)
 
 async def get_fundamental_context(
     symbol: str, enable_tunnel: bool = True, accession_number: Optional[str] = None
-) -> Optional[Dict[str, str]]:
+) -> Optional[Dict[str, Any]]:
     """透過 Cloudflare Tunnel 呼叫本地端爬取 10-K/10-Q/8-K 基本面文本。
 
     Returns:
-        若成功則回傳包含 'text' 與 'source_url' 的字典；
+        若成功則回傳包含 'text', 'source_url', 'form_type', 'sections' 的字典
+        (form_type/sections 可能為空字串/空字典，尤其是讀取舊版快取時)；
         若失敗或關閉 Tunnel 則回傳 None 或包含錯誤訊息的字典 (例如 {'error': '...'})。
     """
 
@@ -71,9 +72,12 @@ async def get_fundamental_context(
                                 logger.info(
                                     f"[{symbol}] 輕量級心跳驗證通過，直接讀取本地快取 ({live_accession})"
                                 )
+                                # .get() 帶預設值：舊版快取資料可能沒有 form_type/sections 這兩個 key
                                 return {
                                     "text": cached_data.get("text", ""),
                                     "source_url": cached_data.get("source_url", ""),
+                                    "form_type": cached_data.get("form_type", ""),
+                                    "sections": cached_data.get("sections", {}),
                                 }
                             else:
                                 logger.info(
@@ -90,6 +94,8 @@ async def get_fundamental_context(
                 return {
                     "text": cached_data.get("text", ""),
                     "source_url": cached_data.get("source_url", ""),
+                    "form_type": cached_data.get("form_type", ""),
+                    "sections": cached_data.get("sections", {}),
                 }
     # ========================
 
@@ -108,6 +114,8 @@ async def get_fundamental_context(
                 result_data = {
                     "text": data.get("text", "無財報文字"),
                     "source_url": data.get("source_url", ""),
+                    "form_type": data.get("form_type", ""),
+                    "sections": data.get("sections", {}),
                 }
 
                 cache_payload = {
