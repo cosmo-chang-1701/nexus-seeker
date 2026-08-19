@@ -103,6 +103,25 @@ def _is_macro_report_marker(line: str) -> bool:
     return ("宏觀風險" in normalized) or ("資金水位報告" in normalized)
 
 
+def _is_correlation_report_marker(line: str) -> bool:
+    """辨識非系統性集中風險（板塊連動性）段落起始行。"""
+    if not line:
+        return False
+    normalized = line.strip()
+    if not normalized.startswith("🕸️"):
+        return False
+    return ("非系統性集中風險" in normalized) or ("板塊連動性" in normalized)
+
+
+def _is_section_title_line(clean: str) -> bool:
+    """辨識已去除 Markdown 標記的整行是否為區塊標題（如 `🌐 【...】` 或 `🕸️ 【...】`）。
+
+    這類標題行只用來標示段落開頭，不含實際數據，格式化時應整行跳過，
+    避免被誤判為一筆「看不見內容」的資料項目。
+    """
+    return bool(re.match(r"^[^\w\s]{0,3}\s*【.*】\s*$", clean))
+
+
 def _format_macro_report_ansi(macro_text: str) -> str:
     """
     將宏觀風險與資金水位報告文字格式化為 Target Center 2.0 樹狀 ANSI 排版。
@@ -119,7 +138,11 @@ def _format_macro_report_ansi(macro_text: str) -> str:
     ):
         return " • 目前無宏觀風險數據。"
 
-    raw_lines = [line.strip() for line in macro_text.split("\n") if line.strip()]
+    raw_lines = [
+        stripped
+        for line in macro_text.split("\n")
+        if (stripped := line.strip()) and stripped.replace("\u200b", "")
+    ]
     grouped_items: List[dict[str, Any]] = []
     current_item: dict[str, Any] | None = None
 
@@ -128,7 +151,7 @@ def _format_macro_report_ansi(macro_text: str) -> str:
         clean = clean.replace("`", "").replace("*", "")
         if not clean:
             continue
-        if "【宏觀風險與資金水位報告】" in clean:
+        if _is_section_title_line(clean):
             continue
 
         is_primary = clean.startswith("🔹") or clean.startswith("🕸️")

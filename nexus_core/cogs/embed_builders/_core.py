@@ -20,7 +20,6 @@ _MAX_FIELD_COUNT = 25
 _MAX_DESCRIPTION_LEN = 4096
 _MAX_TOTAL_LEN = 5800  # 保守值，低於官方 6000 字元總長上限
 
-_OVERFLOW_FIELD_WARNING = "⚠️ (因自選標的過多，已啟用自動截斷防護，僅保留核心數據)"
 _OVERFLOW_DESC_WARNING = "…（內容過長已自動截斷）"
 
 
@@ -221,7 +220,7 @@ class NexusEmbed(discord.Embed):
             if "value" in field:
                 field["value"] = _safe_clamp_field_value(field["value"])
 
-        # 3. 欄位數量防護 (25 個上限)：超過時捨棄尾端欄位並提示。
+        # 3. 欄位數量防護 (25 個上限)：超過時捨棄尾端欄位。
         overflowed_by_count = len(fields) > _MAX_FIELD_COUNT
         if overflowed_by_count:
             fields = fields[:_MAX_FIELD_COUNT]
@@ -247,14 +246,5 @@ class NexusEmbed(discord.Embed):
                 )
 
         result["fields"] = fields
-
-        if overflowed_by_count or overflowed_by_length:
-            desc = result.get("description") or ""
-            if _OVERFLOW_FIELD_WARNING not in desc:
-                result["description"] = (
-                    f"{desc}\n\n{_OVERFLOW_FIELD_WARNING}"
-                    if desc
-                    else _OVERFLOW_FIELD_WARNING
-                )
 
         return result

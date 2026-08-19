@@ -2779,3 +2779,89 @@ def test_create_macro_scan_embed_vix_ansi_and_healthy_status() -> None:
     status_field = field_dict.get("✅ 巨觀狀態", "")
     assert "📈 **波動率環境**" in status_field
     assert "常態健康位階" in status_field
+
+
+def test_macro_report_ansi_no_fake_heading_from_zero_width_space() -> None:
+    """report_formatter 用零寬空格 (\u200b) 分隔段落，_format_macro_report_ansi 不應誤判
+    出一個空洞的「🔹 宏觀指標」假標題。"""
+    from market_analysis.report_formatter import format_macro_risk_report
+
+    metrics = {
+        "exposure_pct": 5.2,
+        "net_exposure_dollars": 1000.0,
+        "total_beta_delta": 10.0,
+        "total_gamma": 0.10,
+        "gamma_threshold": 0.5,
+        "theta_yield": 0.10,
+        "total_theta": 25.0,
+        "portfolio_heat": 12.0,
+        "total_margin_used": 5000.0,
+        "total_vega": 3.0,
+        "total_vanna": 1.0,
+    }
+    report_lines = format_macro_risk_report(metrics, spy_price=450.0)
+
+    embeds = build_post_market_intelligence_embed(report_lines=report_lines)
+    embed = embeds[0]
+    field_dict: dict[str, str] = {str(f.name): str(f.value or "") for f in embed.fields}
+
+    macro_val = field_dict.get("🌐 【宏觀風險與資金水位報告】", "")
+    assert "宏觀指標" not in macro_val
+    assert "淨 SPY Delta 曝險" in macro_val
+
+
+def test_macro_and_correlation_report_split_into_separate_fields() -> None:
+    """宏觀風險與板塊相關性應各自渲染為獨立的 Embed Field（Field-based Modularization）。"""
+    from market_analysis.report_formatter import (
+        format_correlation_report,
+        format_macro_risk_report,
+    )
+
+    metrics = {
+        "exposure_pct": 5.2,
+        "net_exposure_dollars": 1000.0,
+        "total_beta_delta": 10.0,
+        "total_gamma": 0.10,
+        "gamma_threshold": 0.5,
+        "theta_yield": 0.10,
+        "total_theta": 25.0,
+        "portfolio_heat": 12.0,
+        "total_margin_used": 5000.0,
+    }
+    report_lines = format_macro_risk_report(metrics, spy_price=450.0)
+    report_lines += format_correlation_report(
+        high_corr_pairs=[("NVDA", "AMD", 0.85)], symbol_count=5
+    )
+
+    embeds = build_post_market_intelligence_embed(report_lines=report_lines)
+    embed = embeds[0]
+    field_dict: dict[str, str] = {str(f.name): str(f.value or "") for f in embed.fields}
+
+    macro_val = field_dict.get("🌐 【宏觀風險與資金水位報告】", "")
+    correlation_val = field_dict.get("🕸️ 【非系統性集中風險 (板塊連動性)】", "")
+
+    assert macro_val, "應存在獨立的宏觀風險欄位"
+    assert correlation_val, "應存在獨立的板塊相關性欄位"
+
+    assert "淨 SPY Delta 曝險" in macro_val
+    assert "板塊相關性掃描" not in macro_val
+
+    assert "板塊相關性掃描" in correlation_val
+    assert "NVDA" in correlation_val and "AMD" in correlation_val
+    assert "淨 SPY Delta 曝險" not in correlation_val
+
+
+def test_nexus_embed_overflow_no_longer_shows_warning_text() -> None:
+    """移除全域截斷防護警告文字後，超量欄位仍會被安全截斷，但不再附加提示文字。"""
+    from cogs.embed_builders._core import NexusEmbed
+
+    embed = NexusEmbed(title="測試", description="")
+    for i in range(30):
+        embed.add_field(name=f"欄位 {i}", value=f"內容 {i}", inline=False)
+
+    result = embed.to_dict()
+
+    assert len(result["fields"]) <= 25
+    desc = result.get("description") or ""
+    assert "自選標的過多" not in desc
+    assert "自動截斷防護" not in desc

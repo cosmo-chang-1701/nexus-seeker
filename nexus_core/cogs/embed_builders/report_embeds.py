@@ -28,6 +28,7 @@ from typing import List, Dict, Optional
 from cogs.embed_builders._ansi_utils import (
     _clean_ansi,
     _is_macro_report_marker,
+    _is_correlation_report_marker,
     _chunk_text_blocks,
     _truncate_with_boundary,
     _safe_float,
@@ -67,13 +68,31 @@ def create_portfolio_report_embed(  # type: ignore
             macro_index = i
             break
 
+    correlation_text: Optional[str] = None
     if macro_index != -1:
         positions_list = [
             line.strip() for line in report_lines[:macro_index] if line.strip()
         ]
-        macro_text = "\n".join(
-            line.strip() for line in report_lines[macro_index:] if line.strip()
-        )
+        correlation_index = -1
+        for i in range(macro_index + 1, len(report_lines)):
+            if _is_correlation_report_marker(report_lines[i]):
+                correlation_index = i
+                break
+        if correlation_index != -1:
+            macro_text = "\n".join(
+                line.strip()
+                for line in report_lines[macro_index:correlation_index]
+                if line.strip()
+            )
+            correlation_text = "\n".join(
+                line.strip()
+                for line in report_lines[correlation_index:]
+                if line.strip()
+            )
+        else:
+            macro_text = "\n".join(
+                line.strip() for line in report_lines[macro_index:] if line.strip()
+            )
     else:
         positions_list = [line.strip() for line in report_lines if line.strip()]
         macro_text = "目前無宏觀風險數據。"
@@ -204,6 +223,24 @@ def create_portfolio_report_embed(  # type: ignore
             ),
             inline=False,
         )
+
+    # 3b. 🕸️ 【非系統性集中風險 (板塊連動性)】
+    if correlation_text:
+        correlation_formatted = _format_macro_report_ansi(correlation_text)
+        correlation_chunks = _chunk_text_blocks([correlation_formatted], max_len=1000)
+        for i, chunk in enumerate(correlation_chunks):
+            field_name = (
+                f"🕸️ 【非系統性集中風險 (板塊連動性)】 ({i+1}/{len(correlation_chunks)})"
+                if len(correlation_chunks) > 1
+                else "🕸️ 【非系統性集中風險 (板塊連動性)】"
+            )
+            embed.add_field(
+                name=field_name,
+                value=_safe_embed_codeblock_value(
+                    chunk, " • 目前無板塊相關性數據。", lang="ansi"
+                ),
+                inline=False,
+            )
 
     # 4. 🛡️ 對沖績效歸因 (Hedge Attribution) [Dynamic Gating]
     if isinstance(hedge_analysis, dict) and hedge_analysis:
