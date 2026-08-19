@@ -27,6 +27,7 @@ import yfinance as yf
 from aiolimiter import AsyncLimiter
 
 from config import FINNHUB_API_KEY
+from market_time import ny_tz
 import database.financials as db_financials
 
 logger = logging.getLogger(__name__)
@@ -272,10 +273,14 @@ async def _fetch_history_via_edge(
                 if data.get("status") == "success" and data.get("data"):
                     df_edge = pd.DataFrame(data["data"])
                     if "Date" in df_edge.columns:
-                        df_edge["Date"] = pd.to_datetime(df_edge["Date"])
+                        df_edge["Date"] = pd.to_datetime(
+                            df_edge["Date"], utc=True
+                        ).dt.tz_convert(ny_tz)
                         df_edge.set_index("Date", inplace=True)
                     elif "Datetime" in df_edge.columns:
-                        df_edge["Datetime"] = pd.to_datetime(df_edge["Datetime"])
+                        df_edge["Datetime"] = pd.to_datetime(
+                            df_edge["Datetime"], utc=True
+                        ).dt.tz_convert(ny_tz)
                         df_edge.set_index("Datetime", inplace=True)
                     logger.info(f"[{symbol}] Edge 節點成功抓取 K 線")
                     return df_edge

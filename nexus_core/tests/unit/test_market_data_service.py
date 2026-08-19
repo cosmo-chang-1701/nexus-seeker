@@ -749,6 +749,55 @@ async def test_safe_yf_history_prefers_edge_over_direct_yfinance() -> None:
 
 
 @pytest.mark.asyncio
+async def test_fetch_history_via_edge_handles_dst_mixed_offsets() -> None:
+    """Test _fetch_history_via_edge tolerates a Date column whose rows carry
+    different raw UTC offsets across a DST boundary (e.g. -0500 vs -0400),
+    which plain pd.to_datetime() rejects with 'Mixed timezones detected'."""
+    from services.market_data_service import _fetch_history_via_edge
+
+    mock_edge_response = MagicMock()
+    mock_edge_response.status_code = 200
+    mock_edge_response.json.return_value = {
+        "status": "success",
+        "data": [
+            {
+                "Date": "2026-01-02 00:00:00-0500",
+                "Open": 100.0,
+                "High": 101.0,
+                "Low": 99.0,
+                "Close": 100.5,
+                "Volume": 10000,
+            },
+            {
+                "Date": "2026-07-20 00:00:00-0400",
+                "Open": 110.0,
+                "High": 111.0,
+                "Low": 109.0,
+                "Close": 110.5,
+                "Volume": 20000,
+            },
+        ],
+    }
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=mock_edge_response)
+    mock_client_cls = MagicMock()
+    mock_client_cls.return_value.__aenter__.return_value = mock_client
+
+    with patch("config.TUNNEL_URL", "http://edge-node:8000"), patch(
+        "httpx.AsyncClient", mock_client_cls
+    ):
+        df = await _fetch_history_via_edge("ETN", period="1y", interval="1d")
+
+        assert df is not None
+        assert not df.empty
+        assert len(df) == 2
+        assert str(df.index.tz) == "America/New_York"
+        assert df.iloc[0]["Close"] == 100.5
+        assert df.iloc[1]["Close"] == 110.5
+
+
+@pytest.mark.asyncio
 async def test_safe_yf_history_falls_back_to_direct_when_edge_fails() -> None:
     """Test _safe_yf_history falls back to direct yfinance (降級) when the Edge
     tunnel is configured but unreachable/fails."""
