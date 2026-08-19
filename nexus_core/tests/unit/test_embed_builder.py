@@ -2249,7 +2249,8 @@ def test_create_telemetry_alignment_embeds() -> None:
     embeds_pm_degraded = create_telemetry_alignment_embeds([pm_degraded_item])
     assert len(embeds_pm_degraded) == 1
     val_pm_degraded = embeds_pm_degraded[0].fields[0].value
-    assert "[盤前數據未更新]" in val_pm_degraded  # type: ignore
+    name_pm_degraded = embeds_pm_degraded[0].fields[0].name
+    assert "[盤前數據未更新]" in name_pm_degraded  # type: ignore
     assert "等待開盤" in val_pm_degraded  # type: ignore
     assert "--%" in val_pm_degraded  # type: ignore
 
@@ -2258,7 +2259,8 @@ def test_create_telemetry_alignment_embeds() -> None:
     embeds_pm_stored = create_telemetry_alignment_embeds([pm_stored_item])
     assert len(embeds_pm_stored) == 1
     val_pm_stored = embeds_pm_stored[0].fields[0].value
-    assert "[盤前/前日收盤]" in val_pm_stored  # type: ignore
+    name_pm_stored = embeds_pm_stored[0].fields[0].name
+    assert "[盤前/前日收盤]" in name_pm_stored  # type: ignore
     assert "(前日收盤)" in val_pm_stored  # type: ignore
 
     # 4. Test pre-market with HV_PROXY fallback
@@ -2266,7 +2268,8 @@ def test_create_telemetry_alignment_embeds() -> None:
     embeds_pm_hv = create_telemetry_alignment_embeds([pm_hv_item])
     assert len(embeds_pm_hv) == 1
     val_pm_hv = embeds_pm_hv[0].fields[0].value
-    assert "[盤前/HV代理]" in val_pm_hv  # type: ignore
+    name_pm_hv = embeds_pm_hv[0].fields[0].name
+    assert "[盤前/HV代理]" in name_pm_hv  # type: ignore
     assert "(歷史波動率代理)" in val_pm_hv  # type: ignore
 
     # 5. Test pagination (16 items -> should produce at least 2 embeds if split or chunked)

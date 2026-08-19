@@ -21,7 +21,7 @@ import discord
 from cogs.embed_builders._core import NexusEmbed
 
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from cogs.embed_builders._ansi_utils import (
     _pad_string,
@@ -156,8 +156,8 @@ def create_active_orders_embed(orders: List[Dict[str, Any]]) -> List[discord.Emb
     return split_embed_by_fields(embed)
 
 
-def _build_telemetry_alignment_ansi_card(item: Dict[str, Any]) -> str:
-    """建構 Telemetry 實時對齊快照卡片。"""
+def _build_telemetry_alignment_ansi_card(item: Dict[str, Any]) -> Tuple[str, str]:
+    """建構 Telemetry 實時對齊快照卡片。回傳 (卡片內容, 數據降級狀態後綴)。"""
     sym = str(item.get("symbol") or "").upper()
     current_price = float(item.get("live_price") or item.get("current_price") or 0.0)
 
@@ -346,10 +346,6 @@ def _build_telemetry_alignment_ansi_card(item: Dict[str, Any]) -> str:
     sys_dir_color = f"\u001b[1;33m{system_instruction_directive}\u001b[0m"
 
     lines = ["```ansi"]
-    lines.append(
-        f"\u001b[1;35m🌌 Nexus Seeker • Telemetry 實時對齊快照 [{sym}]{degraded_suffix}\u001b[0m"
-    )
-    lines.append(" -----------------------------------------------------------------")
     lines.append("🛡️ \u001b[1;36m【物理防線 (The Shield)】\u001b[0m")
     lines.append(
         " ├─ 持倉型態: "
@@ -387,7 +383,7 @@ def _build_telemetry_alignment_ansi_card(item: Dict[str, Any]) -> str:
     lines.append(f" └─ 指引: {sys_dir_color}")
     lines.append(" -----------------------------------------------------------------")
     lines.append("```")
-    return "\n".join(lines)
+    return "\n".join(lines), degraded_suffix
 
 
 def create_telemetry_alignment_embeds(
@@ -446,16 +442,16 @@ def create_telemetry_alignment_embeds(
             global_idx = chunk_idx * 15 + idx + 1
             sym = str(item.get("symbol") or "").upper()
             order_id = item.get("order_id")
-            card_content = _build_telemetry_alignment_ansi_card(item)
+            card_content, degraded_suffix = _build_telemetry_alignment_ansi_card(item)
 
             name_prefix = f"📦 委託單 #{global_idx}"
             if order_id is not None:
                 name_prefix += f" (ID: {order_id})"
 
             if sym:
-                field_name = f"{name_prefix} ｜ {sym}"
+                field_name = f"{name_prefix} ｜ {sym}{degraded_suffix}"
             else:
-                field_name = name_prefix
+                field_name = f"{name_prefix}{degraded_suffix}"
 
             embed.add_field(
                 name=field_name,

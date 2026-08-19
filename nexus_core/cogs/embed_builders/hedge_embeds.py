@@ -232,8 +232,6 @@ def create_proactive_event_alert_embed(events: List[Any]) -> List[discord.Embed]
 
         event_lines = [
             "```ansi",
-            " 🛡️ 即時防護狀態 (Event Risk Protection)",
-            " ----------------------------------",
             " 距離發布 (Time to Event)",
             f" └─ 剩餘時間: {tte_color}{tte_hours:.1f} 小時\u001b[0m",
             " 持倉風險狀態 (Position Risk Status)",
