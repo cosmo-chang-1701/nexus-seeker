@@ -64,6 +64,7 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - `pre_market_risk_monitor` — **09:00 ET**
 - `dynamic_market_scanner` — **every 30 minutes during market hours**
 - `wti_oil_monitor` — **every 30 minutes (24/7, 00:00–06:00 ET quiet hours)**
+- `price_volume_alert_monitor` — **every 15 minutes during market hours**
 - `monitor_real_portfolio_task` — **every 30 minutes during market hours**
 - `dynamic_after_market_report` — **16:15 ET**
 - `weekly_vtr_report_task` — **Friday 17:05 ET**
@@ -468,12 +469,12 @@ Configurations are strictly segregated into two functional areas to maximize sep
   - `risk_limit` (Base risk percentage limit, bounded between `1.0` and `50.0`)
   - `enable_vtr`, `enable_psq_watchlist`, `monthly_expense`, `tax_reserve_rate`, and `cash_reserve`.
   - Also integrates the **Watchlist Tagging System**: Allows users to attach custom categorization tags (e.g., `TECH`, `CORE`) to watchlist assets via an interactive dropdown and modal (`ui/watchlist_tags.py`). This tagging engine is also fully exposed in the `/list_watch` command output via a localized "🏷️ 原地編輯標籤" shortcut button, enabling direct in-place editing that automatically rebuilds and replaces the original Discord view for a seamless, SPA-like experience.
-- **Notification Preferences (`/notif_settings`)**: Manages individual toggles stored in a key-value style `user_notification_settings` table (designed with composite primary key `(user_id, notification_key)` for infinite schema-less extensibility). Fully consolidated into **4 Tactical Dimensions with 12 Core Channels** (Migration `v061` + WTI Alert + `defense_fundamental_thesis`):
+- **Notification Preferences (`/notif_settings`)**: Manages individual toggles stored in a key-value style `user_notification_settings` table (designed with composite primary key `(user_id, notification_key)` for infinite schema-less extensibility). Fully consolidated into **4 Tactical Dimensions with 13 Core Channels** (Migration `v061` + WTI Alert + `defense_fundamental_thesis` + `alpha_price_volume_watch`):
   - **4 Tactical Modules**:
     1. `briefings` (📋 定時戰報與覆盤): `briefing_pre_market`, `briefing_post_market`, `briefing_weekly_vtr`
     2. `telemetry` (📡 盤中自選與掛單遙測): `heartbeat_watchlist`, `telemetry_orders`
     3. `defense` (🛡️ 持倉風控與極端防禦): `defense_portfolio_risk`, `defense_option_rollover`, `defense_fundamental_thesis`, `defense_macro_tail_risk`
-    4. `alpha` (🎯 Alpha 策略與情報): `alpha_market_signals`, `alpha_polymarket`, `alpha_wti_oil`
+    4. `alpha` (🎯 Alpha 策略與情報): `alpha_market_signals`, `alpha_polymarket`, `alpha_wti_oil`, `alpha_price_volume_watch`
   - **Dynamic Two-Tier Architecture with Preset Modes**: To provide a clean, uncluttered user experience:
     - Row 0 features the Category Selector (`briefings`, `telemetry`, `defense`, `alpha`).
     - Row 1 features toggle choices with real-time `🟢` / `🔴` indicators.
@@ -655,11 +656,45 @@ Adheres 100% to the Nexus Seeker field-based embed architecture:
 
 ---
 
+## Price-Volume Breakout Alert System (個股 15 分鐘價量突破警報)
+
+Unlike the WTI monitor (a single fixed symbol, `CL=F`), this is a **per-user, multi-symbol** watchlist: each user can register up to 15 independent `(symbol, target_price, direction, volume_multiplier)` watches, and the scheduler evaluates every registered watch every 15 minutes during market hours.
+
+### 1. Bar-Completeness Guard (`market_analysis/price_volume_alert.py::get_confirmed_15m_bar`)
+The trigger condition is **15-minute real-body candle close** relative to a target price, combined with a volume-surge gate:
+- Fetches real `interval="15m"` OHLCV via `services.market_data_service.get_history_df(symbol, period="5d", interval="15m", force_refresh=True)`.
+- **`force_refresh=True` is mandatory**: `get_history_df` normally caches results for 6 hours (`_HISTORY_CACHE_TTL`), which would silently serve stale/partial candles to a 15-minute-cadence caller. This is a deliberate divergence from `market_analysis/dynamic_rollover/opportunity_cost.py::_confirm_entry_signal`, which reuses the same `interval="15m"` call *without* bypassing the cache and *without* checking bar completeness — do not copy that pattern for new intraday-candle logic.
+- **Closed-candle detection**: yfinance's 15m bar index is the bar's *start* time. A bar is only "closed" once `bar_start + 15min <= now (ET)`; otherwise the engine falls back to the second-to-last bar so a still-forming candle's live price never triggers a false alert. This is distinct from `market_analysis/gamma_cliff_confirmation.py::is_gamma_cliff_confirmed`, which despite its "15分鐘" naming actually operates on 1-minute bars, not real 15m candles.
+- **Volume surge**: compares the confirmed bar's volume against the mean of the preceding 20 bars (`_VOLUME_LOOKBACK_BARS`), mirroring the 20-bar lookback already used by `opportunity_cost.py`'s entry-confirmation logic (though that path uses a 1.2x multiplier vs. this feature's user-configurable default of 1.5x).
+
+### 2. Threshold Comparison (`evaluate_watch_trigger`)
+Deliberately separated from bar-fetching so multiple users watching the same symbol share a single yfinance call per scan cycle:
+- `direction = "above"` → `Close >= target_price` (breakout).
+- `direction = "below"` → `Close <= target_price` (breakdown).
+- Volume-surge condition is direction-agnostic — both breakout and breakdown require confirming volume, otherwise treated as noise.
+
+### 3. Per-User Watch Config (`database/price_volume_watch.py`, migration `v063`)
+Uses a dedicated SQLite table (`price_volume_watches`, PK `(user_id, symbol)`) rather than `kv_cache`, because the scheduler needs a cross-user, cross-symbol batch query (`get_all_watches()`) that a single-key KV store can't efficiently support. `upsert_watch()` enforces a `_MAX_WATCHES_PER_USER = 15` cap (VPS memory/API-call protection) that only applies to *new* symbols — updating an existing watch's price/direction/multiplier never counts against the cap.
+
+### 4. Scheduler (`cogs/trading/price_volume_alert_monitor.py`)
+- `@tasks.loop(minutes=15)`, gated by `market_time.is_market_open()` (unlike WTI's 24/7 cadence, since equity intraday candles are meaningless outside market hours).
+- Groups all registered watches by symbol first, fetching each unique symbol's confirmed bar exactly once per cycle even if multiple users watch it.
+- **KV Cache Anti-Spam Deduplication**: `price_volume_alert_{user_id}_{symbol}_{YYYYMMDD}` — one alert per user, per symbol, per day (same pattern as WTI's daily dedup keys).
+
+### 5. Interactive Commands & `/notif_settings`
+- `/price_alert_set <symbol> <target_price> <direction> [volume_multiplier=1.5]`: upserts a watch (parameterized command, not a modal, since all fields are simple scalars).
+- `/price_alert_list`: lists the caller's active watches.
+- `/price_alert_remove <symbol>`: removes one watch.
+- `/notif_settings`: governed by canonical channel `alpha_price_volume_watch` under the **🎯 Alpha 策略與情報** module.
+
+---
+
 ## Core Modules to Know
 
 - `nexus_core/bot.py` — bot bootstrap, DM queue, service lifecycle
 - `nexus_core/cogs/trading.py` — active runtime scheduler and watchlist heartbeat sender
 - `nexus_core/cogs/trading/wti_monitor.py` — 24/7 background WTI crude oil price monitor loop
+- `nexus_core/cogs/trading/price_volume_alert_monitor.py` — 15-minute, market-hours-only background price-volume breakout monitor loop
 - `nexus_core/cogs/trading/fundamental_filing_monitor.py` — daily (08:00 ET) automated SEC filing scanner for holding-only symbols, routing new 10-K/10-Q/8-K filings through the form-type-aware Dynamic Rollover Scenario 1 pipeline
 - `nexus_core/cogs/analyst_agent.py` — analyst report scheduler and dispatcher
 - `nexus_core/cogs/order_ui.py` — active orders entrypoints

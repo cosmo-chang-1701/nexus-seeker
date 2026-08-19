@@ -64,6 +64,15 @@ from .market_cache import (
     get_market_cache,
     mark_market_cache_stale,
 )
+from .price_volume_watch import (
+    WatchDirection,
+    PriceVolumeWatch,
+    WatchLimitExceededError,
+    upsert_watch,
+    get_user_watches,
+    get_all_watches,
+    delete_watch,
+)
 
 __all__ = [
     "run_migrations",
@@ -120,4 +129,11 @@ __all__ = [
     "mark_market_cache_stale",
     "save_kv_cache",
     "get_kv_cache",
+    "WatchDirection",
+    "PriceVolumeWatch",
+    "WatchLimitExceededError",
+    "upsert_watch",
+    "get_user_watches",
+    "get_all_watches",
+    "delete_watch",
 ]

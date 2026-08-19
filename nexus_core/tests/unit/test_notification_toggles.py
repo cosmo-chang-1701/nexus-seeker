@@ -22,11 +22,11 @@ def clean_db(db_conn: Any):  # type: ignore
 
 
 def test_default_all_enabled(db_conn: Any):  # type: ignore
-    """測試全新用戶 12 大通知頻道預設值（預設全部開啟）"""
+    """測試全新用戶 13 大通知頻道預設值（預設全部開啟）"""
     user_id = 999111
     settings = get_user_notification_settings(user_id)
     assert len(settings) == len(ALL_NOTIFICATION_KEYS)
-    assert len(ALL_NOTIFICATION_KEYS) == 12
+    assert len(ALL_NOTIFICATION_KEYS) == 13
 
     for key in ALL_NOTIFICATION_KEYS:
         expected = True

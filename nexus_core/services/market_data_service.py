@@ -578,16 +578,19 @@ async def batch_get_quotes(symbols: List[str]) -> Dict[str, Dict[str, Any]]:
 # 歷史數據與指標 (yfinance)
 # ---------------------------------------------------------------------------
 async def get_history_df(
-    symbol: str, period: str = "1y", interval: str = "1d"
+    symbol: str, period: str = "1y", interval: str = "1d", force_refresh: bool = False
 ) -> pd.DataFrame:
     """
     使用 yfinance 抓取歷史 K 線 (異步化，支援 4 小時快取與 Copy 隔離)。
+
+    `force_refresh=True` 會略過快取讀取（但仍會將新結果寫入快取供其他呼叫端
+    受益），供對資料新鮮度要求較高的短週期呼叫端使用（例如 15 分鐘價量警報）。
     """
     symbol = _to_yfinance_symbol(symbol)
     cache_key = (symbol, period, interval)
     now = time.time()
 
-    if cache_key in _history_cache:
+    if not force_refresh and cache_key in _history_cache:
         cached_df, expiry = _history_cache[cache_key]
         if now < expiry:
             return cached_df.copy()

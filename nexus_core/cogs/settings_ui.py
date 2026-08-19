@@ -55,6 +55,7 @@ TRADING_MODULES: Dict[str, Dict[str, Any]] = {
             "alpha_market_signals": "✨ Nexus 戴維斯雙擊 (DDP) 與波動率優勢 (廉價期權)",
             "alpha_polymarket": "🐳 Polymarket 巨鯨異動與預測機率突變 (Delta 閃崩/暴拉)",
             "alpha_wti_oil": "🛢️ WTI 原油價格警報 (閾值突破與劇烈波動)",
+            "alpha_price_volume_watch": "📊 個股 15 分鐘價量突破警報 (自訂目標價與放量倍數)",
         },
     },
 }

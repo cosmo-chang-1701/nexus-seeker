@@ -22,6 +22,9 @@ async def setup(bot):  # type: ignore
     from cogs.trading.fundamental_filing_monitor import (
         setup as setup_fundamental_filing_monitor,
     )
+    from cogs.trading.price_volume_alert_monitor import (
+        setup as setup_price_volume_alert_monitor,
+    )
 
     # MarketScanCog must be added before SchedulerCog so get_cog("MarketScanCog") works
     await setup_scan(bot)
@@ -34,3 +37,4 @@ async def setup(bot):  # type: ignore
     await setup_scanner(bot)
     await setup_wti_monitor(bot)
     await setup_fundamental_filing_monitor(bot)
+    await setup_price_volume_alert_monitor(bot)

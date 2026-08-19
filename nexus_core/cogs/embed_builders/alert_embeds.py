@@ -908,3 +908,60 @@ def create_wti_alert_embed(analysis: Any) -> discord.Embed:
 
     embed.set_footer(text="Commodity Intelligence | WTI Crude Oil Monitor")
     return embed
+
+
+def create_price_volume_alert_embed(watch: Any, bar: Any) -> discord.Embed:
+    """建立個股 15 分鐘價量突破警報 Embed。
+
+    嚴格遵循 Nexus Seeker field-based + ANSI 容器規範：
+    - 區塊標題一律置入 field.name
+    - 所有內文與指標一律封裝於 ```ansi 程式碼區塊內
+    - 統一採用樹狀結構 ( ┌─,  ├─,  └─) 與 ANSI 調色盤渲染
+
+    Args:
+        watch: `database.price_volume_watch.PriceVolumeWatch` 實例。
+        bar: `market_analysis.price_volume_alert.Confirmed15mBar` 實例。
+    """
+    from database.price_volume_watch import WatchDirection
+
+    is_above = watch.direction == WatchDirection.ABOVE
+    title = (
+        f"🚀 {watch.symbol} 15分K突破警報"
+        if is_above
+        else f"📉 {watch.symbol} 15分K跌破警報"
+    )
+    color = discord.Color.green() if is_above else discord.Color.red()
+
+    embed = NexusEmbed(
+        title=title,
+        description=None,
+        color=color,
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    direction_badge = "🚀 向上突破" if is_above else "📉 向下跌破"
+    direction_color = "[1;32m" if is_above else "[1;31m"
+    compare_symbol = ">=" if is_above else "<="
+    volume_ratio = bar.volume / bar.avg_volume if bar.avg_volume > 0 else 0.0
+
+    trigger_ansi = (
+        f"```ansi\n"
+        f" ┌─ 觸發情境 ─ [{direction_color}{direction_badge}[0m]\n"
+        f" ├─ K棒收盤時間: [1;37m{bar.bar_time.strftime('%Y-%m-%d %H:%M')} ET[0m\n"
+        f" ├─ 實際收盤價 : [1;37m${bar.close:.2f}[0m {compare_symbol} 目標價 [1;37m${watch.target_price:.2f}[0m\n"
+        f" ├─ 本根成交量 : [1;37m{bar.volume:,.0f}[0m\n"
+        f" └─ 20根均量  : [1;37m{bar.avg_volume:,.0f}[0m (放大 [1;33m{volume_ratio:.2f}x[0m，門檻 {watch.volume_multiplier:.2f}x)\n"
+        f"```"
+    )
+    embed.add_field(name="🎯 觸發事件", value=trigger_ansi, inline=False)
+
+    followup_ansi = (
+        "```ansi\n"
+        " ┌─ 後續操作建議\n"
+        " └─ 可使用 [1;36m/x[0m 開啟終端機雷達面板，進一步確認 Skew、GEX 牆與 UOA 巨鯨動向後再行決策。\n"
+        "```"
+    )
+    embed.add_field(name="📡 後續操作建議", value=followup_ansi, inline=False)
+
+    embed.set_footer(text="Price-Volume Breakout Alert | Nexus Seeker")
+    return embed

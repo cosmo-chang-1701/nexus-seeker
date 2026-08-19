@@ -114,6 +114,7 @@ ALL_NOTIFICATION_KEYS: list[str] = [
     "alpha_market_signals",
     "alpha_polymarket",
     "alpha_wti_oil",
+    "alpha_price_volume_watch",
 ]
 
 # 舊版 Key 映射字典，確保向下相容
@@ -169,6 +170,7 @@ PRESET_PROFILES: dict[str, dict[str, bool]] = {
         "alpha_market_signals": False,
         "alpha_polymarket": False,
         "alpha_wti_oil": False,
+        "alpha_price_volume_watch": False,
     },
     "mute_intraday": {
         "briefing_pre_market": True,
@@ -183,6 +185,7 @@ PRESET_PROFILES: dict[str, dict[str, bool]] = {
         "alpha_market_signals": False,
         "alpha_polymarket": False,
         "alpha_wti_oil": False,
+        "alpha_price_volume_watch": False,
     },
 }
 
