@@ -635,8 +635,18 @@ class PolymarketService:
             :2
         ]
 
-        for term in search_terms:
-            res = await self.search_markets(term, limit=limit, active_only=active_only)
+        search_results = await asyncio.gather(
+            *[
+                self.search_markets(term, limit=limit, active_only=active_only)
+                for term in search_terms
+            ],
+            return_exceptions=True,
+        )
+
+        for term, res in zip(search_terms, search_results):
+            if isinstance(res, BaseException):
+                logger.debug(f"[{symbol}] Polymarket 搜尋詞 '{term}' 失敗: {res}")
+                continue
             for m in res:
                 slug = str(m.get("slug") or m.get("question") or "")
                 if slug and slug not in seen_slugs:

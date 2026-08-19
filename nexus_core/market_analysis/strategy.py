@@ -572,8 +572,9 @@ def _calculate_sizing(
 
 async def evaluate_ema_trend(symbol: str, current_price: float) -> dict:
     """評估 EMA 8/21 趨勢狀態。"""
-    ema8 = await market_data_service.get_ema(symbol, 8)
-    ema21 = await market_data_service.get_ema(symbol, 21)
+    ema8, ema21 = await asyncio.gather(
+        market_data_service.get_ema(symbol, 8), market_data_service.get_ema(symbol, 21)
+    )
 
     if not ema8 or not ema21:
         return {
@@ -636,6 +637,34 @@ def detect_ema_signals(
     return None
 
 
+async def _as_awaitable(value: Any) -> Any:
+    """把一個已知值包成 coroutine，方便與其他真正的 I/O coroutine 一起 gather。"""
+    return value
+
+
+async def _fetch_opt_chain_and_best_contract(
+    symbol: Any,
+    target_expiry_date: Any,
+    opt_type: Any,
+    target_delta: Any,
+    price: Any,
+    days_to_expiry: Any,
+    dividend_yield: Any,
+) -> tuple[Any, Any]:
+    """選擇權鏈抓取 -> 最佳合約篩選的既有序列管線，包成單一 coroutine 供 gather 使用。"""
+    opt_chain = await market_data_service.get_option_chain(symbol, target_expiry_date)
+    best_contract, opt_chain = await asyncio.to_thread(
+        _get_best_contract_data,
+        opt_chain,
+        opt_type,
+        target_delta,
+        price,
+        days_to_expiry,
+        dividend_yield,
+    )
+    return best_contract, opt_chain
+
+
 async def analyze_symbol(
     symbol: Any,
     stock_cost: Any = 0.0,
@@ -649,23 +678,23 @@ async def analyze_symbol(
         vix_spot: VIX 即時價格。用於 VIX 戰情階梯判定（Delta 上限、倉位縮放、訊號閘門）。
     """
     try:
-        quote = await market_data_service.get_quote(symbol)
-        price = quote.get("c", 0.0) if quote else None
-        is_etf = await market_data_service.is_etf(symbol)
+        df_spy_needs_fetch = df_spy is None
+        quote, is_etf, df, df_spy_fetched = await asyncio.gather(
+            market_data_service.get_quote(symbol),
+            market_data_service.is_etf(symbol),
+            market_data_service.get_history_df(symbol, "1y"),
+            market_data_service.get_history_df("SPY", "1y")
+            if df_spy_needs_fetch
+            else _as_awaitable(df_spy),
+        )
+        if df_spy_needs_fetch:
+            df_spy = df_spy_fetched
 
-        df = await market_data_service.get_history_df(symbol, "1y")
+        price = quote.get("c", 0.0) if quote else None
         if df.empty:
             return None
         if price is None or price <= 0:
             price = df["Close"].iloc[-1]
-
-        if is_etf:
-            dividend_yield = 0.015
-        else:
-            dividend_yield = await market_data_service.get_dividend_yield(symbol)
-
-        if df_spy is None:
-            df_spy = await market_data_service.get_history_df("SPY", "1y")
 
         if df_spy.empty:
             logger.warning(f"無法取得 SPY 基準資料，{symbol} 改用 beta=1.0 fallback")
@@ -682,7 +711,12 @@ async def analyze_symbol(
             else:
                 beta = calculate_beta(df, df_spy) if symbol != "SPY" else 1.0
 
-        indicators = await asyncio.to_thread(_calculate_technical_indicators, df)
+        dividend_yield, indicators = await asyncio.gather(
+            _as_awaitable(0.015)
+            if is_etf
+            else market_data_service.get_dividend_yield(symbol),
+            asyncio.to_thread(_calculate_technical_indicators, df),
+        )
         if indicators is None:
             return None
         price = indicators["price"]
@@ -730,23 +764,42 @@ async def analyze_symbol(
         if not target_expiry_date:
             return None
 
-        opt_chain = await market_data_service.get_option_chain(
-            symbol, target_expiry_date
-        )
-        best_contract, opt_chain = await asyncio.to_thread(
-            _get_best_contract_data,
-            opt_chain,
-            opt_type,
-            target_delta,
-            price,
-            days_to_expiry,
-            dividend_yield,
+        # 以下四項彼此互相獨立（皆僅依賴上方已解析的 price/expirations/is_etf 等值），
+        # 併發抓取取代原本的序列瀑布。注意：這代表即使最終因 best_contract 為 None
+        # 或 EMA 空頭強勢而提前 return，ema_eval/mmm/term_structure 仍會先執行完才被捨棄
+        # ——屬於刻意接受的 tradeoff（用少量早退路徑的多餘網路請求換取常見路徑的低延遲）。
+        (
+            (best_contract, opt_chain),
+            ema_eval,
+            (mmm_pct, safe_lower, safe_upper, days_to_earnings),
+            (ts_ratio, ts_state),
+        ) = await asyncio.gather(
+            _fetch_opt_chain_and_best_contract(
+                symbol,
+                target_expiry_date,
+                opt_type,
+                target_delta,
+                price,
+                days_to_expiry,
+                dividend_yield,
+            ),
+            evaluate_ema_trend(symbol, price)
+            if days_to_expiry <= 90
+            else _as_awaitable(
+                {
+                    "trend": "N/A",
+                    "ema_8": 0.0,
+                    "ema_21": 0.0,
+                    "distance_from_21": 0.0,
+                }
+            ),
+            _calculate_mmm(symbol, price, today, is_etf),
+            _calculate_term_structure(symbol, expirations, price, today),
         )
         if best_contract is None:
             return None
 
         if days_to_expiry <= 90:
-            ema_eval = await evaluate_ema_trend(symbol, price)
             if ema_eval.get("trend") == "BEARISH_STRONG" and strategy in [
                 "BTO_CALL",
                 "STO_PUT",
@@ -762,13 +815,6 @@ async def analyze_symbol(
         else:
             trend_state = "N/A"
             ema_8, ema_21, dist_21 = 0.0, 0.0, 0.0
-
-        mmm_pct, safe_lower, safe_upper, days_to_earnings = await _calculate_mmm(
-            symbol, price, today, is_etf
-        )
-        ts_ratio, ts_state = await _calculate_term_structure(
-            symbol, expirations, price, today
-        )
 
         # ------------------ VIX306 Advanced Volatility Filters ------------------
         vix_vts_data = await market_data_service.get_vix_term_structure()

@@ -237,3 +237,69 @@ async def test_search_markets_and_get_symbol_markets(poly_service: Any) -> None:
         sym_res = await poly_service.get_symbol_markets("NVDA", limit=3)
         assert len(sym_res) >= 1
         assert sym_res[0]["slug"] == "nvda-180"
+
+
+@pytest.mark.asyncio
+async def test_get_symbol_markets_dispatches_search_terms_concurrently(
+    poly_service: Any,
+) -> None:
+    """驗證 get_symbol_markets 對多個別名搜尋詞是透過 asyncio.gather 併發派發，
+    而非逐一序列 await —— 序列版本會在請求尾端疊加多次網路往返延遲。"""
+    call_order: list[str] = []
+
+    async def _fake_search_markets(
+        term: str, limit: int = 5, active_only: bool = True
+    ) -> list:
+        call_order.append(f"start:{term}")
+        # 若是序列 await，第二個詞要等第一個詞完全 return 才會 start；
+        # 併發版本則應該在第一個詞 return 前就看到後續詞的 start。
+        await __import__("asyncio").sleep(0)
+        call_order.append(f"end:{term}")
+        return []
+
+    with patch.object(
+        poly_service, "search_markets", side_effect=_fake_search_markets
+    ), patch(
+        "market_analysis.stock_alias_matrix.StockAliasMatrix.get_aliases_for_symbol",
+        new_callable=AsyncMock,
+        return_value=["NVIDIA"],
+    ):
+        await poly_service.get_symbol_markets("NVDA", limit=3)
+
+    # 併發派發：所有 start 事件應在任一 end 事件之前發生
+    starts = [i for i, ev in enumerate(call_order) if ev.startswith("start:")]
+    ends = [i for i, ev in enumerate(call_order) if ev.startswith("end:")]
+    assert max(starts) < min(
+        ends
+    ), f"Expected concurrent dispatch (all starts before any end), got: {call_order}"
+
+
+@pytest.mark.asyncio
+async def test_get_symbol_markets_isolates_per_term_failure(poly_service: Any) -> None:
+    """驗證單一搜尋詞失敗不會拖垮整個 get_symbol_markets 呼叫。"""
+
+    async def _fake_search_markets(
+        term: str, limit: int = 5, active_only: bool = True
+    ) -> list:
+        if term == "NVDA":
+            raise RuntimeError("simulated network failure")
+        return [
+            {
+                "question": "Will NVIDIA beat earnings?",
+                "description": "",
+                "slug": "nvda-earnings",
+                "volumeNum": 1000.0,
+            }
+        ]
+
+    with patch.object(
+        poly_service, "search_markets", side_effect=_fake_search_markets
+    ), patch(
+        "market_analysis.stock_alias_matrix.StockAliasMatrix.get_aliases_for_symbol",
+        new_callable=AsyncMock,
+        return_value=["NVIDIA"],
+    ):
+        result = await poly_service.get_symbol_markets("NVDA", limit=3)
+
+    assert len(result) == 1
+    assert result[0]["slug"] == "nvda-earnings"
