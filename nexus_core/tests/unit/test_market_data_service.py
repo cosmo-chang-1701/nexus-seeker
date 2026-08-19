@@ -81,9 +81,10 @@ async def test_get_history_df_caching_success() -> None:
     mock_df.index.name = "Date"
 
     mock_ticker = MagicMock()
+    mock_ticker.ticker = "AAPL"
     mock_ticker.history = MagicMock(return_value=mock_df)
 
-    with patch(
+    with patch("config.TUNNEL_URL", ""), patch(
         "services.market_data_service.yf.Ticker", return_value=mock_ticker
     ) as mock_yf_ticker:
         # First call: cache miss
@@ -128,10 +129,11 @@ async def test_get_history_df_cache_expiry() -> None:
     mock_df.index.name = "Date"
 
     mock_ticker = MagicMock()
+    mock_ticker.ticker = "AAPL"
     mock_ticker.history = MagicMock(return_value=mock_df)
 
     start_time = 100000.0
-    with patch(
+    with patch("config.TUNNEL_URL", ""), patch(
         "services.market_data_service.yf.Ticker", return_value=mock_ticker
     ), patch("time.time", return_value=start_time):
         df1 = await get_history_df("AAPL", period="1y", interval="1d")
@@ -139,7 +141,7 @@ async def test_get_history_df_cache_expiry() -> None:
 
     # Fast forward past TTL (6 hours = 21600 seconds)
     expiry_time = start_time + 21601.0
-    with patch(
+    with patch("config.TUNNEL_URL", ""), patch(
         "services.market_data_service.yf.Ticker", return_value=mock_ticker
     ) as mock_yf_ticker, patch("time.time", return_value=expiry_time):
         df2 = await get_history_df("AAPL", period="1y", interval="1d")
@@ -169,10 +171,14 @@ async def test_get_history_df_copy_isolation() -> None:
     mock_df.index.name = "Date"
 
     mock_ticker = MagicMock()
+    mock_ticker.ticker = "AAPL"
     mock_ticker.history = MagicMock(return_value=mock_df)
 
-    with patch("services.market_data_service.yf.Ticker", return_value=mock_ticker):
+    with patch("config.TUNNEL_URL", ""), patch(
+        "services.market_data_service.yf.Ticker", return_value=mock_ticker
+    ):
         df1 = await get_history_df("AAPL", period="1y", interval="1d")
+        assert not df1.empty
         assert "modified_col" not in df1.columns
 
         # Mutate df1
@@ -204,9 +210,10 @@ async def test_clear_history_cache() -> None:
     mock_df.index.name = "Date"
 
     mock_ticker = MagicMock()
+    mock_ticker.ticker = "AAPL"
     mock_ticker.history = MagicMock(return_value=mock_df)
 
-    with patch(
+    with patch("config.TUNNEL_URL", ""), patch(
         "services.market_data_service.yf.Ticker", return_value=mock_ticker
     ) as mock_yf_ticker:
         # Fetch once to populate cache
@@ -235,7 +242,7 @@ async def test_get_all_option_expiries_caching() -> None:
     mock_ticker = MagicMock()
     mock_ticker.options = ["2026-06-19", "2026-07-17"]
 
-    with patch(
+    with patch("config.TUNNEL_URL", ""), patch(
         "services.market_data_service.yf.Ticker", return_value=mock_ticker
     ) as mock_yf_ticker:
         # Miss
@@ -280,7 +287,7 @@ async def test_get_option_chain_caching() -> None:
     mock_ticker = MagicMock()
     mock_ticker.option_chain = MagicMock(return_value=mock_chain)
 
-    with patch(
+    with patch("config.TUNNEL_URL", ""), patch(
         "services.market_data_service.yf.Ticker", return_value=mock_ticker
     ) as mock_yf_ticker, patch(
         "services.market_data_service.get_quote",
@@ -368,7 +375,7 @@ async def test_get_option_chain_falls_back_to_yfinance_when_edge_cache_stale() -
     mock_ticker = MagicMock()
     mock_ticker.option_chain = MagicMock(return_value=mock_chain)
 
-    with patch(
+    with patch("config.TUNNEL_URL", ""), patch(
         "services.edge_cache_client.get_cached_option_chain",
         new_callable=AsyncMock,
         return_value=stale_edge_payload,
@@ -405,7 +412,7 @@ async def test_get_option_chain_falls_back_to_yfinance_when_edge_unreachable() -
     mock_ticker = MagicMock()
     mock_ticker.option_chain = MagicMock(return_value=mock_chain)
 
-    with patch(
+    with patch("config.TUNNEL_URL", ""), patch(
         "services.edge_cache_client.get_cached_option_chain",
         new_callable=AsyncMock,
         return_value=None,
@@ -638,7 +645,8 @@ async def test_get_vix_term_structure_exception() -> None:
 
 @pytest.mark.asyncio
 async def test_safe_yf_history_success_with_repair() -> None:
-    """Test _safe_yf_history returns DataFrame directly when repair=True succeeds."""
+    """Test _safe_yf_history returns DataFrame directly when repair=True succeeds
+    (with Edge disabled, so it exercises the direct-yfinance fallback path)."""
     import pandas as pd
     from services.market_data_service import _safe_yf_history
 
@@ -650,7 +658,8 @@ async def test_safe_yf_history_success_with_repair() -> None:
     mock_ticker.ticker = "AAPL"
     mock_ticker.history = MagicMock(return_value=mock_df)
 
-    res = await _safe_yf_history(mock_ticker, period="2d")
+    with patch("config.TUNNEL_URL", ""):
+        res = await _safe_yf_history(mock_ticker, period="2d")
     assert res is not None
     assert not res.empty
     assert res.iloc[0]["Close"] == 150.0
@@ -661,7 +670,8 @@ async def test_safe_yf_history_success_with_repair() -> None:
 
 @pytest.mark.asyncio
 async def test_safe_yf_history_fallback_when_repair_raises_sklearn_missing() -> None:
-    """Test _safe_yf_history gracefully retries with repair=False if repair=True raises ModuleNotFoundError."""
+    """Test _safe_yf_history gracefully retries with repair=False if repair=True raises
+    ModuleNotFoundError (with Edge disabled, so it exercises the direct-yfinance path)."""
     import pandas as pd
     from services.market_data_service import _safe_yf_history
 
@@ -679,7 +689,8 @@ async def test_safe_yf_history_fallback_when_repair_raises_sklearn_missing() -> 
         ]
     )
 
-    res = await _safe_yf_history(mock_ticker, period="5d", interval="1d")
+    with patch("config.TUNNEL_URL", ""):
+        res = await _safe_yf_history(mock_ticker, period="5d", interval="1d")
     assert res is not None
     assert not res.empty
     assert res.iloc[0]["Close"] == 200.0
@@ -693,17 +704,17 @@ async def test_safe_yf_history_fallback_when_repair_raises_sklearn_missing() -> 
 
 
 @pytest.mark.asyncio
-async def test_safe_yf_history_fallback_to_edge_when_both_fail() -> None:
-    """Test _safe_yf_history falls back to Edge tunnel scraper when all direct yfinance calls fail."""
+async def test_safe_yf_history_prefers_edge_over_direct_yfinance() -> None:
+    """Test _safe_yf_history hits the Edge tunnel first and skips direct yfinance
+    entirely when Edge returns usable data."""
     from services.market_data_service import _safe_yf_history
 
     mock_ticker = MagicMock()
     mock_ticker.ticker = "NVDA"
     mock_ticker.history = MagicMock(
-        side_effect=[
-            Exception("Direct 403 Forbidden"),
-            Exception("Direct 403 Forbidden"),
-        ]
+        side_effect=AssertionError(
+            "direct yfinance should not be called when Edge succeeds"
+        )
     )
 
     mock_edge_response = MagicMock()
@@ -734,3 +745,36 @@ async def test_safe_yf_history_fallback_to_edge_when_both_fail() -> None:
         assert res is not None
         assert not res.empty
         assert res.iloc[0]["Close"] == 124.0
+        mock_ticker.history.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_safe_yf_history_falls_back_to_direct_when_edge_fails() -> None:
+    """Test _safe_yf_history falls back to direct yfinance (降級) when the Edge
+    tunnel is configured but unreachable/fails."""
+    import pandas as pd
+    from services.market_data_service import _safe_yf_history
+
+    mock_df = pd.DataFrame(
+        {"Close": [124.0], "Open": [120.0]},
+        index=pd.to_datetime(["2026-08-17"]),
+    )
+    mock_ticker = MagicMock()
+    mock_ticker.ticker = "NVDA"
+    mock_ticker.history = MagicMock(return_value=mock_df)
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(side_effect=Exception("connection refused"))
+    mock_client_cls = MagicMock()
+    mock_client_cls.return_value.__aenter__.return_value = mock_client
+
+    with patch("config.TUNNEL_URL", "http://edge-node:8000"), patch(
+        "httpx.AsyncClient", mock_client_cls
+    ):
+        res = await _safe_yf_history(mock_ticker, period="1mo", interval="1d")
+        assert res is not None
+        assert not res.empty
+        assert res.iloc[0]["Close"] == 124.0
+        mock_ticker.history.assert_called_once_with(
+            period="1mo", auto_adjust=True, repair=True, interval="1d"
+        )

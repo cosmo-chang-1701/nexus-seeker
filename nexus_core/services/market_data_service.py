@@ -246,14 +246,49 @@ async def _execute_api_call(func: Any, *args, **kwargs) -> Any:  # type: ignore
 # ---------------------------------------------------------------------------
 # Quote (即時報價)
 # ---------------------------------------------------------------------------
-async def _safe_yf_history(
-    ticker: yf.Ticker,
-    *,
-    period: str,
-    interval: Optional[str] = None,
+async def _fetch_history_via_edge(
+    symbol: str, *, period: str, interval: Optional[str] = None
 ) -> Optional[pd.DataFrame]:
-    """安全包裝 yfinance history，加入 repair 容錯與 Edge 節點優雅降級。"""
+    """優先透過 Edge 節點即時抓取 K 線。未設定 TUNNEL_URL 或抓取失敗/空值時回傳 None。"""
+    from config import TUNNEL_URL
+    import httpx
+    import urllib.parse
 
+    base_url = (
+        getattr(TUNNEL_URL, "rstrip", lambda x: TUNNEL_URL)("/") if TUNNEL_URL else ""
+    )
+    if not base_url:
+        return None
+
+    try:
+        req_url = f"{base_url}/api/v1/scrape/yf/history/{urllib.parse.quote(str(symbol))}?period={period}"
+        if interval:
+            req_url += f"&interval={interval}"
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.get(req_url)
+            if res.status_code == 200:
+                data = res.json()
+                if data.get("status") == "success" and data.get("data"):
+                    df_edge = pd.DataFrame(data["data"])
+                    if "Date" in df_edge.columns:
+                        df_edge["Date"] = pd.to_datetime(df_edge["Date"])
+                        df_edge.set_index("Date", inplace=True)
+                    elif "Datetime" in df_edge.columns:
+                        df_edge["Datetime"] = pd.to_datetime(df_edge["Datetime"])
+                        df_edge.set_index("Datetime", inplace=True)
+                    logger.info(f"[{symbol}] Edge 節點成功抓取 K 線")
+                    return df_edge
+    except Exception as ex:
+        logger.warning(f"[{symbol}] Edge 節點即時抓取 K 線失敗: {ex}")
+
+    return None
+
+
+async def _direct_yf_history(
+    ticker: yf.Ticker, *, period: str, interval: Optional[str] = None
+) -> Optional[pd.DataFrame]:
+    """nexus_core 直連 yfinance 抓取 K 線（降級方案），加入 repair 容錯。"""
     df = None
     try:
         kwargs: dict[str, Any] = {
@@ -282,47 +317,30 @@ async def _safe_yf_history(
             logger.warning(f"yfinance history 直接呼叫失敗: {e2}")
 
     if df is None or getattr(df, "empty", True):
-        # 降級方案：透過 Edge 節點抓取
-        symbol = getattr(ticker, "ticker", "")
-        if symbol:
-            logger.info(f"[{symbol}] yfinance 失敗，啟動 Edge 降級方案抓取 K 線...")
-            from config import TUNNEL_URL
-            import httpx
-            import urllib.parse
-
-            base_url = (
-                getattr(TUNNEL_URL, "rstrip", lambda x: TUNNEL_URL)("/")
-                if TUNNEL_URL
-                else ""
-            )
-            if base_url:
-                req_url = f"{base_url}/api/v1/scrape/yf/history/{urllib.parse.quote(symbol)}?period={period}"
-                if interval:
-                    req_url += f"&interval={interval}"
-
-                try:
-                    async with httpx.AsyncClient(timeout=15.0) as client:
-                        res = await client.get(req_url)
-                        if res.status_code == 200:
-                            data = res.json()
-                            if data.get("status") == "success" and data.get("data"):
-                                df_fallback = pd.DataFrame(data["data"])
-                                if "Date" in df_fallback.columns:
-                                    df_fallback["Date"] = pd.to_datetime(
-                                        df_fallback["Date"]
-                                    )
-                                    df_fallback.set_index("Date", inplace=True)
-                                elif "Datetime" in df_fallback.columns:
-                                    df_fallback["Datetime"] = pd.to_datetime(
-                                        df_fallback["Datetime"]
-                                    )
-                                    df_fallback.set_index("Datetime", inplace=True)
-                                return df_fallback
-                except Exception as ex:
-                    logger.warning(f"[{symbol}] Edge 降級抓取 K 線也失敗: {ex}")
-
         return None
     return df
+
+
+async def _safe_yf_history(
+    ticker: yf.Ticker,
+    *,
+    period: str,
+    interval: Optional[str] = None,
+) -> Optional[pd.DataFrame]:
+    """安全包裝 yfinance history：優先透過 Edge 節點抓取，
+    nexus_core 直連 yfinance（含 repair 容錯）僅作為 Edge 不可用時的降級方案。
+    """
+
+    symbol = getattr(ticker, "ticker", "")
+    if symbol:
+        df_edge = await _fetch_history_via_edge(
+            symbol, period=period, interval=interval
+        )
+        if df_edge is not None and not df_edge.empty:
+            return df_edge
+        logger.info(f"[{symbol}] 降級改用本地 yfinance 直連抓取 K 線...")
+
+    return await _direct_yf_history(ticker, period=period, interval=interval)
 
 
 async def get_yfinance_quote(symbol: str) -> Dict[str, Any]:
@@ -632,35 +650,37 @@ async def get_all_option_expiries(symbol: str) -> List[str]:
             return list(cached_val)
 
     res = []
-    try:
-        ticker = yf.Ticker(symbol)
-        expiries = await call_yf(lambda: ticker.options)
-        res = list(expiries)
-    except Exception as e:
-        logger.warning(f"[{symbol}] yfinance 獲取期權到期日失敗: {e}")
+    from config import TUNNEL_URL
+    import httpx
+    import urllib.parse
+
+    base_url = (
+        getattr(TUNNEL_URL, "rstrip", lambda x: TUNNEL_URL)("/") if TUNNEL_URL else ""
+    )
+    if base_url:
+        req_url = (
+            f"{base_url}/api/v1/scrape/yf/options/{urllib.parse.quote(symbol)}/expiries"
+        )
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(req_url)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data.get("status") == "success" and data.get("data"):
+                        res = data.get("data", [])
+                        logger.info(f"[{symbol}] Edge 節點成功抓取期權到期日")
+        except Exception as ex:
+            logger.warning(f"[{symbol}] Edge 節點即時抓取期權到期日失敗: {ex}")
 
     if not res:
-        logger.info(f"[{symbol}] 啟動 Edge 降級方案抓取期權到期日...")
-        from config import TUNNEL_URL
-        import httpx
-        import urllib.parse
-
-        base_url = (
-            getattr(TUNNEL_URL, "rstrip", lambda x: TUNNEL_URL)("/")
-            if TUNNEL_URL
-            else ""
-        )
         if base_url:
-            req_url = f"{base_url}/api/v1/scrape/yf/options/{urllib.parse.quote(symbol)}/expiries"
-            try:
-                async with httpx.AsyncClient(timeout=15.0) as client:
-                    resp = await client.get(req_url)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        if data.get("status") == "success":
-                            res = data.get("data", [])
-            except Exception as ex:
-                logger.warning(f"[{symbol}] Edge 降級抓取期權到期日也失敗: {ex}")
+            logger.info(f"[{symbol}] 降級改用本地 yfinance 直連抓取期權到期日...")
+        try:
+            ticker = yf.Ticker(symbol)
+            expiries = await call_yf(lambda: ticker.options)
+            res = list(expiries)
+        except Exception as e:
+            logger.warning(f"[{symbol}] yfinance 獲取期權到期日失敗: {e}")
 
     if res:
         _option_expiries_cache[symbol] = (
@@ -726,12 +746,12 @@ async def get_option_chain(
 
     calls_full = None
     puts_full = None
-    underlying_full = None
+    underlying_full: Optional[Any] = None
 
     # 優先讀取 edge 背景排程寫入的 Option Chain 快照（毫秒級 SQLite 讀取），
-    # 命中且夠新鮮就直接採用，跳過下方 yfinance 即時抓取。edge 目前部署
-    # 不穩定，任何 miss/逾時/離線都會回傳 None，完全不影響下方既有的
-    # yfinance -> edge 即時 scrape fallback 行為（Max Pain / UOA 等下游
+    # 命中且夠新鮮就直接採用，跳過下方的 edge 即時 scrape / yfinance 直連。
+    # 此 SQLite 快照 miss/逾時/離線都會回傳 None，完全不影響下方既有的
+    # edge 即時 scrape -> yfinance 直連 fallback 行為（Max Pain / UOA 等下游
     # 商業邏輯完全不變，只是輸入來源換掉）。
     from services import edge_cache_client
 
@@ -748,26 +768,6 @@ async def get_option_chain(
                 underlying_full = {}
 
     if calls_full is None or puts_full is None:
-        try:
-            ticker = yf.Ticker(symbol)
-            chain = await call_yf(ticker.option_chain, expiry)
-            if chain is not None:
-                calls_full = chain.calls.copy() if chain.calls is not None else None
-                puts_full = chain.puts.copy() if chain.puts is not None else None
-                underlying_full = (
-                    chain.underlying.copy()
-                    if hasattr(chain.underlying, "copy")
-                    else chain.underlying
-                )
-        except Exception as e:
-            logger.warning(f"[{symbol}] 獲取期權鏈失敗 (expiry={expiry}): {e}")
-
-    if (
-        calls_full is None
-        or puts_full is None
-        or (calls_full.empty and puts_full.empty)
-    ):
-        logger.info(f"[{symbol}] 啟動 Edge 降級方案抓取期權鏈 (expiry={expiry})...")
         from config import TUNNEL_URL
         import httpx
         import urllib.parse
@@ -788,8 +788,32 @@ async def get_option_chain(
                             calls_full = pd.DataFrame(data["data"].get("calls", []))
                             puts_full = pd.DataFrame(data["data"].get("puts", []))
                             underlying_full = {}
+                            logger.info(f"[{symbol}] Edge 節點成功抓取期權鏈")
             except Exception as ex:
-                logger.warning(f"[{symbol}] Edge 降級抓取期權鏈也失敗: {ex}")
+                logger.warning(f"[{symbol}] Edge 節點即時抓取期權鏈失敗: {ex}")
+
+        if (
+            calls_full is None
+            or puts_full is None
+            or (calls_full.empty and puts_full.empty)
+        ):
+            if base_url:
+                logger.info(
+                    f"[{symbol}] 降級改用本地 yfinance 直連抓取期權鏈 (expiry={expiry})..."
+                )
+            try:
+                ticker = yf.Ticker(symbol)
+                chain = await call_yf(ticker.option_chain, expiry)
+                if chain is not None:
+                    calls_full = chain.calls.copy() if chain.calls is not None else None
+                    puts_full = chain.puts.copy() if chain.puts is not None else None
+                    underlying_full = (
+                        chain.underlying.copy()
+                        if hasattr(chain.underlying, "copy")
+                        else chain.underlying
+                    )
+            except Exception as e:
+                logger.warning(f"[{symbol}] 獲取期權鏈失敗 (expiry={expiry}): {e}")
 
     if (
         calls_full is not None
