@@ -398,6 +398,30 @@ def create_dynamic_rollover_embed(
     return embed
 
 
+def build_fundamental_broken_embed(
+    symbol: str, reasoning_with_source: str
+) -> discord.Embed:
+    """
+    產生基本面護城河判定破滅（Scenario 1 原型假設破滅）的動態轉倉 Embed。
+
+    集中封裝固定的清算建議參數 (100% 清倉轉入 VOO)，供互動式 `/verify_thesis`
+    與自動化每日 SEC 財報掃描共用，避免兩處組裝邏輯漂移。
+    """
+    return create_dynamic_rollover_embed(
+        rollover_type="原型假設破滅",
+        sell_symbol=symbol.upper(),
+        sell_ratio=1.0,
+        buy_symbol="VOO",
+        reason=reasoning_with_source,
+        suggested_strategy="Buy Shares (防禦避風港)",
+        suggested_price="Market",
+        strike="N/A",
+        expiry="N/A",
+        direction="BTO",
+        scenario="FUNDAMENTAL_BROKEN",
+    )
+
+
 def create_thesis_passed_embed(
     symbol: str,
     reasoning: str,

@@ -1318,7 +1318,7 @@ class TerminalCog(commands.Cog):
     ) -> None:
         from market_analysis.dynamic_rollover import DynamicRolloverEngine
         from cogs.embed_builders.rollover_embeds import (
-            create_dynamic_rollover_embed,
+            build_fundamental_broken_embed,
             create_thesis_passed_embed,
             RolloverActionView,
         )
@@ -1358,18 +1358,8 @@ class TerminalCog(commands.Cog):
         source_info = f"\n\n🔗 參照資料來源: {source_url}" if source_url else ""
 
         if result.is_broken:
-            embed = create_dynamic_rollover_embed(
-                rollover_type="原型假設破滅",
-                sell_symbol=symbol.upper(),
-                sell_ratio=1.0,
-                buy_symbol="VOO",
-                reason=result.reasoning + source_info,
-                suggested_strategy="Buy Shares (防禦避風港)",
-                suggested_price="Market",
-                strike="N/A",
-                expiry="N/A",
-                direction="BTO",
-                scenario="FUNDAMENTAL_BROKEN",
+            embed = build_fundamental_broken_embed(
+                symbol, result.reasoning + source_info
             )
             view = RolloverActionView(target_symbol=symbol.upper())
             await _send_or_edit("", embed=embed, view=view)

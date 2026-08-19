@@ -141,3 +141,46 @@ def get_fundamental_cache(symbol: str) -> Optional[Dict[str, Any]]:
         if conn:
             conn.close()
     return None
+
+
+def save_fundamental_scan_state(
+    symbol: str, accession_number: str, form_type: str
+) -> bool:
+    """記錄某標的最後一次自動掃描已分析過的 SEC 申報 (accession_number)，
+    作為每日排程的去重游標，避免同一份文件被重複送入 LLM 分析。"""
+    try:
+        execute_write(
+            """
+            INSERT INTO fundamental_scan_state (symbol, last_accession_number, last_form_type, updated_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(symbol) DO UPDATE SET
+            last_accession_number = excluded.last_accession_number,
+            last_form_type = excluded.last_form_type,
+            updated_at = CURRENT_TIMESTAMP
+            """,
+            (symbol.upper(), accession_number, form_type),
+        )
+        return True
+    except Exception:
+        return False
+
+
+def get_fundamental_scan_state(symbol: str) -> Optional[Dict[str, Any]]:
+    conn = None
+    try:
+        conn = get_read_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT last_accession_number, last_form_type, updated_at FROM fundamental_scan_state WHERE symbol = ?",
+            (symbol.upper(),),
+        )
+        row = cursor.fetchone()
+        if row:
+            return dict(row)
+    except Exception:
+        pass
+    finally:
+        if conn:
+            conn.close()
+    return None

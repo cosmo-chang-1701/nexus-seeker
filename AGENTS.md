@@ -59,6 +59,7 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 
 ### In `cogs/trading/`
 
+- `fundamental_filing_scan` — **08:00 ET** (holdings-only, skips non-trading days)
 - `daily_reddit_update` — **08:30 ET**
 - `pre_market_risk_monitor` — **09:00 ET**
 - `dynamic_market_scanner` — **every 30 minutes during market hours**
@@ -466,18 +467,18 @@ Configurations are strictly segregated into two functional areas to maximize sep
   - `risk_limit` (Base risk percentage limit, bounded between `1.0` and `50.0`)
   - `enable_vtr`, `enable_psq_watchlist`, `monthly_expense`, `tax_reserve_rate`, and `cash_reserve`.
   - Also integrates the **Watchlist Tagging System**: Allows users to attach custom categorization tags (e.g., `TECH`, `CORE`) to watchlist assets via an interactive dropdown and modal (`ui/watchlist_tags.py`). This tagging engine is also fully exposed in the `/list_watch` command output via a localized "🏷️ 原地編輯標籤" shortcut button, enabling direct in-place editing that automatically rebuilds and replaces the original Discord view for a seamless, SPA-like experience.
-- **Notification Preferences (`/notif_settings`)**: Manages individual toggles stored in a key-value style `user_notification_settings` table (designed with composite primary key `(user_id, notification_key)` for infinite schema-less extensibility). Fully consolidated into **4 Tactical Dimensions with 11 Core Channels** (Migration `v061` + WTI Alert):
+- **Notification Preferences (`/notif_settings`)**: Manages individual toggles stored in a key-value style `user_notification_settings` table (designed with composite primary key `(user_id, notification_key)` for infinite schema-less extensibility). Fully consolidated into **4 Tactical Dimensions with 12 Core Channels** (Migration `v061` + WTI Alert + `defense_fundamental_thesis`):
   - **4 Tactical Modules**:
     1. `briefings` (📋 定時戰報與覆盤): `briefing_pre_market`, `briefing_post_market`, `briefing_weekly_vtr`
     2. `telemetry` (📡 盤中自選與掛單遙測): `heartbeat_watchlist`, `telemetry_orders`
-    3. `defense` (🛡️ 持倉風控與極端防禦): `defense_portfolio_risk`, `defense_option_rollover`, `defense_macro_tail_risk`
+    3. `defense` (🛡️ 持倉風控與極端防禦): `defense_portfolio_risk`, `defense_option_rollover`, `defense_fundamental_thesis`, `defense_macro_tail_risk`
     4. `alpha` (🎯 Alpha 策略與情報): `alpha_market_signals`, `alpha_polymarket`, `alpha_wti_oil`
   - **Dynamic Two-Tier Architecture with Preset Modes**: To provide a clean, uncluttered user experience:
     - Row 0 features the Category Selector (`briefings`, `telemetry`, `defense`, `alpha`).
     - Row 1 features toggle choices with real-time `🟢` / `🔴` indicators.
     - Row 2 features module batch controls (`⚡ 開啟本區`, `💤 關閉本區`).
     - Row 3 features 1-click Preset Quick Action buttons:
-      - `🛡️ 戰備全開` (`all_on`): Enables all 11 risk and alpha channels.
+      - `🛡️ 戰備全開` (`all_on`): Enables all 12 risk and alpha channels.
       - `🎯 精準交易` (`focus`): Keeps scheduled briefings and real-time portfolio defenses on, while muting intraday market scanner noise.
       - `🔕 盤中靜音` (`mute_intraday`): Only allows pre/post briefings and margin alerts.
   - **Polymarket Parameter Separation**: Non-boolean account configs (`polymarket_threshold`, `polymarket_use_llm`, `polymarket_slippage`) are cleanly placed in `/settings` (`AccountSettingsView`), keeping `/notif_settings` pure and focused on notification channels.
@@ -606,11 +607,13 @@ The platform features an automated **Dynamic Rollover Engine** (`market_analysis
   - If exhaustion is NOT met (momentum still positive), opening short calls is strictly forbidden to prevent being crushed by a **Gamma Squeeze**. The remaining 10% is instead switched to **Trailing Stop (移動止盈)** to let profit ride.
 - **Zero-Gamma Flip & Microstructure Interrupt Handler (微觀異動事件中斷器)**:
   - In `portfolio_monitor.py`, `handle_microstructure_interrupt` listens for intraday micro-events (such as spot penetrating Zero Gamma into negative gamma territory or massive whale UOA spikes). It immediately interrupts the 30-minute scheduler timer, executing real-time rebalancing audits and pushing emergency defense embeds.
-- **Manual LLM Trigger (Scenario 1)**: Due to heavy memory and API overhead, Fundamental Thesis evaluation is NOT scheduled. It is strictly triggered manually by the user via the `/verify_thesis <symbol>` Discord slash command. This command now features an interactive UI: it first triggers the Edge Scraper to fetch a list of recent SEC filings (10-K, 10-Q, 8-K), and presents them in a dropdown menu. If the user selects one, or if the 60-second timeout expires, it fetches the specified (or latest) SEC EDGAR report (up to 10,000 characters) and sends it to the LLM.
+- **Form-Type-Aware Analysis (10-K/10-Q/8-K)**: `evaluate_fundamental_thesis` (`market_analysis/dynamic_rollover/fundamental_thesis.py`) accepts optional `form_type` and `sections` parameters that customize the LLM prompt per filing type. 10-K supplements weight full-year trends and board-reviewed Risk Factor changes; 10-Q applies extra skepticism toward single-quarter noise (only a cross-quarter *trend* should trigger `is_broken=true`); 8-K (an event-driven Current Report with no MD&A) is judged by *which* Item number fired (e.g. Item 2.05 divestiture, Item 4.02 restatement, and abrupt Item 5.02 CEO/CFO departures are high-signal; Item 7.01/8.01 are usually low-signal). The edge scraper (`nexus_edge_scraper/section_extractor.py`, `local_api.py`) routes its extraction anchor and structured `sections` dict (including a dedicated `key_events` field for 8-K dotted Item headers) by `form_type` as well. Both parameters are optional — empty/legacy inputs keep the prompt byte-identical to the pre-form-type-aware behavior.
+- **Manual Trigger (`/verify_thesis`)**: Any user can manually trigger Scenario 1 for any symbol via the `/verify_thesis <symbol>` Discord slash command, regardless of holdings. This command features an interactive UI: it first triggers the Edge Scraper to fetch a list of recent SEC filings (10-K, 10-Q, 8-K), and presents them in a dropdown menu. If the user selects one, or if the 60-second timeout expires, it fetches the specified (or latest) SEC EDGAR report (up to 10,000 characters) and sends it to the LLM.
+- **Automated Daily Filing Scan (`cogs/trading/fundamental_filing_monitor.py`)**: A dedicated daily scheduler (`fundamental_filing_scan`, 08:00 ET, skips non-trading days via `market_time.nyse_calendar`) automatically scans **holding-only** symbols (`database.get_all_holdings()`; watchlist symbols are intentionally excluded to bound LLM/API cost) for new SEC filings. For each unique symbol (deduplicated across all holders so a symbol held by multiple users is only analyzed once, throttled via `asyncio.Semaphore(3)`), it compares the latest filing's `accession_number` against a dedicated dedup-cursor table, `fundamental_scan_state` (migration `v062` — distinct from `fundamental_cache`, which stores the LLM verdict itself and has no accession-number column). If a new filing is detected, it's routed through the same form-type-aware `evaluate_fundamental_thesis` pipeline used by `/verify_thesis`. The whole run is gated by `is_memory_safe()` up front (1GB VPS protection). **Only `is_broken=True` results trigger a DM** (via `bot.queue_dm`, reusing `build_fundamental_broken_embed()` — the same embed-construction helper shared with `/verify_thesis`) to holders who have the notification enabled; passing results are written silently to `fundamental_cache` with no DM, to avoid alert fatigue. The scan cursor is only advanced on a successful (non-`None`) LLM result — if the memory-safety gate or LLM call fails mid-scan, the cursor is left untouched so the same filing is retried on the next day's run rather than being silently skipped.
 - **Global Defense Gate (全域防禦閘門)**: LLM moat verdicts (`is_broken`, `confidence`, `reasoning`) are written to the SQLite `fundamental_cache` table (via migration `v057`). During the intraday 30-minute heartbeat (`intraday_pipeline.py`), the `evaluate_watchlist_symbol` engine acts as a **Global Defense Gate**. If a symbol is flagged as broken, the engine forcefully intercepts and overwrites any quantitative BTO (Buy-To-Open) or Grid Accumulation signals, replacing them with a strict `wait` scenario and a `LIQUIDATE` directive. This guarantees that technical blindspots (e.g., heavily oversold RSI traps) cannot override fundamentally deteriorating assets.
 - **Lightweight Triage Strategy (Scenarios 2, 3, 4)**: Lightweight rule-based tasks execute during the intraday 30-minute `monitor_real_portfolio_task` to ensure zero API blocking.
 - **Discord UI**: All rollover actions generate a stylized embed (`create_dynamic_rollover_embed`) packed with terminal execution guidelines, strategy type, and strict buy/sell directions (e.g., BTC for short puts). Title/color are keyed off an explicit `scenario` identifier (`RolloverScenario`) rather than free-text substring matching, so `MARGIN_DEFENSE` alerts always render as critical red regardless of the underlying action.
-- **Toggle Settings**: Users can opt out via `/notif_settings` under the Defense module (`defense_option_rollover`).
+- **Toggle Settings**: Users can opt out of rollover alerts via `/notif_settings` under the Defense module (`defense_option_rollover`), and specifically out of the automated daily filing scan's alerts via `defense_fundamental_thesis` (both keys are independent; `/verify_thesis`'s manual, interactive results are always shown regardless of either toggle).
 
 ---
 
@@ -656,6 +659,7 @@ Adheres 100% to the Nexus Seeker field-based embed architecture:
 - `nexus_core/bot.py` — bot bootstrap, DM queue, service lifecycle
 - `nexus_core/cogs/trading.py` — active runtime scheduler and watchlist heartbeat sender
 - `nexus_core/cogs/trading/wti_monitor.py` — 24/7 background WTI crude oil price monitor loop
+- `nexus_core/cogs/trading/fundamental_filing_monitor.py` — daily (08:00 ET) automated SEC filing scanner for holding-only symbols, routing new 10-K/10-Q/8-K filings through the form-type-aware Dynamic Rollover Scenario 1 pipeline
 - `nexus_core/cogs/analyst_agent.py` — analyst report scheduler and dispatcher
 - `nexus_core/cogs/order_ui.py` — active orders entrypoints
 - `nexus_core/cogs/order_views.py` — interactive list views and telemetry alignment buttons
@@ -673,6 +677,7 @@ Adheres 100% to the Nexus Seeker field-based embed architecture:
 - `nexus_core/database/migrations/v038_add_active_orders.py` — migration registering the active_orders table in SQLite
 - `nexus_core/database/migrations/v047_remediate_missing_structures.py` — migration remediating/adding economic calendar columns consensus_value and fedwatch_probability
 - `nexus_core/database/migrations/v048_add_escape_window_settings.py` — migration adding escape window configuration columns to user settings
+- `nexus_core/database/migrations/v062_add_fundamental_scan_state.py` — migration registering the fundamental_scan_state table, the dedup cursor (per-symbol last analyzed accession_number) used by the automated daily SEC filing scanner
 - `nexus_core/market_analysis/wti_analysis.py` — WTI crude oil technicals, energy correlation, and event analysis engine
 - `nexus_core/market_analysis/intraday_pipeline.py` — watchlist evaluation, option-plan logic, intraday engine helpers
 - `nexus_core/market_analysis/index_microstructure.py` — market regime determination (SHORT_GAMMA_CRITICAL) using VIX, VIX3M, and zero-gamma line GEX
@@ -696,6 +701,7 @@ Adheres 100% to the Nexus Seeker field-based embed architecture:
 - `nexus_core/database/watchlist.py` — Database CRUD operations for user watchlist symbols (100% deterministic rule-based zero-LLM architecture)
 - `nexus_core/database/migrations/v039_add_notification_toggles.py` — migration registering the user_notification_settings table in SQLite
 - `nexus_core/tests/unit/test_wti_alert.py` — unit tests for WTI crude oil price alert system, technicals, and embed rendering
+- `nexus_core/tests/unit/test_fundamental_filing_monitor.py` — unit tests for the automated daily SEC filing scanner (dedup cursor, is_broken dispatch gating, per-user notification toggle, multi-holder symbol dedup)
 - `nexus_core/tests/unit/test_intraday_pipeline.py` — heartbeat and phase-B gating tests
 - `nexus_core/tests/unit/test_embed_builder.py` — embed contract tests
 - `nexus_core/tests/unit/test_output_centralization.py` — embed-centralization enforcement

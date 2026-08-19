@@ -108,6 +108,7 @@ ALL_NOTIFICATION_KEYS: list[str] = [
     # 3. 🛡️ 持倉風控與防禦 (Portfolio & Risk Defense)
     "defense_portfolio_risk",
     "defense_option_rollover",
+    "defense_fundamental_thesis",
     "defense_macro_tail_risk",
     # 4. 🎯 Alpha 策略與情報 (Alpha & Intelligence)
     "alpha_market_signals",
@@ -163,6 +164,7 @@ PRESET_PROFILES: dict[str, dict[str, bool]] = {
         "telemetry_orders": True,
         "defense_portfolio_risk": True,
         "defense_option_rollover": True,
+        "defense_fundamental_thesis": True,
         "defense_macro_tail_risk": True,
         "alpha_market_signals": False,
         "alpha_polymarket": False,
@@ -176,6 +178,7 @@ PRESET_PROFILES: dict[str, dict[str, bool]] = {
         "telemetry_orders": False,
         "defense_portfolio_risk": True,
         "defense_option_rollover": False,
+        "defense_fundamental_thesis": False,
         "defense_macro_tail_risk": True,
         "alpha_market_signals": False,
         "alpha_polymarket": False,
