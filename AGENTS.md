@@ -380,11 +380,12 @@ The platform implements an advanced macro risk-control layer that dynamically ad
 - next-day strategy report
 
 ### Pre-Market Earnings & Valuation Data Integration & Concurrency Optimizations
-- **14-Day Forward Earnings Risk Window**: The pre-market earnings scan window has been extended to **14 days** (`warning_days = 14`) and consolidated directly into the macro report, deprecating standalone earnings radar embeds.
-- **Data Source Integration**: The pre-market earnings scan automatically resolves technical evaluations (`evaluate_watchlist_symbol`), option PCR metrics (`SentimentEngine.calculate_pcr`), and company profile details (`get_company_profile`) for all target tickers.
-- **Resource Triage Scan (資源分級掃描)**: To avoid redundant computations and API limits, deep scans (calculating technical indicators, IV rank, option skew, and PCR) are strictly gated to near-term tickers (`days_left <= 2`). Long-dated tickers (`days_left > 2`) are lightweight scanned to resolve company sector profiles only.
-- **LLM Context Pruning (Token 裁剪)**: Non-essential presentational data (like buy/sell zone statuses) are stripped from the payload fed to the LLM, leaving only critical validation indicators to save up to 40% of Prompt Token overhead.
-- **Rate Limit Semaphore Protection**: Requests are throttled using `asyncio.Semaphore(3)` to shield third-party endpoints from API burst blocking, ensuring stability on 1GB VPS environments.
+
+**Live path** — `AnalystAgent.pre_market_loop` → `dispatch_pre_market_briefing()` (`cogs/analyst_agent.py`), which is what actually ships in the `🌅 報告：盤前綜合宏觀與自選股` DM:
+- **14-Day Forward Earnings Risk Window**: The pre-market earnings scan window is **14 days** (`warning_days = 14`), consolidated directly into the macro report. Symbols are sourced from the union of each user's holdings + watchlist, resolved via `calendar_service.get_symbol_earnings_batch()`, filtered to `0 <= days_left <= 14`, and sorted ascending by `TradingService.get_pre_market_alerts_data()` (`services/trading_service.py`) — this step returns the **full, uncapped** alert list, no triage/deep-scan gating.
+- **No Display Cap**: `build_pre_market_briefing_embed()` (`cogs/embed_builders/order_embeds.py`) renders the earnings radar into one Discord embed field per **10-ticker chunk** (to stay under Discord's 1024-char field-value limit), tagging field names with `(第 X/Y 批)` when there is more than one chunk. All matching tickers are shown — none are silently dropped.
+
+**Orphaned path** — `market_analysis/analyst_runners/earnings_runner.py::run_premarket_earnings()` implements a heavier pipeline (top-10 cap on symbols analyzed, `days_left <= 2` deep-vs-light scan triage, PCR via `SentimentEngine.calculate_pcr`, company profile resolution, LLM context pruning, and `asyncio.Semaphore(3)` rate limiting) feeding a separate `create_earnings_report_embed()` output (`📊 Nexus Seeker 盤前財報與估值調整`). `AnalystAgent.run_premarket_earnings` is a thin wrapper around it, but **nothing in the active scheduler, slash commands, or `dispatch_*` methods currently calls it** — it is exercised only by `tests/unit/test_analyst_agent.py`. Treat it as legacy/unwired code, not the production earnings-radar behavior, unless it gets wired back into a live dispatch path.
 
 Prompt Refactoring & Constraints:
 - The system prompt in `generate_analyst_report` enforces:

@@ -574,24 +574,31 @@ def build_pre_market_briefing_embed(
             inline=False,
         )
 
-    # 3. 自選股財報雷達
+    # 3. 自選股財報雷達 (依 10 檔一批分欄位完整顯示，避免超出 Discord field 1024 字元上限)
     if earnings_alerts:
-        displayed_alerts = earnings_alerts[:10]
-        earnings_text = "\n\n".join(
-            (
-                f"**{item['symbol']}** "
-                f"({'⚠️ **持倉高風險**' if item['is_portfolio'] else '👀 觀察清單'})\n"
-                f"└ 📅 財報日: `{item['earnings_date']}` (倒數 **{item['days_left']}** 天)"
+        chunk_size = 10
+        chunks = [
+            earnings_alerts[i : i + chunk_size]
+            for i in range(0, len(earnings_alerts), chunk_size)
+        ]
+        total_chunks = len(chunks)
+        for chunk_idx, chunk in enumerate(chunks, start=1):
+            earnings_text = "\n\n".join(
+                (
+                    f"**{item['symbol']}** "
+                    f"({'⚠️ **持倉高風險**' if item['is_portfolio'] else '👀 觀察清單'})\n"
+                    f"└ 📅 財報日: `{item['earnings_date']}` (倒數 **{item['days_left']}** 天)"
+                )
+                for item in chunk
             )
-            for item in displayed_alerts
-        )
-        if len(earnings_alerts) > 10:
-            earnings_text += f"\n\n*...等共 {len(earnings_alerts)} 檔標的即將發布財報*"
-        embed.add_field(
-            name="🚨 自選股財報季雷達預警 (Earnings Radar)",
-            value=earnings_text,
-            inline=False,
-        )
+            field_name = "🚨 自選股財報季雷達預警 (Earnings Radar)"
+            if total_chunks > 1:
+                field_name += f" (第 {chunk_idx}/{total_chunks} 批)"
+            embed.add_field(
+                name=field_name,
+                value=earnings_text,
+                inline=False,
+            )
     else:
         scanned_list = (
             "、".join(f"`{symbol}`" for symbol in scanned_symbols)

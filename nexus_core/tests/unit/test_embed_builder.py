@@ -2735,7 +2735,7 @@ def test_build_pre_market_briefing_embed_10_earnings_alerts() -> None:
         assert f"**SYM{i}**" in earnings_val_10
     assert "...等共" not in earnings_val_10
 
-    # 測試超過 10 檔標的 (例如 12 檔)
+    # 測試超過 10 檔標的 (例如 12 檔)：應拆成兩個分批 field，完整顯示所有標的，不再截斷
     twelve_alerts = [
         {
             "symbol": f"TICK{i}",
@@ -2750,10 +2750,18 @@ def test_build_pre_market_briefing_embed_10_earnings_alerts() -> None:
         earnings_alerts=twelve_alerts,
     )
     field_dict_12 = {str(f.name): str(f.value or "") for f in embed_12.fields}
-    earnings_val_12 = field_dict_12.get("🚨 自選股財報季雷達預警 (Earnings Radar)", "")
-    assert "**TICK10**" in earnings_val_12
-    assert "**TICK11**" not in earnings_val_12
-    assert "*...等共 12 檔標的即將發布財報*" in earnings_val_12
+    earnings_val_page1 = field_dict_12.get(
+        "🚨 自選股財報季雷達預警 (Earnings Radar) (第 1/2 批)", ""
+    )
+    earnings_val_page2 = field_dict_12.get(
+        "🚨 自選股財報季雷達預警 (Earnings Radar) (第 2/2 批)", ""
+    )
+    for i in range(1, 11):
+        assert f"**TICK{i}**" in earnings_val_page1
+    for i in range(11, 13):
+        assert f"**TICK{i}**" in earnings_val_page2
+    combined_val_12 = earnings_val_page1 + earnings_val_page2
+    assert "...等共" not in combined_val_12
 
 
 def test_create_macro_scan_embed_vix_ansi_and_healthy_status() -> None:
