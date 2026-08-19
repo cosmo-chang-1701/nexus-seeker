@@ -682,7 +682,7 @@ async def analyze_symbol(
             else:
                 beta = calculate_beta(df, df_spy) if symbol != "SPY" else 1.0
 
-        indicators = _calculate_technical_indicators(df)
+        indicators = await asyncio.to_thread(_calculate_technical_indicators, df)
         if indicators is None:
             return None
         price = indicators["price"]

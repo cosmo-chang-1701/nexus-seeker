@@ -293,7 +293,7 @@ async def build_enhanced_watchlist_metrics(
     # Restore essential indicators for pricing engine (AGENTS.md)
     from market_analysis.strategy import _calculate_technical_indicators
 
-    indicators = _calculate_technical_indicators(df_stock)
+    indicators = await asyncio.to_thread(_calculate_technical_indicators, df_stock)
     rsi_14 = indicators.get("rsi", 50.0) if indicators else 50.0
     atr_14 = 0.01
     ma20 = indicators.get("sma20", current_price) if indicators else current_price
