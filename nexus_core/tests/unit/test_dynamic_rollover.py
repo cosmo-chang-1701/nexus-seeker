@@ -2345,7 +2345,7 @@ async def test_satellite_rebalancing_euphoria_exhaustion_includes_wash_sale_note
 
 
 # ---------------------------------------------------------------------------
-# 進場訊號四重嚴格過濾鐵律：_scan_gex_walls / _confirm_entry_signal
+# 進場訊號六重嚴格過濾鐵律：_scan_gex_walls / _confirm_entry_signal
 # ---------------------------------------------------------------------------
 
 
@@ -2421,6 +2421,9 @@ def _green_candidate_radar() -> dict:
 _GREEN_15M_DF = _make_15m_df([(98.0, 1000.0)] * 20 + [(101.0, 1500.0)])
 
 
+_FAR_EXPIRIES = [(datetime.now().date() + timedelta(days=14)).strftime("%Y-%m-%d")]
+
+
 @pytest.mark.asyncio
 @patch("database.calendar_cache.get_cached_earnings", return_value=None)
 @patch(
@@ -2428,7 +2431,13 @@ _GREEN_15M_DF = _make_15m_df([(98.0, 1000.0)] * 20 + [(101.0, 1500.0)])
     new_callable=AsyncMock,
     return_value="NORMAL",
 )
-async def test_confirm_entry_signal_all_five_conditions_pass(
+@patch(
+    "services.market_data_service.get_all_option_expiries",
+    new_callable=AsyncMock,
+    return_value=_FAR_EXPIRIES,
+)
+async def test_confirm_entry_signal_all_six_conditions_pass(
+    mock_expiries: AsyncMock,
     mock_regime: AsyncMock,
     mock_earnings: MagicMock,
     engine: DynamicRolloverEngine,
@@ -2447,6 +2456,7 @@ async def test_confirm_entry_signal_all_five_conditions_pass(
     assert "條件三✅" in reason
     assert "條件四✅" in reason
     assert "條件五✅" in reason
+    assert "條件六✅" in reason
 
 
 @pytest.mark.asyncio
@@ -2627,6 +2637,72 @@ async def test_confirm_entry_signal_condition4_fails_dte_too_low(
         confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
     assert confirmed is False
     assert "條件四❌" in reason
+
+
+@pytest.mark.asyncio
+@patch("database.calendar_cache.get_cached_earnings", return_value=None)
+@patch(
+    "market_analysis.index_microstructure.get_market_regime",
+    new_callable=AsyncMock,
+    return_value="NORMAL",
+)
+@patch(
+    "services.market_data_service.get_all_option_expiries",
+    new_callable=AsyncMock,
+)
+async def test_confirm_entry_signal_condition6_fails_0dte(
+    mock_expiries: AsyncMock,
+    mock_regime: AsyncMock,
+    mock_earnings: MagicMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """條件六：candidate 自身最近效期選擇權週期為 0DTE (今日到期) -> 未通過，
+    即使驅動進場的主力 UOA 買盤本身是遠月合約 (條件四仍通過)。"""
+    mock_expiries.return_value = [datetime.now().date().strftime("%Y-%m-%d")]
+    with patch(
+        "services.market_data_service.get_history_df",
+        new_callable=AsyncMock,
+        return_value=_GREEN_15M_DF,
+    ):
+        confirmed, reason = await engine._confirm_entry_signal(
+            "TEST", _green_candidate_radar(), 100.0
+        )
+    assert confirmed is False
+    assert "條件四✅" in reason
+    assert "條件六❌" in reason
+    assert "DTE=0" in reason
+
+
+@pytest.mark.asyncio
+@patch("database.calendar_cache.get_cached_earnings", return_value=None)
+@patch(
+    "market_analysis.index_microstructure.get_market_regime",
+    new_callable=AsyncMock,
+    return_value="NORMAL",
+)
+@patch(
+    "services.market_data_service.get_all_option_expiries",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_confirm_entry_signal_condition6_fails_no_expiries(
+    mock_expiries: AsyncMock,
+    mock_regime: AsyncMock,
+    mock_earnings: MagicMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """條件六 fail-safe：無法取得標的自身選擇權到期日清單 -> 未通過 (不預設通過)"""
+    with patch(
+        "services.market_data_service.get_history_df",
+        new_callable=AsyncMock,
+        return_value=_GREEN_15M_DF,
+    ):
+        confirmed, reason = await engine._confirm_entry_signal(
+            "TEST", _green_candidate_radar(), 100.0
+        )
+    assert confirmed is False
+    assert "條件六❌" in reason
+    assert "無法取得" in reason
 
 
 @pytest.mark.asyncio

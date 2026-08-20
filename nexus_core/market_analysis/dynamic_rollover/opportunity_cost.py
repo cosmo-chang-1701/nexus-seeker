@@ -10,6 +10,7 @@ from .constants import (
     _BREAKOUT_READY_THRESHOLD,
     _EARNINGS_PRE_EVENT_BUFFER_DAYS,
     _ENTRY_ASYMMETRIC_ROOM_PCT,
+    _ENTRY_CANDIDATE_MIN_DTE,
     _ENTRY_UOA_CAP_RATIO_THRESHOLD,
     _ENTRY_UOA_MIN_DTE,
     _ENTRY_VOLUME_LOOKBACK_BARS,
@@ -257,7 +258,7 @@ class _OpportunityCostMixin:
         target_spot: float,
     ) -> Tuple[bool, str]:
         """
-        防洗盤實戰策略：進場訊號四重嚴格過濾鐵律。四項條件必須同時成立才允許
+        防洗盤實戰策略：進場訊號六重嚴格過濾鐵律。六項條件必須同時成立才允許
         evaluate_opportunity_cost_for_satellites 對 candidate_symbol 實際啟動
         機會成本轉倉指令。
 
@@ -444,7 +445,45 @@ class _OpportunityCostMixin:
             if c5_passed:
                 reasons.append("條件五✅：總經環境與財報事件風控安全")
 
-        all_passed = c1_passed and c2_passed and c3_passed and c4_passed and c5_passed
+        # --- 條件六：避開 candidate 自身最近效期選擇權週期的結算日前夕/當日雜訊 (0/1 DTE) ---
+        c6_passed = True
+        if c1_passed and c2_passed and c3_passed and c4_passed and c5_passed:
+            c6_passed = False
+            try:
+                from services import market_data_service
+
+                expiries = await market_data_service.get_all_option_expiries(
+                    candidate_symbol
+                )
+            except Exception as e:
+                expiries = []
+                logger.warning(f"[{candidate_symbol}] 選擇權到期日清單抓取失敗: {e}")
+
+            if not expiries:
+                reasons.append("條件六❌：無法取得標的最近效期選擇權到期日清單")
+            else:
+                try:
+                    nearest_expiry_dt = datetime.strptime(
+                        expiries[0], "%Y-%m-%d"
+                    ).date()
+                    dte_nearest = (nearest_expiry_dt - datetime.now().date()).days
+                    c6_passed = dte_nearest > _ENTRY_CANDIDATE_MIN_DTE
+                    reasons.append(
+                        f"條件六{'✅' if c6_passed else '❌'}：標的最近效期 {expiries[0]} "
+                        f"DTE={dte_nearest}"
+                        f"（{'符合' if c6_passed else '低於'} 門檻 >{_ENTRY_CANDIDATE_MIN_DTE}）"
+                    )
+                except (ValueError, TypeError) as e:
+                    reasons.append(f"條件六❌：標的最近效期到期日解析失敗: {e}")
+
+        all_passed = (
+            c1_passed
+            and c2_passed
+            and c3_passed
+            and c4_passed
+            and c5_passed
+            and c6_passed
+        )
         return all_passed, " | ".join(reasons)
 
     async def evaluate_opportunity_cost_for_satellites(

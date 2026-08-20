@@ -51,6 +51,9 @@ _ENTRY_UOA_CAP_RATIO_THRESHOLD: float = (
 )
 _ENTRY_ASYMMETRIC_ROOM_PCT: float = 0.05  # 條件三：上方須保留的最低非對稱獲利空間
 _ENTRY_UOA_MIN_DTE: int = 7  # 條件四：驅動進場的主力 UOA 買盤最低 DTE 要求
+_ENTRY_CANDIDATE_MIN_DTE: int = (
+    1  # 條件六：標的自身最近效期需 > 此值天數 (避開 0/1 DTE 結算日雜訊)
+)
 
 # --- 華爾街資深交易員與機構風控量化常數 ---
 _BEAR_CALL_SPREAD_WING_ATR_MULT: float = (
