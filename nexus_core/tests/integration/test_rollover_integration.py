@@ -75,7 +75,7 @@ async def test_integration_rollover_embed_generation(
     ), f"Expected at least 3 fields, got {len(embed.fields)}"
     assert "TSLA" in str(embed.fields[0].value)
     assert "VOO" in str(embed.fields[1].value)
-    assert "量化轉倉分析" in str(embed.description)
+    assert "機構量化防禦與再平衡決策" in str(embed.description)
 
     # 4. View initialization
     view = RolloverActionView(target_symbol=ins["symbol"])

@@ -7,6 +7,7 @@ from . import logger
 from .constants import (
     CORE_DEFENSE_ETF_SYMBOLS,
     _BREAKOUT_READY_THRESHOLD,
+    _EARNINGS_PRE_EVENT_BUFFER_DAYS,
     _ENTRY_ASYMMETRIC_ROOM_PCT,
     _ENTRY_UOA_CAP_RATIO_THRESHOLD,
     _ENTRY_UOA_MIN_DTE,
@@ -20,6 +21,7 @@ from .constants import (
     _PUT_WALL_PROXIMITY_TOLERANCE,
     _ROLLOVER_RATIO_HIGH_PROFIT,
     _ROLLOVER_RATIO_STANDARD,
+    _SKEW_DOWNSIDE_PENALTY_FACTOR,
 )
 from .models import RolloverScenario
 from .structural_signals import _scan_gex_walls
@@ -28,10 +30,15 @@ from .structural_signals import _scan_gex_walls
 class _OpportunityCostMixin:
     """邏輯 (2)：機會成本與期望值比對 (Opportunity Cost & EV Comparison)。"""
 
-    def _calculate_ev_proxy(self, symbol: str) -> float:
+    def _calculate_ev_proxy(
+        self, symbol: str, skew_percentile: Optional[float] = None
+    ) -> float:
         """
-        EV 代理值：以快取的 expected_move_upper 相對現貨的正規化上緣空間作為期望值近似。
-        ev = (expected_move_upper - reference_spot_price) / reference_spot_price
+        Skew-Adjusted EV 期望值模型：
+        以快取的 expected_move_upper 相對現貨的正規化上緣空間為基礎，
+        並結合 Skew 偏斜度進行下行風險調整：
+        Adjusted EV = Base EV * (1.0 - Downside Risk Penalty)
+        當 Skew Percentile < 50% (偏恐慌/偏空) 時施加懲罰，避免單純因為波動大而誤判為高期望值。
         僅使用 market_cache（Cache-Aside），零額外 API 呼叫。
         is_stale 或 is_degraded 的快取視為不可信，回傳 0.0。
         """
@@ -44,12 +51,33 @@ class _OpportunityCostMixin:
         upper = float(row.get("expected_move_upper") or 0.0)
         if spot <= 0.0:
             return 0.0
-        return (upper - spot) / spot
+        base_ev = (upper - spot) / spot
+
+        # 若未提供 skew_percentile，嘗試從快取讀取
+        if skew_percentile is None:
+            try:
+                from database.cache import get_kv_cache
+
+                cached_sp = get_kv_cache(f"skew_percentile_{symbol.upper()}")
+                if cached_sp is not None:
+                    skew_percentile = float(cached_sp)
+            except Exception:
+                pass
+
+        if skew_percentile is not None and skew_percentile < 50.0:
+            downside_penalty = (
+                (50.0 - skew_percentile) / 50.0
+            ) * _SKEW_DOWNSIDE_PENALTY_FACTOR
+            return float(max(0.0, base_ev * (1.0 - downside_penalty)))
+
+        return float(base_ev)
 
     def _find_best_rollover_target(
         self, user_id: int, exclude_symbols: Optional[set] = None
     ) -> str:
-        """掃描使用者 Watchlist 與 market_cache 快取尋找下一個高 EV 衛星標的，若無則回傳 VOO"""
+        """掃描使用者 Watchlist 與 market_cache 快取尋找下一個高 EV 衛星標的，若無則回傳 VOO。
+        自動避開即將在 3 天內發布財報的高波事件標的。"""
+        from database.calendar_cache import get_cached_earnings
         from database.watchlist import get_user_watchlist
 
         exclude = {
@@ -61,12 +89,26 @@ class _OpportunityCostMixin:
             logger.error(f"取得 user {user_id} watchlist 失敗: {e}")
             return "VOO"
 
+        today_dt = datetime.now().date()
         best_symbol = "VOO"
-        best_ev = 0.05  # 沿用原始程式碼註解中的門檻 "EV > 0.05"
+        best_ev = 0.05  # 門檻 EV > 0.05
         for sym, _ in watchlist:
             sym_u = str(sym).upper()
             if sym_u in exclude:
                 continue
+
+            # 避開即將發布財報的標的 (機構風控：避開二元事件黑天鵝)
+            try:
+                earn = get_cached_earnings(sym_u)
+                if earn and earn.get("earnings_date"):
+                    earn_date_str = str(earn["earnings_date"])[:10]
+                    earn_dt = datetime.strptime(earn_date_str, "%Y-%m-%d").date()
+                    diff_days = (earn_dt - today_dt).days
+                    if 0 <= diff_days <= _EARNINGS_PRE_EVENT_BUFFER_DAYS:
+                        continue
+            except Exception:
+                pass
+
             ev = self._calculate_ev_proxy(sym_u)
             if ev > best_ev:
                 best_ev = ev
@@ -123,7 +165,7 @@ class _OpportunityCostMixin:
         """
         邏輯 (2): 機會成本與期望值比對 (包含勝率傾斜)
         結合 PowerSqueeze 動能指標，當持倉動能衰退且 Watchlist 具備突破條件時，
-        計算期望值並給出轉倉建議。
+        計算期望值並給出具備清晰履約價規格的轉倉建議。
         """
         # 假設 PowerSqueeze 指標中，數值越低代表動能越弱，越高代表突破動能強烈
         holding_momentum_decaying = (
@@ -163,8 +205,15 @@ class _OpportunityCostMixin:
 
             if is_extreme_asymmetric:
                 strategy = "Shares + ITM Call"
-                reason_suffix = f" (🎯 條件二極致勝率觸發: 低IVR({target_ivr:.1f}%) + 鋼鐵牆築底 + 巨鯨掃貨，強制啟動轉倉)"
+                target_strike = round(target_spot * 0.95, 2) if target_spot > 0 else 0.0
+                strike_note = (
+                    f" (ITM 70Δ Call @ ${target_strike:.2f}, 30-45 DTE)"
+                    if target_spot > 0
+                    else ""
+                )
+                reason_suffix = f" (🎯 條件二極致勝率觸發: 低IVR({target_ivr:.1f}%) + 鋼鐵牆築底 + 巨鯨掃貨{strike_note}，強制啟動轉倉)"
             else:
+                strategy = "Buy Shares"
                 reason_suffix = ""
 
             # 強制優先採用極致不對稱勝率條件
@@ -354,7 +403,47 @@ class _OpportunityCostMixin:
             except (ValueError, TypeError) as e:
                 reasons.append(f"條件四❌：主力買盤到期日解析失敗: {e}")
 
-        all_passed = c1_passed and c2_passed and c3_passed and c4_passed
+        # --- 條件五：總經負 Gamma 與財報黑天鵝防禦閘門 (前四項通過時才發動) ---
+        c5_passed = True
+        if c1_passed and c2_passed and c3_passed and c4_passed:
+            try:
+                from database.calendar_cache import get_cached_earnings
+
+                earn = get_cached_earnings(candidate_symbol)
+                if earn and earn.get("earnings_date"):
+                    earn_date_str = str(earn["earnings_date"])[:10]
+                    earn_dt = datetime.strptime(earn_date_str, "%Y-%m-%d").date()
+                    days_to_er = (earn_dt - datetime.now().date()).days
+                    if 0 <= days_to_er <= _EARNINGS_PRE_EVENT_BUFFER_DAYS:
+                        c5_passed = False
+                        reasons.append(
+                            f"條件五❌：即將於 {days_to_er} 天內發布財報，避開高波事件風險"
+                        )
+            except Exception:
+                pass
+
+            if c5_passed:
+                try:
+                    from market_analysis.index_microstructure import (
+                        get_market_regime,
+                    )
+
+                    regime = await get_market_regime()
+                    if regime in (
+                        "SHORT_GAMMA_CRITICAL",
+                        "SYSTEMIC_LIQUIDITY_CRISIS",
+                    ):
+                        c5_passed = False
+                        reasons.append(
+                            f"條件五❌：大盤處於 `{regime}` 負 Gamma 踩踏模式，嚴禁開倉個股買方"
+                        )
+                except Exception:
+                    pass
+
+            if c5_passed:
+                reasons.append("條件五✅：總經環境與財報事件風控安全")
+
+        all_passed = c1_passed and c2_passed and c3_passed and c4_passed and c5_passed
         return all_passed, " | ".join(reasons)
 
     async def evaluate_opportunity_cost_for_satellites(

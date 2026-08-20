@@ -200,13 +200,29 @@ async def evaluate_margin_defense_impl(
         ) and quantity < 0
         sell_action = "BTC" if is_short_option else "STC"
 
+        has_actual_deficit = total_deficit > 0.0
+        if has_actual_deficit:
+            target_asset = "CASH"
+            buy_label = "保留現金（補足現金儲備，消除追繳風險）"
+            strategy_desc = f"{sell_action} 100% 部位以保留現金 (消除保證金追繳風險)"
+            dest_reason = (
+                "建議平倉釋放資金保留為現金儲備，優先補足保證金缺口以消除追繳風險。"
+            )
+        else:
+            target_asset = "BOXX"
+            buy_label = "轉入 BOXX（鎖定無風險利息）"
+            strategy_desc = f"{sell_action} 100% 轉倉 BOXX (鎖定無風險利息)"
+            dest_reason = (
+                "大盤宏觀風控紅線亮起，VOO 亦會同向下跌無法提供防禦，"
+                f"建議 {sell_action} 100% 部位轉倉至 BOXX 鎖定無風險利息。"
+            )
+
         reason_text = (
             f"🚨 **槓桿與保證金防禦 (Leverage & Margin Defense)**\n"
             f"大盤 Regime: `{regime}`\n"
             f"保證金壓力判定: {deficit_desc}\n"
-            f"{symbol} 個股結構無勝率 (結構性破位 或 主力空頭封殺)，"
-            f"大盤宏觀風控紅線亮起，VOO 亦會同向下跌無法提供防禦，"
-            f"建議 {sell_action} 100% 部位轉倉至 BOXX 鎖定無風險利息。"
+            f"{symbol} 個股結構無勝率 (結構性破位 或 主力空頭封殺)。\n"
+            f"{dest_reason}"
         )
 
         # --- 強制清倉前檢查既有委託單，避免矛盾指令或重複疊加下單 ---
@@ -249,11 +265,11 @@ async def evaluate_margin_defense_impl(
                 "symbol": symbol,
                 "action": action,
                 "sell_ratio": sell_ratio,
-                "target_core": "BOXX",
+                "target_core": target_asset,
                 "reason": reason_text,
-                "suggested_strategy": f"{sell_action} 100% 轉倉 BOXX (鎖定無風險利息)",
+                "suggested_strategy": strategy_desc,
                 "sell_action": sell_action,
-                "buy_action_label": "轉入 BOXX（鎖定無風險利息）",
+                "buy_action_label": buy_label,
                 "is_manual_override_required": True,
                 "scenario": RolloverScenario.MARGIN_DEFENSE.value,
             }

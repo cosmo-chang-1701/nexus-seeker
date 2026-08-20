@@ -51,3 +51,20 @@ _ENTRY_UOA_CAP_RATIO_THRESHOLD: float = (
 )
 _ENTRY_ASYMMETRIC_ROOM_PCT: float = 0.05  # 條件三：上方須保留的最低非對稱獲利空間
 _ENTRY_UOA_MIN_DTE: int = 7  # 條件四：驅動進場的主力 UOA 買盤最低 DTE 要求
+
+# --- 華爾街資深交易員與機構風控量化常數 ---
+_BEAR_CALL_SPREAD_WING_ATR_MULT: float = (
+    1.5  # Bear Call Spread 保護腳距賣方腳的 15m ATR 寬度倍數
+)
+_DYNAMIC_STOP_MIN_ATR_MULT: float = (
+    1.0  # 動態防洗盤停損相對於現價的最小 ATR 距離 (防止太窄被洗)
+)
+_DYNAMIC_STOP_MAX_ATR_MULT: float = (
+    3.0  # 動態防洗盤停損相對於現價的最大 ATR 距離 (防止太寬失控)
+)
+_SKEW_DOWNSIDE_PENALTY_FACTOR: float = (
+    0.5  # Skew 偏空 (<50%) 時 EV 計算之最大下行風險懲罰係數
+)
+_EARNINGS_PRE_EVENT_BUFFER_DAYS: int = (
+    3  # 機會成本轉倉候選標的避開即將發布財報的最小緩衝天數
+)

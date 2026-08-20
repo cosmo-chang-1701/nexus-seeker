@@ -176,17 +176,40 @@ class PortfolioMonitorCog(commands.Cog):
                     r_data = radar_cache_map.get(sym)
                     if r_data:
                         try:
+                            # 追蹤 IVR 變動量 (供期權快速通道偵測 IV 崩塌)
+                            curr_ivr = float(
+                                r_data.get("iv_metrics", {}).get("iv_rank", 0.0)
+                                if r_data.get("iv_metrics")
+                                else 0.0
+                            )
+                            ivr_drop_val = 0.0
+                            try:
+                                from database.cache import get_kv_cache, save_kv_cache
+
+                                prev_ivr_val = get_kv_cache(f"prev_ivr_{sym.upper()}")
+                                if prev_ivr_val is not None:
+                                    prev_ivr = float(prev_ivr_val)
+                                    if prev_ivr > curr_ivr:
+                                        ivr_drop_val = prev_ivr - curr_ivr
+                                await save_kv_cache(
+                                    f"prev_ivr_{sym.upper()}",
+                                    curr_ivr,
+                                )
+                            except Exception:
+                                pass
+
+                            atr_val = float(r_data.get("atr_14", 0.0))
+                            spot_val = float(
+                                r_data.get("quote", {}).get("c", 0.0)
+                                if r_data.get("quote")
+                                else 0.0
+                            )
+
                             metrics = {
-                                "spot_price": float(
-                                    r_data.get("quote", {}).get("c", 0.0)
-                                    if r_data.get("quote")
-                                    else 0.0
-                                ),
-                                "ivr": float(
-                                    r_data.get("iv_metrics", {}).get("iv_rank", 0.0)
-                                    if r_data.get("iv_metrics")
-                                    else 0.0
-                                ),
+                                "spot_price": spot_val,
+                                "price_15m_close": spot_val,
+                                "ivr": curr_ivr,
+                                "ivr_drop": ivr_drop_val,
                                 "max_pain": float(
                                     r_data.get("max_pain", {}).get("max_pain") or 0.0
                                 )
@@ -235,7 +258,8 @@ class PortfolioMonitorCog(commands.Cog):
                                     if r_data.get("skew")
                                     else 0.0
                                 ),
-                                "atr_14": float(r_data.get("atr_14", 0.0)),
+                                "atr_14": atr_val,
+                                "atr_15m": atr_val,
                                 "hvn": float(r_data.get("vp_data", {}).get("hvn", 0.0))
                                 if isinstance(r_data.get("vp_data"), dict)
                                 else 0.0,
@@ -252,7 +276,9 @@ class PortfolioMonitorCog(commands.Cog):
                             )
                             fallback_metrics = {
                                 "spot_price": 0.0,
+                                "price_15m_close": 0.0,
                                 "ivr": 0.0,
+                                "ivr_drop": 0.0,
                                 "max_pain": 0.0,
                                 "put_wall": 0.0,
                                 "call_wall": 0.0,
@@ -261,6 +287,7 @@ class PortfolioMonitorCog(commands.Cog):
                                 "sqz_mom": 0.0,
                                 "skew": 0.0,
                                 "atr_14": 0.0,
+                                "atr_15m": 0.0,
                                 "hvn": 0.0,
                                 "lvn": 0.0,
                                 "dte": 99,
@@ -269,7 +296,9 @@ class PortfolioMonitorCog(commands.Cog):
                     else:
                         fallback_metrics = {
                             "spot_price": 0.0,
+                            "price_15m_close": 0.0,
                             "ivr": 0.0,
+                            "ivr_drop": 0.0,
                             "max_pain": 0.0,
                             "put_wall": 0.0,
                             "call_wall": 0.0,
@@ -278,6 +307,7 @@ class PortfolioMonitorCog(commands.Cog):
                             "sqz_mom": 0.0,
                             "skew": 0.0,
                             "atr_14": 0.0,
+                            "atr_15m": 0.0,
                             "hvn": 0.0,
                             "lvn": 0.0,
                             "dte": 99,
@@ -317,6 +347,7 @@ class PortfolioMonitorCog(commands.Cog):
                             "price_15m_close", metrics["spot_price"]
                         ),
                         "ivr": metrics["ivr"],
+                        "ivr_drop": metrics.get("ivr_drop", 0.0),
                         "max_pain": metrics["max_pain"],
                         "put_wall": metrics["put_wall"],
                         "call_wall": metrics["call_wall"],

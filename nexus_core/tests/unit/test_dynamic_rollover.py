@@ -2563,3 +2563,180 @@ async def test_evaluate_opportunity_cost_for_satellites_blocked_by_entry_gate(
     )
     assert result == []
     mock_entry_gate.assert_awaited_once()
+
+
+@patch(
+    "database.market_cache.get_market_cache",
+    return_value={"reference_spot_price": 100.0, "expected_move_upper": 110.0},
+)
+def test_skew_adjusted_ev_proxy_downside_penalty(
+    mock_cache: MagicMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """測試 Skew-Adjusted EV：當 Skew Percentile < 50%（市場定價極端下行尾部風險）時，EV 應依據 Skew 進行折價扣減。"""
+    # 正常無 Skew 恐慌的情境 (skew_percentile = 70.0%)
+    ev_normal = engine._calculate_ev_proxy(
+        symbol="TEST",
+        skew_percentile=70.0,
+    )
+    assert ev_normal == pytest.approx(0.10, rel=1e-3)
+
+    # 存在下行尾部恐慌 (skew_percentile = 30.0%)
+    # penalty = (50 - 30) / 50 * 0.5 = 0.20
+    # adjusted_ev = 0.10 * (1 - 0.20) = 0.08
+    ev_penalized = engine._calculate_ev_proxy(
+        symbol="TEST",
+        skew_percentile=30.0,
+    )
+    assert ev_penalized == pytest.approx(0.08, rel=1e-3)
+    assert ev_penalized < ev_normal
+
+
+@patch("database.watchlist.get_user_watchlist", return_value=[("NVDA", None)])
+@patch("database.calendar_cache.get_cached_earnings")
+def test_find_best_rollover_target_filters_earnings_pre_event(
+    mock_earnings: MagicMock,
+    mock_watchlist: MagicMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """測試候選標的預篩選：3 天內即將發布財報的標的應被過濾，防止跳空雙殺。"""
+    from datetime import datetime, timedelta
+
+    near_earnings_date = (datetime.now() + timedelta(days=2)).strftime("%Y-%m-%d")
+    mock_earnings.return_value = {"earnings_date": near_earnings_date}
+
+    best_sym = engine._find_best_rollover_target(user_id=1, exclude_symbols={"AMD"})
+    assert best_sym == "VOO"
+
+
+@pytest.mark.asyncio
+@patch("database.calendar_cache.get_cached_earnings", return_value=None)
+@patch(
+    "market_analysis.index_microstructure.get_market_regime",
+    new_callable=AsyncMock,
+    return_value="SHORT_GAMMA_CRITICAL",
+)
+async def test_confirm_entry_signal_condition5_macro_regime_fails(
+    mock_regime: AsyncMock,
+    mock_earn: MagicMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """測試進場閘門條件五：當大盤處於 SHORT_GAMMA_CRITICAL 負 Gamma 踩踏模式時，嚴禁開倉個股買方。"""
+    import pandas as pd
+
+    radar = _green_candidate_radar()
+    # 確保條件一至四皆能通過 (last bar volume 30000 >= lookback mean 10000 * 1.5)
+    df_15m = pd.DataFrame(
+        {
+            "Close": [105.0] * 25,
+            "Volume": [10000.0] * 24 + [30000.0],
+        }
+    )
+    with patch(
+        "services.market_data_service.get_history_df",
+        new_callable=AsyncMock,
+        return_value=df_15m,
+    ):
+        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+    assert confirmed is False
+    assert "條件五❌" in reason
+    assert "SHORT_GAMMA_CRITICAL" in reason
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.index_microstructure.get_market_regime",
+    new_callable=AsyncMock,
+    return_value="SYSTEMIC_LIQUIDITY_CRISIS",
+)
+@patch("database.orders.get_user_active_orders")
+@patch("database.user_settings.get_full_user_context")
+async def test_margin_defense_cash_deficit_restores_cash(
+    mock_user_ctx: MagicMock,
+    mock_orders: MagicMock,
+    mock_regime: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """測試保證金防禦：當存在 GTC 買單現金赤字時，清倉資產應建議保留為 CASH 以補足現金儲備消除追繳風險。"""
+    portfolio = [
+        {
+            "symbol": "AMD",
+            "asset_class": "SATELLITE",
+            "quantity": 100,
+            "spot_price": 100.0,
+            "current_value": 10000.0,
+            "put_wall": 110.0,  # 跌破 put_wall (100 < 110) -> is_no_edge = True
+            "gamma_flip": 110.0,
+            "atr_14": 2.0,
+            "price_15m_close": 95.0,  # 實體破位
+        }
+    ]
+    # GTC 買單需要 5000，但用戶現金儲備為 0 -> total_deficit = 5000 > 0
+    mock_orders.return_value = [
+        {
+            "symbol": "NVDA",
+            "validity": "GTC",
+            "side": "BUY",
+            "limit_price": 50.0,
+            "quantity": 100,
+        }
+    ]
+    mock_ctx = MagicMock()
+    mock_ctx.cash_reserve = 0.0
+    mock_user_ctx.return_value = mock_ctx
+
+    with patch(
+        "market_analysis.dynamic_rollover.is_gamma_cliff_confirmed",
+        new_callable=AsyncMock,
+        return_value=True,
+    ):
+        instructions = await engine.evaluate_margin_defense(
+            user_id=1,
+            portfolio_assets=portfolio,
+        )
+
+    assert len(instructions) == 1
+    ins = instructions[0]
+    assert ins["symbol"] == "AMD"
+    assert ins["target_core"] == "CASH"
+    assert "保留現金" in ins["buy_action_label"]
+    assert "消除保證金追繳風險" in ins["suggested_strategy"]
+
+
+def test_create_dynamic_rollover_embed_hold_and_liquidate_headers() -> None:
+    """測試 Embed 呈現層：HOLD 狀態與 LIQUIDATE 狀態的清晰文案與 ANSI 排版。"""
+    # 測試 HOLD 狀態
+    embed_hold = create_dynamic_rollover_embed(
+        rollover_type="持倉防守評估",
+        sell_symbol="AMD",
+        sell_ratio=0.0,
+        buy_symbol="AMD",
+        reason="做市商支撐完好，15m 實體收盤未跌破防守線",
+        suggested_strategy="HOLD (維持現狀續抱)",
+        suggested_price="N/A",
+        strike="N/A",
+        expiry="N/A",
+        direction="HOLD",
+        scenario="SATELLITE_REBALANCE",
+    )
+    assert "安全續抱" in str(embed_hold.description)
+    assert "HOLD" in str(embed_hold.fields[0].value)
+
+    # 測試 LIQUIDATE 狀態
+    embed_liq = create_dynamic_rollover_embed(
+        rollover_type="核心衛星再平衡",
+        sell_symbol="AMD",
+        sell_ratio=1.0,
+        buy_symbol="VOO",
+        reason="15m 實體破位確認",
+        suggested_strategy="Buy Shares",
+        suggested_price="Market",
+        strike="N/A",
+        expiry="N/A",
+        direction="BTO",
+        scenario="SATELLITE_REBALANCE",
+        cash_impact="$43,524",
+    )
+    assert "執行轉倉指令" in str(embed_liq.description)
+    assert "100%" in str(embed_liq.fields[0].value)
+    assert "$43,524" in str(embed_liq.fields[2].value)

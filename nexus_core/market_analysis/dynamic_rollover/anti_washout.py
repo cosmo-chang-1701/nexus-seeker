@@ -5,6 +5,7 @@ from market_analysis.sentiment.history_storage import get_indicator_percentile
 
 from . import logger
 from .constants import (
+    _BEAR_CALL_SPREAD_WING_ATR_MULT,
     _BUYER_LOCKOUT_IVR_THRESHOLD,
     _DEFAULT_MAX_ALLOCATION_PCT,
     _EUPHORIA_CAPITAL_SPLIT_PRIMARY,
@@ -690,9 +691,15 @@ async def check_satellite_rebalancing_impl(
                     for a in portfolio_assets
                     if a.get("asset_class") == "SATELLITE"
                 }
-                next_target = engine._find_best_rollover_target(
-                    user_id, exclude_symbols=satellite_symbols
-                )
+                # 機構風控鐵律：若為結構破位或空頭封殺，強制撤退回防核心資產 (VOO)，
+                # 嚴禁在停損時又去追逐另一檔高波動衛星標的 (避免 Hot Potato Rotation 擴大虧損)；
+                # 僅在極端亢奮獲利了結 (Euphoria) 或主動輪動時才尋找下一個高 EV 自選標的。
+                if is_structural_breakdown or is_whale_sto_block:
+                    next_target = "VOO"
+                else:
+                    next_target = engine._find_best_rollover_target(
+                        user_id, exclude_symbols=satellite_symbols
+                    )
 
                 if is_euphoria:
                     user_ctx = get_full_user_context(user_id)
@@ -739,13 +746,21 @@ async def check_satellite_rebalancing_impl(
                                 "cash_impact": report_90["cash_impact"],
                             }
                         )
-                        # 10% 留存原標的做 Bear Call Spread 反向收租
+                        # 10% 留存原標的做 Bear Call Spread 反向收租 (定義完整 Long Wing)
+                        short_strike = round(call_wall * 1.02, 2)
+                        wing_buffer = (
+                            _BEAR_CALL_SPREAD_WING_ATR_MULT * atr_15m
+                            if atr_15m > 0
+                            else short_strike * 0.05
+                        )
+                        long_strike = round(short_strike + wing_buffer, 2)
+                        spread_override_str = f"Bear Call Spread (${short_strike:.2f} Short / ${long_strike:.2f} Long Wing, 30-45 DTE)"
                         report_10 = engine._generate_rule_based_rebalance_report(
                             symbol,
                             metrics,
                             requested_action="LIQUIDATE",
                             target=symbol,
-                            strategy_override=f"Bear Call Spread (Short Call @ ${call_wall * 1.02:.2f})",
+                            strategy_override=spread_override_str,
                             asset_class=asset_class,
                             is_take_profit=True,
                             active_orders=user_orders,
