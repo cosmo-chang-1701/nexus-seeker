@@ -817,7 +817,7 @@ def _format_skew_commentary(
     ansi_prefix, emoji, label, bias = badge
 
     skew_state = getattr(metrics, "option_skew_state", None)
-    if skew_state:
+    if skew_state and skew_state not in detail:
         detail = f"{detail}（Skew 型態：{skew_state}）"
 
     lines = [f"{ansi_prefix}{emoji} 操作方向：{label}[0m"]
