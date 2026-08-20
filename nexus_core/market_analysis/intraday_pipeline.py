@@ -1140,6 +1140,7 @@ class IntradayScanPipeline:
 
         hb_symbol = evaluation.metrics.symbol
         is_hedging = hb_symbol.upper() in ["BOXX", "BIL"]
+        hb_uoa_fetched_ok = False
         try:
             if is_hedging:
                 from services import market_data_service
@@ -1163,6 +1164,7 @@ class IntradayScanPipeline:
                     SentimentEngine.detect_uoa(hb_symbol),
                     SentimentEngine.get_unified_max_pain(hb_symbol),
                 )
+                hb_uoa_fetched_ok = True
         except Exception as sup_err:
             logger.warning(f"[{hb_symbol}] 心跳補充數據取得失敗: {sup_err}")
             hb_quote, hb_iv_metrics, hb_pcr_data, hb_uoa_list, hb_max_pain = (
@@ -1172,6 +1174,17 @@ class IntradayScanPipeline:
                 [],
                 None,
             )
+
+        if hb_uoa_fetched_ok:
+            # 心跳已花代價算好 UOA (併發抓多個到期日期權鏈)，寫回 /x 終端
+            # 共用的 kv_cache，避免 /x 對同一標的重複觸發昂貴的自癒偵測。
+            # 快取寫入失敗僅記錄警告，不影響本次心跳 embed 的正常組裝。
+            try:
+                from database.cache import save_kv_cache
+
+                await save_kv_cache(f"uoa_{hb_symbol.upper()}", hb_uoa_list)
+            except Exception as cache_err:
+                logger.warning(f"[{hb_symbol}] UOA 快取寫回失敗: {cache_err}")
 
         embed = create_watchlist_signal_embed(
             symbol=hb_symbol,

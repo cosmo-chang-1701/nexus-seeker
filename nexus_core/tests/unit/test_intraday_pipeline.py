@@ -317,6 +317,153 @@ async def test_build_watchlist_heartbeat_embed_includes_option_plan(
     assert "Skew 避險情緒折價" in create_embed_kwargs["buy_rationale"]
 
 
+@pytest.mark.asyncio
+async def test_build_watchlist_heartbeat_embed_writes_back_uoa_cache(
+    intraday_pipeline: Any,
+) -> None:
+    """
+    測試: 心跳算出的 UOA 結果應寫回 /x 終端共用的 `uoa_{symbol}` kv_cache，
+    避免 /x 對同一標的重複觸發昂貴的 UOA 自癒偵測 (併發抓多個到期日期權鏈)。
+    """
+    evaluation = SimpleNamespace(
+        metrics=SimpleNamespace(
+            symbol="MU",
+            current_price=410.5,
+            iv_rank=68.0,
+            option_skew=6.25,
+            option_skew_state="左偏保護",
+            buy_zone_status="🟡 測試買區",
+            sell_zone_status="⚪ 測試賣區",
+        ),
+        tactical=SimpleNamespace(
+            alert_level="yellow",
+            scenario="premium-harvest",
+            sddm_route="SHIELD",
+        ),
+        event_context=SimpleNamespace(summary="財報前風控"),
+        symbol_gex=None,
+    )
+    user_context = SimpleNamespace(user_id=42, capital=120000.0, risk_limit=12.0)
+    uoa_result = [{"trade_type": "SWEEP", "strike": 420.0}]
+
+    with patch(
+        "ui.formatter.generate_ansi_watchlist_report",
+        return_value="heartbeat snapshot",
+    ), patch(
+        "database.is_symbol_in_portfolio",
+        return_value=False,
+    ), patch(
+        "database.get_user_holdings",
+        return_value=[],
+    ), patch(
+        "market_analysis.intraday_pipeline.derive_watchlist_option_guidance",
+        return_value="option guidance",
+    ), patch(
+        "market_analysis.intraday_pipeline.build_watchlist_option_plan",
+        new_callable=AsyncMock,
+        return_value="option-plan",
+    ), patch(
+        "market_analysis.intraday_pipeline.build_watchlist_skew_rule_commentary",
+        return_value="rule-skew-commentary",
+    ), patch(
+        "cogs.embed_builder.create_watchlist_signal_embed",
+        return_value=MagicMock(),
+    ), patch(
+        "services.market_data_service.get_quote",
+        new_callable=AsyncMock,
+        return_value={"c": 410.5},
+    ), patch(
+        "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
+        new_callable=AsyncMock,
+        return_value=None,
+    ), patch(
+        "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
+        new_callable=AsyncMock,
+        return_value={"pcr": 1.0},
+    ), patch(
+        "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
+        new_callable=AsyncMock,
+        return_value=uoa_result,
+    ), patch(
+        "market_analysis.sentiment_engine.SentimentEngine.get_unified_max_pain",
+        new_callable=AsyncMock,
+        return_value={"max_pain": 400.0},
+    ), patch(
+        "database.cache.save_kv_cache",
+        new_callable=AsyncMock,
+    ) as mock_save_kv_cache:
+        await intraday_pipeline._build_watchlist_heartbeat_embed(
+            evaluation, user_context
+        )
+
+    mock_save_kv_cache.assert_awaited_once_with("uoa_MU", uoa_result)
+
+
+@pytest.mark.asyncio
+async def test_build_watchlist_heartbeat_embed_skips_uoa_writeback_on_fetch_failure(
+    intraday_pipeline: Any,
+) -> None:
+    """
+    測試: 若心跳補充數據抓取失敗 (例如報價 API 出錯)，不應該用空列表覆寫既有的
+    `uoa_{symbol}` kv_cache -- 避免把 /x 終端原本有效的快取資料誤清空。
+    """
+    evaluation = SimpleNamespace(
+        metrics=SimpleNamespace(
+            symbol="MU",
+            current_price=410.5,
+            iv_rank=68.0,
+            option_skew=6.25,
+            option_skew_state="左偏保護",
+            buy_zone_status="🟡 測試買區",
+            sell_zone_status="⚪ 測試賣區",
+        ),
+        tactical=SimpleNamespace(
+            alert_level="yellow",
+            scenario="premium-harvest",
+            sddm_route="SHIELD",
+        ),
+        event_context=SimpleNamespace(summary="財報前風控"),
+        symbol_gex=None,
+    )
+    user_context = SimpleNamespace(user_id=42, capital=120000.0, risk_limit=12.0)
+
+    with patch(
+        "ui.formatter.generate_ansi_watchlist_report",
+        return_value="heartbeat snapshot",
+    ), patch(
+        "database.is_symbol_in_portfolio",
+        return_value=False,
+    ), patch(
+        "database.get_user_holdings",
+        return_value=[],
+    ), patch(
+        "market_analysis.intraday_pipeline.derive_watchlist_option_guidance",
+        return_value="option guidance",
+    ), patch(
+        "market_analysis.intraday_pipeline.build_watchlist_option_plan",
+        new_callable=AsyncMock,
+        return_value="option-plan",
+    ), patch(
+        "market_analysis.intraday_pipeline.build_watchlist_skew_rule_commentary",
+        return_value="rule-skew-commentary",
+    ), patch(
+        "cogs.embed_builder.create_watchlist_signal_embed",
+        return_value=MagicMock(),
+    ), patch(
+        "services.market_data_service.get_quote",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("quote api down"),
+    ), patch(
+        "database.cache.save_kv_cache",
+        new_callable=AsyncMock,
+    ) as mock_save_kv_cache:
+        await intraday_pipeline._build_watchlist_heartbeat_embed(
+            evaluation, user_context
+        )
+
+    mock_save_kv_cache.assert_not_awaited()
+
+
 def _build_skew_test_metrics(**overrides: Any) -> Any:
     from models.schemas import EnhancedWatchlistMetrics
 
