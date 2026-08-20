@@ -316,6 +316,7 @@ The platform implements an advanced macro risk-control layer that dynamically ad
   - Individual symbol GEX profiles (Put Wall, Call Wall, Net GEX) fetched from `/api/v1/scrape/options/{symbol}/gex` are cached in `kv_cache` with a 4-hour TTL (`14400` seconds) to optimize rendering speed for the `/x` terminal and reduce edge scraper overhead.
 - **Tactical Scaling**:
   - Under `SHORT_GAMMA_CRITICAL`, the watchlist scanner in `intraday_pipeline.py` automatically scales `dynamic_grid_step` by **$1.5\times$** to slow down capital depletion during market washouts.
+- **Macro GEX Fetch Degradation & Last-Known-Good Cache Fallback**: `fetch_gex_metrics()` (the SPY-level macro GEX fetch behind `get_market_regime()`) persists every successful scrape into a dedicated `macro_gex_metrics_cache` kv_cache entry. If the live `/api/v1/scrape/macro/gex` call to `TUNNEL_URL` fails or times out (a broad `except Exception`, logged as `無法從 Tunnel Scraper 獲取 GEX 數據`), the function now replays the **last successfully fetched** `gamma_flip`/`spy_spot`/`put_wall` (tagged with `_is_stale_cache: True`) instead of the hardcoded constants (`gamma_flip=515.0`, calibrated to an old SPY price level). This matters because `get_market_regime()` and `cogs/unified_terminal/utils.py`'s `gamma_flip_line` comparison both pit this value against the **live** spot price — a stale hardcoded constant far below current market levels made `spy_spot < gamma_flip` structurally almost impossible to trigger true during exactly the high-load/high-volatility windows when a real negative-gamma regime is most likely and most important to detect. The hardcoded constants are still used as the absolute last resort when no prior successful fetch has ever been cached (e.g. first boot). This mirrors the pre-existing stale-cache pattern already used by the per-symbol `fetch_symbol_gex_metrics()` in the same file.
 
 ### 2. CME FedWatch Forecasting, FRED Metrics & Escape Windows
 - **Rate Probabilities & Dual Caching**:
@@ -354,6 +355,7 @@ The platform implements an advanced macro risk-control layer that dynamically ad
   ```bash
   python cli.py admin force-macro-update
   ```
+- **Stale-Cache Marker**: Both the `/force_macro_update` slash command (`cogs/trading/admin_commands.py`) and the CLI equivalent (`cli.py`) check the `_is_stale_cache` flag on the dict returned by `fetch_gex_metrics()` and append a ` ⚠️ [使用快取資料]` marker to the reported GEX line whenever the live edge-scraper fetch failed and the response is the last-known-good cached value (see §1 above) rather than a fresh scrape — this is not treated as an error (the command still reports overall success), it only flags that the displayed GEX numbers are not live.
 
 ### 6. Volume Profile, Dark Pool & Triple Discount Pricing (TDP)
 - **V-POC & DP-POC Calculation**: The engine calculates the Volume Point of Control (POC) using `pandas-ta` volume profile functions, and fetches the Dark Pool Point of Control (DP-POC).

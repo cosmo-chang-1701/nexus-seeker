@@ -168,7 +168,7 @@ docker compose up -d --build
 - **`/calendar`**：總經與自選股財報事件時間軸日曆，支援 TTE 倒數與發布日程查詢。
 - **`/market`**：全局宏觀風控情報中心，深度整合 SPX、VIX、US10Y、零 Gamma 翻轉線、FedWatch 利率定價、RRP 逆回購、Fed 資產負債表與利率逃頂窗口防禦。
 - **`/sys_health`**：`(Hidden)` 系統健康診斷面板，檢視主節點與邊緣節點的即時硬體資源 (RAM, CPU, RSS, Swap) 與快取狀態。
-- **`/force_macro_update`**：`(Admin 專用)` 強制更新大盤 GEX 與 FedWatch 數據快取。
+- **`/force_macro_update`**：`(Admin 專用)` 強制更新大盤 GEX 與 FedWatch 數據快取。若邊緣爬蟲當下抓取失敗，會自動改用最近一次成功抓取的快取數據，並在回報訊息中標記 `⚠️ [使用快取資料]` 提醒非即時數據。
 
 > 在主機本機端也提供 `cli.py` 開發者工具，供管理員手動觸發爬蟲或強制執行掃描任務。
 
