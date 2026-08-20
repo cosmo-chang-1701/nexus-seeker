@@ -209,22 +209,40 @@ class _AntiWashoutMixin:
         return net_ratio, note
 
     def _maybe_append_tax_risk_note(
-        self, is_01dte_expanded: bool, is_same_symbol_reentry: bool
+        self,
+        is_01dte_expanded: bool,
+        is_same_symbol_reentry: bool,
+        holding_period_days: Optional[int] = None,
     ) -> str:
         """稅務風險資訊性提示（純附加，不做任何攔截閘門，本系統不代為判定）。
 
-        涵蓋兩個最有風險的既有分支：
+        涵蓋三個最有風險的既有分支：
         1. 0/1 DTE 價內短期合約平倉，可能觸發指派 (Assignment)。
         2. 同標的先賣出後又立即重新建倉 (如 Euphoria 雙軌機制留存部位開 Bear
            Call Spread)，可能落入 Wash Sale 規則範圍。
+        3. 若持倉來源標記了 acquired_at（透過 /add_holding 或 /edit_holding
+           設定），提示目前屬於長期 (>365 天) 或短期 (<=365 天) 資本利得稅率
+           區間，供使用者評估是否值得延後平倉以跨越長期門檻。此為單一
+           acquired_at 粗略估計，非完整多批次 (Lot-based FIFO) 成本基礎追蹤。
         """
-        if not (is_01dte_expanded or is_same_symbol_reentry):
-            return ""
         notes = []
         if is_01dte_expanded:
             notes.append("0/1 DTE 價內合約平倉可能觸發指派 (Assignment)")
         if is_same_symbol_reentry:
             notes.append("同標的近期重新建立相似曝險，請留意 Wash Sale 規則")
+        if holding_period_days is not None:
+            if holding_period_days > 365:
+                notes.append(
+                    f"已持有 {holding_period_days} 天 (>365)，符合長期資本利得稅率區間"
+                )
+            else:
+                days_left = 365 - holding_period_days
+                notes.append(
+                    f"已持有 {holding_period_days} 天 (<=365)，屬短期資本利得稅率區間"
+                    f"（距長期門檻尚餘 {days_left} 天）"
+                )
+        if not notes:
+            return ""
         return (
             "\n⚠️ **稅務提醒**：" + "；".join(notes) + "（本系統不代為判定，僅供參考）"
         )
@@ -305,38 +323,44 @@ class _AntiWashoutMixin:
 
         return final_action, final_target, options_strategy, system_conflict_note
 
-    def _resolve_target_reference_price(
-        self, target_core_name: str, fallback_spot: float
-    ) -> float:
+    async def _resolve_target_reference_price(self, target_core_name: str) -> float:
         """
         解析轉倉目標資產的參考價格，用於估算可買入股數 (僅供文字建議粗估)。
-        當目標為 VOO/SPY 等核心資產時，改用與 _calculate_ev_proxy 相同的
-        market_cache 快取讀取 reference_spot_price，取代過期的硬編碼估計值；
-        其餘情況維持原有 fallback 順序 (該資產自身現價 → 具名備援常數)。
+        三層備援（與「執行試算」按鈕 RolloverActionView.btn_execute_callback
+        共用同一順序）：market_cache 快取 → 即時報價 → 具名備援常數。
+        市場快取（market_cache）僅涵蓋已預熱的期權 Watchlist 標的，BOXX 等
+        無選擇權鏈的純現金等價 ETF 通常不會出現在該表中，因此不可只退回
+        「被賣出資產自身的現價」（兩者價格通常無關，例如賣出 NVDA 轉倉 BOXX
+        絕不能用 NVDA 現價估算 BOXX 股數），而是改嘗試即時報價。
         """
-        if "VOO" in target_core_name or "SPY" in target_core_name:
-            from database.market_cache import get_market_cache
+        from database.market_cache import get_market_cache
 
-            try:
-                row = get_market_cache(target_core_name)
-                if row:
-                    cached_price = float(row.get("reference_spot_price") or 0.0)
-                    if cached_price > 0:
-                        return cached_price
-            except Exception as e:
-                logger.warning(
-                    f"讀取 {target_core_name} market_cache 參考價格失敗: {e}"
-                )
+        try:
+            row = get_market_cache(target_core_name)
+            if row:
+                cached_price = float(row.get("reference_spot_price") or 0.0)
+                if cached_price > 0:
+                    return cached_price
+        except Exception as e:
+            logger.warning(f"讀取 {target_core_name} market_cache 參考價格失敗: {e}")
 
-            logger.warning(
-                f"{target_core_name} 快取參考價格缺失，退回備援估計值 "
-                f"${_FALLBACK_TARGET_PRICE_ESTIMATE:.2f}"
-            )
-            return _FALLBACK_TARGET_PRICE_ESTIMATE
+        try:
+            from services import market_data_service
 
-        return fallback_spot if fallback_spot > 0 else _FALLBACK_TARGET_PRICE_ESTIMATE
+            quote = await market_data_service.get_quote(target_core_name)
+            live_price = float(quote.get("c") or 0.0) if quote else 0.0
+            if live_price > 0:
+                return live_price
+        except Exception as e:
+            logger.warning(f"讀取 {target_core_name} 即時報價失敗: {e}")
 
-    def _estimate_cash_recovery(
+        logger.warning(
+            f"{target_core_name} 快取與即時報價皆缺失，退回備援估計值 "
+            f"${_FALLBACK_TARGET_PRICE_ESTIMATE:.2f}"
+        )
+        return _FALLBACK_TARGET_PRICE_ESTIMATE
+
+    async def _estimate_cash_recovery(
         self,
         target_core_name: str,
         spot: float,
@@ -344,8 +368,14 @@ class _AntiWashoutMixin:
         current_value: float,
         is_01dte_expanded: bool,
         dte_risk_parity_scale: float,
-    ) -> Tuple[str, str]:
-        """資金回收與目標核心資產買入預估 (結合風險平價口數縮放)。"""
+    ) -> Tuple[str, str, float]:
+        """資金回收與目標核心資產買入預估 (結合風險平價口數縮放)。
+        回傳 (cash_str, shares_guidance_str, target_entry_price)——
+        target_entry_price 為轉入目標資產的參考進場價，供呼叫端填入
+        Discord Embed「建議限價 (Limit)」欄位，取代過去恆為 "Market" 的佔位字串。
+        """
+        target_est_price = await self._resolve_target_reference_price(target_core_name)
+
         if current_value > 0:
             recovered_cash = current_value
         elif position_shares > 0 and spot > 0:
@@ -355,9 +385,6 @@ class _AntiWashoutMixin:
 
         if recovered_cash > 0:
             cash_str = f"${recovered_cash:,.0f}"
-            target_est_price = self._resolve_target_reference_price(
-                target_core_name, spot
-            )
             target_shares_est = int(recovered_cash / target_est_price)
             if is_01dte_expanded:
                 target_shares_est = max(
@@ -374,9 +401,9 @@ class _AntiWashoutMixin:
             cash_str = "全數部位資金"
             shares_guidance_str = f"{target_core_name}（全額買入）"
 
-        return cash_str, shares_guidance_str
+        return cash_str, shares_guidance_str, target_est_price
 
-    def _generate_rule_based_rebalance_report(
+    async def _generate_rule_based_rebalance_report(
         self,
         symbol: str,
         metrics: dict,
@@ -442,7 +469,11 @@ class _AntiWashoutMixin:
 
         # ━━━ 資金回收與目標核心資產買入預估 (結合風險平價口數縮放) ━━━
         target_core_name = target if target else "VOO"
-        cash_str, shares_guidance_str = self._estimate_cash_recovery(
+        (
+            cash_str,
+            shares_guidance_str,
+            target_entry_price,
+        ) = await self._estimate_cash_recovery(
             target_core_name=target_core_name,
             spot=spot,
             position_shares=position_shares,
@@ -484,9 +515,22 @@ class _AntiWashoutMixin:
                 f"點差 {spread_pct:.1%})，建議採限價單並留意滑價，避免市價單重擊點差。"
             )
 
+        holding_period_days: Optional[int] = None
+        if final_action in ("LIQUIDATE", "REDUCE"):
+            acquired_at_str = metrics.get("acquired_at")
+            if acquired_at_str:
+                try:
+                    from datetime import datetime
+
+                    acquired_dt = datetime.strptime(str(acquired_at_str), "%Y-%m-%d")
+                    holding_period_days = (datetime.now() - acquired_dt).days
+                except (ValueError, TypeError):
+                    holding_period_days = None
+
         tax_note = self._maybe_append_tax_risk_note(
             is_01dte_expanded=is_01dte_expanded and final_action == "LIQUIDATE",
             is_same_symbol_reentry=False,
+            holding_period_days=holding_period_days,
         )
 
         dual_track_note = (
@@ -539,6 +583,11 @@ class _AntiWashoutMixin:
             "cash_impact": cash_str,
             "matching_order": matching_order,
             "is_illiquid_warning": is_illiquid_warning,
+            # 注意：這裡刻意採用 target_entry_price（轉入目標資產的參考進場價），
+            # 而非上面用於防守被賣出部位的 stop-limit `limit_price` 區域變數——
+            # Discord Embed 的「建議限價 (Limit)」欄位語意上對應的是買入目標資產
+            # 的委託價，兩者絕不可混用。
+            "limit_price": target_entry_price,
         }
 
 
@@ -598,6 +647,7 @@ async def check_satellite_rebalancing_impl(
             dte: int = int(asset.get("dte", 99))
             price_15m_close: float = float(asset.get("price_15m_close", spot))
             atr_15m: float = float(asset.get("atr_15m", atr_14))
+            acquired_at: Optional[str] = asset.get("acquired_at")
 
             # 計算比例
             current_alloc: float = (
@@ -665,6 +715,7 @@ async def check_satellite_rebalancing_impl(
                 "resistance_gex": resistance_gex,
                 "bid": float(asset.get("bid", 0.0)),
                 "ask": float(asset.get("ask", 0.0)),
+                "acquired_at": acquired_at,
             }
 
             # 3. 目標區獲利解鎖完成
@@ -713,7 +764,7 @@ async def check_satellite_rebalancing_impl(
                     if user_ctx.can_trade_spreads and is_exhaustion_confirmed:
                         # 90/10 權限資金拆分 - 衰竭確認，建立 Bear Call Spread 反向收租
                         # 90% 轉入新標的
-                        report_90 = engine._generate_rule_based_rebalance_report(
+                        report_90 = await engine._generate_rule_based_rebalance_report(
                             symbol,
                             metrics,
                             requested_action="LIQUIDATE",
@@ -744,6 +795,7 @@ async def check_satellite_rebalancing_impl(
                                     "trigger_condition_report"
                                 ],
                                 "cash_impact": report_90["cash_impact"],
+                                "limit_price": report_90["limit_price"],
                             }
                         )
                         # 10% 留存原標的做 Bear Call Spread 反向收租 (定義完整 Long Wing)
@@ -755,7 +807,7 @@ async def check_satellite_rebalancing_impl(
                         )
                         long_strike = round(short_strike + wing_buffer, 2)
                         spread_override_str = f"Bear Call Spread (${short_strike:.2f} Short / ${long_strike:.2f} Long Wing, 30-45 DTE)"
-                        report_10 = engine._generate_rule_based_rebalance_report(
+                        report_10 = await engine._generate_rule_based_rebalance_report(
                             symbol,
                             metrics,
                             requested_action="LIQUIDATE",
@@ -790,6 +842,7 @@ async def check_satellite_rebalancing_impl(
                                     "trigger_condition_report"
                                 ],
                                 "cash_impact": report_10["cash_impact"],
+                                "limit_price": short_strike,
                             }
                         )
                         continue
@@ -799,7 +852,7 @@ async def check_satellite_rebalancing_impl(
                         trailing_stop_level = round(
                             max(call_wall - (0.5 * atr_15m), spot * 0.98), 2
                         )
-                        report_90 = engine._generate_rule_based_rebalance_report(
+                        report_90 = await engine._generate_rule_based_rebalance_report(
                             symbol,
                             metrics,
                             requested_action="LIQUIDATE",
@@ -830,9 +883,10 @@ async def check_satellite_rebalancing_impl(
                                     "trigger_condition_report"
                                 ],
                                 "cash_impact": report_90["cash_impact"],
+                                "limit_price": report_90["limit_price"],
                             }
                         )
-                        report_10 = engine._generate_rule_based_rebalance_report(
+                        report_10 = await engine._generate_rule_based_rebalance_report(
                             symbol,
                             metrics,
                             requested_action="HOLD",
@@ -859,12 +913,13 @@ async def check_satellite_rebalancing_impl(
                                     "trigger_condition_report"
                                 ],
                                 "cash_impact": report_10["cash_impact"],
+                                "limit_price": trailing_stop_level,
                             }
                         )
                         continue
 
                 # 一般清倉 / 灰階判定
-                report = engine._generate_rule_based_rebalance_report(
+                report = await engine._generate_rule_based_rebalance_report(
                     symbol,
                     metrics,
                     requested_action="LIQUIDATE" if is_structural_breakdown else "HOLD",
@@ -906,6 +961,7 @@ async def check_satellite_rebalancing_impl(
                         ),
                         "trigger_condition_text": report["trigger_condition_report"],
                         "cash_impact": report["cash_impact"],
+                        "limit_price": report["limit_price"],
                     }
                 )
                 continue  # 已經處理，不需進行後續常規再平衡
@@ -924,7 +980,7 @@ async def check_satellite_rebalancing_impl(
                 excess_value = excess_alloc * total_account_value
                 sell_ratio = excess_value / current_value
 
-                report = engine._generate_rule_based_rebalance_report(
+                report = await engine._generate_rule_based_rebalance_report(
                     symbol,
                     metrics,
                     requested_action="REDUCE",
@@ -962,6 +1018,7 @@ async def check_satellite_rebalancing_impl(
                         ),
                         "trigger_condition_text": report["trigger_condition_report"],
                         "cash_impact": report["cash_impact"],
+                        "limit_price": report["limit_price"],
                     }
                 )
 

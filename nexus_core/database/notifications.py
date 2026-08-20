@@ -108,6 +108,7 @@ ALL_NOTIFICATION_KEYS: list[str] = [
     # 3. 🛡️ 持倉風控與防禦 (Portfolio & Risk Defense)
     "defense_portfolio_risk",
     "defense_option_rollover",
+    "defense_margin_call",
     "defense_fundamental_thesis",
     "defense_macro_tail_risk",
     # 4. 🎯 Alpha 策略與情報 (Alpha & Intelligence)
@@ -165,6 +166,9 @@ PRESET_PROFILES: dict[str, dict[str, bool]] = {
         "telemetry_orders": True,
         "defense_portfolio_risk": True,
         "defense_option_rollover": True,
+        # 保證金強制平倉警報屬帳戶生存等級警訊，與例行轉倉建議獨立分流，
+        # 任何情境下皆不可靜音
+        "defense_margin_call": True,
         "defense_fundamental_thesis": True,
         "defense_macro_tail_risk": True,
         "alpha_market_signals": False,
@@ -181,6 +185,9 @@ PRESET_PROFILES: dict[str, dict[str, bool]] = {
         "telemetry_orders": False,
         "defense_portfolio_risk": True,
         "defense_option_rollover": False,
+        # 保證金強制平倉警報屬帳戶生存等級警訊，與例行轉倉建議獨立分流，
+        # 任何情境下皆不可靜音
+        "defense_margin_call": True,
         # 每日僅 08:00 ET 盤前觸發一次的高信號護城河警報，不屬於盤中雜訊
         "defense_fundamental_thesis": True,
         "defense_macro_tail_risk": True,

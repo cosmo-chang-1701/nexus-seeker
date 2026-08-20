@@ -4,10 +4,9 @@ cogs/trading/portfolio_monitor.py
 真實持倉風險動態審計 (每 30 分鐘)：DITM、Gamma Fragility、動態轉倉，以及 VTR 監控。
 """
 
-from typing import Any, Dict, List, Optional
-import json
+from typing import Any, Dict, List
 import logging
-from datetime import time
+from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
 from discord.ext import tasks, commands
@@ -317,31 +316,24 @@ class PortfolioMonitorCog(commands.Cog):
                     is_core = sym in CORE_DEFENSE_ETF_SYMBOLS
                     default_class = "CORE" if is_core else "SATELLITE"
 
-                    meta_asset_class = None
-                    try:
-                        meta = json.loads(h.get("metadata", "{}") or "{}")
-                        if meta:
-                            meta_asset_class = meta.get("asset_class")
-                    except Exception:
-                        pass
-
-                    final_asset_class = (
-                        meta_asset_class if meta_asset_class else default_class
-                    )
+                    # asset_class/max_allocation_pct/target_allocation_pct 現由
+                    # /edit_holding 持久化於 assets.metadata（database/holdings.py
+                    # 的 get_user_holdings() 已展平為頂層欄位），僅在使用者未曾
+                    # 手動設定時才退回此處的預設值。target_allocation_pct 僅在
+                    # 使用者真的設定過時才寫入該 key，讓 check_satellite_rebalancing
+                    # 既有的 asset.get(..., max_alloc) fallback 生效（退回「修剪至
+                    # 上限」而非誤判為「目標配置 0%」導致近乎全清倉）。
+                    final_asset_class = h.get("asset_class") or default_class
                     default_max_alloc = 1.0 if final_asset_class == "CORE" else 0.3
 
-                    # target_allocation_pct 目前無 DB 欄位持久化、也無 /settings UI 可設定，
-                    # 因此只在持倉本身真的帶有明確數值時才寫入該 key，讓
-                    # check_satellite_rebalancing 既有的 asset.get(..., max_alloc) fallback
-                    # 生效（退回「修剪至上限」而非誤判為「目標配置 0%」導致近乎全清倉）。
                     asset_entry: Dict[str, Any] = {
                         "symbol": sym,
                         "asset_class": final_asset_class,
                         "quantity": h.get("quantity", 0),
                         "current_value": h.get("quantity", 0) * metrics["spot_price"],
-                        "max_allocation_pct": h.get(
-                            "max_allocation_pct", default_max_alloc
-                        ),
+                        "max_allocation_pct": h.get("max_allocation_pct")
+                        if h.get("max_allocation_pct") is not None
+                        else default_max_alloc,
                         "spot_price": metrics["spot_price"],
                         "price_15m_close": metrics.get(
                             "price_15m_close", metrics["spot_price"]
@@ -365,6 +357,7 @@ class PortfolioMonitorCog(commands.Cog):
                         else {},
                         "avg_cost": h.get("avg_cost", 0.0),
                         "psq_result": r_data.get("psq_result", {}) if r_data else {},
+                        "acquired_at": h.get("acquired_at"),
                     }
                     if h.get("target_allocation_pct") is not None:
                         asset_entry["target_allocation_pct"] = h.get(
@@ -383,7 +376,13 @@ class PortfolioMonitorCog(commands.Cog):
 
                     # 🚀 邏輯 (2): 機會成本轉倉 — 對尚未被 Scenario 3 標記的
                     # SATELLITE 持倉，比對單一預篩選高 EV 候選標的的機會成本
-                    already_flagged = {ins["symbol"] for ins in rebalance_instructions}
+                    # 注意：僅排除 Scenario 3 有實際賣出/減碼動作的標的；HOLD
+                    # (安心防守卡，無實際動作) 不構成矛盾指令，不應阻擋本情境評估。
+                    already_flagged = {
+                        ins["symbol"]
+                        for ins in rebalance_instructions
+                        if ins.get("action") != "HOLD"
+                    }
                     candidate_symbol = self.rollover_engine._find_best_rollover_target(
                         u_id, exclude_symbols={a["symbol"] for a in portfolio_assets}
                     )
@@ -417,7 +416,14 @@ class PortfolioMonitorCog(commands.Cog):
 
                     # 🚀 邏輯 (4): 槓桿與保證金防禦 — 排除已被 Scenario 2/3 標記過的
                     # 標的，避免同一標的同一輪次收到互相矛盾的清倉指令。
-                    already_flagged = {ins["symbol"] for ins in rebalance_instructions}
+                    # 同樣僅排除有實際賣出/減碼動作者；Scenario 3 的 HOLD 安心防守卡
+                    # 不應在大盤觸發系統性保證金風控紅線時，silently 蓋掉更高等級的
+                    # 強制平倉防禦警報。
+                    already_flagged = {
+                        ins["symbol"]
+                        for ins in rebalance_instructions
+                        if ins.get("action") != "HOLD"
+                    }
                     rebalance_instructions += (
                         await self.rollover_engine.evaluate_margin_defense(
                             u_id,
@@ -435,13 +441,34 @@ class PortfolioMonitorCog(commands.Cog):
                         "MARGIN_DEFENSE": "槓桿與保證金防禦",
                     }
 
+                    today_str = datetime.now(ny_tz).strftime("%Y%m%d")
                     for ins in rebalance_instructions:
-                        if not database.is_notification_enabled(
-                            u_id, "defense_option_rollover"
-                        ):
+                        scenario = ins.get("scenario", "UNKNOWN")
+                        # 保證金強制平倉警報 (MARGIN_DEFENSE) 為帳戶生存等級警訊，
+                        # 獨立於例行轉倉建議 (Scenario 2/3) 的開關之外，避免使用者
+                        # 在 `mute_intraday` 等預設情境下靜音例行雜訊時，連帶誤將
+                        # 系統性保證金風控紅線警報一併關閉。
+                        notif_key = (
+                            "defense_margin_call"
+                            if scenario == "MARGIN_DEFENSE"
+                            else "defense_option_rollover"
+                        )
+                        if not database.is_notification_enabled(u_id, notif_key):
                             continue
 
-                        scenario = ins.get("scenario", "UNKNOWN")
+                        action = ins.get("action", "UNKNOWN")
+                        # 冷卻去重：每位使用者、每個標的、每個情境、每種動作，
+                        # 每日最多發送一則警報，避免同一觸發條件在盤中每 30 分鐘
+                        # 反覆重推導致警報疲勞（比照 WTI / 價量突破警報既有模式）。
+                        # 動作 (action) 亦納入 key：若條件當日從 HOLD 升級為
+                        # LIQUIDATE 等實際動作，仍視為新警報正常發送。
+                        dedup_key = (
+                            f"rollover_alert_{u_id}_{ins['symbol']}_"
+                            f"{scenario}_{action}_{today_str}"
+                        )
+                        if database.get_kv_cache(dedup_key):
+                            continue
+
                         scenario_label = _SCENARIO_LABELS.get(scenario, "動態轉倉")
                         # 若為 HOLD 狀態且無減倉動作，通常不主動洗版，但若有指示則發送安心防守卡
                         rollover_type = (
@@ -449,9 +476,17 @@ class PortfolioMonitorCog(commands.Cog):
                             if ins["action"] == "HOLD"
                             else scenario_label
                         )
-                        suggested_price = (
-                            "N/A (維持現狀)" if ins["action"] == "HOLD" else "Market"
-                        )
+                        # 優先採用各情境引擎實際計算出的目標資產參考限價
+                        # (取代過去恆為 "Market" 的佔位字串)；僅在引擎未提供
+                        # 有效數值時（例如 Scenario 2/4 尚未接上定價邏輯）才
+                        # 退回 "Market" 泛用字串。
+                        limit_price_val = ins.get("limit_price")
+                        if ins["action"] == "HOLD":
+                            suggested_price = "N/A (維持現狀)"
+                        elif limit_price_val:
+                            suggested_price = f"${float(limit_price_val):.2f} (限價)"
+                        else:
+                            suggested_price = "Market"
 
                         embed = create_dynamic_rollover_embed(
                             rollover_type=rollover_type,
@@ -481,6 +516,21 @@ class PortfolioMonitorCog(commands.Cog):
                                 embed, "_view", f"RolloverActionView:{ins['symbol']}"
                             )
                         await self.bot.queue_dm(u_id, embed=embed)
+                        await database.save_kv_cache(dedup_key, 1)
+                        # 審計軌跡：記錄本次實際推送給使用者的轉倉建議本身
+                        # (系統僅提供建議、不代為執行券商下單，故無法追蹤實際
+                        # 成交結果，此處記錄的是「推送了什麼建議」而非「後續
+                        # 執行結果」)，供事後回顧與問責。
+                        await database.log_rollover_instruction(
+                            user_id=u_id,
+                            symbol=ins["symbol"],
+                            scenario=scenario,
+                            action=ins["action"],
+                            sell_ratio=ins["sell_ratio"],
+                            target_core=ins.get("target_core"),
+                            suggested_price=suggested_price,
+                            cash_impact=ins.get("cash_impact"),
+                        )
             except Exception as e:
                 logger.error(f"動態轉倉盤中審計錯誤: {e}")
 
@@ -490,116 +540,6 @@ class PortfolioMonitorCog(commands.Cog):
     @monitor_real_portfolio_task.before_loop
     async def before_monitor_real_portfolio_task(self) -> None:
         await self.bot.wait_until_ready()
-
-    async def handle_microstructure_interrupt(
-        self,
-        user_id: int,
-        symbol: str,
-        trigger_type: str,
-        data: Optional[Dict[str, Any]] = None,
-    ) -> List[Dict[str, Any]]:
-        """
-        微觀異動事件中斷器 (Interrupt Handler)：
-        當盤中發生「標的價格穿透 Zero Gamma 轉為負 Gamma 領域」(ZERO_GAMMA_BREAKDOWN) 或
-        「單筆 UOA 溢價暴增」(MASSIVE_WHALE_UOA) 時，即時中斷定時器，
-        秒級觸發該用戶與該標的的再平衡審計並推送緊急防守卡。
-        """
-        if not database.is_notification_enabled(user_id, "defense_option_rollover"):
-            return []
-
-        logger.info(
-            f"⚡ [Microstructure Interrupt] 觸發異動事件中斷: user={user_id}, symbol={symbol}, trigger={trigger_type}"
-        )
-        try:
-            holdings = database.get_user_holdings(user_id)
-            target_holding = next(
-                (h for h in holdings if h.get("symbol", "").upper() == symbol.upper()),
-                None,
-            )
-            if not target_holding:
-                return []
-
-            total_val = sum(float(h.get("current_value", 0.0)) for h in holdings)
-            if total_val <= 0:
-                total_val = 1.0
-
-            r_data = data or {}
-            metrics = r_data.get("metrics", {})
-            asset_entry: Dict[str, Any] = {
-                "symbol": symbol.upper(),
-                "asset_class": target_holding.get("asset_class", "SATELLITE"),
-                "instrument_type": target_holding.get("instrument_type", "SPOT"),
-                "current_value": float(target_holding.get("current_value", 0.0)),
-                "quantity": float(target_holding.get("quantity", 0.0)),
-                "max_allocation_pct": float(
-                    target_holding.get("max_allocation_pct", 0.3)
-                ),
-                "spot_price": metrics.get(
-                    "spot_price", target_holding.get("spot_price", 0.0)
-                ),
-                "put_wall": metrics.get("put_wall", 0.0),
-                "call_wall": metrics.get("call_wall", 0.0),
-                "max_pain": metrics.get("max_pain", 0.0),
-                "ivr": metrics.get("ivr", 0.0),
-                "is_uoa_sweep": metrics.get("is_uoa_sweep", False),
-                "sqz_mom": metrics.get("sqz_mom", 0.0),
-                "skew": metrics.get("skew", 0.0),
-                "skew_percentile": metrics.get("skew_percentile", 50.0),
-                "gamma_flip": metrics.get("gamma_flip", 0.0),
-                "atr_14": metrics.get("atr_14", 0.0),
-                "atr_15m": metrics.get("atr_15m", 0.0),
-                "price_15m_close": metrics.get("price_15m_close", 0.0),
-                "hvn": metrics.get("hvn", 0.0),
-                "lvn": metrics.get("lvn", 0.0),
-                "dte": metrics.get("dte", 99),
-                "gex_profile_data": r_data.get("gex_profile_data", {}),
-            }
-            if target_holding.get("target_allocation_pct") is not None:
-                asset_entry["target_allocation_pct"] = float(
-                    target_holding.get("target_allocation_pct")
-                )
-
-            instructions = await self.rollover_engine.check_satellite_rebalancing(
-                user_id, [asset_entry], total_val
-            )
-
-            for ins in instructions:
-                rollover_type = (
-                    f"⚡ 微觀事件防守: {trigger_type}"
-                    if ins["action"] == "HOLD"
-                    else f"⚡ 微觀事件轉倉: {trigger_type}"
-                )
-                suggested_price = (
-                    "N/A (維持現狀)" if ins["action"] == "HOLD" else "Market"
-                )
-
-                embed = create_dynamic_rollover_embed(
-                    rollover_type=rollover_type,
-                    sell_symbol=ins["symbol"],
-                    sell_ratio=ins["sell_ratio"],
-                    buy_symbol=ins["target_core"],
-                    reason=ins["reason"],
-                    suggested_strategy=ins.get("suggested_strategy", "Buy Shares"),
-                    suggested_price=suggested_price,
-                    strike="N/A",
-                    expiry="N/A",
-                    direction="BTO" if ins["action"] != "HOLD" else "HOLD",
-                    sell_action=ins.get("sell_action", "STC"),
-                    buy_action_label=ins.get("buy_action_label"),
-                    scenario=ins.get("scenario", "SATELLITE_REBALANCE"),
-                    cash_impact=ins.get("cash_impact"),
-                    trigger_condition_text=ins.get("trigger_condition_text"),
-                )
-                if ins.get("is_manual_override_required"):
-                    setattr(embed, "_view", f"ManualOverrideView:{ins['symbol']}")
-                else:
-                    setattr(embed, "_view", f"RolloverActionView:{ins['symbol']}")
-                await self.bot.queue_dm(user_id, embed=embed)
-
-            return instructions
-        except Exception as e:
-            logger.error(f"微觀異動事件中斷處理失敗: {e}")
-            return []
 
     # ==========================================
     # 🚀 VTR 監控與風險即時預警 (每 30 分鐘)

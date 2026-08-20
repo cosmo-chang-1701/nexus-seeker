@@ -8,8 +8,40 @@ from market_analysis.risk_engine import (
     MacroContext,
     get_macro_modifiers,
     optimize_position_risk,
+    kelly_position_fraction,
 )
 from models.quant import OptimizationResult, MacroRiskMetrics
+
+
+def test_kelly_position_fraction_matches_raw_formula() -> None:
+    """
+    共用凱利公式函式應與手動展開之公式 f* = (p*b - (1-p))/b 數值一致，
+    這是 services/execution_router.py 與 market_analysis/strategy.py
+    先前各自內嵌、現已整併為單一來源的核心公式。
+    """
+    p, b = 0.55, 1.8
+    raw_kelly_f = (p * b - (1.0 - p)) / b
+    result = kelly_position_fraction(win_prob=p, odds=b, kelly_scale=1.0, cap=1.0)
+    assert result == pytest.approx(raw_kelly_f)
+
+
+def test_kelly_position_fraction_applies_scale_and_cap() -> None:
+    # Half-Kelly，理論上限 0.15，且 p=0.55/b=1.8 之原始 kelly_f 遠大於此
+    result = kelly_position_fraction(win_prob=0.55, odds=1.8, kelly_scale=0.5, cap=0.15)
+    assert result == pytest.approx(0.15)
+
+
+def test_kelly_position_fraction_never_negative() -> None:
+    # 勝率過低時，凱利公式本身可能為負，應鉗制為 0 而非允許放空倉位
+    result = kelly_position_fraction(win_prob=0.1, odds=1.0, kelly_scale=0.5, cap=0.15)
+    assert result == 0.0
+
+
+def test_kelly_position_fraction_zero_odds_is_safe() -> None:
+    assert (
+        kelly_position_fraction(win_prob=0.5, odds=0.0, kelly_scale=0.5, cap=0.15)
+        == 0.0
+    )
 
 
 def test_evaluate_ditm_defense() -> None:

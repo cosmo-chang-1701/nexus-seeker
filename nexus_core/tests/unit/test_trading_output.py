@@ -202,6 +202,66 @@ async def test_monitor_real_portfolio_task_margin_defense_excludes_scenario2_and
 
 
 @pytest.mark.asyncio
+async def test_monitor_real_portfolio_task_hold_only_flags_do_not_suppress_later_scenarios() -> (
+    None
+):
+    """
+    修正回歸測試：Scenario 3 若僅回傳 HOLD 安心防守卡（無實際賣出/減碼動作），
+    不應被計入 already_flagged，否則會 silently 阻擋同一標的在同一輪次收到
+    更高等級的 Scenario 2 機會成本轉倉評估，或 Scenario 4 保證金強制平倉警報。
+    """
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+    bot.get_cog = MagicMock(return_value=None)
+
+    with patch("discord.ext.tasks.Loop.start"):
+        cog = PortfolioMonitorCog(bot)
+
+    cog.trading_service.audit_real_portfolio_risk = AsyncMock(return_value=[])  # type: ignore
+
+    holding = {
+        "id": 1,
+        "user_id": 1,
+        "symbol": "NVDA",
+        "metadata": "{}",
+        "quantity": 10.0,
+        "avg_cost": 200.0,
+    }
+
+    # Scenario 3 僅回傳 HOLD（無實際動作），不應被視為「已標記」
+    cog.rollover_engine.check_satellite_rebalancing = AsyncMock(  # type: ignore
+        return_value=[{"symbol": "NVDA", "action": "HOLD"}]
+    )
+    cog.rollover_engine.evaluate_opportunity_cost_for_satellites = AsyncMock(  # type: ignore
+        return_value=[]
+    )
+    cog.rollover_engine.evaluate_margin_defense = AsyncMock(return_value=[])  # type: ignore
+
+    with patch(
+        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
+    ), patch("database.holdings.get_all_holdings", return_value=[holding]), patch(
+        "database.watchlist.get_user_watchlist", return_value=[]
+    ), patch(
+        "market_analysis.trading_orchestration.recommend_covered_calls",
+        new_callable=AsyncMock,
+        return_value={"recommendations": []},
+    ):
+        await cog.monitor_real_portfolio_task()
+
+    # Scenario 2 呼叫時傳入的 already_flagged_symbols 不應包含僅 HOLD 的 NVDA
+    opp_cost_call = (
+        cog.rollover_engine.evaluate_opportunity_cost_for_satellites.await_args
+    )
+    assert opp_cost_call is not None
+    assert opp_cost_call.args[2] == set()
+
+    # Scenario 4 呼叫時傳入的 already_flagged_symbols 同樣不應包含僅 HOLD 的 NVDA
+    margin_call = cog.rollover_engine.evaluate_margin_defense.await_args
+    assert margin_call is not None
+    assert margin_call.kwargs["already_flagged_symbols"] == set()
+
+
+@pytest.mark.asyncio
 async def test_pre_market_risk_monitor_triggers_pre_warm() -> None:
     bot = MagicMock()
 

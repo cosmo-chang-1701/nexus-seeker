@@ -69,7 +69,7 @@ async def test_integration_rollover_embed_generation(
     )
 
     assert isinstance(embed, discord.Embed)
-    assert embed.title == "🔄 核心衛星再平衡: 核心衛星再平衡"
+    assert embed.title == "🔄 核心衛星再平衡: TSLA → VOO"
     assert (
         len(embed.fields) >= 3
     ), f"Expected at least 3 fields, got {len(embed.fields)}"

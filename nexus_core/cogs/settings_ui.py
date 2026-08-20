@@ -44,6 +44,7 @@ TRADING_MODULES: Dict[str, Dict[str, Any]] = {
         "items": {
             "defense_portfolio_risk": "🆘 持倉負 Gamma 斷層、DITM 獲利鎖定與保證金警戒",
             "defense_option_rollover": "🔄 動態轉倉、套牢股票備兌解套與衛星再平衡",
+            "defense_margin_call": "🚨 槓桿與保證金強制平倉警報 (帳戶生存等級)",
             "defense_fundamental_thesis": "📜 SEC 財報自動掃描與護城河破滅警報",
             "defense_macro_tail_risk": "🦇 VIX 期限結構倒掛 (VTS >= 1.0) 與重大事件防護",
         },

@@ -24,6 +24,23 @@ def engine() -> DynamicRolloverEngine:
     return DynamicRolloverEngine()
 
 
+@pytest.fixture(autouse=True)
+def _mock_target_reference_live_quote() -> Any:
+    """
+    _resolve_target_reference_price 在 market_cache 未命中時會嘗試即時報價
+    (services.market_data_service.get_quote) 作為第二層備援。單元測試預設不應
+    觸發真實外部網路呼叫，因此全域 mock 為空報價，讓測試決定性地退回具名備援
+    常數 (與 mock 前的既有行為一致)；個別測試若需驗證即時報價命中路徑，
+    可自行以更內層的 patch 覆寫此 fixture。
+    """
+    with patch(
+        "services.market_data_service.get_quote",
+        new_callable=AsyncMock,
+        return_value={},
+    ):
+        yield
+
+
 def test_evaluate_opportunity_cost(engine: DynamicRolloverEngine) -> None:
     # Scenario 1: Should rollover (EV spread > 5%, target breakout, holding decay)
     res = engine.evaluate_opportunity_cost(
@@ -493,7 +510,8 @@ async def test_satellite_rebalancing_euphoria_exhaustion_bear_call_spread(
     assert ins_10.get("is_manual_override_required") is True
 
 
-def test_generate_rule_based_rebalance_report_grayscale_hold(
+@pytest.mark.asyncio
+async def test_generate_rule_based_rebalance_report_grayscale_hold(
     engine: DynamicRolloverEngine,
 ) -> None:
     """測試灰階思考架構：$225 正 Gamma 彈簧床完好，盤中插針至 $224.50 但動能多頭，判定 HOLD"""
@@ -522,7 +540,7 @@ def test_generate_rule_based_rebalance_report_grayscale_hold(
         }
     ]
 
-    report = engine._generate_rule_based_rebalance_report(
+    report = await engine._generate_rule_based_rebalance_report(
         symbol="AMD",
         metrics=metrics,
         requested_action="HOLD",
@@ -544,7 +562,8 @@ def test_generate_rule_based_rebalance_report_grayscale_hold(
     assert "VOO" in report["markdown_report"]
 
 
-def test_generate_rule_based_rebalance_report_hard_breakdown(
+@pytest.mark.asyncio
+async def test_generate_rule_based_rebalance_report_hard_breakdown(
     engine: DynamicRolloverEngine,
 ) -> None:
     """測試硬性破位條件：15m 實體收盤跌破 $223.80 觸發 100% 轉入 VOO"""
@@ -561,7 +580,7 @@ def test_generate_rule_based_rebalance_report_hard_breakdown(
         "atr_15m": 0.80,
     }
 
-    report = engine._generate_rule_based_rebalance_report(
+    report = await engine._generate_rule_based_rebalance_report(
         symbol="AMD",
         metrics=metrics,
         requested_action="HOLD",
@@ -577,7 +596,8 @@ def test_generate_rule_based_rebalance_report_hard_breakdown(
     assert "$43,524" in report["markdown_report"]
 
 
-def test_generate_rule_based_rebalance_report_dynamic_generic_ticker(
+@pytest.mark.asyncio
+async def test_generate_rule_based_rebalance_report_dynamic_generic_ticker(
     engine: DynamicRolloverEngine,
 ) -> None:
     """測試完全動態通用標的（例如 NVDA 轉入 SPY，無委託單且自定義 GEX 數據）"""
@@ -596,7 +616,7 @@ def test_generate_rule_based_rebalance_report_dynamic_generic_ticker(
         "atr_15m": 1.20,
     }
 
-    report = engine._generate_rule_based_rebalance_report(
+    report = await engine._generate_rule_based_rebalance_report(
         symbol="NVDA",
         metrics=metrics,
         requested_action="HOLD",
@@ -618,7 +638,8 @@ def test_generate_rule_based_rebalance_report_dynamic_generic_ticker(
     assert "#147" not in report["markdown_report"]
 
 
-def test_01dte_risk_parity_position_sizing(engine: DynamicRolloverEngine) -> None:
+@pytest.mark.asyncio
+async def test_01dte_risk_parity_position_sizing(engine: DynamicRolloverEngine) -> None:
     """測試 0/1 DTE 風險平價口數動態縮放：停損擴展至 3.0x ATR，且轉倉買入股數強制縮減 50%"""
     metrics = {
         "spot_price": 100.0,
@@ -630,7 +651,7 @@ def test_01dte_risk_parity_position_sizing(engine: DynamicRolloverEngine) -> Non
         "sqz_mom": 1.0,
     }
     # anchor_wall = 100, base stop = 100 - (1.5 * 2) - (1.5 * 2) = 100 - 6 = 94.0
-    report = engine._generate_rule_based_rebalance_report(
+    report = await engine._generate_rule_based_rebalance_report(
         symbol="XYZ",
         metrics=metrics,
         requested_action="HOLD",
@@ -645,7 +666,8 @@ def test_01dte_risk_parity_position_sizing(engine: DynamicRolloverEngine) -> Non
     assert "$94.00" in report["markdown_report"]
 
 
-def test_lvn_secondary_hvn_snapping(engine: DynamicRolloverEngine) -> None:
+@pytest.mark.asyncio
+async def test_lvn_secondary_hvn_snapping(engine: DynamicRolloverEngine) -> None:
     """測試 LVN 拓撲吸附：絕對吸附至次級 HVN 上緣 + 0.2*ATR，禁止固定 1.5% 平移"""
     metrics = {
         "spot_price": 100.0,
@@ -660,7 +682,7 @@ def test_lvn_secondary_hvn_snapping(engine: DynamicRolloverEngine) -> None:
         "sqz_mom": 1.0,
     }
     # Snapped stop should be secondary_hvn (94.0) + 0.2 * 2.0 = 94.40
-    report = engine._generate_rule_based_rebalance_report(
+    report = await engine._generate_rule_based_rebalance_report(
         symbol="XYZ",
         metrics=metrics,
         requested_action="HOLD",
@@ -671,7 +693,8 @@ def test_lvn_secondary_hvn_snapping(engine: DynamicRolloverEngine) -> None:
     assert "$94.40" in report["markdown_report"]
 
 
-def test_dual_track_exit_options_vs_spot(engine: DynamicRolloverEngine) -> None:
+@pytest.mark.asyncio
+async def test_dual_track_exit_options_vs_spot(engine: DynamicRolloverEngine) -> None:
     """測試雙軌裁決機制：期權 OPTIONS 走 3-5m 快速通道 (現價跌破即清倉)，現貨 SPOT 走 15m 實體收盤"""
     # 案例 A: 現價跌破 Stop Loss，但 15m 收盤價尚未跌破
     metrics_a = {
@@ -684,7 +707,7 @@ def test_dual_track_exit_options_vs_spot(engine: DynamicRolloverEngine) -> None:
         "sqz_mom": 0.5,
     }
     # 現貨 SPOT: 未跌破 15m 實體收盤 -> HOLD
-    report_spot = engine._generate_rule_based_rebalance_report(
+    report_spot = await engine._generate_rule_based_rebalance_report(
         symbol="XYZ",
         metrics=metrics_a,
         requested_action="HOLD",
@@ -694,7 +717,7 @@ def test_dual_track_exit_options_vs_spot(engine: DynamicRolloverEngine) -> None:
     assert "15m 實體 K 線過濾" in report_spot["markdown_report"]
 
     # 期權 OPTIONS: 現價貫穿 Stop Loss (95.0 < 97.0) -> 3-5m 快速通道即時清倉 LIQUIDATE (拒絕等待 15m)
-    report_options = engine._generate_rule_based_rebalance_report(
+    report_options = await engine._generate_rule_based_rebalance_report(
         symbol="XYZ",
         metrics=metrics_a,
         requested_action="HOLD",
@@ -1257,7 +1280,8 @@ async def test_evaluate_margin_defense_excludes_vxx_as_core(
     assert result == []
 
 
-def test_resolve_target_reference_price_uses_market_cache_over_stale_constant(
+@pytest.mark.asyncio
+async def test_resolve_target_reference_price_uses_market_cache_over_stale_constant(
     engine: DynamicRolloverEngine,
 ) -> None:
     """
@@ -1266,26 +1290,38 @@ def test_resolve_target_reference_price_uses_market_cache_over_stale_constant(
     """
     with patch("database.market_cache.get_market_cache") as mock_cache:
         mock_cache.return_value = {"reference_spot_price": 612.34}
-        price = engine._resolve_target_reference_price("VOO", fallback_spot=500.0)
+        price = await engine._resolve_target_reference_price("VOO")
         assert price == 612.34
         assert price != 560.0
 
 
-def test_resolve_target_reference_price_falls_back_when_cache_missing(
+@pytest.mark.asyncio
+async def test_resolve_target_reference_price_uses_market_cache_for_any_target(
     engine: DynamicRolloverEngine,
 ) -> None:
     """
-    VOO/SPY 目標快取缺失時，比照原始程式碼行為 (原硬編碼 560.0 的分支從不採用
-    該資產自身現價)，退回具名備援常數，而非誤用不相關的 fallback_spot。
+    非 VOO/SPY 的轉倉目標 (例如 Watchlist 輪動候選標的或 BOXX) 同樣應優先查詢
+    market_cache 取得其自身參考價，而非誤用「被賣出資產自身的現價」估計目標
+    資產股數 (兩者價格通常無關，例如賣出 NVDA 轉倉 BOXX 絕不能用 NVDA 現價
+    估算 BOXX 股數)。
+    """
+    with patch("database.market_cache.get_market_cache") as mock_cache:
+        mock_cache.return_value = {"reference_spot_price": 101.23}
+        assert await engine._resolve_target_reference_price("BOXX") == 101.23
+        assert await engine._resolve_target_reference_price("SMCI") == 101.23
+
+
+@pytest.mark.asyncio
+async def test_resolve_target_reference_price_falls_back_when_cache_missing(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """
+    任何目標快取缺失時一律退回具名備援常數，絕不誤用不相關標的的現價。
     """
     with patch("database.market_cache.get_market_cache", return_value=None):
-        assert engine._resolve_target_reference_price("VOO", fallback_spot=555.0) == (
-            500.0
-        )
-    # 非 VOO/SPY 目標一律使用自身現價 (與快取無關，維持原始 else 分支行為)
-    assert engine._resolve_target_reference_price("SMCI", fallback_spot=40.0) == 40.0
-    # 非 VOO/SPY 且現價也缺失時，使用同一具名備援常數
-    assert engine._resolve_target_reference_price("SMCI", fallback_spot=0.0) == 500.0
+        assert await engine._resolve_target_reference_price("VOO") == 500.0
+        assert await engine._resolve_target_reference_price("SMCI") == 500.0
+        assert await engine._resolve_target_reference_price("BOXX") == 500.0
 
 
 @pytest.mark.asyncio
@@ -2138,7 +2174,29 @@ def test_maybe_append_tax_risk_note_covers_both_scenarios(
     assert "Wash Sale" in note_both
 
 
-def test_generate_rule_based_rebalance_report_01dte_liquidate_includes_tax_risk_note(
+def test_maybe_append_tax_risk_note_holding_period_long_vs_short_term(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """#A2: acquired_at 粗估的長/短期資本利得稅率區間提醒 (單一日期估計，非多批次 FIFO)"""
+    long_term_note = engine._maybe_append_tax_risk_note(
+        False, False, holding_period_days=400
+    )
+    assert "長期資本利得" in long_term_note
+    assert "短期資本利得" not in long_term_note
+
+    short_term_note = engine._maybe_append_tax_risk_note(
+        False, False, holding_period_days=100
+    )
+    assert "短期資本利得" in short_term_note
+    assert "距長期門檻尚餘 265 天" in short_term_note
+
+    # 未提供 holding_period_days 時完全不受影響 (向下相容既有兩個分支)
+    assert engine._maybe_append_tax_risk_note(False, False) == ""
+    assert engine._maybe_append_tax_risk_note(False, False, None) == ""
+
+
+@pytest.mark.asyncio
+async def test_generate_rule_based_rebalance_report_01dte_liquidate_includes_tax_risk_note(
     engine: DynamicRolloverEngine,
 ) -> None:
     """#10: 0/1 DTE 合約觸發 LIQUIDATE 時，報告應附加資訊性稅務提醒 (Assignment 風險)"""
@@ -2151,7 +2209,7 @@ def test_generate_rule_based_rebalance_report_01dte_liquidate_includes_tax_risk_
         "ivr": 25.0,
         "sqz_mom": 1.0,
     }
-    report = engine._generate_rule_based_rebalance_report(
+    report = await engine._generate_rule_based_rebalance_report(
         symbol="XYZ",
         metrics=metrics,
         requested_action="HOLD",
@@ -2164,7 +2222,8 @@ def test_generate_rule_based_rebalance_report_01dte_liquidate_includes_tax_risk_
     assert "Assignment" in report["markdown_report"]
 
 
-def test_generate_rule_based_rebalance_report_hold_omits_tax_risk_note(
+@pytest.mark.asyncio
+async def test_generate_rule_based_rebalance_report_hold_omits_tax_risk_note(
     engine: DynamicRolloverEngine,
 ) -> None:
     """#10: 非 0/1 DTE LIQUIDATE 情境不應附加稅務提醒 (避免資訊過載)"""
@@ -2177,7 +2236,7 @@ def test_generate_rule_based_rebalance_report_hold_omits_tax_risk_note(
         "ivr": 25.0,
         "sqz_mom": 1.0,
     }
-    report = engine._generate_rule_based_rebalance_report(
+    report = await engine._generate_rule_based_rebalance_report(
         symbol="XYZ",
         metrics=metrics,
         requested_action="HOLD",
@@ -2185,6 +2244,64 @@ def test_generate_rule_based_rebalance_report_hold_omits_tax_risk_note(
         position_shares=100.0,
         current_value=10000.0,
     )
+    assert "稅務提醒" not in report["markdown_report"]
+
+
+@pytest.mark.asyncio
+async def test_generate_rule_based_rebalance_report_includes_holding_period_note_on_liquidate(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """#A2: metrics 帶有 acquired_at 且觸發實體破位 LIQUIDATE 時，報告應附加
+    長/短期資本利得稅率區間提醒（單一 acquired_at 粗估，非多批次 FIFO）。"""
+    from datetime import datetime, timedelta
+
+    acquired_at = (datetime.now() - timedelta(days=400)).strftime("%Y-%m-%d")
+    metrics = {
+        "spot_price": 90.0,
+        "price_15m_close": 90.0,  # 跌破停損，觸發 15m 實體破位 LIQUIDATE
+        "support_wall": 100.0,
+        "atr_15m": 2.0,
+        "dte": 30,
+        "ivr": 25.0,
+        "sqz_mom": -1.0,
+        "acquired_at": acquired_at,
+    }
+    report = await engine._generate_rule_based_rebalance_report(
+        symbol="XYZ",
+        metrics=metrics,
+        requested_action="HOLD",
+        target="VOO",
+        position_shares=100.0,
+        current_value=10000.0,
+    )
+    assert report["final_action"] == "LIQUIDATE"
+    assert "稅務提醒" in report["markdown_report"]
+    assert "長期資本利得" in report["markdown_report"]
+
+
+@pytest.mark.asyncio
+async def test_generate_rule_based_rebalance_report_omits_holding_period_note_when_no_acquired_at(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """未設定 acquired_at (例如尚未透過 /add_holding 記錄) 時，不應假造持有天數。"""
+    metrics = {
+        "spot_price": 90.0,
+        "price_15m_close": 90.0,
+        "support_wall": 100.0,
+        "atr_15m": 2.0,
+        "dte": 30,
+        "ivr": 25.0,
+        "sqz_mom": -1.0,
+    }
+    report = await engine._generate_rule_based_rebalance_report(
+        symbol="XYZ",
+        metrics=metrics,
+        requested_action="HOLD",
+        target="VOO",
+        position_shares=100.0,
+        current_value=10000.0,
+    )
+    assert report["final_action"] == "LIQUIDATE"
     assert "稅務提醒" not in report["markdown_report"]
 
 

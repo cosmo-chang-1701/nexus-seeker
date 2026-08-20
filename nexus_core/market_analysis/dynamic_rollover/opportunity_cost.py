@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from market_analysis.index_microstructure import estimate_symbol_gamma_flip
+from market_analysis.option_guidance import is_spread_illiquid
 
 from . import logger
 from .constants import (
@@ -531,6 +532,31 @@ class _OpportunityCostMixin:
             if not result["should_rollover"]:
                 continue
 
+            # 預估資金影響與建議限價：現貨持倉市值優先，缺失時退回股數*現價估算；
+            # 限價採用候選標的即時報價 (target_spot)，取代呼叫端過去恆為
+            # "Market" 的佔位字串。
+            current_value = float(asset.get("current_value", 0.0))
+            if current_value <= 0 and spot > 0:
+                current_value = float(asset.get("quantity", 0.0)) * spot
+            recovered_cash = current_value * result["rollover_ratio"]
+            cash_impact = f"${recovered_cash:,.0f}" if recovered_cash > 0 else None
+
+            # 流動性閘門：比照 Scenario 3/4 既有做法，期權部位若帶有 bid/ask 且
+            # 點差過寬時強制要求手動確認執行 (ManualOverrideView)，而非放行一鍵
+            # 執行按鈕 (RolloverActionView)，避免使用者在滑價風險下誤觸一鍵轉倉。
+            bid = float(asset.get("bid", 0.0))
+            ask = float(asset.get("ask", 0.0))
+            is_illiquid_warning = asset.get(
+                "asset_class"
+            ) == "OPTIONS" and is_spread_illiquid(bid, ask)
+            reason_text = f"💡 **機會成本轉倉 (Opportunity Cost)**\n{result['reason']}"
+            if is_illiquid_warning:
+                spread_pct = (ask - bid) / ((ask + bid) / 2)
+                reason_text += (
+                    f"\n⚠️ **流動性警告**：合約點差過寬 (Bid ${bid:.2f} / Ask ${ask:.2f}，"
+                    f"點差 {spread_pct:.1%})，建議採限價單並留意滑價。"
+                )
+
             instructions.append(
                 {
                     "symbol": symbol,
@@ -539,10 +565,12 @@ class _OpportunityCostMixin:
                     else "REDUCE",
                     "sell_ratio": result["rollover_ratio"],
                     "target_core": candidate_symbol,
-                    "reason": f"💡 **機會成本轉倉 (Opportunity Cost)**\n{result['reason']}",
+                    "reason": reason_text,
                     "suggested_strategy": result["strategy"],
                     "scenario": RolloverScenario.OPPORTUNITY_COST.value,
-                    "is_manual_override_required": False,
+                    "is_manual_override_required": is_illiquid_warning,
+                    "cash_impact": cash_impact,
+                    "limit_price": target_spot if target_spot > 0 else None,
                 }
             )
         return instructions

@@ -3,6 +3,7 @@ import logging
 from typing import Optional, Any, Callable, Coroutine, Dict
 
 from cogs.embed_builders._core import NexusEmbed
+from cogs.embed_builders._ansi_utils import _pad_string
 from ui.panel_renderer import truncate_with_boundary
 
 logger = logging.getLogger(__name__)
@@ -296,14 +297,28 @@ def create_dynamic_rollover_embed(
     # 二字而無法正確標紅)。
     if scenario in _SCENARIO_STYLE:
         style = _SCENARIO_STYLE[scenario]
-        title = f"{style['emoji']} {style['label']}: {rollover_type}"
+        if rollover_type == style["label"]:
+            # rollover_type 未攜帶超出情境標籤本身的額外資訊時（例如
+            # OPPORTUNITY_COST 呼叫端傳入的補充文字恰好與此表的 label 逐字相同），
+            # 改以「標的 → 轉倉目標」取代，避免出現「機會成本轉倉: 機會成本轉倉」
+            # 這類逐字重複、對使用者毫無新增資訊的標題。
+            title = f"{style['emoji']} {style['label']}: {sell_symbol} → {buy_symbol}"
+        else:
+            title = f"{style['emoji']} {style['label']}: {rollover_type}"
         color = style["color"]
     elif scenario == "SATELLITE_REBALANCE":
         if is_hold:
             title = f"🛡️ 持倉防守評估: {rollover_type}"
             color = discord.Color.teal()
         else:
-            title = f"🔄 核心衛星再平衡: {rollover_type}"
+            # 呼叫端傳入的 rollover_type 常與此分支固定前綴逐字相同
+            # (例如 "核心衛星再平衡")，同上以「標的 → 轉倉目標」取代重複字串。
+            title_suffix = (
+                f"{sell_symbol} → {buy_symbol}"
+                if rollover_type == "核心衛星再平衡"
+                else rollover_type
+            )
+            title = f"🔄 核心衛星再平衡: {title_suffix}"
             color = discord.Color.gold()
     else:
         logger.warning(
@@ -456,21 +471,35 @@ def create_dynamic_rollover_embed(
     return embed
 
 
+_LOW_CONFIDENCE_THRESHOLD = 0.5
+
+
 def build_fundamental_broken_embed(
-    symbol: str, reasoning_with_source: str
+    symbol: str, reasoning_with_source: str, confidence: float = 1.0
 ) -> discord.Embed:
     """
     產生基本面護城河判定破滅（Scenario 1 原型假設破滅）的動態轉倉 Embed。
 
     集中封裝固定的清算建議參數 (100% 清倉轉入 VOO)，供互動式 `/verify_thesis`
     與自動化每日 SEC 財報掃描共用，避免兩處組裝邏輯漂移。
+
+    LLM 判讀信心分數 (confidence) 過去僅寫入 fundamental_cache 卻從未在任何下游
+    呈現，導致使用者無從得知一次「強制清倉」建議背後的判讀把握度。低信心不代表
+    判讀有誤（可能只是財報段落資訊密度不足），因此不靜默降級或攔截警報，而是
+    在低於門檻時附加透明度提示，供使用者自行權衡是否人工複核。
     """
+    confidence_note = (
+        f"\n\n⚠️ **LLM 判讀信心偏低 ({confidence:.0%})**：本次判讀依據的財報段落可能"
+        "資訊密度不足或存在模糊性，建議人工複核原始文件後再執行清倉。"
+        if confidence < _LOW_CONFIDENCE_THRESHOLD
+        else f"\n\n*(LLM 判讀信心: {confidence:.0%})*"
+    )
     return create_dynamic_rollover_embed(
         rollover_type="原型假設破滅",
         sell_symbol=symbol.upper(),
         sell_ratio=1.0,
         buy_symbol="VOO",
-        reason=reasoning_with_source,
+        reason=reasoning_with_source + confidence_note,
         suggested_strategy="Buy Shares (防禦避風港)",
         suggested_price="Market",
         strike="N/A",
@@ -507,4 +536,54 @@ def create_thesis_passed_embed(
             inline=False,
         )
 
+    return embed
+
+
+_SCENARIO_SHORT_LABELS: Dict[str, str] = {
+    "MARGIN_DEFENSE": "保證金防禦",
+    "FUNDAMENTAL_BROKEN": "護城河破滅",
+    "OPPORTUNITY_COST": "機會成本",
+    "SATELLITE_REBALANCE": "核心衛星",
+}
+
+
+def create_rollover_history_embed(records: list[dict[str, Any]]) -> discord.Embed:
+    """
+    產生動態轉倉引擎審計軌跡（歷史推送紀錄）Embed。
+
+    系統僅提供建議、不代為執行券商下單，因此這裡呈現的是「系統實際推送過
+    哪些建議」而非「建議後的真實成交結果」，供使用者事後回顧與問責。
+    """
+    embed = NexusEmbed(
+        title="📜 動態轉倉建議歷史紀錄",
+        description="以下為系統近期實際推送給您的轉倉建議（非模擬成交結果）。\n​",
+        color=discord.Color.blurple(),
+    )
+
+    if not records:
+        embed.description = "📭 目前尚無轉倉建議推送紀錄。"
+        return embed
+
+    header = f"{_pad_string('時間 (UTC)', 16)} | {_pad_string('標的', 6)} | {_pad_string('情境', 8)} | {_pad_string('動作', 9)} | {_pad_string('比例', 6, 'right')}"
+    divider = "-" * 55
+    lines = [header, divider]
+    for r in records:
+        scenario_label = _SCENARIO_SHORT_LABELS.get(
+            str(r.get("scenario", "")), str(r.get("scenario", "N/A"))
+        )
+        created_at = str(r.get("created_at", ""))[:16]
+        action = str(r.get("action", "N/A"))
+        sell_ratio = float(r.get("sell_ratio", 0.0) or 0.0)
+        lines.append(
+            f"{_pad_string(created_at, 16)} | {_pad_string(r.get('symbol', ''), 6)} "
+            f"| {_pad_string(scenario_label, 8)} | {_pad_string(action, 9)} "
+            f"| {_pad_string(f'{sell_ratio:.0%}', 6, 'right')}"
+        )
+
+    table = "```\n" + "\n".join(lines) + "\n```"
+    safe_table = truncate_with_boundary(table, _EMBED_FIELD_VALUE_LIMIT)
+    embed.add_field(name="🕰️ 近期推送紀錄", value=safe_table, inline=False)
+    embed.set_footer(
+        text="Nexus Rollover Audit Trail • 僅記錄系統推送建議，非實際成交結果"
+    )
     return embed

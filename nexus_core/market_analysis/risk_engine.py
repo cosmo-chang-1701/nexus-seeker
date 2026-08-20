@@ -207,6 +207,31 @@ def get_macro_modifiers(
     return w_vix, w_oil, w_regime
 
 
+def kelly_position_fraction(
+    win_prob: float, odds: float, kelly_scale: float, cap: float
+) -> float:
+    """
+    凱利公式核心計算: f* = p - (1-p)/b (等價於 (p*b - (1-p))/b)，
+    經 kelly_scale 縮放（例如 Half-Kelly=0.5、Quarter-Kelly=0.25）並鉗制於 [0, cap]。
+
+    此為 services/execution_router.py 與 market_analysis/strategy.py 共用的唯一凱利公式
+    實作來源，避免同一數學公式在多處各自重複、可能各自漂移。
+
+    刻意不涵蓋的範圍：
+    - optimize_position_risk() 下方的「動態 Kelly 縮放」是以 VIX 分位數對
+      risk_limit 做的啟發式倍率調整，並非基於勝率/賠率的凱利公式計算，概念上
+      是完全不同的倉位模型，僅共用「Kelly」一詞作為保守倉位哲學的命名慣例。
+    - gamma_squeeze_engine.py 的 base_kelly 分層倍率同理，是訊號強度分級的
+      固定基礎倉位比例，非公式計算。
+    兩者均刻意不與此函式合併，比照本專案對三種刻意分歧的 gamma_cliff_level
+    公式的既有處理原則：概念不同的模型不應為了「去重」而強行統一。
+    """
+    if odds <= 0:
+        return 0.0
+    kelly_f = win_prob - (1.0 - win_prob) / odds
+    return max(0.0, min(kelly_f * kelly_scale, cap))
+
+
 def optimize_position_risk(
     current_delta: float,
     unit_weighted_delta: float,

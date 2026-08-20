@@ -8,6 +8,7 @@ from models.execution import (
     Signal,
 )
 from market_analysis.ivr_strategy_gate import is_selling_locked_by_ivr
+from market_analysis.risk_engine import kelly_position_fraction
 
 
 class ExecutionRouter:
@@ -200,11 +201,10 @@ class ExecutionRouter:
         # 預期賠率 (Profit/Loss Ratio) 設為固定的 1.8
         odds = 1.8
 
-        # 凱利公式: f* = (bp - q) / b = p - (1-p)/b
-        kelly_f = expected_win_rate - (1 - expected_win_rate) / odds
-
         # 安全邊際控制：Half-Kelly 並封頂於 15%
-        safe_percentage = max(0.0, min(kelly_f * 0.5, 0.15))
+        safe_percentage = kelly_position_fraction(
+            win_prob=expected_win_rate, odds=odds, kelly_scale=0.5, cap=0.15
+        )
 
         return PositionSizing(
             kelly_percentage=safe_percentage,

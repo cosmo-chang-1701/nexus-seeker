@@ -205,8 +205,10 @@ async def evaluate_margin_defense_impl(
             target_asset = "CASH"
             buy_label = "保留現金（補足現金儲備，消除追繳風險）"
             strategy_desc = f"{sell_action} 100% 部位以保留現金 (消除保證金追繳風險)"
+            # 用詞刻意採強制語氣（平倉/釋放/補足），與本情境 🚨 強制平倉的標題
+            # 危急等級一致，避免與 Scenario 2/3 建議性質的措辭混淆。
             dest_reason = (
-                "建議平倉釋放資金保留為現金儲備，優先補足保證金缺口以消除追繳風險。"
+                "強制平倉釋放資金保留為現金儲備，立即補足保證金缺口以消除追繳風險。"
             )
         else:
             target_asset = "BOXX"
@@ -214,7 +216,7 @@ async def evaluate_margin_defense_impl(
             strategy_desc = f"{sell_action} 100% 轉倉 BOXX (鎖定無風險利息)"
             dest_reason = (
                 "大盤宏觀風控紅線亮起，VOO 亦會同向下跌無法提供防禦，"
-                f"建議 {sell_action} 100% 部位轉倉至 BOXX 鎖定無風險利息。"
+                f"強制 {sell_action} 100% 部位轉倉至 BOXX 鎖定無風險利息。"
             )
 
         reason_text = (
@@ -260,6 +262,22 @@ async def evaluate_margin_defense_impl(
         if sell_ratio <= 0.0:
             action = "HOLD"
 
+        # 預估資金影響：優先採用持倉市值，缺失時退回股數*現價估算。
+        current_value = float(asset.get("current_value", 0.0))
+        spot_price = float(asset.get("spot_price", 0.0))
+        if current_value <= 0 and spot_price > 0:
+            current_value = abs(quantity) * spot_price
+        recovered_cash = current_value * sell_ratio
+        cash_impact = f"${recovered_cash:,.0f}" if recovered_cash > 0 else None
+
+        # 建議限價：僅在目標為 BOXX 等實際買入標的時才有意義（CASH 為單純平倉保留
+        # 現金，無買入委託，維持 None 讓呼叫端退回 "Market" 泛用字串）。
+        limit_price = (
+            await engine._resolve_target_reference_price(target_asset)
+            if target_asset != "CASH"
+            else None
+        )
+
         instructions.append(
             {
                 "symbol": symbol,
@@ -272,6 +290,8 @@ async def evaluate_margin_defense_impl(
                 "buy_action_label": buy_label,
                 "is_manual_override_required": True,
                 "scenario": RolloverScenario.MARGIN_DEFENSE.value,
+                "cash_impact": cash_impact,
+                "limit_price": limit_price,
             }
         )
 

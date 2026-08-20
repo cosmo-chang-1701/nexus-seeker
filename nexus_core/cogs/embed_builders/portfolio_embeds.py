@@ -175,8 +175,8 @@ def create_holdings_embed(
     total_pnl = 0.0
 
     data_lines = []
-    header = f"{_pad_string('標的', 8)} | {_pad_string('數量', 8, 'right')} | {_pad_string('平均成本', 10, 'right')} | {_pad_string('現價', 10, 'right')} | {_pad_string('當前損益', 10, 'right')}"
-    divider = "-" * 58
+    header = f"{_pad_string('標的', 8)} | {_pad_string('數量', 8, 'right')} | {_pad_string('平均成本', 10, 'right')} | {_pad_string('現價', 10, 'right')} | {_pad_string('當前損益', 10, 'right')} | {_pad_string('配置', 12, 'right')}"
+    divider = "-" * 73
 
     for h in sorted_holdings:
         curr_p = h.get("current_price", 0.0)
@@ -201,7 +201,24 @@ def create_holdings_embed(
             pnl_pct_str, f"{color_start}{pnl_pct_str}\u001b[0m"
         )
 
-        data_lines.append(f"{sym} | {qty} | {cost} | {curr_p_fmt} | {pnl_fmt}")
+        # 核心/衛星分類與配置上限：透過 /edit_holding 設定，供動態轉倉引擎
+        # (Scenario 3 核心衛星再平衡) 判斷是否超限。target 僅在使用者設定過
+        # 目標配置比例時才附加顯示。
+        asset_class_label = "CORE" if h.get("asset_class") == "CORE" else "SAT"
+        max_alloc = h.get("max_allocation_pct")
+        alloc_str = (
+            f"{asset_class_label} {max_alloc * 100:.0f}%"
+            if max_alloc is not None
+            else asset_class_label
+        )
+        target_alloc = h.get("target_allocation_pct")
+        if target_alloc is not None:
+            alloc_str += f"→{target_alloc * 100:.0f}%"
+        alloc_fmt = _pad_string(alloc_str, 12, "right")
+
+        data_lines.append(
+            f"{sym} | {qty} | {cost} | {curr_p_fmt} | {pnl_fmt} | {alloc_fmt}"
+        )
 
     chunks = _chunk_ansi_table(header, divider, data_lines)
     for i, chunk in enumerate(chunks):

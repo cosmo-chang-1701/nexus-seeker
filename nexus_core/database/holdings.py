@@ -70,6 +70,10 @@ def get_user_holdings(user_id: int) -> Any:
             d["quantity"] = meta.get("quantity", 0.0)
             d["avg_cost"] = meta.get("avg_cost", 0.0)
             d["weighted_delta"] = meta.get("weighted_delta", 0.0)
+            d["asset_class"] = meta.get("asset_class")
+            d["max_allocation_pct"] = meta.get("max_allocation_pct")
+            d["target_allocation_pct"] = meta.get("target_allocation_pct")
+            d["acquired_at"] = meta.get("acquired_at")
             rows.append(d)
         return rows
     finally:
@@ -107,6 +111,10 @@ def get_all_holdings() -> Any:
             meta = json.loads(d["metadata"]) if d["metadata"] else {}
             d["quantity"] = meta.get("quantity", 0.0)
             d["avg_cost"] = meta.get("avg_cost", 0.0)
+            d["asset_class"] = meta.get("asset_class")
+            d["max_allocation_pct"] = meta.get("max_allocation_pct")
+            d["target_allocation_pct"] = meta.get("target_allocation_pct")
+            d["acquired_at"] = meta.get("acquired_at")
             rows.append(d)
         return rows
     finally:

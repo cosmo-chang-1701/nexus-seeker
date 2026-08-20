@@ -931,11 +931,19 @@ class TerminalCog(commands.Cog):
             success = manager.update_asset(existing_asset)
             action_text = "更新"
         else:
+            # 首次登錄時記錄建倉日期，供動態轉倉引擎粗估長/短期資本利得稅率區間
+            # (若使用者持倉實際開倉日更早，可用 /edit_holding 的 acquired_at
+            # 參數回填校正)。
+            acquired_at = datetime.now().strftime("%Y-%m-%d")
             asset = Asset(
                 user_id=user_id,
                 symbol=symbol,
                 context_type=ContextType.HOLDING,
-                metadata={"quantity": quantity, "avg_cost": avg_cost},
+                metadata={
+                    "quantity": quantity,
+                    "avg_cost": avg_cost,
+                    "acquired_at": acquired_at,
+                },
             )
             success = manager.add_asset(asset)
             action_text = "登錄"
@@ -960,12 +968,23 @@ class TerminalCog(commands.Cog):
             )
 
     @app_commands.command(
-        name="edit_holding", description="修改現貨持倉參數 (數量或成本)"
+        name="edit_holding",
+        description="修改現貨持倉參數 (數量、成本、核心/衛星分類或配置上限)",
     )
     @app_commands.describe(
         symbol="股票代號",
         quantity="更新後的持有股數 (選填)",
         avg_cost="更新後的平均成本 (選填)",
+        asset_class="核心 (CORE) 或衛星 (SATELLITE) 資產分類，供動態轉倉引擎再平衡判斷 (選填)",
+        max_allocation_pct="資產配置佔總市值上限的百分比 (0-100，例如 30 代表 30%，選填)",
+        target_allocation_pct="超限時再平衡的目標配置百分比 (0-100，需小於等於配置上限，選填)",
+        acquired_at="建倉日期 (YYYY-MM-DD)，用於回填校正實際開倉日以利長/短期資本利得稅務提醒 (選填)",
+    )
+    @app_commands.choices(
+        asset_class=[
+            app_commands.Choice(name="CORE (核心防禦資產，如 VOO/BOXX)", value="CORE"),
+            app_commands.Choice(name="SATELLITE (衛星戰術資產)", value="SATELLITE"),
+        ]
     )
     async def edit_holding(
         self,
@@ -973,15 +992,61 @@ class TerminalCog(commands.Cog):
         symbol: str,
         quantity: Optional[float] = None,
         avg_cost: Optional[float] = None,
+        asset_class: Optional[app_commands.Choice[str]] = None,
+        max_allocation_pct: Optional[float] = None,
+        target_allocation_pct: Optional[float] = None,
+        acquired_at: Optional[str] = None,
     ) -> Any:
         symbol = symbol.upper()
-        if quantity is None and avg_cost is None:
+        if (
+            quantity is None
+            and avg_cost is None
+            and asset_class is None
+            and max_allocation_pct is None
+            and target_allocation_pct is None
+            and acquired_at is None
+        ):
             return await interaction.response.send_message(
                 embed=create_info_embed(
-                    title="系統資訊", message=" 請提供要修改的參數 (數量或成本)。"
+                    title="系統資訊", message=" 請提供要修改的參數。"
                 ),
                 ephemeral=True,
             )
+
+        for label, val in (
+            ("資產配置上限", max_allocation_pct),
+            ("目標配置比例", target_allocation_pct),
+        ):
+            if val is not None and not (0.0 < val <= 100.0):
+                return await interaction.response.send_message(
+                    embed=create_error_embed(
+                        f"**{label}** 必須介於 0 (不含) 到 100 之間。", title="系統錯誤"
+                    ),
+                    ephemeral=True,
+                )
+        if (
+            max_allocation_pct is not None
+            and target_allocation_pct is not None
+            and target_allocation_pct > max_allocation_pct
+        ):
+            return await interaction.response.send_message(
+                embed=create_error_embed(
+                    "**目標配置比例** 不可大於 **資產配置上限**。", title="系統錯誤"
+                ),
+                ephemeral=True,
+            )
+
+        if acquired_at is not None:
+            try:
+                datetime.strptime(acquired_at, "%Y-%m-%d")
+            except ValueError:
+                return await interaction.response.send_message(
+                    embed=create_error_embed(
+                        "**建倉日期** 格式錯誤，請使用 `YYYY-MM-DD` (例如 `2024-03-15`)。",
+                        title="系統錯誤",
+                    ),
+                    ephemeral=True,
+                )
 
         await interaction.response.defer(ephemeral=True)
         from services.asset_manager import AssetManager
@@ -989,11 +1054,19 @@ class TerminalCog(commands.Cog):
 
         manager = AssetManager()
 
-        updates = {}
+        updates: Dict[str, Any] = {}
         if quantity is not None:
             updates["quantity"] = quantity
         if avg_cost is not None:
             updates["avg_cost"] = avg_cost
+        if asset_class is not None:
+            updates["asset_class"] = asset_class.value
+        if max_allocation_pct is not None:
+            updates["max_allocation_pct"] = max_allocation_pct / 100.0
+        if target_allocation_pct is not None:
+            updates["target_allocation_pct"] = target_allocation_pct / 100.0
+        if acquired_at is not None:
+            updates["acquired_at"] = acquired_at
 
         success = manager.update_asset_metadata_by_symbol(
             interaction.user.id, symbol, ContextType.HOLDING, updates
@@ -1039,11 +1112,19 @@ class TerminalCog(commands.Cog):
                 ephemeral=True,
             )
 
+        from market_analysis.dynamic_rollover import CORE_DEFENSE_ETF_SYMBOLS
+
         holdings = []
         for a in assets:
             sym = a.symbol
             quote = await market_data_service.get_quote(sym)
             current_price = quote.get("c", 0.0) if quote else 0.0
+
+            default_class = "CORE" if sym in CORE_DEFENSE_ETF_SYMBOLS else "SATELLITE"
+            asset_class = a.metadata.get("asset_class") or default_class
+            default_max_alloc = 1.0 if asset_class == "CORE" else 0.3
+            max_alloc = a.metadata.get("max_allocation_pct")
+            max_alloc = max_alloc if max_alloc is not None else default_max_alloc
 
             h_data = {
                 "id": a.id,
@@ -1052,6 +1133,9 @@ class TerminalCog(commands.Cog):
                 "avg_cost": a.metadata.get("avg_cost", 0.0),
                 "weighted_delta": a.metadata.get("weighted_delta", 0.0),
                 "current_price": current_price,
+                "asset_class": asset_class,
+                "max_allocation_pct": max_alloc,
+                "target_allocation_pct": a.metadata.get("target_allocation_pct"),
             }
             holdings.append(h_data)
 
@@ -1096,6 +1180,17 @@ class TerminalCog(commands.Cog):
                 ),
                 ephemeral=True,
             )
+
+    @app_commands.command(
+        name="rollover_history", description="查看動態轉倉引擎近期推送給您的建議紀錄"
+    )
+    async def rollover_history(self, interaction: discord.Interaction) -> Any:
+        await interaction.response.defer(ephemeral=True)
+        from cogs.embed_builders.rollover_embeds import create_rollover_history_embed
+
+        records = database.get_rollover_audit_log(interaction.user.id)
+        embed = create_rollover_history_embed(records)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="remove_watch", description="將標的從觀察清單中移除")
     async def remove_watch(self, interaction: discord.Interaction, symbol: str) -> Any:
@@ -1489,7 +1584,7 @@ class TerminalCog(commands.Cog):
 
         if result.is_broken:
             embed = build_fundamental_broken_embed(
-                symbol, result.reasoning + source_info
+                symbol, result.reasoning + source_info, confidence=result.confidence
             )
             view = RolloverActionView(target_symbol=symbol.upper())
             await _send_or_edit("", embed=embed, view=view)

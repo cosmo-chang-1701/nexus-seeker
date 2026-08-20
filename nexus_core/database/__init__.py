@@ -73,6 +73,10 @@ from .price_volume_watch import (
     get_all_watches,
     delete_watch,
 )
+from .rollover_audit import (
+    log_rollover_instruction,
+    get_rollover_audit_log,
+)
 
 __all__ = [
     "run_migrations",
@@ -136,4 +140,6 @@ __all__ = [
     "get_user_watches",
     "get_all_watches",
     "delete_watch",
+    "log_rollover_instruction",
+    "get_rollover_audit_log",
 ]

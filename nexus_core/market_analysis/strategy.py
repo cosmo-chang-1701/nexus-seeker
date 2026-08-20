@@ -11,7 +11,7 @@ from config import TARGET_DELTAS, get_vix_tier, VixTier
 from .greeks import calculate_contract_delta, calculate_greeks
 from .data import get_next_earnings_date
 
-from .risk_engine import calculate_beta
+from .risk_engine import calculate_beta, kelly_position_fraction
 from .ivr_strategy_gate import is_selling_locked_by_ivr, _ITM_CALL_MIN_DELTA
 
 import logging
@@ -547,8 +547,9 @@ def _calculate_sizing(
                 p = 1.0 - abs(delta)
                 b = bid / margin_required
                 if b > 0:
-                    kelly_f = (p * b - (1.0 - p)) / b
-                    alloc_pct = min(max(kelly_f * effective_kelly, 0.0), 0.05)
+                    alloc_pct = kelly_position_fraction(
+                        win_prob=p, odds=b, kelly_scale=effective_kelly, cap=0.05
+                    )
                     margin_per_contract = margin_required * 100
     elif strategy in ["BTO_CALL", "BTO_PUT"]:
         premium = ask
@@ -563,8 +564,9 @@ def _calculate_sizing(
                 p = abs(delta)
                 b = potential_profit / premium
                 if b > 0:
-                    kelly_f = (p * b - (1.0 - p)) / b
-                    alloc_pct = min(max(kelly_f * effective_kelly, 0.0), 0.03)
+                    alloc_pct = kelly_position_fraction(
+                        win_prob=p, odds=b, kelly_scale=effective_kelly, cap=0.03
+                    )
             margin_per_contract = premium * 100
 
     return aroc, alloc_pct, margin_per_contract

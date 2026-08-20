@@ -161,7 +161,9 @@ class FundamentalFilingMonitorCog(commands.Cog, name="FundamentalFilingMonitorCo
 
         source_url = context.get("source_url", "")
         source_info = f"\n\n🔗 參照資料來源: {source_url}" if source_url else ""
-        embed = build_fundamental_broken_embed(symbol, result.reasoning + source_info)
+        embed = build_fundamental_broken_embed(
+            symbol, result.reasoning + source_info, confidence=result.confidence
+        )
         setattr(embed, "_view", f"RolloverActionView:{symbol}")
 
         for user_id in holder_ids:

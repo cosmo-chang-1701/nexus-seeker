@@ -22,11 +22,11 @@ def clean_db(db_conn: Any):  # type: ignore
 
 
 def test_default_all_enabled(db_conn: Any):  # type: ignore
-    """測試全新用戶 13 大通知頻道預設值（預設全部開啟）"""
+    """測試全新用戶 14 大通知頻道預設值（預設全部開啟）"""
     user_id = 999111
     settings = get_user_notification_settings(user_id)
     assert len(settings) == len(ALL_NOTIFICATION_KEYS)
-    assert len(ALL_NOTIFICATION_KEYS) == 13
+    assert len(ALL_NOTIFICATION_KEYS) == 14
 
     for key in ALL_NOTIFICATION_KEYS:
         expected = True
@@ -117,6 +117,8 @@ def test_apply_preset_settings(db_conn: Any):  # type: ignore
     assert settings_mute["telemetry_orders"] is False
     assert settings_mute["defense_portfolio_risk"] is True
     assert settings_mute["defense_option_rollover"] is False
+    # 保證金強制平倉警報屬帳戶生存等級警訊，任何情境下皆不可被靜音
+    assert settings_mute["defense_margin_call"] is True
 
     # 3. 戰備全開 (all_on)
     settings_all = apply_preset_settings(user_id, "all_on")
@@ -321,7 +323,7 @@ async def test_module_level_batch_enable_disable_all_categories(db_conn: Any):  
 
 
 def test_full_preset_assertions_all_keys(db_conn: Any):  # type: ignore
-    """測試所有 13 個 Key 在 4 大預設情境 (all_on, all_off, focus, mute_intraday) 下的完整狀態"""
+    """測試所有 14 個 Key 在 4 大預設情境 (all_on, all_off, focus, mute_intraday) 下的完整狀態"""
     user_id = 888111
 
     # 1. all_on
@@ -341,6 +343,7 @@ def test_full_preset_assertions_all_keys(db_conn: Any):  # type: ignore
     assert s_focus["telemetry_orders"] is True
     assert s_focus["defense_portfolio_risk"] is True
     assert s_focus["defense_option_rollover"] is True
+    assert s_focus["defense_margin_call"] is True
     assert s_focus["defense_fundamental_thesis"] is True
     assert s_focus["defense_macro_tail_risk"] is True
     assert s_focus["alpha_market_signals"] is False
@@ -357,6 +360,8 @@ def test_full_preset_assertions_all_keys(db_conn: Any):  # type: ignore
     assert s_mute["telemetry_orders"] is False
     assert s_mute["defense_portfolio_risk"] is True
     assert s_mute["defense_option_rollover"] is False
+    # 保證金強制平倉警報屬帳戶生存等級警訊，任何情境下皆不可被靜音
+    assert s_mute["defense_margin_call"] is True
     # 每日僅 08:00 ET 盤前觸發一次的高信號護城河警報，不屬於盤中雜訊，盤中靜音模式下維持開啟
     assert s_mute["defense_fundamental_thesis"] is True
     assert s_mute["defense_macro_tail_risk"] is True
