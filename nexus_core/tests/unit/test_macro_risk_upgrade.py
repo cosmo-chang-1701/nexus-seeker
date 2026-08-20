@@ -295,13 +295,13 @@ def test_safety_payout_threshold_logic() -> Any:
 async def test_get_macro_overview_data_logic() -> Any:
     from cogs.unified_terminal import get_macro_overview_data
 
-    with patch("psutil.virtual_memory") as mock_mem, patch(
+    with patch("cogs.unified_terminal.utils.is_memory_safe") as mock_safe, patch(
         "database.get_kv_cache"
     ) as mock_kv, patch("services.market_data_service.get_quote") as mock_quote:
         # We simulate get_quote throwing an Exception so it falls back to mock_kv
         mock_quote.side_effect = Exception("Mocked error")
-        # Case 1: RAM normal
-        mock_mem.return_value.percent = 70.0
+        # Case 1: memory (RAM + swap) normal
+        mock_safe.return_value = True
         mock_kv.side_effect = lambda key: {
             "macro_spx": 5150.0,
             "macro_vix": 18.0,
@@ -311,13 +311,77 @@ async def test_get_macro_overview_data_logic() -> Any:
 
         data = await get_macro_overview_data(1)
         assert data["is_degraded"] is False
+        assert data["served_stale_cache"] is False
         assert data["spx"] == 5150.0
         assert data["short_gamma_critical"] is False
 
-        # Case 2: RAM high (>85%) -> Degraded mode
-        mock_mem.return_value.percent = 90.0
+        # Case 2: memory (RAM + swap) high, prior cache entry exists for this user
+        # -> served from the LRU cache fallback without recomputation
+        mock_safe.return_value = False
         data_degraded = await get_macro_overview_data(1)
         assert data_degraded["is_degraded"] is True
+        assert data_degraded["served_stale_cache"] is True
+
+        # Case 3: memory (RAM + swap) high, but NO prior cache entry for this user
+        # (cold cache) -> full computation still runs; served_stale_cache must be
+        # False so the embed layer doesn't falsely claim it skipped computation.
+        data_cold_degraded = await get_macro_overview_data(2)
+        assert data_cold_degraded["is_degraded"] is True
+        assert data_cold_degraded["served_stale_cache"] is False
+        assert data_cold_degraded["spx"] == 5150.0
+
+
+def _get_field_value(embed: Any, field_name: str) -> str:
+    for field in embed.fields:
+        if field.name == field_name:
+            return str(field.value)
+    raise AssertionError(f"Field {field_name!r} not found in embed")
+
+
+def test_market_macro_overview_degradation_warning_wording() -> None:
+    """降級警告文案應依實際是否命中 LRU 快取回退區分，避免冷快取時誤稱已簡化運算"""
+    from cogs.embed_builders.market_embeds import build_market_macro_overview_embed
+
+    base_macro_data: dict[str, Any] = {
+        "spx": 5150.0,
+        "vix": 18.0,
+        "us10y": 4.25,
+        "gamma_flip_line": 5180.0,
+        "wti": 75.0,
+        "rrp": 420.5,
+        "fed_balance": 7.25,
+        "cpi_nfp_calendar": "近期無重大數據",
+        "fear_greed": 48.0,
+        "uer": 4.0,
+        "sahm_rule": 0.35,
+        "rrp_change_30d": 5.0,
+        "short_gamma_critical": False,
+        "recession_warning": False,
+        "payout_threshold": 13000.0,
+        "fedwatch_probability": None,
+        "fedwatch_is_fallback": True,
+        "fedwatch_details": {},
+        "escape_win_status": "NEUTRAL",
+        "escape_window_direction": "NONE",
+        "escape_window_shift_days": 0,
+        "escape_window_tier": "NONE",
+        "is_degraded": True,
+        "gex_is_fallback": True,
+    }
+
+    # 命中 LRU 快取回退：確實跳過了重新運算，維持原有措辭
+    cache_hit_data = {**base_macro_data, "served_stale_cache": True}
+    embed_cache_hit = build_market_macro_overview_embed(cache_hit_data)
+    warning_cache_hit = _get_field_value(embed_cache_hit, "⚠️ 系統降級警告")
+    assert "已自動啟用 LRU 降級保護機制，簡化部分動態計算" in warning_cache_hit
+
+    # 冷快取（無先前快取可回退）：本次仍執行完整運算，文案不得宣稱已簡化計算
+    cold_cache_data = {**base_macro_data, "served_stale_cache": False}
+    embed_cold = build_market_macro_overview_embed(cold_cache_data)
+    warning_cold = _get_field_value(embed_cold, "⚠️ 系統降級警告")
+    assert "簡化部分動態計算" not in warning_cold
+    assert "尚無可用 LRU 快取可供降級回退" in warning_cold
+    assert "本次仍執行完整動態運算" in warning_cold
 
 
 def test_fixed_income_hedging_whitelist() -> None:

@@ -2,7 +2,7 @@ from typing import Any, cast
 import inspect
 import logging
 import re
-import psutil
+from services.llm_service import is_memory_safe
 from services.market_data_service import BoundedCache
 
 logger = logging.getLogger(__name__)
@@ -11,8 +11,7 @@ _macro_overview_cache = BoundedCache(max_size=10)
 
 
 async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
-    ram_usage = psutil.virtual_memory().percent
-    is_degraded = ram_usage > 85.0
+    is_degraded = not is_memory_safe()
     cache_key = f"overview_{user_id}"
 
     if is_degraded and cache_key in _macro_overview_cache:
@@ -20,6 +19,7 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
             dict[str, Any], _macro_overview_cache[cache_key].copy()
         )
         cached_data["is_degraded"] = True
+        cached_data["served_stale_cache"] = True
         return cached_data
 
     # Read from SQLite kv_cache
@@ -206,6 +206,7 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         "escape_window_shift_days": escape_shift,
         "escape_window_tier": escape_tier,
         "is_degraded": is_degraded,
+        "served_stale_cache": False,
         "gex_is_fallback": gex_is_fallback,
     }
 

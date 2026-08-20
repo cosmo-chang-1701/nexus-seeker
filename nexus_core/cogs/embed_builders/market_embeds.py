@@ -1395,8 +1395,9 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
     建立美股總體經濟與大盤風險防禦指標 (Macro & Risk Dashboard) Embed。
     採用繁體中文與 ANSI 雙色調 Panel 格式進行呈現。
     """
-    # 1. 依據 RAM 水位判定是否觸發降級
+    # 1. 依據 RAM+Swap 水位判定是否觸發降級
     is_degraded = macro_data.get("is_degraded", False)
+    served_stale_cache = macro_data.get("served_stale_cache", False)
 
     # 決定顏色
     color = discord.Color.green()
@@ -1582,11 +1583,21 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
         inline=False,
     )
 
-    # 如果有降級警告，加入說明
+    # 如果有降級警告，加入說明（依實際是否命中 LRU 快取回退區分文案，避免冷快取時誤稱已簡化運算）
     if is_degraded:
+        if served_stale_cache:
+            degradation_notice = (
+                "**[警告] 偵測到系統記憶體負載 > 85%，已自動啟用 LRU 降級保護機制，"
+                "簡化部分動態計算以確保系統穩定。**"
+            )
+        else:
+            degradation_notice = (
+                "**[警告] 偵測到系統記憶體負載 > 85%，尚無可用 LRU 快取可供降級回退，"
+                "本次仍執行完整動態運算；記憶體壓力持續期間之後續請求將改用快取回應。**"
+            )
         embed.add_field(
             name="⚠️ 系統降級警告",
-            value="**[警告] 偵測到系統記憶體負載 > 85%，已自動啟用 LRU 降級保護機制，簡化部分動態計算以確保系統穩定。**",
+            value=degradation_notice,
             inline=False,
         )
 
