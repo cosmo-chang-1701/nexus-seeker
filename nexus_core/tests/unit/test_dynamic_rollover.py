@@ -2422,7 +2422,15 @@ _GREEN_15M_DF = _make_15m_df([(98.0, 1000.0)] * 20 + [(101.0, 1500.0)])
 
 
 @pytest.mark.asyncio
-async def test_confirm_entry_signal_all_four_conditions_pass(
+@patch("database.calendar_cache.get_cached_earnings", return_value=None)
+@patch(
+    "market_analysis.index_microstructure.get_market_regime",
+    new_callable=AsyncMock,
+    return_value="NORMAL",
+)
+async def test_confirm_entry_signal_all_five_conditions_pass(
+    mock_regime: AsyncMock,
+    mock_earnings: MagicMock,
     engine: DynamicRolloverEngine,
 ) -> None:
     with patch(
@@ -2438,6 +2446,7 @@ async def test_confirm_entry_signal_all_four_conditions_pass(
     assert "條件二✅" in reason
     assert "條件三✅" in reason
     assert "條件四✅" in reason
+    assert "條件五✅" in reason
 
 
 @pytest.mark.asyncio
