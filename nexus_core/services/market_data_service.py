@@ -10,10 +10,13 @@ Finnhub Service — 集中式 Finnhub API client wrapper (Async Optimized)。
 
 from typing import Any
 import asyncio
+import contextvars
+import functools
 import logging
 import time
 import random
 import math
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, cast
 from collections import OrderedDict, namedtuple
@@ -31,6 +34,42 @@ from market_time import ny_tz
 import database.financials as db_financials
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# 互動請求優先權標記（Context-local）
+# ---------------------------------------------------------------------------
+# 用於區分「使用者互動指令」（如 /x）與「背景排程」（心跳/掃描）對 yfinance /
+# Finnhub 的呼叫來源，讓下方的限流池能替互動請求保留獨立的併發與每分鐘額度，
+# 避免背景任務把共用額度佔滿、導致互動指令長時間排隊卡住。
+# 透過 contextvars 傳遞：asyncio.gather / asyncio.create_task 產生的子協程會
+# 自動繼承呼叫當下的 context，不需要逐層手動傳遞旗標。
+_is_interactive_request: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "is_interactive_request", default=False
+)
+
+
+@contextmanager
+def mark_interactive_request() -> Any:
+    """標記目前 context 內所有下游 API 呼叫為使用者互動來源（例如 /x 指令）。"""
+    token = _is_interactive_request.set(True)
+    try:
+        yield
+    finally:
+        _is_interactive_request.reset(token)
+
+
+def interactive(func: Any) -> Any:
+    """裝飾器版本的 `mark_interactive_request`：標記被裝飾的 async 方法整個執行
+    期間（含其內部 asyncio.gather/create_task 產生的子協程）為互動請求來源，
+    無需在呼叫端或函式內部手動包 `with` 區塊。用於 /x 指令的入口方法。"""
+
+    @functools.wraps(func)
+    async def wrapper(*args: Any, **kwargs: Any) -> Any:
+        with mark_interactive_request():
+            return await func(*args, **kwargs)
+
+    return wrapper
 
 
 def _sanitize_ticker(raw: str) -> str:
@@ -74,12 +113,18 @@ def _get_finnhub_controls() -> dict[str, Any]:
     controls = _finnhub_controls_by_loop.get(loop)
     if controls is None:
         controls = {
-            # 1) 每分鐘 40 次請求（保留更大緩衝以容納重試，避免觸發硬性 60 次上限）
-            "limiter": AsyncLimiter(40, 60),
-            # 2) 每秒 2 次請求（嚴格抑制突發 burst，避免 Finnhub 內部防護攔截）
+            # 1) 每分鐘總額度 40 次（保留更大緩衝以容納重試，避免觸發硬性 60 次上限），
+            #    切分為「背景」30 次 + 「互動」10 次保底，確保 /x 等互動指令不會被
+            #    背景排程（心跳/掃描）佔滿額度而排隊卡住。
+            "limiter_background": AsyncLimiter(30, 60),
+            "limiter_interactive": AsyncLimiter(10, 60),
+            # 2) 每秒 2 次請求為對外真實 burst 上限，背景與互動共用同一把鎖，
+            #    避免兩池疊加後仍觸發 Finnhub 內部突發防護。
             "limiter_per_second": AsyncLimiter(2, 1),
-            # 3) 併發上限（降低併發，避免 API 同時連線造成 429）
-            "sem": asyncio.Semaphore(2),
+            # 3) 併發上限：背景 1 個 + 互動 1 個，總和維持原本的 2，
+            #    只是把保底名額分配給互動請求。
+            "sem_background": asyncio.Semaphore(1),
+            "sem_interactive": asyncio.Semaphore(1),
         }
         _finnhub_controls_by_loop[loop] = controls
     return controls
@@ -99,18 +144,28 @@ def _get_yfinance_controls() -> dict[str, Any]:
     controls = _yfinance_controls_by_loop.get(loop)
     if controls is None:
         controls = {
-            "limiter": AsyncLimiter(30, 60),  # 每分鐘 30 次
-            "sem": asyncio.Semaphore(3),  # 最多 3 個併發
+            # 每分鐘總額度 30 次，切分為「背景」22 次 + 「互動」8 次保底，
+            # 理由同 Finnhub controls：避免背景排程佔滿額度卡住 /x 等互動指令。
+            "limiter_background": AsyncLimiter(22, 60),
+            "limiter_interactive": AsyncLimiter(8, 60),
+            # 併發上限：背景 2 個 + 互動 1 個，總和維持原本的 3。
+            "sem_background": asyncio.Semaphore(2),
+            "sem_interactive": asyncio.Semaphore(1),
         }
         _yfinance_controls_by_loop[loop] = controls
     return controls
 
 
 async def call_yf(func: Any, *args: Any, **kwargs: Any) -> Any:
-    """統一節流包裝：所有對 yfinance 的 blocking 呼叫都應經過這裡。"""
+    """統一節流包裝：所有對 yfinance 的 blocking 呼叫都應經過這裡。
+    依 `_is_interactive_request` context 挑選互動或背景限流池。"""
     controls = _get_yfinance_controls()
-    async with controls["limiter"]:
-        async with controls["sem"]:
+    if _is_interactive_request.get():
+        limiter, sem = controls["limiter_interactive"], controls["sem_interactive"]
+    else:
+        limiter, sem = controls["limiter_background"], controls["sem_background"]
+    async with limiter:
+        async with sem:
             return await asyncio.to_thread(func, *args, **kwargs)
 
 
@@ -153,7 +208,12 @@ async def _execute_api_call(func: Any, *args, **kwargs) -> Any:  # type: ignore
     global _rate_limit_until
 
     controls = _get_finnhub_controls()
-    sem = controls["sem"]
+    if _is_interactive_request.get():
+        sem = controls["sem_interactive"]
+        limiter = controls["limiter_interactive"]
+    else:
+        sem = controls["sem_background"]
+        limiter = controls["limiter_background"]
 
     max_retries = 3
 
@@ -171,7 +231,7 @@ async def _execute_api_call(func: Any, *args, **kwargs) -> Any:  # type: ignore
 
         async with sem:
             async with controls["limiter_per_second"]:
-                async with controls["limiter"]:
+                async with limiter:
                     # 1) 進入限流鎖後再確認一次（防止排隊期間被其他 task 更新 cooldown）
                     now = time.time()
                     rate_limit_until = _rate_limit_until

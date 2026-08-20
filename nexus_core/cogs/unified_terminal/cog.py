@@ -141,6 +141,7 @@ class UnifiedTerminalCog(commands.Cog):
             except Exception as follow_err:
                 logger.error(f"Failed to send outer error followup: {follow_err}")
 
+    @market_data_service.interactive
     async def execute_unified_scan(
         self, interaction: discord.Interaction, state: dict, user_id: int
     ) -> Any:
@@ -565,6 +566,7 @@ class UnifiedTerminalCog(commands.Cog):
             "darkpool": dp_data,
         }
 
+    @market_data_service.interactive
     async def _run_single_symbol_hub(
         self,
         interaction: discord.Interaction,

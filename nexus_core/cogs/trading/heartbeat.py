@@ -55,6 +55,9 @@ async def dispatch_watchlist_heartbeat(
         )
         return
 
+    # --- Pass 1: 依每位使用者的通知開關與 option_alert_mode 篩選出實際要推播的標的 ---
+    user_deliverable: dict[int, list[str]] = {}
+    symbols_to_fetch: set[str] = set()
     for uid, symbols in user_symbols.items():
         try:
             if not database.is_notification_enabled(uid, "heartbeat_watchlist"):
@@ -74,19 +77,34 @@ async def dispatch_watchlist_heartbeat(
             if not deliverable_symbols:
                 continue
 
-            import random
+            user_deliverable[uid] = deliverable_symbols
+            symbols_to_fetch.update(deliverable_symbols)
+        except Exception as user_err:
+            logger.error(
+                f"❌ 用戶 {uid} 心跳前置篩選失敗: {user_err}",
+                exc_info=True,
+            )
+            continue
 
-            scan_results = []
-            for idx, s in enumerate(deliverable_symbols):
-                if idx > 0:
-                    await asyncio.sleep(random.uniform(1.5, 2.0))
-                try:
-                    res = await terminal_cog._fetch_sym_radar_data_slow(s)
-                    scan_results.append(res)
-                except Exception as ex:
-                    logger.error(f"Error fetching radar data for {s}: {ex}")
-                    scan_results.append(ex)
+    # --- Pass 2: 每個「去重後」的標的只實際打一次雷達數據，多位使用者共用同一標的的
+    # 抓取結果不重複打 Finnhub/yfinance/Edge API，避免拖長整輪心跳佔用全域限流額度、
+    # 進而卡住盤中互動指令（如 /x symbol:NVDA）。---
+    import random
 
+    radar_data_cache: dict[str, Any] = {}
+    for idx, s in enumerate(sorted(symbols_to_fetch)):
+        if idx > 0:
+            await asyncio.sleep(random.uniform(1.5, 2.0))
+        try:
+            radar_data_cache[s] = await terminal_cog._fetch_sym_radar_data_slow(s)
+        except Exception as ex:
+            logger.error(f"Error fetching radar data for {s}: {ex}")
+            radar_data_cache[s] = ex
+
+    # --- Pass 3: 依每位使用者各自的標的清單，從共用快取組裝並推播個人化 embed ---
+    for uid, deliverable_symbols in user_deliverable.items():
+        try:
+            scan_results = [radar_data_cache.get(s) for s in deliverable_symbols]
             valid_results = [r for r in scan_results if isinstance(r, dict)]
 
             if valid_results:
