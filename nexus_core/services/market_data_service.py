@@ -758,69 +758,14 @@ async def get_all_option_expiries(symbol: str) -> List[str]:
     return res
 
 
-async def get_option_chain(
-    symbol: str, expiry: str, prune_pct: Optional[float] = 0.1
-) -> Optional[Any]:
-    """取得指定到期日的期權鏈 (支援 40 分鐘快取與 Copy 隔離)。"""
-    symbol = _sanitize_ticker(symbol)
-    cache_key = (symbol, expiry)
-    now = time.time()
-
-    async def _get_spot() -> float:
-        try:
-            quote = await get_quote(symbol)
-            return float(quote.get("c", 0.0)) if quote else 0.0
-        except Exception as e:
-            logger.warning(
-                f"[{symbol}] Strike Pruning 報價獲取失敗 ({e})，降級為不裁減全量資料。"
-            )
-            return 0.0
-
-    def _prune(
-        calls: Optional[pd.DataFrame],
-        puts: Optional[pd.DataFrame],
-        spot: float,
-        pct: Optional[float],
-    ) -> tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
-        if spot <= 0.0 or pct is None:
-            return calls, puts
-        lower = spot * (1.0 - pct)
-        upper = spot * (1.0 + pct)
-        if calls is not None and not calls.empty:
-            calls = calls[(calls["strike"] >= lower) & (calls["strike"] <= upper)]
-        if puts is not None and not puts.empty:
-            puts = puts[(puts["strike"] >= lower) & (puts["strike"] <= upper)]
-        return calls, puts
-
-    if cache_key in _option_chain_cache:
-        cached_val, expiry_time = _option_chain_cache[cache_key]
-        if now < expiry_time:
-            calls_copy = (
-                cached_val.calls.copy() if cached_val.calls is not None else None
-            )
-            puts_copy = cached_val.puts.copy() if cached_val.puts is not None else None
-
-            spot_price = await _get_spot()
-            calls_copy, puts_copy = _prune(calls_copy, puts_copy, spot_price, prune_pct)
-
-            underlying_copy = (
-                cached_val.underlying.copy()
-                if hasattr(cached_val.underlying, "copy")
-                else cached_val.underlying
-            )
-            return OptionChainData(
-                calls=calls_copy, puts=puts_copy, underlying=underlying_copy
-            )
-
+async def _fetch_option_chain_raw(symbol: str, expiry: str) -> Optional[Any]:
+    """底層期權鏈抓取實作（優先 Edge Snapshot 快照 -> Edge 即時 Scrape -> 本地 yfinance 直連）。"""
     calls_full = None
     puts_full = None
     underlying_full: Optional[Any] = None
 
     # 優先讀取 edge 背景排程寫入的 Option Chain 快照（毫秒級 SQLite 讀取），
     # 命中且夠新鮮就直接採用，跳過下方的 edge 即時 scrape / yfinance 直連。
-    # 此 SQLite 快照 miss/逾時/離線都會回傳 None，完全不影響下方既有的
-    # edge 即時 scrape -> yfinance 直連 fallback 行為（Max Pain / UOA 等下游
-    # 商業邏輯完全不變，只是輸入來源換掉）。
     from services import edge_cache_client
 
     edge_cached_chain = await edge_cache_client.get_cached_option_chain(symbol, expiry)
@@ -888,29 +833,83 @@ async def get_option_chain(
         and puts_full is not None
         and not (calls_full.empty and puts_full.empty)
     ):
-        cached_entry = OptionChainData(
+        return OptionChainData(
             calls=calls_full, puts=puts_full, underlying=underlying_full
         )
-        _option_chain_cache[cache_key] = (
-            cached_entry,
-            now + _OPTION_CHAIN_CACHE_TTL,
-        )
+    return None
 
-        # 對回傳的副本進行裁減
+
+async def get_option_chain(
+    symbol: str, expiry: str, prune_pct: Optional[float] = 0.1
+) -> Optional[Any]:
+    """取得指定到期日的期權鏈 (支援 40 分鐘快取、SingleFlight 併發合併與 Copy 隔離)。"""
+    symbol = _sanitize_ticker(symbol)
+    cache_key = (symbol, expiry)
+    now = time.time()
+
+    async def _get_spot() -> float:
+        try:
+            quote = await get_quote(symbol)
+            return float(quote.get("c", 0.0)) if quote else 0.0
+        except Exception as e:
+            logger.warning(
+                f"[{symbol}] Strike Pruning 報價獲取失敗 ({e})，降級為不裁減全量資料。"
+            )
+            return 0.0
+
+    def _prune(
+        calls: Optional[pd.DataFrame],
+        puts: Optional[pd.DataFrame],
+        spot: float,
+        pct: Optional[float],
+    ) -> tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+        if spot <= 0.0 or pct is None:
+            return calls, puts
+        lower = spot * (1.0 - pct)
+        upper = spot * (1.0 + pct)
+        if calls is not None and not calls.empty:
+            calls = calls[(calls["strike"] >= lower) & (calls["strike"] <= upper)]
+        if puts is not None and not puts.empty:
+            puts = puts[(puts["strike"] >= lower) & (puts["strike"] <= upper)]
+        return calls, puts
+
+    cached_val = None
+    if cache_key in _option_chain_cache:
+        val, expiry_time = _option_chain_cache[cache_key]
+        if now < expiry_time:
+            cached_val = val
+
+    if cached_val is None:
+        from services.single_flight import SingleFlightManager
+
+        cached_val = await SingleFlightManager.run(
+            f"opt_chain_raw_{symbol}_{expiry}",
+            _fetch_option_chain_raw,
+            symbol,
+            expiry,
+        )
+        if cached_val is not None:
+            _option_chain_cache[cache_key] = (
+                cached_val,
+                now + _OPTION_CHAIN_CACHE_TTL,
+            )
+
+    if cached_val is not None:
+        calls_copy = cached_val.calls.copy() if cached_val.calls is not None else None
+        puts_copy = cached_val.puts.copy() if cached_val.puts is not None else None
+
         spot_price = await _get_spot()
-        calls_copy = calls_full.copy() if calls_full is not None else None
-        puts_copy = puts_full.copy() if puts_full is not None else None
         calls_copy, puts_copy = _prune(calls_copy, puts_copy, spot_price, prune_pct)
 
-        return OptionChainData(
-            calls=calls_copy,
-            puts=puts_copy,
-            underlying=(
-                underlying_full.copy()
-                if underlying_full is not None and hasattr(underlying_full, "copy")
-                else underlying_full
-            ),
+        underlying_copy = (
+            cached_val.underlying.copy()
+            if hasattr(cached_val.underlying, "copy")
+            else cached_val.underlying
         )
+        return OptionChainData(
+            calls=calls_copy, puts=puts_copy, underlying=underlying_copy
+        )
+
     return None
 
 

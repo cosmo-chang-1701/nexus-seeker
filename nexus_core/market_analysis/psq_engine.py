@@ -1,5 +1,6 @@
+import numpy as np
 import pandas as pd
-import pandas_ta as ta
+from numpy.lib.stride_tricks import sliding_window_view
 from dataclasses import dataclass
 from typing import Optional
 
@@ -30,6 +31,39 @@ class PSQResult:
         return self.is_breakout_short
 
 
+def _fast_ema(series: pd.Series, length: int) -> pd.Series:
+    """TA-Lib 相容之 EMA 計算（前 length 筆以 SMA 初始化）。"""
+    s = series.copy()
+    sma = s.iloc[0:length].mean()
+    s.iloc[: length - 1] = np.nan
+    s.iloc[length - 1] = sma
+    return s.ewm(span=length, adjust=False).mean()
+
+
+def _fast_rolling_linreg(series: pd.Series, length: int = 20) -> pd.Series:
+    """TA-Lib 相容之滑動線性回歸終點值 (Vectorized sliding window linear regression)。"""
+    vals = series.to_numpy(dtype=np.float64)
+    n = len(vals)
+    if n < length:
+        return pd.Series(np.full(n, np.nan), index=series.index)
+
+    x = np.arange(1, length + 1, dtype=np.float64)
+    x_sum = 0.5 * length * (length + 1)
+    x2_sum = x_sum * (2 * length + 1) / 3.0
+    divisor = length * x2_sum - x_sum * x_sum
+
+    windows = sliding_window_view(vals, length)
+    y_sum = np.sum(windows, axis=1)
+    xy_sum = np.sum(windows * x, axis=1)
+    m = (length * xy_sum - x_sum * y_sum) / divisor
+    b = (y_sum * x2_sum - x_sum * xy_sum) / divisor
+    endpoints = m * length + b
+
+    out = np.full(n, np.nan, dtype=np.float64)
+    out[length - 1 :] = endpoints
+    return pd.Series(out, index=series.index)
+
+
 def analyze_psq(
     df: pd.DataFrame,
     length: int = 20,
@@ -39,7 +73,7 @@ def analyze_psq(
     vix_spot: float | None = None,
 ) -> Optional[PSQResult]:
     """
-    計算 PowerSqueeze (PSQ) 量化指標 (Ultimate Edition v2)。
+    計算 PowerSqueeze (PSQ) 量化指標 (Ultimate Edition v2 - Vectorized High Performance)。
     輸入資料為包含 'Open', 'High', 'Low', 'Close' 的 DataFrame。
 
     Args:
@@ -50,42 +84,33 @@ def analyze_psq(
         return None
 
     try:
-        # 防止改變原始 DataFrame
-        df = df.copy()
+        close = df["Close"]
+        high = df["High"]
+        low = df["Low"]
 
         # 1. Bollinger Bands (20, 2)
-        from typing import Any, cast
+        basis = close.rolling(length).mean()
+        rolling_std = close.rolling(length).std(ddof=1)
+        bb_lower = basis - bb_mult * rolling_std
+        bb_upper = basis + bb_mult * rolling_std
 
-        bb = ta.bbands(df["Close"], length=length, std=cast(Any, bb_mult))
-        if bb is None:
-            return None
+        # 2. Keltner Channels (using TA-Lib compatible True Range + EMA)
+        prev_close = close.shift(1)
+        tr1 = high - low
+        tr2 = (high - prev_close).abs()
+        tr3 = (low - prev_close).abs()
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        tr.iloc[0] = high.iloc[0] - low.iloc[0]
 
-        # 避開 pandas-ta 版本導致的動態欄位名稱變更，改用語意固定的位置索引
-        bb_lower = bb.iloc[:, 0]  # Lower Band
-        basis = bb.iloc[:, 1]  # Middle Band (SMA)
-        bb_upper = bb.iloc[:, 2]  # Upper Band
+        kc_basis = _fast_ema(close, length)
+        band = _fast_ema(tr, length)
 
-        # 2. Keltner Channels (using default True Range)
-        kc1 = ta.kc(
-            df["High"], df["Low"], df["Close"], length=length, scalar=kc_mults[0]
-        )
-        kc2 = ta.kc(
-            df["High"], df["Low"], df["Close"], length=length, scalar=kc_mults[1]
-        )
-        kc3 = ta.kc(
-            df["High"], df["Low"], df["Close"], length=length, scalar=kc_mults[2]
-        )
-
-        if kc1 is None or kc2 is None or kc3 is None:
-            return None
-
-        # 區分不同強度的擠壓通道 (KC回傳格式依序為 Lower, Basis, Upper)
-        kc1_lower = kc1.iloc[:, 0]
-        kc1_upper = kc1.iloc[:, 2]
-        kc2_lower = kc2.iloc[:, 0]
-        kc2_upper = kc2.iloc[:, 2]
-        kc3_lower = kc3.iloc[:, 0]
-        kc3_upper = kc3.iloc[:, 2]
+        kc1_lower = kc_basis - kc_mults[0] * band
+        kc1_upper = kc_basis + kc_mults[0] * band
+        kc2_lower = kc_basis - kc_mults[1] * band
+        kc2_upper = kc_basis + kc_mults[1] * band
+        kc3_lower = kc_basis - kc_mults[2] * band
+        kc3_upper = kc_basis + kc_mults[2] * band
 
         # 判定各級別的擠壓狀態
         sqz_high = (bb_lower > kc1_lower) & (bb_upper < kc1_upper)  # 高強度 (紅)
@@ -95,12 +120,12 @@ def analyze_psq(
         is_squeezing = sqz_normal  # 只要 BB 縮入最寬的 2.0 KC 內，即屬擠壓狀態
 
         # 3. Momentum (線性回歸動能)
-        high_max = df["High"].rolling(length).max()
-        low_min = df["Low"].rolling(length).min()
+        high_max = high.rolling(length).max()
+        low_min = low.rolling(length).min()
         avg_price = (high_max + low_min) / 2.0
 
-        momentum_source = df["Close"] - (avg_price + basis) / 2.0
-        momentum_value = ta.linreg(momentum_source, length=length)
+        momentum_source = close - (avg_price + basis) / 2.0
+        momentum_value = _fast_rolling_linreg(momentum_source, length=length)
 
         if momentum_value is None or momentum_value.isna().all():
             return None

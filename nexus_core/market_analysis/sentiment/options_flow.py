@@ -3,6 +3,7 @@ from .history_storage import (
     get_indicator_percentile,
     save_sentiment_history,
 )
+import asyncio
 import logging
 import sqlite3  # noqa: F401
 from datetime import datetime
@@ -193,20 +194,28 @@ async def calculate_pcr(symbol: str) -> Dict[str, Any]:
         if not expiries:
             return _get_pcr_fallback("No option expiries returned")
 
-        # 彙整前三個到期日的數據
+        # 並行彙整前三個到期日的數據
         total_put_vol = 0.0
         total_call_vol = 0.0
         total_put_oi = 0.0
         total_call_oi = 0.0
 
-        for exp in expiries[:3]:
-            chain = await market_data_service.get_option_chain(symbol, exp)
-            if not chain:
+        target_expiries = expiries[:3]
+        chains = await asyncio.gather(
+            *(
+                market_data_service.get_option_chain(symbol, exp)
+                for exp in target_expiries
+            ),
+            return_exceptions=True,
+        )
+
+        for chain in chains:
+            if chain is None or isinstance(chain, BaseException):
                 continue
-            if chain.puts is not None and not chain.puts.empty:
+            if getattr(chain, "puts", None) is not None and not chain.puts.empty:
                 total_put_vol += float(chain.puts["volume"].sum())
                 total_put_oi += float(chain.puts["openInterest"].sum())
-            if chain.calls is not None and not chain.calls.empty:
+            if getattr(chain, "calls", None) is not None and not chain.calls.empty:
                 total_call_vol += float(chain.calls["volume"].sum())
                 total_call_oi += float(chain.calls["openInterest"].sum())
 

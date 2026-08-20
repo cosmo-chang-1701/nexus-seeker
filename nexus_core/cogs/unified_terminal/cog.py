@@ -426,129 +426,130 @@ class UnifiedTerminalCog(commands.Cog):
         from market_analysis.ddp_inspector import DDPInspector
         from market_time import ny_tz
         from datetime import datetime
+        from market_analysis.index_microstructure import fetch_symbol_gex_metrics
+        from market_analysis.volume_profile import calculate_volume_profile
+        from market_analysis.dark_pool_engine import fetch_darkpool_prints
 
         ddp_inspector = DDPInspector(self.bot)
         poly_service = getattr(self.bot, "polymarket_service", None)
-
-        # 1. 取得所有到期日以規劃一個月內的所有 Max Pain 計算任務
-        expiries = []
-        try:
-            expiries = await market_data_service.get_all_option_expiries(symbol)
-        except Exception as e:
-            logger.warning(f"[{symbol}] Failed to fetch expiries: {e}")
-
-        today = datetime.now(ny_tz).date()
-        valid_expiries = []
-        if expiries:
-            for exp in expiries:
-                try:
-                    exp_dt = datetime.strptime(exp, "%Y-%m-%d").date()
-                    # 篩選一個月 (30天) 內的到期日
-                    if 0 <= (exp_dt - today).days <= 30:
-                        valid_expiries.append(exp)
-                except ValueError:
-                    continue
-
-        # 針對這一個月內的所有到期日，建立獨立的 Max Pain 計算任務
-        mp_month_tasks = {}
-        for exp in valid_expiries:
-            mp_month_tasks[exp] = SentimentEngine.get_unified_max_pain(
-                symbol, expiry=exp
-            )
-
-        keys_mp = list(mp_month_tasks.keys())
-        tasks_mp = list(mp_month_tasks.values())
-
-        spy_task = market_data_service.get_spy_history_df("1y")
-        macro_task = market_data_service.get_macro_environment()
-        quote_task = market_data_service.get_quote(symbol)
-        skew_task = SentimentEngine.calculate_skew(symbol)
-        pcr_task = SentimentEngine.calculate_pcr(symbol)
-        uoa_task = SentimentEngine.detect_uoa(symbol)
-        mp_task = SentimentEngine.calculate_max_pain(symbol)
-        iv_task = SentimentEngine.fetch_and_calculate_iv_metrics(symbol)
-        reddit_task = reddit_service.get_reddit_context(
-            symbol, enable_tunnel=enable_local_tunnel
-        )
 
         async def _safe_get_poly_markets() -> list:
             if poly_service:
                 return await poly_service.get_market_snapshot(limit=0)  # type: ignore
             return []
 
-        poly_task = _safe_get_poly_markets()
-
-        ddp_task = ddp_inspector.inspect_symbol(symbol)
-        df_hist_task = market_data_service.get_history_df(
-            symbol, period="1y", interval="1d"
+        # 1. 啟動基礎行情與總經數據任務 (t=0 並行)
+        expiries_task = asyncio.create_task(
+            market_data_service.get_all_option_expiries(symbol)
         )
-        from market_analysis.index_microstructure import fetch_symbol_gex_metrics
+        spy_task = asyncio.create_task(market_data_service.get_spy_history_df("1y"))
+        macro_task = asyncio.create_task(market_data_service.get_macro_environment())
+        quote_task = asyncio.create_task(market_data_service.get_quote(symbol))
+        df_hist_task = asyncio.create_task(
+            market_data_service.get_history_df(symbol, period="1y", interval="1d")
+        )
+        gex_profile_task = asyncio.create_task(fetch_symbol_gex_metrics(symbol))
+        vp_task = asyncio.create_task(
+            asyncio.to_thread(calculate_volume_profile, symbol)
+        )
+        dp_task = asyncio.create_task(fetch_darkpool_prints(symbol))
+        reddit_task = asyncio.create_task(
+            reddit_service.get_reddit_context(symbol, enable_tunnel=enable_local_tunnel)
+        )
+        poly_task = asyncio.create_task(_safe_get_poly_markets())
+        ddp_task = asyncio.create_task(ddp_inspector.inspect_symbol(symbol))
 
-        gex_profile_task = fetch_symbol_gex_metrics(symbol)
-
-        from market_analysis.volume_profile import calculate_volume_profile
-        from market_analysis.dark_pool_engine import fetch_darkpool_prints
-
-        vp_task = asyncio.to_thread(calculate_volume_profile, symbol)
-        dp_task = fetch_darkpool_prints(symbol)
-
-        base_results_task = asyncio.gather(
-            spy_task,
-            macro_task,
-            quote_task,
-            skew_task,
-            pcr_task,
-            uoa_task,
-            mp_task,
-            iv_task,
-            reddit_task,
-            poly_task,
-            ddp_task,
-            df_hist_task,
-            gex_profile_task,
-            vp_task,
-            dp_task,
+        # 2. 啟動期權結構分析任務 (SingleFlight 自動合併相同到期日)
+        skew_task = asyncio.create_task(SentimentEngine.calculate_skew(symbol))
+        pcr_task = asyncio.create_task(SentimentEngine.calculate_pcr(symbol))
+        uoa_task = asyncio.create_task(SentimentEngine.detect_uoa(symbol))
+        mp_task = asyncio.create_task(SentimentEngine.calculate_max_pain(symbol))
+        iv_task = asyncio.create_task(
+            SentimentEngine.fetch_and_calculate_iv_metrics(symbol)
         )
 
-        if tasks_mp:
-            results_all = await asyncio.gather(
-                base_results_task, asyncio.gather(*tasks_mp)
-            )
-            base_results, mp_month_results = results_all
-        else:
-            base_results = await base_results_task
-            mp_month_results = []
+        # 3. 取得 30 天內到期日之 Max Pain
+        async def _fetch_month_max_pains() -> list[dict[str, Any]]:
+            try:
+                expiries = await expiries_task
+            except Exception as e:
+                logger.warning(f"[{symbol}] Failed to fetch expiries: {e}")
+                return []
 
+            if not expiries:
+                return []
+
+            today = datetime.now(ny_tz).date()
+            valid_expiries = []
+            for exp in expiries:
+                try:
+                    exp_dt = datetime.strptime(exp, "%Y-%m-%d").date()
+                    if 0 <= (exp_dt - today).days <= 30:
+                        valid_expiries.append(exp)
+                except ValueError:
+                    continue
+
+            if not valid_expiries:
+                return []
+
+            mp_tasks = [
+                SentimentEngine.get_unified_max_pain(symbol, expiry=exp)
+                for exp in valid_expiries
+            ]
+            mp_results = await asyncio.gather(*mp_tasks, return_exceptions=True)
+
+            month_max_pains = []
+            for exp, res in zip(valid_expiries, mp_results):
+                if isinstance(res, dict) and "error" not in res:
+                    month_max_pains.append(
+                        {
+                            "expiry": exp,
+                            "max_pain": res.get("max_pain"),
+                            "distance_pct": res.get("distance_pct", 0.0),
+                            "is_degraded": bool(res.get("is_degraded", 0)),
+                            "calculation_mode": res.get("calculation_mode", "OI"),
+                        }
+                    )
+            return month_max_pains
+
+        month_mp_task = asyncio.create_task(_fetch_month_max_pains())
+
+        # 4. 全量 Gather
         (
             df_spy,
             macro_raw,
             quote,
+            df_hist_1d,
+            gex_profile_data,
+            vp_data,
+            dp_data,
+            reddit_text,
+            poly_markets,
+            ddp_report,
             skew_data,
             pcr_data,
             uoa_data,
             max_pain_data,
             iv_metrics,
-            reddit_text,
-            poly_markets,
-            ddp_report,
-            df_hist_1d,
-            gex_profile_data,
-            vp_data,
-            dp_data,
-        ) = base_results
-
-        month_max_pains = []
-        for exp, res in zip(keys_mp, mp_month_results):
-            if res and isinstance(res, dict) and "error" not in res:
-                month_max_pains.append(
-                    {
-                        "expiry": exp,
-                        "max_pain": res.get("max_pain"),
-                        "distance_pct": res.get("distance_pct", 0.0),
-                        "is_degraded": bool(res.get("is_degraded", 0)),
-                        "calculation_mode": res.get("calculation_mode", "OI"),
-                    }
-                )
+            month_max_pains,
+        ) = await asyncio.gather(
+            spy_task,
+            macro_task,
+            quote_task,
+            df_hist_task,
+            gex_profile_task,
+            vp_task,
+            dp_task,
+            reddit_task,
+            poly_task,
+            ddp_task,
+            skew_task,
+            pcr_task,
+            uoa_task,
+            mp_task,
+            iv_task,
+            month_mp_task,
+        )
 
         return {
             "df_spy": df_spy,
@@ -642,11 +643,20 @@ class UnifiedTerminalCog(commands.Cog):
                 vix_change=_safe_float(safe_macro.get("vix_change"), 0.0),
             )
 
-            result = await market_math.analyze_symbol(
+            # 並行執行技術指標分析與 Polymarket 機率解析
+            math_task = market_math.analyze_symbol(
                 symbol, stock_cost, df_spy, spy_price, vix_spot=macro_data.vix
             )
-            if not isinstance(result, dict) or not result:
-                result = {"symbol": symbol, "stock_cost": stock_cost, "price": 0.0}
+            poly_task = find_matching_polymarket_odds(
+                symbol, poly_markets, bot=self.bot
+            )
+
+            result_math, poly_odds = await asyncio.gather(math_task, poly_task)
+            result = (
+                result_math
+                if isinstance(result_math, dict) and result_math
+                else {"symbol": symbol, "stock_cost": stock_cost, "price": 0.0}
+            )
 
             psq_result = analyze_psq(df_hist_1d, vix_spot=macro_data.vix)
             if psq_result:
@@ -706,10 +716,6 @@ class UnifiedTerminalCog(commands.Cog):
             else:
                 result["reddit_sentiment_score"] = "⚖️ 中性"
 
-            # Polymarket odds
-            poly_odds = await find_matching_polymarket_odds(
-                symbol, poly_markets, bot=self.bot
-            )
             result["polymarket_odds"] = poly_odds
 
             safe_vp = vp_data if isinstance(vp_data, dict) else {}
