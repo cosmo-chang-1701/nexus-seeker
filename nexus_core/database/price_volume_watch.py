@@ -116,29 +116,36 @@ async def upsert_watch(
 
 def get_user_watches(user_id: int) -> List[PriceVolumeWatch]:
     """取得指定使用者的所有價量監測設定。"""
-    return _query_watches("WHERE user_id = ?", (user_id,))
+    return _query_watches(
+        """
+        SELECT user_id, symbol, target_price, direction, volume_multiplier
+        FROM price_volume_watches
+        WHERE user_id = ?
+        ORDER BY symbol ASC
+        """,
+        (user_id,),
+    )
 
 
 def get_all_watches() -> List[PriceVolumeWatch]:
     """取得所有使用者的價量監測設定 (供排程器批次掃描使用)。"""
-    return _query_watches("", ())
+    return _query_watches(
+        """
+        SELECT user_id, symbol, target_price, direction, volume_multiplier
+        FROM price_volume_watches
+        ORDER BY symbol ASC
+        """,
+        (),
+    )
 
 
-def _query_watches(where_clause: str, params: tuple) -> List[PriceVolumeWatch]:
+def _query_watches(query: str, params: tuple) -> List[PriceVolumeWatch]:
     conn = None
     results: List[PriceVolumeWatch] = []
     try:
         conn = sqlite3.connect(config.DB_NAME)
         cursor = conn.cursor()
-        cursor.execute(
-            f"""
-            SELECT user_id, symbol, target_price, direction, volume_multiplier
-            FROM price_volume_watches
-            {where_clause}
-            ORDER BY symbol ASC
-            """,
-            params,
-        )
+        cursor.execute(query, params)
         for row in cursor.fetchall():
             uid, symbol, target_price, direction, volume_multiplier = row
             try:
