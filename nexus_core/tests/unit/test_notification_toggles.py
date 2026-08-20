@@ -321,7 +321,7 @@ async def test_module_level_batch_enable_disable_all_categories(db_conn: Any):  
 
 
 def test_full_preset_assertions_all_keys(db_conn: Any):  # type: ignore
-    """測試所有 10 個 Key 在 4 大預設情境 (all_on, all_off, focus, mute_intraday) 下的完整狀態"""
+    """測試所有 13 個 Key 在 4 大預設情境 (all_on, all_off, focus, mute_intraday) 下的完整狀態"""
     user_id = 888111
 
     # 1. all_on
@@ -341,10 +341,12 @@ def test_full_preset_assertions_all_keys(db_conn: Any):  # type: ignore
     assert s_focus["telemetry_orders"] is True
     assert s_focus["defense_portfolio_risk"] is True
     assert s_focus["defense_option_rollover"] is True
+    assert s_focus["defense_fundamental_thesis"] is True
     assert s_focus["defense_macro_tail_risk"] is True
     assert s_focus["alpha_market_signals"] is False
-    assert s_focus["alpha_polymarket"] is False
-    assert s_focus["alpha_wti_oil"] is False
+    # WTI/Polymarket 為全天候情報，不屬於盤中 Alpha 雜訊，精準交易模式下維持開啟
+    assert s_focus["alpha_polymarket"] is True
+    assert s_focus["alpha_wti_oil"] is True
 
     # 4. mute_intraday
     s_mute = apply_preset_settings(user_id, "mute_intraday")
@@ -355,7 +357,10 @@ def test_full_preset_assertions_all_keys(db_conn: Any):  # type: ignore
     assert s_mute["telemetry_orders"] is False
     assert s_mute["defense_portfolio_risk"] is True
     assert s_mute["defense_option_rollover"] is False
+    # 每日僅 08:00 ET 盤前觸發一次的高信號護城河警報，不屬於盤中雜訊，盤中靜音模式下維持開啟
+    assert s_mute["defense_fundamental_thesis"] is True
     assert s_mute["defense_macro_tail_risk"] is True
     assert s_mute["alpha_market_signals"] is False
-    assert s_mute["alpha_polymarket"] is False
-    assert s_mute["alpha_wti_oil"] is False
+    # WTI/Polymarket 為全天候情報，不受盤中頻率影響，盤中靜音模式下維持開啟
+    assert s_mute["alpha_polymarket"] is True
+    assert s_mute["alpha_wti_oil"] is True

@@ -168,8 +168,9 @@ PRESET_PROFILES: dict[str, dict[str, bool]] = {
         "defense_fundamental_thesis": True,
         "defense_macro_tail_risk": True,
         "alpha_market_signals": False,
-        "alpha_polymarket": False,
-        "alpha_wti_oil": False,
+        # WTI/Polymarket 為全天候情報，不受盤中頻率影響，不屬於「Alpha 雜訊」
+        "alpha_polymarket": True,
+        "alpha_wti_oil": True,
         "alpha_price_volume_watch": False,
     },
     "mute_intraday": {
@@ -180,11 +181,13 @@ PRESET_PROFILES: dict[str, dict[str, bool]] = {
         "telemetry_orders": False,
         "defense_portfolio_risk": True,
         "defense_option_rollover": False,
-        "defense_fundamental_thesis": False,
+        # 每日僅 08:00 ET 盤前觸發一次的高信號護城河警報，不屬於盤中雜訊
+        "defense_fundamental_thesis": True,
         "defense_macro_tail_risk": True,
         "alpha_market_signals": False,
-        "alpha_polymarket": False,
-        "alpha_wti_oil": False,
+        # WTI/Polymarket 為全天候情報，不受盤中頻率影響，不屬於盤中雜訊
+        "alpha_polymarket": True,
+        "alpha_wti_oil": True,
         "alpha_price_volume_watch": False,
     },
 }

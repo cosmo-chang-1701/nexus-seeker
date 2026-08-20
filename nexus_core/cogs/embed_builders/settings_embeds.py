@@ -19,9 +19,11 @@ def create_notification_settings_embed(module_fields: list) -> discord.Embed:
         title="🌌 Nexus Seeker ｜ 戰術通知管理中樞 (4 大戰術維度)",
         description=(
             "點擊下方選單切換模組設定，或直接點擊快捷情境按鈕：\n"
-            "• **🛡️ 戰備全開**：開啟所有 10 項風控與戰報頻道\n"
-            "• **🎯 精準交易**：保留定時戰報與持倉防禦，關閉盤中 Alpha 雜訊\n"
-            "• **🔕 盤中靜音**：僅保留盤前/盤後戰報與保證金警戒"
+            "• **🛡️ 戰備全開**：開啟所有 13 項風控與戰報頻道\n"
+            "• **🎯 精準交易**：保留定時戰報、持倉防禦與全天候情報 (WTI/Polymarket)，"
+            "僅關閉盤中自選心跳與 Alpha 雜訊\n"
+            "• **🔕 盤中靜音**：僅關閉盤中高頻雜訊，保留戰報、保證金警戒、"
+            "護城河警報與全天候情報 (WTI/Polymarket)"
         ),
         color=discord.Color.dark_magenta(),
         timestamp=datetime.now(timezone.utc),

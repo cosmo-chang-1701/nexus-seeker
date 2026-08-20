@@ -352,8 +352,9 @@ def test_notification_keys_and_presets() -> None:
     assert "alpha_wti_oil" in ALL_NOTIFICATION_KEYS
     assert PRESET_PROFILES["all_on"]["alpha_wti_oil"] is True
     assert PRESET_PROFILES["all_off"]["alpha_wti_oil"] is False
-    assert PRESET_PROFILES["focus"]["alpha_wti_oil"] is False
-    assert PRESET_PROFILES["mute_intraday"]["alpha_wti_oil"] is False
+    # 全天候情報，不受盤中/Alpha 雜訊降噪邏輯影響，focus 與 mute_intraday 皆維持開啟
+    assert PRESET_PROFILES["focus"]["alpha_wti_oil"] is True
+    assert PRESET_PROFILES["mute_intraday"]["alpha_wti_oil"] is True
 
 
 def test_legacy_alias_resolution() -> None:

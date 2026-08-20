@@ -480,9 +480,9 @@ Configurations are strictly segregated into two functional areas to maximize sep
     - Row 1 features toggle choices with real-time `🟢` / `🔴` indicators.
     - Row 2 features module batch controls (`⚡ 開啟本區`, `💤 關閉本區`).
     - Row 3 features 1-click Preset Quick Action buttons:
-      - `🛡️ 戰備全開` (`all_on`): Enables all 12 risk and alpha channels.
-      - `🎯 精準交易` (`focus`): Keeps scheduled briefings and real-time portfolio defenses on, while muting intraday market scanner noise.
-      - `🔕 盤中靜音` (`mute_intraday`): Only allows pre/post briefings and margin alerts.
+      - `🛡️ 戰備全開` (`all_on`): Enables all 13 risk and alpha channels.
+      - `🎯 精準交易` (`focus`): Keeps scheduled briefings, real-time portfolio defenses, and always-on intelligence feeds (`alpha_wti_oil`, `alpha_polymarket`) on, while muting intraday scanner/Alpha noise (`heartbeat_watchlist`, `alpha_market_signals`, `alpha_price_volume_watch`).
+      - `🔕 盤中靜音` (`mute_intraday`): Keeps pre/post briefings, margin & tail-risk alerts, the fundamental-thesis alert, and always-on WTI/Polymarket feeds on; mutes only intraday-cadence chatter (`heartbeat_watchlist`, `telemetry_orders`, `defense_option_rollover`, `alpha_market_signals`, `alpha_price_volume_watch`).
   - **Polymarket Parameter Separation**: Non-boolean account configs (`polymarket_threshold`, `polymarket_use_llm`, `polymarket_slippage`) are cleanly placed in `/settings` (`AccountSettingsView`), keeping `/notif_settings` pure and focused on notification channels.
   - **100% Backward-Compatible Alias Engine**: Queries or updates using legacy keys (e.g. `hb_options_structure`, `ddp_alert`, `profit_lock_alert`, `wti_oil_alert`, `oil_alert`) are transparently resolved to their new consolidated counterparts via `LEGACY_KEY_ALIASES`.
 
