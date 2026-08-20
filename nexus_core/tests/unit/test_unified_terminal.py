@@ -690,7 +690,7 @@ async def test_batch_scan_warning_button_callback(mock_interaction: Any, mock_bo
     from cogs.unified_terminal import BatchScanWarningButton
 
     cog = UnifiedTerminalCog(mock_bot)
-    cog._run_single_symbol_hub = AsyncMock()  # type: ignore
+    cog._run_single_symbol_hub = AsyncMock()
 
     # Case 1: No message or embeds
     btn = BatchScanWarningButton(cog, mock_bot)
@@ -768,7 +768,7 @@ async def test_batch_scan_warning_button_chunking(mock_interaction: Any, mock_bo
         if embeds_accumulator is not None:
             embeds_accumulator.append(discord.Embed(title=f"Mock Embed for {symbol}"))
 
-    cog._run_single_symbol_hub = mock_run_hub  # type: ignore
+    cog._run_single_symbol_hub = mock_run_hub
 
     btn = BatchScanWarningButton(cog, mock_bot)
     mock_msg = MagicMock()
