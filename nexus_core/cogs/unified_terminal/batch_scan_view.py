@@ -1,6 +1,6 @@
 from typing import Any
 import discord
-from typing import List
+from typing import List, Optional
 import logging
 from cogs.embed_builder import create_error_embed, chunk_embeds
 
@@ -111,12 +111,75 @@ class BatchScanWarningButton(discord.ui.Button):
                 )
 
 
-class BatchScanView(discord.ui.View):
+class BatchScanPaginatedView(discord.ui.View):
     """
-    批次掃描總覽面板的互動 View。
-    已移除「選擇單一標的深入分析」下拉選單。
+    批次掃描結果的單一訊息換頁 View。
+
+    按鈕樣式與頁碼 Footer 格式沿用 `/list_watch` 的 `WatchlistPagination`
+    (`ui/watchlist.py`)，維持跨模組換頁介面的視覺一致性；換頁機制則是
+    `interaction.response.edit_message()` 就地換頁，並整合「批次分析警示
+    標的」按鈕。多頁掃描結果只需送出一則 followup 訊息即可完整呈現，避免
+    逐頁分別呼叫 `interaction.followup.send()` 撞上 Discord 互動的隱性
+    followup 訊息數量上限（錯誤碼 40094）。
     """
 
-    def __init__(self, symbols: List[str], cog: Any, bot: Any):
-        super().__init__(timeout=300)
-        self.add_item(BatchScanWarningButton(cog, bot))
+    def __init__(
+        self,
+        embeds: List[discord.Embed],
+        cog: Any,
+        bot: Any,
+        *,
+        timeout: float = 300.0,
+        total_items: Optional[int] = None,
+    ):
+        super().__init__(timeout=timeout)
+        self.embeds = embeds
+        self.current_page = 0
+        self.total_items = total_items if total_items is not None else len(embeds)
+
+        # 警示標的分析按鈕獨立一列，避免與換頁按鈕擠在同一排
+        warning_button = BatchScanWarningButton(cog, bot)
+        warning_button.row = 1
+        self.add_item(warning_button)
+
+        self._apply_footers()
+        self._update_button_states()
+
+    def _apply_footers(self) -> None:
+        """比照 /list_watch：頁碼與總項目數寫入 Footer，而非另立指示按鈕。"""
+        total_pages = len(self.embeds)
+        for idx, emb in enumerate(self.embeds):
+            emb.set_footer(
+                text=f"頁次: {idx + 1}/{total_pages} ｜ 📊 總項目: {self.total_items}"
+            )
+
+    def _update_button_states(self) -> None:
+        """根據當前頁碼動態切換換頁按鈕 disabled 狀態。"""
+        self.btn_prev.disabled = self.current_page <= 0
+        self.btn_next.disabled = self.current_page >= len(self.embeds) - 1
+
+    @discord.ui.button(label="◀ 上一頁", style=discord.ButtonStyle.primary, row=0)
+    async def btn_prev(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> Any:
+        """翻至上一頁。"""
+        self.current_page = max(0, self.current_page - 1)
+        self._update_button_states()
+        await interaction.response.edit_message(
+            embed=self.embeds[self.current_page], view=self
+        )
+
+    @discord.ui.button(label="下一頁 ▶", style=discord.ButtonStyle.primary, row=0)
+    async def btn_next(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> Any:
+        """翻至下一頁。"""
+        self.current_page = min(len(self.embeds) - 1, self.current_page + 1)
+        self._update_button_states()
+        await interaction.response.edit_message(
+            embed=self.embeds[self.current_page], view=self
+        )
+
+    async def on_timeout(self) -> None:
+        """Timeout 後移除所有按鈕，避免殭屍互動元件殘留。"""
+        self.clear_items()

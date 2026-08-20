@@ -11,6 +11,7 @@ sys.path.append(os.getcwd())
 
 from cogs.unified_terminal.cog import UnifiedTerminalCog
 from cogs.unified_terminal.radar_view import UnifiedRadarView, FilterParamsModal
+from cogs.unified_terminal.batch_scan_view import BatchScanPaginatedView
 
 
 @pytest.fixture
@@ -204,8 +205,10 @@ async def test_execute_unified_scan_filters(mock_bot: Any, mock_interaction: Any
             ) as mock_builder:
                 mock_builder.return_value = discord.Embed(title="Radar Scan")
 
-                # Mock BatchScanView
-                with patch("cogs.unified_terminal.cog.BatchScanView") as MockView:
+                # Mock BatchScanPaginatedView
+                with patch(
+                    "cogs.unified_terminal.cog.BatchScanPaginatedView"
+                ) as MockView:
                     MockView.return_value = discord.ui.View()
 
                     await cog.execute_unified_scan(mock_interaction, state, 12345)
@@ -275,7 +278,9 @@ async def test_execute_unified_scan_squeeze_mode_filter(
                 "cogs.unified_terminal.cog.build_radar_scan_embed"
             ) as mock_builder:
                 mock_builder.return_value = discord.Embed(title="Radar Scan")
-                with patch("cogs.unified_terminal.cog.BatchScanView") as MockView:
+                with patch(
+                    "cogs.unified_terminal.cog.BatchScanPaginatedView"
+                ) as MockView:
                     MockView.return_value = discord.ui.View()
                     await cog.execute_unified_scan(mock_interaction, state, 12345)
 
@@ -365,7 +370,9 @@ async def test_execute_unified_scan_magnetic_filters(
                 "cogs.unified_terminal.cog.build_radar_scan_embed"
             ) as mock_builder:
                 mock_builder.return_value = discord.Embed(title="Radar Scan")
-                with patch("cogs.unified_terminal.cog.BatchScanView") as MockView:
+                with patch(
+                    "cogs.unified_terminal.cog.BatchScanPaginatedView"
+                ) as MockView:
                     MockView.return_value = discord.ui.View()
                     await cog.execute_unified_scan(mock_interaction, state, 12345)
 
@@ -382,8 +389,10 @@ async def test_batch_scan_alpha_filters_and_pagination(
     """
     測試:
     1. Alpha 訊號 (TDP, UOA) 正確過濾標的。
-    2. 當符合條件的標的超過 10 個時，cog 能夠正確迭代 embeds 列表並進行多次 followup.send，
-       成功繞過 Discord 長度限制。
+    2. 當符合條件的標的超過 10 個、產生多頁 embeds 時，cog 只送出「一次」
+       followup.send，並將所有分頁封裝進單一則訊息的 BatchScanPaginatedView，
+       翻頁交由使用者點擊 ◀/▶ 按鈕就地編輯同一則訊息，藉此繞過 Discord
+       單一互動的 followup 訊息數量上限。
     """
     cog = UnifiedTerminalCog(mock_bot)
     state: dict[str, Any] = {
@@ -420,39 +429,35 @@ async def test_batch_scan_alpha_filters_and_pagination(
         mock_thread.side_effect = mock_to_thread_side_effect
 
         with patch("cogs.unified_terminal.cog.build_radar_scan_embed") as mock_builder:
-            mock_builder.return_value = [
-                discord.Embed(title="Radar Scan (第 1/2 頁)"),
-                discord.Embed(title="Radar Scan (第 2/2 頁)"),
-            ]
+            page_1 = discord.Embed(title="Radar Scan (第 1/2 頁)")
+            page_2 = discord.Embed(title="Radar Scan (第 2/2 頁)")
+            mock_builder.return_value = [page_1, page_2]
 
-            with patch("cogs.unified_terminal.cog.BatchScanView") as MockView:
-                MockView.return_value = discord.ui.View()
-                await cog.execute_unified_scan(mock_interaction, state, 12345)
+            await cog.execute_unified_scan(mock_interaction, state, 12345)
 
-                mock_builder.assert_called_once()
-                filtered_results = mock_builder.call_args.args[0]
-                assert len(filtered_results) == 12
-                assert filtered_results[0]["symbol"] == "SYM_1"
+            mock_builder.assert_called_once()
+            filtered_results = mock_builder.call_args.args[0]
+            assert len(filtered_results) == 12
+            assert filtered_results[0]["symbol"] == "SYM_1"
 
-                assert mock_interaction.followup.send.call_count == 2
+            # 只送出一次 followup，翻頁改由 BatchScanPaginatedView 就地編輯訊息
+            assert mock_interaction.followup.send.call_count == 1
 
-                call_1 = mock_interaction.followup.send.call_args_list[0]
-                assert call_1.kwargs["embed"].title == "Radar Scan (第 1/2 頁)"
-
-                call_2 = mock_interaction.followup.send.call_args_list[1]
-                assert call_2.kwargs["embed"].title == "Radar Scan (第 2/2 頁)"
+            _, kwargs = mock_interaction.followup.send.call_args
+            assert kwargs["embed"].title == "Radar Scan (第 1/2 頁)"
+            assert isinstance(kwargs["view"], BatchScanPaginatedView)
+            assert kwargs["view"].embeds == [page_1, page_2]
 
 
 @pytest.mark.asyncio
-async def test_batch_scan_resumes_after_page_send_failure(
+async def test_batch_scan_reports_error_when_send_fails(
     mock_bot: Any, mock_interaction: Any
 ) -> None:
     """
-    測試:
-    1. 若中間某一頁 followup.send 失敗（例如 webhook token 過期），迴圈仍應
-       繼續嘗試發送剩餘分頁，而不是整批中止（回歸「第 6/7 頁卻沒有第 7 頁」臭蟲）。
-    2. 失敗後應額外發出一則警告訊息告知使用者。
-    3. BatchScanView 只附掛在最後一個成功送出的分頁上。
+    測試:單一 followup.send（帶著整批分頁的 BatchScanPaginatedView）失敗時，
+    外層例外處理應補發一則錯誤通知，而不是讓例外往外拋出、整個指令悄無聲息地
+    失敗（回歸「第 6/7 頁卻沒有第 7 頁」臭蟲——修正後已不存在「逐頁分別發送」
+    這個失敗模式，但仍需確保單次發送失敗時使用者收得到錯誤提示）。
     """
     cog = UnifiedTerminalCog(mock_bot)
     state: dict[str, Any] = {
@@ -492,33 +497,19 @@ async def test_batch_scan_resumes_after_page_send_failure(
             ]
 
             async def send_side_effect(*args: Any, **kwargs: Any) -> Any:
-                if (
-                    kwargs.get("embed") is not None
-                    and kwargs["embed"].title == "Radar Scan (第 2/3 頁)"
-                ):
+                if kwargs.get("view") is not None:
                     raise discord.HTTPException(MagicMock(status=400), "boom")
                 return MagicMock()
 
             mock_interaction.followup.send = AsyncMock(side_effect=send_side_effect)
 
-            with patch("cogs.unified_terminal.cog.BatchScanView") as MockView:
-                MockView.return_value = discord.ui.View()
-                await cog.execute_unified_scan(mock_interaction, state, 12345)
+            await cog.execute_unified_scan(mock_interaction, state, 12345)
 
-                # 3 個分頁 (其中 1 個失敗) + 1 則失敗通知 = 4 次呼叫
-                assert mock_interaction.followup.send.call_count == 4
+            # 第一次呼叫（帶 view，失敗）+ 外層例外處理補發的錯誤通知 = 2 次呼叫
+            assert mock_interaction.followup.send.call_count == 2
 
-                call_1, call_2, call_3, call_4 = (
-                    mock_interaction.followup.send.call_args_list
-                )
+            call_1, call_2 = mock_interaction.followup.send.call_args_list
+            assert "view" in call_1.kwargs
 
-                assert call_1.kwargs["embed"].title == "Radar Scan (第 1/3 頁)"
-                assert "view" not in call_1.kwargs
-
-                assert call_2.kwargs["embed"].title == "Radar Scan (第 2/3 頁)"
-
-                assert call_3.kwargs["embed"].title == "Radar Scan (第 3/3 頁)"
-                assert "view" in call_3.kwargs
-
-                assert "分頁發送不完整" in call_4.kwargs["embed"].title
-                assert "view" not in call_4.kwargs
+            assert "view" not in call_2.kwargs
+            assert "執行批次掃描時發生錯誤" in call_2.kwargs["embed"].description

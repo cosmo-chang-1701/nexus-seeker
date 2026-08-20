@@ -14,7 +14,7 @@ from cogs.unified_terminal import (
     SymbolHubView,
     PortfolioHubView,
     PulseHubView,
-    BatchScanView,
+    BatchScanPaginatedView,
 )
 
 
@@ -553,7 +553,7 @@ async def test_symbol_hub_batch_scan_holdings(mock_interaction: Any, mock_bot: A
         assert mock_interaction.followup.send.called
         _, kwargs = mock_interaction.followup.send.call_args
         assert "view" in kwargs
-        assert isinstance(kwargs["view"], BatchScanView)
+        assert isinstance(kwargs["view"], BatchScanPaginatedView)
         embed = kwargs["embed"]
         assert "現貨持倉批次量化雷達 (Holdings)" in embed.title
 
@@ -631,7 +631,7 @@ async def test_symbol_hub_batch_scan_all(mock_interaction: Any, mock_bot: Any): 
         assert mock_interaction.followup.send.called
         _, kwargs = mock_interaction.followup.send.call_args
         assert "view" in kwargs
-        assert isinstance(kwargs["view"], BatchScanView)
+        assert isinstance(kwargs["view"], BatchScanPaginatedView)
         embed = kwargs["embed"]
         assert "核心 AI 暨持倉批次量化雷達 (ALL)" in embed.title
 
@@ -680,9 +680,80 @@ async def test_symbol_hub_batch_scan_watchlist(mock_interaction: Any, mock_bot: 
         assert mock_interaction.followup.send.called
         _, kwargs = mock_interaction.followup.send.call_args
         assert "view" in kwargs
-        assert isinstance(kwargs["view"], BatchScanView)
+        assert isinstance(kwargs["view"], BatchScanPaginatedView)
         embed = kwargs["embed"]
         assert "自選標的批次量化雷達 (Watchlist)" in embed.title
+
+
+@pytest.mark.asyncio
+async def test_symbol_hub_batch_scan_watchlist_many_pages_single_followup(
+    mock_interaction: Any, mock_bot: Any
+) -> None:
+    """大量自選股（產生超過 5-6 頁）應只送出一次 followup，並將所有分頁
+    封裝進單一則訊息的 BatchScanPaginatedView，而不是逐頁分別呼叫
+    interaction.followup.send() 撞上 Discord 40094 (maximum number of
+    follow up messages)。"""
+    cog = UnifiedTerminalCog(mock_bot)
+
+    mock_choice = MagicMock()
+    mock_choice.value = "WATCHLIST"
+
+    # 55 個標的 -> chunk_size=10 -> 6 頁，遠超過舊版曾經在此撞牆的頁數 (7)
+    watchlist_symbols = [(f"SYM{i}", i) for i in range(55)]
+
+    with patch("database.get_user_watchlist") as mock_get_watchlist, patch(
+        "services.market_data_service.get_quote", new_callable=AsyncMock
+    ) as mock_quote, patch(
+        # _fetch_sym_radar_data_fast_raw 在 UOA/Squeeze 快取未命中時會 fallback
+        # 呼叫真實的 detect_uoa / get_history_df 網路請求；55 個標的在測試沙箱
+        # 無網路環境下會逐一等待逾時，需 mock 掉以避免測試掛起。
+        "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
+        new_callable=AsyncMock,
+    ) as mock_uoa, patch(
+        "services.market_data_service.get_history_df", new_callable=AsyncMock
+    ) as mock_hist_df, patch(
+        "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
+        new_callable=AsyncMock,
+    ) as mock_iv, patch(
+        "market_analysis.sentiment_engine.SentimentEngine.calculate_skew",
+        new_callable=AsyncMock,
+    ) as mock_skew, patch(
+        "market_analysis.sentiment_engine.SentimentEngine.calculate_max_pain",
+        new_callable=AsyncMock,
+    ) as mock_mp, patch(
+        "market_analysis.sentiment_engine.SentimentEngine.get_indicator_percentile"
+    ) as mock_skew_p:
+        mock_get_watchlist.return_value = watchlist_symbols
+        mock_quote.return_value = {"c": 150.0, "dp": 1.2}
+        mock_uoa.return_value = []
+        mock_hist_df.return_value = None
+
+        mock_iv_metrics = MagicMock()
+        mock_iv_metrics.iv_rank = 30.0
+        mock_iv_metrics.expected_move_weekly = 4.5
+        mock_iv.return_value = mock_iv_metrics
+
+        mock_skew.return_value = {"skew": 1.1}
+        mock_mp.return_value = {"max_pain": 145.0, "distance_pct": 3.4}
+        mock_skew_p.return_value = 75.0
+
+        await cog.symbol_hub.callback(  # type: ignore
+            cog,  # type: ignore
+            mock_interaction,
+            symbol=None,
+            scan_type=mock_choice,
+        )
+
+    total_pages = 6
+
+    # 不管有幾頁，都只呼叫一次 followup.send，翻頁改由使用者點擊 View 上的
+    # ◀/▶ 按鈕就地編輯同一則訊息，因此完全不會撞上 followup 訊息數量上限。
+    assert mock_interaction.followup.send.call_count == 1
+
+    _, kwargs = mock_interaction.followup.send.call_args
+    assert isinstance(kwargs["view"], BatchScanPaginatedView)
+    assert len(kwargs["view"].embeds) == total_pages
+    assert kwargs["embed"] is kwargs["view"].embeds[0]
 
 
 @pytest.mark.asyncio

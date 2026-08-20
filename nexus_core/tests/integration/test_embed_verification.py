@@ -150,6 +150,36 @@ async def test_bot_queue_dm_splits_large_embed(bot: Any):  # type: ignore
 
 
 @pytest.mark.asyncio
+async def test_bot_queue_dm_preserves_view_tag_across_split(bot: Any):  # type: ignore
+    """測試超長 Embed 被 queue_dm 拆分成多則通知時，動態附掛的 _view
+    標記（例如 WatchlistHeartbeatView:AAPL）會被搬移到最後一個分段，
+    而不是隨著 split_embed_by_fields 重建 Embed 而靜默遺失。"""
+    # discord.Embed 本身宣告了 __slots__，無法動態附掛 _view；正式程式碼一律
+    # 透過沒有重新宣告 __slots__ 的 NexusEmbed 建構（因此帶有 __dict__），
+    # 這裡沿用同樣的類別以精確重現生產環境的行為。
+    from cogs.embed_builders._core import NexusEmbed
+
+    user_id = 12345
+    large_embed = NexusEmbed(title="Oversized Embed", description="Base description")
+    for i in range(7):
+        large_embed.add_field(name=f"Field {i}", value="A" * 900, inline=False)
+    setattr(large_embed, "_view", "WatchlistHeartbeatView:AAPL")
+
+    with patch("bot.add_pending_notification") as mock_add:
+        await bot.queue_dm(user_id, embed=large_embed)
+
+        assert mock_add.call_count == 2
+
+        # 第一個分段不應攜帶 _view，避免同一個互動按鈕被還原兩次
+        first_args, _ = mock_add.call_args_list[0]
+        assert "_view" not in first_args[2]
+
+        # 最後一個分段應攜帶原始的 _view 標記
+        second_args, _ = mock_add.call_args_list[1]
+        assert second_args[2]["_view"] == "WatchlistHeartbeatView:AAPL"
+
+
+@pytest.mark.asyncio
 async def test_message_worker_unblocks_on_http_400(bot: Any):  # type: ignore
     """測試當 _message_worker 遭遇 HTTP 400 Bad Request 時，會將該永久失敗的通知從資料庫刪除，以防阻塞佇列。"""
     import discord

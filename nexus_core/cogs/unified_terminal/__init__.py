@@ -3,7 +3,7 @@ from .cog import UnifiedTerminalCog
 from .symbol_view import SymbolHubView
 from .portfolio_view import PortfolioHubView
 from .pulse_view import PulseHubView
-from .batch_scan_view import BatchScanView, BatchScanWarningButton
+from .batch_scan_view import BatchScanPaginatedView, BatchScanWarningButton
 from .polymarket_views import PolymarketPaginatedView
 from .utils import get_macro_overview_data, find_matching_polymarket_odds
 from cogs.embed_builder import (
@@ -20,7 +20,7 @@ __all__ = [
     "SymbolHubView",
     "PortfolioHubView",
     "PulseHubView",
-    "BatchScanView",
+    "BatchScanPaginatedView",
     "BatchScanWarningButton",
     "PolymarketPaginatedView",
     "get_macro_overview_data",

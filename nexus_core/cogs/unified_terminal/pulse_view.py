@@ -110,7 +110,7 @@ class PulseHubView(discord.ui.View):
                             PolymarketPaginatedView,
                         )
 
-                        view = PolymarketPaginatedView(embeds)
+                        view = PolymarketPaginatedView(embeds, total_items=len(markets))
                         await interaction.followup.send(
                             embed=embeds[0], view=view, ephemeral=True
                         )

@@ -22,7 +22,7 @@ from cogs.embed_builder import (
 )
 
 from .utils import get_macro_overview_data, find_matching_polymarket_odds
-from .batch_scan_view import BatchScanView
+from .batch_scan_view import BatchScanPaginatedView
 from .symbol_view import SymbolHubView
 from .portfolio_view import PortfolioHubView
 from .pulse_view import PulseHubView
@@ -373,45 +373,16 @@ class UnifiedTerminalCog(commands.Cog):
             if not isinstance(embeds, list):
                 embeds = [embeds]
 
-            chunk_size = 10
-            total_pages = len(embeds)
-            failed_pages: List[int] = []
-            for idx, emb in enumerate(embeds):
-                page_num = idx + 1
-                # BatchScanView 僅附掛在最後一個分頁，避免每頁都各自附掛一個
-                # 重複的 300 秒逾時互動按鈕。discord.py 的 view 參數預設值是
-                # MISSING sentinel，顯式傳入 view=None 會觸發 TypeError，因此
-                # 非最後一頁時完全不傳遞 view 關鍵字參數。
-                send_kwargs: dict[str, Any] = {"embed": emb, "ephemeral": True}
-                if idx == total_pages - 1:
-                    chunk_results = filtered_results[
-                        idx * chunk_size : (idx + 1) * chunk_size
-                    ]
-                    chunk_symbols = [r["symbol"].upper() for r in chunk_results]
-                    send_kwargs["view"] = BatchScanView(chunk_symbols, self, self.bot)
-                try:
-                    await interaction.followup.send(**send_kwargs)
-                except Exception as page_err:
-                    logger.error(
-                        f"Batch Scan Error for {scan_value} page {page_num}/{total_pages}: {page_err}"
-                    )
-                    failed_pages.append(page_num)
-
-            if failed_pages:
-                failed_str = "、".join(str(p) for p in failed_pages)
-                try:
-                    await interaction.followup.send(
-                        embed=create_error_embed(
-                            f"部分分頁發送失敗（第 {failed_str} 頁，共 {total_pages} 頁），"
-                            "請稍後重新執行 /x 掃描。",
-                            title="分頁發送不完整",
-                        ),
-                        ephemeral=True,
-                    )
-                except Exception as notify_err:
-                    logger.error(
-                        f"Failed to notify user about missing pages for {scan_value}: {notify_err}"
-                    )
+            # 多頁結果一律封裝進單一則訊息的換頁 View（BatchScanPaginatedView），
+            # 只送出一次 interaction.followup.send()，翻頁改由使用者點擊 ◀/▶
+            # 就地編輯同一則訊息。無論結果有幾頁，都不會再逐頁呼叫 followup.send()
+            # 而撞上 Discord 互動的隱性 followup 訊息數量上限（錯誤碼 40094）。
+            pager_view = BatchScanPaginatedView(
+                embeds, self, self.bot, total_items=len(filtered_results)
+            )
+            await interaction.followup.send(
+                embed=embeds[0], view=pager_view, ephemeral=True
+            )
 
         except Exception as e:
             logger.error(f"Batch Scan Error for {scan_value}: {e}")
