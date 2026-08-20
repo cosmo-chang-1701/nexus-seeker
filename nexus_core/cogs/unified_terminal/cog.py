@@ -374,22 +374,54 @@ class UnifiedTerminalCog(commands.Cog):
                 embeds = [embeds]
 
             chunk_size = 10
+            total_pages = len(embeds)
+            failed_pages: List[int] = []
             for idx, emb in enumerate(embeds):
-                chunk_results = filtered_results[
-                    idx * chunk_size : (idx + 1) * chunk_size
-                ]
-                chunk_symbols = [r["symbol"].upper() for r in chunk_results]
-                page_view = BatchScanView(chunk_symbols, self, self.bot)
-                await interaction.followup.send(
-                    embed=emb, view=page_view, ephemeral=True
-                )
+                page_num = idx + 1
+                # BatchScanView 僅附掛在最後一個分頁，避免每頁都各自附掛一個
+                # 重複的 300 秒逾時互動按鈕。discord.py 的 view 參數預設值是
+                # MISSING sentinel，顯式傳入 view=None 會觸發 TypeError，因此
+                # 非最後一頁時完全不傳遞 view 關鍵字參數。
+                send_kwargs: dict[str, Any] = {"embed": emb, "ephemeral": True}
+                if idx == total_pages - 1:
+                    chunk_results = filtered_results[
+                        idx * chunk_size : (idx + 1) * chunk_size
+                    ]
+                    chunk_symbols = [r["symbol"].upper() for r in chunk_results]
+                    send_kwargs["view"] = BatchScanView(chunk_symbols, self, self.bot)
+                try:
+                    await interaction.followup.send(**send_kwargs)
+                except Exception as page_err:
+                    logger.error(
+                        f"Batch Scan Error for {scan_value} page {page_num}/{total_pages}: {page_err}"
+                    )
+                    failed_pages.append(page_num)
+
+            if failed_pages:
+                failed_str = "、".join(str(p) for p in failed_pages)
+                try:
+                    await interaction.followup.send(
+                        embed=create_error_embed(
+                            f"部分分頁發送失敗（第 {failed_str} 頁，共 {total_pages} 頁），"
+                            "請稍後重新執行 /x 掃描。",
+                            title="分頁發送不完整",
+                        ),
+                        ephemeral=True,
+                    )
+                except Exception as notify_err:
+                    logger.error(
+                        f"Failed to notify user about missing pages for {scan_value}: {notify_err}"
+                    )
 
         except Exception as e:
             logger.error(f"Batch Scan Error for {scan_value}: {e}")
-            await interaction.followup.send(
-                embed=create_error_embed(f"執行批次掃描時發生錯誤: {e}"),
-                ephemeral=True,
-            )
+            try:
+                await interaction.followup.send(
+                    embed=create_error_embed(f"執行批次掃描時發生錯誤: {e}"),
+                    ephemeral=True,
+                )
+            except Exception as follow_err:
+                logger.error(f"Failed to send batch scan error followup: {follow_err}")
 
     @symbol_hub.autocomplete("tag")
     async def tag_autocomplete(

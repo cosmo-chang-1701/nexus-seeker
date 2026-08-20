@@ -68,7 +68,7 @@ async def test_symbol_hub_bypass_ui(mock_bot: Any, mock_interaction: Any):  # ty
     測試當 `/x` 帶有 scan_type 參數時，能跳過 UI 面板並直接執行 execute_unified_scan (進階用戶 Bypass)
     """
     cog = UnifiedTerminalCog(mock_bot)
-    cog.execute_unified_scan = AsyncMock()  # type: ignore
+    cog.execute_unified_scan = AsyncMock()
 
     scan_type = Choice(name="ALL", value="ALL")
     await cog.symbol_hub.callback(  # type: ignore
@@ -124,7 +124,7 @@ async def test_radar_view_interactions(mock_bot: Any, mock_interaction: Any):  #
     assert isinstance(modal, FilterParamsModal)
 
     # 4. Execute Scan Route
-    cog.execute_unified_scan = AsyncMock()  # type: ignore
+    cog.execute_unified_scan = AsyncMock()
     mock_interaction.response.is_done.return_value = (
         True  # 假設在 interaction 中被 defer
     )
@@ -441,3 +441,84 @@ async def test_batch_scan_alpha_filters_and_pagination(
 
                 call_2 = mock_interaction.followup.send.call_args_list[1]
                 assert call_2.kwargs["embed"].title == "Radar Scan (第 2/2 頁)"
+
+
+@pytest.mark.asyncio
+async def test_batch_scan_resumes_after_page_send_failure(
+    mock_bot: Any, mock_interaction: Any
+) -> None:
+    """
+    測試:
+    1. 若中間某一頁 followup.send 失敗（例如 webhook token 過期），迴圈仍應
+       繼續嘗試發送剩餘分頁，而不是整批中止（回歸「第 6/7 頁卻沒有第 7 頁」臭蟲）。
+    2. 失敗後應額外發出一則警告訊息告知使用者。
+    3. BatchScanView 只附掛在最後一個成功送出的分頁上。
+    """
+    cog = UnifiedTerminalCog(mock_bot)
+    state: dict[str, Any] = {
+        "scope": "WATCHLIST",
+        "quant_filters": [],
+        "params": {},
+        "selected_tag": None,
+    }
+
+    async def mock_fetch_sym(sym: str) -> dict[str, Any]:
+        return {
+            "symbol": sym,
+            "quote": {"c": 100.0},
+            "ma20": 100.0,
+            "max_pain": {"max_pain": 100.0},
+            "dp_poc": 100.0,
+            "uoa": [],
+            "skew": 0.0,
+        }
+
+    cog._fetch_sym_radar_data_fast = mock_fetch_sym  # type: ignore
+
+    with patch("cogs.unified_terminal.cog.asyncio.to_thread") as mock_thread:
+
+        def mock_to_thread_side_effect(func: Any, *args: Any, **kwargs: Any):  # type: ignore
+            if "get_user_watchlist" in func.__name__:
+                return [[f"SYM_{i}"] for i in range(1, 4)]
+            return []
+
+        mock_thread.side_effect = mock_to_thread_side_effect
+
+        with patch("cogs.unified_terminal.cog.build_radar_scan_embed") as mock_builder:
+            mock_builder.return_value = [
+                discord.Embed(title="Radar Scan (第 1/3 頁)"),
+                discord.Embed(title="Radar Scan (第 2/3 頁)"),
+                discord.Embed(title="Radar Scan (第 3/3 頁)"),
+            ]
+
+            async def send_side_effect(*args: Any, **kwargs: Any) -> Any:
+                if (
+                    kwargs.get("embed") is not None
+                    and kwargs["embed"].title == "Radar Scan (第 2/3 頁)"
+                ):
+                    raise discord.HTTPException(MagicMock(status=400), "boom")
+                return MagicMock()
+
+            mock_interaction.followup.send = AsyncMock(side_effect=send_side_effect)
+
+            with patch("cogs.unified_terminal.cog.BatchScanView") as MockView:
+                MockView.return_value = discord.ui.View()
+                await cog.execute_unified_scan(mock_interaction, state, 12345)
+
+                # 3 個分頁 (其中 1 個失敗) + 1 則失敗通知 = 4 次呼叫
+                assert mock_interaction.followup.send.call_count == 4
+
+                call_1, call_2, call_3, call_4 = (
+                    mock_interaction.followup.send.call_args_list
+                )
+
+                assert call_1.kwargs["embed"].title == "Radar Scan (第 1/3 頁)"
+                assert "view" not in call_1.kwargs
+
+                assert call_2.kwargs["embed"].title == "Radar Scan (第 2/3 頁)"
+
+                assert call_3.kwargs["embed"].title == "Radar Scan (第 3/3 頁)"
+                assert "view" in call_3.kwargs
+
+                assert "分頁發送不完整" in call_4.kwargs["embed"].title
+                assert "view" not in call_4.kwargs
