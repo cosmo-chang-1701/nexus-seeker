@@ -8,12 +8,26 @@ logger = logging.getLogger(__name__)
 
 async def fetch_gex_metrics() -> Dict[str, float]:
     """呼叫邊緣爬蟲獲取大盤的 Gamma Flip Line 與 Put Wall 價位。"""
+    import time
+    import asyncio
+    from database.cache import save_kv_cache, get_kv_cache
+
     fallback = {"spy_spot": 510.0, "gamma_flip": 515.0, "put_wall": 505.0}
-    from database.cache import save_kv_cache
+    cache_key = "macro_gex_metrics_cache"
+
+    async def _last_known_good_or_fallback() -> Dict[str, float]:
+        try:
+            cached_obj = await asyncio.to_thread(get_kv_cache, cache_key)
+        except Exception as e:
+            logger.warning(f"讀取 macro GEX 快取失敗: {e}")
+            cached_obj = None
+        if isinstance(cached_obj, dict) and isinstance(cached_obj.get("data"), dict):
+            return {**cached_obj["data"], "_is_stale_cache": True}
+        return fallback
 
     if not getattr(config, "TUNNEL_URL", ""):
         await save_kv_cache("macro_gex_is_fallback", 1)
-        return fallback
+        return await _last_known_good_or_fallback()
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             res = await client.get(f"{config.TUNNEL_URL}/api/v1/scrape/macro/gex")
@@ -33,11 +47,14 @@ async def fetch_gex_metrics() -> Dict[str, float]:
                         gex_data.get("gamma_flip", 515.0) * 10.0,
                     )
                     await save_kv_cache("macro_gex_is_fallback", 0)
+                    await save_kv_cache(
+                        cache_key, {"data": gex_data, "timestamp": time.time()}
+                    )
                     return gex_data  # type: ignore
     except Exception as e:
         logger.warning(f"無法從 Tunnel Scraper 獲取 GEX 數據: {e}")
     await save_kv_cache("macro_gex_is_fallback", 1)
-    return fallback
+    return await _last_known_good_or_fallback()
 
 
 async def get_market_regime() -> str:

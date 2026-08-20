@@ -470,8 +470,11 @@ def force_macro_update(ctx: Any) -> None:
                     "macro_vts_ratio", vts_data.get("vts_ratio")
                 )
 
+            gex_stale_tag = (
+                " ⚠️ [使用快取資料]" if gex_data.get("_is_stale_cache") else ""
+            )
             rprint(
-                f"[bold green]✅ GEX, 流動性, VTS與核心總經數據更新完成。[/bold green] (SPY: {gex_data.get('spy_spot')}, Flip: {gex_data.get('gamma_flip')}, TED Spread: {liq_data.get('ted_spread') if not isinstance(liq_data, Exception) else 'Error'}, RRP: {core_data.get('rrp') if not isinstance(core_data, Exception) else 'Error'})"
+                f"[bold green]✅ GEX, 流動性, VTS與核心總經數據更新完成。[/bold green] (SPY: {gex_data.get('spy_spot')}, Flip: {gex_data.get('gamma_flip')}, TED Spread: {liq_data.get('ted_spread') if not isinstance(liq_data, Exception) else 'Error'}, RRP: {core_data.get('rrp') if not isinstance(core_data, Exception) else 'Error'}){gex_stale_tag}"
             )
         except Exception as e:
             rprint(f"[bold red]❌ GEX & 流動性數據更新失敗: {e}[/bold red]")

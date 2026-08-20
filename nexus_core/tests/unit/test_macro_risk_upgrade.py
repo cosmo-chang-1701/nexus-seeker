@@ -755,3 +755,57 @@ async def test_fetch_symbol_gex_metrics_falls_back_when_edge_unreachable() -> No
 
         assert result["call_wall"] == 240.0
         mock_client.get.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_fetch_gex_metrics_uses_last_known_good_cache_when_unreachable() -> None:
+    """巨集 GEX (SPY) 抓取逾時/失敗時，應優先回傳最近一次成功抓取的快取值，
+    而非寫死的舊常數 (gamma_flip=515.0)，避免與現價脫節造成負 Gamma 誤判。"""
+    import httpx
+    from unittest.mock import AsyncMock
+    from market_analysis.index_microstructure import fetch_gex_metrics
+
+    last_known_good = {
+        "data": {"spy_spot": 700.0, "gamma_flip": 690.0, "put_wall": 650.0},
+        "timestamp": 1234567890.0,
+    }
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(side_effect=httpx.ReadTimeout("timeout"))
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("database.cache.get_kv_cache", return_value=last_known_good), patch(
+        "database.cache.save_kv_cache", new_callable=AsyncMock
+    ), patch("config.TUNNEL_URL", "http://mock-tunnel"), patch(
+        "httpx.AsyncClient", return_value=mock_client
+    ):
+        result = await fetch_gex_metrics()
+
+        assert result["gamma_flip"] == 690.0
+        assert result["spy_spot"] == 700.0
+        assert result["_is_stale_cache"] is True
+
+
+@pytest.mark.asyncio
+async def test_fetch_gex_metrics_falls_back_to_static_constant_without_cache() -> None:
+    """從未成功抓取過 (無任何歷史快取) 時，仍應安全回退至既有寫死常數，
+    維持向後相容行為。"""
+    import httpx
+    from unittest.mock import AsyncMock
+    from market_analysis.index_microstructure import fetch_gex_metrics
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(side_effect=httpx.ReadTimeout("timeout"))
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("database.cache.get_kv_cache", return_value=None), patch(
+        "database.cache.save_kv_cache", new_callable=AsyncMock
+    ), patch("config.TUNNEL_URL", "http://mock-tunnel"), patch(
+        "httpx.AsyncClient", return_value=mock_client
+    ):
+        result = await fetch_gex_metrics()
+
+        assert result == {"spy_spot": 510.0, "gamma_flip": 515.0, "put_wall": 505.0}
+        assert "_is_stale_cache" not in result

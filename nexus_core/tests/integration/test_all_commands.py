@@ -189,6 +189,23 @@ async def test_all_commands_structure(
         m_fw.assert_called_once()
     mock_interaction.followup.send.reset_mock()
 
+    # Test force_macro_update marks the embed when GEX data is degraded/stale-cache
+    with patch(
+        "market_analysis.index_microstructure.fetch_gex_metrics", new_callable=AsyncMock
+    ) as m_gex, patch(
+        "services.calendar_service.calendar_service.update_fedwatch_probability",
+        new_callable=AsyncMock,
+    ):
+        m_gex.return_value = {
+            "spy_spot": 510.0,
+            "gamma_flip": 515.0,
+            "_is_stale_cache": True,
+        }
+        await admin.force_macro_update.callback(admin, mock_interaction)  # type: ignore
+        sent_embed = mock_interaction.followup.send.call_args.kwargs["embed"]
+        assert "使用快取資料" in sent_embed.description
+    mock_interaction.followup.send.reset_mock()
+
 
 @pytest.mark.asyncio
 async def test_command_remove_watch(mock_interaction: Any, db_conn: Any, mock_bot: Any):  # type: ignore

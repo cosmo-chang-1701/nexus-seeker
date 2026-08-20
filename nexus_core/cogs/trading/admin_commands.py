@@ -174,7 +174,13 @@ class AdminCommandsCog(commands.Cog):
                 ted_spread = liq_data.get("ted_spread", 0.0)
 
             assert isinstance(gex_data, dict)
-            gex_info = f"SPY: ${gex_data.get('spy_spot', 0.0):.2f} / Flip: {gex_data.get('gamma_flip', 0.0):.2f} / TED Spread: {ted_spread}"
+            gex_is_stale = bool(gex_data.get("_is_stale_cache", False))
+            gex_stale_tag = " ⚠️ [使用快取資料]" if gex_is_stale else ""
+            gex_info = (
+                f"SPY: ${gex_data.get('spy_spot', 0.0):.2f} / "
+                f"Flip: {gex_data.get('gamma_flip', 0.0):.2f} / "
+                f"TED Spread: {ted_spread}{gex_stale_tag}"
+            )
         except Exception as e:
             errors.append(f"GEX & 流動性爬取失敗: {e}")
 
