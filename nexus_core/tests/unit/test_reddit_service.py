@@ -26,42 +26,19 @@ async def test_tunnel_disabled_by_caller_skips_http_call() -> None:
 
 
 @pytest.mark.asyncio
-async def test_tunnel_disabled_by_db_global_check_skips_http_call() -> None:
-    """Gate 2: When enable_tunnel defaults to True but the DB reports
-    all users have tunnel disabled, no HTTP call should be made."""
+async def test_tunnel_url_unset_returns_warning_message() -> None:
+    """Gate 2: When TUNNEL_URL is unset, return friendly message without making HTTP call."""
 
     with (
         patch("services.reddit_service.httpx.AsyncClient") as mock_client_cls,
-        patch(
-            "database.user_settings.any_user_local_tunnel_enabled",
-            return_value=False,
-        ),
+        patch("services.reddit_service.config") as mock_config,
     ):
+        mock_config.TUNNEL_URL = ""
         from services.reddit_service import get_reddit_context
 
         result = await get_reddit_context("AAPL")
 
-        assert result is None, "Should return None when DB global toggle is off"
-        mock_client_cls.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_tunnel_db_query_failure_conservative_skip() -> None:
-    """Gate 2 fallback: If the DB query itself raises an exception,
-    we conservatively skip (no HTTP call) rather than risk a 530 error."""
-
-    with (
-        patch("services.reddit_service.httpx.AsyncClient") as mock_client_cls,
-        patch(
-            "database.user_settings.any_user_local_tunnel_enabled",
-            side_effect=Exception("DB connection lost"),
-        ),
-    ):
-        from services.reddit_service import get_reddit_context
-
-        result = await get_reddit_context("TSLA")
-
-        assert result is None, "Should return None when DB query fails"
+        assert result == "尚未配置本地 Tunnel URL，暫不抓取 Reddit 情緒。"
         mock_client_cls.assert_not_called()
 
 
@@ -160,17 +137,15 @@ async def test_custom_query_passed_to_edge_scraper() -> None:
 
 
 @pytest.mark.asyncio
-async def test_batch_skips_http_when_tunnel_globally_disabled() -> None:
+async def test_batch_skips_http_when_tunnel_url_unset() -> None:
     """get_reddit_context_batch should skip the HTTP call entirely and
-    return None for every symbol when no user has the tunnel enabled."""
+    return None for every symbol when TUNNEL_URL is unset."""
 
     with (
         patch("services.reddit_service.httpx.AsyncClient") as mock_client_cls,
-        patch(
-            "database.user_settings.any_user_local_tunnel_enabled",
-            return_value=False,
-        ),
+        patch("services.reddit_service.config") as mock_config,
     ):
+        mock_config.TUNNEL_URL = ""
         from services.reddit_service import get_reddit_context_batch
 
         result = await get_reddit_context_batch(["NVDA", "TSLA"])

@@ -9,7 +9,6 @@ from datetime import datetime, timezone, timedelta
 
 import httpx
 
-import database
 from config import get_vix_tier
 import pandas as pd
 
@@ -173,9 +172,11 @@ async def run_deep_research() -> str:
 
         hist_tasks = [get_history_df(sym, period="3mo") for sym in sectors.values()]
         news_tasks = [fetch_recent_news(sym) for sym in sectors.values()]
+        import config
+
         reddit_tasks = (
             [get_reddit_context(sym) for sym in sectors.values()]
-            if database.any_user_local_tunnel_enabled()
+            if getattr(config, "TUNNEL_URL", "")
             else []
         )
 
@@ -184,7 +185,7 @@ async def run_deep_research() -> str:
         reddit_results = (
             await asyncio.gather(*reddit_tasks, return_exceptions=True)
             if reddit_tasks
-            else ["本地 Tunnel 已關閉，略過 Reddit 情緒。"] * len(sectors)
+            else ["未配置 TUNNEL_URL，略過 Reddit 情緒。"] * len(sectors)
         )
 
         research_data: dict = {}

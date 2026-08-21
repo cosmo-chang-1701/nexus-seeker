@@ -312,3 +312,59 @@ async def test_calendar_embed_with_fallback() -> None:
     )
 
     assert "總經數據暫時無法獲取，正使用本地歷史快取" in embed.title  # type: ignore
+
+
+@pytest.mark.asyncio
+async def test_calendar_service_unset_tunnel_url_degradation(db_conn: Any) -> None:
+    """Test graceful degradation when TUNNEL_URL is empty: falls back to SQLite cache without making HTTP requests."""
+    fixed_now = datetime(2026, 5, 12, 12, 0, 0)
+    month_key = "2026-05"
+
+    from database.calendar_cache import replace_macro_month_events
+    import sqlite3
+    import config
+
+    # Pre-seed existing cache
+    mock_cached_events = [
+        {
+            "event": "Cached Non-Farm Payrolls",
+            "time": "2026-05-15T12:30:00Z",
+            "impact": "high",
+            "country": "US",
+        }
+    ]
+    replace_macro_month_events(month_key, mock_cached_events)
+
+    # Set checked_at to past so it would normally attempt refresh
+    conn = sqlite3.connect(config.DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE economic_calendar_month_cache SET checked_at = '2026-05-01 00:00:00' WHERE month_key = ?",
+        (month_key,),
+    )
+    conn.commit()
+    conn.close()
+
+    with patch("services.calendar_service.datetime") as mock_datetime:
+        mock_datetime.now.side_effect = (
+            lambda tz=None: fixed_now if tz is None else fixed_now.replace(tzinfo=tz)
+        )
+        mock_datetime.fromisoformat = datetime.fromisoformat
+        mock_datetime.strptime = datetime.strptime
+        mock_datetime.combine = datetime.combine
+        mock_datetime.min = datetime.min
+
+        with patch("config.TUNNEL_URL", ""), patch(
+            "httpx.AsyncClient.get", new_callable=AsyncMock
+        ) as mock_get:
+            service = CalendarService()
+            service._cold_start_complete = True
+            events = await service.get_high_impact_events(days=7)
+
+    # 1. Assert no HTTP request was made
+    assert mock_get.call_count == 0
+
+    # 2. Assert fallback to SQLite cache
+    assert len(events) == 1
+    assert events[0].event == "Cached Non-Farm Payrolls"
+    assert getattr(events, "is_fallback", False) is True

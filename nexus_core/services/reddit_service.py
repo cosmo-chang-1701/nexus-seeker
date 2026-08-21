@@ -31,28 +31,10 @@ async def get_reddit_context(
 
     # ── Gate 1: 呼叫端明確關閉 ──────────────────────────────────
     if not enable_tunnel:
-        logger.info(
-            f"⏭️ [{symbol}] 根據用戶 settings 設定，已跳過本地 Tunnel (Reddit Scraper) 呼叫。"
-        )
+        logger.info(f"⏭️ [{symbol}] 呼叫端明確跳過本地 Tunnel (Reddit Scraper) 呼叫。")
         return None
 
-    # ── Gate 2: 資料庫全域開關防禦（即使呼叫端未傳 enable_tunnel）───
-    try:
-        from database.user_settings import any_user_local_tunnel_enabled
-
-        if not any_user_local_tunnel_enabled():
-            logger.info(
-                f"⏭️ [{symbol}] 根據用戶 settings 設定，已跳過本地 Tunnel (Reddit Scraper) 呼叫。"
-            )
-            return None
-    except Exception as e:
-        # 若 DB 查詢失敗，保守降級：不發送外部請求
-        logger.warning(
-            f"[{symbol}] 無法查詢 Tunnel 開關狀態 ({e})，保守跳過 Reddit 呼叫。"
-        )
-        return None
-
-    # ── Gate 3: TUNNEL_URL 配置檢查 ─────────────────────────────
+    # ── Gate 2: TUNNEL_URL 配置檢查 ─────────────────────────────
     if not getattr(config, "TUNNEL_URL", ""):
         return "尚未配置本地 Tunnel URL，暫不抓取 Reddit 情緒。"
 
@@ -123,21 +105,7 @@ async def get_reddit_context_batch(
     if not symbols:
         return {}
 
-    # ── Gate: 資料庫全域開關防禦 ─────────────────────────────
-    try:
-        from database.user_settings import any_user_local_tunnel_enabled
-
-        if not any_user_local_tunnel_enabled():
-            logger.info(
-                "⏭️ [批次] 根據用戶 settings 設定，已跳過本地 Tunnel (Reddit Scraper) 批次呼叫。"
-            )
-            return empty_result
-    except Exception as e:
-        logger.warning(
-            f"[批次] 無法查詢 Tunnel 開關狀態 ({e})，保守跳過 Reddit 批次呼叫。"
-        )
-        return empty_result
-
+    # ── Gate: TUNNEL_URL 配置檢查 ─────────────────────────────
     if not getattr(config, "TUNNEL_URL", ""):
         return empty_result
 

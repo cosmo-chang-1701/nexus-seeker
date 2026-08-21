@@ -417,9 +417,7 @@ class UnifiedTerminalCog(commands.Cog):
             if current.lower() in t.lower()
         ][:25]
 
-    async def _fetch_single_symbol_data_raw(
-        self, symbol: str, enable_local_tunnel: bool
-    ) -> dict:
+    async def _fetch_single_symbol_data_raw(self, symbol: str) -> dict:
         """
         獲取單一標的所需的所有重型量化數據與外部情緒分析。
         供 SingleFlightManager 調度使用。
@@ -454,9 +452,7 @@ class UnifiedTerminalCog(commands.Cog):
             asyncio.to_thread(calculate_volume_profile, symbol)
         )
         dp_task = asyncio.create_task(fetch_darkpool_prints(symbol))
-        reddit_task = asyncio.create_task(
-            reddit_service.get_reddit_context(symbol, enable_tunnel=enable_local_tunnel)
-        )
+        reddit_task = asyncio.create_task(reddit_service.get_reddit_context(symbol))
         poly_task = asyncio.create_task(_safe_get_poly_markets())
         ddp_task = asyncio.create_task(ddp_inspector.inspect_symbol(symbol))
 
@@ -605,8 +601,6 @@ class UnifiedTerminalCog(commands.Cog):
             )
             stock_cost = _safe_float(stock_cost_raw, 0.0)
 
-            ctx = database.get_full_user_context(user_id)
-
             # 🚀 Task 2 Hook: Coalesced fetch using SingleFlightManager
             from services.single_flight import SingleFlightManager
 
@@ -614,7 +608,6 @@ class UnifiedTerminalCog(commands.Cog):
                 f"single_hub_{symbol}",
                 self._fetch_single_symbol_data_raw,
                 symbol,
-                ctx.enable_local_tunnel,
             )
 
             df_spy = data["df_spy"]

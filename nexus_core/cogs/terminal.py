@@ -60,7 +60,6 @@ class TerminalCog(commands.Cog):
         risk_limit: Optional[float] = None,
         enable_vtr: Optional[bool] = None,
         enable_psq_watchlist: Optional[bool] = None,
-        enable_local_tunnel: Optional[bool] = None,
         polymarket_threshold: Optional[float] = None,
         polymarket_use_llm: Optional[bool] = None,
         polymarket_slippage: Optional[float] = None,
@@ -80,7 +79,6 @@ class TerminalCog(commands.Cog):
                 risk_limit,
                 enable_vtr,
                 enable_psq_watchlist,
-                enable_local_tunnel,
                 polymarket_threshold,
                 polymarket_use_llm,
                 polymarket_slippage,
@@ -129,12 +127,6 @@ class TerminalCog(commands.Cog):
             db_updates["enable_psq_watchlist"] = enable_psq_watchlist
             updates.append(
                 f"⚡ PowerSqueeze 追蹤: `{'開啟' if enable_psq_watchlist else '關閉'}`"
-            )
-
-        if enable_local_tunnel is not None:
-            db_updates["enable_local_tunnel"] = enable_local_tunnel
-            updates.append(
-                f"🛜 本地 Tunnel 呼叫: `{'開啟' if enable_local_tunnel else '關閉'}`"
             )
 
         if polymarket_threshold is not None:

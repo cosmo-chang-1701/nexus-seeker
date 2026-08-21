@@ -20,21 +20,7 @@ async def get_fundamental_context(
 
     if not enable_tunnel:
         logger.info(
-            f"⏭️ [{symbol}] 根據用戶 settings 設定，已跳過本地 Tunnel (Fundamental Scraper) 呼叫。"
-        )
-        return None
-
-    try:
-        from database.user_settings import any_user_local_tunnel_enabled
-
-        if not any_user_local_tunnel_enabled():
-            logger.info(
-                f"⏭️ [{symbol}] 根據用戶 settings 設定，已跳過本地 Tunnel (Fundamental Scraper) 呼叫。"
-            )
-            return None
-    except Exception as e:
-        logger.warning(
-            f"[{symbol}] 無法查詢 Tunnel 開關狀態 ({e})，保守跳過 Fundamental 呼叫。"
+            f"⏭️ [{symbol}] 呼叫端明確跳過本地 Tunnel (Fundamental Scraper) 呼叫。"
         )
         return None
 
@@ -145,13 +131,6 @@ async def get_fundamental_reports_list(
 ) -> Optional[list[Dict[str, Any]]]:
     """獲取近期財報清單"""
     if not enable_tunnel:
-        return None
-    try:
-        from database.user_settings import any_user_local_tunnel_enabled
-
-        if not any_user_local_tunnel_enabled():
-            return None
-    except Exception:
         return None
 
     if not getattr(config, "TUNNEL_URL", ""):

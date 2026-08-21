@@ -257,11 +257,6 @@ SETTINGS_LABELS = {
         "是否對自選股開啟 PowerSqueeze 戰情追蹤",
         None,
     ),
-    "enable_local_tunnel": (
-        "🛜 本地 Tunnel 呼叫",
-        "是否允許呼叫本地 Tunnel/Edge Scraper（關閉時將不做任何 Tunnel I/O）",
-        None,
-    ),
     "monthly_expense": (
         "💸 每月支出預算",
         "每月生存支出預算 (USD, 用於財務跑道分析)",
@@ -534,7 +529,6 @@ class AccountSettingsView(discord.ui.View):
         if key in [
             "enable_vtr",
             "enable_psq_watchlist",
-            "enable_local_tunnel",
             "polymarket_use_llm",
             "can_trade_spreads",
             "cash_reserve_protection",
@@ -574,7 +568,6 @@ class AccountSettingsView(discord.ui.View):
             f"📅 **宏觀逃頂窗口**: `{ctx.escape_window_start} ~ {ctx.escape_window_end}`",
             f"👻 **虛擬交易室 (VTR) 跟單**: `{'🟢 開啟' if ctx.enable_vtr else '🔴 關閉'}`",
             f"⚡ **PowerSqueeze 追蹤**: `{'🟢 開啟' if ctx.enable_psq_watchlist else '🔴 關閉'}`",
-            f"🛜 **本地 Tunnel 呼叫**: `{'🟢 開啟' if ctx.enable_local_tunnel else '🔴 關閉'}`",
             f"📈 **期權 Spread 權限**: `{'🟢 開啟' if ctx.can_trade_spreads else '🔴 關閉'}`",
             f"🛡️ **備用金防護**: `{'🟢 開啟' if ctx.cash_reserve_protection else '🔴 關閉'}`",
         ]

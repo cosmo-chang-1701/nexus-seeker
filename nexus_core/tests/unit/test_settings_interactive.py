@@ -33,7 +33,7 @@ async def test_settings_view_structure(db_conn: Any):  # type: ignore
     assert "💰 現金儲備金額" in labels
     assert "🛡️ 基準風險上限 %" in labels
     assert "👻 虛擬交易室 (VTR)" in labels
-    assert "🛜 本地 Tunnel 呼叫" in labels
+    assert "🛜 本地 Tunnel 呼叫" not in labels
 
 
 @pytest.mark.asyncio

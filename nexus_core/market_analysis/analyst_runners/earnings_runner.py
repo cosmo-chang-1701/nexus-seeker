@@ -171,13 +171,15 @@ async def run_premarket_earnings() -> Any:
                 return_exceptions=True,
             )
             reddit_results: list
-            if database.any_user_local_tunnel_enabled():
+            import config
+
+            if getattr(config, "TUNNEL_URL", ""):
                 reddit_results = await asyncio.gather(
                     *[get_reddit_context(sym) for sym in upcoming_symbols],  # type: ignore
                     return_exceptions=True,
                 )
             else:
-                reddit_results = ["本地 Tunnel 已關閉，略過 Reddit 情緒。"] * len(
+                reddit_results = ["未配置 TUNNEL_URL，略過 Reddit 情緒。"] * len(
                     upcoming_symbols
                 )
 

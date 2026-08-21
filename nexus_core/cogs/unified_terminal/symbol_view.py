@@ -4,12 +4,12 @@ import asyncio
 import logging
 from typing import Dict
 
+import database
 from services import market_data_service, news_service, reddit_service, llm_service
 from market_analysis.sentiment_engine import SentimentEngine
 from market_analysis.psq_engine import analyze_psq
 from market_analysis.risk_engine import MacroContext
 import market_math
-import database
 from cogs.embed_builder import (
     create_error_embed,
     create_media_sentiment_embed,
@@ -88,10 +88,7 @@ class SymbolHubView(discord.ui.View):
         embed = None
         try:
             news_task = news_service.fetch_recent_news(self.symbol)
-            ctx = database.get_full_user_context(self.user_id)
-            reddit_task = reddit_service.get_reddit_context(
-                self.symbol, enable_tunnel=ctx.enable_local_tunnel
-            )
+            reddit_task = reddit_service.get_reddit_context(self.symbol)
             news_text, reddit_text = await asyncio.gather(news_task, reddit_task)
             embed = create_media_sentiment_embed(self.symbol, news_text, reddit_text)
         except Exception as e:
@@ -171,9 +168,7 @@ class SymbolHubView(discord.ui.View):
             mp_task = SentimentEngine.calculate_max_pain(self.symbol)
             iv_task = SentimentEngine.fetch_and_calculate_iv_metrics(self.symbol)
             ctx = database.get_full_user_context(self.user_id)
-            reddit_task = reddit_service.get_reddit_context(
-                self.symbol, enable_tunnel=ctx.enable_local_tunnel
-            )
+            reddit_task = reddit_service.get_reddit_context(self.symbol)
             poly_task = (
                 poly_service.get_market_snapshot(limit=0)
                 if poly_service

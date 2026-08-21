@@ -187,7 +187,13 @@ class CalendarService:
         except ValueError:
             return False, False
 
-        tunnel_url = getattr(config, "TUNNEL_URL", "http://nexus_edge_scraper:8000")
+        tunnel_url = getattr(config, "TUNNEL_URL", "").rstrip("/")
+        if not tunnel_url:
+            logger.info(f"未配置 TUNNEL_URL，跳過宏觀日曆爬取 ({month_key})。")
+            if status is not None:
+                return False, True
+            return False, False
+
         url = f"{tunnel_url}/api/v1/macro/calendar?year={year}&month={month}&high_impact_only=true"
 
         high_impact: list[dict[str, str]] = []

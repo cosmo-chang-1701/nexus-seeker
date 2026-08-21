@@ -61,12 +61,14 @@ class SchedulerCog(commands.Cog):
     # ==========================================
     @tasks.loop(time=time(hour=8, minute=30, tzinfo=ny_tz))
     async def daily_reddit_update(self) -> None:
-        """08:30：每日更新 Reddit 散戶情緒快取 (低頻率任務)"""
         if not getattr(self.bot, "_is_leader_instance", True):
             return
-        if not database.any_user_local_tunnel_enabled():
+
+        import config
+
+        if not getattr(config, "TUNNEL_URL", ""):
             logger.info(
-                "🕸️ [Daily Update] 本地 Tunnel 已關閉（無任何使用者啟用），跳過 Reddit 情緒快取更新。"
+                "🕸️ [Daily Update] TUNNEL_URL 未配置，跳過 Reddit 情緒快取更新。"
             )
             return
 

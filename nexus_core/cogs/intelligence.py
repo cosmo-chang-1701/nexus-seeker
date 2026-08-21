@@ -267,10 +267,7 @@ class IntelligenceCog(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         symbol = symbol.upper()
         try:
-            user_ctx = database.get_full_user_context(interaction.user.id)
-            reddit_text = await reddit_service.get_reddit_context(
-                symbol, limit, enable_tunnel=user_ctx.enable_local_tunnel
-            )
+            reddit_text = await reddit_service.get_reddit_context(symbol, limit)
             await interaction.followup.send(
                 embed=create_reddit_scan_embed(symbol, reddit_text), ephemeral=True
             )

@@ -381,9 +381,9 @@ async def test_run_premarket_earnings_sorting_and_filtering() -> Any:
 
         # Check sentiment scan targets (top 2 closest: SYM_D, SYM_A)
         assert mock_fetch_news.call_count == 2
-
-        # Reddit tunnel 呼叫需由 /settings 啟用；預設關閉時，不應觸發本地 Tunnel I/O
-        assert mock_fetch_reddit.call_count == 0
+        assert mock_fetch_reddit.call_count == 2
+        reddit_calls = [c[0][0] for c in mock_fetch_reddit.call_args_list]
+        assert set(reddit_calls) == {"SYM_D", "SYM_A"}
 
         news_calls = [c[0][0] for c in mock_fetch_news.call_args_list]
         assert set(news_calls) == {"SYM_D", "SYM_A"}
