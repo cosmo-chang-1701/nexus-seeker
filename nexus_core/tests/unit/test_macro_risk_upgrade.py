@@ -269,23 +269,37 @@ def test_safety_payout_threshold_logic() -> Any:
     from market_analysis.trading_orchestration import get_safety_payout_threshold
 
     with patch("database.get_kv_cache") as mock_kv:
-        # Case 1: Normal
+        # Case 1a: Normal (小數格式 0.05)
         mock_kv.side_effect = lambda key: {
             "macro_rrp_change_30d": 0.05,
             "macro_rrp_spike": False,
         }.get(key)
         assert get_safety_payout_threshold() == 13000.0
 
-        # Case 2: RRP increase > 20%
+        # Case 1b: Normal (百分比格式 5.0%)
+        mock_kv.side_effect = lambda key: {
+            "macro_rrp_change_30d": 5.0,
+            "macro_rrp_spike": False,
+        }.get(key)
+        assert get_safety_payout_threshold() == 13000.0
+
+        # Case 2a: RRP increase > 20% (小數格式 0.25)
         mock_kv.side_effect = lambda key: {
             "macro_rrp_change_30d": 0.25,
             "macro_rrp_spike": False,
         }.get(key)
         assert get_safety_payout_threshold() == 18000.0
 
+        # Case 2b: RRP increase > 20% (百分比格式 25.0%)
+        mock_kv.side_effect = lambda key: {
+            "macro_rrp_change_30d": 25.0,
+            "macro_rrp_spike": False,
+        }.get(key)
+        assert get_safety_payout_threshold() == 18000.0
+
         # Case 3: RRP Spike
         mock_kv.side_effect = lambda key: {
-            "macro_rrp_change_30d": 0.05,
+            "macro_rrp_change_30d": 5.0,
             "macro_rrp_spike": True,
         }.get(key)
         assert get_safety_payout_threshold() == 18000.0
@@ -657,6 +671,35 @@ def test_evaluate_escape_window_regime_matrix() -> None:
     assert shift == 5
     assert "寬鬆擴張" in tier
     assert "🟢 後推 5 天" in status
+
+
+def test_evaluate_escape_window_regime_none_prob_safe() -> None:
+    """測試逃頂窗口在 prob 為 None 或非數值時具備防禦性中性回退，不拋出 TypeError"""
+    from market_analysis.index_microstructure import evaluate_escape_window_regime
+
+    # Case 1: prob is None
+    t_score, e_score, direction, shift, tier, status = evaluate_escape_window_regime(
+        prob=None,
+        cpi_dev=0.0,
+        wti=75.0,
+        vts_ratio=0.88,
+        is_negative_gamma=False,
+    )
+    assert direction == "維持"
+    assert shift == 0
+    assert "中性平衡" in tier
+    assert "🟢 正常窗口 (均衡定價)" == status
+
+    # Case 2: prob is malformed
+    t_score2, e_score2, dir2, shift2, tier2, status2 = evaluate_escape_window_regime(
+        prob="invalid_prob",  # type: ignore[arg-type]
+        cpi_dev=0.0,
+        wti=75.0,
+        vts_ratio=0.88,
+        is_negative_gamma=False,
+    )
+    assert dir2 == "維持"
+    assert shift2 == 0
 
 
 # ---------------------------------------------------------------------------

@@ -366,7 +366,7 @@ def estimate_symbol_gamma_flip(gex_profile: dict, spot: float) -> float:
 
 
 def evaluate_escape_window_regime(
-    prob: float,
+    prob: float | None = 0.50,
     cpi_dev: float = 0.0,
     wti: float = 75.0,
     vts_ratio: float = 0.88,
@@ -386,13 +386,18 @@ def evaluate_escape_window_regime(
         tuple[int, int, str, int, str, str]:
             (tightening_score, easing_score, direction, shift_days, tier_title, short_status_desc)
     """
+    try:
+        safe_prob = float(prob) if prob is not None else 0.50
+    except (ValueError, TypeError):
+        safe_prob = 0.50
+
     tightening_score = 0
     easing_score = 0
 
     # Factor 1: FedWatch 利率定價
-    if prob > 0.70:
+    if safe_prob > 0.70:
         tightening_score += 1
-    elif prob <= 0.40:
+    elif safe_prob <= 0.40:
         easing_score += 1
 
     # Factor 2: 通膨與能源 (CPI / WTI)
@@ -414,12 +419,12 @@ def evaluate_escape_window_regime(
         easing_score += 1
 
     # 三階矩陣狀態評估
-    if tightening_score >= 2 or (prob > 0.70 and is_negative_gamma):
+    if tightening_score >= 2 or (safe_prob > 0.70 and is_negative_gamma):
         direction = "前移"
         shift_days = 8 if tightening_score >= 3 else 5
         tier_title = "🚨 收縮警戒 (Tightening Contraction)"
         short_status_desc = f"⚠️ 前移 {shift_days} 天 (高利率+結構承壓)"
-    elif prob <= 0.40 and easing_score >= 2 and tightening_score == 0:
+    elif safe_prob <= 0.40 and easing_score >= 2 and tightening_score == 0:
         direction = "後推"
         shift_days = 5
         tier_title = "🟢 寬鬆擴張 (Liquidity Expansion)"
@@ -428,7 +433,7 @@ def evaluate_escape_window_regime(
         direction = "維持"
         shift_days = 0
         tier_title = "🟡 中性平衡 (Neutral Balance)"
-        if not is_negative_gamma and prob > 0.70:
+        if not is_negative_gamma and safe_prob > 0.70:
             short_status_desc = "🟢 正常窗口 (正Gamma護航中)"
         else:
             short_status_desc = "🟢 正常窗口 (均衡定價)"

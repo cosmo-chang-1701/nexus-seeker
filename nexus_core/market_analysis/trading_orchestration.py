@@ -459,7 +459,11 @@ def get_safety_payout_threshold() -> float:
     rrp_change = get_kv_cache("macro_rrp_change_30d") or 0.0
     rrp_spike = get_kv_cache("macro_rrp_spike") or False
 
-    if rrp_change > 0.20 or rrp_spike:
+    # 相容百分比 (e.g. 25.0) 與小數比例 (e.g. 0.25) 兩種格式
+    is_high_rrp_change = rrp_change > 20.0 or (
+        0.0 < rrp_change <= 1.0 and rrp_change > 0.20
+    )
+    if is_high_rrp_change or rrp_spike:
         # 發生流動性結構異常，拉高保留現金底線至最高戒備狀態
         return 18000.0
 
