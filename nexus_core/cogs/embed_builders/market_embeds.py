@@ -20,6 +20,7 @@ from typing import Any, Dict, List
 from cogs.embed_builders._ansi_utils import _safe_float, _truncate_with_boundary
 from cogs.embed_builders.settings_embeds import create_info_embed
 from cogs.embed_builders._core import NexusEmbed
+from market_analysis.macro_calendar_translator import translate_macro_event
 
 
 def create_max_pain_embed(symbol: str, data: Dict[str, Any]) -> discord.Embed:
@@ -292,11 +293,12 @@ def create_market_calendar_embed(
         event_time = getattr(event, "time", None)
 
         if event_name is not None:
+            translated_event_name = translate_macro_event(event_name) or event_name
             impact_icon = "🔴" if impact == "high" else "🟡"
             field_name = (
-                f"{impact_icon} {event_name} ({country})"
+                f"{impact_icon} {translated_event_name} ({country})"
                 if country
-                else f"{impact_icon} {event_name}"
+                else f"{impact_icon} {translated_event_name}"
             )
             time_part = f" | `{event_time}`" if event_time else ""
             field_value = f"⏰ TTE: `{tte_hours}`h{time_part}"
@@ -1649,7 +1651,8 @@ def build_calendar_embed(
     macro_text = ""
     if macro_events:
         for ev in macro_events[:15]:
-            name = getattr(ev, "event", "Unknown")
+            raw_name = getattr(ev, "event", "Unknown")
+            name = translate_macro_event(raw_name) or raw_name
             try:
                 time_dt = datetime.fromisoformat(
                     str(getattr(ev, "time", "")).replace("Z", "+00:00")

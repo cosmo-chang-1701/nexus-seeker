@@ -531,3 +531,39 @@ def test_scrape_sec_fundamental_8k_key_events() -> None:
         assert "key_events" in data["data"]["sections"]
         assert "5.02" in data["data"]["sections"]["key_events"]
         assert "quarterly_financials" not in data["data"]["sections"]
+
+
+def test_scrape_macro_calendar_translations() -> None:
+    mock_tv_response = MagicMock()
+    mock_tv_response.status_code = 200
+    mock_tv_response.json.return_value = {
+        "status": "ok",
+        "result": [
+            {
+                "title": "Core CPI YoY",
+                "date": "2026-06-15T12:30:00.000Z",
+            },
+            {
+                "title": "Non Farm Payrolls",
+                "date": "2026-06-05T12:30:00.000Z",
+            },
+            {
+                "title": "Treasury Refunding Announcement",
+                "date": "2026-06-01T12:30:00.000Z",
+            },
+            {
+                "title": "Fed Governor Waller Speaks",
+                "date": "2026-06-18T14:00:00.000Z",
+            },
+        ],
+    }
+
+    with patch("requests.get", return_value=mock_tv_response):
+        response = client.get("/api/v1/macro/calendar?year=2026&month=6")
+        assert response.status_code == 200
+        events = response.json()
+        assert len(events) == 4
+        assert events[0]["event_name"] == "核心 CPI 年增率"
+        assert events[1]["event_name"] == "非農就業人數"
+        assert events[2]["event_name"] == "美財政部季度發債計畫 (QRA)"
+        assert events[3]["event_name"] == "聯準會理事 華勒 發言"

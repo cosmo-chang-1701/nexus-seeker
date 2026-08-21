@@ -76,10 +76,13 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         except Exception:
             pass
 
+    from market_analysis.macro_calendar_translator import translate_macro_event
+
     cal_parts = []
     for ev in events[:4]:
         dt_str = ev.get("event_time", "")
-        event_name = ev.get("event", "")
+        raw_event_name = ev.get("event", "")
+        event_name = translate_macro_event(raw_event_name) or raw_event_name
         if len(dt_str) >= 10:
             mm_dd = dt_str[5:10].replace("-", "/")
             cal_parts.append(f"{mm_dd} {event_name}")

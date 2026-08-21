@@ -15,6 +15,7 @@ from database.calendar_cache import (
 from services import market_data_service
 from services.market_data_service import BoundedCache
 
+
 ny_tz = ZoneInfo("America/New_York")
 
 logger = logging.getLogger(__name__)

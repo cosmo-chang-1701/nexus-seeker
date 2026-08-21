@@ -3,6 +3,7 @@ from .data import get_next_earnings_date
 from .strategy import analyze_symbol, evaluate_ema_trend, detect_ema_signals
 from .portfolio import check_portfolio_status_logic
 from .stock_alias_matrix import StockAliasMatrix
+from .macro_calendar_translator import MacroCalendarTranslator, translate_macro_event
 
 __all__ = [
     "calculate_contract_delta",
@@ -12,4 +13,6 @@ __all__ = [
     "detect_ema_signals",
     "check_portfolio_status_logic",
     "StockAliasMatrix",
+    "MacroCalendarTranslator",
+    "translate_macro_event",
 ]
