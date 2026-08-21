@@ -943,6 +943,11 @@ def create_price_volume_alert_embed(watch: Any, bar: Any) -> discord.Embed:
     direction_color = "[1;32m" if is_above else "[1;31m"
     compare_symbol = ">=" if is_above else "<="
     volume_ratio = bar.volume / bar.avg_volume if bar.avg_volume > 0 else 0.0
+    vol_threshold_str = (
+        "無放量門檻限制"
+        if watch.volume_multiplier <= 0
+        else f"門檻 {watch.volume_multiplier:.2f}x"
+    )
 
     trigger_ansi = (
         f"```ansi\n"
@@ -950,7 +955,7 @@ def create_price_volume_alert_embed(watch: Any, bar: Any) -> discord.Embed:
         f" ├─ K棒收盤時間: [1;37m{bar.bar_time.strftime('%Y-%m-%d %H:%M')} ET[0m\n"
         f" ├─ 實際收盤價 : [1;37m${bar.close:.2f}[0m {compare_symbol} 目標價 [1;37m${watch.target_price:.2f}[0m\n"
         f" ├─ 本根成交量 : [1;37m{bar.volume:,.0f}[0m\n"
-        f" └─ 20根均量  : [1;37m{bar.avg_volume:,.0f}[0m (放大 [1;33m{volume_ratio:.2f}x[0m，門檻 {watch.volume_multiplier:.2f}x)\n"
+        f" └─ 20根均量  : [1;37m{bar.avg_volume:,.0f}[0m (放大 [1;33m{volume_ratio:.2f}x[0m，{vol_threshold_str})\n"
         f"```"
     )
     embed.add_field(name="🎯 觸發事件", value=trigger_ansi, inline=False)

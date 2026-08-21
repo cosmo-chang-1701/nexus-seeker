@@ -34,7 +34,7 @@ class PriceVolumeWatch(BaseModel):
     symbol: str
     target_price: float = Field(gt=0)
     direction: WatchDirection = WatchDirection.ABOVE
-    volume_multiplier: float = Field(default=1.5, ge=1.1, le=5.0)
+    volume_multiplier: float = Field(default=1.5, ge=0.0, le=5.0)
 
     @field_validator("symbol", mode="before")
     @classmethod

@@ -255,6 +255,57 @@ def test_evaluate_watch_trigger_zero_avg_volume_fails() -> None:
     )
 
 
+def test_evaluate_watch_trigger_zero_volume_multiplier_passes() -> None:
+    # 設為 0 時為純價格警報，即使 volume=0 或 avg_volume=0 只要價格達標即觸發
+    bar = _bar(close=110.0, volume=0.0, avg_volume=0.0)
+    assert (
+        evaluate_watch_trigger(
+            bar,
+            target_price=100.0,
+            direction=WatchDirection.ABOVE,
+            volume_multiplier=0.0,
+        )
+        is True
+    )
+
+    # 設為 0 但價格不符時仍不觸發
+    bar_fail = _bar(close=90.0, volume=5000.0, avg_volume=1000.0)
+    assert (
+        evaluate_watch_trigger(
+            bar_fail,
+            target_price=100.0,
+            direction=WatchDirection.ABOVE,
+            volume_multiplier=0.0,
+        )
+        is False
+    )
+
+
+def test_evaluate_watch_trigger_one_volume_multiplier() -> None:
+    # 設為 1.0 時成交量需達到均量
+    bar_pass = _bar(close=110.0, volume=1000.0, avg_volume=1000.0)
+    assert (
+        evaluate_watch_trigger(
+            bar_pass,
+            target_price=100.0,
+            direction=WatchDirection.ABOVE,
+            volume_multiplier=1.0,
+        )
+        is True
+    )
+
+    bar_fail = _bar(close=110.0, volume=999.0, avg_volume=1000.0)
+    assert (
+        evaluate_watch_trigger(
+            bar_fail,
+            target_price=100.0,
+            direction=WatchDirection.ABOVE,
+            volume_multiplier=1.0,
+        )
+        is False
+    )
+
+
 # ============================================================================
 # 3. PriceVolumeWatch model & CRUD tests
 # ============================================================================
@@ -267,6 +318,17 @@ def test_price_volume_watch_defaults_and_rounding() -> None:
     assert watch.direction == WatchDirection.ABOVE
     assert watch.volume_multiplier == 1.5
 
+    # 測試允許 0 與 1.0
+    watch_zero = PriceVolumeWatch(
+        user_id=1, symbol="NVDA", target_price=120.0, volume_multiplier=0
+    )
+    assert watch_zero.volume_multiplier == 0.0
+
+    watch_one = PriceVolumeWatch(
+        user_id=1, symbol="NVDA", target_price=120.0, volume_multiplier=1.0
+    )
+    assert watch_one.volume_multiplier == 1.0
+
 
 def test_price_volume_watch_validation_error() -> None:
     with pytest.raises(ValidationError):
@@ -274,6 +336,10 @@ def test_price_volume_watch_validation_error() -> None:
     with pytest.raises(ValidationError):
         PriceVolumeWatch(
             user_id=1, symbol="AAPL", target_price=100.0, volume_multiplier=10.0
+        )
+    with pytest.raises(ValidationError):
+        PriceVolumeWatch(
+            user_id=1, symbol="AAPL", target_price=100.0, volume_multiplier=-0.1
         )
 
 
@@ -386,6 +452,32 @@ def test_create_price_volume_alert_embed_below() -> None:
 
     embed = create_price_volume_alert_embed(watch, bar)
     assert embed.title is not None and "跌破" in embed.title
+
+
+def test_create_price_volume_alert_embed_zero_multiplier() -> None:
+    watch = PriceVolumeWatch(
+        user_id=1,
+        symbol="NVDA",
+        target_price=125.0,
+        direction=WatchDirection.ABOVE,
+        volume_multiplier=0.0,
+    )
+    bar = Confirmed15mBar(
+        symbol="NVDA",
+        bar_time=datetime(2026, 8, 19, 10, 30),
+        close=126.0,
+        volume=50000.0,
+        avg_volume=100000.0,
+    )
+
+    embed = create_price_volume_alert_embed(watch, bar)
+    fields = {
+        str(f.name): str(f.value)
+        for f in embed.fields
+        if f.name is not None and f.value is not None
+    }
+    assert "🎯 觸發事件" in fields
+    assert "無放量門檻限制" in fields["🎯 觸發事件"]
 
 
 # ============================================================================

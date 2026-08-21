@@ -94,7 +94,12 @@ def evaluate_watch_trigger(
     else:
         price_ok = bar.close <= target_price
 
-    volume_ok = bar.avg_volume > 0 and bar.volume >= bar.avg_volume * volume_multiplier
+    if volume_multiplier <= 0:
+        volume_ok = True
+    else:
+        volume_ok = (
+            bar.avg_volume > 0 and bar.volume >= bar.avg_volume * volume_multiplier
+        )
     return price_ok and volume_ok
 
 

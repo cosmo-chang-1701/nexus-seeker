@@ -1411,7 +1411,7 @@ class TerminalCog(commands.Cog):
         symbol="股票代號 (如 AAPL)",
         target_price="目標價",
         direction="觸發方向",
-        volume_multiplier="放量倍數門檻 (相對 20 根 15 分鐘均量，預設 1.5)",
+        volume_multiplier="放量倍數門檻 (相對 20 根 15 分鐘均量，預設 1.5，設為 0 則不限制成交量)",
     )
     async def price_alert_set(
         self,
@@ -1443,11 +1443,16 @@ class TerminalCog(commands.Cog):
                 if watch.direction == WatchDirection.ABOVE
                 else "≤ 向下跌破"
             )
+            vol_desc = (
+                "不限制 (純價格警報)"
+                if watch.volume_multiplier <= 0
+                else f"`{watch.volume_multiplier:.2f}x` (相對 20 根 15 分鐘均量)"
+            )
             msg = (
                 f"✅ **價量監測已設定**\n"
                 f"• 標的: `{watch.symbol}`\n"
                 f"• 條件: `15分K實體收盤價 {direction_label} ${watch.target_price:.2f}`\n"
-                f"• 放量門檻: `{watch.volume_multiplier:.2f}x` (相對 20 根 15 分鐘均量)\n\n"
+                f"• 放量門檻: {vol_desc}\n\n"
                 f"💡 盤中每 15 分鐘掃描一次，觸發時將主動私訊通知（需於 `/notif_settings` 開啟"
                 f"「個股 15 分鐘價量突破警報」）。"
             )
@@ -1483,9 +1488,14 @@ class TerminalCog(commands.Cog):
             direction_label = (
                 "≥ 突破" if w.direction == WatchDirection.ABOVE else "≤ 跌破"
             )
+            vol_desc = (
+                "不限成交量"
+                if w.volume_multiplier <= 0
+                else f"放量 `{w.volume_multiplier:.2f}x`"
+            )
             lines.append(
                 f"• `{w.symbol}` {direction_label} `${w.target_price:.2f}` "
-                f"(放量 `{w.volume_multiplier:.2f}x`)"
+                f"({vol_desc})"
             )
 
         await interaction.followup.send(
