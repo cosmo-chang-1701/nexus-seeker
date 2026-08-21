@@ -19,6 +19,13 @@ class RiskInsightsContext:
     sqz_mom: float = 0.0
     has_positive_gamma_support: bool = False
     cb_triggered: bool = False
+    volume_pcr: Optional[float] = None
+    skew_percentile: Optional[float] = None
+    lvn_price: Optional[float] = None
+    hvn_price: Optional[float] = None
+    positive_gex_below: Optional[float] = None
+    overhead_neg_gex_swamp: Optional[Tuple[float, float]] = None
+    put_wall_gex: Optional[float] = None
 
 
 class InsightsEngine:
@@ -38,6 +45,43 @@ class InsightsEngine:
         FIXED_INCOME_WHITE_LIST = ["BOXX", "BIL", "SHV"]
         if context.symbol.upper() in FIXED_INCOME_WHITE_LIST:
             return "(避險資產)", "現金避險部位，風控豁免 🛡️", None
+
+        # 案例 3：RCAT 薄弱紙牆判定 (無做市商深度)
+        if (
+            context.put_wall_gex is not None
+            and 0 < context.put_wall_gex < 500_000.0
+            and context.put_wall > 0
+        ):
+            dmp_label = "[⚠️ 薄弱紙牆]"
+            status_label = "⚠️ 薄弱紙牆(無做市商深度)"
+
+        # 案例 1：STX 結構性破位與 Volume PCR 殺盤背離閘道
+        if (
+            context.put_wall > 0
+            and context.current_price < context.put_wall
+            and context.volume_pcr is not None
+            and context.volume_pcr >= 1.2
+        ):
+            return (
+                "[🚨 破位順向殺盤]",
+                f"🚨 破位順向殺盤 (PCR {context.volume_pcr:.2f})",
+                "STOP_ALL_BUY",
+            )
+
+        # 案例 2：AMAT 跌穿 LVN 20日真空區且正 Gamma 枯竭
+        if (
+            context.lvn_price is not None
+            and context.lvn_price > 0
+            and context.current_price < context.lvn_price
+            and context.current_price < context.put_wall
+            and context.positive_gex_below is not None
+            and context.positive_gex_below < 500_000.0
+        ):
+            return (
+                "[🛑 跌穿LVN真空區]",
+                "🛑 跌穿LVN真空區(正Gamma枯竭)",
+                "STOP_ALL_BUY",
+            )
 
         can_overwrite_dmp = (
             abs(context.max_pain_deviation_pct) > 0.10
@@ -77,7 +121,7 @@ class InsightsEngine:
                     "STOP_ALL_BUY",
                 )
 
-        if is_near_max_pain:
+        if is_near_max_pain and not status_label:
             status_label = "價格接近最大痛點，維持震盪"
 
         # 鐵律一：左側禁區破位

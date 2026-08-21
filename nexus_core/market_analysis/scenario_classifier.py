@@ -30,6 +30,8 @@ def classify_market_scenario(
     lvn: float,
     skew_percentile: float = 50.0,
     is_uoa_aligned: bool = False,
+    volume_pcr: Optional[float] = None,
+    put_wall_gex: Optional[float] = None,
 ) -> Optional[MarketScenario]:
     if not all([price, put_wall, call_wall, gamma_flip]):
         return None
@@ -46,6 +48,8 @@ def classify_market_scenario(
         ivr = float(ivr) if ivr is not None else 0.0
         hvn = float(hvn) if hvn is not None else 0.0
         lvn = float(lvn) if lvn is not None else 0.0
+        v_pcr = float(volume_pcr) if volume_pcr is not None else None
+        pw_gex = float(put_wall_gex) if put_wall_gex is not None else None
     except (ValueError, TypeError):
         return None
 
@@ -70,30 +74,41 @@ def classify_market_scenario(
             return (wall - high_val) / wall <= tolerance
         return False
 
-    # [ Step 4: 轉倉觸發 ]
+    # [ Step 4: 轉倉觸發 / 結構破位 ]
     # 現價貫穿 PutWall 且跌破 Gamma Flip ──► 100% 資金動態轉倉至 QQQ / SPY
     if is_below_gamma_defense_line(price, put_wall, gamma_flip):
         return MarketScenario.STRUCTURAL_BREAKDOWN_PENDING
 
+    # 結構性背離風控：若現價已跌破 PutWall 且 Volume PCR >= 1.2 (順向搶購 Put 殺盤)
+    if price < put_wall and v_pcr is not None and v_pcr >= 1.2:
+        return MarketScenario.FAKE_SUPPORT_TRAP
+
     # [ Step 1: 體質檢查 ] ──現價是否 > Gamma Flip？
     if price > gamma_flip:
         # --- YES (正 Gamma/平穩) 允許進行均值回歸與逢低加碼 ---
+        is_solid_wall = pw_gex is None or pw_gex >= 500_000.0
 
         # [ 巨鯨護航共振 ]
-        # 點位驗證: K棒高低點回測 PutWall (GEX 正 Gamma 牆確立)
-        # 且 Skew 避險分位 < 50.0，且 UOA 方向一致 (STO Put / BTO Call)
+        # 點位驗證: K棒高低點回測 PutWall (GEX 正 Gamma 牆確立且非單薄紙牆)
+        # 且 Skew 避險分位 < 50.0，且 UOA 方向一致 (STO Put / BTO Call)，且無 PCR 搶購殺盤
         if (
             is_price_near_wall(high, low, put_wall)
+            and is_solid_wall
             and skew_percentile < 50.0
             and is_uoa_aligned
+            and (v_pcr is None or v_pcr < 1.1)
         ):
             return MarketScenario.WHALE_ESCORT_RESONANCE
 
         # [ 黃金左側加碼 ]
-        # 點位驗證: K棒高低點回測 PutWall，且 PutWall 與 HVN 重疊 (鋼鐵牆成型)
-        if is_price_near_wall(high, low, put_wall) and is_near(put_wall, hvn):
+        # 點位驗證: K棒高低點回測 PutWall，且 PutWall 與 HVN 重疊 (鋼鐵牆成型且非單薄紙牆)
+        if (
+            is_price_near_wall(high, low, put_wall)
+            and is_solid_wall
+            and is_near(put_wall, hvn)
+        ):
             # 工具匹配: 高 IVR (> 50%)
-            if ivr > 50.0:
+            if ivr > 50.0 and (v_pcr is None or v_pcr < 1.2):
                 return MarketScenario.GOLDEN_LEFT
 
         # [ 黃金波段止盈 ]

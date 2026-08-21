@@ -152,9 +152,14 @@ async def detect_uoa(
                     )
                 )
 
-                # 風控檢驗 2：非指數虛擬名義價值過濾與 UOA 絕對門檻 ( > $50k)
+                # 風控檢驗 2：非指數虛擬名義價值過濾與 UOA 門檻 (一般標的 >= $50k，極端高波 IV > 80% 標的動態提升至 >= $250k 且成交量 >= 1000 口以過濾散戶雜訊)
                 nominal_val = vol * trade_price * 100.0
-                if nominal_val < 50_000.0:
+                iv_val = float(row.get("impliedVolatility", 0.0) or 0.0)
+                is_high_iv_noise = iv_val > 0.80
+                min_nominal_threshold = 250_000.0 if is_high_iv_noise else 50_000.0
+                min_vol_threshold = 1000.0 if is_high_iv_noise else 300.0
+
+                if nominal_val < min_nominal_threshold or vol < min_vol_threshold:
                     continue
 
                 is_index = symbol in INDEX_SYMBOLS or symbol.startswith("^")
@@ -165,7 +170,6 @@ async def detect_uoa(
                     continue
 
                 # 風控檢驗 3：異常 IV 熔斷與 Delta 深價內過濾
-                iv_val = float(row.get("impliedVolatility", 0.0) or 0.0)
 
                 # 報告精髓：防範非交易時段 SQLite 快取導致的 15.5% 等低 IV 異常
                 if iv_val <= 0.02:  # IV 低於 2% 通常為異常快取或無流動性報價

@@ -112,24 +112,24 @@ Instead of invoking LLM on the first-level radar panel, a lightweight rules engi
 - **需防壓回 ⚠️ / 籌碼斷層 ⚠️**: Triggered if `abs(Delta MP%) > 10%`.
 - **Unified Radar Filters**: The terminal UI consolidates Risk Defense and Alpha Signal filters into a single dropdown, fully integrated with `ScanParams` for deep evaluation:
   - **Risk Defenses**: Excludes martial law bounds (`exclude_martial_law`), prevents silent period events (`avoid_silent_period`), and shields against extreme dark pool distribution (`dp_skew_defense` filtering `skew < -0.3`).
-  - **Alpha Signals & Advanced Gates**: Filters for Triple Discount Pricing (`tdp_mode`), Volatility Squeeze firing (`squeeze_mode`), Strict UOA institutional activity (`uoa_mode`), High-Deviation Magnetic Filters (`magnetic_filters`), plus new defensive layers including **UOA Barrier, Gravity Filter, and Divergence Gate**.
-- **Real-time Insights**: Automatically matches active pending orders or option protection strategies (e.g., triggering pull-back alerts or tail-risk warnings). Now rendered inside a dedicated ANSI markdown code block for easy one-click copying.
+  - **Alpha Signals & Advanced Gates**: Filters for Triple Discount Pricing (`tdp_mode`), Volatility Squeeze firing (`squeeze_mode`), Strict UOA institutional activity (`uoa_mode`), High-Deviation Magnetic Filters (`magnetic_filters`), plus advanced defensive layers including **UOA Barrier, Gravity Filter, Micro-Divergence Gate, Volume PCR Cascades Gate, LVN Vacuum Slip Defense, and GEX Paper-Wall Filters**.
+- **Real-time Insights**: Automatically matches active pending orders or option protection strategies (e.g., triggering pull-back alerts, PCR顺向殺盤背離, LVN 真空暴跌, 負 Gamma 泥淖, or paper-thin wall warnings). Now rendered inside a dedicated ANSI markdown code block for easy one-click copying.
 
 ### 3. Rendering Layer (`build_radar_scan_embed`)
 The terminal radar card is built inside `cogs/embed_builders/` using `build_radar_scan_embed()`, keeping with the **Single Source of Truth** for embeds. It prints an interactive Markdown table (which replaced the legacy ANSI format for better aesthetics) showing key quantitative and Alpha fields:
 - **`標的`**: Dynamic `⚠️` prefix for >10% deviation, negative gamma, or structural anomalies for instant visual triage.
-- **`G/P-Wall(±)`**: Call Wall + Put Wall with dynamic Net GEX and PutWall break polarity (e.g. `(+) $227.5 / $220.0` or `(-) $109.0 / $108.0`), automatically switching to `(-)` when price breaks below PutWall or global Net GEX is negative, with `N/A` fallback when open interest data is unavailable.
-- **`Skw%`**: True Skew percentile alongside actual Skew value (e.g. `51% (-0.29%)`), accurately evaluating dealer tail-risk pricing.
+- **`G/P-Wall(±)`**: Call Wall + Put Wall with dynamic Net GEX, PutWall break polarity, GEX depth thickness tag (e.g. `$9.5(薄)` for thin paper-walls with GEX < 500k), and overhead negative GEX resistance swamp tags (e.g. `阻$500` or `$495.0(阻$500)`).
+- **`Skw%`**: True Skew percentile alongside actual Skew value or Volume PCR cascade alert when PCR $\ge 1.2$ (e.g. `5% (PCR:1.81⚠️)`), accurately evaluating dealer tail-risk pricing vs pure option volume directional dump.
 - **`SQZ向量`**: Squeeze Momentum Vector with timer/squeezing indicator (e.g. `⏱️🟢+12.7`, `🟢+19.6`, or `⚪+0.0`), dynamically integrated with **UOA Barrier Index** (downgrading bullish vectors to `⚪` if massive institutional call walls block upside).
 - **`Neg-GEX`**: Net GEX deviation distance percentage.
-- **`STO 鎖死`**: Formatted Short-to-Open strikes (e.g. `C$227.5 / P$237.5` or `P$110.0`) or Straddle STO density.
+- **`STO 鎖死`**: Formatted Short-to-Open strikes (e.g. `C$227.5 / P$237.5`, `C$885.0`, or `P$110.0`) or Straddle STO density.
 - **`IV 策略`**: IV Strategy Match with strict Negative Gamma circuit breaker forcing `🔴賣方禁售` during dealer sell-off cascades, `🔴CSP 禁售` for $IVR < 15\%$, and `🟢適宜賣方` for healthy environments.
 - **`EM Z-Score`**: Normalized Expected Move standard deviation position (e.g. `+0.00σ`, `+0.05σ`).
-- **`Top UOA`**: Single strongest whale print (e.g. `🛡️ 08/15 $227.5C (STO 261k)` or `🔥 08/15 $220.0C (BTO 15k)`).
+- **`Top UOA`**: Single strongest whale print with ratio tags (e.g. `🛡️ 08/28 $885.0C (STO 304)` or `🔥 08/15 $220.0C (BTO 15k)`), with high-IV noise filter (`N/A (無主力)` for high IV stocks without institutional footprints).
 - **`暗池大宗交易 (Dark Pool Block Prints)`**: Automatically alerts users in Real-time Insights when block prints $\ge \$5\text{M}$ appear (e.g. `• 🧱 CRWV: 暗池在 $101.68 爆出 $48.85M 巨額大宗買盤，形成籌碼水泥牆支撐。`).
 - **`防洗盤絕對防守位 (Anti-Washout Stop)`**: Dynamically calculated as $PutWall - 1.5 \times ATR_{14}$, providing solid buffers against liquidity grabs.
 - **`離場判定鐵律`**: Enforces `"🛑 離場判定鐵律：嚴守 15 分鐘實體 K 線收盤撤退線 (過濾下影線流動性獵殺)"` in table notes.
-- **`灰階戰術建議 (Gray-scale Tactical Guidance)`**: Multi-dimensional evaluation engine preventing binary stop-outs (e.g. if price breaks PutWall but remains above anti-washout stop with positive gamma support, recommends `🟡 護航網支撐，現貨續抱，防守退至 $103.80 (嚴守15分K收盤)`). Redundant markdown bold formatting has been removed for consistent ANSI rendering.
+- **`灰階戰術建議 (Gray-scale Tactical Guidance)`**: Multi-dimensional evaluation engine preventing binary stop-outs, dynamically integrating `🚨 破位殺盤 (PCR 1.81)`, `🛑 跌穿LVN真空區($488.6)`, `⚠️ $9.5 僅單薄紙牆`, `🟡 護航網支撐，現貨續抱，防守退至 $103.80 (嚴守15分K收盤)`, etc. Redundant markdown bold formatting has been removed for consistent ANSI rendering.
 
 ### 4. 避免 Discord 回應錯誤的長度分段與分頁原則
 為防範當自選標的 (Watchlist) 或持倉 (Holdings) 數量過大時，因 Embed Description 超過 Discord 的 4096 字元上限而導致 `400 Bad Request (error code: 50035): Invalid Form Body` 系統錯誤，系統實施以下長度分段與分頁原則：

@@ -686,12 +686,39 @@ def build_radar_scan_embed(
             elif "gex_metrics" in r and isinstance(r["gex_metrics"], dict):
                 net_gex = _safe_float(r.get("gex_metrics", {}).get("net_gex"))
             has_positive_gamma_support = net_gex > 10_000_000
-
-            sqz_mom_val = r.get("psq_result", {}).get("momentum", 0.0)
-
+            sqz_mom_val = _safe_float(r.get("psq_result", {}).get("momentum", 0.0))
             is_neg_gamma = net_gex < 0 or (
                 put_wall > 0 and price_val > 0 and price_val < put_wall
             )
+
+            vol_pcr = (
+                _safe_float(r.get("volume_pcr"))
+                if r.get("volume_pcr") is not None
+                else None
+            )
+            pos_gex_below = (
+                _safe_float(r.get("positive_gex_below"))
+                if r.get("positive_gex_below") is not None
+                else None
+            )
+            overhead_neg_swamp = r.get("overhead_neg_gex_swamp")
+            pw_gex_val = (
+                _safe_float(r.get("put_wall_gex"))
+                if r.get("put_wall_gex") is not None
+                else None
+            )
+            lvn_p = (
+                _safe_float(r.get("vp_data", {}).get("lvn"))
+                if isinstance(r.get("vp_data"), dict)
+                else 0.0
+            )
+            hvn_p = (
+                _safe_float(r.get("vp_data", {}).get("hvn"))
+                if isinstance(r.get("vp_data"), dict)
+                else 0.0
+            )
+            skew_val = _safe_float(r.get("skew"), 0.0)
+            skew_percentile_val = _safe_float(r.get("skew_percentile"), 50.0)
 
             risk_ctx = RiskInsightsContext(
                 symbol=sym,
@@ -711,6 +738,13 @@ def build_radar_scan_embed(
                 sqz_mom=sqz_mom_val,
                 has_positive_gamma_support=has_positive_gamma_support,
                 cb_triggered=cb_triggered,
+                volume_pcr=vol_pcr,
+                skew_percentile=skew_percentile_val,
+                lvn_price=lvn_p if lvn_p > 0 else None,
+                hvn_price=hvn_p if hvn_p > 0 else None,
+                positive_gex_below=pos_gex_below,
+                overhead_neg_gex_swamp=overhead_neg_swamp,
+                put_wall_gex=pw_gex_val,
             )
 
             override_dmp, override_status, suggestion = (
@@ -727,7 +761,7 @@ def build_radar_scan_embed(
 
             if override_status:
                 status_label = override_status
-                if "🛑" in status_label:
+                if "🛑" in status_label or "🚨" in status_label:
                     embed.color = 0xE74C3C  # 高危警報紅色
                 elif "⚖️" in status_label:
                     if embed.color.value != 0xE74C3C:
@@ -899,9 +933,10 @@ def build_radar_scan_embed(
                             f"• 🛡️ {sym}: 價格已逼近 GEX PutWall 做市商底牆 (${put_wall:.2f})，此處具備強大流動性支撐，若有效跌破將觸發 Delta 負向螺旋。"
                         )
                     elif pw_dist < 0 and net_gex < 0 and sqz_dir == "🔴":
-                        insights.append(
-                            f"• 🚨 {sym}: 價格已跌破 GEX PutWall 做市商底牆 (${put_wall:.2f})，進入 Delta 負向螺旋高風險區間，嚴防流動性踩踏。"
-                        )
+                        if vol_pcr is None or vol_pcr < 1.2:
+                            insights.append(
+                                f"• 🚨 {sym}: 價格已跌破 GEX PutWall 做市商底牆 (${put_wall:.2f})，進入 Delta 負向螺旋高風險區間，嚴防流動性踩踏。"
+                            )
 
             # 連動 GEX CallWall (做市商頂牆)
             if call_wall > 0 and price_val > 0 and not is_fixed_income:
@@ -941,6 +976,46 @@ def build_radar_scan_embed(
                     insights.append(
                         f"• 🧱 {sym}: 暗池在 ${dp_p_price:.2f} 爆出 ${dp_p_prem / 1_000_000:.2f}M 巨額大宗買盤，形成籌碼水泥牆支撐。"
                     )
+
+            # 案例 1：STX 結構破位與 Volume PCR 殺盤背離警示
+            if (
+                put_wall > 0
+                and price_val < put_wall
+                and vol_pcr is not None
+                and vol_pcr >= 1.2
+            ):
+                insights.append(
+                    f"• 🚨 {sym}: 實體跌破 ${put_wall:.2f} PutWall，Volume PCR 飆升至 {vol_pcr:.2f} (順向搶購 Put 殺盤)，期權偏斜結構性背離，嚴禁抄底！"
+                )
+
+            # 案例 2：AMAT 跌穿 20日 LVN 真空區且正 Gamma 枯竭 / 負 Gamma 泥淖
+            if (
+                lvn_p > 0
+                and price_val < lvn_p
+                and put_wall > 0
+                and price_val < put_wall
+                and pos_gex_below is not None
+                and pos_gex_below < 500_000.0
+            ):
+                insights.append(
+                    f"• 📉 {sym}: 跌穿 20 日 LVN 真空區 (${lvn_p:.2f}) 且下方正 Gamma 枯竭，失守支撐易引發無量滑步暴跌！"
+                )
+            if (
+                overhead_neg_swamp
+                and overhead_neg_swamp[0] > 0
+                and overhead_neg_swamp[1] <= -5_000_000.0
+                and price_val < overhead_neg_swamp[0]
+            ):
+                sw_k, sw_gex = overhead_neg_swamp
+                insights.append(
+                    f"• 🪨 {sym}: 上方 ${sw_k:.1f} 聚集 {abs(sw_gex) / 1_000_000:.1f}M 負 Gamma 泥淖，反彈必遭壓制。"
+                )
+
+            # 案例 3：RCAT 薄弱紙牆 (無做市商深度)
+            if pw_gex_val is not None and 0 < pw_gex_val < 500_000.0 and put_wall > 0:
+                insights.append(
+                    f"• ⚠️ {sym}: 名義 PutWall (${put_wall:.2f}) 僅單薄 +{pw_gex_val / 1000:.0f}K GEX (無做市商深度)，過濾零星雜訊防假防守。"
+                )
 
             # 格式化一列 ANSI 表格 (Two-Line Tree-Style)
             sym_cell = f"\u001b[1;34m{sym:<6}\u001b[0m"
@@ -1131,9 +1206,34 @@ def build_radar_scan_embed(
 
             # 4. G-Wall / P-Wall & Neg-GEX Distance
             p_wall = float(put_wall)
-            c_wall_str = f"${call_wall:.1f}" if call_wall > 0 else "N/A"
-            p_wall_str = f"${p_wall:.1f}" if p_wall > 0 else "N/A"
-            if call_wall > 0 or p_wall > 0:
+            if p_wall > 0:
+                if pw_gex_val is not None and 0 < pw_gex_val < 500_000.0:
+                    p_wall_str = f"${p_wall:.1f}(薄)"
+                else:
+                    p_wall_str = f"${p_wall:.1f}"
+            else:
+                p_wall_str = "N/A"
+
+            if (
+                overhead_neg_swamp
+                and overhead_neg_swamp[0] > 0
+                and overhead_neg_swamp[1] <= -5_000_000.0
+                and price_val < overhead_neg_swamp[0]
+            ):
+                sw_k = overhead_neg_swamp[0]
+                c_wall_str = (
+                    f"阻${sw_k:.0f}"
+                    if call_wall == 0
+                    else f"${call_wall:.1f}(阻${sw_k:.0f})"
+                )
+            else:
+                c_wall_str = f"${call_wall:.1f}" if call_wall > 0 else "N/A"
+
+            if (
+                call_wall > 0
+                or p_wall > 0
+                or (overhead_neg_swamp and overhead_neg_swamp[0] > 0)
+            ):
                 g_p_wall_str = f"{c_wall_str} / {p_wall_str}"
             else:
                 g_p_wall_str = "N/A"
@@ -1211,7 +1311,30 @@ def build_radar_scan_embed(
 
             # 7. 灰階戰術建議 (Multi-dimensional Gray-scale Evaluation)
             tactical_adv = "⚪ 區間震盪，觀察籌碼堆疊"
-            if skew_percentile_val > 90.0:
+            if "破位順向殺盤" in status_label or (
+                put_wall > 0
+                and price_val < put_wall
+                and vol_pcr is not None
+                and vol_pcr >= 1.2
+            ):
+                tactical_adv = f"🚨 破位殺盤 (PCR {vol_pcr:.2f})，嚴防下殺"
+            elif "跌穿LVN真空區" in status_label or (
+                lvn_p > 0
+                and price_val < lvn_p
+                and put_wall > 0
+                and price_val < put_wall
+                and pos_gex_below is not None
+                and pos_gex_below < 500_000.0
+            ):
+                tactical_adv = f"🛑 跌穿LVN真空區(${lvn_p:.1f})，防無量滑步"
+            elif "薄弱紙牆" in status_label or (
+                pw_gex_val is not None
+                and 0 < pw_gex_val < 500_000.0
+                and put_wall > 0
+                and price_val >= put_wall
+            ):
+                tactical_adv = f"⚠️ ${put_wall:.1f} 僅單薄紙牆，無做市商深度"
+            elif skew_percentile_val > 90.0:
                 tactical_adv = "🛑 防洗盤處置，嚴守 15 分鐘實體 K 線撤退線"
             elif z_score is not None and (z_score > 0.9 or z_score < -0.9):
                 tactical_adv = "🟡 貼近 EM 頂/底緣，停損墊高或觀察突破"
@@ -1244,11 +1367,12 @@ def build_radar_scan_embed(
             g_p_wall_str = (
                 f"({gex_pol}) {g_p_wall_str}" if g_p_wall_str != "N/A" else "N/A"
             )
-            skew_pct_str = (
-                f"{skew_percentile_val:.0f}% ({skew_val:+.2f}%)"
-                if skew_val != 0.0
-                else f"{skew_percentile_val:.0f}%"
-            )
+            if vol_pcr is not None and vol_pcr >= 1.2:
+                skew_pct_str = f"{skew_percentile_val:.0f}% (PCR:{vol_pcr:.2f}⚠️)"
+            elif skew_val != 0.0:
+                skew_pct_str = f"{skew_percentile_val:.0f}% ({skew_val:+.2f}%)"
+            else:
+                skew_pct_str = f"{skew_percentile_val:.0f}%"
             sqz_mom_val = _safe_float(
                 r.get("psq_result", {}).get(
                     "momentum", r.get("psq_result", {}).get("momentum_value", 0.0)
@@ -1304,7 +1428,7 @@ def build_radar_scan_embed(
                 break
             safe_insights.append(ins_strip)
             cur_insights_len += len(ins_strip) + 1
-            if len(safe_insights) >= 5:
+            if len(safe_insights) >= 10:
                 break
 
         if safe_insights:

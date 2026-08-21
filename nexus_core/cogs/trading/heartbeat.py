@@ -179,6 +179,8 @@ async def dispatch_watchlist_heartbeat(
                         lvn=lvn,
                         skew_percentile=skew_percentile,
                         is_uoa_aligned=is_uoa_aligned,
+                        volume_pcr=res.get("volume_pcr"),
+                        put_wall_gex=res.get("put_wall_gex"),
                     )
                     if scenario:
                         # 二階段確認：PENDING 狀態需經 15 分鐘實體 K 線確認

@@ -995,6 +995,37 @@ class UnifiedTerminalCog(commands.Cog):
             "direction", radar_cache.get("squeeze_direction", "⚪")
         )
 
+        # 讀取 PCR (買賣權成交量比)
+        volume_pcr = get_last_stored_sentiment(sym, "PCR")
+        if volume_pcr is None:
+            volume_pcr = radar_cache.get("volume_pcr")
+
+        # 做市商正 Gamma 深度、負 Gamma 泥淖與底牆厚度
+        from market_analysis.index_microstructure import (
+            calculate_positive_gex_depth_below,
+            find_overhead_negative_gex_swamp,
+        )
+
+        pos_gex_below = radar_cache.get("positive_gex_below")
+        if pos_gex_below is None and gex_data.get("gex_profile"):
+            pos_gex_below = calculate_positive_gex_depth_below(
+                gex_data["gex_profile"], price
+            )
+
+        overhead_neg_swamp = radar_cache.get("overhead_neg_gex_swamp")
+        if overhead_neg_swamp is None and gex_data.get("gex_profile"):
+            overhead_neg_swamp = find_overhead_negative_gex_swamp(
+                gex_data["gex_profile"], price
+            )
+
+        put_wall_gex = radar_cache.get("put_wall_gex")
+        if put_wall_gex is None and gex_data.get("gex_profile") and put_wall:
+            put_wall_gex = float(
+                gex_data["gex_profile"].get(
+                    str(put_wall), gex_data["gex_profile"].get(str(int(put_wall)), 0.0)
+                )
+            )
+
         return {
             "symbol": sym,
             "quote": quote,
@@ -1002,6 +1033,10 @@ class UnifiedTerminalCog(commands.Cog):
             "radar_cache": radar_cache,
             "skew": skew_val,
             "skew_percentile": skew_percentile,
+            "volume_pcr": volume_pcr,
+            "positive_gex_below": pos_gex_below,
+            "overhead_neg_gex_swamp": overhead_neg_swamp,
+            "put_wall_gex": put_wall_gex,
             "max_pain": {
                 "max_pain": mp_near,
                 "distance_pct": ((price - mp_near) / mp_near) * 100
@@ -1024,12 +1059,16 @@ class UnifiedTerminalCog(commands.Cog):
                 "put_wall": put_wall,
                 "call_wall": call_wall,
                 "net_gex": net_gex,
+                "put_wall_gex": put_wall_gex,
             },
             "gex_profile_data": {
                 "put_wall": put_wall,
                 "call_wall": call_wall,
                 "net_gex": net_gex,
                 "gex_profile": gex_data.get("gex_profile", {}),
+                "put_wall_gex": put_wall_gex,
+                "positive_gex_below": pos_gex_below,
+                "overhead_neg_gex_swamp": overhead_neg_swamp,
             },
             "vp_data": {
                 "hvn": radar_cache.get("hvn_price")
@@ -1067,9 +1106,14 @@ class UnifiedTerminalCog(commands.Cog):
 
         iv_task = SentimentEngine.fetch_and_calculate_iv_metrics(sym)
         mp_task = SentimentEngine.get_unified_max_pain(sym)
-        from market_analysis.index_microstructure import fetch_symbol_gex_metrics
+        from market_analysis.index_microstructure import (
+            fetch_symbol_gex_metrics,
+            calculate_positive_gex_depth_below,
+            find_overhead_negative_gex_swamp,
+        )
 
         gex_task = fetch_symbol_gex_metrics(sym)
+        pcr_task = SentimentEngine.calculate_pcr(sym)
 
         async def _get_far_mp_and_dte(symbol: str) -> tuple[float, Optional[int]]:
             try:
@@ -1106,8 +1150,27 @@ class UnifiedTerminalCog(commands.Cog):
 
         far_mp_task = _get_far_mp_and_dte(sym)
 
-        iv_m, mp_data, gex_data, (far_mp_val, nearest_dte) = await asyncio.gather(
-            iv_task, mp_task, gex_task, far_mp_task
+        (
+            iv_m,
+            mp_data,
+            gex_data,
+            (far_mp_val, nearest_dte),
+            pcr_data,
+        ) = await asyncio.gather(iv_task, mp_task, gex_task, far_mp_task, pcr_task)
+
+        volume_pcr = (
+            pcr_data.get("volume_pcr")
+            if isinstance(pcr_data, dict)
+            else (pcr_data.get("pcr") if isinstance(pcr_data, dict) else None)
+        )
+        gex_prof = gex_data.get("gex_profile", {}) if isinstance(gex_data, dict) else {}
+        pos_gex_below = calculate_positive_gex_depth_below(gex_prof, price)
+        overhead_neg_swamp = find_overhead_negative_gex_swamp(gex_prof, price)
+        pw_strike = gex_data.get("put_wall", 0.0) if isinstance(gex_data, dict) else 0.0
+        pw_gex = (
+            float(gex_prof.get(str(pw_strike), gex_prof.get(str(int(pw_strike)), 0.0)))
+            if pw_strike
+            else 0.0
         )
 
         # 異步預警：若返回資料標記為 stale，啟動背景重新驗證
@@ -1244,9 +1307,39 @@ class UnifiedTerminalCog(commands.Cog):
             "expected_move_context": em_context,
             "skew": skew_val,
             "skew_percentile": skew_percentile,
+            "volume_pcr": volume_pcr,
+            "positive_gex_below": pos_gex_below,
+            "overhead_neg_gex_swamp": overhead_neg_swamp,
+            "put_wall_gex": pw_gex,
             "max_pain": mp_data,
             "uoa": uoa_data,
-            "gex_profile_data": gex_data,
+            "gex_profile_data": {
+                "put_wall": gex_data.get("put_wall")
+                if isinstance(gex_data, dict)
+                else 0.0,
+                "call_wall": gex_data.get("call_wall")
+                if isinstance(gex_data, dict)
+                else 0.0,
+                "net_gex": gex_data.get("net_gex")
+                if isinstance(gex_data, dict)
+                else 0.0,
+                "gex_profile": gex_prof,
+                "put_wall_gex": pw_gex,
+                "positive_gex_below": pos_gex_below,
+                "overhead_neg_gex_swamp": overhead_neg_swamp,
+            },
+            "gex_metrics": {
+                "put_wall": gex_data.get("put_wall")
+                if isinstance(gex_data, dict)
+                else 0.0,
+                "call_wall": gex_data.get("call_wall")
+                if isinstance(gex_data, dict)
+                else 0.0,
+                "net_gex": gex_data.get("net_gex")
+                if isinstance(gex_data, dict)
+                else 0.0,
+                "put_wall_gex": pw_gex,
+            },
             "psq_result": psq_res,
             "dp_poc": dp_poc,
             "ma20": ema_21,
@@ -1274,6 +1367,10 @@ class UnifiedTerminalCog(commands.Cog):
                 "net_gex": gex_data.get("net_gex")
                 if isinstance(gex_data, dict)
                 else 0.0,
+                "put_wall_gex": pw_gex,
+                "positive_gex_below": pos_gex_below,
+                "overhead_neg_gex_swamp": overhead_neg_swamp,
+                "volume_pcr": volume_pcr,
                 "mp_near": mp_data.get("max_pain")
                 if isinstance(mp_data, dict)
                 else 0.0,

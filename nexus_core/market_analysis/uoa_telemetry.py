@@ -188,15 +188,27 @@ def classify_uoa_trade(
 
     elif action == "🔴 賣出開倉 (STO - Bid)":
         if is_call:
-            intent = (
-                f"🛡️ {ticker_tag}機構在 {strike_str} 開倉賣出 {volume_str} 口 CALL"
-                f" (OI={oi_str})，物理封頂鎖死上方天花板"
-            )
+            if ratio >= 2.0:
+                intent = (
+                    f"🛡️ {ticker_tag}機構在 {strike_str} 巨額開倉賣出 {volume_str} 口 CALL"
+                    f" (DTE={dte}, OI={oi_str}, 佔比={ratio_str})，機構高位 STO 築頂收租，物理鎖死上方天花板"
+                )
+            else:
+                intent = (
+                    f"🛡️ {ticker_tag}機構在 {strike_str} 開倉賣出 {volume_str} 口 CALL"
+                    f" (OI={oi_str}, 佔比={ratio_str})，物理封頂鎖死上方天花板"
+                )
         else:  # PUT
-            intent = (
-                f"🛡️ {ticker_tag}機構在 {strike_str} 開倉賣出 {volume_str} 口 PUT"
-                f" (OI={oi_str})，強力構築下行支撐地板"
-            )
+            if ratio >= 2.0:
+                intent = (
+                    f"🛡️ {ticker_tag}機構在 {strike_str} 巨額開倉賣出 {volume_str} 口 PUT"
+                    f" (DTE={dte}, OI={oi_str}, 佔比={ratio_str})，機構低位 STO 築底收租，強力構築下行支撐地板"
+                )
+            else:
+                intent = (
+                    f"🛡️ {ticker_tag}機構在 {strike_str} 開倉賣出 {volume_str} 口 PUT"
+                    f" (OI={oi_str}, 佔比={ratio_str})，強力構築下行支撐地板"
+                )
 
     else:  # ⚖️ MIDPOINT (Cross)
         intent = (

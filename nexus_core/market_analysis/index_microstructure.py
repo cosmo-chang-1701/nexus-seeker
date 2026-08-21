@@ -307,8 +307,65 @@ async def fetch_symbol_gex_metrics(symbol: str) -> dict:
     return fallback
 
 
+GEX_THIN_WALL_THRESHOLD: float = 500_000.0
+
+
+def is_gex_wall_effective(
+    wall_gex: float, threshold: float = GEX_THIN_WALL_THRESHOLD
+) -> bool:
+    """判定 GEX 牆體是否具備實質做市商深度（非單薄紙牆）。"""
+    return abs(wall_gex) >= threshold
+
+
+def find_overhead_negative_gex_swamp(
+    gex_profile: dict, spot: float, min_negative_threshold: float = -5_000_000.0
+) -> tuple[float, float]:
+    """
+    檢索現價上方最大的負 GEX 峰值（負 Gamma 泥淖）。
+    若現價上方聚集龐大負 GEX（<= min_negative_threshold），反彈時做市商將順向拋售壓制。
+    回傳: (swamp_strike, swamp_gex)，若無則回傳 (0.0, 0.0)
+    """
+    if not gex_profile or spot <= 0:
+        return 0.0, 0.0
+    swamp_strike = 0.0
+    min_gex_val = 0.0
+    for k, v in gex_profile.items():
+        try:
+            strike = float(k)
+            gex = float(v)
+            if strike > spot and gex <= min_negative_threshold:
+                if gex < min_gex_val:
+                    min_gex_val = gex
+                    swamp_strike = strike
+        except (ValueError, TypeError):
+            continue
+    return swamp_strike, min_gex_val
+
+
+def calculate_positive_gex_depth_below(gex_profile: dict, spot: float) -> float:
+    """
+    計算現價下方所有履約價的正 GEX 總厚度。
+    若數值極低 (< 500K)，代表現價下方做市商被動買盤緩衝極度枯竭，失守支撐易引發無量滑步暴跌。
+    """
+    if not gex_profile or spot <= 0:
+        return 0.0
+    total_pos = 0.0
+    for k, v in gex_profile.items():
+        try:
+            strike = float(k)
+            gex = float(v)
+            if strike < spot and gex > 0:
+                total_pos += gex
+        except (ValueError, TypeError):
+            continue
+    return total_pos
+
+
 def classify_gex_wall(
-    strike_gex: float, max_positive_gex: float, is_heavy_otm_call: bool = False
+    strike_gex: float,
+    max_positive_gex: float,
+    is_heavy_otm_call: bool = False,
+    min_effective_gex: float = 0.0,
 ) -> str:
     """
     GEX 與做市商意圖映射引擎 (GEX Mapping Engine)
@@ -317,12 +374,15 @@ def classify_gex_wall(
         strike_gex: 該履約價的 GEX 曝險值
         max_positive_gex: 該標的整體選擇權鏈中的最大正 GEX 值
         is_heavy_otm_call: 是否為深度價外大量 Call 的異常堆積
+        min_effective_gex: 底牆最低有效深度門檻 (預設 0.0)
 
     Returns:
-        str: 映射出的對沖屬性分類 (SUPPORT_GEX_WALL, RESISTANCE_CALL_WALL, 或 NEUTRAL)
+        str: 映射出的對沖屬性分類 (SUPPORT_GEX_WALL, THIN_SUPPORT_WALL, RESISTANCE_CALL_WALL, 或 NEUTRAL)
     """
     # 當 GEX 為正，且數值等於最大正 GEX 牆時，視為底牆
     if strike_gex > 0 and abs(strike_gex - max_positive_gex) < 1e-6:
+        if min_effective_gex > 0 and strike_gex < min_effective_gex:
+            return "THIN_SUPPORT_WALL"
         return "SUPPORT_GEX_WALL"  # 做市商護盤底牆 (逢低對沖買盤)
 
     # 當 GEX 為負 (造市商呈負 Gamma 需追漲殺跌)，或是出現價外 Call 異常堆積時，視為天花板壓制
