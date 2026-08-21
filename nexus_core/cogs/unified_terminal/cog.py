@@ -29,9 +29,10 @@ from .pulse_view import PulseHubView
 
 logger = logging.getLogger(__name__)
 
-# 限制 /x 批次雷達掃描的併發標的數，避免大清單 (ALL) 一次性建立過多完整
-# 分析 pipeline（quote + history + option chain + UOA + reddit）造成資源壅塞。
-_RADAR_SCAN_SEM = asyncio.Semaphore(5)
+# 限制 /x 批次雷達掃描的併發標的數，適度提高至 15 以加速大清單處理
+_RADAR_SCAN_SEM = asyncio.Semaphore(15)
+_SWR_REVALIDATE_SEM = asyncio.Semaphore(3)
+_active_swr_tasks: set[str] = set()
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -837,16 +838,29 @@ class UnifiedTerminalCog(commands.Cog):
         ):
             uoa_data = list(radar_cache["uoa"])
         else:
-            # UOA 快取未命中，觸發自癒偵測並寫入快取
-            try:
-                from market_analysis.sentiment_engine import SentimentEngine
-                from database.cache import save_kv_cache
+            # UOA 快取未命中：不阻塞主流程，啟動非同步 SWR 自癒任務寫回快取（去重與節流）
+            uoa_key = f"uoa_{sym.upper()}"
+            if uoa_key not in _active_swr_tasks:
+                _active_swr_tasks.add(uoa_key)
 
-                uoa_res = await SentimentEngine.detect_uoa(sym)
-                uoa_data = list(uoa_res) if uoa_res else []
-                await save_kv_cache(f"uoa_{sym.upper()}", uoa_data)
-            except Exception as e:
-                logger.warning(f"[{sym}] Fast-Track UOA 快取自癒失敗: {e}")
+                async def _revalidate_uoa(s: str, k: str) -> None:
+                    try:
+                        async with _SWR_REVALIDATE_SEM:
+                            from market_analysis.sentiment_engine import (
+                                SentimentEngine,
+                            )
+                            from database.cache import save_kv_cache
+
+                            uoa_res = await SentimentEngine.detect_uoa(s)
+                            await save_kv_cache(
+                                f"uoa_{s.upper()}", list(uoa_res) if uoa_res else []
+                            )
+                    except Exception as ex:
+                        logger.warning(f"[{s}] Async SWR UOA 快取自癒失敗: {ex}")
+                    finally:
+                        _active_swr_tasks.discard(k)
+
+                asyncio.create_task(_revalidate_uoa(sym, uoa_key))
 
         # Squeeze Cache 自癒檢查：若完全未命中或已過期且無歷史數值
         if (
@@ -854,32 +868,52 @@ class UnifiedTerminalCog(commands.Cog):
             or squeeze_cache.get("is_expired", False)
             or "momentum" not in squeeze_cache
         ):
-            try:
-                from database.squeeze_cache import save_squeeze_cache
-                from market_analysis.psq_engine import analyze_psq
+            # 若 radar_cache 中已有歷史數值，作為即時 fallback
+            sqz_is_sq = bool(radar_cache.get("is_squeezing", False))
+            sqz_m = float(radar_cache.get("squeeze_momentum", 0.0) or 0.0)
+            sqz_d = str(radar_cache.get("squeeze_direction", "⚪") or "⚪")
+            squeeze_cache = {
+                "is_squeezing": sqz_is_sq,
+                "momentum": sqz_m,
+                "direction": sqz_d,
+                "is_expired": False,
+            }
 
-                df_hist = await market_data_service.get_history_df(
-                    sym, period="6mo", interval="1d"
-                )
-                if df_hist is not None and not df_hist.empty:
-                    psq_obj = analyze_psq(df_hist, vix_spot=18.0)
-                    if psq_obj:
-                        sqz_is_sq = psq_obj.is_squeezing
-                        sqz_m = psq_obj.momentum_value
-                        sqz_d = (
-                            "🟢"
-                            if psq_obj.signal_direction == "Long"
-                            else ("🔴" if psq_obj.signal_direction == "Short" else "⚪")
-                        )
-                        save_squeeze_cache(sym, sqz_is_sq, sqz_m, sqz_d)
-                        squeeze_cache = {
-                            "is_squeezing": sqz_is_sq,
-                            "momentum": sqz_m,
-                            "direction": sqz_d,
-                            "is_expired": False,
-                        }
-            except Exception as e:
-                logger.warning(f"[{sym}] Fast-Track SQZ 快取自癒計算失敗: {e}")
+            # 啟動非同步 SWR 自癒計算，不阻塞即時互動指令（去重與節流）
+            sqz_key = f"sqz_{sym.upper()}"
+            if sqz_key not in _active_swr_tasks:
+                _active_swr_tasks.add(sqz_key)
+
+                async def _revalidate_sqz(s: str, k: str) -> None:
+                    try:
+                        async with _SWR_REVALIDATE_SEM:
+                            from database.squeeze_cache import save_squeeze_cache
+                            from market_analysis.psq_engine import analyze_psq
+
+                            df_hist = await market_data_service.get_history_df(
+                                s, period="6mo", interval="1d"
+                            )
+                            if df_hist is not None and not df_hist.empty:
+                                psq_obj = analyze_psq(df_hist, vix_spot=18.0)
+                                if psq_obj:
+                                    p_is_sq = psq_obj.is_squeezing
+                                    p_m = psq_obj.momentum_value
+                                    p_d = (
+                                        "🟢"
+                                        if psq_obj.signal_direction == "Long"
+                                        else (
+                                            "🔴"
+                                            if psq_obj.signal_direction == "Short"
+                                            else "⚪"
+                                        )
+                                    )
+                                    save_squeeze_cache(s, p_is_sq, p_m, p_d)
+                    except Exception as ex:
+                        logger.warning(f"[{s}] Async SWR SQZ 快取自癒計算失敗: {ex}")
+                    finally:
+                        _active_swr_tasks.discard(k)
+
+                asyncio.create_task(_revalidate_sqz(sym, sqz_key))
 
         if not squeeze_cache:
             squeeze_cache = {}

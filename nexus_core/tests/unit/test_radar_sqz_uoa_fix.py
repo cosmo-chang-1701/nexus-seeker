@@ -1,4 +1,5 @@
 from typing import Any
+import asyncio
 import pytest
 import pandas as pd
 from unittest.mock import AsyncMock, patch, MagicMock
@@ -94,7 +95,7 @@ async def test_detect_uoa_whale_blocks() -> None:
 
 @pytest.mark.asyncio
 async def test_fetch_sym_radar_data_fast_sqz_self_healing() -> None:
-    """驗證 _fetch_sym_radar_data_fast_raw 在 Squeeze Cache 未命中或過期時，自動執行自癒計算。"""
+    """驗證 _fetch_sym_radar_data_fast_raw 在 Squeeze Cache 未命中時，即時返回預設/歷史值並在背景非同步執行自癒計算。"""
     bot = MagicMock()
     cog = UnifiedTerminalCog(bot)
     sym = "TEST_SELF_HEAL"
@@ -121,17 +122,19 @@ async def test_fetch_sym_radar_data_fast_sqz_self_healing() -> None:
         "database.market_cache.get_market_cache", return_value={"max_pain": 135.0}
     ), patch(
         "market_analysis.sentiment_engine.SentimentEngine.detect_uoa", return_value=[]
-    ):
+    ), patch("database.squeeze_cache.save_squeeze_cache") as mock_save_sqz:
         result = await cog._fetch_sym_radar_data_fast_raw(sym)
         assert result is not None
         psq = result.get("psq_result", {})
         assert "momentum" in psq
-        assert psq["momentum"] != 0.0 or psq["signal_direction"] in ("🟢", "🔴", "⚪")
+        # 讓背景 SWR 任務執行完成
+        await asyncio.sleep(0.05)
+        mock_save_sqz.assert_called()
 
 
 @pytest.mark.asyncio
 async def test_fetch_sym_radar_data_fast_uoa_self_healing() -> None:
-    """驗證 _fetch_sym_radar_data_fast_raw 在 UOA 快取未命中時，自動觸發 detect_uoa 並寫回快取。"""
+    """驗證 _fetch_sym_radar_data_fast_raw 在 UOA 快取未命中時，即時響應並啟動非同步 SWR 任務寫回快取。"""
     bot = MagicMock()
     cog = UnifiedTerminalCog(bot)
     sym = "TEST_UOA_HEAL"
@@ -160,8 +163,9 @@ async def test_fetch_sym_radar_data_fast_uoa_self_healing() -> None:
         return_value=mock_uoa,
     ), patch("database.cache.save_kv_cache", new_callable=AsyncMock) as mock_save_kv:
         result = await cog._fetch_sym_radar_data_fast_raw(sym)
-        assert len(result["uoa"]) == 1
-        assert result["uoa"][0]["strike"] == 150.0
+        assert result is not None
+        # 讓背景 SWR 任務執行完成
+        await asyncio.sleep(0.05)
         mock_save_kv.assert_called()
 
 

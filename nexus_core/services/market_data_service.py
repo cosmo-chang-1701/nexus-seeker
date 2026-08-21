@@ -113,18 +113,15 @@ def _get_finnhub_controls() -> dict[str, Any]:
     controls = _finnhub_controls_by_loop.get(loop)
     if controls is None:
         controls = {
-            # 1) 每分鐘總額度 40 次（保留更大緩衝以容納重試，避免觸發硬性 60 次上限），
-            #    切分為「背景」30 次 + 「互動」10 次保底，確保 /x 等互動指令不會被
-            #    背景排程（心跳/掃描）佔滿額度而排隊卡住。
-            "limiter_background": AsyncLimiter(30, 60),
-            "limiter_interactive": AsyncLimiter(10, 60),
-            # 2) 每秒 2 次請求為對外真實 burst 上限，背景與互動共用同一把鎖，
-            #    避免兩池疊加後仍觸發 Finnhub 內部突發防護。
-            "limiter_per_second": AsyncLimiter(2, 1),
-            # 3) 併發上限：背景 1 個 + 互動 1 個，總和維持原本的 2，
-            #    只是把保底名額分配給互動請求。
-            "sem_background": asyncio.Semaphore(1),
-            "sem_interactive": asyncio.Semaphore(1),
+            # 1) 每分鐘總額度分配：切分為「背景」15 次 + 「互動」45 次保底，
+            #    確保 /x 等使用者互動指令具備足夠吞吐量快速完成批次報價。
+            "limiter_background": AsyncLimiter(15, 60),
+            "limiter_interactive": AsyncLimiter(45, 60),
+            # 2) 每秒 10 次請求 burst 上限，允許批次互動請求快速並發。
+            "limiter_per_second": AsyncLimiter(10, 1),
+            # 3) 併發上限：背景 2 個 + 互動 10 個，加速批次處理。
+            "sem_background": asyncio.Semaphore(2),
+            "sem_interactive": asyncio.Semaphore(10),
         }
         _finnhub_controls_by_loop[loop] = controls
     return controls
@@ -139,18 +136,60 @@ _yfinance_controls_by_loop: weakref.WeakKeyDictionary[
 ] = weakref.WeakKeyDictionary()
 
 
+# ---------------------------------------------------------------------------
+# Edge Scraper (TUNNEL_URL) HTTP 連線池與 Keep-Alive
+# ---------------------------------------------------------------------------
+_edge_clients_by_loop: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, Any] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+class _EdgeClientContext:
+    def __init__(self, client: Any):
+        self._client = client
+
+    async def __aenter__(self) -> Any:
+        is_real_httpx = type(self._client).__name__ == "AsyncClient" and getattr(
+            type(self._client), "__module__", ""
+        ).startswith("httpx")
+        if hasattr(self._client, "__aenter__") and not is_real_httpx:
+            return await self._client.__aenter__()
+        return self._client
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> Any:
+        is_real_httpx = type(self._client).__name__ == "AsyncClient" and getattr(
+            type(self._client), "__module__", ""
+        ).startswith("httpx")
+        if hasattr(self._client, "__aexit__") and not is_real_httpx:
+            return await self._client.__aexit__(exc_type, exc_val, exc_tb)
+        return False
+
+
+def get_edge_client() -> Any:
+    """取得當前 event loop 的共用 Edge Scraper HTTP 連線池 (Keep-Alive)。"""
+    import httpx
+
+    loop = asyncio.get_running_loop()
+    client = _edge_clients_by_loop.get(loop)
+    if client is None or getattr(client, "is_closed", False):
+        client = httpx.AsyncClient(
+            timeout=httpx.Timeout(20.0, connect=5.0),
+            limits=httpx.Limits(max_keepalive_connections=20, max_connections=50),
+            follow_redirects=True,
+        )
+        _edge_clients_by_loop[loop] = client
+    return _EdgeClientContext(client)
+
+
 def _get_yfinance_controls() -> dict[str, Any]:
     loop = asyncio.get_running_loop()
     controls = _yfinance_controls_by_loop.get(loop)
     if controls is None:
         controls = {
-            # 每分鐘總額度 30 次，切分為「背景」22 次 + 「互動」8 次保底，
-            # 理由同 Finnhub controls：避免背景排程佔滿額度卡住 /x 等互動指令。
-            "limiter_background": AsyncLimiter(22, 60),
-            "limiter_interactive": AsyncLimiter(8, 60),
-            # 併發上限：背景 2 個 + 互動 1 個，總和維持原本的 3。
+            "limiter_background": AsyncLimiter(20, 60),
+            "limiter_interactive": AsyncLimiter(30, 60),
             "sem_background": asyncio.Semaphore(2),
-            "sem_interactive": asyncio.Semaphore(1),
+            "sem_interactive": asyncio.Semaphore(5),
         }
         _yfinance_controls_by_loop[loop] = controls
     return controls
@@ -217,8 +256,9 @@ async def _execute_api_call(func: Any, *args, **kwargs) -> Any:  # type: ignore
 
     max_retries = 3
 
-    # Introduce Micro-Jitter (Throttling) before entering the semaphore / limiters
-    await asyncio.sleep(random.uniform(0.1, 0.3))
+    # Introduce Micro-Jitter (Throttling) only for background requests to avoid thundering herd; skip for interactive requests
+    if not _is_interactive_request.get():
+        await asyncio.sleep(random.uniform(0.1, 0.3))
 
     for attempt in range(max_retries + 1):
         # 0) 全局冷卻（先快檢一次，不要讓所有 task 進 limiter 排隊後又卡住）
@@ -296,6 +336,14 @@ async def _execute_api_call(func: Any, *args, **kwargs) -> Any:  # type: ignore
                                 _rate_limit_until, time.time() + delay
                             )
 
+                        # 針對使用者互動請求（如 /x 指令），若遇 429 直接快速熔斷拋出，
+                        # 讓呼叫端立即無縫降級至 yfinance fallback，避免在互動路徑中 sleep 阻塞。
+                        if is_rate_limit and _is_interactive_request.get():
+                            logger.warning(
+                                f"🚨 互動請求觸發 Finnhub 429 限流，立即快速熔斷並轉向 fallback (冷卻至 {delay:.1f}s 後)"
+                            )
+                            raise
+
                         reason = "429 頻率限制" if is_rate_limit else "連線錯誤/超時"
                         logger.warning(
                             f"🚨 觸發 Finnhub {reason}。將於 {delay:.1f} 秒後重試 (次數: {attempt + 1}/{max_retries})..."
@@ -312,7 +360,6 @@ async def _fetch_history_via_edge(
 ) -> Optional[pd.DataFrame]:
     """優先透過 Edge 節點即時抓取 K 線。未設定 TUNNEL_URL 或抓取失敗/空值時回傳 None。"""
     from config import TUNNEL_URL
-    import httpx
     import urllib.parse
 
     base_url = (
@@ -326,24 +373,29 @@ async def _fetch_history_via_edge(
         if interval:
             req_url += f"&interval={interval}"
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with get_edge_client() as client:
             res = await client.get(req_url)
             if res.status_code == 200:
                 data = res.json()
-                if data.get("status") == "success" and data.get("data"):
-                    df_edge = pd.DataFrame(data["data"])
-                    if "Date" in df_edge.columns:
-                        df_edge["Date"] = pd.to_datetime(
-                            df_edge["Date"], utc=True
-                        ).dt.tz_convert(ny_tz)
-                        df_edge.set_index("Date", inplace=True)
-                    elif "Datetime" in df_edge.columns:
-                        df_edge["Datetime"] = pd.to_datetime(
-                            df_edge["Datetime"], utc=True
-                        ).dt.tz_convert(ny_tz)
-                        df_edge.set_index("Datetime", inplace=True)
-                    logger.info(f"[{symbol}] Edge 節點成功抓取 K 線")
-                    return df_edge
+                if data.get("status") == "success":
+                    records = data.get("data", [])
+                    if records:
+                        df_edge = pd.DataFrame(records)
+                        if "Date" in df_edge.columns:
+                            df_edge["Date"] = pd.to_datetime(
+                                df_edge["Date"], utc=True
+                            ).dt.tz_convert(ny_tz)
+                            df_edge.set_index("Date", inplace=True)
+                        elif "Datetime" in df_edge.columns:
+                            df_edge["Datetime"] = pd.to_datetime(
+                                df_edge["Datetime"], utc=True
+                            ).dt.tz_convert(ny_tz)
+                            df_edge.set_index("Datetime", inplace=True)
+                        logger.info(f"[{symbol}] Edge 節點成功抓取 K 線")
+                        return df_edge
+                    else:
+                        # Edge 節點已明確確認查無數據 (如標的下市)，回傳空 DataFrame 避免無謂本地重試
+                        return pd.DataFrame()
     except Exception as ex:
         logger.warning(f"[{symbol}] Edge 節點即時抓取 K 線失敗: {ex}")
 
@@ -401,8 +453,11 @@ async def _safe_yf_history(
         df_edge = await _fetch_history_via_edge(
             symbol, period=period, interval=interval
         )
-        if df_edge is not None and not df_edge.empty:
-            return df_edge
+        if df_edge is not None:
+            if not df_edge.empty:
+                return df_edge
+            # Edge 節點已確認無數據，直接返回 None，不再走本地直連
+            return None
         logger.info(f"[{symbol}] 降級改用本地 yfinance 直連抓取 K 線...")
 
     return await _direct_yf_history(ticker, period=period, interval=interval)
@@ -500,9 +555,18 @@ async def get_quote(symbol: str) -> Dict[str, Any]:
             )
             return await get_yfinance_quote(symbol)
 
-    res = await _fetch()
+    try:
+        res = await _fetch()
+    except Exception as ex:
+        _quote_cache[symbol] = ({}, now + _QUOTE_CACHE_TTL)
+        if "SYMBOL_NOT_FOUND" in str(ex):
+            raise
+        return {}
+
     if res and res.get("c", 0) > 0:
         _quote_cache[symbol] = (res, now + _QUOTE_CACHE_TTL)
+    else:
+        _quote_cache[symbol] = ({}, now + _QUOTE_CACHE_TTL)
     return res  # type: ignore
 
 
@@ -659,11 +723,13 @@ async def get_history_df(
         ticker = yf.Ticker(symbol)
         df = await _safe_yf_history(ticker, period=period, interval=interval)
 
-        if df is None:
+        if df is None or getattr(df, "empty", True):
             logger.warning(
                 f"[{symbol}] yfinance 歷史數據為空 (period={period}, interval={interval})"
             )
-            return pd.DataFrame()
+            empty_df = pd.DataFrame()
+            _history_cache[cache_key] = (empty_df, now + _HISTORY_CACHE_TTL)
+            return empty_df
 
         df.index.name = "Date"
         if df.index.tz is not None:
@@ -719,7 +785,6 @@ async def get_all_option_expiries(symbol: str) -> List[str]:
 
     res = []
     from config import TUNNEL_URL
-    import httpx
     import urllib.parse
 
     base_url = (
@@ -730,7 +795,7 @@ async def get_all_option_expiries(symbol: str) -> List[str]:
             f"{base_url}/api/v1/scrape/yf/options/{urllib.parse.quote(symbol)}/expiries"
         )
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with get_edge_client() as client:
                 resp = await client.get(req_url)
                 if resp.status_code == 200:
                     data = resp.json()
@@ -782,7 +847,6 @@ async def _fetch_option_chain_raw(symbol: str, expiry: str) -> Optional[Any]:
 
     if calls_full is None or puts_full is None:
         from config import TUNNEL_URL
-        import httpx
         import urllib.parse
 
         base_url = (
@@ -793,7 +857,7 @@ async def _fetch_option_chain_raw(symbol: str, expiry: str) -> Optional[Any]:
         if base_url:
             req_url = f"{base_url}/api/v1/scrape/yf/options/{urllib.parse.quote(symbol)}/chain?expiry={expiry}"
             try:
-                async with httpx.AsyncClient(timeout=20.0) as client:
+                async with get_edge_client() as client:
                     resp = await client.get(req_url)
                     if resp.status_code == 200:
                         data = resp.json()
