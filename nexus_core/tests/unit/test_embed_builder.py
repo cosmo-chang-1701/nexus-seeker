@@ -1,3 +1,4 @@
+import discord
 from typing import Any, Dict, List
 from datetime import datetime
 from types import SimpleNamespace
@@ -42,7 +43,6 @@ from cogs.embed_builder import (
     build_pre_market_briefing_embed,
     create_macro_scan_embed,
 )
-from market_analysis.analyst_runners.macro_runner import build_macro_healthy_status
 from models.schemas import WatchlistOptionLeg, WatchlistOptionPlan
 
 
@@ -2668,7 +2668,9 @@ def test_build_pre_market_briefing_embed_vix_ansi_and_macro_status() -> None:
         warning_days=14,
     )
 
-    assert embed.title == "🌅 報告：盤前綜合宏觀與自選股"
+    assert embed.title == "🌅 報告：盤前綜合宏觀與自選股 [✅ 總經平穩・無即期財報]"
+    assert embed.description is None
+    assert embed.color == discord.Color.blue()
     field_dict = {str(f.name): str(f.value or "") for f in embed.fields}
 
     # 1. 驗證巨觀數據指標 ANSI 代碼無文字亂碼殘留
@@ -2683,29 +2685,36 @@ def test_build_pre_market_briefing_embed_vix_ansi_and_macro_status() -> None:
     assert "\x1b[0m" in macro_field
     assert "(🟢)" in macro_field
 
-    # 2. 驗證四維度宏觀狀態解讀
-    direct_status = build_macro_healthy_status(macro_data)
-    assert "📈 **波動率環境**" in direct_status
+    # 2. 驗證四維度宏觀狀態解讀 (ANSI 包裹)
     status_field = field_dict.get("✅ 宏觀狀態", "")
-    assert status_field == direct_status
+    assert status_field.startswith("```ansi")
     assert "低波動沉睡區間" in status_field
-    assert "🏦 **公債與利差**" in status_field
-    assert "10Y 美債 4.25%" in status_field
-    assert "💵 **美元與匯率**" in status_field
+    assert "10Y 4.25%" in status_field
     assert "DXY 104.25" in status_field
-    assert "🛡️ **操盤風控指引**" in status_field
+    assert "指標全數合規" in status_field
 
-    # 3. 驗證警報狀態分支
+    # 3. 驗證自選股無財報風險安全欄位 (ANSI 包裹)
+    safe_field = field_dict.get("✅ 自選股財報季雷達", "")
+    assert safe_field.startswith("```ansi")
+    assert "AAPL, NVDA" in safe_field
+    assert "近 14 日內無財報發布風險" in safe_field
+
+    # 4. 驗證僅宏觀警報狀態分支 (Red)
     embed_with_alerts = build_pre_market_briefing_embed(
         macro_data=macro_data,
         alerts=["恐慌指數急遽上升，市場避險情緒發酵"],
         earnings_alerts=[],
     )
+    assert (
+        embed_with_alerts.title == "🌅 報告：盤前綜合宏觀與自選股 [⚠️ 宏觀風控警報觸發]"
+    )
+    assert embed_with_alerts.color == discord.Color.red()
     alert_field_dict = {
         str(f.name): str(f.value or "") for f in embed_with_alerts.fields
     }
     assert "🚨 宏觀風險警示 (Macro Alerts)" in alert_field_dict
     assert "恐慌指數急遽上升" in alert_field_dict["🚨 宏觀風險警示 (Macro Alerts)"]
+    assert alert_field_dict["🚨 宏觀風險警示 (Macro Alerts)"].startswith("```ansi")
 
 
 def test_build_pre_market_briefing_embed_10_earnings_alerts() -> None:
@@ -2718,7 +2727,7 @@ def test_build_pre_market_briefing_embed_10_earnings_alerts() -> None:
         "us2y": 4.2,
     }
 
-    # 測試正好 10 檔標的
+    # 測試正好 10 檔標的 (包含持倉高風險 -> 觸發紅色高危標題)
     ten_alerts = [
         {
             "symbol": f"SYM{i}",
@@ -2732,13 +2741,16 @@ def test_build_pre_market_briefing_embed_10_earnings_alerts() -> None:
         macro_data=macro_data,
         earnings_alerts=ten_alerts,
     )
+    assert embed_10.title == "🌅 報告：盤前綜合宏觀與自選股 [⚠️ 持倉標的財報高危]"
+    assert embed_10.color == discord.Color.red()
     field_dict_10 = {str(f.name): str(f.value or "") for f in embed_10.fields}
     earnings_val_10 = field_dict_10.get("🚨 自選股財報季雷達預警 (Earnings Radar)", "")
+    assert earnings_val_10.startswith("```ansi")
     for i in range(1, 11):
-        assert f"**SYM{i}**" in earnings_val_10
+        assert f"SYM{i}" in earnings_val_10
     assert "...等共" not in earnings_val_10
 
-    # 測試超過 10 檔標的 (例如 12 檔)：應拆成兩個分批 field，完整顯示所有標的，不再截斷
+    # 測試超過 10 檔標的 (例如 12 檔，純觀察名單 -> 觸發橙色觀察標題)：應拆成兩個分批 field
     twelve_alerts = [
         {
             "symbol": f"TICK{i}",
@@ -2752,6 +2764,8 @@ def test_build_pre_market_briefing_embed_10_earnings_alerts() -> None:
         macro_data=macro_data,
         earnings_alerts=twelve_alerts,
     )
+    assert embed_12.title == "🌅 報告：盤前綜合宏觀與自選股 [👀 自選清單財報預警]"
+    assert embed_12.color == discord.Color(0xF39C12)
     field_dict_12 = {str(f.name): str(f.value or "") for f in embed_12.fields}
     earnings_val_page1 = field_dict_12.get(
         "🚨 自選股財報季雷達預警 (Earnings Radar) (第 1/2 批)", ""
@@ -2759,12 +2773,32 @@ def test_build_pre_market_briefing_embed_10_earnings_alerts() -> None:
     earnings_val_page2 = field_dict_12.get(
         "🚨 自選股財報季雷達預警 (Earnings Radar) (第 2/2 批)", ""
     )
+    assert earnings_val_page1.startswith("```ansi")
+    assert earnings_val_page2.startswith("```ansi")
     for i in range(1, 11):
-        assert f"**TICK{i}**" in earnings_val_page1
+        assert f"TICK{i}" in earnings_val_page1
     for i in range(11, 13):
-        assert f"**TICK{i}**" in earnings_val_page2
+        assert f"TICK{i}" in earnings_val_page2
     combined_val_12 = earnings_val_page1 + earnings_val_page2
     assert "...等共" not in combined_val_12
+
+    # 測試雙重高危 (宏觀警報 + 持倉財報高危)
+    embed_dual_risk = build_pre_market_briefing_embed(
+        macro_data=macro_data,
+        alerts=["殖利率曲線深度倒掛"],
+        earnings_alerts=[
+            {
+                "symbol": "NVDA",
+                "is_portfolio": True,
+                "earnings_date": "2026-08-25",
+                "days_left": 4,
+            }
+        ],
+    )
+    assert (
+        embed_dual_risk.title == "🌅 報告：盤前綜合宏觀與自選股 [🚨 雙重高危風控警戒]"
+    )
+    assert embed_dual_risk.color == discord.Color.red()
 
 
 def test_create_macro_scan_embed_vix_ansi_and_healthy_status() -> None:
