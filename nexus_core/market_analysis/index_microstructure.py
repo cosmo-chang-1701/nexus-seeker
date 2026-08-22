@@ -198,27 +198,13 @@ async def fetch_core_macro_metrics() -> dict:
     return fallback
 
 
-async def fetch_symbol_gex_metrics(symbol: str) -> dict:
-    """呼叫邊緣爬蟲獲取個股的 Net GEX, Call Wall, Put Wall 與 GEX Profile。"""
+async def _scrape_symbol_gex_raw(
+    symbol: str, stale_cached_data: Optional[dict] = None
+) -> dict:
     import time
-    import asyncio
-    from database.cache import get_kv_cache, save_kv_cache
+    from database.cache import save_kv_cache
 
     cache_key = f"gex_metrics_{symbol.upper()}"
-    stale_cached_data: dict | None = None
-    try:
-        cached_obj = await asyncio.to_thread(get_kv_cache, cache_key)
-        if cached_obj and isinstance(cached_obj, dict):
-            data = cached_obj.get("data")
-            if isinstance(data, dict):
-                # 快取有效期設定為 4 小時 (14400 秒)
-                if time.time() - cached_obj.get("timestamp", 0) < 14400:
-                    return data
-                # 快取已過期，保留作為 API 失敗時的降級備援
-                stale_cached_data = data
-    except Exception as e:
-        logger.warning(f"讀取 GEX 快取失敗 ({symbol}): {e}")
-
     fallback = {
         "spot": 0.0,
         "net_gex": 0.0,
@@ -227,33 +213,14 @@ async def fetch_symbol_gex_metrics(symbol: str) -> dict:
         "gex_profile": {},
     }
 
-    # 優先讀取 edge 背景排程寫入的 GEX 快照（毫秒級 SQLite 讀取），
-    # 命中且夠新鮮就直接採用，跳過下方即時 Playwright scrape。
-    # edge 目前部署不穩定，任何 miss/逾時/離線都會回傳 None，
-    # 完全不影響下方既有的 fallback 行為。
-    from services import edge_cache_client
-
-    edge_cached = await edge_cache_client.get_cached_gex(symbol)
-    if edge_cached is not None:
-        edge_age = edge_cached.get("age_seconds")
-        if edge_age is not None and edge_age < 3600:
-            edge_data = edge_cached["data"]
-            try:
-                await save_kv_cache(
-                    cache_key, {"data": edge_data, "timestamp": time.time()}
-                )
-            except Exception as e:
-                logger.warning(f"寫入 GEX kv_cache 失敗 ({symbol}): {e}")
-            return edge_data  # type: ignore
-
     if not getattr(config, "TUNNEL_URL", ""):
         if stale_cached_data is not None:
-            logger.warning(f"[{symbol}] TUNNEL_URL 未設定，回傳過期 GEX 快取資料。")
             return {**stale_cached_data, "_is_stale_cache": True}
         return fallback
+
     try:
         base_url = config.TUNNEL_URL.rstrip("/")
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
             res = await client.get(f"{base_url}/api/v1/scrape/options/{symbol}/gex")
             if res.status_code == 200:
                 data = res.json()
@@ -305,6 +272,66 @@ async def fetch_symbol_gex_metrics(symbol: str) -> dict:
         logger.warning(f"[{symbol}] API 不可用，回傳過期 GEX 快取資料作為降級備援。")
         return {**stale_cached_data, "_is_stale_cache": True}
     return fallback
+
+
+async def fetch_symbol_gex_metrics(symbol: str) -> dict:
+    """呼叫邊緣爬蟲獲取個股的 Net GEX, Call Wall, Put Wall 與 GEX Profile。"""
+    import time
+    import asyncio
+    from database.cache import get_kv_cache, save_kv_cache
+    from services.single_flight import SingleFlightManager
+
+    cache_key = f"gex_metrics_{symbol.upper()}"
+    stale_cached_data: dict | None = None
+    try:
+        cached_obj = await asyncio.to_thread(get_kv_cache, cache_key)
+        if cached_obj and isinstance(cached_obj, dict):
+            data = cached_obj.get("data")
+            if isinstance(data, dict):
+                # 快取有效期設定為 4 小時 (14400 秒)
+                if time.time() - cached_obj.get("timestamp", 0) < 14400:
+                    return data
+                # 快取已過期，保留作為 API 失敗時的降級備援
+                stale_cached_data = data
+    except Exception as e:
+        logger.warning(f"讀取 GEX 快取失敗 ({symbol}): {e}")
+
+    # 優先讀取 edge 背景排程寫入的 GEX 快照（毫秒級 SQLite 讀取），
+    # 命中且夠新鮮就直接採用，跳過下方即時 Playwright scrape。
+    from services import edge_cache_client
+
+    edge_cached = await edge_cache_client.get_cached_gex(symbol)
+    if edge_cached is not None:
+        edge_age = edge_cached.get("age_seconds")
+        if edge_age is not None and edge_age < 3600:
+            edge_data = edge_cached["data"]
+            try:
+                await save_kv_cache(
+                    cache_key, {"data": edge_data, "timestamp": time.time()}
+                )
+            except Exception as e:
+                logger.warning(f"寫入 GEX kv_cache 失敗 ({symbol}): {e}")
+            return edge_data  # type: ignore
+
+    # 若已有過期快取，立即以過期快取作為 SWR 回傳，並在背景非同步更新，避免阻塞主排程
+    if stale_cached_data is not None:
+        asyncio.create_task(
+            SingleFlightManager.run(
+                f"scrape_gex_{symbol.upper()}",
+                _scrape_symbol_gex_raw,
+                symbol,
+                stale_cached_data,
+            )
+        )
+        return {**stale_cached_data, "_is_stale_cache": True}
+
+    # 初次冷啟動且無任何歷史快取時，透過 SingleFlight 執行防重疊查詢
+    return await SingleFlightManager.run(  # type: ignore
+        f"scrape_gex_{symbol.upper()}",
+        _scrape_symbol_gex_raw,
+        symbol,
+        stale_cached_data,
+    )
 
 
 GEX_THIN_WALL_THRESHOLD: float = 500_000.0

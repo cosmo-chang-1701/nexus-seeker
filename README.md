@@ -6,13 +6,14 @@
 
 Nexus Seeker 是一個 **Discord-first 的多租戶選擇權風控與交易營運平台**。本平台深度結合了技術指標分析、Black-Scholes-Merton 期權定價、希臘字母（Greeks）投資組合風險管理、事件日曆防禦及大型語言模型（LLM）輔助分析，旨在低內存 VPS 部署環境下，為實盤交易者提供最即時、可持續、自動化的高勝率風控操作指南。
 
-> 核心版本（nexus_core）：**v1.12.19** (請參考最新 Release)
+> 核心版本（nexus_core）：**v1.12.50** (請參考最新 Release)
 
 
 ---
 
 ## ✨ 核心特色 (Key Features)
 
+- **高效能非阻塞背景排程與快取共享 (High-Performance Background Scheduling & Cache-Sharing)**：針對低內存 VPS 全面重構背景任務管線。自選標的心跳 Pass 2、11 大產業板塊輪動與 15 分鐘價量監測全面採用 `Semaphore(3)` 併行化加速；跨模組雷達快取共享 (`_latest_radar_data_cache`) 與 `:05 / :35` 錯峰排程使持倉監控 100% 命中記憶體快取；多使用者市場掃描實施 $O(U \times S) \to O(S)$ 標的層級去重快取；盤前預熱流水線提前至 08:45 ET，搭配 GEX SingleFlight 防重疊查詢與 SWR 降級，杜絕開盤壅塞與 API 穿透。
 - **自動化戰場心跳 (Watchlist Heartbeat)**：盤中每半小時主動推送自選標的之技術與期權快照，預設完整整合 UOA 巨鯨異動大單、暗池 (Dark Pool) 磁吸點位（已整合 5% 髒數據過濾）、100% 確定性量化 Skew 解析與動態買賣定價指引。
 - **4 大戰術維度通知中樞與快捷情境 (Tactical Notifications & 1-Click Presets)**：`/notif_settings` 全面收斂為 4 大戰術維度（定時戰報、盤中遙測、持倉防禦、Alpha 策略）與 13 大核心通知頻道（含 `alpha_wti_oil` 與全新 SEC 財報自動掃描 `defense_fundamental_thesis`），並提供「🛡️ 戰備全開」、「🎯 精準交易」、「🔕 盤中靜音」三大 1-Click Preset 情境模式，徹底告別零碎雜訊。
 - **WTI 原油價格警報與大宗商品情報 (WTI Crude Oil Alert & Commodity Intelligence)**：支援全天候 30 分鐘原油期貨 (`CL=F`) 輪詢，具備「絕對價格上下限」與「30 分鐘波動 %」雙軌觸發機制。嚴格遵循 100% Field-Based + ANSI 代碼塊排版規範，即時整合技術指標 (RSI, MA20/50/200, ATR)、能源關聯股衝擊 (`XLE`, `XOM`, `CVX`, `OXY`, `SLB`, `USO` 自動標註持倉與自選)、地緣政治事件 (OPEC+, EIA, 制裁) 與投資組合風險權重壓縮。支援 `/notif_settings` 與 `/wti_config` 互動式 Modal 配置，具備 00:00–06:00 ET 深夜靜默保護與每日 KV Cache 防重複去重。

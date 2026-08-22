@@ -89,17 +89,31 @@ async def dispatch_watchlist_heartbeat(
     # --- Pass 2: 每個「去重後」的標的只實際打一次雷達數據，多位使用者共用同一標的的
     # 抓取結果不重複打 Finnhub/yfinance/Edge API，避免拖長整輪心跳佔用全域限流額度、
     # 進而卡住盤中互動指令（如 /x symbol:NVDA）。---
-    import random
+    import time
 
     radar_data_cache: dict[str, Any] = {}
-    for idx, s in enumerate(sorted(symbols_to_fetch)):
-        if idx > 0:
-            await asyncio.sleep(random.uniform(1.5, 2.0))
-        try:
-            radar_data_cache[s] = await terminal_cog._fetch_sym_radar_data_slow(s)
-        except Exception as ex:
-            logger.error(f"Error fetching radar data for {s}: {ex}")
-            radar_data_cache[s] = ex
+    sem = asyncio.Semaphore(3)
+
+    async def _fetch_one_radar(sym: str) -> tuple[str, Any]:
+        async with sem:
+            try:
+                data = await terminal_cog._fetch_sym_radar_data_slow(sym)
+                return sym, data
+            except Exception as ex:
+                logger.error(f"Error fetching radar data for {sym}: {ex}")
+                return sym, ex
+
+    fetch_tasks = [_fetch_one_radar(s) for s in sorted(symbols_to_fetch)]
+    fetched_results = await asyncio.gather(*fetch_tasks)
+    for s, res in fetched_results:
+        radar_data_cache[s] = res
+
+    # 寫入 bot 共用記憶體快取供同一 30 分鐘輪次內的其他 Cog 複用
+    try:
+        setattr(bot, "_latest_radar_data_cache", radar_data_cache)
+        setattr(bot, "_latest_radar_cache_time", time.time())
+    except Exception:
+        pass
 
     # --- Pass 3: 依每位使用者各自的標的清單，從共用快取組裝並推播個人化 embed ---
     for uid, deliverable_symbols in user_deliverable.items():

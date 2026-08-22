@@ -90,7 +90,7 @@ class MemoryManager:
             from services.market_data_service import get_sma, get_ema, get_quote
 
             watchlist = get_all_watchlist()
-            symbols = list(set([row[1] for row in watchlist]))
+            symbols: list[str] = list(set([row[1] for row in watchlist]))
             # 確保 SPY 優先預熱
             if "SPY" not in symbols:
                 symbols.insert(0, "SPY")

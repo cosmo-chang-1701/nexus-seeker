@@ -30,6 +30,10 @@ from cogs.embed_builders.rollover_embeds import create_dynamic_rollover_embed
 ny_tz = ZoneInfo("America/New_York")
 logger = logging.getLogger(__name__)
 
+portfolio_scanner_times = [
+    time(hour=h, minute=m, tzinfo=ny_tz) for h in range(24) for m in (5, 35)
+]
+
 
 class PortfolioMonitorCog(commands.Cog):
     """真實持倉風險審計 + VTR 監控排程。"""
@@ -46,9 +50,9 @@ class PortfolioMonitorCog(commands.Cog):
         self.monitor_vtr_task.cancel()
 
     # ==========================================
-    # 🚀 真實持倉風險動態審計 (每 30 分鐘)
+    # 🚀 真實持倉風險動態審計 (每 30 分鐘，於 :05 與 :35 執行)
     # ==========================================
-    @tasks.loop(minutes=30)
+    @tasks.loop(time=portfolio_scanner_times)
     async def monitor_real_portfolio_task(self) -> None:
         """每 30 分鐘審計真實持倉風險 (DITM & Gamma Fragility)"""
         if not getattr(self.bot, "_is_leader_instance", True):
@@ -91,23 +95,46 @@ class PortfolioMonitorCog(commands.Cog):
                 "UnifiedTerminalCog"
             )
             radar_cache_map: Dict[str, Any] = {}
+            import time
 
+            shared_cache = getattr(self.bot, "_latest_radar_data_cache", {}) or {}
+            shared_time = float(
+                getattr(self.bot, "_latest_radar_cache_time", 0.0) or 0.0
+            )
+            is_shared_fresh = (time.time() - shared_time) < 300.0
+
+            symbols_to_query: set[str] = set()
             for h in all_holdings:
                 sym = h["symbol"].upper()
-                if sym not in radar_cache_map:
-                    if terminal_cog:
+                if (
+                    is_shared_fresh
+                    and sym in shared_cache
+                    and isinstance(shared_cache[sym], dict)
+                ):
+                    radar_cache_map[sym] = shared_cache[sym]
+                elif sym not in radar_cache_map:
+                    symbols_to_query.add(sym)
+
+            if symbols_to_query and terminal_cog:
+                sem = asyncio.Semaphore(3)
+
+                async def _fetch_one_holding_radar(s: str) -> tuple[str, Any]:
+                    async with sem:
                         try:
-                            # 節流保護：若已抓取過其他標的，先休息 1.5 秒
-                            if radar_cache_map:
-                                await asyncio.sleep(1.5)
-                            radar_cache_map[
-                                sym
-                            ] = await terminal_cog._fetch_sym_radar_data_slow(sym)
+                            data = await terminal_cog._fetch_sym_radar_data_slow(s)
+                            return s, data
                         except Exception as ex:
-                            logger.error(f"Failed to fetch radar data for {sym}: {ex}")
-                            radar_cache_map[sym] = None
-                    else:
-                        radar_cache_map[sym] = None
+                            logger.error(f"Failed to fetch radar data for {s}: {ex}")
+                            return s, None
+
+                fetch_res = await asyncio.gather(
+                    *[_fetch_one_holding_radar(s) for s in sorted(symbols_to_query)]
+                )
+                for s, data in fetch_res:
+                    radar_cache_map[s] = data
+            elif symbols_to_query:
+                for s in symbols_to_query:
+                    radar_cache_map[s] = None
 
             # 🚀 物理死鎖解除與備兌建單指引主動推播
             try:

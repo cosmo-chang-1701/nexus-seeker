@@ -31,9 +31,9 @@ class PreMarketCog(commands.Cog):
     async def cog_unload(self) -> None:
         self.pre_market_risk_monitor.cancel()
 
-    @tasks.loop(time=time(hour=9, minute=0, tzinfo=ny_tz))
+    @tasks.loop(time=time(hour=8, minute=45, tzinfo=ny_tz))
     async def pre_market_risk_monitor(self) -> None:
-        """09:00：盤前財報警報 (依使用者分發私訊)"""
+        """08:45：盤前預熱與量化快取計算 (依使用者分發私訊/預熱快取)"""
         if not getattr(self.bot, "_is_leader_instance", True):
             return
         now_ny = datetime.now(ny_tz)

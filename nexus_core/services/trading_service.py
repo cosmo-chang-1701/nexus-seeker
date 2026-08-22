@@ -495,6 +495,7 @@ class TradingService:
                         from market_analysis.sentiment_engine import SentimentEngine
 
                         skew_res = await SentimentEngine.calculate_skew(sym)
+                        res["skew_data"] = skew_res
                         skew_val = (skew_res.get("skew") or 0.0) / 100.0
 
                         uoa_detected = bool(
@@ -611,6 +612,38 @@ class TradingService:
             stock_cost = holding_map.get((uid, sym), 0.0)
             user_watchlists.setdefault(uid, []).append((sym, stock_cost))
 
+        # 🚀 標的層級批次預先獲取 Skew, PCR 與財報事件，徹底消除多使用者迴圈內的 O(U x S) 重複呼叫
+        from market_analysis.sentiment_engine import SentimentEngine
+        from services.calendar_service import calendar_service
+
+        unique_scan_symbols: set[str] = {
+            sym
+            for sym, _ in scan_results.keys()
+            if scan_results[(sym, _)].get("is_option_valid")
+        }
+        symbol_sentiment_cache: dict[str, dict[str, Any]] = {}
+        for sym in unique_scan_symbols:
+            cached_item = next(
+                (
+                    scan_results[(s, c)]
+                    for (s, c) in scan_results
+                    if s == sym and "skew_data" in scan_results[(s, c)]
+                ),
+                None,
+            )
+            skew_data = (
+                cached_item.get("skew_data")
+                if cached_item and cached_item.get("skew_data")
+                else await SentimentEngine.calculate_skew(sym)
+            )
+            pcr_data = await SentimentEngine.calculate_pcr(sym)
+            earnings_info = await calendar_service.get_symbol_earnings(sym)
+            symbol_sentiment_cache[sym] = {
+                "skew_val": skew_data.get("skew") or 0.0,
+                "pcr_val": pcr_data.get("pcr") or 0.8,
+                "tte_hours": earnings_info.tte_hours if earnings_info else None,
+            }
+
         for uid, watchlist_items in user_watchlists.items():
             valid_user_alerts = []
 
@@ -656,19 +689,26 @@ class TradingService:
                         opt_data = base_data.copy()
                         opt_data["alert_type"] = "OPTION"
 
-                        # 🚀 整合核心：期權情緒掃描
-                        from market_analysis.sentiment_engine import SentimentEngine
+                        # 🚀 整合核心：讀取標的層級快取，確保 0 重複計算與數據一致性
+                        cached_sent = symbol_sentiment_cache.get(sym)
+                        if cached_sent is None:
+                            skew_data = await SentimentEngine.calculate_skew(sym)
+                            pcr_data = await SentimentEngine.calculate_pcr(sym)
+                            earnings_info = await calendar_service.get_symbol_earnings(
+                                sym
+                            )
+                            cached_sent = {
+                                "skew_val": skew_data.get("skew") or 0.0,
+                                "pcr_val": pcr_data.get("pcr") or 0.8,
+                                "tte_hours": earnings_info.tte_hours
+                                if earnings_info
+                                else None,
+                            }
+                            symbol_sentiment_cache[sym] = cached_sent
 
-                        skew_data = await SentimentEngine.calculate_skew(sym)
-                        pcr_data = await SentimentEngine.calculate_pcr(sym)
-                        pcr_val = pcr_data.get("pcr") or 0.8
-                        skew_val = skew_data.get("skew") or 0.0
-
-                        # 🚀 整合核心：注入宏觀背景與日曆事件進行風險優化
-                        from services.calendar_service import calendar_service
-
-                        earnings_info = await calendar_service.get_symbol_earnings(sym)
-                        tte_hours = earnings_info.tte_hours if earnings_info else None
+                        pcr_val = cached_sent["pcr_val"]
+                        skew_val = cached_sent["skew_val"]
+                        tte_hours = cached_sent["tte_hours"]
 
                         strategy = opt_data.get("strategy", "")
                         opt_res = optimize_position_risk(

@@ -1,7 +1,7 @@
 """Sector rotation, deep research, and market-open liquidity runners."""
 
 from __future__ import annotations
-from typing import Any
+from typing import Any, Optional
 
 import asyncio
 import logging
@@ -82,34 +82,35 @@ async def gather_sector_rotation_data(bot: Any) -> dict:
     vix_tier = get_vix_tier(vix)
     spy_quote = await get_quote("SPY")
 
-    sector_results: list[dict] = []
-    for symbol, name in SECTORS.items():
-        try:
-            df = await get_history_df(symbol, period="1mo")
-            if df.empty:
-                continue
+    sem = asyncio.Semaphore(3)
 
-            pct_change = (
-                (df["Close"].iloc[-1] - df["Close"].iloc[-2])
-                / df["Close"].iloc[-2]
-                * 100
-            )
-            vol_current = df["Volume"].iloc[-1]
-            vol_avg = df["Volume"].tail(20).mean()
-            rel_vol = vol_current / vol_avg if vol_avg > 0 else 1.0
-
+    async def _fetch_sector_data(symbol: str, name: str) -> Optional[dict[str, Any]]:
+        async with sem:
             try:
-                skew_data = await SentimentEngine.calculate_skew(symbol)
-            except Exception:
-                skew_data = {"skew": 0, "state": "N/A"}
+                df = await get_history_df(symbol, period="1mo")
+                if df.empty:
+                    return None
 
-            try:
-                uoa = await SentimentEngine.detect_uoa(symbol)
-            except Exception:
-                uoa = []
+                pct_change = (
+                    (df["Close"].iloc[-1] - df["Close"].iloc[-2])
+                    / df["Close"].iloc[-2]
+                    * 100
+                )
+                vol_current = df["Volume"].iloc[-1]
+                vol_avg = df["Volume"].tail(20).mean()
+                rel_vol = vol_current / vol_avg if vol_avg > 0 else 1.0
 
-            sector_results.append(
-                {
+                try:
+                    skew_data = await SentimentEngine.calculate_skew(symbol)
+                except Exception:
+                    skew_data = {"skew": 0, "state": "N/A"}
+
+                try:
+                    uoa = await SentimentEngine.detect_uoa(symbol)
+                except Exception:
+                    uoa = []
+
+                return {
                     "symbol": symbol,
                     "name": name,
                     "pct_change": round(pct_change, 2),
@@ -118,9 +119,14 @@ async def gather_sector_rotation_data(bot: Any) -> dict:
                     "skew_state": skew_data.get("state", "N/A"),
                     "uoa_count": len(uoa),
                 }
-            )
-        except Exception as e:
-            logger.error(f"Error gathering data for {symbol}: {e}")
+            except Exception as e:
+                logger.error(f"Error gathering data for {symbol}: {e}")
+                return None
+
+    raw_results = await asyncio.gather(
+        *[_fetch_sector_data(sym, name) for sym, name in SECTORS.items()]
+    )
+    sector_results: list[dict] = [r for r in raw_results if r is not None]
 
     poly_events = await _fetch_poly_events(bot)
 

@@ -4,6 +4,7 @@ cogs/trading/price_volume_alert_monitor.py
 個股 15 分鐘價量突破警報背景排程器 (盤中每 15 分鐘執行一次)。
 """
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -57,10 +58,24 @@ class PriceVolumeAlertMonitorCog(commands.Cog, name="PriceVolumeAlertMonitorCog"
         if not all_watches:
             return
 
-        unique_symbols = {w.symbol for w in all_watches}
+        unique_symbols: set[str] = {w.symbol for w in all_watches}
         bar_cache: Dict[str, Optional[Confirmed15mBar]] = {}
-        for symbol in unique_symbols:
-            bar_cache[symbol] = await get_confirmed_15m_bar(symbol)
+        sem = asyncio.Semaphore(3)
+
+        async def _fetch_one_bar(sym: str) -> tuple[str, Optional[Confirmed15mBar]]:
+            async with sem:
+                try:
+                    bar = await get_confirmed_15m_bar(sym)
+                    return sym, bar
+                except Exception as ex:
+                    logger.error(f"Failed to get confirmed 15m bar for {sym}: {ex}")
+                    return sym, None
+
+        fetched_bars = await asyncio.gather(
+            *[_fetch_one_bar(s) for s in sorted(unique_symbols)]
+        )
+        for s, bar in fetched_bars:
+            bar_cache[s] = bar
 
         today_str = datetime.now(market_time.ny_tz).strftime("%Y%m%d")
 
