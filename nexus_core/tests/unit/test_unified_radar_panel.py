@@ -11,7 +11,10 @@ sys.path.append(os.getcwd())
 
 from cogs.unified_terminal.cog import UnifiedTerminalCog
 from cogs.unified_terminal.radar_view import UnifiedRadarView, FilterParamsModal
-from cogs.unified_terminal.batch_scan_view import BatchScanPaginatedView
+from cogs.unified_terminal.batch_scan_view import (
+    BatchScanPaginatedView,
+    BatchScanWarningButton,
+)
 
 
 @pytest.fixture
@@ -513,3 +516,181 @@ async def test_batch_scan_reports_error_when_send_fails(
 
             assert "view" not in call_2.kwargs
             assert "執行批次掃描時發生錯誤" in call_2.kwargs["embed"].description
+
+
+@pytest.mark.asyncio
+async def test_btn_return_panel_switches_back_to_radar_view(
+    mock_bot: Any,
+    mock_interaction: Any,
+) -> None:
+    """測試 BatchScanPaginatedView 點擊『🔄 返回控制面板』按鈕時，原地切換回 UnifiedRadarView。"""
+    cog = UnifiedTerminalCog(mock_bot)
+    embeds = [discord.Embed(title="Radar Page 1")]
+    view = BatchScanPaginatedView(embeds, cog, mock_bot, total_items=1)
+
+    with patch(
+        "cogs.embed_builders.scan_embeds.build_unified_radar_panel_embed"
+    ) as mock_panel_embed:
+        mock_panel_embed.return_value = discord.Embed(title="Panel Embed")
+
+        await view.btn_return_panel.callback(mock_interaction)
+
+        mock_interaction.response.edit_message.assert_called_once()
+        kwargs = mock_interaction.response.edit_message.call_args.kwargs
+        assert kwargs["embed"].title == "Panel Embed"
+        assert isinstance(kwargs["view"], UnifiedRadarView)
+
+
+@pytest.mark.asyncio
+async def test_batch_scan_warning_button_concurrent_semaphore(
+    mock_bot: Any,
+    mock_interaction: Any,
+) -> None:
+    """測試 BatchScanWarningButton 點擊時能解析警示標的並使用 Semaphore(3) 併發分析。"""
+    cog = UnifiedTerminalCog(mock_bot)
+    cog._run_single_symbol_hub = AsyncMock()
+
+    # 模擬 Embed 帶有即時聯動警示
+    embed = discord.Embed(title="Radar")
+    embed.add_field(
+        name="💡 即時聯動警示 (Real-time Insights)",
+        value="• 🚀 NVDA: 價格逼近波動下緣\n• 🚀 TSLA: 價格逼近波動下緣",
+        inline=False,
+    )
+    mock_interaction.message = MagicMock()
+    mock_interaction.message.embeds = [embed]
+
+    embeds = [embed]
+    view = BatchScanPaginatedView(embeds, cog, mock_bot, total_items=1)
+    warning_btn = [c for c in view.children if isinstance(c, BatchScanWarningButton)][0]
+
+    await warning_btn.callback(mock_interaction)
+
+    # 驗證兩個標的皆被呼叫分析
+    assert cog._run_single_symbol_hub.call_count == 2
+    called_symbols = [
+        call.args[1] for call in cog._run_single_symbol_hub.call_args_list
+    ]
+    assert "NVDA" in called_symbols
+    assert "TSLA" in called_symbols
+
+
+@pytest.mark.asyncio
+async def test_fetch_sym_radar_data_fast_stitches_month_max_pains_and_ma20(
+    mock_bot: Any,
+) -> None:
+    """測試 _fetch_sym_radar_data_fast_raw 正確從快取中縫合 month_max_pains 與 ma20。"""
+    cog = UnifiedTerminalCog(mock_bot)
+
+    with (
+        patch(
+            "services.market_data_service.get_quote",
+            return_value={"c": 150.0, "volume": 1000000},
+        ),
+        patch(
+            "database.cache.get_kv_cache",
+            side_effect=lambda key: (
+                {
+                    "ma20": 145.0,
+                    "month_max_pains": [{"expiry": "2026-08-28", "max_pain": 148.0}],
+                }
+                if "radar_terminal_NVDA" in key
+                else None
+            ),
+        ),
+        patch("database.market_cache.get_market_cache", return_value={}),
+        patch(
+            "database.squeeze_cache.get_squeeze_cache",
+            return_value={
+                "momentum": 1.5,
+                "direction": "🟢",
+                "is_squeezing": False,
+            },
+        ),
+    ):
+        data = await cog._fetch_sym_radar_data_fast_raw("NVDA")
+        assert data["symbol"] == "NVDA"
+        assert data["ma20"] == 145.0
+        assert len(data["month_max_pains"]) == 1
+        assert data["month_max_pains"][0]["max_pain"] == 148.0
+
+
+@pytest.mark.asyncio
+async def test_exclude_martial_law_putwall_breach_and_neg_gex(
+    mock_bot: Any,
+    mock_interaction: Any,
+) -> None:
+    """測試 exclude_martial_law 能正確過濾跌破 PutWall 與落入負 Gamma 的標的。"""
+    cog = UnifiedTerminalCog(mock_bot)
+
+    state = {
+        "scope": "ALL",
+        "quant_filters": ["exclude_martial_law"],
+        "params": {
+            "max_pain_threshold": 10.0,
+            "abs_support_tolerance": 1.0,
+            "silent_period_days": 5,
+        },
+        "selected_tag": None,
+    }
+
+    with (
+        patch("cogs.unified_terminal.cog.asyncio.to_thread") as mock_thread,
+        patch("services.asset_manager.AssetManager.get_assets", return_value=[]),
+    ):
+
+        def mock_to_thread_side_effect(func: Any, *args: Any, **kwargs: Any) -> Any:
+            if "get_user_portfolio" in getattr(func, "__name__", ""):
+                return [(123, "NVDA"), (123, "TSLA"), (123, "AAPL")]
+            return [{"symbol": "NVDA"}, {"symbol": "TSLA"}, {"symbol": "AAPL"}]
+
+        mock_thread.side_effect = mock_to_thread_side_effect
+
+        async def fake_fetch(sym: str) -> dict[str, Any]:
+            if sym == "NVDA":
+                # 跌破 PutWall: spot 100 < put_wall 105
+                return {
+                    "symbol": "NVDA",
+                    "quote": {"c": 100.0},
+                    "max_pain": {"distance_pct": 0.02},
+                    "gex_profile_data": {
+                        "put_wall": 105.0,
+                        "net_gex": 100000.0,
+                    },
+                }
+            elif sym == "TSLA":
+                # 負 Gamma: net_gex < 0
+                return {
+                    "symbol": "TSLA",
+                    "quote": {"c": 200.0},
+                    "max_pain": {"distance_pct": 0.02},
+                    "gex_profile_data": {
+                        "put_wall": 190.0,
+                        "net_gex": -500000.0,
+                    },
+                }
+            elif sym == "AAPL":
+                # 正常標的: spot 220 > put_wall 200, net_gex > 0, dist 2% < 10%
+                return {
+                    "symbol": "AAPL",
+                    "quote": {"c": 220.0},
+                    "max_pain": {"distance_pct": 0.02},
+                    "gex_profile_data": {
+                        "put_wall": 200.0,
+                        "net_gex": 500000.0,
+                    },
+                }
+            return {}
+
+        cog._fetch_sym_radar_data_fast = fake_fetch  # type: ignore
+
+        with patch("cogs.unified_terminal.cog.build_radar_scan_embed") as mock_builder:
+            mock_builder.return_value = [discord.Embed(title="Radar Page")]
+
+            await cog.execute_unified_scan(mock_interaction, state, 12345)
+
+            # 斷言只有 AAPL 通過過濾
+            mock_builder.assert_called_once()
+            passed_results = mock_builder.call_args.args[0]
+            passed_symbols = [r["symbol"] for r in passed_results]
+            assert passed_symbols == ["AAPL"]

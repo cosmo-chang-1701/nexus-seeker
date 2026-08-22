@@ -254,13 +254,35 @@ class UnifiedTerminalCog(commands.Cog):
                     if skew_val < -0.3:
                         passed = False
 
-                # 2. exclude_martial_law
+                # 2. exclude_martial_law (排除底牆破位 / 負 Gamma / 痛點極端偏離)
                 if "exclude_martial_law" in quant_filters:
+                    gex_data = r.get("gex_profile_data", {}) or r.get("gex_metrics", {})
+                    pw_val = gex_data.get("put_wall") if gex_data else None
+                    put_wall_val = float(pw_val) if pw_val is not None else 0.0
+                    net_gex_val = (
+                        float(gex_data.get("net_gex", 0.0) or 0.0) if gex_data else 0.0
+                    )
+
+                    quote = r.get("quote", {})
+                    c_val = quote.get("c") if quote else 0.0
+                    current_price = float(c_val) if c_val is not None else 0.0
+
                     mp_data = r.get("max_pain")
-                    if isinstance(mp_data, dict):
-                        dist = mp_data.get("distance_pct", 0.0)
-                        if abs(dist) > max_pain_threshold:
-                            passed = False
+                    dist = (
+                        mp_data.get("distance_pct", 0.0)
+                        if isinstance(mp_data, dict)
+                        else 0.0
+                    )
+                    if (
+                        (
+                            put_wall_val > 0
+                            and current_price > 0
+                            and current_price < put_wall_val
+                        )
+                        or net_gex_val < 0
+                        or abs(dist) > max_pain_threshold
+                    ):
+                        passed = False
 
                 # 3. avoid_silent_period (規避財報/總經靜默期)
                 if "avoid_silent_period" in quant_filters:
@@ -1026,6 +1048,26 @@ class UnifiedTerminalCog(commands.Cog):
                 )
             )
 
+        # 多週期 Max Pain (month_max_pains) 與 MA20 快取縫合
+        month_max_pains = (
+            radar_cache.get("month_max_pains")
+            or get_kv_cache(f"month_mp_{sym.upper()}")
+            or get_kv_cache(f"month_max_pains_{sym.upper()}")
+            or []
+        )
+        if not month_max_pains and (mp_near or radar_cache.get("mp_far")):
+            today_date_str = datetime.now().strftime("%Y-%m-%d")
+            synth_mps: list[dict[str, Any]] = []
+            if mp_near:
+                synth_mps.append({"expiry": today_date_str, "max_pain": float(mp_near)})
+            if radar_cache.get("mp_far"):
+                synth_mps.append(
+                    {"expiry": "far", "max_pain": float(radar_cache["mp_far"])}
+                )
+            month_max_pains = synth_mps
+
+        ma20_val = radar_cache.get("ma20") or get_kv_cache(f"ma20_{sym.upper()}")
+
         return {
             "symbol": sym,
             "quote": quote,
@@ -1048,6 +1090,8 @@ class UnifiedTerminalCog(commands.Cog):
             "uoa": uoa_data,
             "darkpool": darkpool_cached,
             "atr_14": atr_14,
+            "ma20": float(ma20_val) if ma20_val is not None else None,
+            "month_max_pains": month_max_pains,
             "psq_result": {
                 "is_squeezing": sqz_is_squeezing,
                 "momentum": sqz_mom,

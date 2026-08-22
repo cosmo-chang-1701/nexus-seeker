@@ -1,6 +1,6 @@
-from typing import Any
+import asyncio
+from typing import Any, List, Optional
 import discord
-from typing import List, Optional
 import logging
 from cogs.embed_builder import create_error_embed, chunk_embeds
 
@@ -77,16 +77,25 @@ class BatchScanWarningButton(discord.ui.Button):
             )
 
             accumulated_embeds: List[discord.Embed] = []
-            for symbol in unique_warnings:
-                try:
-                    await self.cog._run_single_symbol_hub(
-                        interaction,
-                        symbol,
-                        user_id,
-                        embeds_accumulator=accumulated_embeds,
-                    )
-                except Exception as e:
-                    logger.error(f"Batch analysis failed for {symbol}: {e}")
+            analysis_sem = asyncio.Semaphore(3)
+            embed_lock = asyncio.Lock()
+
+            async def _analyze_symbol(sym: str) -> None:
+                async with analysis_sem:
+                    sym_embeds: List[discord.Embed] = []
+                    try:
+                        await self.cog._run_single_symbol_hub(
+                            interaction,
+                            sym,
+                            user_id,
+                            embeds_accumulator=sym_embeds,
+                        )
+                        async with embed_lock:
+                            accumulated_embeds.extend(sym_embeds)
+                    except Exception as e:
+                        logger.error(f"Batch analysis failed for {sym}: {e}")
+
+            await asyncio.gather(*(_analyze_symbol(s) for s in unique_warnings))
 
             # Chunk embeds safely by cumulative character length (under 5,500 characters) and size limits (max 10 embeds)
             chunks = chunk_embeds(accumulated_embeds, max_size=5500, max_count=10)
@@ -118,8 +127,8 @@ class BatchScanPaginatedView(discord.ui.View):
     按鈕樣式與頁碼 Footer 格式沿用 `/list_watch` 的 `WatchlistPagination`
     (`ui/watchlist.py`)，維持跨模組換頁介面的視覺一致性；換頁機制則是
     `interaction.response.edit_message()` 就地換頁，並整合「批次分析警示
-    標的」按鈕。多頁掃描結果只需送出一則 followup 訊息即可完整呈現，避免
-    逐頁分別呼叫 `interaction.followup.send()` 撞上 Discord 互動的隱性
+    標的」與「返回控制面板」按鈕。多頁掃描結果只需送出一則 followup 訊息即可完整呈現，
+    避免逐頁分別呼叫 `interaction.followup.send()` 撞上 Discord 互動的隱性
     followup 訊息數量上限（錯誤碼 40094）。
     """
 
@@ -134,6 +143,8 @@ class BatchScanPaginatedView(discord.ui.View):
     ):
         super().__init__(timeout=timeout)
         self.embeds = embeds
+        self.cog = cog
+        self.bot = bot
         self.current_page = 0
         self.total_items = total_items if total_items is not None else len(embeds)
 
@@ -179,6 +190,22 @@ class BatchScanPaginatedView(discord.ui.View):
         await interaction.response.edit_message(
             embed=self.embeds[self.current_page], view=self
         )
+
+    @discord.ui.button(
+        label="🔄 返回控制面板", style=discord.ButtonStyle.secondary, row=0
+    )
+    async def btn_return_panel(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> Any:
+        """切換回 UnifiedRadarView 控制面板，允許使用者調整過濾條件或掃描範圍。"""
+        from .radar_view import UnifiedRadarView
+        from cogs.embed_builders.scan_embeds import (
+            build_unified_radar_panel_embed,
+        )
+
+        view = UnifiedRadarView(self.cog, interaction.user.id)
+        embed = build_unified_radar_panel_embed(view.get_state_dict())
+        await interaction.response.edit_message(embed=embed, view=view)
 
     async def on_timeout(self) -> None:
         """Timeout 後移除所有按鈕，避免殭屍互動元件殘留。"""

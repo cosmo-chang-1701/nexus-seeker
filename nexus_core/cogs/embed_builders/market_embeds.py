@@ -479,9 +479,6 @@ def build_radar_scan_embed(
 
         _max_pain_col_header = f"Max Pain{_mp_header_dte_label}"
 
-        ansi_lines = []
-        if macro_ansi_header:
-            ansi_lines.extend(macro_ansi_header)
         insights = []
         md_lines = []
 
@@ -496,12 +493,6 @@ def build_radar_scan_embed(
             price_val = float(price_raw) if price_raw is not None else 0.0
             dp_raw = quote.get("dp")
             dp_val = float(dp_raw) if dp_raw is not None else 0.0
-            if dp_val >= 0:
-                price_str = f"${price_val:.2f} (+{dp_val:.2f}%)"
-                price_ansi = f"${price_val:.2f} (\u001b[1;32m+{dp_val:.2f}%\u001b[0m)"
-            else:
-                price_str = f"${price_val:.2f} ({dp_val:.2f}%)"
-                price_ansi = f"${price_val:.2f} (\u001b[1;31m{dp_val:.2f}%\u001b[0m)"
 
             # 2. IV Rank
             iv_rank_val = 0.0
@@ -523,8 +514,6 @@ def build_radar_scan_embed(
                     iv_rank_val = float(ivr_raw) if ivr_raw is not None else 0.0
                     em_raw = iv_metrics.get("expected_move_weekly")
                     em_weekly = float(em_raw) if em_raw is not None else 0.0
-
-            ivr_str = f"{iv_rank_val:.1f}%"
 
             # 3. 本週預期區間 (EM)
             is_fixed_income = sym.upper() in ["BOXX", "BIL", "SHV"]
@@ -1017,168 +1006,18 @@ def build_radar_scan_embed(
                     f"• ⚠️ {sym}: 名義 PutWall (${put_wall:.2f}) 僅單薄 +{pw_gex_val / 1000:.0f}K GEX (無做市商深度)，過濾零星雜訊防假防守。"
                 )
 
-            # 格式化一列 ANSI 表格 (Two-Line Tree-Style)
-            sym_cell = f"\u001b[1;34m{sym:<6}\u001b[0m"
-            price_cell = price_ansi + (" " * max(0, 17 - len(price_str)))
-
-            # 1. IV TS
-            ts_status_raw = "Normal"
-            term_ratio = None
-            if isinstance(iv_metrics, dict):
-                ts_status_raw = iv_metrics.get("iv_term_structure_status") or "Normal"
-                term_ratio = iv_metrics.get("term_structure_ratio")
-            elif hasattr(iv_metrics, "iv_term_structure_status"):
-                ts_status_raw = (
-                    getattr(iv_metrics, "iv_term_structure_status") or "Normal"
-                )
-                term_ratio = getattr(iv_metrics, "term_structure_ratio", None)
-
-            iv_ts_cell_str = f"{ivr_str} / {ts_status_raw}"
-            if ts_status_raw == "Backwardation":
-                iv_ts_cell_str += " ⚠️"
-            iv_ts_len = len(iv_ts_cell_str)
-
-            if ts_status_raw == "Backwardation":
-                iv_ts_ansi = f"{ivr_str} / \u001b[1;31m{ts_status_raw} ⚠️\u001b[0m"
-            else:
-                iv_ts_ansi = f"{ivr_str} / {ts_status_raw}"
-
-            iv_ts_cell = iv_ts_ansi + (" " * max(0, 26 - iv_ts_len))
-
-            # 2. DTE / Event Prem
-            dte_er = r.get("dte_er")
-            dte_str = f"{dte_er}D" if dte_er is not None else "--"
-
-            if term_ratio is not None:
-                ratio_val = float(term_ratio)
-                ratio_str = f"{ratio_val:.1f}x"
-                if ratio_val > 1.3:
-                    ratio_str = f"{ratio_str} ⚠️"
-            else:
-                ratio_str = "--"
-
-            dte_prem_str = f"{dte_str} / {ratio_str}"
-            dte_prem_cell = dte_prem_str + (" " * max(0, 17 - len(dte_prem_str)))
-
-            # 3. EM Pos %
-            em_pos_str = "EM: N/A"
-            if em_weekly > 0 and (em_high - em_low) > 0 and not is_fixed_income:
-                pos_pct = (price_val - em_low) / (em_high - em_low) * 100
-                em_pos_str = f"EM: {pos_pct:.1f}%"
-            em_pos_cell = em_pos_str
-
-            # 4. D-Wall (Bottom Wall Defense)
-            radar_cache = r.get("radar_cache", {})
-            put_wall_strike = radar_cache.get("put_wall_strike", put_wall)
-
-            d_wall_dist = 0.0
-            if put_wall_strike and put_wall_strike > 0 and price_val > 0:
-                d_wall_dist = (price_val - put_wall_strike) / price_val * 100
-
-            d_wall_alert = " ⚠️" if d_wall_dist < 1.0 and d_wall_dist != 0 else ""
-            struct_str = (
-                f"D-Wall: {d_wall_dist:+.1f}%{d_wall_alert}"
-                if put_wall_strike
-                else "D-Wall: N/A"
-            )
-            struct_ansi = (
-                f"D-Wall:  [1;31m{d_wall_dist:+.1f}% [0m{d_wall_alert}"
-                if d_wall_dist < 1.0
-                else f"D-Wall:  [1;32m{d_wall_dist:+.1f}% [0m"
-            )
-            if not put_wall_strike:
-                struct_ansi = struct_str
-            struct_len = len(struct_str)
-            struct_cell = struct_ansi + (" " * max(0, 25 - struct_len))
-
-            # 5. RVOL & MOM
-            rvol = r.get("rvol", 0.0)
-            rvol_alert = " 🚀" if rvol > 2.0 else ""
-            rvol_str = f"RVOL {rvol:.1f}x{rvol_alert}"
-            rvol_ansi = (
-                f"RVOL  [1;33m{rvol:.1f}x [0m{rvol_alert}" if rvol > 2.0 else rvol_str
-            )
-
-            mom_str = f"MOM {sqz_dir} {sqz_mom:+.1f}" if psq_result else "MOM ⚪"
-
-            sqz_mom_str = f"{rvol_str} | {mom_str}"
-            sqz_mom_ansi = f"{rvol_ansi} | {mom_str}"
-            sqz_len = len(sqz_mom_str)
-            sqz_cell = sqz_mom_ansi + (" " * max(0, 25 - sqz_len))
-
-            # 6. D-MP % (Multi-DTE Trend)
-            radar_cache = r.get("radar_cache", {})
-            mp_near = radar_cache.get("mp_near", 0.0)
-            mp_far = radar_cache.get("mp_far", 0.0)
-
-            trend = ""
-            if mp_near and mp_far and mp_near > 0 and mp_far > 0:
-                if mp_far > mp_near:
-                    trend = " (遠期 ↗)"
-                elif mp_far < mp_near:
-                    trend = " (遠期 ↘)"
-                else:
-                    trend = " (遠期 →)"
-
-            updated_at_str = radar_cache.get("updated_at")
-            sync_tag = ""
-            if updated_at_str:
-                try:
-                    # SQLite CURRENT_TIMESTAMP is UTC
-                    updated_dt = datetime.strptime(
-                        updated_at_str, "%Y-%m-%d %H:%M:%S"
-                    ).replace(tzinfo=timezone.utc)
-                    diff_mins = int(
-                        (datetime.now(timezone.utc) - updated_dt).total_seconds() / 60
-                    )
-                    if diff_mins > 30:
-                        sync_tag = f" [過期 {diff_mins}m 🔴]"
-                    else:
-                        sync_tag = f" [{diff_mins}m 🟢]"
-                except Exception:
-                    pass
-
-            dmp_display = f"D-MP: {dist_pct:+.2f}%{trend}{sync_tag}"
-            color_ansi = " [1;32m" if dist_pct >= 0 else " [1;31m"
-            dmp_display_ansi = (
-                f"D-MP: {color_ansi}{dist_pct:+.2f}% [0m{trend}{sync_tag}"
-            )
-
-            dmp_len = len(dmp_display)
-            dmp_cell = dmp_display_ansi + (" " * max(0, 21 - dmp_len))
-
-            # 7. Alerts (Divergence & Skew Flags)
-            radar_cache = r.get("radar_cache", {})
-            labels = []
-            if radar_cache.get("is_divergence"):
-                labels.append("🚨 結構背離")
-            if radar_cache.get("is_skew_extreme"):
-                labels.append("⚠️ 極端避險")
-
-            if not labels and status_label != "正常運行":
-                labels.append(status_label)
-
-            label_cell = " | ".join(labels) if labels else "正常運行"
-
             # Volume Profile Level (hvn_price/lvn_price)
+            radar_cache = r.get("radar_cache", {})
             hvn = radar_cache.get("hvn_price", 0.0)
             lvn = radar_cache.get("lvn_price", 0.0)
             if lvn > 0 and abs(price_val - lvn) / lvn < 0.01:
                 insights.append(
-                    f"• 📉 {sym}: 價格接近 LVN 真空區 (${lvn:.2f})，注意突破或無支撐風險。"
+                    f"• 📉 {sym}: 價格接近 LVN 真空區 ()，注意突破或無支撐風險。"
                 )
             if hvn > 0 and abs(price_val - hvn) / hvn < 0.01:
                 insights.append(
-                    f"• 📈 {sym}: 價格接近 HVN 密集區 (${hvn:.2f})，此處為籌碼換手重要支撐/壓力。"
+                    f"• 📈 {sym}: 價格接近 HVN 密集區 ()，此處為籌碼換手重要支撐/壓力。"
                 )
-
-            # 組合雙行
-            line1 = f"{sym_cell}  {price_cell}{iv_ts_cell}{dte_prem_cell}{em_pos_cell}"
-            line2 = f" └─ {struct_cell}{sqz_cell}{dmp_cell}{label_cell}"
-
-            ansi_lines.append(line1)
-            ansi_lines.append(line2)
-            ansi_lines.append("")  # 加上空行讓每個標的層級更分明
 
             # ---- 產生 Markdown 行 (高 Alpha 欄位) ----
             # 2. IV Rank & Skew

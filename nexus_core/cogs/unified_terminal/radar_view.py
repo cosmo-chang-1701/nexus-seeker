@@ -8,7 +8,7 @@ from cogs.embed_builders.scan_embeds import build_unified_radar_panel_embed
 
 class FilterParamsModal(discord.ui.Modal, title="微調進階量化參數"):
     max_pain_threshold: discord.ui.TextInput = discord.ui.TextInput(
-        label="Max Pain 閾值 (%)", default="10", placeholder="例如: 10"
+        label="Max Pain 偏離門檻 (%)", default="10", placeholder="例如: 10"
     )
     abs_support_tolerance: discord.ui.TextInput = discord.ui.TextInput(
         label="絕對支撐容錯率 (%)", default="1", placeholder="例如: 1"
@@ -103,13 +103,19 @@ class UnifiedRadarView(discord.ui.View):
         # 2. Quant Filters Selector (Merged)
         filter_options = [
             discord.SelectOption(
-                label="🛡️ 排除底牆破位 / 戒嚴", value="exclude_martial_law"
+                label="🛡️ 排除底牆破位 / 負 Gamma (Martial Law)",
+                value="exclude_martial_law",
+                description="排除跌破 PutWall 或落入負 Gamma 區之標的",
             ),
             discord.SelectOption(
-                label="🛡️ 規避財報與總經靜默期", value="avoid_silent_period"
+                label="🛡️ 規避財報與總經靜默期",
+                value="avoid_silent_period",
+                description="排除進入財報或主要事件前夕之標的",
             ),
             discord.SelectOption(
-                label="🛡️ 暗池派發防護 (Skew < -0.3)", value="dp_skew_defense"
+                label="🛡️ 暗池派發防護 (Skew < -0.3)",
+                value="dp_skew_defense",
+                description="過濾機構恐慌搶購 Put 或派發之標的",
             ),
             discord.SelectOption(
                 label="🔵 TDP 估值三擊 (TDP Mode)",
