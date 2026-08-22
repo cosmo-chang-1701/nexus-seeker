@@ -423,14 +423,9 @@ async def test_dispatch_post_market_intelligence_runway_fallback() -> None:
         "database.is_notification_enabled", return_value=True
     ), patch("database.get_full_user_context", return_value=user_ctx), patch(
         "cogs.analyst_agent.generate_analyst_report", new_callable=AsyncMock
-    ) as mock_gen_report, patch("psutil.virtual_memory") as mock_vmem:
+    ) as mock_gen_report, patch("cogs.analyst_agent.is_memory_safe", return_value=True):
         # Empty dict from ts.get_after_market_report_data
         mock_get_data.return_value = {}
-
-        mock_mem = MagicMock()
-        mock_mem.percent = 50.0
-        mock_vmem.return_value = mock_mem
-
         mock_gen_report.return_value = "Mocked AI Commentary"
 
         await agent.dispatch_post_market_intelligence()
@@ -451,6 +446,63 @@ async def test_dispatch_post_market_intelligence_runway_fallback() -> None:
             [f.name + f.value for f in sent_embed.fields]
         )
         assert "600" in embed_content
+
+
+@pytest.mark.asyncio
+async def test_post_market_intelligence_dispatch_memory_gate_triggered() -> None:
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+    with patch("discord.ext.tasks.Loop.start"):
+        agent = AnalystAgent(bot)
+
+    with patch.object(
+        agent,
+        "run_market_open_liquidity",
+        new_callable=AsyncMock,
+        return_value={
+            "sectors": [],
+            "vix": 15.0,
+            "vix_tier_name": "NORMAL",
+            "spy_price": 500.0,
+            "poly_events": [],
+            "spy_max_pain": 490.0,
+        },
+    ):
+        pass
+
+    user_ctx = MagicMock()
+    user_ctx.enable_analyst_agent = True
+    user_ctx.capital = 100000.0
+    user_ctx.cash_reserve = 60000.0
+    user_ctx.monthly_expense = 3000.0
+    user_ctx.total_theta = 0.0
+
+    with patch("database.purge_old_cache", return_value=0), patch(
+        "services.trading_service.TradingService.get_after_market_report_data",
+        new_callable=AsyncMock,
+    ) as mock_get_data, patch("database.get_all_user_ids", return_value=[12345]), patch(
+        "database.is_notification_enabled", return_value=True
+    ), patch("database.get_full_user_context", return_value=user_ctx), patch(
+        "cogs.analyst_agent.generate_analyst_report", new_callable=AsyncMock
+    ) as mock_gen_report, patch(
+        "cogs.analyst_agent.is_memory_safe", return_value=False
+    ):
+        mock_get_data.return_value = {}
+
+        await agent.dispatch_post_market_intelligence()
+
+        # When memory is unsafe, generate_analyst_report should NOT be called
+        mock_gen_report.assert_not_called()
+
+        # Check queue_dm was called with the embed containing Memory Gate warning
+        assert bot.queue_dm.await_count == 1
+        assert bot.queue_dm.await_args is not None
+        sent_embed = bot.queue_dm.await_args.kwargs["embed"]
+        embed_content = str(sent_embed.description) + "".join(
+            [f.name + f.value for f in sent_embed.fields]
+        )
+        assert "[Memory Gate]" in embed_content
+        assert "系統記憶體使用率高於 85%" in embed_content
 
 
 @pytest.mark.asyncio

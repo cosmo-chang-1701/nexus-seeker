@@ -7,6 +7,7 @@ import os
 from datetime import datetime, timezone
 
 from cogs.embed_builder import create_memory_alert_embed
+from services.llm_service import is_memory_safe
 
 logger = logging.getLogger(__name__)
 
@@ -77,11 +78,9 @@ class MemoryManager:
         if self._last_warmup_date == today_str:
             return
 
-        mem = psutil.virtual_memory()
-        swap = psutil.swap_memory()
-        if mem.percent > 85.0 or swap.percent > 60.0:
+        if not is_memory_safe():
             logger.warning(
-                f"🚨 [Warmup Gate] Resource usage too high (RAM: {mem.percent}%, Swap: {swap.percent}%), skipping cache warmup."
+                "🚨 [Warmup Gate] Resource usage too high (RAM+Swap >= 85%), skipping cache warmup."
             )
             return
 

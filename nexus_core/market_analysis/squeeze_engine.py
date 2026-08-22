@@ -1,9 +1,8 @@
-from typing import Any
+from typing import Any, Dict
 import numpy as np
 import pandas as pd
-import psutil
 import logging
-from typing import Dict
+from services.llm_service import is_memory_safe
 
 logger = logging.getLogger(__name__)
 
@@ -16,11 +15,10 @@ def calculate_power_squeeze(df: pd.DataFrame) -> Dict[str, Any]:
     """
     fallback = {"is_squeezing": False, "momentum": 0.0, "direction": "⚪"}
 
-    # 記憶體安全檢查 (85%)
-    mem_usage = psutil.virtual_memory().percent
-    if mem_usage > 85.0:
+    # 記憶體安全檢查 (RAM + Swap 綜合使用率 < 85%)
+    if not is_memory_safe():
         logger.warning(
-            f"[PowerSqueeze] 系統記憶體過載 ({mem_usage}%)，略過 PSQ 計算，返回預設值。"
+            "[PowerSqueeze] 系統記憶體過載 (RAM+Swap >= 85%)，略過 PSQ 計算，返回預設值。"
         )
         return fallback
 

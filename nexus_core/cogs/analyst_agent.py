@@ -24,7 +24,7 @@ from market_time import (
     get_next_market_target_time,
     get_sleep_seconds,
 )
-from services.llm_service import generate_analyst_report
+from services.llm_service import generate_analyst_report, is_memory_safe
 from cogs.embed_builder import split_embed_by_fields
 
 # ── Runner sub-modules ────────────────────────────────────────────────────────
@@ -254,7 +254,6 @@ class AnalystAgent(commands.Cog):
             user_reports = {}
 
         user_ids = database.get_all_user_ids()
-        import psutil
         from cogs.embed_builder import build_post_market_intelligence_embed
 
         for uid in user_ids:
@@ -278,11 +277,10 @@ class AnalystAgent(commands.Cog):
 
             ai_commentary = None
             if user_ctx.enable_analyst_agent:
-                # 4. 記憶體安全閘
-                mem = psutil.virtual_memory()
-                if mem.percent > 85.0:
+                # 4. 記憶體安全閘 (RAM + Swap 綜合使用率 < 85%)
+                if not is_memory_safe():
                     logger.warning(
-                        f"🚨 [Memory Gate] RAM usage ({mem.percent}%) > 85%, "
+                        f"🚨 [Memory Gate] System memory unsafe (RAM+Swap >= 85%), "
                         f"AI Commentary suspended for user {uid}"
                     )
                     ai_commentary = (

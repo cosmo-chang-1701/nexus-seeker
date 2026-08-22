@@ -83,12 +83,9 @@ async def test_task2_warmup_memory_gate() -> None:
     bot = MagicMock()
     mm = MemoryManager(bot)
 
-    with patch("psutil.virtual_memory") as mock_mem, patch(
+    with patch("services.memory_manager.is_memory_safe", return_value=False), patch(
         "database.watchlist.get_all_watchlist"
     ) as mock_list:
-        # 模擬記憶體過高 (86%)
-        mock_mem.return_value.percent = 86.0
-
         await mm.proactive_warmup()
         assert mm._last_warmup_date is None  # 未執行
         assert mock_list.call_count == 0
