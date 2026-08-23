@@ -256,6 +256,7 @@ def create_dynamic_rollover_embed(
     scenario: str = "UNKNOWN",
     cash_impact: Optional[str] = None,
     trigger_condition_text: Optional[str] = None,
+    asset_class: Optional[str] = None,
 ) -> discord.Embed:
     """
     產生動態轉倉 (Dynamic Rollover) 的 Embed 推播訊息。
@@ -350,12 +351,33 @@ def create_dynamic_rollover_embed(
     C_RED = " [1;31m"
     C_CYAN = " [1;36m"
 
-    # 2. 賣出/平倉指令區塊
-    sell_action_full = (
-        "STC (Sell To Close)"
-        if sell_action == "STC"
-        else ("BTC (Buy To Close)" if sell_action == "BTC" else sell_action)
+    # 判斷是否為期權合約（若有非 N/A 到期日/履約價，或明確標記 asset_class 為 OPTIONS）
+    has_option_params = (strike not in ("N/A", "", None)) or (
+        expiry not in ("N/A", "", None)
     )
+    if asset_class is not None:
+        is_options = (
+            asset_class.upper() in ("OPTIONS", "OPTION", "CONTRACT")
+            or has_option_params
+        )
+    else:
+        is_options = has_option_params
+    is_spot = not is_options
+
+    # 2. 賣出/平倉指令區塊
+    if is_spot and sell_action in ("SELL", "STC"):
+        sell_action_full = "SELL (賣出現貨)"
+    elif sell_action == "SELL":
+        sell_action_full = "SELL (賣出現貨)"
+    elif sell_action == "STC":
+        sell_action_full = "STC (Sell To Close)"
+    elif sell_action == "BTC":
+        sell_action_full = "BTC (Buy To Close)"
+    elif sell_action == "BUY":
+        sell_action_full = "BUY (買入現貨)"
+    else:
+        sell_action_full = sell_action
+
     if is_hold:
         sell_lines = [
             "```ansi",
@@ -396,7 +418,23 @@ def create_dynamic_rollover_embed(
         ]
         embed.add_field(name="📥 當前資產配置", value="\n".join(buy_lines), inline=True)
     else:
-        buy_action_display = buy_action_label or f"{direction} (Buy To Open)"
+        if buy_action_label:
+            buy_action_display = buy_action_label
+        elif is_spot:
+            buy_action_display = (
+                "BUY (買入現貨)" if direction.upper() in ("BTO", "BUY") else direction
+            )
+        else:
+            buy_action_display = (
+                f"{direction} (Buy To Open)"
+                if direction.upper() in ("BTO", "BUY")
+                else (
+                    f"{direction} (Sell To Open)"
+                    if direction.upper() == "STO"
+                    else direction
+                )
+            )
+
         buy_lines = [
             "```ansi",
             " 📥 轉入資產 (Buy)",
@@ -439,15 +477,28 @@ def create_dynamic_rollover_embed(
         direction_color = (
             C_RED if direction.upper() in ("STC", "BTC", "SELL") else C_GREEN
         )
+        display_direction = (
+            "BUY"
+            if (is_spot and direction.upper() in ("BTO", "BUY"))
+            else (
+                "SELL"
+                if (is_spot and direction.upper() in ("STC", "SELL"))
+                else direction
+            )
+        )
         guide_lines = [
             "```ansi",
             " 🎯 終端執行引導",
             " ----------------------------------",
             f" ├─ 標的: {buy_symbol}",
-            f" ├─ 到期日: {expiry}",
-            f" ├─ 履約價: {strike}",
-            f" ├─ 買賣方向: {direction_color}{direction}{C_RESET}",
         ]
+        if is_options:
+            guide_lines.append(f" ├─ 到期日: {expiry}")
+            guide_lines.append(f" ├─ 履約價: {strike}")
+
+        guide_lines.append(
+            f" ├─ 買賣方向: {direction_color}{display_direction}{C_RESET}"
+        )
         if cash_impact:
             guide_lines.append(f" ├─ 預估資金影響: {cash_impact}")
         guide_lines.append(f" └─ 建議限價 (Limit): {suggested_price}")

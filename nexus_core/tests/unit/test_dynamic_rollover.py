@@ -1113,13 +1113,33 @@ def test_create_dynamic_rollover_embed_buy_action_label_override() -> None:
         suggested_price="Market",
         strike="N/A",
         expiry="N/A",
-        direction="BTO",
+        direction="BUY",
+        asset_class="SPOT",
     )
     buy_field_default = next(
         f for f in embed_default.fields if f.name and "轉入資產" in f.name
     )
     assert buy_field_default.value is not None
-    assert "(Buy To Open)" in buy_field_default.value
+    assert "BUY (買入現貨)" in buy_field_default.value
+
+    embed_option = create_dynamic_rollover_embed(
+        rollover_type="機會成本",
+        sell_symbol="NVDA",
+        sell_ratio=0.3,
+        buy_symbol="SMCI",
+        reason="test reason",
+        suggested_strategy="Bull Call Spread",
+        suggested_price="Market",
+        strike="$90.0C",
+        expiry="2026-09-18",
+        direction="BTO",
+        asset_class="OPTIONS",
+    )
+    buy_field_option = next(
+        f for f in embed_option.fields if f.name and "轉入資產" in f.name
+    )
+    assert buy_field_option.value is not None
+    assert "(Buy To Open)" in buy_field_option.value
 
     embed_override = create_dynamic_rollover_embed(
         rollover_type="槓桿與保證金防禦",
