@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nexus-core"
-version = "1.12.52"
+version = "1.12.53"
 
 description = "Nexus Seeker Core Bot and Market Analysis"
 requires-python = ">=3.10"
@@ -44,6 +44,7 @@ py-modules = ["bot", "bot_healthy", "config", "gather_report", "main", "market_m
 
 [tool.mypy]
 python_version = "3.12"
+cache_dir = "/tmp/.mypy_cache"
 warn_return_any = true
 warn_unused_configs = true
 warn_unused_ignores = true
@@ -73,8 +74,7 @@ module = [
     "dotenv.*",
     "psutil.*",
     "pytest",
-    "httpx",
-    "sklearn.*"
+    "httpx"
 ]
 ignore_missing_imports = true
 
