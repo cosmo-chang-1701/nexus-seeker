@@ -181,11 +181,15 @@ async def scrape_reddit_feed(
                 published = entry.find("atom:published", ns)
                 published_text = published.text if published is not None else ""
 
+                link = entry.find("atom:link", ns)
+                link_url = link.attrib.get("href", "") if link is not None else ""
+
                 posts.append(
                     {
                         "title": title_text or "N/A",
                         "subreddit": sub,
                         "published": published_text or "",
+                        "url": link_url,
                     }
                 )
 
@@ -246,26 +250,61 @@ async def scrape_reddit(
             entries = root.findall("atom:entry", ns)
 
             if not entries:
-                result = {"status": "success", "data": "過去 24 小時內無相關討論。"}
-                _reddit_cache[cache_key] = (result, time.time() + _REDDIT_CACHE_TTL)
-                return result
+                no_posts: list[dict[str, str]] = []
+                empty_result: dict[str, Any] = {
+                    "status": "success",
+                    "data": "過去 24 小時內無相關討論。",
+                    "posts": no_posts,
+                }
+                _reddit_cache[cache_key] = (
+                    empty_result,
+                    time.time() + _REDDIT_CACHE_TTL,
+                )
+                return empty_result
 
             posts_text = ""
+            posts_list: list[dict[str, str]] = []
             for entry in entries[:limit]:
                 title = entry.find("atom:title", ns)
-                title_text = title.text if title is not None else "N/A"
+                title_text: str = (
+                    title.text
+                    if title is not None and title.text is not None
+                    else "N/A"
+                )
 
                 category = entry.find("atom:category", ns)
-                sub = (
+                sub: str = (
                     category.attrib.get("label", "unknown")
                     if category is not None
                     else "unknown"
                 )
                 sub = sub.replace("r/", "")
 
-                posts_text += f"[{sub}] {title_text}\n"
+                link = entry.find("atom:link", ns)
+                link_url: str = link.attrib.get("href", "") if link is not None else ""
 
-            result = {"status": "success", "data": posts_text}
+                published = entry.find("atom:published", ns)
+                published_text: str = (
+                    published.text
+                    if published is not None and published.text is not None
+                    else ""
+                )
+
+                posts_text += f"[{sub}] {title_text}\n"
+                posts_list.append(
+                    {
+                        "title": title_text,
+                        "subreddit": sub,
+                        "url": link_url,
+                        "published": published_text,
+                    }
+                )
+
+            result = {
+                "status": "success",
+                "data": posts_text,
+                "posts": posts_list,
+            }
             _reddit_cache[cache_key] = (result, time.time() + _REDDIT_CACHE_TTL)
             return result
 

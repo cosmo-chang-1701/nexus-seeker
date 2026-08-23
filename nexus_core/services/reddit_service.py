@@ -13,30 +13,23 @@ logger = logging.getLogger(__name__)
 _reddit_sem = asyncio.Semaphore(2)
 
 
-async def get_reddit_context(
+async def get_reddit_details(
     symbol: str, limit: int = 5, *, enable_tunnel: bool = True
-) -> Optional[str]:
-    """透過 Cloudflare Tunnel 呼叫本地端爬取 Reddit。
-
-    防禦性設計（Defense-in-Depth）：
-    1. 若呼叫端明確傳入 ``enable_tunnel=False``，立即中斷並回傳 ``None``。
-    2. 即使呼叫端未傳入（使用預設值 ``True``），本函式仍會自行查詢資料庫
-       ``any_user_local_tunnel_enabled()``，確認是否有任何使用者啟用了本地
-       Tunnel 開關。若全域均為關閉，同樣中斷，避免誤觸 530 網路穿透錯誤。
-    3. 若 ``TUNNEL_URL`` 未配置，降級回傳提示字串。
+) -> tuple[Optional[str], list[dict[str, str]]]:
+    """透過 Cloudflare Tunnel 爬取 Reddit，同時回傳情緒摘要文字與結構化貼文清單 (含 URL)。
 
     Returns:
-        Reddit 情緒摘要文字，或 ``None`` 表示已跳過呼叫。
+        (reddit_text, posts_list)
     """
-
+    empty_posts: list[dict[str, str]] = []
     # ── Gate 1: 呼叫端明確關閉 ──────────────────────────────────
     if not enable_tunnel:
         logger.info(f"⏭️ [{symbol}] 呼叫端明確跳過本地 Tunnel (Reddit Scraper) 呼叫。")
-        return None
+        return None, empty_posts
 
     # ── Gate 2: TUNNEL_URL 配置檢查 ─────────────────────────────
     if not getattr(config, "TUNNEL_URL", ""):
-        return "尚未配置本地 Tunnel URL，暫不抓取 Reddit 情緒。"
+        return "尚未配置本地 Tunnel URL，暫不抓取 Reddit 情緒。", empty_posts
 
     try:
         logger.info(
@@ -69,19 +62,33 @@ async def get_reddit_context(
                 response_json = res.json()
                 if response_json.get("status") == "success":
                     logger.info(f"[{symbol}] 成功從本地端取得 Reddit 資料！")
-                    return response_json.get("data")  # type: ignore
+                    raw_data = response_json.get("data")
+                    posts = response_json.get("posts") or []
+                    return raw_data, posts
                 else:
                     logger.warning(
                         f"[{symbol}] 本地端爬取發生內部錯誤: {response_json.get('data')}"
                     )
-                    return "本地備援節點發生錯誤，暫無情緒資料。"
+                    return "本地備援節點發生錯誤，暫無情緒資料。", empty_posts
 
     except httpx.ReadTimeout:
         logger.warning(f"[{symbol}] Tunnel 請求超時，本地端無回應。")
-        return "本地節點連線超時。"
+        return "本地節點連線超時。", empty_posts
     except Exception as e:
         logger.warning(f"[{symbol}] 呼叫本地 Tunnel 失敗: {e}")
-        return "邊緣運算節點連線異常。"
+        return "邊緣運算節點連線異常。", empty_posts
+
+
+async def get_reddit_context(
+    symbol: str, limit: int = 5, *, enable_tunnel: bool = True
+) -> Optional[str]:
+    """透過 Cloudflare Tunnel 呼叫本地端爬取 Reddit。
+
+    Returns:
+        Reddit 情緒摘要文字，或 ``None`` 表示已跳過呼叫。
+    """
+    text, _ = await get_reddit_details(symbol, limit=limit, enable_tunnel=enable_tunnel)
+    return text
 
 
 async def get_reddit_context_batch(

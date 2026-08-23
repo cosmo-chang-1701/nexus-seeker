@@ -719,7 +719,10 @@ async def test_polymarket_fuzzy_matching_and_odds_format(mock_get_company: Any):
     ]
 
     odds = await find_matching_polymarket_odds("MU", poly_markets)
-    assert odds == "Will Micron's Q3 revenue exceed $6.6 billion? (Yes: 98.0%)"
+    assert (
+        odds
+        == "[Will Micron's Q3 revenue exceed $6.6 billion?](https://polymarket.com) (Yes: 98.0%)"
+    )
 
     poly_markets_new = [
         {
@@ -731,7 +734,10 @@ async def test_polymarket_fuzzy_matching_and_odds_format(mock_get_company: Any):
         }
     ]
     odds_new = await find_matching_polymarket_odds("MU", poly_markets_new)
-    assert odds_new == "Will Micron's Q3 revenue exceed $6.6 billion? (Yes: 98.0%)"
+    assert (
+        odds_new
+        == "[Will Micron's Q3 revenue exceed $6.6 billion?](https://polymarket.com) (Yes: 98.0%)"
+    )
 
     poly_markets_other = [
         {
@@ -756,8 +762,8 @@ async def test_polymarket_fuzzy_matching_and_odds_format(mock_get_company: Any):
     ]
     odds_long = await find_matching_polymarket_odds("MU", poly_markets_long)
     assert odds_long == (
-        "Will Micron's fiscal Q3 2026 revenue exceed $6.6 billion after the memory"
-        "… (Yes: 42.0%)"
+        "[Will Micron's fiscal Q3 2026 revenue exceed $6.6 billion after the memory"
+        "…](https://polymarket.com) (Yes: 42.0%)"
     )
 
     # Redundant "Will {Company} (TICKER) hit " prefix on Polymarket's stock
@@ -784,8 +790,8 @@ async def test_polymarket_fuzzy_matching_and_odds_format(mock_get_company: Any):
         "PLTR", poly_markets_price_target
     )
     assert odds_price_target == (
-        "Hit (HIGH) $192 Week of August 17-21? (Yes: 4.5%)\n"
-        " │    └─ Hit (LOW) $120 in August? (Yes: 3.1%)"
+        "[Hit (HIGH) $192 Week of August 17-21?](https://polymarket.com) (Yes: 4.5%)\n"
+        " • [Hit (LOW) $120 in August?](https://polymarket.com) (Yes: 3.1%)"
     )
     assert "Palantir" not in odds_price_target
     assert "…" not in odds_price_target

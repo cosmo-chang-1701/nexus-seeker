@@ -168,7 +168,7 @@ class SymbolHubView(discord.ui.View):
             mp_task = SentimentEngine.calculate_max_pain(self.symbol)
             iv_task = SentimentEngine.fetch_and_calculate_iv_metrics(self.symbol)
             ctx = database.get_full_user_context(self.user_id)
-            reddit_task = reddit_service.get_reddit_context(self.symbol)
+            reddit_task = reddit_service.get_reddit_details(self.symbol)
             poly_task = (
                 poly_service.get_market_snapshot(limit=0)
                 if poly_service
@@ -199,7 +199,7 @@ class SymbolHubView(discord.ui.View):
                 uoa_data,
                 max_pain_data,
                 iv_metrics,
-                reddit_text,
+                reddit_details,
                 poly_markets,
                 ddp_report,
                 df_hist_1d,
@@ -287,13 +287,22 @@ class SymbolHubView(discord.ui.View):
             result["vix"] = macro_data.vix
             result["spy_price"] = spy_price
 
-            # Reddit sentiment score
-            safe_reddit_text = reddit_text or ""
+            # Reddit sentiment score & structured posts
+            if isinstance(reddit_details, tuple):
+                safe_reddit_text = reddit_details[0] or ""
+                reddit_posts = (
+                    reddit_details[1] if isinstance(reddit_details[1], list) else []
+                )
+            else:
+                safe_reddit_text = reddit_details or ""
+                reddit_posts = []
+
             result[
                 "reddit_sentiment_score"
             ] = await llm_service.evaluate_reddit_sentiment(
                 self.symbol, safe_reddit_text
             )
+            result["reddit_posts"] = reddit_posts
 
             # Polymarket odds
             poly_odds = await find_matching_polymarket_odds(

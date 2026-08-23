@@ -5,13 +5,17 @@ from cogs.embed_builders._core import NexusEmbed
 import logging
 import psutil
 
+import re
 from datetime import datetime, timezone
 from typing import List, Dict, Any
 
 from market_analysis.uoa_telemetry import UOATradeResult, generate_uoa_ascii_table
 
 from cogs.embed_builders._ansi_utils import _pad_string, _safe_float
-from cogs.embed_builders._embed_helpers import _chunk_ansi_table
+from cogs.embed_builders._embed_helpers import (
+    _chunk_ansi_table,
+    _truncate_with_boundary,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -658,11 +662,17 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     )
 
     if has_market_intention:
+        poly_ansi_summary = (
+            re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", str(poly_odds)).split("\n")[0]
+            if poly_odds
+            else "N/A"
+        )
+        poly_ansi_summary = _truncate_with_boundary(poly_ansi_summary, 45)
         edge_lines.extend(
             [
                 " 巨鯨/散戶意圖映射 (Market Intention)",
-                f" ├─ Polymarket 預測勝率: \u001b[1;34m{poly_odds}\u001b[0m",
-                f" └─ Reddit 情緒指數: {sentiment_color}{reddit_score}\u001b[0m",
+                f" ├─ Polymarket: \u001b[1;34m{poly_ansi_summary}\u001b[0m",
+                f" └─ Reddit: {sentiment_color}{reddit_score}\u001b[0m",
             ]
         )
 
@@ -674,7 +684,52 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             "```",
         ]
     )
-    _add_ansi_field_safely(embed, "📐 情緒與邊緣偵測 (Edge Detection)", edge_lines)
+
+    ansi_block = "\n".join(edge_lines)
+    markdown_parts: List[str] = []
+
+    # 1. 🐋 Polymarket 預測勝率 (超連結清單)
+    if poly_odds and str(poly_odds).strip() != "N/A":
+        # 確保開頭有 bullet 標記
+        poly_items = str(poly_odds).strip()
+        if not poly_items.startswith("•") and not poly_items.startswith("["):
+            poly_items = f"• {poly_items}"
+        elif poly_items.startswith("["):
+            poly_items = f"• {poly_items}"
+        markdown_parts.append(f"**🐋 Polymarket 預測勝率：**\n{poly_items}")
+
+    # 2. 📰 Reddit 前三名熱門文章 (超連結清單)
+    reddit_posts = data.get("reddit_posts", [])
+    if reddit_posts and isinstance(reddit_posts, list):
+        reddit_links: List[str] = []
+        for p in reddit_posts[:3]:
+            if isinstance(p, dict):
+                sub = p.get("subreddit", "reddit")
+                raw_title = str(p.get("title", "")).strip()
+                short_title = _truncate_with_boundary(raw_title, 55)
+                url = p.get("url", "")
+                if url:
+                    reddit_links.append(f"• [r/{sub}: {short_title}]({url})")
+                else:
+                    reddit_links.append(f"• `[r/{sub}]` {short_title}")
+        if reddit_links:
+            markdown_parts.append(
+                "**📰 Reddit 熱門討論 (Top 3)：**\n" + "\n".join(reddit_links)
+            )
+
+    if markdown_parts:
+        edge_field_value = ansi_block + "\n" + "\n".join(markdown_parts)
+    else:
+        edge_field_value = ansi_block
+
+    if len(edge_field_value) > 1020:
+        edge_field_value = _truncate_with_boundary(edge_field_value, 1020)
+
+    embed.add_field(
+        name="📐 情緒與邊緣偵測 (Edge Detection)",
+        value=edge_field_value,
+        inline=False,
+    )
 
     # 3. 📊 隱含波動率與預期區間 (IV Context)
     raw_em_context = data.get("expected_move_context")

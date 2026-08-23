@@ -474,7 +474,7 @@ class UnifiedTerminalCog(commands.Cog):
             asyncio.to_thread(calculate_volume_profile, symbol)
         )
         dp_task = asyncio.create_task(fetch_darkpool_prints(symbol))
-        reddit_task = asyncio.create_task(reddit_service.get_reddit_context(symbol))
+        reddit_task = asyncio.create_task(reddit_service.get_reddit_details(symbol))
         poly_task = asyncio.create_task(_safe_get_poly_markets())
         ddp_task = asyncio.create_task(ddp_inspector.inspect_symbol(symbol))
 
@@ -542,7 +542,7 @@ class UnifiedTerminalCog(commands.Cog):
             gex_profile_data,
             vp_data,
             dp_data,
-            reddit_text,
+            reddit_details,
             poly_markets,
             ddp_report,
             skew_data,
@@ -570,6 +570,13 @@ class UnifiedTerminalCog(commands.Cog):
             month_mp_task,
         )
 
+        safe_reddit_text = (
+            reddit_details[0] if isinstance(reddit_details, tuple) else reddit_details
+        )
+        safe_reddit_posts = (
+            reddit_details[1] if isinstance(reddit_details, tuple) else []
+        )
+
         return {
             "df_spy": df_spy,
             "macro_raw": macro_raw,
@@ -579,7 +586,8 @@ class UnifiedTerminalCog(commands.Cog):
             "uoa_data": uoa_data,
             "max_pain_data": max_pain_data,
             "iv_metrics": iv_metrics,
-            "reddit_text": reddit_text,
+            "reddit_text": safe_reddit_text,
+            "reddit_posts": safe_reddit_posts,
             "poly_markets": poly_markets,
             "ddp_report": ddp_report,
             "df_hist_1d": df_hist_1d,
@@ -732,6 +740,7 @@ class UnifiedTerminalCog(commands.Cog):
             else:
                 result["reddit_sentiment_score"] = "⚖️ 中性"
 
+            result["reddit_posts"] = data.get("reddit_posts", [])
             result["polymarket_odds"] = poly_odds
 
             safe_vp = vp_data if isinstance(vp_data, dict) else {}

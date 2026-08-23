@@ -316,16 +316,21 @@ async def find_matching_polymarket_odds(
             except Exception:
                 val_str = f"{outcome}: {price_val}"
 
-            # Format to a compact string
+            # Format to a compact string with markdown hyperlink
             stripped_q = _strip_redundant_symbol_prefix(question, symbol_upper)
             short_q = _smart_truncate_question(stripped_q)
+            event_slug = m.get("event_slug") or m.get("slug")
+            market_url = m.get("url") or (
+                f"https://polymarket.com/event/{event_slug}"
+                if event_slug
+                else "https://polymarket.com"
+            )
             vol = float(m.get("volumeNum") or m.get("volume") or 0.0)
-            results.append((f"{short_q} ({val_str})", vol))
+            results.append((f"[{short_q}]({market_url}) ({val_str})", vol))
 
     if results:
         # Sort by volume descending and take top 3
         results.sort(key=lambda x: x[1], reverse=True)
         top_results = results[:3]
-        # Join multiple matches with vertical tree layout
-        return "\n │    └─ ".join(r[0] for r in top_results)
+        return "\n • ".join(r[0] for r in top_results)
     return "N/A"
