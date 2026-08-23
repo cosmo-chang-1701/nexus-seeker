@@ -16,6 +16,7 @@ from market_analysis.dynamic_rollover import (
 from cogs.embed_builders.rollover_embeds import (
     create_dynamic_rollover_embed,
     create_thesis_passed_embed,
+    build_fundamental_broken_embed,
 )
 
 
@@ -368,30 +369,77 @@ async def test_evaluate_fundamental_thesis_empty_sections_no_appendix(
 
 
 def test_create_thesis_passed_embed_truncates_long_reasoning() -> None:
-    """reasoning 超過 4000 字元時被正確截斷，且 Embed description ≤ 4096。"""
+    """reasoning 超過 safe limit 時被正確截斷，且 Embed description ≤ 4096。"""
     long_reasoning = "護城河分析" * 1000  # 5000 chars
     embed = create_thesis_passed_embed(
         symbol="AMD",
         reasoning=long_reasoning,
+        confidence=0.85,
         source_url="https://example.com/sec",
+        form_type="10-Q",
     )
     assert embed.description is not None
     assert len(embed.description) <= 4096
     assert embed.title == "✅ AMD 基本面驗證通過"
-    assert len(embed.fields) == 1
-    assert embed.fields[0].value is not None
-    assert "example.com" in embed.fields[0].value
+    assert embed.color == discord.Color.green()
+    assert "### 📊 評估摘要" in embed.description
+    assert "### 🧠 護城河分析與評定" in embed.description
+    assert "### 🎯 操盤指引" in embed.description
+    assert "85%" in embed.description
+    assert "[10-Q 申報文件](https://example.com/sec)" in embed.description
+    assert "```ansi" not in embed.description
 
 
 def test_create_thesis_passed_embed_short_reasoning() -> None:
-    """短 reasoning 原樣通過，不會被截斷，也不產生 source_url 欄位。"""
+    """短 reasoning 與低信心警告測試。"""
     embed = create_thesis_passed_embed(
         symbol="NVDA",
         reasoning="護城河穩固，無異常。",
+        confidence=0.4,
     )
     assert embed.description is not None
     assert "護城河穩固" in embed.description
-    assert len(embed.fields) == 0  # 無 source_url 欄位
+    assert "40%" in embed.description
+    assert "⚠️" in embed.description
+    assert "使用者提供新聞/資訊摘要" in embed.description
+    assert "### 🎯 操盤指引" in embed.description
+
+
+def test_build_fundamental_broken_embed_simple_markdown() -> None:
+    """驗證破滅情境的 Simple-Markdown 格式、信心值、超連結與動作指引。"""
+    embed = build_fundamental_broken_embed(
+        symbol="AMD",
+        reasoning="資料中心市占率結構性流失，毛利率連續兩季受壓。",
+        confidence=0.9,
+        source_url="https://sec.gov/10k",
+        form_type="10-K",
+    )
+    assert embed.title == "💥 原型假設破滅: AMD → VOO"
+    assert embed.color == discord.Color.red()
+    assert embed.description is not None
+    assert "### 📊 評估摘要" in embed.description
+    assert "### 🧠 護城河分析與歸因" in embed.description
+    assert "### 🎯 轉倉執行建議" in embed.description
+    assert "🔴 **假設破滅 (Moat Broken)**" in embed.description
+    assert "90%" in embed.description
+    assert "[10-K 申報文件](https://sec.gov/10k)" in embed.description
+    assert "賣出平倉" in embed.description
+    assert "VOO" in embed.description
+    assert "```ansi" not in embed.description
+
+
+def test_build_fundamental_broken_embed_truncates_long_reasoning() -> None:
+    """驗證長 reasoning 破滅 Embed 在截斷後仍符合 Discord 4096 字元上限。"""
+    long_reasoning = "嚴重基本面衰退與護城河喪失分析。" * 500
+    embed = build_fundamental_broken_embed(
+        symbol="INTC",
+        reasoning=long_reasoning,
+        confidence=0.35,
+    )
+    assert embed.description is not None
+    assert len(embed.description) <= 4096
+    assert "35%" in embed.description
+    assert "⚠️" in embed.description
 
 
 def test_create_dynamic_rollover_embed_truncates_long_reason() -> None:

@@ -526,67 +526,118 @@ _LOW_CONFIDENCE_THRESHOLD = 0.5
 
 
 def build_fundamental_broken_embed(
-    symbol: str, reasoning_with_source: str, confidence: float = 1.0
+    symbol: str,
+    reasoning: str,
+    confidence: float = 1.0,
+    source_url: str = "",
+    form_type: str = "",
 ) -> discord.Embed:
     """
     產生基本面護城河判定破滅（Scenario 1 原型假設破滅）的動態轉倉 Embed。
 
+    使用 Simple-Markdown 格式排版，提供結構化、行動端友善且層次清晰的量化風控報告。
     集中封裝固定的清算建議參數 (100% 清倉轉入 VOO)，供互動式 `/verify_thesis`
     與自動化每日 SEC 財報掃描共用，避免兩處組裝邏輯漂移。
-
-    LLM 判讀信心分數 (confidence) 過去僅寫入 fundamental_cache 卻從未在任何下游
-    呈現，導致使用者無從得知一次「強制清倉」建議背後的判讀把握度。低信心不代表
-    判讀有誤（可能只是財報段落資訊密度不足），因此不靜默降級或攔截警報，而是
-    在低於門檻時附加透明度提示，供使用者自行權衡是否人工複核。
     """
-    confidence_note = (
-        f"\n\n⚠️ **LLM 判讀信心偏低 ({confidence:.0%})**：本次判讀依據的財報段落可能"
-        "資訊密度不足或存在模糊性，建議人工複核原始文件後再執行清倉。"
-        if confidence < _LOW_CONFIDENCE_THRESHOLD
-        else f"\n\n*(LLM 判讀信心: {confidence:.0%})*"
+    sym = symbol.upper()
+    title = f"💥 原型假設破滅: {sym} → VOO"
+    embed = NexusEmbed(title=title, color=discord.Color.red())
+
+    if source_url:
+        source_label = (
+            f"[{form_type} 申報文件]({source_url})"
+            if form_type
+            else f"[SEC 申報文件]({source_url})"
+        )
+    else:
+        source_label = "使用者提供新聞/資訊摘要"
+
+    if confidence < _LOW_CONFIDENCE_THRESHOLD:
+        confidence_str = f"{confidence:.0%} ⚠️ (判讀依據資訊密度偏低，建議人工複核)"
+    else:
+        confidence_str = f"{confidence:.0%}"
+
+    safe_reasoning = truncate_with_boundary(
+        reasoning.strip(), _EMBED_DESCRIPTION_SAFE_LIMIT - 600
     )
-    return create_dynamic_rollover_embed(
-        rollover_type="原型假設破滅",
-        sell_symbol=symbol.upper(),
-        sell_ratio=1.0,
-        buy_symbol="VOO",
-        reason=reasoning_with_source + confidence_note,
-        suggested_strategy="Buy Shares (防禦避風港)",
-        suggested_price="Market",
-        strike="N/A",
-        expiry="N/A",
-        direction="BTO",
-        scenario="FUNDAMENTAL_BROKEN",
+
+    desc_lines = [
+        "> 🚨 **【執行轉倉指令】機構基本面護城河已破滅，建議全面防守**\n",
+        "### 📊 評估摘要",
+        f"- **驗證標的**：`{sym}`",
+        "- **判定結果**：🔴 **假設破滅 (Moat Broken)**",
+        f"- **LLM 信心**：{confidence_str}",
+        f"- **資料來源**：{source_label}\n",
+        "### 🧠 護城河分析與歸因",
+        f"{safe_reasoning}\n",
+        "### 🎯 轉倉執行建議",
+        f"- **賣出平倉**：`{sym}` × 100% (市價全數清倉)",
+        "- **轉入標的**：`VOO` (防禦避風港 ETF)",
+        "- **執行動作**：買入現貨 (BUY Shares)",
+        "- **建議限價**：市價 (Market)",
+    ]
+
+    embed.description = truncate_with_boundary(
+        "\n".join(desc_lines), _EMBED_DESCRIPTION_SAFE_LIMIT
     )
+    embed.set_footer(
+        text="Nexus Risk & Rollover Engine • 請點擊下方 [執行試算] 以推估保證金佔用與預期報酬"
+    )
+    return embed
 
 
 def create_thesis_passed_embed(
     symbol: str,
     reasoning: str,
+    confidence: float = 1.0,
     source_url: str = "",
+    form_type: str = "",
 ) -> discord.Embed:
     """
     產生基本面驗證通過（護城河穩固）的 Embed。
 
-    使用 truncate_with_boundary 防止 Discord API 字元溢出，
-    將 reasoning 放入 Embed description（上限 4096 字元）而非
-    message content（上限 2000 字元）。
+    使用 Simple-Markdown 格式排版，提供結構化、行動端友善且層次清晰的量化風控報告。
     """
-    embed = NexusEmbed(
-        title=f"✅ {symbol} 基本面驗證通過",
-        color=discord.Color.green(),
-    )
-
-    safe_reasoning = truncate_with_boundary(reasoning, _EMBED_DESCRIPTION_SAFE_LIMIT)
-    embed.description = f"護城河評估結果：依然穩固。無需轉倉。\n\n> {safe_reasoning}"
+    sym = symbol.upper()
+    title = f"✅ {sym} 基本面驗證通過"
+    embed = NexusEmbed(title=title, color=discord.Color.green())
 
     if source_url:
-        embed.add_field(
-            name="🔗 參照資料來源",
-            value=source_url,
-            inline=False,
+        source_label = (
+            f"[{form_type} 申報文件]({source_url})"
+            if form_type
+            else f"[SEC 申報文件]({source_url})"
         )
+    else:
+        source_label = "使用者提供新聞/資訊摘要"
 
+    if confidence < _LOW_CONFIDENCE_THRESHOLD:
+        confidence_str = f"{confidence:.0%} ⚠️ (判讀依據資訊密度偏低，建議人工複核)"
+    else:
+        confidence_str = f"{confidence:.0%}"
+
+    safe_reasoning = truncate_with_boundary(
+        reasoning.strip(), _EMBED_DESCRIPTION_SAFE_LIMIT - 600
+    )
+
+    desc_lines = [
+        "> 🟢 **【狀態：安全續抱】長期成長護城河依然穩固，無需轉倉**\n",
+        "### 📊 評估摘要",
+        f"- **驗證標的**：`{sym}`",
+        "- **判定結果**：🟢 **護城河穩固 (Moat Intact)**",
+        f"- **LLM 信心**：{confidence_str}",
+        f"- **資料來源**：{source_label}\n",
+        "### 🧠 護城河分析與評定",
+        f"{safe_reasoning}\n",
+        "### 🎯 操盤指引",
+        "- **持倉狀態**：維持現狀續抱 (`HOLD`)",
+        "- **風控指引**：基本面無結構性惡化，宏觀或短期波動無須恐慌殺跌",
+    ]
+
+    embed.description = truncate_with_boundary(
+        "\n".join(desc_lines), _EMBED_DESCRIPTION_SAFE_LIMIT
+    )
+    embed.set_footer(text="Nexus Risk & Rollover Engine • 護城河驗證完成")
     return embed
 
 

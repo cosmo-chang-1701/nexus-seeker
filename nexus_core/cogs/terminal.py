@@ -1582,11 +1582,13 @@ class TerminalCog(commands.Cog):
                 await _send_or_edit("⚠️ LLM 呼叫失敗，已中止驗證。")
             return
 
-        source_info = f"\n\n🔗 參照資料來源: {source_url}" if source_url else ""
-
         if result.is_broken:
             embed = build_fundamental_broken_embed(
-                symbol, result.reasoning + source_info, confidence=result.confidence
+                symbol=symbol.upper(),
+                reasoning=result.reasoning,
+                confidence=result.confidence,
+                source_url=source_url,
+                form_type=form_type,
             )
             view = RolloverActionView(target_symbol=symbol.upper())
             await _send_or_edit("", embed=embed, view=view)
@@ -1594,7 +1596,9 @@ class TerminalCog(commands.Cog):
             embed = create_thesis_passed_embed(
                 symbol=symbol.upper(),
                 reasoning=result.reasoning,
+                confidence=result.confidence,
                 source_url=source_url,
+                form_type=form_type,
             )
             await _send_or_edit("", embed=embed)
 

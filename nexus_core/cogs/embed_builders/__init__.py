@@ -133,6 +133,14 @@ from cogs.embed_builders.report_embeds import (
     create_next_day_strategy_embed,
 )
 
+# ── Rollover Embeds ───────────────────────────────────────────────────────────
+from cogs.embed_builders.rollover_embeds import (
+    create_dynamic_rollover_embed,
+    build_fundamental_broken_embed,
+    create_thesis_passed_embed,
+    create_rollover_history_embed,
+)
+
 # ── Settings Embeds ───────────────────────────────────────────────────────────
 from cogs.embed_builders.settings_embeds import (
     create_notification_settings_embed,
@@ -273,6 +281,11 @@ __all__ = [
     "build_hedge_analysis_field",
     "create_ai_analysis_embed",
     "create_next_day_strategy_embed",
+    # Rollover embeds
+    "create_dynamic_rollover_embed",
+    "build_fundamental_broken_embed",
+    "create_thesis_passed_embed",
+    "create_rollover_history_embed",
     # Settings embeds
     "create_notification_settings_embed",
     "create_account_settings_embed",

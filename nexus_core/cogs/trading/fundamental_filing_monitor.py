@@ -160,9 +160,13 @@ class FundamentalFilingMonitorCog(commands.Cog, name="FundamentalFilingMonitorCo
             return  # 判讀通過，靜默寫入 fundamental_cache 即可，不主動打擾使用者
 
         source_url = context.get("source_url", "")
-        source_info = f"\n\n🔗 參照資料來源: {source_url}" if source_url else ""
+        form_type = context.get("form_type", latest.get("form", ""))
         embed = build_fundamental_broken_embed(
-            symbol, result.reasoning + source_info, confidence=result.confidence
+            symbol=symbol.upper(),
+            reasoning=result.reasoning,
+            confidence=result.confidence,
+            source_url=source_url,
+            form_type=form_type,
         )
         setattr(embed, "_view", f"RolloverActionView:{symbol}")
 
