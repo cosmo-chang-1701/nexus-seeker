@@ -14,7 +14,7 @@ _reddit_sem = asyncio.Semaphore(2)
 
 
 async def get_reddit_details(
-    symbol: str, limit: int = 5, *, enable_tunnel: bool = True
+    symbol: str, limit: int = 3, *, enable_tunnel: bool = True
 ) -> tuple[Optional[str], list[dict[str, str]]]:
     """透過 Cloudflare Tunnel 爬取 Reddit，同時回傳情緒摘要文字與結構化貼文清單 (含 URL)。
 
@@ -80,7 +80,7 @@ async def get_reddit_details(
 
 
 async def get_reddit_context(
-    symbol: str, limit: int = 5, *, enable_tunnel: bool = True
+    symbol: str, limit: int = 3, *, enable_tunnel: bool = True
 ) -> Optional[str]:
     """透過 Cloudflare Tunnel 呼叫本地端爬取 Reddit。
 

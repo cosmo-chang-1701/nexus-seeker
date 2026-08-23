@@ -319,6 +319,7 @@ class SymbolHubView(discord.ui.View):
             ] = await llm_service.evaluate_reddit_sentiment(
                 self.symbol, safe_reddit_text
             )
+            result["reddit_text"] = safe_reddit_text
             result["reddit_posts"] = reddit_posts
 
             # Polymarket odds
