@@ -4,9 +4,9 @@
 # 確保從項目根目錄執行
 ROOT_DIR="$(git rev-parse --show-toplevel)"
 
-echo "🔍 [Docker: nexus_core] 正在執行 nexus_core Mypy 靜態型別檢查..."
+echo "🔍 [Docker: nexus_core] 正在執行 nexus_core Mypy 靜態型別檢查 (全量檔案掃描)..."
 cd "$ROOT_DIR/nexus_core"
-docker compose run --rm nexus-seeker mypy .
+docker compose run --rm nexus-seeker bash -c 'mypy $(find . -maxdepth 3 -name "*.py" ! -path "*/build/*" ! -path "*/.venv/*" ! -path "*/.*")'
 CORE_MYPY_EXIT_CODE=$?
 
 if [ $CORE_MYPY_EXIT_CODE -ne 0 ]; then
@@ -27,9 +27,9 @@ if [ $CORE_EXIT_CODE -ne 0 ]; then
 fi
 
 echo ""
-echo "🔍 [Docker: nexus_edge_scraper] 正在執行 nexus_edge_scraper Mypy 靜態型別檢查..."
+echo "🔍 [Docker: nexus_edge_scraper] 正在執行 nexus_edge_scraper Mypy 靜態型別檢查 (全量檔案掃描)..."
 cd "$ROOT_DIR/nexus_edge_scraper"
-docker compose run --rm nexus-edge-api mypy .
+docker compose run --rm nexus-edge-api bash -c 'mypy $(find . -maxdepth 3 -name "*.py" ! -path "*/build/*" ! -path "*/.venv/*" ! -path "*/.*")'
 EDGE_MYPY_EXIT_CODE=$?
 
 if [ $EDGE_MYPY_EXIT_CODE -ne 0 ]; then

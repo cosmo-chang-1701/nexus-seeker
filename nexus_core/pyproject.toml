@@ -37,10 +37,10 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["cogs*", "database*", "market_analysis*", "models*", "services*", "ui*"]
+include = ["cogs*", "database*", "market_analysis*", "models*", "services*", "ui*", "tests*"]
 
 [tool.setuptools]
-py-modules = ["bot", "bot_healthy", "config", "gather_report", "main", "market_math", "market_time", "verify_stat1"]
+py-modules = ["bot", "bot_healthy", "cli", "config", "main", "market_math", "market_time"]
 
 [tool.mypy]
 python_version = "3.12"

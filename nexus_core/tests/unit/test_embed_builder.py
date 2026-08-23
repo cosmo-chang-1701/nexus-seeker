@@ -1020,10 +1020,10 @@ def test_create_media_sentiment_embed() -> None:
 
     embed = create_media_sentiment_embed(symbol, news_text, reddit_text)
     assert embed.title == "🎭 TSLA 輿情與社群大盤掃描 (Media & Social)"
-    assert "最新新聞" in embed.fields[0].name
-    assert news_text in embed.fields[0].value
-    assert "Reddit 討論" in embed.fields[1].name
-    assert reddit_text in embed.fields[1].value
+    assert embed.fields[0].name is not None and "最新新聞" in embed.fields[0].name
+    assert embed.fields[0].value is not None and news_text in embed.fields[0].value
+    assert embed.fields[1].name is not None and "Reddit 討論" in embed.fields[1].name
+    assert embed.fields[1].value is not None and reddit_text in embed.fields[1].value
 
 
 def test_create_active_orders_embed() -> None:
