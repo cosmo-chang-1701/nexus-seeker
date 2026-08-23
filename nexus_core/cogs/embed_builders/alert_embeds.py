@@ -308,7 +308,6 @@ def create_media_sentiment_embed(
         poly_ansi_summary = re.sub(
             r"\[([^\]]+)\]\([^\)]+\)", r"\1", str(poly_summary_raw)
         ).split("\n")[0]
-        poly_ansi_summary = _truncate_with_boundary(poly_ansi_summary, 55)
         poly_status_line = f" └─ 狀態: \u001b[1;34m{poly_ansi_summary}\u001b[0m"
     else:
         poly_status_line = " └─ 狀態: \u001b[1;30m暫無預測市場數據\u001b[0m"
@@ -413,7 +412,7 @@ def create_media_sentiment_embed(
         if lines:
             embed.add_field(
                 name="🐋 Polymarket 預測事件",
-                value="\n".join(lines[:4]),
+                value="\n".join(lines[:4]) + "\n\u200b",
                 inline=False,
             )
 
@@ -424,17 +423,16 @@ def create_media_sentiment_embed(
             if isinstance(p, dict):
                 sub = p.get("subreddit", "reddit")
                 raw_title = str(p.get("title", "")).strip()
-                short_title = _truncate_with_boundary(raw_title, 65)
                 url = p.get("url", "")
                 if url:
-                    reddit_lines.append(f"• `[r/{sub}]` [{short_title}]({url})")
+                    reddit_lines.append(f"• `[r/{sub}]` [{raw_title}]({url})")
                 else:
-                    reddit_lines.append(f"• `[r/{sub}]` {short_title}")
+                    reddit_lines.append(f"• `[r/{sub}]` {raw_title}")
 
         if reddit_lines:
             embed.add_field(
                 name="🔥 Reddit 社群熱門討論",
-                value="\n".join(reddit_lines),
+                value="\n".join(reddit_lines) + "\n\u200b",
                 inline=False,
             )
     elif reddit_text:
@@ -448,14 +446,13 @@ def create_media_sentiment_embed(
             ):
                 embed.add_field(
                     name="🔥 Reddit 社群熱門討論",
-                    value=f"• {_truncate_with_boundary(reddit_str, 200)}",
+                    value=f"• {reddit_str}\n\u200b",
                     inline=False,
                 )
             else:
-                text_val = _truncate_with_boundary(reddit_str, 900)
                 embed.add_field(
                     name="🔥 Reddit 社群熱門討論",
-                    value=f"```{text_val}\n\u200b```",
+                    value=f"```{reddit_str}\n\u200b```\n\u200b",
                     inline=False,
                 )
 
@@ -466,21 +463,18 @@ def create_media_sentiment_embed(
             if isinstance(n, dict):
                 src = n.get("source") or "News"
                 headline = str(n.get("headline", "")).strip()
-                short_headline = _truncate_with_boundary(headline, 65)
                 url = n.get("url", "")
                 time_tag = n.get("time_tag", "")
                 time_suffix = f" · *{time_tag}*" if time_tag else ""
                 if url:
-                    news_lines.append(
-                        f"• `[{src}]` [{short_headline}]({url}){time_suffix}"
-                    )
+                    news_lines.append(f"• `[{src}]` [{headline}]({url}){time_suffix}")
                 else:
-                    news_lines.append(f"• `[{src}]` {short_headline}{time_suffix}")
+                    news_lines.append(f"• `[{src}]` {headline}{time_suffix}")
 
         if news_lines:
             embed.add_field(
                 name="📰 即時市場新聞與權威報導",
-                value="\n".join(news_lines),
+                value="\n".join(news_lines) + "\n\u200b",
                 inline=False,
             )
     elif news_text:
@@ -493,16 +487,16 @@ def create_media_sentiment_embed(
                 fmt_lines = []
                 for line in raw_lines[:4]:
                     clean_line = line.lstrip("▪️").lstrip("•").strip()
-                    fmt_lines.append(f"• {_truncate_with_boundary(clean_line, 75)}")
+                    fmt_lines.append(f"• {clean_line}")
                 embed.add_field(
                     name="📰 即時市場新聞與權威報導",
-                    value="\n".join(fmt_lines),
+                    value="\n".join(fmt_lines) + "\n\u200b",
                     inline=False,
                 )
             else:
                 embed.add_field(
                     name="📰 即時市場新聞與權威報導",
-                    value=f"• {_truncate_with_boundary(news_str, 200)}",
+                    value=f"• {news_str}\n\u200b",
                     inline=False,
                 )
 

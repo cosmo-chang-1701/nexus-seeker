@@ -1028,6 +1028,62 @@ def test_create_media_sentiment_embed() -> None:
     assert news_text in fields["📰 即時市場新聞與權威報導"]
 
 
+def test_create_media_sentiment_embed_untruncated_and_line_breaks() -> None:
+    """Verify that create_media_sentiment_embed does not truncate long text and adds line breaks below each block."""
+    symbol = "NVDA"
+    long_headline = "NVIDIA Announces Groundbreaking Next-Generation Quantum AI Architecture with Unprecedented Computing Efficiency Across Major Cloud Providers Worldwide"
+    long_reddit_title = "Deep Dive Analysis: Why NVIDIA's Massive Free Cash Flow Generation and Software Moat Will Outperform Consensus Estimates Over the Next Five Years"
+    long_poly_summary = "🟢 78.5% 巨鯨看多 (NVIDIA will achieve record revenue in upcoming fiscal quarter and maintain market leadership)"
+
+    news_items = [
+        {
+            "source": "Reuters",
+            "headline": long_headline,
+            "url": "https://reuters.com/nvda-news",
+            "time_tag": "10分鐘前",
+        }
+    ]
+    reddit_posts = [
+        {
+            "subreddit": "wallstreetbets",
+            "title": long_reddit_title,
+            "url": "https://reddit.com/r/wallstreetbets/nvda_post",
+        }
+    ]
+    poly_odds = f"[{long_poly_summary}](https://polymarket.com/nvda) (Yes: 78.5%)"
+
+    embed = create_media_sentiment_embed(
+        symbol,
+        news_items=news_items,
+        reddit_posts=reddit_posts,
+        polymarket_odds=poly_odds,
+        polymarket_summary=long_poly_summary,
+    )
+
+    fields = {f.name: str(f.value) for f in embed.fields}
+
+    # 1. Check ANSI panel contains full Polymarket summary without 55-char truncation
+    radar_val = fields["📊 輿情與期權共振雷達"]
+    assert "NVIDIA will achieve record revenue" in radar_val
+
+    # 2. Check Polymarket field has full text and ends with \n\u200b
+    poly_val = fields["🐋 Polymarket 預測事件"]
+    assert long_poly_summary in poly_val
+    assert poly_val.endswith("\n\u200b")
+
+    # 3. Check Reddit field has full long title without 65-char truncation and ends with \n\u200b
+    reddit_val = fields["🔥 Reddit 社群熱門討論"]
+    assert long_reddit_title in reddit_val
+    assert "…" not in reddit_val
+    assert reddit_val.endswith("\n\u200b")
+
+    # 4. Check News field has full long headline without 65-char truncation and ends with \n\u200b
+    news_val = fields["📰 即時市場新聞與權威報導"]
+    assert long_headline in news_val
+    assert "…" not in news_val
+    assert news_val.endswith("\n\u200b")
+
+
 def test_create_active_orders_embed() -> None:
     """Verify that create_active_orders_embed correctly renders active orders with premium ANSI card formatting."""
     # 1. Test empty state
