@@ -279,16 +279,75 @@ def create_reddit_scan_embed(symbol: Any, reddit_text: Any):  # type: ignore
     return embed
 
 
-def create_media_sentiment_embed(symbol: Any, news_text: Any, reddit_text: Any):  # type: ignore
+def create_media_sentiment_embed(
+    symbol: Any,
+    news_text: Any = None,
+    reddit_text: Any = None,
+    *,
+    polymarket_odds: Any = None,
+    reddit_posts: Optional[List[Dict[str, Any]]] = None,
+    reddit_sentiment_score: Optional[str] = None,
+) -> discord.Embed:
     """建構輿情與社群 (Media & Social) 掃描結果的統一 Embed"""
     embed = NexusEmbed(
         title=f"🎭 {symbol} 輿情與社群大盤掃描 (Media & Social)",
         color=discord.Color.blue(),
+        timestamp=datetime.now(timezone.utc),
     )
+
+    # 1. 📰 即時市場新聞
     add_news_field(embed, news_text)
-    add_reddit_field(embed, reddit_text)
+
+    # 2. 🐋 Polymarket 巨鯨預測勝率 (超連結清單)
+    if polymarket_odds and str(polymarket_odds).strip() != "N/A":
+        poly_items = str(polymarket_odds).strip()
+        if not poly_items.startswith("•") and not poly_items.startswith("["):
+            poly_items = f"• {poly_items}"
+        elif poly_items.startswith("["):
+            poly_items = f"• {poly_items}"
+        embed.add_field(
+            name="🐋 Polymarket 巨鯨預測勝率",
+            value=poly_items,
+            inline=False,
+        )
+
+    # 3. 🔥 Reddit 散戶情緒與熱門討論 (超連結清單)
+    if reddit_posts and isinstance(reddit_posts, list) and len(reddit_posts) > 0:
+        reddit_lines: List[str] = []
+        if reddit_sentiment_score and str(reddit_sentiment_score).strip():
+            reddit_lines.append(f"**情緒指標：** {reddit_sentiment_score}\n")
+
+        reddit_lines.append("**熱門焦點 (Top 3)：**")
+        for p in reddit_posts[:3]:
+            if isinstance(p, dict):
+                sub = p.get("subreddit", "reddit")
+                raw_title = str(p.get("title", "")).strip()
+                short_title = _truncate_with_boundary(raw_title, 60)
+                url = p.get("url", "")
+                if url:
+                    reddit_lines.append(f"• [r/{sub}: {short_title}]({url})")
+                else:
+                    reddit_lines.append(f"• `[r/{sub}]` {short_title}")
+
+        embed.add_field(
+            name="🔥 Reddit 散戶情緒與熱門焦點",
+            value="\n".join(reddit_lines),
+            inline=False,
+        )
+    elif reddit_text:
+        if reddit_sentiment_score and str(reddit_sentiment_score).strip():
+            reddit_summary = f"**情緒指標：** {reddit_sentiment_score}\n"
+            text_val = _truncate_with_boundary(str(reddit_text), 900)
+            embed.add_field(
+                name="🔥 Reddit 散戶情緒與討論",
+                value=f"{reddit_summary}```{text_val}\n\u200b```",
+                inline=False,
+            )
+        else:
+            add_reddit_field(embed, reddit_text)
+
     embed.set_footer(
-        text="Nexus Seeker 輿情中心 • 資料來源: Yahoo Finance & Reddit (WSB/Stocks/Options)"
+        text="Nexus Seeker 輿情中心 • 資料來源: Yahoo Finance, Polymarket & Reddit (WSB/Stocks/Options)"
     )
     return embed
 

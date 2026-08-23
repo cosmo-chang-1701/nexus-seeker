@@ -502,8 +502,8 @@ def test_edge_failure_graceful_degradation_and_hiding() -> None:
     assert "狀態: \x1b[1;32m同步\x1b[0m" in edge_text
 
 
-def test_polymarket_and_reddit_top_3_hyperlinks_in_embed() -> None:
-    """驗證 Polymarket 預測勝率與 Reddit 前三名熱門文章皆以超連結形式正確呈現在卡片中。"""
+def test_core_indicators_tab_only_retains_calculated_summary() -> None:
+    """驗證『核心指標』頁籤僅在 ANSI 區塊保留計算後的 Polymarket 與 Reddit 結果，不展開文章列表與超連結。"""
     mock_data: Dict[str, Any] = {
         "symbol": "NVDA",
         "price": 128.00,
@@ -526,21 +526,6 @@ def test_polymarket_and_reddit_top_3_hyperlinks_in_embed() -> None:
                 "subreddit": "wallstreetbets",
                 "url": "https://www.reddit.com/r/wallstreetbets/comments/1vvrh14/nvidia_customers/",
             },
-            {
-                "title": "SPX one month premium at zero into NVDA, Jackson Hole, jobs",
-                "subreddit": "options",
-                "url": "https://www.reddit.com/r/options/comments/1vvpvj8/spx_one_month_premium/",
-            },
-            {
-                "title": "NVDA raising prices 15% on certain chips per Bloomberg",
-                "subreddit": "stocks",
-                "url": "https://www.reddit.com/r/stocks/comments/1vvodz9/nvda_raising_prices/",
-            },
-            {
-                "title": "Fourth post that should not be in top 3",
-                "subreddit": "stocks",
-                "url": "https://www.reddit.com/r/stocks/comments/ignored/",
-            },
         ],
         "pcr": {"volume_pcr": 0.85},
         "iv_data": {
@@ -556,28 +541,84 @@ def test_polymarket_and_reddit_top_3_hyperlinks_in_embed() -> None:
 
     edge_text = str(fields["📐 情緒與邊緣偵測 (Edge Detection)"])
 
-    # 1. 驗證 Polymarket 超連結
-    assert "**🐋 Polymarket 預測勝率：**" in edge_text
+    # 1. 驗證 ANSI 區塊內保留計算結果
+    assert "巨鯨/散戶意圖映射 (Market Intention)" in edge_text
+    assert (
+        "Polymarket: \x1b[1;34mWill Nvidia hit $150 in September? (Yes: 6..."
+        in edge_text
+    )
+    assert "Reddit: \x1b[1;32m🚀 樂觀 (Bullish)\x1b[0m" in edge_text
+
+    # 2. 驗證超連結列表已自『核心指標』頁籤移除
+    assert "**🐋 Polymarket 預測勝率：**" not in edge_text
+    assert "**📰 Reddit 熱門討論" not in edge_text
+    assert "https://www.reddit.com" not in edge_text
+
+
+def test_media_sentiment_tab_renders_hyperlinks() -> None:
+    """驗證『輿情社群』頁籤完整渲染 Polymarket 預測勝率與 Reddit 前三名熱門文章超連結。"""
+    from cogs.embed_builders import create_media_sentiment_embed
+
+    posts = [
+        {
+            "title": "NVIDIA customers notified about AI-related price hikes above 15%",
+            "subreddit": "wallstreetbets",
+            "url": "https://www.reddit.com/r/wallstreetbets/comments/1vvrh14/nvidia_customers/",
+        },
+        {
+            "title": "SPX one month premium at zero into NVDA, Jackson Hole, jobs",
+            "subreddit": "options",
+            "url": "https://www.reddit.com/r/options/comments/1vvpvj8/spx_one_month_premium/",
+        },
+        {
+            "title": "NVDA raising prices 15% on certain chips per Bloomberg",
+            "subreddit": "stocks",
+            "url": "https://www.reddit.com/r/stocks/comments/1vvodz9/nvda_raising_prices/",
+        },
+        {
+            "title": "Fourth post that should not be in top 3",
+            "subreddit": "stocks",
+            "url": "https://www.reddit.com/r/stocks/comments/ignored/",
+        },
+    ]
+    poly_odds = "[Will Nvidia hit $150 in September?](https://polymarket.com/event/nvda-150) (Yes: 68.0%)"
+
+    embed = create_media_sentiment_embed(
+        "NVDA",
+        news_text="[08/23] NVIDIA AI revenue soars according to reports",
+        polymarket_odds=poly_odds,
+        reddit_posts=posts,
+        reddit_sentiment_score="🚀 樂觀 (Bullish)",
+    )
+    fields = {f.name: str(f.value) for f in embed.fields}
+
+    # 1. 驗證新聞欄位
+    assert "📰 最新新聞" in fields
+    assert "NVIDIA AI revenue soars" in fields["📰 最新新聞"]
+
+    # 2. 驗證 Polymarket 超連結
+    assert "🐋 Polymarket 巨鯨預測勝率" in fields
+    poly_text = fields["🐋 Polymarket 巨鯨預測勝率"]
     assert (
         "[Will Nvidia hit $150 in September?](https://polymarket.com/event/nvda-150)"
-        in edge_text
+        in poly_text
     )
-    assert "(Yes: 68.0%)" in edge_text
+    assert "(Yes: 68.0%)" in poly_text
 
-    # 2. 驗證 Reddit 前三名熱門文章超連結
-    assert "**📰 Reddit 熱門討論 (Top 3)：**" in edge_text
+    # 3. 驗證 Reddit 前三名熱門文章超連結
+    assert "🔥 Reddit 散戶情緒與熱門焦點" in fields
+    reddit_field = fields["🔥 Reddit 散戶情緒與熱門焦點"]
+    assert "**情緒指標：** 🚀 樂觀 (Bullish)" in reddit_field
     assert (
-        "[r/wallstreetbets: NVIDIA customers notified about AI-related price hik...](https://www.reddit.com/r/wallstreetbets/comments/1vvrh14/nvidia_customers/)"
-        in edge_text
+        "[r/wallstreetbets: NVIDIA customers notified about AI-related price hikes ab...](https://www.reddit.com/r/wallstreetbets/comments/1vvrh14/nvidia_customers/)"
+        in reddit_field
     )
     assert (
-        "[r/options: SPX one month premium at zero into NVDA, Jackson Hol...](https://www.reddit.com/r/options/comments/1vvpvj8/spx_one_month_premium/)"
-        in edge_text
+        "[r/options: SPX one month premium at zero into NVDA, Jackson Hole, jobs](https://www.reddit.com/r/options/comments/1vvpvj8/spx_one_month_premium/)"
+        in reddit_field
     )
     assert (
         "[r/stocks: NVDA raising prices 15% on certain chips per Bloomberg](https://www.reddit.com/r/stocks/comments/1vvodz9/nvda_raising_prices/)"
-        in edge_text
+        in reddit_field
     )
-
-    # 3. 驗證第 4 篇貼文未被列出 (嚴守 Top 3)
-    assert "Fourth post" not in edge_text
+    assert "Fourth post" not in reddit_field

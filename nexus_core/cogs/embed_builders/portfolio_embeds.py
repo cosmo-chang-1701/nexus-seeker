@@ -685,51 +685,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         ]
     )
 
-    ansi_block = "\n".join(edge_lines)
-    markdown_parts: List[str] = []
-
-    # 1. 🐋 Polymarket 預測勝率 (超連結清單)
-    if poly_odds and str(poly_odds).strip() != "N/A":
-        # 確保開頭有 bullet 標記
-        poly_items = str(poly_odds).strip()
-        if not poly_items.startswith("•") and not poly_items.startswith("["):
-            poly_items = f"• {poly_items}"
-        elif poly_items.startswith("["):
-            poly_items = f"• {poly_items}"
-        markdown_parts.append(f"**🐋 Polymarket 預測勝率：**\n{poly_items}")
-
-    # 2. 📰 Reddit 前三名熱門文章 (超連結清單)
-    reddit_posts = data.get("reddit_posts", [])
-    if reddit_posts and isinstance(reddit_posts, list):
-        reddit_links: List[str] = []
-        for p in reddit_posts[:3]:
-            if isinstance(p, dict):
-                sub = p.get("subreddit", "reddit")
-                raw_title = str(p.get("title", "")).strip()
-                short_title = _truncate_with_boundary(raw_title, 55)
-                url = p.get("url", "")
-                if url:
-                    reddit_links.append(f"• [r/{sub}: {short_title}]({url})")
-                else:
-                    reddit_links.append(f"• `[r/{sub}]` {short_title}")
-        if reddit_links:
-            markdown_parts.append(
-                "**📰 Reddit 熱門討論 (Top 3)：**\n" + "\n".join(reddit_links)
-            )
-
-    if markdown_parts:
-        edge_field_value = ansi_block + "\n" + "\n".join(markdown_parts)
-    else:
-        edge_field_value = ansi_block
-
-    if len(edge_field_value) > 1020:
-        edge_field_value = _truncate_with_boundary(edge_field_value, 1020)
-
-    embed.add_field(
-        name="📐 情緒與邊緣偵測 (Edge Detection)",
-        value=edge_field_value,
-        inline=False,
-    )
+    _add_ansi_field_safely(embed, "📐 情緒與邊緣偵測 (Edge Detection)", edge_lines)
 
     # 3. 📊 隱含波動率與預期區間 (IV Context)
     raw_em_context = data.get("expected_move_context")

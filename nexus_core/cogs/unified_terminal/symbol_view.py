@@ -88,9 +88,26 @@ class SymbolHubView(discord.ui.View):
         embed = None
         try:
             news_task = news_service.fetch_recent_news(self.symbol)
-            reddit_task = reddit_service.get_reddit_context(self.symbol)
-            news_text, reddit_text = await asyncio.gather(news_task, reddit_task)
-            embed = create_media_sentiment_embed(self.symbol, news_text, reddit_text)
+            reddit_posts = self.base_data.get("reddit_posts")
+            reddit_text = self.base_data.get("reddit_text")
+            reddit_score = self.base_data.get("reddit_sentiment_score")
+            poly_odds = self.base_data.get("polymarket_odds")
+
+            if not reddit_text and not reddit_posts:
+                news_text, (reddit_text, reddit_posts) = await asyncio.gather(
+                    news_task, reddit_service.get_reddit_details(self.symbol)
+                )
+            else:
+                news_text = await news_task
+
+            embed = create_media_sentiment_embed(
+                self.symbol,
+                news_text=news_text,
+                reddit_text=reddit_text,
+                polymarket_odds=poly_odds,
+                reddit_posts=reddit_posts,
+                reddit_sentiment_score=reddit_score,
+            )
         except Exception as e:
             await interaction.followup.send(
                 embed=create_error_embed(f"獲取輿情社群失敗: {e}"),
