@@ -135,9 +135,9 @@ The terminal radar card is built inside `cogs/embed_builders/` using `build_rada
 為防範當自選標的 (Watchlist) 或持倉 (Holdings) 數量過大時，因 Embed Description 超過 Discord 的 4096 字元上限而導致 `400 Bad Request (error code: 50035): Invalid Form Body` 系統錯誤，系統實施以下長度分段與分頁原則：
 - **最大分段間距 (Chunk Size)**：批次掃描結果一律以每頁最多 **10 個標的**進行分組封裝。
 - **返回多個 Embed 列表**：`build_radar_scan_embed()` 的返回型別升級為 `List[discord.Embed]`。
-- **動態分頁標題**：若分頁數量大於 1，系統會在每個 Embed 的 Title 後方自動標註頁碼，格式為 `(第 X/Y 頁)`（例如：`(第 1/2 頁)`）。
+- **動態分頁標題與 Footer**：若分頁數量大於 1，系統會在每個 Embed 的 Title 後方自動標註頁碼，格式為 `(第 X/Y 頁)`（例如：`(第 1/2 頁)`），並將頁碼與總項目數寫入 Footer（`頁次: X/Y ｜ 📊 總項目: N`）。
 - **呼叫端分流處理**：
-  - **Discord 互動指令 (如 `/x`)**：對分頁後的 Embed 列表進行迭代，逐頁調用 `interaction.followup.send(embed=emb, view=msg_view)` 作為獨立的 Ephemeral 訊息發送，並將互動選單 (`BatchScanView`) 僅附掛在最後一個分頁。這能徹底繞過單一訊息中所有 Embed 累計字數不得超過 6000 字元的 Discord 限制。
+  - **Discord 互動指令 (如 `/x` 單訊息就地翻頁)**：多頁掃描結果採用 `BatchScanPaginatedView`（`cogs/unified_terminal/batch_scan_view.py`），透過 `interaction.response.edit_message()` 於單一 Ephemeral 訊息中進行 `◀ 上一頁` / `下一頁 ▶` 就地翻頁，徹底避免逐頁發送 followup 訊息觸發 Discord 40094 限制。該 View 同時掛載 `⚡ 批次分析警示標的` (`BatchScanWarningButton`，以 `Semaphore(3)` 併行分析並透過 `chunk_embeds` 依字數分段安全發送) 與 `🔄 返回控制面板`（切回 `UnifiedRadarView`）。
   - **背景排程與 DM 隊列 (如 Watchlist 30分鐘心跳)**：呼叫端會自動對 Embed 列表進行迭代，逐頁調用 `queue_dm` 加入發送佇列，確保每一頁皆能穩定投遞且不觸發 Discord API 的字數限制。
 
 ---
@@ -305,7 +305,32 @@ To prevent keyword fragmentation across prediction markets, retail sentiment scr
 - **Boolean OR Query Generator (`build_reddit_query`)**: Formats ticker and aliases into precise Boolean search expressions (e.g. `("NVDA" OR "$NVDA" OR "NVIDIA")`).
 - **Edge API Integration**: Passes `custom_query` to `/api/v1/scrape/reddit/{symbol}`, ensuring Reddit RSS search matches actual company discussions rather than noisy single-word stems (e.g. searching "Super" for `SMCI`).
 
-### 4. Interactive Commands & Unified Terminal Integration
+### 4. Volume-Weighted Bullish Probability (VWBP) 演算法 (`cogs/unified_terminal/utils.py`)
+為量化多個預測市場對單一美股標的的總體共識，系統實作了**成交量加權看多勝率 (Volume-Weighted Bullish Probability, VWBP)**：
+- **事件方向性標準化 (Directional Normalization)**：
+  - 解析市場問題文本，若偵測為看跌事件（如包含 `drop below`, `fall below`, `crash`, `bearish`, `fail`），則自動將 `Yes` 機率轉換為看多勝率：$P_{bullish} = 1.0 - P_{yes}$。
+  - 看漲或目標達成事件則維持 $P_{bullish} = P_{yes}$。
+- **成交量加權公式**：
+  $$\text{VWBP} = \frac{\sum_{i=1}^{n} (P_{bullish, i} \times \text{Volume}_i)}{\sum_{i=1}^{n} \text{Volume}_i}$$
+- **標籤與視覺渲染**：
+  - $\text{VWBP} \ge 55.0\%$：標註為 `🟢 XX.X% 巨鯨看多 (N檔加權 · 池量 $X.XXM)`
+  - $\text{VWBP} \le 45.0\%$：標註為 `🔴 XX.X% 巨鯨偏空 (N檔加權 · 池量 $X.XXM)`
+  - $45.0\% < \text{VWBP} < 55.0\%$：標註為 `⚖️ XX.X% 巨鯨中性 (N檔加權 · 池量 $X.XXM)`
+
+### 5. 雙頁籤輿情社群終端與共振雷達 (`SymbolHubView` & `create_media_sentiment_embed`)
+個股分析面板 (`/x <symbol>` 與 `SymbolHubView`) 實施 **1-to-1 資料同步之雙頁籤架構**：
+- **`🏠 核心指標` (Core Tab)**：
+  - `create_tactical_symbol_embed()` 僅在 `📐 情緒與邊緣偵測 (Edge Detection)` 的 ANSI 區塊中保留 Polymarket 與 Reddit 的計算結果摘要（如 `Polymarket: 🟢 75.0% 巨鯨看多` 與 `Reddit: 🚀 樂觀 (Bullish)`）。
+  - 徹底移除文章列表與超連結，保持核心量化數據（Greeks, Skew, PutWall, GEX）的清晰整潔。
+- **`🎭 輿情社群` (Media Tab)**：
+  - `create_media_sentiment_embed()` 提供完整的情報下鑽視圖，包含：
+    1. **`📊 輿情與期權共振雷達`**：ANSI 控制台即時交叉驗證巨鯨定價 (Polymarket)、散戶風向 (Reddit) 與期權微觀結構 (Greeks & Skew)，輸出共振狀態判定（如「同步」、「背離 (散戶樂觀 vs 專業避險)」、「背離 (現價暴跌但波動率極低)」）。
+    2. **`🐋 Polymarket 預測事件`**：列出匹配之預測市場事件標題、勝率與資金池超連結。
+    3. **`🔥 Reddit 社群熱門討論`**：展示前 3 名精確匹配之 Reddit 熱門貼文（帶有 `[r/wallstreetbets]`, `[r/stocks]`, `[r/options]` 等看板前綴與直接超連結）。
+    4. **`📰 即時市場新聞與權威報導`**：結構化展示權威新聞媒體（Bloomberg, Reuters, Yahoo Finance 等）、標題超連結與時間戳（如 `25分鐘前`）。
+- **1-to-1 資料集一致性**：核心頁籤與輿情頁籤共享相同的底層抓取與計算資料集，確保使用者切換頁籤時數據完全對齊且無延遲。
+
+### 6. Interactive Commands & Unified Terminal Integration
 - **`/poly_list [query]`**: Supports ticker/keyword prediction market queries with volume tags (`💵 $12.5M`, `💵 $54.2k`) and paginated embeds. When results exceed `chunk_size=8`, a `PolymarketPaginatedView` (◀ page indicator ▶) is attached to a **single ephemeral message**, enabling in-place `edit_message()` page navigation instead of sending multiple separate messages.
 - **`/market` → 🐋 預測市場 按鈕 (`PulseHubView`)**: Multi-page results are dispatched as a single `followup.send()` with `PolymarketPaginatedView`, preserving the original `PulseHubView` buttons (📊 📅 🔥) on the parent message. `_reset_loading()` includes an `embed=None` guard to prevent accidentally clearing the original embed when the Polymarket result is sent as a separate message.
 - **`/x` Terminal Odds Lookup**: `find_matching_polymarket_odds` evaluates multi-alias matches with fallback to online `get_symbol_markets` search.
@@ -561,7 +586,7 @@ When documenting notification behavior, treat the DM queue as **persistent and r
 
 ---
 
-## Event Calendar Architecture
+## Event Calendar Architecture & Translation Engine
 
 `services/calendar_service.py` is the shared calendar gateway.
 
@@ -572,6 +597,16 @@ Current design:
 - watchlist heartbeat, calendar views, pre-market alerting, and analyst flows all share the same SQLite-backed cache path
 
 Do **not** add raw market-calendar API calls directly to feature code when calendar helpers already exist.
+
+### Macro Economic Calendar Translation and Normalization Engine (`market_analysis/macro_calendar_translator.py`)
+為徹底解決 TradingView 原始總經事件英文名稱繁雜、縮寫不一與聯準會官員演講解析困難的問題，系統建置了全域統一的中文化與正規化引擎：
+1. **標準 150+ 總經事件中英對照庫 (`_RAW_MACRO_EVENT_TRANSLATIONS`)**：
+   - 涵蓋通膨物價（CPI, Core CPI, PCE, PPI 年增/月增率）、就業市場（Nonfarm Payrolls, Initial Jobless Claims, Unemployment Rate, JOLTs）、GDP 與經濟成長、房地產市場（Existing/New Home Sales, Building Permits）、國庫券與公債拍賣（4-Week ~ 30-Year Treasury Auction）、ISM / S&P PMI 採購經理人指數、密西根大學消費者信心指數等。
+   - 支援不分大小寫與多種常見別名變體映射，確保事件名稱 100% 符合台灣與華語金融市場慣用翻譯。
+2. **聯準會官員動態演講解析 (`FED_OFFICIALS_MAP` & `translate_macro_event`)**：
+   - 內建 30+ 位現任與歷任聯準會官員名冊（包括 Powell 鮑爾, Waller 華勒, Bowman 鮑曼, Williams 威廉斯, Brainard 布蘭納德, Yellen 葉倫等）。
+   - 透過 Regex 自動擷取「Fed [Name] Speaks / Speech / Testifies」模式，動態組合為標準化中文，例如：`"Fed Waller Speech"` ➔ `"聯準會華勒發表演說"`。
+3. **優雅降級與保底機制**：若遭遇未在庫內之罕見事件，系統會保留原始英文名稱並自動清理冗餘後綴，確保永不拋出異常。
 
 ---
 
@@ -699,11 +734,13 @@ The trigger condition is **15-minute real-body candle close** relative to a targ
 - **Closed-candle detection**: yfinance's 15m bar index is the bar's *start* time. A bar is only "closed" once `bar_start + 15min <= now (ET)`; otherwise the engine falls back to the second-to-last bar so a still-forming candle's live price never triggers a false alert. This is distinct from `market_analysis/gamma_cliff_confirmation.py::is_gamma_cliff_confirmed`, which despite its "15分鐘" naming actually operates on 1-minute bars, not real 15m candles.
 - **Volume surge**: compares the confirmed bar's volume against the mean of the preceding 20 bars (`_VOLUME_LOOKBACK_BARS`), mirroring the 20-bar lookback already used by `opportunity_cost.py`'s entry-confirmation logic (though that path uses a 1.2x multiplier vs. this feature's user-configurable default of 1.5x).
 
-### 2. Threshold Comparison (`evaluate_watch_trigger`)
+### 2. Threshold Comparison & Pure Price Alert Support (`evaluate_watch_trigger`)
 Deliberately separated from bar-fetching so multiple users watching the same symbol share a single yfinance call per scan cycle:
 - `direction = "above"` → `Close >= target_price` (breakout).
 - `direction = "below"` → `Close <= target_price` (breakdown).
-- Volume-surge condition is direction-agnostic — both breakout and breakdown require confirming volume, otherwise treated as noise.
+- **雙模支援 (Dual-Mode Watch)**:
+  - **價量突破模式 (`volume_multiplier > 0`, 預設 1.5x)**: 要求當根 15 分鐘收盤價達標且成交量大於前 20 根均量的倍數，防止假突破/雜訊。
+  - **純價格警報模式 (`volume_multiplier = 0`)**: 若將 `volume_multiplier` 設為 `0`，量能檢查條件將無條件通過 (`volume_condition = True`)，轉為單純的實體 K 線價格觸及/破位警報。
 
 ### 3. Per-User Watch Config (`database/price_volume_watch.py`, migration `v063`)
 Uses a dedicated SQLite table (`price_volume_watches`, PK `(user_id, symbol)`) rather than `kv_cache`, because the scheduler needs a cross-user, cross-symbol batch query (`get_all_watches()`) that a single-key KV store can't efficiently support. `upsert_watch()` enforces a `_MAX_WATCHES_PER_USER = 15` cap (VPS memory/API-call protection) that only applies to *new* symbols — updating an existing watch's price/direction/multiplier never counts against the cap.
@@ -714,7 +751,7 @@ Uses a dedicated SQLite table (`price_volume_watches`, PK `(user_id, symbol)`) r
 - **KV Cache Anti-Spam Deduplication**: `price_volume_alert_{user_id}_{symbol}_{YYYYMMDD}` — one alert per user, per symbol, per day (same pattern as WTI's daily dedup keys).
 
 ### 5. Interactive Commands & `/notif_settings`
-- `/price_alert_set <symbol> <target_price> <direction> [volume_multiplier=1.5]`: upserts a watch (parameterized command, not a modal, since all fields are simple scalars).
+- `/price_alert_set <symbol> <target_price> <direction> [volume_multiplier=1.5]`: upserts a watch (parameterized command, not a modal, since all fields are simple scalars; 可設 `volume_multiplier: 0` 開啟純價格警報).
 - `/price_alert_list`: lists the caller's active watches.
 - `/price_alert_remove <symbol>`: removes one watch.
 - `/notif_settings`: governed by canonical channel `alpha_price_volume_watch` under the **🎯 Alpha 策略與情報** module.
@@ -746,6 +783,7 @@ Uses a dedicated SQLite table (`price_volume_watches`, PK `(user_id, symbol)`) r
 - `nexus_core/database/migrations/v047_remediate_missing_structures.py` — migration remediating/adding economic calendar columns consensus_value and fedwatch_probability
 - `nexus_core/database/migrations/v048_add_escape_window_settings.py` — migration adding escape window configuration columns to user settings
 - `nexus_core/database/migrations/v062_add_fundamental_scan_state.py` — migration registering the fundamental_scan_state table, the dedup cursor (per-symbol last analyzed accession_number) used by the automated daily SEC filing scanner
+- `nexus_core/market_analysis/macro_calendar_translator.py` — Macro calendar 150+ translation dictionary & dynamic Fed speech parsing engine
 - `nexus_core/market_analysis/wti_analysis.py` — WTI crude oil technicals, energy correlation, and event analysis engine
 - `nexus_core/market_analysis/intraday_pipeline.py` — watchlist evaluation, option-plan logic, intraday engine helpers
 - `nexus_core/market_analysis/index_microstructure.py` — market regime determination (SHORT_GAMMA_CRITICAL) using VIX, VIX3M, and zero-gamma line GEX
@@ -759,7 +797,7 @@ Uses a dedicated SQLite table (`price_volume_watches`, PK `(user_id, symbol)`) r
 - `nexus_core/services/llm_service.py` — structured LLM outputs and memory-safe degradation
 - `nexus_core/services/trading_service.py` — scan / report / validation data orchestration
 - `nexus_core/services/telemetry_pricing_engine.py` — dynamic telemetry pricing calculation covering Max Pain, EM, Skew, IV Spikes, and psychological round numbers
-- `nexus_core/services/polymarket_service.py` — Polymarket whale tracking and AI summary service
+- `nexus_core/services/polymarket_service.py` — Polymarket whale tracking, VWBP aggregation, and AI summary service
 - `nexus_core/services/order_telemetry_service.py` — Order telemetry scanning service
 - `nexus_core/database/notifications.py` — custom user notification preferences database operations
 - `nexus_core/database/virtual_trading.py` — Database interface for virtual trades (VTR)
@@ -770,6 +808,7 @@ Uses a dedicated SQLite table (`price_volume_watches`, PK `(user_id, symbol)`) r
 - `nexus_core/database/migrations/v039_add_notification_toggles.py` — migration registering the user_notification_settings table in SQLite
 - `nexus_core/tests/unit/test_wti_alert.py` — unit tests for WTI crude oil price alert system, technicals, and embed rendering
 - `nexus_core/tests/unit/test_fundamental_filing_monitor.py` — unit tests for the automated daily SEC filing scanner (dedup cursor, is_broken dispatch gating, per-user notification toggle, multi-holder symbol dedup)
+- `nexus_core/tests/unit/test_edge_detection_sentiment.py` — unit tests for Edge Detection, Reddit sentiment classification, VWBP, and dual-tab layout
 - `nexus_core/tests/unit/test_intraday_pipeline.py` — heartbeat and phase-B gating tests
 - `nexus_core/tests/unit/test_embed_builder.py` — embed contract tests
 - `nexus_core/tests/unit/test_output_centralization.py` — embed-centralization enforcement
@@ -797,18 +836,19 @@ Uses a dedicated SQLite table (`price_volume_watches`, PK `(user_id, symbol)`) r
 ### Memory / VPS safety
 
 - prefer `BoundedCache` for recurring hot data
-- respect the 85% RAM memory gate for non-core LLM work
-- keep features safe for 1GB RAM deployment
+- strictly gate background tasks and LLM workflows with `is_memory_safe()` (85% RAM memory gate)
+- keep all features safe for 1GB RAM deployment
 
 ### Type safety
 
 - prefer explicit Pydantic models / aliases over loose dicts
 - keep literal types consistent with model fields
 - avoid `Any` unless truly unavoidable at integration boundaries
+- **Strict Annotations for Empty Collections**: Always provide explicit type annotations when initializing empty collections (e.g. `_my_set: set[str] = set()`, `_my_list: list[str] = []`, `_my_dict: dict[str, Any] = {}`).
 - **Union & Nullability Safety**: Always perform explicit check-guards (e.g. `if obj is not None:`) before accessing properties on optional/nullable objects (like `interaction.message` or `self.view` on Discord items) to avoid Mypy `union-attr` check failures.
 - **Dynamic Property Reflection**: Use safe dynamic helpers `getattr(obj, "attr", default)` or `setattr(obj, "attr", val)` when passing or querying dynamic custom states across UI components (e.g. tracking pre-selected states in views before triggering modals).
 - **Mypy Exclusion Configuration**: Stale build directories (`build/`, `dist/`) must be kept clean and explicitly ignored in `[tool.mypy]` `exclude` configuration under `pyproject.toml` to prevent build-pipeline duplicate scans.
-- **型別自我檢測 (Pre-commit Type Check)**：Mypy 已開啟嚴格模式（Strict Mode）。在提交程式碼前，開發人員應在包含完整依賴的 Docker 容器中手動跑一次全域型別檢查（在 `nexus_core` 目錄下執行 `docker compose run --rm nexus-seeker python -m mypy --config-file pyproject.toml .`），以確保所有第三方套件（如 `discord.py`）的型別解析正確無誤，避免型別錯誤進入遠端倉庫。
+- **型別自我檢測 (Pre-commit Type Check)**：Mypy 已開啟嚴格模式（Strict Mode），並遞迴檢查所有單元與整合測試模組。在提交程式碼前，開發人員應在包含完整依賴的 Docker 容器中手動跑一次全域型別檢查（在 `nexus_core` 目錄下執行 `docker compose run --rm nexus-seeker python -m mypy --config-file pyproject.toml .`），以確保所有第三方套件（如 `discord.py`）的型別解析正確無誤，避免型別錯誤進入遠端倉庫。
 
 ### Security
 
@@ -860,3 +900,4 @@ When updating docs in this repository:
 3. reflect the current field-based embed format
 4. mention the persistent DM queue when discussing notifications
 5. keep README user-oriented and AGENTS contributor-oriented
+6. **pure documentation updates** (e.g., modifying only `AGENTS.md`, `README.md`, or `.md` files) **do not require running test suites or containerized testing**

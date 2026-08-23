@@ -1013,17 +1013,19 @@ def test_create_sentiment_scan_embed_premarket() -> None:
 
 
 def test_create_media_sentiment_embed() -> None:
-    """Verify that create_media_sentiment_embed renders institutional news and reddit consensus correctly."""
+    """Verify that create_media_sentiment_embed renders institutional news, resonance radar, and reddit consensus correctly."""
     symbol = "TSLA"
     news_text = "Tesla stock spikes on earnings beat"
     reddit_text = "To the moon! Bullish sentiment on TSLA options"
 
     embed = create_media_sentiment_embed(symbol, news_text, reddit_text)
     assert embed.title == "🎭 TSLA 輿情與社群大盤掃描 (Media & Social)"
-    assert embed.fields[0].name is not None and "最新新聞" in embed.fields[0].name
-    assert embed.fields[0].value is not None and news_text in embed.fields[0].value
-    assert embed.fields[1].name is not None and "Reddit 討論" in embed.fields[1].name
-    assert embed.fields[1].value is not None and reddit_text in embed.fields[1].value
+    fields = {f.name: str(f.value) for f in embed.fields}
+    assert "📊 輿情與期權共振雷達" in fields
+    assert "🔥 Reddit 社群熱門討論" in fields
+    assert reddit_text in fields["🔥 Reddit 社群熱門討論"]
+    assert "📰 即時市場新聞與權威報導" in fields
+    assert news_text in fields["📰 即時市場新聞與權威報導"]
 
 
 def test_create_active_orders_embed() -> None:

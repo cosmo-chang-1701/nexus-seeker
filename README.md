@@ -8,24 +8,28 @@ Nexus Seeker 是一個 **Discord-first 的多租戶選擇權風控與交易營�
 
 > 核心版本（nexus_core）：**v1.12.53** (請參考最新 Release)
 
-
 ---
 
 ## ✨ 核心特色 (Key Features)
 
 - **高效能非阻塞背景排程與快取共享 (High-Performance Background Scheduling & Cache-Sharing)**：針對低內存 VPS 全面重構背景任務管線。自選標的心跳 Pass 2、11 大產業板塊輪動與 15 分鐘價量監測全面採用 `Semaphore(3)` 併行化加速；跨模組雷達快取共享 (`_latest_radar_data_cache`) 與 `:05 / :35` 錯峰排程使持倉監控 100% 命中記憶體快取；多使用者市場掃描實施 $O(U \times S) \to O(S)$ 標的層級去重快取；盤前預熱流水線提前至 08:45 ET，搭配 GEX SingleFlight 防重疊查詢與 SWR 降級，杜絕開盤壅塞與 API 穿透。
+- **量化雷達終端與單訊息翻頁架構 (Quantitative Radar & Batch Scan Paging)**：`/x` 批次掃描全面升級為高 Alpha 精簡 Markdown 報表，直擊 `G/P-Wall(±)` 動態極性、`IV 策略` 負 Gamma 熔斷、⚠️ 異常標的視覺連動、`Skw%`、`SQZ向量`、`Neg-GEX`、`STO 鎖死`、`EM Z-Score` 與 `Top UOA`。多頁掃描結果採用 `BatchScanPaginatedView` 於單一 Ephemeral 訊息中進行 `◀ 上一頁` / `下一頁 ▶` 就地翻頁，徹底告別洗版與 Discord 40094 限制，並支援 `⚡ 批次分析警示標的` 併行分析與 `🔄 返回控制面板`。
 - **自動化戰場心跳 (Watchlist Heartbeat)**：盤中每半小時主動推送自選標的之技術與期權快照，預設完整整合 UOA 巨鯨異動大單、暗池 (Dark Pool) 磁吸點位（已整合 5% 髒數據過濾）、100% 確定性量化 Skew 解析與動態買賣定價指引。
 - **4 大戰術維度通知中樞與快捷情境 (Tactical Notifications & 1-Click Presets)**：`/notif_settings` 全面收斂為 4 大戰術維度（定時戰報、盤中遙測、持倉防禦、Alpha 策略）與 13 大核心通知頻道（含 `alpha_wti_oil` 與全新 SEC 財報自動掃描 `defense_fundamental_thesis`），並提供「🛡️ 戰備全開」、「🎯 精準交易」、「🔕 盤中靜音」三大 1-Click Preset 情境模式，徹底告別零碎雜訊。
+- **Polymarket 巨鯨成交量加權勝率 (VWBP) 與雙頁籤輿情社群雷達 (Dual-Tab Sentiment & Resonance Radar)**：
+  - 搭載 `StockAliasMatrix` 4 層別名解析、Gamma API 即時搜尋與**成交量加權看多勝率 (VWBP)** 演算法（自動標準化看跌事件為看多勝率，計算資金池加權總體共識）。
+  - 個股終端 (`SymbolHubView`) 實施 **1-to-1 資料同步雙頁籤架構**：`🏠 核心指標` (Core Tab) 在 ANSI 區塊保留純粹計算結果，杜絕連結雜訊；`🎭 輿情社群` (Media Tab) 完整展開 `📊 輿情與期權共振雷達`、Polymarket 預測事件超連結、Top 3 Reddit 熱門討論貼文（附看板標籤）與結構化權威新聞。
+- **總經日曆 150+ 項目精確中文化與聯準會官員動態解析引擎 (Macro Calendar Translation Engine)**：
+  - 內建標準 150+ 總經事件中英字典 (`_RAW_MACRO_EVENT_TRANSLATIONS`)，全面覆蓋通膨 (CPI/PCE)、就業 (非農/失業率)、GDP、國債拍賣與 PMI 指數。
+  - 整合動態 Regex 解析引擎與 30+ 位聯準會官員名冊 (`FED_OFFICIALS_MAP`)，自動將「Fed Waller Speech」等事件精準轉化為「聯準會華勒發表演說」。
 - **WTI 原油價格警報與大宗商品情報 (WTI Crude Oil Alert & Commodity Intelligence)**：支援全天候 30 分鐘原油期貨 (`CL=F`) 輪詢，具備「絕對價格上下限」與「30 分鐘波動 %」雙軌觸發機制。嚴格遵循 100% Field-Based + ANSI 代碼塊排版規範，即時整合技術指標 (RSI, MA20/50/200, ATR)、能源關聯股衝擊 (`XLE`, `XOM`, `CVX`, `OXY`, `SLB`, `USO` 自動標註持倉與自選)、地緣政治事件 (OPEC+, EIA, 制裁) 與投資組合風險權重壓縮。支援 `/notif_settings` 與 `/wti_config` 互動式 Modal 配置，具備 00:00–06:00 ET 深夜靜默保護與每日 KV Cache 防重複去重。
+- **個股 15 分鐘價量突破警報 (Price-Volume Breakout Alert)**：支援每 15 分鐘輪詢確認實體 K 線收盤價與量能突破，支援純價格警報模式 (`volume_multiplier=0`) 與價量共振模式，每日 KV Cache 自動防重複去重。
 - **盤後綜合風險與 AI 策略報告 (Post-Market Intelligence)**：每日收盤後主動推送盤後結算報告，全面支援**現貨持倉 (`HOLDING`) 與期權 (`TRADE`) 混合結算**。搭載 Target Center 2.0 樹狀 ANSI 儀表板、財務生存跑道 (Financial Runway)、對沖績效 Brinson 歸因 (OPTIMAL 狀態標註)、板塊焦點矩陣 (Top Inflows vs Outflows) 與 100% 現金空狀態行動引導。
-- **戰場情境轉折警報與進階雷達 (Market Scenario & Advanced Radar)**：整合獨立事件驅動引擎（6 階 GEX 決策矩陣，新增「巨鯨護航共振」）與進階雷達過濾器 (UOA Barrier, Gravity Filter, Divergence Gate)。全新量化雷達支援 `G/P-Wall(±)`（完整展示頂部 Call Wall 與底牆 Put Wall，支援現價跌破負 Gamma 動態極性連動與 N/A 容錯退路）、`IV 策略` 負 Gamma 踩踏區風控熔斷（強制阻斷賣方開倉並標記 `🔴賣方禁售`）、標的偏離度 `⚠️` 強視覺連動、`Skw%`（真實期權偏斜數值與歷史分位點）、`SQZ向量`（動能數值、方向與擠壓計時器，連動 UOA Barrier 硬封頂降級）、`Neg-GEX`、`STO 鎖死`（Short-to-Open 關鍵履約價鎖死）、`EM Z-Score`、`Top UOA` 單一最強巨鯨異動大單、暗池 $\ge \$5\text{M}$ 大宗水泥牆買盤警示，並具備 **$PutWall - 1.5 \times ATR_{14}$ 防洗盤絕對防守位**、15 分鐘實體 K 線收盤離場鐵律與多維度灰階戰術決策樹（多重正 Gamma 護航網支撐現貨續抱），精準防範二元停損與盲目接刀。
-- **動態轉倉與防洗盤風控 (Dynamic Rollover & Anti-Washout Defense)**：搭載全新「防洗盤動態停損引擎」與「GEX 做市商意圖映射引擎」，動態鎖定支撐錨定牆並給予 1.5x 15m ATR 緩衝；現貨 (SPOT) 必須經 15 分鐘實體 K 線跌破才確認清倉（高 IVR 啟動收盤價防守），選擇權合約 (OPTIONS) 則於高 IVR 啟動降槓桿平倉。支援透過 `/verify_thesis` 手動觸發，並新增**互動式 SEC 財報選擇介面**，讓使用者自由選擇近期 (10-K, 10-Q, 8-K) 進行分析，且分析框架依申報類型客製化（10-K 側重全年趨勢、10-Q 嚴格排除單季雜訊、8-K 依觸發 Item 判讀重要性）。Edge Scraper 現具備 **SEC 財報結構化區塊擷取** 能力（含 8-K 專屬的 Item 事件擷取），若基本面破滅，將無條件攔截量化買入訊號，強制執行清算與轉倉。**每日自動化財報掃描**：獨立排程每日 08:00 ET 自動掃描使用者持倉標的是否有新的 SEC 申報，偵測到護城河假設破滅時才主動私訊警報（其餘結果靜默寫入快取以避免雜訊），可透過 `/notif_settings` 的 `defense_fundamental_thesis` 頻道獨立開關。
-- **Polymarket 巨鯨意圖圖譜與美股預測搜尋 (Polymarket Intelligence 2.0)**：搭載全域抽象之 `StockAliasMatrix` 與 4 層自動補齊架構（靜態庫 ➔ 記憶體快取 ➔ SQLite 持久化 ➔ Finnhub/yfinance 動態推導），徹底解決冷門標的別名維護負擔。精準重構黑白名單過濾閘門，消除正牌美股誤殺，並整合 Gamma API 即時在線搜尋。支援 `/poly_list [query]` 代碼即時檢索、成交量標籤與 `/x` 量化雷達雙向別名撮合。多頁結果採用 `PolymarketPaginatedView`（◀ 頁碼 ▶）單訊息就地翻頁，取代舊有多訊息洗版模式。
-- **Reddit 散戶輿情與社群優勢 (Reddit Sentiment Boolean Search)**：全面升級為精確 Boolean OR 搜尋字串（如 `("NVDA" OR "$NVDA" OR "NVIDIA")`），精準鎖定標的品牌與代碼討論串，徹底杜絕單字切分產生的語意雜訊。
+- **戰場情境轉折警報與進階雷達 (Market Scenario & Advanced Radar)**：整合獨立事件驅動引擎（6 階 GEX 決策矩陣，新增「巨鯨護航共振」）與進階雷達過濾器 (UOA Barrier, Gravity Filter, Divergence Gate)。支援 $PutWall - 1.5 \times ATR_{14}$ 防洗盤絕對防守位、15 分鐘實體 K 線收盤離場鐵律與多維度灰階戰術決策樹。
+- **動態轉倉與防洗盤風控 (Dynamic Rollover & Anti-Washout Defense)**：搭載全新「防洗盤動態停損引擎」與「GEX 做市商意圖映射引擎」，動態鎖定支撐錨定牆並給予 1.5x 15m ATR 緩衝；現貨 (SPOT) 必須經 15 分鐘實體 K 線跌破才確認清倉，選擇權合約 (OPTIONS) 則於高 IVR 啟動降槓桿平倉。支援 `/verify_thesis` 互動式 SEC 財報選擇介面與每日 08:00 ET 自動化財報掃描。
 - **總體經濟與事件日曆防護**：自動抓取 CME FedWatch 利率機率、FRED 關鍵總經數據與財報日曆（已擴展至 14 日前瞻預警並深度整併至 `/market` 總經風險情報中心與盤前報告），結合避險邏輯進行動態逃頂窗口前置與 4 小時自動快取維護。
 - **大盤微觀結構解析**：計算零 Gamma 線 (Gamma Flip Line) 與 GEX 分佈，在市場進入高壓 $VIX > 20$ 時動態縮小合約建倉口數（Kelly Criterion 調節）與拉大網格距離。
 - **互動式 UI 介面**：所有交易參數（資本、風險上限、虛擬交易室、Polymarket 巨鯨門檻等）與推送偏好均透過 Discord 內建的 Buttons / Select Menu / Modal 進行管理。
-
 
 > 💡 **進階量化策略與運作邏輯**：關於 TDP 估值三擊、暗池防禦共振、動態均價 Covered Call 解鎖等深度架構細節，請參閱專案內的 [`AGENTS.md`](AGENTS.md) 說明文件。
 
@@ -77,8 +81,8 @@ nexus-seeker/
 ├── nexus_core/              # 核心 Discord Bot 服務
 │   ├── bot.py               # Bot 進入點與健康監控
 │   ├── cogs/                # Discord 交互指令、背景排程與 UI 元件
-│   ├── market_analysis/     # 核心量化引擎 (Scan Pipeline, Gamma Squeeze)
-│   ├── services/            # 外部 API 封裝 (Calendar, LLM 等)
+│   ├── market_analysis/     # 核心量化引擎 (Scan Pipeline, Gamma Squeeze, Translator)
+│   ├── services/            # 外部 API 封裝 (Calendar, LLM, Polymarket 等)
 │   ├── database/            # SQLite Schema 與 Migrations
 │   ├── risk_engine/         # SDDM 戰術路由與風險控制 (NRO)
 │   ├── formatters/          # Embed 格式化與輸出模組
@@ -160,14 +164,20 @@ docker compose up -d --build
 
 - **`/settings`**：帳戶全域參數配置中心（資本、風險上限設定、虛擬交易室、Polymarket 巨鯨門檻與 AI 分析開關等）。
 - **`/notif_settings`**：戰術型通知管理中控台，支援以 4 大戰術維度（定時戰報、盤中遙測、持倉防禦、Alpha 策略）自訂 13 項核心通知頻道（含 WTI 原油價格警報與 SEC 財報自動掃描警報），並提供 3 大 1-Click Preset 模式（🛡️ 戰備全開、🎯 精準交易、🔕 盤中靜音）。
+- **`/x [scan_type]`**：批次量化雷達終端，支援統一雷達面板進行多層次過濾，並採用 `BatchScanPaginatedView` 支援單一訊息 `◀ 上一頁` / `下一頁 ▶` 就地翻頁、`⚡ 批次分析警示標的` 併行分析與 `🔄 返回控制面板`。
 - **`/wti_config`**：🛢️ WTI 原油價格警報閾值設定彈窗，隨時配置上限價格、下限價格與 30 分鐘波動百分比（支援留空無限制）。
-- **`/x`**：批次量化雷達掃描，支援統一雷達面板進行多層次過濾 (現已升級為高 Alpha 精簡 Markdown 報表，直擊 G/P-Wall(±) 動態極性與 N/A 容錯、IV 策略負 Gamma 熔斷、⚠️ 異常標的視覺連動、Skw%、SQZ向量、Neg-GEX、STO 鎖死、EM Z-Score 與 Top UOA)。
+- **`/price_alert_set`**：配置個股 15 分鐘 K 線突破警報，支援目標價、方向與成交量倍數（可設 `volume_multiplier: 0` 開啟純價格警報）。
+- **`/price_alert_list` / `/price_alert_remove`**：檢視與移除活躍的個股 15 分鐘價量突破警報。
+- **`/poly_list [query]`**：顯示或搜尋 Polymarket 預測市場活躍清單與成交量加權勝率。
+- **`/quote [symbol]`**：獲取標的即時報價快照 (Finnhub)。
+- **`/scan_news [symbol]` / `/scan_reddit [symbol]`**：掃描特定標的之即時新聞與 Reddit 散戶情緒。
 - **`/dash`**：交易員主控板，檢視持倉、備用流動性與極限跑道天數。
 - **`/stress_test`**：委託單壓力測試與現金赤字警報。
 - **`/list_orders` / `/order_panel`**：檢視活躍委託單與新增委託單。
 - **`/cc_recovery`**：根據現有持倉自動過濾與顯示最佳的 OTM Covered Call 合約 (收租解套策略)。
 - **`/calendar`**：總經與自選股財報事件時間軸日曆，支援 TTE 倒數與發布日程查詢。
 - **`/market`**：全局宏觀風控情報中心，深度整合 SPX、VIX、US10Y、零 Gamma 翻轉線、FedWatch 利率定價、RRP 逆回購、Fed 資產負債表與利率逃頂窗口防禦。
+- **`/verify_thesis [symbol]`**：手動觸發特定標的之 SEC 財報護城河假設驗證 (支援互動式 10-K/10-Q/8-K 下拉選單)。
 - **`/sys_health`**：`(Hidden)` 系統健康診斷面板，檢視主節點與邊緣節點的即時硬體資源 (RAM, CPU, RSS, Swap) 與快取狀態。
 - **`/force_macro_update`**：`(Admin 專用)` 強制更新大盤 GEX 與 FedWatch 數據快取。若邊緣爬蟲當下抓取失敗，會自動改用最近一次成功抓取的快取數據，並在回報訊息中標記 `⚠️ [使用快取資料]` 提醒非即時數據。
 
@@ -191,7 +201,7 @@ docker compose run --rm nexus-seeker python -m mypy --config-file pyproject.toml
 docker compose run --rm nexus-seeker python -m pytest tests
 
 # 執行特定功能測試
-docker compose run --rm nexus-seeker python -m pytest tests/unit/test_intraday_pipeline.py
+docker compose run --rm nexus-seeker python -m pytest tests/unit/test_edge_detection_sentiment.py
 ```
 
 ---

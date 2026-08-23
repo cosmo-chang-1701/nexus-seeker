@@ -313,6 +313,38 @@ def add_reddit_field(embed: Any, reddit_text: Any):  # type: ignore
         embed.add_field(name="📰 Reddit 討論", value=reddit_context, inline=False)
 
 
+def _add_ansi_field_safely(embed: Any, name: str, lines: list) -> None:
+    """將包含 ANSI 碼的字串陣列安全地加入 embed，若超過長度限制則自動切分為多個 Field。"""
+    current_chunk = ["```ansi"]
+    current_length = 8  # len("```ansi\n")
+    part = 1
+
+    for line in lines:
+        if line == "```ansi" or line == "```":
+            continue
+
+        line_len = len(line) + 1
+
+        if current_length + line_len > 1018:
+            current_chunk.append("```")
+            field_name = name if part == 1 else f"{name} (續 {part})"
+            embed.add_field(
+                name=field_name, value="\n".join(current_chunk), inline=False
+            )
+
+            part += 1
+            current_chunk = ["```ansi", line]
+            current_length = 8 + line_len
+        else:
+            current_chunk.append(line)
+            current_length += line_len
+
+    if len(current_chunk) > 1:
+        current_chunk.append("```")
+        field_name = name if part == 1 else f"{name} (續 {part})"
+        embed.add_field(name=field_name, value="\n".join(current_chunk), inline=False)
+
+
 # ============================================================================
 # Positions table formatter (used by portfolio embeds)
 # ============================================================================

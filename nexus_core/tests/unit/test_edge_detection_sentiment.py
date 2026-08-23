@@ -557,7 +557,7 @@ def test_core_indicators_tab_only_retains_calculated_summary() -> None:
 
 
 def test_media_sentiment_tab_renders_hyperlinks() -> None:
-    """驗證『輿情社群』頁籤完整渲染 Polymarket 預測勝率與 Reddit 前三名熱門文章超連結。"""
+    """驗證『輿情社群』頁籤完整渲染共振雷達、Polymarket 預測事件、Reddit 熱門文章與結構化新聞超連結。"""
     from cogs.embed_builders import create_media_sentiment_embed
 
     posts = [
@@ -582,47 +582,74 @@ def test_media_sentiment_tab_renders_hyperlinks() -> None:
             "url": "https://www.reddit.com/r/stocks/comments/ignored/",
         },
     ]
+    news_items = [
+        {
+            "source": "Bloomberg",
+            "headline": "NVIDIA AI revenue soars according to quarterly reports",
+            "url": "https://finance.yahoo.com/news/nvidia-ai-revenue",
+            "time_tag": "25分鐘前",
+        }
+    ]
     poly_odds = "[Will Nvidia hit $150 in September?](https://polymarket.com/event/nvda-150) (Yes: 68.0%)"
 
     embed = create_media_sentiment_embed(
         "NVDA",
-        news_text="[08/23] NVIDIA AI revenue soars according to reports",
+        news_items=news_items,
         polymarket_odds=poly_odds,
         reddit_posts=posts,
         reddit_sentiment_score="🚀 樂觀 (Bullish)",
+        skew_val=7.82,
+        skew_percentile=28.5,
+        pcr_val=0.65,
     )
     fields = {f.name: str(f.value) for f in embed.fields}
 
-    # 1. 驗證新聞欄位
-    assert "📰 最新新聞" in fields
-    assert "NVIDIA AI revenue soars" in fields["📰 最新新聞"]
+    # 1. 驗證頂部 ANSI 輿情與期權共振雷達
+    assert "📊 輿情與期權共振雷達" in fields
+    radar_text = fields["📊 輿情與期權共振雷達"]
+    assert "巨鯨定價 (Polymarket)" in radar_text
+    assert "散戶風向 (Reddit)" in radar_text
+    assert "🚀 樂觀 (Bullish)" in radar_text
+    assert "期權微觀結構 (Greeks & Skew)" in radar_text
+    assert "Skew 值: " in radar_text
+    assert "輿情籌碼共振 (Resonance Check)" in radar_text
 
-    # 2. 驗證 Polymarket 超連結
-    assert "🐋 Polymarket 巨鯨預測勝率" in fields
-    poly_text = fields["🐋 Polymarket 巨鯨預測勝率"]
+    # 2. 驗證 Polymarket 預測事件超連結
+    assert "🐋 Polymarket 預測事件" in fields
+    poly_text = fields["🐋 Polymarket 預測事件"]
     assert (
         "[Will Nvidia hit $150 in September?](https://polymarket.com/event/nvda-150)"
         in poly_text
     )
     assert "(Yes: 68.0%)" in poly_text
 
-    # 3. 驗證 Reddit 前三名熱門文章超連結
-    assert "🔥 Reddit 散戶情緒與熱門焦點" in fields
-    reddit_field = fields["🔥 Reddit 散戶情緒與熱門焦點"]
-    assert "**情緒指標：** 🚀 樂觀 (Bullish)" in reddit_field
+    # 3. 驗證 Reddit 前三名熱門討論超連結 (純文章清單，無情緒指標重複)
+    assert "🔥 Reddit 社群熱門討論" in fields
+    reddit_field = fields["🔥 Reddit 社群熱門討論"]
+    assert "**情緒指標：**" not in reddit_field
     assert (
-        "[r/wallstreetbets: NVIDIA customers notified about AI-related price hikes ab...](https://www.reddit.com/r/wallstreetbets/comments/1vvrh14/nvidia_customers/)"
+        "`[r/wallstreetbets]` [NVIDIA customers notified about AI-related price hikes above 15%](https://www.reddit.com/r/wallstreetbets/comments/1vvrh14/nvidia_customers/)"
         in reddit_field
     )
     assert (
-        "[r/options: SPX one month premium at zero into NVDA, Jackson Hole, jobs](https://www.reddit.com/r/options/comments/1vvpvj8/spx_one_month_premium/)"
+        "`[r/options]` [SPX one month premium at zero into NVDA, Jackson Hole, jobs](https://www.reddit.com/r/options/comments/1vvpvj8/spx_one_month_premium/)"
         in reddit_field
     )
     assert (
-        "[r/stocks: NVDA raising prices 15% on certain chips per Bloomberg](https://www.reddit.com/r/stocks/comments/1vvodz9/nvda_raising_prices/)"
+        "`[r/stocks]` [NVDA raising prices 15% on certain chips per Bloomberg](https://www.reddit.com/r/stocks/comments/1vvodz9/nvda_raising_prices/)"
         in reddit_field
     )
     assert "Fourth post" not in reddit_field
+
+    # 4. 驗證新聞結構化超連結與來源時間戳
+    assert "📰 即時市場新聞與權威報導" in fields
+    news_field = fields["📰 即時市場新聞與權威報導"]
+    assert "`[Bloomberg]`" in news_field
+    assert (
+        "[NVIDIA AI revenue soars according to quarterly reports](https://finance.yahoo.com/news/nvidia-ai-revenue)"
+        in news_field
+    )
+    assert "25分鐘前" in news_field
 
 
 @pytest.mark.asyncio

@@ -32,12 +32,19 @@ async def test_symbol_hub_interactions(mock_interaction: Any, mock_bot: Any):  #
 
     # 測試輿情社群按鈕的狀態轉換 (應使用 edit_original_response)
     with patch(
-        "services.news_service.fetch_recent_news", new_callable=AsyncMock
+        "services.news_service.fetch_recent_news_structured", new_callable=AsyncMock
     ) as mock_news, patch(
-        "services.reddit_service.get_reddit_context", new_callable=AsyncMock
+        "services.reddit_service.get_reddit_details", new_callable=AsyncMock
     ) as mock_reddit:
-        mock_news.return_value = "Mock News"
-        mock_reddit.return_value = "Mock Reddit"
+        mock_news.return_value = [
+            {
+                "source": "Bloomberg",
+                "headline": "Mock News",
+                "url": "https://example.com",
+                "time_tag": "剛剛",
+            }
+        ]
+        mock_reddit.return_value = ("Mock Reddit", [])
 
         # 執行 Callback
         await view.btn_media.callback(mock_interaction)

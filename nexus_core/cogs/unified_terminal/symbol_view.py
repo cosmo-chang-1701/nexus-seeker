@@ -87,26 +87,46 @@ class SymbolHubView(discord.ui.View):
         await self._set_loading(interaction)
         embed = None
         try:
-            news_task = news_service.fetch_recent_news(self.symbol)
+            news_task = news_service.fetch_recent_news_structured(self.symbol)
             reddit_posts = self.base_data.get("reddit_posts")
             reddit_text = self.base_data.get("reddit_text")
             reddit_score = self.base_data.get("reddit_sentiment_score")
             poly_odds = self.base_data.get("polymarket_odds")
+            poly_summary = self.base_data.get("polymarket_summary")
+            skew_val = (
+                _safe_float(self.base_data.get("skew"))
+                if self.base_data.get("skew") is not None
+                else None
+            )
+            skew_percentile = (
+                _safe_float(self.base_data.get("skew_percentile"))
+                if self.base_data.get("skew_percentile") is not None
+                else None
+            )
+
+            raw_pcr = self.base_data.get("pcr")
+            pcr_dict = raw_pcr if isinstance(raw_pcr, dict) else {}
+            pcr_raw_val = pcr_dict.get("volume_pcr", pcr_dict.get("pcr"))
+            pcr_val = _safe_float(pcr_raw_val) if pcr_raw_val is not None else None
 
             if not reddit_text and not reddit_posts:
-                news_text, (reddit_text, reddit_posts) = await asyncio.gather(
+                news_items, (reddit_text, reddit_posts) = await asyncio.gather(
                     news_task, reddit_service.get_reddit_details(self.symbol)
                 )
             else:
-                news_text = await news_task
+                news_items = await news_task
 
             embed = create_media_sentiment_embed(
                 self.symbol,
-                news_text=news_text,
+                news_items=news_items,
                 reddit_text=reddit_text,
                 polymarket_odds=poly_odds,
+                polymarket_summary=poly_summary,
                 reddit_posts=reddit_posts,
                 reddit_sentiment_score=reddit_score,
+                skew_val=skew_val,
+                skew_percentile=skew_percentile,
+                pcr_val=pcr_val,
             )
         except Exception as e:
             await interaction.followup.send(
