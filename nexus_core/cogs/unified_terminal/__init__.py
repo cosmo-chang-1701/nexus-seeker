@@ -5,7 +5,11 @@ from .portfolio_view import PortfolioHubView
 from .pulse_view import PulseHubView
 from .batch_scan_view import BatchScanPaginatedView, BatchScanWarningButton
 from .polymarket_views import PolymarketPaginatedView
-from .utils import get_macro_overview_data, find_matching_polymarket_odds
+from .utils import (
+    get_macro_overview_data,
+    find_matching_polymarket_odds,
+    calculate_polymarket_weighted_odds,
+)
 from cogs.embed_builder import (
     create_error_embed,
     build_radar_scan_embed,
@@ -25,6 +29,7 @@ __all__ = [
     "PolymarketPaginatedView",
     "get_macro_overview_data",
     "find_matching_polymarket_odds",
+    "calculate_polymarket_weighted_odds",
     "create_error_embed",
     "build_radar_scan_embed",
     "create_strategic_dash_embed",

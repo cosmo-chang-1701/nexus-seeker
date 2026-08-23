@@ -518,7 +518,8 @@ def test_core_indicators_tab_only_retains_calculated_summary() -> None:
         },
         "skew": 4.5,
         "skew_percentile": 55.0,
-        "polymarket_odds": "[Will Nvidia hit $150 in September?](https://polymarket.com/event/nvda-150) (Yes: 68.0%)",
+        "polymarket_summary": "🟢 68.0% 巨鯨看多 (1檔加權 · 池量 $1.20M)",
+        "polymarket_odds": "[Will Nvidia hit $150 in September?](https://polymarket.com/event/nvda-150) (Yes: 68.0% · 池量 $1.20M)",
         "reddit_sentiment_score": "🚀 樂觀 (Bullish)",
         "reddit_posts": [
             {
@@ -544,7 +545,7 @@ def test_core_indicators_tab_only_retains_calculated_summary() -> None:
     # 1. 驗證 ANSI 區塊內保留計算結果
     assert "巨鯨/散戶意圖映射 (Market Intention)" in edge_text
     assert (
-        "Polymarket: \x1b[1;34mWill Nvidia hit $150 in September? (Yes: 6..."
+        "Polymarket: \x1b[1;34m🟢 68.0% 巨鯨看多 (1檔加權 · 池量 $1.20M)\x1b[0m"
         in edge_text
     )
     assert "Reddit: \x1b[1;32m🚀 樂觀 (Bullish)\x1b[0m" in edge_text
@@ -622,3 +623,60 @@ def test_media_sentiment_tab_renders_hyperlinks() -> None:
         in reddit_field
     )
     assert "Fourth post" not in reddit_field
+
+
+@pytest.mark.asyncio
+async def test_polymarket_volume_weighted_bullish_probability() -> None:
+    """驗證 Polymarket 方案一：成交量加權看多勝率 (VWBP) 計算與方向性標準化。"""
+    from cogs.unified_terminal.utils import calculate_polymarket_weighted_odds
+
+    markets = [
+        {
+            "question": "Will Nvidia hit $150 by September?",
+            "tokens": [{"outcome": "Yes", "price": 0.70}],
+            "volumeNum": 1_000_000.0,
+        },
+        {
+            "question": "Will Nvidia Blackwell shipments beat targets?",
+            "tokens": [{"outcome": "Yes", "price": 0.80}],
+            "volumeNum": 500_000.0,
+        },
+        {
+            # 看跌事件: Yes 20% 相當於看多 80% (1.0 - 0.20)
+            "question": "Will Nvidia drop below $100 in 2026?",
+            "tokens": [{"outcome": "Yes", "price": 0.20}],
+            "volumeNum": 500_000.0,
+        },
+    ]
+
+    # Weighted Bullish = (0.70 * 1M + 0.80 * 0.5M + 0.80 * 0.5M) / 2.0M = 1.5M / 2.0M = 75.0%
+    summary = await calculate_polymarket_weighted_odds("NVDA", markets)
+    assert "🟢 75.0% 巨鯨看多" in summary
+    assert "3檔加權" in summary
+    assert "$2.00M" in summary
+
+
+@pytest.mark.asyncio
+async def test_polymarket_volume_weighted_bearish_probability() -> None:
+    """驗證 Polymarket 看空行情下的成交量加權勝率與 Emoji 判定。"""
+    from cogs.unified_terminal.utils import calculate_polymarket_weighted_odds
+
+    markets = [
+        {
+            # 看跌事件: Yes 80% 相當於看多 20%
+            "question": "Will Tesla drop below $150 in October?",
+            "tokens": [{"outcome": "Yes", "price": 0.80}],
+            "volumeNum": 1_000_000.0,
+        },
+        {
+            "question": "Will Tesla hit $300 this year?",
+            "tokens": [{"outcome": "Yes", "price": 0.20}],
+            "volumeNum": 1_000_000.0,
+        },
+    ]
+
+    # Weighted Bullish = (0.20 * 1M + 0.20 * 1M) / 2.0M = 20.0%
+    summary = await calculate_polymarket_weighted_odds("TSLA", markets)
+    assert "🔴 20.0% 巨鯨偏空" in summary
+    assert "2檔加權" in summary
+    assert "$2.00M" in summary

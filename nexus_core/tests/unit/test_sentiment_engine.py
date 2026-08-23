@@ -790,7 +790,7 @@ async def test_polymarket_fuzzy_matching_and_odds_format(mock_get_company: Any):
         "PLTR", poly_markets_price_target
     )
     assert odds_price_target == (
-        "[Hit (HIGH) $192 Week of August 17-21?](https://polymarket.com) (Yes: 4.5%)\n"
+        "[Hit (HIGH) $192 Week of August 17-21?](https://polymarket.com) (Yes: 4.5% · 池量 $100)\n"
         " • [Hit (LOW) $120 in August?](https://polymarket.com) (Yes: 3.1%)"
     )
     assert "Palantir" not in odds_price_target

@@ -21,7 +21,11 @@ from cogs.embed_builder import (
     create_tactical_symbol_embed,
 )
 
-from .utils import get_macro_overview_data, find_matching_polymarket_odds
+from .utils import (
+    get_macro_overview_data,
+    find_matching_polymarket_odds,
+    calculate_polymarket_weighted_odds,
+)
 from .batch_scan_view import BatchScanPaginatedView
 from .symbol_view import SymbolHubView
 from .portfolio_view import PortfolioHubView
@@ -674,8 +678,13 @@ class UnifiedTerminalCog(commands.Cog):
             poly_task = find_matching_polymarket_odds(
                 symbol, poly_markets, bot=self.bot
             )
+            poly_summary_task = calculate_polymarket_weighted_odds(
+                symbol, poly_markets, bot=self.bot
+            )
 
-            result_math, poly_odds = await asyncio.gather(math_task, poly_task)
+            result_math, poly_odds, poly_summary = await asyncio.gather(
+                math_task, poly_task, poly_summary_task
+            )
             result = (
                 result_math
                 if isinstance(result_math, dict) and result_math
@@ -742,6 +751,7 @@ class UnifiedTerminalCog(commands.Cog):
 
             result["reddit_posts"] = data.get("reddit_posts", [])
             result["polymarket_odds"] = poly_odds
+            result["polymarket_summary"] = poly_summary
 
             safe_vp = vp_data if isinstance(vp_data, dict) else {}
             safe_dp = dp_data if isinstance(dp_data, dict) else {}

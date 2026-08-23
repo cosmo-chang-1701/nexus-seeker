@@ -655,7 +655,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         )
 
     # 動態決定是否顯示巨鯨/散戶意圖映射
-    has_market_intention = (poly_odds != "N/A") or (
+    poly_summary_raw = data.get("polymarket_summary") or poly_odds
+    has_market_intention = (str(poly_summary_raw).strip() != "N/A") or (
         "中性" not in reddit_score
         and "抓取失敗" not in reddit_score
         and "無法" not in reddit_score
@@ -663,11 +664,13 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
     if has_market_intention:
         poly_ansi_summary = (
-            re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", str(poly_odds)).split("\n")[0]
-            if poly_odds
+            re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", str(poly_summary_raw)).split("\n")[
+                0
+            ]
+            if poly_summary_raw
             else "N/A"
         )
-        poly_ansi_summary = _truncate_with_boundary(poly_ansi_summary, 45)
+        poly_ansi_summary = _truncate_with_boundary(poly_ansi_summary, 50)
         edge_lines.extend(
             [
                 " 巨鯨/散戶意圖映射 (Market Intention)",

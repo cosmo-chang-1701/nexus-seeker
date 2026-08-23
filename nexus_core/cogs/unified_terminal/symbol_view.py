@@ -16,7 +16,7 @@ from cogs.embed_builder import (
     create_tactical_symbol_embed,
     create_tactical_hedge_embed,
 )
-from .utils import find_matching_polymarket_odds
+from .utils import find_matching_polymarket_odds, calculate_polymarket_weighted_odds
 
 logger = logging.getLogger(__name__)
 
@@ -322,11 +322,18 @@ class SymbolHubView(discord.ui.View):
             result["reddit_text"] = safe_reddit_text
             result["reddit_posts"] = reddit_posts
 
-            # Polymarket odds
-            poly_odds = await find_matching_polymarket_odds(
+            # Polymarket odds & summary
+            poly_odds_task = find_matching_polymarket_odds(
                 self.symbol, poly_markets, bot=self.bot
             )
+            poly_summary_task = calculate_polymarket_weighted_odds(
+                self.symbol, poly_markets, bot=self.bot
+            )
+            poly_odds, poly_summary = await asyncio.gather(
+                poly_odds_task, poly_summary_task
+            )
             result["polymarket_odds"] = poly_odds
+            result["polymarket_summary"] = poly_summary
 
             result["catalysts"] = catalysts
             safe_vp = vp_data if isinstance(vp_data, dict) else {}

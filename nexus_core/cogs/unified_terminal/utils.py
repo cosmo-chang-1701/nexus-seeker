@@ -242,9 +242,40 @@ def _smart_truncate_question(text: str, max_len: int = 75) -> str:
     return text[:cutoff] + "…"
 
 
-async def find_matching_polymarket_odds(
+def _format_pool_volume(vol: float) -> str:
+    """Format trading volume into human readable string."""
+    if vol >= 1_000_000:
+        return f"${vol / 1_000_000:.2f}M"
+    elif vol >= 1_000:
+        return f"${vol / 1_000:.0f}k"
+    elif vol > 0:
+        return f"${vol:.0f}"
+    return "$0"
+
+
+def _is_bearish_market_question(question: str) -> bool:
+    """Determine if a prediction market question represents a bearish event."""
+    q_lower = question.lower()
+    bearish_keywords = [
+        "drop",
+        "fall",
+        "down",
+        "below",
+        "under",
+        "crash",
+        "miss",
+        "loss",
+        "decline",
+        "bear",
+        "recession",
+        "bankruptcy",
+    ]
+    return any(k in q_lower for k in bearish_keywords)
+
+
+async def _get_matched_poly_markets(
     symbol: str, poly_markets: list, bot: Any = None
-) -> str:
+) -> list[dict[str, Any]]:
     from market_analysis.stock_alias_matrix import StockAliasMatrix
 
     symbol_upper = symbol.upper().strip()
@@ -290,6 +321,86 @@ async def find_matching_polymarket_odds(
                     f"Failed to fetch live polymarket odds for {symbol_upper}: {e}"
                 )
 
+    return matched_markets
+
+
+async def calculate_polymarket_weighted_odds(
+    symbol: str, poly_markets: list, bot: Any = None
+) -> str:
+    """計算標的在 Polymarket 上所有相關合約之成交量加權綜合看多勝率 (Volume-Weighted Bullish Probability)"""
+    matched_markets = await _get_matched_poly_markets(symbol, poly_markets, bot=bot)
+    if not matched_markets:
+        return "N/A"
+
+    total_weighted_bullish = 0.0
+    total_weight = 0.0
+    actual_total_vol = 0.0
+    valid_contracts = 0
+
+    for m in matched_markets:
+        question = m.get("question", "")
+        tokens = m.get("tokens", [])
+        if not tokens:
+            tokens = m.get("odds_distribution", [])
+        if not tokens:
+            continue
+
+        yes_token = None
+        for t in tokens:
+            if str(t.get("outcome", "")).strip().lower() == "yes":
+                yes_token = t
+                break
+        target_token = yes_token if yes_token else tokens[0]
+        price_val = target_token.get("price")
+        if price_val is None:
+            price_val = target_token.get("odds", 0)
+
+        try:
+            price_float = float(price_val)
+        except Exception:
+            continue
+
+        # 方向性標準化：看跌事件 Yes 視為看空 (1 - P(Yes))
+        if _is_bearish_market_question(question):
+            bullish_prob = 1.0 - price_float
+        else:
+            bullish_prob = price_float
+
+        vol = float(m.get("volumeNum") or m.get("volume") or 0.0)
+        # 基底名義流動性權重（防止 0 成交量合約被完全忽略）
+        w = max(vol, 1000.0)
+
+        total_weighted_bullish += bullish_prob * w
+        total_weight += w
+        actual_total_vol += vol
+        valid_contracts += 1
+
+    if valid_contracts == 0 or total_weight <= 0.0:
+        return "N/A"
+
+    agg_prob = total_weighted_bullish / total_weight
+    pct = agg_prob * 100.0
+    vol_tag = _format_pool_volume(actual_total_vol)
+
+    if pct >= 55.0:
+        tag = f"🟢 {pct:.1f}% 巨鯨看多"
+    elif pct <= 45.0:
+        tag = f"🔴 {pct:.1f}% 巨鯨偏空"
+    else:
+        tag = f"⚖️ {pct:.1f}% 中性分歧"
+
+    if actual_total_vol > 0:
+        return f"{tag} ({valid_contracts}檔加權 · 池量 {vol_tag})"
+    else:
+        return f"{tag} ({valid_contracts}檔加權)"
+
+
+async def find_matching_polymarket_odds(
+    symbol: str, poly_markets: list, bot: Any = None
+) -> str:
+    symbol_upper = symbol.upper().strip()
+    matched_markets = await _get_matched_poly_markets(symbol, poly_markets, bot=bot)
+
     results = []
     for m in matched_markets:
         question = m.get("question", "")
@@ -316,7 +427,7 @@ async def find_matching_polymarket_odds(
             except Exception:
                 val_str = f"{outcome}: {price_val}"
 
-            # Format to a compact string with markdown hyperlink
+            # Format to a compact string with markdown hyperlink and contract volume
             stripped_q = _strip_redundant_symbol_prefix(question, symbol_upper)
             short_q = _smart_truncate_question(stripped_q)
             event_slug = m.get("event_slug") or m.get("slug")
@@ -326,7 +437,8 @@ async def find_matching_polymarket_odds(
                 else "https://polymarket.com"
             )
             vol = float(m.get("volumeNum") or m.get("volume") or 0.0)
-            results.append((f"[{short_q}]({market_url}) ({val_str})", vol))
+            vol_str = f" · 池量 {_format_pool_volume(vol)}" if vol > 0 else ""
+            results.append((f"[{short_q}]({market_url}) ({val_str}{vol_str})", vol))
 
     if results:
         # Sort by volume descending and take top 3
