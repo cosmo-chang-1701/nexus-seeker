@@ -141,7 +141,9 @@ def _add_ansi_field_safely(embed: discord.Embed, name: str, lines: list) -> None
             current_chunk.append("```")
             field_name = name if part == 1 else f"{name} (續 {part})"
             embed.add_field(
-                name=field_name, value="\n".join(current_chunk), inline=False
+                name=field_name,
+                value="\n".join(current_chunk) + "\n\u200b",
+                inline=False,
             )
 
             part += 1
@@ -154,7 +156,11 @@ def _add_ansi_field_safely(embed: discord.Embed, name: str, lines: list) -> None
     if len(current_chunk) > 1:
         current_chunk.append("```")
         field_name = name if part == 1 else f"{name} (續 {part})"
-        embed.add_field(name=field_name, value="\n".join(current_chunk), inline=False)
+        embed.add_field(
+            name=field_name,
+            value="\n".join(current_chunk) + "\n\u200b",
+            inline=False,
+        )
 
 
 def create_holdings_embed(

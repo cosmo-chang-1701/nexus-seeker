@@ -1062,9 +1062,10 @@ def test_create_media_sentiment_embed_untruncated_and_line_breaks() -> None:
 
     fields = {f.name: str(f.value) for f in embed.fields}
 
-    # 1. Check ANSI panel contains full Polymarket summary without 55-char truncation
+    # 1. Check ANSI panel contains full Polymarket summary without 55-char truncation and ends with \n\u200b
     radar_val = fields["📊 輿情與期權共振雷達"]
     assert "NVIDIA will achieve record revenue" in radar_val
+    assert radar_val.endswith("\n\u200b")
 
     # 2. Check Polymarket field has full text and ends with \n\u200b
     poly_val = fields["🐋 Polymarket 預測事件"]
