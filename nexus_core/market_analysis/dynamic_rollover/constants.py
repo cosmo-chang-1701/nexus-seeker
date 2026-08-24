@@ -43,6 +43,9 @@ _DEFAULT_MAX_ALLOCATION_PCT: float = (
     0.3  # 未設定 max_allocation_pct 時的預設衛星部位上限
 )
 
+# --- 邏輯 (5)：核心資金部署 (evaluate_core_deployment) 具名常數 ---
+_CORE_EXCESS_MIN_TRADE_PCT: float = 0.005  # CORE 超額配置低於此幅度 (0.5%) 視為誤差雜訊，不觸發部署轉倉，避免 dust trade
+
 # --- 進場訊號四重嚴格過濾鐵律 (_confirm_entry_signal) 具名常數 ---
 _ENTRY_VOLUME_LOOKBACK_BARS: int = 20  # 條件一：15m 成交量基準所需回看根數 (不含確認根)
 _ENTRY_VOLUME_SURGE_MULTIPLIER: float = 1.2  # 條件一：「放量」門檻，須達回看均量的倍數

@@ -441,7 +441,27 @@ class PortfolioMonitorCog(commands.Cog):
                         candidate_radar,
                     )
 
-                    # 🚀 邏輯 (4): 槓桿與保證金防禦 — 排除已被 Scenario 2/3 標記過的
+                    # 🚀 邏輯 (5): 核心資金部署 — 對超過使用者明確設定
+                    # target_allocation_pct 的 CORE 持倉，將超額部位部署至
+                    # 邏輯 (2) 已找到並確認突破的候選標的，重用同一份
+                    # candidate_symbol / candidate_radar，不重複掃描 watchlist。
+                    already_flagged = {
+                        ins["symbol"]
+                        for ins in rebalance_instructions
+                        if ins.get("action") != "HOLD"
+                    }
+                    rebalance_instructions += (
+                        await self.rollover_engine.evaluate_core_deployment(
+                            u_id,
+                            portfolio_assets,
+                            already_flagged,
+                            total_val,
+                            candidate_symbol,
+                            candidate_radar,
+                        )
+                    )
+
+                    # 🚀 邏輯 (4): 槓桿與保證金防禦 — 排除已被 Scenario 2/3/5 標記過的
                     # 標的，避免同一標的同一輪次收到互相矛盾的清倉指令。
                     # 同樣僅排除有實際賣出/減碼動作者；Scenario 3 的 HOLD 安心防守卡
                     # 不應在大盤觸發系統性保證金風控紅線時，silently 蓋掉更高等級的
@@ -466,6 +486,7 @@ class PortfolioMonitorCog(commands.Cog):
                         "OPPORTUNITY_COST": "機會成本轉倉",
                         "SATELLITE_REBALANCE": "核心衛星再平衡",
                         "MARGIN_DEFENSE": "槓桿與保證金防禦",
+                        "CORE_DEPLOYMENT": "核心資金部署",
                     }
 
                     today_str = datetime.now(ny_tz).strftime("%Y%m%d")

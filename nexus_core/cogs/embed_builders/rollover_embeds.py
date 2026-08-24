@@ -33,6 +33,11 @@ _SCENARIO_STYLE: Dict[str, Dict[str, Any]] = {
         "label": "機會成本轉倉",
         "color": discord.Color.blue(),
     },
+    "CORE_DEPLOYMENT": {
+        "emoji": "🌱",
+        "label": "核心資金部署",
+        "color": discord.Color.green(),
+    },
 }
 
 
@@ -646,6 +651,7 @@ _SCENARIO_SHORT_LABELS: Dict[str, str] = {
     "FUNDAMENTAL_BROKEN": "護城河破滅",
     "OPPORTUNITY_COST": "機會成本",
     "SATELLITE_REBALANCE": "核心衛星",
+    "CORE_DEPLOYMENT": "核心部署",
 }
 
 

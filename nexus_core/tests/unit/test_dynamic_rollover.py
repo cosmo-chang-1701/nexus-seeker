@@ -957,6 +957,246 @@ async def test_evaluate_opportunity_cost_for_satellites_triggers(
     assert result[0]["is_manual_override_required"] is False
 
 
+# ==========================================
+# 邏輯 (5)：核心資金部署 (evaluate_core_deployment)
+# ==========================================
+
+
+@pytest.mark.asyncio
+async def test_evaluate_core_deployment_no_candidate(
+    engine: DynamicRolloverEngine,
+) -> None:
+    portfolio = [
+        {
+            "symbol": "VOO",
+            "asset_class": "CORE",
+            "current_value": 10000.0,
+            "target_allocation_pct": 0.5,
+        },
+    ]
+    # candidate_symbol == "VOO" (未找到高 EV 候選標的) -> 不部署，即使有合格 CORE 持倉
+    result = await engine.evaluate_core_deployment(
+        1, portfolio, set(), 10000.0, "VOO", None
+    )
+    assert result == []
+
+    # 有候選標的但 radar 資料為空 -> 不部署
+    result2 = await engine.evaluate_core_deployment(
+        1, portfolio, set(), 10000.0, "SPCX", None
+    )
+    assert result2 == []
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
+    new_callable=AsyncMock,
+    return_value=(True, "mocked"),
+)
+async def test_evaluate_core_deployment_no_target_allocation_is_noop(
+    mock_entry_gate: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """滿倉 VOO、從未透過 /edit_holding 設定 target_allocation_pct -> 必須永遠是
+    no-op，不可意外觸發部署（嚴格 opt-in 設計，關鍵回歸測試）。"""
+    portfolio = [
+        {
+            "symbol": "VOO",
+            "asset_class": "CORE",
+            "current_value": 10000.0,
+            # 刻意不設定 target_allocation_pct
+        },
+    ]
+    candidate_radar = {
+        "psq_result": {
+            "squeeze_level": "High",
+            "signal_direction": "Long",
+            "is_breakout_long": True,
+        },
+        "quote": {"c": 40.0},
+        "iv_metrics": {"iv_rank": 20.0},
+        "gex_profile_data": {"put_wall": 0.0},
+        "uoa": [],
+    }
+    result = await engine.evaluate_core_deployment(
+        1, portfolio, set(), 10000.0, "SPCX", candidate_radar
+    )
+    assert result == []
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
+    new_callable=AsyncMock,
+    return_value=(True, "mocked"),
+)
+async def test_evaluate_core_deployment_triggers(
+    mock_entry_gate: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    portfolio = [
+        {
+            "symbol": "VOO",
+            "asset_class": "CORE",
+            "current_value": 10000.0,
+            "target_allocation_pct": 0.5,  # 使用者設定：VOO 只想保留 50%
+        },
+    ]
+    candidate_radar = {
+        "psq_result": {
+            "squeeze_level": "High",
+            "signal_direction": "Long",
+            "is_breakout_long": True,
+        },
+        "quote": {"c": 40.0},
+        "iv_metrics": {"iv_rank": 20.0},
+        "gex_profile_data": {"put_wall": 0.0},
+        "uoa": [],
+    }
+    # total_account_value = 10000 (全倉 VOO) -> current_alloc = 1.0
+    # excess_alloc = 1.0 - 0.5 = 0.5 -> sell_ratio = 0.5
+    result = await engine.evaluate_core_deployment(
+        1, portfolio, set(), 10000.0, "SPCX", candidate_radar
+    )
+    assert len(result) == 1
+    assert result[0]["symbol"] == "VOO"
+    assert result[0]["target_core"] == "SPCX"
+    assert result[0]["action"] == "REDUCE"
+    assert result[0]["sell_ratio"] == 0.5
+    assert result[0]["scenario"] == "CORE_DEPLOYMENT"
+    assert result[0]["is_manual_override_required"] is False
+    assert result[0]["limit_price"] == 40.0
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
+    new_callable=AsyncMock,
+    return_value=(False, "mocked fail"),
+)
+async def test_evaluate_core_deployment_blocked_by_entry_gate(
+    mock_entry_gate: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """即使 CORE 配置明顯超額，進場訊號六重過濾未通過時應靜默略過，
+    不產生任何指令。"""
+    portfolio = [
+        {
+            "symbol": "VOO",
+            "asset_class": "CORE",
+            "current_value": 10000.0,
+            "target_allocation_pct": 0.5,
+        },
+    ]
+    candidate_radar = {
+        "psq_result": {"squeeze_level": "High", "signal_direction": "Long"},
+        "quote": {"c": 40.0},
+        "iv_metrics": {"iv_rank": 20.0},
+        "gex_profile_data": {"put_wall": 0.0},
+        "uoa": [],
+    }
+    result = await engine.evaluate_core_deployment(
+        1, portfolio, set(), 10000.0, "SPCX", candidate_radar
+    )
+    assert result == []
+    mock_entry_gate.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
+    new_callable=AsyncMock,
+    return_value=(True, "mocked"),
+)
+async def test_evaluate_core_deployment_below_min_trade_size_is_noop(
+    mock_entry_gate: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    portfolio = [
+        {
+            "symbol": "VOO",
+            "asset_class": "CORE",
+            "current_value": 10000.0,
+            "target_allocation_pct": 0.997,  # 超額僅 0.3%，低於 0.5% 雜訊門檻
+        },
+    ]
+    candidate_radar = {
+        "psq_result": {"squeeze_level": "High", "signal_direction": "Long"},
+        "quote": {"c": 40.0},
+        "iv_metrics": {"iv_rank": 20.0},
+        "gex_profile_data": {"put_wall": 0.0},
+        "uoa": [],
+    }
+    result = await engine.evaluate_core_deployment(
+        1, portfolio, set(), 10000.0, "SPCX", candidate_radar
+    )
+    assert result == []
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
+    new_callable=AsyncMock,
+    return_value=(True, "mocked"),
+)
+async def test_evaluate_core_deployment_already_flagged_symbol_skipped(
+    mock_entry_gate: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    portfolio = [
+        {
+            "symbol": "VOO",
+            "asset_class": "CORE",
+            "current_value": 10000.0,
+            "target_allocation_pct": 0.5,
+        },
+    ]
+    candidate_radar = {
+        "psq_result": {"squeeze_level": "High", "signal_direction": "Long"},
+        "quote": {"c": 40.0},
+        "iv_metrics": {"iv_rank": 20.0},
+        "gex_profile_data": {"put_wall": 0.0},
+        "uoa": [],
+    }
+    result = await engine.evaluate_core_deployment(
+        1, portfolio, {"VOO"}, 10000.0, "SPCX", candidate_radar
+    )
+    assert result == []
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
+    new_callable=AsyncMock,
+    return_value=(True, "mocked"),
+)
+async def test_evaluate_core_deployment_satellite_asset_ignored(
+    mock_entry_gate: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """SATELLITE 持倉即使設了 target_allocation_pct，也不應被本情境當成來源腳
+    （角色不可顛倒，來源必須是 CORE；SATELLITE 的配置控管屬於 Scenario 3）。"""
+    portfolio = [
+        {
+            "symbol": "NVDA",
+            "asset_class": "SATELLITE",
+            "current_value": 10000.0,
+            "target_allocation_pct": 0.1,
+        },
+    ]
+    candidate_radar = {
+        "psq_result": {"squeeze_level": "High", "signal_direction": "Long"},
+        "quote": {"c": 40.0},
+        "iv_metrics": {"iv_rank": 20.0},
+        "gex_profile_data": {"put_wall": 0.0},
+        "uoa": [],
+    }
+    result = await engine.evaluate_core_deployment(
+        1, portfolio, set(), 10000.0, "SPCX", candidate_radar
+    )
+    assert result == []
+
+
 @pytest.mark.asyncio
 @patch(
     "market_analysis.index_microstructure.get_market_regime",
@@ -1251,9 +1491,9 @@ def test_margin_defense_scenario_always_renders_red(
     assert "保證金防禦強制平倉" in str(embed.title)
 
 
-def test_scenario_style_distinguishes_all_four_scenarios() -> None:
+def test_scenario_style_distinguishes_all_five_scenarios() -> None:
     """
-    四大情境必須產生彼此不同的標題/顏色組合，讓交易者能一眼分辨是哪個引擎觸發。
+    五大情境必須產生彼此不同的標題/顏色組合，讓交易者能一眼分辨是哪個引擎觸發。
     """
     embeds = {
         scenario: create_dynamic_rollover_embed(
@@ -1274,13 +1514,34 @@ def test_scenario_style_distinguishes_all_four_scenarios() -> None:
             "SATELLITE_REBALANCE",
             "MARGIN_DEFENSE",
             "FUNDAMENTAL_BROKEN",
+            "CORE_DEPLOYMENT",
         )
     }
     combos = {(e.title, e.color) for e in embeds.values()}
-    assert len(combos) == 4, "四大情境的 (標題, 顏色) 組合必須互不相同"
+    assert len(combos) == 5, "五大情境的 (標題, 顏色) 組合必須互不相同"
     # 最危險的兩個情境 (保證金防禦 / 基本面破滅) 必須共享同一種危急紅色
     assert embeds["MARGIN_DEFENSE"].color == embeds["FUNDAMENTAL_BROKEN"].color
     assert embeds["MARGIN_DEFENSE"].color == discord.Color(0xE74C3C)
+
+
+def test_create_dynamic_rollover_embed_core_deployment_style() -> None:
+    """CORE_DEPLOYMENT (核心資金部署) 必須產生 🌱 標題與綠色，與其餘四大情境區隔。"""
+    embed = create_dynamic_rollover_embed(
+        rollover_type="核心資金部署",
+        sell_symbol="VOO",
+        sell_ratio=0.5,
+        buy_symbol="SPCX",
+        reason="test",
+        suggested_strategy="Buy Shares",
+        suggested_price="Market",
+        strike="N/A",
+        expiry="N/A",
+        direction="BTO",
+        scenario="CORE_DEPLOYMENT",
+    )
+    assert embed.color == discord.Color.green()
+    assert "🌱" in str(embed.title)
+    assert "核心資金部署" in str(embed.title)
 
 
 def test_create_dynamic_rollover_embed_unknown_scenario_falls_back_gracefully() -> None:

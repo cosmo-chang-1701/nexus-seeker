@@ -25,6 +25,7 @@ from .anti_washout import (  # noqa: E402
     check_satellite_rebalancing_impl,
 )
 from .constants import CORE_DEFENSE_ETF_SYMBOLS  # noqa: E402
+from .core_deployment import _CoreDeploymentMixin  # noqa: E402
 from .fundamental_thesis import evaluate_fundamental_thesis_impl  # noqa: E402
 from .margin_defense import _MarginDefenseMixin, evaluate_margin_defense_impl  # noqa: E402
 from .models import FundamentalThesisResult, RolloverScenario  # noqa: E402
@@ -46,7 +47,7 @@ __all__ = [
 
 
 class DynamicRolloverEngine(
-    _OpportunityCostMixin, _AntiWashoutMixin, _MarginDefenseMixin
+    _OpportunityCostMixin, _AntiWashoutMixin, _MarginDefenseMixin, _CoreDeploymentMixin
 ):
     def __init__(self) -> None:
         self._structural_signals_cache: BoundedCache = BoundedCache(max_size=256)
