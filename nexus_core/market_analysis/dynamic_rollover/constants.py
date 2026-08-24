@@ -45,6 +45,7 @@ _DEFAULT_MAX_ALLOCATION_PCT: float = (
 
 # --- 邏輯 (5)：核心資金部署 (evaluate_core_deployment) 具名常數 ---
 _CORE_EXCESS_MIN_TRADE_PCT: float = 0.005  # CORE 超額配置低於此幅度 (0.5%) 視為誤差雜訊，不觸發部署轉倉，避免 dust trade
+_BOXX_DEFENSE_THRESHOLD: float = 50.0  # boxx_allocation_pct (0-100) >= 此值時，超額資金優先防禦轉入 BOXX 而非候選標的
 
 # --- 進場訊號四重嚴格過濾鐵律 (_confirm_entry_signal) 具名常數 ---
 _ENTRY_VOLUME_LOOKBACK_BARS: int = 20  # 條件一：15m 成交量基準所需回看根數 (不含確認根)

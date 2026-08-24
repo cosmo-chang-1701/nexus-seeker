@@ -970,6 +970,7 @@ class TerminalCog(commands.Cog):
         asset_class="核心 (CORE) 或衛星 (SATELLITE) 資產分類，供動態轉倉引擎再平衡判斷 (選填)",
         max_allocation_pct="資產配置佔總市值上限的百分比 (0-100，例如 30 代表 30%，選填)",
         target_allocation_pct="超限時再平衡的目標配置百分比 (0-100，需小於等於配置上限，選填)",
+        boxx_allocation_pct="核心資金部署觸發時，優先轉入 BOXX 防禦的判定閾值 (0-100，≥50 優先防禦轉入 BOXX；留空則由系統依當前總經數據自動評估建議值，選填)",
         acquired_at="建倉日期 (YYYY-MM-DD)，用於回填校正實際開倉日以利長/短期資本利得稅務提醒 (選填)",
     )
     @app_commands.choices(
@@ -987,6 +988,7 @@ class TerminalCog(commands.Cog):
         asset_class: Optional[app_commands.Choice[str]] = None,
         max_allocation_pct: Optional[float] = None,
         target_allocation_pct: Optional[float] = None,
+        boxx_allocation_pct: Optional[float] = None,
         acquired_at: Optional[str] = None,
     ) -> Any:
         symbol = symbol.upper()
@@ -996,6 +998,7 @@ class TerminalCog(commands.Cog):
             and asset_class is None
             and max_allocation_pct is None
             and target_allocation_pct is None
+            and boxx_allocation_pct is None
             and acquired_at is None
         ):
             return await interaction.response.send_message(
@@ -1008,6 +1011,7 @@ class TerminalCog(commands.Cog):
         for label, val in (
             ("資產配置上限", max_allocation_pct),
             ("目標配置比例", target_allocation_pct),
+            ("BOXX 防禦閾值", boxx_allocation_pct),
         ):
             if val is not None and not (0.0 < val <= 100.0):
                 return await interaction.response.send_message(
@@ -1057,6 +1061,8 @@ class TerminalCog(commands.Cog):
             updates["max_allocation_pct"] = max_allocation_pct / 100.0
         if target_allocation_pct is not None:
             updates["target_allocation_pct"] = target_allocation_pct / 100.0
+        if boxx_allocation_pct is not None:
+            updates["boxx_allocation_pct"] = boxx_allocation_pct / 100.0
         if acquired_at is not None:
             updates["acquired_at"] = acquired_at
 
@@ -1128,6 +1134,7 @@ class TerminalCog(commands.Cog):
                 "asset_class": asset_class,
                 "max_allocation_pct": max_alloc,
                 "target_allocation_pct": a.metadata.get("target_allocation_pct"),
+                "boxx_allocation_pct": a.metadata.get("boxx_allocation_pct"),
             }
             holdings.append(h_data)
 

@@ -76,6 +76,30 @@ def test_create_holdings_embed() -> None:
     assert "$160.00" in desc_field  # type: ignore
 
 
+def test_create_holdings_embed_shows_boxx_allocation_pct() -> None:
+    """boxx_allocation_pct 有設定時應顯示於配置欄位；未設定時不應顯示 🧱 標記。"""
+    holdings_data = [
+        {
+            "symbol": "VOO",
+            "quantity": 10,
+            "avg_cost": 400.0,
+            "current_price": 420.0,
+            "asset_class": "CORE",
+            "target_allocation_pct": 0.5,
+            "boxx_allocation_pct": 0.7,
+        },
+        {
+            "symbol": "AAPL",
+            "quantity": 5,
+            "avg_cost": 150.0,
+            "current_price": 160.0,
+        },
+    ]
+    embed = create_holdings_embed(holdings_data, total_capital=100000.0)
+    desc_field = embed.fields[0].value
+    assert "🧱70%" in desc_field  # type: ignore
+
+
 def test_create_trades_embed() -> None:
     pnl_data = {
         "trades": [

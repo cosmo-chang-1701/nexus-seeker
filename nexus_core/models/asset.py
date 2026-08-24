@@ -49,6 +49,10 @@ class HoldingMetadata(BaseModel):
     asset_class: Optional[str] = None  # "CORE" | "SATELLITE"
     max_allocation_pct: Optional[float] = None  # 0.0 - 1.0
     target_allocation_pct: Optional[float] = None  # 0.0 - 1.0
+    # 核心資金部署引擎 (Dynamic Rollover Scenario 5) 判定超額配置應優先防禦轉入
+    # BOXX 而非投入候選標的的閾值，透過 /edit_holding 由使用者手動設定；未設定
+    # 時由引擎依 suggest_boxx_allocation_pct() 依當前總經數據自動評估建議值。
+    boxx_allocation_pct: Optional[float] = None  # 0.0 - 1.0
     # 建倉日期 (YYYY-MM-DD)，供動態轉倉引擎的稅務提醒粗估長/短期資本利得稅率
     # 區間。單一日期為簡化估計，非完整多批次 (Lot-based FIFO) 成本基礎追蹤。
     acquired_at: Optional[str] = None

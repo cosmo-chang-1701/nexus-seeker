@@ -385,6 +385,10 @@ class PortfolioMonitorCog(commands.Cog):
                         "avg_cost": h.get("avg_cost", 0.0),
                         "psq_result": r_data.get("psq_result", {}) if r_data else {},
                         "acquired_at": h.get("acquired_at"),
+                        # 核心資金部署引擎 (Scenario 5) 的 BOXX 防禦閾值：None 時
+                        # evaluate_core_deployment() 會自動改用
+                        # suggest_boxx_allocation_pct() 的總經自動建議值。
+                        "boxx_allocation_pct": h.get("boxx_allocation_pct"),
                     }
                     if h.get("target_allocation_pct") is not None:
                         asset_entry["target_allocation_pct"] = h.get(

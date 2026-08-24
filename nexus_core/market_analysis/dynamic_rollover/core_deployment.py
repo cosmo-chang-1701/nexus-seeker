@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from market_analysis.option_guidance import is_spread_illiquid
 
 from . import logger
-from .constants import _CORE_EXCESS_MIN_TRADE_PCT
+from .constants import _BOXX_DEFENSE_THRESHOLD, _CORE_EXCESS_MIN_TRADE_PCT
 from .models import RolloverScenario
 
 
@@ -14,8 +14,15 @@ class _CoreDeploymentMixin:
     都只處理 asset_class == "SATELLITE"，CORE 持倉 (如 VOO) 永遠只被當成轉倉的
     「目的地」，從未被當成「來源」。本情境補上這個缺口：當使用者透過 /edit_holding
     在 CORE 持倉上明確設定過 target_allocation_pct，且目前配置超過該目標時，將超額
-    部位部署進已由 Scenario 2 找到並經 _confirm_entry_signal 六重鐵律確認突破的候選
-    標的。
+    部位部署出去。
+
+    每個 CORE 持倉的超額資金去向由 boxx_allocation_pct (0-100，/edit_holding 選填，
+    未設定時由 suggest_boxx_allocation_pct() 依當前總經數據自動評估建議值) 與
+    _BOXX_DEFENSE_THRESHOLD (50.0) 比較決定：
+    - >= 50：防禦分支，超額資金整筆轉入 BOXX 鎖定無風險利息，不需候選標的通過
+      進場鐵律 (BOXX 是純防禦性現金替代品停泊，不該被「有沒有找到好標的」卡住)。
+    - < 50：機會分支，沿用既有邏輯，需候選標的存在且經 _confirm_entry_signal
+      六重鐵律確認突破，才將超額資金整筆投入候選標的。
     """
 
     if TYPE_CHECKING:
@@ -46,31 +53,25 @@ class _CoreDeploymentMixin:
         算好的候選發現結果，本情境不重複掃描 watchlist，也不重複抓取 radar 資料。
         """
         instructions: List[Dict[str, Any]] = []
-        if (
-            candidate_symbol == "VOO"
-            or not candidate_radar
-            or total_account_value <= 0.0
-        ):
-            return (
-                instructions  # 沒有找到高 EV 候選標的，或無有效帳戶總值可供計算配置比例
+        if total_account_value <= 0.0:
+            return instructions  # 無有效帳戶總值可供計算配置比例
+
+        # 候選標的是否可用，僅決定「機會分支」是否有得選；防禦分支 (轉入 BOXX)
+        # 不依賴候選標的，即使沒找到高 EV 候選標的也應照樣評估。
+        has_valid_candidate = candidate_symbol != "VOO" and bool(candidate_radar)
+        target_spot = 0.0
+        if has_valid_candidate and candidate_radar is not None:
+            target_spot = float(
+                candidate_radar.get("quote", {}).get("c", 0.0)
+                if candidate_radar.get("quote")
+                else 0.0
             )
 
-        target_spot = float(
-            candidate_radar.get("quote", {}).get("c", 0.0)
-            if candidate_radar.get("quote")
-            else 0.0
-        )
-
-        # 防洗盤實戰策略：進場訊號六重嚴格過濾鐵律。與 Scenario 2 共用同一套把關，
-        # 未通過時比照「找不到候選標的」的早退模式，靜默略過、不產生任何指令。
-        is_entry_confirmed, entry_reason = await self._confirm_entry_signal(
-            candidate_symbol, candidate_radar, target_spot
-        )
-        if not is_entry_confirmed:
-            logger.info(
-                f"[{candidate_symbol}] 進場訊號未確認，靜默略過核心資金部署: {entry_reason}"
-            )
-            return instructions
+        # 六重鐵律確認結果與總經自動建議值同一輪次內只需計算一次，跨多個 CORE
+        # 持倉共用，避免對同一候選標的/總經數據重複發送請求。
+        candidate_entry_confirmed: Optional[bool] = None
+        candidate_entry_reason: str = ""
+        boxx_auto_suggestion: Optional[float] = None
 
         for asset in portfolio_assets:
             symbol = str(asset.get("symbol", "")).upper()
@@ -103,6 +104,75 @@ class _CoreDeploymentMixin:
             if sell_ratio <= 0.0:
                 continue
 
+            recovered_cash = current_value * sell_ratio
+            cash_impact = f"${recovered_cash:,.0f}" if recovered_cash > 0 else None
+
+            # boxx_allocation_pct 以 0.0-1.0 fraction 儲存 (與 max/target_allocation_pct
+            # 慣例一致)，換算為 0-100 尺度與 _BOXX_DEFENSE_THRESHOLD 比較。
+            boxx_pct_setting_raw = asset.get("boxx_allocation_pct")
+            is_user_set_boxx_pct = boxx_pct_setting_raw is not None
+            if boxx_pct_setting_raw is not None:
+                boxx_pct = float(boxx_pct_setting_raw) * 100.0
+            else:
+                if boxx_auto_suggestion is None:
+                    from market_analysis.index_microstructure import (
+                        suggest_boxx_allocation_pct,
+                    )
+
+                    boxx_auto_suggestion = await suggest_boxx_allocation_pct()
+                boxx_pct = boxx_auto_suggestion
+
+            if boxx_pct >= _BOXX_DEFENSE_THRESHOLD:
+                # 防禦分支：不需候選標的通過進場鐵律，直接部署至 BOXX 鎖定無風險利息。
+                basis_text = (
+                    f"使用者設定防禦閾值 {boxx_pct:.0f}"
+                    if is_user_set_boxx_pct
+                    else f"依當前總經數據自動評估防禦閾值 {boxx_pct:.0f}"
+                )
+                reason_text = (
+                    "🌱 **核心資金部署 (Core Capital Deployment)**\n"
+                    f"{symbol} 目前配置 {current_alloc:.1%}，超過使用者設定之目標配置 "
+                    f"{float(target_alloc):.1%}（超額 {excess_alloc:.1%}）。{basis_text} "
+                    "(≥50 優先防禦)，建議將超額核心資金轉入 BOXX 鎖定無風險利息，暫緩投入新部位。"
+                )
+                instructions.append(
+                    {
+                        "symbol": symbol,
+                        "action": "LIQUIDATE" if sell_ratio >= 1.0 else "REDUCE",
+                        "sell_ratio": sell_ratio,
+                        "target_core": "BOXX",
+                        "reason": reason_text,
+                        "suggested_strategy": "Buy Shares (防禦性現金替代品)",
+                        "buy_action_label": "轉入 BOXX（鎖定無風險利息）",
+                        "scenario": RolloverScenario.CORE_DEPLOYMENT.value,
+                        "is_manual_override_required": False,
+                        "cash_impact": cash_impact,
+                        "limit_price": None,
+                    }
+                )
+                continue
+
+            # 機會分支：沿用既有邏輯，需候選標的存在且經六重鐵律確認突破。
+            if not has_valid_candidate or candidate_radar is None:
+                continue
+
+            if candidate_entry_confirmed is None:
+                # 防洗盤實戰策略：進場訊號六重嚴格過濾鐵律。與 Scenario 2 共用同一套
+                # 把關，未通過時比照「找不到候選標的」的早退模式，靜默略過。
+                (
+                    candidate_entry_confirmed,
+                    candidate_entry_reason,
+                ) = await self._confirm_entry_signal(
+                    candidate_symbol, candidate_radar, target_spot
+                )
+                if not candidate_entry_confirmed:
+                    logger.info(
+                        f"[{candidate_symbol}] 進場訊號未確認，靜默略過核心資金部署: "
+                        f"{candidate_entry_reason}"
+                    )
+            if not candidate_entry_confirmed:
+                continue
+
             bid = float(asset.get("bid", 0.0))
             ask = float(asset.get("ask", 0.0))
             is_illiquid_warning = asset.get(
@@ -114,7 +184,7 @@ class _CoreDeploymentMixin:
                 f"{symbol} 目前配置 {current_alloc:.1%}，超過使用者設定之目標配置 "
                 f"{float(target_alloc):.1%}（超額 {excess_alloc:.1%}）。候選標的 "
                 f"{candidate_symbol} 已通過進場訊號六重嚴格過濾鐵律確認突破，"
-                f"建議部署部分閒置核心資金：{entry_reason}"
+                f"建議部署部分閒置核心資金：{candidate_entry_reason}"
             )
             if is_illiquid_warning:
                 spread_pct = (ask - bid) / ((ask + bid) / 2)
@@ -122,9 +192,6 @@ class _CoreDeploymentMixin:
                     f"\n⚠️ **流動性警告**：合約點差過寬 (Bid ${bid:.2f} / Ask ${ask:.2f}，"
                     f"點差 {spread_pct:.1%})，建議採限價單並留意滑價。"
                 )
-
-            recovered_cash = current_value * sell_ratio
-            cash_impact = f"${recovered_cash:,.0f}" if recovered_cash > 0 else None
 
             instructions.append(
                 {

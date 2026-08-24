@@ -5,6 +5,7 @@ import pandas as pd
 from models.schemas import EnhancedWatchlistMetrics, WatchlistEventContext
 from market_analysis.index_microstructure import (
     get_market_regime,
+    suggest_boxx_allocation_pct,
     estimate_symbol_gamma_flip,
 )
 from market_analysis.intraday_pipeline import evaluate_watchlist_symbol
@@ -87,6 +88,67 @@ async def test_get_market_regime_critical() -> None:
 
         regime = await get_market_regime()
         assert regime == "SHORT_GAMMA_CRITICAL"
+
+
+@pytest.mark.asyncio
+async def test_suggest_boxx_allocation_pct_crisis_regime() -> None:
+    # Regime 為 SHORT_GAMMA_CRITICAL / SYSTEMIC_LIQUIDITY_CRISIS 時，直接回傳
+    # 最高防禦建議值 70，且不需再查詢 Fear & Greed 指數。
+    with patch(
+        "market_analysis.index_microstructure.get_market_regime"
+    ) as mock_regime, patch(
+        "market_analysis.index_microstructure.fetch_core_macro_metrics"
+    ) as mock_core_metrics:
+        mock_regime.return_value = "SHORT_GAMMA_CRITICAL"
+        result = await suggest_boxx_allocation_pct()
+        assert result == 70.0
+        mock_core_metrics.assert_not_called()
+
+    with patch(
+        "market_analysis.index_microstructure.get_market_regime"
+    ) as mock_regime2:
+        mock_regime2.return_value = "SYSTEMIC_LIQUIDITY_CRISIS"
+        result2 = await suggest_boxx_allocation_pct()
+        assert result2 == 70.0
+
+
+@pytest.mark.asyncio
+async def test_suggest_boxx_allocation_pct_extreme_fear() -> None:
+    with patch(
+        "market_analysis.index_microstructure.get_market_regime"
+    ) as mock_regime, patch(
+        "market_analysis.index_microstructure.fetch_core_macro_metrics"
+    ) as mock_core_metrics:
+        mock_regime.return_value = "NORMAL"
+        mock_core_metrics.return_value = {"fear_greed": 20.0}
+        result = await suggest_boxx_allocation_pct()
+        assert result == 60.0
+
+
+@pytest.mark.asyncio
+async def test_suggest_boxx_allocation_pct_extreme_greed() -> None:
+    with patch(
+        "market_analysis.index_microstructure.get_market_regime"
+    ) as mock_regime, patch(
+        "market_analysis.index_microstructure.fetch_core_macro_metrics"
+    ) as mock_core_metrics:
+        mock_regime.return_value = "NORMAL"
+        mock_core_metrics.return_value = {"fear_greed": 80.0}
+        result = await suggest_boxx_allocation_pct()
+        assert result == 20.0
+
+
+@pytest.mark.asyncio
+async def test_suggest_boxx_allocation_pct_normal_baseline() -> None:
+    with patch(
+        "market_analysis.index_microstructure.get_market_regime"
+    ) as mock_regime, patch(
+        "market_analysis.index_microstructure.fetch_core_macro_metrics"
+    ) as mock_core_metrics:
+        mock_regime.return_value = "NORMAL"
+        mock_core_metrics.return_value = {"fear_greed": 48.0}
+        result = await suggest_boxx_allocation_pct()
+        assert result == 30.0
 
 
 @pytest.mark.asyncio

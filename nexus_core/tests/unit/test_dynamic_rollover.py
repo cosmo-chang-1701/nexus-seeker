@@ -972,6 +972,9 @@ async def test_evaluate_core_deployment_no_candidate(
             "asset_class": "CORE",
             "current_value": 10000.0,
             "target_allocation_pct": 0.5,
+            # 明確設定防禦閾值 < 50，確保走機會分支（避免呼叫真實的
+            # suggest_boxx_allocation_pct() 總經自動建議，維持測試決定性）。
+            "boxx_allocation_pct": 0.0,
         },
     ]
     # candidate_symbol == "VOO" (未找到高 EV 候選標的) -> 不部署，即使有合格 CORE 持倉
@@ -1040,6 +1043,7 @@ async def test_evaluate_core_deployment_triggers(
             "asset_class": "CORE",
             "current_value": 10000.0,
             "target_allocation_pct": 0.5,  # 使用者設定：VOO 只想保留 50%
+            "boxx_allocation_pct": 0.0,  # 明確設定防禦閾值 < 50，走機會分支
         },
     ]
     candidate_radar = {
@@ -1072,6 +1076,133 @@ async def test_evaluate_core_deployment_triggers(
 @patch(
     "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
     new_callable=AsyncMock,
+    return_value=(True, "mocked"),
+)
+async def test_evaluate_core_deployment_boxx_defense_manual_threshold(
+    mock_entry_gate: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """使用者手動設定 boxx_allocation_pct >= 50 -> 超額資金整筆防禦轉入 BOXX，
+    且完全不需候選標的通過六重進場鐵律（_confirm_entry_signal 不應被呼叫）。"""
+    portfolio = [
+        {
+            "symbol": "VOO",
+            "asset_class": "CORE",
+            "current_value": 10000.0,
+            "target_allocation_pct": 0.5,
+            "boxx_allocation_pct": 0.7,  # 70 >= _BOXX_DEFENSE_THRESHOLD (50)
+        },
+    ]
+    # 候選標的完全無效 (radar=None) 也不影響 BOXX 防禦分支
+    result = await engine.evaluate_core_deployment(
+        1, portfolio, set(), 10000.0, "SPCX", None
+    )
+    assert len(result) == 1
+    assert result[0]["symbol"] == "VOO"
+    assert result[0]["target_core"] == "BOXX"
+    assert result[0]["action"] == "REDUCE"
+    assert result[0]["sell_ratio"] == 0.5
+    assert result[0]["scenario"] == "CORE_DEPLOYMENT"
+    assert result[0]["is_manual_override_required"] is False
+    assert result[0]["limit_price"] is None
+    mock_entry_gate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.index_microstructure.suggest_boxx_allocation_pct",
+    new_callable=AsyncMock,
+    return_value=70.0,
+)
+@patch(
+    "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
+    new_callable=AsyncMock,
+    return_value=(True, "mocked"),
+)
+async def test_evaluate_core_deployment_boxx_defense_auto_suggested(
+    mock_entry_gate: AsyncMock,
+    mock_suggest_boxx: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """使用者未設定 boxx_allocation_pct，且總經數據自動建議值 >= 50 ->
+    比照手動設定達標的行為，整筆防禦轉入 BOXX，不需候選標的確認。"""
+    portfolio = [
+        {
+            "symbol": "VOO",
+            "asset_class": "CORE",
+            "current_value": 10000.0,
+            "target_allocation_pct": 0.5,
+            # 刻意不設定 boxx_allocation_pct
+        },
+    ]
+    candidate_radar = {
+        "psq_result": {"squeeze_level": "High", "signal_direction": "Long"},
+        "quote": {"c": 40.0},
+        "iv_metrics": {"iv_rank": 20.0},
+        "gex_profile_data": {"put_wall": 0.0},
+        "uoa": [],
+    }
+    result = await engine.evaluate_core_deployment(
+        1, portfolio, set(), 10000.0, "SPCX", candidate_radar
+    )
+    assert len(result) == 1
+    assert result[0]["target_core"] == "BOXX"
+    assert result[0]["sell_ratio"] == 0.5
+    mock_suggest_boxx.assert_awaited_once()
+    mock_entry_gate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.index_microstructure.suggest_boxx_allocation_pct",
+    new_callable=AsyncMock,
+    return_value=30.0,
+)
+@patch(
+    "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
+    new_callable=AsyncMock,
+    return_value=(True, "mocked"),
+)
+async def test_evaluate_core_deployment_boxx_auto_suggested_below_threshold(
+    mock_entry_gate: AsyncMock,
+    mock_suggest_boxx: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """使用者未設定 boxx_allocation_pct，且總經數據自動建議值 < 50 ->
+    沿用既有行為，部署至候選標的（回歸測試：向下相容多數正常市況）。"""
+    portfolio = [
+        {
+            "symbol": "VOO",
+            "asset_class": "CORE",
+            "current_value": 10000.0,
+            "target_allocation_pct": 0.5,
+        },
+    ]
+    candidate_radar = {
+        "psq_result": {
+            "squeeze_level": "High",
+            "signal_direction": "Long",
+            "is_breakout_long": True,
+        },
+        "quote": {"c": 40.0},
+        "iv_metrics": {"iv_rank": 20.0},
+        "gex_profile_data": {"put_wall": 0.0},
+        "uoa": [],
+    }
+    result = await engine.evaluate_core_deployment(
+        1, portfolio, set(), 10000.0, "SPCX", candidate_radar
+    )
+    assert len(result) == 1
+    assert result[0]["target_core"] == "SPCX"
+    assert result[0]["sell_ratio"] == 0.5
+    mock_suggest_boxx.assert_awaited_once()
+    mock_entry_gate.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
+    new_callable=AsyncMock,
     return_value=(False, "mocked fail"),
 )
 async def test_evaluate_core_deployment_blocked_by_entry_gate(
@@ -1086,6 +1217,7 @@ async def test_evaluate_core_deployment_blocked_by_entry_gate(
             "asset_class": "CORE",
             "current_value": 10000.0,
             "target_allocation_pct": 0.5,
+            "boxx_allocation_pct": 0.0,  # 明確設定防禦閾值 < 50，走機會分支
         },
     ]
     candidate_radar = {

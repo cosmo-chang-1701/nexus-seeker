@@ -122,6 +122,46 @@ async def get_market_regime() -> str:
     return "NORMAL"
 
 
+_BOXX_SUGGEST_CRISIS: float = (
+    70.0  # Regime 為 SYSTEMIC_LIQUIDITY_CRISIS / SHORT_GAMMA_CRITICAL
+)
+_BOXX_SUGGEST_EXTREME_FEAR: float = 60.0  # Fear & Greed <= 25
+_BOXX_SUGGEST_EXTREME_GREED: float = 20.0  # Fear & Greed >= 75
+_BOXX_SUGGEST_NORMAL: float = 30.0  # 其餘正常市況，維持偏向投入候選標的的既有行為
+_FEAR_GREED_EXTREME_FEAR_BOUND: float = 25.0
+_FEAR_GREED_EXTREME_GREED_BOUND: float = 75.0
+
+
+async def suggest_boxx_allocation_pct() -> float:
+    """依當前大盤 Gamma Regime 與 Fear & Greed 指數，評估動態轉倉引擎核心資金部署
+    (Dynamic Rollover Scenario 5, CORE_DEPLOYMENT) 超額資金轉入 BOXX 防禦的建議
+    閾值 (0-100)。供使用者未透過 /edit_holding 手動設定 boxx_allocation_pct 時的
+    自動預設依據，數值 >= _BOXX_DEFENSE_THRESHOLD (50.0) 代表建議優先防禦轉入 BOXX。
+    """
+    try:
+        regime = await get_market_regime()
+    except Exception as e:
+        logger.warning(f"評估 BOXX 部署建議值時取得市場 Regime 失敗: {e}")
+        regime = "NORMAL"
+
+    if regime in ("SYSTEMIC_LIQUIDITY_CRISIS", "SHORT_GAMMA_CRITICAL"):
+        return _BOXX_SUGGEST_CRISIS
+
+    try:
+        core_metrics = await fetch_core_macro_metrics()
+        fear_greed = float(core_metrics.get("fear_greed", 48.0))
+    except Exception as e:
+        logger.warning(f"評估 BOXX 部署建議值時取得 Fear & Greed 指數失敗: {e}")
+        fear_greed = 48.0
+
+    if fear_greed <= _FEAR_GREED_EXTREME_FEAR_BOUND:
+        return _BOXX_SUGGEST_EXTREME_FEAR
+    if fear_greed >= _FEAR_GREED_EXTREME_GREED_BOUND:
+        return _BOXX_SUGGEST_EXTREME_GREED
+
+    return _BOXX_SUGGEST_NORMAL
+
+
 async def fetch_liquidity_metrics() -> dict:
     """呼叫邊緣爬蟲獲取 TED Spread, SOFR, DTB3 與 High Yield Spread 等跨資產流動性指標。"""
     fallback = {
