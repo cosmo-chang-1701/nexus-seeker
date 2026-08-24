@@ -187,6 +187,9 @@ def create_holdings_embed(
     data_lines = []
     header = f"{_pad_string('標的', 8)} | {_pad_string('數量', 8, 'right')} | {_pad_string('平均成本', 10, 'right')} | {_pad_string('現價', 10, 'right')} | {_pad_string('當前損益', 10, 'right')} | {_pad_string('配置', 20, 'right')}"
     divider = "-" * 81
+    # 核心資金部署引擎 (Scenario 5) target_allocation_pct 總經自動建議值：僅供參考，
+    # 不會自動套用生效，獨立列於表格外的提示區塊，避免與已實際生效的配置欄位混淆。
+    target_alloc_suggestions: List[str] = []
 
     for h in sorted_holdings:
         curr_p = h.get("current_price", 0.0)
@@ -224,6 +227,13 @@ def create_holdings_embed(
         target_alloc = h.get("target_allocation_pct")
         if target_alloc is not None:
             alloc_str += f"→{target_alloc * 100:.0f}%"
+        else:
+            suggested_target = h.get("suggested_target_allocation_pct")
+            if suggested_target is not None:
+                target_alloc_suggestions.append(
+                    f" • {h['symbol']}：建議目標配置 {suggested_target:.0f}%"
+                    "（依當前總經市況自動評估，未生效，需自行以 /edit_holding 設定）"
+                )
         # 核心資金部署引擎 (Scenario 5) 的 BOXX 防禦閾值：僅使用者設定過才顯示，
         # 未設定時由引擎依總經數據自動評估，不在此表格中顯示估算值。
         boxx_alloc = h.get("boxx_allocation_pct")
@@ -241,6 +251,13 @@ def create_holdings_embed(
             f"📦 持倉明細 ({i+1}/{len(chunks)})" if len(chunks) > 1 else "📦 持倉明細"
         )
         embed.add_field(name=name, value=chunk, inline=False)
+
+    if target_alloc_suggestions:
+        embed.add_field(
+            name="💡 核心資金部署建議 (Scenario 5)",
+            value="\n".join(target_alloc_suggestions),
+            inline=False,
+        )
 
     summary = (
         f"💰 **持倉總市值**: `${total_value:,.2f}`\n"

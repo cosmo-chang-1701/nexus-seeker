@@ -138,6 +138,41 @@ async def test_command_edit_holding_rejects_invalid_boxx_allocation_pct(
 
 
 @pytest.mark.asyncio
+async def test_command_list_holdings_shows_target_allocation_suggestion(
+    mock_interaction: Any, db_conn: Any, mock_market_data: Any
+) -> None:
+    """CORE 持倉未設定 target_allocation_pct 時，/list_holdings 應顯示總經自動
+    建議值作為參考（僅供顯示，不會自動套用生效，仍需使用者自行以 /edit_holding
+    設定才會真正影響核心資金部署引擎行為）。"""
+    bot = MagicMock()
+    cog = TerminalCog(bot)
+
+    await cog.add_holding.callback(  # type: ignore
+        cog,  # type: ignore
+        mock_interaction,
+        symbol="VOO",
+        quantity=10,
+        avg_cost=400.0,
+    )
+
+    mock_interaction.followup.send.reset_mock()
+
+    with patch(
+        "market_analysis.index_microstructure.suggest_target_allocation_pct",
+        new_callable=AsyncMock,
+        return_value=50.0,
+    ):
+        await cog.list_holdings.callback(cog, mock_interaction)  # type: ignore
+
+    mock_interaction.followup.send.assert_called_once()
+    args, kwargs = mock_interaction.followup.send.call_args
+    hint_fields = [f for f in kwargs["embed"].fields if "核心資金部署建議" in f.name]
+    assert len(hint_fields) == 1
+    assert "VOO" in hint_fields[0].value
+    assert "50%" in hint_fields[0].value
+
+
+@pytest.mark.asyncio
 async def test_command_edit_holding_rejects_target_above_max(
     mock_interaction: Any, db_conn: Any, mock_market_data: Any
 ) -> None:

@@ -6,6 +6,7 @@ from models.schemas import EnhancedWatchlistMetrics, WatchlistEventContext
 from market_analysis.index_microstructure import (
     get_market_regime,
     suggest_boxx_allocation_pct,
+    suggest_target_allocation_pct,
     estimate_symbol_gamma_flip,
 )
 from market_analysis.intraday_pipeline import evaluate_watchlist_symbol
@@ -149,6 +150,70 @@ async def test_suggest_boxx_allocation_pct_normal_baseline() -> None:
         mock_core_metrics.return_value = {"fear_greed": 48.0}
         result = await suggest_boxx_allocation_pct()
         assert result == 30.0
+
+
+@pytest.mark.asyncio
+async def test_suggest_target_allocation_pct_tiers() -> None:
+    # target_allocation_pct 建議值方向與 boxx_allocation_pct 相反連動：市況越差，
+    # 越傾向續抱防禦性核心部位（建議值越高，觸發部署門檻越高）。
+    with patch("market_analysis.index_microstructure.get_market_regime") as mock_regime:
+        mock_regime.return_value = "SHORT_GAMMA_CRITICAL"
+        assert await suggest_target_allocation_pct() == 70.0
+
+    with patch(
+        "market_analysis.index_microstructure.get_market_regime"
+    ) as mock_regime, patch(
+        "market_analysis.index_microstructure.fetch_core_macro_metrics"
+    ) as mock_core_metrics:
+        mock_regime.return_value = "NORMAL"
+        mock_core_metrics.return_value = {"fear_greed": 20.0}
+        assert await suggest_target_allocation_pct() == 60.0
+
+    with patch(
+        "market_analysis.index_microstructure.get_market_regime"
+    ) as mock_regime, patch(
+        "market_analysis.index_microstructure.fetch_core_macro_metrics"
+    ) as mock_core_metrics:
+        mock_regime.return_value = "NORMAL"
+        mock_core_metrics.return_value = {"fear_greed": 80.0}
+        assert await suggest_target_allocation_pct() == 30.0
+
+    with patch(
+        "market_analysis.index_microstructure.get_market_regime"
+    ) as mock_regime, patch(
+        "market_analysis.index_microstructure.fetch_core_macro_metrics"
+    ) as mock_core_metrics:
+        mock_regime.return_value = "NORMAL"
+        mock_core_metrics.return_value = {"fear_greed": 48.0}
+        assert await suggest_target_allocation_pct() == 50.0
+
+
+@pytest.mark.asyncio
+async def test_suggest_target_and_boxx_allocation_pct_never_diverge_on_same_input() -> (
+    None
+):
+    """target_allocation_pct 與 boxx_allocation_pct 兩套總經自動建議機制必須共用
+    同一份市況分級 (regime + fear_greed 只評估一次)，確保給定完全相同的市況輸入時，
+    兩者的建議值永遠落在彼此對應、不衝突的配對層級上（結構上不可能各自解讀出
+    矛盾的市況判斷）。"""
+    scenarios = [
+        ("SYSTEMIC_LIQUIDITY_CRISIS", None, 70.0, 70.0),
+        ("NORMAL", 20.0, 60.0, 60.0),
+        ("NORMAL", 80.0, 30.0, 20.0),
+        ("NORMAL", 48.0, 50.0, 30.0),
+    ]
+    for regime_value, fear_greed_value, expected_target, expected_boxx in scenarios:
+        with patch(
+            "market_analysis.index_microstructure.get_market_regime"
+        ) as mock_regime, patch(
+            "market_analysis.index_microstructure.fetch_core_macro_metrics"
+        ) as mock_core_metrics:
+            mock_regime.return_value = regime_value
+            mock_core_metrics.return_value = {"fear_greed": fear_greed_value}
+            target = await suggest_target_allocation_pct()
+            boxx = await suggest_boxx_allocation_pct()
+            assert target == expected_target
+            assert boxx == expected_boxx
 
 
 @pytest.mark.asyncio

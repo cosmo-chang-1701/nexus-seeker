@@ -1113,6 +1113,11 @@ class TerminalCog(commands.Cog):
         from market_analysis.dynamic_rollover import CORE_DEFENSE_ETF_SYMBOLS
 
         holdings = []
+        # 核心資金部署引擎 (Scenario 5) target_allocation_pct 總經自動建議值：
+        # 僅供顯示參考，不會自動套用生效（target_allocation_pct 是嚴格 opt-in
+        # 閘門，仍須使用者自行透過 /edit_holding 設定才會真正影響部署行為）。
+        # 同一次 /list_holdings 呼叫內，跨多個未設定的 CORE 持倉只需評估一次。
+        suggested_target_alloc: Optional[float] = None
         for a in assets:
             sym = a.symbol
             quote = await market_data_service.get_quote(sym)
@@ -1123,6 +1128,7 @@ class TerminalCog(commands.Cog):
             default_max_alloc = 1.0 if asset_class == "CORE" else 0.3
             max_alloc = a.metadata.get("max_allocation_pct")
             max_alloc = max_alloc if max_alloc is not None else default_max_alloc
+            target_alloc = a.metadata.get("target_allocation_pct")
 
             h_data = {
                 "id": a.id,
@@ -1133,9 +1139,17 @@ class TerminalCog(commands.Cog):
                 "current_price": current_price,
                 "asset_class": asset_class,
                 "max_allocation_pct": max_alloc,
-                "target_allocation_pct": a.metadata.get("target_allocation_pct"),
+                "target_allocation_pct": target_alloc,
                 "boxx_allocation_pct": a.metadata.get("boxx_allocation_pct"),
             }
+            if asset_class == "CORE" and target_alloc is None:
+                if suggested_target_alloc is None:
+                    from market_analysis.index_microstructure import (
+                        suggest_target_allocation_pct,
+                    )
+
+                    suggested_target_alloc = await suggest_target_allocation_pct()
+                h_data["suggested_target_allocation_pct"] = suggested_target_alloc
             holdings.append(h_data)
 
         ctx = get_full_user_context(user_id)

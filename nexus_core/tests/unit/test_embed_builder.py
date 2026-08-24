@@ -100,6 +100,36 @@ def test_create_holdings_embed_shows_boxx_allocation_pct() -> None:
     assert "🧱70%" in desc_field  # type: ignore
 
 
+def test_create_holdings_embed_shows_target_allocation_suggestion_hint() -> None:
+    """target_allocation_pct 未設定但帶有 suggested_target_allocation_pct 時，
+    應以獨立提示欄位顯示建議值（僅供參考，不進入配置表格本身，避免與已生效的
+    數值混淆）。已設定 target_allocation_pct 的持倉則不應觸發提示。"""
+    holdings_data = [
+        {
+            "symbol": "VOO",
+            "quantity": 10,
+            "avg_cost": 400.0,
+            "current_price": 420.0,
+            "asset_class": "CORE",
+            "suggested_target_allocation_pct": 50.0,
+        },
+        {
+            "symbol": "QQQ",
+            "quantity": 5,
+            "avg_cost": 300.0,
+            "current_price": 310.0,
+            "asset_class": "CORE",
+            "target_allocation_pct": 0.6,
+        },
+    ]
+    embed = create_holdings_embed(holdings_data, total_capital=100000.0)
+    hint_fields = [f for f in embed.fields if "核心資金部署建議" in f.name]  # type: ignore
+    assert len(hint_fields) == 1
+    assert "VOO" in hint_fields[0].value  # type: ignore
+    assert "50%" in hint_fields[0].value  # type: ignore
+    assert "QQQ" not in hint_fields[0].value  # type: ignore
+
+
 def test_create_trades_embed() -> None:
     pnl_data = {
         "trades": [
