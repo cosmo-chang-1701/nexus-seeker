@@ -449,6 +449,7 @@ class SymbolHubView(discord.ui.View):
     ) -> Any:
         await interaction.response.defer()
         await self._set_loading(interaction)
+        embed = None
         try:
             # 根據目前波動率與情緒自動引導對沖操作
             ivr = _safe_float(self.base_data.get("iv_rank"), 50.0)
@@ -458,14 +459,13 @@ class SymbolHubView(discord.ui.View):
                 else "Bear Debits / Put Protection (買入保護性認沽)"
             )
 
-            embed_hedge = create_tactical_hedge_embed(self.symbol, ivr, rec_strategy)
-            await interaction.followup.send(embed=embed_hedge, ephemeral=True)
+            embed = create_tactical_hedge_embed(self.symbol, ivr, rec_strategy)
         except Exception as e:
             await interaction.followup.send(
                 embed=create_error_embed(f"開啟對沖中心失敗: {e}"), ephemeral=True
             )
         finally:
-            await self._reset_loading(interaction)
+            await self._reset_loading(interaction, embed=embed)
 
 
 class WatchlistHeartbeatView(discord.ui.View):

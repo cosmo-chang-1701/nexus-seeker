@@ -92,7 +92,7 @@ async def test_symbol_hub_hedge_uses_builder(mock_interaction: Any, mock_bot: An
         mock_builder.assert_called_once_with(
             "AAPL", 55.0, "Bull Put Spread (賣出認沽價差策略)"
         )
-        _, last_kwargs = mock_interaction.followup.send.call_args
+        _, last_kwargs = mock_interaction.edit_original_response.call_args
         assert last_kwargs["embed"] is mock_builder.return_value
 
 
@@ -113,7 +113,7 @@ async def test_symbol_hub_hedge_tolerates_string_iv_rank(  # type: ignore
         mock_builder.assert_called_once_with(
             "AAPL", 50.0, "Bear Debits / Put Protection (買入保護性認沽)"
         )
-        _, last_kwargs = mock_interaction.followup.send.call_args
+        _, last_kwargs = mock_interaction.edit_original_response.call_args
         assert last_kwargs["embed"] is mock_builder.return_value
 
 
