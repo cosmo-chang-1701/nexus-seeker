@@ -117,6 +117,7 @@ from cogs.embed_builders.watchlist_embeds import (
     create_watchlist_embed,
     create_watchlist_signal_embed,
     create_watchlist_overview_embed,
+    create_bulk_watchlist_result_embed,
 )
 
 # ── Report Embeds ─────────────────────────────────────────────────────────────
@@ -271,6 +272,7 @@ __all__ = [
     "create_watchlist_embed",
     "create_watchlist_signal_embed",
     "create_watchlist_overview_embed",
+    "create_bulk_watchlist_result_embed",
     # Report embeds
     "create_portfolio_report_embed",
     "create_transition_suggestion_embed",

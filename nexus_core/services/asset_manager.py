@@ -8,6 +8,15 @@ from models.asset import Asset, ContextType, TradeMetadata, HoldingMetadata
 
 logger = logging.getLogger(__name__)
 
+# 單一使用者觀察清單 (WATCH) 可同時追蹤的標的數量上限，避免無限制增長拖慢
+# 30 分鐘心跳掃描週期（VPS 記憶體與 API 呼叫量防護）。
+# 與 database/price_volume_watch.py 的 _MAX_WATCHES_PER_USER 命名/防護模式一致。
+_MAX_WATCHLIST_SYMBOLS_PER_USER = 50
+
+
+class WatchlistLimitExceededError(Exception):
+    """使用者觀察清單標的數量超過 `_MAX_WATCHLIST_SYMBOLS_PER_USER` 上限時拋出。"""
+
 
 class AssetManager:
     def __init__(self, db_name: str | None = None) -> Any:  # type: ignore
@@ -218,7 +227,25 @@ class AssetManager:
                 return False
 
     def add_asset(self, asset: Asset) -> bool:
-        """新增資產紀錄"""
+        """新增資產紀錄
+
+        Raises:
+            WatchlistLimitExceededError: 新增 WATCH 類型資產時，該使用者的觀察清單
+                已達 `_MAX_WATCHLIST_SYMBOLS_PER_USER` 上限。
+        """
+        if asset.context_type == ContextType.WATCH:
+            with self._get_conn() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT COUNT(*) FROM assets WHERE user_id = ? AND context_type = 'WATCH'",
+                    (asset.user_id,),
+                )
+                existing_count = cursor.fetchone()[0]
+            if existing_count >= _MAX_WATCHLIST_SYMBOLS_PER_USER:
+                raise WatchlistLimitExceededError(
+                    f"觀察清單標的數量已達上限 ({_MAX_WATCHLIST_SYMBOLS_PER_USER} 檔)，請先移除部分標的後再新增。"
+                )
+
         metadata_json = json.dumps(asset.metadata)
         with self._get_conn() as conn:
             cursor = conn.cursor()

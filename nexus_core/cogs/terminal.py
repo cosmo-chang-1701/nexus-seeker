@@ -4,6 +4,7 @@ from discord.ext import commands
 from discord import app_commands
 import asyncio
 import logging
+import re
 from datetime import datetime
 from typing import Optional, Dict
 
@@ -27,6 +28,19 @@ from cogs.settings_ui import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_symbol_list(raw: str) -> list[str]:
+    """將以逗號或空白分隔的標的代號字串解析為去重、大寫的代號列表。"""
+    if not raw:
+        return []
+    tokens = re.split(r"[,\s]+", raw.strip())
+    symbols: list[str] = []
+    for t in tokens:
+        sym = t.strip().upper()
+        if sym and sym not in symbols:
+            symbols.append(sym)
+    return symbols
 
 
 def _validate_holding_config_params(
@@ -865,51 +879,123 @@ class TerminalCog(commands.Cog):
             )
 
     @app_commands.command(
-        name="add_watch", description="將標的加入自動化量化監控清單 (WATCH)"
+        name="add_watch",
+        description="將標的加入自動化量化監控清單 (WATCH)，可用逗號或空白分隔一次加入多檔",
     )
-    @app_commands.describe(symbol="股票代號 (如 TSLA)")
+    @app_commands.describe(
+        symbol="股票代號 (如 TSLA，可一次輸入多檔，用逗號或空白分隔，如 'AAPL, TSLA NVDA')"
+    )
     async def add_watch(self, interaction: discord.Interaction, symbol: str) -> Any:
-        symbol = symbol.upper()
         await interaction.response.defer(ephemeral=True)
 
-        # 🚀 驗證標的合法性
-        if not await market_data_service.validate_symbol(symbol):
+        symbols = _parse_symbol_list(symbol)
+        if not symbols:
             return await interaction.followup.send(
                 embed=create_error_embed(
-                    f"**無效的標的代號**: `{symbol}`。請輸入正確的美股代號。",
-                    title="系統錯誤",
+                    "請輸入至少一個有效的股票代號。", title="系統錯誤"
                 ),
                 ephemeral=True,
             )
 
-        from services.asset_manager import AssetManager
+        from services.asset_manager import AssetManager, WatchlistLimitExceededError
         from models.asset import Asset, ContextType
 
-        manager = AssetManager()
+        if len(symbols) == 1:
+            # 單一代號：維持原有訊息文案不變 (向後相容)
+            sym = symbols[0]
+            if not await market_data_service.validate_symbol(sym):
+                return await interaction.followup.send(
+                    embed=create_error_embed(
+                        f"**無效的標的代號**: `{sym}`。請輸入正確的美股代號。",
+                        title="系統錯誤",
+                    ),
+                    ephemeral=True,
+                )
 
-        asset = Asset(
-            user_id=interaction.user.id,
-            symbol=symbol,
-            context_type=ContextType.WATCH,
-            metadata={},
+            manager = AssetManager()
+            asset = Asset(
+                user_id=interaction.user.id,
+                symbol=sym,
+                context_type=ContextType.WATCH,
+                metadata={},
+            )
+
+            try:
+                success = manager.add_asset(asset)
+            except WatchlistLimitExceededError as e:
+                return await interaction.followup.send(
+                    embed=create_error_embed(str(e), title="系統警告"), ephemeral=True
+                )
+
+            if success:
+                await interaction.followup.send(
+                    embed=create_info_embed(
+                        title="操作成功",
+                        message=f"✅ **已加入觀察清單**: `{sym}`",
+                    ),
+                    ephemeral=True,
+                )
+            else:
+                await interaction.followup.send(
+                    embed=create_error_embed(
+                        f"`{sym}` 已在您的資產清單中或發生錯誤。", title="系統警告"
+                    ),
+                    ephemeral=True,
+                )
+            return
+
+        # 多代號批次新增
+        from cogs.embed_builders.watchlist_embeds import (
+            create_bulk_watchlist_result_embed,
         )
 
-        success = manager.add_asset(asset)
-        if success:
-            await interaction.followup.send(
-                embed=create_info_embed(
-                    title="操作成功",
-                    message=f"✅ **已加入觀察清單**: `{symbol}`",
-                ),
-                ephemeral=True,
+        sem = asyncio.Semaphore(3)
+
+        async def _validate(sym: str) -> tuple[str, bool]:
+            async with sem:
+                return sym, await market_data_service.validate_symbol(sym)
+
+        validation_results = await asyncio.gather(*[_validate(s) for s in symbols])
+
+        manager = AssetManager()
+        added: list[str] = []
+        invalid: list[str] = []
+        duplicates: list[str] = []
+        capped: list[str] = []
+        limit_hit = False
+
+        for sym, is_valid in validation_results:
+            if not is_valid:
+                invalid.append(sym)
+                continue
+            if limit_hit:
+                capped.append(sym)
+                continue
+
+            asset = Asset(
+                user_id=interaction.user.id,
+                symbol=sym,
+                context_type=ContextType.WATCH,
+                metadata={},
             )
-        else:
-            await interaction.followup.send(
-                embed=create_error_embed(
-                    f"`{symbol}` 已在您的資產清單中或發生錯誤。", title="系統警告"
-                ),
-                ephemeral=True,
-            )
+            try:
+                success = manager.add_asset(asset)
+            except WatchlistLimitExceededError:
+                limit_hit = True
+                capped.append(sym)
+                continue
+
+            if success:
+                added.append(sym)
+            else:
+                duplicates.append(sym)
+
+        embed = create_bulk_watchlist_result_embed(
+            "加入",
+            added,
+            {"已存在": duplicates, "無效代號": invalid, "已達上限": capped},
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="add_holding", description="登錄實際現貨持倉 (HOLDING)")
     @app_commands.describe(
@@ -1263,35 +1349,92 @@ class TerminalCog(commands.Cog):
         embed = create_rollover_history_embed(records)
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-    @app_commands.command(name="remove_watch", description="將標的從觀察清單中移除")
+    @app_commands.command(
+        name="remove_watch",
+        description="將標的從觀察清單中移除，可用逗號或空白分隔一次移除多檔",
+    )
+    @app_commands.describe(
+        symbol="股票代號 (可一次輸入多檔，用逗號或空白分隔，如 'AAPL, TSLA NVDA')"
+    )
     async def remove_watch(self, interaction: discord.Interaction, symbol: str) -> Any:
         await interaction.response.defer(ephemeral=True)
-        symbol = symbol.upper()
+
+        symbols = _parse_symbol_list(symbol)
+        if not symbols:
+            return await interaction.followup.send(
+                embed=create_error_embed(
+                    "請輸入至少一個有效的股票代號。", title="系統錯誤"
+                ),
+                ephemeral=True,
+            )
+
         from services.asset_manager import AssetManager
         from models.asset import ContextType
 
         manager = AssetManager()
-        success = manager.delete_asset_by_symbol(
-            interaction.user.id, symbol, ContextType.WATCH
+
+        if len(symbols) == 1:
+            # 單一代號：維持原有訊息文案不變 (向後相容)
+            sym = symbols[0]
+            success = manager.delete_asset_by_symbol(
+                interaction.user.id, sym, ContextType.WATCH
+            )
+
+            if success:
+                await interaction.followup.send(
+                    embed=create_info_embed(
+                        title="移除成功", message=f"✅ **已移除觀察標的**: `{sym}`"
+                    ),
+                    ephemeral=True,
+                )
+            else:
+                await interaction.followup.send(
+                    embed=create_error_embed(
+                        f"您的觀察清單中找不到 `{sym}`。", title="系統錯誤"
+                    ),
+                    ephemeral=True,
+                )
+            return
+
+        # 多代號批次移除
+        from cogs.embed_builders.watchlist_embeds import (
+            create_bulk_watchlist_result_embed,
         )
 
-        if success:
-            await interaction.followup.send(
-                embed=create_info_embed(
-                    title="移除成功", message=f"✅ **已移除觀察標的**: `{symbol}`"
-                ),
-                ephemeral=True,
+        removed: list[str] = []
+        not_found: list[str] = []
+        for sym in symbols:
+            success = manager.delete_asset_by_symbol(
+                interaction.user.id, sym, ContextType.WATCH
             )
-        else:
-            await interaction.followup.send(
-                embed=create_error_embed(
-                    f"您的觀察清單中找不到 `{symbol}`。", title="系統錯誤"
-                ),
-                ephemeral=True,
-            )
+            if success:
+                removed.append(sym)
+            else:
+                not_found.append(sym)
+
+        embed = create_bulk_watchlist_result_embed(
+            "移除", removed, {"找不到": not_found}
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="list_watch", description="列出您的雷達觀察清單")
-    async def list_watch(self, interaction: discord.Interaction) -> Any:
+    @app_commands.choices(
+        sort=[
+            app_commands.Choice(name="加入時間 (預設)", value="created"),
+            app_commands.Choice(name="字母 A→Z", value="alpha"),
+            app_commands.Choice(name="標籤", value="tags"),
+        ]
+    )
+    @app_commands.describe(
+        sort="排序方式 (預設依加入時間)",
+        query="依標的代號或標籤搜尋 (不分大小寫，選填)",
+    )
+    async def list_watch(
+        self,
+        interaction: discord.Interaction,
+        sort: Optional[app_commands.Choice[str]] = None,
+        query: Optional[str] = None,
+    ) -> Any:
         await interaction.response.defer(ephemeral=True)
         from services.asset_manager import AssetManager
         from models.asset import ContextType
@@ -1308,11 +1451,18 @@ class TerminalCog(commands.Cog):
             )
             return
 
-        symbols_data = [(a.symbol, getattr(a, "tags", None)) for a in assets]
+        symbols_data = [
+            (a.symbol, getattr(a, "tags", None), a.created_at) for a in assets
+        ]
 
         from ui.watchlist import WatchlistPagination
 
-        view = WatchlistPagination(symbols_data, original_interaction=interaction)
+        view = WatchlistPagination(
+            symbols_data,
+            original_interaction=interaction,
+            sort_key=sort.value if sort else None,
+            query=query,
+        )
         view.update_buttons()
         await interaction.followup.send(
             embed=view.create_embed(), view=view, ephemeral=True
