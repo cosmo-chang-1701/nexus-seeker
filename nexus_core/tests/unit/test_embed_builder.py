@@ -130,6 +130,30 @@ def test_create_holdings_embed_shows_target_allocation_suggestion_hint() -> None
     assert "QQQ" not in hint_fields[0].value  # type: ignore
 
 
+def test_create_holdings_embed_shows_acquired_at() -> None:
+    """acquired_at 有設定時應顯示建倉日期；未設定時應顯示佔位符號「—」。"""
+    holdings_data = [
+        {
+            "symbol": "AAPL",
+            "quantity": 10,
+            "avg_cost": 150.0,
+            "current_price": 160.0,
+            "acquired_at": "2023-05-01",
+        },
+        {
+            "symbol": "VOO",
+            "quantity": 5,
+            "avg_cost": 400.0,
+            "current_price": 420.0,
+        },
+    ]
+    embed = create_holdings_embed(holdings_data, total_capital=100000.0)
+    desc_field = embed.fields[0].value
+    assert "建倉日" in desc_field  # type: ignore
+    assert "2023-05-01" in desc_field  # type: ignore
+    assert "—" in desc_field  # type: ignore
+
+
 def test_create_trades_embed() -> None:
     pnl_data = {
         "trades": [

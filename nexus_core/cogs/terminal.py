@@ -29,6 +29,43 @@ from cogs.settings_ui import (
 logger = logging.getLogger(__name__)
 
 
+def _validate_holding_config_params(
+    max_allocation_pct: Optional[float],
+    target_allocation_pct: Optional[float],
+    boxx_allocation_pct: Optional[float],
+    acquired_at: Optional[str],
+) -> Optional[discord.Embed]:
+    """驗證 /add_holding 與 /edit_holding 共用的持倉配置參數，合法回傳 None，否則回傳錯誤 Embed。"""
+    for label, val in (
+        ("資產配置上限", max_allocation_pct),
+        ("目標配置比例", target_allocation_pct),
+        ("BOXX 防禦閾值", boxx_allocation_pct),
+    ):
+        if val is not None and not (0.0 < val <= 100.0):
+            return create_error_embed(
+                f"**{label}** 必須介於 0 (不含) 到 100 之間。", title="系統錯誤"
+            )
+    if (
+        max_allocation_pct is not None
+        and target_allocation_pct is not None
+        and target_allocation_pct > max_allocation_pct
+    ):
+        return create_error_embed(
+            "**目標配置比例** 不可大於 **資產配置上限**。", title="系統錯誤"
+        )
+
+    if acquired_at is not None:
+        try:
+            datetime.strptime(acquired_at, "%Y-%m-%d")
+        except ValueError:
+            return create_error_embed(
+                "**建倉日期** 格式錯誤，請使用 `YYYY-MM-DD` (例如 `2024-03-15`)。",
+                title="系統錯誤",
+            )
+
+    return None
+
+
 class TerminalCog(commands.Cog):
     """
     [Core] Nexus Seeker Professional Terminal Interface.
@@ -876,7 +913,20 @@ class TerminalCog(commands.Cog):
 
     @app_commands.command(name="add_holding", description="登錄實際現貨持倉 (HOLDING)")
     @app_commands.describe(
-        symbol="股票代號", quantity="持有股數", avg_cost="平均買入成本 (USD)"
+        symbol="股票代號",
+        quantity="持有股數",
+        avg_cost="平均買入成本 (USD)",
+        asset_class="核心 (CORE) 或衛星 (SATELLITE) 資產分類，供動態轉倉引擎再平衡判斷 (選填)",
+        max_allocation_pct="資產配置佔總市值上限的百分比 (0-100，例如 30 代表 30%，選填)",
+        target_allocation_pct="超限時再平衡的目標配置百分比 (0-100，需小於等於配置上限，選填)",
+        boxx_allocation_pct="核心資金部署觸發時，優先轉入 BOXX 防禦的判定閾值 (0-100，≥50 優先防禦轉入 BOXX；留空則由系統依當前總經數據自動評估建議值，選填)",
+        acquired_at="建倉日期 (YYYY-MM-DD)，供動態轉倉引擎估算長/短期資本利得稅率區間；留空則預設為今天 (選填)",
+    )
+    @app_commands.choices(
+        asset_class=[
+            app_commands.Choice(name="CORE (核心防禦資產，如 VOO/BOXX)", value="CORE"),
+            app_commands.Choice(name="SATELLITE (衛星戰術資產)", value="SATELLITE"),
+        ]
     )
     async def add_holding(
         self,
@@ -884,6 +934,11 @@ class TerminalCog(commands.Cog):
         symbol: str,
         quantity: float,
         avg_cost: float,
+        asset_class: Optional[app_commands.Choice[str]] = None,
+        max_allocation_pct: Optional[float] = None,
+        target_allocation_pct: Optional[float] = None,
+        boxx_allocation_pct: Optional[float] = None,
+        acquired_at: Optional[str] = None,
     ) -> Any:
         symbol = symbol.upper()
         user_id = interaction.user.id
@@ -907,6 +962,12 @@ class TerminalCog(commands.Cog):
                 ephemeral=True,
             )
 
+        config_error = _validate_holding_config_params(
+            max_allocation_pct, target_allocation_pct, boxx_allocation_pct, acquired_at
+        )
+        if config_error is not None:
+            return await interaction.followup.send(embed=config_error, ephemeral=True)
+
         from services.asset_manager import AssetManager
         from models.asset import Asset, ContextType
 
@@ -920,22 +981,46 @@ class TerminalCog(commands.Cog):
         if existing_asset:
             existing_asset.metadata["quantity"] = quantity
             existing_asset.metadata["avg_cost"] = avg_cost
+            if asset_class is not None:
+                existing_asset.metadata["asset_class"] = asset_class.value
+            if max_allocation_pct is not None:
+                existing_asset.metadata["max_allocation_pct"] = (
+                    max_allocation_pct / 100.0
+                )
+            if target_allocation_pct is not None:
+                existing_asset.metadata["target_allocation_pct"] = (
+                    target_allocation_pct / 100.0
+                )
+            if boxx_allocation_pct is not None:
+                existing_asset.metadata["boxx_allocation_pct"] = (
+                    boxx_allocation_pct / 100.0
+                )
+            if acquired_at is not None:
+                existing_asset.metadata["acquired_at"] = acquired_at
             success = manager.update_asset(existing_asset)
             action_text = "更新"
         else:
-            # 首次登錄時記錄建倉日期，供動態轉倉引擎粗估長/短期資本利得稅率區間
-            # (若使用者持倉實際開倉日更早，可用 /edit_holding 的 acquired_at
-            # 參數回填校正)。
-            acquired_at = datetime.now().strftime("%Y-%m-%d")
+            # 首次登錄時記錄建倉日期，供動態轉倉引擎粗估長/短期資本利得稅率區間；
+            # 使用者可直接透過 acquired_at 參數指定實際開倉日，未提供時預設為今天。
+            # /edit_holding 的 acquired_at 參數仍可用於事後回填校正。
+            metadata: Dict[str, Any] = {
+                "quantity": quantity,
+                "avg_cost": avg_cost,
+                "acquired_at": acquired_at or datetime.now().strftime("%Y-%m-%d"),
+            }
+            if asset_class is not None:
+                metadata["asset_class"] = asset_class.value
+            if max_allocation_pct is not None:
+                metadata["max_allocation_pct"] = max_allocation_pct / 100.0
+            if target_allocation_pct is not None:
+                metadata["target_allocation_pct"] = target_allocation_pct / 100.0
+            if boxx_allocation_pct is not None:
+                metadata["boxx_allocation_pct"] = boxx_allocation_pct / 100.0
             asset = Asset(
                 user_id=user_id,
                 symbol=symbol,
                 context_type=ContextType.HOLDING,
-                metadata={
-                    "quantity": quantity,
-                    "avg_cost": avg_cost,
-                    "acquired_at": acquired_at,
-                },
+                metadata=metadata,
             )
             success = manager.add_asset(asset)
             action_text = "登錄"
@@ -1008,41 +1093,13 @@ class TerminalCog(commands.Cog):
                 ephemeral=True,
             )
 
-        for label, val in (
-            ("資產配置上限", max_allocation_pct),
-            ("目標配置比例", target_allocation_pct),
-            ("BOXX 防禦閾值", boxx_allocation_pct),
-        ):
-            if val is not None and not (0.0 < val <= 100.0):
-                return await interaction.response.send_message(
-                    embed=create_error_embed(
-                        f"**{label}** 必須介於 0 (不含) 到 100 之間。", title="系統錯誤"
-                    ),
-                    ephemeral=True,
-                )
-        if (
-            max_allocation_pct is not None
-            and target_allocation_pct is not None
-            and target_allocation_pct > max_allocation_pct
-        ):
+        config_error = _validate_holding_config_params(
+            max_allocation_pct, target_allocation_pct, boxx_allocation_pct, acquired_at
+        )
+        if config_error is not None:
             return await interaction.response.send_message(
-                embed=create_error_embed(
-                    "**目標配置比例** 不可大於 **資產配置上限**。", title="系統錯誤"
-                ),
-                ephemeral=True,
+                embed=config_error, ephemeral=True
             )
-
-        if acquired_at is not None:
-            try:
-                datetime.strptime(acquired_at, "%Y-%m-%d")
-            except ValueError:
-                return await interaction.response.send_message(
-                    embed=create_error_embed(
-                        "**建倉日期** 格式錯誤，請使用 `YYYY-MM-DD` (例如 `2024-03-15`)。",
-                        title="系統錯誤",
-                    ),
-                    ephemeral=True,
-                )
 
         await interaction.response.defer(ephemeral=True)
         from services.asset_manager import AssetManager
@@ -1141,6 +1198,7 @@ class TerminalCog(commands.Cog):
                 "max_allocation_pct": max_alloc,
                 "target_allocation_pct": target_alloc,
                 "boxx_allocation_pct": a.metadata.get("boxx_allocation_pct"),
+                "acquired_at": a.metadata.get("acquired_at"),
             }
             if asset_class == "CORE" and target_alloc is None:
                 if suggested_target_alloc is None:

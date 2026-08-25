@@ -185,8 +185,8 @@ def create_holdings_embed(
     total_pnl = 0.0
 
     data_lines = []
-    header = f"{_pad_string('標的', 8)} | {_pad_string('數量', 8, 'right')} | {_pad_string('平均成本', 10, 'right')} | {_pad_string('現價', 10, 'right')} | {_pad_string('當前損益', 10, 'right')} | {_pad_string('配置', 20, 'right')}"
-    divider = "-" * 81
+    header = f"{_pad_string('標的', 8)} | {_pad_string('數量', 8, 'right')} | {_pad_string('平均成本', 10, 'right')} | {_pad_string('現價', 10, 'right')} | {_pad_string('當前損益', 10, 'right')} | {_pad_string('配置', 20, 'right')} | {_pad_string('建倉日', 10, 'right')}"
+    divider = "-" * len(header)
     # 核心資金部署引擎 (Scenario 5) target_allocation_pct 總經自動建議值：僅供參考，
     # 不會自動套用生效，獨立列於表格外的提示區塊，避免與已實際生效的配置欄位混淆。
     target_alloc_suggestions: List[str] = []
@@ -240,9 +240,10 @@ def create_holdings_embed(
         if boxx_alloc is not None:
             alloc_str += f" 🧱{boxx_alloc * 100:.0f}%"
         alloc_fmt = _pad_string(alloc_str, 20, "right")
+        acquired_fmt = _pad_string(h.get("acquired_at") or "—", 10, "right")
 
         data_lines.append(
-            f"{sym} | {qty} | {cost} | {curr_p_fmt} | {pnl_fmt} | {alloc_fmt}"
+            f"{sym} | {qty} | {cost} | {curr_p_fmt} | {pnl_fmt} | {alloc_fmt} | {acquired_fmt}"
         )
 
     chunks = _chunk_ansi_table(header, divider, data_lines)

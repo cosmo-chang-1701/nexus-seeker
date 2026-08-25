@@ -288,6 +288,105 @@ async def test_command_edit_holding_rejects_invalid_acquired_at_format(
 
 
 @pytest.mark.asyncio
+async def test_command_add_holding_with_full_config_params(
+    mock_interaction: Any, db_conn: Any, mock_market_data: Any
+) -> None:
+    """/add_holding 應能在建倉當下一次帶入 asset_class / max_allocation_pct /
+    target_allocation_pct / boxx_allocation_pct / acquired_at，不需再另外呼叫
+    /edit_holding 補設定 (供動態轉倉引擎 Scenario 3/5 使用)。"""
+    bot = MagicMock()
+    cog = TerminalCog(bot)
+
+    await cog.add_holding.callback(  # type: ignore
+        cog,  # type: ignore
+        mock_interaction,
+        symbol="META",
+        quantity=10,
+        avg_cost=300.0,
+        asset_class=discord.app_commands.Choice(name="SATELLITE", value="SATELLITE"),
+        max_allocation_pct=30.0,
+        target_allocation_pct=15.0,
+        boxx_allocation_pct=70.0,
+        acquired_at="2022-06-01",
+    )
+
+    from database.holdings import get_user_holdings
+
+    holdings = get_user_holdings(mock_interaction.user.id)
+    meta = next(h for h in holdings if h["symbol"] == "META")
+    assert meta["asset_class"] == "SATELLITE"
+    assert meta["max_allocation_pct"] == pytest.approx(0.30)
+    assert meta["target_allocation_pct"] == pytest.approx(0.15)
+    assert meta["boxx_allocation_pct"] == pytest.approx(0.70)
+    assert meta["acquired_at"] == "2022-06-01"
+
+
+@pytest.mark.asyncio
+async def test_command_add_holding_upsert_merges_config_params(
+    mock_interaction: Any, db_conn: Any, mock_market_data: Any
+) -> None:
+    """對既有持倉再次呼叫 /add_holding 時，新提供的欄位應合併寫入，未提供的既有
+    欄位應保留不被清空 (Upsert 分支)。"""
+    bot = MagicMock()
+    cog = TerminalCog(bot)
+
+    await cog.add_holding.callback(  # type: ignore
+        cog,  # type: ignore
+        mock_interaction,
+        symbol="NFLX",
+        quantity=10,
+        avg_cost=400.0,
+        asset_class=discord.app_commands.Choice(name="CORE", value="CORE"),
+    )
+
+    await cog.add_holding.callback(  # type: ignore
+        cog,  # type: ignore
+        mock_interaction,
+        symbol="NFLX",
+        quantity=20,
+        avg_cost=420.0,
+        max_allocation_pct=40.0,
+    )
+
+    from database.holdings import get_user_holdings
+
+    holdings = get_user_holdings(mock_interaction.user.id)
+    nflx = next(h for h in holdings if h["symbol"] == "NFLX")
+    assert nflx["quantity"] == 20
+    assert nflx["avg_cost"] == 420.0
+    assert nflx["max_allocation_pct"] == pytest.approx(0.40)
+    # asset_class 未在第二次呼叫中提供，應維持第一次設定的值不被清空
+    assert nflx["asset_class"] == "CORE"
+
+
+@pytest.mark.asyncio
+async def test_command_add_holding_rejects_invalid_boxx_allocation_pct(
+    mock_interaction: Any, db_conn: Any, mock_market_data: Any
+) -> None:
+    """/add_holding 建倉當下帶入的配置參數也應套用與 /edit_holding 相同的驗證規則。"""
+    bot = MagicMock()
+    cog = TerminalCog(bot)
+
+    await cog.add_holding.callback(  # type: ignore
+        cog,  # type: ignore
+        mock_interaction,
+        symbol="ORCL",
+        quantity=10,
+        avg_cost=100.0,
+        boxx_allocation_pct=150.0,
+    )
+
+    mock_interaction.followup.send.assert_called_once()
+    args, kwargs = mock_interaction.followup.send.call_args
+    assert "介於" in kwargs["embed"].description
+
+    from database.holdings import get_user_holdings
+
+    holdings = get_user_holdings(mock_interaction.user.id)
+    assert not any(h["symbol"] == "ORCL" for h in holdings)
+
+
+@pytest.mark.asyncio
 async def test_command_skew_scan(
     mock_interaction: Any, db_conn: Any, mock_market_data: Any
 ) -> None:
