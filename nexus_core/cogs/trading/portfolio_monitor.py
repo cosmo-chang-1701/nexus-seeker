@@ -437,18 +437,26 @@ class PortfolioMonitorCog(commands.Cog):
                                 f"Failed to fetch candidate radar data for {candidate_symbol}: {ex}"
                             )
 
-                    rebalance_instructions += await self.rollover_engine.evaluate_opportunity_cost_for_satellites(
+                    (
+                        opportunity_cost_instructions,
+                        candidate_entry_confirmation,
+                    ) = await self.rollover_engine.evaluate_opportunity_cost_for_satellites(
                         u_id,
                         portfolio_assets,
                         already_flagged,
                         candidate_symbol,
                         candidate_radar,
                     )
+                    rebalance_instructions += opportunity_cost_instructions
 
                     # 🚀 邏輯 (5): 核心資金部署 — 對超過使用者明確設定
                     # target_allocation_pct 的 CORE 持倉，將超額部位部署至
                     # 邏輯 (2) 已找到並確認突破的候選標的，重用同一份
-                    # candidate_symbol / candidate_radar，不重複掃描 watchlist。
+                    # candidate_symbol / candidate_radar，不重複掃描 watchlist；
+                    # 同時沿用邏輯 (2) 已算好的 _confirm_entry_signal 六重鐵律
+                    # 確認結果 (candidate_entry_confirmation)，避免對同一候選
+                    # 標的在同一輪次內重複驗證 (內含未快取的 get_market_regime()
+                    # 呼叫)。
                     already_flagged = {
                         ins["symbol"]
                         for ins in rebalance_instructions
@@ -462,6 +470,7 @@ class PortfolioMonitorCog(commands.Cog):
                             total_val,
                             candidate_symbol,
                             candidate_radar,
+                            precomputed_entry_confirmation=candidate_entry_confirmation,
                         )
                     )
 

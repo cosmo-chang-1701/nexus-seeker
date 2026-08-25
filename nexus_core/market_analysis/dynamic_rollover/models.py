@@ -1,4 +1,5 @@
 from enum import Enum
+from typing import Optional, TypedDict
 
 from pydantic import BaseModel, Field
 
@@ -23,3 +24,37 @@ class FundamentalThesisResult(BaseModel):
         description="True if structural thesis is broken, False if just macro/temporary"
     )
     confidence: float = Field(description="Confidence score from 0.0 to 1.0")
+
+
+class _RolloverInstructionRequired(TypedDict):
+    symbol: str
+    action: str
+    sell_ratio: float
+    target_core: str
+    reason: str
+
+
+class RolloverInstruction(_RolloverInstructionRequired, total=False):
+    """四個情境驅動函式 (opportunity_cost.py / anti_washout.py /
+    margin_defense.py / core_deployment.py) 共用的轉倉建議指令結構。
+
+    刻意採用 TypedDict 而非 Pydantic BaseModel：唯一的下游消費端
+    (cogs/trading/portfolio_monitor.py) 與 tests/unit/test_dynamic_rollover.py
+    的既有斷言皆大量使用 `ins["key"]` / `ins.get("key")` dict 下標存取語法，
+    BaseModel 預設不支援下標存取，強行改為 BaseModel 會需要同時重寫消費端與
+    整份測試檔案的斷言方式，超出本次純型別標註重構的範圍。TypedDict 在執行期
+    仍是一般 dict，對呼叫端與既有測試零影響，僅提供靜態型別檢查層級的保障。
+
+    僅 symbol/action/sell_ratio/target_core/reason 五欄位在所有情境下皆會被
+    portfolio_monitor.py 以 `ins["key"]`（而非 `.get`）存取，故列為必要欄位；
+    其餘欄位各情境視需要選填。
+    """
+
+    suggested_strategy: str
+    scenario: str
+    is_manual_override_required: bool
+    cash_impact: Optional[str]
+    limit_price: Optional[float]
+    trigger_condition_text: Optional[str]
+    sell_action: str
+    buy_action_label: Optional[str]

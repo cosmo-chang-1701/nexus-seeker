@@ -28,7 +28,11 @@ from .constants import CORE_DEFENSE_ETF_SYMBOLS  # noqa: E402
 from .core_deployment import _CoreDeploymentMixin  # noqa: E402
 from .fundamental_thesis import evaluate_fundamental_thesis_impl  # noqa: E402
 from .margin_defense import _MarginDefenseMixin, evaluate_margin_defense_impl  # noqa: E402
-from .models import FundamentalThesisResult, RolloverScenario  # noqa: E402
+from .models import (  # noqa: E402
+    FundamentalThesisResult,
+    RolloverInstruction,
+    RolloverScenario,
+)
 from .opportunity_cost import _OpportunityCostMixin  # noqa: E402
 from .structural_signals import (  # noqa: E402
     _resolve_canonical_anchor_base,
@@ -40,6 +44,7 @@ __all__ = [
     "DynamicRolloverEngine",
     "CORE_DEFENSE_ETF_SYMBOLS",
     "FundamentalThesisResult",
+    "RolloverInstruction",
     "RolloverScenario",
     "_resolve_canonical_anchor_base",
     "_scan_gex_walls",
@@ -129,7 +134,7 @@ class DynamicRolloverEngine(
         user_id: int,
         portfolio_assets: List[Dict[str, Any]],
         total_account_value: float,
-    ) -> List[Dict[str, Any]]:
+    ) -> List[RolloverInstruction]:
         """
         邏輯 (3): 核心與衛星比例再平衡 + 深度微觀結構與選擇權籌碼驅動
         包含勝率傾斜與雜訊避險等高階戰術。
@@ -143,7 +148,7 @@ class DynamicRolloverEngine(
         user_id: int,
         portfolio_assets: List[Dict[str, Any]],
         already_flagged_symbols: Optional[set] = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> List[RolloverInstruction]:
         """
         邏輯 (4): 槓桿與保證金防禦 (Leverage & Margin Defense)
         """

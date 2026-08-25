@@ -1,10 +1,9 @@
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
-from market_analysis.option_guidance import is_spread_illiquid
-
 from . import logger
+from ._shared import format_cash_impact, format_illiquidity_warning
 from .constants import _BOXX_DEFENSE_THRESHOLD, _CORE_EXCESS_MIN_TRADE_PCT
-from .models import RolloverScenario
+from .models import RolloverInstruction, RolloverScenario
 
 
 class _CoreDeploymentMixin:
@@ -43,7 +42,8 @@ class _CoreDeploymentMixin:
         total_account_value: float,
         candidate_symbol: str,
         candidate_radar: Optional[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
+        precomputed_entry_confirmation: Optional[Tuple[bool, str]] = None,
+    ) -> List[RolloverInstruction]:
         """
         邏輯 (5)：對每一個使用者明確設定過 target_allocation_pct 的 CORE 持倉，
         若目前配置超過該目標，將超額部位部署進單一預篩選候選標的 (candidate_symbol)，
@@ -51,8 +51,16 @@ class _CoreDeploymentMixin:
 
         candidate_symbol / candidate_radar：由呼叫端 (cog 層) 沿用 Scenario 2 已經
         算好的候選發現結果，本情境不重複掃描 watchlist，也不重複抓取 radar 資料。
+
+        precomputed_entry_confirmation：由呼叫端沿用 Scenario 2
+        (evaluate_opportunity_cost_for_satellites) 針對同一 candidate_symbol/
+        candidate_radar 已經算好的 _confirm_entry_signal 結果 (is_confirmed, reason)。
+        兩者的確認結果僅取決於 (candidate_symbol, candidate_radar, target_spot)，
+        在同一輪次呼叫端傳入的三者皆相同，故重用安全且非僅為效能優化。若為 None
+        (例如 Scenario 2 未觸及確認步驟，如 candidate_symbol 為 "VOO")，則照舊
+        獨立呼叫 _confirm_entry_signal。
         """
-        instructions: List[Dict[str, Any]] = []
+        instructions: List[RolloverInstruction] = []
         if total_account_value <= 0.0:
             return instructions  # 無有效帳戶總值可供計算配置比例
 
@@ -68,9 +76,14 @@ class _CoreDeploymentMixin:
             )
 
         # 六重鐵律確認結果與總經自動建議值同一輪次內只需計算一次，跨多個 CORE
-        # 持倉共用，避免對同一候選標的/總經數據重複發送請求。
+        # 持倉共用，避免對同一候選標的/總經數據重複發送請求。若呼叫端已提供
+        # Scenario 2 算好的結果，直接沿用，跳過下方的重新確認。
         candidate_entry_confirmed: Optional[bool] = None
         candidate_entry_reason: str = ""
+        if precomputed_entry_confirmation is not None:
+            candidate_entry_confirmed, candidate_entry_reason = (
+                precomputed_entry_confirmation
+            )
         boxx_auto_suggestion: Optional[float] = None
 
         for asset in portfolio_assets:
@@ -105,7 +118,7 @@ class _CoreDeploymentMixin:
                 continue
 
             recovered_cash = current_value * sell_ratio
-            cash_impact = f"${recovered_cash:,.0f}" if recovered_cash > 0 else None
+            cash_impact = format_cash_impact(recovered_cash)
 
             # boxx_allocation_pct 以 0.0-1.0 fraction 儲存 (與 max/target_allocation_pct
             # 慣例一致)，換算為 0-100 尺度與 _BOXX_DEFENSE_THRESHOLD 比較。
@@ -175,9 +188,12 @@ class _CoreDeploymentMixin:
 
             bid = float(asset.get("bid", 0.0))
             ask = float(asset.get("ask", 0.0))
-            is_illiquid_warning = asset.get(
-                "asset_class"
-            ) == "OPTIONS" and is_spread_illiquid(bid, ask)
+            illiquidity_warning = (
+                format_illiquidity_warning(bid, ask)
+                if asset.get("asset_class") == "OPTIONS"
+                else None
+            )
+            is_illiquid_warning = illiquidity_warning is not None
 
             reason_text = (
                 "🌱 **核心資金部署 (Core Capital Deployment)**\n"
@@ -186,12 +202,8 @@ class _CoreDeploymentMixin:
                 f"{candidate_symbol} 已通過進場訊號六重嚴格過濾鐵律確認突破，"
                 f"建議部署部分閒置核心資金：{candidate_entry_reason}"
             )
-            if is_illiquid_warning:
-                spread_pct = (ask - bid) / ((ask + bid) / 2)
-                reason_text += (
-                    f"\n⚠️ **流動性警告**：合約點差過寬 (Bid ${bid:.2f} / Ask ${ask:.2f}，"
-                    f"點差 {spread_pct:.1%})，建議採限價單並留意滑價。"
-                )
+            if illiquidity_warning:
+                reason_text += illiquidity_warning
 
             instructions.append(
                 {

@@ -1,9 +1,43 @@
 import httpx
 import logging
+import time
 import config
 from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
+
+# get_market_regime() 快取：該值為全域、與使用者無關的單一市況判讀，但過去完全
+# 未快取，導致動態轉倉引擎單一使用者單一 30 分鐘週期內最多被獨立呼叫 4 次
+# (Scenario 2/4/5)，且 intraday_pipeline.py 的自選股心跳評估每檔標的又各自呼叫
+# 一次，每次呼叫皆會觸發 fetch_gex_metrics()/fetch_liquidity_metrics() 兩支未快取
+# 的邊緣爬蟲 HTTP 端點。TTL 刻意設定較短 (60 秒)：此值會直接影響
+# SHORT_GAMMA_CRITICAL/SYSTEMIC_LIQUIDITY_CRISIS 期間凍結買方進場等真實交易安全
+# 機制，過長的 TTL 會讓危機偵測延遲生效。
+_MARKET_REGIME_CACHE_TTL: float = 60.0
+_market_regime_cache_value: Optional[str] = None
+_market_regime_cache_expiry: float = 0.0
+
+# fetch_core_macro_metrics() 快取：所有現有呼叫端皆非次秒級時效需求 (排程本身即
+# 每 30 分鐘一次，其餘呼叫端僅在 KV 快取為空時才觸發 fallback)，故給予較長 TTL。
+_CORE_MACRO_METRICS_CACHE_TTL: float = 150.0
+_core_macro_metrics_cache_value: Optional[dict] = None
+_core_macro_metrics_cache_expiry: float = 0.0
+
+
+def invalidate_market_regime_cache() -> None:
+    """清除 get_market_regime() 的記憶體快取，供 /force_macro_update 等手動刷新
+    流程於成功刷新 GEX/流動性數據後呼叫，避免管理員手動強制刷新後仍看到過期的
+    市況判讀結果長達一個 TTL 週期。"""
+    global _market_regime_cache_value, _market_regime_cache_expiry
+    _market_regime_cache_value = None
+    _market_regime_cache_expiry = 0.0
+
+
+def invalidate_core_macro_metrics_cache() -> None:
+    """清除 fetch_core_macro_metrics() 的記憶體快取，語意同 invalidate_market_regime_cache()。"""
+    global _core_macro_metrics_cache_value, _core_macro_metrics_cache_expiry
+    _core_macro_metrics_cache_value = None
+    _core_macro_metrics_cache_expiry = 0.0
 
 
 async def fetch_gex_metrics() -> Dict[str, float]:
@@ -58,7 +92,29 @@ async def fetch_gex_metrics() -> Dict[str, float]:
 
 
 async def get_market_regime() -> str:
-    """根據 VIX、VTS 比率以及 SPY 現貨價與零 Gamma 線的相對位置，判讀當前市場 Regime。"""
+    """根據 VIX、VTS 比率以及 SPY 現貨價與零 Gamma 線的相對位置，判讀當前市場 Regime。
+
+    全域記憶體快取 (TTL=_MARKET_REGIME_CACHE_TTL)：該值與呼叫端使用者無關，透過
+    SingleFlightManager 防止快取未命中時的併發重複抓取。詳見模組頂部快取變數註解。
+    """
+    global _market_regime_cache_value, _market_regime_cache_expiry
+
+    now = time.time()
+    if _market_regime_cache_value is not None and now < _market_regime_cache_expiry:
+        return _market_regime_cache_value
+
+    from services.single_flight import SingleFlightManager
+
+    regime = await SingleFlightManager.run(
+        "get_market_regime", _compute_market_regime_uncached
+    )
+    _market_regime_cache_value = regime
+    _market_regime_cache_expiry = time.time() + _MARKET_REGIME_CACHE_TTL
+    return regime  # type: ignore
+
+
+async def _compute_market_regime_uncached() -> str:
+    """get_market_regime() 的實際運算邏輯 (無快取)，供快取層與 SingleFlight 呼叫。"""
     from services.market_data_service import (
         get_macro_environment,
         get_vix_term_structure,
@@ -228,7 +284,31 @@ async def fetch_liquidity_metrics() -> dict:
 
 
 async def fetch_core_macro_metrics() -> dict:
-    """呼叫邊緣爬蟲獲取 RRP, Fed Balance, UER, Sahm Rule, Fear & Greed 等核心總經指標。"""
+    """呼叫邊緣爬蟲獲取 RRP, Fed Balance, UER, Sahm Rule, Fear & Greed 等核心總經指標。
+
+    全域記憶體快取 (TTL=_CORE_MACRO_METRICS_CACHE_TTL)，機制同 get_market_regime()。
+    """
+    global _core_macro_metrics_cache_value, _core_macro_metrics_cache_expiry
+
+    now = time.time()
+    if (
+        _core_macro_metrics_cache_value is not None
+        and now < _core_macro_metrics_cache_expiry
+    ):
+        return _core_macro_metrics_cache_value
+
+    from services.single_flight import SingleFlightManager
+
+    result = await SingleFlightManager.run(
+        "fetch_core_macro_metrics", _fetch_core_macro_metrics_uncached
+    )
+    _core_macro_metrics_cache_value = result
+    _core_macro_metrics_cache_expiry = time.time() + _CORE_MACRO_METRICS_CACHE_TTL
+    return result  # type: ignore
+
+
+async def _fetch_core_macro_metrics_uncached() -> dict:
+    """fetch_core_macro_metrics() 的實際運算邏輯 (無快取)，供快取層與 SingleFlight 呼叫。"""
     fallback = {
         "rrp": 420.5,
         "fed_balance": 7.25,

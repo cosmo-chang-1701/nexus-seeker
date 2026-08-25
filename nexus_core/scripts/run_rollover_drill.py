@@ -194,7 +194,10 @@ async def run_scenario_1() -> None:
         new_callable=AsyncMock,
         return_value="NORMAL",
     ):
-        instructions = await engine.evaluate_opportunity_cost_for_satellites(
+        (
+            instructions,
+            _entry_confirmation,
+        ) = await engine.evaluate_opportunity_cost_for_satellites(
             user_id=101,
             portfolio_assets=portfolio_assets,
             already_flagged_symbols=set(),

@@ -44,9 +44,17 @@ def _scan_gex_walls(
     條件二) 共用，確保「什麼算正 Gamma 支撐牆」在進場/出場兩端定義一致。
 
     回傳 (support_wall, resistance_wall, support_gex, resistance_gex)，
-    找不到對應牆時該值維持 0.0。
-    """
-    from market_analysis.index_microstructure import classify_gex_wall
+    找不到對應牆時該值維持 0.0。若最大正 GEX 履約價的曝險值低於
+    GEX_THIN_WALL_THRESHOLD（薄弱紙牆，`/x` 終端機既有的 `(薄)` 標記邏輯），
+    classify_gex_wall 會回傳 THIN_SUPPORT_WALL 而非 SUPPORT_GEX_WALL——本函式
+    的 if/elif 判斷式未對 THIN_SUPPORT_WALL 另開分支，故薄弱牆會直接落空，
+    support_wall/support_gex 維持 0.0，等同「未偵測到支撐牆」。此為刻意的
+    保守設計：避免轉倉引擎的結構性破位判定/停損錨點信任一面隨時可能被打穿的
+    薄紙牆。"""
+    from market_analysis.index_microstructure import (
+        GEX_THIN_WALL_THRESHOLD,
+        classify_gex_wall,
+    )
 
     support_wall: float = 0.0
     resistance_wall: float = 0.0
@@ -72,7 +80,12 @@ def _scan_gex_walls(
         try:
             val = float(v)
             strike = float(k)
-            wall_type = classify_gex_wall(val, max_positive, is_heavy_otm_call=False)
+            wall_type = classify_gex_wall(
+                val,
+                max_positive,
+                is_heavy_otm_call=False,
+                min_effective_gex=GEX_THIN_WALL_THRESHOLD,
+            )
             if wall_type == "SUPPORT_GEX_WALL" and strike > support_wall:
                 support_wall = strike
                 support_gex = val

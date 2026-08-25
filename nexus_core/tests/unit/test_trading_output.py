@@ -75,7 +75,7 @@ async def test_monitor_real_portfolio_task_no_rollover_dm_when_no_trigger() -> N
 
     cog.rollover_engine.check_satellite_rebalancing = AsyncMock(return_value=[])  # type: ignore
     cog.rollover_engine.evaluate_opportunity_cost_for_satellites = AsyncMock(  # type: ignore
-        return_value=[]
+        return_value=([], None)
     )
     cog.rollover_engine.evaluate_margin_defense = AsyncMock(return_value=[])  # type: ignore
 
@@ -126,7 +126,7 @@ async def test_monitor_real_portfolio_task_omits_unset_target_allocation_pct() -
 
     cog.rollover_engine.check_satellite_rebalancing = AsyncMock(return_value=[])  # type: ignore
     cog.rollover_engine.evaluate_opportunity_cost_for_satellites = AsyncMock(  # type: ignore
-        return_value=[]
+        return_value=([], None)
     )
     cog.rollover_engine.evaluate_margin_defense = AsyncMock(return_value=[])  # type: ignore
 
@@ -180,7 +180,7 @@ async def test_monitor_real_portfolio_task_margin_defense_excludes_scenario2_and
         return_value=[{"symbol": "NVDA", "action": "REDUCE"}]
     )
     cog.rollover_engine.evaluate_opportunity_cost_for_satellites = AsyncMock(  # type: ignore
-        return_value=[{"symbol": "AAPL", "action": "LIQUIDATE"}]
+        return_value=([{"symbol": "AAPL", "action": "LIQUIDATE"}], None)
     )
     cog.rollover_engine.evaluate_margin_defense = AsyncMock(return_value=[])  # type: ignore
 
@@ -233,7 +233,7 @@ async def test_monitor_real_portfolio_task_hold_only_flags_do_not_suppress_later
         return_value=[{"symbol": "NVDA", "action": "HOLD"}]
     )
     cog.rollover_engine.evaluate_opportunity_cost_for_satellites = AsyncMock(  # type: ignore
-        return_value=[]
+        return_value=([], None)
     )
     cog.rollover_engine.evaluate_margin_defense = AsyncMock(return_value=[])  # type: ignore
 
@@ -663,3 +663,54 @@ async def test_dispatch_order_telemetry_alignment_alert_success() -> None:
     )
     bot.queue_dm.assert_awaited_once_with(1, embed=mock_embed)
     bot = MagicMock()
+
+
+@pytest.mark.asyncio
+async def test_monitor_real_portfolio_task_threads_entry_confirmation_into_core_deployment() -> (
+    None
+):
+    """Phase 2 回歸鎖定：monitor_real_portfolio_task 應將 Scenario 2
+    (evaluate_opportunity_cost_for_satellites) 回傳的 _confirm_entry_signal
+    確認結果，原樣透過 precomputed_entry_confirmation 轉交 Scenario 5
+    (evaluate_core_deployment)，而非各自獨立重新確認。"""
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+    bot.get_cog = MagicMock(return_value=None)
+
+    with patch("discord.ext.tasks.Loop.start"):
+        cog = PortfolioMonitorCog(bot)
+
+    cog.trading_service.audit_real_portfolio_risk = AsyncMock(return_value=[])  # type: ignore
+
+    holding = {
+        "id": 1,
+        "user_id": 1,
+        "symbol": "NVDA",
+        "metadata": "{}",
+        "quantity": 10.0,
+        "avg_cost": 200.0,
+    }
+
+    entry_confirmation = (True, "已確認突破")
+    cog.rollover_engine.check_satellite_rebalancing = AsyncMock(return_value=[])  # type: ignore
+    cog.rollover_engine.evaluate_opportunity_cost_for_satellites = AsyncMock(  # type: ignore
+        return_value=([], entry_confirmation)
+    )
+    cog.rollover_engine.evaluate_core_deployment = AsyncMock(return_value=[])  # type: ignore
+    cog.rollover_engine.evaluate_margin_defense = AsyncMock(return_value=[])  # type: ignore
+
+    with patch(
+        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
+    ), patch("database.holdings.get_all_holdings", return_value=[holding]), patch(
+        "database.watchlist.get_user_watchlist", return_value=[]
+    ), patch(
+        "market_analysis.trading_orchestration.recommend_covered_calls",
+        new_callable=AsyncMock,
+        return_value={"recommendations": []},
+    ):
+        await cog.monitor_real_portfolio_task()
+
+    cog.rollover_engine.evaluate_core_deployment.assert_awaited_once()
+    await_args = cog.rollover_engine.evaluate_core_deployment.await_args
+    assert await_args is not None
+    assert await_args.kwargs["precomputed_entry_confirmation"] == entry_confirmation

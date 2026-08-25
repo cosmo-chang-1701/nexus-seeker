@@ -63,11 +63,19 @@ _ENTRY_CANDIDATE_MIN_DTE: int = (
 _BEAR_CALL_SPREAD_WING_ATR_MULT: float = (
     1.5  # Bear Call Spread 保護腳距賣方腳的 15m ATR 寬度倍數
 )
-_DYNAMIC_STOP_MIN_ATR_MULT: float = (
-    1.0  # 動態防洗盤停損相對於現價的最小 ATR 距離 (防止太窄被洗)
+# 防洗盤動態停損機制 2 的基礎 ATR 墊片倍數，相對於 anchor_base（非現價）：
+# 一般情境套用一次 (base_stop_loss = anchor_base - _ANTI_WASHOUT_BASE_ATR_MULT * atr_15m)；
+# 0/1 DTE 末日結算容忍度機制再疊加套用一次，使總距離達到 2 倍
+# (Risk-Parity 縮放因子 = 1.5 / 3.0 = 0.5)。
+_ANTI_WASHOUT_BASE_ATR_MULT: float = 1.5
+_BEAR_CALL_SPREAD_WING_FALLBACK_PCT: float = (
+    0.05  # atr_15m 無效時，Bear Call Spread Wing 距離退回以賣方履約價的百分比估算
 )
-_DYNAMIC_STOP_MAX_ATR_MULT: float = (
-    3.0  # 動態防洗盤停損相對於現價的最大 ATR 距離 (防止太寬失控)
+_TRAILING_STOP_ATR_MULT: float = (
+    0.5  # 極端亢奮區剩餘 10% 部位移動止盈：距離 call_wall 的 15m ATR 倍數
+)
+_TRAILING_STOP_SPOT_FLOOR_PCT: float = (
+    0.98  # 移動止盈價位相對現價的下限保護 (不得低於現價 98%)
 )
 _SKEW_DOWNSIDE_PENALTY_FACTOR: float = (
     0.5  # Skew 偏空 (<50%) 時 EV 計算之最大下行風險懲罰係數

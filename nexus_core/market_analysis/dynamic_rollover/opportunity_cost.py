@@ -2,9 +2,13 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from market_analysis.index_microstructure import estimate_symbol_gamma_flip
-from market_analysis.option_guidance import is_spread_illiquid
 
 from . import logger
+from ._shared import (
+    format_cash_impact,
+    format_illiquidity_warning,
+    resolve_current_value,
+)
 from .constants import (
     CORE_DEFENSE_ETF_SYMBOLS,
     _BREAKOUT_READY_THRESHOLD,
@@ -25,8 +29,242 @@ from .constants import (
     _ROLLOVER_RATIO_STANDARD,
     _SKEW_DOWNSIDE_PENALTY_FACTOR,
 )
-from .models import RolloverScenario
+from .models import RolloverInstruction, RolloverScenario
 from .structural_signals import _scan_gex_walls
+
+
+# --- _confirm_entry_signal 六重進場鐵律各條件的獨立判斷函式 ---
+# 拆分自曾經 233 行的單一函式本體，每個函式對應一項條件，維持與原本
+# `# --- 條件N ---` 註解區段完全相同的判斷順序、fail-safe 語意與 reasons
+# 訊息文字，純屬邏輯抽取，不改變任何行為。共用的衍生資料 (gex_profile_data /
+# gex_profile / uoa_list / call_wall) 由呼叫端 (_confirm_entry_signal) 於
+# 迴圈外算好一次後傳入，避免重複解析。reasons 為呼叫端持有的單一列表，各函式
+# 依序原地 append 自身條件的判定說明，確保最終合併字串的順序與拆分前一致。
+async def _confirm_entry_condition1_breakout(
+    candidate_symbol: str,
+    target_spot: float,
+    gex_profile: Optional[dict],
+    reasons: list,
+) -> bool:
+    """條件一：結構性右側突破確認 (15m 實體收盤 + 放量，站穩 Gamma Flip 估算門檻)。"""
+    if target_spot <= 0:
+        reasons.append("條件一❌：candidate 現價無效")
+        return False
+
+    gamma_flip_est = estimate_symbol_gamma_flip(
+        gex_profile if isinstance(gex_profile, dict) else {}, target_spot
+    )
+    if gamma_flip_est <= 0:
+        reasons.append("條件一❌：無法估算 Gamma Flip 門檻 (GEX Profile 無交叉點)")
+        return False
+
+    try:
+        from services import market_data_service
+
+        df_15m = await market_data_service.get_history_df(
+            candidate_symbol, period="5d", interval="15m"
+        )
+    except Exception as e:
+        df_15m = None
+        logger.warning(f"[{candidate_symbol}] 15m K 線抓取失敗: {e}")
+
+    if df_15m is None or df_15m.empty or len(df_15m) < _ENTRY_VOLUME_LOOKBACK_BARS + 1:
+        reasons.append("條件一❌：15m K 線資料不足，無法確認突破")
+        return False
+
+    last_bar = df_15m.iloc[-1]
+    lookback_bars = df_15m.iloc[-(_ENTRY_VOLUME_LOOKBACK_BARS + 1) : -1]
+    close_val = float(last_bar["Close"])
+    volume_val = float(last_bar["Volume"])
+    avg_volume = float(lookback_bars["Volume"].mean())
+    is_closed_above = close_val > gamma_flip_est
+    is_volume_surge = (
+        avg_volume > 0 and volume_val >= avg_volume * _ENTRY_VOLUME_SURGE_MULTIPLIER
+    )
+    c1_passed = is_closed_above and is_volume_surge
+    reasons.append(
+        f"條件一{'✅' if c1_passed else '❌'}：15m收盤 ${close_val:.2f} "
+        f"{'>' if is_closed_above else '<='} Gamma Flip估算 ${gamma_flip_est:.2f}，"
+        f"量能 {volume_val:.0f} vs 均量×{_ENTRY_VOLUME_SURGE_MULTIPLIER} "
+        f"={avg_volume * _ENTRY_VOLUME_SURGE_MULTIPLIER:.0f}"
+    )
+    return c1_passed
+
+
+def _confirm_entry_condition2_support_wall(
+    candidate_symbol: str,
+    gex_profile_data: Any,
+    reasons: list,
+) -> bool:
+    """條件二：做市商正 Gamma 底牆完好。"""
+    support_wall, _resistance_wall, support_gex, _resistance_gex = _scan_gex_walls(
+        candidate_symbol,
+        gex_profile_data if isinstance(gex_profile_data, dict) else None,
+    )
+    c2_passed = support_wall > 0 and support_gex > 0
+    reasons.append(
+        f"條件二{'✅' if c2_passed else '❌'}：正 Gamma 支撐牆 "
+        f"{'$' + format(support_wall, '.2f') if c2_passed else '未偵測到'}"
+    )
+    return c2_passed
+
+
+def _confirm_entry_condition3_no_physical_cap(
+    uoa_list: list,
+    call_wall: float,
+    target_spot: float,
+    reasons: list,
+) -> bool:
+    """條件三：UOA 無實質物理封頂 (上方空間暢通)。"""
+    has_physical_cap = False
+    capping_strike = 0.0
+    for entry in uoa_list:
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("type", "")).upper() != "CALL":
+            continue
+        if "STO" not in str(entry.get("action", "")):
+            continue
+        strike = float(entry.get("strike", 0.0) or 0.0)
+        ratio = float(entry.get("ratio", 0.0) or 0.0)
+        if strike > target_spot and ratio > _ENTRY_UOA_CAP_RATIO_THRESHOLD:
+            has_physical_cap = True
+            capping_strike = strike
+            break
+
+    has_tight_call_wall = (
+        call_wall > target_spot
+        and target_spot > 0
+        and (call_wall - target_spot) / target_spot < _ENTRY_ASYMMETRIC_ROOM_PCT
+    )
+    c3_passed = not has_physical_cap and not has_tight_call_wall
+    if has_physical_cap:
+        reasons.append(
+            f"條件三❌：偵測到單筆 ratio>{_ENTRY_UOA_CAP_RATIO_THRESHOLD}x OI 的 "
+            f"STO Call 物理封頂 @ ${capping_strike:.2f}"
+        )
+    elif has_tight_call_wall:
+        reasons.append(
+            f"條件三❌：Call Wall ${call_wall:.2f} 距現價不足 "
+            f"{_ENTRY_ASYMMETRIC_ROOM_PCT:.0%} 非對稱空間"
+        )
+    else:
+        reasons.append("條件三✅：上方無實質物理封頂，非對稱空間充足")
+    return c3_passed
+
+
+def _confirm_entry_condition4_uoa_dte(uoa_list: list, reasons: list) -> bool:
+    """條件四：避開結算日前夕的末日雜訊 (主力 UOA 買盤須 DTE >= 7)。"""
+    primary_bullish_call = None
+    for entry in uoa_list:
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("type", "")).upper() != "CALL":
+            continue
+        if "BTO" not in str(entry.get("action", "")):
+            continue
+        primary_bullish_call = entry
+        break  # uoa 已依成交量降序排列，第一筆符合者即為主力買盤
+
+    if primary_bullish_call is None:
+        reasons.append("條件四❌：未偵測到驅動進場的主力 CALL BTO 買盤")
+        return False
+
+    try:
+        expiry_str = str(primary_bullish_call.get("expiry", ""))
+        exp_dt = datetime.strptime(expiry_str, "%Y-%m-%d").date()
+        dte = (exp_dt - datetime.now().date()).days
+        c4_passed = dte >= _ENTRY_UOA_MIN_DTE
+        reasons.append(
+            f"條件四{'✅' if c4_passed else '❌'}：主力買盤 DTE={dte} "
+            f"({'符合' if c4_passed else '低於'} 門檻 {_ENTRY_UOA_MIN_DTE})"
+        )
+        return c4_passed
+    except (ValueError, TypeError) as e:
+        reasons.append(f"條件四❌：主力買盤到期日解析失敗: {e}")
+        return False
+
+
+async def _confirm_entry_condition5_macro_earnings_gate(
+    candidate_symbol: str,
+    prior_conditions_passed: bool,
+    reasons: list,
+) -> bool:
+    """條件五：總經負 Gamma 與財報黑天鵝防禦閘門 (前四項通過時才發動)。"""
+    if not prior_conditions_passed:
+        return True
+
+    c5_passed = True
+    try:
+        from database.calendar_cache import get_cached_earnings
+
+        earn = get_cached_earnings(candidate_symbol)
+        if earn and earn.get("earnings_date"):
+            earn_date_str = str(earn["earnings_date"])[:10]
+            earn_dt = datetime.strptime(earn_date_str, "%Y-%m-%d").date()
+            days_to_er = (earn_dt - datetime.now().date()).days
+            if 0 <= days_to_er <= _EARNINGS_PRE_EVENT_BUFFER_DAYS:
+                c5_passed = False
+                reasons.append(
+                    f"條件五❌：即將於 {days_to_er} 天內發布財報，避開高波事件風險"
+                )
+    except Exception:
+        pass
+
+    if c5_passed:
+        try:
+            from market_analysis.index_microstructure import get_market_regime
+
+            regime = await get_market_regime()
+            if regime in ("SHORT_GAMMA_CRITICAL", "SYSTEMIC_LIQUIDITY_CRISIS"):
+                c5_passed = False
+                reasons.append(
+                    f"條件五❌：大盤處於 `{regime}` 負 Gamma 踩踏模式，嚴禁開倉個股買方"
+                )
+        except Exception:
+            pass
+
+    if c5_passed:
+        reasons.append("條件五✅：總經環境與財報事件風控安全")
+
+    return c5_passed
+
+
+async def _confirm_entry_condition6_candidate_dte(
+    candidate_symbol: str,
+    prior_conditions_passed: bool,
+    reasons: list,
+) -> bool:
+    """條件六：避開 candidate 自身最近效期選擇權週期的結算日前夕/當日雜訊 (0/1 DTE)。"""
+    if not prior_conditions_passed:
+        return True
+
+    c6_passed = False
+    try:
+        from services import market_data_service
+
+        expiries = await market_data_service.get_all_option_expiries(candidate_symbol)
+    except Exception as e:
+        expiries = []
+        logger.warning(f"[{candidate_symbol}] 選擇權到期日清單抓取失敗: {e}")
+
+    if not expiries:
+        reasons.append("條件六❌：無法取得標的最近效期選擇權到期日清單")
+        return c6_passed
+
+    try:
+        nearest_expiry_dt = datetime.strptime(expiries[0], "%Y-%m-%d").date()
+        dte_nearest = (nearest_expiry_dt - datetime.now().date()).days
+        c6_passed = dte_nearest > _ENTRY_CANDIDATE_MIN_DTE
+        reasons.append(
+            f"條件六{'✅' if c6_passed else '❌'}：標的最近效期 {expiries[0]} "
+            f"DTE={dte_nearest}"
+            f"（{'符合' if c6_passed else '低於'} 門檻 >{_ENTRY_CANDIDATE_MIN_DTE}）"
+        )
+        return c6_passed
+    except (ValueError, TypeError) as e:
+        reasons.append(f"條件六❌：標的最近效期到期日解析失敗: {e}")
+        return False
 
 
 class _OpportunityCostMixin:
@@ -93,7 +331,7 @@ class _OpportunityCostMixin:
 
         today_dt = datetime.now().date()
         best_symbol = "VOO"
-        best_ev = 0.05  # 門檻 EV > 0.05
+        best_ev = _EV_SPREAD_MIN_THRESHOLD  # 門檻 EV > _EV_SPREAD_MIN_THRESHOLD
         for sym, _ in watchlist:
             sym_u = str(sym).upper()
             if sym_u in exclude:
@@ -267,214 +505,46 @@ class _OpportunityCostMixin:
         (不進場)，不預設通過、不略過。
 
         回傳 (四項條件是否全數通過, 逐項原因說明字串，供 log 觀察用)。
+
+        六項條件各自的判斷邏輯拆分至模組層級的 _confirm_entry_condition{1..6}_*
+        函式（本檔案類別定義之前），此處僅負責準備各條件共用的衍生資料
+        （避免重複解析 candidate_radar）、依序呼叫並串接 gating 關係。
         """
         reasons: list[str] = []
 
-        # --- 條件一：結構性右側突破確認 (15m 實體收盤 + 放量，站穩 Gamma Flip 估算門檻) ---
         gex_profile_data = candidate_radar.get("gex_profile_data") or {}
         gex_profile = (
             gex_profile_data.get("gex_profile")
             if isinstance(gex_profile_data, dict)
             else None
         )
-        c1_passed = False
-        if target_spot <= 0:
-            reasons.append("條件一❌：candidate 現價無效")
-        else:
-            gamma_flip_est = estimate_symbol_gamma_flip(
-                gex_profile if isinstance(gex_profile, dict) else {}, target_spot
-            )
-            if gamma_flip_est <= 0:
-                reasons.append(
-                    "條件一❌：無法估算 Gamma Flip 門檻 (GEX Profile 無交叉點)"
-                )
-            else:
-                try:
-                    from services import market_data_service
-
-                    df_15m = await market_data_service.get_history_df(
-                        candidate_symbol, period="5d", interval="15m"
-                    )
-                except Exception as e:
-                    df_15m = None
-                    logger.warning(f"[{candidate_symbol}] 15m K 線抓取失敗: {e}")
-
-                if (
-                    df_15m is None
-                    or df_15m.empty
-                    or len(df_15m) < _ENTRY_VOLUME_LOOKBACK_BARS + 1
-                ):
-                    reasons.append("條件一❌：15m K 線資料不足，無法確認突破")
-                else:
-                    last_bar = df_15m.iloc[-1]
-                    lookback_bars = df_15m.iloc[-(_ENTRY_VOLUME_LOOKBACK_BARS + 1) : -1]
-                    close_val = float(last_bar["Close"])
-                    volume_val = float(last_bar["Volume"])
-                    avg_volume = float(lookback_bars["Volume"].mean())
-                    is_closed_above = close_val > gamma_flip_est
-                    is_volume_surge = (
-                        avg_volume > 0
-                        and volume_val >= avg_volume * _ENTRY_VOLUME_SURGE_MULTIPLIER
-                    )
-                    c1_passed = is_closed_above and is_volume_surge
-                    reasons.append(
-                        f"條件一{'✅' if c1_passed else '❌'}：15m收盤 ${close_val:.2f} "
-                        f"{'>' if is_closed_above else '<='} Gamma Flip估算 ${gamma_flip_est:.2f}，"
-                        f"量能 {volume_val:.0f} vs 均量×{_ENTRY_VOLUME_SURGE_MULTIPLIER} "
-                        f"={avg_volume * _ENTRY_VOLUME_SURGE_MULTIPLIER:.0f}"
-                    )
-
-        # --- 條件二：做市商正 Gamma 底牆完好 ---
-        support_wall, _resistance_wall, support_gex, _resistance_gex = _scan_gex_walls(
-            candidate_symbol,
-            gex_profile_data if isinstance(gex_profile_data, dict) else None,
-        )
-        c2_passed = support_wall > 0 and support_gex > 0
-        reasons.append(
-            f"條件二{'✅' if c2_passed else '❌'}：正 Gamma 支撐牆 "
-            f"{'$' + format(support_wall, '.2f') if c2_passed else '未偵測到'}"
-        )
-
-        # --- 條件三：UOA 無實質物理封頂 (上方空間暢通) ---
         uoa_list = candidate_radar.get("uoa") or []
         call_wall = (
             float(gex_profile_data.get("call_wall", 0.0) or 0.0)
             if isinstance(gex_profile_data, dict)
             else 0.0
         )
-        has_physical_cap = False
-        capping_strike = 0.0
-        for entry in uoa_list:
-            if not isinstance(entry, dict):
-                continue
-            if str(entry.get("type", "")).upper() != "CALL":
-                continue
-            if "STO" not in str(entry.get("action", "")):
-                continue
-            strike = float(entry.get("strike", 0.0) or 0.0)
-            ratio = float(entry.get("ratio", 0.0) or 0.0)
-            if strike > target_spot and ratio > _ENTRY_UOA_CAP_RATIO_THRESHOLD:
-                has_physical_cap = True
-                capping_strike = strike
-                break
 
-        has_tight_call_wall = (
-            call_wall > target_spot
-            and target_spot > 0
-            and (call_wall - target_spot) / target_spot < _ENTRY_ASYMMETRIC_ROOM_PCT
+        c1_passed = await _confirm_entry_condition1_breakout(
+            candidate_symbol, target_spot, gex_profile, reasons
         )
-        c3_passed = not has_physical_cap and not has_tight_call_wall
-        if has_physical_cap:
-            reasons.append(
-                f"條件三❌：偵測到單筆 ratio>{_ENTRY_UOA_CAP_RATIO_THRESHOLD}x OI 的 "
-                f"STO Call 物理封頂 @ ${capping_strike:.2f}"
-            )
-        elif has_tight_call_wall:
-            reasons.append(
-                f"條件三❌：Call Wall ${call_wall:.2f} 距現價不足 "
-                f"{_ENTRY_ASYMMETRIC_ROOM_PCT:.0%} 非對稱空間"
-            )
-        else:
-            reasons.append("條件三✅：上方無實質物理封頂，非對稱空間充足")
-
-        # --- 條件四：避開結算日前夕的末日雜訊 (主力 UOA 買盤須 DTE >= 7) ---
-        primary_bullish_call = None
-        for entry in uoa_list:
-            if not isinstance(entry, dict):
-                continue
-            if str(entry.get("type", "")).upper() != "CALL":
-                continue
-            if "BTO" not in str(entry.get("action", "")):
-                continue
-            primary_bullish_call = entry
-            break  # uoa 已依成交量降序排列，第一筆符合者即為主力買盤
-
-        c4_passed = False
-        if primary_bullish_call is None:
-            reasons.append("條件四❌：未偵測到驅動進場的主力 CALL BTO 買盤")
-        else:
-            try:
-                expiry_str = str(primary_bullish_call.get("expiry", ""))
-                exp_dt = datetime.strptime(expiry_str, "%Y-%m-%d").date()
-                dte = (exp_dt - datetime.now().date()).days
-                c4_passed = dte >= _ENTRY_UOA_MIN_DTE
-                reasons.append(
-                    f"條件四{'✅' if c4_passed else '❌'}：主力買盤 DTE={dte} "
-                    f"({'符合' if c4_passed else '低於'} 門檻 {_ENTRY_UOA_MIN_DTE})"
-                )
-            except (ValueError, TypeError) as e:
-                reasons.append(f"條件四❌：主力買盤到期日解析失敗: {e}")
-
-        # --- 條件五：總經負 Gamma 與財報黑天鵝防禦閘門 (前四項通過時才發動) ---
-        c5_passed = True
-        if c1_passed and c2_passed and c3_passed and c4_passed:
-            try:
-                from database.calendar_cache import get_cached_earnings
-
-                earn = get_cached_earnings(candidate_symbol)
-                if earn and earn.get("earnings_date"):
-                    earn_date_str = str(earn["earnings_date"])[:10]
-                    earn_dt = datetime.strptime(earn_date_str, "%Y-%m-%d").date()
-                    days_to_er = (earn_dt - datetime.now().date()).days
-                    if 0 <= days_to_er <= _EARNINGS_PRE_EVENT_BUFFER_DAYS:
-                        c5_passed = False
-                        reasons.append(
-                            f"條件五❌：即將於 {days_to_er} 天內發布財報，避開高波事件風險"
-                        )
-            except Exception:
-                pass
-
-            if c5_passed:
-                try:
-                    from market_analysis.index_microstructure import (
-                        get_market_regime,
-                    )
-
-                    regime = await get_market_regime()
-                    if regime in (
-                        "SHORT_GAMMA_CRITICAL",
-                        "SYSTEMIC_LIQUIDITY_CRISIS",
-                    ):
-                        c5_passed = False
-                        reasons.append(
-                            f"條件五❌：大盤處於 `{regime}` 負 Gamma 踩踏模式，嚴禁開倉個股買方"
-                        )
-                except Exception:
-                    pass
-
-            if c5_passed:
-                reasons.append("條件五✅：總經環境與財報事件風控安全")
-
-        # --- 條件六：避開 candidate 自身最近效期選擇權週期的結算日前夕/當日雜訊 (0/1 DTE) ---
-        c6_passed = True
-        if c1_passed and c2_passed and c3_passed and c4_passed and c5_passed:
-            c6_passed = False
-            try:
-                from services import market_data_service
-
-                expiries = await market_data_service.get_all_option_expiries(
-                    candidate_symbol
-                )
-            except Exception as e:
-                expiries = []
-                logger.warning(f"[{candidate_symbol}] 選擇權到期日清單抓取失敗: {e}")
-
-            if not expiries:
-                reasons.append("條件六❌：無法取得標的最近效期選擇權到期日清單")
-            else:
-                try:
-                    nearest_expiry_dt = datetime.strptime(
-                        expiries[0], "%Y-%m-%d"
-                    ).date()
-                    dte_nearest = (nearest_expiry_dt - datetime.now().date()).days
-                    c6_passed = dte_nearest > _ENTRY_CANDIDATE_MIN_DTE
-                    reasons.append(
-                        f"條件六{'✅' if c6_passed else '❌'}：標的最近效期 {expiries[0]} "
-                        f"DTE={dte_nearest}"
-                        f"（{'符合' if c6_passed else '低於'} 門檻 >{_ENTRY_CANDIDATE_MIN_DTE}）"
-                    )
-                except (ValueError, TypeError) as e:
-                    reasons.append(f"條件六❌：標的最近效期到期日解析失敗: {e}")
+        c2_passed = _confirm_entry_condition2_support_wall(
+            candidate_symbol, gex_profile_data, reasons
+        )
+        c3_passed = _confirm_entry_condition3_no_physical_cap(
+            uoa_list, call_wall, target_spot, reasons
+        )
+        c4_passed = _confirm_entry_condition4_uoa_dte(uoa_list, reasons)
+        c5_passed = await _confirm_entry_condition5_macro_earnings_gate(
+            candidate_symbol,
+            c1_passed and c2_passed and c3_passed and c4_passed,
+            reasons,
+        )
+        c6_passed = await _confirm_entry_condition6_candidate_dte(
+            candidate_symbol,
+            c1_passed and c2_passed and c3_passed and c4_passed and c5_passed,
+            reasons,
+        )
 
         all_passed = (
             c1_passed
@@ -493,7 +563,7 @@ class _OpportunityCostMixin:
         already_flagged_symbols: set,
         candidate_symbol: str,
         candidate_radar: Optional[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
+    ) -> Tuple[List[RolloverInstruction], Optional[Tuple[bool, str]]]:
         """
         邏輯 (2) 批次橋接：對每一個尚未被 Scenario 3 標記的 SATELLITE 持倉，
         比對其 PowerSqueeze/EV 與單一預篩選候選標的 (candidate_symbol) 的機會成本，
@@ -501,10 +571,17 @@ class _OpportunityCostMixin:
 
         candidate_radar: 由呼叫端 (cog 層) 預先透過既有 radar 抓取機制取得的單一候選標的資料，
         純資料 dict，避免 market_analysis 層依賴 cogs。
+
+        回傳 (instructions, entry_confirmation)：entry_confirmation 為
+        (is_entry_confirmed, entry_reason) 或 None (未觸及 _confirm_entry_signal，
+        例如 candidate_symbol 為 "VOO" 或無 candidate_radar 而提早返回)。呼叫端
+        (portfolio_monitor.py) 將此結果原樣轉交邏輯 (5) 核心資金部署，避免針對
+        同一 candidate_symbol 在同一輪次內重複執行 _confirm_entry_signal 的六重
+        條件驗證 (內含未快取的 get_market_regime() 呼叫與歷史 K 線/選擇權到期日抓取)。
         """
-        instructions: List[Dict[str, Any]] = []
+        instructions: List[RolloverInstruction] = []
         if candidate_symbol == "VOO" or not candidate_radar:
-            return instructions  # 沒有找到高 EV 候選標的，不強制轉倉
+            return instructions, None  # 沒有找到高 EV 候選標的，不強制轉倉
 
         target_psq = candidate_radar.get("psq_result", {}) or {}
         target_power_squeeze = self._normalize_power_squeeze(target_psq)
@@ -534,11 +611,15 @@ class _OpportunityCostMixin:
         is_entry_confirmed, entry_reason = await self._confirm_entry_signal(
             candidate_symbol, candidate_radar, target_spot
         )
+        entry_confirmation: Optional[Tuple[bool, str]] = (
+            is_entry_confirmed,
+            entry_reason,
+        )
         if not is_entry_confirmed:
             logger.info(
                 f"[{candidate_symbol}] 進場訊號未確認，靜默略過機會成本轉倉: {entry_reason}"
             )
-            return instructions
+            return instructions, entry_confirmation
 
         for asset in portfolio_assets:
             symbol = str(asset.get("symbol", "")).upper()
@@ -574,27 +655,28 @@ class _OpportunityCostMixin:
             # 預估資金影響與建議限價：現貨持倉市值優先，缺失時退回股數*現價估算；
             # 限價採用候選標的即時報價 (target_spot)，取代呼叫端過去恆為
             # "Market" 的佔位字串。
-            current_value = float(asset.get("current_value", 0.0))
-            if current_value <= 0 and spot > 0:
-                current_value = float(asset.get("quantity", 0.0)) * spot
+            current_value = resolve_current_value(
+                float(asset.get("current_value", 0.0)),
+                float(asset.get("quantity", 0.0)),
+                spot,
+            )
             recovered_cash = current_value * result["rollover_ratio"]
-            cash_impact = f"${recovered_cash:,.0f}" if recovered_cash > 0 else None
+            cash_impact = format_cash_impact(recovered_cash)
 
             # 流動性閘門：比照 Scenario 3/4 既有做法，期權部位若帶有 bid/ask 且
             # 點差過寬時強制要求手動確認執行 (ManualOverrideView)，而非放行一鍵
             # 執行按鈕 (RolloverActionView)，避免使用者在滑價風險下誤觸一鍵轉倉。
             bid = float(asset.get("bid", 0.0))
             ask = float(asset.get("ask", 0.0))
-            is_illiquid_warning = asset.get(
-                "asset_class"
-            ) == "OPTIONS" and is_spread_illiquid(bid, ask)
+            illiquidity_warning = (
+                format_illiquidity_warning(bid, ask)
+                if asset.get("asset_class") == "OPTIONS"
+                else None
+            )
+            is_illiquid_warning = illiquidity_warning is not None
             reason_text = f"💡 **機會成本轉倉 (Opportunity Cost)**\n{result['reason']}"
-            if is_illiquid_warning:
-                spread_pct = (ask - bid) / ((ask + bid) / 2)
-                reason_text += (
-                    f"\n⚠️ **流動性警告**：合約點差過寬 (Bid ${bid:.2f} / Ask ${ask:.2f}，"
-                    f"點差 {spread_pct:.1%})，建議採限價單並留意滑價。"
-                )
+            if illiquidity_warning:
+                reason_text += illiquidity_warning
 
             instructions.append(
                 {
@@ -612,4 +694,4 @@ class _OpportunityCostMixin:
                     "limit_price": target_spot if target_spot > 0 else None,
                 }
             )
-        return instructions
+        return instructions, entry_confirmation

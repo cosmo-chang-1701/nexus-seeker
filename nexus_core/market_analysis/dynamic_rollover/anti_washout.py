@@ -5,7 +5,9 @@ from market_analysis.sentiment.history_storage import get_indicator_percentile
 
 from . import logger
 from .constants import (
+    _ANTI_WASHOUT_BASE_ATR_MULT,
     _BEAR_CALL_SPREAD_WING_ATR_MULT,
+    _BEAR_CALL_SPREAD_WING_FALLBACK_PCT,
     _BUYER_LOCKOUT_IVR_THRESHOLD,
     _DEFAULT_MAX_ALLOCATION_PCT,
     _EUPHORIA_CAPITAL_SPLIT_PRIMARY,
@@ -15,8 +17,10 @@ from .constants import (
     _FALLBACK_TARGET_PRICE_ESTIMATE,
     _IV_BUBBLE_THRESHOLD,
     _PROFIT_UNLOCK_TOLERANCE,
+    _TRAILING_STOP_ATR_MULT,
+    _TRAILING_STOP_SPOT_FLOOR_PCT,
 )
-from .models import RolloverScenario
+from .models import RolloverInstruction, RolloverScenario
 from .structural_signals import _resolve_canonical_anchor_base
 
 
@@ -95,7 +99,7 @@ class _AntiWashoutMixin:
 
         # 機制 2: 1.5x ATR 防護墊片
         if anchor_base > 0:
-            raw_stop_loss = anchor_base - (1.5 * atr_15m)
+            raw_stop_loss = anchor_base - (_ANTI_WASHOUT_BASE_ATR_MULT * atr_15m)
         else:
             raw_stop_loss = spot * 0.96 if spot > 0 else 0.0
 
@@ -132,7 +136,7 @@ class _AntiWashoutMixin:
         is_01dte_expanded = dte <= 1 and base_stop_loss > 0
         dte_risk_parity_scale = 1.0
         if is_01dte_expanded:
-            base_stop_loss = base_stop_loss - 1.5 * atr_15m
+            base_stop_loss = base_stop_loss - _ANTI_WASHOUT_BASE_ATR_MULT * atr_15m
             # Risk-Parity 縮放因子: Base Distance / (Base Distance + 1.5 * ATR_15m) = 1.5 / 3.0 = 0.5
             dte_risk_parity_scale = 0.5
 
@@ -591,18 +595,100 @@ class _AntiWashoutMixin:
         }
 
 
+async def _build_euphoria_primary_liquidation_instruction(
+    engine: Any,
+    symbol: str,
+    metrics: dict,
+    asset_class: str,
+    quantity: float,
+    current_value: float,
+    user_orders: list,
+    next_target: str,
+) -> RolloverInstruction:
+    """極端亢奮區雙軌機制 (Bear Call Spread 反向收租 / Trailing Stop 移動止盈)
+    共用的 90% 主要轉倉腳：兩個分支對這 90% 部位的處理完全相同 (LIQUIDATE 90%
+    進 next_target)，僅剩餘 10% 殘留腳的後續處理不同，故僅此 90% 部分可安全
+    抽取為共用函式，避免兩處分支各自維護逐字相同的 34 行區塊。"""
+    report_90 = await engine._generate_rule_based_rebalance_report(
+        symbol,
+        metrics,
+        requested_action="LIQUIDATE",
+        target=next_target,
+        asset_class=asset_class,
+        is_take_profit=True,
+        active_orders=user_orders,
+        position_shares=quantity,
+        current_value=current_value,
+    )
+    return {
+        "symbol": symbol,
+        "action": report_90["final_action"],
+        "sell_ratio": _EUPHORIA_CAPITAL_SPLIT_PRIMARY
+        if report_90["final_action"] == "LIQUIDATE"
+        else (0.5 if report_90["final_action"] == "REDUCE" else 0.0),
+        "target_core": report_90["final_target"],
+        "reason": report_90["markdown_report"],
+        "suggested_strategy": report_90["options_strategy"],
+        "scenario": RolloverScenario.SATELLITE_REBALANCE.value,
+        "is_manual_override_required": False,
+        "trigger_condition_text": report_90["trigger_condition_report"],
+        "cash_impact": report_90["cash_impact"],
+        "limit_price": report_90["limit_price"],
+    }
+
+
+def _net_and_build_rebalance_instruction(
+    engine: Any,
+    symbol: str,
+    quantity: float,
+    report: dict,
+    default_sell_ratio: float,
+) -> RolloverInstruction:
+    """套用既有委託單淨額扣抵並組裝 instruction dict：一般清倉/灰階判定分支與
+    常規比例修剪分支皆遵循「report 決定 final_action → 依情境算出預設
+    sell_ratio → _net_against_existing_order 扣抵既有委託單 → 組裝 dict」的
+    相同流程，僅 default_sell_ratio 的計算方式不同 (前者取決於 report 本身的
+    LIQUIDATE/REDUCE 判定，後者取決於超額配置比例)，故由呼叫端各自算好
+    default_sell_ratio 後傳入，其餘完全共用。"""
+    net_action = report["final_action"]
+    net_sell_ratio = default_sell_ratio
+    net_reason = report["markdown_report"]
+    if net_action in ("LIQUIDATE", "REDUCE"):
+        net_sell_ratio, net_note = engine._net_against_existing_order(
+            net_sell_ratio, quantity, report.get("matching_order")
+        )
+        if net_note:
+            net_reason += net_note
+        if net_sell_ratio <= 0.0:
+            net_action = "HOLD"
+
+    return {
+        "symbol": symbol,
+        "action": net_action,
+        "sell_ratio": net_sell_ratio,
+        "target_core": report["final_target"],
+        "reason": net_reason,
+        "suggested_strategy": report["options_strategy"],
+        "scenario": RolloverScenario.SATELLITE_REBALANCE.value,
+        "is_manual_override_required": bool(report.get("is_illiquid_warning", False)),
+        "trigger_condition_text": report["trigger_condition_report"],
+        "cash_impact": report["cash_impact"],
+        "limit_price": report["limit_price"],
+    }
+
+
 async def check_satellite_rebalancing_impl(
     engine: Any,
     get_full_user_context: Any,
     user_id: int,
     portfolio_assets: List[Dict[str, Any]],
     total_account_value: float,
-) -> List[Dict[str, Any]]:
+) -> List[RolloverInstruction]:
     """
     邏輯 (3): 核心與衛星比例再平衡 + 深度微觀結構與選擇權籌碼驅動
     包含勝率傾斜與雜訊避險等高階戰術。
     """
-    rebalance_instructions: List[Dict[str, Any]] = []
+    rebalance_instructions: List[RolloverInstruction] = []
 
     # 取得使用者待成交委託單以供防守機制關聯
     user_orders: list[dict] = []
@@ -764,46 +850,24 @@ async def check_satellite_rebalancing_impl(
                     if user_ctx.can_trade_spreads and is_exhaustion_confirmed:
                         # 90/10 權限資金拆分 - 衰竭確認，建立 Bear Call Spread 反向收租
                         # 90% 轉入新標的
-                        report_90 = await engine._generate_rule_based_rebalance_report(
-                            symbol,
-                            metrics,
-                            requested_action="LIQUIDATE",
-                            target=next_target,
-                            asset_class=asset_class,
-                            is_take_profit=True,
-                            active_orders=user_orders,
-                            position_shares=quantity,
-                            current_value=current_value,
-                        )
                         rebalance_instructions.append(
-                            {
-                                "symbol": symbol,
-                                "action": report_90["final_action"],
-                                "sell_ratio": _EUPHORIA_CAPITAL_SPLIT_PRIMARY
-                                if report_90["final_action"] == "LIQUIDATE"
-                                else (
-                                    0.5
-                                    if report_90["final_action"] == "REDUCE"
-                                    else 0.0
-                                ),
-                                "target_core": report_90["final_target"],
-                                "reason": report_90["markdown_report"],
-                                "suggested_strategy": report_90["options_strategy"],
-                                "scenario": RolloverScenario.SATELLITE_REBALANCE.value,
-                                "is_manual_override_required": False,
-                                "trigger_condition_text": report_90[
-                                    "trigger_condition_report"
-                                ],
-                                "cash_impact": report_90["cash_impact"],
-                                "limit_price": report_90["limit_price"],
-                            }
+                            await _build_euphoria_primary_liquidation_instruction(
+                                engine,
+                                symbol,
+                                metrics,
+                                asset_class,
+                                quantity,
+                                current_value,
+                                user_orders,
+                                next_target,
+                            )
                         )
                         # 10% 留存原標的做 Bear Call Spread 反向收租 (定義完整 Long Wing)
                         short_strike = round(call_wall * 1.02, 2)
                         wing_buffer = (
                             _BEAR_CALL_SPREAD_WING_ATR_MULT * atr_15m
                             if atr_15m > 0
-                            else short_strike * 0.05
+                            else short_strike * _BEAR_CALL_SPREAD_WING_FALLBACK_PCT
                         )
                         long_strike = round(short_strike + wing_buffer, 2)
                         spread_override_str = f"Bear Call Spread (${short_strike:.2f} Short / ${long_strike:.2f} Long Wing, 30-45 DTE)"
@@ -850,41 +914,23 @@ async def check_satellite_rebalancing_impl(
                         # 未衰竭 (多頭動能強勁或 Skew 極端狂熱)，嚴禁做空以防 Gamma Squeeze！
                         # 90% 獲利了結轉入新標的，剩餘 10% 啟動 Trailing Stop 移動止盈
                         trailing_stop_level = round(
-                            max(call_wall - (0.5 * atr_15m), spot * 0.98), 2
-                        )
-                        report_90 = await engine._generate_rule_based_rebalance_report(
-                            symbol,
-                            metrics,
-                            requested_action="LIQUIDATE",
-                            target=next_target,
-                            asset_class=asset_class,
-                            is_take_profit=True,
-                            active_orders=user_orders,
-                            position_shares=quantity,
-                            current_value=current_value,
+                            max(
+                                call_wall - (_TRAILING_STOP_ATR_MULT * atr_15m),
+                                spot * _TRAILING_STOP_SPOT_FLOOR_PCT,
+                            ),
+                            2,
                         )
                         rebalance_instructions.append(
-                            {
-                                "symbol": symbol,
-                                "action": report_90["final_action"],
-                                "sell_ratio": _EUPHORIA_CAPITAL_SPLIT_PRIMARY
-                                if report_90["final_action"] == "LIQUIDATE"
-                                else (
-                                    0.5
-                                    if report_90["final_action"] == "REDUCE"
-                                    else 0.0
-                                ),
-                                "target_core": report_90["final_target"],
-                                "reason": report_90["markdown_report"],
-                                "suggested_strategy": report_90["options_strategy"],
-                                "scenario": RolloverScenario.SATELLITE_REBALANCE.value,
-                                "is_manual_override_required": False,
-                                "trigger_condition_text": report_90[
-                                    "trigger_condition_report"
-                                ],
-                                "cash_impact": report_90["cash_impact"],
-                                "limit_price": report_90["limit_price"],
-                            }
+                            await _build_euphoria_primary_liquidation_instruction(
+                                engine,
+                                symbol,
+                                metrics,
+                                asset_class,
+                                quantity,
+                                current_value,
+                                user_orders,
+                                next_target,
+                            )
                         )
                         report_10 = await engine._generate_rule_based_rebalance_report(
                             symbol,
@@ -931,38 +977,15 @@ async def check_satellite_rebalancing_impl(
                     current_value=current_value,
                 )
 
-                net_action = report["final_action"]
-                net_sell_ratio = (
+                default_sell_ratio = (
                     1.0
-                    if net_action == "LIQUIDATE"
-                    else (0.5 if net_action == "REDUCE" else 0.0)
+                    if report["final_action"] == "LIQUIDATE"
+                    else (0.5 if report["final_action"] == "REDUCE" else 0.0)
                 )
-                net_reason = report["markdown_report"]
-                if net_action in ("LIQUIDATE", "REDUCE"):
-                    net_sell_ratio, net_note = engine._net_against_existing_order(
-                        net_sell_ratio, quantity, report.get("matching_order")
-                    )
-                    if net_note:
-                        net_reason += net_note
-                    if net_sell_ratio <= 0.0:
-                        net_action = "HOLD"
-
                 rebalance_instructions.append(
-                    {
-                        "symbol": symbol,
-                        "action": net_action,
-                        "sell_ratio": net_sell_ratio,
-                        "target_core": report["final_target"],
-                        "reason": net_reason,
-                        "suggested_strategy": report["options_strategy"],
-                        "scenario": RolloverScenario.SATELLITE_REBALANCE.value,
-                        "is_manual_override_required": bool(
-                            report.get("is_illiquid_warning", False)
-                        ),
-                        "trigger_condition_text": report["trigger_condition_report"],
-                        "cash_impact": report["cash_impact"],
-                        "limit_price": report["limit_price"],
-                    }
+                    _net_and_build_rebalance_instruction(
+                        engine, symbol, quantity, report, default_sell_ratio
+                    )
                 )
                 continue  # 已經處理，不需進行後續常規再平衡
 
@@ -990,36 +1013,15 @@ async def check_satellite_rebalancing_impl(
                     current_value=current_value,
                 )
 
-                net_action = report["final_action"]
-                net_sell_ratio = (
-                    round(sell_ratio, 2) if net_action != "LIQUIDATE" else 1.0
+                default_sell_ratio = (
+                    round(sell_ratio, 2)
+                    if report["final_action"] != "LIQUIDATE"
+                    else 1.0
                 )
-                net_reason = report["markdown_report"]
-                if net_action in ("LIQUIDATE", "REDUCE"):
-                    net_sell_ratio, net_note = engine._net_against_existing_order(
-                        net_sell_ratio, quantity, report.get("matching_order")
-                    )
-                    if net_note:
-                        net_reason += net_note
-                    if net_sell_ratio <= 0.0:
-                        net_action = "HOLD"
-
                 rebalance_instructions.append(
-                    {
-                        "symbol": symbol,
-                        "action": net_action,
-                        "sell_ratio": net_sell_ratio,
-                        "target_core": report["final_target"],
-                        "reason": net_reason,
-                        "suggested_strategy": report["options_strategy"],
-                        "scenario": RolloverScenario.SATELLITE_REBALANCE.value,
-                        "is_manual_override_required": bool(
-                            report.get("is_illiquid_warning", False)
-                        ),
-                        "trigger_condition_text": report["trigger_condition_report"],
-                        "cash_impact": report["cash_impact"],
-                        "limit_price": report["limit_price"],
-                    }
+                    _net_and_build_rebalance_instruction(
+                        engine, symbol, quantity, report, default_sell_ratio
+                    )
                 )
 
     return rebalance_instructions

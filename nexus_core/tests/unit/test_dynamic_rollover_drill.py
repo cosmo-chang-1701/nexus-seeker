@@ -151,7 +151,10 @@ async def test_drill_scenario_1_nvda_decay_spcx_breakout_triggers_rollover(
 
     # 4. 執行機會成本評估
     already_flagged: set[str] = set()
-    instructions = await engine.evaluate_opportunity_cost_for_satellites(
+    (
+        instructions,
+        _entry_confirmation,
+    ) = await engine.evaluate_opportunity_cost_for_satellites(
         user_id=101,
         portfolio_assets=portfolio_assets,
         already_flagged_symbols=already_flagged,
@@ -249,7 +252,10 @@ async def test_drill_scenario_2a_nvda_decay_no_target_safe_hold(
         }
     ]
 
-    s2_instructions = await engine.evaluate_opportunity_cost_for_satellites(
+    (
+        s2_instructions,
+        s2_entry_confirmation,
+    ) = await engine.evaluate_opportunity_cost_for_satellites(
         user_id=101,
         portfolio_assets=portfolio_assets,
         already_flagged_symbols=set(),
@@ -257,6 +263,7 @@ async def test_drill_scenario_2a_nvda_decay_no_target_safe_hold(
         candidate_radar=None,
     )
     assert s2_instructions == []
+    assert s2_entry_confirmation is None
 
     # 2. 驗證 S3 核心衛星檢驗 -> 未破位，發出 HOLD 安心防守卡
     with patch(
@@ -379,7 +386,10 @@ async def test_drill_scenario_2b_candidate_blocked_by_six_gates(
         ],
     }
 
-    instructions = await engine.evaluate_opportunity_cost_for_satellites(
+    (
+        instructions,
+        entry_confirmation,
+    ) = await engine.evaluate_opportunity_cost_for_satellites(
         user_id=101,
         portfolio_assets=portfolio_assets,
         already_flagged_symbols=set(),
@@ -388,6 +398,8 @@ async def test_drill_scenario_2b_candidate_blocked_by_six_gates(
     )
 
     assert instructions == []
+    assert entry_confirmation is not None
+    assert entry_confirmation[0] is False
 
 
 @pytest.mark.asyncio

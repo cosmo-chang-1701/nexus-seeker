@@ -13,6 +13,7 @@ from market_analysis.dynamic_rollover import (
     _resolve_canonical_anchor_base,
     _scan_gex_walls,
 )
+from market_analysis.dynamic_rollover.constants import _ANTI_WASHOUT_BASE_ATR_MULT
 from cogs.embed_builders.rollover_embeds import (
     create_dynamic_rollover_embed,
     create_thesis_passed_embed,
@@ -878,16 +879,21 @@ async def test_evaluate_opportunity_cost_for_satellites_no_candidate(
     engine: DynamicRolloverEngine,
 ) -> None:
     # candidate_symbol == "VOO" (未找到高 EV 候選標的) -> 不強制轉倉
-    result = await engine.evaluate_opportunity_cost_for_satellites(
+    result, entry_confirmation = await engine.evaluate_opportunity_cost_for_satellites(
         1, [{"symbol": "NVDA", "asset_class": "SATELLITE"}], set(), "VOO", None
     )
     assert result == []
+    assert entry_confirmation is None
 
     # 有候選標的但 radar 資料為空 -> 不強制轉倉
-    result2 = await engine.evaluate_opportunity_cost_for_satellites(
+    (
+        result2,
+        entry_confirmation2,
+    ) = await engine.evaluate_opportunity_cost_for_satellites(
         1, [{"symbol": "NVDA", "asset_class": "SATELLITE"}], set(), "SMCI", None
     )
     assert result2 == []
+    assert entry_confirmation2 is None
 
 
 @pytest.mark.asyncio
@@ -945,12 +951,13 @@ async def test_evaluate_opportunity_cost_for_satellites_triggers(
         "uoa": [],
     }
 
-    result = await engine.evaluate_opportunity_cost_for_satellites(
+    result, entry_confirmation = await engine.evaluate_opportunity_cost_for_satellites(
         1, portfolio, set(), "SMCI", candidate_radar
     )
     assert len(result) == 1
     assert result[0]["symbol"] == "NVDA"
     assert result[0]["target_core"] == "SMCI"
+    assert entry_confirmation == (True, "mocked")
     assert result[0]["action"] == "REDUCE"
     assert result[0]["sell_ratio"] == 0.3
     assert result[0]["scenario"] == "OPPORTUNITY_COST"
@@ -1331,6 +1338,107 @@ async def test_evaluate_core_deployment_satellite_asset_ignored(
 
 @pytest.mark.asyncio
 @patch(
+    "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
+    new_callable=AsyncMock,
+    return_value=(True, "confirmed"),
+)
+@patch("database.market_cache.get_market_cache", return_value=None)
+async def test_scenario2_and_scenario5_reuse_confirm_entry_signal_result(
+    mock_cache: MagicMock,
+    mock_entry_gate: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """Phase 2 回歸鎖定：Scenario 2 (機會成本轉倉) 與 Scenario 5 (核心資金部署)
+    在同一輪次對同一 candidate_symbol/candidate_radar 評估時，_confirm_entry_signal
+    只應被實際呼叫一次 (由 Scenario 5 沿用 Scenario 2 已算好的結果並透過
+    precomputed_entry_confirmation 傳入)，而非各自獨立呼叫兩次。"""
+    portfolio = [
+        {
+            "symbol": "VOO",
+            "asset_class": "CORE",
+            "current_value": 10000.0,
+            "target_allocation_pct": 0.5,
+            "boxx_allocation_pct": 0.0,  # < 50，走機會分支，需 _confirm_entry_signal
+        },
+    ]
+    candidate_radar = {
+        "psq_result": {"squeeze_level": "High", "signal_direction": "Long"},
+        "quote": {"c": 40.0},
+        "iv_metrics": {"iv_rank": 20.0},
+        "gex_profile_data": {"put_wall": 0.0},
+        "uoa": [],
+    }
+
+    (
+        _opportunity_cost_instructions,
+        entry_confirmation,
+    ) = await engine.evaluate_opportunity_cost_for_satellites(
+        1, portfolio, set(), "SPCX", candidate_radar
+    )
+    assert entry_confirmation == (True, "confirmed")
+
+    core_deployment_instructions = await engine.evaluate_core_deployment(
+        1,
+        portfolio,
+        set(),
+        10000.0,
+        "SPCX",
+        candidate_radar,
+        precomputed_entry_confirmation=entry_confirmation,
+    )
+
+    assert len(core_deployment_instructions) == 1
+    assert core_deployment_instructions[0]["target_core"] == "SPCX"
+    mock_entry_gate.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
+    new_callable=AsyncMock,
+    return_value=(True, "confirmed independently"),
+)
+async def test_evaluate_core_deployment_confirms_independently_when_no_precomputed_result(
+    mock_entry_gate: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """Phase 2 回歸鎖定：當呼叫端未提供 precomputed_entry_confirmation (例如
+    Scenario 2 當輪未觸及 _confirm_entry_signal，如 candidate_symbol 為 VOO)，
+    Scenario 5 仍應照舊獨立呼叫 _confirm_entry_signal 自行確認，而非因收到
+    None 就靜默跳過部署。"""
+    portfolio = [
+        {
+            "symbol": "VOO",
+            "asset_class": "CORE",
+            "current_value": 10000.0,
+            "target_allocation_pct": 0.5,
+            "boxx_allocation_pct": 0.0,
+        },
+    ]
+    candidate_radar = {
+        "psq_result": {"squeeze_level": "High", "signal_direction": "Long"},
+        "quote": {"c": 40.0},
+        "iv_metrics": {"iv_rank": 20.0},
+        "gex_profile_data": {"put_wall": 0.0},
+        "uoa": [],
+    }
+
+    result = await engine.evaluate_core_deployment(
+        1,
+        portfolio,
+        set(),
+        10000.0,
+        "SPCX",
+        candidate_radar,
+        precomputed_entry_confirmation=None,
+    )
+
+    assert len(result) == 1
+    mock_entry_gate.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@patch(
     "market_analysis.index_microstructure.get_market_regime",
     new_callable=AsyncMock,
     return_value="NORMAL",
@@ -1407,7 +1515,7 @@ async def test_evaluate_margin_defense_triggers_boxx_for_no_edge_holding(
     assert result[0]["action"] == "LIQUIDATE"
     assert result[0]["sell_ratio"] == 1.0
     assert result[0]["target_core"] == "BOXX"
-    assert "BOXX" in result[0]["buy_action_label"]
+    assert "BOXX" in (result[0]["buy_action_label"] or "")
     assert result[0]["is_manual_override_required"] is True
     assert result[0]["scenario"] == "MARGIN_DEFENSE"
 
@@ -2094,6 +2202,33 @@ def test_compute_anti_washout_stop_01dte_and_lvn_regression_unchanged(
     assert stop_lvn == 94.40
 
 
+def test_compute_anti_washout_stop_01dte_total_distance_matches_named_constant(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """
+    Phase 0 常數清理回歸鎖定：0/1 DTE 末日結算容忍度機制對 anchor_base 疊加套用
+    兩次 _ANTI_WASHOUT_BASE_ATR_MULT (1.5x) ATR 墊片，故停損最終距 anchor_base
+    應恰為 2 * _ANTI_WASHOUT_BASE_ATR_MULT * atr_15m (= 3.0x ATR，
+    對應既有 Risk-Parity 縮放因子註解 1.5 / 3.0 = 0.5)。使用不落在邊界鉗制範圍
+    [spot*0.95, spot*0.98] 內的數值，確保驗證的是 ATR 墊片本身而非鉗制。
+    """
+    anchor_base = 100.0
+    atr_15m = 2.0
+    stop_loss, _limit, is_01dte, scale = engine._compute_anti_washout_stop(
+        anchor_base=anchor_base,
+        metrics={
+            "spot_price": 100.0,
+            "atr_15m": atr_15m,
+            "dte": 1,
+            "lvn": 0.0,
+            "hvn": 0.0,
+        },
+    )
+    assert is_01dte is True
+    assert scale == 0.5
+    assert anchor_base - stop_loss == 2 * _ANTI_WASHOUT_BASE_ATR_MULT * atr_15m
+
+
 def test_resolve_canonical_anchor_base_topology_correction() -> None:
     """put_wall/call_wall 顛倒時應取兩者較低值作為防守錨點。"""
     assert (
@@ -2194,9 +2329,10 @@ async def test_compute_structural_breakdown_signals_memoizes_within_ttl(
     )
     with patch(
         "market_analysis.index_microstructure.classify_gex_wall",
-        side_effect=lambda val, max_pos, is_heavy_otm_call=False: (
-            "SUPPORT_GEX_WALL" if val > 0 else "NEUTRAL"
-        ),
+        side_effect=lambda val,
+        max_pos,
+        is_heavy_otm_call=False,
+        min_effective_gex=0.0: ("SUPPORT_GEX_WALL" if val > 0 else "NEUTRAL"),
     ) as mock_classify:
         result1 = await engine._compute_structural_breakdown_signals(**common_kwargs)
         result2 = await engine._compute_structural_breakdown_signals(**common_kwargs)
@@ -2811,16 +2947,43 @@ async def test_satellite_rebalancing_euphoria_exhaustion_includes_wash_sale_note
 
 
 def test_scan_gex_walls_finds_support_and_resistance() -> None:
+    # 數值採真實美元名目量級 (>= GEX_THIN_WALL_THRESHOLD=500,000)，確保支撐牆
+    # 不會被 Phase 3 新增的薄弱紙牆過濾邏輯誤判為 THIN_SUPPORT_WALL。
     gex_profile_data = {
-        "gex_profile": {"90": -50.0, "95": 80.0, "100": 30.0, "105": -20.0}
+        "gex_profile": {
+            "90": -500_000.0,
+            "95": 800_000.0,
+            "100": 300_000.0,
+            "105": -200_000.0,
+        }
     }
     support_wall, resistance_wall, support_gex, resistance_gex = _scan_gex_walls(
         "TEST", gex_profile_data
     )
     assert support_wall == 95.0
-    assert support_gex == 80.0
+    assert support_gex == 800_000.0
     assert resistance_wall == 105.0
-    assert resistance_gex == -20.0
+    assert resistance_gex == -200_000.0
+
+
+def test_scan_gex_walls_thin_wall_excluded() -> None:
+    """Phase 3 行為修正回歸鎖定：最大正 GEX 履約價若曝險值低於
+    GEX_THIN_WALL_THRESHOLD (500,000，即 `/x` 終端機既有的薄弱紙牆 `(薄)`
+    標記門檻)，應視為 THIN_SUPPORT_WALL 而非 SUPPORT_GEX_WALL；
+    _scan_gex_walls 對此無對應分支，故薄弱牆會直接落空，support_wall/
+    support_gex 應維持 0.0（等同「未偵測到支撐牆」），而非誤將薄紙牆當成
+    滿血支撐牆。resistance_wall 判定不受此門檻影響 (負 GEX 分支未套用
+    min_effective_gex)。"""
+    gex_profile_data = {
+        "gex_profile": {"90": -500_000.0, "95": 80.0, "105": -200_000.0}
+    }
+    support_wall, resistance_wall, support_gex, resistance_gex = _scan_gex_walls(
+        "TEST", gex_profile_data
+    )
+    assert support_wall == 0.0
+    assert support_gex == 0.0
+    assert resistance_wall == 105.0
+    assert resistance_gex == -200_000.0
 
 
 def test_scan_gex_walls_missing_profile_returns_zeros() -> None:
@@ -2829,11 +2992,11 @@ def test_scan_gex_walls_missing_profile_returns_zeros() -> None:
 
 
 def test_scan_gex_walls_logs_malformed_entries(caplog: Any) -> None:
-    gex_profile_data = {"gex_profile": {"bad_strike": "bad_value", "100": 50.0}}
+    gex_profile_data = {"gex_profile": {"bad_strike": "bad_value", "100": 600_000.0}}
     with caplog.at_level(logging.DEBUG, logger="market_analysis.dynamic_rollover"):
         support_wall, _, support_gex, _ = _scan_gex_walls("TEST", gex_profile_data)
     assert support_wall == 100.0
-    assert support_gex == 50.0
+    assert support_gex == 600_000.0
     assert any("解析失敗" in record.message for record in caplog.records)
 
 
@@ -2855,7 +3018,10 @@ def _make_15m_df(bars: list[tuple[float, float]]) -> pd.DataFrame:
 def _green_candidate_radar() -> dict:
     """四重過濾鐵律全數通過的候選標的基準 fixture：
     - gex_profile 累積曝險在 $95 由負轉正 (Gamma Flip 估算 = 95.0)，
-      且 $95 亦為全鏈最大正 GEX (支撐牆)。
+      且 $95 亦為全鏈最大正 GEX (支撐牆)。數值採真實美元名目量級
+      (>= GEX_THIN_WALL_THRESHOLD=500,000，Phase 3 薄弱紙牆過濾門檻)，
+      避免 $95 支撐牆被誤判為 THIN_SUPPORT_WALL 而在條件二失效
+      (各數值等比例放大 10,000 倍，保留原始由負轉正的累積和交叉點不變)。
     - call_wall $110，距現價 $100 有 10% 空間 (>= 5% 門檻)。
     - uoa 僅含一筆次週 CALL BTO (DTE=14)，無 STO Call 封頂。
     """
@@ -2865,7 +3031,12 @@ def _green_candidate_radar() -> dict:
         "gex_profile_data": {
             "call_wall": 110.0,
             "put_wall": 95.0,
-            "gex_profile": {"90": -50.0, "95": 80.0, "100": 30.0, "105": -20.0},
+            "gex_profile": {
+                "90": -500_000.0,
+                "95": 800_000.0,
+                "100": 300_000.0,
+                "105": -200_000.0,
+            },
         },
         "uoa": [
             {
@@ -2967,7 +3138,9 @@ async def test_confirm_entry_signal_condition1_fails_gamma_flip_unavailable(
     無法估算，直接判定條件一未通過 (不發動 15m 抓取)；條件二仍可通過
     (該履約價本身即為支撐牆)。"""
     radar = _green_candidate_radar()
-    radar["gex_profile_data"]["gex_profile"] = {"100": 50.0}
+    # 單一正值履約價數值採真實美元名目量級，確保條件二 (支撐牆偵測) 仍能通過
+    # (本測試目的是驗證條件一因無零交叉點而失敗，而非條件二受薄弱紙牆過濾影響)。
+    radar["gex_profile_data"]["gex_profile"] = {"100": 600_000.0}
     with patch(
         "services.market_data_service.get_history_df",
         new_callable=AsyncMock,
@@ -3221,10 +3394,11 @@ async def test_evaluate_opportunity_cost_for_satellites_blocked_by_entry_gate(
         "uoa": [],
     }
 
-    result = await engine.evaluate_opportunity_cost_for_satellites(
+    result, entry_confirmation = await engine.evaluate_opportunity_cost_for_satellites(
         1, portfolio, set(), "SMCI", candidate_radar
     )
     assert result == []
+    assert entry_confirmation == (False, "mocked: entry not confirmed")
     mock_entry_gate.assert_awaited_once()
 
 
@@ -3362,7 +3536,7 @@ async def test_margin_defense_cash_deficit_restores_cash(
     ins = instructions[0]
     assert ins["symbol"] == "AMD"
     assert ins["target_core"] == "CASH"
-    assert "保留現金" in ins["buy_action_label"]
+    assert "保留現金" in (ins["buy_action_label"] or "")
     assert "消除保證金追繳風險" in ins["suggested_strategy"]
 
 

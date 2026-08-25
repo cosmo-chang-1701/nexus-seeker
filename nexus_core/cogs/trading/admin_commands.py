@@ -181,6 +181,15 @@ class AdminCommandsCog(commands.Cog):
                 f"Flip: {gex_data.get('gamma_flip', 0.0):.2f} / "
                 f"TED Spread: {ted_spread}{gex_stale_tag}"
             )
+
+            # get_market_regime() 快取的組成輸入 (GEX/流動性) 剛被強制刷新，
+            # 需一併清除其記憶體快取，避免管理員手動刷新後市況判讀仍停留在
+            # 舊資料直到 TTL 到期才更新。
+            from market_analysis.index_microstructure import (
+                invalidate_market_regime_cache,
+            )
+
+            invalidate_market_regime_cache()
         except Exception as e:
             errors.append(f"GEX & 流動性爬取失敗: {e}")
 

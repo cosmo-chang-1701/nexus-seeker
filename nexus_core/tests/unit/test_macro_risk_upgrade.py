@@ -1,10 +1,14 @@
 from typing import Any
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 import pandas as pd
 from models.schemas import EnhancedWatchlistMetrics, WatchlistEventContext
+import market_analysis.index_microstructure as index_microstructure
 from market_analysis.index_microstructure import (
     get_market_regime,
+    fetch_core_macro_metrics,
+    invalidate_market_regime_cache,
+    invalidate_core_macro_metrics_cache,
     suggest_boxx_allocation_pct,
     suggest_target_allocation_pct,
     estimate_symbol_gamma_flip,
@@ -14,6 +18,26 @@ from market_analysis.trading_orchestration import (
     calculate_new_cost_basis,
     recommend_covered_calls,
 )
+from services.single_flight import SingleFlightManager
+
+
+@pytest.fixture(autouse=True)
+def _reset_regime_and_core_macro_caches() -> Any:
+    """Phase 1 (get_market_regime/fetch_core_macro_metrics 記憶體快取) 的
+    測試隔離：確保每個測試皆從乾淨的快取狀態開始，避免測試執行順序造成
+    快取命中/未命中結果不確定，也避免 SingleFlightManager 殘留的已完成
+    task 造成後續呼叫誤判為「進行中」而略過重新抓取。"""
+
+    def _reset() -> None:
+        index_microstructure._market_regime_cache_value = None
+        index_microstructure._market_regime_cache_expiry = 0.0
+        index_microstructure._core_macro_metrics_cache_value = None
+        index_microstructure._core_macro_metrics_cache_expiry = 0.0
+        SingleFlightManager._active_tasks.clear()
+
+    _reset()
+    yield
+    _reset()
 
 
 def _create_sample_metrics(**overrides):  # type: ignore
@@ -89,6 +113,111 @@ async def test_get_market_regime_critical() -> None:
 
         regime = await get_market_regime()
         assert regime == "SHORT_GAMMA_CRITICAL"
+
+
+@pytest.mark.asyncio
+async def test_get_market_regime_caches_within_ttl() -> None:
+    """Phase 1：TTL 內第二次呼叫應直接命中記憶體快取，不重新觸發底層運算
+    (_compute_market_regime_uncached，內含 2 支未快取的邊緣爬蟲 HTTP 端點)。"""
+    with patch(
+        "market_analysis.index_microstructure._compute_market_regime_uncached",
+        new_callable=AsyncMock,
+    ) as mock_compute:
+        mock_compute.return_value = "NORMAL"
+
+        first = await get_market_regime()
+        second = await get_market_regime()
+
+        assert first == "NORMAL"
+        assert second == "NORMAL"
+        mock_compute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_market_regime_refetches_after_ttl_expiry() -> None:
+    """Phase 1：快取過期後應重新觸發底層運算，而非永久回傳陳舊市況判讀
+    （此值直接影響 SHORT_GAMMA_CRITICAL 等交易安全機制，過期後必須重抓）。"""
+    with patch(
+        "market_analysis.index_microstructure._compute_market_regime_uncached",
+        new_callable=AsyncMock,
+    ) as mock_compute:
+        mock_compute.return_value = "NORMAL"
+
+        await get_market_regime()
+        mock_compute.assert_awaited_once()
+
+        # 模擬 TTL 到期：直接將快取到期時間撥回過去，而非等待真實時間流逝。
+        # 同時清除 SingleFlightManager 殘留的已完成 task：真實情境下兩次呼叫
+        # 相隔遠超過一個事件迴圈 tick，done_callback 排程的清理必然已完成；
+        # 這裡以同步方式模擬該已完成的清理狀態。
+        index_microstructure._market_regime_cache_expiry = 0.0
+        SingleFlightManager._active_tasks.clear()
+
+        await get_market_regime()
+        assert mock_compute.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_invalidate_market_regime_cache_forces_refetch() -> None:
+    """Phase 1：/force_macro_update 手動刷新 GEX/流動性數據後呼叫此函式，
+    應使下一次 get_market_regime() 立即重新運算，而非等待 TTL 到期。"""
+    with patch(
+        "market_analysis.index_microstructure._compute_market_regime_uncached",
+        new_callable=AsyncMock,
+    ) as mock_compute:
+        mock_compute.return_value = "NORMAL"
+
+        await get_market_regime()
+        mock_compute.assert_awaited_once()
+
+        invalidate_market_regime_cache()
+        SingleFlightManager._active_tasks.clear()
+
+        await get_market_regime()
+        assert mock_compute.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_fetch_core_macro_metrics_caches_within_ttl() -> None:
+    """Phase 1：fetch_core_macro_metrics() 沿用與 get_market_regime() 相同的
+    快取機制，TTL 內第二次呼叫不應重新觸發底層邊緣爬蟲抓取。"""
+    fallback = {
+        "rrp": 420.5,
+        "fed_balance": 7.25,
+        "uer": 4.0,
+        "sahm_rule": 0.35,
+        "fear_greed": 48.0,
+    }
+    with patch(
+        "market_analysis.index_microstructure._fetch_core_macro_metrics_uncached",
+        new_callable=AsyncMock,
+    ) as mock_fetch:
+        mock_fetch.return_value = fallback
+
+        first = await fetch_core_macro_metrics()
+        second = await fetch_core_macro_metrics()
+
+        assert first == fallback
+        assert second == fallback
+        mock_fetch.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_invalidate_core_macro_metrics_cache_forces_refetch() -> None:
+    with patch(
+        "market_analysis.index_microstructure._fetch_core_macro_metrics_uncached",
+        new_callable=AsyncMock,
+    ) as mock_fetch:
+        mock_fetch.return_value = {"fear_greed": 48.0}
+
+        await fetch_core_macro_metrics()
+        mock_fetch.assert_awaited_once()
+
+        invalidate_core_macro_metrics_cache()
+        SingleFlightManager._active_tasks.clear()
+
+        await fetch_core_macro_metrics()
+        assert mock_fetch.await_count == 2
 
 
 @pytest.mark.asyncio

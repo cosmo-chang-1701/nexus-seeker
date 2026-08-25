@@ -1,10 +1,13 @@
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
-from market_analysis.option_guidance import is_spread_illiquid
-
 from . import logger
+from ._shared import (
+    format_cash_impact,
+    format_illiquidity_warning,
+    resolve_current_value,
+)
 from .constants import CORE_DEFENSE_ETF_SYMBOLS
-from .models import RolloverScenario
+from .models import RolloverInstruction, RolloverScenario
 
 
 class _MarginDefenseMixin:
@@ -80,7 +83,7 @@ async def evaluate_margin_defense_impl(
     user_id: int,
     portfolio_assets: List[Dict[str, Any]],
     already_flagged_symbols: Optional[set] = None,
-) -> List[Dict[str, Any]]:
+) -> List[RolloverInstruction]:
     """
     邏輯 (4): 槓桿與保證金防禦 (Leverage & Margin Defense)
     觸發條件: 大盤 Regime 進入 SHORT_GAMMA_CRITICAL / SYSTEMIC_LIQUIDITY_CRISIS
@@ -153,7 +156,7 @@ async def evaluate_margin_defense_impl(
         return []
 
     # --- 逐一檢查所有 SATELLITE 持倉是否結構性無勝率 ---
-    instructions: List[Dict[str, Any]] = []
+    instructions: List[RolloverInstruction] = []
 
     flagged = already_flagged_symbols or set()
     for asset in portfolio_assets:
@@ -243,12 +246,10 @@ async def evaluate_margin_defense_impl(
         # --- 流動性閘門 (#7)：期權部位若帶有 bid/ask，點差過寬時附加警示 ---
         bid = float(asset.get("bid", 0.0))
         ask = float(asset.get("ask", 0.0))
-        if asset_class == "OPTIONS" and is_spread_illiquid(bid, ask):
-            spread_pct = (ask - bid) / ((ask + bid) / 2)
-            reason_text += (
-                f"\n⚠️ **流動性警告**：合約點差過寬 (Bid ${bid:.2f} / Ask ${ask:.2f}，"
-                f"點差 {spread_pct:.1%})，建議採限價單並留意滑價。"
-            )
+        if asset_class == "OPTIONS":
+            illiquidity_warning = format_illiquidity_warning(bid, ask)
+            if illiquidity_warning:
+                reason_text += illiquidity_warning
 
         _, matching_sell_order = engine._resolve_active_order_defense(
             symbol, orders, 0.0, 0.0
@@ -263,12 +264,13 @@ async def evaluate_margin_defense_impl(
             action = "HOLD"
 
         # 預估資金影響：優先採用持倉市值，缺失時退回股數*現價估算。
-        current_value = float(asset.get("current_value", 0.0))
-        spot_price = float(asset.get("spot_price", 0.0))
-        if current_value <= 0 and spot_price > 0:
-            current_value = abs(quantity) * spot_price
+        current_value = resolve_current_value(
+            float(asset.get("current_value", 0.0)),
+            abs(quantity),
+            float(asset.get("spot_price", 0.0)),
+        )
         recovered_cash = current_value * sell_ratio
-        cash_impact = f"${recovered_cash:,.0f}" if recovered_cash > 0 else None
+        cash_impact = format_cash_impact(recovered_cash)
 
         # 建議限價：僅在目標為 BOXX 等實際買入標的時才有意義（CASH 為單純平倉保留
         # 現金，無買入委託，維持 None 讓呼叫端退回 "Market" 泛用字串）。
