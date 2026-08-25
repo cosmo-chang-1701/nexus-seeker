@@ -714,3 +714,92 @@ async def test_monitor_real_portfolio_task_threads_entry_confirmation_into_core_
     await_args = cog.rollover_engine.evaluate_core_deployment.await_args
     assert await_args is not None
     assert await_args.kwargs["precomputed_entry_confirmation"] == entry_confirmation
+
+
+@pytest.mark.asyncio
+async def test_monitor_real_portfolio_task_dispatches_covered_call_overlay_embed() -> (
+    None
+):
+    """Phase C 回歸鎖定：evaluate_covered_call_overlay 產生的 instruction
+    (is_covered_call_overlay=True) 必須經由專屬的 create_covered_call_overlay_embed
+    推播，而非誤用 create_dynamic_rollover_embed (該函式的 is_hold 判斷會將
+    sell_ratio==0 的本情境誤渲染為「安全續抱、無需任何手動操作」)。"""
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+    bot.get_cog = MagicMock(return_value=None)
+
+    with patch("discord.ext.tasks.Loop.start"):
+        cog = PortfolioMonitorCog(bot)
+
+    cog.trading_service.audit_real_portfolio_risk = AsyncMock(return_value=[])  # type: ignore
+
+    holding = {
+        "id": 1,
+        "user_id": 1,
+        "symbol": "VOO",
+        "metadata": "{}",
+        "quantity": 500.0,
+        "avg_cost": 470.0,
+    }
+
+    overlay_instruction = {
+        "symbol": "VOO",
+        "action": "HOLD",
+        "sell_ratio": 0.0,
+        "target_core": "VOO",
+        "reason": "test reason",
+        "suggested_strategy": "Covered Call (STO)",
+        "scenario": "CORE_DEPLOYMENT",
+        "is_manual_override_required": False,
+        "cash_impact": "$350",
+        "limit_price": 465.0,
+        "strike": "$465.00C",
+        "expiry": "2026-09-18",
+        "direction": "STO",
+        "is_covered_call_overlay": True,
+    }
+
+    cog.rollover_engine.check_satellite_rebalancing = AsyncMock(return_value=[])  # type: ignore
+    cog.rollover_engine.evaluate_opportunity_cost_for_satellites = AsyncMock(  # type: ignore
+        return_value=([], None)
+    )
+    cog.rollover_engine.evaluate_core_deployment = AsyncMock(return_value=[])  # type: ignore
+    cog.rollover_engine.evaluate_covered_call_overlay = AsyncMock(  # type: ignore
+        return_value=[overlay_instruction]
+    )
+    cog.rollover_engine.evaluate_margin_defense = AsyncMock(return_value=[])  # type: ignore
+
+    overlay_embed = object()
+    with patch(
+        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
+    ), patch("database.holdings.get_all_holdings", return_value=[holding]), patch(
+        "database.watchlist.get_user_watchlist", return_value=[]
+    ), patch(
+        "market_analysis.trading_orchestration.recommend_covered_calls",
+        new_callable=AsyncMock,
+        return_value={"recommendations": []},
+    ), patch("database.is_notification_enabled", return_value=True), patch(
+        "database.get_kv_cache", return_value=None
+    ), patch("database.save_kv_cache", new_callable=AsyncMock), patch(
+        "database.log_rollover_instruction", new_callable=AsyncMock
+    ), patch(
+        "cogs.trading.portfolio_monitor.create_covered_call_overlay_embed",
+        return_value=overlay_embed,
+    ) as mock_overlay_embed, patch(
+        "cogs.trading.portfolio_monitor.create_dynamic_rollover_embed"
+    ) as mock_rotation_embed:
+        await cog.monitor_real_portfolio_task()
+
+    cog.rollover_engine.evaluate_covered_call_overlay.assert_awaited_once()
+    mock_overlay_embed.assert_called_once()
+    mock_overlay_embed.assert_called_once_with(
+        symbol="VOO",
+        reason="test reason",
+        strike="$465.00C",
+        expiry="2026-09-18",
+        cash_impact="$350",
+        trigger_condition_text=None,
+        is_manual_override_required=False,
+    )
+    mock_rotation_embed.assert_not_called()
+    bot.queue_dm.assert_awaited_once_with(1, embed=overlay_embed)

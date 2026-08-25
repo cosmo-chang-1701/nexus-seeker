@@ -16,6 +16,7 @@ from market_analysis.dynamic_rollover import (
 from market_analysis.dynamic_rollover.constants import _ANTI_WASHOUT_BASE_ATR_MULT
 from cogs.embed_builders.rollover_embeds import (
     create_dynamic_rollover_embed,
+    create_covered_call_overlay_embed,
     create_thesis_passed_embed,
     build_fundamental_broken_embed,
 )
@@ -82,6 +83,33 @@ def test_evaluate_opportunity_cost(engine: DynamicRolloverEngine) -> None:
         current_holding_expected_value=0.10,  # Spread = 2%
     )
     assert res3["should_rollover"] is False
+
+
+def test_evaluate_opportunity_cost_friction_cost_pct_is_load_bearing(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """Phase D 回歸鎖定：friction_cost_pct 須實際影響 EV 門檻判定，而非僅是
+    未被使用的裝飾性參數。ev_spread=0.06 在預設靜態摩擦成本 (0.3%) 下應通過
+    門檻 (0.05+0.003=0.053 &lt; 0.06)，但傳入較寬的動態摩擦成本 (2%，模擬候選
+    標的近價期權點差極寬的高波環境) 後，門檻拉高至 0.07，應反轉為不通過。"""
+    kwargs = dict(
+        current_holding_symbol="PLTR",
+        current_holding_power_squeeze=15.0,
+        current_holding_profit_pct=0.4,
+        target_watchlist_symbol="SMCI",
+        target_power_squeeze=85.0,
+        target_expected_value=0.16,
+        current_holding_expected_value=0.10,  # ev_spread = 0.06
+    )
+
+    res_default = engine.evaluate_opportunity_cost(**kwargs)  # type: ignore[arg-type]
+    assert res_default["should_rollover"] is True
+
+    res_wide_friction = engine.evaluate_opportunity_cost(
+        **kwargs,  # type: ignore[arg-type]
+        friction_cost_pct=0.02,
+    )
+    assert res_wide_friction["should_rollover"] is False
 
 
 @pytest.mark.asyncio
@@ -964,6 +992,151 @@ async def test_evaluate_opportunity_cost_for_satellites_triggers(
     assert result[0]["is_manual_override_required"] is False
 
 
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
+    new_callable=AsyncMock,
+    return_value=(True, "mocked"),
+)
+@patch("database.market_cache.get_market_cache")
+async def test_evaluate_opportunity_cost_for_satellites_wide_option_spread_suppresses_rollover(
+    mock_cache: MagicMock,
+    mock_entry_gate: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """Phase D 回歸鎖定：候選標的近價期權合約點差極寬時，動態摩擦成本應拉高
+    EV 門檻，使原本在靜態 0.3% 下會通過的邊際 ev_spread (0.06) 反轉為不通過。"""
+
+    def cache_side_effect(symbol: str, expiry: str = None):  # type: ignore
+        if symbol.upper() == "NVDA":
+            return {
+                "reference_spot_price": 200.0,
+                "expected_move_upper": 205.0,  # EV ≈ 0.025
+                "is_stale": 0,
+                "is_degraded": 0,
+            }
+        if symbol.upper() == "SMCI":
+            return {
+                "reference_spot_price": 40.0,
+                "expected_move_upper": 43.4,  # EV = 0.085 -> ev_spread = 0.06
+                "is_stale": 0,
+                "is_degraded": 0,
+            }
+        return None
+
+    mock_cache.side_effect = cache_side_effect
+
+    portfolio = [
+        {
+            "symbol": "NVDA",
+            "asset_class": "SATELLITE",
+            "spot_price": 240.0,
+            "avg_cost": 200.0,
+            "psq_result": {"squeeze_level": "Release", "signal_direction": "Neutral"},
+        },
+    ]
+    candidate_radar = {
+        "psq_result": {
+            "squeeze_level": "High",
+            "signal_direction": "Long",
+            "is_breakout_long": True,
+        },
+        "quote": {"c": 40.0},
+        "iv_metrics": {"iv_rank": 20.0},
+        "gex_profile_data": {"put_wall": 0.0},
+        "uoa": [],
+    }
+
+    with patch(
+        "market_analysis.strategy.find_best_contract",
+        new_callable=AsyncMock,
+        # spread_pct = (3.0-1.0)/40.0 = 0.05 -> friction = 0.05*1.5 = 0.075
+        # 門檻 = 0.05 + 0.075 = 0.125 > ev_spread(0.06)
+        return_value={"strike": 42.0, "expiry": "2026-10-16", "bid": 1.0, "ask": 3.0},
+    ) as mock_find_contract:
+        (
+            result,
+            _entry_confirmation,
+        ) = await engine.evaluate_opportunity_cost_for_satellites(
+            1, portfolio, set(), "SMCI", candidate_radar
+        )
+
+    mock_find_contract.assert_awaited_once()
+    assert result == []
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
+    new_callable=AsyncMock,
+    return_value=(True, "mocked"),
+)
+@patch("database.market_cache.get_market_cache")
+async def test_evaluate_opportunity_cost_for_satellites_option_fetch_failure_falls_back_to_static_friction(
+    mock_cache: MagicMock,
+    mock_entry_gate: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """Phase D 回歸鎖定：近價期權合約抓取失敗時應靜默退回靜態 0.3% 摩擦成本，
+    而非中斷評估或誤將邊際 ev_spread 判定為不通過。"""
+
+    def cache_side_effect(symbol: str, expiry: str = None):  # type: ignore
+        if symbol.upper() == "NVDA":
+            return {
+                "reference_spot_price": 200.0,
+                "expected_move_upper": 205.0,
+                "is_stale": 0,
+                "is_degraded": 0,
+            }
+        if symbol.upper() == "SMCI":
+            return {
+                "reference_spot_price": 40.0,
+                "expected_move_upper": 43.4,  # ev_spread = 0.06，僅在靜態 0.3% 下通過
+                "is_stale": 0,
+                "is_degraded": 0,
+            }
+        return None
+
+    mock_cache.side_effect = cache_side_effect
+
+    portfolio = [
+        {
+            "symbol": "NVDA",
+            "asset_class": "SATELLITE",
+            "spot_price": 240.0,
+            "avg_cost": 200.0,
+            "psq_result": {"squeeze_level": "Release", "signal_direction": "Neutral"},
+        },
+    ]
+    candidate_radar = {
+        "psq_result": {
+            "squeeze_level": "High",
+            "signal_direction": "Long",
+            "is_breakout_long": True,
+        },
+        "quote": {"c": 40.0},
+        "iv_metrics": {"iv_rank": 20.0},
+        "gex_profile_data": {"put_wall": 0.0},
+        "uoa": [],
+    }
+
+    with patch(
+        "market_analysis.strategy.find_best_contract",
+        new_callable=AsyncMock,
+        side_effect=Exception("network error"),
+    ) as mock_find_contract:
+        (
+            result,
+            _entry_confirmation,
+        ) = await engine.evaluate_opportunity_cost_for_satellites(
+            1, portfolio, set(), "SMCI", candidate_radar
+        )
+
+    mock_find_contract.assert_awaited_once()
+    assert len(result) == 1
+    assert result[0]["symbol"] == "NVDA"
+
+
 # ==========================================
 # 邏輯 (5)：核心資金部署 (evaluate_core_deployment)
 # ==========================================
@@ -1437,6 +1610,307 @@ async def test_evaluate_core_deployment_confirms_independently_when_no_precomput
     mock_entry_gate.assert_awaited_once()
 
 
+# ==========================================
+# 邏輯 (5) 延伸：Covered Call Overlay (evaluate_covered_call_overlay)
+# ==========================================
+
+_CAPPED_SIGNAL = {
+    "is_capped": True,
+    "regime": "NORMAL",
+    "swamp_strike": 460.0,
+    "swamp_gex": -6_000_000.0,
+    "has_uoa_physical_cap": True,
+    "capping_strike": 465.0,
+    "reason": "大盤 Regime: `NORMAL`，SPY 上方負 Gamma 泥淖 @ $460.00，SPY STO Call 物理封頂 @ $465.00",
+}
+
+_NOT_CAPPED_SIGNAL = {
+    "is_capped": False,
+    "regime": "NORMAL",
+    "swamp_strike": 0.0,
+    "swamp_gex": 0.0,
+    "has_uoa_physical_cap": False,
+    "capping_strike": 0.0,
+    "reason": "大盤 Regime: `NORMAL`，SPY 上方未偵測到負 Gamma 泥淖",
+}
+
+_SAMPLE_CC_CONTRACT = {
+    "strike": 465.0,
+    "expiry": "2026-09-18",
+    "mid": 3.5,
+    "bid": 3.4,
+    "ask": 3.6,
+}
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.strategy.find_lowest_strike_call_above_floor",
+    new_callable=AsyncMock,
+)
+@patch(
+    "market_analysis.index_microstructure.get_spx_capped_from_above_signal",
+    new_callable=AsyncMock,
+    return_value=_NOT_CAPPED_SIGNAL,
+)
+async def test_evaluate_covered_call_overlay_not_capped_is_noop(
+    mock_signal: AsyncMock,
+    mock_find_contract: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """SPX 未受制於上方 (is_capped=False) 時應完全不評估任何 CORE 持倉，
+    也不應為此浪費一次期權鏈抓取。"""
+    portfolio = [
+        {
+            "symbol": "VOO",
+            "asset_class": "CORE",
+            "quantity": 500.0,
+            "avg_cost": 450.0,
+        },
+    ]
+    result = await engine.evaluate_covered_call_overlay(1, portfolio, set())
+    assert result == []
+    mock_find_contract.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.strategy.find_lowest_strike_call_above_floor",
+    new_callable=AsyncMock,
+)
+@patch(
+    "market_analysis.index_microstructure.get_spx_capped_from_above_signal",
+    new_callable=AsyncMock,
+    return_value=_CAPPED_SIGNAL,
+)
+async def test_evaluate_covered_call_overlay_below_min_shares_skipped(
+    mock_signal: AsyncMock,
+    mock_find_contract: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """CORE 持倉股數 < 100 (未滿 1 口) 應跳過，即使 SPX 結構訊號已觸發。"""
+    portfolio = [
+        {
+            "symbol": "VOO",
+            "asset_class": "CORE",
+            "quantity": 50.0,
+            "avg_cost": 450.0,
+        },
+    ]
+    result = await engine.evaluate_covered_call_overlay(1, portfolio, set())
+    assert result == []
+    mock_find_contract.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.strategy.find_lowest_strike_call_above_floor",
+    new_callable=AsyncMock,
+    return_value=_SAMPLE_CC_CONTRACT,
+)
+@patch(
+    "market_analysis.index_microstructure.get_spx_capped_from_above_signal",
+    new_callable=AsyncMock,
+    return_value=_CAPPED_SIGNAL,
+)
+async def test_evaluate_covered_call_overlay_triggers_with_cost_basis_as_floor(
+    mock_signal: AsyncMock,
+    mock_find_contract: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """成本線 (avg_cost=470) 高於 SPY 負 Gamma 阻力區 (swamp_strike=460) 時，
+    履約價下限應採成本線 (兩者較高者)，且產生的指令必須是 HOLD + sell_ratio=0
+    (不賣出任何標的持股，僅為賣方 overlay 建議)。"""
+    portfolio = [
+        {
+            "symbol": "VOO",
+            "asset_class": "CORE",
+            "quantity": 500.0,
+            "avg_cost": 470.0,  # > swamp_strike (460.0)
+        },
+    ]
+    result = await engine.evaluate_covered_call_overlay(1, portfolio, set())
+
+    assert len(result) == 1
+    ins = result[0]
+    assert ins["symbol"] == "VOO"
+    assert ins["action"] == "HOLD"
+    assert ins["sell_ratio"] == 0.0
+    assert ins["target_core"] == "VOO"
+    assert ins["scenario"] == "CORE_DEPLOYMENT"
+    assert ins["is_covered_call_overlay"] is True
+    assert ins["direction"] == "STO"
+    assert ins["strike"] == "$465.00C"
+    assert ins["expiry"] == "2026-09-18"
+    assert ins["cash_impact"] == "$350"  # 1 口 * 100 * mid(3.5)
+
+    mock_find_contract.assert_awaited_once()
+    awaited_args = mock_find_contract.await_args
+    assert awaited_args is not None
+    assert awaited_args.args[0] == "VOO"
+    assert awaited_args.args[1] == 470.0  # floor = max(avg_cost, swamp_strike)
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.strategy.find_lowest_strike_call_above_floor",
+    new_callable=AsyncMock,
+    return_value=_SAMPLE_CC_CONTRACT,
+)
+@patch(
+    "market_analysis.index_microstructure.get_spx_capped_from_above_signal",
+    new_callable=AsyncMock,
+    return_value=_CAPPED_SIGNAL,
+)
+async def test_evaluate_covered_call_overlay_triggers_with_swamp_strike_as_floor(
+    mock_signal: AsyncMock,
+    mock_find_contract: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """成本線 (avg_cost=400) 低於 SPY 負 Gamma 阻力區 (swamp_strike=460) 時，
+    履約價下限應改採阻力區 (兩者較高者)，避免推薦的履約價落在阻力區之下。"""
+    portfolio = [
+        {
+            "symbol": "VOO",
+            "asset_class": "CORE",
+            "quantity": 200.0,
+            "avg_cost": 400.0,  # < swamp_strike (460.0)
+        },
+    ]
+    result = await engine.evaluate_covered_call_overlay(1, portfolio, set())
+
+    assert len(result) == 1
+    mock_find_contract.assert_awaited_once()
+    awaited_args = mock_find_contract.await_args
+    assert awaited_args is not None
+    assert awaited_args.args[1] == 460.0  # floor = max(avg_cost, swamp_strike)
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.strategy.find_lowest_strike_call_above_floor",
+    new_callable=AsyncMock,
+    return_value=None,
+)
+@patch(
+    "market_analysis.index_microstructure.get_spx_capped_from_above_signal",
+    new_callable=AsyncMock,
+    return_value=_CAPPED_SIGNAL,
+)
+async def test_evaluate_covered_call_overlay_no_contract_found_is_noop(
+    mock_signal: AsyncMock,
+    mock_find_contract: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """找不到合格履約價的期權合約 (例如選擇權鏈流動性不足) 時應靜默略過，
+    而非拋出例外或產生殘缺指令。"""
+    portfolio = [
+        {
+            "symbol": "VOO",
+            "asset_class": "CORE",
+            "quantity": 500.0,
+            "avg_cost": 470.0,
+        },
+    ]
+    result = await engine.evaluate_covered_call_overlay(1, portfolio, set())
+    assert result == []
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.strategy.find_lowest_strike_call_above_floor",
+    new_callable=AsyncMock,
+    return_value=_SAMPLE_CC_CONTRACT,
+)
+@patch(
+    "market_analysis.index_microstructure.get_spx_capped_from_above_signal",
+    new_callable=AsyncMock,
+    return_value=_CAPPED_SIGNAL,
+)
+async def test_evaluate_covered_call_overlay_already_flagged_symbol_skipped(
+    mock_signal: AsyncMock,
+    mock_find_contract: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    portfolio = [
+        {
+            "symbol": "VOO",
+            "asset_class": "CORE",
+            "quantity": 500.0,
+            "avg_cost": 470.0,
+        },
+    ]
+    result = await engine.evaluate_covered_call_overlay(1, portfolio, {"VOO"})
+    assert result == []
+    mock_find_contract.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.strategy.find_lowest_strike_call_above_floor",
+    new_callable=AsyncMock,
+    return_value=_SAMPLE_CC_CONTRACT,
+)
+@patch(
+    "market_analysis.index_microstructure.get_spx_capped_from_above_signal",
+    new_callable=AsyncMock,
+    return_value=_CAPPED_SIGNAL,
+)
+async def test_evaluate_covered_call_overlay_satellite_asset_ignored(
+    mock_signal: AsyncMock,
+    mock_find_contract: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """僅評估 CORE 持倉；SATELLITE 持倉即使股數與成本線皆符合條件也應忽略。"""
+    portfolio = [
+        {
+            "symbol": "NVDA",
+            "asset_class": "SATELLITE",
+            "quantity": 500.0,
+            "avg_cost": 470.0,
+        },
+    ]
+    result = await engine.evaluate_covered_call_overlay(1, portfolio, set())
+    assert result == []
+    mock_find_contract.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.strategy.find_lowest_strike_call_above_floor",
+    new_callable=AsyncMock,
+    return_value={
+        "strike": 465.0,
+        "expiry": "2026-09-18",
+        "mid": 3.5,
+        "bid": 2.0,
+        "ask": 5.0,  # spread_ratio = 3.0/3.5 ≈ 0.857 > 0.15 門檻
+    },
+)
+@patch(
+    "market_analysis.index_microstructure.get_spx_capped_from_above_signal",
+    new_callable=AsyncMock,
+    return_value=_CAPPED_SIGNAL,
+)
+async def test_evaluate_covered_call_overlay_warns_on_illiquid_option_spread(
+    mock_signal: AsyncMock,
+    mock_find_contract: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    portfolio = [
+        {
+            "symbol": "VOO",
+            "asset_class": "CORE",
+            "quantity": 500.0,
+            "avg_cost": 470.0,
+        },
+    ]
+    result = await engine.evaluate_covered_call_overlay(1, portfolio, set())
+    assert len(result) == 1
+    assert result[0]["is_manual_override_required"] is True
+    assert "流動性警告" in result[0]["reason"]
+
+
 @pytest.mark.asyncio
 @patch(
     "market_analysis.index_microstructure.get_market_regime",
@@ -1782,6 +2256,46 @@ def test_create_dynamic_rollover_embed_core_deployment_style() -> None:
     assert embed.color == discord.Color.green()
     assert "🌱" in str(embed.title)
     assert "核心資金部署" in str(embed.title)
+
+
+def test_create_covered_call_overlay_embed_renders_contract_details() -> None:
+    """Covered Call Overlay 專屬 embed 必須實際呈現履約價/到期日/預估權利金，
+    這正是本情境存在的目的 —— 過去 create_dynamic_rollover_embed 雖有支援
+    渲染這些欄位的邏輯，但因 sell_ratio==0 恆被 is_hold 攔截為安全續抱文案，
+    從未真正顯示過。"""
+    embed = create_covered_call_overlay_embed(
+        symbol="VOO",
+        reason="VOO 持有 500 股，成本線 $470.00，建議賣出 1 口 $465.00C。",
+        strike="$465.00C",
+        expiry="2026-09-18",
+        cash_impact="$350",
+        trigger_condition_text="大盤 Regime: `NORMAL`，SPY 上方負 Gamma 泥淖 @ $460.00",
+    )
+
+    all_field_text = " ".join(f.value or "" for f in embed.fields)
+    assert "$465.00C" in all_field_text
+    assert "2026-09-18" in all_field_text
+    assert "$350" in all_field_text
+    assert "STO (Sell To Open)" in all_field_text
+    assert "NORMAL" in all_field_text
+    assert embed.color == discord.Color.green()
+    assert "🌱" in str(embed.title)  # 沿用 CORE_DEPLOYMENT 情境樣式表的 emoji
+    assert "VOO" in str(embed.title)
+    # 不應誤用「安全續抱、無需任何手動操作」文案 (本情境需要使用者主動掛單)
+    assert "無需任何手動操作" not in str(embed.description)
+
+
+def test_create_covered_call_overlay_embed_illiquidity_warning_field() -> None:
+    embed = create_covered_call_overlay_embed(
+        symbol="VOO",
+        reason="test",
+        strike="$465.00C",
+        expiry="2026-09-18",
+        cash_impact="$350",
+        is_manual_override_required=True,
+    )
+    field_names = [f.name for f in embed.fields]
+    assert any("流動性警告" in (name or "") for name in field_names)
 
 
 def test_create_dynamic_rollover_embed_unknown_scenario_falls_back_gracefully() -> None:

@@ -25,7 +25,10 @@ from cogs.embed_builder import (
     create_gamma_fragility_embed,
     create_option_defense_alert_embed,
 )
-from cogs.embed_builders.rollover_embeds import create_dynamic_rollover_embed
+from cogs.embed_builders.rollover_embeds import (
+    create_dynamic_rollover_embed,
+    create_covered_call_overlay_embed,
+)
 
 ny_tz = ZoneInfo("America/New_York")
 logger = logging.getLogger(__name__)
@@ -474,6 +477,21 @@ class PortfolioMonitorCog(commands.Cog):
                         )
                     )
 
+                    # 🚀 邏輯 (5) 延伸: Covered Call Overlay — 與上方超額配置部署
+                    # 分支互相獨立，不要求 target_allocation_pct opt-in，只要求
+                    # CORE 持倉股數達 1 口門檻。輸出恆為 action="HOLD"（不賣出
+                    # 任何標的持股），故不需要、也不應該把它的輸出併入
+                    # already_flagged_symbols 用於排除後續分支 —— 沿用當前的
+                    # already_flagged 集合即可（其僅用於避免重複評估已被標記
+                    # 賣出/減碼的標的）。
+                    rebalance_instructions += (
+                        await self.rollover_engine.evaluate_covered_call_overlay(
+                            u_id,
+                            portfolio_assets,
+                            already_flagged,
+                        )
+                    )
+
                     # 🚀 邏輯 (4): 槓桿與保證金防禦 — 排除已被 Scenario 2/3/5 標記過的
                     # 標的，避免同一標的同一輪次收到互相矛盾的清倉指令。
                     # 同樣僅排除有實際賣出/減碼動作者；Scenario 3 的 HOLD 安心防守卡
@@ -549,33 +567,63 @@ class PortfolioMonitorCog(commands.Cog):
                         else:
                             suggested_price = "Market"
 
-                        embed = create_dynamic_rollover_embed(
-                            rollover_type=rollover_type,
-                            sell_symbol=ins["symbol"],
-                            sell_ratio=ins["sell_ratio"],
-                            buy_symbol=ins["target_core"],
-                            reason=ins["reason"],
-                            suggested_strategy=ins.get(
-                                "suggested_strategy", "Buy Shares"
-                            ),
-                            suggested_price=suggested_price,
-                            strike="N/A",
-                            expiry="N/A",
-                            direction="BTO" if ins["action"] != "HOLD" else "HOLD",
-                            sell_action=ins.get("sell_action", "STC"),
-                            buy_action_label=ins.get("buy_action_label"),
-                            scenario=scenario,
-                            cash_impact=ins.get("cash_impact"),
-                            trigger_condition_text=ins.get("trigger_condition_text"),
-                        )
-                        if ins.get("is_manual_override_required"):
-                            setattr(
-                                embed, "_view", f"ManualOverrideView:{ins['symbol']}"
+                        if ins.get("is_covered_call_overlay"):
+                            # Covered Call Overlay：不賣出任何標的持股、沒有第二個
+                            # 轉倉標的，套用 create_dynamic_rollover_embed 的
+                            # sell/buy 轉倉框架會產生誤導文案 (該函式的 is_hold
+                            # 判斷只要 sell_ratio==0 就恆為真，會顯示「安全續抱、
+                            # 無需任何手動操作」——但這裡恰恰需要使用者主動掛單
+                            # 賣出買權)，改用專屬 embed。既有兩個互動 View
+                            # (RolloverActionView 試算買入股數、ManualOverrideView)
+                            # 語意皆不適用於「賣出備兌買權」，故不附加互動按鈕。
+                            embed = create_covered_call_overlay_embed(
+                                symbol=ins["symbol"],
+                                reason=ins["reason"],
+                                strike=ins.get("strike") or "N/A",
+                                expiry=ins.get("expiry") or "N/A",
+                                cash_impact=ins.get("cash_impact"),
+                                trigger_condition_text=ins.get(
+                                    "trigger_condition_text"
+                                ),
+                                is_manual_override_required=bool(
+                                    ins.get("is_manual_override_required")
+                                ),
                             )
                         else:
-                            setattr(
-                                embed, "_view", f"RolloverActionView:{ins['symbol']}"
+                            embed = create_dynamic_rollover_embed(
+                                rollover_type=rollover_type,
+                                sell_symbol=ins["symbol"],
+                                sell_ratio=ins["sell_ratio"],
+                                buy_symbol=ins["target_core"],
+                                reason=ins["reason"],
+                                suggested_strategy=ins.get(
+                                    "suggested_strategy", "Buy Shares"
+                                ),
+                                suggested_price=suggested_price,
+                                strike=ins.get("strike") or "N/A",
+                                expiry=ins.get("expiry") or "N/A",
+                                direction=ins.get("direction")
+                                or ("BTO" if ins["action"] != "HOLD" else "HOLD"),
+                                sell_action=ins.get("sell_action", "STC"),
+                                buy_action_label=ins.get("buy_action_label"),
+                                scenario=scenario,
+                                cash_impact=ins.get("cash_impact"),
+                                trigger_condition_text=ins.get(
+                                    "trigger_condition_text"
+                                ),
                             )
+                            if ins.get("is_manual_override_required"):
+                                setattr(
+                                    embed,
+                                    "_view",
+                                    f"ManualOverrideView:{ins['symbol']}",
+                                )
+                            else:
+                                setattr(
+                                    embed,
+                                    "_view",
+                                    f"RolloverActionView:{ins['symbol']}",
+                                )
                         await self.bot.queue_dm(u_id, embed=embed)
                         await database.save_kv_cache(dedup_key, 1)
                         # 審計軌跡：記錄本次實際推送給使用者的轉倉建議本身

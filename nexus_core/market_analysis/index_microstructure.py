@@ -23,6 +23,16 @@ _CORE_MACRO_METRICS_CACHE_TTL: float = 150.0
 _core_macro_metrics_cache_value: Optional[dict] = None
 _core_macro_metrics_cache_expiry: float = 0.0
 
+# get_spx_capped_from_above_signal() 快取：動態轉倉引擎 Scenario 5 的 Covered
+# Call Overlay 分支每 30 分鐘週期對每一檔符合條件的 CORE 持倉評估一次，此訊號
+# 本身與個別持倉無關 (純大盤 SPY 結構判讀)，TTL 刻意比 get_market_regime()
+# 寬鬆 (300 秒，比照 _STRUCTURAL_SIGNALS_CACHE_TTL 的設計理由)：此訊號僅用於
+# 門控一個防禦性加碼收租建議，並非即時進場閘門，不需要 60 秒等級的新鮮度，
+# 過短的 TTL 只會讓同一輪次內每檔 CORE 持倉各自重複觸發一次 UOA 掃描。
+_SPX_CAPPED_SIGNAL_CACHE_TTL: float = 300.0
+_spx_capped_signal_cache_value: Optional[dict] = None
+_spx_capped_signal_cache_expiry: float = 0.0
+
 
 def invalidate_market_regime_cache() -> None:
     """清除 get_market_regime() 的記憶體快取，供 /force_macro_update 等手動刷新
@@ -38,6 +48,14 @@ def invalidate_core_macro_metrics_cache() -> None:
     global _core_macro_metrics_cache_value, _core_macro_metrics_cache_expiry
     _core_macro_metrics_cache_value = None
     _core_macro_metrics_cache_expiry = 0.0
+
+
+def invalidate_spx_capped_from_above_signal_cache() -> None:
+    """清除 get_spx_capped_from_above_signal() 的記憶體快取，語意同
+    invalidate_market_regime_cache()。"""
+    global _spx_capped_signal_cache_value, _spx_capped_signal_cache_expiry
+    _spx_capped_signal_cache_value = None
+    _spx_capped_signal_cache_expiry = 0.0
 
 
 async def fetch_gex_metrics() -> Dict[str, float]:
@@ -571,6 +589,136 @@ def classify_gex_wall(
         return "RESISTANCE_CALL_WALL"  # 上方壓制天花板
 
     return "NEUTRAL"
+
+
+def detect_uoa_sto_call_physical_cap(
+    uoa_list: list, spot: float, ratio_threshold: float = 1.0
+) -> tuple[bool, float]:
+    """掃描 UOA (異常期權活動) 清單，偵測現價上方是否存在單筆 ratio (成交量/未平倉量)
+    超過 ratio_threshold 的 STO Call 物理封頂 (即機構單筆巨量賣出開倉 Call，物理上
+    鎖死上方空間)。回傳 (has_physical_cap, capping_strike)，找不到則為 (False, 0.0)。
+
+    抽自 dynamic_rollover/opportunity_cost.py 的
+    _confirm_entry_condition3_no_physical_cap (僅取其 STO ratio 封頂偵測邏輯，
+    不含該函式另外疊加的 Call Wall 緊貼現價判定 —— 那部分是個股特有的
+    call_wall 概念，SPY/SPX 等大盤代理標的沒有對應語意)，供該函式與
+    get_spx_capped_from_above_signal() 共用，確保「什麼算 STO 物理封頂」在
+    個股進場確認與大盤結構訊號兩處定義一致。刻意放在 index_microstructure.py
+    而非 dynamic_rollover/ 內，維持既有的單向依賴方向
+    (dynamic_rollover 已經 import index_microstructure，反向則不然)。
+    """
+    for entry in uoa_list:
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("type", "")).upper() != "CALL":
+            continue
+        if "STO" not in str(entry.get("action", "")):
+            continue
+        strike = float(entry.get("strike", 0.0) or 0.0)
+        ratio = float(entry.get("ratio", 0.0) or 0.0)
+        if strike > spot and ratio > ratio_threshold:
+            return True, strike
+    return False, 0.0
+
+
+async def get_spx_capped_from_above_signal() -> dict:
+    """判讀大盤 SPX (以 SPY 為可交易代理標的) 是否「受制於上方負 Gamma 泥淖與
+    STO 封頂、缺乏向上爆發力」—— 動態轉倉引擎 Scenario 5 Covered Call Overlay
+    分支 (核心持倉加碼賣出備兌買權收租) 的門控訊號。
+
+    觸發條件 (三者同時成立)：
+    1. get_market_regime() == "NORMAL"（危機模式下不建議賣方策略，交由
+       Scenario 4 槓桿防禦處理）。
+    2. SPY 選擇權鏈存在現價上方的負 Gamma 泥淖 (find_overhead_negative_gex_swamp)。
+    3. SPY 存在現價上方的 STO Call 物理封頂 (detect_uoa_sto_call_physical_cap)。
+
+    回傳 dict：
+    {
+        "is_capped": bool,
+        "regime": str,
+        "swamp_strike": float,       # 0.0 代表未偵測到
+        "swamp_gex": float,
+        "has_uoa_physical_cap": bool,
+        "capping_strike": float,     # 0.0 代表未偵測到
+        "reason": str,                # 逐項判定說明，供呼叫端組裝 reason 文字
+    }
+
+    全域記憶體快取 (TTL=_SPX_CAPPED_SIGNAL_CACHE_TTL)，機制同 get_market_regime()。
+    """
+    global _spx_capped_signal_cache_value, _spx_capped_signal_cache_expiry
+
+    now = time.time()
+    if (
+        _spx_capped_signal_cache_value is not None
+        and now < _spx_capped_signal_cache_expiry
+    ):
+        return _spx_capped_signal_cache_value
+
+    from services.single_flight import SingleFlightManager
+
+    result = await SingleFlightManager.run(
+        "get_spx_capped_from_above_signal",
+        _compute_spx_capped_from_above_signal_uncached,
+    )
+    _spx_capped_signal_cache_value = result
+    _spx_capped_signal_cache_expiry = time.time() + _SPX_CAPPED_SIGNAL_CACHE_TTL
+    return result  # type: ignore
+
+
+async def _compute_spx_capped_from_above_signal_uncached() -> dict:
+    """get_spx_capped_from_above_signal() 的實際運算邏輯 (無快取)。"""
+    regime = await get_market_regime()
+
+    swamp_strike = 0.0
+    swamp_gex = 0.0
+    has_uoa_physical_cap = False
+    capping_strike = 0.0
+
+    if regime == "NORMAL":
+        try:
+            gex_data = await fetch_symbol_gex_metrics("SPY")
+            spy_spot = float(gex_data.get("spot", 0.0) or 0.0)
+            gex_profile = gex_data.get("gex_profile")
+            if spy_spot > 0 and isinstance(gex_profile, dict):
+                swamp_strike, swamp_gex = find_overhead_negative_gex_swamp(
+                    gex_profile, spy_spot
+                )
+        except Exception as e:
+            logger.warning(f"[SPX 結構訊號] SPY GEX Profile 抓取失敗: {e}")
+            spy_spot = 0.0
+
+        if swamp_strike > 0:
+            try:
+                from market_analysis.sentiment.uoa_detector import detect_uoa
+
+                uoa_list = await detect_uoa("SPY")
+                has_uoa_physical_cap, capping_strike = detect_uoa_sto_call_physical_cap(
+                    list(uoa_list) if uoa_list else [], spy_spot
+                )
+            except Exception as e:
+                logger.warning(f"[SPX 結構訊號] SPY UOA 抓取失敗: {e}")
+
+    is_capped = regime == "NORMAL" and swamp_strike > 0 and has_uoa_physical_cap
+
+    reason_parts = [f"大盤 Regime: `{regime}`"]
+    if swamp_strike > 0:
+        reason_parts.append(f"SPY 上方負 Gamma 泥淖 @ ${swamp_strike:.2f}")
+    else:
+        reason_parts.append("SPY 上方未偵測到負 Gamma 泥淖")
+    if has_uoa_physical_cap:
+        reason_parts.append(f"SPY STO Call 物理封頂 @ ${capping_strike:.2f}")
+    else:
+        reason_parts.append("SPY 未偵測到 STO Call 物理封頂")
+
+    return {
+        "is_capped": is_capped,
+        "regime": regime,
+        "swamp_strike": swamp_strike,
+        "swamp_gex": swamp_gex,
+        "has_uoa_physical_cap": has_uoa_physical_cap,
+        "capping_strike": capping_strike,
+        "reason": "，".join(reason_parts),
+    }
 
 
 def estimate_symbol_gamma_flip(gex_profile: dict, spot: float) -> float:

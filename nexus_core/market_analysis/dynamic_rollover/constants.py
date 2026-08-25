@@ -47,6 +47,17 @@ _DEFAULT_MAX_ALLOCATION_PCT: float = (
 _CORE_EXCESS_MIN_TRADE_PCT: float = 0.005  # CORE 超額配置低於此幅度 (0.5%) 視為誤差雜訊，不觸發部署轉倉，避免 dust trade
 _BOXX_DEFENSE_THRESHOLD: float = 50.0  # boxx_allocation_pct (0-100) >= 此值時，超額資金優先防禦轉入 BOXX 而非候選標的
 
+# --- 邏輯 (5) 延伸：Covered Call Overlay (evaluate_covered_call_overlay) 具名常數 ---
+# 與 evaluate_core_deployment 的兩個既有分支不同，本分支刻意不要求
+# target_allocation_pct opt-in (詳見該函式 docstring)，只要求 CORE 持倉股數
+# 達 1 口門檻，故獨立於上方兩個常數之外另立一組。
+_COVERED_CALL_MIN_SHARES: int = 100  # 1 口最低股數門檻
+_COVERED_CALL_MAX_LOTS: int = (
+    1  # 使用者明確規格：固定 1 口，未來若放寬為 N 口只需調整此常數
+)
+_COVERED_CALL_MIN_DTE: int = 18
+_COVERED_CALL_MAX_DTE: int = 25
+
 # --- 進場訊號四重嚴格過濾鐵律 (_confirm_entry_signal) 具名常數 ---
 _ENTRY_VOLUME_LOOKBACK_BARS: int = 20  # 條件一：15m 成交量基準所需回看根數 (不含確認根)
 _ENTRY_VOLUME_SURGE_MULTIPLIER: float = 1.2  # 條件一：「放量」門檻，須達回看均量的倍數

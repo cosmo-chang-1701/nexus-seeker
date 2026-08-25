@@ -7,8 +7,11 @@ import market_analysis.index_microstructure as index_microstructure
 from market_analysis.index_microstructure import (
     get_market_regime,
     fetch_core_macro_metrics,
+    get_spx_capped_from_above_signal,
     invalidate_market_regime_cache,
     invalidate_core_macro_metrics_cache,
+    invalidate_spx_capped_from_above_signal_cache,
+    detect_uoa_sto_call_physical_cap,
     suggest_boxx_allocation_pct,
     suggest_target_allocation_pct,
     estimate_symbol_gamma_flip,
@@ -33,6 +36,8 @@ def _reset_regime_and_core_macro_caches() -> Any:
         index_microstructure._market_regime_cache_expiry = 0.0
         index_microstructure._core_macro_metrics_cache_value = None
         index_microstructure._core_macro_metrics_cache_expiry = 0.0
+        index_microstructure._spx_capped_signal_cache_value = None
+        index_microstructure._spx_capped_signal_cache_expiry = 0.0
         SingleFlightManager._active_tasks.clear()
 
     _reset()
@@ -218,6 +223,188 @@ async def test_invalidate_core_macro_metrics_cache_forces_refetch() -> None:
 
         await fetch_core_macro_metrics()
         assert mock_fetch.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_get_spx_capped_from_above_signal_caches_within_ttl() -> None:
+    """Phase A：TTL 內第二次呼叫應直接命中記憶體快取，不重新觸發底層運算
+    (內含 SPY GEX Profile 抓取與 UOA 掃描兩支網路請求)。"""
+    with patch(
+        "market_analysis.index_microstructure._compute_spx_capped_from_above_signal_uncached",
+        new_callable=AsyncMock,
+    ) as mock_compute:
+        mock_compute.return_value = {"is_capped": True}
+
+        first = await get_spx_capped_from_above_signal()
+        second = await get_spx_capped_from_above_signal()
+
+        assert first == {"is_capped": True}
+        assert second == {"is_capped": True}
+        mock_compute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_spx_capped_from_above_signal_refetches_after_ttl_expiry() -> None:
+    with patch(
+        "market_analysis.index_microstructure._compute_spx_capped_from_above_signal_uncached",
+        new_callable=AsyncMock,
+    ) as mock_compute:
+        mock_compute.return_value = {"is_capped": False}
+
+        await get_spx_capped_from_above_signal()
+        mock_compute.assert_awaited_once()
+
+        index_microstructure._spx_capped_signal_cache_expiry = 0.0
+        SingleFlightManager._active_tasks.clear()
+
+        await get_spx_capped_from_above_signal()
+        assert mock_compute.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_invalidate_spx_capped_from_above_signal_cache_forces_refetch() -> None:
+    with patch(
+        "market_analysis.index_microstructure._compute_spx_capped_from_above_signal_uncached",
+        new_callable=AsyncMock,
+    ) as mock_compute:
+        mock_compute.return_value = {"is_capped": False}
+
+        await get_spx_capped_from_above_signal()
+        mock_compute.assert_awaited_once()
+
+        invalidate_spx_capped_from_above_signal_cache()
+        SingleFlightManager._active_tasks.clear()
+
+        await get_spx_capped_from_above_signal()
+        assert mock_compute.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_spx_capped_signal_false_when_regime_not_normal() -> None:
+    """危機模式下不建議賣方策略，即使 SPY 結構上確實受制於上方，is_capped 仍應
+    為 False，且不應浪費網路請求去抓取 SPY GEX/UOA 資料。"""
+    with patch(
+        "market_analysis.index_microstructure.get_market_regime",
+        new_callable=AsyncMock,
+        return_value="SHORT_GAMMA_CRITICAL",
+    ), patch(
+        "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
+        new_callable=AsyncMock,
+    ) as mock_gex:
+        signal = await get_spx_capped_from_above_signal()
+
+    assert signal["is_capped"] is False
+    assert signal["regime"] == "SHORT_GAMMA_CRITICAL"
+    mock_gex.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_spx_capped_signal_false_when_no_negative_gamma_swamp() -> None:
+    """NORMAL 市況但 SPY 上方未偵測到負 Gamma 泥淖 -> is_capped False，
+    且不應為此額外觸發 UOA 掃描 (無泥淖時封頂與否已不影響結論)。"""
+    with patch(
+        "market_analysis.index_microstructure.get_market_regime",
+        new_callable=AsyncMock,
+        return_value="NORMAL",
+    ), patch(
+        "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
+        new_callable=AsyncMock,
+        return_value={"spot": 500.0, "gex_profile": {"510": 100.0}},
+    ), patch(
+        "market_analysis.index_microstructure.find_overhead_negative_gex_swamp",
+        return_value=(0.0, 0.0),
+    ), patch(
+        "market_analysis.sentiment.uoa_detector.detect_uoa",
+        new_callable=AsyncMock,
+    ) as mock_uoa:
+        signal = await get_spx_capped_from_above_signal()
+
+    assert signal["is_capped"] is False
+    assert signal["swamp_strike"] == 0.0
+    mock_uoa.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_spx_capped_signal_false_when_swamp_present_but_no_sto_cap() -> None:
+    """NORMAL 市況、SPY 上方有負 Gamma 泥淖，但無 STO Call 物理封頂 -> is_capped
+    仍應為 False (兩項結構訊號須同時成立)。"""
+    with patch(
+        "market_analysis.index_microstructure.get_market_regime",
+        new_callable=AsyncMock,
+        return_value="NORMAL",
+    ), patch(
+        "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
+        new_callable=AsyncMock,
+        return_value={"spot": 500.0, "gex_profile": {"510": -6_000_000.0}},
+    ), patch(
+        "market_analysis.index_microstructure.find_overhead_negative_gex_swamp",
+        return_value=(510.0, -6_000_000.0),
+    ), patch(
+        "market_analysis.sentiment.uoa_detector.detect_uoa",
+        new_callable=AsyncMock,
+        return_value=[],
+    ):
+        signal = await get_spx_capped_from_above_signal()
+
+    assert signal["is_capped"] is False
+    assert signal["swamp_strike"] == 510.0
+    assert signal["has_uoa_physical_cap"] is False
+
+
+@pytest.mark.asyncio
+async def test_spx_capped_signal_true_when_both_conditions_met() -> None:
+    """NORMAL 市況、SPY 上方同時存在負 Gamma 泥淖與 STO Call 物理封頂 ->
+    is_capped True。"""
+    with patch(
+        "market_analysis.index_microstructure.get_market_regime",
+        new_callable=AsyncMock,
+        return_value="NORMAL",
+    ), patch(
+        "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
+        new_callable=AsyncMock,
+        return_value={"spot": 500.0, "gex_profile": {"510": -6_000_000.0}},
+    ), patch(
+        "market_analysis.index_microstructure.find_overhead_negative_gex_swamp",
+        return_value=(510.0, -6_000_000.0),
+    ), patch(
+        "market_analysis.sentiment.uoa_detector.detect_uoa",
+        new_callable=AsyncMock,
+        return_value=[
+            {
+                "type": "CALL",
+                "action": "STO",
+                "strike": 515.0,
+                "ratio": 2.5,
+            }
+        ],
+    ):
+        signal = await get_spx_capped_from_above_signal()
+
+    assert signal["is_capped"] is True
+    assert signal["swamp_strike"] == 510.0
+    assert signal["has_uoa_physical_cap"] is True
+    assert signal["capping_strike"] == 515.0
+
+
+def test_detect_uoa_sto_call_physical_cap_finds_capping_strike() -> None:
+    uoa_list = [
+        {"type": "CALL", "action": "STO", "strike": 105.0, "ratio": 1.5},
+        {"type": "PUT", "action": "STO", "strike": 95.0, "ratio": 5.0},
+    ]
+    has_cap, strike = detect_uoa_sto_call_physical_cap(uoa_list, spot=100.0)
+    assert has_cap is True
+    assert strike == 105.0
+
+
+def test_detect_uoa_sto_call_physical_cap_ignores_below_spot_or_low_ratio() -> None:
+    uoa_list = [
+        {"type": "CALL", "action": "STO", "strike": 95.0, "ratio": 5.0},  # 現價下方
+        {"type": "CALL", "action": "STO", "strike": 105.0, "ratio": 0.5},  # ratio 過低
+        {"type": "CALL", "action": "BTO", "strike": 110.0, "ratio": 5.0},  # 非 STO
+    ]
+    has_cap, strike = detect_uoa_sto_call_physical_cap(uoa_list, spot=100.0)
+    assert has_cap is False
+    assert strike == 0.0
 
 
 @pytest.mark.asyncio

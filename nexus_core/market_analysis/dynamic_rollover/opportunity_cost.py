@@ -1,7 +1,10 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from market_analysis.index_microstructure import estimate_symbol_gamma_flip
+from market_analysis.index_microstructure import (
+    detect_uoa_sto_call_physical_cap,
+    estimate_symbol_gamma_flip,
+)
 
 from . import logger
 from ._shared import (
@@ -116,21 +119,9 @@ def _confirm_entry_condition3_no_physical_cap(
     reasons: list,
 ) -> bool:
     """條件三：UOA 無實質物理封頂 (上方空間暢通)。"""
-    has_physical_cap = False
-    capping_strike = 0.0
-    for entry in uoa_list:
-        if not isinstance(entry, dict):
-            continue
-        if str(entry.get("type", "")).upper() != "CALL":
-            continue
-        if "STO" not in str(entry.get("action", "")):
-            continue
-        strike = float(entry.get("strike", 0.0) or 0.0)
-        ratio = float(entry.get("ratio", 0.0) or 0.0)
-        if strike > target_spot and ratio > _ENTRY_UOA_CAP_RATIO_THRESHOLD:
-            has_physical_cap = True
-            capping_strike = strike
-            break
+    has_physical_cap, capping_strike = detect_uoa_sto_call_physical_cap(
+        uoa_list, target_spot, _ENTRY_UOA_CAP_RATIO_THRESHOLD
+    )
 
     has_tight_call_wall = (
         call_wall > target_spot
@@ -401,11 +392,18 @@ class _OpportunityCostMixin:
         target_uoa_sweep: bool = False,
         target_spot: float = 0.0,
         target_put_wall: float = 0.0,
+        friction_cost_pct: float = _ESTIMATED_ROUND_TRIP_COST_PCT,
     ) -> Dict[str, Any]:
         """
         邏輯 (2): 機會成本與期望值比對 (包含勝率傾斜)
         結合 PowerSqueeze 動能指標，當持倉動能衰退且 Watchlist 具備突破條件時，
         計算期望值並給出具備清晰履約價規格的轉倉建議。
+
+        friction_cost_pct：往返交易摩擦成本估計值，預設為靜態保守值
+        _ESTIMATED_ROUND_TRIP_COST_PCT。呼叫端 (evaluate_opportunity_cost_for_satellites)
+        於高波動環境下會改傳入動態計算值 (候選標的近價期權合約 Bid-Ask 點差
+        推算)，確保 EV 門檻在流動性摩擦擴大時自動提高。本函式維持純運算、
+        零 I/O，僅接受呼叫端已算好的數值，不在此處發動網路請求。
         """
         # 假設 PowerSqueeze 指標中，數值越低代表動能越弱，越高代表突破動能強烈
         holding_momentum_decaying = (
@@ -423,7 +421,7 @@ class _OpportunityCostMixin:
         if (
             holding_momentum_decaying
             and target_breakout_ready
-            and ev_spread > (_EV_SPREAD_MIN_THRESHOLD + _ESTIMATED_ROUND_TRIP_COST_PCT)
+            and ev_spread > (_EV_SPREAD_MIN_THRESHOLD + friction_cost_pct)
         ):
             should_rollover = True
             if current_holding_profit_pct > _PROFIT_LOCK_PROFIT_PCT_THRESHOLD:
@@ -621,6 +619,31 @@ class _OpportunityCostMixin:
             )
             return instructions, entry_confirmation
 
+        # 高波環境滑點與摩擦成本動態化：以候選標的近價期權合約的實際 Bid-Ask
+        # 點差取代固定 0.3% 往返成本估算，確保極端高波 (寬點差) 時 EV 門檻
+        # 自動提高，避免在流動性摩擦過大時仍放行進場。任何抓取失敗一律退回
+        # 靜態保守值 (find_best_contract 本身已內含 try/except 永不拋例外，
+        # 此處另包一層防禦僅為了 bid/ask 數值驗證與除法本身)。
+        friction_cost_pct = _ESTIMATED_ROUND_TRIP_COST_PCT
+        try:
+            from market_analysis.strategy import find_best_contract
+
+            near_atm_contract = await find_best_contract(
+                candidate_symbol, "STO_CALL", 0.50, 21, 45
+            )
+            if near_atm_contract and target_spot > 0:
+                bid = float(near_atm_contract.get("bid", 0.0))
+                ask = float(near_atm_contract.get("ask", 0.0))
+                if bid > 0 and ask > bid:
+                    spread_pct = (ask - bid) / target_spot
+                    friction_cost_pct = max(
+                        _ESTIMATED_ROUND_TRIP_COST_PCT, spread_pct * 1.5
+                    )
+        except Exception as e:
+            logger.warning(
+                f"[{candidate_symbol}] 近價期權合約點差抓取失敗，退回靜態摩擦成本: {e}"
+            )
+
         for asset in portfolio_assets:
             symbol = str(asset.get("symbol", "")).upper()
             if asset.get("asset_class") != "SATELLITE":
@@ -648,6 +671,7 @@ class _OpportunityCostMixin:
                 target_uoa_sweep=target_uoa_sweep,
                 target_spot=target_spot,
                 target_put_wall=target_put_wall,
+                friction_cost_pct=friction_cost_pct,
             )
             if not result["should_rollover"]:
                 continue

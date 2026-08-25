@@ -136,6 +136,7 @@ from cogs.embed_builders.report_embeds import (
 # ── Rollover Embeds ───────────────────────────────────────────────────────────
 from cogs.embed_builders.rollover_embeds import (
     create_dynamic_rollover_embed,
+    create_covered_call_overlay_embed,
     build_fundamental_broken_embed,
     create_thesis_passed_embed,
     create_rollover_history_embed,
@@ -283,6 +284,7 @@ __all__ = [
     "create_next_day_strategy_embed",
     # Rollover embeds
     "create_dynamic_rollover_embed",
+    "create_covered_call_overlay_embed",
     "build_fundamental_broken_embed",
     "create_thesis_passed_embed",
     "create_rollover_history_embed",

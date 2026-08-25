@@ -58,3 +58,7 @@ class RolloverInstruction(_RolloverInstructionRequired, total=False):
     trigger_condition_text: Optional[str]
     sell_action: str
     buy_action_label: Optional[str]
+    strike: Optional[str]
+    expiry: Optional[str]
+    direction: Optional[str]
+    is_covered_call_overlay: Optional[bool]

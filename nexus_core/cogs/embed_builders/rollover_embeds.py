@@ -527,6 +527,93 @@ def create_dynamic_rollover_embed(
     return embed
 
 
+def create_covered_call_overlay_embed(
+    symbol: str,
+    reason: str,
+    strike: str,
+    expiry: str,
+    cash_impact: Optional[str] = None,
+    trigger_condition_text: Optional[str] = None,
+    is_manual_override_required: bool = False,
+) -> discord.Embed:
+    """
+    產生 Covered Call Overlay (核心持倉加碼賣出備兌買權收租) 的專屬 Embed。
+
+    刻意不重用 create_dynamic_rollover_embed：該函式以「賣出 sell_symbol →
+    買入 buy_symbol」的轉倉框架建模，其 is_hold 判斷 (`sell_ratio == 0.0`)
+    只要 sell_ratio 為 0 就恆為 True，會讓本情境的 embed 固定落入
+    「🟢【狀態：安全續抱】...無需任何手動操作」的文案分支——但本建議恰恰
+    需要使用者主動掛單賣出買權，套用該文案會誤導使用者。本情境是「續抱
+    同一標的、額外疊加賣方 overlay」，沒有第二個轉倉標的，語意上也不適合
+    「標的 → 轉倉目標」的標題框架，故改用專屬版面呈現合約細節。
+
+    :param symbol: 標的代號 (現貨與備兌買權的標的相同)
+    :param reason: 建議理由 (成本線/阻力區/履約價下限/口數/預估權利金說明)
+    :param strike: 履約價字串 (例如 "$450.00C")
+    :param expiry: 到期日字串
+    :param cash_impact: 預估權利金收入字串 (例如 "$120")，None 時不顯示
+    :param trigger_condition_text: SPX 結構封頂觸發條件說明 (Regime/負 Gamma
+        泥淖/STO 封頂)，獨立呈現為專屬欄位
+    :param is_manual_override_required: 合約點差過寬時為 True，附加流動性警告欄位
+    """
+    style = _SCENARIO_STYLE["CORE_DEPLOYMENT"]
+    embed = NexusEmbed(
+        title=f"{style['emoji']} 核心資金部署延伸 (Covered Call Overlay): {symbol}",
+        color=style["color"],
+    )
+
+    safe_reason = truncate_with_boundary(reason, _EMBED_DESCRIPTION_SAFE_LIMIT)
+    embed.description = (
+        "**🖋️【建議動作：賣出備兌買權收租】續抱現貨部位，額外賣出 Call 收取權利金**"
+        f"\n\n{safe_reason}"
+    )
+
+    C_RESET = " [0m"
+    C_GREEN = " [1;32m"
+    C_CYAN = " [1;36m"
+
+    overlay_lines = [
+        "```ansi",
+        " 🖋️ 掛單覆蓋 (STO Covered Call)",
+        " ----------------------------------",
+        f" ├─ 標的: {symbol}",
+        f" ├─ 履約價: {C_CYAN}{strike}{C_RESET}",
+        f" ├─ 到期日: {expiry}",
+        f" ├─ 買賣方向: {C_GREEN}STO (Sell To Open){C_RESET}",
+    ]
+    if cash_impact:
+        overlay_lines.append(f" └─ 預估權利金收入: {C_GREEN}{cash_impact}{C_RESET}")
+    else:
+        overlay_lines.append(" └─ 預估權利金收入: N/A")
+    overlay_lines.append("```")
+
+    embed.add_field(
+        name="🖋️ 掛單覆蓋 (STO Covered Call)",
+        value="\n".join(overlay_lines),
+        inline=False,
+    )
+
+    if trigger_condition_text:
+        embed.add_field(
+            name="🛡️ 觸發條件 (SPX 結構封頂偵測)",
+            value=trigger_condition_text,
+            inline=False,
+        )
+
+    if is_manual_override_required:
+        embed.add_field(
+            name="⚠️ 流動性警告",
+            value="合約點差過寬，建議採限價單並留意滑價，請人工確認後再執行。",
+            inline=False,
+        )
+
+    embed.set_footer(
+        text="Nexus Risk & Rollover Engine • Covered Call Overlay 為選填加碼收租建議，非強制轉倉"
+    )
+
+    return embed
+
+
 _LOW_CONFIDENCE_THRESHOLD = 0.5
 
 

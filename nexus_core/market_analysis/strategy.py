@@ -1047,3 +1047,55 @@ async def find_best_contract(
     except Exception as e:
         logger.error(f"find_best_contract error for {symbol}: {e}")
         return None
+
+
+async def find_lowest_strike_call_above_floor(
+    symbol: Any, floor_strike: Any, min_dte: Any, max_dte: Any
+) -> Optional[dict[str, Any]]:
+    """尋找 [min_dte, max_dte] 區間內最近一個到期日，於該到期日 Call 鏈中挑選
+    strike > floor_strike 的所有合約裡履約價最低者 (最貼近下限，OTM 幅度最小、
+    權利金最高)。供 Covered Call Overlay 這類「履約價下限錨定」的選股邏輯使用，
+    與 find_best_contract() 的 Delta 錨定選股邏輯互補而非重複 —— find_best_contract
+    無法表達「履約價下限」這種約束，只能挑選最接近目標 Delta 的單一合約。
+
+    找不到合格到期日、合格履約價，或任何步驟失敗，一律回傳 None (fail-safe，
+    絕不拋出例外)，與 find_best_contract 的降級慣例一致。
+    """
+    try:
+        expirations = await market_data_service.get_all_option_expiries(symbol)
+        today = datetime.now().date()
+        target_expiry_date, _days_to_expiry = _find_target_expiry(
+            expirations, today, min_dte, max_dte
+        )
+        if not target_expiry_date:
+            return None
+
+        opt_chain = await market_data_service.get_option_chain(
+            symbol, target_expiry_date
+        )
+        if opt_chain is None or opt_chain.calls is None:
+            return None
+
+        chain_data = opt_chain.calls
+        chain_data = chain_data[chain_data["volume"] > 0].copy()
+        chain_data = chain_data[chain_data["strike"] > float(floor_strike)]
+        if chain_data.empty:
+            return None
+
+        best_contract = chain_data.loc[chain_data["strike"].idxmin()]
+        bid, ask = best_contract.get("bid", 0.0), best_contract.get("ask", 0.0)
+        mid = (
+            (bid + ask) / 2.0
+            if bid > 0 and ask > 0
+            else best_contract.get("lastPrice", 0.0)
+        )
+        return {
+            "strike": float(best_contract.get("strike", 0.0)),
+            "expiry": target_expiry_date,
+            "mid": mid,
+            "bid": bid,
+            "ask": ask,
+        }
+    except Exception as e:
+        logger.error(f"find_lowest_strike_call_above_floor error for {symbol}: {e}")
+        return None
