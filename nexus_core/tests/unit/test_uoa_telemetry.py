@@ -189,3 +189,72 @@ def test_classify_uoa_trade_moneyness() -> None:
     )
     res4 = classify_uoa_trade(trade4, reference_date="2026-06-05", current_price=136.85)
     assert "ITM_Whale_Accumulation" in res4.intent
+
+
+def test_classify_uoa_trade_delta_dte_fields_populated() -> None:
+    """驗證 delta/dte 欄位正確寫入 UOATradeResult（Item 3：UOA 意圖映射重構）"""
+    trade = UOATradeInput(
+        strike_price=100.0,
+        option_type="PUT",
+        trade_price=0.85,
+        bid_price=0.75,
+        ask_price=0.85,
+        volume=1000,
+        open_interest=100,
+        expiry="2026-06-12",
+        symbol="PLTR",
+    )
+    result = classify_uoa_trade(
+        trade, reference_date="2026-06-05", current_price=136.85, delta=-0.30
+    )
+    assert result.delta == -0.30
+    assert result.dte == 7
+
+    # delta 未提供時預設為 0.0，不影響既有行為
+    result_no_delta = classify_uoa_trade(
+        trade, reference_date="2026-06-05", current_price=136.85
+    )
+    assert result_no_delta.delta == 0.0
+
+
+def test_classify_uoa_trade_whale_hedge_deep_itm_put() -> None:
+    """驗證買入深價內 Put (Delta < -0.65) 強制標註為 Whale_Hedge (巨鯨避險)"""
+    trade = UOATradeInput(
+        strike_price=200.0,
+        option_type="PUT",
+        trade_price=64.5,
+        bid_price=63.5,
+        ask_price=64.5,
+        volume=1000,
+        open_interest=100,
+        expiry="2026-06-12",
+        symbol="PLTR",
+    )
+    result = classify_uoa_trade(
+        trade, reference_date="2026-06-05", current_price=136.85, delta=-0.72
+    )
+    assert result.action == "🟢 買入開倉 (BTO - Ask)"
+    assert "Whale_Hedge" in result.intent
+
+    # Delta 未達 -0.65 門檻不應被標記
+    result_shallow = classify_uoa_trade(
+        trade, reference_date="2026-06-05", current_price=136.85, delta=-0.40
+    )
+    assert "Whale_Hedge" not in result_shallow.intent
+
+    # 買入 CALL 即使 Delta 深，也不應被標記為 Whale_Hedge (僅適用 PUT 買入避險)
+    call_trade = UOATradeInput(
+        strike_price=100.0,
+        option_type="CALL",
+        trade_price=38.5,
+        bid_price=37.5,
+        ask_price=38.5,
+        volume=1000,
+        open_interest=100,
+        expiry="2026-06-12",
+        symbol="PLTR",
+    )
+    result_call = classify_uoa_trade(
+        call_trade, reference_date="2026-06-05", current_price=136.85, delta=0.90
+    )
+    assert "Whale_Hedge" not in result_call.intent

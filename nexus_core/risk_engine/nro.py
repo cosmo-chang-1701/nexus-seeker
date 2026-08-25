@@ -59,6 +59,24 @@ class WatchlistRiskController:
             )
 
         if getattr(metrics, "iv_term_structure_status", None) == "Backwardation":
-            plan.action_guideline += " ⚠️ [IV Crush 警告] 期限結構呈現 Backwardation (倒掛)，短天期波動率定價極端昂貴，強烈建議避開單腿買方策略 (Long Call/Put) 避免開牌後遭波動率潰縮重擊。"
+            backwardation_warning = " ⚠️ [IV Crush 警告] 期限結構呈現 Backwardation (倒掛)，短天期波動率定價極端昂貴，強烈建議避開單腿買方策略 (Long Call/Put) 避免開牌後遭波動率潰縮重擊。"
+            if plan.scenario == "premium-harvest":
+                plan = WatchlistTacticalPlan(
+                    scenario="wait",
+                    sddm_route="WAIT (⚠️ 總經事件防禦期 - IV Backwardation)",
+                    action_guideline=(
+                        "IV 期限結構呈現 Backwardation (近月波動率高於次月)，"
+                        "反映市場正為即將到來的總經/事件風險定價，"
+                        "全面禁止左側限價接刀 (含 Cash-Secured Put 收租)，嚴守觀望。"
+                        + backwardation_warning
+                    ),
+                    dynamic_grid_step=plan.dynamic_grid_step,
+                    hidden_delta_risk=plan.hidden_delta_risk,
+                    hedge_instruction=None,
+                    hedge_allocation_shares=0,
+                    alert_level="red",
+                )
+            else:
+                plan.action_guideline += backwardation_warning
 
         return plan

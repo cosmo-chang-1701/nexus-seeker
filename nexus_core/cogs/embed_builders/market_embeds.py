@@ -1104,7 +1104,10 @@ def build_radar_scan_embed(
                     sto_str = f"{float(sto_density) * 100:.1f}%"
 
             # 4.2 IV 階級、期限結構與策略匹配 (具備負 Gamma 踩踏區風控熔斷)
-            if is_neg_gamma:
+            is_iv_backwardation = term_structure > 1.05
+            if is_iv_backwardation:
+                iv_strategy_str = "⚠️總經事件防禦期"
+            elif is_neg_gamma:
                 iv_strategy_str = "🔴賣方禁售"
             elif iv_rank_val < 15.0:
                 iv_strategy_str = "🔴CSP 禁售"
@@ -1148,6 +1151,56 @@ def build_radar_scan_embed(
             else:
                 anti_washout_stop = 0.0
 
+            # 6.5 訊號融合層嚴格布林 AND-gate (Entry Trigger)
+            # 「現貨重砲」等進場建議須四規則同時成立才可輸出激進語句，
+            # 任一規則為 False 僅能降級為「保持觀察」或「禁止進場」。
+            from database.cache import get_kv_cache as _get_kv_cache_gate
+            from market_analysis.index_microstructure import (
+                estimate_symbol_gamma_flip as _estimate_gamma_flip_gate,
+            )
+
+            oi_pcr_val = (
+                _safe_float(r.get("oi_pcr")) if r.get("oi_pcr") is not None else None
+            )
+            rule1_no_sto_veto = not bool(
+                radar_cache.get("physical_cap_above_spot", False)
+            )
+
+            gex_profile_gate = (
+                r.get("gex_profile_data", {}).get("gex_profile", {}) or {}
+            )
+            gamma_flip_est_gate = _estimate_gamma_flip_gate(gex_profile_gate, price_val)
+            prev_iv_rank_gate = _get_kv_cache_gate(f"iv_rank_prev_{sym.upper()}")
+            iv_rising_with_price_gate = (
+                prev_iv_rank_gate is not None and iv_rank_val > float(prev_iv_rank_gate)
+            )
+            crossed_gamma_flip_up_gate = (
+                gamma_flip_est_gate > 0
+                and price_val > gamma_flip_est_gate
+                and net_gex > 0
+            )
+            pcr_confirms_gate = oi_pcr_val is not None and oi_pcr_val >= 1.0
+            rule2_gamma_flip_squeeze = (
+                crossed_gamma_flip_up_gate
+                and pcr_confirms_gate
+                and iv_rising_with_price_gate
+            )
+
+            # Rule 3 刻意採用「成交量 PCR」而非 Rule 2 已使用的「未平倉 OI PCR」：
+            # OI PCR>=1.0 是 Rule 2 判定軋空籌碼燃料是否存在的必要條件，若 Rule 3
+            # 也對同一個 OI PCR 要求 <1.0，會與 Rule 2 邏輯矛盾導致此 AND-gate 永
+            # 遠無法為真。改採當日實際成交流的 Volume PCR，並沿用本函式既有的
+            # 破位殺盤閾值 (>=1.2，見「案例 1」)，確認當日盤中賣壓未惡化。
+            rule3_pcr_ok = vol_pcr is None or vol_pcr < 1.2
+            rule4_term_structure_ok = term_structure <= 1.05
+
+            entry_trigger_confirmed = (
+                rule1_no_sto_veto
+                and rule2_gamma_flip_squeeze
+                and rule3_pcr_ok
+                and rule4_term_structure_ok
+            )
+
             # 7. 灰階戰術建議 (Multi-dimensional Gray-scale Evaluation)
             tactical_adv = "⚪ 區間震盪，觀察籌碼堆疊"
             if "破位順向殺盤" in status_label or (
@@ -1178,9 +1231,17 @@ def build_radar_scan_embed(
             elif z_score is not None and (z_score > 0.9 or z_score < -0.9):
                 tactical_adv = "🟡 貼近 EM 頂/底緣，停損墊高或觀察突破"
             elif call_wall > 0 and price_val >= call_wall * 0.98 and sqz_mom > 0:
-                tactical_adv = f"🟢 撕裂 ${call_wall:.1f} 發動軋空，現貨重砲"
+                if entry_trigger_confirmed:
+                    tactical_adv = f"🟢 撕裂 ${call_wall:.1f} 發動軋空，現貨重砲"
+                elif not rule1_no_sto_veto:
+                    tactical_adv = "⛔ 禁止進場：偵測到 STO 物理封頂，機構鎖死上方空間"
+                else:
+                    tactical_adv = "🟡 保持觀察：訊號未全數共振（Gamma Flip/PCR/IV 期限結構未同步確認）"
             elif call_wall > 0 and price_val >= call_wall and sqz_mom <= 0:
-                tactical_adv = f"🔴 ${call_wall:.1f} 物理封頂，Sell Put 獲利落袋"
+                if not rule1_no_sto_veto:
+                    tactical_adv = "⛔ 禁止進場：偵測到 STO 物理封頂，機構鎖死上方空間"
+                else:
+                    tactical_adv = f"🔴 ${call_wall:.1f} 物理封頂，Sell Put 獲利落袋"
             elif put_wall > 0 and price_val < put_wall:
                 has_gex_prof = bool(r.get("gex_profile_data", {}).get("gex_profile"))
                 if price_val >= anti_washout_stop and (

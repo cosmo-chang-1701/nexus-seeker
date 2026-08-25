@@ -214,3 +214,100 @@ def test_build_radar_scan_embed_top_uoa_clean_action() -> None:
     assert "🔥 08/28 $230.0C (BTO 15k)" in table_field.value
     # 應包含 SQZ 向量 🟢+8.5
     assert "🟢+8.5" in table_field.value
+
+
+def _build_entry_trigger_scan_result(**overrides: Any) -> dict:
+    base: dict = {
+        "symbol": "AAPL",
+        "quote": {"c": 235.0, "dp": 1.2},
+        "iv_metrics": {"iv_rank": 60.0, "term_structure_ratio": 1.0},
+        "max_pain": {"max_pain": 235.0},
+        "gex_metrics": {"put_wall": 200.0, "call_wall": 230.0, "net_gex": 500000.0},
+        "gex_profile_data": {
+            "put_wall": 200.0,
+            "call_wall": 230.0,
+            "net_gex": 500000.0,
+            "put_wall_gex": 0.0,
+            # 累積 GEX 由負轉正發生於 210~225 之間 -> gamma_flip 估算 = 225.0
+            "gex_profile": {"210": -1_000_000.0, "225": 2_000_000.0},
+        },
+        "psq_result": {"momentum": 8.5, "direction": "🟢", "is_squeezing": False},
+        "uoa": [],
+        "skew": 0.0,
+        "skew_percentile": 50.0,
+        "volume_pcr": 0.8,
+        "oi_pcr": 1.3,
+        "radar_cache": {"physical_cap_above_spot": False},
+    }
+    base.update(overrides)
+    return base
+
+
+@pytest.mark.parametrize(
+    "case_name,overrides,kv_prev_iv_rank,expect_substr,forbid_substr",
+    [
+        (
+            "all_rules_pass",
+            {},
+            40.0,  # prev iv_rank (40.0) < 目前 60.0 -> IV 隨價走揚
+            "現貨重砲",
+            None,
+        ),
+        (
+            "sto_veto",
+            {"radar_cache": {"physical_cap_above_spot": True}},
+            40.0,
+            "⛔ 禁止進場",
+            "現貨重砲",
+        ),
+        (
+            "squeeze_not_confirmed",
+            # gex_profile 清空 -> gamma_flip 估算為 0.0，Rule 2 (GEX Flip 確認) 失效
+            {
+                "gex_profile_data": {
+                    "put_wall": 200.0,
+                    "call_wall": 230.0,
+                    "net_gex": 500000.0,
+                    "put_wall_gex": 0.0,
+                    "gex_profile": {},
+                }
+            },
+            40.0,
+            "保持觀察",
+            "現貨重砲",
+        ),
+        (
+            "iv_backwardation",
+            {"iv_metrics": {"iv_rank": 60.0, "term_structure_ratio": 1.10}},
+            40.0,
+            "保持觀察",
+            "現貨重砲",
+        ),
+    ],
+)
+def test_build_radar_scan_embed_entry_trigger_and_gate(
+    case_name: str,
+    overrides: dict,
+    kv_prev_iv_rank: float,
+    expect_substr: str,
+    forbid_substr: str | None,
+) -> None:
+    """Item 5：訊號融合層嚴格布林 AND-gate，驗證「現貨重砲」類建議的四規則真值表。"""
+    scan_results = [_build_entry_trigger_scan_result(**overrides)]
+
+    with patch(
+        "market_analysis.insights_engine.InsightsEngine.generate_cro_insight",
+        return_value=(None, None, None),
+    ), patch("database.cache.get_kv_cache", return_value=kv_prev_iv_rank):
+        embeds = build_radar_scan_embed(scan_results, "WATCHLIST", 12345)
+
+    assert len(embeds) == 1
+    table_field = next(f for f in embeds[0].fields if "核心 AI" in (f.name or ""))
+    assert table_field is not None and table_field.value is not None
+    assert (
+        expect_substr in table_field.value
+    ), f"[{case_name}] 預期包含: {expect_substr}"
+    if forbid_substr:
+        assert (
+            forbid_substr not in table_field.value
+        ), f"[{case_name}] 不應包含: {forbid_substr}"

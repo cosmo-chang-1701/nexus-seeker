@@ -19,7 +19,7 @@ from .max_pain import (
     _calculate_max_pain_raw,
     _current_week_friday,
 )
-from .uoa_detector import detect_uoa
+from .uoa_detector import detect_uoa, detect_uoa_with_physical_caps
 from .iv_metrics import (
     IVContext,
     fetch_and_calculate_iv_metrics,
@@ -60,6 +60,10 @@ class SentimentEngine:
     @staticmethod
     async def detect_uoa(*args, **kwargs):  # type: ignore
         return await detect_uoa(*args, **kwargs)
+
+    @staticmethod
+    async def detect_uoa_with_physical_caps(*args, **kwargs):  # type: ignore
+        return await detect_uoa_with_physical_caps(*args, **kwargs)
 
     @staticmethod
     async def save_sentiment_history(*args, **kwargs):  # type: ignore

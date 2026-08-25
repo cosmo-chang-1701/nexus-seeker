@@ -1036,10 +1036,11 @@ class UnifiedTerminalCog(commands.Cog):
             "direction", radar_cache.get("squeeze_direction", "⚪")
         )
 
-        # 讀取 PCR (買賣權成交量比)
+        # 讀取 PCR (買賣權成交量比 / 未平倉比)
         volume_pcr = get_last_stored_sentiment(sym, "PCR")
         if volume_pcr is None:
             volume_pcr = radar_cache.get("volume_pcr")
+        oi_pcr = radar_cache.get("oi_pcr")
 
         # 做市商正 Gamma 深度、負 Gamma 泥淖與底牆厚度
         from market_analysis.index_microstructure import (
@@ -1095,6 +1096,7 @@ class UnifiedTerminalCog(commands.Cog):
             "skew": skew_val,
             "skew_percentile": skew_percentile,
             "volume_pcr": volume_pcr,
+            "oi_pcr": oi_pcr,
             "positive_gex_below": pos_gex_below,
             "overhead_neg_gex_swamp": overhead_neg_swamp,
             "put_wall_gex": put_wall_gex,
@@ -1160,12 +1162,17 @@ class UnifiedTerminalCog(commands.Cog):
             sym, "SKEW", skew_val
         )
 
-        # 取得 UOA (異常期權活動) 資料
-        uoa_data = []
+        # 取得 UOA (異常期權活動) 資料，並同步全鏈掃描 STO 物理封頂
+        # (與 detect_uoa 共用同一次期權鏈抓取，不發動額外網路請求)
+        uoa_data: list[Any] = []
+        physical_cap_strikes: list[dict[str, Any]] = []
         try:
-            uoa_data = await SentimentEngine.detect_uoa(sym)
+            (
+                uoa_data,
+                physical_cap_strikes,
+            ) = await SentimentEngine.detect_uoa_with_physical_caps(sym)
         except Exception as e:
-            logger.error(f"[{sym}] Batch Scan 獲取 UOA 失敗: {e}")
+            logger.error(f"[{sym}] Batch Scan 獲取 UOA/物理封頂 失敗: {e}")
 
         iv_task = SentimentEngine.fetch_and_calculate_iv_metrics(sym)
         mp_task = SentimentEngine.get_unified_max_pain(sym)
@@ -1225,6 +1232,12 @@ class UnifiedTerminalCog(commands.Cog):
             pcr_data.get("volume_pcr")
             if isinstance(pcr_data, dict)
             else (pcr_data.get("pcr") if isinstance(pcr_data, dict) else None)
+        )
+        oi_pcr = pcr_data.get("oi_pcr") if isinstance(pcr_data, dict) else None
+        physical_cap_above_spot = any(
+            str(s.get("type", "")).upper().startswith("C")
+            and float(s.get("strike", 0.0) or 0.0) > price
+            for s in physical_cap_strikes
         )
         gex_prof = gex_data.get("gex_profile", {}) if isinstance(gex_data, dict) else {}
         pos_gex_below = calculate_positive_gex_depth_below(gex_prof, price)
@@ -1371,6 +1384,7 @@ class UnifiedTerminalCog(commands.Cog):
             "skew": skew_val,
             "skew_percentile": skew_percentile,
             "volume_pcr": volume_pcr,
+            "oi_pcr": oi_pcr,
             "positive_gex_below": pos_gex_below,
             "overhead_neg_gex_swamp": overhead_neg_swamp,
             "put_wall_gex": pw_gex,
@@ -1434,6 +1448,9 @@ class UnifiedTerminalCog(commands.Cog):
                 "positive_gex_below": pos_gex_below,
                 "overhead_neg_gex_swamp": overhead_neg_swamp,
                 "volume_pcr": volume_pcr,
+                "oi_pcr": oi_pcr,
+                "sto_strikes": physical_cap_strikes,
+                "physical_cap_above_spot": physical_cap_above_spot,
                 "mp_near": mp_data.get("max_pain")
                 if isinstance(mp_data, dict)
                 else 0.0,

@@ -927,3 +927,148 @@ async def test_global_defense_gate_blocks_bullish_signals(
     assert "LLM 護城河破滅警告" in res_broken.tactical.action_guideline
     assert "Deteriorating margins" in res_broken.tactical.action_guideline
     assert res_broken.tactical.alert_level == "red"
+
+
+def _build_squeeze_test_metrics(**overrides: Any) -> Any:
+    from models.schemas import EnhancedWatchlistMetrics
+
+    payload: dict[str, Any] = dict(
+        symbol="TSLA",
+        exchange="NASDAQ",
+        current_price=185.0,
+        buy_zone_status="wait",
+        buy_price_phase1=170.0,
+        buy_price_phase2=160.0,
+        buy_price_phase3=150.0,
+        sell_zone_status="wait",
+        sell_price_phase1=200.0,
+        sell_price_phase2=210.0,
+        sell_price_phase3=220.0,
+        atr_14=5.0,
+        skew_percentile=50.0,
+        pcr=1.0,
+        beta=1.2,
+        option_skew_state="normal",
+        volume_poc=195.0,
+        relative_strength_spy=1.1,
+        gex_max_put_wall=150.0,
+        iv_rank=60.0,
+        oi_pcr=1.2,
+        is_premarket=False,
+    )
+    payload.update(overrides)
+    return EnhancedWatchlistMetrics(**payload)
+
+
+@pytest.mark.asyncio
+@patch("database.cache.save_kv_cache", new_callable=AsyncMock)
+@patch("database.cache.get_kv_cache")
+@patch("database.market_cache.get_fundamental_cache")
+@patch("market_analysis.intraday_pipeline.build_enhanced_watchlist_metrics")
+@patch("market_analysis.index_microstructure.get_market_regime")
+@patch("market_analysis.index_microstructure.fetch_symbol_gex_metrics")
+async def test_squeeze_warning_requires_gamma_flip_pcr_and_iv_confirmation(
+    mock_fetch_gex: AsyncMock,
+    mock_get_regime: AsyncMock,
+    mock_build_metrics: AsyncMock,
+    mock_get_fc: MagicMock,
+    mock_get_kv: MagicMock,
+    mock_save_kv: AsyncMock,
+) -> None:
+    """Item 4：軋空預警校正，須同時滿足 GEX Flip 翻轉 + OI PCR>=1.0 + IV 隨價同步走揚。"""
+    from market_analysis.intraday_pipeline import evaluate_watchlist_symbol
+
+    mock_get_regime.return_value = "NORMAL"
+    mock_get_fc.return_value = {"is_broken": 0, "reasoning": "ok"}
+
+    # gex_profile 由 90(-1M) 累加至 200(+2M)，累積值於 100~200 之間由負轉正
+    # -> estimate_symbol_gamma_flip 估算 gamma_flip = 200.0
+    gex_profile = {"90": -1_000_000.0, "150": 0.0, "200": 2_000_000.0}
+
+    # CASE 1：舊條件為真 (spot > call_wall 且 net_gex < 0)，新條件應不觸發
+    mock_fetch_gex.return_value = {
+        "net_gex": -500_000.0,
+        "call_wall": 150.0,
+        "put_wall": 100.0,
+        "gex_profile": {},
+    }
+    mock_build_metrics.return_value = _build_squeeze_test_metrics(
+        current_price=155.0, gex_max_put_wall=100.0
+    )
+    mock_get_kv.return_value = 40.0
+
+    res_old_condition = await evaluate_watchlist_symbol("TSLA")
+    assert res_old_condition is not None
+    assert "軋空預警" not in res_old_condition.tactical.action_guideline
+
+    # CASE 2：gamma_flip 缺值 (profile 為空 -> 估算為 0.0)，fail-safe 不觸發
+    mock_fetch_gex.return_value = {
+        "net_gex": 2_000_000.0,
+        "call_wall": 150.0,
+        "put_wall": 100.0,
+        "gex_profile": {},
+    }
+    mock_build_metrics.return_value = _build_squeeze_test_metrics(
+        current_price=160.0, gex_max_put_wall=100.0, oi_pcr=1.5
+    )
+    mock_get_kv.return_value = 30.0
+
+    res_no_flip = await evaluate_watchlist_symbol("TSLA")
+    assert res_no_flip is not None
+    assert "軋空預警" not in res_no_flip.tactical.action_guideline
+
+    # CASE 3：三條件皆滿足 -> 觸發軋空預警
+    mock_fetch_gex.return_value = {
+        "net_gex": 2_000_000.0,
+        "call_wall": 190.0,
+        "put_wall": 150.0,
+        "gex_profile": gex_profile,
+    }
+    mock_build_metrics.return_value = _build_squeeze_test_metrics(
+        current_price=205.0, gex_max_put_wall=150.0, iv_rank=60.0, oi_pcr=1.2
+    )
+    mock_get_kv.return_value = 40.0  # prev iv_rank (40.0) < 目前 60.0 -> IV 走揚
+
+    res_confirmed = await evaluate_watchlist_symbol("TSLA")
+    assert res_confirmed is not None
+    assert "軋空預警" in res_confirmed.tactical.action_guideline
+    assert "Gamma Flip" in res_confirmed.tactical.action_guideline
+
+
+def test_evaluate_advanced_filters_excludes_whale_hedge_and_low_dte_uoa() -> None:
+    """Item 3：net_uoa_delta 加總須排除 Whale_Hedge 標記與 DTE<7 的雜訊項目。"""
+    from market_analysis.intraday_pipeline import evaluate_advanced_filters
+    from models.schemas import ScanParams
+
+    metrics = SimpleNamespace(
+        squeeze_status=False,
+        squeeze_momentum=0.0,
+        current_price=100.0,
+        dark_pool_skew=None,
+    )
+    params = ScanParams(min_net_uoa_delta=0.5)
+
+    uoa_data = [
+        # 應排除：Whale_Hedge (深價內避險 Put)，即使 DTE 合格
+        {
+            "trade_type": "SWEEP",
+            "delta": 0.90,
+            "intent": "Whale_Hedge (巨鯨避險)",
+            "dte": 10,
+        },
+        # 應排除：DTE < 7 雜訊
+        {"trade_type": "SWEEP", "delta": 0.80, "intent": "一般買盤", "dte": 2},
+        # 應納入：跨週期且非避險標記
+        {"trade_type": "SWEEP", "delta": 0.70, "intent": "一般買盤", "dte": 10},
+    ]
+
+    passed, _tags = evaluate_advanced_filters(metrics, {}, uoa_data, params)
+    # net_uoa_delta 僅計入第三筆 (0.70) >= min_net_uoa_delta(0.5) -> 通過
+    assert passed is True
+
+    # 若移除唯一合格項目，net_uoa_delta 應歸零而無法達標
+    uoa_data_without_valid = uoa_data[:2]
+    passed_without_valid, _tags2 = evaluate_advanced_filters(
+        metrics, {}, uoa_data_without_valid, params
+    )
+    assert passed_without_valid is False

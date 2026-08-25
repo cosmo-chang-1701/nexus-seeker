@@ -598,7 +598,9 @@ async def evaluate_watchlist_symbol(
         from market_analysis.index_microstructure import (
             get_market_regime,
             fetch_symbol_gex_metrics,
+            estimate_symbol_gamma_flip,
         )
+        from database.cache import get_kv_cache, save_kv_cache
 
         regime = await get_market_regime()
         if regime == "SYSTEMIC_LIQUIDITY_CRISIS":
@@ -639,9 +641,42 @@ async def evaluate_watchlist_symbol(
         if put_wall > 0:
             metrics.gex_max_put_wall = put_wall
 
+        # 軋空 (Squeeze) 判定校正：嚴禁將「現價穿越負 Gamma 履約價」直接定義為軋空。
+        # 真正的 Gamma 軋空須同時滿足：(1) 現價向上放量穿越 Gamma Flip 翻轉點，
+        # 進入正 Gamma 區間；(2) OI PCR >= 1.0（具備實質空頭籌碼供做市商軋空）；
+        # (3) IV 隨價格同步走揚（Call Buying Mania），非單純價格穿越某個履約價牆位。
+        gamma_flip_est = 0.0
+        if not is_hedging:
+            gex_profile = (
+                symbol_gex.get("gex_profile", {})
+                if isinstance(symbol_gex, dict)
+                else {}
+            )
+            gamma_flip_est = estimate_symbol_gamma_flip(gex_profile, spot)
+
+        iv_rank_prev_key = f"iv_rank_prev_{symbol.upper()}"
+        prev_iv_rank = get_kv_cache(iv_rank_prev_key)
+        iv_rising_with_price = (
+            prev_iv_rank is not None
+            and metrics.iv_rank is not None
+            and metrics.iv_rank > float(prev_iv_rank)
+        )
+        if metrics.iv_rank is not None:
+            await save_kv_cache(iv_rank_prev_key, metrics.iv_rank)
+
         if call_wall > 0 and put_wall > 0:
-            if spot > call_wall and net_gex < 0:
-                tactical.action_guideline += f"\n🚨 【軋空預警】現價 ({spot:.2f}) 突破 Call Wall ({call_wall:.2f}) 且處於 Short Gamma ({net_gex:+.0f})，隨時可能觸發造市商被迫回補引發暴漲軋空。"
+            crossed_gamma_flip_up = (
+                gamma_flip_est > 0 and spot > gamma_flip_est and net_gex > 0
+            )
+            pcr_confirms = metrics.oi_pcr is not None and metrics.oi_pcr >= 1.0
+            if crossed_gamma_flip_up and pcr_confirms and iv_rising_with_price:
+                tactical.action_guideline += (
+                    f"\n🚨 【軋空預警】現價 ({spot:.2f}) 站上 Gamma Flip 估算門檻 "
+                    f"(${gamma_flip_est:.2f}) 進入正 Gamma 區間，OI PCR "
+                    f"({metrics.oi_pcr:.2f}) 顯示籌碼結構具備實質空頭供軋倉，"
+                    f"且 IV 隨價格同步走揚 (Call Buying Mania)，"
+                    f"隨時可能觸發造市商被迫回補引發暴漲軋空。"
+                )
             elif spot < put_wall:
                 tactical.action_guideline += f"\n⚠️ 【流動性枯竭預警】現價 ({spot:.2f}) 跌破 Put Wall ({put_wall:.2f})，期權造市商支撐消失，存在嚴重賣壓與流動性真空風險。"
 
@@ -965,11 +1000,17 @@ def evaluate_advanced_filters(
         def safe_float(v: Any):  # type: ignore
             return float(v) if v is not None else 0.0
 
+        # UOA 意圖映射重構：Whale_Hedge (深價內避險 Put) 嚴禁計入多頭動能分數；
+        # DTE 雜訊過濾器剔除 DTE < 7 的做市商結算對倒單，僅跨週期訂單計入攻擊權重。
+        # 若上游未提供 dte 欄位 (舊資料源尚未升級)，視為未知而不套用此過濾，
+        # 避免破壞既有呼叫端行為；僅在明確偵測到 dte 時才強制執行門檻。
         net_uoa_delta = sum(
             safe_float(item.get("delta", 0))
             if item.get("trade_type", "").upper() == "SWEEP"
             else -safe_float(item.get("delta", 0))
             for item in uoa_data
+            if "Whale_Hedge" not in str(item.get("intent", ""))
+            and ("dte" not in item or int(item.get("dte", 0) or 0) >= 7)
         )
         if net_uoa_delta < params.min_net_uoa_delta:
             return False, []

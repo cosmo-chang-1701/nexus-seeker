@@ -39,6 +39,8 @@ class UOATradeResult:
     action: str
     intent: str
     symbol: Optional[str] = None
+    delta: float = 0.0
+    dte: int = 0
 
 
 def _visual_len(s: str) -> int:
@@ -82,6 +84,7 @@ def classify_uoa_trade(
     trade: UOATradeInput,
     reference_date: Optional[Union[datetime, date, str]] = None,
     current_price: Optional[float] = None,
+    delta: Optional[float] = None,
 ) -> UOATradeResult:
     """
     根據即時 Bid/Ask 買賣價邊界進行全訂單流動性方向分類，並映射戰略意圖。
@@ -216,6 +219,16 @@ def classify_uoa_trade(
             f" {opt_type_upper} (OI={oi_str})，中性策略組合或機構調倉"
         )
 
+    # 5. Whale_Hedge 分類：買入深價內 Put (Delta < -0.65) 屬巨鯨避險部位，
+    # 嚴禁計入多頭動能分數 (見 intraday_pipeline.py::evaluate_advanced_filters)
+    if (
+        not is_call
+        and action == "🟢 買入開倉 (BTO - Ask)"
+        and delta is not None
+        and delta < -0.65
+    ):
+        intent += "｜Whale_Hedge (巨鯨避險)"
+
     return UOATradeResult(
         expiry=trade.expiry,
         strike_price=trade.strike_price,
@@ -230,6 +243,8 @@ def classify_uoa_trade(
         action=action,
         intent=intent,
         symbol=trade.symbol,
+        delta=delta if delta is not None else 0.0,
+        dte=dte,
     )
 
 
