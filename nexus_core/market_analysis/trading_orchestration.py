@@ -46,6 +46,38 @@ def calculate_new_cost_basis(
     return round(total_cost_spent / total_shares, 2)
 
 
+def get_covered_shares(user_id: int, symbol: str) -> tuple[float, List[Dict[str, Any]]]:
+    """掃描使用者 TRADE 部位，計算既有 Short Call 已鎖定的股數與明細。"""
+    from database.portfolio import get_user_portfolio
+
+    symbol = symbol.upper()
+    portfolio = get_user_portfolio(user_id)
+    covered_shares = 0.0
+    existing_calls: List[Dict[str, Any]] = []
+    for row in portfolio:
+        # row: (asset_id, symbol, opt_type, strike, expiry, entry_price, quantity,
+        #       stock_cost, weighted_delta, theta, gamma, category)
+        sym = row[1]
+        opt_type = row[2]
+        strike = row[3]
+        expiry = row[4]
+        quantity = row[6]
+        if not sym or sym.upper() != symbol:
+            continue
+        if (opt_type or "").lower() == "call" and quantity is not None and quantity < 0:
+            shares = abs(quantity) * 100
+            covered_shares += shares
+            existing_calls.append(
+                {
+                    "strike": strike,
+                    "expiry": expiry,
+                    "quantity": quantity,
+                    "shares_covered": shares,
+                }
+            )
+    return covered_shares, existing_calls
+
+
 async def get_hv_30(symbol: str) -> float:
     """計算個股 30 天歷史波動率 (HV) 作為 IV 備用代理。"""
     try:
@@ -88,6 +120,17 @@ async def recommend_covered_calls(
 
     if current_shares <= 0:
         logger.info(f"使用者 {user_id} 目前無 {symbol} 持倉，無需生成解鎖建議。")
+        return None
+
+    # 1.5 檢查既有 Short Call 部位，避免對已鎖定股數重複建議備兌
+    covered_shares, existing_calls = get_covered_shares(user_id, symbol)
+    uncovered_shares = max(0.0, current_shares - covered_shares)
+    max_new_contracts = int(uncovered_shares // 100)
+    if max_new_contracts <= 0:
+        logger.info(
+            f"使用者 {user_id} 的 {symbol} 現股已全數被既有 Short Call 覆蓋 "
+            f"(持股 {current_shares:.0f} / 已鎖定 {covered_shares:.0f})，無可用裸股，跳過建議。"
+        )
         return None
 
     # 2. 取得活躍 GTC 網格買單
@@ -228,7 +271,12 @@ async def recommend_covered_calls(
         "new_cost_basis": new_cost_basis,
         "current_price": current_price,
         "fallback_iv": fallback_iv,
-        "recommendations": recommendations[:3],  # 最多推薦前 3 個合約
+        "covered_shares": covered_shares,
+        "uncovered_shares": uncovered_shares,
+        "max_new_contracts": max_new_contracts,
+        "existing_calls": existing_calls,
+        # 最多推薦前 3 個合約，且不超過尚未被既有 Short Call 覆蓋的股數上限
+        "recommendations": recommendations[: min(3, max_new_contracts)],
     }
 
 

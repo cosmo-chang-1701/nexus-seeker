@@ -2166,6 +2166,17 @@ def test_create_covered_call_unlock_embed() -> None:
         "current_cost": 120.0,
         "new_cost_basis": 115.0,
         "current_price": 110.0,
+        "covered_shares": 100.0,
+        "uncovered_shares": 100.0,
+        "max_new_contracts": 1,
+        "existing_calls": [
+            {
+                "strike": 140.0,
+                "expiry": "2026-06-19",
+                "quantity": -1,
+                "shares_covered": 100.0,
+            }
+        ],
         "recommendations": [
             {
                 "expiration": "2026-07-17",
@@ -2178,17 +2189,20 @@ def test_create_covered_call_unlock_embed() -> None:
     }
     embed_with_recs = create_covered_call_unlock_embed(data_with_recs)
     assert embed_with_recs.title == "🔓 警報：物理死鎖解除與備兌建單 | NVDA"
-    assert len(embed_with_recs.fields) == 3
+    assert len(embed_with_recs.fields) == 4
     assert "現貨與吸籌模擬" in embed_with_recs.fields[0].name  # type: ignore
     assert "100 股" in embed_with_recs.fields[0].value  # type: ignore
     assert "$120.00" in embed_with_recs.fields[0].value  # type: ignore
     assert "$115.00" in embed_with_recs.fields[0].value  # type: ignore
-    assert "推薦 Covered Call 備兌合約" in embed_with_recs.fields[1].name  # type: ignore
-    assert "2026-07-17" in embed_with_recs.fields[1].value  # type: ignore
-    assert "$125.00" in embed_with_recs.fields[1].value  # type: ignore
-    assert "18.50%" in embed_with_recs.fields[1].value  # type: ignore
+    assert "既有備兌覆蓋狀態" in embed_with_recs.fields[1].name  # type: ignore
+    assert "100 股" in embed_with_recs.fields[1].value  # type: ignore
+    assert "$140.00 Call @ 2026-06-19" in embed_with_recs.fields[1].value  # type: ignore
+    assert "推薦 Covered Call 備兌合約" in embed_with_recs.fields[2].name  # type: ignore
+    assert "2026-07-17" in embed_with_recs.fields[2].value  # type: ignore
+    assert "$125.00" in embed_with_recs.fields[2].value  # type: ignore
+    assert "18.50%" in embed_with_recs.fields[2].value  # type: ignore
 
-    # 2. Without recommendations
+    # 2. Without recommendations, and without any existing covered call coverage
     data_no_recs = {
         "symbol": "AAPL",
         "current_shares": 50.0,
@@ -2199,9 +2213,11 @@ def test_create_covered_call_unlock_embed() -> None:
     }
     embed_no_recs = create_covered_call_unlock_embed(data_no_recs)
     assert embed_no_recs.title == "🔓 警報：物理死鎖解除與備兌建單 | AAPL"
-    assert len(embed_no_recs.fields) == 2
-    assert "解鎖狀態與策略建議" in embed_no_recs.fields[1].name  # type: ignore
-    assert "未尋獲符合條件之極虛值" in embed_no_recs.fields[1].value  # type: ignore
+    assert len(embed_no_recs.fields) == 3
+    assert "既有備兌覆蓋狀態" in embed_no_recs.fields[1].name  # type: ignore
+    assert "目前無既有備兌部位" in embed_no_recs.fields[1].value  # type: ignore
+    assert "解鎖狀態與策略建議" in embed_no_recs.fields[2].name  # type: ignore
+    assert "未尋獲符合條件之極虛值" in embed_no_recs.fields[2].value  # type: ignore
 
 
 def test_create_watchlist_signal_embed_event_loading() -> None:

@@ -659,6 +659,10 @@ def create_covered_call_unlock_embed(data: dict) -> discord.Embed:
     new_cost_basis = data.get("new_cost_basis", 0.0)
     current_price = data.get("current_price", 0.0)
     recs = data.get("recommendations", [])
+    covered_shares = data.get("covered_shares", 0.0)
+    uncovered_shares = data.get("uncovered_shares", current_shares)
+    max_new_contracts = data.get("max_new_contracts", 0)
+    existing_calls = data.get("existing_calls", [])
 
     embed = NexusEmbed(
         title=f"🔓 警報：物理死鎖解除與備兌建單 | {symbol}",
@@ -691,6 +695,36 @@ def create_covered_call_unlock_embed(data: dict) -> discord.Embed:
         value="\n".join(spot_lines),
         inline=False,
     )
+
+    # 🔒 既有備兌覆蓋狀態：避免對已被既有 Short Call 鎖定的股數重複建議備兌
+    if covered_shares > 0 or existing_calls:
+        coverage_lines = [
+            "```ansi",
+            " 既有備兌覆蓋狀態 (Existing Covered Call Coverage)",
+            f" ├─ 已被既有 Short Call 鎖定: [1;33m{covered_shares:.0f} 股[0m",
+            f" └─ 尚未覆蓋可用股數: [1;36m{uncovered_shares:.0f} 股[0m (最多可再開 [1;32m{max_new_contracts}[0m 口)",
+        ]
+        if existing_calls:
+            coverage_lines.append("")
+            coverage_lines.append(" 既有合約明細")
+            for i, c in enumerate(existing_calls):
+                prefix = " └─ " if i == len(existing_calls) - 1 else " ├─ "
+                strike = c.get("strike", 0.0)
+                expiry = c.get("expiry", "")
+                coverage_lines.append(f"{prefix}${strike:,.2f} Call @ {expiry}")
+        coverage_lines.append("```")
+
+        embed.add_field(
+            name="🔒 既有備兌覆蓋狀態 (Existing Covered Call Coverage)",
+            value="\n".join(coverage_lines),
+            inline=False,
+        )
+    else:
+        embed.add_field(
+            name="🔒 既有備兌覆蓋狀態 (Existing Covered Call Coverage)",
+            value="```ansi\n 目前無既有備兌部位 (No Existing Covered Call Position)\n```",
+            inline=False,
+        )
 
     if recs:
         # 建立 ANSI 備兌推薦合約表格

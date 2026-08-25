@@ -20,6 +20,7 @@ from market_analysis.intraday_pipeline import evaluate_watchlist_symbol
 from market_analysis.trading_orchestration import (
     calculate_new_cost_basis,
     recommend_covered_calls,
+    get_covered_shares,
 )
 from services.single_flight import SingleFlightManager
 
@@ -598,6 +599,8 @@ async def test_recommend_covered_calls_filtering() -> Any:
     ) as mock_holdings, patch(
         "market_analysis.trading_orchestration.get_user_active_orders"
     ) as mock_orders, patch(
+        "market_analysis.trading_orchestration.get_covered_shares"
+    ) as mock_covered, patch(
         "market_analysis.trading_orchestration.get_quote"
     ) as mock_quote, patch(
         "market_analysis.trading_orchestration.SentimentEngine.get_last_stored_iv"
@@ -606,6 +609,7 @@ async def test_recommend_covered_calls_filtering() -> Any:
             {"symbol": "AAPL", "quantity": 100.0, "avg_cost": 150.0}
         ]
         mock_orders.return_value = []
+        mock_covered.return_value = (0.0, [])
         mock_quote.return_value = {"c": 148.0}
         mock_iv.return_value = 0.30
 
@@ -669,6 +673,182 @@ async def test_recommend_covered_calls_filtering() -> Any:
             assert len(recs) == 1
             assert recs[0]["strike"] == 170.0
             assert recs[0]["annualized_yield"] >= 10.0
+
+
+def test_get_covered_shares_sums_existing_short_calls() -> None:
+    # 測試 get_covered_shares 正確加總既有 Short Call 鎖定的股數，且忽略其他標的/多單/賣權
+    portfolio_rows = [
+        (
+            1,
+            "AAPL",
+            "call",
+            160.0,
+            "2026-07-20",
+            5.0,
+            -1,
+            150.0,
+            0.0,
+            0.0,
+            0.0,
+            "HEDGE",
+        ),
+        (
+            2,
+            "AAPL",
+            "call",
+            165.0,
+            "2026-08-17",
+            3.0,
+            -2,
+            150.0,
+            0.0,
+            0.0,
+            0.0,
+            "HEDGE",
+        ),
+        (3, "AAPL", "put", 140.0, "2026-07-20", 2.0, -1, 150.0, 0.0, 0.0, 0.0, "HEDGE"),
+        (
+            4,
+            "AAPL",
+            "call",
+            200.0,
+            "2026-07-20",
+            4.0,
+            1,
+            150.0,
+            0.0,
+            0.0,
+            0.0,
+            "SPECULATIVE",
+        ),
+        (
+            5,
+            "MSFT",
+            "call",
+            400.0,
+            "2026-07-20",
+            6.0,
+            -1,
+            300.0,
+            0.0,
+            0.0,
+            0.0,
+            "HEDGE",
+        ),
+    ]
+    with patch("database.portfolio.get_user_portfolio", return_value=portfolio_rows):
+        covered_shares, existing_calls = get_covered_shares(1, "aapl")
+
+    # 僅計入 AAPL 的 2 筆 Short Call (100 + 200 = 300 股)，忽略 Put、多單與其他標的
+    assert covered_shares == 300.0
+    assert len(existing_calls) == 2
+    assert {c["strike"] for c in existing_calls} == {160.0, 165.0}
+
+
+@pytest.mark.asyncio
+async def test_recommend_covered_calls_fully_covered_returns_none() -> Any:
+    # 測試現股已全數被既有 Short Call 覆蓋時，應直接跳過建議 (回傳 None)
+    with patch(
+        "market_analysis.trading_orchestration.get_user_holdings"
+    ) as mock_holdings, patch(
+        "market_analysis.trading_orchestration.get_covered_shares"
+    ) as mock_covered:
+        mock_holdings.return_value = [
+            {"symbol": "AAPL", "quantity": 100.0, "avg_cost": 150.0}
+        ]
+        mock_covered.return_value = (
+            100.0,
+            [
+                {
+                    "strike": 160.0,
+                    "expiry": "2026-07-20",
+                    "quantity": -1,
+                    "shares_covered": 100.0,
+                }
+            ],
+        )
+
+        res = await recommend_covered_calls(1, "AAPL")
+        assert res is None
+
+
+@pytest.mark.asyncio
+async def test_recommend_covered_calls_partial_coverage_caps_contracts() -> Any:
+    # 測試部分覆蓋時，推薦口數應被裁切至尚未覆蓋股數上限 (uncovered_shares // 100)
+    with patch(
+        "market_analysis.trading_orchestration.get_user_holdings"
+    ) as mock_holdings, patch(
+        "market_analysis.trading_orchestration.get_user_active_orders"
+    ) as mock_orders, patch(
+        "market_analysis.trading_orchestration.get_covered_shares"
+    ) as mock_covered, patch(
+        "market_analysis.trading_orchestration.get_quote"
+    ) as mock_quote, patch(
+        "market_analysis.trading_orchestration.SentimentEngine.get_last_stored_iv"
+    ) as mock_iv, patch("yfinance.Ticker") as mock_ticker:
+        # 現股 300 股，既有 2 口 Short Call 已鎖定 200 股 -> 僅剩 100 股可用 (max_new_contracts = 1)
+        mock_holdings.return_value = [
+            {"symbol": "AAPL", "quantity": 300.0, "avg_cost": 150.0}
+        ]
+        mock_orders.return_value = []
+        mock_covered.return_value = (
+            200.0,
+            [
+                {
+                    "strike": 160.0,
+                    "expiry": "2026-07-20",
+                    "quantity": -2,
+                    "shares_covered": 200.0,
+                }
+            ],
+        )
+        mock_quote.return_value = {"c": 148.0}
+        mock_iv.return_value = 0.30
+
+        ticker_instance = MagicMock()
+        ticker_instance.options = ["2026-07-20"]
+
+        # 兩筆合約皆符合 Strike > New Cost Basis / Delta < 0.15 / 年化收益率 >= 10% 門檻，
+        # 但 max_new_contracts = 1，應僅保留履約價最低的一筆
+        mock_calls = pd.DataFrame(
+            [
+                {
+                    "strike": 170.0,
+                    "impliedVolatility": 0.30,
+                    "lastPrice": 1.60,
+                    "bid": 1.55,
+                    "ask": 1.65,
+                    "contractSymbol": "AAPL260720C00170000",
+                },
+                {
+                    "strike": 172.0,
+                    "impliedVolatility": 0.30,
+                    "lastPrice": 1.60,
+                    "bid": 1.55,
+                    "ask": 1.65,
+                    "contractSymbol": "AAPL260720C00172000",
+                },
+            ]
+        )
+
+        chain_mock = MagicMock()
+        chain_mock.calls = mock_calls
+        ticker_instance.option_chain.return_value = chain_mock
+        mock_ticker.return_value = ticker_instance
+
+        with patch("market_analysis.trading_orchestration.datetime") as mock_dt:
+            mock_dt.now.return_value = pd.Timestamp("2026-06-11 12:00:00")
+            mock_dt.strptime = lambda val, fmt: pd.Timestamp(val)
+
+            res = await recommend_covered_calls(1, "AAPL")
+            assert res is not None
+            assert res["covered_shares"] == 200.0
+            assert res["uncovered_shares"] == 100.0
+            assert res["max_new_contracts"] == 1
+
+            recs = res["recommendations"]
+            assert len(recs) == 1
+            assert recs[0]["strike"] == 170.0
 
 
 @pytest.mark.asyncio

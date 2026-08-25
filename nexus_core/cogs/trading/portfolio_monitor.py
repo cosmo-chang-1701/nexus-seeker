@@ -152,8 +152,15 @@ class PortfolioMonitorCog(commands.Cog):
                     sym = h["symbol"].upper()
                     user_symbols.setdefault(u_id, []).append(sym)
 
+                cc_unlock_today_str = datetime.now(market_time.ny_tz).strftime("%Y%m%d")
+
                 for u_id, syms in user_symbols.items():
                     for sym in set(syms):
+                        cc_unlock_cache_key = (
+                            f"cc_unlock_{u_id}_{sym}_{cc_unlock_today_str}"
+                        )
+                        if database.get_kv_cache(cc_unlock_cache_key):
+                            continue
                         # 檢查雷達數據，若符合強勢多頭+低IV+強支撐條件則阻斷
                         r_data = radar_cache_map.get(sym)
                         if r_data:
@@ -191,6 +198,7 @@ class PortfolioMonitorCog(commands.Cog):
                             ):
                                 embed = create_covered_call_unlock_embed(res)
                                 await self.bot.queue_dm(u_id, embed=embed)
+                                await database.save_kv_cache(cc_unlock_cache_key, 1)
             except Exception as e:
                 logger.error(f"物理死鎖解除審計錯誤: {e}")
 
