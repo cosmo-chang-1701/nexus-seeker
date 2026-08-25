@@ -1,7 +1,7 @@
 """
 cogs/trading/scheduler.py
 
-[Controller] 主排程 Cog：動態市場掃描心跳 (每 30 分鐘)、Reddit 每日更新、
+[Controller] 主排程 Cog：動態市場掃描心跳 (每 15 分鐘)、Reddit 每日更新、
 盤中 Scheduled Audit (每 120 分鐘)。
 業務邏輯委派給 MarketScanCog、HeartbeatCog helper 及其他子 Cog。
 """
@@ -21,7 +21,7 @@ ny_tz = ZoneInfo("America/New_York")
 logger = logging.getLogger(__name__)
 
 scanner_times = [
-    time(hour=h, minute=m, tzinfo=ny_tz) for h in range(24) for m in (0, 30)
+    time(hour=h, minute=m, tzinfo=ny_tz) for h in range(24) for m in (0, 15, 30, 45)
 ]
 
 
@@ -94,11 +94,11 @@ class SchedulerCog(commands.Cog):
         await self.bot.wait_until_ready()
 
     # ==========================================
-    # 🕒 盤中動態巡邏 (每 30 分鐘心跳)
+    # 🕒 盤中動態巡邏 (每 15 分鐘心跳)
     # ==========================================
     @tasks.loop(time=scanner_times)
     async def dynamic_market_scanner(self) -> None:
-        """盤中動態巡邏：每 30 分鐘心跳檢查，僅在盤中執行掃描"""
+        """盤中動態巡邏：每 15 分鐘心跳檢查，僅在盤中執行掃描"""
         if not getattr(self.bot, "_is_leader_instance", True):
             return
         if not market_time.is_market_open():
@@ -233,7 +233,7 @@ class SchedulerCog(commands.Cog):
     @dynamic_market_scanner.before_loop
     async def before_dynamic_market_scanner(self) -> None:
         await self.bot.wait_until_ready()
-        logger.info("盤中動態巡邏機已掛載，將每 30 分鐘偵測一次開盤狀態。")
+        logger.info("盤中動態巡邏機已掛載，將每 15 分鐘偵測一次開盤狀態。")
 
 
 async def setup(bot: Any) -> None:

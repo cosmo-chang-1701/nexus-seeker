@@ -1,7 +1,7 @@
 """
 cogs/trading/heartbeat.py
 
-Watchlist 30 分鐘心跳推送邏輯 (_dispatch_watchlist_heartbeat)。
+Watchlist 15 分鐘心跳推送邏輯 (_dispatch_watchlist_heartbeat)。
 此模組提供一個獨立函式，由 SchedulerCog 呼叫。
 """
 
@@ -20,7 +20,7 @@ async def dispatch_watchlist_heartbeat(
     bot: Any,
     all_watchlists: list[tuple[int, str, int]] | None = None,
 ) -> None:
-    """每個 30 分鐘節點推送 watchlist 批次掃描量化雷達。"""
+    """每個 15 分鐘節點推送 watchlist 批次掃描量化雷達。"""
     from cogs.embed_builder import build_radar_scan_embed
 
     if all_watchlists is None:
@@ -103,12 +103,21 @@ async def dispatch_watchlist_heartbeat(
                 logger.error(f"Error fetching radar data for {sym}: {ex}")
                 return sym, ex
 
+    pass2_started_at = time.perf_counter()
     fetch_tasks = [_fetch_one_radar(s) for s in sorted(symbols_to_fetch)]
     fetched_results = await asyncio.gather(*fetch_tasks)
     for s, res in fetched_results:
         radar_data_cache[s] = res
+    pass2_elapsed = time.perf_counter() - pass2_started_at
 
-    # 寫入 bot 共用記憶體快取供同一 30 分鐘輪次內的其他 Cog 複用
+    # 觀測用 log：去重後標的數與 Pass 2 實際耗時，供未來評估心跳節奏／
+    # _MAX_WATCHLIST_SYMBOLS_PER_USER 上限是否需要調整的依據。
+    logger.info(
+        f"🕒 [心跳 Pass 2] 去重後標的數={len(symbols_to_fetch)}，"
+        f"耗時={pass2_elapsed:.2f}s"
+    )
+
+    # 寫入 bot 共用記憶體快取供同一 15 分鐘輪次內的其他 Cog 複用
     try:
         setattr(bot, "_latest_radar_data_cache", radar_data_cache)
         setattr(bot, "_latest_radar_cache_time", time.time())

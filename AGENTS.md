@@ -31,7 +31,7 @@ The codebase is optimized for:
 
 ### Important Runtime Distinction
 
-- **Watchlist 半小時心跳** is currently emitted by `cogs/trading.py` via `SchedulerCog.dynamic_market_scanner()`
+- **Watchlist 15 分鐘心跳** is currently emitted by `cogs/trading.py` via `SchedulerCog.dynamic_market_scanner()`
 - **Analyst Agent** is a separate report family in `cogs/analyst_agent.py`
 - `market_analysis/intraday_pipeline.py` currently serves as the **shared watchlist evaluation / option-plan / engine helper module**, and also contains the reusable `IntradayScanPipeline` class and gamma squeeze engine logic
 
@@ -62,10 +62,10 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - `fundamental_filing_scan` — **08:00 ET** (holdings-only, skips non-trading days)
 - `daily_reddit_update` — **08:30 ET**
 - `pre_market_risk_monitor` — **08:45 ET** (staggered pre-warming of quant metrics, IV, Max Pain & Squeeze before 09:00 Analyst Agent)
-- `dynamic_market_scanner` — **every 30 minutes (:00 & :30) during market hours**
+- `dynamic_market_scanner` — **every 15 minutes (:00, :15, :30 & :45) during market hours**
 - `wti_oil_monitor` — **every 30 minutes (24/7, 00:00–06:00 ET quiet hours)**
 - `price_volume_alert_monitor` — **every 15 minutes during market hours** (with `Semaphore(3)` concurrent K-line bar retrieval)
-- `monitor_real_portfolio_task` — **every 30 minutes (:05 & :35) during market hours** (staggered 5 minutes after dynamic scanner to consume shared in-memory radar cache)
+- `monitor_real_portfolio_task` — **every 15 minutes (:05, :20, :35 & :50) during market hours** (staggered 5 minutes after dynamic scanner to consume shared in-memory radar cache)
 - `dynamic_after_market_report` — **16:15 ET**
 - `weekly_vtr_report_task` — **Friday 17:05 ET**
 
@@ -138,11 +138,11 @@ The terminal radar card is built inside `cogs/embed_builders/` using `build_rada
 - **動態分頁標題與 Footer**：若分頁數量大於 1，系統會在每個 Embed 的 Title 後方自動標註頁碼，格式為 `(第 X/Y 頁)`（例如：`(第 1/2 頁)`），並將頁碼與總項目數寫入 Footer（`頁次: X/Y ｜ 📊 總項目: N`）。
 - **呼叫端分流處理**：
   - **Discord 互動指令 (如 `/x` 單訊息就地翻頁)**：多頁掃描結果採用 `BatchScanPaginatedView`（`cogs/unified_terminal/batch_scan_view.py`），透過 `interaction.response.edit_message()` 於單一 Ephemeral 訊息中進行 `◀ 上一頁` / `下一頁 ▶` 就地翻頁，徹底避免逐頁發送 followup 訊息觸發 Discord 40094 限制。該 View 同時掛載 `⚡ 批次分析警示標的` (`BatchScanWarningButton`，以 `Semaphore(3)` 併行分析並透過 `chunk_embeds` 依字數分段安全發送) 與 `🔄 返回控制面板`（切回 `UnifiedRadarView`）。
-  - **背景排程與 DM 隊列 (如 Watchlist 30分鐘心跳)**：呼叫端會自動對 Embed 列表進行迭代，逐頁調用 `queue_dm` 加入發送佇列，確保每一頁皆能穩定投遞且不觸發 Discord API 的字數限制。
+  - **背景排程與 DM 隊列 (如 Watchlist 15分鐘心跳)**：呼叫端會自動對 Embed 列表進行迭代，逐頁調用 `queue_dm` 加入發送佇列，確保每一頁皆能穩定投遞且不觸發 Discord API 的字數限制。
 
 ---
 
-## Watchlist Half-Hour Heartbeat
+## Watchlist 15-Minute Heartbeat
 
 ### Actual current flow
 
@@ -259,8 +259,8 @@ To guarantee high scalability on low-RAM VPS deployments and maintain zero-laten
 - **Price/Volume 15m Monitor (`PriceVolumeAlertMonitorCog`)**: Evaluates confirmed 15-minute K-line bars across all user watches concurrently using `Semaphore(3)`, finishing evaluations within 1 second.
 
 ### 2. Cross-Module Shared Radar Cache (`bot._latest_radar_data_cache`)
-- When `SchedulerCog.dynamic_market_scanner()` executes at `:00` and `:30`, Heartbeat Pass 2 populates `bot._latest_radar_data_cache` and sets `bot._latest_radar_cache_time = time.time()`.
-- When `PortfolioMonitorCog.monitor_real_portfolio_task()` fires 5 minutes later (at `:05` and `:35`), it directly consumes `bot._latest_radar_data_cache` if it is fresh (< 300 seconds), achieving **100% in-memory cache hits** for all overlapping holdings and eliminating duplicate network requests. Any non-watchlist holding is fetched concurrently via `Semaphore(3)` fallback.
+- When `SchedulerCog.dynamic_market_scanner()` executes at `:00`, `:15`, `:30` and `:45`, Heartbeat Pass 2 populates `bot._latest_radar_data_cache` and sets `bot._latest_radar_cache_time = time.time()`.
+- When `PortfolioMonitorCog.monitor_real_portfolio_task()` fires 5 minutes later (at `:05`, `:20`, `:35` and `:50`), it directly consumes `bot._latest_radar_data_cache` if it is fresh (< 300 seconds), achieving **100% in-memory cache hits** for all overlapping holdings and eliminating duplicate network requests. Any non-watchlist holding is fetched concurrently via `Semaphore(3)` fallback.
 
 ### 3. Multi-User Market Scan De-duplication ($O(U \times S) \to O(S)$)
 - In `TradingService.run_market_scan()`, skew, PCR, and earnings dates (`calendar_service.get_symbol_earnings`) are pre-cached at the unique-symbol level (`symbol_sentiment_cache`) before iterating over users.
@@ -276,8 +276,8 @@ To guarantee high scalability on low-RAM VPS deployments and maintain zero-laten
 - `08:30 ET`: `daily_reddit_update` (RSS sentiment pre-fetch)
 - `08:45 ET`: `pre_market_risk_monitor` (pre-warms IV, Max Pain, Expected Move, and Squeeze cache into SQLite `market_cache` before Analyst Agent and market open)
 - `09:00 ET`: `AnalystAgent.pre_market_loop` (consumes pre-warmed cache)
-- `:00 / :30 ET`: `dynamic_market_scanner` (populates `_latest_radar_data_cache` and dispatches heartbeat)
-- `:05 / :35 ET`: `monitor_real_portfolio_task` (consumes fresh `_latest_radar_data_cache` without network overhead)
+- `:00 / :15 / :30 / :45 ET`: `dynamic_market_scanner` (populates `_latest_radar_data_cache` and dispatches heartbeat)
+- `:05 / :20 / :35 / :50 ET`: `monitor_real_portfolio_task` (consumes fresh `_latest_radar_data_cache` without network overhead)
 
 ---
 
@@ -406,7 +406,7 @@ The platform implements an advanced macro risk-control layer that dynamically ad
   - Utilizes 30-day Historical Volatility (HV) or last closing IV as fallback pricing inputs if live option chains are unavailable.
   - **Zero IV Premium & Strong Bullish Momentum Block**: Covered Call alerts are physically blocked if `IVR <= 5.0`, `Squeeze Momentum > 10.0`, and `Spot > PutWall`. This prevents locking up shares against strong momentum rallies when option premiums are artificially cheap.
   - **Existing Short Call Coverage Gate**: `recommend_covered_calls()` (`market_analysis/trading_orchestration.py`) cross-checks the user's existing options positions (`context_type = 'TRADE'`) via `get_covered_shares()`, summing shares already collateralized by open short calls (`opt_type == "call"` and `quantity < 0`) on the same symbol. `uncovered_shares = current_shares - covered_shares` is used to (a) skip the recommendation entirely (return `None`) when fewer than 100 uncovered shares remain, and (b) cap the number of surfaced contracts to `uncovered_shares // 100`, so the engine never recommends building a new covered call against shares already committed to an existing one. The returned dict now also carries `covered_shares`, `uncovered_shares`, `max_new_contracts`, and `existing_calls` (list of `{strike, expiry, quantity, shares_covered}`), which `create_covered_call_unlock_embed()` renders in a dedicated `🔒 既有備兌覆蓋狀態` field.
-  - **Daily Dispatch Dedup**: The 30-minute dispatch site (`cogs/trading/portfolio_monitor.py::monitor_real_portfolio_task`) applies the same daily `kv_cache` anti-spam pattern used by the WTI and price-volume alerts (`cc_unlock_{user_id}_{symbol}_{YYYYMMDD}`), guaranteeing at most one covered-call-unlock DM per user, per symbol, per day, regardless of how many 30-minute scan cycles the underlying condition remains true.
+  - **Daily Dispatch Dedup**: The 15-minute dispatch site (`cogs/trading/portfolio_monitor.py::monitor_real_portfolio_task`) applies the same daily `kv_cache` anti-spam pattern used by the WTI and price-volume alerts (`cc_unlock_{user_id}_{symbol}_{YYYYMMDD}`), guaranteeing at most one covered-call-unlock DM per user, per symbol, per day, regardless of how many 15-minute scan cycles the underlying condition remains true.
 
 ### 5. Manual Macro Update Controls (Added in v1.7.3)
 - **Discord Slash Command**: Administrators can manually update GEX and FedWatch data via `/force_macro_update` in Discord.
@@ -656,7 +656,7 @@ Current repository rule:
 
 ## Dynamic Rollover Engine (動態轉倉引擎)
 
-The platform features an automated **Dynamic Rollover Engine** (`market_analysis/dynamic_rollover/`, a package with a facade `__init__.py` assembling `DynamicRolloverEngine` from per-scenario submodules) that monitors the real portfolio every 30 minutes. It evaluates holdings across five core scenarios to defensively rebalance assets or shift momentum based on Specification by Example (SBE) guidelines.
+The platform features an automated **Dynamic Rollover Engine** (`market_analysis/dynamic_rollover/`, a package with a facade `__init__.py` assembling `DynamicRolloverEngine` from per-scenario submodules) that monitors the real portfolio every 15 minutes. It evaluates holdings across five core scenarios to defensively rebalance assets or shift momentum based on Specification by Example (SBE) guidelines.
 
 ### Scenarios
 1. **Fundamental Thesis Broken (原型假設破滅)**: Leverages `nexus_edge_scraper` via the SEC EDGAR API (`httpx` + BS4 decomposition + Regex tag filtering). Specifically, `section_extractor.py` provides **structured extraction** (Forward Guidance, Margin & Cost, Market Share, Financial Results, Operational Disruption) to prevent token explosion. It uses an **Advanced CoT** (Chain of Thought) system prompt to validate the moat. If broken, completely liquidates the asset into the Core holding (e.g., VOO).
@@ -689,7 +689,7 @@ The platform features an automated **Dynamic Rollover Engine** (`market_analysis
 - **Manual Trigger (`/verify_thesis`)**: Any user can manually trigger Scenario 1 for any symbol via the `/verify_thesis <symbol>` Discord slash command, regardless of holdings. This command features an interactive UI: it first triggers the Edge Scraper to fetch a list of recent SEC filings (10-K, 10-Q, 8-K), and presents them in a dropdown menu. If the user selects one, or if the 60-second timeout expires, it fetches the specified (or latest) SEC EDGAR report (up to 10,000 characters) and sends it to the LLM.
 - **Automated Daily Filing Scan (`cogs/trading/fundamental_filing_monitor.py`)**: A dedicated daily scheduler (`fundamental_filing_scan`, 08:00 ET, skips non-trading days via `market_time.nyse_calendar`) automatically scans **holding-only** symbols (`database.get_all_holdings()`; watchlist symbols are intentionally excluded to bound LLM/API cost) for new SEC filings. For each unique symbol (deduplicated across all holders so a symbol held by multiple users is only analyzed once, throttled via `asyncio.Semaphore(3)`), it compares the latest filing's `accession_number` against a dedicated dedup-cursor table, `fundamental_scan_state` (migration `v062` — distinct from `fundamental_cache`, which stores the LLM verdict itself and has no accession-number column). If a new filing is detected, it's routed through the same form-type-aware `evaluate_fundamental_thesis` pipeline used by `/verify_thesis`. The whole run is gated by `is_memory_safe()` up front (1GB VPS protection). **Only `is_broken=True` results trigger a DM** (via `bot.queue_dm`, reusing `build_fundamental_broken_embed()` — the same embed-construction helper shared with `/verify_thesis`) to holders who have the notification enabled; passing results are written silently to `fundamental_cache` with no DM, to avoid alert fatigue. The scan cursor is only advanced on a successful (non-`None`) LLM result — if the memory-safety gate or LLM call fails mid-scan, the cursor is left untouched so the same filing is retried on the next day's run rather than being silently skipped.
 - **Global Defense Gate (全域防禦閘門)**: LLM moat verdicts (`is_broken`, `confidence`, `reasoning`) are written to the SQLite `fundamental_cache` table (via migration `v057`). During the intraday 30-minute heartbeat (`intraday_pipeline.py`), the `evaluate_watchlist_symbol` engine acts as a **Global Defense Gate**. If a symbol is flagged as broken, the engine forcefully intercepts and overwrites any quantitative BTO (Buy-To-Open) or Grid Accumulation signals, replacing them with a strict `wait` scenario and a `LIQUIDATE` directive. This guarantees that technical blindspots (e.g., heavily oversold RSI traps) cannot override fundamentally deteriorating assets.
-- **Lightweight Triage Strategy (Scenarios 2, 3, 4)**: Lightweight rule-based tasks execute during the intraday 30-minute `monitor_real_portfolio_task` to ensure zero API blocking.
+- **Lightweight Triage Strategy (Scenarios 2, 3, 4)**: Lightweight rule-based tasks execute during the intraday 15-minute `monitor_real_portfolio_task` to ensure zero API blocking.
 - **Discord UI**: All rollover actions generate a stylized embed (`create_dynamic_rollover_embed`) packed with terminal execution guidelines, strategy type, and strict buy/sell directions (e.g., BTC for short puts). Title/color are keyed off an explicit `scenario` identifier (`RolloverScenario`) rather than free-text substring matching, so `MARGIN_DEFENSE` alerts always render as critical red regardless of the underlying action.
 - **Toggle Settings**: Users can opt out of rollover alerts via `/notif_settings` under the Defense module (`defense_option_rollover`), and specifically out of the automated daily filing scan's alerts via `defense_fundamental_thesis` (both keys are independent; `/verify_thesis`'s manual, interactive results are always shown regardless of either toggle).
 

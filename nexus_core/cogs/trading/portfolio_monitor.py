@@ -1,7 +1,7 @@
 """
 cogs/trading/portfolio_monitor.py
 
-真實持倉風險動態審計 (每 30 分鐘)：DITM、Gamma Fragility、動態轉倉，以及 VTR 監控。
+真實持倉風險動態審計 (每 15 分鐘)：DITM、Gamma Fragility、動態轉倉，以及 VTR 監控。
 """
 
 from typing import Any, Dict, List
@@ -34,7 +34,7 @@ ny_tz = ZoneInfo("America/New_York")
 logger = logging.getLogger(__name__)
 
 portfolio_scanner_times = [
-    time(hour=h, minute=m, tzinfo=ny_tz) for h in range(24) for m in (5, 35)
+    time(hour=h, minute=m, tzinfo=ny_tz) for h in range(24) for m in (5, 20, 35, 50)
 ]
 
 
@@ -53,11 +53,12 @@ class PortfolioMonitorCog(commands.Cog):
         self.monitor_vtr_task.cancel()
 
     # ==========================================
-    # 🚀 真實持倉風險動態審計 (每 30 分鐘，於 :05 與 :35 執行)
+    # 🚀 真實持倉風險動態審計 (每 15 分鐘，於 :05、:20、:35、:50 執行，
+    # 固定落後 SchedulerCog.dynamic_market_scanner 5 分鐘以消費其共用雷達快取)
     # ==========================================
     @tasks.loop(time=portfolio_scanner_times)
     async def monitor_real_portfolio_task(self) -> None:
-        """每 30 分鐘審計真實持倉風險 (DITM & Gamma Fragility)"""
+        """每 15 分鐘審計真實持倉風險 (DITM & Gamma Fragility)"""
         if not getattr(self.bot, "_is_leader_instance", True):
             return
         if not market_time.is_market_open():
