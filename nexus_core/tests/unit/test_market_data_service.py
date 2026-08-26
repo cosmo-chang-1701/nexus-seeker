@@ -20,9 +20,10 @@ async def test_execute_api_call_cooperative_backoff() -> None:
     mock_func = MagicMock(return_value="delayed_success")
     future_time = time.time() + 1.0
 
-    with patch("services.market_data_service._rate_limit_until", future_time), patch(
-        "asyncio.sleep", new_callable=AsyncMock
-    ) as m_sleep:
+    with (
+        patch("services.market_data_service._rate_limit_until", future_time),
+        patch("asyncio.sleep", new_callable=AsyncMock) as m_sleep,
+    ):
         res = await _execute_api_call(mock_func)
         assert res == "delayed_success"
 
@@ -42,9 +43,10 @@ async def test_execute_api_call_sets_rate_limit_on_429() -> None:
     mock_func.side_effect = [Exception("429 Too Many Requests"), "recovered"]
 
     # We must patch _rate_limit_until inside market_data_service so we don't pollute global state
-    with patch("services.market_data_service._rate_limit_until", 0.0), patch(
-        "asyncio.sleep", new_callable=AsyncMock
-    ) as m_sleep:
+    with (
+        patch("services.market_data_service._rate_limit_until", 0.0),
+        patch("asyncio.sleep", new_callable=AsyncMock) as m_sleep,
+    ):
         res = await _execute_api_call(mock_func)
         assert res == "recovered"
 
@@ -84,9 +86,12 @@ async def test_get_history_df_caching_success() -> None:
     mock_ticker.ticker = "AAPL"
     mock_ticker.history = MagicMock(return_value=mock_df)
 
-    with patch("config.TUNNEL_URL", ""), patch(
-        "services.market_data_service.yf.Ticker", return_value=mock_ticker
-    ) as mock_yf_ticker:
+    with (
+        patch("config.TUNNEL_URL", ""),
+        patch(
+            "services.market_data_service.yf.Ticker", return_value=mock_ticker
+        ) as mock_yf_ticker,
+    ):
         # First call: cache miss
         df1 = await get_history_df("AAPL", period="1y", interval="1d")
         assert not df1.empty
@@ -133,17 +138,23 @@ async def test_get_history_df_cache_expiry() -> None:
     mock_ticker.history = MagicMock(return_value=mock_df)
 
     start_time = 100000.0
-    with patch("config.TUNNEL_URL", ""), patch(
-        "services.market_data_service.yf.Ticker", return_value=mock_ticker
-    ), patch("time.time", return_value=start_time):
+    with (
+        patch("config.TUNNEL_URL", ""),
+        patch("services.market_data_service.yf.Ticker", return_value=mock_ticker),
+        patch("time.time", return_value=start_time),
+    ):
         df1 = await get_history_df("AAPL", period="1y", interval="1d")
         assert not df1.empty
 
     # Fast forward past TTL (6 hours = 21600 seconds)
     expiry_time = start_time + 21601.0
-    with patch("config.TUNNEL_URL", ""), patch(
-        "services.market_data_service.yf.Ticker", return_value=mock_ticker
-    ) as mock_yf_ticker, patch("time.time", return_value=expiry_time):
+    with (
+        patch("config.TUNNEL_URL", ""),
+        patch(
+            "services.market_data_service.yf.Ticker", return_value=mock_ticker
+        ) as mock_yf_ticker,
+        patch("time.time", return_value=expiry_time),
+    ):
         df2 = await get_history_df("AAPL", period="1y", interval="1d")
         assert not df2.empty
         # Should call yfinance again due to expiry
@@ -174,8 +185,9 @@ async def test_get_history_df_copy_isolation() -> None:
     mock_ticker.ticker = "AAPL"
     mock_ticker.history = MagicMock(return_value=mock_df)
 
-    with patch("config.TUNNEL_URL", ""), patch(
-        "services.market_data_service.yf.Ticker", return_value=mock_ticker
+    with (
+        patch("config.TUNNEL_URL", ""),
+        patch("services.market_data_service.yf.Ticker", return_value=mock_ticker),
     ):
         df1 = await get_history_df("AAPL", period="1y", interval="1d")
         assert not df1.empty
@@ -213,9 +225,12 @@ async def test_clear_history_cache() -> None:
     mock_ticker.ticker = "AAPL"
     mock_ticker.history = MagicMock(return_value=mock_df)
 
-    with patch("config.TUNNEL_URL", ""), patch(
-        "services.market_data_service.yf.Ticker", return_value=mock_ticker
-    ) as mock_yf_ticker:
+    with (
+        patch("config.TUNNEL_URL", ""),
+        patch(
+            "services.market_data_service.yf.Ticker", return_value=mock_ticker
+        ) as mock_yf_ticker,
+    ):
         # Fetch once to populate cache
         await get_history_df("AAPL", period="1y", interval="1d")
         mock_yf_ticker.assert_called_once()
@@ -242,9 +257,12 @@ async def test_get_all_option_expiries_caching() -> None:
     mock_ticker = MagicMock()
     mock_ticker.options = ["2026-06-19", "2026-07-17"]
 
-    with patch("config.TUNNEL_URL", ""), patch(
-        "services.market_data_service.yf.Ticker", return_value=mock_ticker
-    ) as mock_yf_ticker:
+    with (
+        patch("config.TUNNEL_URL", ""),
+        patch(
+            "services.market_data_service.yf.Ticker", return_value=mock_ticker
+        ) as mock_yf_ticker,
+    ):
         # Miss
         expiries1 = await get_all_option_expiries("MSFT")
         assert expiries1 == ["2026-06-19", "2026-07-17"]
@@ -287,12 +305,16 @@ async def test_get_option_chain_caching() -> None:
     mock_ticker = MagicMock()
     mock_ticker.option_chain = MagicMock(return_value=mock_chain)
 
-    with patch("config.TUNNEL_URL", ""), patch(
-        "services.market_data_service.yf.Ticker", return_value=mock_ticker
-    ) as mock_yf_ticker, patch(
-        "services.market_data_service.get_quote",
-        new_callable=AsyncMock,
-        return_value={"c": 145.0},
+    with (
+        patch("config.TUNNEL_URL", ""),
+        patch(
+            "services.market_data_service.yf.Ticker", return_value=mock_ticker
+        ) as mock_yf_ticker,
+        patch(
+            "services.market_data_service.get_quote",
+            new_callable=AsyncMock,
+            return_value={"c": 145.0},
+        ),
     ):
         # First call: cache miss
         chain1 = await get_option_chain("MSFT", "2026-06-19")
@@ -331,14 +353,18 @@ async def test_get_option_chain_prefers_fresh_edge_cache_over_yfinance() -> None
         "age_seconds": 60.0,
     }
 
-    with patch(
-        "services.edge_cache_client.get_cached_option_chain",
-        new_callable=AsyncMock,
-        return_value=edge_payload,
-    ), patch("services.market_data_service.yf.Ticker") as mock_yf_ticker, patch(
-        "services.market_data_service.get_quote",
-        new_callable=AsyncMock,
-        return_value={"c": 195.0},
+    with (
+        patch(
+            "services.edge_cache_client.get_cached_option_chain",
+            new_callable=AsyncMock,
+            return_value=edge_payload,
+        ),
+        patch("services.market_data_service.yf.Ticker") as mock_yf_ticker,
+        patch(
+            "services.market_data_service.get_quote",
+            new_callable=AsyncMock,
+            return_value={"c": 195.0},
+        ),
     ):
         chain = await get_option_chain("NVDA", "2026-09-18")
 
@@ -362,7 +388,7 @@ async def test_get_option_chain_falls_back_to_yfinance_when_edge_cache_stale() -
             "calls": [{"strike": 999.0, "openInterest": 1}],
             "puts": [],
         },
-        "age_seconds": 7200.0,  # 超過 3600 秒新鮮度門檻
+        "age_seconds": 7200.0,  # 遠超過新鮮度門檻
     }
 
     mock_calls = pd.DataFrame({"strike": [150.0], "impliedVolatility": [0.3]})
@@ -375,16 +401,75 @@ async def test_get_option_chain_falls_back_to_yfinance_when_edge_cache_stale() -
     mock_ticker = MagicMock()
     mock_ticker.option_chain = MagicMock(return_value=mock_chain)
 
-    with patch("config.TUNNEL_URL", ""), patch(
-        "services.edge_cache_client.get_cached_option_chain",
-        new_callable=AsyncMock,
-        return_value=stale_edge_payload,
-    ), patch(
-        "services.market_data_service.yf.Ticker", return_value=mock_ticker
-    ) as mock_yf_ticker, patch(
-        "services.market_data_service.get_quote",
-        new_callable=AsyncMock,
-        return_value={"c": 145.0},
+    with (
+        patch("config.TUNNEL_URL", ""),
+        patch(
+            "services.edge_cache_client.get_cached_option_chain",
+            new_callable=AsyncMock,
+            return_value=stale_edge_payload,
+        ),
+        patch(
+            "services.market_data_service.yf.Ticker", return_value=mock_ticker
+        ) as mock_yf_ticker,
+        patch(
+            "services.market_data_service.get_quote",
+            new_callable=AsyncMock,
+            return_value={"c": 145.0},
+        ),
+    ):
+        chain = await get_option_chain("MSFT", "2026-06-19")
+
+        assert chain is not None
+        assert list(chain.calls["strike"]) == [150.0]
+        mock_yf_ticker.assert_called_once_with("MSFT")
+
+
+@pytest.mark.asyncio
+async def test_get_option_chain_falls_back_when_edge_cache_older_than_tightened_threshold() -> (
+    None
+):
+    """新鮮度門檻已從 3600 秒收緊到 1800 秒（對齊背景輪詢 ~25-30 分鐘的設計
+    週期），驗證這個收緊確實生效：一個介於新舊門檻之間（1800~3600 秒）的
+    edge 快照，收緊前會被視為新鮮直接採用，收緊後應正確 fallback 回
+    yfinance，而不是照單全收將近 1 小時舊的資料。"""
+    import pandas as pd
+    from services.market_data_service import get_option_chain, clear_options_cache
+
+    clear_options_cache()
+
+    stale_edge_payload = {
+        "data": {
+            "calls": [{"strike": 999.0, "openInterest": 1}],
+            "puts": [],
+        },
+        "age_seconds": 2400.0,  # 40 分鐘：< 舊門檻 3600s，>= 新門檻 1800s
+    }
+
+    mock_calls = pd.DataFrame({"strike": [150.0], "impliedVolatility": [0.3]})
+    mock_puts = pd.DataFrame({"strike": [140.0], "impliedVolatility": [0.32]})
+    mock_chain = MagicMock()
+    mock_chain.calls = mock_calls
+    mock_chain.puts = mock_puts
+    mock_chain.underlying = {"symbol": "MSFT", "price": 145.0}
+
+    mock_ticker = MagicMock()
+    mock_ticker.option_chain = MagicMock(return_value=mock_chain)
+
+    with (
+        patch("config.TUNNEL_URL", ""),
+        patch(
+            "services.edge_cache_client.get_cached_option_chain",
+            new_callable=AsyncMock,
+            return_value=stale_edge_payload,
+        ),
+        patch(
+            "services.market_data_service.yf.Ticker", return_value=mock_ticker
+        ) as mock_yf_ticker,
+        patch(
+            "services.market_data_service.get_quote",
+            new_callable=AsyncMock,
+            return_value={"c": 145.0},
+        ),
     ):
         chain = await get_option_chain("MSFT", "2026-06-19")
 
@@ -412,16 +497,21 @@ async def test_get_option_chain_falls_back_to_yfinance_when_edge_unreachable() -
     mock_ticker = MagicMock()
     mock_ticker.option_chain = MagicMock(return_value=mock_chain)
 
-    with patch("config.TUNNEL_URL", ""), patch(
-        "services.edge_cache_client.get_cached_option_chain",
-        new_callable=AsyncMock,
-        return_value=None,
-    ), patch(
-        "services.market_data_service.yf.Ticker", return_value=mock_ticker
-    ) as mock_yf_ticker, patch(
-        "services.market_data_service.get_quote",
-        new_callable=AsyncMock,
-        return_value={"c": 145.0},
+    with (
+        patch("config.TUNNEL_URL", ""),
+        patch(
+            "services.edge_cache_client.get_cached_option_chain",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "services.market_data_service.yf.Ticker", return_value=mock_ticker
+        ) as mock_yf_ticker,
+        patch(
+            "services.market_data_service.get_quote",
+            new_callable=AsyncMock,
+            return_value={"c": 145.0},
+        ),
     ):
         chain = await get_option_chain("MSFT", "2026-06-19")
 
@@ -449,9 +539,10 @@ async def test_execute_api_call_respects_retry_after() -> None:
     mock_func = MagicMock()
     mock_func.side_effect = [mock_exception, "recovered_after_retry"]
 
-    with patch("services.market_data_service._rate_limit_until", 0.0), patch(
-        "asyncio.sleep", new_callable=AsyncMock
-    ) as m_sleep:
+    with (
+        patch("services.market_data_service._rate_limit_until", 0.0),
+        patch("asyncio.sleep", new_callable=AsyncMock) as m_sleep,
+    ):
         res = await _execute_api_call(mock_func)
         assert res == "recovered_after_retry"
 
@@ -465,13 +556,17 @@ async def test_get_quote_fast_fail_to_yfinance() -> None:
     """Test that get_quote bypasses Finnhub and directly calls yfinance when in rate limit cooldown."""
     import services.market_data_service as mds
 
-    with patch(
-        "services.market_data_service.is_finnhub_rate_limited", return_value=True
-    ), patch(
-        "services.market_data_service.get_yfinance_quote", new_callable=AsyncMock
-    ) as mock_yf_quote, patch(
-        "services.market_data_service._execute_api_call", new_callable=AsyncMock
-    ) as mock_exec_api:
+    with (
+        patch(
+            "services.market_data_service.is_finnhub_rate_limited", return_value=True
+        ),
+        patch(
+            "services.market_data_service.get_yfinance_quote", new_callable=AsyncMock
+        ) as mock_yf_quote,
+        patch(
+            "services.market_data_service._execute_api_call", new_callable=AsyncMock
+        ) as mock_exec_api,
+    ):
         mock_yf_quote.return_value = {"c": 120.0}
 
         res = await mds.get_quote("AAPL")
@@ -489,11 +584,14 @@ async def test_get_quote_futures_symbol_bypasses_finnhub() -> None:
     and would otherwise fast-fail with SYMBOL_NOT_FOUND."""
     import services.market_data_service as mds
 
-    with patch(
-        "services.market_data_service.get_yfinance_quote", new_callable=AsyncMock
-    ) as mock_yf_quote, patch(
-        "services.market_data_service._execute_api_call", new_callable=AsyncMock
-    ) as mock_exec_api:
+    with (
+        patch(
+            "services.market_data_service.get_yfinance_quote", new_callable=AsyncMock
+        ) as mock_yf_quote,
+        patch(
+            "services.market_data_service._execute_api_call", new_callable=AsyncMock
+        ) as mock_exec_api,
+    ):
         mock_yf_quote.return_value = {"c": 65.5}
 
         res = await mds.get_quote("CL=F")
@@ -738,8 +836,9 @@ async def test_safe_yf_history_prefers_edge_over_direct_yfinance() -> None:
     mock_client_cls = MagicMock()
     mock_client_cls.return_value.__aenter__.return_value = mock_client
 
-    with patch("config.TUNNEL_URL", "http://edge-node:8000"), patch(
-        "httpx.AsyncClient", mock_client_cls
+    with (
+        patch("config.TUNNEL_URL", "http://edge-node:8000"),
+        patch("httpx.AsyncClient", mock_client_cls),
     ):
         res = await _safe_yf_history(mock_ticker, period="1mo", interval="1d")
         assert res is not None
@@ -784,8 +883,9 @@ async def test_fetch_history_via_edge_handles_dst_mixed_offsets() -> None:
     mock_client_cls = MagicMock()
     mock_client_cls.return_value.__aenter__.return_value = mock_client
 
-    with patch("config.TUNNEL_URL", "http://edge-node:8000"), patch(
-        "httpx.AsyncClient", mock_client_cls
+    with (
+        patch("config.TUNNEL_URL", "http://edge-node:8000"),
+        patch("httpx.AsyncClient", mock_client_cls),
     ):
         df = await _fetch_history_via_edge("ETN", period="1y", interval="1d")
 
@@ -817,8 +917,9 @@ async def test_safe_yf_history_falls_back_to_direct_when_edge_fails() -> None:
     mock_client_cls = MagicMock()
     mock_client_cls.return_value.__aenter__.return_value = mock_client
 
-    with patch("config.TUNNEL_URL", "http://edge-node:8000"), patch(
-        "httpx.AsyncClient", mock_client_cls
+    with (
+        patch("config.TUNNEL_URL", "http://edge-node:8000"),
+        patch("httpx.AsyncClient", mock_client_cls),
     ):
         res = await _safe_yf_history(mock_ticker, period="1mo", interval="1d")
         assert res is not None

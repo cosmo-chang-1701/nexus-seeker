@@ -836,7 +836,7 @@ async def _fetch_option_chain_raw(symbol: str, expiry: str) -> Optional[Any]:
     edge_cached_chain = await edge_cache_client.get_cached_option_chain(symbol, expiry)
     if edge_cached_chain is not None:
         edge_age = edge_cached_chain.get("age_seconds")
-        if edge_age is not None and edge_age < 3600:
+        if edge_age is not None and edge_age < _EDGE_SNAPSHOT_MAX_AGE_SECONDS:
             edge_data = edge_cached_chain["data"]
             edge_calls = pd.DataFrame(edge_data.get("calls", []))
             edge_puts = pd.DataFrame(edge_data.get("puts", []))
@@ -1058,6 +1058,15 @@ _option_chain_cache = BoundedCache(max_size=MAX_CACHE_SIZE)
 # （max_pain.py、iv_metrics.py、uoa_detector.py 等）對同一 symbol+expiry 短時間
 # 內重複呼叫 get_option_chain() 的情況，避免重複打 edge 快照讀取請求。
 _OPTION_CHAIN_CACHE_TTL = 60  # 60 秒（僅請求去重，非新鮮度保證）
+
+# 30 分鐘：_fetch_option_chain_raw() 用來判斷 edge 快照是否還「夠新鮮」可直接採用
+# 的門檻，對齊 nexus_edge_scraper/scheduler.py 背景輪詢設計目標的整份清單輪替
+# 週期（~25-30 分鐘，持倉標的因不受批次輪替影響則遠低於此）。舊值 3600 秒（1 小時）
+# 比背景輪詢自己的正常週期寬鬆兩倍以上，等於這道 fallback 保護網在背景輪詢正常
+# 運作時幾乎不會被觸發；調緊到 1800 秒後，只要某標的的批次輪替真的落後正常週期
+# （例如背景輪詢卡住、Playwright 持續失敗），nexus_core 就會主動觸發下方的即時
+# scrape 補上，而不是照單全收一份可能將近 1 小時舊的資料。
+_EDGE_SNAPSHOT_MAX_AGE_SECONDS = 1800  # 30 分鐘
 
 # --- 期權鏈「資料是否真的刷新過」觀測用指紋快取 ---
 # yfinance/Yahoo 不提供 chain 層級的資料快照時間戳（各 contract 的 lastTradeDate 只反映
