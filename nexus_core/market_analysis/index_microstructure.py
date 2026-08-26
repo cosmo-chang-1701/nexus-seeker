@@ -446,8 +446,13 @@ async def _scrape_symbol_gex_raw(
     return fallback
 
 
-async def fetch_symbol_gex_metrics(symbol: str) -> dict:
-    """呼叫邊緣爬蟲獲取個股的 Net GEX, Call Wall, Put Wall 與 GEX Profile。"""
+async def fetch_symbol_gex_metrics(symbol: str, force_live: bool = False) -> dict:
+    """呼叫邊緣爬蟲獲取個股的 Net GEX, Call Wall, Put Wall 與 GEX Profile。
+
+    force_live=True 時完全略過 4 小時 kv_cache 與 Edge Snapshot 兩層快取，直接
+    進行即時 Playwright scrape（仍透過 SingleFlight 防止併發重複掃描）；若即時
+    抓取失敗仍會優雅降級回退至舊快取而非直接失敗。僅供已透過 Discord defer
+    （不受 3 秒互動逾時限制）的深度分析路徑使用。"""
     import time
     import asyncio
     from database.cache import get_kv_cache, save_kv_cache
@@ -461,46 +466,51 @@ async def fetch_symbol_gex_metrics(symbol: str) -> dict:
             data = cached_obj.get("data")
             if isinstance(data, dict):
                 # 快取有效期設定為 4 小時 (14400 秒)
-                if time.time() - cached_obj.get("timestamp", 0) < 14400:
+                if (
+                    not force_live
+                    and time.time() - cached_obj.get("timestamp", 0) < 14400
+                ):
                     return data
-                # 快取已過期，保留作為 API 失敗時的降級備援
+                # 快取已過期（或 force_live 要求略過），保留作為 API 失敗時的降級備援
                 stale_cached_data = data
     except Exception as e:
         logger.warning(f"讀取 GEX 快取失敗 ({symbol}): {e}")
 
-    # 優先讀取 edge 背景排程寫入的 GEX 快照（毫秒級 SQLite 讀取），
-    # 命中且夠新鮮就直接採用，跳過下方即時 Playwright scrape。
-    from services import edge_cache_client
-    from services.market_data_service import _EDGE_SNAPSHOT_MAX_AGE_SECONDS
+    if not force_live:
+        # 優先讀取 edge 背景排程寫入的 GEX 快照（毫秒級 SQLite 讀取），
+        # 命中且夠新鮮就直接採用，跳過下方即時 Playwright scrape。
+        from services import edge_cache_client
+        from services.market_data_service import _EDGE_SNAPSHOT_MAX_AGE_SECONDS
 
-    edge_cached = await edge_cache_client.get_cached_gex(symbol)
-    if edge_cached is not None:
-        edge_age = edge_cached.get("age_seconds")
-        # 與選擇權鏈共用同一顆 edge 背景輪詢器（約 30 分鐘輪完一輪），
-        # 故沿用同一個新鮮度閾值常數，避免兩處各自維護不同步的數值。
-        if edge_age is not None and edge_age < _EDGE_SNAPSHOT_MAX_AGE_SECONDS:
-            edge_data = edge_cached["data"]
-            try:
-                await save_kv_cache(
-                    cache_key, {"data": edge_data, "timestamp": time.time()}
+        edge_cached = await edge_cache_client.get_cached_gex(symbol)
+        if edge_cached is not None:
+            edge_age = edge_cached.get("age_seconds")
+            # 與選擇權鏈共用同一顆 edge 背景輪詢器（約 30 分鐘輪完一輪），
+            # 故沿用同一個新鮮度閾值常數，避免兩處各自維護不同步的數值。
+            if edge_age is not None and edge_age < _EDGE_SNAPSHOT_MAX_AGE_SECONDS:
+                edge_data = edge_cached["data"]
+                try:
+                    await save_kv_cache(
+                        cache_key, {"data": edge_data, "timestamp": time.time()}
+                    )
+                except Exception as e:
+                    logger.warning(f"寫入 GEX kv_cache 失敗 ({symbol}): {e}")
+                return edge_data  # type: ignore
+
+        # 若已有過期快取，立即以過期快取作為 SWR 回傳，並在背景非同步更新，避免阻塞主排程
+        if stale_cached_data is not None:
+            asyncio.create_task(
+                SingleFlightManager.run(
+                    f"scrape_gex_{symbol.upper()}",
+                    _scrape_symbol_gex_raw,
+                    symbol,
+                    stale_cached_data,
                 )
-            except Exception as e:
-                logger.warning(f"寫入 GEX kv_cache 失敗 ({symbol}): {e}")
-            return edge_data  # type: ignore
-
-    # 若已有過期快取，立即以過期快取作為 SWR 回傳，並在背景非同步更新，避免阻塞主排程
-    if stale_cached_data is not None:
-        asyncio.create_task(
-            SingleFlightManager.run(
-                f"scrape_gex_{symbol.upper()}",
-                _scrape_symbol_gex_raw,
-                symbol,
-                stale_cached_data,
             )
-        )
-        return {**stale_cached_data, "_is_stale_cache": True}
+            return {**stale_cached_data, "_is_stale_cache": True}
 
-    # 初次冷啟動且無任何歷史快取時，透過 SingleFlight 執行防重疊查詢
+    # force_live=True：不使用任何快取捷徑，直接同步等待即時掃描結果。
+    # 非 force_live 且無任何歷史快取（冷啟動）：透過 SingleFlight 執行防重疊查詢。
     return await SingleFlightManager.run(  # type: ignore
         f"scrape_gex_{symbol.upper()}",
         _scrape_symbol_gex_raw,

@@ -38,12 +38,12 @@ class SentimentEngine:
         return _trigger_background_cache_clear(symbol)
 
     @staticmethod
-    async def calculate_skew(symbol: str) -> Dict[str, Any]:
-        return await calculate_skew(symbol)
+    async def calculate_skew(symbol: str, force_live: bool = False) -> Dict[str, Any]:
+        return await calculate_skew(symbol, force_live=force_live)
 
     @staticmethod
-    async def calculate_pcr(symbol: str) -> Dict[str, Any]:
-        return await calculate_pcr(symbol)
+    async def calculate_pcr(symbol: str, force_live: bool = False) -> Dict[str, Any]:
+        return await calculate_pcr(symbol, force_live=force_live)
 
     @staticmethod
     async def get_unified_max_pain(*args, **kwargs):  # type: ignore

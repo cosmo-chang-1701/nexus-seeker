@@ -124,7 +124,7 @@ class IVContext:
 
 
 async def _calculate_straddle_implied_em(
-    symbol: str, spot_price: float
+    symbol: str, spot_price: float, force_live: bool = False
 ) -> float | None:
     """以 ATM Straddle 權利金總和計算預期區間。
 
@@ -153,7 +153,9 @@ async def _calculate_straddle_implied_em(
         if target_expiry is None:
             return None
 
-        chain = await market_data_service.get_option_chain(symbol, target_expiry)
+        chain = await market_data_service.get_option_chain(
+            symbol, target_expiry, force_live=force_live
+        )
         if chain is None:
             return None
 
@@ -206,7 +208,7 @@ async def _calculate_straddle_implied_em(
 
 
 async def _calculate_iv_term_structure(
-    symbol: str, spot_price: float
+    symbol: str, spot_price: float, force_live: bool = False
 ) -> tuple[str | None, float | None]:
     """計算 IV 期限結構 (Term Structure)。
 
@@ -239,8 +241,12 @@ async def _calculate_iv_term_structure(
             return None, None
 
         near_chain, far_chain = await asyncio.gather(
-            market_data_service.get_option_chain(symbol, near_expiry),
-            market_data_service.get_option_chain(symbol, far_expiry),
+            market_data_service.get_option_chain(
+                symbol, near_expiry, force_live=force_live
+            ),
+            market_data_service.get_option_chain(
+                symbol, far_expiry, force_live=force_live
+            ),
         )
 
         def _get_atm_iv(chain: Any) -> float | None:
@@ -287,10 +293,16 @@ async def _calculate_iv_term_structure(
         return None, None
 
 
-async def fetch_and_calculate_iv_metrics(symbol: str) -> IVMetrics:
+async def fetch_and_calculate_iv_metrics(
+    symbol: str, force_refresh: bool = False
+) -> IVMetrics:
     """
     獲取並計算隱含波動率 (IV) 相關指標，包括 IV Rank, IV Percentile, 週預期震盪區間。
     具備 15 分鐘快取（900 秒）與資料庫持久化儲存。
+
+    force_refresh=True 時完全略過記憶體快取與 SQLite kv_cache 讀取，並要求所有
+    下游期權鏈抓取略過 Edge Snapshot 分層，保證回傳即時資料。僅供已透過 Discord
+    defer（不受 3 秒互動逾時限制）的深度分析路徑使用。
     """
     symbol = symbol.upper()
     current_time = time.time()
@@ -309,7 +321,7 @@ async def fetch_and_calculate_iv_metrics(symbol: str) -> IVMetrics:
         logger.warning(f"[{symbol}] 預先取得現價失敗: {e}")
 
     # Check cache
-    if symbol in _iv_cache:
+    if not force_refresh and symbol in _iv_cache:
         cached_val, expiry = _iv_cache[symbol]
         if current_time < expiry:
             # If cached during pre-market, but now the market is open, bypass memory cache
@@ -338,7 +350,7 @@ async def fetch_and_calculate_iv_metrics(symbol: str) -> IVMetrics:
 
     today_str = datetime.now().strftime("%Y-%m-%d")
     cache_key = f"iv_metrics_{symbol}_{today_str}"
-    cached = get_kv_cache(cache_key)
+    cached = None if force_refresh else get_kv_cache(cache_key)
     if cached is not None:
         try:
             metrics = IVMetrics(**cached)
@@ -395,7 +407,7 @@ async def fetch_and_calculate_iv_metrics(symbol: str) -> IVMetrics:
                     )
                     if expirations:
                         chain = await market_data_service.get_option_chain(
-                            symbol, expirations[0]
+                            symbol, expirations[0], force_live=force_refresh
                         )
                         if chain:
                             all_options = []
@@ -573,8 +585,10 @@ async def fetch_and_calculate_iv_metrics(symbol: str) -> IVMetrics:
         )
 
         straddle_em, (term_status, term_ratio) = await asyncio.gather(
-            _calculate_straddle_implied_em(symbol, spot_price),
-            _calculate_iv_term_structure(symbol, spot_price),
+            _calculate_straddle_implied_em(
+                symbol, spot_price, force_live=force_refresh
+            ),
+            _calculate_iv_term_structure(symbol, spot_price, force_live=force_refresh),
         )
 
         if straddle_em and straddle_em > 0:

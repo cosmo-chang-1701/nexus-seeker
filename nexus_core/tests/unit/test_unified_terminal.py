@@ -31,44 +31,59 @@ def mock_bot() -> Any:
 async def test_symbol_hub_command(mock_interaction: Any, mock_bot: Any):  # type: ignore
     cog = UnifiedTerminalCog(mock_bot)
 
-    with patch(
-        "services.market_data_service.validate_symbol", new_callable=AsyncMock
-    ) as mock_val, patch(
-        "services.market_data_service.get_spy_history_df", new_callable=AsyncMock
-    ) as mock_spy_hist, patch(
-        "services.market_data_service.get_macro_environment", new_callable=AsyncMock
-    ) as mock_macro, patch(
-        "services.market_data_service.get_quote", new_callable=AsyncMock
-    ) as mock_quote, patch(
-        "market_math.analyze_symbol", new_callable=AsyncMock
-    ) as mock_analyze, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_skew",
-        new_callable=AsyncMock,
-    ) as mock_skew, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.get_indicator_percentile"
-    ) as mock_skew_p, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_max_pain",
-        new_callable=AsyncMock,
-    ) as mock_mp, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
-        new_callable=AsyncMock,
-    ) as mock_pcr, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
-        new_callable=AsyncMock,
-    ) as mock_uoa, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
-        new_callable=AsyncMock,
-    ) as mock_iv, patch(
-        "services.market_data_service.get_history_df", new_callable=AsyncMock
-    ) as mock_hist, patch(
-        "services.reddit_service.get_reddit_context", new_callable=AsyncMock
-    ) as mock_reddit, patch(
-        "market_analysis.ddp_inspector.DDPInspector.inspect_symbol",
-        new_callable=AsyncMock,
-    ) as mock_ddp, patch(
-        "services.polymarket_service.PolymarketService.get_market_snapshot",
-        new_callable=AsyncMock,
-    ) as mock_poly, patch("database.get_full_user_context") as mock_user_ctx:
+    with (
+        patch(
+            "services.market_data_service.validate_symbol", new_callable=AsyncMock
+        ) as mock_val,
+        patch(
+            "services.market_data_service.get_spy_history_df", new_callable=AsyncMock
+        ) as mock_spy_hist,
+        patch(
+            "services.market_data_service.get_macro_environment", new_callable=AsyncMock
+        ) as mock_macro,
+        patch(
+            "services.market_data_service.get_quote", new_callable=AsyncMock
+        ) as mock_quote,
+        patch("market_math.analyze_symbol", new_callable=AsyncMock) as mock_analyze,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_skew",
+            new_callable=AsyncMock,
+        ) as mock_skew,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.get_indicator_percentile"
+        ) as mock_skew_p,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_max_pain",
+            new_callable=AsyncMock,
+        ) as mock_mp,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
+            new_callable=AsyncMock,
+        ) as mock_pcr,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
+            new_callable=AsyncMock,
+        ) as mock_uoa,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
+            new_callable=AsyncMock,
+        ) as mock_iv,
+        patch(
+            "services.market_data_service.get_history_df", new_callable=AsyncMock
+        ) as mock_hist,
+        patch(
+            "services.reddit_service.get_reddit_context", new_callable=AsyncMock
+        ) as mock_reddit,
+        patch(
+            "market_analysis.ddp_inspector.DDPInspector.inspect_symbol",
+            new_callable=AsyncMock,
+        ) as mock_ddp,
+        patch(
+            "services.polymarket_service.PolymarketService.get_market_snapshot",
+            new_callable=AsyncMock,
+        ) as mock_poly,
+        patch("database.get_full_user_context") as mock_user_ctx,
+    ):
         mock_val.return_value = True
         mock_spy_hist.return_value = pd.DataFrame({"Close": [500.0]})
         mock_macro.return_value = {"vix": 15.0}
@@ -130,47 +145,63 @@ async def test_symbol_hub_command_tolerates_string_expected_move_context(  # typ
 ):
     cog = UnifiedTerminalCog(mock_bot)
 
-    with patch(
-        "services.market_data_service.validate_symbol", new_callable=AsyncMock
-    ) as mock_val, patch(
-        "services.market_data_service.get_spy_history_df", new_callable=AsyncMock
-    ) as mock_spy_hist, patch(
-        "services.market_data_service.get_macro_environment", new_callable=AsyncMock
-    ) as mock_macro, patch(
-        "services.market_data_service.get_quote", new_callable=AsyncMock
-    ) as mock_quote, patch(
-        "market_math.analyze_symbol", new_callable=AsyncMock
-    ) as mock_analyze, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_skew",
-        new_callable=AsyncMock,
-    ) as mock_skew, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.get_indicator_percentile"
-    ) as mock_skew_p, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_max_pain",
-        new_callable=AsyncMock,
-    ) as mock_mp, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
-        new_callable=AsyncMock,
-    ) as mock_pcr, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
-        new_callable=AsyncMock,
-    ) as mock_uoa, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
-        new_callable=AsyncMock,
-    ) as mock_iv, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.get_expected_move",
-        new_callable=AsyncMock,
-    ) as mock_em, patch(
-        "services.market_data_service.get_history_df", new_callable=AsyncMock
-    ) as mock_hist, patch(
-        "services.reddit_service.get_reddit_context", new_callable=AsyncMock
-    ) as mock_reddit, patch(
-        "market_analysis.ddp_inspector.DDPInspector.inspect_symbol",
-        new_callable=AsyncMock,
-    ) as mock_ddp, patch(
-        "services.polymarket_service.PolymarketService.get_market_snapshot",
-        new_callable=AsyncMock,
-    ) as mock_poly, patch("database.get_full_user_context") as mock_user_ctx:
+    with (
+        patch(
+            "services.market_data_service.validate_symbol", new_callable=AsyncMock
+        ) as mock_val,
+        patch(
+            "services.market_data_service.get_spy_history_df", new_callable=AsyncMock
+        ) as mock_spy_hist,
+        patch(
+            "services.market_data_service.get_macro_environment", new_callable=AsyncMock
+        ) as mock_macro,
+        patch(
+            "services.market_data_service.get_quote", new_callable=AsyncMock
+        ) as mock_quote,
+        patch("market_math.analyze_symbol", new_callable=AsyncMock) as mock_analyze,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_skew",
+            new_callable=AsyncMock,
+        ) as mock_skew,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.get_indicator_percentile"
+        ) as mock_skew_p,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_max_pain",
+            new_callable=AsyncMock,
+        ) as mock_mp,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
+            new_callable=AsyncMock,
+        ) as mock_pcr,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
+            new_callable=AsyncMock,
+        ) as mock_uoa,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
+            new_callable=AsyncMock,
+        ) as mock_iv,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.get_expected_move",
+            new_callable=AsyncMock,
+        ) as mock_em,
+        patch(
+            "services.market_data_service.get_history_df", new_callable=AsyncMock
+        ) as mock_hist,
+        patch(
+            "services.reddit_service.get_reddit_context", new_callable=AsyncMock
+        ) as mock_reddit,
+        patch(
+            "market_analysis.ddp_inspector.DDPInspector.inspect_symbol",
+            new_callable=AsyncMock,
+        ) as mock_ddp,
+        patch(
+            "services.polymarket_service.PolymarketService.get_market_snapshot",
+            new_callable=AsyncMock,
+        ) as mock_poly,
+        patch("database.get_full_user_context") as mock_user_ctx,
+    ):
         mock_val.return_value = True
         mock_spy_hist.return_value = pd.DataFrame({"Close": [500.0]})
         mock_macro.return_value = {"vix": 15.0}
@@ -234,47 +265,63 @@ async def test_symbol_hub_command_tolerates_non_dict_expected_move_and_string_iv
 ):
     cog = UnifiedTerminalCog(mock_bot)
 
-    with patch(
-        "services.market_data_service.validate_symbol", new_callable=AsyncMock
-    ) as mock_val, patch(
-        "services.market_data_service.get_spy_history_df", new_callable=AsyncMock
-    ) as mock_spy_hist, patch(
-        "services.market_data_service.get_macro_environment", new_callable=AsyncMock
-    ) as mock_macro, patch(
-        "services.market_data_service.get_quote", new_callable=AsyncMock
-    ) as mock_quote, patch(
-        "market_math.analyze_symbol", new_callable=AsyncMock
-    ) as mock_analyze, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_skew",
-        new_callable=AsyncMock,
-    ) as mock_skew, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.get_indicator_percentile"
-    ) as mock_skew_p, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_max_pain",
-        new_callable=AsyncMock,
-    ) as mock_mp, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
-        new_callable=AsyncMock,
-    ) as mock_pcr, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
-        new_callable=AsyncMock,
-    ) as mock_uoa, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
-        new_callable=AsyncMock,
-    ) as mock_iv, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.get_expected_move",
-        new_callable=AsyncMock,
-    ) as mock_em, patch(
-        "services.market_data_service.get_history_df", new_callable=AsyncMock
-    ) as mock_hist, patch(
-        "services.reddit_service.get_reddit_context", new_callable=AsyncMock
-    ) as mock_reddit, patch(
-        "market_analysis.ddp_inspector.DDPInspector.inspect_symbol",
-        new_callable=AsyncMock,
-    ) as mock_ddp, patch(
-        "services.polymarket_service.PolymarketService.get_market_snapshot",
-        new_callable=AsyncMock,
-    ) as mock_poly, patch("database.get_full_user_context") as mock_user_ctx:
+    with (
+        patch(
+            "services.market_data_service.validate_symbol", new_callable=AsyncMock
+        ) as mock_val,
+        patch(
+            "services.market_data_service.get_spy_history_df", new_callable=AsyncMock
+        ) as mock_spy_hist,
+        patch(
+            "services.market_data_service.get_macro_environment", new_callable=AsyncMock
+        ) as mock_macro,
+        patch(
+            "services.market_data_service.get_quote", new_callable=AsyncMock
+        ) as mock_quote,
+        patch("market_math.analyze_symbol", new_callable=AsyncMock) as mock_analyze,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_skew",
+            new_callable=AsyncMock,
+        ) as mock_skew,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.get_indicator_percentile"
+        ) as mock_skew_p,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_max_pain",
+            new_callable=AsyncMock,
+        ) as mock_mp,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
+            new_callable=AsyncMock,
+        ) as mock_pcr,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
+            new_callable=AsyncMock,
+        ) as mock_uoa,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
+            new_callable=AsyncMock,
+        ) as mock_iv,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.get_expected_move",
+            new_callable=AsyncMock,
+        ) as mock_em,
+        patch(
+            "services.market_data_service.get_history_df", new_callable=AsyncMock
+        ) as mock_hist,
+        patch(
+            "services.reddit_service.get_reddit_context", new_callable=AsyncMock
+        ) as mock_reddit,
+        patch(
+            "market_analysis.ddp_inspector.DDPInspector.inspect_symbol",
+            new_callable=AsyncMock,
+        ) as mock_ddp,
+        patch(
+            "services.polymarket_service.PolymarketService.get_market_snapshot",
+            new_callable=AsyncMock,
+        ) as mock_poly,
+        patch("database.get_full_user_context") as mock_user_ctx,
+    ):
         mock_val.return_value = True
         mock_spy_hist.return_value = pd.DataFrame({"Close": [500.0]})
         mock_macro.return_value = {"vix": 15.0}
@@ -333,47 +380,63 @@ async def test_symbol_hub_command_tolerates_string_max_pain_payload(  # type: ig
 ):
     cog = UnifiedTerminalCog(mock_bot)
 
-    with patch(
-        "services.market_data_service.validate_symbol", new_callable=AsyncMock
-    ) as mock_val, patch(
-        "services.market_data_service.get_spy_history_df", new_callable=AsyncMock
-    ) as mock_spy_hist, patch(
-        "services.market_data_service.get_macro_environment", new_callable=AsyncMock
-    ) as mock_macro, patch(
-        "services.market_data_service.get_quote", new_callable=AsyncMock
-    ) as mock_quote, patch(
-        "market_math.analyze_symbol", new_callable=AsyncMock
-    ) as mock_analyze, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_skew",
-        new_callable=AsyncMock,
-    ) as mock_skew, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.get_indicator_percentile"
-    ) as mock_skew_p, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_max_pain",
-        new_callable=AsyncMock,
-    ) as mock_mp, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
-        new_callable=AsyncMock,
-    ) as mock_pcr, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
-        new_callable=AsyncMock,
-    ) as mock_uoa, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
-        new_callable=AsyncMock,
-    ) as mock_iv, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.get_expected_move",
-        new_callable=AsyncMock,
-    ) as mock_em, patch(
-        "services.market_data_service.get_history_df", new_callable=AsyncMock
-    ) as mock_hist, patch(
-        "services.reddit_service.get_reddit_context", new_callable=AsyncMock
-    ) as mock_reddit, patch(
-        "market_analysis.ddp_inspector.DDPInspector.inspect_symbol",
-        new_callable=AsyncMock,
-    ) as mock_ddp, patch(
-        "services.polymarket_service.PolymarketService.get_market_snapshot",
-        new_callable=AsyncMock,
-    ) as mock_poly, patch("database.get_full_user_context") as mock_user_ctx:
+    with (
+        patch(
+            "services.market_data_service.validate_symbol", new_callable=AsyncMock
+        ) as mock_val,
+        patch(
+            "services.market_data_service.get_spy_history_df", new_callable=AsyncMock
+        ) as mock_spy_hist,
+        patch(
+            "services.market_data_service.get_macro_environment", new_callable=AsyncMock
+        ) as mock_macro,
+        patch(
+            "services.market_data_service.get_quote", new_callable=AsyncMock
+        ) as mock_quote,
+        patch("market_math.analyze_symbol", new_callable=AsyncMock) as mock_analyze,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_skew",
+            new_callable=AsyncMock,
+        ) as mock_skew,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.get_indicator_percentile"
+        ) as mock_skew_p,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_max_pain",
+            new_callable=AsyncMock,
+        ) as mock_mp,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
+            new_callable=AsyncMock,
+        ) as mock_pcr,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
+            new_callable=AsyncMock,
+        ) as mock_uoa,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
+            new_callable=AsyncMock,
+        ) as mock_iv,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.get_expected_move",
+            new_callable=AsyncMock,
+        ) as mock_em,
+        patch(
+            "services.market_data_service.get_history_df", new_callable=AsyncMock
+        ) as mock_hist,
+        patch(
+            "services.reddit_service.get_reddit_context", new_callable=AsyncMock
+        ) as mock_reddit,
+        patch(
+            "market_analysis.ddp_inspector.DDPInspector.inspect_symbol",
+            new_callable=AsyncMock,
+        ) as mock_ddp,
+        patch(
+            "services.polymarket_service.PolymarketService.get_market_snapshot",
+            new_callable=AsyncMock,
+        ) as mock_poly,
+        patch("database.get_full_user_context") as mock_user_ctx,
+    ):
         mock_val.return_value = True
         mock_spy_hist.return_value = pd.DataFrame({"Close": [500.0]})
         mock_macro.return_value = {"vix": 15.0}
@@ -430,12 +493,16 @@ async def test_symbol_hub_command_tolerates_string_max_pain_payload(  # type: ig
 async def test_portfolio_hub_command(mock_interaction: Any, mock_bot: Any):  # type: ignore
     cog = UnifiedTerminalCog(mock_bot)
 
-    with patch(
-        "services.trading_service.TradingService.get_portfolio_pnl",
-        new_callable=AsyncMock,
-    ) as mock_pnl, patch(
-        "services.market_data_service.get_macro_environment", new_callable=AsyncMock
-    ) as mock_macro, patch("database.get_full_user_context") as mock_user_ctx:
+    with (
+        patch(
+            "services.trading_service.TradingService.get_portfolio_pnl",
+            new_callable=AsyncMock,
+        ) as mock_pnl,
+        patch(
+            "services.market_data_service.get_macro_environment", new_callable=AsyncMock
+        ) as mock_macro,
+        patch("database.get_full_user_context") as mock_user_ctx,
+    ):
         mock_pnl.return_value = {"trades": [], "total_unrealized_pnl": 0.0}
         mock_macro.return_value = {"vix": 18.0}
 
@@ -515,22 +582,27 @@ async def test_symbol_hub_batch_scan_holdings(mock_interaction: Any, mock_bot: A
     mock_holding = MagicMock()
     mock_holding.symbol = "AAPL"
 
-    with patch(
-        "services.asset_manager.AssetManager.get_assets"
-    ) as mock_get_assets, patch(
-        "services.market_data_service.get_quote", new_callable=AsyncMock
-    ) as mock_quote, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
-        new_callable=AsyncMock,
-    ) as mock_iv, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_skew",
-        new_callable=AsyncMock,
-    ) as mock_skew, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_max_pain",
-        new_callable=AsyncMock,
-    ) as mock_mp, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.get_indicator_percentile"
-    ) as mock_skew_p:
+    with (
+        patch("services.asset_manager.AssetManager.get_assets") as mock_get_assets,
+        patch(
+            "services.market_data_service.get_quote", new_callable=AsyncMock
+        ) as mock_quote,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
+            new_callable=AsyncMock,
+        ) as mock_iv,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_skew",
+            new_callable=AsyncMock,
+        ) as mock_skew,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_max_pain",
+            new_callable=AsyncMock,
+        ) as mock_mp,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.get_indicator_percentile"
+        ) as mock_skew_p,
+    ):
         mock_get_assets.return_value = [mock_holding]
         mock_quote.return_value = {"c": 150.0, "dp": 1.2}
 
@@ -586,26 +658,29 @@ async def test_symbol_hub_batch_scan_all(mock_interaction: Any, mock_bot: Any): 
         "SPECULATIVE",
     )
 
-    with patch(
-        "services.asset_manager.AssetManager.get_assets"
-    ) as mock_get_assets, patch(
-        "database.orders.get_user_active_orders"
-    ) as mock_get_orders, patch(
-        "database.portfolio.get_user_portfolio"
-    ) as mock_get_portfolio, patch(
-        "services.market_data_service.get_quote", new_callable=AsyncMock
-    ) as mock_quote, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
-        new_callable=AsyncMock,
-    ) as mock_iv, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_skew",
-        new_callable=AsyncMock,
-    ) as mock_skew, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_max_pain",
-        new_callable=AsyncMock,
-    ) as mock_mp, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.get_indicator_percentile"
-    ) as mock_skew_p:
+    with (
+        patch("services.asset_manager.AssetManager.get_assets") as mock_get_assets,
+        patch("database.orders.get_user_active_orders") as mock_get_orders,
+        patch("database.portfolio.get_user_portfolio") as mock_get_portfolio,
+        patch(
+            "services.market_data_service.get_quote", new_callable=AsyncMock
+        ) as mock_quote,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
+            new_callable=AsyncMock,
+        ) as mock_iv,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_skew",
+            new_callable=AsyncMock,
+        ) as mock_skew,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_max_pain",
+            new_callable=AsyncMock,
+        ) as mock_mp,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.get_indicator_percentile"
+        ) as mock_skew_p,
+    ):
         mock_get_assets.return_value = [mock_holding]
         mock_get_orders.return_value = [mock_order]
         mock_get_portfolio.return_value = [mock_portfolio]
@@ -644,20 +719,27 @@ async def test_symbol_hub_batch_scan_watchlist(mock_interaction: Any, mock_bot: 
     mock_choice = MagicMock()
     mock_choice.value = "WATCHLIST"
 
-    with patch("database.get_user_watchlist") as mock_get_watchlist, patch(
-        "services.market_data_service.get_quote", new_callable=AsyncMock
-    ) as mock_quote, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
-        new_callable=AsyncMock,
-    ) as mock_iv, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_skew",
-        new_callable=AsyncMock,
-    ) as mock_skew, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_max_pain",
-        new_callable=AsyncMock,
-    ) as mock_mp, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.get_indicator_percentile"
-    ) as mock_skew_p:
+    with (
+        patch("database.get_user_watchlist") as mock_get_watchlist,
+        patch(
+            "services.market_data_service.get_quote", new_callable=AsyncMock
+        ) as mock_quote,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
+            new_callable=AsyncMock,
+        ) as mock_iv,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_skew",
+            new_callable=AsyncMock,
+        ) as mock_skew,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_max_pain",
+            new_callable=AsyncMock,
+        ) as mock_mp,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.get_indicator_percentile"
+        ) as mock_skew_p,
+    ):
         mock_get_watchlist.return_value = [("AAPL", 1)]
         mock_quote.return_value = {"c": 150.0, "dp": 1.2}
 
@@ -701,28 +783,37 @@ async def test_symbol_hub_batch_scan_watchlist_many_pages_single_followup(
     # 55 個標的 -> chunk_size=10 -> 6 頁，遠超過舊版曾經在此撞牆的頁數 (7)
     watchlist_symbols = [(f"SYM{i}", i) for i in range(55)]
 
-    with patch("database.get_user_watchlist") as mock_get_watchlist, patch(
-        "services.market_data_service.get_quote", new_callable=AsyncMock
-    ) as mock_quote, patch(
-        # _fetch_sym_radar_data_fast_raw 在 UOA/Squeeze 快取未命中時會 fallback
-        # 呼叫真實的 detect_uoa / get_history_df 網路請求；55 個標的在測試沙箱
-        # 無網路環境下會逐一等待逾時，需 mock 掉以避免測試掛起。
-        "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
-        new_callable=AsyncMock,
-    ) as mock_uoa, patch(
-        "services.market_data_service.get_history_df", new_callable=AsyncMock
-    ) as mock_hist_df, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
-        new_callable=AsyncMock,
-    ) as mock_iv, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_skew",
-        new_callable=AsyncMock,
-    ) as mock_skew, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_max_pain",
-        new_callable=AsyncMock,
-    ) as mock_mp, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.get_indicator_percentile"
-    ) as mock_skew_p:
+    with (
+        patch("database.get_user_watchlist") as mock_get_watchlist,
+        patch(
+            "services.market_data_service.get_quote", new_callable=AsyncMock
+        ) as mock_quote,
+        patch(
+            # _fetch_sym_radar_data_fast_raw 在 UOA/Squeeze 快取未命中時會 fallback
+            # 呼叫真實的 detect_uoa / get_history_df 網路請求；55 個標的在測試沙箱
+            # 無網路環境下會逐一等待逾時，需 mock 掉以避免測試掛起。
+            "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
+            new_callable=AsyncMock,
+        ) as mock_uoa,
+        patch(
+            "services.market_data_service.get_history_df", new_callable=AsyncMock
+        ) as mock_hist_df,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
+            new_callable=AsyncMock,
+        ) as mock_iv,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_skew",
+            new_callable=AsyncMock,
+        ) as mock_skew,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_max_pain",
+            new_callable=AsyncMock,
+        ) as mock_mp,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.get_indicator_percentile"
+        ) as mock_skew_p,
+    ):
         mock_get_watchlist.return_value = watchlist_symbols
         mock_quote.return_value = {"c": 150.0, "dp": 1.2}
         mock_uoa.return_value = []
@@ -782,9 +873,7 @@ async def test_batch_scan_warning_button_callback(mock_interaction: Any, mock_bo
     mock_embed = MagicMock()
     mock_field = MagicMock()
     mock_field.name = "💡 即時聯動警示 (Real-time Insights)"
-    mock_field.value = (
-        "```ansi\n" "• 🚀 AAPL: 價格接近下緣\n" "• ⚠️ TSLA: 籌碼面異常\n" "```"
-    )
+    mock_field.value = "```ansi\n• 🚀 AAPL: 價格接近下緣\n• ⚠️ TSLA: 籌碼面異常\n```"
     mock_embed.fields = [mock_field]
     mock_embed.description = "```ansi\n```"
     mock_msg.embeds = [mock_embed]
@@ -874,3 +963,109 @@ async def test_batch_scan_warning_button_chunking(mock_interaction: Any, mock_bo
 
     assert "embeds" in calls[2][1]
     assert len(calls[2][1]["embeds"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_fetch_single_symbol_data_raw_forces_live_option_data(  # type: ignore
+    mock_bot: Any,
+):
+    """`_fetch_single_symbol_data_raw` 是 `/x symbol:`、批次掃描「⚡ 批次分析
+    警示標的」按鈕與 SymbolHubView 分頁切換共用的唯一深度分析資料來源，呼叫端
+    一律已透過 Discord defer 取得最長 15 分鐘的 followup 視窗。期權相關的
+    Skew/PCR/UOA/Max Pain/IV/GEX 抓取必須明確帶上 force_live/force_refresh=True，
+    保證略過 Edge Snapshot 與各自的記憶體/SQLite 快取層取得即時資料。"""
+    from datetime import date, timedelta
+
+    cog = UnifiedTerminalCog(mock_bot)
+    # 動態計算一個必定落在「30 天內到期日」篩選窗口內的到期日，避免寫死日期
+    # 隨測試執行的實際日期經過而漂移出窗口導致測試變得不穩定。
+    target_expiry = (date.today() + timedelta(days=15)).strftime("%Y-%m-%d")
+
+    with (
+        patch(
+            "services.market_data_service.get_spy_history_df", new_callable=AsyncMock
+        ) as mock_spy_hist,
+        patch(
+            "services.market_data_service.get_macro_environment", new_callable=AsyncMock
+        ) as mock_macro,
+        patch(
+            "services.market_data_service.get_quote", new_callable=AsyncMock
+        ) as mock_quote,
+        patch(
+            "services.market_data_service.get_history_df", new_callable=AsyncMock
+        ) as mock_hist,
+        patch(
+            "services.market_data_service.get_all_option_expiries",
+            new_callable=AsyncMock,
+        ) as mock_expiries,
+        patch(
+            "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
+            new_callable=AsyncMock,
+        ) as mock_gex,
+        patch("market_analysis.volume_profile.calculate_volume_profile") as mock_vp,
+        patch(
+            "market_analysis.dark_pool_engine.fetch_darkpool_prints",
+            new_callable=AsyncMock,
+        ) as mock_dp,
+        patch(
+            "services.reddit_service.get_reddit_details", new_callable=AsyncMock
+        ) as mock_reddit,
+        patch(
+            "market_analysis.ddp_inspector.DDPInspector.inspect_symbol",
+            new_callable=AsyncMock,
+        ) as mock_ddp,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_skew",
+            new_callable=AsyncMock,
+        ) as mock_skew,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
+            new_callable=AsyncMock,
+        ) as mock_pcr,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
+            new_callable=AsyncMock,
+        ) as mock_uoa,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_max_pain",
+            new_callable=AsyncMock,
+        ) as mock_mp,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
+            new_callable=AsyncMock,
+        ) as mock_iv,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.get_unified_max_pain",
+            new_callable=AsyncMock,
+        ) as mock_unified_mp,
+    ):
+        mock_spy_hist.return_value = pd.DataFrame({"Close": [500.0]})
+        mock_macro.return_value = {"vix": 15.0}
+        mock_quote.return_value = {"c": 120.0}
+        mock_hist.return_value = pd.DataFrame({"Close": [100.0, 105.0]})
+        mock_expiries.return_value = [target_expiry]
+        mock_gex.return_value = {"put_wall": 100.0}
+        mock_vp.return_value = {"hvn": 0.0, "lvn": 0.0}
+        mock_dp.return_value = {}
+        mock_reddit.return_value = ("看多情緒高漲", [])
+        mock_ddp.return_value = {"is_ddp": False}
+        mock_skew.return_value = {"skew": 1.0}
+        mock_pcr.return_value = {"pcr": 0.9}
+        mock_uoa.return_value = []
+        mock_mp.return_value = {"max_pain": 115.0}
+        mock_unified_mp.return_value = {"max_pain": 115.0, "distance_pct": 0.0}
+        mock_iv_metrics = MagicMock()
+        mock_iv_metrics.iv_rank = 35.0
+        mock_iv.return_value = mock_iv_metrics
+
+        await cog._fetch_single_symbol_data_raw("NVDA")
+
+        mock_gex.assert_awaited_once_with("NVDA", force_live=True)
+        mock_skew.assert_awaited_once_with("NVDA", force_live=True)
+        mock_pcr.assert_awaited_once_with("NVDA", force_live=True)
+        mock_uoa.assert_awaited_once_with("NVDA", force_live=True)
+        mock_mp.assert_awaited_once_with("NVDA", _retry=True)
+        mock_iv.assert_awaited_once_with("NVDA", force_refresh=True)
+        mock_unified_mp.assert_awaited_once_with(
+            "NVDA", expiry=target_expiry, force_refresh=True
+        )

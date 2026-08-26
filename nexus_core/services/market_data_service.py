@@ -843,27 +843,36 @@ async def get_all_option_expiries(symbol: str) -> List[str]:
     return res
 
 
-async def _fetch_option_chain_raw(symbol: str, expiry: str) -> Optional[Any]:
-    """底層期權鏈抓取實作（優先 Edge Snapshot 快照 -> Edge 即時 Scrape -> 本地 yfinance 直連）。"""
+async def _fetch_option_chain_raw(
+    symbol: str, expiry: str, force_live: bool = False
+) -> Optional[Any]:
+    """底層期權鏈抓取實作（優先 Edge Snapshot 快照 -> Edge 即時 Scrape -> 本地
+    yfinance 直連）。force_live=True 時完全略過 Edge Snapshot 這一層（最舊可能
+    達 _EDGE_SNAPSHOT_MAX_AGE_SECONDS），直接進行 Edge 即時 scrape 或本地
+    yfinance 直連，保證回傳的是即時抓取的資料，僅供已透過 Discord defer
+    (不受 3 秒互動逾時限制) 的深度分析路徑使用。"""
     calls_full = None
     puts_full = None
     underlying_full: Optional[Any] = None
 
     # 優先讀取 edge 背景排程寫入的 Option Chain 快照（毫秒級 SQLite 讀取），
     # 命中且夠新鮮就直接採用，跳過下方的 edge 即時 scrape / yfinance 直連。
-    from services import edge_cache_client
+    if not force_live:
+        from services import edge_cache_client
 
-    edge_cached_chain = await edge_cache_client.get_cached_option_chain(symbol, expiry)
-    if edge_cached_chain is not None:
-        edge_age = edge_cached_chain.get("age_seconds")
-        if edge_age is not None and edge_age < _EDGE_SNAPSHOT_MAX_AGE_SECONDS:
-            edge_data = edge_cached_chain["data"]
-            edge_calls = pd.DataFrame(edge_data.get("calls", []))
-            edge_puts = pd.DataFrame(edge_data.get("puts", []))
-            if not (edge_calls.empty and edge_puts.empty):
-                calls_full = edge_calls
-                puts_full = edge_puts
-                underlying_full = {}
+        edge_cached_chain = await edge_cache_client.get_cached_option_chain(
+            symbol, expiry
+        )
+        if edge_cached_chain is not None:
+            edge_age = edge_cached_chain.get("age_seconds")
+            if edge_age is not None and edge_age < _EDGE_SNAPSHOT_MAX_AGE_SECONDS:
+                edge_data = edge_cached_chain["data"]
+                edge_calls = pd.DataFrame(edge_data.get("calls", []))
+                edge_puts = pd.DataFrame(edge_data.get("puts", []))
+                if not (edge_calls.empty and edge_puts.empty):
+                    calls_full = edge_calls
+                    puts_full = edge_puts
+                    underlying_full = {}
 
     if calls_full is None or puts_full is None:
         from config import TUNNEL_URL
@@ -930,11 +939,20 @@ async def _fetch_option_chain_raw(symbol: str, expiry: str) -> Optional[Any]:
 
 
 async def get_option_chain(
-    symbol: str, expiry: str, prune_pct: Optional[float] = 0.1
+    symbol: str,
+    expiry: str,
+    prune_pct: Optional[float] = 0.1,
+    force_live: bool = False,
 ) -> Optional[Any]:
     """取得指定到期日的期權鏈 (支援 60 秒請求去重快取、SingleFlight 併發合併與
     Copy 隔離；資料新鮮度由下游 _fetch_option_chain_raw() 依 edge 快照
-    age_seconds 把關，不再由本層快取 TTL 決定)。"""
+    age_seconds 把關，不再由本層快取 TTL 決定)。
+
+    force_live=True 時完全略過本層的 60 秒請求去重快取讀取，並要求下游
+    _fetch_option_chain_raw() 略過 Edge Snapshot 分層，保證回傳即時抓取的
+    資料。僅供已透過 Discord defer（不受 3 秒互動逾時限制）的深度分析路徑
+    使用；仍會把結果寫回 60 秒去重快取，讓同一視窗內的其他一般呼叫端受益於
+    更新鮮的資料。"""
     symbol = _sanitize_ticker(symbol)
     cache_key = (symbol, expiry)
     now = time.time()
@@ -966,7 +984,7 @@ async def get_option_chain(
         return calls, puts
 
     cached_val = None
-    if cache_key in _option_chain_cache:
+    if not force_live and cache_key in _option_chain_cache:
         val, expiry_time = _option_chain_cache[cache_key]
         if now < expiry_time:
             cached_val = val
@@ -974,11 +992,17 @@ async def get_option_chain(
     if cached_val is None:
         from services.single_flight import SingleFlightManager
 
+        # force_live 併入 SingleFlight key，避免與同一時間非強制即時的呼叫
+        # 共用同一個進行中的請求而意外拿到 Edge Snapshot 分層的舊資料。
+        single_flight_key = (
+            f"opt_chain_raw_{symbol}_{expiry}_{'live' if force_live else 'std'}"
+        )
         cached_val = await SingleFlightManager.run(
-            f"opt_chain_raw_{symbol}_{expiry}",
+            single_flight_key,
             _fetch_option_chain_raw,
             symbol,
             expiry,
+            force_live,
         )
         if cached_val is not None:
             _option_chain_cache[cache_key] = (

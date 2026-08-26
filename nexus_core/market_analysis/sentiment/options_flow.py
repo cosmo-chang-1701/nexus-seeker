@@ -14,7 +14,7 @@ from services import market_data_service
 logger = logging.getLogger(__name__)
 
 
-async def calculate_skew(symbol: str) -> Dict[str, Any]:
+async def calculate_skew(symbol: str, force_live: bool = False) -> Dict[str, Any]:
     """
     計算期權偏斜 (Option Skew)。
     邏輯：取最近一個月 (Monthly) 的 OTM Put IV 與 OTM Call IV 之差。
@@ -75,7 +75,9 @@ async def calculate_skew(symbol: str) -> Dict[str, Any]:
         if not target_expiry:
             target_expiry = expiries[0]  # 回退到最近的一個
 
-        chain = await market_data_service.get_option_chain(symbol, target_expiry)
+        chain = await market_data_service.get_option_chain(
+            symbol, target_expiry, force_live=force_live
+        )
         if not chain:
             return _get_skew_fallback(
                 f"No option chain returned for expiry {target_expiry}"
@@ -149,7 +151,7 @@ async def calculate_skew(symbol: str) -> Dict[str, Any]:
         return _get_skew_fallback(f"Exception during skew calculation: {str(e)}")
 
 
-async def calculate_pcr(symbol: str) -> Dict[str, Any]:
+async def calculate_pcr(symbol: str, force_live: bool = False) -> Dict[str, Any]:
     """
     計算買賣權比率 (Put/Call Ratio)，拆分為成交量 (Volume) 與未平倉量 (Open Interest) 比率。
     """
@@ -203,7 +205,7 @@ async def calculate_pcr(symbol: str) -> Dict[str, Any]:
         target_expiries = expiries[:3]
         chains = await asyncio.gather(
             *(
-                market_data_service.get_option_chain(symbol, exp)
+                market_data_service.get_option_chain(symbol, exp, force_live=force_live)
                 for exp in target_expiries
             ),
             return_exceptions=True,

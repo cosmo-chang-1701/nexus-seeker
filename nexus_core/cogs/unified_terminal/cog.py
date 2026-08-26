@@ -447,6 +447,15 @@ class UnifiedTerminalCog(commands.Cog):
         """
         獲取單一標的所需的所有重型量化數據與外部情緒分析。
         供 SingleFlightManager 調度使用。
+
+        這是 `/x symbol:` 互動指令、批次掃描「⚡ 批次分析警示標的」按鈕，以及
+        SymbolHubView 分頁切換共用的唯一深度分析資料來源，呼叫端一律已透過
+        Discord `interaction.response.defer()` 取得最長 15 分鐘的 followup
+        視窗，不再受 3 秒互動逾時限制。因此期權鏈/GEX/IV/Max Pain/Skew/PCR/UOA
+        等量化數據一律以 force_live=True 或等效的 force_refresh=True 抓取，
+        略過 Edge Snapshot（最舊可能 30 分鐘）與各自的記憶體/SQLite 快取層，
+        保證回傳即時資料。現價/SPY 歷史/總經/Reddit/Polymarket/暗池/基本面
+        論點等非期權數據維持既有快取策略不變。
         """
         from market_analysis.ddp_inspector import DDPInspector
         from market_time import ny_tz
@@ -473,7 +482,9 @@ class UnifiedTerminalCog(commands.Cog):
         df_hist_task = asyncio.create_task(
             market_data_service.get_history_df(symbol, period="1y", interval="1d")
         )
-        gex_profile_task = asyncio.create_task(fetch_symbol_gex_metrics(symbol))
+        gex_profile_task = asyncio.create_task(
+            fetch_symbol_gex_metrics(symbol, force_live=True)
+        )
         vp_task = asyncio.create_task(
             asyncio.to_thread(calculate_volume_profile, symbol)
         )
@@ -483,12 +494,21 @@ class UnifiedTerminalCog(commands.Cog):
         ddp_task = asyncio.create_task(ddp_inspector.inspect_symbol(symbol))
 
         # 2. 啟動期權結構分析任務 (SingleFlight 自動合併相同到期日)
-        skew_task = asyncio.create_task(SentimentEngine.calculate_skew(symbol))
-        pcr_task = asyncio.create_task(SentimentEngine.calculate_pcr(symbol))
-        uoa_task = asyncio.create_task(SentimentEngine.detect_uoa(symbol))
-        mp_task = asyncio.create_task(SentimentEngine.calculate_max_pain(symbol))
+        # 深度分析路徑：一律 force_live/force_refresh=True，保證即時性。
+        skew_task = asyncio.create_task(
+            SentimentEngine.calculate_skew(symbol, force_live=True)
+        )
+        pcr_task = asyncio.create_task(
+            SentimentEngine.calculate_pcr(symbol, force_live=True)
+        )
+        uoa_task = asyncio.create_task(
+            SentimentEngine.detect_uoa(symbol, force_live=True)
+        )
+        mp_task = asyncio.create_task(
+            SentimentEngine.calculate_max_pain(symbol, _retry=True)
+        )
         iv_task = asyncio.create_task(
-            SentimentEngine.fetch_and_calculate_iv_metrics(symbol)
+            SentimentEngine.fetch_and_calculate_iv_metrics(symbol, force_refresh=True)
         )
 
         # 3. 取得 30 天內到期日之 Max Pain
@@ -516,7 +536,9 @@ class UnifiedTerminalCog(commands.Cog):
                 return []
 
             mp_tasks = [
-                SentimentEngine.get_unified_max_pain(symbol, expiry=exp)
+                SentimentEngine.get_unified_max_pain(
+                    symbol, expiry=exp, force_refresh=True
+                )
                 for exp in valid_expiries
             ]
             mp_results = await asyncio.gather(*mp_tasks, return_exceptions=True)
@@ -1147,6 +1169,14 @@ class UnifiedTerminalCog(commands.Cog):
         """
         獲取單一標的的雷達量化數據。
         採用統一的 get_unified_max_pain 方法讀取與重算快取。
+
+        本函式僅由背景排程呼叫（15 分鐘 Watchlist 心跳、08:45 ET 盤前預熱、
+        15 分鐘持倉監控），並非互動指令的即時深度分析路徑，因此刻意維持預設
+        的 force_live=False / force_refresh=False，繼續吃 Edge Snapshot 與
+        IV/Max Pain 自身的快取——這正是這些排程任務存在的目的，避免每輪都對
+        每個使用者、每個標的重複發動即時網路請求。互動指令（`/x symbol:`、
+        批次掃描的「⚡ 批次分析警示標的」按鈕）走的是完全獨立的
+        `_fetch_single_symbol_data_raw`，那裡才是保證即時性的地方。
         """
         from market_analysis.sentiment_engine import SentimentEngine
         from services import market_data_service
@@ -1155,35 +1185,20 @@ class UnifiedTerminalCog(commands.Cog):
         quote = await market_data_service.get_quote(sym)
         price = quote.get("c", 0.0) if quote else 0.0
 
-        # 2. 取得 Skew (情緒)
-        skew_data = await SentimentEngine.calculate_skew(sym)
-        skew_val = skew_data.get("skew", 0.0) if isinstance(skew_data, dict) else 0.0
-        skew_percentile = SentimentEngine.get_indicator_percentile(
-            sym, "SKEW", skew_val
-        )
-
-        # 取得 UOA (異常期權活動) 資料，並同步全鏈掃描 STO 物理封頂
-        # (與 detect_uoa 共用同一次期權鏈抓取，不發動額外網路請求)
-        uoa_data: list[Any] = []
-        physical_cap_strikes: list[dict[str, Any]] = []
-        try:
-            (
-                uoa_data,
-                physical_cap_strikes,
-            ) = await SentimentEngine.detect_uoa_with_physical_caps(sym)
-        except Exception as e:
-            logger.error(f"[{sym}] Batch Scan 獲取 UOA/物理封頂 失敗: {e}")
-
-        iv_task = SentimentEngine.fetch_and_calculate_iv_metrics(sym)
-        mp_task = SentimentEngine.get_unified_max_pain(sym)
         from market_analysis.index_microstructure import (
             fetch_symbol_gex_metrics,
             calculate_positive_gex_depth_below,
             find_overhead_negative_gex_swamp,
         )
 
-        gex_task = fetch_symbol_gex_metrics(sym)
-        pcr_task = SentimentEngine.calculate_pcr(sym)
+        async def _get_uoa_with_physical_caps(
+            symbol: str,
+        ) -> tuple[list[Any], list[dict[str, Any]]]:
+            try:
+                return await SentimentEngine.detect_uoa_with_physical_caps(symbol)  # type: ignore[no-any-return]
+            except Exception as e:
+                logger.error(f"[{symbol}] Batch Scan 獲取 UOA/物理封頂 失敗: {e}")
+                return [], []
 
         async def _get_far_mp_and_dte(symbol: str) -> tuple[float, Optional[int]]:
             try:
@@ -1218,15 +1233,34 @@ class UnifiedTerminalCog(commands.Cog):
                 pass
             return 0.0, None
 
+        # 2. 情緒 (Skew)、UOA/物理封頂、IV、Max Pain、GEX、遠月 Max Pain、PCR
+        # 彼此互不依賴，一律併入同一個 gather 平行執行，避免先前 Skew/UOA
+        # 序列等待再進入 gather 造成的不必要延遲疊加（純效能修正，與快取新鮮度
+        # 政策無關，背景排程任務一樣受益）。
+        skew_task = SentimentEngine.calculate_skew(sym)
+        uoa_task = _get_uoa_with_physical_caps(sym)
+        iv_task = SentimentEngine.fetch_and_calculate_iv_metrics(sym)
+        mp_task = SentimentEngine.get_unified_max_pain(sym)
+        gex_task = fetch_symbol_gex_metrics(sym)
+        pcr_task = SentimentEngine.calculate_pcr(sym)
         far_mp_task = _get_far_mp_and_dte(sym)
 
         (
+            skew_data,
+            (uoa_data, physical_cap_strikes),
             iv_m,
             mp_data,
             gex_data,
             (far_mp_val, nearest_dte),
             pcr_data,
-        ) = await asyncio.gather(iv_task, mp_task, gex_task, far_mp_task, pcr_task)
+        ) = await asyncio.gather(
+            skew_task, uoa_task, iv_task, mp_task, gex_task, far_mp_task, pcr_task
+        )
+
+        skew_val = skew_data.get("skew", 0.0) if isinstance(skew_data, dict) else 0.0
+        skew_percentile = SentimentEngine.get_indicator_percentile(
+            sym, "SKEW", skew_val
+        )
 
         volume_pcr = (
             pcr_data.get("volume_pcr")

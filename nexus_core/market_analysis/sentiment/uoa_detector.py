@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 async def _fetch_and_combine_chains(
-    symbol: str, max_expiries: int = 4
+    symbol: str, max_expiries: int = 4, force_live: bool = False
 ) -> Tuple[float, List[Tuple[str, "pd.DataFrame", float]]]:
     """抓取現價與多個到期日的完整合併期權鏈（calls+puts 標記 option_type）。
 
@@ -45,7 +45,8 @@ async def _fetch_and_combine_chains(
 
     target_expiries = expiries[:max_expiries]
     tasks = [
-        market_data_service.get_option_chain(symbol, exp) for exp in target_expiries
+        market_data_service.get_option_chain(symbol, exp, force_live=force_live)
+        for exp in target_expiries
     ]
     chains = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -263,6 +264,7 @@ async def detect_uoa(
     vol_oi_ratio: float = 3.0,
     min_volume: int = 300,
     max_non_index_nominal: float = 500_000_000.0,
+    force_live: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     偵測異常期權活動 (Unusual Options Activity)。
@@ -270,7 +272,9 @@ async def detect_uoa(
     經過高並發 I/O 與 Pandas 向量化優化，並加入異常數據風控機制。
     """
     try:
-        spot_price, chain_data = await _fetch_and_combine_chains(symbol, max_expiries)
+        spot_price, chain_data = await _fetch_and_combine_chains(
+            symbol, max_expiries, force_live=force_live
+        )
         if spot_price <= 0 or not chain_data:
             return []
 
@@ -312,6 +316,7 @@ async def detect_uoa_with_physical_caps(
     max_non_index_nominal: float = 500_000_000.0,
     physical_cap_ratio: float = 0.8,
     physical_cap_min_volume: int = 500,
+    force_live: bool = False,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """偵測異常期權活動，並額外對完整期權鏈（非僅前 5 大 UOA）掃描 STO 物理封頂。
 
@@ -327,7 +332,9 @@ async def detect_uoa_with_physical_caps(
     不發動額外網路請求。
     """
     try:
-        spot_price, chain_data = await _fetch_and_combine_chains(symbol, max_expiries)
+        spot_price, chain_data = await _fetch_and_combine_chains(
+            symbol, max_expiries, force_live=force_live
+        )
         if spot_price <= 0 or not chain_data:
             return [], []
 

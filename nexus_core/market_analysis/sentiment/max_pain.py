@@ -230,13 +230,17 @@ async def get_unified_max_pain(
 
     iv_metrics = None
     try:
-        iv_metrics = await fetch_and_calculate_iv_metrics(symbol)
+        iv_metrics = await fetch_and_calculate_iv_metrics(
+            symbol, force_refresh=force_refresh
+        )
     except Exception as iv_err:
         logger.warning(f"[{symbol}] 計算 IV metrics 失敗: {iv_err}")
 
     mp_res = None
     try:
-        mp_res = await _calculate_max_pain_raw(symbol, expiry, _retry=force_refresh)
+        mp_res = await _calculate_max_pain_raw(
+            symbol, expiry, _retry=force_refresh, force_live=force_refresh
+        )
     except Exception as mp_err:
         logger.error(f"[{symbol}] _calculate_max_pain_raw 失敗: {mp_err}")
 
@@ -339,11 +343,18 @@ async def calculate_max_pain(
 
 
 async def _calculate_max_pain_raw(
-    symbol: str, expiry: Optional[str] = None, _retry: bool = False
+    symbol: str,
+    expiry: Optional[str] = None,
+    _retry: bool = False,
+    force_live: bool = False,
 ) -> Dict[str, Any]:
     """
     計算最大痛點 (Max Pain) 原生邏輯。
     邏輯：尋找讓所有期權買家總價值最小化的標的價格。
+
+    force_live=True 時完全略過本函式自身的同日 kv_cache 讀取分層，並要求下游
+    期權鏈抓取略過 Edge Snapshot 分層，保證即時性；與 `_retry`（僅控制 30%
+    偏離度斷路器是否略過）是各自獨立的旗標。
     """
     from database.cache import get_kv_cache, save_kv_cache
     from datetime import datetime
@@ -361,7 +372,7 @@ async def _calculate_max_pain_raw(
     today = datetime.now(ny_tz).date()
     today_str = today.strftime("%Y-%m-%d")
     cache_key = f"max_pain_{symbol.upper()}_{expiry or 'first'}_{today_str}"
-    cached = get_kv_cache(cache_key)
+    cached = None if force_live else get_kv_cache(cache_key)
     if cached is not None:
         cached_price = cached.get("current_price", 0.0)
         if cached_price > 0 and spot_price > 0:
@@ -448,7 +459,7 @@ async def _calculate_max_pain_raw(
                 }
 
         chain = await market_data_service.get_option_chain(
-            symbol, expiry, prune_pct=None
+            symbol, expiry, prune_pct=None, force_live=force_live
         )
         if not chain:
             return {
