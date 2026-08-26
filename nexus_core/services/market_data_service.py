@@ -906,7 +906,9 @@ async def _fetch_option_chain_raw(symbol: str, expiry: str) -> Optional[Any]:
 async def get_option_chain(
     symbol: str, expiry: str, prune_pct: Optional[float] = 0.1
 ) -> Optional[Any]:
-    """取得指定到期日的期權鏈 (支援 15 分鐘快取、SingleFlight 併發合併與 Copy 隔離)。"""
+    """取得指定到期日的期權鏈 (支援 60 秒請求去重快取、SingleFlight 併發合併與
+    Copy 隔離；資料新鮮度由下游 _fetch_option_chain_raw() 依 edge 快照
+    age_seconds 把關，不再由本層快取 TTL 決定)。"""
     symbol = _sanitize_ticker(symbol)
     cache_key = (symbol, expiry)
     now = time.time()
@@ -1046,18 +1048,24 @@ _option_expiries_cache = BoundedCache(max_size=MAX_CACHE_SIZE)
 _OPTION_EXPIRIES_CACHE_TTL = 43200  # 12 小時
 
 _option_chain_cache = BoundedCache(max_size=MAX_CACHE_SIZE)
-# 15 分鐘：對齊 yfinance 期權資料本身約 15 分鐘的延遲，以及 dynamic_market_scanner
-# 15 分鐘心跳節奏。舊值 20 分鐘是配合已淘汰的 30 分鐘心跳節奏訂的，會讓每隔一輪心跳
-# 提早命中快取、實際看到的期權鏈數據可能已經是上一次 15 分鐘資料更新之前的舊值。
-_OPTION_CHAIN_CACHE_TTL = 900  # 15 分鐘
+# 60 秒：這層快取的用途改為「同一輪評估內的請求去重」，不再是「資料新鮮度保證」。
+# 新鮮度改由 _fetch_option_chain_raw() 讀取 edge 背景輪詢寫入的 SQLite 快照時
+# 附帶的 age_seconds 直接把關（該快照本身已由 nexus_edge_scraper/scheduler.py
+# 每輪抓最新資料維持在 ~25-30 分鐘內，且該次讀取是毫秒級本地讀取，不是需要用長
+# TTL 保護的昂貴資源）。舊值 900 秒（15 分鐘）會讓 get_option_chain() 在 edge
+# 快照早就刷新之後，仍多疊加最多 15 分鐘才回頭去看新資料，等於在 edge 端的延遲
+# 之外又白白多疊加一層。60 秒只是用來合併同一次心跳評估中，多個下游模組
+# （max_pain.py、iv_metrics.py、uoa_detector.py 等）對同一 symbol+expiry 短時間
+# 內重複呼叫 get_option_chain() 的情況，避免重複打 edge 快照讀取請求。
+_OPTION_CHAIN_CACHE_TTL = 60  # 60 秒（僅請求去重，非新鮮度保證）
 
 # --- 期權鏈「資料是否真的刷新過」觀測用指紋快取 ---
 # yfinance/Yahoo 不提供 chain 層級的資料快照時間戳（各 contract 的 lastTradeDate 只反映
 # 該合約最後成交時間，冷門合約可能是好幾天前，不能拿來判斷整條鏈是否已刷新）。因此無法在
-# 抓取「之前」保證這次拿到的資料已經過了一次 15 分鐘延遲週期，只能靠 _OPTION_CHAIN_CACHE_TTL
-# 這種基於已知延遲特性反推的時間保證。這裡額外做「抓取之後」的觀測：比對本次與上次成功抓取
-# 的 OI/IV 指紋，若完全相同就記錄 warning，代表 Yahoo 端資料這一輪可能尚未真正刷新
-# （純觀測用，不重試、不阻擋主流程，只用來驗證 15 分鐘快取節奏是否與實際資料延遲相符）。
+# 抓取「之前」保證這次拿到的資料已經過了一次刷新週期，只能靠 _fetch_option_chain_raw()
+# 讀取的 edge 快照 age_seconds 做時間上的把關。這裡額外做「抓取之後」的觀測：比對本次與
+# 上次成功抓取的 OI/IV 指紋，若完全相同就記錄 warning，代表 Yahoo 端資料這一輪可能尚未
+# 真正刷新（純觀測用，不重試、不阻擋主流程，只用來驗證背景輪詢節奏是否與實際資料延遲相符）。
 _option_chain_fingerprint_cache = BoundedCache(max_size=MAX_CACHE_SIZE)
 
 

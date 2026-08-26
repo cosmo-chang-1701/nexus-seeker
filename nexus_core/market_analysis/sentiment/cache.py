@@ -2,5 +2,8 @@ from services.market_data_service import BoundedCache
 
 _iv_cache = BoundedCache(max_size=500)
 # 15 分鐘：對齊 yfinance 期權資料本身約 15 分鐘的延遲，以及 dynamic_market_scanner
-# 15 分鐘心跳節奏（同 services/market_data_service.py 的 _OPTION_CHAIN_CACHE_TTL）。
+# 15 分鐘心跳節奏。這是真正的資料新鮮度 TTL（IV/報價本身會隨時間變化），與
+# services/market_data_service.py 的 _OPTION_CHAIN_CACHE_TTL 語意不同——後者
+# 已改為 60 秒的純請求去重快取，新鮮度改由 edge 快照的 age_seconds 把關，
+# 兩者不再對齊，也不需要對齊。
 _IV_CACHE_TTL = 900
