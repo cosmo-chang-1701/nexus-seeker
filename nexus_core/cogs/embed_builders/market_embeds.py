@@ -867,6 +867,7 @@ def build_radar_scan_embed(
 
             # --- 新增：多週期 Max Pain 引力階梯 (Multi-DTE Gravity Filter) ---
             month_max_pains = r.get("month_max_pains") or []
+            mp_gravity_strong_down = False
             if price_val > 0:
                 for mp_entry in month_max_pains:
                     exp_str = mp_entry.get("expiry")
@@ -884,6 +885,8 @@ def build_radar_scan_embed(
                                     )
                                     status_label = f"{dir_text}末日磁吸 ⚠️"
                                     embed.color = 0xE74C3C
+                                    if dev > 0:
+                                        mp_gravity_strong_down = True
                                     break
                                 elif 1 < dte <= 14:
                                     if dev > 10.0:
@@ -895,6 +898,7 @@ def build_radar_scan_embed(
                                             or "磁吸回升" in status_label
                                         ):
                                             status_label = "下行磁吸預警 ⚠️"
+                                        mp_gravity_strong_down = True
                                         break
                         except Exception:
                             pass
@@ -1086,6 +1090,30 @@ def build_radar_scan_embed(
             # 4.1 STO 鎖死履約價 (STO Strikes & Density)
             sto_str = "N/A"
             uoa_list = r.get("uoa") or []
+
+            # --- 新增：DTE≥7 實質機構買盤支撐判定 (沿用 heartbeat.py 的
+            # is_uoa_aligned 定義：BTO CALL 或 STO PUT 視為機構買方力量) ---
+            has_dte7_institutional_buy_support = False
+            for uoa_item in uoa_list:
+                if not isinstance(uoa_item, dict):
+                    continue
+                action_str = str(uoa_item.get("action", ""))
+                opt_type = str(uoa_item.get("type", "")).upper()
+                exp_str = uoa_item.get("expiry")
+                if not exp_str:
+                    continue
+                try:
+                    item_exp_dt = datetime.strptime(exp_str, "%Y-%m-%d").date()
+                    item_dte = (item_exp_dt - datetime.now().date()).days
+                except Exception:
+                    continue
+                if item_dte >= 7 and (
+                    ("BTO" in action_str and opt_type == "CALL")
+                    or ("STO" in action_str and opt_type == "PUT")
+                ):
+                    has_dte7_institutional_buy_support = True
+                    break
+
             sto_uoa_items = [
                 u for u in uoa_list if "STO" in str(u.get("action", "")).upper()
             ]
@@ -1226,6 +1254,18 @@ def build_radar_scan_embed(
                 and price_val >= put_wall
             ):
                 tactical_adv = f"⚠️ ${put_wall:.1f} 僅單薄紙牆，無做市商深度"
+            elif (
+                skew_percentile_val >= 98.0
+                and mp_gravity_strong_down
+                and not has_dte7_institutional_buy_support
+            ):
+                status_label = "三重結構性風險合流 🚨"
+                tactical_adv = (
+                    "🚨 三重結構性風險合流：避險背離+痛點引力+機構真空，嚴禁抄底"
+                )
+                insights.append(
+                    f"• 🚨 {sym}: Skew 避險分位 {skew_percentile_val:.0f}% 極端背離，疊加 Max Pain 向下引力，且無 DTE≥7 機構買盤護航，結構性風險合流。"
+                )
             elif skew_percentile_val > 90.0:
                 tactical_adv = "🛑 防洗盤處置，嚴守 15 分鐘實體 K 線撤退線"
             elif z_score is not None and (z_score > 0.9 or z_score < -0.9):

@@ -1,6 +1,7 @@
 import discord
 from typing import Any, Dict, List
-from datetime import datetime
+from contextlib import contextmanager
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -1609,6 +1610,171 @@ def test_build_radar_scan_embed_gp_wall_polarity_dynamics() -> None:
     assert "-1.6%" in desc_crwv
     assert "現貨續抱" in desc_crwv
     assert "嚴守15分K收盤" in desc_crwv
+
+
+@contextmanager
+def _triple_confluence_patches() -> Any:
+    with (
+        patch(
+            "database.notifications.get_user_notification_settings",
+            return_value={
+                "radar_macro_edge": False,
+                "radar_alpha_signals": True,
+                "radar_risk_defenses": True,
+            },
+        ),
+        patch("database.orders.get_user_active_orders", return_value=[]),
+        patch(
+            "database.get_full_user_context",
+            return_value=SimpleNamespace(
+                can_trade_spreads=True, cash_reserve_protection=True
+            ),
+        ),
+        patch(
+            "market_analysis.insights_engine.InsightsEngine.generate_cro_insight",
+            return_value=(None, None, None),
+        ),
+    ):
+        yield
+
+
+def _triple_confluence_base_result(
+    *,
+    skew_percentile: float,
+    month_max_pains: List[Dict[str, Any]],
+    uoa: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """三重結構性風險合流測試共用的最小可運作 scan_result：
+    price=110、put_wall=90、call_wall=130，確保不會誤觸其他更高優先序的
+    灰階戰術建議分支（跌破底牆/CallWall/薄弱紙牆/跌穿LVN），僅留下待測變因
+    （skew_percentile / month_max_pains / uoa）。"""
+    return {
+        "symbol": "TSTX",
+        "quote": {"c": 110.0, "dp": 0.5},
+        "iv_metrics": {
+            "iv_rank": 50.0,
+            "expected_move_weekly": 5.0,
+            "expected_move_lower": 105.0,
+            "expected_move_upper": 115.0,
+            "term_structure_ratio": 0.95,
+            "iv_term_structure_status": "Contango",
+        },
+        "dte_er": 40,
+        "skew": 1.0,
+        "skew_percentile": skew_percentile,
+        "max_pain": {"max_pain": 100.0},
+        "uoa": uoa,
+        "gex_metrics": {
+            "put_wall": 90.0,
+            "call_wall": 130.0,
+            "net_gex": 3_000_000.0,
+        },
+        "psq_result": {
+            "is_squeezing": False,
+            "momentum": -0.5,
+            "momentum_value": -0.5,
+            "signal_direction": "⚪",
+        },
+        "month_max_pains": month_max_pains,
+    }
+
+
+def test_build_radar_scan_embed_triple_structural_risk_confluence() -> None:
+    """正向案例：Skew 98% 極端避險背離 + 次週 Max Pain 向下引力 + 無 DTE≥7 機構買盤支撐，應合流觸發複合警示。"""
+    far_expiry = (datetime.now() + timedelta(days=10)).strftime("%Y-%m-%d")
+    scan_results = [
+        _triple_confluence_base_result(
+            skew_percentile=98.0,
+            month_max_pains=[
+                {"expiry": far_expiry, "max_pain": 95.0}
+            ],  # dev ≈ +15.8%, dte=10
+            uoa=[],
+        )
+    ]
+
+    with _triple_confluence_patches():
+        embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
+
+    desc = get_embed_text(embeds[0])
+    assert "🚨 三重結構性風險合流：避險背離+痛點引力+機構真空，嚴禁抄底" in desc
+    assert "結構性風險合流" in desc
+
+
+def test_build_radar_scan_embed_triple_confluence_requires_all_three_conditions() -> (
+    None
+):
+    """回歸案例 A：僅 Skew 98% 極端分位成立，缺乏 Max Pain 引力與 UOA 條件，應落回既有的 skew>90 防洗盤分支。"""
+    scan_results = [
+        _triple_confluence_base_result(
+            skew_percentile=98.0,
+            month_max_pains=[],
+            uoa=[],
+        )
+    ]
+
+    with _triple_confluence_patches():
+        embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
+
+    desc = get_embed_text(embeds[0])
+    assert "三重結構性風險合流" not in desc
+    assert "🛑 防洗盤處置，嚴守 15 分鐘實體 K 線撤退線" in desc
+
+
+def test_build_radar_scan_embed_triple_confluence_blocked_by_institutional_buy_support() -> (
+    None
+):
+    """回歸案例 B：Skew 與 Max Pain 引力皆成立，但存在 DTE≥7 的 BTO CALL 機構買盤，應視為有支撐而不觸發複合警示。"""
+    far_expiry = (datetime.now() + timedelta(days=10)).strftime("%Y-%m-%d")
+    scan_results = [
+        _triple_confluence_base_result(
+            skew_percentile=98.0,
+            month_max_pains=[{"expiry": far_expiry, "max_pain": 95.0}],
+            uoa=[
+                {
+                    "symbol": "TSTX",
+                    "expiry": far_expiry,
+                    "strike": 115.0,
+                    "type": "CALL",
+                    "action": "BTO",
+                    "volume": 5000,
+                    "oi": 1000,
+                }
+            ],
+        )
+    ]
+
+    with _triple_confluence_patches():
+        embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
+
+    desc = get_embed_text(embeds[0])
+    assert "三重結構性風險合流" not in desc
+    assert "🛑 防洗盤處置，嚴守 15 分鐘實體 K 線撤退線" in desc
+
+
+def test_build_radar_scan_embed_triple_confluence_yields_to_higher_priority_breakdown() -> (
+    None
+):
+    """優先序案例：同時符合複合條件與既有更高優先序的「破位殺盤」條件時，應仍輸出破位殺盤訊息。"""
+    far_expiry = (datetime.now() + timedelta(days=10)).strftime("%Y-%m-%d")
+    result = _triple_confluence_base_result(
+        skew_percentile=98.0,
+        month_max_pains=[
+            {"expiry": far_expiry, "max_pain": 70.0}
+        ],  # dev ≈ +21.4%, dte=10
+        uoa=[],
+    )
+    # 觸發「破位殺盤」：price < put_wall 且 volume_pcr >= 1.2
+    result["quote"] = {"c": 85.0, "dp": -1.0}
+    result["volume_pcr"] = 1.5
+
+    scan_results = [result]
+
+    with _triple_confluence_patches():
+        embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
+
+    desc = get_embed_text(embeds[0])
+    assert "🚨 破位殺盤 (PCR 1.50)，嚴防下殺" in desc
+    assert "三重結構性風險合流" not in desc
 
 
 def test_build_radar_scan_embed_all_enhanced_fields() -> None:
