@@ -471,11 +471,14 @@ async def fetch_symbol_gex_metrics(symbol: str) -> dict:
     # 優先讀取 edge 背景排程寫入的 GEX 快照（毫秒級 SQLite 讀取），
     # 命中且夠新鮮就直接採用，跳過下方即時 Playwright scrape。
     from services import edge_cache_client
+    from services.market_data_service import _EDGE_SNAPSHOT_MAX_AGE_SECONDS
 
     edge_cached = await edge_cache_client.get_cached_gex(symbol)
     if edge_cached is not None:
         edge_age = edge_cached.get("age_seconds")
-        if edge_age is not None and edge_age < 3600:
+        # 與選擇權鏈共用同一顆 edge 背景輪詢器（約 30 分鐘輪完一輪），
+        # 故沿用同一個新鮮度閾值常數，避免兩處各自維護不同步的數值。
+        if edge_age is not None and edge_age < _EDGE_SNAPSHOT_MAX_AGE_SECONDS:
             edge_data = edge_cached["data"]
             try:
                 await save_kv_cache(

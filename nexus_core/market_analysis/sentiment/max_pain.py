@@ -8,12 +8,7 @@ import asyncio
 from datetime import datetime, timedelta, date
 from typing import Dict, Optional
 from services import market_data_service
-from services.market_data_service import BoundedCache
 from market_time import ny_tz
-
-
-_iv_cache = BoundedCache(max_size=500)
-_IV_CACHE_TTL = 1200  # 20 minutes
 
 
 logger = logging.getLogger(__name__)

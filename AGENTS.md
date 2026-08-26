@@ -96,11 +96,18 @@ The system features a low-latency, high-information-density **Trader Terminal Ra
 A daily pre-market task runs asynchronously (at 18:00 UTC+8) to fetch option Open Interest (OI), Implied Volatility (IV), and compute weekly expected moves and max pain for all watchlist symbols. These values are cached locally in the `market_cache` table:
 ```sql
 CREATE TABLE IF NOT EXISTS market_cache (
-    symbol TEXT PRIMARY KEY,
+    symbol TEXT NOT NULL,
+    expiry TEXT NOT NULL,
     max_pain REAL,
     expected_move_lower REAL,
     expected_move_upper REAL,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    reference_spot_price REAL,
+    is_stale INTEGER DEFAULT 0,
+    calculation_mode TEXT DEFAULT 'OI',
+    is_degraded INTEGER DEFAULT 0,
+    circuit_breaker_triggered INTEGER DEFAULT 0,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (symbol, expiry)
 );
 ```
 

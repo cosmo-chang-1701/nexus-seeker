@@ -290,7 +290,7 @@ async def _calculate_iv_term_structure(
 async def fetch_and_calculate_iv_metrics(symbol: str) -> IVMetrics:
     """
     獲取並計算隱含波動率 (IV) 相關指標，包括 IV Rank, IV Percentile, 週預期震盪區間。
-    具備 30 分鐘快取與資料庫持久化儲存。
+    具備 15 分鐘快取（900 秒）與資料庫持久化儲存。
     """
     symbol = symbol.upper()
     current_time = time.time()

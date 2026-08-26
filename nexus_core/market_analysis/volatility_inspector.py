@@ -66,17 +66,17 @@ class VolatilityInspector:
         )
         iv_current = info.get("impliedVolatility")
         if not iv_current or iv_current <= 0:
-            # Fallback: 嘗試從 ATM 期權鏈獲取
-
-            def _fetch_first_chain(sym: str) -> Optional[Any]:
-                t = yf.Ticker(sym)
-                expirations = t.options
-                if not expirations:
-                    return None
-                return t.option_chain(expirations[0])
-
+            # Fallback: 嘗試從 ATM 期權鏈獲取 (透過集中快取路徑，享有 edge
+            # tunnel 降級保護；不裁減履約價範圍，純粹取第一個到期日以定位 ATM)
             try:
-                chain = await market_data_service.call_yf(_fetch_first_chain, symbol)
+                expirations = await market_data_service.get_all_option_expiries(symbol)
+                chain = (
+                    await market_data_service.get_option_chain(
+                        symbol, expirations[0], prune_pct=None
+                    )
+                    if expirations
+                    else None
+                )
                 if chain is not None:
                     price = info.get("currentPrice") or df["Close"].iloc[-1]
                     atm_call_idx = (chain.calls["strike"] - price).abs().idxmin()

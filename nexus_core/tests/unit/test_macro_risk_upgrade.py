@@ -101,13 +101,12 @@ async def test_get_market_regime_critical() -> None:
     # 情境 1：VIX 飆升與 Gamma Flip 踩踏
     # 輸入：現有 VIX = 22.22, VIX3M = 21.0 (vts_ratio = 1.058)，SPY 現貨價 = 510，爬取之 Gamma Flip Line = 515。
     # 預期輸出：get_market_regime() 回傳 SHORT_GAMMA_CRITICAL
-    with patch(
-        "services.market_data_service.get_macro_environment"
-    ) as mock_macro, patch(
-        "services.market_data_service.get_vix_term_structure"
-    ) as mock_vts, patch("services.market_data_service.get_quote") as mock_quote, patch(
-        "market_analysis.index_microstructure.fetch_gex_metrics"
-    ) as mock_gex:
+    with (
+        patch("services.market_data_service.get_macro_environment") as mock_macro,
+        patch("services.market_data_service.get_vix_term_structure") as mock_vts,
+        patch("services.market_data_service.get_quote") as mock_quote,
+        patch("market_analysis.index_microstructure.fetch_gex_metrics") as mock_gex,
+    ):
         mock_macro.return_value = {"vix": 22.22, "oil": 75.0, "vix_change": 0.0}
         mock_vts.return_value = {"vts_ratio": 1.058, "vts_state": "Backwardation"}
         mock_quote.return_value = {"c": 510.0}
@@ -284,14 +283,17 @@ async def test_invalidate_spx_capped_from_above_signal_cache_forces_refetch() ->
 async def test_spx_capped_signal_false_when_regime_not_normal() -> None:
     """危機模式下不建議賣方策略，即使 SPY 結構上確實受制於上方，is_capped 仍應
     為 False，且不應浪費網路請求去抓取 SPY GEX/UOA 資料。"""
-    with patch(
-        "market_analysis.index_microstructure.get_market_regime",
-        new_callable=AsyncMock,
-        return_value="SHORT_GAMMA_CRITICAL",
-    ), patch(
-        "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
-        new_callable=AsyncMock,
-    ) as mock_gex:
+    with (
+        patch(
+            "market_analysis.index_microstructure.get_market_regime",
+            new_callable=AsyncMock,
+            return_value="SHORT_GAMMA_CRITICAL",
+        ),
+        patch(
+            "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
+            new_callable=AsyncMock,
+        ) as mock_gex,
+    ):
         signal = await get_spx_capped_from_above_signal()
 
     assert signal["is_capped"] is False
@@ -303,21 +305,26 @@ async def test_spx_capped_signal_false_when_regime_not_normal() -> None:
 async def test_spx_capped_signal_false_when_no_negative_gamma_swamp() -> None:
     """NORMAL 市況但 SPY 上方未偵測到負 Gamma 泥淖 -> is_capped False，
     且不應為此額外觸發 UOA 掃描 (無泥淖時封頂與否已不影響結論)。"""
-    with patch(
-        "market_analysis.index_microstructure.get_market_regime",
-        new_callable=AsyncMock,
-        return_value="NORMAL",
-    ), patch(
-        "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
-        new_callable=AsyncMock,
-        return_value={"spot": 500.0, "gex_profile": {"510": 100.0}},
-    ), patch(
-        "market_analysis.index_microstructure.find_overhead_negative_gex_swamp",
-        return_value=(0.0, 0.0),
-    ), patch(
-        "market_analysis.sentiment.uoa_detector.detect_uoa",
-        new_callable=AsyncMock,
-    ) as mock_uoa:
+    with (
+        patch(
+            "market_analysis.index_microstructure.get_market_regime",
+            new_callable=AsyncMock,
+            return_value="NORMAL",
+        ),
+        patch(
+            "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
+            new_callable=AsyncMock,
+            return_value={"spot": 500.0, "gex_profile": {"510": 100.0}},
+        ),
+        patch(
+            "market_analysis.index_microstructure.find_overhead_negative_gex_swamp",
+            return_value=(0.0, 0.0),
+        ),
+        patch(
+            "market_analysis.sentiment.uoa_detector.detect_uoa",
+            new_callable=AsyncMock,
+        ) as mock_uoa,
+    ):
         signal = await get_spx_capped_from_above_signal()
 
     assert signal["is_capped"] is False
@@ -329,21 +336,26 @@ async def test_spx_capped_signal_false_when_no_negative_gamma_swamp() -> None:
 async def test_spx_capped_signal_false_when_swamp_present_but_no_sto_cap() -> None:
     """NORMAL 市況、SPY 上方有負 Gamma 泥淖，但無 STO Call 物理封頂 -> is_capped
     仍應為 False (兩項結構訊號須同時成立)。"""
-    with patch(
-        "market_analysis.index_microstructure.get_market_regime",
-        new_callable=AsyncMock,
-        return_value="NORMAL",
-    ), patch(
-        "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
-        new_callable=AsyncMock,
-        return_value={"spot": 500.0, "gex_profile": {"510": -6_000_000.0}},
-    ), patch(
-        "market_analysis.index_microstructure.find_overhead_negative_gex_swamp",
-        return_value=(510.0, -6_000_000.0),
-    ), patch(
-        "market_analysis.sentiment.uoa_detector.detect_uoa",
-        new_callable=AsyncMock,
-        return_value=[],
+    with (
+        patch(
+            "market_analysis.index_microstructure.get_market_regime",
+            new_callable=AsyncMock,
+            return_value="NORMAL",
+        ),
+        patch(
+            "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
+            new_callable=AsyncMock,
+            return_value={"spot": 500.0, "gex_profile": {"510": -6_000_000.0}},
+        ),
+        patch(
+            "market_analysis.index_microstructure.find_overhead_negative_gex_swamp",
+            return_value=(510.0, -6_000_000.0),
+        ),
+        patch(
+            "market_analysis.sentiment.uoa_detector.detect_uoa",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
     ):
         signal = await get_spx_capped_from_above_signal()
 
@@ -356,28 +368,33 @@ async def test_spx_capped_signal_false_when_swamp_present_but_no_sto_cap() -> No
 async def test_spx_capped_signal_true_when_both_conditions_met() -> None:
     """NORMAL 市況、SPY 上方同時存在負 Gamma 泥淖與 STO Call 物理封頂 ->
     is_capped True。"""
-    with patch(
-        "market_analysis.index_microstructure.get_market_regime",
-        new_callable=AsyncMock,
-        return_value="NORMAL",
-    ), patch(
-        "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
-        new_callable=AsyncMock,
-        return_value={"spot": 500.0, "gex_profile": {"510": -6_000_000.0}},
-    ), patch(
-        "market_analysis.index_microstructure.find_overhead_negative_gex_swamp",
-        return_value=(510.0, -6_000_000.0),
-    ), patch(
-        "market_analysis.sentiment.uoa_detector.detect_uoa",
-        new_callable=AsyncMock,
-        return_value=[
-            {
-                "type": "CALL",
-                "action": "STO",
-                "strike": 515.0,
-                "ratio": 2.5,
-            }
-        ],
+    with (
+        patch(
+            "market_analysis.index_microstructure.get_market_regime",
+            new_callable=AsyncMock,
+            return_value="NORMAL",
+        ),
+        patch(
+            "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
+            new_callable=AsyncMock,
+            return_value={"spot": 500.0, "gex_profile": {"510": -6_000_000.0}},
+        ),
+        patch(
+            "market_analysis.index_microstructure.find_overhead_negative_gex_swamp",
+            return_value=(510.0, -6_000_000.0),
+        ),
+        patch(
+            "market_analysis.sentiment.uoa_detector.detect_uoa",
+            new_callable=AsyncMock,
+            return_value=[
+                {
+                    "type": "CALL",
+                    "action": "STO",
+                    "strike": 515.0,
+                    "ratio": 2.5,
+                }
+            ],
+        ),
     ):
         signal = await get_spx_capped_from_above_signal()
 
@@ -412,11 +429,12 @@ def test_detect_uoa_sto_call_physical_cap_ignores_below_spot_or_low_ratio() -> N
 async def test_suggest_boxx_allocation_pct_crisis_regime() -> None:
     # Regime 為 SHORT_GAMMA_CRITICAL / SYSTEMIC_LIQUIDITY_CRISIS 時，直接回傳
     # 最高防禦建議值 70，且不需再查詢 Fear & Greed 指數。
-    with patch(
-        "market_analysis.index_microstructure.get_market_regime"
-    ) as mock_regime, patch(
-        "market_analysis.index_microstructure.fetch_core_macro_metrics"
-    ) as mock_core_metrics:
+    with (
+        patch("market_analysis.index_microstructure.get_market_regime") as mock_regime,
+        patch(
+            "market_analysis.index_microstructure.fetch_core_macro_metrics"
+        ) as mock_core_metrics,
+    ):
         mock_regime.return_value = "SHORT_GAMMA_CRITICAL"
         result = await suggest_boxx_allocation_pct()
         assert result == 70.0
@@ -432,11 +450,12 @@ async def test_suggest_boxx_allocation_pct_crisis_regime() -> None:
 
 @pytest.mark.asyncio
 async def test_suggest_boxx_allocation_pct_extreme_fear() -> None:
-    with patch(
-        "market_analysis.index_microstructure.get_market_regime"
-    ) as mock_regime, patch(
-        "market_analysis.index_microstructure.fetch_core_macro_metrics"
-    ) as mock_core_metrics:
+    with (
+        patch("market_analysis.index_microstructure.get_market_regime") as mock_regime,
+        patch(
+            "market_analysis.index_microstructure.fetch_core_macro_metrics"
+        ) as mock_core_metrics,
+    ):
         mock_regime.return_value = "NORMAL"
         mock_core_metrics.return_value = {"fear_greed": 20.0}
         result = await suggest_boxx_allocation_pct()
@@ -445,11 +464,12 @@ async def test_suggest_boxx_allocation_pct_extreme_fear() -> None:
 
 @pytest.mark.asyncio
 async def test_suggest_boxx_allocation_pct_extreme_greed() -> None:
-    with patch(
-        "market_analysis.index_microstructure.get_market_regime"
-    ) as mock_regime, patch(
-        "market_analysis.index_microstructure.fetch_core_macro_metrics"
-    ) as mock_core_metrics:
+    with (
+        patch("market_analysis.index_microstructure.get_market_regime") as mock_regime,
+        patch(
+            "market_analysis.index_microstructure.fetch_core_macro_metrics"
+        ) as mock_core_metrics,
+    ):
         mock_regime.return_value = "NORMAL"
         mock_core_metrics.return_value = {"fear_greed": 80.0}
         result = await suggest_boxx_allocation_pct()
@@ -458,11 +478,12 @@ async def test_suggest_boxx_allocation_pct_extreme_greed() -> None:
 
 @pytest.mark.asyncio
 async def test_suggest_boxx_allocation_pct_normal_baseline() -> None:
-    with patch(
-        "market_analysis.index_microstructure.get_market_regime"
-    ) as mock_regime, patch(
-        "market_analysis.index_microstructure.fetch_core_macro_metrics"
-    ) as mock_core_metrics:
+    with (
+        patch("market_analysis.index_microstructure.get_market_regime") as mock_regime,
+        patch(
+            "market_analysis.index_microstructure.fetch_core_macro_metrics"
+        ) as mock_core_metrics,
+    ):
         mock_regime.return_value = "NORMAL"
         mock_core_metrics.return_value = {"fear_greed": 48.0}
         result = await suggest_boxx_allocation_pct()
@@ -477,29 +498,32 @@ async def test_suggest_target_allocation_pct_tiers() -> None:
         mock_regime.return_value = "SHORT_GAMMA_CRITICAL"
         assert await suggest_target_allocation_pct() == 70.0
 
-    with patch(
-        "market_analysis.index_microstructure.get_market_regime"
-    ) as mock_regime, patch(
-        "market_analysis.index_microstructure.fetch_core_macro_metrics"
-    ) as mock_core_metrics:
+    with (
+        patch("market_analysis.index_microstructure.get_market_regime") as mock_regime,
+        patch(
+            "market_analysis.index_microstructure.fetch_core_macro_metrics"
+        ) as mock_core_metrics,
+    ):
         mock_regime.return_value = "NORMAL"
         mock_core_metrics.return_value = {"fear_greed": 20.0}
         assert await suggest_target_allocation_pct() == 60.0
 
-    with patch(
-        "market_analysis.index_microstructure.get_market_regime"
-    ) as mock_regime, patch(
-        "market_analysis.index_microstructure.fetch_core_macro_metrics"
-    ) as mock_core_metrics:
+    with (
+        patch("market_analysis.index_microstructure.get_market_regime") as mock_regime,
+        patch(
+            "market_analysis.index_microstructure.fetch_core_macro_metrics"
+        ) as mock_core_metrics,
+    ):
         mock_regime.return_value = "NORMAL"
         mock_core_metrics.return_value = {"fear_greed": 80.0}
         assert await suggest_target_allocation_pct() == 30.0
 
-    with patch(
-        "market_analysis.index_microstructure.get_market_regime"
-    ) as mock_regime, patch(
-        "market_analysis.index_microstructure.fetch_core_macro_metrics"
-    ) as mock_core_metrics:
+    with (
+        patch("market_analysis.index_microstructure.get_market_regime") as mock_regime,
+        patch(
+            "market_analysis.index_microstructure.fetch_core_macro_metrics"
+        ) as mock_core_metrics,
+    ):
         mock_regime.return_value = "NORMAL"
         mock_core_metrics.return_value = {"fear_greed": 48.0}
         assert await suggest_target_allocation_pct() == 50.0
@@ -520,11 +544,14 @@ async def test_suggest_target_and_boxx_allocation_pct_never_diverge_on_same_inpu
         ("NORMAL", 48.0, 50.0, 30.0),
     ]
     for regime_value, fear_greed_value, expected_target, expected_boxx in scenarios:
-        with patch(
-            "market_analysis.index_microstructure.get_market_regime"
-        ) as mock_regime, patch(
-            "market_analysis.index_microstructure.fetch_core_macro_metrics"
-        ) as mock_core_metrics:
+        with (
+            patch(
+                "market_analysis.index_microstructure.get_market_regime"
+            ) as mock_regime,
+            patch(
+                "market_analysis.index_microstructure.fetch_core_macro_metrics"
+            ) as mock_core_metrics,
+        ):
             mock_regime.return_value = regime_value
             mock_core_metrics.return_value = {"fear_greed": fear_greed_value}
             target = await suggest_target_allocation_pct()
@@ -536,13 +563,16 @@ async def test_suggest_target_and_boxx_allocation_pct_never_diverge_on_same_inpu
 @pytest.mark.asyncio
 async def test_grid_step_scaling_critical() -> None:
     # 當觸發 SHORT_GAMMA_CRITICAL 時，網格間距自動等比放大 1.5x
-    with patch(
-        "market_analysis.index_microstructure.get_market_regime"
-    ) as mock_regime, patch(
-        "market_analysis.intraday_pipeline.build_enhanced_watchlist_metrics"
-    ) as mock_metrics, patch(
-        "market_analysis.intraday_pipeline.build_watchlist_event_context"
-    ) as mock_context, patch("services.market_data_service.get_quote") as mock_quote:
+    with (
+        patch("market_analysis.index_microstructure.get_market_regime") as mock_regime,
+        patch(
+            "market_analysis.intraday_pipeline.build_enhanced_watchlist_metrics"
+        ) as mock_metrics,
+        patch(
+            "market_analysis.intraday_pipeline.build_watchlist_event_context"
+        ) as mock_context,
+        patch("services.market_data_service.get_quote") as mock_quote,
+    ):
         mock_regime.return_value = "SHORT_GAMMA_CRITICAL"
 
         metrics = _create_sample_metrics(
@@ -594,17 +624,29 @@ def test_new_cost_basis_math() -> None:
 async def test_recommend_covered_calls_filtering() -> Any:
     # 測試 Covered Call 篩選邏輯：
     # DTE 必須在 30-50 天內，Strike > New Cost Basis，且年化收益率 >= 10.0% 或單次收租權利金大於現貨的 1%
-    with patch(
-        "market_analysis.trading_orchestration.get_user_holdings"
-    ) as mock_holdings, patch(
-        "market_analysis.trading_orchestration.get_user_active_orders"
-    ) as mock_orders, patch(
-        "market_analysis.trading_orchestration.get_covered_shares"
-    ) as mock_covered, patch(
-        "market_analysis.trading_orchestration.get_quote"
-    ) as mock_quote, patch(
-        "market_analysis.trading_orchestration.SentimentEngine.get_last_stored_iv"
-    ) as mock_iv, patch("yfinance.Ticker") as mock_ticker:
+    with (
+        patch(
+            "market_analysis.trading_orchestration.get_user_holdings"
+        ) as mock_holdings,
+        patch(
+            "market_analysis.trading_orchestration.get_user_active_orders"
+        ) as mock_orders,
+        patch(
+            "market_analysis.trading_orchestration.get_covered_shares"
+        ) as mock_covered,
+        patch("market_analysis.trading_orchestration.get_quote") as mock_quote,
+        patch(
+            "market_analysis.trading_orchestration.SentimentEngine.get_last_stored_iv"
+        ) as mock_iv,
+        patch(
+            "market_analysis.trading_orchestration.get_all_option_expiries",
+            new_callable=AsyncMock,
+        ) as mock_expiries,
+        patch(
+            "market_analysis.trading_orchestration.get_option_chain",
+            new_callable=AsyncMock,
+        ) as mock_chain,
+    ):
         mock_holdings.return_value = [
             {"symbol": "AAPL", "quantity": 100.0, "avg_cost": 150.0}
         ]
@@ -616,8 +658,7 @@ async def test_recommend_covered_calls_filtering() -> Any:
         # Mock Option Chain Expirations:
         # 1. 2026-07-20 (DTE 約 39 天，合乎 30-50 區間)
         # 2. 2026-06-15 (DTE 約 4 天，被過濾)
-        ticker_instance = MagicMock()
-        ticker_instance.options = ["2026-06-15", "2026-07-20"]
+        mock_expiries.return_value = ["2026-06-15", "2026-07-20"]
 
         # Mock option chain call contracts for 2026-07-20
         # Call 1: Strike = 170.0 (Strike > 150, Delta ~ 0.09, Premium = 1.60 -> 年化收益率 = 10.38% -> 通過)
@@ -654,8 +695,7 @@ async def test_recommend_covered_calls_filtering() -> Any:
 
         chain_mock = MagicMock()
         chain_mock.calls = mock_calls
-        ticker_instance.option_chain.return_value = chain_mock
-        mock_ticker.return_value = ticker_instance
+        mock_chain.return_value = chain_mock
 
         # Mock current date to be 2026-06-11
         with patch("market_analysis.trading_orchestration.datetime") as mock_dt:
@@ -673,6 +713,11 @@ async def test_recommend_covered_calls_filtering() -> Any:
             assert len(recs) == 1
             assert recs[0]["strike"] == 170.0
             assert recs[0]["annualized_yield"] >= 10.0
+
+            # 已整併至集中快取路徑 (market_data_service)，且不裁減履約價範圍
+            # (成本基礎附近的合約可能落在現價 ±10% 之外)
+            mock_expiries.assert_awaited_once_with("AAPL")
+            mock_chain.assert_awaited_once_with("AAPL", "2026-07-20", prune_pct=None)
 
 
 def test_get_covered_shares_sums_existing_short_calls() -> None:
@@ -748,11 +793,14 @@ def test_get_covered_shares_sums_existing_short_calls() -> None:
 @pytest.mark.asyncio
 async def test_recommend_covered_calls_fully_covered_returns_none() -> Any:
     # 測試現股已全數被既有 Short Call 覆蓋時，應直接跳過建議 (回傳 None)
-    with patch(
-        "market_analysis.trading_orchestration.get_user_holdings"
-    ) as mock_holdings, patch(
-        "market_analysis.trading_orchestration.get_covered_shares"
-    ) as mock_covered:
+    with (
+        patch(
+            "market_analysis.trading_orchestration.get_user_holdings"
+        ) as mock_holdings,
+        patch(
+            "market_analysis.trading_orchestration.get_covered_shares"
+        ) as mock_covered,
+    ):
         mock_holdings.return_value = [
             {"symbol": "AAPL", "quantity": 100.0, "avg_cost": 150.0}
         ]
@@ -775,17 +823,29 @@ async def test_recommend_covered_calls_fully_covered_returns_none() -> Any:
 @pytest.mark.asyncio
 async def test_recommend_covered_calls_partial_coverage_caps_contracts() -> Any:
     # 測試部分覆蓋時，推薦口數應被裁切至尚未覆蓋股數上限 (uncovered_shares // 100)
-    with patch(
-        "market_analysis.trading_orchestration.get_user_holdings"
-    ) as mock_holdings, patch(
-        "market_analysis.trading_orchestration.get_user_active_orders"
-    ) as mock_orders, patch(
-        "market_analysis.trading_orchestration.get_covered_shares"
-    ) as mock_covered, patch(
-        "market_analysis.trading_orchestration.get_quote"
-    ) as mock_quote, patch(
-        "market_analysis.trading_orchestration.SentimentEngine.get_last_stored_iv"
-    ) as mock_iv, patch("yfinance.Ticker") as mock_ticker:
+    with (
+        patch(
+            "market_analysis.trading_orchestration.get_user_holdings"
+        ) as mock_holdings,
+        patch(
+            "market_analysis.trading_orchestration.get_user_active_orders"
+        ) as mock_orders,
+        patch(
+            "market_analysis.trading_orchestration.get_covered_shares"
+        ) as mock_covered,
+        patch("market_analysis.trading_orchestration.get_quote") as mock_quote,
+        patch(
+            "market_analysis.trading_orchestration.SentimentEngine.get_last_stored_iv"
+        ) as mock_iv,
+        patch(
+            "market_analysis.trading_orchestration.get_all_option_expiries",
+            new_callable=AsyncMock,
+        ) as mock_expiries,
+        patch(
+            "market_analysis.trading_orchestration.get_option_chain",
+            new_callable=AsyncMock,
+        ) as mock_chain,
+    ):
         # 現股 300 股，既有 2 口 Short Call 已鎖定 200 股 -> 僅剩 100 股可用 (max_new_contracts = 1)
         mock_holdings.return_value = [
             {"symbol": "AAPL", "quantity": 300.0, "avg_cost": 150.0}
@@ -805,8 +865,7 @@ async def test_recommend_covered_calls_partial_coverage_caps_contracts() -> Any:
         mock_quote.return_value = {"c": 148.0}
         mock_iv.return_value = 0.30
 
-        ticker_instance = MagicMock()
-        ticker_instance.options = ["2026-07-20"]
+        mock_expiries.return_value = ["2026-07-20"]
 
         # 兩筆合約皆符合 Strike > New Cost Basis / Delta < 0.15 / 年化收益率 >= 10% 門檻，
         # 但 max_new_contracts = 1，應僅保留履約價最低的一筆
@@ -833,8 +892,7 @@ async def test_recommend_covered_calls_partial_coverage_caps_contracts() -> Any:
 
         chain_mock = MagicMock()
         chain_mock.calls = mock_calls
-        ticker_instance.option_chain.return_value = chain_mock
-        mock_ticker.return_value = ticker_instance
+        mock_chain.return_value = chain_mock
 
         with patch("market_analysis.trading_orchestration.datetime") as mock_dt:
             mock_dt.now.return_value = pd.Timestamp("2026-06-11 12:00:00")
@@ -855,9 +913,10 @@ async def test_recommend_covered_calls_partial_coverage_caps_contracts() -> Any:
 async def test_is_covered_call_unlock_allowed_logic() -> Any:
     from market_analysis.trading_orchestration import is_covered_call_unlock_allowed
 
-    with patch("database.get_kv_cache") as mock_kv, patch(
-        "services.market_data_service.get_quote"
-    ) as mock_quote:
+    with (
+        patch("database.get_kv_cache") as mock_kv,
+        patch("services.market_data_service.get_quote") as mock_quote,
+    ):
         # We simulate get_quote throwing an Exception so it falls back to mock_kv
         mock_quote.side_effect = Exception("Mocked error")
         # Case 1: Normal
@@ -932,9 +991,11 @@ def test_safety_payout_threshold_logic() -> Any:
 async def test_get_macro_overview_data_logic() -> Any:
     from cogs.unified_terminal import get_macro_overview_data
 
-    with patch("cogs.unified_terminal.utils.is_memory_safe") as mock_safe, patch(
-        "database.get_kv_cache"
-    ) as mock_kv, patch("services.market_data_service.get_quote") as mock_quote:
+    with (
+        patch("cogs.unified_terminal.utils.is_memory_safe") as mock_safe,
+        patch("database.get_kv_cache") as mock_kv,
+        patch("services.market_data_service.get_quote") as mock_quote,
+    ):
         # We simulate get_quote throwing an Exception so it falls back to mock_kv
         mock_quote.side_effect = Exception("Mocked error")
         # Case 1: memory (RAM + swap) normal
@@ -1199,9 +1260,10 @@ def test_calendar_service_fedwatch_lookup() -> None:
         assert details.get("prob_maintain") == 65.0
 
     # Case 2: kv_cache miss, fallback to SQLite
-    with patch("database.cache.get_kv_cache", return_value=None), patch(
-        "sqlite3.connect"
-    ) as mock_conn:
+    with (
+        patch("database.cache.get_kv_cache", return_value=None),
+        patch("sqlite3.connect") as mock_conn,
+    ):
         mock_cursor = MagicMock()
         mock_cursor.fetchone.return_value = {"fedwatch_probability": 0.85}
         mock_conn.return_value.__enter__.return_value.cursor.return_value = mock_cursor
@@ -1211,8 +1273,8 @@ def test_calendar_service_fedwatch_lookup() -> None:
 
     # Case 3: kv_cache 包含污染的 1.0 (100.0% 升息) 數據 -> 自動觸發防禦並轉為 fallback
     with patch("database.cache.get_kv_cache") as mock_kv:
-        mock_kv.side_effect = (
-            lambda k: 1.0
+        mock_kv.side_effect = lambda k: (
+            1.0
             if k == "macro_fedwatch_probability"
             else (0 if k == "macro_fedwatch_is_fallback" else None)
         )
@@ -1242,9 +1304,11 @@ async def test_calendar_service_fedwatch_sanity_rejection() -> None:
         },
     }
 
-    with patch.object(config, "TUNNEL_URL", "http://mock-tunnel"), patch(
-        "httpx.AsyncClient.get", return_value=mock_resp
-    ), patch("database.cache.save_kv_cache") as mock_save:
+    with (
+        patch.object(config, "TUNNEL_URL", "http://mock-tunnel"),
+        patch("httpx.AsyncClient.get", return_value=mock_resp),
+        patch("database.cache.save_kv_cache") as mock_save,
+    ):
         await calendar_service.update_fedwatch_probability()
         # 應將 macro_fedwatch_is_fallback 寫入 1，且不應將 1.0 寫入 macro_fedwatch_probability
         saved_keys = [call.args[0] for call in mock_save.call_args_list]
@@ -1378,13 +1442,16 @@ async def test_fetch_symbol_gex_metrics_prefers_fresh_edge_cache() -> None:
         "age_seconds": 120.0,
     }
 
-    with patch("database.cache.get_kv_cache", return_value=None), patch(
-        "database.cache.save_kv_cache", new_callable=AsyncMock
-    ), patch(
-        "services.edge_cache_client.get_cached_gex",
-        new_callable=AsyncMock,
-        return_value=edge_payload,
-    ), patch("httpx.AsyncClient") as mock_client_cls:
+    with (
+        patch("database.cache.get_kv_cache", return_value=None),
+        patch("database.cache.save_kv_cache", new_callable=AsyncMock),
+        patch(
+            "services.edge_cache_client.get_cached_gex",
+            new_callable=AsyncMock,
+            return_value=edge_payload,
+        ),
+        patch("httpx.AsyncClient") as mock_client_cls,
+    ):
         result = await fetch_symbol_gex_metrics("AAPL")
 
         assert result["call_wall"] == 240.0
@@ -1429,14 +1496,74 @@ async def test_fetch_symbol_gex_metrics_falls_back_when_edge_cache_stale() -> No
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("database.cache.get_kv_cache", return_value=None), patch(
-        "database.cache.save_kv_cache", new_callable=AsyncMock
-    ), patch(
-        "services.edge_cache_client.get_cached_gex",
-        new_callable=AsyncMock,
-        return_value=stale_edge_payload,
-    ), patch("config.TUNNEL_URL", "http://mock-tunnel"), patch(
-        "httpx.AsyncClient", return_value=mock_client
+    with (
+        patch("database.cache.get_kv_cache", return_value=None),
+        patch("database.cache.save_kv_cache", new_callable=AsyncMock),
+        patch(
+            "services.edge_cache_client.get_cached_gex",
+            new_callable=AsyncMock,
+            return_value=stale_edge_payload,
+        ),
+        patch("config.TUNNEL_URL", "http://mock-tunnel"),
+        patch("httpx.AsyncClient", return_value=mock_client),
+    ):
+        result = await fetch_symbol_gex_metrics("AAPL")
+
+        assert result["call_wall"] == 240.0
+        assert result["put_wall"] == 220.0
+        mock_client.get.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_fetch_symbol_gex_metrics_falls_back_when_edge_cache_older_than_tightened_threshold() -> (
+    None
+):
+    """edge 快取新鮮度門檻已與選擇權鏈共用同一個 30 分鐘 (1800 秒) 常數
+    (_EDGE_SNAPSHOT_MAX_AGE_SECONDS)，而非舊有寫死的 3600 秒。age_seconds=2400
+    落在新舊門檻之間，應觸發 fallback 至即時 scrape，證明新閾值確實生效。"""
+    from unittest.mock import AsyncMock
+    from market_analysis.index_microstructure import fetch_symbol_gex_metrics
+
+    edge_payload_between_thresholds = {
+        "data": {
+            "spot": 1.0,
+            "net_gex": 1.0,
+            "call_wall": 1.0,
+            "put_wall": 1.0,
+            "gex_profile": {},
+        },
+        "age_seconds": 2400.0,
+    }
+    live_scrape_response = {
+        "status": "success",
+        "data": {
+            "spot": 230.0,
+            "net_gex": 500.0,
+            "call_wall": 240.0,
+            "put_wall": 220.0,
+            "gex_profile": {"220.0": 100.0},
+        },
+    }
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = live_scrape_response
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=mock_response)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with (
+        patch("database.cache.get_kv_cache", return_value=None),
+        patch("database.cache.save_kv_cache", new_callable=AsyncMock),
+        patch(
+            "services.edge_cache_client.get_cached_gex",
+            new_callable=AsyncMock,
+            return_value=edge_payload_between_thresholds,
+        ),
+        patch("config.TUNNEL_URL", "http://mock-tunnel"),
+        patch("httpx.AsyncClient", return_value=mock_client),
     ):
         result = await fetch_symbol_gex_metrics("AAPL")
 
@@ -1472,14 +1599,16 @@ async def test_fetch_symbol_gex_metrics_falls_back_when_edge_unreachable() -> No
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("database.cache.get_kv_cache", return_value=None), patch(
-        "database.cache.save_kv_cache", new_callable=AsyncMock
-    ), patch(
-        "services.edge_cache_client.get_cached_gex",
-        new_callable=AsyncMock,
-        return_value=None,
-    ), patch("config.TUNNEL_URL", "http://mock-tunnel"), patch(
-        "httpx.AsyncClient", return_value=mock_client
+    with (
+        patch("database.cache.get_kv_cache", return_value=None),
+        patch("database.cache.save_kv_cache", new_callable=AsyncMock),
+        patch(
+            "services.edge_cache_client.get_cached_gex",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch("config.TUNNEL_URL", "http://mock-tunnel"),
+        patch("httpx.AsyncClient", return_value=mock_client),
     ):
         result = await fetch_symbol_gex_metrics("AAPL")
 
@@ -1505,10 +1634,11 @@ async def test_fetch_gex_metrics_uses_last_known_good_cache_when_unreachable() -
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("database.cache.get_kv_cache", return_value=last_known_good), patch(
-        "database.cache.save_kv_cache", new_callable=AsyncMock
-    ), patch("config.TUNNEL_URL", "http://mock-tunnel"), patch(
-        "httpx.AsyncClient", return_value=mock_client
+    with (
+        patch("database.cache.get_kv_cache", return_value=last_known_good),
+        patch("database.cache.save_kv_cache", new_callable=AsyncMock),
+        patch("config.TUNNEL_URL", "http://mock-tunnel"),
+        patch("httpx.AsyncClient", return_value=mock_client),
     ):
         result = await fetch_gex_metrics()
 
@@ -1530,10 +1660,11 @@ async def test_fetch_gex_metrics_falls_back_to_static_constant_without_cache() -
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("database.cache.get_kv_cache", return_value=None), patch(
-        "database.cache.save_kv_cache", new_callable=AsyncMock
-    ), patch("config.TUNNEL_URL", "http://mock-tunnel"), patch(
-        "httpx.AsyncClient", return_value=mock_client
+    with (
+        patch("database.cache.get_kv_cache", return_value=None),
+        patch("database.cache.save_kv_cache", new_callable=AsyncMock),
+        patch("config.TUNNEL_URL", "http://mock-tunnel"),
+        patch("httpx.AsyncClient", return_value=mock_client),
     ):
         result = await fetch_gex_metrics()
 

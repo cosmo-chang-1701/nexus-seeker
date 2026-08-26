@@ -774,6 +774,20 @@ async def get_stock_splits(symbol: str) -> pd.Series:
 OptionChainData = namedtuple("OptionChainData", ["calls", "puts", "underlying"])
 
 
+async def _retry_once(
+    coro_factory: Any, *, delay: float = 0.75, label: str = ""
+) -> Any:
+    """對指定的協程工廠函式重試一次（短暫固定延遲後重試）。僅用於期權到期日
+    /期權鏈抓取三層降級架構「單一層內部」的暫時性故障重試，非通用重試機制，
+    不影響降級層級的順序或本身的 try/except 結構。"""
+    try:
+        return await coro_factory()
+    except Exception as e:
+        logger.warning(f"{label} 第一次嘗試失敗 ({e})，{delay}s 後重試一次...")
+        await asyncio.sleep(delay)
+        return await coro_factory()
+
+
 async def get_all_option_expiries(symbol: str) -> List[str]:
     """取得該標的所有可用的期權到期日 (支援 12 小時快取)。"""
     symbol = _sanitize_ticker(symbol)
@@ -796,7 +810,10 @@ async def get_all_option_expiries(symbol: str) -> List[str]:
         )
         try:
             async with get_edge_client() as client:
-                resp = await client.get(req_url)
+                resp = await _retry_once(
+                    lambda: client.get(req_url),
+                    label=f"[{symbol}] Edge 節點抓取期權到期日",
+                )
                 if resp.status_code == 200:
                     data = resp.json()
                     if data.get("status") == "success" and data.get("data"):
@@ -810,7 +827,10 @@ async def get_all_option_expiries(symbol: str) -> List[str]:
             logger.info(f"[{symbol}] 降級改用本地 yfinance 直連抓取期權到期日...")
         try:
             ticker = yf.Ticker(symbol)
-            expiries = await call_yf(lambda: ticker.options)
+            expiries = await _retry_once(
+                lambda: call_yf(lambda: ticker.options),
+                label=f"[{symbol}] yfinance 抓取期權到期日",
+            )
             res = list(expiries)
         except Exception as e:
             logger.warning(f"[{symbol}] yfinance 獲取期權到期日失敗: {e}")
@@ -858,7 +878,10 @@ async def _fetch_option_chain_raw(symbol: str, expiry: str) -> Optional[Any]:
             req_url = f"{base_url}/api/v1/scrape/yf/options/{urllib.parse.quote(symbol)}/chain?expiry={expiry}"
             try:
                 async with get_edge_client() as client:
-                    resp = await client.get(req_url)
+                    resp = await _retry_once(
+                        lambda: client.get(req_url),
+                        label=f"[{symbol}] Edge 節點抓取期權鏈",
+                    )
                     if resp.status_code == 200:
                         data = resp.json()
                         if data.get("status") == "success" and data.get("data"):
@@ -880,7 +903,10 @@ async def _fetch_option_chain_raw(symbol: str, expiry: str) -> Optional[Any]:
                 )
             try:
                 ticker = yf.Ticker(symbol)
-                chain = await call_yf(ticker.option_chain, expiry)
+                chain = await _retry_once(
+                    lambda: call_yf(ticker.option_chain, expiry),
+                    label=f"[{symbol}] yfinance 抓取期權鏈 (expiry={expiry})",
+                )
                 if chain is not None:
                     calls_full = chain.calls.copy() if chain.calls is not None else None
                     puts_full = chain.puts.copy() if chain.puts is not None else None

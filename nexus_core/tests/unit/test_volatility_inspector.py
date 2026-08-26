@@ -31,24 +31,33 @@ async def test_volatility_inspector_inspect_symbol() -> None:
     mock_earnings = MagicMock()
     mock_earnings.tte_hours = 12.0
 
-    with patch("yfinance.Ticker") as m_ticker, patch(
-        "services.market_data_service.get_history_df", new_callable=AsyncMock
-    ) as m_hist, patch(
-        "services.calendar_service.calendar_service.get_symbol_earnings",
-        new_callable=AsyncMock,
-    ) as m_earnings, patch(
-        "market_analysis.volatility_inspector.evaluate_ema_trend",
-        new_callable=AsyncMock,
-    ) as m_ema, patch(
-        "market_analysis.volatility_inspector.analyze_psq"
-    ) as m_psq, patch(
-        "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
-        new_callable=AsyncMock,
-    ) as m_gex, patch(
-        "services.market_data_service.get_all_option_expiries", new_callable=AsyncMock
-    ) as m_exp, patch(
-        "market_analysis.volume_profile.calculate_volume_profile_from_df"
-    ) as m_vp, patch("pandas_ta.atr") as m_atr:
+    with (
+        patch("yfinance.Ticker") as m_ticker,
+        patch(
+            "services.market_data_service.get_history_df", new_callable=AsyncMock
+        ) as m_hist,
+        patch(
+            "services.calendar_service.calendar_service.get_symbol_earnings",
+            new_callable=AsyncMock,
+        ) as m_earnings,
+        patch(
+            "market_analysis.volatility_inspector.evaluate_ema_trend",
+            new_callable=AsyncMock,
+        ) as m_ema,
+        patch("market_analysis.volatility_inspector.analyze_psq") as m_psq,
+        patch(
+            "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
+            new_callable=AsyncMock,
+        ) as m_gex,
+        patch(
+            "services.market_data_service.get_all_option_expiries",
+            new_callable=AsyncMock,
+        ) as m_exp,
+        patch(
+            "market_analysis.volume_profile.calculate_volume_profile_from_df"
+        ) as m_vp,
+        patch("pandas_ta.atr") as m_atr,
+    ):
         # Mock yfinance.Ticker
         mock_ticker_instance = MagicMock()
         mock_ticker_instance.info = {
@@ -136,24 +145,33 @@ async def test_volatility_inspector_ddp_opportunity() -> None:
     mock_earnings = MagicMock()
     mock_earnings.tte_hours = 500.0
 
-    with patch("yfinance.Ticker") as m_ticker, patch(
-        "services.market_data_service.get_history_df", new_callable=AsyncMock
-    ) as m_hist, patch(
-        "services.calendar_service.calendar_service.get_symbol_earnings",
-        new_callable=AsyncMock,
-    ) as m_earnings, patch(
-        "market_analysis.volatility_inspector.evaluate_ema_trend",
-        new_callable=AsyncMock,
-    ) as m_ema, patch(
-        "market_analysis.volatility_inspector.analyze_psq"
-    ) as m_psq, patch(
-        "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
-        new_callable=AsyncMock,
-    ) as m_gex, patch(
-        "services.market_data_service.get_all_option_expiries", new_callable=AsyncMock
-    ) as m_exp, patch(
-        "market_analysis.volume_profile.calculate_volume_profile_from_df"
-    ) as m_vp, patch("pandas_ta.atr") as m_atr:
+    with (
+        patch("yfinance.Ticker") as m_ticker,
+        patch(
+            "services.market_data_service.get_history_df", new_callable=AsyncMock
+        ) as m_hist,
+        patch(
+            "services.calendar_service.calendar_service.get_symbol_earnings",
+            new_callable=AsyncMock,
+        ) as m_earnings,
+        patch(
+            "market_analysis.volatility_inspector.evaluate_ema_trend",
+            new_callable=AsyncMock,
+        ) as m_ema,
+        patch("market_analysis.volatility_inspector.analyze_psq") as m_psq,
+        patch(
+            "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
+            new_callable=AsyncMock,
+        ) as m_gex,
+        patch(
+            "services.market_data_service.get_all_option_expiries",
+            new_callable=AsyncMock,
+        ) as m_exp,
+        patch(
+            "market_analysis.volume_profile.calculate_volume_profile_from_df"
+        ) as m_vp,
+        patch("pandas_ta.atr") as m_atr,
+    ):
         # Calculate expected HV_current from mock data so we can set IV appropriately
         # Let's mock the df to just have a preset HV column instead, but the code calculates it.
         # So let's provide a df with prices, and just mock info["impliedVolatility"] to be extremely low (0.01).
@@ -197,11 +215,12 @@ async def test_volatility_inspector_ddp_opportunity() -> None:
 
 @pytest.mark.asyncio
 async def test_volatility_inspector_dispatches_yfinance_via_call_yf() -> None:
-    """確保 `ticker.info` (以及 IV 缺失時的 `ticker.options` /
-    `ticker.option_chain` fallback 路徑) 皆透過
-    market_data_service.call_yf (asyncio.to_thread) 分派，而非在事件迴圈中
-    直接同步呼叫 —— 這類直接呼叫會在 30 分鐘心跳掃描期間凍結整個 bot 的
-    事件迴圈（含 Discord 指令回應）。
+    """確保 `ticker.info` 透過 market_data_service.call_yf (asyncio.to_thread)
+    分派，而非在事件迴圈中直接同步呼叫 —— 這類直接呼叫會在 30 分鐘心跳掃描
+    期間凍結整個 bot 的事件迴圈（含 Discord 指令回應）。IV 缺失時的 ATM 期權鏈
+    fallback 路徑則已整併至集中快取路徑 (market_data_service.get_all_option_
+    expiries / get_option_chain)，享有 edge tunnel 降級保護，不再直接呼叫裸
+    yfinance，因此不再經過 call_yf。
     """
     inspector = VolatilityInspector()
     symbol = "AAPL"
@@ -223,35 +242,42 @@ async def test_volatility_inspector_dispatches_yfinance_via_call_yf() -> None:
     mock_earnings = MagicMock()
     mock_earnings.tte_hours = 500.0
 
-    with patch("yfinance.Ticker") as m_ticker, patch(
-        "services.market_data_service.get_history_df", new_callable=AsyncMock
-    ) as m_hist, patch(
-        "services.calendar_service.calendar_service.get_symbol_earnings",
-        new_callable=AsyncMock,
-    ) as m_earnings, patch(
-        "market_analysis.volatility_inspector.evaluate_ema_trend",
-        new_callable=AsyncMock,
-    ) as m_ema, patch(
-        "market_analysis.volatility_inspector.analyze_psq"
-    ) as m_psq, patch(
-        "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
-        new_callable=AsyncMock,
-    ) as m_gex, patch(
-        "services.market_data_service.get_all_option_expiries", new_callable=AsyncMock
-    ) as m_exp, patch(
-        "market_analysis.volume_profile.calculate_volume_profile_from_df"
-    ) as m_vp, patch("pandas_ta.atr") as m_atr, patch(
-        "services.market_data_service.call_yf", new_callable=AsyncMock
-    ) as m_call_yf:
+    with (
+        patch("yfinance.Ticker") as m_ticker,
+        patch(
+            "services.market_data_service.get_history_df", new_callable=AsyncMock
+        ) as m_hist,
+        patch(
+            "services.calendar_service.calendar_service.get_symbol_earnings",
+            new_callable=AsyncMock,
+        ) as m_earnings,
+        patch(
+            "market_analysis.volatility_inspector.evaluate_ema_trend",
+            new_callable=AsyncMock,
+        ) as m_ema,
+        patch("market_analysis.volatility_inspector.analyze_psq") as m_psq,
+        patch(
+            "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
+            new_callable=AsyncMock,
+        ) as m_gex,
+        patch(
+            "services.market_data_service.get_all_option_expiries",
+            new_callable=AsyncMock,
+        ) as m_exp,
+        patch(
+            "services.market_data_service.get_option_chain", new_callable=AsyncMock
+        ) as m_chain,
+        patch(
+            "market_analysis.volume_profile.calculate_volume_profile_from_df"
+        ) as m_vp,
+        patch("pandas_ta.atr") as m_atr,
+        patch(
+            "services.market_data_service.call_yf", new_callable=AsyncMock
+        ) as m_call_yf,
+    ):
         mock_ticker_instance = MagicMock()
-        # impliedVolatility 缺失，強迫觸發 ticker.options / ticker.option_chain
-        # 的第二次 call_yf 分派路徑
+        # impliedVolatility 缺失，強迫觸發 ATM 期權鏈 fallback 路徑
         mock_ticker_instance.info = {"currentPrice": 175.0}
-        mock_ticker_instance.options = ["2099-12-31"]
-        mock_chain = MagicMock()
-        mock_calls_df = pd.DataFrame({"strike": [175.0], "impliedVolatility": [0.35]})
-        mock_chain.calls = mock_calls_df
-        mock_ticker_instance.option_chain.return_value = mock_chain
         m_ticker.return_value = mock_ticker_instance
 
         m_hist.return_value = df_hist
@@ -264,6 +290,12 @@ async def test_volatility_inspector_dispatches_yfinance_via_call_yf() -> None:
 
         m_gex.return_value = {"put_wall": 0.0}
         m_exp.return_value = ["2099-12-31"]
+
+        mock_chain_obj = MagicMock()
+        mock_calls_df = pd.DataFrame({"strike": [175.0], "impliedVolatility": [0.35]})
+        mock_chain_obj.calls = mock_calls_df
+        m_chain.return_value = mock_chain_obj
+
         m_vp.return_value = {"hvn": 0.0, "lvn": 0.0}
         mock_atr_series = MagicMock()
         mock_atr_series.empty = False
@@ -277,4 +309,7 @@ async def test_volatility_inspector_dispatches_yfinance_via_call_yf() -> None:
 
         await inspector.inspect_symbol(symbol, mock_user_ctx)
 
-        assert m_call_yf.await_count >= 2
+        # 僅 `.info` 仍經由 call_yf 分派；ATM 期權鏈 fallback 已改走
+        # market_data_service 的集中快取路徑，不再經過 call_yf。
+        assert m_call_yf.await_count >= 1
+        m_chain.assert_awaited_once_with("AAPL", "2099-12-31", prune_pct=None)

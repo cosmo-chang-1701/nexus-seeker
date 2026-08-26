@@ -1,7 +1,6 @@
 from typing import Any
 import logging
 import datetime
-import yfinance as yf
 import pandas as pd
 import asyncio
 import json
@@ -29,10 +28,13 @@ class GhostTrader:
     async def get_option_mid_price(
         self, symbol: str, opt_type: str, strike: float, expiry: str
     ) -> Any:
-        """獲取特定期權合約的 Mid 價格 (用 to_thread)"""
+        """獲取特定期權合約的 Mid 價格"""
         try:
-            ticker = yf.Ticker(symbol)
-            chain = await market_data_service.call_yf(ticker.option_chain, expiry)
+            chain = await market_data_service.get_option_chain(
+                symbol, expiry, prune_pct=None
+            )
+            if chain is None:
+                return None, None
             opts = chain.calls if opt_type == "call" else chain.puts
             contract = opts[opts["strike"] == strike]
             if contract.empty:
@@ -155,7 +157,7 @@ class GhostTrader:
                     if ditm_action == DITMDefenseAction.DEFENSIVE_CLOSE:
                         await self._close_position(
                             trade,
-                            f"🚨 DITM 喪失凸性防禦 ｜ Delta:{current_delta:.2f}, PnL:{pnl_pct*100:.1f}%",
+                            f"🚨 DITM 喪失凸性防禦 ｜ Delta:{current_delta:.2f}, PnL:{pnl_pct * 100:.1f}%",
                             mid,
                         )
                         return
@@ -166,7 +168,7 @@ class GhostTrader:
                         # 執行轉倉：平掉舊的，開新的 (Delta ~0.50, DTE 30-45)
                         await self._close_position(
                             trade,
-                            f"🔄 DITM 轉倉防禦 ｜ Delta:{current_delta:.2f}, PnL:{pnl_pct*100:.1f}%",
+                            f"🔄 DITM 轉倉防禦 ｜ Delta:{current_delta:.2f}, PnL:{pnl_pct * 100:.1f}%",
                             mid,
                             status="ROLLED",
                         )
@@ -209,7 +211,7 @@ class GhostTrader:
                 ):
                     await self._close_position(
                         trade,
-                        f"🚨 動能平倉警報 ｜ 價格{'跌破' if opt_type=='call' else '突破'} EMA 21",
+                        f"🚨 動能平倉警報 ｜ 價格{'跌破' if opt_type == 'call' else '突破'} EMA 21",
                         mid,
                     )
                     return
@@ -376,8 +378,7 @@ class GhostTrader:
         target_delta: Any = 0.20,
     ):
         """尋找符合 DTE 與 Delta 條件的合約 (Async)"""
-        ticker = yf.Ticker(symbol)
-        expirations = await market_data_service.call_yf(lambda: ticker.options)
+        expirations = await market_data_service.get_all_option_expiries(symbol)
 
         valid_expiries = []
         for exp in expirations:
@@ -390,7 +391,11 @@ class GhostTrader:
         best_exp = min(
             valid_expiries, key=lambda x: abs(x[1] - (sum(target_dte) / 2.0))
         )[0]
-        chain = await market_data_service.call_yf(ticker.option_chain, best_exp)
+        chain = await market_data_service.get_option_chain(
+            symbol, best_exp, prune_pct=None
+        )
+        if chain is None:
+            return None
         opts = chain.calls if opt_type == "call" else chain.puts
 
         best_strike, min_diff = None, 999

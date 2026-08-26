@@ -25,6 +25,7 @@ import asyncio
 import logging
 import math
 import random
+import time
 from datetime import datetime
 
 from playwright.async_api import Browser, async_playwright
@@ -118,15 +119,29 @@ async def poll_once() -> None:
     """執行一輪 GEX + Option Chain 輪詢：priority 標的（持倉）每輪必抓，
     其餘一般自選標的取出下一小批（分批輪詢，見模組頂端 POLL_ROTATION_CYCLES
     註解）。兩者為互斥分割（見 database.get_priority_symbols /
-    get_non_priority_symbols），不會重複抓取同一標的。"""
+    get_non_priority_symbols），不會重複抓取同一標的。
+
+    加入批次量與耗時觀測記錄：priority 標的自 commit 710cb59 起改為每輪必抓，
+    會疊加在既有的非優先輪詢批次之上，MAX_CONCURRENCY 並未隨之調整。這裡記錄
+    每輪的 priority/non-priority 批次量與總耗時，用以實際觀察是否真的出現
+    單輪跑超過 POLL_BASE_INTERVAL_SECONDS 或排隊延遲的情況，作為是否需要調整
+    併發/批次量的依據，而非憑空臆測。"""
+    start_ts = time.monotonic()
     priority_symbols = await asyncio.to_thread(database.get_priority_symbols)
     non_priority_symbols = await asyncio.to_thread(database.get_non_priority_symbols)
 
-    batch = list(priority_symbols)
-    if non_priority_symbols:
-        batch.extend(_next_batch(non_priority_symbols))
+    non_priority_batch = (
+        _next_batch(non_priority_symbols) if non_priority_symbols else []
+    )
+    batch = list(priority_symbols) + non_priority_batch
     if not batch:
         return
+
+    logger.info(
+        f"[poll_once] 本輪批次量：priority={len(priority_symbols)}, "
+        f"non_priority={len(non_priority_batch)}, total={len(batch)}, "
+        f"MAX_CONCURRENCY={MAX_CONCURRENCY}"
+    )
 
     sem = asyncio.Semaphore(MAX_CONCURRENCY)
 
@@ -142,6 +157,13 @@ async def poll_once() -> None:
     pruned = await asyncio.to_thread(database.prune_stale_symbols, PRUNE_AFTER_HOURS)
     if pruned:
         logger.info(f"已清除 {pruned} 個逾時未同步的追蹤標的")
+
+    elapsed = time.monotonic() - start_ts
+    level = logger.warning if elapsed > POLL_BASE_INTERVAL_SECONDS else logger.info
+    level(
+        f"[poll_once] 本輪耗時 {elapsed:.1f}s（批次上限週期 "
+        f"{POLL_BASE_INTERVAL_SECONDS}s）"
+    )
 
 
 async def _loop() -> None:

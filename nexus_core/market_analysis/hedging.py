@@ -32,7 +32,7 @@ def evaluate_rehedge_necessity(
     if current_vix > 20:
         rehedge_reason = f"🌪️ VIX 突破 20 ({current_vix:.1f} 市場進入恐慌區)"
     if vix_change > 0.10:
-        rehedge_reason = f"⚡ VIX 單日大幅飆升 ({vix_change*100:+.1f}%)"
+        rehedge_reason = f"⚡ VIX 單日大幅飆升 ({vix_change * 100:+.1f}%)"
 
     if u_ctx.capital > 0:
         current_exposure_pct = (
@@ -205,8 +205,7 @@ async def analyze_hedge_performance(user_id: int) -> Dict[str, Any]:
     alpha_pnl, hedge_pnl, alpha_delta, hedge_delta = 0.0, 0.0, 0.0, 0.0
 
     for t in all_trades_normalized:
-        current_price, _ = await asyncio.to_thread(
-            get_option_chain_mid_iv,
+        current_price, _ = await get_option_chain_mid_iv(
             t["symbol"],
             t["expiry"],
             t["strike"],

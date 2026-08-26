@@ -4,7 +4,6 @@ from typing import Optional, Dict
 import pandas as pd
 import pandas_ta as ta  # noqa: F401
 import numpy as np
-import yfinance as yf  # 僅保留用於 option_chain() / options
 from services import market_data_service
 from datetime import datetime
 from config import TARGET_DELTAS, get_vix_tier, VixTier
@@ -72,8 +71,7 @@ def _determine_strategy_signal(indicators: Any, ivr: float = 0.0):  # type: igno
     # 鎖死所有 STO 策略，僅允許現貨或 ITM Call BTO。
     if is_selling_locked_by_ivr(ivr):
         logger.info(
-            f"IVR 賣方硬鎖啟動 (IVR={ivr:.1f}%): "
-            f"封鎖所有 STO 策略，僅路由 ITM Call BTO"
+            f"IVR 賣方硬鎖啟動 (IVR={ivr:.1f}%): 封鎖所有 STO 策略，僅路由 ITM Call BTO"
         )
         return "BTO_CALL", "call", _ITM_CALL_MIN_DELTA, 30, 60
 
@@ -428,11 +426,11 @@ def _validate_risk_and_liquidity(  # type: ignore
     vrp = iv - hv_current
     if strategy in ["STO_PUT", "STO_CALL"]:
         if vrp < 0:
-            logger.info(f"[{symbol}] 剔除: 賣方策略但 VRP {vrp*100:.2f}% < 0")
+            logger.info(f"[{symbol}] 剔除: 賣方策略但 VRP {vrp * 100:.2f}% < 0")
             return None
     elif strategy in ["BTO_PUT", "BTO_CALL"]:
         if vrp > 0.03:
-            logger.info(f"[{symbol}] 剔除: 買方策略但 VRP 高達 {vrp*100:.2f}%")
+            logger.info(f"[{symbol}] 剔除: 買方策略但 VRP 高達 {vrp * 100:.2f}%")
             return None
 
     # Zero-IV 防禦：若 IV 為零，回退至 HV 代理
@@ -970,35 +968,6 @@ async def analyze_symbol(
     except Exception as e:
         logger.error(f"分析 {symbol} 錯誤: {e}")
         return None
-
-
-async def get_option_metrics(symbol: Any, opt_type: Any, strike: Any, expiry: Any):  # type: ignore
-    ticker = yf.Ticker(symbol)
-    today = datetime.now().date()
-    try:
-        opt_chain = await market_data_service.call_yf(ticker.option_chain, expiry)
-        chain_data = opt_chain.calls if opt_type == "call" else opt_chain.puts
-        contract = chain_data[chain_data["strike"] == strike]
-        if contract.empty:
-            return {"delta": 0.0, "dte": 0, "mid": 0.0}
-
-        c = contract.iloc[0]
-        days_to_expiry = (datetime.strptime(expiry, "%Y-%m-%d").date() - today).days
-        quote = await market_data_service.get_quote(symbol)
-        price = quote.get("c", 0.0) if quote else 0.0
-
-        delta_val = calculate_contract_delta(
-            c,
-            price,
-            max(days_to_expiry, 1) / 365.0,
-            ("c" if opt_type == "call" else "p"),
-        )
-        bid, ask = c.get("bid", 0.0), c.get("ask", 0.0)
-        mid = (bid + ask) / 2.0 if bid > 0 and ask > 0 else c.get("lastPrice", 0.0)
-        return {"delta": delta_val, "dte": days_to_expiry, "mid": mid}
-    except Exception as e:
-        logger.error(f"get_option_metrics error for {symbol}: {e}")
-        return {"delta": 0.0, "dte": 0, "mid": 0.0}
 
 
 async def find_best_contract(

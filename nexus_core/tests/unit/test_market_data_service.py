@@ -521,6 +521,107 @@ async def test_get_option_chain_falls_back_to_yfinance_when_edge_unreachable() -
 
 
 @pytest.mark.asyncio
+async def test_fetch_option_chain_raw_edge_tunnel_retries_once_then_succeeds() -> None:
+    """Edge tunnel 期權鏈抓取遇到暫時性例外時，應在同一層內重試一次；第二次
+    成功後不應降級至下一層 (本地 yfinance 直連)。"""
+    from services.market_data_service import (
+        _fetch_option_chain_raw,
+        clear_options_cache,
+    )
+
+    clear_options_cache()
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "status": "success",
+        "data": {
+            "calls": [{"strike": 150.0, "impliedVolatility": 0.3}],
+            "puts": [],
+        },
+    }
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(side_effect=[Exception("timeout"), mock_response])
+    mock_client_cls = MagicMock()
+    mock_client_cls.return_value.__aenter__.return_value = mock_client
+
+    mock_ticker = MagicMock()
+    mock_ticker.option_chain = MagicMock(
+        side_effect=AssertionError(
+            "本地 yfinance 不應被呼叫，edge tunnel 重試後應已成功"
+        )
+    )
+
+    with (
+        patch("config.TUNNEL_URL", "http://edge-node:8000"),
+        patch("httpx.AsyncClient", mock_client_cls),
+        patch(
+            "services.edge_cache_client.get_cached_option_chain",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch("services.market_data_service.yf.Ticker", return_value=mock_ticker),
+        patch("asyncio.sleep", new_callable=AsyncMock),
+    ):
+        chain = await _fetch_option_chain_raw("MSFT", "2026-06-19")
+
+        assert chain is not None
+        assert list(chain.calls["strike"]) == [150.0]
+        assert mock_client.get.call_count == 2
+        mock_ticker.option_chain.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_fetch_option_chain_raw_edge_tunnel_persistent_failure_falls_through() -> (
+    None
+):
+    """Edge tunnel 兩次嘗試 (首次 + 重試一次) 皆失敗時，仍應正確降級至本地
+    yfinance 直連，而不是拋出例外或回傳 None。"""
+    import pandas as pd
+    from services.market_data_service import (
+        _fetch_option_chain_raw,
+        clear_options_cache,
+    )
+
+    clear_options_cache()
+
+    mock_calls = pd.DataFrame({"strike": [150.0], "impliedVolatility": [0.3]})
+    mock_puts = pd.DataFrame({"strike": [140.0], "impliedVolatility": [0.32]})
+    mock_chain = MagicMock()
+    mock_chain.calls = mock_calls
+    mock_chain.puts = mock_puts
+    mock_chain.underlying = {}
+
+    mock_ticker = MagicMock()
+    mock_ticker.option_chain = MagicMock(return_value=mock_chain)
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(side_effect=Exception("connection refused"))
+    mock_client_cls = MagicMock()
+    mock_client_cls.return_value.__aenter__.return_value = mock_client
+
+    with (
+        patch("config.TUNNEL_URL", "http://edge-node:8000"),
+        patch("httpx.AsyncClient", mock_client_cls),
+        patch(
+            "services.edge_cache_client.get_cached_option_chain",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch("services.market_data_service.yf.Ticker", return_value=mock_ticker),
+        patch("asyncio.sleep", new_callable=AsyncMock),
+    ):
+        chain = await _fetch_option_chain_raw("MSFT", "2026-06-19")
+
+        assert chain is not None
+        assert list(chain.calls["strike"]) == [150.0]
+        # 首次嘗試 + 重試一次，共兩次呼叫，仍失敗後才降級
+        assert mock_client.get.call_count == 2
+        mock_ticker.option_chain.assert_called_once_with("2026-06-19")
+
+
+@pytest.mark.asyncio
 async def test_execute_api_call_respects_retry_after() -> None:
     """Test that _execute_api_call respects Retry-After header when a 429 occurs."""
 

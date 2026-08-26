@@ -5,8 +5,6 @@
 from typing import Any
 import logging
 from datetime import date
-import pandas as pd
-import yfinance as yf
 
 from services.calendar_service import calendar_service
 
@@ -23,14 +21,3 @@ async def get_next_earnings_date(symbol: str) -> Any:
     except Exception as e:
         logger.warning("取得財報日期失敗: %s", e)
         return None
-
-
-def get_option_chain(symbol: str, expiry: str) -> Any:
-    """透過 yfinance 獲取選擇權鏈 (同步)。"""
-    try:
-        ticker = yf.Ticker(symbol)
-        chain = ticker.option_chain(expiry)
-        return chain.calls, chain.puts
-    except Exception as e:
-        logger.warning(f"獲取選擇權鏈失敗 ({symbol}, {expiry}): {e}")
-        return pd.DataFrame(), pd.DataFrame()

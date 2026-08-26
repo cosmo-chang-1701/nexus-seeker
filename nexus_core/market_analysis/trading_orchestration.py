@@ -1,9 +1,8 @@
 import logging
 import asyncio
 import math
-import yfinance as yf
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, date
 from typing import Dict, Any, List, Optional
 from py_vollib.black_scholes_merton.greeks.analytical import delta
 from config import RISK_FREE_RATE
@@ -15,10 +14,37 @@ from services.market_data_service import (
     get_quote,
     get_all_option_expiries,
     get_option_chain,
-    call_yf,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _select_target_expirations_by_dte(
+    expirations: List[str], today: date, dte_min: int = 30, dte_max: int = 50
+) -> List[str]:
+    """篩選 DTE 落於 [dte_min, dte_max] 區間的到期日；若區間內無合適到期日，
+    退而求其次選取最近一個 DTE >= dte_min 的到期日以維持系統運作。"""
+    target_expirations = []
+    for exp in expirations:
+        try:
+            exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
+            dte = (exp_date - today).days
+            if dte_min <= dte <= dte_max:
+                target_expirations.append(exp)
+        except ValueError:
+            continue
+
+    if not target_expirations and expirations:
+        for exp in expirations:
+            try:
+                exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
+                if (exp_date - today).days >= dte_min:
+                    target_expirations.append(exp)
+                    break
+            except ValueError:
+                continue
+
+    return target_expirations
 
 
 def calculate_new_cost_basis(
@@ -162,34 +188,13 @@ async def recommend_covered_calls(
 
     # 5. 基於到期天數 (DTE 30-50 天) 進行動態篩選
     today = datetime.now().date()
-    ticker = yf.Ticker(symbol)
     try:
-        expirations = await call_yf(lambda: ticker.options)
+        expirations = await get_all_option_expiries(symbol)
     except Exception as e:
         logger.error(f"獲取 {symbol} 期權到期日失敗: {e}")
         return None
 
-    target_expirations = []
-    for exp in expirations:
-        try:
-            exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
-            dte = (exp_date - today).days
-            # 篩選 DTE 30-50 天的期權
-            if 30 <= dte <= 50:
-                target_expirations.append(exp)
-        except ValueError:
-            continue
-
-    # Fallback：若 30-50 天區間無到期日，取最近一個 DTE >= 30 的到期日以保持系統運作
-    if not target_expirations and expirations:
-        for exp in expirations:
-            try:
-                exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
-                if (exp_date - today).days >= 30:
-                    target_expirations.append(exp)
-                    break
-            except ValueError:
-                continue
+    target_expirations = _select_target_expirations_by_dte(expirations, today)
 
     recommendations = []
     today_dt = datetime.now()
@@ -201,8 +206,11 @@ async def recommend_covered_calls(
             if t_years <= 0:
                 continue
 
-            # 抓取 option chain
-            opt_chain = await call_yf(lambda: ticker.option_chain(exp))
+            # 抓取 option chain (不裁減履約價範圍：篩選條件是 Strike > New Cost
+            # Basis，股價已大漲時合理的履約價可能落在現價 ±10% 之外)
+            opt_chain = await get_option_chain(symbol, exp, prune_pct=None)
+            if not opt_chain or opt_chain.calls is None:
+                continue
             calls = opt_chain.calls
 
             for _, row in calls.iterrows():
@@ -328,26 +336,7 @@ async def filter_cc_recovery_targets(symbol: str) -> Optional[Dict[str, Any]]:
         return None
 
     today = datetime.now().date()
-    target_expirations = []
-    for exp in expirations:
-        try:
-            exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
-            dte = (exp_date - today).days
-            if 30 <= dte <= 50:
-                target_expirations.append(exp)
-        except ValueError:
-            continue
-
-    # Fallback：若 30-50 天區間無到期日，取最近一個 DTE >= 30 的到期日以保持系統運作
-    if not target_expirations and expirations:
-        for exp in expirations:
-            try:
-                exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
-                if (exp_date - today).days >= 30:
-                    target_expirations.append(exp)
-                    break
-            except ValueError:
-                continue
+    target_expirations = _select_target_expirations_by_dte(expirations, today)
 
     from services.calendar_service import calendar_service
 

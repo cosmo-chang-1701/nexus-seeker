@@ -1,6 +1,6 @@
 from typing import Any
 from services import market_data_service
-from .data import get_option_chain
+from services.market_data_service import get_option_chain
 import pandas as pd
 import logging
 import asyncio
@@ -156,11 +156,17 @@ class PortfolioStatusOrchestrator:
                     continue
 
                 if expiry not in option_chains_cache:
-                    option_chains_cache[expiry] = await asyncio.to_thread(
-                        get_option_chain, symbol, expiry
+                    # 現有持倉可能是遠價外/價內合約，或建倉後現價已大幅偏移，
+                    # 故不裁減履約價範圍 (prune_pct=None)，避免真實持倉的合約
+                    # 憑空從鏈中消失、破壞 Greeks/P&L 計算。
+                    option_chains_cache[expiry] = await get_option_chain(
+                        symbol, expiry, prune_pct=None
                     )
 
-                calls, puts = option_chains_cache[expiry]
+                chain = option_chains_cache[expiry]
+                if chain is None:
+                    continue
+                calls, puts = chain.calls, chain.puts
                 chain_data = calls if opt_type == "call" else puts
 
                 if chain_data.empty:
@@ -373,8 +379,7 @@ async def refresh_portfolio_greeks(
                     trade_meta.stock_cost = holding_map.get(
                         (asset.user_id, asset.symbol.upper()), trade_meta.stock_cost
                     )
-                    mid, iv_raw = await asyncio.to_thread(
-                        get_option_chain_mid_iv,
+                    mid, iv_raw = await get_option_chain_mid_iv(
                         asset.symbol,
                         trade_meta.expiry,
                         trade_meta.strike,
@@ -467,10 +472,12 @@ async def refresh_portfolio_greeks(
         logger.error(f"refresh_portfolio_greeks 失敗: {e}", exc_info=True)
 
 
-def get_option_chain_mid_iv(symbol: Any, expiry: Any, strike: Any, opt_type: Any):  # type: ignore
+async def get_option_chain_mid_iv(symbol: Any, expiry: Any, strike: Any, opt_type: Any):  # type: ignore
     try:
-        calls, puts = get_option_chain(symbol, expiry)
-        chain = calls if opt_type == "call" else puts
+        opt_chain = await get_option_chain(symbol, expiry, prune_pct=None)
+        if opt_chain is None:
+            return 0.0, 0.0
+        chain = opt_chain.calls if opt_type == "call" else opt_chain.puts
         # 彈性匹配：尋找最接近的履約價 (防止浮點數誤差)
         contract = chain[(chain["strike"] - strike).abs() < 0.01]
 

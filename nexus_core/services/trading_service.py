@@ -237,9 +237,7 @@ class TradingService:
             entry_price = m.get("entry_price") or a.entry_price or 0.0
             quantity = m.get("quantity", 0)
 
-            mid, _ = await asyncio.to_thread(
-                get_option_chain_mid_iv, sym, expiry, strike, opt_type
-            )
+            mid, _ = await get_option_chain_mid_iv(sym, expiry, strike, opt_type)
 
             unrealized_pnl = (mid - entry_price) * 100 * quantity
             pnl_pct = ((mid - entry_price) / entry_price) if entry_price > 0 else 0.0
@@ -1046,8 +1044,8 @@ class TradingService:
 
                     # Profit Lock 觸發條件：Delta >= 0.85 且 PnL > 150% 且 DTE <= 21
                     # 獲取即時 Mid 以計算 PnL
-                    mid, _ = await asyncio.to_thread(
-                        portfolio.get_option_chain_mid_iv, sym, exp, strike, opt_t
+                    mid, _ = await portfolio.get_option_chain_mid_iv(
+                        sym, exp, strike, opt_t
                     )
                     pnl_pct = ((mid - entry) / entry) if mid > 0 else 0
 
