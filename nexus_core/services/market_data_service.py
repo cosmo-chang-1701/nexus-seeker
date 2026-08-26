@@ -906,7 +906,7 @@ async def _fetch_option_chain_raw(symbol: str, expiry: str) -> Optional[Any]:
 async def get_option_chain(
     symbol: str, expiry: str, prune_pct: Optional[float] = 0.1
 ) -> Optional[Any]:
-    """取得指定到期日的期權鏈 (支援 40 分鐘快取、SingleFlight 併發合併與 Copy 隔離)。"""
+    """取得指定到期日的期權鏈 (支援 15 分鐘快取、SingleFlight 併發合併與 Copy 隔離)。"""
     symbol = _sanitize_ticker(symbol)
     cache_key = (symbol, expiry)
     now = time.time()
@@ -957,6 +957,19 @@ async def get_option_chain(
                 cached_val,
                 now + _OPTION_CHAIN_CACHE_TTL,
             )
+            try:
+                fingerprint = _compute_option_chain_fingerprint(
+                    cached_val.calls, cached_val.puts
+                )
+                prev_fingerprint = _option_chain_fingerprint_cache.get(cache_key)
+                if prev_fingerprint is not None and prev_fingerprint == fingerprint:
+                    logger.warning(
+                        f"[{symbol}] 期權鏈 OI/IV 指紋與上次抓取完全相同，"
+                        f"Yahoo 端資料本輪可能尚未真正刷新（本次抓取仍是延遲快照）。"
+                    )
+                _option_chain_fingerprint_cache[cache_key] = fingerprint
+            except Exception as fp_err:
+                logger.debug(f"[{symbol}] 期權鏈指紋比對失敗（不影響主流程）: {fp_err}")
 
     if cached_val is not None:
         calls_copy = cached_val.calls.copy() if cached_val.calls is not None else None
@@ -1033,7 +1046,38 @@ _option_expiries_cache = BoundedCache(max_size=MAX_CACHE_SIZE)
 _OPTION_EXPIRIES_CACHE_TTL = 43200  # 12 小時
 
 _option_chain_cache = BoundedCache(max_size=MAX_CACHE_SIZE)
-_OPTION_CHAIN_CACHE_TTL = 1200  # 20 分鐘
+# 15 分鐘：對齊 yfinance 期權資料本身約 15 分鐘的延遲，以及 dynamic_market_scanner
+# 15 分鐘心跳節奏。舊值 20 分鐘是配合已淘汰的 30 分鐘心跳節奏訂的，會讓每隔一輪心跳
+# 提早命中快取、實際看到的期權鏈數據可能已經是上一次 15 分鐘資料更新之前的舊值。
+_OPTION_CHAIN_CACHE_TTL = 900  # 15 分鐘
+
+# --- 期權鏈「資料是否真的刷新過」觀測用指紋快取 ---
+# yfinance/Yahoo 不提供 chain 層級的資料快照時間戳（各 contract 的 lastTradeDate 只反映
+# 該合約最後成交時間，冷門合約可能是好幾天前，不能拿來判斷整條鏈是否已刷新）。因此無法在
+# 抓取「之前」保證這次拿到的資料已經過了一次 15 分鐘延遲週期，只能靠 _OPTION_CHAIN_CACHE_TTL
+# 這種基於已知延遲特性反推的時間保證。這裡額外做「抓取之後」的觀測：比對本次與上次成功抓取
+# 的 OI/IV 指紋，若完全相同就記錄 warning，代表 Yahoo 端資料這一輪可能尚未真正刷新
+# （純觀測用，不重試、不阻擋主流程，只用來驗證 15 分鐘快取節奏是否與實際資料延遲相符）。
+_option_chain_fingerprint_cache = BoundedCache(max_size=MAX_CACHE_SIZE)
+
+
+def _compute_option_chain_fingerprint(
+    calls: Optional[pd.DataFrame], puts: Optional[pd.DataFrame]
+) -> tuple[Any, ...]:
+    def _rows(df: Optional[pd.DataFrame]) -> tuple[Any, ...]:
+        if df is None or df.empty:
+            return ()
+        cols = [
+            c
+            for c in ("strike", "openInterest", "impliedVolatility")
+            if c in df.columns
+        ]
+        if "strike" not in cols:
+            return ()
+        sub = df[cols].fillna(-1.0).sort_values("strike")
+        return tuple(tuple(row) for row in sub.itertuples(index=False, name=None))
+
+    return (_rows(calls), _rows(puts))
 
 
 def clear_quote_cache() -> None:

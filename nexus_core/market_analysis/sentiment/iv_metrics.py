@@ -361,7 +361,7 @@ async def fetch_and_calculate_iv_metrics(symbol: str) -> IVMetrics:
                         )
                         use_cache = False
             if use_cache:
-                _iv_cache[symbol] = (metrics, current_time + 1800)
+                _iv_cache[symbol] = (metrics, current_time + _IV_CACHE_TTL)
                 return metrics
         except Exception as e:
             logger.warning(f"[{symbol}] Failed to restore IVMetrics from kv_cache: {e}")
