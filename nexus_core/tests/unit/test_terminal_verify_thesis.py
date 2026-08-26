@@ -45,7 +45,7 @@ async def test_execute_verify_thesis_logic_passes_form_type_and_sections_to_engi
 
 
 @pytest.mark.asyncio
-async def test_verify_thesis_news_context_path_passes_empty_form_type(
+async def test_verify_thesis_news_context_path_passes_news_form_type(
     mock_interaction: Any,
 ) -> None:
     bot = MagicMock()
@@ -61,8 +61,58 @@ async def test_verify_thesis_news_context_path_passes_empty_form_type(
 
     cog._execute_verify_thesis_logic.assert_awaited_once()
     call = cog._execute_verify_thesis_logic.call_args
-    assert call.kwargs.get("form_type", "") == ""
+    assert call.kwargs.get("form_type", "") == "NEWS"
     assert call.kwargs.get("sections") is None
+
+
+@pytest.mark.asyncio
+async def test_evaluate_fundamental_thesis_impl_news_prompt_construction() -> None:
+    from market_analysis.dynamic_rollover.fundamental_thesis import (
+        evaluate_fundamental_thesis_impl,
+    )
+
+    mock_client = MagicMock()
+    mock_client.beta.chat.completions.parse = AsyncMock()
+    mock_parse_result = MagicMock()
+    mock_parse_result.choices = [
+        MagicMock(
+            message=MagicMock(
+                parsed=FundamentalThesisResult(
+                    is_broken=False, confidence=0.7, reasoning="測試新聞分析"
+                )
+            )
+        )
+    ]
+    mock_client.beta.chat.completions.parse.return_value = mock_parse_result
+
+    with patch("database.market_cache.save_fundamental_cache") as mock_save_cache:
+        result = await evaluate_fundamental_thesis_impl(
+            client=mock_client,
+            is_memory_safe=lambda: True,
+            llm_model_name="test-model",
+            symbol="NVDA",
+            fundamental_text="[使用者補充新聞/資訊]:\n測試突發消息",
+            form_type="NEWS",
+        )
+
+    assert result is not None
+    assert result.is_broken is False
+    assert result.confidence == 0.7
+    mock_save_cache.assert_called_once_with("NVDA", False, 0.7, "測試新聞分析")
+
+    call_args = mock_client.beta.chat.completions.parse.call_args
+    messages = call_args.kwargs["messages"]
+    system_msg = messages[0]["content"]
+    user_msg = messages[1]["content"]
+
+    assert (
+        "### 📰 Context: Real-Time News / Breaking Event / Conference Call Notes"
+        in system_msg
+    )
+    assert (
+        "Please analyze the following breaking news / event context for NVDA"
+        in user_msg
+    )
 
 
 @pytest.mark.asyncio

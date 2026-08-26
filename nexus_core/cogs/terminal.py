@@ -1859,7 +1859,7 @@ class TerminalCog(commands.Cog):
             )
             combined_text = f"[使用者補充新聞/資訊]:\n{news_context}\n"
             await self._execute_verify_thesis_logic(
-                interaction, symbol, combined_text, "", form_type="", sections=None
+                interaction, symbol, combined_text, "", form_type="NEWS", sections=None
             )
             return
 

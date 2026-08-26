@@ -48,6 +48,13 @@ _FORM_TYPE_PROMPT_NOTES: Dict[str, str] = {
         "self-evidently structural (e.g., a restatement or a core-business "
         "divestiture).\n"
     ),
+    "NEWS": (
+        "\n### 📰 Context: Real-Time News / Breaking Event / Conference Call Notes\n"
+        "This analysis is based on user-provided news snippets, media reports, or external disclosures (NOT raw SEC filings).\n"
+        "- SIGNAL EVALUATION: Differentiate between verified factual developments (e.g., regulatory penalties, loss of key customers, executive indictments) and unverified market rumors or routine analyst rating changes.\n"
+        "- NOISE FILTER: Routine product delays, general macroeconomic commentary, or short-term sentiment dips should NOT trigger is_broken=true unless they permanently impair the company's core pricing power or market moat.\n"
+        "- CONFIDENCE CALIBRATION: If the provided news snippet lacks granular context or official verification, calibrate confidence accordingly (typically <= 0.75 unless evidence is overwhelming).\n"
+    ),
 }
 
 _SECTION_LABELS: Dict[str, str] = {
@@ -64,7 +71,7 @@ def _format_sections_appendix(sections: Optional[Dict[str, str]]) -> str:
     """Render the structured `sections` dict as a labeled appendix for the
     user prompt. Returns "" if sections is empty/None, keeping the user
     prompt byte-identical to before when no structured data is available
-    (e.g. the news_context-only /verify_thesis path)."""
+    (e.g. the news_context /verify_thesis path)."""
     if not sections:
         return ""
 
@@ -94,13 +101,15 @@ async def evaluate_fundamental_thesis_impl(
     """
     邏輯 (1): 原型假設破滅
     傳入 FastAPI 爬取的法說會或財報文本，使用 LLM 判定基本面護城河是否流失。
-    `form_type` (10-K/10-Q/8-K) 客製化分析框架補充說明；`sections` 為
+    `form_type` (10-K/10-Q/8-K/NEWS) 客製化分析框架補充說明；`sections` 為
     edge scraper 結構化擷取的段落，會以附錄形式併入 user prompt。兩者皆為
     選填，留空時 prompt 與未區分格式前完全一致。
     """
     if not is_memory_safe():
         logger.warning("記憶體水位過高，跳過 vLLM 基本面護城河判定")
         return None
+
+    normalized_form_type = form_type.strip().upper() if form_type else ""
 
     system_prompt = (
         "You are a senior Wall Street quantitative analyst and fundamental research director.\n"
@@ -123,10 +132,18 @@ async def evaluate_fundamental_thesis_impl(
         "- `reasoning`: (CRITICAL) You must perform a Chain-of-Thought analysis here BEFORE concluding. Explicitly state the evidence extracted, categorize if the headwinds are macro (A) or structural (B), and explain how it triggers or avoids the strict exclusion rule. This field MUST be highly analytical, actionable, and written in Traditional Chinese (繁體中文).\n"
         "- `is_broken`: Set to `true` ONLY IF the thesis is structurally broken based on the exclusion rule. Otherwise, `false`.\n"
         "- `confidence`: Provide a float from 0.0 to 1.0 reflecting your confidence in this assessment based on the density and clarity of the provided text."
-    ) + _FORM_TYPE_PROMPT_NOTES.get(form_type, "")
+    ) + _FORM_TYPE_PROMPT_NOTES.get(normalized_form_type, "")
+
+    if normalized_form_type == "NEWS":
+        intro = (
+            f"Please analyze the following breaking news / event context for {symbol} "
+            f"to assess if the company's core fundamental moat or thesis is structurally broken.\n\n"
+        )
+    else:
+        intro = f"Please analyze the following latest earnings report and conference call highlights for {symbol}.\n\n"
 
     user_prompt = (
-        f"Please analyze the following latest earnings report and conference call highlights for {symbol}.\n\n"
+        f"{intro}"
         f"Context:\n{fundamental_text}"
         f"{_format_sections_appendix(sections)}"
     )

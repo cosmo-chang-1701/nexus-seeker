@@ -67,8 +67,8 @@ class DynamicRolloverEngine(
         """
         邏輯 (1): 原型假設破滅
         傳入 FastAPI 爬取的法說會或財報文本，使用 LLM 判定基本面護城河是否流失。
-        `form_type` (10-K/10-Q/8-K) 與 `sections` (結構化擷取段落) 為選填，
-        用於依財報格式客製化 LLM 分析框架；留空則行為與未區分格式時完全一致。
+        `form_type` (10-K/10-Q/8-K/NEWS) 與 `sections` (結構化擷取段落) 為選填，
+        用於依財報或新聞格式客製化 LLM 分析框架；留空則行為與未區分格式時完全一致。
         """
         return await evaluate_fundamental_thesis_impl(
             client,
