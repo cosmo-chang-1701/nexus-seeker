@@ -43,6 +43,7 @@ from cogs.embed_builder import (
     build_pre_market_briefing_embed,
     create_macro_scan_embed,
     create_fomc_escape_window_embed,
+    create_stress_test_embed,
 )
 from models.schemas import WatchlistOptionLeg, WatchlistOptionPlan
 
@@ -3090,3 +3091,50 @@ def test_create_fomc_escape_window_embed_title_and_layout() -> None:
     assert "前移 5 個交易日" in field_dict["🔄 逃頂窗口調整方向"]
     assert "📆 調整後逃頂窗口預期" in field_dict
     assert "10月中旬 (10-15)" in field_dict["📆 調整後逃頂窗口預期"]
+    assert "🎯 戰術行動指引" in field_dict
+    assert "```ansi" in field_dict["🎯 戰術行動指引"]
+    assert "💡 推演邏輯與風控分析" in field_dict
+    assert "```ansi" in field_dict["💡 推演邏輯與風控分析"]
+
+
+def test_create_stress_test_embed_ansi_layout() -> None:
+    """驗證現金赤字壓力測試 Embed ANSI 排版與警報狀態"""
+    # 1. Critical Scenario
+    critical_data = {
+        "is_critical": True,
+        "total_deficit": 22500.0,
+        "cash_reserve": 150.0,
+        "boxx_shares": 213.0,
+        "boxx_cash": 21000.0,
+        "net_deficit": -1350.0,
+        "gtc_buy_orders_count": 18,
+    }
+    embed_crit = create_stress_test_embed(critical_data)
+    assert embed_crit.title == "🚨 GTC 掛單現金赤字壓力測試 (Worst-Case Stress Test)"
+    assert embed_crit.color == discord.Color.red()
+    field_dict = {str(f.name): str(f.value or "") for f in embed_crit.fields}
+    assert "📊 壓測摘要" in field_dict
+    assert "```ansi" in field_dict["📊 壓測摘要"]
+    assert "$22,500.00" in field_dict["📊 壓測摘要"]
+    assert (
+        "-$1350.00" in field_dict["📊 壓測摘要"]
+        or "-$1,350.00" in field_dict["📊 壓測摘要"]
+    )
+    assert "🔥 CRITICAL WARNING" in field_dict
+    assert "```ansi" in field_dict["🔥 CRITICAL WARNING"]
+
+    # 2. Safe Scenario
+    safe_data = {
+        "is_critical": False,
+        "total_deficit": 5000.0,
+        "cash_reserve": 10000.0,
+        "boxx_shares": 100.0,
+        "boxx_cash": 11600.0,
+        "net_deficit": 16600.0,
+        "gtc_buy_orders_count": 4,
+    }
+    embed_safe = create_stress_test_embed(safe_data)
+    assert embed_safe.color == discord.Color.green()
+    field_dict_safe = {str(f.name): str(f.value or "") for f in embed_safe.fields}
+    assert "✅ 系統安全狀態" in field_dict_safe
+    assert "```ansi" in field_dict_safe["✅ 系統安全狀態"]

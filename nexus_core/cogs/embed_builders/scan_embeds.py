@@ -541,10 +541,7 @@ def create_fomc_escape_window_embed(
 
     # 2. 多因子看板 (ANSI format)
     if factors_summary:
-        lines: list[str] = [
-            " 🌐 宏觀流動性多因子看板 (Liquidity Factors)",
-            " ----------------------------------",
-        ]
+        lines: list[str] = []
         for name, val in factors_summary:
             lines.append(f" ├─ {name}: {val}")
         lines[-1] = lines[-1].replace("├─", "└─")
@@ -582,13 +579,26 @@ def create_fomc_escape_window_embed(
     )
 
     if tactical_directive:
+        clean_directive = tactical_directive.replace("**", "")
+        directive_lines = [
+            "```ansi",
+            f" └─ {clean_directive}",
+            "```",
+        ]
         embed.add_field(
             name="🎯 戰術行動指引",
-            value=tactical_directive,
+            value="\n".join(directive_lines),
             inline=False,
         )
 
-    embed.add_field(name="💡 推演邏輯與風控分析", value=reason, inline=False)
+    reason_lines = [
+        "```ansi",
+        f" └─ {reason}",
+        "```",
+    ]
+    embed.add_field(
+        name="💡 推演邏輯與風控分析", value="\n".join(reason_lines), inline=False
+    )
 
     embed.set_footer(text="Nexus Risk Engine | 宏觀流動性逃頂推演矩陣")
     return embed
@@ -615,34 +625,54 @@ def create_stress_test_embed(results: dict) -> discord.Embed:
     net_deficit = results.get("net_deficit", 0.0)
     order_count = results.get("gtc_buy_orders_count", 0)
 
+    deficit_color = "\u001b[1;31m" if net_deficit < 0 else "\u001b[1;32m"
+    net_deficit_str = (
+        f"-${abs(net_deficit):,.2f}" if net_deficit < 0 else f"${net_deficit:,.2f}"
+    )
+
+    summary_lines = [
+        "```ansi",
+        f" ├─ 活躍 GTC 網格買單: \u001b[1;36m{order_count} 筆\u001b[0m",
+        f" ├─ 100% 全數成交所需總美金 (Total Cash Deficit): \u001b[1;33m${total_deficit:,.2f}\u001b[0m",
+        f" ├─ 常規可用現金 (cash_reserve): \u001b[1;32m${cash_reserve:,.2f}\u001b[0m",
+        f" ├─ BOXX 持倉股數: \u001b[1;36m{boxx_shares:.1f} 股\u001b[0m (常規清算上限 180 股)",
+        f" ├─ BOXX 最大套現金額: \u001b[1;32m${boxx_cash:,.2f}\u001b[0m",
+        f" └─ 壓測後淨赤字/淨值: {deficit_color}{net_deficit_str}\u001b[0m",
+        "```",
+    ]
     embed.add_field(
         name="📊 壓測摘要",
-        value=f"• 活躍 GTC 網格買單筆數：**{order_count} 筆**\n"
-        f"• 100% 全數成交所需總美金 (Total Cash Deficit)：**${total_deficit:,.2f}**\n"
-        f"• 常規可用現金 (cash_reserve)：**${cash_reserve:,.2f}**\n"
-        f"• BOXX 持倉股數：**{boxx_shares:.1f} 股** (常規清算上限 180 股)\n"
-        f"• BOXX 最大套現金額：**${boxx_cash:,.2f}**\n"
-        f"• 壓測後淨赤字/淨值：**${net_deficit:,.2f}**",
+        value="\n".join(summary_lines),
         inline=False,
     )
 
     if is_critical:
+        warning_lines = [
+            "```ansi",
+            " ├─ \u001b[1;31m警告：當前 GTC 網格單潛在赤字已大於可用流動性！\u001b[0m",
+            " ├─ 在極端無差別踩踏情境下，若所有掛單 100% 全數成交，將會抽乾 BOXX 水壩",
+            f" ├─ 破壞 +${cash_reserve:,.0f} 的安全常規現金水位，且危及 7 月底 $13,000 實體提領紅線！",
+            " └─ 建議立即取消部分 GTC 掛單，或注入額外資金以維持安全邊際。",
+            "```",
+        ]
         embed.add_field(
             name="🔥 CRITICAL WARNING",
-            value=f"**警告：當前 GTC 網格單潛在赤字已大於可用流動性！**\n"
-            f"在極端無差別踩踏情境下，若所有掛單 100% 全數成交，將會**抽乾 BOXX 水壩**，"
-            f"**破壞 +${cash_reserve:,.0f} 的安全常規現金水位**，且**危及 7 月底 $13,000 實體提領紅線**！\n"
-            f"建議立即取消部分 GTC 掛單，或注入額外資金以維持安全邊際。",
+            value="\n".join(warning_lines),
             inline=False,
         )
     else:
+        safe_lines = [
+            "```ansi",
+            " └─ \u001b[1;32m目前可用現金儲備與 BOXX 備用流動性充裕，足以覆蓋所有活躍 GTC 掛單全數成交之極端情境，未威脅到提領紅線。\u001b[0m",
+            "```",
+        ]
         embed.add_field(
             name="✅ 系統安全狀態",
-            value="目前可用現金儲備與 BOXX 備用流動性充裕，足以覆蓋所有活躍 GTC 掛單全數成交之極端情境，未威脅到提領紅線。",
+            value="\n".join(safe_lines),
             inline=False,
         )
 
-    embed.set_footer(text="現金赤字壓力測試模組")
+    embed.set_footer(text="Nexus Risk Engine | 流動性水壩壓力測試")
     return embed
 
 
@@ -679,13 +709,10 @@ def create_covered_call_unlock_embed(data: dict) -> discord.Embed:
 
     spot_lines = [
         "```ansi",
-        " 現貨持倉狀態 (Spot Position Details)",
         f" ├─ 持股數量: \u001b[1;36m{current_shares:.0f} 股\u001b[0m",
         f" ├─ 原始均價: \u001b[1;33m${current_cost:,.2f}\u001b[0m",
-        f" └─ 當前現價: \u001b[1;32m${current_price:,.2f}\u001b[0m (與均價價差: {diff_color}{diff_pct:+.2f}%\u001b[0m)",
-        "",
-        " 模擬吸籌後成本 (Simulated Cost Basis After Accumulation)",
-        f" └─ 加權平均成本: \u001b[1;35m${new_cost_basis:,.2f}\u001b[0m",
+        f" ├─ 當前現價: \u001b[1;32m${current_price:,.2f}\u001b[0m (與均價價差: {diff_color}{diff_pct:+.2f}%\u001b[0m)",
+        f" └─ 模擬吸籌後加權成本: \u001b[1;35m${new_cost_basis:,.2f}\u001b[0m",
         "```",
         "*(已計入所有活躍 GTC 買入網格單模擬成交後的成本調整)*",
     ]
@@ -700,13 +727,12 @@ def create_covered_call_unlock_embed(data: dict) -> discord.Embed:
     if covered_shares > 0 or existing_calls:
         coverage_lines = [
             "```ansi",
-            " 既有備兌覆蓋狀態 (Existing Covered Call Coverage)",
-            f" ├─ 已被既有 Short Call 鎖定: [1;33m{covered_shares:.0f} 股[0m",
-            f" └─ 尚未覆蓋可用股數: [1;36m{uncovered_shares:.0f} 股[0m (最多可再開 [1;32m{max_new_contracts}[0m 口)",
+            f" ├─ 已被既有 Short Call 鎖定: \u001b[1;33m{covered_shares:.0f} 股\u001b[0m",
+            f" └─ 尚未覆蓋可用股數: \u001b[1;36m{uncovered_shares:.0f} 股\u001b[0m (最多可再開 \u001b[1;32m{max_new_contracts}\u001b[0m 口)",
         ]
         if existing_calls:
             coverage_lines.append("")
-            coverage_lines.append(" 既有合約明細")
+            coverage_lines.append(" 既有合約明細:")
             for i, c in enumerate(existing_calls):
                 prefix = " └─ " if i == len(existing_calls) - 1 else " ├─ "
                 strike = c.get("strike", 0.0)
@@ -764,9 +790,16 @@ def create_covered_call_unlock_embed(data: dict) -> discord.Embed:
             inline=False,
         )
 
+        unlock_guide_lines = [
+            "```ansi",
+            " └─ 現貨大跌至低位網格吸籌完成後，透過建立高於新成本線且 Delta < 0.15",
+            "    且年化收益率 >= 10% 的極虛值備兌 Call，可以在安全保護現貨",
+            "    （防止被平價收回）的同時收取權利金，加速降低整體持有成本。",
+            "```",
+        ]
         embed.add_field(
             name="💡 物理死鎖解鎖說明 (Recovery Guidance)",
-            value="現貨大跌至低位網格吸籌完成後，透過建立**高於新成本線且 Delta < 0.15 且年化收益率 >= 10%** 的極虛值備兌 Call，可以在安全保護現貨（防止被平價收回）的同時收取權利金，加速降低整體套牢部位的持有成本，實現物理死鎖解鎖。",
+            value="\n".join(unlock_guide_lines),
             inline=False,
         )
     else:
@@ -779,8 +812,10 @@ def create_covered_call_unlock_embed(data: dict) -> discord.Embed:
             " ├─ 履約價 > 模擬加權成本",
             " ├─ 預估 Delta < 0.15",
             " └─ 年化收益率 >= 10.0% 或單次權利金 >= 現貨 1.0%",
+            "",
+            " 💡 策略建議 (Strategy)",
+            " └─ 目前市場隱含波動率低迷或現貨價格過低，不宜盲目開倉。建議等待現貨反彈或波動率回升，拉開與成本線之空間後再行評估。",
             "```",
-            "💡 **策略建議**：目前市場隱含波動率低迷或現貨價格過低，不宜盲目開倉。建議等待現貨反彈或波動率回升，拉開與成本線之空間後再行評估。",
         ]
         embed.add_field(
             name="⚠️ 解鎖狀態與策略建議 (Unlock Status & Strategy)",
@@ -788,7 +823,7 @@ def create_covered_call_unlock_embed(data: dict) -> discord.Embed:
             inline=False,
         )
 
-    embed.set_footer(text="物理死鎖解除策略模組")
+    embed.set_footer(text="Nexus Risk Engine | 物理死鎖解除策略模組")
     return embed
 
 
