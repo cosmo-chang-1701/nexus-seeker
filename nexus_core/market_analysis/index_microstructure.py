@@ -33,6 +33,17 @@ _SPX_CAPPED_SIGNAL_CACHE_TTL: float = 300.0
 _spx_capped_signal_cache_value: Optional[dict] = None
 _spx_capped_signal_cache_expiry: float = 0.0
 
+# fetch_symbol_gex_metrics() 的 SWR 背景刷新退避：舊實作在快取持續處於過期狀態
+# 時，每一次呼叫都會無條件重新 asyncio.create_task 一個新的背景 scrape（即使
+# SingleFlightManager 已經在同一瞬間去重併發呼叫，但兩次呼叫只要間隔超過任務
+# 完成時間，就會各自觸發一次全新的嘗試）。當上游邊緣爬蟲持續故障時，這會對同一
+# 個持續失敗的下游造成密集重試 (thundering herd)。改為記錄每個 symbol 最近一次
+# 觸發背景刷新的時間，若距上次嘗試未滿此退避窗口，本次呼叫僅回傳過期快取、不再
+# 額外觸發背景刷新，退避窗口本身遠短於 edge 輪詢/心跳週期，故不影響正常情況下
+# 的資料新鮮度恢復速度。
+_GEX_SWR_REFRESH_BACKOFF_SECONDS: float = 60.0
+_gex_swr_last_attempt: Dict[str, float] = {}
+
 
 def invalidate_market_regime_cache() -> None:
     """清除 get_market_regime() 的記憶體快取，供 /force_macro_update 等手動刷新
@@ -449,7 +460,7 @@ async def _scrape_symbol_gex_raw(
 async def fetch_symbol_gex_metrics(symbol: str, force_live: bool = False) -> dict:
     """呼叫邊緣爬蟲獲取個股的 Net GEX, Call Wall, Put Wall 與 GEX Profile。
 
-    force_live=True 時完全略過 4 小時 kv_cache 與 Edge Snapshot 兩層快取，直接
+    force_live=True 時完全略過 kv_cache 與 Edge Snapshot 兩層快取，直接
     進行即時 Playwright scrape（仍透過 SingleFlight 防止併發重複掃描）；若即時
     抓取失敗仍會優雅降級回退至舊快取而非直接失敗。僅供已透過 Discord defer
     （不受 3 秒互動逾時限制）的深度分析路徑使用。"""
@@ -457,6 +468,7 @@ async def fetch_symbol_gex_metrics(symbol: str, force_live: bool = False) -> dic
     import asyncio
     from database.cache import get_kv_cache, save_kv_cache
     from services.single_flight import SingleFlightManager
+    from services.market_data_service import _EDGE_SNAPSHOT_MAX_AGE_SECONDS
 
     cache_key = f"gex_metrics_{symbol.upper()}"
     stale_cached_data: dict | None = None
@@ -465,10 +477,13 @@ async def fetch_symbol_gex_metrics(symbol: str, force_live: bool = False) -> dic
         if cached_obj and isinstance(cached_obj, dict):
             data = cached_obj.get("data")
             if isinstance(data, dict):
-                # 快取有效期設定為 4 小時 (14400 秒)
+                # 快取有效期與下方 Edge Snapshot 共用同一個新鮮度閾值常數
+                # （_EDGE_SNAPSHOT_MAX_AGE_SECONDS），避免此層獨立設定更長
+                # 的門檻而遮蔽 edge 背景輪詢器早已寫入的更新鮮資料。
                 if (
                     not force_live
-                    and time.time() - cached_obj.get("timestamp", 0) < 14400
+                    and time.time() - cached_obj.get("timestamp", 0)
+                    < _EDGE_SNAPSHOT_MAX_AGE_SECONDS
                 ):
                     return data
                 # 快取已過期（或 force_live 要求略過），保留作為 API 失敗時的降級備援
@@ -480,7 +495,6 @@ async def fetch_symbol_gex_metrics(symbol: str, force_live: bool = False) -> dic
         # 優先讀取 edge 背景排程寫入的 GEX 快照（毫秒級 SQLite 讀取），
         # 命中且夠新鮮就直接採用，跳過下方即時 Playwright scrape。
         from services import edge_cache_client
-        from services.market_data_service import _EDGE_SNAPSHOT_MAX_AGE_SECONDS
 
         edge_cached = await edge_cache_client.get_cached_gex(symbol)
         if edge_cached is not None:
@@ -497,16 +511,21 @@ async def fetch_symbol_gex_metrics(symbol: str, force_live: bool = False) -> dic
                     logger.warning(f"寫入 GEX kv_cache 失敗 ({symbol}): {e}")
                 return edge_data  # type: ignore
 
-        # 若已有過期快取，立即以過期快取作為 SWR 回傳，並在背景非同步更新，避免阻塞主排程
+        # 若已有過期快取，立即以過期快取作為 SWR 回傳，並在背景非同步更新，避免阻塞主排程。
+        # 觸發背景刷新前先檢查退避窗口，避免上游持續故障時每次呼叫都重新發起嘗試。
         if stale_cached_data is not None:
-            asyncio.create_task(
-                SingleFlightManager.run(
-                    f"scrape_gex_{symbol.upper()}",
-                    _scrape_symbol_gex_raw,
-                    symbol,
-                    stale_cached_data,
+            now = time.time()
+            last_attempt = _gex_swr_last_attempt.get(symbol.upper(), 0.0)
+            if now - last_attempt >= _GEX_SWR_REFRESH_BACKOFF_SECONDS:
+                _gex_swr_last_attempt[symbol.upper()] = now
+                asyncio.create_task(
+                    SingleFlightManager.run(
+                        f"scrape_gex_{symbol.upper()}",
+                        _scrape_symbol_gex_raw,
+                        symbol,
+                        stale_cached_data,
+                    )
                 )
-            )
             return {**stale_cached_data, "_is_stale_cache": True}
 
     # force_live=True：不使用任何快取捷徑，直接同步等待即時掃描結果。

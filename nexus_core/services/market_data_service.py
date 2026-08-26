@@ -19,7 +19,7 @@ import math
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, cast
-from collections import OrderedDict, namedtuple
+from collections import namedtuple
 import gc
 import weakref
 
@@ -32,6 +32,7 @@ from aiolimiter import AsyncLimiter
 from config import FINNHUB_API_KEY
 from market_time import ny_tz
 import database.financials as db_financials
+from services.bounded_cache import BoundedCache  # noqa: F401 (re-exported below)
 
 logger = logging.getLogger(__name__)
 
@@ -1045,26 +1046,10 @@ async def get_option_chain(
 # 限制快取大小以節省記憶體 (1GB RAM VPS 優化)
 MAX_CACHE_SIZE = 500
 
-
-class BoundedCache(OrderedDict):
-    """具備容量上限的快取 (LRU 邏輯)。"""
-
-    def __init__(self, max_size: Any = MAX_CACHE_SIZE):
-        super().__init__()
-        self.max_size = max_size
-
-    def __getitem__(self, key: Any):  # type: ignore
-        value = super().__getitem__(key)
-        self.move_to_end(key)
-        return value
-
-    def __setitem__(self, key: Any, value: Any):  # type: ignore
-        if key in self:
-            self.move_to_end(key)
-        super().__setitem__(key, value)
-        if len(self) > self.max_size:
-            self.popitem(last=False)
-
+# BoundedCache 的實作已集中到 services/bounded_cache.py（過去這裡與
+# polymarket_service.py 各自維護一份完全相同的 class，容量上限已分歧且無文件
+# 說明理由，見上方 import）。保留模組層級名稱 BoundedCache，維持既有
+# `from services.market_data_service import BoundedCache` 呼叫端不需變動。
 
 # ---------------------------------------------------------------------------
 # SMA 記憶體快取設定

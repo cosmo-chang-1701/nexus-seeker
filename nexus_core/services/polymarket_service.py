@@ -13,8 +13,8 @@ from database.user_settings import get_full_user_context, get_all_user_ids
 from database.notifications import is_notification_enabled
 from services.llm_service import generate_polymarket_summary, classify_uoa_intent
 from market_analysis.sentiment_engine import SentimentEngine
+from services.bounded_cache import BoundedCache
 
-from collections import OrderedDict
 import gc
 
 logger = logging.getLogger(__name__)
@@ -23,28 +23,10 @@ POLY_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 POLY_API_BASE = "https://clob.polymarket.com"
 GAMMA_API_BASE = "https://gamma-api.polymarket.com"
 
-# 限制快取大小以節省記憶體 (1GB RAM VPS 優化)
+# 限制快取大小以節省記憶體 (1GB RAM VPS 優化)。BoundedCache 的實作已集中到
+# services/bounded_cache.py（過去這裡與 market_data_service.py 各自維護一份
+# 完全相同的 class，容量上限已分歧且無文件說明理由）。
 MAX_CACHE_SIZE = 2000
-
-
-class BoundedCache(OrderedDict):
-    """具備容量上限的快取 (LRU 邏輯)。"""
-
-    def __init__(self, max_size: Any = MAX_CACHE_SIZE):
-        super().__init__()
-        self.max_size = max_size
-
-    def __getitem__(self, key: Any):  # type: ignore
-        value = super().__getitem__(key)
-        self.move_to_end(key)
-        return value
-
-    def __setitem__(self, key: Any, value: Any):  # type: ignore
-        if key in self:
-            self.move_to_end(key)
-        super().__setitem__(key, value)
-        if len(self) > self.max_size:
-            self.popitem(last=False)
 
 
 @dataclass

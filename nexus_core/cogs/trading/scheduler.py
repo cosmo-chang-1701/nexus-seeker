@@ -47,12 +47,14 @@ class SchedulerCog(commands.Cog):
 
         self.dynamic_market_scanner.start()
         self.daily_reddit_update.start()
+        self.kv_cache_dedup_purge.start()
 
         logger.info("SchedulerCog loaded. Background tasks started.")
 
     async def cog_unload(self) -> None:
         self.dynamic_market_scanner.cancel()
         self.daily_reddit_update.cancel()
+        self.kv_cache_dedup_purge.cancel()
         self.intraday_pipeline.stop()
         logger.info("SchedulerCog unloaded. Background tasks cancelled.")
 
@@ -91,6 +93,32 @@ class SchedulerCog(commands.Cog):
 
     @daily_reddit_update.before_loop
     async def before_daily_reddit_update(self) -> None:
+        await self.bot.wait_until_ready()
+
+    # ==========================================
+    # 🧹 kv_cache 每日去重旗標清理 (03:00 ET，離峰時段)
+    # ==========================================
+    @tasks.loop(time=time(hour=3, minute=0, tzinfo=ny_tz))
+    async def kv_cache_dedup_purge(self) -> None:
+        """清除 kv_cache 中已用完即棄的一次性每日去重旗標（如告警防重複發送
+        標記），避免此表隨時間無界成長。僅限白名單前綴，不影響其他任何具持久
+        意義的快取（詳見 database/cache.py 的 _KV_CACHE_DEDUP_KEY_PREFIXES）。
+        """
+        if not getattr(self.bot, "_is_leader_instance", True):
+            return
+
+        from database.cache import purge_stale_kv_cache_dedup_keys
+
+        try:
+            purged_prefixes = await purge_stale_kv_cache_dedup_keys()
+            logger.info(
+                f"🧹 [kv_cache 清理] 已清除 {purged_prefixes} 個前綴下的過期去重旗標。"
+            )
+        except Exception as e:
+            logger.error(f"kv_cache 每日去重旗標清理失敗: {e}")
+
+    @kv_cache_dedup_purge.before_loop
+    async def before_kv_cache_dedup_purge(self) -> None:
         await self.bot.wait_until_ready()
 
     # ==========================================

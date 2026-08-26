@@ -139,10 +139,12 @@ async def get_unified_max_pain(
     獲取統一的最大痛點 (Max Pain)，封裝快取讀取、過期與偏離度校驗、降級與自癒機制。
     """
     from database import get_market_cache, save_market_cache
+    from services.single_flight import SingleFlightManager
     from datetime import datetime, timezone
 
     symbol = symbol.upper()
     # 1. 取得最新現價
+    quote: Optional[dict] = None
     try:
         quote = await market_data_service.get_quote(symbol)
         spot_price = quote.get("c", 0.0) if quote else 0.0
@@ -225,112 +227,122 @@ async def get_unified_max_pain(
             "fallback_source": None,
         }
 
-    # 3. 快取不存在或已失效，執行即時 API 抓取與計算
+    # 3. 快取不存在或已失效，執行即時 API 抓取與計算。以 SingleFlight 依 symbol+expiry
+    # 去重併發呼叫：過去兩個同時遇到 cache miss 的呼叫會各自完整跑一次 IV metrics +
+    # Max Pain 運算並各自寫回 SQLite，造成重複運算與寫入競爭（不會寫壞資料，但浪費
+    # 運算與 I/O），改為併發時共享同一份計算結果與同一次寫回。
     logger.info(f"[{symbol}] 快取失效或強制更新，啟動即時計算並同步更新 SQLite...")
 
-    iv_metrics = None
-    try:
-        iv_metrics = await fetch_and_calculate_iv_metrics(
-            symbol, force_refresh=force_refresh
+    async def _compute_and_persist() -> Dict[str, Any]:
+        nonlocal expiry
+        iv_metrics = None
+        try:
+            iv_metrics = await fetch_and_calculate_iv_metrics(
+                symbol, force_refresh=force_refresh
+            )
+        except Exception as iv_err:
+            logger.warning(f"[{symbol}] 計算 IV metrics 失敗: {iv_err}")
+
+        mp_res = None
+        try:
+            mp_res = await _calculate_max_pain_raw(
+                symbol, expiry, _retry=force_refresh, force_live=force_refresh
+            )
+        except Exception as mp_err:
+            logger.error(f"[{symbol}] _calculate_max_pain_raw 失敗: {mp_err}")
+
+        # 4. 解析計算結果，處理 Circuit Breaker 與降級狀態
+        max_pain = None
+        calculation_mode = "OI"
+        is_degraded = 0
+        circuit_breaker_triggered = 0
+        is_stale = 0
+        fallback_source = None
+
+        if mp_res and isinstance(mp_res, dict) and "error" not in mp_res:
+            max_pain = mp_res.get("max_pain")
+            calculation_mode = mp_res.get("calculation_mode", "OI")
+            is_degraded = int(mp_res.get("is_degraded", 0))
+            circuit_breaker_triggered = int(mp_res.get("circuit_breaker_triggered", 0))
+            is_stale = 1 if mp_res.get("is_stale") else 0
+            fallback_source = mp_res.get("fallback_source")
+            if "expiry" in mp_res and mp_res["expiry"]:
+                expiry = mp_res["expiry"]
+        else:
+            if cache_data and cache_data.get("max_pain") is not None:
+                max_pain = cache_data.get("max_pain")
+                calculation_mode = cache_data.get("calculation_mode", "OI")
+                is_degraded = int(cache_data.get("is_degraded", 0))
+                circuit_breaker_triggered = int(
+                    cache_data.get("circuit_breaker_triggered", 0)
+                )
+                is_stale = 1
+                fallback_source = "SQLite"
+                if cache_data.get("expiry"):
+                    expiry = cache_data.get("expiry")
+                logger.info(
+                    f"[{symbol}] 即時計算失敗，降級回退至 SQLite 舊快取最大痛點: ${max_pain}"
+                )
+
+        # 5. 偏離度異常防禦 (30% Circuit Breaker 自癒)
+        if max_pain is not None and spot_price > 0:
+            dev = abs(max_pain - spot_price) / spot_price
+            if dev > 0.30:
+                logger.warning(
+                    f"[{symbol}] Max Pain 偏離度過高 ({dev:.2%} > 30%)，觸發斷路器自癒機制。設定為 None 並非同步清理快取。"
+                )
+                max_pain = None
+                circuit_breaker_triggered = 1
+                if not force_refresh:
+                    _trigger_background_cache_clear(symbol)
+
+        # 6. 計算本週預期區間
+        em_context = await IVContext.get_expected_move(
+            symbol, quote=quote, iv_metrics=iv_metrics
         )
-    except Exception as iv_err:
-        logger.warning(f"[{symbol}] 計算 IV metrics 失敗: {iv_err}")
+        em_lower = float(em_context.get("expected_move_lower") or 0.0)
+        em_upper = float(em_context.get("expected_move_upper") or 0.0)
 
-    mp_res = None
-    try:
-        mp_res = await _calculate_max_pain_raw(
-            symbol, expiry, _retry=force_refresh, force_live=force_refresh
+        # 7. 寫回 SQLite 快取
+        await asyncio.to_thread(
+            lambda: save_market_cache(
+                symbol,
+                max_pain if max_pain is not None else 0.0,
+                em_lower,
+                em_upper,
+                spot_price,
+                is_stale,
+                calculation_mode,
+                is_degraded,
+                circuit_breaker_triggered,
+                expiry,
+            )
         )
-    except Exception as mp_err:
-        logger.error(f"[{symbol}] _calculate_max_pain_raw 失敗: {mp_err}")
 
-    # 4. 解析計算結果，處理 Circuit Breaker 與降級狀態
-    max_pain = None
-    calculation_mode = "OI"
-    is_degraded = 0
-    circuit_breaker_triggered = 0
-    is_stale = 0
-    fallback_source = None
+        dist_pct = 0.0
+        if max_pain is not None and max_pain > 0 and spot_price > 0:
+            dist_pct = (spot_price - max_pain) / max_pain * 100
 
-    if mp_res and isinstance(mp_res, dict) and "error" not in mp_res:
-        max_pain = mp_res.get("max_pain")
-        calculation_mode = mp_res.get("calculation_mode", "OI")
-        is_degraded = int(mp_res.get("is_degraded", 0))
-        circuit_breaker_triggered = int(mp_res.get("circuit_breaker_triggered", 0))
-        is_stale = 1 if mp_res.get("is_stale") else 0
-        fallback_source = mp_res.get("fallback_source")
-        if "expiry" in mp_res and mp_res["expiry"]:
-            expiry = mp_res["expiry"]
-    else:
-        if cache_data and cache_data.get("max_pain") is not None:
-            max_pain = cache_data.get("max_pain")
-            calculation_mode = cache_data.get("calculation_mode", "OI")
-            is_degraded = int(cache_data.get("is_degraded", 0))
-            circuit_breaker_triggered = int(
-                cache_data.get("circuit_breaker_triggered", 0)
-            )
-            is_stale = 1
-            fallback_source = "SQLite"
-            if cache_data.get("expiry"):
-                expiry = cache_data.get("expiry")
-            logger.info(
-                f"[{symbol}] 即時計算失敗，降級回退至 SQLite 舊快取最大痛點: ${max_pain}"
-            )
+        return {
+            "symbol": symbol,
+            "expiry": expiry,
+            "max_pain": max_pain,
+            "expected_move_lower": em_lower,
+            "expected_move_upper": em_upper,
+            "current_price": spot_price,
+            "distance_pct": round(dist_pct, 2),
+            "is_converging": abs(dist_pct) < 2.0 if max_pain is not None else False,
+            "is_stale": bool(is_stale),
+            "calculation_mode": calculation_mode,
+            "is_degraded": bool(is_degraded),
+            "circuit_breaker_triggered": bool(circuit_breaker_triggered),
+            "fallback_source": fallback_source,
+        }
 
-    # 5. 偏離度異常防禦 (30% Circuit Breaker 自癒)
-    if max_pain is not None and spot_price > 0:
-        dev = abs(max_pain - spot_price) / spot_price
-        if dev > 0.30:
-            logger.warning(
-                f"[{symbol}] Max Pain 偏離度過高 ({dev:.2%} > 30%)，觸發斷路器自癒機制。設定為 None 並非同步清理快取。"
-            )
-            max_pain = None
-            circuit_breaker_triggered = 1
-            if not force_refresh:
-                _trigger_background_cache_clear(symbol)
-
-    # 6. 計算本週預期區間
-    em_context = await IVContext.get_expected_move(
-        symbol, quote=quote if "quote" in locals() else None, iv_metrics=iv_metrics
+    return await SingleFlightManager.run(  # type: ignore
+        f"max_pain_calc_{symbol}_{expiry or 'nearest'}",
+        _compute_and_persist,
     )
-    em_lower = float(em_context.get("expected_move_lower") or 0.0)
-    em_upper = float(em_context.get("expected_move_upper") or 0.0)
-
-    # 7. 寫回 SQLite 快取
-    await asyncio.to_thread(
-        lambda: save_market_cache(
-            symbol,
-            max_pain if max_pain is not None else 0.0,
-            em_lower,
-            em_upper,
-            spot_price,
-            is_stale,
-            calculation_mode,
-            is_degraded,
-            circuit_breaker_triggered,
-            expiry,
-        )
-    )
-
-    dist_pct = 0.0
-    if max_pain is not None and max_pain > 0 and spot_price > 0:
-        dist_pct = (spot_price - max_pain) / max_pain * 100
-
-    return {
-        "symbol": symbol,
-        "expiry": expiry,
-        "max_pain": max_pain,
-        "expected_move_lower": em_lower,
-        "expected_move_upper": em_upper,
-        "current_price": spot_price,
-        "distance_pct": round(dist_pct, 2),
-        "is_converging": abs(dist_pct) < 2.0 if max_pain is not None else False,
-        "is_stale": bool(is_stale),
-        "calculation_mode": calculation_mode,
-        "is_degraded": bool(is_degraded),
-        "circuit_breaker_triggered": bool(circuit_breaker_triggered),
-        "fallback_source": fallback_source,
-    }
 
 
 async def calculate_max_pain(

@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional
 import asyncio
 import logging
 from typing import Dict, Callable, Coroutine
@@ -16,11 +16,18 @@ class SingleFlightManager:
         key: str,
         coro_func: Callable[..., Coroutine[Any, Any, Any]],
         *args,
+        timeout: Optional[float] = None,
         **kwargs,
     ) -> Any:
         """
         Runs the coroutine for the given key. If a task with the same key is already running,
         awaits it instead of starting a new one.
+
+        timeout: 若提供，僅限制「這次呼叫」等待共享任務的時間 (asyncio.TimeoutError)，
+        不會取消底層共享任務本身 —— 其他仍在等待同一個 key 的呼叫者、以及該任務
+        完成後寫回快取的動作，都不受這次逾時影響，繼續在背景執行。預設為 None
+        （沿用既有行為：無限期等待），刻意不強制套用到既有呼叫端，僅供需要有界
+        等待時間的呼叫端（例如受 Discord 互動逾時限制的路徑）自行選用。
         """
         async with cls._lock:
             if key in cls._active_tasks:
@@ -52,4 +59,6 @@ class SingleFlightManager:
 
                 task.add_done_callback(cleanup)
 
+        if timeout is not None:
+            return await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
         return await task

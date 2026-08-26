@@ -300,3 +300,54 @@ async def test_price_volume_alert_monitor_concurrency() -> None:
         await cog._evaluate_price_volume_alerts()
         # Should complete concurrently without throwing exceptions
         assert True
+
+
+@pytest.mark.asyncio
+async def test_purge_stale_kv_cache_dedup_keys_only_removes_whitelisted_old_rows() -> (
+    None
+):
+    """kv_cache has no TTL column and no purge job, so one-shot daily dedup flags
+    (e.g. scenario_alert_..., wti_alert_...) accumulate forever. Verify the new
+    purge helper deletes only whitelisted-prefix rows older than the retention
+    window, leaves recent whitelisted rows untouched, and never touches
+    non-whitelisted keys regardless of age (e.g. permanent last-known-good
+    fallback caches)."""
+    import sqlite3
+    import config
+    from database.cache import (
+        get_kv_cache,
+        save_kv_cache,
+        purge_stale_kv_cache_dedup_keys,
+    )
+
+    old_dedup_key = "scenario_alert_1_AAPL_2020-01-01_WHALE_ESCORT"
+    recent_dedup_key = "wti_alert_1_20990101_UPPER_BREAKOUT"
+    old_permanent_key = "macro_gex_metrics_cache"
+
+    assert await save_kv_cache(old_dedup_key, True)
+    assert await save_kv_cache(recent_dedup_key, True)
+    assert await save_kv_cache(old_permanent_key, {"gamma_flip": 500.0})
+
+    # Backdate the two rows that should survive the "old" bucket regardless of
+    # whitelist status differently: old_dedup_key -> old (should be purged),
+    # old_permanent_key -> old (should NOT be purged, wrong prefix).
+    conn = sqlite3.connect(config.DB_NAME, uri=config.DB_NAME.startswith("file:"))
+    try:
+        conn.execute(
+            "UPDATE kv_cache SET updated_at = '2000-01-01 00:00:00' WHERE key = ?",
+            (old_dedup_key,),
+        )
+        conn.execute(
+            "UPDATE kv_cache SET updated_at = '2000-01-01 00:00:00' WHERE key = ?",
+            (old_permanent_key,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    purged_prefixes = await purge_stale_kv_cache_dedup_keys(older_than_days=3)
+    assert purged_prefixes == 6  # all 6 whitelisted prefixes attempted, none error
+
+    assert get_kv_cache(old_dedup_key) is None
+    assert get_kv_cache(recent_dedup_key) is True
+    assert get_kv_cache(old_permanent_key) == {"gamma_flip": 500.0}
