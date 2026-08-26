@@ -40,6 +40,44 @@ async def fetch_option_chain_dict(symbol: str, expiry: str) -> Optional[Dict[str
     return await asyncio.to_thread(_fetch)
 
 
+async def fetch_nearest_option_chain(symbol: str) -> Optional[Dict[str, Any]]:
+    """一次性取得最近到期日的期權鏈與到期日字串。
+
+    `yf.Ticker.option_chain(date=None)` 底層打的 `v7/finance/options/{symbol}`
+    （不帶 date）本身就會回傳最近到期日的完整 calls/puts，且會把
+    `expirationDates` 一併寫進該 Ticker 實例的內部快取；緊接著讀取
+    `.options` 會直接命中這個內部快取、不再觸發第二次網路請求。相較於
+    分別呼叫 `fetch_option_expiries()` + `fetch_option_chain_dict()`
+    （各自建立新的 Ticker 實例，等於對同一份「最近到期日」資料重複打了
+    兩次請求），這裡只需要一次 HTTP 請求。僅供背景排程 (scheduler.py)
+    在只需要「最近到期日」時使用；`/expiries` 與 `/chain` 端點維持不變，
+    供 nexus_core 查詢任意（非最近）到期日時使用。"""
+
+    def _fetch() -> Optional[Dict[str, Any]]:
+        ticker = yf.Ticker(symbol)
+        chain = ticker.option_chain()
+        expiries = ticker.options
+        if not expiries:
+            return None
+        expiry = expiries[0]
+
+        calls = chain.calls.copy()
+        puts = chain.puts.copy()
+
+        if "lastTradeDate" in calls.columns:
+            calls["lastTradeDate"] = calls["lastTradeDate"].astype(str)
+        if "lastTradeDate" in puts.columns:
+            puts["lastTradeDate"] = puts["lastTradeDate"].astype(str)
+
+        return {
+            "expiry": expiry,
+            "calls": calls.to_dict(orient="records"),
+            "puts": puts.to_dict(orient="records"),
+        }
+
+    return await asyncio.to_thread(_fetch)
+
+
 @router.get("/api/v1/scrape/yf/history/{symbol}")
 async def scrape_yf_history(
     symbol: str, period: str = "1y", interval: str = "1d"

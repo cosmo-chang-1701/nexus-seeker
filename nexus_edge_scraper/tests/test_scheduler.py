@@ -62,15 +62,15 @@ async def test_poll_once_writes_snapshots_for_tracked_symbols(
             "gex_profile": {"100.0": 1.0},
         }
 
-    async def _fake_expiries(symbol: str) -> list[str]:
-        return ["2026-09-18"]
-
-    async def _fake_chain(symbol: str, expiry: str) -> dict[str, Any]:
-        return {"calls": [{"strike": 100.0}], "puts": [{"strike": 90.0}]}
+    async def _fake_nearest_chain(symbol: str) -> dict[str, Any]:
+        return {
+            "expiry": "2026-09-18",
+            "calls": [{"strike": 100.0}],
+            "puts": [{"strike": 90.0}],
+        }
 
     monkeypatch.setattr(scheduler, "scrape_symbol_gex_core", _fake_gex_core)
-    monkeypatch.setattr(scheduler, "fetch_option_expiries", _fake_expiries)
-    monkeypatch.setattr(scheduler, "fetch_option_chain_dict", _fake_chain)
+    monkeypatch.setattr(scheduler, "fetch_nearest_option_chain", _fake_nearest_chain)
     monkeypatch.setattr(
         scheduler, "async_playwright", lambda: _FakeAsyncPlaywrightCtx()
     )
@@ -124,15 +124,11 @@ async def test_poll_once_continues_when_one_symbol_fails(
             "gex_profile": {},
         }
 
-    async def _fake_expiries(symbol: str) -> list[str]:
-        return []
-
-    async def _fake_chain(symbol: str, expiry: str) -> dict[str, Any]:
-        return {"calls": [], "puts": []}
+    async def _fake_nearest_chain(symbol: str) -> None:
+        return None
 
     monkeypatch.setattr(scheduler, "scrape_symbol_gex_core", _fake_gex_core)
-    monkeypatch.setattr(scheduler, "fetch_option_expiries", _fake_expiries)
-    monkeypatch.setattr(scheduler, "fetch_option_chain_dict", _fake_chain)
+    monkeypatch.setattr(scheduler, "fetch_nearest_option_chain", _fake_nearest_chain)
     monkeypatch.setattr(
         scheduler, "async_playwright", lambda: _FakeAsyncPlaywrightCtx()
     )

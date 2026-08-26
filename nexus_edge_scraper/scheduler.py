@@ -27,7 +27,7 @@ from playwright.async_api import Browser, async_playwright
 
 import database
 from gex_scraper import scrape_symbol_gex_core
-from yf_api import fetch_option_chain_dict, fetch_option_expiries
+from yf_api import fetch_nearest_option_chain
 
 logger = logging.getLogger(__name__)
 
@@ -85,18 +85,15 @@ async def _poll_symbol(symbol: str, browser: Browser, sem: "asyncio.Semaphore") 
             logger.warning(f"[{symbol}] 排程 GEX 抓取失敗: {e}")
 
         try:
-            expiries = await fetch_option_expiries(symbol)
-            if expiries:
-                expiry = expiries[0]
-                chain = await fetch_option_chain_dict(symbol, expiry)
-                if chain:
-                    await asyncio.to_thread(
-                        database.save_option_chain_snapshot,
-                        symbol,
-                        expiry,
-                        chain.get("calls", []),
-                        chain.get("puts", []),
-                    )
+            chain = await fetch_nearest_option_chain(symbol)
+            if chain:
+                await asyncio.to_thread(
+                    database.save_option_chain_snapshot,
+                    symbol,
+                    chain["expiry"],
+                    chain.get("calls", []),
+                    chain.get("puts", []),
+                )
         except Exception as e:
             logger.warning(f"[{symbol}] 排程 Option Chain 抓取失敗: {e}")
 
