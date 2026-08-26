@@ -518,7 +518,7 @@ def create_fomc_escape_window_embed(
     was_auto_rolled: bool = False,
     original_window_label: str = "",
 ) -> discord.Embed:
-    """建立方案 C 全維度宏觀流動性逃頂矩陣 Embed (繁體中文)"""
+    """建立全維度宏觀流動性逃頂推演矩陣 Embed (繁體中文)"""
     if direction == "前移":
         color = discord.Color.red()  # Tightening risk defense
     elif direction == "後推":
@@ -526,7 +526,7 @@ def create_fomc_escape_window_embed(
     else:
         color = discord.Color.gold()  # Neutral balance
 
-    title_text = "📅 方案 C 宏觀流動性逃頂矩陣 (Macro Escape Matrix)"
+    title_text = "📅 宏觀逃頂：總經流動性撤退推演矩陣 (Macro Escape Matrix)"
     if is_fallback:
         title_text += " [歷史快取/備援]"
     embed = NexusEmbed(title=title_text, color=color)

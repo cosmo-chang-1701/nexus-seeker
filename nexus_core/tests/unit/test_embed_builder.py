@@ -42,6 +42,7 @@ from cogs.embed_builder import (
     create_covered_call_unlock_embed,
     build_pre_market_briefing_embed,
     create_macro_scan_embed,
+    create_fomc_escape_window_embed,
 )
 from models.schemas import WatchlistOptionLeg, WatchlistOptionPlan
 
@@ -3063,3 +3064,29 @@ def test_nexus_embed_overflow_no_longer_shows_warning_text() -> None:
     desc = result.get("description") or ""
     assert "自選標的過多" not in desc
     assert "自動截斷防護" not in desc
+
+
+def test_create_fomc_escape_window_embed_title_and_layout() -> None:
+    """驗證宏觀逃頂推演矩陣 Embed 標題與版面格式"""
+    embed = create_fomc_escape_window_embed(
+        prob=0.85,
+        direction="前移",
+        shift_days=5,
+        adjusted_start="10月中旬 (10-15)",
+        adjusted_end="10月下旬 (10-25)",
+        reason="緊縮警戒測試",
+        is_fallback=False,
+        tier_title="🚨 收縮警戒 (Tightening Contraction)",
+        tactical_directive="提前防禦撤退指引",
+        factors_summary=[("FOMC 利率定價 (FedWatch)", "🚨 鷹派加息")],
+        was_auto_rolled=False,
+    )
+
+    assert embed.title == "📅 宏觀逃頂：總經流動性撤退推演矩陣 (Macro Escape Matrix)"
+    field_dict: dict[str, str] = {str(f.name): str(f.value or "") for f in embed.fields}
+    assert "🧭 宏觀流動性狀態" in field_dict
+    assert "🚨 收縮警戒" in field_dict["🧭 宏觀流動性狀態"]
+    assert "🔄 逃頂窗口調整方向" in field_dict
+    assert "前移 5 個交易日" in field_dict["🔄 逃頂窗口調整方向"]
+    assert "📆 調整後逃頂窗口預期" in field_dict
+    assert "10月中旬 (10-15)" in field_dict["📆 調整後逃頂窗口預期"]

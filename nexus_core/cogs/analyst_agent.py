@@ -224,7 +224,7 @@ class AnalystAgent(commands.Cog):
                 if fomc_embed:
                     await self.bot.queue_dm(uid, embed=fomc_embed)
             except Exception as e:
-                logger.error(f"推送方案 C 逃頂窗口 Embed 失敗: {e}")
+                logger.error(f"推送宏觀逃頂窗口 Embed 失敗: {e}")
 
     # ──────────────────────────────────────────────────────────────────────────
     # Post-market intelligence
