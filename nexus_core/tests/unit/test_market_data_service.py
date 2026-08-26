@@ -1090,3 +1090,59 @@ async def test_execute_api_call_interactive_fast_circuit_when_in_cooldown() -> N
 
         # Should never call the mock function or sleep for the 10s cooldown
         mock_func.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_execute_api_call_interactive_inlock_recheck_spends_no_budget() -> None:
+    """Regression test: when cooldown is set *while an interactive request is queued
+    on the concurrency semaphore* (a race the in-lock recheck exists to catch), the
+    fast circuit-break must fire before touching limiter_per_second/limiter_global —
+    an AsyncLimiter token can never be refunded once acquired, so a queued request
+    that ends up circuit-breaking must not have spent any global rate-limit budget."""
+    import asyncio
+    import services.market_data_service
+    from services.market_data_service import (
+        _get_finnhub_controls,
+        mark_interactive_request,
+    )
+
+    services.market_data_service._rate_limit_until = 0.0
+    controls = _get_finnhub_controls()
+    sem = controls["sem_interactive"]
+    capacity = sem._value
+
+    # Saturate the interactive concurrency slots so the call under test must queue.
+    for _ in range(capacity):
+        await sem.acquire()
+
+    mock_func = MagicMock()
+
+    async def _call() -> None:
+        with mark_interactive_request():
+            await _execute_api_call(mock_func)
+
+    task = asyncio.create_task(_call())
+    # Let the real micro-pacing sleep (30-60ms) elapse so the task reaches `sem.acquire()`
+    # and blocks (cooldown is still 0 at this point, so the pre-lock check "0" passes).
+    await asyncio.sleep(0.15)
+
+    # Simulate a sibling request setting the cooldown while this task is still queued.
+    services.market_data_service._rate_limit_until = time.time() + 10.0
+
+    # Free a slot so the queued task resumes and hits the in-lock recheck.
+    sem.release()
+
+    try:
+        with pytest.raises(
+            Exception, match="Finnhub rate limited, fast-circuit to fallback"
+        ):
+            await task
+
+        mock_func.assert_not_called()
+        # Core assertion: the aborted call must not have spent global rate-limit budget.
+        assert controls["limiter_global"]._level == 0
+        assert controls["limiter_per_second"]._level == 0
+    finally:
+        # Release the remaining slots this test manually acquired.
+        for _ in range(capacity - 1):
+            sem.release()

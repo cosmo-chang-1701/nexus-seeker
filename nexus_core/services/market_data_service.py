@@ -243,6 +243,8 @@ async def _execute_api_call(func: Any, *args, **kwargs) -> Any:  # type: ignore
     - Concurrency limiting：限制同時間最大併發，避免重試碰撞與 thread 資源抖動。
     - Pacing & Jitter：互動請求加入微步流控 (30~60ms)，冷卻甦醒加入隨機抖動避免群湧 (Thundering Herd)。
     - Fast Circuit-Breaker：互動請求在 429 或冷卻期內立即快速熔斷並拋出例外，供上游無縫降級。
+      熔斷檢查刻意排在進入 limiter_per_second / limiter_global 之前，避免熔斷時仍消耗
+      全局配額（AsyncLimiter 一經 acquire 即無法歸還，見下方 `async with sem:` 區塊）。
 
     注意：limiter 以 event loop 維度維護；429 cooldown 以全局 `_rate_limit_until` 維護。
     """
@@ -276,10 +278,90 @@ async def _execute_api_call(func: Any, *args, **kwargs) -> Any:  # type: ignore
             await asyncio.sleep(wait_time)
 
         async with sem:
-            async with controls["limiter_per_second"]:
-                async with controls["limiter_global"]:
-                    # 若為背景任務，須額外遵循背景次級配額 (12/60s)
-                    if not is_interactive:
+            if is_interactive:
+                # 互動請求路徑：先確認冷卻狀態再進入母令牌桶／每秒流控，
+                # 避免快速熔斷時仍白白消耗全局配額（AsyncLimiter 一經 acquire 即無法歸還）
+                now = time.time()
+                rate_limit_until = _rate_limit_until
+                if now < rate_limit_until:
+                    logger.warning(
+                        "🚨 限流鎖內確認 Finnhub 正處於冷卻中，互動請求快速熔斷"
+                    )
+                    raise Exception("Finnhub rate limited, fast-circuit to fallback")
+
+                async with controls["limiter_per_second"]:
+                    async with controls["limiter_global"]:
+                        try:
+                            # Finnhub SDK 為同步阻塞 I/O，必須在獨立線程中執行
+                            return await asyncio.to_thread(func, *args, **kwargs)
+                        except Exception as e:
+                            error_msg = str(e).lower()
+                            is_rate_limit = (
+                                "429" in error_msg
+                                or "limit reached" in error_msg
+                                or "too many requests" in error_msg
+                            )
+                            is_conn_error = (
+                                "connection aborted" in error_msg
+                                or "timeout" in error_msg
+                                or "remotedisconnected" in error_msg
+                                or "temporarily unavailable" in error_msg
+                            )
+
+                            if not (is_rate_limit or is_conn_error):
+                                raise
+
+                            if attempt >= max_retries:
+                                reason = (
+                                    "429 頻率限制" if is_rate_limit else "連線錯誤/超時"
+                                )
+                                logger.error(
+                                    f"🚨 觸發 Finnhub {reason}。已達最大重試次數，放棄呼叫。"
+                                )
+                                raise
+
+                            # Parse Retry-After or apply exponential backoff fallback
+                            if is_rate_limit:
+                                retry_after = None
+                                if hasattr(e, "response") and e.response is not None:
+                                    retry_after_hdr = e.response.headers.get(
+                                        "Retry-After"
+                                    ) or e.response.headers.get("retry-after")
+                                    if retry_after_hdr:
+                                        try:
+                                            retry_after = float(retry_after_hdr)
+                                        except ValueError:
+                                            pass
+                                if retry_after is not None:
+                                    delay = retry_after
+                                else:
+                                    delay = (3**attempt) * 2 + random.uniform(1.0, 3.0)
+                            else:
+                                delay = (2**attempt) + random.uniform(0.5, 1.5)
+
+                            if is_rate_limit:
+                                _rate_limit_until = max(
+                                    _rate_limit_until, time.time() + delay
+                                )
+
+                            # 針對使用者互動請求（如 /x 指令），若遇 429 直接快速熔斷拋出，
+                            # 讓呼叫端立即無縫降級至 yfinance fallback，避免在互動路徑中 sleep 阻塞。
+                            if is_rate_limit:
+                                logger.warning(
+                                    f"🚨 互動請求觸發 Finnhub 429 限流，立即快速熔斷並轉向 fallback (冷卻至 {delay:.1f}s 後)"
+                                )
+                                raise
+
+                            reason = "連線錯誤/超時"
+                            logger.warning(
+                                f"🚨 觸發 Finnhub {reason}。將於 {delay:.1f} 秒後重試 (次數: {attempt + 1}/{max_retries})..."
+                            )
+                            await asyncio.sleep(delay)
+                            continue
+            else:
+                async with controls["limiter_per_second"]:
+                    async with controls["limiter_global"]:
+                        # 背景任務須額外遵循背景次級配額 (12/60s)
                         async with controls["limiter_background"]:
                             # 1) 進入限流鎖後再確認一次（防止排隊期間被其他 task 更新 cooldown）
                             now = time.time()
@@ -363,85 +445,6 @@ async def _execute_api_call(func: Any, *args, **kwargs) -> Any:  # type: ignore
                                 )
                                 await asyncio.sleep(jittered_delay)
                                 continue
-                    else:
-                        # 互動請求路徑
-                        now = time.time()
-                        rate_limit_until = _rate_limit_until
-                        if now < rate_limit_until:
-                            logger.warning(
-                                "🚨 限流鎖內確認 Finnhub 正處於冷卻中，互動請求快速熔斷"
-                            )
-                            raise Exception(
-                                "Finnhub rate limited, fast-circuit to fallback"
-                            )
-
-                        try:
-                            # Finnhub SDK 為同步阻塞 I/O，必須在獨立線程中執行
-                            return await asyncio.to_thread(func, *args, **kwargs)
-                        except Exception as e:
-                            error_msg = str(e).lower()
-                            is_rate_limit = (
-                                "429" in error_msg
-                                or "limit reached" in error_msg
-                                or "too many requests" in error_msg
-                            )
-                            is_conn_error = (
-                                "connection aborted" in error_msg
-                                or "timeout" in error_msg
-                                or "remotedisconnected" in error_msg
-                                or "temporarily unavailable" in error_msg
-                            )
-
-                            if not (is_rate_limit or is_conn_error):
-                                raise
-
-                            if attempt >= max_retries:
-                                reason = (
-                                    "429 頻率限制" if is_rate_limit else "連線錯誤/超時"
-                                )
-                                logger.error(
-                                    f"🚨 觸發 Finnhub {reason}。已達最大重試次數，放棄呼叫。"
-                                )
-                                raise
-
-                            # Parse Retry-After or apply exponential backoff fallback
-                            if is_rate_limit:
-                                retry_after = None
-                                if hasattr(e, "response") and e.response is not None:
-                                    retry_after_hdr = e.response.headers.get(
-                                        "Retry-After"
-                                    ) or e.response.headers.get("retry-after")
-                                    if retry_after_hdr:
-                                        try:
-                                            retry_after = float(retry_after_hdr)
-                                        except ValueError:
-                                            pass
-                                if retry_after is not None:
-                                    delay = retry_after
-                                else:
-                                    delay = (3**attempt) * 2 + random.uniform(1.0, 3.0)
-                            else:
-                                delay = (2**attempt) + random.uniform(0.5, 1.5)
-
-                            if is_rate_limit:
-                                _rate_limit_until = max(
-                                    _rate_limit_until, time.time() + delay
-                                )
-
-                            # 針對使用者互動請求（如 /x 指令），若遇 429 直接快速熔斷拋出，
-                            # 讓呼叫端立即無縫降級至 yfinance fallback，避免在互動路徑中 sleep 阻塞。
-                            if is_rate_limit:
-                                logger.warning(
-                                    f"🚨 互動請求觸發 Finnhub 429 限流，立即快速熔斷並轉向 fallback (冷卻至 {delay:.1f}s 後)"
-                                )
-                                raise
-
-                            reason = "連線錯誤/超時"
-                            logger.warning(
-                                f"🚨 觸發 Finnhub {reason}。將於 {delay:.1f} 秒後重試 (次數: {attempt + 1}/{max_retries})..."
-                            )
-                            await asyncio.sleep(delay)
-                            continue
 
 
 # ---------------------------------------------------------------------------
