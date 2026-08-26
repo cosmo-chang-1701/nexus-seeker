@@ -31,18 +31,22 @@ def _base_url() -> str:
     return getattr(config, "TUNNEL_URL", "").rstrip("/")
 
 
-async def sync_watchlist_symbols(symbols: list[str]) -> None:
-    """Best-effort 同步目前全體使用者去重後的自選標的清單給 edge，
-    讓 edge 的背景排程知道該輪詢哪些標的。失敗只記錄 warning，不拋出、
-    不影響呼叫端（watchlist 心跳）繼續執行。"""
+async def sync_watchlist_symbols(
+    symbols: list[str], priority_symbols: Optional[list[str]] = None
+) -> None:
+    """Best-effort 同步目前全體使用者去重後的自選標的清單給 edge，讓 edge 的
+    背景排程知道該輪詢哪些標的；priority_symbols（實際持倉標的，可能包含未
+    列在一般自選清單中的標的）會被標記為每輪必抓，不受批次輪替影響。
+    失敗只記錄 warning，不拋出、不影響呼叫端（watchlist 心跳）繼續執行。"""
     base_url = _base_url()
-    if not base_url or not symbols:
+    priority_symbols = priority_symbols or []
+    if not base_url or (not symbols and not priority_symbols):
         return
     try:
         async with httpx.AsyncClient(timeout=_SYNC_TIMEOUT_SECONDS) as client:
             await client.post(
                 f"{base_url}/api/v1/watchlist/sync",
-                json={"symbols": symbols},
+                json={"symbols": symbols, "priority_symbols": priority_symbols},
             )
     except Exception as e:
         logger.warning(f"同步 watchlist 標的清單至 edge 失敗（不影響心跳繼續執行): {e}")

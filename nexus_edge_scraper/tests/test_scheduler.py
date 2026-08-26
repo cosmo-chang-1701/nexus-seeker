@@ -144,6 +144,48 @@ async def test_poll_once_continues_when_one_symbol_fails(
     assert good_row["call_wall"] == 1.0
 
 
+@pytest.mark.asyncio
+async def test_poll_once_polls_priority_symbols_every_cycle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """持倉標的（priority）不受批次輪替影響，應該每一輪都被抓取；
+    一般自選標的（non-priority）仍走原本的分批輪替。"""
+    database.upsert_tracked_symbols(["AAPL", "TSLA", "MSFT"], priority_symbols=["NVDA"])
+
+    polled: list[list[str]] = [[]]
+
+    async def _fake_gex_core(symbol: str, browser: object) -> dict[str, Any]:
+        polled[-1].append(symbol)
+        return {
+            "spot": 1.0,
+            "net_gex": 1.0,
+            "call_wall": 1.0,
+            "put_wall": 1.0,
+            "gex_profile": {},
+        }
+
+    async def _fake_nearest_chain(symbol: str) -> None:
+        return None
+
+    monkeypatch.setattr(scheduler, "scrape_symbol_gex_core", _fake_gex_core)
+    monkeypatch.setattr(scheduler, "fetch_nearest_option_chain", _fake_nearest_chain)
+    monkeypatch.setattr(
+        scheduler, "async_playwright", lambda: _FakeAsyncPlaywrightCtx()
+    )
+
+    await scheduler.poll_once()
+    polled.append([])
+    await scheduler.poll_once()
+    polled.append([])
+    await scheduler.poll_once()
+
+    # NVDA (priority) 出現在每一輪；一般自選標的的批次大小為 1
+    # (ceil(3/6)=1)，同一輪不會全部一起出現。
+    for round_symbols in polled[:3]:
+        assert "NVDA" in round_symbols
+        assert len(round_symbols) == 2  # NVDA + 該輪的一支 non-priority 標的
+
+
 def test_prune_runs_after_poll(monkeypatch: pytest.MonkeyPatch) -> None:
     database.upsert_tracked_symbols(["OLD"])
     conn = database._get_connection()

@@ -1219,6 +1219,7 @@ async def scrape_symbol_gex(symbol: str) -> dict[str, Any]:
 
 class WatchlistSyncRequest(BaseModel):
     symbols: list[str]
+    priority_symbols: list[str] = []
 
 
 def _row_age_seconds(updated_at: str | None) -> float | None:
@@ -1236,10 +1237,21 @@ def _row_age_seconds(updated_at: str | None) -> float | None:
 @app.post("/api/v1/watchlist/sync")
 async def sync_watchlist_symbols(payload: WatchlistSyncRequest) -> dict[str, Any]:
     """nexus_core 於每次心跳前 best-effort 呼叫，同步目前全體使用者去重後的
-    自選標的清單，讓背景排程 (scheduler.py) 知道該輪詢哪些標的。"""
+    自選標的清單，以及應優先每輪必抓的持倉標的（priority_symbols），讓背景
+    排程 (scheduler.py) 知道該輪詢哪些標的、以及哪些標的不受批次輪替影響。"""
     try:
-        await asyncio.to_thread(database.upsert_tracked_symbols, payload.symbols)
-        return {"status": "success", "data": {"synced": len(payload.symbols)}}
+        await asyncio.to_thread(
+            database.upsert_tracked_symbols,
+            payload.symbols,
+            payload.priority_symbols,
+        )
+        return {
+            "status": "success",
+            "data": {
+                "synced": len(payload.symbols),
+                "priority_synced": len(payload.priority_symbols),
+            },
+        }
     except Exception as e:
         logger.warning(f"同步 watchlist 標的清單失敗: {e}")
         return {"status": "error", "message": str(e)}

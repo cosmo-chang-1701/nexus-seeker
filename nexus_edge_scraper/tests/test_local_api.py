@@ -1,7 +1,11 @@
 from typing import Any
 from unittest.mock import patch, MagicMock, AsyncMock
+import os
+import tempfile
 import httpx
 from fastapi.testclient import TestClient
+
+import database
 from local_api import app
 
 client = TestClient(app)
@@ -567,3 +571,48 @@ def test_scrape_macro_calendar_translations() -> None:
         assert events[1]["event_name"] == "非農就業人數"
         assert events[2]["event_name"] == "美財政部季度發債計畫 (QRA)"
         assert events[3]["event_name"] == "聯準會理事 華勒 發言"
+
+
+def test_sync_watchlist_symbols_marks_priority_symbols() -> None:
+    """POST /api/v1/watchlist/sync 帶入的 priority_symbols 應被正確標記，
+    讓背景排程知道哪些標的每輪必抓。此測試使用獨立的暫存 SQLite 檔案，
+    避免污染其他測試或真實的 edge_cache.db。"""
+    fd, path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    with patch.object(database, "DB_PATH", path):
+        database.init_db()
+        try:
+            response = client.post(
+                "/api/v1/watchlist/sync",
+                json={"symbols": ["AAPL", "TSLA"], "priority_symbols": ["NVDA"]},
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "success"
+            assert data["data"] == {"synced": 2, "priority_synced": 1}
+
+            assert database.get_priority_symbols() == ["NVDA"]
+            assert database.get_non_priority_symbols() == ["AAPL", "TSLA"]
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+
+def test_sync_watchlist_symbols_defaults_priority_symbols_to_empty() -> None:
+    """priority_symbols 未帶入時應預設為空清單，維持向下相容。"""
+    fd, path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    with patch.object(database, "DB_PATH", path):
+        database.init_db()
+        try:
+            response = client.post("/api/v1/watchlist/sync", json={"symbols": ["AAPL"]})
+            assert response.status_code == 200
+            assert response.json()["data"] == {"synced": 1, "priority_synced": 0}
+            assert database.get_priority_symbols() == []
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass

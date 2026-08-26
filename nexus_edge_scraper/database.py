@@ -34,6 +34,7 @@ def init_db() -> None:
             """
             CREATE TABLE IF NOT EXISTS tracked_symbols (
                 symbol TEXT PRIMARY KEY,
+                is_priority INTEGER NOT NULL DEFAULT 0,
                 last_synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
@@ -57,25 +58,45 @@ def init_db() -> None:
             );
             """
         )
+        # 舊版 DB 檔案（is_priority 欄位加入前建立的）不會被上面的
+        # CREATE TABLE IF NOT EXISTS 補上新欄位，需要額外用 ALTER TABLE 補齊，
+        # 沿用本檔案一貫不套用 migration engine 的輕量風格。
+        existing_cols = {
+            row["name"] for row in conn.execute("PRAGMA table_info(tracked_symbols)")
+        }
+        if "is_priority" not in existing_cols:
+            conn.execute(
+                "ALTER TABLE tracked_symbols ADD COLUMN is_priority INTEGER NOT NULL DEFAULT 0"
+            )
         conn.commit()
     finally:
         conn.close()
 
 
-def upsert_tracked_symbols(symbols: list[str]) -> None:
-    """由 nexus_core 於每次心跳前 best-effort 同步過來的自選標的清單。"""
-    clean = [s.upper() for s in symbols if s]
+def upsert_tracked_symbols(
+    symbols: list[str], priority_symbols: Optional[list[str]] = None
+) -> None:
+    """由 nexus_core 於每次心跳前 best-effort 同步過來的自選標的清單，以及
+    應優先每輪必抓、不受批次輪替影響的持倉標的（priority_symbols，可能包含
+    未列在一般自選清單中的標的，例如未加入 watchlist 的持倉）。
+
+    每次呼叫都會用傳入的 priority_symbols 覆寫既有標記，讓已出清的持倉
+    正確降級回一般批次輪替，不會殘留過期的優先旗標。"""
+    priority_clean = {s.upper() for s in (priority_symbols or []) if s}
+    clean = {s.upper() for s in symbols if s} | priority_clean
     if not clean:
         return
     conn = _get_connection()
     try:
         conn.executemany(
             """
-            INSERT INTO tracked_symbols (symbol, last_synced_at)
-            VALUES (?, CURRENT_TIMESTAMP)
-            ON CONFLICT(symbol) DO UPDATE SET last_synced_at = CURRENT_TIMESTAMP
+            INSERT INTO tracked_symbols (symbol, is_priority, last_synced_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(symbol) DO UPDATE SET
+                is_priority = excluded.is_priority,
+                last_synced_at = CURRENT_TIMESTAMP
             """,
-            [(s,) for s in clean],
+            [(s, 1 if s in priority_clean else 0) for s in clean],
         )
         conn.commit()
     finally:
@@ -86,6 +107,30 @@ def get_tracked_symbols() -> list[str]:
     conn = _get_connection()
     try:
         cursor = conn.execute("SELECT symbol FROM tracked_symbols ORDER BY symbol")
+        return [row["symbol"] for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_priority_symbols() -> list[str]:
+    """取得每輪必抓、不受批次輪替影響的持倉標的清單。"""
+    conn = _get_connection()
+    try:
+        cursor = conn.execute(
+            "SELECT symbol FROM tracked_symbols WHERE is_priority = 1 ORDER BY symbol"
+        )
+        return [row["symbol"] for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_non_priority_symbols() -> list[str]:
+    """取得走一般批次輪替的標的清單（與 get_priority_symbols() 互斥分割）。"""
+    conn = _get_connection()
+    try:
+        cursor = conn.execute(
+            "SELECT symbol FROM tracked_symbols WHERE is_priority = 0 ORDER BY symbol"
+        )
         return [row["symbol"] for row in cursor.fetchall()]
     finally:
         conn.close()

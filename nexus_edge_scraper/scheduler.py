@@ -12,6 +12,10 @@ Playwright/yfinance 抓取的行為。
 一次，維持與單一時間點全量刷新相近的更新頻率，但改成分散在多輪、時間點
 隨機化的小批次請求，降低對 Yahoo 的請求爆量與固定週期特徵。
 
+其中被標記為 priority（實際持倉標的，見 database.upsert_tracked_symbols）
+的標的不受批次輪替影響，每輪都會被抓取，將它們的延遲上限從 ~30 分鐘壓到
+單一輪詢週期本身（~5 分鐘），其餘一般自選標的仍走原本的批次輪替。
+
 刻意不使用完整的 NYSE 假日行事曆 —— 假日多跑幾輪只會產生稍舊但無害的
 快取，不影響正確性，維持 edge 端一貫的輕量風格。
 """
@@ -111,13 +115,18 @@ def _next_batch(symbols: list[str]) -> list[str]:
 
 
 async def poll_once() -> None:
-    """對目前 tracked_symbols 清單取出下一小批標的，執行一輪 GEX + Option Chain 輪詢
-    （分批輪詢，見模組頂端 POLL_ROTATION_CYCLES 註解）。"""
-    symbols = await asyncio.to_thread(database.get_tracked_symbols)
-    if not symbols:
-        return
+    """執行一輪 GEX + Option Chain 輪詢：priority 標的（持倉）每輪必抓，
+    其餘一般自選標的取出下一小批（分批輪詢，見模組頂端 POLL_ROTATION_CYCLES
+    註解）。兩者為互斥分割（見 database.get_priority_symbols /
+    get_non_priority_symbols），不會重複抓取同一標的。"""
+    priority_symbols = await asyncio.to_thread(database.get_priority_symbols)
+    non_priority_symbols = await asyncio.to_thread(database.get_non_priority_symbols)
 
-    batch = _next_batch(symbols)
+    batch = list(priority_symbols)
+    if non_priority_symbols:
+        batch.extend(_next_batch(non_priority_symbols))
+    if not batch:
+        return
 
     sem = asyncio.Semaphore(MAX_CONCURRENCY)
 

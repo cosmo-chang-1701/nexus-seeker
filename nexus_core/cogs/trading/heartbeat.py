@@ -37,12 +37,20 @@ async def dispatch_watchlist_heartbeat(
         all_symbols.add(sym)
 
     # Best-effort 同步全體去重後的自選標的清單給 nexus_edge_scraper，
-    # 讓 edge 的背景排程知道該輪詢哪些標的的 GEX / Option Chain。
+    # 讓 edge 的背景排程知道該輪詢哪些標的的 GEX / Option Chain。實際持倉
+    # 標的（現貨 HOLDING + 期權 TRADE，可能包含未列在一般自選清單中的標的）
+    # 額外標記為 priority，讓 edge 每輪都優先抓取，不受批次輪替影響，把持倉
+    # 標的的資料延遲上限從 ~30 分鐘壓到單一輪詢週期本身（~5 分鐘）。
     # edge 目前部署不穩定，失敗只記錄 warning，不影響心跳繼續執行。
     try:
         from services import edge_cache_client
 
-        await edge_cache_client.sync_watchlist_symbols(list(all_symbols))
+        priority_symbols = list(
+            {row[2].upper() for row in database.get_all_portfolio() if row[2]}
+        )
+        await edge_cache_client.sync_watchlist_symbols(
+            list(all_symbols), priority_symbols
+        )
     except Exception as sync_err:
         logger.warning(
             f"同步 watchlist 標的清單至 edge 失敗（不影響心跳繼續執行): {sync_err}"

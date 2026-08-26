@@ -32,6 +32,54 @@ def test_tracked_symbols_upsert_empty_is_noop() -> None:
     assert database.get_tracked_symbols() == []
 
 
+def test_priority_symbols_partition() -> None:
+    database.upsert_tracked_symbols(["AAPL", "TSLA"], priority_symbols=["NVDA"])
+    assert database.get_priority_symbols() == ["NVDA"]
+    assert database.get_non_priority_symbols() == ["AAPL", "TSLA"]
+    assert database.get_tracked_symbols() == ["AAPL", "NVDA", "TSLA"]
+
+
+def test_priority_symbols_do_not_need_to_be_in_symbols_list() -> None:
+    """實際持倉標的可能沒有被加入任何使用者的自選清單，仍應被追蹤並標記為 priority。"""
+    database.upsert_tracked_symbols([], priority_symbols=["NVDA"])
+    assert database.get_tracked_symbols() == ["NVDA"]
+    assert database.get_priority_symbols() == ["NVDA"]
+    assert database.get_non_priority_symbols() == []
+
+
+def test_priority_flag_is_cleared_when_no_longer_priority() -> None:
+    database.upsert_tracked_symbols(["AAPL"], priority_symbols=["AAPL"])
+    assert database.get_priority_symbols() == ["AAPL"]
+
+    # 使用者已出清 AAPL 持倉，下一次同步不再帶入 priority_symbols
+    database.upsert_tracked_symbols(["AAPL"], priority_symbols=[])
+    assert database.get_priority_symbols() == []
+    assert database.get_non_priority_symbols() == ["AAPL"]
+
+
+def test_init_db_migrates_pre_existing_table_without_is_priority_column() -> None:
+    """模擬 is_priority 欄位加入前建立的舊版 DB 檔案，確認 init_db() 會用
+    ALTER TABLE 補齊欄位而不報錯，且既有資料不會遺失。"""
+    conn = database._get_connection()
+    try:
+        conn.execute("DROP TABLE tracked_symbols")
+        conn.execute(
+            "CREATE TABLE tracked_symbols ("
+            "symbol TEXT PRIMARY KEY, "
+            "last_synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        conn.execute("INSERT INTO tracked_symbols (symbol) VALUES ('AAPL')")
+        conn.commit()
+    finally:
+        conn.close()
+
+    database.init_db()
+
+    assert database.get_tracked_symbols() == ["AAPL"]
+    assert database.get_priority_symbols() == []
+    assert database.get_non_priority_symbols() == ["AAPL"]
+
+
 def test_prune_stale_symbols_removes_old_rows() -> None:
     database.upsert_tracked_symbols(["AAPL"])
     conn = database._get_connection()
