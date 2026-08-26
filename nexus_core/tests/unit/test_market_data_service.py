@@ -649,7 +649,8 @@ async def test_execute_api_call_respects_retry_after() -> None:
 
         assert m_sleep.called
         sleep_args = [args[0] for args, _ in m_sleep.call_args_list]
-        assert 5.5 in sleep_args
+        # Includes 5.5 + jitter (5.5 <= delay <= 6.5)
+        assert any(5.5 <= a <= 6.5 for a in sleep_args)
 
 
 @pytest.mark.asyncio
@@ -1029,3 +1030,63 @@ async def test_safe_yf_history_falls_back_to_direct_when_edge_fails() -> None:
         mock_ticker.history.assert_called_once_with(
             period="1mo", auto_adjust=True, repair=True, interval="1d"
         )
+
+
+@pytest.mark.asyncio
+async def test_get_finnhub_controls_structure() -> None:
+    """Test that _get_finnhub_controls provides a global master limiter and conservative limits."""
+    from services.market_data_service import _get_finnhub_controls
+
+    controls = _get_finnhub_controls()
+    assert "limiter_global" in controls
+    assert "limiter_background" in controls
+    assert "limiter_per_second" in controls
+    assert "sem_background" in controls
+    assert "sem_interactive" in controls
+    assert controls["limiter_global"].max_rate == 50
+    assert controls["limiter_per_second"].max_rate == 3
+
+
+@pytest.mark.asyncio
+async def test_execute_api_call_interactive_fast_circuit_on_429() -> None:
+    """Test that interactive requests immediately raise on 429 without sleeping/retrying."""
+    from services.market_data_service import mark_interactive_request
+    import services.market_data_service
+
+    mock_func = MagicMock()
+    mock_func.side_effect = Exception("429 Too Many Requests")
+
+    with (
+        mark_interactive_request(),
+        patch("services.market_data_service._rate_limit_until", 0.0),
+        patch("asyncio.sleep", new_callable=AsyncMock),
+    ):
+        with pytest.raises(Exception, match="429"):
+            await _execute_api_call(mock_func)
+
+        # Mock function should be called only once (no retries for interactive 429)
+        assert mock_func.call_count == 1
+        # Cooldown should be set to the future
+        assert services.market_data_service._rate_limit_until > time.time()
+
+
+@pytest.mark.asyncio
+async def test_execute_api_call_interactive_fast_circuit_when_in_cooldown() -> None:
+    """Test that interactive requests bypass Finnhub and fast-fail immediately when in cooldown."""
+    from services.market_data_service import mark_interactive_request
+
+    mock_func = MagicMock()
+    future_time = time.time() + 10.0
+
+    with (
+        mark_interactive_request(),
+        patch("services.market_data_service._rate_limit_until", future_time),
+        patch("asyncio.sleep", new_callable=AsyncMock),
+    ):
+        with pytest.raises(
+            Exception, match="Finnhub rate limited, fast-circuit to fallback"
+        ):
+            await _execute_api_call(mock_func)
+
+        # Should never call the mock function or sleep for the 10s cooldown
+        mock_func.assert_not_called()
