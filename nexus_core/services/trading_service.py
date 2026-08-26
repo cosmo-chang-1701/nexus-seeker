@@ -228,7 +228,20 @@ class TradingService:
         trades = []
         total_unrealized_pnl = 0.0
 
-        for a in assets:
+        # 併發批次拉取各部位期權鏈中間價 (Semaphore(3) 上限，避免逐筆序列 await 拖慢回應)
+        sem = asyncio.Semaphore(3)
+
+        async def _fetch_mid(asset: Any) -> float:
+            am = asset.metadata
+            async with sem:
+                mid_price, _ = await get_option_chain_mid_iv(
+                    asset.symbol, am.get("expiry"), am.get("strike"), am.get("opt_type")
+                )
+                return float(mid_price)
+
+        mids = await asyncio.gather(*[_fetch_mid(a) for a in assets])
+
+        for a, mid in zip(assets, mids):
             m = a.metadata
             sym = a.symbol
             opt_type = m.get("opt_type")
@@ -236,8 +249,6 @@ class TradingService:
             expiry = m.get("expiry")
             entry_price = m.get("entry_price") or a.entry_price or 0.0
             quantity = m.get("quantity", 0)
-
-            mid, _ = await get_option_chain_mid_iv(sym, expiry, strike, opt_type)
 
             unrealized_pnl = (mid - entry_price) * 100 * quantity
             pnl_pct = ((mid - entry_price) / entry_price) if entry_price > 0 else 0.0

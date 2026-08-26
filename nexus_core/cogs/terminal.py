@@ -1234,6 +1234,7 @@ class TerminalCog(commands.Cog):
     @app_commands.command(
         name="list_holdings", description="列出目前所有現貨持倉、分配比例與即時損益估計"
     )
+    @market_data_service.interactive
     async def list_holdings(self, interaction: discord.Interaction) -> Any:
         await interaction.response.defer(ephemeral=True)
         user_id = interaction.user.id
@@ -1255,6 +1256,19 @@ class TerminalCog(commands.Cog):
 
         from market_analysis.dynamic_rollover import CORE_DEFENSE_ETF_SYMBOLS
 
+        # 併發批次拉取各標的即時報價 (Semaphore(3) 上限，避免逐筆序列 await 拖慢回應)
+        quote_sem = asyncio.Semaphore(3)
+
+        async def _fetch_quote(sym: str) -> tuple[str, Dict[str, Any]]:
+            async with quote_sem:
+                quote = await market_data_service.get_quote(sym)
+                return sym, (quote or {})
+
+        unique_symbols = {a.symbol for a in assets}
+        quotes_by_symbol = dict(
+            await asyncio.gather(*[_fetch_quote(sym) for sym in unique_symbols])
+        )
+
         holdings = []
         # 核心資金部署引擎 (Scenario 5) target_allocation_pct 總經自動建議值：
         # 僅供顯示參考，不會自動套用生效（target_allocation_pct 是嚴格 opt-in
@@ -1263,8 +1277,8 @@ class TerminalCog(commands.Cog):
         suggested_target_alloc: Optional[float] = None
         for a in assets:
             sym = a.symbol
-            quote = await market_data_service.get_quote(sym)
-            current_price = quote.get("c", 0.0) if quote else 0.0
+            quote = quotes_by_symbol.get(sym, {})
+            current_price = quote.get("c", 0.0)
 
             default_class = "CORE" if sym in CORE_DEFENSE_ETF_SYMBOLS else "SATELLITE"
             asset_class = a.metadata.get("asset_class") or default_class
@@ -1471,6 +1485,7 @@ class TerminalCog(commands.Cog):
     @app_commands.command(
         name="list_trades", description="列出目前資料庫中的所有實單持倉與未實現損益"
     )
+    @market_data_service.interactive
     async def list_trades(self, interaction: discord.Interaction) -> Any:
         await interaction.response.defer(ephemeral=True)
         user_id = interaction.user.id
