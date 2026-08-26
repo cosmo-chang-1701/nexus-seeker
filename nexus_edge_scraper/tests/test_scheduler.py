@@ -15,6 +15,9 @@ def _isolated_db(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]
     os.close(fd)
     monkeypatch.setattr(database, "DB_PATH", path)
     database.init_db()
+    # _poll_cursor 是模組層級游標，跨測試共用同一個 process，測試間必須重置，
+    # 避免前一個測試留下的游標位置讓本測試的批次輪替變得不可預期。
+    monkeypatch.setattr(scheduler, "_poll_cursor", 0)
     yield
     try:
         os.remove(path)
@@ -72,6 +75,9 @@ async def test_poll_once_writes_snapshots_for_tracked_symbols(
         scheduler, "async_playwright", lambda: _FakeAsyncPlaywrightCtx()
     )
 
+    # 分批輪詢：2 個標的、POLL_ROTATION_CYCLES=6 時每輪批次大小為 1，
+    # 需呼叫兩次 poll_once() 讓 round-robin 游標輪過所有標的。
+    await scheduler.poll_once()
     await scheduler.poll_once()
 
     for sym in ["AAPL", "TSLA"]:
@@ -131,6 +137,9 @@ async def test_poll_once_continues_when_one_symbol_fails(
         scheduler, "async_playwright", lambda: _FakeAsyncPlaywrightCtx()
     )
 
+    # 分批輪詢：2 個標的、POLL_ROTATION_CYCLES=6 時每輪批次大小為 1，
+    # 需呼叫兩次 poll_once() 讓 round-robin 游標輪過所有標的。
+    await scheduler.poll_once()
     await scheduler.poll_once()
 
     assert database.get_gex_snapshot("BAD") is None
