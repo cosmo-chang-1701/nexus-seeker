@@ -1,7 +1,7 @@
 """Portfolio and trading position embed builders"""
 
 import discord
-from cogs.embed_builders._core import NexusEmbed
+from cogs.embed_builders._core import NexusEmbed, format_cache_age_suffix
 import logging
 import psutil
 
@@ -1375,15 +1375,20 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     _add_ansi_field_safely(embed, "🎯 結算與目標 (Target Lock)", target_lines)
 
     uoa_data = data.get("uoa", [])
+    # 15 分鐘心跳週期的 2 倍緩衝，與 market_embeds.py 的
+    # _UOA_DARKPOOL_MAX_AGE_SECONDS 保持一致，避免兩處門檻各自漂移。
+    uoa_field_name = "🐋 異常活動 (UOA)" + format_cache_age_suffix(
+        data.get("uoa_age_seconds"), stale_threshold_seconds=1800.0
+    )
     if uoa_data:
         try:
             table_str = _format_uoa_field(uoa_data)
-            _add_ansi_field_safely(embed, "🐋 異常活動 (UOA)", table_str.split("\n"))
+            _add_ansi_field_safely(embed, uoa_field_name, table_str.split("\n"))
         except Exception:
             pass
     else:
         embed.add_field(
-            name="🐋 異常活動 (UOA)",
+            name=uoa_field_name,
             value="```ansi\n目前無顯著異常活動\n```",
             inline=False,
         )

@@ -225,6 +225,7 @@ async def get_unified_max_pain(
             "is_degraded": bool(cache_data.get("is_degraded", 0)),
             "circuit_breaker_triggered": cb_triggered,
             "fallback_source": None,
+            "updated_at": cache_data.get("updated_at"),
         }
 
     # 3. 快取不存在或已失效，執行即時 API 抓取與計算。以 SingleFlight 依 symbol+expiry
@@ -337,6 +338,11 @@ async def get_unified_max_pain(
             "is_degraded": bool(is_degraded),
             "circuit_breaker_triggered": bool(circuit_breaker_triggered),
             "fallback_source": fallback_source,
+            # 僅在真正降級回退至舊 SQLite 快取時附上其 updated_at；即時新算成功
+            # 的一般路徑本身就是新鮮資料，不需要（也沒有）一個舊時間戳記。
+            "updated_at": cache_data.get("updated_at")
+            if fallback_source == "SQLite" and cache_data
+            else None,
         }
 
     return await SingleFlightManager.run(  # type: ignore

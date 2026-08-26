@@ -19,8 +19,12 @@ from typing import Any, Dict, List
 
 from cogs.embed_builders._ansi_utils import _safe_float, _truncate_with_boundary
 from cogs.embed_builders.settings_embeds import create_info_embed
-from cogs.embed_builders._core import NexusEmbed
+from cogs.embed_builders._core import NexusEmbed, format_cache_age_suffix
 from market_analysis.macro_calendar_translator import translate_macro_event
+
+# UOA/DP-POC kv_cache 新鮮度門檻：15 分鐘心跳週期的 2 倍緩衝。刻意獨立於 GEX 的
+# _EDGE_SNAPSHOT_MAX_AGE_SECONDS（30 分鐘 edge scraper 輪詢），兩者走不同管線。
+_UOA_DARKPOOL_MAX_AGE_SECONDS: float = 1800.0
 
 
 def create_max_pain_embed(symbol: str, data: Dict[str, Any]) -> discord.Embed:
@@ -486,6 +490,12 @@ def build_radar_scan_embed(
             sym = r["symbol"]
             quote = r["quote"] or {}
             iv_metrics = r.get("iv_metrics", {})
+            gex_is_stale = bool(r.get("gex_metrics", {}).get("_is_stale_cache", False))
+            uoa_age_seconds = r.get("uoa_age_seconds")
+            uoa_is_stale = (
+                uoa_age_seconds is not None
+                and uoa_age_seconds > _UOA_DARKPOOL_MAX_AGE_SECONDS
+            )
             mp_data = r["max_pain"] or {}
 
             # 1. 價格與漲跌幅
@@ -539,6 +549,9 @@ def build_radar_scan_embed(
             max_pain_strike = 0.0
             dist_pct = 0.0
             cb_triggered = False
+            mp_is_stale = False
+            mp_is_degraded = False
+            mp_age_seconds = None
 
             if is_fixed_income:
                 max_pain_strike = 0.0
@@ -548,6 +561,22 @@ def build_radar_scan_embed(
                 mp_val = mp_data.get("max_pain")
                 max_pain_strike = float(mp_val) if mp_val is not None else 0.0
                 cb_triggered = mp_data.get("circuit_breaker_triggered", False)
+                mp_is_stale = bool(mp_data.get("is_stale", False))
+                mp_is_degraded = bool(
+                    mp_data.get("is_degraded", False)
+                    or mp_data.get("calculation_mode", "OI") == "Volume"
+                )
+                mp_updated_at = mp_data.get("updated_at")
+                if mp_updated_at:
+                    try:
+                        mp_age_seconds = (
+                            datetime.now(timezone.utc)
+                            - datetime.strptime(
+                                mp_updated_at, "%Y-%m-%d %H:%M:%S"
+                            ).replace(tzinfo=timezone.utc)
+                        ).total_seconds()
+                    except Exception:
+                        mp_age_seconds = None
                 if max_pain_strike > 0 and price_val > 0:
                     dist_pct = (price_val - max_pain_strike) / max_pain_strike * 100
             elif isinstance(mp_data, (float, int)):
@@ -1331,7 +1360,20 @@ def build_radar_scan_embed(
                 or any(mark in status_label for mark in ["⚠️", "🚨", "🛑"])
                 or cb_triggered
             )
-            sym_cell_md = f"⚠️ {sym}" if is_high_risk_or_anomaly else sym
+            # 資料新鮮度標示 (🕓)：與上方「結構性風險」⚠️ 刻意分開，避免把「資料只是
+            # 舊了」和「真正的結構性風險」混為一談，誤導使用者過度反應舊資料。
+            is_data_stale_or_degraded = (
+                mp_is_stale or mp_is_degraded or gex_is_stale or uoa_is_stale
+            )
+            if is_data_stale_or_degraded:
+                age_note = format_cache_age_suffix(mp_age_seconds)
+                tag = age_note if age_note else " [快取 / API 降級]"
+                insights.append(
+                    f"• 🕓 {sym}: 本列數據{tag}，Max Pain/GEX/UOA 判讀可能非即時，請謹慎採信灰階建議。"
+                )
+            risk_prefix = "⚠️" if is_high_risk_or_anomaly else ""
+            freshness_prefix = "🕓" if is_data_stale_or_degraded else ""
+            sym_cell_md = f"{risk_prefix}{freshness_prefix} {sym}".strip()
 
             md_line = f"| {sym_cell_md} | {price_str_md} | {g_p_wall_str} | {skew_pct_str} | {sqz_vec_str} | {neg_gex_str} | {sto_str} | {iv_strategy_str} | {em_z_score_str} | {top_uoa_str} | {tactical_adv} |"
             md_lines.append(md_line)
@@ -1441,6 +1483,7 @@ def build_radar_scan_embed(
         # 獨立風控圖例與指標指引欄位 (避免擠佔表格 codeblock 字元數)
         legend_notes = (
             "提示: ⚠️ 代表與最大痛點偏離度過高（>10%）或具備異常籌碼結構，需點擊穿透審查。\n"
+            "提示: 🕓 代表該標的本列存在快取/降級數據 (Max Pain/GEX/UOA)，詳見下方即時聯動警示。\n"
             "備註: EM Pos % 代表價格處於預期波動區間之下緣(0%)或上緣(100%)。\n"
             "指標: SQZ 🟢多頭動能/🔴空頭動能。MOM 顯示數值代表處於擠壓蓄力期，需防突破或殺跌。\n"
             "風控: 🛑 離場判定鐵律：嚴守 15 分鐘實體 K 線收盤撤退線 (過濾下影線流動性獵殺)。"

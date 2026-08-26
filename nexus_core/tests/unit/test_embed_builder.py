@@ -1298,6 +1298,124 @@ def test_build_radar_scan_embed_with_none_values() -> None:
     assert "CRASH" in get_embed_text(embed)
 
 
+def test_build_radar_scan_embed_marks_stale_max_pain_with_freshness_prefix() -> None:
+    """market_cache.is_stale=True 應在標的列渲染 🕓 新鮮度前綴，並於 Real-time
+    Insights 附上提示，且不與代表結構性風險的 ⚠️ 前綴混用。"""
+    scan_results = [
+        {
+            "symbol": "STALESYM",
+            "quote": {"c": 100.0, "dp": 0.0},
+            "iv_metrics": {"iv_rank": 40.0, "expected_move_weekly": 3.0},
+            "skew": 0.0,
+            "max_pain": {
+                "max_pain": 100.0,
+                "distance_pct": 0.0,
+                "is_stale": True,
+                "calculation_mode": "OI",
+                "is_degraded": False,
+                "circuit_breaker_triggered": False,
+            },
+        },
+    ]
+
+    embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
+    text = get_embed_text(embeds[0])
+    assert "🕓" in text
+    assert "STALESYM" in text
+    assert "本列數據" in text
+
+
+def test_build_radar_scan_embed_marks_volume_degraded_max_pain() -> None:
+    """market_cache.calculation_mode == 'Volume' (OI 資料不可用降級) 應同樣觸發
+    🕓 新鮮度標記，即使 is_stale 本身為 False。"""
+    scan_results = [
+        {
+            "symbol": "VOLDEG",
+            "quote": {"c": 50.0, "dp": 0.0},
+            "iv_metrics": {"iv_rank": 30.0, "expected_move_weekly": 1.5},
+            "skew": 0.0,
+            "max_pain": {
+                "max_pain": 50.0,
+                "distance_pct": 0.0,
+                "is_stale": False,
+                "calculation_mode": "Volume",
+                "is_degraded": True,
+                "circuit_breaker_triggered": False,
+            },
+        },
+    ]
+
+    embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
+    text = get_embed_text(embeds[0])
+    assert "🕓" in text
+    assert "VOLDEG" in text
+
+
+def test_build_radar_scan_embed_marks_stale_gex_cache() -> None:
+    """gex_metrics._is_stale_cache=True（GEX edge scraper 快取過期回退）應觸發
+    同一套 🕓 新鮮度標記，即使 Max Pain 本身是新鮮的。"""
+    scan_results = [
+        {
+            "symbol": "GEXSTALE",
+            "quote": {"c": 75.0, "dp": 0.0},
+            "iv_metrics": {"iv_rank": 20.0, "expected_move_weekly": 2.0},
+            "skew": 0.0,
+            "max_pain": {
+                "max_pain": 75.0,
+                "distance_pct": 0.0,
+                "is_stale": False,
+                "calculation_mode": "OI",
+                "is_degraded": False,
+                "circuit_breaker_triggered": False,
+            },
+            "gex_metrics": {
+                "put_wall": 70.0,
+                "call_wall": 80.0,
+                "net_gex": 1_000_000.0,
+                "_is_stale_cache": True,
+            },
+        },
+    ]
+
+    embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
+    text = get_embed_text(embeds[0])
+    assert "🕓" in text
+    assert "GEXSTALE" in text
+
+
+def test_build_radar_scan_embed_no_freshness_marker_when_data_is_fresh() -> None:
+    """基準案例：所有新鮮度旗標皆為 False/None 時，該標的列本身不應被標上 🕓
+    前綴，也不應觸發即時聯動警示提示（表格頁尾的固定圖例說明文字本身一律存在，
+    不在本測試驗證範圍內）。"""
+    scan_results = [
+        {
+            "symbol": "FRESHSYM",
+            "quote": {"c": 60.0, "dp": 0.0},
+            "iv_metrics": {"iv_rank": 45.0, "expected_move_weekly": 2.0},
+            "skew": 0.0,
+            "max_pain": {
+                "max_pain": 60.0,
+                "distance_pct": 0.0,
+                "is_stale": False,
+                "calculation_mode": "OI",
+                "is_degraded": False,
+                "circuit_breaker_triggered": False,
+            },
+            "gex_metrics": {
+                "put_wall": 55.0,
+                "call_wall": 65.0,
+                "net_gex": 500_000.0,
+                "_is_stale_cache": False,
+            },
+        },
+    ]
+
+    embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
+    text = get_embed_text(embeds[0])
+    assert "🕓 FRESHSYM" not in text
+    assert "本列數據" not in text
+
+
 def test_build_radar_scan_embed_renders_field_formulas_consistently() -> None:
     """驗算雷達主欄位算式：EM Pos%、D-MP%、DTE/Event Prem、最近結構牆位距離。"""
     scan_results = [
@@ -2516,6 +2634,84 @@ def test_create_watchlist_signal_embed_non_degraded() -> None:
     assert "OI PCR (結構防禦): 0.90" in desc
 
 
+def test_create_watchlist_signal_embed_marks_stale_max_pain_with_age() -> None:
+    """max_pain_data.is_stale=True 搭配 updated_at 應在心跳的 Max Pain 行同時
+    顯示 [快取 / API 降級] 標記與人類可讀的資料年齡（回應使用者要求：不只顯示
+    是否降級，也要能看到快取資料實際的日期時間）。"""
+    from models.schemas import EnhancedWatchlistMetrics
+    from models.quant import IVMetrics
+    from datetime import datetime, timedelta, timezone
+
+    metrics = EnhancedWatchlistMetrics(
+        symbol="AAPL",
+        exchange="NASDAQ",
+        current_price=150.0,
+        buy_zone_status="🟢 買點支撐",
+        buy_price_phase1=140.0,
+        buy_price_phase2=135.0,
+        buy_price_phase3=130.0,
+        sell_zone_status="🟢 賣點壓力",
+        sell_price_phase1=160.0,
+        sell_price_phase2=165.0,
+        sell_price_phase3=170.0,
+        pe_ratio=30.0,
+        rsi_14=50.0,
+        atr_14=3.0,
+        beta=1.0,
+        ma20=148.0,
+        ma50=145.0,
+        ma200=140.0,
+        iv_rank=25.0,
+        iv_percentile=30.0,
+        option_skew=2.5,
+        skew_percentile=60.0,
+        option_skew_state="正常",
+        pcr=0.8,
+        volume_poc=145.0,
+        gex_max_put_wall=130.0,
+        vanna_sensitivity=0.05,
+        relative_strength_spy=1.0,
+        iv_source="LIVE_IV",
+        is_premarket=False,
+        volume_pcr=0.8,
+        oi_pcr=0.9,
+    )
+    iv_metrics = IVMetrics(
+        symbol="AAPL",
+        current_iv=0.35,
+        iv_rank=25.0,
+        iv_percentile=30.0,
+        expected_move_weekly=5.0,
+        iv_status="Normal",
+        is_premarket=False,
+        iv_source="LIVE_IV",
+        reference_spot_price=150.0,
+    )
+
+    stale_ts = (datetime.now(timezone.utc) - timedelta(minutes=42)).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    embed = create_watchlist_signal_embed(
+        symbol="AAPL",
+        metrics=metrics,
+        iv_metrics=iv_metrics,
+        alert_level="green",
+        max_pain_data={
+            "max_pain": 145.0,
+            "distance_pct": 3.45,
+            "is_stale": True,
+            "calculation_mode": "OI",
+            "is_degraded": False,
+            "circuit_breaker_triggered": False,
+            "updated_at": stale_ts,
+        },
+    )
+
+    desc = get_embed_text(embed) or ""
+    assert "[快取 / API 降級" in desc
+    assert "分鐘前" in desc
+
+
 def test_create_telemetry_alignment_embeds() -> None:
     from cogs.embed_builders.order_embeds import create_telemetry_alignment_embeds
 
@@ -2625,6 +2821,85 @@ def test_create_tactical_symbol_embed_string_expected_move() -> None:
         assert "NVDA" in embed.title
     except TypeError as e:
         pytest.fail(f"Embed creation failed with type error: {e}")
+
+
+def test_create_tactical_symbol_embed_marks_stale_uoa_field() -> None:
+    """uoa_age_seconds 超過 30 分鐘門檻時，UOA 欄位名稱應附上資料年齡標記
+    （回應使用者要求：能看到快取資料實際的日期時間，而不只是布林警告）。"""
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data = {
+        "symbol": "NVDA",
+        "iv_data": {
+            "current_iv": 0.5,
+            "iv_rank": 50.0,
+            "iv_percentile": 60.0,
+            "expected_move_weekly": 10.0,
+            "iv_status": "Normal",
+        },
+        "expected_move_context": {"reference_price": 100.0},
+        "uoa": [],
+        "uoa_age_seconds": 3600.0,  # 1 小時前，超過 1800 秒門檻
+    }
+
+    embed = create_tactical_symbol_embed(data)
+    field_names = [f.name for f in embed.fields if f.name is not None]
+    matching = [n for n in field_names if "異常活動 (UOA)" in n]
+    assert matching, f"找不到 UOA 欄位，現有欄位: {field_names}"
+    assert "小時前" in matching[0]
+
+
+def test_create_tactical_symbol_embed_fresh_uoa_shows_just_fetched_marker() -> None:
+    """uoa_age_seconds=0.0（即時抓取，如背景排程 slow path）應顯示「剛剛」
+    而非降級警告字樣 —— 年齡標記本身永遠附上（回應使用者要求可看到實際資料
+    時間），但不應與 [快取 / API 降級] 的警告語氣混淆。"""
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data = {
+        "symbol": "AMD",
+        "iv_data": {
+            "current_iv": 0.4,
+            "iv_rank": 40.0,
+            "iv_percentile": 50.0,
+            "expected_move_weekly": 8.0,
+            "iv_status": "Normal",
+        },
+        "expected_move_context": {"reference_price": 90.0},
+        "uoa": [],
+        "uoa_age_seconds": 0.0,
+    }
+
+    embed = create_tactical_symbol_embed(data)
+    field_names = [f.name for f in embed.fields if f.name is not None]
+    matching = [n for n in field_names if "異常活動 (UOA)" in n]
+    assert matching, f"找不到 UOA 欄位，現有欄位: {field_names}"
+    assert "剛剛" in matching[0]
+    assert "降級" not in matching[0]
+
+
+def test_create_tactical_symbol_embed_no_uoa_age_marker_when_age_unknown() -> None:
+    """uoa_age_seconds 完全未提供（None）時，無法判斷資料年齡，不應顯示任何
+    年齡標記，以免誤導使用者資料是新鮮的。"""
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data = {
+        "symbol": "AMD",
+        "iv_data": {
+            "current_iv": 0.4,
+            "iv_rank": 40.0,
+            "iv_percentile": 50.0,
+            "expected_move_weekly": 8.0,
+            "iv_status": "Normal",
+        },
+        "expected_move_context": {"reference_price": 90.0},
+        "uoa": [],
+    }
+
+    embed = create_tactical_symbol_embed(data)
+    field_names = [f.name for f in embed.fields if f.name is not None]
+    matching = [n for n in field_names if "異常活動 (UOA)" in n]
+    assert matching, f"找不到 UOA 欄位，現有欄位: {field_names}"
+    assert matching[0] == "🐋 異常活動 (UOA)"
 
 
 def test_create_tactical_symbol_embed_string_reference_price() -> None:

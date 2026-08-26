@@ -14,8 +14,16 @@ from typing import Dict, List
 
 from cogs.embed_builders._ansi_utils import _pad_string
 from cogs.embed_builders._embed_helpers import _safe_embed_field_value
-from cogs.embed_builders._core import NexusEmbed
+from cogs.embed_builders._core import (
+    NexusEmbed,
+    format_market_cache_freshness_suffix,
+    format_cache_age_suffix,
+)
 from database.market_cache import get_market_cache
+
+# UOA kv_cache 新鮮度門檻：與 market_embeds.py 的 _UOA_DARKPOOL_MAX_AGE_SECONDS
+# 保持一致（15 分鐘心跳週期的 2 倍緩衝），避免兩處各自維護不同步的數值。
+_UOA_MAX_AGE_SECONDS: float = 1800.0
 
 
 def _classify_watchlist_cache_tag(
@@ -292,7 +300,25 @@ def create_watchlist_signal_embed(
         else:
             max_pain = float(mp_val)
             pain_dist = float(max_pain_data.get("distance_pct") or 0.0)
-            max_pain_str = f"${max_pain:.2f} (當前價差: {pain_dist:+.2f}%)"
+            mp_updated_at = max_pain_data.get("updated_at")
+            mp_age_seconds = None
+            if mp_updated_at:
+                try:
+                    mp_age_seconds = (
+                        datetime.now(timezone.utc)
+                        - datetime.strptime(mp_updated_at, "%Y-%m-%d %H:%M:%S").replace(
+                            tzinfo=timezone.utc
+                        )
+                    ).total_seconds()
+                except Exception:
+                    mp_age_seconds = None
+            freshness_suffix = format_market_cache_freshness_suffix(
+                is_stale=bool(max_pain_data.get("is_stale", False)),
+                is_degraded=bool(max_pain_data.get("is_degraded", False)),
+                calculation_mode=max_pain_data.get("calculation_mode", "OI"),
+            )
+            age_suffix = format_cache_age_suffix(mp_age_seconds)
+            max_pain_str = f"${max_pain:.2f}{freshness_suffix}{age_suffix} (當前價差: {pain_dist:+.2f}%)"
     else:
         max_pain_str = "N/A (⚠️ 數據源缺失)"
 

@@ -907,3 +907,40 @@ async def test_calculate_max_pain_split_anomaly_and_degradation() -> None:
         )
         assert any_downgrading, "Should log Data integrity degraded (Valid OI too low)"
         assert result3["max_pain"] is not None
+
+
+@pytest.mark.asyncio
+async def test_get_unified_max_pain_cache_hit_carries_updated_at() -> None:
+    """快取命中路徑應把 market_cache.updated_at 一併帶入回傳字典，讓下游
+    embed builder 能顯示快取資料實際的日期時間，而不只是布林式降級標記。
+
+    刻意透過真實 SQLite 寫入 (database.market_cache.save_market_cache) 而非
+    mock get_market_cache：get_unified_max_pain 內部有 is_mock 偵測邏輯，
+    在 pytest 環境下若 get_market_cache 被 mock 會強制跳過快取命中分支、
+    改走即時計算路徑，因此必須用真實資料庫寫入才能命中該分支。"""
+    from market_analysis.sentiment.max_pain import get_unified_max_pain
+    from database.market_cache import save_market_cache
+
+    assert save_market_cache(
+        symbol="MPFRESH",
+        max_pain=100.0,
+        expected_move_lower=95.0,
+        expected_move_upper=105.0,
+        reference_spot_price=100.0,
+        is_stale=0,
+        calculation_mode="OI",
+        is_degraded=0,
+        circuit_breaker_triggered=0,
+        expiry="WEEKLY",
+    )
+
+    with patch(
+        "services.market_data_service.get_quote",
+        new_callable=AsyncMock,
+        return_value={"c": 100.0},
+    ):
+        result = await get_unified_max_pain("MPFRESH", expiry="WEEKLY")
+
+    assert result["max_pain"] == 100.0
+    assert result["updated_at"] is not None
+    assert isinstance(result["updated_at"], str)

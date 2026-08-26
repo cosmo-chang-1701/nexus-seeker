@@ -60,6 +60,34 @@ def get_kv_cache(key: str) -> Optional[Any]:
     return None
 
 
+def get_kv_cache_with_age(key: str) -> tuple[Optional[Any], Optional[float]]:
+    """同 get_kv_cache()，但額外回傳資料年齡（秒），供新鮮度標示與時間戳顯示共用。
+    查無資料或 updated_at 解析失敗時，年齡回傳 None（而非誤判為新鮮）。"""
+    conn = None
+    try:
+        conn = get_read_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT value, updated_at FROM kv_cache WHERE key = ?", (key,))
+        row = cursor.fetchone()
+        if row:
+            value = json.loads(row[0])
+            age_seconds: Optional[float] = None
+            try:
+                updated_dt = datetime.strptime(row[1], "%Y-%m-%d %H:%M:%S").replace(
+                    tzinfo=timezone.utc
+                )
+                age_seconds = (datetime.now(timezone.utc) - updated_dt).total_seconds()
+            except Exception:
+                pass
+            return value, age_seconds
+    except Exception as e:
+        logger.error(f"get_kv_cache_with_age 失敗 (key: {key}): {e}")
+    finally:
+        if conn:
+            conn.close()
+    return None, None
+
+
 async def purge_stale_kv_cache_dedup_keys(older_than_days: int = 3) -> int:
     """清除 _KV_CACHE_DEDUP_KEY_PREFIXES 白名單前綴下、且 updated_at 早於
     older_than_days 天前的一次性每日去重旗標記錄，避免 kv_cache 無界成長。
@@ -93,5 +121,6 @@ __all__ = [
     "purge_old_cache",
     "save_kv_cache",
     "get_kv_cache",
+    "get_kv_cache_with_age",
     "purge_stale_kv_cache_dedup_keys",
 ]

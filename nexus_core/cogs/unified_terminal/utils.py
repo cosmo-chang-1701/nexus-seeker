@@ -132,6 +132,14 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
 
     gamma_flip_line = gamma_flip_line or 5180.0
 
+    # 此處刻意不直接沿用上方 fetch_gex_metrics() 回傳值的 `_is_stale_cache`
+    # （若有呼叫的話）：該呼叫只在 macro_gamma_flip_line 快取未命中時才會執行，
+    # 多數渲染回合會直接跳過整個 if 區塊，故無法作為穩定訊號。改讀
+    # macro_gex_is_fallback —— 此鍵由 index_microstructure.fetch_gex_metrics()
+    # 內部每次呼叫（不論在系統何處被觸發）都無條件寫入，是唯一能反映「最近一次
+    # 實際 macro GEX 抓取是否降級」的持久跨呼叫訊號。若改為在此無條件呼叫
+    # fetch_gex_metrics() 以直接取得新鮮的 `_is_stale_cache`，會重新引入這段
+    # 條件式原本刻意避免的每次渲染網路/爬蟲成本。
     gex_fallback_val = get_kv_cache("macro_gex_is_fallback")
     gex_is_fallback = gex_fallback_val is None or int(gex_fallback_val) == 1
 

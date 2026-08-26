@@ -4,7 +4,7 @@
 所有子模組皆應改用 `NexusEmbed` 取代 `discord.Embed` 來建立 Embed 物件。
 """
 
-from typing import Any
+from typing import Any, Optional
 import discord
 
 from datetime import datetime, timezone
@@ -248,3 +248,53 @@ class NexusEmbed(discord.Embed):
         result["fields"] = fields
 
         return result
+
+
+# ============================================================================
+# 期權資料新鮮度標示共用 Helper
+#
+# 供各 embed_builders 子模組共用的快取新鮮度／降級／時間戳後綴產生函式，
+# 統一全站對「資料是否即時」的視覺語彙，避免各模組各自寫死不一致的字串。
+# ============================================================================
+
+
+def format_gex_stale_suffix(is_stale_cache: bool) -> str:
+    """GEX 快取降級標記後綴，供讀取 `_is_stale_cache` 旗標的 embed builder 共用。"""
+    return " [快取 / API 降級]" if is_stale_cache else ""
+
+
+def format_market_cache_freshness_suffix(
+    is_stale: bool = False,
+    is_degraded: bool = False,
+    calculation_mode: str = "OI",
+    circuit_breaker_triggered: bool = False,
+) -> str:
+    """market_cache 表 (Max Pain) 新鮮度/降級標記後綴。優先序：斷路器 > OI 降級 > 快取過期。"""
+    if circuit_breaker_triggered:
+        return " (已觸發斷路器)"
+    if is_degraded or calculation_mode == "Volume":
+        return " (Volume 降級)"
+    if is_stale:
+        return " [快取 / API 降級]"
+    return ""
+
+
+def format_cache_age_suffix(
+    age_seconds: Optional[float], stale_threshold_seconds: Optional[float] = None
+) -> str:
+    """依快取資料年齡回傳人類可讀時間戳後綴，讓使用者能看到資料實際的日期時間，
+    而不只是一個「是否降級」的布林標記。age_seconds 為 None 時回傳空字串
+    （無法判斷年齡，避免誤導使用者資料是新鮮的）。若提供 stale_threshold_seconds
+    且已超過門檻，額外附上降級標記。"""
+    if age_seconds is None or age_seconds < 0:
+        return ""
+    minutes = int(age_seconds // 60)
+    if minutes < 1:
+        age_str = "剛剛"
+    elif minutes < 60:
+        age_str = f"{minutes}分鐘前"
+    else:
+        age_str = f"{minutes // 60}小時前"
+    if stale_threshold_seconds is not None and age_seconds >= stale_threshold_seconds:
+        return f" [快取 / API 降級，更新於{age_str}]"
+    return f" (更新於{age_str})"

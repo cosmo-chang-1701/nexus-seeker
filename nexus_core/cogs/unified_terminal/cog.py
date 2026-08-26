@@ -869,10 +869,12 @@ class UnifiedTerminalCog(commands.Cog):
         """
         Fast Track 讀取：抓取即時報價並從多個 SQLite 快取 (radar, market, kv, squeeze) 縫合數據。
         """
+        import time
         from services import market_data_service
+        from services.market_data_service import _EDGE_SNAPSHOT_MAX_AGE_SECONDS
         from database.market_cache import get_market_cache
         from database.squeeze_cache import get_squeeze_cache
-        from database.cache import get_kv_cache
+        from database.cache import get_kv_cache, get_kv_cache_with_age
         from datetime import datetime
 
         quote = await market_data_service.get_quote(sym)
@@ -884,9 +886,17 @@ class UnifiedTerminalCog(commands.Cog):
         squeeze_cache = get_squeeze_cache(sym)
         gex_cached = get_kv_cache(f"gex_metrics_{sym.upper()}") or {}
         gex_data = gex_cached.get("data", {}) if isinstance(gex_cached, dict) else {}
+        # Fast path 讀取 gex_metrics_{sym} 為未經 fetch_symbol_gex_metrics() 的原始
+        # kv_cache 讀取，繞過了該函式內建的新鮮度檢查；這裡直接利用信封本身已內含的
+        # timestamp（寫入端見 index_microstructure.py）自行判斷是否過期，門檻沿用
+        # 與該函式相同的 _EDGE_SNAPSHOT_MAX_AGE_SECONDS，避免此層另立不同步的門檻。
+        gex_is_stale = bool(gex_cached) and (
+            time.time() - gex_cached.get("timestamp", 0)
+            >= _EDGE_SNAPSHOT_MAX_AGE_SECONDS
+        )
 
         uoa_data: list[Any] = []
-        uoa_cached = get_kv_cache(f"uoa_{sym.upper()}")
+        uoa_cached, uoa_age_seconds = get_kv_cache_with_age(f"uoa_{sym.upper()}")
         if uoa_cached is not None and isinstance(uoa_cached, list):
             uoa_data = list(uoa_cached)
         elif radar_cache.get("uoa") is not None and isinstance(
@@ -975,13 +985,14 @@ class UnifiedTerminalCog(commands.Cog):
             squeeze_cache = {}
 
         darkpool_cached = get_kv_cache(f"darkpool_{sym.upper()}") or {}
-        dp_poc_val = get_kv_cache(f"dp_poc_{sym.upper()}")
+        dp_poc_val, dp_poc_age_seconds = get_kv_cache_with_age(f"dp_poc_{sym.upper()}")
         if dp_poc_val is None:
             dp_poc_val = (
                 darkpool_cached.get("dp_poc")
                 or radar_cache.get("hvn_price")
                 or get_kv_cache(f"volume_poc_{sym.upper()}")
             )
+            dp_poc_age_seconds = None
         dp_poc = float(dp_poc_val) if dp_poc_val is not None else 0.0
 
         today_str = datetime.now().strftime("%Y-%m-%d")
@@ -1127,11 +1138,20 @@ class UnifiedTerminalCog(commands.Cog):
                 "distance_pct": ((price - mp_near) / mp_near) * 100
                 if mp_near and mp_near > 0
                 else 0.0,
+                "is_stale": bool(market_cache.get("is_stale", 0)),
+                "calculation_mode": market_cache.get("calculation_mode", "OI"),
+                "is_degraded": bool(market_cache.get("is_degraded", 0)),
+                "circuit_breaker_triggered": bool(
+                    market_cache.get("circuit_breaker_triggered", 0)
+                ),
+                "updated_at": market_cache.get("updated_at"),
             },
             "iv_metrics": iv_metrics,
             "iv_data": iv_metrics,
             "uoa": uoa_data,
+            "uoa_age_seconds": uoa_age_seconds,
             "darkpool": darkpool_cached,
+            "dp_poc_age_seconds": dp_poc_age_seconds,
             "atr_14": atr_14,
             "ma20": float(ma20_val) if ma20_val is not None else None,
             "month_max_pains": month_max_pains,
@@ -1147,6 +1167,7 @@ class UnifiedTerminalCog(commands.Cog):
                 "call_wall": call_wall,
                 "net_gex": net_gex,
                 "put_wall_gex": put_wall_gex,
+                "_is_stale_cache": gex_is_stale,
             },
             "gex_profile_data": {
                 "put_wall": put_wall,
@@ -1156,6 +1177,7 @@ class UnifiedTerminalCog(commands.Cog):
                 "put_wall_gex": put_wall_gex,
                 "positive_gex_below": pos_gex_below,
                 "overhead_neg_gex_swamp": overhead_neg_swamp,
+                "_is_stale_cache": gex_is_stale,
             },
             "vp_data": {
                 "hvn": radar_cache.get("hvn_price")
@@ -1383,9 +1405,9 @@ class UnifiedTerminalCog(commands.Cog):
                     )
 
         # 讀取 DP-POC (暗池共振)
-        from database.cache import get_kv_cache
+        from database.cache import get_kv_cache_with_age
 
-        dp_poc_val = get_kv_cache(f"dp_poc_{sym.upper()}")
+        dp_poc_val, dp_poc_age_seconds = get_kv_cache_with_age(f"dp_poc_{sym.upper()}")
         dp_poc = float(dp_poc_val) if dp_poc_val is not None else 0.0
 
         # 重複利用 df_hist 計算 Volume Profile (HVN/LVN)
@@ -1424,6 +1446,7 @@ class UnifiedTerminalCog(commands.Cog):
             "put_wall_gex": pw_gex,
             "max_pain": mp_data,
             "uoa": uoa_data,
+            "uoa_age_seconds": 0.0,
             "gex_profile_data": {
                 "put_wall": gex_data.get("put_wall")
                 if isinstance(gex_data, dict)
@@ -1438,6 +1461,9 @@ class UnifiedTerminalCog(commands.Cog):
                 "put_wall_gex": pw_gex,
                 "positive_gex_below": pos_gex_below,
                 "overhead_neg_gex_swamp": overhead_neg_swamp,
+                "_is_stale_cache": bool(gex_data.get("_is_stale_cache", False))
+                if isinstance(gex_data, dict)
+                else False,
             },
             "gex_metrics": {
                 "put_wall": gex_data.get("put_wall")
@@ -1450,9 +1476,13 @@ class UnifiedTerminalCog(commands.Cog):
                 if isinstance(gex_data, dict)
                 else 0.0,
                 "put_wall_gex": pw_gex,
+                "_is_stale_cache": bool(gex_data.get("_is_stale_cache", False))
+                if isinstance(gex_data, dict)
+                else False,
             },
             "psq_result": psq_res,
             "dp_poc": dp_poc,
+            "dp_poc_age_seconds": dp_poc_age_seconds,
             "ma20": ema_21,
             "atr_14": atr_14,
             "nearest_dte": nearest_dte,
