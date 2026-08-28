@@ -1401,15 +1401,16 @@ def test_estimate_symbol_gamma_flip_finds_zero_crossing() -> None:
     assert estimate_symbol_gamma_flip(gex_profile, spot=97.0) == 95.0
 
 
-def test_estimate_symbol_gamma_flip_all_positive_no_crossing() -> None:
-    """全數為正 GEX (無負轉正交叉點) -> 回傳 0.0"""
-    gex_profile = {"90": 10.0, "95": 20.0, "100": 30.0}
-    assert estimate_symbol_gamma_flip(gex_profile, spot=95.0) == 0.0
-
-
-def test_estimate_symbol_gamma_flip_all_negative_no_crossing() -> None:
-    """全數為負 GEX (無交叉點) -> 回傳 0.0"""
-    gex_profile = {"90": -10.0, "95": -20.0, "100": -5.0}
+@pytest.mark.parametrize(
+    "gex_profile",
+    [
+        {"90": 10.0, "95": 20.0, "100": 30.0},
+        {"90": -10.0, "95": -20.0, "100": -5.0},
+    ],
+    ids=["all_positive", "all_negative"],
+)
+def test_estimate_symbol_gamma_flip_no_crossing(gex_profile: dict) -> None:
+    """全數同號 GEX (無負轉正交叉點) -> 回傳 0.0"""
     assert estimate_symbol_gamma_flip(gex_profile, spot=95.0) == 0.0
 
 

@@ -25,35 +25,32 @@ from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
 
 
 @pytest.mark.asyncio
-async def test_nvda_alias_and_query_generation() -> None:
-    """驗證 NVDA 別名解析與 Reddit Boolean Search Query 構建。"""
-    aliases: List[str] = await StockAliasMatrix.get_aliases_for_symbol("NVDA")
-    assert "nvda" in aliases
-    assert "nvidia" in aliases
-    assert "jensen huang" in aliases
-    assert "blackwell" in aliases
+@pytest.mark.parametrize(
+    "symbol, expected_aliases, expected_query_terms",
+    [
+        (
+            "NVDA",
+            ["nvda", "nvidia", "jensen huang", "blackwell"],
+            ['"NVDA"', '"$NVDA"', '"nvidia"', '"jensen huang"'],
+        ),
+        (
+            "TSLA",
+            ["tsla", "tesla", "elon musk", "robotaxi"],
+            ['"TSLA"', '"$TSLA"', '"tesla"', '"elon musk"'],
+        ),
+    ],
+)
+async def test_alias_and_query_generation(
+    symbol: str, expected_aliases: List[str], expected_query_terms: List[str]
+) -> None:
+    """驗證別名解析與 Reddit Boolean Search Query 構建。"""
+    aliases: List[str] = await StockAliasMatrix.get_aliases_for_symbol(symbol)
+    for expected_alias in expected_aliases:
+        assert expected_alias in aliases
 
-    query: str = StockAliasMatrix.build_reddit_query("NVDA", aliases)
-    assert '"NVDA"' in query
-    assert '"$NVDA"' in query
-    assert '"nvidia"' in query
-    assert '"jensen huang"' in query
-
-
-@pytest.mark.asyncio
-async def test_tsla_alias_and_query_generation() -> None:
-    """驗證 TSLA 別名解析與 Reddit Boolean Search Query 構建。"""
-    aliases: List[str] = await StockAliasMatrix.get_aliases_for_symbol("TSLA")
-    assert "tsla" in aliases
-    assert "tesla" in aliases
-    assert "elon musk" in aliases
-    assert "robotaxi" in aliases
-
-    query: str = StockAliasMatrix.build_reddit_query("TSLA", aliases)
-    assert '"TSLA"' in query
-    assert '"$TSLA"' in query
-    assert '"tesla"' in query
-    assert '"elon musk"' in query
+    query: str = StockAliasMatrix.build_reddit_query(symbol, aliases)
+    for term in expected_query_terms:
+        assert term in query
 
 
 def test_reddit_post_keyword_matching_nvda_and_tsla() -> None:
@@ -92,8 +89,25 @@ def test_reddit_post_keyword_matching_nvda_and_tsla() -> None:
 
 
 @pytest.mark.asyncio
-async def test_nvda_llm_sentiment_bullish_evaluation() -> None:
-    """驗證 NVDA 散戶做多貼文被精準評定為 '🚀 樂觀 (Bullish)'。"""
+@pytest.mark.parametrize(
+    "symbol, raw_posts, expected_sentiment",
+    [
+        (
+            "NVDA",
+            "[wallstreetbets] NVDA 150 calls YOLO to the moon\n[options] Betting 50k on NVDA earnings beat",
+            "🚀 樂觀 (Bullish)",
+        ),
+        (
+            "TSLA",
+            "[wallstreetbets] TSLA crashing, buying 180 puts\n[stocks] Tesla margins destroyed by price war",
+            "💀 恐慌 (Bearish)",
+        ),
+    ],
+)
+async def test_llm_sentiment_evaluation(
+    symbol: str, raw_posts: str, expected_sentiment: str
+) -> None:
+    """驗證散戶貼文被精準評定為 LLM 回傳的結構化情緒分類。"""
     from services.llm_service import evaluate_reddit_sentiment
 
     with patch(
@@ -102,40 +116,13 @@ async def test_nvda_llm_sentiment_bullish_evaluation() -> None:
     ) as mock_parse:
         mock_parsed_obj = MagicMock()
         mock_parsed_obj.choices = [
-            MagicMock(
-                message=MagicMock(parsed=MagicMock(sentiment="🚀 樂觀 (Bullish)"))
-            )
+            MagicMock(message=MagicMock(parsed=MagicMock(sentiment=expected_sentiment)))
         ]
         mock_parse.return_value = mock_parsed_obj
 
-        raw_nvda_posts = "[wallstreetbets] NVDA 150 calls YOLO to the moon\n[options] Betting 50k on NVDA earnings beat"
-        score = await evaluate_reddit_sentiment("NVDA", raw_nvda_posts)
+        score = await evaluate_reddit_sentiment(symbol, raw_posts)
 
-        assert score == "🚀 樂觀 (Bullish)"
-        mock_parse.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_tsla_llm_sentiment_bearish_evaluation() -> None:
-    """驗證 TSLA 散戶恐慌貼文被精準評定為 '💀 恐慌 (Bearish)'。"""
-    from services.llm_service import evaluate_reddit_sentiment
-
-    with patch(
-        "services.llm_service.client.beta.chat.completions.parse",
-        new_callable=AsyncMock,
-    ) as mock_parse:
-        mock_parsed_obj = MagicMock()
-        mock_parsed_obj.choices = [
-            MagicMock(
-                message=MagicMock(parsed=MagicMock(sentiment="💀 恐慌 (Bearish)"))
-            )
-        ]
-        mock_parse.return_value = mock_parsed_obj
-
-        raw_tsla_posts = "[wallstreetbets] TSLA crashing, buying 180 puts\n[stocks] Tesla margins destroyed by price war"
-        score = await evaluate_reddit_sentiment("TSLA", raw_tsla_posts)
-
-        assert score == "💀 恐慌 (Bearish)"
+        assert score == expected_sentiment
         mock_parse.assert_called_once()
 
 

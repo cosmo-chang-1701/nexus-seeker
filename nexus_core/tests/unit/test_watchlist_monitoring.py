@@ -88,14 +88,8 @@ def test_enhanced_watchlist_metrics_rejects_invalid_phase_order() -> None:
         _sample_metrics(buy_price_phase1=120.0, buy_price_phase2=124.0)
 
 
-def test_watchlist_risk_controller_routes_premium_harvest() -> None:
-    tactical = WatchlistRiskController.process_metrics(
-        _sample_metrics(current_price=129.0, iv_rank=78.0)
-    )
-    assert tactical.scenario == "premium-harvest"
-    assert tactical.alert_level == "yellow"
-    assert "Cash-Secured Put" in tactical.action_guideline
-    assert tactical.dynamic_grid_step == 3.0
+# premium-harvest 情境的基準案例驗證見
+# tests/unit/test_watchlist_risk_controller.py::test_process_metrics_premium_harvest_without_backwardation。
 
 
 def test_watchlist_risk_controller_routes_hard_hedge() -> None:

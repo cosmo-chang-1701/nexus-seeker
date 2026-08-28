@@ -2687,21 +2687,15 @@ def test_compute_anti_washout_stop_no_clamp_when_already_breached(
     assert stop_loss == 97.0
 
 
-def test_compute_anti_washout_stop_01dte_and_lvn_regression_unchanged(
+def test_compute_anti_washout_stop_lvn_regression_unchanged(
     engine: DynamicRolloverEngine,
 ) -> None:
     """
-    回歸防護：新增的邊界鉗制不得影響既有 0/1 DTE 風險平價與 LVN 吸附機制的
-    最終輸出 (兩者刻意驗證超出 [spot*0.95, spot*0.98] 邊界的最終值)。
+    回歸防護：新增的邊界鉗制不得影響既有 LVN 吸附機制的最終輸出
+    (刻意驗證超出 [spot*0.95, spot*0.98] 邊界的最終值)。
+    0/1 DTE 風險平價的回歸驗證見
+    test_compute_anti_washout_stop_01dte_total_distance_matches_named_constant。
     """
-    stop_01dte, _l1, is_01dte, scale = engine._compute_anti_washout_stop(
-        anchor_base=100.0,
-        metrics={"spot_price": 100.0, "atr_15m": 2.0, "dte": 1, "lvn": 0.0, "hvn": 0.0},
-    )
-    assert stop_01dte == 94.0
-    assert is_01dte is True
-    assert scale == 0.5
-
     stop_lvn, _l2, _is2, _s2 = engine._compute_anti_washout_stop(
         anchor_base=100.0,
         metrics={
@@ -3302,7 +3296,8 @@ def test_maybe_append_tax_risk_note_holding_period_long_vs_short_term(
     assert "距長期門檻尚餘 265 天" in short_term_note
 
     # 未提供 holding_period_days 時完全不受影響 (向下相容既有兩個分支)
-    assert engine._maybe_append_tax_risk_note(False, False) == ""
+    # (False, False) 無 holding_period_days 的基準案例見
+    # test_maybe_append_tax_risk_note_covers_both_scenarios
     assert engine._maybe_append_tax_risk_note(False, False, None) == ""
 
 

@@ -98,32 +98,8 @@ def test_toggle_all_settings(db_conn: Any):  # type: ignore
         assert is_notification_enabled(user_id, key) is True
 
 
-def test_apply_preset_settings(db_conn: Any):  # type: ignore
-    """測試戰術預設情境模式 (all_on, all_off, focus, mute_intraday)"""
-    user_id = 999333
-
-    # 1. 精準交易 (focus)
-    settings = apply_preset_settings(user_id, "focus")
-    assert settings["briefing_pre_market"] is True
-    assert settings["briefing_post_market"] is True
-    assert settings["defense_portfolio_risk"] is True
-    assert settings["heartbeat_watchlist"] is False
-    assert settings["alpha_market_signals"] is False
-
-    # 2. 盤中靜音 (mute_intraday)
-    settings_mute = apply_preset_settings(user_id, "mute_intraday")
-    assert settings_mute["briefing_pre_market"] is True
-    assert settings_mute["heartbeat_watchlist"] is False
-    assert settings_mute["telemetry_orders"] is False
-    assert settings_mute["defense_portfolio_risk"] is True
-    assert settings_mute["defense_option_rollover"] is False
-    # 保證金強制平倉警報屬帳戶生存等級警訊，任何情境下皆不可被靜音
-    assert settings_mute["defense_margin_call"] is True
-
-    # 3. 戰備全開 (all_on)
-    settings_all = apply_preset_settings(user_id, "all_on")
-    for key in ALL_NOTIFICATION_KEYS:
-        assert settings_all[key] is True
+# 戰術預設情境模式 (all_on, all_off, focus, mute_intraday) 的完整驗證見
+# test_full_preset_assertions_all_keys（涵蓋全部 14 個 key 與全部 4 種情境）。
 
 
 @pytest.mark.asyncio

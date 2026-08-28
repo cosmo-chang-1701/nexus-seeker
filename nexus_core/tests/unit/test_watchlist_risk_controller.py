@@ -45,6 +45,8 @@ def test_process_metrics_premium_harvest_without_backwardation() -> None:
     plan = WatchlistRiskController.process_metrics(metrics)
     assert plan.scenario == "premium-harvest"
     assert plan.alert_level == "yellow"
+    assert "Cash-Secured Put" in plan.action_guideline
+    assert plan.dynamic_grid_step == 1.0  # round(atr_14=2.0 * 0.5, 2)
 
 
 def test_process_metrics_backwardation_downgrades_premium_harvest_to_wait() -> None:
