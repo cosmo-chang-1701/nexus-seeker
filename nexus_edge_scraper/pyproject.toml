@@ -28,7 +28,11 @@ dependencies = [
 ]
 
 [tool.setuptools]
-py-modules = ["local_api", "section_extractor", "yf_api"]
+py-modules = ["section_extractor", "yf_api"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["local_api*"]
 
 [tool.mypy]
 python_version = "3.12"

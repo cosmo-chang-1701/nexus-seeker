@@ -113,7 +113,11 @@ def test_scrape_symbol_gex_endpoint_still_delegates_to_core(
             "gex_profile": {},
         }
 
-    monkeypatch.setattr(local_api, "scrape_symbol_gex_core", _fake_core)
+    # scrape_symbol_gex() lives in local_api.macro and imports
+    # scrape_symbol_gex_core/async_playwright at module level there, so both
+    # patches must target local_api.macro, not the top-level local_api
+    # package (which only re-exports a snapshot taken at package-import time).
+    monkeypatch.setattr(local_api.macro, "scrape_symbol_gex_core", _fake_core)
 
     class _FakeBrowser:
         async def close(self) -> None:
@@ -134,7 +138,7 @@ def test_scrape_symbol_gex_endpoint_still_delegates_to_core(
             pass
 
     monkeypatch.setattr(
-        local_api, "async_playwright", lambda: _FakeAsyncPlaywrightCtx()
+        local_api.macro, "async_playwright", lambda: _FakeAsyncPlaywrightCtx()
     )
 
     response = client.get("/api/v1/scrape/options/AAPL/gex")

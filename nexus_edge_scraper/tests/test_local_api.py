@@ -156,8 +156,14 @@ def test_scrape_reddit_feed_retries_on_429_then_caches_result() -> None:
 
 
 def test_scrape_gex_fallback() -> None:
-    # Mock playwright to fail at context creation inside try-except
-    with patch("local_api.async_playwright", return_value=AsyncContextManagerMock()):
+    # Mock playwright to fail at context creation inside try-except.
+    # scrape_gex() lives in local_api.macro and imports async_playwright at
+    # module level there, so the patch target must be local_api.macro, not
+    # the top-level local_api package (which only re-exports a snapshot of
+    # the name taken at package-import time).
+    with patch(
+        "local_api.macro.async_playwright", return_value=AsyncContextManagerMock()
+    ):
         response = client.get("/api/v1/scrape/macro/gex")
         assert response.status_code == 200
         data = response.json()

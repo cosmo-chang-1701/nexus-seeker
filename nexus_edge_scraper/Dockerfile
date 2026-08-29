@@ -17,7 +17,8 @@ RUN mkdir -p /ms-playwright && \
     playwright install chromium && \
     playwright install-deps chromium
 
-COPY local_api.py section_extractor.py yf_api.py database.py gex_scraper.py scheduler.py ./
+COPY local_api ./local_api
+COPY section_extractor.py yf_api.py database.py gex_scraper.py scheduler.py ./
 COPY tests ./tests
 
 RUN groupadd -g 1001 appuser && \
