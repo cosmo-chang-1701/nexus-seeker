@@ -7,6 +7,7 @@ import re
 from typing import Dict, List, Optional, Set
 
 from database.cache import get_kv_cache, save_kv_cache
+from services.bounded_cache import BoundedCache
 from services.market_data_service import get_company_profile
 
 logger = logging.getLogger(__name__)
@@ -225,7 +226,7 @@ class StockAliasMatrix:
         "east",
     }
 
-    _dynamic_alias_cache: Dict[str, List[str]] = {}
+    _dynamic_alias_cache: BoundedCache = BoundedCache(max_size=1000)
 
     @classmethod
     async def get_aliases_for_symbol(cls, symbol: str) -> List[str]:
@@ -253,7 +254,7 @@ class StockAliasMatrix:
             cached = get_kv_cache(f"stock_aliases_{sym_clean}")
             if cached and isinstance(cached, list):
                 cls._dynamic_alias_cache[sym_clean] = [str(x) for x in cached]
-                return cls._dynamic_alias_cache[sym_clean]
+                return list(cls._dynamic_alias_cache[sym_clean])
         except Exception as e:
             logger.debug(f"Failed to load aliases from kv_cache for {sym_clean}: {e}")
 

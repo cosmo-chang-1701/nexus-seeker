@@ -245,7 +245,13 @@ class HedgeMonitorService:
         """
         # We can use a simplified call to llm_service
         try:
-            from services.llm_service import client, LLM_MODEL_NAME
+            from services.llm_service import client, LLM_MODEL_NAME, is_memory_safe
+
+            if not is_memory_safe():
+                logger.warning(
+                    "🛡️ [Hedge Monitor] 記憶體水位過高 (RAM > 85%)，跳過 LLM 敘述生成，改用預設文案。"
+                )
+                return "市場波動劇烈，組合 Delta 已偏離中性。建議執行對沖以鎖定風險。"
 
             response = await client.chat.completions.create(
                 model=LLM_MODEL_NAME,

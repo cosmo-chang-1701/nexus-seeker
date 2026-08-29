@@ -606,20 +606,22 @@ async def scrape_core_macro_metrics() -> dict[str, Any]:
             browser = await p.chromium.launch(
                 headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"]
             )
-            context = await browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-                accept_downloads=True,
-            )
-            await Stealth().apply_stealth_async(context)
+            try:
+                context = await browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+                    accept_downloads=True,
+                )
+                await Stealth().apply_stealth_async(context)
 
-            rrp_data, walcl, unrate, sahm, fgi = await asyncio.gather(
-                fetch_fred_csv_all("RRPONTSYD", context),
-                fetch_fred_csv("WALCL", context),
-                fetch_fred_csv("UNRATE", context),
-                fetch_fred_csv("SAHMREALTIME", context),
-                fetch_cnn_fgi(),
-            )
-            await browser.close()
+                rrp_data, walcl, unrate, sahm, fgi = await asyncio.gather(
+                    fetch_fred_csv_all("RRPONTSYD", context),
+                    fetch_fred_csv("WALCL", context),
+                    fetch_fred_csv("UNRATE", context),
+                    fetch_fred_csv("SAHMREALTIME", context),
+                    fetch_cnn_fgi(),
+                )
+            finally:
+                await browser.close()
 
         rrp = rrp_data[0][1] if rrp_data else None
         rrp_change = 0.0
@@ -702,18 +704,20 @@ async def scrape_liquidity() -> dict[str, Any]:
             browser = await p.chromium.launch(
                 headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"]
             )
-            context = await browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-                accept_downloads=True,
-            )
-            await Stealth().apply_stealth_async(context)
+            try:
+                context = await browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+                    accept_downloads=True,
+                )
+                await Stealth().apply_stealth_async(context)
 
-            sofr_90, dtb3, hy_spread = await asyncio.gather(
-                fetch_fred_csv("SOFR90DAYAVG", context),
-                fetch_fred_csv("DTB3", context),
-                fetch_fred_csv("BAMLH0A0HYM2", context),
-            )
-            await browser.close()
+                sofr_90, dtb3, hy_spread = await asyncio.gather(
+                    fetch_fred_csv("SOFR90DAYAVG", context),
+                    fetch_fred_csv("DTB3", context),
+                    fetch_fred_csv("BAMLH0A0HYM2", context),
+                )
+            finally:
+                await browser.close()
 
         if sofr_90 is None or dtb3 is None:
             return {"status": "success", "data": fallback}

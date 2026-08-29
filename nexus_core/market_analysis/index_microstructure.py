@@ -4,6 +4,8 @@ import time
 import config
 from typing import Dict, Optional
 
+from services.bounded_cache import BoundedCache
+
 logger = logging.getLogger(__name__)
 
 # get_market_regime() 快取：該值為全域、與使用者無關的單一市況判讀，但過去完全
@@ -42,7 +44,7 @@ _spx_capped_signal_cache_expiry: float = 0.0
 # 額外觸發背景刷新，退避窗口本身遠短於 edge 輪詢/心跳週期，故不影響正常情況下
 # 的資料新鮮度恢復速度。
 _GEX_SWR_REFRESH_BACKOFF_SECONDS: float = 60.0
-_gex_swr_last_attempt: Dict[str, float] = {}
+_gex_swr_last_attempt: BoundedCache = BoundedCache(max_size=300)
 
 
 def invalidate_market_regime_cache() -> None:

@@ -9,8 +9,9 @@ gamma_squeeze_engine.py — Nexus Gamma Squeeze 量化風控決策引擎。
 
 import math
 import logging
+from collections import deque
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Deque, Dict, List, Optional, Tuple
 
 from market_time import ny_tz
 from market_analysis.models.trader_models import (
@@ -31,7 +32,11 @@ class NexusGammaSqueezeEngine:
 
     def __init__(self, base_gate_3_threshold: float = 1000000.0):
         self.gate_3_threshold: float = base_gate_3_threshold
-        self.protection_score_history: List[Dict[str, Any]] = []
+        # deque(maxlen=...) 而非 list：此 engine 為長駐單例（見
+        # cogs/trading/scheduler.py::SchedulerCog.__init__），若未來
+        # run_post_market_attribution() 被排入定期任務，list 會無上限持續
+        # 增長；maxlen=252 約為一個交易年，超出即自動淘汰最舊項目。
+        self.protection_score_history: Deque[Dict[str, Any]] = deque(maxlen=252)
 
     def validate_gates(
         self, data: TickerMarketData, market_phase: str

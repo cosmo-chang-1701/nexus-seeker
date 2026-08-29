@@ -168,6 +168,54 @@ def test_scrape_gex_fallback() -> None:
         assert data["data"]["put_wall"] == 505.0
 
 
+class AsyncContextManagerMockWithBrowserCapture:
+    """Like AsyncContextManagerMock, but exposes the launched browser mock so
+    tests can assert browser.close() was still called after a mid-scrape
+    exception (regression test for browser leak on exception)."""
+
+    def __init__(self) -> None:
+        self.mock_browser: AsyncMock | None = None
+
+    async def __aenter__(self) -> Any:
+        mock_p = MagicMock()
+        mock_browser = AsyncMock()
+        # Raise exception inside the try...finally block (new_context)
+        mock_browser.new_context.side_effect = Exception("Mock context failure")
+        mock_p.chromium.launch = AsyncMock(return_value=mock_browser)
+        self.mock_browser = mock_browser
+        return mock_p
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        pass
+
+
+def test_scrape_core_macro_metrics_closes_browser_on_exception() -> None:
+    # scrape_core_macro_metrics() does a local `from playwright.async_api import
+    # async_playwright`, so it must be patched at the source module, not on
+    # local_api (unlike scrape_gex which imports it at module level).
+    mock_cm = AsyncContextManagerMockWithBrowserCapture()
+    with patch("playwright.async_api.async_playwright", return_value=mock_cm):
+        response = client.get("/api/v1/scrape/macro/core_metrics")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+        assert data["data"]["rrp"] == 420.5  # fallback value
+    assert mock_cm.mock_browser is not None
+    mock_cm.mock_browser.close.assert_called_once()
+
+
+def test_scrape_liquidity_closes_browser_on_exception() -> None:
+    mock_cm = AsyncContextManagerMockWithBrowserCapture()
+    with patch("playwright.async_api.async_playwright", return_value=mock_cm):
+        response = client.get("/api/v1/scrape/macro/liquidity")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+        assert data["data"]["ted_spread"] == 0.15  # fallback value
+    assert mock_cm.mock_browser is not None
+    mock_cm.mock_browser.close.assert_called_once()
+
+
 def test_scrape_fedwatch_realtime_zq_calculation() -> None:
     import pandas as pd
 

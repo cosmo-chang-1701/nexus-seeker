@@ -99,3 +99,28 @@ async def test_send_discord_alert_uses_embed_builder() -> None:
     assert mock_create.call_args.kwargs["total_beta_delta"] == 75.0
     assert mock_create.call_args.kwargs["total_vega"] == -15.5
     bot.queue_dm.assert_awaited_once_with(123, embed=embed)
+
+
+@pytest.mark.asyncio
+async def test_generate_narration_skips_llm_when_memory_unsafe() -> None:
+    bot = MagicMock()
+    service = HedgeMonitorService(bot)
+    metrics = {
+        "total_beta_delta": 75.0,
+        "total_vega": -15.5,
+        "total_vanna": 8.2,
+    }
+
+    with (
+        patch("services.llm_service.is_memory_safe", return_value=False),
+        patch(
+            "services.llm_service.client.chat.completions.create",
+            new_callable=AsyncMock,
+        ) as mock_create,
+    ):
+        narration = await service._generate_narration(
+            user_id=123, metrics=metrics, adj_delta=82.0, vix=24.0
+        )
+
+    assert narration == "市場波動劇烈，組合 Delta 已偏離中性。建議執行對沖以鎖定風險。"
+    mock_create.assert_not_called()

@@ -6,6 +6,7 @@ services:
     ports:
       - "8000:8000"
     restart: unless-stopped
+    mem_limit: 2g
     environment:
       - PYTHONUNBUFFERED=1
       - REDDIT_USER_AGENT=${REDDIT_USER_AGENT}
@@ -15,6 +16,7 @@ services:
     image: cloudflare/cloudflared:latest
     container_name: nexus-tunnel
     restart: unless-stopped
+    mem_limit: 128m
     environment:
       - TUNNEL_TOKEN=${CF_TUNNEL_TOKEN}
     command: tunnel run
