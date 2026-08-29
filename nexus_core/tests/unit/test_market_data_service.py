@@ -21,7 +21,7 @@ async def test_execute_api_call_cooperative_backoff() -> None:
     future_time = time.time() + 1.0
 
     with (
-        patch("services.market_data_service._rate_limit_until", future_time),
+        patch("services.market_data_service._core._rate_limit_until", future_time),
         patch("asyncio.sleep", new_callable=AsyncMock) as m_sleep,
     ):
         res = await _execute_api_call(mock_func)
@@ -44,7 +44,7 @@ async def test_execute_api_call_sets_rate_limit_on_429() -> None:
 
     # We must patch _rate_limit_until inside market_data_service so we don't pollute global state
     with (
-        patch("services.market_data_service._rate_limit_until", 0.0),
+        patch("services.market_data_service._core._rate_limit_until", 0.0),
         patch("asyncio.sleep", new_callable=AsyncMock) as m_sleep,
     ):
         res = await _execute_api_call(mock_func)
@@ -53,13 +53,13 @@ async def test_execute_api_call_sets_rate_limit_on_429() -> None:
         # Verify sleep was called for the 429 delay
         assert m_sleep.called
 
-        # Verify services.market_data_service._rate_limit_until was updated to a future time
+        # Verify services.market_data_service._core._rate_limit_until was updated to a future time
         import services.market_data_service
 
         # Since it is patched, the actual module variable won't be modified in global namespace,
         # but the local lookup in _execute_api_call modified the patched value.
         # Let's verify that the module reference (which is patched) was set.
-        assert services.market_data_service._rate_limit_until > time.time()
+        assert services.market_data_service._core._rate_limit_until > time.time()
 
 
 @pytest.mark.asyncio
@@ -641,7 +641,7 @@ async def test_execute_api_call_respects_retry_after() -> None:
     mock_func.side_effect = [mock_exception, "recovered_after_retry"]
 
     with (
-        patch("services.market_data_service._rate_limit_until", 0.0),
+        patch("services.market_data_service._core._rate_limit_until", 0.0),
         patch("asyncio.sleep", new_callable=AsyncMock) as m_sleep,
     ):
         res = await _execute_api_call(mock_func)
@@ -1058,7 +1058,7 @@ async def test_execute_api_call_interactive_fast_circuit_on_429() -> None:
 
     with (
         mark_interactive_request(),
-        patch("services.market_data_service._rate_limit_until", 0.0),
+        patch("services.market_data_service._core._rate_limit_until", 0.0),
         patch("asyncio.sleep", new_callable=AsyncMock),
     ):
         with pytest.raises(Exception, match="429"):
@@ -1067,7 +1067,7 @@ async def test_execute_api_call_interactive_fast_circuit_on_429() -> None:
         # Mock function should be called only once (no retries for interactive 429)
         assert mock_func.call_count == 1
         # Cooldown should be set to the future
-        assert services.market_data_service._rate_limit_until > time.time()
+        assert services.market_data_service._core._rate_limit_until > time.time()
 
 
 @pytest.mark.asyncio
@@ -1080,7 +1080,7 @@ async def test_execute_api_call_interactive_fast_circuit_when_in_cooldown() -> N
 
     with (
         mark_interactive_request(),
-        patch("services.market_data_service._rate_limit_until", future_time),
+        patch("services.market_data_service._core._rate_limit_until", future_time),
         patch("asyncio.sleep", new_callable=AsyncMock),
     ):
         with pytest.raises(
@@ -1106,7 +1106,7 @@ async def test_execute_api_call_interactive_inlock_recheck_spends_no_budget() ->
         mark_interactive_request,
     )
 
-    services.market_data_service._rate_limit_until = 0.0
+    services.market_data_service._core._rate_limit_until = 0.0
     controls = _get_finnhub_controls()
     sem = controls["sem_interactive"]
     capacity = sem._value
@@ -1127,7 +1127,7 @@ async def test_execute_api_call_interactive_inlock_recheck_spends_no_budget() ->
     await asyncio.sleep(0.15)
 
     # Simulate a sibling request setting the cooldown while this task is still queued.
-    services.market_data_service._rate_limit_until = time.time() + 10.0
+    services.market_data_service._core._rate_limit_until = time.time() + 10.0
 
     # Free a slot so the queued task resumes and hits the in-lock recheck.
     sem.release()
