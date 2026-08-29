@@ -25,7 +25,7 @@ async def test_sys_health_uses_builder(mock_interaction: Any):  # type: ignore
         patch("services.market_data_service._sma_cache", {1: 1, 2: 2}),
         patch("services.market_data_service._ema_cache", {1: 1}),
         patch(
-            "cogs.terminal.create_system_health_embed", return_value=embed
+            "cogs.terminal.system.create_system_health_embed", return_value=embed
         ) as mock_builder,
     ):
         mock_mem.return_value.percent = 50.0
@@ -58,7 +58,7 @@ async def test_promote_watch_uses_builder(mock_interaction: Any):  # type: ignor
         patch("services.asset_manager.AssetManager") as mock_manager_cls,
         patch("market_analysis.portfolio.refresh_portfolio_greeks", new=AsyncMock()),
         patch(
-            "cogs.terminal.create_asset_promotion_embed", return_value=embed
+            "cogs.terminal.watchlist.create_asset_promotion_embed", return_value=embed
         ) as mock_builder,
     ):
         mock_manager_cls.return_value.promote_to_trade.return_value = True
@@ -107,7 +107,8 @@ async def test_transition_sim_uses_builder(mock_interaction: Any):  # type: igno
             return_value=result,
         ),
         patch(
-            "cogs.terminal.create_transition_simulation_embed", return_value=embed
+            "cogs.terminal.analysis.create_transition_simulation_embed",
+            return_value=embed,
         ) as mock_builder,
     ):
         await cog.transition_sim.callback(  # type: ignore
