@@ -64,6 +64,12 @@ class PortfolioMonitorCog(commands.Cog):
         if not market_time.is_market_open():
             return
 
+        from services.llm_service import is_memory_safe
+
+        if not is_memory_safe():
+            logger.warning("🛡️ [NRO] 記憶體水位過高 (RAM+Swap > 85%)，跳過本輪審計。")
+            return
+
         logger.info("🛡️ [NRO] 開始執行真實持倉風險審計...")
         try:
             risk_events = await self.trading_service.audit_real_portfolio_risk()

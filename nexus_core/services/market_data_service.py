@@ -1138,7 +1138,15 @@ async def get_option_chain(
 
 
 # 限制快取大小以節省記憶體 (1GB RAM VPS 優化)
-MAX_CACHE_SIZE = 500
+# 依實際儲存內容分層設定上限：純量/小型 dict 值 (SMA/EMA/quote/profile/etf/
+# option_expiries，約數百 bytes) 與整份 DataFrame (_history_cache 約 12KB/entry、
+# _option_chain_cache 雙邊 DataFrame 流動性大的標的可達 80-150KB/entry) 的單筆
+# 記憶體成本差距達兩個數量級，共用同一個上限等於放任最重的兩個 cache 佔用不成
+# 比例的記憶體，因此拆成三層常數分別套用。
+_SCALAR_CACHE_SIZE = 500  # sma/ema/quote/profile/etf/option_expiries
+_HISTORY_CACHE_SIZE = 250  # _history_cache（DataFrame，~12KB/entry）
+_OPTION_CHAIN_CACHE_SIZE = 150  # _option_chain_cache（雙邊 DataFrame，~20-150KB/entry）
+_OPTION_CHAIN_FINGERPRINT_SIZE = 150  # 純觀測用，跟 _option_chain_cache 的 key 空間對齊
 
 # BoundedCache 的實作已集中到 services/bounded_cache.py（過去這裡與
 # polymarket_service.py 各自維護一份完全相同的 class，容量上限已分歧且無文件
@@ -1148,35 +1156,35 @@ MAX_CACHE_SIZE = 500
 # ---------------------------------------------------------------------------
 # SMA 記憶體快取設定
 # ---------------------------------------------------------------------------
-_sma_cache = BoundedCache(max_size=MAX_CACHE_SIZE)
+_sma_cache = BoundedCache(max_size=_SCALAR_CACHE_SIZE)
 _SMA_CACHE_TTL = 3600  # 1 小時 (1GB VPS 優化)
 
 
 # ---------------------------------------------------------------------------
 # 即時報價與基本面資料快取設定
 # ---------------------------------------------------------------------------
-_quote_cache = BoundedCache(max_size=MAX_CACHE_SIZE)
+_quote_cache = BoundedCache(max_size=_SCALAR_CACHE_SIZE)
 _QUOTE_CACHE_TTL = 15  # 15 秒，避免在同一次掃描中心跳訊號重複對相同標的進行即時報價呼叫
 
-_profile_cache = BoundedCache(max_size=MAX_CACHE_SIZE)
+_profile_cache = BoundedCache(max_size=_SCALAR_CACHE_SIZE)
 _PROFILE_CACHE_TTL = 86400  # 24 小時，公司 Profile 通常是靜態的
 
-_etf_cache = BoundedCache(max_size=MAX_CACHE_SIZE)
+_etf_cache = BoundedCache(max_size=_SCALAR_CACHE_SIZE)
 _ETF_CACHE_TTL = 86400  # 24 小時，ETF 屬性通常是靜態的
 
 # ---------------------------------------------------------------------------
 # 歷史 K 線數據快取設定 (6 小時，避開盤中大量重複 API 查詢)
 # ---------------------------------------------------------------------------
-_history_cache = BoundedCache(max_size=MAX_CACHE_SIZE)
+_history_cache = BoundedCache(max_size=_HISTORY_CACHE_SIZE)
 _HISTORY_CACHE_TTL = 21600  # 6 小時
 
 # ---------------------------------------------------------------------------
 # 期權到期日與期權鏈快取設定 (避開盤中重複的 yfinance 查詢)
 # ---------------------------------------------------------------------------
-_option_expiries_cache = BoundedCache(max_size=MAX_CACHE_SIZE)
+_option_expiries_cache = BoundedCache(max_size=_SCALAR_CACHE_SIZE)
 _OPTION_EXPIRIES_CACHE_TTL = 43200  # 12 小時
 
-_option_chain_cache = BoundedCache(max_size=MAX_CACHE_SIZE)
+_option_chain_cache = BoundedCache(max_size=_OPTION_CHAIN_CACHE_SIZE)
 # 60 秒：這層快取的用途改為「同一輪評估內的請求去重」，不再是「資料新鮮度保證」。
 # 新鮮度改由 _fetch_option_chain_raw() 讀取 edge 背景輪詢寫入的 SQLite 快照時
 # 附帶的 age_seconds 直接把關（該快照本身已由 nexus_edge_scraper/scheduler.py
@@ -1204,7 +1212,7 @@ _EDGE_SNAPSHOT_MAX_AGE_SECONDS = 1800  # 30 分鐘
 # 讀取的 edge 快照 age_seconds 做時間上的把關。這裡額外做「抓取之後」的觀測：比對本次與
 # 上次成功抓取的 OI/IV 指紋，若完全相同就記錄 warning，代表 Yahoo 端資料這一輪可能尚未
 # 真正刷新（純觀測用，不重試、不阻擋主流程，只用來驗證背景輪詢節奏是否與實際資料延遲相符）。
-_option_chain_fingerprint_cache = BoundedCache(max_size=MAX_CACHE_SIZE)
+_option_chain_fingerprint_cache = BoundedCache(max_size=_OPTION_CHAIN_FINGERPRINT_SIZE)
 
 
 def _compute_option_chain_fingerprint(
@@ -1289,7 +1297,7 @@ def clear_sma_cache() -> None:
 # ---------------------------------------------------------------------------
 # EMA 記憶體快取設定
 # ---------------------------------------------------------------------------
-_ema_cache = BoundedCache(max_size=MAX_CACHE_SIZE)
+_ema_cache = BoundedCache(max_size=_SCALAR_CACHE_SIZE)
 _EMA_CACHE_TTL = 3600  # 1 小時 (1GB VPS 優化)
 
 

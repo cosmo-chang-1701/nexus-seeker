@@ -179,3 +179,71 @@ async def test_historical_iv_self_healing_fallback(db_conn: Any):  # type: ignor
 
     finally:
         await DatabaseWriteQueue.stop_worker()
+
+
+@pytest.mark.asyncio
+async def test_put_task_sync_backpressure_no_deadlock(db_conn: Any) -> None:
+    """驗證加上 maxsize 之後，put_task_sync 在佇列滿載時是正確地非阻塞式等待
+    （最終在有空間時成功完成），而不是像修正前那樣：worker thread 呼叫
+    call_soon_threadsafe + put_nowait()，佇列滿時 put_nowait() 拋出的
+    asyncio.QueueFull 會在 callback 內被 asyncio 預設處理器吞掉，導致
+    event.wait() 永久卡死。"""
+    loop = asyncio.get_running_loop()
+    hold_event = asyncio.Event()
+    # 透過 __dict__ 取原始 classmethod 描述器再取 __func__，避開直接對已綁定的
+    # classmethod（DatabaseWriteQueue._process_task）存取 __func__ 時，mypy 對
+    # bound method 型別沒有該屬性的靜態檢查錯誤。
+    original_process_task = DatabaseWriteQueue.__dict__["_process_task"].__func__
+
+    async def slow_process_task(
+        cls: Any, conn: Any, task_type: str, data: tuple, commit: bool
+    ) -> Any:
+        if task_type == "hold":
+            # 讓 worker 卡在這裡，模擬處理緩慢導致佇列積壓的情境
+            await hold_event.wait()
+            return True
+        return await original_process_task(cls, conn, task_type, data, commit)
+
+    with patch.object(
+        DatabaseWriteQueue, "_process_task", classmethod(slow_process_task)
+    ):
+        # maxsize=1：只要 worker 卡在第一筆任務，第二筆就會把佇列填滿。
+        DatabaseWriteQueue.initialize(loop, maxsize=1)
+        try:
+            # Task 1：讓 worker 從 queue.get() 拿走後卡住，佇列因此開始清空以外
+            # 都是積壓狀態。
+            fut_hold = asyncio.ensure_future(DatabaseWriteQueue.put_task("hold", ()))
+            await asyncio.sleep(0.05)
+
+            # Task 2：worker 正忙，這筆會佔滿 maxsize=1 的佇列。
+            fut_2 = asyncio.ensure_future(
+                DatabaseWriteQueue.put_task("sql", ("SELECT 1", ()))
+            )
+            await asyncio.sleep(0.05)
+            assert DatabaseWriteQueue._queue is not None
+            assert DatabaseWriteQueue._queue.full()
+
+            # Task 3：改由 worker thread（run_in_executor）呼叫 put_task_sync，
+            # 此時佇列已滿，應該正確地等待而不是死結或立即失敗。
+            fut_sync = loop.run_in_executor(
+                None,
+                DatabaseWriteQueue.put_task_sync,
+                "sql",
+                ("SELECT 1", ()),
+                False,
+            )
+            await asyncio.sleep(0.2)
+            assert not fut_sync.done(), (
+                "佇列已滿時 put_task_sync 應該正確等待背壓釋放，"
+                "而不是立刻完成或拋錯（代表沒有真的觸發滿載路徑）"
+            )
+
+            # 釋放 worker，讓積壓的任務依序被處理完，確認整條鏈最終都能完成
+            # （而不是永久掛住）。
+            hold_event.set()
+            await asyncio.wait_for(fut_hold, timeout=5.0)
+            await asyncio.wait_for(fut_2, timeout=5.0)
+            result = await asyncio.wait_for(fut_sync, timeout=5.0)
+            assert result is not None
+        finally:
+            await DatabaseWriteQueue.stop_worker()

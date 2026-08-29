@@ -34,7 +34,7 @@ async def test_monitor_real_portfolio_task_uses_helpers() -> None:
 
     with patch(
         "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
-    ), patch(
+    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
         "cogs.trading.portfolio_monitor.create_profit_lock_alert_embed",
         return_value=embed1,
     ) as mock_profit, patch(
@@ -47,6 +47,28 @@ async def test_monitor_real_portfolio_task_uses_helpers() -> None:
     mock_gamma.assert_called_once()
     assert bot.queue_dm.await_args_list[0].kwargs == {"embed": embed1}
     assert bot.queue_dm.await_args_list[1].kwargs == {"embed": embed2}
+
+
+@pytest.mark.asyncio
+async def test_monitor_real_portfolio_task_skips_when_memory_unsafe() -> None:
+    """當 is_memory_safe() 回傳 False（RAM+Swap 水位 > 85%）時，
+    monitor_real_portfolio_task 應該直接跳過本輪審計，不呼叫
+    audit_real_portfolio_risk 或發送任何 DM。"""
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+
+    with patch("discord.ext.tasks.Loop.start"):
+        cog = PortfolioMonitorCog(bot)
+
+    cog.trading_service.audit_real_portfolio_risk = AsyncMock(return_value=[])  # type: ignore
+
+    with patch(
+        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
+    ), patch("services.llm_service.is_memory_safe", return_value=False):
+        await cog.monitor_real_portfolio_task()
+
+    cog.trading_service.audit_real_portfolio_risk.assert_not_called()
+    bot.queue_dm.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -81,9 +103,9 @@ async def test_monitor_real_portfolio_task_no_rollover_dm_when_no_trigger() -> N
 
     with patch(
         "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
-    ), patch("database.holdings.get_all_holdings", return_value=[holding]), patch(
-        "database.watchlist.get_user_watchlist", return_value=[]
-    ), patch(
+    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
+        "database.holdings.get_all_holdings", return_value=[holding]
+    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
         "market_analysis.trading_orchestration.recommend_covered_calls",
         new_callable=AsyncMock,
         return_value={"recommendations": []},
@@ -132,9 +154,9 @@ async def test_monitor_real_portfolio_task_omits_unset_target_allocation_pct() -
 
     with patch(
         "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
-    ), patch("database.holdings.get_all_holdings", return_value=[holding]), patch(
-        "database.watchlist.get_user_watchlist", return_value=[]
-    ), patch(
+    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
+        "database.holdings.get_all_holdings", return_value=[holding]
+    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
         "market_analysis.trading_orchestration.recommend_covered_calls",
         new_callable=AsyncMock,
         return_value={"recommendations": []},
@@ -186,9 +208,9 @@ async def test_monitor_real_portfolio_task_margin_defense_excludes_scenario2_and
 
     with patch(
         "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
-    ), patch("database.holdings.get_all_holdings", return_value=[holding]), patch(
-        "database.watchlist.get_user_watchlist", return_value=[]
-    ), patch(
+    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
+        "database.holdings.get_all_holdings", return_value=[holding]
+    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
         "market_analysis.trading_orchestration.recommend_covered_calls",
         new_callable=AsyncMock,
         return_value={"recommendations": []},
@@ -239,9 +261,9 @@ async def test_monitor_real_portfolio_task_hold_only_flags_do_not_suppress_later
 
     with patch(
         "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
-    ), patch("database.holdings.get_all_holdings", return_value=[holding]), patch(
-        "database.watchlist.get_user_watchlist", return_value=[]
-    ), patch(
+    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
+        "database.holdings.get_all_holdings", return_value=[holding]
+    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
         "market_analysis.trading_orchestration.recommend_covered_calls",
         new_callable=AsyncMock,
         return_value={"recommendations": []},
@@ -701,9 +723,9 @@ async def test_monitor_real_portfolio_task_threads_entry_confirmation_into_core_
 
     with patch(
         "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
-    ), patch("database.holdings.get_all_holdings", return_value=[holding]), patch(
-        "database.watchlist.get_user_watchlist", return_value=[]
-    ), patch(
+    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
+        "database.holdings.get_all_holdings", return_value=[holding]
+    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
         "market_analysis.trading_orchestration.recommend_covered_calls",
         new_callable=AsyncMock,
         return_value={"recommendations": []},
@@ -772,9 +794,9 @@ async def test_monitor_real_portfolio_task_dispatches_covered_call_overlay_embed
     overlay_embed = object()
     with patch(
         "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
-    ), patch("database.holdings.get_all_holdings", return_value=[holding]), patch(
-        "database.watchlist.get_user_watchlist", return_value=[]
-    ), patch(
+    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
+        "database.holdings.get_all_holdings", return_value=[holding]
+    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
         "market_analysis.trading_orchestration.recommend_covered_calls",
         new_callable=AsyncMock,
         return_value={"recommendations": []},

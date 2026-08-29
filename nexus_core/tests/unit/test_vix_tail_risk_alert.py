@@ -56,8 +56,8 @@ async def test_dynamic_market_scanner_blocks_false_alarm_vix_zero(
     the system MUST NOT trigger any tail risk alert.
     """
     with patch("market_time.is_market_open", return_value=True), patch(
-        "services.market_data_service.get_quote"
-    ) as mock_quote, patch(
+        "services.llm_service.is_memory_safe", return_value=True
+    ), patch("services.market_data_service.get_quote") as mock_quote, patch(
         "services.market_data_service.get_vix_term_structure"
     ) as mock_vts, patch(
         "market_analysis.dark_pool_engine.fetch_and_cache_darkpool_dix",
@@ -104,8 +104,8 @@ async def test_dynamic_market_scanner_blocks_false_alarm_mild_vts(
     it is NOT a black swan event, so no alert should be sent.
     """
     with patch("market_time.is_market_open", return_value=True), patch(
-        "services.market_data_service.get_quote"
-    ) as mock_quote, patch(
+        "services.llm_service.is_memory_safe", return_value=True
+    ), patch("services.market_data_service.get_quote") as mock_quote, patch(
         "services.market_data_service.get_vix_term_structure"
     ) as mock_vts, patch(
         "market_analysis.dark_pool_engine.fetch_and_cache_darkpool_dix",
@@ -157,8 +157,8 @@ async def test_dynamic_market_scanner_triggers_on_vix_surge(mock_bot: Any) -> No
         return saved_kv.get(k)
 
     with patch("market_time.is_market_open", return_value=True), patch(
-        "services.market_data_service.get_quote"
-    ) as mock_quote, patch(
+        "services.llm_service.is_memory_safe", return_value=True
+    ), patch("services.market_data_service.get_quote") as mock_quote, patch(
         "services.market_data_service.get_vix_term_structure"
     ) as mock_vts, patch(
         "market_analysis.dark_pool_engine.fetch_and_cache_darkpool_dix",
@@ -219,8 +219,8 @@ async def test_dynamic_market_scanner_triggers_on_severe_vts_inversion(
     it triggers the tail-risk alert.
     """
     with patch("market_time.is_market_open", return_value=True), patch(
-        "services.market_data_service.get_quote"
-    ) as mock_quote, patch(
+        "services.llm_service.is_memory_safe", return_value=True
+    ), patch("services.market_data_service.get_quote") as mock_quote, patch(
         "services.market_data_service.get_vix_term_structure"
     ) as mock_vts, patch(
         "market_analysis.dark_pool_engine.fetch_and_cache_darkpool_dix",
@@ -253,6 +253,41 @@ async def test_dynamic_market_scanner_triggers_on_severe_vts_inversion(
         assert mock_bot.queue_dm.call_count == 1
         args, kwargs = mock_bot.queue_dm.call_args
         assert args[0] == 987654321
+
+        cog.intraday_pipeline.stop()
+        cog.dynamic_market_scanner.cancel()
+        cog.daily_reddit_update.cancel()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_market_scanner_skips_when_memory_unsafe(mock_bot: Any) -> None:
+    """當 is_memory_safe() 回傳 False（RAM+Swap 水位 > 85%）時，
+    dynamic_market_scanner 應該直接跳過本輪掃描，不觸發任何 quote/DM 呼叫。"""
+    with patch("market_time.is_market_open", return_value=True), patch(
+        "services.llm_service.is_memory_safe", return_value=False
+    ), patch("services.market_data_service.get_quote") as mock_quote, patch(
+        "services.market_data_service.get_vix_term_structure"
+    ) as mock_vts, patch(
+        "market_analysis.dark_pool_engine.fetch_and_cache_darkpool_dix",
+        new_callable=AsyncMock,
+    ), patch(
+        "market_analysis.index_microstructure.fetch_core_macro_metrics",
+        new_callable=AsyncMock,
+    ), patch(
+        "cogs.trading.heartbeat.dispatch_watchlist_heartbeat",
+        new_callable=AsyncMock,
+    ), patch("database.get_all_watchlist", return_value=[]), patch(
+        "database.get_all_user_ids", return_value=[123456789]
+    ), patch("database.is_notification_enabled", return_value=True), patch(
+        "database.get_kv_cache", return_value=None
+    ), patch("database.save_kv_cache", new_callable=AsyncMock):
+        cog = SchedulerCog(mock_bot)
+        await cog.dynamic_market_scanner()
+
+        # 記憶體不安全時應該在抓取任何行情資料之前就跳過整輪掃描
+        mock_quote.assert_not_called()
+        mock_vts.assert_not_called()
+        mock_bot.queue_dm.assert_not_called()
 
         cog.intraday_pipeline.stop()
         cog.dynamic_market_scanner.cancel()

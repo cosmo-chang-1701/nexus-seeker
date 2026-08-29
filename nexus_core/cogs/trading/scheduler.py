@@ -132,6 +132,14 @@ class SchedulerCog(commands.Cog):
         if not market_time.is_market_open():
             return
 
+        from services.llm_service import is_memory_safe
+
+        if not is_memory_safe():
+            logger.warning(
+                "🕒 [盤中掃描] 記憶體水位過高 (RAM+Swap > 85%)，跳過本輪掃描。"
+            )
+            return
+
         logger.info("🕒 [盤中掃描] 美股交易時段內，啟動動態雷達並更新大盤總經快取...")
 
         # 1. 抓取 SPX, VIX, US10Y, WTI 數據並存入 SQLite

@@ -28,11 +28,13 @@ class DatabaseWriteQueue:
     _lock = threading.Lock()
 
     @classmethod
-    def initialize(cls, loop: asyncio.AbstractEventLoop) -> Any:
+    def initialize(cls, loop: asyncio.AbstractEventLoop, maxsize: int = 1000) -> Any:
         with cls._lock:
             cls._loop = loop
             cls._loop_thread = threading.current_thread()
-            cls._queue = asyncio.Queue()
+            # 有界佇列：>10x 目前實際觀測到的寫入流量峰值，純粹作為未來 bug
+            # 造成寫入洪水時的防禦性上限，正常操作不會觸發背壓延遲。
+            cls._queue = asyncio.Queue(maxsize=maxsize)
             cls._running = True
             cls._worker_task = loop.create_task(cls._worker_loop())
             logger.info(
@@ -102,11 +104,18 @@ class DatabaseWriteQueue:
         assert cls._queue is not None
         assert cls._loop is not None
 
-        def enqueue() -> None:
+        async def _enqueue() -> None:
             assert cls._queue is not None
-            cls._queue.put_nowait((task_type, data, commit, None, (event, result)))
+            await cls._queue.put((task_type, data, commit, None, (event, result)))
 
-        cls._loop.call_soon_threadsafe(enqueue)
+        # 用 run_coroutine_threadsafe + await queue.put(...) 取代
+        # call_soon_threadsafe + put_nowait()：佇列設有 maxsize 後，若滿載時用
+        # put_nowait() 會在 call_soon_threadsafe 的 callback 內拋出
+        # asyncio.QueueFull，該例外會被 asyncio 預設處理器吞掉（僅記 log），
+        # 永遠不會傳回呼叫端，導致下面的 event.wait() 永久卡死。改用這個寫法
+        # 讓佇列滿的時候正確地非阻塞式等待（其他 event loop 上的工作仍可繼續
+        # 執行），而不是讓 worker thread 死結。
+        asyncio.run_coroutine_threadsafe(_enqueue(), cls._loop)
         event.wait()
 
         err = result["error"]
