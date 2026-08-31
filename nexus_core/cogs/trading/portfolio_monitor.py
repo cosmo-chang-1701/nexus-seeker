@@ -74,6 +74,7 @@ class PortfolioMonitorCog(commands.Cog):
             "hvn": 0.0,
             "lvn": 0.0,
             "dte": 99,
+            "iv_term_structure_status": None,
         }
         if not r_data:
             return fallback_metrics
@@ -98,6 +99,7 @@ class PortfolioMonitorCog(commands.Cog):
                 pass
 
             atr_val = float(r_data.get("atr_14", 0.0))
+            atr_15m_val = float(r_data.get("atr_15m", 0.0))
             spot_val = float(
                 r_data.get("quote", {}).get("c", 0.0) if r_data.get("quote") else 0.0
             )
@@ -142,7 +144,7 @@ class PortfolioMonitorCog(commands.Cog):
                 ),
                 "skew": float(r_data.get("skew", 0.0) if r_data.get("skew") else 0.0),
                 "atr_14": atr_val,
-                "atr_15m": atr_val,
+                "atr_15m": atr_15m_val,
                 "hvn": float(r_data.get("vp_data", {}).get("hvn", 0.0))
                 if isinstance(r_data.get("vp_data"), dict)
                 else 0.0,
@@ -150,6 +152,11 @@ class PortfolioMonitorCog(commands.Cog):
                 if isinstance(r_data.get("vp_data"), dict)
                 else 0.0,
                 "dte": dte_val,
+                "iv_term_structure_status": (
+                    r_data.get("iv_metrics", {}).get("iv_term_structure_status")
+                    if isinstance(r_data.get("iv_metrics"), dict)
+                    else None
+                ),
             }
         except Exception as parse_ex:
             logger.error(f"Failed to parse radar data for {sym}: {parse_ex}")
@@ -192,10 +199,11 @@ class PortfolioMonitorCog(commands.Cog):
             "sqz_mom": metrics.get("sqz_mom", 0.0),
             "skew": metrics.get("skew", 0.0),
             "atr_14": metrics.get("atr_14", 0.0),
-            "atr_15m": metrics.get("atr_15m", metrics.get("atr_14", 0.0)),
+            "atr_15m": metrics.get("atr_15m", 0.0),
             "hvn": metrics.get("hvn", 0.0),
             "lvn": metrics.get("lvn", 0.0),
             "dte": metrics.get("dte", 99),
+            "iv_term_structure_status": metrics.get("iv_term_structure_status"),
             "gex_profile_data": r_data.get("gex_profile_data", {}) if r_data else {},
             "avg_cost": 0.0,
             "psq_result": r_data.get("psq_result", {}) if r_data else {},
@@ -436,10 +444,13 @@ class PortfolioMonitorCog(commands.Cog):
                         "sqz_mom": metrics.get("sqz_mom", 0.0),
                         "skew": metrics.get("skew", 0.0),
                         "atr_14": metrics.get("atr_14", 0.0),
-                        "atr_15m": metrics.get("atr_15m", metrics.get("atr_14", 0.0)),
+                        "atr_15m": metrics.get("atr_15m", 0.0),
                         "hvn": metrics.get("hvn", 0.0),
                         "lvn": metrics.get("lvn", 0.0),
                         "dte": metrics.get("dte", 99),
+                        "iv_term_structure_status": metrics.get(
+                            "iv_term_structure_status"
+                        ),
                         "gex_profile_data": radar_cache_map[sym].get(
                             "gex_profile_data", {}
                         )
@@ -758,6 +769,8 @@ class PortfolioMonitorCog(commands.Cog):
                                 trigger_condition_text=ins.get(
                                     "trigger_condition_text"
                                 ),
+                                entry_ironclad_result=ins.get("entry_ironclad_result"),
+                                extreme_stop_loss=ins.get("extreme_stop_loss"),
                             )
                             if ins.get("is_manual_override_required"):
                                 setattr(

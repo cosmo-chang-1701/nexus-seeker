@@ -383,6 +383,7 @@ class RadarDataMixin:
             calculate_positive_gex_depth_below,
             find_overhead_negative_gex_swamp,
         )
+        from market_analysis.atr_utils import fetch_atr_15m
 
         async def _get_uoa_with_physical_caps(
             symbol: str,
@@ -437,6 +438,7 @@ class RadarDataMixin:
         gex_task = fetch_symbol_gex_metrics(sym)
         pcr_task = SentimentEngine.calculate_pcr(sym)
         far_mp_task = _get_far_mp_and_dte(sym)
+        atr_15m_task = fetch_atr_15m(sym)
 
         (
             skew_data,
@@ -446,8 +448,16 @@ class RadarDataMixin:
             gex_data,
             (far_mp_val, nearest_dte),
             pcr_data,
+            atr_15m,
         ) = await asyncio.gather(
-            skew_task, uoa_task, iv_task, mp_task, gex_task, far_mp_task, pcr_task
+            skew_task,
+            uoa_task,
+            iv_task,
+            mp_task,
+            gex_task,
+            far_mp_task,
+            pcr_task,
+            atr_15m_task,
         )
 
         skew_val = skew_data.get("skew", 0.0) if isinstance(skew_data, dict) else 0.0
@@ -575,12 +585,6 @@ class RadarDataMixin:
                         psq_res["signal_direction"],
                     )
 
-        # 讀取 DP-POC (暗池共振)
-        from database.cache import get_kv_cache_with_age
-
-        dp_poc_val, dp_poc_age_seconds = get_kv_cache_with_age(f"dp_poc_{sym.upper()}")
-        dp_poc = float(dp_poc_val) if dp_poc_val is not None else 0.0
-
         # 重複利用 df_hist 計算 Volume Profile (HVN/LVN)
         from market_analysis.volume_profile import calculate_volume_profile_from_df
 
@@ -589,6 +593,24 @@ class RadarDataMixin:
             if df_hist is not None
             else None
         )
+
+        # 讀取 DP-POC (暗池共振)：nexus_edge_scraper 已無真實暗池資料源，
+        # dp_poc_{sym}/darkpool_{sym} 快取鍵在正式環境從未被寫入，此處套用與
+        # fast-path (_fetch_sym_radar_data_fast_raw) 完全一致的 fallback 鏈，
+        # 退回本函式已算出的 Volume-POC (vp_data.hvn) 或 volume_poc_{sym} 快取，
+        # 避免此路徑的 dp_poc 恆為 0.0（與 fast-path 行為不一致）。
+        from database.cache import get_kv_cache, get_kv_cache_with_age
+
+        dp_poc_val, dp_poc_age_seconds = get_kv_cache_with_age(f"dp_poc_{sym.upper()}")
+        if dp_poc_val is None:
+            darkpool_cached = get_kv_cache(f"darkpool_{sym.upper()}") or {}
+            dp_poc_val = (
+                darkpool_cached.get("dp_poc")
+                or (vp_data or {}).get("hvn")
+                or get_kv_cache(f"volume_poc_{sym.upper()}")
+            )
+            dp_poc_age_seconds = None
+        dp_poc = float(dp_poc_val) if dp_poc_val is not None else 0.0
 
         # 計算 20 日均量與當前 K 棒成交量
         vol_data = {"current_volume": 0.0, "avg_volume_20": 0.0}
@@ -656,6 +678,7 @@ class RadarDataMixin:
             "dp_poc_age_seconds": dp_poc_age_seconds,
             "ma20": ema_21,
             "atr_14": atr_14,
+            "atr_15m": atr_15m,
             "nearest_dte": nearest_dte,
             "vp_data": vp_data or {},
             "vol_data": vol_data,
@@ -699,6 +722,7 @@ class RadarDataMixin:
                 "skew": skew_val,
                 "skew_percentile": skew_percentile,
                 "atr_14": atr_14,
+                "atr_15m": atr_15m,
                 "iv_rank": iv_rank_val,
                 "term_structure_ratio": iv_m.term_structure_ratio if iv_m else None,
                 "iv_term_structure_status": iv_m.iv_term_structure_status

@@ -57,6 +57,11 @@ def test_build_option_asset_entry_success_path() -> None:
     assert entry["ivr"] == 40.0
     assert entry["bid"] == 4.9
     assert entry["ask"] == 5.1
+    # atr_15m 必須直接沿用 metrics 提供的真實 15m ATR，不得別名/退回 atr_14
+    # (Task 1.1: 消除 atr_15m == atr_14 的資料鏈假造問題)。
+    assert entry["atr_14"] == 2.0
+    assert entry["atr_15m"] == 2.5
+    assert entry["atr_15m"] != entry["atr_14"]
     assert entry["gex_profile_data"] == {"put_wall": 95.0, "call_wall": 110.0}
     assert entry["psq_result"] == {
         "squeeze_level": "High",
@@ -77,6 +82,20 @@ def test_build_option_asset_entry_degrades_avg_cost_and_acquired_at() -> None:
     # 無雷達資料時，gex_profile_data/psq_result 優雅降級為空 dict
     assert entry["gex_profile_data"] == {}
     assert entry["psq_result"] == {}
+
+
+def test_build_option_asset_entry_atr_15m_defaults_to_zero_not_atr_14() -> None:
+    """metrics 缺失 atr_15m 時 (例如上游抓取失敗)，必須優雅降級為 0.0，
+    嚴禁再退回 metrics['atr_14'] 別名充當 15m ATR (Task 1.1 消除的假造行為)。
+    """
+    metrics_without_atr_15m: dict[str, Any] = {
+        k: v for k, v in _SAMPLE_METRICS.items() if k != "atr_15m"
+    }
+    entry = PortfolioMonitorCog._build_option_asset_entry(
+        "AAPL", 2.0, 5.0, 4.9, 5.1, metrics_without_atr_15m, None
+    )
+    assert entry["atr_14"] == 2.0
+    assert entry["atr_15m"] == 0.0
 
 
 @pytest.mark.asyncio
@@ -109,6 +128,7 @@ async def test_build_symbol_metrics_parses_radar_data(
         "quote": {"c": 150.0},
         "iv_metrics": {"iv_rank": 55.0},
         "atr_14": 3.0,
+        "atr_15m": 1.2,
         "gex_profile_data": {
             "put_wall": 145.0,
             "call_wall": 160.0,
@@ -134,3 +154,29 @@ async def test_build_symbol_metrics_parses_radar_data(
     assert metrics["hvn"] == 148.5
     assert metrics["lvn"] == 143.0
     assert metrics["dte"] == 14
+    # atr_15m 必須是真實的 15m ATR (獨立於 atr_14)，不得別名 (Task 1.1)。
+    assert metrics["atr_14"] == 3.0
+    assert metrics["atr_15m"] == 1.2
+    assert metrics["atr_15m"] != metrics["atr_14"]
+
+
+@pytest.mark.asyncio
+@patch("database.cache.save_kv_cache")
+@patch("database.cache.get_kv_cache", return_value=None)
+async def test_build_symbol_metrics_atr_15m_defaults_to_zero_not_atr_14(
+    mock_get_kv: Any, mock_save_kv: Any
+) -> None:
+    """r_data 缺失 atr_15m 欄位時 (radar_data.py 尚未回填/抓取失敗)，
+    _build_symbol_metrics 必須降級為 0.0，嚴禁退回 r_data['atr_14'] 別名。"""
+    bot = MagicMock()
+    cog = PortfolioMonitorCog.__new__(PortfolioMonitorCog)
+    cog.bot = bot
+
+    r_data = {
+        "quote": {"c": 150.0},
+        "atr_14": 3.0,
+        # 刻意不提供 atr_15m
+    }
+    metrics = await cog._build_symbol_metrics("AAPL", r_data)
+    assert metrics["atr_14"] == 3.0
+    assert metrics["atr_15m"] == 0.0

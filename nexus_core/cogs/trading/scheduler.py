@@ -199,8 +199,7 @@ class SchedulerCog(commands.Cog):
 
             logger.info(
                 f"🕒 [盤中總經快取更新完成] SPX: {spx_val}, VIX: {vix_val} (Valid: {is_vix_valid}), "
-                f"US10Y: {tnx_val}, WTI: {wti_val}, VTS: {vts_val} (Valid: {is_vts_valid}), "
-                "DarkPool DIX & Core Metrics updated"
+                f"US10Y: {tnx_val}, WTI: {wti_val}, VTS: {vts_val} (Valid: {is_vts_valid})"
             )
 
             # 🚨 偵測 VIX 期限結構倒掛與黑天鵝預警 (嚴格數據把關 + 雙重條件門檻)

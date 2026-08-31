@@ -46,6 +46,11 @@ _DEFAULT_MAX_ALLOCATION_PCT: float = (
 # --- 邏輯 (5)：核心資金部署 (evaluate_core_deployment) 具名常數 ---
 _CORE_EXCESS_MIN_TRADE_PCT: float = 0.005  # CORE 超額配置低於此幅度 (0.5%) 視為誤差雜訊，不觸發部署轉倉，避免 dust trade
 _BOXX_DEFENSE_THRESHOLD: float = 50.0  # boxx_allocation_pct (0-100) >= 此值時，超額資金優先防禦轉入 BOXX 而非候選標的
+# 機會分支（State A）通過既有六重鐵律 _confirm_entry_signal 且額外通過
+# market_analysis.entry_ironclad.check_entry_ironclad_rules（進場四重鐵律）
+# 後，僅動用超額資金的這個比例部署至候選標的；剩餘部分維持現金/緩衝，
+# 不生成第二筆分流指令。BOXX 防禦分支不受此常數影響，仍為 100% 部署。
+_CORE_DEPLOYMENT_OPPORTUNITY_DEPLOY_RATIO: float = 0.5
 
 # --- 邏輯 (5) 延伸：Covered Call Overlay (evaluate_covered_call_overlay) 具名常數 ---
 # 與 evaluate_core_deployment 的兩個既有分支不同，本分支刻意不要求
@@ -58,7 +63,22 @@ _COVERED_CALL_MAX_LOTS: int = (
 _COVERED_CALL_MIN_DTE: int = 18
 _COVERED_CALL_MAX_DTE: int = 25
 
-# --- 進場訊號四重嚴格過濾鐵律 (_confirm_entry_signal) 具名常數 ---
+# --- 進場訊號六重嚴格過濾鐵律 (opportunity_cost.py::_confirm_entry_signal) 具名常數 ---
+# (原註解誤標「四重」，已修正——本函式實為六項條件，見其自身 docstring)
+#
+# 與 market_analysis/entry_ironclad.py 的「進場四重嚴格過濾鐵律」
+# (check_entry_ironclad_rules) 交叉對照表：兩套鐵律刻意完全獨立、不合併
+# (見 entry_ironclad.py 模組 docstring 的設計理由)，條件一/三/四在概念上
+# 有對應但門檻/範圍刻意收得更嚴，條件二為簡化版，條件五/六在四重鐵律中
+# 無對應（四重鐵律是零 I/O 純函式，不含總經/財報/candidate 自身 DTE 檢查）：
+#   六重條件一 (放量倍數 1.2x)         <-> 四重規則一 (entry_ironclad._IRONCLAD_VOLUME_SURGE_MULTIPLIER = 1.5x，更嚴)
+#   六重條件二 (_scan_gex_walls 完整掃描) <-> 四重規則二 (僅檢查 put_wall > 0 且現價站上，簡化版)
+#   六重條件三 (無上緣界限、嚴格 >)      <-> 四重規則三 (entry_ironclad._IRONCLAD_UOA_CAP_RATIO_THRESHOLD /
+#                                          _IRONCLAD_UOA_CAP_UPSIDE_ROOM_PCT，限定 (spot, spot*1.05] 視窗、改用 >=)
+#   六重條件四 (僅檢查 DTE>=7，不檢查 ratio) <-> 四重規則四 (entry_ironclad._IRONCLAD_UOA_ENTRY_MIN_DTE /
+#                                          _IRONCLAD_UOA_ENTRY_MIN_RATIO，額外要求 ratio>=0.8)
+#   六重條件五 (總經/財報安全閥)         <-> 四重鐵律無對應（純函式不含此 I/O）
+#   六重條件六 (candidate 自身 DTE)      <-> 四重鐵律無對應（純函式不含此 I/O）
 _ENTRY_VOLUME_LOOKBACK_BARS: int = 20  # 條件一：15m 成交量基準所需回看根數 (不含確認根)
 _ENTRY_VOLUME_SURGE_MULTIPLIER: float = 1.2  # 條件一：「放量」門檻，須達回看均量的倍數
 _ENTRY_UOA_CAP_RATIO_THRESHOLD: float = (
@@ -79,6 +99,16 @@ _BEAR_CALL_SPREAD_WING_ATR_MULT: float = (
 # 0/1 DTE 末日結算容忍度機制再疊加套用一次，使總距離達到 2 倍
 # (Risk-Parity 縮放因子 = 1.5 / 3.0 = 0.5)。
 _ANTI_WASHOUT_BASE_ATR_MULT: float = 1.5
+# 雙軌出場防守引擎軌道二：極端瞬時停損 (Extreme Tick Breach) 的 ATR 墊片倍數。
+# 刻意獨立於上方 _ANTI_WASHOUT_BASE_ATR_MULT 之外另立常數，儘管數值恰好同為
+# 3.0（1.5 的兩倍）——兩者是完全不同、互不疊加的機制：
+# - 0/1 DTE 累積值：_ANTI_WASHOUT_BASE_ATR_MULT 疊加兩次 (anti_washout.py
+#   機制 4)，僅在 dte<=1 時啟動，影響既有的單一 stop_loss 欄位與口數縮放。
+# - 本常數：任何 DTE 皆適用的獨立「極端瞬時停損」防線，產生獨立的
+#   extreme_stop_loss 欄位，不套用 [0.95,0.98] 邊界鉗制／LVN 吸附／0-1DTE
+#   疊加，現價 (SPOT 亦然，不等待 15m 收盤) 貫穿即立即觸發，作為與 OPTIONS
+#   既有即時 tick 熔斷同等級的最後防線。
+_ANTI_WASHOUT_EXTREME_ATR_MULT: float = 3.0
 _BEAR_CALL_SPREAD_WING_FALLBACK_PCT: float = (
     0.05  # atr_15m 無效時，Bear Call Spread Wing 距離退回以賣方履約價的百分比估算
 )

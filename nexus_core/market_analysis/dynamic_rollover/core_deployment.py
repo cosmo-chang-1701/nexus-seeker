@@ -4,6 +4,7 @@ from . import logger
 from ._shared import format_cash_impact, format_illiquidity_warning
 from .constants import (
     _BOXX_DEFENSE_THRESHOLD,
+    _CORE_DEPLOYMENT_OPPORTUNITY_DEPLOY_RATIO,
     _CORE_EXCESS_MIN_TRADE_PCT,
     _COVERED_CALL_MAX_DTE,
     _COVERED_CALL_MAX_LOTS,
@@ -27,8 +28,16 @@ class _CoreDeploymentMixin:
     _BOXX_DEFENSE_THRESHOLD (50.0) 比較決定：
     - >= 50：防禦分支，超額資金整筆轉入 BOXX 鎖定無風險利息，不需候選標的通過
       進場鐵律 (BOXX 是純防禦性現金替代品停泊，不該被「有沒有找到好標的」卡住)。
-    - < 50：機會分支，沿用既有邏輯，需候選標的存在且經 _confirm_entry_signal
-      六重鐵律確認突破，才將超額資金整筆投入候選標的。
+    - < 50：機會分支（狀態 A），需候選標的存在且依序通過兩道獨立閘門才將
+      超額資金部署至候選標的：
+        1. 既有的 _confirm_entry_signal 六重鐵律（機會成本轉倉候選確認，
+           含總經/財報安全閥與候選標的自身 DTE 檢查，維持既有行為不變）。
+        2. market_analysis.entry_ironclad.check_entry_ironclad_rules
+           （進場四重嚴格過濾鐵律，全新獨立、零 I/O 的純函式閘門，兩者
+           皆通過才放行）。
+      兩道閘門皆通過時，僅動用超額資金的 _CORE_DEPLOYMENT_OPPORTUNITY_
+      DEPLOY_RATIO (50%) 部署，剩餘部分維持現金/緩衝，不生成第二筆
+      分流指令。
     """
 
     if TYPE_CHECKING:
@@ -92,6 +101,13 @@ class _CoreDeploymentMixin:
                 precomputed_entry_confirmation
             )
         boxx_auto_suggestion: Optional[float] = None
+
+        # 進場四重嚴格過濾鐵律（狀態 A 額外閘門）所需的 15m 量價快照，對整個
+        # 函式呼叫只抓取一次並跨多個 CORE 持倉共用（candidate_symbol 對整個
+        # 迴圈固定），比照上方 boxx_auto_suggestion 的單次快取模式。
+        # `False` 代表尚未嘗試抓取；`None` 代表已嘗試但失敗 (fail-safe)。
+        confirmed_bar_fetched: bool = False
+        confirmed_bar: Optional[Any] = None
 
         for asset in portfolio_assets:
             symbol = str(asset.get("symbol", "")).upper()
@@ -201,6 +217,61 @@ class _CoreDeploymentMixin:
             if not candidate_entry_confirmed:
                 continue
 
+            # 狀態 A 額外閘門：進場四重嚴格過濾鐵律（與上方六重鐵律完全獨立，
+            # 兩者皆通過才允許本次部署）。所需 15m 量價快照對整個函式呼叫僅
+            # 抓取一次並跨 CORE 持倉共用。抓取失敗 (fail-safe) 時視為未確認，
+            # 靜默略過，比照六重鐵律未通過的早退模式。
+            if not confirmed_bar_fetched:
+                confirmed_bar_fetched = True
+                try:
+                    from market_analysis.price_volume_alert import (
+                        get_confirmed_15m_bar,
+                    )
+
+                    confirmed_bar = await get_confirmed_15m_bar(candidate_symbol)
+                except Exception as e:
+                    logger.warning(
+                        f"[{candidate_symbol}] 15m 量價快照抓取失敗，"
+                        f"核心資金部署狀態 A 閘門判定未通過: {e}"
+                    )
+                    confirmed_bar = None
+            if confirmed_bar is None:
+                logger.info(
+                    f"[{candidate_symbol}] 無有效 15m 量價快照，靜默略過核心資金部署"
+                )
+                continue
+
+            from market_analysis.entry_ironclad import check_entry_ironclad_rules
+
+            ironclad_result = check_entry_ironclad_rules(
+                candidate_symbol,
+                target_spot,
+                candidate_radar.get("gex_profile_data"),
+                candidate_radar.get("uoa") or [],
+                price_15m_close=confirmed_bar.close,
+                volume_15m=confirmed_bar.volume,
+                volume_15m_sma20=confirmed_bar.avg_volume,
+            )
+            if not ironclad_result.all_passed:
+                logger.info(
+                    f"[{candidate_symbol}] 進場四重鐵律未通過，靜默略過核心資金部署（機會分支）"
+                )
+                continue
+
+            # 僅動用超額資金的 50%（_CORE_DEPLOYMENT_OPPORTUNITY_DEPLOY_RATIO）
+            # 部署至候選標的；剩餘部分維持現金/緩衝，不生成第二筆分流指令。
+            # 僅本機會分支套用此比例，上方 BOXX 防禦分支仍為 100%。
+            opportunity_excess_value = (
+                excess_value * _CORE_DEPLOYMENT_OPPORTUNITY_DEPLOY_RATIO
+            )
+            opportunity_sell_ratio = round(
+                min(1.0, max(0.0, opportunity_excess_value / current_value)), 4
+            )
+            if opportunity_sell_ratio <= 0.0:
+                continue
+            recovered_cash_opportunity = current_value * opportunity_sell_ratio
+            cash_impact_opportunity = format_cash_impact(recovered_cash_opportunity)
+
             bid = float(asset.get("bid", 0.0))
             ask = float(asset.get("ask", 0.0))
             illiquidity_warning = (
@@ -214,8 +285,10 @@ class _CoreDeploymentMixin:
                 "🌱 **核心資金部署 (Core Capital Deployment)**\n"
                 f"{symbol} 目前配置 {current_alloc:.1%}，超過使用者設定之目標配置 "
                 f"{float(target_alloc):.1%}（超額 {excess_alloc:.1%}）。候選標的 "
-                f"{candidate_symbol} 已通過進場訊號六重嚴格過濾鐵律確認突破，"
-                f"建議部署部分閒置核心資金：{candidate_entry_reason}"
+                f"{candidate_symbol} 已通過進場訊號六重嚴格過濾鐵律與進場四重"
+                f"嚴格過濾鐵律雙重確認突破，建議部署超額核心資金的 "
+                f"{_CORE_DEPLOYMENT_OPPORTUNITY_DEPLOY_RATIO:.0%}"
+                f"（剩餘部分維持現金/緩衝）：{candidate_entry_reason}"
             )
             if illiquidity_warning:
                 reason_text += illiquidity_warning
@@ -223,15 +296,18 @@ class _CoreDeploymentMixin:
             instructions.append(
                 {
                     "symbol": symbol,
-                    "action": "LIQUIDATE" if sell_ratio >= 1.0 else "REDUCE",
-                    "sell_ratio": sell_ratio,
+                    "action": "LIQUIDATE"
+                    if opportunity_sell_ratio >= 1.0
+                    else "REDUCE",
+                    "sell_ratio": opportunity_sell_ratio,
                     "target_core": candidate_symbol,
                     "reason": reason_text,
                     "suggested_strategy": "Buy Shares",
                     "scenario": RolloverScenario.CORE_DEPLOYMENT.value,
                     "is_manual_override_required": is_illiquid_warning,
-                    "cash_impact": cash_impact,
+                    "cash_impact": cash_impact_opportunity,
                     "limit_price": target_spot if target_spot > 0 else None,
+                    "entry_ironclad_result": ironclad_result.as_dict_list(),
                     "instrument_type": "SPOT",
                 }
             )

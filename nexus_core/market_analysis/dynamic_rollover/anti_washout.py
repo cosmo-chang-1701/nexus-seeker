@@ -6,6 +6,7 @@ from market_analysis.sentiment.history_storage import get_indicator_percentile
 from . import logger
 from .constants import (
     _ANTI_WASHOUT_BASE_ATR_MULT,
+    _ANTI_WASHOUT_EXTREME_ATR_MULT,
     _BEAR_CALL_SPREAD_WING_ATR_MULT,
     _BEAR_CALL_SPREAD_WING_FALLBACK_PCT,
     _BUYER_LOCKOUT_IVR_THRESHOLD,
@@ -86,13 +87,14 @@ class _AntiWashoutMixin:
 
     def _compute_anti_washout_stop(
         self, anchor_base: float, metrics: dict
-    ) -> Tuple[float, float, bool, float]:
+    ) -> Tuple[float, float, bool, float, float]:
         """
         防洗盤四大機制：計算精確防守位與掛單限價。
-        回傳 (stop_loss, limit_price, is_01dte_expanded, dte_risk_parity_scale)。
+        回傳 (stop_loss, limit_price, is_01dte_expanded, dte_risk_parity_scale,
+        extreme_stop_loss)。
         """
         spot = float(metrics.get("spot_price", 0.0))
-        atr_15m = float(metrics.get("atr_15m", metrics.get("atr_14", 0.0)))
+        atr_15m = float(metrics.get("atr_15m", 0.0))
         lvn = float(metrics.get("lvn", 0.0))
         hvn = float(metrics.get("hvn", 0.0))
         dte = int(metrics.get("dte", 99))
@@ -145,7 +147,25 @@ class _AntiWashoutMixin:
             max(stop_loss - (0.5 * atr_15m if atr_15m > 0 else 0.6), stop_loss * 0.995),
             2,
         )
-        return stop_loss, limit_price, is_01dte_expanded, dte_risk_parity_scale
+
+        # 軌道二：極端瞬時停損 (Extreme Tick Breach)。沿用與機制 2 完全相同的
+        # anchor_base/atr_15m 原始輸入，獨立於上方 base_stop_loss 的鉗制／LVN
+        # 吸附／0-1DTE 疊加管線之外計算，純粹 anchor_base - 3.0×ATR_15m 公式，
+        # 不做任何邊界修飾——見 _apply_decision_matrix 的即時 tick 觸發判定。
+        if anchor_base > 0 and atr_15m > 0:
+            extreme_stop_loss = round(
+                anchor_base - (_ANTI_WASHOUT_EXTREME_ATR_MULT * atr_15m), 2
+            )
+        else:
+            extreme_stop_loss = 0.0
+
+        return (
+            stop_loss,
+            limit_price,
+            is_01dte_expanded,
+            dte_risk_parity_scale,
+            extreme_stop_loss,
+        )
 
     def _resolve_active_order_defense(
         self,
@@ -261,6 +281,7 @@ class _AntiWashoutMixin:
         is_take_profit: bool,
         stop_loss: float,
         anchor_base: float,
+        extreme_stop_loss: float = 0.0,
     ) -> Tuple[str, str, str, str]:
         """
         灰階思考量化裁決 (決策矩陣 - 雙軌裁決機制 Dual-Track Exit)。
@@ -280,6 +301,15 @@ class _AntiWashoutMixin:
             or (ivr_drop >= 20.0)
         )
 
+        # 軌道二：極端瞬時停損 (Extreme Tick Breach)。無論 SPOT 或 OPTIONS，
+        # 現價貫穿即立即觸發，無視 15m 實體收盤等待 (SPOT 常態停損仍維持
+        # 15m 收盤確認，僅此極端檔位額外賦予 SPOT 即時熔斷能力；OPTIONS
+        # 本已有即時熔斷，此檔位對其而言是純粹的向下相容 backstop)。優先權
+        # 高於 is_options_fast_exit/is_15m_close_broken，僅次於獲利了結。
+        is_extreme_tick_breach = (
+            spot < extreme_stop_loss if (extreme_stop_loss > 0 and spot > 0) else False
+        )
+
         # 機制 3: 15 分鐘實體 K 線過濾 (非瞬時破位，針對現貨 SPOT)
         is_15m_close_broken = (
             (price_15m_close < stop_loss)
@@ -294,6 +324,17 @@ class _AntiWashoutMixin:
                 "🎯 **獲利解鎖達成**：觸及阻力目標位，按計劃獲利了結轉倉。"
             )
             options_strategy = f"100% LIQUIDATE (轉入 {final_target})"
+        elif is_extreme_tick_breach:
+            final_action = "LIQUIDATE"
+            final_target = target if target else "VOO"
+            system_conflict_note = (
+                f"🆘 **極端瞬時停損觸發**：標的現價 (${spot:.2f}) 貫穿極端防守位 "
+                f"(${extreme_stop_loss:.2f} = ${anchor_base:.2f} - "
+                f"{_ANTI_WASHOUT_EXTREME_ATR_MULT}× ATR_15m)，無視 15m 實體收盤"
+                f"等待，立即市價平倉轉入 {final_target}（現貨與期權皆適用的"
+                "最後防線，阻斷突發黑天鵝與流動性真空滑步）。"
+            )
+            options_strategy = f"100% LIQUIDATE / STC (極端瞬時停損轉入 {final_target})"
         elif is_options_fast_exit:
             final_action = "LIQUIDATE"
             final_target = target if target else "VOO"
@@ -427,6 +468,7 @@ class _AntiWashoutMixin:
         """
         spot = float(metrics.get("spot_price", 0.0))
         ivr = float(metrics.get("ivr", 0.0))
+        iv_term_structure_status = metrics.get("iv_term_structure_status") or "N/A"
         max_pain = float(metrics.get("max_pain", 0.0))
         is_uoa_sweep = bool(metrics.get("is_uoa_sweep", False))
         sqz_mom = float(metrics.get("sqz_mom", 0.0))
@@ -439,9 +481,13 @@ class _AntiWashoutMixin:
         is_illiquid_warning = asset_class == "OPTIONS" and is_spread_illiquid(bid, ask)
 
         anchor_base, effective_res_wall = self._correct_wall_topology(metrics)
-        stop_loss, limit_price, is_01dte_expanded, dte_risk_parity_scale = (
-            self._compute_anti_washout_stop(anchor_base, metrics)
-        )
+        (
+            stop_loss,
+            limit_price,
+            is_01dte_expanded,
+            dte_risk_parity_scale,
+            extreme_stop_loss,
+        ) = self._compute_anti_washout_stop(anchor_base, metrics)
         order_defense_str, matching_order = self._resolve_active_order_defense(
             symbol, active_orders, stop_loss, limit_price
         )
@@ -456,6 +502,7 @@ class _AntiWashoutMixin:
                 is_take_profit=is_take_profit,
                 stop_loss=stop_loss,
                 anchor_base=anchor_base,
+                extreme_stop_loss=extreme_stop_loss,
             )
         )
 
@@ -465,6 +512,9 @@ class _AntiWashoutMixin:
 
         # 停損數值字串格式化 (嚴禁輸出 N/A)
         stop_loss_str = f"${stop_loss:.2f}"
+        extreme_stop_loss_str = (
+            f"${extreme_stop_loss:.2f}" if extreme_stop_loss > 0 else "N/A"
+        )
 
         # 數據異常註記
         data_note = ""
@@ -542,11 +592,17 @@ class _AntiWashoutMixin:
             if asset_class == "OPTIONS"
             else f"**15m 實體 K 線過濾** (盤中插針至 ${spot:.2f} 屬做市商正常洗盤，未跌破 ${stop_loss_str} 實體收盤前絕不手動干預)"
         )
+        extreme_stop_note = (
+            f"🆘 **極端瞬時停損 (軌道二)**：{extreme_stop_loss_str}"
+            f"（現價貫穿即立即市價平倉，無視 15m 收盤等待，全資產類別適用，"
+            f"作為黑天鵝/流動性真空級別的最後防線）"
+        )
 
         # 建構標準 4 段式 Markdown
         core_report = f"""
 1. **盤勢定調**
    - 現價: ${spot:.2f} | IV 位階: {ivr:.1f}%{data_note}
+   - IV 期限結構: {iv_term_structure_status}
    - 相對位置: Max Pain ${max_pain:.2f}
 2. **主力意圖拆解 (UOA/GEX 微結構)**
    - 做市商護盤牆: GEX Wall: ${anchor_base:.2f} ({gex_support_desc}) (強支撐彈簧床)
@@ -561,6 +617,7 @@ class _AntiWashoutMixin:
    - 防守機制: {order_defense_str}
      *(避開真空區，依據公式：`Stop = ${anchor_base:.2f} - ({"3.0" if is_01dte_expanded else "1.5"} × ATR_15m) = ${stop_loss_str}`)*
    - 出場裁決軌道: {dual_track_note}
+   - {extreme_stop_note}
 """.strip()
 
         # 🚨 動態資金輪動觸發條件：獨立拆分供 embed 呈現層放入專屬欄位，
@@ -572,6 +629,7 @@ class _AntiWashoutMixin:
 1. **實體破位觸發**：
    - {"3-5m 快速通道跌破或 IV 崩塌" if asset_class == "OPTIONS" else f"15 分鐘 K 線**實體收盤跌破 ${stop_loss_str}**"}，或委託單自動觸發成交。
    - **量化含義**：宣告 ${anchor_base:.2f} 做市商底牆徹底崩塌，負 Gamma 助跌啟動，價格將下探 ${max_pain:.2f} 痛點。
+   - **軌道二（極端瞬時停損）**：現價貫穿 **{extreme_stop_loss_str}** 時，無視上述 15m 收盤等待，立即市價平倉（全資產類別適用）。
 2. **轉倉執行動作**：
    - 回收資金約 **{cash_str}**。
    - **唯一指令**：立即市價全數買入 **{shares_guidance_str}**，使組合轉為 100% {target_core_name} 大盤防禦模式。
@@ -587,6 +645,7 @@ class _AntiWashoutMixin:
             "cash_impact": cash_str,
             "matching_order": matching_order,
             "is_illiquid_warning": is_illiquid_warning,
+            "extreme_stop_loss": extreme_stop_loss,
             # 注意：這裡刻意採用 target_entry_price（轉入目標資產的參考進場價），
             # 而非上面用於防守被賣出部位的 stop-limit `limit_price` 區域變數——
             # Discord Embed 的「建議限價 (Limit)」欄位語意上對應的是買入目標資產
@@ -634,6 +693,7 @@ async def _build_euphoria_primary_liquidation_instruction(
         "trigger_condition_text": report_90["trigger_condition_report"],
         "cash_impact": report_90["cash_impact"],
         "limit_price": report_90["limit_price"],
+        "extreme_stop_loss": report_90.get("extreme_stop_loss"),
         "instrument_type": asset_class,
     }
 
@@ -676,6 +736,7 @@ def _net_and_build_rebalance_instruction(
         "trigger_condition_text": report["trigger_condition_report"],
         "cash_impact": report["cash_impact"],
         "limit_price": report["limit_price"],
+        "extreme_stop_loss": report.get("extreme_stop_loss"),
         "instrument_type": asset_class,
     }
 
@@ -735,8 +796,11 @@ async def check_satellite_rebalancing_impl(
             lvn: float = float(asset.get("lvn", 0.0))
             dte: int = int(asset.get("dte", 99))
             price_15m_close: float = float(asset.get("price_15m_close", spot))
-            atr_15m: float = float(asset.get("atr_15m", atr_14))
+            atr_15m: float = float(asset.get("atr_15m", 0.0))
             acquired_at: Optional[str] = asset.get("acquired_at")
+            iv_term_structure_status: Optional[str] = asset.get(
+                "iv_term_structure_status"
+            )
 
             # 計算比例
             current_alloc: float = (
@@ -805,6 +869,7 @@ async def check_satellite_rebalancing_impl(
                 "bid": float(asset.get("bid", 0.0)),
                 "ask": float(asset.get("ask", 0.0)),
                 "acquired_at": acquired_at,
+                "iv_term_structure_status": iv_term_structure_status,
             }
 
             # 3. 目標區獲利解鎖完成
@@ -910,6 +975,7 @@ async def check_satellite_rebalancing_impl(
                                 ],
                                 "cash_impact": report_10["cash_impact"],
                                 "limit_price": short_strike,
+                                "extreme_stop_loss": report_10.get("extreme_stop_loss"),
                                 "instrument_type": asset_class,
                             }
                         )
@@ -964,6 +1030,7 @@ async def check_satellite_rebalancing_impl(
                                 ],
                                 "cash_impact": report_10["cash_impact"],
                                 "limit_price": trailing_stop_level,
+                                "extreme_stop_loss": report_10.get("extreme_stop_loss"),
                                 "instrument_type": asset_class,
                             }
                         )

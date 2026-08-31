@@ -13,7 +13,12 @@ from market_analysis.dynamic_rollover import (
     _resolve_canonical_anchor_base,
     _scan_gex_walls,
 )
-from market_analysis.dynamic_rollover.constants import _ANTI_WASHOUT_BASE_ATR_MULT
+from market_analysis.dynamic_rollover.constants import (
+    _ANTI_WASHOUT_BASE_ATR_MULT,
+    _ANTI_WASHOUT_EXTREME_ATR_MULT,
+)
+from market_analysis.entry_ironclad import RuleCheckResult
+from market_analysis.price_volume_alert import Confirmed15mBar
 from cogs.embed_builders.rollover_embeds import (
     create_dynamic_rollover_embed,
     create_covered_call_overlay_embed,
@@ -25,6 +30,23 @@ from cogs.embed_builders.rollover_embeds import (
 @pytest.fixture
 def engine() -> DynamicRolloverEngine:
     return DynamicRolloverEngine()
+
+
+def _passing_confirmed_bar(close: float = 40.0) -> Confirmed15mBar:
+    """核心資金部署狀態 A 額外閘門所需的 15m 量價快照 mock，供不測試
+    entry_ironclad 內部規則細節、僅測試 core_deployment 分支邏輯的既有測試
+    共用（entry_ironclad 的規則細節已由專屬的 test_entry_ironclad.py 覆蓋）。"""
+    return Confirmed15mBar(
+        symbol="MOCK",
+        bar_time=datetime.now(),
+        close=close,
+        volume=1000.0,
+        avg_volume=500.0,
+    )
+
+
+def _passing_ironclad_result() -> RuleCheckResult:
+    return RuleCheckResult(all_passed=True, checks=[])
 
 
 @pytest.fixture(autouse=True)
@@ -494,6 +516,82 @@ def test_create_dynamic_rollover_embed_truncates_long_reason() -> None:
     assert embed.description is not None
     assert len(embed.description) <= 4096
     assert "AAAA" in embed.description
+
+
+def test_create_dynamic_rollover_embed_renders_ironclad_checklist_field() -> None:
+    """entry_ironclad_result 帶入時，應新增「🔐 防洗盤實戰策略檢核清單」欄位，
+    正確渲染 Pass/Fail 符號、規則標籤，並顯示 extreme_stop_loss 數值。"""
+    entry_ironclad_result = [
+        {
+            "name": "rule_1_breakout",
+            "label": "結構性右側放量突破",
+            "passed": True,
+            "detail": "...",
+        },
+        {
+            "name": "rule_2_put_wall_floor",
+            "label": "正 Gamma 底牆完好",
+            "passed": True,
+            "detail": "...",
+        },
+        {
+            "name": "rule_3_no_physical_cap",
+            "label": "無 UOA 物理封頂",
+            "passed": False,
+            "detail": "...",
+        },
+        {
+            "name": "rule_4_bto_call_conviction",
+            "label": "主力 BTO Call 買盤確認",
+            "passed": True,
+            "detail": "...",
+        },
+    ]
+    embed = create_dynamic_rollover_embed(
+        rollover_type="核心資金部署",
+        sell_symbol="VOO",
+        sell_ratio=0.25,
+        buy_symbol="SPCX",
+        reason="測試原因",
+        suggested_strategy="Buy Shares",
+        suggested_price="$40.00 (限價)",
+        strike="N/A",
+        expiry="N/A",
+        scenario="CORE_DEPLOYMENT",
+        entry_ironclad_result=entry_ironclad_result,
+        extreme_stop_loss=88.5,
+    )
+    checklist_field = next(
+        (f for f in embed.fields if f.name == "🔐 防洗盤實戰策略檢核清單"), None
+    )
+    assert checklist_field is not None
+    assert checklist_field.value is not None
+    assert "結構性右側放量突破" in checklist_field.value
+    assert "✅" in checklist_field.value
+    assert "❌" in checklist_field.value  # rule_3 未通過
+    assert "$88.50" in checklist_field.value
+
+
+def test_create_dynamic_rollover_embed_omits_checklist_field_when_none() -> None:
+    """entry_ironclad_result/extreme_stop_loss 皆未提供 (既有情境，例如
+    OPPORTUNITY_COST/MARGIN_DEFENSE) 時，不應新增檢核清單欄位，維持既有
+    embed 結構向下相容。"""
+    embed = create_dynamic_rollover_embed(
+        rollover_type="機會成本轉倉",
+        sell_symbol="NVDA",
+        sell_ratio=0.5,
+        buy_symbol="SPCX",
+        reason="測試原因",
+        suggested_strategy="Buy Shares",
+        suggested_price="Market",
+        strike="N/A",
+        expiry="N/A",
+        scenario="OPPORTUNITY_COST",
+    )
+    checklist_field = next(
+        (f for f in embed.fields if f.name == "🔐 防洗盤實戰策略檢核清單"), None
+    )
+    assert checklist_field is None
 
 
 @pytest.mark.asyncio
@@ -1351,7 +1449,18 @@ async def test_evaluate_core_deployment_no_target_allocation_is_noop(
     new_callable=AsyncMock,
     return_value=(True, "mocked"),
 )
+@patch(
+    "market_analysis.price_volume_alert.get_confirmed_15m_bar",
+    new_callable=AsyncMock,
+    return_value=_passing_confirmed_bar(),
+)
+@patch(
+    "market_analysis.entry_ironclad.check_entry_ironclad_rules",
+    return_value=_passing_ironclad_result(),
+)
 async def test_evaluate_core_deployment_triggers(
+    mock_ironclad: MagicMock,
+    mock_confirmed_bar: AsyncMock,
     mock_entry_gate: AsyncMock,
     engine: DynamicRolloverEngine,
 ) -> None:
@@ -1376,7 +1485,9 @@ async def test_evaluate_core_deployment_triggers(
         "uoa": [],
     }
     # total_account_value = 10000 (全倉 VOO) -> current_alloc = 1.0
-    # excess_alloc = 1.0 - 0.5 = 0.5 -> sell_ratio = 0.5
+    # excess_alloc = 1.0 - 0.5 = 0.5 -> excess_value = 5000
+    # 狀態 A 僅部署超額資金的 50% (_CORE_DEPLOYMENT_OPPORTUNITY_DEPLOY_RATIO)
+    # -> opportunity_excess_value = 2500 -> sell_ratio = 2500 / 10000 = 0.25
     result = await engine.evaluate_core_deployment(
         1, portfolio, set(), 10000.0, "SPCX", candidate_radar
     )
@@ -1384,10 +1495,11 @@ async def test_evaluate_core_deployment_triggers(
     assert result[0]["symbol"] == "VOO"
     assert result[0]["target_core"] == "SPCX"
     assert result[0]["action"] == "REDUCE"
-    assert result[0]["sell_ratio"] == 0.5
+    assert result[0]["sell_ratio"] == 0.25
     assert result[0]["scenario"] == "CORE_DEPLOYMENT"
     assert result[0]["is_manual_override_required"] is False
     assert result[0]["limit_price"] == 40.0
+    assert result[0]["entry_ironclad_result"] == []
 
 
 @pytest.mark.asyncio
@@ -1481,7 +1593,18 @@ async def test_evaluate_core_deployment_boxx_defense_auto_suggested(
     new_callable=AsyncMock,
     return_value=(True, "mocked"),
 )
+@patch(
+    "market_analysis.price_volume_alert.get_confirmed_15m_bar",
+    new_callable=AsyncMock,
+    return_value=_passing_confirmed_bar(),
+)
+@patch(
+    "market_analysis.entry_ironclad.check_entry_ironclad_rules",
+    return_value=_passing_ironclad_result(),
+)
 async def test_evaluate_core_deployment_boxx_auto_suggested_below_threshold(
+    mock_ironclad: MagicMock,
+    mock_confirmed_bar: AsyncMock,
     mock_entry_gate: AsyncMock,
     mock_suggest_boxx: AsyncMock,
     engine: DynamicRolloverEngine,
@@ -1512,7 +1635,8 @@ async def test_evaluate_core_deployment_boxx_auto_suggested_below_threshold(
     )
     assert len(result) == 1
     assert result[0]["target_core"] == "SPCX"
-    assert result[0]["sell_ratio"] == 0.5
+    # 機會分支僅部署超額資金的 50% (_CORE_DEPLOYMENT_OPPORTUNITY_DEPLOY_RATIO)
+    assert result[0]["sell_ratio"] == 0.25
     mock_suggest_boxx.assert_awaited_once()
     mock_entry_gate.assert_awaited_once()
 
@@ -1654,7 +1778,18 @@ async def test_evaluate_core_deployment_satellite_asset_ignored(
     return_value=(True, "confirmed"),
 )
 @patch("database.market_cache.get_market_cache", return_value=None)
+@patch(
+    "market_analysis.price_volume_alert.get_confirmed_15m_bar",
+    new_callable=AsyncMock,
+    return_value=_passing_confirmed_bar(),
+)
+@patch(
+    "market_analysis.entry_ironclad.check_entry_ironclad_rules",
+    return_value=_passing_ironclad_result(),
+)
 async def test_scenario2_and_scenario5_reuse_confirm_entry_signal_result(
+    mock_ironclad: MagicMock,
+    mock_confirmed_bar: AsyncMock,
     mock_cache: MagicMock,
     mock_entry_gate: AsyncMock,
     engine: DynamicRolloverEngine,
@@ -1709,7 +1844,18 @@ async def test_scenario2_and_scenario5_reuse_confirm_entry_signal_result(
     new_callable=AsyncMock,
     return_value=(True, "confirmed independently"),
 )
+@patch(
+    "market_analysis.price_volume_alert.get_confirmed_15m_bar",
+    new_callable=AsyncMock,
+    return_value=_passing_confirmed_bar(),
+)
+@patch(
+    "market_analysis.entry_ironclad.check_entry_ironclad_rules",
+    return_value=_passing_ironclad_result(),
+)
 async def test_evaluate_core_deployment_confirms_independently_when_no_precomputed_result(
+    mock_ironclad: MagicMock,
+    mock_confirmed_bar: AsyncMock,
     mock_entry_gate: AsyncMock,
     engine: DynamicRolloverEngine,
 ) -> None:
@@ -2786,12 +2932,14 @@ def test_compute_anti_washout_stop_clamps_floor_when_anchor_far_below_spot(
     基礎停損應鉗制在 spot*0.95 下限，避免防護過鬆而失去防洗盤意義。
     """
     metrics = {"spot_price": 100.0, "atr_15m": 1.0, "dte": 30, "lvn": 0.0, "hvn": 0.0}
-    stop_loss, _limit, is_01dte, _scale = engine._compute_anti_washout_stop(
-        anchor_base=80.0, metrics=metrics
+    stop_loss, _limit, is_01dte, _scale, extreme_stop_loss = (
+        engine._compute_anti_washout_stop(anchor_base=80.0, metrics=metrics)
     )
     # raw = 80 - 1.5*1.0 = 78.5 -> 遠低於 spot*0.95=95.0 -> 鉗制至 95.0
     assert stop_loss == 95.0
     assert is_01dte is False
+    # 軌道二極端停損不受機制 2 的邊界鉗制影響：80 - 3.0*1.0 = 77.0
+    assert extreme_stop_loss == 77.0
 
 
 def test_compute_anti_washout_stop_clamps_ceiling_when_anchor_close_to_spot(
@@ -2802,7 +2950,7 @@ def test_compute_anti_washout_stop_clamps_ceiling_when_anchor_close_to_spot(
     spot*0.98 上限，避免防護過緊而提前洗出。
     """
     metrics = {"spot_price": 100.0, "atr_15m": 0.1, "dte": 30, "lvn": 0.0, "hvn": 0.0}
-    stop_loss, _limit, _is_01dte, _scale = engine._compute_anti_washout_stop(
+    stop_loss, _limit, _is_01dte, _scale, _extreme = engine._compute_anti_washout_stop(
         anchor_base=99.0, metrics=metrics
     )
     # raw = 99 - 0.15 = 98.85 -> 高於 spot*0.98=98.0 -> 鉗制至 98.0
@@ -2818,7 +2966,7 @@ def test_compute_anti_washout_stop_no_clamp_when_already_breached(
     誤將破位訊號抹除 (與 test_dual_track_exit_options_vs_spot 情境一致)。
     """
     metrics = {"spot_price": 95.0, "atr_15m": 2.0, "dte": 10, "lvn": 0.0, "hvn": 0.0}
-    stop_loss, _limit, _is_01dte, _scale = engine._compute_anti_washout_stop(
+    stop_loss, _limit, _is_01dte, _scale, _extreme = engine._compute_anti_washout_stop(
         anchor_base=100.0, metrics=metrics
     )
     # raw = 100 - 1.5*2 = 97.0 > spot(95.0) -> 已處於破位訊號區間，不鉗制
@@ -2834,7 +2982,7 @@ def test_compute_anti_washout_stop_lvn_regression_unchanged(
     0/1 DTE 風險平價的回歸驗證見
     test_compute_anti_washout_stop_01dte_total_distance_matches_named_constant。
     """
-    stop_lvn, _l2, _is2, _s2 = engine._compute_anti_washout_stop(
+    stop_lvn, _l2, _is2, _s2, _e2 = engine._compute_anti_washout_stop(
         anchor_base=100.0,
         metrics={
             "spot_price": 100.0,
@@ -2860,19 +3008,27 @@ def test_compute_anti_washout_stop_01dte_total_distance_matches_named_constant(
     """
     anchor_base = 100.0
     atr_15m = 2.0
-    stop_loss, _limit, is_01dte, scale = engine._compute_anti_washout_stop(
-        anchor_base=anchor_base,
-        metrics={
-            "spot_price": 100.0,
-            "atr_15m": atr_15m,
-            "dte": 1,
-            "lvn": 0.0,
-            "hvn": 0.0,
-        },
+    stop_loss, _limit, is_01dte, scale, extreme_stop_loss = (
+        engine._compute_anti_washout_stop(
+            anchor_base=anchor_base,
+            metrics={
+                "spot_price": 100.0,
+                "atr_15m": atr_15m,
+                "dte": 1,
+                "lvn": 0.0,
+                "hvn": 0.0,
+            },
+        )
     )
     assert is_01dte is True
     assert scale == 0.5
     assert anchor_base - stop_loss == 2 * _ANTI_WASHOUT_BASE_ATR_MULT * atr_15m
+    # 軌道二極端停損 (anchor_base - 3.0*atr_15m) 與上方 0/1 DTE 疊加後的
+    # stop_loss 恰好數值相同 (兩者皆為 2*1.5=3.0x ATR)，但這是「刻意的巧合」，
+    # 非同一機制：extreme_stop_loss 不受 dte<=1 分支影響 (任何 DTE 皆計算)，
+    # 也不套用 [0.95,0.98] 邊界鉗制/LVN 吸附，純粹套用
+    # _ANTI_WASHOUT_EXTREME_ATR_MULT 公式，驗證兩者互不依賴。
+    assert extreme_stop_loss == anchor_base - _ANTI_WASHOUT_EXTREME_ATR_MULT * atr_15m
 
 
 def test_resolve_canonical_anchor_base_topology_correction() -> None:

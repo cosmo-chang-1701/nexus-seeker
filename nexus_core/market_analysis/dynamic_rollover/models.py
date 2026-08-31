@@ -55,6 +55,14 @@ class RolloverInstruction(_RolloverInstructionRequired, total=False):
     is_manual_override_required: bool
     cash_impact: Optional[str]
     limit_price: Optional[float]
+    # 雙軌出場防守引擎軌道二（極端瞬時停損，anchor_base - 3.0×ATR_15m，
+    # 現價貫穿即立即觸發，無視 15m 收盤等待）。僅 SATELLITE_REBALANCE 情境
+    # 的指令會攜帶此欄位；CORE_DEPLOYMENT 等其餘情境維持 None。
+    extreme_stop_loss: Optional[float]
+    # 進場四重嚴格過濾鐵律 (market_analysis.entry_ironclad.RuleCheckResult.
+    # as_dict_list()) 的序列化檢核清單，供報告輸出層渲染 Pass/Fail。僅
+    # CORE_DEPLOYMENT 情境的機會分支（State A）指令會攜帶此欄位。
+    entry_ironclad_result: Optional[list[dict]]
     trigger_condition_text: Optional[str]
     sell_action: str
     buy_action_label: Optional[str]

@@ -223,7 +223,10 @@ class SymbolHubView(discord.ui.View):
             from market_analysis.index_microstructure import fetch_symbol_gex_metrics
 
             vp_task = asyncio.to_thread(calculate_volume_profile, self.symbol)
-            gex_task = fetch_symbol_gex_metrics(self.symbol)
+            # force_live=True：使用者主動點擊「刷新」，語意上與本處理器其餘
+            # IV/報價/歷史快取的清除行為一致，繞過 GEX 30 分鐘 SWR 快取層，
+            # 避免刷新後 Gamma Flip/GEX 牆仍顯示陳舊數據。
+            gex_task = fetch_symbol_gex_metrics(self.symbol, force_live=True)
 
             (
                 df_spy,

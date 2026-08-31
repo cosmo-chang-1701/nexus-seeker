@@ -10,6 +10,7 @@ from services import market_data_service, reddit_service
 from market_analysis.sentiment_engine import SentimentEngine
 from market_analysis.psq_engine import analyze_psq
 from market_analysis.risk_engine import MacroContext
+from market_analysis.atr_utils import fetch_atr_15m
 import market_math
 
 from cogs.embed_builder import create_error_embed, create_tactical_symbol_embed
@@ -24,29 +25,6 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return float(value) if value is not None else default
     except (TypeError, ValueError):
         return default
-
-
-async def _fetch_atr_15m(symbol: str) -> float:
-    """計算真正的 15 分鐘 K 棒 ATR(14)，供防洗盤停損參考使用。
-
-    force_refresh=True：ATR_15m 的價值建立在盤中即時性上，沿用
-    get_history_df() docstring 建議的短週期新鮮度模式（見 15 分鐘價量警報）。
-    """
-    try:
-        df_15m = await market_data_service.get_history_df(
-            symbol, period="5d", interval="15m", force_refresh=True
-        )
-        if df_15m is None or df_15m.empty or len(df_15m) < 14:
-            return 0.0
-        import pandas_ta as ta
-
-        atr_series = ta.atr(df_15m["High"], df_15m["Low"], df_15m["Close"], length=14)
-        if atr_series is None or atr_series.empty:
-            return 0.0
-        return float(atr_series.iloc[-1])
-    except Exception as e:
-        logger.warning(f"[{symbol}] ATR_15m 計算失敗: {e}")
-        return 0.0
 
 
 class SymbolDeepDiveMixin:
@@ -97,7 +75,7 @@ class SymbolDeepDiveMixin:
         vp_task = asyncio.create_task(
             asyncio.to_thread(calculate_volume_profile, symbol)
         )
-        atr_15m_task = asyncio.create_task(_fetch_atr_15m(symbol))
+        atr_15m_task = asyncio.create_task(fetch_atr_15m(symbol))
         reddit_task = asyncio.create_task(reddit_service.get_reddit_details(symbol))
         poly_task = asyncio.create_task(_safe_get_poly_markets())
         ddp_task = asyncio.create_task(ddp_inspector.inspect_symbol(symbol))
