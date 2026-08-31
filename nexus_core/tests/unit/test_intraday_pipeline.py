@@ -741,26 +741,6 @@ def test_avgo_positive_gamma_support_avoids_forbidden_zone() -> None:
     assert status_label == "價格接近最大痛點，維持震盪"
 
 
-def test_dark_pool_dirty_data_filter() -> None:
-    """測試暗池價格嚴重偏離 (大於20%) 時的過濾機制"""
-    from market_analysis.dark_pool_engine import sanitize_darkpool_prints
-
-    current_price = 394.06
-    prints = [
-        {
-            "price": 100.53,
-            "volume": 383236,
-            "premium": 38000000,
-        },  # Dirty (SATS/RCAT mis-mapped)
-        {"price": 393.10, "volume": 50000, "premium": 19655000},  # Valid
-    ]
-
-    valid_prints = sanitize_darkpool_prints("AVGO", prints, current_price, 0.20)
-
-    assert len(valid_prints) == 1
-    assert valid_prints[0]["price"] == 393.10
-
-
 def test_fixed_income_hedging_whitelist() -> None:
     """測試 BOXX 等避險資產的白名單豁免邏輯"""
     from market_analysis.insights_engine import RiskInsightsContext, InsightsEngine
@@ -1054,7 +1034,6 @@ def test_evaluate_advanced_filters_excludes_whale_hedge_and_low_dte_uoa() -> Non
         squeeze_status=False,
         squeeze_momentum=0.0,
         current_price=100.0,
-        dark_pool_skew=None,
     )
     params = ScanParams(min_net_uoa_delta=0.5)
 

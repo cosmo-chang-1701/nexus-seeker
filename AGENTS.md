@@ -119,7 +119,7 @@ Instead of invoking LLM on the first-level radar panel, a lightweight rules engi
 - **超跌磁吸 🚀**: Triggered if `price <= expected_move_lower` and `Delta MP% > 5%`.
 - **需防壓回 ⚠️ / 籌碼斷層 ⚠️**: Triggered if `abs(Delta MP%) > 10%`.
 - **Unified Radar Filters**: The terminal UI consolidates Risk Defense and Alpha Signal filters into a single dropdown, fully integrated with `ScanParams` for deep evaluation:
-  - **Risk Defenses**: Excludes martial law bounds (`exclude_martial_law`), prevents silent period events (`avoid_silent_period`), and shields against extreme dark pool distribution (`dp_skew_defense` filtering `skew < -0.3`).
+  - **Risk Defenses**: Excludes martial law bounds (`exclude_martial_law`) and prevents silent period events (`avoid_silent_period`).
   - **Alpha Signals & Advanced Gates**: Filters for Triple Discount Pricing (`tdp_mode`), Volatility Squeeze firing (`squeeze_mode`), Strict UOA institutional activity (`uoa_mode`), High-Deviation Magnetic Filters (`magnetic_filters`), plus advanced defensive layers including **UOA Barrier, Gravity Filter, Micro-Divergence Gate, Volume PCR Cascades Gate, LVN Vacuum Slip Defense, and GEX Paper-Wall Filters**.
 - **Real-time Insights**: Automatically matches active pending orders or option protection strategies (e.g., triggering pull-back alerts, PCR顺向殺盤背離, LVN 真空暴跌, 負 Gamma 泥淖, or paper-thin wall warnings). Now rendered inside a dedicated ANSI markdown code block for easy one-click copying.
 
@@ -134,7 +134,6 @@ The terminal radar card is built inside `cogs/embed_builders/` using `build_rada
 - **`IV 策略`**: IV Strategy Match with strict Negative Gamma circuit breaker forcing `🔴賣方禁售` during dealer sell-off cascades, `🔴CSP 禁售` for $IVR < 15\%$, and `🟢適宜賣方` for healthy environments.
 - **`EM Z-Score`**: Normalized Expected Move standard deviation position (e.g. `+0.00σ`, `+0.05σ`).
 - **`Top UOA`**: Single strongest whale print with ratio tags (e.g. `🛡️ 08/28 $885.0C (STO 304)` or `🔥 08/15 $220.0C (BTO 15k)`), with high-IV noise filter (`N/A (無主力)` for high IV stocks without institutional footprints).
-- **`暗池大宗交易 (Dark Pool Block Prints)`**: Automatically alerts users in Real-time Insights when block prints $\ge \$5\text{M}$ appear (e.g. `• 🧱 CRWV: 暗池在 $101.68 爆出 $48.85M 巨額大宗買盤，形成籌碼水泥牆支撐。`).
 - **`防洗盤絕對防守位 (Anti-Washout Stop)`**: Dynamically calculated as $PutWall - 1.5 \times ATR_{14}$, providing solid buffers against liquidity grabs.
 - **`離場判定鐵律`**: Enforces `"🛑 離場判定鐵律：嚴守 15 分鐘實體 K 線收盤撤退線 (過濾下影線流動性獵殺)"` in table notes.
 - **`灰階戰術建議 (Gray-scale Tactical Guidance)`**: Multi-dimensional evaluation engine preventing binary stop-outs, dynamically integrating `🚨 破位殺盤 (PCR 1.81)`, `🛑 跌穿LVN真空區($488.6)`, `⚠️ $9.5 僅單薄紙牆`, `🟡 護航網支撐，現貨續抱，防守退至 $103.80 (嚴守15分K收盤)`, etc. Redundant markdown bold formatting has been removed for consistent ANSI rendering.
@@ -193,7 +192,6 @@ Current sections:
   - ANSI snapshot and enriched Unusual Option Activity (UOA) table:
     - UOA entries are processed with `trade_type` (`SWEEP` or `BLOCK`) and `oi_change_net`.
     - Presentational layer tags UOA records visually with `🔥 SWEEP` or `📦 BLOCK` and the corresponding daily Open Interest net change.
-    - Top Dark Pool block prints are dynamically displayed along with absolute support resonance (DP-POC overlapping with PutWall). Dirty data (price deviation > 5%) is explicitly filtered out, and the number of filtered records is reported.
   - skew / IV structure interpretation
   - event risk summary
   - executable option plan
@@ -365,7 +363,6 @@ Relative Strength (RS) & Tactical Routing:
   $$RS_{Ticker} = \frac{Price_{Ticker}(t) / Price_{Ticker}(t-n)}{Price_{Benchmark}(t) / Price_{Benchmark}(t-n)}$$
   using sectoral ETFs (e.g., `SMH` for semiconductor tickers) as benchmarks.
 - In `ExecutionRouter`, overextended bullish assets (Price/MA20 Deviation > 10% AND RSI > 65) with high Relative Strength (RS > 1.2) are routed to **SPEAR** mode (suggesting Bull Put Spreads or OTM Covered Calls) instead of SHIELD grid shorting.
-- **Dark Pool Skew Override**: If the derived Dark Pool Skew is strongly negative (`dark_pool_skew < -0.3`), indicating heavy institutional distribution, the router overrides all aggressive strategies and forces a downgrade to **SHIELD** mode.
 - **IVR Strategy Gate (IVR 硬鎖閘門)**: If the Implied Volatility Rank (IVR) drops strictly below 10.0%, all selling strategies are hard-locked. The router forces a downgrade to `STANDBY` for sellers or restricts operations to Spot Buy, ITM Call BTO, or Debit Spreads, explicitly preventing physically deadlocked short premium entries in a zero-premium environment.
 - **Skew Divergence Gate (機構避險背離/尾部風險警戒)**: If `metrics.skew_percentile > 90.0`, the pipeline automatically sets `sddm_route = "WAIT (機構避險背離/尾部風險警戒)"` and `alert_level = "red"`, blocking all optimistic ratings and enforcing defensive capital allocation (70%~85% back to broad market assets).
 - **Momentum Vector Gate (負 Gamma 疊加空頭動能發散)**: If `net_gex < 0` and `metrics.squeeze_momentum < 0`, the pipeline forces `sddm_route = "WAIT (空頭動能發散)"` and `alert_level = "red"`, strictly forbidding range-bound defense or buy signals due to risk of cascade selloffs.
@@ -427,10 +424,11 @@ The platform implements an advanced macro risk-control layer that dynamically ad
   ```
 - **Stale-Cache Marker**: Both the `/force_macro_update` slash command (`cogs/trading/admin_commands.py`) and the CLI equivalent (`cli.py`) check the `_is_stale_cache` flag on the dict returned by `fetch_gex_metrics()` and append a ` ⚠️ [使用快取資料]` marker to the reported GEX line whenever the live edge-scraper fetch failed and the response is the last-known-good cached value (see §1 above) rather than a fresh scrape — this is not treated as an error (the command still reports overall success), it only flags that the displayed GEX numbers are not live.
 
-### 6. Volume Profile, Dark Pool & Triple Discount Pricing (TDP)
-- **V-POC & DP-POC Calculation**: The engine calculates the Volume Point of Control (POC) using `pandas-ta` volume profile functions, and fetches the Dark Pool Point of Control (DP-POC).
-- **Absolute Support Resonance**: If the DP-POC closely overlaps with the Market Maker's PutWall (< 1% deviation), an absolute support resonance alert is flagged.
-- **TDP Signal**: When the current spot price falls below the EMA 21, the option Max Pain level, the V-POC, AND the DP-POC, a `✨ TDP 估值三擊 (Triple Discount Pricing)` signal is activated. This highlights an immensely discounted structural entry point backed by both volume profile and dark pool support.
+### 6. Volume Profile & Triple Discount Pricing (TDP)
+- **V-POC Calculation**: The engine calculates the Volume Point of Control (POC) using `pandas-ta` volume profile functions. No live dark-pool data source is wired up (the previous `nexus_edge_scraper` darkpool endpoints returned synthetic/mock data and have been removed); the Radar Terminal's `dp_poc` field, used by its `magnetic_filters` quant filter and absolute-support-resonance check, is a fallback proxy resolved from this same Volume-POC signal (or the cached HVN price) — not genuine dark-pool print data.
+- **Absolute Support Resonance** (Radar Terminal only, `build_radar_scan_embed`): If the fallback `dp_poc` closely overlaps with the Market Maker's PutWall (< 1% deviation), an absolute support resonance alert (`🧲 共振磁吸`) is flagged.
+- **TDP Signal — Symbol Hub (`/x symbol:`)**: When the current spot price falls below the EMA 21, the option Max Pain level, AND the V-POC, a `✨ TDP 估值三擊 (Triple Discount Pricing)` signal is activated, highlighting an immensely discounted structural entry point backed by volume-profile support. (A fourth, dark-pool-backed condition was removed from this gate — Symbol Hub had no real dark-pool data source, so that condition could never be satisfied.)
+- **TDP Signal — Radar Terminal (`tdp_mode` quant filter)**: A separate four-condition check (`ma20`, `max_pain`, `volume_poc`, and the fallback `dp_poc` above) inside `evaluate_advanced_filters()`; unaffected by the Symbol Hub TDP change above.
 
 ### 7. Kelly Criterion Risk Sizing
 - **Dynamic Allocations**: Utilizing user-configured `capital` and `risk_limit`, the system uses `risk_engine.optimize_position_risk` to calculate the safe number of contracts to buy.

@@ -207,9 +207,8 @@ class ScanParams(BaseModel):
         default=False, description="嚴格要求標的處於正 Gamma 區間"
     )
 
-    # 3. 機構暗池與異常期權追蹤 (UOA & Dark Pool)
+    # 3. 機構異常期權追蹤 (UOA)
     min_net_uoa_delta: float = Field(default=0.0, description="UOA 買方淨 Delta 門檻")
-    dark_pool_skew_floor: float = Field(default=-0.2, description="暗池偏斜度防護下限")
 
     # 4. 終極價值共振 (Triple Discount Pricing - TDP)
     require_tdp_signal: bool = Field(default=False, description="要求觸發 TDP 估值三擊")

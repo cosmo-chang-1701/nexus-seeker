@@ -113,11 +113,6 @@ class UnifiedRadarView(discord.ui.View):
                 description="排除進入財報或主要事件前夕之標的",
             ),
             discord.SelectOption(
-                label="🛡️ 暗池派發防護 (Skew < -0.3)",
-                value="dp_skew_defense",
-                description="過濾機構恐慌搶購 Put 或派發之標的",
-            ),
-            discord.SelectOption(
                 label="🔵 TDP 估值三擊 (TDP Mode)",
                 value="tdp_mode",
                 description="嚴格過濾出估值三擊標的",
@@ -130,7 +125,7 @@ class UnifiedRadarView(discord.ui.View):
             discord.SelectOption(
                 label="🐋 嚴格機構籌碼 (Strict UOA)",
                 value="uoa_mode",
-                description="要求極高的 UOA 買方 Delta 與暗池支撐",
+                description="要求極高的 UOA 買方 Delta",
             ),
             discord.SelectOption(
                 label="🧲 高階磁吸過濾 (Magnetic Filters)",
@@ -141,7 +136,7 @@ class UnifiedRadarView(discord.ui.View):
         self.filter_select = discord.ui.Select(  # type: ignore
             placeholder="請選擇量化與進階引擎過濾條件 (可多選)...",
             min_values=0,
-            max_values=7,
+            max_values=6,
             options=filter_options,
             row=1,
         )

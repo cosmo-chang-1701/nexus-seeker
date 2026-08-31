@@ -220,11 +220,9 @@ class SymbolHubView(discord.ui.View):
                 self.symbol, period="1y", interval="1d"
             )
             from market_analysis.volume_profile import calculate_volume_profile
-            from market_analysis.dark_pool_engine import fetch_darkpool_prints
             from market_analysis.index_microstructure import fetch_symbol_gex_metrics
 
             vp_task = asyncio.to_thread(calculate_volume_profile, self.symbol)
-            dp_task = fetch_darkpool_prints(self.symbol)
             gex_task = fetch_symbol_gex_metrics(self.symbol)
 
             (
@@ -242,7 +240,6 @@ class SymbolHubView(discord.ui.View):
                 df_hist_1d,
                 catalysts,
                 vp_data,
-                dp_data,
                 gex_data,
             ) = await asyncio.gather(
                 spy_task,
@@ -259,7 +256,6 @@ class SymbolHubView(discord.ui.View):
                 df_hist_task,
                 catalyst_task,
                 vp_task,
-                dp_task,
                 gex_task,
             )
 
@@ -357,34 +353,21 @@ class SymbolHubView(discord.ui.View):
 
             result["catalysts"] = catalysts
             safe_vp = vp_data if isinstance(vp_data, dict) else {}
-            safe_dp = dp_data if isinstance(dp_data, dict) else {}
             result["volume_profile"] = safe_vp
 
-            # TDP 估值三擊判斷: 現價 < EMA 21 且 現價 < Max Pain 且 現價 < V-POC 且 現價 < DP-POC
+            # TDP 估值三擊判斷: 現價 < EMA 21 且 現價 < Max Pain 且 現價 < V-POC
             ema_21 = (
                 df_hist_1d["Close"].ewm(span=21, adjust=False).mean().iloc[-1]
                 if df_hist_1d is not None and not df_hist_1d.empty
                 else 0.0
             )
             vpoc = _safe_float(safe_vp.get("hvn"), 0.0)
-            dp_poc = _safe_float(safe_dp.get("dp_poc"), 0.0)
             max_pain = _safe_float(result["max_pain"], 0.0)
             price = _safe_float(result["price"], 0.0)
 
             if result.get("is_ddp"):
-                if (
-                    price > 0
-                    and ema_21 > 0
-                    and max_pain > 0
-                    and vpoc > 0
-                    and dp_poc > 0
-                ):
-                    if (
-                        price < ema_21
-                        and price < max_pain
-                        and price < vpoc
-                        and price < dp_poc
-                    ):
+                if price > 0 and ema_21 > 0 and max_pain > 0 and vpoc > 0:
+                    if price < ema_21 and price < max_pain and price < vpoc:
                         result["is_ddp"] = True
                         result["tdp_activated"] = True
 
@@ -396,8 +379,6 @@ class SymbolHubView(discord.ui.View):
                         )
                         if is_sqz:
                             result["tdpq_activated"] = True
-
-            result["darkpool"] = safe_dp
 
             from market_analysis.risk_engine import optimize_position_risk
 

@@ -121,7 +121,6 @@ class BatchScanMixin:
                 scan_params_kwargs["require_squeeze_firing"] = True
             if "uoa_mode" in quant_filters:
                 scan_params_kwargs["min_net_uoa_delta"] = 1.0
-                scan_params_kwargs["dark_pool_skew_floor"] = -0.2
 
             advanced_active = bool(scan_params_kwargs)
             adv_params = ScanParams(**scan_params_kwargs)
@@ -129,13 +128,7 @@ class BatchScanMixin:
             for r in valid_results:
                 passed = True
 
-                # 1. dp_skew_defense (防護派發風險)
-                if "dp_skew_defense" in quant_filters:
-                    skew_val = r.get("skew", 0.0)
-                    if skew_val < -0.3:
-                        passed = False
-
-                # 2. exclude_martial_law (排除底牆破位 / 負 Gamma / 痛點極端偏離)
+                # 1. exclude_martial_law (排除底牆破位 / 負 Gamma / 痛點極端偏離)
                 if "exclude_martial_law" in quant_filters:
                     gex_data = r.get("gex_profile_data", {}) or r.get("gex_metrics", {})
                     pw_val = gex_data.get("put_wall") if gex_data else None
@@ -165,7 +158,7 @@ class BatchScanMixin:
                     ):
                         passed = False
 
-                # 3. avoid_silent_period (規避財報/總經靜默期)
+                # 2. avoid_silent_period (規避財報/總經靜默期)
                 if "avoid_silent_period" in quant_filters:
                     iv_data = r.get("iv_data")
                     if iv_data:
@@ -182,7 +175,7 @@ class BatchScanMixin:
                         if earnings_loading or macro_loading:
                             passed = False
 
-                # 4. magnetic_filters (高階磁吸過濾)
+                # 3. magnetic_filters (高階磁吸過濾)
                 if "magnetic_filters" in quant_filters:
                     quote = r.get("quote", {})
                     c_val = quote.get("c") if quote else 0.0
@@ -219,7 +212,7 @@ class BatchScanMixin:
                     else:
                         passed = False
 
-                # 5. Advanced Filters (ScanParams)
+                # 4. Advanced Filters (ScanParams)
                 if passed and advanced_active:
                     quote = r.get("quote", {})
                     c_val = quote.get("c") if quote else 0.0
@@ -243,7 +236,6 @@ class BatchScanMixin:
                             "momentum_value", psq_res.get("momentum", 0.0)
                         ),
                         current_price=current_price,
-                        dark_pool_skew=r.get("skew", 0.0),
                         volume_poc=None,  # volume profile may not be fully available in batch scan
                         gex_max_put_wall=put_wall,
                         ma20=r.get("ma20"),

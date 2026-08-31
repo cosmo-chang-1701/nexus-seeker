@@ -25,7 +25,6 @@ class MarketCondition(BaseModel):
     relative_strength: float = Field(
         1.0, description="相對強度 (Relative Strength) 指標"
     )
-    dark_pool_skew: float = Field(0.0, description="暗池偏度 (DP Skew)")
     ivr: float = Field(default=0.0, description="IV Rank (0-100)", ge=0.0, le=100.0)
     sqz_mom: float = Field(default=0.0, description="Squeeze Momentum")
     skew_percentile: float = Field(
@@ -44,7 +43,6 @@ class MarketCondition(BaseModel):
         "atr_14",
         "rsi_14",
         "relative_strength",
-        "dark_pool_skew",
         "ivr",
         "sqz_mom",
         "skew_percentile",
@@ -106,7 +104,6 @@ class MarketCondition(BaseModel):
             "atr_14": 1.0,
             "rsi_14": 50.0,
             "relative_strength": 1.0,
-            "dark_pool_skew": 0.0,
             "ivr": 0.0,
             "sqz_mom": 0.0,
             "skew_percentile": 50.0,

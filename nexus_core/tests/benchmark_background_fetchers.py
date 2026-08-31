@@ -38,7 +38,6 @@ import config
 import database
 from database.cache import save_kv_cache
 from market_analysis import (
-    dark_pool_engine,
     index_microstructure,
     psq_engine,
     volume_profile,
@@ -425,49 +424,7 @@ class BenchmarkSuite:
                 f"POC: ${poc_val:.2f}, HVN: ${hvn_val:.2f}, LVN: ${lvn_val:.2f}",
             )
 
-        # 7. 暗池 DIX 與個股暗池明細
-        t0 = time.perf_counter()
-        try:
-            dix_data = await dark_pool_engine.fetch_and_cache_darkpool_dix()
-            elapsed = (time.perf_counter() - t0) * 1000
-            self.record(
-                "Suite 2",
-                "fetch_and_cache_darkpool_dix()",
-                "PASS",
-                elapsed,
-                f"DIX: {dix_data.get('dix')}%, GEX: {dix_data.get('gex')}B",
-            )
-        except Exception as e:
-            self.record(
-                "Suite 2",
-                "fetch_and_cache_darkpool_dix",
-                "FAIL",
-                (time.perf_counter() - t0) * 1000,
-                str(e),
-            )
-
-        t0 = time.perf_counter()
-        try:
-            dp_prints = await dark_pool_engine.fetch_darkpool_prints(test_symbol)
-            elapsed = (time.perf_counter() - t0) * 1000
-            prints_list = dp_prints.get("prints", [])
-            self.record(
-                "Suite 2",
-                f"fetch_darkpool_prints({test_symbol})",
-                "PASS",
-                elapsed,
-                f"{len(prints_list)} block prints, DP-POC: ${dp_prints.get('dp_poc', 0.0)}",
-            )
-        except Exception as e:
-            self.record(
-                "Suite 2",
-                "fetch_darkpool_prints",
-                "FAIL",
-                (time.perf_counter() - t0) * 1000,
-                str(e),
-            )
-
-        # 8. 總經微觀結構與市場體系 (Regime)
+        # 7. 總經微觀結構與市場體系 (Regime)
         t0 = time.perf_counter()
         try:
             regime = await index_microstructure.get_market_regime()
@@ -488,7 +445,7 @@ class BenchmarkSuite:
                 str(e),
             )
 
-        # 9. 宏觀日曆與 FedWatch
+        # 8. 宏觀日曆與 FedWatch
         t0 = time.perf_counter()
         try:
             events = await calendar_service.calendar_service.get_high_impact_events(
@@ -531,7 +488,7 @@ class BenchmarkSuite:
                 str(e),
             )
 
-        # 10. Reddit 批次情緒與 SEC 基本面
+        # 9. Reddit 批次情緒與 SEC 基本面
         t0 = time.perf_counter()
         try:
             reddit_batch = await reddit_service.get_reddit_context_batch(
@@ -577,7 +534,7 @@ class BenchmarkSuite:
                 str(e),
             )
 
-        # 11. WTI 原油全套指標
+        # 10. WTI 原油全套指標
         t0 = time.perf_counter()
         try:
             wti_res = await wti_analysis.analyze_wti(
@@ -893,20 +850,7 @@ class BenchmarkSuite:
                 f"Stale: {is_stale}, Gamma Flip: {degraded_gex.get('gamma_flip')}",
             )
 
-            # 2. 測試 Dark Pool DIX 降級至常數 45.2
-            t0 = time.perf_counter()
-            degraded_dix = await dark_pool_engine.fetch_and_cache_darkpool_dix()
-            elapsed = (time.perf_counter() - t0) * 1000
-            is_dix_fallback = degraded_dix.get("dix") == 45.2
-            self.record(
-                "Suite 5",
-                "Dark Pool DIX Fallback to Constant 45.2%",
-                "PASS" if is_dix_fallback else "FAIL",
-                elapsed,
-                f"DIX: {degraded_dix.get('dix')}%",
-            )
-
-            # 3. 測試 Macro Liquidity 降級至常數 TED Spread 0.15
+            # 2. 測試 Macro Liquidity 降級至常數 TED Spread 0.15
             t0 = time.perf_counter()
             degraded_liq = await index_microstructure.fetch_liquidity_metrics()
             elapsed = (time.perf_counter() - t0) * 1000
@@ -917,43 +861,6 @@ class BenchmarkSuite:
                 "PASS" if is_liq_fallback else "FAIL",
                 elapsed,
                 f"TED Spread: {degraded_liq.get('ted_spread')}",
-            )
-
-            # 4. 測試 暗池大單髒數據過濾器 (Sanitize Dark Pool Prints > 5% 偏離)
-            dirty_prints = [
-                {
-                    "price": 100.0,
-                    "size": 10000,
-                    "type": "BUY",
-                },  # 偏離 0% (現價 100)
-                {
-                    "price": 150.0,
-                    "size": 50000,
-                    "type": "BUY",
-                },  # 偏離 50% (髒數據)
-                {
-                    "price": 50.0,
-                    "size": 50000,
-                    "type": "BUY",
-                },  # 偏離 50% (髒數據)
-                {"price": 102.0, "size": 10000, "type": "BUY"},  # 偏離 2% (合法)
-            ]
-            t0 = time.perf_counter()
-            cleaned_prints = dark_pool_engine.sanitize_darkpool_prints(
-                "NVDA", dirty_prints, current_price=100.0, deviation_threshold=0.05
-            )
-            elapsed = (time.perf_counter() - t0) * 1000
-            is_cleaned_pass = (
-                len(cleaned_prints) == 2
-                and cleaned_prints[0]["price"] == 100.0
-                and cleaned_prints[1]["price"] == 102.0
-            )
-            self.record(
-                "Suite 5",
-                "Dark Pool Dirty Print Filter (>5% deviation)",
-                "PASS" if is_cleaned_pass else "FAIL",
-                elapsed,
-                f"Retained {len(cleaned_prints)}/4 valid prints",
             )
 
         finally:

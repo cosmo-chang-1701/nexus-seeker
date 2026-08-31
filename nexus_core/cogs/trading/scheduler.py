@@ -144,17 +144,15 @@ class SchedulerCog(commands.Cog):
 
         # 1. 抓取 SPX, VIX, US10Y, WTI 數據並存入 SQLite
         try:
-            from market_analysis.dark_pool_engine import fetch_and_cache_darkpool_dix
             from services.market_data_service import get_vix_term_structure, get_quote
             from market_analysis.index_microstructure import fetch_core_macro_metrics
 
-            spx_q, vix_q, tnx_q, wti_q, vts_q, _, _ = await asyncio.gather(
+            spx_q, vix_q, tnx_q, wti_q, vts_q, _ = await asyncio.gather(
                 get_quote("^SPX"),
                 get_quote("^VIX"),
                 get_quote("^TNX"),
                 get_quote("CL=F"),
                 get_vix_term_structure(),
-                fetch_and_cache_darkpool_dix(),
                 fetch_core_macro_metrics(),
                 return_exceptions=True,
             )

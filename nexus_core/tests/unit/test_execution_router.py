@@ -152,7 +152,7 @@ def test_gatekeeper_spear_on_overextended_bullish_and_high_rs(router: Any):  # t
     當價格嚴重超買 (偏離 > 10% AND RSI > 65) 且相對強度 RS > 1.2 時，應戰術路由至 SPEAR 模式。
     """
     # Case 1: Overextended bullish and RS > 1.2 -> SPEAR
-    condition_spear = MarketCondition(  # type: ignore
+    condition_spear = MarketCondition(
         vix=15.0,
         skew_percent=0.02,
         asset_price=112.0,  # 12% deviation from ma20
@@ -167,7 +167,7 @@ def test_gatekeeper_spear_on_overextended_bullish_and_high_rs(router: Any):  # t
     assert "相對行業板塊強度 RS" in decision.trigger_reason
 
     # Case 2: Overextended bullish but RS <= 1.2 -> SHIELD (falling back to standard deviation grid)
-    condition_shield = MarketCondition(  # type: ignore
+    condition_shield = MarketCondition(
         vix=15.0,
         skew_percent=0.02,
         asset_price=112.0,

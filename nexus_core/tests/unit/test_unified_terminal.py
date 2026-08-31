@@ -822,10 +822,6 @@ async def test_fetch_single_symbol_data_raw_forces_live_option_data(  # type: ig
         ) as mock_gex,
         patch("market_analysis.volume_profile.calculate_volume_profile") as mock_vp,
         patch(
-            "market_analysis.dark_pool_engine.fetch_darkpool_prints",
-            new_callable=AsyncMock,
-        ) as mock_dp,
-        patch(
             "services.reddit_service.get_reddit_details", new_callable=AsyncMock
         ) as mock_reddit,
         patch(
@@ -864,7 +860,6 @@ async def test_fetch_single_symbol_data_raw_forces_live_option_data(  # type: ig
         mock_expiries.return_value = [target_expiry]
         mock_gex.return_value = {"put_wall": 100.0}
         mock_vp.return_value = {"hvn": 0.0, "lvn": 0.0}
-        mock_dp.return_value = {}
         mock_reddit.return_value = ("看多情緒高漲", [])
         mock_ddp.return_value = {"is_ddp": False}
         mock_skew.return_value = {"skew": 1.0}

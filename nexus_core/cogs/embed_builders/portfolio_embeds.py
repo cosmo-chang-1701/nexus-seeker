@@ -820,12 +820,18 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                     else "基於前日收盤 IV 計算"
                 )
             else:
-                vol_title = "Implied Volatility (IV)"
-                vol_note = (
-                    "當前 30 天平值期權隱含波動率"
-                    if iv_source != "STORED_IV"
-                    else "SQLite 快取 IV（非即時）"
-                )
+                if iv_source == "LIVE_IV":
+                    vol_title = "Implied Volatility (IV) 🟢即時"
+                    vol_note = (
+                        "當前 30 天平值期權隱含波動率（每次開啟強制刷新，非快取）"
+                    )
+                else:
+                    vol_title = "Implied Volatility (IV)"
+                    vol_note = (
+                        "當前 30 天平值期權隱含波動率"
+                        if iv_source != "STORED_IV"
+                        else "SQLite 快取 IV（非即時）"
+                    )
                 em_note = (
                     "基於當前 IV 計算"
                     if iv_source != "STORED_IV"
@@ -1030,6 +1036,12 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         gex_lines.append(
                             f" 🛡️ GEX PutWall (做市商底牆): ${float(gex_putwall):.2f}"
                         )
+                        atr_15m_val = _to_float(data.get("atr_15m"), 0.0)
+                        if atr_15m_val > 0:
+                            anti_washout_stop = float(gex_putwall) - 1.5 * atr_15m_val
+                            gex_lines.append(
+                                f" 📉 防洗盤停損參考 (PutWall - 1.5×ATR_15m): ${anti_washout_stop:.2f}"
+                            )
 
                     gex_lines.append("```")
 
@@ -1392,69 +1404,6 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             value="```ansi\n目前無顯著異常活動\n```",
             inline=False,
         )
-
-    # 4.5. 🦇 暗池與大宗交易跡象 (Dark Pool Prints)
-    dp_data = data.get("darkpool")
-    if dp_data:
-        from market_analysis.dark_pool_engine import sanitize_darkpool_prints
-
-        dp_lines = ["```ansi"]
-        prints = dp_data.get("prints", [])
-        valid_prints = sanitize_darkpool_prints(symbol, prints, c_val, 0.05)
-
-        if valid_prints:
-            top3 = sorted(
-                valid_prints, key=lambda x: _to_float(x.get("premium", 0)), reverse=True
-            )[:3]
-            actual_count = len(top3)
-            dp_lines.append(f" 💰 近期最大暗池成交 (Top {actual_count} Block Prints)")
-
-            filtered_count = len(prints) - len(valid_prints)
-
-            for i, p in enumerate(top3):
-                pr = _to_float(p.get("price", 0))
-                vol = int(_to_float(p.get("volume", 0)))
-                prem = _to_float(p.get("premium", 0))
-                prem_m = prem / 1000000.0
-
-                is_last_item = (i == len(top3) - 1) and (filtered_count == 0)
-                prefix = " └─" if is_last_item else " ├─"
-
-                dp_lines.append(
-                    f"{prefix} \u001b[1;36m${pr:>7.2f}\u001b[0m | 量: {vol:>8,} | 金額: \u001b[1;33m${prem_m:>6.2f}M\u001b[0m"
-                )
-
-            if filtered_count > 0:
-                dp_lines.append(
-                    f" └─ ⚠️ 已過濾 {filtered_count} 筆偏離現價大於 5% 的髒數據"
-                )
-        else:
-            dp_lines.append(" 💰 近期最大暗池成交 (Top 3 Block Prints)")
-            dp_lines.append(" └─ 近 24 小時無顯著大宗交易。")
-
-        dp_poc = _to_float_or_none(dp_data.get("dp_poc"))
-        if dp_poc is not None and dp_poc > 0:
-            dp_lines.append("")
-            dp_lines.append(" 🌊 籌碼與防禦共振 (Support Resonance)")
-            dp_lines.append(
-                f" ├─ 暗池磁吸價 (DP-POC): \u001b[1;35m${dp_poc:.2f}\u001b[0m"
-            )
-
-            gex_putwall = _to_float_or_none(data.get("gex", {}).get("put_wall"))
-            if gex_putwall is not None and gex_putwall > 0:
-                is_overlap = abs(dp_poc - gex_putwall) / gex_putwall <= 0.01
-                if is_overlap:
-                    dp_lines.append(
-                        " └─ 狀態: \u001b[1;31m🛡️ 絕對防禦共振\u001b[0m (與 PutWall 高度重疊)"
-                    )
-                else:
-                    dp_lines.append(" └─ 狀態: \u001b[1;30m⚪ 無顯著重疊\u001b[0m")
-            else:
-                dp_lines.append(" └─ 狀態: \u001b[1;30m⚪ 缺乏 PutWall 數據\u001b[0m")
-
-        dp_lines.append("```")
-
-        _add_ansi_field_safely(embed, "🦇 暗池大宗交易與支撐 (Dark Pool)", dp_lines)
 
     embed.set_footer(
         text="🔗 使用 /settle_hedge 紀錄對沖或 /event_impact 進行曝險模擬。"

@@ -204,11 +204,7 @@ def evaluate_advanced_filters(
             else:
                 tags.append("[☢️ GEX 臨界]")
 
-    # 3. UOA & Dark Pool
-    dp_skew = getattr(metrics, "dark_pool_skew", None)
-    if dp_skew is not None and dp_skew < params.dark_pool_skew_floor:
-        return False, []
-
+    # 3. UOA
     if uoa_data:
 
         def safe_float(v: Any):  # type: ignore

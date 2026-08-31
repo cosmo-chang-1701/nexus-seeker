@@ -2098,10 +2098,7 @@ def test_build_radar_scan_embed_all_enhanced_fields() -> None:
     assert "🔴賣方禁售" in desc
     assert "🟢適宜賣方" in desc
 
-    # 7. 暗池水泥牆大宗交易警示驗證
-    assert "暗池在 $101.68 爆出 $48.85M 巨額大宗買盤" in desc
-
-    # 8. 防洗盤絕對防守位與離場判定鐵律驗證
+    # 7. 防洗盤絕對防守位與離場判定鐵律驗證
     # CRWV PutWall 108.0 - 1.5 * 2.8 = $103.80
     assert "$103.80" in desc
     assert "嚴守 15 分鐘實體 K 線收盤撤退線" in desc
@@ -2823,6 +2820,112 @@ def test_create_tactical_symbol_embed_string_expected_move() -> None:
         assert "NVDA" in embed.title
     except TypeError as e:
         pytest.fail(f"Embed creation failed with type error: {e}")
+
+
+def test_create_tactical_symbol_embed_shows_anti_washout_stop_with_atr_15m() -> None:
+    """atr_15m 有值且成功抓到 PutWall 時，GEX 欄位應附上
+    PutWall - 1.5×ATR_15m 的防洗盤停損參考行。"""
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data = {
+        "symbol": "NVDA",
+        "iv_data": {
+            "current_iv": 0.5,
+            "iv_rank": 50.0,
+            "iv_percentile": 60.0,
+            "expected_move_weekly": 10.0,
+            "iv_status": "Normal",
+        },
+        "expected_move_context": {"reference_price": 100.0},
+        "gex_profile_data": {
+            "put_wall": 100.0,
+            "gex_profile": {"98.0": 2_000_000, "100.0": 3_000_000, "102.0": -1_000_000},
+        },
+        "atr_15m": 2.0,
+    }
+
+    embed = create_tactical_symbol_embed(data)
+    desc = get_embed_text(embed)
+    # PutWall(100.0) - 1.5 * ATR_15m(2.0) = 97.0
+    assert "防洗盤停損參考 (PutWall - 1.5×ATR_15m): $97.00" in desc
+
+
+def test_create_tactical_symbol_embed_omits_anti_washout_stop_without_atr_15m() -> None:
+    """atr_15m 缺失或為 0（抓取失敗）時，不應顯示防洗盤停損參考行，
+    以免印出誤導性的 $0.00 或以現價當作 ATR 計算基礎。"""
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data = {
+        "symbol": "NVDA",
+        "iv_data": {
+            "current_iv": 0.5,
+            "iv_rank": 50.0,
+            "iv_percentile": 60.0,
+            "expected_move_weekly": 10.0,
+            "iv_status": "Normal",
+        },
+        "expected_move_context": {"reference_price": 100.0},
+        "gex_profile_data": {
+            "put_wall": 100.0,
+            "gex_profile": {"98.0": 2_000_000, "100.0": 3_000_000, "102.0": -1_000_000},
+        },
+        # atr_15m 未提供，模擬抓取失敗降級為 0.0
+    }
+
+    embed = create_tactical_symbol_embed(data)
+    desc = get_embed_text(embed)
+    assert "防洗盤停損參考" not in desc
+    assert "GEX PutWall (做市商底牆): $100.00" in desc
+
+
+def test_create_tactical_symbol_embed_marks_live_iv_realtime() -> None:
+    """iv_source == "LIVE_IV"（force_refresh 即時反解）時，IV 標題應標示
+    🟢即時，讓使用者能分辨看到的 IV 是即時反解還是快取值。"""
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data = {
+        "symbol": "NVDA",
+        "iv_data": {
+            "current_iv": 0.5,
+            "iv_rank": 50.0,
+            "iv_percentile": 60.0,
+            "expected_move_weekly": 10.0,
+            "iv_status": "Normal",
+            "iv_source": "LIVE_IV",
+            "is_premarket": False,
+        },
+        "expected_move_context": {"reference_price": 100.0},
+    }
+
+    embed = create_tactical_symbol_embed(data)
+    desc = get_embed_text(embed)
+    assert "Implied Volatility (IV) 🟢即時" in desc
+    assert "當前 30 天平值期權隱含波動率（每次開啟強制刷新，非快取）" in desc
+
+
+def test_create_tactical_symbol_embed_stored_iv_has_no_realtime_marker() -> None:
+    """iv_source == "STORED_IV" 時（非本次請求即時反解），不應顯示 🟢即時標記，
+    維持既有的快取提示文字不變。"""
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data = {
+        "symbol": "NVDA",
+        "iv_data": {
+            "current_iv": 0.5,
+            "iv_rank": 50.0,
+            "iv_percentile": 60.0,
+            "expected_move_weekly": 10.0,
+            "iv_status": "Normal",
+            "iv_source": "STORED_IV",
+            "is_premarket": False,
+        },
+        "expected_move_context": {"reference_price": 100.0},
+    }
+
+    embed = create_tactical_symbol_embed(data)
+    desc = get_embed_text(embed)
+    assert "🟢即時" not in desc
+    assert "SQLite 快取 IV（非即時）" in desc
 
 
 def test_create_tactical_symbol_embed_marks_stale_uoa_field() -> None:

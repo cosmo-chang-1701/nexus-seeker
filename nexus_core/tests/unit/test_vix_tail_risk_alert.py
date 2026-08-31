@@ -60,9 +60,6 @@ async def test_dynamic_market_scanner_blocks_false_alarm_vix_zero(
     ), patch("services.market_data_service.get_quote") as mock_quote, patch(
         "services.market_data_service.get_vix_term_structure"
     ) as mock_vts, patch(
-        "market_analysis.dark_pool_engine.fetch_and_cache_darkpool_dix",
-        new_callable=AsyncMock,
-    ), patch(
         "market_analysis.index_microstructure.fetch_core_macro_metrics",
         new_callable=AsyncMock,
     ), patch(
@@ -108,9 +105,6 @@ async def test_dynamic_market_scanner_blocks_false_alarm_mild_vts(
     ), patch("services.market_data_service.get_quote") as mock_quote, patch(
         "services.market_data_service.get_vix_term_structure"
     ) as mock_vts, patch(
-        "market_analysis.dark_pool_engine.fetch_and_cache_darkpool_dix",
-        new_callable=AsyncMock,
-    ), patch(
         "market_analysis.index_microstructure.fetch_core_macro_metrics",
         new_callable=AsyncMock,
     ), patch(
@@ -161,9 +155,6 @@ async def test_dynamic_market_scanner_triggers_on_vix_surge(mock_bot: Any) -> No
     ), patch("services.market_data_service.get_quote") as mock_quote, patch(
         "services.market_data_service.get_vix_term_structure"
     ) as mock_vts, patch(
-        "market_analysis.dark_pool_engine.fetch_and_cache_darkpool_dix",
-        new_callable=AsyncMock,
-    ), patch(
         "market_analysis.index_microstructure.fetch_core_macro_metrics",
         new_callable=AsyncMock,
     ), patch(
@@ -223,9 +214,6 @@ async def test_dynamic_market_scanner_triggers_on_severe_vts_inversion(
     ), patch("services.market_data_service.get_quote") as mock_quote, patch(
         "services.market_data_service.get_vix_term_structure"
     ) as mock_vts, patch(
-        "market_analysis.dark_pool_engine.fetch_and_cache_darkpool_dix",
-        new_callable=AsyncMock,
-    ), patch(
         "market_analysis.index_microstructure.fetch_core_macro_metrics",
         new_callable=AsyncMock,
     ), patch(
@@ -268,9 +256,6 @@ async def test_dynamic_market_scanner_skips_when_memory_unsafe(mock_bot: Any) ->
     ), patch("services.market_data_service.get_quote") as mock_quote, patch(
         "services.market_data_service.get_vix_term_structure"
     ) as mock_vts, patch(
-        "market_analysis.dark_pool_engine.fetch_and_cache_darkpool_dix",
-        new_callable=AsyncMock,
-    ), patch(
         "market_analysis.index_microstructure.fetch_core_macro_metrics",
         new_callable=AsyncMock,
     ), patch(

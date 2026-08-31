@@ -26,6 +26,29 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+async def _fetch_atr_15m(symbol: str) -> float:
+    """計算真正的 15 分鐘 K 棒 ATR(14)，供防洗盤停損參考使用。
+
+    force_refresh=True：ATR_15m 的價值建立在盤中即時性上，沿用
+    get_history_df() docstring 建議的短週期新鮮度模式（見 15 分鐘價量警報）。
+    """
+    try:
+        df_15m = await market_data_service.get_history_df(
+            symbol, period="5d", interval="15m", force_refresh=True
+        )
+        if df_15m is None or df_15m.empty or len(df_15m) < 14:
+            return 0.0
+        import pandas_ta as ta
+
+        atr_series = ta.atr(df_15m["High"], df_15m["Low"], df_15m["Close"], length=14)
+        if atr_series is None or atr_series.empty:
+            return 0.0
+        return float(atr_series.iloc[-1])
+    except Exception as e:
+        logger.warning(f"[{symbol}] ATR_15m 計算失敗: {e}")
+        return 0.0
+
+
 class SymbolDeepDiveMixin:
     if TYPE_CHECKING:
         bot: Any
@@ -49,7 +72,6 @@ class SymbolDeepDiveMixin:
         from datetime import datetime
         from market_analysis.index_microstructure import fetch_symbol_gex_metrics
         from market_analysis.volume_profile import calculate_volume_profile
-        from market_analysis.dark_pool_engine import fetch_darkpool_prints
 
         ddp_inspector = DDPInspector(self.bot)
         poly_service = getattr(self.bot, "polymarket_service", None)
@@ -75,7 +97,7 @@ class SymbolDeepDiveMixin:
         vp_task = asyncio.create_task(
             asyncio.to_thread(calculate_volume_profile, symbol)
         )
-        dp_task = asyncio.create_task(fetch_darkpool_prints(symbol))
+        atr_15m_task = asyncio.create_task(_fetch_atr_15m(symbol))
         reddit_task = asyncio.create_task(reddit_service.get_reddit_details(symbol))
         poly_task = asyncio.create_task(_safe_get_poly_markets())
         ddp_task = asyncio.create_task(ddp_inspector.inspect_symbol(symbol))
@@ -154,7 +176,7 @@ class SymbolDeepDiveMixin:
             df_hist_1d,
             gex_profile_data,
             vp_data,
-            dp_data,
+            atr_15m_data,
             reddit_details,
             poly_markets,
             ddp_report,
@@ -171,7 +193,7 @@ class SymbolDeepDiveMixin:
             df_hist_task,
             gex_profile_task,
             vp_task,
-            dp_task,
+            atr_15m_task,
             reddit_task,
             poly_task,
             ddp_task,
@@ -207,7 +229,7 @@ class SymbolDeepDiveMixin:
             "month_max_pains": month_max_pains,
             "gex_profile_data": gex_profile_data,
             "volume_profile": vp_data,
-            "darkpool": dp_data,
+            "atr_15m": atr_15m_data,
         }
 
     @market_data_service.interactive
@@ -267,7 +289,6 @@ class SymbolDeepDiveMixin:
             df_hist_1d = data["df_hist_1d"]
             gex_profile_data = data.get("gex_profile_data")
             vp_data = data.get("volume_profile")
-            dp_data = data.get("darkpool")
 
             spy_price = _safe_float(
                 (df_spy["Close"].iloc[-1] if not df_spy.empty else 670.0),
@@ -363,35 +384,22 @@ class SymbolDeepDiveMixin:
             result["polymarket_summary"] = poly_summary
 
             safe_vp = vp_data if isinstance(vp_data, dict) else {}
-            safe_dp = dp_data if isinstance(dp_data, dict) else {}
             result["volume_profile"] = safe_vp
-            result["darkpool"] = safe_dp
+            result["atr_15m"] = _safe_float(data.get("atr_15m"), 0.0)
 
-            # TDP 估值三擊判斷: 現價 < EMA 21 且 現價 < Max Pain 且 現價 < V-POC 且 現價 < DP-POC
+            # TDP 估值三擊判斷: 現價 < EMA 21 且 現價 < Max Pain 且 現價 < V-POC
             ema_21 = (
                 df_hist_1d["Close"].ewm(span=21, adjust=False).mean().iloc[-1]
                 if df_hist_1d is not None and not df_hist_1d.empty
                 else 0.0
             )
             vpoc = _safe_float(safe_vp.get("hvn"), 0.0)
-            dp_poc = _safe_float(safe_dp.get("dp_poc"), 0.0)
             max_pain = _safe_float(result.get("max_pain"), 0.0)
             price = _safe_float(result.get("price"), 0.0)
 
             if result.get("is_ddp"):
-                if (
-                    price > 0
-                    and ema_21 > 0
-                    and max_pain > 0
-                    and vpoc > 0
-                    and dp_poc > 0
-                ):
-                    if (
-                        price < ema_21
-                        and price < max_pain
-                        and price < vpoc
-                        and price < dp_poc
-                    ):
+                if price > 0 and ema_21 > 0 and max_pain > 0 and vpoc > 0:
+                    if price < ema_21 and price < max_pain and price < vpoc:
                         result["is_ddp"] = True
                         result["tdp_activated"] = True
 

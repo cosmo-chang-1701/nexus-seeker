@@ -149,21 +149,18 @@ class AdminCommandsCog(commands.Cog):
         errors = []
         gex_info = ""
 
-        # 1. Update GEX, Liquidity, and Dark Pool DIX
+        # 1. Update GEX and Liquidity
         try:
             from market_analysis.index_microstructure import fetch_liquidity_metrics
-            from market_analysis.dark_pool_engine import fetch_and_cache_darkpool_dix
             import typing
 
             results = await asyncio.gather(
                 fetch_gex_metrics(),
                 fetch_liquidity_metrics(),
-                fetch_and_cache_darkpool_dix(),
                 return_exceptions=True,
             )
             gex_data = typing.cast(typing.Any, results[0])
             liq_data = typing.cast(typing.Any, results[1])
-            _ = typing.cast(typing.Any, results[2])
 
             if isinstance(gex_data, Exception):
                 raise gex_data

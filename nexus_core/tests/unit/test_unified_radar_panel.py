@@ -148,7 +148,7 @@ async def test_execute_unified_scan_filters(mock_bot: Any, mock_interaction: Any
 
     state = {
         "scope": "ALL",  # 使用 ALL 避免針對 WATCHLIST 等特定情境進行 mock
-        "quant_filters": ["dp_skew_defense", "exclude_martial_law"],
+        "quant_filters": ["exclude_martial_law"],
         "params": {
             "max_pain_threshold": 10.0,  # 10% 限制
             "abs_support_tolerance": 1.0,
@@ -168,28 +168,15 @@ async def test_execute_unified_scan_filters(mock_bot: Any, mock_interaction: Any
 
         mock_thread.side_effect = mock_to_thread_side_effect
 
-        # Mock AssetManager
-        class FakeAsset:
-            symbol = "NVDA"
-
-        with patch(
-            "services.asset_manager.AssetManager.get_assets", return_value=[FakeAsset()]
-        ):
+        with patch("services.asset_manager.AssetManager.get_assets", return_value=[]):
             # Setup fetch radar data responses
             async def fake_fetch(sym: Any):  # type: ignore
                 if sym == "AAPL":
-                    # 符合條件：無極端派發 (skew >= -0.3), max_pain distance < 10%
+                    # 符合條件：max_pain distance < 10%，且無底牆破位
                     return {
                         "symbol": "AAPL",
                         "skew": -0.2,
                         "max_pain": {"distance_pct": 0.05},  # 5% < 10%
-                    }
-                elif sym == "NVDA":
-                    # 違反 dp_skew_defense (skew < -0.3)
-                    return {
-                        "symbol": "NVDA",
-                        "skew": -0.4,
-                        "max_pain": {"distance_pct": 0.05},
                     }
                 elif sym == "TSLA":
                     # 違反 exclude_martial_law (distance_pct == 0.15 > 0.10)
@@ -420,7 +407,6 @@ async def test_batch_scan_alpha_filters_and_pagination(
             "max_pain": {"max_pain": 100.0},
             "dp_poc": 100.0,
             "uoa": [{"trade_type": "SWEEP", "delta": 1.5 if is_valid else 0.5}],
-            "skew": -0.1,  # 符合 dark_pool_skew_floor (-0.2)
         }
 
     cog._fetch_sym_radar_data_fast = mock_fetch_sym  # type: ignore

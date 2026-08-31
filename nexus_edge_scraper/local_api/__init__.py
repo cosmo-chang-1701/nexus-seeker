@@ -4,7 +4,7 @@
 `uvicorn local_api:app` 皆繼續運作）。路由依領域拆分為子模組：
 
 - `reddit`         ：Reddit RSS 抓取（版塊清單 / 個股關鍵字搜尋）
-- `macro`           ：總經 GEX/流動性/FedWatch/暗池 Playwright 抓取、個股 GEX 端點
+- `macro`           ：總經 GEX/流動性/FedWatch Playwright 抓取、個股 GEX 端點
                        （`async_playwright`、`scrape_symbol_gex_core` 皆於本模組
                        頂層 import，需要攔截 Playwright 的測試應
                        patch `local_api.macro.async_playwright` /
@@ -70,8 +70,6 @@ from .reddit import (  # noqa: F401,E402
 from .macro import (  # noqa: F401,E402
     async_playwright,
     scrape_core_macro_metrics,
-    scrape_darkpool_dix,
-    scrape_darkpool_prints,
     scrape_fedwatch,
     scrape_gex,
     scrape_symbol_gex,

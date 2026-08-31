@@ -31,7 +31,6 @@ def build_unified_radar_panel_embed(state: dict) -> NexusEmbed:
     filter_name_map = {
         "exclude_martial_law": "🛡️ 排除底牆破位 / 負 Gamma (Martial Law)",
         "avoid_silent_period": "🛡️ 規避財報與總經靜默期",
-        "dp_skew_defense": "🛡️ 暗池派發防護 (Skew < -0.3)",
         "tdp_mode": "🔵 TDP 估值三擊 (TDP Mode)",
         "squeeze_mode": "🔥 動能擠壓爆發 (Gamma Squeeze)",
         "uoa_mode": "🐋 嚴格機構籌碼 (Strict UOA)",

@@ -404,7 +404,7 @@ def build_radar_scan_embed(
             color=0x3498DB,  # Default to 資訊藍
         )
 
-        # 讀取全域快取指標 (TED Spread & GEX Flip & Darkpool DIX)
+        # 讀取全域快取指標 (TED Spread & GEX Flip)
         macro_ansi_header = []
         try:
             if show_macro:
@@ -412,13 +412,8 @@ def build_radar_scan_embed(
 
             gex_flip = get_kv_cache("macro_spy_gamma_flip")
             ted_spread = get_kv_cache("macro_ted_spread")
-            darkpool_dix = get_kv_cache("macro_darkpool_dix")
 
-            if (
-                gex_flip is not None
-                or ted_spread is not None
-                or darkpool_dix is not None
-            ):
+            if gex_flip is not None or ted_spread is not None:
                 gex_str = (
                     f"SPY 零 Gamma 線 (GEX Flip): \u001b[1;35m{gex_flip:.2f}\u001b[0m"
                     if gex_flip is not None
@@ -439,18 +434,7 @@ def build_radar_scan_embed(
                     if ted_spread is not None
                     else ""
                 )
-
-                dix_str = ""
-                if darkpool_dix is not None:
-                    dix_val = float(darkpool_dix)
-                    dix_alert = (
-                        " (\u001b[1;31m🔥 機構逢低建倉\u001b[0m)"
-                        if dix_val > 45.0
-                        else ""
-                    )
-                    dix_str = f"DIX (暗池吸籌指數): \u001b[1;36m{dix_val:.1f}%\u001b[0m{dix_alert}"
-
-                macro_parts = [p for p in (gex_str, ted_str, dix_str) if p]
+                macro_parts = [p for p in (gex_str, ted_str) if p]
                 if macro_parts:
                     macro_ansi_header.append(" 🌍 雷達：宏觀數據發布與流動性枯竭警告")
                     for i, part in enumerate(macro_parts):
@@ -979,24 +963,6 @@ def build_radar_scan_embed(
                 elif sqz_mom < 0:
                     insights.append(
                         f"• ⏱️ {sym}: SQZ 正處於動能擠壓蓄力期 (Squeezing)，當前動能偏空 ({sqz_mom:+.1f})，建議嚴防向下殺跌風險。"
-                    )
-
-            # 暗池大宗交易 (Dark Pool Block Prints) 警示
-            dp_prints = (
-                r.get("darkpool", {}).get("prints", [])
-                if isinstance(r.get("darkpool"), dict)
-                else []
-            )
-            if dp_prints:
-                max_print = max(
-                    dp_prints,
-                    key=lambda p: float(p.get("premium", 0.0) or 0.0),
-                )
-                dp_p_prem = float(max_print.get("premium", 0.0) or 0.0)
-                dp_p_price = float(max_print.get("price", 0.0) or 0.0)
-                if dp_p_prem >= 5_000_000.0 and dp_p_price > 0:
-                    insights.append(
-                        f"• 🧱 {sym}: 暗池在 ${dp_p_price:.2f} 爆出 ${dp_p_prem / 1_000_000:.2f}M 巨額大宗買盤，形成籌碼水泥牆支撐。"
                     )
 
             # 案例 1：STX 結構破位與 Volume PCR 殺盤背離警示
