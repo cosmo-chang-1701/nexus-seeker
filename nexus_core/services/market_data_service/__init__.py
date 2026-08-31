@@ -111,7 +111,6 @@ from .fundamentals import (  # noqa: F401,E402
     get_company_profile,
     get_dividend_yield,
     get_earnings_calendar,
-    get_economic_calendar,
     get_macro_environment,
     get_vix_term_structure,
     get_vix_zscores,
