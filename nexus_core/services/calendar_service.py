@@ -168,7 +168,7 @@ class CalendarService:
         - success: True if fetch succeeded or if existing cache was fresh.
         - is_fallback: True if fetch failed but we fell back to existing cache.
         """
-        status = get_macro_month_status(month_key)
+        status = await asyncio.to_thread(get_macro_month_status, month_key)
         if status and not force_fetch:
             if not force_fresh or self._is_timestamp_fresh(
                 status.get("checked_at"), self._macro_cache_hours
@@ -241,7 +241,7 @@ class CalendarService:
 
         # SWR: Only replace cache if scraper explicitly returned a valid non-empty list of events
         if api_success and len(high_impact) > 0:
-            replace_macro_month_events(month_key, high_impact)
+            await asyncio.to_thread(replace_macro_month_events, month_key, high_impact)
             return True, False
         else:
             # Fallback to existing SQLite cached events (if they exist)
@@ -304,7 +304,7 @@ class CalendarService:
             for key in month_keys:
                 force_fresh = True
                 if not self._cold_start_complete:
-                    if get_macro_month_status(key) is not None:
+                    if await asyncio.to_thread(get_macro_month_status, key) is not None:
                         force_fresh = False
                 tasks.append(
                     self._ensure_macro_month_cached(key, force_fresh=force_fresh)
@@ -316,7 +316,9 @@ class CalendarService:
             results = await asyncio.gather(*tasks)
             any_fallback = any(r[1] for r in results if r is not None)
 
-            raw_events = get_macro_events_between(start_date, end_date)
+            raw_events = await asyncio.to_thread(
+                get_macro_events_between, start_date, end_date
+            )
 
             high_impact = EconomicEventList()
             high_impact.is_fallback = any_fallback
@@ -364,7 +366,7 @@ class CalendarService:
             return self._earnings_cache[symbol]  # type: ignore
 
         try:
-            cached = get_cached_earnings(symbol)
+            cached = await asyncio.to_thread(get_cached_earnings, symbol)
             today = datetime.now(ny_tz).date()
             if cached and (
                 self._is_timestamp_fresh(
@@ -396,8 +398,10 @@ class CalendarService:
 
             raw_entries = await market_data_service.get_earnings_calendar(symbol)
             next_date = self._extract_next_earnings_date(raw_entries)
-            save_earnings_cache(
-                symbol, next_date.strftime("%Y-%m-%d") if next_date else None
+            await asyncio.to_thread(
+                save_earnings_cache,
+                symbol,
+                next_date.strftime("%Y-%m-%d") if next_date else None,
             )
 
             if next_date is not None:

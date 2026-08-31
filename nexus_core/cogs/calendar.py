@@ -5,6 +5,7 @@ from cogs.embed_builder import (
     create_iv_risk_scan_embed,
     build_calendar_embed,
 )
+import asyncio
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
@@ -12,6 +13,7 @@ import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from services import market_data_service
 from services.calendar_service import calendar_service
 from market_analysis.volatility_inspector import VolatilityInspector
 import database
@@ -59,41 +61,44 @@ class CalendarCog(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         user_id = interaction.user.id
 
-        # 1. 解析當前用戶的自選股清單 (Watchlist)
-        from database.watchlist import get_user_watchlist
+        with market_data_service.mark_interactive_request():
+            # 1. 解析當前用戶的自選股清單 (Watchlist)
+            from database.watchlist import get_user_watchlist
 
-        watchlist_rows = get_user_watchlist(user_id)
-        symbols = [row[0] for row in watchlist_rows]
+            watchlist_rows = await asyncio.to_thread(get_user_watchlist, user_id)
+            symbols = [row[0] for row in watchlist_rows]
 
-        # 2. 獲取總經數據 (30 天) 與財報快取數據
-        from typing import Any
+            # 2. 獲取總經數據 (30 天) 與財報快取數據
+            from typing import Any
 
-        macro_events = await calendar_service.get_high_impact_events(days=30)
+            macro_events = await calendar_service.get_high_impact_events(days=30)
 
-        earnings_events: list[Any] = []
-        if symbols:
-            earnings_map = await calendar_service.get_symbol_earnings_batch(symbols)
-            for ev in earnings_map.values():
-                if ev is not None:
-                    earnings_events.append(ev)
+            earnings_events: list[Any] = []
+            if symbols:
+                earnings_map = await calendar_service.get_symbol_earnings_batch(symbols)
+                for ev in earnings_map.values():
+                    if ev is not None:
+                        earnings_events.append(ev)
 
-            # Sort by tte_hours
-            earnings_events.sort(key=lambda x: getattr(x, "tte_hours", float("inf")))
+                # Sort by tte_hours
+                earnings_events.sort(
+                    key=lambda x: getattr(x, "tte_hours", float("inf"))
+                )
 
-        # 3. 讀取 CME FedWatch 概率
-        fedwatch_prob = None
-        for macro_ev in macro_events:
-            prob = getattr(macro_ev, "fedwatch_probability", None)
-            if prob is not None:
-                fedwatch_prob = float(prob)
-                break
+            # 3. 讀取 CME FedWatch 概率
+            fedwatch_prob = None
+            for macro_ev in macro_events:
+                prob = getattr(macro_ev, "fedwatch_probability", None)
+                if prob is not None:
+                    fedwatch_prob = float(prob)
+                    break
 
-        # 4. 生成 Embed
-        embed = build_calendar_embed(
-            macro_events=macro_events,
-            earnings_events=earnings_events,
-            fedwatch_prob=fedwatch_prob,
-        )
+            # 4. 生成 Embed
+            embed = build_calendar_embed(
+                macro_events=macro_events,
+                earnings_events=earnings_events,
+                fedwatch_prob=fedwatch_prob,
+            )
 
         await interaction.followup.send(embed=embed)
 
@@ -102,7 +107,7 @@ class CalendarCog(commands.Cog):
     )
     async def iv_rank(self, interaction: discord.Interaction) -> Any:
         await interaction.response.defer(ephemeral=True)
-        all_watchlists = database.get_all_watchlist()
+        all_watchlists = await asyncio.to_thread(database.get_all_watchlist)
         user_id = interaction.user.id
         user_watch = [row[1] for row in all_watchlists if row[0] == user_id]
 
@@ -113,7 +118,8 @@ class CalendarCog(commands.Cog):
                 )
             )
 
-        results = await self.vol_inspector.run_scan(user_watch, user_id)
+        with market_data_service.mark_interactive_request():
+            results = await self.vol_inspector.run_scan(user_watch, user_id)
 
         # Filter for IV Rank > 80 or high risk vol
         high_iv_results = [
@@ -148,7 +154,7 @@ class CalendarCog(commands.Cog):
         # Get Greeks for the user's positions in this symbol
         from database.portfolio import get_user_portfolio
 
-        portfolio = get_user_portfolio(user_id)
+        portfolio = await asyncio.to_thread(get_user_portfolio, user_id)
         symbol_positions = [p for p in portfolio if p[1] == symbol]
 
         if not symbol_positions:
@@ -165,9 +171,9 @@ class CalendarCog(commands.Cog):
 
         # Calculate Vanna for each position
         from market_analysis.greeks import calculate_vanna
-        from services import market_data_service
 
-        price_data = await market_data_service.get_quote(symbol)
+        with market_data_service.mark_interactive_request():
+            price_data = await market_data_service.get_quote(symbol)
         price = price_data.get("c", 0.0)
 
         total_vanna = 0.0
