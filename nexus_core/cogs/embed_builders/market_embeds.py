@@ -1625,6 +1625,27 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
     else:
         fedwatch_desc = "暫無數據"
 
+    cpi_actual = macro_data.get("cpi_actual")
+    cpi_expected = macro_data.get("cpi_expected")
+    cpi_is_fallback = macro_data.get("cpi_is_fallback", True)
+    if cpi_actual is not None and cpi_expected is not None:
+        cpi_actual_f = float(cpi_actual)
+        cpi_expected_f = float(cpi_expected)
+        cpi_diff = cpi_actual_f - cpi_expected_f
+        if cpi_diff > 0:
+            cpi_color = "[1;31m"  # 高於預期，通膨升溫
+        elif cpi_diff < 0:
+            cpi_color = "[1;32m"  # 低於預期，通膨降溫
+        else:
+            cpi_color = "[1;33m"
+        cpi_suffix = " [1;33m[備援][0m" if cpi_is_fallback else ""
+        cpi_desc = (
+            f"{cpi_color}{cpi_actual_f:.1f}% (預期 {cpi_expected_f:.1f}%, "
+            f"差 {cpi_diff:+.1f}%)[0m{cpi_suffix}"
+        )
+    else:
+        cpi_desc = "[1;33m--% (尚無最新公布數據)[0m"
+
     escape_win_status = macro_data.get("escape_win_status")
     if not escape_win_status:
         if fedwatch_prob is not None:
@@ -1663,6 +1684,7 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
         f" ├─ 聯準會逆回購 (RRP): \u001b[1;36m${rrp:,.1f}B\u001b[0m (30天變動: \u001b[1;35m{rrp_change_30d:+.1f}%\u001b[0m)",
         f" ├─ 聯準會資產負債表: \u001b[1;32m${fed_balance:.2f}T\u001b[0m",
         f" ├─ FOMC 利率定價 (FedWatch): {fedwatch_desc}",
+        f" ├─ CPI 年增率 (實際 vs 預期): {cpi_desc}",
         f" ├─ CNN 恐懼與貪婪指數: \u001b[1;36m{fear_greed:.1f}\u001b[0m",
         f" └─ 美國失業率 (UER): \u001b[1;33m{uer:.1f}%\u001b[0m (薩姆規則值: \u001b[1;31m{sahm_rule:.2f}\u001b[0m)",
     ]

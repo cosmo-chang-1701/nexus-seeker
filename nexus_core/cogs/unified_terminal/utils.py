@@ -168,9 +168,11 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         calendar_service.get_latest_fedwatch_info()
     )
 
-    # 取得 CPI 偏差
+    # 取得 CPI 實際值 / 預期值與偏差
     cpi_actual = get_kv_cache("macro_cpi_actual")
     cpi_expected = get_kv_cache("macro_cpi_expected")
+    cpi_is_fallback_val = get_kv_cache("macro_cpi_is_fallback")
+    cpi_is_fallback = cpi_is_fallback_val is None or int(cpi_is_fallback_val) == 1
     cpi_dev = (
         cpi_actual - cpi_expected
         if (cpi_actual is not None and cpi_expected is not None)
@@ -214,6 +216,9 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         "fedwatch_probability": fedwatch_prob,
         "fedwatch_is_fallback": fedwatch_is_fallback,
         "fedwatch_details": fedwatch_details,
+        "cpi_actual": cpi_actual,
+        "cpi_expected": cpi_expected,
+        "cpi_is_fallback": cpi_is_fallback,
         "escape_win_status": escape_win_status,
         "escape_window_direction": escape_dir,
         "escape_window_shift_days": escape_shift,
