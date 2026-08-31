@@ -196,8 +196,6 @@ async def run_fomc_escape_window_analysis(
     # 3. 收集四大宏觀因子
     from database.cache import get_kv_cache
 
-    tightening_score = 0
-    easing_score = 0
     factors_summary: list[tuple[str, str]] = []
 
     # Factor 1: FedWatch 利率定價
@@ -229,14 +227,12 @@ async def run_fomc_escape_window_analysis(
             or decision == "hike"
             or (p_h >= 30.0 and p_h > p_c and p_h > p_m)
         ):
-            tightening_score += 1
             f1_val = f"\u001b[1;31m🚨 {meeting_prefix}鷹派加息 ({detail_str})\u001b[0m"
         elif (
             p_c >= 50.0
             or decision == "cut"
             or (p_c >= 30.0 and p_c > p_h and p_c > p_m)
         ):
-            easing_score += 1
             f1_val = f"\u001b[1;32m🟢 {meeting_prefix}降息確立 ({detail_str})\u001b[0m"
         elif p_m >= 50.0 or decision == "maintain":
             f1_val = f"\u001b[1;33m🟡 {meeting_prefix}維持利率 ({detail_str})\u001b[0m"
@@ -244,12 +240,10 @@ async def run_fomc_escape_window_analysis(
             f1_val = f"\u001b[1;33m🟡 {meeting_prefix}均衡定價 ({detail_str})\u001b[0m"
     else:
         if prob > 0.70:
-            tightening_score += 1
             f1_val = (
                 f"\u001b[1;31m🚨 {meeting_prefix}鷹派高位 ({prob * 100:.1f}%)\u001b[0m"
             )
         elif prob <= 0.40:
-            easing_score += 1
             f1_val = (
                 f"\u001b[1;32m🟢 {meeting_prefix}降息確立 ({prob * 100:.1f}%)\u001b[0m"
             )
@@ -270,10 +264,8 @@ async def run_fomc_escape_window_analysis(
     wti = get_kv_cache("macro_wti") or 75.0
 
     if (cpi_dev > 0.1) or (wti > 85.0):
-        tightening_score += 1
         f2_val = f"\u001b[1;31m🚨 通膨偏高 (WTI ${wti:.1f}, CPI偏差 {cpi_dev:+.2f}%)\u001b[0m"
     elif (cpi_dev <= 0.0) and (wti <= 80.0):
-        easing_score += 1
         f2_val = f"\u001b[1;32m🟢 通膨平穩 (WTI ${wti:.1f}, CPI偏差 {cpi_dev:+.2f}%)\u001b[0m"
     else:
         f2_val = f"\u001b[1;33m🟡 通膨受控 (WTI ${wti:.1f}, CPI偏差 {cpi_dev:+.2f}%)\u001b[0m"
@@ -293,10 +285,8 @@ async def run_fomc_escape_window_analysis(
     if not is_vts_valid:
         f3_val = "⚪ 數據未更新 (使用中性預設)"
     elif vts_ratio >= 1.0:
-        tightening_score += 1
         f3_val = f"\u001b[1;31m🚨 期限倒掛 (VTS: {vts_ratio:.3f})\u001b[0m"
     elif vts_ratio < 0.90:
-        easing_score += 1
         f3_val = f"\u001b[1;32m🟢 正價差健康 (VTS: {vts_ratio:.3f})\u001b[0m"
     else:
         f3_val = f"\u001b[1;33m🟡 期限正常 (VTS: {vts_ratio:.3f})\u001b[0m"
@@ -305,10 +295,8 @@ async def run_fomc_escape_window_analysis(
     # Factor 4: 大盤 Gamma 翻轉線與微觀結構
     is_negative_gamma = bool(get_kv_cache("macro_short_gamma_critical"))
     if is_negative_gamma:
-        tightening_score += 1
         f4_val = "\u001b[1;31m🚨 負 Gamma 踩踏加速區\u001b[0m"
     else:
-        easing_score += 1
         f4_val = "\u001b[1;32m🟢 正 Gamma 護航區\u001b[0m"
     factors_summary.append(("大盤微觀結構 (SPY GEX)", f4_val))
 
