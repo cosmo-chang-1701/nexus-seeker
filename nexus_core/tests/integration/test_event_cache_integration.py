@@ -59,8 +59,11 @@ async def test_pre_market_alerts_use_sqlite_earnings_cache(db_conn: Any):  # typ
     fixed_now = datetime(2026, 5, 18, 12, 0, 0)
     calendar_service._earnings_cache.clear()
 
+    # datetime is imported at module top in services/trading_service/market_scan.py,
+    # which is where get_pre_market_alerts_data() actually calls it, so the patch
+    # must target that submodule (not the package-level re-export).
     with patch("services.calendar_service.datetime") as calendar_datetime, patch(
-        "services.trading_service.datetime"
+        "services.trading_service.market_scan.datetime"
     ) as trading_datetime:
         calendar_datetime.now.side_effect = (
             lambda tz=None: fixed_now if tz is None else fixed_now.replace(tzinfo=tz)
