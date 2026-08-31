@@ -67,12 +67,14 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
 
     start_date = datetime.now().strftime("%Y-%m-%d")
     end_date = (datetime.now() + timedelta(days=60)).strftime("%Y-%m-%d")
-    events = get_macro_events_between(start_date, end_date)
+    events = await asyncio.to_thread(get_macro_events_between, start_date, end_date)
 
     if not events:
         try:
             await calendar_service.prefetch_monthly_macro_cache(months_ahead=2)
-            events = get_macro_events_between(start_date, end_date)
+            events = await asyncio.to_thread(
+                get_macro_events_between, start_date, end_date
+            )
         except Exception:
             pass
 

@@ -174,20 +174,21 @@ class UnifiedTerminalCog(
         manager = AssetManager()
         holdings = manager.get_assets(user_id, ContextType.HOLDING)
         total_holding_value = 0.0
-        for h in holdings:
-            meta = HoldingMetadata(**h.metadata)
-            quote = await market_data_service.get_quote(h.symbol)
-            total_holding_value += (
-                quote.get("c", 0.0) if quote else 0.0
-            ) * meta.quantity
-        backup_liq = total_holding_value * 0.8
-        ext_runway = calculate_financial_runway(
-            ctx.cash_reserve + backup_liq, ctx.monthly_expense, ctx.total_theta
-        )
+        with market_data_service.mark_interactive_request():
+            for h in holdings:
+                meta = HoldingMetadata(**h.metadata)
+                quote = await market_data_service.get_quote(h.symbol)
+                total_holding_value += (
+                    quote.get("c", 0.0) if quote else 0.0
+                ) * meta.quantity
+            backup_liq = total_holding_value * 0.8
+            ext_runway = calculate_financial_runway(
+                ctx.cash_reserve + backup_liq, ctx.monthly_expense, ctx.total_theta
+            )
 
-        # 獲取 VIX 資訊
-        macro_raw = await market_data_service.get_macro_environment()
-        vix_spot = macro_raw.get("vix", 18.0)
+            # 獲取 VIX 資訊
+            macro_raw = await market_data_service.get_macro_environment()
+            vix_spot = macro_raw.get("vix", 18.0)
 
         embed = create_strategic_dash_embed(
             ctx,
@@ -212,7 +213,8 @@ class UnifiedTerminalCog(
             if asyncio.iscoroutine(coro):
                 asyncio.create_task(coro)
 
-        macro_data = await get_macro_overview_data(interaction.user.id)
+        with market_data_service.mark_interactive_request():
+            macro_data = await get_macro_overview_data(interaction.user.id)
         embed = build_market_macro_overview_embed(macro_data)
 
         view = PulseHubView(interaction.user.id, self.bot)

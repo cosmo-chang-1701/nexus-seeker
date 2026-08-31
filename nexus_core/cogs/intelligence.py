@@ -284,7 +284,8 @@ class IntelligenceCog(commands.Cog):
     async def quote(self, interaction: discord.Interaction, symbol: str) -> Any:
         symbol = symbol.upper()
         await interaction.response.defer(ephemeral=True)
-        data = await market_data_service.get_quote(symbol)
+        with market_data_service.mark_interactive_request():
+            data = await market_data_service.get_quote(symbol)
         if not data:
             return await interaction.followup.send(
                 embed=create_error_embed(
