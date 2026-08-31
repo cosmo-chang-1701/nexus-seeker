@@ -47,6 +47,10 @@ class CalendarCog(commands.Cog):
             await calendar_service.update_fedwatch_probability()
         except Exception as e:
             logger.warning(f"週期性更新 FedWatch 數據失敗: {e}")
+        try:
+            await calendar_service.update_cpi_deviation()
+        except Exception as e:
+            logger.warning(f"週期性更新 CPI 偏差數據失敗: {e}")
         await self.monitor.check_upcoming_events()
 
     @event_checker.before_loop

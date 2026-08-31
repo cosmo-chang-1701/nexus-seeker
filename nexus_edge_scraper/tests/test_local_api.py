@@ -613,6 +613,13 @@ def test_scrape_macro_calendar_translations() -> None:
                 "title": "Fed Governor Waller Speaks",
                 "date": "2026-06-18T14:00:00.000Z",
             },
+            {
+                # TradingView 現行 API 已將 CPI YoY 重新命名為 Inflation Rate YoY
+                "title": "Inflation Rate YoY",
+                "date": "2026-06-11T12:30:00.000Z",
+                "actual": 3.1,
+                "forecast": 3.0,
+            },
         ],
     }
 
@@ -620,11 +627,43 @@ def test_scrape_macro_calendar_translations() -> None:
         response = client.get("/api/v1/macro/calendar?year=2026&month=6")
         assert response.status_code == 200
         events = response.json()
-        assert len(events) == 4
+        assert len(events) == 5
         assert events[0]["event_name"] == "核心 CPI 年增率"
         assert events[1]["event_name"] == "非農就業人數"
         assert events[2]["event_name"] == "美財政部季度發債計畫 (QRA)"
         assert events[3]["event_name"] == "聯準會理事 華勒 發言"
+        # 已公布事件 (Inflation Rate YoY -> CPI 年增率) 應正確翻譯並帶出 actual/forecast
+        assert events[4]["event_name"] == "CPI 年增率"
+        assert events[4]["actual_value"] == 3.1
+        assert events[4]["forecast_value"] == 3.0
+        # 未公布事件不應出現 actual_value/forecast_value key，避免 schema 雜訊
+        assert "actual_value" not in events[0]
+        assert "forecast_value" not in events[0]
+
+
+def test_scrape_macro_calendar_omits_actual_for_unreleased_events() -> None:
+    mock_tv_response = MagicMock()
+    mock_tv_response.status_code = 200
+    mock_tv_response.json.return_value = {
+        "status": "ok",
+        "result": [
+            {
+                "title": "Core Inflation Rate YoY",
+                "date": "2026-07-14T12:30:00.000Z",
+                "actual": None,
+                "forecast": None,
+            },
+        ],
+    }
+
+    with patch("requests.get", return_value=mock_tv_response):
+        response = client.get("/api/v1/macro/calendar?year=2026&month=7")
+        assert response.status_code == 200
+        events = response.json()
+        assert len(events) == 1
+        assert events[0]["event_name"] == "核心 CPI 年增率"
+        assert "actual_value" not in events[0]
+        assert "forecast_value" not in events[0]
 
 
 def test_sync_watchlist_symbols_marks_priority_symbols() -> None:

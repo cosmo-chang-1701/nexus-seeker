@@ -368,3 +368,51 @@ async def test_calendar_service_unset_tunnel_url_degradation(db_conn: Any) -> No
     assert len(events) == 1
     assert events[0].event == "Cached Non-Farm Payrolls"
     assert getattr(events, "is_fallback", False) is True
+
+
+def test_get_latest_released_economic_event(db_conn: Any) -> None:
+    """已公布（含 actual_value）的事件應被找到，未公布或名稱不符的事件應被排除，
+    且不可將「核心 CPI 年增率」誤判為「CPI 年增率」。"""
+    from database.calendar_cache import (
+        replace_macro_month_events,
+        get_latest_released_economic_event,
+    )
+
+    month_key = "2026-07"
+    events: list[dict[str, Any]] = [
+        {
+            "event": "CPI 年增率",
+            "time": "2026-07-14T12:30:00Z",
+            "impact": "high",
+            "country": "US",
+            "actual_value": 3.1,
+            "consensus_value": "3.0",
+        },
+        {
+            # 未來事件：尚未公布，無 actual_value
+            "event": "CPI 年增率",
+            "time": "2026-08-13T12:30:00Z",
+            "impact": "high",
+            "country": "US",
+        },
+        {
+            # 核心 CPI，名稱不同，不應被「CPI 年增率」查詢誤抓
+            "event": "核心 CPI 年增率",
+            "time": "2026-07-14T12:30:00Z",
+            "impact": "high",
+            "country": "US",
+            "actual_value": 2.6,
+            "consensus_value": "2.8",
+        },
+    ]
+    replace_macro_month_events(month_key, events)
+
+    result = get_latest_released_economic_event(
+        "CPI 年增率", as_of="2026-08-01T00:00:00Z"
+    )
+    assert result is not None
+    assert result["actual_value"] == 3.1
+    assert result["consensus_value"] == "3.0"
+
+    # 不存在的事件名稱應回傳 None
+    assert get_latest_released_economic_event("不存在的事件") is None

@@ -1316,6 +1316,75 @@ async def test_calendar_service_fedwatch_sanity_rejection() -> None:
         assert "macro_fedwatch_probability" not in saved_keys
 
 
+@pytest.mark.asyncio
+async def test_calendar_service_cpi_deviation_happy_path() -> None:
+    """測試 calendar_service.update_cpi_deviation 成功取得最新 CPI YoY 實際值/預測值時的寫入行為"""
+    from services.calendar_service import calendar_service
+
+    with (
+        patch.object(
+            calendar_service, "prefetch_monthly_macro_cache", new_callable=AsyncMock
+        ),
+        patch(
+            "database.calendar_cache.get_latest_released_economic_event",
+            return_value={"actual_value": 3.2, "consensus_value": "3.1"},
+        ),
+        patch("database.cache.save_kv_cache") as mock_save,
+    ):
+        await calendar_service.update_cpi_deviation()
+
+    saved = {call.args[0]: call.args[1] for call in mock_save.call_args_list}
+    assert saved["macro_cpi_actual"] == 3.2
+    assert saved["macro_cpi_expected"] == 3.1
+    assert saved["macro_cpi_is_fallback"] == 0
+
+
+@pytest.mark.asyncio
+async def test_calendar_service_cpi_deviation_sanity_rejection() -> None:
+    """測試 CPI YoY 數值超出合理區間 (-2% ~ 15%) 時觸發防禦阻斷"""
+    from services.calendar_service import calendar_service
+
+    with (
+        patch.object(
+            calendar_service, "prefetch_monthly_macro_cache", new_callable=AsyncMock
+        ),
+        patch(
+            "database.calendar_cache.get_latest_released_economic_event",
+            return_value={"actual_value": 99.0, "consensus_value": "3.1"},
+        ),
+        patch("database.cache.save_kv_cache") as mock_save,
+    ):
+        await calendar_service.update_cpi_deviation()
+
+    saved = {call.args[0]: call.args[1] for call in mock_save.call_args_list}
+    assert saved.get("macro_cpi_is_fallback") == 1
+    assert "macro_cpi_actual" not in saved
+    assert "macro_cpi_expected" not in saved
+
+
+@pytest.mark.asyncio
+async def test_calendar_service_cpi_deviation_no_data_fallback() -> None:
+    """測試行事曆快取中尚無已公布 CPI YoY 資料時的 fallback 行為"""
+    from services.calendar_service import calendar_service
+
+    with (
+        patch.object(
+            calendar_service, "prefetch_monthly_macro_cache", new_callable=AsyncMock
+        ),
+        patch(
+            "database.calendar_cache.get_latest_released_economic_event",
+            return_value=None,
+        ),
+        patch("database.cache.save_kv_cache") as mock_save,
+    ):
+        await calendar_service.update_cpi_deviation()
+
+    saved = {call.args[0]: call.args[1] for call in mock_save.call_args_list}
+    assert saved.get("macro_cpi_is_fallback") == 1
+    assert "macro_cpi_actual" not in saved
+    assert "macro_cpi_expected" not in saved
+
+
 def test_evaluate_escape_window_regime_matrix() -> None:
     """測試多因子逃頂窗口矩陣評估邏輯 (四因子)"""
     from market_analysis.index_microstructure import evaluate_escape_window_regime

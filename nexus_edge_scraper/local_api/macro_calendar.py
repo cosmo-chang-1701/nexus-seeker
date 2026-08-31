@@ -77,6 +77,12 @@ async def scrape_macro_calendar(
 
         TRANSLATIONS = {
             # --- 通膨與物價 ---
+            # TradingView 現行 API 已將「CPI YoY/MoM」重新命名為「Inflation Rate YoY/MoM」，
+            # 統一翻譯為與舊有 CPI 系列相同的中文標籤，確保下游 CPI 偏差值比對邏輯能精確比對事件名稱。
+            "Core Inflation Rate YoY": "核心 CPI 年增率",
+            "Core Inflation Rate MoM": "核心 CPI 月增率",
+            "Inflation Rate YoY": "CPI 年增率",
+            "Inflation Rate MoM": "CPI 月增率",
             "Core CPI YoY": "核心 CPI 年增率",
             "Core CPI MoM": "核心 CPI 月增率",
             "Core CPI": "核心 CPI",
@@ -374,13 +380,25 @@ async def scrape_macro_calendar(
                         matched_str, f"{prefix_title} {speaker_name} {act_str}"
                     )
 
-            events.append(
-                {
-                    "date": dt_est.strftime("%Y-%m-%d"),
-                    "time": dt_est.strftime("%H:%M"),
-                    "event_name": translated_name,
-                }
-            )
+            event_dict: dict[str, Any] = {
+                "date": dt_est.strftime("%Y-%m-%d"),
+                "time": dt_est.strftime("%H:%M"),
+                "event_name": translated_name,
+            }
+            raw_actual = item.get("actual")
+            raw_forecast = item.get("forecast")
+            if raw_actual is not None:
+                try:
+                    event_dict["actual_value"] = float(raw_actual)
+                except (TypeError, ValueError):
+                    pass
+            if raw_forecast is not None:
+                try:
+                    event_dict["forecast_value"] = float(raw_forecast)
+                except (TypeError, ValueError):
+                    pass
+
+            events.append(event_dict)
 
         return events
 

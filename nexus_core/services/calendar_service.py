@@ -196,7 +196,7 @@ class CalendarService:
 
         url = f"{tunnel_url}/api/v1/macro/calendar?year={year}&month={month}&high_impact_only=true"
 
-        high_impact: list[dict[str, str]] = []
+        high_impact: list[dict[str, Any]] = []
         api_success = False
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
@@ -227,14 +227,20 @@ class CalendarService:
                                 )
                                 iso_time = f"{date_val}T{time_val}:00Z"
 
-                            high_impact.append(
-                                {
-                                    "event": event_name,
-                                    "time": iso_time,
-                                    "impact": "high",
-                                    "country": "US",
-                                }
-                            )
+                            entry: dict[str, Any] = {
+                                "event": event_name,
+                                "time": iso_time,
+                                "impact": "high",
+                                "country": "US",
+                            }
+                            actual_val = ev.get("actual_value")
+                            if actual_val is not None:
+                                entry["actual_value"] = actual_val
+                            # 借用既有的 consensus_value 欄位存放 forecast，避免新增冗餘欄位
+                            forecast_val = ev.get("forecast_value")
+                            if forecast_val is not None:
+                                entry["consensus_value"] = str(forecast_val)
+                            high_impact.append(entry)
                         api_success = True
         except Exception as e:
             logger.error(f"Edge Scraper API request failed for macro calendar: {e}")
@@ -553,6 +559,56 @@ class CalendarService:
             logger.error(f"更新 FedWatch 概率失敗: {e}")
 
         await save_kv_cache("macro_fedwatch_is_fallback", 1)
+
+    # CPI YoY 事件在行事曆快取中的中文標準名稱，須與 TRANSLATIONS 字典的輸出保持一致
+    # (nexus_edge_scraper/local_api/macro_calendar.py 與 market_analysis/macro_calendar_translator.py)
+    _CPI_YOY_EVENT_NAME = "CPI 年增率"
+
+    async def update_cpi_deviation(self) -> None:
+        """從已快取的總經行事曆（TradingView）取得最新一期已公布 CPI YoY 的
+        實際值與市場預測值，計算偏差並寫入 kv_cache。不另發送 HTTP 請求，
+        改為沿用 prefetch_monthly_macro_cache() 既有的 24 小時 SWR 快取。"""
+        from database.cache import save_kv_cache
+        from database.calendar_cache import get_latest_released_economic_event
+
+        try:
+            await self.prefetch_monthly_macro_cache(months_ahead=0)
+
+            row = await asyncio.to_thread(
+                get_latest_released_economic_event, self._CPI_YOY_EVENT_NAME
+            )
+            if (
+                row is None
+                or row.get("actual_value") is None
+                or row.get("consensus_value") is None
+            ):
+                logger.info(
+                    "尚無已發布且含實際值/預測值的 CPI YoY 資料，跳過 CPI 偏差更新。"
+                )
+                await save_kv_cache("macro_cpi_is_fallback", 1)
+                return
+
+            actual = float(row["actual_value"])
+            expected = float(row["consensus_value"])
+
+            # 數值合理性閘門：CPI YoY 正常範圍約 -2% ~ 15%，超出視為異常/污染數據
+            if not (-2.0 <= actual <= 15.0) or not (-2.0 <= expected <= 15.0):
+                logger.warning(
+                    f"CPI YoY 返回疑似異常數據 (actual={actual}, expected={expected})，"
+                    "觸發防禦阻斷並轉為備援模式。"
+                )
+                await save_kv_cache("macro_cpi_is_fallback", 1)
+                return
+
+            await save_kv_cache("macro_cpi_actual", actual)
+            await save_kv_cache("macro_cpi_expected", expected)
+            await save_kv_cache("macro_cpi_is_fallback", 0)
+            logger.info(
+                f"成功更新 CPI YoY 偏差數據: actual={actual}%, expected={expected}%"
+            )
+        except Exception as e:
+            logger.error(f"更新 CPI 偏差數據失敗: {e}")
+            await save_kv_cache("macro_cpi_is_fallback", 1)
 
     def get_latest_fedwatch_probability(self) -> tuple[float, bool]:
         """讀取最新 FedWatch 概率與是否為 Fallback 快取"""

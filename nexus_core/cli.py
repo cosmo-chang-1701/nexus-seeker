@@ -497,6 +497,14 @@ def force_macro_update(ctx: Any) -> None:
         except Exception as e:
             rprint(f"[bold red]❌ 總經日曆更新失敗: {e}[/bold red]")
 
+        # 4. CPI 偏差值
+        rprint("正在從總經日曆快取解析最新 CPI YoY 實際值/預測值...")
+        try:
+            await calendar_service.update_cpi_deviation()
+            rprint("[bold green]✅ CPI 偏差數據更新並寫入資料庫完成。[/bold green]")
+        except Exception as e:
+            rprint(f"[bold red]❌ CPI 偏差數據更新失敗: {e}[/bold red]")
+
         rprint("[bold blue]🎯 所有手動更新流程結束。[/bold blue]")
 
     run_async(_run())

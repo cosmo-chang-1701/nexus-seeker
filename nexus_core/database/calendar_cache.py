@@ -1,5 +1,6 @@
 import logging
 import sqlite3
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 import config
@@ -44,8 +45,8 @@ def replace_macro_month_events(month_key: str, events: list[dict[str, Any]]) -> 
             cursor.executemany(
                 """
                 INSERT INTO economic_calendar_events
-                (month_key, event, event_time, impact, country, consensus_value, fedwatch_probability)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (month_key, event, event_time, impact, country, consensus_value, fedwatch_probability, actual_value)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -56,6 +57,7 @@ def replace_macro_month_events(month_key: str, events: list[dict[str, Any]]) -> 
                         item.get("country", "US"),
                         item.get("consensus_value"),
                         item.get("fedwatch_probability"),
+                        item.get("actual_value"),
                     )
                     for item in events
                 ],
@@ -103,6 +105,39 @@ def get_macro_events_between(start_date: str, end_date: str) -> list[dict[str, A
             e,
         )
         return []
+    finally:
+        if conn:
+            conn.close()
+
+
+def get_latest_released_economic_event(
+    event_name: str, as_of: Optional[str] = None
+) -> Optional[dict[str, Any]]:
+    """取得指定事件名稱（須為翻譯後的精確中文全名，如「CPI 年增率」）中，
+    最近一筆「已公布且含實際值」的紀錄。用於 CPI 等 actual-vs-expected 比對。"""
+    conn = None
+    try:
+        conn = sqlite3.connect(config.DB_NAME)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cutoff = as_of or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        cursor.execute(
+            """
+            SELECT event, event_time, actual_value, consensus_value
+            FROM economic_calendar_events
+            WHERE event = ?
+              AND event_time <= ?
+              AND actual_value IS NOT NULL
+            ORDER BY event_time DESC
+            LIMIT 1
+            """,
+            (event_name, cutoff),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    except Exception as e:
+        logger.error("讀取最新已公布事件失敗 (%s): %s", event_name, e)
+        return None
     finally:
         if conn:
             conn.close()

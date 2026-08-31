@@ -53,6 +53,12 @@ FED_OFFICIALS_MAP: Final[dict[str, str]] = {
 # ---------------------------------------------------------------------------
 _RAW_MACRO_EVENT_TRANSLATIONS: dict[str, str] = {
     # --- 1. 通膨與物價指數 (Inflation & Price Indices) ---
+    # TradingView 現行 API 已將「CPI YoY/MoM」重新命名為「Inflation Rate YoY/MoM」，
+    # 統一翻譯為與舊有 CPI 系列相同的中文標籤，確保下游 CPI 偏差值比對邏輯能精確比對事件名稱。
+    "Core Inflation Rate YoY": "核心 CPI 年增率",
+    "Core Inflation Rate MoM": "核心 CPI 月增率",
+    "Inflation Rate YoY": "CPI 年增率",
+    "Inflation Rate MoM": "CPI 月增率",
     "Core CPI YoY": "核心 CPI 年增率",
     "Core CPI MoM": "核心 CPI 月增率",
     "Core CPI": "核心 CPI",
