@@ -272,6 +272,39 @@ def get_all_portfolio() -> Any:
         conn.close()
 
 
+def get_all_trade_positions() -> Any:
+    """取得全站所有期權持倉 (TRADE only，不含 HOLDING)。
+
+    刻意不呼叫 archive_expired_portfolio_records()：呼叫端 (目前僅
+    cogs/trading/portfolio_monitor.py) 在同一輪 15 分鐘排程內，已先透過
+    audit_real_portfolio_risk() -> get_all_portfolio() 觸發過一次歸檔，
+    此函式僅供同一輪次內二次取用 TRADE 資料，避免重複全表歸檔掃描。若未來
+    有新呼叫端要在沒有先呼叫 get_all_portfolio() 的情境下使用本函式，需自行
+    確保過期合約已被歸檔，否則可能把已下市/到期的合約一併抓進報價查詢。
+    """
+    conn = sqlite3.connect(config.DB_NAME)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT id, user_id, symbol, metadata FROM assets WHERE context_type = 'TRADE'"
+        )
+        rows = []
+        for row in cursor.fetchall():
+            d = dict(row)
+            meta = json.loads(d["metadata"]) if d["metadata"] else {}
+            d["opt_type"] = meta.get("opt_type")
+            d["strike"] = meta.get("strike")
+            d["expiry"] = meta.get("expiry")
+            d["entry_price"] = meta.get("entry_price")
+            d["quantity"] = meta.get("quantity", 0)
+            d["category"] = meta.get("category", "SPECULATIVE")
+            rows.append(d)
+        return rows
+    finally:
+        conn.close()
+
+
 def get_user_portfolio_stats(user_id: Any):  # type: ignore
     """
     [Database Layer] 結算使用者當前投資組合的總體風險數據 (暫行簡化版)。

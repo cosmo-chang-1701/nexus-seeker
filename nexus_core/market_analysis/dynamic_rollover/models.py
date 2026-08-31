@@ -62,3 +62,7 @@ class RolloverInstruction(_RolloverInstructionRequired, total=False):
     expiry: Optional[str]
     direction: Optional[str]
     is_covered_call_overlay: Optional[bool]
+    # "OPTIONS" 或 "SPOT"：供 portfolio_monitor.py 組成 (symbol, instrument_type)
+    # 複合去重鍵與每日 kv_cache dedup key，避免同一標的的現貨與期權部位互相
+    # 誤判為同一筆已處理的建議。未提供時各消費端一律 fallback 為 "SPOT"。
+    instrument_type: str

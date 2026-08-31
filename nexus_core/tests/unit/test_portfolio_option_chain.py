@@ -114,7 +114,7 @@ async def test_process_symbol_positions_handles_none_chain_gracefully() -> None:
 @pytest.mark.asyncio
 async def test_get_option_chain_mid_iv_uses_centralized_option_chain() -> None:
     """get_option_chain_mid_iv 應透過集中快取路徑抓取期權鏈，不裁減履約價，
-    且在 None 回傳時優雅退回 (0.0, 0.0) 而非拋出例外。"""
+    回傳 (mid, iv, bid, ask)，且在 None 回傳時優雅退回全 0.0 而非拋出例外。"""
     chain_mock = MagicMock()
     chain_mock.calls = pd.DataFrame(
         [
@@ -134,10 +134,14 @@ async def test_get_option_chain_mid_iv_uses_centralized_option_chain() -> None:
         new_callable=AsyncMock,
         return_value=chain_mock,
     ) as mock_chain:
-        mid, iv = await get_option_chain_mid_iv("AAPL", "2026-07-20", 150.0, "call")
+        mid, iv, bid, ask = await get_option_chain_mid_iv(
+            "AAPL", "2026-07-20", 150.0, "call"
+        )
 
         assert mid == pytest.approx(5.0)
         assert iv == pytest.approx(0.3)
+        assert bid == pytest.approx(4.9)
+        assert ask == pytest.approx(5.1)
         mock_chain.assert_awaited_once_with("AAPL", "2026-07-20", prune_pct=None)
 
     with patch(
@@ -145,5 +149,7 @@ async def test_get_option_chain_mid_iv_uses_centralized_option_chain() -> None:
         new_callable=AsyncMock,
         return_value=None,
     ):
-        mid, iv = await get_option_chain_mid_iv("AAPL", "2026-07-20", 150.0, "call")
-        assert (mid, iv) == (0.0, 0.0)
+        mid, iv, bid, ask = await get_option_chain_mid_iv(
+            "AAPL", "2026-07-20", 150.0, "call"
+        )
+        assert (mid, iv, bid, ask) == (0.0, 0.0, 0.0, 0.0)

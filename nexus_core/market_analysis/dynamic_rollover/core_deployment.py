@@ -97,7 +97,14 @@ class _CoreDeploymentMixin:
             symbol = str(asset.get("symbol", "")).upper()
             if asset.get("asset_class") != "CORE":
                 continue
-            if symbol in already_flagged_symbols or symbol == candidate_symbol:
+            # CORE 持倉恆為現貨 (期權部位一律標記 asset_class="SATELLITE"，見
+            # portfolio_monitor.py 期權迴圈設計)，故用複合鍵比對時固定以
+            # "SPOT" 作為 instrument_type，與 Scenario 2/3/4 產生的 instruction
+            # 保持同一套去重鍵語意。
+            if (
+                symbol,
+                "SPOT",
+            ) in already_flagged_symbols or symbol == candidate_symbol:
                 continue
 
             # 嚴格 opt-in 閘門：CORE 持倉在 portfolio_monitor.py 預設
@@ -168,6 +175,7 @@ class _CoreDeploymentMixin:
                         "is_manual_override_required": False,
                         "cash_impact": cash_impact,
                         "limit_price": None,
+                        "instrument_type": "SPOT",
                     }
                 )
                 continue
@@ -224,6 +232,7 @@ class _CoreDeploymentMixin:
                     "is_manual_override_required": is_illiquid_warning,
                     "cash_impact": cash_impact,
                     "limit_price": target_spot if target_spot > 0 else None,
+                    "instrument_type": "SPOT",
                 }
             )
 
@@ -283,7 +292,8 @@ class _CoreDeploymentMixin:
             symbol = str(asset.get("symbol", "")).upper()
             if asset.get("asset_class") != "CORE":
                 continue
-            if symbol in already_flagged_symbols:
+            # CORE 持倉恆為現貨，比照上方 evaluate_core_deployment 的複合鍵語意。
+            if (symbol, "SPOT") in already_flagged_symbols:
                 continue
 
             quantity = float(asset.get("quantity", 0.0))

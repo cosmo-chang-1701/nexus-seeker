@@ -634,6 +634,7 @@ async def _build_euphoria_primary_liquidation_instruction(
         "trigger_condition_text": report_90["trigger_condition_report"],
         "cash_impact": report_90["cash_impact"],
         "limit_price": report_90["limit_price"],
+        "instrument_type": asset_class,
     }
 
 
@@ -643,6 +644,7 @@ def _net_and_build_rebalance_instruction(
     quantity: float,
     report: dict,
     default_sell_ratio: float,
+    asset_class: str = "SPOT",
 ) -> RolloverInstruction:
     """套用既有委託單淨額扣抵並組裝 instruction dict：一般清倉/灰階判定分支與
     常規比例修剪分支皆遵循「report 決定 final_action → 依情境算出預設
@@ -674,6 +676,7 @@ def _net_and_build_rebalance_instruction(
         "trigger_condition_text": report["trigger_condition_report"],
         "cash_impact": report["cash_impact"],
         "limit_price": report["limit_price"],
+        "instrument_type": asset_class,
     }
 
 
@@ -907,6 +910,7 @@ async def check_satellite_rebalancing_impl(
                                 ],
                                 "cash_impact": report_10["cash_impact"],
                                 "limit_price": short_strike,
+                                "instrument_type": asset_class,
                             }
                         )
                         continue
@@ -960,6 +964,7 @@ async def check_satellite_rebalancing_impl(
                                 ],
                                 "cash_impact": report_10["cash_impact"],
                                 "limit_price": trailing_stop_level,
+                                "instrument_type": asset_class,
                             }
                         )
                         continue
@@ -984,7 +989,12 @@ async def check_satellite_rebalancing_impl(
                 )
                 rebalance_instructions.append(
                     _net_and_build_rebalance_instruction(
-                        engine, symbol, quantity, report, default_sell_ratio
+                        engine,
+                        symbol,
+                        quantity,
+                        report,
+                        default_sell_ratio,
+                        asset_class,
                     )
                 )
                 continue  # 已經處理，不需進行後續常規再平衡
@@ -1020,7 +1030,12 @@ async def check_satellite_rebalancing_impl(
                 )
                 rebalance_instructions.append(
                     _net_and_build_rebalance_instruction(
-                        engine, symbol, quantity, report, default_sell_ratio
+                        engine,
+                        symbol,
+                        quantity,
+                        report,
+                        default_sell_ratio,
+                        asset_class,
                     )
                 )
 

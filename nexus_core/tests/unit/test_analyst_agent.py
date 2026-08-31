@@ -668,3 +668,35 @@ def test_get_all_portfolio_includes_holdings() -> None:
         assert nvda_row[3] == "stock"
         assert nvda_row[5] == "PERPETUAL"
         assert nvda_row[7] == 10.0
+
+
+def test_get_all_trade_positions_trade_only_no_archive_side_effect(
+    db_conn: Any,
+) -> None:
+    """database.portfolio.get_all_trade_positions()：只回傳 TRADE (不含
+    HOLDING)，且刻意不觸發 archive_expired_portfolio_records() (該歸檔副作用
+    由同一輪次先呼叫的 get_all_portfolio() 負責，避免重複全表掃描)。"""
+    from database.portfolio import add_portfolio_record, get_all_trade_positions
+    from database.holdings import add_holding
+
+    user_id = 987654321
+    add_holding(user_id, "NVDA", 10.0, 120.0)
+    add_portfolio_record(
+        user_id, "AAPL", "call", 200.0, "2036-06-19", 5.0, 1.0, 0.0, 0.5, -0.1, 0.01
+    )
+
+    with patch("database.portfolio.archive_expired_portfolio_records") as mock_archive:
+        results = get_all_trade_positions()
+
+    mock_archive.assert_not_called()
+
+    symbols = [r["symbol"].upper() for r in results]
+    assert "AAPL" in symbols
+    assert "NVDA" not in symbols
+
+    aapl_row = next(r for r in results if r["symbol"].upper() == "AAPL")
+    assert aapl_row["opt_type"] == "call"
+    assert aapl_row["strike"] == 200.0
+    assert aapl_row["expiry"] == "2036-06-19"
+    assert aapl_row["quantity"] == 1.0
+    assert aapl_row["category"] == "SPECULATIVE"

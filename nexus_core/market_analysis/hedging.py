@@ -205,7 +205,7 @@ async def analyze_hedge_performance(user_id: int) -> Dict[str, Any]:
     alpha_pnl, hedge_pnl, alpha_delta, hedge_delta = 0.0, 0.0, 0.0, 0.0
 
     for t in all_trades_normalized:
-        current_price, _ = await get_option_chain_mid_iv(
+        current_price, _, _bid, _ask = await get_option_chain_mid_iv(
             t["symbol"],
             t["expiry"],
             t["strike"],

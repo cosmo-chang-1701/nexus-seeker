@@ -4,13 +4,14 @@ cogs/trading/portfolio_monitor.py
 真實持倉風險動態審計 (每 15 分鐘)：DITM、Gamma Fragility、動態轉倉，以及 VTR 監控。
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 import logging
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
 from discord.ext import tasks, commands
 
+import config
 import database
 import market_time
 from services.trading_service import TradingService
@@ -51,6 +52,158 @@ class PortfolioMonitorCog(commands.Cog):
     async def cog_unload(self) -> None:
         self.monitor_real_portfolio_task.cancel()
         self.monitor_vtr_task.cancel()
+
+    async def _build_symbol_metrics(
+        self, sym: str, r_data: Optional[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """彙整單一標的的量化指標快照，供現貨與期權部位共用同一份計算結果。"""
+        fallback_metrics: Dict[str, Any] = {
+            "spot_price": 0.0,
+            "price_15m_close": 0.0,
+            "ivr": 0.0,
+            "ivr_drop": 0.0,
+            "max_pain": 0.0,
+            "put_wall": 0.0,
+            "call_wall": 0.0,
+            "is_uoa_sweep": False,
+            "gamma_flip": 0.0,
+            "sqz_mom": 0.0,
+            "skew": 0.0,
+            "atr_14": 0.0,
+            "atr_15m": 0.0,
+            "hvn": 0.0,
+            "lvn": 0.0,
+            "dte": 99,
+        }
+        if not r_data:
+            return fallback_metrics
+        try:
+            # 追蹤 IVR 變動量 (供期權快速通道偵測 IV 崩塌)
+            curr_ivr = float(
+                r_data.get("iv_metrics", {}).get("iv_rank", 0.0)
+                if r_data.get("iv_metrics")
+                else 0.0
+            )
+            ivr_drop_val = 0.0
+            try:
+                from database.cache import get_kv_cache, save_kv_cache
+
+                prev_ivr_val = get_kv_cache(f"prev_ivr_{sym.upper()}")
+                if prev_ivr_val is not None:
+                    prev_ivr = float(prev_ivr_val)
+                    if prev_ivr > curr_ivr:
+                        ivr_drop_val = prev_ivr - curr_ivr
+                await save_kv_cache(f"prev_ivr_{sym.upper()}", curr_ivr)
+            except Exception:
+                pass
+
+            atr_val = float(r_data.get("atr_14", 0.0))
+            spot_val = float(
+                r_data.get("quote", {}).get("c", 0.0) if r_data.get("quote") else 0.0
+            )
+
+            raw_max_pain = r_data.get("max_pain")
+            max_pain_val = (
+                float(raw_max_pain.get("max_pain") or 0.0)
+                if isinstance(raw_max_pain, dict)
+                else (float(raw_max_pain) if raw_max_pain else 0.0)
+            )
+            raw_dte = r_data.get("nearest_dte")
+            dte_val = int(raw_dte) if raw_dte is not None else 99
+
+            return {
+                "spot_price": spot_val,
+                "price_15m_close": spot_val,
+                "ivr": curr_ivr,
+                "ivr_drop": ivr_drop_val,
+                "max_pain": max_pain_val,
+                "put_wall": float(
+                    r_data.get("gex_profile_data", {}).get("put_wall", 0.0) or 0.0
+                )
+                if isinstance(r_data.get("gex_profile_data"), dict)
+                else 0.0,
+                "call_wall": float(
+                    r_data.get("gex_profile_data", {}).get("call_wall", 0.0) or 0.0
+                )
+                if isinstance(r_data.get("gex_profile_data"), dict)
+                else 0.0,
+                "is_uoa_sweep": len(r_data.get("uoa", [])) > 0
+                if r_data.get("uoa")
+                else False,
+                "gamma_flip": float(
+                    r_data.get("gex_profile_data", {}).get("gamma_flip", 0.0) or 0.0
+                )
+                if isinstance(r_data.get("gex_profile_data"), dict)
+                else 0.0,
+                "sqz_mom": float(
+                    r_data.get("psq_result", {}).get("momentum_value", 0.0)
+                    if r_data.get("psq_result")
+                    else 0.0
+                ),
+                "skew": float(r_data.get("skew", 0.0) if r_data.get("skew") else 0.0),
+                "atr_14": atr_val,
+                "atr_15m": atr_val,
+                "hvn": float(r_data.get("vp_data", {}).get("hvn", 0.0))
+                if isinstance(r_data.get("vp_data"), dict)
+                else 0.0,
+                "lvn": float(r_data.get("vp_data", {}).get("lvn", 0.0))
+                if isinstance(r_data.get("vp_data"), dict)
+                else 0.0,
+                "dte": dte_val,
+            }
+        except Exception as parse_ex:
+            logger.error(f"Failed to parse radar data for {sym}: {parse_ex}")
+            return fallback_metrics
+
+    @staticmethod
+    def _build_option_asset_entry(
+        opt_sym: str,
+        quantity: float,
+        mid_price: float,
+        bid: float,
+        ask: float,
+        metrics: Dict[str, Any],
+        r_data: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """組裝單筆多頭期權持倉的 asset_entry，供動態轉倉引擎評估迴圈使用。
+
+        選擇權合約本身恆為戰術性部位：即使標的是 CORE 防禦 ETF，也不套用
+        CORE 的無上限配置假設，避免 evaluate_core_deployment /
+        evaluate_covered_call_overlay 誤處理。期權部位無法從既有資料推導
+        單筆成本基礎 (見 anti_washout.py 的 acquired_at 估算邏輯)，
+        avg_cost/acquired_at 明確降級為 0.0/None。
+        """
+        return {
+            "symbol": opt_sym,
+            "asset_class": "SATELLITE",
+            "instrument_type": "OPTIONS_CONTRACT",
+            "quantity": quantity,
+            "current_value": quantity * mid_price * 100.0,
+            "max_allocation_pct": 0.3,
+            "spot_price": metrics["spot_price"],
+            "price_15m_close": metrics.get("price_15m_close", metrics["spot_price"]),
+            "ivr": metrics["ivr"],
+            "ivr_drop": metrics.get("ivr_drop", 0.0),
+            "max_pain": metrics["max_pain"],
+            "put_wall": metrics["put_wall"],
+            "call_wall": metrics["call_wall"],
+            "is_uoa_sweep": metrics["is_uoa_sweep"],
+            "gamma_flip": metrics.get("gamma_flip", 0.0),
+            "sqz_mom": metrics.get("sqz_mom", 0.0),
+            "skew": metrics.get("skew", 0.0),
+            "atr_14": metrics.get("atr_14", 0.0),
+            "atr_15m": metrics.get("atr_15m", metrics.get("atr_14", 0.0)),
+            "hvn": metrics.get("hvn", 0.0),
+            "lvn": metrics.get("lvn", 0.0),
+            "dte": metrics.get("dte", 99),
+            "gex_profile_data": r_data.get("gex_profile_data", {}) if r_data else {},
+            "avg_cost": 0.0,
+            "psq_result": r_data.get("psq_result", {}) if r_data else {},
+            "acquired_at": None,
+            "bid": bid,
+            "ask": ask,
+            "boxx_allocation_pct": None,
+        }
 
     # ==========================================
     # 🚀 真實持倉風險動態審計 (每 15 分鐘，於 :05、:20、:35、:50 執行，
@@ -100,6 +253,25 @@ class PortfolioMonitorCog(commands.Cog):
 
             all_holdings = get_all_holdings()
 
+            # 🚀 動態轉倉引擎：真實期權持倉併入評估迴圈 (Feature Flag，預設關閉)。
+            # 僅納入多頭買方部位 (quantity > 0)；賣方 (STO) 部位風險輪廓相反
+            # (時間價值衰減對我方有利)，已由既有 evaluate_covered_call_overlay /
+            # recommend_covered_calls 覆蓋，套用本引擎會產生方向錯誤的清倉指令。
+            long_option_trades: List[Dict[str, Any]] = []
+            if config.ENABLE_OPTIONS_ROLLOVER_INGESTION:
+                from database.portfolio import get_all_trade_positions
+
+                all_trades_raw = get_all_trade_positions()
+                long_option_trades = [
+                    t for t in all_trades_raw if float(t.get("quantity") or 0) > 0
+                ]
+                skipped_short_count = len(all_trades_raw) - len(long_option_trades)
+                if skipped_short_count:
+                    logger.debug(
+                        f"[OptionsRollover] 略過 {skipped_short_count} 筆賣方/非多頭"
+                        "期權部位 (不在動態轉倉引擎評估範圍內)"
+                    )
+
             # --- 提前抓取雷達數據，供後續模組共用 ---
             terminal_cog = getattr(self, "bot", None) and self.bot.get_cog(
                 "UnifiedTerminalCog"
@@ -113,9 +285,11 @@ class PortfolioMonitorCog(commands.Cog):
             )
             is_shared_fresh = (time.time() - shared_time) < 300.0
 
+            all_symbols_needed = {h["symbol"].upper() for h in all_holdings} | {
+                str(t["symbol"]).upper() for t in long_option_trades
+            }
             symbols_to_query: set[str] = set()
-            for h in all_holdings:
-                sym = h["symbol"].upper()
+            for sym in all_symbols_needed:
                 if (
                     is_shared_fresh
                     and sym in shared_cache
@@ -213,150 +387,19 @@ class PortfolioMonitorCog(commands.Cog):
             try:
                 user_assets: Dict[int, List[Dict[str, Any]]] = {}
 
+                # 現貨與期權部位共用同一份標的層級量化指標快照 (避免重複計算，
+                # 也讓 prev_ivr_{symbol} kv_cache 每個標的每輪只讀寫一次，而非
+                # 每筆持倉都重複讀寫)。
+                symbol_metrics_map: Dict[str, Dict[str, Any]] = {}
+                for sym in all_symbols_needed:
+                    symbol_metrics_map[sym] = await self._build_symbol_metrics(
+                        sym, radar_cache_map.get(sym)
+                    )
+
                 for h in all_holdings:
                     u_id = h["user_id"]
                     sym = h["symbol"].upper()
-
-                    r_data = radar_cache_map.get(sym)
-                    if r_data:
-                        try:
-                            # 追蹤 IVR 變動量 (供期權快速通道偵測 IV 崩塌)
-                            curr_ivr = float(
-                                r_data.get("iv_metrics", {}).get("iv_rank", 0.0)
-                                if r_data.get("iv_metrics")
-                                else 0.0
-                            )
-                            ivr_drop_val = 0.0
-                            try:
-                                from database.cache import get_kv_cache, save_kv_cache
-
-                                prev_ivr_val = get_kv_cache(f"prev_ivr_{sym.upper()}")
-                                if prev_ivr_val is not None:
-                                    prev_ivr = float(prev_ivr_val)
-                                    if prev_ivr > curr_ivr:
-                                        ivr_drop_val = prev_ivr - curr_ivr
-                                await save_kv_cache(
-                                    f"prev_ivr_{sym.upper()}",
-                                    curr_ivr,
-                                )
-                            except Exception:
-                                pass
-
-                            atr_val = float(r_data.get("atr_14", 0.0))
-                            spot_val = float(
-                                r_data.get("quote", {}).get("c", 0.0)
-                                if r_data.get("quote")
-                                else 0.0
-                            )
-
-                            metrics = {
-                                "spot_price": spot_val,
-                                "price_15m_close": spot_val,
-                                "ivr": curr_ivr,
-                                "ivr_drop": ivr_drop_val,
-                                "max_pain": float(
-                                    r_data.get("max_pain", {}).get("max_pain") or 0.0
-                                )
-                                if isinstance(r_data.get("max_pain"), dict)
-                                else (
-                                    float(r_data.get("max_pain"))
-                                    if r_data.get("max_pain")
-                                    else 0.0
-                                ),
-                                "put_wall": float(
-                                    r_data.get("gex_profile_data", {}).get(
-                                        "put_wall", 0.0
-                                    )
-                                    or 0.0
-                                )
-                                if isinstance(r_data.get("gex_profile_data"), dict)
-                                else 0.0,
-                                "call_wall": float(
-                                    r_data.get("gex_profile_data", {}).get(
-                                        "call_wall", 0.0
-                                    )
-                                    or 0.0
-                                )
-                                if isinstance(r_data.get("gex_profile_data"), dict)
-                                else 0.0,
-                                "is_uoa_sweep": len(r_data.get("uoa", [])) > 0
-                                if r_data.get("uoa")
-                                else False,
-                                "gamma_flip": float(
-                                    r_data.get("gex_profile_data", {}).get(
-                                        "gamma_flip", 0.0
-                                    )
-                                    or 0.0
-                                )
-                                if isinstance(r_data.get("gex_profile_data"), dict)
-                                else 0.0,
-                                "sqz_mom": float(
-                                    r_data.get("psq_result", {}).get(
-                                        "momentum_value", 0.0
-                                    )
-                                    if r_data.get("psq_result")
-                                    else 0.0
-                                ),
-                                "skew": float(
-                                    r_data.get("skew", 0.0)
-                                    if r_data.get("skew")
-                                    else 0.0
-                                ),
-                                "atr_14": atr_val,
-                                "atr_15m": atr_val,
-                                "hvn": float(r_data.get("vp_data", {}).get("hvn", 0.0))
-                                if isinstance(r_data.get("vp_data"), dict)
-                                else 0.0,
-                                "lvn": float(r_data.get("vp_data", {}).get("lvn", 0.0))
-                                if isinstance(r_data.get("vp_data"), dict)
-                                else 0.0,
-                                "dte": int(r_data.get("nearest_dte"))
-                                if r_data.get("nearest_dte") is not None
-                                else 99,
-                            }
-                        except Exception as parse_ex:
-                            logger.error(
-                                f"Failed to parse radar data for {sym}: {parse_ex}"
-                            )
-                            fallback_metrics = {
-                                "spot_price": 0.0,
-                                "price_15m_close": 0.0,
-                                "ivr": 0.0,
-                                "ivr_drop": 0.0,
-                                "max_pain": 0.0,
-                                "put_wall": 0.0,
-                                "call_wall": 0.0,
-                                "is_uoa_sweep": False,
-                                "gamma_flip": 0.0,
-                                "sqz_mom": 0.0,
-                                "skew": 0.0,
-                                "atr_14": 0.0,
-                                "atr_15m": 0.0,
-                                "hvn": 0.0,
-                                "lvn": 0.0,
-                                "dte": 99,
-                            }
-                            metrics = fallback_metrics
-                    else:
-                        fallback_metrics = {
-                            "spot_price": 0.0,
-                            "price_15m_close": 0.0,
-                            "ivr": 0.0,
-                            "ivr_drop": 0.0,
-                            "max_pain": 0.0,
-                            "put_wall": 0.0,
-                            "call_wall": 0.0,
-                            "is_uoa_sweep": False,
-                            "gamma_flip": 0.0,
-                            "sqz_mom": 0.0,
-                            "skew": 0.0,
-                            "atr_14": 0.0,
-                            "atr_15m": 0.0,
-                            "hvn": 0.0,
-                            "lvn": 0.0,
-                            "dte": 99,
-                        }
-                        metrics = fallback_metrics
+                    metrics = symbol_metrics_map[sym]
 
                     is_core = sym in CORE_DEFENSE_ETF_SYMBOLS
                     default_class = "CORE" if is_core else "SATELLITE"
@@ -397,11 +440,15 @@ class PortfolioMonitorCog(commands.Cog):
                         "hvn": metrics.get("hvn", 0.0),
                         "lvn": metrics.get("lvn", 0.0),
                         "dte": metrics.get("dte", 99),
-                        "gex_profile_data": r_data.get("gex_profile_data", {})
-                        if r_data
+                        "gex_profile_data": radar_cache_map[sym].get(
+                            "gex_profile_data", {}
+                        )
+                        if radar_cache_map.get(sym)
                         else {},
                         "avg_cost": h.get("avg_cost", 0.0),
-                        "psq_result": r_data.get("psq_result", {}) if r_data else {},
+                        "psq_result": radar_cache_map[sym].get("psq_result", {})
+                        if radar_cache_map.get(sym)
+                        else {},
                         "acquired_at": h.get("acquired_at"),
                         # 核心資金部署引擎 (Scenario 5) 的 BOXX 防禦閾值：None 時
                         # evaluate_core_deployment() 會自動改用
@@ -413,6 +460,87 @@ class PortfolioMonitorCog(commands.Cog):
                             "target_allocation_pct"
                         )
                     user_assets.setdefault(u_id, []).append(asset_entry)
+
+                # 🚀 期權部位併入動態轉倉評估迴圈 (Feature Flag)。此機制與
+                # audit_real_portfolio_risk() 的 PROFIT_LOCK/GAMMA_FRAGILITY
+                # 判斷完全獨立 (一個判斷「該獲利了結」，一個判斷「該轉倉/清倉
+                # 防禦」)，兩者刻意保持獨立，未來重構不應合併耦合。
+                if long_option_trades:
+                    quote_sem = asyncio.Semaphore(3)
+                    unique_contracts: Dict[
+                        tuple[str, Any, Any, Any], Dict[str, Any]
+                    ] = {}
+                    for t in long_option_trades:
+                        contract_key = (
+                            str(t["symbol"]).upper(),
+                            t.get("expiry"),
+                            t.get("strike"),
+                            t.get("opt_type"),
+                        )
+                        unique_contracts.setdefault(contract_key, t)
+
+                    from market_analysis.portfolio import get_option_chain_mid_iv
+
+                    async def _fetch_one_contract_quote(
+                        key: tuple[str, Any, Any, Any],
+                    ) -> tuple[tuple[str, Any, Any, Any], float, float, float]:
+                        sym_k, expiry_k, strike_k, opt_type_k = key
+                        async with quote_sem:
+                            try:
+                                mid, _iv, bid, ask = await get_option_chain_mid_iv(
+                                    sym_k, expiry_k, strike_k, opt_type_k
+                                )
+                                return key, mid, bid, ask
+                            except Exception as ex:
+                                logger.warning(
+                                    f"[OptionsRollover] 抓取 {sym_k} {expiry_k} "
+                                    f"{strike_k}{opt_type_k} 報價失敗: {ex}"
+                                )
+                                return key, 0.0, 0.0, 0.0
+
+                    quote_results = await asyncio.gather(
+                        *[_fetch_one_contract_quote(key) for key in unique_contracts]
+                    )
+                    quote_map = {
+                        key: (mid, bid, ask) for key, mid, bid, ask in quote_results
+                    }
+
+                    for t in long_option_trades:
+                        opt_u_id = t["user_id"]
+                        opt_sym = str(t["symbol"]).upper()
+                        contract_key = (
+                            opt_sym,
+                            t.get("expiry"),
+                            t.get("strike"),
+                            t.get("opt_type"),
+                        )
+                        mid_price, bid, ask = quote_map.get(
+                            contract_key, (0.0, 0.0, 0.0)
+                        )
+                        if mid_price <= 0:
+                            logger.warning(
+                                f"[OptionsRollover] {opt_sym} {t.get('expiry')} "
+                                f"{t.get('strike')}{t.get('opt_type')} 無有效報價 "
+                                "(合約可能已下市/到期)，跳過本輪評估。"
+                            )
+                            continue
+
+                        opt_metrics = symbol_metrics_map.get(opt_sym)
+                        if opt_metrics is None:
+                            continue
+                        opt_quantity = float(t.get("quantity") or 0.0)
+                        opt_r_data = radar_cache_map.get(opt_sym)
+
+                        option_asset_entry = self._build_option_asset_entry(
+                            opt_sym,
+                            opt_quantity,
+                            mid_price,
+                            bid,
+                            ask,
+                            opt_metrics,
+                            opt_r_data,
+                        )
+                        user_assets.setdefault(opt_u_id, []).append(option_asset_entry)
 
                 for u_id, portfolio_assets in user_assets.items():
                     total_val = sum(a["current_value"] for a in portfolio_assets)
@@ -427,8 +555,11 @@ class PortfolioMonitorCog(commands.Cog):
                     # SATELLITE 持倉，比對單一預篩選高 EV 候選標的的機會成本
                     # 注意：僅排除 Scenario 3 有實際賣出/減碼動作的標的；HOLD
                     # (安心防守卡，無實際動作) 不構成矛盾指令，不應阻擋本情境評估。
+                    # 去重鍵採 (symbol, instrument_type) 複合鍵：同一標的可能
+                    # 同時存在現貨與期權部位，純 symbol 去重會讓其中一種工具
+                    # 類型的清倉指令意外壓制另一種工具類型的獨立評估。
                     already_flagged = {
-                        ins["symbol"]
+                        (ins["symbol"], ins.get("instrument_type", "SPOT"))
                         for ins in rebalance_instructions
                         if ins.get("action") != "HOLD"
                     }
@@ -476,7 +607,7 @@ class PortfolioMonitorCog(commands.Cog):
                     # 標的在同一輪次內重複驗證 (內含未快取的 get_market_regime()
                     # 呼叫)。
                     already_flagged = {
-                        ins["symbol"]
+                        (ins["symbol"], ins.get("instrument_type", "SPOT"))
                         for ins in rebalance_instructions
                         if ins.get("action") != "HOLD"
                     }
@@ -513,7 +644,7 @@ class PortfolioMonitorCog(commands.Cog):
                     # 不應在大盤觸發系統性保證金風控紅線時，silently 蓋掉更高等級的
                     # 強制平倉防禦警報。
                     already_flagged = {
-                        ins["symbol"]
+                        (ins["symbol"], ins.get("instrument_type", "SPOT"))
                         for ins in rebalance_instructions
                         if ins.get("action") != "HOLD"
                     }
@@ -556,9 +687,10 @@ class PortfolioMonitorCog(commands.Cog):
                         # 反覆重推導致警報疲勞（比照 WTI / 價量突破警報既有模式）。
                         # 動作 (action) 亦納入 key：若條件當日從 HOLD 升級為
                         # LIQUIDATE 等實際動作，仍視為新警報正常發送。
+                        instrument_type = ins.get("instrument_type", "SPOT")
                         dedup_key = (
                             f"rollover_alert_{u_id}_{ins['symbol']}_"
-                            f"{scenario}_{action}_{today_str}"
+                            f"{instrument_type}_{scenario}_{action}_{today_str}"
                         )
                         if database.get_kv_cache(dedup_key):
                             continue
@@ -639,7 +771,21 @@ class PortfolioMonitorCog(commands.Cog):
                                     "_view",
                                     f"RolloverActionView:{ins['symbol']}",
                                 )
-                        await self.bot.queue_dm(u_id, embed=embed)
+                        # 期權相關轉倉指令是「首次真正被生產環境觸發」的分支，
+                        # 行為分佈尚未經過實際流量驗證；dry-run 期間僅記錄
+                        # log 與審計軌跡，不實際推播 DM，待觀察 1-2 週分佈合理
+                        # 後再關閉 OPTIONS_ROLLOVER_DRY_RUN。
+                        if (
+                            instrument_type == "OPTIONS"
+                            and config.OPTIONS_ROLLOVER_DRY_RUN
+                        ):
+                            logger.info(
+                                f"[OptionsRollover][DryRun] 略過推播 (僅記錄審計軌跡): "
+                                f"user={u_id} symbol={ins['symbol']} scenario={scenario} "
+                                f"action={action}"
+                            )
+                        else:
+                            await self.bot.queue_dm(u_id, embed=embed)
                         await database.save_kv_cache(dedup_key, 1)
                         # 審計軌跡：記錄本次實際推送給使用者的轉倉建議本身
                         # (系統僅提供建議、不代為執行券商下單，故無法追蹤實際

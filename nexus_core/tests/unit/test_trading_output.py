@@ -220,7 +220,10 @@ async def test_monitor_real_portfolio_task_margin_defense_excludes_scenario2_and
     cog.rollover_engine.evaluate_margin_defense.assert_awaited_once()
     await_args = cog.rollover_engine.evaluate_margin_defense.await_args
     assert await_args is not None
-    assert await_args.kwargs["already_flagged_symbols"] == {"NVDA", "AAPL"}
+    assert await_args.kwargs["already_flagged_symbols"] == {
+        ("NVDA", "SPOT"),
+        ("AAPL", "SPOT"),
+    }
 
 
 @pytest.mark.asyncio

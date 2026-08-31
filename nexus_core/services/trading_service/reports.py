@@ -36,7 +36,7 @@ class ReportsMixin:
         async def _fetch_mid(asset: Any) -> float:
             am = asset.metadata
             async with sem:
-                mid_price, _ = await get_option_chain_mid_iv(
+                mid_price, _, _bid, _ask = await get_option_chain_mid_iv(
                     asset.symbol, am.get("expiry"), am.get("strike"), am.get("opt_type")
                 )
                 return float(mid_price)
@@ -166,7 +166,7 @@ class ReportsMixin:
 
                     # Profit Lock 觸發條件：Delta >= 0.85 且 PnL > 150% 且 DTE <= 21
                     # 獲取即時 Mid 以計算 PnL
-                    mid, _ = await portfolio.get_option_chain_mid_iv(
+                    mid, _, _bid, _ask = await portfolio.get_option_chain_mid_iv(
                         sym, exp, strike, opt_t
                     )
                     pnl_pct = ((mid - entry) / entry) if mid > 0 else 0

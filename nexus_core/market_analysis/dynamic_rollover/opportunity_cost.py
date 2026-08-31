@@ -199,8 +199,9 @@ async def _confirm_entry_condition5_macro_earnings_gate(
                 reasons.append(
                     f"條件五❌：即將於 {days_to_er} 天內發布財報，避開高波事件風險"
                 )
-    except Exception:
-        pass
+    except Exception as e:
+        c5_passed = False
+        reasons.append(f"條件五❌：財報行事曆資料抓取失敗，安全起見判定未通過: {e}")
 
     if c5_passed:
         try:
@@ -212,8 +213,11 @@ async def _confirm_entry_condition5_macro_earnings_gate(
                 reasons.append(
                     f"條件五❌：大盤處於 `{regime}` 負 Gamma 踩踏模式，嚴禁開倉個股買方"
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            c5_passed = False
+            reasons.append(
+                f"條件五❌：大盤總經風控狀態抓取失敗，安全起見判定未通過: {e}"
+            )
 
     if c5_passed:
         reasons.append("條件五✅：總經環境與財報事件風控安全")
@@ -648,7 +652,17 @@ class _OpportunityCostMixin:
             symbol = str(asset.get("symbol", "")).upper()
             if asset.get("asset_class") != "SATELLITE":
                 continue
-            if symbol in already_flagged_symbols or symbol == candidate_symbol:
+            instrument_class = str(
+                asset.get("instrument_type", asset.get("asset_type", "SPOT"))
+            ).upper()
+            instrument_class = (
+                "OPTIONS"
+                if ("OPT" in instrument_class or "CONTRACT" in instrument_class)
+                else "SPOT"
+            )
+            if (symbol, instrument_class) in already_flagged_symbols:
+                continue
+            if symbol == candidate_symbol:
                 continue
 
             holding_psq = asset.get("psq_result", {}) or {}
@@ -694,7 +708,7 @@ class _OpportunityCostMixin:
             ask = float(asset.get("ask", 0.0))
             illiquidity_warning = (
                 format_illiquidity_warning(bid, ask)
-                if asset.get("asset_class") == "OPTIONS"
+                if instrument_class == "OPTIONS"
                 else None
             )
             is_illiquid_warning = illiquidity_warning is not None
@@ -716,6 +730,7 @@ class _OpportunityCostMixin:
                     "is_manual_override_required": is_illiquid_warning,
                     "cash_impact": cash_impact,
                     "limit_price": target_spot if target_spot > 0 else None,
+                    "instrument_type": instrument_class,
                 }
             )
         return instructions, entry_confirmation

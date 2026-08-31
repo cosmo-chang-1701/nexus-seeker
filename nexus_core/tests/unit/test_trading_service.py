@@ -206,8 +206,8 @@ async def test_get_portfolio_pnl_maps_each_trade_to_its_own_mid_price() -> None:
 
     async def _fake_get_option_chain_mid_iv(
         symbol: str, expiry: Any, strike: Any, opt_type: Any
-    ) -> Tuple[float, float]:
-        return mid_by_symbol[symbol], 0.3
+    ) -> Tuple[float, float, float, float]:
+        return mid_by_symbol[symbol], 0.3, 0.0, 0.0
 
     with (
         patch("services.asset_manager.AssetManager.get_assets", return_value=assets),
@@ -261,13 +261,13 @@ async def test_get_portfolio_pnl_fetches_mid_prices_concurrently() -> None:
 
     async def _fake_get_option_chain_mid_iv(
         symbol: str, expiry: Any, strike: Any, opt_type: Any
-    ) -> Tuple[float, float]:
+    ) -> Tuple[float, float, float, float]:
         nonlocal in_flight, max_in_flight
         in_flight += 1
         max_in_flight = max(max_in_flight, in_flight)
         await asyncio.sleep(0.05)
         in_flight -= 1
-        return 1.5, 0.3
+        return 1.5, 0.3, 0.0, 0.0
 
     with (
         patch("services.asset_manager.AssetManager.get_assets", return_value=assets),

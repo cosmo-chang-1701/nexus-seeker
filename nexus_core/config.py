@@ -57,6 +57,17 @@ API_KEY = get_env_or_secret("API_KEY", None)
 TUNNEL_URL = get_env_or_secret("TUNNEL_URL", "")
 FINNHUB_API_KEY = get_env_or_secret("FINNHUB_API_KEY", "")
 
+# 動態轉倉引擎：真實期權持倉併入 15 分鐘評估迴圈 (Feature Flag)
+# 預設關閉，避免 OPTIONS 快速通道/流動性警告等「首次真正被生產環境觸發」的
+# 分支在未經觀察期前意外對使用者發送大量清倉指令。開啟後預設仍為 dry-run
+# (僅記錄不推播)，須另外關閉 OPTIONS_ROLLOVER_DRY_RUN 才會實際發送 DM。
+ENABLE_OPTIONS_ROLLOVER_INGESTION = (
+    get_env_or_secret("ENABLE_OPTIONS_ROLLOVER_INGESTION", "false").lower() == "true"
+)
+OPTIONS_ROLLOVER_DRY_RUN = (
+    get_env_or_secret("OPTIONS_ROLLOVER_DRY_RUN", "true").lower() == "true"
+)
+
 # 策略目標 Delta 參數
 TARGET_DELTAS = {"STO_PUT": -0.20, "STO_CALL": 0.20, "BTO_PUT": -0.50, "BTO_CALL": 0.50}
 

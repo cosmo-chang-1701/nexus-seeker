@@ -379,7 +379,7 @@ async def refresh_portfolio_greeks(
                     trade_meta.stock_cost = holding_map.get(
                         (asset.user_id, asset.symbol.upper()), trade_meta.stock_cost
                     )
-                    mid, iv_raw = await get_option_chain_mid_iv(
+                    mid, iv_raw, _bid, _ask = await get_option_chain_mid_iv(
                         asset.symbol,
                         trade_meta.expiry,
                         trade_meta.strike,
@@ -473,10 +473,12 @@ async def refresh_portfolio_greeks(
 
 
 async def get_option_chain_mid_iv(symbol: Any, expiry: Any, strike: Any, opt_type: Any):  # type: ignore
+    """回傳 (mid, iv, bid, ask)。bid/ask 為合約原始報價 (供流動性點差判斷用，
+    非 mid)；找不到匹配合約或例外時全部回傳 0.0。"""
     try:
         opt_chain = await get_option_chain(symbol, expiry, prune_pct=None)
         if opt_chain is None:
-            return 0.0, 0.0
+            return 0.0, 0.0, 0.0, 0.0
         chain = opt_chain.calls if opt_type == "call" else opt_chain.puts
         # 彈性匹配：尋找最接近的履約價 (防止浮點數誤差)
         contract = chain[(chain["strike"] - strike).abs() < 0.01]
@@ -490,7 +492,7 @@ async def get_option_chain_mid_iv(symbol: Any, expiry: Any, strike: Any, opt_typ
             # 優先使用 Mid，若無報價使用 Last
             mid = (bid + ask) / 2 if (bid > 0 and ask > 0) else last
             iv = c.get("impliedVolatility", 0.0)
-            return mid, iv
+            return mid, iv, bid, ask
     except Exception as e:
         logger.debug(f"get_option_chain_mid_iv 異常: {e}")
-    return 0.0, 0.0
+    return 0.0, 0.0, 0.0, 0.0

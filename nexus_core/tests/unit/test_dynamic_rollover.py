@@ -771,6 +771,70 @@ async def test_lvn_secondary_hvn_snapping(engine: DynamicRolloverEngine) -> None
 
 
 @pytest.mark.asyncio
+@patch("market_analysis.dynamic_rollover.get_full_user_context")
+@patch(
+    "market_analysis.dynamic_rollover.is_gamma_cliff_confirmed",
+    new_callable=AsyncMock,
+    return_value=True,
+)
+@patch("database.orders.get_user_active_orders", return_value=[])
+async def test_check_satellite_rebalancing_options_fast_track_vs_spot_slow_track(
+    mock_orders: MagicMock,
+    mock_cliff: AsyncMock,
+    mock_get_user: MagicMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """問題二迴歸鎖定（驗證整個修復目標最關鍵的測試）：同一標的、同一組量化
+    數據，僅 instrument_type 不同 —— 期權部位 (OPTIONS_CONTRACT) 應透過 3-5m
+    快速通道立即清倉 (現價 95.0 貫穿 anchor_base 100.0 即時判定破位，不等待
+    15m 實體收盤確認)；現貨部位 (SPOT) 則因 15m 實體收盤價 (98.0) 未跌破防守
+    位 (97.0) 且 SQZ MOM (+0.5) 維持多頭，結構性破位判定不成立，維持不動作。
+    修正前 portfolio_monitor.py 從未在 asset_entry 設定 instrument_type，此
+    區分永遠恆為 SPOT，OPTIONS 快速通道分支在生產環境中從未真正被觸發過。"""
+    mock_get_user.return_value = MagicMock(can_trade_spreads=False)
+    shared_fields = {
+        "symbol": "NVDA",
+        "asset_class": "SATELLITE",
+        "current_value": 950.0,
+        "quantity": 10.0,
+        "max_allocation_pct": 1.0,
+        "spot_price": 95.0,
+        "price_15m_close": 98.0,
+        "put_wall": 100.0,
+        "gamma_flip": 0.0,
+        "call_wall": 0.0,
+        "hvn": 0.0,
+        "atr_14": 2.0,
+        "atr_15m": 2.0,
+        "ivr": 30.0,
+        "is_uoa_sweep": False,
+        "max_pain": 0.0,
+        "sqz_mom": 0.5,
+        "skew": 0.1,
+    }
+    portfolio = [
+        {**shared_fields, "instrument_type": "SPOT"},
+        {**shared_fields, "instrument_type": "OPTIONS_CONTRACT"},
+    ]
+    instructions = await engine.check_satellite_rebalancing(1, portfolio, 10000.0)
+
+    spot_instructions = [
+        ins for ins in instructions if ins.get("instrument_type") == "SPOT"
+    ]
+    options_instructions = [
+        ins for ins in instructions if ins.get("instrument_type") == "OPTIONS"
+    ]
+
+    assert spot_instructions == []
+    assert len(options_instructions) == 1
+    assert options_instructions[0]["symbol"] == "NVDA"
+    assert options_instructions[0]["action"] == "LIQUIDATE"
+    assert options_instructions[0]["sell_ratio"] == 1.0
+    assert "期權雙軌快速通道觸發" in options_instructions[0]["reason"]
+    assert "3-5m 快速通道" in options_instructions[0]["reason"]
+
+
+@pytest.mark.asyncio
 async def test_dual_track_exit_options_vs_spot(engine: DynamicRolloverEngine) -> None:
     """測試雙軌裁決機制：期權 OPTIONS 走 3-5m 快速通道 (現價跌破即清倉)，現貨 SPOT 走 15m 實體收盤"""
     # 案例 A: 現價跌破 Stop Loss，但 15m 收盤價尚未跌破
@@ -990,6 +1054,80 @@ async def test_evaluate_opportunity_cost_for_satellites_triggers(
     assert result[0]["sell_ratio"] == 0.3
     assert result[0]["scenario"] == "OPPORTUNITY_COST"
     assert result[0]["is_manual_override_required"] is False
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
+    new_callable=AsyncMock,
+    return_value=(True, "mocked"),
+)
+@patch("database.market_cache.get_market_cache")
+async def test_evaluate_opportunity_cost_for_satellites_options_holding_wide_spread_flags_manual_override(
+    mock_cache: MagicMock,
+    mock_entry_gate: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """問題二迴歸鎖定：期權部位 (instrument_type="OPTIONS") 若帶有過寬的 bid/ask
+    點差，機會成本轉倉建議必須附加流動性警告並強制手動確認 (is_manual_override_
+    required=True)。修正前 opportunity_cost.py:697 誤讀頂層 asset_class 欄位
+    (該迴圈已預先過濾成只剩 asset_class == "SATELLITE"，故此判斷式恆假)，導致
+    此分支自寫下起從未真正生效。"""
+
+    def cache_side_effect(symbol: str, expiry: str = None):  # type: ignore
+        if symbol.upper() == "NVDA":
+            return {
+                "reference_spot_price": 200.0,
+                "expected_move_upper": 205.0,  # EV ≈ 0.025 (低)
+                "is_stale": 0,
+                "is_degraded": 0,
+            }
+        if symbol.upper() == "SMCI":
+            return {
+                "reference_spot_price": 40.0,
+                "expected_move_upper": 50.0,  # EV = 0.25 (高)
+                "is_stale": 0,
+                "is_degraded": 0,
+            }
+        return None
+
+    mock_cache.side_effect = cache_side_effect
+
+    portfolio = [
+        {
+            "symbol": "NVDA",
+            "asset_class": "SATELLITE",
+            "instrument_type": "OPTIONS_CONTRACT",
+            "spot_price": 240.0,
+            "avg_cost": 200.0,  # profit_pct = 0.2 (< 0.3)
+            "psq_result": {
+                "squeeze_level": "Release",
+                "signal_direction": "Neutral",
+            },  # normalized score = 10 (< 20 動能衰退)
+            "bid": 1.00,
+            "ask": 1.50,  # 點差 (1.5-1.0)/1.25 = 40% >> 15% 閾值
+        },
+    ]
+    candidate_radar = {
+        "psq_result": {
+            "squeeze_level": "High",
+            "signal_direction": "Long",
+            "is_breakout_long": True,
+        },
+        "quote": {"c": 40.0},
+        "iv_metrics": {"iv_rank": 20.0},
+        "gex_profile_data": {"put_wall": 0.0},
+        "uoa": [],
+    }
+
+    result, _entry_confirmation = await engine.evaluate_opportunity_cost_for_satellites(
+        1, portfolio, set(), "SMCI", candidate_radar
+    )
+    assert len(result) == 1
+    assert result[0]["symbol"] == "NVDA"
+    assert result[0]["is_manual_override_required"] is True
+    assert "流動性警告" in result[0]["reason"]
+    assert result[0]["instrument_type"] == "OPTIONS"
 
 
 @pytest.mark.asyncio
@@ -1471,7 +1609,7 @@ async def test_evaluate_core_deployment_already_flagged_symbol_skipped(
         "uoa": [],
     }
     result = await engine.evaluate_core_deployment(
-        1, portfolio, {"VOO"}, 10000.0, "SPCX", candidate_radar
+        1, portfolio, {("VOO", "SPOT")}, 10000.0, "SPCX", candidate_radar
     )
     assert result == []
 
@@ -1840,7 +1978,7 @@ async def test_evaluate_covered_call_overlay_already_flagged_symbol_skipped(
             "avg_cost": 470.0,
         },
     ]
-    result = await engine.evaluate_covered_call_overlay(1, portfolio, {"VOO"})
+    result = await engine.evaluate_covered_call_overlay(1, portfolio, {("VOO", "SPOT")})
     assert result == []
     mock_find_contract.assert_not_awaited()
 
@@ -2912,7 +3050,7 @@ async def test_evaluate_margin_defense_skips_already_flagged_symbols(
         },
     ]
     result = await engine.evaluate_margin_defense(
-        1, portfolio, already_flagged_symbols={"NVDA"}
+        1, portfolio, already_flagged_symbols={("NVDA", "SPOT")}
     )
     assert result == []
 
@@ -3987,6 +4125,70 @@ async def test_confirm_entry_signal_condition5_macro_regime_fails(
     assert confirmed is False
     assert "條件五❌" in reason
     assert "SHORT_GAMMA_CRITICAL" in reason
+
+
+@pytest.mark.asyncio
+@patch(
+    "database.calendar_cache.get_cached_earnings",
+    side_effect=RuntimeError("財報行事曆抓取異常"),
+)
+async def test_confirm_entry_condition5_fails_closed_on_earnings_exception(
+    mock_earn: MagicMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """條件五 fail-closed：get_cached_earnings 拋出例外時，不得預設判定通過
+    (與其餘條件一/二/三/四/六方向一致：資料缺失/抓取失敗一律視為未通過)。"""
+    import pandas as pd
+
+    radar = _green_candidate_radar()
+    df_15m = pd.DataFrame(
+        {
+            "Close": [105.0] * 25,
+            "Volume": [10000.0] * 24 + [30000.0],
+        }
+    )
+    with patch(
+        "services.market_data_service.get_history_df",
+        new_callable=AsyncMock,
+        return_value=df_15m,
+    ):
+        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+    assert confirmed is False
+    assert "條件五❌" in reason
+    assert "財報行事曆資料抓取失敗" in reason
+
+
+@pytest.mark.asyncio
+@patch("database.calendar_cache.get_cached_earnings", return_value=None)
+@patch(
+    "market_analysis.index_microstructure.get_market_regime",
+    new_callable=AsyncMock,
+    side_effect=RuntimeError("總經風控狀態抓取異常"),
+)
+async def test_confirm_entry_condition5_fails_closed_on_regime_exception(
+    mock_regime: AsyncMock,
+    mock_earn: MagicMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """條件五 fail-closed：get_market_regime 拋出例外時，不得預設判定通過。"""
+    import pandas as pd
+
+    radar = _green_candidate_radar()
+    df_15m = pd.DataFrame(
+        {
+            "Close": [105.0] * 25,
+            "Volume": [10000.0] * 24 + [30000.0],
+        }
+    )
+    with patch(
+        "services.market_data_service.get_history_df",
+        new_callable=AsyncMock,
+        return_value=df_15m,
+    ):
+        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+    assert confirmed is False
+    assert "條件五❌" in reason
+    assert "大盤總經風控狀態抓取失敗" in reason
 
 
 @pytest.mark.asyncio

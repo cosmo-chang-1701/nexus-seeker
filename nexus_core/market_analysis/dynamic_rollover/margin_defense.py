@@ -162,13 +162,6 @@ async def evaluate_margin_defense_impl(
     for asset in portfolio_assets:
         symbol = str(asset.get("symbol", "")).upper()
         quantity = float(asset.get("quantity", 0.0))
-        if (
-            asset.get("asset_class") != "SATELLITE"
-            or symbol in CORE_DEFENSE_ETF_SYMBOLS
-            or symbol in flagged
-            or quantity == 0
-        ):
-            continue
 
         instrument_type = str(
             asset.get("instrument_type", asset.get("asset_type", "SPOT"))
@@ -178,6 +171,14 @@ async def evaluate_margin_defense_impl(
             if ("OPT" in instrument_type or "CONTRACT" in instrument_type)
             else "SPOT"
         )
+
+        if (
+            asset.get("asset_class") != "SATELLITE"
+            or symbol in CORE_DEFENSE_ETF_SYMBOLS
+            or (symbol, asset_class) in flagged
+            or quantity == 0
+        ):
+            continue
 
         is_no_edge = await engine._evaluate_structural_no_edge(
             symbol=symbol,
@@ -294,6 +295,7 @@ async def evaluate_margin_defense_impl(
                 "scenario": RolloverScenario.MARGIN_DEFENSE.value,
                 "cash_impact": cash_impact,
                 "limit_price": limit_price,
+                "instrument_type": asset_class,
             }
         )
 
