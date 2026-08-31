@@ -256,6 +256,13 @@ async def test_build_watchlist_heartbeat_embed_includes_option_plan(
     )
     user_context = SimpleNamespace(user_id=42, capital=120000.0, risk_limit=12.0)
 
+    # derive_watchlist_option_guidance/build_watchlist_option_plan are external
+    # market_analysis.option_guidance symbols imported at module top in
+    # intraday_pipeline/pipeline.py, so the patch must target the pipeline
+    # submodule (not the package-level re-export) to intercept the call made
+    # inside _build_watchlist_heartbeat_embed. build_watchlist_skew_rule_commentary
+    # is instead lazily re-imported from the package inside that same method, so
+    # patching the package-level attribute still works for it.
     with patch(
         "ui.formatter.generate_ansi_watchlist_report",
         return_value="heartbeat snapshot",
@@ -266,10 +273,10 @@ async def test_build_watchlist_heartbeat_embed_includes_option_plan(
         "database.get_user_holdings",
         return_value=[],
     ), patch(
-        "market_analysis.intraday_pipeline.derive_watchlist_option_guidance",
+        "market_analysis.intraday_pipeline.pipeline.derive_watchlist_option_guidance",
         return_value="option guidance",
     ) as mock_guidance, patch(
-        "market_analysis.intraday_pipeline.build_watchlist_option_plan",
+        "market_analysis.intraday_pipeline.pipeline.build_watchlist_option_plan",
         new_callable=AsyncMock,
         return_value="option-plan",
     ) as mock_build_plan, patch(
@@ -356,10 +363,10 @@ async def test_build_watchlist_heartbeat_embed_writes_back_uoa_cache(
         "database.get_user_holdings",
         return_value=[],
     ), patch(
-        "market_analysis.intraday_pipeline.derive_watchlist_option_guidance",
+        "market_analysis.intraday_pipeline.pipeline.derive_watchlist_option_guidance",
         return_value="option guidance",
     ), patch(
-        "market_analysis.intraday_pipeline.build_watchlist_option_plan",
+        "market_analysis.intraday_pipeline.pipeline.build_watchlist_option_plan",
         new_callable=AsyncMock,
         return_value="option-plan",
     ), patch(
@@ -437,10 +444,10 @@ async def test_build_watchlist_heartbeat_embed_skips_uoa_writeback_on_fetch_fail
         "database.get_user_holdings",
         return_value=[],
     ), patch(
-        "market_analysis.intraday_pipeline.derive_watchlist_option_guidance",
+        "market_analysis.intraday_pipeline.pipeline.derive_watchlist_option_guidance",
         return_value="option guidance",
     ), patch(
-        "market_analysis.intraday_pipeline.build_watchlist_option_plan",
+        "market_analysis.intraday_pipeline.pipeline.build_watchlist_option_plan",
         new_callable=AsyncMock,
         return_value="option-plan",
     ), patch(
@@ -586,10 +593,13 @@ async def test_run_loop_exception_isolation(intraday_pipeline: Any):  # type: ig
 
     intraday_pipeline.evaluate_watchlist_symbol = mock_evaluate
 
+    # is_market_open (from market_time) and datetime (stdlib) are imported at
+    # module top in intraday_pipeline/pipeline.py, which is where _run_loop()
+    # actually calls them, so the patch must target that submodule.
     with patch(
-        "market_analysis.intraday_pipeline.is_market_open", return_value=True
+        "market_analysis.intraday_pipeline.pipeline.is_market_open", return_value=True
     ), patch(
-        "market_analysis.intraday_pipeline.datetime"
+        "market_analysis.intraday_pipeline.pipeline.datetime"
     ) as mock_datetime_class, patch(
         "database.get_all_user_ids", return_value=[42]
     ), patch("database.get_full_user_context") as mock_ctx, patch(
