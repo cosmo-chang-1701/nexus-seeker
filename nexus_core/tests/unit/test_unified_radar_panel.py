@@ -202,15 +202,19 @@ async def test_execute_unified_scan_filters(mock_bot: Any, mock_interaction: Any
 
             cog._fetch_sym_radar_data_fast = fake_fetch  # type: ignore
 
+            # build_radar_scan_embed/BatchScanPaginatedView are imported at module
+            # top in cogs/unified_terminal/batch_scan.py, which is where
+            # execute_unified_scan() now lives (BatchScanMixin), so the patch
+            # must target that submodule rather than the cog.py facade.
             # Mock build_radar_scan_embed to capture the filtered result
             with patch(
-                "cogs.unified_terminal.cog.build_radar_scan_embed"
+                "cogs.unified_terminal.batch_scan.build_radar_scan_embed"
             ) as mock_builder:
                 mock_builder.return_value = discord.Embed(title="Radar Scan")
 
                 # Mock BatchScanPaginatedView
                 with patch(
-                    "cogs.unified_terminal.cog.BatchScanPaginatedView"
+                    "cogs.unified_terminal.batch_scan.BatchScanPaginatedView"
                 ) as MockView:
                     MockView.return_value = discord.ui.View()
 
@@ -278,11 +282,11 @@ async def test_execute_unified_scan_squeeze_mode_filter(
             cog._fetch_sym_radar_data_fast = fake_fetch  # type: ignore
 
             with patch(
-                "cogs.unified_terminal.cog.build_radar_scan_embed"
+                "cogs.unified_terminal.batch_scan.build_radar_scan_embed"
             ) as mock_builder:
                 mock_builder.return_value = discord.Embed(title="Radar Scan")
                 with patch(
-                    "cogs.unified_terminal.cog.BatchScanPaginatedView"
+                    "cogs.unified_terminal.batch_scan.BatchScanPaginatedView"
                 ) as MockView:
                     MockView.return_value = discord.ui.View()
                     await cog.execute_unified_scan(mock_interaction, state, 12345)
@@ -370,11 +374,11 @@ async def test_execute_unified_scan_magnetic_filters(
             cog._fetch_sym_radar_data_fast = fake_fetch  # type: ignore
 
             with patch(
-                "cogs.unified_terminal.cog.build_radar_scan_embed"
+                "cogs.unified_terminal.batch_scan.build_radar_scan_embed"
             ) as mock_builder:
                 mock_builder.return_value = discord.Embed(title="Radar Scan")
                 with patch(
-                    "cogs.unified_terminal.cog.BatchScanPaginatedView"
+                    "cogs.unified_terminal.batch_scan.BatchScanPaginatedView"
                 ) as MockView:
                     MockView.return_value = discord.ui.View()
                     await cog.execute_unified_scan(mock_interaction, state, 12345)
@@ -431,7 +435,9 @@ async def test_batch_scan_alpha_filters_and_pagination(
 
         mock_thread.side_effect = mock_to_thread_side_effect
 
-        with patch("cogs.unified_terminal.cog.build_radar_scan_embed") as mock_builder:
+        with patch(
+            "cogs.unified_terminal.batch_scan.build_radar_scan_embed"
+        ) as mock_builder:
             page_1 = discord.Embed(title="Radar Scan (第 1/2 頁)")
             page_2 = discord.Embed(title="Radar Scan (第 2/2 頁)")
             mock_builder.return_value = [page_1, page_2]
@@ -492,7 +498,9 @@ async def test_batch_scan_reports_error_when_send_fails(
 
         mock_thread.side_effect = mock_to_thread_side_effect
 
-        with patch("cogs.unified_terminal.cog.build_radar_scan_embed") as mock_builder:
+        with patch(
+            "cogs.unified_terminal.batch_scan.build_radar_scan_embed"
+        ) as mock_builder:
             mock_builder.return_value = [
                 discord.Embed(title="Radar Scan (第 1/3 頁)"),
                 discord.Embed(title="Radar Scan (第 2/3 頁)"),
@@ -684,7 +692,9 @@ async def test_exclude_martial_law_putwall_breach_and_neg_gex(
 
         cog._fetch_sym_radar_data_fast = fake_fetch  # type: ignore
 
-        with patch("cogs.unified_terminal.cog.build_radar_scan_embed") as mock_builder:
+        with patch(
+            "cogs.unified_terminal.batch_scan.build_radar_scan_embed"
+        ) as mock_builder:
             mock_builder.return_value = [discord.Embed(title="Radar Page")]
 
             await cog.execute_unified_scan(mock_interaction, state, 12345)
