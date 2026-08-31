@@ -38,6 +38,15 @@ _SMA_CACHE_TTL = 3600  # 1 小時 (1GB VPS 優化)
 _quote_cache: Any = BoundedCache(max_size=_SCALAR_CACHE_SIZE)
 _QUOTE_CACHE_TTL = 15  # 15 秒，避免在同一次掃描中心跳訊號重複對相同標的進行即時報價呼叫
 
+# 5 分鐘：判斷 Finnhub `/quote` 回傳的報價時間戳 (`t`) 是否「陳舊」的門檻。部分
+# Finnhub 免費方案對美股沒有真正的即時報價權限，`/quote` 只會回傳上一交易日收盤價
+# （`c > 0` 但 `t` 停在上個交易日甚至上週五），而既有邏輯只檢查 `c > 0` 就直接採用，
+# 導致盤中仍長期顯示過期價格且不會被偵測到。此門檻僅在盤中生效（見
+# `get_quote._is_finnhub_quote_stale`），盤外/週末時 `t` 停留在最後成交時間是正常
+# 現象，不應誤判為過期。5 分鐘遠寬於 Finnhub 正常即時/輕微延遲報價的秒級誤差，
+# 只用來攔截「完全沒有更新」這種結構性問題，而非追求分鐘級的新鮮度。
+_FINNHUB_QUOTE_STALE_THRESHOLD_SECONDS = 300
+
 _profile_cache: Any = BoundedCache(max_size=_SCALAR_CACHE_SIZE)
 _PROFILE_CACHE_TTL = 86400  # 24 小時，公司 Profile 通常是靜態的
 

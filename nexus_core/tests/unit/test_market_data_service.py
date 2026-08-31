@@ -703,6 +703,99 @@ async def test_get_quote_futures_symbol_bypasses_finnhub() -> None:
         mock_exec_api.assert_not_called()
 
 
+def test_is_finnhub_quote_stale_market_closed_is_never_stale() -> None:
+    """收盤/週末時 Finnhub `t` 停在最後成交時間屬正常現象，不應被判定為過期。"""
+    from services.market_data_service.quote import _is_finnhub_quote_stale
+
+    with patch("services.market_data_service.quote.is_market_open", return_value=False):
+        stale_data = {"c": 100.0, "t": time.time() - 999999}
+        assert _is_finnhub_quote_stale(stale_data) is False
+
+
+def test_is_finnhub_quote_stale_market_open_fresh_quote() -> None:
+    """盤中且時間戳夠新鮮 (< 5 分鐘) 時不應判定為過期。"""
+    from services.market_data_service.quote import _is_finnhub_quote_stale
+
+    with patch("services.market_data_service.quote.is_market_open", return_value=True):
+        fresh_data = {"c": 100.0, "t": time.time() - 30}
+        assert _is_finnhub_quote_stale(fresh_data) is False
+
+
+def test_is_finnhub_quote_stale_market_open_old_quote() -> None:
+    """盤中但 `t` 超過 5 分鐘門檻（例如帳號無即時報價權限只回傳上一交易日收盤價）
+    時應判定為過期。"""
+    from services.market_data_service.quote import _is_finnhub_quote_stale
+
+    with patch("services.market_data_service.quote.is_market_open", return_value=True):
+        stale_data = {"c": 100.0, "t": time.time() - 3 * 86400}  # 3 天前收盤
+        assert _is_finnhub_quote_stale(stale_data) is True
+
+
+@pytest.mark.asyncio
+async def test_get_quote_falls_back_to_yfinance_when_finnhub_quote_stale() -> None:
+    """盤中若 Finnhub `/quote` 回傳的 `c>0` 但時間戳陳舊（無即時報價權限），
+    get_quote() 應自動改用 yfinance，而非照單全收過期價格。"""
+    import services.market_data_service as mds
+
+    stale_finnhub_data = {
+        "c": 266.47,
+        "d": 10.21,
+        "dp": 3.98,
+        "h": 267.56,
+        "l": 257.78,
+        "o": 262.16,
+        "pc": 256.26,
+        "t": time.time() - 3 * 86400,
+    }
+
+    with (
+        patch(
+            "services.market_data_service.is_finnhub_rate_limited", return_value=False
+        ),
+        patch(
+            "services.market_data_service._execute_api_call", new_callable=AsyncMock
+        ) as mock_exec_api,
+        patch(
+            "services.market_data_service.get_yfinance_quote", new_callable=AsyncMock
+        ) as mock_yf_quote,
+        patch("services.market_data_service.quote.is_market_open", return_value=True),
+    ):
+        mock_exec_api.return_value = stale_finnhub_data
+        mock_yf_quote.return_value = {"c": 261.70}
+
+        res = await mds.get_quote("AMZN")
+
+        assert res == {"c": 261.70}
+        mock_yf_quote.assert_called_once_with("AMZN")
+
+
+@pytest.mark.asyncio
+async def test_get_quote_uses_finnhub_when_quote_is_fresh() -> None:
+    """盤中若 Finnhub `/quote` 時間戳新鮮，維持原行為直接採用，不觸發 fallback。"""
+    import services.market_data_service as mds
+
+    fresh_finnhub_data = {"c": 266.47, "t": time.time() - 5}
+
+    with (
+        patch(
+            "services.market_data_service.is_finnhub_rate_limited", return_value=False
+        ),
+        patch(
+            "services.market_data_service._execute_api_call", new_callable=AsyncMock
+        ) as mock_exec_api,
+        patch(
+            "services.market_data_service.get_yfinance_quote", new_callable=AsyncMock
+        ) as mock_yf_quote,
+        patch("services.market_data_service.quote.is_market_open", return_value=True),
+    ):
+        mock_exec_api.return_value = fresh_finnhub_data
+
+        res = await mds.get_quote("AMZN")
+
+        assert res == fresh_finnhub_data
+        mock_yf_quote.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_validate_symbol(mock_symbol_validation: Any):  # type: ignore
     validate_symbol = mock_symbol_validation.real_fn

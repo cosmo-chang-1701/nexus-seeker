@@ -50,6 +50,7 @@ from .caches import (  # noqa: F401,E402
     _EDGE_SNAPSHOT_MAX_AGE_SECONDS,
     _EMA_CACHE_TTL,
     _ETF_CACHE_TTL,
+    _FINNHUB_QUOTE_STALE_THRESHOLD_SECONDS,
     _HISTORY_CACHE_SIZE,
     _HISTORY_CACHE_TTL,
     _OPTION_CHAIN_CACHE_SIZE,
@@ -81,6 +82,7 @@ from .caches import (  # noqa: F401,E402
 from .quote import (  # noqa: F401,E402
     _direct_yf_history,
     _fetch_history_via_edge,
+    _is_finnhub_quote_stale,
     _safe_yf_history,
     batch_get_quotes,
     get_quote,

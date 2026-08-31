@@ -8,14 +8,18 @@ import time
 import pandas as pd
 import yfinance as yf
 
-from market_time import ny_tz
+from market_time import is_market_open, ny_tz
 from services.market_data_service._core import (
     _sanitize_ticker,
     _to_yfinance_symbol,
     call_yf,
     get_edge_client,
 )
-from services.market_data_service.caches import _quote_cache, _QUOTE_CACHE_TTL
+from services.market_data_service.caches import (
+    _FINNHUB_QUOTE_STALE_THRESHOLD_SECONDS,
+    _quote_cache,
+    _QUOTE_CACHE_TTL,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +183,21 @@ async def get_yfinance_quote(symbol: str) -> Dict[str, Any]:
         return {}
 
 
+def _is_finnhub_quote_stale(data: Dict[str, Any]) -> bool:
+    """盤中判斷 Finnhub `/quote` 回傳的報價是否陳舊（例如帳號無美股即時報價權限，
+    只回傳上一交易日收盤價）。僅在市場開盤時檢查——收盤/週末時 `t` 停留在最後
+    成交時間屬正常現象，不應誤判為過期。"""
+    if not is_market_open():
+        return False
+
+    quote_ts = data.get("t")
+    if not quote_ts:
+        return False
+
+    age_seconds = time.time() - float(quote_ts)
+    return age_seconds > _FINNHUB_QUOTE_STALE_THRESHOLD_SECONDS
+
+
 async def get_quote(symbol: str) -> Dict[str, Any]:
     """取得即時報價 (非同步)。對於指數型標的，強制轉向 yfinance。"""
     # 延遲從套件頂層 import：讓單元測試對 `services.market_data_service.X`
@@ -213,6 +232,12 @@ async def get_quote(symbol: str) -> Dict[str, Any]:
         try:
             data = await _execute_api_call(client.quote, symbol)
             if data and data.get("c", 0) > 0:
+                if _is_finnhub_quote_stale(data):
+                    logger.warning(
+                        f"[{symbol}] Finnhub quote 時間戳過舊 (t={data.get('t')})，"
+                        f"疑似帳號無即時報價權限，改用 yfinance fallback"
+                    )
+                    return await _get_yfinance_quote(symbol)
                 return data
 
             # 若 Finnhub 回傳無效或報權限錯誤 (c=0 有可能是權限問題或標的不存在)
