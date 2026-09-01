@@ -567,12 +567,25 @@ class CalendarService:
     async def update_cpi_deviation(self) -> None:
         """從已快取的總經行事曆（TradingView）取得最新一期已公布 CPI YoY 的
         實際值與市場預測值，計算偏差並寫入 kv_cache。不另發送 HTTP 請求，
-        改為沿用 prefetch_monthly_macro_cache() 既有的 24 小時 SWR 快取。"""
+        改為沿用 prefetch_monthly_macro_cache() 既有的 24 小時 SWR 快取。
+
+        每月月初到當月 CPI 公布前這段期間（例如每月 1 日~11 日左右），當月
+        尚無已公布數據，最新一期已公布 CPI 只會落在「上個月」的行事曆快取裡。
+        `prefetch_monthly_macro_cache(months_ahead=0)` 只確保「當月」被快取，
+        上個月的資料過去純粹是靠其他行事曆功能（如 /calendar）順帶快取後殘留
+        在 SQLite 裡才拿得到——這在全新資料庫（冷啟動）或月初尚未有人觸發過
+        其他行事曆功能時會找不到任何已公布 CPI 數據。因此這裡額外明確確保
+        上個月也已快取，讓本函式的正確性不依賴其他功能的副作用。"""
         from database.cache import save_kv_cache
         from database.calendar_cache import get_latest_released_economic_event
 
         try:
             await self.prefetch_monthly_macro_cache(months_ahead=0)
+
+            today = date.today()
+            previous_month_end = date(today.year, today.month, 1) - timedelta(days=1)
+            previous_month_key = previous_month_end.strftime("%Y-%m")
+            await self._ensure_macro_month_cached(previous_month_key)
 
             row = await asyncio.to_thread(
                 get_latest_released_economic_event, self._CPI_YOY_EVENT_NAME

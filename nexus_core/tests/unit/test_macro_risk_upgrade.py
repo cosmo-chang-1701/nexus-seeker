@@ -1325,6 +1325,9 @@ async def test_calendar_service_cpi_deviation_happy_path() -> None:
         patch.object(
             calendar_service, "prefetch_monthly_macro_cache", new_callable=AsyncMock
         ),
+        patch.object(
+            calendar_service, "_ensure_macro_month_cached", new_callable=AsyncMock
+        ),
         patch(
             "database.calendar_cache.get_latest_released_economic_event",
             return_value={"actual_value": 3.2, "consensus_value": "3.1"},
@@ -1347,6 +1350,9 @@ async def test_calendar_service_cpi_deviation_sanity_rejection() -> None:
     with (
         patch.object(
             calendar_service, "prefetch_monthly_macro_cache", new_callable=AsyncMock
+        ),
+        patch.object(
+            calendar_service, "_ensure_macro_month_cached", new_callable=AsyncMock
         ),
         patch(
             "database.calendar_cache.get_latest_released_economic_event",
@@ -1371,6 +1377,9 @@ async def test_calendar_service_cpi_deviation_no_data_fallback() -> None:
         patch.object(
             calendar_service, "prefetch_monthly_macro_cache", new_callable=AsyncMock
         ),
+        patch.object(
+            calendar_service, "_ensure_macro_month_cached", new_callable=AsyncMock
+        ),
         patch(
             "database.calendar_cache.get_latest_released_economic_event",
             return_value=None,
@@ -1383,6 +1392,44 @@ async def test_calendar_service_cpi_deviation_no_data_fallback() -> None:
     assert saved.get("macro_cpi_is_fallback") == 1
     assert "macro_cpi_actual" not in saved
     assert "macro_cpi_expected" not in saved
+
+
+@pytest.mark.asyncio
+async def test_calendar_service_cpi_deviation_ensures_previous_month_cached() -> None:
+    """回歸測試：月初到當月 CPI 公布前這段期間（或全新資料庫冷啟動），
+    最新一期已公布 CPI YoY 只會落在「上個月」的行事曆快取裡。
+    update_cpi_deviation() 必須主動確保上個月也已快取，而不是被動依賴
+    /calendar 等其他功能過去是否曾經順帶快取過該月份——否則會誤判為
+    「尚無最新公布數據」即使 TradingView 上其實有資料。"""
+    from datetime import date, timedelta
+    from services.calendar_service import calendar_service
+
+    today = date.today()
+    expected_previous_month_key = (
+        date(today.year, today.month, 1) - timedelta(days=1)
+    ).strftime("%Y-%m")
+
+    with (
+        patch.object(
+            calendar_service, "prefetch_monthly_macro_cache", new_callable=AsyncMock
+        ),
+        patch.object(
+            calendar_service,
+            "_ensure_macro_month_cached",
+            new_callable=AsyncMock,
+        ) as mock_ensure_cached,
+        patch(
+            "database.calendar_cache.get_latest_released_economic_event",
+            return_value={"actual_value": 3.4, "consensus_value": "3.4"},
+        ),
+        patch("database.cache.save_kv_cache") as mock_save,
+    ):
+        await calendar_service.update_cpi_deviation()
+
+    mock_ensure_cached.assert_awaited_once_with(expected_previous_month_key)
+    saved = {call.args[0]: call.args[1] for call in mock_save.call_args_list}
+    assert saved["macro_cpi_actual"] == 3.4
+    assert saved["macro_cpi_is_fallback"] == 0
 
 
 def test_evaluate_escape_window_regime_matrix() -> None:
