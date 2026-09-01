@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 
 class RolloverScenario(str, Enum):
-    """動態轉倉引擎五大情境的明確識別碼，供 embed 呈現層做顏色/危險等級判斷，
+    """動態轉倉引擎六大情境的明確識別碼，供 embed 呈現層做顏色/危險等級判斷，
     避免依賴呼叫端自由文字 rollover_type 的子字串比對（該作法曾導致最危險的
     MARGIN_DEFENSE 警報無法正確標紅，詳見 rollover_embeds.py）。"""
 
@@ -14,6 +14,7 @@ class RolloverScenario(str, Enum):
     MARGIN_DEFENSE = "MARGIN_DEFENSE"
     FUNDAMENTAL_BROKEN = "FUNDAMENTAL_BROKEN"
     CORE_DEPLOYMENT = "CORE_DEPLOYMENT"
+    MACRO_TOP_ESCAPE_DEFENSE = "MACRO_TOP_ESCAPE_DEFENSE"
 
 
 class FundamentalThesisResult(BaseModel):

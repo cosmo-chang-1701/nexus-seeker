@@ -869,3 +869,107 @@ def evaluate_escape_window_regime(
         tier_title,
         short_status_desc,
     )
+
+
+_MACRO_ESCAPE_WATCH_THRESHOLD: int = 1
+_MACRO_ESCAPE_ELEVATED_THRESHOLD: int = 2
+_MACRO_ESCAPE_CRITICAL_THRESHOLD: int = 3
+_MACRO_ESCAPE_BREADTH_TRIGGER_RATIO: float = 0.5
+
+
+def evaluate_macro_top_escape_score(
+    vts_ratio: float = 0.88,
+    fear_greed: float = 48.0,
+    prob: float | None = 0.50,
+    is_negative_gamma: bool = False,
+    satellite_euphoria_ratio: float | None = None,
+) -> tuple[int, str, str, list[tuple[str, str]]]:
+    """
+    評估宏觀逃頂綜合評分：獨立於 evaluate_escape_window_regime() 的利率擇時矩陣，
+    額外疊加 Fear & Greed 極度貪婪與 (可選的) 衛星持倉亢奮廣度，組合成一個純粹的
+    「多頭過熱/逃頂警戒」分級指標。本函式為純函式，不主動觸發任何轉倉/減碼動作，
+    僅供顯示層與 Dynamic Rollover Scenario 6 (MACRO_TOP_ESCAPE_DEFENSE) 共同消費。
+
+    Args:
+        vts_ratio: VIX 期限結構比例 (VIX / VIX3M)，>= 1.0 代表逆價差 (Backwardation)
+        fear_greed: CNN Fear & Greed 指數 (0-100)
+        prob: FedWatch 維持高利率或加息機率 (0.0 ~ 1.0)
+        is_negative_gamma: 是否處於負 Gamma 踩踏區間 (SHORT_GAMMA_CRITICAL regime)
+        satellite_euphoria_ratio: 使用者衛星持倉中，個別已符合 Scenario 3 亢奮出場
+            條件 (現貨觸及 Call Wall 或 Skew 百分位 <= 20) 的比例 (0.0-1.0)。傳入
+            None 代表此因子不參與評分 (例如脫離使用者持倉脈絡的呼叫路徑)。
+
+    Returns:
+        tuple[int, str, str, list[tuple[str, str]]]:
+            (score, tier, tier_title, factor_breakdown)
+    """
+    try:
+        safe_prob = float(prob) if prob is not None else 0.50
+    except (ValueError, TypeError):
+        safe_prob = 0.50
+
+    score = 0
+    factor_breakdown: list[tuple[str, str]] = []
+
+    # Factor 1: VIX 期限結構逆價差
+    if vts_ratio >= 1.0:
+        score += 1
+        f1_val = f"\u001b[1;31m🚨 期限倒掛 (VTS: {vts_ratio:.3f})\u001b[0m"
+    else:
+        f1_val = f"\u001b[1;32m🟢 期限正常 (VTS: {vts_ratio:.3f})\u001b[0m"
+    factor_breakdown.append(("VIX 期限結構逆價差", f1_val))
+
+    # Factor 2: Fear & Greed 極度貪婪
+    if fear_greed >= _FEAR_GREED_EXTREME_GREED_BOUND:
+        score += 1
+        f2_val = f"\u001b[1;31m🚨 極度貪婪 (F&G: {fear_greed:.0f})\u001b[0m"
+    else:
+        f2_val = f"\u001b[1;32m🟢 情緒正常 (F&G: {fear_greed:.0f})\u001b[0m"
+    factor_breakdown.append(("市場情緒 (Fear & Greed)", f2_val))
+
+    # Factor 3: FedWatch 鷹派利率機率過高
+    if safe_prob > 0.70:
+        score += 1
+        f3_val = f"\u001b[1;31m🚨 鷹派高位 ({safe_prob * 100:.1f}%)\u001b[0m"
+    else:
+        f3_val = f"\u001b[1;32m🟢 定價均衡 ({safe_prob * 100:.1f}%)\u001b[0m"
+    factor_breakdown.append(("FOMC 利率定價 (FedWatch)", f3_val))
+
+    # Factor 4: 大盤負 Gamma 狀態
+    if is_negative_gamma:
+        score += 1
+        f4_val = "\u001b[1;31m🚨 負 Gamma 踩踏加速區\u001b[0m"
+    else:
+        f4_val = "\u001b[1;32m🟢 正 Gamma 護航區\u001b[0m"
+    factor_breakdown.append(("大盤微觀結構 (SPY GEX)", f4_val))
+
+    # Factor 5 (可選): 衛星持倉亢奮廣度 — 由呼叫端聚合 Scenario 3 的單一標的
+    # 亢奮判定結果傳入，None 代表此因子在當前呼叫路徑下不參與評分
+    if satellite_euphoria_ratio is not None:
+        if satellite_euphoria_ratio >= _MACRO_ESCAPE_BREADTH_TRIGGER_RATIO:
+            score += 1
+            f5_val = (
+                f"\u001b[1;31m🚨 廣泛亢奮 "
+                f"({satellite_euphoria_ratio * 100:.0f}% 衛星持倉觸頂)\u001b[0m"
+            )
+        else:
+            f5_val = (
+                f"\u001b[1;32m🟢 結構健康 "
+                f"({satellite_euphoria_ratio * 100:.0f}% 衛星持倉觸頂)\u001b[0m"
+            )
+        factor_breakdown.append(("衛星持倉亢奮廣度", f5_val))
+
+    if score >= _MACRO_ESCAPE_CRITICAL_THRESHOLD:
+        tier = "CRITICAL"
+        tier_title = "🚨🚨 逃頂確認 (Top-Escape Critical)"
+    elif score >= _MACRO_ESCAPE_ELEVATED_THRESHOLD:
+        tier = "ELEVATED"
+        tier_title = "🚨 逃頂警戒 (Top-Escape Elevated)"
+    elif score >= _MACRO_ESCAPE_WATCH_THRESHOLD:
+        tier = "WATCH"
+        tier_title = "⚠️ 前哨觀察 (Top-Escape Watch)"
+    else:
+        tier = "NORMAL"
+        tier_title = "🟢 常態 (Normal)"
+
+    return score, tier, tier_title, factor_breakdown

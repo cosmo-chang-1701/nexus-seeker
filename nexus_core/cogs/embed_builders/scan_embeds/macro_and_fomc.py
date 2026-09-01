@@ -103,6 +103,9 @@ def create_fomc_escape_window_embed(
     factors_summary: list[tuple[str, str]] | None = None,
     was_auto_rolled: bool = False,
     original_window_label: str = "",
+    top_escape_score: int | None = None,
+    top_escape_tier: str | None = None,
+    top_escape_factors: list[tuple[str, str]] | None = None,
 ) -> discord.Embed:
     """建立全維度宏觀流動性逃頂推演矩陣 Embed (繁體中文)"""
     if direction == "前移":
@@ -142,6 +145,21 @@ def create_fomc_escape_window_embed(
         embed.add_field(
             name="📊 利率機率定價 (FedWatch)",
             value=f"下週 FOMC 維持高利率/加息機率：**{prob * 100:.1f}%**{prob_suffix}",
+            inline=False,
+        )
+
+    # 2.5. 宏觀逃頂綜合評分 (Top-Escape Composite Score) — 獨立於上方的利率擇時矩陣，
+    # 額外疊加 Fear & Greed / VTS / 負 Gamma / (可選) 衛星持倉亢奮廣度的組合式過熱評分
+    if top_escape_tier is not None:
+        score_lines: list[str] = [f" ├─ {top_escape_tier} (綜合 {top_escape_score} 分)"]
+        if top_escape_factors:
+            for name, val in top_escape_factors:
+                score_lines.append(f" ├─ {name}: {val}")
+        score_lines[-1] = score_lines[-1].replace("├─", "└─")
+        score_panel = "```ansi\n" + "\n".join(score_lines) + "\n```"
+        embed.add_field(
+            name="🎯 宏觀逃頂綜合評分 (Top-Escape Composite Score)",
+            value=score_panel,
             inline=False,
         )
 

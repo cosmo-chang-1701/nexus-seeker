@@ -124,3 +124,13 @@ _SKEW_DOWNSIDE_PENALTY_FACTOR: float = (
 _EARNINGS_PRE_EVENT_BUFFER_DAYS: int = (
     3  # 機會成本轉倉候選標的避開即將發布財報的最小緩衝天數
 )
+
+# --- 邏輯 (6)：宏觀逃頂前瞻防禦 (evaluate_macro_top_escape_defense) 具名常數 ---
+# 校準基準：Scenario 3 (反應式，個股結構已破) 用 90%；Scenario 4 (反應式，系統性
+# regime + 保證金壓力已雙重確認) 用 100%；本情境是純粹的「領先訊號」(組合式機率
+# 評分，尚無任何個股結構真正破位)，假陽性風險明顯高於前兩者，故 25% 明顯保守，
+# 只做風險曝險的部分削減，不強迫在可能誤判的訊號上全額出場。
+_MACRO_TOP_ESCAPE_TRIM_RATIO: float = 0.25
+# 對應 evaluate_macro_top_escape_score() (index_microstructure.py) 的分級輸出，
+# 僅最高分級 (CRITICAL，>= 3 項因子同時觸發) 才會啟動本情境的實際減碼動作。
+_MACRO_TOP_ESCAPE_MIN_TIER: str = "CRITICAL"

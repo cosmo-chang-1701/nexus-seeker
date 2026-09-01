@@ -667,6 +667,27 @@ class PortfolioMonitorCog(commands.Cog):
                         )
                     )
 
+                    # 🚀 邏輯 (6): 宏觀逃頂前瞻防禦 — 排在六大情境的最後一位
+                    # (3→2→5→4→6)。本情境是信心度最低、最具推測性的觸發
+                    # (機率性組合評分 vs. 其餘情境已確認的價格/保證金破位)，
+                    # 必須確保不會搶在更確定的訊號之前對同一標的下指令；沿用
+                    # 累積的 already_flagged 集合，保證 Scenario 2-5 對任一
+                    # 標的永遠享有優先權。嚴格 opt-in
+                    # (user_settings.enable_macro_top_escape_defense)，未開啟
+                    # 的使用者這裡恆為 no-op。
+                    already_flagged = {
+                        (ins["symbol"], ins.get("instrument_type", "SPOT"))
+                        for ins in rebalance_instructions
+                        if ins.get("action") != "HOLD"
+                    }
+                    rebalance_instructions += (
+                        await self.rollover_engine.evaluate_macro_top_escape_defense(
+                            u_id,
+                            portfolio_assets,
+                            already_flagged_symbols=already_flagged,
+                        )
+                    )
+
                     # 情境識別碼 → 人類可讀標籤，僅供標題補充說明；顏色/危險等級判斷
                     # 由 create_dynamic_rollover_embed 依 scenario 明確對照表決定，
                     # 不再依賴此處字串是否包含特定關鍵字。
@@ -675,6 +696,7 @@ class PortfolioMonitorCog(commands.Cog):
                         "SATELLITE_REBALANCE": "核心衛星再平衡",
                         "MARGIN_DEFENSE": "槓桿與保證金防禦",
                         "CORE_DEPLOYMENT": "核心資金部署",
+                        "MACRO_TOP_ESCAPE_DEFENSE": "宏觀逃頂前瞻防禦",
                     }
 
                     today_str = datetime.now(ny_tz).strftime("%Y%m%d")

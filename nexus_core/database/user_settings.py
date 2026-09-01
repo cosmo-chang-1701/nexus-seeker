@@ -34,6 +34,9 @@ class UserContext:
     escape_window_end: str = "07-31"
     can_trade_spreads: bool = False  # 是否具備複式選擇權 (Spread) 交易權限
     cash_reserve_protection: bool = True  # 是否啟動備用金與新資金動用率的風控防禦
+    enable_macro_top_escape_defense: bool = (
+        False  # 是否啟用宏觀逃頂前瞻防禦 (Dynamic Rollover Scenario 6)，嚴格 opt-in
+    )
 
 
 # ==========================================
@@ -87,6 +90,7 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:  # type: ignore
             "escape_window_end",
             "can_trade_spreads",
             "cash_reserve_protection",
+            "enable_macro_top_escape_defense",
         }
         update_pairs = []
         values = []
@@ -329,6 +333,9 @@ def get_full_user_context(user_id: int) -> UserContext:
             escape_window_end=_get_val("escape_window_end", "07-31"),
             can_trade_spreads=bool(_get_val("can_trade_spreads", False)),
             cash_reserve_protection=bool(_get_val("cash_reserve_protection", True)),
+            enable_macro_top_escape_defense=bool(
+                _get_val("enable_macro_top_escape_defense", False)
+            ),
         )
 
     except Exception as e:

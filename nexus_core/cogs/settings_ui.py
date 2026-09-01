@@ -282,6 +282,11 @@ SETTINGS_LABELS = {
         "是否啟動備用金與新資金動用率風控防禦",
         None,
     ),
+    "enable_macro_top_escape_defense": (
+        "🧭 宏觀逃頂前瞻防禦",
+        "是否啟用逃頂綜合評分達最高警戒時的主動衛星減碼防禦 (Dynamic Rollover Scenario 6)",
+        None,
+    ),
     "polymarket_threshold": (
         "🐋 Polymarket 巨鯨門檻",
         "Polymarket 巨鯨監控門檻 (USD, 0=關閉)",
@@ -532,6 +537,7 @@ class AccountSettingsView(discord.ui.View):
             "polymarket_use_llm",
             "can_trade_spreads",
             "cash_reserve_protection",
+            "enable_macro_top_escape_defense",
         ]:
             current_bool = getattr(ctx, key, False)
             new_val = not current_bool
@@ -570,6 +576,7 @@ class AccountSettingsView(discord.ui.View):
             f"⚡ **PowerSqueeze 追蹤**: `{'🟢 開啟' if ctx.enable_psq_watchlist else '🔴 關閉'}`",
             f"📈 **期權 Spread 權限**: `{'🟢 開啟' if ctx.can_trade_spreads else '🔴 關閉'}`",
             f"🛡️ **備用金防護**: `{'🟢 開啟' if ctx.cash_reserve_protection else '🔴 關閉'}`",
+            f"🧭 **宏觀逃頂前瞻防禦**: `{'🟢 開啟' if ctx.enable_macro_top_escape_defense else '🔴 關閉'}`",
         ]
 
         runway_settings = [

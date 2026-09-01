@@ -38,6 +38,14 @@ _SCENARIO_STYLE: Dict[str, Dict[str, Any]] = {
         "label": "核心資金部署",
         "color": discord.Color.green(),
     },
+    "MACRO_TOP_ESCAPE_DEFENSE": {
+        "emoji": "🧭",
+        "label": "宏觀逃頂前瞻防禦",
+        # 琥珀/橙色，刻意與 MARGIN_DEFENSE 的 discord.Color.red() 區隔——
+        # 本情境是「前瞻/機率性」的領先訊號減碼，而非已經價格/保證金雙重
+        # 確認的危急情境，視覺等級不應與後者混淆。
+        "color": discord.Color.orange(),
+    },
 }
 
 
@@ -786,6 +794,7 @@ _SCENARIO_SHORT_LABELS: Dict[str, str] = {
     "OPPORTUNITY_COST": "機會成本",
     "SATELLITE_REBALANCE": "核心衛星",
     "CORE_DEPLOYMENT": "核心部署",
+    "MACRO_TOP_ESCAPE_DEFENSE": "逃頂前瞻",
 }
 
 

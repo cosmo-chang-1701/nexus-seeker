@@ -1429,6 +1429,92 @@ def test_evaluate_escape_window_regime_matrix() -> None:
     assert "🟢 後推 5 天" in status
 
 
+def test_evaluate_macro_top_escape_score_matrix() -> None:
+    """測試宏觀逃頂綜合評分 (獨立於 evaluate_escape_window_regime 的四因子矩陣，
+    額外疊加 Fear & Greed 與可選的衛星持倉亢奮廣度)"""
+    from market_analysis.index_microstructure import evaluate_macro_top_escape_score
+
+    # 1. 全數未觸發 (4 因子模式，未傳入 satellite_euphoria_ratio) -> NORMAL
+    score, tier, tier_title, factors = evaluate_macro_top_escape_score(
+        vts_ratio=0.85,
+        fear_greed=48.0,
+        prob=0.50,
+        is_negative_gamma=False,
+    )
+    assert score == 0
+    assert tier == "NORMAL"
+    assert "常態" in tier_title
+    assert len(factors) == 4  # 未傳入第 5 因子時只評 4 項
+
+    # 2. 恰好 1 項觸發 (僅極度貪婪) -> WATCH
+    score, tier, tier_title, factors = evaluate_macro_top_escape_score(
+        vts_ratio=0.85,
+        fear_greed=80.0,
+        prob=0.50,
+        is_negative_gamma=False,
+    )
+    assert score == 1
+    assert tier == "WATCH"
+    assert "前哨觀察" in tier_title
+
+    # 3. 恰好 2 項觸發 (VTS 逆價差 + 極度貪婪) -> ELEVATED
+    score, tier, tier_title, factors = evaluate_macro_top_escape_score(
+        vts_ratio=1.05,
+        fear_greed=80.0,
+        prob=0.50,
+        is_negative_gamma=False,
+    )
+    assert score == 2
+    assert tier == "ELEVATED"
+    assert "逃頂警戒" in tier_title
+
+    # 4. 3 項觸發 (VTS + 貪婪 + 鷹派) -> CRITICAL
+    score, tier, tier_title, factors = evaluate_macro_top_escape_score(
+        vts_ratio=1.05,
+        fear_greed=80.0,
+        prob=0.75,
+        is_negative_gamma=False,
+    )
+    assert score == 3
+    assert tier == "CRITICAL"
+    assert "逃頂確認" in tier_title
+
+    # 5. 全數 4 項觸發 (未含第 5 因子) 仍為 CRITICAL (門檻為 >= 3 分)
+    score, tier, tier_title, factors = evaluate_macro_top_escape_score(
+        vts_ratio=1.05,
+        fear_greed=80.0,
+        prob=0.75,
+        is_negative_gamma=True,
+    )
+    assert score == 4
+    assert tier == "CRITICAL"
+
+    # 6. 帶入第 5 因子 (衛星持倉亢奮廣度) 且觸發 -> 因子明細應多一筆，且可單獨
+    # 把 WATCH (1 項既有觸發) 推升至 ELEVATED (2 項觸發)
+    score, tier, tier_title, factors = evaluate_macro_top_escape_score(
+        vts_ratio=0.85,
+        fear_greed=80.0,
+        prob=0.50,
+        is_negative_gamma=False,
+        satellite_euphoria_ratio=0.6,
+    )
+    assert score == 2
+    assert tier == "ELEVATED"
+    assert len(factors) == 5  # 傳入第 5 因子時應評 5 項
+
+    # 7. 第 5 因子未觸發 (廣度不足 0.5) 時不加分，因子明細仍多一筆
+    score, tier, tier_title, factors = evaluate_macro_top_escape_score(
+        vts_ratio=0.85,
+        fear_greed=48.0,
+        prob=0.50,
+        is_negative_gamma=False,
+        satellite_euphoria_ratio=0.2,
+    )
+    assert score == 0
+    assert tier == "NORMAL"
+    assert len(factors) == 5
+
+
 def test_evaluate_escape_window_regime_none_prob_safe() -> None:
     """測試逃頂窗口在 prob 為 None 或非數值時具備防禦性中性回退，不拋出 TypeError"""
     from market_analysis.index_microstructure import evaluate_escape_window_regime

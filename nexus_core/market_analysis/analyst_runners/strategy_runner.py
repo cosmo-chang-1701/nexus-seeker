@@ -318,6 +318,36 @@ async def run_fomc_escape_window_analysis(
         is_negative_gamma=is_negative_gamma,
     )
 
+    # 4.5. 宏觀逃頂綜合評分 (Top-Escape Composite Score) — 獨立於上方的利率擇時矩陣，
+    # 疊加 Fear & Greed 極度貪婪訊號。沿用同一次 fetch_core_macro_metrics() 呼叫
+    # (150 秒快取)，不新增任何額外抓取成本。第 5 個「衛星持倉亢奮廣度」因子刻意留白
+    # (satellite_euphoria_ratio=None)：其即時計算已由 15 分鐘轉倉排程
+    # (Dynamic Rollover Scenario 6) 在記憶體中完成，這裡不重複發起額外的 GEX/Skew
+    # 抓取，避免拖慢每日一次的盤前簡報路徑。
+    from market_analysis.index_microstructure import (
+        evaluate_macro_top_escape_score,
+        fetch_core_macro_metrics,
+    )
+
+    try:
+        core_metrics = await fetch_core_macro_metrics()
+        fear_greed = float(core_metrics.get("fear_greed", 48.0))
+    except Exception as e:
+        logger.warning(f"評估宏觀逃頂綜合評分時取得 Fear & Greed 指數失敗: {e}")
+        fear_greed = 48.0
+
+    (
+        top_escape_score,
+        _top_escape_tier_code,
+        top_escape_tier_title,
+        top_escape_factors,
+    ) = evaluate_macro_top_escape_score(
+        vts_ratio=vts_ratio if is_vts_valid else 0.88,
+        fear_greed=fear_greed,
+        prob=prob,
+        is_negative_gamma=is_negative_gamma,
+    )
+
     if direction == "前移":
         tactical_directive = (
             "🚨 **提前防禦撤退**：宏觀流動性收緊與估值回殺風險加劇，多頭反彈窗口受限，"
@@ -372,4 +402,7 @@ async def run_fomc_escape_window_analysis(
         factors_summary=factors_summary,
         was_auto_rolled=was_auto_rolled,
         original_window_label=orig_label,
+        top_escape_score=top_escape_score,
+        top_escape_tier=top_escape_tier_title,
+        top_escape_factors=top_escape_factors,
     )
