@@ -4,6 +4,7 @@ from market_analysis.option_guidance import is_spread_illiquid
 from market_analysis.sentiment.history_storage import get_indicator_percentile
 
 from . import logger
+from ._shared import format_cash_impact
 from .constants import (
     _ANTI_WASHOUT_BASE_ATR_MULT,
     _ANTI_WASHOUT_EXTREME_ATR_MULT,
@@ -16,13 +17,16 @@ from .constants import (
     _EUPHORIA_SKEW_PERCENTILE,
     _EXHAUSTION_SKEW_PERCENTILE,
     _FALLBACK_TARGET_PRICE_ESTIMATE,
+    _FORCED_SETTLEMENT_ROLL_MAX_DTE,
+    _FORCED_SETTLEMENT_ROLL_MIN_DTE,
+    _HOLDING_DTE_FORCED_SETTLEMENT_THRESHOLD,
     _IV_BUBBLE_THRESHOLD,
     _PROFIT_UNLOCK_TOLERANCE,
     _TRAILING_STOP_ATR_MULT,
     _TRAILING_STOP_SPOT_FLOOR_PCT,
 )
 from .models import RolloverInstruction, RolloverScenario
-from .structural_signals import _resolve_canonical_anchor_base
+from .structural_signals import _resolve_canonical_anchor_base, evaluate_option_dte_tier
 
 
 def apply_ivr_strategy_overlay_impl(
@@ -87,17 +91,20 @@ class _AntiWashoutMixin:
 
     def _compute_anti_washout_stop(
         self, anchor_base: float, metrics: dict
-    ) -> Tuple[float, float, bool, float, float]:
+    ) -> Tuple[float, float, float]:
         """
-        防洗盤四大機制：計算精確防守位與掛單限價。
-        回傳 (stop_loss, limit_price, is_01dte_expanded, dte_risk_parity_scale,
-        extreme_stop_loss)。
+        防洗盤機制：計算精確防守位與掛單限價。
+        回傳 (stop_loss, limit_price, extreme_stop_loss)。
+
+        注意：DTE<=1 的部位不會呼叫本函式——已由呼叫端 (check_satellite_
+        rebalancing_impl) 透過 evaluate_option_dte_tier() 判定為
+        EXPIRATION_SETTLEMENT_ALERT 並短路為強制結算保護指令，因此本函式
+        不再需要處理 0/1 DTE 分支。
         """
         spot = float(metrics.get("spot_price", 0.0))
         atr_15m = float(metrics.get("atr_15m", 0.0))
         lvn = float(metrics.get("lvn", 0.0))
         hvn = float(metrics.get("hvn", 0.0))
-        dte = int(metrics.get("dte", 99))
 
         # 機制 2: 1.5x ATR 防護墊片
         if anchor_base > 0:
@@ -107,16 +114,10 @@ class _AntiWashoutMixin:
 
         base_stop_loss = raw_stop_loss
 
-        # 邊界防護：機制 2 算出的基礎停損鉗制在 [spot*0.95, spot*0.98]（2%~5% 邊界），
-        # 防止 anchor_base 數據異常（GEX 牆缺失/畸形）導致停損離現價過遠或過近。
-        # 僅鉗制此處的「基礎值」，下方機制 1 (LVN 吸附) 與機制 4 (0/1 DTE 擴展)
-        # 允許依物理流動性理由將最終停損推到此邊界之外。
-        # 條件限定 base_stop_loss < spot（尚未破位）：若 anchor_base 已高於現價
-        # （現價已貫穿防守牆），raw base 本身即是雙軌裁決機制用來判定「已破位」的
-        # 訊號 (spot < stop_loss)，鉗制會把停損拉回現價之下、誤將破位訊號抹除，
-        # 因此破位後的狀態刻意不鉗制，交由 _apply_decision_matrix 的破位判定處理。
-        if spot > 0 and 0 < base_stop_loss < spot:
-            base_stop_loss = max(spot * 0.95, min(spot * 0.98, base_stop_loss))
+        # 不對機制 2 算出的基礎停損做人為區間鉗制：停損點位純粹依微觀結構公式
+        # (anchor_base - 1.5×ATR_15m) 輸出，避免高波動標的、或 anchor_base
+        # 距現價極近/極遠時被強行推寬或縮窄。下方機制 1 (LVN 吸附) 仍可依物理
+        # 流動性理由調整最終停損。
 
         # 機制 1: 避開 LVN 陷阱 (量價拓撲吸附演算法：絕對吸附至次級 HVN 上緣 + 0.2*ATR_15m，禁止固定 % 平移)
         if lvn > 0 and base_stop_loss > 0 and abs(base_stop_loss - lvn) / lvn <= 0.015:
@@ -134,14 +135,6 @@ class _AntiWashoutMixin:
             else:
                 base_stop_loss = lvn - (1.0 * atr_15m)
 
-        # 機制 4: 末日結算容忍度 (DTE 0/1) 與風險平價口數縮放 (Risk-Parity Sizing)
-        is_01dte_expanded = dte <= 1 and base_stop_loss > 0
-        dte_risk_parity_scale = 1.0
-        if is_01dte_expanded:
-            base_stop_loss = base_stop_loss - _ANTI_WASHOUT_BASE_ATR_MULT * atr_15m
-            # Risk-Parity 縮放因子: Base Distance / (Base Distance + 1.5 * ATR_15m) = 1.5 / 3.0 = 0.5
-            dte_risk_parity_scale = 0.5
-
         stop_loss = round(base_stop_loss, 2)
         limit_price = round(
             max(stop_loss - (0.5 * atr_15m if atr_15m > 0 else 0.6), stop_loss * 0.995),
@@ -149,9 +142,9 @@ class _AntiWashoutMixin:
         )
 
         # 軌道二：極端瞬時停損 (Extreme Tick Breach)。沿用與機制 2 完全相同的
-        # anchor_base/atr_15m 原始輸入，獨立於上方 base_stop_loss 的鉗制／LVN
-        # 吸附／0-1DTE 疊加管線之外計算，純粹 anchor_base - 3.0×ATR_15m 公式，
-        # 不做任何邊界修飾——見 _apply_decision_matrix 的即時 tick 觸發判定。
+        # anchor_base/atr_15m 原始輸入，獨立於上方 base_stop_loss 的 LVN 吸附
+        # 管線之外計算，純粹 anchor_base - 3.0×ATR_15m 公式，不做任何邊界
+        # 修飾——見 _apply_decision_matrix 的即時 tick 觸發判定。
         if anchor_base > 0 and atr_15m > 0:
             extreme_stop_loss = round(
                 anchor_base - (_ANTI_WASHOUT_EXTREME_ATR_MULT * atr_15m), 2
@@ -162,8 +155,6 @@ class _AntiWashoutMixin:
         return (
             stop_loss,
             limit_price,
-            is_01dte_expanded,
-            dte_risk_parity_scale,
             extreme_stop_loss,
         )
 
@@ -234,14 +225,14 @@ class _AntiWashoutMixin:
 
     def _maybe_append_tax_risk_note(
         self,
-        is_01dte_expanded: bool,
+        is_forced_settlement: bool,
         is_same_symbol_reentry: bool,
         holding_period_days: Optional[int] = None,
     ) -> str:
         """稅務風險資訊性提示（純附加，不做任何攔截閘門，本系統不代為判定）。
 
         涵蓋三個最有風險的既有分支：
-        1. 0/1 DTE 價內短期合約平倉，可能觸發指派 (Assignment)。
+        1. DTE<=1 強制結算保護的價內短期合約平倉，可能觸發指派 (Assignment)。
         2. 同標的先賣出後又立即重新建倉 (如 Euphoria 雙軌機制留存部位開 Bear
            Call Spread)，可能落入 Wash Sale 規則範圍。
         3. 若持倉來源標記了 acquired_at（透過 /add_holding 或 /edit_holding
@@ -250,8 +241,8 @@ class _AntiWashoutMixin:
            acquired_at 粗略估計，非完整多批次 (Lot-based FIFO) 成本基礎追蹤。
         """
         notes = []
-        if is_01dte_expanded:
-            notes.append("0/1 DTE 價內合約平倉可能觸發指派 (Assignment)")
+        if is_forced_settlement:
+            notes.append("DTE<=1 強制結算保護的價內合約平倉可能觸發指派 (Assignment)")
         if is_same_symbol_reentry:
             notes.append("同標的近期重新建立相似曝險，請留意 Wash Sale 規則")
         if holding_period_days is not None:
@@ -282,10 +273,12 @@ class _AntiWashoutMixin:
         stop_loss: float,
         anchor_base: float,
         extreme_stop_loss: float = 0.0,
-    ) -> Tuple[str, str, str, str]:
+    ) -> Tuple[str, str, str, str, bool]:
         """
         灰階思考量化裁決 (決策矩陣 - 雙軌裁決機制 Dual-Track Exit)。
-        回傳 (final_action, final_target, options_strategy, system_conflict_note)。
+        回傳 (final_action, final_target, options_strategy, system_conflict_note,
+        is_extreme_tick_breach)。is_extreme_tick_breach 供呼叫端判斷是否需要將
+        呈現層升級為最高急迫性樣式（見 rollover_embeds.py 的立即人工執行標記）。
         """
         spot = float(metrics.get("spot_price", 0.0))
         price_15m_close = float(metrics.get("price_15m_close", spot))
@@ -366,7 +359,13 @@ class _AntiWashoutMixin:
             )
             options_strategy = "HOLD (維持現狀續抱)"
 
-        return final_action, final_target, options_strategy, system_conflict_note
+        return (
+            final_action,
+            final_target,
+            options_strategy,
+            system_conflict_note,
+            is_extreme_tick_breach,
+        )
 
     async def _resolve_target_reference_price(self, target_core_name: str) -> float:
         """
@@ -411,10 +410,8 @@ class _AntiWashoutMixin:
         spot: float,
         position_shares: float,
         current_value: float,
-        is_01dte_expanded: bool,
-        dte_risk_parity_scale: float,
     ) -> Tuple[str, str, float]:
-        """資金回收與目標核心資產買入預估 (結合風險平價口數縮放)。
+        """資金回收與目標核心資產買入預估。
         回傳 (cash_str, shares_guidance_str, target_entry_price)——
         target_entry_price 為轉入目標資產的參考進場價，供呼叫端填入
         Discord Embed「建議限價 (Limit)」欄位，取代過去恆為 "Market" 的佔位字串。
@@ -431,17 +428,11 @@ class _AntiWashoutMixin:
         if recovered_cash > 0:
             cash_str = f"${recovered_cash:,.0f}"
             target_shares_est = int(recovered_cash / target_est_price)
-            if is_01dte_expanded:
-                target_shares_est = max(
-                    1, int(target_shares_est * dte_risk_parity_scale)
-                )
-                target_shares_low = max(1, target_shares_est - 1)
-                target_shares_high = max(1, target_shares_est + 1)
-                shares_guidance_str = f"{target_core_name}（0/1 DTE 風險平價縮放: 約 {target_shares_low}–{target_shares_high} 股 / 削減 50% 部位）"
-            else:
-                target_shares_low = max(1, target_shares_est - 1)
-                target_shares_high = max(1, target_shares_est + 1)
-                shares_guidance_str = f"{target_core_name}（約 {target_shares_low}–{target_shares_high} 股）"
+            target_shares_low = max(1, target_shares_est - 1)
+            target_shares_high = max(1, target_shares_est + 1)
+            shares_guidance_str = (
+                f"{target_core_name}（約 {target_shares_low}–{target_shares_high} 股）"
+            )
         else:
             cash_str = "全數部位資金"
             shares_guidance_str = f"{target_core_name}（全額買入）"
@@ -480,30 +471,34 @@ class _AntiWashoutMixin:
         # 中的期權部位取得即時 bid/ask 屬資料管線擴充，列為範圍外後續追蹤項目。
         is_illiquid_warning = asset_class == "OPTIONS" and is_spread_illiquid(bid, ask)
 
+        atr_15m = float(metrics.get("atr_15m", 0.0))
+
         anchor_base, effective_res_wall = self._correct_wall_topology(metrics)
         (
             stop_loss,
             limit_price,
-            is_01dte_expanded,
-            dte_risk_parity_scale,
             extreme_stop_loss,
         ) = self._compute_anti_washout_stop(anchor_base, metrics)
         order_defense_str, matching_order = self._resolve_active_order_defense(
             symbol, active_orders, stop_loss, limit_price
         )
 
-        final_action, final_target, options_strategy, system_conflict_note = (
-            self._apply_decision_matrix(
-                symbol=symbol,
-                metrics=metrics,
-                requested_action=requested_action,
-                target=target,
-                asset_class=asset_class,
-                is_take_profit=is_take_profit,
-                stop_loss=stop_loss,
-                anchor_base=anchor_base,
-                extreme_stop_loss=extreme_stop_loss,
-            )
+        (
+            final_action,
+            final_target,
+            options_strategy,
+            system_conflict_note,
+            is_extreme_tick_breach,
+        ) = self._apply_decision_matrix(
+            symbol=symbol,
+            metrics=metrics,
+            requested_action=requested_action,
+            target=target,
+            asset_class=asset_class,
+            is_take_profit=is_take_profit,
+            stop_loss=stop_loss,
+            anchor_base=anchor_base,
+            extreme_stop_loss=extreme_stop_loss,
         )
 
         options_strategy = self._apply_ivr_strategy_overlay(
@@ -532,8 +527,6 @@ class _AntiWashoutMixin:
             spot=spot,
             position_shares=position_shares,
             current_value=current_value,
-            is_01dte_expanded=is_01dte_expanded,
-            dte_risk_parity_scale=dte_risk_parity_scale,
         )
 
         # GEX 數值描述格式化
@@ -557,10 +550,6 @@ class _AntiWashoutMixin:
         else:
             gex_res_desc = "做市商阻力天花板"
 
-        dte_scale_note = ""
-        if is_01dte_expanded:
-            dte_scale_note = "\n   - ⚡ **0/1 DTE 風險平價口數縮放**：已啟動 3.0× ATR 緩衝墊片 (停損拉寬)，強制削減 50% 轉倉/開倉部位規模以維持 Dollar Risk 恆定。"
-
         liquidity_note = ""
         if is_illiquid_warning:
             spread_pct = (ask - bid) / ((ask + bid) / 2)
@@ -582,7 +571,7 @@ class _AntiWashoutMixin:
                     holding_period_days = None
 
         tax_note = self._maybe_append_tax_risk_note(
-            is_01dte_expanded=is_01dte_expanded and final_action == "LIQUIDATE",
+            is_forced_settlement=False,
             is_same_symbol_reentry=False,
             holding_period_days=holding_period_days,
         )
@@ -611,11 +600,11 @@ class _AntiWashoutMixin:
 3. **動能與擠壓狀態**
    - SQZ MOM: {sqz_mom:+.2f} | Skew: {skew:.2f} ({"多頭動能延續" if sqz_mom > 0 else "動能中性/趨緩"})
 4. **具體的動態轉倉建議**
-   - {system_conflict_note if system_conflict_note else "常規執行：依系統建議比例調節"}{dte_scale_note}{liquidity_note}
+   - {system_conflict_note if system_conflict_note else "常規執行：依系統建議比例調節"}{liquidity_note}
    - 轉倉決策: **{final_action} ({"維持現狀續抱" if final_action == "HOLD" else "轉入 " + final_target})**
    - 微結構判定: GEX Wall ${anchor_base:.2f} 護城河完好，阻力天花板 ${effective_res_wall:.2f}
    - 防守機制: {order_defense_str}
-     *(避開真空區，依據公式：`Stop = ${anchor_base:.2f} - ({"3.0" if is_01dte_expanded else "1.5"} × ATR_15m) = ${stop_loss_str}`)*
+     *(避開真空區，依據公式：`Stop = ${anchor_base:.2f} - (1.5 × ATR_15m) = ${stop_loss_str}`)*
    - 出場裁決軌道: {dual_track_note}
    - {extreme_stop_note}
 """.strip()
@@ -636,6 +625,30 @@ class _AntiWashoutMixin:
 """.strip()
 
         markdown_report = f"{core_report}\n\n---\n{trigger_condition_report}{tax_note}"
+
+        # 軌道二極端瞬時停損詳情區塊：僅在這次真的由 is_extreme_tick_breach 觸發時
+        # 組裝，供呈現層 (rollover_embeds.py) 渲染為獨立的「立即人工執行」欄位。
+        extreme_breach_detail_block: Optional[str] = None
+        if is_extreme_tick_breach and extreme_stop_loss > 0 and spot > 0:
+            penetration_pct = (extreme_stop_loss - spot) / spot * 100
+            penetration_atrs = (
+                (extreme_stop_loss - spot) / atr_15m if atr_15m > 0 else 0.0
+            )
+            extreme_breach_detail_block = f"""```ansi
+🚨 【緊急風控指令：軌道二極端瞬時停損觸發】
+------------------------------------------------------------
+標的資產：{symbol} ({asset_class})
+觸發價格：${spot:.2f}  (已穿透極端熔斷線 ${extreme_stop_loss:.2f})
+做市商底牆：${anchor_base:.2f} | 15m ATR：${atr_15m:.2f}
+結構破位幅度：-{penetration_pct:.2f}% (超額穿透 {penetration_atrs:.2f}x ATR)
+做市商 Gamma 狀態：🔴 進入負 Gamma 踩踏區間 (追跌對沖生效中)
+
+⚠️ 執行指引 (ACTION REQUIRED)：
+系統當前處於 15 分鐘輪詢節點，市場流動性可能正處於斷崖真空。
+請「立即手動至券商終端」執行市價/IOC 清倉指令，嚴禁左側抗單！
+------------------------------------------------------------
+```""".strip()
+
         return {
             "final_action": final_action,
             "final_target": final_target,
@@ -646,6 +659,8 @@ class _AntiWashoutMixin:
             "matching_order": matching_order,
             "is_illiquid_warning": is_illiquid_warning,
             "extreme_stop_loss": extreme_stop_loss,
+            "is_extreme_tick_breach": is_extreme_tick_breach,
+            "extreme_breach_detail_block": extreme_breach_detail_block,
             # 注意：這裡刻意採用 target_entry_price（轉入目標資產的參考進場價），
             # 而非上面用於防守被賣出部位的 stop-limit `limit_price` 區域變數——
             # Discord Embed 的「建議限價 (Limit)」欄位語意上對應的是買入目標資產
@@ -694,6 +709,8 @@ async def _build_euphoria_primary_liquidation_instruction(
         "cash_impact": report_90["cash_impact"],
         "limit_price": report_90["limit_price"],
         "extreme_stop_loss": report_90.get("extreme_stop_loss"),
+        "is_extreme_tick_breach": report_90.get("is_extreme_tick_breach", False),
+        "extreme_breach_detail_block": report_90.get("extreme_breach_detail_block"),
         "instrument_type": asset_class,
     }
 
@@ -737,6 +754,54 @@ def _net_and_build_rebalance_instruction(
         "cash_impact": report["cash_impact"],
         "limit_price": report["limit_price"],
         "extreme_stop_loss": report.get("extreme_stop_loss"),
+        "is_extreme_tick_breach": report.get("is_extreme_tick_breach", False),
+        "extreme_breach_detail_block": report.get("extreme_breach_detail_block"),
+        "instrument_type": asset_class,
+    }
+
+
+def _build_forced_settlement_instruction(
+    engine: Any,
+    symbol: str,
+    asset_class: str,
+    quantity: float,
+    current_value: float,
+    dte: int,
+) -> RolloverInstruction:
+    """DTE<=1 末日結算保護 (EXPIRATION_SETTLEMENT_ALERT)：完全略過錨點/破位
+    判定與停損計算，無條件產生 LIQUIDATE 指令，轉倉至**同標的**次月主力合約
+    （而非切換至其他標的），嚴禁透過擴大停損空間抗單。取代舊版「0/1 DTE
+    風險平價縮放」機制（擴大停損 + 口數砍半）。"""
+    sell_action = "BTC" if quantity < 0 else "STC"
+    reason = (
+        "🆘 **末日結算保護 (Forced Settlement Protection)**\n"
+        f"{symbol} 合約 DTE={dte}（<= {_HOLDING_DTE_FORCED_SETTLEMENT_THRESHOLD}），"
+        "已進入最後結算週期，無條件強制平倉，嚴禁透過擴大停損空間抗單。\n"
+        f"建議轉倉至 {symbol} 次月主力合約（約 {_FORCED_SETTLEMENT_ROLL_MIN_DTE}-"
+        f"{_FORCED_SETTLEMENT_ROLL_MAX_DTE} DTE 效期）。"
+    )
+    tax_note = engine._maybe_append_tax_risk_note(
+        is_forced_settlement=True,
+        is_same_symbol_reentry=False,
+    )
+    return {
+        "symbol": symbol,
+        "action": "LIQUIDATE",
+        "sell_ratio": 1.0,
+        "target_core": symbol,
+        "reason": reason + tax_note,
+        "suggested_strategy": (
+            f"100% {sell_action} → 轉倉至 {symbol} 次月主力合約 "
+            f"({_FORCED_SETTLEMENT_ROLL_MIN_DTE}-{_FORCED_SETTLEMENT_ROLL_MAX_DTE} DTE)"
+        ),
+        "sell_action": sell_action,
+        "scenario": RolloverScenario.SATELLITE_REBALANCE.value,
+        "is_manual_override_required": True,
+        "cash_impact": format_cash_impact(abs(current_value)),
+        "limit_price": None,
+        "extreme_stop_loss": None,
+        "is_extreme_tick_breach": False,
+        "extreme_breach_detail_block": None,
         "instrument_type": asset_class,
     }
 
@@ -773,6 +838,34 @@ async def check_satellite_rebalancing_impl(
                 asset.get("max_allocation_pct", _DEFAULT_MAX_ALLOCATION_PCT)
             )
 
+            # --- DTE 三態狀態機閘門：提前解析 asset_class 與 dte，於深度量化
+            # 資料提取與 GEX 掃描之前短路，避免對即將被結算保護接管的部位做
+            # 不必要的運算。僅 OPTIONS 部位有意義；SPOT 的 dte 恆為預設值 99
+            # (>=7)，天生落在 NORMAL_EXECUTION，故不需另外判斷 asset_class。 ---
+            asset_class = str(
+                asset.get("instrument_type", asset.get("asset_type", "SPOT"))
+            ).upper()
+            if "OPT" in asset_class or "CONTRACT" in asset_class:
+                asset_class = "OPTIONS"
+            else:
+                asset_class = "SPOT"
+            dte: int = int(asset.get("dte", 99))
+
+            if asset_class == "OPTIONS":
+                dte_tier = evaluate_option_dte_tier(dte, "MANAGE_EXISTING")
+                if dte_tier == "EXPIRATION_SETTLEMENT_ALERT":
+                    rebalance_instructions.append(
+                        _build_forced_settlement_instruction(
+                            engine=engine,
+                            symbol=symbol,
+                            asset_class=asset_class,
+                            quantity=quantity,
+                            current_value=current_value,
+                            dte=dte,
+                        )
+                    )
+                    continue
+
             # --- 新增：深度量化數據 (Fallback = None/0.0) ---
             spot: float = float(asset.get("spot_price", 0.0))
             call_wall: float = float(asset.get("call_wall", 0.0))
@@ -794,7 +887,6 @@ async def check_satellite_rebalancing_impl(
             atr_14: float = float(asset.get("atr_14", 0.0))
             hvn: float = float(asset.get("hvn", 0.0))
             lvn: float = float(asset.get("lvn", 0.0))
-            dte: int = int(asset.get("dte", 99))
             price_15m_close: float = float(asset.get("price_15m_close", spot))
             atr_15m: float = float(asset.get("atr_15m", 0.0))
             acquired_at: Optional[str] = asset.get("acquired_at")
@@ -806,14 +898,6 @@ async def check_satellite_rebalancing_impl(
             current_alloc: float = (
                 current_value / total_account_value if total_account_value > 0 else 0.0
             )
-
-            asset_class = str(
-                asset.get("instrument_type", asset.get("asset_type", "SPOT"))
-            ).upper()
-            if "OPT" in asset_class or "CONTRACT" in asset_class:
-                asset_class = "OPTIONS"
-            else:
-                asset_class = "SPOT"
 
             gex_profile_data = asset.get("gex_profile_data", {})
 
@@ -914,8 +998,20 @@ async def check_satellite_rebalancing_impl(
                     is_exhaustion_confirmed = (sqz_mom < 0.0) and (
                         skew_percentile >= _EXHAUSTION_SKEW_PERCENTILE
                     )
+                    # DTE 三態狀態機：開立全新 Bear Call Spread 屬於「開立全新
+                    # 選擇權結構」(NEW_OPPORTUNITY)，1<dte<7 的 LOCKOUT_SKIP 需
+                    # 封鎖此分支，落入下方 Trailing Stop 分支 (純風控延伸，非
+                    # 新開倉，不受影響)。SPOT 持倉 dte 恆為 99，不受影響。
+                    is_new_entry_allowed = (
+                        evaluate_option_dte_tier(dte, "NEW_OPPORTUNITY")
+                        == "NORMAL_EXECUTION"
+                    )
 
-                    if user_ctx.can_trade_spreads and is_exhaustion_confirmed:
+                    if (
+                        user_ctx.can_trade_spreads
+                        and is_exhaustion_confirmed
+                        and is_new_entry_allowed
+                    ):
                         # 90/10 權限資金拆分 - 衰竭確認，建立 Bear Call Spread 反向收租
                         # 90% 轉入新標的
                         rebalance_instructions.append(
@@ -964,7 +1060,7 @@ async def check_satellite_rebalancing_impl(
                                 "reason": report_10["markdown_report"]
                                 + "\n⚠️ **【動能衰竭確認】SQZ MOM 拐頭且 Skew 降溫，觸發 Bear Call Spread 反向收租 (手動防滑價)**"
                                 + engine._maybe_append_tax_risk_note(
-                                    is_01dte_expanded=False,
+                                    is_forced_settlement=False,
                                     is_same_symbol_reentry=True,
                                 ),
                                 "suggested_strategy": report_10["options_strategy"],
@@ -976,6 +1072,12 @@ async def check_satellite_rebalancing_impl(
                                 "cash_impact": report_10["cash_impact"],
                                 "limit_price": short_strike,
                                 "extreme_stop_loss": report_10.get("extreme_stop_loss"),
+                                "is_extreme_tick_breach": report_10.get(
+                                    "is_extreme_tick_breach", False
+                                ),
+                                "extreme_breach_detail_block": report_10.get(
+                                    "extreme_breach_detail_block"
+                                ),
                                 "instrument_type": asset_class,
                             }
                         )
@@ -1031,6 +1133,12 @@ async def check_satellite_rebalancing_impl(
                                 "cash_impact": report_10["cash_impact"],
                                 "limit_price": trailing_stop_level,
                                 "extreme_stop_loss": report_10.get("extreme_stop_loss"),
+                                "is_extreme_tick_breach": report_10.get(
+                                    "is_extreme_tick_breach", False
+                                ),
+                                "extreme_breach_detail_block": report_10.get(
+                                    "extreme_breach_detail_block"
+                                ),
                                 "instrument_type": asset_class,
                             }
                         )

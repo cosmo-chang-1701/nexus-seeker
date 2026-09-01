@@ -15,6 +15,7 @@ class RolloverScenario(str, Enum):
     FUNDAMENTAL_BROKEN = "FUNDAMENTAL_BROKEN"
     CORE_DEPLOYMENT = "CORE_DEPLOYMENT"
     MACRO_TOP_ESCAPE_DEFENSE = "MACRO_TOP_ESCAPE_DEFENSE"
+    COVERED_CALL_PROFIT_LOCK = "COVERED_CALL_PROFIT_LOCK"
 
 
 class FundamentalThesisResult(BaseModel):
@@ -60,6 +61,14 @@ class RolloverInstruction(_RolloverInstructionRequired, total=False):
     # 現價貫穿即立即觸發，無視 15m 收盤等待）。僅 SATELLITE_REBALANCE 情境
     # 的指令會攜帶此欄位；CORE_DEPLOYMENT 等其餘情境維持 None。
     extreme_stop_loss: Optional[float]
+    # 這次指令是否「真的」由軌道二極端瞬時停損觸發（而非例行 15m 收盤破位或
+    # 常規再平衡）。extreme_stop_loss 只是參考數值，本欄位才是「這次是否真的
+    # 由此觸發」的布林旗標，供呈現層決定是否升級為最高急迫性視覺樣式。
+    is_extreme_tick_breach: Optional[bool]
+    # is_extreme_tick_breach=True 時，預先組裝好的完整 ANSI 明細字串（觸發價格/
+    # 極端熔斷線/做市商底牆/ATR/穿透幅度/Gamma 狀態/執行指引），供呈現層原樣
+    # 渲染為獨立欄位。其餘情境維持 None。
+    extreme_breach_detail_block: Optional[str]
     # 進場四重嚴格過濾鐵律 (market_analysis.entry_ironclad.RuleCheckResult.
     # as_dict_list()) 的序列化檢核清單，供報告輸出層渲染 Pass/Fail。僅
     # CORE_DEPLOYMENT 情境的機會分支（State A）指令會攜帶此欄位。
@@ -75,3 +84,12 @@ class RolloverInstruction(_RolloverInstructionRequired, total=False):
     # 複合去重鍵與每日 kv_cache dedup key，避免同一標的的現貨與期權部位互相
     # 誤判為同一筆已處理的建議。未提供時各消費端一律 fallback 為 "SPOT"。
     instrument_type: str
+    # Covered Call 權利金衰減停利 (covered_call_profit_lock.py) 專屬欄位。
+    # is_covered_call_profit_lock 供呈現層判斷走專屬 embed 分支（比照既有
+    # is_covered_call_overlay 旗標模式）；其餘僅該情境的指令會攜帶，其他
+    # 情境維持 None。
+    is_covered_call_profit_lock: Optional[bool]
+    entry_premium: Optional[float]
+    current_premium: Optional[float]
+    decay_pct: Optional[float]
+    dte: Optional[int]

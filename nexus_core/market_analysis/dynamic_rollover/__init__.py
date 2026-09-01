@@ -26,6 +26,7 @@ from .anti_washout import (  # noqa: E402
 )
 from .constants import CORE_DEFENSE_ETF_SYMBOLS  # noqa: E402
 from .core_deployment import _CoreDeploymentMixin  # noqa: E402
+from .covered_call_profit_lock import _CoveredCallProfitLockMixin  # noqa: E402
 from .fundamental_thesis import evaluate_fundamental_thesis_impl  # noqa: E402
 from .macro_top_escape_defense import (  # noqa: E402
     _MacroTopEscapeDefenseMixin,
@@ -61,6 +62,7 @@ class DynamicRolloverEngine(
     _MarginDefenseMixin,
     _CoreDeploymentMixin,
     _MacroTopEscapeDefenseMixin,
+    _CoveredCallProfitLockMixin,
 ):
     def __init__(self) -> None:
         self._structural_signals_cache: BoundedCache = BoundedCache(max_size=256)

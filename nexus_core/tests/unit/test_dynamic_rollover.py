@@ -14,14 +14,21 @@ from market_analysis.dynamic_rollover import (
     _scan_gex_walls,
 )
 from market_analysis.dynamic_rollover.constants import (
-    _ANTI_WASHOUT_BASE_ATR_MULT,
-    _ANTI_WASHOUT_EXTREME_ATR_MULT,
+    _COVERED_CALL_PROFIT_LOCK_PARTIAL_RATIO,
+    _HOLDING_DTE_FORCED_SETTLEMENT_THRESHOLD,
+)
+from market_analysis.dynamic_rollover.anti_washout import (
+    _build_forced_settlement_instruction,
+)
+from market_analysis.dynamic_rollover.structural_signals import (
+    evaluate_option_dte_tier,
 )
 from market_analysis.entry_ironclad import RuleCheckResult
 from market_analysis.price_volume_alert import Confirmed15mBar
 from cogs.embed_builders.rollover_embeds import (
     create_dynamic_rollover_embed,
     create_covered_call_overlay_embed,
+    create_covered_call_profit_lock_embed,
     create_thesis_passed_embed,
     build_fundamental_broken_embed,
 )
@@ -594,6 +601,94 @@ def test_create_dynamic_rollover_embed_omits_checklist_field_when_none() -> None
     assert checklist_field is None
 
 
+def test_create_dynamic_rollover_embed_extreme_tick_breach_urgency_override() -> None:
+    """is_extreme_tick_breach=True 時，標題應加上「立即人工執行」前綴、顏色
+    強制覆寫為紅色 (無論原 scenario 顏色為何)，且渲染 extreme_breach_detail_block
+    獨立欄位。"""
+    detail_block = "```ansi\n測試明細區塊\n```"
+    embed = create_dynamic_rollover_embed(
+        rollover_type="核心衛星再平衡",
+        sell_symbol="NVDA",
+        sell_ratio=1.0,
+        buy_symbol="VOO",
+        reason="測試",
+        suggested_strategy="100% LIQUIDATE",
+        suggested_price="Market",
+        strike="N/A",
+        expiry="N/A",
+        scenario="SATELLITE_REBALANCE",
+        is_extreme_tick_breach=True,
+        extreme_breach_detail_block=detail_block,
+    )
+    assert "🆘【立即人工執行】" in str(embed.title)
+    assert embed.color == discord.Color.red()
+    detail_field = next(
+        (f for f in embed.fields if f.name == "🆘 極端瞬時停損詳情"), None
+    )
+    assert detail_field is not None
+    assert detail_field.value == detail_block
+    assert "立即人工核實" in str(embed.description)
+
+
+def test_create_dynamic_rollover_embed_no_urgency_override_by_default() -> None:
+    """is_extreme_tick_breach 預設 False 時，標題/顏色維持原本 scenario 樣式，
+    不渲染極端瞬時停損詳情欄位 (回歸驗證，確保新參數不影響既有情境)。"""
+    embed = create_dynamic_rollover_embed(
+        rollover_type="核心衛星再平衡",
+        sell_symbol="NVDA",
+        sell_ratio=1.0,
+        buy_symbol="VOO",
+        reason="測試",
+        suggested_strategy="100% LIQUIDATE",
+        suggested_price="Market",
+        strike="N/A",
+        expiry="N/A",
+        scenario="SATELLITE_REBALANCE",
+    )
+    assert "立即人工執行" not in str(embed.title)
+    # NexusEmbed 會將 discord.Color.gold() 重映射為策展色盤的
+    # _COLOR_WARNING (0xF39C12)，故不直接比對 discord.Color.gold()。
+    assert embed.color == discord.Color(0xF39C12)
+    detail_field = next(
+        (f for f in embed.fields if f.name == "🆘 極端瞬時停損詳情"), None
+    )
+    assert detail_field is None
+
+
+@pytest.mark.asyncio
+async def test_generate_rule_based_rebalance_report_extreme_breach_detail_block(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """_generate_rule_based_rebalance_report：軌道二極端瞬時停損觸發時，應
+    組裝 extreme_breach_detail_block 並包含使用者規格要求的所有數據欄位。"""
+    metrics = {
+        "spot_price": 90.0,
+        "price_15m_close": 90.0,
+        "support_wall": 100.0,
+        "atr_15m": 2.0,  # extreme_stop_loss = 100 - 3.0*2 = 94.0，spot(90) < 94 觸發
+        "ivr": 25.0,
+        "sqz_mom": -1.0,
+    }
+    report = await engine._generate_rule_based_rebalance_report(
+        symbol="XYZ",
+        metrics=metrics,
+        requested_action="HOLD",
+        target="VOO",
+        asset_class="SPOT",
+        position_shares=100.0,
+        current_value=9000.0,
+    )
+    assert report["is_extreme_tick_breach"] is True
+    block = report["extreme_breach_detail_block"]
+    assert block is not None
+    assert "XYZ (SPOT)" in block
+    assert "$90.00" in block  # 觸發價格
+    assert "$94.00" in block  # 極端熔斷線
+    assert "$100.00" in block  # 做市商底牆 (anchor_base)
+    assert "負 Gamma 踩踏區間" in block
+    assert "立即手動至券商終端" in block
+
+
 @pytest.mark.asyncio
 @patch("market_analysis.dynamic_rollover.get_full_user_context")
 @patch(
@@ -813,32 +908,177 @@ async def test_generate_rule_based_rebalance_report_dynamic_generic_ticker(
     assert "#147" not in report["markdown_report"]
 
 
-@pytest.mark.asyncio
-async def test_01dte_risk_parity_position_sizing(engine: DynamicRolloverEngine) -> None:
-    """測試 0/1 DTE 風險平價口數動態縮放：停損擴展至 3.0x ATR，且轉倉買入股數強制縮減 50%"""
-    metrics = {
-        "spot_price": 100.0,
-        "price_15m_close": 100.0,
-        "support_wall": 100.0,
-        "atr_15m": 2.0,
-        "dte": 1,  # 0/1 DTE
-        "ivr": 25.0,
-        "sqz_mom": 1.0,
-    }
-    # anchor_wall = 100, base stop = 100 - (1.5 * 2) - (1.5 * 2) = 100 - 6 = 94.0
-    report = await engine._generate_rule_based_rebalance_report(
-        symbol="XYZ",
-        metrics=metrics,
-        requested_action="HOLD",
-        target="VOO",
-        position_shares=100.0,
-        current_value=10000.0,
+def test_evaluate_option_dte_tier_boundaries() -> None:
+    """DTE 三態狀態機邊界值：dte>=7 恆為 NORMAL_EXECUTION；dte<=1 恆為
+    EXPIRATION_SETTLEMENT_ALERT (與 position_intent 無關)；1<dte<7 依
+    position_intent 分流。"""
+    assert evaluate_option_dte_tier(7, "NEW_OPPORTUNITY") == "NORMAL_EXECUTION"
+    assert evaluate_option_dte_tier(99, "MANAGE_EXISTING") == "NORMAL_EXECUTION"
+    assert (
+        evaluate_option_dte_tier(0, "NEW_OPPORTUNITY") == "EXPIRATION_SETTLEMENT_ALERT"
     )
-    # VOO est price = 560. 10000 / 560 = 17 shares. With 50% risk parity scale = 8 shares.
-    assert "0/1 DTE 風險平價" in report["markdown_report"]
-    assert "削減 50%" in report["markdown_report"]
-    assert "3.0 × ATR_15m" in report["markdown_report"]
-    assert "$94.00" in report["markdown_report"]
+    assert (
+        evaluate_option_dte_tier(1, "MANAGE_EXISTING") == "EXPIRATION_SETTLEMENT_ALERT"
+    )
+    assert evaluate_option_dte_tier(6, "NEW_OPPORTUNITY") == "LOCKOUT_SKIP"
+    assert evaluate_option_dte_tier(2, "MANAGE_EXISTING") == "MAINTAIN_RISK_MONITORING"
+
+
+def test_build_forced_settlement_instruction_liquidates_same_symbol(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """DTE<=1 強制結算保護：無條件 LIQUIDATE 100%，轉倉至同標的（次月主力
+    合約），嚴禁擴大停損空間抗單的舊版措辭不應再出現。"""
+    ins = _build_forced_settlement_instruction(
+        engine=engine,
+        symbol="XYZ",
+        asset_class="OPTIONS",
+        quantity=1.0,
+        current_value=500.0,
+        dte=1,
+    )
+    assert ins["action"] == "LIQUIDATE"
+    assert ins["sell_ratio"] == 1.0
+    assert ins["target_core"] == "XYZ"
+    assert ins["sell_action"] == "STC"
+    assert f"DTE<={_HOLDING_DTE_FORCED_SETTLEMENT_THRESHOLD}" in ins["reason"]
+    assert "次月主力合約" in ins["reason"]
+    assert ins["is_manual_override_required"] is True
+    assert ins["is_extreme_tick_breach"] is False
+    # #10 回歸：末日結算保護取代舊版 0/1 DTE 稅務提醒的產生位置
+    assert "稅務提醒" in ins["reason"]
+    assert "Assignment" in ins["reason"]
+
+
+def test_build_forced_settlement_instruction_short_position_uses_btc(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """空頭部位 (quantity<0) 的強制結算保護應使用 BTC 而非 STC。"""
+    ins = _build_forced_settlement_instruction(
+        engine=engine,
+        symbol="XYZ",
+        asset_class="OPTIONS",
+        quantity=-1.0,
+        current_value=500.0,
+        dte=0,
+    )
+    assert ins["sell_action"] == "BTC"
+
+
+@pytest.mark.asyncio
+async def test_check_satellite_rebalancing_dte_forced_settlement_short_circuits(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """check_satellite_rebalancing_impl：DTE<=1 的 OPTIONS SATELLITE 部位應在
+    迴圈最前段短路為強制結算保護指令，完全不進入結構破位/Euphoria 判定
+    (即使其餘欄位刻意設成會觸發破位的數值，仍應走結算保護分支)。"""
+    portfolio_assets = [
+        {
+            "symbol": "XYZ",
+            "asset_class": "SATELLITE",
+            "instrument_type": "OPTIONS",
+            "quantity": 1.0,
+            "current_value": 500.0,
+            "spot_price": 50.0,
+            "put_wall": 60.0,  # 現價已跌破 put_wall，若未短路將被判定破位
+            "dte": 1,
+        }
+    ]
+    instructions = await engine.check_satellite_rebalancing(
+        user_id=1, portfolio_assets=portfolio_assets, total_account_value=10000.0
+    )
+    assert len(instructions) == 1
+    assert instructions[0]["action"] == "LIQUIDATE"
+    assert instructions[0]["target_core"] == "XYZ"
+    assert "結算保護" in instructions[0]["reason"]
+
+
+@pytest.mark.asyncio
+async def test_check_satellite_rebalancing_dte_lockout_allows_existing_risk_monitoring(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """1<dte<7 的 LOCKOUT 分級不應影響既有部位的雙軌停損監控——結構性破位
+    仍應正常觸發 LIQUIDATE (MAINTAIN_RISK_MONITORING 不封鎖既有風控)。"""
+    portfolio_assets = [
+        {
+            "symbol": "XYZ",
+            "asset_class": "SATELLITE",
+            "instrument_type": "OPTIONS",
+            "quantity": 1.0,
+            "current_value": 500.0,
+            "spot_price": 50.0,
+            "put_wall": 60.0,  # 現價已跌破 put_wall -> OPTIONS 快速通道破位
+            "dte": 5,
+        }
+    ]
+    instructions = await engine.check_satellite_rebalancing(
+        user_id=1, portfolio_assets=portfolio_assets, total_account_value=10000.0
+    )
+    assert len(instructions) == 1
+    assert instructions[0]["action"] == "LIQUIDATE"
+    # 非強制結算保護分支 (走一般結構破位判定)，reason 不含結算保護措辭
+    assert "結算保護" not in instructions[0]["reason"]
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
+    new_callable=AsyncMock,
+    return_value=(True, "mocked"),
+)
+@patch("database.market_cache.get_market_cache")
+async def test_evaluate_opportunity_cost_for_satellites_dte_lockout_skips(
+    mock_cache: MagicMock,
+    mock_entry_gate: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """evaluate_opportunity_cost_for_satellites：1<dte<7 的 OPTIONS 持倉應被
+    DTE LOCKOUT 靜默跳過，不產生機會成本轉倉指令（即使進場鐵律已放行）。"""
+
+    def cache_side_effect(symbol: str, expiry: str = None):  # type: ignore
+        if symbol.upper() == "XYZ":
+            return {
+                "reference_spot_price": 50.0,
+                "expected_move_upper": 51.0,  # EV ≈ 0.02 (低，動能衰退中的原持倉)
+                "is_stale": 0,
+                "is_degraded": 0,
+            }
+        return {
+            "reference_spot_price": 100.0,
+            "expected_move_upper": 120.0,  # EV = 0.20 (高，候選標的)
+            "is_stale": 0,
+            "is_degraded": 0,
+        }
+
+    mock_cache.side_effect = cache_side_effect
+    portfolio_assets = [
+        {
+            "symbol": "XYZ",
+            "asset_class": "SATELLITE",
+            "instrument_type": "OPTIONS",
+            "quantity": 1.0,
+            "current_value": 500.0,
+            "spot_price": 50.0,
+            "avg_cost": 40.0,
+            "psq_result": {"squeeze_level": "Release", "signal_direction": "Short"},
+            "dte": 3,
+        }
+    ]
+    candidate_radar = {
+        "psq_result": {"squeeze_level": "Release", "signal_direction": "Long"},
+        "quote": {"c": 100.0},
+        "iv_metrics": {},
+        "gex_profile_data": {},
+        "uoa": [],
+    }
+    instructions, _confirmation = await engine.evaluate_opportunity_cost_for_satellites(
+        user_id=1,
+        portfolio_assets=portfolio_assets,
+        already_flagged_symbols=set(),
+        candidate_symbol="ABC",
+        candidate_radar=candidate_radar,
+    )
+    assert instructions == []
 
 
 @pytest.mark.asyncio
@@ -2491,7 +2731,7 @@ def test_margin_defense_scenario_always_renders_red(
 
 def test_scenario_style_distinguishes_all_five_scenarios() -> None:
     """
-    五大情境必須產生彼此不同的標題/顏色組合，讓交易者能一眼分辨是哪個引擎觸發。
+    六大情境必須產生彼此不同的標題/顏色組合，讓交易者能一眼分辨是哪個引擎觸發。
     """
     embeds = {
         scenario: create_dynamic_rollover_embed(
@@ -2513,10 +2753,11 @@ def test_scenario_style_distinguishes_all_five_scenarios() -> None:
             "MARGIN_DEFENSE",
             "FUNDAMENTAL_BROKEN",
             "CORE_DEPLOYMENT",
+            "COVERED_CALL_PROFIT_LOCK",
         )
     }
     combos = {(e.title, e.color) for e in embeds.values()}
-    assert len(combos) == 5, "五大情境的 (標題, 顏色) 組合必須互不相同"
+    assert len(combos) == 6, "六大情境的 (標題, 顏色) 組合必須互不相同"
     # 最危險的兩個情境 (保證金防禦 / 基本面破滅) 必須共享同一種危急紅色
     assert embeds["MARGIN_DEFENSE"].color == embeds["FUNDAMENTAL_BROKEN"].color
     assert embeds["MARGIN_DEFENSE"].color == discord.Color(0xE74C3C)
@@ -2924,52 +3165,49 @@ async def test_check_satellite_rebalancing_default_target_allocation_omitted(
     assert ins["sell_ratio"] < 0.5
 
 
-def test_compute_anti_washout_stop_clamps_floor_when_anchor_far_below_spot(
+def test_compute_anti_washout_stop_no_clamp_far_below_spot(
     engine: DynamicRolloverEngine,
 ) -> None:
     """
-    anchor_base 遠低於現價 (GEX 牆數據異常/過舊) 且 ATR 極小時，機制 2 算出的
-    基礎停損應鉗制在 spot*0.95 下限，避免防護過鬆而失去防洗盤意義。
+    DTE 三態狀態機重構移除了 [spot*0.95, spot*0.98] 硬編碼邊界鉗制：即使
+    anchor_base 遠低於現價，停損也應純粹依微觀結構公式輸出，不再被人為推寬。
     """
-    metrics = {"spot_price": 100.0, "atr_15m": 1.0, "dte": 30, "lvn": 0.0, "hvn": 0.0}
-    stop_loss, _limit, is_01dte, _scale, extreme_stop_loss = (
-        engine._compute_anti_washout_stop(anchor_base=80.0, metrics=metrics)
+    metrics = {"spot_price": 100.0, "atr_15m": 1.0, "lvn": 0.0, "hvn": 0.0}
+    stop_loss, _limit, extreme_stop_loss = engine._compute_anti_washout_stop(
+        anchor_base=80.0, metrics=metrics
     )
-    # raw = 80 - 1.5*1.0 = 78.5 -> 遠低於 spot*0.95=95.0 -> 鉗制至 95.0
-    assert stop_loss == 95.0
-    assert is_01dte is False
-    # 軌道二極端停損不受機制 2 的邊界鉗制影響：80 - 3.0*1.0 = 77.0
+    # raw = 80 - 1.5*1.0 = 78.5，不再鉗制至 spot*0.95=95.0
+    assert stop_loss == 78.5
+    # 軌道二極端停損公式不變：80 - 3.0*1.0 = 77.0
     assert extreme_stop_loss == 77.0
 
 
-def test_compute_anti_washout_stop_clamps_ceiling_when_anchor_close_to_spot(
+def test_compute_anti_washout_stop_no_clamp_close_to_spot(
     engine: DynamicRolloverEngine,
 ) -> None:
     """
-    anchor_base 極貼近現價且 ATR 極小時，機制 2 算出的基礎停損應鉗制在
-    spot*0.98 上限，避免防護過緊而提前洗出。
+    同上：anchor_base 極貼近現價時，停損也不再被鉗制至 spot*0.98 上限。
     """
-    metrics = {"spot_price": 100.0, "atr_15m": 0.1, "dte": 30, "lvn": 0.0, "hvn": 0.0}
-    stop_loss, _limit, _is_01dte, _scale, _extreme = engine._compute_anti_washout_stop(
+    metrics = {"spot_price": 100.0, "atr_15m": 0.1, "lvn": 0.0, "hvn": 0.0}
+    stop_loss, _limit, _extreme = engine._compute_anti_washout_stop(
         anchor_base=99.0, metrics=metrics
     )
-    # raw = 99 - 0.15 = 98.85 -> 高於 spot*0.98=98.0 -> 鉗制至 98.0
-    assert stop_loss == 98.0
+    # raw = 99 - 0.15 = 98.85，不再鉗制至 spot*0.98=98.0
+    assert stop_loss == 98.85
 
 
 def test_compute_anti_washout_stop_no_clamp_when_already_breached(
     engine: DynamicRolloverEngine,
 ) -> None:
     """
-    回歸防護：現價已跌破 anchor_base (base_stop_loss >= spot，即雙軌裁決機制
-    賴以判定「已破位」的訊號) 時，不得鉗制，否則會把停損拉回現價之下、
-    誤將破位訊號抹除 (與 test_dual_track_exit_options_vs_spot 情境一致)。
+    回歸防護：現價已跌破 anchor_base 時，停損維持原始公式值，供雙軌裁決機制
+    正確判定「已破位」(與 test_dual_track_exit_options_vs_spot 情境一致)。
     """
-    metrics = {"spot_price": 95.0, "atr_15m": 2.0, "dte": 10, "lvn": 0.0, "hvn": 0.0}
-    stop_loss, _limit, _is_01dte, _scale, _extreme = engine._compute_anti_washout_stop(
+    metrics = {"spot_price": 95.0, "atr_15m": 2.0, "lvn": 0.0, "hvn": 0.0}
+    stop_loss, _limit, _extreme = engine._compute_anti_washout_stop(
         anchor_base=100.0, metrics=metrics
     )
-    # raw = 100 - 1.5*2 = 97.0 > spot(95.0) -> 已處於破位訊號區間，不鉗制
+    # raw = 100 - 1.5*2 = 97.0 > spot(95.0) -> 已處於破位訊號區間
     assert stop_loss == 97.0
 
 
@@ -2977,17 +3215,13 @@ def test_compute_anti_washout_stop_lvn_regression_unchanged(
     engine: DynamicRolloverEngine,
 ) -> None:
     """
-    回歸防護：新增的邊界鉗制不得影響既有 LVN 吸附機制的最終輸出
-    (刻意驗證超出 [spot*0.95, spot*0.98] 邊界的最終值)。
-    0/1 DTE 風險平價的回歸驗證見
-    test_compute_anti_washout_stop_01dte_total_distance_matches_named_constant。
+    回歸防護：clamp 移除不得影響既有 LVN 吸附機制的最終輸出。
     """
-    stop_lvn, _l2, _is2, _s2, _e2 = engine._compute_anti_washout_stop(
+    stop_lvn, _l2, _e2 = engine._compute_anti_washout_stop(
         anchor_base=100.0,
         metrics={
             "spot_price": 100.0,
             "atr_15m": 2.0,
-            "dte": 30,
             "lvn": 97.0,
             "secondary_hvn": 94.0,
             "hvn": 94.0,
@@ -2996,39 +3230,24 @@ def test_compute_anti_washout_stop_lvn_regression_unchanged(
     assert stop_lvn == 94.40
 
 
-def test_compute_anti_washout_stop_01dte_total_distance_matches_named_constant(
+def test_compute_anti_washout_stop_ignores_dte(
     engine: DynamicRolloverEngine,
 ) -> None:
     """
-    Phase 0 常數清理回歸鎖定：0/1 DTE 末日結算容忍度機制對 anchor_base 疊加套用
-    兩次 _ANTI_WASHOUT_BASE_ATR_MULT (1.5x) ATR 墊片，故停損最終距 anchor_base
-    應恰為 2 * _ANTI_WASHOUT_BASE_ATR_MULT * atr_15m (= 3.0x ATR，
-    對應既有 Risk-Parity 縮放因子註解 1.5 / 3.0 = 0.5)。使用不落在邊界鉗制範圍
-    [spot*0.95, spot*0.98] 內的數值，確保驗證的是 ATR 墊片本身而非鉗制。
+    回歸防護：_compute_anti_washout_stop 不再讀取 metrics["dte"]（0/1 DTE 的
+    「擴大停損 + 口數縮放」機制已被 DTE 三態狀態機取代，DTE<=1 的部位在
+    check_satellite_rebalancing_impl 迴圈最前段即短路為 _build_forced_
+    settlement_instruction，永遠不會呼叫到本函式）。dte=1 與 dte=99 應產生
+    完全相同的結果。
     """
-    anchor_base = 100.0
-    atr_15m = 2.0
-    stop_loss, _limit, is_01dte, scale, extreme_stop_loss = (
-        engine._compute_anti_washout_stop(
-            anchor_base=anchor_base,
-            metrics={
-                "spot_price": 100.0,
-                "atr_15m": atr_15m,
-                "dte": 1,
-                "lvn": 0.0,
-                "hvn": 0.0,
-            },
-        )
+    base_metrics = {"spot_price": 100.0, "atr_15m": 2.0, "lvn": 0.0, "hvn": 0.0}
+    result_dte1 = engine._compute_anti_washout_stop(
+        anchor_base=100.0, metrics={**base_metrics, "dte": 1}
     )
-    assert is_01dte is True
-    assert scale == 0.5
-    assert anchor_base - stop_loss == 2 * _ANTI_WASHOUT_BASE_ATR_MULT * atr_15m
-    # 軌道二極端停損 (anchor_base - 3.0*atr_15m) 與上方 0/1 DTE 疊加後的
-    # stop_loss 恰好數值相同 (兩者皆為 2*1.5=3.0x ATR)，但這是「刻意的巧合」，
-    # 非同一機制：extreme_stop_loss 不受 dte<=1 分支影響 (任何 DTE 皆計算)，
-    # 也不套用 [0.95,0.98] 邊界鉗制/LVN 吸附，純粹套用
-    # _ANTI_WASHOUT_EXTREME_ATR_MULT 公式，驗證兩者互不依賴。
-    assert extreme_stop_loss == anchor_base - _ANTI_WASHOUT_EXTREME_ATR_MULT * atr_15m
+    result_dte99 = engine._compute_anti_washout_stop(
+        anchor_base=100.0, metrics={**base_metrics, "dte": 99}
+    )
+    assert result_dte1 == result_dte99
 
 
 def test_resolve_canonical_anchor_base_topology_correction() -> None:
@@ -3596,16 +3815,19 @@ def test_maybe_append_tax_risk_note_holding_period_long_vs_short_term(
 
 
 @pytest.mark.asyncio
-async def test_generate_rule_based_rebalance_report_01dte_liquidate_includes_tax_risk_note(
+async def test_generate_rule_based_rebalance_report_never_appends_01dte_tax_note(
     engine: DynamicRolloverEngine,
 ) -> None:
-    """#10: 0/1 DTE 合約觸發 LIQUIDATE 時，報告應附加資訊性稅務提醒 (Assignment 風險)"""
+    """#10 回歸：_generate_rule_based_rebalance_report 不再產生 0/1 DTE 稅務
+    提醒（該路徑已改由 _build_forced_settlement_instruction 獨立處理，DTE<=1
+    的部位永遠不會呼叫到本函式）。即使 metrics 帶有 dte=1 且觸發 LIQUIDATE，
+    也不應附加稅務提醒。"""
     metrics = {
         "spot_price": 100.0,
         "price_15m_close": 90.0,  # 跌破停損，觸發 15m 實體破位 LIQUIDATE
         "support_wall": 100.0,
         "atr_15m": 2.0,
-        "dte": 1,  # 0/1 DTE
+        "dte": 1,
         "ivr": 25.0,
         "sqz_mom": 1.0,
     }
@@ -3618,8 +3840,7 @@ async def test_generate_rule_based_rebalance_report_01dte_liquidate_includes_tax
         current_value=10000.0,
     )
     assert report["final_action"] == "LIQUIDATE"
-    assert "稅務提醒" in report["markdown_report"]
-    assert "Assignment" in report["markdown_report"]
+    assert "稅務提醒" not in report["markdown_report"]
 
 
 @pytest.mark.asyncio
@@ -4444,3 +4665,168 @@ def test_create_dynamic_rollover_embed_hold_and_liquidate_headers() -> None:
     assert "執行轉倉指令" in str(embed_liq.description)
     assert "100%" in str(embed_liq.fields[0].value)
     assert "$43,524" in str(embed_liq.fields[2].value)
+
+
+# ==========================================
+# 新功能: Covered Call 權利金衰減停利 (evaluate_covered_call_profit_lock)
+# ==========================================
+
+
+@pytest.mark.asyncio
+async def test_evaluate_covered_call_profit_lock_full_decay_liquidates(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """權利金衰減達 80% 全額門檻時，應產生 100% BTC LIQUIDATE 指令。"""
+    positions = [
+        {
+            "symbol": "AAPL",
+            "expiry": (datetime.now() + timedelta(days=20)).strftime("%Y-%m-%d"),
+            "strike": 200.0,
+            "quantity": -1.0,
+            "entry_price": 5.0,
+            "current_premium": 0.9,  # 衰減 = (5-0.9)/5 = 0.82 >= 0.80
+        }
+    ]
+    instructions = await engine.evaluate_covered_call_profit_lock(1, positions)
+    assert len(instructions) == 1
+    ins = instructions[0]
+    assert ins["action"] == "LIQUIDATE"
+    assert ins["sell_ratio"] == 1.0
+    assert ins["sell_action"] == "BTC"
+    assert ins["scenario"] == "COVERED_CALL_PROFIT_LOCK"
+    assert ins["is_covered_call_profit_lock"] is True
+    assert ins["decay_pct"] == pytest.approx(0.82)
+
+
+@pytest.mark.asyncio
+async def test_evaluate_covered_call_profit_lock_partial_decay_reduces(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """權利金衰減達 50% 局部門檻 (未達 80%) 時，應產生局部比例 BTC REDUCE 指令。"""
+    positions = [
+        {
+            "symbol": "AAPL",
+            "expiry": (datetime.now() + timedelta(days=20)).strftime("%Y-%m-%d"),
+            "strike": 200.0,
+            "quantity": -1.0,
+            "entry_price": 5.0,
+            "current_premium": 2.0,  # 衰減 = (5-2)/5 = 0.60，介於 0.50~0.80
+        }
+    ]
+    instructions = await engine.evaluate_covered_call_profit_lock(1, positions)
+    assert len(instructions) == 1
+    ins = instructions[0]
+    assert ins["action"] == "REDUCE"
+    assert ins["sell_ratio"] == _COVERED_CALL_PROFIT_LOCK_PARTIAL_RATIO
+    assert ins["decay_pct"] == pytest.approx(0.60)
+
+
+@pytest.mark.asyncio
+async def test_evaluate_covered_call_profit_lock_below_threshold_is_noop(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """衰減幅度未達 50% 門檻時，不應產生任何指令。"""
+    positions = [
+        {
+            "symbol": "AAPL",
+            "expiry": (datetime.now() + timedelta(days=20)).strftime("%Y-%m-%d"),
+            "strike": 200.0,
+            "quantity": -1.0,
+            "entry_price": 5.0,
+            "current_premium": 4.0,  # 衰減 = 0.20，未達門檻
+        }
+    ]
+    instructions = await engine.evaluate_covered_call_profit_lock(1, positions)
+    assert instructions == []
+
+
+@pytest.mark.asyncio
+async def test_evaluate_covered_call_profit_lock_dte_forced_settlement(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """DTE<=1 時無論衰減幅度或報價是否可得，一律強制 100% BTC 回補。"""
+    positions = [
+        {
+            "symbol": "AAPL",
+            "expiry": (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d"),
+            "strike": 200.0,
+            "quantity": -1.0,
+            "entry_price": 5.0,
+            "current_premium": 4.8,  # 衰減僅 0.04，遠低於一般門檻
+        }
+    ]
+    instructions = await engine.evaluate_covered_call_profit_lock(1, positions)
+    assert len(instructions) == 1
+    ins = instructions[0]
+    assert ins["action"] == "LIQUIDATE"
+    assert ins["sell_ratio"] == 1.0
+    assert "結算保護" in ins["reason"]
+
+
+@pytest.mark.asyncio
+async def test_evaluate_covered_call_profit_lock_missing_quote_is_fail_safe(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """一般衰減判定分支缺少即時報價 (current_premium<=0) 時，fail-safe 跳過，
+    不猜測衰減幅度。"""
+    positions = [
+        {
+            "symbol": "AAPL",
+            "expiry": (datetime.now() + timedelta(days=20)).strftime("%Y-%m-%d"),
+            "strike": 200.0,
+            "quantity": -1.0,
+            "entry_price": 5.0,
+            "current_premium": 0.0,
+        }
+    ]
+    instructions = await engine.evaluate_covered_call_profit_lock(1, positions)
+    assert instructions == []
+
+
+@pytest.mark.asyncio
+async def test_evaluate_covered_call_profit_lock_missing_entry_premium_is_fail_safe(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """entry_price 缺失或無效時，fail-safe 跳過。"""
+    positions = [
+        {
+            "symbol": "AAPL",
+            "expiry": (datetime.now() + timedelta(days=20)).strftime("%Y-%m-%d"),
+            "strike": 200.0,
+            "quantity": -1.0,
+            "entry_price": 0.0,
+            "current_premium": 1.0,
+        }
+    ]
+    instructions = await engine.evaluate_covered_call_profit_lock(1, positions)
+    assert instructions == []
+
+
+def test_create_covered_call_profit_lock_embed_renders_details() -> None:
+    """create_covered_call_profit_lock_embed：應正確渲染原始/現價權利金、
+    衰減幅度、回補比例、DTE 等明細，且採用綠色系與不重用通用轉倉框架。"""
+    embed = create_covered_call_profit_lock_embed(
+        symbol="AAPL",
+        reason="測試理由",
+        entry_premium=5.0,
+        current_premium=0.9,
+        decay_pct=0.82,
+        btc_ratio=1.0,
+        dte=20,
+        strike="$200.00",
+        expiry="2026-01-16",
+        cash_impact="$90",
+    )
+    assert "AAPL" in str(embed.title)
+    assert embed.color == discord.Color.green()
+    detail_field = next(
+        (f for f in embed.fields if f.name == "🖋️ Covered Call 停利明細"), None
+    )
+    assert detail_field is not None
+    assert detail_field.value is not None
+    assert "$5.00" in detail_field.value
+    assert "$0.90" in detail_field.value
+    assert "82%" in detail_field.value
+    assert "100%" in detail_field.value
+    assert "DTE=20" in detail_field.value
+    assert "$90" in detail_field.value

@@ -33,7 +33,7 @@ from .constants import (
     _SKEW_DOWNSIDE_PENALTY_FACTOR,
 )
 from .models import RolloverInstruction, RolloverScenario
-from .structural_signals import _scan_gex_walls
+from .structural_signals import _scan_gex_walls, evaluate_option_dte_tier
 
 
 # --- _confirm_entry_signal 六重進場鐵律各條件的獨立判斷函式 ---
@@ -664,6 +664,16 @@ class _OpportunityCostMixin:
                 continue
             if symbol == candidate_symbol:
                 continue
+
+            # DTE 三態狀態機：機會成本轉倉本質即是「新增轉倉」(NEW_OPPORTUNITY)，
+            # dte<7 一律封鎖 (末日流動性雜訊，不適合驅動新轉倉決策)。dte<=1
+            # 已由 Scenario 3 的強制結算保護接管，此處靜默跳過避免重複/矛盾指令。
+            if instrument_class == "OPTIONS":
+                dte_tier = evaluate_option_dte_tier(
+                    int(asset.get("dte", 99)), "NEW_OPPORTUNITY"
+                )
+                if dte_tier != "NORMAL_EXECUTION":
+                    continue
 
             holding_psq = asset.get("psq_result", {}) or {}
             current_power_squeeze = self._normalize_power_squeeze(holding_psq)

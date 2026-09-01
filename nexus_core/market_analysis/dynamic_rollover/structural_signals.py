@@ -2,7 +2,33 @@ import time
 from typing import Any, Dict, Optional, Tuple
 
 from . import logger
-from .constants import _STRUCTURAL_SIGNALS_CACHE_TTL
+from .constants import (
+    _HOLDING_DTE_FORCED_SETTLEMENT_THRESHOLD,
+    _HOLDING_DTE_LOCKOUT_THRESHOLD,
+    _STRUCTURAL_SIGNALS_CACHE_TTL,
+)
+
+
+def evaluate_option_dte_tier(dte: int, position_intent: str) -> str:
+    """DTE 三態狀態機：回傳 "NORMAL_EXECUTION" | "LOCKOUT_SKIP" |
+    "MAINTAIN_RISK_MONITORING" | "EXPIRATION_SETTLEMENT_ALERT"。
+
+    position_intent 為 "NEW_OPPORTUNITY"（新增轉倉/開倉判斷，例如 Scenario 2
+    機會成本轉倉、Scenario 3 Euphoria 分支開立全新 Bear Call Spread）或
+    "MANAGE_EXISTING"（既有持倉風控/停利，例如 Scenario 3 雙軌停損監控、
+    Covered Call 權利金衰減停利）。
+
+    純函式、零 I/O。僅對 OPTIONS 部位有意義；呼叫端對 SPOT/HOLDING 一律不應
+    呼叫此函式（SPOT 無到期日概念）。dte<=1 時無論 position_intent 為何皆回傳
+    EXPIRATION_SETTLEMENT_ALERT——結算保護優先權高於「新增/既有」的區分。
+    """
+    if dte >= _HOLDING_DTE_LOCKOUT_THRESHOLD:
+        return "NORMAL_EXECUTION"
+    if dte <= _HOLDING_DTE_FORCED_SETTLEMENT_THRESHOLD:
+        return "EXPIRATION_SETTLEMENT_ALERT"
+    if position_intent == "NEW_OPPORTUNITY":
+        return "LOCKOUT_SKIP"
+    return "MAINTAIN_RISK_MONITORING"
 
 
 def _resolve_canonical_anchor_base(

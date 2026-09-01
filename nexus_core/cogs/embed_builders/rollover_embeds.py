@@ -46,7 +46,18 @@ _SCENARIO_STYLE: Dict[str, Dict[str, Any]] = {
         # 確認的危急情境，視覺等級不應與後者混淆。
         "color": discord.Color.orange(),
     },
+    "COVERED_CALL_PROFIT_LOCK": {
+        "emoji": "🖋️",
+        "label": "Covered Call 權利金衰減停利",
+        # 綠色系：權利金衰減對賣方有利，屬獲利了結的正面結果，與
+        # CORE_DEPLOYMENT 同色系呼應。
+        "color": discord.Color.green(),
+    },
 }
+
+# 軌道二極端瞬時停損觸發時，覆寫於 _SCENARIO_STYLE 查表結果之上的最高急迫性樣式。
+_EXTREME_TICK_BREACH_TITLE_PREFIX = "🆘【立即人工執行】"
+_EXTREME_TICK_BREACH_COLOR = discord.Color.red()
 
 
 class ReportSelect(discord.ui.Select["ReportSelectionView"]):
@@ -272,6 +283,8 @@ def create_dynamic_rollover_embed(
     asset_class: Optional[str] = None,
     entry_ironclad_result: Optional[list[dict]] = None,
     extreme_stop_loss: Optional[float] = None,
+    is_extreme_tick_breach: bool = False,
+    extreme_breach_detail_block: Optional[str] = None,
 ) -> discord.Embed:
     """
     產生動態轉倉 (Dynamic Rollover) 的 Embed 推播訊息。
@@ -306,6 +319,12 @@ def create_dynamic_rollover_embed(
         SATELLITE_REBALANCE 情境的指令會攜帶，None 或 <= 0 時不渲染對應欄位。
         與 entry_ironclad_result 刻意互相獨立、非同時出現（分屬進場與出場
         兩個不同情境）。
+    :param is_extreme_tick_breach: 這次指令是否「真的」由軌道二極端瞬時停損
+        觸發（而非例行 15m 收盤破位或常規再平衡）。True 時標題/顏色會升級為
+        最高急迫性樣式，覆寫於 scenario 對照表結果之上。
+    :param extreme_breach_detail_block: is_extreme_tick_breach=True 時，預先
+        組裝好的完整 ANSI 明細字串（觸發價格/極端熔斷線/做市商底牆/ATR/
+        穿透幅度/Gamma 狀態/執行指引），原樣渲染為獨立欄位。
     """
 
     # 決定 HOLD/執行 狀態 (與 scenario 無關，純粹決定文案措辭)
@@ -358,15 +377,26 @@ def create_dynamic_rollover_embed(
             if "破滅" in rollover_type or "防禦" in rollover_type:
                 color = discord.Color.red()
 
+    # 軌道二極端瞬時停損：最高急迫性樣式覆寫，優先權高於上方 scenario 對照表
+    # 結果（但保留原標題其餘文字），比照 MARGIN_DEFENSE 恆紅慣例強制標紅。
+    if is_extreme_tick_breach:
+        title = f"{_EXTREME_TICK_BREACH_TITLE_PREFIX}{title}"
+        color = _EXTREME_TICK_BREACH_COLOR
+
     embed = NexusEmbed(title=title, color=color)
 
     # 1. 核心原因區塊 — 由於字數可能會超過 Discord Field Value 1024 字元上限，改置於 Description
     safe_reason = truncate_with_boundary(reason, _EMBED_DESCRIPTION_SAFE_LIMIT)
-    desc_header = (
-        "**🟢【狀態：安全續抱】正 Gamma 護城河完好，無需任何手動操作**"
-        if is_hold
-        else "**🚨【執行轉倉指令】機構量化防禦與再平衡決策**"
-    )
+    if is_extreme_tick_breach:
+        desc_header = (
+            "**🆘【極端瞬時停損・立即人工執行】** 現價已貫穿最後防線，系統下次"
+            "排程評估在 15 分鐘後，屆時市場可能已進一步位移，請立即人工核實"
+            "現價並執行，勿等待下一輪通知"
+        )
+    elif is_hold:
+        desc_header = "**🟢【狀態：安全續抱】正 Gamma 護城河完好，無需任何手動操作**"
+    else:
+        desc_header = "**🚨【執行轉倉指令】機構量化防禦與再平衡決策**"
     embed.description = f"{desc_header}\n\n{safe_reason}"
 
     C_RESET = " [0m"
@@ -566,6 +596,15 @@ def create_dynamic_rollover_embed(
             inline=False,
         )
 
+    # 4.6 極端瞬時停損詳情 (僅 is_extreme_tick_breach=True 時渲染，逐字呈現
+    # anti_washout.py 預先組裝好的 ANSI 明細區塊)
+    if is_extreme_tick_breach and extreme_breach_detail_block:
+        embed.add_field(
+            name="🆘 極端瞬時停損詳情",
+            value=extreme_breach_detail_block,
+            inline=False,
+        )
+
     # 5. 觸發條件區塊 (獨立欄位，避免與 description 一起被截斷或重複)
     if trigger_condition_text and trigger_condition_text not in safe_reason:
         field_title = (
@@ -664,6 +703,81 @@ def create_covered_call_overlay_embed(
 
     embed.set_footer(
         text="Nexus Risk & Rollover Engine • Covered Call Overlay 為選填加碼收租建議，非強制轉倉"
+    )
+
+    return embed
+
+
+def create_covered_call_profit_lock_embed(
+    symbol: str,
+    reason: str,
+    entry_premium: float,
+    current_premium: float,
+    decay_pct: float,
+    btc_ratio: float,
+    dte: int,
+    strike: str,
+    expiry: str,
+    cash_impact: Optional[str] = None,
+) -> discord.Embed:
+    """
+    產生 Covered Call 權利金衰減停利 (Premium Decay Profit-Lock) 的專屬 Embed。
+
+    刻意不重用 create_dynamic_rollover_embed：本情境是既有空頭 CALL 部位的
+    單純 BTC 平倉了結，沒有「賣出→買入」的第二個轉倉標的，套用通用轉倉框架
+    會誤導使用者（理由與既有 create_covered_call_overlay_embed 完全相同）。
+
+    :param symbol: 標的代號
+    :param reason: 建議理由 (衰減幅度/DTE/門檻判定說明)
+    :param entry_premium: 開倉時收到的每股權利金
+    :param current_premium: 即時報價換算的每股權利金
+    :param decay_pct: 權利金衰減幅度 (0.0-1.0+)
+    :param btc_ratio: 建議 BTC 回補比例 (0.5 或 1.0)
+    :param dte: 距到期日剩餘天數
+    :param strike: 履約價字串
+    :param expiry: 到期日字串
+    :param cash_impact: 預估回補成本字串，None 時不顯示
+    """
+    style = _SCENARIO_STYLE["COVERED_CALL_PROFIT_LOCK"]
+    embed = NexusEmbed(
+        title=f"{style['emoji']} Covered Call 權利金衰減停利: {symbol}",
+        color=style["color"],
+    )
+
+    safe_reason = truncate_with_boundary(reason, _EMBED_DESCRIPTION_SAFE_LIMIT)
+    embed.description = (
+        "**🟢【建議動作：買回平倉 (BTC) 鎖定收益】權利金已大幅衰減，時間價值收租完成**"
+        f"\n\n{safe_reason}"
+    )
+
+    C_RESET = " [0m"
+    C_GREEN = " [1;32m"
+    C_CYAN = " [1;36m"
+
+    lock_lines = [
+        "```ansi",
+        " 🖋️ Covered Call 停利明細",
+        " ----------------------------------",
+        f" ├─ 標的: {symbol}",
+        f" ├─ 履約價: {C_CYAN}{strike}{C_RESET}",
+        f" ├─ 到期日: {expiry} (DTE={dte})",
+        f" ├─ 原始權利金: ${entry_premium:.2f} → 現價權利金: ${current_premium:.2f}",
+        f" ├─ 衰減幅度: {C_GREEN}{decay_pct:.0%}{C_RESET}",
+        f" ├─ 買賣方向: {C_GREEN}BTC (Buy To Close){C_RESET}",
+    ]
+    if cash_impact:
+        lock_lines.append(f" ├─ 預估回補成本: {cash_impact}")
+    lock_lines.append(f" └─ 建議回補比例: {C_GREEN}{btc_ratio:.0%}{C_RESET}")
+    lock_lines.append("```")
+
+    embed.add_field(
+        name="🖋️ Covered Call 停利明細",
+        value="\n".join(lock_lines),
+        inline=False,
+    )
+
+    embed.set_footer(
+        text="Nexus Risk & Rollover Engine • 權利金衰減停利為建議性回補，非強制轉倉"
     )
 
     return embed
@@ -795,6 +909,7 @@ _SCENARIO_SHORT_LABELS: Dict[str, str] = {
     "SATELLITE_REBALANCE": "核心衛星",
     "CORE_DEPLOYMENT": "核心部署",
     "MACRO_TOP_ESCAPE_DEFENSE": "逃頂前瞻",
+    "COVERED_CALL_PROFIT_LOCK": "CC停利",
 }
 
 

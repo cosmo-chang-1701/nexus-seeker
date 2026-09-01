@@ -29,6 +29,7 @@ from cogs.embed_builder import (
 from cogs.embed_builders.rollover_embeds import (
     create_dynamic_rollover_embed,
     create_covered_call_overlay_embed,
+    create_covered_call_profit_lock_embed,
 )
 
 ny_tz = ZoneInfo("America/New_York")
@@ -262,10 +263,14 @@ class PortfolioMonitorCog(commands.Cog):
             all_holdings = get_all_holdings()
 
             # 🚀 動態轉倉引擎：真實期權持倉併入評估迴圈 (Feature Flag，預設關閉)。
-            # 僅納入多頭買方部位 (quantity > 0)；賣方 (STO) 部位風險輪廓相反
-            # (時間價值衰減對我方有利)，已由既有 evaluate_covered_call_overlay /
-            # recommend_covered_calls 覆蓋，套用本引擎會產生方向錯誤的清倉指令。
+            # 僅納入多頭買方部位 (quantity > 0) 至 Scenario 2/3/4/5 的 SATELLITE
+            # 評估迴圈；空頭 (STO) 部位風險輪廓相反 (時間價值衰減對我方有利)，
+            # 套用該迴圈的結構性破位邏輯會產生方向錯誤的清倉指令。開立新備兌
+            # 買權已由既有 evaluate_covered_call_overlay / recommend_covered_calls
+            # 覆蓋；既有空頭 CALL 部位的提前 BTC 回補了結則由下方獨立的
+            # evaluate_covered_call_profit_lock 處理 (見 short_call_trades)。
             long_option_trades: List[Dict[str, Any]] = []
+            short_call_trades: List[Dict[str, Any]] = []
             if config.ENABLE_OPTIONS_ROLLOVER_INGESTION:
                 from database.portfolio import get_all_trade_positions
 
@@ -273,11 +278,21 @@ class PortfolioMonitorCog(commands.Cog):
                 long_option_trades = [
                     t for t in all_trades_raw if float(t.get("quantity") or 0) > 0
                 ]
-                skipped_short_count = len(all_trades_raw) - len(long_option_trades)
+                short_call_trades = [
+                    t
+                    for t in all_trades_raw
+                    if float(t.get("quantity") or 0) < 0
+                    and str(t.get("opt_type", "")).lower() == "call"
+                ]
+                skipped_short_count = (
+                    len(all_trades_raw)
+                    - len(long_option_trades)
+                    - len(short_call_trades)
+                )
                 if skipped_short_count:
                     logger.debug(
-                        f"[OptionsRollover] 略過 {skipped_short_count} 筆賣方/非多頭"
-                        "期權部位 (不在動態轉倉引擎評估範圍內)"
+                        f"[OptionsRollover] 略過 {skipped_short_count} 筆非多頭/"
+                        "非空頭 CALL 期權部位 (不在動態轉倉引擎評估範圍內)"
                     )
 
             # --- 提前抓取雷達數據，供後續模組共用 ---
@@ -476,12 +491,24 @@ class PortfolioMonitorCog(commands.Cog):
                 # audit_real_portfolio_risk() 的 PROFIT_LOCK/GAMMA_FRAGILITY
                 # 判斷完全獨立 (一個判斷「該獲利了結」，一個判斷「該轉倉/清倉
                 # 防禦」)，兩者刻意保持獨立，未來重構不應合併耦合。
-                if long_option_trades:
+                # Covered Call 權利金衰減停利 (evaluate_covered_call_profit_lock)
+                # 所需的即時報價，併入下方同一批 Semaphore(3) 併發抓取，避免對
+                # 同一批合約 (若剛好與 long_option_trades 重疊) 重複發送請求。
+                user_short_calls: Dict[int, List[Dict[str, Any]]] = {}
+                if long_option_trades or short_call_trades:
                     quote_sem = asyncio.Semaphore(3)
                     unique_contracts: Dict[
                         tuple[str, Any, Any, Any], Dict[str, Any]
                     ] = {}
                     for t in long_option_trades:
+                        contract_key = (
+                            str(t["symbol"]).upper(),
+                            t.get("expiry"),
+                            t.get("strike"),
+                            t.get("opt_type"),
+                        )
+                        unique_contracts.setdefault(contract_key, t)
+                    for t in short_call_trades:
                         contract_key = (
                             str(t["symbol"]).upper(),
                             t.get("expiry"),
@@ -553,7 +580,40 @@ class PortfolioMonitorCog(commands.Cog):
                         )
                         user_assets.setdefault(opt_u_id, []).append(option_asset_entry)
 
-                for u_id, portfolio_assets in user_assets.items():
+                    for t in short_call_trades:
+                        sc_u_id = t["user_id"]
+                        sc_sym = str(t["symbol"]).upper()
+                        contract_key = (
+                            sc_sym,
+                            t.get("expiry"),
+                            t.get("strike"),
+                            t.get("opt_type"),
+                        )
+                        mid_price, _bid, _ask = quote_map.get(
+                            contract_key, (0.0, 0.0, 0.0)
+                        )
+                        # 報價缺失 (mid_price<=0) 時仍併入清單——
+                        # evaluate_covered_call_profit_lock 對 DTE<=1 的
+                        # 結算保護分支不需要報價，只有一般衰減判定分支才會
+                        # fail-safe 跳過缺報價的部位。
+                        user_short_calls.setdefault(sc_u_id, []).append(
+                            {
+                                "symbol": sc_sym,
+                                "expiry": t.get("expiry"),
+                                "strike": t.get("strike"),
+                                "quantity": t.get("quantity"),
+                                "entry_price": t.get("entry_price"),
+                                "current_premium": mid_price,
+                            }
+                        )
+
+                # 聯集 user_assets 與 user_short_calls 的使用者集合：Covered
+                # Call 賣方通常會同時持有對應現貨 (已在 user_assets 中)，但為
+                # 避免僅持有空頭 CALL、無對應現貨紀錄的邊界情況被靜默忽略，
+                # 仍以聯集為準，portfolio_assets 缺席時安全退回空列表。
+                all_user_ids = set(user_assets.keys()) | set(user_short_calls.keys())
+                for u_id in all_user_ids:
+                    portfolio_assets = user_assets.get(u_id, [])
                     total_val = sum(a["current_value"] for a in portfolio_assets)
 
                     rebalance_instructions = (
@@ -688,6 +748,17 @@ class PortfolioMonitorCog(commands.Cog):
                         )
                     )
 
+                    # 🚀 Covered Call 權利金衰減停利 — 與 Scenario 2/3/4/5/6 完全
+                    # 獨立，只處理既有空頭 CALL 部位是否該提前 BTC 回補了結，
+                    # 不涉及任何轉倉/開倉決策，因此不參與 already_flagged_symbols
+                    # 排除邏輯，也不影響/受影響於上述任一情境。
+                    rebalance_instructions += (
+                        await self.rollover_engine.evaluate_covered_call_profit_lock(
+                            u_id,
+                            user_short_calls.get(u_id, []),
+                        )
+                    )
+
                     # 情境識別碼 → 人類可讀標籤，僅供標題補充說明；顏色/危險等級判斷
                     # 由 create_dynamic_rollover_embed 依 scenario 明確對照表決定，
                     # 不再依賴此處字串是否包含特定關鍵字。
@@ -697,6 +768,7 @@ class PortfolioMonitorCog(commands.Cog):
                         "MARGIN_DEFENSE": "槓桿與保證金防禦",
                         "CORE_DEPLOYMENT": "核心資金部署",
                         "MACRO_TOP_ESCAPE_DEFENSE": "宏觀逃頂前瞻防禦",
+                        "COVERED_CALL_PROFIT_LOCK": "Covered Call 權利金衰減停利",
                     }
 
                     today_str = datetime.now(ny_tz).strftime("%Y%m%d")
@@ -725,6 +797,14 @@ class PortfolioMonitorCog(commands.Cog):
                             f"rollover_alert_{u_id}_{ins['symbol']}_"
                             f"{instrument_type}_{scenario}_{action}_{today_str}"
                         )
+                        if scenario == "COVERED_CALL_PROFIT_LOCK":
+                            # 同一標的可能同時存在多筆不同履約價/到期日的 Covered
+                            # Call，通用 dedup_key 僅以 (symbol, action) 區分會讓
+                            # 其中一筆的警報意外壓制另一筆；額外納入 strike/expiry
+                            # 與衰減門檻分級 (action 已隱含 LIQUIDATE=全額/
+                            # REDUCE=局部)，允許當日從局部門檻推進至全額門檻時
+                            # 仍能重新提醒一次。
+                            dedup_key += f"_{ins.get('strike')}_{ins.get('expiry')}"
                         if database.get_kv_cache(dedup_key):
                             continue
 
@@ -769,6 +849,23 @@ class PortfolioMonitorCog(commands.Cog):
                                     ins.get("is_manual_override_required")
                                 ),
                             )
+                        elif ins.get("is_covered_call_profit_lock"):
+                            # Covered Call 權利金衰減停利：純 BTC 平倉了結，沒有
+                            # 第二個轉倉標的，理由同上不套用通用轉倉框架。
+                            embed = create_covered_call_profit_lock_embed(
+                                symbol=ins["symbol"],
+                                reason=ins["reason"],
+                                entry_premium=float(ins.get("entry_premium") or 0.0),
+                                current_premium=float(
+                                    ins.get("current_premium") or 0.0
+                                ),
+                                decay_pct=float(ins.get("decay_pct") or 0.0),
+                                btc_ratio=ins["sell_ratio"],
+                                dte=int(ins.get("dte") or 0),
+                                strike=ins.get("strike") or "N/A",
+                                expiry=ins.get("expiry") or "N/A",
+                                cash_impact=ins.get("cash_impact"),
+                            )
                         else:
                             embed = create_dynamic_rollover_embed(
                                 rollover_type=rollover_type,
@@ -793,6 +890,12 @@ class PortfolioMonitorCog(commands.Cog):
                                 ),
                                 entry_ironclad_result=ins.get("entry_ironclad_result"),
                                 extreme_stop_loss=ins.get("extreme_stop_loss"),
+                                is_extreme_tick_breach=bool(
+                                    ins.get("is_extreme_tick_breach")
+                                ),
+                                extreme_breach_detail_block=ins.get(
+                                    "extreme_breach_detail_block"
+                                ),
                             )
                             if ins.get("is_manual_override_required"):
                                 setattr(

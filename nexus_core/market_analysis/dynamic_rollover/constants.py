@@ -95,19 +95,17 @@ _BEAR_CALL_SPREAD_WING_ATR_MULT: float = (
     1.5  # Bear Call Spread 保護腳距賣方腳的 15m ATR 寬度倍數
 )
 # 防洗盤動態停損機制 2 的基礎 ATR 墊片倍數，相對於 anchor_base（非現價）：
-# 一般情境套用一次 (base_stop_loss = anchor_base - _ANTI_WASHOUT_BASE_ATR_MULT * atr_15m)；
-# 0/1 DTE 末日結算容忍度機制再疊加套用一次，使總距離達到 2 倍
-# (Risk-Parity 縮放因子 = 1.5 / 3.0 = 0.5)。
+# base_stop_loss = anchor_base - _ANTI_WASHOUT_BASE_ATR_MULT * atr_15m。
+# 注意：DTE<=1 的部位不會流經此計算——已由 evaluate_option_dte_tier() 判定為
+# EXPIRATION_SETTLEMENT_ALERT，在 check_satellite_rebalancing_impl 迴圈最前段
+# 直接短路為強制結算保護指令（見 _build_forced_settlement_instruction()），
+# 不再走「擴大停損空間抗單」的舊行為（該行為已於 DTE 三態狀態機重構中移除）。
 _ANTI_WASHOUT_BASE_ATR_MULT: float = 1.5
 # 雙軌出場防守引擎軌道二：極端瞬時停損 (Extreme Tick Breach) 的 ATR 墊片倍數。
-# 刻意獨立於上方 _ANTI_WASHOUT_BASE_ATR_MULT 之外另立常數，儘管數值恰好同為
-# 3.0（1.5 的兩倍）——兩者是完全不同、互不疊加的機制：
-# - 0/1 DTE 累積值：_ANTI_WASHOUT_BASE_ATR_MULT 疊加兩次 (anti_washout.py
-#   機制 4)，僅在 dte<=1 時啟動，影響既有的單一 stop_loss 欄位與口數縮放。
-# - 本常數：任何 DTE 皆適用的獨立「極端瞬時停損」防線，產生獨立的
-#   extreme_stop_loss 欄位，不套用 [0.95,0.98] 邊界鉗制／LVN 吸附／0-1DTE
-#   疊加，現價 (SPOT 亦然，不等待 15m 收盤) 貫穿即立即觸發，作為與 OPTIONS
-#   既有即時 tick 熔斷同等級的最後防線。
+# 刻意獨立於上方 _ANTI_WASHOUT_BASE_ATR_MULT 之外另立常數（數值恰好為 2 倍純屬
+# 巧合，兩者互不疊加）：任何 DTE 皆適用的獨立「極端瞬時停損」防線，產生獨立的
+# extreme_stop_loss 欄位，不套用 LVN 吸附，現價 (SPOT 亦然，不等待 15m 收盤)
+# 貫穿即立即觸發，作為與 OPTIONS 既有即時 tick 熔斷同等級的最後防線。
 _ANTI_WASHOUT_EXTREME_ATR_MULT: float = 3.0
 _BEAR_CALL_SPREAD_WING_FALLBACK_PCT: float = (
     0.05  # atr_15m 無效時，Bear Call Spread Wing 距離退回以賣方履約價的百分比估算
@@ -134,3 +132,25 @@ _MACRO_TOP_ESCAPE_TRIM_RATIO: float = 0.25
 # 對應 evaluate_macro_top_escape_score() (index_microstructure.py) 的分級輸出，
 # 僅最高分級 (CRITICAL，>= 3 項因子同時觸發) 才會啟動本情境的實際減碼動作。
 _MACRO_TOP_ESCAPE_MIN_TIER: str = "CRITICAL"
+
+# --- DTE 三態狀態機 (structural_signals.py::evaluate_option_dte_tier) 具名常數 ---
+# 僅對 OPTIONS 部位有意義。與既有 _ENTRY_UOA_MIN_DTE(7)/_ENTRY_CANDIDATE_MIN_DTE(1)
+# 刻意分開命名而不合併重用：後兩者是「候選標的」進場確認條件的一部分，本組常數
+# 是「既有持倉」本身的到期日分級門檻，語意不同，數值恰好相同純屬巧合。
+_HOLDING_DTE_LOCKOUT_THRESHOLD: int = 7  # dte < 此值時，Scenario 2 的機會成本轉倉
+# 與 Scenario 3 Euphoria 分支的「開立全新 Bear Call Spread」判定一律封鎖 (末日
+# 流動性雜訊，不適合用於驅動新開倉/轉倉決策)；既有部位的雙軌停損監控不受影響。
+_HOLDING_DTE_FORCED_SETTLEMENT_THRESHOLD: int = 1  # dte <= 此值時，無論停損是否
+# 觸發，一律強制結算保護 (LIQUIDATE 100%，轉倉至同標的次月主力合約)，取代舊版
+# 「擴大停損空間 + 口數縮放」的漸進式風險平價機制。
+# 「次月主力合約」文案敘述用的效期窗口，沿用 opportunity_cost.py 既有
+# find_best_contract(..., 21, 45) 與 Covered Call 效期窗口的慣例。
+_FORCED_SETTLEMENT_ROLL_MIN_DTE: int = 21
+_FORCED_SETTLEMENT_ROLL_MAX_DTE: int = 45
+
+# --- Covered Call 權利金衰減停利 (covered_call_profit_lock.py) 具名常數 ---
+# 僅適用於既有的空頭 CALL 部位 (Covered Call)；空頭 PUT (CSP) 不在範圍內。
+# decay_pct = (entry_premium - current_premium) / entry_premium。
+_COVERED_CALL_PROFIT_LOCK_PARTIAL_DECAY_PCT: float = 0.50  # 達此衰減幅度局部停利
+_COVERED_CALL_PROFIT_LOCK_FULL_DECAY_PCT: float = 0.80  # 達此衰減幅度全額停利
+_COVERED_CALL_PROFIT_LOCK_PARTIAL_RATIO: float = 0.5  # 局部停利門檻的 BTC 比例
