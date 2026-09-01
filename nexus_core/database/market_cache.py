@@ -1,6 +1,9 @@
+import logging
 import sqlite3
 from typing import Optional, Dict, Any
 from database.connection import get_read_connection, execute_write
+
+logger = logging.getLogger(__name__)
 
 
 def save_market_cache(
@@ -51,7 +54,8 @@ def save_market_cache(
             ),
         )
         return True
-    except Exception:
+    except Exception as e:
+        logger.error(f"[{symbol}] save_market_cache 寫入失敗: {e}")
         return False
 
 

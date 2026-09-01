@@ -13,6 +13,13 @@ from market_time import ny_tz
 
 logger = logging.getLogger(__name__)
 
+# 6 小時：即使股價偏離度低於下方 2% 門檻、看似沒有重算必要，也要求 market_cache
+# 至少每 6 小時強制重新計算一次並寫回。2% 偏離度門檻本身沒有絕對時間上限——若標的
+# 長期在窄幅區間盤整，快取會被判定「有效」而永遠不觸發重算，updated_at 因此可能無限期
+# 凍結（且 is_stale 全程維持 0，看似乾淨、實際上早已過期）。這道 TTL 作為後盾，
+# 比照 services/market_data_service/caches.py 的 _EDGE_SNAPSHOT_MAX_AGE_SECONDS 設計精神。
+_MARKET_CACHE_MAX_AGE_SECONDS = 6 * 3600
+
 
 def _current_week_friday() -> date:
     """取得本週五日期。若今天已過週五（週六/週日）或今天是週五且已收盤（美東時間 16:00 後），則取下週五。
@@ -186,6 +193,9 @@ async def get_unified_max_pain(
 
             # 平滑快取防護（MIN_TTL=30秒強制冷卻）
             is_cooldown = False
+            # 絕對 TTL 後盾：偏離度門檻本身沒有時間上限，長期盤整標的需要靠這個
+            # 旗標強制過期，避免 market_cache 無限期凍結（見 _MARKET_CACHE_MAX_AGE_SECONDS）。
+            is_expired_by_ttl = False
             updated_str = cache_data.get("updated_at")
             if updated_str:
                 try:
@@ -195,11 +205,16 @@ async def get_unified_max_pain(
                     elapsed = (datetime.now(timezone.utc) - updated_dt).total_seconds()
                     if elapsed < 30.0:
                         is_cooldown = True
+                    if elapsed >= _MARKET_CACHE_MAX_AGE_SECONDS:
+                        is_expired_by_ttl = True
                 except Exception as ts_err:
                     logger.error(f"[{symbol}] 解析快取時間戳記失敗: {ts_err}")
 
-            # 統一對齊為 2% 價格偏離閥值
-            if is_cooldown or (is_mp_valid and deviation <= 0.02):
+            # 統一對齊為 2% 價格偏離閥值；即使冷卻中或偏離度合格，超過絕對 TTL
+            # 一律強制視為失效，確保至少每 _MARKET_CACHE_MAX_AGE_SECONDS 重算一次。
+            if not is_expired_by_ttl and (
+                is_cooldown or (is_mp_valid and deviation <= 0.02)
+            ):
                 is_cache_valid = True
 
     if is_cache_valid and cache_data:
@@ -298,11 +313,21 @@ async def get_unified_max_pain(
                     _trigger_background_cache_clear(symbol)
 
         # 6. 計算本週預期區間
-        em_context = await IVContext.get_expected_move(
-            symbol, quote=quote, iv_metrics=iv_metrics
-        )
-        em_lower = float(em_context.get("expected_move_lower") or 0.0)
-        em_upper = float(em_context.get("expected_move_upper") or 0.0)
+        # 這一步（尤其內部可能重新呼叫 get_quote）若拋出例外（例如標的已下市/更名，
+        # Finnhub symbol_lookup 判定不存在而觸發 SYMBOL_NOT_FOUND），絕不能讓整個
+        # _compute_and_persist() 中途中斷、跳過下方第 7 步的 save_market_cache()
+        # 寫回——那會讓 market_cache.updated_at 永久凍結在舊時間戳記且無法自癒。
+        try:
+            em_context = await IVContext.get_expected_move(
+                symbol, quote=quote, iv_metrics=iv_metrics
+            )
+            em_lower = float(em_context.get("expected_move_lower") or 0.0)
+            em_upper = float(em_context.get("expected_move_upper") or 0.0)
+        except Exception as em_err:
+            logger.warning(f"[{symbol}] 計算本週預期區間失敗: {em_err}")
+            em_lower = float((cache_data or {}).get("expected_move_lower") or 0.0)
+            em_upper = float((cache_data or {}).get("expected_move_upper") or 0.0)
+            is_stale = 1
 
         # 7. 寫回 SQLite 快取
         await asyncio.to_thread(

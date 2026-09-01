@@ -46,7 +46,7 @@ class RadarDataMixin:
         from database.market_cache import get_market_cache
         from database.squeeze_cache import get_squeeze_cache
         from database.cache import get_kv_cache, get_kv_cache_with_age
-        from datetime import datetime
+        from datetime import datetime, timezone
 
         quote = await market_data_service.get_quote(sym)
         price = quote.get("c", 0.0) if quote else 0.0
@@ -55,6 +55,52 @@ class RadarDataMixin:
         radar_cache = get_kv_cache(f"radar_terminal_{sym.upper()}") or {}
         market_cache = get_market_cache(sym) or {}
         squeeze_cache = get_squeeze_cache(sym)
+
+        # Market Cache（Max Pain / 預期區間）SWR 自癒檢查：快取缺失、標記
+        # is_stale，或 updated_at 已超過絕對 TTL（見 max_pain.py 的
+        # _MARKET_CACHE_MAX_AGE_SECONDS）都視為過期，觸發背景重算並寫回，
+        # 期間仍先用資料庫裡的舊值（若有）即時回應，比照下方 UOA / Squeeze
+        # 既有的自癒模式，重用既有的 _async_revalidate_market_cache()。
+        market_cache_is_stale = True
+        if market_cache:
+            if market_cache.get("is_stale", 0):
+                market_cache_is_stale = True
+            else:
+                updated_str = market_cache.get("updated_at")
+                market_cache_is_stale = True
+                if updated_str:
+                    try:
+                        from market_analysis.sentiment.max_pain import (
+                            _MARKET_CACHE_MAX_AGE_SECONDS,
+                        )
+
+                        updated_dt = datetime.strptime(
+                            updated_str, "%Y-%m-%d %H:%M:%S"
+                        ).replace(tzinfo=timezone.utc)
+                        age_seconds = (
+                            datetime.now(timezone.utc) - updated_dt
+                        ).total_seconds()
+                        market_cache_is_stale = (
+                            age_seconds >= _MARKET_CACHE_MAX_AGE_SECONDS
+                        )
+                    except Exception as ts_err:
+                        logger.warning(
+                            f"[{sym}] 解析 market_cache 時間戳記失敗: {ts_err}"
+                        )
+
+        if market_cache_is_stale:
+            mc_key = f"mc_{sym.upper()}"
+            if mc_key not in _active_swr_tasks:
+                _active_swr_tasks.add(mc_key)
+
+                async def _revalidate_mc(s: str, p: float, k: str) -> None:
+                    try:
+                        async with _SWR_REVALIDATE_SEM:
+                            await self._async_revalidate_market_cache(s, p)
+                    finally:
+                        _active_swr_tasks.discard(k)
+
+                asyncio.create_task(_revalidate_mc(sym, price, mc_key))
         gex_cached = get_kv_cache(f"gex_metrics_{sym.upper()}") or {}
         gex_data = gex_cached.get("data", {}) if isinstance(gex_cached, dict) else {}
         # Fast path 讀取 gex_metrics_{sym} 為未經 fetch_symbol_gex_metrics() 的原始

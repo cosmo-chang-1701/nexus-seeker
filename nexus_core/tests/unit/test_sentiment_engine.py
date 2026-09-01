@@ -944,3 +944,105 @@ async def test_get_unified_max_pain_cache_hit_carries_updated_at() -> None:
     assert result["max_pain"] == 100.0
     assert result["updated_at"] is not None
     assert isinstance(result["updated_at"], str)
+
+
+@pytest.mark.asyncio
+async def test_get_unified_max_pain_writes_back_when_expected_move_fails() -> None:
+    """第 6 步（計算本週預期區間 IVContext.get_expected_move）例外不應阻斷第 7 步
+    的 save_market_cache 寫回，否則 market_cache.updated_at 會永久凍結在舊時間
+    戳記——這正是導致雷達終端某標的「121 小時未更新」的根因。修復後即使第 6 步
+    失敗，也應強制標記 is_stale 並仍完成寫回。"""
+    from market_analysis.sentiment.max_pain import get_unified_max_pain
+
+    with patch(
+        "services.market_data_service.get_quote",
+        new_callable=AsyncMock,
+        return_value={"c": 100.0},
+    ), patch("database.get_market_cache", return_value=None), patch(
+        "market_analysis.sentiment.max_pain.fetch_and_calculate_iv_metrics",
+        new_callable=AsyncMock,
+        return_value=MagicMock(expected_move_weekly=5.0),
+    ), patch(
+        "market_analysis.sentiment.max_pain._calculate_max_pain_raw",
+        new_callable=AsyncMock,
+        return_value={
+            "symbol": "AAPL",
+            "expiry": MOCK_EXPIRY,
+            "max_pain": 100.0,
+            "calculation_mode": "OI",
+            "is_degraded": 0,
+            "circuit_breaker_triggered": 0,
+        },
+    ), patch(
+        "market_analysis.sentiment.max_pain.IVContext.get_expected_move",
+        new_callable=AsyncMock,
+        side_effect=Exception("SYMBOL_NOT_FOUND"),
+    ), patch("database.save_market_cache") as mock_save:
+        result = await get_unified_max_pain("AAPL", force_refresh=True)
+
+    mock_save.assert_called_once()
+    assert result["is_stale"] is True
+    assert result["max_pain"] == 100.0
+
+
+@pytest.mark.asyncio
+async def test_get_unified_max_pain_ttl_forces_recompute_even_without_price_deviation() -> (
+    None
+):
+    """即使股價完全沒有偏離 reference_spot_price（0% 偏離度，遠低於 2% 門檻），
+    market_cache 一旦超過絕對 TTL（_MARKET_CACHE_MAX_AGE_SECONDS）仍應強制重新
+    計算並寫回，避免長期盤整標的的 market_cache 無限期凍結（is_stale 全程維持 0
+    卻已過期多日的結構性缺口）。"""
+    from datetime import datetime, timedelta, timezone
+    from database.connection import execute_write
+    from database.market_cache import save_market_cache
+    from market_analysis.sentiment.max_pain import get_unified_max_pain
+
+    assert save_market_cache(
+        symbol="MPTTL",
+        max_pain=100.0,
+        expected_move_lower=95.0,
+        expected_move_upper=105.0,
+        reference_spot_price=100.0,
+        is_stale=0,
+        calculation_mode="OI",
+        is_degraded=0,
+        circuit_breaker_triggered=0,
+        expiry="WEEKLY",
+    )
+
+    stale_ts = (datetime.now(timezone.utc) - timedelta(hours=7)).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    execute_write(
+        "UPDATE market_cache SET updated_at = ? WHERE symbol = ? AND expiry = ?",
+        (stale_ts, "MPTTL", "WEEKLY"),
+    )
+
+    with patch(
+        "services.market_data_service.get_quote",
+        new_callable=AsyncMock,
+        return_value={"c": 100.0},
+    ), patch(
+        "market_analysis.sentiment.max_pain.fetch_and_calculate_iv_metrics",
+        new_callable=AsyncMock,
+        return_value=MagicMock(expected_move_weekly=5.0),
+    ), patch(
+        "market_analysis.sentiment.max_pain._calculate_max_pain_raw",
+        new_callable=AsyncMock,
+        return_value={
+            "symbol": "MPTTL",
+            "expiry": "WEEKLY",
+            "max_pain": 100.0,
+            "calculation_mode": "OI",
+            "is_degraded": 0,
+            "circuit_breaker_triggered": 0,
+        },
+    ) as mock_calc, patch(
+        "market_analysis.sentiment.max_pain.IVContext.get_expected_move",
+        new_callable=AsyncMock,
+        return_value={"expected_move_lower": 95.0, "expected_move_upper": 105.0},
+    ):
+        await get_unified_max_pain("MPTTL", expiry="WEEKLY")
+
+    mock_calc.assert_called_once()
