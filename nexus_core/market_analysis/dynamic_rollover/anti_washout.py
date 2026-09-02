@@ -298,8 +298,17 @@ class _AntiWashoutMixin:
         # 現價貫穿即立即觸發，無視 15m 實體收盤等待 (SPOT 常態停損仍維持
         # 15m 收盤確認，僅此極端檔位額外賦予 SPOT 即時熔斷能力；OPTIONS
         # 本已有即時熔斷，此檔位對其而言是純粹的向下相容 backstop)。優先權
-        # 高於 is_options_fast_exit/is_15m_close_broken，僅次於獲利了結。
-        is_extreme_tick_breach = (
+        # 高於 is_options_fast_exit/is_15m_close_broken，僅次於獲利了結——
+        # `not is_take_profit` 守衛是這個「僅次於」的必要條件，而非裝飾：
+        # 若省略，即使 is_take_profit 分支才是實際決定 final_action/敘事的
+        # 分支，這裡仍會回傳原始的價格穿透判定，導致下游 (呼叫端組裝
+        # extreme_breach_detail_block、rollover_embeds.py 的立即人工執行紅色
+        # 急迫樣式覆蓋) 誤把一則平靜的「🎯 獲利解鎖達成」通知，套上「🆘 立即
+        # 人工執行」的緊急標題與極端熔斷詳情欄位——兩者敘事互相矛盾。真實
+        # 案例：TSLA 現價同時站上 Call Wall (獲利解鎖) 且跌破以 GEX Support
+        # Wall 算出的極端熔斷線，過去在此處會回傳 True，讓 embed 呈現「獲利
+        # 了結」內文配「立即人工執行」急迫標題的錯亂訊息。
+        is_extreme_tick_breach = not is_take_profit and (
             spot < extreme_stop_loss if (extreme_stop_loss > 0 and spot > 0) else False
         )
 

@@ -719,6 +719,45 @@ async def test_generate_rule_based_rebalance_report_extreme_breach_detail_block(
 
 
 @pytest.mark.asyncio
+async def test_generate_rule_based_rebalance_report_take_profit_suppresses_extreme_breach_flag(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """回歸鎖定 (真實數據案例，TSLA)：is_take_profit 分支的優先權高於軌道二
+    極端瞬時停損 (見 _apply_decision_matrix 註解「僅次於獲利了結」)，但過去
+    is_extreme_tick_breach 這個外部回傳旗標是在分支判斷之前就無條件算好的
+    原始價格穿透檢查，不論最終走哪個分支都會原樣回傳。這導致下游組裝的
+    Discord embed 出現敘事矛盾：內文是平靜的「🎯 獲利解鎖達成」，標題卻被
+    is_extreme_tick_breach=True 觸發成 rollover_embeds.py 的「🆘 立即人工
+    執行」紅色最高急迫樣式，兩者互相矛盾。修正後：當 is_take_profit=True
+    時，即使原始價格條件仍然滿足穿透極端熔斷線，is_extreme_tick_breach 與
+    extreme_breach_detail_block 都必須是「未觸發」狀態，final_action 與
+    system_conflict_note 則仍遵循 is_take_profit 優先權不變。"""
+    metrics = {
+        "spot_price": 90.0,
+        "price_15m_close": 90.0,
+        "support_wall": 100.0,
+        "atr_15m": 2.0,  # extreme_stop_loss = 100 - 3.0*2 = 94.0，spot(90) < 94 本應觸發
+        "ivr": 25.0,
+        "sqz_mom": -1.0,
+    }
+    report = await engine._generate_rule_based_rebalance_report(
+        symbol="XYZ",
+        metrics=metrics,
+        requested_action="HOLD",
+        target="VOO",
+        asset_class="SPOT",
+        is_take_profit=True,
+        position_shares=100.0,
+        current_value=9000.0,
+    )
+    assert report["final_action"] == "LIQUIDATE"
+    assert report["is_extreme_tick_breach"] is False
+    assert report["extreme_breach_detail_block"] is None
+    assert "獲利解鎖達成" in report["markdown_report"]
+    assert "極端瞬時停損觸發" not in report["markdown_report"]
+
+
+@pytest.mark.asyncio
 @patch("market_analysis.dynamic_rollover.get_full_user_context")
 @patch(
     "market_analysis.dynamic_rollover.is_gamma_cliff_confirmed",
