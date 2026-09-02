@@ -154,3 +154,57 @@ _FORCED_SETTLEMENT_ROLL_MAX_DTE: int = 45
 _COVERED_CALL_PROFIT_LOCK_PARTIAL_DECAY_PCT: float = 0.50  # 達此衰減幅度局部停利
 _COVERED_CALL_PROFIT_LOCK_FULL_DECAY_PCT: float = 0.80  # 達此衰減幅度全額停利
 _COVERED_CALL_PROFIT_LOCK_PARTIAL_RATIO: float = 0.5  # 局部停利門檻的 BTC 比例
+
+# --- 邏輯 (4) 延伸：保證金防禦第三轉倉目的地 —— 反向ETF對照表 (inverse_hedge.py) ---
+# 個股直接映射清單：僅收錄使用者確認、具備官方單股反向ETF商品的標的，每檔標的視
+# 發行商實際推出的槓桿倍率收錄 "1x"/"2x" 其中一個或兩個 key。
+# ⚠️ 這類商品規模小、成交量薄，且發行商會不定期清算/下市/更名，本表僅為初始骨架，
+# 需使用者定期核實現行是否仍在市場交易、成交量/點差是否足夠再繼續使用。
+SINGLE_STOCK_INVERSE_MAP: dict[str, dict[str, str]] = {
+    "NVDA": {"1x": "NVDD", "2x": "NVD"},  # Direxion -1x / GraniteShares -2x
+    "TSLA": {"1x": "TSLS", "2x": "TSDD"},  # Direxion -1x / GraniteShares -2x
+    "AAPL": {"1x": "AAPD"},  # Direxion -1x（無已確認 -2x 商品）
+    "AMD": {"1x": "AMDD", "2x": "DAMD"},  # Direxion -1x / Defiance -2x
+    "TSM": {"1x": "TSMZ", "2x": "STSM"},  # Direxion -1x / Defiance -2x
+    "AMZN": {"1x": "AMZD"},  # Direxion -1x（無已確認 -2x 商品）
+    "AAOI": {"2x": "AAOZ"},  # Tradr -2x（無已確認 -1x 商品）
+}
+
+# 大盤指數ETF直接映射：供 CORE_DEFENSE_ETF_SYMBOLS 中的 QQQ/SPY/IWM/DIA 若因故被
+# 判定為 SATELLITE 持倉時使用（現行架構下極少見），亦作為下方產業分類與最終回退
+# 依據。皆為長期存在、流動性有長期驗證紀錄的商品，不分槓桿倍率層級（僅收錄一檔）。
+INDEX_INVERSE_MAP: dict[str, str] = {
+    "QQQ": "SQQQ",  # ProShares UltraPro Short QQQ (-3x)
+    "SPY": "SH",  # ProShares Short S&P500 (-1x)
+    "IWM": "SRTY",  # ProShares UltraPro Short Russell2000 (-3x)
+    "DIA": "SDOW",  # ProShares UltraPro Short Dow30 (-3x)
+}
+
+# 產業分類反向ETF：與 market_analysis.risk_engine.SECTOR_BENCHMARK_MAP 的產業 ETF
+# 對應，供未列入 SINGLE_STOCK_INVERSE_MAP 的個股依產業分類回退。僅收錄長期存在、
+# 流動性有長期驗證紀錄的商品；SECTOR_BENCHMARK_MAP 涵蓋但此表未收錄的產業
+# (XLV/XLY/XLI) 代表尚無足夠信心確認的反向商品，一律回退至 INDEX_INVERSE_MAP["SPY"]
+# (SH)，而非強行猜測代號。
+SECTOR_INVERSE_MAP: dict[str, str] = {
+    "SMH": "SOXS",  # Direxion 每日3倍反向半導體 ETF (-3x)
+    "XLK": "TECS",  # Direxion 每日3倍反向科技 ETF (-3x)
+    "XLF": "FAZ",  # Direxion 每日3倍反向金融 ETF (-3x)
+    "XLE": "ERY",  # Direxion 每日2倍反向能源 ETF (-2x)
+}
+
+# 個股槓桿倍率動態選擇門檻：is_structural_breakdown 與 is_whale_sto_block 「雙重
+# 確認」同時成立時，視為高信心度空頭情境，優先採用 "2x" 商品（若該標的有收錄）；
+# 僅單一條件成立時，採用槓桿較低的 "1x" 商品，降低槓桿反向ETP的波動耗損風險。
+_INVERSE_HEDGE_HIGH_CONVICTION_LEVERAGE_TIER: str = "2x"
+_INVERSE_HEDGE_DEFAULT_LEVERAGE_TIER: str = "1x"
+
+# 反向ETF現貨動能確認 (inverse_hedge.py::confirm_inverse_hedge_spot_momentum) 具名
+# 門檻：刻意不查詢選擇權鏈，僅用現貨技術面 (RSI + 短期均線 + 成交額流動性) 做最後
+# 一道確認，任何資料不足/例外一律 fail-closed 回傳 False，呼叫端退回既有 BOXX 行為。
+_INVERSE_HEDGE_HISTORY_PERIOD: str = "3mo"  # 取歷史日K的區間長度
+_INVERSE_HEDGE_MA_LOOKBACK: int = 10  # 短期均線回看天數
+_INVERSE_HEDGE_VOLUME_LOOKBACK_BARS: int = 20  # 平均成交額回看天數
+_INVERSE_HEDGE_RSI_BULLISH_THRESHOLD: float = 50.0  # RSI14 需高於此值視為動能偏多
+_INVERSE_HEDGE_MIN_ADV_USD: float = (
+    5_000_000.0  # 最低日均成交額門檻(美元)，避免推薦流動性過薄的反向ETF
+)

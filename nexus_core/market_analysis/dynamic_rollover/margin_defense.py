@@ -7,6 +7,11 @@ from ._shared import (
     resolve_current_value,
 )
 from .constants import CORE_DEFENSE_ETF_SYMBOLS
+from .inverse_hedge import (
+    confirm_inverse_hedge_spot_momentum,
+    get_inverse_symbol,
+    select_inverse_leverage_tier,
+)
 from .models import RolloverInstruction, RolloverScenario
 
 
@@ -46,12 +51,16 @@ class _MarginDefenseMixin:
         asset_class: str,
         call_wall: float = 0.0,
         hvn: float = 0.0,
-    ) -> bool:
+    ) -> Tuple[bool, bool, bool]:
         """
         判定該持倉是否已「結構性無勝率」(結構性破位 或 主力空頭封殺)。
         重用與 check_satellite_rebalancing 共用的 _compute_structural_breakdown_signals，
         不發明新的量化門檻，供 evaluate_margin_defense 在宏觀紅線觸發時逐一檢查每檔
         SATELLITE 持倉。
+
+        回傳 (is_no_edge, is_structural_breakdown, is_whale_sto_block)：後兩者額外
+        暴露給呼叫端，供反向ETF槓桿層級選擇 (select_inverse_leverage_tier) 判斷此次
+        是單一條件觸發還是「雙重確認」的高信心度空頭情境。
         """
         (
             is_structural_breakdown,
@@ -74,7 +83,8 @@ class _MarginDefenseMixin:
             call_wall=call_wall,
             hvn=hvn,
         )
-        return is_structural_breakdown or is_whale_sto_block
+        is_no_edge = is_structural_breakdown or is_whale_sto_block
+        return is_no_edge, is_structural_breakdown, is_whale_sto_block
 
 
 async def evaluate_margin_defense_impl(
@@ -180,7 +190,11 @@ async def evaluate_margin_defense_impl(
         ):
             continue
 
-        is_no_edge = await engine._evaluate_structural_no_edge(
+        (
+            is_no_edge,
+            is_structural_breakdown,
+            is_whale_sto_block,
+        ) = await engine._evaluate_structural_no_edge(
             symbol=symbol,
             spot=float(asset.get("spot_price", 0.0)),
             put_wall=float(asset.get("put_wall", 0.0)),
@@ -215,13 +229,43 @@ async def evaluate_margin_defense_impl(
                 "強制平倉釋放資金保留為現金儲備，立即補足保證金缺口以消除追繳風險。"
             )
         else:
-            target_asset = "BOXX"
-            buy_label = "轉入 BOXX（鎖定無風險利息）"
-            strategy_desc = f"{sell_action} 100% 轉倉 BOXX (鎖定無風險利息)"
-            dest_reason = (
-                "大盤宏觀風控紅線亮起，VOO 亦會同向下跌無法提供防禦，"
-                f"強制 {sell_action} 100% 部位轉倉至 BOXX 鎖定無風險利息。"
+            inverse_symbol = get_inverse_symbol(
+                symbol,
+                select_inverse_leverage_tier(
+                    is_structural_breakdown, is_whale_sto_block
+                ),
             )
+            use_inverse_hedge = False
+            if inverse_symbol:
+                try:
+                    use_inverse_hedge = await confirm_inverse_hedge_spot_momentum(
+                        inverse_symbol
+                    )
+                except Exception as e:
+                    logger.error(f"反向ETF現貨動能確認發生例外 ({inverse_symbol}): {e}")
+                    use_inverse_hedge = False
+
+            if use_inverse_hedge and inverse_symbol:
+                target_asset = inverse_symbol
+                buy_label = f"轉入反向ETF {inverse_symbol}（把握方向性對沖機會）"
+                strategy_desc = (
+                    f"{sell_action} 100% 轉倉至反向ETF {inverse_symbol} "
+                    "(系統性風險+結構性破位雙重確認)"
+                )
+                dest_reason = (
+                    "大盤宏觀風控紅線亮起且個股結構性破位已確認，"
+                    f"反向ETF {inverse_symbol} 自身現貨動能同步確認向上，"
+                    f"強制 {sell_action} 100% 部位轉倉至 {inverse_symbol} "
+                    "把握方向性對沖獲利機會。"
+                )
+            else:
+                target_asset = "BOXX"
+                buy_label = "轉入 BOXX（鎖定無風險利息）"
+                strategy_desc = f"{sell_action} 100% 轉倉 BOXX (鎖定無風險利息)"
+                dest_reason = (
+                    "大盤宏觀風控紅線亮起，VOO 亦會同向下跌無法提供防禦，"
+                    f"強制 {sell_action} 100% 部位轉倉至 BOXX 鎖定無風險利息。"
+                )
 
         reason_text = (
             f"🚨 **槓桿與保證金防禦 (Leverage & Margin Defense)**\n"

@@ -2480,6 +2480,11 @@ async def test_evaluate_margin_defense_critical_regime_no_margin_pressure(
 
 @pytest.mark.asyncio
 @patch(
+    "market_analysis.dynamic_rollover.margin_defense.confirm_inverse_hedge_spot_momentum",
+    new_callable=AsyncMock,
+    return_value=False,
+)
+@patch(
     "market_analysis.index_microstructure.get_market_regime",
     new_callable=AsyncMock,
     return_value="SHORT_GAMMA_CRITICAL",
@@ -2490,6 +2495,7 @@ async def test_evaluate_margin_defense_triggers_boxx_for_no_edge_holding(
     mock_ctx: MagicMock,
     mock_orders: MagicMock,
     mock_regime: AsyncMock,
+    mock_inverse_confirm: AsyncMock,
     engine: DynamicRolloverEngine,
 ) -> None:
     mock_ctx.return_value = MagicMock(cash_reserve=1000.0)  # 緩衝很小
@@ -2506,6 +2512,7 @@ async def test_evaluate_margin_defense_triggers_boxx_for_no_edge_holding(
         },
     ]
     # SATELLITE 總市值 5000 > 緩衝 1000 -> 保證金壓力觸發
+    # 反向ETF現貨動能未確認 (mock 回傳 False) -> 應退回既有 BOXX 行為
     result = await engine.evaluate_margin_defense(1, portfolio)
     assert len(result) == 1
     assert result[0]["symbol"] == "NVDA"
@@ -2516,6 +2523,140 @@ async def test_evaluate_margin_defense_triggers_boxx_for_no_edge_holding(
     assert "BOXX" in (result[0]["buy_action_label"] or "")
     assert result[0]["is_manual_override_required"] is True
     assert result[0]["scenario"] == "MARGIN_DEFENSE"
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.dynamic_rollover.margin_defense.confirm_inverse_hedge_spot_momentum",
+    new_callable=AsyncMock,
+    return_value=True,
+)
+@patch(
+    "market_analysis.index_microstructure.get_market_regime",
+    new_callable=AsyncMock,
+    return_value="SHORT_GAMMA_CRITICAL",
+)
+@patch("database.orders.get_user_active_orders", return_value=[])
+@patch("market_analysis.dynamic_rollover.get_full_user_context")
+async def test_evaluate_margin_defense_routes_to_1x_inverse_etf_on_single_confirmation(
+    mock_ctx: MagicMock,
+    mock_orders: MagicMock,
+    mock_regime: AsyncMock,
+    mock_inverse_confirm: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """僅單一條件觸發 (只有主力空頭封殺，結構性破位未觸發) -> 採用槓桿較低的 1x 商品。"""
+    mock_ctx.return_value = MagicMock(cash_reserve=1000.0)
+
+    portfolio = [
+        {
+            "symbol": "NVDA",
+            "asset_class": "SATELLITE",
+            "current_value": 5000.0,
+            "quantity": 10.0,
+            "instrument_type": "SPOT",
+            "sqz_mom": -5.0,
+            "skew": -0.5,  # 觸發主力空頭封殺
+            "put_wall": 0.0,
+            "gamma_flip": 0.0,  # 結構性破位條件不觸發 (無有效 anchor_base)
+        },
+    ]
+    result = await engine.evaluate_margin_defense(1, portfolio)
+    assert len(result) == 1
+    assert result[0]["target_core"] == "NVDD"
+    assert "NVDD" in (result[0]["buy_action_label"] or "")
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.dynamic_rollover.margin_defense.confirm_inverse_hedge_spot_momentum",
+    new_callable=AsyncMock,
+    return_value=True,
+)
+@patch(
+    "market_analysis.index_microstructure.get_market_regime",
+    new_callable=AsyncMock,
+    return_value="SHORT_GAMMA_CRITICAL",
+)
+@patch("database.orders.get_user_active_orders", return_value=[])
+@patch("market_analysis.dynamic_rollover.get_full_user_context")
+async def test_evaluate_margin_defense_routes_to_2x_inverse_etf_on_double_confirmation(
+    mock_ctx: MagicMock,
+    mock_orders: MagicMock,
+    mock_regime: AsyncMock,
+    mock_inverse_confirm: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """結構性破位 + 主力空頭封殺「雙重確認」-> 高信心度空頭情境，採用槓桿較高的 2x 商品。"""
+    mock_ctx.return_value = MagicMock(cash_reserve=1000.0)
+
+    portfolio = [
+        {
+            "symbol": "NVDA",
+            "asset_class": "SATELLITE",
+            "current_value": 5000.0,
+            "quantity": 10.0,
+            "instrument_type": "SPOT",
+            "spot_price": 90.0,
+            "put_wall": 110.0,  # 現價跌破 put_wall -> 結構性破位 (OPTIONS/SPOT 皆觸發)
+            "gamma_flip": 110.0,
+            "atr_14": 2.0,
+            "price_15m_close": 90.0,
+            "sqz_mom": -5.0,
+            "skew": -0.5,  # 同時觸發主力空頭封殺
+        },
+    ]
+    with patch(
+        "market_analysis.dynamic_rollover.is_gamma_cliff_confirmed",
+        new_callable=AsyncMock,
+        return_value=True,
+    ):
+        result = await engine.evaluate_margin_defense(1, portfolio)
+    assert len(result) == 1
+    assert result[0]["target_core"] == "NVD"
+    assert "NVD" in (result[0]["buy_action_label"] or "")
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.dynamic_rollover.margin_defense.confirm_inverse_hedge_spot_momentum",
+    new_callable=AsyncMock,
+    return_value=True,
+)
+@patch(
+    "market_analysis.index_microstructure.get_market_regime",
+    new_callable=AsyncMock,
+    return_value="SHORT_GAMMA_CRITICAL",
+)
+@patch("database.orders.get_user_active_orders", return_value=[])
+@patch("market_analysis.dynamic_rollover.get_full_user_context")
+async def test_evaluate_margin_defense_falls_back_to_sector_inverse_etf(
+    mock_ctx: MagicMock,
+    mock_orders: MagicMock,
+    mock_regime: AsyncMock,
+    mock_inverse_confirm: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """未收錄於 SINGLE_STOCK_INVERSE_MAP 的個股 (如 MU) 應依產業分類
+    (risk_engine.SECTOR_BENCHMARK_MAP: MU -> SMH) 回退至產業反向ETF (SOXS)。"""
+    mock_ctx.return_value = MagicMock(cash_reserve=1000.0)
+
+    portfolio = [
+        {
+            "symbol": "MU",
+            "asset_class": "SATELLITE",
+            "current_value": 5000.0,
+            "quantity": 10.0,
+            "instrument_type": "SPOT",
+            "sqz_mom": -5.0,
+            "skew": -0.5,
+            "put_wall": 0.0,
+            "gamma_flip": 0.0,
+        },
+    ]
+    result = await engine.evaluate_margin_defense(1, portfolio)
+    assert len(result) == 1
+    assert result[0]["target_core"] == "SOXS"
 
 
 @pytest.mark.asyncio
@@ -2554,6 +2695,11 @@ async def test_evaluate_margin_defense_holding_with_edge_left_untouched(
 
 @pytest.mark.asyncio
 @patch(
+    "market_analysis.dynamic_rollover.margin_defense.confirm_inverse_hedge_spot_momentum",
+    new_callable=AsyncMock,
+    return_value=False,
+)
+@patch(
     "market_analysis.index_microstructure.get_market_regime",
     new_callable=AsyncMock,
     return_value="SHORT_GAMMA_CRITICAL",
@@ -2564,6 +2710,7 @@ async def test_evaluate_margin_defense_checks_every_satellite_holding(
     mock_ctx: MagicMock,
     mock_orders: MagicMock,
     mock_regime: AsyncMock,
+    mock_inverse_confirm: AsyncMock,
     engine: DynamicRolloverEngine,
 ) -> None:
     mock_ctx.return_value = MagicMock(cash_reserve=1000.0)
@@ -3476,6 +3623,11 @@ async def test_evaluate_margin_defense_warns_on_gtc_buy_conflict(
 
 @pytest.mark.asyncio
 @patch(
+    "market_analysis.dynamic_rollover.margin_defense.confirm_inverse_hedge_spot_momentum",
+    new_callable=AsyncMock,
+    return_value=False,
+)
+@patch(
     "market_analysis.index_microstructure.get_market_regime",
     new_callable=AsyncMock,
     return_value="SHORT_GAMMA_CRITICAL",
@@ -3484,6 +3636,7 @@ async def test_evaluate_margin_defense_warns_on_gtc_buy_conflict(
 async def test_evaluate_margin_defense_nets_against_existing_sell_order(
     mock_ctx: MagicMock,
     mock_regime: AsyncMock,
+    mock_inverse_confirm: AsyncMock,
     engine: DynamicRolloverEngine,
 ) -> None:
     """#5/#6: 既有 SELL 委託單已足額覆蓋建議賣出量時，降級為 HOLD 而非疊加下單"""
@@ -3734,6 +3887,11 @@ async def test_check_satellite_rebalancing_liquidate_no_warning_when_bid_ask_abs
 
 @pytest.mark.asyncio
 @patch(
+    "market_analysis.dynamic_rollover.margin_defense.confirm_inverse_hedge_spot_momentum",
+    new_callable=AsyncMock,
+    return_value=False,
+)
+@patch(
     "market_analysis.index_microstructure.get_market_regime",
     new_callable=AsyncMock,
     return_value="SHORT_GAMMA_CRITICAL",
@@ -3744,6 +3902,7 @@ async def test_evaluate_margin_defense_warns_on_illiquid_option_spread(
     mock_ctx: MagicMock,
     mock_orders: MagicMock,
     mock_regime: AsyncMock,
+    mock_inverse_confirm: AsyncMock,
     engine: DynamicRolloverEngine,
 ) -> None:
     """#7: 保證金防禦強制清倉的期權部位若點差過寬，附加流動性警告文字。"""
