@@ -408,6 +408,35 @@ async def test_evaluate_fundamental_thesis_with_form_type_8k(
 @patch("market_analysis.dynamic_rollover.is_memory_safe", return_value=True)
 @patch("market_analysis.dynamic_rollover.client")
 @patch("database.market_cache.save_fundamental_cache")
+async def test_evaluate_fundamental_thesis_with_form_type_10k(
+    mock_save_cache: MagicMock,
+    mock_client: MagicMock,
+    mock_mem: MagicMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    _mock_llm_client_for_thesis(mock_client)
+
+    await engine.evaluate_fundamental_thesis(
+        "AMD",
+        "some text",
+        form_type="10-K",
+        sections={"quarterly_financials": "FY2025 rev $50B, up 20% YoY"},
+    )
+
+    call_kwargs = mock_client.beta.chat.completions.parse.call_args.kwargs
+    system_prompt = call_kwargs["messages"][0]["content"]
+    user_prompt = call_kwargs["messages"][1]["content"]
+    assert "Annual Report (10-K)" in system_prompt
+    assert "board-reviewed" in system_prompt
+    assert "Structured Filing Appendix" in user_prompt
+    assert "Quarterly Financial Results" in user_prompt
+    assert "FY2025 rev $50B, up 20% YoY" in user_prompt
+
+
+@pytest.mark.asyncio
+@patch("market_analysis.dynamic_rollover.is_memory_safe", return_value=True)
+@patch("market_analysis.dynamic_rollover.client")
+@patch("database.market_cache.save_fundamental_cache")
 async def test_evaluate_fundamental_thesis_empty_sections_no_appendix(
     mock_save_cache: MagicMock,
     mock_client: MagicMock,
@@ -687,6 +716,75 @@ async def test_generate_rule_based_rebalance_report_extreme_breach_detail_block(
     assert "$100.00" in block  # 做市商底牆 (anchor_base)
     assert "負 Gamma 踩踏區間" in block
     assert "立即手動至券商終端" in block
+
+
+@pytest.mark.asyncio
+@patch("market_analysis.dynamic_rollover.get_full_user_context")
+@patch(
+    "market_analysis.dynamic_rollover.is_gamma_cliff_confirmed",
+    new_callable=AsyncMock,
+    return_value=False,
+)
+async def test_check_satellite_rebalancing_extreme_tick_breach_threads_through_public_entry_point(
+    mock_cliff: AsyncMock,
+    mock_get_user: MagicMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """極端瞬時停損欄位 (is_extreme_tick_breach/extreme_stop_loss/
+    extreme_breach_detail_block) 必須一路串到公開入口
+    check_satellite_rebalancing() 的最終輸出，而非僅在私有 helper
+    (_generate_rule_based_rebalance_report) 或 embed 渲染層被個別驗證過。
+    沿用 test_generate_rule_based_rebalance_report_extreme_breach_detail_block
+    的數值組合：support_wall/put_wall=100.0、atr_15m=2.0
+    → extreme_stop_loss = 100 - 3.0*2 = 94.0，spot(90) < 94 觸發。
+
+    is_gamma_cliff_confirmed 固定回傳 False，避免常規結構性破位判定
+    (15m 收盤確認路徑) 搶先把 action 判成 LIQUIDATE，確保這裡真正驗證的
+    是「軌道二極端瞬時停損」這條獨立的優先分支，而非常規破位路徑的副作用。
+    """
+    mock_get_user.return_value = MagicMock(can_trade_spreads=False)
+    portfolio = [
+        {
+            "symbol": "XYZ",
+            "asset_class": "SATELLITE",
+            "quantity": 100.0,
+            "current_value": 4500.0,
+            "target_allocation_pct": 0.20,
+            "max_allocation_pct": 0.30,
+            "spot_price": 90.0,
+            "price_15m_close": 90.0,
+            "put_wall": 100.0,
+            "call_wall": 0.0,
+            "gamma_flip": 0.0,
+            "hvn": 0.0,
+            "atr_14": 0.0,
+            "atr_15m": 2.0,
+            "ivr": 25.0,
+            "sqz_mom": -1.0,
+            "skew": 0.0,
+            "max_pain": 0.0,
+            "is_uoa_sweep": False,
+            "gex_profile_data": {},
+        },
+    ]
+
+    instructions = await engine.check_satellite_rebalancing(1, portfolio, 10000.0)
+
+    assert len(instructions) == 1
+    ins = instructions[0]
+    assert ins["symbol"] == "XYZ"
+    # 極端瞬時停損在決策矩陣中優先權高於常規「REDUCE」比例控管判定，
+    # 故最終 action 為 100% LIQUIDATE，而非原始超額配置觸發的 REDUCE。
+    assert ins["action"] == "LIQUIDATE"
+    assert ins["sell_ratio"] == 1.0
+    assert ins["is_extreme_tick_breach"] is True
+    assert ins["extreme_stop_loss"] == 94.0
+    block = ins["extreme_breach_detail_block"]
+    assert block is not None
+    assert "XYZ (SPOT)" in block
+    assert "$90.00" in block
+    assert "$94.00" in block
+    assert "$100.00" in block
 
 
 @pytest.mark.asyncio
@@ -3410,6 +3508,56 @@ def test_resolve_canonical_anchor_base_topology_correction() -> None:
         )
         == 190.0
     )
+
+
+def test_resolve_canonical_anchor_base_priority_ladder_degrades_one_level_at_a_time() -> (
+    None
+):
+    """完整優先序階梯 support_wall > put_wall > gamma_flip > hvn > spot，
+    逐層拿掉最高優先權輸入，驗證每一層都確實輪到接手。put_wall 刻意保持
+    小於 call_wall，避開 test_resolve_canonical_anchor_base_topology_correction
+    已覆蓋的拓撲修正分支，確保這是純優先序階梯的獨立驗證。"""
+    inputs = {
+        "support_wall": 100.0,
+        "put_wall": 90.0,
+        "call_wall": 110.0,
+        "gamma_flip": 80.0,
+        "hvn": 70.0,
+        "spot": 60.0,
+    }
+
+    assert _resolve_canonical_anchor_base(**inputs) == 100.0  # support_wall 勝出
+
+    assert (
+        _resolve_canonical_anchor_base(**{**inputs, "support_wall": 0.0}) == 90.0
+    )  # put_wall 勝出
+
+    assert (
+        _resolve_canonical_anchor_base(
+            **{**inputs, "support_wall": 0.0, "put_wall": 0.0}
+        )
+        == 80.0
+    )  # gamma_flip 勝出
+
+    assert (
+        _resolve_canonical_anchor_base(
+            **{**inputs, "support_wall": 0.0, "put_wall": 0.0, "gamma_flip": 0.0}
+        )
+        == 70.0
+    )  # hvn 勝出
+
+    assert (
+        _resolve_canonical_anchor_base(
+            **{
+                **inputs,
+                "support_wall": 0.0,
+                "put_wall": 0.0,
+                "gamma_flip": 0.0,
+                "hvn": 0.0,
+            }
+        )
+        == 60.0
+    )  # spot 最終保底
 
 
 def test_correct_wall_topology_uses_gamma_flip_fallback_consistently_with_structural_signals(

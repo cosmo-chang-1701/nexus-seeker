@@ -828,3 +828,752 @@ async def test_monitor_real_portfolio_task_dispatches_covered_call_overlay_embed
     )
     mock_rotation_embed.assert_not_called()
     bot.queue_dm.assert_awaited_once_with(1, embed=overlay_embed)
+
+
+def _mock_all_rollover_scenarios(cog: PortfolioMonitorCog) -> None:
+    """所有測試共用：預設全部六大情境 + Covered Call Profit Lock 回傳空結果，
+    測試僅需覆寫關心的特定情境 mock，避免真實引擎邏輯在測試環境意外執行
+    (例如 evaluate_macro_top_escape_defense 的總經資料抓取)。"""
+    cog.rollover_engine.check_satellite_rebalancing = AsyncMock(  # type: ignore
+        return_value=[]
+    )
+    cog.rollover_engine.evaluate_opportunity_cost_for_satellites = AsyncMock(  # type: ignore
+        return_value=([], None)
+    )
+    cog.rollover_engine.evaluate_core_deployment = AsyncMock(return_value=[])  # type: ignore
+    cog.rollover_engine.evaluate_covered_call_overlay = AsyncMock(  # type: ignore
+        return_value=[]
+    )
+    cog.rollover_engine.evaluate_margin_defense = AsyncMock(return_value=[])  # type: ignore
+    cog.rollover_engine.evaluate_macro_top_escape_defense = AsyncMock(  # type: ignore
+        return_value=[]
+    )
+    cog.rollover_engine.evaluate_covered_call_profit_lock = AsyncMock(  # type: ignore
+        return_value=[]
+    )
+
+
+@pytest.mark.asyncio
+async def test_monitor_real_portfolio_task_options_ingestion_gate_off_skips_option_trades() -> (
+    None
+):
+    """config.ENABLE_OPTIONS_ROLLOVER_INGESTION 為 False（預設值）時，
+    不應呼叫 get_all_trade_positions，且進入動態轉倉引擎的 portfolio_assets
+    不應包含任何 OPTIONS_CONTRACT 部位——僅現貨持倉應流入評估迴圈。"""
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+    bot.get_cog = MagicMock(return_value=None)
+
+    with patch("discord.ext.tasks.Loop.start"):
+        cog = PortfolioMonitorCog(bot)
+
+    cog.trading_service.audit_real_portfolio_risk = AsyncMock(return_value=[])  # type: ignore
+    _mock_all_rollover_scenarios(cog)
+    mock_check_satellite = AsyncMock(return_value=[])
+    cog.rollover_engine.check_satellite_rebalancing = mock_check_satellite  # type: ignore
+
+    holding = {
+        "id": 1,
+        "user_id": 1,
+        "symbol": "NVDA",
+        "metadata": "{}",
+        "quantity": 10.0,
+        "avg_cost": 200.0,
+    }
+
+    mock_get_trade_positions = MagicMock(
+        return_value=[
+            {
+                "user_id": 1,
+                "symbol": "AAPL",
+                "quantity": 1.0,
+                "opt_type": "call",
+                "expiry": "2026-01-16",
+                "strike": 150.0,
+            }
+        ]
+    )
+
+    with patch(
+        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
+    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
+        "database.holdings.get_all_holdings", return_value=[holding]
+    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
+        "market_analysis.trading_orchestration.recommend_covered_calls",
+        new_callable=AsyncMock,
+        return_value={"recommendations": []},
+    ), patch("config.ENABLE_OPTIONS_ROLLOVER_INGESTION", False), patch(
+        "database.portfolio.get_all_trade_positions", mock_get_trade_positions
+    ):
+        await cog.monitor_real_portfolio_task()
+
+    mock_get_trade_positions.assert_not_called()
+    mock_check_satellite.assert_awaited_once()
+    await_args = mock_check_satellite.await_args
+    assert await_args is not None
+    portfolio_assets = await_args.args[1]
+    assert all(a.get("instrument_type") != "OPTIONS_CONTRACT" for a in portfolio_assets)
+
+
+@pytest.mark.asyncio
+async def test_monitor_real_portfolio_task_options_ingestion_gate_on_splits_long_and_short_call_trades() -> (
+    None
+):
+    """config.ENABLE_OPTIONS_ROLLOVER_INGESTION 為 True 時，多頭期權部位
+    (quantity>0) 應併入 check_satellite_rebalancing 的 portfolio_assets，
+    空頭 CALL 部位 (quantity<0, opt_type=="call") 應併入
+    evaluate_covered_call_profit_lock 的 short_call_positions，空頭 PUT
+    則兩邊都不應出現。"""
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+    bot.get_cog = MagicMock(return_value=None)
+
+    with patch("discord.ext.tasks.Loop.start"):
+        cog = PortfolioMonitorCog(bot)
+
+    cog.trading_service.audit_real_portfolio_risk = AsyncMock(return_value=[])  # type: ignore
+    _mock_all_rollover_scenarios(cog)
+    mock_check_satellite = AsyncMock(return_value=[])
+    cog.rollover_engine.check_satellite_rebalancing = mock_check_satellite  # type: ignore
+    mock_profit_lock = AsyncMock(return_value=[])
+    cog.rollover_engine.evaluate_covered_call_profit_lock = mock_profit_lock  # type: ignore
+
+    holding = {
+        "id": 1,
+        "user_id": 1,
+        "symbol": "NVDA",
+        "metadata": "{}",
+        "quantity": 10.0,
+        "avg_cost": 200.0,
+    }
+
+    long_call = {
+        "user_id": 1,
+        "symbol": "AAPL",
+        "quantity": 1.0,
+        "opt_type": "call",
+        "expiry": "2026-01-16",
+        "strike": 150.0,
+        "entry_price": 5.0,
+    }
+    short_call = {
+        "user_id": 1,
+        "symbol": "VOO",
+        "quantity": -1.0,
+        "opt_type": "call",
+        "expiry": "2026-02-20",
+        "strike": 480.0,
+        "entry_price": 2.5,
+    }
+    short_put = {
+        "user_id": 1,
+        "symbol": "TSLA",
+        "quantity": -1.0,
+        "opt_type": "put",
+        "expiry": "2026-03-20",
+        "strike": 200.0,
+        "entry_price": 3.0,
+    }
+
+    with patch(
+        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
+    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
+        "database.holdings.get_all_holdings", return_value=[holding]
+    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
+        "market_analysis.trading_orchestration.recommend_covered_calls",
+        new_callable=AsyncMock,
+        return_value={"recommendations": []},
+    ), patch("config.ENABLE_OPTIONS_ROLLOVER_INGESTION", True), patch(
+        "database.portfolio.get_all_trade_positions",
+        return_value=[long_call, short_call, short_put],
+    ), patch(
+        "market_analysis.portfolio.get_option_chain_mid_iv",
+        new_callable=AsyncMock,
+        return_value=(4.5, 0.35, 4.4, 4.6),
+    ):
+        await cog.monitor_real_portfolio_task()
+
+    check_call_args = mock_check_satellite.await_args
+    assert check_call_args is not None
+    portfolio_assets = check_call_args.args[1]
+    option_symbols = {
+        a["symbol"]
+        for a in portfolio_assets
+        if a.get("instrument_type") == "OPTIONS_CONTRACT"
+    }
+    assert option_symbols == {"AAPL"}
+
+    profit_lock_call = mock_profit_lock.await_args
+    assert profit_lock_call is not None
+    short_call_positions = profit_lock_call.args[1]
+    assert len(short_call_positions) == 1
+    assert short_call_positions[0]["symbol"] == "VOO"
+
+
+@pytest.mark.asyncio
+async def test_monitor_real_portfolio_task_options_dry_run_suppresses_dm_but_logs_audit_trail() -> (
+    None
+):
+    """config.OPTIONS_ROLLOVER_DRY_RUN 為 True（預設值）時，instrument_type
+    =="OPTIONS" 的指令不應觸發 DM 推播，但 dedup key 與
+    database.log_rollover_instruction 審計軌跡仍應正常寫入——期權轉倉是
+    尚未經過生產流量驗證的新分支，dry-run 期間僅記錄不推播。"""
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+    bot.get_cog = MagicMock(return_value=None)
+
+    with patch("discord.ext.tasks.Loop.start"):
+        cog = PortfolioMonitorCog(bot)
+
+    cog.trading_service.audit_real_portfolio_risk = AsyncMock(return_value=[])  # type: ignore
+    _mock_all_rollover_scenarios(cog)
+
+    holding = {
+        "id": 1,
+        "user_id": 1,
+        "symbol": "NVDA",
+        "metadata": "{}",
+        "quantity": 10.0,
+        "avg_cost": 200.0,
+    }
+
+    options_instruction = {
+        "symbol": "NVDA",
+        "action": "LIQUIDATE",
+        "sell_ratio": 1.0,
+        "target_core": "VOO",
+        "reason": "test reason",
+        "scenario": "SATELLITE_REBALANCE",
+        "instrument_type": "OPTIONS",
+    }
+    cog.rollover_engine.check_satellite_rebalancing = AsyncMock(  # type: ignore
+        return_value=[options_instruction]
+    )
+
+    log_mock = AsyncMock()
+    save_kv_mock = AsyncMock()
+
+    with patch(
+        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
+    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
+        "database.holdings.get_all_holdings", return_value=[holding]
+    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
+        "market_analysis.trading_orchestration.recommend_covered_calls",
+        new_callable=AsyncMock,
+        return_value={"recommendations": []},
+    ), patch("database.is_notification_enabled", return_value=True), patch(
+        "database.get_kv_cache", return_value=None
+    ), patch("database.save_kv_cache", save_kv_mock), patch(
+        "database.log_rollover_instruction", log_mock
+    ), patch("config.OPTIONS_ROLLOVER_DRY_RUN", True):
+        await cog.monitor_real_portfolio_task()
+
+    bot.queue_dm.assert_not_called()
+    log_mock.assert_awaited_once()
+    log_call = log_mock.await_args
+    assert log_call is not None
+    assert log_call.kwargs["symbol"] == "NVDA"
+    assert log_call.kwargs["scenario"] == "SATELLITE_REBALANCE"
+    assert log_call.kwargs["action"] == "LIQUIDATE"
+    save_kv_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_monitor_real_portfolio_task_options_dry_run_off_sends_dm_for_options() -> (
+    None
+):
+    """config.OPTIONS_ROLLOVER_DRY_RUN 為 False 時，期權轉倉指令應正常推播
+    DM——證明 dry-run 開關雙向都有效，而非「期權轉倉恆被跳過」的假陽性。"""
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+    bot.get_cog = MagicMock(return_value=None)
+
+    with patch("discord.ext.tasks.Loop.start"):
+        cog = PortfolioMonitorCog(bot)
+
+    cog.trading_service.audit_real_portfolio_risk = AsyncMock(return_value=[])  # type: ignore
+    _mock_all_rollover_scenarios(cog)
+
+    holding = {
+        "id": 1,
+        "user_id": 1,
+        "symbol": "NVDA",
+        "metadata": "{}",
+        "quantity": 10.0,
+        "avg_cost": 200.0,
+    }
+
+    options_instruction = {
+        "symbol": "NVDA",
+        "action": "LIQUIDATE",
+        "sell_ratio": 1.0,
+        "target_core": "VOO",
+        "reason": "test reason",
+        "scenario": "SATELLITE_REBALANCE",
+        "instrument_type": "OPTIONS",
+    }
+    cog.rollover_engine.check_satellite_rebalancing = AsyncMock(  # type: ignore
+        return_value=[options_instruction]
+    )
+
+    with patch(
+        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
+    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
+        "database.holdings.get_all_holdings", return_value=[holding]
+    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
+        "market_analysis.trading_orchestration.recommend_covered_calls",
+        new_callable=AsyncMock,
+        return_value={"recommendations": []},
+    ), patch("database.is_notification_enabled", return_value=True), patch(
+        "database.get_kv_cache", return_value=None
+    ), patch("database.save_kv_cache", new_callable=AsyncMock), patch(
+        "database.log_rollover_instruction", new_callable=AsyncMock
+    ), patch("config.OPTIONS_ROLLOVER_DRY_RUN", False):
+        await cog.monitor_real_portfolio_task()
+
+    bot.queue_dm.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_monitor_real_portfolio_task_notif_key_routes_margin_defense_vs_default() -> (
+    None
+):
+    """MARGIN_DEFENSE 情境的通知開關應查詢 "defense_margin_call"
+    （帳戶生存等級警訊，獨立於例行轉倉靜音設定），其餘情境一律查詢
+    "defense_option_rollover"。"""
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+    bot.get_cog = MagicMock(return_value=None)
+
+    with patch("discord.ext.tasks.Loop.start"):
+        cog = PortfolioMonitorCog(bot)
+
+    cog.trading_service.audit_real_portfolio_risk = AsyncMock(return_value=[])  # type: ignore
+    _mock_all_rollover_scenarios(cog)
+
+    holding = {
+        "id": 1,
+        "user_id": 1,
+        "symbol": "NVDA",
+        "metadata": "{}",
+        "quantity": 10.0,
+        "avg_cost": 200.0,
+    }
+
+    cog.rollover_engine.check_satellite_rebalancing = AsyncMock(  # type: ignore
+        return_value=[
+            {
+                "symbol": "NVDA",
+                "action": "REDUCE",
+                "sell_ratio": 0.3,
+                "target_core": "VOO",
+                "reason": "test reason",
+                "scenario": "SATELLITE_REBALANCE",
+            }
+        ]
+    )
+    cog.rollover_engine.evaluate_margin_defense = AsyncMock(  # type: ignore
+        return_value=[
+            {
+                "symbol": "SPY",
+                "action": "LIQUIDATE",
+                "sell_ratio": 1.0,
+                "target_core": "CASH",
+                "reason": "test reason",
+                "scenario": "MARGIN_DEFENSE",
+            }
+        ]
+    )
+
+    notif_mock = MagicMock(return_value=True)
+
+    with patch(
+        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
+    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
+        "database.holdings.get_all_holdings", return_value=[holding]
+    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
+        "market_analysis.trading_orchestration.recommend_covered_calls",
+        new_callable=AsyncMock,
+        return_value={"recommendations": []},
+    ), patch("database.is_notification_enabled", notif_mock), patch(
+        "database.get_kv_cache", return_value=None
+    ), patch("database.save_kv_cache", new_callable=AsyncMock), patch(
+        "database.log_rollover_instruction", new_callable=AsyncMock
+    ):
+        await cog.monitor_real_portfolio_task()
+
+    call_args_list = [c.args for c in notif_mock.call_args_list]
+    assert (1, "defense_margin_call") in call_args_list
+    assert (1, "defense_option_rollover") in call_args_list
+
+
+@pytest.mark.asyncio
+async def test_monitor_real_portfolio_task_dedup_suppresses_second_dm_same_day() -> (
+    None
+):
+    """同一使用者、標的、情境、動作，當日已發送過（database.get_kv_cache
+    回傳真值）時，不應再次推播 DM，也不應重複寫入 dedup key 或審計軌跡——
+    現行測試皆固定 mock get_kv_cache 回傳 None，從未驗證過 dedup 真的生效。"""
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+    bot.get_cog = MagicMock(return_value=None)
+
+    with patch("discord.ext.tasks.Loop.start"):
+        cog = PortfolioMonitorCog(bot)
+
+    from cogs.trading.portfolio_monitor import ny_tz as _ny_tz
+    from datetime import datetime as _datetime
+
+    cog.trading_service.audit_real_portfolio_risk = AsyncMock(return_value=[])  # type: ignore
+    _mock_all_rollover_scenarios(cog)
+
+    holding = {
+        "id": 1,
+        "user_id": 1,
+        "symbol": "NVDA",
+        "metadata": "{}",
+        "quantity": 10.0,
+        "avg_cost": 200.0,
+    }
+
+    cog.rollover_engine.check_satellite_rebalancing = AsyncMock(  # type: ignore
+        return_value=[
+            {
+                "symbol": "NVDA",
+                "action": "REDUCE",
+                "sell_ratio": 0.3,
+                "target_core": "VOO",
+                "reason": "test reason",
+                "scenario": "SATELLITE_REBALANCE",
+            }
+        ]
+    )
+
+    today_str = _datetime.now(_ny_tz).strftime("%Y%m%d")
+    expected_dedup_key = (
+        f"rollover_alert_1_NVDA_SPOT_SATELLITE_REBALANCE_REDUCE_{today_str}"
+    )
+
+    save_kv_mock = AsyncMock()
+    log_mock = AsyncMock()
+
+    with patch(
+        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
+    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
+        "database.holdings.get_all_holdings", return_value=[holding]
+    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
+        "market_analysis.trading_orchestration.recommend_covered_calls",
+        new_callable=AsyncMock,
+        return_value={"recommendations": []},
+    ), patch("database.is_notification_enabled", return_value=True), patch(
+        "database.get_kv_cache",
+        side_effect=lambda key: 1 if key == expected_dedup_key else None,
+    ), patch("database.save_kv_cache", save_kv_mock), patch(
+        "database.log_rollover_instruction", log_mock
+    ):
+        await cog.monitor_real_portfolio_task()
+
+    bot.queue_dm.assert_not_called()
+    save_kv_mock.assert_not_called()
+    log_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_monitor_real_portfolio_task_covered_call_profit_lock_dedup_key_includes_strike_expiry() -> (
+    None
+):
+    """同一標的但不同履約價/到期日的兩筆 Covered Call 權利金衰減停利指令，
+    dedup key 必須各自獨立（納入 strike/expiry），不能讓其中一筆意外壓制
+    另一筆——兩筆都應正常推播。"""
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+    bot.get_cog = MagicMock(return_value=None)
+
+    with patch("discord.ext.tasks.Loop.start"):
+        cog = PortfolioMonitorCog(bot)
+
+    cog.trading_service.audit_real_portfolio_risk = AsyncMock(return_value=[])  # type: ignore
+    _mock_all_rollover_scenarios(cog)
+
+    holding = {
+        "id": 1,
+        "user_id": 1,
+        "symbol": "AAPL",
+        "metadata": "{}",
+        "quantity": 200.0,
+        "avg_cost": 140.0,
+    }
+
+    cog.rollover_engine.evaluate_covered_call_profit_lock = AsyncMock(  # type: ignore
+        return_value=[
+            {
+                "symbol": "AAPL",
+                "action": "LIQUIDATE",
+                "sell_ratio": 1.0,
+                "target_core": "AAPL",
+                "reason": "test reason",
+                "scenario": "COVERED_CALL_PROFIT_LOCK",
+                "instrument_type": "OPTIONS",
+                "is_covered_call_profit_lock": True,
+                "entry_premium": 2.5,
+                "current_premium": 0.4,
+                "decay_pct": 0.84,
+                "dte": 10,
+                "strike": "$150.00C",
+                "expiry": "2026-01-16",
+            },
+            {
+                "symbol": "AAPL",
+                "action": "LIQUIDATE",
+                "sell_ratio": 1.0,
+                "target_core": "AAPL",
+                "reason": "test reason",
+                "scenario": "COVERED_CALL_PROFIT_LOCK",
+                "instrument_type": "OPTIONS",
+                "is_covered_call_profit_lock": True,
+                "entry_premium": 3.0,
+                "current_premium": 0.5,
+                "decay_pct": 0.83,
+                "dte": 20,
+                "strike": "$160.00C",
+                "expiry": "2026-02-20",
+            },
+        ]
+    )
+
+    get_kv_mock = MagicMock(return_value=None)
+
+    with patch(
+        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
+    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
+        "database.holdings.get_all_holdings", return_value=[holding]
+    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
+        "market_analysis.trading_orchestration.recommend_covered_calls",
+        new_callable=AsyncMock,
+        return_value={"recommendations": []},
+    ), patch("database.is_notification_enabled", return_value=True), patch(
+        "database.get_kv_cache", get_kv_mock
+    ), patch("database.save_kv_cache", new_callable=AsyncMock), patch(
+        "database.log_rollover_instruction", new_callable=AsyncMock
+    ), patch(
+        "cogs.trading.portfolio_monitor.create_covered_call_profit_lock_embed",
+        return_value=object(),
+    ), patch("config.OPTIONS_ROLLOVER_DRY_RUN", False):
+        await cog.monitor_real_portfolio_task()
+
+    dedup_keys = [c.args[0] for c in get_kv_mock.call_args_list]
+    profit_lock_keys = [k for k in dedup_keys if "COVERED_CALL_PROFIT_LOCK" in k]
+    assert len(profit_lock_keys) == 2
+    assert len(set(profit_lock_keys)) == 2
+    assert any("$150.00C" in k and "2026-01-16" in k for k in profit_lock_keys)
+    assert any("$160.00C" in k and "2026-02-20" in k for k in profit_lock_keys)
+    assert bot.queue_dm.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_monitor_real_portfolio_task_dispatches_covered_call_profit_lock_embed() -> (
+    None
+):
+    """evaluate_covered_call_profit_lock 產生的指令
+    (is_covered_call_profit_lock=True) 必須經由專屬的
+    create_covered_call_profit_lock_embed 推播，而非誤用
+    create_dynamic_rollover_embed。"""
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+    bot.get_cog = MagicMock(return_value=None)
+
+    with patch("discord.ext.tasks.Loop.start"):
+        cog = PortfolioMonitorCog(bot)
+
+    cog.trading_service.audit_real_portfolio_risk = AsyncMock(return_value=[])  # type: ignore
+    _mock_all_rollover_scenarios(cog)
+
+    holding = {
+        "id": 1,
+        "user_id": 1,
+        "symbol": "VOO",
+        "metadata": "{}",
+        "quantity": 500.0,
+        "avg_cost": 470.0,
+    }
+
+    profit_lock_instruction = {
+        "symbol": "VOO",
+        "action": "LIQUIDATE",
+        "sell_ratio": 1.0,
+        "target_core": "VOO",
+        "reason": "test reason",
+        "scenario": "COVERED_CALL_PROFIT_LOCK",
+        "instrument_type": "OPTIONS",
+        "is_covered_call_profit_lock": True,
+        "entry_premium": 2.50,
+        "current_premium": 0.40,
+        "decay_pct": 0.84,
+        "dte": 10,
+        "strike": "$465.00C",
+        "expiry": "2026-01-16",
+        "cash_impact": "$4,000",
+    }
+    cog.rollover_engine.evaluate_covered_call_profit_lock = AsyncMock(  # type: ignore
+        return_value=[profit_lock_instruction]
+    )
+
+    profit_lock_embed = object()
+    with patch(
+        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
+    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
+        "database.holdings.get_all_holdings", return_value=[holding]
+    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
+        "market_analysis.trading_orchestration.recommend_covered_calls",
+        new_callable=AsyncMock,
+        return_value={"recommendations": []},
+    ), patch("database.is_notification_enabled", return_value=True), patch(
+        "database.get_kv_cache", return_value=None
+    ), patch("database.save_kv_cache", new_callable=AsyncMock), patch(
+        "database.log_rollover_instruction", new_callable=AsyncMock
+    ), patch(
+        "cogs.trading.portfolio_monitor.create_covered_call_profit_lock_embed",
+        return_value=profit_lock_embed,
+    ) as mock_profit_lock_embed, patch(
+        "cogs.trading.portfolio_monitor.create_dynamic_rollover_embed"
+    ) as mock_rotation_embed, patch("config.OPTIONS_ROLLOVER_DRY_RUN", False):
+        await cog.monitor_real_portfolio_task()
+
+    mock_profit_lock_embed.assert_called_once_with(
+        symbol="VOO",
+        reason="test reason",
+        entry_premium=2.50,
+        current_premium=0.40,
+        decay_pct=0.84,
+        btc_ratio=1.0,
+        dte=10,
+        strike="$465.00C",
+        expiry="2026-01-16",
+        cash_impact="$4,000",
+    )
+    mock_rotation_embed.assert_not_called()
+    bot.queue_dm.assert_awaited_once_with(1, embed=profit_lock_embed)
+
+
+@pytest.mark.asyncio
+async def test_monitor_real_portfolio_task_invokes_macro_top_escape_defense() -> None:
+    """Scenario 6 (宏觀逃頂前瞻防禦) 必須被實際掛進 monitor_real_portfolio_task
+    的評估迴圈，且接收到的 already_flagged_symbols 應是 Scenario 2/3/4/5
+    累積後的完整集合（在六大情境中排最後一位，永遠享有最低優先權）。"""
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+    bot.get_cog = MagicMock(return_value=None)
+
+    with patch("discord.ext.tasks.Loop.start"):
+        cog = PortfolioMonitorCog(bot)
+
+    cog.trading_service.audit_real_portfolio_risk = AsyncMock(return_value=[])  # type: ignore
+    _mock_all_rollover_scenarios(cog)
+
+    holding = {
+        "id": 1,
+        "user_id": 1,
+        "symbol": "NVDA",
+        "metadata": "{}",
+        "quantity": 10.0,
+        "avg_cost": 200.0,
+    }
+
+    cog.rollover_engine.check_satellite_rebalancing = AsyncMock(  # type: ignore
+        return_value=[{"symbol": "NVDA", "action": "REDUCE"}]
+    )
+    cog.rollover_engine.evaluate_margin_defense = AsyncMock(  # type: ignore
+        return_value=[{"symbol": "AAPL", "action": "LIQUIDATE"}]
+    )
+    mock_macro_top_escape = AsyncMock(return_value=[])
+    cog.rollover_engine.evaluate_macro_top_escape_defense = mock_macro_top_escape  # type: ignore
+
+    with patch(
+        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
+    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
+        "database.holdings.get_all_holdings", return_value=[holding]
+    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
+        "market_analysis.trading_orchestration.recommend_covered_calls",
+        new_callable=AsyncMock,
+        return_value={"recommendations": []},
+    ):
+        await cog.monitor_real_portfolio_task()
+
+    mock_macro_top_escape.assert_awaited_once()
+    await_args = mock_macro_top_escape.await_args
+    assert await_args is not None
+    assert await_args.kwargs["already_flagged_symbols"] == {
+        ("NVDA", "SPOT"),
+        ("AAPL", "SPOT"),
+    }
+
+
+@pytest.mark.asyncio
+async def test_monitor_real_portfolio_task_logs_rollover_instruction_with_correct_args() -> (
+    None
+):
+    """database.log_rollover_instruction 必須以正確的
+    user_id/symbol/scenario/action/sell_ratio/target_core/suggested_price/
+    cash_impact 呼叫——釘死簽章，避免未來重構不小心漏改某個 kwarg。"""
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+    bot.get_cog = MagicMock(return_value=None)
+
+    with patch("discord.ext.tasks.Loop.start"):
+        cog = PortfolioMonitorCog(bot)
+
+    cog.trading_service.audit_real_portfolio_risk = AsyncMock(return_value=[])  # type: ignore
+    _mock_all_rollover_scenarios(cog)
+
+    holding = {
+        "id": 1,
+        "user_id": 1,
+        "symbol": "NVDA",
+        "metadata": "{}",
+        "quantity": 10.0,
+        "avg_cost": 200.0,
+    }
+
+    cog.rollover_engine.check_satellite_rebalancing = AsyncMock(  # type: ignore
+        return_value=[
+            {
+                "symbol": "NVDA",
+                "action": "REDUCE",
+                "sell_ratio": 0.3,
+                "target_core": "VOO",
+                "reason": "test reason",
+                "scenario": "SATELLITE_REBALANCE",
+                "cash_impact": "$600",
+            }
+        ]
+    )
+
+    log_mock = AsyncMock()
+
+    with patch(
+        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
+    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
+        "database.holdings.get_all_holdings", return_value=[holding]
+    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
+        "market_analysis.trading_orchestration.recommend_covered_calls",
+        new_callable=AsyncMock,
+        return_value={"recommendations": []},
+    ), patch("database.is_notification_enabled", return_value=True), patch(
+        "database.get_kv_cache", return_value=None
+    ), patch("database.save_kv_cache", new_callable=AsyncMock), patch(
+        "database.log_rollover_instruction", log_mock
+    ):
+        await cog.monitor_real_portfolio_task()
+
+    log_mock.assert_awaited_once()
+    log_await_args = log_mock.await_args
+    assert log_await_args is not None
+    call_kwargs = log_await_args.kwargs
+    assert call_kwargs["user_id"] == 1
+    assert call_kwargs["symbol"] == "NVDA"
+    assert call_kwargs["scenario"] == "SATELLITE_REBALANCE"
+    assert call_kwargs["action"] == "REDUCE"
+    assert call_kwargs["sell_ratio"] == 0.3
+    assert call_kwargs["target_core"] == "VOO"
+    assert call_kwargs["suggested_price"] == "Market"
+    assert call_kwargs["cash_impact"] == "$600"
