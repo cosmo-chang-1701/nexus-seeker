@@ -799,7 +799,7 @@ def evaluate_escape_window_regime(
     評估四因子宏觀流動性矩陣與逃頂窗口狀態。
 
     Args:
-        prob: FedWatch 維持高利率或加息機率 (0.0 ~ 1.0)
+        prob: FedWatch 鷹派傾向強度分數 (0.05~0.95，壓縮後的加息/降息傾向指標，非嚴格機率總和)
         cpi_dev: CPI 偏差值 (%)
         wti: WTI 原油價格
         vts_ratio: VIX 期限結構比例 (VIX / VIX3M)
@@ -893,7 +893,7 @@ def evaluate_macro_top_escape_score(
     Args:
         vts_ratio: VIX 期限結構比例 (VIX / VIX3M)，>= 1.0 代表逆價差 (Backwardation)
         fear_greed: CNN Fear & Greed 指數 (0-100)
-        prob: FedWatch 維持高利率或加息機率 (0.0 ~ 1.0)
+        prob: FedWatch 鷹派傾向強度分數 (0.05~0.95，壓縮後的加息/降息傾向指標，非嚴格機率總和)
         is_negative_gamma: 是否處於負 Gamma 踩踏區間 (SHORT_GAMMA_CRITICAL regime)
         satellite_euphoria_ratio: 使用者衛星持倉中，個別已符合 Scenario 3 亢奮出場
             條件 (現貨觸及 Call Wall 或 Skew 百分位 <= 20) 的比例 (0.0-1.0)。傳入
@@ -927,13 +927,13 @@ def evaluate_macro_top_escape_score(
         f2_val = f"\u001b[1;32m🟢 情緒正常 (F&G: {fear_greed:.0f})\u001b[0m"
     factor_breakdown.append(("市場情緒 (Fear & Greed)", f2_val))
 
-    # Factor 3: FedWatch 鷹派利率機率過高
+    # Factor 3: FedWatch 鷹派傾向分數過高
     if safe_prob > 0.70:
         score += 1
-        f3_val = f"\u001b[1;31m🚨 鷹派高位 ({safe_prob * 100:.1f}%)\u001b[0m"
+        f3_val = f"\u001b[1;31m🚨 鷹派傾向偏高 ({safe_prob * 100:.1f}%)\u001b[0m"
     else:
         f3_val = f"\u001b[1;32m🟢 定價均衡 ({safe_prob * 100:.1f}%)\u001b[0m"
-    factor_breakdown.append(("FOMC 利率定價 (FedWatch)", f3_val))
+    factor_breakdown.append(("FOMC 鷹派傾向分數 (FedWatch)", f3_val))
 
     # Factor 4: 大盤負 Gamma 狀態
     if is_negative_gamma:

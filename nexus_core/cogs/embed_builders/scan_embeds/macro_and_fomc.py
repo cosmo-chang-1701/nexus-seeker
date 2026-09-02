@@ -143,8 +143,8 @@ def create_fomc_escape_window_embed(
     else:
         prob_suffix = " *(歷史快取/備援)*" if is_fallback else ""
         embed.add_field(
-            name="📊 利率機率定價 (FedWatch)",
-            value=f"下週 FOMC 維持高利率/加息機率：**{prob * 100:.1f}%**{prob_suffix}",
+            name="📊 利率鷹派傾向分數 (FedWatch)",
+            value=f"下週 FOMC 鷹派傾向分數：**{prob * 100:.1f}%**{prob_suffix}",
             inline=False,
         )
 

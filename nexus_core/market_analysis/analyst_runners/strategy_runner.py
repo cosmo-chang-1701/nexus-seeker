@@ -354,7 +354,7 @@ async def run_fomc_escape_window_analysis(
             "建議於窗口初段逢高分批減倉、收緊防守停損線並全面封鎖裸賣策略。"
         )
         reason = (
-            f"宏觀流動性矩陣偵測到 {tightening_score} 項緊縮特徵（如 FedWatch 維持高利率機率達 {prob * 100:.1f}% 或通膨/結構承壓）。"
+            f"宏觀流動性矩陣偵測到 {tightening_score} 項緊縮特徵（如 FedWatch 鷹派傾向分數達 {prob * 100:.1f}% 或通膨/結構承壓）。"
             f"為防範估值回殺與流動性衰竭，系統自動將自訂反彈逃頂窗口前移 {shift_days} 個交易日，提示需提前啟動防禦部署。"
         )
         adj_start_date = _shift_business_days(start_date, -shift_days)
@@ -366,7 +366,7 @@ async def run_fomc_escape_window_analysis(
             "建議延後撤退時機、讓利潤奔馳，可適度提高風險偏好。"
         )
         reason = (
-            f"宏觀流動性矩陣呈現寬鬆擴張格局（FedWatch 維持高利率機率僅 {prob * 100:.1f}%、通膨放緩且大盤結構健康）。"
+            f"宏觀流動性矩陣呈現寬鬆擴張格局（FedWatch 鷹派傾向分數僅 {prob * 100:.1f}%、通膨放緩且大盤結構健康）。"
             f"系統自動將自訂反彈逃頂窗口後推 {shift_days} 個交易日，建議延後多頭撤退時機、充分享受流動性溢價。"
         )
         adj_start_date = _shift_business_days(start_date, shift_days)
@@ -378,7 +378,7 @@ async def run_fomc_escape_window_analysis(
             "建議按原定計畫嚴守關鍵支撐與壓力關卡，執行標準網格防禦。"
         )
         reason = (
-            f"當前 FedWatch 利率定價 ({prob * 100:.1f}%) 與各項總經流動性因子處於常態均衡區間。"
+            f"當前 FedWatch 鷹派傾向分數 ({prob * 100:.1f}%) 與各項總經流動性因子處於常態均衡區間。"
             "系統評估反彈逃頂窗口維持原訂日程 (偏移 0 天)，建議持續監控大盤結構變化。"
         )
         adj_start_date = start_date
