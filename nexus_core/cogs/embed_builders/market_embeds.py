@@ -477,6 +477,12 @@ def build_radar_scan_embed(
             sym = r["symbol"]
             quote = r["quote"] or {}
             iv_metrics = r.get("iv_metrics", {})
+            is_premarket_row = False
+            if iv_metrics is not None:
+                if hasattr(iv_metrics, "is_premarket"):
+                    is_premarket_row = bool(iv_metrics.is_premarket)
+                elif isinstance(iv_metrics, dict):
+                    is_premarket_row = bool(iv_metrics.get("is_premarket", False))
             gex_is_stale = bool(r.get("gex_metrics", {}).get("_is_stale_cache", False))
             uoa_age_seconds = r.get("uoa_age_seconds")
             uoa_is_stale = (
@@ -1334,14 +1340,35 @@ def build_radar_scan_embed(
             is_data_stale_or_degraded = (
                 mp_is_stale or mp_is_degraded or gex_is_stale or uoa_is_stale
             )
+            # 盤前選擇權市場尚未開盤，Max Pain/GEX/OI 本來就不會有比前一交易日
+            # 收盤更新的數據，此時單純的年齡過期（gex_is_stale/uoa_is_stale）屬
+            # 正常現象；只有 mp_is_stale（SWR 重算失敗回退舊值）、mp_is_degraded
+            # （Volume 降級）或斷路器觸發才代表資料品質真的有問題，兩者仍需維持
+            # 原本較強烈的警語，不受盤前狀態影響。
+            is_genuine_degradation = mp_is_stale or mp_is_degraded or cb_triggered
+            is_benign_premarket_staleness = (
+                is_premarket_row and not is_genuine_degradation
+            )
             if is_data_stale_or_degraded:
                 age_note = format_cache_age_suffix(mp_age_seconds)
                 tag = age_note if age_note else " [快取 / API 降級]"
-                insights.append(
-                    f"• 🕓 {sym}: 本列數據{tag}，Max Pain/GEX/UOA 判讀可能非即時，請謹慎採信灰階建議。"
-                )
+                if is_benign_premarket_staleness:
+                    insights.append(
+                        f"• 🌙 {sym}: 本列數據{tag} [盤前/前日收盤]，選擇權市場尚未開盤，"
+                        "Max Pain/GEX/UOA 為前一交易日收盤快照，屬正常現象。"
+                    )
+                else:
+                    insights.append(
+                        f"• 🕓 {sym}: 本列數據{tag}，Max Pain/GEX/UOA 判讀可能非即時，請謹慎採信灰階建議。"
+                    )
             risk_prefix = "⚠️" if is_high_risk_or_anomaly else ""
-            freshness_prefix = "🕓" if is_data_stale_or_degraded else ""
+            freshness_prefix = (
+                "🌙"
+                if is_data_stale_or_degraded and is_benign_premarket_staleness
+                else "🕓"
+                if is_data_stale_or_degraded
+                else ""
+            )
             sym_cell_md = f"{risk_prefix}{freshness_prefix} {sym}".strip()
 
             md_line = f"| {sym_cell_md} | {price_str_md} | {g_p_wall_str} | {skew_pct_str} | {sqz_vec_str} | {neg_gex_str} | {sto_str} | {iv_strategy_str} | {em_z_score_str} | {top_uoa_str} | {tactical_adv} |"

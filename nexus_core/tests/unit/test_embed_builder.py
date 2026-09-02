@@ -1385,6 +1385,79 @@ def test_build_radar_scan_embed_marks_stale_gex_cache() -> None:
     assert "GEXSTALE" in text
 
 
+def test_build_radar_scan_embed_marks_premarket_stale_gex_as_benign() -> None:
+    """盤前（iv_metrics.is_premarket=True）且僅因年齡過期的 gex_is_stale/
+    uoa_is_stale 觸發時，選擇權市場尚未開盤本就不會有更新數據，應改用
+    🌙「前日收盤」的中性提示文字，而非暗示資料異常的「請謹慎採信灰階建議」。"""
+    scan_results = [
+        {
+            "symbol": "PMSYM",
+            "quote": {"c": 75.0, "dp": 0.0},
+            "iv_metrics": {
+                "iv_rank": 20.0,
+                "expected_move_weekly": 2.0,
+                "is_premarket": True,
+            },
+            "skew": 0.0,
+            "max_pain": {
+                "max_pain": 75.0,
+                "distance_pct": 0.0,
+                "is_stale": False,
+                "calculation_mode": "OI",
+                "is_degraded": False,
+                "circuit_breaker_triggered": False,
+            },
+            "gex_metrics": {
+                "put_wall": 70.0,
+                "call_wall": 80.0,
+                "net_gex": 1_000_000.0,
+                "_is_stale_cache": True,
+            },
+        },
+    ]
+
+    embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
+    text = get_embed_text(embeds[0])
+    assert "🌙" in text
+    assert "PMSYM" in text
+    assert "盤前/前日收盤" in text
+    assert "請謹慎採信灰階建議" not in text
+
+
+def test_build_radar_scan_embed_premarket_genuine_degradation_keeps_strong_warning() -> (
+    None
+):
+    """即使處於盤前，若 market_cache.is_stale=True（SWR 重算失敗回退舊值）等
+    代表真正資料品質問題的旗標成立，仍應維持原本較強烈的警語，不得被盤前的
+    「屬正常現象」中性提示掩蓋。"""
+    scan_results = [
+        {
+            "symbol": "PMBAD",
+            "quote": {"c": 75.0, "dp": 0.0},
+            "iv_metrics": {
+                "iv_rank": 20.0,
+                "expected_move_weekly": 2.0,
+                "is_premarket": True,
+            },
+            "skew": 0.0,
+            "max_pain": {
+                "max_pain": 75.0,
+                "distance_pct": 0.0,
+                "is_stale": True,
+                "calculation_mode": "OI",
+                "is_degraded": False,
+                "circuit_breaker_triggered": False,
+            },
+        },
+    ]
+
+    embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
+    text = get_embed_text(embeds[0])
+    assert "🕓" in text
+    assert "PMBAD" in text
+    assert "請謹慎採信灰階建議" in text
+
+
 def test_build_radar_scan_embed_no_freshness_marker_when_data_is_fresh() -> None:
     """基準案例：所有新鮮度旗標皆為 False/None 時，該標的列本身不應被標上 🕓
     前綴，也不應觸發即時聯動警示提示（表格頁尾的固定圖例說明文字本身一律存在，
