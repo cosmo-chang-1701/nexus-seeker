@@ -839,12 +839,18 @@ async def scrape_symbol_gex(symbol: str) -> dict[str, Any]:
     """即時抓取單一標的 GEX(每次請求各自啟動一顆短命 browser)。
     實際抓取/計算邏輯已抽至 gex_scraper.scrape_symbol_gex_core，供本端點與
     背景排程 (scheduler.py) 共用。"""
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"]
-        )
-        try:
-            data = await scrape_symbol_gex_core(symbol, browser)
-            return {"status": "success", "data": data}
-        finally:
-            await browser.close()
+    from gex_scraper import FALLBACK_GEX
+
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"]
+            )
+            try:
+                data = await scrape_symbol_gex_core(symbol, browser)
+                return {"status": "success", "data": data}
+            finally:
+                await browser.close()
+    except Exception as e:
+        logger.warning(f"[{symbol}] Playwright GEX scrape failed: {e}, using fallback.")
+        return {"status": "success", "data": dict(FALLBACK_GEX)}

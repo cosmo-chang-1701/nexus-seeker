@@ -4,19 +4,13 @@ import asyncio
 import logging
 from typing import Dict
 
-import database
-from services import market_data_service, news_service, reddit_service, llm_service
-from market_analysis.sentiment_engine import SentimentEngine
-from market_analysis.psq_engine import analyze_psq
-from market_analysis.risk_engine import MacroContext
-import market_math
+from services import news_service, reddit_service
 from cogs.embed_builder import (
     create_error_embed,
     create_media_sentiment_embed,
     create_tactical_symbol_embed,
     create_tactical_hedge_embed,
 )
-from .utils import find_matching_polymarket_odds, calculate_polymarket_weighted_odds
 
 logger = logging.getLogger(__name__)
 
@@ -173,250 +167,33 @@ class SymbolHubView(discord.ui.View):
 
             await asyncio.to_thread(mark_market_cache_stale, self.symbol)
 
-            # 獲取 stock_cost
-            from services.asset_manager import AssetManager
-            from models.asset import ContextType
-
-            manager = AssetManager()
-            assets = manager.get_assets(self.user_id, ContextType.HOLDING)
-            stock_cost_raw = next(
-                (
-                    a.metadata.get("avg_cost", 0.0)
-                    for a in assets
-                    if a.symbol == self.symbol
-                ),
-                0.0,
-            )
-            stock_cost = _safe_float(stock_cost_raw, 0.0)
-
-            # 用於 DDP 與 Polymarket 等服務
-            from market_analysis.ddp_inspector import DDPInspector
-
-            ddp_inspector = DDPInspector(self.bot)
-            poly_service = getattr(self.bot, "polymarket_service", None)
-
-            # 並行抓取所有數據
-            spy_task = market_data_service.get_spy_history_df("1y")
-            macro_task = market_data_service.get_macro_environment()
-            quote_task = market_data_service.get_quote(self.symbol)
-            skew_task = SentimentEngine.calculate_skew(self.symbol)
-            pcr_task = SentimentEngine.calculate_pcr(self.symbol)
-            uoa_task = SentimentEngine.detect_uoa(self.symbol)
-            mp_task = SentimentEngine.calculate_max_pain(self.symbol)
-            iv_task = SentimentEngine.fetch_and_calculate_iv_metrics(self.symbol)
-            ctx = database.get_full_user_context(self.user_id)
-            reddit_task = reddit_service.get_reddit_details(self.symbol)
-            poly_task = (
-                poly_service.get_market_snapshot(limit=0)
-                if poly_service
-                else asyncio.sleep(0, result=[])
-            )
-
-            ddp_task = ddp_inspector.inspect_symbol(self.symbol)
-            from services.calendar_service import calendar_service
-
-            catalyst_task = calendar_service.get_symbol_catalysts(self.symbol, days=14)
-            df_hist_task = market_data_service.get_history_df(
-                self.symbol, period="1y", interval="1d"
-            )
-            from market_analysis.volume_profile import calculate_volume_profile
-            from market_analysis.index_microstructure import fetch_symbol_gex_metrics
-
-            vp_task = asyncio.to_thread(calculate_volume_profile, self.symbol)
-            # force_live=True：使用者主動點擊「刷新」，語意上與本處理器其餘
-            # IV/報價/歷史快取的清除行為一致，繞過 GEX 30 分鐘 SWR 快取層，
-            # 避免刷新後 Gamma Flip/GEX 牆仍顯示陳舊數據。
-            gex_task = fetch_symbol_gex_metrics(self.symbol, force_live=True)
-
-            (
-                df_spy,
-                macro_raw,
-                quote,
-                skew_data,
-                pcr_data,
-                uoa_data,
-                max_pain_data,
-                iv_metrics,
-                reddit_details,
-                poly_markets,
-                ddp_report,
-                df_hist_1d,
-                catalysts,
-                vp_data,
-                gex_data,
-            ) = await asyncio.gather(
-                spy_task,
-                macro_task,
-                quote_task,
-                skew_task,
-                pcr_task,
-                uoa_task,
-                mp_task,
-                iv_task,
-                reddit_task,
-                poly_task,
-                ddp_task,
-                df_hist_task,
-                catalyst_task,
-                vp_task,
-                gex_task,
-            )
-
-            spy_price = _safe_float(
-                (df_spy["Close"].iloc[-1] if not df_spy.empty else 670.0),
-                670.0,
-            )
-            safe_macro = macro_raw or {}
-            macro_data = MacroContext(
-                vix=_safe_float(safe_macro.get("vix"), 18.0),
-                oil_price=_safe_float(safe_macro.get("oil"), 75.0),
-                vix_change=_safe_float(safe_macro.get("vix_change"), 0.0),
-            )
-
-            result = await market_math.analyze_symbol(
-                self.symbol, stock_cost, df_spy, spy_price, vix_spot=macro_data.vix
-            )
-            if not isinstance(result, dict) or not result:
-                result = {"symbol": self.symbol, "stock_cost": stock_cost, "price": 0.0}
-
-            psq_result = analyze_psq(df_hist_1d, vix_spot=macro_data.vix)
-            if psq_result:
-                result["psq_result"] = psq_result
-                is_df_valid = df_hist_1d is not None and not df_hist_1d.empty
-                result["price"] = (
-                    _safe_float(df_hist_1d["Close"].iloc[-1], 0.0)
-                    if is_df_valid
-                    else _safe_float(result.get("price"), 0.0)
-                )
-
-            result["quote"] = quote
-
-            safe_skew = skew_data if isinstance(skew_data, dict) else {}
-            result["skew"] = _safe_float(safe_skew.get("skew"), 0.0)
-            result["skew_percentile"] = SentimentEngine.get_indicator_percentile(
-                self.symbol, "SKEW", result["skew"]
-            )
-
-            result["pcr"] = pcr_data if pcr_data is not None else {}
-            result["uoa"] = uoa_data if uoa_data is not None else []
-
-            result["iv_data"] = iv_metrics
-            iv_rank_raw = (
-                iv_metrics.get("iv_rank")
-                if isinstance(iv_metrics, dict)
-                else getattr(iv_metrics, "iv_rank", None)
-            )
-            result["iv_rank"] = _safe_float(iv_rank_raw, 0.0)
-            raw_em_context = await SentimentEngine.get_expected_move(
-                self.symbol, quote=quote, iv_metrics=iv_metrics
-            )
-            result["expected_move_context"] = (
-                raw_em_context if isinstance(raw_em_context, dict) else {}
-            )
-
-            safe_mp = max_pain_data if isinstance(max_pain_data, dict) else {}
-            result["max_pain"] = _safe_float(safe_mp.get("max_pain"), 0.0)
-
-            result["gex_profile_data"] = gex_data
-            safe_ddp = ddp_report if isinstance(ddp_report, dict) else {}
-            result["is_ddp"] = bool(safe_ddp.get("is_ddp", False))
-            result["vix"] = macro_data.vix
-            result["spy_price"] = spy_price
-
-            # Reddit sentiment score & structured posts
-            if isinstance(reddit_details, tuple):
-                safe_reddit_text = reddit_details[0] or ""
-                reddit_posts = (
-                    reddit_details[1] if isinstance(reddit_details[1], list) else []
+            cog = self.bot.get_cog("UnifiedTerminalCog") if self.bot else None
+            if (
+                cog
+                and hasattr(cog, "_fetch_single_symbol_data_raw")
+                and hasattr(cog, "_process_symbol_hub_data")
+            ):
+                raw_data = await cog._fetch_single_symbol_data_raw(self.symbol)
+                result = await cog._process_symbol_hub_data(
+                    self.symbol, self.user_id, raw_data
                 )
             else:
-                safe_reddit_text = reddit_details or ""
-                reddit_posts = []
+                from cogs.unified_terminal.symbol_deep_dive import SymbolDeepDiveMixin
 
-            result[
-                "reddit_sentiment_score"
-            ] = await llm_service.evaluate_reddit_sentiment(
-                self.symbol, safe_reddit_text
-            )
-            result["reddit_text"] = safe_reddit_text
-            result["reddit_posts"] = reddit_posts
+                class _HelperDeepDive(SymbolDeepDiveMixin):
+                    def __init__(self, bot: Any) -> None:
+                        self.bot = bot
 
-            # Polymarket odds & summary
-            poly_odds_task = find_matching_polymarket_odds(
-                self.symbol, poly_markets, bot=self.bot
-            )
-            poly_summary_task = calculate_polymarket_weighted_odds(
-                self.symbol, poly_markets, bot=self.bot
-            )
-            poly_odds, poly_summary = await asyncio.gather(
-                poly_odds_task, poly_summary_task
-            )
-            result["polymarket_odds"] = poly_odds
-            result["polymarket_summary"] = poly_summary
-
-            result["catalysts"] = catalysts
-            safe_vp = vp_data if isinstance(vp_data, dict) else {}
-            result["volume_profile"] = safe_vp
-
-            # TDP 估值三擊判斷: 現價 < EMA 21 且 現價 < Max Pain 且 現價 < V-POC
-            ema_21 = (
-                df_hist_1d["Close"].ewm(span=21, adjust=False).mean().iloc[-1]
-                if df_hist_1d is not None and not df_hist_1d.empty
-                else 0.0
-            )
-            vpoc = _safe_float(safe_vp.get("hvn"), 0.0)
-            max_pain = _safe_float(result["max_pain"], 0.0)
-            price = _safe_float(result["price"], 0.0)
-
-            if result.get("is_ddp"):
-                if price > 0 and ema_21 > 0 and max_pain > 0 and vpoc > 0:
-                    if price < ema_21 and price < max_pain and price < vpoc:
-                        result["is_ddp"] = True
-                        result["tdp_activated"] = True
-
-                        psq_res = result.get("psq_result", {})
-                        is_sqz = (
-                            psq_res.get("is_squeezing", False)
-                            if isinstance(psq_res, dict)
-                            else getattr(psq_res, "is_squeezing", False)
-                        )
-                        if is_sqz:
-                            result["tdpq_activated"] = True
-
-            from market_analysis.risk_engine import optimize_position_risk
-
-            raw_stock_iv = (
-                iv_metrics.get("current_iv")
-                if isinstance(iv_metrics, dict)
-                else getattr(iv_metrics, "current_iv", None)
-            )
-            stock_iv_val = _safe_float(raw_stock_iv, 0.0)
-            stock_iv = stock_iv_val if stock_iv_val > 0 else 0.40
-            vol_pcr = (
-                _safe_float(pcr_data.get("volume_pcr"), 0.8)
-                if isinstance(pcr_data, dict)
-                else 0.8
-            )
-            skew_val = _safe_float(safe_skew.get("skew"), 0.0)
-
-            opt_result = optimize_position_risk(
-                current_delta=0.0,
-                unit_weighted_delta=0.16,
-                user_capital=ctx.capital,
-                spy_price=spy_price,
-                stock_iv=stock_iv,
-                strategy="STO",
-                macro_data=macro_data,
-                risk_limit=ctx.risk_limit,
-                vix_spot=macro_data.vix,
-                pcr=vol_pcr,
-                skew=skew_val,
-            )
-            result["kelly_sizing"] = opt_result
+                helper = _HelperDeepDive(self.bot)
+                raw_data = await helper._fetch_single_symbol_data_raw(self.symbol)
+                result = await helper._process_symbol_hub_data(
+                    self.symbol, self.user_id, raw_data
+                )
 
             self.base_data = result
             embed = create_tactical_symbol_embed(self.base_data)
         except Exception as e:
+            logger.exception(f"[{self.symbol}] Refresh failed: {e}")
             await interaction.followup.send(
                 embed=create_error_embed(f"重整數據失敗: {e}"), ephemeral=True
             )
