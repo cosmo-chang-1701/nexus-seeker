@@ -410,8 +410,11 @@ def build_radar_scan_embed(
             if show_macro:
                 from database.cache import get_kv_cache
 
-            gex_flip = get_kv_cache("macro_spy_gamma_flip")
-            ted_spread = get_kv_cache("macro_ted_spread")
+                gex_flip = get_kv_cache("macro_spy_gamma_flip")
+                ted_spread = get_kv_cache("macro_ted_spread")
+            else:
+                gex_flip = None
+                ted_spread = None
 
             if gex_flip is not None or ted_spread is not None:
                 gex_str = (

@@ -108,7 +108,10 @@ class BatchScanMixin:
 
             # 根據 Unified Radar Panel 的量化過濾條件進行篩選
             filtered_results = []
-            max_pain_threshold = params.get("max_pain_threshold", 10.0) / 100.0
+            # 與 max_pain.distance_pct（sentiment/max_pain.py、radar_data.py）保持相同的
+            # 百分比單位（例如 10.0 代表 10%），避免與 dist（同樣是百分比數值）比較時
+            # 單位不一致，導致幾乎任何非零偏離都被誤判為「超過門檻」。
+            max_pain_threshold = params.get("max_pain_threshold", 10.0)
 
             from models.schemas import ScanParams
             from market_analysis.intraday_pipeline import evaluate_advanced_filters

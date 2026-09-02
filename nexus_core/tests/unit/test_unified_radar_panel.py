@@ -173,17 +173,19 @@ async def test_execute_unified_scan_filters(mock_bot: Any, mock_interaction: Any
             async def fake_fetch(sym: Any):  # type: ignore
                 if sym == "AAPL":
                     # 符合條件：max_pain distance < 10%，且無底牆破位
+                    # distance_pct 與正式環境（sentiment/max_pain.py、radar_data.py）
+                    # 一致，採百分比數值（5.0 代表 5%），而非小數。
                     return {
                         "symbol": "AAPL",
                         "skew": -0.2,
-                        "max_pain": {"distance_pct": 0.05},  # 5% < 10%
+                        "max_pain": {"distance_pct": 5.0},  # 5% < 10%
                     }
                 elif sym == "TSLA":
-                    # 違反 exclude_martial_law (distance_pct == 0.15 > 0.10)
+                    # 違反 exclude_martial_law (distance_pct == 15.0 > 10.0)
                     return {
                         "symbol": "TSLA",
                         "skew": -0.2,
-                        "max_pain": {"distance_pct": 0.15},
+                        "max_pain": {"distance_pct": 15.0},
                     }
                 return None
 
@@ -641,12 +643,13 @@ async def test_exclude_martial_law_putwall_breach_and_neg_gex(
         mock_thread.side_effect = mock_to_thread_side_effect
 
         async def fake_fetch(sym: str) -> dict[str, Any]:
+            # distance_pct 與正式環境一致，採百分比數值（2.0 代表 2%）。
             if sym == "NVDA":
                 # 跌破 PutWall: spot 100 < put_wall 105
                 return {
                     "symbol": "NVDA",
                     "quote": {"c": 100.0},
-                    "max_pain": {"distance_pct": 0.02},
+                    "max_pain": {"distance_pct": 2.0},
                     "gex_profile_data": {
                         "put_wall": 105.0,
                         "net_gex": 100000.0,
@@ -657,7 +660,7 @@ async def test_exclude_martial_law_putwall_breach_and_neg_gex(
                 return {
                     "symbol": "TSLA",
                     "quote": {"c": 200.0},
-                    "max_pain": {"distance_pct": 0.02},
+                    "max_pain": {"distance_pct": 2.0},
                     "gex_profile_data": {
                         "put_wall": 190.0,
                         "net_gex": -500000.0,
@@ -668,7 +671,7 @@ async def test_exclude_martial_law_putwall_breach_and_neg_gex(
                 return {
                     "symbol": "AAPL",
                     "quote": {"c": 220.0},
-                    "max_pain": {"distance_pct": 0.02},
+                    "max_pain": {"distance_pct": 2.0},
                     "gex_profile_data": {
                         "put_wall": 200.0,
                         "net_gex": 500000.0,
