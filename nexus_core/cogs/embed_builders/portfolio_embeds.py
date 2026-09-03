@@ -454,7 +454,12 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
     def _to_float_or_none(value: Any) -> float | None:
         try:
-            return float(value) if value is not None else None
+            if value is None:
+                return None
+            val = float(value)
+            import math
+
+            return None if math.isnan(val) else val
         except (TypeError, ValueError):
             return None
 
@@ -575,6 +580,130 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         quote_lines.append("```")
 
     _add_ansi_field_safely(embed, "💹 即時報價 (Real-time Quote)", quote_lines)
+
+    # 1.5 ⏱️ 15分鐘微觀結構 (15m Microstructure)
+    bar_15m = data.get("bar_15m")
+    has_explicit_15m = (
+        data.get("volume_15m") is not None
+        or data.get("close_15m") is not None
+        or data.get("open_15m") is not None
+        or data.get("rvol_15m") is not None
+    )
+    if bar_15m is not None or has_explicit_15m or "bar_15m" in data:
+        o_15m = None
+        h_15m = None
+        l_15m = None
+        c_15m = None
+        vol_15m = None
+        sma20_15m = None
+
+        if bar_15m is not None:
+            if hasattr(bar_15m, "open"):
+                o_15m = _to_float_or_none(getattr(bar_15m, "open", None))
+                h_15m = _to_float_or_none(getattr(bar_15m, "high", None))
+                l_15m = _to_float_or_none(getattr(bar_15m, "low", None))
+                c_15m = _to_float_or_none(getattr(bar_15m, "close", None))
+                vol_15m = _to_float_or_none(getattr(bar_15m, "volume", None))
+                sma20_15m = _to_float_or_none(getattr(bar_15m, "avg_volume", None))
+            elif isinstance(bar_15m, dict):
+                o_15m = _to_float_or_none(bar_15m.get("open"))
+                h_15m = _to_float_or_none(bar_15m.get("high"))
+                l_15m = _to_float_or_none(bar_15m.get("low"))
+                c_15m = _to_float_or_none(bar_15m.get("close"))
+                vol_15m = _to_float_or_none(bar_15m.get("volume"))
+                sma20_15m = _to_float_or_none(
+                    bar_15m.get("avg_volume", bar_15m.get("volume_15m_sma20"))
+                )
+
+        if o_15m is None:
+            o_15m = _to_float_or_none(data.get("open_15m"))
+        if h_15m is None:
+            h_15m = _to_float_or_none(data.get("high_15m"))
+        if l_15m is None:
+            l_15m = _to_float_or_none(data.get("low_15m"))
+        if c_15m is None:
+            c_15m = _to_float_or_none(data.get("close_15m"))
+        if vol_15m is None:
+            vol_15m = _to_float_or_none(data.get("volume_15m"))
+        if sma20_15m is None:
+            sma20_15m = _to_float_or_none(
+                data.get("volume_15m_sma20", data.get("avg_volume_15m"))
+            )
+
+        rvol_raw = _to_float_or_none(data.get("rvol_15m"))
+        if rvol_raw is not None and sma20_15m is not None and sma20_15m > 0:
+            rvol_val = rvol_raw
+        elif vol_15m is not None and sma20_15m is not None and sma20_15m > 0:
+            rvol_val = vol_15m / sma20_15m
+        else:
+            rvol_val = None
+
+        if (
+            o_15m is None
+            and h_15m is None
+            and l_15m is None
+            and c_15m is None
+            and vol_15m is None
+        ):
+            micro_lines = [
+                "```ansi",
+                " 15分鐘微觀結構 (15m Microstructure)",
+                " ├─ 最新 15m K棒: -- (暫無數據 / 待開盤)",
+                " ├─ 15m 成交量: -- 股",
+                " ├─ 15m 均量 (SMA20): -- 股",
+                " └─ 即時量比 (RVOL_15m): -- (狀態: ⚠️ 數據源缺失)",
+                "```",
+            ]
+        else:
+            # 1. K-line real body verification
+            if c_15m is not None and o_15m is not None and c_15m > 0 and o_15m > 0:
+                if c_15m > o_15m:
+                    kline_type = "實體陽線"
+                elif c_15m < o_15m:
+                    kline_type = "實體陰線"
+                else:
+                    kline_type = "平盤十字"
+                o_str = f"{o_15m:.2f}"
+                h_str = f"{h_15m:.2f}" if (h_15m is not None and h_15m > 0) else "--"
+                l_str = f"{l_15m:.2f}" if (l_15m is not None and l_15m > 0) else "--"
+                c_str = f"{c_15m:.2f}"
+                kline_line = f" ├─ 最新 15m K棒: 開 {o_str} | 高 {h_str} | 低 {l_str} | 收 {c_str} ({kline_type})"
+            else:
+                kline_line = " ├─ 最新 15m K棒: -- (數據不全)"
+
+            # 2. 15m 成交量
+            vol_str = f"{vol_15m:,.0f}" if vol_15m is not None else "--"
+            vol_line = f" ├─ 15m 成交量: {vol_str} 股"
+
+            # 3. 15m 均量 (SMA20)
+            sma20_str = f"{sma20_15m:,.0f}" if sma20_15m is not None else "--"
+            sma20_line = f" ├─ 15m 均量 (SMA20): {sma20_str} 股"
+
+            # 4. 即時量比 (RVOL_15m)
+            if rvol_val is not None:
+                if rvol_val >= 1.5:
+                    status_str = "🟢 放量突破 >= 1.5x"
+                else:
+                    status_str = "❌ 缺乏放量代償 < 1.5x"
+                rvol_line = (
+                    f" └─ 即時量比 (RVOL_15m): {rvol_val:.2f}x (狀態: {status_str})"
+                )
+            else:
+                rvol_line = " └─ 即時量比 (RVOL_15m): -- (狀態: ⚠️ 數據源缺失)"
+
+            micro_lines = [
+                "```ansi",
+                " 15分鐘微觀結構 (15m Microstructure)",
+                kline_line,
+                vol_line,
+                sma20_line,
+                rvol_line,
+                "```",
+            ]
+
+        _add_ansi_field_safely(
+            embed, "⏱️ 15分鐘微觀結構 (15m Microstructure)", micro_lines
+        )
 
     # 2. 📐 情緒與邊緣偵測 (Edge Detection)
     skew_val_raw = data.get("skew")

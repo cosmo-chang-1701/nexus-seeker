@@ -11,6 +11,7 @@ from market_analysis.sentiment_engine import SentimentEngine
 from market_analysis.psq_engine import analyze_psq
 from market_analysis.risk_engine import MacroContext
 from market_analysis.atr_utils import fetch_atr_15m
+from market_analysis.price_volume_alert import get_confirmed_15m_bar
 import market_math
 
 from cogs.embed_builder import create_error_embed, create_tactical_symbol_embed
@@ -75,6 +76,7 @@ class SymbolDeepDiveMixin:
             asyncio.to_thread(calculate_volume_profile, symbol)
         )
         atr_15m_task = asyncio.create_task(fetch_atr_15m(symbol))
+        bar_15m_task = asyncio.create_task(get_confirmed_15m_bar(symbol))
         from services.calendar_service import calendar_service
 
         catalysts_task = asyncio.create_task(
@@ -159,6 +161,7 @@ class SymbolDeepDiveMixin:
             gex_profile_data,
             vp_data,
             atr_15m_data,
+            bar_15m_data,
             catalysts,
             reddit_details,
             poly_markets,
@@ -177,6 +180,7 @@ class SymbolDeepDiveMixin:
             gex_profile_task,
             vp_task,
             atr_15m_task,
+            bar_15m_task,
             catalysts_task,
             reddit_task,
             poly_task,
@@ -214,6 +218,7 @@ class SymbolDeepDiveMixin:
             "gex_profile_data": gex_profile_data,
             "volume_profile": vp_data,
             "atr_15m": atr_15m_data,
+            "bar_15m": bar_15m_data,
             "catalysts": catalysts,
         }
 
@@ -347,6 +352,52 @@ class SymbolDeepDiveMixin:
         safe_vp = vp_data if isinstance(vp_data, dict) else {}
         result["volume_profile"] = safe_vp
         result["atr_15m"] = _safe_float(data.get("atr_15m"), 0.0)
+
+        bar_15m = data.get("bar_15m")
+        result["bar_15m"] = bar_15m
+        if bar_15m is not None:
+
+            def _extract_val(k: str) -> Any:
+                if hasattr(bar_15m, k):
+                    return getattr(bar_15m, k, None)
+                if isinstance(bar_15m, dict):
+                    return bar_15m.get(k)
+                return None
+
+            import math
+
+            def _clean_float(v: Any) -> Optional[float]:
+                if v is None:
+                    return None
+                try:
+                    f = float(v)
+                    return None if math.isnan(f) else f
+                except (TypeError, ValueError):
+                    return None
+
+            c_15m = _clean_float(_extract_val("close"))
+            o_15m = _clean_float(_extract_val("open"))
+            h_15m = _clean_float(_extract_val("high"))
+            l_15m = _clean_float(_extract_val("low"))
+            v_15m = _clean_float(_extract_val("volume"))
+            sma_15m = _clean_float(
+                _extract_val("avg_volume")
+                if _extract_val("avg_volume") is not None
+                else _extract_val("volume_15m_sma20")
+            )
+            rvol = (
+                (v_15m / sma_15m)
+                if (v_15m is not None and sma_15m is not None and sma_15m > 0)
+                else None
+            )
+
+            result["open_15m"] = o_15m
+            result["high_15m"] = h_15m
+            result["low_15m"] = l_15m
+            result["close_15m"] = c_15m
+            result["volume_15m"] = v_15m
+            result["volume_15m_sma20"] = sma_15m
+            result["rvol_15m"] = rvol
 
         # TDP 估值三擊判斷: 現價 < EMA 21 且 現價 < Max Pain 且 現價 < V-POC
         ema_21 = (

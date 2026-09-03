@@ -38,7 +38,7 @@ class UnifiedTerminalCog(
         logger.info("UnifiedTerminalCog loaded.")
 
     @app_commands.command(
-        name="x", description="🌌 標體分析中心：一站式獲取報價、量化掃描與情緒分析"
+        name="x", description="🌌 標的分析中心：一站式獲取報價、量化掃描與情緒分析"
     )
     @app_commands.describe(
         symbol="股票代號 (如 NVDA，與 scan_type 二擇一)",

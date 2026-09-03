@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional
 
+import pandas as pd
+
 import market_time
 from database.price_volume_watch import WatchDirection
 from services import market_data_service
@@ -36,6 +38,9 @@ class Confirmed15mBar:
     close: float
     volume: float
     avg_volume: float  # 前 _VOLUME_LOOKBACK_BARS 根（不含本根）均量
+    open: Optional[float] = None
+    high: Optional[float] = None
+    low: Optional[float] = None
 
 
 async def get_confirmed_15m_bar(symbol: str) -> Optional[Confirmed15mBar]:
@@ -56,7 +61,7 @@ async def get_confirmed_15m_bar(symbol: str) -> Optional[Confirmed15mBar]:
         logger.warning(f"[{symbol}] 15m K 線抓取失敗: {e}")
         return None
 
-    if df_15m is None or df_15m.empty or len(df_15m) < _VOLUME_LOOKBACK_BARS + 2:
+    if df_15m is None or df_15m.empty or len(df_15m) < _VOLUME_LOOKBACK_BARS + 1:
         return None
 
     now_ny = datetime.now(market_time.ny_tz).replace(tzinfo=None)
@@ -73,12 +78,31 @@ async def get_confirmed_15m_bar(symbol: str) -> Optional[Confirmed15mBar]:
     lookback = df_15m.iloc[confirmed_pos - _VOLUME_LOOKBACK_BARS : confirmed_pos]
     avg_volume = float(lookback["Volume"].mean())
 
+    open_val = (
+        float(confirmed_bar["Open"])
+        if "Open" in confirmed_bar and pd.notna(confirmed_bar["Open"])
+        else None
+    )
+    high_val = (
+        float(confirmed_bar["High"])
+        if "High" in confirmed_bar and pd.notna(confirmed_bar["High"])
+        else None
+    )
+    low_val = (
+        float(confirmed_bar["Low"])
+        if "Low" in confirmed_bar and pd.notna(confirmed_bar["Low"])
+        else None
+    )
+
     return Confirmed15mBar(
         symbol=symbol,
         bar_time=df_15m.index[confirmed_pos].to_pydatetime(),
         close=float(confirmed_bar["Close"]),
         volume=float(confirmed_bar["Volume"]),
         avg_volume=avg_volume,
+        open=open_val,
+        high=high_val,
+        low=low_val,
     )
 
 
