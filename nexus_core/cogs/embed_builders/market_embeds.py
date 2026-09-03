@@ -24,7 +24,9 @@ from market_analysis.macro_calendar_translator import translate_macro_event
 
 # UOA/DP-POC kv_cache 新鮮度門檻：15 分鐘心跳週期的 2 倍緩衝。刻意獨立於 GEX 的
 # _EDGE_SNAPSHOT_MAX_AGE_SECONDS（30 分鐘 edge scraper 輪詢），兩者走不同管線。
-_UOA_DARKPOOL_MAX_AGE_SECONDS: float = 1800.0
+from services.market_data_service import _EDGE_SNAPSHOT_MAX_AGE_SECONDS
+
+_UOA_DARKPOOL_MAX_AGE_SECONDS: float = float(_EDGE_SNAPSHOT_MAX_AGE_SECONDS)
 
 
 def create_max_pain_embed(symbol: str, data: Dict[str, Any]) -> discord.Embed:
@@ -1350,7 +1352,13 @@ def build_radar_scan_embed(
                 is_premarket_row and not is_genuine_degradation
             )
             if is_data_stale_or_degraded:
-                age_note = format_cache_age_suffix(mp_age_seconds)
+                _stale_ages: list[float] = []
+                if (mp_is_stale or mp_is_degraded) and mp_age_seconds is not None:
+                    _stale_ages.append(mp_age_seconds)
+                if uoa_is_stale and uoa_age_seconds is not None:
+                    _stale_ages.append(uoa_age_seconds)
+                display_age = max(_stale_ages) if _stale_ages else mp_age_seconds
+                age_note = format_cache_age_suffix(display_age)
                 tag = age_note if age_note else " [快取 / API 降級]"
                 if is_benign_premarket_staleness:
                     insights.append(

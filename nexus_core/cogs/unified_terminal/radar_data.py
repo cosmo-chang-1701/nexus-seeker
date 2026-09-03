@@ -338,7 +338,35 @@ class RadarDataMixin:
 
         ma20_val = radar_cache.get("ma20") or get_kv_cache(f"ma20_{sym.upper()}")
 
+        _mc_updated = market_cache.get("updated_at")
+        _mc_age: float | None = None
+        if _mc_updated:
+            try:
+                from datetime import datetime, timezone as _tz2
+
+                _mc_age = (
+                    datetime.now(_tz2.utc)
+                    - datetime.strptime(_mc_updated, "%Y-%m-%d %H:%M:%S").replace(
+                        tzinfo=_tz2.utc
+                    )
+                ).total_seconds()
+            except Exception:
+                pass
+        _f_ages = [a for a in [_mc_age, uoa_age_seconds] if a is not None]
+        uoa_is_stale = uoa_cached is None or (
+            uoa_age_seconds is not None
+            and uoa_age_seconds >= _EDGE_SNAPSHOT_MAX_AGE_SECONDS
+        )
+
         return {
+            "_freshness": {
+                "mp_age_seconds": _mc_age,
+                "uoa_age_seconds": uoa_age_seconds,
+                "oldest_age_seconds": max(_f_ages) if _f_ages else None,
+                "is_any_stale": bool(market_cache.get("is_stale", 0))
+                or gex_is_stale
+                or uoa_is_stale,
+            },
             "symbol": sym,
             "quote": quote,
             "rvol": rvol,
@@ -731,10 +759,12 @@ class RadarDataMixin:
         }
 
         # Save to kv_cache
-        from database.cache import save_kv_cache
+        from database.cache import save_kv_cache, get_kv_cache_with_age
         from datetime import datetime, timezone
 
         await save_kv_cache(f"uoa_{sym.upper()}", uoa_data or [])
+        _, real_uoa_age = get_kv_cache_with_age(f"uoa_{sym.upper()}")
+        result["uoa_age_seconds"] = real_uoa_age
 
         await save_kv_cache(
             f"radar_terminal_{sym.upper()}",
@@ -781,5 +811,31 @@ class RadarDataMixin:
                 "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
             },
         )
+
+        _mp_updated_str = (
+            mp_data.get("updated_at") if isinstance(mp_data, dict) else None
+        )
+        _mp_age_s: float | None = None
+        if _mp_updated_str:
+            try:
+                from datetime import datetime, timezone as _tz
+
+                _mp_age_s = (
+                    datetime.now(_tz.utc)
+                    - datetime.strptime(_mp_updated_str, "%Y-%m-%d %H:%M:%S").replace(
+                        tzinfo=_tz.utc
+                    )
+                ).total_seconds()
+            except Exception:
+                pass
+        _ages_s: list[float] = [a for a in [_mp_age_s, real_uoa_age] if a is not None]
+        result["_freshness"] = {
+            "mp_age_seconds": _mp_age_s,
+            "uoa_age_seconds": real_uoa_age,
+            "oldest_age_seconds": max(_ages_s) if _ages_s else None,
+            "is_any_stale": bool(mp_data.get("is_stale", False))
+            if isinstance(mp_data, dict)
+            else False,
+        }
 
         return result

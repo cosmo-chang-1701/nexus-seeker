@@ -289,12 +289,16 @@ def format_cache_age_suffix(
     if age_seconds is None or age_seconds < 0:
         return ""
     minutes = int(age_seconds // 60)
+    hours = minutes // 60
+    days = hours // 24
     if minutes < 1:
         age_str = "剛剛"
     elif minutes < 60:
         age_str = f"{minutes}分鐘前"
+    elif hours < 24:
+        age_str = f"{hours}小時前"
     else:
-        age_str = f"{minutes // 60}小時前"
+        age_str = f"{days}天前"
     if stale_threshold_seconds is not None and age_seconds >= stale_threshold_seconds:
         return f" [快取 / API 降級，更新於{age_str}]"
     return f" (更新於{age_str})"
