@@ -272,6 +272,16 @@ SETTINGS_LABELS = {
         "現金儲備金額 (USD, 用於生存天數計算)",
         "輸入大於等於 0 的現金儲備",
     ),
+    "option_buying_power": (
+        "🎯 期權購買力上限",
+        "使用者自填的期權/保證金購買力上限 (USD，非即時券商數據)",
+        "輸入大於等於 0 的金額",
+    ),
+    "margin_used": (
+        "📊 目前佔用保證金",
+        "使用者自填的目前佔用保證金金額 (USD，非即時券商數據)",
+        "輸入大於等於 0 的金額",
+    ),
     "can_trade_spreads": (
         "📈 期權 Spread 權限",
         "是否具備複式選擇權 (Spread) 交易權限",
@@ -411,7 +421,13 @@ class AccountSettingsModal(discord.ui.Modal):
                     ephemeral=True,
                 )
                 return
-        elif self.key in ["polymarket_threshold", "monthly_expense", "cash_reserve"]:
+        elif self.key in [
+            "polymarket_threshold",
+            "monthly_expense",
+            "cash_reserve",
+            "option_buying_power",
+            "margin_used",
+        ]:
             if val < 0:
                 await interaction.response.send_message(
                     embed=create_error_embed("金額不能為負數", title="驗證失敗"),
@@ -492,7 +508,13 @@ class AccountSettingsView(discord.ui.View):
                 val_display = f"${raw_val:,.2f}"
             elif key == "risk_limit":
                 val_display = f"{raw_val}%"
-            elif key in ["polymarket_threshold", "monthly_expense", "cash_reserve"]:
+            elif key in [
+                "polymarket_threshold",
+                "monthly_expense",
+                "cash_reserve",
+                "option_buying_power",
+                "margin_used",
+            ]:
                 val_display = f"${raw_val:,.0f}" if raw_val > 0 else "關閉/未設定"  # type: ignore
             elif key == "polymarket_slippage":
                 val_display = f"{raw_val}%"
@@ -583,6 +605,8 @@ class AccountSettingsView(discord.ui.View):
             f"💸 **每月生存支出預算**: `${ctx.monthly_expense:,.0f}`",
             f"🏦 **稅務預留比例**: `{ctx.tax_reserve_rate:.1%}`",
             f"💰 **現金儲備金額**: `${ctx.cash_reserve:,.0f}`",
+            f"🎯 **期權購買力上限 (自填)**: `${ctx.option_buying_power:,.0f}`",
+            f"📊 **目前佔用保證金 (自填)**: `${ctx.margin_used:,.0f}`",
         ]
 
         return create_account_settings_embed(

@@ -131,6 +131,91 @@ async def test_settings_modal_validation_cash_reserve(db_conn: Any):  # type: ig
 
 
 @pytest.mark.asyncio
+async def test_settings_modal_validation_option_buying_power(db_conn: Any):  # type: ignore
+    """測試 Modal 針對 option_buying_power (期權購買力上限, 使用者自填) 的輸入邊界驗證與持久化"""
+    user_id = 999005
+    view = AccountSettingsView(user_id)
+
+    modal = AccountSettingsModal(
+        user_id=user_id,
+        key="option_buying_power",
+        label="🎯 期權購買力上限",
+        current_value=0.0,
+        placeholder="輸入大於等於 0 的金額",
+        view=view,
+    )
+
+    # 1. 測試輸入小於 0 應被拒絕
+    modal.input_field._value = "-500"
+    mock_interaction = AsyncMock()
+    mock_interaction.response.send_message = AsyncMock()
+    await modal.on_submit(mock_interaction)
+    mock_interaction.response.send_message.assert_called_once()
+    assert (
+        "金額不能為負數"
+        in mock_interaction.response.send_message.call_args[1]["embed"].description
+    )
+
+    # 2. 測試正常輸入應成功持久化至資料庫
+    modal2 = AccountSettingsModal(
+        user_id=user_id,
+        key="option_buying_power",
+        label="🎯 期權購買力上限",
+        current_value=0.0,
+        placeholder="輸入大於等於 0 的金額",
+        view=view,
+    )
+    modal2.input_field._value = "25000"
+    mock_interaction2 = AsyncMock()
+    mock_interaction2.response.edit_message = AsyncMock()
+    await modal2.on_submit(mock_interaction2)
+
+    ctx = database.get_full_user_context(user_id)
+    assert ctx.option_buying_power == 25000.0
+
+
+@pytest.mark.asyncio
+async def test_settings_modal_validation_margin_used(db_conn: Any):  # type: ignore
+    """測試 Modal 針對 margin_used (目前佔用保證金, 使用者自填) 的輸入邊界驗證與持久化"""
+    user_id = 999006
+    view = AccountSettingsView(user_id)
+
+    modal = AccountSettingsModal(
+        user_id=user_id,
+        key="margin_used",
+        label="📊 目前佔用保證金",
+        current_value=0.0,
+        placeholder="輸入大於等於 0 的金額",
+        view=view,
+    )
+    modal.input_field._value = "-1"
+    mock_interaction = AsyncMock()
+    mock_interaction.response.send_message = AsyncMock()
+    await modal.on_submit(mock_interaction)
+    mock_interaction.response.send_message.assert_called_once()
+    assert (
+        "金額不能為負數"
+        in mock_interaction.response.send_message.call_args[1]["embed"].description
+    )
+
+    modal2 = AccountSettingsModal(
+        user_id=user_id,
+        key="margin_used",
+        label="📊 目前佔用保證金",
+        current_value=0.0,
+        placeholder="輸入大於等於 0 的金額",
+        view=view,
+    )
+    modal2.input_field._value = "12000"
+    mock_interaction2 = AsyncMock()
+    mock_interaction2.response.edit_message = AsyncMock()
+    await modal2.on_submit(mock_interaction2)
+
+    ctx = database.get_full_user_context(user_id)
+    assert ctx.margin_used == 12000.0
+
+
+@pytest.mark.asyncio
 async def test_settings_modal_validation_risk_limit(db_conn: Any):  # type: ignore
     """測試 Modal 針對 risk_limit (風險上限) 的 1% ~ 50% 範圍驗證"""
     user_id = 999001

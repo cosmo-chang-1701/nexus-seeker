@@ -3029,6 +3029,115 @@ def test_create_tactical_symbol_embed_shows_flip_placeholder_when_no_crossing() 
     assert "個股零 Gamma 翻轉線 (Stock GEX Flip): -- (無法估算)" in desc
 
 
+def test_create_tactical_symbol_embed_uoa_shows_sweep_block_cross_tags() -> None:
+    """UOA 表格應依 trade_type (量體形狀) + action (Bid/Ask 位置) 組合出
+    🔥 SWEEP / 📦 BLOCK / ⚖️ CROSS 三分類標籤，CROSS 優先於 BLOCK/SWEEP。"""
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data = {
+        "symbol": "NVDA",
+        "uoa": [
+            {
+                "expiry": "2026-06-12",
+                "strike": 150.0,
+                "type": "CALL",
+                "trade_price": 12.5,
+                "bid_price": 12.0,
+                "ask_price": 12.6,
+                "volume": 500,
+                "oi": 100,
+                "ratio": 5.0,
+                "ratio_str": "5.00x",
+                "action": "🟢 買入開倉 (BTO - Ask)",
+                "intent": "測試 SWEEP 意圖",
+                "trade_type": "SWEEP",
+                "symbol": "NVDA",
+            },
+            {
+                "expiry": "2026-06-12",
+                "strike": 155.0,
+                "type": "PUT",
+                "trade_price": 1.0,
+                "bid_price": 1.0,
+                "ask_price": 1.2,
+                "volume": 2000,
+                "oi": 100,
+                "ratio": 5.0,
+                "ratio_str": "5.00x",
+                "action": "🔴 賣出開倉 (STO - Bid)",
+                "intent": "測試 BLOCK 意圖",
+                "trade_type": "BLOCK",
+                "symbol": "NVDA",
+            },
+            {
+                "expiry": "2026-06-12",
+                "strike": 152.0,
+                "type": "CALL",
+                "trade_price": 1.1,
+                "bid_price": 1.0,
+                "ask_price": 1.2,
+                "volume": 300,
+                "oi": 100,
+                "ratio": 3.0,
+                "ratio_str": "3.00x",
+                "action": "⚖️ MIDPOINT (Cross)",
+                "intent": "測試 CROSS 意圖",
+                "trade_type": "SWEEP",
+                "symbol": "NVDA",
+            },
+        ],
+    }
+
+    embed = create_tactical_symbol_embed(data)
+    desc = get_embed_text(embed)
+
+    assert "🔥 SWEEP 🟢 買入開倉 (BTO - Ask)" in desc
+    assert "📦 BLOCK 🔴 賣出開倉 (STO - Bid)" in desc
+    assert "⚖️ CROSS ⚖️ MIDPOINT (Cross)" in desc
+
+
+def test_create_tactical_symbol_embed_shows_margin_buying_power_reference() -> None:
+    """資產端保證金與購買力區塊：已設定購買力時應顯示現金佔比與使用率色階。"""
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data = {
+        "symbol": "NVDA",
+        "capital": 100000.0,
+        "cash_reserve": 20000.0,
+        "option_buying_power": 50000.0,
+        "margin_used": 45000.0,
+    }
+
+    embed = create_tactical_symbol_embed(data)
+    desc = get_embed_text(embed)
+
+    assert "⚠️ 以下為使用者自填數據，非即時券商保證金/購買力數據" in desc
+    assert "可用非承諾現金: $20000.00" in desc.replace(",", "")
+    assert "期權購買力 (自填): $50000.00" in desc.replace(",", "")
+    # 45000/50000 = 90% >= 80% 門檻 -> 🔴
+    assert "保證金使用率: 90.0% 🔴 (安全提領線: 80%)" in desc
+
+
+def test_create_tactical_symbol_embed_margin_buying_power_unset_placeholder() -> None:
+    """未設定期權購買力上限時，應顯示「尚未設定」提示，不誤算除以零。"""
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data = {
+        "symbol": "NVDA",
+        "capital": 0.0,
+        "cash_reserve": 0.0,
+        "option_buying_power": 0.0,
+        "margin_used": 0.0,
+    }
+
+    embed = create_tactical_symbol_embed(data)
+    desc = get_embed_text(embed)
+
+    assert "可用非承諾現金: -- (尚無總資金基準)" in desc
+    assert "期權購買力 (自填): 尚未設定 (可於 /settings 設定)" in desc
+    assert "保證金使用率: --" in desc
+
+
 def test_create_tactical_symbol_embed_marks_live_iv_realtime() -> None:
     """iv_source == "LIVE_IV"（force_refresh 即時反解）時，IV 標題應標示
     🟢即時，讓使用者能分辨看到的 IV 是即時反解還是快取值。"""

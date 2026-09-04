@@ -47,6 +47,14 @@ def _format_uoa_field(uoa_data: list) -> str:
     trades = []
     for item in uoa_data:
         if "action" in item and "intent" in item:
+            action_str = str(item.get("action", ""))
+            trade_type_str = str(item.get("trade_type", "SWEEP")).upper()
+            if action_str.startswith("⚖️ MIDPOINT"):
+                flow_tag = "⚖️ CROSS"
+            elif trade_type_str == "BLOCK":
+                flow_tag = "📦 BLOCK"
+            else:
+                flow_tag = "🔥 SWEEP"
             trade = UOATradeResult(
                 expiry=str(item.get("expiry", "")),
                 strike_price=float(item.get("strike", 0.0)),
@@ -58,7 +66,7 @@ def _format_uoa_field(uoa_data: list) -> str:
                 open_interest=int(item.get("oi", 0)),
                 ratio=float(item.get("ratio", 0.0)),
                 ratio_str=str(item.get("ratio_str", f"{item.get('ratio', 0.0)}x")),
-                action=str(item.get("action", "")),
+                action=f"{flow_tag} {action_str}",
                 intent=str(item.get("intent", "")),
                 symbol=item.get("symbol"),
             )
@@ -1609,6 +1617,37 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             value="```ansi\n目前無顯著異常活動\n```",
             inline=False,
         )
+
+    capital_val = _to_float(data.get("capital"), 0.0)
+    cash_reserve_val = _to_float(data.get("cash_reserve"), 0.0)
+    buying_power_val = _to_float(data.get("option_buying_power"), 0.0)
+    margin_used_val = _to_float(data.get("margin_used"), 0.0)
+
+    margin_lines = ["```ansi", " ⚠️ 以下為使用者自填數據，非即時券商保證金/購買力數據"]
+
+    if capital_val > 0:
+        cash_pct = cash_reserve_val / capital_val * 100
+        margin_lines.append(
+            f" ├─ 可用非承諾現金: ${cash_reserve_val:,.2f} (佔比 {cash_pct:.1f}%)"
+        )
+    else:
+        margin_lines.append(" ├─ 可用非承諾現金: -- (尚無總資金基準)")
+
+    if buying_power_val > 0:
+        margin_lines.append(f" ├─ 期權購買力 (自填): ${buying_power_val:,.2f}")
+        util_pct = margin_used_val / buying_power_val * 100
+        util_flag = "🔴" if util_pct >= 80.0 else ("🟡" if util_pct >= 50.0 else "🟢")
+        margin_lines.append(
+            f" └─ 保證金使用率: {util_pct:.1f}% {util_flag} (安全提領線: 80%)"
+        )
+    else:
+        margin_lines.append(" ├─ 期權購買力 (自填): 尚未設定 (可於 /settings 設定)")
+        margin_lines.append(" └─ 保證金使用率: --")
+
+    margin_lines.append("```")
+    _add_ansi_field_safely(
+        embed, "🏦 資產端保證金與購買力 (使用者自填參考)", margin_lines
+    )
 
     embed.set_footer(
         text="🔗 使用 /settle_hedge 紀錄對沖或 /event_impact 進行曝險模擬。"
