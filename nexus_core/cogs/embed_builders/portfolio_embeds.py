@@ -7,7 +7,7 @@ import psutil
 
 import re
 from datetime import datetime, timezone
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from market_analysis.uoa_telemetry import UOATradeResult, generate_uoa_ascii_table
 from market_analysis.index_microstructure import estimate_symbol_gamma_flip
@@ -1678,5 +1678,82 @@ def create_tactical_hedge_embed(
         name="🛠️ 推薦執行步驟",
         value="1. 請在終端機或聊天室中輸入 `/settle_hedge` 以登錄對沖操作。\n2. 可搭配 `/event_impact` 輸入事件代號模擬近期宏觀事件（財報/CPI）對選擇權曝險的影響。",
         inline=False,
+    )
+    return embed
+
+
+def create_entry_rules_embed(
+    symbol: str,
+    four_rule_checks: Optional[List[Dict[str, Any]]],
+    six_rule_passed: Optional[bool],
+    six_rule_reasons: Optional[List[str]],
+) -> discord.Embed:
+    """
+    建構標的深度分析中心「🔐 進場鐵律檢核」頁籤 Embed。
+
+    彙總呈現兩組獨立、互不取代、互不合併的進場前檢核清單（詳見
+    `market_analysis/entry_ironclad.py` 檔頭註解的交叉對照表）：
+    - 四重鐵律 (`market_analysis/entry_ironclad.py::check_entry_ironclad_rules`)：
+      純函式、零 I/O，供 Dynamic Rollover Core Deployment 分支與本頁籤共用。
+    - 六重鐵律 (`market_analysis/dynamic_rollover/opportunity_cost.py::
+      _confirm_entry_signal`)：本專案既有機會成本轉倉候選標的確認的生產路徑，
+      額外含總經/財報安全閥與 candidate 自身 DTE 檢查（四重鐵律沒有這兩項）。
+    """
+    embed = NexusEmbed(
+        title=f"🔐 {symbol} 進場鐵律檢核 (Entry Ironclad Rules)",
+        color=discord.Color.dark_magenta(),
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    four_lines = [
+        "```ansi",
+        " 純函式・零 I/O (放量1.5x / UOA視窗+ratio 較嚴)",
+        " ----------------------------------",
+    ]
+    if four_rule_checks:
+        for idx, chk in enumerate(four_rule_checks):
+            prefix = " └─ " if idx == len(four_rule_checks) - 1 else " ├─ "
+            mark = (
+                "\u001b[1;32m✅\u001b[0m"
+                if chk.get("passed")
+                else "\u001b[1;31m❌\u001b[0m"
+            )
+            label = chk.get("label") or chk.get("name", "")
+            detail = chk.get("detail", "")
+            four_lines.append(f"{prefix}{mark} {label}：{detail}")
+        four_all_passed = all(bool(chk.get("passed")) for chk in four_rule_checks)
+        overall_mark = (
+            "\u001b[1;32m✅ 全數通過\u001b[0m"
+            if four_all_passed
+            else "\u001b[1;31m❌ 未全數通過\u001b[0m"
+        )
+        four_lines.append(f" 綜合判定: {overall_mark}")
+    else:
+        four_lines.append(" └─ 尚無足夠數據進行判定")
+    four_lines.append("```")
+    _add_ansi_field_safely(embed, "🔐 進場四重鐵律 (Entry Ironclad)", four_lines)
+
+    six_lines = [
+        "```ansi",
+        " 含即時 I/O・多兩道總經/財報安全閥與candidate自身DTE檢查",
+        " ----------------------------------",
+    ]
+    if six_rule_reasons:
+        for idx, reason in enumerate(six_rule_reasons):
+            prefix = " └─ " if idx == len(six_rule_reasons) - 1 else " ├─ "
+            six_lines.append(f"{prefix}{reason}")
+        overall_mark = (
+            "\u001b[1;32m✅ 全數通過\u001b[0m"
+            if six_rule_passed
+            else "\u001b[1;31m❌ 未全數通過\u001b[0m"
+        )
+        six_lines.append(f" 綜合判定: {overall_mark}")
+    else:
+        six_lines.append(" └─ 尚無足夠數據進行判定")
+    six_lines.append("```")
+    _add_ansi_field_safely(embed, "🔐 進場六重鐵律 (機會成本轉倉候選確認)", six_lines)
+
+    embed.set_footer(
+        text="🔗 四重鐵律與六重鐵律為獨立判定邏輯，互不取代，僅供進場前快速核對。"
     )
     return embed

@@ -3328,6 +3328,79 @@ def test_create_tactical_symbol_embed_tolerates_string_iv_and_macro_tte() -> Non
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# create_entry_rules_embed (進場鐵律檢核頁籤：四重鐵律 + 六重鐵律)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_create_entry_rules_embed_renders_both_checklists() -> None:
+    """四重鐵律與六重鐵律應各自渲染為獨立欄位，且 Pass/Fail 符號正確對應。"""
+    from cogs.embed_builders.portfolio_embeds import create_entry_rules_embed
+
+    four_rule_checks = [
+        {
+            "name": "rule_1_breakout",
+            "label": "結構性右側放量突破",
+            "passed": True,
+            "detail": "15m收盤 $101.00 > Gamma Flip估算 $100.00",
+        },
+        {
+            "name": "rule_2_put_wall_floor",
+            "label": "正 Gamma 底牆完好",
+            "passed": True,
+            "detail": "現價 $101.00 站上 PutWall $95.00",
+        },
+        {
+            "name": "rule_3_no_physical_cap",
+            "label": "無 UOA 物理封頂",
+            "passed": False,
+            "detail": "偵測到單筆 ratio>=1.0x OI 的 STO Call 物理封頂 @ $103.00",
+        },
+        {
+            "name": "rule_4_bto_call_conviction",
+            "label": "主力 BTO Call 買盤確認",
+            "passed": True,
+            "detail": "主力買盤 DTE=14、ratio=1.20x OI",
+        },
+    ]
+    six_rule_reasons = [
+        "條件一✅：15m收盤 $101.00 > Gamma Flip估算 $100.00，量能 5000 vs 均量×1.2=4000",
+        "條件二✅：正 Gamma 支撐牆 $95.00",
+        "條件三❌：Call Wall $103.00 距現價不足 5% 非對稱空間",
+        "條件四✅：主力買盤 DTE=14 (符合門檻 7)",
+        "條件五✅：總經環境與財報事件風控安全",
+        "條件六✅：標的最近效期 2026-10-16 DTE=42（符合門檻 >1）",
+    ]
+
+    embed = create_entry_rules_embed("NVDA", four_rule_checks, False, six_rule_reasons)
+
+    assert "NVDA" in str(embed.title)
+    four_field = next((f for f in embed.fields if "進場四重鐵律" in str(f.name)), None)
+    six_field = next((f for f in embed.fields if "進場六重鐵律" in str(f.name)), None)
+    assert four_field is not None
+    assert six_field is not None
+    four_value = str(four_field.value)
+    six_value = str(six_field.value)
+    assert "結構性右側放量突破" in four_value
+    assert "✅" in four_value and "❌" in four_value
+    assert "條件三❌" in six_value
+    assert "❌ 未全數通過" in six_value
+    # 兩組規則刻意獨立，footer 應揭露互不取代
+    assert embed.footer is not None
+    assert "互不取代" in str(embed.footer.text)
+
+
+def test_create_entry_rules_embed_handles_missing_data() -> None:
+    """四重/六重鐵律資料皆缺席時（例如尚未點擊過或計算失敗），不應拋出例外，
+    應顯示「尚無足夠數據進行判定」佔位文字。"""
+    from cogs.embed_builders.portfolio_embeds import create_entry_rules_embed
+
+    embed = create_entry_rules_embed("NVDA", None, None, None)
+    text = get_embed_text(embed)
+
+    assert text.count("尚無足夠數據進行判定") == 2
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 欄位數據驗算測試 (Field Accuracy Audit)
 # ─────────────────────────────────────────────────────────────────────────────
 

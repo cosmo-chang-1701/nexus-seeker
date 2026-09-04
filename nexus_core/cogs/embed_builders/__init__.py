@@ -110,6 +110,7 @@ from cogs.embed_builders.portfolio_embeds import (
     create_strategic_dash_embed,
     create_tactical_symbol_embed,
     create_tactical_hedge_embed,
+    create_entry_rules_embed,
 )
 
 # ── Watchlist Embeds ──────────────────────────────────────────────────────────
@@ -268,6 +269,7 @@ __all__ = [
     "create_strategic_dash_embed",
     "create_tactical_symbol_embed",
     "create_tactical_hedge_embed",
+    "create_entry_rules_embed",
     # Watchlist embeds
     "create_watchlist_embed",
     "create_watchlist_signal_embed",

@@ -118,6 +118,74 @@ async def test_symbol_hub_hedge_tolerates_string_iv_rank(  # type: ignore
 
 
 @pytest.mark.asyncio
+async def test_symbol_hub_entry_rules_combines_four_and_six_rule_checks(  # type: ignore
+    mock_interaction: Any, mock_bot: Any
+):
+    """進場鐵律檢核按鈕：應同時呼叫四重鐵律 (entry_ironclad, 零 I/O) 與
+    六重鐵律 (DynamicRolloverEngine._confirm_entry_signal, 含 I/O)，並將兩者
+    結果一併帶入 create_entry_rules_embed。"""
+    from market_analysis.entry_ironclad import RuleCheck, RuleCheckResult
+
+    view = SymbolHubView(symbol="AAPL", user_id=123, bot=mock_bot)
+    view.base_data = {
+        "symbol": "AAPL",
+        "price": 101.0,
+        "gex_profile_data": {"put_wall": 95.0, "call_wall": 110.0},
+        "uoa": [
+            {"type": "CALL", "action": "BTO", "ratio": 1.2, "expiry": "2099-01-01"}
+        ],
+        "close_15m": 101.5,
+        "volume_15m": 5000.0,
+        "volume_15m_sma20": 3000.0,
+    }
+
+    fake_four_rule_result = RuleCheckResult(
+        all_passed=True,
+        checks=[
+            RuleCheck(
+                name="rule_1_breakout",
+                label="結構性右側放量突破",
+                passed=True,
+                detail="ok",
+            )
+        ],
+    )
+
+    with patch(
+        "cogs.unified_terminal.symbol_view.create_entry_rules_embed"
+    ) as mock_builder, patch(
+        "market_analysis.entry_ironclad.check_entry_ironclad_rules"
+    ) as mock_four_rule, patch(
+        "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
+        new_callable=AsyncMock,
+    ) as mock_six_rule:
+        mock_four_rule.return_value = fake_four_rule_result
+        mock_six_rule.return_value = (False, "條件一✅：ok | 條件二❌：no support wall")
+        mock_builder.return_value = MagicMock(spec=discord.Embed)
+
+        await view.btn_entry_rules.callback(mock_interaction)
+
+        mock_four_rule.assert_called_once_with(
+            candidate_symbol="AAPL",
+            target_spot=101.0,
+            gex_profile_data=view.base_data["gex_profile_data"],
+            uoa_list=view.base_data["uoa"],
+            price_15m_close=101.5,
+            volume_15m=5000.0,
+            volume_15m_sma20=3000.0,
+        )
+        mock_six_rule.assert_called_once_with(view.symbol, view.base_data, 101.0)
+        mock_builder.assert_called_once_with(
+            "AAPL",
+            fake_four_rule_result.as_dict_list(),
+            False,
+            ["條件一✅：ok", "條件二❌：no support wall"],
+        )
+        _, last_kwargs = mock_interaction.edit_original_response.call_args
+        assert last_kwargs["embed"] is mock_builder.return_value
+
+
+@pytest.mark.asyncio
 async def test_symbol_hub_invalid_symbol_returns_error_embed(  # type: ignore
     mock_interaction: Any, mock_bot: Any
 ):
