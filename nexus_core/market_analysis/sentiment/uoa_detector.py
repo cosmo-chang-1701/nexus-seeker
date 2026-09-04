@@ -252,6 +252,7 @@ def _process_uoa_candidate_rows(
                 "oi_change_net": oi_change_net,
                 "delta": result.delta,
                 "dte": result.dte,
+                "notional_value": nominal_val,
             }
         )
 
@@ -300,8 +301,8 @@ async def detect_uoa(
                 )
             )
 
-        # 依成交量降序排列，取前 5 大
-        return sorted(uoa_list, key=lambda x: x["volume"], reverse=True)[:5]
+        # 依權利金金額（名目價值）降序排列，取前 5 大，更能反映真實機構資金規模
+        return sorted(uoa_list, key=lambda x: x["notional_value"], reverse=True)[:5]
 
     except Exception as e:
         logger.error(f"[{symbol}] UOA 偵測嚴重失敗: {e}", exc_info=True)
@@ -416,7 +417,9 @@ async def detect_uoa_with_physical_caps(
                         }
                     )
 
-        top5_uoa_list = sorted(uoa_list, key=lambda x: x["volume"], reverse=True)[:5]
+        top5_uoa_list = sorted(
+            uoa_list, key=lambda x: x["notional_value"], reverse=True
+        )[:5]
         return top5_uoa_list, physical_cap_strikes
 
     except Exception as e:

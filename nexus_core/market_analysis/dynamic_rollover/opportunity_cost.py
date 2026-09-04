@@ -155,7 +155,7 @@ def _confirm_entry_condition4_uoa_dte(uoa_list: list, reasons: list) -> bool:
         if "BTO" not in str(entry.get("action", "")):
             continue
         primary_bullish_call = entry
-        break  # uoa 已依成交量降序排列，第一筆符合者即為主力買盤
+        break  # uoa 已依權利金金額（名目價值）降序排列，第一筆符合者即為主力買盤
 
     if primary_bullish_call is None:
         reasons.append("條件四❌：未偵測到驅動進場的主力 CALL BTO 買盤")

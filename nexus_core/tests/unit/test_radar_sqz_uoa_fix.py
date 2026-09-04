@@ -86,7 +86,7 @@ async def test_detect_uoa_whale_blocks() -> None:
     ), patch("services.market_data_service.get_quote", return_value=quote):
         uoa_res = await detect_uoa("NVDA")
         assert len(uoa_res) == 2
-        # 依成交量降序
+        # 依權利金金額（名目價值）降序：210 履約價 $1,000,000 > 220 履約價 $75,000
         assert uoa_res[0]["strike"] == 210.0
         assert uoa_res[0]["volume"] == 2000.0
         assert uoa_res[1]["strike"] == 220.0
