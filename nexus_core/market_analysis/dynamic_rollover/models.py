@@ -69,10 +69,6 @@ class RolloverInstruction(_RolloverInstructionRequired, total=False):
     # 極端熔斷線/做市商底牆/ATR/穿透幅度/Gamma 狀態/執行指引），供呈現層原樣
     # 渲染為獨立欄位。其餘情境維持 None。
     extreme_breach_detail_block: Optional[str]
-    # 進場四重嚴格過濾鐵律 (market_analysis.entry_ironclad.RuleCheckResult.
-    # as_dict_list()) 的序列化檢核清單，供報告輸出層渲染 Pass/Fail。僅
-    # CORE_DEPLOYMENT 情境的機會分支（State A）指令會攜帶此欄位。
-    entry_ironclad_result: Optional[list[dict]]
     trigger_condition_text: Optional[str]
     sell_action: str
     buy_action_label: Optional[str]

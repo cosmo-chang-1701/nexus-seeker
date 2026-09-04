@@ -239,30 +239,17 @@ class SymbolHubView(discord.ui.View):
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> Any:
         """
-        進場鐵律檢核頁籤：彙總呈現四重鐵律 (entry_ironclad.py，純函式、零 I/O)
-        與六重鐵律 (dynamic_rollover/opportunity_cost.py::_confirm_entry_signal，
-        本專案既有機會成本轉倉候選確認生產路徑，含即時 I/O) 兩組獨立判定結果。
+        進場鐵律檢核頁籤：呈現六重鐵律 (dynamic_rollover/opportunity_cost.py::
+        _confirm_entry_signal，本專案既有機會成本轉倉候選確認生產路徑，含即時
+        I/O) 的判定結果。
         """
         await interaction.response.defer()
         await self._set_loading(interaction)
         embed = None
         try:
-            from market_analysis.entry_ironclad import check_entry_ironclad_rules
             from market_analysis.dynamic_rollover import DynamicRolloverEngine
 
             target_spot = _safe_float(self.base_data.get("price"), 0.0)
-
-            four_rule_result = check_entry_ironclad_rules(
-                candidate_symbol=self.symbol,
-                target_spot=target_spot,
-                gex_profile_data=self.base_data.get("gex_profile_data"),
-                uoa_list=self.base_data.get("uoa") or [],
-                price_15m_close=_safe_float(self.base_data.get("close_15m"), 0.0),
-                volume_15m=_safe_float(self.base_data.get("volume_15m"), 0.0),
-                volume_15m_sma20=_safe_float(
-                    self.base_data.get("volume_15m_sma20"), 0.0
-                ),
-            )
 
             engine = DynamicRolloverEngine()
             six_rule_passed, six_rule_reason = await engine._confirm_entry_signal(
@@ -272,7 +259,6 @@ class SymbolHubView(discord.ui.View):
 
             embed = create_entry_rules_embed(
                 self.symbol,
-                four_rule_result.as_dict_list(),
                 six_rule_passed,
                 six_rule_reasons,
             )

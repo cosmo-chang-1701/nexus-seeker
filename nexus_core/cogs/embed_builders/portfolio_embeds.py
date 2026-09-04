@@ -1684,20 +1684,15 @@ def create_tactical_hedge_embed(
 
 def create_entry_rules_embed(
     symbol: str,
-    four_rule_checks: Optional[List[Dict[str, Any]]],
     six_rule_passed: Optional[bool],
     six_rule_reasons: Optional[List[str]],
 ) -> discord.Embed:
     """
     建構標的深度分析中心「🔐 進場鐵律檢核」頁籤 Embed。
 
-    彙總呈現兩組獨立、互不取代、互不合併的進場前檢核清單（詳見
-    `market_analysis/entry_ironclad.py` 檔頭註解的交叉對照表）：
-    - 四重鐵律 (`market_analysis/entry_ironclad.py::check_entry_ironclad_rules`)：
-      純函式、零 I/O，供 Dynamic Rollover Core Deployment 分支與本頁籤共用。
-    - 六重鐵律 (`market_analysis/dynamic_rollover/opportunity_cost.py::
-      _confirm_entry_signal`)：本專案既有機會成本轉倉候選標的確認的生產路徑，
-      額外含總經/財報安全閥與 candidate 自身 DTE 檢查（四重鐵律沒有這兩項）。
+    彙總呈現進場六重鐵律 (`market_analysis/dynamic_rollover/opportunity_cost.py::
+    _confirm_entry_signal`) 的即時 Pass/Fail 判定：本專案既有機會成本轉倉候選
+    標的確認的生產路徑，含總經/財報安全閥與 candidate 自身 DTE 檢查等 I/O。
     """
     embed = NexusEmbed(
         title=f"🔐 {symbol} 進場鐵律檢核 (Entry Ironclad Rules)",
@@ -1705,37 +1700,9 @@ def create_entry_rules_embed(
         timestamp=datetime.now(timezone.utc),
     )
 
-    four_lines = [
-        "```ansi",
-        " 純函式・零 I/O (放量1.5x / UOA視窗+ratio 較嚴)",
-        " ----------------------------------",
-    ]
-    if four_rule_checks:
-        for idx, chk in enumerate(four_rule_checks):
-            prefix = " └─ " if idx == len(four_rule_checks) - 1 else " ├─ "
-            mark = (
-                "\u001b[1;32m✅\u001b[0m"
-                if chk.get("passed")
-                else "\u001b[1;31m❌\u001b[0m"
-            )
-            label = chk.get("label") or chk.get("name", "")
-            detail = chk.get("detail", "")
-            four_lines.append(f"{prefix}{mark} {label}：{detail}")
-        four_all_passed = all(bool(chk.get("passed")) for chk in four_rule_checks)
-        overall_mark = (
-            "\u001b[1;32m✅ 全數通過\u001b[0m"
-            if four_all_passed
-            else "\u001b[1;31m❌ 未全數通過\u001b[0m"
-        )
-        four_lines.append(f" 綜合判定: {overall_mark}")
-    else:
-        four_lines.append(" └─ 尚無足夠數據進行判定")
-    four_lines.append("```")
-    _add_ansi_field_safely(embed, "🔐 進場四重鐵律 (Entry Ironclad)", four_lines)
-
     six_lines = [
         "```ansi",
-        " 含即時 I/O・多兩道總經/財報安全閥與candidate自身DTE檢查",
+        " 含即時 I/O・總經/財報安全閥與candidate自身DTE檢查",
         " ----------------------------------",
     ]
     if six_rule_reasons:
@@ -1754,6 +1721,6 @@ def create_entry_rules_embed(
     _add_ansi_field_safely(embed, "🔐 進場六重鐵律 (機會成本轉倉候選確認)", six_lines)
 
     embed.set_footer(
-        text="🔗 四重鐵律與六重鐵律為獨立判定邏輯，互不取代，僅供進場前快速核對。"
+        text="🔗 進場六重鐵律：機會成本轉倉候選標的確認，僅供進場前快速核對。"
     )
     return embed

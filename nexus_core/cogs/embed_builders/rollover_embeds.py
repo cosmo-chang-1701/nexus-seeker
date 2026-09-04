@@ -281,7 +281,6 @@ def create_dynamic_rollover_embed(
     cash_impact: Optional[str] = None,
     trigger_condition_text: Optional[str] = None,
     asset_class: Optional[str] = None,
-    entry_ironclad_result: Optional[list[dict]] = None,
     extreme_stop_loss: Optional[float] = None,
     is_extreme_tick_breach: bool = False,
     extreme_breach_detail_block: Optional[str] = None,
@@ -311,14 +310,8 @@ def create_dynamic_rollover_embed(
         引導區塊顯示，None 時不顯示。
     :param trigger_condition_text: 引擎產生之「動態資金輪動觸發條件」段落，獨立
         呈現為專屬欄位，避免與其餘敘述一起塞入 description 時被截斷。
-    :param entry_ironclad_result: market_analysis.entry_ironclad.RuleCheckResult.
-        as_dict_list() 的序列化輸出（進場四重嚴格過濾鐵律 Pass/Fail 檢核清單）。
-        僅 CORE_DEPLOYMENT 情境的機會分支（狀態 A）指令會攜帶，None 時不渲染
-        對應欄位。
     :param extreme_stop_loss: 雙軌出場防守引擎軌道二（極端瞬時停損）數值。僅
         SATELLITE_REBALANCE 情境的指令會攜帶，None 或 <= 0 時不渲染對應欄位。
-        與 entry_ironclad_result 刻意互相獨立、非同時出現（分屬進場與出場
-        兩個不同情境）。
     :param is_extreme_tick_breach: 這次指令是否「真的」由軌道二極端瞬時停損
         觸發（而非例行 15m 收盤破位或常規再平衡）。True 時標題/顏色會升級為
         最高急迫性樣式，覆寫於 scenario 對照表結果之上。
@@ -559,39 +552,22 @@ def create_dynamic_rollover_embed(
 
     embed.add_field(name="🎯 終端執行引導", value="\n".join(guide_lines), inline=False)
 
-    # 4.5 防洗盤實戰策略檢核清單 (進場四重鐵律 Pass/Fail + 雙軌防守點位)
-    # 兩參數皆 None 時不新增欄位，維持既有情境 (SATELLITE_REBALANCE 未攜帶
-    # entry_ironclad_result、CORE_DEPLOYMENT 未攜帶 extreme_stop_loss 等)
-    # 的 embed 輸出向下相容、結構不變。
+    # 4.5 雙軌防守點位 (極端瞬時停損)
+    # extreme_stop_loss 未提供時不新增欄位，維持既有情境 (CORE_DEPLOYMENT 等
+    # 未攜帶此欄位) 的 embed 輸出向下相容、結構不變。
     has_extreme_stop_line = bool(extreme_stop_loss and extreme_stop_loss > 0)
-    if entry_ironclad_result or has_extreme_stop_line:
+    if has_extreme_stop_line:
         check_lines = [
             "```ansi",
-            " 🔐 進場四重鐵律檢核",
+            " 🛡️ 雙軌防守點位",
             " ----------------------------------",
+            f" └─ 雙軌防守：Stop_normal 見上方終端執行引導 ｜ "
+            f"Stop_extreme {C_RED}${extreme_stop_loss:.2f}{C_RESET}（現價貫穿即"
+            "無視收盤等待瞬時觸發）",
+            "```",
         ]
-        if entry_ironclad_result:
-            for idx, chk in enumerate(entry_ironclad_result):
-                is_last = (
-                    idx == len(entry_ironclad_result) - 1
-                ) and not has_extreme_stop_line
-                prefix = " └─ " if is_last else " ├─ "
-                mark = (
-                    f"{C_GREEN}✅{C_RESET}"
-                    if chk.get("passed")
-                    else f"{C_RED}❌{C_RESET}"
-                )
-                label = chk.get("label") or chk.get("name", "")
-                check_lines.append(f"{prefix}{mark} {label}")
-        if has_extreme_stop_line:
-            check_lines.append(
-                f" └─ 雙軌防守：Stop_normal 見上方終端執行引導 ｜ "
-                f"Stop_extreme {C_RED}${extreme_stop_loss:.2f}{C_RESET}（現價貫穿即"
-                "無視收盤等待瞬時觸發）"
-            )
-        check_lines.append("```")
         embed.add_field(
-            name="🔐 防洗盤實戰策略檢核清單",
+            name="🛡️ 防洗盤實戰策略檢核清單",
             value="\n".join(check_lines),
             inline=False,
         )

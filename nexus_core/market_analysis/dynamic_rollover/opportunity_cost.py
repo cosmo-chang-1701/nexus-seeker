@@ -20,6 +20,7 @@ from .constants import (
     _ENTRY_CANDIDATE_MIN_DTE,
     _ENTRY_UOA_CAP_RATIO_THRESHOLD,
     _ENTRY_UOA_MIN_DTE,
+    _ENTRY_UOA_MIN_RATIO,
     _ENTRY_VOLUME_LOOKBACK_BARS,
     _ENTRY_VOLUME_SURGE_MULTIPLIER,
     _ESTIMATED_ROUND_TRIP_COST_PCT,
@@ -37,12 +38,10 @@ from .structural_signals import _scan_gex_walls, evaluate_option_dte_tier
 
 
 # --- _confirm_entry_signal 六重進場鐵律各條件的獨立判斷函式 ---
-# 拆分自曾經 233 行的單一函式本體，每個函式對應一項條件，維持與原本
-# `# --- 條件N ---` 註解區段完全相同的判斷順序、fail-safe 語意與 reasons
-# 訊息文字，純屬邏輯抽取，不改變任何行為。共用的衍生資料 (gex_profile_data /
-# gex_profile / uoa_list / call_wall) 由呼叫端 (_confirm_entry_signal) 於
-# 迴圈外算好一次後傳入，避免重複解析。reasons 為呼叫端持有的單一列表，各函式
-# 依序原地 append 自身條件的判定說明，確保最終合併字串的順序與拆分前一致。
+# 每個函式對應一項條件，共用的衍生資料 (gex_profile_data / gex_profile /
+# uoa_list / call_wall) 由呼叫端 (_confirm_entry_signal) 於迴圈外算好一次後
+# 傳入，避免重複解析。reasons 為呼叫端持有的單一列表，各函式依序原地
+# append 自身條件的判定說明，確保最終合併字串的順序一致。
 async def _confirm_entry_condition1_breakout(
     candidate_symbol: str,
     target_spot: float,
@@ -97,18 +96,24 @@ async def _confirm_entry_condition1_breakout(
 def _confirm_entry_condition2_support_wall(
     candidate_symbol: str,
     gex_profile_data: Any,
+    target_spot: float,
     reasons: list,
 ) -> bool:
-    """條件二：做市商正 Gamma 底牆完好。"""
+    """條件二：做市商正 Gamma 底牆完好 (現價須站上支撐牆)。"""
     support_wall, _resistance_wall, support_gex, _resistance_gex = _scan_gex_walls(
         candidate_symbol,
         gex_profile_data if isinstance(gex_profile_data, dict) else None,
     )
-    c2_passed = support_wall > 0 and support_gex > 0
-    reasons.append(
-        f"條件二{'✅' if c2_passed else '❌'}：正 Gamma 支撐牆 "
-        f"{'$' + format(support_wall, '.2f') if c2_passed else '未偵測到'}"
-    )
+    has_support_wall = support_wall > 0 and support_gex > 0
+    is_above_wall = has_support_wall and target_spot > support_wall
+    c2_passed = has_support_wall and is_above_wall
+    if not has_support_wall:
+        reasons.append("條件二❌：正 Gamma 支撐牆未偵測到")
+    else:
+        reasons.append(
+            f"條件二{'✅' if is_above_wall else '❌'}：現價 ${target_spot:.2f} "
+            f"{'>' if is_above_wall else '<='} 正 Gamma 支撐牆 ${support_wall:.2f}"
+        )
     return c2_passed
 
 
@@ -145,8 +150,9 @@ def _confirm_entry_condition3_no_physical_cap(
 
 
 def _confirm_entry_condition4_uoa_dte(uoa_list: list, reasons: list) -> bool:
-    """條件四：避開結算日前夕的末日雜訊 (主力 UOA 買盤須 DTE >= 7)。"""
-    primary_bullish_call = None
+    """條件四：主力跨週期買盤認證與雜訊過濾 (主力 UOA BTO Call 買盤須同時滿足
+    DTE >= 7 與 ratio (Volume/OI) >= _ENTRY_UOA_MIN_RATIO)。uoa 已依權利金
+    金額（名目價值）降序排列，逐筆掃描找出第一筆同時符合兩項門檻者。"""
     for entry in uoa_list:
         if not isinstance(entry, dict):
             continue
@@ -154,26 +160,27 @@ def _confirm_entry_condition4_uoa_dte(uoa_list: list, reasons: list) -> bool:
             continue
         if "BTO" not in str(entry.get("action", "")):
             continue
-        primary_bullish_call = entry
-        break  # uoa 已依權利金金額（名目價值）降序排列，第一筆符合者即為主力買盤
+        ratio = float(entry.get("ratio", 0.0) or 0.0)
+        if ratio < _ENTRY_UOA_MIN_RATIO:
+            continue
+        try:
+            expiry_str = str(entry.get("expiry", ""))
+            exp_dt = datetime.strptime(expiry_str, "%Y-%m-%d").date()
+            dte = (exp_dt - datetime.now().date()).days
+        except (ValueError, TypeError):
+            continue
+        if dte >= _ENTRY_UOA_MIN_DTE:
+            reasons.append(
+                f"條件四✅：主力買盤 DTE={dte}、ratio={ratio:.2f}x OI "
+                f"(符合門檻 DTE>={_ENTRY_UOA_MIN_DTE}、ratio>={_ENTRY_UOA_MIN_RATIO})"
+            )
+            return True
 
-    if primary_bullish_call is None:
-        reasons.append("條件四❌：未偵測到驅動進場的主力 CALL BTO 買盤")
-        return False
-
-    try:
-        expiry_str = str(primary_bullish_call.get("expiry", ""))
-        exp_dt = datetime.strptime(expiry_str, "%Y-%m-%d").date()
-        dte = (exp_dt - datetime.now().date()).days
-        c4_passed = dte >= _ENTRY_UOA_MIN_DTE
-        reasons.append(
-            f"條件四{'✅' if c4_passed else '❌'}：主力買盤 DTE={dte} "
-            f"({'符合' if c4_passed else '低於'} 門檻 {_ENTRY_UOA_MIN_DTE})"
-        )
-        return c4_passed
-    except (ValueError, TypeError) as e:
-        reasons.append(f"條件四❌：主力買盤到期日解析失敗: {e}")
-        return False
+    reasons.append(
+        f"條件四❌：未偵測到符合門檻 (DTE>={_ENTRY_UOA_MIN_DTE}、"
+        f"ratio>={_ENTRY_UOA_MIN_RATIO}) 的主力 CALL BTO 買盤"
+    )
+    return False
 
 
 async def _confirm_entry_condition5_macro_earnings_gate(
@@ -531,7 +538,7 @@ class _OpportunityCostMixin:
             candidate_symbol, target_spot, gex_profile, reasons
         )
         c2_passed = _confirm_entry_condition2_support_wall(
-            candidate_symbol, gex_profile_data, reasons
+            candidate_symbol, gex_profile_data, target_spot, reasons
         )
         c3_passed = _confirm_entry_condition3_no_physical_cap(
             uoa_list, call_wall, target_spot, reasons

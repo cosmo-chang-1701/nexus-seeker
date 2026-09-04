@@ -23,8 +23,6 @@ from market_analysis.dynamic_rollover.anti_washout import (
 from market_analysis.dynamic_rollover.structural_signals import (
     evaluate_option_dte_tier,
 )
-from market_analysis.entry_ironclad import RuleCheckResult
-from market_analysis.price_volume_alert import Confirmed15mBar
 from cogs.embed_builders.rollover_embeds import (
     create_dynamic_rollover_embed,
     create_covered_call_overlay_embed,
@@ -37,23 +35,6 @@ from cogs.embed_builders.rollover_embeds import (
 @pytest.fixture
 def engine() -> DynamicRolloverEngine:
     return DynamicRolloverEngine()
-
-
-def _passing_confirmed_bar(close: float = 40.0) -> Confirmed15mBar:
-    """核心資金部署狀態 A 額外閘門所需的 15m 量價快照 mock，供不測試
-    entry_ironclad 內部規則細節、僅測試 core_deployment 分支邏輯的既有測試
-    共用（entry_ironclad 的規則細節已由專屬的 test_entry_ironclad.py 覆蓋）。"""
-    return Confirmed15mBar(
-        symbol="MOCK",
-        bar_time=datetime.now(),
-        close=close,
-        volume=1000.0,
-        avg_volume=500.0,
-    )
-
-
-def _passing_ironclad_result() -> RuleCheckResult:
-    return RuleCheckResult(all_passed=True, checks=[])
 
 
 @pytest.fixture(autouse=True)
@@ -554,35 +535,9 @@ def test_create_dynamic_rollover_embed_truncates_long_reason() -> None:
     assert "AAAA" in embed.description
 
 
-def test_create_dynamic_rollover_embed_renders_ironclad_checklist_field() -> None:
-    """entry_ironclad_result 帶入時，應新增「🔐 防洗盤實戰策略檢核清單」欄位，
-    正確渲染 Pass/Fail 符號、規則標籤，並顯示 extreme_stop_loss 數值。"""
-    entry_ironclad_result = [
-        {
-            "name": "rule_1_breakout",
-            "label": "結構性右側放量突破",
-            "passed": True,
-            "detail": "...",
-        },
-        {
-            "name": "rule_2_put_wall_floor",
-            "label": "正 Gamma 底牆完好",
-            "passed": True,
-            "detail": "...",
-        },
-        {
-            "name": "rule_3_no_physical_cap",
-            "label": "無 UOA 物理封頂",
-            "passed": False,
-            "detail": "...",
-        },
-        {
-            "name": "rule_4_bto_call_conviction",
-            "label": "主力 BTO Call 買盤確認",
-            "passed": True,
-            "detail": "...",
-        },
-    ]
+def test_create_dynamic_rollover_embed_renders_extreme_stop_loss_line() -> None:
+    """extreme_stop_loss 帶入時，應新增「🛡️ 防洗盤實戰策略檢核清單」欄位，
+    正確顯示雙軌防守點位數值。"""
     embed = create_dynamic_rollover_embed(
         rollover_type="核心資金部署",
         sell_symbol="VOO",
@@ -594,24 +549,19 @@ def test_create_dynamic_rollover_embed_renders_ironclad_checklist_field() -> Non
         strike="N/A",
         expiry="N/A",
         scenario="CORE_DEPLOYMENT",
-        entry_ironclad_result=entry_ironclad_result,
         extreme_stop_loss=88.5,
     )
     checklist_field = next(
-        (f for f in embed.fields if f.name == "🔐 防洗盤實戰策略檢核清單"), None
+        (f for f in embed.fields if f.name == "🛡️ 防洗盤實戰策略檢核清單"), None
     )
     assert checklist_field is not None
     assert checklist_field.value is not None
-    assert "結構性右側放量突破" in checklist_field.value
-    assert "✅" in checklist_field.value
-    assert "❌" in checklist_field.value  # rule_3 未通過
     assert "$88.50" in checklist_field.value
 
 
 def test_create_dynamic_rollover_embed_omits_checklist_field_when_none() -> None:
-    """entry_ironclad_result/extreme_stop_loss 皆未提供 (既有情境，例如
-    OPPORTUNITY_COST/MARGIN_DEFENSE) 時，不應新增檢核清單欄位，維持既有
-    embed 結構向下相容。"""
+    """extreme_stop_loss 未提供 (既有情境，例如 OPPORTUNITY_COST/MARGIN_DEFENSE)
+    時，不應新增檢核清單欄位，維持既有 embed 結構向下相容。"""
     embed = create_dynamic_rollover_embed(
         rollover_type="機會成本轉倉",
         sell_symbol="NVDA",
@@ -625,7 +575,7 @@ def test_create_dynamic_rollover_embed_omits_checklist_field_when_none() -> None
         scenario="OPPORTUNITY_COST",
     )
     checklist_field = next(
-        (f for f in embed.fields if f.name == "🔐 防洗盤實戰策略檢核清單"), None
+        (f for f in embed.fields if f.name == "🛡️ 防洗盤實戰策略檢核清單"), None
     )
     assert checklist_field is None
 
@@ -1826,18 +1776,7 @@ async def test_evaluate_core_deployment_no_target_allocation_is_noop(
     new_callable=AsyncMock,
     return_value=(True, "mocked"),
 )
-@patch(
-    "market_analysis.price_volume_alert.get_confirmed_15m_bar",
-    new_callable=AsyncMock,
-    return_value=_passing_confirmed_bar(),
-)
-@patch(
-    "market_analysis.entry_ironclad.check_entry_ironclad_rules",
-    return_value=_passing_ironclad_result(),
-)
 async def test_evaluate_core_deployment_triggers(
-    mock_ironclad: MagicMock,
-    mock_confirmed_bar: AsyncMock,
     mock_entry_gate: AsyncMock,
     engine: DynamicRolloverEngine,
 ) -> None:
@@ -1876,7 +1815,6 @@ async def test_evaluate_core_deployment_triggers(
     assert result[0]["scenario"] == "CORE_DEPLOYMENT"
     assert result[0]["is_manual_override_required"] is False
     assert result[0]["limit_price"] == 40.0
-    assert result[0]["entry_ironclad_result"] == []
 
 
 @pytest.mark.asyncio
@@ -1970,18 +1908,7 @@ async def test_evaluate_core_deployment_boxx_defense_auto_suggested(
     new_callable=AsyncMock,
     return_value=(True, "mocked"),
 )
-@patch(
-    "market_analysis.price_volume_alert.get_confirmed_15m_bar",
-    new_callable=AsyncMock,
-    return_value=_passing_confirmed_bar(),
-)
-@patch(
-    "market_analysis.entry_ironclad.check_entry_ironclad_rules",
-    return_value=_passing_ironclad_result(),
-)
 async def test_evaluate_core_deployment_boxx_auto_suggested_below_threshold(
-    mock_ironclad: MagicMock,
-    mock_confirmed_bar: AsyncMock,
     mock_entry_gate: AsyncMock,
     mock_suggest_boxx: AsyncMock,
     engine: DynamicRolloverEngine,
@@ -2155,18 +2082,7 @@ async def test_evaluate_core_deployment_satellite_asset_ignored(
     return_value=(True, "confirmed"),
 )
 @patch("database.market_cache.get_market_cache", return_value=None)
-@patch(
-    "market_analysis.price_volume_alert.get_confirmed_15m_bar",
-    new_callable=AsyncMock,
-    return_value=_passing_confirmed_bar(),
-)
-@patch(
-    "market_analysis.entry_ironclad.check_entry_ironclad_rules",
-    return_value=_passing_ironclad_result(),
-)
 async def test_scenario2_and_scenario5_reuse_confirm_entry_signal_result(
-    mock_ironclad: MagicMock,
-    mock_confirmed_bar: AsyncMock,
     mock_cache: MagicMock,
     mock_entry_gate: AsyncMock,
     engine: DynamicRolloverEngine,
@@ -2221,18 +2137,7 @@ async def test_scenario2_and_scenario5_reuse_confirm_entry_signal_result(
     new_callable=AsyncMock,
     return_value=(True, "confirmed independently"),
 )
-@patch(
-    "market_analysis.price_volume_alert.get_confirmed_15m_bar",
-    new_callable=AsyncMock,
-    return_value=_passing_confirmed_bar(),
-)
-@patch(
-    "market_analysis.entry_ironclad.check_entry_ironclad_rules",
-    return_value=_passing_ironclad_result(),
-)
 async def test_evaluate_core_deployment_confirms_independently_when_no_precomputed_result(
-    mock_ironclad: MagicMock,
-    mock_confirmed_bar: AsyncMock,
     mock_entry_gate: AsyncMock,
     engine: DynamicRolloverEngine,
 ) -> None:
@@ -4506,11 +4411,12 @@ async def test_confirm_entry_signal_condition1_fails_gamma_flip_unavailable(
 ) -> None:
     """條件一 fail-safe：GEX Profile 無零交叉點 (單一正值履約價) -> Gamma Flip
     無法估算，直接判定條件一未通過 (不發動 15m 抓取)；條件二仍可通過
-    (該履約價本身即為支撐牆)。"""
+    (該履約價本身即為支撐牆，且現價 $100 站上該支撐牆 $99)。"""
     radar = _green_candidate_radar()
     # 單一正值履約價數值採真實美元名目量級，確保條件二 (支撐牆偵測) 仍能通過
     # (本測試目的是驗證條件一因無零交叉點而失敗，而非條件二受薄弱紙牆過濾影響)。
-    radar["gex_profile_data"]["gex_profile"] = {"100": 600_000.0}
+    # 履約價設為略低於現價 ($99 < $100)，確保條件二的「現價須站上支撐牆」檢查通過。
+    radar["gex_profile_data"]["gex_profile"] = {"99": 600_000.0}
     with patch(
         "services.market_data_service.get_history_df",
         new_callable=AsyncMock,
@@ -4541,6 +4447,24 @@ async def test_confirm_entry_signal_condition1_fails_on_fetch_exception(
 
 
 @pytest.mark.asyncio
+async def test_confirm_entry_signal_condition1_requires_1_5x_volume_surge() -> None:
+    """條件一放量門檻已由 1.2x 調升為 1.5x：僅達舊門檻 (1.2x 均量) 而未達新
+    門檻 (1.5x 均量) 應判定未通過。"""
+    engine = DynamicRolloverEngine()
+    borderline_df = _make_15m_df([(98.0, 1000.0)] * 20 + [(101.0, 1200.0)])
+    with patch(
+        "services.market_data_service.get_history_df",
+        new_callable=AsyncMock,
+        return_value=borderline_df,
+    ):
+        confirmed, reason = await engine._confirm_entry_signal(
+            "TEST", _green_candidate_radar(), 100.0
+        )
+    assert confirmed is False
+    assert "條件一❌" in reason
+
+
+@pytest.mark.asyncio
 async def test_confirm_entry_signal_condition2_fails_no_support_wall(
     engine: DynamicRolloverEngine,
 ) -> None:
@@ -4548,6 +4472,17 @@ async def test_confirm_entry_signal_condition2_fails_no_support_wall(
     radar = _green_candidate_radar()
     radar["gex_profile_data"]["gex_profile"] = {"90": -10.0, "95": -20.0}
     confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+    assert confirmed is False
+    assert "條件二❌" in reason
+
+
+@pytest.mark.asyncio
+async def test_confirm_entry_signal_condition2_fails_price_below_support_wall(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """條件二：正 Gamma 支撐牆存在，但現價未站上 (跌破/持平) -> 未通過。"""
+    radar = _green_candidate_radar()  # 支撐牆為 $95.0
+    confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 90.0)
     assert confirmed is False
     assert "條件二❌" in reason
 
@@ -4631,6 +4566,32 @@ async def test_confirm_entry_signal_condition4_fails_dte_too_low(
             "strike": 102.0,
             "ratio": 3.0,
             "expiry": near_expiry,
+        }
+    ]
+    with patch(
+        "services.market_data_service.get_history_df",
+        new_callable=AsyncMock,
+        return_value=_GREEN_15M_DF,
+    ):
+        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+    assert confirmed is False
+    assert "條件四❌" in reason
+
+
+@pytest.mark.asyncio
+async def test_confirm_entry_signal_condition4_fails_ratio_too_low(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """條件四：主力 CALL BTO 買盤 DTE 達標，但 ratio (Volume/OI) 低於
+    _ENTRY_UOA_MIN_RATIO (0.8x) 門檻 -> 未通過。"""
+    radar = _green_candidate_radar()
+    radar["uoa"] = [
+        {
+            "type": "CALL",
+            "action": "🟢 買入開倉 (BTO - Ask)",
+            "strike": 105.0,
+            "ratio": 0.5,  # < _ENTRY_UOA_MIN_RATIO (0.8)
+            "expiry": (datetime.now().date() + timedelta(days=14)).strftime("%Y-%m-%d"),
         }
     ]
     with patch(

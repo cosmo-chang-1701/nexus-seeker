@@ -888,7 +888,6 @@ class PortfolioMonitorCog(commands.Cog):
                                 trigger_condition_text=ins.get(
                                     "trigger_condition_text"
                                 ),
-                                entry_ironclad_result=ins.get("entry_ironclad_result"),
                                 extreme_stop_loss=ins.get("extreme_stop_loss"),
                                 is_extreme_tick_breach=bool(
                                     ins.get("is_extreme_tick_breach")

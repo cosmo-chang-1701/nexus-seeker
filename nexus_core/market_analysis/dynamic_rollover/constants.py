@@ -46,10 +46,9 @@ _DEFAULT_MAX_ALLOCATION_PCT: float = (
 # --- 邏輯 (5)：核心資金部署 (evaluate_core_deployment) 具名常數 ---
 _CORE_EXCESS_MIN_TRADE_PCT: float = 0.005  # CORE 超額配置低於此幅度 (0.5%) 視為誤差雜訊，不觸發部署轉倉，避免 dust trade
 _BOXX_DEFENSE_THRESHOLD: float = 50.0  # boxx_allocation_pct (0-100) >= 此值時，超額資金優先防禦轉入 BOXX 而非候選標的
-# 機會分支（State A）通過既有六重鐵律 _confirm_entry_signal 且額外通過
-# market_analysis.entry_ironclad.check_entry_ironclad_rules（進場四重鐵律）
-# 後，僅動用超額資金的這個比例部署至候選標的；剩餘部分維持現金/緩衝，
-# 不生成第二筆分流指令。BOXX 防禦分支不受此常數影響，仍為 100% 部署。
+# 機會分支（State A）通過既有六重鐵律 _confirm_entry_signal 後，僅動用超額
+# 資金的這個比例部署至候選標的；剩餘部分維持現金/緩衝，不生成第二筆分流
+# 指令。BOXX 防禦分支不受此常數影響，仍為 100% 部署。
 _CORE_DEPLOYMENT_OPPORTUNITY_DEPLOY_RATIO: float = 0.5
 
 # --- 邏輯 (5) 延伸：Covered Call Overlay (evaluate_covered_call_overlay) 具名常數 ---
@@ -64,28 +63,25 @@ _COVERED_CALL_MIN_DTE: int = 18
 _COVERED_CALL_MAX_DTE: int = 25
 
 # --- 進場訊號六重嚴格過濾鐵律 (opportunity_cost.py::_confirm_entry_signal) 具名常數 ---
-# (原註解誤標「四重」，已修正——本函式實為六項條件，見其自身 docstring)
-#
-# 與 market_analysis/entry_ironclad.py 的「進場四重嚴格過濾鐵律」
-# (check_entry_ironclad_rules) 交叉對照表：兩套鐵律刻意完全獨立、不合併
-# (見 entry_ironclad.py 模組 docstring 的設計理由)，條件一/三/四在概念上
-# 有對應但門檻/範圍刻意收得更嚴，條件二為簡化版，條件五/六在四重鐵律中
-# 無對應（四重鐵律是零 I/O 純函式，不含總經/財報/candidate 自身 DTE 檢查）：
-#   六重條件一 (放量倍數 1.2x)         <-> 四重規則一 (entry_ironclad._IRONCLAD_VOLUME_SURGE_MULTIPLIER = 1.5x，更嚴)
-#   六重條件二 (_scan_gex_walls 完整掃描) <-> 四重規則二 (僅檢查 put_wall > 0 且現價站上，簡化版)
-#   六重條件三 (無上緣界限、嚴格 >)      <-> 四重規則三 (entry_ironclad._IRONCLAD_UOA_CAP_RATIO_THRESHOLD /
-#                                          _IRONCLAD_UOA_CAP_UPSIDE_ROOM_PCT，限定 (spot, spot*1.05] 視窗、改用 >=)
-#   六重條件四 (僅檢查 DTE>=7，不檢查 ratio) <-> 四重規則四 (entry_ironclad._IRONCLAD_UOA_ENTRY_MIN_DTE /
-#                                          _IRONCLAD_UOA_ENTRY_MIN_RATIO，額外要求 ratio>=0.8)
-#   六重條件五 (總經/財報安全閥)         <-> 四重鐵律無對應（純函式不含此 I/O）
-#   六重條件六 (candidate 自身 DTE)      <-> 四重鐵律無對應（純函式不含此 I/O）
+# 六項條件必須同時成立才允許對候選標的實際啟動機會成本轉倉/核心資金部署指令：
+#   條件一：結構性右側放量突破 (15m 實體收盤站穩 Gamma Flip 估算門檻 + 放量)
+#   條件二：做市商正 Gamma 底牆完好 (支撐牆存在且現價站上)
+#   條件三：做市商阻力結構與非對稱空間 (無 UOA 物理封頂，Call Wall 空間充足)
+#   條件四：主力跨週期買盤認證與雜訊過濾 (BTO Call，DTE 與 ratio 雙門檻)
+#   條件五：二元宏觀與財報事件安全閥
+#   條件六：candidate 自身最近效期選擇權週期雜訊過濾 (避開 0/1 DTE)
 _ENTRY_VOLUME_LOOKBACK_BARS: int = 20  # 條件一：15m 成交量基準所需回看根數 (不含確認根)
-_ENTRY_VOLUME_SURGE_MULTIPLIER: float = 1.2  # 條件一：「放量」門檻，須達回看均量的倍數
+_ENTRY_VOLUME_SURGE_MULTIPLIER: float = (
+    1.5  # 條件一：「放量」門檻，須達回看均量的 1.5 倍
+)
 _ENTRY_UOA_CAP_RATIO_THRESHOLD: float = (
     1.0  # 條件三：單筆 STO Call 視為物理封頂的 ratio (volume/OI) 門檻
 )
 _ENTRY_ASYMMETRIC_ROOM_PCT: float = 0.05  # 條件三：上方須保留的最低非對稱獲利空間
 _ENTRY_UOA_MIN_DTE: int = 7  # 條件四：驅動進場的主力 UOA 買盤最低 DTE 要求
+_ENTRY_UOA_MIN_RATIO: float = (
+    0.8  # 條件四：驅動進場的主力 UOA 買盤最低 ratio (volume/OI) 要求
+)
 _ENTRY_CANDIDATE_MIN_DTE: int = (
     1  # 條件六：標的自身最近效期需 > 此值天數 (避開 0/1 DTE 結算日雜訊)
 )
