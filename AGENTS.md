@@ -148,6 +148,22 @@ The terminal radar card is built inside `cogs/embed_builders/` using `build_rada
   - **Discord 互動指令 (如 `/x` 單訊息就地翻頁)**：多頁掃描結果採用 `BatchScanPaginatedView`（`cogs/unified_terminal/batch_scan_view.py`），透過 `interaction.response.edit_message()` 於單一 Ephemeral 訊息中進行 `◀ 上一頁` / `下一頁 ▶` 就地翻頁，徹底避免逐頁發送 followup 訊息觸發 Discord 40094 限制。該 View 同時掛載 `⚡ 批次分析警示標的` (`BatchScanWarningButton`，以 `Semaphore(3)` 併行分析並透過 `chunk_embeds` 依字數分段安全發送) 與 `🔄 返回控制面板`（切回 `UnifiedRadarView`）。
   - **背景排程與 DM 隊列 (如 Watchlist 15分鐘心跳)**：呼叫端會自動對 Embed 列表進行迭代，逐頁調用 `queue_dm` 加入發送佇列，確保每一頁皆能穩定投遞且不觸發 Discord API 的字數限制。
 
+### 5. 個股深度分析面板 (Symbol Hub / `/x symbol:`)
+
+單一標的深度分析（`create_tactical_symbol_embed()`，`cogs/embed_builders/portfolio_embeds.py`；資料組裝於 `cogs/unified_terminal/symbol_deep_dive.py`）在既有的技術/期權快照基礎上，持續擴充以下量化與帳戶層級欄位：
+
+- **15 分鐘微觀結構 (15m Microstructure)**：除既有的已收盤 15m K棒 OHLC、15m 成交量、SMA20 均量與 RVOL_15m 外，另補上：
+  - **15m ATR (EMA14)**：沿用 `market_analysis/atr_utils.py::fetch_atr_15m()` 既有計算結果獨立顯示一行（原本只用於防洗盤停損公式，未曾單獨渲染）。
+  - **Session VWAP**：`market_analysis/vwap_utils.py::fetch_session_vwap()` 以 `period="1d", interval="15m"` 單次抓取當前/最近一個交易時段的 K棒（刻意不沿用其他 15m 抓取共用的 `period="5d"`，因為 VWAP 定義本身只需要單一 session 即可自然涵蓋），計算累積成交量加權均價與現價偏離%。
+- **GEX 結構邊界接線**：`fetch_symbol_gex_metrics()` 原本就會回傳 `net_gex`、`call_wall`、`gex_profile`，但先前只有 `put_wall` 被實際渲染。現已接上：
+  - **Net GEX Regime**：依 `net_gex` 正負分類為 🟢 LONG_GAMMA（自穩定壓制波動）/ 🔴 SHORT_GAMMA（助漲助跌）——這是個股層級的展示分類，與 `index_microstructure.get_market_regime()` 的大盤層級 `SHORT_GAMMA_CRITICAL` 是獨立概念，不應混淆。
+  - **個股 GEX Flip 線**：呼叫既有的 `index_microstructure.estimate_symbol_gamma_flip(gex_profile, spot)`（累積 GEX 曝險零交叉點估算），顯示翻轉價位與現價緩衝%；找不到零交叉點時顯示 `--` 而非誤導性的 `$0.00`。
+  - **GEX CallWall**：水位、該履約價的淨 GEX 深度，以及距現價空間%（< 5% 時標註 `❌ 不足5%` 空間不足警示）。
+- **UOA 訂單流強化**：
+  - **權利金欄位 (Notional Premium)**：`generate_uoa_ascii_table()`（`market_analysis/uoa_telemetry.py`）新增「權利金」欄位，由 `trade_price * volume * 100` 動態算出，`>= $1M` 顯示 `M`，否則顯示 `k`。
+  - **SWEEP/BLOCK/CROSS 三分類**：`_format_uoa_field()`（`cogs/embed_builders/portfolio_embeds.py`）合併兩套原本各自獨立、從未互相參照的既有啟發式訊號——`uoa_detector.py` 的**成交量整數手數形狀**（`vol > 1500` 且為 100 的倍數 → BLOCK，否則 SWEEP）與 `classify_uoa_trade()` 的 **Bid/Ask 執行價位置**（MIDPOINT 視為暗池對倒代理訊號）——輸出 🔥 SWEEP / 📦 BLOCK / ⚖️ CROSS 標籤（CROSS 判定優先於量體形狀，因為對倒印花本質上比單純大單形狀更具決定性）。**這仍是啟發式代理，不是真實 order-type tape 資料**；`cogs/embed_builders/watchlist_embeds.py` 心跳 embed 的 SWEEP/BLOCK 兩分類是獨立渲染路徑，尚未同步擴充為三分類。
+- **🏦 資產端保證金與購買力 (使用者自填參考)**：本平台是純現金紙上帳戶模型，沒有真實券商保證金/購買力資料。`user_settings` 新增 `option_buying_power`（期權購買力上限）與 `margin_used`（目前佔用保證金）兩個使用者自填欄位（比照既有 `cash_reserve` 模式，`/settings` 可編輯，migration `v067`），Symbol Hub 據此顯示可用現金佔比（沿用既有 `cash_reserve`/`capital`）、期權購買力與保證金使用率（🟢 < 50% / 🟡 50-80% / 🔴 >= 80%，門檻沿用 `risk_engine.get_macro_risk_metrics()` 既有的 `portfolio_heat_limit` 80% 慣例）。此區塊明確標註「使用者自填數據，非即時券商保證金/購買力數據」，避免與其餘即時市場數據混淆。
+
 ---
 
 ## Watchlist 15-Minute Heartbeat
@@ -656,6 +672,11 @@ Current repository rule:
     - 當非交易時段、市場封盤或網路/API 異常導致即時數據不可用時，Embed Title 必須追加狀態後綴（如 ` [盤前數據未更新/降級模式]`），且受影響的指標應自動降級顯示為公允的預設字元（如 `--%`、`--`、`N/A`、`封盤中`）。
     - 若成功讀取本地 SQLite 資料庫快取或歷史代理數據（如歷史波動率 proxy），Title 應註明來源屬性（如 ` [盤前/前日收盤]` 或 ` [盤前/HV代理]`），數值旁應附加 `(前日收盤 / 歷史波動率代理)` 標記，確保數據透明度。
     - 若核心比對數值偏離公允區間超出特定閥值（例如價格偏離痛點 >30% 觸發斷路器），下游的執行或操作指南需自動顯示 `N/A (已觸發斷路器)` 或相關警告，暫停輸出特定交易建議。
+  - **啟發式代理數據揭露 (Heuristic Proxy Disclosure)**：當某項使用者可見的判定/標籤是由**啟發式規則或代理指標**推算而來（而非真實的第一手數據源），必須在該欄位/圖例附近明確揭露，不能讓使用者誤以為是即時精確數據。現行案例：
+    - UOA SWEEP/BLOCK/CROSS 分類（`_format_uoa_field()`、`watchlist_embeds.py` 心跳 UOA 表格）：由成交量整數手數形狀 + Bid/Ask 執行價位置兩套啟發式訊號組合而成，非真實 order-type tape 資料，表格下方固定附註揭露文字。
+    - 🧲 共振磁吸 / 高階磁吸過濾（Radar Terminal `build_radar_scan_embed` 圖例、`magnetic_filters` 下拉選單描述）：`dp_poc` 是 Volume-POC/HVN 的代理指標，本平台無真實暗池數據源，固定附註揭露。
+    - 🏦 資產端保證金與購買力（Symbol Hub）：`option_buying_power`/`margin_used` 是使用者自填數值，非即時券商保證金數據，區塊開頭固定附註揭露。
+    - 新增此類代理判定時，比照上述既有案例的措辭與位置（表格/圖例附近、簡短一行）加入揭露，而非省略。
   - **結構化網格與戰術意圖映射 (Structured Grid & Tactical Intent Mapping)**：數據表格（如異常交易流、委託單列表、持倉明細）必須動態計算每列的最大字元寬度以對齊網格。底層的原始數據流或交易類別應被映射轉換為直觀的戰術意圖描述，使終端使用者能迅速判讀意圖與支撐/阻力物理界線。
   - **字數上限與分頁保護 (Pagination & Message Splitting)**：
     - **批次分頁限制**：當批次掃描或查詢的標的/項目數量過大時，為避免超出 Discord 的 4096 (Description) 與 6000 (Total Size) 字元上限而導致 `400 Bad Request` 系統錯誤，單一頁面最多僅能承載 **10 個標的**。

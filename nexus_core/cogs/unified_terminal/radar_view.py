@@ -130,7 +130,7 @@ class UnifiedRadarView(discord.ui.View):
             discord.SelectOption(
                 label="🧲 高階磁吸過濾 (Magnetic Filters)",
                 value="magnetic_filters",
-                description="偏離大於10% + 站穩底牆 + 暗池共振",
+                description="偏離大於10% + 站穩底牆 + 暗池共振 (Volume-POC代理，非真實暗池數據)",
             ),
         ]
         self.filter_select = discord.ui.Select(  # type: ignore

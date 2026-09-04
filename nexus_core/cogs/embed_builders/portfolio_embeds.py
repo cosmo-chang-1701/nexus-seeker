@@ -1608,7 +1608,13 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     if uoa_data:
         try:
             table_str = _format_uoa_field(uoa_data)
-            _add_ansi_field_safely(embed, uoa_field_name, table_str.split("\n"))
+            table_lines = table_str.split("\n")
+            table_lines.append("")
+            table_lines.append(
+                "⚠️ SWEEP/BLOCK/CROSS 為量體形狀 + Bid/Ask 執行價位置啟發式代理判定，"
+                "非真實 order-type 逐筆 tape 數據。"
+            )
+            _add_ansi_field_safely(embed, uoa_field_name, table_lines)
         except Exception:
             pass
     else:
