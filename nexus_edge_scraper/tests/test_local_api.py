@@ -223,6 +223,8 @@ def test_scrape_liquidity_closes_browser_on_exception() -> None:
 
 
 def test_scrape_fedwatch_realtime_zq_calculation() -> None:
+    # Atlanta Fed Excel 現為 Primary 來源，需讓 requests.get 失敗才會真正落到
+    # ZQ 期貨階梯算式（Secondary）這條路徑，維持本測試原本的測試意圖。
     import pandas as pd
 
     mock_df_meeting = pd.DataFrame({"Close": [96.33]}, index=[pd.Timestamp.now()])
@@ -239,7 +241,10 @@ def test_scrape_fedwatch_realtime_zq_calculation() -> None:
             t.history.return_value = mock_df_meeting
         return t
 
-    with patch("yfinance.Ticker", side_effect=mock_ticker):
+    with (
+        patch("yfinance.Ticker", side_effect=mock_ticker),
+        patch("requests.get", side_effect=Exception("Mock Atlanta Fed fetch failure")),
+    ):
         response = client.get("/api/v1/scrape/macro/fedwatch")
         assert response.status_code == 200
         data = response.json()
@@ -250,6 +255,87 @@ def test_scrape_fedwatch_realtime_zq_calculation() -> None:
         assert res_data["prob_hike"] == 32.1
         assert res_data["prob_cut"] == 0.0
         assert res_data["decision"] == "maintain"
+        # 未跨過一整碼邊界 (32.1% < 100%)：不應觸發 ladder 飽和旗標，
+        # prob_hike_25 應等於聚合值本身，prob_hike_50 維持 0.0
+        assert res_data["ladder_saturated"] is False
+        assert res_data["prob_hike_25"] == 32.1
+        assert res_data["prob_hike_50"] == 0.0
+        assert res_data["prob_cut_25"] == 0.0
+        assert res_data["prob_cut_50"] == 0.0
+        assert (
+            round(
+                res_data["prob_maintain"]
+                + res_data["prob_hike"]
+                + res_data["prob_cut"],
+                1,
+            )
+            == 100.0
+        )
+
+
+def test_scrape_fedwatch_zq_ladder_saturation_decomposes_across_buckets() -> None:
+    """驗證 ZQ 期貨階梯算式在隱含降息幅度跨過一整碼 (25bp) 邊界時，不會再像修正前
+    那樣把 prob_maintain 硬壓成孤立無說明的 0.0、prob_cut 硬壓成孤立無說明的 100.0，
+    而是附帶 ladder_saturated 旗標與 prob_cut_25/prob_cut_50 拆解，說明幅度分佈。
+    對應使用者回報的「(09/16) 降息確立 (降息 100.0% / 維持 0.0%)」誤導性顯示 bug。
+
+    數學設計：delta_r = days_in_month * (implied_avg - r1) / d_post，
+    這裡選用今日 (next_meeting = 2026-09-16，days_in_month=30, d_prior=16,
+    d_post=14) 的階梯權重反推出 delta_r = -0.35（介於 -0.25 與 -0.50 之間，
+    即 1.4 個 25bp 級距，floor_steps=1，frac=0.4），確保落在
+    「已完全定價 1 碼、但 2 碼仍有 40% 部分機率」的情境，而非只是清晰的單一步階。
+    """
+    import pandas as pd
+
+    r1 = 3.5
+    delta_r_target = -0.35
+    days_in_month = 30  # next_meeting 為 2026-09-16 (2026年9月)
+    d_prior = 16
+    d_post = days_in_month - d_prior  # 14
+    implied_avg = r1 + delta_r_target * d_post / days_in_month
+    latest_price = 100.0 - implied_avg
+
+    mock_df_meeting = pd.DataFrame(
+        {"Close": [latest_price]}, index=[pd.Timestamp.now()]
+    )
+    mock_df_prior = pd.DataFrame({"Close": [100.0 - r1]}, index=[pd.Timestamp.now()])
+    mock_df_irx = pd.DataFrame({"Close": [r1]}, index=[pd.Timestamp.now()])
+
+    def mock_ticker(sym: str) -> MagicMock:
+        t = MagicMock()
+        if sym == "^IRX":
+            t.history.return_value = mock_df_irx
+        elif "ZQQ" in sym:
+            t.history.return_value = mock_df_prior
+        else:
+            t.history.return_value = mock_df_meeting
+        return t
+
+    with (
+        patch("yfinance.Ticker", side_effect=mock_ticker),
+        patch("requests.get", side_effect=Exception("Mock Atlanta Fed fetch failure")),
+    ):
+        response = client.get("/api/v1/scrape/macro/fedwatch")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+        res_data = data["data"]
+        assert res_data["source"] == "CME 30-Day Fed Funds Futures (ZQ)"
+        assert res_data["decision"] == "cut"
+
+        # 聚合欄位語意不變：在「只有相鄰兩桶」模型下，跨過一整碼後維持機率確實是 0%，
+        # 這本身不是 bug；bug 在於顯示層過去完全沒有幅度不確定性的說明。
+        assert res_data["prob_cut"] == 100.0
+        assert res_data["prob_maintain"] == 0.0
+        assert res_data["prob_hike"] == 0.0
+
+        # 核心修正：飽和旗標 + 兩個相鄰桶都要有意義地分配到機率，而非全部塞在單一桶
+        assert res_data["ladder_saturated"] is True
+        assert res_data["prob_cut_25"] == 60.0
+        assert res_data["prob_cut_50"] == 40.0
+        assert res_data["prob_cut_25"] > 0.0
+        assert res_data["prob_cut_50"] > 0.0
+        assert round(res_data["prob_cut_25"] + res_data["prob_cut_50"], 1) == 100.0
         assert (
             round(
                 res_data["prob_maintain"]
@@ -276,6 +362,7 @@ def test_scrape_fedwatch_fallback() -> None:
         assert data["data"]["prob_cut"] == 50.0
         assert data["data"]["decision"] == "maintain"
         assert data["data"]["source"] == "fallback"
+        assert data["data"]["ladder_saturated"] is False
 
 
 def test_scrape_fedwatch_excel_parsing_and_buckets() -> None:
@@ -329,6 +416,8 @@ def test_scrape_fedwatch_excel_parsing_and_buckets() -> None:
         assert data["data"]["prob_hike"] == 5.0
         assert data["data"]["meeting_date"] == meeting_date.strftime("%m/%d")
         assert data["data"]["source"] == "Atlanta Fed Market Probability Tracker (MPT)"
+        # Excel 路徑直接加總已公布多桶機率，結構上不會有 ladder 飽和問題
+        assert data["data"]["ladder_saturated"] is False
 
 
 def test_scrape_fedwatch_stale_data_fallback() -> None:
@@ -441,6 +530,7 @@ def test_scrape_fedwatch_direct_summary_and_buckets_no_double_count() -> None:
             == 100.0
         )
         assert res_data["source"] == "Atlanta Fed Market Probability Tracker (MPT)"
+        assert res_data["ladder_saturated"] is False
 
 
 # NOTE: this mocked HTML contains no "Item 7"/"Item 2"/"Item 1A" anchor text

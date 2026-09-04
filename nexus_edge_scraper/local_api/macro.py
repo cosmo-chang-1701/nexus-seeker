@@ -464,6 +464,11 @@ async def scrape_fedwatch() -> dict[str, Any]:
         "prob_maintain": 50.0,
         "prob_hike": 0.0,
         "prob_cut": 50.0,
+        "prob_hike_25": 0.0,
+        "prob_hike_50": 0.0,
+        "prob_cut_25": 0.0,
+        "prob_cut_50": 0.0,
+        "ladder_saturated": False,
         "decision": "maintain",
         "source": "fallback",
     }
@@ -579,13 +584,46 @@ async def scrape_fedwatch() -> dict[str, Any]:
         r2 = (days_in_month * implied_avg - d_prior * r1) / d_post
         delta_r = r2 - r1
 
+        # 階梯內插：把隱含變動幅度（以 25bp 為一階）拆解成「已完全定價的整數階」
+        # 與「下一階的部分機率」。舊版單一步階 clamp 只要 |delta_r| 跨過一整碼
+        # 就會把維持機率硬壓成失真的 0.0（例如市場真實分佈是 20% 維持 / 50% 降1碼 /
+        # 30% 降2碼，加權平均仍會超過一整碼，但維持機率明明不是 0%）。
+        steps = abs(delta_r) / 0.25
+        floor_steps = int(steps)
+        frac_pct = round((steps - floor_steps) * 100.0, 1)
+
+        prob_hike_25 = 0.0
+        prob_hike_50 = 0.0
+        prob_cut_25 = 0.0
+        prob_cut_50 = 0.0
+        ladder_saturated = floor_steps >= 1
+
         if delta_r >= 0.0:
-            prob_hike = round(min(100.0, max(0.0, (delta_r / 0.25) * 100.0)), 1)
             prob_cut = 0.0
+            if floor_steps == 0:
+                prob_hike = frac_pct
+                prob_hike_25 = prob_hike
+            elif floor_steps == 1:
+                prob_hike = 100.0
+                prob_hike_50 = frac_pct
+                prob_hike_25 = round(100.0 - frac_pct, 1)
+            else:
+                # 隱含變動已超過 2 整碼（極端罕見情境），機率質量全數併入「2碼+」桶
+                prob_hike = 100.0
+                prob_hike_50 = 100.0
             prob_maintain = round(100.0 - prob_hike, 1)
         else:
-            prob_cut = round(min(100.0, max(0.0, (-delta_r / 0.25) * 100.0)), 1)
             prob_hike = 0.0
+            if floor_steps == 0:
+                prob_cut = frac_pct
+                prob_cut_25 = prob_cut
+            elif floor_steps == 1:
+                prob_cut = 100.0
+                prob_cut_50 = frac_pct
+                prob_cut_25 = round(100.0 - frac_pct, 1)
+            else:
+                prob_cut = 100.0
+                prob_cut_50 = 100.0
             prob_maintain = round(100.0 - prob_cut, 1)
 
         # 分類與宏觀緊縮純量計算
@@ -619,6 +657,11 @@ async def scrape_fedwatch() -> dict[str, Any]:
             "prob_maintain": round(prob_maintain, 1),
             "prob_hike": round(prob_hike, 1),
             "prob_cut": round(prob_cut, 1),
+            "prob_hike_25": round(prob_hike_25, 1),
+            "prob_hike_50": round(prob_hike_50, 1),
+            "prob_cut_25": round(prob_cut_25, 1),
+            "prob_cut_50": round(prob_cut_50, 1),
+            "ladder_saturated": ladder_saturated,
             "decision": decision,
             "futures_price": latest_price,
             "source": "CME 30-Day Fed Funds Futures (ZQ)",
@@ -804,23 +847,20 @@ async def scrape_fedwatch() -> dict[str, Any]:
             "prob_maintain": round(prob_maintain, 1),
             "prob_hike": round(prob_hike, 1),
             "prob_cut": round(prob_cut, 1),
+            # Excel 路徑直接加總已公布的多桶機率，結構上不會有單點期貨線性內插
+            # 跨整碼邊界失真飽和的問題，因此不需要 ladder 拆解欄位。
+            "prob_hike_25": 0.0,
+            "prob_hike_50": 0.0,
+            "prob_cut_25": 0.0,
+            "prob_cut_50": 0.0,
+            "ladder_saturated": False,
             "decision": decision,
             "source": "Atlanta Fed Market Probability Tracker (MPT)",
         }
 
-    # 1. Primary: CBOT 30-Day Fed Funds Futures (ZQ) 即時階梯算式
-    try:
-        zq_data = await asyncio.to_thread(_fetch_and_calculate_zq_futures)
-        return {
-            "status": "success",
-            "data": zq_data,
-        }
-    except Exception as e:
-        logger.warning(
-            f"Primary CBOT ZQ Fed Funds Futures calc failed: {e}, falling back to Atlanta Fed MPT."
-        )
-
-    # 2. Secondary: Atlanta Fed MPT Excel 解析
+    # 1. Primary: Atlanta Fed MPT Excel 解析。直接加總 CME 已公布的多桶機率，
+    #    不依賴單點期貨價格反推，結構上不會有 ZQ 階梯算式那種跨整碼邊界
+    #    失真飽和成 100%/0% 的問題。
     try:
         parsed_data = await asyncio.to_thread(_fetch_and_parse_excel)
         return {
@@ -829,7 +869,19 @@ async def scrape_fedwatch() -> dict[str, Any]:
         }
     except Exception as e:
         logger.warning(
-            f"Secondary Atlanta FedWatch parse failed with exception: {e}, using static fallbacks."
+            f"Primary Atlanta Fed MPT parse failed: {e}, falling back to CBOT ZQ Fed Funds Futures calc."
+        )
+
+    # 2. Secondary: CBOT 30-Day Fed Funds Futures (ZQ) 即時階梯算式
+    try:
+        zq_data = await asyncio.to_thread(_fetch_and_calculate_zq_futures)
+        return {
+            "status": "success",
+            "data": zq_data,
+        }
+    except Exception as e:
+        logger.warning(
+            f"Secondary CBOT ZQ Fed Funds Futures calc failed with exception: {e}, using static fallbacks."
         )
         return {"status": "success", "data": fallback}
 

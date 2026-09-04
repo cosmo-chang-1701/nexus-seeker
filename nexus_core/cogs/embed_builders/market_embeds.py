@@ -1588,20 +1588,34 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
                 p_h = float(prob_h) if prob_h is not None else 0.0
                 p_c = float(prob_c) if prob_c is not None else 0.0
 
+                ladder_saturated = bool(fedwatch_details.get("ladder_saturated"))
+                p_h50 = float(fedwatch_details.get("prob_hike_50") or 0.0)
+                p_h25 = float(fedwatch_details.get("prob_hike_25") or 0.0)
+                p_c50 = float(fedwatch_details.get("prob_cut_50") or 0.0)
+                p_c25 = float(fedwatch_details.get("prob_cut_25") or 0.0)
+
                 if p_h >= 1.0:
+                    # 隱含幅度已跨過一整碼邊界時，附帶 1碼/2碼+ 拆解，避免讓使用者
+                    # 誤讀成「對加息這件事本身 100% 確定、且無任何幅度不確定性」
+                    hike_ladder = (
+                        f" (1碼 {p_h25:.1f}% / 2碼+ {p_h50:.1f}%)"
+                        if ladder_saturated and p_h50 > 0.0
+                        else ""
+                    )
                     if p_h >= p_m:
-                        detail_str = (
-                            f"加息 {p_h:.1f}% / 維持 {p_m:.1f}% / 降息 {p_c:.1f}%"
-                        )
+                        detail_str = f"加息 {p_h:.1f}%{hike_ladder} / 維持 {p_m:.1f}% / 降息 {p_c:.1f}%"
                     else:
-                        detail_str = (
-                            f"維持 {p_m:.1f}% / 加息 {p_h:.1f}% / 降息 {p_c:.1f}%"
-                        )
+                        detail_str = f"維持 {p_m:.1f}% / 加息 {p_h:.1f}%{hike_ladder} / 降息 {p_c:.1f}%"
                 else:
+                    cut_ladder = (
+                        f" (1碼 {p_c25:.1f}% / 2碼+ {p_c50:.1f}%)"
+                        if ladder_saturated and p_c50 > 0.0
+                        else ""
+                    )
                     if p_c >= p_m:
-                        detail_str = f"降息 {p_c:.1f}% / 維持 {p_m:.1f}%"
+                        detail_str = f"降息 {p_c:.1f}%{cut_ladder} / 維持 {p_m:.1f}%"
                     else:
-                        detail_str = f"維持 {p_m:.1f}% / 降息 {p_c:.1f}%"
+                        detail_str = f"維持 {p_m:.1f}% / 降息 {p_c:.1f}%{cut_ladder}"
 
                 if (
                     p_h >= 50.0

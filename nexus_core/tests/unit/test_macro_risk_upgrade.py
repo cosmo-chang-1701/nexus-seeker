@@ -1233,6 +1233,41 @@ def test_fedwatch_market_overview_embed_formatting() -> None:
         in fields_maintain["📈 流動性與總經指標 (Liquidity & Macro)"]
     )
 
+    # Case 4: ZQ 期貨階梯算式飽和 (ladder_saturated)——降息 100%/維持 0% 聚合值不變，
+    # 但必須附帶 1碼/2碼+ 拆解，避免使用者誤讀成對降息幅度也 100% 確定。
+    # 對應使用者回報的「(09/16) 降息確立 (降息 100.0% / 維持 0.0%)」bug。
+    macro_data_ladder_saturated: dict[str, Any] = {
+        **macro_data_hawkish,
+        "fedwatch_probability": 0.05,
+        "fedwatch_is_fallback": False,
+        "fedwatch_details": {
+            "meeting_date": "09/16",
+            "prob_maintain": 0.0,
+            "prob_hike": 0.0,
+            "prob_cut": 100.0,
+            "prob_cut_25": 60.0,
+            "prob_cut_50": 40.0,
+            "ladder_saturated": True,
+            "decision": "cut",
+        },
+        "escape_win_status": "🟢 後推 5 天 (流動性擴張)",
+    }
+    embed_ladder_saturated = build_market_macro_overview_embed(
+        macro_data_ladder_saturated
+    )
+    fields_ladder_saturated: dict[str, str] = {
+        str(field.name): str(field.value) for field in embed_ladder_saturated.fields
+    }
+    assert (
+        "(09/16) 降息確立 (降息 100.0% (1碼 60.0% / 2碼+ 40.0%) / 維持 0.0%)"
+        in fields_ladder_saturated["📈 流動性與總經指標 (Liquidity & Macro)"]
+    )
+    # 舊版失真格式「降息 100.0% / 維持 0.0%」不應再單獨出現(需帶有拆解說明)
+    assert (
+        "降息 100.0% / 維持 0.0%"
+        not in fields_ladder_saturated["📈 流動性與總經指標 (Liquidity & Macro)"]
+    )
+
 
 def test_calendar_service_fedwatch_lookup() -> None:
     """測試 calendar_service.get_latest_fedwatch_probability 與 get_latest_fedwatch_info"""
@@ -1314,6 +1349,86 @@ async def test_calendar_service_fedwatch_sanity_rejection() -> None:
         saved_keys = [call.args[0] for call in mock_save.call_args_list]
         assert "macro_fedwatch_is_fallback" in saved_keys
         assert "macro_fedwatch_probability" not in saved_keys
+
+
+@pytest.mark.asyncio
+async def test_calendar_service_fedwatch_cut_saturation_without_explanation_rejected() -> (
+    None
+):
+    """測試 prob_cut 飽和至 100% 但缺乏 ladder 拆解說明（既非 Atlanta Fed 多桶來源，
+    也沒有 ladder_saturated 旗標）時，比照既有的 prob_hike 對稱防禦邏輯，視為疑似
+    異常/污染數據並觸發防禦阻斷。對應使用者回報的「(09/16) 降息確立 (降息 100.0% /
+    維持 0.0%)」bug 修正前的資料形狀（見 macro.py 修正前的單一步階 clamp）。"""
+    from services.calendar_service import calendar_service
+    import config
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "status": "success",
+        "data": {
+            "probability": 0.05,
+            "prob_hike": 0.0,
+            "prob_maintain": 0.0,
+            "prob_cut": 100.0,
+            "meeting_date": "09/16",
+            "source": "unexplained-source",
+        },
+    }
+
+    with (
+        patch.object(config, "TUNNEL_URL", "http://mock-tunnel"),
+        patch("httpx.AsyncClient.get", return_value=mock_resp),
+        patch("database.cache.save_kv_cache") as mock_save,
+    ):
+        await calendar_service.update_fedwatch_probability()
+        saved_keys = [call.args[0] for call in mock_save.call_args_list]
+        assert "macro_fedwatch_is_fallback" in saved_keys
+        assert "macro_fedwatch_probability" not in saved_keys
+
+
+@pytest.mark.asyncio
+async def test_calendar_service_fedwatch_cut_saturation_with_ladder_breakdown_accepted() -> (
+    None
+):
+    """測試 prob_cut 飽和至 100% 但附帶修正後 ZQ 階梯算式的 ladder_saturated +
+    prob_cut_25/prob_cut_50 拆解說明時，視為合理的高信心定價，正常寫入快取而不會
+    被防禦閘門誤擋——確保修正 bug 用的新 ladder 拆解欄位不會被閘門自己吃掉。"""
+    from services.calendar_service import calendar_service
+    import config
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "status": "success",
+        "data": {
+            "probability": 0.05,
+            "prob_hike": 0.0,
+            "prob_maintain": 0.0,
+            "prob_cut": 100.0,
+            "prob_cut_25": 60.0,
+            "prob_cut_50": 40.0,
+            "ladder_saturated": True,
+            "meeting_date": "09/16",
+            "source": "CME 30-Day Fed Funds Futures (ZQ)",
+        },
+    }
+
+    with (
+        patch.object(config, "TUNNEL_URL", "http://mock-tunnel"),
+        patch("httpx.AsyncClient.get", return_value=mock_resp),
+        patch("database.cache.save_kv_cache") as mock_save,
+        patch("database.connection.execute_write_async", new_callable=AsyncMock),
+    ):
+        await calendar_service.update_fedwatch_probability()
+        saved_keys = [call.args[0] for call in mock_save.call_args_list]
+        assert "macro_fedwatch_probability" in saved_keys
+        fallback_calls = [
+            call.args[1]
+            for call in mock_save.call_args_list
+            if call.args[0] == "macro_fedwatch_is_fallback"
+        ]
+        assert fallback_calls[-1] == 0
 
 
 @pytest.mark.asyncio
