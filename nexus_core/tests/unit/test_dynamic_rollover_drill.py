@@ -95,8 +95,10 @@ async def test_drill_scenario_1_nvda_decay_spcx_breakout_triggers_rollover(
 
     mock_market_cache.side_effect = cache_side_effect
 
-    # 2. Mock SPCX 15m K 線 (條件一：15m 實體收盤 $85.50 > Gamma Flip $80.00，成交量 2.5x 均量)
+    # 2. Mock SPCX 15m K 線 (條件一：15m 實體陽線收盤 $85.50 > Gamma Flip $80.00，
+    # 成交量 2.5x 均量；open $82.00 < close $85.50 確保為陽線)
     df_data: Dict[str, List[float]] = {
+        "Open": [80.0] * 20 + [82.00],
         "Close": [80.0] * 20 + [85.50],
         "Volume": [10000.0] * 20 + [25000.0],
     }
@@ -135,6 +137,7 @@ async def test_drill_scenario_1_nvda_decay_spcx_breakout_triggers_rollover(
             },
             "call_wall": 95.0,  # 距現價 11.8% > 5% (條件三通過)
             "put_wall": 80.0,
+            "net_gex": 1500000.0,  # 正值 LONG_GAMMA (條件一淨 GEX regime 通過)
         },
         "uoa": [
             {
@@ -338,6 +341,7 @@ async def test_drill_scenario_2b_candidate_blocked_by_six_gates(
     }
 
     df_data: Dict[str, List[float]] = {
+        "Open": [80.0] * 20 + [85.50],
         "Close": [80.0] * 20 + [85.50],
         "Volume": [10000.0] * 20 + [25000.0],
     }
@@ -355,7 +359,8 @@ async def test_drill_scenario_2b_candidate_blocked_by_six_gates(
         }
     ]
 
-    # 上方存在 $88.0C STO (ratio=4.0 > 3.0 物理封頂)
+    # 上方存在 $88.0C STO (ratio=4.0 > 3.0 物理封頂)，本情境重點是條件三攔截，
+    # 條件一的 Open 值僅需存在以避免抓取結果缺欄位，不影響本測試斷言。
     candidate_radar_blocked: Dict[str, Any] = {
         "quote": {"c": 85.0},
         "iv_metrics": {"iv_rank": 25.0},

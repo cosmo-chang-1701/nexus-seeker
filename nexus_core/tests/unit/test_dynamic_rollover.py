@@ -4275,15 +4275,24 @@ def test_scan_gex_walls_logs_malformed_entries(caplog: Any) -> None:
     assert any("解析失敗" in record.message for record in caplog.records)
 
 
-def _make_15m_df(bars: list[tuple[float, float]]) -> pd.DataFrame:
-    """建構模擬的 15 分鐘 K 線 DataFrame，最後一筆視為待確認的收盤根。"""
+def _make_15m_df(
+    bars: list[tuple[float, float]], last_open: Optional[float] = None
+) -> pd.DataFrame:
+    """建構模擬的 15 分鐘 K 線 DataFrame，最後一筆視為待確認的收盤根。
+
+    預設每根 K 棒 Open == Close (十字)。`last_open` 可選擇性覆寫最後一根
+    (待確認根) 的開盤價，用於建構陽線 (last_open < close) 或陰線
+    (last_open > close) 情境，其餘根不受影響。"""
     closes = [c for c, _ in bars]
     volumes = [v for _, v in bars]
+    opens = list(closes)
+    if last_open is not None:
+        opens[-1] = last_open
     return pd.DataFrame(
         {
-            "Open": closes,
-            "High": [c + 0.5 for c in closes],
-            "Low": [c - 0.5 for c in closes],
+            "Open": opens,
+            "High": [max(o, c) + 0.5 for o, c in zip(opens, closes)],
+            "Low": [min(o, c) - 0.5 for o, c in zip(opens, closes)],
             "Close": closes,
             "Volume": volumes,
         }
@@ -4291,13 +4300,15 @@ def _make_15m_df(bars: list[tuple[float, float]]) -> pd.DataFrame:
 
 
 def _green_candidate_radar() -> dict:
-    """四重過濾鐵律全數通過的候選標的基準 fixture：
+    """六重過濾鐵律全數通過的候選標的基準 fixture：
     - gex_profile 累積曝險在 $95 由負轉正 (Gamma Flip 估算 = 95.0)，
       且 $95 亦為全鏈最大正 GEX (支撐牆)。數值採真實美元名目量級
       (>= GEX_THIN_WALL_THRESHOLD=500,000，Phase 3 薄弱紙牆過濾門檻)，
       避免 $95 支撐牆被誤判為 THIN_SUPPORT_WALL 而在條件二失效
       (各數值等比例放大 10,000 倍，保留原始由負轉正的累積和交叉點不變)。
     - call_wall $110，距現價 $100 有 10% 空間 (>= 5% 門檻)。
+    - net_gex 為正值 (LONG_GAMMA)，比照分析中心對淨 GEX Regime 的判讀，
+      供條件一的個股淨 Gamma regime 檢查使用。
     - uoa 僅含一筆次週 CALL BTO (DTE=14)，無 STO Call 封頂。
     """
     far_expiry = (datetime.now().date() + timedelta(days=14)).strftime("%Y-%m-%d")
@@ -4306,6 +4317,7 @@ def _green_candidate_radar() -> dict:
         "gex_profile_data": {
             "call_wall": 110.0,
             "put_wall": 95.0,
+            "net_gex": 800_000.0,
             "gex_profile": {
                 "90": -500_000.0,
                 "95": 800_000.0,
@@ -4325,7 +4337,8 @@ def _green_candidate_radar() -> dict:
     }
 
 
-_GREEN_15M_DF = _make_15m_df([(98.0, 1000.0)] * 20 + [(101.0, 1500.0)])
+# 條件一新增陽線判定，最後一根待確認根需 Open ($99) < Close ($101)。
+_GREEN_15M_DF = _make_15m_df([(98.0, 1000.0)] * 20 + [(101.0, 1500.0)], last_open=99.0)
 
 
 _FAR_EXPIRIES = [(datetime.now().date() + timedelta(days=14)).strftime("%Y-%m-%d")]
@@ -4465,6 +4478,49 @@ async def test_confirm_entry_signal_condition1_requires_1_5x_volume_surge() -> N
 
 
 @pytest.mark.asyncio
+async def test_confirm_entry_signal_condition1_fails_bearish_candle(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """條件一：收盤價與量能兩項代數條件皆達標，但最後一根 15m 為實體陰線
+    (open > close，比照分析中心的陰陽線判讀) -> 仍應判定未通過，避免將
+    空頭摜壓誤判為右側突破。"""
+    bearish_df = _make_15m_df(
+        [(98.0, 1000.0)] * 20 + [(101.0, 1500.0)], last_open=103.0
+    )
+    with patch(
+        "services.market_data_service.get_history_df",
+        new_callable=AsyncMock,
+        return_value=bearish_df,
+    ):
+        confirmed, reason = await engine._confirm_entry_signal(
+            "TEST", _green_candidate_radar(), 100.0
+        )
+    assert confirmed is False
+    assert "條件一❌" in reason
+    assert "陰線" in reason
+
+
+@pytest.mark.asyncio
+async def test_confirm_entry_signal_condition1_fails_short_gamma_regime(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """條件一：K 棒為陽線且收盤價/量能皆達標，但個股淨 GEX 為負值
+    (SHORT_GAMMA 泥淖) -> 仍應判定未通過，比照分析中心對淨 GEX Regime
+    的判讀，避免負 Gamma 環境下的放量被誤判為可信的右側突破。"""
+    radar = _green_candidate_radar()
+    radar["gex_profile_data"]["net_gex"] = -800_000.0
+    with patch(
+        "services.market_data_service.get_history_df",
+        new_callable=AsyncMock,
+        return_value=_GREEN_15M_DF,
+    ):
+        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+    assert confirmed is False
+    assert "條件一❌" in reason
+    assert "SHORT_GAMMA" in reason
+
+
+@pytest.mark.asyncio
 async def test_confirm_entry_signal_condition2_fails_no_support_wall(
     engine: DynamicRolloverEngine,
 ) -> None:
@@ -4522,6 +4578,27 @@ async def test_confirm_entry_signal_condition3_fails_tight_call_wall(
     """條件三：Call Wall 過近現價 (< 5% 空間) -> 未通過"""
     radar = _green_candidate_radar()
     radar["gex_profile_data"]["call_wall"] = 102.0  # (102-100)/100 = 2% < 5%
+    with patch(
+        "services.market_data_service.get_history_df",
+        new_callable=AsyncMock,
+        return_value=_GREEN_15M_DF,
+    ):
+        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+    assert confirmed is False
+    assert "條件三❌" in reason
+    assert "空間" in reason
+
+
+@pytest.mark.asyncio
+async def test_confirm_entry_signal_condition3_fails_call_wall_already_breached(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """條件三迴歸鎖定：Call Wall 已貼平/跌破現價 (距離為負值) 時，比照分析中心
+    的絕對距離判讀，同樣視為壓制仍在、空間不足 -> 未通過。修正前的判斷式
+    要求 call_wall > target_spot 才會觸發此檢查，導致這種「現價已觸及或
+    穿越 Call Wall」的情境被誤判為「上方無封頂」。"""
+    radar = _green_candidate_radar()
+    radar["gex_profile_data"]["call_wall"] = 99.0  # < spot $100，已貼平/跌破
     with patch(
         "services.market_data_service.get_history_df",
         new_callable=AsyncMock,
@@ -4793,9 +4870,11 @@ async def test_confirm_entry_signal_condition5_macro_regime_fails(
     import pandas as pd
 
     radar = _green_candidate_radar()
-    # 確保條件一至四皆能通過 (last bar volume 30000 >= lookback mean 10000 * 1.5)
+    # 確保條件一至四皆能通過 (last bar volume 30000 >= lookback mean 10000 * 1.5，
+    # 且最後一根為陽線 open $103 < close $105)
     df_15m = pd.DataFrame(
         {
+            "Open": [105.0] * 24 + [103.0],
             "Close": [105.0] * 25,
             "Volume": [10000.0] * 24 + [30000.0],
         }
@@ -4827,6 +4906,7 @@ async def test_confirm_entry_condition5_fails_closed_on_earnings_exception(
     radar = _green_candidate_radar()
     df_15m = pd.DataFrame(
         {
+            "Open": [105.0] * 24 + [103.0],
             "Close": [105.0] * 25,
             "Volume": [10000.0] * 24 + [30000.0],
         }
@@ -4860,6 +4940,7 @@ async def test_confirm_entry_condition5_fails_closed_on_regime_exception(
     radar = _green_candidate_radar()
     df_15m = pd.DataFrame(
         {
+            "Open": [105.0] * 24 + [103.0],
             "Close": [105.0] * 25,
             "Volume": [10000.0] * 24 + [30000.0],
         }

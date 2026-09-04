@@ -39,16 +39,22 @@ from .structural_signals import _scan_gex_walls, evaluate_option_dte_tier
 
 # --- _confirm_entry_signal 六重進場鐵律各條件的獨立判斷函式 ---
 # 每個函式對應一項條件，共用的衍生資料 (gex_profile_data / gex_profile /
-# uoa_list / call_wall) 由呼叫端 (_confirm_entry_signal) 於迴圈外算好一次後
-# 傳入，避免重複解析。reasons 為呼叫端持有的單一列表，各函式依序原地
-# append 自身條件的判定說明，確保最終合併字串的順序一致。
+# uoa_list / call_wall / net_gex) 由呼叫端 (_confirm_entry_signal) 於迴圈外
+# 算好一次後傳入，避免重複解析。reasons 為呼叫端持有的單一列表，各函式依序
+# 原地 append 自身條件的判定說明，確保最終合併字串的順序一致。
 async def _confirm_entry_condition1_breakout(
     candidate_symbol: str,
     target_spot: float,
     gex_profile: Optional[dict],
+    net_gex: float,
     reasons: list,
 ) -> bool:
-    """條件一：結構性右側突破確認 (15m 實體收盤 + 放量，站穩 Gamma Flip 估算門檻)。"""
+    """條件一：結構性右側放量突破確認 (15m 實體陽線收盤 + 放量，站穩 Gamma Flip
+    估算門檻，且個股淨 GEX 須為 LONG_GAMMA)。比照分析中心 (Symbol Hub
+    `create_tactical_symbol_embed()`) 的判讀方式：放量若發生在實體陰線
+    (close < open) 或個股淨 Gamma 處於 SHORT_GAMMA (net_gex <= 0) 泥淖時，
+    屬於空頭摜壓而非右側突破，即便收盤價與量能兩項代數條件皆達標，仍判定
+    未通過。"""
     if target_spot <= 0:
         reasons.append("條件一❌：candidate 現價無效")
         return False
@@ -76,6 +82,7 @@ async def _confirm_entry_condition1_breakout(
 
     last_bar = df_15m.iloc[-1]
     lookback_bars = df_15m.iloc[-(_ENTRY_VOLUME_LOOKBACK_BARS + 1) : -1]
+    open_val = float(last_bar["Open"])
     close_val = float(last_bar["Close"])
     volume_val = float(last_bar["Volume"])
     avg_volume = float(lookback_bars["Volume"].mean())
@@ -83,12 +90,24 @@ async def _confirm_entry_condition1_breakout(
     is_volume_surge = (
         avg_volume > 0 and volume_val >= avg_volume * _ENTRY_VOLUME_SURGE_MULTIPLIER
     )
-    c1_passed = is_closed_above and is_volume_surge
+    is_bullish_candle = close_val > open_val
+    is_long_gamma_regime = net_gex > 0
+    c1_passed = (
+        is_closed_above
+        and is_volume_surge
+        and is_bullish_candle
+        and is_long_gamma_regime
+    )
+    candle_tag = (
+        "陽線" if is_bullish_candle else ("陰線" if close_val < open_val else "十字")
+    )
+    regime_tag = "LONG_GAMMA" if is_long_gamma_regime else "SHORT_GAMMA"
     reasons.append(
         f"條件一{'✅' if c1_passed else '❌'}：15m收盤 ${close_val:.2f} "
         f"{'>' if is_closed_above else '<='} Gamma Flip估算 ${gamma_flip_est:.2f}，"
         f"量能 {volume_val:.0f} vs 均量×{_ENTRY_VOLUME_SURGE_MULTIPLIER} "
-        f"={avg_volume * _ENTRY_VOLUME_SURGE_MULTIPLIER:.0f}"
+        f"={avg_volume * _ENTRY_VOLUME_SURGE_MULTIPLIER:.0f}，"
+        f"K棒{candle_tag}、淨GEX {regime_tag}"
     )
     return c1_passed
 
@@ -123,15 +142,23 @@ def _confirm_entry_condition3_no_physical_cap(
     target_spot: float,
     reasons: list,
 ) -> bool:
-    """條件三：UOA 無實質物理封頂 (上方空間暢通)。"""
+    """條件三：UOA 無實質物理封頂 (上方空間暢通)。比照分析中心 (Symbol Hub) 的
+    GEX CallWall 距現價空間% 判讀：不要求 Call Wall 必須還在現價之上，只要帶
+    正負號的距離 (call_wall - spot) / spot 小於門檻，即代表做市商壓制仍在——
+    現價已觸及甚至跌破 Call Wall 時（距離為負值）同樣視為空間不足，而非誤判
+    為「已站上、無封頂」。"""
     has_physical_cap, capping_strike = detect_uoa_sto_call_physical_cap(
         uoa_list, target_spot, _ENTRY_UOA_CAP_RATIO_THRESHOLD
     )
 
+    call_wall_dist_pct = (
+        (call_wall - target_spot) / target_spot
+        if call_wall > 0 and target_spot > 0
+        else None
+    )
     has_tight_call_wall = (
-        call_wall > target_spot
-        and target_spot > 0
-        and (call_wall - target_spot) / target_spot < _ENTRY_ASYMMETRIC_ROOM_PCT
+        call_wall_dist_pct is not None
+        and call_wall_dist_pct < _ENTRY_ASYMMETRIC_ROOM_PCT
     )
     c3_passed = not has_physical_cap and not has_tight_call_wall
     if has_physical_cap:
@@ -139,10 +166,11 @@ def _confirm_entry_condition3_no_physical_cap(
             f"條件三❌：偵測到單筆 ratio>{_ENTRY_UOA_CAP_RATIO_THRESHOLD}x OI 的 "
             f"STO Call 物理封頂 @ ${capping_strike:.2f}"
         )
-    elif has_tight_call_wall:
+    elif has_tight_call_wall and call_wall_dist_pct is not None:
         reasons.append(
-            f"條件三❌：Call Wall ${call_wall:.2f} 距現價不足 "
-            f"{_ENTRY_ASYMMETRIC_ROOM_PCT:.0%} 非對稱空間"
+            f"條件三❌：Call Wall ${call_wall:.2f} 距現價空間 "
+            f"{call_wall_dist_pct:+.2%} 不足 {_ENTRY_ASYMMETRIC_ROOM_PCT:.0%} "
+            f"非對稱空間"
         )
     else:
         reasons.append("條件三✅：上方無實質物理封頂，非對稱空間充足")
@@ -533,9 +561,14 @@ class _OpportunityCostMixin:
             if isinstance(gex_profile_data, dict)
             else 0.0
         )
+        net_gex = (
+            float(gex_profile_data.get("net_gex", 0.0) or 0.0)
+            if isinstance(gex_profile_data, dict)
+            else 0.0
+        )
 
         c1_passed = await _confirm_entry_condition1_breakout(
-            candidate_symbol, target_spot, gex_profile, reasons
+            candidate_symbol, target_spot, gex_profile, net_gex, reasons
         )
         c2_passed = _confirm_entry_condition2_support_wall(
             candidate_symbol, gex_profile_data, target_spot, reasons

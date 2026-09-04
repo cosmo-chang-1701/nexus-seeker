@@ -64,9 +64,17 @@ _COVERED_CALL_MAX_DTE: int = 25
 
 # --- 進場訊號六重嚴格過濾鐵律 (opportunity_cost.py::_confirm_entry_signal) 具名常數 ---
 # 六項條件必須同時成立才允許對候選標的實際啟動機會成本轉倉/核心資金部署指令：
-#   條件一：結構性右側放量突破 (15m 實體收盤站穩 Gamma Flip 估算門檻 + 放量)
+#   條件一：結構性右側放量突破 (15m 實體「陽線」收盤站穩 Gamma Flip 估算門檻 +
+#           放量 + 個股淨 GEX 須為 LONG_GAMMA)。比照分析中心
+#           (cogs/embed_builders/portfolio_embeds.py::create_tactical_symbol_embed())
+#           的判讀方式：陰線放量或 SHORT_GAMMA 泥淖下的放量視為空頭摜壓，不算
+#           右側突破，即便收盤價與量能兩項代數條件皆達標仍判定未通過。
 #   條件二：做市商正 Gamma 底牆完好 (支撐牆存在且現價站上)
-#   條件三：做市商阻力結構與非對稱空間 (無 UOA 物理封頂，Call Wall 空間充足)
+#   條件三：做市商阻力結構與非對稱空間 (無 UOA 物理封頂，Call Wall 空間充足)。
+#           Call Wall 距現價空間% 比照分析中心同一函式的 GEX CallWall 欄位，
+#           用帶正負號的距離 (call_wall - spot) / spot 判定，不要求 Call Wall
+#           必須還在現價之上——現價已觸及/跌破 Call Wall (負距離) 同樣視為
+#           空間不足，而非誤判為「已站上、無封頂」。
 #   條件四：主力跨週期買盤認證與雜訊過濾 (BTO Call，DTE 與 ratio 雙門檻)
 #   條件五：二元宏觀與財報事件安全閥
 #   條件六：candidate 自身最近效期選擇權週期雜訊過濾 (避開 0/1 DTE)
@@ -77,7 +85,9 @@ _ENTRY_VOLUME_SURGE_MULTIPLIER: float = (
 _ENTRY_UOA_CAP_RATIO_THRESHOLD: float = (
     1.0  # 條件三：單筆 STO Call 視為物理封頂的 ratio (volume/OI) 門檻
 )
-_ENTRY_ASYMMETRIC_ROOM_PCT: float = 0.05  # 條件三：上方須保留的最低非對稱獲利空間
+_ENTRY_ASYMMETRIC_ROOM_PCT: float = (
+    0.05  # 條件三：Call Wall 距現價須保留的最低非對稱獲利空間 (帶正負號距離)
+)
 _ENTRY_UOA_MIN_DTE: int = 7  # 條件四：驅動進場的主力 UOA 買盤最低 DTE 要求
 _ENTRY_UOA_MIN_RATIO: float = (
     0.8  # 條件四：驅動進場的主力 UOA 買盤最低 ratio (volume/OI) 要求
