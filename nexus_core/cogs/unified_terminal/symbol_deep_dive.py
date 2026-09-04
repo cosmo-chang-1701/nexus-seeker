@@ -11,6 +11,7 @@ from market_analysis.sentiment_engine import SentimentEngine
 from market_analysis.psq_engine import analyze_psq
 from market_analysis.risk_engine import MacroContext
 from market_analysis.atr_utils import fetch_atr_15m
+from market_analysis.vwap_utils import fetch_session_vwap
 from market_analysis.price_volume_alert import get_confirmed_15m_bar
 import market_math
 
@@ -76,6 +77,7 @@ class SymbolDeepDiveMixin:
             asyncio.to_thread(calculate_volume_profile, symbol)
         )
         atr_15m_task = asyncio.create_task(fetch_atr_15m(symbol))
+        vwap_task = asyncio.create_task(fetch_session_vwap(symbol))
         bar_15m_task = asyncio.create_task(get_confirmed_15m_bar(symbol))
         from services.calendar_service import calendar_service
 
@@ -161,6 +163,7 @@ class SymbolDeepDiveMixin:
             gex_profile_data,
             vp_data,
             atr_15m_data,
+            session_vwap_data,
             bar_15m_data,
             catalysts,
             reddit_details,
@@ -180,6 +183,7 @@ class SymbolDeepDiveMixin:
             gex_profile_task,
             vp_task,
             atr_15m_task,
+            vwap_task,
             bar_15m_task,
             catalysts_task,
             reddit_task,
@@ -218,6 +222,7 @@ class SymbolDeepDiveMixin:
             "gex_profile_data": gex_profile_data,
             "volume_profile": vp_data,
             "atr_15m": atr_15m_data,
+            "session_vwap": session_vwap_data,
             "bar_15m": bar_15m_data,
             "catalysts": catalysts,
         }
@@ -352,6 +357,7 @@ class SymbolDeepDiveMixin:
         safe_vp = vp_data if isinstance(vp_data, dict) else {}
         result["volume_profile"] = safe_vp
         result["atr_15m"] = _safe_float(data.get("atr_15m"), 0.0)
+        result["session_vwap"] = _safe_float(data.get("session_vwap"), 0.0)
 
         bar_15m = data.get("bar_15m")
         result["bar_15m"] = bar_15m

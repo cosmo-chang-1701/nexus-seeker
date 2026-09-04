@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import List, Dict, Any
 
 from market_analysis.uoa_telemetry import UOATradeResult, generate_uoa_ascii_table
+from market_analysis.index_microstructure import estimate_symbol_gamma_flip
 
 from cogs.embed_builders._ansi_utils import _pad_string, _safe_float
 from cogs.embed_builders._embed_helpers import (
@@ -582,6 +583,22 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     _add_ansi_field_safely(embed, "💹 即時報價 (Real-time Quote)", quote_lines)
 
     # 1.5 ⏱️ 15分鐘微觀結構 (15m Microstructure)
+    atr_15m_display_val = _to_float_or_none(data.get("atr_15m"))
+    if atr_15m_display_val is not None and atr_15m_display_val > 0:
+        atr_15m_line = f" ├─ 15m ATR (EMA14): ${atr_15m_display_val:.2f}"
+    else:
+        atr_15m_line = " ├─ 15m ATR (EMA14): --"
+
+    session_vwap_val = _to_float_or_none(data.get("session_vwap"))
+    if session_vwap_val is not None and session_vwap_val > 0 and c_val > 0:
+        vwap_dev_pct = (c_val - session_vwap_val) / session_vwap_val * 100
+        session_vwap_line = (
+            f" └─ 日內錨點 (Session VWAP): ${session_vwap_val:.2f}"
+            f" (現價偏離: {vwap_dev_pct:+.2f}%)"
+        )
+    else:
+        session_vwap_line = " └─ 日內錨點 (Session VWAP): -- (現價偏離: --)"
+
     bar_15m = data.get("bar_15m")
     has_explicit_15m = (
         data.get("volume_15m") is not None
@@ -651,7 +668,9 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 " ├─ 最新 15m K棒: -- (暫無數據 / 待開盤)",
                 " ├─ 15m 成交量: -- 股",
                 " ├─ 15m 均量 (SMA20): -- 股",
-                " └─ 即時量比 (RVOL_15m): -- (狀態: ⚠️ 數據源缺失)",
+                " ├─ 即時量比 (RVOL_15m): -- (狀態: ⚠️ 數據源缺失)",
+                atr_15m_line,
+                session_vwap_line,
                 "```",
             ]
         else:
@@ -686,10 +705,10 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 else:
                     status_str = "❌ 缺乏放量代償 < 1.5x"
                 rvol_line = (
-                    f" └─ 即時量比 (RVOL_15m): {rvol_val:.2f}x (狀態: {status_str})"
+                    f" ├─ 即時量比 (RVOL_15m): {rvol_val:.2f}x (狀態: {status_str})"
                 )
             else:
-                rvol_line = " └─ 即時量比 (RVOL_15m): -- (狀態: ⚠️ 數據源缺失)"
+                rvol_line = " ├─ 即時量比 (RVOL_15m): -- (狀態: ⚠️ 數據源缺失)"
 
             micro_lines = [
                 "```ansi",
@@ -698,6 +717,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 vol_line,
                 sma20_line,
                 rvol_line,
+                atr_15m_line,
+                session_vwap_line,
                 "```",
             ]
 
@@ -1171,6 +1192,61 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                             gex_lines.append(
                                 f" 📉 防洗盤停損參考 (PutWall - 1.5×ATR_15m): ${anti_washout_stop:.2f}"
                             )
+
+                    net_gex_raw = gex_data.get("net_gex")
+                    try:
+                        net_gex_float = (
+                            float(net_gex_raw) if net_gex_raw is not None else None
+                        )
+                    except (ValueError, TypeError):
+                        net_gex_float = None
+                    if net_gex_float is not None:
+                        regime_label = (
+                            "🟢 LONG_GAMMA (自穩定壓制波動)"
+                            if net_gex_float > 0
+                            else "🔴 SHORT_GAMMA (助漲助跌)"
+                        )
+                        net_gex_sign = "+" if net_gex_float >= 0 else "-"
+                        gex_lines.append(
+                            f" 做市商淨曝險 (Net GEX Regime): {net_gex_sign}{abs(net_gex_float)/1000:.0f}K ({regime_label})"
+                        )
+
+                    gamma_flip_val = estimate_symbol_gamma_flip(
+                        gex_prof, effective_c_val
+                    )
+                    if gamma_flip_val > 0 and effective_c_val > 0:
+                        flip_buffer_pct = (
+                            (effective_c_val - gamma_flip_val) / effective_c_val * 100
+                        )
+                        gex_lines.append(
+                            f" 個股零 Gamma 翻轉線 (Stock GEX Flip): ${gamma_flip_val:.2f}"
+                            f" (現價緩衝: {flip_buffer_pct:+.2f}%)"
+                        )
+                    else:
+                        gex_lines.append(
+                            " 個股零 Gamma 翻轉線 (Stock GEX Flip): -- (無法估算)"
+                        )
+
+                    gex_callwall = gex_data.get("call_wall")
+                    has_callwall = False
+                    try:
+                        if gex_callwall and float(gex_callwall) > 0:
+                            has_callwall = True
+                    except (ValueError, TypeError):
+                        pass
+                    if has_callwall and effective_c_val > 0:
+                        call_wall_float = float(gex_callwall)
+                        call_wall_depth = _safe_gex(call_wall_float)
+                        call_wall_dist_pct = (
+                            (call_wall_float - effective_c_val) / effective_c_val * 100
+                        )
+                        space_flag = " ❌ 不足5%" if call_wall_dist_pct < 5.0 else ""
+                        depth_sign = "+" if call_wall_depth >= 0 else "-"
+                        gex_lines.append(
+                            f" GEX CallWall (做市商頂牆): ${call_wall_float:.2f}"
+                            f" (深度: {depth_sign}{abs(call_wall_depth)/1000:.0f}K"
+                            f" | 距現價空間: {call_wall_dist_pct:+.2f}%{space_flag})"
+                        )
 
                     gex_lines.append("```")
 

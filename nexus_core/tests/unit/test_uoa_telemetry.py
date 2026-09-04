@@ -217,6 +217,43 @@ def test_classify_uoa_trade_delta_dte_fields_populated() -> None:
     assert result_no_delta.delta == 0.0
 
 
+def test_generate_uoa_ascii_table_includes_notional_premium_column() -> None:
+    """驗證 UOA 表格新增的「權利金」欄位：>=$1M 顯示 M，< $1M 顯示 k。"""
+    trade_million = UOATradeInput(
+        strike_price=50.0,
+        option_type="CALL",
+        trade_price=100.0,
+        bid_price=99.0,
+        ask_price=100.0,
+        volume=100,
+        open_interest=50,
+        expiry="2026-06-12",
+        symbol="TEST",
+    )
+    trade_small = UOATradeInput(
+        strike_price=10.0,
+        option_type="PUT",
+        trade_price=1.0,
+        bid_price=0.9,
+        ask_price=1.0,
+        volume=100,
+        open_interest=50,
+        expiry="2026-06-12",
+        symbol="TEST",
+    )
+    r1 = classify_uoa_trade(trade_million, reference_date="2026-06-05")
+    r2 = classify_uoa_trade(trade_small, reference_date="2026-06-05")
+
+    table = generate_uoa_ascii_table([r1, r2])
+    lines = table.split("\n")
+
+    assert "權利金" in lines[0]
+    # notional = $100.0 * 100 * 100 = $1,000,000 -> $1.00M
+    assert "$1.00M" in lines[2]
+    # notional = $1.0 * 100 * 100 = $10,000 -> $10.0k
+    assert "$10.0k" in lines[3]
+
+
 def test_classify_uoa_trade_whale_hedge_deep_itm_put() -> None:
     """驗證買入深價內 Put (Delta < -0.65) 強制標註為 Whale_Hedge (巨鯨避險)"""
     trade = UOATradeInput(

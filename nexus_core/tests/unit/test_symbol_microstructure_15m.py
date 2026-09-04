@@ -254,3 +254,37 @@ def test_confirmed_15m_bar_none_ohlc_defaults() -> None:
     assert bar.open is None
     assert bar.high is None
     assert bar.low is None
+
+
+def test_15m_atr_and_session_vwap_displayed_with_values() -> None:
+    """測試 15m ATR 獨立顯示行與 Session VWAP + 現價偏離% 正確渲染。"""
+    data: Dict[str, Any] = {
+        "symbol": "QQQ",
+        "price": 378.87,
+        "bar_15m": None,
+        "atr_15m": 3.47,
+        "session_vwap": 376.20,
+    }
+
+    embed = create_tactical_symbol_embed(data)
+    text = _get_embed_text(embed)
+
+    assert "15m ATR (EMA14): $3.47" in text
+    # (378.87 - 376.20) / 376.20 * 100 = +0.71%
+    assert "日內錨點 (Session VWAP): $376.20 (現價偏離: +0.71%)" in text
+
+
+def test_15m_atr_and_session_vwap_degraded_when_missing() -> None:
+    """測試 15m ATR 與 Session VWAP 缺失/為零時優雅降級為 --，不誤顯示 $0.00。"""
+    data: Dict[str, Any] = {
+        "symbol": "AAPL",
+        "bar_15m": None,
+        "atr_15m": 0.0,
+        "session_vwap": 0.0,
+    }
+
+    embed = create_tactical_symbol_embed(data)
+    text = _get_embed_text(embed)
+
+    assert "15m ATR (EMA14): --" in text
+    assert "日內錨點 (Session VWAP): -- (現價偏離: --)" in text

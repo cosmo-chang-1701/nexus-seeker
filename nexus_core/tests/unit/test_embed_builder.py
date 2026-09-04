@@ -2951,6 +2951,84 @@ def test_create_tactical_symbol_embed_omits_anti_washout_stop_without_atr_15m() 
     assert "GEX PutWall (做市商底牆): $100.00" in desc
 
 
+def test_create_tactical_symbol_embed_shows_net_gex_flip_and_callwall() -> None:
+    """Net GEX Regime、個股 GEX Flip 線、GEX CallWall 水位/深度/距現價% 應正確接線顯示。"""
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data = {
+        "symbol": "NVDA",
+        "price": 100.0,
+        "gex_profile_data": {
+            "put_wall": 90.0,
+            "call_wall": 108.0,
+            "net_gex": 20_000_000.0,
+            "gex_profile": {
+                "90.0": -5_000_000,
+                "95.0": -2_000_000,
+                "100.0": 10_000_000,
+                "108.0": 4_000_000,
+            },
+        },
+    }
+
+    embed = create_tactical_symbol_embed(data)
+    desc = get_embed_text(embed)
+
+    assert (
+        "做市商淨曝險 (Net GEX Regime): +20000K (🟢 LONG_GAMMA (自穩定壓制波動))"
+        in desc
+    )
+    assert "個股零 Gamma 翻轉線 (Stock GEX Flip): $100.00 (現價緩衝: +0.00%)" in desc
+    assert (
+        "GEX CallWall (做市商頂牆): $108.00 (深度: +4000K | 距現價空間: +8.00%)" in desc
+    )
+
+
+def test_create_tactical_symbol_embed_flags_callwall_insufficient_space() -> None:
+    """GEX CallWall 距現價空間 < 5% 時應附註「❌ 不足5%」警示。"""
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data = {
+        "symbol": "NVDA",
+        "price": 100.0,
+        "gex_profile_data": {
+            "put_wall": 90.0,
+            "call_wall": 103.0,
+            "net_gex": -5_000_000.0,
+            "gex_profile": {
+                "90.0": 1_000_000,
+                "100.0": 2_000_000,
+                "103.0": 1_000_000,
+            },
+        },
+    }
+
+    embed = create_tactical_symbol_embed(data)
+    desc = get_embed_text(embed)
+
+    assert "做市商淨曝險 (Net GEX Regime): -5000K (🔴 SHORT_GAMMA (助漲助跌))" in desc
+    assert "距現價空間: +3.00% ❌ 不足5%" in desc
+
+
+def test_create_tactical_symbol_embed_shows_flip_placeholder_when_no_crossing() -> None:
+    """gex_profile 全數同號、沒有 zero-cross 時，GEX Flip 應顯示 -- 而非誤導性的 $0.00。"""
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data = {
+        "symbol": "NVDA",
+        "price": 100.0,
+        "gex_profile_data": {
+            "put_wall": 90.0,
+            "gex_profile": {"98.0": 2_000_000, "100.0": 3_000_000, "102.0": 1_000_000},
+        },
+    }
+
+    embed = create_tactical_symbol_embed(data)
+    desc = get_embed_text(embed)
+
+    assert "個股零 Gamma 翻轉線 (Stock GEX Flip): -- (無法估算)" in desc
+
+
 def test_create_tactical_symbol_embed_marks_live_iv_realtime() -> None:
     """iv_source == "LIVE_IV"（force_refresh 即時反解）時，IV 標題應標示
     🟢即時，讓使用者能分辨看到的 IV 是即時反解還是快取值。"""

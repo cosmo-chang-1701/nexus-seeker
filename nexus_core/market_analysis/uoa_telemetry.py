@@ -259,15 +259,21 @@ def generate_uoa_ascii_table(trades: List[UOATradeResult]) -> str:
         "交易流向 [買/賣]",
         "機構/OI",
         "比例",
+        "權利金",
         "戰略意圖映射",
     ]
-    header_alignments = ["left", "left", "left", "left", "left", "left", "left"]
-    col_alignments = ["left", "right", "left", "left", "left", "left", "left"]
-    min_widths = [10, 7, 4, 21, 8, 6, 0]
+    header_alignments = ["left", "left", "left", "left", "left", "left", "left", "left"]
+    col_alignments = ["left", "right", "left", "left", "left", "left", "right", "left"]
+    min_widths = [10, 7, 4, 21, 8, 6, 8, 0]
 
     # 格式化每一行數據的儲存格
     rows_cells: List[List[str]] = []
     for trade in trades:
+        notional_val = trade.trade_price * trade.volume * 100
+        if notional_val >= 1_000_000:
+            notional_str = f"${notional_val / 1_000_000:.2f}M"
+        else:
+            notional_str = f"${notional_val / 1_000:.1f}k"
         cells = [
             trade.expiry,
             f"${trade.strike_price:.1f}",
@@ -275,6 +281,7 @@ def generate_uoa_ascii_table(trades: List[UOATradeResult]) -> str:
             trade.action,
             f"+{trade.volume:,}",
             trade.ratio_str,
+            notional_str,
             trade.intent,
         ]
         rows_cells.append(cells)
