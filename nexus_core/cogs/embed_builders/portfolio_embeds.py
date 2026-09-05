@@ -1194,11 +1194,33 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         gex_lines.append(
                             f" 🛡️ GEX PutWall (做市商底牆): ${float(gex_putwall):.2f}"
                         )
+                        put_wall_float = float(gex_putwall)
+                        if effective_c_val > 0:
+                            put_buffer_pct = (
+                                (effective_c_val - put_wall_float)
+                                / effective_c_val
+                                * 100
+                            )
+                            if put_buffer_pct < 0:
+                                put_space_flag = " ⚠️ [數據異常：PutWall已高於現價]"
+                            elif put_buffer_pct < 5.0:
+                                put_space_flag = " ❌ 不足5%"
+                            else:
+                                put_space_flag = ""
+                            gex_lines.append(
+                                f" PutWall 距現價空間 (下行緩衝): {put_buffer_pct:+.2f}%{put_space_flag}"
+                            )
                         atr_15m_val = _to_float(data.get("atr_15m"), 0.0)
                         if atr_15m_val > 0:
-                            anti_washout_stop = float(gex_putwall) - 1.5 * atr_15m_val
+                            anti_washout_stop = put_wall_float - 1.5 * atr_15m_val
+                            fallback_marker = ""
+                            if anti_washout_stop >= effective_c_val:
+                                anti_washout_stop = effective_c_val - 2.0 * atr_15m_val
+                                fallback_marker = (
+                                    " [PutWall異常降級：改用現價-2×ATR_15m]"
+                                )
                             gex_lines.append(
-                                f" 📉 防洗盤停損參考 (PutWall - 1.5×ATR_15m): ${anti_washout_stop:.2f}"
+                                f" 📉 防洗盤停損參考 (PutWall - 1.5×ATR_15m): ${anti_washout_stop:.2f}{fallback_marker}"
                             )
 
                     net_gex_raw = gex_data.get("net_gex")
@@ -1248,7 +1270,12 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         call_wall_dist_pct = (
                             (call_wall_float - effective_c_val) / effective_c_val * 100
                         )
-                        space_flag = " ❌ 不足5%" if call_wall_dist_pct < 5.0 else ""
+                        if call_wall_dist_pct < 0:
+                            space_flag = " ⚠️ [數據異常：CallWall已低於現價]"
+                        elif call_wall_dist_pct < 5.0:
+                            space_flag = " ❌ 不足5%"
+                        else:
+                            space_flag = ""
                         depth_sign = "+" if call_wall_depth >= 0 else "-"
                         gex_lines.append(
                             f" GEX CallWall (做市商頂牆): ${call_wall_float:.2f}"

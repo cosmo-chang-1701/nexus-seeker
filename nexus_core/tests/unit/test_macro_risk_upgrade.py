@@ -1731,6 +1731,27 @@ def test_estimate_symbol_gamma_flip_no_crossing(gex_profile: dict) -> None:
     assert estimate_symbol_gamma_flip(gex_profile, spot=95.0) == 0.0
 
 
+def test_estimate_symbol_gamma_flip_crossing_outside_bracket_returns_zero() -> None:
+    """交叉點存在但落在 spot ± 30% bracket 之外 -> 視為無法採信，回傳 0.0。"""
+    gex_profile = {"50": -100.0, "100": -50.0, "200": 300.0}
+    # 累積: 50 -> -100 (負) ; 100 -> -150 (仍負) ; 200 -> +150 (交叉點，但 200 遠超出 bracket)
+    assert estimate_symbol_gamma_flip(gex_profile, spot=100.0) == 0.0
+
+
+def test_estimate_symbol_gamma_flip_crossing_at_bracket_boundary() -> None:
+    """交叉點恰好落在 bracket 邊界 (spot*1.3) 上 -> 應視為在 bracket 內，正常回傳。"""
+    gex_profile = {"50.0": -100.0, "130.0": 100.0}
+    assert estimate_symbol_gamma_flip(gex_profile, spot=100.0) == 130.0
+
+
+def test_estimate_symbol_gamma_flip_no_bracket_restriction_when_spot_non_positive() -> (
+    None
+):
+    """spot<=0 時無法定義合理 bracket，應退回不限制 bracket 的既有行為。"""
+    gex_profile = {"50": -100.0, "100": -50.0, "200": 300.0}
+    assert estimate_symbol_gamma_flip(gex_profile, spot=0.0) == 200.0
+
+
 def test_estimate_symbol_gamma_flip_empty_profile_returns_zero() -> None:
     assert estimate_symbol_gamma_flip({}, spot=100.0) == 0.0
     assert estimate_symbol_gamma_flip(None, spot=100.0) == 0.0  # type: ignore[arg-type]

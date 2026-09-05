@@ -768,6 +768,14 @@ def estimate_symbol_gamma_flip(gex_profile: dict, spot: float) -> float:
     這是輕量估算，非如 SPY 端點那樣與官方數據源比對的精算值。找不到交叉點
     （例如全數為正、全數為負，或 profile 為空/格式異常）一律回傳 0.0，
     由呼叫端 fail-safe 處理（視為無法確認，不應作為判斷依據）。
+
+    Bracket 防禦：僅接受落在 spot ± 30%（`[spot*0.7, spot*1.3]`）區間內的
+    交叉履約價作為回傳值，避免深度價外雜訊合約（edge-scraper 端過濾後仍
+    可能殘留）產生偏離現價極遠的失真交叉判定被誤用為 Gamma Flip。累積和
+    本身仍涵蓋全部履約價（含 bracket 下界以下者）以確保進入 bracket 時的
+    累積基準值正確，只在「是否接受此交叉點」這一步驟做 bracket 篩選；
+    bracket 內找不到交叉點（即使 bracket 外存在交叉點）一律回傳 0.0。
+    `spot <= 0` 時無法定義合理的 bracket，退回不限制 bracket 的既有行為。
     """
     if not gex_profile:
         return 0.0
@@ -778,12 +786,18 @@ def estimate_symbol_gamma_flip(gex_profile: dict, spot: float) -> float:
     if not sorted_strikes:
         return 0.0
 
+    if spot > 0:
+        bracket_low, bracket_high = spot * 0.7, spot * 1.3
+    else:
+        bracket_low, bracket_high = float("-inf"), float("inf")
+
     cumulative = 0.0
     prev_cumulative: Optional[float] = None
     for strike, gex in sorted_strikes:
         cumulative += gex
         if prev_cumulative is not None and prev_cumulative < 0 <= cumulative:
-            return strike
+            if bracket_low <= strike <= bracket_high:
+                return strike
         prev_cumulative = cumulative
     return 0.0
 

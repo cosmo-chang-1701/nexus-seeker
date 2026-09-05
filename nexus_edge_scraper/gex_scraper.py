@@ -30,9 +30,15 @@ FALLBACK_GEX: dict[str, Any] = {
     "gex_profile": {},
 }
 
+_GEX_MIN_DELTA_THRESHOLD = 0.02
+
 
 def _ndtr_prime(x: float) -> float:
     return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
+
+
+def _ndtr(x: float) -> float:
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
 
 
 def _calculate_gamma(S: float, K: float, t: float, r: float, sigma: float) -> float:
@@ -43,6 +49,51 @@ def _calculate_gamma(S: float, K: float, t: float, r: float, sigma: float) -> fl
         return _ndtr_prime(d1) / (S * sigma * math.sqrt(t))
     except Exception:
         return 0.0
+
+
+def _calculate_delta(
+    S: float, K: float, t: float, r: float, sigma: float, is_call: bool
+) -> float:
+    if S <= 0 or K <= 0 or t <= 0 or sigma <= 0:
+        return 0.0
+    try:
+        d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * t) / (sigma * math.sqrt(t))
+        return _ndtr(d1) if is_call else _ndtr(d1) - 1.0
+    except Exception:
+        return 0.0
+
+
+def _filter_noise_contracts(
+    chain: list[dict[str, Any]], spot: float
+) -> list[dict[str, Any]]:
+    """過濾雜訊合約：先剔除 oi<=0（本就對曝險零貢獻），再對每邊
+    (calls / puts) 各自嘗試以 |delta| < _GEX_MIN_DELTA_THRESHOLD 剔除
+    深度價外、Delta 趨近於零的合約（避免掛牌雜訊/長天期價外合約的異常
+    OI 堆積扭曲 Wall 判定與 Gamma Flip 估算）。若對某一邊套用 delta 過濾
+    後會導致該邊清空，則該邊 fail-safe 退回只套用 oi>0 過濾，確保 Wall /
+    Gamma Flip 計算永遠有資料可用。
+    """
+    oi_filtered = [c for c in chain if c["oi"] > 0]
+    if not oi_filtered:
+        return oi_filtered
+
+    def _delta_filter(contracts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        kept = []
+        for c in contracts:
+            delta = _calculate_delta(
+                spot, c["strike"], c["t"], 0.04, c["iv"], c["is_call"]
+            )
+            if abs(delta) >= _GEX_MIN_DELTA_THRESHOLD:
+                kept.append(c)
+        return kept
+
+    calls = [c for c in oi_filtered if c["is_call"]]
+    puts = [c for c in oi_filtered if not c["is_call"]]
+
+    calls_filtered = _delta_filter(calls) or calls
+    puts_filtered = _delta_filter(puts) or puts
+
+    return calls_filtered + puts_filtered
 
 
 async def scrape_symbol_gex_core(symbol: str, browser: Browser) -> dict[str, Any]:
@@ -182,8 +233,17 @@ async def scrape_symbol_gex_core(symbol: str, browser: Browser) -> dict[str, Any
             )
             return fallback
 
+        option_chain = _filter_noise_contracts(option_chain, spot_price)
+        if not option_chain:
+            logger.warning(
+                f"All contracts filtered as noise for {symbol_upper}, using fallbacks."
+            )
+            return fallback
+
         net_gex = 0.0
         gex_by_strike: dict[float, float] = {}
+        call_gex_by_strike: dict[float, float] = {}
+        put_gex_by_strike: dict[float, float] = {}
 
         for contract in option_chain:
             strike = contract["strike"]
@@ -193,37 +253,36 @@ async def scrape_symbol_gex_core(symbol: str, browser: Browser) -> dict[str, Any
             is_call = contract["is_call"]
 
             gamma = _calculate_gamma(spot_price, strike, t, 0.04, iv)
-            gex = oi * gamma * spot_price * spot_price
-            if not is_call:
-                gex = -gex
+            raw_gex = oi * gamma * spot_price * spot_price
 
-            net_gex += gex
-            gex_by_strike[strike] = gex_by_strike.get(strike, 0.0) + gex
+            if is_call:
+                call_gex_by_strike[strike] = (
+                    call_gex_by_strike.get(strike, 0.0) + raw_gex
+                )
+                signed_gex = raw_gex
+            else:
+                put_gex_by_strike[strike] = put_gex_by_strike.get(strike, 0.0) + raw_gex
+                signed_gex = -raw_gex
+
+            net_gex += signed_gex
+            gex_by_strike[strike] = gex_by_strike.get(strike, 0.0) + signed_gex
 
         call_wall = spot_price
         put_wall = spot_price
 
-        if gex_by_strike:
-            # Put Wall (GEX Support Wall): Strike with max positive GEX (dealers long gamma, buying dips)
-            support_candidates: dict[float, float] = {
-                k: v for k, v in gex_by_strike.items() if v > 0
-            }
-            if support_candidates:
-                put_wall = max(support_candidates, key=lambda k: support_candidates[k])
+        # Call Wall (Resistance Ceiling): 現價以上，Call GEX 曝險最大的履約價
+        call_wall_candidates: dict[float, float] = {
+            k: v for k, v in call_gex_by_strike.items() if k >= spot_price and v > 0
+        }
+        if call_wall_candidates:
+            call_wall = max(call_wall_candidates, key=lambda k: call_wall_candidates[k])
 
-            # Call Wall (Resistance Ceiling): Strike with lowest negative GEX / heavy resistance
-            resistance_candidates: dict[float, float] = {
-                k: v for k, v in gex_by_strike.items() if v < 0
-            }
-            if resistance_candidates:
-                call_wall = min(
-                    resistance_candidates, key=lambda k: resistance_candidates[k]
-                )
-            elif support_candidates and put_wall > 0:
-                # Fallback if all GEX is positive: set call_wall to highest strike with positive GEX above spot
-                otm_calls = [k for k in gex_by_strike.keys() if k > spot_price]
-                if otm_calls:
-                    call_wall = max(otm_calls)
+        # Put Wall (GEX Support Wall): 現價以下，Put GEX 曝險最大的履約價
+        put_wall_candidates: dict[float, float] = {
+            k: v for k, v in put_gex_by_strike.items() if k <= spot_price and v > 0
+        }
+        if put_wall_candidates:
+            put_wall = max(put_wall_candidates, key=lambda k: put_wall_candidates[k])
 
         return {
             "spot": round(spot_price, 2),

@@ -2982,6 +2982,7 @@ def test_create_tactical_symbol_embed_shows_net_gex_flip_and_callwall() -> None:
     assert (
         "GEX CallWall (做市商頂牆): $108.00 (深度: +4000K | 距現價空間: +8.00%)" in desc
     )
+    assert "PutWall 距現價空間 (下行緩衝): +10.00%" in desc
 
 
 def test_create_tactical_symbol_embed_flags_callwall_insufficient_space() -> None:
@@ -2998,7 +2999,7 @@ def test_create_tactical_symbol_embed_flags_callwall_insufficient_space() -> Non
             "gex_profile": {
                 "90.0": 1_000_000,
                 "100.0": 2_000_000,
-                "103.0": 1_000_000,
+                "103.0": -8_000_000,
             },
         },
     }
@@ -3008,6 +3009,80 @@ def test_create_tactical_symbol_embed_flags_callwall_insufficient_space() -> Non
 
     assert "做市商淨曝險 (Net GEX Regime): -5000K (🔴 SHORT_GAMMA (助漲助跌))" in desc
     assert "距現價空間: +3.00% ❌ 不足5%" in desc
+
+
+def test_create_tactical_symbol_embed_flags_callwall_data_anomaly_when_below_spot() -> (
+    None
+):
+    """CallWall 低於現價（防禦性資料異常情境）應標示異常，而非誤判為「空間不足」。"""
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data = {
+        "symbol": "NVDA",
+        "price": 100.0,
+        "gex_profile_data": {
+            "put_wall": 90.0,
+            "call_wall": 95.0,
+            "net_gex": 5_000_000.0,
+            "gex_profile": {"90.0": 1_000_000, "95.0": 2_000_000, "100.0": 2_000_000},
+        },
+    }
+
+    embed = create_tactical_symbol_embed(data)
+    desc = get_embed_text(embed)
+
+    assert "距現價空間: -5.00% ⚠️ [數據異常：CallWall已低於現價]" in desc
+
+
+def test_create_tactical_symbol_embed_shows_putwall_headroom_anomaly_when_above_spot() -> (
+    None
+):
+    """PutWall 高於現價（防禦性資料異常情境）應標示異常，而非誤判為「空間不足」。"""
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data = {
+        "symbol": "NVDA",
+        "price": 100.0,
+        "gex_profile_data": {
+            "put_wall": 105.0,
+            "gex_profile": {"100.0": 1_000_000, "105.0": 2_000_000},
+        },
+    }
+
+    embed = create_tactical_symbol_embed(data)
+    desc = get_embed_text(embed)
+
+    assert (
+        "PutWall 距現價空間 (下行緩衝): -5.00% ⚠️ [數據異常：PutWall已高於現價]" in desc
+    )
+
+
+def test_create_tactical_symbol_embed_anti_washout_stop_falls_back_when_nonsensical() -> (
+    None
+):
+    """PutWall - 1.5×ATR_15m ≥ 現價（開倉即觸發的矛盾停損）時應改用
+    「現價 - 2×ATR_15m」並附上降級標記。"""
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data = {
+        "symbol": "NVDA",
+        "price": 100.0,
+        "gex_profile_data": {
+            "put_wall": 101.0,
+            "gex_profile": {"98.0": 1_000_000, "101.0": 2_000_000},
+        },
+        "atr_15m": 0.2,
+    }
+
+    embed = create_tactical_symbol_embed(data)
+    desc = get_embed_text(embed)
+
+    # 101.0 - 1.5*0.2 = 100.7 >= 100.0 (現價) -> 觸發 fallback
+    # fallback: 100.0 - 2*0.2 = 99.60
+    assert (
+        "防洗盤停損參考 (PutWall - 1.5×ATR_15m): $99.60"
+        " [PutWall異常降級：改用現價-2×ATR_15m]" in desc
+    )
 
 
 def test_create_tactical_symbol_embed_shows_flip_placeholder_when_no_crossing() -> None:
