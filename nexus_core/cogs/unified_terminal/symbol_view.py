@@ -249,7 +249,13 @@ class SymbolHubView(discord.ui.View):
         try:
             from market_analysis.dynamic_rollover import DynamicRolloverEngine
 
-            target_spot = _safe_float(self.base_data.get("price"), 0.0)
+            _quote = self.base_data.get("quote") or {}
+            _c_raw = (
+                _quote.get("c")
+                if _quote.get("c") is not None
+                else self.base_data.get("price")
+            )
+            target_spot = _safe_float(_c_raw, 0.0)
 
             engine = DynamicRolloverEngine()
             six_rule_passed, six_rule_reason = await engine._confirm_entry_signal(
