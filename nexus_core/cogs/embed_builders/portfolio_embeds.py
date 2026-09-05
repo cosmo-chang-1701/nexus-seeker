@@ -1189,12 +1189,19 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                             f"{prefix} {spot_marker}{k:>7.2f} | {color_prefix}{bar_str}\u001b[0m | {formatted_val:>8}"
                         )
 
+                    def _append_tree_block(
+                        lines: List[str], header: str, items: List[str]
+                    ) -> None:
+                        lines.append("")
+                        lines.append(f" ── {header} ──")
+                        for i, item in enumerate(items):
+                            prefix = " ├─ " if i < len(items) - 1 else " └─ "
+                            lines.append(prefix + item)
+
                     if has_putwall:
-                        gex_lines.append("")
-                        gex_lines.append(
-                            f" 🛡️ GEX PutWall (做市商底牆): ${float(gex_putwall):.2f}"
-                        )
                         put_wall_float = float(gex_putwall)
+                        put_items = [f"PutWall: ${put_wall_float:.2f}"]
+
                         if effective_c_val > 0:
                             put_buffer_pct = (
                                 (effective_c_val - put_wall_float)
@@ -1207,9 +1214,11 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                 put_space_flag = " ❌ 不足5%"
                             else:
                                 put_space_flag = ""
-                            gex_lines.append(
-                                f" PutWall 距現價空間 (下行緩衝): {put_buffer_pct:+.2f}%{put_space_flag}"
+                            put_arrow = "↓" if put_buffer_pct >= 0 else "↑"
+                            put_items.append(
+                                f"距現價空間 (下行緩衝): {put_arrow}{abs(put_buffer_pct):.2f}%{put_space_flag}"
                             )
+
                         atr_15m_val = _to_float(data.get("atr_15m"), 0.0)
                         if atr_15m_val > 0:
                             anti_washout_stop = put_wall_float - 1.5 * atr_15m_val
@@ -1219,43 +1228,11 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                 fallback_marker = (
                                     " [PutWall異常降級：改用現價-2×ATR_15m]"
                                 )
-                            gex_lines.append(
-                                f" 📉 防洗盤停損參考 (PutWall - 1.5×ATR_15m): ${anti_washout_stop:.2f}{fallback_marker}"
+                            put_items.append(
+                                f"防洗盤停損 (PutWall-1.5×ATR_15m): ${anti_washout_stop:.2f}{fallback_marker}"
                             )
 
-                    net_gex_raw = gex_data.get("net_gex")
-                    try:
-                        net_gex_float = (
-                            float(net_gex_raw) if net_gex_raw is not None else None
-                        )
-                    except (ValueError, TypeError):
-                        net_gex_float = None
-                    if net_gex_float is not None:
-                        regime_label = (
-                            "🟢 LONG_GAMMA (自穩定壓制波動)"
-                            if net_gex_float > 0
-                            else "🔴 SHORT_GAMMA (助漲助跌)"
-                        )
-                        net_gex_sign = "+" if net_gex_float >= 0 else "-"
-                        gex_lines.append(
-                            f" 做市商淨曝險 (Net GEX Regime): {net_gex_sign}{abs(net_gex_float)/1000:.0f}K ({regime_label})"
-                        )
-
-                    gamma_flip_val = estimate_symbol_gamma_flip(
-                        gex_prof, effective_c_val
-                    )
-                    if gamma_flip_val > 0 and effective_c_val > 0:
-                        flip_buffer_pct = (
-                            (effective_c_val - gamma_flip_val) / effective_c_val * 100
-                        )
-                        gex_lines.append(
-                            f" 個股零 Gamma 翻轉線 (Stock GEX Flip): ${gamma_flip_val:.2f}"
-                            f" (現價緩衝: {flip_buffer_pct:+.2f}%)"
-                        )
-                    else:
-                        gex_lines.append(
-                            " 個股零 Gamma 翻轉線 (Stock GEX Flip): -- (無法估算)"
-                        )
+                        _append_tree_block(gex_lines, "🛡️ 下檔支撐", put_items)
 
                     gex_callwall = gex_data.get("call_wall")
                     has_callwall = False
@@ -1276,12 +1253,48 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                             space_flag = " ❌ 不足5%"
                         else:
                             space_flag = ""
+                        call_arrow = "↑" if call_wall_dist_pct >= 0 else "↓"
                         depth_sign = "+" if call_wall_depth >= 0 else "-"
-                        gex_lines.append(
-                            f" GEX CallWall (做市商頂牆): ${call_wall_float:.2f}"
-                            f" (深度: {depth_sign}{abs(call_wall_depth)/1000:.0f}K"
-                            f" | 距現價空間: {call_wall_dist_pct:+.2f}%{space_flag})"
+                        call_items = [
+                            f"CallWall: ${call_wall_float:.2f}",
+                            f"距現價空間: {call_arrow}{abs(call_wall_dist_pct):.2f}%{space_flag}",
+                            f"深度: {depth_sign}{abs(call_wall_depth)/1000:.0f}K",
+                        ]
+                        _append_tree_block(gex_lines, "🚧 上檔壓力", call_items)
+
+                    regime_items: List[str] = []
+                    net_gex_raw = gex_data.get("net_gex")
+                    try:
+                        net_gex_float = (
+                            float(net_gex_raw) if net_gex_raw is not None else None
                         )
+                    except (ValueError, TypeError):
+                        net_gex_float = None
+                    if net_gex_float is not None:
+                        regime_label = (
+                            "🟢 LONG_GAMMA (自穩定壓制波動)"
+                            if net_gex_float > 0
+                            else "🔴 SHORT_GAMMA (助漲助跌)"
+                        )
+                        net_gex_sign = "+" if net_gex_float >= 0 else "-"
+                        regime_items.append(
+                            f"Net GEX Regime: {net_gex_sign}{abs(net_gex_float)/1000:.0f}K ({regime_label})"
+                        )
+
+                    gamma_flip_val = estimate_symbol_gamma_flip(
+                        gex_prof, effective_c_val
+                    )
+                    if gamma_flip_val > 0 and effective_c_val > 0:
+                        flip_buffer_pct = (
+                            (effective_c_val - gamma_flip_val) / effective_c_val * 100
+                        )
+                        regime_items.append(
+                            f"Gamma Flip: ${gamma_flip_val:.2f} (緩衝: {flip_buffer_pct:+.2f}%)"
+                        )
+                    else:
+                        regime_items.append("Gamma Flip: -- (無法估算)")
+
+                    _append_tree_block(gex_lines, "⚙️ 體制判讀", regime_items)
 
                     gex_lines.append("```")
 

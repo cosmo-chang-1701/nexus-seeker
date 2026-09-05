@@ -2920,7 +2920,7 @@ def test_create_tactical_symbol_embed_shows_anti_washout_stop_with_atr_15m() -> 
     embed = create_tactical_symbol_embed(data)
     desc = get_embed_text(embed)
     # PutWall(100.0) - 1.5 * ATR_15m(2.0) = 97.0
-    assert "防洗盤停損參考 (PutWall - 1.5×ATR_15m): $97.00" in desc
+    assert "防洗盤停損 (PutWall-1.5×ATR_15m): $97.00" in desc
 
 
 def test_create_tactical_symbol_embed_omits_anti_washout_stop_without_atr_15m() -> None:
@@ -2947,8 +2947,8 @@ def test_create_tactical_symbol_embed_omits_anti_washout_stop_without_atr_15m() 
 
     embed = create_tactical_symbol_embed(data)
     desc = get_embed_text(embed)
-    assert "防洗盤停損參考" not in desc
-    assert "GEX PutWall (做市商底牆): $100.00" in desc
+    assert "防洗盤停損" not in desc
+    assert "PutWall: $100.00" in desc
 
 
 def test_create_tactical_symbol_embed_shows_net_gex_flip_and_callwall() -> None:
@@ -2974,15 +2974,12 @@ def test_create_tactical_symbol_embed_shows_net_gex_flip_and_callwall() -> None:
     embed = create_tactical_symbol_embed(data)
     desc = get_embed_text(embed)
 
-    assert (
-        "做市商淨曝險 (Net GEX Regime): +20000K (🟢 LONG_GAMMA (自穩定壓制波動))"
-        in desc
-    )
-    assert "個股零 Gamma 翻轉線 (Stock GEX Flip): $100.00 (現價緩衝: +0.00%)" in desc
-    assert (
-        "GEX CallWall (做市商頂牆): $108.00 (深度: +4000K | 距現價空間: +8.00%)" in desc
-    )
-    assert "PutWall 距現價空間 (下行緩衝): +10.00%" in desc
+    assert "Net GEX Regime: +20000K (🟢 LONG_GAMMA (自穩定壓制波動))" in desc
+    assert "Gamma Flip: $100.00 (緩衝: +0.00%)" in desc
+    assert "CallWall: $108.00" in desc
+    assert "距現價空間: ↑8.00%" in desc
+    assert "深度: +4000K" in desc
+    assert "距現價空間 (下行緩衝): ↓10.00%" in desc
 
 
 def test_create_tactical_symbol_embed_flags_callwall_insufficient_space() -> None:
@@ -3007,8 +3004,8 @@ def test_create_tactical_symbol_embed_flags_callwall_insufficient_space() -> Non
     embed = create_tactical_symbol_embed(data)
     desc = get_embed_text(embed)
 
-    assert "做市商淨曝險 (Net GEX Regime): -5000K (🔴 SHORT_GAMMA (助漲助跌))" in desc
-    assert "距現價空間: +3.00% ❌ 不足5%" in desc
+    assert "Net GEX Regime: -5000K (🔴 SHORT_GAMMA (助漲助跌))" in desc
+    assert "距現價空間: ↑3.00% ❌ 不足5%" in desc
 
 
 def test_create_tactical_symbol_embed_flags_callwall_data_anomaly_when_below_spot() -> (
@@ -3031,7 +3028,7 @@ def test_create_tactical_symbol_embed_flags_callwall_data_anomaly_when_below_spo
     embed = create_tactical_symbol_embed(data)
     desc = get_embed_text(embed)
 
-    assert "距現價空間: -5.00% ⚠️ [數據異常：CallWall已低於現價]" in desc
+    assert "距現價空間: ↓5.00% ⚠️ [數據異常：CallWall已低於現價]" in desc
 
 
 def test_create_tactical_symbol_embed_shows_putwall_headroom_anomaly_when_above_spot() -> (
@@ -3052,9 +3049,7 @@ def test_create_tactical_symbol_embed_shows_putwall_headroom_anomaly_when_above_
     embed = create_tactical_symbol_embed(data)
     desc = get_embed_text(embed)
 
-    assert (
-        "PutWall 距現價空間 (下行緩衝): -5.00% ⚠️ [數據異常：PutWall已高於現價]" in desc
-    )
+    assert "距現價空間 (下行緩衝): ↑5.00% ⚠️ [數據異常：PutWall已高於現價]" in desc
 
 
 def test_create_tactical_symbol_embed_anti_washout_stop_falls_back_when_nonsensical() -> (
@@ -3080,7 +3075,7 @@ def test_create_tactical_symbol_embed_anti_washout_stop_falls_back_when_nonsensi
     # 101.0 - 1.5*0.2 = 100.7 >= 100.0 (現價) -> 觸發 fallback
     # fallback: 100.0 - 2*0.2 = 99.60
     assert (
-        "防洗盤停損參考 (PutWall - 1.5×ATR_15m): $99.60"
+        "防洗盤停損 (PutWall-1.5×ATR_15m): $99.60"
         " [PutWall異常降級：改用現價-2×ATR_15m]" in desc
     )
 
@@ -3101,7 +3096,7 @@ def test_create_tactical_symbol_embed_shows_flip_placeholder_when_no_crossing() 
     embed = create_tactical_symbol_embed(data)
     desc = get_embed_text(embed)
 
-    assert "個股零 Gamma 翻轉線 (Stock GEX Flip): -- (無法估算)" in desc
+    assert "Gamma Flip: -- (無法估算)" in desc
 
 
 def test_create_tactical_symbol_embed_uoa_shows_sweep_block_cross_tags() -> None:
