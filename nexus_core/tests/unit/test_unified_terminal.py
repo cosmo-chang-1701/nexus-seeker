@@ -61,7 +61,7 @@ async def test_symbol_hub_command(mock_interaction: Any, mock_bot: Any):  # type
             new_callable=AsyncMock,
         ) as mock_pcr,
         patch(
-            "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
+            "market_analysis.sentiment_engine.SentimentEngine.detect_uoa_with_physical_caps",
             new_callable=AsyncMock,
         ) as mock_uoa,
         patch(
@@ -106,7 +106,7 @@ async def test_symbol_hub_command(mock_interaction: Any, mock_bot: Any):  # type
         mock_skew_p.return_value = 85.0
         mock_mp.return_value = {"max_pain": 115.0}
         mock_pcr.return_value = {"pcr": 0.8, "state": "正常"}
-        mock_uoa.return_value = []
+        mock_uoa.return_value = ([], [])
 
         mock_iv_metrics = MagicMock()
         mock_iv_metrics.iv_rank = 35.0
@@ -228,7 +228,7 @@ async def test_symbol_hub_command_tolerates_malformed_payloads(  # type: ignore
             new_callable=AsyncMock,
         ) as mock_pcr,
         patch(
-            "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
+            "market_analysis.sentiment_engine.SentimentEngine.detect_uoa_with_physical_caps",
             new_callable=AsyncMock,
         ) as mock_uoa,
         patch(
@@ -277,7 +277,7 @@ async def test_symbol_hub_command_tolerates_malformed_payloads(  # type: ignore
         mock_skew_p.return_value = 85.0
         mock_mp.return_value = case["max_pain"]
         mock_pcr.return_value = {"pcr": 0.8, "state": "正常"}
-        mock_uoa.return_value = []
+        mock_uoa.return_value = ([], [])
 
         mock_iv_metrics = MagicMock()
         mock_iv_metrics.iv_rank = case["iv_rank"]
@@ -837,7 +837,7 @@ async def test_fetch_single_symbol_data_raw_forces_live_option_data(  # type: ig
             new_callable=AsyncMock,
         ) as mock_pcr,
         patch(
-            "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
+            "market_analysis.sentiment_engine.SentimentEngine.detect_uoa_with_physical_caps",
             new_callable=AsyncMock,
         ) as mock_uoa,
         patch(
@@ -864,7 +864,7 @@ async def test_fetch_single_symbol_data_raw_forces_live_option_data(  # type: ig
         mock_ddp.return_value = {"is_ddp": False}
         mock_skew.return_value = {"skew": 1.0}
         mock_pcr.return_value = {"pcr": 0.9}
-        mock_uoa.return_value = []
+        mock_uoa.return_value = ([], [])
         mock_mp.return_value = {"max_pain": 115.0}
         mock_unified_mp.return_value = {"max_pain": 115.0, "distance_pct": 0.0}
         mock_iv_metrics = MagicMock()

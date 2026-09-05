@@ -20,6 +20,10 @@ from cogs.embed_builders._embed_helpers import (
 
 logger = logging.getLogger(__name__)
 
+# GEX PutWall 與機構大額 STO PUT 履約價的分歧門檻（相對現價的距離百分比）。
+# 超過此門檻視為兩個支撐訊號互相矛盾，值得在顯示層揭露供使用者交叉參考。
+_GEX_STO_DIVERGENCE_THRESHOLD_PCT = 2.0
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -1231,6 +1235,59 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                             put_items.append(
                                 f"防洗盤停損 (PutWall-1.5×ATR_15m): ${anti_washout_stop:.2f}{fallback_marker}"
                             )
+
+                        if effective_c_val > 0:
+                            sto_strikes = data.get("sto_physical_cap_strikes") or []
+                            put_sto_candidates = [
+                                s
+                                for s in sto_strikes
+                                if isinstance(s, dict)
+                                and str(s.get("type", "")).upper() == "PUT"
+                            ]
+                            if put_sto_candidates:
+                                best_sto = max(
+                                    put_sto_candidates,
+                                    key=lambda s: _to_float(
+                                        s.get("notional_value"),
+                                        _to_float(s.get("volume"), 0.0),
+                                    ),
+                                )
+                                sto_strike = _to_float(best_sto.get("strike"), 0.0)
+                                sto_volume = int(_to_float(best_sto.get("volume"), 0.0))
+                                sto_notional = _to_float(
+                                    best_sto.get("notional_value"), 0.0
+                                )
+                                if sto_strike > 0 and sto_volume > 0:
+                                    sto_divergence_pct = (
+                                        abs(sto_strike - put_wall_float)
+                                        / effective_c_val
+                                        * 100
+                                    )
+                                    if (
+                                        sto_divergence_pct
+                                        > _GEX_STO_DIVERGENCE_THRESHOLD_PCT
+                                    ):
+                                        if sto_notional >= 1_000_000:
+                                            notional_str = (
+                                                f"${sto_notional / 1_000_000:.2f}M"
+                                            )
+                                        elif sto_notional > 0:
+                                            notional_str = (
+                                                f"${sto_notional / 1_000:.1f}k"
+                                            )
+                                        else:
+                                            notional_str = ""
+                                        notional_suffix = (
+                                            f", 權利金 {notional_str}"
+                                            if notional_str
+                                            else ""
+                                        )
+                                        put_items.append(
+                                            f"⚠️ 機構大單 ${sto_strike:.2f}"
+                                            f" (STO PUT {sto_volume:,}口{notional_suffix})"
+                                            " 與 GEX PutWall 分歧"
+                                            " (機構掛單為單筆流量信號，非全鏈聚合曝險，僅供交叉參考)"
+                                        )
 
                         _append_tree_block(gex_lines, "🛡️ 下檔支撐", put_items)
 

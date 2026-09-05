@@ -3080,6 +3080,156 @@ def test_create_tactical_symbol_embed_anti_washout_stop_falls_back_when_nonsensi
     )
 
 
+def test_create_tactical_symbol_embed_flags_sto_put_divergence_from_putwall() -> None:
+    """真實案例 (SPCX)：機構大額 STO PUT 履約價 ($145.00) 與 GEX PutWall
+    ($140.00) 相對現價的距離超過門檻時，應揭露分歧提示。"""
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data = {
+        "symbol": "SPCX",
+        "price": 147.95,
+        "gex_profile_data": {
+            "put_wall": 140.0,
+            "gex_profile": {"140.0": 1_000_000, "150.0": 2_000_000},
+        },
+        "sto_physical_cap_strikes": [
+            {
+                "strike": 145.0,
+                "type": "PUT",
+                "volume": 12509,
+                "oi": 5000,
+                "ratio": 2.5,
+                "notional_value": 3_040_000.0,
+            },
+        ],
+    }
+
+    embed = create_tactical_symbol_embed(data)
+    desc = get_embed_text(embed)
+
+    assert (
+        "⚠️ 機構大單 $145.00 (STO PUT 12,509口, 權利金 $3.04M) 與 GEX PutWall 分歧"
+        in desc
+    )
+    assert "機構掛單為單筆流量信號，非全鏈聚合曝險，僅供交叉參考" in desc
+
+
+def test_create_tactical_symbol_embed_omits_sto_divergence_line_within_threshold() -> (
+    None
+):
+    """STO PUT 履約價與 PutWall 相對現價距離未超過門檻時，不應顯示分歧提示。"""
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data = {
+        "symbol": "NVDA",
+        "price": 100.0,
+        "gex_profile_data": {
+            "put_wall": 90.0,
+            "gex_profile": {"90.0": 1_000_000, "100.0": 2_000_000},
+        },
+        "sto_physical_cap_strikes": [
+            {"strike": 91.0, "type": "PUT", "volume": 1000, "oi": 500, "ratio": 1.5},
+        ],
+    }
+
+    embed = create_tactical_symbol_embed(data)
+    desc = get_embed_text(embed)
+
+    assert "與 GEX PutWall 分歧" not in desc
+
+
+def test_create_tactical_symbol_embed_ignores_call_side_sto_for_putwall_divergence() -> (
+    None
+):
+    """sto_physical_cap_strikes 內僅有 CALL 方向的 STO 時，不應誤用於 PutWall 分歧比對。"""
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data = {
+        "symbol": "NVDA",
+        "price": 100.0,
+        "gex_profile_data": {
+            "put_wall": 90.0,
+            "gex_profile": {"90.0": 1_000_000, "100.0": 2_000_000},
+        },
+        "sto_physical_cap_strikes": [
+            {"strike": 110.0, "type": "CALL", "volume": 5000, "oi": 2000, "ratio": 2.0},
+        ],
+    }
+
+    embed = create_tactical_symbol_embed(data)
+    desc = get_embed_text(embed)
+
+    assert "與 GEX PutWall 分歧" not in desc
+
+
+def test_create_tactical_symbol_embed_sto_divergence_falls_back_to_volume_without_notional() -> (
+    None
+):
+    """PUT 候選缺少 notional_value 時，應退回以成交量最大者作為代表。"""
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data = {
+        "symbol": "NVDA",
+        "price": 100.0,
+        "gex_profile_data": {
+            "put_wall": 90.0,
+            "gex_profile": {"90.0": 1_000_000, "100.0": 2_000_000},
+        },
+        "sto_physical_cap_strikes": [
+            {"strike": 91.0, "type": "PUT", "volume": 600, "oi": 300, "ratio": 1.2},
+            {"strike": 96.0, "type": "PUT", "volume": 8000, "oi": 4000, "ratio": 3.0},
+        ],
+    }
+
+    embed = create_tactical_symbol_embed(data)
+    desc = get_embed_text(embed)
+
+    assert "⚠️ 機構大單 $96.00 (STO PUT 8,000口) 與 GEX PutWall 分歧" in desc
+
+
+def test_create_tactical_symbol_embed_sto_divergence_prioritizes_notional_over_volume() -> (
+    None
+):
+    """真實案例反例 (SPCX)：某一履約價成交量較大但權利金金額較小，另一履約價
+    成交量較小但權利金金額（名目價值）遠大於前者時，應選金額較大者為代表——
+    因為「機構大單」的實質意義是資金規模，而非單純合約口數。"""
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data = {
+        "symbol": "NVDA",
+        "price": 100.0,
+        "gex_profile_data": {
+            "put_wall": 90.0,
+            "gex_profile": {"90.0": 1_000_000, "100.0": 2_000_000},
+        },
+        "sto_physical_cap_strikes": [
+            {
+                "strike": 91.0,
+                "type": "PUT",
+                "volume": 18595,
+                "oi": 18427,
+                "ratio": 1.0,
+                "notional_value": 50_000.0,
+            },
+            {
+                "strike": 96.0,
+                "type": "PUT",
+                "volume": 1605,
+                "oi": 353,
+                "ratio": 4.5,
+                "notional_value": 3_040_000.0,
+            },
+        ],
+    }
+
+    embed = create_tactical_symbol_embed(data)
+    desc = get_embed_text(embed)
+
+    assert (
+        "⚠️ 機構大單 $96.00 (STO PUT 1,605口, 權利金 $3.04M) 與 GEX PutWall 分歧" in desc
+    )
+
+
 def test_create_tactical_symbol_embed_shows_flip_placeholder_when_no_crossing() -> None:
     """gex_profile 全數同號、沒有 zero-cross 時，GEX Flip 應顯示 -- 而非誤導性的 $0.00。"""
     from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed

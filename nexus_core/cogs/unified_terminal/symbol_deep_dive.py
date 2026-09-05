@@ -96,9 +96,17 @@ class SymbolDeepDiveMixin:
         pcr_task = asyncio.create_task(
             SentimentEngine.calculate_pcr(symbol, force_live=True)
         )
-        uoa_task = asyncio.create_task(
-            SentimentEngine.detect_uoa(symbol, force_live=True)
-        )
+
+        async def _get_uoa_with_physical_caps() -> tuple[list, list]:
+            try:
+                return await SentimentEngine.detect_uoa_with_physical_caps(  # type: ignore[no-any-return]
+                    symbol, force_live=True
+                )
+            except Exception as e:
+                logger.warning(f"[{symbol}] 獲取 UOA/物理封頂 STO 失敗: {e}")
+                return [], []
+
+        uoa_task = asyncio.create_task(_get_uoa_with_physical_caps())
         mp_task = asyncio.create_task(
             SentimentEngine.calculate_max_pain(symbol, _retry=True)
         )
@@ -171,7 +179,7 @@ class SymbolDeepDiveMixin:
             ddp_report,
             skew_data,
             pcr_data,
-            uoa_data,
+            (uoa_data, sto_physical_cap_strikes),
             max_pain_data,
             iv_metrics,
             month_max_pains,
@@ -211,6 +219,7 @@ class SymbolDeepDiveMixin:
             "skew_data": skew_data,
             "pcr_data": pcr_data,
             "uoa_data": uoa_data,
+            "sto_physical_cap_strikes": sto_physical_cap_strikes,
             "max_pain_data": max_pain_data,
             "iv_metrics": iv_metrics,
             "reddit_text": safe_reddit_text,
@@ -254,6 +263,7 @@ class SymbolDeepDiveMixin:
         skew_data = data["skew_data"]
         pcr_data = data["pcr_data"]
         uoa_data = data["uoa_data"]
+        sto_physical_cap_strikes = data.get("sto_physical_cap_strikes", [])
         max_pain_data = data["max_pain_data"]
         iv_metrics = data["iv_metrics"]
         reddit_text = data["reddit_text"]
@@ -313,6 +323,9 @@ class SymbolDeepDiveMixin:
 
         result["pcr"] = pcr_data if pcr_data is not None else {}
         result["uoa"] = uoa_data if uoa_data is not None else []
+        result["sto_physical_cap_strikes"] = (
+            sto_physical_cap_strikes if sto_physical_cap_strikes is not None else []
+        )
 
         result["iv_data"] = iv_metrics
         iv_rank_raw = (

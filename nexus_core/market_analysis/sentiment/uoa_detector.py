@@ -414,6 +414,7 @@ async def detect_uoa_with_physical_caps(
                             "oi": int(oi),
                             "expiry": exp,
                             "action": "STO",
+                            "notional_value": vol * trade_price * 100.0,
                         }
                     )
 
