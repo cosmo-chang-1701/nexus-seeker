@@ -1700,21 +1700,16 @@ def create_entry_rules_embed(
         timestamp=datetime.now(timezone.utc),
     )
 
-    six_lines = [
-        "```ansi",
-        " 含即時 I/O・總經/財報安全閥與candidate自身DTE檢查",
-        " ----------------------------------",
-    ]
+    six_lines = ["```ansi"]
     if six_rule_reasons:
-        for idx, reason in enumerate(six_rule_reasons):
-            prefix = " └─ " if idx == len(six_rule_reasons) - 1 else " ├─ "
-            six_lines.append(f"{prefix}{reason}")
+        for reason in six_rule_reasons:
+            six_lines.append(f" ├─ {reason}")
         overall_mark = (
             "\u001b[1;32m✅ 全數通過\u001b[0m"
             if six_rule_passed
             else "\u001b[1;31m❌ 未全數通過\u001b[0m"
         )
-        six_lines.append(f" 綜合判定: {overall_mark}")
+        six_lines.append(f" └─ 綜合判定: {overall_mark}")
     else:
         six_lines.append(" └─ 尚無足夠數據進行判定")
     six_lines.append("```")
