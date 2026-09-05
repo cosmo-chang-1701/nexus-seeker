@@ -770,12 +770,35 @@ def estimate_symbol_gamma_flip(gex_profile: dict, spot: float) -> float:
     由呼叫端 fail-safe 處理（視為無法確認，不應作為判斷依據）。
 
     Bracket 防禦：僅接受落在 spot ± 30%（`[spot*0.7, spot*1.3]`）區間內的
-    交叉履約價作為回傳值，避免深度價外雜訊合約（edge-scraper 端過濾後仍
+    交叉履約價作為候選，避免深度價外雜訊合約（edge-scraper 端過濾後仍
     可能殘留）產生偏離現價極遠的失真交叉判定被誤用為 Gamma Flip。累積和
     本身仍涵蓋全部履約價（含 bracket 下界以下者）以確保進入 bracket 時的
     累積基準值正確，只在「是否接受此交叉點」這一步驟做 bracket 篩選；
     bracket 內找不到交叉點（即使 bracket 外存在交叉點）一律回傳 0.0。
     `spot <= 0` 時無法定義合理的 bracket，退回不限制 bracket 的既有行為。
+
+    最近交叉點選取（而非掃描到的第一個交叉點）：個股 GEX 曲線在現價附近
+    常見多次正負交錯（例如 ATM 附近的 Call/Put 曝險互相抵銷造成局部翻轉），
+    導致累積和在到達現價前就先出現一次「假交叉」，若直接回傳掃描到的第一個
+    bracket 內交叉點，會產生遠離現價的失真翻轉線。因此改為蒐集 bracket 內
+    所有負轉正交叉點，優先回傳其中離現價最近者。
+
+    Net GEX Regime 一致性驗證（真實案例：SPCX 現價 $147.95）：累積和的
+    最終值（掃描完所有履約價後的 `cumulative`）數學上等同於呼叫端另外算出
+    的 `net_gex`（兩者皆為同一組 `signed_gex` 的加總，只是求和順序不同，
+    加法滿足交換律故結果必然相同）。當累積和沿途先深度探底、直到接近
+    bracket 邊界才勉強翻正（例如 net_gex 僅 +67K 的極微弱 LONG_GAMMA，
+    卻要一路虧到現價之上才能拉平），bracket 內可能只找得到單一交叉點，
+    且該交叉點的位置與 Net GEX Regime 慣例（`現價 > Flip` 應對應
+    LONG_GAMMA，`現價 < Flip` 應對應 SHORT_GAMMA）互相矛盾——這代表輕量
+    估算在這個快照下不可靠，而非真的存在一條遠在天邊的翻轉線。因此在
+    `spot > 0` 且累積和最終值（等同 net_gex）不為零時，額外要求候選交叉點
+    的方向必須與最終累積和正負號一致：最終值 > 0（LONG_GAMMA）只接受
+    `strike <= spot` 的候選（翻轉線在現價或現價以下）；最終值 < 0
+    （SHORT_GAMMA）只接受 `strike >= spot` 的候選。方向不一致的候選視為
+    不可信並剔除；剔除後若無候選，一律回傳 0.0（無法估算），優於呈現一個
+    自相矛盾、誤導使用者的翻轉線。最終值恰為 0（regime 本身無明確方向）
+    或 `spot <= 0` 時跳過此方向性檢查，保留既有行為。
     """
     if not gex_profile:
         return 0.0
@@ -793,13 +816,26 @@ def estimate_symbol_gamma_flip(gex_profile: dict, spot: float) -> float:
 
     cumulative = 0.0
     prev_cumulative: Optional[float] = None
+    candidates: list[float] = []
     for strike, gex in sorted_strikes:
         cumulative += gex
         if prev_cumulative is not None and prev_cumulative < 0 <= cumulative:
             if bracket_low <= strike <= bracket_high:
-                return strike
+                candidates.append(strike)
         prev_cumulative = cumulative
-    return 0.0
+
+    total_gex = cumulative
+    if spot > 0 and total_gex != 0:
+        if total_gex > 0:
+            candidates = [s for s in candidates if s <= spot]
+        else:
+            candidates = [s for s in candidates if s >= spot]
+
+    if not candidates:
+        return 0.0
+    if spot > 0:
+        return min(candidates, key=lambda k: abs(k - spot))
+    return candidates[0]
 
 
 def evaluate_escape_window_regime(

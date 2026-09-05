@@ -1744,6 +1744,47 @@ def test_estimate_symbol_gamma_flip_crossing_at_bracket_boundary() -> None:
     assert estimate_symbol_gamma_flip(gex_profile, spot=100.0) == 130.0
 
 
+def test_estimate_symbol_gamma_flip_picks_crossing_closest_to_spot() -> None:
+    """現價附近若有多次正負交錯，應回傳離現價最近的交叉點，而非掃描到的
+    第一個交叉點——否則可能回傳遠離現價、與 Net GEX Regime 矛盾的失真翻轉線
+    (真實案例：SPCX 現價 $147.95，舊邏輯回傳 $170.00 的失真翻轉線，
+    但現價附近 $146~$150 早已存在真正的正負交錯區間)。"""
+    gex_profile = {
+        "60": -500.0,
+        "70": 600.0,  # 累積轉正 (+100)，第一個交叉點，但離現價 100 很遠 (距離 30)
+        "90": -50.0,  # 累積轉為 +50，仍為正
+        "95": -70.0,  # 累積轉負 (-20)
+        "99": 30.0,  # 累積轉正 (+10)，第二個交叉點，離現價僅 1
+        "110": 5.0,
+    }
+    assert estimate_symbol_gamma_flip(gex_profile, spot=100.0) == 99.0
+
+
+def test_estimate_symbol_gamma_flip_returns_zero_when_only_crossing_contradicts_long_gamma() -> (
+    None
+):
+    """真實案例 (SPCX 現價 $147.95)：Net GEX 僅微幅為正 (LONG_GAMMA)，但
+    bracket 內唯一的負轉正交叉點卻落在現價之上——若真的採信，會產生
+    「現價 < Flip」與「LONG_GAMMA」互相矛盾的翻轉線。方向性一致性檢查應
+    剔除此交叉點並回傳 0.0（無法估算），而非呈現一個自相矛盾的數字。"""
+    gex_profile = {"60": -1000.0, "90": 500.0, "120": 600.0}
+    # 累積: 60 -> -1000 (負) ; 90 -> -500 (仍負) ; 120 -> +100 (交叉點，但 120 > spot)
+    # 最終累積 (=net_gex) = +100 > 0 (LONG_GAMMA)，理應要求交叉點 <= spot
+    assert estimate_symbol_gamma_flip(gex_profile, spot=100.0) == 0.0
+
+
+def test_estimate_symbol_gamma_flip_returns_zero_when_only_crossing_contradicts_short_gamma() -> (
+    None
+):
+    """對稱情境：Net GEX 為負 (SHORT_GAMMA)，但 bracket 內唯一的負轉正交叉點
+    卻落在現價之下——理應要求交叉點 >= spot 才與 SHORT_GAMMA 一致，方向不符
+    應剔除並回傳 0.0。"""
+    gex_profile = {"50": -1000.0, "80": 1200.0, "130": -700.0}
+    # 累積: 50 -> -1000 (負) ; 80 -> +200 (交叉點，但 80 < spot) ; 130 -> -500 (再度轉負)
+    # 最終累積 (=net_gex) = -500 < 0 (SHORT_GAMMA)，理應要求交叉點 >= spot
+    assert estimate_symbol_gamma_flip(gex_profile, spot=100.0) == 0.0
+
+
 def test_estimate_symbol_gamma_flip_no_bracket_restriction_when_spot_non_positive() -> (
     None
 ):
