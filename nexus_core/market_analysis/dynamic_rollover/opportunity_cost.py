@@ -18,8 +18,10 @@ from .constants import (
     _EARNINGS_PRE_EVENT_BUFFER_DAYS,
     _ENTRY_ASYMMETRIC_ROOM_PCT,
     _ENTRY_CANDIDATE_MIN_DTE,
+    _ENTRY_SUPPORT_WALL_MAX_DISTANCE_PCT,
     _ENTRY_UOA_CAP_RATIO_THRESHOLD,
     _ENTRY_UOA_MIN_DTE,
+    _ENTRY_UOA_MIN_NOTIONAL_USD,
     _ENTRY_UOA_MIN_RATIO,
     _ENTRY_VOLUME_LOOKBACK_BARS,
     _ENTRY_VOLUME_SURGE_MULTIPLIER,
@@ -46,15 +48,16 @@ async def _confirm_entry_condition1_breakout(
     candidate_symbol: str,
     target_spot: float,
     gex_profile: Optional[dict],
-    net_gex: float,
     reasons: list,
 ) -> bool:
     """條件一：結構性右側放量突破確認 (15m 實體陽線收盤 + 放量，站穩 Gamma Flip
-    估算門檻，且個股淨 GEX 須為 LONG_GAMMA)。比照分析中心 (Symbol Hub
+    估算門檻，且須站穩 Session VWAP)。比照分析中心 (Symbol Hub
     `create_tactical_symbol_embed()`) 的判讀方式：放量若發生在實體陰線
-    (close < open) 或個股淨 Gamma 處於 SHORT_GAMMA (net_gex <= 0) 泥淖時，
-    屬於空頭摜壓而非右側突破，即便收盤價與量能兩項代數條件皆達標，仍判定
-    未通過。"""
+    (close < open) 時，屬於空頭摜壓而非右側突破，即便收盤價與量能兩項代數條件
+    皆達標，仍判定未通過。刻意不再疊加淨 GEX Regime (net_gex>0) 判斷 ——
+    該訊號與「收盤站穩 Gamma Flip」高度相關且同源自同一份 GEX 快照，屬於
+    重複確認；改以獨立於 GEX 快照的即時 Session VWAP 站穩訊號補強右側動能
+    確認，VWAP 抓取失敗 (回傳 0.0) 比照既有 fail-safe 原則直接判定未通過。"""
     if target_spot <= 0:
         reasons.append("條件一❌：candidate 現價無效")
         return False
@@ -80,6 +83,14 @@ async def _confirm_entry_condition1_breakout(
         reasons.append("條件一❌：15m K 線資料不足，無法確認突破")
         return False
 
+    try:
+        from market_analysis.vwap_utils import fetch_session_vwap
+
+        session_vwap = await fetch_session_vwap(candidate_symbol)
+    except Exception as e:
+        session_vwap = 0.0
+        logger.warning(f"[{candidate_symbol}] Session VWAP 抓取失敗: {e}")
+
     last_bar = df_15m.iloc[-1]
     lookback_bars = df_15m.iloc[-(_ENTRY_VOLUME_LOOKBACK_BARS + 1) : -1]
     open_val = float(last_bar["Open"])
@@ -91,23 +102,24 @@ async def _confirm_entry_condition1_breakout(
         avg_volume > 0 and volume_val >= avg_volume * _ENTRY_VOLUME_SURGE_MULTIPLIER
     )
     is_bullish_candle = close_val > open_val
-    is_long_gamma_regime = net_gex > 0
+    is_above_vwap = session_vwap > 0 and close_val > session_vwap
     c1_passed = (
-        is_closed_above
-        and is_volume_surge
-        and is_bullish_candle
-        and is_long_gamma_regime
+        is_closed_above and is_volume_surge and is_bullish_candle and is_above_vwap
     )
     candle_tag = (
         "陽線" if is_bullish_candle else ("陰線" if close_val < open_val else "十字")
     )
-    regime_tag = "LONG_GAMMA" if is_long_gamma_regime else "SHORT_GAMMA"
+    vwap_tag = (
+        f"VWAP ${session_vwap:.2f} {'站穩' if is_above_vwap else '未站穩'}"
+        if session_vwap > 0
+        else "VWAP 抓取失敗"
+    )
     reasons.append(
         f"條件一{'✅' if c1_passed else '❌'}：15m收盤 ${close_val:.2f} "
         f"{'>' if is_closed_above else '<='} Gamma Flip估算 ${gamma_flip_est:.2f}，"
         f"量能 {volume_val:.0f} vs 均量×{_ENTRY_VOLUME_SURGE_MULTIPLIER} "
         f"={avg_volume * _ENTRY_VOLUME_SURGE_MULTIPLIER:.0f}，"
-        f"K棒{candle_tag}、淨GEX {regime_tag}"
+        f"K棒{candle_tag}、{vwap_tag}"
     )
     return c1_passed
 
@@ -118,20 +130,37 @@ def _confirm_entry_condition2_support_wall(
     target_spot: float,
     reasons: list,
 ) -> bool:
-    """條件二：做市商正 Gamma 底牆完好 (現價須站上支撐牆)。"""
+    """條件二：做市商正 Gamma 底牆完好 (現價須站上支撐牆，且距離落在
+    (0, _ENTRY_SUPPORT_WALL_MAX_DISTANCE_PCT] 之內才算「即時有效防禦」——
+    支撐牆離現價過遠即便現價仍在其上方，也不構成短線可依靠的保護)。"""
     support_wall, _resistance_wall, support_gex, _resistance_gex = _scan_gex_walls(
         candidate_symbol,
         gex_profile_data if isinstance(gex_profile_data, dict) else None,
     )
     has_support_wall = support_wall > 0 and support_gex > 0
-    is_above_wall = has_support_wall and target_spot > support_wall
+    dist_pct = (
+        (target_spot - support_wall) / target_spot
+        if has_support_wall and target_spot > 0
+        else None
+    )
+    is_above_wall = (
+        dist_pct is not None and 0 < dist_pct <= _ENTRY_SUPPORT_WALL_MAX_DISTANCE_PCT
+    )
     c2_passed = has_support_wall and is_above_wall
     if not has_support_wall:
         reasons.append("條件二❌：正 Gamma 支撐牆未偵測到")
+    elif dist_pct is None:
+        reasons.append("條件二❌：candidate 現價無效，無法計算支撐牆距離")
+    elif dist_pct <= 0:
+        reasons.append(
+            f"條件二❌：現價 ${target_spot:.2f} <= 正 Gamma 支撐牆 ${support_wall:.2f}"
+        )
     else:
         reasons.append(
             f"條件二{'✅' if is_above_wall else '❌'}：現價 ${target_spot:.2f} "
-            f"{'>' if is_above_wall else '<='} 正 Gamma 支撐牆 ${support_wall:.2f}"
+            f"距正 Gamma 支撐牆 ${support_wall:.2f} +{dist_pct:.2%}"
+            f"（{'≤' if is_above_wall else '>'}{_ENTRY_SUPPORT_WALL_MAX_DISTANCE_PCT:.0%} "
+            f"{'有效防禦' if is_above_wall else '距離過遠，非即時有效保護'}）"
         )
     return c2_passed
 
@@ -146,9 +175,14 @@ def _confirm_entry_condition3_no_physical_cap(
     GEX CallWall 距現價空間% 判讀：不要求 Call Wall 必須還在現價之上，只要帶
     正負號的距離 (call_wall - spot) / spot 小於門檻，即代表做市商壓制仍在——
     現價已觸及甚至跌破 Call Wall 時（距離為負值）同樣視為空間不足，而非誤判
-    為「已站上、無封頂」。"""
+    為「已站上、無封頂」。物理封頂偵測改以 Call Wall（而非現價）作為 strike
+    位置基準，並套用 _ENTRY_UOA_CAP_RATIO_THRESHOLD 較高的 ratio 門檻，降低
+    一般 STO 平倉/避險單被誤判為物理封頂的假警報率。"""
     has_physical_cap, capping_strike = detect_uoa_sto_call_physical_cap(
-        uoa_list, target_spot, _ENTRY_UOA_CAP_RATIO_THRESHOLD
+        uoa_list,
+        target_spot,
+        _ENTRY_UOA_CAP_RATIO_THRESHOLD,
+        wall_reference=call_wall if call_wall > 0 else None,
     )
 
     call_wall_dist_pct = (
@@ -164,7 +198,7 @@ def _confirm_entry_condition3_no_physical_cap(
     if has_physical_cap:
         reasons.append(
             f"條件三❌：偵測到單筆 ratio>{_ENTRY_UOA_CAP_RATIO_THRESHOLD}x OI 的 "
-            f"STO Call 物理封頂 @ ${capping_strike:.2f}"
+            f"STO Call 物理封頂 @ ${capping_strike:.2f}（位於 Call Wall 上方）"
         )
     elif has_tight_call_wall and call_wall_dist_pct is not None:
         reasons.append(
@@ -177,10 +211,13 @@ def _confirm_entry_condition3_no_physical_cap(
     return c3_passed
 
 
-def _confirm_entry_condition4_uoa_dte(uoa_list: list, reasons: list) -> bool:
+def _confirm_entry_condition4_uoa_dte(
+    uoa_list: list, target_spot: float, reasons: list
+) -> bool:
     """條件四：主力跨週期買盤認證與雜訊過濾 (主力 UOA BTO Call 買盤須同時滿足
-    DTE >= 7 與 ratio (Volume/OI) >= _ENTRY_UOA_MIN_RATIO)。uoa 已依權利金
-    金額（名目價值）降序排列，逐筆掃描找出第一筆同時符合兩項門檻者。"""
+    DTE >= 7、ratio (Volume/OI) >= _ENTRY_UOA_MIN_RATIO、權利金名目金額 >=
+    _ENTRY_UOA_MIN_NOTIONAL_USD，且 strike >= 現價，排除深實值避險單)。uoa
+    已依權利金金額（名目價值）降序排列，逐筆掃描找出第一筆同時符合四項門檻者。"""
     for entry in uoa_list:
         if not isinstance(entry, dict):
             continue
@@ -191,6 +228,12 @@ def _confirm_entry_condition4_uoa_dte(uoa_list: list, reasons: list) -> bool:
         ratio = float(entry.get("ratio", 0.0) or 0.0)
         if ratio < _ENTRY_UOA_MIN_RATIO:
             continue
+        notional_value = float(entry.get("notional_value", 0.0) or 0.0)
+        if notional_value < _ENTRY_UOA_MIN_NOTIONAL_USD:
+            continue
+        strike = float(entry.get("strike", 0.0) or 0.0)
+        if strike < target_spot:
+            continue
         try:
             expiry_str = str(entry.get("expiry", ""))
             exp_dt = datetime.strptime(expiry_str, "%Y-%m-%d").date()
@@ -199,14 +242,17 @@ def _confirm_entry_condition4_uoa_dte(uoa_list: list, reasons: list) -> bool:
             continue
         if dte >= _ENTRY_UOA_MIN_DTE:
             reasons.append(
-                f"條件四✅：主力買盤 DTE={dte}、ratio={ratio:.2f}x OI "
-                f"(符合門檻 DTE>={_ENTRY_UOA_MIN_DTE}、ratio>={_ENTRY_UOA_MIN_RATIO})"
+                f"條件四✅：主力買盤 DTE={dte}、ratio={ratio:.2f}x OI、"
+                f"權利金 ${notional_value:,.0f} "
+                f"(符合門檻 DTE>={_ENTRY_UOA_MIN_DTE}、ratio>={_ENTRY_UOA_MIN_RATIO}、"
+                f"Premium>=${_ENTRY_UOA_MIN_NOTIONAL_USD:,.0f})"
             )
             return True
 
     reasons.append(
         f"條件四❌：未偵測到符合門檻 (DTE>={_ENTRY_UOA_MIN_DTE}、"
-        f"ratio>={_ENTRY_UOA_MIN_RATIO}) 的主力 CALL BTO 買盤"
+        f"ratio>={_ENTRY_UOA_MIN_RATIO}、Premium>=${_ENTRY_UOA_MIN_NOTIONAL_USD:,.0f}、"
+        f"strike>=現價) 的主力 CALL BTO 買盤"
     )
     return False
 
@@ -216,8 +262,13 @@ async def _confirm_entry_condition5_macro_earnings_gate(
     prior_conditions_passed: bool,
     reasons: list,
 ) -> bool:
-    """條件五：總經負 Gamma 與財報黑天鵝防禦閘門 (前四項通過時才發動)。"""
+    """條件五：總經負 Gamma 與財報黑天鵝防禦閘門 (前四項通過時才發動判定，避免
+    為了一個已經確定會失敗的整體結果，仍去打財報行事曆/總經 Regime 這類真實
+    I/O)。未發動時仍在 reasons 補上一行「⏭️ 略過」標記 (不觸發任何額外 I/O)，
+    確保「進場鐵律檢核」面板永遠完整列出六項條件，不會因短路優化而讓使用者
+    誤以為只有四重鐵律。"""
     if not prior_conditions_passed:
+        reasons.append("條件五⏭️：前四項未全數通過，略過總經/財報安全閥檢查")
         return True
 
     c5_passed = True
@@ -265,8 +316,12 @@ async def _confirm_entry_condition6_candidate_dte(
     prior_conditions_passed: bool,
     reasons: list,
 ) -> bool:
-    """條件六：避開 candidate 自身最近效期選擇權週期的結算日前夕/當日雜訊 (0/1 DTE)。"""
+    """條件六：避開 candidate 自身最近效期選擇權週期的結算日前夕/當日雜訊
+    (0/1 DTE)。前五項通過時才發動判定，比照條件五同樣的短路優化理由，未發動
+    時仍在 reasons 補上一行「⏭️ 略過」標記，維持六項條件在檢核面板永遠完整
+    列出。"""
     if not prior_conditions_passed:
+        reasons.append("條件六⏭️：前五項未全數通過，略過 candidate 自身 DTE 雜訊檢查")
         return True
 
     c6_passed = False
@@ -561,14 +616,9 @@ class _OpportunityCostMixin:
             if isinstance(gex_profile_data, dict)
             else 0.0
         )
-        net_gex = (
-            float(gex_profile_data.get("net_gex", 0.0) or 0.0)
-            if isinstance(gex_profile_data, dict)
-            else 0.0
-        )
 
         c1_passed = await _confirm_entry_condition1_breakout(
-            candidate_symbol, target_spot, gex_profile, net_gex, reasons
+            candidate_symbol, target_spot, gex_profile, reasons
         )
         c2_passed = _confirm_entry_condition2_support_wall(
             candidate_symbol, gex_profile_data, target_spot, reasons
@@ -576,7 +626,7 @@ class _OpportunityCostMixin:
         c3_passed = _confirm_entry_condition3_no_physical_cap(
             uoa_list, call_wall, target_spot, reasons
         )
-        c4_passed = _confirm_entry_condition4_uoa_dte(uoa_list, reasons)
+        c4_passed = _confirm_entry_condition4_uoa_dte(uoa_list, target_spot, reasons)
         c5_passed = await _confirm_entry_condition5_macro_earnings_gate(
             candidate_symbol,
             c1_passed and c2_passed and c3_passed and c4_passed,

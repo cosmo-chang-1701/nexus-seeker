@@ -65,25 +65,35 @@ _COVERED_CALL_MAX_DTE: int = 25
 # --- 進場訊號六重嚴格過濾鐵律 (opportunity_cost.py::_confirm_entry_signal) 具名常數 ---
 # 六項條件必須同時成立才允許對候選標的實際啟動機會成本轉倉/核心資金部署指令：
 #   條件一：結構性右側放量突破 (15m 實體「陽線」收盤站穩 Gamma Flip 估算門檻 +
-#           放量 + 個股淨 GEX 須為 LONG_GAMMA)。比照分析中心
-#           (cogs/embed_builders/portfolio_embeds.py::create_tactical_symbol_embed())
-#           的判讀方式：陰線放量或 SHORT_GAMMA 泥淖下的放量視為空頭摜壓，不算
-#           右側突破，即便收盤價與量能兩項代數條件皆達標仍判定未通過。
-#   條件二：做市商正 Gamma 底牆完好 (支撐牆存在且現價站上)
+#           放量 + Session VWAP 站穩確認)。刻意不再重複疊加淨 GEX Regime
+#           (net_gex>0) 判斷——該訊號與「收盤站穩 Gamma Flip」高度相關且同樣
+#           源自同一份 GEX 快照，屬於重複確認；改以獨立於 GEX 快照的即時 VWAP
+#           動能訊號取代，強化右側突破的即時性。
+#   條件二：做市商正 Gamma 底牆完好 (支撐牆存在、現價站上，且距離落在
+#           (0, _ENTRY_SUPPORT_WALL_MAX_DISTANCE_PCT] 之內才算「即時有效防禦」
+#           ——支撐牆離現價過遠等同缺乏保護)。
 #   條件三：做市商阻力結構與非對稱空間 (無 UOA 物理封頂，Call Wall 空間充足)。
+#           物理封頂偵測改以 Call Wall（而非現價）作為 strike 位置基準，並將
+#           ratio (volume/OI) 門檻提高為 _ENTRY_UOA_CAP_RATIO_THRESHOLD，降低
+#           一般 STO 平倉/避險單被誤判為物理封頂的假警報率。
 #           Call Wall 距現價空間% 比照分析中心同一函式的 GEX CallWall 欄位，
 #           用帶正負號的距離 (call_wall - spot) / spot 判定，不要求 Call Wall
 #           必須還在現價之上——現價已觸及/跌破 Call Wall (負距離) 同樣視為
 #           空間不足，而非誤判為「已站上、無封頂」。
-#   條件四：主力跨週期買盤認證與雜訊過濾 (BTO Call，DTE 與 ratio 雙門檻)
+#   條件四：主力跨週期買盤認證與雜訊過濾 (BTO Call，須同時滿足 DTE、ratio、
+#           名目金額 _ENTRY_UOA_MIN_NOTIONAL_USD 三門檻，並排除 strike 低於
+#           現價的深實值避險單)
 #   條件五：二元宏觀與財報事件安全閥
 #   條件六：candidate 自身最近效期選擇權週期雜訊過濾 (避開 0/1 DTE)
 _ENTRY_VOLUME_LOOKBACK_BARS: int = 20  # 條件一：15m 成交量基準所需回看根數 (不含確認根)
 _ENTRY_VOLUME_SURGE_MULTIPLIER: float = (
     1.5  # 條件一：「放量」門檻，須達回看均量的 1.5 倍
 )
+_ENTRY_SUPPORT_WALL_MAX_DISTANCE_PCT: float = (
+    0.05  # 條件二：現價距支撐牆的最大有效防禦距離，超過視為缺乏即時保護
+)
 _ENTRY_UOA_CAP_RATIO_THRESHOLD: float = (
-    1.0  # 條件三：單筆 STO Call 視為物理封頂的 ratio (volume/OI) 門檻
+    1.5  # 條件三：單筆 STO Call 視為物理封頂的 ratio (volume/OI) 門檻
 )
 _ENTRY_ASYMMETRIC_ROOM_PCT: float = (
     0.05  # 條件三：Call Wall 距現價須保留的最低非對稱獲利空間 (帶正負號距離)
@@ -91,6 +101,9 @@ _ENTRY_ASYMMETRIC_ROOM_PCT: float = (
 _ENTRY_UOA_MIN_DTE: int = 7  # 條件四：驅動進場的主力 UOA 買盤最低 DTE 要求
 _ENTRY_UOA_MIN_RATIO: float = (
     0.8  # 條件四：驅動進場的主力 UOA 買盤最低 ratio (volume/OI) 要求
+)
+_ENTRY_UOA_MIN_NOTIONAL_USD: float = (
+    200_000.0  # 條件四：驅動進場的主力 UOA 買盤最低權利金名目金額要求
 )
 _ENTRY_CANDIDATE_MIN_DTE: int = (
     1  # 條件六：標的自身最近效期需 > 此值天數 (避開 0/1 DTE 結算日雜訊)

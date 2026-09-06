@@ -31,6 +31,18 @@ def _mock_target_reference_live_quote() -> Any:
         yield
 
 
+@pytest.fixture(autouse=True)
+def _mock_entry_condition1_vwap() -> Any:
+    """條件一新增 Session VWAP 站穩確認；全域 mock 為遠低於本檔案各演練情境
+    收盤價的常數，維持既有演練情境的通過/攔截語意不變。"""
+    with patch(
+        "market_analysis.vwap_utils.fetch_session_vwap",
+        new_callable=AsyncMock,
+        return_value=50.0,
+    ):
+        yield
+
+
 # ==============================================================================
 # 情境一：NVDA 轉弱，SPCX 轉強符合轉倉條件 (Opportunity Cost Rotation)
 # ==============================================================================
@@ -95,8 +107,9 @@ async def test_drill_scenario_1_nvda_decay_spcx_breakout_triggers_rollover(
 
     mock_market_cache.side_effect = cache_side_effect
 
-    # 2. Mock SPCX 15m K 線 (條件一：15m 實體陽線收盤 $85.50 > Gamma Flip $80.00，
-    # 成交量 2.5x 均量；open $82.00 < close $85.50 確保為陽線)
+    # 2. Mock SPCX 15m K 線 (條件一：15m 實體陽線收盤 $85.50 > Gamma Flip $81.00，
+    # 成交量 2.5x 均量；open $82.00 < close $85.50 確保為陽線；VWAP 由全域 fixture
+    # mock 為 $50.00，站穩)
     df_data: Dict[str, List[float]] = {
         "Open": [80.0] * 20 + [82.00],
         "Close": [80.0] * 20 + [85.50],
@@ -132,12 +145,13 @@ async def test_drill_scenario_1_nvda_decay_spcx_breakout_triggers_rollover(
         "gex_profile_data": {
             "gex_profile": {
                 "75.0": -500000.0,  # 累積 < 0
-                "80.0": 1500000.0,  # 累積由負轉正 -> Gamma Flip 估算為 80.0，同時為 Support GEX Wall
+                "81.0": 1500000.0,  # 累積由負轉正 -> Gamma Flip 估算為 81.0，同時為
+                # Support GEX Wall；距現價 $85 為 4.7% (<= 5% 條件二有效防禦距離門檻)
                 "95.0": -500000.0,  # Overhead Call Wall
             },
             "call_wall": 95.0,  # 距現價 11.8% > 5% (條件三通過)
-            "put_wall": 80.0,
-            "net_gex": 1500000.0,  # 正值 LONG_GAMMA (條件一淨 GEX regime 通過)
+            "put_wall": 81.0,
+            "net_gex": 1500000.0,  # 正值 LONG_GAMMA
         },
         "uoa": [
             {
@@ -146,8 +160,9 @@ async def test_drill_scenario_1_nvda_decay_spcx_breakout_triggers_rollover(
                 "strike": 90.0,
                 "expiry": (datetime.now() + timedelta(days=21)).strftime(
                     "%Y-%m-%d"
-                ),  # DTE = 21 >= 7 (條件四通過)
+                ),  # DTE = 21 >= 7、strike >= 現價 (條件四通過)
                 "ratio": 1.5,
+                "notional_value": 300_000.0,  # >= 條件四權利金門檻 $200,000
             }
         ],
     }
@@ -330,8 +345,8 @@ async def test_drill_scenario_2b_candidate_blocked_by_six_gates(
 ) -> None:
     """
     子情境 2B：
-    Watchlist 有 SPCX，但 SPCX 上方有巨量 STO Call 壓頂 (ratio=4.0 > 3.0)，
-    防洗盤條件三攔截，S2 機會成本靜默早退。
+    Watchlist 有 SPCX，但 SPCX 的 Call Wall 上方有巨量 STO Call 壓頂
+    (ratio=4.0 > 新門檻 1.5x)，防洗盤條件三攔截，S2 機會成本靜默早退。
     """
     mock_market_cache.return_value = {
         "reference_spot_price": 85.0,
@@ -359,8 +374,10 @@ async def test_drill_scenario_2b_candidate_blocked_by_six_gates(
         }
     ]
 
-    # 上方存在 $88.0C STO (ratio=4.0 > 3.0 物理封頂)，本情境重點是條件三攔截，
-    # 條件一的 Open 值僅需存在以避免抓取結果缺欄位，不影響本測試斷言。
+    # 上方 (Call Wall $95 之上) 存在 $97.0C STO (ratio=4.0 > 新門檻 1.5x 物理封頂)，
+    # 本情境重點是條件三攔截；支撐牆調整為 $81.0 (距現價 4.7% <= 5%) 確保條件二
+    # 通過，讓條件三成為唯一攔截點。條件一的 Open 值僅需存在以避免抓取結果缺欄位，
+    # 不影響本測試斷言。
     candidate_radar_blocked: Dict[str, Any] = {
         "quote": {"c": 85.0},
         "iv_metrics": {"iv_rank": 25.0},
@@ -370,16 +387,16 @@ async def test_drill_scenario_2b_candidate_blocked_by_six_gates(
             "is_breakout_long": True,
         },
         "gex_profile_data": {
-            "gex_profile": {"75.0": -500000.0, "80.0": 1500000.0},
+            "gex_profile": {"75.0": -500000.0, "81.0": 1500000.0},
             "call_wall": 95.0,
-            "put_wall": 80.0,
+            "put_wall": 81.0,
         },
         "uoa": [
             {
                 "type": "CALL",
                 "action": "STO",
-                "strike": 88.0,
-                "ratio": 4.0,  # 觸發條件三物理封頂
+                "strike": 97.0,
+                "ratio": 4.0,  # 觸發條件三物理封頂 (位於 Call Wall $95 上方)
             },
             {
                 "type": "CALL",

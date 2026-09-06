@@ -54,6 +54,22 @@ def _mock_target_reference_live_quote() -> Any:
         yield
 
 
+@pytest.fixture(autouse=True)
+def _mock_entry_condition1_vwap() -> Any:
+    """
+    條件一新增 Session VWAP 站穩確認 (market_analysis.vwap_utils.fetch_session_vwap)。
+    全域 mock 為遠低於既有測試收盤價的常數，維持既有測試在未特別驗證 VWAP 情境
+    下的通過/失敗語意不變；個別測試如需驗證 VWAP 未站穩情境，可用更內層的
+    patch 覆寫此 fixture。
+    """
+    with patch(
+        "market_analysis.vwap_utils.fetch_session_vwap",
+        new_callable=AsyncMock,
+        return_value=50.0,
+    ):
+        yield
+
+
 def test_evaluate_opportunity_cost(engine: DynamicRolloverEngine) -> None:
     # Scenario 1: Should rollover (EV spread > 5%, target breakout, holding decay)
     res = engine.evaluate_opportunity_cost(
@@ -4309,7 +4325,8 @@ def _green_candidate_radar() -> dict:
     - call_wall $110，距現價 $100 有 10% 空間 (>= 5% 門檻)。
     - net_gex 為正值 (LONG_GAMMA)，比照分析中心對淨 GEX Regime 的判讀，
       供條件一的個股淨 Gamma regime 檢查使用。
-    - uoa 僅含一筆次週 CALL BTO (DTE=14)，無 STO Call 封頂。
+    - uoa 僅含一筆次週 CALL BTO (DTE=14，權利金 $300,000 >= 條件四門檻)，
+      無 STO Call 封頂。
     """
     far_expiry = (datetime.now().date() + timedelta(days=14)).strftime("%Y-%m-%d")
     return {
@@ -4331,6 +4348,7 @@ def _green_candidate_radar() -> dict:
                 "action": "🟢 買入開倉 (BTO - Ask)",
                 "strike": 105.0,
                 "ratio": 2.5,
+                "notional_value": 300_000.0,
                 "expiry": far_expiry,
             }
         ],
@@ -4377,6 +4395,30 @@ async def test_confirm_entry_signal_all_six_conditions_pass(
     assert "條件四✅" in reason
     assert "條件五✅" in reason
     assert "條件六✅" in reason
+
+
+@pytest.mark.asyncio
+async def test_confirm_entry_signal_shows_all_six_reasons_even_when_short_circuited(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """條件五、六在前置條件未全數通過時會短路跳過真實 I/O (財報行事曆、總經
+    Regime、選擇權到期日抓取)，但 reasons 仍必須各自補上一行「⏭️ 略過」標記，
+    確保「進場鐵律檢核」面板永遠完整列出六項條件，不會因短路優化而讓使用者
+    誤以為只有四重鐵律。此測試刻意不 mock 條件五、六用到的任何外部服務，
+    藉此同時驗證這兩項真的被短路跳過 (未觸發真實 I/O)。"""
+    radar = _green_candidate_radar()
+    radar["uoa"] = []  # 條件四刻意失敗，觸發條件五/六短路
+    with patch(
+        "services.market_data_service.get_history_df",
+        new_callable=AsyncMock,
+        return_value=_GREEN_15M_DF,
+    ):
+        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+    assert confirmed is False
+    assert "條件四❌" in reason
+    assert "條件五⏭️" in reason
+    assert "條件六⏭️" in reason
+    assert reason.count(" | ") == 5  # 六段 reasons 皆存在
 
 
 @pytest.mark.asyncio
@@ -4501,23 +4543,57 @@ async def test_confirm_entry_signal_condition1_fails_bearish_candle(
 
 
 @pytest.mark.asyncio
-async def test_confirm_entry_signal_condition1_fails_short_gamma_regime(
+async def test_confirm_entry_signal_condition1_fails_vwap_not_held(
     engine: DynamicRolloverEngine,
 ) -> None:
-    """條件一：K 棒為陽線且收盤價/量能皆達標，但個股淨 GEX 為負值
-    (SHORT_GAMMA 泥淖) -> 仍應判定未通過，比照分析中心對淨 GEX Regime
-    的判讀，避免負 Gamma 環境下的放量被誤判為可信的右側突破。"""
-    radar = _green_candidate_radar()
-    radar["gex_profile_data"]["net_gex"] = -800_000.0
-    with patch(
-        "services.market_data_service.get_history_df",
-        new_callable=AsyncMock,
-        return_value=_GREEN_15M_DF,
+    """條件一：K 棒為陽線且收盤價/量能與 Gamma Flip 門檻皆達標，但收盤價未站穩
+    Session VWAP -> 仍應判定未通過。取代已移除的淨 GEX Regime 重複檢查
+    (與「收盤站穩 Gamma Flip」高度相關，屬重複確認)，改以獨立的即時 VWAP
+    動能訊號補強右側突破確認。"""
+    with (
+        patch(
+            "services.market_data_service.get_history_df",
+            new_callable=AsyncMock,
+            return_value=_GREEN_15M_DF,
+        ),
+        patch(
+            "market_analysis.vwap_utils.fetch_session_vwap",
+            new_callable=AsyncMock,
+            return_value=105.0,  # 15m 收盤 $101 未站穩 VWAP $105
+        ),
     ):
-        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+        confirmed, reason = await engine._confirm_entry_signal(
+            "TEST", _green_candidate_radar(), 100.0
+        )
     assert confirmed is False
     assert "條件一❌" in reason
-    assert "SHORT_GAMMA" in reason
+    assert "未站穩" in reason
+
+
+@pytest.mark.asyncio
+async def test_confirm_entry_signal_condition1_fails_vwap_fetch_failure(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """條件一 fail-safe：Session VWAP 抓取失敗 (回傳 0.0) -> 直接判定未通過，
+    比照既有「資料缺失一律不進場」的 fail-safe 原則，不預設通過。"""
+    with (
+        patch(
+            "services.market_data_service.get_history_df",
+            new_callable=AsyncMock,
+            return_value=_GREEN_15M_DF,
+        ),
+        patch(
+            "market_analysis.vwap_utils.fetch_session_vwap",
+            new_callable=AsyncMock,
+            return_value=0.0,
+        ),
+    ):
+        confirmed, reason = await engine._confirm_entry_signal(
+            "TEST", _green_candidate_radar(), 100.0
+        )
+    assert confirmed is False
+    assert "條件一❌" in reason
+    assert "VWAP 抓取失敗" in reason
 
 
 @pytest.mark.asyncio
@@ -4544,17 +4620,39 @@ async def test_confirm_entry_signal_condition2_fails_price_below_support_wall(
 
 
 @pytest.mark.asyncio
+async def test_confirm_entry_signal_condition2_fails_wall_too_far(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """條件二：現價已站上支撐牆，但距離超過 _ENTRY_SUPPORT_WALL_MAX_DISTANCE_PCT
+    (5%) -> 未通過，因為支撐牆離現價過遠不構成短線可依靠的即時防禦。"""
+    radar = _green_candidate_radar()
+    radar["gex_profile_data"]["gex_profile"] = {
+        "80": -500_000.0,
+        "85": 800_000.0,  # 支撐牆 $85，距現價 $100 有 15% > 5% 門檻
+        "100": 300_000.0,
+        "105": -200_000.0,
+    }
+    confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+    assert confirmed is False
+    assert "條件二❌" in reason
+    assert "距離過遠" in reason
+
+
+@pytest.mark.asyncio
 async def test_confirm_entry_signal_condition3_fails_physical_cap(
     engine: DynamicRolloverEngine,
 ) -> None:
-    """條件三：上方存在單筆 ratio > 1.0x OI 的 STO Call -> 未通過"""
+    """條件三：Call Wall ($110) 上方存在單筆 ratio > 1.5x OI 的 STO Call -> 未通過。
+    物理封頂偵測已改以 Call Wall (而非現價) 作為 strike 位置基準，且 ratio 門檻
+    由 1.0x 調升為 1.5x，故封頂 strike 須設於 Call Wall 之上、ratio 須超過 1.5x
+    才會觸發 (低於任一門檻皆視為一般平倉/避險單，不誤判為物理封頂)。"""
     radar = _green_candidate_radar()
     radar["uoa"].append(
         {
             "type": "CALL",
             "action": "🔴 賣出開倉 (STO - Bid)",
-            "strike": 103.0,
-            "ratio": 1.5,
+            "strike": 112.0,  # > call_wall $110
+            "ratio": 2.0,  # > 新門檻 1.5x
             "expiry": (datetime.now().date() + timedelta(days=14)).strftime("%Y-%m-%d"),
         }
     )
@@ -4569,6 +4667,34 @@ async def test_confirm_entry_signal_condition3_fails_physical_cap(
     assert "物理封頂" in reason
     assert "條件一✅" in reason
     assert "條件四✅" in reason
+
+
+@pytest.mark.asyncio
+async def test_confirm_entry_signal_condition3_physical_cap_below_call_wall_passes(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """條件三迴歸鎖定：STO Call 的 strike 雖然高於現價，但仍在 Call Wall 之下，
+    且/或 ratio 未超過新的 1.5x 門檻時，不應再被誤判為物理封頂 (修正前僅以
+    「現價」與 1.0x 為基準，此情境會被誤判為封頂)。"""
+    radar = _green_candidate_radar()
+    radar["uoa"].append(
+        {
+            "type": "CALL",
+            "action": "🔴 賣出開倉 (STO - Bid)",
+            "strike": 103.0,  # > 現價但 < call_wall $110
+            "ratio": 1.5,  # 未嚴格超過新門檻 1.5x
+            "expiry": (datetime.now().date() + timedelta(days=14)).strftime("%Y-%m-%d"),
+        }
+    )
+    with patch(
+        "services.market_data_service.get_history_df",
+        new_callable=AsyncMock,
+        return_value=_GREEN_15M_DF,
+    ):
+        _confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+    # 僅驗證條件三自身的判定語意；整體 confirmed 還取決於未在此測試中 mock 的
+    # 條件五/六 (財報行事曆、總經 Regime、選擇權到期日)，與此迴歸測試的目的無關。
+    assert "條件三✅" in reason
 
 
 @pytest.mark.asyncio
@@ -4642,6 +4768,7 @@ async def test_confirm_entry_signal_condition4_fails_dte_too_low(
             "action": "🟢 買入開倉 (BTO - Ask)",
             "strike": 102.0,
             "ratio": 3.0,
+            "notional_value": 300_000.0,
             "expiry": near_expiry,
         }
     ]
@@ -4668,6 +4795,62 @@ async def test_confirm_entry_signal_condition4_fails_ratio_too_low(
             "action": "🟢 買入開倉 (BTO - Ask)",
             "strike": 105.0,
             "ratio": 0.5,  # < _ENTRY_UOA_MIN_RATIO (0.8)
+            "notional_value": 300_000.0,
+            "expiry": (datetime.now().date() + timedelta(days=14)).strftime("%Y-%m-%d"),
+        }
+    ]
+    with patch(
+        "services.market_data_service.get_history_df",
+        new_callable=AsyncMock,
+        return_value=_GREEN_15M_DF,
+    ):
+        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+    assert confirmed is False
+    assert "條件四❌" in reason
+
+
+@pytest.mark.asyncio
+async def test_confirm_entry_signal_condition4_fails_notional_too_low(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """條件四：主力 CALL BTO 買盤 DTE/ratio/strike 皆達標，但權利金名目金額低於
+    _ENTRY_UOA_MIN_NOTIONAL_USD ($200,000) 門檻 -> 未通過，避免邊界小單被誤判
+    為主力買盤。"""
+    radar = _green_candidate_radar()
+    radar["uoa"] = [
+        {
+            "type": "CALL",
+            "action": "🟢 買入開倉 (BTO - Ask)",
+            "strike": 105.0,
+            "ratio": 2.0,
+            "notional_value": 50_000.0,  # < _ENTRY_UOA_MIN_NOTIONAL_USD (200,000)
+            "expiry": (datetime.now().date() + timedelta(days=14)).strftime("%Y-%m-%d"),
+        }
+    ]
+    with patch(
+        "services.market_data_service.get_history_df",
+        new_callable=AsyncMock,
+        return_value=_GREEN_15M_DF,
+    ):
+        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+    assert confirmed is False
+    assert "條件四❌" in reason
+
+
+@pytest.mark.asyncio
+async def test_confirm_entry_signal_condition4_fails_deep_itm_strike(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """條件四：主力 CALL BTO 買盤 DTE/ratio/權利金皆達標，但 strike 低於現價
+    (深實值避險單，非右側追價的方向性買盤) -> 未通過。"""
+    radar = _green_candidate_radar()
+    radar["uoa"] = [
+        {
+            "type": "CALL",
+            "action": "🟢 買入開倉 (BTO - Ask)",
+            "strike": 95.0,  # < 現價 $100
+            "ratio": 2.0,
+            "notional_value": 300_000.0,
             "expiry": (datetime.now().date() + timedelta(days=14)).strftime("%Y-%m-%d"),
         }
     ]

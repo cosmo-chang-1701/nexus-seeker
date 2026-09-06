@@ -626,11 +626,20 @@ def classify_gex_wall(
 
 
 def detect_uoa_sto_call_physical_cap(
-    uoa_list: list, spot: float, ratio_threshold: float = 1.0
+    uoa_list: list,
+    spot: float,
+    ratio_threshold: float = 1.0,
+    wall_reference: Optional[float] = None,
 ) -> tuple[bool, float]:
-    """掃描 UOA (異常期權活動) 清單，偵測現價上方是否存在單筆 ratio (成交量/未平倉量)
+    """掃描 UOA (異常期權活動) 清單，偵測是否存在單筆 ratio (成交量/未平倉量)
     超過 ratio_threshold 的 STO Call 物理封頂 (即機構單筆巨量賣出開倉 Call，物理上
     鎖死上方空間)。回傳 (has_physical_cap, capping_strike)，找不到則為 (False, 0.0)。
+
+    strike 的位置判定基準預設為 spot，但呼叫端可傳入 wall_reference (例如個股
+    Call Wall) 取代 spot 作為「封頂位置」的基準 —— 用更具結構意義的阻力位而非
+    單純現價，降低一般 STO 平倉/避險單被誤判為物理封頂的假警報率。
+    wall_reference 為 None 或 <=0 時完全比照舊行為退回使用 spot，確保
+    get_spx_capped_from_above_signal() 這類未傳入該參數的既有呼叫端行為不變。
 
     抽自 dynamic_rollover/opportunity_cost.py 的
     _confirm_entry_condition3_no_physical_cap (僅取其 STO ratio 封頂偵測邏輯，
@@ -641,6 +650,7 @@ def detect_uoa_sto_call_physical_cap(
     而非 dynamic_rollover/ 內，維持既有的單向依賴方向
     (dynamic_rollover 已經 import index_microstructure，反向則不然)。
     """
+    position_ref = wall_reference if wall_reference and wall_reference > 0 else spot
     for entry in uoa_list:
         if not isinstance(entry, dict):
             continue
@@ -650,7 +660,7 @@ def detect_uoa_sto_call_physical_cap(
             continue
         strike = float(entry.get("strike", 0.0) or 0.0)
         ratio = float(entry.get("ratio", 0.0) or 0.0)
-        if strike > spot and ratio > ratio_threshold:
+        if strike > position_ref and ratio > ratio_threshold:
             return True, strike
     return False, 0.0
 
