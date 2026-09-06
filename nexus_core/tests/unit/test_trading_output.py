@@ -172,6 +172,77 @@ async def test_monitor_real_portfolio_task_omits_unset_target_allocation_pct() -
 
 
 @pytest.mark.asyncio
+async def test_monitor_real_portfolio_task_force_live_gex_refresh_overrides_stale_cache() -> (
+    None
+):
+    """微觀結構出場決策矩陣：SATELLITE 持倉標的的 GEX 錨點應強制即時刷新
+    (force_live=True)，即使既有雷達快取完全缺席 (此測試 terminal_cog=None，
+    模擬雷達快取未命中的情境)，新鮮的 call_wall/put_wall/net_gex 仍應透過
+    force_live 刷新結果餵給 check_satellite_rebalancing，而非留空退回 0.0。"""
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+    bot.get_cog = MagicMock(return_value=None)
+
+    with patch("discord.ext.tasks.Loop.start"):
+        cog = PortfolioMonitorCog(bot)
+
+    cog.trading_service.audit_real_portfolio_risk = AsyncMock(return_value=[])  # type: ignore
+
+    holding = {
+        "id": 1,
+        "user_id": 1,
+        "symbol": "NVDA",
+        "metadata": "{}",
+        "quantity": 10.0,
+        "avg_cost": 200.0,
+    }
+
+    cog.rollover_engine.check_satellite_rebalancing = AsyncMock(return_value=[])  # type: ignore
+    cog.rollover_engine.evaluate_opportunity_cost_for_satellites = AsyncMock(  # type: ignore
+        return_value=([], None)
+    )
+    cog.rollover_engine.evaluate_margin_defense = AsyncMock(return_value=[])  # type: ignore
+
+    fresh_gex_data = {
+        "spot": 250.0,
+        "net_gex": -1_000_000.0,
+        "call_wall": 260.0,
+        "put_wall": 240.0,
+        "gex_profile": {},
+    }
+
+    with patch(
+        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
+    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
+        "database.holdings.get_all_holdings", return_value=[holding]
+    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
+        "market_analysis.trading_orchestration.recommend_covered_calls",
+        new_callable=AsyncMock,
+        return_value={"recommendations": []},
+    ), patch(
+        "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
+        new_callable=AsyncMock,
+        return_value=fresh_gex_data,
+    ) as mock_fresh_gex:
+        await cog.monitor_real_portfolio_task()
+
+    # 除了本測試關注的 NVDA 持倉刷新外，其餘未 mock 的引擎方法 (Scenario 5
+    # Covered Call Overlay 等) 也可能各自獨立呼叫同一個函式查詢大盤 SPY 訊號
+    # (例如 get_spx_capped_from_above_signal())，故僅驗證「有沒有針對 NVDA
+    # 以 force_live=True 呼叫過」，不要求是唯一一次呼叫。
+    mock_fresh_gex.assert_any_await("NVDA", force_live=True)
+
+    cog.rollover_engine.check_satellite_rebalancing.assert_awaited_once()
+    await_args = cog.rollover_engine.check_satellite_rebalancing.await_args
+    assert await_args is not None
+    portfolio_assets = await_args.args[1]
+    assert len(portfolio_assets) == 1
+    assert portfolio_assets[0]["put_wall"] == 240.0
+    assert portfolio_assets[0]["call_wall"] == 260.0
+    assert portfolio_assets[0]["gex_profile_data"]["net_gex"] == -1_000_000.0
+
+
+@pytest.mark.asyncio
 async def test_monitor_real_portfolio_task_margin_defense_excludes_scenario2_and_3_flags() -> (
     None
 ):

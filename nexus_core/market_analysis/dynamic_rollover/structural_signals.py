@@ -137,6 +137,13 @@ def _detect_whale_put_bto_block(
     _confirm_entry_condition4_uoa_dte` 的 UOA 掃描模式（型別+動作+ratio+
     名目金額+strike 位置門檻），僅方向反轉為 PUT BTO（主力买入 PUT 押注下跌，
     做市商需即時空頭對沖）。uoa_list 為 None 或空list 時 fail-safe 回傳 False。
+
+    ratio 門檻優先採用 `paced_ratio`（uoa_detector.py 依當日交易時段進度
+    正規化後的 Volume/OI 預估值），未提供時 fail-safe 退回原始 `ratio`
+    （向後相容手動組裝的 uoa_list，例如既有測試 fixture）。OI 本身仍是前一
+    交易日收盤的固定值——時段正規化解決的是「同一原始比值在盤中不同時刻
+    代表的異常程度不同」，並非讓 OI 本身變成即時數據，這點無法透過任何
+    正規化解決，屬選擇權市場資料的先天限制。
     """
     if not uoa_list or spot <= 0:
         return False
@@ -147,7 +154,7 @@ def _detect_whale_put_bto_block(
             continue
         if "BTO" not in str(entry.get("action", "")):
             continue
-        ratio = float(entry.get("ratio", 0.0) or 0.0)
+        ratio = float(entry.get("paced_ratio", entry.get("ratio", 0.0)) or 0.0)
         if ratio < _MICROSTRUCTURE_SL_WHALE_PUT_MIN_RATIO:
             continue
         notional_value = float(entry.get("notional_value", 0.0) or 0.0)

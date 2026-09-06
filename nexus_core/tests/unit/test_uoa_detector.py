@@ -187,3 +187,40 @@ async def test_detect_uoa_sorts_by_notional_value_not_volume() -> None:
     # 若仍依成交量排序，則候選 A (volume=1000) 應排在候選 B (volume=500) 之前，
     # 但此處驗證的是反過來的順序，確保排序依據確實已改為名目價值。
     assert results[0]["volume"] < results[1]["volume"]
+
+
+@pytest.mark.asyncio
+async def test_detect_uoa_paced_ratio_normalizes_by_trading_day_progress() -> None:
+    """驗證 paced_ratio = ratio / 交易時段進度：模擬盤中僅過 50% 交易時間，
+    paced_ratio 應為原始 ratio 的 2 倍（外推至全天收盤的預估比值）。"""
+    expiries = ["2026-08-28"]
+    quote = {"c": 100.0}
+    calls_df = pd.DataFrame(
+        [
+            {
+                # volume(2000) > 3x OI(100) -> 觸發 Sweep 異動門檻入選
+                "strike": 100.0,
+                "volume": 2000.0,
+                "openInterest": 100.0,
+                "lastPrice": 5.0,
+                "bid": 4.9,
+                "ask": 5.1,
+                "impliedVolatility": 0.35,
+            }
+        ]
+    )
+    mock_chain = MockChain(calls_df, pd.DataFrame([]))
+
+    with patch(
+        "services.market_data_service.get_all_option_expiries", return_value=expiries
+    ), patch(
+        "services.market_data_service.get_option_chain", return_value=mock_chain
+    ), patch("services.market_data_service.get_quote", return_value=quote), patch(
+        "market_analysis.sentiment.uoa_detector.market_time.get_trading_day_elapsed_fraction",
+        return_value=0.5,
+    ):
+        results = await detect_uoa("TEST")
+
+    assert len(results) >= 1
+    for item in results:
+        assert item["paced_ratio"] == pytest.approx(item["ratio"] / 0.5)

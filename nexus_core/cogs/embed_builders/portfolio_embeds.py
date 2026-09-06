@@ -1711,6 +1711,9 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 "⚠️ SWEEP/BLOCK/CROSS 為量體形狀 + Bid/Ask 執行價位置啟發式代理判定，"
                 "非真實 order-type 逐筆 tape 數據。"
             )
+            table_lines.append(
+                "⚠️ OI 為前一交易日收盤未平倉量，非盤中即時數據；比例欄位為當日累積量對此固定值的比值。"
+            )
             _add_ansi_field_safely(embed, uoa_field_name, table_lines)
         except Exception:
             pass

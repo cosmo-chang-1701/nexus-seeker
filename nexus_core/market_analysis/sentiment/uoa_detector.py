@@ -5,6 +5,7 @@ import sqlite3  # noqa: F401
 import asyncio
 from datetime import date, datetime
 from typing import Dict, Any, List, Tuple
+import market_time
 from services import market_data_service
 from market_analysis.uoa_telemetry import UOATradeInput, classify_uoa_trade
 from market_analysis.greeks import calculate_greeks
@@ -113,8 +114,20 @@ def _process_uoa_candidate_rows(
     total_chain_volume: float,
     spot_price: float,
     max_non_index_nominal: float,
+    trading_day_elapsed_fraction: float = 1.0,
 ) -> List[Dict[str, Any]]:
-    """對已篩選出的候選列執行風控驗證、Greeks 計算與意圖分類，回傳結果 dict 列表。"""
+    """對已篩選出的候選列執行風控驗證、Greeks 計算與意圖分類，回傳結果 dict 列表。
+
+    trading_day_elapsed_fraction: 由呼叫端 (`detect_uoa`/`detect_uoa_with_
+    physical_caps`) 透過 `market_time.get_trading_day_elapsed_fraction()`
+    計算一次後傳入（同一次偵測呼叫內所有候選列共用同一個時間點，避免逐列
+    重複查詢 NYSE 行事曆）。用於將原始 `ratio` (Volume/OI) 正規化為
+    `paced_ratio`——OI 是前一交易日收盤的固定值，Volume 卻隨盤中時間持續
+    累積，同一個原始比值在開盤 10 分鐘與收盤前 10 分鐘代表的「異常程度」
+    並不相同；`paced_ratio = ratio / trading_day_elapsed_fraction` 換算為
+    「以目前速度外推至全天收盤的預估比值」，讓門檻在一天中任何時間點的意義
+    趨於一致。預設 1.0（不正規化，等同原始 ratio）以維持向後相容。
+    """
     results: List[Dict[str, Any]] = []
 
     try:
@@ -231,6 +244,11 @@ def _process_uoa_candidate_rows(
         )
 
         result = classify_uoa_trade(trade_input, current_price=spot_price, delta=d_val)
+        paced_ratio = (
+            result.ratio / trading_day_elapsed_fraction
+            if trading_day_elapsed_fraction > 0
+            else result.ratio
+        )
 
         results.append(
             {
@@ -242,6 +260,11 @@ def _process_uoa_candidate_rows(
                 "oi": result.open_interest,
                 "ratio": result.ratio,
                 "ratio_str": result.ratio_str,
+                # 盤中時段進度正規化後的 Volume/OI 比值（外推至全天收盤的預估
+                # 值）。刻意不取代既有 `ratio`（SWEEP/BLOCK 分類、物理封頂/
+                # 進場鐵律等既有已校準門檻皆維持原始 ratio 語意不變），僅供
+                # 新的消費端 (SL-主力對沖) 選用。
+                "paced_ratio": round(paced_ratio, 4),
                 "trade_price": result.trade_price,
                 "bid_price": result.bid_price,
                 "ask_price": result.ask_price,
@@ -281,6 +304,9 @@ async def detect_uoa(
 
         uoa_list: List[Dict[str, Any]] = []
         today_dt = datetime.now().date()
+        # 同一次偵測呼叫內所有候選列共用同一個交易時段進度快照，避免逐列
+        # 重複查詢 NYSE 行事曆 (供 paced_ratio 正規化使用)。
+        elapsed_fraction = market_time.get_trading_day_elapsed_fraction()
 
         for exp, df_combined, total_chain_volume in chain_data:
             df_uoa_candidates = _select_uoa_candidate_rows(
@@ -298,6 +324,7 @@ async def detect_uoa(
                     total_chain_volume,
                     spot_price,
                     max_non_index_nominal,
+                    trading_day_elapsed_fraction=elapsed_fraction,
                 )
             )
 
@@ -342,6 +369,7 @@ async def detect_uoa_with_physical_caps(
         uoa_list: List[Dict[str, Any]] = []
         physical_cap_strikes: List[Dict[str, Any]] = []
         today_dt = datetime.now().date()
+        elapsed_fraction = market_time.get_trading_day_elapsed_fraction()
 
         for exp, df_combined, total_chain_volume in chain_data:
             df_uoa_candidates = _select_uoa_candidate_rows(
@@ -357,6 +385,7 @@ async def detect_uoa_with_physical_caps(
                         total_chain_volume,
                         spot_price,
                         max_non_index_nominal,
+                        trading_day_elapsed_fraction=elapsed_fraction,
                     )
                 )
 

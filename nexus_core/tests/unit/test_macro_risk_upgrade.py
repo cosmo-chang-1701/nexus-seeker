@@ -46,6 +46,16 @@ def _reset_regime_and_core_macro_caches() -> Any:
     _reset()
 
 
+@pytest.fixture(autouse=True)
+def mock_fetch_symbol_gex_metrics() -> Any:
+    """覆寫 conftest.py 同名的全域 session-scoped autouse mock：本檔案的測試
+    (`test_fetch_symbol_gex_metrics_*`) 目的就是驗證 `fetch_symbol_gex_metrics`
+    本身的真實邊緣快取/即時抓取降級邏輯，不能被全域 mock 取代，故在本模組層級
+    以空 fixture 覆寫（pytest 依 fixture 名稱就近覆寫，本模組定義的版本優先於
+    conftest.py），讓真實函式在本檔案內維持不變。"""
+    yield None
+
+
 def _create_sample_metrics(**overrides):  # type: ignore
     payload = {
         "symbol": "AAPL",

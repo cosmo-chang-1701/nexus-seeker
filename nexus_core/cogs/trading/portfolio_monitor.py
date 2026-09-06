@@ -408,6 +408,67 @@ class PortfolioMonitorCog(commands.Cog):
                 for s in symbols_to_query:
                     radar_cache_map[s] = None
 
+            # 🚀 微觀結構出場決策矩陣：SATELLITE 持倉標的的 GEX 錨點 (call_wall/
+            # put_wall/net_gex) 強制即時刷新 (force_live=True)，縮短「矩陣評估
+            # 新鮮度」與「GEX edge 快照新鮮度上限 30 分鐘 (_EDGE_SNAPSHOT_MAX_
+            # AGE_SECONDS)」之間的落差。刻意只對「已持倉」的衛星標的做，範圍
+            # 遠小於整份 watchlist；不改動共用的 _EDGE_SNAPSHOT_MAX_AGE_SECONDS
+            # 常數本身，watchlist 心跳與大盤 GEX Regime 判定頻率完全不受影響。
+            # fetch_symbol_gex_metrics(force_live=True) 內部已有優雅降級（即時
+            # 抓取失敗時退回舊快取，而非直接失敗），此處的 try/except 僅防範
+            # 呼叫本身拋出未預期例外。
+            satellite_gex_symbols: set[str] = set()
+            for h in all_holdings:
+                sym_h = h["symbol"].upper()
+                is_core_h = sym_h in CORE_DEFENSE_ETF_SYMBOLS
+                final_class_h = h.get("asset_class") or (
+                    "CORE" if is_core_h else "SATELLITE"
+                )
+                if final_class_h == "SATELLITE":
+                    satellite_gex_symbols.add(sym_h)
+            satellite_gex_symbols |= {
+                str(t["symbol"]).upper() for t in long_option_trades
+            }
+
+            if satellite_gex_symbols:
+                from market_analysis.index_microstructure import (
+                    fetch_symbol_gex_metrics,
+                )
+
+                gex_refresh_sem = asyncio.Semaphore(3)
+
+                async def _fetch_fresh_satellite_gex(
+                    s: str,
+                ) -> tuple[str, Optional[Dict[str, Any]]]:
+                    async with gex_refresh_sem:
+                        try:
+                            data = await fetch_symbol_gex_metrics(s, force_live=True)
+                            return s, data
+                        except Exception as ex:
+                            logger.warning(
+                                f"[MicrostructureMatrix] {s} 即時 GEX 刷新失敗，"
+                                f"沿用既有雷達快取資料: {ex}"
+                            )
+                            return s, None
+
+                fresh_gex_results = await asyncio.gather(
+                    *[
+                        _fetch_fresh_satellite_gex(s)
+                        for s in sorted(satellite_gex_symbols)
+                    ]
+                )
+                for s, fresh_data in fresh_gex_results:
+                    if not fresh_data:
+                        continue
+                    existing = radar_cache_map.get(s)
+                    # 淺拷貝後覆寫 gex_profile_data，避免直接原地修改可能與
+                    # bot._latest_radar_data_cache 共用參照的既有 dict 物件，
+                    # 污染下一輪 15 分鐘心跳週期的共用雷達快取。
+                    radar_cache_map[s] = {
+                        **(existing if isinstance(existing, dict) else {}),
+                        "gex_profile_data": fresh_data,
+                    }
+
             # 🚀 物理死鎖解除與備兌建單指引主動推播
             try:
                 from market_analysis.trading_orchestration import (

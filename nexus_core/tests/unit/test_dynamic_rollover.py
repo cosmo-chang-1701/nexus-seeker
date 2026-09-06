@@ -1418,6 +1418,78 @@ async def test_microstructure_whale_put_near_miss_ratio_does_not_trigger(
     assert is_whale_block is False
 
 
+@pytest.mark.asyncio
+async def test_microstructure_whale_put_prefers_paced_ratio_over_raw_ratio(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """SL-主力對沖時段進度正規化：raw ratio 低於門檻但 paced_ratio (盤中時段
+    進度正規化後的預估值) 達標時，應以 paced_ratio 為準判定觸發——這正是時段
+    正規化要解決的問題：早盤極短時間內的原始 ratio 即使數字不高，也可能代表
+    異常猛烈的資金掃貨速度。"""
+    (
+        _is_breakdown,
+        is_whale_block,
+        *_rest,
+    ) = await engine._compute_structural_breakdown_signals(
+        symbol="AMD",
+        spot=100.0,
+        put_wall=0.0,
+        gamma_flip=0.0,
+        atr_14=2.0,
+        sqz_mom=0.0,
+        skew=0.0,
+        price_15m_close=100.0,
+        gex_profile_data=None,
+        asset_class="SPOT",
+        uoa_list=[
+            {
+                "type": "PUT",
+                "action": "BTO",
+                "ratio": 1.0,  # 原始 ratio 未達 1.5x 門檻
+                "paced_ratio": 2.0,  # 但時段正規化後已達標
+                "notional_value": 600_000.0,
+                "strike": 100.0,
+            }
+        ],
+    )
+    assert is_whale_block is True
+
+
+@pytest.mark.asyncio
+async def test_microstructure_whale_put_falls_back_to_raw_ratio_without_paced_field(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """向後相容回歸鎖定：uoa_list 條目未提供 paced_ratio 欄位（例如既有手動
+    組裝的測試 fixture 或舊資料）時，應優雅退回原始 ratio 判定，行為與
+    正規化功能推出前完全一致。"""
+    (
+        _is_breakdown,
+        is_whale_block,
+        *_rest,
+    ) = await engine._compute_structural_breakdown_signals(
+        symbol="AMD",
+        spot=100.0,
+        put_wall=0.0,
+        gamma_flip=0.0,
+        atr_14=2.0,
+        sqz_mom=0.0,
+        skew=0.0,
+        price_15m_close=100.0,
+        gex_profile_data=None,
+        asset_class="SPOT",
+        uoa_list=[
+            {
+                "type": "PUT",
+                "action": "BTO",
+                "ratio": 2.0,  # 未提供 paced_ratio，應退回使用此值判定
+                "notional_value": 600_000.0,
+                "strike": 100.0,
+            }
+        ],
+    )
+    assert is_whale_block is True
+
+
 # ==========================================
 # 補足缺口測試: _find_best_rollover_target / _normalize_power_squeeze /
 # evaluate_opportunity_cost_for_satellites / evaluate_margin_defense
