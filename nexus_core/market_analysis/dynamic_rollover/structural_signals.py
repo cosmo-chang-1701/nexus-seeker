@@ -1,3 +1,4 @@
+import math
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -64,13 +65,22 @@ def _resolve_canonical_anchor_base(
 
 
 def _scan_gex_walls(
-    symbol: str, gex_profile_data: Optional[Dict[str, Any]]
+    symbol: str,
+    gex_profile_data: Optional[Dict[str, Any]],
+    spot: float = 0.0,
 ) -> Tuple[float, float, float, float]:
     """
     掃描 gex_profile（履約價 -> GEX 曝險值）找出 support_wall/resistance_wall
     及其對應的 GEX 曝險值。抽自 _compute_structural_breakdown_signals，供該函式
     (Scenario 3/4 結構性破位判定) 與 _confirm_entry_signal (Scenario 2 進場確認
     條件二) 共用，確保「什麼算正 Gamma 支撐牆」在進場/出場兩端定義一致。
+
+    Support Wall 物理約束：支撐位在物理定義上必須位於現價下方。當提供 spot > 0 時，
+    支撐牆的掃描範圍強制約束在現價下方（K < Spot），即：
+        Support Wall = argmax_{K < Spot} (Net GEX(K))
+    若現價下方無任何正 GEX 峰值（或最大曝險低於 GEX_THIN_WALL_THRESHOLD），
+    則 support_wall/support_gex 維持 0.0，避免將現價上方的阻力牆 (Call Wall) 誤當成
+    防禦底牆。若未提供 spot (spot <= 0)，退回不限制履約價範圍的既有全鏈掃描行為。
 
     回傳 (support_wall, resistance_wall, support_gex, resistance_gex)，
     找不到對應牆時該值維持 0.0。若最大正 GEX 履約價的曝險值低於
@@ -97,32 +107,45 @@ def _scan_gex_walls(
         return support_wall, resistance_wall, support_gex, resistance_gex
 
     gex_prof = gex_profile_data["gex_profile"]
-    max_positive: float = 0.0
+    parsed_entries: list[tuple[float, float]] = []
     for k, v in gex_prof.items():
         try:
-            val = float(v)
-            if val > max_positive:
-                max_positive = val
+            strike_flt = float(k)
+            val_flt = float(v)
+            if math.isnan(strike_flt) or math.isnan(val_flt):
+                continue
+            parsed_entries.append((strike_flt, val_flt))
         except (ValueError, TypeError) as e:
             logger.debug(f"[{symbol}] GEX strike {k}/{v} 解析失敗，略過: {e}")
-    for k, v in gex_prof.items():
-        try:
-            val = float(v)
-            strike = float(k)
-            wall_type = classify_gex_wall(
-                val,
-                max_positive,
-                is_heavy_otm_call=False,
-                min_effective_gex=GEX_THIN_WALL_THRESHOLD,
-            )
-            if wall_type == "SUPPORT_GEX_WALL" and strike > support_wall:
-                support_wall = strike
-                support_gex = val
-            elif wall_type == "RESISTANCE_CALL_WALL" and strike > resistance_wall:
-                resistance_wall = strike
-                resistance_gex = val
-        except (ValueError, TypeError) as e:
-            logger.debug(f"[{symbol}] GEX strike {k}/{v} 解析失敗，略過: {e}")
+
+    if not parsed_entries:
+        return support_wall, resistance_wall, support_gex, resistance_gex
+
+    # 支撐牆候選：若 spot > 0，嚴格約束在現價下方 (K < Spot)；若 spot <= 0 則全鏈候選
+    eligible_support = [
+        (strike, val)
+        for strike, val in parsed_entries
+        if (spot <= 0 or strike < spot) and val > 0
+    ]
+    max_positive_support: float = max((val for _, val in eligible_support), default=0.0)
+
+    for strike, val in parsed_entries:
+        wall_type = classify_gex_wall(
+            val,
+            max_positive_support,
+            is_heavy_otm_call=False,
+            min_effective_gex=GEX_THIN_WALL_THRESHOLD,
+        )
+        if (
+            wall_type == "SUPPORT_GEX_WALL"
+            and (spot <= 0 or strike < spot)
+            and strike > support_wall
+        ):
+            support_wall = strike
+            support_gex = val
+        elif wall_type == "RESISTANCE_CALL_WALL" and strike > resistance_wall:
+            resistance_wall = strike
+            resistance_gex = val
 
     return support_wall, resistance_wall, support_gex, resistance_gex
 
@@ -255,7 +278,7 @@ async def compute_structural_breakdown_signals_impl(
             return cached_result  # type: ignore
 
     support_wall, resistance_wall, support_gex, resistance_gex = _scan_gex_walls(
-        symbol, gex_profile_data
+        symbol, gex_profile_data, spot=spot
     )
 
     anchor_base: float = _resolve_canonical_anchor_base(

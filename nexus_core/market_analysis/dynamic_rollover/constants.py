@@ -69,13 +69,18 @@ _COVERED_CALL_MAX_DTE: int = 25
 # --- 進場訊號六重嚴格過濾鐵律 (opportunity_cost.py::_confirm_entry_signal) 具名常數 ---
 # 六項條件必須同時成立才允許對候選標的實際啟動機會成本轉倉/核心資金部署指令：
 #   條件一：結構性右側放量突破 (15m 實體「陽線」收盤站穩 Gamma Flip 估算門檻 +
-#           放量 + Session VWAP 站穩確認)。刻意不再重複疊加淨 GEX Regime
-#           (net_gex>0) 判斷——該訊號與「收盤站穩 Gamma Flip」高度相關且同樣
-#           源自同一份 GEX 快照，屬於重複確認；改以獨立於 GEX 快照的即時 VWAP
-#           動能訊號取代，強化右側突破的即時性。
-#   條件二：做市商正 Gamma 底牆完好 (支撐牆存在、現價站上，且距離落在
-#           (0, _ENTRY_SUPPORT_WALL_MAX_DISTANCE_PCT] 之內才算「即時有效防禦」
-#           ——支撐牆離現價過遠等同缺乏保護)。
+#           放量 + Session VWAP 站穩確認)。針對極端單邊期權分佈導致 Gamma Flip
+#           無零交叉點之邊界：若全鏈動態 Net GEX < 0 則確認處於全域 Short Gamma
+#           泥淖，判定為結構性空頭直接不通過；若全鏈動態 Net GEX > 0 則代表做市商
+#           處於正 Gamma 吸收波動的自穩定狀態，啟用 Fallback 替代方案改以站穩
+#           Session VWAP + 0.5 × ATR₁₅ₘ 作為突破確認標準，避免誤殺；若數據缺失
+#           則 fail-safe 判定未通過。
+#   條件二：做市商正 Gamma 底牆完好。支撐位物理定義上必須位於現價下方，掃描
+#           範圍強制約束在現價下方 (K < Spot)，即 Support Wall = argmax_{K < Spot}
+#           (Net GEX(K))，避免將現價上方的阻力牆 (Call Wall) 誤當成支撐底牆；
+#           若現價下方無正 GEX 峰值 (或曝險低於 500k 薄紙牆門檻) 則判定未通過；
+#           現價須 > 支撐牆，且距離落在 (0, _ENTRY_SUPPORT_WALL_MAX_DISTANCE_PCT]
+#           之內才算「即時有效防禦」(支撐牆離現價過遠等同缺乏保護)。
 #   條件三：做市商阻力結構與非對稱空間 (無 UOA 物理封頂，Call Wall 空間充足)。
 #           物理封頂偵測改以 Call Wall（而非現價）作為 strike 位置基準，並將
 #           ratio (volume/OI) 門檻提高為 _ENTRY_UOA_CAP_RATIO_THRESHOLD，降低

@@ -1,3 +1,4 @@
+import math
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -49,25 +50,58 @@ async def _confirm_entry_condition1_breakout(
     target_spot: float,
     gex_profile: Optional[dict],
     reasons: list,
+    net_gex: Optional[float] = None,
 ) -> bool:
     """條件一：結構性右側放量突破確認 (15m 實體陽線收盤 + 放量，站穩 Gamma Flip
-    估算門檻，且須站穩 Session VWAP)。比照分析中心 (Symbol Hub
-    `create_tactical_symbol_embed()`) 的判讀方式：放量若發生在實體陰線
-    (close < open) 時，屬於空頭摜壓而非右側突破，即便收盤價與量能兩項代數條件
-    皆達標，仍判定未通過。刻意不再疊加淨 GEX Regime (net_gex>0) 判斷 ——
-    該訊號與「收盤站穩 Gamma Flip」高度相關且同源自同一份 GEX 快照，屬於
-    重複確認；改以獨立於 GEX 快照的即時 Session VWAP 站穩訊號補強右側動能
-    確認，VWAP 抓取失敗 (回傳 0.0) 比照既有 fail-safe 原則直接判定未通過。"""
+    估算門檻或全域 Long Gamma 替代門檻，且須站穩 Session VWAP)。
+
+    Gamma Flip 邊界處理與 Fallback 機制：
+    - 若全鏈期權分佈極端導致無零交叉點 (estimate_symbol_gamma_flip <= 0)：
+      - 若全鏈動態 Net GEX < 0：確認處於全域 Short Gamma 泥淖，結構性空頭直接判定未通過。
+      - 若全鏈動態 Net GEX > 0：代表全區間處於做市商正 Gamma 吸收波動的自穩定狀態。
+        強求 Flip 交叉門檻會造成「誤殺」，故啟用 Fallback 替代方案：改以站穩
+        Session VWAP + 0.5 × ATR₁₅ₘ 作為突破確認標準。
+      - 若 Net GEX == 0 或數據缺失：fail-safe 判定未通過。
+
+    四項突破要素須同時成立才通過：
+    1. 15m 收盤價站穩門檻 (Gamma Flip 或 Fallback VWAP + 0.5 × ATR₁₅ₘ)；
+    2. 15m 成交量 ≥ 前 20 根均量 × 1.5 倍 (放量突破)；
+    3. K 棒須為實體陽線 (close > open)，排除陰線放量摜壓假突破；
+    4. 15m 收盤價須站穩 Session VWAP。"""
     if target_spot <= 0:
         reasons.append("條件一❌：candidate 現價無效")
         return False
 
+    effective_net_gex = net_gex
+    if effective_net_gex is None or math.isnan(effective_net_gex):
+        if isinstance(gex_profile, dict):
+            try:
+                effective_net_gex = sum(float(v) for v in gex_profile.values())
+            except (ValueError, TypeError):
+                effective_net_gex = 0.0
+        else:
+            effective_net_gex = 0.0
+    if math.isnan(effective_net_gex):
+        effective_net_gex = 0.0
+
     gamma_flip_est = estimate_symbol_gamma_flip(
         gex_profile if isinstance(gex_profile, dict) else {}, target_spot
     )
+
+    is_fallback_mode = False
     if gamma_flip_est <= 0:
-        reasons.append("條件一❌：無法估算 Gamma Flip 門檻 (GEX Profile 無交叉點)")
-        return False
+        if effective_net_gex < 0:
+            reasons.append(
+                "條件一❌：全域 Short Gamma 泥淖 (Net GEX < 0 且無 Flip 交叉點)，結構性空頭直接不通過"
+            )
+            return False
+        elif effective_net_gex > 0:
+            is_fallback_mode = True
+        else:
+            reasons.append(
+                "條件一❌：無法估算 Gamma Flip 門檻 (GEX Profile 無交叉點且無明確方向)"
+            )
+            return False
 
     try:
         from services import market_data_service
@@ -91,18 +125,64 @@ async def _confirm_entry_condition1_breakout(
         session_vwap = 0.0
         logger.warning(f"[{candidate_symbol}] Session VWAP 抓取失敗: {e}")
 
+    if is_fallback_mode:
+        atr_15m = 0.0
+        try:
+            if (
+                len(df_15m) >= 14
+                and "High" in df_15m.columns
+                and "Low" in df_15m.columns
+            ):
+                import pandas_ta as ta
+
+                atr_series = ta.atr(
+                    df_15m["High"], df_15m["Low"], df_15m["Close"], length=14
+                )
+                if atr_series is not None and not atr_series.empty:
+                    atr_val = float(atr_series.iloc[-1])
+                    if not math.isnan(atr_val):
+                        atr_15m = atr_val
+        except Exception as e:
+            logger.debug(f"[{candidate_symbol}] 內嵌 ATR_15m 計算失敗: {e}")
+
+        if atr_15m <= 0 or math.isnan(atr_15m):
+            try:
+                from market_analysis.atr_utils import fetch_atr_15m
+
+                atr_15m = await fetch_atr_15m(candidate_symbol)
+            except Exception as e:
+                atr_15m = 0.0
+                logger.warning(f"[{candidate_symbol}] fetch_atr_15m 失敗: {e}")
+
+        if session_vwap <= 0 or math.isnan(session_vwap):
+            reasons.append(
+                "條件一❌：全域 Long Gamma 替代門檻計算失敗 (Session VWAP 抓取失敗)"
+            )
+            return False
+        if atr_15m <= 0 or math.isnan(atr_15m):
+            reasons.append(
+                "條件一❌：全域 Long Gamma 替代門檻計算失敗 (ATR₁₅ₘ 無法取得)"
+            )
+            return False
+
+        breakout_threshold = session_vwap + 0.5 * atr_15m
+    else:
+        breakout_threshold = gamma_flip_est
+
     last_bar = df_15m.iloc[-1]
     lookback_bars = df_15m.iloc[-(_ENTRY_VOLUME_LOOKBACK_BARS + 1) : -1]
     open_val = float(last_bar["Open"])
     close_val = float(last_bar["Close"])
     volume_val = float(last_bar["Volume"])
     avg_volume = float(lookback_bars["Volume"].mean())
-    is_closed_above = close_val > gamma_flip_est
+    is_closed_above = close_val > breakout_threshold
     is_volume_surge = (
         avg_volume > 0 and volume_val >= avg_volume * _ENTRY_VOLUME_SURGE_MULTIPLIER
     )
     is_bullish_candle = close_val > open_val
-    is_above_vwap = session_vwap > 0 and close_val > session_vwap
+    is_above_vwap = (
+        not math.isnan(session_vwap) and session_vwap > 0 and close_val > session_vwap
+    )
     c1_passed = (
         is_closed_above and is_volume_surge and is_bullish_candle and is_above_vwap
     )
@@ -114,13 +194,23 @@ async def _confirm_entry_condition1_breakout(
         if session_vwap > 0
         else "VWAP 抓取失敗"
     )
-    reasons.append(
-        f"條件一{'✅' if c1_passed else '❌'}：15m收盤 ${close_val:.2f} "
-        f"{'>' if is_closed_above else '<='} Gamma Flip估算 ${gamma_flip_est:.2f}，"
-        f"量能 {volume_val:.0f} vs 均量×{_ENTRY_VOLUME_SURGE_MULTIPLIER} "
-        f"={avg_volume * _ENTRY_VOLUME_SURGE_MULTIPLIER:.0f}，"
-        f"K棒{candle_tag}、{vwap_tag}"
-    )
+    if is_fallback_mode:
+        reasons.append(
+            f"條件一{'✅' if c1_passed else '❌'}：[全域Long Gamma] 15m收盤 ${close_val:.2f} "
+            f"{'>' if is_closed_above else '<='} 替代門檻 ${breakout_threshold:.2f} "
+            f"(VWAP ${session_vwap:.2f}+0.5×ATR ${atr_15m:.2f})，"
+            f"量能 {volume_val:.0f} vs 均量×{_ENTRY_VOLUME_SURGE_MULTIPLIER} "
+            f"={avg_volume * _ENTRY_VOLUME_SURGE_MULTIPLIER:.0f}，"
+            f"K棒{candle_tag}、{vwap_tag}"
+        )
+    else:
+        reasons.append(
+            f"條件一{'✅' if c1_passed else '❌'}：15m收盤 ${close_val:.2f} "
+            f"{'>' if is_closed_above else '<='} Gamma Flip估算 ${gamma_flip_est:.2f}，"
+            f"量能 {volume_val:.0f} vs 均量×{_ENTRY_VOLUME_SURGE_MULTIPLIER} "
+            f"={avg_volume * _ENTRY_VOLUME_SURGE_MULTIPLIER:.0f}，"
+            f"K棒{candle_tag}、{vwap_tag}"
+        )
     return c1_passed
 
 
@@ -132,10 +222,17 @@ def _confirm_entry_condition2_support_wall(
 ) -> bool:
     """條件二：做市商正 Gamma 底牆完好 (現價須站上支撐牆，且距離落在
     (0, _ENTRY_SUPPORT_WALL_MAX_DISTANCE_PCT] 之內才算「即時有效防禦」——
-    支撐牆離現價過遠即便現價仍在其上方，也不構成短線可依靠的保護)。"""
+    支撐牆離現價過遠即便現價仍在其上方，也不構成短線可依靠的保護)。
+
+    物理定義約束：支撐位在物理定義上必須位於現價下方 (K < Spot)。
+    透過 _scan_gex_walls(..., spot=target_spot) 將掃描範圍強制約束在現價下方：
+        Support Wall = argmax_{K < Spot} (Net GEX(K))
+    避免將現價上方的阻力牆 (Call Wall) 誤當成下方的防禦底牆。若現價下方無任何
+    正 GEX 峰值 (或曝險低於 GEX_THIN_WALL_THRESHOLD 門檻)，直接判定未通過。"""
     support_wall, _resistance_wall, support_gex, _resistance_gex = _scan_gex_walls(
         candidate_symbol,
         gex_profile_data if isinstance(gex_profile_data, dict) else None,
+        spot=target_spot,
     )
     has_support_wall = support_wall > 0 and support_gex > 0
     dist_pct = (
@@ -148,7 +245,7 @@ def _confirm_entry_condition2_support_wall(
     )
     c2_passed = has_support_wall and is_above_wall
     if not has_support_wall:
-        reasons.append("條件二❌：正 Gamma 支撐牆未偵測到")
+        reasons.append("條件二❌：未偵測到有效正 Gamma 支撐牆 (現價下方無正 GEX 峰值)")
     elif dist_pct is None:
         reasons.append("條件二❌：candidate 現價無效，無法計算支撐牆距離")
     elif dist_pct <= 0:
@@ -596,7 +693,7 @@ class _OpportunityCostMixin:
         任何一項條件所需資料缺失、抓取失敗或無法確認，一律判定該條件未通過
         (不進場)，不預設通過、不略過。
 
-        回傳 (四項條件是否全數通過, 逐項原因說明字串，供 log 觀察用)。
+        回傳 (六項條件是否全數通過, 逐項原因說明字串，供 log 觀察用)。
 
         六項條件各自的判斷邏輯拆分至模組層級的 _confirm_entry_condition{1..6}_*
         函式（本檔案類別定義之前），此處僅負責準備各條件共用的衍生資料
@@ -616,9 +713,26 @@ class _OpportunityCostMixin:
             if isinstance(gex_profile_data, dict)
             else 0.0
         )
+        net_gex = (
+            float(gex_profile_data.get("net_gex", 0.0) or 0.0)
+            if isinstance(gex_profile_data, dict)
+            else 0.0
+        )
+        if (net_gex == 0.0 or math.isnan(net_gex)) and "net_gex" in candidate_radar:
+            try:
+                net_gex = float(candidate_radar.get("net_gex", 0.0) or 0.0)
+            except (ValueError, TypeError):
+                net_gex = 0.0
+        if (net_gex == 0.0 or math.isnan(net_gex)) and gex_profile:
+            try:
+                net_gex = sum(float(v) for v in gex_profile.values())
+            except (ValueError, TypeError):
+                net_gex = 0.0
+        if math.isnan(net_gex):
+            net_gex = 0.0
 
         c1_passed = await _confirm_entry_condition1_breakout(
-            candidate_symbol, target_spot, gex_profile, reasons
+            candidate_symbol, target_spot, gex_profile, reasons, net_gex=net_gex
         )
         c2_passed = _confirm_entry_condition2_support_wall(
             candidate_symbol, gex_profile_data, target_spot, reasons
@@ -697,7 +811,7 @@ class _OpportunityCostMixin:
         )
         target_uoa_sweep = len(candidate_radar.get("uoa", []) or []) > 0
 
-        # 防洗盤實戰策略：進場訊號四重嚴格過濾鐵律。四項條件必須同時成立才允許
+        # 防洗盤實戰策略：進場訊號六重嚴格過濾鐵律。六項條件必須同時成立才允許
         # 對 candidate_symbol 啟動任何機會成本轉倉指令；未通過時比照上方
         # 「找不到候選標的」的早退模式，靜默略過、不產生任何指令。
         is_entry_confirmed, entry_reason = await self._confirm_entry_signal(

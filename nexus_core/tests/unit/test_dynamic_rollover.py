@@ -4551,6 +4551,40 @@ def test_scan_gex_walls_logs_malformed_entries(caplog: Any) -> None:
     assert any("解析失敗" in record.message for record in caplog.records)
 
 
+def test_scan_gex_walls_spot_at_strike_excludes_atm_strike() -> None:
+    """當現價恰好等於某履約價時 (K == Spot)，依 K < Spot 嚴格不等式約束，
+    該 ATM 履約價不得視為支撐牆，必須錨定在嚴格低於現價的下一道正 GEX 峰值。"""
+    gex_profile_data = {
+        "gex_profile": {
+            "95": 800_000.0,  # 現價下方真正支撐牆 (K < Spot)
+            "100": 1_000_000.0,  # ATM 履約價 (K == Spot)，不得作為支撐牆
+            "105": -200_000.0,
+        }
+    }
+    support_wall, resistance_wall, support_gex, _ = _scan_gex_walls(
+        "TEST", gex_profile_data, spot=100.0
+    )
+    assert support_wall == 95.0
+    assert support_gex == 800_000.0
+    assert resistance_wall == 105.0
+
+
+def test_scan_gex_walls_filters_nan_strikes_and_values() -> None:
+    """字串 'nan' 或 float('nan') 不得拋出例外，亦不得干擾大小比較與牆體判定。"""
+    gex_profile_data = {
+        "gex_profile": {
+            "nan": 900_000.0,
+            "95": float("nan"),
+            "90": 700_000.0,
+        }
+    }
+    support_wall, _, support_gex, _ = _scan_gex_walls(
+        "TEST", gex_profile_data, spot=100.0
+    )
+    assert support_wall == 90.0
+    assert support_gex == 700_000.0
+
+
 def _make_15m_df(
     bars: list[tuple[float, float]], last_open: Optional[float] = None
 ) -> pd.DataFrame:
@@ -4724,14 +4758,12 @@ async def test_confirm_entry_signal_condition1_fails_close_below_threshold(
 async def test_confirm_entry_signal_condition1_fails_gamma_flip_unavailable(
     engine: DynamicRolloverEngine,
 ) -> None:
-    """條件一 fail-safe：GEX Profile 無零交叉點 (單一正值履約價) -> Gamma Flip
+    """條件一 fail-safe：GEX Profile 無零交叉點且無明確方向 (淨 GEX 為 0) -> Gamma Flip
     無法估算，直接判定條件一未通過 (不發動 15m 抓取)；條件二仍可通過
-    (該履約價本身即為支撐牆，且現價 $100 站上該支撐牆 $99)。"""
+    (現價下方 $95 支撐牆存在，現價 $100 站上該支撐牆)。"""
     radar = _green_candidate_radar()
-    # 單一正值履約價數值採真實美元名目量級，確保條件二 (支撐牆偵測) 仍能通過
-    # (本測試目的是驗證條件一因無零交叉點而失敗，而非條件二受薄弱紙牆過濾影響)。
-    # 履約價設為略低於現價 ($99 < $100)，確保條件二的「現價須站上支撐牆」檢查通過。
-    radar["gex_profile_data"]["gex_profile"] = {"99": 600_000.0}
+    radar["gex_profile_data"]["gex_profile"] = {"95": 600_000.0, "105": -600_000.0}
+    radar["gex_profile_data"]["net_gex"] = 0.0
     with patch(
         "services.market_data_service.get_history_df",
         new_callable=AsyncMock,
@@ -4742,6 +4774,151 @@ async def test_confirm_entry_signal_condition1_fails_gamma_flip_unavailable(
     assert "無法估算 Gamma Flip" in reason
     assert "條件二✅" in reason
     mock_history.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_confirm_entry_signal_condition1_fails_short_gamma_no_flip(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """條件一邊界處理：全鏈動態 Net GEX < 0 且無零交叉點 -> 確認處於全域 Short Gamma
+    泥淖，直接判定為結構性空頭未通過，不發動 15m 抓取。"""
+    radar = _green_candidate_radar()
+    radar["gex_profile_data"]["gex_profile"] = {"95": -600_000.0}
+    radar["gex_profile_data"]["net_gex"] = -600_000.0
+    with patch(
+        "services.market_data_service.get_history_df",
+        new_callable=AsyncMock,
+    ) as mock_history:
+        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+    assert confirmed is False
+    assert "條件一❌" in reason
+    assert "全域 Short Gamma 泥淖" in reason
+    assert "結構性空頭直接不通過" in reason
+    mock_history.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_confirm_entry_signal_condition1_long_gamma_fallback_passes(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """條件一邊界處理：全鏈動態 Net GEX > 0 且無零交叉點 -> 啟用 Fallback 替代方案
+    (站穩 Session VWAP + 0.5 × ATR₁₅ₘ)。當 15m 陽線收盤突破替代門檻且放量站穩 VWAP，
+    條件一應順利通過，避免誤殺做市商自穩定盤。"""
+    radar = _green_candidate_radar()
+    radar["gex_profile_data"]["gex_profile"] = {"99": 600_000.0}
+    radar["gex_profile_data"]["net_gex"] = 600_000.0
+    with (
+        patch(
+            "services.market_data_service.get_history_df",
+            new_callable=AsyncMock,
+            return_value=_GREEN_15M_DF,  # close = 101.0, open = 99.0
+        ),
+        patch(
+            "market_analysis.vwap_utils.fetch_session_vwap",
+            new_callable=AsyncMock,
+            return_value=100.0,
+        ),
+    ):
+        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+    assert "條件一✅" in reason
+    assert "[全域Long Gamma]" in reason
+    assert "替代門檻" in reason
+    assert "VWAP $100.00" in reason
+    assert "條件二✅" in reason
+
+
+@pytest.mark.asyncio
+async def test_confirm_entry_signal_condition1_long_gamma_fallback_fails_weak_close(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """條件一邊界處理：全鏈 Net GEX > 0 啟用 Fallback 替代方案，若 15m 收盤價
+    未突破替代門檻 (close <= VWAP + 0.5 × ATR₁₅ₘ)，條件一應判定未通過。"""
+    radar = _green_candidate_radar()
+    radar["gex_profile_data"]["gex_profile"] = {"99": 600_000.0}
+    radar["gex_profile_data"]["net_gex"] = 600_000.0
+    # 收盤 $100.2，低於門檻 100.0 + 0.5 * 1.0 = 100.5
+    weak_df = _make_15m_df([(98.0, 1000.0)] * 20 + [(100.2, 1500.0)], last_open=99.0)
+    with (
+        patch(
+            "services.market_data_service.get_history_df",
+            new_callable=AsyncMock,
+            return_value=weak_df,
+        ),
+        patch(
+            "market_analysis.vwap_utils.fetch_session_vwap",
+            new_callable=AsyncMock,
+            return_value=100.0,
+        ),
+        patch(
+            "market_analysis.atr_utils.fetch_atr_15m",
+            new_callable=AsyncMock,
+            return_value=1.0,
+        ),
+    ):
+        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+    assert confirmed is False
+    assert "條件一❌" in reason
+    assert "[全域Long Gamma]" in reason
+
+
+@pytest.mark.asyncio
+async def test_confirm_entry_signal_condition1_long_gamma_fallback_fails_nan_atr(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """全域 Long Gamma 替代方案：若 ATR 計算回傳 NaN，必須 fail-safe 判定未通過，
+    不得產生 $nan 門檻或拋出異常。"""
+    radar = _green_candidate_radar()
+    radar["gex_profile_data"]["gex_profile"] = {"99": 600_000.0}
+    radar["gex_profile_data"]["net_gex"] = 600_000.0
+    with (
+        patch(
+            "services.market_data_service.get_history_df",
+            new_callable=AsyncMock,
+            return_value=_GREEN_15M_DF,
+        ),
+        patch(
+            "market_analysis.vwap_utils.fetch_session_vwap",
+            new_callable=AsyncMock,
+            return_value=100.0,
+        ),
+        patch(
+            "market_analysis.atr_utils.fetch_atr_15m",
+            new_callable=AsyncMock,
+            return_value=float("nan"),
+        ),
+        patch("pandas_ta.atr", return_value=pd.Series([float("nan")])),
+    ):
+        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+    assert confirmed is False
+    assert "條件一❌" in reason
+    assert "ATR₁₅ₘ 無法取得" in reason
+    assert "$nan" not in reason
+
+
+@pytest.mark.asyncio
+async def test_confirm_entry_signal_condition1_long_gamma_fallback_fails_nan_vwap(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """全域 Long Gamma 替代方案：若 Session VWAP 計算回傳 NaN，必須 fail-safe 判定未通過。"""
+    radar = _green_candidate_radar()
+    radar["gex_profile_data"]["gex_profile"] = {"99": 600_000.0}
+    radar["gex_profile_data"]["net_gex"] = 600_000.0
+    with (
+        patch(
+            "services.market_data_service.get_history_df",
+            new_callable=AsyncMock,
+            return_value=_GREEN_15M_DF,
+        ),
+        patch(
+            "market_analysis.vwap_utils.fetch_session_vwap",
+            new_callable=AsyncMock,
+            return_value=float("nan"),
+        ),
+    ):
+        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+    assert confirmed is False
+    assert "條件一❌" in reason
+    assert "Session VWAP 抓取失敗" in reason
 
 
 @pytest.mark.asyncio
@@ -4896,6 +5073,110 @@ async def test_confirm_entry_signal_condition2_fails_wall_too_far(
     assert confirmed is False
     assert "條件二❌" in reason
     assert "距離過遠" in reason
+
+
+@pytest.mark.asyncio
+async def test_confirm_entry_signal_condition2_spcx_support_wall_constraint(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """條件二演算法缺陷修復驗證 (真實案例 SPCX 現價 $147.95)：
+    全鏈最大正 GEX 位於現價上方的 $150.00 (Call Wall, GEX=+1,000,000)，
+    現價下方無任何正 GEX 峰值 (例如 $145 GEX=-200,000)。
+    支撐牆掃描範圍必須約束在現價下方 (K < Spot)。
+    系統不得將上方的 $150 阻力牆誤判為支撐牆，不得產生「現價 $147.95 <= 正 Gamma 支撐牆 $150.00」
+    的荒謬結論，應直接觸發「未偵測到有效正 Gamma 支撐牆」判定失敗。"""
+    radar = _green_candidate_radar()
+    radar["gex_profile_data"]["gex_profile"] = {
+        "140": -500_000.0,
+        "145": -200_000.0,
+        "150": 1_000_000.0,  # 上方 Call Wall，不得作為支撐牆
+    }
+    with patch(
+        "services.market_data_service.get_history_df",
+        new_callable=AsyncMock,
+        return_value=_GREEN_15M_DF,
+    ):
+        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 147.95)
+    assert confirmed is False
+    assert "條件二❌" in reason
+    assert "未偵測到有效正 Gamma 支撐牆 (現價下方無正 GEX 峰值)" in reason
+    assert "$150.00" not in reason
+
+
+@pytest.mark.asyncio
+async def test_confirm_entry_signal_condition2_spcx_support_wall_below_spot_passes(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """條件二演算法修復驗證：現價 $147.95，上方有 Call Wall $150 (GEX=1,000,000)，
+    現價下方有有效支撐牆 $145 (GEX=800,000)。
+    支撐位應精準錨定為 $145.00，距離 (147.95 - 145.0) / 147.95 = 1.99% <= 5%，
+    條件二應順利通過。"""
+    radar = _green_candidate_radar()
+    radar["gex_profile_data"]["gex_profile"] = {
+        "140": 200_000.0,
+        "145": 800_000.0,  # 現價下方最大正 GEX 峰值，即 Support Wall
+        "150": 1_000_000.0,  # 現價上方更大峰值 (Call Wall) 不應干擾支撐判斷
+    }
+    with patch(
+        "services.market_data_service.get_history_df",
+        new_callable=AsyncMock,
+        return_value=_GREEN_15M_DF,
+    ):
+        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 147.95)
+    assert "條件二✅" in reason
+    assert "正 Gamma 支撐牆 $145.00" in reason
+    assert "+1.99%" in reason
+    assert "有效防禦" in reason
+
+
+@pytest.mark.asyncio
+@patch(
+    "database.calendar_cache.get_cached_earnings",
+    return_value={"earnings_date": "2026-11-01"},
+)
+@patch(
+    "market_analysis.index_microstructure.get_market_regime",
+    new_callable=AsyncMock,
+    return_value="NORMAL",
+)
+@patch(
+    "services.market_data_service.get_all_option_expiries",
+    new_callable=AsyncMock,
+    return_value=_FAR_EXPIRIES,
+)
+async def test_confirm_entry_signal_all_six_conditions_pass_long_gamma_fallback(
+    mock_expiries: AsyncMock,
+    mock_regime: AsyncMock,
+    mock_earnings: MagicMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """全域 Long Gamma 替代方案：當全鏈 Net GEX > 0 且無 Flip 交叉點時，
+    若 15m 陽線突破替代門檻 (Session VWAP + 0.5 × ATR₁₅ₘ) 且其餘條件二～六皆達標，
+    六重進場鐵律應全數通過 (confirmed is True)。"""
+    radar = _green_candidate_radar()
+    radar["gex_profile_data"]["gex_profile"] = {"95": 800_000.0}
+    radar["gex_profile_data"]["net_gex"] = 800_000.0
+    with (
+        patch(
+            "services.market_data_service.get_history_df",
+            new_callable=AsyncMock,
+            return_value=_GREEN_15M_DF,  # close = 101.0, open = 99.0
+        ),
+        patch(
+            "market_analysis.vwap_utils.fetch_session_vwap",
+            new_callable=AsyncMock,
+            return_value=100.0,
+        ),
+    ):
+        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+    assert confirmed is True
+    assert "條件一✅" in reason
+    assert "[全域Long Gamma]" in reason
+    assert "條件二✅" in reason
+    assert "條件三✅" in reason
+    assert "條件四✅" in reason
+    assert "條件五✅" in reason
+    assert "條件六✅" in reason
 
 
 @pytest.mark.asyncio
