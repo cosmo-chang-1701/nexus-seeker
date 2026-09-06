@@ -35,6 +35,7 @@ class _MarginDefenseMixin:
             asset_class: str,
             call_wall: float = 0.0,
             hvn: float = 0.0,
+            uoa_list: Optional[list] = None,
         ) -> Tuple[bool, bool, float, float, float, float]: ...
 
     async def _evaluate_structural_no_edge(
@@ -51,12 +52,15 @@ class _MarginDefenseMixin:
         asset_class: str,
         call_wall: float = 0.0,
         hvn: float = 0.0,
+        uoa_list: Optional[list] = None,
     ) -> Tuple[bool, bool, bool]:
         """
         判定該持倉是否已「結構性無勝率」(結構性破位 或 主力空頭封殺)。
         重用與 check_satellite_rebalancing 共用的 _compute_structural_breakdown_signals，
         不發明新的量化門檻，供 evaluate_margin_defense 在宏觀紅線觸發時逐一檢查每檔
-        SATELLITE 持倉。
+        SATELLITE 持倉。uoa_list 轉發給該共用函式供其「主力空頭封殺」(SL-主力對沖，
+        真實 UOA PUT BTO 名目金額/比率判定) 使用，確保 Scenario 3/4 對同一威脅永遠
+        給出一致判定。
 
         回傳 (is_no_edge, is_structural_breakdown, is_whale_sto_block)：後兩者額外
         暴露給呼叫端，供反向ETF槓桿層級選擇 (select_inverse_leverage_tier) 判斷此次
@@ -82,6 +86,7 @@ class _MarginDefenseMixin:
             asset_class=asset_class,
             call_wall=call_wall,
             hvn=hvn,
+            uoa_list=uoa_list,
         )
         is_no_edge = is_structural_breakdown or is_whale_sto_block
         return is_no_edge, is_structural_breakdown, is_whale_sto_block
@@ -209,6 +214,7 @@ async def evaluate_margin_defense_impl(
             asset_class=asset_class,
             call_wall=float(asset.get("call_wall", 0.0)),
             hvn=float(asset.get("hvn", 0.0)),
+            uoa_list=asset.get("uoa", []),
         )
         if not is_no_edge:
             continue

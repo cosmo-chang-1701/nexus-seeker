@@ -89,3 +89,9 @@ class RolloverInstruction(_RolloverInstructionRequired, total=False):
     current_premium: Optional[float]
     decay_pct: Optional[float]
     dte: Optional[int]
+    # 微觀結構出場決策矩陣 (anti_washout.py) 觸發的具體分層識別碼，例如
+    # "SL_STRUCTURAL"/"SL_REGIME_FLIP"/"SL_WHALE_PUT"/"SL_TRAILING_BREAKEVEN"/
+    # "TP1"/"TP2"/"TP3"。純附加欄位，供未來分析各層級觸發率之用；不影響
+    # embed 呈現層 (仍僅依賴 scenario+action 決定顏色/文案)。未觸發任何分層
+    # 的指令 (例如常規配置超額 REDUCE) 維持 None。
+    exit_tier: Optional[str]

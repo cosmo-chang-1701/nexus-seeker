@@ -96,8 +96,8 @@ class DynamicRolloverEngine(
         """
         IVR 策略防禦與微調。
         NOTE: strategy_override 傳入非空字串時會【完全取代】IVR 鎖定後綴邏輯 (elif，
-        而非疊加)。此設計用於 Bear Call Spread / Trailing Stop 等戰術覆寫場景，
-        該場景下 strategy_override 本身的文字已包含完整防守資訊，故刻意跳過 IVR 後綴。
+        而非疊加)，供未來需要完整自訂策略文字的戰術覆寫場景使用（該場景下
+        strategy_override 本身的文字已包含完整防守資訊，故刻意跳過 IVR 後綴）。
         """
         return apply_ivr_strategy_overlay_impl(
             is_selling_locked_by_ivr, options_strategy, strategy_override, ivr
@@ -117,6 +117,7 @@ class DynamicRolloverEngine(
         asset_class: str,
         call_wall: float = 0.0,
         hvn: float = 0.0,
+        uoa_list: Optional[list] = None,
     ) -> Tuple[bool, bool, float, float, float, float]:
         """
         共用結構性破位 / 主力空頭封殺訊號計算，供 Scenario 3/4 共同呼叫。
@@ -137,6 +138,7 @@ class DynamicRolloverEngine(
             asset_class,
             call_wall=call_wall,
             hvn=hvn,
+            uoa_list=uoa_list,
         )
 
     async def check_satellite_rebalancing(

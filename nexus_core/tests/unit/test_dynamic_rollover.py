@@ -206,44 +206,6 @@ async def test_check_satellite_rebalancing(
 @patch(
     "market_analysis.dynamic_rollover.is_gamma_cliff_confirmed",
     new_callable=AsyncMock,
-    return_value=False,
-)
-async def test_satellite_rebalancing_breakdown_not_confirmed(
-    mock_cliff: AsyncMock,
-    mock_get_user: MagicMock,
-    engine: DynamicRolloverEngine,
-) -> None:
-    mock_get_user.return_value = MagicMock(can_trade_spreads=False)
-    """結構破位待確認：15 分鐘確認未通過時不觸發清倉"""
-    portfolio = [
-        {
-            "symbol": "NVDA",
-            "asset_class": "SATELLITE",
-            "current_value": 5000.0,
-            "target_allocation_pct": 0.20,
-            "max_allocation_pct": 0.50,
-            "spot_price": 200.0,
-            "put_wall": 210.0,
-            "gamma_flip": 215.0,
-            "call_wall": 250.0,
-            "ivr": 30.0,
-            "is_uoa_sweep": False,
-            "max_pain": 220.0,
-            "sqz_mom": 0.5,
-            "skew": -0.1,
-        },
-    ]
-    instructions = await engine.check_satellite_rebalancing(1, portfolio, 10000.0)
-    # is_gamma_cliff_confirmed returned False → structural breakdown NOT confirmed
-    # Allocation is 50% == max 50%, so no regular rebalance either
-    assert all(ins.get("action") != "LIQUIDATE" for ins in instructions)
-
-
-@pytest.mark.asyncio
-@patch("market_analysis.dynamic_rollover.get_full_user_context")
-@patch(
-    "market_analysis.dynamic_rollover.is_gamma_cliff_confirmed",
-    new_callable=AsyncMock,
     return_value=True,
 )
 async def test_satellite_rebalancing_breakdown_confirmed(
@@ -688,21 +650,22 @@ async def test_generate_rule_based_rebalance_report_extreme_breach_detail_block(
 async def test_generate_rule_based_rebalance_report_take_profit_suppresses_extreme_breach_flag(
     engine: DynamicRolloverEngine,
 ) -> None:
-    """回歸鎖定 (真實數據案例，TSLA)：is_take_profit 分支的優先權高於軌道二
-    極端瞬時停損 (見 _apply_decision_matrix 註解「僅次於獲利了結」)，但過去
+    """回歸鎖定 (真實數據案例，TSLA)：TP 分層的優先權高於軌道二極端瞬時停損
+    (見 _apply_decision_matrix 註解「僅次於 TP 分層」)，但過去
     is_extreme_tick_breach 這個外部回傳旗標是在分支判斷之前就無條件算好的
     原始價格穿透檢查，不論最終走哪個分支都會原樣回傳。這導致下游組裝的
-    Discord embed 出現敘事矛盾：內文是平靜的「🎯 獲利解鎖達成」，標題卻被
+    Discord embed 出現敘事矛盾：內文是平靜的「🎯 TP1-阻力初探」，標題卻被
     is_extreme_tick_breach=True 觸發成 rollover_embeds.py 的「🆘 立即人工
-    執行」紅色最高急迫樣式，兩者互相矛盾。修正後：當 is_take_profit=True
-    時，即使原始價格條件仍然滿足穿透極端熔斷線，is_extreme_tick_breach 與
+    執行」紅色最高急迫樣式，兩者互相矛盾。修正後：當 TP 分層觸發時，即使
+    原始價格條件仍然滿足穿透極端熔斷線，is_extreme_tick_breach 與
     extreme_breach_detail_block 都必須是「未觸發」狀態，final_action 與
-    system_conflict_note 則仍遵循 is_take_profit 優先權不變。"""
+    system_conflict_note 則仍遵循 TP 分層優先權不變。"""
     metrics = {
         "spot_price": 90.0,
         "price_15m_close": 90.0,
         "support_wall": 100.0,
         "atr_15m": 2.0,  # extreme_stop_loss = 100 - 3.0*2 = 94.0，spot(90) < 94 本應觸發
+        "call_wall": 90.0,  # TP1-阻力初探門檻 90*0.995=89.55，spot(90) 達標優先觸發
         "ivr": 25.0,
         "sqz_mom": -1.0,
     }
@@ -712,14 +675,13 @@ async def test_generate_rule_based_rebalance_report_take_profit_suppresses_extre
         requested_action="HOLD",
         target="VOO",
         asset_class="SPOT",
-        is_take_profit=True,
         position_shares=100.0,
         current_value=9000.0,
     )
     assert report["final_action"] == "LIQUIDATE"
     assert report["is_extreme_tick_breach"] is False
     assert report["extreme_breach_detail_block"] is None
-    assert "獲利解鎖達成" in report["markdown_report"]
+    assert "TP1-阻力初探" in report["markdown_report"]
     assert "極端瞬時停損觸發" not in report["markdown_report"]
 
 
@@ -793,97 +755,6 @@ async def test_check_satellite_rebalancing_extreme_tick_breach_threads_through_p
 
 
 @pytest.mark.asyncio
-@patch("market_analysis.dynamic_rollover.get_full_user_context")
-@patch(
-    "market_analysis.dynamic_rollover.DynamicRolloverEngine._find_best_rollover_target",
-    return_value="AMD",
-)
-async def test_satellite_rebalancing_euphoria_trailing_stop(
-    mock_target: MagicMock,
-    mock_get_user: MagicMock,
-    engine: DynamicRolloverEngine,
-) -> None:
-    """Euphoria 且動能多頭延續 (SQZ MOM > 0)，為防範 Gamma Squeeze 軋空，剩餘 10% 啟動 Trailing Stop 移動止盈"""
-    mock_get_user.return_value = MagicMock(can_trade_spreads=True)
-    portfolio = [
-        {
-            "symbol": "NVDA",
-            "asset_class": "SATELLITE",
-            "current_value": 5000.0,
-            "target_allocation_pct": 0.20,
-            "max_allocation_pct": 0.50,
-            "spot_price": 249.0,
-            "put_wall": 210.0,
-            "gamma_flip": 215.0,
-            "call_wall": 250.0,  # 距離現價 < 1.5%
-            "ivr": 30.0,
-            "is_uoa_sweep": False,
-            "max_pain": 220.0,
-            "sqz_mom": 0.5,  # 多頭動能未衰竭
-            "skew": -0.1,
-            "skew_percentile": 50.0,
-        },
-    ]
-    instructions = await engine.check_satellite_rebalancing(1, portfolio, 10000.0)
-    assert len(instructions) == 2
-
-    ins_90 = [i for i in instructions if i["sell_ratio"] == 0.9][0]
-    assert ins_90["target_core"] == "AMD"
-    assert ins_90["action"] == "LIQUIDATE"
-
-    ins_10 = [i for i in instructions if i["sell_ratio"] == 0.0][0]
-    assert ins_10["target_core"] == "NVDA"
-    assert ins_10["action"] == "HOLD"
-    assert "Trailing Stop" in ins_10["suggested_strategy"]
-    assert "動能延續・移動止盈" in ins_10["reason"]
-
-
-@patch("market_analysis.dynamic_rollover.get_full_user_context")
-@patch(
-    "market_analysis.dynamic_rollover.DynamicRolloverEngine._find_best_rollover_target",
-    return_value="AMD",
-)
-async def test_satellite_rebalancing_euphoria_exhaustion_bear_call_spread(
-    mock_target: MagicMock,
-    mock_get_user: MagicMock,
-    engine: DynamicRolloverEngine,
-) -> None:
-    """Euphoria 且雙重動能衰竭確認 (SQZ MOM < 0 且 Skew >= 30%)，安全建立 10% Bear Call Spread 反向收租"""
-    mock_get_user.return_value = MagicMock(can_trade_spreads=True)
-    portfolio = [
-        {
-            "symbol": "NVDA",
-            "asset_class": "SATELLITE",
-            "current_value": 5000.0,
-            "target_allocation_pct": 0.20,
-            "max_allocation_pct": 0.50,
-            "spot_price": 249.0,
-            "put_wall": 210.0,
-            "gamma_flip": 215.0,
-            "call_wall": 250.0,  # 距離現價 < 1.5%
-            "ivr": 30.0,
-            "is_uoa_sweep": False,
-            "max_pain": 220.0,
-            "sqz_mom": -0.8,  # 動能翻負拐頭
-            "skew": -0.05,
-            "skew_percentile": 40.0,  # Skew 脫離狂熱 (>= 30%)
-        },
-    ]
-    instructions = await engine.check_satellite_rebalancing(1, portfolio, 10000.0)
-    assert len(instructions) == 2
-
-    ins_90 = [i for i in instructions if i["sell_ratio"] == 0.9][0]
-    assert ins_90["target_core"] == "AMD"
-    assert ins_90["action"] == "LIQUIDATE"
-
-    ins_10 = [i for i in instructions if i["sell_ratio"] == 0.1][0]
-    assert ins_10["target_core"] == "NVDA"
-    assert ins_10["action"] == "REDUCE"
-    assert "Bear Call Spread" in ins_10["suggested_strategy"]
-    assert ins_10.get("is_manual_override_required") is True
-
-
-@pytest.mark.asyncio
 async def test_generate_rule_based_rebalance_report_grayscale_hold(
     engine: DynamicRolloverEngine,
 ) -> None:
@@ -892,7 +763,7 @@ async def test_generate_rule_based_rebalance_report_grayscale_hold(
         "spot_price": 224.50,
         "price_15m_close": 224.80,
         "put_wall": 227.50,  # 原始顛倒數據
-        "call_wall": 225.00,  # 原始顛倒數據
+        "call_wall": 300.00,  # 遠高於現價，避免誤觸發 TP1-阻力初探 (與本測試主旨無關)
         "support_wall": 225.00,
         "resistance_wall": 227.50,
         "max_pain": 217.50,
@@ -964,7 +835,7 @@ async def test_generate_rule_based_rebalance_report_hard_breakdown(
 
     assert report["final_action"] == "LIQUIDATE"
     assert report["final_target"] == "VOO"
-    assert "15m 實體破位確認" in report["markdown_report"]
+    assert "SL-結構失效" in report["markdown_report"]
     assert "100% LIQUIDATE (轉入 VOO)" in report["options_strategy"]
     assert "$43,524" in report["markdown_report"]
 
@@ -1191,15 +1062,15 @@ async def test_lvn_secondary_hvn_snapping(engine: DynamicRolloverEngine) -> None
         "spot_price": 100.0,
         "price_15m_close": 100.0,
         "support_wall": 100.0,
-        "atr_15m": 2.0,
-        "lvn": 97.0,  # Base stop is 100 - 3.0 = 97.0, which lands exactly in LVN
+        "atr_15m": 6.0,  # SL-結構失效 base stop = 100 - 0.5*6.0 = 97.0, 恰好落於 LVN
+        "lvn": 97.0,
         "secondary_hvn": 94.0,  # Below LVN
         "hvn": 94.0,
         "dte": 30,
         "ivr": 25.0,
         "sqz_mom": 1.0,
     }
-    # Snapped stop should be secondary_hvn (94.0) + 0.2 * 2.0 = 94.40
+    # Snapped stop should be secondary_hvn (94.0) + 0.2 * 6.0 = 95.20
     report = await engine._generate_rule_based_rebalance_report(
         symbol="XYZ",
         metrics=metrics,
@@ -1208,7 +1079,7 @@ async def test_lvn_secondary_hvn_snapping(engine: DynamicRolloverEngine) -> None
         position_shares=100.0,
         current_value=10000.0,
     )
-    assert "$94.40" in report["markdown_report"]
+    assert "$95.20" in report["markdown_report"]
 
 
 @pytest.mark.asyncio
@@ -1246,7 +1117,7 @@ async def test_check_satellite_rebalancing_options_fast_track_vs_spot_slow_track
         "call_wall": 0.0,
         "hvn": 0.0,
         "atr_14": 2.0,
-        "atr_15m": 2.0,
+        "atr_15m": 7.0,  # SL-結構失效 stop = 100 - 0.5*7.0 = 96.5
         "ivr": 30.0,
         "is_uoa_sweep": False,
         "max_pain": 0.0,
@@ -1271,7 +1142,7 @@ async def test_check_satellite_rebalancing_options_fast_track_vs_spot_slow_track
     assert options_instructions[0]["symbol"] == "NVDA"
     assert options_instructions[0]["action"] == "LIQUIDATE"
     assert options_instructions[0]["sell_ratio"] == 1.0
-    assert "期權雙軌快速通道觸發" in options_instructions[0]["reason"]
+    assert "SL-結構失效" in options_instructions[0]["reason"]
     assert "3-5m 快速通道" in options_instructions[0]["reason"]
 
 
@@ -1283,7 +1154,7 @@ async def test_dual_track_exit_options_vs_spot(engine: DynamicRolloverEngine) ->
         "spot_price": 95.0,
         "price_15m_close": 98.0,  # 15m close still above stop loss
         "support_wall": 100.0,
-        "atr_15m": 2.0,  # Stop loss = 97.0
+        "atr_15m": 7.0,  # SL-結構失效 stop = 100 - 0.5*7.0 = 96.5
         "dte": 10,
         "ivr": 30.0,
         "sqz_mom": 0.5,
@@ -1298,7 +1169,7 @@ async def test_dual_track_exit_options_vs_spot(engine: DynamicRolloverEngine) ->
     assert report_spot["final_action"] == "HOLD"
     assert "15m 實體 K 線過濾" in report_spot["markdown_report"]
 
-    # 期權 OPTIONS: 現價貫穿 Stop Loss (95.0 < 97.0) -> 3-5m 快速通道即時清倉 LIQUIDATE (拒絕等待 15m)
+    # 期權 OPTIONS: 現價貫穿 Stop Loss (95.0 < 96.5) -> 3-5m 快速通道即時清倉 LIQUIDATE (拒絕等待 15m)
     report_options = await engine._generate_rule_based_rebalance_report(
         symbol="XYZ",
         metrics=metrics_a,
@@ -1306,8 +1177,245 @@ async def test_dual_track_exit_options_vs_spot(engine: DynamicRolloverEngine) ->
         asset_class="OPTIONS",
     )
     assert report_options["final_action"] == "LIQUIDATE"
-    assert "期權雙軌快速通道觸發" in report_options["markdown_report"]
+    assert "SL-結構失效" in report_options["markdown_report"]
     assert "3-5m 快速通道" in report_options["markdown_report"]
+
+
+# ==========================================
+# 微觀結構出場決策矩陣 (SL/TP 分層) — _generate_rule_based_rebalance_report
+# ==========================================
+
+
+@pytest.mark.asyncio
+async def test_microstructure_sl_regime_flip_liquidates_without_price_break(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """SL-狀態翻轉：個股 Net GEX <= 0 時，即使現價未跌破結構停損，仍應強制
+    100% 平倉。"""
+    metrics = {
+        "spot_price": 100.0,
+        "price_15m_close": 100.0,
+        "support_wall": 90.0,  # anchor_base=90，現價 100 遠高於結構停損
+        "atr_15m": 1.0,
+        "net_gex": -1_000_000.0,
+    }
+    report = await engine._generate_rule_based_rebalance_report(
+        symbol="XYZ",
+        metrics=metrics,
+        requested_action="HOLD",
+        target="VOO",
+        asset_class="SPOT",
+    )
+    assert report["final_action"] == "LIQUIDATE"
+    assert report["final_target"] == "VOO"
+    assert report["sell_ratio"] == 1.0
+    assert report["exit_tier"] == "SL_REGIME_FLIP"
+    assert "SL-狀態翻轉" in report["markdown_report"]
+
+
+@pytest.mark.asyncio
+async def test_microstructure_sl_regime_flip_missing_data_does_not_trigger(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """回歸鎖定：net_gex 資料缺失 (None，而非已抓取的 0.0) 時不得誤判為
+    「已確認 Net GEX <= 0」，避免對每一筆無 GEX 資料的部位強制清倉。"""
+    metrics = {
+        "spot_price": 100.0,
+        "price_15m_close": 100.0,
+        "support_wall": 90.0,
+        "atr_15m": 1.0,
+        # net_gex 未提供
+    }
+    report = await engine._generate_rule_based_rebalance_report(
+        symbol="XYZ",
+        metrics=metrics,
+        requested_action="HOLD",
+        target="VOO",
+        asset_class="SPOT",
+    )
+    assert report["final_action"] == "HOLD"
+    assert report["exit_tier"] is None
+
+
+@pytest.mark.asyncio
+async def test_microstructure_sl_trailing_breakeven_moves_stop_and_holds(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """SL-動態保本：現價漲幅達距 Call Wall 空間之 50% 時，維持 HOLD 但停損
+    上移至保本點 max(avg_cost, anchor_base)。"""
+    metrics = {
+        "spot_price": 120.0,  # 距 anchor(100) -> call_wall(140) 空間 50%
+        "price_15m_close": 120.0,
+        "support_wall": 100.0,
+        "call_wall": 140.0,
+        "atr_15m": 1.0,
+        "avg_cost": 110.0,
+    }
+    report = await engine._generate_rule_based_rebalance_report(
+        symbol="XYZ",
+        metrics=metrics,
+        requested_action="HOLD",
+        target="XYZ",
+        asset_class="SPOT",
+    )
+    assert report["final_action"] == "HOLD"
+    assert report["sell_ratio"] == 0.0
+    assert report["exit_tier"] == "SL_TRAILING_BREAKEVEN"
+    assert "SL-動態保本" in report["markdown_report"]
+    assert "$110.00" in report["markdown_report"]  # max(avg_cost, anchor_base)=110
+
+
+@pytest.mark.asyncio
+async def test_microstructure_sl_trailing_breakeven_options_no_cost_basis_fallback(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """OPTIONS 部位無單筆成本基礎 (avg_cost 恆為 0.0) 時，SL-動態保本應優雅
+    退回以結構錨點本身作為保本點近似值。"""
+    metrics = {
+        "spot_price": 120.0,
+        "price_15m_close": 120.0,
+        "support_wall": 100.0,
+        "call_wall": 140.0,
+        "atr_15m": 1.0,
+        "avg_cost": 0.0,
+    }
+    report = await engine._generate_rule_based_rebalance_report(
+        symbol="XYZ",
+        metrics=metrics,
+        requested_action="HOLD",
+        target="XYZ",
+        asset_class="OPTIONS",
+    )
+    assert report["exit_tier"] == "SL_TRAILING_BREAKEVEN"
+    assert "$100.00" in report["markdown_report"]  # anchor_base 近似保本點
+    assert "近似保本點" in report["markdown_report"]
+
+
+@pytest.mark.asyncio
+async def test_microstructure_tp1_liquidates_half_position(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """TP1-阻力初探：現價達 Call Wall 99.5% 時，執行 50% 平倉。"""
+    metrics = {
+        "spot_price": 199.0,  # 199 / 200 = 99.5%
+        "price_15m_close": 199.0,
+        "call_wall": 200.0,
+    }
+    report = await engine._generate_rule_based_rebalance_report(
+        symbol="XYZ",
+        metrics=metrics,
+        requested_action="HOLD",
+        target="VOO",
+        asset_class="SPOT",
+    )
+    assert report["final_action"] == "LIQUIDATE"
+    assert report["sell_ratio"] == 0.5
+    assert report["exit_tier"] == "TP1"
+    assert "TP1-阻力初探" in report["markdown_report"]
+
+
+@pytest.mark.asyncio
+async def test_microstructure_tp2_liquidates_30pct_on_wall_break(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """TP2-空間擴展：現價穿越 Call Wall 達 1.5% 以上時，執行 30% 平倉。"""
+    metrics = {
+        "spot_price": 203.0,  # (203-200)/200 = 1.5%
+        "price_15m_close": 203.0,
+        "call_wall": 200.0,
+    }
+    report = await engine._generate_rule_based_rebalance_report(
+        symbol="XYZ",
+        metrics=metrics,
+        requested_action="HOLD",
+        target="VOO",
+        asset_class="SPOT",
+    )
+    assert report["final_action"] == "LIQUIDATE"
+    assert report["sell_ratio"] == 0.3
+    assert report["exit_tier"] == "TP2"
+    assert "TP2-空間擴展" in report["markdown_report"]
+
+
+@pytest.mark.asyncio
+async def test_microstructure_tp3_delta_liquidates_20pct(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """TP3-終局平倉：期權 Delta >= 0.85 時，執行 20% 平倉。"""
+    metrics = {
+        "spot_price": 300.0,  # 遠低於 call_wall，避免同時觸發 TP1/TP2
+        "price_15m_close": 300.0,
+        "call_wall": 1000.0,
+        "delta": 0.90,
+    }
+    report = await engine._generate_rule_based_rebalance_report(
+        symbol="XYZ",
+        metrics=metrics,
+        requested_action="HOLD",
+        target="VOO",
+        asset_class="OPTIONS",
+    )
+    assert report["final_action"] == "LIQUIDATE"
+    assert report["sell_ratio"] == 0.2
+    assert report["exit_tier"] == "TP3"
+    assert "TP3-終局平倉" in report["markdown_report"]
+    assert "Delta 0.90" in report["markdown_report"]
+
+
+@pytest.mark.asyncio
+async def test_microstructure_tp3_priority_over_tp1_when_both_fire(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """優先序回歸鎖定：TP1 與 TP3 條件同時成立時，本輪應回報最高層級 TP3
+    (20%)，而非 TP1 (50%)——系統無狀態、每輪重新評估，取最高已觸發層級。"""
+    metrics = {
+        "spot_price": 199.0,  # 同時滿足 TP1 (>= call_wall*99.5%)
+        "price_15m_close": 199.0,
+        "call_wall": 200.0,
+        "delta": 0.90,  # 且滿足 TP3 (Delta >= 0.85)
+    }
+    report = await engine._generate_rule_based_rebalance_report(
+        symbol="XYZ",
+        metrics=metrics,
+        requested_action="HOLD",
+        target="VOO",
+        asset_class="OPTIONS",
+    )
+    assert report["exit_tier"] == "TP3"
+    assert report["sell_ratio"] == 0.2
+
+
+@pytest.mark.asyncio
+async def test_microstructure_whale_put_near_miss_ratio_does_not_trigger(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """SL-主力對沖近誤判防護：ratio 剛好低於 1.5x 門檻時不應觸發。"""
+    (
+        _is_breakdown,
+        is_whale_block,
+        *_rest,
+    ) = await engine._compute_structural_breakdown_signals(
+        symbol="AMD",
+        spot=100.0,
+        put_wall=0.0,
+        gamma_flip=0.0,
+        atr_14=2.0,
+        sqz_mom=0.0,
+        skew=0.0,
+        price_15m_close=100.0,
+        gex_profile_data=None,
+        asset_class="SPOT",
+        uoa_list=[
+            {
+                "type": "PUT",
+                "action": "BTO",
+                "ratio": 1.4,  # 低於 1.5x 門檻
+                "notional_value": 600_000.0,
+                "strike": 100.0,
+            }
+        ],
+    )
+    assert is_whale_block is False
 
 
 # ==========================================
@@ -2565,8 +2673,19 @@ async def test_evaluate_margin_defense_triggers_boxx_for_no_edge_holding(
             "current_value": 5000.0,
             "quantity": 10.0,
             "instrument_type": "SPOT",
+            "spot_price": 100.0,
             "sqz_mom": -5.0,
-            "skew": -0.5,  # 主力空頭封殺 -> 結構性無勝率
+            "skew": -0.5,
+            # 主力空頭封殺 -> 結構性無勝率 (真實 UOA PUT BTO 大單判定)
+            "uoa": [
+                {
+                    "type": "PUT",
+                    "action": "BTO",
+                    "ratio": 2.0,
+                    "notional_value": 600_000.0,
+                    "strike": 100.0,
+                }
+            ],
         },
     ]
     # SATELLITE 總市值 5000 > 緩衝 1000 -> 保證金壓力觸發
@@ -2613,10 +2732,21 @@ async def test_evaluate_margin_defense_routes_to_1x_inverse_etf_on_single_confir
             "current_value": 5000.0,
             "quantity": 10.0,
             "instrument_type": "SPOT",
+            "spot_price": 100.0,
             "sqz_mom": -5.0,
-            "skew": -0.5,  # 觸發主力空頭封殺
+            "skew": -0.5,
             "put_wall": 0.0,
             "gamma_flip": 0.0,  # 結構性破位條件不觸發 (無有效 anchor_base)
+            # 觸發主力空頭封殺 (真實 UOA PUT BTO 大單判定)
+            "uoa": [
+                {
+                    "type": "PUT",
+                    "action": "BTO",
+                    "ratio": 2.0,
+                    "notional_value": 600_000.0,
+                    "strike": 100.0,
+                }
+            ],
         },
     ]
     result = await engine.evaluate_margin_defense(1, portfolio)
@@ -2661,7 +2791,17 @@ async def test_evaluate_margin_defense_routes_to_2x_inverse_etf_on_double_confir
             "atr_14": 2.0,
             "price_15m_close": 90.0,
             "sqz_mom": -5.0,
-            "skew": -0.5,  # 同時觸發主力空頭封殺
+            "skew": -0.5,
+            # 同時觸發主力空頭封殺 (真實 UOA PUT BTO 大單判定)
+            "uoa": [
+                {
+                    "type": "PUT",
+                    "action": "BTO",
+                    "ratio": 2.0,
+                    "notional_value": 600_000.0,
+                    "strike": 90.0,
+                }
+            ],
         },
     ]
     with patch(
@@ -2706,10 +2846,20 @@ async def test_evaluate_margin_defense_falls_back_to_sector_inverse_etf(
             "current_value": 5000.0,
             "quantity": 10.0,
             "instrument_type": "SPOT",
+            "spot_price": 100.0,
             "sqz_mom": -5.0,
             "skew": -0.5,
             "put_wall": 0.0,
             "gamma_flip": 0.0,
+            "uoa": [
+                {
+                    "type": "PUT",
+                    "action": "BTO",
+                    "ratio": 2.0,
+                    "notional_value": 600_000.0,
+                    "strike": 100.0,
+                }
+            ],
         },
     ]
     result = await engine.evaluate_margin_defense(1, portfolio)
@@ -2780,8 +2930,19 @@ async def test_evaluate_margin_defense_checks_every_satellite_holding(
             "current_value": 5000.0,
             "quantity": 10.0,
             "instrument_type": "SPOT",
+            "spot_price": 100.0,
             "sqz_mom": -5.0,
-            "skew": -0.5,  # 無勝率
+            "skew": -0.5,
+            # 無勝率 (真實 UOA PUT BTO 大單判定)
+            "uoa": [
+                {
+                    "type": "PUT",
+                    "action": "BTO",
+                    "ratio": 2.0,
+                    "notional_value": 600_000.0,
+                    "strike": 100.0,
+                }
+            ],
         },
         {
             "symbol": "AAPL",
@@ -3177,7 +3338,8 @@ async def test_compute_structural_breakdown_signals_options_fast_path(
 async def test_compute_structural_breakdown_signals_whale_sto_block_only(
     engine: DynamicRolloverEngine,
 ) -> None:
-    """主力空頭封殺 (sqz_mom<0 且 skew<-0.3) 應獨立於結構性破位觸發。"""
+    """主力空頭封殺 (微觀結構出場決策矩陣 SL-主力對沖：近平值單筆 PUT BTO
+    大單，權利金 >= $500k 且 Vol/OI >= 1.5x) 應獨立於結構性破位觸發。"""
     (
         is_breakdown,
         is_whale_block,
@@ -3193,9 +3355,44 @@ async def test_compute_structural_breakdown_signals_whale_sto_block_only(
         price_15m_close=100.0,
         gex_profile_data=None,
         asset_class="SPOT",
+        uoa_list=[
+            {
+                "type": "PUT",
+                "action": "BTO",
+                "ratio": 2.0,
+                "notional_value": 600_000.0,
+                "strike": 100.0,
+            }
+        ],
     )
     assert is_breakdown is False  # 無 anchor_base -> 無法判定結構性破位
     assert is_whale_block is True
+
+
+@pytest.mark.asyncio
+async def test_compute_structural_breakdown_signals_whale_proxy_removed(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """回歸鎖定：舊版 (sqz_mom<0 且 skew<-0.3) 純動能代理已移除。純負動能/
+    偏空 Skew 但無真實 UOA PUT BTO 資料時，不應再誤判為主力空頭封殺。"""
+    (
+        _is_breakdown,
+        is_whale_block,
+        *_rest,
+    ) = await engine._compute_structural_breakdown_signals(
+        symbol="AMD",
+        spot=100.0,
+        put_wall=0.0,
+        gamma_flip=0.0,
+        atr_14=2.0,
+        sqz_mom=-2.0,
+        skew=-0.5,
+        price_15m_close=100.0,
+        gex_profile_data=None,
+        asset_class="SPOT",
+        uoa_list=None,
+    )
+    assert is_whale_block is False
 
 
 @pytest.mark.asyncio
@@ -3381,8 +3578,8 @@ def test_compute_anti_washout_stop_no_clamp_far_below_spot(
     stop_loss, _limit, extreme_stop_loss = engine._compute_anti_washout_stop(
         anchor_base=80.0, metrics=metrics
     )
-    # raw = 80 - 1.5*1.0 = 78.5，不再鉗制至 spot*0.95=95.0
-    assert stop_loss == 78.5
+    # raw = 80 - 0.5*1.0 = 79.5，不再鉗制至 spot*0.95=95.0
+    assert stop_loss == 79.5
     # 軌道二極端停損公式不變：80 - 3.0*1.0 = 77.0
     assert extreme_stop_loss == 77.0
 
@@ -3397,8 +3594,8 @@ def test_compute_anti_washout_stop_no_clamp_close_to_spot(
     stop_loss, _limit, _extreme = engine._compute_anti_washout_stop(
         anchor_base=99.0, metrics=metrics
     )
-    # raw = 99 - 0.15 = 98.85，不再鉗制至 spot*0.98=98.0
-    assert stop_loss == 98.85
+    # raw = 99 - 0.5*0.1 = 98.95，不再鉗制至 spot*0.98=98.0
+    assert stop_loss == 98.95
 
 
 def test_compute_anti_washout_stop_no_clamp_when_already_breached(
@@ -3412,8 +3609,8 @@ def test_compute_anti_washout_stop_no_clamp_when_already_breached(
     stop_loss, _limit, _extreme = engine._compute_anti_washout_stop(
         anchor_base=100.0, metrics=metrics
     )
-    # raw = 100 - 1.5*2 = 97.0 > spot(95.0) -> 已處於破位訊號區間
-    assert stop_loss == 97.0
+    # raw = 100 - 0.5*2 = 99.0 > spot(95.0) -> 已處於破位訊號區間
+    assert stop_loss == 99.0
 
 
 def test_compute_anti_washout_stop_lvn_regression_unchanged(
@@ -3426,13 +3623,13 @@ def test_compute_anti_washout_stop_lvn_regression_unchanged(
         anchor_base=100.0,
         metrics={
             "spot_price": 100.0,
-            "atr_15m": 2.0,
+            "atr_15m": 6.0,  # base stop = 100 - 0.5*6.0 = 97.0，恰好落於 LVN
             "lvn": 97.0,
             "secondary_hvn": 94.0,
             "hvn": 94.0,
         },
     )
-    assert stop_lvn == 94.40
+    assert stop_lvn == 95.20
 
 
 def test_compute_anti_washout_stop_ignores_dte(
@@ -3706,8 +3903,18 @@ async def test_evaluate_margin_defense_warns_on_gtc_buy_conflict(
             "current_value": 5000.0,
             "quantity": 10.0,
             "instrument_type": "SPOT",
+            "spot_price": 100.0,
             "sqz_mom": -5.0,
             "skew": -0.5,
+            "uoa": [
+                {
+                    "type": "PUT",
+                    "action": "BTO",
+                    "ratio": 2.0,
+                    "notional_value": 600_000.0,
+                    "strike": 100.0,
+                }
+            ],
         },
     ]
     with patch(
@@ -3756,8 +3963,18 @@ async def test_evaluate_margin_defense_nets_against_existing_sell_order(
             "current_value": 5000.0,
             "quantity": 10.0,
             "instrument_type": "SPOT",
+            "spot_price": 100.0,
             "sqz_mom": -5.0,
             "skew": -0.5,
+            "uoa": [
+                {
+                    "type": "PUT",
+                    "action": "BTO",
+                    "ratio": 2.0,
+                    "notional_value": 600_000.0,
+                    "strike": 100.0,
+                }
+            ],
         },
     ]
     with patch(
@@ -4022,10 +4239,20 @@ async def test_evaluate_margin_defense_warns_on_illiquid_option_spread(
             "current_value": 5000.0,
             "quantity": 10.0,
             "instrument_type": "OPTIONS_CONTRACT",
+            "spot_price": 100.0,
             "sqz_mom": -5.0,
             "skew": -0.5,
             "bid": 1.00,
             "ask": 1.30,
+            "uoa": [
+                {
+                    "type": "PUT",
+                    "action": "BTO",
+                    "ratio": 2.0,
+                    "notional_value": 600_000.0,
+                    "strike": 100.0,
+                }
+            ],
         },
     ]
     result = await engine.evaluate_margin_defense(1, portfolio)
@@ -4191,45 +4418,6 @@ async def test_generate_rule_based_rebalance_report_omits_holding_period_note_wh
     )
     assert report["final_action"] == "LIQUIDATE"
     assert "稅務提醒" not in report["markdown_report"]
-
-
-@pytest.mark.asyncio
-@patch("market_analysis.dynamic_rollover.get_full_user_context")
-@patch(
-    "market_analysis.dynamic_rollover.DynamicRolloverEngine._find_best_rollover_target",
-    return_value="AMD",
-)
-async def test_satellite_rebalancing_euphoria_exhaustion_includes_wash_sale_note(
-    mock_target: MagicMock,
-    mock_get_user: MagicMock,
-    engine: DynamicRolloverEngine,
-) -> None:
-    """#10: Euphoria 雙軌機制留存部位開 Bear Call Spread (同標的重新建倉)
-    應附加資訊性 Wash Sale 提醒"""
-    mock_get_user.return_value = MagicMock(can_trade_spreads=True)
-    portfolio = [
-        {
-            "symbol": "NVDA",
-            "asset_class": "SATELLITE",
-            "current_value": 5000.0,
-            "target_allocation_pct": 0.20,
-            "max_allocation_pct": 0.50,
-            "spot_price": 249.0,
-            "put_wall": 210.0,
-            "gamma_flip": 215.0,
-            "call_wall": 250.0,
-            "ivr": 30.0,
-            "is_uoa_sweep": False,
-            "max_pain": 220.0,
-            "sqz_mom": -0.8,
-            "skew": -0.05,
-            "skew_percentile": 40.0,
-        },
-    ]
-    instructions = await engine.check_satellite_rebalancing(1, portfolio, 10000.0)
-    ins_10 = [i for i in instructions if i["sell_ratio"] == 0.1][0]
-    assert "稅務提醒" in ins_10["reason"]
-    assert "Wash Sale" in ins_10["reason"]
 
 
 # ---------------------------------------------------------------------------

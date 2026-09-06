@@ -76,6 +76,8 @@ class PortfolioMonitorCog(commands.Cog):
             "lvn": 0.0,
             "dte": 99,
             "iv_term_structure_status": None,
+            "uoa": [],
+            "vwap_loss_with_volume": False,
         }
         if not r_data:
             return fallback_metrics
@@ -104,6 +106,29 @@ class PortfolioMonitorCog(commands.Cog):
             spot_val = float(
                 r_data.get("quote", {}).get("c", 0.0) if r_data.get("quote") else 0.0
             )
+
+            # TP3-終局平倉 (微觀結構出場決策矩陣)：15m VWAP 帶量失守判定。重用既有
+            # vwap_utils.fetch_session_vwap 與 price_volume_alert.get_confirmed_15m_bar
+            # (20 根回看均量)，不新創量能定義；「帶量」門檻沿用 opportunity_cost.py
+            # 條件一/price_volume_alert.py 預設值皆為 1.5x 的既有慣例。任何抓取失敗
+            # 一律 fail-safe 判定為 False，不視為觸發。
+            vwap_loss_with_volume = False
+            try:
+                from market_analysis.price_volume_alert import get_confirmed_15m_bar
+                from market_analysis.vwap_utils import fetch_session_vwap
+
+                session_vwap = await fetch_session_vwap(sym, force_refresh=True)
+                confirmed_bar = await get_confirmed_15m_bar(sym)
+                if (
+                    session_vwap > 0
+                    and confirmed_bar is not None
+                    and confirmed_bar.avg_volume > 0
+                    and confirmed_bar.close < session_vwap
+                    and confirmed_bar.volume >= confirmed_bar.avg_volume * 1.5
+                ):
+                    vwap_loss_with_volume = True
+            except Exception as e:
+                logger.warning(f"[{sym}] TP3 VWAP 帶量失守判定計算失敗: {e}")
 
             raw_max_pain = r_data.get("max_pain")
             max_pain_val = (
@@ -158,6 +183,8 @@ class PortfolioMonitorCog(commands.Cog):
                     if isinstance(r_data.get("iv_metrics"), dict)
                     else None
                 ),
+                "uoa": r_data.get("uoa", []) or [],
+                "vwap_loss_with_volume": vwap_loss_with_volume,
             }
         except Exception as parse_ex:
             logger.error(f"Failed to parse radar data for {sym}: {parse_ex}")
@@ -172,6 +199,10 @@ class PortfolioMonitorCog(commands.Cog):
         ask: float,
         metrics: Dict[str, Any],
         r_data: Optional[Dict[str, Any]],
+        strike: Optional[float] = None,
+        expiry: Optional[str] = None,
+        opt_type: Optional[str] = None,
+        iv: float = 0.0,
     ) -> Dict[str, Any]:
         """組裝單筆多頭期權持倉的 asset_entry，供動態轉倉引擎評估迴圈使用。
 
@@ -180,7 +211,38 @@ class PortfolioMonitorCog(commands.Cog):
         evaluate_covered_call_overlay 誤處理。期權部位無法從既有資料推導
         單筆成本基礎 (見 anti_washout.py 的 acquired_at 估算邏輯)，
         avg_cost/acquired_at 明確降級為 0.0/None。
+
+        TP3-終局平倉 (微觀結構出場決策矩陣)：Delta 現算自 strike/expiry/
+        opt_type/iv（皆為呼叫端既有 get_option_chain_mid_iv() 批次抓取的
+        副產品，此前僅 mid/bid/ask 被保留、iv 遭丟棄），零新增網路成本。
+        任一輸入缺失/計算失敗時 delta 維持 None，TP3 的 Delta 子條件優雅
+        略過（不視為觸發）。
         """
+        delta_val: Optional[float] = None
+        spot_price = float(metrics.get("spot_price", 0.0))
+        if (
+            strike is not None
+            and expiry is not None
+            and opt_type is not None
+            and iv > 0
+            and spot_price > 0
+            and float(strike) > 0
+        ):
+            try:
+                from datetime import date, datetime
+
+                from market_analysis.greeks import calculate_greeks
+
+                exp_dt = datetime.strptime(str(expiry), "%Y-%m-%d").date()
+                dte_days = max((exp_dt - date.today()).days, 0.5)
+                t_years = dte_days / 365.0
+                greeks = calculate_greeks(
+                    str(opt_type).lower(), spot_price, float(strike), t_years, iv, 0.0
+                )
+                delta_val = float(greeks.get("delta", 0.0))
+            except Exception as e:
+                logger.warning(f"[{opt_sym}] TP3 Delta 計算失敗: {e}")
+
         return {
             "symbol": opt_sym,
             "asset_class": "SATELLITE",
@@ -212,6 +274,9 @@ class PortfolioMonitorCog(commands.Cog):
             "bid": bid,
             "ask": ask,
             "boxx_allocation_pct": None,
+            "uoa": metrics.get("uoa", []),
+            "vwap_loss_with_volume": metrics.get("vwap_loss_with_volume", False),
+            "delta": delta_val,
         }
 
     # ==========================================
@@ -480,6 +545,15 @@ class PortfolioMonitorCog(commands.Cog):
                         # evaluate_core_deployment() 會自動改用
                         # suggest_boxx_allocation_pct() 的總經自動建議值。
                         "boxx_allocation_pct": h.get("boxx_allocation_pct"),
+                        # 微觀結構出場決策矩陣 (SL-主力對沖/TP3-終局平倉) 所需的
+                        # 原始 UOA 清單與 VWAP 帶量失守訊號，皆由 _build_symbol_metrics
+                        # 標的層級計算一次，現貨與期權部位共用同一份結果。
+                        "uoa": metrics.get("uoa", []),
+                        "vwap_loss_with_volume": metrics.get(
+                            "vwap_loss_with_volume", False
+                        ),
+                        # 現貨部位無 Delta 概念 (僅期權合約適用 TP3 Delta 子條件)。
+                        "delta": None,
                     }
                     if h.get("target_allocation_pct") is not None:
                         asset_entry["target_allocation_pct"] = h.get(
@@ -521,26 +595,27 @@ class PortfolioMonitorCog(commands.Cog):
 
                     async def _fetch_one_contract_quote(
                         key: tuple[str, Any, Any, Any],
-                    ) -> tuple[tuple[str, Any, Any, Any], float, float, float]:
+                    ) -> tuple[tuple[str, Any, Any, Any], float, float, float, float]:
                         sym_k, expiry_k, strike_k, opt_type_k = key
                         async with quote_sem:
                             try:
-                                mid, _iv, bid, ask = await get_option_chain_mid_iv(
+                                mid, iv, bid, ask = await get_option_chain_mid_iv(
                                     sym_k, expiry_k, strike_k, opt_type_k
                                 )
-                                return key, mid, bid, ask
+                                return key, mid, bid, ask, iv
                             except Exception as ex:
                                 logger.warning(
                                     f"[OptionsRollover] 抓取 {sym_k} {expiry_k} "
                                     f"{strike_k}{opt_type_k} 報價失敗: {ex}"
                                 )
-                                return key, 0.0, 0.0, 0.0
+                                return key, 0.0, 0.0, 0.0, 0.0
 
                     quote_results = await asyncio.gather(
                         *[_fetch_one_contract_quote(key) for key in unique_contracts]
                     )
                     quote_map = {
-                        key: (mid, bid, ask) for key, mid, bid, ask in quote_results
+                        key: (mid, bid, ask, iv)
+                        for key, mid, bid, ask, iv in quote_results
                     }
 
                     for t in long_option_trades:
@@ -552,8 +627,8 @@ class PortfolioMonitorCog(commands.Cog):
                             t.get("strike"),
                             t.get("opt_type"),
                         )
-                        mid_price, bid, ask = quote_map.get(
-                            contract_key, (0.0, 0.0, 0.0)
+                        mid_price, bid, ask, contract_iv = quote_map.get(
+                            contract_key, (0.0, 0.0, 0.0, 0.0)
                         )
                         if mid_price <= 0:
                             logger.warning(
@@ -577,6 +652,10 @@ class PortfolioMonitorCog(commands.Cog):
                             ask,
                             opt_metrics,
                             opt_r_data,
+                            strike=t.get("strike"),
+                            expiry=t.get("expiry"),
+                            opt_type=t.get("opt_type"),
+                            iv=contract_iv,
                         )
                         user_assets.setdefault(opt_u_id, []).append(option_asset_entry)
 
@@ -589,8 +668,8 @@ class PortfolioMonitorCog(commands.Cog):
                             t.get("strike"),
                             t.get("opt_type"),
                         )
-                        mid_price, _bid, _ask = quote_map.get(
-                            contract_key, (0.0, 0.0, 0.0)
+                        mid_price, _bid, _ask, _iv = quote_map.get(
+                            contract_key, (0.0, 0.0, 0.0, 0.0)
                         )
                         # 報價缺失 (mid_price<=0) 時仍併入清單——
                         # evaluate_covered_call_profit_lock 對 DTE<=1 的

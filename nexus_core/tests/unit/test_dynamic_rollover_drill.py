@@ -478,7 +478,7 @@ async def test_drill_scenario_2c_nvda_structural_breakdown_retreat_to_voo(
     assert ins["sell_ratio"] == 1.0
     assert ins["target_core"] == "VOO"
     assert ins["scenario"] == RolloverScenario.SATELLITE_REBALANCE.value
-    assert "15m 實體破位確認" in ins["reason"]
+    assert "SL-結構失效" in ins["reason"]
 
     # 驗證 Embed 渲染
     embed = create_dynamic_rollover_embed(

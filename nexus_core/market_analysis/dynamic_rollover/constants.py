@@ -30,14 +30,18 @@ _ROLLOVER_RATIO_STANDARD: float = 0.3  # 原持倉獲利一般/虧損時的機�
 _PROFIT_LOCK_PROFIT_PCT_THRESHOLD: float = 0.3  # 判定「獲利豐厚」的持倉獲利率門檻
 _LOW_IVR_UPPER_BOUND: float = 30.0  # 極致不對稱勝率條件之「低 IVR」上限
 _PUT_WALL_PROXIMITY_TOLERANCE: float = 0.01  # 極致不對稱勝率條件之貼近 put_wall 容差
-_PROFIT_UNLOCK_TOLERANCE: float = 0.015  # 現價貼近 call_wall 視為目標區獲利解鎖的容差
+# ⚠️ 注意：_PROFIT_UNLOCK_TOLERANCE 與 _EUPHORIA_SKEW_PERCENTILE 已不再是
+# Scenario 3 (anti_washout.py) 的清倉閘門條件——該角色已由下方「微觀結構出場
+# 決策矩陣」的 TP1/TP2/SL-主力對沖 取代。兩者現僅由 Scenario 6
+# (macro_top_escape_defense.py::_compute_satellite_euphoria_ratio) 獨立引用，
+# 作為其「衛星持倉亢奮比例」複合評分因子的輸入，故不可刪除。
+_PROFIT_UNLOCK_TOLERANCE: float = (
+    0.015  # Scenario 6 專用：現價貼近 call_wall 視為亢奮的容差
+)
 _EUPHORIA_SKEW_PERCENTILE: float = (
-    20.0  # Skew Percentile <= 此值視為極端亢奮 (Euphoria)
+    20.0  # Scenario 6 專用：Skew Percentile <= 此值視為極端亢奮 (Euphoria)
 )
 _IV_BUBBLE_THRESHOLD: float = 80.0  # IVR > 此值視為 IV 泡沫 (擺脫高波洗籌泥淖)
-_EXHAUSTION_SKEW_PERCENTILE: float = 30.0  # 雙重動能衰竭確認制之 Skew 回升門檻
-_EUPHORIA_CAPITAL_SPLIT_PRIMARY: float = 0.9  # Euphoria 雙軌機制主要轉倉資金比例
-_EUPHORIA_CAPITAL_SPLIT_RESIDUAL: float = 0.1  # Euphoria 雙軌機制留存原標的資金比例
 _BUYER_LOCKOUT_IVR_THRESHOLD: float = 50.0  # IVR > 此值時嚴禁買方策略 (規避 Gamma 陷阱)
 _DEFAULT_MAX_ALLOCATION_PCT: float = (
     0.3  # 未設定 max_allocation_pct 時的預設衛星部位上限
@@ -110,31 +114,12 @@ _ENTRY_CANDIDATE_MIN_DTE: int = (
 )
 
 # --- 華爾街資深交易員與機構風控量化常數 ---
-_BEAR_CALL_SPREAD_WING_ATR_MULT: float = (
-    1.5  # Bear Call Spread 保護腳距賣方腳的 15m ATR 寬度倍數
-)
-# 防洗盤動態停損機制 2 的基礎 ATR 墊片倍數，相對於 anchor_base（非現價）：
-# base_stop_loss = anchor_base - _ANTI_WASHOUT_BASE_ATR_MULT * atr_15m。
-# 注意：DTE<=1 的部位不會流經此計算——已由 evaluate_option_dte_tier() 判定為
-# EXPIRATION_SETTLEMENT_ALERT，在 check_satellite_rebalancing_impl 迴圈最前段
-# 直接短路為強制結算保護指令（見 _build_forced_settlement_instruction()），
-# 不再走「擴大停損空間抗單」的舊行為（該行為已於 DTE 三態狀態機重構中移除）。
-_ANTI_WASHOUT_BASE_ATR_MULT: float = 1.5
 # 雙軌出場防守引擎軌道二：極端瞬時停損 (Extreme Tick Breach) 的 ATR 墊片倍數。
-# 刻意獨立於上方 _ANTI_WASHOUT_BASE_ATR_MULT 之外另立常數（數值恰好為 2 倍純屬
-# 巧合，兩者互不疊加）：任何 DTE 皆適用的獨立「極端瞬時停損」防線，產生獨立的
-# extreme_stop_loss 欄位，不套用 LVN 吸附，現價 (SPOT 亦然，不等待 15m 收盤)
-# 貫穿即立即觸發，作為與 OPTIONS 既有即時 tick 熔斷同等級的最後防線。
+# 任何 DTE 皆適用的獨立「極端瞬時停損」防線（黑天鵝/流動性真空最後防線），
+# 產生獨立的 extreme_stop_loss 欄位，不套用 LVN 吸附，現價 (SPOT 亦然，不等待
+# 15m 收盤) 貫穿即立即觸發。微觀結構出場決策矩陣 (SL-結構失效等) 未涵蓋此
+# 黑天鵝情境，故本常數維持不變，獨立於下方矩陣常數之外。
 _ANTI_WASHOUT_EXTREME_ATR_MULT: float = 3.0
-_BEAR_CALL_SPREAD_WING_FALLBACK_PCT: float = (
-    0.05  # atr_15m 無效時，Bear Call Spread Wing 距離退回以賣方履約價的百分比估算
-)
-_TRAILING_STOP_ATR_MULT: float = (
-    0.5  # 極端亢奮區剩餘 10% 部位移動止盈：距離 call_wall 的 15m ATR 倍數
-)
-_TRAILING_STOP_SPOT_FLOOR_PCT: float = (
-    0.98  # 移動止盈價位相對現價的下限保護 (不得低於現價 98%)
-)
 _SKEW_DOWNSIDE_PENALTY_FACTOR: float = (
     0.5  # Skew 偏空 (<50%) 時 EV 計算之最大下行風險懲罰係數
 )
@@ -227,3 +212,42 @@ _INVERSE_HEDGE_RSI_BULLISH_THRESHOLD: float = 50.0  # RSI14 需高於此值視�
 _INVERSE_HEDGE_MIN_ADV_USD: float = (
     5_000_000.0  # 最低日均成交額門檻(美元)，避免推薦流動性過薄的反向ETF
 )
+
+# --- 微觀結構出場決策矩陣 (anti_washout.py 決策矩陣) 具名常數 ---
+# 取代舊版 Euphoria 90/10 二分獲利了結與 1.5x ATR Track 1 停損，Scenario 3
+# (check_satellite_rebalancing) 對既有 SATELLITE 部位的止盈/止損判定改由此組
+# 4 層 SL + 3 層 TP 矩陣決定；Track 2 極端瞬時停損 (_ANTI_WASHOUT_EXTREME_ATR_MULT)
+# 為黑天鵝最後防線，維持不變、不受本矩陣影響。
+_MICROSTRUCTURE_SL_STRUCTURAL_ATR_MULT: float = (
+    0.5  # SL-結構失效：Track 1 停損 = anchor_base - 此值 × ATR_15m（取代舊版 1.5x）
+)
+_MICROSTRUCTURE_SL_NET_GEX_THRESHOLD: float = (
+    0.0  # SL-狀態翻轉：個股 Net GEX <= 此值視為做市商避險邏輯消亡
+)
+_MICROSTRUCTURE_SL_WHALE_PUT_MIN_NOTIONAL_USD: float = (
+    500_000.0  # SL-主力對沖：單筆近平值 PUT BTO 最低權利金名目金額
+)
+_MICROSTRUCTURE_SL_WHALE_PUT_MIN_RATIO: float = (
+    1.5  # SL-主力對沖：單筆 PUT BTO 最低 ratio (Volume/OI)
+)
+_MICROSTRUCTURE_SL_WHALE_PUT_NEAR_ATM_PCT: float = 0.05  # SL-主力對沖：近平值判定容差，沿用 _ENTRY_SUPPORT_WALL_MAX_DISTANCE_PCT 既有 5% 慣例
+_MICROSTRUCTURE_SL_TRAILING_CALLWALL_PROGRESS_PCT: float = (
+    0.5  # SL-動態保本：現價漲幅達距 Call Wall 空間此比例時，停損上移至保本點
+)
+_MICROSTRUCTURE_TP1_CALLWALL_PCT: float = (
+    0.995  # TP1-阻力初探：現價 >= Call Wall 此比例即視為觸及阻力
+)
+_MICROSTRUCTURE_TP1_RATIO: float = 0.5  # TP1 執行比例 (50%)
+_MICROSTRUCTURE_TP2_WALL_BREAK_PCT: float = (
+    0.015  # TP2-空間擴展：穿越 Call Wall 幅度門檻（v1 僅實作此子條件，
+    # 「新舊 Call Wall 轉移點」比對需要跨週期快照，列為後續 fast-follow）
+)
+_MICROSTRUCTURE_TP2_RATIO: float = 0.3  # TP2 執行比例 (30%)
+_MICROSTRUCTURE_TP3_DELTA_THRESHOLD: float = (
+    0.85  # TP3-終局平倉：期權 Delta >= 此值視為趨勢耗竭 (深實值 Pinning 風險)
+)
+_MICROSTRUCTURE_TP3_DTE_THRESHOLD: int = (
+    5  # TP3-終局平倉：DTE <= 此值視為末日 Theta 耗損風險（dte<=1 已由既有
+    # EXPIRATION_SETTLEMENT_ALERT 強制結算保護接管，故此處實際生效區間為 1<dte<=5）
+)
+_MICROSTRUCTURE_TP3_RATIO: float = 0.2  # TP3 執行比例 (20%)

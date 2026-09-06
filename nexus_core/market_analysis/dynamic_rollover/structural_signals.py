@@ -1,10 +1,13 @@
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from . import logger
 from .constants import (
     _HOLDING_DTE_FORCED_SETTLEMENT_THRESHOLD,
     _HOLDING_DTE_LOCKOUT_THRESHOLD,
+    _MICROSTRUCTURE_SL_WHALE_PUT_MIN_NOTIONAL_USD,
+    _MICROSTRUCTURE_SL_WHALE_PUT_MIN_RATIO,
+    _MICROSTRUCTURE_SL_WHALE_PUT_NEAR_ATM_PCT,
     _STRUCTURAL_SIGNALS_CACHE_TTL,
 )
 
@@ -124,6 +127,41 @@ def _scan_gex_walls(
     return support_wall, resistance_wall, support_gex, resistance_gex
 
 
+def _detect_whale_put_bto_block(
+    uoa_list: Optional[List[Dict[str, Any]]], spot: float
+) -> bool:
+    """SL-主力對沖（微觀結構出場決策矩陣）：偵測近平值單筆 PUT BTO 大單壓制。
+
+    取代舊版 `is_whale_sto_block` 的動能代理 (sqz_mom<0 且 skew<-0.3)，改用
+    真實 UOA 名目金額/比率資料。比照既有 `opportunity_cost.py::
+    _confirm_entry_condition4_uoa_dte` 的 UOA 掃描模式（型別+動作+ratio+
+    名目金額+strike 位置門檻），僅方向反轉為 PUT BTO（主力买入 PUT 押注下跌，
+    做市商需即時空頭對沖）。uoa_list 為 None 或空list 時 fail-safe 回傳 False。
+    """
+    if not uoa_list or spot <= 0:
+        return False
+    for entry in uoa_list:
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("type", "")).upper() != "PUT":
+            continue
+        if "BTO" not in str(entry.get("action", "")):
+            continue
+        ratio = float(entry.get("ratio", 0.0) or 0.0)
+        if ratio < _MICROSTRUCTURE_SL_WHALE_PUT_MIN_RATIO:
+            continue
+        notional_value = float(entry.get("notional_value", 0.0) or 0.0)
+        if notional_value < _MICROSTRUCTURE_SL_WHALE_PUT_MIN_NOTIONAL_USD:
+            continue
+        strike = float(entry.get("strike", 0.0) or 0.0)
+        if strike <= 0:
+            continue
+        if abs(strike - spot) / spot > _MICROSTRUCTURE_SL_WHALE_PUT_NEAR_ATM_PCT:
+            continue
+        return True
+    return False
+
+
 async def compute_structural_breakdown_signals_impl(
     engine: Any,
     is_gamma_cliff_confirmed: Any,
@@ -139,6 +177,7 @@ async def compute_structural_breakdown_signals_impl(
     asset_class: str,
     call_wall: float = 0.0,
     hvn: float = 0.0,
+    uoa_list: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[bool, bool, float, float, float, float]:
     """
     共用結構性破位 / 主力空頭封殺訊號計算：GEX 牆掃描 + anchor_base/gamma_cliff_level
@@ -160,13 +199,33 @@ async def compute_structural_breakdown_signals_impl(
     同一標的若同時在自選股與持倉中，watchlist 心跳與持倉轉倉可能對「是否確認
     破位」給出不同判定，此為刻意設計而非缺陷（見下方回歸測試）。
 
+    is_whale_sto_block（微觀結構出場決策矩陣 SL-主力對沖）：改用
+    `_detect_whale_put_bto_block` 的真實 UOA 名目金額/比率判定，取代舊版
+    `(sqz_mom<0) and (skew<-0.3)` 純動能代理。uoa_list 未傳入時等同舊版
+    fail-safe 行為（一律判定為 False，不視為觸發）。
+
     回傳 (is_structural_breakdown, is_whale_sto_block, support_wall, resistance_wall,
           support_gex, resistance_gex)。
     """
     # 記憶化：同一 30 分鐘週期內 Scenario 3/4 對同一標的重複呼叫時直接複用結果，
     # 避免重跑一次完整 GEX 逐履約價掃描。gex_profile_data 以 id() 而非內容雜湊
     # 加入 key（兩個呼叫端在同一輪次餵入的是同一個 dict 物件參照），搭配短 TTL
-    # 將「id 恰好被回收重用」的極低機率風險限制在可忽略範圍內。
+    # 將「id 恰好被回收重用」的極低機率風險限制在可忽略範圍內。uoa_list 內容
+    # (而非 id()) 需另外指紋化——與 gex_profile_data 不同，呼叫端可能對同一
+    # 標的在同一輪次內傳入內容不同的 uoa_list 片段，僅比對物件參照可能誤判快取命中。
+    uoa_fingerprint = tuple(
+        sorted(
+            (
+                str(e.get("type")),
+                str(e.get("action")),
+                round(float(e.get("notional_value", 0.0) or 0.0)),
+                round(float(e.get("ratio", 0.0) or 0.0), 2),
+                e.get("strike"),
+            )
+            for e in (uoa_list or [])
+            if isinstance(e, dict)
+        )
+    )
     cache_key = (
         symbol,
         round(spot, 2),
@@ -180,6 +239,7 @@ async def compute_structural_breakdown_signals_impl(
         round(price_15m_close, 2),
         asset_class,
         id(gex_profile_data) if gex_profile_data is not None else None,
+        uoa_fingerprint,
     )
     now = time.time()
     if cache_key in engine._structural_signals_cache:
@@ -213,7 +273,7 @@ async def compute_structural_breakdown_signals_impl(
                 symbol, gamma_cliff_level
             )
 
-    is_whale_sto_block = (sqz_mom < 0.0) and (skew < -0.3)
+    is_whale_sto_block = _detect_whale_put_bto_block(uoa_list, spot)
 
     result = (
         is_structural_breakdown,

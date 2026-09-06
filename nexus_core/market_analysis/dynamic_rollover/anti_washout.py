@@ -6,24 +6,24 @@ from market_analysis.sentiment.history_storage import get_indicator_percentile
 from . import logger
 from ._shared import format_cash_impact
 from .constants import (
-    _ANTI_WASHOUT_BASE_ATR_MULT,
     _ANTI_WASHOUT_EXTREME_ATR_MULT,
-    _BEAR_CALL_SPREAD_WING_ATR_MULT,
-    _BEAR_CALL_SPREAD_WING_FALLBACK_PCT,
     _BUYER_LOCKOUT_IVR_THRESHOLD,
     _DEFAULT_MAX_ALLOCATION_PCT,
-    _EUPHORIA_CAPITAL_SPLIT_PRIMARY,
-    _EUPHORIA_CAPITAL_SPLIT_RESIDUAL,
-    _EUPHORIA_SKEW_PERCENTILE,
-    _EXHAUSTION_SKEW_PERCENTILE,
     _FALLBACK_TARGET_PRICE_ESTIMATE,
     _FORCED_SETTLEMENT_ROLL_MAX_DTE,
     _FORCED_SETTLEMENT_ROLL_MIN_DTE,
     _HOLDING_DTE_FORCED_SETTLEMENT_THRESHOLD,
     _IV_BUBBLE_THRESHOLD,
-    _PROFIT_UNLOCK_TOLERANCE,
-    _TRAILING_STOP_ATR_MULT,
-    _TRAILING_STOP_SPOT_FLOOR_PCT,
+    _MICROSTRUCTURE_SL_NET_GEX_THRESHOLD,
+    _MICROSTRUCTURE_SL_STRUCTURAL_ATR_MULT,
+    _MICROSTRUCTURE_SL_TRAILING_CALLWALL_PROGRESS_PCT,
+    _MICROSTRUCTURE_TP1_CALLWALL_PCT,
+    _MICROSTRUCTURE_TP1_RATIO,
+    _MICROSTRUCTURE_TP2_RATIO,
+    _MICROSTRUCTURE_TP2_WALL_BREAK_PCT,
+    _MICROSTRUCTURE_TP3_DELTA_THRESHOLD,
+    _MICROSTRUCTURE_TP3_DTE_THRESHOLD,
+    _MICROSTRUCTURE_TP3_RATIO,
 )
 from .models import RolloverInstruction, RolloverScenario
 from .structural_signals import _resolve_canonical_anchor_base, evaluate_option_dte_tier
@@ -38,8 +38,8 @@ def apply_ivr_strategy_overlay_impl(
     """
     IVR 策略防禦與微調。
     NOTE: strategy_override 傳入非空字串時會【完全取代】IVR 鎖定後綴邏輯 (elif，
-    而非疊加)。此設計用於 Bear Call Spread / Trailing Stop 等戰術覆寫場景，
-    該場景下 strategy_override 本身的文字已包含完整防守資訊，故刻意跳過 IVR 後綴。
+    而非疊加)，供未來需要完整自訂策略文字的戰術覆寫場景使用（該場景下
+    strategy_override 本身的文字已包含完整防守資訊，故刻意跳過 IVR 後綴）。
     """
     if strategy_override:
         return strategy_override
@@ -106,9 +106,11 @@ class _AntiWashoutMixin:
         lvn = float(metrics.get("lvn", 0.0))
         hvn = float(metrics.get("hvn", 0.0))
 
-        # 機制 2: 1.5x ATR 防護墊片
+        # SL-結構失效 (微觀結構出場決策矩陣)：0.5x ATR 防護墊片
         if anchor_base > 0:
-            raw_stop_loss = anchor_base - (_ANTI_WASHOUT_BASE_ATR_MULT * atr_15m)
+            raw_stop_loss = anchor_base - (
+                _MICROSTRUCTURE_SL_STRUCTURAL_ATR_MULT * atr_15m
+            )
         else:
             raw_stop_loss = spot * 0.96 if spot > 0 else 0.0
 
@@ -157,6 +159,156 @@ class _AntiWashoutMixin:
             limit_price,
             extreme_stop_loss,
         )
+
+    def _evaluate_microstructure_tp_ladder(
+        self, metrics: dict
+    ) -> Tuple[Optional[str], float, str]:
+        """微觀結構出場決策矩陣 - 止盈分層 (TP1/TP2/TP3)。
+
+        無狀態、每 15 分鐘重新評估、無「TP1 是否已執行過」的持久化狀態，故採
+        「本輪最高已觸發層級」而非累加：優先序 TP3 > TP2 > TP1。回傳
+        (tier_name 或 None, sell_ratio, reason_text)。
+        """
+        spot = float(metrics.get("spot_price", 0.0))
+        call_wall = float(metrics.get("call_wall", 0.0))
+        delta_raw = metrics.get("delta")
+        delta: Optional[float] = float(delta_raw) if delta_raw is not None else None
+        vwap_loss_with_volume = bool(metrics.get("vwap_loss_with_volume", False))
+        dte = int(metrics.get("dte", 99))
+
+        if call_wall <= 0 or spot <= 0:
+            return None, 0.0, ""
+
+        wall_break_pct = (spot - call_wall) / call_wall
+        is_tp1 = spot >= call_wall * _MICROSTRUCTURE_TP1_CALLWALL_PCT
+        is_tp2 = wall_break_pct >= _MICROSTRUCTURE_TP2_WALL_BREAK_PCT
+        is_tp3_delta = (
+            delta is not None and delta >= _MICROSTRUCTURE_TP3_DELTA_THRESHOLD
+        )
+        is_tp3_dte = 0 < dte <= _MICROSTRUCTURE_TP3_DTE_THRESHOLD
+        is_tp3 = is_tp3_delta or vwap_loss_with_volume or is_tp3_dte
+
+        if is_tp3:
+            triggers = []
+            if is_tp3_delta and delta is not None:
+                triggers.append(
+                    f"Delta {delta:.2f} >= {_MICROSTRUCTURE_TP3_DELTA_THRESHOLD}"
+                )
+            if vwap_loss_with_volume:
+                triggers.append("15m VWAP 帶量失守")
+            if is_tp3_dte:
+                triggers.append(f"DTE={dte} <= {_MICROSTRUCTURE_TP3_DTE_THRESHOLD}")
+            return (
+                "TP3",
+                _MICROSTRUCTURE_TP3_RATIO,
+                f"🎯 **TP3-終局平倉**：{' 或 '.join(triggers)}，趨勢動能耗竭，"
+                f"消除非線性 Theta 耗損與做市商 Pinning 釘住風險，執行 "
+                f"{_MICROSTRUCTURE_TP3_RATIO:.0%} 平倉。",
+            )
+        if is_tp2:
+            return (
+                "TP2",
+                _MICROSTRUCTURE_TP2_RATIO,
+                f"🎯 **TP2-空間擴展**：現價已穿越 Call Wall ${call_wall:.2f} 達 "
+                f"{wall_break_pct:+.2%}（>= {_MICROSTRUCTURE_TP2_WALL_BREAK_PCT:.1%}），"
+                f"釋放 Gamma Squeeze 利潤、防範滯留回洗，執行 "
+                f"{_MICROSTRUCTURE_TP2_RATIO:.0%} 平倉。",
+            )
+        if is_tp1:
+            return (
+                "TP1",
+                _MICROSTRUCTURE_TP1_RATIO,
+                f"🎯 **TP1-阻力初探**：現價 ${spot:.2f} 已達 Call Wall ${call_wall:.2f} 的 "
+                f"{_MICROSTRUCTURE_TP1_CALLWALL_PCT:.1%}，做市商多頭避險動能竭盡，"
+                f"執行 {_MICROSTRUCTURE_TP1_RATIO:.0%} 平倉。",
+            )
+        return None, 0.0, ""
+
+    def _evaluate_microstructure_sl_ladder(
+        self,
+        metrics: dict,
+        anchor_base: float,
+        stop_loss: float,
+        asset_class: str,
+    ) -> Tuple[Optional[str], float, str, Optional[float]]:
+        """微觀結構出場決策矩陣 - 止損分層 (由硬到軟依序判定)：
+        SL-結構失效 > SL-狀態翻轉 > SL-主力對沖 > SL-動態保本。
+
+        回傳 (tier_name 或 None, sell_ratio, reason_text, new_stop_level)。
+        new_stop_level 僅 SL-動態保本 (HOLD，停損上移至保本點) 會有值。
+        """
+        spot = float(metrics.get("spot_price", 0.0))
+        price_15m_close = float(metrics.get("price_15m_close", spot))
+        call_wall = float(metrics.get("call_wall", 0.0))
+        net_gex_raw = metrics.get("net_gex")
+        net_gex = float(net_gex_raw) if net_gex_raw is not None else None
+        is_whale_put_block = bool(metrics.get("is_whale_put_block", False))
+        avg_cost = float(metrics.get("avg_cost", 0.0))
+
+        # 1. SL-結構失效：OPTIONS 現價即時貫穿 / SPOT 15m 實體收盤跌破
+        is_structural_break = (
+            (spot > 0 and spot < stop_loss)
+            if asset_class == "OPTIONS"
+            else (price_15m_close > 0 and price_15m_close < stop_loss)
+        ) and stop_loss > 0
+        if is_structural_break:
+            return (
+                "SL_STRUCTURAL",
+                1.0,
+                f"🚨 **SL-結構失效**："
+                f"{'現價即時貫穿' if asset_class == 'OPTIONS' else '15m 實體收盤跌破'} "
+                f"防守線 (${stop_loss:.2f} = 錨點 ${anchor_base:.2f} - "
+                f"{_MICROSTRUCTURE_SL_STRUCTURAL_ATR_MULT}×ATR_15m)，跌入負 Gamma 區，"
+                "做市商加速拋售，強制 100% 平倉。",
+                None,
+            )
+
+        # 2. SL-狀態翻轉：個股 Net GEX 翻轉為負。net_gex 為 None（GEX 數據缺失/
+        # 未曾抓取，而非「已抓到且確認 <= 0」）時一律 fail-safe 不觸發，避免將
+        # 「資料缺失」誤判為「已確認負 Gamma」而對每一筆無 GEX 資料的部位強制清倉。
+        if net_gex is not None and net_gex <= _MICROSTRUCTURE_SL_NET_GEX_THRESHOLD:
+            return (
+                "SL_REGIME_FLIP",
+                1.0,
+                f"🚨 **SL-狀態翻轉**：個股 Net GEX 已翻轉為 {net_gex:+,.0f}"
+                f"（<= {_MICROSTRUCTURE_SL_NET_GEX_THRESHOLD:.0f}），"
+                "全鏈市場狀態轉變，做市商避險邏輯消亡，強制 100% 平倉。",
+                None,
+            )
+
+        # 3. SL-主力對沖：近平值單筆 PUT BTO 大單壓制 (真實 UOA 判定，見
+        # structural_signals.py::_detect_whale_put_bto_block)
+        if is_whale_put_block:
+            return (
+                "SL_WHALE_PUT",
+                1.0,
+                "🚨 **SL-主力對沖**：偵測到近平值單筆 PUT BTO 大單"
+                "（權利金 >= $500k 且 Vol/OI >= 1.5x），機構級大單壓制，"
+                "做市商產生即時做空對沖，強制 100% 平倉。",
+                None,
+            )
+
+        # 4. SL-動態保本：現價漲幅達距 Call Wall 空間之 50%，停損上移至保本點
+        if call_wall > anchor_base > 0 and spot > 0:
+            progress = (spot - anchor_base) / (call_wall - anchor_base)
+            if progress >= _MICROSTRUCTURE_SL_TRAILING_CALLWALL_PROGRESS_PCT:
+                new_stop = anchor_base if avg_cost <= 0 else max(avg_cost, anchor_base)
+                approx_note = (
+                    "（期權部位無單筆成本基礎資料，以結構錨點近似保本點）"
+                    if avg_cost <= 0
+                    else ""
+                )
+                return (
+                    "SL_TRAILING_BREAKEVEN",
+                    0.0,
+                    f"🛡️ **SL-動態保本**：現價距 Call Wall 空間已達 {progress:.0%}"
+                    f"（>= {_MICROSTRUCTURE_SL_TRAILING_CALLWALL_PROGRESS_PCT:.0%}），"
+                    f"停損上移至保本點 ${new_stop:.2f}{approx_note}，"
+                    "鎖定基礎成本，消除本金承險敞口。",
+                    new_stop,
+                )
+
+        return None, 0.0, "", None
 
     def _resolve_active_order_defense(
         self,
@@ -269,66 +421,69 @@ class _AntiWashoutMixin:
         requested_action: str,
         target: str,
         asset_class: str,
-        is_take_profit: bool,
+        tp_tier_result: Tuple[Optional[str], float, str],
+        sl_tier_result: Tuple[Optional[str], float, str, Optional[float]],
         stop_loss: float,
         anchor_base: float,
         extreme_stop_loss: float = 0.0,
-    ) -> Tuple[str, str, str, str, bool]:
+    ) -> Tuple[str, str, str, str, bool, float, Optional[str]]:
         """
-        灰階思考量化裁決 (決策矩陣 - 雙軌裁決機制 Dual-Track Exit)。
+        微觀結構出場決策矩陣 - 統一裁決。優先序：
+        TP 分層 (TP1/TP2/TP3) > Track 2 極端瞬時停損 (黑天鵝最後防線，不受本
+        矩陣影響) > OPTIONS IV 驟降快速出場 (Vega/IV crush，矩陣未涵蓋的獨立
+        保護) > SL 分層 (SL-結構失效/SL-狀態翻轉/SL-主力對沖 一律 100% 平倉；
+        SL-動態保本為 HOLD + 停損上移保本點) > 常規配置超額 REDUCE > HOLD。
+
         回傳 (final_action, final_target, options_strategy, system_conflict_note,
-        is_extreme_tick_breach)。is_extreme_tick_breach 供呼叫端判斷是否需要將
-        呈現層升級為最高急迫性樣式（見 rollover_embeds.py 的立即人工執行標記）。
+        is_extreme_tick_breach, sell_ratio, fired_tier)。is_extreme_tick_breach
+        供呼叫端判斷是否需要將呈現層升級為最高急迫性樣式（見 rollover_embeds.py
+        的立即人工執行標記）。sell_ratio 為本次裁決實際決定的執行比例（TP1/TP2/
+        TP3 為各自的部分比例，其餘 LIQUIDATE 分支恆為 1.0，SL-動態保本/HOLD 恆為
+        0.0；REDUCE 分支的實際比例由呼叫端的常規配置超額運算另行決定，此處
+        僅填入佔位值 0.0，不影響呼叫端行為）。fired_tier 為純附加的分層識別碼
+        (供 RolloverInstruction.exit_tier 記錄用途，不影響任何裁決邏輯)。
         """
         spot = float(metrics.get("spot_price", 0.0))
-        price_15m_close = float(metrics.get("price_15m_close", spot))
-        sqz_mom = float(metrics.get("sqz_mom", 0.0))
+
+        tp_tier, tp_ratio, tp_reason = tp_tier_result
+        sl_tier, sl_ratio, sl_reason, sl_new_stop = sl_tier_result
 
         final_target = target if target else "VOO"
         final_action = requested_action
+        sell_ratio = 0.0
         system_conflict_note = ""
 
         ivr_drop = float(metrics.get("ivr_drop", metrics.get("ivr_change", 0.0)))
-        is_options_fast_exit = asset_class == "OPTIONS" and (
-            (spot < stop_loss if (stop_loss > 0 and spot > 0) else False)
-            or (ivr_drop >= 20.0)
-        )
+        is_ivr_fast_exit = asset_class == "OPTIONS" and ivr_drop >= 20.0
 
         # 軌道二：極端瞬時停損 (Extreme Tick Breach)。無論 SPOT 或 OPTIONS，
-        # 現價貫穿即立即觸發，無視 15m 實體收盤等待 (SPOT 常態停損仍維持
-        # 15m 收盤確認，僅此極端檔位額外賦予 SPOT 即時熔斷能力；OPTIONS
-        # 本已有即時熔斷，此檔位對其而言是純粹的向下相容 backstop)。優先權
-        # 高於 is_options_fast_exit/is_15m_close_broken，僅次於獲利了結——
-        # `not is_take_profit` 守衛是這個「僅次於」的必要條件，而非裝飾：
-        # 若省略，即使 is_take_profit 分支才是實際決定 final_action/敘事的
-        # 分支，這裡仍會回傳原始的價格穿透判定，導致下游 (呼叫端組裝
-        # extreme_breach_detail_block、rollover_embeds.py 的立即人工執行紅色
-        # 急迫樣式覆蓋) 誤把一則平靜的「🎯 獲利解鎖達成」通知，套上「🆘 立即
-        # 人工執行」的緊急標題與極端熔斷詳情欄位——兩者敘事互相矛盾。真實
-        # 案例：TSLA 現價同時站上 Call Wall (獲利解鎖) 且跌破以 GEX Support
-        # Wall 算出的極端熔斷線，過去在此處會回傳 True，讓 embed 呈現「獲利
-        # 了結」內文配「立即人工執行」急迫標題的錯亂訊息。
-        is_extreme_tick_breach = not is_take_profit and (
+        # 現價貫穿即立即觸發，無視 15m 實體收盤等待。優先權高於 IV 驟降快速
+        # 出場/SL 分層，僅次於 TP 分層獲利了結——`not tp_tier` 守衛是這個
+        # 「僅次於」的必要條件，而非裝飾：若省略，即使 TP 分支才是實際決定
+        # final_action/敘事的分支，這裡仍會回傳原始的價格穿透判定，導致下游
+        # (呼叫端組裝 extreme_breach_detail_block、rollover_embeds.py 的立即
+        # 人工執行紅色急迫樣式覆蓋) 誤把一則平靜的「🎯 獲利解鎖達成」通知，
+        # 套上「🆘 立即人工執行」的緊急標題與極端熔斷詳情欄位——兩者敘事互相
+        # 矛盾。真實案例：TSLA 現價同時站上 Call Wall (獲利解鎖) 且跌破以 GEX
+        # Support Wall 算出的極端熔斷線，過去在此處會回傳 True，讓 embed 呈現
+        # 「獲利了結」內文配「立即人工執行」急迫標題的錯亂訊息。
+        is_extreme_tick_breach = not tp_tier and (
             spot < extreme_stop_loss if (extreme_stop_loss > 0 and spot > 0) else False
         )
 
-        # 機制 3: 15 分鐘實體 K 線過濾 (非瞬時破位，針對現貨 SPOT)
-        is_15m_close_broken = (
-            (price_15m_close < stop_loss)
-            if (stop_loss > 0 and price_15m_close > 0)
-            else False
-        )
+        fired_tier: Optional[str] = None
 
-        if is_take_profit:
+        if tp_tier:
             final_action = "LIQUIDATE"
             final_target = target
-            system_conflict_note = (
-                "🎯 **獲利解鎖達成**：觸及阻力目標位，按計劃獲利了結轉倉。"
-            )
-            options_strategy = f"100% LIQUIDATE (轉入 {final_target})"
+            sell_ratio = tp_ratio
+            system_conflict_note = tp_reason
+            options_strategy = f"{tp_ratio:.0%} LIQUIDATE (轉入 {final_target})"
+            fired_tier = tp_tier
         elif is_extreme_tick_breach:
             final_action = "LIQUIDATE"
             final_target = target if target else "VOO"
+            sell_ratio = 1.0
             system_conflict_note = (
                 f"🆘 **極端瞬時停損觸發**：標的現價 (${spot:.2f}) 貫穿極端防守位 "
                 f"(${extreme_stop_loss:.2f} = ${anchor_base:.2f} - "
@@ -337,34 +492,48 @@ class _AntiWashoutMixin:
                 "最後防線，阻斷突發黑天鵝與流動性真空滑步）。"
             )
             options_strategy = f"100% LIQUIDATE / STC (極端瞬時停損轉入 {final_target})"
-        elif is_options_fast_exit:
+            fired_tier = "EXTREME_TICK_BREACH"
+        elif is_ivr_fast_exit:
             final_action = "LIQUIDATE"
             final_target = target if target else "VOO"
+            sell_ratio = 1.0
             system_conflict_note = (
-                f"🚨 **期權雙軌快速通道觸發**：標的現價 (${spot:.2f}) 貫穿防守位 (${stop_loss:.2f}) 或 IV 驟降 (>20%)，"
-                f"啟動 3-5m 快速通道平倉 (拒絕等待 15m 實體收盤以規避 Delta/Vega 雙殺)。"
+                "🚨 **期權 IV 驟降快速出場**：IV 較前次觀測驟降 (>20%)，"
+                "啟動 3-5m 快速通道平倉 (拒絕等待 15m 實體收盤以規避 Delta/Vega 雙殺)。"
             )
             options_strategy = f"100% LIQUIDATE / STC (快速平倉轉入 {final_target})"
-        elif is_15m_close_broken:
+            fired_tier = "IVR_FAST_EXIT"
+        elif sl_tier in ("SL_STRUCTURAL", "SL_REGIME_FLIP", "SL_WHALE_PUT"):
             final_action = "LIQUIDATE"
             final_target = target if target else "VOO"
-            system_conflict_note = (
-                f"🚨 **15m 實體破位確認**：15 分鐘實體收盤價 (${price_15m_close:.2f}) 跌破防守線 (${stop_loss:.2f})，"
-                f"做市商底牆徹底崩塌，負 Gamma 助跌啟動，強制啟動 100% 轉入 {final_target} 防禦。"
-            )
+            sell_ratio = 1.0
+            system_conflict_note = sl_reason
             options_strategy = f"100% LIQUIDATE (轉入 {final_target})"
+            fired_tier = sl_tier
+        elif sl_tier == "SL_TRAILING_BREAKEVEN":
+            final_action = "HOLD"
+            final_target = symbol
+            sell_ratio = 0.0
+            system_conflict_note = sl_reason
+            options_strategy = (
+                f"移動止盈 (保本) @ ${sl_new_stop:.2f}"
+                if sl_new_stop is not None
+                else "移動止盈 (保本)"
+            )
+            fired_tier = sl_tier
         elif requested_action == "REDUCE":
             final_action = "REDUCE"
             final_target = target
             system_conflict_note = "⚖️ **持倉比例再平衡**：衛星部位超過風險上限，執行常規部分減倉以平衡資產權重。"
             options_strategy = "REDUCE (部分獲利了結/降低持倉比重)"
         else:
-            # 未跌破防守線 -> 一律維持 HOLD
+            # 未觸發任何 SL/TP 分層 -> 一律維持 HOLD
             final_action = "HOLD"
             final_target = symbol
+            sell_ratio = 0.0
             system_conflict_note = (
                 f"🛡️ **灰階量化裁決**：${anchor_base:.2f} 正 Gamma 護城河完好，"
-                f"動能（SQZ MOM {sqz_mom:+.2f}）維持多頭，未觸發轉倉條件，維持現狀續抱。"
+                "未觸發微觀結構出場決策矩陣任何分層，維持現狀續抱。"
             )
             options_strategy = "HOLD (維持現狀續抱)"
 
@@ -374,6 +543,8 @@ class _AntiWashoutMixin:
             options_strategy,
             system_conflict_note,
             is_extreme_tick_breach,
+            sell_ratio,
+            fired_tier,
         )
 
     async def _resolve_target_reference_price(self, target_core_name: str) -> float:
@@ -456,7 +627,6 @@ class _AntiWashoutMixin:
         target: str = "VOO",
         strategy_override: str = "",
         asset_class: str = "SPOT",
-        is_take_profit: bool = False,
         active_orders: Optional[list[dict]] = None,
         position_shares: float = 0.0,
         current_value: float = 0.0,
@@ -492,19 +662,27 @@ class _AntiWashoutMixin:
             symbol, active_orders, stop_loss, limit_price
         )
 
+        tp_tier_result = self._evaluate_microstructure_tp_ladder(metrics)
+        sl_tier_result = self._evaluate_microstructure_sl_ladder(
+            metrics, anchor_base, stop_loss, asset_class
+        )
+
         (
             final_action,
             final_target,
             options_strategy,
             system_conflict_note,
             is_extreme_tick_breach,
+            sell_ratio,
+            fired_tier,
         ) = self._apply_decision_matrix(
             symbol=symbol,
             metrics=metrics,
             requested_action=requested_action,
             target=target,
             asset_class=asset_class,
-            is_take_profit=is_take_profit,
+            tp_tier_result=tp_tier_result,
+            sl_tier_result=sl_tier_result,
             stop_loss=stop_loss,
             anchor_base=anchor_base,
             extreme_stop_loss=extreme_stop_loss,
@@ -613,7 +791,7 @@ class _AntiWashoutMixin:
    - 轉倉決策: **{final_action} ({"維持現狀續抱" if final_action == "HOLD" else "轉入 " + final_target})**
    - 微結構判定: GEX Wall ${anchor_base:.2f} 護城河完好，阻力天花板 ${effective_res_wall:.2f}
    - 防守機制: {order_defense_str}
-     *(避開真空區，依據公式：`Stop = ${anchor_base:.2f} - (1.5 × ATR_15m) = ${stop_loss_str}`)*
+     *(避開真空區，依據公式：`Stop = ${anchor_base:.2f} - ({_MICROSTRUCTURE_SL_STRUCTURAL_ATR_MULT} × ATR_15m) = ${stop_loss_str}`)*
    - 出場裁決軌道: {dual_track_note}
    - {extreme_stop_note}
 """.strip()
@@ -661,6 +839,8 @@ class _AntiWashoutMixin:
         return {
             "final_action": final_action,
             "final_target": final_target,
+            "sell_ratio": sell_ratio,
+            "exit_tier": fired_tier,
             "options_strategy": options_strategy,
             "markdown_report": markdown_report.strip(),
             "trigger_condition_report": trigger_condition_report,
@@ -676,52 +856,6 @@ class _AntiWashoutMixin:
             # 的委託價，兩者絕不可混用。
             "limit_price": target_entry_price,
         }
-
-
-async def _build_euphoria_primary_liquidation_instruction(
-    engine: Any,
-    symbol: str,
-    metrics: dict,
-    asset_class: str,
-    quantity: float,
-    current_value: float,
-    user_orders: list,
-    next_target: str,
-) -> RolloverInstruction:
-    """極端亢奮區雙軌機制 (Bear Call Spread 反向收租 / Trailing Stop 移動止盈)
-    共用的 90% 主要轉倉腳：兩個分支對這 90% 部位的處理完全相同 (LIQUIDATE 90%
-    進 next_target)，僅剩餘 10% 殘留腳的後續處理不同，故僅此 90% 部分可安全
-    抽取為共用函式，避免兩處分支各自維護逐字相同的 34 行區塊。"""
-    report_90 = await engine._generate_rule_based_rebalance_report(
-        symbol,
-        metrics,
-        requested_action="LIQUIDATE",
-        target=next_target,
-        asset_class=asset_class,
-        is_take_profit=True,
-        active_orders=user_orders,
-        position_shares=quantity,
-        current_value=current_value,
-    )
-    return {
-        "symbol": symbol,
-        "action": report_90["final_action"],
-        "sell_ratio": _EUPHORIA_CAPITAL_SPLIT_PRIMARY
-        if report_90["final_action"] == "LIQUIDATE"
-        else (0.5 if report_90["final_action"] == "REDUCE" else 0.0),
-        "target_core": report_90["final_target"],
-        "reason": report_90["markdown_report"],
-        "suggested_strategy": report_90["options_strategy"],
-        "scenario": RolloverScenario.SATELLITE_REBALANCE.value,
-        "is_manual_override_required": False,
-        "trigger_condition_text": report_90["trigger_condition_report"],
-        "cash_impact": report_90["cash_impact"],
-        "limit_price": report_90["limit_price"],
-        "extreme_stop_loss": report_90.get("extreme_stop_loss"),
-        "is_extreme_tick_breach": report_90.get("is_extreme_tick_breach", False),
-        "extreme_breach_detail_block": report_90.get("extreme_breach_detail_block"),
-        "instrument_type": asset_class,
-    }
 
 
 def _net_and_build_rebalance_instruction(
@@ -766,6 +900,7 @@ def _net_and_build_rebalance_instruction(
         "is_extreme_tick_breach": report.get("is_extreme_tick_breach", False),
         "extreme_breach_detail_block": report.get("extreme_breach_detail_block"),
         "instrument_type": asset_class,
+        "exit_tier": report.get("exit_tier"),
     }
 
 
@@ -909,16 +1044,30 @@ async def check_satellite_rebalancing_impl(
             )
 
             gex_profile_data = asset.get("gex_profile_data", {})
+            uoa_list = asset.get("uoa", []) or []
+            # None（而非 0.0）代表 GEX 數據缺失/未曾抓取，供 SL-狀態翻轉判定
+            # 明確區分「資料缺失」與「已抓到且確認 Net GEX <= 0」。
+            net_gex_raw = (
+                gex_profile_data.get("net_gex")
+                if isinstance(gex_profile_data, dict)
+                else None
+            )
+            net_gex: Optional[float] = (
+                float(net_gex_raw) if net_gex_raw is not None else None
+            )
+            avg_cost: float = float(asset.get("avg_cost", 0.0))
+            delta_val = asset.get("delta")
+            vwap_loss_with_volume: bool = bool(
+                asset.get("vwap_loss_with_volume", False)
+            )
 
             # ----------------------------------------------------
-            # 條件一：現有持倉結構劣化（護衛牆破位 / 主力物理蓋頂 / 目標區獲利解鎖完成）
+            # 微觀結構出場決策矩陣：SL-主力對沖訊號 (真實 UOA PUT BTO 判定，取代
+            # 舊版 sqz_mom/skew 動能代理) 與 GEX 牆掃描，供錨點解析與矩陣共用。
             # ----------------------------------------------------
-            # 1. 做市商 GEX 防線失守 (共用 _compute_structural_breakdown_signals，
-            #    與 evaluate_margin_defense/_evaluate_structural_no_edge 同一份門檻邏輯)
-            # 2. 主力巨量 STO 實體蓋頂
             (
-                is_structural_breakdown,
-                is_whale_sto_block,
+                _legacy_structural_breakdown,
+                is_whale_put_block,
                 support_wall,
                 resistance_wall,
                 support_gex,
@@ -936,6 +1085,7 @@ async def check_satellite_rebalancing_impl(
                 asset_class=asset_class,
                 call_wall=call_wall,
                 hvn=hvn,
+                uoa_list=uoa_list,
             )
 
             metrics: Dict[str, Any] = {
@@ -963,214 +1113,64 @@ async def check_satellite_rebalancing_impl(
                 "ask": float(asset.get("ask", 0.0)),
                 "acquired_at": acquired_at,
                 "iv_term_structure_status": iv_term_structure_status,
+                "net_gex": net_gex,
+                "avg_cost": avg_cost,
+                "delta": delta_val,
+                "vwap_loss_with_volume": vwap_loss_with_volume,
+                "is_whale_put_block": is_whale_put_block,
             }
 
-            # 3. 目標區獲利解鎖完成
-            is_profit_unlocked = (call_wall > 0 and spot > 0) and (
-                spot >= call_wall
-                or abs(spot - call_wall) / call_wall < _PROFIT_UNLOCK_TOLERANCE
+            # 微觀結構出場決策矩陣：TP 分層 (TP1/TP2/TP3) 與 SL 分層 (SL-結構
+            # 失效/SL-狀態翻轉/SL-主力對沖/SL-動態保本)。兩者皆為純函式，
+            # 於此處先行評估以決定是否需要進入本輪特殊評估路徑；
+            # _generate_rule_based_rebalance_report 內部會再次評估以產生最終
+            # 指令 (與既有 is_structural_breakdown 於外層/_apply_decision_matrix
+            # 內層雙重確認的既有架構模式一致)。
+            tp_tier, _tp_ratio, _tp_reason = engine._evaluate_microstructure_tp_ladder(
+                metrics
+            )
+            anchor_base_gate, _res_wall_gate = engine._correct_wall_topology(metrics)
+            stop_loss_gate, _limit_gate, _extreme_gate = (
+                engine._compute_anti_washout_stop(anchor_base_gate, metrics)
+            )
+            sl_tier, _sl_ratio, _sl_reason, _sl_new_stop = (
+                engine._evaluate_microstructure_sl_ladder(
+                    metrics, anchor_base_gate, stop_loss_gate, asset_class
+                )
             )
 
-            # 目標解鎖與極端亢奮 (Euphoria)
-            is_euphoria_skew = skew < 0 and skew_percentile <= _EUPHORIA_SKEW_PERCENTILE
-            is_euphoria = is_profit_unlocked or is_euphoria_skew
-
-            # 條件三 (部分)：擺脫高波洗籌泥淖 (IV Crush 威脅)
+            # IV 泡沫防護：擺脫高波洗籌泥淖 (IV Crush 威脅)，矩陣未涵蓋的獨立保護
             is_iv_bubble = ivr > _IV_BUBBLE_THRESHOLD
 
-            if (
-                is_structural_breakdown
-                or is_whale_sto_block
-                or is_euphoria
-                or is_iv_bubble
-            ):
+            if tp_tier is not None or sl_tier is not None or is_iv_bubble:
                 satellite_symbols = {
                     str(a.get("symbol", "")).upper()
                     for a in portfolio_assets
                     if a.get("asset_class") == "SATELLITE"
                 }
-                # 機構風控鐵律：若為結構破位或空頭封殺，強制撤退回防核心資產 (VOO)，
-                # 嚴禁在停損時又去追逐另一檔高波動衛星標的 (避免 Hot Potato Rotation 擴大虧損)；
-                # 僅在極端亢奮獲利了結 (Euphoria) 或主動輪動時才尋找下一個高 EV 自選標的。
-                if is_structural_breakdown or is_whale_sto_block:
-                    next_target = "VOO"
-                else:
+                # 機構風控鐵律：SL 分層 (結構破位/狀態翻轉/主力對沖) 強制撤退回防
+                # 核心資產 (VOO)，嚴禁在停損時又去追逐另一檔高波動衛星標的
+                # (避免 Hot Potato Rotation 擴大虧損)；僅 TP 分層 (獲利了結
+                # 輪動) 才尋找下一個高 EV 自選標的。
+                if tp_tier is not None:
                     next_target = engine._find_best_rollover_target(
                         user_id, exclude_symbols=satellite_symbols
                     )
+                else:
+                    next_target = "VOO"
 
-                if is_euphoria:
-                    user_ctx = get_full_user_context(user_id)
-                    # 雙重動能衰竭確認制：
-                    # 1. 15m SQZ MOM 由正轉負 (動能拐頭)
-                    # 2. Skew 脫離極端狂熱 (Percentile 回升至 30% 以上)
-                    is_exhaustion_confirmed = (sqz_mom < 0.0) and (
-                        skew_percentile >= _EXHAUSTION_SKEW_PERCENTILE
-                    )
-                    # DTE 三態狀態機：開立全新 Bear Call Spread 屬於「開立全新
-                    # 選擇權結構」(NEW_OPPORTUNITY)，1<dte<7 的 LOCKOUT_SKIP 需
-                    # 封鎖此分支，落入下方 Trailing Stop 分支 (純風控延伸，非
-                    # 新開倉，不受影響)。SPOT 持倉 dte 恆為 99，不受影響。
-                    is_new_entry_allowed = (
-                        evaluate_option_dte_tier(dte, "NEW_OPPORTUNITY")
-                        == "NORMAL_EXECUTION"
-                    )
-
-                    if (
-                        user_ctx.can_trade_spreads
-                        and is_exhaustion_confirmed
-                        and is_new_entry_allowed
-                    ):
-                        # 90/10 權限資金拆分 - 衰竭確認，建立 Bear Call Spread 反向收租
-                        # 90% 轉入新標的
-                        rebalance_instructions.append(
-                            await _build_euphoria_primary_liquidation_instruction(
-                                engine,
-                                symbol,
-                                metrics,
-                                asset_class,
-                                quantity,
-                                current_value,
-                                user_orders,
-                                next_target,
-                            )
-                        )
-                        # 10% 留存原標的做 Bear Call Spread 反向收租 (定義完整 Long Wing)
-                        short_strike = round(call_wall * 1.02, 2)
-                        wing_buffer = (
-                            _BEAR_CALL_SPREAD_WING_ATR_MULT * atr_15m
-                            if atr_15m > 0
-                            else short_strike * _BEAR_CALL_SPREAD_WING_FALLBACK_PCT
-                        )
-                        long_strike = round(short_strike + wing_buffer, 2)
-                        spread_override_str = f"Bear Call Spread (${short_strike:.2f} Short / ${long_strike:.2f} Long Wing, 30-45 DTE)"
-                        report_10 = await engine._generate_rule_based_rebalance_report(
-                            symbol,
-                            metrics,
-                            requested_action="LIQUIDATE",
-                            target=symbol,
-                            strategy_override=spread_override_str,
-                            asset_class=asset_class,
-                            is_take_profit=True,
-                            active_orders=user_orders,
-                            position_shares=quantity,
-                            current_value=current_value,
-                        )
-                        rebalance_instructions.append(
-                            {
-                                "symbol": symbol,
-                                "action": "REDUCE"
-                                if report_10["final_action"] in ["LIQUIDATE", "REDUCE"]
-                                else "HOLD",
-                                "sell_ratio": _EUPHORIA_CAPITAL_SPLIT_RESIDUAL
-                                if report_10["final_action"] in ["LIQUIDATE", "REDUCE"]
-                                else 0.0,
-                                "target_core": symbol,
-                                "reason": report_10["markdown_report"]
-                                + "\n⚠️ **【動能衰竭確認】SQZ MOM 拐頭且 Skew 降溫，觸發 Bear Call Spread 反向收租 (手動防滑價)**"
-                                + engine._maybe_append_tax_risk_note(
-                                    is_forced_settlement=False,
-                                    is_same_symbol_reentry=True,
-                                ),
-                                "suggested_strategy": report_10["options_strategy"],
-                                "is_manual_override_required": True,
-                                "scenario": RolloverScenario.SATELLITE_REBALANCE.value,
-                                "trigger_condition_text": report_10[
-                                    "trigger_condition_report"
-                                ],
-                                "cash_impact": report_10["cash_impact"],
-                                "limit_price": short_strike,
-                                "extreme_stop_loss": report_10.get("extreme_stop_loss"),
-                                "is_extreme_tick_breach": report_10.get(
-                                    "is_extreme_tick_breach", False
-                                ),
-                                "extreme_breach_detail_block": report_10.get(
-                                    "extreme_breach_detail_block"
-                                ),
-                                "instrument_type": asset_class,
-                            }
-                        )
-                        continue
-                    elif user_ctx.can_trade_spreads and not is_exhaustion_confirmed:
-                        # 未衰竭 (多頭動能強勁或 Skew 極端狂熱)，嚴禁做空以防 Gamma Squeeze！
-                        # 90% 獲利了結轉入新標的，剩餘 10% 啟動 Trailing Stop 移動止盈
-                        trailing_stop_level = round(
-                            max(
-                                call_wall - (_TRAILING_STOP_ATR_MULT * atr_15m),
-                                spot * _TRAILING_STOP_SPOT_FLOOR_PCT,
-                            ),
-                            2,
-                        )
-                        rebalance_instructions.append(
-                            await _build_euphoria_primary_liquidation_instruction(
-                                engine,
-                                symbol,
-                                metrics,
-                                asset_class,
-                                quantity,
-                                current_value,
-                                user_orders,
-                                next_target,
-                            )
-                        )
-                        report_10 = await engine._generate_rule_based_rebalance_report(
-                            symbol,
-                            metrics,
-                            requested_action="HOLD",
-                            target=symbol,
-                            strategy_override=f"Trailing Stop 移動止盈 (防守位: ${trailing_stop_level:.2f})",
-                            asset_class=asset_class,
-                            is_take_profit=False,
-                            active_orders=user_orders,
-                            position_shares=quantity,
-                            current_value=current_value,
-                        )
-                        rebalance_instructions.append(
-                            {
-                                "symbol": symbol,
-                                "action": "HOLD",
-                                "sell_ratio": 0.0,
-                                "target_core": symbol,
-                                "reason": report_10["markdown_report"]
-                                + f"\n🚀 **【動能延續・移動止盈】**突破 Call Wall 但動能未衰竭 (SQZ MOM {sqz_mom:+.2f} / Skew {skew_percentile:.0f}%)，嚴禁以身擋車做空！剩餘 10% 部位啟動 Trailing Stop (${trailing_stop_level:.2f}) 讓獲利奔馳。",
-                                "suggested_strategy": report_10["options_strategy"],
-                                "is_manual_override_required": False,
-                                "scenario": RolloverScenario.SATELLITE_REBALANCE.value,
-                                "trigger_condition_text": report_10[
-                                    "trigger_condition_report"
-                                ],
-                                "cash_impact": report_10["cash_impact"],
-                                "limit_price": trailing_stop_level,
-                                "extreme_stop_loss": report_10.get("extreme_stop_loss"),
-                                "is_extreme_tick_breach": report_10.get(
-                                    "is_extreme_tick_breach", False
-                                ),
-                                "extreme_breach_detail_block": report_10.get(
-                                    "extreme_breach_detail_block"
-                                ),
-                                "instrument_type": asset_class,
-                            }
-                        )
-                        continue
-
-                # 一般清倉 / 灰階判定
                 report = await engine._generate_rule_based_rebalance_report(
                     symbol,
                     metrics,
-                    requested_action="LIQUIDATE" if is_structural_breakdown else "HOLD",
+                    requested_action="HOLD",
                     target=next_target,
                     asset_class=asset_class,
-                    is_take_profit=is_euphoria,
                     active_orders=user_orders,
                     position_shares=quantity,
                     current_value=current_value,
                 )
 
-                default_sell_ratio = (
-                    1.0
-                    if report["final_action"] == "LIQUIDATE"
-                    else (0.5 if report["final_action"] == "REDUCE" else 0.0)
-                )
+                default_sell_ratio = report.get("sell_ratio", 0.0) or 0.0
                 rebalance_instructions.append(
                     _net_and_build_rebalance_instruction(
                         engine,
