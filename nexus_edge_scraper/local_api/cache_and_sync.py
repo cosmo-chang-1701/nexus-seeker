@@ -136,5 +136,6 @@ async def sys_health() -> dict[str, Any]:
         "disk_percent": disk.percent,
         "disk_free_gb": disk.free / (1024**3),
         "swap_percent": swap.percent,
+        "swap_total_mb": swap.total / (1024**2),
         "battery": battery_data,
     }

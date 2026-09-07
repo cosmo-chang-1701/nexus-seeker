@@ -57,6 +57,26 @@ API_KEY = get_env_or_secret("API_KEY", None)
 TUNNEL_URL = get_env_or_secret("TUNNEL_URL", "")
 FINNHUB_API_KEY = get_env_or_secret("FINNHUB_API_KEY", "")
 
+# 記憶體與 Swap 緊急警報門檻 (百分比)
+try:
+    MEMORY_ALERT_THRESHOLD = float(get_env_or_secret("MEMORY_ALERT_THRESHOLD", 90.0))
+except (ValueError, TypeError):
+    MEMORY_ALERT_THRESHOLD = 90.0
+
+try:
+    MEMORY_SWAP_ALERT_THRESHOLD = float(
+        get_env_or_secret("MEMORY_SWAP_ALERT_THRESHOLD", 50.0)
+    )
+except (ValueError, TypeError):
+    MEMORY_SWAP_ALERT_THRESHOLD = 50.0
+
+try:
+    MEMORY_SWAP_CRITICAL_THRESHOLD = float(
+        get_env_or_secret("MEMORY_SWAP_CRITICAL_THRESHOLD", 80.0)
+    )
+except (ValueError, TypeError):
+    MEMORY_SWAP_CRITICAL_THRESHOLD = 80.0
+
 # 動態轉倉引擎：真實期權持倉併入 15 分鐘評估迴圈 (Feature Flag)
 # 預設關閉，避免 OPTIONS 快速通道/流動性警告等「首次真正被生產環境觸發」的
 # 分支在未經觀察期前意外對使用者發送大量清倉指令。開啟後預設仍為 dry-run

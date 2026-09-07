@@ -18,14 +18,37 @@ class MemoryManager:
     專為 1GB RAM 環境優化。
     """
 
-    def __init__(self, bot: Any, threshold: float = 90.0):
+    def __init__(
+        self,
+        bot: Any,
+        threshold: float | None = None,
+        swap_threshold: float | None = None,
+        swap_critical: float | None = None,
+    ) -> None:
+        import config
+
         self.bot = bot
-        self.threshold = threshold
+        self.threshold: float = (
+            float(threshold)
+            if threshold is not None
+            else getattr(config, "MEMORY_ALERT_THRESHOLD", 90.0)
+        )
+        self.swap_threshold: float = (
+            float(swap_threshold)
+            if swap_threshold is not None
+            else getattr(config, "MEMORY_SWAP_ALERT_THRESHOLD", 50.0)
+        )
+        self.swap_critical: float = (
+            float(swap_critical)
+            if swap_critical is not None
+            else getattr(config, "MEMORY_SWAP_CRITICAL_THRESHOLD", 80.0)
+        )
         self.running = False
         self._monitor_task = None
         self._warmup_task = None
         self._check_interval = 300  # 5 分鐘檢查一次
-        self._last_alert_at = 0
+        self._last_alert_at: float = 0.0
+        self._last_alerts: dict[str, float] = {}
         self._last_power_alert_level = 100
         self._last_warmup_date = None
 
@@ -117,6 +140,39 @@ class MemoryManager:
         except Exception as e:
             logger.error(f"Cache warmup failed: {e}")
 
+    def is_memory_critical(
+        self,
+        mem_percent: float,
+        swap_percent: float,
+        swap_total: float | None = None,
+    ) -> bool:
+        """
+        綜合判定實體 RAM 與 Swap 是否達到緊急警報條件。
+
+        判定標準：
+        1. 臨界 Swap 耗盡 (swap_percent >= self.swap_critical，預設 80%)：
+           代表虛擬置換空間將盡，系統極可能面臨 Page Thrashing 導致 OOM。
+        2. 系統確認無 Swap 分區環境 (swap_total is not None 且 swap_total <= 0)：
+           此時無任何置換緩衝，RAM 達到門檻 (mem_percent >= self.threshold，預設 90%)
+           即構成直接 OOM 威脅。
+        3. 正常配置 Swap 環境 (或 swap_total 未知)：
+           單純 RAM 偏高不觸發警報（避免 Linux 正常的 buffer/cache 行為造成誤報），
+           必須同時滿足 RAM 飽和 (mem_percent >= self.threshold) 且
+           Swap 顯著受壓 (swap_percent >= self.swap_threshold，預設 50%)。
+        """
+        # 1. Swap 瀕臨耗盡
+        if swap_percent >= self.swap_critical:
+            return True
+
+        # 2. 系統無 Swap 分區保護
+        if swap_total is not None and swap_total <= 0:
+            return bool(mem_percent >= self.threshold)
+
+        # 3. 綜合判定：RAM 飽和且 Swap 達到顯著壓力門檻
+        return bool(
+            mem_percent >= self.threshold and swap_percent >= self.swap_threshold
+        )
+
     async def _perform_health_check(self) -> None:
         mem = psutil.virtual_memory()
         swap = psutil.swap_memory()
@@ -132,13 +188,17 @@ class MemoryManager:
 
         # 2. 觸發主節點警報
         now = datetime.now(timezone.utc).timestamp()
-        if mem.percent > self.threshold or swap.percent > 80:
+        source_main = "Droplet (主節點)"
+        if self.is_memory_critical(
+            mem.percent, swap.percent, swap_total=float(swap.total)
+        ):
             # 限制警報頻率 (1 小時一次)
-            if now - self._last_alert_at > 3600:
+            if now - self._last_alerts.get(source_main, 0.0) > 3600:
                 await self._trigger_emergency_alert(
-                    mem.percent, proc_mem, swap.percent, source="Droplet (主節點)"
+                    mem.percent, proc_mem, swap.percent, source=source_main
                 )
-                self._last_alert_at = now  # type: ignore
+                self._last_alerts[source_main] = now
+                self._last_alert_at = now
 
         # 3. 觸發邊緣節點警報
         import config
@@ -154,18 +214,28 @@ class MemoryManager:
                     )
                     if res.status_code == 200:
                         edge = res.json()
-                        edge_mem_pct = edge.get("memory_percent", 0)
-                        edge_swap_pct = edge.get("swap_percent", 0)
-                        if edge_mem_pct > self.threshold or edge_swap_pct > 80:
-                            if now - self._last_alert_at > 3600:
-                                edge_os = edge.get("os_system", "Edge")
+                        edge_mem_pct = float(edge.get("memory_percent", 0.0))
+                        edge_swap_pct = float(edge.get("swap_percent", 0.0))
+                        edge_swap_total_raw = edge.get("swap_total_mb")
+                        edge_swap_total = (
+                            float(edge_swap_total_raw)
+                            if edge_swap_total_raw is not None
+                            else None
+                        )
+                        edge_os = edge.get("os_system", "Edge")
+                        source_edge = f"{edge_os} (邊緣節點)"
+                        if self.is_memory_critical(
+                            edge_mem_pct, edge_swap_pct, swap_total=edge_swap_total
+                        ):
+                            if now - self._last_alerts.get(source_edge, 0.0) > 3600:
                                 await self._trigger_emergency_alert(
                                     edge_mem_pct,
-                                    edge.get("process_memory_mb", 0),
+                                    edge.get("process_memory_mb", 0.0),
                                     edge_swap_pct,
-                                    source=f"{edge_os} (邊緣節點)",
+                                    source=source_edge,
                                 )
-                                self._last_alert_at = now  # type: ignore
+                                self._last_alerts[source_edge] = now
+                                self._last_alert_at = now
 
                         # Check battery (0%, 25%, 50%, 75% thresholds)
                         battery = edge.get("battery")
@@ -222,6 +292,23 @@ class MemoryManager:
         source: str = "Droplet (主節點)",
     ) -> Any:
         from config import DISCORD_ADMIN_USER_ID
+
+        # 主動緊急急救：當主節點告警時，立即清理重量級快取以避開 OOM 崩潰
+        if source == "Droplet (主節點)":
+            try:
+                from services.market_data_service import (
+                    clear_history_cache,
+                    clear_options_cache,
+                )
+
+                clear_history_cache()
+                clear_options_cache()
+                gc.collect()
+                logger.warning(
+                    "🧹 [緊急快取救援] 記憶體告警觸發，已主動清空歷史 K 線與期權鏈快取並執行 GC。"
+                )
+            except Exception as e:
+                logger.error(f"Emergency cache eviction failed: {e}")
 
         if not DISCORD_ADMIN_USER_ID:
             return
