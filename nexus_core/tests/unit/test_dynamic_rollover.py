@@ -6150,3 +6150,348 @@ async def test_evaluate_opportunity_cost_for_satellites_dynamic_regime_ii_blocks
     assert confirmed is False
     assert "REGIME_II_CHAOS_STANDASIDE" in reason
     assert instructions == []
+
+
+# ============================================================================
+# 阻力牆向上遷移 (TP2 Call Wall Migration) 與 CSP 賣方停利 (Cash-Secured Put)
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_tp2_call_wall_upward_migration_triggers(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """TP2-空間擴展：做市商阻力牆向上遷移 >= 3% 且現價站穩舊阻力位時，執行 30% 平倉。"""
+    metrics = {
+        "spot_price": 152.0,  # 站穩舊 Call Wall 150.0，但尚未突破新 Call Wall 165.0
+        "price_15m_close": 152.0,
+        "call_wall": 165.0,  # 遷移幅度 (165-150)/150 = +10.0% >= 3%
+        "previous_call_wall": 150.0,
+    }
+    report = await engine._generate_rule_based_rebalance_report(
+        symbol="XYZ",
+        metrics=metrics,
+        requested_action="HOLD",
+        target="VOO",
+        asset_class="SPOT",
+    )
+    assert report["final_action"] == "LIQUIDATE"
+    assert report["sell_ratio"] == 0.3
+    assert report["exit_tier"] == "TP2"
+    assert "TP2-空間擴展" in report["markdown_report"]
+    assert (
+        "做市商阻力牆向上遷移 $150.00 → $165.00 (+10.0%)" in report["markdown_report"]
+    )
+    assert "現價 $152.00 站穩舊阻力位" in report["markdown_report"]
+
+
+@pytest.mark.asyncio
+async def test_tp2_call_wall_migration_rejected_if_spot_below_previous(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """TP2-空間擴展：若現價未站穩舊阻力牆 (spot < previous_call_wall)，不可因牆上移而觸發 TP2。"""
+    metrics = {
+        "spot_price": 148.0,  # 跌破舊 Call Wall 150.0
+        "price_15m_close": 148.0,
+        "call_wall": 165.0,
+        "previous_call_wall": 150.0,
+    }
+    tier, ratio, reason = engine._evaluate_microstructure_tp_ladder(metrics)
+    assert tier != "TP2"
+    assert ratio != 0.3
+
+
+@pytest.mark.asyncio
+async def test_tp2_call_wall_migration_rejected_if_under_threshold(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """TP2-空間擴展：Call Wall 向上遷移幅度小於 3% (如 1.33%) 時，不觸發遷移判定。"""
+    metrics = {
+        "spot_price": 151.0,
+        "price_15m_close": 151.0,
+        "call_wall": 152.0,  # 遷移幅度 (152-150)/150 = 1.33% < 3%
+        "previous_call_wall": 150.0,
+    }
+    tier, ratio, reason = engine._evaluate_microstructure_tp_ladder(metrics)
+    assert tier != "TP2"
+
+
+@pytest.mark.asyncio
+async def test_tp2_fallback_when_no_previous_call_wall(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """TP2-空間擴展：無 previous_call_wall 時，自動回退為原有的 1.5% 突破判定。"""
+    # 案例 A: 穿透 >= 1.5% 觸發原版 TP2
+    metrics_break = {
+        "spot_price": 203.0,  # (203-200)/200 = 1.5%
+        "call_wall": 200.0,
+        "previous_call_wall": 0.0,
+    }
+    tier, ratio, reason = engine._evaluate_microstructure_tp_ladder(metrics_break)
+    assert tier == "TP2"
+    assert ratio == 0.3
+    assert "穿越 Call Wall $200.00" in reason
+
+    # 案例 B: 穿透 < 1.5% 不觸發 TP2
+    metrics_no_break = {
+        "spot_price": 201.0,
+        "call_wall": 200.0,
+        "previous_call_wall": 0.0,
+    }
+    tier_nb, ratio_nb, _ = engine._evaluate_microstructure_tp_ladder(metrics_no_break)
+    assert tier_nb != "TP2"
+
+
+@pytest.mark.asyncio
+async def test_short_option_profit_lock_csp_full_decay(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """CSP 權利金衰減 >= 80% 時，建議全額 100% BTC 回補，並標註釋放現金擔保金。"""
+    positions = [
+        {
+            "symbol": "AAPL",
+            "expiry": (datetime.now().date() + timedelta(days=20)).strftime("%Y-%m-%d"),
+            "strike": 150.0,
+            "quantity": -2,
+            "opt_type": "PUT",
+            "entry_price": 5.0,
+            "current_premium": 0.90,  # decay = (5 - 0.9) / 5 = 82% >= 80%
+        }
+    ]
+    instructions = await engine.evaluate_short_option_profit_lock(1, positions)
+    assert len(instructions) == 1
+    ins = instructions[0]
+    assert ins["symbol"] == "AAPL"
+    assert ins["action"] == "LIQUIDATE"
+    assert ins["sell_ratio"] == 1.0
+    assert ins["is_csp"] is True
+    assert ins["opt_type"] == "PUT"
+    # 擔保金 = strike * 100 * abs(quantity) * btc_ratio = 150 * 100 * 2 * 1.0 = 30000.0
+    assert ins["margin_released"] == 30000.0
+    assert "Cash-Secured Put (CSP) 權利金衰減停利 (全額)" in ins["reason"]
+    assert "釋放現金擔保金 $30,000.00" in ins["reason"]
+
+
+@pytest.mark.asyncio
+async def test_short_option_profit_lock_csp_partial_decay(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """CSP 權利金衰減 >= 50% 且 < 80% 時，建議局部 50% BTC 回補。"""
+    positions = [
+        {
+            "symbol": "TSLA",
+            "expiry": (datetime.now().date() + timedelta(days=20)).strftime("%Y-%m-%d"),
+            "strike": 200.0,
+            "quantity": -4,
+            "opt_type": "PUT",
+            "entry_price": 10.0,
+            "current_premium": 4.0,  # decay = 60%
+        }
+    ]
+    instructions = await engine.evaluate_short_option_profit_lock(1, positions)
+    assert len(instructions) == 1
+    ins = instructions[0]
+    assert ins["action"] == "REDUCE"
+    assert ins["sell_ratio"] == 0.5
+    assert ins["is_csp"] is True
+    # 局部釋放擔保金 = 200 * 100 * 4 * 0.5 = 40000.0
+    assert ins["margin_released"] == 40000.0
+    assert "Cash-Secured Put (CSP) 權利金衰減停利 (局部)" in ins["reason"]
+    assert "釋放現金擔保金 $40,000.00" in ins["reason"]
+
+
+@pytest.mark.asyncio
+async def test_short_option_profit_lock_csp_dte_forced_settlement(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """CSP 部位 DTE <= 1 時，強制 100% BTC 回補以防範指派風險，並標註釋放擔保金。"""
+    positions = [
+        {
+            "symbol": "NVDA",
+            "expiry": (datetime.now().date() + timedelta(days=1)).strftime("%Y-%m-%d"),
+            "strike": 100.0,
+            "quantity": -1,
+            "opt_type": "PUT",
+            "entry_price": 3.0,
+            "current_premium": 0.50,
+        }
+    ]
+    instructions = await engine.evaluate_short_option_profit_lock(1, positions)
+    assert len(instructions) == 1
+    ins = instructions[0]
+    assert ins["sell_ratio"] == 1.0
+    assert ins["action"] == "LIQUIDATE"
+    assert ins["is_csp"] is True
+    assert ins["margin_released"] == 10000.0
+    assert "末日結算保護 (Cash-Secured Put (CSP) Forced Settlement)" in ins["reason"]
+    assert "釋放現金擔保金 $10,000.00" in ins["reason"]
+
+
+@pytest.mark.asyncio
+async def test_evaluate_covered_call_profit_lock_alias_compatibility(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """驗證 evaluate_covered_call_profit_lock 與 evaluate_short_option_profit_lock 100% 相容。"""
+    positions = [
+        {
+            "symbol": "AAPL",
+            "expiry": (datetime.now().date() + timedelta(days=20)).strftime("%Y-%m-%d"),
+            "strike": 200.0,
+            "quantity": -1,
+            "opt_type": "CALL",
+            "entry_price": 5.0,
+            "current_premium": 0.8,
+        }
+    ]
+    res1 = await engine.evaluate_covered_call_profit_lock(1, positions)
+    res2 = await engine.evaluate_short_option_profit_lock(1, positions)
+    assert len(res1) == 1 and len(res2) == 1
+    assert res1[0]["reason"] == res2[0]["reason"]
+    assert res1[0]["is_csp"] is False
+
+
+def test_create_covered_call_profit_lock_embed_csp_rendering() -> None:
+    """create_covered_call_profit_lock_embed 支援 CSP 與釋放擔保金渲染。"""
+    embed = create_covered_call_profit_lock_embed(
+        symbol="XYZ",
+        reason="測試理由",
+        entry_premium=5.0,
+        current_premium=0.5,
+        decay_pct=0.9,
+        btc_ratio=1.0,
+        dte=15,
+        strike="$100.00",
+        expiry="2026-02-20",
+        cash_impact="$50",
+        opt_type="PUT",
+        margin_released=10000.0,
+    )
+    assert "Cash-Secured Put (CSP)" in str(embed.title)
+    detail_field = next(
+        (f for f in embed.fields if f.name == "🖋️ Cash-Secured Put (CSP) 停利明細"), None
+    )
+    assert detail_field is not None
+    assert detail_field.value is not None
+    assert "預估釋放擔保金:" in detail_field.value
+    assert "$10,000.00" in detail_field.value
+    assert "$100.00" in detail_field.value
+    assert "90%" in detail_field.value
+
+
+def test_market_cache_call_wall_and_previous_call_wall_persistence() -> None:
+    """驗證 SQLite market_cache 保存 call_wall 與 previous_call_wall 跨週期遷移機制。"""
+    import tempfile
+    from database.core import run_migrations
+    import config
+    from database.market_cache import save_market_cache, get_market_cache
+
+    tf = tempfile.NamedTemporaryFile(suffix=".db")
+    orig_db = config.DB_NAME
+    try:
+        config.DB_NAME = tf.name
+        run_migrations()
+
+        # 首次寫入：previous_call_wall 應為 NULL
+        save_market_cache("TEST_SYM", 100.0, 95.0, 105.0, call_wall=150.0)
+        row1 = get_market_cache("TEST_SYM")
+        assert row1 is not None
+        assert row1.get("call_wall") == 150.0
+        assert row1.get("previous_call_wall") is None
+
+        # 更新且 call_wall 向上遷移至 165.0：previous_call_wall 應保留 150.0
+        save_market_cache("TEST_SYM", 102.0, 95.0, 105.0, call_wall=165.0)
+        row2 = get_market_cache("TEST_SYM")
+        assert row2 is not None
+        assert row2.get("call_wall") == 165.0
+        assert row2.get("previous_call_wall") == 150.0
+
+        # 再次更新但 call_wall 維持 165.0：previous_call_wall 應維持 150.0 (不被覆蓋為 165.0)
+        save_market_cache("TEST_SYM", 103.0, 95.0, 105.0, call_wall=165.0)
+        row3 = get_market_cache("TEST_SYM")
+        assert row3 is not None
+        assert row3.get("call_wall") == 165.0
+        assert row3.get("previous_call_wall") == 150.0
+
+        # 更新時未傳入 call_wall (None)：call_wall 與 previous_call_wall 應妥善保留
+        save_market_cache("TEST_SYM", 104.0, 95.0, 105.0)
+        row4 = get_market_cache("TEST_SYM")
+        assert row4 is not None
+        assert row4.get("call_wall") == 165.0
+        assert row4.get("previous_call_wall") == 150.0
+    finally:
+        config.DB_NAME = orig_db
+        try:
+            tf.close()
+        except Exception:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_short_option_profit_lock_string_strike_with_dollar_sign(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """驗證 strike 為含美元符號之字串 ('$150.00') 時能安全解析並正確計算擔保金，不拋出例外。"""
+    positions = [
+        {
+            "symbol": "AAPL",
+            "expiry": (datetime.now().date() + timedelta(days=20)).strftime("%Y-%m-%d"),
+            "strike": "$150.00",
+            "quantity": -2,
+            "opt_type": "PUT",
+            "entry_price": 5.0,
+            "current_premium": 0.50,
+        }
+    ]
+    instructions = await engine.evaluate_short_option_profit_lock(1, positions)
+    assert len(instructions) == 1
+    ins = instructions[0]
+    assert ins["strike"] == "$150.00"
+    assert ins["margin_released"] == 30000.0
+
+
+@pytest.mark.asyncio
+async def test_tp2_call_wall_downward_migration_does_not_trigger(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """TP2-空間擴展：若做市商阻力牆向下遷移 (165 -> 150)，絕不可誤觸發 TP2 空間擴展。"""
+    metrics = {
+        "spot_price": 149.0,
+        "price_15m_close": 149.0,
+        "call_wall": 150.0,
+        "previous_call_wall": 165.0,
+    }
+    tier, ratio, reason = engine._evaluate_microstructure_tp_ladder(metrics)
+    assert tier != "TP2"
+
+
+@pytest.mark.asyncio
+async def test_radar_data_persists_call_wall_and_previous_call_wall() -> None:
+    """驗證 market_cache 保存 call_wall 與 previous_call_wall 於跨週期查詢時能正確還原。"""
+    import tempfile
+    from database.core import run_migrations
+    import config
+    from database.market_cache import save_market_cache, get_market_cache
+
+    tf = tempfile.NamedTemporaryFile(suffix=".db")
+    orig_db = config.DB_NAME
+    try:
+        config.DB_NAME = tf.name
+        run_migrations()
+
+        # 模擬第一輪掃描，call_wall = 150.0
+        save_market_cache("TEST_RADAR", 100.0, 95.0, 105.0, call_wall=150.0)
+        c1 = get_market_cache("TEST_RADAR")
+        assert c1 is not None and c1.get("call_wall") == 150.0
+        assert c1.get("previous_call_wall") is None
+
+        # 模擬第二輪掃描，call_wall 向上遷移至 165.0
+        save_market_cache("TEST_RADAR", 102.0, 95.0, 105.0, call_wall=165.0)
+        c2 = get_market_cache("TEST_RADAR")
+        assert c2 is not None and c2.get("call_wall") == 165.0
+        assert c2.get("previous_call_wall") == 150.0
+    finally:
+        config.DB_NAME = orig_db
+        try:
+            tf.close()
+        except Exception:
+            pass

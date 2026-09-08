@@ -992,9 +992,8 @@ async def test_monitor_real_portfolio_task_options_ingestion_gate_on_splits_long
 ):
     """config.ENABLE_OPTIONS_ROLLOVER_INGESTION 為 True 時，多頭期權部位
     (quantity>0) 應併入 check_satellite_rebalancing 的 portfolio_assets，
-    空頭 CALL 部位 (quantity<0, opt_type=="call") 應併入
-    evaluate_covered_call_profit_lock 的 short_call_positions，空頭 PUT
-    則兩邊都不應出現。"""
+    空頭 CALL 與 PUT 部位 (quantity<0, opt_type in ("call", "put")) 應併入
+    evaluate_covered_call_profit_lock 的 short_positions。"""
     bot = MagicMock()
     bot.queue_dm = AsyncMock()
     bot.get_cog = MagicMock(return_value=None)
@@ -1076,9 +1075,9 @@ async def test_monitor_real_portfolio_task_options_ingestion_gate_on_splits_long
 
     profit_lock_call = mock_profit_lock.await_args
     assert profit_lock_call is not None
-    short_call_positions = profit_lock_call.args[1]
-    assert len(short_call_positions) == 1
-    assert short_call_positions[0]["symbol"] == "VOO"
+    short_positions = profit_lock_call.args[1]
+    assert len(short_positions) == 2
+    assert {p["symbol"] for p in short_positions} == {"VOO", "TSLA"}
 
 
 @pytest.mark.asyncio

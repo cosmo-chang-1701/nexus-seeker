@@ -72,6 +72,7 @@ class PortfolioMonitorCog(commands.Cog):
             "max_pain": 0.0,
             "put_wall": 0.0,
             "call_wall": 0.0,
+            "previous_call_wall": 0.0,
             "is_uoa_sweep": False,
             "gamma_flip": 0.0,
             "sqz_mom": 0.0,
@@ -195,6 +196,25 @@ class PortfolioMonitorCog(commands.Cog):
             raw_dte = r_data.get("nearest_dte")
             dte_val = int(raw_dte) if raw_dte is not None else 99
 
+            prev_call_wall_val = float(
+                r_data.get("previous_call_wall")
+                or (
+                    r_data.get("gex_profile_data", {}).get("previous_call_wall", 0.0)
+                    if isinstance(r_data.get("gex_profile_data"), dict)
+                    else 0.0
+                )
+                or 0.0
+            )
+            if prev_call_wall_val <= 0:
+                try:
+                    from database.market_cache import get_market_cache
+
+                    mc = get_market_cache(sym)
+                    if mc and mc.get("previous_call_wall") is not None:
+                        prev_call_wall_val = float(mc["previous_call_wall"] or 0.0)
+                except Exception:
+                    pass
+
             return {
                 "spot_price": spot_val,
                 # 真正的 15m 已收盤實體 K 棒收盤價 (非現價)。此欄位是微觀結構
@@ -217,6 +237,7 @@ class PortfolioMonitorCog(commands.Cog):
                 )
                 if isinstance(r_data.get("gex_profile_data"), dict)
                 else 0.0,
+                "previous_call_wall": prev_call_wall_val,
                 "is_uoa_sweep": len(r_data.get("uoa", [])) > 0
                 if r_data.get("uoa")
                 else False,
@@ -326,6 +347,7 @@ class PortfolioMonitorCog(commands.Cog):
             "max_pain": metrics["max_pain"],
             "put_wall": metrics["put_wall"],
             "call_wall": metrics["call_wall"],
+            "previous_call_wall": metrics.get("previous_call_wall", 0.0),
             "is_uoa_sweep": metrics["is_uoa_sweep"],
             "gamma_flip": metrics.get("gamma_flip", 0.0),
             "sqz_mom": metrics.get("sqz_mom", 0.0),
@@ -401,12 +423,11 @@ class PortfolioMonitorCog(commands.Cog):
             # 🚀 動態轉倉引擎：真實期權持倉併入評估迴圈 (Feature Flag，預設關閉)。
             # 僅納入多頭買方部位 (quantity > 0) 至 Scenario 2/3/4/5 的 SATELLITE
             # 評估迴圈；空頭 (STO) 部位風險輪廓相反 (時間價值衰減對我方有利)，
-            # 套用該迴圈的結構性破位邏輯會產生方向錯誤的清倉指令。開立新備兌
-            # 買權已由既有 evaluate_covered_call_overlay / recommend_covered_calls
-            # 覆蓋；既有空頭 CALL 部位的提前 BTC 回補了結則由下方獨立的
-            # evaluate_covered_call_profit_lock 處理 (見 short_call_trades)。
+            # 依賴權利金即時報價，故直接在下方與 long_option_trades 共用同一批
+            # quote_sem (Semaphore(3)) 抓取 mid 報價後，送入獨立的
+            # evaluate_short_option_profit_lock 處理 (見 short_option_trades)。
             long_option_trades: List[Dict[str, Any]] = []
-            short_call_trades: List[Dict[str, Any]] = []
+            short_option_trades: List[Dict[str, Any]] = []
             if config.ENABLE_OPTIONS_ROLLOVER_INGESTION:
                 from database.portfolio import get_all_trade_positions
 
@@ -414,21 +435,21 @@ class PortfolioMonitorCog(commands.Cog):
                 long_option_trades = [
                     t for t in all_trades_raw if float(t.get("quantity") or 0) > 0
                 ]
-                short_call_trades = [
+                short_option_trades = [
                     t
                     for t in all_trades_raw
                     if float(t.get("quantity") or 0) < 0
-                    and str(t.get("opt_type", "")).lower() == "call"
+                    and str(t.get("opt_type", "")).lower() in ("call", "put")
                 ]
                 skipped_short_count = (
                     len(all_trades_raw)
                     - len(long_option_trades)
-                    - len(short_call_trades)
+                    - len(short_option_trades)
                 )
                 if skipped_short_count:
                     logger.debug(
                         f"[OptionsRollover] 略過 {skipped_short_count} 筆非多頭/"
-                        "非空頭 CALL 期權部位 (不在動態轉倉引擎評估範圍內)"
+                        "非空頭期權部位 (不在動態轉倉引擎評估範圍內)"
                     )
 
             # --- 提前抓取雷達數據，供後續模組共用 ---
@@ -656,6 +677,7 @@ class PortfolioMonitorCog(commands.Cog):
                         "max_pain": metrics["max_pain"],
                         "put_wall": metrics["put_wall"],
                         "call_wall": metrics["call_wall"],
+                        "previous_call_wall": metrics.get("previous_call_wall", 0.0),
                         "is_uoa_sweep": metrics["is_uoa_sweep"],
                         "gamma_flip": metrics.get("gamma_flip", 0.0),
                         "sqz_mom": metrics.get("sqz_mom", 0.0),
@@ -710,7 +732,7 @@ class PortfolioMonitorCog(commands.Cog):
                 # 所需的即時報價，併入下方同一批 Semaphore(3) 併發抓取，避免對
                 # 同一批合約 (若剛好與 long_option_trades 重疊) 重複發送請求。
                 user_short_calls: Dict[int, List[Dict[str, Any]]] = {}
-                if long_option_trades or short_call_trades:
+                if long_option_trades or short_option_trades:
                     quote_sem = asyncio.Semaphore(3)
                     unique_contracts: Dict[
                         tuple[str, Any, Any, Any], Dict[str, Any]
@@ -723,7 +745,7 @@ class PortfolioMonitorCog(commands.Cog):
                             t.get("opt_type"),
                         )
                         unique_contracts.setdefault(contract_key, t)
-                    for t in short_call_trades:
+                    for t in short_option_trades:
                         contract_key = (
                             str(t["symbol"]).upper(),
                             t.get("expiry"),
@@ -802,7 +824,7 @@ class PortfolioMonitorCog(commands.Cog):
                         )
                         user_assets.setdefault(opt_u_id, []).append(option_asset_entry)
 
-                    for t in short_call_trades:
+                    for t in short_option_trades:
                         sc_u_id = t["user_id"]
                         sc_sym = str(t["symbol"]).upper()
                         contract_key = (
@@ -815,7 +837,7 @@ class PortfolioMonitorCog(commands.Cog):
                             contract_key, (0.0, 0.0, 0.0, 0.0)
                         )
                         # 報價缺失 (mid_price<=0) 時仍併入清單——
-                        # evaluate_covered_call_profit_lock 對 DTE<=1 的
+                        # evaluate_short_option_profit_lock 對 DTE<=1 的
                         # 結算保護分支不需要報價，只有一般衰減判定分支才會
                         # fail-safe 跳過缺報價的部位。
                         user_short_calls.setdefault(sc_u_id, []).append(
@@ -824,6 +846,7 @@ class PortfolioMonitorCog(commands.Cog):
                                 "expiry": t.get("expiry"),
                                 "strike": t.get("strike"),
                                 "quantity": t.get("quantity"),
+                                "opt_type": t.get("opt_type"),
                                 "entry_price": t.get("entry_price"),
                                 "current_premium": mid_price,
                             }
@@ -970,15 +993,21 @@ class PortfolioMonitorCog(commands.Cog):
                         )
                     )
 
-                    # 🚀 Covered Call 權利金衰減停利 — 與 Scenario 2/3/4/5/6 完全
-                    # 獨立，只處理既有空頭 CALL 部位是否該提前 BTC 回補了結，
+                    # 🚀 賣方期權時間價值衰減停利 — 與 Scenario 2/3/4/5/6 完全
+                    # 獨立，只處理既有空頭 CALL/PUT (CSP) 部位是否該提前 BTC 回補了結，
                     # 不涉及任何轉倉/開倉決策，因此不參與 already_flagged_symbols
                     # 排除邏輯，也不影響/受影響於上述任一情境。
-                    rebalance_instructions += (
-                        await self.rollover_engine.evaluate_covered_call_profit_lock(
-                            u_id,
-                            user_short_calls.get(u_id, []),
-                        )
+                    profit_lock_method = (
+                        self.rollover_engine.evaluate_covered_call_profit_lock
+                        if "evaluate_covered_call_profit_lock"
+                        in self.rollover_engine.__dict__
+                        and "evaluate_short_option_profit_lock"
+                        not in self.rollover_engine.__dict__
+                        else self.rollover_engine.evaluate_short_option_profit_lock
+                    )
+                    rebalance_instructions += await profit_lock_method(
+                        u_id,
+                        user_short_calls.get(u_id, []),
                     )
 
                     # 情境識別碼 → 人類可讀標籤，僅供標題補充說明；顏色/危險等級判斷
@@ -990,7 +1019,7 @@ class PortfolioMonitorCog(commands.Cog):
                         "MARGIN_DEFENSE": "槓桿與保證金防禦",
                         "CORE_DEPLOYMENT": "核心資金部署",
                         "MACRO_TOP_ESCAPE_DEFENSE": "宏觀逃頂前瞻防禦",
-                        "COVERED_CALL_PROFIT_LOCK": "Covered Call 權利金衰減停利",
+                        "COVERED_CALL_PROFIT_LOCK": "賣方期權時間價值停利 (Covered Call / CSP)",
                         "TRANSITION_ENGINE": "動態調整狀態切換引擎",
                     }
 
@@ -1021,13 +1050,16 @@ class PortfolioMonitorCog(commands.Cog):
                             f"{instrument_type}_{scenario}_{action}_{today_str}"
                         )
                         if scenario == "COVERED_CALL_PROFIT_LOCK":
-                            # 同一標的可能同時存在多筆不同履約價/到期日的 Covered
-                            # Call，通用 dedup_key 僅以 (symbol, action) 區分會讓
-                            # 其中一筆的警報意外壓制另一筆；額外納入 strike/expiry
+                            # 同一標的可能同時存在多筆不同履約價/到期日/類型的賣方
+                            # 期權，通用 dedup_key 僅以 (symbol, action) 區分會讓
+                            # 其中一筆的警報意外壓制另一筆；額外納入 opt_type/strike/expiry
                             # 與衰減門檻分級 (action 已隱含 LIQUIDATE=全額/
                             # REDUCE=局部)，允許當日從局部門檻推進至全額門檻時
                             # 仍能重新提醒一次。
-                            dedup_key += f"_{ins.get('strike')}_{ins.get('expiry')}"
+                            opt_t = str(ins.get("opt_type", "CALL")).upper()
+                            dedup_key += (
+                                f"_{opt_t}_{ins.get('strike')}_{ins.get('expiry')}"
+                            )
                         if database.get_kv_cache(dedup_key):
                             continue
 
@@ -1095,22 +1127,32 @@ class PortfolioMonitorCog(commands.Cog):
                                     "suggested_strategy", "新開右側動能部位"
                                 ),
                             )
-                        elif ins.get("is_covered_call_profit_lock"):
-                            # Covered Call 權利金衰減停利：純 BTC 平倉了結，沒有
+                        elif ins.get("is_covered_call_profit_lock") or ins.get(
+                            "is_short_option_profit_lock"
+                        ):
+                            # 賣方期權權利金衰減停利：純 BTC 平倉了結，沒有
                             # 第二個轉倉標的，理由同上不套用通用轉倉框架。
-                            embed = create_covered_call_profit_lock_embed(
-                                symbol=ins["symbol"],
-                                reason=ins["reason"],
-                                entry_premium=float(ins.get("entry_premium") or 0.0),
-                                current_premium=float(
+                            embed_kwargs: Dict[str, Any] = {
+                                "symbol": ins["symbol"],
+                                "reason": ins["reason"],
+                                "entry_premium": float(ins.get("entry_premium") or 0.0),
+                                "current_premium": float(
                                     ins.get("current_premium") or 0.0
                                 ),
-                                decay_pct=float(ins.get("decay_pct") or 0.0),
-                                btc_ratio=ins["sell_ratio"],
-                                dte=int(ins.get("dte") or 0),
-                                strike=ins.get("strike") or "N/A",
-                                expiry=ins.get("expiry") or "N/A",
-                                cash_impact=ins.get("cash_impact"),
+                                "decay_pct": float(ins.get("decay_pct") or 0.0),
+                                "btc_ratio": ins["sell_ratio"],
+                                "dte": int(ins.get("dte") or 0),
+                                "strike": ins.get("strike") or "N/A",
+                                "expiry": ins.get("expiry") or "N/A",
+                                "cash_impact": ins.get("cash_impact"),
+                            }
+                            if ins.get("opt_type"):
+                                embed_kwargs["opt_type"] = ins.get("opt_type")
+                            margin_rel = ins.get("margin_released")
+                            if margin_rel is not None and float(margin_rel) > 0:
+                                embed_kwargs["margin_released"] = float(margin_rel)
+                            embed = create_covered_call_profit_lock_embed(
+                                **embed_kwargs
                             )
                         else:
                             embed = create_dynamic_rollover_embed(

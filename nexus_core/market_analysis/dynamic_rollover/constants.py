@@ -244,8 +244,10 @@ _MICROSTRUCTURE_TP1_CALLWALL_PCT: float = (
 )
 _MICROSTRUCTURE_TP1_RATIO: float = 0.5  # TP1 執行比例 (50%)
 _MICROSTRUCTURE_TP2_WALL_BREAK_PCT: float = (
-    0.015  # TP2-空間擴展：穿越 Call Wall 幅度門檻（v1 僅實作此子條件，
-    # 「新舊 Call Wall 轉移點」比對需要跨週期快照，列為後續 fast-follow）
+    0.015  # TP2-空間擴展：穿越 Call Wall 幅度門檻
+)
+_MICROSTRUCTURE_TP2_WALL_MIGRATION_PCT: float = (
+    0.03  # TP2-空間擴展：Call Wall 向上遷移 >= 3% 視為阻力空間有效擴展
 )
 _MICROSTRUCTURE_TP2_RATIO: float = 0.3  # TP2 執行比例 (30%)
 _MICROSTRUCTURE_TP3_DELTA_THRESHOLD: float = (

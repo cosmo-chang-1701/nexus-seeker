@@ -21,6 +21,7 @@ from .constants import (
     _MICROSTRUCTURE_TP1_RATIO,
     _MICROSTRUCTURE_TP2_RATIO,
     _MICROSTRUCTURE_TP2_WALL_BREAK_PCT,
+    _MICROSTRUCTURE_TP2_WALL_MIGRATION_PCT,
     _MICROSTRUCTURE_TP3_DELTA_THRESHOLD,
     _MICROSTRUCTURE_TP3_DTE_THRESHOLD,
     _MICROSTRUCTURE_TP3_RATIO,
@@ -191,7 +192,15 @@ class _AntiWashoutMixin:
 
         wall_break_pct = (spot - call_wall) / call_wall
         is_tp1 = spot >= call_wall * _MICROSTRUCTURE_TP1_CALLWALL_PCT
-        is_tp2 = wall_break_pct >= _MICROSTRUCTURE_TP2_WALL_BREAK_PCT
+        previous_call_wall = float(metrics.get("previous_call_wall") or 0.0)
+        is_wall_break = wall_break_pct >= _MICROSTRUCTURE_TP2_WALL_BREAK_PCT
+        is_wall_migrated_up = (
+            previous_call_wall > 0
+            and call_wall
+            >= previous_call_wall * (1.0 + _MICROSTRUCTURE_TP2_WALL_MIGRATION_PCT)
+            and spot >= previous_call_wall  # 現價必須站穩舊阻力牆，確認突破成立
+        )
+        is_tp2 = is_wall_break or is_wall_migrated_up
         is_tp3_delta = (
             delta is not None and delta >= _MICROSTRUCTURE_TP3_DELTA_THRESHOLD
         )
@@ -216,6 +225,15 @@ class _AntiWashoutMixin:
                 f"{_MICROSTRUCTURE_TP3_RATIO:.0%} 平倉。",
             )
         if is_tp2:
+            if is_wall_migrated_up:
+                migration_pct = (call_wall - previous_call_wall) / previous_call_wall
+                return (
+                    "TP2",
+                    _MICROSTRUCTURE_TP2_RATIO,
+                    f"🎯 **TP2-空間擴展**：做市商阻力牆向上遷移 ${previous_call_wall:.2f} → ${call_wall:.2f} "
+                    f"({migration_pct:+.1%})，現價 ${spot:.2f} 站穩舊阻力位，釋放 Gamma 空間，"
+                    f"執行 {_MICROSTRUCTURE_TP2_RATIO:.0%} 平倉。",
+                )
             return (
                 "TP2",
                 _MICROSTRUCTURE_TP2_RATIO,
@@ -233,6 +251,8 @@ class _AntiWashoutMixin:
                 f"執行 {_MICROSTRUCTURE_TP1_RATIO:.0%} 平倉。",
             )
         return None, 0.0, ""
+
+    _evaluate_microstructure_tp_tiers = _evaluate_microstructure_tp_ladder
 
     def _evaluate_microstructure_sl_ladder(
         self,

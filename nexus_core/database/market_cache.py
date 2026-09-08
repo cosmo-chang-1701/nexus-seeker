@@ -17,18 +17,28 @@ def save_market_cache(
     is_degraded: int = 0,
     circuit_breaker_triggered: int = 0,
     expiry: Optional[str] = None,
+    call_wall: Optional[float] = None,
+    previous_call_wall: Optional[float] = None,
 ) -> bool:
     if not expiry:
         expiry = "WEEKLY"
+    call_wall_val = (
+        float(call_wall) if (call_wall is not None and float(call_wall) > 0) else None
+    )
+    prev_cw_val = (
+        float(previous_call_wall)
+        if (previous_call_wall is not None and float(previous_call_wall) > 0)
+        else None
+    )
     try:
         execute_write(
             """
             INSERT INTO market_cache (
                 symbol, expiry, max_pain, expected_move_lower, expected_move_upper,
                 reference_spot_price, is_stale, calculation_mode, is_degraded,
-                circuit_breaker_triggered, updated_at
+                circuit_breaker_triggered, call_wall, previous_call_wall, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(symbol, expiry) DO UPDATE SET
             max_pain = excluded.max_pain,
             expected_move_lower = excluded.expected_move_lower,
@@ -38,6 +48,20 @@ def save_market_cache(
             calculation_mode = excluded.calculation_mode,
             is_degraded = excluded.is_degraded,
             circuit_breaker_triggered = excluded.circuit_breaker_triggered,
+            previous_call_wall = CASE
+                WHEN excluded.previous_call_wall IS NOT NULL THEN excluded.previous_call_wall
+                WHEN excluded.call_wall IS NOT NULL
+                     AND excluded.call_wall > 0
+                     AND market_cache.call_wall IS NOT NULL
+                     AND market_cache.call_wall > 0
+                     AND excluded.call_wall != market_cache.call_wall
+                THEN market_cache.call_wall
+                ELSE market_cache.previous_call_wall
+            END,
+            call_wall = CASE
+                WHEN excluded.call_wall IS NOT NULL AND excluded.call_wall > 0 THEN excluded.call_wall
+                ELSE market_cache.call_wall
+            END,
             updated_at = CURRENT_TIMESTAMP
         """,
             (
@@ -51,6 +75,8 @@ def save_market_cache(
                 calculation_mode,
                 is_degraded,
                 circuit_breaker_triggered,
+                call_wall_val,
+                prev_cw_val,
             ),
         )
         return True

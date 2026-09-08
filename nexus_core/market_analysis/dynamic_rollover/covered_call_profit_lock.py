@@ -13,30 +13,29 @@ from .structural_signals import evaluate_option_dte_tier
 
 
 class _CoveredCallProfitLockMixin:
-    """Covered Call 權利金衰減停利 (Premium Decay Profit-Lock)。
+    """賣方期權權利金衰減停利 (Short Option Premium Decay Profit-Lock)。
 
-    嚴格限定為既有的空頭 CALL 部位 (Covered Call)；空頭 PUT (CSP) 不在本次
-    範圍內，留待未來視需要用同一機制擴充。與 Scenario 2/3/5 的機會成本/
-    再平衡/核心部署完全獨立，只回答「既有空頭 CALL 部位是否該提前 BTC 回補
-    了結」這一個問題，不涉及任何轉倉/開倉決策，因此不參與 already_flagged_
-    symbols 排除邏輯。
+    支援空頭 CALL (Covered Call) 與空頭 PUT (Cash-Secured Put, CSP)。
+    與 Scenario 2/3/5 的機會成本/再平衡/核心部署完全獨立，只回答「既有空頭
+    期權部位是否該提前 BTC 回補了結」這一個問題，不涉及任何轉倉/開倉決策，
+    因此不參與 already_flagged_symbols 排除邏輯。
 
     呼叫端 (cogs/trading/portfolio_monitor.py) 需預先透過既有
     market_analysis.portfolio.get_option_chain_mid_iv() 批次抓取每筆部位的
-    current_premium 併入 short_call_positions 各筆 dict 再傳入（比照既有
+    current_premium 併入 short_positions 各筆 dict 再傳入（比照既有
     long_option_trades 的 Semaphore(3) 批次抓取模式，避免序列化 I/O）；本函式
     本身純運算、零額外網路請求。
     """
 
-    async def evaluate_covered_call_profit_lock(
+    async def evaluate_short_option_profit_lock(
         self,
         user_id: int,
-        short_call_positions: List[Dict[str, Any]],
+        short_positions: List[Dict[str, Any]],
     ) -> List[RolloverInstruction]:
         del user_id  # 目前判斷邏輯不依賴，保留供未來個人化門檻擴充
         instructions: List[RolloverInstruction] = []
 
-        for pos in short_call_positions:
+        for pos in short_positions:
             symbol = str(pos.get("symbol", "")).upper()
             entry_premium = float(pos.get("entry_price", 0.0) or 0.0)
             if entry_premium <= 0:
@@ -49,7 +48,19 @@ class _CoveredCallProfitLockMixin:
             except (ValueError, TypeError):
                 continue  # fail-safe：到期日無法解析，安全起見不產生指令
 
+            def _parse_strike(val: Any) -> float:
+                if val is None:
+                    return 0.0
+                if isinstance(val, (int, float)):
+                    return float(val)
+                try:
+                    clean = str(val).replace("$", "").strip()
+                    return float(clean) if clean else 0.0
+                except (ValueError, TypeError):
+                    return 0.0
+
             strike = pos.get("strike")
+            strike_float = _parse_strike(strike)
             quantity = float(pos.get("quantity", 0.0) or 0.0)
             current_premium = float(pos.get("current_premium", 0.0) or 0.0)
             decay_pct = (
@@ -57,6 +68,10 @@ class _CoveredCallProfitLockMixin:
                 if current_premium > 0
                 else 0.0
             )
+
+            opt_type = str(pos.get("opt_type", "CALL")).upper()
+            is_csp = opt_type == "PUT"
+            strategy_label = "Cash-Secured Put (CSP)" if is_csp else "Covered Call"
 
             dte_tier = evaluate_option_dte_tier(dte, "MANAGE_EXISTING")
             if dte_tier == "EXPIRATION_SETTLEMENT_ALERT":
@@ -68,37 +83,60 @@ class _CoveredCallProfitLockMixin:
                     if current_premium > 0
                     else "現價權利金報價暫缺"
                 )
+                margin_released = (
+                    strike_float * 100.0 * abs(quantity) * btc_ratio if is_csp else 0.0
+                )
+                margin_note = (
+                    f"，預估釋放現金擔保金 ${margin_released:,.2f}" if is_csp else ""
+                )
                 reason = (
-                    "🆘 **末日結算保護 (Covered Call Forced Settlement)**\n"
-                    f"{symbol} Covered Call DTE={dte}"
+                    f"🆘 **末日結算保護 ({strategy_label} Forced Settlement)**\n"
+                    f"{symbol} {strategy_label} DTE={dte}"
                     f"（<= {_HOLDING_DTE_FORCED_SETTLEMENT_THRESHOLD}），"
-                    f"無論權利金衰減幅度，強制 100% BTC 回補了結。{premium_desc}"
+                    f"無論權利金衰減幅度，強制 100% BTC 回補了結{margin_note}。{premium_desc}"
                 )
             elif current_premium <= 0:
                 continue  # fail-safe：報價缺失，不猜測衰減幅度
             elif decay_pct >= _COVERED_CALL_PROFIT_LOCK_FULL_DECAY_PCT:
                 btc_ratio = 1.0
+                margin_released = (
+                    strike_float * 100.0 * abs(quantity) * btc_ratio if is_csp else 0.0
+                )
+                margin_note = (
+                    f"並釋放現金擔保金 ${margin_released:,.2f}"
+                    if is_csp
+                    else "鎖定收益"
+                )
                 reason = (
-                    "💡 **Covered Call 權利金衰減停利 (全額)**\n"
+                    f"💡 **{strategy_label} 權利金衰減停利 (全額)**\n"
                     f"{symbol} 原始權利金 ${entry_premium:.2f} → 現價權利金 "
                     f"${current_premium:.2f}，衰減 {decay_pct:.0%} "
                     f"(達 {_COVERED_CALL_PROFIT_LOCK_FULL_DECAY_PCT:.0%} 全額門檻)，"
-                    "時間價值收租已完成，建議全額 BTC 回補鎖定收益。"
+                    f"時間價值收租已完成，建議全額 BTC 回補{margin_note}。"
                 )
             elif decay_pct >= _COVERED_CALL_PROFIT_LOCK_PARTIAL_DECAY_PCT:
                 btc_ratio = _COVERED_CALL_PROFIT_LOCK_PARTIAL_RATIO
+                margin_released = (
+                    strike_float * 100.0 * abs(quantity) * btc_ratio if is_csp else 0.0
+                )
+                margin_note = (
+                    f"，預估釋放現金擔保金 ${margin_released:,.2f}" if is_csp else ""
+                )
                 reason = (
-                    "💡 **Covered Call 權利金衰減停利 (局部)**\n"
+                    f"💡 **{strategy_label} 權利金衰減停利 (局部)**\n"
                     f"{symbol} 原始權利金 ${entry_premium:.2f} → 現價權利金 "
                     f"${current_premium:.2f}，衰減 {decay_pct:.0%} "
                     f"(達 {_COVERED_CALL_PROFIT_LOCK_PARTIAL_DECAY_PCT:.0%} 局部門檻)，"
-                    f"建議 BTC 回補 {btc_ratio:.0%} 部位局部鎖定收益。"
+                    f"建議 BTC 回補 {btc_ratio:.0%} 部位局部鎖定收益{margin_note}。"
                 )
             else:
                 continue  # 未達任何衰減門檻，不產生指令
 
             cash_impact = format_cash_impact(
                 abs(quantity) * btc_ratio * current_premium * 100
+            )
+            margin_released_val = (
+                strike_float * 100.0 * abs(quantity) * btc_ratio if is_csp else 0.0
             )
 
             instructions.append(
@@ -118,9 +156,13 @@ class _CoveredCallProfitLockMixin:
                     "is_extreme_tick_breach": False,
                     "extreme_breach_detail_block": None,
                     "instrument_type": "OPTIONS",
-                    "strike": f"${float(strike):.2f}" if strike else "N/A",
+                    "strike": f"${strike_float:.2f}" if strike_float > 0 else "N/A",
                     "expiry": expiry or "N/A",
                     "is_covered_call_profit_lock": True,
+                    "is_short_option_profit_lock": True,
+                    "is_csp": is_csp,
+                    "opt_type": opt_type,
+                    "margin_released": margin_released_val,
                     "entry_premium": entry_premium,
                     "current_premium": current_premium,
                     "decay_pct": decay_pct,
@@ -128,3 +170,13 @@ class _CoveredCallProfitLockMixin:
                 }
             )
         return instructions
+
+    async def evaluate_covered_call_profit_lock(
+        self,
+        user_id: int,
+        short_call_positions: List[Dict[str, Any]],
+    ) -> List[RolloverInstruction]:
+        """向後相容別名：轉呼叫 evaluate_short_option_profit_lock。"""
+        return await self.evaluate_short_option_profit_lock(
+            user_id, short_call_positions
+        )

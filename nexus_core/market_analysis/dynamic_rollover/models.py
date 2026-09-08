@@ -122,11 +122,12 @@ class RolloverInstruction(_RolloverInstructionRequired, total=False):
     # 複合去重鍵與每日 kv_cache dedup key，避免同一標的的現貨與期權部位互相
     # 誤判為同一筆已處理的建議。未提供時各消費端一律 fallback 為 "SPOT"。
     instrument_type: str
-    # Covered Call 權利金衰減停利 (covered_call_profit_lock.py) 專屬欄位。
-    # is_covered_call_profit_lock 供呈現層判斷走專屬 embed 分支（比照既有
-    # is_covered_call_overlay 旗標模式）；其餘僅該情境的指令會攜帶，其他
-    # 情境維持 None。
+    # 賣方期權時間價值停利 (covered_call_profit_lock.py) 專屬欄位。
     is_covered_call_profit_lock: Optional[bool]
+    is_short_option_profit_lock: Optional[bool]
+    is_csp: Optional[bool]
+    opt_type: Optional[str]
+    margin_released: Optional[float]
     entry_premium: Optional[float]
     current_premium: Optional[float]
     decay_pct: Optional[float]

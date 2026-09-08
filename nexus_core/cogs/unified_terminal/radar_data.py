@@ -407,9 +407,19 @@ class RadarDataMixin:
                 "signal_direction": sqz_dir,
                 "direction": sqz_dir,
             },
+            "previous_call_wall": float(
+                market_cache.get("previous_call_wall")
+                or radar_cache.get("previous_call_wall")
+                or 0.0
+            ),
             "gex_metrics": {
                 "put_wall": put_wall,
                 "call_wall": call_wall,
+                "previous_call_wall": float(
+                    market_cache.get("previous_call_wall")
+                    or radar_cache.get("previous_call_wall")
+                    or 0.0
+                ),
                 "net_gex": net_gex,
                 "put_wall_gex": put_wall_gex,
                 "_is_stale_cache": gex_is_stale,
@@ -417,6 +427,11 @@ class RadarDataMixin:
             "gex_profile_data": {
                 "put_wall": put_wall,
                 "call_wall": call_wall,
+                "previous_call_wall": float(
+                    market_cache.get("previous_call_wall")
+                    or radar_cache.get("previous_call_wall")
+                    or 0.0
+                ),
                 "net_gex": net_gex,
                 "gex_profile": gex_data.get("gex_profile", {}),
                 "put_wall_gex": put_wall_gex,
@@ -559,6 +574,41 @@ class RadarDataMixin:
             if pw_strike
             else 0.0
         )
+
+        # 持久化 call_wall 至 market_cache 供做市商阻力牆跨週期遷移追蹤 (TP2)
+        c_wall_val = (
+            float(gex_data.get("call_wall", 0.0) or 0.0)
+            if isinstance(gex_data, dict)
+            else 0.0
+        )
+        prev_call_wall_val = 0.0
+        if c_wall_val > 0:
+            try:
+                from database.market_cache import save_market_cache, get_market_cache
+
+                save_market_cache(
+                    symbol=sym,
+                    max_pain=float((mp_data or {}).get("max_pain") or 0.0)
+                    if isinstance(mp_data, dict)
+                    else 0.0,
+                    expected_move_lower=float(
+                        (mp_data or {}).get("expected_move_lower") or 0.0
+                    )
+                    if isinstance(mp_data, dict)
+                    else 0.0,
+                    expected_move_upper=float(
+                        (mp_data or {}).get("expected_move_upper") or 0.0
+                    )
+                    if isinstance(mp_data, dict)
+                    else 0.0,
+                    reference_spot_price=price,
+                    call_wall=c_wall_val,
+                )
+                cached_mc = get_market_cache(sym)
+                if cached_mc and cached_mc.get("previous_call_wall") is not None:
+                    prev_call_wall_val = float(cached_mc["previous_call_wall"] or 0.0)
+            except Exception as cw_err:
+                logger.warning(f"[{sym}] 寫入 market_cache call_wall 失敗: {cw_err}")
 
         # 異步預警：若返回資料標記為 stale，啟動背景重新驗證
         if mp_data.get("is_stale"):
@@ -714,6 +764,7 @@ class RadarDataMixin:
             "max_pain": mp_data,
             "uoa": uoa_data,
             "uoa_age_seconds": 0.0,
+            "previous_call_wall": prev_call_wall_val,
             "gex_profile_data": {
                 "put_wall": gex_data.get("put_wall")
                 if isinstance(gex_data, dict)
@@ -721,6 +772,7 @@ class RadarDataMixin:
                 "call_wall": gex_data.get("call_wall")
                 if isinstance(gex_data, dict)
                 else 0.0,
+                "previous_call_wall": prev_call_wall_val,
                 "net_gex": gex_data.get("net_gex")
                 if isinstance(gex_data, dict)
                 else 0.0,
@@ -739,6 +791,7 @@ class RadarDataMixin:
                 "call_wall": gex_data.get("call_wall")
                 if isinstance(gex_data, dict)
                 else 0.0,
+                "previous_call_wall": prev_call_wall_val,
                 "net_gex": gex_data.get("net_gex")
                 if isinstance(gex_data, dict)
                 else 0.0,
@@ -775,6 +828,7 @@ class RadarDataMixin:
                 "call_wall_strike": gex_data.get("call_wall")
                 if isinstance(gex_data, dict)
                 else 0.0,
+                "previous_call_wall": prev_call_wall_val,
                 "net_gex": gex_data.get("net_gex")
                 if isinstance(gex_data, dict)
                 else 0.0,

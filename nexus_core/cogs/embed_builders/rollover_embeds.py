@@ -48,7 +48,7 @@ _SCENARIO_STYLE: Dict[str, Dict[str, Any]] = {
     },
     "COVERED_CALL_PROFIT_LOCK": {
         "emoji": "🖋️",
-        "label": "Covered Call 權利金衰減停利",
+        "label": "賣方期權時間價值停利 (Covered Call / CSP)",
         # 綠色系：權利金衰減對賣方有利，屬獲利了結的正面結果，與
         # CORE_DEPLOYMENT 同色系呼應。
         "color": discord.Color.green(),
@@ -703,11 +703,13 @@ def create_covered_call_profit_lock_embed(
     strike: str,
     expiry: str,
     cash_impact: Optional[str] = None,
+    opt_type: Optional[str] = None,
+    margin_released: Optional[float] = None,
 ) -> discord.Embed:
     """
-    產生 Covered Call 權利金衰減停利 (Premium Decay Profit-Lock) 的專屬 Embed。
+    產生賣方期權權利金衰減停利 (Covered Call / CSP) 的專屬 Embed。
 
-    刻意不重用 create_dynamic_rollover_embed：本情境是既有空頭 CALL 部位的
+    刻意不重用 create_dynamic_rollover_embed：本情境是既有空頭部位的
     單純 BTC 平倉了結，沒有「賣出→買入」的第二個轉倉標的，套用通用轉倉框架
     會誤導使用者（理由與既有 create_covered_call_overlay_embed 完全相同）。
 
@@ -721,10 +723,15 @@ def create_covered_call_profit_lock_embed(
     :param strike: 履約價字串
     :param expiry: 到期日字串
     :param cash_impact: 預估回補成本字串，None 時不顯示
+    :param opt_type: 期權類型 (CALL 或 PUT，預設 CALL)
+    :param margin_released: CSP 預估釋放的擔保金金額
     """
+    is_csp = str(opt_type).upper() == "PUT" if opt_type else False
+    strategy_label = "Cash-Secured Put (CSP)" if is_csp else "Covered Call"
+
     style = _SCENARIO_STYLE["COVERED_CALL_PROFIT_LOCK"]
     embed = NexusEmbed(
-        title=f"{style['emoji']} Covered Call 權利金衰減停利: {symbol}",
+        title=f"{style['emoji']} {strategy_label} 權利金衰減停利: {symbol}",
         color=style["color"],
     )
 
@@ -740,7 +747,7 @@ def create_covered_call_profit_lock_embed(
 
     lock_lines = [
         "```ansi",
-        " 🖋️ Covered Call 停利明細",
+        f" 🖋️ {strategy_label} 停利明細",
         " ----------------------------------",
         f" ├─ 標的: {symbol}",
         f" ├─ 履約價: {C_CYAN}{strike}{C_RESET}",
@@ -751,11 +758,15 @@ def create_covered_call_profit_lock_embed(
     ]
     if cash_impact:
         lock_lines.append(f" ├─ 預估回補成本: {cash_impact}")
+    if is_csp and margin_released is not None and margin_released > 0:
+        lock_lines.append(
+            f" ├─ 預估釋放擔保金: {C_GREEN}${margin_released:,.2f}{C_RESET}"
+        )
     lock_lines.append(f" └─ 建議回補比例: {C_GREEN}{btc_ratio:.0%}{C_RESET}")
     lock_lines.append("```")
 
     embed.add_field(
-        name="🖋️ Covered Call 停利明細",
+        name=f"🖋️ {strategy_label} 停利明細",
         value="\n".join(lock_lines),
         inline=False,
     )
@@ -765,6 +776,9 @@ def create_covered_call_profit_lock_embed(
     )
 
     return embed
+
+
+create_short_option_profit_lock_embed = create_covered_call_profit_lock_embed
 
 
 def create_transition_pyramid_embed(
