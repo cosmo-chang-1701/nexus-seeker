@@ -138,6 +138,15 @@ class _AntiWashoutMixin:
             else:
                 base_stop_loss = lvn - (1.0 * atr_15m)
 
+        # 動態調整狀態切換引擎路徑 1 已上移的保本地板：Regime 只負責「抬高
+        # 地板」，實際的執行judgement 仍完全由本階梯決定 (職責邊界，見
+        # transition_engine.py 模組 docstring)。取 max 而非覆寫——結構性停損
+        # 若已高於保本點 (部位續漲、anchor_base 隨之上移)，應沿用較高者，
+        # 保本地板只保證「不會再退回成本以下」，不會反過來把停損拉低。
+        ratchet_stop = float(metrics.get("ratchet_stop", 0.0) or 0.0)
+        if ratchet_stop > 0:
+            base_stop_loss = max(base_stop_loss, ratchet_stop)
+
         stop_loss = round(base_stop_loss, 2)
         limit_price = round(
             max(stop_loss - (0.5 * atr_15m if atr_15m > 0 else 0.6), stop_loss * 0.995),
@@ -1040,6 +1049,10 @@ async def check_satellite_rebalancing_impl(
             lvn: float = float(asset.get("lvn", 0.0))
             price_15m_close: float = float(asset.get("price_15m_close", spot))
             price_15m_open: float = float(asset.get("price_15m_open", spot))
+            # 路徑 1 上移後持久化的保本停損地板 (未標記/未觸發者為 0.0)
+            ratchet_stop: float = float(
+                (asset.get("dynamic_strategy_state") or {}).get("ratchet_stop") or 0.0
+            )
             atr_15m: float = float(asset.get("atr_15m", 0.0))
             acquired_at: Optional[str] = asset.get("acquired_at")
             iv_term_structure_status: Optional[str] = asset.get(
@@ -1118,6 +1131,7 @@ async def check_satellite_rebalancing_impl(
                 "dte": dte,
                 "price_15m_close": price_15m_close,
                 "price_15m_open": price_15m_open,
+                "ratchet_stop": ratchet_stop,
                 "atr_15m": atr_15m,
                 "support_wall": support_wall,
                 "resistance_wall": resistance_wall,

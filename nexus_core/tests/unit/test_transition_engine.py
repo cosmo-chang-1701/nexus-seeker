@@ -127,10 +127,11 @@ async def test_path1_left_evolves_to_right_pyramid_and_ratchet(
     assert pyramid_ins["exit_tier"] == "TRANSITION_PYRAMID"
     # 狀態改由派發端在確認送出後才提交，引擎只負責附上待寫入的增量
     mock_set_state.assert_not_called()
-    assert hold_ins["dynamic_state_patch"] == {
-        "ratchet_applied": True,
-        "pyramided": True,
-    }
+    _patch = hold_ins["dynamic_state_patch"]
+    assert _patch is not None
+    assert _patch["ratchet_applied"] is True
+    assert _patch["pyramided"] is True
+    assert _patch["ratchet_stop"] > 0
 
 
 @pytest.mark.asyncio
@@ -426,10 +427,10 @@ async def test_path1_defers_state_commit_to_dispatcher(
     mock_set_state.assert_not_called()
     for ins in instructions:
         assert ins["asset_id"] == 42
-        assert ins["dynamic_state_patch"] == {
-            "ratchet_applied": True,
-            "pyramided": True,
-        }
+        _ins_patch = ins["dynamic_state_patch"]
+        assert _ins_patch is not None
+        assert _ins_patch["ratchet_applied"] is True
+        assert _ins_patch["pyramided"] is True
 
 
 @pytest.mark.asyncio
@@ -482,3 +483,77 @@ async def test_tagged_asset_still_runs_generic_exit_ladder(
     assert instructions[0]["symbol"] == "NVDA"
     assert instructions[0]["action"] == "REDUCE"
     assert instructions[0]["scenario"] == "SATELLITE_REBALANCE"
+
+
+@pytest.mark.asyncio
+@patch("market_analysis.dynamic_rollover.transition_engine.set_asset_dynamic_state")
+async def test_path1_persists_ratchet_stop_for_ladder(
+    mock_set_state: MagicMock, engine: DynamicRolloverEngine
+) -> None:
+    """路徑1算出的保本停損必須被持久化，否則「停損已上移」只存在於一封已發出的
+    DM 文字裡，沒有任何執行端會真正守住它。"""
+    asset = _base_asset(
+        avg_cost=48.0,
+        dynamic_strategy_state={
+            "entry_mode": "DYNAMIC",
+            "entry_regime": "REGIME_I_LEFT_CATCH",
+            "pyramided": False,
+            "lockout": False,
+        },
+    )
+    metrics = _base_metrics(
+        price_15m_close=52.0,
+        session_vwap=48.0,
+        gamma_flip=50.0,
+        call_wall=70.0,
+        put_wall=40.0,
+        vwap_reclaim_with_volume=True,
+    )
+
+    instructions = await evaluate_transition_for_position(engine, 1, asset, metrics)
+
+    patch_payload = instructions[0]["dynamic_state_patch"]
+    assert patch_payload is not None
+    assert patch_payload["ratchet_applied"] is True
+    assert patch_payload["ratchet_stop"] > 0
+    # 保本地板不得低於開倉成本
+    assert patch_payload["ratchet_stop"] >= 48.0
+
+
+def test_ratchet_stop_raises_ladder_stop_floor(engine: DynamicRolloverEngine) -> None:
+    """已持久化的保本地板必須被風控階梯的停損計算讀取並取 max——這是 Regime
+    「抬高地板」與階梯「負責執行」之間的交接點。"""
+    base_metrics = {
+        "spot_price": 100.0,
+        "atr_15m": 1.0,
+        "lvn": 0.0,
+        "hvn": 0.0,
+    }
+    stop_without, _limit, _extreme = engine._compute_anti_washout_stop(
+        95.0, dict(base_metrics)
+    )
+    stop_with, _limit2, _extreme2 = engine._compute_anti_washout_stop(
+        95.0, {**base_metrics, "ratchet_stop": 98.0}
+    )
+
+    # anchor 95 - 0.5×ATR 1.0 = 94.5；保本地板 98.0 應勝出
+    assert stop_without == 94.5
+    assert stop_with == 98.0
+
+
+def test_ratchet_stop_never_lowers_an_already_higher_stop(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """結構性停損若已高於保本點 (部位續漲、anchor 隨之上移)，保本地板不得反過來
+    把停損拉低。"""
+    metrics = {
+        "spot_price": 130.0,
+        "atr_15m": 1.0,
+        "lvn": 0.0,
+        "hvn": 0.0,
+        "ratchet_stop": 98.0,
+    }
+    stop, _limit, _extreme = engine._compute_anti_washout_stop(125.0, metrics)
+
+    # anchor 125 - 0.5 = 124.5，遠高於保本地板 98.0
+    assert stop == 124.5

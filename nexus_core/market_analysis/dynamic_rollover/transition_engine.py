@@ -167,7 +167,14 @@ async def evaluate_transition_for_position(
             # (預設為 true) 三道閘門。若在這裡就寫入 pyramided=True，一旦推播被
             # 抑制，這個一次性切換就永久燒掉、加碼與保本停損建議再也不會發出。
             # 改為附在指令上，由派發端在確認送出後才提交 (見 dynamic_state_patch)。
-            _state_patch = {"ratchet_applied": True, "pyramided": True}
+            # ratchet_stop 會被 anti_washout.py::_compute_anti_washout_stop 讀取為
+            # 停損地板 (取 max)，讓「已上移至保本」這件事真正被風控階梯執行，
+            # 而不只是出現在一封已發出的 DM 文字裡。
+            _state_patch = {
+                "ratchet_applied": True,
+                "pyramided": True,
+                "ratchet_stop": round(new_stop, 2),
+            }
             return [
                 {
                     "symbol": symbol,

@@ -805,6 +805,8 @@ Regime II is deliberately implemented as the `else` fallback rather than checkin
 - `SL-結構失效` 在 `anchor_base − 0.5×ATR₁₅ₘ` 觸發，而 `_resolve_canonical_anchor_base` 的優先序本就包含 `put_wall`——對貼著底牆的 Regime I 部位而言，比舊路徑 2 的 `put_wall × 0.985` **更早觸發**。
 - `TP1/TP2/TP3` 依實際價格與 Call Wall 距離**分層減碼**（50%/30%/20%），取代舊路徑 4 一次性 100% 平倉；`TP3` 的 VWAP 帶量失守判定涵蓋舊路徑 3。
 
+**保本停損的錨點交接**：路徑 1 算出的保本價 (`max(avg_cost, anchor_base)`) 會以 `ratchet_stop` 持久化進 `dynamic_strategy_state`，並由 `_compute_anti_washout_stop()` 讀取為**停損地板**（`base_stop_loss = max(base_stop_loss, ratchet_stop)`）。這是「Regime 抬高地板、階梯負責執行」的具體交接點——若不持久化，「停損已上移至保本」就只存在於一封已發出的 DM 文字裡，沒有任何執行端會守住它。取 `max` 而非覆寫：部位續漲使 `anchor_base` 隨之上移時，結構性停損可能已高於保本點，此時應沿用較高者；保本地板只保證「不會再退回成本以下」，不會反過來把停損拉低。因為地板是套在 `_compute_anti_washout_stop()` 這個單一來源內，閘門評估與最終報告產生兩條路徑會自動看到同一個值。
+
 **一次性狀態的提交時機**：`pyramided` / `ratchet_applied` 等只觸發一次的旗標**不在引擎內落地**。DM 要到 `portfolio_monitor.py` 派發迴圈才送出，中間隔著通知開關、每日 dedup 與 `OPTIONS_ROLLOVER_DRY_RUN`（**預設為 true**）三道閘門；提前寫入會讓推播一旦被抑制，該切換就永久燒掉、對應建議再也不會發出。引擎改為把待寫入的增量掛在指令的 `dynamic_state_patch` / `asset_id` 欄位上，由派發端在確認送出後才 `set_asset_dynamic_state`。
 
 **手動部位標記**：本平台從不自動下單，部位一律由使用者手動記錄，故動態引擎歸屬透過 `/add_trade`、`/edit_trade`、`/add_holding`、`/edit_holding` 的選填 `dynamic_entry_regime` 參數捕捉，存於既有 `assets.metadata` JSON 的 `dynamic_strategy_state`（**無需 schema migration**，比照 `asset_class`/`acquired_at` 既有作法）。`build_dynamic_strategy_state_for_symbol()` 另會擷取標記當下已收盤 15m K 棒的低點存為 `entry_bar_low`。語意界線：那是**標記當下**而非**成交當下**的 K 棒；若使用者事後才標記會產生偏移。抓取失敗留空，不猜測。
