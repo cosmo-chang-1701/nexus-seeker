@@ -139,7 +139,25 @@ class TestRegimeIV:
                 [],
             )
         assert regime == DynamicRegime.REGIME_IV_STRUCTURAL_CAP_CRISIS
-        assert "Call Wall 空間" in reason
+        assert "Call Wall $102.00 空間 +2.00% 不足 5%" in reason
+
+    @pytest.mark.asyncio
+    async def test_call_wall_negative_room_percentage_formatting(self) -> None:
+        """Call Wall 低於現價 (已觸及或跌破) 時，距離為負值且小於 5% 門檻，
+        格式化應包含帶負號百分比與門檻。"""
+        with patch(
+            "market_analysis.index_microstructure.get_market_regime",
+            new_callable=AsyncMock,
+            return_value="NORMAL",
+        ):
+            regime, reason, _df = await classify_dynamic_regime(
+                "TEST",
+                100.0,
+                {"call_wall": 98.0, "put_wall": 90.0, "gex_profile": {}},
+                [],
+            )
+        assert regime == DynamicRegime.REGIME_IV_STRUCTURAL_CAP_CRISIS
+        assert "Call Wall $98.00 空間 -2.00% 不足 5%" in reason
 
     @pytest.mark.asyncio
     async def test_sto_call_physical_cap_forces_regime_iv(self) -> None:
@@ -163,7 +181,71 @@ class TestRegimeIV:
                 uoa,
             )
         assert regime == DynamicRegime.REGIME_IV_STRUCTURAL_CAP_CRISIS
-        assert "STO Call 壓頂" in reason
+        assert "STO Call 壓頂 @ $120.00（位於 Call Wall 上方）" in reason
+
+    @pytest.mark.asyncio
+    async def test_sto_call_physical_cap_without_call_wall_falls_back_to_spot(
+        self,
+    ) -> None:
+        """Call Wall 缺失 (<=0 或 None) 時，封頂基準退回現價，reason 應顯示（位於現價上方）。"""
+        uoa = [
+            {
+                "type": "CALL",
+                "action": "🔴 賣出開倉 (STO - Bid)",
+                "strike": 120.0,
+                "ratio": 2.0,
+            }
+        ]
+        with patch(
+            "market_analysis.index_microstructure.get_market_regime",
+            new_callable=AsyncMock,
+            return_value="NORMAL",
+        ):
+            # 測試 call_wall 為 0.0
+            regime, reason, _df = await classify_dynamic_regime(
+                "TEST",
+                100.0,
+                {"call_wall": 0.0, "put_wall": 90.0, "gex_profile": {}},
+                uoa,
+            )
+            assert regime == DynamicRegime.REGIME_IV_STRUCTURAL_CAP_CRISIS
+            assert "STO Call 壓頂 @ $120.00（位於現價上方）" in reason
+
+            # 測試 call_wall 為 None
+            regime_none, reason_none, _ = await classify_dynamic_regime(
+                "TEST",
+                100.0,
+                {"call_wall": None, "put_wall": 90.0, "gex_profile": {}},
+                uoa,
+            )
+            assert regime_none == DynamicRegime.REGIME_IV_STRUCTURAL_CAP_CRISIS
+            assert "STO Call 壓頂 @ $120.00（位於現價上方）" in reason_none
+
+    @pytest.mark.asyncio
+    async def test_call_wall_and_sto_cap_both_present_in_reason(self) -> None:
+        """Call Wall 空間不足與 STO Call 物理封頂同時觸發時，兩項原因皆應完整呈現。"""
+        uoa = [
+            {
+                "type": "CALL",
+                "action": "🔴 賣出開倉 (STO - Bid)",
+                "strike": 120.0,
+                "ratio": 2.0,
+            }
+        ]
+        with patch(
+            "market_analysis.index_microstructure.get_market_regime",
+            new_callable=AsyncMock,
+            return_value="NORMAL",
+        ):
+            regime, reason, _df = await classify_dynamic_regime(
+                "TEST",
+                100.0,
+                {"call_wall": 102.0, "put_wall": 90.0, "gex_profile": {}},
+                uoa,
+            )
+        assert regime == DynamicRegime.REGIME_IV_STRUCTURAL_CAP_CRISIS
+        assert "Call Wall $102.00 空間 +2.00% 不足 5%" in reason
+        assert "STO Call 壓頂 @ $120.00（位於 Call Wall 上方）" in reason
 
 
 class TestRegimeIII:

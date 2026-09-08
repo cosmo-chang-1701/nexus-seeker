@@ -84,7 +84,7 @@ async def classify_dynamic_regime(
     # 較寬鬆的 1.0，而右側條件三早已刻意調高為 1.5，用意就是避免一般 STO 平倉/
     # 避險單被誤判為物理封頂。此處若沿用預設值，單筆 ratio 1.2 的例行 STO 印花就
     # 會把正常盤況分類成 Regime IV 全面鎖倉。
-    has_sto_call_cap, _capping_strike = detect_uoa_sto_call_physical_cap(
+    has_sto_call_cap, capping_strike = detect_uoa_sto_call_physical_cap(
         uoa_list,
         target_spot,
         _ENTRY_UOA_CAP_RATIO_THRESHOLD,
@@ -124,9 +124,13 @@ async def classify_dynamic_regime(
         if is_deep_backwardation:
             reason += f"，VIX 期限結構深度倒掛 (vts={vts_ratio:.2f})"
         if is_call_wall_capped and call_wall_room_pct is not None:
-            reason += f"，Call Wall 空間 {call_wall_room_pct:+.2%} 不足"
+            reason += (
+                f"，Call Wall ${call_wall:.2f} 空間 {call_wall_room_pct:+.2%} "
+                f"不足 {_REGIME_IV_CALL_WALL_PROXIMITY_PCT:.0%}"
+            )
         if has_sto_call_cap:
-            reason += "，偵測到 STO Call 壓頂"
+            wall_desc = "位於 Call Wall 上方" if call_wall > 0 else "位於現價上方"
+            reason += f"，偵測到 STO Call 壓頂 @ ${capping_strike:.2f}（{wall_desc}）"
         return (
             DynamicRegime.REGIME_IV_STRUCTURAL_CAP_CRISIS,
             reason,
