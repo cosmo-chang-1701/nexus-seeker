@@ -3,6 +3,7 @@ from typing import Any, Optional, Tuple
 
 from . import logger
 from .constants import (
+    _ENTRY_UOA_CAP_RATIO_THRESHOLD,
     _ENTRY_VOLUME_LOOKBACK_BARS,
     _REGIME_I_PUT_WALL_LOWER_PCT,
     _REGIME_I_PUT_WALL_UPPER_PCT,
@@ -79,8 +80,15 @@ async def classify_dynamic_regime(
         call_wall_room_pct is not None
         and call_wall_room_pct < _REGIME_IV_CALL_WALL_PROXIMITY_PCT
     )
+    # ratio 門檻必須顯式傳入 _ENTRY_UOA_CAP_RATIO_THRESHOLD (1.5)：函式預設值仍是
+    # 較寬鬆的 1.0，而右側條件三早已刻意調高為 1.5，用意就是避免一般 STO 平倉/
+    # 避險單被誤判為物理封頂。此處若沿用預設值，單筆 ratio 1.2 的例行 STO 印花就
+    # 會把正常盤況分類成 Regime IV 全面鎖倉。
     has_sto_call_cap, _capping_strike = detect_uoa_sto_call_physical_cap(
-        uoa_list, target_spot, wall_reference=call_wall if call_wall > 0 else None
+        uoa_list,
+        target_spot,
+        _ENTRY_UOA_CAP_RATIO_THRESHOLD,
+        wall_reference=call_wall if call_wall > 0 else None,
     )
 
     # VIX 期限結構深度倒掛：get_market_regime() 的 SHORT_GAMMA_CRITICAL 需同時

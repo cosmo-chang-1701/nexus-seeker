@@ -1016,6 +1016,12 @@ async def check_satellite_rebalancing_impl(
             call_wall: float = float(asset.get("call_wall", 0.0))
             max_pain: float = float(asset.get("max_pain", 0.0))
             ivr: float = float(asset.get("ivr", 0.0))
+            # ⚠️ 既有缺陷修正：portfolio_monitor 早已把 ivr_drop 放進 asset
+            # entry，但此處的 metrics 組裝從未讀取它，導致
+            # _apply_decision_matrix 的 is_ivr_fast_exit
+            # (metrics.get("ivr_drop", ...)) 恆為 0.0——AGENTS.md 記載的
+            # 「OPTIONS IV 崩塌快速通道」對所有部位其實從未真正觸發過。
+            ivr_drop: float = float(asset.get("ivr_drop", 0.0))
             put_wall: float = float(asset.get("put_wall", 0.0))
             is_uoa_sweep: bool = bool(asset.get("is_uoa_sweep", False))
             sqz_mom: float = float(asset.get("sqz_mom", 0.0))
@@ -1099,6 +1105,7 @@ async def check_satellite_rebalancing_impl(
                 "call_wall": call_wall,
                 "max_pain": max_pain,
                 "ivr": ivr,
+                "ivr_drop": ivr_drop,
                 "put_wall": put_wall,
                 "is_uoa_sweep": is_uoa_sweep,
                 "sqz_mom": sqz_mom,
@@ -1160,26 +1167,28 @@ async def check_satellite_rebalancing_impl(
             # 出現兩組互相衝突的出場建議。未標記部位不受影響，直接落入下方
             # 既有邏輯。
             #
-            # 唯一例外是軌道二極端瞬時停損：黑天鵝跳空是 Transition Engine
-            # 四條切換路徑都無法涵蓋的情境——路徑 2 除了破牆還額外要求同時
-            # 偵測到追空 PUT BTO 印花，路徑 3 依賴 Session VWAP 抓取成功，
-            # 兩者在極端行情下都可能落空。若在此一併攔截，已標記部位反而會
-            # 比未標記部位保護更薄。因此軌道二一旦觸發即不交給 Transition
-            # Engine，直接落入下方既有通用路徑，由既有的 🆘【立即人工執行】
-            # 極端瞬時停損渲染流程處理。
-            # ----------------------------------------------------
+            # 狀態轉換引擎只負責「授予進場權限」(路徑1：停損上移保本 + 授權
+            # 加碼)，**不再接管出場**。它的建議與下方出場階梯並存而非互斥：
+            # 階梯對所有部位一律照跑，不因部位被標記而跳過。
+            #
+            # 這是刻意的職責邊界修正。先前的作法是讓 Transition Engine 完全
+            # 取代已標記部位的出場矩陣，結果把「部位能否活下去」綁在進場當下
+            # 貼的 entry_regime 標籤上；而該標籤從不更新，導致路徑1觸發後的
+            # 部位失去所有例行停損 (詳見 transition_engine.py 模組 docstring)。
+            # 現在 Regime 只做環境識別與進場閘門，部位存亡回歸獨立風控階梯，
+            # 因此也不再需要為軌道二極端瞬時停損與 OPTIONS IV 崩塌快速通道
+            # 各開一個例外孔。
             dynamic_state = asset.get("dynamic_strategy_state")
             if (
                 dynamic_state
                 and dynamic_state.get("entry_mode") == "DYNAMIC"
                 and not dynamic_state.get("lockout")
-                and not is_extreme_breach_gate
             ):
-                transition_instructions = await evaluate_transition_for_position(
-                    engine, user_id, asset, metrics, uoa_list
+                rebalance_instructions.extend(
+                    await evaluate_transition_for_position(
+                        engine, user_id, asset, metrics
+                    )
                 )
-                rebalance_instructions.extend(transition_instructions)
-                continue
 
             sl_tier, _sl_ratio, _sl_reason, _sl_new_stop = (
                 engine._evaluate_microstructure_sl_ladder(

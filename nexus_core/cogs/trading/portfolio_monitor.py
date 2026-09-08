@@ -34,6 +34,7 @@ from cogs.embed_builders.rollover_embeds import (
     create_covered_call_overlay_embed,
     create_covered_call_profit_lock_embed,
     create_transition_pyramid_embed,
+    create_transition_ratchet_embed,
 )
 
 ny_tz = ZoneInfo("America/New_York")
@@ -144,6 +145,12 @@ class PortfolioMonitorCog(commands.Cog):
                     confirmed_close_val = float(confirmed_bar.close)
                     if confirmed_bar.open is not None and confirmed_bar.open > 0:
                         confirmed_open_val = float(confirmed_bar.open)
+                    else:
+                        # 只拿到收盤價、拿不到開盤價時，退回**該根的收盤價**而非
+                        # 現價：退回現價會讓「實體陰線」判定變成 close < 現價，
+                        # 在破位後反彈的情境下把收紅的 K 棒誤判為陰線而觸發平倉。
+                        # 退回收盤價則使實體為零 (非陰線)，方向上 fail-safe。
+                        confirmed_open_val = confirmed_close_val
                 else:
                     logger.warning(
                         f"[{sym}] 無可用的已收盤 15m K 棒，price_15m_close 降級退回現價 "
@@ -1065,6 +1072,18 @@ class PortfolioMonitorCog(commands.Cog):
                                     ins.get("is_manual_override_required")
                                 ),
                             )
+                        elif ins.get("exit_tier") == "TRANSITION_RATCHET":
+                            # 動態調整狀態切換引擎路徑1：停損上移至保本。雖然
+                            # sell_ratio=0.0，但通用 embed 的 is_hold 判定會把它
+                            # 渲染成「安全續抱、無需任何手動操作」，與內文要求
+                            # 使用者上移停損的指示直接矛盾，故獨立渲染。
+                            embed = create_transition_ratchet_embed(
+                                symbol=ins["symbol"],
+                                reason=ins["reason"],
+                                suggested_strategy=ins.get(
+                                    "suggested_strategy", "移動止盈 (保本)"
+                                ),
+                            )
                         elif ins.get("action") == "OPEN_PYRAMID":
                             # 動態調整狀態切換引擎路徑1：順勢加碼建議，非賣出
                             # 導向框架，沒有第二個轉倉標的，理由同上不套用
@@ -1148,9 +1167,26 @@ class PortfolioMonitorCog(commands.Cog):
                                 f"user={u_id} symbol={ins['symbol']} scenario={scenario} "
                                 f"action={action}"
                             )
+                            _delivered = False
                         else:
                             await self.bot.queue_dm(u_id, embed=embed)
+                            _delivered = True
                         await database.save_kv_cache(dedup_key, 1)
+
+                        # 動態調整狀態切換引擎的一次性狀態 (pyramided / lockout)
+                        # 只在建議「確實送到使用者手上」之後才提交。若在引擎內
+                        # 提前寫入，一旦推播被通知開關或 dry-run 抑制，該切換就
+                        # 永久燒掉、對應建議再也不會發出。
+                        _state_patch = ins.get("dynamic_state_patch")
+                        _patch_asset_id = ins.get("asset_id")
+                        if _delivered and _state_patch and _patch_asset_id is not None:
+                            from market_analysis.dynamic_rollover.transition_engine import (
+                                set_asset_dynamic_state,
+                            )
+
+                            set_asset_dynamic_state(
+                                u_id, int(_patch_asset_id), **_state_patch
+                            )
                         # 審計軌跡：記錄本次實際推送給使用者的轉倉建議本身
                         # (系統僅提供建議、不代為執行券商下單，故無法追蹤實際
                         # 成交結果，此處記錄的是「推送了什麼建議」而非「後續

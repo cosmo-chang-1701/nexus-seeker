@@ -783,6 +783,8 @@ A mirrored six-rule gate for mean-reversion / market-maker Put Wall bottom-fishi
 | Regime | Trigger | Routing |
 |---|---|---|
 | **IV 結構封頂／危機態** (evaluated first) | macro regime is `SYSTEMIC_LIQUIDITY_CRISIS` **or** `SHORT_GAMMA_CRITICAL`; or deep VIX backwardation (vts ≥ 1.10); or Call Wall room < 5%; or a large STO-Call cap print | Total lockout — no entry |
+
+⚠️ `detect_uoa_sto_call_physical_cap()` 的 `ratio_threshold` **必須顯式傳入 `_ENTRY_UOA_CAP_RATIO_THRESHOLD` (1.5)**——函式簽章的預設值仍是較寬鬆的 1.0，而右側條件三早已刻意調高為 1.5，用意就是避免一般 STO 平倉/避險單被誤判為物理封頂。沿用預設值會讓單筆 ratio 1.2 的例行印花把正常盤況分類成 Regime IV 全面鎖倉。
 | **III 右側動能態** | `Spot > Gamma Flip` and above VWAP, Call Wall room ≥ 5%, positive-Gamma support wall within 5%, bullish 15m body with ≥1.5× volume, RSI > 55 | Right-side six-rule gate |
 | **I 左側接刀態** | `Spot <= VWAP − 1.5×ATR₁₅ₘ`, RSI ≤ 30, densely attached to the Put Wall (`[−1.0%, +1.5%]`) | Left-side six-rule gate |
 | **II 混沌泥淖態** | fallback (everything else) | Stand aside — no entry |
@@ -792,22 +794,27 @@ Regime II is deliberately implemented as the `else` fallback rather than checkin
 `classify_dynamic_regime()` returns `(regime, reason, RegimeMarketData)`. The third element carries the 15m frame, Session VWAP and ATR₁₅ₘ it actually fetched, which the caller hands straight to the left-side gate when routing to Regime I — this removes 4 redundant `force_refresh` network requests per candidate per cycle **and**, more importantly, guarantees that "regime classification" and "entry confirmation" are computed from the same snapshot rather than two independently-fetched ones.
 
 ### 4. Transition Engine (狀態切換引擎) — `market_analysis/dynamic_rollover/transition_engine.py`
-Manages the lifecycle of already-open positions that the user manually tagged as dynamic-engine-managed. Four switch paths:
-1. **左側進化為右側** (fires once, `pyramided` flag): a Regime I position whose 15m close reclaims both Session VWAP and Gamma Flip on ≥1.5× volume → emits a `HOLD` ratchet-to-breakeven instruction **and** a second `OPEN_PYRAMID` instruction authorizing a short-DTE (7-21) momentum add-on.
-2. **左側破牆硬停損**: 15m **bearish body** close breaching the Put Wall lower edge by ≥1.5% → `LIQUIDATE` 100%, sets `lockout`.
-3. **右側假突破防禦性平倉**: 15m close below Session VWAP **or** below the recorded entry-bar low → `LIQUIDATE` 100%.
-4. **推進至 Call Wall 獲利了結**: Call Wall room < 3.5% or a large STO-Call cap print → `LIQUIDATE` 100%.
 
-**Spec conflict resolved in path 2**: the Regime I matrix's 風險防線 column says a bearish-body breach alone is a hard stop, while the transition-path column additionally requires a chasing PUT BTO print. The stricter AND version would leave a Regime I position — which by construction sits right against the Put Wall — with no stop at all whenever no whale print happens to accompany a genuine structural failure. The 風險防線 column is the authoritative stop-loss definition, so **breach + bearish body fires the stop, and the chasing PUT BTO is demoted to an escalation note in the reason text.**
+**職責邊界（重要）**：Regime 只負責「環境識別與進場權限許可」(Gatekeeper)；部位的生死存亡一律回歸獨立的風控階梯 (`anti_washout.py` 的微觀結構出場決策矩陣)。因此這個引擎只保留**一條**真正屬於狀態轉換的路徑：
 
-**Manual position tagging**: this platform never auto-executes trades — positions are recorded by hand via `/add_trade` / `/add_holding`. So dynamic-engine attribution is captured through an optional `dynamic_entry_regime` choice param on `/add_trade`, `/edit_trade`, `/add_holding`, `/edit_holding`, persisted as new keys inside the existing `assets.metadata` JSON blob (`dynamic_strategy_state`) — **no schema migration needed**, mirroring how `asset_class`/`acquired_at` already work. `build_dynamic_strategy_state_for_symbol()` additionally captures the confirmed 15m bar's low at tagging time as `entry_bar_low` for path 3. Note the semantic limit: that low is the bar at *tagging* time, not necessarily at *fill* time; if a user tags long after entering, it will drift. Fetch failure leaves it `None` and path 3 silently falls back to VWAP-only.
+- **路徑 1 左側進化為右側**（一次性，`pyramided` 旗標）：Regime I 部位的 15m 收盤帶量（≥1.5×）站回 Session VWAP 與 Gamma Flip → 發出 `HOLD` 停損上移保本指令，並額外發出 `OPEN_PYRAMID` **授權**開立第二筆短天期(7-21 DTE)動能部位。這是在授予新的進場權限，不是在決定既有部位存亡。
+
+早期版本另有路徑 2（破 Put Wall 硬停損）、路徑 3（右側假突破平倉）、路徑 4（推進至 Call Wall 獲利了結），**已全數移除**。它們是出場矩陣既有分層的重複實作，而且把「部位能否活下去」綁在**進場當下貼上的 `entry_regime` 標籤**上。該標籤從不更新，實務後果是：路徑 1 觸發後部位仍掛著 `REGIME_I` 標籤 → 只服務 `REGIME_III` 的路徑 3 永遠套用不到它，而路徑 2 又因為部位剛站上 VWAP 而不可達 → **演化後的部位失去所有例行停損**，儘管系統才剛在 DM 裡告訴使用者「停損已上移至保本點」。
+
+既有階梯本就更嚴格且完全不看標籤：
+- `SL-結構失效` 在 `anchor_base − 0.5×ATR₁₅ₘ` 觸發，而 `_resolve_canonical_anchor_base` 的優先序本就包含 `put_wall`——對貼著底牆的 Regime I 部位而言，比舊路徑 2 的 `put_wall × 0.985` **更早觸發**。
+- `TP1/TP2/TP3` 依實際價格與 Call Wall 距離**分層減碼**（50%/30%/20%），取代舊路徑 4 一次性 100% 平倉；`TP3` 的 VWAP 帶量失守判定涵蓋舊路徑 3。
+
+**一次性狀態的提交時機**：`pyramided` / `ratchet_applied` 等只觸發一次的旗標**不在引擎內落地**。DM 要到 `portfolio_monitor.py` 派發迴圈才送出，中間隔著通知開關、每日 dedup 與 `OPTIONS_ROLLOVER_DRY_RUN`（**預設為 true**）三道閘門；提前寫入會讓推播一旦被抑制，該切換就永久燒掉、對應建議再也不會發出。引擎改為把待寫入的增量掛在指令的 `dynamic_state_patch` / `asset_id` 欄位上，由派發端在確認送出後才 `set_asset_dynamic_state`。
+
+**手動部位標記**：本平台從不自動下單，部位一律由使用者手動記錄，故動態引擎歸屬透過 `/add_trade`、`/edit_trade`、`/add_holding`、`/edit_holding` 的選填 `dynamic_entry_regime` 參數捕捉，存於既有 `assets.metadata` JSON 的 `dynamic_strategy_state`（**無需 schema migration**，比照 `asset_class`/`acquired_at` 既有作法）。`build_dynamic_strategy_state_for_symbol()` 另會擷取標記當下已收盤 15m K 棒的低點存為 `entry_bar_low`。語意界線：那是**標記當下**而非**成交當下**的 K 棒；若使用者事後才標記會產生偏移。抓取失敗留空，不猜測。
 
 ### 5. Coordination with `anti_washout.py`'s exit matrix
-The Transition Engine **subsumes** the generic Microstructure Exit Decision Matrix (SL/TP ladder) for tagged positions only — running both would produce two competing instructions for the same symbol in one cycle, which the `already_flagged_symbols` de-dup (which works across *scenarios*, not within one) isn't designed to arbitrate. Untagged positions go through the pre-existing logic completely unmodified.
+出場階梯**對所有部位一律照跑**，不因部位被標記而跳過。路徑 1 的建議與階梯的出場判定**並存而非互斥**（兩者 dedup key 的 `action` 不同，可各自投遞）。
 
-**The one exception is Track 2 extreme-tick-breach, which stays universal.** A black-swan gap-down is covered by none of the four transition paths (path 2 additionally demands a PUT BTO print; path 3 depends on a successful Session VWAP fetch), so intercepting it at the hook would leave tagged positions *less* protected than untagged ones. The hook therefore computes `is_extreme_breach_gate` first — using the exact same definition as `_apply_decision_matrix`'s internal `is_extreme_tick_breach` — and when it fires, the asset falls through to the existing generic path and its 🆘【立即人工執行】 rendering instead of the Transition Engine.
+早期版本讓 Transition Engine 完全取代已標記部位的出場矩陣，為此被迫為「軌道二極端瞬時停損」與「OPTIONS IV 崩塌快速通道」各開一個例外孔。職責邊界修正後，這兩個例外孔連同 `continue` 一併移除——階梯既然一直都在跑，就不存在需要豁免的東西。
 
-Because the hook lives inside Scenario 3 (`check_satellite_rebalancing`), it runs first in the 3→2→5→4→6 dispatch order, so its output populates `already_flagged_symbols` before Scenario 2 and Scenario 4 evaluate. This also resolves the potential overlap between Regime IV and the pre-existing Scenario 4 margin defense: the two engines act on disjoint position sets (tagged vs. untagged) with dispatch ordering as the tiebreaker, and neither's trigger conditions were weakened to accommodate the other.
+⚠️ 修正過程中另外發現一個**與本功能無關的既有缺陷**：`portfolio_monitor` 早已把 `ivr_drop` 放進 asset entry，但 `anti_washout` 的 metrics 組裝從未讀取它，導致 `_apply_decision_matrix` 的 `is_ivr_fast_exit`（`metrics.get("ivr_drop", ...)`）恆為 `0.0`——文件記載的「OPTIONS IV 崩塌快速通道」對所有部位其實**從未真正觸發過**。已補上該欄位的傳遞。
 
 ### 6. Presentation
 `RolloverScenario.TRANSITION_ENGINE` gets its own `_SCENARIO_STYLE` entry; `create_transition_pyramid_embed()` renders `OPEN_PYRAMID` with add-on framing rather than the generic sell/rollover framing (same rationale as the Covered Call Profit-Lock embed). `create_entry_rules_embed()` (the `/x symbol:` 🔐 進場鐵律檢核 tab) renders an extra 當前 Regime field when the user is in DYNAMIC mode, and the tab itself routes to whichever gate the user's strategy selects.

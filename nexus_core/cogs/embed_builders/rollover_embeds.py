@@ -814,6 +814,54 @@ def create_transition_pyramid_embed(
     return embed
 
 
+def create_transition_ratchet_embed(
+    symbol: str,
+    reason: str,
+    suggested_strategy: str,
+) -> discord.Embed:
+    """
+    產生動態調整狀態切換引擎「路徑1：停損上移至保本」的專屬 Embed。
+
+    刻意不重用 create_dynamic_rollover_embed：該函式的 `is_hold` 判定只要
+    `sell_ratio == 0.0` 就恆為真，會把本指令渲染成「🟢【狀態：安全續抱】正
+    Gamma 護城河完好，無需任何手動操作」，與內文要求使用者「把停損上移至保本
+    點」的指示直接矛盾（同一個陷阱已在 create_covered_call_overlay_embed 的
+    註解中記錄過）。本指令雖然不賣出任何部位，卻**確實需要使用者手動操作**，
+    故獨立渲染。
+    """
+    style = _SCENARIO_STYLE["TRANSITION_ENGINE"]
+    embed = NexusEmbed(
+        title=f"{style['emoji']} 動態調整・停損上移保本: {symbol}",
+        color=style["color"],
+    )
+
+    safe_reason = truncate_with_boundary(reason, _EMBED_DESCRIPTION_SAFE_LIMIT)
+    embed.description = (
+        "**🔀【建議動作：上移停損】部位維持不動，但請將停損調整至保本點**"
+        f"\n\n{safe_reason}"
+    )
+
+    C_RESET = " [0m"
+    C_GREEN = " [1;32m"
+
+    ratchet_lines = [
+        "```ansi",
+        " 🔀 停損上移",
+        " ----------------------------------",
+        f" ├─ 標的: {symbol}",
+        f" ├─ 動作: {C_GREEN}移動停損{C_RESET} (不平倉、不減碼)",
+        f" └─ 新防守位: {suggested_strategy}",
+        "```",
+    ]
+    embed.add_field(name="🔀 停損上移", value="\n".join(ratchet_lines), inline=False)
+
+    embed.set_footer(
+        text="Nexus Risk & Rollover Engine • 動態調整狀態切換引擎，需手動調整停損"
+    )
+
+    return embed
+
+
 _LOW_CONFIDENCE_THRESHOLD = 0.5
 
 

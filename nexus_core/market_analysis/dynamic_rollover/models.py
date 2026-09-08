@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Any, NamedTuple, Optional, TypedDict
+from typing import Any, Dict, NamedTuple, Optional, TypedDict
 
 from pydantic import BaseModel, Field
 
@@ -142,3 +142,10 @@ class RolloverInstruction(_RolloverInstructionRequired, total=False):
     # 產生的指令會攜帶此欄位，供呈現層顯示「當前 Regime」與分析用途；純右側/左側
     # 手動模式維持 None。
     entry_regime: Optional[str]
+    # 動態調整狀態切換引擎 (transition_engine.py) 專屬：本指令若成功推播，派發端
+    # 應提交的 dynamic_strategy_state 增量 (例如 {"pyramided": True})，以及要寫入
+    # 的資產 id。刻意不在引擎內直接落地——DM 要到 portfolio_monitor 派發迴圈才
+    # 送出，中間隔著通知開關、每日 dedup 與 OPTIONS_ROLLOVER_DRY_RUN 三道閘門，
+    # 提前寫入會讓一次性切換 (pyramided / lockout) 在推播被抑制時永久燒掉。
+    asset_id: Optional[int]
+    dynamic_state_patch: Optional[Dict[str, Any]]

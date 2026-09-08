@@ -4314,3 +4314,23 @@ def test_create_entry_rules_embed_dynamic_regime_iv_shows_no_gate_notice() -> No
     assert "左右兩套六重鐵律皆未發動判定" in blob
     assert "結構性右側放量突破確認" not in blob
     assert "結構性空頭力竭與極值乖離確認" not in blob
+
+
+def test_create_transition_ratchet_embed_does_not_say_no_action_needed() -> None:
+    """停損上移指令雖然 sell_ratio=0，卻確實需要使用者手動操作，不得沿用通用
+    轉倉 embed——後者的 is_hold 判定會渲染成「安全續抱、無需任何手動操作」，
+    與內文要求上移停損的指示直接矛盾。"""
+    from cogs.embed_builders.rollover_embeds import create_transition_ratchet_embed
+
+    embed = create_transition_ratchet_embed(
+        symbol="NVDA",
+        reason="🔀 動態調整・路徑1：左側進化為右側動能倉",
+        suggested_strategy="移動止盈 (保本) @ $180.00",
+    )
+    blob = f"{embed.title}\n{embed.description}\n" + "\n".join(
+        f"{f.name}\n{f.value}" for f in embed.fields
+    )
+    assert "無需任何手動操作" not in blob
+    assert "安全續抱" not in blob
+    assert "上移停損" in blob or "停損上移" in blob
+    assert "$180.00" in blob

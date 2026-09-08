@@ -326,3 +326,45 @@ class TestRegimeII:
             )
         assert regime == DynamicRegime.REGIME_II_CHAOS_STANDASIDE
         assert "15m 已收盤 K 線資料不足" in reason
+
+
+@pytest.mark.asyncio
+async def test_regime_iv_uses_strict_sto_ratio_threshold() -> None:
+    """Regime IV 的 STO Call 封頂偵測必須顯式套用 1.5x 門檻——沿用函式預設的 1.0
+    會讓單筆 ratio 1.2 的例行 STO 平倉單把正常盤況誤判為全面鎖倉態，連帶封鎖
+    DYNAMIC 模式下的所有進場。"""
+    routine_sto = [
+        {
+            "type": "CALL",
+            "action": "🔴 賣出開倉 (STO - Bid)",
+            "strike": 160.0,
+            "ratio": 1.2,
+            "notional_value": 400_000.0,
+        }
+    ]
+    with (
+        patch(
+            "market_analysis.index_microstructure.get_market_regime",
+            new_callable=AsyncMock,
+            return_value="NORMAL",
+        ),
+        patch(
+            "services.market_data_service.get_vix_term_structure",
+            new_callable=AsyncMock,
+            return_value={"vts_ratio": 0.9},
+        ),
+        patch(
+            "services.market_data_service.get_history_df",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        regime, reason, _data = await classify_dynamic_regime(
+            "TEST",
+            100.0,
+            {"call_wall": 150.0, "put_wall": 90.0, "gex_profile": {}},
+            routine_sto,
+        )
+
+    assert regime != DynamicRegime.REGIME_IV_STRUCTURAL_CAP_CRISIS
+    assert "STO Call 壓頂" not in reason

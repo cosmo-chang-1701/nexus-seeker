@@ -348,6 +348,8 @@ _REGIME_IV_CALL_WALL_PROXIMITY_PCT: float = 0.05
 _REGIME_IV_VTS_BACKWARDATION_RATIO: float = 1.10
 
 # --- 動態調整狀態切換引擎 (transition_engine.py::evaluate_transition_for_position) 具名常數 ---
+# 只剩路徑 1：Regime 僅負責進場權限，部位出場一律回歸 anti_washout.py 的
+# 微觀結構出場決策矩陣，故原路徑 2/4 的門檻常數已隨該邏輯一併移除。
 # 僅接管使用者透過 /add_trade、/add_holding 手動標記 dynamic_strategy_state 的
 # 部位；未標記部位完全不受影響，仍走既有 anti_washout.py 通用 SL/TP 矩陣。
 # 切換路徑 1：左側部位進化為右側動能倉 (加碼 + 停損上移保本)
@@ -358,11 +360,3 @@ _TRANSITION_PATH1_VWAP_VOLUME_MULT: float = (
 # (與 TP3 的 vwap_loss_with_volume 共用同一次 get_confirmed_15m_bar 呼叫結果)，
 # 結果以 metrics["vwap_reclaim_with_volume"] 布林值傳入 transition_engine.py；
 # 後者只在文案中引用本常數。調整此值時請一併確認該處。
-# 切換路徑 2：左側失效硬停損 (破 Put Wall 踩踏防禦)
-_TRANSITION_PATH2_PUT_WALL_BREACH_PCT: float = (
-    0.015  # 15m 收盤跌破 Put Wall 下緣達此幅度視為做市商底牆潰堤
-)
-# 切換路徑 4：推進至 Call Wall (非對稱風報比耗盡，任一 Regime 皆適用)
-_TRANSITION_PATH4_CALL_WALL_ROOM_PCT: float = (
-    0.035  # Call Wall 距現價剩餘空間低於此值視為右側動能天花板已至
-)

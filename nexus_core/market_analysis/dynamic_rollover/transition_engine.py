@@ -1,30 +1,35 @@
 """動態調整狀態切換引擎 (Transition Engine)。
 
-管理使用者透過 `/add_trade`、`/add_holding` 手動標記 `dynamic_strategy_state`
-(entry_mode="DYNAMIC") 的部位，隨市場結構從 Regime I/III 演化時的生命週期：
+**職責邊界**：Regime 只負責「環境識別與進場權限許可」(Gatekeeper)，部位的
+生死存亡一律回歸獨立的風控階梯 (anti_washout.py 的微觀結構出場決策矩陣)。
 
-- 路徑 1：左側部位進化為右側動能倉 (加碼 + 停損上移保本)
-- 路徑 2：左側失效硬停損 (破 Put Wall 踩踏防禦)
-- 路徑 3：右側假突破防禦性平倉
-- 路徑 4：推進至 Call Wall (非對稱風報比耗盡，任一 Regime 皆適用)
+因此本模組只保留唯一一條真正屬於「狀態轉換」的路徑：
 
-僅接管有標記且未 `lockout` 的部位；未標記部位完全不受影響，仍走
-`anti_washout.py` 既有的通用微觀結構出場決策矩陣 (SL/TP 分層)。
+- 路徑 1：左側部位進化為右側動能倉——停損上移至保本點，並**授權**開立第二筆
+  高動能部位 (Pyramiding)。這是在「授予新的進場權限」，而非決定既有部位存亡。
+
+曾經存在的路徑 2 (破 Put Wall 硬停損)、路徑 3 (右側假突破平倉)、路徑 4
+(推進至 Call Wall 獲利了結) 已全部移除，因為它們是出場決策矩陣既有分層的
+重複實作，而且更糟的是：它們把「部位能否活下去」綁在**進場當下貼上的
+entry_regime 標籤**上。實務後果是 entry_regime 從不更新，路徑 1 觸發後部位
+仍掛著 REGIME_I 標籤，導致只服務 REGIME_III 的路徑 3 永遠不會套用到它，而
+路徑 2 又因為部位剛站上 VWAP 而不可達——等於演化後的部位失去所有例行停損。
+
+既有階梯本就更嚴格且不看標籤：
+  - SL-結構失效在 anchor_base − 0.5×ATR₁₅ₘ 觸發，而 anchor_base 的優先序
+    本就包含 put_wall，對貼著底牆的部位比舊路徑 2 的 put_wall×0.985 更早。
+  - TP1/TP2/TP3 依實際價格與 Call Wall 距離分層減碼，取代舊路徑 4 的一次性
+    100% 平倉；TP3 的 VWAP 帶量失守判定則涵蓋舊路徑 3。
+
+移除後，anti_washout.py 掛載點不再需要為已標記部位開「軌道二極端瞬時停損」
+與「OPTIONS IV 崩塌快速通道」兩個例外孔——階梯對所有部位一律照跑。
 """
 
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from market_analysis.index_microstructure import detect_uoa_sto_call_physical_cap
-
 from . import logger
-from .constants import (
-    _LEFT_ENTRY_UOA_CHASE_MIN_PREMIUM_USD,
-    _LEFT_ENTRY_UOA_CHASE_RATIO_THRESHOLD,
-    _TRANSITION_PATH1_VWAP_VOLUME_MULT,
-    _TRANSITION_PATH2_PUT_WALL_BREACH_PCT,
-    _TRANSITION_PATH4_CALL_WALL_ROOM_PCT,
-)
+from .constants import _TRANSITION_PATH1_VWAP_VOLUME_MULT
 from .models import RolloverInstruction, RolloverScenario
 
 
@@ -111,41 +116,11 @@ def set_asset_dynamic_state(user_id: int, asset_id: int, **patch: Any) -> bool:
     )
 
 
-def _detect_chasing_put_bto(uoa_list: list, put_wall: float) -> bool:
-    """掃描 UOA 清單偵測是否存在追空踩踏 PUT BTO (strike < put_wall、
-    ratio/權利金超過門檻)。與 `left_side_entry.py::
-    _confirm_left_entry_condition3_no_panic_cliff` 使用完全相同的判定邏輯，
-    僅語意相反：左側條件三要求「不存在」此類印花才允許進場；此處路徑 2
-    要求「確實存在」此類印花才確認硬停損（追跌對沖已實際發生，而非僅結構
-    破位本身）。刻意各自實作而非直接呼叫該函式——後者是一個回傳 bool 並
-    同時 append reasons 的完整進場條件判定，介面不適合單純的訊號偵測用途。
-    """
-    for entry in uoa_list:
-        if not isinstance(entry, dict):
-            continue
-        if str(entry.get("type", "")).upper() != "PUT":
-            continue
-        if "BTO" not in str(entry.get("action", "")):
-            continue
-        ratio = float(entry.get("ratio", 0.0) or 0.0)
-        notional_value = float(entry.get("notional_value", 0.0) or 0.0)
-        strike = float(entry.get("strike", 0.0) or 0.0)
-        if (
-            ratio > _LEFT_ENTRY_UOA_CHASE_RATIO_THRESHOLD
-            and notional_value >= _LEFT_ENTRY_UOA_CHASE_MIN_PREMIUM_USD
-            and put_wall > 0
-            and strike < put_wall
-        ):
-            return True
-    return False
-
-
 async def evaluate_transition_for_position(
     engine: Any,
     user_id: int,
     asset: Dict[str, Any],
     metrics: Dict[str, Any],
-    uoa_list: Optional[List[Dict[str, Any]]] = None,
 ) -> List[RolloverInstruction]:
     """評估單一已標記部位的狀態切換路徑，回傳本輪應發出的 `RolloverInstruction`
     列表（可能為空 list = 本輪無動作；路徑 1 會同時回傳停損上移 HOLD 與
@@ -159,7 +134,6 @@ async def evaluate_transition_for_position(
     entry_regime = state.get("entry_regime")
     asset_id = asset.get("asset_id")
     symbol = str(asset.get("symbol", ""))
-    current_value = float(asset.get("current_value", 0.0))
     avg_cost = float(asset.get("avg_cost", 0.0))
     asset_class = str(
         asset.get("instrument_type", asset.get("asset_type", "SPOT"))
@@ -170,15 +144,9 @@ async def evaluate_transition_for_position(
 
     spot = float(metrics.get("spot_price", 0.0))
     price_15m_close = float(metrics.get("price_15m_close", spot))
-    price_15m_open = float(metrics.get("price_15m_open", spot))
-    call_wall = float(metrics.get("call_wall", 0.0))
-    put_wall = float(metrics.get("put_wall", 0.0))
     gamma_flip = float(metrics.get("gamma_flip", 0.0))
     session_vwap = float(metrics.get("session_vwap", 0.0))
     vwap_reclaim_with_volume = bool(metrics.get("vwap_reclaim_with_volume", False))
-    uoa_list = uoa_list if uoa_list is not None else (asset.get("uoa", []) or [])
-
-    cash_impact = f"${current_value:,.0f}" if current_value > 0 else None
 
     if entry_regime == "REGIME_I_LEFT_CATCH":
         # 路徑 1：左側部位進化為右側動能倉 (加碼 + 停損上移保本)。只觸發一次
@@ -194,10 +162,12 @@ async def evaluate_transition_for_position(
         ):
             anchor_base, _ = engine._correct_wall_topology(metrics)
             new_stop = anchor_base if avg_cost <= 0 else max(avg_cost, anchor_base)
-            if asset_id is not None:
-                set_asset_dynamic_state(
-                    user_id, int(asset_id), ratchet_applied=True, pyramided=True
-                )
+            # 狀態刻意**不在此處**落地：DM 要到 portfolio_monitor 的派發迴圈才
+            # 實際送出，中間還隔著通知開關、每日 dedup 與 OPTIONS_ROLLOVER_DRY_RUN
+            # (預設為 true) 三道閘門。若在這裡就寫入 pyramided=True，一旦推播被
+            # 抑制，這個一次性切換就永久燒掉、加碼與保本停損建議再也不會發出。
+            # 改為附在指令上，由派發端在確認送出後才提交 (見 dynamic_state_patch)。
+            _state_patch = {"ratchet_applied": True, "pyramided": True}
             return [
                 {
                     "symbol": symbol,
@@ -217,6 +187,8 @@ async def evaluate_transition_for_position(
                     "exit_tier": "TRANSITION_RATCHET",
                     "entry_regime": entry_regime,
                     "instrument_type": asset_class,
+                    "asset_id": asset_id,
+                    "dynamic_state_patch": _state_patch,
                 },
                 {
                     "symbol": symbol,
@@ -234,146 +206,9 @@ async def evaluate_transition_for_position(
                     "exit_tier": "TRANSITION_PYRAMID",
                     "entry_regime": entry_regime,
                     "instrument_type": asset_class,
+                    "asset_id": asset_id,
+                    "dynamic_state_patch": _state_patch,
                 },
-            ]
-
-        # 路徑 2：左側失效硬停損 (破 Put Wall 踩踏防禦)。
-        #
-        # ⚠️ 規格自身存在兩種說法，此處採用「風險防線」版本：
-        #   (a) Regime I 矩陣的「風險防線」欄：15m 實體陰線實質跌破 Put Wall
-        #       下緣 > 1.5% 即刻硬停損。
-        #   (b) 狀態切換引擎路徑 2 的「觸發事件」欄：放量擊穿 Put Wall 下緣
-        #       超過 1.5%，且伴隨次週期價外大額 PUT BTO 追擊。
-        # (b) 比 (a) 嚴格得多——若無追空 PUT BTO 印花，破牆將完全不觸發停損，
-        # 使 Regime I 部位在真實結構失效時失去保護 (該部位依定義正緊貼 Put
-        # Wall，破牆 1.5% 已是實質結構失效)。「風險防線」欄是停損規則的權威
-        # 定義，故以 (a) 為準：破牆幅度 + 實體陰線確認即觸發，追空 PUT BTO
-        # 降為 reason 中的升級標記而非觸發前提。
-        if put_wall > 0 and price_15m_close > 0:
-            breach_pct = (put_wall - price_15m_close) / put_wall
-            is_bearish_body = price_15m_open > 0 and price_15m_close < price_15m_open
-            has_chasing_put = _detect_chasing_put_bto(uoa_list, put_wall)
-            if breach_pct >= _TRANSITION_PATH2_PUT_WALL_BREACH_PCT and is_bearish_body:
-                if asset_id is not None:
-                    set_asset_dynamic_state(user_id, int(asset_id), lockout=True)
-                return [
-                    {
-                        "symbol": symbol,
-                        "action": "LIQUIDATE",
-                        "sell_ratio": 1.0,
-                        "target_core": "BOXX",
-                        "reason": (
-                            "🔀 **動態調整・路徑2：左側失效硬停損**\n"
-                            f"{symbol} 15m 實體陰線收盤已擊穿 Put Wall (${put_wall:.2f}) "
-                            f"下緣達 {breach_pct:.2%}"
-                            f"（>= {_TRANSITION_PATH2_PUT_WALL_BREACH_PCT:.1%}），"
-                            "做市商底牆潰堤、結構實質失效"
-                            + (
-                                "，且偵測到次週期價外大額 PUT BTO 追擊 (負 Gamma "
-                                "螺旋式對沖拋售已實際發生)"
-                                if has_chasing_put
-                                else ""
-                            )
-                            + "。即刻全數砍倉，強制回歸現金觀望，禁止在此處二次摸底。"
-                        ),
-                        "suggested_strategy": "100% LIQUIDATE / STC → 轉入 BOXX 現金觀望",
-                        "scenario": RolloverScenario.TRANSITION_ENGINE.value,
-                        "exit_tier": "TRANSITION_LEFT_HARD_STOP",
-                        "entry_regime": entry_regime,
-                        "instrument_type": asset_class,
-                        "cash_impact": cash_impact,
-                    }
-                ]
-
-    elif entry_regime == "REGIME_III_RIGHT_MOMENTUM":
-        # 路徑 3：右側假突破防禦性平倉。Regime III 的風險防線為「15m 收盤跌破
-        # Session VWAP **或**下破進場 K 棒低點」，兩者為 OR 關係。
-        # entry_bar_low 由標記當下擷取並存入 dynamic_strategy_state (見
-        # build_dynamic_strategy_state_for_symbol)；未記錄時該子條件自動略過，
-        # 退回僅以 Session VWAP 判定。
-        entry_bar_low = float(state.get("entry_bar_low") or 0.0)
-        is_vwap_loss = (
-            session_vwap > 0 and price_15m_close > 0 and price_15m_close < session_vwap
-        )
-        is_entry_bar_low_break = (
-            entry_bar_low > 0
-            and price_15m_close > 0
-            and price_15m_close < entry_bar_low
-        )
-        if is_vwap_loss or is_entry_bar_low_break:
-            return [
-                {
-                    "symbol": symbol,
-                    "action": "LIQUIDATE",
-                    "sell_ratio": 1.0,
-                    "target_core": "VOO",
-                    "reason": (
-                        "🔀 **動態調整・路徑3：右側假突破防禦性平倉**\n"
-                        f"{symbol} 右側突破進場後，15m 實體 K 棒無法維持強度，收盤 "
-                        f"(${price_15m_close:.2f}) 已"
-                        + (
-                            f"跌破 Session VWAP (${session_vwap:.2f})"
-                            if is_vwap_loss
-                            else ""
-                        )
-                        + ("，且" if (is_vwap_loss and is_entry_bar_low_break) else "")
-                        + (
-                            f"下破進場 K 棒低點 (${entry_bar_low:.2f})"
-                            if is_entry_bar_low_break
-                            else ""
-                        )
-                        + "，確認突破失敗，右側部位無條件全平，策略切回混沌泥淖態"
-                        "現金觀望。"
-                    ),
-                    "suggested_strategy": "100% LIQUIDATE / STC (假突破防禦性平倉)",
-                    "scenario": RolloverScenario.TRANSITION_ENGINE.value,
-                    "exit_tier": "TRANSITION_FALSE_BREAKOUT",
-                    "entry_regime": entry_regime,
-                    "instrument_type": asset_class,
-                    "cash_impact": cash_impact,
-                }
-            ]
-
-    # 路徑 4：推進至 Call Wall (非對稱風報比耗盡)，任一已標記 Regime 皆適用。
-    if (
-        entry_regime in ("REGIME_I_LEFT_CATCH", "REGIME_III_RIGHT_MOMENTUM")
-        and call_wall > 0
-        and spot > 0
-    ):
-        call_wall_room_pct = (call_wall - spot) / spot
-        has_sto_call_cap = False
-        try:
-            has_sto_call_cap, _capping_strike = detect_uoa_sto_call_physical_cap(
-                uoa_list, spot, wall_reference=call_wall
-            )
-        except Exception as e:
-            logger.warning(f"[{symbol}] TransitionEngine 路徑4 UOA 封頂偵測失敗: {e}")
-
-        if (
-            call_wall_room_pct < _TRANSITION_PATH4_CALL_WALL_ROOM_PCT
-            or has_sto_call_cap
-        ):
-            cap_note = "，且偵測到機構大額 STO Call 壓制" if has_sto_call_cap else ""
-            return [
-                {
-                    "symbol": symbol,
-                    "action": "LIQUIDATE",
-                    "sell_ratio": 1.0,
-                    "target_core": "VOO",
-                    "reason": (
-                        "🔀 **動態調整・路徑4：推進至 Call Wall 獲利了結**\n"
-                        f"{symbol} 現價已逼近 Call Wall (${call_wall:.2f})，剩餘空間 "
-                        f"{call_wall_room_pct:.2%}（< {_TRANSITION_PATH4_CALL_WALL_ROOM_PCT:.1%}"
-                        f"）{cap_note}，右側動能天花板已至，全面觸發獲利了結，所有"
-                        "多頭部位平倉完畢，靜待回調重新築底。"
-                    ),
-                    "suggested_strategy": "100% LIQUIDATE / STC (Call Wall 獲利了結)",
-                    "scenario": RolloverScenario.TRANSITION_ENGINE.value,
-                    "exit_tier": "TRANSITION_TAKE_PROFIT",
-                    "entry_regime": entry_regime,
-                    "instrument_type": asset_class,
-                    "cash_impact": cash_impact,
-                }
             ]
 
     return []
