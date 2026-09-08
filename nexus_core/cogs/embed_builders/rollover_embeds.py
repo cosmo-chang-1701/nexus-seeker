@@ -53,6 +53,14 @@ _SCENARIO_STYLE: Dict[str, Dict[str, Any]] = {
         # CORE_DEPLOYMENT 同色系呼應。
         "color": discord.Color.green(),
     },
+    "TRANSITION_ENGINE": {
+        "emoji": "🔀",
+        "label": "動態調整狀態切換引擎",
+        # 金/琥珀色：與 MACRO_TOP_ESCAPE_DEFENSE 的 orange() 區隔，代表「部位
+        # 隨 Regime 演化」這類中性偏正面的生命週期管理事件（加碼/停損上移/
+        # 防禦性平倉/獲利了結皆可能觸發），不預設是危急或獲利結果。
+        "color": discord.Color.gold(),
+    },
 }
 
 # 軌道二極端瞬時停損觸發時，覆寫於 _SCENARIO_STYLE 查表結果之上的最高急迫性樣式。
@@ -759,6 +767,53 @@ def create_covered_call_profit_lock_embed(
     return embed
 
 
+def create_transition_pyramid_embed(
+    symbol: str,
+    reason: str,
+    suggested_strategy: str,
+) -> discord.Embed:
+    """
+    產生動態調整狀態切換引擎「路徑1：順勢加碼 (Pyramiding)」的專屬 Embed。
+
+    刻意不重用 create_dynamic_rollover_embed：該函式以「賣出 sell_symbol →
+    買入 buy_symbol」的轉倉框架建模，但 OPEN_PYRAMID 不是賣出任何既有部位，
+    而是建議在同一標的「額外開立第二筆」新部位，語意上不適合「標的 → 轉倉
+    目標」的框架（理由與既有 create_covered_call_overlay_embed 相同）。
+    """
+    style = _SCENARIO_STYLE["TRANSITION_ENGINE"]
+    embed = NexusEmbed(
+        title=f"{style['emoji']} 動態調整・順勢加碼 (Pyramiding): {symbol}",
+        color=style["color"],
+    )
+
+    safe_reason = truncate_with_boundary(reason, _EMBED_DESCRIPTION_SAFE_LIMIT)
+    embed.description = (
+        "**🔀【建議動作：順勢加碼】原部位已隨 Regime 演化確認，授權開立第二筆"
+        "高動能部位**"
+        f"\n\n{safe_reason}"
+    )
+
+    C_RESET = " [0m"
+    C_GREEN = " [1;32m"
+
+    pyramid_lines = [
+        "```ansi",
+        " 🔀 加碼建議",
+        " ----------------------------------",
+        f" ├─ 標的: {symbol}",
+        f" ├─ 動作: {C_GREEN}OPEN_PYRAMID{C_RESET} (新開第二筆部位)",
+        f" └─ 策略: {suggested_strategy}",
+        "```",
+    ]
+    embed.add_field(name="🔀 加碼建議", value="\n".join(pyramid_lines), inline=False)
+
+    embed.set_footer(
+        text="Nexus Risk & Rollover Engine • 動態調整狀態切換引擎，原部位維持不動"
+    )
+
+    return embed
+
+
 _LOW_CONFIDENCE_THRESHOLD = 0.5
 
 
@@ -886,6 +941,7 @@ _SCENARIO_SHORT_LABELS: Dict[str, str] = {
     "CORE_DEPLOYMENT": "核心部署",
     "MACRO_TOP_ESCAPE_DEFENSE": "逃頂前瞻",
     "COVERED_CALL_PROFIT_LOCK": "CC停利",
+    "TRANSITION_ENGINE": "動態切換",
 }
 
 

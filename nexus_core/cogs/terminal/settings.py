@@ -1,6 +1,6 @@
 """帳戶設定、通知偏好與 WTI 警報設定相關指令邏輯。"""
 
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 import discord
 
@@ -21,6 +21,7 @@ async def update_settings_impl(
     monthly_expense: Optional[float] = None,
     tax_reserve_rate: Optional[float] = None,
     cash_reserve: Optional[float] = None,
+    trading_strategy: Optional[str] = None,
 ) -> Any:
     """喚起帳戶設定互動式面板，或直接配置特定參數"""
     await interaction.response.defer(ephemeral=True)
@@ -40,6 +41,7 @@ async def update_settings_impl(
             monthly_expense,
             tax_reserve_rate,
             cash_reserve,
+            trading_strategy,
         ]
     )
 
@@ -52,7 +54,7 @@ async def update_settings_impl(
 
     # 2. 直接更新模式 (參數化調用，供集成測試或腳本使用)
     updates = []
-    db_updates = {}
+    db_updates: Dict[str, Any] = {}
 
     if capital is not None:
         return await interaction.followup.send(
@@ -138,6 +140,23 @@ async def update_settings_impl(
         else:
             return await interaction.followup.send(
                 embed=create_error_embed("現金儲備不能為負數", title="系統錯誤"),
+                ephemeral=True,
+            )
+
+    if trading_strategy is not None:
+        if trading_strategy in {"RIGHT_SIDE", "LEFT_SIDE", "DYNAMIC"}:
+            db_updates["trading_strategy"] = trading_strategy
+            from cogs.settings_ui import TRADING_STRATEGY_DISPLAY
+
+            updates.append(
+                f"📐 交易策略: `{TRADING_STRATEGY_DISPLAY.get(trading_strategy, trading_strategy)}`"
+            )
+        else:
+            return await interaction.followup.send(
+                embed=create_error_embed(
+                    "交易策略需為 RIGHT_SIDE / LEFT_SIDE / DYNAMIC 其中之一",
+                    title="系統錯誤",
+                ),
                 ephemeral=True,
             )
 

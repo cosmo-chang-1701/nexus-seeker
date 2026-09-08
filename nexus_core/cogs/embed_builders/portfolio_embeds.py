@@ -1782,10 +1782,68 @@ def create_tactical_hedge_embed(
     return embed
 
 
+# 左側交易六重鐵律的條件說明區塊 (create_entry_rules_embed 使用)。與右側說明
+# 分開維護：兩套鐵律的技術定義方向相反，共用同一份說明會讓使用者看到與實際
+# 判定結果自相矛盾的解釋。
+_ENTRY_RULES_DETAIL_LEFT = [
+    "```ansi",
+    " 條件一～四為核心結構性進場門檻；條件五、六屬總經財報與",
+    " candidate 自身 DTE 雜訊安全閥，僅於前置條件皆通過後才會真正發動判定",
+    " (未發動時上方仍會列出「⏭️ 略過」標記，六項條件永遠完整列出)",
+    " ----------------------------------",
+    "條件一",
+    "•結構性空頭力竭與極值乖離確認",
+    "•現價 ≤ Session VWAP − 1.5 × ATR₁₅ₘ (極度負向乖離)，且 15m RSI ≤ 30",
+    "•K棒形態須拒絕灌壓：排除大陰線實體灌破 (Close≈Low)；須出現錘頭/Pin Bar",
+    "  (下影線 ≥ 實體 1.5 倍)、蜻蜓十字 (實體 ≤ 全距 10% 且下影線 ≥ 全距 60%)",
+    "  或連續 2 根實體收窄且未破前低",
+    "•量能二擇一：縮量窒息 (≤ 前20根均量 × 0.7) 或恐慌吸收 (≥ × 2.0 但未收最低點)",
+    "•一律以「已收盤」15m K 棒判定：成型中 K 棒只累積部分量能，會讓縮量條件偽陽性",
+    "",
+    "條件二",
+    "•做市商 Put Wall / 負 Gamma 吸附牆密著截擊",
+    "•現價距 Put Wall 須落在 −1.0% ~ +1.5% 區間 (允許微幅穿刺洗盤或提前掛單)",
+    "•防禦厚度：該履約價絕對 GEX 曝險量級 ≥ $5,000,000",
+    "•⚠️ 厚度為 GEX 曝險量級代理值，非真實 Put OI 名目金額",
+    "  (現有 GEX 資料源沒有逐履約價的 OI 名目金額欄位)",
+    "",
+    "條件三",
+    "•下檔無恐慌踩踏斷崖 + 向上均值回歸空間",
+    "•UOA 不得存在 strike < Put Wall 且 ratio > 1.2x、權利金 ≥ $200,000 的",
+    "  PUT BTO 追空踩踏單 (防做市商破牆後進入負 Gamma 螺旋式拋售)",
+    "•(min(Session VWAP, Gamma Flip) − 現價)/現價 ≥ 3.5% (非對稱盈虧比保證)",
+    "",
+    "條件四",
+    "•主力大額吸收認證 (二擇一即可)",
+    "•PUT STO 護盤：DTE ≥ 14、ratio ≥ 1.0x、名目 ≥ $300,000、strike ≤ 現價",
+    "•CALL BTO 長天期潛伏：DTE ≥ 30、ratio ≥ 0.8x、名目 ≥ $200,000",
+    "•⚠️ 規格的「過去 4 小時內」時間窗無法實作：UOA 為選擇權鏈的當日累計快照",
+    "  (volume 為當日累計、oi 為前一日收盤)，並非逐筆成交，故不帶時間戳",
+    "",
+    "條件五",
+    "•總經流動性危機與財報黑天鵝安全閥",
+    "•前四項須全數通過才會真正發動，否則列「⏭️ 略過」",
+    "•重用右側條件五的財報緩衝期與大盤 Regime 子檢查 (門檻校準單一來源)",
+    "•額外疊加 VIX 期限結構倒掛防禦：vts_ratio ≥ 1.10 直接判定未通過",
+    "•任一外部資料抓取失敗一律 fail-safe 判定未通過 (不預設放行)",
+    "",
+    "條件六",
+    "•Candidate 自身 Theta 磨底防禦",
+    "•前五項須全數通過才會真正發動，否則列「⏭️ 略過」",
+    "•最近效期 DTE ≥ 21：左側須承受底部震盪整理期，嚴禁 0~7 DTE 合約",
+    "•IVR ≤ 50 建議輕度 ITM/ATM Call 買進",
+    "•IVR > 50 強制改以 Bull Call Spread 或 Short Put (避免恐慌插針時高買隱波)",
+    "```",
+]
+
+
 def create_entry_rules_embed(
     symbol: str,
     six_rule_passed: Optional[bool],
     six_rule_reasons: Optional[List[str]],
+    trading_strategy: Optional[str] = None,
+    dynamic_regime: Optional[str] = None,
+    dynamic_regime_reason: Optional[str] = None,
 ) -> discord.Embed:
     """
     建構標的深度分析中心「🔐 進場鐵律檢核」頁籤 Embed。
@@ -1793,12 +1851,55 @@ def create_entry_rules_embed(
     彙總呈現進場六重鐵律 (`market_analysis/dynamic_rollover/opportunity_cost.py::
     _confirm_entry_signal`) 的即時 Pass/Fail 判定：本專案既有機會成本轉倉候選
     標的確認的生產路徑，含總經/財報安全閥與 candidate 自身 DTE 檢查等 I/O。
+
+    :param trading_strategy: 呼叫端使用者當前 /settings 選擇的交易策略模式
+        (RIGHT_SIDE/LEFT_SIDE/DYNAMIC)。僅 "DYNAMIC" 且提供 dynamic_regime 時
+        才會額外渲染「當前 Regime」欄位；其餘情境維持既有輸出格式不變
+        (向下相容既有呼叫端)。
+    :param dynamic_regime: `regime_classifier.py::classify_dynamic_regime`
+        回傳的 DynamicRegime 值 (例如 "REGIME_I_LEFT_CATCH")。
+    :param dynamic_regime_reason: 對應的分類理由文字。
     """
     embed = NexusEmbed(
         title=f"🔐 {symbol} 進場鐵律檢核 (Entry Ironclad Rules)",
         color=discord.Color.dark_magenta(),
         timestamp=datetime.now(timezone.utc),
     )
+
+    # 實際發動的是哪一套鐵律，完全由 trading_strategy + dynamic_regime 決定，
+    # 不需要呼叫端額外傳參：LEFT_SIDE 走左側；DYNAMIC 依分類結果路由 (Regime I
+    # 走左側、Regime III 走右側、Regime II/IV 兩套都不發動)；其餘走右側。
+    if trading_strategy == "LEFT_SIDE" or (
+        trading_strategy == "DYNAMIC" and dynamic_regime == "REGIME_I_LEFT_CATCH"
+    ):
+        _effective_gate = "LEFT"
+        _gate_label = "左側交易：逆勢均值回歸"
+    elif trading_strategy == "DYNAMIC" and dynamic_regime in (
+        "REGIME_II_CHAOS_STANDASIDE",
+        "REGIME_IV_STRUCTURAL_CAP_CRISIS",
+    ):
+        _effective_gate = "NONE"
+        _gate_label = "本輪未發動判定"
+    else:
+        _effective_gate = "RIGHT"
+        _gate_label = "右側交易：順勢動能突破"
+
+    if trading_strategy == "DYNAMIC" and dynamic_regime:
+        _regime_display = {
+            "REGIME_I_LEFT_CATCH": "🩹 Regime I：左側接刀態 (極端負乖離吸籌)",
+            "REGIME_II_CHAOS_STANDASIDE": "⚪ Regime II：混沌泥淖態 (全系統休眠)",
+            "REGIME_III_RIGHT_MOMENTUM": "🎯 Regime III：右側動能態 (結構突破伽馬擠壓)",
+            "REGIME_IV_STRUCTURAL_CAP_CRISIS": "🔴 Regime IV：結構封頂／危機態 (強制鎖定)",
+        }.get(dynamic_regime, dynamic_regime)
+        regime_lines = [
+            "```ansi",
+            f" ├─ 目前 Regime: {_regime_display}",
+            f" └─ 分類理由: {dynamic_regime_reason or 'N/A'}",
+            "```",
+        ]
+        _add_ansi_field_safely(
+            embed, "🔀 當前 Regime (交易策略：動態調整)", regime_lines
+        )
 
     six_lines = ["```ansi"]
     if six_rule_reasons:
@@ -1813,57 +1914,82 @@ def create_entry_rules_embed(
     else:
         six_lines.append(" └─ 尚無足夠數據進行判定")
     six_lines.append("```")
-    _add_ansi_field_safely(embed, "🔐 進場六重鐵律 (機會成本轉倉候選確認)", six_lines)
+    _add_ansi_field_safely(embed, f"🔐 進場六重鐵律 ({_gate_label})", six_lines)
 
-    detail_lines = [
-        "```ansi",
-        " 條件一～四為核心結構性進場門檻；條件五、六屬總經財報與",
-        " candidate 自身 DTE 雜訊安全閥，僅於前置條件皆通過後才會真正發動判定",
-        " (未發動時上方仍會列出「⏭️ 略過」標記，六項條件永遠完整列出)",
-        " ----------------------------------",
-        "條件一",
-        "•結構性右側放量突破確認",
-        "•15m 實體K棒收盤價 > Gamma Flip 估算門檻 (若全鏈動態 Net GEX > 0 且無交叉點，改以站穩 Session VWAP + 0.5 × ATR₁₅ₘ 替代門檻)",
-        "•若全鏈動態 Net GEX < 0 且無交叉點：確認處於全域 Short Gamma 泥淖，結構性空頭直接判定未通過",
-        "•15m 成交量 ≥ 前20根均量 × 1.5倍 (放量確認)",
-        "•K棒須為實體陽線 (close > open)，排除陰線放量摜壓假突破",
-        "•15m 收盤價須站穩 Session VWAP",
-        "•突破要素同時滿足才通過，避免誤殺全域 Long Gamma 或誤判空頭摜壓",
-        "",
-        "條件二",
-        "•做市商正 Gamma 底牆完好",
-        "•支撐牆強制約束在現價下方 (K < Spot)，即 Support Wall = argmax_{K < Spot} (Net GEX(K))",
-        "•避免將現價上方的阻力牆 (Call Wall) 誤當成下方的防禦底牆",
-        "•現價下方無正 GEX 峰值 (或曝險低於 500k 薄紙牆門檻) 則判定未偵測到有效支撐牆 (未通過)",
-        "•現價須 > 支撐牆，且距離 (現價-支撐牆)/現價 ≤ 5% (支撐牆離現價過遠不構成即時有效防禦)",
-        "",
-        "條件三",
-        "•UOA 無實質物理封頂",
-        "•無單筆 STO Call ratio(成交量/OI) > 1.5x 且 strike 位於 Call Wall 上方的物理封頂",
-        "•Call Wall 距現價空間 (call_wall-現價)/現價 ≥ 5% (帶正負號；現價已觸及或跌破 Call Wall 同樣視為空間不足，而非「已站上、無封頂」)",
-        "•兩項條件須同時成立",
-        "",
-        "條件四",
-        "•主力跨週期買盤認證與雜訊過濾",
-        "•掃描 UOA 清單 (依權利金金額/名目價值降序)",
-        "•尋找 CALL BTO 買盤，且 DTE ≥ 7、ratio(成交量/OI) ≥ 0.8x、權利金名目金額 ≥ $200,000、strike ≥ 現價 (排除深實值避險單)",
-        "•找到第一筆同時符合四項門檻者即判定通過",
-        "",
-        "條件五",
-        "•總經負 Gamma 與財報黑天鵝防禦閘門",
-        "•前四項須全數通過才會真正發動，否則列「⏭️ 略過」",
-        "•candidate 3 天內即將發布財報 -> 直接判定未通過",
-        "•大盤 Regime 為 SHORT_GAMMA_CRITICAL 或 SYSTEMIC_LIQUIDITY_CRISIS -> 直接判定未通過",
-        "•財報行事曆/總經 Regime 任一資料抓取失敗，安全起見一律判定未通過 (fail-safe，不預設放行)",
-        "",
-        "條件六",
-        "•candidate 自身到期日雜訊過濾",
-        "•前五項須全數通過才會真正發動，否則列「⏭️ 略過」",
-        "•candidate 自身最近效期選擇權 DTE 須 > 1 (避開 0/1 DTE 結算日前夕/當日雜訊)",
-        "•無法取得到期日清單或解析失敗，同樣一律判定未通過",
-        "```",
-    ]
-    _add_ansi_field_safely(embed, "📖 條件一～六判定說明 (指標定義)", detail_lines)
+    if _effective_gate == "NONE":
+        # 動態調整判定為 Regime II (全系統休眠) / IV (全面鎖倉) 時，兩套鐵律都
+        # 沒有實際發動，貼上任一套的條件說明都會誤導使用者。
+        _add_ansi_field_safely(
+            embed,
+            "📖 判定說明",
+            [
+                "```ansi",
+                " 目前 Regime 禁止任何多頭開倉，左右兩套六重鐵律皆未發動判定。",
+                " 待盤勢結構回到 Regime I (左側接刀態) 或 Regime III (右側動能態)",
+                " 時，系統才會套用對應的六重鐵律並在此列出逐項 Pass/Fail。",
+                "```",
+            ],
+        )
+        embed.set_footer(
+            text="🔗 進場六重鐵律：機會成本轉倉候選標的確認，僅供進場前快速核對。"
+        )
+        return embed
+
+    detail_lines = (
+        _ENTRY_RULES_DETAIL_LEFT
+        if _effective_gate == "LEFT"
+        else [
+            "```ansi",
+            " 條件一～四為核心結構性進場門檻；條件五、六屬總經財報與",
+            " candidate 自身 DTE 雜訊安全閥，僅於前置條件皆通過後才會真正發動判定",
+            " (未發動時上方仍會列出「⏭️ 略過」標記，六項條件永遠完整列出)",
+            " ----------------------------------",
+            "條件一",
+            "•結構性右側放量突破確認",
+            "•15m 實體K棒收盤價 > Gamma Flip 估算門檻 (若全鏈動態 Net GEX > 0 且無交叉點，改以站穩 Session VWAP + 0.5 × ATR₁₅ₘ 替代門檻)",
+            "•若全鏈動態 Net GEX < 0 且無交叉點：確認處於全域 Short Gamma 泥淖，結構性空頭直接判定未通過",
+            "•15m 成交量 ≥ 前20根均量 × 1.5倍 (放量確認)",
+            "•K棒須為實體陽線 (close > open)，排除陰線放量摜壓假突破",
+            "•15m 收盤價須站穩 Session VWAP",
+            "•突破要素同時滿足才通過，避免誤殺全域 Long Gamma 或誤判空頭摜壓",
+            "",
+            "條件二",
+            "•做市商正 Gamma 底牆完好",
+            "•支撐牆強制約束在現價下方 (K < Spot)，即 Support Wall = argmax_{K < Spot} (Net GEX(K))",
+            "•避免將現價上方的阻力牆 (Call Wall) 誤當成下方的防禦底牆",
+            "•現價下方無正 GEX 峰值 (或曝險低於 500k 薄紙牆門檻) 則判定未偵測到有效支撐牆 (未通過)",
+            "•現價須 > 支撐牆，且距離 (現價-支撐牆)/現價 ≤ 5% (支撐牆離現價過遠不構成即時有效防禦)",
+            "",
+            "條件三",
+            "•UOA 無實質物理封頂",
+            "•無單筆 STO Call ratio(成交量/OI) > 1.5x 且 strike 位於 Call Wall 上方的物理封頂",
+            "•Call Wall 距現價空間 (call_wall-現價)/現價 ≥ 5% (帶正負號；現價已觸及或跌破 Call Wall 同樣視為空間不足，而非「已站上、無封頂」)",
+            "•兩項條件須同時成立",
+            "",
+            "條件四",
+            "•主力跨週期買盤認證與雜訊過濾",
+            "•掃描 UOA 清單 (依權利金金額/名目價值降序)",
+            "•尋找 CALL BTO 買盤，且 DTE ≥ 7、ratio(成交量/OI) ≥ 0.8x、權利金名目金額 ≥ $200,000、strike ≥ 現價 (排除深實值避險單)",
+            "•找到第一筆同時符合四項門檻者即判定通過",
+            "",
+            "條件五",
+            "•總經負 Gamma 與財報黑天鵝防禦閘門",
+            "•前四項須全數通過才會真正發動，否則列「⏭️ 略過」",
+            "•candidate 3 天內即將發布財報 -> 直接判定未通過",
+            "•大盤 Regime 為 SHORT_GAMMA_CRITICAL 或 SYSTEMIC_LIQUIDITY_CRISIS -> 直接判定未通過",
+            "•財報行事曆/總經 Regime 任一資料抓取失敗，安全起見一律判定未通過 (fail-safe，不預設放行)",
+            "",
+            "條件六",
+            "•candidate 自身到期日雜訊過濾",
+            "•前五項須全數通過才會真正發動，否則列「⏭️ 略過」",
+            "•candidate 自身最近效期選擇權 DTE 須 > 1 (避開 0/1 DTE 結算日前夕/當日雜訊)",
+            "•無法取得到期日清單或解析失敗，同樣一律判定未通過",
+            "```",
+        ]
+    )
+    _add_ansi_field_safely(
+        embed, f"📖 條件一～六判定說明 ({_gate_label}指標定義)", detail_lines
+    )
 
     embed.set_footer(
         text="🔗 進場六重鐵律：機會成本轉倉候選標的確認，僅供進場前快速核對。"

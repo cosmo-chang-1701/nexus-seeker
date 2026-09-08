@@ -20,6 +20,22 @@ from . import (
 
 logger = logging.getLogger(__name__)
 
+# 動態調整狀態切換引擎 (Transition Engine) 的部位歸屬標記選項，供
+# /add_trade、/edit_trade、/add_holding、/edit_holding 共用。僅 REGIME_I
+# (左側接刀態) 與 REGIME_III (右側動能態) 兩個會實際產生已建立部位的 Regime
+# 可選——Regime II (混沌泥淖態，全系統休眠) 與 Regime IV (結構封頂危機態，
+# 強制鎖定) 依定義不會有對應的已開倉部位。
+_DYNAMIC_ENTRY_REGIME_CHOICES = [
+    app_commands.Choice(
+        name="動態調整・Regime I 左側接刀 (逆勢均值回歸)",
+        value="REGIME_I_LEFT_CATCH",
+    ),
+    app_commands.Choice(
+        name="動態調整・Regime III 右側動能 (順勢突破)",
+        value="REGIME_III_RIGHT_MOMENTUM",
+    ),
+]
+
 
 class TerminalCog(commands.Cog):
     """
@@ -62,6 +78,7 @@ class TerminalCog(commands.Cog):
         monthly_expense: Optional[float] = None,
         tax_reserve_rate: Optional[float] = None,
         cash_reserve: Optional[float] = None,
+        trading_strategy: Optional[str] = None,
     ) -> Any:
         """喚起帳戶設定互動式面板，或直接配置特定參數"""
         return await settings.update_settings_impl(
@@ -76,6 +93,7 @@ class TerminalCog(commands.Cog):
             monthly_expense=monthly_expense,
             tax_reserve_rate=tax_reserve_rate,
             cash_reserve=cash_reserve,
+            trading_strategy=trading_strategy,
         )
 
     @app_commands.command(
@@ -103,7 +121,8 @@ class TerminalCog(commands.Cog):
         opt_type=[
             app_commands.Choice(name="Put (賣權)", value="put"),
             app_commands.Choice(name="Call (買權)", value="call"),
-        ]
+        ],
+        dynamic_entry_regime=_DYNAMIC_ENTRY_REGIME_CHOICES,
     )
     @app_commands.describe(
         symbol="股票代號 (如 TSLA)",
@@ -112,6 +131,7 @@ class TerminalCog(commands.Cog):
         expiry="到期日 (YYYY-MM-DD)",
         entry_price="成交價格",
         quantity="口數",
+        dynamic_entry_regime="標記此部位是依交易策略「動態調整」引擎的哪個 Regime 建立，供狀態切換引擎 (加碼/停損上移/防禦性平倉) 接管 (選填)",
     )
     async def add_trade(
         self,
@@ -122,9 +142,17 @@ class TerminalCog(commands.Cog):
         expiry: str,
         entry_price: float,
         quantity: int,
+        dynamic_entry_regime: Optional[app_commands.Choice[str]] = None,
     ) -> Any:
         return await trades.add_trade_impl(
-            interaction, symbol, opt_type, strike, expiry, entry_price, quantity
+            interaction,
+            symbol,
+            opt_type,
+            strike,
+            expiry,
+            entry_price,
+            quantity,
+            dynamic_entry_regime,
         )
 
     @app_commands.command(
@@ -137,12 +165,14 @@ class TerminalCog(commands.Cog):
         price="更新成交價格 (選填)",
         quantity="更新口數 (選填)",
         category="更新類別 SPECULATIVE/HEDGE (選填)",
+        dynamic_entry_regime="事後標記/重新標記此部位是依交易策略「動態調整」引擎的哪個 Regime 建立 (選填)",
     )
     @app_commands.choices(
         category=[
             app_commands.Choice(name="SPECULATIVE", value="SPECULATIVE"),
             app_commands.Choice(name="HEDGE", value="HEDGE"),
-        ]
+        ],
+        dynamic_entry_regime=_DYNAMIC_ENTRY_REGIME_CHOICES,
     )
     async def edit_trade(
         self,
@@ -153,9 +183,17 @@ class TerminalCog(commands.Cog):
         price: Optional[float] = None,
         quantity: Optional[int] = None,
         category: Optional[app_commands.Choice[str]] = None,
+        dynamic_entry_regime: Optional[app_commands.Choice[str]] = None,
     ) -> Any:
         return await trades.edit_trade_impl(
-            interaction, trade_id, strike, expiry, price, quantity, category
+            interaction,
+            trade_id,
+            strike,
+            expiry,
+            price,
+            quantity,
+            category,
+            dynamic_entry_regime,
         )
 
     @app_commands.command(
@@ -266,12 +304,14 @@ class TerminalCog(commands.Cog):
         target_allocation_pct="超限時再平衡的目標配置百分比 (0-100，需小於等於配置上限，選填)",
         boxx_allocation_pct="核心資金部署觸發時，優先轉入 BOXX 防禦的判定閾值 (0-100，≥50 優先防禦轉入 BOXX；留空則由系統依當前總經數據自動評估建議值，選填)",
         acquired_at="建倉日期 (YYYY-MM-DD)，供動態轉倉引擎估算長/短期資本利得稅率區間；留空則預設為今天 (選填)",
+        dynamic_entry_regime="標記此部位是依交易策略「動態調整」引擎的哪個 Regime 建立，供狀態切換引擎 (加碼/停損上移/防禦性平倉) 接管 (選填)",
     )
     @app_commands.choices(
         asset_class=[
             app_commands.Choice(name="CORE (核心防禦資產，如 VOO/BOXX)", value="CORE"),
             app_commands.Choice(name="SATELLITE (衛星戰術資產)", value="SATELLITE"),
-        ]
+        ],
+        dynamic_entry_regime=_DYNAMIC_ENTRY_REGIME_CHOICES,
     )
     async def add_holding(
         self,
@@ -284,6 +324,7 @@ class TerminalCog(commands.Cog):
         target_allocation_pct: Optional[float] = None,
         boxx_allocation_pct: Optional[float] = None,
         acquired_at: Optional[str] = None,
+        dynamic_entry_regime: Optional[app_commands.Choice[str]] = None,
     ) -> Any:
         return await holdings.add_holding_impl(
             interaction,
@@ -295,6 +336,7 @@ class TerminalCog(commands.Cog):
             target_allocation_pct,
             boxx_allocation_pct,
             acquired_at,
+            dynamic_entry_regime,
         )
 
     @app_commands.command(
@@ -310,12 +352,14 @@ class TerminalCog(commands.Cog):
         target_allocation_pct="超限時再平衡的目標配置百分比 (0-100，需小於等於配置上限，選填)",
         boxx_allocation_pct="核心資金部署觸發時，優先轉入 BOXX 防禦的判定閾值 (0-100，≥50 優先防禦轉入 BOXX；留空則由系統依當前總經數據自動評估建議值，選填)",
         acquired_at="建倉日期 (YYYY-MM-DD)，用於回填校正實際開倉日以利長/短期資本利得稅務提醒 (選填)",
+        dynamic_entry_regime="事後標記/重新標記此部位是依交易策略「動態調整」引擎的哪個 Regime 建立 (選填)",
     )
     @app_commands.choices(
         asset_class=[
             app_commands.Choice(name="CORE (核心防禦資產，如 VOO/BOXX)", value="CORE"),
             app_commands.Choice(name="SATELLITE (衛星戰術資產)", value="SATELLITE"),
-        ]
+        ],
+        dynamic_entry_regime=_DYNAMIC_ENTRY_REGIME_CHOICES,
     )
     async def edit_holding(
         self,
@@ -328,6 +372,7 @@ class TerminalCog(commands.Cog):
         target_allocation_pct: Optional[float] = None,
         boxx_allocation_pct: Optional[float] = None,
         acquired_at: Optional[str] = None,
+        dynamic_entry_regime: Optional[app_commands.Choice[str]] = None,
     ) -> Any:
         return await holdings.edit_holding_impl(
             interaction,
@@ -339,6 +384,7 @@ class TerminalCog(commands.Cog):
             target_allocation_pct,
             boxx_allocation_pct,
             acquired_at,
+            dynamic_entry_regime,
         )
 
     @app_commands.command(

@@ -28,6 +28,7 @@ Nexus Seeker 是一個 **Discord-first 的多租戶選擇權風控與交易營�
 - **盤後綜合風險與 AI 策略報告 (Post-Market Intelligence)**：每日收盤後主動推送盤後結算報告，全面支援**現貨持倉 (`HOLDING`) 與期權 (`TRADE`) 混合結算**。搭載 Target Center 2.0 樹狀 ANSI 儀表板、財務生存跑道 (Financial Runway)、對沖績效 Brinson 歸因 (OPTIMAL 狀態標註)、板塊焦點矩陣 (Top Inflows vs Outflows) 與 100% 現金空狀態行動引導。
 - **戰場情境轉折警報與進階雷達 (Market Scenario & Advanced Radar)**：整合獨立事件驅動引擎（6 階 GEX 決策矩陣，新增「巨鯨護航共振」）與進階雷達過濾器 (UOA Barrier, Gravity Filter, Divergence Gate)。支援 $PutWall - 1.5 \times ATR_{14}$ 防洗盤絕對防守位、15 分鐘實體 K 線收盤離場鐵律與多維度灰階戰術決策樹。
 - **動態轉倉與防洗盤風控 (Dynamic Rollover & Anti-Washout Defense)**：搭載全新「防洗盤動態停損引擎」與「GEX 做市商意圖映射引擎」，動態鎖定支撐錨定牆並給予 1.5x 15m ATR 緩衝；現貨 (SPOT) 必須經 15 分鐘實體 K 線跌破才確認清倉，選擇權合約 (OPTIONS) 則於高 IVR 啟動降槓桿平倉。支援 `/verify_thesis` 互動式 SEC 財報選擇介面與每日 08:00 ET 自動化財報掃描。大盤系統性風險發生時，除既有轉入 BOXX 鎖定無風險利息外，亦會依個股結構性風險嚴重程度與反向ETF自身現貨動能確認，動態建議轉入對應的 1x/2x 反向ETF 把握方向性對沖機會。
+- **三態交易策略與 4-Regime 決策矩陣 (Trading Strategy Modes & Regime Router)**：`/settings` 新增交易策略選單，可切換「**右側交易**」（順勢動能突破六重鐵律，維持既有預設行為）、「**左側交易**」（逆勢均值回歸／做市商 Put Wall 底牆接刀六重鐵律，含極值乖離、止跌 K 棒型態、量能窒息／恐慌吸收、主力 PUT STO 接刀認證與 Theta 磨底防禦）或「**動態調整**」。動態調整模式依 Put Wall／Call Wall／Gamma Flip／Session VWAP／ATR₁₅ₘ／RSI／量能／UOA／VIX 期限結構／大盤 Regime，將盤勢自動分類為 4 態（左側接刀態、混沌泥淖態、右側動能態、結構封頂危機態），路由至對應鐵律或強制休眠／全面鎖倉，杜絕「在追高區摸底、在接刀區追單」的邏輯衝突。搭配**狀態切換引擎**管理已標記部位的生命週期：左側部位帶量站上 VWAP 與 Gamma Flip 時停損上移保本並授權順勢加碼、實體陰線破 Put Wall 硬停損、右側假突破防禦性平倉、逼近 Call Wall 全面獲利了結。部位歸屬透過 `/add_trade`、`/add_holding` 的選填參數手動標記，未標記部位完全不受影響。
 - **總體經濟與事件日曆防護**：自動抓取 CME FedWatch 利率機率、FRED 關鍵總經數據與財報日曆（已擴展至 14 日前瞻預警並深度整併至 `/market` 總經風險情報中心與盤前報告），結合避險邏輯進行動態逃頂窗口前置與 4 小時自動快取維護。
 - **大盤微觀結構解析**：計算零 Gamma 線 (Gamma Flip Line) 與 GEX 分佈，在市場進入高壓 $VIX > 20$ 時動態縮小合約建倉口數（Kelly Criterion 調節）與拉大網格距離。
 - **互動式 UI 介面**：所有交易參數（資本、風險上限、虛擬交易室、Polymarket 巨鯨門檻等）與推送偏好均透過 Discord 內建的 Buttons / Select Menu / Modal 進行管理。
@@ -163,7 +164,8 @@ docker compose up -d --build
 
 透過 Discord 頻道輸入斜線指令即可與機器人互動：
 
-- **`/settings`**：帳戶全域參數配置中心（資本、風險上限設定、虛擬交易室、Polymarket 巨鯨門檻與 AI 分析開關等）。
+- **`/settings`**：帳戶全域參數配置中心（資本、風險上限設定、虛擬交易室、Polymarket 巨鯨門檻與 AI 分析開關等），並可切換**交易策略**（動態調整／左側交易／右側交易）。
+- **`/add_trade` / `/add_holding`（及對應 `/edit_*`）**：記錄實單期權與現貨持倉，可選填 `dynamic_entry_regime` 將部位標記為「動態調整」引擎託管，交由狀態切換引擎進行加碼、停損上移與防禦性平倉管理。
 - **`/notif_settings`**：戰術型通知管理中控台，支援以 4 大戰術維度（定時戰報、盤中遙測、持倉防禦、Alpha 策略）自訂 13 項核心通知頻道（含 WTI 原油價格警報與 SEC 財報自動掃描警報），並提供 3 大 1-Click Preset 模式（🛡️ 戰備全開、🎯 精準交易、🔕 盤中靜音）。
 - **`/x [scan_type]`**：批次量化雷達終端，支援統一雷達面板進行多層次過濾，並採用 `BatchScanPaginatedView` 支援單一訊息 `◀ 上一頁` / `下一頁 ▶` 就地翻頁、`⚡ 批次分析警示標的` 併行分析與 `🔄 返回控制面板`。
 - **`/wti_config`**：🛢️ WTI 原油價格警報閾值設定彈窗，隨時配置上限價格、下限價格與 30 分鐘波動百分比（支援留空無限制）。

@@ -22,6 +22,7 @@ async def add_trade_impl(
     expiry: str,
     entry_price: float,
     quantity: int,
+    dynamic_entry_regime: Optional[app_commands.Choice[str]] = None,
 ) -> Any:
     symbol = symbol.upper()
     user_id = interaction.user.id
@@ -96,6 +97,16 @@ async def add_trade_impl(
             "category": trade_category,
             "stock_cost": stock_cost,
         }
+        if dynamic_entry_regime is not None:
+            from market_analysis.dynamic_rollover.transition_engine import (
+                build_dynamic_strategy_state_for_symbol,
+            )
+
+            trade_details[
+                "dynamic_strategy_state"
+            ] = await build_dynamic_strategy_state_for_symbol(
+                symbol, dynamic_entry_regime.value
+            )
 
         asset = Asset(
             user_id=user_id,
@@ -141,6 +152,7 @@ async def edit_trade_impl(
     price: Optional[float] = None,
     quantity: Optional[int] = None,
     category: Optional[app_commands.Choice[str]] = None,
+    dynamic_entry_regime: Optional[app_commands.Choice[str]] = None,
 ) -> Any:
     await interaction.response.defer(ephemeral=True)
     from services.asset_manager import AssetManager
@@ -169,6 +181,25 @@ async def edit_trade_impl(
         updates["quantity"] = quantity
     if category is not None:
         updates["category"] = category.value
+    if dynamic_entry_regime is not None:
+        from market_analysis.dynamic_rollover.transition_engine import (
+            build_dynamic_strategy_state_for_symbol,
+        )
+
+        # 進場 K 棒低點的擷取需要標的代號，而本指令只收 trade_id，故先回查資產。
+        existing_asset = manager.get_asset_by_id(interaction.user.id, trade_id)
+        if existing_asset is None:
+            return await interaction.followup.send(
+                embed=create_error_embed(
+                    f"找不到交易 ID `{trade_id}`。", title="系統錯誤"
+                ),
+                ephemeral=True,
+            )
+        updates[
+            "dynamic_strategy_state"
+        ] = await build_dynamic_strategy_state_for_symbol(
+            existing_asset.symbol, dynamic_entry_regime.value
+        )
 
     if not updates:
         return await interaction.followup.send(

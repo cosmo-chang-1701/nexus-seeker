@@ -39,6 +39,7 @@ class UserContext:
     enable_macro_top_escape_defense: bool = (
         False  # 是否啟用宏觀逃頂前瞻防禦 (Dynamic Rollover Scenario 6)，嚴格 opt-in
     )
+    trading_strategy: str = "RIGHT_SIDE"  # 交易策略模式: RIGHT_SIDE/LEFT_SIDE/DYNAMIC
 
 
 # ==========================================
@@ -95,6 +96,7 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:  # type: ignore
             "can_trade_spreads",
             "cash_reserve_protection",
             "enable_macro_top_escape_defense",
+            "trading_strategy",
         }
         update_pairs = []
         values = []
@@ -119,6 +121,12 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:  # type: ignore
                     value = max(0.1, min(float(value), 10.0))
                 elif key == "tax_reserve_rate":
                     value = max(0.0, min(float(value), 1.0))
+                elif key == "trading_strategy":
+                    value = (
+                        value
+                        if value in {"RIGHT_SIDE", "LEFT_SIDE", "DYNAMIC"}
+                        else "RIGHT_SIDE"
+                    )
 
                 update_pairs.append(f"{key} = ?")
                 values.append(value)
@@ -344,6 +352,7 @@ def get_full_user_context(user_id: int) -> UserContext:
             enable_macro_top_escape_defense=bool(
                 _get_val("enable_macro_top_escape_defense", False)
             ),
+            trading_strategy=_get_val("trading_strategy", "RIGHT_SIDE"),
         )
 
     except Exception as e:

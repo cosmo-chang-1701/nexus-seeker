@@ -1,6 +1,7 @@
 from typing import Any
 import pytest
 import discord
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch, MagicMock
 import sys
 import os
@@ -152,9 +153,104 @@ async def test_symbol_hub_entry_rules_calls_six_rule_check(  # type: ignore
             "AAPL",
             False,
             ["條件一✅：ok", "條件二❌：no support wall"],
+            trading_strategy="RIGHT_SIDE",
+            dynamic_regime=None,
+            dynamic_regime_reason=None,
         )
         _, last_kwargs = mock_interaction.edit_original_response.call_args
         assert last_kwargs["embed"] is mock_builder.return_value
+
+
+@pytest.mark.asyncio
+async def test_symbol_hub_entry_rules_routes_to_left_side_gate(  # type: ignore
+    mock_interaction: Any, mock_bot: Any
+):
+    """交易策略=LEFT_SIDE 時，進場鐵律檢核按鈕應改呼叫左側六重鐵律
+    (left_side_entry.py::_confirm_left_entry_signal)，而非既有右側鐵律。"""
+    view = SymbolHubView(symbol="AAPL", user_id=123, bot=mock_bot)
+    view.base_data = {"symbol": "AAPL", "price": 101.0}
+
+    with patch(
+        "cogs.unified_terminal.symbol_view.create_entry_rules_embed"
+    ) as mock_builder, patch(
+        "cogs.unified_terminal.symbol_view.database.get_full_user_context"
+    ) as mock_ctx, patch(
+        "market_analysis.dynamic_rollover.left_side_entry._confirm_left_entry_signal",
+        new_callable=AsyncMock,
+    ) as mock_left_rule, patch(
+        "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
+        new_callable=AsyncMock,
+    ) as mock_right_rule:
+        mock_ctx.return_value = SimpleNamespace(trading_strategy="LEFT_SIDE")
+        mock_left_rule.return_value = (True, "條件一✅：極端負乖離", "Bull Call Spread")
+        mock_builder.return_value = MagicMock(spec=discord.Embed)
+
+        await view.btn_entry_rules.callback(mock_interaction)
+
+        mock_left_rule.assert_called_once_with(view.symbol, view.base_data, 101.0)
+        mock_right_rule.assert_not_called()
+        mock_builder.assert_called_once_with(
+            "AAPL",
+            True,
+            ["條件一✅：極端負乖離"],
+            trading_strategy="LEFT_SIDE",
+            dynamic_regime=None,
+            dynamic_regime_reason=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_symbol_hub_entry_rules_routes_dynamic_to_regime_i(  # type: ignore
+    mock_interaction: Any, mock_bot: Any
+):
+    """交易策略=DYNAMIC 且分類為 Regime I 時，應路由至左側六重鐵律，並將
+    Regime 資訊帶入 create_entry_rules_embed。"""
+    view = SymbolHubView(symbol="AAPL", user_id=123, bot=mock_bot)
+    view.base_data = {"symbol": "AAPL", "price": 101.0}
+
+    with patch(
+        "cogs.unified_terminal.symbol_view.create_entry_rules_embed"
+    ) as mock_builder, patch(
+        "cogs.unified_terminal.symbol_view.database.get_full_user_context"
+    ) as mock_ctx, patch(
+        "market_analysis.dynamic_rollover.regime_classifier.classify_dynamic_regime",
+        new_callable=AsyncMock,
+    ) as mock_classify, patch(
+        "market_analysis.dynamic_rollover.left_side_entry._confirm_left_entry_signal",
+        new_callable=AsyncMock,
+    ) as mock_left_rule:
+        from market_analysis.dynamic_rollover.models import (
+            DynamicRegime,
+            RegimeMarketData,
+        )
+
+        mock_ctx.return_value = SimpleNamespace(trading_strategy="DYNAMIC")
+        mock_classify.return_value = (
+            DynamicRegime.REGIME_I_LEFT_CATCH,
+            "極端負乖離吸籌",
+            RegimeMarketData(),
+        )
+        mock_left_rule.return_value = (True, "條件一✅：ok", None)
+        mock_builder.return_value = MagicMock(spec=discord.Embed)
+
+        await view.btn_entry_rules.callback(mock_interaction)
+
+        mock_left_rule.assert_called_once_with(
+            view.symbol,
+            view.base_data,
+            101.0,
+            df_15m=None,
+            session_vwap=0.0,
+            atr_15m=0.0,
+        )
+        mock_builder.assert_called_once_with(
+            "AAPL",
+            True,
+            ["條件一✅：ok"],
+            trading_strategy="DYNAMIC",
+            dynamic_regime="REGIME_I_LEFT_CATCH",
+            dynamic_regime_reason="極端負乖離吸籌",
+        )
 
 
 @pytest.mark.asyncio

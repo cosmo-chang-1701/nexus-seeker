@@ -256,3 +256,113 @@ _MICROSTRUCTURE_TP3_DTE_THRESHOLD: int = (
     # EXPIRATION_SETTLEMENT_ALERT 強制結算保護接管，故此處實際生效區間為 1<dte<=5）
 )
 _MICROSTRUCTURE_TP3_RATIO: float = 0.2  # TP3 執行比例 (20%)
+
+# --- 左側六重嚴格過濾鐵律 (left_side_entry.py::_confirm_left_entry_signal) 具名常數 ---
+# 逆勢均值回歸／做市商 Put Wall 底牆接刀，結構完全比照上方右側六重鐵律
+# (opportunity_cost.py) 的組裝方式，僅技術定義方向相反（右側要求收盤站上
+# 突破線；左側要求深跌破 VWAP 且密著 Put Wall），故同一時間點一檔標的
+# 技術上幾乎不可能同時滿足兩套條件一。
+# 條件一：結構性空頭力竭與極值乖離確認
+_LEFT_ENTRY_VWAP_ATR_MULT: float = 1.5  # 極度負乖離：Spot <= VWAP - 此倍數 × ATR₁₅ₘ
+_LEFT_ENTRY_RSI_MAX: float = 30.0  # 15m RSI <= 此值視為超賣
+_LEFT_ENTRY_PIN_BAR_WICK_RATIO: float = (
+    1.5  # 下影線長度 >= 實體 × 此倍數 視為錘頭/Pin Bar
+)
+# 蜻蜓十字 (Dragonfly Doji) 判定：實體趨近於零時，錘頭的「下影線 >= 實體 × 1.5」
+# 比例判定會退化為恆真 (任何數 >= 0)，若不額外要求 body > 0，連墓碑十字 (長上影、
+# 無下影) 都會被誤判為錘頭。但 body > 0 這道防呆同時也把「實體為零 + 長下影」這個
+# 教科書級的底部反轉訊號整個排除，故改以下列兩個「佔全距比例」門檻獨立判定。
+_LEFT_ENTRY_DOJI_BODY_RANGE_RATIO: float = 0.1  # 實體 <= 全距 × 此比例 視為十字
+_LEFT_ENTRY_DRAGONFLY_WICK_RANGE_RATIO: float = 0.6  # 下影線 >= 全距 × 此比例 視為蜻蜓
+_LEFT_ENTRY_VOLUME_EXHAUST_MULT: float = 0.7  # 縮量窒息門檻 (<= 前20根均量 × 此倍數)
+_LEFT_ENTRY_VOLUME_PANIC_MULT: float = 2.0  # 恐慌吸收門檻 (>= 前20根均量 × 此倍數)
+_LEFT_ENTRY_CAPITULATION_RANGE_RATIO: float = (
+    0.1  # (close-low)/(high-low) < 此值 視為「大陰線實體灌破 (Close≈Low)」
+)
+# 條件二：做市商 Put Wall / 負 Gamma 吸附牆密著截擊
+_LEFT_ENTRY_PUT_WALL_LOWER_PCT: float = (
+    -0.01
+)  # (spot-put_wall)/spot 下界 (允許微幅穿刺)
+_LEFT_ENTRY_PUT_WALL_UPPER_PCT: float = 0.015  # (spot-put_wall)/spot 上界
+# ⚠️ 資料缺口代理值：文獻規格要求「Put OI 名目價值 >= $1,000,000,000」，但現有
+# GEX 爬蟲資料 (fetch_symbol_gex_metrics) 完全沒有「每履約價 OI 名目金額」欄位，
+# 僅有 Net GEX 曝險值。改用該履約價絕對 GEX 曝險量級是否超過此代理門檻，比照
+# 既有 GEX_THIN_WALL_THRESHOLD (500k) 薄紙牆判定慣例並取整數量級上調，作為
+# 「防禦厚度」的近似代理，非真實 OI 名目金額。呈現層需依 AGENTS.md「啟發式
+# 代理數據揭露」慣例，在對應欄位附近標註此為代理值。
+_LEFT_ENTRY_PUT_WALL_GEX_PROXY_THRESHOLD: float = 5_000_000.0
+# 條件三：下檔無恐慌踩踏斷崖 + 向上均值回歸空間
+_LEFT_ENTRY_UOA_CHASE_RATIO_THRESHOLD: float = 1.2  # 追空踩踏 PUT BTO 的 ratio 門檻
+_LEFT_ENTRY_UOA_CHASE_MIN_PREMIUM_USD: float = (
+    200_000.0  # 追空踩踏 PUT BTO 的最低權利金
+)
+_LEFT_ENTRY_ASYMMETRIC_ROOM_PCT: float = 0.035  # 向上均值回歸空間門檻 (3.5%)
+# ⚠️ 校準備註：文獻規格宣稱此 3.5% 是「在停損設於 Put Wall 下方 1% 的前提下，
+# 隱含風報比達 3:1 以上」，但該推導只在現價幾乎正好貼齊 Put Wall 時成立。
+# 令 d = (Spot-PutWall)/Spot、停損 = PutWall × 0.99，則風險 = 0.01 + 0.99d：
+#   d = 0      → 風險 1.00%  → R:R 3.50 ✅
+#   d = +1.5%  → 風險 2.49%  → R:R 1.41 ❌ (條件二允許的上界)
+#   d = -1.0%  → 風險 0.01%  → 停損落在進場價下方 0.01%，數學上退化
+# 即 R:R >= 3 僅在 d <= 0.168% 時成立。本引擎目前**沒有**實作那個
+# 「PutWall 下方 1%」的停損 (左側部位仍走 anti_washout.py 的錨點停損體系)，
+# 故此處僅是門檻本身；若日後真要實作該停損並保證整個密著帶都有 3:1，需將本
+# 門檻提高至約 7.5%、或把 _LEFT_ENTRY_PUT_WALL_UPPER_PCT 收斂至 0.17% 左右。
+# 條件四：主力大額 PUT STO 接刀或長天期 CALL BTO 佈局
+_LEFT_ENTRY_PUT_STO_MIN_DTE: int = 14
+_LEFT_ENTRY_PUT_STO_MIN_RATIO: float = 1.0
+_LEFT_ENTRY_PUT_STO_MIN_NOTIONAL_USD: float = 300_000.0
+_LEFT_ENTRY_CALL_BTO_MIN_DTE: int = 30
+_LEFT_ENTRY_CALL_BTO_MIN_RATIO: float = 0.8
+_LEFT_ENTRY_CALL_BTO_MIN_NOTIONAL_USD: float = 200_000.0
+# 條件五：總經流動性危機與財報黑天鵝安全閥 (疊加在重用的右側條件五之上)
+_LEFT_ENTRY_VTS_BACKWARDATION_RATIO: float = (
+    1.10  # front-month VIX 溢價 3-month 超過此比例 (vts_ratio) 視為倒掛防禦
+)
+# 條件六：Candidate 自身 Theta 磨底防禦
+_LEFT_ENTRY_CANDIDATE_MIN_DTE: int = 21  # 嚴禁 0~7 DTE 合約，左側需承受底部震盪整理期
+_LEFT_ENTRY_IVR_SPREAD_THRESHOLD: float = (
+    50.0  # IVR > 此值強制改 Bull Call Spread/Short Put，避免恐慌插針時高買隱波
+)
+
+# --- 動態調整 4 態 Regime Classifier (regime_classifier.py::classify_dynamic_regime) 具名常數 ---
+# Regime I 左側接刀態：門檻與上方 _LEFT_ENTRY_VWAP_ATR_MULT/_LEFT_ENTRY_RSI_MAX/
+# _LEFT_ENTRY_PUT_WALL_*_PCT 刻意分開命名而不合併重用——本組是「是否進入左側
+# 接刀盤勢」的較寬鬆分類門檻，_LEFT_ENTRY_* 是「六重鐵律本身」的進場確認門檻，
+# 語意不同（前者決定路由，後者決定是否真的允許下單），數值目前恰好相同純屬
+# 校準巧合，未來可能各自獨立調整。
+_REGIME_I_VWAP_ATR_MULT: float = 1.5
+_REGIME_I_RSI_MAX: float = 30.0
+_REGIME_I_PUT_WALL_LOWER_PCT: float = -0.01
+_REGIME_I_PUT_WALL_UPPER_PCT: float = 0.015
+# Regime III 右側動能態
+_REGIME_III_CALL_WALL_MIN_ROOM_PCT: float = 0.05
+_REGIME_III_SUPPORT_WALL_MAX_DIST_PCT: float = 0.05
+_REGIME_III_RSI_MIN: float = 55.0
+_REGIME_III_VOLUME_SURGE_MULT: float = 1.5
+# Regime IV 結構封頂／危機態 (最優先判定，全面鎖定態)
+_REGIME_IV_CALL_WALL_PROXIMITY_PCT: float = 0.05
+# VIX 期限結構深度倒掛 (front-month 溢價於 3-month 超過 10%)。與左側條件五的
+# _LEFT_ENTRY_VTS_BACKWARDATION_RATIO 數值相同但刻意分開命名：前者決定「盤勢
+# 是否已進入全面鎖定態」(路由層)，後者是「六重鐵律本身是否放行」(進場確認層)，
+# 語意不同，未來可各自獨立調整。
+_REGIME_IV_VTS_BACKWARDATION_RATIO: float = 1.10
+
+# --- 動態調整狀態切換引擎 (transition_engine.py::evaluate_transition_for_position) 具名常數 ---
+# 僅接管使用者透過 /add_trade、/add_holding 手動標記 dynamic_strategy_state 的
+# 部位；未標記部位完全不受影響，仍走既有 anti_washout.py 通用 SL/TP 矩陣。
+# 切換路徑 1：左側部位進化為右側動能倉 (加碼 + 停損上移保本)
+_TRANSITION_PATH1_VWAP_VOLUME_MULT: float = (
+    1.5  # 15m 收盤站上 VWAP 與 Gamma Flip 同時須伴隨量能放大達此倍數，方視為真突破
+)
+# 注意：實際的量能比較發生在 cogs/trading/portfolio_monitor.py::_build_symbol_metrics
+# (與 TP3 的 vwap_loss_with_volume 共用同一次 get_confirmed_15m_bar 呼叫結果)，
+# 結果以 metrics["vwap_reclaim_with_volume"] 布林值傳入 transition_engine.py；
+# 後者只在文案中引用本常數。調整此值時請一併確認該處。
+# 切換路徑 2：左側失效硬停損 (破 Put Wall 踩踏防禦)
+_TRANSITION_PATH2_PUT_WALL_BREACH_PCT: float = (
+    0.015  # 15m 收盤跌破 Put Wall 下緣達此幅度視為做市商底牆潰堤
+)
+# 切換路徑 4：推進至 Call Wall (非對稱風報比耗盡，任一 Regime 皆適用)
+_TRANSITION_PATH4_CALL_WALL_ROOM_PCT: float = (
+    0.035  # Call Wall 距現價剩餘空間低於此值視為右側動能天花板已至
+)

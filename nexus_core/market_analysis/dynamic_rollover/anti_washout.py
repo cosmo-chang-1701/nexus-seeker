@@ -27,6 +27,7 @@ from .constants import (
 )
 from .models import RolloverInstruction, RolloverScenario
 from .structural_signals import _resolve_canonical_anchor_base, evaluate_option_dte_tier
+from .transition_engine import evaluate_transition_for_position
 
 
 def apply_ivr_strategy_overlay_impl(
@@ -1032,6 +1033,7 @@ async def check_satellite_rebalancing_impl(
             hvn: float = float(asset.get("hvn", 0.0))
             lvn: float = float(asset.get("lvn", 0.0))
             price_15m_close: float = float(asset.get("price_15m_close", spot))
+            price_15m_open: float = float(asset.get("price_15m_open", spot))
             atr_15m: float = float(asset.get("atr_15m", 0.0))
             acquired_at: Optional[str] = asset.get("acquired_at")
             iv_term_structure_status: Optional[str] = asset.get(
@@ -1059,6 +1061,10 @@ async def check_satellite_rebalancing_impl(
             delta_val = asset.get("delta")
             vwap_loss_with_volume: bool = bool(
                 asset.get("vwap_loss_with_volume", False)
+            )
+            session_vwap: float = float(asset.get("session_vwap", 0.0))
+            vwap_reclaim_with_volume: bool = bool(
+                asset.get("vwap_reclaim_with_volume", False)
             )
 
             # ----------------------------------------------------
@@ -1104,6 +1110,7 @@ async def check_satellite_rebalancing_impl(
                 "lvn": lvn,
                 "dte": dte,
                 "price_15m_close": price_15m_close,
+                "price_15m_open": price_15m_open,
                 "atr_15m": atr_15m,
                 "support_wall": support_wall,
                 "resistance_wall": resistance_wall,
@@ -1118,6 +1125,8 @@ async def check_satellite_rebalancing_impl(
                 "delta": delta_val,
                 "vwap_loss_with_volume": vwap_loss_with_volume,
                 "is_whale_put_block": is_whale_put_block,
+                "session_vwap": session_vwap,
+                "vwap_reclaim_with_volume": vwap_reclaim_with_volume,
             }
 
             # 微觀結構出場決策矩陣：TP 分層 (TP1/TP2/TP3) 與 SL 分層 (SL-結構
@@ -1130,9 +1139,48 @@ async def check_satellite_rebalancing_impl(
                 metrics
             )
             anchor_base_gate, _res_wall_gate = engine._correct_wall_topology(metrics)
-            stop_loss_gate, _limit_gate, _extreme_gate = (
+            stop_loss_gate, _limit_gate, extreme_gate = (
                 engine._compute_anti_washout_stop(anchor_base_gate, metrics)
             )
+
+            # 軌道二極端瞬時停損 (黑天鵝最後防線) 的觸發判定，定義與
+            # _apply_decision_matrix 內部的 is_extreme_tick_breach 完全一致
+            # (TP 未觸發，且現價已貫穿 anchor_base - 3.0×ATR₁₅ₘ 的極端熔斷線)。
+            # 在此先行計算，唯一用途是確保它對「所有」部位通用——包含下方
+            # 交由 Transition Engine 接管的已標記部位。
+            is_extreme_breach_gate = (
+                (not tp_tier) and extreme_gate > 0 and spot > 0 and spot < extreme_gate
+            )
+
+            # ----------------------------------------------------
+            # 動態調整狀態切換引擎 (Transition Engine)：僅接管使用者透過
+            # /add_trade、/add_holding 手動標記 dynamic_strategy_state
+            # (entry_mode="DYNAMIC") 且未 lockout 的部位，完全取代這些部位
+            # 原本會走的通用微觀結構出場決策矩陣 (SL/TP 分層)，避免同一標的
+            # 出現兩組互相衝突的出場建議。未標記部位不受影響，直接落入下方
+            # 既有邏輯。
+            #
+            # 唯一例外是軌道二極端瞬時停損：黑天鵝跳空是 Transition Engine
+            # 四條切換路徑都無法涵蓋的情境——路徑 2 除了破牆還額外要求同時
+            # 偵測到追空 PUT BTO 印花，路徑 3 依賴 Session VWAP 抓取成功，
+            # 兩者在極端行情下都可能落空。若在此一併攔截，已標記部位反而會
+            # 比未標記部位保護更薄。因此軌道二一旦觸發即不交給 Transition
+            # Engine，直接落入下方既有通用路徑，由既有的 🆘【立即人工執行】
+            # 極端瞬時停損渲染流程處理。
+            # ----------------------------------------------------
+            dynamic_state = asset.get("dynamic_strategy_state")
+            if (
+                dynamic_state
+                and dynamic_state.get("entry_mode") == "DYNAMIC"
+                and not dynamic_state.get("lockout")
+                and not is_extreme_breach_gate
+            ):
+                transition_instructions = await evaluate_transition_for_position(
+                    engine, user_id, asset, metrics, uoa_list
+                )
+                rebalance_instructions.extend(transition_instructions)
+                continue
+
             sl_tier, _sl_ratio, _sl_reason, _sl_new_stop = (
                 engine._evaluate_microstructure_sl_ladder(
                     metrics, anchor_base_gate, stop_loss_gate, asset_class
@@ -1142,7 +1190,18 @@ async def check_satellite_rebalancing_impl(
             # IV 泡沫防護：擺脫高波洗籌泥淖 (IV Crush 威脅)，矩陣未涵蓋的獨立保護
             is_iv_bubble = ivr > _IV_BUBBLE_THRESHOLD
 
-            if tp_tier is not None or sl_tier is not None or is_iv_bubble:
+            # is_extreme_breach_gate 一併納入閘門：軌道二觸發時必須確保能進入
+            # 報告產生流程。目前 extreme_stop (anchor-3.0×ATR) 恆低於 Track 1
+            # stop_loss (anchor-0.5×ATR)，故軌道二觸發時 sl_tier 必然也已觸發、
+            # 閘門本就會通過；此處明確納入是防禦性寫法，避免未來若 SL 分層或
+            # price_15m_close 語意調整後，出現「軌道二已觸發卻無任何指令產出」
+            # 的破口。
+            if (
+                tp_tier is not None
+                or sl_tier is not None
+                or is_iv_bubble
+                or is_extreme_breach_gate
+            ):
                 satellite_symbols = {
                     str(a.get("symbol", "")).upper()
                     for a in portfolio_assets

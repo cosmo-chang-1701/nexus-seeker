@@ -23,6 +23,7 @@ from market_analysis.dynamic_rollover.anti_washout import (
 from market_analysis.dynamic_rollover.structural_signals import (
     evaluate_option_dte_tier,
 )
+from market_analysis.dynamic_rollover.models import DynamicRegime, RegimeMarketData
 from cogs.embed_builders.rollover_embeds import (
     create_dynamic_rollover_embed,
     create_covered_call_overlay_embed,
@@ -5942,3 +5943,210 @@ def test_create_covered_call_profit_lock_embed_renders_details() -> None:
     assert "100%" in detail_field.value
     assert "DTE=20" in detail_field.value
     assert "$90" in detail_field.value
+
+
+# ============================================================================
+# 交易策略引擎 (trading_strategy) 路由測試：RIGHT_SIDE (預設/回歸) /
+# LEFT_SIDE / DYNAMIC 三分支
+# ============================================================================
+
+
+@pytest.mark.asyncio
+@patch("database.calendar_cache.get_cached_earnings", return_value=None)
+@patch(
+    "market_analysis.index_microstructure.get_market_regime",
+    new_callable=AsyncMock,
+    return_value="NORMAL",
+)
+@patch(
+    "services.market_data_service.get_all_option_expiries",
+    new_callable=AsyncMock,
+    return_value=_FAR_EXPIRIES,
+)
+async def test_evaluate_opportunity_cost_for_satellites_right_side_default_matches_existing_behavior(
+    mock_expiries: AsyncMock,
+    mock_regime: AsyncMock,
+    mock_earnings: MagicMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """trading_strategy 未設定 (預設 RIGHT_SIDE，未在 user_settings 建立過紀錄
+    的使用者) 時，entry_confirmation 必須與改動前的既有六重鐵律行為位元對位
+    一致 (回歸測試)，證明 Section 4 的三分支 wiring 對未選擇策略的既有使用者
+    零行為變化。"""
+    with patch(
+        "services.market_data_service.get_history_df",
+        new_callable=AsyncMock,
+        return_value=_GREEN_15M_DF,
+    ):
+        (
+            instructions,
+            entry_confirmation,
+        ) = await engine.evaluate_opportunity_cost_for_satellites(
+            user_id=999999001,
+            portfolio_assets=[],
+            already_flagged_symbols=set(),
+            candidate_symbol="TEST",
+            candidate_radar=_green_candidate_radar(),
+        )
+    assert entry_confirmation is not None
+    confirmed, reason = entry_confirmation
+    assert confirmed is True
+    assert "條件一✅" in reason
+    assert "左側" not in reason
+    assert instructions == []
+
+
+@pytest.mark.asyncio
+async def test_evaluate_opportunity_cost_for_satellites_left_side_routes_to_left_gate(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """trading_strategy=LEFT_SIDE 時應完全略過右側六重鐵律，改呼叫
+    left_side_entry._confirm_left_entry_signal。"""
+    with (
+        patch(
+            "market_analysis.dynamic_rollover.opportunity_cost.get_full_user_context",
+            return_value=MagicMock(trading_strategy="LEFT_SIDE"),
+        ),
+        patch(
+            "market_analysis.dynamic_rollover.left_side_entry._confirm_left_entry_signal",
+            new_callable=AsyncMock,
+            return_value=(True, "左側測試通過", "測試策略指令"),
+        ) as mock_left_gate,
+    ):
+        (
+            instructions,
+            entry_confirmation,
+        ) = await engine.evaluate_opportunity_cost_for_satellites(
+            user_id=999999002,
+            portfolio_assets=[],
+            already_flagged_symbols=set(),
+            candidate_symbol="TEST",
+            candidate_radar=_green_candidate_radar(),
+        )
+    mock_left_gate.assert_awaited_once()
+    assert entry_confirmation == (True, "左側測試通過")
+    assert instructions == []
+
+
+@pytest.mark.asyncio
+async def test_evaluate_opportunity_cost_for_satellites_dynamic_routes_via_regime_classifier(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """trading_strategy=DYNAMIC 時應先呼叫 4-Regime 分類器，Regime I (左側接刀
+    態) 路由至左側六重鐵律，且產生的指令需攜帶 entry_regime 與左側條件六的
+    structure_directive 覆寫 suggested_strategy。"""
+
+    def cache_side_effect(symbol: str, expiry: Optional[str] = None) -> Optional[dict]:
+        if symbol.upper() == "XYZ":
+            return {
+                "reference_spot_price": 50.0,
+                "expected_move_upper": 51.0,
+                "is_stale": 0,
+                "is_degraded": 0,
+            }
+        return {
+            "reference_spot_price": 100.0,
+            "expected_move_upper": 120.0,
+            "is_stale": 0,
+            "is_degraded": 0,
+        }
+
+    portfolio_assets = [
+        {
+            "symbol": "XYZ",
+            "asset_class": "SATELLITE",
+            "instrument_type": "SPOT",
+            "quantity": 10.0,
+            "current_value": 500.0,
+            "spot_price": 50.0,
+            "avg_cost": 40.0,
+            "psq_result": {"squeeze_level": "Release", "signal_direction": "Short"},
+        }
+    ]
+    candidate_radar = {
+        "psq_result": {"squeeze_level": "High", "signal_direction": "Long"},
+        "quote": {"c": 100.0},
+        "iv_metrics": {},
+        "gex_profile_data": {},
+        "uoa": [],
+    }
+
+    with (
+        patch("database.market_cache.get_market_cache", side_effect=cache_side_effect),
+        patch(
+            "market_analysis.dynamic_rollover.opportunity_cost.get_full_user_context",
+            return_value=MagicMock(trading_strategy="DYNAMIC"),
+        ),
+        patch(
+            "market_analysis.dynamic_rollover.regime_classifier.classify_dynamic_regime",
+            new_callable=AsyncMock,
+            return_value=(
+                DynamicRegime.REGIME_I_LEFT_CATCH,
+                "測試regime",
+                RegimeMarketData(),
+            ),
+        ),
+        patch(
+            "market_analysis.dynamic_rollover.left_side_entry._confirm_left_entry_signal",
+            new_callable=AsyncMock,
+            return_value=(True, "左側測試通過", "測試策略指令"),
+        ),
+    ):
+        (
+            instructions,
+            entry_confirmation,
+        ) = await engine.evaluate_opportunity_cost_for_satellites(
+            user_id=999999003,
+            portfolio_assets=portfolio_assets,
+            already_flagged_symbols=set(),
+            candidate_symbol="ABC",
+            candidate_radar=candidate_radar,
+        )
+    assert entry_confirmation == (True, "左側測試通過")
+    assert len(instructions) == 1
+    assert instructions[0]["entry_regime"] == "REGIME_I_LEFT_CATCH"
+    assert instructions[0]["suggested_strategy"] == "測試策略指令"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_opportunity_cost_for_satellites_dynamic_regime_ii_blocks_entry(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """trading_strategy=DYNAMIC 時，Regime II (混沌泥淖態) 應直接判定未通過，
+    完全不呼叫左側或右側六重鐵律。"""
+    with (
+        patch(
+            "market_analysis.dynamic_rollover.opportunity_cost.get_full_user_context",
+            return_value=MagicMock(trading_strategy="DYNAMIC"),
+        ),
+        patch(
+            "market_analysis.dynamic_rollover.regime_classifier.classify_dynamic_regime",
+            new_callable=AsyncMock,
+            return_value=(
+                DynamicRegime.REGIME_II_CHAOS_STANDASIDE,
+                "無人區過渡震盪",
+                None,
+            ),
+        ) as mock_classify,
+        patch(
+            "market_analysis.dynamic_rollover.left_side_entry._confirm_left_entry_signal",
+            new_callable=AsyncMock,
+        ) as mock_left_gate,
+    ):
+        (
+            instructions,
+            entry_confirmation,
+        ) = await engine.evaluate_opportunity_cost_for_satellites(
+            user_id=999999004,
+            portfolio_assets=[],
+            already_flagged_symbols=set(),
+            candidate_symbol="TEST",
+            candidate_radar=_green_candidate_radar(),
+        )
+    mock_classify.assert_awaited_once()
+    mock_left_gate.assert_not_awaited()
+    assert entry_confirmation is not None
+    confirmed, reason = entry_confirmation
+    assert confirmed is False
+    assert "REGIME_II_CHAOS_STANDASIDE" in reason
+    assert instructions == []

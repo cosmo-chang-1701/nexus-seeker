@@ -23,6 +23,7 @@ from market_analysis.price_volume_alert import (
     Confirmed15mBar,
     evaluate_watch_trigger,
     get_confirmed_15m_bar,
+    trim_to_confirmed_15m_bars,
 )
 from cogs.embed_builders.alert_embeds import create_price_volume_alert_embed
 from cogs.trading.price_volume_alert_monitor import PriceVolumeAlertMonitorCog
@@ -566,3 +567,40 @@ def test_price_volume_watch_notification_key_registered() -> None:
     assert PRESET_PROFILES["all_off"]["alpha_price_volume_watch"] is False
     assert PRESET_PROFILES["focus"]["alpha_price_volume_watch"] is False
     assert PRESET_PROFILES["mute_intraday"]["alpha_price_volume_watch"] is False
+
+
+# ----------------------------------------------------------------------
+# trim_to_confirmed_15m_bars：get_confirmed_15m_bar 與 dynamic_rollover
+# 左側鐵律/Regime 分類器共用的單一「已收盤 K 棒」截斷定義
+# ----------------------------------------------------------------------
+
+
+def test_trim_to_confirmed_15m_bars_drops_forming_last_bar() -> None:
+    """最後一根仍在成型 (起始時間距今未滿 15 分鐘) 時必須被截掉。"""
+    df = _make_15m_df(last_bar_age_minutes=5.0, num_bars=22)
+    trimmed = trim_to_confirmed_15m_bars(df)
+    assert trimmed is not None
+    assert len(trimmed) == len(df) - 1
+    assert trimmed.index[-1] == df.index[-2]
+
+
+def test_trim_to_confirmed_15m_bars_keeps_closed_last_bar() -> None:
+    """最後一根已收盤時應原樣保留，不得誤砍一根。"""
+    df = _make_15m_df(last_bar_age_minutes=20.0, num_bars=22)
+    trimmed = trim_to_confirmed_15m_bars(df)
+    assert trimmed is not None
+    assert len(trimmed) == len(df)
+    assert trimmed.index[-1] == df.index[-1]
+
+
+def test_trim_to_confirmed_15m_bars_non_datetime_index_fails_safe() -> None:
+    """索引非日期型別時無從判定收盤狀態，一律 fail-safe 回傳 None，而非退回
+    「假設已收盤」讓成型中的 K 棒重新溜進判定。"""
+    df = pd.DataFrame({"Close": [1.0] * 25, "Volume": [1.0] * 25})
+    assert trim_to_confirmed_15m_bars(df) is None
+
+
+def test_trim_to_confirmed_15m_bars_insufficient_bars_returns_none() -> None:
+    """截斷後不足 20 根回看均量基準時回傳 None。"""
+    df = _make_15m_df(last_bar_age_minutes=5.0, num_bars=21)
+    assert trim_to_confirmed_15m_bars(df) is None

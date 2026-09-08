@@ -19,6 +19,9 @@ from market_analysis.dynamic_rollover import (
     DynamicRolloverEngine,
     CORE_DEFENSE_ETF_SYMBOLS,
 )
+from market_analysis.dynamic_rollover.constants import (
+    _TRANSITION_PATH1_VWAP_VOLUME_MULT,
+)
 from market_analysis.ghost_trader import GhostTrader
 from cogs.embed_builder import (
     build_vtr_stats_embed,
@@ -30,6 +33,7 @@ from cogs.embed_builders.rollover_embeds import (
     create_dynamic_rollover_embed,
     create_covered_call_overlay_embed,
     create_covered_call_profit_lock_embed,
+    create_transition_pyramid_embed,
 )
 
 ny_tz = ZoneInfo("America/New_York")
@@ -61,6 +65,7 @@ class PortfolioMonitorCog(commands.Cog):
         fallback_metrics: Dict[str, Any] = {
             "spot_price": 0.0,
             "price_15m_close": 0.0,
+            "price_15m_open": 0.0,
             "ivr": 0.0,
             "ivr_drop": 0.0,
             "max_pain": 0.0,
@@ -78,6 +83,8 @@ class PortfolioMonitorCog(commands.Cog):
             "iv_term_structure_status": None,
             "uoa": [],
             "vwap_loss_with_volume": False,
+            "session_vwap": 0.0,
+            "vwap_reclaim_with_volume": False,
         }
         if not r_data:
             return fallback_metrics
@@ -113,12 +120,45 @@ class PortfolioMonitorCog(commands.Cog):
             # 條件一/price_volume_alert.py 預設值皆為 1.5x 的既有慣例。任何抓取失敗
             # 一律 fail-safe 判定為 False，不視為觸發。
             vwap_loss_with_volume = False
+            session_vwap_val = 0.0
+            # 動態調整狀態切換引擎切換路徑 1 (左側部位進化為右側動能倉) 所需的
+            # 15m 收盤帶量站上 VWAP 訊號，與上方 TP3 的 vwap_loss_with_volume
+            # 共用同一次 fetch_session_vwap/get_confirmed_15m_bar 呼叫結果，
+            # 零額外網路成本，僅方向相反 (站上而非跌破)。
+            vwap_reclaim_with_volume = False
+            # 微觀結構出場決策矩陣的 SPOT 軌道 (15m 實體 K 線收盤過濾) 所依據的
+            # 收盤價。取自下方同一次 get_confirmed_15m_bar 呼叫的**已收盤**
+            # K 棒，零額外網路成本。抓取失敗或尚無足夠已收盤 K 棒時退回現價
+            # (等同此欄位過去的行為)，確保降級時不會讓判定失去輸入。
+            confirmed_close_val = spot_val
+            confirmed_open_val = spot_val
+            confirmed_bar: Any = None
+            # 已收盤 15m K 棒獨立一個 try：price_15m_close 現在是所有 SPOT 部位
+            # 結構性停損的判定依據，不應因為不相干的 Session VWAP 抓取失敗而
+            # 被一併降級退回現價 (兩者是彼此獨立的資料源)。
             try:
                 from market_analysis.price_volume_alert import get_confirmed_15m_bar
+
+                confirmed_bar = await get_confirmed_15m_bar(sym)
+                if confirmed_bar is not None and confirmed_bar.close > 0:
+                    confirmed_close_val = float(confirmed_bar.close)
+                    if confirmed_bar.open is not None and confirmed_bar.open > 0:
+                        confirmed_open_val = float(confirmed_bar.open)
+                else:
+                    logger.warning(
+                        f"[{sym}] 無可用的已收盤 15m K 棒，price_15m_close 降級退回現價 "
+                        f"${spot_val:.2f} (SPOT 軌道本輪等同即時價判定)"
+                    )
+            except Exception as e:
+                logger.warning(
+                    f"[{sym}] 已收盤 15m K 棒抓取失敗，price_15m_close 降級退回現價: {e}"
+                )
+
+            try:
                 from market_analysis.vwap_utils import fetch_session_vwap
 
                 session_vwap = await fetch_session_vwap(sym, force_refresh=True)
-                confirmed_bar = await get_confirmed_15m_bar(sym)
+                session_vwap_val = session_vwap
                 if (
                     session_vwap > 0
                     and confirmed_bar is not None
@@ -127,8 +167,17 @@ class PortfolioMonitorCog(commands.Cog):
                     and confirmed_bar.volume >= confirmed_bar.avg_volume * 1.5
                 ):
                     vwap_loss_with_volume = True
+                if (
+                    session_vwap > 0
+                    and confirmed_bar is not None
+                    and confirmed_bar.avg_volume > 0
+                    and confirmed_bar.close > session_vwap
+                    and confirmed_bar.volume
+                    >= confirmed_bar.avg_volume * _TRANSITION_PATH1_VWAP_VOLUME_MULT
+                ):
+                    vwap_reclaim_with_volume = True
             except Exception as e:
-                logger.warning(f"[{sym}] TP3 VWAP 帶量失守判定計算失敗: {e}")
+                logger.warning(f"[{sym}] VWAP 帶量站上/失守判定計算失敗: {e}")
 
             raw_max_pain = r_data.get("max_pain")
             max_pain_val = (
@@ -141,7 +190,13 @@ class PortfolioMonitorCog(commands.Cog):
 
             return {
                 "spot_price": spot_val,
-                "price_15m_close": spot_val,
+                # 真正的 15m 已收盤實體 K 棒收盤價 (非現價)。此欄位是微觀結構
+                # 出場決策矩陣 SPOT 軌道與 Transition Engine 路徑 2/3 的判定
+                # 依據；OPTIONS 快速通道另行使用 spot_price，不受影響。
+                "price_15m_close": confirmed_close_val,
+                # 同一根已收盤 K 棒的開盤價，供 Transition Engine 路徑 2 判定
+                # 「實體陰線」(close < open) 之用。
+                "price_15m_open": confirmed_open_val,
                 "ivr": curr_ivr,
                 "ivr_drop": ivr_drop_val,
                 "max_pain": max_pain_val,
@@ -185,6 +240,8 @@ class PortfolioMonitorCog(commands.Cog):
                 ),
                 "uoa": r_data.get("uoa", []) or [],
                 "vwap_loss_with_volume": vwap_loss_with_volume,
+                "session_vwap": session_vwap_val,
+                "vwap_reclaim_with_volume": vwap_reclaim_with_volume,
             }
         except Exception as parse_ex:
             logger.error(f"Failed to parse radar data for {sym}: {parse_ex}")
@@ -203,6 +260,8 @@ class PortfolioMonitorCog(commands.Cog):
         expiry: Optional[str] = None,
         opt_type: Optional[str] = None,
         iv: float = 0.0,
+        asset_id: Optional[int] = None,
+        dynamic_strategy_state: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """組裝單筆多頭期權持倉的 asset_entry，供動態轉倉引擎評估迴圈使用。
 
@@ -245,6 +304,8 @@ class PortfolioMonitorCog(commands.Cog):
 
         return {
             "symbol": opt_sym,
+            "asset_id": asset_id,
+            "dynamic_strategy_state": dynamic_strategy_state,
             "asset_class": "SATELLITE",
             "instrument_type": "OPTIONS_CONTRACT",
             "quantity": quantity,
@@ -252,6 +313,7 @@ class PortfolioMonitorCog(commands.Cog):
             "max_allocation_pct": 0.3,
             "spot_price": metrics["spot_price"],
             "price_15m_close": metrics.get("price_15m_close", metrics["spot_price"]),
+            "price_15m_open": metrics.get("price_15m_open", metrics["spot_price"]),
             "ivr": metrics["ivr"],
             "ivr_drop": metrics.get("ivr_drop", 0.0),
             "max_pain": metrics["max_pain"],
@@ -276,6 +338,8 @@ class PortfolioMonitorCog(commands.Cog):
             "boxx_allocation_pct": None,
             "uoa": metrics.get("uoa", []),
             "vwap_loss_with_volume": metrics.get("vwap_loss_with_volume", False),
+            "session_vwap": metrics.get("session_vwap", 0.0),
+            "vwap_reclaim_with_volume": metrics.get("vwap_reclaim_with_volume", False),
             "delta": delta_val,
         }
 
@@ -565,6 +629,8 @@ class PortfolioMonitorCog(commands.Cog):
 
                     asset_entry: Dict[str, Any] = {
                         "symbol": sym,
+                        "asset_id": h.get("id"),
+                        "dynamic_strategy_state": h.get("dynamic_strategy_state"),
                         "asset_class": final_asset_class,
                         "quantity": h.get("quantity", 0),
                         "current_value": h.get("quantity", 0) * metrics["spot_price"],
@@ -574,6 +640,9 @@ class PortfolioMonitorCog(commands.Cog):
                         "spot_price": metrics["spot_price"],
                         "price_15m_close": metrics.get(
                             "price_15m_close", metrics["spot_price"]
+                        ),
+                        "price_15m_open": metrics.get(
+                            "price_15m_open", metrics["spot_price"]
                         ),
                         "ivr": metrics["ivr"],
                         "ivr_drop": metrics.get("ivr_drop", 0.0),
@@ -612,6 +681,10 @@ class PortfolioMonitorCog(commands.Cog):
                         "uoa": metrics.get("uoa", []),
                         "vwap_loss_with_volume": metrics.get(
                             "vwap_loss_with_volume", False
+                        ),
+                        "session_vwap": metrics.get("session_vwap", 0.0),
+                        "vwap_reclaim_with_volume": metrics.get(
+                            "vwap_reclaim_with_volume", False
                         ),
                         # 現貨部位無 Delta 概念 (僅期權合約適用 TP3 Delta 子條件)。
                         "delta": None,
@@ -717,6 +790,8 @@ class PortfolioMonitorCog(commands.Cog):
                             expiry=t.get("expiry"),
                             opt_type=t.get("opt_type"),
                             iv=contract_iv,
+                            asset_id=t.get("id"),
+                            dynamic_strategy_state=t.get("dynamic_strategy_state"),
                         )
                         user_assets.setdefault(opt_u_id, []).append(option_asset_entry)
 
@@ -909,6 +984,7 @@ class PortfolioMonitorCog(commands.Cog):
                         "CORE_DEPLOYMENT": "核心資金部署",
                         "MACRO_TOP_ESCAPE_DEFENSE": "宏觀逃頂前瞻防禦",
                         "COVERED_CALL_PROFIT_LOCK": "Covered Call 權利金衰減停利",
+                        "TRANSITION_ENGINE": "動態調整狀態切換引擎",
                     }
 
                     today_str = datetime.now(ny_tz).strftime("%Y%m%d")
@@ -987,6 +1063,17 @@ class PortfolioMonitorCog(commands.Cog):
                                 ),
                                 is_manual_override_required=bool(
                                     ins.get("is_manual_override_required")
+                                ),
+                            )
+                        elif ins.get("action") == "OPEN_PYRAMID":
+                            # 動態調整狀態切換引擎路徑1：順勢加碼建議，非賣出
+                            # 導向框架，沒有第二個轉倉標的，理由同上不套用
+                            # 通用轉倉框架。
+                            embed = create_transition_pyramid_embed(
+                                symbol=ins["symbol"],
+                                reason=ins["reason"],
+                                suggested_strategy=ins.get(
+                                    "suggested_strategy", "新開右側動能部位"
                                 ),
                             )
                         elif ins.get("is_covered_call_profit_lock"):

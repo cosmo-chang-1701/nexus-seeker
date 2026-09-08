@@ -75,6 +75,7 @@ def get_user_holdings(user_id: int) -> Any:
             d["target_allocation_pct"] = meta.get("target_allocation_pct")
             d["boxx_allocation_pct"] = meta.get("boxx_allocation_pct")
             d["acquired_at"] = meta.get("acquired_at")
+            d["dynamic_strategy_state"] = meta.get("dynamic_strategy_state")
             rows.append(d)
         return rows
     finally:
@@ -117,6 +118,7 @@ def get_all_holdings() -> Any:
             d["target_allocation_pct"] = meta.get("target_allocation_pct")
             d["boxx_allocation_pct"] = meta.get("boxx_allocation_pct")
             d["acquired_at"] = meta.get("acquired_at")
+            d["dynamic_strategy_state"] = meta.get("dynamic_strategy_state")
             rows.append(d)
         return rows
     finally:

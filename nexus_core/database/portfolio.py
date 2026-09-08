@@ -299,6 +299,7 @@ def get_all_trade_positions() -> Any:
             d["entry_price"] = meta.get("entry_price")
             d["quantity"] = meta.get("quantity", 0)
             d["category"] = meta.get("category", "SPECULATIVE")
+            d["dynamic_strategy_state"] = meta.get("dynamic_strategy_state")
             rows.append(d)
         return rows
     finally:

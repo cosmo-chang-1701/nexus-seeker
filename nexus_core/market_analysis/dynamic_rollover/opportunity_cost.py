@@ -2,6 +2,7 @@ import math
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+from database.user_settings import get_full_user_context
 from market_analysis.index_microstructure import (
     detect_uoa_sto_call_physical_cap,
     estimate_symbol_gamma_flip,
@@ -36,7 +37,12 @@ from .constants import (
     _ROLLOVER_RATIO_STANDARD,
     _SKEW_DOWNSIDE_PENALTY_FACTOR,
 )
-from .models import RolloverInstruction, RolloverScenario
+from .models import (
+    DynamicRegime,
+    RolloverInstruction,
+    RolloverScenario,
+    TradingStrategyMode,
+)
 from .structural_signals import _scan_gex_walls, evaluate_option_dte_tier
 
 
@@ -811,12 +817,79 @@ class _OpportunityCostMixin:
         )
         target_uoa_sweep = len(candidate_radar.get("uoa", []) or []) > 0
 
-        # 防洗盤實戰策略：進場訊號六重嚴格過濾鐵律。六項條件必須同時成立才允許
-        # 對 candidate_symbol 啟動任何機會成本轉倉指令；未通過時比照上方
-        # 「找不到候選標的」的早退模式，靜默略過、不產生任何指令。
-        is_entry_confirmed, entry_reason = await self._confirm_entry_signal(
-            candidate_symbol, candidate_radar, target_spot
-        )
+        # 交易策略引擎：依使用者 /settings 選擇的 trading_strategy (右側交易/
+        # 左側交易/動態調整) 決定要套用哪一套進場鐵律。RIGHT_SIDE 為預設值，
+        # 呼叫既有六重鐵律，行為與改動前完全一致 (零行為變化)。LEFT_SIDE 呼叫
+        # 全新的逆勢均值回歸六重鐵律 (left_side_entry.py)。DYNAMIC 先透過
+        # 4-Regime 分類器 (regime_classifier.py) 判定盤勢，再路由至對應鐵律或
+        # 直接判定未通過 (Regime II 混沌泥淖態/IV 結構封頂危機態)。
+        try:
+            trading_strategy = get_full_user_context(user_id).trading_strategy
+        except Exception as e:
+            trading_strategy = TradingStrategyMode.RIGHT_SIDE.value
+            logger.warning(
+                f"[{candidate_symbol}] 讀取使用者 {user_id} 交易策略設定失敗，"
+                f"退回右側交易預設: {e}"
+            )
+
+        suggested_strategy_override: Optional[str] = None
+        entry_regime: Optional[str] = None
+
+        if trading_strategy == TradingStrategyMode.LEFT_SIDE.value:
+            from .left_side_entry import _confirm_left_entry_signal
+
+            (
+                is_entry_confirmed,
+                entry_reason,
+                suggested_strategy_override,
+            ) = await _confirm_left_entry_signal(
+                candidate_symbol, candidate_radar, target_spot
+            )
+        elif trading_strategy == TradingStrategyMode.DYNAMIC.value:
+            from .left_side_entry import _confirm_left_entry_signal
+            from .regime_classifier import classify_dynamic_regime
+
+            gex_profile_data_for_regime = candidate_radar.get("gex_profile_data") or {}
+            uoa_list_for_regime = candidate_radar.get("uoa") or []
+            regime, regime_reason, regime_market_data = await classify_dynamic_regime(
+                candidate_symbol,
+                target_spot,
+                gex_profile_data_for_regime,
+                uoa_list_for_regime,
+            )
+            entry_regime = regime.value
+            if regime == DynamicRegime.REGIME_III_RIGHT_MOMENTUM:
+                is_entry_confirmed, entry_reason = await self._confirm_entry_signal(
+                    candidate_symbol, candidate_radar, target_spot
+                )
+            elif regime == DynamicRegime.REGIME_I_LEFT_CATCH:
+                (
+                    is_entry_confirmed,
+                    entry_reason,
+                    suggested_strategy_override,
+                ) = await _confirm_left_entry_signal(
+                    candidate_symbol,
+                    candidate_radar,
+                    target_spot,
+                    # 原樣沿用分類階段已抓取的 15m frame / Session VWAP /
+                    # ATR₁₅ₘ，確保「盤勢分類」與「進場確認」建立在同一份資料
+                    # 快照上，並省去對同一標的的重複網路請求。
+                    df_15m=regime_market_data.df_15m,
+                    session_vwap=regime_market_data.session_vwap,
+                    atr_15m=regime_market_data.atr_15m,
+                )
+            else:
+                is_entry_confirmed = False
+                entry_reason = f"⛔ Regime `{regime.value}`：{regime_reason}"
+        else:
+            # 防洗盤實戰策略：進場訊號六重嚴格過濾鐵律 (右側交易，預設行為)。
+            # 六項條件必須同時成立才允許對 candidate_symbol 啟動任何機會成本
+            # 轉倉指令；未通過時比照上方「找不到候選標的」的早退模式，靜默
+            # 略過、不產生任何指令。
+            is_entry_confirmed, entry_reason = await self._confirm_entry_signal(
+                candidate_symbol, candidate_radar, target_spot
+            )
+
         entry_confirmation: Optional[Tuple[bool, str]] = (
             is_entry_confirmed,
             entry_reason,
@@ -939,12 +1012,14 @@ class _OpportunityCostMixin:
                     "sell_ratio": result["rollover_ratio"],
                     "target_core": candidate_symbol,
                     "reason": reason_text,
-                    "suggested_strategy": result["strategy"],
+                    "suggested_strategy": suggested_strategy_override
+                    or result["strategy"],
                     "scenario": RolloverScenario.OPPORTUNITY_COST.value,
                     "is_manual_override_required": is_illiquid_warning,
                     "cash_impact": cash_impact,
                     "limit_price": target_spot if target_spot > 0 else None,
                     "instrument_type": instrument_class,
+                    "entry_regime": entry_regime,
                 }
             )
         return instructions, entry_confirmation

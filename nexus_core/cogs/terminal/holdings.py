@@ -59,6 +59,7 @@ async def add_holding_impl(
     target_allocation_pct: Optional[float] = None,
     boxx_allocation_pct: Optional[float] = None,
     acquired_at: Optional[str] = None,
+    dynamic_entry_regime: Optional[app_commands.Choice[str]] = None,
 ) -> Any:
     symbol = symbol.upper()
     user_id = interaction.user.id
@@ -111,6 +112,16 @@ async def add_holding_impl(
             existing_asset.metadata["boxx_allocation_pct"] = boxx_allocation_pct / 100.0
         if acquired_at is not None:
             existing_asset.metadata["acquired_at"] = acquired_at
+        if dynamic_entry_regime is not None:
+            from market_analysis.dynamic_rollover.transition_engine import (
+                build_dynamic_strategy_state_for_symbol,
+            )
+
+            existing_asset.metadata[
+                "dynamic_strategy_state"
+            ] = await build_dynamic_strategy_state_for_symbol(
+                symbol, dynamic_entry_regime.value
+            )
         success = manager.update_asset(existing_asset)
         action_text = "更新"
     else:
@@ -130,6 +141,16 @@ async def add_holding_impl(
             metadata["target_allocation_pct"] = target_allocation_pct / 100.0
         if boxx_allocation_pct is not None:
             metadata["boxx_allocation_pct"] = boxx_allocation_pct / 100.0
+        if dynamic_entry_regime is not None:
+            from market_analysis.dynamic_rollover.transition_engine import (
+                build_dynamic_strategy_state_for_symbol,
+            )
+
+            metadata[
+                "dynamic_strategy_state"
+            ] = await build_dynamic_strategy_state_for_symbol(
+                symbol, dynamic_entry_regime.value
+            )
         asset = Asset(
             user_id=user_id,
             symbol=symbol,
@@ -169,6 +190,7 @@ async def edit_holding_impl(
     target_allocation_pct: Optional[float] = None,
     boxx_allocation_pct: Optional[float] = None,
     acquired_at: Optional[str] = None,
+    dynamic_entry_regime: Optional[app_commands.Choice[str]] = None,
 ) -> Any:
     symbol = symbol.upper()
     if (
@@ -179,6 +201,7 @@ async def edit_holding_impl(
         and target_allocation_pct is None
         and boxx_allocation_pct is None
         and acquired_at is None
+        and dynamic_entry_regime is None
     ):
         return await interaction.response.send_message(
             embed=create_info_embed(title="系統資訊", message=" 請提供要修改的參數。"),
@@ -214,6 +237,16 @@ async def edit_holding_impl(
         updates["boxx_allocation_pct"] = boxx_allocation_pct / 100.0
     if acquired_at is not None:
         updates["acquired_at"] = acquired_at
+    if dynamic_entry_regime is not None:
+        from market_analysis.dynamic_rollover.transition_engine import (
+            build_dynamic_strategy_state_for_symbol,
+        )
+
+        updates[
+            "dynamic_strategy_state"
+        ] = await build_dynamic_strategy_state_for_symbol(
+            symbol, dynamic_entry_regime.value
+        )
 
     success = manager.update_asset_metadata_by_symbol(
         interaction.user.id, symbol, ContextType.HOLDING, updates

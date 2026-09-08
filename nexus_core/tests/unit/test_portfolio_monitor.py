@@ -6,7 +6,7 @@ tests/unit/test_portfolio_monitor.py
 """
 
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -180,3 +180,125 @@ async def test_build_symbol_metrics_atr_15m_defaults_to_zero_not_atr_14(
     metrics = await cog._build_symbol_metrics("AAPL", r_data)
     assert metrics["atr_14"] == 3.0
     assert metrics["atr_15m"] == 0.0
+
+
+# ----------------------------------------------------------------------
+# price_15m_close：必須是真正的 15m 已收盤 K 棒收盤價，而非現價
+# ----------------------------------------------------------------------
+
+
+def _make_confirmed_bar(close: float, volume: float = 1000.0) -> Any:
+    from datetime import datetime
+
+    from market_analysis.price_volume_alert import Confirmed15mBar
+
+    return Confirmed15mBar(
+        symbol="AAPL",
+        bar_time=datetime(2024, 1, 2, 10, 0),
+        close=close,
+        volume=volume,
+        avg_volume=1000.0,
+        open=close,
+        high=close + 1.0,
+        low=close - 1.0,
+    )
+
+
+@pytest.mark.asyncio
+@patch("database.cache.save_kv_cache")
+@patch("database.cache.get_kv_cache", return_value=None)
+async def test_price_15m_close_uses_confirmed_bar_not_spot(
+    mock_get_kv: Any, mock_save_kv: Any
+) -> None:
+    """price_15m_close 必須取自已收盤的 15m 實體 K 棒，而非即時現價。
+
+    此欄位是微觀結構出場決策矩陣 SPOT 軌道 (15m 實體收盤過濾) 與 Transition
+    Engine 路徑 2/3 的判定依據；若誤填現價，盤中任何一次插針都會被當成實體
+    破位，防洗盤設計形同虛設。OPTIONS 快速通道另行使用 spot_price，不受影響。
+    """
+    cog = PortfolioMonitorCog.__new__(PortfolioMonitorCog)
+    cog.bot = MagicMock()
+
+    r_data = {"quote": {"c": 150.0}, "atr_15m": 1.2}
+
+    with (
+        patch(
+            "market_analysis.price_volume_alert.get_confirmed_15m_bar",
+            new_callable=AsyncMock,
+            return_value=_make_confirmed_bar(close=147.5),
+        ),
+        patch(
+            "market_analysis.vwap_utils.fetch_session_vwap",
+            new_callable=AsyncMock,
+            return_value=149.0,
+        ),
+    ):
+        metrics = await cog._build_symbol_metrics("AAPL", r_data)
+
+    assert metrics["spot_price"] == 150.0
+    assert metrics["price_15m_close"] == 147.5
+    assert metrics["price_15m_close"] != metrics["spot_price"]
+
+
+@pytest.mark.asyncio
+@patch("database.cache.save_kv_cache")
+@patch("database.cache.get_kv_cache", return_value=None)
+async def test_price_15m_close_falls_back_to_spot_when_no_confirmed_bar(
+    mock_get_kv: Any, mock_save_kv: Any
+) -> None:
+    """尚無可用的已收盤 15m K 棒 (開盤初期/抓取失敗) 時，退回現價以確保判定
+    不會失去輸入 (等同此欄位過去的行為)。"""
+    cog = PortfolioMonitorCog.__new__(PortfolioMonitorCog)
+    cog.bot = MagicMock()
+
+    r_data = {"quote": {"c": 150.0}}
+
+    with (
+        patch(
+            "market_analysis.price_volume_alert.get_confirmed_15m_bar",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "market_analysis.vwap_utils.fetch_session_vwap",
+            new_callable=AsyncMock,
+            return_value=149.0,
+        ),
+    ):
+        metrics = await cog._build_symbol_metrics("AAPL", r_data)
+
+    assert metrics["price_15m_close"] == 150.0
+
+
+@pytest.mark.asyncio
+@patch("database.cache.save_kv_cache")
+@patch("database.cache.get_kv_cache", return_value=None)
+async def test_price_15m_close_survives_session_vwap_failure(
+    mock_get_kv: Any, mock_save_kv: Any
+) -> None:
+    """Session VWAP 抓取失敗不得連帶讓 price_15m_close 降級退回現價——兩者是
+    彼此獨立的資料源，各自擁有獨立的 try 區塊。"""
+    cog = PortfolioMonitorCog.__new__(PortfolioMonitorCog)
+    cog.bot = MagicMock()
+
+    r_data = {"quote": {"c": 150.0}}
+
+    with (
+        patch(
+            "market_analysis.price_volume_alert.get_confirmed_15m_bar",
+            new_callable=AsyncMock,
+            return_value=_make_confirmed_bar(close=147.5),
+        ),
+        patch(
+            "market_analysis.vwap_utils.fetch_session_vwap",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("VWAP 抓取失敗"),
+        ),
+    ):
+        metrics = await cog._build_symbol_metrics("AAPL", r_data)
+
+    assert metrics["price_15m_close"] == 147.5
+    # VWAP 相關欄位本身仍 fail-safe 降級
+    assert metrics["session_vwap"] == 0.0
+    assert metrics["vwap_loss_with_volume"] is False
+    assert metrics["vwap_reclaim_with_volume"] is False

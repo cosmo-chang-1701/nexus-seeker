@@ -43,6 +43,46 @@ class Confirmed15mBar:
     low: Optional[float] = None
 
 
+def trim_to_confirmed_15m_bars(
+    df_15m: Optional[pd.DataFrame],
+) -> Optional[pd.DataFrame]:
+    """將 15m K 線 DataFrame 截斷至「最近一根已收盤 K 棒」為止。
+
+    yfinance 的 15m K 棒索引代表該根的**起始時間**；盤中抓取時最後一根通常
+    仍在成型中。任何以 `df.iloc[-1]` 直接取用最後一根的日內邏輯，都會拿到
+    尚未收盤的即時價格與**只累積了一部分**的成交量——後者對「縮量」類判定
+    尤其危險：一根剛成型的 K 棒必然「縮量」，會讓該類子條件在每根 K 棒的
+    前段時間恆為真。
+
+    本函式是 `get_confirmed_15m_bar` 與 `market_analysis/dynamic_rollover/`
+    左側進場鐵律、Regime 分類器共用的**單一截斷定義**，避免各處重複實作。
+
+    回傳截斷後的 DataFrame；若截斷後不足 `_VOLUME_LOOKBACK_BARS + 1` 根
+    (無法計算均量基準) 則回傳 None。
+    """
+    if df_15m is None or df_15m.empty:
+        return None
+
+    last_idx_raw = df_15m.index[-1]
+    if not hasattr(last_idx_raw, "to_pydatetime"):
+        # 生產環境的 get_history_df 一律回傳 DatetimeIndex；索引非日期型別代表
+        # 無從判定 K 棒是否已收盤，一律 fail-safe 視為資料不可用，而非退回
+        # 「假設已收盤」——後者會讓成型中的 K 棒重新溜進判定。
+        logger.warning("15m K 線索引非日期型別，無法判定收盤狀態，視為資料不可用")
+        return None
+
+    now_ny = datetime.now(market_time.ny_tz).replace(tzinfo=None)
+    last_idx = last_idx_raw.to_pydatetime()
+    # 只有起始時間 + 15 分鐘已經過去，才代表這根 K 棒真正收盤。
+    is_last_bar_closed = (last_idx + timedelta(minutes=15)) <= now_ny
+    confirmed_pos = len(df_15m) - 1 if is_last_bar_closed else len(df_15m) - 2
+
+    if confirmed_pos - _VOLUME_LOOKBACK_BARS < 0:
+        return None
+
+    return df_15m.iloc[: confirmed_pos + 1]
+
+
 async def get_confirmed_15m_bar(symbol: str) -> Optional[Confirmed15mBar]:
     """抓取並回傳某標的最近一根已收盤的 15 分鐘 K 棒資料。
 
@@ -61,21 +101,13 @@ async def get_confirmed_15m_bar(symbol: str) -> Optional[Confirmed15mBar]:
         logger.warning(f"[{symbol}] 15m K 線抓取失敗: {e}")
         return None
 
-    if df_15m is None or df_15m.empty or len(df_15m) < _VOLUME_LOOKBACK_BARS + 1:
+    df_confirmed = trim_to_confirmed_15m_bars(df_15m)
+    if df_confirmed is None:
         return None
 
-    now_ny = datetime.now(market_time.ny_tz).replace(tzinfo=None)
-    last_idx = df_15m.index[-1].to_pydatetime()
-    # yfinance 15m K 棒索引代表該根的「起始時間」；只有起始時間 + 15 分鐘
-    # 已經過去，才代表這根 K 棒真正收盤，避免用尚在成型的即時價格誤觸發。
-    is_last_bar_closed = (last_idx + timedelta(minutes=15)) <= now_ny
-    confirmed_pos = len(df_15m) - 1 if is_last_bar_closed else len(df_15m) - 2
-
-    if confirmed_pos - _VOLUME_LOOKBACK_BARS < 0:
-        return None
-
-    confirmed_bar = df_15m.iloc[confirmed_pos]
-    lookback = df_15m.iloc[confirmed_pos - _VOLUME_LOOKBACK_BARS : confirmed_pos]
+    confirmed_pos = len(df_confirmed) - 1
+    confirmed_bar = df_confirmed.iloc[confirmed_pos]
+    lookback = df_confirmed.iloc[confirmed_pos - _VOLUME_LOOKBACK_BARS : confirmed_pos]
     avg_volume = float(lookback["Volume"].mean())
 
     open_val = (
@@ -96,7 +128,7 @@ async def get_confirmed_15m_bar(symbol: str) -> Optional[Confirmed15mBar]:
 
     return Confirmed15mBar(
         symbol=symbol,
-        bar_time=df_15m.index[confirmed_pos].to_pydatetime(),
+        bar_time=df_confirmed.index[confirmed_pos].to_pydatetime(),
         close=float(confirmed_bar["Close"]),
         volume=float(confirmed_bar["Volume"]),
         avg_volume=avg_volume,

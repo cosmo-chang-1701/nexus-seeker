@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Optional, TypedDict
+from typing import Any, NamedTuple, Optional, TypedDict
 
 from pydantic import BaseModel, Field
 
@@ -16,6 +16,48 @@ class RolloverScenario(str, Enum):
     CORE_DEPLOYMENT = "CORE_DEPLOYMENT"
     MACRO_TOP_ESCAPE_DEFENSE = "MACRO_TOP_ESCAPE_DEFENSE"
     COVERED_CALL_PROFIT_LOCK = "COVERED_CALL_PROFIT_LOCK"
+    TRANSITION_ENGINE = "TRANSITION_ENGINE"
+
+
+class TradingStrategyMode(str, Enum):
+    """使用者 /settings 可選的交易策略模式，決定 Scenario 2 (opportunity_cost.py)
+    進場閘門要套用哪一套六重鐵律。RIGHT_SIDE 為現行、已上線的預設行為，未選擇的
+    使用者一律沿用 RIGHT_SIDE，零行為變化。"""
+
+    RIGHT_SIDE = (
+        "RIGHT_SIDE"  # 右側交易：順勢動能突破六重鐵律 (opportunity_cost.py 現行邏輯)
+    )
+    LEFT_SIDE = "LEFT_SIDE"  # 左側交易：逆勢均值回歸六重鐵律 (left_side_entry.py)
+    DYNAMIC = "DYNAMIC"  # 動態調整：4態 Regime 分類器路由 (regime_classifier.py)
+
+
+class RegimeMarketData(NamedTuple):
+    """`classify_dynamic_regime()` 判定過程中實際抓取/計算的市場資料。
+
+    供呼叫端在路由至 Regime I 時原樣傳給左側六重鐵律重用——這三項原本會被
+    分類器與六重鐵律各自抓取一次 (15m K 線、Session VWAP 皆為
+    force_refresh=True 的真實網路請求)，除了多餘的請求成本外，更關鍵的是兩次
+    抓取可能取到不同快照，導致「盤勢分類」與「進場確認」建立在不一致的資料上。
+    """
+
+    df_15m: Optional[Any] = None
+    session_vwap: float = 0.0
+    atr_15m: float = 0.0
+
+
+class DynamicRegime(str, Enum):
+    """動態調整模式的 4 態市場結構分類 (regime_classifier.py::classify_dynamic_regime)。"""
+
+    REGIME_I_LEFT_CATCH = "REGIME_I_LEFT_CATCH"  # 左側接刀態：極端負乖離吸籌
+    REGIME_II_CHAOS_STANDASIDE = (
+        "REGIME_II_CHAOS_STANDASIDE"  # 混沌泥淖態：無人區過渡震盪，全系統休眠
+    )
+    REGIME_III_RIGHT_MOMENTUM = (
+        "REGIME_III_RIGHT_MOMENTUM"  # 右側動能態：結構突破伽馬擠壓
+    )
+    REGIME_IV_STRUCTURAL_CAP_CRISIS = (
+        "REGIME_IV_STRUCTURAL_CAP_CRISIS"  # 結構封頂／危機態：強制鎖定
+    )
 
 
 class FundamentalThesisResult(BaseModel):
@@ -95,3 +137,8 @@ class RolloverInstruction(_RolloverInstructionRequired, total=False):
     # embed 呈現層 (仍僅依賴 scenario+action 決定顏色/文案)。未觸發任何分層
     # 的指令 (例如常規配置超額 REDUCE) 維持 None。
     exit_tier: Optional[str]
+    # 交易策略引擎 (regime_classifier.py / left_side_entry.py) 產生此指令時所依據的
+    # DynamicRegime 值（例如 "REGIME_I_LEFT_CATCH"）。僅 trading_strategy=DYNAMIC 時
+    # 產生的指令會攜帶此欄位，供呈現層顯示「當前 Regime」與分析用途；純右側/左側
+    # 手動模式維持 None。
+    entry_regime: Optional[str]

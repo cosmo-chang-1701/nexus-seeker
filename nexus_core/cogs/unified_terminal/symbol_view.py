@@ -4,6 +4,7 @@ import asyncio
 import logging
 from typing import Dict
 
+import database
 from services import news_service, reddit_service
 from cogs.embed_builder import (
     create_error_embed,
@@ -239,15 +240,22 @@ class SymbolHubView(discord.ui.View):
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> Any:
         """
-        進場鐵律檢核頁籤：呈現六重鐵律 (dynamic_rollover/opportunity_cost.py::
-        _confirm_entry_signal，本專案既有機會成本轉倉候選確認生產路徑，含即時
-        I/O) 的判定結果。
+        進場鐵律檢核頁籤：依使用者 /settings 選擇的交易策略模式 (右側交易/左側
+        交易/動態調整) 呈現對應的六重鐵律 (dynamic_rollover/opportunity_cost.py::
+        _confirm_entry_signal 或 left_side_entry.py::_confirm_left_entry_signal，
+        動態調整模式另由 regime_classifier.py::classify_dynamic_regime 先行路由)
+        的判定結果，串接方式比照 opportunity_cost.py::
+        evaluate_opportunity_cost_for_satellites 既有的三分支邏輯。
         """
         await interaction.response.defer()
         await self._set_loading(interaction)
         embed = None
         try:
             from market_analysis.dynamic_rollover import DynamicRolloverEngine
+            from market_analysis.dynamic_rollover.models import (
+                DynamicRegime,
+                TradingStrategyMode,
+            )
 
             _quote = self.base_data.get("quote") or {}
             _c_raw = (
@@ -257,16 +265,87 @@ class SymbolHubView(discord.ui.View):
             )
             target_spot = _safe_float(_c_raw, 0.0)
 
+            try:
+                trading_strategy = database.get_full_user_context(
+                    self.user_id
+                ).trading_strategy
+            except Exception as e:
+                trading_strategy = TradingStrategyMode.RIGHT_SIDE.value
+                logger.warning(
+                    f"[{self.symbol}] 讀取使用者 {self.user_id} 交易策略設定失敗，"
+                    f"退回右側交易預設: {e}"
+                )
+
             engine = DynamicRolloverEngine()
-            six_rule_passed, six_rule_reason = await engine._confirm_entry_signal(
-                self.symbol, self.base_data, target_spot
-            )
+            dynamic_regime: Any = None
+            dynamic_regime_reason = None
+
+            if trading_strategy == TradingStrategyMode.LEFT_SIDE.value:
+                from market_analysis.dynamic_rollover.left_side_entry import (
+                    _confirm_left_entry_signal,
+                )
+
+                six_rule_passed, six_rule_reason, _ = await _confirm_left_entry_signal(
+                    self.symbol, self.base_data, target_spot
+                )
+            elif trading_strategy == TradingStrategyMode.DYNAMIC.value:
+                from market_analysis.dynamic_rollover.left_side_entry import (
+                    _confirm_left_entry_signal,
+                )
+                from market_analysis.dynamic_rollover.regime_classifier import (
+                    classify_dynamic_regime,
+                )
+
+                gex_profile_data = self.base_data.get("gex_profile_data") or {}
+                uoa_list = self.base_data.get("uoa") or []
+                (
+                    dynamic_regime,
+                    dynamic_regime_reason,
+                    regime_market_data,
+                ) = await classify_dynamic_regime(
+                    self.symbol, target_spot, gex_profile_data, uoa_list
+                )
+                if dynamic_regime == DynamicRegime.REGIME_III_RIGHT_MOMENTUM:
+                    (
+                        six_rule_passed,
+                        six_rule_reason,
+                    ) = await engine._confirm_entry_signal(
+                        self.symbol, self.base_data, target_spot
+                    )
+                elif dynamic_regime == DynamicRegime.REGIME_I_LEFT_CATCH:
+                    (
+                        six_rule_passed,
+                        six_rule_reason,
+                        _,
+                    ) = await _confirm_left_entry_signal(
+                        self.symbol,
+                        self.base_data,
+                        target_spot,
+                        df_15m=regime_market_data.df_15m,
+                        session_vwap=regime_market_data.session_vwap,
+                        atr_15m=regime_market_data.atr_15m,
+                    )
+                else:
+                    six_rule_passed = False
+                    six_rule_reason = (
+                        f"⛔ Regime `{dynamic_regime.value}`：{dynamic_regime_reason}"
+                    )
+            else:
+                six_rule_passed, six_rule_reason = await engine._confirm_entry_signal(
+                    self.symbol, self.base_data, target_spot
+                )
+
             six_rule_reasons = six_rule_reason.split(" | ") if six_rule_reason else []
 
             embed = create_entry_rules_embed(
                 self.symbol,
                 six_rule_passed,
                 six_rule_reasons,
+                trading_strategy=trading_strategy,
+                dynamic_regime=(
+                    dynamic_regime.value if dynamic_regime is not None else None
+                ),
+                dynamic_regime_reason=dynamic_regime_reason,
             )
         except Exception as e:
             logger.exception(f"[{self.symbol}] Entry rules check failed: {e}")

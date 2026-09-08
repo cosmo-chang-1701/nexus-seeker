@@ -4268,3 +4268,49 @@ def test_single_oversized_embed() -> None:
     assert len(chunks) == 2
     assert len(chunks[0]) == 1
     assert len(chunks[1]) == 1
+
+
+def test_create_entry_rules_embed_left_side_uses_left_legend() -> None:
+    """交易策略為 LEFT_SIDE 時，條件說明區塊必須改為左側鐵律的定義——沿用寫死的
+    右側說明會讓使用者看到與判定結果自相矛盾的解釋 (判定寫「左側條件一」，說明
+    卻寫「結構性右側放量突破確認」)。"""
+    from cogs.embed_builders.portfolio_embeds import create_entry_rules_embed
+
+    embed = create_entry_rules_embed(
+        "NVDA", False, ["左側條件一❌：現價未達乖離門檻"], trading_strategy="LEFT_SIDE"
+    )
+    blob = "\n".join(f"{f.name}\n{f.value}" for f in embed.fields)
+    assert "左側交易：逆勢均值回歸" in blob
+    assert "結構性空頭力竭與極值乖離確認" in blob
+    assert "做市商 Put Wall / 負 Gamma 吸附牆密著截擊" in blob
+    # 不得殘留右側鐵律的說明
+    assert "結構性右側放量突破確認" not in blob
+
+
+def test_create_entry_rules_embed_right_side_keeps_existing_legend() -> None:
+    """未選擇策略 (預設 RIGHT_SIDE) 時維持既有右側說明，確保零行為變化。"""
+    from cogs.embed_builders.portfolio_embeds import create_entry_rules_embed
+
+    embed = create_entry_rules_embed("NVDA", True, ["條件一✅：ok"])
+    blob = "\n".join(f"{f.name}\n{f.value}" for f in embed.fields)
+    assert "結構性右側放量突破確認" in blob
+    assert "結構性空頭力竭與極值乖離確認" not in blob
+
+
+def test_create_entry_rules_embed_dynamic_regime_iv_shows_no_gate_notice() -> None:
+    """動態調整判定為 Regime IV (全面鎖倉) 時兩套鐵律都沒發動，不得貼上任一套的
+    條件說明誤導使用者。"""
+    from cogs.embed_builders.portfolio_embeds import create_entry_rules_embed
+
+    embed = create_entry_rules_embed(
+        "NVDA",
+        False,
+        ["⛔ Regime `REGIME_IV_STRUCTURAL_CAP_CRISIS`：Call Wall 空間不足"],
+        trading_strategy="DYNAMIC",
+        dynamic_regime="REGIME_IV_STRUCTURAL_CAP_CRISIS",
+        dynamic_regime_reason="Call Wall 空間不足",
+    )
+    blob = "\n".join(f"{f.name}\n{f.value}" for f in embed.fields)
+    assert "左右兩套六重鐵律皆未發動判定" in blob
+    assert "結構性右側放量突破確認" not in blob
+    assert "結構性空頭力竭與極值乖離確認" not in blob
