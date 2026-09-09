@@ -35,7 +35,7 @@ The codebase is optimized for:
 - **Analyst Agent** is a separate report family in `cogs/analyst_agent.py`
 - `market_analysis/intraday_pipeline.py` currently serves as the **shared watchlist evaluation / option-plan / engine helper module**, and also contains the reusable `IntradayScanPipeline` class and gamma squeeze engine logic
 
-Do **not** assume that enabling Analyst Agent is required for the watchlist heartbeat; in current code, those are separate paths.
+Do **not** assume that enabling Analyst Agent is required for the watchlist heartbeat; in current code, those are separate paths. Note there are in fact **two** watchlist push loops (15-minute radar via `cogs/trading/heartbeat.py`, and the 30-minute `標的分析中心 2.0` heartbeat via `IntradayScanPipeline`) — see the comparison table under "Two independent watchlist push paths" below before touching either.
 
 ---
 
@@ -188,6 +188,77 @@ The heartbeat currently reuses logic from `market_analysis/intraday_pipeline.py`
 - `derive_watchlist_option_guidance()`
 - `build_watchlist_option_plan()`
 
+### ⚠️ Two independent watchlist push paths — do not conflate them
+
+There are **two separate loops** that both push watchlist-derived DMs. They share no data path:
+
+| | 15 分鐘雷達心跳 | 30 分鐘「標的分析中心 2.0」心跳 |
+|---|---|---|
+| Entry | `SchedulerCog.dynamic_market_scanner()` → `cogs/trading/heartbeat.py::dispatch_watchlist_heartbeat()` | `IntradayScanPipeline._run_loop()` (`market_analysis/intraday_pipeline/pipeline.py`) |
+| Cadence | :00 / :15 / :30 / :45 (`tasks.loop`) | `asyncio.sleep(30*60)` **after** each full pass (drifts, not cron-aligned) |
+| Data | `RadarDataMixin._fetch_sym_radar_data_slow()` | `evaluate_watchlist_symbol()` |
+| Embed | `build_radar_scan_embed()` | `create_watchlist_signal_embed()` |
+| Extra gate | none | only pushes when `tactical.alert_level != "green"` |
+
+`derive_watchlist_option_guidance` / `build_watchlist_option_plan` /
+`build_watchlist_skew_rule_commentary` / `calculate_dynamic_trading_signals` (the 1.5×ATR
+buffer and 資金藍圖) are reachable **only** from the 30-minute pipeline.
+
+Each path has its own `/notif_settings` channel: the 15-minute radar is
+`heartbeat_watchlist`, the 30-minute deep heartbeat is `heartbeat_symbol_deep`
+(migration `v070` backfills the new key from the old shared one so muted users stay muted).
+
+⚠️ **Do not gate `IntradayScanPipeline.start()` on `_is_leader_instance` in
+`SchedulerCog.__init__`.** Cogs load in `setup_hook`, but the leader is elected in
+`on_ready` and `bot.py` initialises the flag to `False`, so a construction-time check
+never starts the pipeline at all. The leader check belongs inside `_run_loop`, per
+iteration — leader status also changes at runtime via `_leader_lock_loop`.
+
+The 30-minute heartbeat used to be nested inside `if not ctx.enable_analyst_agent: continue`.
+That column defaults to `0` and no command exposes it, so the embed was never actually
+delivered — users saw its `/notif_settings` toggle green and reasonably assumed they were
+subscribed. The Analyst Agent flag now gates only the `NexusGammaSqueezeEngine` section.
+
+### NexusGammaSqueezeEngine 輸出接線 (SPEAR 進攻訊號)
+
+`analyze_ticker()`'s result used to be discarded (`_ = self.engine.analyze_ticker(...)`),
+so the whole engine ran for nothing. It is now dispatched through
+`IntradayScanPipeline._dispatch_gamma_squeeze_alert()`:
+
+- **Only `sddm_route == "SPEAR"` is pushed.** SHIELD / WAIT are "do nothing" conclusions;
+  restating them per symbol every 30 minutes is pure noise.
+- Delivered on the existing **`alpha_market_signals`** channel (🎯 Alpha 策略與情報).
+- Deduped at most **one alert per user, per symbol, per day** via
+  `gamma_squeeze_alert_{uid}_{SYMBOL}_{YYYYMMDD}` (prefix registered in
+  `database/cache.py::_KV_CACHE_DEDUP_KEY_PREFIXES` so the daily purge reclaims it).
+- Rendered by `create_gamma_squeeze_alert_embed()`
+  (`cogs/embed_builders/alert_embeds/market_signal_alerts.py`).
+
+**Gate inputs are now real, and fail closed.** Wiring the output up made the gate inputs
+user-visible, and three of them were hardcoded placeholders sitting just above their own
+thresholds — `market_cap_billion=250.5` (Gate 1 needs ≥ 20B), `avg_option_volume=65000`
+(Gate 1 needs ≥ 50k) and `tomorrow_expiring_otm_calls_premium=1200000.0` (Gate 3 needs
+≥ $1M) — so **Gates 1 and 3 passed unconditionally for every symbol**. They now come from:
+
+| Input | Source | Failure behaviour |
+|---|---|---|
+| `market_cap_billion` | Finnhub `company_profile2.marketCapitalization` (百萬美元 → ÷1000) | `0.0` → Gate 1 fails |
+| `avg_option_volume` | `calculate_pcr()`'s `put_vol + call_vol`, divided by `market_time.get_trading_day_elapsed_fraction()` | `0` → Gate 1 fails |
+| `tomorrow_expiring_otm_calls_premium` | nearest expiry chain, `Σ(volume × lastPrice × 100)` over calls with `strike > spot` | `0.0` → Gate 3 fails |
+
+`iv_rank`'s cache-miss fallback also changed from `50.0` to `0.0`: the old value satisfied
+Gate 4's `iv_rank >= 50.0` outright, i.e. missing data auto-passed the gate.
+
+**啟發式代理數據揭露** — two of these inputs are proxies, disclosed in a dedicated embed
+field per the convention above:
+- Gate 1 asks for *日均* option volume, but the platform keeps no multi-day option-volume
+  series. The current-day chain volume is extrapolated to the close by trading-day elapsed
+  fraction (same normalisation `uoa_detector.paced_ratio` uses) — without it the gate would
+  systematically fail in the morning and pass in the afternoon.
+- Gate 3's field is named 「明日到期」 but options do not expire daily; the **nearest**
+  expiry is used (typically 0-7 DTE under weeklies). The engine's field name is kept to
+  avoid churning its interface.
+
 ### Current heartbeat output
 
 The active embed builder is `create_watchlist_signal_embed()` in `cogs/embed_builders/`.
@@ -195,15 +266,19 @@ The active embed builder is `create_watchlist_signal_embed()` in `cogs/embed_bui
 The embed title is dynamically injected with the ticker's active tags fetched from the multi-tenant `watchlist_tags` table (e.g. `標的分析中心 2.0: AAPL 每半小時戰場心跳 🏷️ TECH | CORE`).
 The delivery of watchlist heartbeat is controlled by the unified `heartbeat_watchlist` toggle in `/notif_settings` (which delivers a complete, rich multi-layered snapshot including options structure, deterministic Skew, event risk, stock pricing, share sizing, and UOA whale prints).
 
-Current sections:
+Current sections (in actual render order — the first two are Markdown headings inside
+`embed.description`, the rest are real Discord embed fields):
 
-1. **🧱 心跳：期權結構與波動率** (Technical/Options Snapshot ANSI Panel)
-2. **📐 Skew 與市場判讀** (Skew Interpretation ANSI Panel - aligned with Sentiment Scan style)
-3. **⚙️ 量化 Skew 解析** (Deterministic Skew Rules)
-4. **🗓️ 事件風控** (Event Risk Management Summary)
-5. **🛡️ 心跳：操盤指引與委託風控** (Holdings & Trading Guide ANSI Panel - dynamically calculates suitable entry/exit prices and shares sizing)
-6. **🎯 執行建議** (Execution Suggestions - with options suggestions aligned with calculated pricing strikes)
-7. **🧾 可執行期權合約與 UOA 巨鯨大單** (Executable Options Contracts & Whale Prints)
+1. **🗓️ 事件風控** (Event Risk Management Summary — description block)
+2. **⚙️ 量化 Skew 解析** (Deterministic Skew Rules — description block)
+3. **🧱 物理籌碼牆與邊緣偵測 (Market Footprints)** (GEX PutWall / Vol POC / Option Skew)
+4. **🧲 Gamma 曝險分布 (GEX Profile Matrix)** (optional — only when `symbol_gex["gex_profile"]` is present; ANSI heat-map of ±3 strikes around spot)
+5. **🧱 心跳：期權結構與波動率** (IV / IV Rank / IV term structure / weekly expected move)
+6. **🎯 結算與目標 (Target Lock)** (Max Pain with freshness + cache-age suffixes, Volume PCR, OI PCR)
+7. **🎯 執行建議 (Execution Suggestions)** (計算出的建議買/賣價與股數；未持倉走建倉側、已持倉走減碼側)
+8. **🛡️ 心跳：操盤指引與委託風控** (Holdings & Trading Guide ANSI Panel)
+9. **📡 Telemetry 待成交委託單實時對齊建議** (optional — no production caller currently passes `telemetry_alignment_note`)
+10. **🎯 雷達：期權 Alpha 與 UOA 異常穿透** (top-3 UOA prints, ranked upstream by notional value)
 
 ### Current heartbeat logic details
 
@@ -219,7 +294,10 @@ Current sections:
   - **Dynamic Stock Pricing, Share Sizing & Capital Allocation**:
     - Unheld tickers: Calculates a dynamic `suitable_buy_price` based on RSI and Skew (downside fear discount factor) and corresponding shares budget based on user `capital` and `risk_limit`.
     - Held tickers: Calculates a dynamic `suitable_sell_price` and recommended sell shares (25%, 33%, 50%, or 100% exit ratio depending on RSI and scenario like `hard-hedge`).
-    - **1.5x ATR 防洗盤緩衝與關卡避開**: Both buy and sell price calculations dynamically apply a `1.5 * atr_14` anti-washout buffer (warning users to enforce the 15-minute candle closing break as final exit line) and automatically avoid psychological round numbers (`.00`, `.50`, `.99`).
+    - **1.5x ATR 防洗盤緩衝與關卡避開**: Both buy and sell price calculations dynamically apply a `1.5 * atr_14` anti-washout buffer (warning users to enforce the 15-minute candle closing break as final exit line) and automatically avoid psychological round numbers (`.00`, `.50`, `.99`). The rationale string reports the **actual dollar amount** (`已疊加 1.5×ATR = $X.XX`) rather than merely asserting a buffer was applied — `metrics.atr_14` was previously a hardcoded `0.01` placeholder (`_calculate_technical_indicators()` returns no ATR), which made the advertised buffer worth $0.015 and pinned `nro.dynamic_grid_step` at `0.01`. It is now computed in-place from the `period="1y"` daily frame `build_enhanced_watchlist_metrics()` already fetches, via `atr_utils.compute_atr_14_from_daily_df()` (zero extra network cost); `ma50`/`ma200` were hardcoded to `current_price` in the same spot and are likewise computed now.
+    - **資金藍圖退守閘門是組合層限額，不是單一部位上限**: when the retreat gate fires, the budget available this cycle is `max(capital * 15% - deployed_tactical_value, 0)`. `deployed_tactical_value` comes from `signal_calculator.compute_deployed_tactical_value()`: spot satellite holdings at **cost basis** (`quantity * avg_cost`), long option premium (`quantity * entry_price * 100`), and short-PUT collateral (`|quantity| * strike * 100`); `asset_class == "CORE"` and the BOXX/BIL/SHV cash-equivalents are excluded because they are the retreat *destination*, and short CALLs are excluded because their collateral is the underlying shares already counted on the spot side. Cost basis (not mark-to-market) is deliberate — the data is already in hand (zero extra quotes) and it over-states exposure during a drawdown, which is the conservative direction for a defensive gate. Once the cap is exhausted the budget and share count both go to zero and the rationale says so explicitly.
+      - This replaced a per-position `min(allocated_budget, capital * 0.15)` that could **never** bind: a single position's budget peaks at `capital * 0.05 * 2.0 * 1.1 * 1.15 = capital * 0.1265 < capital * 0.15`. The "只保留 10%~15%" rule is portfolio-level by nature but had been written as a per-position ceiling, so firing the gate only changed the rationale wording and never reduced a position.
+      - The gate is selected by the explicit `WatchlistTacticalPlan.capital_retreat_required` flag. It previously keyed off Chinese substring matches on `sddm_route`; `evaluation.py`'s negative-gamma branch sets `"SHIELD 網格防禦"` and its momentum branch sets `"WAIT (空頭動能發散)"`, neither of which contains `"負 Gamma"`, so that branch never fired. The substring check is retained only as backward compatibility for hand-constructed plans.
     - **動態資金藍圖演算法 (Capital Allocation Model)**: If "機構避險背離" (Skew Divergence) or "負 Gamma" is active in the tactical route, capital allocation dynamically caps the budget and forces 70%~85% of funds to retreat to broad market liquidity assets (such as VOO), reserving only 10%~15% for tactical/arbitrage trading.
     - **(Textual Martial Law)**: If spot drops below the Market Maker PutWall into Negative Gamma, `suitable_buy_price` is locked to N/A, shares size to 0, and all "buy the dip" (Narrative Trap) optimistic wording is forcefully blocked and overwritten with strict "Delta Negative Feedback" warnings.
   - **Strike-Aligned Options Guidance**:
@@ -230,6 +308,30 @@ Current sections:
   - earnings proximity reduces risk
   - pre-event windows prefer defined-risk structures
   - macro events shrink size / bias toward debit spreads or protection
+
+### ⚠️ Skew 百分位的統計視窗（已知限制，尚未變更）
+
+`sentiment/history_storage.py::get_indicator_percentile()` ranks the current value
+against `SELECT value ... ORDER BY timestamp DESC LIMIT 100`. `calculate_skew()` has
+15+ call sites (radar every 15 min, `build_enhanced_watchlist_metrics` on a 20-minute
+cache, `market_scan`, …) and each successful call writes a sample, so during market
+hours a single symbol accumulates roughly 4-8 rows per hour — **100 rows is about
+2-4 trading days, not a year**.
+
+Every gate keyed on that number is therefore a *few-day* relative ranking rather than a
+tail-risk percentile: `evaluation.py`'s `skew_percentile > 90` (forces WAIT + capital
+retreat), `skew_commentary.py`'s 85/90/15/20 branches, `radar_data.py`, and the
+`98.0` threshold in the 三重結構性風險合流 gate — a 98th percentile over ~100 rows means
+"top 2 readings of the last few days", which fires far more often than an annual 98th
+percentile would.
+
+`options_flow.py:123-124` also writes the current value to history *before* computing the
+percentile, so the sample includes itself.
+
+This is deliberately left as-is for now: switching to a fixed time window (e.g. one sample
+per trading day over 252 days) is the semantically correct fix but would simultaneously
+change the trigger frequency of several already-tuned live gates, so it should be its own
+change with its own observation period — not a side effect of an unrelated fix.
 
 ### Deterministic Skew Interpretation
 
@@ -248,6 +350,7 @@ We resolve this via a comprehensive pre-market optimization workflow:
 2. **Database Fallback**: If the market is closed (`not is_market_open()`), it automatically queries the SQLite database `historical_iv` table for the last known closing IV of the symbol and sets it as `current_iv`.
 3. **Historical Volatility (HV) Fallback**: If the DB has no history for the symbol, the engine calculates the standard 30-day Historical Volatility (HV) using historical stock close prices as a proxy.
 4. **Degradation Gating**: If all options and historical data are unavailable, the engine gracefully degrades and sets the `is_premarket` flag to `True` on the returned `IVMetrics` model.
+4b. **Event Loading Factor (1.4x) 與其揭露**: when real-time IV is missing (`iv_source` is `STORED_IV` / `HV_PROXY`) **and** earnings or a macro event falls within 14 days, `iv_metrics.py` multiplies `current_iv` by a hardcoded **1.4x** event-loading factor. That inflated value then propagates into IV Rank, Expected Move and every IVR gate, so `IVMetrics.event_loading_applied` records whether it was applied and the presentation layer discloses it verbatim (`已套用 1.4x 事件加載係數 (非原始觀測值)`) rather than inferring it from `iv_source`. Previously the heartbeat showed 「快取波動率**可能低估**」 for the earnings case even though the same 1.4x had already been applied to it — the disclosure pointed in the opposite direction to what the code did.
 5. **Presentation Layer Customization**: In `cogs/embed_builders/`, if `is_premarket` is `True`:
    - **Complete Data Absence (`current_iv == 0.0`)**: Appends ` [盤前數據未更新]` to the title and displays friendly placeholders (`--%` and `等待開盤`) to prevent user confusion.
    - **Successful Fallback (`current_iv > 0.0`)**: Appends ` [盤前/前日收盤]` to the title and tags the IV values with `(前日收盤 / 歷史波動率代理)` to clearly report that the data reflects previous closing levels.
@@ -384,6 +487,7 @@ Relative Strength (RS) & Tactical Routing:
   using sectoral ETFs (e.g., `SMH` for semiconductor tickers) as benchmarks.
 - In `ExecutionRouter`, overextended bullish assets (Price/MA20 Deviation > 10% AND RSI > 65) with high Relative Strength (RS > 1.2) are routed to **SPEAR** mode (suggesting Bull Put Spreads or OTM Covered Calls) instead of SHIELD grid shorting.
 - **IVR Strategy Gate (IVR 硬鎖閘門)**: If the Implied Volatility Rank (IVR) drops strictly below 10.0%, all selling strategies are hard-locked. The router forces a downgrade to `STANDBY` for sellers or restricts operations to Spot Buy, ITM Call BTO, or Debit Spreads, explicitly preventing physically deadlocked short premium entries in a zero-premium environment.
+- **`capital_retreat_required` 必須是 sticky 的**: `evaluation.py` 的閘門依序評估，且每一道都會整包重建 `WatchlistTacticalPlan`。本身不設此旗標的閘門（結構性背離、IV 壓抑背離）必須 OR 進既有值，否則同一根 K 棒先觸發 `skew_percentile > 90`、再觸發 IV 壓抑閘門的標的，會同時失去資金退守要求**與** `is_crisis`（重建後的路由不再含 `"SHIELD"` 或 `"機構避險背離"`），反而在這道旗標存在的目的——尾部風險當下——輸出全額買點與股數。
 - **Skew Divergence Gate (機構避險背離/尾部風險警戒)**: If `metrics.skew_percentile > 90.0`, the pipeline automatically sets `sddm_route = "WAIT (機構避險背離/尾部風險警戒)"` and `alert_level = "red"`, blocking all optimistic ratings and enforcing defensive capital allocation (70%~85% back to broad market assets).
 - **Momentum Vector Gate (負 Gamma 疊加空頭動能發散)**: If `net_gex < 0` and `metrics.squeeze_momentum < 0`, the pipeline forces `sddm_route = "WAIT (空頭動能發散)"` and `alert_level = "red"`, strictly forbidding range-bound defense or buy signals due to risk of cascade selloffs.
 
@@ -457,6 +561,7 @@ The platform implements an advanced macro risk-control layer that dynamically ad
 ### 8. Bid-Ask Spread Liquidity Gate
 - **Spread Ratio**: Evaluates the option spread against the mid-price: `Spread Ratio = (Ask - Bid) / Mid`.
 - **Illiquidity Block**: If the ratio exceeds 15.0%, the contract is flagged as illiquid (`is_illiquid = True`). This prevents execution routing, adds a `⚠️ 流動性警告` (Liquidity Warning) overlay to the tactical terminal, and updates the watchlist heartbeat's Option Plan to a strict `WAIT` state to prevent severe slippage.
+- **`WatchlistOptionPlan` 的「不執行」狀態**: `suggested_contracts` is `ge=0` and `legs` may be empty, so a plan can legitimately mean "no executable structure this cycle, and here is why" — used by the illiquidity block above and by the earnings `event-lock` credit block. These two branches already constructed such a plan, but the model previously required `ge=1` / `min_length=1`, so **every illiquid symbol raised `ValidationError`**, was swallowed by the per-ticker `except` in `IntradayScanPipeline._run_loop`, and took that symbol's entire heartbeat down with it — the documented "strict WAIT state" was never actually rendered. When `legs` is empty the heartbeat renders the plan's `rationale` instead of a contract count.
 
 ---
 
@@ -563,7 +668,10 @@ Configurations are strictly segregated into two functional areas to maximize sep
 - **Notification Preferences (`/notif_settings`)**: Manages individual toggles stored in a key-value style `user_notification_settings` table (designed with composite primary key `(user_id, notification_key)` for infinite schema-less extensibility). Fully consolidated into **4 Tactical Dimensions with 13 Core Channels** (Migration `v061` + WTI Alert + `defense_fundamental_thesis` + `alpha_price_volume_watch`):
   - **4 Tactical Modules**:
     1. `briefings` (📋 定時戰報與覆盤): `briefing_pre_market`, `briefing_post_market`, `briefing_weekly_vtr`
-    2. `telemetry` (📡 盤中自選與掛單遙測): `heartbeat_watchlist`, `telemetry_orders`
+    2. `telemetry` (📡 盤中自選與掛單遙測): `heartbeat_watchlist`, `heartbeat_symbol_deep`, `telemetry_orders`
+       - `heartbeat_watchlist` → **15 分鐘批次量化雷達** (`cogs/trading/heartbeat.py` → `build_radar_scan_embed`)
+       - `heartbeat_symbol_deep` → **30 分鐘個股深度戰場心跳** (`IntradayScanPipeline` → `create_watchlist_signal_embed`)
+       - 這兩條是完全獨立的推播路徑（見 Watchlist 章節的對照表）。過去共用同一個 `heartbeat_watchlist` key，無法分別靜音，而標籤還誤寫成「30 分鐘」卻同時管著 15 分鐘那條。
     3. `defense` (🛡️ 持倉風控與極端防禦): `defense_portfolio_risk`, `defense_option_rollover`, `defense_fundamental_thesis`, `defense_macro_tail_risk`
     4. `alpha` (🎯 Alpha 策略與情報): `alpha_market_signals`, `alpha_polymarket`, `alpha_wti_oil`, `alpha_price_volume_watch`
   - **Dynamic Two-Tier Architecture with Preset Modes**: To provide a clean, uncluttered user experience:
@@ -679,6 +787,7 @@ Current repository rule:
     - 若核心比對數值偏離公允區間超出特定閥值（例如價格偏離痛點 >30% 觸發斷路器），下游的執行或操作指南需自動顯示 `N/A (已觸發斷路器)` 或相關警告，暫停輸出特定交易建議。
   - **啟發式代理數據揭露 (Heuristic Proxy Disclosure)**：當某項使用者可見的判定/標籤是由**啟發式規則或代理指標**推算而來（而非真實的第一手數據源），必須在該欄位/圖例附近明確揭露，不能讓使用者誤以為是即時精確數據。現行案例：
     - UOA SWEEP/BLOCK/CROSS 分類（`_format_uoa_field()`、`watchlist_embeds.py` 心跳 UOA 表格）：由成交量整數手數形狀 + Bid/Ask 執行價位置兩套啟發式訊號組合而成，非真實 order-type tape 資料，表格下方固定附註揭露文字。
+    - UOA ΔOI 欄位（`watchlist_embeds.py` 心跳 UOA 表格）：`uoa_detector` 在上游未提供實際未平倉變動時，以 `volume - open_interest` 代理推估，非真實 ΔOI；欄位標為 `ΔOI*` 並於表格下方附註揭露。同一欄的數值本身是**當日成交量**（欄名 `成交量(ΔOI*)`），過去誤標為 `機構/OI(ΔOI)`。
     - 🧲 共振磁吸 / 高階磁吸過濾（Radar Terminal `build_radar_scan_embed` 圖例、`magnetic_filters` 下拉選單描述）：`dp_poc` 是 Volume-POC/HVN 的代理指標，本平台無真實暗池數據源，固定附註揭露。
     - 🏦 資產端保證金與購買力（Symbol Hub）：`option_buying_power`/`margin_used` 是使用者自填數值，非即時券商保證金數據，區塊開頭固定附註揭露。
     - UOA Volume/OI 比例欄位（`_format_uoa_field()`、`watchlist_embeds.py` 心跳 UOA 表格）：OI 是前一交易日收盤的未平倉量，非盤中即時數據（選擇權市場結構性限制，任何資料源皆同，非本平台獨有），比例欄位分母固定使用此值，表格下方固定附註揭露文字。
@@ -922,6 +1031,7 @@ Uses a dedicated SQLite table (`price_volume_watches`, PK `(user_id, symbol)`) r
 - `nexus_core/database/migrations/v048_add_escape_window_settings.py` — migration adding escape window configuration columns to user settings
 - `nexus_core/database/migrations/v062_add_fundamental_scan_state.py` — migration registering the fundamental_scan_state table, the dedup cursor (per-symbol last analyzed accession_number) used by the automated daily SEC filing scanner
 - `nexus_core/database/migrations/v068_add_trading_strategy.py` — migration adding `user_settings.trading_strategy` (交易策略模式，預設 `RIGHT_SIDE` 以維持既有行為不變)
+- `nexus_core/database/migrations/v070_split_heartbeat_symbol_deep.py` — migration backfilling `heartbeat_symbol_deep` from each user's existing `heartbeat_watchlist` value when the two heartbeat channels were split, so anyone who had muted the shared toggle is not silently re-subscribed by the new key's `True` default
 - `nexus_core/market_analysis/macro_calendar_translator.py` — Macro calendar 150+ translation dictionary & dynamic Fed speech parsing engine
 - `nexus_core/market_analysis/wti_analysis.py` — WTI crude oil technicals, energy correlation, and event analysis engine
 - `nexus_core/market_analysis/intraday_pipeline.py` — watchlist evaluation, option-plan logic, intraday engine helpers

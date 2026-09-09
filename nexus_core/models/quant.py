@@ -103,3 +103,7 @@ class IVMetrics(BaseModel):
     has_macro_event: bool = False
     iv_term_structure_status: str | None = None
     term_structure_ratio: float | None = None
+    # current_iv 是否已被套用 1.4x 事件加載係數（見 sentiment/iv_metrics.py）。
+    # 只在即時 IV 缺失、改用 STORED_IV / HV_PROXY 且 14 天內有財報或總經事件時為
+    # True。呈現層據此揭露「已套用事件加載」，而不是靠 iv_source 反推。
+    event_loading_applied: bool = False

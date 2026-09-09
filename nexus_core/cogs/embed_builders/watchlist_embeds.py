@@ -21,10 +21,6 @@ from cogs.embed_builders._core import (
 )
 from database.market_cache import get_market_cache
 
-# UOA kv_cache 新鮮度門檻：與 market_embeds.py 的 _UOA_DARKPOOL_MAX_AGE_SECONDS
-# 保持一致（15 分鐘心跳週期的 2 倍緩衝），避免兩處各自維護不同步的數值。
-_UOA_MAX_AGE_SECONDS: float = 1800.0
-
 
 def _classify_watchlist_cache_tag(
     spot: float, max_pain: float, em_lower: Optional[float]
@@ -150,9 +146,62 @@ def create_bulk_watchlist_result_embed(
     return embed
 
 
+def _build_execution_suggestion_lines(
+    *,
+    has_position: bool,
+    suitable_buy_price: Any,
+    suitable_buy_shares: int | None,
+    suitable_sell_price: Any,
+    suitable_sell_shares: int | None,
+    holding_quantity: float | None,
+) -> list[str]:
+    """組出「🎯 執行建議」區塊的 ANSI 行。
+
+    未持倉走建倉側（買價 / 股數），已持倉走減碼側（賣價 / 股數）。
+    `suitable_buy_price` 在風控戒嚴時會是一段中文字串（如
+    「N/A（風控鎖定，暫不推薦開倉買方策略）」）而非數字，需原樣呈現而不是
+    格式化成 $0.00 讓使用者誤以為有可執行價位。四個值都缺時回傳空 list，
+    呼叫端據此整個略過此欄位。
+    """
+    lines: list[str] = []
+
+    if not has_position:
+        if isinstance(suitable_buy_price, str):
+            lines.append(f" ├─ 建議買入價位: {suitable_buy_price}")
+        elif suitable_buy_price is not None and float(suitable_buy_price) > 0.0:
+            lines.append(f" ├─ 建議買入價位: ${float(suitable_buy_price):.2f}")
+
+        if suitable_buy_shares is not None and int(suitable_buy_shares) > 0:
+            shares = int(suitable_buy_shares)
+            budget_note = ""
+            if isinstance(suitable_buy_price, (int, float)) and suitable_buy_price > 0:
+                budget_note = f" (約 ${shares * float(suitable_buy_price):,.0f})"
+            lines.append(f" ├─ 建議建倉股數: {shares} 股{budget_note}")
+        elif lines:
+            lines.append(" ├─ 建議建倉股數: 0 股 (風控鎖定或預算不足)")
+    else:
+        if suitable_sell_price is not None and float(suitable_sell_price) > 0.0:
+            lines.append(f" ├─ 建議止盈價位: ${float(suitable_sell_price):.2f}")
+
+        if suitable_sell_shares is not None and int(suitable_sell_shares) > 0:
+            shares = int(suitable_sell_shares)
+            ratio_note = ""
+            if holding_quantity is not None and float(holding_quantity) > 0.0:
+                ratio_note = f" (佔持倉 {shares / float(holding_quantity) * 100:.0f}%)"
+            lines.append(f" ├─ 建議減碼股數: {shares} 股{ratio_note}")
+
+    if not lines:
+        return []
+
+    lines.append(
+        " └─ ⚠️ 上述價位為量化參考值，非委託指令；請以「15 分鐘 K 線實體收盤」為最終確認。"
+    )
+    # 最後一行改用結尾角後，把前面所有行統一為分叉角。
+    return [line.replace(" └─ ", " ├─ ", 1) for line in lines[:-1]] + [lines[-1]]
+
+
 def create_watchlist_signal_embed(
     symbol: str,
-    report_body: str = "",
     option_guidance: str = "",
     event_risk_summary: str = "",
     skew_state: str = "",
@@ -172,7 +221,6 @@ def create_watchlist_signal_embed(
     telemetry_alignment_note: str | None = None,
     # Upgraded Heartbeat Parameters
     metrics: Any | None = None,
-    quote: dict | None = None,
     iv_metrics: Any | None = None,
     max_pain_data: dict | None = None,
     pcr_data: dict | None = None,
@@ -185,7 +233,9 @@ def create_watchlist_signal_embed(
     has_meaningful_content = False
 
     toggles = toggles or {}
-    hb_enabled = toggles.get("heartbeat_watchlist", True)
+    # 本 embed 屬 30 分鐘個股深度心跳，開關為 heartbeat_symbol_deep；
+    # 15 分鐘批次雷達 (build_radar_scan_embed) 才是 heartbeat_watchlist。
+    hb_enabled = toggles.get("heartbeat_symbol_deep", True)
     show_market_footprints = hb_enabled
     show_iv_context = hb_enabled
     show_target_lock = hb_enabled
@@ -218,7 +268,7 @@ def create_watchlist_signal_embed(
     # Extract IV metrics
     earnings_loading = False
     macro_loading = False
-    legacy_event_warning = False
+    event_loading_applied = False
     iv_source = "UNAVAILABLE"
 
     if iv_metrics is not None:
@@ -239,7 +289,7 @@ def create_watchlist_signal_embed(
         expected_move = iv_metrics.expected_move_weekly
         earnings_loading = getattr(iv_metrics, "has_earnings_event", False)
         macro_loading = getattr(iv_metrics, "has_macro_event", False)
-        legacy_event_warning = getattr(iv_metrics, "has_event_warning_applied", False)
+        event_loading_applied = getattr(iv_metrics, "event_loading_applied", False)
         iv_source = iv_metrics.iv_source
         iv_term_status = getattr(iv_metrics, "iv_term_structure_status", None)
         iv_term_ratio = getattr(iv_metrics, "term_structure_ratio", None)
@@ -256,17 +306,11 @@ def create_watchlist_signal_embed(
             earnings_loading = True
         if hasattr(metrics, "has_macro_event") and metrics.has_macro_event:
             macro_loading = True
-        if (
-            hasattr(metrics, "has_event_warning_applied")
-            and metrics.has_event_warning_applied
-        ):
-            legacy_event_warning = True
+        if getattr(metrics, "event_loading_applied", False):
+            event_loading_applied = True
 
         if hasattr(metrics, "iv_source") and metrics.iv_source:
             iv_source = metrics.iv_source
-
-    if legacy_event_warning and not earnings_loading and not macro_loading:
-        macro_loading = True
 
     if iv_source in ["STORED_IV", "HV_PROXY"] and not earnings_loading:
         try:
@@ -283,11 +327,25 @@ def create_watchlist_signal_embed(
         except Exception:
             pass
 
+    # 事件加載揭露：iv_metrics 在「即時 IV 缺失 + 14 天內有財報/總經事件」時，
+    # 會把 fallback IV 乘上 1.4x 事件加載係數，放大值接著流入 IV Rank、
+    # Expected Move 與所有 IVR 閘門。
+    #
+    # 過去這裡對財報顯示「快取波動率可能低估」、對總經顯示「已校正」，但程式對
+    # 兩者其實都套用同一個 1.4x——「可能低估」等於在值已被放大之後還告訴使用者
+    # 它偏低，方向剛好相反。現在改讀 iv_metrics 上的顯式 event_loading_applied
+    # 旗標（而非從 iv_source 反推），據實說明數值是否經過加載。
     iv_status_str = f"狀態: {iv_status}"
-    if earnings_loading:
-        iv_status_str = "狀態: ⚠️ 臨近財報/快取波動率可能低估"
+    if event_loading_applied:
+        event_label = "財報" if earnings_loading else "總經大事件"
+        iv_status_str = (
+            f"狀態: ⚠️ 臨近{event_label}／即時 IV 缺失，"
+            "已套用 1.4x 事件加載係數 (非原始觀測值)"
+        )
+    elif earnings_loading:
+        iv_status_str = "狀態: ⚠️ 臨近財報，波動率定價可能尚未反映事件風險"
     elif macro_loading:
-        iv_status_str = "狀態: ⚠️ 臨近總經大事件/快取波動率已校正"
+        iv_status_str = "狀態: ⚠️ 臨近總經大事件，波動率定價可能尚未反映事件風險"
 
     if max_pain_data is not None:
         mp_val = max_pain_data.get("max_pain")
@@ -328,7 +386,10 @@ def create_watchlist_signal_embed(
     pcr_dict = pcr_data if isinstance(pcr_data, dict) else {}
     if pcr_dict:
         vol_pcr_val = pcr_dict.get("volume_pcr", vol_pcr_val)
-        oi_pcr_val = pcr_dict.get("oi_pcr", pcr_dict.get("pcr", oi_pcr_val))
+        # 注意：pcr_dict["pcr"] 是 **volume** PCR（options_flow.calculate_pcr），
+        # 不可拿來當 OI PCR 的後備值，否則會把成交量 PCR 標示成結構性 OI PCR。
+        if "oi_pcr" in pcr_dict:
+            oi_pcr_val = pcr_dict["oi_pcr"]
 
     if is_premarket or vol_pcr_val == 0.0 or vol_pcr_val is None:
         vol_pcr_status = "⚖️ 封盤中 (盤前未更新)"
@@ -349,11 +410,14 @@ def create_watchlist_signal_embed(
         oi_pcr_str = "--"
     else:
         oi_pcr_str = f"{oi_pcr_val:.2f}"
+        # 只有在上游未提供 oi_pcr_state（缺 key 或空字串）時才走本地數值分支。
+        # 門檻刻意與 options_flow.calculate_pcr() 的 0.90 / 1.10 對齊——這裡原本
+        # 用的是 1.20，兩套並存會讓同一個 OI PCR 依資料來源得到不同判讀。
         if pcr_dict.get("oi_pcr_state"):
             oi_pcr_status = pcr_dict["oi_pcr_state"]
         elif oi_pcr_val < 0.90:
             oi_pcr_status = "🏹 結構激進/看漲多頭沉澱"
-        elif oi_pcr_val > 1.20:
+        elif oi_pcr_val > 1.10:
             oi_pcr_status = "🛡️ 結構防禦/虛值 Put 沉澱"
         else:
             oi_pcr_status = "⚖️ 籌碼結構中性"
@@ -415,9 +479,19 @@ def create_watchlist_signal_embed(
                 mid = getattr(leg, "mid_price", 0.0)
                 expiry = getattr(leg, "expiry", "")
                 inst_str += f"\n ├─ 合約: {action} {opt_type} {expiry} ${strike:.2f} (Mid: ${mid:.2f})"
-            contracts = getattr(option_plan, "suggested_contracts", 0)
-            risk = getattr(option_plan, "max_risk_amount", 0.0)
-            inst_str += f"\n └─ 建議口數上限: {contracts} 口 (風險配額: ${risk:.2f})"
+            if not legs:
+                # 0 口 / 空 legs 是「本輪不執行」的 WAIT 計畫（財報 event-lock、
+                # 期權鏈流動性不足等）。這種情況下 rationale 才是使用者真正需要
+                # 看到的內容——它說明了為什麼沒有可執行合約。
+                reason = getattr(option_plan, "rationale", "")
+                if reason:
+                    inst_str += f"\n └─ {reason}"
+            else:
+                contracts = getattr(option_plan, "suggested_contracts", 0)
+                risk = getattr(option_plan, "max_risk_amount", 0.0)
+                inst_str += (
+                    f"\n └─ 建議口數上限: {contracts} 口 (風險配額: ${risk:.2f})"
+                )
 
     is_degraded = (
         is_premarket
@@ -617,8 +691,26 @@ def create_watchlist_signal_embed(
             inline=False,
         )
 
-    if show_uoa and uoa_table_lines:
-        has_meaningful_content = True
+    if show_target_lock:
+        # 🎯 執行建議：把 calculate_dynamic_trading_signals() 實際算出來的買/賣價與
+        # 股數渲染出來。過去這四個值有被計算、也有被傳進來，但 embed 只在
+        # `metrics is None` 的降級分支用到價格、兩個 shares 參數完全沒被讀取，
+        # AGENTS.md 文件化的「Dynamic Stock Pricing & Share Sizing」等於沒有出口。
+        exec_lines = _build_execution_suggestion_lines(
+            has_position=has_position,
+            suitable_buy_price=suitable_buy_price,
+            suitable_buy_shares=suitable_buy_shares,
+            suitable_sell_price=suitable_sell_price,
+            suitable_sell_shares=suitable_sell_shares,
+            holding_quantity=holding_quantity,
+        )
+        if exec_lines:
+            has_meaningful_content = True
+            embed.add_field(
+                name="🎯 執行建議 (Execution Suggestions)",
+                value="```ansi\n" + "\n".join(exec_lines) + "\n```",
+                inline=False,
+            )
 
     if show_risk_alignment:
         has_meaningful_content = True
@@ -656,11 +748,12 @@ def create_watchlist_signal_embed(
     if show_uoa and uoa_table_lines:
         uoa_content = (
             "```ansi\n"
-            " 到期日     | 履約價      | 類型 | 標籤 & 交易流向 [買/賣]          | 機構/OI(ΔOI)   | 比例   | 戰略意圖映射\n"
+            " 到期日     | 履約價      | 類型 | 標籤 & 交易流向 [買/賣]          | 成交量(ΔOI*)   | 比例   | 戰略意圖映射\n"
             " ------------------------------------------------------------------------------------------------------\n"
             + "\n".join(uoa_table_lines)
             + "\n\n ⚠️ SWEEP/BLOCK 為成交量整數手數啟發式代理判定，非真實 order-type 逐筆 tape 數據。"
             + "\n ⚠️ OI 為前一交易日收盤未平倉量，非盤中即時數據；比例欄位為當日累積量對此固定值的比值。"
+            + "\n ⚠️ ΔOI* 於上游未提供實際未平倉變動時，以「當日成交量 − 前一日 OI」代理推估，非真實 ΔOI。"
             + "\n```"
         )
         embed.add_field(

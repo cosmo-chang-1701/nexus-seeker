@@ -465,6 +465,7 @@ async def fetch_and_calculate_iv_metrics(
 
         has_earnings_event = False
         has_macro_event = False
+        event_loading_applied = False
 
         # Apply Event Loading Factor (1.4x) if fallback used and event near
         if iv_source in ["STORED_IV", "HV_PROXY"]:
@@ -510,6 +511,11 @@ async def fetch_and_calculate_iv_metrics(
             if has_earnings_event or has_macro_event:
                 orig = current_iv
                 current_iv = current_iv * 1.4
+                # 這是刻意的事件風險補償（快取/HV 代理值無法反映即將到來的事件
+                # 定價），但放大後的值會一路流入 IV Rank、Expected Move 與所有
+                # IVR 閘門，因此必須讓呈現層有辦法據實揭露，而不是讓使用者以為
+                # 看到的是原始觀測值。
+                event_loading_applied = True
                 logger.warning(
                     f"[{symbol}] Real-time IV missing. Applied 1.4x Event Loading Factor to {iv_source}: {orig:.4f} -> {current_iv:.4f}"
                 )
@@ -639,6 +645,7 @@ async def fetch_and_calculate_iv_metrics(
             has_macro_event=has_macro_event,
             iv_term_structure_status=term_status,
             term_structure_ratio=term_ratio,
+            event_loading_applied=event_loading_applied,
         )
 
         # 12. 寫入快取

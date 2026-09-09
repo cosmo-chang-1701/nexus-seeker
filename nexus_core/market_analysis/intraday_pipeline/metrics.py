@@ -79,6 +79,36 @@ def _estimate_volume_poc(df: pd.DataFrame, bins: int = 24) -> float:
     return float(round((float(poc_bucket.left) + float(poc_bucket.right)) / 2.0, 4))
 
 
+def _compute_daily_trend_levels(
+    df_daily: pd.DataFrame,
+) -> tuple[float, float, float]:
+    """就地由日線 frame 算出 (ATR14, MA50, MA200)，不發動任何抓取。
+
+    `_calculate_technical_indicators()` 只回傳 RSI / SMA20 / MACD / HV，沒有 ATR
+    與長天期均線，過去這三個值在 `build_enhanced_watchlist_metrics()` 中分別被寫死
+    為 `0.01` / `current_price` / `current_price`。改為重用同一份已抓好的
+    `period="1y"` 日線 frame 就地計算，零額外網路成本。
+
+    任一項資料不足或計算失敗時回傳 `0.0`，由呼叫端決定佔位值（fail-safe 語意與
+    `atr_utils` 的兩個 helper 一致，不猜測）。
+    """
+    from market_analysis.atr_utils import compute_atr_14_from_daily_df
+
+    atr_14 = compute_atr_14_from_daily_df(df_daily)
+
+    def _sma(length: int) -> float:
+        try:
+            if df_daily is None or df_daily.empty or len(df_daily) < length:
+                return 0.0
+            value = float(df_daily["Close"].tail(length).mean())
+            return value if value == value and value > 0.0 else 0.0
+        except Exception as e:
+            logger.warning(f"日線 SMA({length}) 就地計算失敗: {e}")
+            return 0.0
+
+    return atr_14, _sma(50), _sma(200)
+
+
 def _relative_strength_vs_spy(df_stock: pd.DataFrame, df_spy: pd.DataFrame) -> float:
     from market_analysis.risk_engine import calculate_relative_strength_index
 
@@ -275,10 +305,25 @@ async def build_enhanced_watchlist_metrics(
 
     indicators = await asyncio.to_thread(_calculate_technical_indicators, df_stock)
     rsi_14 = indicators.get("rsi", 50.0) if indicators else 50.0
-    atr_14 = 0.01
     ma20 = indicators.get("sma20", current_price) if indicators else current_price
-    ma50 = current_price
-    ma200 = current_price
+
+    # 日線 ATR(14) / MA50 / MA200：重用上方已抓取的 df_stock (period="1y") 就地計算。
+    # 這三項過去是寫死的佔位值，其中 atr_14=0.01 會讓 signal_calculator 宣稱的
+    # 「1.5x ATR 防洗盤緩衝」實際只有 $0.015，且讓 nro.dynamic_grid_step 恆為 0.01。
+    atr_14_calc, ma50_calc, ma200_calc = await asyncio.to_thread(
+        _compute_daily_trend_levels, df_stock
+    )
+    # EnhancedWatchlistMetrics.atr_14 為 gt=0.0，計算失敗時沿用原本的 0.01 佔位值，
+    # 讓下游既有的 `if atr > 0` 分支行為維持不變（只是緩衝仍近似於零）。
+    if atr_14_calc > 0.0:
+        atr_14 = atr_14_calc
+    else:
+        atr_14 = 0.01
+        logger.warning(
+            f"[{symbol}] 日線 ATR(14) 資料不足或計算失敗，沿用 0.01 佔位值。"
+        )
+    ma50 = ma50_calc if ma50_calc > 0.0 else current_price
+    ma200 = ma200_calc if ma200_calc > 0.0 else current_price
     beta = (
         0.0
         if symbol.upper() == "BOXX"
@@ -399,6 +444,9 @@ async def build_enhanced_watchlist_metrics(
         if iv_metrics
         else False,
         has_macro_event=getattr(iv_metrics, "has_macro_event", False)
+        if iv_metrics
+        else False,
+        event_loading_applied=getattr(iv_metrics, "event_loading_applied", False)
         if iv_metrics
         else False,
         iv_term_structure_status=getattr(iv_metrics, "iv_term_structure_status", None)

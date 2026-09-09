@@ -32,9 +32,14 @@ TRADING_MODULES: Dict[str, Dict[str, Any]] = {
     },
     "telemetry": {
         "title": "📡 盤中自選與掛單遙測",
-        "description": "盤中每 30 分鐘主動推送自選股量化雷達與掛單對齊。",
+        "description": "盤中主動推送自選股量化雷達、個股深度心跳與掛單對齊。",
         "items": {
-            "heartbeat_watchlist": "🧱 自選股 30 分鐘戰場心跳 (含微觀結構、Skew 與 UOA 巨鯨)",
+            # 兩則心跳是獨立的推播路徑、頻率也不同，因此各自一個開關：
+            # heartbeat_watchlist 走 cogs/trading/heartbeat.py 的 :00/:15/:30/:45
+            # 批次雷達；heartbeat_symbol_deep 走 IntradayScanPipeline 的 30 分鐘
+            # 單標的深度快照。過去共用一個 key，標籤還誤寫成 30 分鐘。
+            "heartbeat_watchlist": "📡 自選股 15 分鐘批次量化雷達 (整批標的掃描總覽)",
+            "heartbeat_symbol_deep": "🧱 個股 30 分鐘深度戰場心跳 (含微觀結構、Skew 與 UOA 巨鯨)",
             "telemetry_orders": "🌌 待成交掛單實時對齊與撤退線",
         },
     },

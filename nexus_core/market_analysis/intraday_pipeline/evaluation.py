@@ -13,6 +13,50 @@ from risk_engine.nro import WatchlistRiskController
 logger = logging.getLogger(__name__)
 
 
+def _apply_tactical_gate(
+    tactical: WatchlistTacticalPlan,
+    *,
+    locked: bool,
+    sddm_route: str,
+    action_guideline: str,
+    capital_retreat_required: bool = False,
+) -> WatchlistTacticalPlan:
+    """套用一道戰術閘門。
+
+    `locked=True` 代表已有更高優先級的鎖定指令在位（基本面護城河破滅強制清算、
+    或系統性流動性危機凍結）。這種情況下只把警語追加到 `action_guideline`，
+    **不覆寫既有路由**——過去這幾道閘門一律 `tactical = WatchlistTacticalPlan(...)`
+    整包重建，會把「立即清算」降級成一般的「機構避險背離」觀望文案，等於在最需要
+    清算指令的情境下把它靜默丟掉。
+    """
+    if locked:
+        tactical.action_guideline = f"{tactical.action_guideline}\n{action_guideline}"
+        tactical.alert_level = "red"
+        if capital_retreat_required:
+            tactical.capital_retreat_required = True
+        return tactical
+    return WatchlistTacticalPlan(
+        scenario="wait",
+        sddm_route=sddm_route,
+        action_guideline=action_guideline,
+        dynamic_grid_step=tactical.dynamic_grid_step,
+        hidden_delta_risk=0.0,
+        hedge_instruction=None,
+        hedge_allocation_shares=0,
+        alert_level="red",
+        # 旗標必須是 sticky 的：這些閘門會依序評估，未設此旗標的閘門
+        # （結構性背離、IV 壓抑背離）若把 plan 整個重建成 False，會清掉前面
+        # 由 Skew>90 或負 Gamma 設好的退守要求。實務情境：skew_percentile=95
+        # 先設 True，同一根 K 棒又滿足 dp<-3% 且 IVR<15，IV 壓抑閘門重建後
+        # 旗標歸 False、路由也不再含「機構避險背離」/「負 Gamma」字樣，
+        # 資金退守與 is_crisis 兩道保護同時失效，反而在尾部風險當下輸出
+        # 全額買點與股數。
+        capital_retreat_required=(
+            capital_retreat_required or tactical.capital_retreat_required
+        ),
+    )
+
+
 async def evaluate_watchlist_symbol(
     symbol: str,
     *,
@@ -44,6 +88,9 @@ async def evaluate_watchlist_symbol(
 
     tactical = WatchlistRiskController.process_metrics(metrics)
     symbol_gex = None
+    # 更高優先級的鎖定指令是否已成立（基本面破滅強制清算 / 系統性流動性危機凍結）。
+    # 後續的 Skew / 動能 / IV 背離閘門只能追加警語，不得整包覆寫。
+    higher_priority_lock = False
 
     # 🛑 動態轉倉引擎全域防禦閘門 (Fundamental Thesis)
     try:
@@ -55,6 +102,8 @@ async def evaluate_watchlist_symbol(
             tactical.sddm_route = "LIQUIDATE (基本面破滅強制清算)"
             tactical.action_guideline = f"⛔ 【LLM 護城河破滅警告】根據最新基本面分析，護城河已遭結構性破壞。\n> {fc.get('reasoning', '')}\n\n⚠️ 已觸發全域防禦閘門，強制封鎖所有買入與網格建倉策略，建議立即清算並轉倉至 CORE 資產。"
             tactical.alert_level = "red"
+            tactical.capital_retreat_required = True
+            higher_priority_lock = True
     except Exception as e:
         logger.warning(f"全域防禦閘門查詢錯誤: {e}")
 
@@ -79,6 +128,8 @@ async def evaluate_watchlist_symbol(
             tactical.sddm_route = "SYSTEMIC RISK FREEZE"
             tactical.action_guideline = f"⛔ 【系統性流動性危機】TED Spread 飆升且大盤陷入 Negative Gamma 負螺旋{fb_tag}。已啟動最高層級防火牆：凍結所有網格左側買單，強制保留 BOXX 現金水位以防範系統性衰退。"
             tactical.alert_level = "red"
+            tactical.capital_retreat_required = True
+            higher_priority_lock = True
         elif regime == "SHORT_GAMMA_CRITICAL":
             from database.cache import get_kv_cache
 
@@ -153,8 +204,12 @@ async def evaluate_watchlist_symbol(
                     f"{warning_text}\n{tactical.action_guideline}"
                 )
                 tactical.alert_level = "red"
-                tactical.sddm_route = "SHIELD 網格防禦"
                 tactical.scenario = "wait"
+                # 資金藍圖閘門改讀顯式旗標。過去它比對 sddm_route 是否含
+                # "負 Gamma"，但這裡設的字串是 "SHIELD 網格防禦"，從不匹配。
+                tactical.capital_retreat_required = True
+                if not higher_priority_lock:
+                    tactical.sddm_route = "SHIELD 網格防禦 (負 Gamma 踩踏)"
 
     except Exception as e:
         logger.warning(f"評估市場 Regime 與 GEX 時發生錯誤: {e}")
@@ -168,35 +223,28 @@ async def evaluate_watchlist_symbol(
             or (metrics.skew_percentile < 15.0 and metrics.pcr > 1.5)
         )
     ):
-        tactical = WatchlistTacticalPlan(
-            scenario="wait",
+        tactical = _apply_tactical_gate(
+            tactical,
+            locked=higher_priority_lock,
             sddm_route="WAIT (觀望 / 待機)",
             action_guideline=(
                 "⚠️ 警告：結構性情緒背離｜Skew 分位極端但 PCR 指向相反極端，"
                 "可能是機構大幅對沖、散戶追逐買權的結構性分裂。建議停止追價單腿，"
                 "僅允許小倉位收租並搭配保護性 Put/Collar 或使用價差結構。"
             ),
-            dynamic_grid_step=tactical.dynamic_grid_step,
-            hidden_delta_risk=0.0,
-            hedge_instruction=None,
-            hedge_allocation_shares=0,
-            alert_level="red",
         )
 
     # Skew Divergence Gate (機構避險背離/尾部風險警戒)
     if metrics.skew_percentile is not None and metrics.skew_percentile > 90.0:
-        tactical = WatchlistTacticalPlan(
-            scenario="wait",
+        tactical = _apply_tactical_gate(
+            tactical,
+            locked=higher_priority_lock,
             sddm_route="WAIT (機構避險背離/尾部風險警戒)",
             action_guideline=(
                 "⚠️ 機構避險背離/尾部風險警戒｜Skew 分位處於極端高位 (>90%)，顯示真金白銀大量避險。"
                 "已自動阻斷任何樂觀評級，建議立即提高現金比重或退守大盤流動性資產。"
             ),
-            dynamic_grid_step=tactical.dynamic_grid_step,
-            hidden_delta_risk=0.0,
-            hedge_instruction=None,
-            hedge_allocation_shares=0,
-            alert_level="red",
+            capital_retreat_required=True,
         )
 
     # Momentum Vector Gate (SQZ MOM + Negative Gamma)
@@ -206,18 +254,15 @@ async def evaluate_watchlist_symbol(
         and metrics.squeeze_momentum is not None
         and metrics.squeeze_momentum < 0
     ):
-        tactical = WatchlistTacticalPlan(
-            scenario="wait",
+        tactical = _apply_tactical_gate(
+            tactical,
+            locked=higher_priority_lock,
             sddm_route="WAIT (空頭動能發散)",
             action_guideline=(
                 "⚠️ 負 Gamma 疊加空頭動能發散 (SQZ MOM < 0)，禁止輸出「區間震盪防守」或買入訊號。"
                 "價格極易產生踩踏效應，建議保持觀望。"
             ),
-            dynamic_grid_step=tactical.dynamic_grid_step,
-            hidden_delta_risk=0.0,
-            hedge_instruction=None,
-            hedge_allocation_shares=0,
-            alert_level="red",
+            capital_retreat_required=True,
         )
 
     # 價格暴跌但波動率低壓背離偵測
@@ -228,8 +273,9 @@ async def evaluate_watchlist_symbol(
         dp_raw = quote.get("dp") if quote else None
         dp_val = float(dp_raw) if dp_raw is not None else 0.0
         if dp_val < -3.0 and metrics.iv_rank is not None and metrics.iv_rank < 15.0:
-            tactical = WatchlistTacticalPlan(
-                scenario="wait",
+            tactical = _apply_tactical_gate(
+                tactical,
+                locked=higher_priority_lock,
                 sddm_route="WAIT (IV 壓抑背離)",
                 action_guideline=(
                     "⚠️ WARNING: IV Suppression Divergence｜現價暴跌但波動率低壓，"
@@ -237,11 +283,6 @@ async def evaluate_watchlist_symbol(
                     "可能存在系統快取延遲或異常，建議暫緩單腿長權利金操作，"
                     "僅允許小倉位收租並搭配保護性結構。"
                 ),
-                dynamic_grid_step=tactical.dynamic_grid_step,
-                hidden_delta_risk=0.0,
-                hedge_instruction=None,
-                hedge_allocation_shares=0,
-                alert_level="red",
             )
     except Exception as e:
         logger.warning(

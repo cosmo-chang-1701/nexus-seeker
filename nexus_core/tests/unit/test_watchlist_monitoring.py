@@ -227,7 +227,17 @@ async def test_build_watchlist_option_plan_builds_credit_spread() -> None:
 
 
 @pytest.mark.asyncio
-async def test_build_watchlist_option_plan_switches_to_debit_before_earnings() -> None:
+async def test_build_watchlist_option_plan_blocks_credit_before_earnings() -> None:
+    """財報 72 小時內 (event-lock) 必須擋掉所有信用（賣方）結構。
+
+    此測試原本斷言此情境下仍會回傳 Cash-Secured Put，鎖住的其實是一個 bug：
+    `build_watchlist_option_plan` 的 event-lock 判定寫成
+    `"Credit" in strategy_name`，但 strategy_name 只會是 "Covered Call (...)"
+    或 "Cash-Secured Put"，永遠不含 "Credit"，這道風控從未生效。判定改為
+    `premium_type == "credit"` 後，此情境應如 event_context 文案所述「禁做賣方」，
+    並回傳一個 0 口的 WAIT 計畫（而非 None），讓使用者看得到封鎖原因而不是期權
+    區塊無聲消失。
+    """
     metrics = _sample_metrics(current_price=129.0, iv_rank=78.0, option_skew=7.2)
     tactical = WatchlistRiskController.process_metrics(metrics)
     event_context = _sample_event_context(
@@ -273,9 +283,10 @@ async def test_build_watchlist_option_plan_switches_to_debit_before_earnings() -
         )
 
     assert plan is not None
-    assert plan.strategy_name == "Cash-Secured Put"
-    assert plan.premium_type == "credit"
-    assert plan.legs[0].action == "SELL"
+    assert plan.strategy_name == "WAIT (財報事件鎖定，禁做賣方)"
+    assert plan.suggested_contracts == 0
+    assert plan.legs == []
+    assert "禁做賣方" in plan.rationale
 
 
 @pytest.mark.asyncio
@@ -538,12 +549,8 @@ async def test_rule2_premium_selling_option_strategy_routing() -> None:
     # 2. Without position: routes to Cash-Secured Put
     with patch(
         "market_analysis.strategy.find_best_contract", new_callable=AsyncMock
-    ) as mock_find, patch(
-        "market_analysis.option_guidance._pick_watchlist_cover_leg",
-        new_callable=AsyncMock,
-    ) as mock_cover:
+    ) as mock_find:
         mock_find.return_value = {"strike": 105.0, "expiry": "2026-06-26", "mid": 4.15}
-        mock_cover.return_value = {"strike": 100.0, "expiry": "2026-06-26", "mid": 1.15}
 
         plan_unheld = await build_watchlist_option_plan(
             metrics, tactical, capital=100000.0, risk_limit=15.0, has_position=False
@@ -736,3 +743,349 @@ def test_sell_shares_hard_hedge_full_exit() -> None:
     )
     assert result["suitable_sell_shares"] == 200
     assert "硬避險" in result["sell_rationale"] or "Hard" in result["sell_rationale"]
+
+
+@pytest.mark.asyncio
+async def test_symbol_earnings_countdown_is_not_frozen_by_memory_cache() -> None:
+    """財報倒數必須每次重算，不能被記憶體快取凍結。
+
+    `_earnings_cache` 是純 LRU（`services/bounded_cache.py`），沒有任何 TTL，而
+    `get_symbol_earnings()` 過去在命中時直接回傳「算好的 EarningsEvent」且不做
+    新鮮度檢查——`tte_hours` 因此在進程生命週期內永遠不變，心跳的「🗓️ 事件風控」
+    會無限顯示同一個倒數，`_resolve_watchlist_event_mode` 也會鎖死在
+    event-lock / earnings-guard。
+    """
+    from datetime import datetime, timedelta
+    from services.calendar_service import CalendarService, ny_tz
+
+    service = CalendarService()
+    earnings_day = (datetime.now(ny_tz) + timedelta(days=3)).date()
+
+    with patch(
+        "services.calendar_service.get_cached_earnings",
+        return_value={
+            "earnings_date": earnings_day.strftime("%Y-%m-%d"),
+            "checked_at": datetime.now().isoformat(),
+        },
+    ), patch("services.calendar_service.save_earnings_cache", return_value=None):
+        first = await service.get_symbol_earnings("NVDA")
+        assert first is not None
+
+        # 第二次呼叫走記憶體快取路徑；把「現在」往後推 2 小時，倒數必須跟著縮短。
+        real_datetime = datetime
+
+        class _ShiftedDatetime(real_datetime):  # type: ignore[misc,valid-type]
+            @classmethod
+            def now(cls, tz=None):  # type: ignore[no-untyped-def]
+                return real_datetime.now(tz) + timedelta(hours=2)
+
+        with patch("services.calendar_service.datetime", _ShiftedDatetime):
+            second = await service.get_symbol_earnings("NVDA")
+
+    assert second is not None
+    assert second.date == first.date
+    assert second.tte_hours == pytest.approx(first.tte_hours - 2.0, abs=0.2)
+
+
+def test_fundamental_liquidation_route_survives_later_skew_gate() -> None:
+    """基本面破滅的強制清算指令，不得被後續 Skew 閘門整包覆寫。
+
+    `evaluate_watchlist_symbol()` 的四道 Skew / 動能 / IV 背離閘門過去都是
+    `tactical = WatchlistTacticalPlan(...)` 重建，會把「立即清算並轉倉至 CORE
+    資產」降級成一般的「機構避險背離」觀望文案。
+    """
+    from market_analysis.intraday_pipeline.evaluation import _apply_tactical_gate
+    from models.schemas import WatchlistTacticalPlan
+
+    locked = WatchlistTacticalPlan(
+        scenario="wait",
+        sddm_route="LIQUIDATE (基本面破滅強制清算)",
+        action_guideline="⛔ 【LLM 護城河破滅警告】建議立即清算。",
+        dynamic_grid_step=1.5,
+        alert_level="red",
+        capital_retreat_required=True,
+    )
+
+    result = _apply_tactical_gate(
+        locked,
+        locked=True,
+        sddm_route="WAIT (機構避險背離/尾部風險警戒)",
+        action_guideline="⚠️ 機構避險背離/尾部風險警戒",
+        capital_retreat_required=True,
+    )
+
+    assert result.sddm_route == "LIQUIDATE (基本面破滅強制清算)"
+    assert "立即清算" in result.action_guideline
+    assert "機構避險背離" in result.action_guideline  # 警語仍以追加方式保留
+    assert result.alert_level == "red"
+
+    # 對照組：沒有更高優先級鎖定時，閘門仍照常改寫路由。
+    unlocked = WatchlistTacticalPlan(
+        scenario="premium-harvest",
+        sddm_route="SHIELD (防禦網格)",
+        action_guideline="收租",
+        dynamic_grid_step=1.5,
+        alert_level="yellow",
+    )
+    overridden = _apply_tactical_gate(
+        unlocked,
+        locked=False,
+        sddm_route="WAIT (機構避險背離/尾部風險警戒)",
+        action_guideline="⚠️ 機構避險背離/尾部風險警戒",
+        capital_retreat_required=True,
+    )
+    assert overridden.sddm_route == "WAIT (機構避險背離/尾部風險警戒)"
+    assert overridden.capital_retreat_required is True
+
+
+def test_capital_retreat_flag_drives_allocation_cap() -> None:
+    """資金藍圖 70%~85% 退守閘門改由顯式旗標驅動，不再依賴中文字串比對。"""
+    from market_analysis.signal_calculator import calculate_dynamic_trading_signals
+    from models.schemas import WatchlistTacticalPlan
+
+    metrics = _sample_metrics(current_price=100.0, iv_rank=50.0, option_skew=0.0)
+
+    def _plan(retreat: bool) -> WatchlistTacticalPlan:
+        return WatchlistTacticalPlan(
+            scenario="premium-harvest",
+            # 刻意使用不含「負 Gamma」字樣的路由名稱——evaluation.py 實際設定的
+            # 就是這種名稱，舊的子字串比對在此永遠不會匹配。
+            sddm_route="SHIELD 網格防禦 (負 Gamma 踩踏)".replace(
+                "負 Gamma 踩踏", "壓力測試"
+            ),
+            action_guideline="test",
+            dynamic_grid_step=1.0,
+            alert_level="yellow",
+            capital_retreat_required=retreat,
+        )
+
+    baseline = calculate_dynamic_trading_signals(
+        metrics, _plan(False), has_position=False, capital=100000.0, risk_limit=15.0
+    )
+    retreated = calculate_dynamic_trading_signals(
+        metrics, _plan(True), has_position=False, capital=100000.0, risk_limit=15.0
+    )
+
+    # 旗標為 True 時才會掛上退守警語；為 False 時不得誤觸。
+    assert "退守大盤流動性資產" in retreated["buy_rationale"]
+    assert "退守大盤流動性資產" not in baseline["buy_rationale"]
+    # 未提供已部署曝險時（預設 0.0），15% 額度全數可用，部位規模不受影響。
+    assert retreated["suitable_buy_shares"] == baseline["suitable_buy_shares"]
+
+
+def test_capital_retreat_cap_is_portfolio_level() -> None:
+    """資金退守是**組合層**限額：可用預算 = 總資金 15% − 已部署戰術曝險。
+
+    過去這裡是單一部位的 `min(allocated_budget, capital * 0.15)`，而單一部位預算
+    的理論上限只有 capital * 0.1265，min() 永遠取前者，閘門實際從未縮減過任何部位。
+    """
+    from market_analysis.signal_calculator import calculate_dynamic_trading_signals
+    from models.schemas import WatchlistTacticalPlan
+
+    metrics = _sample_metrics(current_price=100.0, iv_rank=50.0, option_skew=0.0)
+    plan = WatchlistTacticalPlan(
+        scenario="premium-harvest",
+        sddm_route="SHIELD 網格防禦",
+        action_guideline="test",
+        dynamic_grid_step=1.0,
+        alert_level="yellow",
+        capital_retreat_required=True,
+    )
+
+    def _shares(deployed: float) -> int:
+        return int(
+            calculate_dynamic_trading_signals(
+                metrics,
+                plan,
+                has_position=False,
+                capital=100000.0,
+                risk_limit=15.0,
+                deployed_tactical_value=deployed,
+            )["suitable_buy_shares"]
+        )
+
+    # 額度充裕（15,000 上限、已用 8,000 → 剩 7,000 > 本輪預算 5,500）：不受限
+    assert _shares(8_000.0) == _shares(0.0)
+    # 額度快滿（剩 1,000）：部位被壓縮
+    assert 0 < _shares(14_000.0) < _shares(0.0)
+    # 額度用罄與超額：一律不得新增部位
+    assert _shares(15_000.0) == 0
+    assert _shares(22_000.0) == 0
+
+    exhausted = calculate_dynamic_trading_signals(
+        metrics,
+        plan,
+        has_position=False,
+        capital=100000.0,
+        risk_limit=15.0,
+        deployed_tactical_value=22_000.0,
+    )
+    assert "已達上限" in exhausted["buy_rationale"]
+    assert exhausted["capital_retreat_remaining"] == 0.0
+
+
+def test_compute_deployed_tactical_value_scope() -> None:
+    """戰術曝險只計衛星部位；CORE 與現金等價物是退守目的地，不得計入。"""
+    from market_analysis.signal_calculator import compute_deployed_tactical_value
+
+    spot = [
+        {
+            "symbol": "NVDA",
+            "asset_class": "SATELLITE",
+            "quantity": 10.0,
+            "avg_cost": 120.0,
+        },
+        # CORE 是退守目的地
+        {"symbol": "VOO", "asset_class": "CORE", "quantity": 50.0, "avg_cost": 500.0},
+        # 現金等價物同理
+        {
+            "symbol": "BOXX",
+            "asset_class": "SATELLITE",
+            "quantity": 100.0,
+            "avg_cost": 110.0,
+        },
+        # 未分類視為衛星
+        {"symbol": "AMD", "asset_class": None, "quantity": 5.0, "avg_cost": 100.0},
+        # 髒資料應被跳過而非中斷整體計算
+        {
+            "symbol": "BAD",
+            "asset_class": "SATELLITE",
+            "quantity": "N/A",
+            "avg_cost": None,
+        },
+    ]
+    options = [
+        # 長倉：已付權利金
+        {
+            "symbol": "TSLA",
+            "opt_type": "call",
+            "strike": 250.0,
+            "entry_price": 3.0,
+            "quantity": 2.0,
+        },
+        # 賣出 PUT：佔用擔保現金
+        {
+            "symbol": "MU",
+            "opt_type": "put",
+            "strike": 90.0,
+            "entry_price": 1.5,
+            "quantity": -1.0,
+        },
+        # 賣出 CALL：擔保品是股票，已由現貨計入，不得重複計算
+        {
+            "symbol": "NVDA",
+            "opt_type": "call",
+            "strike": 150.0,
+            "entry_price": 2.0,
+            "quantity": -1.0,
+        },
+    ]
+
+    total = compute_deployed_tactical_value(
+        spot_holdings=spot, option_positions=options
+    )
+    # 10*120 (NVDA) + 5*100 (AMD) + 2*3*100 (TSLA long) + 1*90*100 (MU short put)
+    assert total == pytest.approx(1200.0 + 500.0 + 600.0 + 9000.0)
+
+    assert compute_deployed_tactical_value() == 0.0
+
+
+def test_capital_retreat_flag_is_sticky_across_gates() -> None:
+    """後續未設此旗標的閘門不得清掉前面已設好的資金退守要求。
+
+    實務情境：skew_percentile=95 先由 Skew 閘門設 True，同一根 K 棒又滿足
+    dp<-3% 且 IVR<15，IV 壓抑閘門把 plan 整個重建。若旗標沒有 sticky，重建後
+    旗標歸 False、路由也不再含「機構避險背離」/「負 Gamma」字樣，資金退守與
+    is_crisis 兩道保護會同時失效，反而在尾部風險當下輸出全額買點與股數。
+    """
+    from market_analysis.intraday_pipeline.evaluation import _apply_tactical_gate
+    from models.schemas import WatchlistTacticalPlan
+
+    after_skew_gate = WatchlistTacticalPlan(
+        scenario="wait",
+        sddm_route="WAIT (機構避險背離/尾部風險警戒)",
+        action_guideline="⚠️ 機構避險背離",
+        dynamic_grid_step=1.0,
+        alert_level="red",
+        capital_retreat_required=True,
+    )
+
+    # IV 壓抑閘門本身不帶 capital_retreat_required
+    after_iv_gate = _apply_tactical_gate(
+        after_skew_gate,
+        locked=False,
+        sddm_route="WAIT (IV 壓抑背離)",
+        action_guideline="⚠️ IV Suppression Divergence",
+    )
+
+    assert after_iv_gate.sddm_route == "WAIT (IV 壓抑背離)"
+    assert after_iv_gate.capital_retreat_required is True
+
+
+@pytest.mark.asyncio
+async def test_symbol_earnings_tte_stays_positive_on_earnings_day() -> None:
+    """財報當日 tte_hours 不得為負，否則 event-lock 會在最需要時降級為 normal。
+
+    錨點是財報當日 00:00 ET，13:30 ET 時原始值約 -13.5；而
+    `_resolve_watchlist_event_mode()` 要求 `0 < earnings_tte_hours`。
+    """
+    from datetime import datetime
+    from market_analysis.intraday_pipeline.events import _resolve_watchlist_event_mode
+    from services.calendar_service import CalendarService, ny_tz
+
+    service = CalendarService()
+    today = datetime.now(ny_tz).date()
+
+    with patch(
+        "services.calendar_service.get_cached_earnings",
+        return_value={
+            "earnings_date": today.strftime("%Y-%m-%d"),
+            "checked_at": datetime.now().isoformat(),
+        },
+    ), patch("services.calendar_service.save_earnings_cache", return_value=None):
+        event = await service.get_symbol_earnings("NVDA")
+
+    assert event is not None
+    assert event.tte_hours > 0.0
+    assert _resolve_watchlist_event_mode(event.tte_hours, None) == "event-lock"
+
+
+@pytest.mark.asyncio
+async def test_option_plan_illiquid_path_builds_wait_plan() -> None:
+    """期權鏈流動性不足時應產出 0 口 WAIT 計畫，而不是拋 ValidationError。
+
+    WatchlistOptionPlan 原本限制 suggested_contracts>=1 與 legs 至少 1 筆，
+    但這條分支就是以 0 口 / 空 legs 建構，等於每次都拋例外並被上游的
+    per-ticker except 吞掉，連帶讓該標的整則心跳消失。
+    """
+    import pandas as pd
+
+    metrics = _sample_metrics(current_price=129.0, iv_rank=78.0, option_skew=7.2)
+    tactical = WatchlistRiskController.process_metrics(metrics)
+
+    # bid/ask 點差極大 → is_spread_illiquid 判定為不流動
+    with patch(
+        "market_analysis.strategy.find_best_contract",
+        new_callable=AsyncMock,
+        return_value={
+            "strike": 132.0,
+            "expiry": "2026-06-19",
+            "mid": 2.3,
+            "bid": 0.5,
+            "ask": 4.5,
+        },
+    ), patch(
+        "services.market_data_service.get_option_chain",
+        new_callable=AsyncMock,
+        return_value=type(
+            "Chain", (), {"calls": pd.DataFrame([]), "puts": pd.DataFrame([])}
+        )(),
+    ):
+        plan = await build_watchlist_option_plan(
+            metrics, tactical, capital=100000.0, risk_limit=15.0, has_position=True
+        )
+
+    assert plan is not None
+    assert "流動性不足" in plan.strategy_name
+    assert plan.suggested_contracts == 0
+    assert plan.legs == []

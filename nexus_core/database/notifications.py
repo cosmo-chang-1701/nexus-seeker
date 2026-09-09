@@ -103,7 +103,11 @@ ALL_NOTIFICATION_KEYS: list[str] = [
     "briefing_post_market",
     "briefing_weekly_vtr",
     # 2. 📡 盤中自選與掛單遙測 (Intraday Telemetry)
+    # heartbeat_watchlist  → 15 分鐘批次量化雷達 (cogs/trading/heartbeat.py)
+    # heartbeat_symbol_deep → 30 分鐘個股深度戰場心跳 (IntradayScanPipeline)
+    # 兩者是完全獨立的推播路徑，過去共用同一個 key、無法分別靜音。
     "heartbeat_watchlist",
+    "heartbeat_symbol_deep",
     "telemetry_orders",
     # 3. 🛡️ 持倉風控與防禦 (Portfolio & Risk Defense)
     "defense_portfolio_risk",
@@ -163,6 +167,7 @@ PRESET_PROFILES: dict[str, dict[str, bool]] = {
         "briefing_post_market": True,
         "briefing_weekly_vtr": True,
         "heartbeat_watchlist": False,
+        "heartbeat_symbol_deep": False,
         "telemetry_orders": True,
         "defense_portfolio_risk": True,
         "defense_option_rollover": True,
@@ -182,6 +187,7 @@ PRESET_PROFILES: dict[str, dict[str, bool]] = {
         "briefing_post_market": True,
         "briefing_weekly_vtr": True,
         "heartbeat_watchlist": False,
+        "heartbeat_symbol_deep": False,
         "telemetry_orders": False,
         "defense_portfolio_risk": True,
         "defense_option_rollover": False,

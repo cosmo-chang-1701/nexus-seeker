@@ -22,11 +22,11 @@ def clean_db(db_conn: Any):  # type: ignore
 
 
 def test_default_all_enabled(db_conn: Any):  # type: ignore
-    """測試全新用戶 14 大通知頻道預設值（預設全部開啟）"""
+    """測試全新用戶 15 大通知頻道預設值（預設全部開啟）"""
     user_id = 999111
     settings = get_user_notification_settings(user_id)
     assert len(settings) == len(ALL_NOTIFICATION_KEYS)
-    assert len(ALL_NOTIFICATION_KEYS) == 14
+    assert len(ALL_NOTIFICATION_KEYS) == 15
 
     for key in ALL_NOTIFICATION_KEYS:
         expected = True
@@ -316,6 +316,7 @@ def test_full_preset_assertions_all_keys(db_conn: Any):  # type: ignore
     assert s_focus["briefing_post_market"] is True
     assert s_focus["briefing_weekly_vtr"] is True
     assert s_focus["heartbeat_watchlist"] is False
+    assert s_focus["heartbeat_symbol_deep"] is False
     assert s_focus["telemetry_orders"] is True
     assert s_focus["defense_portfolio_risk"] is True
     assert s_focus["defense_option_rollover"] is True
@@ -333,6 +334,7 @@ def test_full_preset_assertions_all_keys(db_conn: Any):  # type: ignore
     assert s_mute["briefing_post_market"] is True
     assert s_mute["briefing_weekly_vtr"] is True
     assert s_mute["heartbeat_watchlist"] is False
+    assert s_mute["heartbeat_symbol_deep"] is False
     assert s_mute["telemetry_orders"] is False
     assert s_mute["defense_portfolio_risk"] is True
     assert s_mute["defense_option_rollover"] is False
@@ -345,3 +347,52 @@ def test_full_preset_assertions_all_keys(db_conn: Any):  # type: ignore
     # WTI/Polymarket 為全天候情報，不受盤中頻率影響，盤中靜音模式下維持開啟
     assert s_mute["alpha_polymarket"] is True
     assert s_mute["alpha_wti_oil"] is True
+
+
+def test_v070_backfills_heartbeat_symbol_deep_from_watchlist(db_conn: Any) -> None:
+    """拆分通知 key 時必須回填，否則已靜音的使用者會被自動重新訂閱。
+
+    `heartbeat_symbol_deep` 的 DEFAULT_NOTIFICATION_SETTINGS 是 True，而
+    `is_notification_enabled()` 在查無該列時會落到該預設值。凡是曾把
+    `heartbeat_watchlist` 關掉（或套用 focus / mute_intraday 預設）的使用者，
+    若不回填就會突然開始收到 30 分鐘個股深度心跳。
+    """
+    from database.migrations.v070_split_heartbeat_symbol_deep import migrate_data
+
+    cursor = db_conn.cursor()
+    # 使用者 A 明確關閉；使用者 B 明確開啟；使用者 C 從未設定
+    cursor.execute(
+        "INSERT OR REPLACE INTO user_notification_settings VALUES (?, ?, ?)",
+        (8001, "heartbeat_watchlist", 0),
+    )
+    cursor.execute(
+        "INSERT OR REPLACE INTO user_notification_settings VALUES (?, ?, ?)",
+        (8002, "heartbeat_watchlist", 1),
+    )
+    db_conn.commit()
+
+    migrate_data(db_conn)
+    db_conn.commit()
+
+    def _deep(uid: int) -> Any:
+        cursor.execute(
+            "SELECT enabled FROM user_notification_settings "
+            "WHERE user_id = ? AND notification_key = 'heartbeat_symbol_deep'",
+            (uid,),
+        )
+        return cursor.fetchone()
+
+    assert _deep(8001)[0] == 0, "已靜音的使用者必須保持靜音"
+    assert _deep(8002)[0] == 1
+    assert _deep(8003) is None, "從未設定過的使用者維持沿用預設值，不寫入新列"
+
+    # 重跑不得覆寫使用者在拆分之後才調整過的設定
+    cursor.execute(
+        "UPDATE user_notification_settings SET enabled = 1 "
+        "WHERE user_id = ? AND notification_key = 'heartbeat_symbol_deep'",
+        (8001,),
+    )
+    db_conn.commit()
+    migrate_data(db_conn)
+    db_conn.commit()
+    assert _deep(8001)[0] == 1

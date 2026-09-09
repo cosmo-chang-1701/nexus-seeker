@@ -63,6 +63,9 @@ class EnhancedWatchlistMetrics(BaseModel):
     oi_pcr: float | None = None
     has_earnings_event: bool = False
     has_macro_event: bool = False
+    # 由 IVMetrics 一併帶下來：current_iv 是否已被套用 1.4x 事件加載係數。
+    # 呈現層可能只拿到 metrics 而沒有 iv_metrics，此時仍須能據實揭露。
+    event_loading_applied: bool = False
     iv_term_structure_status: str | None = None
     term_structure_ratio: float | None = None
     squeeze_status: bool | None = None
@@ -117,6 +120,10 @@ class WatchlistTacticalPlan(BaseModel):
     hedge_instruction: str | None = None
     hedge_allocation_shares: int = 0
     alert_level: Literal["green", "yellow", "red"] = "green"
+    # 機構避險背離 / 負 Gamma 踩踏等情境要求 70%~85% 資金退守大盤流動性資產。
+    # 這是給 signal_calculator 的資金藍圖閘門用的顯式旗標，取代原本對
+    # sddm_route 顯示字串做中文子字串比對的脆弱做法（文案微調就會靜默失效）。
+    capital_retreat_required: bool = False
 
 
 class WatchlistOptionLeg(BaseModel):
@@ -139,11 +146,17 @@ class WatchlistOptionPlan(BaseModel):
     strategy_name: str = Field(min_length=1)
     premium_type: WatchlistPremiumType
     estimated_net_premium: float = Field(ge=0.0)
-    suggested_contracts: int = Field(ge=1)
+    # 允許 0 口 / 空 legs：代表一個「本輪不執行」的 WAIT 計畫，用來告訴使用者
+    # 為什麼沒有可執行結構（流動性不足、財報 event-lock 等），而不是讓整個
+    # 期權區塊無聲消失。過去這兩個欄位限制為 ge=1 / min_length=1，導致
+    # option_guidance 的流動性不足分支每次都拋 ValidationError，被上游的
+    # per-ticker except 吞掉，連帶讓該標的整則心跳消失——AGENTS.md 記載的
+    # 「Option Plan 轉為 strict WAIT 狀態」從未真正呈現過。
+    suggested_contracts: int = Field(ge=0)
     max_risk_amount: float = Field(ge=0.0)
     rationale: str = Field(min_length=1)
     stock_action: str = Field(min_length=1)
-    legs: list[WatchlistOptionLeg] = Field(min_length=1)
+    legs: list[WatchlistOptionLeg] = Field(default_factory=list)
 
 
 class WatchlistEventContext(BaseModel):

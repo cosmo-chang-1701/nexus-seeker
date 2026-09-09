@@ -20,6 +20,21 @@ _SKEW_BADGE_DIVERGENCE = ("[1;31m", "⚠️", "方向背離／降槓桿", "neut
 _SKEW_BADGE_BULLISH = ("[1;32m", "🟢", "偏多／賣方收租", "bullish")
 
 
+def _optional_float(value: Any) -> Optional[float]:
+    """把可能為 None / 非數值的量化欄位安全轉成 `float | None`。
+
+    刻意不提供預設值：呼叫端需要能區分「資料缺失」與「真實數值剛好是 0」，
+    這正是這些閘門過去誤判的來源。
+    """
+    if value is None:
+        return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if result == result else None  # 過濾 NaN
+
+
 def _skew_route_sync_note(
     bias: str, tactical: "WatchlistTacticalPlan | None"
 ) -> str | None:
@@ -96,10 +111,28 @@ def build_watchlist_skew_rule_commentary(
       can read the operating direction in the first line.
     """
 
-    skew_val = float(getattr(metrics, "option_skew", 0.0) or 0.0)
-    skew_percentile = float(getattr(metrics, "skew_percentile", 50.0) or 50.0)
-    pcr = float(getattr(metrics, "pcr", 0.0) or 0.0)
-    iv_rank = float(getattr(metrics, "iv_rank", 0.0) or 0.0)
+    # 缺資料與真值 0 必須分開處理。過去這裡一律 `or 0.0` / `or 50.0`：
+    #   - `pcr=None`（期權鏈抓取失敗）會變成 0.0，直接滿足下方 `pcr < 0.35`，
+    #     憑空輸出「FOMO 情緒泡沫」防守路由；
+    #   - `skew_percentile=None` 會變成 50.0，把「沒資料」報成「常態，已抑制警報」。
+    # 現在保留 None，並讓每條規則各自要求它實際需要的欄位存在。
+    skew_val = _optional_float(getattr(metrics, "option_skew", None))
+    skew_percentile = _optional_float(getattr(metrics, "skew_percentile", None))
+    iv_rank = _optional_float(getattr(metrics, "iv_rank", None))
+    # PCR 為 0.0 同樣代表資料缺失而非「極端看漲」：calculate_pcr() 在分母
+    # (call volume/OI) 為 0 時就直接回傳 0.0，盤前與流動性枯竭都會落在這裡。
+    pcr = _optional_float(getattr(metrics, "pcr", None))
+    if pcr is not None and pcr <= 0.0:
+        pcr = None
+
+    # 分位數據本身缺失時不做任何方向判讀，避免把資料缺口誤報為常態。
+    if skew_percentile is None:
+        return _format_skew_commentary(
+            _SKEW_BADGE_NEUTRAL,
+            "Skew 分位數據缺失（期權鏈或歷史樣本不足），已抑制判讀。",
+            metrics,
+            tactical,
+        )
 
     # High-pass filter: suppress normal-range noise
     if 30.0 <= skew_percentile <= 70.0:
@@ -112,7 +145,7 @@ def build_watchlist_skew_rule_commentary(
 
     # Absolute tail-risk routes
     # Left-Tail Explosion (Put Panic)
-    if skew_percentile > 90.0 and iv_rank > 70.0:
+    if skew_percentile > 90.0 and iv_rank is not None and iv_rank > 70.0:
         return _format_skew_commentary(
             _SKEW_BADGE_PREMIUM_HARVEST,
             "[IV 火山爆發 ── 收租主動路由] 市場呈現左尾極端避險，建議優先收租/定義風險的 Premium Extraction。",
@@ -121,7 +154,7 @@ def build_watchlist_skew_rule_commentary(
         )
 
     # Right-Tail Mania (Call FOMO)
-    if pcr < 0.35:
+    if pcr is not None and pcr < 0.35:
         return _format_skew_commentary(
             _SKEW_BADGE_DEFENSIVE,
             "[FOMO 情緒泡沫 ── 靜默防守路由] 檢測到極端追漲行為，強烈封鎖單腿長權利金追價。",
@@ -130,22 +163,23 @@ def build_watchlist_skew_rule_commentary(
         )
 
     # Structural divergence check (Skew vs PCR extremes)
-    if (skew_percentile > 85.0 and 0.0 < pcr < 0.4) or (
-        skew_percentile < 15.0 and pcr > 1.5
+    if pcr is not None and (
+        (skew_percentile > 85.0 and 0.0 < pcr < 0.4)
+        or (skew_percentile < 15.0 and pcr > 1.5)
     ):
         return _format_skew_commentary(
             _SKEW_BADGE_DIVERGENCE, _SKEW_PCR_DIVERGENCE_WARNING, metrics, tactical
         )
 
     # Rigid skew sign ↔ interpretation mapping
-    if skew_val > 0 and skew_percentile >= 80.0:
+    if skew_val is not None and skew_val > 0 and skew_percentile >= 80.0:
         return _format_skew_commentary(
             _SKEW_BADGE_DEFENSIVE,
             "⚠️ 市場下行保護需求極高，隱含避險情緒升溫（機構大舉購入 Put 保險）",
             metrics,
             tactical,
         )
-    if skew_val < 0 and skew_percentile <= 20.0:
+    if skew_val is not None and skew_val < 0 and skew_percentile <= 20.0:
         return _format_skew_commentary(
             _SKEW_BADGE_BULLISH,
             "🔥 市場上行看漲需求爆發，動能抄底/追高情緒極端亢奮（散戶搶購末日 Call）",
@@ -153,10 +187,11 @@ def build_watchlist_skew_rule_commentary(
             tactical,
         )
 
+    skew_val_text = f"{skew_val:+.2f}%" if skew_val is not None else "--"
     return _format_skew_commentary(
         _SKEW_BADGE_NEUTRAL,
         (
-            f"Skew {skew_val:+.2f}%（百分位 {skew_percentile:.0f}%）屬常態區；"
+            f"Skew {skew_val_text}（百分位 {skew_percentile:.0f}%）屬常態區；"
             "建議以價位牆與事件風控為主，避免對單一指標過度解讀。"
         ),
         metrics,

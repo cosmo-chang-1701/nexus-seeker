@@ -346,7 +346,7 @@ async def test_purge_stale_kv_cache_dedup_keys_only_removes_whitelisted_old_rows
         conn.close()
 
     purged_prefixes = await purge_stale_kv_cache_dedup_keys(older_than_days=3)
-    assert purged_prefixes == 6  # all 6 whitelisted prefixes attempted, none error
+    assert purged_prefixes == 7  # all 7 whitelisted prefixes attempted, none error
 
     assert get_kv_cache(old_dedup_key) is None
     assert get_kv_cache(recent_dedup_key) is True

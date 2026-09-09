@@ -52,3 +52,34 @@ async def fetch_atr_15m(symbol: str, force_refresh: bool = True) -> float:
     except Exception as e:
         logger.warning(f"[{symbol}] ATR_15m 計算失敗: {e}")
         return 0.0
+
+
+def compute_atr_14_from_daily_df(df_daily: Optional[Any]) -> float:
+    """從既有的日線 K 線 DataFrame 直接計算 ATR(14)，不發動任何抓取。
+
+    供 `intraday_pipeline/metrics.py::build_enhanced_watchlist_metrics()` 重用它
+    本來就已經抓好的 `period="1y"` 日線 frame——該處原本把 `atr_14` 寫死為 0.01
+    佔位值（`_calculate_technical_indicators()` 並不回傳 ATR），導致下游宣稱的
+    「1.5x ATR 防洗盤緩衝」實際只有 $0.015、`dynamic_grid_step` 恆為 0.01。
+    就地計算後 ATR 與該 frame 保證同源，且零額外網路成本。
+
+    與 `compute_atr_15m_from_df()` 刻意維持相同的 fail-safe 語意：資料不足或
+    任何例外一律回傳 0.0，交由呼叫端決定佔位值。
+    """
+    try:
+        if df_daily is None or df_daily.empty or len(df_daily) < 14:
+            return 0.0
+        import pandas_ta as ta
+
+        atr_series = ta.atr(
+            df_daily["High"], df_daily["Low"], df_daily["Close"], length=14
+        )
+        if atr_series is None or atr_series.empty:
+            return 0.0
+        atr_val = float(atr_series.iloc[-1])
+        if atr_val != atr_val or atr_val <= 0.0:  # NaN 或非正值
+            return 0.0
+        return atr_val
+    except Exception as e:
+        logger.warning(f"日線 ATR(14) 就地計算失敗: {e}")
+        return 0.0

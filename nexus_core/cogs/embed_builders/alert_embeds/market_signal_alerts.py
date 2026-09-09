@@ -234,3 +234,96 @@ def create_price_volume_alert_embed(watch: Any, bar: Any) -> discord.Embed:
 
     embed.set_footer(text="Price-Volume Breakout Alert | Nexus Seeker")
     return embed
+
+
+def create_gamma_squeeze_alert_embed(output: Any) -> discord.Embed:
+    """建立 Nexus Gamma Squeeze 引擎 (NexusGammaSqueezeEngine) 的 SPEAR 進攻警報。
+
+    輸入為 `market_analysis.models.trader_models.AdvancedTraderOutput`。
+    僅在四階段門檻全數通過且 VIX < 25 (sddm_route == "SPEAR") 時由呼叫端派發，
+    因此這裡不再重複渲染 SHIELD / WAIT 的觀望文案。
+
+    嚴格遵循 field-based + ANSI 容器規範：區塊標題置於 field.name，
+    內文一律封裝於 ```ansi 區塊並使用樹狀縮排。
+    """
+    ticker = str(getattr(output, "ticker", "N/A"))
+    magnet_target = getattr(output, "magnet_target", None)
+    kelly_scaling = float(getattr(output, "kelly_position_scaling", 0.0))
+    runway_days = int(getattr(output, "financial_runway_days", 0))
+    theta_coverage = float(getattr(output, "theta_coverage_pct", 0.0))
+    runway_msg = str(getattr(output, "runway_status_msg", ""))
+    market_phase = str(getattr(output, "market_phase", "N/A"))
+    vanna_instruction = str(getattr(output, "vanna_hedging_instruction", "") or "")
+    risk_notes = str(getattr(output, "risk_mitigation_notes", "") or "")
+    actions = list(getattr(output, "recommended_actions", []) or [])
+
+    embed = NexusEmbed(
+        title=f"🏹 Gamma 擠壓 SPEAR 進攻訊號 | {ticker}",
+        description=None,
+        color=discord.Color.green(),
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    magnet_str = f"${magnet_target:.2f}" if magnet_target is not None else "--"
+    tactical_lines = [
+        f" ├─ 戰術路由: SPEAR (四階段門檻全數通過 ｜ 時段: {market_phase})",
+        f" ├─ Gamma 磁吸目標價: {magnet_str}",
+        f" └─ 凱利倉位上限: {kelly_scaling * 100:.1f}%",
+    ]
+    embed.add_field(
+        name="🎯 戰術路由與倉位配比",
+        value="```ansi\n" + "\n".join(tactical_lines) + "\n```",
+        inline=False,
+    )
+
+    if actions:
+        action_lines = []
+        for i, action in enumerate(actions):
+            prefix = " └─" if i == len(actions) - 1 else " ├─"
+            action_lines.append(f"{prefix} {action}")
+        embed.add_field(
+            name="📋 建議動作",
+            value="```ansi\n" + "\n".join(action_lines) + "\n```",
+            inline=False,
+        )
+
+    runway_lines = [
+        f" ├─ 生存跑道: {runway_days} 天 ｜ Theta 每日覆蓋率: {theta_coverage:.1f}%",
+        f" └─ {runway_msg}",
+    ]
+    embed.add_field(
+        name="🏦 財務跑道與生存分析",
+        value="```ansi\n" + "\n".join(runway_lines) + "\n```",
+        inline=False,
+    )
+
+    if vanna_instruction:
+        embed.add_field(
+            name="🌀 Vanna 隱含 Delta 對沖",
+            value=f"```ansi\n └─ {vanna_instruction}\n```",
+            inline=False,
+        )
+
+    # 代理數據揭露：Gate 1 / Gate 3 的兩項輸入並非門檻字面所述的原始指標，
+    # 依 AGENTS.md「啟發式代理數據揭露」慣例於此據實標註。
+    disclosure_lines = [
+        " ├─ Gate 1 期權量：本平台無多日期權成交量序列，"
+        "以「當日全鏈成交量 ÷ 交易時段已過比例」外推至收盤的預估值代理「日均量」。",
+        " └─ Gate 3 權利金：期權非每日到期，取「最近一個到期日」的價外 Call"
+        "總成交權利金，非字面上的「明日到期」。",
+    ]
+    embed.add_field(
+        name="ℹ️ 門檻輸入的代理數據揭露",
+        value="```ansi\n" + "\n".join(disclosure_lines) + "\n```",
+        inline=False,
+    )
+
+    if risk_notes:
+        embed.add_field(
+            name="🛡️ 風控備註",
+            value=f"```ansi\n └─ {risk_notes}\n```",
+            inline=False,
+        )
+
+    embed.set_footer(text="Nexus Gamma Squeeze Engine | 每 30 分鐘評估，每日至多一則")
+    return embed

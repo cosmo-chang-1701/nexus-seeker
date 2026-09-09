@@ -556,7 +556,6 @@ def test_create_watchlist_signal_embed() -> None:
     )
     embed = create_watchlist_signal_embed(
         symbol="NVDA",
-        report_body="```ansi\nwatchlist report\n```",
         option_guidance="可先以 Bull Put Spread 佈局。",
         event_risk_summary="CPI 倒數 12.0 小時 ｜ 先縮口數，優先定義風險的 Debit Spread / 保護性部位。",
         skew_state="+6.20% ｜ ⚠️ 預警性對沖 (Put 昂貴)",
@@ -611,7 +610,6 @@ def test_create_watchlist_signal_embed_covered_call() -> None:
     )
     embed = create_watchlist_signal_embed(
         symbol="INTC",
-        report_body="```ansi\nwatchlist report\n```",
         option_guidance="Covered Call 鎖利。",
         event_risk_summary="無重大事件",
         skew_state="-5.10% ｜ 右偏 (Call 昂貴)",
@@ -2617,6 +2615,7 @@ def test_create_watchlist_signal_embed_event_loading() -> None:
         oi_pcr=1.55,
         has_earnings_event=True,
         has_macro_event=False,
+        event_loading_applied=True,
     )
 
     embed = create_watchlist_signal_embed(
@@ -2625,10 +2624,38 @@ def test_create_watchlist_signal_embed_event_loading() -> None:
         alert_level="yellow",
     )
 
-    assert "(狀態: ⚠️ 臨近財報/快取波動率可能低估)" in get_embed_text(embed)
+    # 值已被乘上 1.4x 事件加載係數，揭露必須據實說明，不能像過去那樣寫
+    # 「快取波動率可能低估」——方向與程式實際所做的剛好相反。
+    text = get_embed_text(embed)
+    assert "已套用 1.4x 事件加載係數 (非原始觀測值)" in text
+    assert "臨近財報" in text
+    assert "可能低估" not in text
     assert "備註: 實盤請預留 1.4x 波動邊界以防範 IV Crush。" in get_embed_text(embed)
     assert "Volume PCR (即時情緒): 0.78" in get_embed_text(embed)
     assert "OI PCR (結構防禦): 1.55" in get_embed_text(embed)
+
+
+def test_watchlist_signal_embed_event_without_loading_factor() -> None:
+    """臨近事件但未套用 1.4x 時，不得宣稱已加載；措辭也不能反向說「可能低估」。"""
+    from models.quant import IVMetrics
+
+    iv_m = IVMetrics(
+        symbol="MU",
+        current_iv=0.42,
+        iv_rank=60.0,
+        iv_percentile=62.0,
+        expected_move_weekly=6.0,
+        iv_status="Normal",
+        iv_source="LIVE_IV",
+        has_earnings_event=True,
+        event_loading_applied=False,
+    )
+
+    embed = create_watchlist_signal_embed(symbol="MU", iv_metrics=iv_m)
+    assert embed is not None
+    text = get_embed_text(embed)
+    assert "已套用 1.4x 事件加載係數" not in text
+    assert "臨近財報，波動率定價可能尚未反映事件風險" in text
 
 
 def test_create_watchlist_signal_embed_non_degraded() -> None:
@@ -4334,3 +4361,44 @@ def test_create_transition_ratchet_embed_does_not_say_no_action_needed() -> None
     assert "安全續抱" not in blob
     assert "上移停損" in blob or "停損上移" in blob
     assert "$180.00" in blob
+
+
+def test_create_gamma_squeeze_alert_embed() -> None:
+    """Gamma Squeeze SPEAR 警報：欄位齊備、代理數據揭露不可省略。"""
+    from datetime import datetime as _dt
+
+    from cogs.embed_builders.alert_embeds import create_gamma_squeeze_alert_embed
+    from market_analysis.models.trader_models import AdvancedTraderOutput
+
+    output = AdvancedTraderOutput(
+        ticker="NVDA",
+        timestamp=_dt.now(),
+        market_phase="Phase B",
+        is_applicable=True,
+        failed_gates=[],
+        sddm_route="SPEAR",
+        financial_runway_days=210,
+        theta_coverage_pct=45.0,
+        runway_status_msg="🟢 財務跑道極其安全 (生存跑道: 210 天)",
+        magnet_target=185.0,
+        recommended_actions=[
+            "🏹 當前進入 SPEAR 進攻模組",
+            "🎯 預估上行磁吸目標價為 $185.00",
+        ],
+        vanna_hedging_instruction="組合 Delta 處於中性區間，目前無需進行 Vanna 對沖調整。",
+        kelly_position_scaling=0.25,
+        risk_mitigation_notes="當前波動率環境相對溫和。",
+    )
+
+    embed = create_gamma_squeeze_alert_embed(output)
+    text = get_embed_text(embed)
+
+    assert embed.title == "🏹 Gamma 擠壓 SPEAR 進攻訊號 | NVDA"
+    assert "$185.00" in text
+    assert "凱利倉位上限: 25.0%" in text
+    assert "210 天" in text
+    assert "Vanna" in text
+    # Gate 1 / Gate 3 的輸入是代理指標，依 AGENTS.md 慣例必須揭露
+    assert "代理數據揭露" in text
+    assert "外推至收盤" in text
+    assert "最近一個到期日" in text

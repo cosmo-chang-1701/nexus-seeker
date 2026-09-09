@@ -43,6 +43,10 @@ class SchedulerCog(commands.Cog):
         self.intraday_pipeline = IntradayScanPipeline(
             bot, NexusGammaSqueezeEngine(base_gate_3_threshold=1000000.0)
         )
+        # leader 判定**不能**放在這裡：cog 是在 setup_hook 載入的，而
+        # `_is_leader_instance` 要到 on_ready 才選舉出來（bot.py 建構時固定為
+        # False），在此檢查等於永遠不啟動。改為與本 Cog 其餘 tasks.loop 相同，
+        # 在 _run_loop 的每一輪迴圈內檢查。
         self.intraday_pipeline.start()
 
         self.dynamic_market_scanner.start()

@@ -363,13 +363,61 @@ class CalendarService:
             logger.error(f"Failed to fetch economic calendar: {e}")
             return []
 
+    def _build_earnings_event(
+        self, symbol: str, earnings_date: date
+    ) -> Optional[EarningsEvent]:
+        """依「現在」重新計算 tte_hours 並組出 EarningsEvent。
+
+        `tte_hours` 本質上是時間的函式，不該被快取——`_earnings_cache` 是純 LRU
+        (`services/bounded_cache.py`)、沒有任何 TTL，過去這裡快取的是算好的
+        `EarningsEvent`，命中時直接回傳且不做新鮮度檢查，導致倒數在進程生命週期內
+        永遠凍結（心跳的「🗓️ 事件風控」會無限顯示同一個倒數，且
+        `_resolve_watchlist_event_mode` 會鎖死在 event-lock / earnings-guard）。
+        現在快取的是財報「日期」這個緩慢變動的事實，每次呼叫重算倒數。
+        """
+        next_dt = datetime.combine(earnings_date, datetime.min.time()).replace(
+            tzinfo=ny_tz
+        )
+        tte_hours = (next_dt - datetime.now(ny_tz)).total_seconds() / 3600
+
+        # 錨點是財報當日的 00:00 ET，因此在財報當天 tte_hours 整個交易時段都是
+        # 負值（13:30 ET 時約 -13.5）。而 `_resolve_watchlist_event_mode()` 要求
+        # `0 < earnings_tte_hours` 才會進入 event-lock / earnings-guard，等於在
+        # 最需要防護的當天反而降級為 normal——賣方期權的 event-lock 封鎖會失效。
+        # 過去這個問題被「快取凍結住一個陳舊但為正的倒數」意外遮住了。
+        # 財報日當天（或更晚才被查到）一律夾為極小正值，維持風控處於鎖定狀態。
+        if tte_hours <= 0.0:
+            tte_hours = 0.1
+        try:
+            return EarningsEvent(
+                symbol=symbol,
+                date=earnings_date.strftime("%Y-%m-%d"),
+                tte_hours=round(tte_hours, 1),
+            )
+        except Exception as ve:
+            logger.warning(f"Skipping malformed earnings event for {symbol}: {ve}")
+            return None
+
     async def get_symbol_earnings(self, symbol: str) -> Optional[EarningsEvent]:
         """
         Get the next earnings date for a specific symbol.
         """
         symbol = symbol.upper()
+        # 快取內容是財報日期字串（或 None 代表「已查過、目前無財報」），
+        # 不是算好的 EarningsEvent——原因見 _build_earnings_event 的 docstring。
         if symbol in self._earnings_cache:
-            return self._earnings_cache[symbol]  # type: ignore
+            cached_date_str = self._earnings_cache[symbol]
+            if cached_date_str is None:
+                return None
+            try:
+                cached_day = datetime.strptime(str(cached_date_str), "%Y-%m-%d").date()
+            except ValueError:
+                del self._earnings_cache[symbol]
+            else:
+                # 財報日已過就讓快取失效，重新向上游取下一次財報日。
+                if cached_day >= datetime.now(ny_tz).date():
+                    return self._build_earnings_event(symbol, cached_day)
+                del self._earnings_cache[symbol]
 
         try:
             cached = await asyncio.to_thread(get_cached_earnings, symbol)
@@ -390,17 +438,8 @@ class CalendarService:
                     parsed_cached = None
 
                 if parsed_cached is not None and parsed_cached >= today:
-                    next_dt = datetime.combine(
-                        parsed_cached, datetime.min.time()
-                    ).replace(tzinfo=ny_tz)
-                    tte_hours = (next_dt - datetime.now(ny_tz)).total_seconds() / 3600
-                    earnings_info = EarningsEvent(
-                        symbol=symbol,
-                        date=parsed_cached.strftime("%Y-%m-%d"),
-                        tte_hours=round(tte_hours, 1),
-                    )
-                    self._earnings_cache[symbol] = earnings_info
-                    return earnings_info
+                    self._earnings_cache[symbol] = parsed_cached.strftime("%Y-%m-%d")
+                    return self._build_earnings_event(symbol, parsed_cached)
 
             raw_entries = await market_data_service.get_earnings_calendar(symbol)
             next_date = self._extract_next_earnings_date(raw_entries)
@@ -411,24 +450,10 @@ class CalendarService:
             )
 
             if next_date is not None:
-                next_dt = datetime.combine(next_date, datetime.min.time()).replace(
-                    tzinfo=ny_tz
-                )
-                now = datetime.now(ny_tz)
-                tte_hours = (next_dt - now).total_seconds() / 3600
-
-                try:
-                    earnings_info = EarningsEvent(
-                        symbol=symbol,
-                        date=next_date.strftime("%Y-%m-%d"),
-                        tte_hours=round(tte_hours, 1),
-                    )
-                    self._earnings_cache[symbol] = earnings_info
+                earnings_info = self._build_earnings_event(symbol, next_date)
+                if earnings_info is not None:
+                    self._earnings_cache[symbol] = next_date.strftime("%Y-%m-%d")
                     return earnings_info
-                except Exception as ve:
-                    logger.warning(
-                        f"Skipping malformed earnings event for {symbol}: {ve}"
-                    )
             else:
                 self._earnings_cache[symbol] = None
 

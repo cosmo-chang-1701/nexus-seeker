@@ -4,15 +4,12 @@ option_guidance.py — 期權策略指引與可執行期權合約計畫。
 從 intraday_pipeline.py 分離，包含：
   - _watchlist_event_risk_multiplier（事件風險乘數）
   - derive_watchlist_option_guidance（策略文字描述）
-  - _mid_price_from_row / _pick_watchlist_cover_leg（合約選擇工具）
   - _estimate_watchlist_contract_count（口數估算）
   - build_watchlist_option_plan（完整期權計畫建構）
 """
 
 import logging
 from typing import Any, Mapping, Optional
-
-import pandas as pd
 
 from models.schemas import (
     EnhancedWatchlistMetrics,
@@ -168,73 +165,26 @@ def is_spread_illiquid(bid: float, ask: float, threshold: float = 0.15) -> bool:
     return spread_ratio > threshold
 
 
-def _mid_price_from_row(row: pd.Series) -> float:
-    bid = float(row.get("bid", 0.0) or 0.0)
-    ask = float(row.get("ask", 0.0) or 0.0)
-    if bid > 0.0 and ask > 0.0:
-        return round((bid + ask) / 2.0, 4)
-    return round(float(row.get("lastPrice", 0.0) or 0.0), 4)
-
-
-async def _pick_watchlist_cover_leg(
-    symbol: str,
-    expiry: str,
-    opt_type: str,
-    anchor_strike: float,
-    direction: str,
-    current_price: float,
-    atr_14: float,
-) -> Optional[dict[str, float | str]]:
-    from services import market_data_service
-
-    chain = await market_data_service.get_option_chain(symbol, expiry)
-    if chain is None:
-        return None
-
-    contracts = chain.calls if opt_type == "call" else chain.puts
-    if contracts.empty:
-        return None
-
-    width = max(round(max(atr_14, current_price * 0.03), 2), 1.0)
-    target_strike = (
-        anchor_strike + width if direction == "higher" else anchor_strike - width
-    )
-
-    if direction == "higher":
-        candidates = contracts[contracts["strike"] > anchor_strike].copy()
-    else:
-        candidates = contracts[contracts["strike"] < anchor_strike].copy()
-    if candidates.empty:
-        return None
-
-    idx = (candidates["strike"] - target_strike).abs().idxmin()
-    leg = candidates.loc[idx]
-    return {
-        "strike": float(leg["strike"]),
-        "expiry": expiry,
-        "mid": _mid_price_from_row(leg),
-        "bid": float(leg.get("bid", 0.0) or 0.0),
-        "ask": float(leg.get("ask", 0.0) or 0.0),
-    }
-
-
 def _estimate_watchlist_contract_count(
     *,
     premium_type: str,
     estimated_net_premium: float,
-    width: float,
     short_strike: float,
     capital: float,
     risk_limit: float,
     risk_budget_multiplier: float = 1.0,
 ) -> tuple[int, float]:
+    """估算建議口數與風險配額。
+
+    原本另有一個 `width` 參數用於價差結構的最大風險計算，但唯一呼叫端
+    (`build_watchlist_option_plan`) 只路由單腿結構、width 恆為 0.0，該分支從未
+    執行過；隨價差對沖腿一併移除。
+    """
     base_budget = max(capital * min(max(risk_limit, 1.0), 15.0) / 100.0 * 0.1, 500.0)
     base_budget *= max(min(risk_budget_multiplier, 1.0), 0.2)
 
     if premium_type == "debit":
         risk_per_contract = max(estimated_net_premium * 100.0, 1.0)
-    elif width > 0.0:
-        risk_per_contract = max((width - estimated_net_premium) * 100.0, 1.0)
     else:
         risk_per_contract = max((short_strike - estimated_net_premium) * 100.0, 1.0)
 
@@ -289,38 +239,36 @@ async def build_watchlist_option_plan(
     iv_rank_val = iv_rank_raw
     naked_sell_warning = iv_rank_val > 90.0 and not has_position
 
+    # 本函式目前只路由兩種單腿信用結構（Covered Call / Cash-Secured Put），
+    # 因此 premium_type 恆為 "credit"、legs 恆為 1 腿。過去這裡另外維護了
+    # hedge_leg / cover_direction / width / chain_opt_type 與一段
+    # `if "Spread" in strategy_name`
+    # 的價差對沖腿選取，但 strategy_name 永遠不含 "Spread"，整段從未執行過；
+    # 一併移除的還有 `iv_bubble and premium_type == "debit"` 的買方封鎖。
+    # 若日後要恢復價差路由，應連同 strategy_name 的產生邏輯一起設計，而不是
+    # 留著一段永遠碰不到的分支讓讀者誤以為它會生效。
     strategy_name: str | None = None
     premium_type: WatchlistPremiumType | None = None
     primary_leg: dict[str, float | str] | None = None
-    hedge_leg: dict[str, float | str] | None = None
     primary_action: WatchlistLegAction = "BUY"
-    chain_opt_type = "put"
     leg_opt_type: WatchlistOptionType = "PUT"
-    cover_direction = "lower"
-    width = 0.0
 
     event_lock = event_context is not None and event_context.risk_mode == "event-lock"
 
     if has_position:
         strategy_name = "Covered Call (拋補看漲期權 / 高位收租)"
         premium_type = "credit"
-        chain_opt_type = "call"
         leg_opt_type = "CALL"
         primary_leg = await find_best_contract(metrics.symbol, "STO_CALL", 0.20, 21, 45)
         primary_action = "SELL"
     else:
         strategy_name = "Cash-Secured Put"
         premium_type = "credit"
-        chain_opt_type = "put"
         leg_opt_type = "PUT"
         primary_leg = await find_best_contract(metrics.symbol, "STO_PUT", -0.20, 30, 45)
         primary_action = "SELL"
 
     if primary_leg is None or strategy_name is None or premium_type is None:
-        return None
-
-    # IV Percentile > 90%: hard block all buyer routes (debit / BTO structures)
-    if iv_bubble and premium_type == "debit":
         return None
 
     # Option pricing and liquidity verification (Guideline Four)
@@ -360,20 +308,6 @@ async def build_watchlist_option_plan(
             legs=[],
         )
 
-    if "Spread" in strategy_name:
-        hedge_leg = await _pick_watchlist_cover_leg(
-            metrics.symbol,
-            str(primary_leg["expiry"]),
-            chain_opt_type,
-            float(primary_leg["strike"]),
-            cover_direction,
-            metrics.current_price,
-            metrics.atr_14,
-        )
-        if hedge_leg is None:
-            return None
-        width = abs(float(primary_leg["strike"]) - float(hedge_leg["strike"]))
-
     legs = [
         WatchlistOptionLeg(
             action=primary_action,
@@ -385,32 +319,11 @@ async def build_watchlist_option_plan(
     ]
 
     estimated_net_premium = float(primary_leg["mid"])
-    if hedge_leg is not None:
-        hedge_action: WatchlistLegAction = "SELL" if premium_type == "debit" else "BUY"
-        estimated_net_premium = (
-            max(float(primary_leg["mid"]) - float(hedge_leg["mid"]), 0.01)
-            if premium_type == "debit"
-            else max(float(primary_leg["mid"]) - float(hedge_leg["mid"]), 0.01)
-        )
-        legs.append(
-            WatchlistOptionLeg(
-                action=hedge_action,
-                opt_type=leg_opt_type,
-                strike=float(hedge_leg["strike"]),
-                expiry=str(hedge_leg["expiry"]),
-                mid_price=float(hedge_leg["mid"]),
-            )
-        )
 
     suggested_contracts, max_risk_amount = _estimate_watchlist_contract_count(
         premium_type=premium_type,
         estimated_net_premium=estimated_net_premium,
-        width=width,
-        short_strike=float(primary_leg["strike"])
-        if primary_action == "SELL"
-        else float(hedge_leg["strike"])
-        if hedge_leg is not None and premium_type == "credit"
-        else float(primary_leg["strike"]),
+        short_strike=float(primary_leg["strike"]),
         capital=capital,
         risk_limit=risk_limit,
         risk_budget_multiplier=_watchlist_event_risk_multiplier(event_context),
@@ -424,9 +337,15 @@ async def build_watchlist_option_plan(
     ):
         suggested_contracts = min(int(suggested_contracts), 1)
 
+    # iv_rank / option_skew 皆為 Optional：calculate_skew() 在無歷史樣本時會回傳
+    # skew=None，直接進 f-string 會拋 TypeError 並讓整則心跳靜默消失。
+    iv_rank_text = f"{metrics.iv_rank:.1f}%" if metrics.iv_rank is not None else "--"
+    skew_text = (
+        f"{metrics.option_skew:+.2f}%" if metrics.option_skew is not None else "--"
+    )
     rationale = (
-        f"依據 {strategy_name} 路由，結合 IV Rank {metrics.iv_rank:.1f}%、"
-        f"Skew {metrics.option_skew:+.2f}% 與當前技術位階自動選約。"
+        f"依據 {strategy_name} 路由，結合 IV Rank {iv_rank_text}、"
+        f"Skew {skew_text} 與當前技術位階自動選約。"
     )
     if event_context is not None and event_context.risk_mode != "normal":
         rationale = f"{rationale} {event_context.summary}"
@@ -441,8 +360,32 @@ async def build_watchlist_option_plan(
             "🚨 當前隱含波動率已高度泡沫化，強烈預警造市商波動率扼殺 (IV Crush) 陷阱，全面關閉買方路由。 "
             + rationale
         )
-    if event_lock and "Credit" in strategy_name:
-        return None
+    # 財報 72 小時內 (event-lock) 一律不輸出信用（賣方）結構——event_context 的
+    # 文案本身就寫明「禁做賣方、僅保留保護性 / Debit Spread 類型」。
+    # 過去這裡比對的是 `"Credit" in strategy_name`，但 strategy_name 只會是
+    # "Covered Call (拋補看漲期權 / 高位收租)" 或 "Cash-Secured Put"，永遠不含
+    # "Credit"，導致這道風控從未生效、財報前仍會建議裸賣 CSP。改判 premium_type。
+    #
+    # 回傳一個 0 口的 WAIT 計畫而非 None：讓使用者看得到「為什麼這三天沒有可執行
+    # 合約」，而不是期權區塊無聲消失。本函式目前只路由賣方結構，沒有可替代的
+    # 買方/價差選約邏輯，因此這裡不嘗試自行降級成其他結構。
+    if event_lock and premium_type == "credit":
+        lock_reason = (
+            f"⛔ 財報事件鎖定 (event-lock)：{metrics.symbol} 距財報 72 小時內，"
+            f"依風控規則禁做賣方結構（{strategy_name}），本輪不輸出可執行合約。"
+        )
+        if event_context is not None:
+            lock_reason = f"{lock_reason} {event_context.summary}"
+        return WatchlistOptionPlan(
+            strategy_name="WAIT (財報事件鎖定，禁做賣方)",
+            premium_type="credit",
+            estimated_net_premium=0.0,
+            suggested_contracts=0,
+            max_risk_amount=0.0,
+            rationale=lock_reason,
+            stock_action=stock_action,
+            legs=[],
+        )
     return WatchlistOptionPlan(
         strategy_name=strategy_name,
         premium_type=premium_type,
