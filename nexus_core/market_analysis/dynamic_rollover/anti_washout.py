@@ -2,6 +2,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from market_analysis.option_guidance import is_spread_illiquid
 from market_analysis.sentiment.history_storage import get_indicator_percentile
+from market_analysis.sentiment.skew_taxonomy import SKEW_INDICATOR
 
 from . import logger
 from ._shared import format_cash_impact
@@ -1061,7 +1062,11 @@ async def check_satellite_rebalancing_impl(
             if raw_skew_perc is not None:
                 skew_percentile = float(raw_skew_perc)
             else:
-                skew_percentile = get_indicator_percentile(symbol, "SKEW", skew)
+                # 樣本不足/查詢失敗時 get_indicator_percentile 回傳 None。
+                # 這條路徑的下游閘門全部是「分位越極端越觸發」，退回 50.0
+                # 這個中性值即為 fail-safe（不觸發任何極端分支）。
+                fallback_perc = get_indicator_percentile(symbol, SKEW_INDICATOR, skew)
+                skew_percentile = 50.0 if fallback_perc is None else fallback_perc
 
             gamma_flip: float = float(asset.get("gamma_flip", 0.0))
             atr_14: float = float(asset.get("atr_14", 0.0))

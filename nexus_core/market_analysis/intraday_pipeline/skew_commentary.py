@@ -2,6 +2,12 @@
 
 from typing import Any, Optional
 
+from market_analysis.sentiment.skew_taxonomy import (
+    SKEW_BULLISH_PERCENTILE,
+    SKEW_DEFENSIVE_PERCENTILE,
+    SKEW_STATE_BULLISH,
+    SKEW_STATE_DEFENSIVE,
+)
 from models.schemas import EnhancedWatchlistMetrics, ScanParams, WatchlistTacticalPlan
 
 
@@ -14,8 +20,8 @@ _SKEW_PCR_DIVERGENCE_WARNING = (
 # Direction badge taxonomy: (ansi_prefix, emoji, label, bias)
 # bias is one of "bullish", "bearish", "neutral" — used for route/momentum cross-checks.
 _SKEW_BADGE_NEUTRAL = ("[1;33m", "🟡", "中性觀望", "neutral")
-_SKEW_BADGE_PREMIUM_HARVEST = ("[1;33m", "🟠", "傾向：賣方收租（不追價）", "bearish")
-_SKEW_BADGE_DEFENSIVE = ("[1;31m", "🔴", "傾向：防禦／避險需求升溫", "bearish")
+_SKEW_BADGE_PREMIUM_HARVEST = ("[1;33m", "🟠", "賣方收租（不追價）", "bearish")
+_SKEW_BADGE_DEFENSIVE = ("[1;31m", "🔴", "防禦／避險需求升溫", "bearish")
 _SKEW_BADGE_DIVERGENCE = ("[1;31m", "⚠️", "方向背離／降槓桿", "neutral")
 _SKEW_BADGE_BULLISH = ("[1;32m", "🟢", "偏多／賣方收租", "bullish")
 
@@ -52,7 +58,13 @@ def _skew_route_sync_note(
     if scenario_bias is None:
         return None
 
-    if bias == "neutral" or scenario_bias == bias:
+    # 中性判讀不構成對操盤路由的「確認」。舊實作讓任何 neutral 徽章都回報
+    # 「✅ 同向」，包括紅燈 WAIT 路由——那會讀成系統兩邊都同意可以動作。
+    if bias == "neutral":
+        return (
+            f"➖ 本判讀無方向性，不構成對操盤路由的確認 (SDDM: {tactical.sddm_route})"
+        )
+    if scenario_bias == bias:
         return f"✅ 與操盤路由同向 (SDDM: {tactical.sddm_route})"
     return f"⚠️ 訊號不同步，建議以操盤路由為準 (SDDM: {tactical.sddm_route})"
 
@@ -72,6 +84,18 @@ def _skew_momentum_note(bias: str, metrics: EnhancedWatchlistMetrics) -> str | N
     return None
 
 
+def _skew_capital_retreat_note(tactical: "WatchlistTacticalPlan | None") -> str | None:
+    """資金退守閘門啟動時，明講本判讀不得當成加碼依據。
+
+    `evaluation.py` 的 skew>90 / 負 Gamma 閘門會設 `capital_retreat_required`，
+    而本模組的「收租主動路由」等分支卻可能同時建議開倉賣方——同一封 embed 裡
+    兩個方向打架。直接讀既有旗標交叉檢查，零額外 I/O。
+    """
+    if tactical is None or not getattr(tactical, "capital_retreat_required", False):
+        return None
+    return "🚨 資金退守閘門已啟動，本判讀不構成加碼/開倉依據"
+
+
 def _format_skew_commentary(
     badge: tuple[str, str, str, str],
     detail: str,
@@ -80,15 +104,15 @@ def _format_skew_commentary(
 ) -> str:
     ansi_prefix, emoji, label, bias = badge
 
-    skew_state = getattr(metrics, "option_skew_state", None)
-    if skew_state and skew_state not in detail:
-        detail = f"{detail}（Skew 型態：{skew_state}）"
+    # 型態字串（option_skew_state）刻意不在這裡重複附掛：呈現層的
+    # 「Skew: ⋯ ｜ {型態}」表頭已經是它的唯一承載處。
 
     lines = [f"{ansi_prefix}{emoji} 操作方向：{label}[0m"]
 
     sync_note = _skew_route_sync_note(bias, tactical)
     momentum_note = _skew_momentum_note(bias, metrics)
-    tail_notes = [note for note in (sync_note, momentum_note) if note]
+    retreat_note = _skew_capital_retreat_note(tactical)
+    tail_notes = [note for note in (retreat_note, sync_note, momentum_note) if note]
     body_lines = tail_notes + [detail]
     for note in body_lines[:-1]:
         lines.append(f" ├─ {note}")
@@ -143,26 +167,11 @@ def build_watchlist_skew_rule_commentary(
             tactical,
         )
 
-    # Absolute tail-risk routes
-    # Left-Tail Explosion (Put Panic)
-    if skew_percentile > 90.0 and iv_rank is not None and iv_rank > 70.0:
-        return _format_skew_commentary(
-            _SKEW_BADGE_PREMIUM_HARVEST,
-            "[IV 火山爆發 ── 收租主動路由] 市場呈現左尾極端避險，建議優先收租/定義風險的 Premium Extraction。",
-            metrics,
-            tactical,
-        )
-
-    # Right-Tail Mania (Call FOMO)
-    if pcr is not None and pcr < 0.35:
-        return _format_skew_commentary(
-            _SKEW_BADGE_DEFENSIVE,
-            "[FOMO 情緒泡沫 ── 靜默防守路由] 檢測到極端追漲行為，強烈封鎖單腿長權利金追價。",
-            metrics,
-            tactical,
-        )
-
     # Structural divergence check (Skew vs PCR extremes)
+    # 必須排在 FOMO 之前：FOMO 的條件 `pcr < 0.35` 是這裡第一條件
+    # (`0 < pcr < 0.4`) 的子集，順序反了會把整條背離分支吃成死碼，只剩
+    # [0.35, 0.4) 這 0.05 寬的窗。這個順序也與 evaluation.py 對同一組
+    # 條件的判定結果一致（同一封 embed 不該自相矛盾）。
     if pcr is not None and (
         (skew_percentile > 85.0 and 0.0 < pcr < 0.4)
         or (skew_percentile < 15.0 and pcr > 1.5)
@@ -171,28 +180,72 @@ def build_watchlist_skew_rule_commentary(
             _SKEW_BADGE_DIVERGENCE, _SKEW_PCR_DIVERGENCE_WARNING, metrics, tactical
         )
 
-    # Rigid skew sign ↔ interpretation mapping
-    if skew_val is not None and skew_val > 0 and skew_percentile >= 80.0:
+    # Absolute tail-risk routes
+    # Left-Tail Explosion (Put Panic)
+    if skew_percentile > 90.0:
+        if iv_rank is None:
+            # IVR 缺失時不再靜默落入下一支：收租與否本來就取決於 IV 是否膨脹，
+            # 沒有 IVR 就沒有判斷依據，據實揭露並取防禦側。
+            return _format_skew_commentary(
+                _SKEW_BADGE_DEFENSIVE,
+                "[左尾極端避險] Skew 分位 >90% 但 IV Rank 數據缺失，無法判定權利金是否膨脹；"
+                "暫取防禦立場，不建議據此開立賣方收租結構。",
+                metrics,
+                tactical,
+            )
+        if iv_rank > 70.0:
+            return _format_skew_commentary(
+                _SKEW_BADGE_PREMIUM_HARVEST,
+                "[IV 火山爆發 ── 收租主動路由] 市場呈現左尾極端避險，建議優先收租/定義風險的 Premium Extraction。",
+                metrics,
+                tactical,
+            )
         return _format_skew_commentary(
             _SKEW_BADGE_DEFENSIVE,
-            "⚠️ 市場下行保護需求極高，隱含避險情緒升溫（機構大舉購入 Put 保險）",
-            metrics,
-            tactical,
-        )
-    if skew_val is not None and skew_val < 0 and skew_percentile <= 20.0:
-        return _format_skew_commentary(
-            _SKEW_BADGE_BULLISH,
-            "🔥 市場上行看漲需求爆發，動能抄底/追高情緒極端亢奮（散戶搶購末日 Call）",
+            "[左尾極端避險 ── 防禦路由] Skew 分位 >90% 但 IV Rank 未達 70%，"
+            "避險需求集中在尾部而整體權利金並未膨脹，收租缺乏溢價補償；建議防禦而非賣方。",
             metrics,
             tactical,
         )
 
+    # Right-Tail Mania (Call FOMO)
+    # 加上 `skew_percentile < 30` 方向守衛：低 PCR 只有搭配右偏（Call 相對昂貴、
+    # 分位偏低）才是追漲。舊實作不看分位，於是 skew_percentile=95（極端 Put 恐慌）
+    # 配 pcr=0.2 會輸出「檢測到極端追漲行為」——方向完全相反。
+    if pcr is not None and pcr < 0.35 and skew_percentile < 30.0:
+        return _format_skew_commentary(
+            _SKEW_BADGE_DEFENSIVE,
+            "[FOMO 情緒泡沫 ── 靜默防守路由] 檢測到極端追漲行為，強烈封鎖單腿長權利金追價。",
+            metrics,
+            tactical,
+        )
+
+    # Rigid skew sign ↔ interpretation mapping（門檻與文案共用 skew_taxonomy，
+    # 與 calculate_skew() 產生的 state 字串同源，避免兩處各自漂移）
+    if (
+        skew_val is not None
+        and skew_val > 0
+        and skew_percentile >= SKEW_DEFENSIVE_PERCENTILE
+    ):
+        return _format_skew_commentary(
+            _SKEW_BADGE_DEFENSIVE, SKEW_STATE_DEFENSIVE, metrics, tactical
+        )
+    if (
+        skew_val is not None
+        and skew_val < 0
+        and skew_percentile <= SKEW_BULLISH_PERCENTILE
+    ):
+        return _format_skew_commentary(
+            _SKEW_BADGE_BULLISH, SKEW_STATE_BULLISH, metrics, tactical
+        )
+
+    # 兜底：此處必然落在 30-70 抑制窗之外（否則早已回傳），所以不能寫「屬常態區」。
     skew_val_text = f"{skew_val:+.2f}%" if skew_val is not None else "--"
     return _format_skew_commentary(
         _SKEW_BADGE_NEUTRAL,
         (
-            f"Skew {skew_val_text}（百分位 {skew_percentile:.0f}%）屬常態區；"
-            "建議以價位牆與事件風控為主，避免對單一指標過度解讀。"
+            f"Skew {skew_val_text}（百分位 {skew_percentile:.0f}%）已偏離常態區，"
+            "但未達任何極端閾值；建議以價位牆與事件風控為主，避免對單一指標過度解讀。"
         ),
         metrics,
         tactical,

@@ -49,6 +49,11 @@ class EnhancedWatchlistMetrics(BaseModel):
     option_skew: float | None = None
     skew_percentile: float | None = Field(default=None, ge=0.0, le=100.0)
     option_skew_state: str = Field(min_length=1)
+    # 百分位排名實際採用的歷史樣本數。視窗是「最近 N 列」而非固定時間視窗
+    # （AGENTS.md 記載的已知限制），把樣本數攤在使用者面前是最低成本的誠實揭露。
+    skew_sample_size: int | None = Field(default=None, ge=0)
+    # calculate_skew() 走了歷史快取降級路徑（期權鏈抓取失敗、沿用上次成功值）。
+    skew_is_fallback: bool = False
 
     # Put/Call Ratio (volume-based), used for skew consistency checks
     pcr: float | None = Field(default=None, ge=0.0)

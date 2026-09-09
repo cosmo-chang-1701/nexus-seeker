@@ -3,9 +3,13 @@ import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 import pandas as pd
 import sqlite3
+from datetime import datetime, timedelta
 from market_analysis.sentiment_engine import SentimentEngine, _current_week_friday
 
 MOCK_EXPIRY = _current_week_friday().strftime("%Y-%m-%d")
+# calculate_skew() 只接受 DTE >= 7 的到期日（避免 0DTE/週選的偏斜值混進同一條
+# 百分位序列），且會挑最接近 30 DTE 的一檔，因此 Skew 相關案例需要月選到期日。
+MOCK_MONTHLY_EXPIRY = (datetime.now().date() + timedelta(days=30)).strftime("%Y-%m-%d")
 
 
 @pytest.mark.asyncio
@@ -17,7 +21,7 @@ async def test_calculate_skew_full() -> None:
     ) as mock_chain, patch(
         "services.market_data_service.get_quote", new_callable=AsyncMock
     ) as mock_quote:
-        mock_expiries.return_value = [MOCK_EXPIRY]
+        mock_expiries.return_value = [MOCK_MONTHLY_EXPIRY]
         mock_quote.return_value = {"c": 100.0}
 
         calls_df = pd.DataFrame(
@@ -49,8 +53,13 @@ async def test_calculate_skew_full() -> None:
 
             result = await SentimentEngine.calculate_skew("AAPL")
             assert "skew" in result
-            assert result["skew"] == pytest.approx(7.0)
+            # 真 25-Delta 選檔：Call 取 δ=0.25 的 strike 110 (IV 0.17)、
+            # Put 取 δ=-0.25 的 strike 90 (IV 0.23) → (0.23-0.17)*100 = 6.0。
+            # 舊的固定 ±5% 代理會選到 strike 110 與 strike 85 (IV 0.24) → 7.0。
+            assert result["skew"] == pytest.approx(6.0)
             assert result["state"] != "ERROR"
+            assert result["call_delta"] == pytest.approx(0.25)
+            assert result["put_delta"] == pytest.approx(0.25)
 
 
 @pytest.mark.asyncio
@@ -159,7 +168,7 @@ async def test_sentiment_edge_cases() -> None:
     ) as mock_expiries, patch(
         "services.market_data_service.get_option_chain", new_callable=AsyncMock
     ) as mock_chain:
-        mock_expiries.return_value = [MOCK_EXPIRY]
+        mock_expiries.return_value = [MOCK_MONTHLY_EXPIRY]
         mock_chain.return_value = None
         res = await SentimentEngine.calculate_skew("AAPL")
         assert res["state"] == "N/A"
@@ -199,7 +208,7 @@ async def test_sentiment_edge_cases() -> None:
     ) as mock_chain, patch(
         "services.market_data_service.get_quote", new_callable=AsyncMock
     ) as mock_quote:
-        mock_expiries.return_value = [MOCK_EXPIRY]
+        mock_expiries.return_value = [MOCK_MONTHLY_EXPIRY]
         mock_chain.return_value = MagicMock()
         mock_quote.return_value = {"c": 0}
         res = await SentimentEngine.calculate_skew("AAPL")
@@ -213,7 +222,7 @@ async def test_sentiment_edge_cases() -> None:
     ) as mock_chain, patch(
         "services.market_data_service.get_quote", new_callable=AsyncMock
     ) as mock_quote:
-        mock_expiries.return_value = [MOCK_EXPIRY]
+        mock_expiries.return_value = [MOCK_MONTHLY_EXPIRY]
         mock_quote.return_value = {"c": 100.0}
 
         class MockChainShort:
@@ -253,7 +262,7 @@ async def test_sentiment_edge_cases() -> None:
     ) as mock_chain, patch(
         "services.market_data_service.get_quote", new_callable=AsyncMock
     ) as mock_quote:
-        mock_expiries.return_value = [MOCK_EXPIRY]
+        mock_expiries.return_value = [MOCK_MONTHLY_EXPIRY]
         mock_quote.return_value = {"c": 100.0}
 
         class MockChainNoCall:
@@ -1046,3 +1055,121 @@ async def test_get_unified_max_pain_ttl_forces_recompute_even_without_price_devi
         await get_unified_max_pain("MPTTL", expiry="WEEKLY")
 
     mock_calc.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# 百分位樣本數守衛與 25-Delta 涵蓋度守衛
+# ---------------------------------------------------------------------------
+
+
+def _patch_percentile_rows(values: list[float]) -> Any:
+    """把 get_indicator_percentile 的 SQLite 讀取換成固定的樣本列。"""
+    conn = MagicMock()
+    cursor = MagicMock()
+    cursor.fetchall.return_value = [(v,) for v in values]
+    conn.cursor.return_value = cursor
+    return patch("database.connection.get_read_connection", return_value=conn)
+
+
+def test_get_indicator_percentile_requires_minimum_samples() -> None:
+    """樣本不足時回傳 None，不得回傳看似合理的 50.0 或 0.0。
+
+    舊實作在「完全無歷史」與 DB 例外時都回傳 50.0（正好落在 skew_commentary 的
+    30-70 抑制窗，資料全滅會被報成「屬常態」）；只有 1 筆樣本時
+    count(v < current) == 0 → 回傳 0.0%，單一觀測值就足以點燃
+    `skew_percentile <= 20` 的「市場上行看漲需求爆發」。
+    """
+    from market_analysis.sentiment.history_storage import get_indicator_percentile
+
+    with _patch_percentile_rows([1.0] * 19):
+        assert get_indicator_percentile("AAPL", "SKEW_D25", 5.0) is None
+
+    with _patch_percentile_rows([]):
+        assert get_indicator_percentile("AAPL", "SKEW_D25", 5.0) is None
+
+    with _patch_percentile_rows([float(i) for i in range(20)]):
+        assert get_indicator_percentile("AAPL", "SKEW_D25", 100.0) == pytest.approx(
+            100.0
+        )
+
+
+def test_get_indicator_percentile_returns_none_on_db_error() -> None:
+    """DB 例外不得被靜默偽裝成「常態」百分位。"""
+    from market_analysis.sentiment.history_storage import get_indicator_percentile
+
+    with patch(
+        "database.connection.get_read_connection", side_effect=sqlite3.Error("boom")
+    ):
+        assert get_indicator_percentile("AAPL", "SKEW_D25", 5.0) is None
+
+
+def test_get_indicator_percentile_uses_midrank_for_ties() -> None:
+    """所有樣本相等（行情停滯/資料源卡住）應回到 50.0，而非塌陷成 0.0。
+
+    舊實作用嚴格 `<` 計數，全同值時 count == 0 → 0.0%，與真正的極端低位
+    無法區分，會直接餵進 evaluation.py 的 `< 15.0` 背離閘門。
+    """
+    from market_analysis.sentiment.history_storage import (
+        get_indicator_percentile_with_sample_size,
+    )
+
+    with _patch_percentile_rows([3.0] * 30):
+        percentile, sample_size = get_indicator_percentile_with_sample_size(
+            "AAPL", "SKEW_D25", 3.0
+        )
+    assert percentile == pytest.approx(50.0)
+    assert sample_size == 30
+
+
+@pytest.mark.asyncio
+async def test_calculate_skew_rejects_chain_without_25delta_coverage() -> None:
+    """期權鏈未涵蓋 25-Delta 區域時降級，不硬湊一個不像 25-Delta 的合約。"""
+    with patch(
+        "services.market_data_service.get_all_option_expiries", new_callable=AsyncMock
+    ) as mock_expiries, patch(
+        "services.market_data_service.get_option_chain", new_callable=AsyncMock
+    ) as mock_chain, patch(
+        "services.market_data_service.get_quote", new_callable=AsyncMock
+    ) as mock_quote, patch(
+        "market_analysis.sentiment.options_flow.get_last_stored_sentiment",
+        return_value=None,
+    ):
+        mock_expiries.return_value = [MOCK_MONTHLY_EXPIRY]
+        mock_quote.return_value = {"c": 100.0}
+
+        frame = pd.DataFrame({"strike": [105, 110], "impliedVolatility": [0.18, 0.17]})
+        put_frame = pd.DataFrame(
+            {"strike": [95, 90], "impliedVolatility": [0.22, 0.23]}
+        )
+
+        class MockChain:
+            def __init__(self) -> None:
+                self.calls = frame
+                self.puts = put_frame
+
+        mock_chain.return_value = MockChain()
+
+        with patch("market_analysis.greeks.calculate_contract_delta") as mock_delta:
+            # 全部深度價外（|δ| 遠低於 _SKEW_DELTA_MIN=0.10）
+            mock_delta.side_effect = [0.04, 0.02, -0.04, -0.02]
+            res = await SentimentEngine.calculate_skew("AAPL")
+
+        assert res["skew"] is None
+        assert res["state"] == "數據不足"
+
+
+@pytest.mark.asyncio
+async def test_calculate_skew_rejects_expiries_below_dte_floor() -> None:
+    """只有 0DTE/週選可用時降級，不讓短天期偏斜值汙染百分位序列。"""
+    near_expiry = (datetime.now().date() + timedelta(days=2)).strftime("%Y-%m-%d")
+    with patch(
+        "services.market_data_service.get_all_option_expiries", new_callable=AsyncMock
+    ) as mock_expiries, patch(
+        "market_analysis.sentiment.options_flow.get_last_stored_sentiment",
+        return_value=None,
+    ):
+        mock_expiries.return_value = [near_expiry]
+        res = await SentimentEngine.calculate_skew("AAPL")
+
+    assert res["skew"] is None
+    assert "Insufficient DTE coverage" in res["error"]

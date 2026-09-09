@@ -309,7 +309,7 @@ Current sections (in actual render order — the first two are Markdown headings
   - pre-event windows prefer defined-risk structures
   - macro events shrink size / bias toward debit spreads or protection
 
-### ⚠️ Skew 百分位的統計視窗（已知限制，尚未變更）
+### ⚠️ Skew 百分位的統計視窗（視窗仍未變更；邊界預設值已修正）
 
 `sentiment/history_storage.py::get_indicator_percentile()` ranks the current value
 against `SELECT value ... ORDER BY timestamp DESC LIMIT 100`. `calculate_skew()` has
@@ -325,13 +325,42 @@ retreat), `skew_commentary.py`'s 85/90/15/20 branches, `radar_data.py`, and the
 "top 2 readings of the last few days", which fires far more often than an annual 98th
 percentile would.
 
-`options_flow.py:123-124` also writes the current value to history *before* computing the
+`options_flow.py` also writes the current value to history *before* computing the
 percentile, so the sample includes itself.
 
-This is deliberately left as-is for now: switching to a fixed time window (e.g. one sample
-per trading day over 252 days) is the semantically correct fix but would simultaneously
-change the trigger frequency of several already-tuned live gates, so it should be its own
-change with its own observation period — not a side effect of an unrelated fix.
+The **window itself is still deliberately unchanged**: switching to a fixed time window
+(e.g. one sample per trading day over 252 days) is the semantically correct fix but would
+simultaneously change the trigger frequency of several already-tuned live gates, so it
+should be its own change with its own observation period — not a side effect of an
+unrelated fix.
+
+What *has* changed is the behaviour at the edges of that window, because the old defaults
+were fabricating signal rather than reporting a limitation:
+
+- **Minimum sample count (`_MIN_PERCENTILE_SAMPLES = 20`).** Below it,
+  `get_indicator_percentile()` returns `None`. Previously a single stored row made
+  `count(v < current) == 0` → **0.0%**, which alone satisfied
+  `skew_percentile <= 20` (「市場上行看漲需求爆發」) and `evaluation.py`'s `< 15.0`
+  divergence gate. The threshold is a keyword argument so SKEW and PCR can be tuned
+  separately if their accumulation rates diverge.
+- **`None` on empty history and on DB error**, replacing a hardcoded `50.0`. That value
+  landed squarely inside `skew_commentary`'s 30-70 suppression window, so total data loss
+  was reported to the user as 「Skew 分位屬常態 (30-70%)，已抑制警報」. This is the same
+  failure the `skew_commentary.py` comments claim to have fixed — the earlier fix only
+  removed the caller's `or 50.0`, leaving the default alive one layer down. Errors are now
+  logged rather than swallowed by a bare `except`.
+- **Midrank for ties** (`(count_less + 0.5 * count_equal) / n`). Strict `<` collapsed an
+  all-identical sample (stalled tape, stuck data source) to 0.0%, indistinguishable from a
+  genuine extreme low; midrank returns 50.0.
+- `get_indicator_percentile_with_sample_size()` returns `(percentile, sample_size)`; the
+  original name stays as a thin wrapper so existing call sites keep their signature. The
+  sample count is surfaced to users in the heartbeat's Market Footprints line
+  (`分位點: X% , 樣本 N 筆`) so the window's real depth is visible rather than implied.
+
+Because the percentile can now legitimately be `None`, every consumer must guard it. The
+directions chosen are fail-safe (a missing percentile never triggers an extreme branch):
+`anti_washout.py` substitutes the neutral `50.0`, `radar_data.py` falls through to its
+existing cache/neutral path and forces `is_divergence`/`is_skew_extreme` to `False`.
 
 ### Deterministic Skew Interpretation
 
@@ -340,6 +369,92 @@ change with its own observation period — not a side effect of an unrelated fix
 - Replaced legacy LLM commentary to ensure 0-latency execution.
 - Deterministically evaluates `option_skew`, `skew_percentile`, and `pcr`.
 - Triggers absolute tail-risk routes (e.g. Put Panic, Call FOMO) and structural divergence warnings without external API calls.
+
+**Branch order is load-bearing — do not reshuffle casually.** Evaluated first-match-wins:
+
+| # | Condition | Badge |
+|---|---|---|
+| 1 | `skew_percentile is None` | 🟡 分位數據缺失，抑制判讀 |
+| 2 | `30 <= pct <= 70` | 🟡 常態，抑制警報 |
+| 3 | `(pct > 85 且 0 < pcr < 0.4)` 或 `(pct < 15 且 pcr > 1.5)` | ⚠️ 結構性情緒背離 |
+| 4 | `pct > 90`, sub-branched on `iv_rank` (`> 70` → 🟠 收租主動路由; `<= 70` → 🔴 防禦路由; `None` → 🔴 防禦 + 揭露 IVR 缺失) | 🟠 / 🔴 |
+| 5 | `pcr < 0.35` **且 `pct < 30`** | 🔴 FOMO 情緒泡沫 |
+| 6 | `skew > 0 且 pct >= 80` | 🔴 防禦 |
+| 7 | `skew < 0 且 pct <= 20` | 🟢 偏多 |
+| 8 | fallback (necessarily outside 30-70) | 🟡 已偏離常態區但未達極端閾值 |
+
+Two of these orderings/guards exist because their absence produced directionally wrong output:
+
+- **Divergence (3) must precede FOMO (5).** FOMO's `pcr < 0.35` is a strict subset of
+  divergence's `0 < pcr < 0.4`, so the old ordering left divergence reachable only for
+  `pcr ∈ [0.35, 0.4)` — a 0.05-wide window, effectively dead code — while
+  `evaluation.py:217`'s identically-conditioned gate fired correctly, so the same embed
+  contradicted itself.
+- **FOMO's `pct < 30` direction guard.** Without it, `skew_percentile = 95` (extreme put
+  fear) plus `pcr = 0.2` rendered as 「檢測到極端追漲行為」 — the opposite direction.
+  `test_skew_commentary_fomo_respects_skew_direction` locks this.
+
+`_format_skew_commentary()` also cross-checks `tactical.capital_retreat_required` (already
+on the passed-in plan, zero extra I/O) and appends 「🚨 資金退守閘門已啟動，本判讀不構成
+加碼/開倉依據」 when set — otherwise the 收租主動路由 branch recommends opening short-premium
+structures in the same embed whose SDDM route demands capital retreat. A `neutral` badge no
+longer reports 「✅ 與操盤路由同向」 for any route (including red-light WAIT); it reports
+「➖ 本判讀無方向性，不構成對操盤路由的確認」.
+
+The 80/20 thresholds and their two state strings live in
+`market_analysis/sentiment/skew_taxonomy.py` (a leaf module with no heavy imports, so it can
+be shared without an `intraday_pipeline` ↔ `sentiment` import cycle) and are consumed by both
+`options_flow.classify_skew_state()` and this function — they were previously the same rule
+written in two places. `option_skew_state` is rendered **only** in the presentation layer's
+`Skew: {值} (分位 {分位}) ｜ {型態}` header; the commentary no longer appends a
+「（Skew 型態：⋯）」 suffix.
+
+⚠️ `pipeline.py` passes `skew_state=metrics.option_skew_state` — the **state string only**.
+It must not pre-format `option_skew` (an `Optional[float]`) into that argument: doing so
+raised `TypeError` whenever skew data was fully unavailable, was swallowed by
+`_run_loop`'s per-ticker `except`, and took that symbol's **entire heartbeat** down — which
+also meant the 「分位數據缺失」 degraded branch above could never actually render through this
+path. The numeric value and percentile are formatted by `watchlist_embeds.py` from its own
+already-None-safe `skew_val_str` / `skew_per_str`.
+
+### Option Skew 的計算基準 (真 25-Delta)
+
+`sentiment/options_flow.py::calculate_skew()` computes
+`Skew = IV(25Δ Put) - IV(25Δ Call)` in percentage points (positive = put expensive).
+Delta is genuinely computed via the existing
+`market_analysis/greeks.py::calculate_contract_delta` (Merton, `RISK_FREE_RATE`,
+`MIN_IV_THRESHOLD` invalid-IV guard); each side takes the OTM contract whose `|δ|` is
+closest to 0.25.
+
+This replaced a **fixed ±5% strike-moneyness proxy** (`strike > spot*1.05` /
+`strike < spot*0.95`) that the docstring already described as 25-Delta. For a high-IV name
+±5% sits nearly at-the-money (skew flattened); for a low-IV name it is already deep OTM
+(skew exaggerated) — so the measurement was neither comparable across symbols nor stable
+across a single symbol's IV regimes, which matters because the percentile ranks a symbol
+against **its own** history.
+
+Two guards fail closed rather than producing a plausible-looking number:
+- **DTE floor** — the expiry is chosen as the one closest to 30 DTE among those with
+  `DTE >= 7`; if none qualifies it degrades. The old code silently fell back to
+  `expiries[0]`, which could be a 0DTE/weekly contract whose skew then entered the same
+  percentile series.
+- **25-Delta coverage** — if the closest contract's `|δ|` falls outside `[0.10, 0.40]`, the
+  chain does not span the 25-delta region and the function degrades instead of substituting
+  a contract that is not meaningfully 25-delta.
+
+**History namespace is `SKEW_D25`, not `SKEW`.** The numeric definition changed, so new
+values must not be ranked against ±5%-proxy-era rows. `sentiment_history.indicator` is an
+existing column, so **no migration is needed**; old `"SKEW"` rows simply go inert. The
+constant lives in `skew_taxonomy.SKEW_INDICATOR` and every reader
+(`options_flow`, `anti_washout`, `radar_data`) imports it from there.
+On deploy every symbol restarts at zero samples, so `skew_percentile` returns `None` until
+the minimum-sample threshold below is met (roughly within the first trading day at the
+current ~4-8 rows/hour rate) — sinking to silence rather than fabricating extremes.
+
+`radar_data.py` and `symbol_deep_dive.py` previously re-queried the percentile from
+`skew_data.get("skew", 0.0)` — a **fabricated 0.0 on missing data** — even though
+`calculate_skew()` returns `skew_percentile` in the same dict, computed from the very value
+it wrote to history. They now read that field directly, removing two redundant DB queries.
 
 ### Pre-market IV Sentiment Scan & Fallback
 
@@ -1037,7 +1152,8 @@ Uses a dedicated SQLite table (`price_volume_watches`, PK `(user_id, symbol)`) r
 - `nexus_core/market_analysis/intraday_pipeline.py` — watchlist evaluation, option-plan logic, intraday engine helpers
 - `nexus_core/market_analysis/index_microstructure.py` — market regime determination (SHORT_GAMMA_CRITICAL) using VIX, VIX3M, and zero-gamma line GEX
 - `nexus_core/market_analysis/sentiment_engine.py` — Facade entrypoint for skew / UOA / IV stack
-- `nexus_core/market_analysis/sentiment/` — Dedicated submodules (`iv_metrics`, `max_pain`, `options_flow`, `uoa_detector`, `history_storage`, `cache`)
+- `nexus_core/market_analysis/sentiment/` — Dedicated submodules (`iv_metrics`, `max_pain`, `options_flow`, `uoa_detector`, `history_storage`, `cache`, `skew_taxonomy`)
+- `nexus_core/market_analysis/sentiment/skew_taxonomy.py` — leaf module (stdlib-only, so it can be imported from both `sentiment` and `intraday_pipeline` without a cycle) holding the single source of truth for the Skew history-indicator key (`SKEW_D25`), the 80/20 classification thresholds, and the two extreme state strings
 - `nexus_core/market_analysis/telemetry_pricing_engine.py` — central alignment alert pipeline and decision gating logic (stale-lock, deep sea gap limits, pure stock gate, UOA squeeze classification)
 - `nexus_core/risk_engine/nro.py` — WatchlistRiskController translating technical status to SDDM tactical routes (SHIELD, SPEAR, STANDBY)
 - `nexus_core/formatters/execution_embeds.py` — embeds formatter separating execution decision view logic

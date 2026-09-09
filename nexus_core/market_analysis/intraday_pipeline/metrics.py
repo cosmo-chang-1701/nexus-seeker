@@ -427,6 +427,13 @@ async def build_enhanced_watchlist_metrics(
         option_skew_state=str(skew_metrics.get("state") or "N/A")
         if skew_metrics
         else "N/A",
+        skew_sample_size=int(skew_size)
+        if skew_metrics
+        and (skew_size := skew_metrics.get("skew_sample_size")) is not None
+        else None,
+        skew_is_fallback=bool(skew_metrics.get("is_fallback", False))
+        if skew_metrics
+        else False,
         pcr=float(pcr_val)
         if pcr_metrics and (pcr_val := pcr_metrics.get("pcr")) is not None
         else None,

@@ -558,7 +558,7 @@ def test_create_watchlist_signal_embed() -> None:
         symbol="NVDA",
         option_guidance="可先以 Bull Put Spread 佈局。",
         event_risk_summary="CPI 倒數 12.0 小時 ｜ 先縮口數，優先定義風險的 Debit Spread / 保護性部位。",
-        skew_state="+6.20% ｜ ⚠️ 預警性對沖 (Put 昂貴)",
+        skew_state="⚠️ 預警性對沖 (Put 昂貴)",
         alert_level="yellow",
         option_plan=option_plan,
         skew_commentary="Skew 左偏代表保護性買盤偏多，若事件風險逼近應優先使用定義風險結構。",
@@ -586,7 +586,9 @@ def test_create_watchlist_signal_embed() -> None:
     )
     assert "操盤執行指南: 可先以 Bull Put Spread 佈局。" in get_embed_text(embed)
     assert "**⚙️ 量化 Skew 解析**" in get_embed_text(embed)
-    assert "Skew: +6.20% ｜ ⚠️ 預警性對沖 (Put 昂貴)" in get_embed_text(embed)
+    # skew_state 只承載型態字串；數值與分位由 builder 自 metrics 格式化，
+    # 此處未傳 metrics，故走 None 降級輸出 --%。
+    assert "Skew: --% (分位 --%) ｜ ⚠️ 預警性對沖 (Put 昂貴)" in get_embed_text(embed)
 
 
 def test_create_watchlist_signal_embed_covered_call() -> None:
@@ -612,7 +614,7 @@ def test_create_watchlist_signal_embed_covered_call() -> None:
         symbol="INTC",
         option_guidance="Covered Call 鎖利。",
         event_risk_summary="無重大事件",
-        skew_state="-5.10% ｜ 右偏 (Call 昂貴)",
+        skew_state="右偏 (Call 昂貴)",
         alert_level="yellow",
         option_plan=option_plan,
         skew_commentary="Skew 右偏顯示買權昂貴，適合 Covered Call 收租。",
@@ -636,7 +638,7 @@ def test_create_watchlist_signal_embed_covered_call() -> None:
     )
     assert "操盤執行指南: Covered Call 鎖利。" in get_embed_text(embed)
     assert "**⚙️ 量化 Skew 解析**" in get_embed_text(embed)
-    assert "Skew: -5.10% ｜ 右偏 (Call 昂貴)" in get_embed_text(embed)
+    assert "Skew: --% (分位 --%) ｜ 右偏 (Call 昂貴)" in get_embed_text(embed)
 
 
 def test_create_watchlist_overview_embed() -> None:

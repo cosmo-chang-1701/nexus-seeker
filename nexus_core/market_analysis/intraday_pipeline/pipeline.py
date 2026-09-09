@@ -318,10 +318,11 @@ class IntradayScanPipeline:
                 if evaluation.event_context is not None
                 else "未偵測到近期重大事件"
             ),
-            skew_state=(
-                f"{evaluation.metrics.option_skew:+.2f}% ｜ "
-                f"{evaluation.metrics.option_skew_state}"
-            ),
+            # 只傳型態字串：數值與分位由 embed builder 用它既有的
+            # skew_val_str / skew_per_str 安全格式化（option_skew 是
+            # Optional[float]，在此處直接 f"{...:+.2f}" 會在缺資料時拋
+            # TypeError，被逐檔 except 吞掉後整封心跳都會消失）。
+            skew_state=evaluation.metrics.option_skew_state,
             alert_level=evaluation.tactical.alert_level,
             option_plan=option_plan,
             skew_commentary=skew_commentary,

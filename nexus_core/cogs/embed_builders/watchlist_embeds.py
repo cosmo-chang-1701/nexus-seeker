@@ -255,6 +255,8 @@ def create_watchlist_signal_embed(
         vol_poc = metrics.volume_poc
         skew_val = metrics.option_skew
         skew_per = metrics.skew_percentile
+        skew_samples = getattr(metrics, "skew_sample_size", None)
+        skew_is_fallback = bool(getattr(metrics, "skew_is_fallback", False))
     else:
         live_price_val = (
             suitable_buy_price if not isinstance(suitable_buy_price, str) else None
@@ -264,6 +266,8 @@ def create_watchlist_signal_embed(
         vol_poc = 100.0
         skew_val = None
         skew_per = None
+        skew_samples = None
+        skew_is_fallback = False
 
     # Extract IV metrics
     earnings_loading = False
@@ -501,6 +505,9 @@ def create_watchlist_signal_embed(
         or gex_putwall is None
         or skew_val is None
         or skew_per is None
+        # 歷史快取降級（期權鏈抓取失敗、沿用上次成功值）也是降級模式的一種，
+        # 過去 is_fallback 完全沒有人讀，title 因此不會帶降級後綴。
+        or skew_is_fallback
     )
 
     gex_putwall_str = (
@@ -510,6 +517,9 @@ def create_watchlist_signal_embed(
     vol_poc_str = f"${vol_poc:.2f}" if vol_poc is not None else "N/A"
     skew_val_str = f"{skew_val:+.2f}%" if skew_val is not None else "--%"
     skew_per_str = f"{skew_per:.1f}%" if skew_per is not None else "--%"
+    # 分位視窗是「最近 N 列樣本」而非固定時間視窗，把樣本數揭露出來，
+    # 避免使用者把它讀成年度級的尾部風險百分位。
+    skew_sample_str = f", 樣本 {skew_samples} 筆" if skew_samples is not None else ""
     iv_val_str = f"{iv_val:.1f}%" if iv_val is not None else "--%"
     iv_rank_str = f"{iv_rank:.1f}%" if iv_rank is not None else "--%"
     expected_move_str = (
@@ -539,9 +549,13 @@ def create_watchlist_signal_embed(
     if skew_commentary:
         has_meaningful_content = True
         description_lines.append("**⚙️ 量化 Skew 解析**")
-        skew_body = (
-            f"Skew: {skew_state}\n{skew_commentary}" if skew_state else skew_commentary
-        )
+        # 表頭是 Skew 型態字串的唯一承載處：判讀本文不再重複附掛
+        # 「（Skew 型態：⋯）」尾綴。數值與分位沿用下方 Market Footprints
+        # 同一組已做過 None 降級的字串，避免兩處格式各自漂移。
+        skew_header = f"Skew: {skew_val_str} (分位 {skew_per_str})"
+        if skew_state:
+            skew_header += f" ｜ {skew_state}"
+        skew_body = f"{skew_header}\n{skew_commentary}"
         description_lines.append(f"```ansi\n{skew_body}\n```")
 
     embed_description = (
@@ -560,7 +574,8 @@ def create_watchlist_signal_embed(
         footprint_lines = [
             f" ├─ GEX PutWall (做市商底牆): {gex_putwall_str} (當前價差: {gex_dist_str})",
             f" ├─ Vol POC (籌碼控制中心): {vol_poc_str}",
-            f" └─ Option Skew (期權偏斜): {skew_val_str} (分位點: {skew_per_str})",
+            f" └─ Option Skew (期權偏斜): {skew_val_str} "
+            f"(分位點: {skew_per_str}{skew_sample_str})",
         ]
         embed.add_field(
             name="🧱 物理籌碼牆與邊緣偵測 (Market Footprints)",

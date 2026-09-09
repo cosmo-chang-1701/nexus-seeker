@@ -2,6 +2,7 @@ import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 import pandas as pd
 import sys
+from datetime import datetime, timedelta
 import os
 
 # Ensure we can import from nexus_core
@@ -57,12 +58,19 @@ async def test_analyst_agent_integration_with_sentiment_engine() -> None:
             index=pd.to_datetime(["2024-01-01", "2024-01-02"]),
         )
 
-        # Mock SentimentEngine 使用的期權數據
-        mock_exp.return_value = ["2024-06-21"]
+        # Mock SentimentEngine 使用的期權數據。
+        # calculate_skew() 只接受 DTE >= 7 的到期日並挑最接近 30 DTE 的一檔，
+        # 因此到期日必須相對「今天」動態產生——寫死的過去日期會被正確地判為
+        # 涵蓋不足而降級（舊實作會無視 DTE 直接回退 expiries[0]）。
+        mock_exp.return_value = [
+            (datetime.now().date() + timedelta(days=30)).strftime("%Y-%m-%d")
+        ]
         mock_quote_svc.return_value = {"c": 100.0}
 
         mock_chain_obj = MagicMock()
-        # Skew 計算邏輯：Calls > 105, Puts < 95
+        # Skew 計算邏輯：各邊取 |δ| 最接近 25-Delta 的價外合約。
+        # 於 30 DTE、spot=100 下：Call 選 strike 105 (δ≈0.223, IV 0.20)、
+        # Put 選 strike 95 (δ≈-0.194, IV 0.23)。
         mock_chain_obj.calls = pd.DataFrame(
             {"strike": [105, 110], "impliedVolatility": [0.2, 0.22]}
         )

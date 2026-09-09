@@ -220,6 +220,7 @@ class RadarDataMixin:
             get_indicator_percentile,
             get_last_stored_iv,
         )
+        from market_analysis.sentiment.skew_taxonomy import SKEW_INDICATOR
 
         if not iv_metrics or "iv_rank" not in iv_metrics:
             last_iv = get_last_stored_iv(sym)
@@ -254,9 +255,17 @@ class RadarDataMixin:
         mp_near = radar_cache.get("mp_near") or market_cache.get("max_pain")
 
         # 讀取真實 Skew 與分位點
-        skew_val = get_last_stored_sentiment(sym, "SKEW")
-        if skew_val is not None:
-            skew_percentile = get_indicator_percentile(sym, "SKEW", skew_val)
+        # 分位需要足夠樣本，樣本不足時 get_indicator_percentile 回傳 None；
+        # 此時視同「沒有可用的真實 Skew」，往下走既有的快取/中性回退路徑。
+        stored_skew = get_last_stored_sentiment(sym, SKEW_INDICATOR)
+        stored_percentile = (
+            get_indicator_percentile(sym, SKEW_INDICATOR, stored_skew)
+            if stored_skew is not None
+            else None
+        )
+        if stored_skew is not None and stored_percentile is not None:
+            skew_val = stored_skew
+            skew_percentile = stored_percentile
         elif "skew" in radar_cache:
             skew_val = radar_cache.get("skew", 0.0)
             skew_percentile = radar_cache.get("skew_percentile", 50.0)
@@ -549,9 +558,12 @@ class RadarDataMixin:
             atr_15m_task,
         )
 
-        skew_val = skew_data.get("skew", 0.0) if isinstance(skew_data, dict) else 0.0
-        skew_percentile = SentimentEngine.get_indicator_percentile(
-            sym, "SKEW", skew_val
+        # calculate_skew() 已在同一個 dict 內回傳 skew_percentile（且與它實際
+        # 寫入歷史的那筆值同源）。舊實作在這裡拿 skew_data.get("skew", 0.0)
+        # ——缺資料時預設 0.0——再查一次 DB 重算，等於用一個假值去排名。
+        skew_val = skew_data.get("skew") if isinstance(skew_data, dict) else None
+        skew_percentile = (
+            skew_data.get("skew_percentile") if isinstance(skew_data, dict) else None
         )
 
         volume_pcr = (
@@ -843,9 +855,13 @@ class RadarDataMixin:
                 if isinstance(mp_data, dict)
                 else 0.0,
                 "mp_far": far_mp_val,
-                "is_divergence": skew_percentile > 85.0
+                # skew_percentile 可能為 None（樣本不足/期權鏈抓取失敗）；
+                # 分位缺失時這兩個極端旗標一律 False（fail-safe，不憑空觸發）。
+                "is_divergence": skew_percentile is not None
+                and skew_percentile > 85.0
                 and psq_res.get("momentum_value", 0.0) > 0,
-                "is_skew_extreme": skew_percentile > 85.0 or skew_percentile < 15.0,
+                "is_skew_extreme": skew_percentile is not None
+                and (skew_percentile > 85.0 or skew_percentile < 15.0),
                 "hvn_price": (vp_data or {}).get("hvn", 0.0),
                 "lvn_price": (vp_data or {}).get("lvn", 0.0),
                 "avg_vol_20d": vol_data.get("avg_volume_20", 0.0),

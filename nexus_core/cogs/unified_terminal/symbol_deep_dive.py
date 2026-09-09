@@ -317,9 +317,11 @@ class SymbolDeepDiveMixin:
 
         safe_skew = skew_data if isinstance(skew_data, dict) else {}
         result["skew"] = _safe_float(safe_skew.get("skew"), 0.0)
-        result["skew_percentile"] = SentimentEngine.get_indicator_percentile(
-            symbol, "SKEW", result["skew"]
-        )
+        # calculate_skew() 已在同一個 dict 內回傳分位（與它寫入歷史的那筆值同源）。
+        # 舊實作拿 _safe_float(..., 0.0) 的結果再查一次 DB 重算，缺資料時等於用
+        # 假的 0.0 去排名；直接沿用上游回傳值即可，順帶省下一次查詢。
+        result["skew_percentile"] = safe_skew.get("skew_percentile")
+        result["skew_sample_size"] = safe_skew.get("skew_sample_size")
 
         result["pcr"] = pcr_data if pcr_data is not None else {}
         result["uoa"] = uoa_data if uoa_data is not None else []

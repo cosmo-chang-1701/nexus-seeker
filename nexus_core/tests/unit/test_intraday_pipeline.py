@@ -233,6 +233,67 @@ def test_post_market_attribution_evolution(squeeze_engine: Any):  # type: ignore
 
 
 @pytest.mark.asyncio
+async def test_build_watchlist_heartbeat_embed_survives_missing_skew(
+    intraday_pipeline: Any,
+) -> None:
+    """Skew 完全無資料時仍要送得出整封心跳。
+
+    `option_skew` 是 Optional[float]（calculate_skew() 在期權鏈抓取失敗且無歷史
+    快取時回傳 None）。舊實作在 pipeline 端直接 f"{option_skew:+.2f}%" 格式化，
+    會拋 TypeError；該例外被 _run_loop 的逐檔 except 吞掉後，**該標的整封心跳
+    直接消失**，連帶讓 build_watchlist_skew_rule_commentary() 的
+    「分位數據缺失」降級分支永遠不可能被渲染出來。
+    """
+    evaluation = SimpleNamespace(
+        metrics=SimpleNamespace(
+            symbol="MU",
+            current_price=410.5,
+            iv_rank=None,
+            option_skew=None,
+            skew_percentile=None,
+            option_skew_state="N/A",
+            buy_zone_status="🟡 測試買區",
+            sell_zone_status="⚪ 測試賣區",
+        ),
+        tactical=SimpleNamespace(
+            alert_level="yellow",
+            scenario="wait",
+            sddm_route="STANDBY",
+        ),
+        event_context=SimpleNamespace(summary="未偵測到近期重大事件"),
+        symbol_gex=None,
+    )
+    user_context = SimpleNamespace(user_id=42, capital=120000.0, risk_limit=12.0)
+
+    with patch(
+        "database.is_symbol_in_portfolio",
+        return_value=False,
+    ), patch(
+        "database.get_user_holdings",
+        return_value=[],
+    ), patch(
+        "market_analysis.intraday_pipeline.pipeline.derive_watchlist_option_guidance",
+        return_value="option guidance",
+    ), patch(
+        "market_analysis.intraday_pipeline.pipeline.build_watchlist_option_plan",
+        new_callable=AsyncMock,
+        return_value="option-plan",
+    ), patch(
+        "market_analysis.intraday_pipeline.build_watchlist_skew_rule_commentary",
+        return_value="rule-skew-commentary",
+    ), patch(
+        "cogs.embed_builder.create_watchlist_signal_embed",
+        return_value=MagicMock(),
+    ) as mock_create_embed:
+        embed = await intraday_pipeline._build_watchlist_heartbeat_embed(
+            evaluation, user_context
+        )
+
+    assert embed is mock_create_embed.return_value
+    assert mock_create_embed.call_args[1]["skew_state"] == "N/A"
+
+
+@pytest.mark.asyncio
 async def test_build_watchlist_heartbeat_embed_includes_option_plan(
     intraday_pipeline: Any,
 ) -> None:
@@ -309,7 +370,10 @@ async def test_build_watchlist_heartbeat_embed_includes_option_plan(
     assert "quote" not in create_embed_kwargs
     assert create_embed_kwargs["option_guidance"] == "option guidance"
     assert create_embed_kwargs["event_risk_summary"] == "財報前風控"
-    assert create_embed_kwargs["skew_state"] == "+6.25% ｜ 左偏保護"
+    # pipeline 只傳型態字串；數值與分位改由 embed builder 用它既有、
+    # 已做過 None 降級的 skew_val_str / skew_per_str 格式化，
+    # 避免 option_skew=None 時在 pipeline 端拋 TypeError 吃掉整封心跳。
+    assert create_embed_kwargs["skew_state"] == "左偏保護"
     assert create_embed_kwargs["alert_level"] == "yellow"
     assert create_embed_kwargs["option_plan"] == "option-plan"
     assert create_embed_kwargs["skew_commentary"] == "rule-skew-commentary"
@@ -533,7 +597,8 @@ def test_skew_commentary_badge_syncs_with_tactical_route() -> None:
 
     assert "🔴" in result
     assert "✅ 與操盤路由同向 (SDDM: SHIELD)" in result
-    assert "（Skew 型態：左偏保護）" in result
+    # 型態字串已移到呈現層的「Skew: ⋯ ｜ {型態}」表頭，判讀本文不再重複附掛。
+    assert "（Skew 型態：左偏保護）" not in result
 
 
 def test_skew_commentary_badge_diverges_from_tactical_route() -> None:
@@ -1080,11 +1145,96 @@ def test_skew_commentary_missing_pcr_does_not_fire_fomo_alert() -> None:
         commentary = build_watchlist_skew_rule_commentary(metrics, None)
         assert "FOMO" not in commentary, f"pcr={missing_pcr} 仍誤觸 FOMO 分支"
 
-    # 對照組：PCR 真的極低時仍應正常觸發
+    # 對照組：PCR 真的極低、且分位方向一致（右偏低分位）時仍應正常觸發。
+    # 原對照組用 skew_percentile=95.0（極端 Put 恐慌）搭 pcr=0.20 斷言 FOMO，
+    # 鎖住的正是被修掉的方向矛盾——見下方 test_..._respects_skew_direction。
     metrics_real = _build_skew_test_metrics(
-        pcr=0.20, skew_percentile=95.0, iv_rank=40.0, option_skew=1.0
+        pcr=0.20, skew_percentile=10.0, iv_rank=40.0, option_skew=-1.0
     )
     assert "FOMO" in build_watchlist_skew_rule_commentary(metrics_real, None)
+
+
+def test_skew_commentary_fomo_respects_skew_direction() -> None:
+    """極端 Put 恐慌分位不得被判成「極端追漲」。
+
+    FOMO 分支的條件只有 `pcr < 0.35`，且排在結構性背離之前。因為 30-70 已被
+    上游濾掉，skew_percentile=95（機構大舉買 Put）配 pcr=0.2 會輸出
+    「檢測到極端追漲行為」——方向完全相反；同一封 embed 裡 evaluation.py 的
+    閘門卻正確判成「結構性情緒背離」。
+    """
+    from market_analysis.intraday_pipeline import build_watchlist_skew_rule_commentary
+
+    metrics = _build_skew_test_metrics(
+        pcr=0.20, skew_percentile=95.0, iv_rank=40.0, option_skew=1.0
+    )
+    commentary = build_watchlist_skew_rule_commentary(metrics, None)
+
+    assert "FOMO" not in commentary
+    assert "結構性情緒背離" in commentary
+
+
+def test_skew_commentary_high_percentile_without_ivr_avoids_selling() -> None:
+    """分位 >90 但 IVR 缺失/偏低時，不得建議開立賣方收租結構。
+
+    「收租主動路由」的前提是 IV 已膨脹到有溢價可收。舊實作在 iv_rank 為 None
+    時靜默落入下一支分支，等於用一個未經檢查的前提做了方向性建議。
+    """
+    from market_analysis.intraday_pipeline import build_watchlist_skew_rule_commentary
+
+    missing_ivr = _build_skew_test_metrics(
+        pcr=0.8, skew_percentile=95.0, iv_rank=None, option_skew=6.0
+    )
+    missing_ivr_commentary = build_watchlist_skew_rule_commentary(missing_ivr, None)
+    assert "收租主動路由" not in missing_ivr_commentary
+    assert "IV Rank 數據缺失" in missing_ivr_commentary
+
+    low_ivr = _build_skew_test_metrics(
+        pcr=0.8, skew_percentile=95.0, iv_rank=30.0, option_skew=6.0
+    )
+    commentary = build_watchlist_skew_rule_commentary(low_ivr, None)
+    assert "收租主動路由" not in commentary
+    assert "防禦路由" in commentary
+
+    # 對照組：IVR 真的膨脹時仍走收租
+    high_ivr = _build_skew_test_metrics(
+        pcr=0.8, skew_percentile=95.0, iv_rank=85.0, option_skew=6.0
+    )
+    assert "收租主動路由" in build_watchlist_skew_rule_commentary(high_ivr, None)
+
+
+def test_skew_commentary_discloses_capital_retreat_gate() -> None:
+    """資金退守閘門啟動時，判讀必須明講不構成加碼依據。
+
+    evaluation.py 的 skew>90 / 負 Gamma 閘門會設 capital_retreat_required，
+    而本模組的「收租主動路由」等分支可能同時建議開倉賣方，同一封 embed 兩邊打架。
+    """
+    from market_analysis.intraday_pipeline import build_watchlist_skew_rule_commentary
+
+    metrics = _build_skew_test_metrics(
+        pcr=0.8, skew_percentile=95.0, iv_rank=85.0, option_skew=6.0
+    )
+    tactical = _build_skew_test_tactical(capital_retreat_required=True)
+
+    assert "資金退守閘門已啟動" in build_watchlist_skew_rule_commentary(
+        metrics, tactical
+    )
+
+
+def test_skew_commentary_neutral_badge_does_not_confirm_route() -> None:
+    """中性判讀不得對操盤路由回報「✅ 同向」。
+
+    舊實作讓任何 neutral 徽章都回報同向，包括紅燈 WAIT 路由——會被讀成
+    系統兩邊都同意可以動作。
+    """
+    from market_analysis.intraday_pipeline import build_watchlist_skew_rule_commentary
+
+    metrics = _build_skew_test_metrics(skew_percentile=50.0, option_skew=0.5)
+    tactical = _build_skew_test_tactical(scenario="wait", sddm_route="WAIT (尾部風險)")
+
+    result = build_watchlist_skew_rule_commentary(metrics, tactical)
+
+    assert "✅ 與操盤路由同向" not in result
+    assert "不構成對操盤路由的確認" in result
 
 
 def test_skew_commentary_missing_percentile_is_reported_as_missing() -> None:
