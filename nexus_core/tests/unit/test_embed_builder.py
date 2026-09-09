@@ -3437,6 +3437,61 @@ def test_create_tactical_symbol_embed_stored_iv_has_no_realtime_marker() -> None
     assert "SQLite 快取 IV（非即時）" in desc
 
 
+def test_create_tactical_symbol_embed_missing_skew_percentile_is_not_degraded() -> None:
+    """skew_percentile 為 None（樣本數 < 20 的 fail-safe 中性狀態）不應讓標題
+    出現「[數據未更新/降級模式]」——IV/GEX/報價等其餘資料都是即時抓取成功，
+    只是 Skew 的歷史分位還沒累積足夠樣本，不代表本次抓取退化。"""
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data = {
+        "symbol": "NVDA",
+        "iv_data": {
+            "current_iv": 0.5,
+            "iv_rank": 50.0,
+            "iv_percentile": 60.0,
+            "expected_move_weekly": 10.0,
+            "iv_status": "Normal",
+            "iv_source": "LIVE_IV",
+            "is_premarket": False,
+        },
+        "skew": 1.2,
+        "skew_percentile": None,
+        "expected_move_context": {"reference_price": 100.0},
+    }
+
+    embed = create_tactical_symbol_embed(data)
+    assert embed.title is not None
+    assert "[數據未更新/降級模式]" not in embed.title
+    desc = get_embed_text(embed)
+    assert "分位點: " in desc and "--%" in desc
+
+
+def test_create_tactical_symbol_embed_unavailable_iv_source_is_degraded() -> None:
+    """iv_source == "UNAVAILABLE"（整體 IV 抓取真的失敗）仍應在標題顯示
+    「[數據未更新/降級模式]」，確認上面的修正沒有連帶放寬真正的失敗情境。"""
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data = {
+        "symbol": "NVDA",
+        "iv_data": {
+            "current_iv": None,
+            "iv_rank": None,
+            "iv_percentile": None,
+            "expected_move_weekly": None,
+            "iv_status": "Normal",
+            "iv_source": "UNAVAILABLE",
+            "is_premarket": False,
+        },
+        "skew": 1.2,
+        "skew_percentile": 42.0,
+        "expected_move_context": {"reference_price": 100.0},
+    }
+
+    embed = create_tactical_symbol_embed(data)
+    assert embed.title is not None
+    assert "[數據未更新/降級模式]" in embed.title
+
+
 def test_create_tactical_symbol_embed_marks_stale_uoa_field() -> None:
     """uoa_age_seconds 超過 30 分鐘門檻時，UOA 欄位名稱應附上資料年齡標記
     （回應使用者要求：能看到快取資料實際的日期時間，而不只是布林警告）。"""

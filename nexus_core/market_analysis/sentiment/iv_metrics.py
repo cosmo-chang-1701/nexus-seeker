@@ -658,6 +658,8 @@ async def fetch_and_calculate_iv_metrics(
 
     except ValueError as ve:
         logger.warning(f"[{symbol}] IV 指標計算退級: {ve}")
+        # 用真實市場狀態判斷 is_premarket，而非無條件寫死 True：否則盤中一次暫時性
+        # 抓取失敗（網路抖動/DB 讀取錯誤）也會被誤標成「盤前」徽章文案。
         return IVMetrics(
             symbol=symbol,
             current_iv=None,
@@ -665,7 +667,7 @@ async def fetch_and_calculate_iv_metrics(
             iv_percentile=None,
             expected_move_weekly=None,
             iv_status="Normal",
-            is_premarket=True,
+            is_premarket=not is_market_open(),
             iv_source="UNAVAILABLE",
             reference_spot_price=spot_price,
             has_earnings_event=False,
@@ -682,7 +684,7 @@ async def fetch_and_calculate_iv_metrics(
             iv_percentile=None,
             expected_move_weekly=None,
             iv_status="Normal",
-            is_premarket=True,
+            is_premarket=not is_market_open(),
             iv_source="UNAVAILABLE",
             reference_spot_price=spot_price,
             has_earnings_event=False,

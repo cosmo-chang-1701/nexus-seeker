@@ -420,13 +420,17 @@ async def test_iv_rank_and_percentile_math() -> None:
 
 @pytest.mark.asyncio
 async def test_fetch_and_calculate_iv_metrics_value_error_warning() -> None:
-    """Test that a ValueError raised during calculation is handled as warning and returns default metrics."""
+    """Test that a ValueError raised during calculation is handled as warning and returns default
+    metrics, with is_premarket reflecting the real market state (not hardcoded True) — a transient
+    mid-day failure must not be mislabeled as pre-market."""
     symbol = "TEST_VALUE_ERROR"
     with patch(
         "services.market_data_service.get_quote", new_callable=AsyncMock
     ) as m_quote, patch(
         "services.market_data_service.get_history_df", new_callable=AsyncMock
-    ) as m_hist:
+    ) as m_hist, patch(
+        "market_analysis.sentiment.iv_metrics.is_market_open", return_value=False
+    ):
         m_quote.return_value = {"c": 0.0}
         m_hist.return_value = pd.DataFrame()
 
@@ -439,6 +443,29 @@ async def test_fetch_and_calculate_iv_metrics_value_error_warning() -> None:
         assert metrics.expected_move_weekly is None
         assert metrics.iv_status == "Normal"
         assert metrics.is_premarket is True
+
+
+@pytest.mark.asyncio
+async def test_fetch_and_calculate_iv_metrics_value_error_during_market_hours_not_premarket() -> (
+    None
+):
+    """A ValueError raised while the market is genuinely open must NOT be mislabeled as
+    pre-market — is_premarket should track real market state even on the failure path."""
+    symbol = "TEST_VALUE_ERROR_MARKET_OPEN"
+    with patch(
+        "services.market_data_service.get_quote", new_callable=AsyncMock
+    ) as m_quote, patch(
+        "services.market_data_service.get_history_df", new_callable=AsyncMock
+    ) as m_hist, patch(
+        "market_analysis.sentiment.iv_metrics.is_market_open", return_value=True
+    ):
+        m_quote.return_value = {"c": 0.0}
+        m_hist.return_value = pd.DataFrame()
+
+        metrics = await SentimentEngine.fetch_and_calculate_iv_metrics(symbol)
+        assert isinstance(metrics, IVMetrics)
+        assert metrics.iv_source == "UNAVAILABLE"
+        assert metrics.is_premarket is False
 
 
 @pytest.mark.asyncio

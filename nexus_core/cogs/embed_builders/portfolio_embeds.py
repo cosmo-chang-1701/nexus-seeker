@@ -524,10 +524,13 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 title_suffix = " [盤前數據未更新/降級模式]"
 
     current_iv_num = _to_float_or_none(current_iv_val)
-    skew_percentile = _to_float_or_none(data.get("skew_percentile"))
-    is_degraded = (
-        iv_source == "UNAVAILABLE" or current_iv_num is None or skew_percentile is None
-    )
+    # 注意：skew_percentile is None 刻意不計入 is_degraded——分位數需要 20 筆
+    # sentiment_history 樣本才能算出，樣本不足時回傳 None 是設計上的 fail-safe
+    # 中性狀態，不代表本次抓取退化或使用了快取值（Skew 欄位本身已用 --% 呈現，
+    # 見下方 skew_val_str/skew_per_str）。只有整體 IV 抓取真的失敗
+    # （iv_source == "UNAVAILABLE" 或 current_iv_num is None）才應該讓標題顯示
+    # 「數據未更新/降級模式」。
+    is_degraded = iv_source == "UNAVAILABLE" or current_iv_num is None
     if is_degraded and not title_suffix:
         title_suffix = " [數據未更新/降級模式]"
 
