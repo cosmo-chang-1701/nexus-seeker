@@ -4693,6 +4693,52 @@ async def test_confirm_entry_signal_all_six_conditions_pass(
 
 
 @pytest.mark.asyncio
+@patch("database.calendar_cache.get_cached_earnings", return_value=None)
+@patch(
+    "market_analysis.index_microstructure.get_market_regime",
+    new_callable=AsyncMock,
+    return_value="NORMAL",
+)
+@patch(
+    "services.market_data_service.get_all_option_expiries",
+    new_callable=AsyncMock,
+    return_value=_FAR_EXPIRIES,
+)
+async def test_confirm_entry_signal_reuses_prefetched_market_data(
+    mock_expiries: AsyncMock,
+    mock_regime: AsyncMock,
+    mock_earnings: MagicMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """條件一收到呼叫端已預先抓取的 df_15m / session_vwap 時，不得再對
+    services.market_data_service.get_history_df 或
+    market_analysis.vwap_utils.fetch_session_vwap 發起任何額外網路請求
+    (DYNAMIC 模式路由至 Regime III 時，避免與 classify_dynamic_regime 重複抓取
+    同一標的的 15m K 線與 Session VWAP)。"""
+    with (
+        patch(
+            "services.market_data_service.get_history_df",
+            new_callable=AsyncMock,
+            side_effect=AssertionError("不應重複抓取 15m K 線"),
+        ),
+        patch(
+            "market_analysis.vwap_utils.fetch_session_vwap",
+            new_callable=AsyncMock,
+            side_effect=AssertionError("不應重複抓取 Session VWAP"),
+        ),
+    ):
+        confirmed, reason = await engine._confirm_entry_signal(
+            "TEST",
+            _green_candidate_radar(),
+            100.0,
+            df_15m=_GREEN_15M_DF,
+            session_vwap=99.0,
+        )
+    assert confirmed is True
+    assert "條件一✅" in reason
+
+
+@pytest.mark.asyncio
 async def test_confirm_entry_signal_shows_all_six_reasons_even_when_short_circuited(
     engine: DynamicRolloverEngine,
 ) -> None:
@@ -6106,6 +6152,57 @@ async def test_evaluate_opportunity_cost_for_satellites_dynamic_routes_via_regim
     assert len(instructions) == 1
     assert instructions[0]["entry_regime"] == "REGIME_I_LEFT_CATCH"
     assert instructions[0]["suggested_strategy"] == "測試策略指令"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_opportunity_cost_for_satellites_dynamic_regime_iii_reuses_market_data(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """trading_strategy=DYNAMIC 時，Regime III (右側動能態) 應將分類階段已抓取的
+    15m frame / Session VWAP 原樣傳給 _confirm_entry_signal，避免對同一標的重複
+    發起 15m K 線與 Session VWAP 的網路請求（比照 Regime I 左側鐵律既有的重用
+    模式）。"""
+    sentinel_df_15m = pd.DataFrame({"Close": [1.0]})
+
+    with (
+        patch(
+            "market_analysis.dynamic_rollover.opportunity_cost.get_full_user_context",
+            return_value=MagicMock(trading_strategy="DYNAMIC"),
+        ),
+        patch(
+            "market_analysis.dynamic_rollover.regime_classifier.classify_dynamic_regime",
+            new_callable=AsyncMock,
+            return_value=(
+                DynamicRegime.REGIME_III_RIGHT_MOMENTUM,
+                "測試regime",
+                RegimeMarketData(
+                    df_15m=sentinel_df_15m, session_vwap=123.45, atr_15m=1.0
+                ),
+            ),
+        ),
+        patch.object(
+            engine,
+            "_confirm_entry_signal",
+            new_callable=AsyncMock,
+            return_value=(True, "右側測試通過"),
+        ) as mock_confirm,
+    ):
+        (
+            instructions,
+            entry_confirmation,
+        ) = await engine.evaluate_opportunity_cost_for_satellites(
+            user_id=999999005,
+            portfolio_assets=[],
+            already_flagged_symbols=set(),
+            candidate_symbol="TEST",
+            candidate_radar=_green_candidate_radar(),
+        )
+    mock_confirm.assert_awaited_once()
+    _args, kwargs = mock_confirm.call_args
+    assert kwargs["df_15m"] is sentinel_df_15m
+    assert kwargs["session_vwap"] == 123.45
+    assert entry_confirmation == (True, "右側測試通過")
+    assert instructions == []
 
 
 @pytest.mark.asyncio

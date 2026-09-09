@@ -1,3 +1,4 @@
+import asyncio
 import math
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -57,9 +58,17 @@ async def _confirm_entry_condition1_breakout(
     gex_profile: Optional[dict],
     reasons: list,
     net_gex: Optional[float] = None,
+    df_15m: Optional[Any] = None,
+    session_vwap: Optional[float] = None,
 ) -> bool:
     """條件一：結構性右側放量突破確認 (15m 實體陽線收盤 + 放量，站穩 Gamma Flip
     估算門檻或全域 Long Gamma 替代門檻，且須站穩 Session VWAP)。
+
+    :param df_15m: 呼叫端 (DYNAMIC 模式下 `regime_classifier.classify_dynamic_regime`
+        路由至 REGIME_III 時) 若已抓取過同一標的的 15m K 線 frame，原樣傳入以避免
+        本函式內部重複發起網路請求；為 None 時比照既有行為自行抓取。
+    :param session_vwap: 同上，避免重複抓取 Session VWAP（`fetch_session_vwap`
+        預設 `force_refresh=True`，每次呼叫皆為真實網路請求，重複抓取代價不小）。
 
     Gamma Flip 邊界處理與 Fallback 機制：
     - 若全鏈期權分佈極端導致無零交叉點 (estimate_symbol_gamma_flip <= 0)：
@@ -109,27 +118,52 @@ async def _confirm_entry_condition1_breakout(
             )
             return False
 
-    try:
-        from services import market_data_service
+    async def _fetch_df_15m() -> Any:
+        try:
+            from services import market_data_service
 
-        df_15m = await market_data_service.get_history_df(
-            candidate_symbol, period="5d", interval="15m"
+            return await market_data_service.get_history_df(
+                candidate_symbol, period="5d", interval="15m"
+            )
+        except Exception as e:
+            logger.warning(f"[{candidate_symbol}] 15m K 線抓取失敗: {e}")
+            return None
+
+    async def _fetch_session_vwap() -> float:
+        try:
+            from market_analysis.vwap_utils import fetch_session_vwap
+
+            return await fetch_session_vwap(candidate_symbol)
+        except Exception as e:
+            logger.warning(f"[{candidate_symbol}] Session VWAP 抓取失敗: {e}")
+            return 0.0
+
+    # 兩者互不依賴 (皆只需 candidate_symbol)，皆需重新抓取時以 asyncio.gather
+    # 併發執行取代原本序列 await，省下一趟網路往返延遲；呼叫端已提供其中一項
+    # 或兩項時直接沿用，完全略過對應的網路請求。
+    resolved_df_15m: Any = df_15m
+    resolved_session_vwap: float
+    if df_15m is None and session_vwap is None:
+        resolved_df_15m, resolved_session_vwap = await asyncio.gather(
+            _fetch_df_15m(), _fetch_session_vwap()
         )
-    except Exception as e:
-        df_15m = None
-        logger.warning(f"[{candidate_symbol}] 15m K 線抓取失敗: {e}")
+    else:
+        if resolved_df_15m is None:
+            resolved_df_15m = await _fetch_df_15m()
+        resolved_session_vwap = (
+            session_vwap if session_vwap is not None else await _fetch_session_vwap()
+        )
 
-    if df_15m is None or df_15m.empty or len(df_15m) < _ENTRY_VOLUME_LOOKBACK_BARS + 1:
+    if (
+        resolved_df_15m is None
+        or resolved_df_15m.empty
+        or len(resolved_df_15m) < _ENTRY_VOLUME_LOOKBACK_BARS + 1
+    ):
         reasons.append("條件一❌：15m K 線資料不足，無法確認突破")
         return False
 
-    try:
-        from market_analysis.vwap_utils import fetch_session_vwap
-
-        session_vwap = await fetch_session_vwap(candidate_symbol)
-    except Exception as e:
-        session_vwap = 0.0
-        logger.warning(f"[{candidate_symbol}] Session VWAP 抓取失敗: {e}")
+    df_15m = resolved_df_15m
+    session_vwap = resolved_session_vwap
 
     if is_fallback_mode:
         atr_15m = 0.0
@@ -689,6 +723,8 @@ class _OpportunityCostMixin:
         candidate_symbol: str,
         candidate_radar: Dict[str, Any],
         target_spot: float,
+        df_15m: Optional[Any] = None,
+        session_vwap: Optional[float] = None,
     ) -> Tuple[bool, str]:
         """
         防洗盤實戰策略：進場訊號六重嚴格過濾鐵律。六項條件必須同時成立才允許
@@ -704,6 +740,13 @@ class _OpportunityCostMixin:
         六項條件各自的判斷邏輯拆分至模組層級的 _confirm_entry_condition{1..6}_*
         函式（本檔案類別定義之前），此處僅負責準備各條件共用的衍生資料
         （避免重複解析 candidate_radar）、依序呼叫並串接 gating 關係。
+
+        :param df_15m: DYNAMIC 模式下 `regime_classifier.classify_dynamic_regime`
+            路由至 REGIME_III 時，原樣傳入分類階段已抓取的同一份 15m K 線 frame，
+            比照 `left_side_entry._confirm_left_entry_signal` 既有的重用模式，
+            避免條件一內部重複發起網路請求、也避免「盤勢分類」與「進場確認」
+            建立在不同時間點抓取的資料快照上。
+        :param session_vwap: 同上，避免重複抓取 Session VWAP。
         """
         reasons: list[str] = []
 
@@ -738,7 +781,13 @@ class _OpportunityCostMixin:
             net_gex = 0.0
 
         c1_passed = await _confirm_entry_condition1_breakout(
-            candidate_symbol, target_spot, gex_profile, reasons, net_gex=net_gex
+            candidate_symbol,
+            target_spot,
+            gex_profile,
+            reasons,
+            net_gex=net_gex,
+            df_15m=df_15m,
+            session_vwap=session_vwap,
         )
         c2_passed = _confirm_entry_condition2_support_wall(
             candidate_symbol, gex_profile_data, target_spot, reasons
@@ -860,7 +909,13 @@ class _OpportunityCostMixin:
             entry_regime = regime.value
             if regime == DynamicRegime.REGIME_III_RIGHT_MOMENTUM:
                 is_entry_confirmed, entry_reason = await self._confirm_entry_signal(
-                    candidate_symbol, candidate_radar, target_spot
+                    candidate_symbol,
+                    candidate_radar,
+                    target_spot,
+                    # 原樣沿用分類階段已抓取的 15m frame / Session VWAP，避免對
+                    # 同一標的重複發起網路請求 (比照下方 REGIME_I 分支既有作法)。
+                    df_15m=regime_market_data.df_15m,
+                    session_vwap=regime_market_data.session_vwap,
                 )
             elif regime == DynamicRegime.REGIME_I_LEFT_CATCH:
                 (

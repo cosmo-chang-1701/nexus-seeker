@@ -43,6 +43,8 @@ class _CoreDeploymentMixin:
             candidate_symbol: str,
             candidate_radar: Dict[str, Any],
             target_spot: float,
+            df_15m: Optional[Any] = None,
+            session_vwap: Optional[float] = None,
         ) -> Tuple[bool, str]: ...
 
     async def evaluate_core_deployment(

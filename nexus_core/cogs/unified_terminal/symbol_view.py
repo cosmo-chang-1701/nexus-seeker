@@ -310,7 +310,14 @@ class SymbolHubView(discord.ui.View):
                         six_rule_passed,
                         six_rule_reason,
                     ) = await engine._confirm_entry_signal(
-                        self.symbol, self.base_data, target_spot
+                        self.symbol,
+                        self.base_data,
+                        target_spot,
+                        # 原樣沿用分類階段已抓取的 15m frame / Session VWAP，
+                        # 避免對同一標的重複發起網路請求 (比照下方 REGIME_I
+                        # 分支既有作法)。
+                        df_15m=regime_market_data.df_15m,
+                        session_vwap=regime_market_data.session_vwap,
                     )
                 elif dynamic_regime == DynamicRegime.REGIME_I_LEFT_CATCH:
                     (
