@@ -497,6 +497,11 @@ def create_watchlist_signal_embed(
                     f"\n └─ 建議口數上限: {contracts} 口 (風險配額: ${risk:.2f})"
                 )
 
+    # 注意：skew_percentile (skew_per) is None 刻意不計入 is_degraded——分位數需要
+    # 20 筆 sentiment_history 樣本才能算出，樣本不足時回傳 None 是設計上的
+    # fail-safe 中性狀態，不代表本次抓取退化（Skew 欄位本身已用 --% 呈現，見下方
+    # skew_per_str）。skew_val（真正的即時 Skew 數值計算失敗）與其他欄位仍照舊
+    # 視為真降級。
     is_degraded = (
         is_premarket
         or iv_source == "UNAVAILABLE"
@@ -504,7 +509,6 @@ def create_watchlist_signal_embed(
         or iv_rank is None
         or gex_putwall is None
         or skew_val is None
-        or skew_per is None
         # 歷史快取降級（期權鏈抓取失敗、沿用上次成功值）也是降級模式的一種，
         # 過去 is_fallback 完全沒有人讀，title 因此不會帶降級後綴。
         or skew_is_fallback

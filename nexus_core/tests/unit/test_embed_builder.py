@@ -2735,6 +2735,142 @@ def test_create_watchlist_signal_embed_non_degraded() -> None:
     assert "OI PCR (結構防禦): 0.90" in desc
 
 
+def test_create_watchlist_signal_embed_missing_skew_percentile_is_not_degraded() -> (
+    None
+):
+    """skew_percentile 為 None（樣本數 < 20 的 fail-safe 中性狀態）不應讓標題
+    出現「[數據未更新/降級模式]」——IV/GEX/報價等其餘資料都是即時抓取成功，
+    只是 Skew 的歷史分位還沒累積足夠樣本，不代表本次抓取退化。"""
+    from models.schemas import EnhancedWatchlistMetrics
+    from models.quant import IVMetrics
+
+    metrics = EnhancedWatchlistMetrics(
+        symbol="AAPL",
+        exchange="NASDAQ",
+        current_price=150.0,
+        buy_zone_status="🟢 買點支撐",
+        buy_price_phase1=140.0,
+        buy_price_phase2=135.0,
+        buy_price_phase3=130.0,
+        sell_zone_status="🟢 賣點壓力",
+        sell_price_phase1=160.0,
+        sell_price_phase2=165.0,
+        sell_price_phase3=170.0,
+        pe_ratio=30.0,
+        rsi_14=50.0,
+        atr_14=3.0,
+        beta=1.0,
+        ma20=148.0,
+        ma50=145.0,
+        ma200=140.0,
+        iv_rank=25.0,
+        iv_percentile=30.0,
+        option_skew=2.5,
+        skew_percentile=None,
+        option_skew_state="正常",
+        pcr=0.8,
+        volume_poc=145.0,
+        gex_max_put_wall=130.0,
+        vanna_sensitivity=0.05,
+        relative_strength_spy=1.0,
+        iv_source="LIVE_IV",
+        is_premarket=False,
+        volume_pcr=0.8,
+        oi_pcr=0.9,
+    )
+
+    iv_metrics = IVMetrics(
+        symbol="AAPL",
+        current_iv=0.35,
+        iv_rank=25.0,
+        iv_percentile=30.0,
+        expected_move_weekly=5.0,
+        iv_status="Normal",
+        is_premarket=False,
+        iv_source="LIVE_IV",
+        reference_spot_price=150.0,
+    )
+
+    embed = create_watchlist_signal_embed(
+        symbol="AAPL",
+        metrics=metrics,
+        iv_metrics=iv_metrics,
+        alert_level="green",
+    )
+
+    assert embed is not None
+    assert embed.title is not None
+    assert "[數據未更新/降級模式]" not in embed.title
+
+    desc = get_embed_text(embed) or ""
+    assert "Option Skew (期權偏斜): +2.50% (分位點: --%)" in desc
+
+
+def test_create_watchlist_signal_embed_unavailable_iv_source_is_degraded() -> None:
+    """iv_source == "UNAVAILABLE"（整體 IV 抓取真的失敗）仍應在標題顯示
+    「[數據未更新/降級模式]」，確認上面的修正沒有連帶放寬真正的失敗情境。"""
+    from models.schemas import EnhancedWatchlistMetrics
+    from models.quant import IVMetrics
+
+    metrics = EnhancedWatchlistMetrics(
+        symbol="AAPL",
+        exchange="NASDAQ",
+        current_price=150.0,
+        buy_zone_status="🟢 買點支撐",
+        buy_price_phase1=140.0,
+        buy_price_phase2=135.0,
+        buy_price_phase3=130.0,
+        sell_zone_status="🟢 賣點壓力",
+        sell_price_phase1=160.0,
+        sell_price_phase2=165.0,
+        sell_price_phase3=170.0,
+        pe_ratio=30.0,
+        rsi_14=50.0,
+        atr_14=3.0,
+        beta=1.0,
+        ma20=148.0,
+        ma50=145.0,
+        ma200=140.0,
+        iv_rank=None,
+        iv_percentile=None,
+        option_skew=2.5,
+        skew_percentile=60.0,
+        option_skew_state="正常",
+        pcr=0.8,
+        volume_poc=145.0,
+        gex_max_put_wall=130.0,
+        vanna_sensitivity=0.05,
+        relative_strength_spy=1.0,
+        iv_source="UNAVAILABLE",
+        is_premarket=False,
+        volume_pcr=0.8,
+        oi_pcr=0.9,
+    )
+
+    iv_metrics = IVMetrics(
+        symbol="AAPL",
+        current_iv=None,
+        iv_rank=None,
+        iv_percentile=None,
+        expected_move_weekly=None,
+        iv_status="Normal",
+        is_premarket=False,
+        iv_source="UNAVAILABLE",
+        reference_spot_price=150.0,
+    )
+
+    embed = create_watchlist_signal_embed(
+        symbol="AAPL",
+        metrics=metrics,
+        iv_metrics=iv_metrics,
+        alert_level="green",
+    )
+
+    assert embed is not None
+    assert embed.title is not None
+    assert "[數據未更新/降級模式]" in embed.title
+
+
 def test_create_watchlist_signal_embed_marks_stale_max_pain_with_age() -> None:
     """max_pain_data.is_stale=True 搭配 updated_at 應在心跳的 Max Pain 行同時
     顯示 [快取 / API 降級] 標記與人類可讀的資料年齡（回應使用者要求：不只顯示
