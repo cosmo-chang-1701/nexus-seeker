@@ -21,6 +21,10 @@ from .constants import (
     _EARNINGS_PRE_EVENT_BUFFER_DAYS,
     _ENTRY_ASYMMETRIC_ROOM_PCT,
     _ENTRY_CANDIDATE_MIN_DTE,
+    _ENTRY_DTE_BAND_SHORT,
+    _ENTRY_DTE_BAND_SWING,
+    _ENTRY_IVR_SPREAD_THRESHOLD,
+    _ENTRY_ROOM_EXTENDED_PCT,
     _ENTRY_SUPPORT_WALL_MAX_DISTANCE_PCT,
     _ENTRY_UOA_CAP_RATIO_THRESHOLD,
     _ENTRY_UOA_MIN_DTE,
@@ -398,17 +402,23 @@ async def _confirm_entry_condition5_macro_earnings_gate(
     candidate_symbol: str,
     prior_conditions_passed: bool,
     reasons: list,
-) -> bool:
+) -> Tuple[bool, Optional[int]]:
     """條件五：總經負 Gamma 與財報黑天鵝防禦閘門 (前四項通過時才發動判定，避免
     為了一個已經確定會失敗的整體結果，仍去打財報行事曆/總經 Regime 這類真實
     I/O)。未發動時仍在 reasons 補上一行「⏭️ 略過」標記 (不觸發任何額外 I/O)，
     確保「進場鐵律檢核」面板永遠完整列出六項條件，不會因短路優化而讓使用者
-    誤以為只有四重鐵律。"""
+    誤以為只有四重鐵律。
+
+    回傳 (是否通過, 距財報天數)。第二個元素純粹是把本函式「為了判定財報緩衝
+    而本來就已經查到」的天數一併帶出，供條件六推導建議進場結構的 DTE band 時
+    收斂上限用 (不建議抱過財報)，零額外 I/O。查無財報、解析失敗或短路略過時
+    為 None；財報已過期時為負值，由消費端自行決定如何處理。"""
     if not prior_conditions_passed:
         reasons.append("條件五⏭️：前四項未全數通過，略過總經/財報安全閥檢查")
-        return True
+        return True, None
 
     c5_passed = True
+    days_to_er: Optional[int] = None
     try:
         from database.calendar_cache import get_cached_earnings
 
@@ -445,21 +455,81 @@ async def _confirm_entry_condition5_macro_earnings_gate(
     if c5_passed:
         reasons.append("條件五✅：總經環境與財報事件風控安全")
 
-    return c5_passed
+    return c5_passed, days_to_er
+
+
+def _derive_entry_structure_directive(
+    call_wall_room_pct: float,
+    target_ivr: float,
+    days_to_earnings: Optional[int],
+) -> str:
+    """由「當下市況」推導右側進場的建議合約天期 (DTE band) 與部位結構。
+
+    純函式、零 I/O：三個輸入全部是六重鐵律評估過程中本來就已經算好/查到的值
+    (條件三的 Call Wall 空間、candidate_radar 既有的 IV Rank、條件五既有的距
+    財報天數)。
+
+    設計意圖：天期是「每輪重評都依當下市況重算的輸出參數」，不是在進場當下蓋章
+    後就永不更新的部位標籤——後者正是 transition_engine.py 路徑 2/3/4 被移除的
+    原因 (entry_regime 標籤陳舊導致演化後的部位失去所有例行停損)。作法完全比照
+    左側條件六既有的 IVR 分流 (_confirm_left_entry_condition6_candidate_dte_ivr)。
+
+    ⚠️ 本函式的輸出「不參與」條件六的 Pass/Fail 判定，純為附加建議文字。
+
+    - DTE band：Call Wall 空間 >= _ENTRY_ROOM_EXTENDED_PCT 視為延伸跑道，給波段
+      band；否則目標就在上方不遠處的 Call Wall，給短天期 band。
+    - 財報收斂：band 上限不跨過財報日 (條件五已保證距財報 >
+      _EARNINGS_PRE_EVENT_BUFFER_DAYS，故此處只會收斂、不會歸零)。收斂後若下限
+      高於上限則一併塌陷至上限，避免輸出反向區間。
+    - 結構：IVR > _ENTRY_IVR_SPREAD_THRESHOLD 時改建議 Bull Call Spread，避免在
+      隱波高位開單腳買方後遭遇 IV Crush 的 Vega 崩塌 (與左側同一門檻、同一理由)。
+    """
+    is_extended_room = call_wall_room_pct >= _ENTRY_ROOM_EXTENDED_PCT
+    lo, hi = _ENTRY_DTE_BAND_SWING if is_extended_room else _ENTRY_DTE_BAND_SHORT
+    horizon_label = "波段" if is_extended_room else "短線"
+
+    earnings_capped = False
+    if days_to_earnings is not None and 0 < days_to_earnings < hi:
+        hi = days_to_earnings
+        lo = min(lo, hi)
+        earnings_capped = True
+
+    dte_text = f"DTE {lo}-{hi}" if lo < hi else f"DTE {hi}"
+    if earnings_capped:
+        dte_text += f" (財報前收斂，距財報 {days_to_earnings} 天)"
+
+    if target_ivr <= _ENTRY_IVR_SPREAD_THRESHOLD:
+        structure = "Long Call (ATM/輕度 OTM)"
+    else:
+        structure = "Bull Call Spread (IVR 過高，避免單腳買方 Vega 崩塌)"
+
+    return f"{dte_text} {horizon_label} ｜ {structure}"
 
 
 async def _confirm_entry_condition6_candidate_dte(
     candidate_symbol: str,
     prior_conditions_passed: bool,
     reasons: list,
-) -> bool:
+    call_wall_room_pct: float = 0.0,
+    target_ivr: float = 0.0,
+    days_to_earnings: Optional[int] = None,
+) -> Tuple[bool, Optional[str]]:
     """條件六：避開 candidate 自身最近效期選擇權週期的結算日前夕/當日雜訊
     (0/1 DTE)。前五項通過時才發動判定，比照條件五同樣的短路優化理由，未發動
     時仍在 reasons 補上一行「⏭️ 略過」標記，維持六項條件在檢核面板永遠完整
-    列出。"""
+    列出。
+
+    回傳 (是否通過, structure_directive)。structure_directive 為依當下市況現算
+    的建議合約天期與結構字串 —— 這使本函式與左側條件六
+    (_confirm_left_entry_condition6_candidate_dte_ivr) 的簽章完全收斂。
+
+    ⚠️ structure_directive 純為附加輸出，「不影響」本條件的 Pass/Fail：通過與否
+    仍完全由 dte_nearest > _ENTRY_CANDIDATE_MIN_DTE 決定，與本次改動前逐字相同。
+    未通過或短路略過時一律為 None。
+    """
     if not prior_conditions_passed:
         reasons.append("條件六⏭️：前五項未全數通過，略過 candidate 自身 DTE 雜訊檢查")
-        return True
+        return True, None
 
     c6_passed = False
     try:
@@ -472,21 +542,31 @@ async def _confirm_entry_condition6_candidate_dte(
 
     if not expiries:
         reasons.append("條件六❌：無法取得標的最近效期選擇權到期日清單")
-        return c6_passed
+        return c6_passed, None
 
     try:
         nearest_expiry_dt = datetime.strptime(expiries[0], "%Y-%m-%d").date()
         dte_nearest = (nearest_expiry_dt - datetime.now().date()).days
         c6_passed = dte_nearest > _ENTRY_CANDIDATE_MIN_DTE
-        reasons.append(
+        reason_line = (
             f"條件六{'✅' if c6_passed else '❌'}：標的最近效期 {expiries[0]} "
             f"DTE={dte_nearest}"
             f"（{'符合' if c6_passed else '低於'} 門檻 >{_ENTRY_CANDIDATE_MIN_DTE}）"
         )
-        return c6_passed
+        structure_directive: Optional[str] = None
+        if c6_passed:
+            structure_directive = _derive_entry_structure_directive(
+                call_wall_room_pct, target_ivr, days_to_earnings
+            )
+            reason_line += (
+                f"｜Call Wall 空間 {call_wall_room_pct:.1%}，"
+                f"IVR={target_ivr:.1f}% -> {structure_directive}"
+            )
+        reasons.append(reason_line)
+        return c6_passed, structure_directive
     except (ValueError, TypeError) as e:
         reasons.append(f"條件六❌：標的最近效期到期日解析失敗: {e}")
-        return False
+        return False, None
 
 
 class _OpportunityCostMixin:
@@ -725,7 +805,7 @@ class _OpportunityCostMixin:
         target_spot: float,
         df_15m: Optional[Any] = None,
         session_vwap: Optional[float] = None,
-    ) -> Tuple[bool, str]:
+    ) -> Tuple[bool, str, Optional[str]]:
         """
         防洗盤實戰策略：進場訊號六重嚴格過濾鐵律。六項條件必須同時成立才允許
         evaluate_opportunity_cost_for_satellites 對 candidate_symbol 實際啟動
@@ -735,7 +815,14 @@ class _OpportunityCostMixin:
         任何一項條件所需資料缺失、抓取失敗或無法確認，一律判定該條件未通過
         (不進場)，不預設通過、不略過。
 
-        回傳 (六項條件是否全數通過, 逐項原因說明字串，供 log 觀察用)。
+        回傳 (六項條件是否全數通過, 逐項原因說明字串供 log 觀察用,
+        建議進場結構 structure_directive)。
+
+        第三個元素是依「當下市況」現算的建議合約天期與部位結構 (見條件六的
+        _derive_entry_structure_directive)，讓天期成為每輪重評都重算的輸出參數，
+        而非在進場當下蓋章後永不更新的部位標籤。此簽章與左側
+        left_side_entry.py::_confirm_left_entry_signal 完全一致，兩套鐵律的
+        呼叫端因此可以無差別解包。未通過六重鐵律時一律為 None。
 
         六項條件各自的判斷邏輯拆分至模組層級的 _confirm_entry_condition{1..6}_*
         函式（本檔案類別定義之前），此處僅負責準備各條件共用的衍生資料
@@ -796,15 +883,34 @@ class _OpportunityCostMixin:
             uoa_list, call_wall, target_spot, reasons
         )
         c4_passed = _confirm_entry_condition4_uoa_dte(uoa_list, target_spot, reasons)
-        c5_passed = await _confirm_entry_condition5_macro_earnings_gate(
+        (
+            c5_passed,
+            days_to_earnings,
+        ) = await _confirm_entry_condition5_macro_earnings_gate(
             candidate_symbol,
             c1_passed and c2_passed and c3_passed and c4_passed,
             reasons,
         )
-        c6_passed = await _confirm_entry_condition6_candidate_dte(
+        # 條件六的建議進場結構所需的兩個輸入，全部取自本函式「已經解析好」的共用
+        # 衍生資料，零額外 I/O：Call Wall 空間沿用與條件三完全相同的帶正負號距離
+        # 公式；target_ivr 與左側 _confirm_left_entry_signal 同一來源。
+        call_wall_room_pct = (
+            (call_wall - target_spot) / target_spot
+            if call_wall > 0 and target_spot > 0
+            else 0.0
+        )
+        target_ivr = float(
+            candidate_radar.get("iv_metrics", {}).get("iv_rank", 0.0)
+            if candidate_radar.get("iv_metrics")
+            else 0.0
+        )
+        c6_passed, structure_directive = await _confirm_entry_condition6_candidate_dte(
             candidate_symbol,
             c1_passed and c2_passed and c3_passed and c4_passed and c5_passed,
             reasons,
+            call_wall_room_pct=call_wall_room_pct,
+            target_ivr=target_ivr,
+            days_to_earnings=days_to_earnings,
         )
 
         all_passed = (
@@ -815,7 +921,7 @@ class _OpportunityCostMixin:
             and c5_passed
             and c6_passed
         )
-        return all_passed, " | ".join(reasons)
+        return all_passed, " | ".join(reasons), structure_directive
 
     async def evaluate_opportunity_cost_for_satellites(
         self,
@@ -881,7 +987,7 @@ class _OpportunityCostMixin:
                 f"退回右側交易預設: {e}"
             )
 
-        suggested_strategy_override: Optional[str] = None
+        structure_directive: Optional[str] = None
         entry_regime: Optional[str] = None
 
         if trading_strategy == TradingStrategyMode.LEFT_SIDE.value:
@@ -890,7 +996,7 @@ class _OpportunityCostMixin:
             (
                 is_entry_confirmed,
                 entry_reason,
-                suggested_strategy_override,
+                structure_directive,
             ) = await _confirm_left_entry_signal(
                 candidate_symbol, candidate_radar, target_spot
             )
@@ -908,7 +1014,11 @@ class _OpportunityCostMixin:
             )
             entry_regime = regime.value
             if regime == DynamicRegime.REGIME_III_RIGHT_MOMENTUM:
-                is_entry_confirmed, entry_reason = await self._confirm_entry_signal(
+                (
+                    is_entry_confirmed,
+                    entry_reason,
+                    structure_directive,
+                ) = await self._confirm_entry_signal(
                     candidate_symbol,
                     candidate_radar,
                     target_spot,
@@ -921,7 +1031,7 @@ class _OpportunityCostMixin:
                 (
                     is_entry_confirmed,
                     entry_reason,
-                    suggested_strategy_override,
+                    structure_directive,
                 ) = await _confirm_left_entry_signal(
                     candidate_symbol,
                     candidate_radar,
@@ -941,7 +1051,11 @@ class _OpportunityCostMixin:
             # 六項條件必須同時成立才允許對 candidate_symbol 啟動任何機會成本
             # 轉倉指令；未通過時比照上方「找不到候選標的」的早退模式，靜默
             # 略過、不產生任何指令。
-            is_entry_confirmed, entry_reason = await self._confirm_entry_signal(
+            (
+                is_entry_confirmed,
+                entry_reason,
+                structure_directive,
+            ) = await self._confirm_entry_signal(
                 candidate_symbol, candidate_radar, target_spot
             )
 
@@ -1067,8 +1181,11 @@ class _OpportunityCostMixin:
                     "sell_ratio": result["rollover_ratio"],
                     "target_core": candidate_symbol,
                     "reason": reason_text,
-                    "suggested_strategy": suggested_strategy_override
-                    or result["strategy"],
+                    # suggested_strategy 維持 _calculate_rollover_decision 自行
+                    # 決策的工具別 (Buy Shares / Shares + ITM Call)，不被進場鐵律
+                    # 的期權結構建議覆寫；後者獨立走 structure_directive 欄位。
+                    "suggested_strategy": result["strategy"],
+                    "structure_directive": structure_directive,
                     "scenario": RolloverScenario.OPPORTUNITY_COST.value,
                     "is_manual_override_required": is_illiquid_warning,
                     "cash_impact": cash_impact,

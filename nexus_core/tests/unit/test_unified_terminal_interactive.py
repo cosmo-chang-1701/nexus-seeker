@@ -143,7 +143,11 @@ async def test_symbol_hub_entry_rules_calls_six_rule_check(  # type: ignore
         "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
         new_callable=AsyncMock,
     ) as mock_six_rule:
-        mock_six_rule.return_value = (False, "條件一✅：ok | 條件二❌：no support wall")
+        mock_six_rule.return_value = (
+            False,
+            "條件一✅：ok | 條件二❌：no support wall",
+            None,
+        )
         mock_builder.return_value = MagicMock(spec=discord.Embed)
 
         await view.btn_entry_rules.callback(mock_interaction)
@@ -156,6 +160,7 @@ async def test_symbol_hub_entry_rules_calls_six_rule_check(  # type: ignore
             trading_strategy="RIGHT_SIDE",
             dynamic_regime=None,
             dynamic_regime_reason=None,
+            structure_directive=None,
         )
         _, last_kwargs = mock_interaction.edit_original_response.call_args
         assert last_kwargs["embed"] is mock_builder.return_value
@@ -196,6 +201,7 @@ async def test_symbol_hub_entry_rules_routes_to_left_side_gate(  # type: ignore
             trading_strategy="LEFT_SIDE",
             dynamic_regime=None,
             dynamic_regime_reason=None,
+            structure_directive="Bull Call Spread",
         )
 
 
@@ -250,6 +256,7 @@ async def test_symbol_hub_entry_rules_routes_dynamic_to_regime_i(  # type: ignor
             trading_strategy="DYNAMIC",
             dynamic_regime="REGIME_I_LEFT_CATCH",
             dynamic_regime_reason="極端負乖離吸籌",
+            structure_directive=None,
         )
 
 

@@ -986,7 +986,7 @@ The platform features an automated **Dynamic Rollover Engine** (`market_analysis
 Scenario 2 (`opportunity_cost.py`)'s entry gate is no longer a single hardcoded ruleset. A per-user `/settings` option (`user_settings.trading_strategy`, migration `v068`, `TEXT DEFAULT 'RIGHT_SIDE'`) selects which entry ironclad rules apply. Stored as English enum codes (`RIGHT_SIDE` / `LEFT_SIDE` / `DYNAMIC`) with Chinese labels living purely in the presentation layer (`TRADING_STRATEGY_DISPLAY` in `cogs/settings_ui.py`) — same rationale as the pre-existing `RolloverScenario` enum. **Default `RIGHT_SIDE` means every existing user's behavior is unchanged until they opt in.**
 
 ### 1. `右側交易` (RIGHT_SIDE) — the pre-existing default
-The already-shipped six-rule breakout gate (`_confirm_entry_signal` / `_confirm_entry_condition1-6`), byte-identical to its previous behavior. A dedicated regression test locks this.
+The already-shipped six-rule breakout gate (`_confirm_entry_signal` / `_confirm_entry_condition1-6`). **Every condition's Pass/Fail is byte-identical to its previous behavior** and a dedicated regression test locks this; condition 6 additionally emits an advisory `structure_directive` (below) that does not participate in the verdict.
 
 ### 2. `左側交易` (LEFT_SIDE) — `market_analysis/dynamic_rollover/left_side_entry.py`
 A mirrored six-rule gate for mean-reversion / market-maker Put Wall bottom-fishing, structured exactly like the right-side one (shared derived data, `reasons` accumulation, conditions 5/6 short-circuit-skipped with ⏭️ when 1-4 don't all pass):
@@ -995,7 +995,7 @@ A mirrored six-rule gate for mean-reversion / market-maker Put Wall bottom-fishi
 3. **無恐慌踩踏 + 非對稱風報比**: no chasing PUT BTO print below the Put Wall, and `(min(VWAP, GammaFlip) − Spot)/Spot >= 3.5%`.
 4. **主力吸收認證**: a whale PUT STO (DTE≥14, ratio≥1.0, ≥$300k) or long-dated CALL BTO (DTE≥30, ratio≥0.8, ≥$200k).
 5. **總經/財報/VTS 安全閥**: *reuses* (imports) the right-side `_confirm_entry_condition5_macro_earnings_gate` for the shared earnings-buffer + macro-regime checks, adding only a VIX-backwardation clause on top.
-6. **Candidate Theta 磨底防禦**: DTE ≥ 21; returns a `structure_directive` (IVR ≤ 50 → light ITM/ATM Call; IVR > 50 → forced Bull Call Spread / Short Put) that flows into the instruction's `suggested_strategy`. This extra return value is the *only* signature deviation from the right-side mirror.
+6. **Candidate Theta 磨底防禦**: DTE ≥ 21; returns a `structure_directive` (IVR ≤ 50 → light ITM/ATM Call; IVR > 50 → forced Bull Call Spread / Short Put) that flows into the instruction's own `structure_directive` field. The right-side gate now returns the same 3-tuple, so the two signatures have converged — see 「進場天期是輸出參數，不是部位標籤」 below.
 
 **Two documented data-source limits, deliberately not faked:**
 - Condition 2's spec calls for "Put OI notional ≥ $1B", but the GEX scraper exposes no per-strike OI-notional field — only Net GEX. A **GEX-exposure-magnitude proxy threshold** is used instead, disclosed both in the docstring and in the user-visible reason string, per the repo's 啟發式代理數據揭露 convention.
@@ -1017,7 +1017,52 @@ Regime II is deliberately implemented as the `else` fallback rather than checkin
 
 `classify_dynamic_regime()` returns `(regime, reason, RegimeMarketData)`. The third element carries the 15m frame, Session VWAP and ATR₁₅ₘ it actually fetched, which the caller hands straight to the left-side gate when routing to Regime I — this removes 4 redundant `force_refresh` network requests per candidate per cycle **and**, more importantly, guarantees that "regime classification" and "entry confirmation" are computed from the same snapshot rather than two independently-fetched ones.
 
-### 4. Transition Engine (狀態切換引擎) — `market_analysis/dynamic_rollover/transition_engine.py`
+### 4. 進場天期是輸出參數，不是部位標籤 (`structure_directive`)
+
+Rather than splitting each gate into short/medium/long-term strategy modes, the **horizon is
+recomputed from live market state on every evaluation cycle** and emitted as an output. Both
+gates now return `(passed, reasons, structure_directive)`.
+
+Right-side condition 6 derives it in `_derive_entry_structure_directive()` (pure function,
+zero I/O — all three inputs are values the gate already computed or fetched):
+
+| Input | Source | Effect |
+|---|---|---|
+| Call Wall room `(call_wall - spot)/spot` | condition 3's own signed-distance formula | `>= _ENTRY_ROOM_EXTENDED_PCT` (10%) → swing band `_ENTRY_DTE_BAND_SWING` (21-45); else short band `_ENTRY_DTE_BAND_SHORT` (7-21) |
+| `iv_rank` | `candidate_radar["iv_metrics"]` — same source left-side uses | `> _ENTRY_IVR_SPREAD_THRESHOLD` (50.0) → Bull Call Spread instead of a single-leg long call (Vega-crush defense; same threshold and rationale as left-side) |
+| days to earnings | condition 5 now returns the value it already looked up | caps the band's upper bound (never hold across earnings); the lower bound collapses with it so an inverted range like `21-10` can't be emitted |
+
+The DTE band values reuse existing repo conventions (`transition_engine.py`'s 7-21 pyramid,
+the 21-45 「次月」 convention) rather than introducing new uncalibrated numbers — there is no
+backtest harness in this repo, so every threshold in `constants.py` is tuned by live
+observation and a 3-horizon × 2-side split would have meant ~90 uncalibratable thresholds.
+
+**Why an output and not a label.** A horizon stamped on a position at entry time and never
+updated is exactly the failure that got Transition Engine paths 2/3/4 deleted: `entry_regime`
+went stale and the evolved position lost every routine stop. Horizon is the most volatile
+attribute of all, so it is derived fresh each cycle instead.
+
+**`structure_directive` never overwrites `suggested_strategy`.** It rides on its own
+`RolloverInstruction` field. `suggested_strategy` answers *which instrument*
+(`_calculate_rollover_decision()` picks `Buy Shares` or `Shares + ITM Call`); the directive
+answers *which expiry band and structure, if expressed as options*. The earlier
+overwrite-based wiring would have erased `Shares + ITM Call` along with the ITM 70Δ strike
+and 30-45 DTE guidance it carries — `test_drill_scenario_1_nvda_decay_spcx_breakout_triggers_rollover`
+catches this.
+
+⚠️ **Scenario 5 (`core_deployment.py`) deliberately discards the directive.** Its opportunity
+branch emits `instrument_type="SPOT"` / `suggested_strategy="Buy Shares"` — it deploys CORE
+excess cash into the candidate's *shares*, so an options DTE/spread directive there would be
+actively misleading. The shared `entry_confirmation` tuple handed from Scenario 2 to
+Scenario 5 therefore stays a 2-tuple.
+
+Rendered in two places: the rollover DM's 「📥 轉入資產」 block
+(`create_dynamic_rollover_embed`) and the `/x symbol:` 🔐 進場鐵律檢核 tab's
+「🎯 建議進場結構」 field (`create_entry_rules_embed`). The latter also fixed an existing
+gap — `symbol_view.py` was discarding the left-side directive with `_`, so it never reached
+a user.
+
+### 5. Transition Engine (狀態切換引擎) — `market_analysis/dynamic_rollover/transition_engine.py`
 
 **職責邊界（重要）**：Regime 只負責「環境識別與進場權限許可」(Gatekeeper)；部位的生死存亡一律回歸獨立的風控階梯 (`anti_washout.py` 的微觀結構出場決策矩陣)。因此這個引擎只保留**一條**真正屬於狀態轉換的路徑：
 
@@ -1035,15 +1080,15 @@ Regime II is deliberately implemented as the `else` fallback rather than checkin
 
 **手動部位標記**：本平台從不自動下單，部位一律由使用者手動記錄，故動態引擎歸屬透過 `/add_trade`、`/edit_trade`、`/add_holding`、`/edit_holding` 的選填 `dynamic_entry_regime` 參數捕捉，存於既有 `assets.metadata` JSON 的 `dynamic_strategy_state`（**無需 schema migration**，比照 `asset_class`/`acquired_at` 既有作法）。`build_dynamic_strategy_state_for_symbol()` 另會擷取標記當下已收盤 15m K 棒的低點存為 `entry_bar_low`。語意界線：那是**標記當下**而非**成交當下**的 K 棒；若使用者事後才標記會產生偏移。抓取失敗留空，不猜測。
 
-### 5. Coordination with `anti_washout.py`'s exit matrix
+### 6. Coordination with `anti_washout.py`'s exit matrix
 出場階梯**對所有部位一律照跑**，不因部位被標記而跳過。路徑 1 的建議與階梯的出場判定**並存而非互斥**（兩者 dedup key 的 `action` 不同，可各自投遞）。
 
 早期版本讓 Transition Engine 完全取代已標記部位的出場矩陣，為此被迫為「軌道二極端瞬時停損」與「OPTIONS IV 崩塌快速通道」各開一個例外孔。職責邊界修正後，這兩個例外孔連同 `continue` 一併移除——階梯既然一直都在跑，就不存在需要豁免的東西。
 
 ⚠️ 修正過程中另外發現一個**與本功能無關的既有缺陷**：`portfolio_monitor` 早已把 `ivr_drop` 放進 asset entry，但 `anti_washout` 的 metrics 組裝從未讀取它，導致 `_apply_decision_matrix` 的 `is_ivr_fast_exit`（`metrics.get("ivr_drop", ...)`）恆為 `0.0`——文件記載的「OPTIONS IV 崩塌快速通道」對所有部位其實**從未真正觸發過**。已補上該欄位的傳遞。
 
-### 6. Presentation
-`RolloverScenario.TRANSITION_ENGINE` gets its own `_SCENARIO_STYLE` entry; `create_transition_pyramid_embed()` renders `OPEN_PYRAMID` with add-on framing rather than the generic sell/rollover framing (same rationale as the Covered Call Profit-Lock embed). `create_entry_rules_embed()` (the `/x symbol:` 🔐 進場鐵律檢核 tab) renders an extra 當前 Regime field when the user is in DYNAMIC mode, and the tab itself routes to whichever gate the user's strategy selects.
+### 7. Presentation
+`RolloverScenario.TRANSITION_ENGINE` gets its own `_SCENARIO_STYLE` entry; `create_transition_pyramid_embed()` renders `OPEN_PYRAMID` with add-on framing rather than the generic sell/rollover framing (same rationale as the Covered Call Profit-Lock embed). `create_entry_rules_embed()` (the `/x symbol:` 🔐 進場鐵律檢核 tab) renders an extra 當前 Regime field when the user is in DYNAMIC mode, an optional 「🎯 建議進場結構」 field when a `structure_directive` is present (§4), and the tab itself routes to whichever gate the user's strategy selects.
 
 ---
 

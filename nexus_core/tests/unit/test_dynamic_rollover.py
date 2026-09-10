@@ -999,7 +999,7 @@ async def test_check_satellite_rebalancing_dte_lockout_allows_existing_risk_moni
 @patch(
     "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
     new_callable=AsyncMock,
-    return_value=(True, "mocked"),
+    return_value=(True, "mocked", None),
 )
 @patch("database.market_cache.get_market_cache")
 async def test_evaluate_opportunity_cost_for_satellites_dte_lockout_skips(
@@ -1614,7 +1614,7 @@ async def test_evaluate_opportunity_cost_for_satellites_no_candidate(
 @patch(
     "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
     new_callable=AsyncMock,
-    return_value=(True, "mocked"),
+    return_value=(True, "mocked", None),
 )
 @patch("database.market_cache.get_market_cache")
 async def test_evaluate_opportunity_cost_for_satellites_triggers(
@@ -1682,7 +1682,7 @@ async def test_evaluate_opportunity_cost_for_satellites_triggers(
 @patch(
     "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
     new_callable=AsyncMock,
-    return_value=(True, "mocked"),
+    return_value=(True, "mocked", None),
 )
 @patch("database.market_cache.get_market_cache")
 async def test_evaluate_opportunity_cost_for_satellites_options_holding_wide_spread_flags_manual_override(
@@ -1756,7 +1756,7 @@ async def test_evaluate_opportunity_cost_for_satellites_options_holding_wide_spr
 @patch(
     "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
     new_callable=AsyncMock,
-    return_value=(True, "mocked"),
+    return_value=(True, "mocked", None),
 )
 @patch("database.market_cache.get_market_cache")
 async def test_evaluate_opportunity_cost_for_satellites_wide_option_spread_suppresses_rollover(
@@ -1829,7 +1829,7 @@ async def test_evaluate_opportunity_cost_for_satellites_wide_option_spread_suppr
 @patch(
     "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
     new_callable=AsyncMock,
-    return_value=(True, "mocked"),
+    return_value=(True, "mocked", None),
 )
 @patch("database.market_cache.get_market_cache")
 async def test_evaluate_opportunity_cost_for_satellites_option_fetch_failure_falls_back_to_static_friction(
@@ -1934,7 +1934,7 @@ async def test_evaluate_core_deployment_no_candidate(
 @patch(
     "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
     new_callable=AsyncMock,
-    return_value=(True, "mocked"),
+    return_value=(True, "mocked", None),
 )
 async def test_evaluate_core_deployment_no_target_allocation_is_noop(
     mock_entry_gate: AsyncMock,
@@ -1971,7 +1971,7 @@ async def test_evaluate_core_deployment_no_target_allocation_is_noop(
 @patch(
     "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
     new_callable=AsyncMock,
-    return_value=(True, "mocked"),
+    return_value=(True, "mocked", None),
 )
 async def test_evaluate_core_deployment_triggers(
     mock_entry_gate: AsyncMock,
@@ -2018,7 +2018,7 @@ async def test_evaluate_core_deployment_triggers(
 @patch(
     "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
     new_callable=AsyncMock,
-    return_value=(True, "mocked"),
+    return_value=(True, "mocked", None),
 )
 async def test_evaluate_core_deployment_boxx_defense_manual_threshold(
     mock_entry_gate: AsyncMock,
@@ -2059,7 +2059,7 @@ async def test_evaluate_core_deployment_boxx_defense_manual_threshold(
 @patch(
     "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
     new_callable=AsyncMock,
-    return_value=(True, "mocked"),
+    return_value=(True, "mocked", None),
 )
 async def test_evaluate_core_deployment_boxx_defense_auto_suggested(
     mock_entry_gate: AsyncMock,
@@ -2103,7 +2103,7 @@ async def test_evaluate_core_deployment_boxx_defense_auto_suggested(
 @patch(
     "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
     new_callable=AsyncMock,
-    return_value=(True, "mocked"),
+    return_value=(True, "mocked", None),
 )
 async def test_evaluate_core_deployment_boxx_auto_suggested_below_threshold(
     mock_entry_gate: AsyncMock,
@@ -2146,7 +2146,7 @@ async def test_evaluate_core_deployment_boxx_auto_suggested_below_threshold(
 @patch(
     "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
     new_callable=AsyncMock,
-    return_value=(False, "mocked fail"),
+    return_value=(False, "mocked fail", None),
 )
 async def test_evaluate_core_deployment_blocked_by_entry_gate(
     mock_entry_gate: AsyncMock,
@@ -2181,7 +2181,7 @@ async def test_evaluate_core_deployment_blocked_by_entry_gate(
 @patch(
     "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
     new_callable=AsyncMock,
-    return_value=(True, "mocked"),
+    return_value=(True, "mocked", None),
 )
 async def test_evaluate_core_deployment_below_min_trade_size_is_noop(
     mock_entry_gate: AsyncMock,
@@ -2212,7 +2212,7 @@ async def test_evaluate_core_deployment_below_min_trade_size_is_noop(
 @patch(
     "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
     new_callable=AsyncMock,
-    return_value=(True, "mocked"),
+    return_value=(True, "mocked", None),
 )
 async def test_evaluate_core_deployment_already_flagged_symbol_skipped(
     mock_entry_gate: AsyncMock,
@@ -2243,7 +2243,7 @@ async def test_evaluate_core_deployment_already_flagged_symbol_skipped(
 @patch(
     "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
     new_callable=AsyncMock,
-    return_value=(True, "mocked"),
+    return_value=(True, "mocked", None),
 )
 async def test_evaluate_core_deployment_satellite_asset_ignored(
     mock_entry_gate: AsyncMock,
@@ -2276,7 +2276,7 @@ async def test_evaluate_core_deployment_satellite_asset_ignored(
 @patch(
     "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
     new_callable=AsyncMock,
-    return_value=(True, "confirmed"),
+    return_value=(True, "confirmed", None),
 )
 @patch("database.market_cache.get_market_cache", return_value=None)
 async def test_scenario2_and_scenario5_reuse_confirm_entry_signal_result(
@@ -2332,7 +2332,7 @@ async def test_scenario2_and_scenario5_reuse_confirm_entry_signal_result(
 @patch(
     "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
     new_callable=AsyncMock,
-    return_value=(True, "confirmed independently"),
+    return_value=(True, "confirmed independently", None),
 )
 async def test_evaluate_core_deployment_confirms_independently_when_no_precomputed_result(
     mock_entry_gate: AsyncMock,
@@ -4680,7 +4680,7 @@ async def test_confirm_entry_signal_all_six_conditions_pass(
         new_callable=AsyncMock,
         return_value=_GREEN_15M_DF,
     ):
-        confirmed, reason = await engine._confirm_entry_signal(
+        confirmed, reason, _ = await engine._confirm_entry_signal(
             "TEST", _green_candidate_radar(), 100.0
         )
     assert confirmed is True
@@ -4727,7 +4727,7 @@ async def test_confirm_entry_signal_reuses_prefetched_market_data(
             side_effect=AssertionError("不應重複抓取 Session VWAP"),
         ),
     ):
-        confirmed, reason = await engine._confirm_entry_signal(
+        confirmed, reason, _ = await engine._confirm_entry_signal(
             "TEST",
             _green_candidate_radar(),
             100.0,
@@ -4754,7 +4754,7 @@ async def test_confirm_entry_signal_shows_all_six_reasons_even_when_short_circui
         new_callable=AsyncMock,
         return_value=_GREEN_15M_DF,
     ):
-        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+        confirmed, reason, _ = await engine._confirm_entry_signal("TEST", radar, 100.0)
     assert confirmed is False
     assert "條件四❌" in reason
     assert "條件五⏭️" in reason
@@ -4773,7 +4773,7 @@ async def test_confirm_entry_signal_condition1_fails_no_volume_surge(
         new_callable=AsyncMock,
         return_value=flat_volume_df,
     ):
-        confirmed, reason = await engine._confirm_entry_signal(
+        confirmed, reason, _ = await engine._confirm_entry_signal(
             "TEST", _green_candidate_radar(), 100.0
         )
     assert confirmed is False
@@ -4794,7 +4794,7 @@ async def test_confirm_entry_signal_condition1_fails_close_below_threshold(
         new_callable=AsyncMock,
         return_value=weak_close_df,
     ):
-        confirmed, reason = await engine._confirm_entry_signal(
+        confirmed, reason, _ = await engine._confirm_entry_signal(
             "TEST", _green_candidate_radar(), 100.0
         )
     assert confirmed is False
@@ -4815,7 +4815,7 @@ async def test_confirm_entry_signal_condition1_fails_gamma_flip_unavailable(
         "services.market_data_service.get_history_df",
         new_callable=AsyncMock,
     ) as mock_history:
-        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+        confirmed, reason, _ = await engine._confirm_entry_signal("TEST", radar, 100.0)
     assert confirmed is False
     assert "條件一❌" in reason
     assert "無法估算 Gamma Flip" in reason
@@ -4836,7 +4836,7 @@ async def test_confirm_entry_signal_condition1_fails_short_gamma_no_flip(
         "services.market_data_service.get_history_df",
         new_callable=AsyncMock,
     ) as mock_history:
-        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+        confirmed, reason, _ = await engine._confirm_entry_signal("TEST", radar, 100.0)
     assert confirmed is False
     assert "條件一❌" in reason
     assert "全域 Short Gamma 泥淖" in reason
@@ -4866,7 +4866,7 @@ async def test_confirm_entry_signal_condition1_long_gamma_fallback_passes(
             return_value=100.0,
         ),
     ):
-        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+        confirmed, reason, _ = await engine._confirm_entry_signal("TEST", radar, 100.0)
     assert "條件一✅" in reason
     assert "[全域Long Gamma]" in reason
     assert "替代門檻" in reason
@@ -4902,7 +4902,7 @@ async def test_confirm_entry_signal_condition1_long_gamma_fallback_fails_weak_cl
             return_value=1.0,
         ),
     ):
-        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+        confirmed, reason, _ = await engine._confirm_entry_signal("TEST", radar, 100.0)
     assert confirmed is False
     assert "條件一❌" in reason
     assert "[全域Long Gamma]" in reason
@@ -4935,7 +4935,7 @@ async def test_confirm_entry_signal_condition1_long_gamma_fallback_fails_nan_atr
         ),
         patch("pandas_ta.atr", return_value=pd.Series([float("nan")])),
     ):
-        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+        confirmed, reason, _ = await engine._confirm_entry_signal("TEST", radar, 100.0)
     assert confirmed is False
     assert "條件一❌" in reason
     assert "ATR₁₅ₘ 無法取得" in reason
@@ -4962,7 +4962,7 @@ async def test_confirm_entry_signal_condition1_long_gamma_fallback_fails_nan_vwa
             return_value=float("nan"),
         ),
     ):
-        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+        confirmed, reason, _ = await engine._confirm_entry_signal("TEST", radar, 100.0)
     assert confirmed is False
     assert "條件一❌" in reason
     assert "Session VWAP 抓取失敗" in reason
@@ -4978,7 +4978,7 @@ async def test_confirm_entry_signal_condition1_fails_on_fetch_exception(
         new_callable=AsyncMock,
         side_effect=Exception("network error"),
     ):
-        confirmed, reason = await engine._confirm_entry_signal(
+        confirmed, reason, _ = await engine._confirm_entry_signal(
             "TEST", _green_candidate_radar(), 100.0
         )
     assert confirmed is False
@@ -4996,7 +4996,7 @@ async def test_confirm_entry_signal_condition1_requires_1_5x_volume_surge() -> N
         new_callable=AsyncMock,
         return_value=borderline_df,
     ):
-        confirmed, reason = await engine._confirm_entry_signal(
+        confirmed, reason, _ = await engine._confirm_entry_signal(
             "TEST", _green_candidate_radar(), 100.0
         )
     assert confirmed is False
@@ -5018,7 +5018,7 @@ async def test_confirm_entry_signal_condition1_fails_bearish_candle(
         new_callable=AsyncMock,
         return_value=bearish_df,
     ):
-        confirmed, reason = await engine._confirm_entry_signal(
+        confirmed, reason, _ = await engine._confirm_entry_signal(
             "TEST", _green_candidate_radar(), 100.0
         )
     assert confirmed is False
@@ -5046,7 +5046,7 @@ async def test_confirm_entry_signal_condition1_fails_vwap_not_held(
             return_value=105.0,  # 15m 收盤 $101 未站穩 VWAP $105
         ),
     ):
-        confirmed, reason = await engine._confirm_entry_signal(
+        confirmed, reason, _ = await engine._confirm_entry_signal(
             "TEST", _green_candidate_radar(), 100.0
         )
     assert confirmed is False
@@ -5072,7 +5072,7 @@ async def test_confirm_entry_signal_condition1_fails_vwap_fetch_failure(
             return_value=0.0,
         ),
     ):
-        confirmed, reason = await engine._confirm_entry_signal(
+        confirmed, reason, _ = await engine._confirm_entry_signal(
             "TEST", _green_candidate_radar(), 100.0
         )
     assert confirmed is False
@@ -5087,7 +5087,7 @@ async def test_confirm_entry_signal_condition2_fails_no_support_wall(
     """條件二：GEX Profile 全數為負，無正 Gamma 支撐牆 -> 未通過"""
     radar = _green_candidate_radar()
     radar["gex_profile_data"]["gex_profile"] = {"90": -10.0, "95": -20.0}
-    confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+    confirmed, reason, _ = await engine._confirm_entry_signal("TEST", radar, 100.0)
     assert confirmed is False
     assert "條件二❌" in reason
 
@@ -5098,7 +5098,7 @@ async def test_confirm_entry_signal_condition2_fails_price_below_support_wall(
 ) -> None:
     """條件二：正 Gamma 支撐牆存在，但現價未站上 (跌破/持平) -> 未通過。"""
     radar = _green_candidate_radar()  # 支撐牆為 $95.0
-    confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 90.0)
+    confirmed, reason, _ = await engine._confirm_entry_signal("TEST", radar, 90.0)
     assert confirmed is False
     assert "條件二❌" in reason
 
@@ -5116,7 +5116,7 @@ async def test_confirm_entry_signal_condition2_fails_wall_too_far(
         "100": 300_000.0,
         "105": -200_000.0,
     }
-    confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+    confirmed, reason, _ = await engine._confirm_entry_signal("TEST", radar, 100.0)
     assert confirmed is False
     assert "條件二❌" in reason
     assert "距離過遠" in reason
@@ -5143,7 +5143,7 @@ async def test_confirm_entry_signal_condition2_spcx_support_wall_constraint(
         new_callable=AsyncMock,
         return_value=_GREEN_15M_DF,
     ):
-        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 147.95)
+        confirmed, reason, _ = await engine._confirm_entry_signal("TEST", radar, 147.95)
     assert confirmed is False
     assert "條件二❌" in reason
     assert "未偵測到有效正 Gamma 支撐牆 (現價下方無正 GEX 峰值)" in reason
@@ -5169,7 +5169,7 @@ async def test_confirm_entry_signal_condition2_spcx_support_wall_below_spot_pass
         new_callable=AsyncMock,
         return_value=_GREEN_15M_DF,
     ):
-        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 147.95)
+        confirmed, reason, _ = await engine._confirm_entry_signal("TEST", radar, 147.95)
     assert "條件二✅" in reason
     assert "正 Gamma 支撐牆 $145.00" in reason
     assert "+1.99%" in reason
@@ -5215,7 +5215,7 @@ async def test_confirm_entry_signal_all_six_conditions_pass_long_gamma_fallback(
             return_value=100.0,
         ),
     ):
-        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+        confirmed, reason, _ = await engine._confirm_entry_signal("TEST", radar, 100.0)
     assert confirmed is True
     assert "條件一✅" in reason
     assert "[全域Long Gamma]" in reason
@@ -5249,7 +5249,7 @@ async def test_confirm_entry_signal_condition3_fails_physical_cap(
         new_callable=AsyncMock,
         return_value=_GREEN_15M_DF,
     ):
-        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+        confirmed, reason, _ = await engine._confirm_entry_signal("TEST", radar, 100.0)
     assert confirmed is False
     assert "條件三❌" in reason
     assert "物理封頂" in reason
@@ -5279,7 +5279,7 @@ async def test_confirm_entry_signal_condition3_physical_cap_below_call_wall_pass
         new_callable=AsyncMock,
         return_value=_GREEN_15M_DF,
     ):
-        _confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+        _confirmed, reason, _ = await engine._confirm_entry_signal("TEST", radar, 100.0)
     # 僅驗證條件三自身的判定語意；整體 confirmed 還取決於未在此測試中 mock 的
     # 條件五/六 (財報行事曆、總經 Regime、選擇權到期日)，與此迴歸測試的目的無關。
     assert "條件三✅" in reason
@@ -5297,7 +5297,7 @@ async def test_confirm_entry_signal_condition3_fails_tight_call_wall(
         new_callable=AsyncMock,
         return_value=_GREEN_15M_DF,
     ):
-        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+        confirmed, reason, _ = await engine._confirm_entry_signal("TEST", radar, 100.0)
     assert confirmed is False
     assert "條件三❌" in reason
     assert "空間" in reason
@@ -5318,7 +5318,7 @@ async def test_confirm_entry_signal_condition3_fails_call_wall_already_breached(
         new_callable=AsyncMock,
         return_value=_GREEN_15M_DF,
     ):
-        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+        confirmed, reason, _ = await engine._confirm_entry_signal("TEST", radar, 100.0)
     assert confirmed is False
     assert "條件三❌" in reason
     assert "空間" in reason
@@ -5336,7 +5336,7 @@ async def test_confirm_entry_signal_condition4_fails_no_bullish_call(
         new_callable=AsyncMock,
         return_value=_GREEN_15M_DF,
     ):
-        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+        confirmed, reason, _ = await engine._confirm_entry_signal("TEST", radar, 100.0)
     assert confirmed is False
     assert "條件四❌" in reason
     assert "條件一✅" in reason
@@ -5365,7 +5365,7 @@ async def test_confirm_entry_signal_condition4_fails_dte_too_low(
         new_callable=AsyncMock,
         return_value=_GREEN_15M_DF,
     ):
-        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+        confirmed, reason, _ = await engine._confirm_entry_signal("TEST", radar, 100.0)
     assert confirmed is False
     assert "條件四❌" in reason
 
@@ -5392,7 +5392,7 @@ async def test_confirm_entry_signal_condition4_fails_ratio_too_low(
         new_callable=AsyncMock,
         return_value=_GREEN_15M_DF,
     ):
-        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+        confirmed, reason, _ = await engine._confirm_entry_signal("TEST", radar, 100.0)
     assert confirmed is False
     assert "條件四❌" in reason
 
@@ -5420,7 +5420,7 @@ async def test_confirm_entry_signal_condition4_fails_notional_too_low(
         new_callable=AsyncMock,
         return_value=_GREEN_15M_DF,
     ):
-        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+        confirmed, reason, _ = await engine._confirm_entry_signal("TEST", radar, 100.0)
     assert confirmed is False
     assert "條件四❌" in reason
 
@@ -5447,7 +5447,7 @@ async def test_confirm_entry_signal_condition4_fails_deep_itm_strike(
         new_callable=AsyncMock,
         return_value=_GREEN_15M_DF,
     ):
-        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+        confirmed, reason, _ = await engine._confirm_entry_signal("TEST", radar, 100.0)
     assert confirmed is False
     assert "條件四❌" in reason
 
@@ -5477,7 +5477,7 @@ async def test_confirm_entry_signal_condition6_fails_0dte(
         new_callable=AsyncMock,
         return_value=_GREEN_15M_DF,
     ):
-        confirmed, reason = await engine._confirm_entry_signal(
+        confirmed, reason, _ = await engine._confirm_entry_signal(
             "TEST", _green_candidate_radar(), 100.0
         )
     assert confirmed is False
@@ -5510,7 +5510,7 @@ async def test_confirm_entry_signal_condition6_fails_no_expiries(
         new_callable=AsyncMock,
         return_value=_GREEN_15M_DF,
     ):
-        confirmed, reason = await engine._confirm_entry_signal(
+        confirmed, reason, _ = await engine._confirm_entry_signal(
             "TEST", _green_candidate_radar(), 100.0
         )
     assert confirmed is False
@@ -5518,11 +5518,240 @@ async def test_confirm_entry_signal_condition6_fails_no_expiries(
     assert "無法取得" in reason
 
 
+# ---------------------------------------------------------------------------
+# 條件六附加輸出：建議進場結構 (structure_directive)
+#
+# 設計約束：天期是「每輪重評依當下市況現算的輸出參數」，不是進場當下蓋章後永不
+# 更新的部位標籤 (參見 transition_engine.py 移除路徑 2/3/4 的原因)。因此本組測試
+# 除了驗證推導規則，最關鍵的是鎖定「directive 不影響 Pass/Fail」這條安全性質。
+# ---------------------------------------------------------------------------
+
+
+def test_derive_entry_structure_directive_tight_room_gives_short_band() -> None:
+    """Call Wall 空間 < 10%：目標就在上方不遠處，給短天期 band (7-21)。"""
+    from market_analysis.dynamic_rollover.opportunity_cost import (
+        _derive_entry_structure_directive,
+    )
+
+    directive = _derive_entry_structure_directive(0.06, 30.0, None)
+    assert "DTE 7-21" in directive
+    assert "短線" in directive
+
+
+def test_derive_entry_structure_directive_extended_room_gives_swing_band() -> None:
+    """Call Wall 空間 >= 10%：延伸跑道，給波段 band (21-45)。"""
+    from market_analysis.dynamic_rollover.opportunity_cost import (
+        _derive_entry_structure_directive,
+    )
+
+    directive = _derive_entry_structure_directive(0.12, 30.0, None)
+    assert "DTE 21-45" in directive
+    assert "波段" in directive
+
+
+def test_derive_entry_structure_directive_breached_call_wall_gives_short_band() -> None:
+    """現價已跌破 Call Wall (帶負號距離)：不得誤判為延伸跑道。"""
+    from market_analysis.dynamic_rollover.opportunity_cost import (
+        _derive_entry_structure_directive,
+    )
+
+    directive = _derive_entry_structure_directive(-0.02, 30.0, None)
+    assert "DTE 7-21" in directive
+
+
+def test_derive_entry_structure_directive_high_ivr_forces_spread() -> None:
+    """IVR > 50：強制改 Bull Call Spread，避免高隱波下單腳買方遭 Vega 崩塌
+    (與左側條件六同一門檻、同一理由)。"""
+    from market_analysis.dynamic_rollover.opportunity_cost import (
+        _derive_entry_structure_directive,
+    )
+
+    assert "Bull Call Spread" in _derive_entry_structure_directive(0.12, 63.0, None)
+    assert "Long Call" in _derive_entry_structure_directive(0.12, 50.0, None)
+
+
+def test_derive_entry_structure_directive_earnings_caps_band_upper() -> None:
+    """財報落在 band 區間內：上限收斂至財報前，不建議抱過財報。"""
+    from market_analysis.dynamic_rollover.opportunity_cost import (
+        _derive_entry_structure_directive,
+    )
+
+    directive = _derive_entry_structure_directive(0.12, 30.0, 30)
+    assert "DTE 21-30" in directive
+    assert "財報前收斂" in directive
+
+
+def test_derive_entry_structure_directive_earnings_collapses_inverted_band() -> None:
+    """財報早於 band 下限時，下限一併塌陷至上限，不得輸出反向區間 (如 21-10)。"""
+    from market_analysis.dynamic_rollover.opportunity_cost import (
+        _derive_entry_structure_directive,
+    )
+
+    directive = _derive_entry_structure_directive(0.12, 30.0, 10)
+    assert "DTE 10" in directive
+    assert "21-10" not in directive
+    assert "財報前收斂" in directive
+
+
+def test_derive_entry_structure_directive_past_earnings_does_not_cap() -> None:
+    """財報已過期 (負值天數) 不應觸發收斂。"""
+    from market_analysis.dynamic_rollover.opportunity_cost import (
+        _derive_entry_structure_directive,
+    )
+
+    directive = _derive_entry_structure_directive(0.12, 30.0, -5)
+    assert "DTE 21-45" in directive
+    assert "財報前收斂" not in directive
+
+
+@pytest.mark.asyncio
+@patch("database.calendar_cache.get_cached_earnings", return_value=None)
+@patch(
+    "market_analysis.index_microstructure.get_market_regime",
+    new_callable=AsyncMock,
+    return_value="NORMAL",
+)
+@patch(
+    "services.market_data_service.get_all_option_expiries",
+    new_callable=AsyncMock,
+    return_value=_FAR_EXPIRIES,
+)
+async def test_confirm_entry_signal_returns_structure_directive_when_all_pass(
+    mock_expiries: AsyncMock,
+    mock_regime: AsyncMock,
+    mock_earnings: MagicMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """六重鐵律全數通過時，第三個回傳元素為建議進場結構；fixture 的 Call Wall
+    $110 距現價 $100 恰為 10% (延伸跑道) 且無 iv_metrics (IVR=0) -> 波段買方。"""
+    with patch(
+        "services.market_data_service.get_history_df",
+        new_callable=AsyncMock,
+        return_value=_GREEN_15M_DF,
+    ):
+        confirmed, reason, directive = await engine._confirm_entry_signal(
+            "TEST", _green_candidate_radar(), 100.0
+        )
+    assert confirmed is True
+    assert directive is not None
+    assert "DTE 21-45" in directive
+    assert "Long Call" in directive
+    # 推導依據需一併寫進 reasons，讓「進場鐵律檢核」面板看得到來源
+    assert "Call Wall 空間" in reason
+
+
+@pytest.mark.asyncio
+@patch("database.calendar_cache.get_cached_earnings", return_value=None)
+@patch(
+    "market_analysis.index_microstructure.get_market_regime",
+    new_callable=AsyncMock,
+    return_value="NORMAL",
+)
+@patch(
+    "services.market_data_service.get_all_option_expiries",
+    new_callable=AsyncMock,
+    return_value=_FAR_EXPIRIES,
+)
+async def test_confirm_entry_signal_high_ivr_directive_does_not_change_verdict(
+    mock_expiries: AsyncMock,
+    mock_regime: AsyncMock,
+    mock_earnings: MagicMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """🔒 最關鍵的迴歸鎖定：structure_directive 純為附加輸出，其內容變化
+    (此處由 IVR 驅動) 絕不得改變六重鐵律的 Pass/Fail 判定。"""
+    radar_low_ivr = _green_candidate_radar()
+    radar_high_ivr = _green_candidate_radar()
+    radar_high_ivr["iv_metrics"] = {"iv_rank": 88.0}
+
+    with patch(
+        "services.market_data_service.get_history_df",
+        new_callable=AsyncMock,
+        return_value=_GREEN_15M_DF,
+    ):
+        low_passed, _low_reason, low_directive = await engine._confirm_entry_signal(
+            "TEST", radar_low_ivr, 100.0
+        )
+        high_passed, _high_reason, high_directive = await engine._confirm_entry_signal(
+            "TEST", radar_high_ivr, 100.0
+        )
+
+    assert low_passed is high_passed is True
+    assert low_directive is not None and "Long Call" in low_directive
+    assert high_directive is not None and "Bull Call Spread" in high_directive
+
+
+@pytest.mark.asyncio
+@patch("database.calendar_cache.get_cached_earnings", return_value=None)
+@patch(
+    "market_analysis.index_microstructure.get_market_regime",
+    new_callable=AsyncMock,
+    return_value="NORMAL",
+)
+@patch(
+    "services.market_data_service.get_all_option_expiries",
+    new_callable=AsyncMock,
+    return_value=_FAR_EXPIRIES,
+)
+async def test_confirm_entry_signal_structure_directive_none_when_short_circuited(
+    mock_expiries: AsyncMock,
+    mock_regime: AsyncMock,
+    mock_earnings: MagicMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """前四項未通過而短路略過條件六時，directive 必須為 None (不得憑空生成建議)。"""
+    radar = _green_candidate_radar()
+    radar["gex_profile_data"]["gex_profile"] = {}  # 條件一/二失效
+    with patch(
+        "services.market_data_service.get_history_df",
+        new_callable=AsyncMock,
+        return_value=_GREEN_15M_DF,
+    ):
+        confirmed, reason, directive = await engine._confirm_entry_signal(
+            "TEST", radar, 100.0
+        )
+    assert confirmed is False
+    assert directive is None
+    assert "條件六⏭️" in reason
+
+
+@pytest.mark.asyncio
+@patch("database.calendar_cache.get_cached_earnings", return_value=None)
+@patch(
+    "market_analysis.index_microstructure.get_market_regime",
+    new_callable=AsyncMock,
+    return_value="NORMAL",
+)
+@patch(
+    "services.market_data_service.get_all_option_expiries",
+    new_callable=AsyncMock,
+)
+async def test_confirm_entry_signal_structure_directive_none_when_condition6_fails(
+    mock_expiries: AsyncMock,
+    mock_regime: AsyncMock,
+    mock_earnings: MagicMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """條件六本身未通過 (0DTE 結算雜訊) 時，directive 亦為 None。"""
+    mock_expiries.return_value = [datetime.now().date().strftime("%Y-%m-%d")]
+    with patch(
+        "services.market_data_service.get_history_df",
+        new_callable=AsyncMock,
+        return_value=_GREEN_15M_DF,
+    ):
+        confirmed, reason, directive = await engine._confirm_entry_signal(
+            "TEST", _green_candidate_radar(), 100.0
+        )
+    assert confirmed is False
+    assert directive is None
+    assert "條件六❌" in reason
+
+
 @pytest.mark.asyncio
 @patch(
     "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
     new_callable=AsyncMock,
-    return_value=(False, "mocked: entry not confirmed"),
+    return_value=(False, "mocked: entry not confirmed", None),
 )
 @patch("database.market_cache.get_market_cache")
 async def test_evaluate_opportunity_cost_for_satellites_blocked_by_entry_gate(
@@ -5655,7 +5884,7 @@ async def test_confirm_entry_signal_condition5_macro_regime_fails(
         new_callable=AsyncMock,
         return_value=df_15m,
     ):
-        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+        confirmed, reason, _ = await engine._confirm_entry_signal("TEST", radar, 100.0)
     assert confirmed is False
     assert "條件五❌" in reason
     assert "SHORT_GAMMA_CRITICAL" in reason
@@ -5687,7 +5916,7 @@ async def test_confirm_entry_condition5_fails_closed_on_earnings_exception(
         new_callable=AsyncMock,
         return_value=df_15m,
     ):
-        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+        confirmed, reason, _ = await engine._confirm_entry_signal("TEST", radar, 100.0)
     assert confirmed is False
     assert "條件五❌" in reason
     assert "財報行事曆資料抓取失敗" in reason
@@ -5721,7 +5950,7 @@ async def test_confirm_entry_condition5_fails_closed_on_regime_exception(
         new_callable=AsyncMock,
         return_value=df_15m,
     ):
-        confirmed, reason = await engine._confirm_entry_signal("TEST", radar, 100.0)
+        confirmed, reason, _ = await engine._confirm_entry_signal("TEST", radar, 100.0)
     assert confirmed is False
     assert "條件五❌" in reason
     assert "大盤總經風控狀態抓取失敗" in reason
@@ -6080,7 +6309,8 @@ async def test_evaluate_opportunity_cost_for_satellites_dynamic_routes_via_regim
 ) -> None:
     """trading_strategy=DYNAMIC 時應先呼叫 4-Regime 分類器，Regime I (左側接刀
     態) 路由至左側六重鐵律，且產生的指令需攜帶 entry_regime 與左側條件六的
-    structure_directive 覆寫 suggested_strategy。"""
+    structure_directive（獨立欄位，不覆寫 suggested_strategy——後者是
+    _calculate_rollover_decision 自行決策的工具別）。"""
 
     def cache_side_effect(symbol: str, expiry: Optional[str] = None) -> Optional[dict]:
         if symbol.upper() == "XYZ":
@@ -6151,7 +6381,10 @@ async def test_evaluate_opportunity_cost_for_satellites_dynamic_routes_via_regim
     assert entry_confirmation == (True, "左側測試通過")
     assert len(instructions) == 1
     assert instructions[0]["entry_regime"] == "REGIME_I_LEFT_CATCH"
-    assert instructions[0]["suggested_strategy"] == "測試策略指令"
+    assert instructions[0]["structure_directive"] == "測試策略指令"
+    # 🔒 迴歸鎖定：建議結構不得覆寫 _calculate_rollover_decision 決定的工具別，
+    # 否則 "Shares + ITM Call" 連同它自帶的 ITM 70Δ 履約價/DTE 指引會一起被抹掉。
+    assert instructions[0]["suggested_strategy"] == "Buy Shares"
 
 
 @pytest.mark.asyncio
@@ -6184,7 +6417,7 @@ async def test_evaluate_opportunity_cost_for_satellites_dynamic_regime_iii_reuse
             engine,
             "_confirm_entry_signal",
             new_callable=AsyncMock,
-            return_value=(True, "右側測試通過"),
+            return_value=(True, "右側測試通過", None),
         ) as mock_confirm,
     ):
         (

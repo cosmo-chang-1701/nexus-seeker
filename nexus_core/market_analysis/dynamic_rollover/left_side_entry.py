@@ -441,7 +441,13 @@ async def _confirm_left_entry_condition5_macro_earnings_vts_gate(
     from .opportunity_cost import _confirm_entry_condition5_macro_earnings_gate
 
     shared_reasons: list = []
-    c5_base_passed = await _confirm_entry_condition5_macro_earnings_gate(
+    # 右側條件五現已一併回傳距財報天數 (供右側條件六收斂 DTE band)；左側條件六
+    # 的 DTE 門檻是固定的 _LEFT_ENTRY_CANDIDATE_MIN_DTE (磨底需求)，不做財報收斂，
+    # 故此處僅取用通過與否。
+    (
+        c5_base_passed,
+        _days_to_earnings,
+    ) = await _confirm_entry_condition5_macro_earnings_gate(
         candidate_symbol, True, shared_reasons
     )
     for r in shared_reasons:

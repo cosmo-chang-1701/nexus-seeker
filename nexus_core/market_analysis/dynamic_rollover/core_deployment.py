@@ -45,7 +45,7 @@ class _CoreDeploymentMixin:
             target_spot: float,
             df_15m: Optional[Any] = None,
             session_vwap: Optional[float] = None,
-        ) -> Tuple[bool, str]: ...
+        ) -> Tuple[bool, str, Optional[str]]: ...
 
     async def evaluate_core_deployment(
         self,
@@ -193,9 +193,15 @@ class _CoreDeploymentMixin:
             if candidate_entry_confirmed is None:
                 # 防洗盤實戰策略：進場訊號六重嚴格過濾鐵律。與 Scenario 2 共用同一套
                 # 把關，未通過時比照「找不到候選標的」的早退模式，靜默略過。
+                # 第三個元素 structure_directive (建議期權合約天期/結構) 在此
+                # 刻意丟棄不用：本分支產生的指令是 instrument_type="SPOT" /
+                # suggested_strategy="Buy Shares"——把 CORE 超額現金部署成候選
+                # 標的的「現貨股票」，不是期權部位。塞一個期權 DTE band /
+                # Bull Call Spread 建議進去會直接誤導使用者。
                 (
                     candidate_entry_confirmed,
                     candidate_entry_reason,
+                    _structure_directive,
                 ) = await self._confirm_entry_signal(
                     candidate_symbol, candidate_radar, target_spot
                 )
