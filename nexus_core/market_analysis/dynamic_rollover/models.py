@@ -95,6 +95,14 @@ class RolloverInstruction(_RolloverInstructionRequired, total=False):
     """
 
     suggested_strategy: str
+    # 進場鐵律條件六依「當下市況」現算的建議合約天期與部位結構 (右側來自
+    # opportunity_cost._derive_entry_structure_directive，左側來自 left_side_entry
+    # 的 IVR 分流)。刻意獨立成欄位、不覆寫上方 suggested_strategy——後者回答的是
+    # 「用什麼工具進場」(Buy Shares / Shares + ITM Call，由 _calculate_rollover_
+    # decision 自行決策)，本欄位回答的是「若以期權表達，該選哪個天期與結構」，
+    # 兩者互補而非互斥。早期版本以覆寫實作，會把 "Shares + ITM Call" 連同它自帶
+    # 的 ITM 70Δ 履約價/DTE 指引一起抹掉。僅 OPPORTUNITY_COST 情境會攜帶此欄位。
+    structure_directive: Optional[str]
     scenario: str
     is_manual_override_required: bool
     cash_impact: Optional[str]

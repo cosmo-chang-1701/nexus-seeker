@@ -90,13 +90,52 @@
    \text{Macro Regime} \notin \{\text{"SHORT\_GAMMA\_CRITICAL"}, \text{"SYSTEMIC\_LIQUIDITY\_CRISIS"}\}
    $$
 
-### 2.6 條件六：標的自身最近效期選擇權週期雜訊過濾
+### 2.6 條件六：標的自身最近效期選擇權週期雜訊過濾與建議進場結構
 1. 抓取標的完整選擇權到期日列表，取得最近效期合約到期天數 $\text{DTE}_{\text{nearest}}$。
-2. 雜訊過濾約束：
+2. 雜訊過濾約束（**唯一決定本條件 Pass/Fail 的判準**）：
    $$
    \text{DTE}_{\text{nearest}} > \text{\_ENTRY\_CANDIDATE\_MIN\_DTE} = 1 \quad (\text{天})
    $$
    嚴禁在標的自身處於 0/1 DTE 結算日當日或前夕開倉，徹底規避末日合約結算引發的做市商流動性抽離與劇烈針狀洗盤。
+
+3. **建議進場結構 (`structure_directive`) 之推導**：
+   通過上述判準後，額外輸出一組「建議合約天期 (DTE band) 與部位結構」。此輸出**不參與 Pass/Fail 判定**，且三個輸入全部取自六重鐵律評估過程中本來就已算好／查到的值（條件三的 Call Wall 空間、`candidate_radar` 既有的 IV Rank、條件五既有的距財報天數），**零額外網路 I/O**。
+
+   - **天期分流（跑道長度）**：
+     $$
+     [\text{DTE}_{lo}, \text{DTE}_{hi}] =
+     \begin{cases}
+     (21, 45) \text{ 波段} & \text{若} \Delta_{\text{CallWall}} \ge \text{\_ENTRY\_ROOM\_EXTENDED\_PCT} = 10\% \\
+     (7, 21) \text{ 短線} & \text{否則}
+     \end{cases}
+     $$
+     物理意義：目標價位就是上方的 Call Wall。空間不足 10% 代表目標近在咫尺，不需要長跑道承擔額外 Theta；空間充足才值得用波段天期換取行情延展。現價已觸及或跌破 Call Wall（$\Delta_{\text{CallWall}} < 0$）一律歸入短線。
+
+   - **財報收斂**：
+     $$
+     \text{若 } 0 < \text{DaysToEarnings} < \text{DTE}_{hi}
+     \;\Rightarrow\;
+     \text{DTE}_{hi} \leftarrow \text{DaysToEarnings},\;
+     \text{DTE}_{lo} \leftarrow \min(\text{DTE}_{lo}, \text{DTE}_{hi})
+     $$
+     不建議持有跨越財報的合約。條件五已保證距財報 $> 3$ 天，故此處只會收斂、不會歸零；$\text{DTE}_{lo}$ 一併塌陷是為了避免輸出 `21-10` 這類反向區間。
+
+   - **結構分流（IVR）**：與左側條件六**共用同一門檻、同一理由**：
+     $$
+     \begin{cases}
+     \text{Long Call (ATM/輕度 OTM)} & \text{若 IVR} \le \text{\_ENTRY\_IVR\_SPREAD\_THRESHOLD} = 50\% \\
+     \text{Bull Call Spread} & \text{若 IVR} > 50\%
+     \end{cases}
+     $$
+     高隱波位階下開單腳買方，一旦行情兌現引發 IV Crush 將遭遇 Vega 崩塌，故強制轉為垂直價差。
+
+4. **設計原則：天期是輸出參數，不是部位標籤**。
+   `structure_directive` 於**每一輪重評時依當下市況重新計算**，不會在進場當下蓋章後固定於部位上。這是刻意的設計約束：`transition_engine.py` 早期版本的路徑 2/3/4 正是因為把部位存亡綁在進場時貼上、之後永不更新的 `entry_regime` 標籤而被整批移除（演化後的部位因標籤陳舊而失去所有例行停損）。天期恰恰是最容易隨市況改變的屬性，若以標籤實作必然重蹈覆轍。
+
+5. **與 `suggested_strategy` 的職責分界**：
+   `structure_directive` 以**獨立欄位**攜帶於 `RolloverInstruction`，**不覆寫** `suggested_strategy`。後者由 `_calculate_rollover_decision()` 自行決策「用什麼工具進場」（`Buy Shares` / `Shares + ITM Call`），前者回答「若以期權表達，該選哪個天期與結構」，兩者互補而非互斥。若以覆寫實作，`Shares + ITM Call` 連同它自帶的 ITM 70Δ 履約價與 30-45 DTE 指引會被一併抹除。
+
+   ⚠️ **核心資金部署 (Scenario 5) 機會分支刻意不消費此欄位**：該分支產生的指令為 `instrument_type="SPOT"` / `suggested_strategy="Buy Shares"`，是把 CORE 超額現金部署為候選標的的**現貨股票**，附上期權天期／價差建議會直接誤導使用者。
 
 ---
 
@@ -123,7 +162,17 @@ flowchart TD
     C5 -- 通過 --> C6{"條件六: 標的自身 DTE 雜訊<br/>最近效期 DTE > 1 天?"}
 
     C6 -- 失敗 --> Fail6[條件六❌: 標的處於 0/1 DTE 結算雜訊期] --> StopFail
-    C6 -- 通過 --> PassAll([六重鐵律全數通過 ✅: 授權執行進場指令])
+    C6 -- 通過 --> Room{"建議進場結構推導 (不影響 Pass/Fail)<br/>Call Wall 空間 >= 10%?"}
+
+    Room -- "是 (延伸跑道)" --> BandSwing["DTE band = 21-45 波段"]
+    Room -- "否 (目標貼近)" --> BandShort["DTE band = 7-21 短線"]
+    BandSwing --> EarnCap{"財報落在 band 區間內?"}
+    BandShort --> EarnCap
+    EarnCap -- 是 --> Capped["band 上限收斂至財報前<br/>(下限一併塌陷，避免反向區間)"] --> CheckIVR
+    EarnCap -- 否 --> CheckIVR{標的 IVR 位階評估}
+
+    CheckIVR -- "IVR <= 50.0%" --> PassCall(["六重鐵律全數通過 ✅<br/>建議結構: Long Call (ATM/輕度 OTM)"])
+    CheckIVR -- "IVR > 50.0%" --> PassSpread(["六重鐵律全數通過 ✅<br/>建議結構: Bull Call Spread (防 Vega 崩塌)"])
 
     %% 短路註記
     StopFail -. 前四項失敗時 .-> SkipC5C6[標記: 條件五/六 ⏭️ 略過]
@@ -145,6 +194,10 @@ flowchart TD
 | `_ENTRY_UOA_MIN_NOTIONAL_USD` | `$200,000.0` | 主力 UOA 買盤最低權利金名目金額 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_EARNINGS_PRE_EVENT_BUFFER_DAYS` | `3` | 避開財報發布的最小安全天數緩衝 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_ENTRY_CANDIDATE_MIN_DTE` | `1` | 標的自身最近效期選擇權最低 DTE 要求（避開 0/1 DTE） | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `_ENTRY_ROOM_EXTENDED_PCT` | `0.10` ($10\%$) | Call Wall 空間達此值視為「延伸跑道」，建議波段天期（僅影響建議文字） | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `_ENTRY_DTE_BAND_SHORT` | `(7, 21)` | 短線建議 DTE band，沿用 `transition_engine.py` 路徑一加碼的既有天期慣例 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `_ENTRY_DTE_BAND_SWING` | `(21, 45)` | 波段建議 DTE band，沿用既有「次月合約」慣例 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `_ENTRY_IVR_SPREAD_THRESHOLD` | `50.0` ($50\%$) | IVR 高於此值改建議 Bull Call Spread（與左側 `_LEFT_ENTRY_IVR_SPREAD_THRESHOLD` 同值同理由） | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `GEX_THIN_WALL_THRESHOLD` | `500,000.0` | 做市商有效正 Gamma 牆體之最低曝險深度門檻 | `nexus_core/market_analysis/index_microstructure.py` |
 
 ---
@@ -165,13 +218,17 @@ flowchart TD
 ## 6. 核心程式碼檔案路徑關聯
 
 - `nexus_core/market_analysis/dynamic_rollover/opportunity_cost.py`：
-  - 核心檢核入口：`_confirm_entry_signal()`（第 721–750 行）
-  - 條件一實作：`_confirm_entry_condition1_breakout()`（第 55–255 行）
-  - 條件二實作：`_confirm_entry_condition2_support_wall()`（第 257–303 行）
-  - 條件三實作：`_confirm_entry_condition3_no_physical_cap()`（第 305–349 行）
-  - 條件四實作：`_confirm_entry_condition4_uoa_dte()`（第 351–395 行）
-  - 條件五實作：`_confirm_entry_condition5_macro_earnings_gate()`（第 397–449 行）
-  - 條件六實作：`_confirm_entry_condition6_candidate_dte()`（第 451–490 行）
+  - 核心檢核入口：`_confirm_entry_signal()`（第 801 行起，回傳 `(是否通過, 逐項原因, structure_directive)`）
+  - 條件一實作：`_confirm_entry_condition1_breakout()`（第 59 行起）
+  - 條件二實作：`_confirm_entry_condition2_support_wall()`（第 261 行起）
+  - 條件三實作：`_confirm_entry_condition3_no_physical_cap()`（第 309 行起）
+  - 條件四實作：`_confirm_entry_condition4_uoa_dte()`（第 355 行起）
+  - 條件五實作：`_confirm_entry_condition5_macro_earnings_gate()`（第 401 行起，另回傳距財報天數供條件六收斂 DTE band）
+  - 建議結構推導：`_derive_entry_structure_directive()`（第 461 行起，純函式、零 I/O）
+  - 條件六實作：`_confirm_entry_condition6_candidate_dte()`（第 509 行起）
+- `nexus_core/market_analysis/dynamic_rollover/models.py`：`RolloverInstruction.structure_directive` 欄位
+- `nexus_core/cogs/embed_builders/rollover_embeds.py`：`create_dynamic_rollover_embed(structure_directive=...)` 於「📥 轉入資產」區塊渲染
+- `nexus_core/cogs/embed_builders/portfolio_embeds.py`：`create_entry_rules_embed(structure_directive=...)` 於「🔐 進場鐵律檢核」頁籤渲染「🎯 建議進場結構」欄位
 - `nexus_core/market_analysis/dynamic_rollover/constants.py`：具名常數 `_ENTRY_*`
 - `nexus_core/market_analysis/dynamic_rollover/structural_signals.py`：支撐牆掃描 `_scan_gex_walls()`
 - `nexus_core/market_analysis/index_microstructure.py`：`estimate_symbol_gamma_flip()`, `detect_uoa_sto_call_physical_cap()`, `get_market_regime()`

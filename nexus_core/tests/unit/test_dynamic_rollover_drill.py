@@ -188,7 +188,14 @@ async def test_drill_scenario_1_nvda_decay_spcx_breakout_triggers_rollover(
     assert ins["sell_ratio"] == 0.30
     assert ins["target_core"] == "SPCX"
     assert ins["scenario"] == RolloverScenario.OPPORTUNITY_COST.value
+    # 🔒 工具別由 _calculate_rollover_decision 決定，不被進場鐵律的期權結構建議覆寫
     assert ins["suggested_strategy"] == "Buy Shares"
+    # 條件六依當下市況現算的建議結構走獨立欄位：Call Wall $95 距現價 $85 約 11.8%
+    # (>= 10% 延伸跑道) -> 波段 band；無 iv_metrics (IVR=0 <= 50) -> 單腳買方。
+    assert ins["structure_directive"] is not None
+    assert "DTE 21-45" in ins["structure_directive"]
+    assert "波段" in ins["structure_directive"]
+    assert "Long Call" in ins["structure_directive"]
     assert ins["limit_price"] == 85.00
     assert ins["cash_impact"] == "$4,500"
     assert ins["is_manual_override_required"] is False
@@ -210,6 +217,7 @@ async def test_drill_scenario_1_nvda_decay_spcx_breakout_triggers_rollover(
         scenario=ins["scenario"],
         cash_impact=ins["cash_impact"],
         asset_class="SPOT",
+        structure_directive=ins["structure_directive"],
     )
 
     assert isinstance(embed, discord.Embed)
@@ -221,6 +229,9 @@ async def test_drill_scenario_1_nvda_decay_spcx_breakout_triggers_rollover(
     assert "SPCX" in str(embed.fields[1].value)
     assert "BUY (買入現貨)" in str(embed.fields[1].value)
     assert "Buy Shares" in str(embed.fields[1].value)
+    # 工具別與建議結構並存於「轉入資產」區塊，互補而非互相取代
+    assert "建議結構" in str(embed.fields[1].value)
+    assert "DTE 21-45" in str(embed.fields[1].value)
     assert "$4,500" in str(embed.fields[2].value)
     assert "$85.00" in str(embed.fields[2].value)
     assert "到期日" not in str(embed.fields[2].value)

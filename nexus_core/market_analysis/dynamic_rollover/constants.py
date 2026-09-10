@@ -118,6 +118,25 @@ _ENTRY_CANDIDATE_MIN_DTE: int = (
     1  # 條件六：標的自身最近效期需 > 此值天數 (避開 0/1 DTE 結算日雜訊)
 )
 
+# 條件六附加輸出：建議進場結構 (structure_directive) 的推導門檻。
+# 這組常數「只影響建議文字，不影響條件六的 Pass/Fail 判定」——條件六的通過與否
+# 仍完全由上方 _ENTRY_CANDIDATE_MIN_DTE 決定。設計動機：天期不應該是一個在進場
+# 當下蓋章、之後永不更新的部位標籤 (參見 transition_engine.py 移除路徑 2/3/4 的
+# 原因，entry_regime 標籤陳舊導致部位失去例行停損)，而應該是每輪重評都依當下
+# 市況重算的輸出參數。作法完全比照左側條件六既有的 IVR 分流
+# (_confirm_left_entry_condition6_candidate_dte_ivr)。
+_ENTRY_IVR_SPREAD_THRESHOLD: float = (
+    50.0  # IVR > 此值改建議 Bull Call Spread，避免高隱波下單腳買方遭 Vega 崩塌
+)
+_ENTRY_ROOM_EXTENDED_PCT: float = (
+    0.10  # Call Wall 空間 >= 此值視為「延伸跑道」，建議波段天期；否則建議短天期
+)
+# DTE band 數值沿用 repo 既有慣例，不引入新的未校準數字：
+#   短天期 (7, 21)  —— 比照 transition_engine.py 路徑一加碼的「新開短天期 (DTE 7-21)」
+#   波段   (21, 45) —— 比照 opportunity_cost / recommend_covered_calls 既有「次月」慣例
+_ENTRY_DTE_BAND_SHORT: tuple[int, int] = (7, 21)
+_ENTRY_DTE_BAND_SWING: tuple[int, int] = (21, 45)
+
 # --- 華爾街資深交易員與機構風控量化常數 ---
 # 雙軌出場防守引擎軌道二：極端瞬時停損 (Extreme Tick Breach) 的 ATR 墊片倍數。
 # 任何 DTE 皆適用的獨立「極端瞬時停損」防線（黑天鵝/流動性真空最後防線），

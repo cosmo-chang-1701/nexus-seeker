@@ -1183,6 +1183,7 @@ class PortfolioMonitorCog(commands.Cog):
                                 extreme_breach_detail_block=ins.get(
                                     "extreme_breach_detail_block"
                                 ),
+                                structure_directive=ins.get("structure_directive"),
                             )
                             if ins.get("is_manual_override_required"):
                                 setattr(

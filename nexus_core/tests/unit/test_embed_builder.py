@@ -3808,6 +3808,35 @@ def test_create_entry_rules_embed_handles_missing_data() -> None:
     assert text.count("尚無足夠數據進行判定") == 1
 
 
+def test_create_entry_rules_embed_renders_structure_directive() -> None:
+    """建議進場結構有值時，應渲染為獨立欄位，並標明天期是依當下市況現算、
+    而非進場時固定標籤 (左右兩套鐵律共用此欄位)。"""
+    from cogs.embed_builders.portfolio_embeds import create_entry_rules_embed
+
+    embed = create_entry_rules_embed(
+        "NVDA",
+        True,
+        ["條件六✅：標的最近效期 2026-10-16 DTE=42（符合門檻 >1）"],
+        structure_directive="DTE 21-45 波段 ｜ Long Call (ATM/輕度 OTM)",
+    )
+
+    field = next((f for f in embed.fields if "建議進場結構" in str(f.name)), None)
+    assert field is not None
+    value = str(field.value)
+    assert "DTE 21-45 波段" in value
+    assert "Long Call" in value
+    assert "每輪重算" in value
+
+
+def test_create_entry_rules_embed_omits_structure_directive_when_absent() -> None:
+    """未提供建議進場結構時不渲染該欄位 (向下相容既有呼叫端)。"""
+    from cogs.embed_builders.portfolio_embeds import create_entry_rules_embed
+
+    embed = create_entry_rules_embed("NVDA", True, ["條件六✅：ok"])
+
+    assert all("建議進場結構" not in str(f.name) for f in embed.fields)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 欄位數據驗算測試 (Field Accuracy Audit)
 # ─────────────────────────────────────────────────────────────────────────────

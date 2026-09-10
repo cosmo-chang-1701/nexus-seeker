@@ -2,7 +2,7 @@ from typing import Any
 import discord
 import asyncio
 import logging
-from typing import Dict
+from typing import Dict, Optional
 
 import database
 from services import news_service, reddit_service
@@ -279,13 +279,19 @@ class SymbolHubView(discord.ui.View):
             engine = DynamicRolloverEngine()
             dynamic_regime: Any = None
             dynamic_regime_reason = None
+            # 兩套鐵律的入口簽章現已完全收斂，皆回傳 (是否通過, 原因, 建議結構)。
+            structure_directive: Optional[str] = None
 
             if trading_strategy == TradingStrategyMode.LEFT_SIDE.value:
                 from market_analysis.dynamic_rollover.left_side_entry import (
                     _confirm_left_entry_signal,
                 )
 
-                six_rule_passed, six_rule_reason, _ = await _confirm_left_entry_signal(
+                (
+                    six_rule_passed,
+                    six_rule_reason,
+                    structure_directive,
+                ) = await _confirm_left_entry_signal(
                     self.symbol, self.base_data, target_spot
                 )
             elif trading_strategy == TradingStrategyMode.DYNAMIC.value:
@@ -309,6 +315,7 @@ class SymbolHubView(discord.ui.View):
                     (
                         six_rule_passed,
                         six_rule_reason,
+                        structure_directive,
                     ) = await engine._confirm_entry_signal(
                         self.symbol,
                         self.base_data,
@@ -323,7 +330,7 @@ class SymbolHubView(discord.ui.View):
                     (
                         six_rule_passed,
                         six_rule_reason,
-                        _,
+                        structure_directive,
                     ) = await _confirm_left_entry_signal(
                         self.symbol,
                         self.base_data,
@@ -337,8 +344,13 @@ class SymbolHubView(discord.ui.View):
                     six_rule_reason = (
                         f"⛔ Regime `{dynamic_regime.value}`：{dynamic_regime_reason}"
                     )
+                    structure_directive = None
             else:
-                six_rule_passed, six_rule_reason = await engine._confirm_entry_signal(
+                (
+                    six_rule_passed,
+                    six_rule_reason,
+                    structure_directive,
+                ) = await engine._confirm_entry_signal(
                     self.symbol, self.base_data, target_spot
                 )
 
@@ -353,6 +365,7 @@ class SymbolHubView(discord.ui.View):
                     dynamic_regime.value if dynamic_regime is not None else None
                 ),
                 dynamic_regime_reason=dynamic_regime_reason,
+                structure_directive=structure_directive,
             )
         except Exception as e:
             logger.exception(f"[{self.symbol}] Entry rules check failed: {e}")

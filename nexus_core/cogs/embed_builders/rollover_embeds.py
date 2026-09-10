@@ -292,6 +292,7 @@ def create_dynamic_rollover_embed(
     extreme_stop_loss: Optional[float] = None,
     is_extreme_tick_breach: bool = False,
     extreme_breach_detail_block: Optional[str] = None,
+    structure_directive: Optional[str] = None,
 ) -> discord.Embed:
     """
     產生動態轉倉 (Dynamic Rollover) 的 Embed 推播訊息。
@@ -302,7 +303,13 @@ def create_dynamic_rollover_embed(
     :param sell_ratio: 建議賣出比例 (例如 1.0 表示全部，0.5 表示 50%)
     :param buy_symbol: 建議買入/轉倉的標的 (例如 SPY)
     :param reason: 轉倉原因
-    :param suggested_strategy: 建議使用的期權策略 (例如 Bull Call Spread)
+    :param suggested_strategy: 建議使用的進場工具 (例如 Buy Shares / Shares + ITM Call)
+    :param structure_directive: 進場鐵律條件六依當下市況 (Call Wall 空間 / IVR /
+        距財報天數) 現算的建議合約天期與結構，例如
+        「DTE 21-45 波段 ｜ Long Call (ATM/輕度 OTM)」。與 suggested_strategy 互補：
+        前者說「用什麼工具」，本參數說「若以期權表達，選哪個天期與結構」。天期
+        刻意設計為每輪重評都重算的輸出參數，而非進場當下蓋章的部位標籤。
+        None 時不渲染該行，向下相容既有呼叫端。
     :param suggested_price: 建議成交價位 (例如 $1.25)
     :param strike: 建議履約價
     :param expiry: 建議到期日
@@ -495,9 +502,13 @@ def create_dynamic_rollover_embed(
             " ----------------------------------",
             f" ├─ 標的: {C_GREEN}{buy_symbol}{C_RESET}",
             f" ├─ 動作: {C_GREEN}{buy_action_display}{C_RESET}",
-            f" └─ 策略: {suggested_strategy}",
-            "```",
+            f" ├─ 策略: {suggested_strategy}"
+            if structure_directive
+            else f" └─ 策略: {suggested_strategy}",
         ]
+        if structure_directive:
+            buy_lines.append(f" └─ 建議結構: {structure_directive}")
+        buy_lines.append("```")
         embed.add_field(
             name="📥 轉入資產 (Buy)", value="\n".join(buy_lines), inline=True
         )

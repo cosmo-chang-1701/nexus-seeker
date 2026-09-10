@@ -1847,6 +1847,7 @@ def create_entry_rules_embed(
     trading_strategy: Optional[str] = None,
     dynamic_regime: Optional[str] = None,
     dynamic_regime_reason: Optional[str] = None,
+    structure_directive: Optional[str] = None,
 ) -> discord.Embed:
     """
     建構標的深度分析中心「🔐 進場鐵律檢核」頁籤 Embed。
@@ -1862,6 +1863,11 @@ def create_entry_rules_embed(
     :param dynamic_regime: `regime_classifier.py::classify_dynamic_regime`
         回傳的 DynamicRegime 值 (例如 "REGIME_I_LEFT_CATCH")。
     :param dynamic_regime_reason: 對應的分類理由文字。
+    :param structure_directive: 左右兩套鐵律條件六依「當下市況」現算的建議合約
+        天期與部位結構字串 (右側來自 opportunity_cost.py::
+        _derive_entry_structure_directive，左側來自 left_side_entry.py 的 IVR
+        分流)。天期刻意設計為每輪重評都重算的輸出參數，而非在進場當下蓋章後
+        永不更新的部位標籤。預設 None 時不渲染此欄位，向下相容既有呼叫端。
     """
     embed = NexusEmbed(
         title=f"🔐 {symbol} 進場鐵律檢核 (Entry Ironclad Rules)",
@@ -1918,6 +1924,18 @@ def create_entry_rules_embed(
         six_lines.append(" └─ 尚無足夠數據進行判定")
     six_lines.append("```")
     _add_ansi_field_safely(embed, f"🔐 進場六重鐵律 ({_gate_label})", six_lines)
+
+    if structure_directive:
+        _add_ansi_field_safely(
+            embed,
+            "🎯 建議進場結構 (依當下市況現算)",
+            [
+                "```ansi",
+                f" ├─ {structure_directive}",
+                " └─ 天期依當下 Call Wall 空間/IVR/財報距離每輪重算，非進場時固定標籤",
+                "```",
+            ],
+        )
 
     if _effective_gate == "NONE":
         # 動態調整判定為 Regime II (全系統休眠) / IV (全面鎖倉) 時，兩套鐵律都
