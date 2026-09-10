@@ -1707,6 +1707,9 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
         f" ├─ CPI 年增率 (實際 vs 預期): {cpi_desc}",
         f" ├─ CNN 恐懼與貪婪指數: \u001b[1;36m{fear_greed:.1f}\u001b[0m",
         f" └─ 美國失業率 (UER): \u001b[1;33m{uer:.1f}%\u001b[0m (薩姆規則值: \u001b[1;31m{sahm_rule:.2f}\u001b[0m)",
+        "",
+        " ⚠️ FedWatch 資料源: 主要取自 Atlanta Fed 選擇權隱含機率分佈 (非 CME 期貨線性反推)，"
+        "方法論與 CME 官網 FedWatch 工具不同，數字可能存在落差。",
     ]
     macro_panel = "```ansi\n" + "\n".join(macro_lines) + "\n```"
 

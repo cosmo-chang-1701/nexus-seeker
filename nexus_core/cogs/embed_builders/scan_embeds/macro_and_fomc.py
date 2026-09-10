@@ -134,6 +134,11 @@ def create_fomc_escape_window_embed(
         for name, val in factors_summary:
             lines.append(f" ├─ {name}: {val}")
         lines[-1] = lines[-1].replace("├─", "└─")
+        lines.append("")
+        lines.append(
+            " ⚠️ FedWatch 資料源: 主要取自 Atlanta Fed 選擇權隱含機率分佈 (非 CME 期貨線性反推)，"
+            "方法論與 CME 官網 FedWatch 工具不同，數字可能存在落差。"
+        )
         panel = "```ansi\n" + "\n".join(lines) + "\n```"
         embed.add_field(
             name="📊 多因子監測結果",
@@ -144,7 +149,11 @@ def create_fomc_escape_window_embed(
         prob_suffix = " *(歷史快取/備援)*" if is_fallback else ""
         embed.add_field(
             name="📊 利率鷹派傾向分數 (FedWatch)",
-            value=f"下週 FOMC 鷹派傾向分數：**{prob * 100:.1f}%**{prob_suffix}",
+            value=(
+                f"下週 FOMC 鷹派傾向分數：**{prob * 100:.1f}%**{prob_suffix}\n"
+                "⚠️ 資料源: 主要取自 Atlanta Fed 選擇權隱含機率分佈 (非 CME 期貨線性反推)，"
+                "方法論與 CME 官網 FedWatch 工具不同，數字可能存在落差。"
+            ),
             inline=False,
         )
 
