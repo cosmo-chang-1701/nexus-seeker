@@ -113,7 +113,7 @@ flowchart TD
     FetchSentimentData --> AliasLookup[透過 StockAliasMatrix 4 層解析別名]
     AliasLookup --> MatchPoly[比對候選合約與在線 Fallback 搜尋]
 
-    MatchPoly --> CheckBearish{問句是否包含<br/>13 組看跌關鍵字?}
+    MatchPoly --> CheckBearish{"問句是否包含<br/>13 組看跌關鍵字?"}
     CheckBearish -- 是 --> InvertProb["P_bullish = 1.0 - P_yes (看跌反轉)"]
     CheckBearish -- 否 --> KeepProb["P_bullish = P_yes"]
 

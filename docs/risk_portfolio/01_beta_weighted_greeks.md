@@ -125,8 +125,8 @@ flowchart TD
     NextPos -- 是 --> HeatCheck[計算 Portfolio Heat = |Total Delta SPY| * SPY / Capital]
 
     HeatCheck --> LimitEval{Portfolio Heat >= 80%?}
-    LimitEval -- 是 --> HeatAlarm[🚨 投資組合過熱警報<br/>限制開倉 / 觸發 VTR 對沖建議]
-    LimitEval -- 否 --> SafeState[🟢 風控水位正常<br/>輸出 Portfolio Dashboard]
+    LimitEval -- 是 --> HeatAlarm["🚨 投資組合過熱警報<br/>限制開倉 / 觸發 VTR 對沖建議"]
+    LimitEval -- 否 --> SafeState["🟢 風控水位正常<br/>輸出 Portfolio Dashboard"]
 ```
 
 ---

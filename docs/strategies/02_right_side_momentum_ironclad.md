@@ -104,23 +104,23 @@
 
 ```mermaid
 flowchart TD
-    Start([開始: 候選標的右側進場六重鐵律檢核]) --> C1{條件一: 結構性突破<br/>15m 實體陽線 + 放量 1.5x<br/>站穩 VWAP + GammaFlip / Fallback?}
+    Start([開始: 候選標的右側進場六重鐵律檢核]) --> C1{"條件一: 結構性突破<br/>15m 實體陽線 + 放量 1.5x<br/>站穩 VWAP + GammaFlip / Fallback?"}
 
     C1 -- 失敗 --> Fail1[條件一❌: 突破未確認] --> StopFail([進場未通過: 拒絕轉倉/部署])
-    C1 -- 通過 --> C2{條件二: 做市商正 Gamma 底牆<br/>Support Wall 位於現價下方 (K < Spot)?<br/>距離現價 <= 5% 且 GEX >= 500k?}
+    C1 -- 通過 --> C2{"條件二: 做市商正 Gamma 底牆<br/>Support Wall 位於現價下方 (K < Spot)?<br/>距離現價 <= 5% 且 GEX >= 500k?"}
 
     C2 -- 失敗 --> Fail2[條件二❌: 缺乏有效正 Gamma 底牆] --> StopFail
-    C2 -- 通過 --> C3{條件三: 阻力空間與物理封頂<br/>Call Wall 距離 >= 5%?<br/>無 STO Call 巨鯨封頂?}
+    C2 -- 通過 --> C3{"條件三: 阻力空間與物理封頂<br/>Call Wall 距離 >= 5%?<br/>無 STO Call 巨鯨封頂?"}
 
     C3 -- 失敗 --> Fail3[條件三❌: 上方空間受阻或存在封頂] --> StopFail
-    C3 -- 通過 --> C4{條件四: 主力跨週期買盤<br/>存在 CALL BTO: DTE >= 7<br/>Ratio >= 0.8x, 名目 >= $200k<br/>Strike >= Spot?}
+    C3 -- 通過 --> C4{"條件四: 主力跨週期買盤<br/>存在 CALL BTO: DTE >= 7<br/>Ratio >= 0.8x, 名目 >= $200k<br/>Strike >= Spot?"}
 
     C4 -- 失敗 --> Fail4[條件四❌: 無主力跨週期買盤背書] --> StopFail
     C4 -- 通過 --> TriggerIO[前四項全數通過: 發動實體外部 I/O]
 
-    TriggerIO --> C5{條件五: 總經與財報安全閥<br/>距離財報 > 3 天?<br/>大盤非 SHORT_GAMMA / 危機?}
+    TriggerIO --> C5{"條件五: 總經與財報安全閥<br/>距離財報 > 3 天?<br/>大盤非 SHORT_GAMMA / 危機?"}
     C5 -- 失敗 --> Fail5[條件五❌: 遭遇總經踩踏或財報黑天鵝] --> StopFail
-    C5 -- 通過 --> C6{條件六: 標的自身 DTE 雜訊<br/>最近效期 DTE > 1 天?}
+    C5 -- 通過 --> C6{"條件六: 標的自身 DTE 雜訊<br/>最近效期 DTE > 1 天?"}
 
     C6 -- 失敗 --> Fail6[條件六❌: 標的處於 0/1 DTE 結算雜訊期] --> StopFail
     C6 -- 通過 --> PassAll([六重鐵律全數通過 ✅: 授權執行進場指令])

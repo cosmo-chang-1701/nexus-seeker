@@ -79,7 +79,7 @@ flowchart TD
     SortStrikes --> CalcCumSum[逐步累加 GEX: 計算累積曲線 C_i]
     CalcCumSum --> FindZeroCross[捕捉負轉正交叉點: C_prev < 0 <= C_curr]
 
-    FindZeroCross --> ApplyBracket[套用 Bracket 雜訊過濾:<br/>僅保留落在 0.7 * Spot 至 1.3 * Spot 之候選]
+    FindZeroCross --> ApplyBracket["套用 Bracket 雜訊過濾:<br/>僅保留落在 0.7 * Spot 至 1.3 * Spot 之候選"]
 
     ApplyBracket --> CheckRegimeDir{全鏈總和 C_N 方向校驗}
     CheckRegimeDir -- "C_N > 0 (LONG_GAMMA)" --> FilterBelow[僅保留 Strike <= Spot 之候選]

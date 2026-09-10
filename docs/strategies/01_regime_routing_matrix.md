@@ -67,24 +67,24 @@ $$
 
 ```mermaid
 flowchart TD
-    Start([開始: 標的動態市場結構分類]) --> CheckData{資料有效性檢查<br/>Spot > 0 且 GEX 有效?}
-    CheckData -- 否 --> ReturnRegimeII[返回 Regime II: 混沌泥淖態<br/>Fail-Safe 休眠觀望]
-    CheckData -- 是 --> CheckRegimeIV{Regime IV 優先審查<br/>滿足任一結構封頂/危機?}
+    Start([開始: 標的動態市場結構分類]) --> CheckData{"資料有效性檢查<br/>Spot > 0 且 GEX 有效?"}
+    CheckData -- 否 --> ReturnRegimeII["返回 Regime II: 混沌泥淖態<br/>Fail-Safe 休眠觀望"]
+    CheckData -- 是 --> CheckRegimeIV{"Regime IV 優先審查<br/>滿足任一結構封頂/危機?"}
 
-    CheckRegimeIV -- 大盤 SHORT_GAMMA 或 LIQUIDITY_CRISIS --> ReturnRegimeIV[返回 Regime IV: 結構封頂/危機態<br/>全面鎖定 / 嚴禁多頭進場]
+    CheckRegimeIV -- 大盤 SHORT_GAMMA 或 LIQUIDITY_CRISIS --> ReturnRegimeIV["返回 Regime IV: 結構封頂/危機態<br/>全面鎖定 / 嚴禁多頭進場"]
     CheckRegimeIV -- VTS Ratio >= 1.10 --> ReturnRegimeIV
     CheckRegimeIV -- Call Wall 空間 < 5% --> ReturnRegimeIV
     CheckRegimeIV -- 偵測到 STO Call 巨鯨物理封頂 --> ReturnRegimeIV
 
-    CheckRegimeIV -- 全數否 --> CheckBars{15m K 線檢查<br/>已收盤 K 棒 >= 21 根?}
+    CheckRegimeIV -- 全數否 --> CheckBars{"15m K 線檢查<br/>已收盤 K 棒 >= 21 根?"}
     CheckBars -- 否 --> ReturnRegimeII
-    CheckBars -- 是 --> CheckRegimeIII{Regime III 順勢突破審查<br/>全部條件是否成立?}
+    CheckBars -- 是 --> CheckRegimeIII{"Regime III 順勢突破審查<br/>全部條件是否成立?"}
 
-    CheckRegimeIII -- "Spot > GammaFlip 且 Spot > VWAP<br/>Call Wall 空間 >= 5%<br/>支撐牆距離 (0, 5%]<br/>15m 實體陽線且放量 >= 1.5x<br/>15m RSI > 55" --> ReturnRegimeIII[返回 Regime III: 右側動能態<br/>路由至: 右側突破六重鐵律]
+    CheckRegimeIII -- "Spot > GammaFlip 且 Spot > VWAP<br/>Call Wall 空間 >= 5%<br/>支撐牆距離 (0, 5%]<br/>15m 實體陽線且放量 >= 1.5x<br/>15m RSI > 55" --> ReturnRegimeIII["返回 Regime III: 右側動能態<br/>路由至: 右側突破六重鐵律"]
 
-    CheckRegimeIII -- 否 --> CheckRegimeI{Regime I 逆勢接刀審查<br/>全部條件是否成立?}
+    CheckRegimeIII -- 否 --> CheckRegimeI{"Regime I 逆勢接刀審查<br/>全部條件是否成立?"}
 
-    CheckRegimeI -- "Spot <= VWAP - 1.5 * ATR_15m<br/>15m RSI <= 30<br/>Put Wall 密著帶 [-1.0%, +1.5%]" --> ReturnRegimeI[返回 Regime I: 左側接刀態<br/>路由至: 左側均值回歸六重鐵律]
+    CheckRegimeI -- "Spot <= VWAP - 1.5 * ATR_15m<br/>15m RSI <= 30<br/>Put Wall 密著帶 [-1.0%, +1.5%]" --> ReturnRegimeI["返回 Regime I: 左側接刀態<br/>路由至: 左側均值回歸六重鐵律"]
 
     CheckRegimeI -- 否 --> ReturnRegimeII
 ```

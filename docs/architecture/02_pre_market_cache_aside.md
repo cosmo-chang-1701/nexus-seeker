@@ -98,15 +98,15 @@ flowchart TD
     Req([請求: get_unified_max_pain]) --> ReadQuote[取得最新現價 Spot]
     ReadQuote --> ReadDB[讀取 SQLite: market_cache 表]
 
-    ReadDB --> CacheExist{快取是否存在<br/>且 force_refresh=False?}
+    ReadDB --> CacheExist{"快取是否存在<br/>且 force_refresh=False?"}
     CacheExist -- 否 --> TriggerCompute[觸發即時計算管線]
-    CacheExist -- 是 --> CheckTTL{是否超過絕對 TTL?<br/>elapsed >= 21600s}
+    CacheExist -- 是 --> CheckTTL{"是否超過絕對 TTL?<br/>elapsed >= 21600s"}
 
     CheckTTL -- 是 --> TriggerCompute
-    CheckTTL -- 否 --> CheckCooldown{處於 30 秒平滑冷卻中?<br/>elapsed < 30.0s}
+    CheckTTL -- 否 --> CheckCooldown{"處於 30 秒平滑冷卻中?<br/>elapsed < 30.0s"}
 
-    CheckCooldown -- 是 --> CacheHit[🟢 快取命中 (Cache Valid)]
-    CheckCooldown -- 否 --> CheckDeviation{價格偏離度校驗<br/>|Spot - RefPrice| / RefPrice <= 0.02?}
+    CheckCooldown -- 是 --> CacheHit["🟢 快取命中 (Cache Valid)"]
+    CheckCooldown -- 否 --> CheckDeviation{"價格偏離度校驗<br/>|Spot - RefPrice| / RefPrice <= 0.02?"}
 
     CheckDeviation -- 是 且 mp_valid --> CacheHit
     CheckDeviation -- 否 (偏離 > 2%) --> TriggerCompute
@@ -120,7 +120,7 @@ flowchart TD
         SF_Wait --> BroadcastResult
     end
 
-    CacheHit --> ReturnResult([立即回傳指標封裝數據 (延遲 < 100ms)])
+    CacheHit --> ReturnResult(["立即回傳指標封裝數據 (延遲 < 100ms)"])
     BroadcastResult --> ReturnResult
 ```
 

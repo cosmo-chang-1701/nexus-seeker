@@ -111,13 +111,13 @@ flowchart TD
     FwdCheck -- 是 --> CalcScore[計算置信度評分 60-100]
     CalcScore --> MarkDDP[標記 is_ddp = True]
 
-    MarkDDP --> TDPCheck{現價 < EMA21 且<br/>現價 < MaxPain 且<br/>現價 < VPOC 且<br/>現價 < DPPOC?}
+    MarkDDP --> TDPCheck{"現價 < EMA21 且<br/>現價 < MaxPain 且<br/>現價 < VPOC 且<br/>現價 < DPPOC?"}
     TDPCheck -- 否 --> NormalDDP[輸出: DDP 基本面低估標的]
     TDPCheck -- 是 --> MarkTDP[標記 [🔵 TDP 三擊] 籌碼四重折價]
 
     MarkTDP --> SQZCheck{PSQ is_squeezing 是否為 True?}
     SQZCheck -- 否 --> OutputTDP[輸出: TDP 估值三擊共振信號]
-    SQZCheck -- 是 --> OutputTDPQ[升級: ⚡ TDPQ 突破共振<br/>基本面+籌碼折價+波動率壓縮]
+    SQZCheck -- 是 --> OutputTDPQ["升級: ⚡ TDPQ 突破共振<br/>基本面+籌碼折價+波動率壓縮"]
 ```
 
 ---

@@ -109,12 +109,12 @@ $$V_{trim} = _MACRO\_TOP\_ESCAPE\_TRIM\_RATIO \times V_{satellite} = 0.25 \times
 ```mermaid
 flowchart TD
     Start([排程觸發: 04:00/08:45/15m 心跳]) --> FetchMacro[抓取 CME ZQ 期貨, CPI, WTI, VTS, Net GEX]
-    FetchMacro --> SanityCheck{數值合理性閘門<br/>Sanity Gating}
+    FetchMacro --> SanityCheck{"數值合理性閘門<br/>Sanity Gating"}
 
-    SanityCheck -- 異常/未解釋飽和 --> FallbackState[啟動 Atlanta Fed Excel 或 0.50 備援<br/>macro_fedwatch_is_fallback=1]
+    SanityCheck -- 異常/未解釋飽和 --> FallbackState["啟動 Atlanta Fed Excel 或 0.50 備援<br/>macro_fedwatch_is_fallback=1"]
     SanityCheck -- 數值正常 --> CalculateProb[反推 R2 並計算緊縮分數 prob]
 
-    FallbackState --> EscapeRegime[評估四因子流動性矩陣<br/>evaluate_escape_window_regime]
+    FallbackState --> EscapeRegime["評估四因子流動性矩陣<br/>evaluate_escape_window_regime"]
     CalculateProb --> EscapeRegime
 
     EscapeRegime --> WindowShift{矩陣狀態評估}
@@ -122,7 +122,7 @@ flowchart TD
     WindowShift -- "prob<=0.4 且 E>=2 且 T==0" --> ShiftLate[🟢 寬鬆擴張: 逃頂窗口後推 5 天]
     WindowShift -- 其他中性條件 --> ShiftNeutral[🟡 中性平衡: 窗口維持 0 天]
 
-    ShiftEarly --> TopEscapeScore[計算五因子複合逃頂評分<br/>evaluate_macro_top_escape_score]
+    ShiftEarly --> TopEscapeScore["計算五因子複合逃頂評分<br/>evaluate_macro_top_escape_score"]
     ShiftLate --> TopEscapeScore
     ShiftNeutral --> TopEscapeScore
 
@@ -132,8 +132,8 @@ flowchart TD
     CheckTier -- "Score == 1" --> WatchTier[⚠️ WATCH 前哨觀察]
     CheckTier -- "Score == 0" --> NormalTier[🟢 NORMAL 常態]
 
-    CriticalTier --> Scenario6Gate{使用者開啟<br/>enable_macro_top_escape_defense?}
-    Scenario6Gate -- 是 --> ExecScenario6[觸發轉倉情境 6:<br/>衛星持倉防禦性減碼 25% 轉入 BOXX]
+    CriticalTier --> Scenario6Gate{"使用者開啟<br/>enable_macro_top_escape_defense?"}
+    Scenario6Gate -- 是 --> ExecScenario6["觸發轉倉情境 6:<br/>衛星持倉防禦性減碼 25% 轉入 BOXX"]
     Scenario6Gate -- 否 --> EndReport[僅呈現終端 Embed 警報]
     ElevatedTier --> EndReport
     WatchTier --> EndReport

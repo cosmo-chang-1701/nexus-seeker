@@ -80,16 +80,16 @@ flowchart TD
     end
 
     subgraph Pipeline2 ["管線二：30 分鐘深度戰術心跳 (深度決策)"]
-        LoopTrigger(["獨立 Task: sleep(30m) 循環"]) --> P2_Leader{動態檢查 Leader 狀態<br/>getattr(bot, '_is_leader_instance')}
+        LoopTrigger(["獨立 Task: sleep(30m) 循環"]) --> P2_Leader{"動態檢查 Leader 狀態<br/>getattr(bot, '_is_leader_instance')"}
         P2_Leader -- 否 --> SleepLeader["休眠 600 秒等待選舉"] --> LoopTrigger
         P2_Leader -- 是 --> CheckMarket{美股開盤中?}
         CheckMarket -- 否 --> SleepClosed["休眠 600 秒待機"] --> LoopTrigger
         CheckMarket -- 是 --> EvalPhase["計算 Phase A/B/C 時段"]
 
         EvalPhase --> EvalSymbol["evaluate_watchlist_symbol()<br/>計算微觀結構, Greeks, ATR"]
-        EvalSymbol --> CheckAlert{tactical.alert_level != 'green'?}
+        EvalSymbol --> CheckAlert{"tactical.alert_level != 'green'?"}
         CheckAlert -- 否 (綠色常態) --> SkipPush["靜默不推送 (杜絕打擾)"]
-        CheckAlert -- 是 (非綠色警報) --> CheckDeepNotif{用戶開啟<br/>heartbeat_symbol_deep?}
+        CheckAlert -- 是 (非綠色警報) --> CheckDeepNotif{"用戶開啟<br/>heartbeat_symbol_deep?"}
 
         CheckDeepNotif -- 是 --> BuildDeepEmbed["組裝 create_watchlist_signal_embed<br/>(含 1.5x ATR 停損與資金藍圖)"]
         CheckDeepNotif -- 否 --> SkipPush

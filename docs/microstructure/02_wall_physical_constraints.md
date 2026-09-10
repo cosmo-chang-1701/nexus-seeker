@@ -75,16 +75,16 @@ flowchart TD
     Start([呼叫 _scan_gex_walls 進行牆體掃描]) --> InputCheck{現價 Spot > 0?}
 
     InputCheck -- 否 --> Unconstrained[退回不設限的全鏈掃描]
-    InputCheck -- 是 --> FilterSupport[強制物理約束過濾:<br/>選取所有 Strike < Spot 且 GEX > 0 之履約價]
+    InputCheck -- 是 --> FilterSupport["強制物理約束過濾:<br/>選取所有 Strike < Spot 且 GEX > 0 之履約價"]
 
     FilterSupport --> CheckEmpty{合格集合是否為空?}
-    CheckEmpty -- 是 (下方無正 GEX 峰值) --> WallZero[Support Wall = 0.0<br/>Support GEX = 0.0]
+    CheckEmpty -- 是 (下方無正 GEX 峰值) --> WallZero["Support Wall = 0.0<br/>Support GEX = 0.0"]
 
     CheckEmpty -- 否 --> FindArgMax[找出下方最大正 GEX 履約價 Strike*]
     FindArgMax --> CheckThreshold{GEX Strike* >= 500,000?}
 
     CheckThreshold -- 否 (屬於薄紙牆) --> WallZero
-    CheckThreshold -- 是 --> WallValid[Support Wall = Strike*<br/>Support GEX = GEX Strike*]
+    CheckThreshold -- 是 --> WallValid["Support Wall = Strike*<br/>Support GEX = GEX Strike*"]
 
     WallZero --> Out([輸出: 正 Gamma 支撐底牆判定完畢])
     WallValid --> Out

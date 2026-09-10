@@ -108,32 +108,32 @@ $$
 
 ```mermaid
 flowchart TD
-    Start([15 分鐘微觀結構出場評估循環]) --> Step1{計算防守錨點與雙軌停損<br/>AnchorBase -> StopLoss(0.5 ATR) -> ExtremeStop(3.0 ATR)<br/>執行 LVN 吸附修正與 Ratchet 地板}
+    Start([15 分鐘微觀結構出場評估循環]) --> Step1{"計算防守錨點與雙軌停損<br/>AnchorBase -> StopLoss(0.5 ATR) -> ExtremeStop(3.0 ATR)<br/>執行 LVN 吸附修正與 Ratchet 地板"}
 
-    Step1 --> StepTP{止盈分層檢驗<br/>TP3 > TP2 > TP1?}
+    Step1 --> StepTP{"止盈分層檢驗<br/>TP3 > TP2 > TP1?"}
 
-    StepTP -- 命中 TP3 --> ActTP3[執行 TP3-終局平倉: 減碼 20%<br/>Delta >= 0.85 或 15m 帶量失守 VWAP 或 DTE <= 5]
-    StepTP -- 命中 TP2 --> ActTP2[執行 TP2-空間擴展: 減碼 30%<br/>穿過 CallWall >= 1.5% 或 CallWall 向上遷移 >= 3%]
-    StepTP -- 命中 TP1 --> ActTP1[執行 TP1-阻力初探: 減碼 50%<br/>現價 >= 0.995 * CallWall]
+    StepTP -- 命中 TP3 --> ActTP3["執行 TP3-終局平倉: 減碼 20%<br/>Delta >= 0.85 或 15m 帶量失守 VWAP 或 DTE <= 5"]
+    StepTP -- 命中 TP2 --> ActTP2["執行 TP2-空間擴展: 減碼 30%<br/>穿過 CallWall >= 1.5% 或 CallWall 向上遷移 >= 3%"]
+    StepTP -- 命中 TP1 --> ActTP1["執行 TP1-阻力初探: 減碼 50%<br/>現價 >= 0.995 * CallWall"]
 
-    StepTP -- 未命中任何 TP --> StepTrack2{軌道二: 極端瞬時停損?<br/>Spot < ExtremeStopLoss?}
+    StepTP -- 未命中任何 TP --> StepTrack2{"軌道二: 極端瞬時停損?<br/>Spot < ExtremeStopLoss?"}
 
-    StepTrack2 -- 是 --> ActTrack2[🚨 軌道二極端瞬時停損觸發！<br/>無視 15m 收盤等待，現價即時貫穿<br/>立即 100% 市價平倉轉入 VOO/CASH]
+    StepTrack2 -- 是 --> ActTrack2["🚨 軌道二極端瞬時停損觸發！<br/>無視 15m 收盤等待，現價即時貫穿<br/>立即 100% 市價平倉轉入 VOO/CASH"]
 
-    StepTrack2 -- 否 --> StepIVR{期權 IV 驟降檢查?<br/>OPTIONS 且 IVR 驟降 >= 20%?}
+    StepTrack2 -- 否 --> StepIVR{"期權 IV 驟降檢查?<br/>OPTIONS 且 IVR 驟降 >= 20%?"}
 
-    StepIVR -- 是 --> ActIVR[🚨 期權 IV 驟降快速通道: 100% 平倉<br/>3-5m 快速平倉規避 Delta/Vega 雙殺]
+    StepIVR -- 是 --> ActIVR["🚨 期權 IV 驟降快速通道: 100% 平倉<br/>3-5m 快速平倉規避 Delta/Vega 雙殺"]
 
-    StepIVR -- 否 --> StepSL{止損分層檢驗<br/>SL-結構 > SL-翻轉 > SL-主力 > SL-保本?}
+    StepIVR -- 否 --> StepSL{"止損分層檢驗<br/>SL-結構 > SL-翻轉 > SL-主力 > SL-保本?"}
 
-    StepSL -- SL-結構失效 --> ActSL1[🚨 SL-結構失效: 100% 平倉<br/>SPOT: 15m 實體收盤跌破 / OPTIONS: 即時跌破]
-    StepSL -- SL-狀態翻轉 --> ActSL2[🚨 SL-狀態翻轉: 100% 平倉<br/>個股 Net GEX <= 0 翻入負 Gamma]
-    StepSL -- SL-主力對沖 --> ActSL3[🚨 SL-主力對沖: 100% 平倉<br/>偵測到近平值 PUT BTO 巨鯨壓制]
-    StepSL -- SL-動態保本 --> ActSL4[🛡️ SL-動態保本: 維持 HOLD<br/>距 Call Wall 進度 >= 50%，停損上移保本點]
+    StepSL -- SL-結構失效 --> ActSL1["🚨 SL-結構失效: 100% 平倉<br/>SPOT: 15m 實體收盤跌破 / OPTIONS: 即時跌破"]
+    StepSL -- SL-狀態翻轉 --> ActSL2["🚨 SL-狀態翻轉: 100% 平倉<br/>個股 Net GEX <= 0 翻入負 Gamma"]
+    StepSL -- SL-主力對沖 --> ActSL3["🚨 SL-主力對沖: 100% 平倉<br/>偵測到近平值 PUT BTO 巨鯨壓制"]
+    StepSL -- SL-動態保本 --> ActSL4["🛡️ SL-動態保本: 維持 HOLD<br/>距 Call Wall 進度 >= 50%，停損上移保本點"]
 
-    StepSL -- 未觸發任何 SL --> StepReduce{超額配置檢查<br/>佔比 > max_allocation_pct?}
+    StepSL -- 未觸發任何 SL --> StepReduce{"超額配置檢查<br/>佔比 > max_allocation_pct?"}
     StepReduce -- 是 --> ActReduce[常規再平衡: REDUCE 減碼至上限]
-    StepReduce -- 否 --> ActHold[維持現狀: HOLD<br/>做市商正 Gamma 護城河完好]
+    StepReduce -- 否 --> ActHold["維持現狀: HOLD<br/>做市商正 Gamma 護城河完好"]
 ```
 
 ---

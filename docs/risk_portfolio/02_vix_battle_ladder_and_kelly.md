@@ -83,12 +83,12 @@ flowchart TD
 
     FetchVIX --> VIXTierCheck{VIX 水位落在哪一階梯?}
 
-    VIXTierCheck -->|VIX < 15.0| TierDormant[⚪ 休兵 Tier: STO 策略強制阻斷<br/>配額 0.0x / 禁止開倉]
-    VIXTierCheck -->|15.0 <= VIX < 18.0| TierCaution[🟡 少買 Tier: 謹慎進場<br/>STO Delta Cap -0.12 / 配額 0.5x]
-    VIXTierCheck -->|18.0 <= VIX < 24.0| TierReady[🟠 摩拳擦掌 Tier: 標準配置<br/>STO Delta Cap -0.20 / 配額 1.0x]
-    VIXTierCheck -->|24.0 <= VIX < 30.0| TierAggressive[🔴 大買 Tier: 主動進攻<br/>STO Delta Cap -0.20 / 配額 1.2x]
-    VIXTierCheck -->|30.0 <= VIX < 35.0| TierHeavy[🔴 重砲進場 Tier: 積極加碼<br/>STO Delta Cap -0.25 / 配額 1.5x]
-    VIXTierCheck -->|VIX >= 35.0| TierExtreme[🟥 All-in Tier: 終極逆向進攻<br/>STO Delta Cap -0.35 / 配額 2.0x<br/>啟用 Half-Kelly 0.50 覆寫]
+    VIXTierCheck -->|VIX < 15.0| TierDormant["⚪ 休兵 Tier: STO 策略強制阻斷<br/>配額 0.0x / 禁止開倉"]
+    VIXTierCheck -->|15.0 <= VIX < 18.0| TierCaution["🟡 少買 Tier: 謹慎進場<br/>STO Delta Cap -0.12 / 配額 0.5x"]
+    VIXTierCheck -->|18.0 <= VIX < 24.0| TierReady["🟠 摩拳擦掌 Tier: 標準配置<br/>STO Delta Cap -0.20 / 配額 1.0x"]
+    VIXTierCheck -->|24.0 <= VIX < 30.0| TierAggressive["🔴 大買 Tier: 主動進攻<br/>STO Delta Cap -0.20 / 配額 1.2x"]
+    VIXTierCheck -->|30.0 <= VIX < 35.0| TierHeavy["🔴 重砲進場 Tier: 積極加碼<br/>STO Delta Cap -0.25 / 配額 1.5x"]
+    VIXTierCheck -->|VIX >= 35.0| TierExtreme["🟥 All-in Tier: 終極逆向進攻<br/>STO Delta Cap -0.35 / 配額 2.0x<br/>啟用 Half-Kelly 0.50 覆寫"]
 
     TierDormant --> RejectTrade[終止操作 / 拒絕信號]
     TierCaution --> CalcKelly[計算勝率 p 與賠率 b]
@@ -98,10 +98,10 @@ flowchart TD
     TierExtreme --> CalcKelly
 
     CalcKelly --> KellyFormula[計算純凱利 f* = p - 1-p / b]
-    KellyFormula --> ApplyScaling[應用分數縮放與 Cap<br/>STO: 5% / BTO: 3%]
+    KellyFormula --> ApplyScaling["應用分數縮放與 Cap<br/>STO: 5% / BTO: 3%"]
 
     ApplyScaling --> InterpCheck{VIX > 29.5?}
-    InterpCheck -- 是 --> DynamicInterp[線性插值放大 Risk Limit<br/>最高放大 1.5x]
+    InterpCheck -- 是 --> DynamicInterp["線性插值放大 Risk Limit<br/>最高放大 1.5x"]
     InterpCheck -- 否 --> HaircutCheck
 
     DynamicInterp --> HaircutCheck{檢查重大事件與尾部風險}

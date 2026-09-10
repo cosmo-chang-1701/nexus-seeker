@@ -70,23 +70,23 @@ $$\text{Strategy Routing} \leftarrow \text{"🔴賣方禁售"}$$
 
 ```mermaid
 flowchart TD
-    Start([啟動期權策略匹配與 IVR 審計]) --> TermCheck{Term Ratio > 1.05?<br/>期限結構倒掛}
+    Start([啟動期權策略匹配與 IVR 審計]) --> TermCheck{"Term Ratio > 1.05?<br/>期限結構倒掛"}
 
-    TermCheck -- 是 --> DefenseState[⚠️ 總經事件防禦期<br/>防 IV Crush 暴跌<br/>全面暫停常規開倉]
-    TermCheck -- 否 --> GammaCheck{is_neg_gamma 是否成立?<br/>Net GEX < 0 或 現價 < PutWall}
+    TermCheck -- 是 --> DefenseState["⚠️ 總經事件防禦期<br/>防 IV Crush 暴跌<br/>全面暫停常規開倉"]
+    TermCheck -- 否 --> GammaCheck{"is_neg_gamma 是否成立?<br/>Net GEX < 0 或 現價 < PutWall"}
 
-    GammaCheck -- 是 (做市商順向追殺) --> LockoutSeller[🔴 賣方禁售<br/>做市商負 Gamma 泥淖<br/>禁止 CSP / Covered Call / Credit Spread]
-    GammaCheck -- 否 (做市商自穩定) --> IVRHardLock{IV Rank < 10.0%?<br/>底層硬鎖閘門}
+    GammaCheck -- 是 (做市商順向追殺) --> LockoutSeller["🔴 賣方禁售<br/>做市商負 Gamma 泥淖<br/>禁止 CSP / Covered Call / Credit Spread"]
+    GammaCheck -- 否 (做市商自穩定) --> IVRHardLock{"IV Rank < 10.0%?<br/>底層硬鎖閘門"}
 
-    IVRHardLock -- 是 --> HardLockAllowed[🔴 絕對禁止賣方<br/>僅允許: SPOT_BUY / BTO ITM Call (Delta>=0.70) / Debit Spread]
-    IVRHardLock -- 否 --> IVRCSPGate{IV Rank < 15.0%?<br/>前端雷達閘門}
+    IVRHardLock -- 是 --> HardLockAllowed["🔴 絕對禁止賣方<br/>僅允許: SPOT_BUY / BTO ITM Call (Delta>=0.70) / Debit Spread"]
+    IVRHardLock -- 否 --> IVRCSPGate{"IV Rank < 15.0%?<br/>前端雷達閘門"}
 
-    IVRCSPGate -- 是 --> LockCSP[🔴 CSP 禁售<br/>權利金價值過低，不符風險報酬比]
+    IVRCSPGate -- 是 --> LockCSP["🔴 CSP 禁售<br/>權利金價值過低，不符風險報酬比"]
     IVRCSPGate -- 否 --> IVRRangeCheck{IV Rank 區間劃分}
 
-    IVRRangeCheck -->|15% <= IVR <= 80%| NormalSeller[🟢 適宜賣方<br/>推薦: CSP / Covered Call / Iron Condor]
-    IVRRangeCheck -->|80% < IVR <= 90%| BubbleDefense[⚠️ 高 IV 泡沫防禦<br/>嚴禁單腿買方 / 僅限寬幅 Credit Spread 或 Collar]
-    IVRRangeCheck -->|IVR > 90%| ExtremePanic[🟥 極端恐慌階梯<br/>啟動 VIX 重砲/All-in 戰情階梯審計]
+    IVRRangeCheck -->|15% <= IVR <= 80%| NormalSeller["🟢 適宜賣方<br/>推薦: CSP / Covered Call / Iron Condor"]
+    IVRRangeCheck -->|80% < IVR <= 90%| BubbleDefense["⚠️ 高 IV 泡沫防禦<br/>嚴禁單腿買方 / 僅限寬幅 Credit Spread 或 Collar"]
+    IVRRangeCheck -->|IVR > 90%| ExtremePanic["🟥 極端恐慌階梯<br/>啟動 VIX 重砲/All-in 戰情階梯審計"]
 ```
 
 ---

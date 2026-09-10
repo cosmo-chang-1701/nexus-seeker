@@ -79,9 +79,9 @@ $$\text{Action} = \begin{cases} \text{DEFENSIVE\_CLOSE}, & \text{若 Trigger 為
 flowchart TD
     Start([投資組合監控循環 Portfolio Monitor]) --> PosLoop[審計單一持倉 Position]
 
-    PosLoop --> LongCheck{是否為買方多頭持倉?<br/>quantity > 0}
+    PosLoop --> LongCheck{"是否為買方多頭持倉?<br/>quantity > 0"}
     LongCheck -- 否 (賣方空頭部位) --> ShortEval[交由賣方防禦狀態機審計 evaluate_defense_status]
-    LongCheck -- 是 (買方部位) --> DITMCheck{滿足 DITM 四重條件?<br/>|Delta| >= 0.85<br/>且 PnL > 150%<br/>且 DTE <= 21天?}
+    LongCheck -- 是 (買方部位) --> DITMCheck{"滿足 DITM 四重條件?<br/>|Delta| >= 0.85<br/>且 PnL > 150%<br/>且 DTE <= 21天?"}
 
     DITMCheck -- 否 --> GeneralLongCheck{常規買方規則審計}
     GeneralLongCheck -->|PnL >= 100%| TPAlert[✅ 建議停利 Sell to Close]
@@ -91,8 +91,8 @@ flowchart TD
 
     DITMCheck -- 是 (凸性衰竭警報) --> DTEGate{剩餘到期時間 DTE <= 7 天?}
 
-    DTEGate -- 是 (極短天期) --> ActionClose[🛑 DEFENSIVE_CLOSE<br/>防禦性平倉落袋<br/>規避末日流動性獵殺與踩踏]
-    DTEGate -- 否 (7 < DTE <= 21) --> ActionRoll[🔄 ROLL_UP_OUT<br/>動態轉倉防禦<br/>向上平移履約價 + 延長到期日<br/>抽回原始本金 + 重置 Gamma 凸性]
+    DTEGate -- 是 (極短天期) --> ActionClose["🛑 DEFENSIVE_CLOSE<br/>防禦性平倉落袋<br/>規避末日流動性獵殺與踩踏"]
+    DTEGate -- 否 (7 < DTE <= 21) --> ActionRoll["🔄 ROLL_UP_OUT<br/>動態轉倉防禦<br/>向上平移履約價 + 延長到期日<br/>抽回原始本金 + 重置 Gamma 凸性"]
 
     ActionClose --> GenerateAlert[發送 Discord 嵌入式風險警報]
     ActionRoll --> GenerateAlert

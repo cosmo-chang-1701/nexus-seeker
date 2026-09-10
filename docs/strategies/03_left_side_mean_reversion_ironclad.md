@@ -108,30 +108,30 @@ $$
 
 ```mermaid
 flowchart TD
-    Start([開始: 候選標的左側進場六重鐵律檢核]) --> L1{左側條件一: 力竭與乖離<br/>Spot <= VWAP - 1.5 ATR_15m?<br/>15m RSI <= 30?<br/>止跌K線: 錘頭/蜻蜓十字/收窄?<br/>量能: 縮量 <=0.7x 或 恐慌 >=2.0x?}
+    Start([開始: 候選標的左側進場六重鐵律檢核]) --> L1{"左側條件一: 力竭與乖離<br/>Spot <= VWAP - 1.5 ATR_15m?<br/>15m RSI <= 30?<br/>止跌K線: 錘頭/蜻蜓十字/收窄?<br/>量能: 縮量 <=0.7x 或 恐慌 >=2.0x?"}
 
     L1 -- 失敗 --> Fail1[左側條件一❌: 拋壓未竭或無止跌信號] --> StopFail([左側進場未通過: 拒絕抄底])
-    L1 -- 通過 --> L2{左側條件二: Put Wall 密著<br/>Spot 距 Put Wall 在 [-1.0%, +1.5%]?<br/>底牆 GEX >= $5M?}
+    L1 -- 通過 --> L2{"左側條件二: Put Wall 密著<br/>Spot 距 Put Wall 在 [-1.0%, +1.5%]?<br/>底牆 GEX >= $5M?"}
 
     L2 -- 失敗 --> Fail2[左側條件二❌: 未密著做市商有效底牆] --> StopFail
-    L2 -- 通過 --> L3{左側條件三: 無踩踏與回歸空間<br/>無 Strike < PutWall 追空大單?<br/>min(VWAP, GammaFlip) 空間 >= 3.5%?}
+    L2 -- 通過 --> L3{"左側條件三: 無踩踏與回歸空間<br/>無 Strike < PutWall 追空大單?<br/>min(VWAP, GammaFlip) 空間 >= 3.5%?"}
 
     L3 -- 失敗 --> Fail3[左側條件三❌: 存在追空踩踏或空間不足] --> StopFail
-    L3 -- 通過 --> L4{左側條件四: 主力護盤訂單流<br/>存在 PUT STO: DTE>=14, >=$300k?<br/>或存在 CALL BTO: DTE>=30, >=$200k?}
+    L3 -- 通過 --> L4{"左側條件四: 主力護盤訂單流<br/>存在 PUT STO: DTE>=14, >=$300k?<br/>或存在 CALL BTO: DTE>=30, >=$200k?"}
 
     L4 -- 失敗 --> Fail4[左側條件四❌: 無機構主力資金護盤] --> StopFail
     L4 -- 通過 --> TriggerIO[前四項全數通過: 發動實體外部 I/O]
 
-    TriggerIO --> L5{左側條件五: 總經與 VTS 安全閥<br/>距離財報 > 3 天?<br/>大盤非危機模式?<br/>VTS Ratio < 1.10 未倒掛?}
+    TriggerIO --> L5{"左側條件五: 總經與 VTS 安全閥<br/>距離財報 > 3 天?<br/>大盤非危機模式?<br/>VTS Ratio < 1.10 未倒掛?"}
 
     L5 -- 失敗 --> Fail5[左側條件五❌: 遭遇流動性倒掛或財報風險] --> StopFail
-    L5 -- 通過 --> L6{左側條件六: Theta 磨底與 IVR 分流<br/>最近效期 DTE >= 21 天?}
+    L5 -- 通過 --> L6{"左側條件六: Theta 磨底與 IVR 分流<br/>最近效期 DTE >= 21 天?"}
 
     L6 -- 失敗 --> Fail6[左側條件六❌: 合約天數過短無法承受磨底] --> StopFail
     L6 -- 通過 --> CheckIVR{標的 IVR 位階評估}
 
-    CheckIVR -- "IVR <= 50.0%" --> PassBuyCall([六重鐵律全數通過 ✅<br/>策略指令: 輕度 ITM/ATM Call 買進])
-    CheckIVR -- "IVR > 50.0%" --> PassSpread([六重鐵律全數通過 ✅<br/>策略指令: Bull Call Spread / Short Put])
+    CheckIVR -- "IVR <= 50.0%" --> PassBuyCall(["六重鐵律全數通過 ✅<br/>策略指令: 輕度 ITM/ATM Call 買進"])
+    CheckIVR -- "IVR > 50.0%" --> PassSpread(["六重鐵律全數通過 ✅<br/>策略指令: Bull Call Spread / Short Put"])
 
     %% 短路註記
     StopFail -. 前四項失敗時 .-> SkipL5L6[標記: 左側條件五/六 ⏭️ 略過]

@@ -148,13 +148,13 @@ stateDiagram-v2
 flowchart TD
     DTE_Input[期權持倉到期天數: DTE] --> DTE_Check{DTE 階梯判斷}
 
-    DTE_Check -- "DTE <= 1 天" --> ForceSettle[EXPIRATION_SETTLEMENT_ALERT<br/>最高優先級！強制 100% 平倉<br/>轉倉至 21-45 DTE 次月主力合約]
+    DTE_Check -- "DTE <= 1 天" --> ForceSettle["EXPIRATION_SETTLEMENT_ALERT<br/>最高優先級！強制 100% 平倉<br/>轉倉至 21-45 DTE 次月主力合約"]
 
     DTE_Check -- "1 < DTE < 7 天" --> IntentCheck{意圖類型?}
-    IntentCheck -- 新開倉/轉倉意圖 --> Lockout[LOCKOUT_SKIP<br/>封鎖操作！末日合約流動性雜訊]
-    IntentCheck -- 既有持倉管理 --> MaintainRisk[MAINTAIN_RISK_MONITORING<br/>維持停損與微觀結構監控]
+    IntentCheck -- 新開倉/轉倉意圖 --> Lockout["LOCKOUT_SKIP<br/>封鎖操作！末日合約流動性雜訊"]
+    IntentCheck -- 既有持倉管理 --> MaintainRisk["MAINTAIN_RISK_MONITORING<br/>維持停損與微觀結構監控"]
 
-    DTE_Check -- "DTE >= 7 天" --> NormalExec[NORMAL_EXECUTION<br/>正常執行各項量化策略]
+    DTE_Check -- "DTE >= 7 天" --> NormalExec["NORMAL_EXECUTION<br/>正常執行各項量化策略"]
 ```
 
 ---

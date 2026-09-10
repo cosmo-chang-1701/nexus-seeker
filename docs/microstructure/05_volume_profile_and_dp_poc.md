@@ -78,7 +78,7 @@ $$
 
 ```mermaid
 flowchart TD
-    Start([輸入標的歷史 K 線: 回看 20 交易日]) --> SubsetData[截取最近 20 日資料子集<br/>1h K 線約 140 根 / 1d K 線約 20 根]
+    Start([輸入標的歷史 K 線: 回看 20 交易日]) --> SubsetData["截取最近 20 日資料子集<br/>1h K 線約 140 根 / 1d K 線約 20 根"]
     SubsetData --> CheckEmpty{資料為空?}
     CheckEmpty -- 是 --> ReturnNone[返回 None: 無法計算]
 
@@ -86,14 +86,14 @@ flowchart TD
     CalcExtremes --> CheckDegenerate{P_min == P_max?}
     CheckDegenerate -- 是 (極端無波動) --> ReturnFlat[HVN = P_min, LVN = P_min]
 
-    CheckDegenerate -- 否 --> Binning[切割 50 個等寬區間: Bins 0 到 49<br/>計算每根 K 棒 Typical Price]
+    CheckDegenerate -- 否 --> Binning["切割 50 個等寬區間: Bins 0 到 49<br/>計算每根 K 棒 Typical Price"]
     Binning --> GroupSum[按 Bin 分組加總成交量: V_b]
 
     GroupSum --> FindPeaks[找出最大值 b_HVN 與最小值 b_LVN]
-    FindPeaks --> CalcPrices[計算中央價格:<br/>HVN Price 與 LVN Price]
+    FindPeaks --> CalcPrices["計算中央價格:<br/>HVN Price 與 LVN Price"]
 
-    CalcPrices --> PutWallComp{比對做市商 Put Wall:<br/>|DP-POC - PutWall| / PutWall <= 1%?}
-    PutWallComp -- 是 --> MarkResonance[🧲 觸發共振磁吸底牆:<br/>現貨大宗籌碼與期權底牆雙重共振]
+    CalcPrices --> PutWallComp{"比對做市商 Put Wall:<br/>|DP-POC - PutWall| / PutWall <= 1%?"}
+    PutWallComp -- 是 --> MarkResonance["🧲 觸發共振磁吸底牆:<br/>現貨大宗籌碼與期權底牆雙重共振"]
     PutWallComp -- 否 --> NormalProfile[輸出常規 HVN/LVN 支撐壓力位]
 
     MarkResonance --> End([輸出結果至雷達終端與防洗盤模組])

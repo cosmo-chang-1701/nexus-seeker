@@ -66,16 +66,16 @@ flowchart TD
     FetchTheta --> CalcMonthlyTheta[計算月度 Theta 現金流 = Daily Theta * 30]
     CalcMonthlyTheta --> CalcBurn[計算淨月度現金消耗率 = Monthly Expense - Monthly Theta]
 
-    CalcBurn --> BurnCheck{Net Monthly Burn <= 0?<br/>Theta 是否完全覆蓋生活支出}
+    CalcBurn --> BurnCheck{"Net Monthly Burn <= 0?<br/>Theta 是否完全覆蓋生活支出"}
 
-    BurnCheck -- 是 (完全覆蓋) --> InfiniteRunway[✨ 輸出生存天數: 9999.0 天<br/>標記: 鐵血不破 永續生存<br/>無需被迫平倉任何現貨]
+    BurnCheck -- 是 (完全覆蓋) --> InfiniteRunway["✨ 輸出生存天數: 9999.0 天<br/>標記: 鐵血不破 永續生存<br/>無需被迫平倉任何現貨"]
     BurnCheck -- 否 (淨消耗 > 0) --> CalcDays[計算跑道天數 = Cash Reserve / Net Burn * 30]
 
-    CalcDays --> ExtendedCalc[計算極限跑道 Extended Runway<br/>含 Backup Liquidity]
+    CalcDays --> ExtendedCalc["計算極限跑道 Extended Runway<br/>含 Backup Liquidity"]
     ExtendedCalc --> HealthCheck{Runway Days 是否 < 180 天?}
 
-    HealthCheck -- 是 --> TriggerWarning[🚨 觸發流動性吃緊警報<br/>建議提高賣方 AROC 配置<br/>或縮減非必要資本開支]
-    HealthCheck -- 否 --> NormalHealth[🟢 財務跑道充裕<br/>處於安全防禦區間]
+    HealthCheck -- 是 --> TriggerWarning["🚨 觸發流動性吃緊警報<br/>建議提高賣方 AROC 配置<br/>或縮減非必要資本開支"]
+    HealthCheck -- 否 --> NormalHealth["🟢 財務跑道充裕<br/>處於安全防禦區間"]
 
     InfiniteRunway --> RenderDashboard[渲染至用戶分析中心與 CLI 面板]
     TriggerWarning --> RenderDashboard

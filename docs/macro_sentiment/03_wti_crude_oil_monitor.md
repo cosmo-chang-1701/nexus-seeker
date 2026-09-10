@@ -81,16 +81,16 @@ flowchart TD
 
     FetchQuote --> ValidQuote{報價有效 c > 0?}
     ValidQuote -- 否 --> LogWarn[記錄警告並退出]
-    ValidQuote -- 是 --> CalcChange[讀取 macro_wti_prev_30m<br/>計算 30m 波動率與更新快取]
+    ValidQuote -- 是 --> CalcChange["讀取 macro_wti_prev_30m<br/>計算 30m 波動率與更新快取"]
 
-    CalcChange --> CalcTechnicals[計算 RSI14, MA20/50/200, ATR14<br/>判定五階趨勢與 w_oil 權重]
+    CalcChange --> CalcTechnicals["計算 RSI14, MA20/50/200, ATR14<br/>判定五階趨勢與 w_oil 權重"]
     CalcTechnicals --> ScanGeopolitics[比對 17 組地緣政治事件關鍵字]
 
     ScanGeopolitics --> UserLoop[遍歷開啟 alpha_wti_oil 之使用者]
-    UserLoop --> CheckThresholds{評估使用者門檻<br/>上限 / 下限 / 波動率}
+    UserLoop --> CheckThresholds{"評估使用者門檻<br/>上限 / 下限 / 波動率"}
 
     CheckThresholds -- 未達門檻 --> NextUser[次一使用者]
-    CheckThresholds -- 觸發警報 --> MapHoldings[比對該用戶持倉與自選中之<br/>6 大能源關聯標的: XLE, XOM, CVX, OXY, SLB, USO]
+    CheckThresholds -- 觸發警報 --> MapHoldings["比對該用戶持倉與自選中之<br/>6 大能源關聯標的: XLE, XOM, CVX, OXY, SLB, USO"]
 
     MapHoldings --> BuildEmbed[透過 create_wti_alert_embed 組裝 Embed]
     BuildEmbed --> QueueDM[呼叫 bot.queue_dm 派發即時通知]

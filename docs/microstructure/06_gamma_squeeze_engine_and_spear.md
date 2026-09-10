@@ -181,7 +181,7 @@ flowchart TD
 
     RouteSpear --> PhaseCheck{交易時段檢驗}
     PhaseCheck -- "Phase A (開盤)" --> PhaseAAction[門檻調降 30% / 注意滑價]
-    PhaseCheck -- "Phase C (尾盤)" --> PhaseCAlert[🚨 嚴禁新建短線 SPEAR<br/>必須搭配等比例 SPY PUT 隔夜]
+    PhaseCheck -- "Phase C (尾盤)" --> PhaseCAlert["🚨 嚴禁新建短線 SPEAR<br/>必須搭配等比例 SPY PUT 隔夜"]
     PhaseCheck -- "Phase B (盤中)" --> NormalSpear[執行常規 SPEAR 進攻]
 
     NormalSpear --> PositionRunway[計算財務生存跑道與 Kelly 倉位]

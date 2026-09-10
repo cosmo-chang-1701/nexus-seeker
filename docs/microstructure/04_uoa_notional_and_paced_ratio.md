@@ -80,10 +80,10 @@ $$
 ```mermaid
 flowchart TD
     Start([啟動 UOA 訂單流檢測]) --> FetchChains[抓取標的近 4 個到期日完整期權鏈]
-    FetchChains --> GetTime[獲取交易時段經過比例 f_elapsed<br/>NYSE 行事曆精確換算 鉗制下限 0.05]
+    FetchChains --> GetTime["獲取交易時段經過比例 f_elapsed<br/>NYSE 行事曆精確換算 鉗制下限 0.05"]
 
     GetTime --> LoopRows[遍歷期權鏈各合約履約價]
-    LoopRows --> FilterCandidates{滿足雙軌候選篩選?<br/>(1) Sweep: Vol > 3x OI 且 Vol >= 300<br/>(2) Whale: Vol >= 500 且 名目 >= $250k}
+    LoopRows --> FilterCandidates{"滿足雙軌候選篩選?<br/>(1) Sweep: Vol > 3x OI 且 Vol >= 300<br/>(2) Whale: Vol >= 500 且 名目 >= $250k"}
 
     FilterCandidates -- 否 --> SkipRow[略過此合約]
     FilterCandidates -- 是 --> CalcMetrics[計算 BS Greeks、名目價值與 paced_ratio]

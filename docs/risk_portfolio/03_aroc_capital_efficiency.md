@@ -82,16 +82,16 @@ flowchart TD
     CalcMargin --> CalcSTOAROC[計算 AROC_STO = Bid / Margin * 365 / DTE]
     CalcSTOAROC --> STOGate{AROC_STO >= 15.0%?}
 
-    STOGate -- 否 --> RejectSTO[❌ 攔截拒絕<br/>觸發: STO 訊號遭攔截<br/>低於 15% AROC 閾值]
-    STOGate -- 是 --> KellySTO[調用分數凱利分配資金<br/>Cap 5% / 允許進入下單路由]
+    STOGate -- 否 --> RejectSTO["❌ 攔截拒絕<br/>觸發: STO 訊號遭攔截<br/>低於 15% AROC 閾值"]
+    STOGate -- 是 --> KellySTO["調用分數凱利分配資金<br/>Cap 5% / 允許進入下單路由"]
 
     StratCheck -- 買方策略 (BTO_CALL / BTO_PUT) --> CalcExpMove[獲取 7日 ATM 跨式預期波幅 Expected Move]
     CalcExpMove --> CalcPotentialProfit[潛在利潤 = Expected Move - Ask]
     CalcPotentialProfit --> CalcBTOAROC[計算 AROC_BTO = Profit / Ask * 365 / DTE]
     CalcBTOAROC --> BTOGate{AROC_BTO >= 30.0%?}
 
-    BTOGate -- 否 --> RejectBTO[❌ 攔截拒絕<br/>觸發: ALPHA_REJECT<br/>BTO AROC < 30.0% 閾值]
-    BTOGate -- 是 --> KellyBTO[調用分數凱利分配資金<br/>Cap 3% / 允許進入下單路由]
+    BTOGate -- 否 --> RejectBTO["❌ 攔截拒絕<br/>觸發: ALPHA_REJECT<br/>BTO AROC < 30.0% 閾值"]
+    BTOGate -- 是 --> KellyBTO["調用分數凱利分配資金<br/>Cap 3% / 允許進入下單路由"]
 
     subgraph Covered Call 轉倉評估
         CCStart([Covered Call 轉倉發起]) --> CalcNetOutlay[計算淨資本支出 Net Outlay]

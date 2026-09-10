@@ -65,7 +65,7 @@ flowchart TD
     CheckVersion -- 否 --> NextMigration[下一遷移]
     CheckVersion -- 是 --> ExecSQL[執行 executescript SQL]
 
-    ExecSQL --> CheckPythonHook{存在 migrate_data<br/>Python 鉤子?}
+    ExecSQL --> CheckPythonHook{"存在 migrate_data<br/>Python 鉤子?"}
     CheckPythonHook -- 是 --> ExecPython[執行 Python 資料轉換]
     CheckPythonHook -- 否 --> RecordSuccess
     ExecPython --> RecordSuccess[寫入 schema_versions 並 COMMIT]
@@ -76,12 +76,12 @@ flowchart TD
     CatchError --> Rollback[執行 conn.rollback]
     Rollback --> ScanTempTables["掃描殘留暫存表:<br/>name LIKE '%_new'"]
 
-    ScanTempTables --> MatchPattern{名稱符合正則白名單<br/>^[a-zA-Z0-9_]+$?}
+    ScanTempTables --> MatchPattern{"名稱符合正則白名單<br/>^[a-zA-Z0-9_]+$?"}
     MatchPattern -- 是 --> DropTemp["執行 DROP TABLE IF EXISTS<br/>解除死鎖 (Self-Healing)"]
     MatchPattern -- 否 --> LogSecurityErr[拒絕清理非法格式名稱]
 
-    DropTemp --> CheckTolerant{屬於 duplicate/no such column<br/>容錯例外?}
-    CheckTolerant -- 是 --> LogWarn[記錄警告並視為成功<br/>INSERT version 並繼續]
+    DropTemp --> CheckTolerant{"屬於 duplicate/no such column<br/>容錯例外?"}
+    CheckTolerant -- 是 --> LogWarn["記錄警告並視為成功<br/>INSERT version 並繼續"]
     CheckTolerant -- 否 --> BreakFail[❌ 終止遷移，保護資料一致性]
 
     LogWarn --> NextMigration

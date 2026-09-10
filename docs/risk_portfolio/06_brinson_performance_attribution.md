@@ -94,9 +94,9 @@ flowchart TD
     CalcPnL --> CalcRatio[計算 Hedge Ratio = |Delta_hedge / Delta_alpha|]
 
     CalcRatio --> RatioEval{Hedge Ratio 水位評估}
-    RatioEval -->|> 1.10| StatusOver[OVER_HEDGED 對沖過度<br/>磨損牛市 Alpha 收益]
-    RatioEval -->|< 0.80| StatusUnder[UNDER_HEDGED 對沖不足<br/>暴露系統性下行風險]
-    RatioEval -->|0.80 <= Ratio <= 1.10| StatusOpt[OPTIMAL 黃金平衡<br/>對沖比例最佳適配]
+    RatioEval -->|> 1.10| StatusOver["OVER_HEDGED 對沖過度<br/>磨損牛市 Alpha 收益"]
+    RatioEval -->|< 0.80| StatusUnder["UNDER_HEDGED 對沖不足<br/>暴露系統性下行風險"]
+    RatioEval -->|0.80 <= Ratio <= 1.10| StatusOpt["OPTIMAL 黃金平衡<br/>對沖比例最佳適配"]
 
     StatusOver --> CalcEff[計算對沖有效性 Effectiveness = 1 - |Net PnL| / |Alpha PnL|]
     StatusUnder --> CalcEff
@@ -110,8 +110,8 @@ flowchart TD
     SampleCheck -- 是 --> CalcWeightedEff[計算 7日線性加權平均有效性 E_bar]
 
     CalcWeightedEff --> EvolveDecision{自我進化調適規則}
-    EvolveDecision -->|E_bar < 0.5 且 Alpha>0 且 Hedge<0| ReduceTau[牛市對沖磨損過大<br/>Tau 縮減: tau = clip tau - 0.05, 0.5, 1.5]
-    EvolveDecision -->|Net PnL < 0 且 E_bar < 0.7| IncreaseTau[下行保護不足產生淨虧<br/>Tau 強化: tau = clip tau + 0.10, 0.5, 1.5]
+    EvolveDecision -->|E_bar < 0.5 且 Alpha>0 且 Hedge<0| ReduceTau["牛市對沖磨損過大<br/>Tau 縮減: tau = clip tau - 0.05, 0.5, 1.5"]
+    EvolveDecision -->|Net PnL < 0 且 E_bar < 0.7| IncreaseTau["下行保護不足產生淨虧<br/>Tau 強化: tau = clip tau + 0.10, 0.5, 1.5"]
     EvolveDecision -->|其他穩健狀況| KeepTau
 
     ReduceTau --> UpdateUserConfig[持久化寫入 user_config.dynamic_tau]

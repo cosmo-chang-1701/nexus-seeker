@@ -66,21 +66,21 @@ $$\Delta t_{\text{delay, priority}} \le 5 \text{ 分鐘} \ll \Delta t_{\text{del
 
 ```mermaid
 flowchart TD
-    Req([期權鏈請求: _fetch_option_chain_raw]) --> CheckForce{force_live == True?}
+    Req(["期權鏈請求: _fetch_option_chain_raw"]) --> CheckForce{force_live == True?}
 
-    CheckForce -- 否 (常規/批次掃描) --> Tier1[第 1 階: 讀取 Edge SQLite 快照<br/>get_cached_option_chain]
+    CheckForce -- 否 (常規/批次掃描) --> Tier1["第 1 階: 讀取 Edge SQLite 快照<br/>get_cached_option_chain"]
     CheckForce -- 是 (深度分析 defer 路徑) --> CheckTunnel
 
-    Tier1 --> SnapshotHit{快照存在且<br/>age < 300 秒?}
+    Tier1 --> SnapshotHit{"快照存在且<br/>age < 300 秒?"}
     SnapshotHit -- 是 --> ParseDF[解析 Calls / Puts 為 DataFrame]
-    ParseDF --> ReturnChain([返回期權鏈 (延遲 ~2ms)])
+    ParseDF --> ReturnChain(["返回期權鏈 (延遲 ~2ms)"])
 
     SnapshotHit -- 否 --> CheckTunnel{TUNNEL_URL 是否已配置?}
 
     subgraph Tier2_Block ["第 2 階: Edge 即時 Scraper 代理"]
-        CheckTunnel -- 是 --> EdgeRequest[發起 HTTP GET 請求至<br/>{TUNNEL_URL}/api/v1/scrape/yf/options/chain]
-        EdgeRequest --> RetryEdge[_retry_once 執行重試]
-        RetryEdge --> EdgeResp{狀態碼 200 且<br/>status == success?}
+        CheckTunnel -- 是 --> EdgeRequest["發起 HTTP GET 請求至<br/>TUNNEL_URL/api/v1/scrape/yf/options/chain"]
+        EdgeRequest --> RetryEdge["_retry_once 執行重試"]
+        RetryEdge --> EdgeResp{"狀態碼 200 且<br/>status == success?"}
         EdgeResp -- 是 --> ReturnChain
         EdgeResp -- 否 / 拋出例外 --> LogEdgeFail[記錄警告: 邊緣節點抓取失敗]
     end
@@ -89,11 +89,11 @@ flowchart TD
 
     subgraph Tier3_Block ["第 3 階: 本地 yfinance 直連備援"]
         LogEdgeFail --> LocalFallback[降級改用本地 yfinance 直連]
-        LocalFallback --> YFCall[yf.Ticker(symbol).option_chain(expiry)]
-        YFCall --> RetryYF[_retry_once 搭配指數退避]
+        LocalFallback --> YFCall["yf.Ticker(symbol).option_chain(expiry)"]
+        YFCall --> RetryYF["_retry_once 搭配指數退避"]
         RetryYF --> YFSuccess{成功抓取?}
         YFSuccess -- 是 --> ReturnChain
-        YFSuccess -- 否 --> ReturnNone([返回 None / 觸發熔斷])
+        YFSuccess -- 否 --> ReturnNone(["返回 None / 觸發熔斷"])
     end
 ```
 

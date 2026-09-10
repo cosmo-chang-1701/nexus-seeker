@@ -94,7 +94,7 @@ flowchart TD
     Start([盤中即時掃描標的期權結構]) --> PutWallCheck{現價 < PutWall 做市商底牆?}
 
     PutWallCheck -- 是 --> PCRCheck{Volume PCR >= 1.20?}
-    PCRCheck -- 是 --> TriggerWaterfall[🚨 破位順向殺盤<br/>做市商負 Gamma 追殺<br/>指令: STOP_ALL_BUY]
+    PCRCheck -- 是 --> TriggerWaterfall["🚨 破位順向殺盤<br/>做市商負 Gamma 追殺<br/>指令: STOP_ALL_BUY"]
     PCRCheck -- 否 --> CheckConfluence
 
     PutWallCheck -- 否 --> CheckConfluence
@@ -102,21 +102,21 @@ flowchart TD
     subgraph 三重結構性風險合流評估
         CheckConfluence --> Gate1{條件 1: Skew Percentile >= 98.0%?}
         Gate1 -- 否 --> NormalSkewCheck
-        Gate1 -- 是 --> Gate2{條件 2: mp_gravity_strong_down 是否成立?<br/>末日偏離>8% 或 次週偏離>10%}
+        Gate1 -- 是 --> Gate2{"條件 2: mp_gravity_strong_down 是否成立?<br/>末日偏離>8% 或 次週偏離>10%"}
         Gate2 -- 否 --> NormalSkewCheck
-        Gate2 -- 是 --> Gate3{條件 3: 是否完全不存在<br/>DTE >= 7 的 BTO Call 或 STO Put?}
-        Gate3 -- 是 (機構真空) --> TriggerTriple[🚨 三重結構性風險合流<br/>避險背離+痛點引力+機構真空<br/>輸出: 嚴禁抄底]
+        Gate2 -- 是 --> Gate3{"條件 3: 是否完全不存在<br/>DTE >= 7 的 BTO Call 或 STO Put?"}
+        Gate3 -- 是 (機構真空) --> TriggerTriple["🚨 三重結構性風險合流<br/>避險背離+痛點引力+機構真空<br/>輸出: 嚴禁抄底"]
         Gate3 -- 否 (有主力買盤) --> NormalSkewCheck
     end
 
     NormalSkewCheck --> HighSkewCheck{Skew Percentile > 90.0%?}
-    HighSkewCheck -- 是 --> SkewStop[🛑 防洗盤處置<br/>嚴守 15分鐘實體K線撤退線]
-    HighSkewCheck -- 否 --> DivergenceCheck{Skew > 85% 且 PCR < 0.40?<br/>或 Skew < 15% 且 PCR > 1.50?}
+    HighSkewCheck -- 是 --> SkewStop["🛑 防洗盤處置<br/>嚴守 15分鐘實體K線撤退線"]
+    HighSkewCheck -- 否 --> DivergenceCheck{"Skew > 85% 且 PCR < 0.40?<br/>或 Skew < 15% 且 PCR > 1.50?"}
 
-    DivergenceCheck -- 是 --> StructDiv[⚠️ 警告：結構性情緒背離<br/>市場籌碼嚴重撕裂，暫停開倉]
-    DivergenceCheck -- 否 --> FakeoutCheck{SQZ Momentum > 0<br/>且 Skew Percentile > 85%?}
+    DivergenceCheck -- 是 --> StructDiv["⚠️ 警告：結構性情緒背離<br/>市場籌碼嚴重撕裂，暫停開倉"]
+    DivergenceCheck -- 否 --> FakeoutCheck{"SQZ Momentum > 0<br/>且 Skew Percentile > 85%?"}
 
-    FakeoutCheck -- 是 --> FakeoutAlert[🚫 偽突破 嚴禁單腿看多<br/>散戶追高但做市商買 Put 避險]
+    FakeoutCheck -- 是 --> FakeoutAlert["🚫 偽突破 嚴禁單腿看多<br/>散戶追高但做市商買 Put 避險"]
     FakeoutCheck -- 否 --> NormalTrade[進入一般期權策略匹配流程]
 ```
 

@@ -83,24 +83,24 @@ $$\text{dev} = \frac{S - \text{MP}}{\text{MP}} \times 100\%$$
 
 ```mermaid
 flowchart TD
-    Start([請求標的 EM 與 Max Pain]) --> CacheCheck{SQLite 快取是否存在<br/>且年齡 < 6小時?}
+    Start([請求標的 EM 與 Max Pain]) --> CacheCheck{"SQLite 快取是否存在<br/>且年齡 < 6小時?"}
 
-    CacheCheck -- 是 --> DriftCheck{現價偏離基準價 > 2%<br/>且冷卻時間 > 30秒?}
+    CacheCheck -- 是 --> DriftCheck{"現價偏離基準價 > 2%<br/>且冷卻時間 > 30秒?"}
     DriftCheck -- 否 (命中快取) --> ReturnCache[直接返回快取數值]
     DriftCheck -- 是 (偏離過大) --> Recompute[觸發 Cache-Aside 即時重算]
     CacheCheck -- 否 (快取缺失) --> Recompute
 
     Recompute --> FetchChain[拉取即時期權鏈與 IV]
-    FetchChain --> CalcEM[計算 ATM Straddle EM<br/>與 BSM IV EM 取大]
+    FetchChain --> CalcEM["計算 ATM Straddle EM<br/>與 BSM IV EM 取大"]
     FetchChain --> CalcMP[遍歷履約價求解 Pain 最小值]
 
     CalcMP --> CBCheck{|MaxPain - Spot| / Spot > 30%?}
-    CBCheck -- 是 --> TriggerCB[🚨 觸發 30% 異常斷路器<br/>max_pain=None, 背景清快取]
+    CBCheck -- 是 --> TriggerCB["🚨 觸發 30% 異常斷路器<br/>max_pain=None, 背景清快取"]
     CBCheck -- 否 --> MultiDTE[遍歷月度合約計算各 DTE 痛點]
 
     MultiDTE --> GravityLadder{DTE 階梯評估}
-    GravityLadder -->|0 <= DTE <= 1 且 |dev| > 8%| NearGravity[觸發: 末日對沖磁吸力 ⚠️<br/>dev>0 設 mp_gravity_strong_down=True]
-    GravityLadder -->|1 < DTE <= 14 且 dev > +10%| FarGravity[觸發: 下行磁吸預警 ⚠️<br/>設 mp_gravity_strong_down=True]
+    GravityLadder -->|0 <= DTE <= 1 且 |dev| > 8%| NearGravity["觸發: 末日對沖磁吸力 ⚠️<br/>dev>0 設 mp_gravity_strong_down=True"]
+    GravityLadder -->|1 < DTE <= 14 且 dev > +10%| FarGravity["觸發: 下行磁吸預警 ⚠️<br/>設 mp_gravity_strong_down=True"]
     GravityLadder -->|正常範圍| NormalState[正常運行 / 磁吸回升]
 
     NormalState --> SaveCache[非同步寫回 SQLite market_cache]
