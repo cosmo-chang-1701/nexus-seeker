@@ -317,7 +317,7 @@ async def get_vix_zscores() -> Dict[str, float]:
         return {"zscore_30": 0.0, "zscore_60": 0.0}
 
 
-def check_and_reconcile_max_pain_anomaly(
+async def check_and_reconcile_max_pain_anomaly(
     symbol: str, max_pain: float, spot_price: float
 ) -> bool:
     """
@@ -338,7 +338,7 @@ def check_and_reconcile_max_pain_anomaly(
             from database import mark_market_cache_stale
 
             # Mark stale in DB instead of deleting
-            mark_market_cache_stale(symbol)
+            await mark_market_cache_stale(symbol)
 
             # Trigger background revalidation task
             async def _async_revalidate_max_pain() -> None:
@@ -363,17 +363,15 @@ def check_and_reconcile_max_pain_anomaly(
                         del _option_chain_cache[k]
 
                     # Clear SQLite KV cache for the symbol's Max Pain
-                    import sqlite3
-                    import config
+                    # 這裡刻意不用 sqlite3.connect() 直寫：那會繞過
+                    # DatabaseWriteQueue，並在 event loop 執行緒上阻塞。
+                    from database.connection import execute_write_async
 
                     try:
-                        with sqlite3.connect(config.DB_NAME) as conn:
-                            cursor = conn.cursor()
-                            cursor.execute(
-                                "DELETE FROM kv_cache WHERE key LIKE ?",
-                                (f"max_pain_{symbol.upper()}%",),
-                            )
-                            conn.commit()
+                        await execute_write_async(
+                            "DELETE FROM kv_cache WHERE key LIKE ?",
+                            (f"max_pain_{symbol.upper()}%",),
+                        )
                     except Exception as db_err:
                         logger.warning(
                             f"Failed to clear SQLite KV cache for {symbol} Max Pain: {db_err}"

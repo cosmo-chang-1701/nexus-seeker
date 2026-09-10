@@ -6708,7 +6708,8 @@ def test_create_covered_call_profit_lock_embed_csp_rendering() -> None:
     assert "90%" in detail_field.value
 
 
-def test_market_cache_call_wall_and_previous_call_wall_persistence() -> None:
+@pytest.mark.asyncio
+async def test_market_cache_call_wall_and_previous_call_wall_persistence() -> None:
     """驗證 SQLite market_cache 保存 call_wall 與 previous_call_wall 跨週期遷移機制。"""
     import tempfile
     from database.core import run_migrations
@@ -6722,28 +6723,28 @@ def test_market_cache_call_wall_and_previous_call_wall_persistence() -> None:
         run_migrations()
 
         # 首次寫入：previous_call_wall 應為 NULL
-        save_market_cache("TEST_SYM", 100.0, 95.0, 105.0, call_wall=150.0)
+        await save_market_cache("TEST_SYM", 100.0, 95.0, 105.0, call_wall=150.0)
         row1 = get_market_cache("TEST_SYM")
         assert row1 is not None
         assert row1.get("call_wall") == 150.0
         assert row1.get("previous_call_wall") is None
 
         # 更新且 call_wall 向上遷移至 165.0：previous_call_wall 應保留 150.0
-        save_market_cache("TEST_SYM", 102.0, 95.0, 105.0, call_wall=165.0)
+        await save_market_cache("TEST_SYM", 102.0, 95.0, 105.0, call_wall=165.0)
         row2 = get_market_cache("TEST_SYM")
         assert row2 is not None
         assert row2.get("call_wall") == 165.0
         assert row2.get("previous_call_wall") == 150.0
 
         # 再次更新但 call_wall 維持 165.0：previous_call_wall 應維持 150.0 (不被覆蓋為 165.0)
-        save_market_cache("TEST_SYM", 103.0, 95.0, 105.0, call_wall=165.0)
+        await save_market_cache("TEST_SYM", 103.0, 95.0, 105.0, call_wall=165.0)
         row3 = get_market_cache("TEST_SYM")
         assert row3 is not None
         assert row3.get("call_wall") == 165.0
         assert row3.get("previous_call_wall") == 150.0
 
         # 更新時未傳入 call_wall (None)：call_wall 與 previous_call_wall 應妥善保留
-        save_market_cache("TEST_SYM", 104.0, 95.0, 105.0)
+        await save_market_cache("TEST_SYM", 104.0, 95.0, 105.0)
         row4 = get_market_cache("TEST_SYM")
         assert row4 is not None
         assert row4.get("call_wall") == 165.0
@@ -6809,13 +6810,13 @@ async def test_radar_data_persists_call_wall_and_previous_call_wall() -> None:
         run_migrations()
 
         # 模擬第一輪掃描，call_wall = 150.0
-        save_market_cache("TEST_RADAR", 100.0, 95.0, 105.0, call_wall=150.0)
+        await save_market_cache("TEST_RADAR", 100.0, 95.0, 105.0, call_wall=150.0)
         c1 = get_market_cache("TEST_RADAR")
         assert c1 is not None and c1.get("call_wall") == 150.0
         assert c1.get("previous_call_wall") is None
 
         # 模擬第二輪掃描，call_wall 向上遷移至 165.0
-        save_market_cache("TEST_RADAR", 102.0, 95.0, 105.0, call_wall=165.0)
+        await save_market_cache("TEST_RADAR", 102.0, 95.0, 105.0, call_wall=165.0)
         c2 = get_market_cache("TEST_RADAR")
         assert c2 is not None and c2.get("call_wall") == 165.0
         assert c2.get("previous_call_wall") == 150.0

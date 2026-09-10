@@ -67,7 +67,7 @@ def _trigger_background_cache_clear(symbol: str) -> Any:
             try:
                 from database import mark_market_cache_stale
 
-                await asyncio.to_thread(mark_market_cache_stale, symbol_upper)
+                await mark_market_cache_stale(symbol_upper)
             except Exception as stale_err:
                 logger.warning(
                     f"Failed to mark market_cache stale for {symbol_upper}: {stale_err}"

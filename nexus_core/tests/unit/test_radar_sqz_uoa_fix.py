@@ -16,7 +16,7 @@ async def test_get_squeeze_cache_ttl_and_fallback() -> None:
     """驗證 squeeze_cache 的 TTL 與過期回退判定。"""
     sym = "TEST_SQZ_TTL"
     # 儲存初始快取
-    save_squeeze_cache(sym, True, 15.5, "🟢")
+    await save_squeeze_cache(sym, True, 15.5, "🟢")
 
     # 1. 正常 30 分鐘內讀取
     cache_fresh = get_squeeze_cache(sym, max_age_minutes=30)
@@ -122,7 +122,9 @@ async def test_fetch_sym_radar_data_fast_sqz_self_healing() -> None:
         "database.market_cache.get_market_cache", return_value={"max_pain": 135.0}
     ), patch(
         "market_analysis.sentiment_engine.SentimentEngine.detect_uoa", return_value=[]
-    ), patch("database.squeeze_cache.save_squeeze_cache") as mock_save_sqz:
+    ), patch(
+        "database.squeeze_cache.save_squeeze_cache", new_callable=AsyncMock
+    ) as mock_save_sqz:
         result = await cog._fetch_sym_radar_data_fast_raw(sym)
         assert result is not None
         psq = result.get("psq_result", {})

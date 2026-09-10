@@ -166,7 +166,7 @@ async def evaluate_fundamental_thesis_impl(
         if parsed:
             from database.market_cache import save_fundamental_cache
 
-            save_fundamental_cache(
+            await save_fundamental_cache(
                 symbol, parsed.is_broken, parsed.confidence, parsed.reasoning
             )
 

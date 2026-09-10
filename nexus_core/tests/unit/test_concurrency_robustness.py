@@ -247,3 +247,70 @@ async def test_put_task_sync_backpressure_no_deadlock(db_conn: Any) -> None:
             assert result is not None
         finally:
             await DatabaseWriteQueue.stop_worker()
+
+
+@pytest.mark.asyncio
+async def test_cache_writers_succeed_with_write_queue_active(db_conn: Any):  # type: ignore
+    """market_cache / squeeze_cache 的寫入函式必須能在「寫入佇列已啟用」的狀態下
+    （即 production 的真實狀態）從 event loop 成功寫入。
+
+    這則測試存在的理由：其餘所有 market_cache / squeeze_cache 測試都是在佇列未啟用
+    （`is_active()` 為 False）下跑的，`put_task_sync()` 會走 `_execute_direct_write()`
+    直寫捷徑，因此 `threading.current_thread() is cls._loop_thread` 守衛永遠不會觸發。
+    這讓「在 event loop 上同步寫入」的缺陷在測試中完全隱形，只在 production 拋
+    `Sync database write (sql) called from main event loop thread`（且多數呼叫點的
+    `except` 連 log 都沒有，屬於全靜默失效）。
+    """
+    from database.market_cache import (
+        save_market_cache,
+        mark_market_cache_stale,
+        save_fundamental_scan_state,
+        get_market_cache,
+        get_fundamental_scan_state,
+    )
+    from database.squeeze_cache import save_squeeze_cache, get_squeeze_cache
+
+    loop = asyncio.get_running_loop()
+    DatabaseWriteQueue.initialize(loop)
+    assert DatabaseWriteQueue.is_active() is True
+
+    try:
+        assert (
+            await save_market_cache(
+                "QUEUE_MC",
+                100.0,
+                95.0,
+                105.0,
+                reference_spot_price=100.0,
+                call_wall=150.0,
+            )
+            is True
+        )
+        row = get_market_cache("QUEUE_MC")
+        assert row is not None and row.get("call_wall") == 150.0
+        assert row.get("is_stale") == 0
+
+        assert await mark_market_cache_stale("QUEUE_MC") is True
+        row = get_market_cache("QUEUE_MC")
+        assert row is not None and row.get("is_stale") == 1
+
+        # 注意：save_fundamental_cache / get_fundamental_cache 刻意未納入本測試。
+        # fundamental_cache 資料表實際上並不存在——v057_fundamental_cache.py 用的是
+        # upgrade(cursor) 介面，而 database/core.py::get_migrations() 只收錄同時具備
+        # version / description / sql 三個模組層級屬性的遷移模組，因此該遷移被無聲跳過
+        # （v054_add_cro_risk_settings.py 的 run(conn) 介面同樣被跳過）。那是與本次
+        # event loop 同步寫入缺陷互相獨立的另一個問題，需以新遷移補建資料表後才能納入。
+        assert (
+            await save_fundamental_scan_state("QUEUE_MC", "0001-24-000001", "10-Q")
+            is True
+        )
+        st = get_fundamental_scan_state("QUEUE_MC")
+        assert st is not None
+        assert st.get("last_accession_number") == "0001-24-000001"
+
+        assert await save_squeeze_cache("QUEUE_SQZ", True, 15.5, "🟢") is True
+        sq = get_squeeze_cache("QUEUE_SQZ")
+        assert sq is not None and sq.get("momentum") == 15.5
+    finally:
+        await DatabaseWriteQueue.stop_worker()
+        assert DatabaseWriteQueue.is_active() is False

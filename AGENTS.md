@@ -1245,6 +1245,17 @@ Uses a dedicated SQLite table (`price_volume_watches`, PK `(user_id, symbol)`) r
 
 - Never edit schema manually
 - Add a migration file in `nexus_core/database/migrations/`
+- 遷移模組必須匯出 **`version` / `description` / `sql` 三個模組層級屬性**。
+  `database/core.py::get_migrations()` 只收錄同時具備這三者的模組，其餘一律**無聲跳過**
+  （不會 log、不會報錯）。`upgrade(cursor)` / `run(conn)` 這類函式介面不會被執行——
+  `v054_add_cro_risk_settings.py` 與 `v057_fundamental_cache.py` 就是這樣從未套用過。
+- **所有資料庫寫入一律走 `await execute_write_async(...)`**（或 `DatabaseWriteQueue.put_task`），
+  讀取則維持同步的 `get_read_connection()`。同步的 `execute_write()` 僅供 CLI 與
+  worker thread（`asyncio.to_thread`）使用：從 event loop 執行緒呼叫會被
+  `DatabaseWriteQueue.put_task_sync()` 的守衛直接拋 `RuntimeError`。
+  注意這道守衛在 pytest 下**不會觸發**（測試環境佇列未啟用，走 `_execute_direct_write`
+  直寫捷徑），因此這類缺陷只在 production 顯形——寫入函式的 `except` 務必留
+  `logger.error`，否則會全靜默失效。
 
 ### Memory / VPS safety
 

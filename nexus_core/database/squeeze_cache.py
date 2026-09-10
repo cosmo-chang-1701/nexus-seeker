@@ -1,13 +1,16 @@
+import logging
 import sqlite3
 from typing import Optional, Dict, Any
-from database.connection import get_read_connection, execute_write
+from database.connection import get_read_connection, execute_write_async
+
+logger = logging.getLogger(__name__)
 
 
-def save_squeeze_cache(
+async def save_squeeze_cache(
     symbol: str, is_squeezing: bool, momentum: float, direction: str
 ) -> bool:
     try:
-        execute_write(
+        await execute_write_async(
             """
             INSERT INTO squeeze_cache (symbol, is_squeezing, momentum, direction, updated_at)
             VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
@@ -20,7 +23,8 @@ def save_squeeze_cache(
             (symbol.upper(), int(is_squeezing), momentum, direction),
         )
         return True
-    except Exception:
+    except Exception as e:
+        logger.error(f"[{symbol}] save_squeeze_cache 寫入失敗: {e}")
         return False
 
 

@@ -165,9 +165,8 @@ class SymbolHubView(discord.ui.View):
                 del _history_cache[k]
 
             from database import mark_market_cache_stale
-            import asyncio
 
-            await asyncio.to_thread(mark_market_cache_stale, self.symbol)
+            await mark_market_cache_stale(self.symbol)
 
             cog = self.bot.get_cog("UnifiedTerminalCog") if self.bot else None
             if (

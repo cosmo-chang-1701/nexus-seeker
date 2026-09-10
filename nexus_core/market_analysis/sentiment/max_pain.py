@@ -330,19 +330,17 @@ async def get_unified_max_pain(
             is_stale = 1
 
         # 7. 寫回 SQLite 快取
-        await asyncio.to_thread(
-            lambda: save_market_cache(
-                symbol,
-                max_pain if max_pain is not None else 0.0,
-                em_lower,
-                em_upper,
-                spot_price,
-                is_stale,
-                calculation_mode,
-                is_degraded,
-                circuit_breaker_triggered,
-                expiry,
-            )
+        await save_market_cache(
+            symbol,
+            max_pain if max_pain is not None else 0.0,
+            em_lower,
+            em_upper,
+            spot_price,
+            is_stale,
+            calculation_mode,
+            is_degraded,
+            circuit_breaker_triggered,
+            expiry,
         )
 
         dist_pct = 0.0
@@ -684,7 +682,9 @@ async def _calculate_max_pain_raw(
             and not _retry
         ):
             # 觸發警告與資料庫快取標記
-            check_and_reconcile_max_pain_anomaly(symbol, max_pain_strike, spot_price)
+            await check_and_reconcile_max_pain_anomaly(
+                symbol, max_pain_strike, spot_price
+            )
 
             # SWR: Try to read old cache from DB and return it directly, marked as is_stale = True
             from database import get_market_cache

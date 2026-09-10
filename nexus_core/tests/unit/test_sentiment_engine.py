@@ -437,6 +437,7 @@ async def test_max_pain_anomaly_warning_and_retry() -> None:
         "services.market_data_service.get_quote", new_callable=AsyncMock
     ) as mock_quote, patch(
         "services.market_data_service.check_and_reconcile_max_pain_anomaly",
+        new_callable=AsyncMock,
         return_value=True,
     ) as mock_anomaly:
         mock_expiries.return_value = [MOCK_EXPIRY]
@@ -532,7 +533,7 @@ async def test_get_unified_max_pain_sets_circuit_breaker_on_large_deviation() ->
             "expected_move_lower": 95.0,
             "expected_move_upper": 105.0,
         },
-    ), patch("database.save_market_cache"):
+    ), patch("database.save_market_cache", new_callable=AsyncMock):
         result = await get_unified_max_pain("AAPL", force_refresh=True)
 
     assert result["max_pain"] is None
@@ -930,7 +931,7 @@ async def test_get_unified_max_pain_cache_hit_carries_updated_at() -> None:
     from market_analysis.sentiment.max_pain import get_unified_max_pain
     from database.market_cache import save_market_cache
 
-    assert save_market_cache(
+    assert await save_market_cache(
         symbol="MPFRESH",
         max_pain=100.0,
         expected_move_lower=95.0,
@@ -986,7 +987,7 @@ async def test_get_unified_max_pain_writes_back_when_expected_move_fails() -> No
         "market_analysis.sentiment.max_pain.IVContext.get_expected_move",
         new_callable=AsyncMock,
         side_effect=Exception("SYMBOL_NOT_FOUND"),
-    ), patch("database.save_market_cache") as mock_save:
+    ), patch("database.save_market_cache", new_callable=AsyncMock) as mock_save:
         result = await get_unified_max_pain("AAPL", force_refresh=True)
 
     mock_save.assert_called_once()
@@ -1003,11 +1004,11 @@ async def test_get_unified_max_pain_ttl_forces_recompute_even_without_price_devi
     計算並寫回，避免長期盤整標的的 market_cache 無限期凍結（is_stale 全程維持 0
     卻已過期多日的結構性缺口）。"""
     from datetime import datetime, timedelta, timezone
-    from database.connection import execute_write
+    from database.connection import execute_write_async
     from database.market_cache import save_market_cache
     from market_analysis.sentiment.max_pain import get_unified_max_pain
 
-    assert save_market_cache(
+    assert await save_market_cache(
         symbol="MPTTL",
         max_pain=100.0,
         expected_move_lower=95.0,
@@ -1023,7 +1024,7 @@ async def test_get_unified_max_pain_ttl_forces_recompute_even_without_price_devi
     stale_ts = (datetime.now(timezone.utc) - timedelta(hours=7)).strftime(
         "%Y-%m-%d %H:%M:%S"
     )
-    execute_write(
+    await execute_write_async(
         "UPDATE market_cache SET updated_at = ? WHERE symbol = ? AND expiry = ?",
         (stale_ts, "MPTTL", "WEEKLY"),
     )

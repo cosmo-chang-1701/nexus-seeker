@@ -190,7 +190,7 @@ class RadarDataMixin:
                                             else "⚪"
                                         )
                                     )
-                                    save_squeeze_cache(s, p_is_sq, p_m, p_d)
+                                    await save_squeeze_cache(s, p_is_sq, p_m, p_d)
                     except Exception as ex:
                         logger.warning(f"[{s}] Async SWR SQZ 快取自癒計算失敗: {ex}")
                     finally:
@@ -598,7 +598,7 @@ class RadarDataMixin:
             try:
                 from database.market_cache import save_market_cache, get_market_cache
 
-                save_market_cache(
+                await save_market_cache(
                     symbol=sym,
                     max_pain=float((mp_data or {}).get("max_pain") or 0.0)
                     if isinstance(mp_data, dict)
@@ -616,7 +616,7 @@ class RadarDataMixin:
                     reference_spot_price=price,
                     call_wall=c_wall_val,
                 )
-                cached_mc = get_market_cache(sym)
+                cached_mc = await asyncio.to_thread(get_market_cache, sym)
                 if cached_mc and cached_mc.get("previous_call_wall") is not None:
                     prev_call_wall_val = float(cached_mc["previous_call_wall"] or 0.0)
             except Exception as cw_err:
@@ -714,7 +714,7 @@ class RadarDataMixin:
                         else ("🔴" if psq_obj.signal_direction == "Short" else "⚪"),
                         "squeeze_level": psq_obj.squeeze_level,
                     }
-                    save_squeeze_cache(
+                    await save_squeeze_cache(
                         sym,
                         psq_res["is_squeezing"],
                         psq_res["momentum_value"],

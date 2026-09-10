@@ -391,7 +391,9 @@ async def build_enhanced_watchlist_metrics(
             squeeze_status = False
             squeeze_momentum = 0.0
             squeeze_direction = "⚪"
-        save_squeeze_cache(symbol, squeeze_status, squeeze_momentum, squeeze_direction)
+        await save_squeeze_cache(
+            symbol, squeeze_status, squeeze_momentum, squeeze_direction
+        )
 
     metrics = EnhancedWatchlistMetrics(
         symbol=symbol,

@@ -81,8 +81,8 @@ def test_get_fundamental_scan_state_missing_returns_none() -> None:
     assert get_fundamental_scan_state("NOPE") is None
 
 
-def test_save_and_get_fundamental_scan_state_roundtrip() -> None:
-    assert save_fundamental_scan_state("amd", "0001-22", "10-Q") is True
+async def test_save_and_get_fundamental_scan_state_roundtrip() -> None:
+    assert await save_fundamental_scan_state("amd", "0001-22", "10-Q") is True
 
     state = get_fundamental_scan_state("AMD")
     assert state is not None
@@ -90,9 +90,9 @@ def test_save_and_get_fundamental_scan_state_roundtrip() -> None:
     assert state["last_form_type"] == "10-Q"
 
 
-def test_save_fundamental_scan_state_upserts_on_new_filing() -> None:
-    save_fundamental_scan_state("TSLA", "0001-22", "10-Q")
-    save_fundamental_scan_state("TSLA", "0002-33", "8-K")
+async def test_save_fundamental_scan_state_upserts_on_new_filing() -> None:
+    await save_fundamental_scan_state("TSLA", "0001-22", "10-Q")
+    await save_fundamental_scan_state("TSLA", "0002-33", "8-K")
 
     state = get_fundamental_scan_state("TSLA")
     assert state is not None

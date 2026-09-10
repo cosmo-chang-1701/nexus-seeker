@@ -1,12 +1,12 @@
 import logging
 import sqlite3
 from typing import Optional, Dict, Any
-from database.connection import get_read_connection, execute_write
+from database.connection import get_read_connection, execute_write_async
 
 logger = logging.getLogger(__name__)
 
 
-def save_market_cache(
+async def save_market_cache(
     symbol: str,
     max_pain: float,
     expected_move_lower: float,
@@ -31,7 +31,7 @@ def save_market_cache(
         else None
     )
     try:
-        execute_write(
+        await execute_write_async(
             """
             INSERT INTO market_cache (
                 symbol, expiry, max_pain, expected_move_lower, expected_move_upper,
@@ -85,20 +85,21 @@ def save_market_cache(
         return False
 
 
-def mark_market_cache_stale(symbol: str, expiry: Optional[str] = None) -> bool:
+async def mark_market_cache_stale(symbol: str, expiry: Optional[str] = None) -> bool:
     try:
         if expiry:
-            execute_write(
+            await execute_write_async(
                 "UPDATE market_cache SET is_stale = 1 WHERE symbol = ? AND expiry = ?",
                 (symbol.upper(), expiry),
             )
         else:
-            execute_write(
+            await execute_write_async(
                 "UPDATE market_cache SET is_stale = 1 WHERE symbol = ?",
                 (symbol.upper(),),
             )
         return True
-    except Exception:
+    except Exception as e:
+        logger.error(f"[{symbol}] mark_market_cache_stale 寫入失敗: {e}")
         return False
 
 
@@ -131,11 +132,11 @@ def get_market_cache(
     return None
 
 
-def save_fundamental_cache(
+async def save_fundamental_cache(
     symbol: str, is_broken: bool, confidence: float, reasoning: str
 ) -> bool:
     try:
-        execute_write(
+        await execute_write_async(
             """
             INSERT INTO fundamental_cache (symbol, is_broken, confidence, reasoning, updated_at)
             VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
@@ -148,7 +149,8 @@ def save_fundamental_cache(
             (symbol.upper(), int(is_broken), confidence, reasoning),
         )
         return True
-    except Exception:
+    except Exception as e:
+        logger.error(f"[{symbol}] save_fundamental_cache 寫入失敗: {e}")
         return False
 
 
@@ -173,13 +175,13 @@ def get_fundamental_cache(symbol: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def save_fundamental_scan_state(
+async def save_fundamental_scan_state(
     symbol: str, accession_number: str, form_type: str
 ) -> bool:
     """記錄某標的最後一次自動掃描已分析過的 SEC 申報 (accession_number)，
     作為每日排程的去重游標，避免同一份文件被重複送入 LLM 分析。"""
     try:
-        execute_write(
+        await execute_write_async(
             """
             INSERT INTO fundamental_scan_state (symbol, last_accession_number, last_form_type, updated_at)
             VALUES (?, ?, ?, CURRENT_TIMESTAMP)
@@ -191,7 +193,8 @@ def save_fundamental_scan_state(
             (symbol.upper(), accession_number, form_type),
         )
         return True
-    except Exception:
+    except Exception as e:
+        logger.error(f"[{symbol}] save_fundamental_scan_state 寫入失敗: {e}")
         return False
 
 

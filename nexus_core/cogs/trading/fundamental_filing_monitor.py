@@ -149,8 +149,7 @@ class FundamentalFilingMonitorCog(commands.Cog, name="FundamentalFilingMonitorCo
             logger.warning(f"📜 [SEC 財報掃描] {symbol} LLM 判讀失敗，保留游標待重試。")
             return
 
-        await asyncio.to_thread(
-            save_fundamental_scan_state,
+        await save_fundamental_scan_state(
             symbol,
             accession_number,
             context.get("form_type", latest.get("form", "")),
