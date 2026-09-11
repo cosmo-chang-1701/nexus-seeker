@@ -150,3 +150,11 @@ def update_watchlist_alert_state(
         return True
     finally:
         conn.close()
+
+
+def set_user_watchlist(user_id: Any, symbols: list[str]) -> tuple[int, list[str]]:
+    """以原子操作覆蓋特定使用者的觀察清單 (WATCH)"""
+    from services.asset_manager import AssetManager
+
+    manager = AssetManager()
+    return manager.set_watchlist(int(user_id), symbols)

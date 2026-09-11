@@ -13,6 +13,7 @@ from .portfolio import (
 )
 from .watchlist import (
     add_watchlist_symbol,
+    set_user_watchlist,
     get_user_watchlist,
     get_user_watchlist_by_symbol,
     get_all_watchlist,
@@ -93,6 +94,7 @@ __all__ = [
     "add_hedge_history",
     "get_hedge_history",
     "add_watchlist_symbol",
+    "set_user_watchlist",
     "get_user_watchlist",
     "get_user_watchlist_by_symbol",
     "get_all_watchlist",

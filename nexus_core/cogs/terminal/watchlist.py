@@ -3,6 +3,7 @@
 from typing import Any, Optional
 import asyncio
 import re
+import unicodedata
 
 import discord
 from discord import app_commands
@@ -16,13 +17,14 @@ from cogs.embed_builder import (
 
 
 def _parse_symbol_list(raw: str) -> list[str]:
-    """將以逗號或空白分隔的標的代號字串解析為去重、大寫的代號列表。"""
+    """將以逗號（半形、全形或頓號）或空白分隔的標的代號字串解析為去重、大寫的代號列表。"""
     if not raw:
         return []
-    tokens = re.split(r"[,\s]+", raw.strip())
+    normalized = unicodedata.normalize("NFKC", raw)
+    tokens = re.split(r"[,，、\s]+", normalized.strip())
     symbols: list[str] = []
     for t in tokens:
-        sym = t.strip().upper()
+        sym = t.strip().strip("$＄").upper()
         if sym and sym not in symbols:
             symbols.append(sym)
     return symbols
@@ -198,6 +200,89 @@ async def remove_watch_impl(interaction: discord.Interaction, symbol: str) -> An
             not_found.append(sym)
 
     embed = create_bulk_watchlist_result_embed("移除", removed, {"找不到": not_found})
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+async def set_watch_impl(interaction: discord.Interaction, symbol: str) -> Any:
+    await interaction.response.defer(ephemeral=True)
+
+    symbols = _parse_symbol_list(symbol)
+    if not symbols:
+        return await interaction.followup.send(
+            embed=create_error_embed(
+                "請輸入至少一個有效的股票代號。", title="系統錯誤"
+            ),
+            ephemeral=True,
+        )
+
+    from services.asset_manager import (
+        AssetManager,
+        WatchlistLimitExceededError,
+        _MAX_WATCHLIST_SYMBOLS_PER_USER,
+    )
+    from cogs.embed_builders.watchlist_embeds import (
+        create_set_watchlist_result_embed,
+    )
+
+    sem = asyncio.Semaphore(3)
+
+    async def _validate(sym: str) -> tuple[str, bool]:
+        async with sem:
+            try:
+                return sym, await market_data_service.validate_symbol(sym)
+            except Exception:
+                return sym, False
+
+    validation_results = await asyncio.gather(*[_validate(s) for s in symbols])
+
+    valid_symbols: list[str] = [sym for sym, is_valid in validation_results if is_valid]
+    invalid_symbols: list[str] = [
+        sym for sym, is_valid in validation_results if not is_valid
+    ]
+
+    if not valid_symbols:
+        invalid_str = ", ".join(invalid_symbols)
+        return await interaction.followup.send(
+            embed=create_error_embed(
+                f"所有輸入的標的代號皆無效：`{invalid_str}`。現有觀察清單未變更。",
+                title="系統錯誤",
+            ),
+            ephemeral=True,
+        )
+
+    if len(valid_symbols) > _MAX_WATCHLIST_SYMBOLS_PER_USER:
+        return await interaction.followup.send(
+            embed=create_error_embed(
+                f"有效標的數量 ({len(valid_symbols)} 檔) 超過觀察清單上限 ({_MAX_WATCHLIST_SYMBOLS_PER_USER} 檔)，操作已取消，現有觀察清單維持不變。",
+                title="系統警告",
+            ),
+            ephemeral=True,
+        )
+
+    manager = AssetManager()
+    try:
+        cleared_count, new_symbols = manager.set_watchlist(
+            interaction.user.id, valid_symbols
+        )
+    except WatchlistLimitExceededError as e:
+        return await interaction.followup.send(
+            embed=create_error_embed(str(e), title="系統警告"),
+            ephemeral=True,
+        )
+    except Exception as e:
+        return await interaction.followup.send(
+            embed=create_error_embed(
+                f"覆蓋觀察清單時發生未預期錯誤，已自動回滾，現有清單未變更：{e}",
+                title="系統錯誤",
+            ),
+            ephemeral=True,
+        )
+
+    embed = create_set_watchlist_result_embed(
+        succeeded=new_symbols,
+        cleared_count=cleared_count,
+        invalid=invalid_symbols if invalid_symbols else None,
+    )
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 

@@ -146,6 +146,32 @@ def create_bulk_watchlist_result_embed(
     return embed
 
 
+def create_set_watchlist_result_embed(
+    succeeded: List[str],
+    cleared_count: int,
+    invalid: Optional[List[str]] = None,
+) -> discord.Embed:
+    """生成覆蓋設定觀察清單標的的結果摘要 Embed。
+
+    Args:
+        succeeded: 成功設定為觀察清單的新標的代號列表。
+        cleared_count: 原先被清除的舊標的總數。
+        invalid: 被過濾排除的無效代號列表。
+    """
+    lines: List[str] = [
+        f"✅ **已設定觀察清單** ({len(succeeded)} 檔): {', '.join(succeeded)}",
+        f"🗑️ **已清除原清單**: {cleared_count} 檔標的",
+    ]
+    if invalid:
+        lines.append(f"❌ **無效代號** ({len(invalid)} 檔): {', '.join(invalid)}")
+
+    return NexusEmbed(
+        title="📡 觀察清單設定結果",
+        description="\n".join(lines),
+        color=discord.Color.green(),
+    )
+
+
 def _build_execution_suggestion_lines(
     *,
     has_position: bool,

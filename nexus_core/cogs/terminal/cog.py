@@ -245,6 +245,16 @@ class TerminalCog(commands.Cog):
     async def remove_watch(self, interaction: discord.Interaction, symbol: str) -> Any:
         return await watchlist.remove_watch_impl(interaction, symbol)
 
+    @app_commands.command(
+        name="set_watch",
+        description="批次設定觀察清單 (WATCH)，將現有清單替換為指定標的",
+    )
+    @app_commands.describe(
+        symbol="股票代號 (如 'AAPL, TSLA NVDA'，以逗號或空白分隔，將完全覆蓋現有清單)"
+    )
+    async def set_watch(self, interaction: discord.Interaction, symbol: str) -> Any:
+        return await watchlist.set_watch_impl(interaction, symbol)
+
     @app_commands.command(name="list_watch", description="列出您的雷達觀察清單")
     @app_commands.choices(
         sort=[

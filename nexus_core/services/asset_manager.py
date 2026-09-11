@@ -2,6 +2,7 @@ from typing import Any
 import sqlite3
 import json
 import logging
+import unicodedata
 from typing import List, Optional, Dict
 import config
 from models.asset import Asset, ContextType, TradeMetadata, HoldingMetadata
@@ -308,3 +309,56 @@ class AssetManager:
             changes = cursor.rowcount
             conn.commit()
             return changes > 0  # type: ignore
+
+    def set_watchlist(self, user_id: int, symbols: list[str]) -> tuple[int, list[str]]:
+        """以原子操作覆蓋特定使用者的觀察清單 (WATCH)。
+
+        先清除該使用者所有既有的 WATCH 標的，再寫入傳入的標的清單。
+        若過程中發生任何例外，將自動回滾以確保交易原子性。
+
+        Args:
+            user_id: 使用者 ID。
+            symbols: 欲設定的標的代號列表。
+
+        Returns:
+            tuple[int, list[str]]: (原先清除的舊標的總數, 成功寫入的新標的代號列表)
+
+        Raises:
+            WatchlistLimitExceededError: 若傳入的有效標的數量超過上限。
+        """
+        clean_symbols: list[str] = []
+        seen: set[str] = set()
+        for s in symbols:
+            s_norm = unicodedata.normalize("NFKC", s)
+            sym_upper = s_norm.strip().strip("$＄").upper()
+            if sym_upper and sym_upper not in seen:
+                seen.add(sym_upper)
+                clean_symbols.append(sym_upper)
+
+        if len(clean_symbols) > _MAX_WATCHLIST_SYMBOLS_PER_USER:
+            raise WatchlistLimitExceededError(
+                f"觀察清單標的數量超過上限 ({_MAX_WATCHLIST_SYMBOLS_PER_USER} 檔)，請縮減標的數量後再設定。"
+            )
+
+        conn = self._get_conn()
+        try:
+            with conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "DELETE FROM assets WHERE user_id = ? AND context_type = 'WATCH'",
+                    (user_id,),
+                )
+                cleared_count: int = max(0, cursor.rowcount)
+
+                metadata_json = json.dumps({})
+                for sym in clean_symbols:
+                    cursor.execute(
+                        """
+                        INSERT INTO assets (user_id, symbol, context_type, risk_weight, entry_price, metadata)
+                        VALUES (?, ?, 'WATCH', 1.0, NULL, ?)
+                        """,
+                        (user_id, sym, metadata_json),
+                    )
+            return cleared_count, clean_symbols
+        finally:
+            conn.close()
