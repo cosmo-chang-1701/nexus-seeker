@@ -10,8 +10,9 @@ parse_table() 解析欄位需求的最小合成 HTML，端對端呼叫
 scrape_symbol_gex_core()，不 mock 內部計算邏輯。
 """
 
-from typing import Any, List
+from typing import Any, List, cast
 
+from playwright.async_api import Browser
 import pytest
 
 import gex_scraper
@@ -67,6 +68,10 @@ class _FakeBrowser:
         return _FakeContext(self._html)
 
 
+def _make_browser(html: str) -> Browser:
+    return cast(Browser, _FakeBrowser(html))
+
+
 def _row(contract_name: str, strike: float, oi: int, iv_pct: float) -> str:
     cols = [contract_name, "-", str(strike)] + ["-"] * 6 + [str(oi), f"{iv_pct}"]
     return "<tr>" + "".join(f"<td>{c}</td>" for c in cols) + "</tr>"
@@ -90,7 +95,7 @@ async def test_call_wall_only_selects_from_strikes_at_or_above_spot() -> None:
         call_rows=[_row("TESTC1", 105.0, 500, 20)],
         put_rows=[_row("TESTP1", 90.0, 5000, 20)],
     )
-    result = await gex_scraper.scrape_symbol_gex_core("TEST", _FakeBrowser(html))
+    result = await gex_scraper.scrape_symbol_gex_core("TEST", _make_browser(html))
     assert result["call_wall"] == 105.0
     assert result["call_wall"] >= 100.0
 
@@ -102,7 +107,7 @@ async def test_put_wall_only_selects_from_strikes_at_or_below_spot() -> None:
         call_rows=[_row("TESTC1", 110.0, 5000, 20)],
         put_rows=[_row("TESTP1", 95.0, 500, 20)],
     )
-    result = await gex_scraper.scrape_symbol_gex_core("TEST", _FakeBrowser(html))
+    result = await gex_scraper.scrape_symbol_gex_core("TEST", _make_browser(html))
     assert result["put_wall"] == 95.0
     assert result["put_wall"] <= 100.0
 
@@ -115,7 +120,7 @@ async def test_call_wall_falls_back_to_spot_when_no_strike_above_spot_has_calls(
         call_rows=[_row("TESTC1", 95.0, 1000, 20)],
         put_rows=[_row("TESTP1", 85.0, 1000, 20)],
     )
-    result = await gex_scraper.scrape_symbol_gex_core("TEST", _FakeBrowser(html))
+    result = await gex_scraper.scrape_symbol_gex_core("TEST", _make_browser(html))
     assert result["call_wall"] == 100.0
     assert result["put_wall"] == 85.0
 
@@ -126,7 +131,7 @@ async def test_put_wall_falls_back_to_spot_when_no_strike_below_spot_has_puts() 
         call_rows=[_row("TESTC1", 115.0, 1000, 20)],
         put_rows=[_row("TESTP1", 110.0, 1000, 20)],
     )
-    result = await gex_scraper.scrape_symbol_gex_core("TEST", _FakeBrowser(html))
+    result = await gex_scraper.scrape_symbol_gex_core("TEST", _make_browser(html))
     assert result["put_wall"] == 100.0
     assert result["call_wall"] == 115.0
 
@@ -138,7 +143,7 @@ async def test_net_gex_and_gex_profile_unchanged_sign_convention() -> None:
         call_rows=[_row("TESTC1", 105.0, 300, 20)],
         put_rows=[_row("TESTP1", 95.0, 400, 20)],
     )
-    result = await gex_scraper.scrape_symbol_gex_core("TEST", _FakeBrowser(html))
+    result = await gex_scraper.scrape_symbol_gex_core("TEST", _make_browser(html))
 
     t = 7.0 / 365.0
     gamma_call = gex_scraper._calculate_gamma(100.0, 105.0, t, 0.04, 0.20)
@@ -166,7 +171,7 @@ async def test_deep_otm_low_delta_high_oi_contract_excluded_from_wall() -> None:
         ],
         put_rows=[_row("TESTP1", 95.0, 100, 20)],
     )
-    result = await gex_scraper.scrape_symbol_gex_core("TEST", _FakeBrowser(html))
+    result = await gex_scraper.scrape_symbol_gex_core("TEST", _make_browser(html))
     assert result["call_wall"] == 105.0
 
 
@@ -179,7 +184,7 @@ async def test_noise_filter_failsafe_keeps_side_when_all_contracts_are_low_delta
         call_rows=[_row("AAPL301231C", 400.0, 1_000_000, 20)],
         put_rows=[_row("TESTP1", 95.0, 100, 20)],
     )
-    result = await gex_scraper.scrape_symbol_gex_core("TEST", _FakeBrowser(html))
+    result = await gex_scraper.scrape_symbol_gex_core("TEST", _make_browser(html))
     assert result["call_wall"] == 400.0
 
 
@@ -211,7 +216,7 @@ async def test_scrape_symbol_gex_core_with_dividend_yield() -> None:
         put_rows=[_row("TESTP1", 100.0, 500, 20)],
     )
     result = await gex_scraper.scrape_symbol_gex_core(
-        "TEST", _FakeBrowser(html), risk_free_rate=0.04, dividend_yield=0.03
+        "TEST", _make_browser(html), risk_free_rate=0.04, dividend_yield=0.03
     )
     t = 7.0 / 365.0
     gamma = gex_scraper._calculate_gamma(100.0, 100.0, t, 0.04, 0.20, q=0.03)

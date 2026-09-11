@@ -254,12 +254,16 @@ class PortfolioMonitorCog(commands.Cog):
                 "skew": float(r_data.get("skew", 0.0) if r_data.get("skew") else 0.0),
                 "atr_14": atr_val,
                 "atr_15m": atr_15m_val,
-                "hvn": float(r_data.get("vp_data", {}).get("hvn", 0.0))
-                if isinstance(r_data.get("vp_data"), dict)
-                else 0.0,
-                "lvn": float(r_data.get("vp_data", {}).get("lvn", 0.0))
-                if isinstance(r_data.get("vp_data"), dict)
-                else 0.0,
+                "hvn": float(
+                    r_data.get("vp_data", {}).get("hvn") or 0.0
+                    if isinstance(r_data.get("vp_data"), dict)
+                    else 0.0
+                ),
+                "lvn": float(
+                    r_data.get("vp_data", {}).get("lvn") or 0.0
+                    if isinstance(r_data.get("vp_data"), dict)
+                    else 0.0
+                ),
                 "dte": dte_val,
                 "iv_term_structure_status": (
                     r_data.get("iv_metrics", {}).get("iv_term_structure_status")

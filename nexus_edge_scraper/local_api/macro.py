@@ -11,77 +11,81 @@ from playwright.async_api import (
 )
 from playwright_stealth import Stealth
 
-from gex_scraper import scrape_symbol_gex_core
+import statistics
+from gex_scraper import (
+    _calculate_gamma,
+    _filter_noise_contracts,
+    scrape_symbol_gex_core,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 
+def calculate_total_gex(
+    S: float, option_chain: list[dict[str, Any]], r: float = 0.04, q: float = 0.013
+) -> float:
+    total_gex = 0.0
+    for contract in option_chain:
+        strike = contract["strike"]
+        oi = contract["oi"]
+        iv = contract["iv"]
+        t = contract["t"]
+        is_call = contract["is_call"]
+
+        gamma = _calculate_gamma(S, strike, t, r, iv, q=q)
+        gex = oi * 100.0 * gamma * S * S
+        if not is_call:
+            gex = -gex
+        total_gex += gex
+    return total_gex
+
+
+def find_gamma_flip(
+    spot_price: float,
+    option_chain: list[dict[str, Any]],
+    r: float = 0.04,
+    q: float = 0.013,
+) -> float:
+    if spot_price <= 0 or not option_chain:
+        return 0.0
+    low_price = spot_price * 0.8
+    high_price = spot_price * 1.2
+    steps = 100
+    prices = [
+        low_price + (high_price - low_price) * i / steps for i in range(steps + 1)
+    ]
+    gex_values = [calculate_total_gex(p, option_chain, r=r, q=q) for p in prices]
+
+    # 若全鏈在搜索區間內恆正或恆負（無做市商正負 Gamma 翻轉），回傳 0.0
+    if max(gex_values) <= 0.0 or min(gex_values) >= 0.0:
+        return 0.0
+
+    candidates: list[float] = []
+    for i in range(len(prices) - 1):
+        g1, g2 = gex_values[i], gex_values[i + 1]
+        p1, p2 = prices[i], prices[i + 1]
+        # 嚴格符號變化：一正一負
+        if g1 * g2 < 0:
+            candidates.append(p1 - g1 * (p2 - p1) / (g2 - g1))
+        # 剛好觸碰 0 且兩側變號
+        elif g1 == 0.0 and i > 0 and gex_values[i - 1] * g2 < 0:
+            candidates.append(p1)
+
+    if not candidates:
+        return 0.0
+    # 最近距離選取：若存在多次局部交叉，優先選取距現價最近者
+    return min(candidates, key=lambda k: abs(k - spot_price))
+
+
 @router.get("/api/v1/scrape/macro/gex")
 async def scrape_gex() -> dict[str, Any]:
-    import math
     import re
     from datetime import date
 
     # Standard fallback values
     fallback = {"spy_spot": 510.0, "gamma_flip": 515.0, "put_wall": 505.0}
-
-    # Black-Scholes math helper
-    def ndtr_prime(x: float) -> float:
-        return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
-
-    def calculate_gamma(
-        S: float, K: float, t: float, r: float, sigma: float, q: float = 0.013
-    ) -> float:
-        if S <= 0 or K <= 0 or t <= 0 or sigma <= 0:
-            return 0.0
-        try:
-            d1 = (math.log(S / K) + (r - q + 0.5 * sigma * sigma) * t) / (
-                sigma * math.sqrt(t)
-            )
-            return (math.exp(-q * t) * ndtr_prime(d1)) / (S * sigma * math.sqrt(t))
-        except Exception:
-            return 0.0
-
-    def calculate_total_gex(
-        S: float, option_chain: list[dict[str, Any]], r: float = 0.04, q: float = 0.013
-    ) -> float:
-        total_gex = 0.0
-        for contract in option_chain:
-            strike = contract["strike"]
-            oi = contract["oi"]
-            iv = contract["iv"]
-            t = contract["t"]
-            is_call = contract["is_call"]
-
-            gamma = calculate_gamma(S, strike, t, r, iv, q=q)
-            gex = oi * 100.0 * gamma * S * S
-            if not is_call:
-                gex = -gex
-            total_gex += gex
-        return total_gex
-
-    def find_gamma_flip(spot_price: float, option_chain: list[dict[str, Any]]) -> float:
-        low_price = spot_price * 0.8
-        high_price = spot_price * 1.2
-        steps = 100
-        prices = [
-            low_price + (high_price - low_price) * i / steps for i in range(steps + 1)
-        ]
-        gex_values = [calculate_total_gex(p, option_chain) for p in prices]
-
-        flip_price = spot_price
-        for i in range(len(prices) - 1):
-            if gex_values[i] * gex_values[i + 1] <= 0:
-                p1, p2 = prices[i], prices[i + 1]
-                g1, g2 = gex_values[i], gex_values[i + 1]
-                if g2 - g1 != 0:
-                    flip_price = p1 - g1 * (p2 - p1) / (g2 - g1)
-                else:
-                    flip_price = (p1 + p2) / 2.0
-                break
-        return flip_price
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -156,7 +160,6 @@ async def scrape_gex() -> dict[str, Any]:
                 return {"status": "success", "data": fallback}
 
             option_chain: list[dict[str, Any]] = []
-            put_oi_by_strike: dict[float, int] = {}
             today = date.today()
 
             def parse_table(table: Any, is_call: bool) -> None:
@@ -173,13 +176,14 @@ async def scrape_gex() -> dict[str, Any]:
                         oi = int(oi_text) if oi_text and oi_text != "-" else 0
 
                         iv_text = cols[10].replace("%", "").replace(",", "")
-                        iv = (
-                            float(iv_text) / 100.0
-                            if iv_text and iv_text != "-"
-                            else 0.20
-                        )
-                        if iv <= 0:
-                            iv = 0.20
+                        try:
+                            iv_val_parsed = (
+                                float(iv_text) / 100.0
+                                if iv_text and iv_text != "-"
+                                else None
+                            )
+                        except ValueError:
+                            iv_val_parsed = None
 
                         match = re.match(r"SPY(\d{2})(\d{2})(\d{2})[CP]", contract_name)
                         if match:
@@ -191,22 +195,18 @@ async def scrape_gex() -> dict[str, Any]:
                         else:
                             days_to_exp = 7
 
-                        t = max(days_to_exp, 0.5) / 365.0
+                        # 防範假牆：0-DTE / 1-DTE 合約在結算日當天 t->0 導致 Gamma 虛高膨脹，至少以 2.0 天作為 Gamma 定價底限
+                        t = max(days_to_exp, 2.0) / 365.0
 
                         option_chain.append(
                             {
                                 "strike": strike,
                                 "oi": oi,
-                                "iv": iv,
+                                "iv": iv_val_parsed,
                                 "t": t,
                                 "is_call": is_call,
                             }
                         )
-
-                        if not is_call:
-                            put_oi_by_strike[strike] = (
-                                put_oi_by_strike.get(strike, 0) + oi
-                            )
                     except Exception:
                         pass
 
@@ -217,13 +217,38 @@ async def scrape_gex() -> dict[str, Any]:
                 logger.warning("No option chain contracts parsed, using fallbacks.")
                 return {"status": "success", "data": fallback}
 
+            # 自適應 IV 估計：提取全鏈有效 IV 中位數作為缺失合約的自適應基準
+            valid_ivs = [
+                c["iv"] for c in option_chain if c["iv"] is not None and c["iv"] > 0.01
+            ]
+            adaptive_iv = float(statistics.median(valid_ivs)) if valid_ivs else 0.20
+            for c in option_chain:
+                if c["iv"] is None or c["iv"] <= 0.01:
+                    c["iv"] = adaptive_iv
+
+            # 過濾深度價外雜訊合約 (|delta| < 0.02)
+            option_chain = _filter_noise_contracts(
+                option_chain, spot_price, r=0.04, q=0.013
+            )
+            if not option_chain:
+                logger.warning(
+                    "All option chain contracts filtered as noise, using fallbacks."
+                )
+                return {"status": "success", "data": fallback}
+
             # Calculate Put Wall
             put_wall = spot_price - 5.0
+            put_oi_by_strike: dict[float, int] = {}
+            for c in option_chain:
+                if not c["is_call"] and c["oi"] > 0:
+                    put_oi_by_strike[c["strike"]] = (
+                        put_oi_by_strike.get(c["strike"], 0) + c["oi"]
+                    )
             if put_oi_by_strike:
                 put_wall = max(put_oi_by_strike, key=lambda k: put_oi_by_strike[k])
 
             # Calculate Gamma Flip
-            gamma_flip = find_gamma_flip(spot_price, option_chain)
+            gamma_flip = find_gamma_flip(spot_price, option_chain, r=0.04, q=0.013)
 
             return {
                 "status": "success",

@@ -277,3 +277,71 @@ async def test_dynamic_market_scanner_skips_when_memory_unsafe(mock_bot: Any) ->
         cog.intraday_pipeline.stop()
         cog.dynamic_market_scanner.cancel()
         cog.daily_reddit_update.cancel()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_market_scanner_spx_sanity_bounds(mock_bot: Any) -> None:
+    """P2: 驗證 dynamic_market_scanner 在寫入 macro_spx kv_cache 前，
+    嚴格檢驗 spx_val 合理性邊界 [3000.0, 15000.0]，過濾異常報價。"""
+    mock_save_kv = AsyncMock()
+    with patch("market_time.is_market_open", return_value=True), patch(
+        "services.llm_service.is_memory_safe", return_value=True
+    ), patch("services.market_data_service.get_quote") as mock_quote, patch(
+        "services.market_data_service.get_vix_term_structure"
+    ) as mock_vts, patch(
+        "market_analysis.index_microstructure.fetch_core_macro_metrics",
+        new_callable=AsyncMock,
+    ), patch(
+        "cogs.trading.heartbeat.dispatch_watchlist_heartbeat",
+        new_callable=AsyncMock,
+    ), patch("database.get_all_watchlist", return_value=[]), patch(
+        "database.get_all_user_ids", return_value=[]
+    ), patch("database.is_notification_enabled", return_value=False), patch(
+        "database.get_kv_cache", return_value=None
+    ), patch("database.save_kv_cache", mock_save_kv):
+        # Case 1: SPX = 5500.0 (正常)
+        mock_quote.side_effect = (
+            lambda sym: {"c": 5500.0} if sym == "^SPX" else {"c": 15.0}
+        )
+        mock_vts.return_value = {
+            "vts_ratio": 0.9,
+            "is_valid": True,
+            "vts_state": "CONTANGO",
+        }
+
+        cog = SchedulerCog(mock_bot)
+        await cog.dynamic_market_scanner()
+
+        spx_saves = [
+            call for call in mock_save_kv.call_args_list if call[0][0] == "macro_spx"
+        ]
+        assert len(spx_saves) == 1
+        assert spx_saves[0][0][1] == 5500.0
+
+        # Case 2: SPX = 550.0 (異常過低，例如誤傳 SPY 價格)
+        mock_save_kv.reset_mock()
+        mock_quote.side_effect = (
+            lambda sym: {"c": 550.0} if sym == "^SPX" else {"c": 15.0}
+        )
+        await cog.dynamic_market_scanner()
+
+        spx_saves_invalid = [
+            call for call in mock_save_kv.call_args_list if call[0][0] == "macro_spx"
+        ]
+        assert len(spx_saves_invalid) == 0
+
+        # Case 3: SPX = 25000.0 (異常過高)
+        mock_save_kv.reset_mock()
+        mock_quote.side_effect = (
+            lambda sym: {"c": 25000.0} if sym == "^SPX" else {"c": 15.0}
+        )
+        await cog.dynamic_market_scanner()
+
+        spx_saves_high = [
+            call for call in mock_save_kv.call_args_list if call[0][0] == "macro_spx"
+        ]
+        assert len(spx_saves_high) == 0
+
+        cog.intraday_pipeline.stop()
+        cog.dynamic_market_scanner.cancel()
+        cog.daily_reddit_update.cancel()

@@ -7,6 +7,8 @@ services:
       - "8000:8000"
     restart: unless-stopped
     mem_limit: 2g
+    volumes:
+      - .:/app
     environment:
       - PYTHONUNBUFFERED=1
       - REDDIT_USER_AGENT=${REDDIT_USER_AGENT}

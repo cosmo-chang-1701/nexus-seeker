@@ -1039,6 +1039,60 @@ async def test_get_macro_overview_data_logic() -> Any:
         assert data_cold_degraded["spx"] == 5150.0
 
 
+@pytest.mark.asyncio
+async def test_get_macro_overview_data_short_gamma_critical_spy_basis() -> Any:
+    """P1: 驗證 build_macro_terminal_embed_context (get_macro_overview_data)
+    使用 SPY 現貨價比對 SPY Gamma Flip，消除 SPX 10x basis 扭曲導致的 split-brain。"""
+    from cogs.unified_terminal.utils import (
+        build_macro_terminal_embed_context,
+        get_macro_overview_data,
+    )
+
+    # 驗證別名一致性
+    assert build_macro_terminal_embed_context is get_macro_overview_data
+
+    with (
+        patch("cogs.unified_terminal.utils.is_memory_safe", return_value=True),
+        patch("database.get_kv_cache") as mock_kv,
+        patch("services.market_data_service.get_quote") as mock_quote,
+        patch("cogs.unified_terminal.utils._macro_overview_cache", {}),
+    ):
+        mock_quote.side_effect = Exception("Fallback to kv")
+
+        # 情境 A: SPY < spy_gamma_flip, VIX > 20, VTS >= 1.0 (Backwardation)
+        # SPX 雖然看似在 5180 以上 (5190)，但 SPY 510 < SPY Flip 515，應觸發 short_gamma_critical
+        mock_kv.side_effect = lambda key: {
+            "macro_spx": 5190.0,
+            "macro_spy_spot": 510.0,
+            "macro_spy_gamma_flip": 515.0,
+            "macro_gamma_flip_line": 5150.0,
+            "macro_vix": 22.0,
+            "macro_us10y": 4.25,
+            "macro_vts_ratio": 1.05,
+        }.get(key)
+
+        data = await get_macro_overview_data(999)
+        assert data["spy_spot"] == 510.0
+        assert data["spy_gamma_flip"] == 515.0
+        assert data["short_gamma_critical"] is True
+
+        # 情境 B: SPY >= spy_gamma_flip, 即使 SPX 數值失真 (5000)，也不得誤觸發
+        mock_kv.side_effect = lambda key: {
+            "macro_spx": 5000.0,
+            "macro_spy_spot": 520.0,
+            "macro_spy_gamma_flip": 515.0,
+            "macro_gamma_flip_line": 5150.0,
+            "macro_vix": 22.0,
+            "macro_us10y": 4.25,
+            "macro_vts_ratio": 1.05,
+        }.get(key)
+
+        data2 = await get_macro_overview_data(1000)
+        assert data2["spy_spot"] == 520.0
+        assert data2["spy_gamma_flip"] == 515.0
+        assert data2["short_gamma_critical"] is False
+
+
 def _get_field_value(embed: Any, field_name: str) -> str:
     for field in embed.fields:
         if field.name == field_name:

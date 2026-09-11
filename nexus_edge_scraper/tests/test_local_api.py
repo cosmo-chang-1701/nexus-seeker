@@ -174,6 +174,100 @@ def test_scrape_gex_fallback() -> None:
         assert data["data"]["put_wall"] == 505.0
 
 
+def test_find_gamma_flip_finds_zero_crossing() -> None:
+    from local_api.macro import find_gamma_flip
+
+    spot = 500.0
+    chain = [
+        {"strike": 480.0, "oi": 5000, "iv": 0.20, "t": 10.0 / 365.0, "is_call": False},
+        {"strike": 490.0, "oi": 3000, "iv": 0.20, "t": 10.0 / 365.0, "is_call": False},
+        {"strike": 510.0, "oi": 3000, "iv": 0.20, "t": 10.0 / 365.0, "is_call": True},
+        {"strike": 520.0, "oi": 5000, "iv": 0.20, "t": 10.0 / 365.0, "is_call": True},
+    ]
+    flip = find_gamma_flip(spot, chain)
+    assert 480.0 < flip < 520.0
+
+
+def test_find_gamma_flip_no_crossing_returns_zero_not_spot() -> None:
+    """P1: 找不到零交叉點時，不得退回 spot_price (造成閃爍)，而必須回傳 0.0。"""
+    from local_api.macro import find_gamma_flip
+
+    spot = 500.0
+    chain = [
+        {"strike": 480.0, "oi": 5000, "iv": 0.20, "t": 10.0 / 365.0, "is_call": True},
+        {"strike": 520.0, "oi": 5000, "iv": 0.20, "t": 10.0 / 365.0, "is_call": True},
+    ]
+    flip = find_gamma_flip(spot, chain)
+    assert flip == 0.0
+    assert flip != spot
+
+
+def test_find_gamma_flip_empty_or_invalid_chain_returns_zero() -> None:
+    from local_api.macro import find_gamma_flip
+
+    assert find_gamma_flip(500.0, []) == 0.0
+    assert (
+        find_gamma_flip(
+            0.0,
+            [{"strike": 500.0, "oi": 100, "iv": 0.2, "t": 0.1, "is_call": True}],
+        )
+        == 0.0
+    )
+
+
+def test_find_gamma_flip_all_calls_deep_otm_underflow_returns_zero() -> None:
+    """邊界防禦：當期權鏈全為 Call 且存在深度價外導致 BS 尾端 underflow 為 0.0 時，
+    演算法不得將 0.0*0.0<=0 誤判為翻轉線，必須正確回傳 0.0。"""
+    from local_api.macro import find_gamma_flip
+
+    spot = 500.0
+    chain = [
+        {"strike": 700.0, "oi": 5000, "iv": 0.20, "t": 2.0 / 365.0, "is_call": True},
+    ]
+    assert find_gamma_flip(spot, chain) == 0.0
+
+
+def test_find_gamma_flip_all_zero_oi_returns_zero() -> None:
+    """邊界防禦：全鏈合約未平倉均為 0 (GEX 恆為 0.0) 時，必須回傳 0.0 而非下邊界。"""
+    from local_api.macro import find_gamma_flip
+
+    spot = 500.0
+    chain = [
+        {"strike": 500.0, "oi": 0, "iv": 0.20, "t": 2.0 / 365.0, "is_call": True},
+    ]
+    assert find_gamma_flip(spot, chain) == 0.0
+
+
+def test_find_gamma_flip_all_puts_returns_zero() -> None:
+    """邊界防禦：全鏈合約均為 Put (GEX 恆負)，無做市商轉正點，必須回傳 0.0。"""
+    from local_api.macro import find_gamma_flip
+
+    spot = 500.0
+    chain = [
+        {"strike": 480.0, "oi": 5000, "iv": 0.20, "t": 10.0 / 365.0, "is_call": False},
+        {"strike": 520.0, "oi": 5000, "iv": 0.20, "t": 10.0 / 365.0, "is_call": False},
+    ]
+    assert find_gamma_flip(spot, chain) == 0.0
+
+
+def test_find_gamma_flip_multiple_crossings_picks_closest_to_spot() -> None:
+    """最近距離選取：若存在多次局部零交叉，優先選取距現價最近者。"""
+    from local_api.macro import find_gamma_flip
+
+    spot = 500.0
+    # 構造在 430 與 498 兩處各有零交叉的鏈
+    # 430 附近：420 Put, 440 Call
+    # 498 附近：490 Put, 510 Call (更接近 spot=500.0)
+    chain = [
+        {"strike": 420.0, "oi": 8000, "iv": 0.20, "t": 15.0 / 365.0, "is_call": False},
+        {"strike": 440.0, "oi": 8000, "iv": 0.20, "t": 15.0 / 365.0, "is_call": True},
+        {"strike": 490.0, "oi": 6000, "iv": 0.20, "t": 15.0 / 365.0, "is_call": False},
+        {"strike": 510.0, "oi": 6000, "iv": 0.20, "t": 15.0 / 365.0, "is_call": True},
+    ]
+    flip = find_gamma_flip(spot, chain)
+    assert abs(flip - spot) < abs(430.0 - spot)
+
+
 class AsyncContextManagerMockWithBrowserCapture:
     """Like AsyncContextManagerMock, but exposes the launched browser mock so
     tests can assert browser.close() was still called after a mid-scrape

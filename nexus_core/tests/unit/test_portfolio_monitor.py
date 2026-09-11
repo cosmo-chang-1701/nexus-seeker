@@ -302,3 +302,178 @@ async def test_price_15m_close_survives_session_vwap_failure(
     assert metrics["session_vwap"] == 0.0
     assert metrics["vwap_loss_with_volume"] is False
     assert metrics["vwap_reclaim_with_volume"] is False
+
+
+@pytest.mark.asyncio
+@patch("database.market_cache.save_market_cache", new_callable=AsyncMock)
+@patch("database.market_cache.get_market_cache", return_value=None)
+@patch("database.cache.save_kv_cache", new_callable=AsyncMock)
+@patch("database.cache.get_kv_cache", return_value=None)
+@patch("database.cache.get_kv_cache_with_age", return_value=(None, None))
+async def test_radar_data_slow_gamma_flip_populates_portfolio_monitor(
+    mock_kv_age: Any,
+    mock_get_kv: Any,
+    mock_save_kv: Any,
+    mock_get_mc: Any,
+    mock_save_mc: Any,
+) -> None:
+    """P0 驗證：_fetch_sym_radar_data_slow_raw 計算 gamma_flip 並存入 gex_profile_data，
+    且能端對端完整傳遞至 PortfolioMonitorCog._build_symbol_metrics 的 metrics 快照中。"""
+    from cogs.unified_terminal.radar_data import RadarDataMixin
+
+    mock_gex_profile = {"130": -1000.0, "140": -500.0, "148": 1000.0, "160": 2000.0}
+
+    with (
+        patch(
+            "services.market_data_service.get_quote",
+            new_callable=AsyncMock,
+            return_value={"c": 150.0},
+        ),
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_skew",
+            new_callable=AsyncMock,
+            return_value={"skew": -0.1, "skew_percentile": 50.0},
+        ),
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.detect_uoa_with_physical_caps",
+            new_callable=AsyncMock,
+            return_value=([], []),
+        ),
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.get_unified_max_pain",
+            new_callable=AsyncMock,
+            return_value={"max_pain": 149.0, "is_stale": False},
+        ),
+        patch(
+            "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
+            new_callable=AsyncMock,
+            return_value={
+                "put_wall": 140.0,
+                "call_wall": 160.0,
+                "net_gex": 1500.0,
+                "gex_profile": mock_gex_profile,
+            },
+        ),
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
+            new_callable=AsyncMock,
+            return_value={"volume_pcr": 0.8, "oi_pcr": 0.9},
+        ),
+        patch(
+            "services.market_data_service.get_all_option_expiries",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+        patch(
+            "market_analysis.atr_utils.fetch_atr_15m",
+            new_callable=AsyncMock,
+            return_value=1.5,
+        ),
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.get_expected_move",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch(
+            "services.market_data_service.get_history_df",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        mixin = RadarDataMixin()
+        r_data = await mixin._fetch_sym_radar_data_slow_raw("AAPL")
+
+    # 1. 斷言 radar_data 內 gex_profile_data 正確包含 gamma_flip
+    assert "gamma_flip" in r_data["gex_profile_data"]
+    assert r_data["gex_profile_data"]["gamma_flip"] == 148.0
+    assert r_data["gex_metrics"]["gamma_flip"] == 148.0
+
+    # 2. 端對端傳入 PortfolioMonitorCog._build_symbol_metrics
+    cog = PortfolioMonitorCog.__new__(PortfolioMonitorCog)
+    cog.bot = MagicMock()
+    with (
+        patch(
+            "market_analysis.price_volume_alert.get_confirmed_15m_bar",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "market_analysis.vwap_utils.fetch_session_vwap",
+            new_callable=AsyncMock,
+            return_value=0.0,
+        ),
+    ):
+        metrics = await cog._build_symbol_metrics("AAPL", r_data)
+
+    assert metrics["gamma_flip"] == 148.0
+    assert metrics["spot_price"] == 150.0
+
+
+@pytest.mark.asyncio
+@patch("database.market_cache.get_market_cache", return_value={"max_pain": 149.0})
+@patch("database.squeeze_cache.get_squeeze_cache", return_value={})
+@patch("database.cache.get_kv_cache")
+@patch("database.cache.get_kv_cache_with_age", return_value=(None, None))
+async def test_radar_data_fast_gamma_flip_populates_portfolio_monitor(
+    mock_kv_age: Any,
+    mock_get_kv: Any,
+    mock_squeeze: Any,
+    mock_mc: Any,
+) -> None:
+    """P0 驗證：_fetch_sym_radar_data_fast_raw 在快取命中與未命中時，均能正確處理 gamma_flip 並存入 gex_profile_data / gex_metrics。"""
+    from cogs.unified_terminal.radar_data import RadarDataMixin
+
+    mock_gex_profile = {"130": -1000.0, "140": -500.0, "148": 1000.0, "160": 2000.0}
+
+    def kv_side_effect(key: str) -> Any:
+        if key == "radar_terminal_AAPL":
+            return {
+                "gamma_flip": 148.0,
+                "put_wall_strike": 140.0,
+                "call_wall_strike": 160.0,
+            }
+        if key == "gex_metrics_AAPL":
+            return {
+                "gex_profile": mock_gex_profile,
+                "put_wall": 140.0,
+                "call_wall": 160.0,
+            }
+        return None
+
+    mock_get_kv.side_effect = kv_side_effect
+
+    with patch(
+        "services.market_data_service.get_quote",
+        new_callable=AsyncMock,
+        return_value={"c": 150.0, "volume": 1000000},
+    ):
+        mixin = RadarDataMixin()
+        r_data = await mixin._fetch_sym_radar_data_fast_raw("AAPL")
+
+    assert "gamma_flip" in r_data["gex_profile_data"]
+    assert r_data["gex_profile_data"]["gamma_flip"] == 148.0
+    assert r_data["gex_metrics"]["gamma_flip"] == 148.0
+
+    cog = PortfolioMonitorCog.__new__(PortfolioMonitorCog)
+    cog.bot = MagicMock()
+    with (
+        patch(
+            "market_analysis.price_volume_alert.get_confirmed_15m_bar",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "market_analysis.vwap_utils.fetch_session_vwap",
+            new_callable=AsyncMock,
+            return_value=0.0,
+        ),
+    ):
+        metrics = await cog._build_symbol_metrics("AAPL", r_data)
+
+    assert metrics["gamma_flip"] == 148.0
+    assert metrics["spot_price"] == 150.0

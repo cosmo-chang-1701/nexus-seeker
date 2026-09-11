@@ -190,8 +190,13 @@ class SchedulerCog(commands.Cog):
                 and (vts_q.get("vts_state") != "UNKNOWN")
             )
 
-            if spx_val > 0.0:
+            is_spx_valid = 3000.0 <= spx_val <= 15000.0
+            if is_spx_valid:
                 await database.save_kv_cache("macro_spx", spx_val)
+            else:
+                logger.warning(
+                    f"🕒 [SPX 數據異常] 報價 {spx_val} 超出合理範圍 [3000.0, 15000.0]，跳過更新 macro_spx 快取"
+                )
             if is_vix_valid:
                 await database.save_kv_cache("macro_vix", vix_val)
             if tnx_val > 0.0:
@@ -202,7 +207,7 @@ class SchedulerCog(commands.Cog):
                 await database.save_kv_cache("macro_vts_ratio", vts_val)
 
             logger.info(
-                f"🕒 [盤中總經快取更新完成] SPX: {spx_val}, VIX: {vix_val} (Valid: {is_vix_valid}), "
+                f"🕒 [盤中總經快取更新完成] SPX: {spx_val} (Valid: {is_spx_valid}), VIX: {vix_val} (Valid: {is_vix_valid}), "
                 f"US10Y: {tnx_val}, WTI: {wti_val}, VTS: {vts_val} (Valid: {is_vts_valid})"
             )
 

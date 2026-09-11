@@ -34,6 +34,7 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
             get_quote("^VIX"),
             get_quote("^TNX"),
             get_quote("CL=F"),
+            get_quote("SPY"),
             return_exceptions=True,
         )
 
@@ -48,12 +49,14 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         vix = _parse(results[1], "macro_vix", 18.0)
         us10y = _parse(results[2], "macro_us10y", 4.25)
         wti = _parse(results[3], "macro_wti", 75.0)
+        spy_spot = _parse(results[4], "macro_spy_spot", (spx / 10.0) if spx else 510.0)
 
     except Exception:
         spx = get_kv_cache("macro_spx") or 5150.0
         vix = get_kv_cache("macro_vix") or 18.0
         us10y = get_kv_cache("macro_us10y") or 4.25
         wti = get_kv_cache("macro_wti") or 75.0
+        spy_spot = get_kv_cache("macro_spy_spot") or ((spx / 10.0) if spx else 510.0)
 
     # Normalize US10Y if needed
     if us10y > 10.0:
@@ -98,6 +101,7 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
 
     fear_greed = get_kv_cache("macro_fear_greed")
     gamma_flip_line = get_kv_cache("macro_gamma_flip_line")
+    spy_gamma_flip = get_kv_cache("macro_spy_gamma_flip")
     uer = get_kv_cache("macro_uer")
     sahm_rule = get_kv_cache("macro_sahm_rule")
     rrp_change_30d = get_kv_cache("macro_rrp_change_30d")
@@ -123,16 +127,25 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
     sahm_rule = sahm_rule or 0.35
     rrp_change_30d = rrp_change_30d or 5.0
 
-    if not gamma_flip_line:
+    if not gamma_flip_line or not spy_gamma_flip:
         try:
             from market_analysis.index_microstructure import fetch_gex_metrics
 
             gex_data = await fetch_gex_metrics()
-            gamma_flip_line = (gex_data.get("gamma_flip") or 515.0) * 10.0
+            raw_flip = float(gex_data.get("gamma_flip") or 515.0)
+            if not spy_gamma_flip:
+                spy_gamma_flip = raw_flip
+            if not gamma_flip_line:
+                gamma_flip_line = raw_flip * 10.0
         except Exception:
             pass
 
-    gamma_flip_line = gamma_flip_line or 5180.0
+    gamma_flip_line = float(gamma_flip_line or 5180.0)
+    spy_gamma_flip = float(
+        spy_gamma_flip
+        if spy_gamma_flip is not None
+        else (gamma_flip_line / 10.0 if gamma_flip_line else 515.0)
+    )
 
     # 此處刻意不直接沿用上方 fetch_gex_metrics() 回傳值的 `_is_stale_cache`
     # （若有呼叫的話）：該呼叫只在 macro_gamma_flip_line 快取未命中時才會執行，
@@ -156,8 +169,13 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
     )
 
     # 零 Gamma 踩踏 Regime 判定
-    # SPX 跌破 Gamma Flip Line 且 VIX > 20 且 is_backwardation (倒掛或極端恐慌)
-    short_gamma_critical = (spx < gamma_flip_line) and (vix > 20.0) and is_backwardation
+    # 評估 SPY 現貨價相對於 SPY Gamma Flip（與 index_microstructure.get_market_regime 一致，消除 10x basis 失真）
+    is_negative_gamma_spy = (
+        (spy_spot < spy_gamma_flip)
+        if (spy_spot > 0.0 and spy_gamma_flip > 0.0)
+        else (spx < gamma_flip_line if (spx > 0.0 and gamma_flip_line > 0.0) else False)
+    )
+    short_gamma_critical = is_negative_gamma_spy and (vix > 20.0) and is_backwardation
 
     # 衰退警告 RECESSION_WARNING
     recession_warning = (sahm_rule >= 0.5) or (us10y > 4.5 and vix > 20.0)
@@ -194,11 +212,13 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         cpi_dev=float(cpi_dev),
         wti=float(wti),
         vts_ratio=float(vts_val) if (vts_val is not None and vts_val > 0) else 0.88,
-        is_negative_gamma=short_gamma_critical or (spx < gamma_flip_line),
+        is_negative_gamma=short_gamma_critical or is_negative_gamma_spy,
     )
 
     result_data: dict[str, Any] = {
         "spx": spx,
+        "spy_spot": spy_spot,
+        "spy_gamma_flip": spy_gamma_flip,
         "vix": vix,
         "us10y": us10y,
         "wti": wti,
@@ -231,6 +251,10 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
     # Save to memory cache
     _macro_overview_cache[cache_key] = result_data
     return result_data
+
+
+# Alias for backward compatibility / explicit context building
+build_macro_terminal_embed_context = get_macro_overview_data
 
 
 def _strip_redundant_symbol_prefix(question: str, symbol: str) -> str:

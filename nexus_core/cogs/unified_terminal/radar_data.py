@@ -305,6 +305,7 @@ class RadarDataMixin:
         from market_analysis.index_microstructure import (
             calculate_positive_gex_depth_below,
             find_overhead_negative_gex_swamp,
+            estimate_symbol_gamma_flip,
         )
 
         pos_gex_below = radar_cache.get("positive_gex_below")
@@ -326,6 +327,11 @@ class RadarDataMixin:
                     str(put_wall), gex_data["gex_profile"].get(str(int(put_wall)), 0.0)
                 )
             )
+
+        gamma_flip = radar_cache.get("gamma_flip")
+        if (gamma_flip is None or gamma_flip == 0.0) and gex_data.get("gex_profile"):
+            gamma_flip = estimate_symbol_gamma_flip(gex_data["gex_profile"], price)
+        gamma_flip = float(gamma_flip or 0.0)
 
         # 多週期 Max Pain (month_max_pains) 與 MA20 快取縫合
         month_max_pains = (
@@ -431,6 +437,7 @@ class RadarDataMixin:
                 ),
                 "net_gex": net_gex,
                 "put_wall_gex": put_wall_gex,
+                "gamma_flip": gamma_flip,
                 "_is_stale_cache": gex_is_stale,
             },
             "gex_profile_data": {
@@ -446,12 +453,16 @@ class RadarDataMixin:
                 "put_wall_gex": put_wall_gex,
                 "positive_gex_below": pos_gex_below,
                 "overhead_neg_gex_swamp": overhead_neg_swamp,
+                "gamma_flip": gamma_flip,
                 "_is_stale_cache": gex_is_stale,
             },
             "vp_data": {
-                "hvn": radar_cache.get("hvn_price")
-                or get_kv_cache(f"volume_poc_{sym.upper()}"),
-                "lvn": radar_cache.get("lvn_price"),
+                "hvn": float(
+                    radar_cache.get("hvn_price")
+                    or get_kv_cache(f"volume_poc_{sym.upper()}")
+                    or 0.0
+                ),
+                "lvn": float(radar_cache.get("lvn_price") or 0.0),
             },
             "dp_poc": dp_poc,
         }
@@ -480,6 +491,7 @@ class RadarDataMixin:
             fetch_symbol_gex_metrics,
             calculate_positive_gex_depth_below,
             find_overhead_negative_gex_swamp,
+            estimate_symbol_gamma_flip,
         )
         from market_analysis.atr_utils import fetch_atr_15m
 
@@ -578,6 +590,7 @@ class RadarDataMixin:
             for s in physical_cap_strikes
         )
         gex_prof = gex_data.get("gex_profile", {}) if isinstance(gex_data, dict) else {}
+        gamma_flip = estimate_symbol_gamma_flip(gex_prof, price)
         pos_gex_below = calculate_positive_gex_depth_below(gex_prof, price)
         overhead_neg_swamp = find_overhead_negative_gex_swamp(gex_prof, price)
         pw_strike = gex_data.get("put_wall", 0.0) if isinstance(gex_data, dict) else 0.0
@@ -792,6 +805,7 @@ class RadarDataMixin:
                 "put_wall_gex": pw_gex,
                 "positive_gex_below": pos_gex_below,
                 "overhead_neg_gex_swamp": overhead_neg_swamp,
+                "gamma_flip": gamma_flip,
                 "_is_stale_cache": bool(gex_data.get("_is_stale_cache", False))
                 if isinstance(gex_data, dict)
                 else False,
@@ -808,6 +822,7 @@ class RadarDataMixin:
                 if isinstance(gex_data, dict)
                 else 0.0,
                 "put_wall_gex": pw_gex,
+                "gamma_flip": gamma_flip,
                 "_is_stale_cache": bool(gex_data.get("_is_stale_cache", False))
                 if isinstance(gex_data, dict)
                 else False,
@@ -845,6 +860,7 @@ class RadarDataMixin:
                 if isinstance(gex_data, dict)
                 else 0.0,
                 "put_wall_gex": pw_gex,
+                "gamma_flip": gamma_flip,
                 "positive_gex_below": pos_gex_below,
                 "overhead_neg_gex_swamp": overhead_neg_swamp,
                 "volume_pcr": volume_pcr,
