@@ -4623,5 +4623,5 @@ def test_create_gamma_squeeze_alert_embed() -> None:
     assert "Vanna" in text
     # Gate 1 / Gate 3 的輸入是代理指標，依 AGENTS.md 慣例必須揭露
     assert "代理數據揭露" in text
-    assert "外推至收盤" in text
-    assert "最近一個到期日" in text
+    assert "RVOL_15m" in text
+    assert "DTE >= 7" in text

@@ -667,19 +667,15 @@ class IntradayScanPipeline:
             return 0.0
 
     async def _fetch_projected_option_volume(self, ticker: str) -> int:
-        """全鏈當日期權成交量，外推至收盤的預估值，供 Gate 1 使用。
+        """全鏈當日期權成交量，取消跨時段線性外推。
 
-        ⚠️ 這是代理指標：Gate 1 的語意是「日均期權成交量」，但本平台沒有多日期權
-        成交量的歷史序列，只有當日快照。直接用當日累積量會產生時段偏誤——早盤必然
-        不足、尾盤必然充足，使訊號系統性集中在下午。因此比照
-        `uoa_detector.paced_ratio` 既有作法，除以
-        `market_time.get_trading_day_elapsed_fraction()` 換算為「以目前速度外推至
-        收盤」的預估值，讓門檻在一天中任何時點的意義趨於一致。
+        已取消「當日成交量 ÷ 交易時段已過比例」的線性外推機制，徹底避免開盤時段因
+        成交量 U 型分佈導致的 3~5 倍虛假放大。Gate 1 已全面改用微觀結構指標
+        「15m 即時成交量比 (RVOL_15m = Volume_15m / SMA20)」進行放量驗證。
 
         取不到時回傳 0（Gate 1 fail-closed）。
         """
         try:
-            import market_time
             from market_analysis.sentiment_engine import SentimentEngine
 
             pcr_data = await SentimentEngine.calculate_pcr(ticker)
@@ -690,8 +686,7 @@ class IntradayScanPipeline:
             )
             if total_volume <= 0.0:
                 return 0
-            elapsed = market_time.get_trading_day_elapsed_fraction()
-            return int(total_volume / elapsed) if elapsed > 0 else int(total_volume)
+            return int(total_volume)
         except Exception as e:
             logger.warning(f"[{ticker}] 取得期權成交量失敗，Gate 1 將判定不通過: {e}")
             return 0
@@ -699,32 +694,74 @@ class IntradayScanPipeline:
     async def _fetch_front_expiry_otm_call_premium(
         self, ticker: str, spot_price: float
     ) -> float:
-        """最近到期日的價外 Call 總成交權利金 (Σ volume × lastPrice × 100)，供 Gate 3。
+        """統計 DTE >= 7 且 Vol/OI >= 0.8x 之價外 Call 主力成交權利金 (Σ volume × lastPrice × 100)，供 Gate 3。
 
-        ⚠️ 欄位原名為「明日到期」，但期權並非每日到期；這裡取的是**最近一個到期日**
-        （週選情境下通常是 0-7 DTE）。沿用既有欄位名以免動到引擎介面，語意差異記錄
-        於此。取不到或無價外 Call 時回傳 0.0（Gate 3 fail-closed）。
+        強制過濾 DTE 0~4 之末日輪流動性雜訊（做市商結算日尾盤對倒與 Gamma 軋平），
+        僅採樣 DTE >= 7 且單筆/累積成交佔該合約 OI >= 0.8x 的跨週期主力訂單流。
+        取不到或無符合主力單時回傳 0.0（Gate 3 fail-closed）。
         """
         try:
             from services import market_data_service
+            import market_time
+            import pandas as pd
 
             expiries = await market_data_service.get_all_option_expiries(ticker)
             if not expiries:
                 return 0.0
-            chain = await market_data_service.get_option_chain(ticker, expiries[0])
-            if chain is None or chain.calls.empty:
+
+            today = datetime.now(market_time.ny_tz).date()
+            qualifying_expiries = []
+            for exp_str in expiries:
+                try:
+                    exp_date = datetime.strptime(exp_str, "%Y-%m-%d").date()
+                    dte = (exp_date - today).days
+                    # 強制過濾 DTE 0~4 之合約，僅採樣 DTE >= 7
+                    if dte >= 7:
+                        qualifying_expiries.append(exp_str)
+                except ValueError:
+                    continue
+
+            if not qualifying_expiries:
                 return 0.0
 
-            calls = chain.calls
-            otm = calls[calls["strike"] > spot_price]
-            if otm.empty:
-                return 0.0
-            volumes = otm["volume"].fillna(0.0).astype(float)
-            prices = otm["lastPrice"].fillna(0.0).astype(float)
-            return float((volumes * prices * 100.0).sum())
+            total_institutional_premium = 0.0
+            # 採樣前 3 個符合 DTE >= 7 的到期日
+            for exp in qualifying_expiries[:3]:
+                chain = await market_data_service.get_option_chain(ticker, exp)
+                if chain is None or chain.calls.empty:
+                    continue
+
+                calls = chain.calls
+                otm = calls[calls["strike"] > spot_price]
+                if otm.empty:
+                    continue
+
+                vols = otm["volume"].fillna(0.0).astype(float)
+                ois = (
+                    otm["openInterest"].fillna(0.0).astype(float)
+                    if "openInterest" in otm.columns
+                    else pd.Series(0.0, index=otm.index)
+                )
+
+                # 篩選成交量佔該合約 OI >= 0.8x 的跨週期主力訂單流
+                has_oi = (ois > 0).any()
+                if has_oi:
+                    mask = (ois > 0) & (vols >= 0.8 * ois) & (vols > 0)
+                    target_otm = otm[mask]
+                else:
+                    target_otm = otm
+
+                if not target_otm.empty:
+                    t_vols = target_otm["volume"].fillna(0.0).astype(float)
+                    t_prices = target_otm["lastPrice"].fillna(0.0).astype(float)
+                    total_institutional_premium += float(
+                        (t_vols * t_prices * 100.0).sum()
+                    )
+
+            return total_institutional_premium
         except Exception as e:
             logger.warning(
-                f"[{ticker}] 取得最近到期 OTM Call 權利金失敗，Gate 3 將判定不通過: {e}"
+                f"[{ticker}] 取得 DTE>=7 主力 OTM Call 權利金失敗，Gate 3 將判定不通過: {e}"
             )
             return 0.0
 
@@ -733,16 +770,15 @@ class IntradayScanPipeline:
     ) -> Optional[TickerMarketData]:
         """獲取標的即時數據並拼裝為 TickerMarketData。
 
-        此處的每一個欄位都直接決定 `NexusGammaSqueezeEngine.validate_gates()` 的
-        通過與否，而該結果現在會實際推播給使用者。過去 market_cap_billion /
-        avg_option_volume / tomorrow_expiring_otm_calls_premium 三者是寫死的
-        「安全降級預設值」(250.5 / 65000 / 1_200_000)，剛好都高於各自的門檻
-        (20B / 50k / $1M)，等於 Gate 1 與 Gate 3 對所有標的無條件放行。現已全部
-        改抓真實數據，且任一項取得失敗一律回傳會使該 Gate 不通過的值。
+        包含即時微觀結構、15m RVOL、即時 IV 與 GEX Profile。
+        任一核心項取得失敗一律安全降級並促使相應 Gate fail-closed。
         """
         try:
             from services.calendar_service import calendar_service
             from services.market_data_service import get_quote
+            from market_analysis.price_volume_alert import get_confirmed_15m_bar
+            from market_analysis.index_microstructure import fetch_symbol_gex_metrics
+            from market_analysis.sentiment_engine import SentimentEngine
 
             quote = await get_quote(ticker)
             price_raw = quote.get("c", 0) if quote else 0
@@ -761,21 +797,62 @@ class IntradayScanPipeline:
             except Exception:
                 pass
 
-            # 從已快取的 watchlist metrics 取得真實 IV Rank 與 Skew。
-            # ⚠️ 這裡的 fallback 值 (iv_rank=50.0) 會讓 Gate 4 的
-            # `iv_rank >= 50.0` 條件無條件成立，屬 fail-open。改為 0.0/0.0，
-            # 缺資料時 Gate 4 由 Skew 或後續真實 IV Rank 決定，不自動放行。
+            # 接入即時波動率強制刷新數據源（Realtime_IV）
             real_iv_rank = 0.0
+            realtime_iv = None
+            try:
+                iv_metrics = await SentimentEngine.fetch_and_calculate_iv_metrics(
+                    ticker
+                )
+                if iv_metrics:
+                    if iv_metrics.iv_rank is not None:
+                        real_iv_rank = float(iv_metrics.iv_rank)
+                    if iv_metrics.current_iv is not None:
+                        realtime_iv = float(iv_metrics.current_iv)
+            except Exception as e:
+                logger.debug(f"[{ticker}] 抓取即時 IV 失敗: {e}")
+
+            # Skew 取得
             real_option_skew = 0.0
             cached_entry = _WATCHLIST_METRICS_CACHE.get(ticker.upper())
             if cached_entry is not None:
                 cached_m, _ = cached_entry
-                if cached_m.iv_rank is not None:
+                if real_iv_rank == 0.0 and cached_m.iv_rank is not None:
                     real_iv_rank = float(cached_m.iv_rank)
                 if cached_m.option_skew is not None:
-                    # option_skew 以百分點儲存 (見 options_flow.calculate_skew)，
-                    # 而 Gate 4 的門檻 0.05 是小數，故此處換算。
                     real_option_skew = float(cached_m.option_skew) / 100.0
+
+            # 微觀結構 15m K 棒 (RVOL_15m)
+            rvol_15m = None
+            try:
+                bar_15m = await get_confirmed_15m_bar(ticker)
+                if bar_15m and bar_15m.avg_volume > 0:
+                    rvol_15m = round(bar_15m.volume / bar_15m.avg_volume, 4)
+            except Exception as e:
+                logger.debug(f"[{ticker}] 抓取 15m K 棒失敗: {e}")
+
+            # GEX 結構與 Call Wall
+            call_wall = None
+            net_gex = None
+            gex_profile = None
+            try:
+                gex_data = await fetch_symbol_gex_metrics(ticker)
+                if gex_data:
+                    call_wall = gex_data.get("call_wall")
+                    net_gex = gex_data.get("net_gex")
+                    gex_profile = gex_data.get("gex_profile")
+            except Exception as e:
+                logger.debug(f"[{ticker}] 抓取 GEX 數據失敗: {e}")
+
+            # 全鏈 STO 物理封頂
+            physical_cap_strikes = None
+            try:
+                (
+                    _,
+                    physical_cap_strikes,
+                ) = await SentimentEngine.detect_uoa_with_physical_caps(ticker)
+            except Exception as e:
+                logger.debug(f"[{ticker}] 抓取 STO 物理封頂失敗: {e}")
 
             (
                 market_cap_billion,
@@ -796,6 +873,12 @@ class IntradayScanPipeline:
                 tomorrow_expiring_otm_calls_premium=otm_call_premium,
                 iv_rank=real_iv_rank,
                 option_skew=real_option_skew,
+                rvol_15m=rvol_15m,
+                realtime_iv=realtime_iv,
+                call_wall=call_wall,
+                net_gex=net_gex,
+                gex_profile=gex_profile,
+                physical_cap_strikes=physical_cap_strikes,
             )
         except Exception as e:
             logger.error(f"Failed to fetch market data for {ticker}: {e}")

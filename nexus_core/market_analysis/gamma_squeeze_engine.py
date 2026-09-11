@@ -43,18 +43,39 @@ class NexusGammaSqueezeEngine:
     ) -> Tuple[bool, List[str]]:
         """
         執行 4 階段戰術硬性過濾門檻。
-        - Gate 1: 流動性門檻 (市值 >= 20B 且日均期權量 >= 50,000)
+        - Gate 1: 流動性門檻 (市值 >= 20B 且 15m 即時量比 RVOL_15m >= 1.0；Phase A 要求 >= 1.5x)
         - Gate 2: 事件風險 (距離財報天數 > 3 天)
-        - Gate 3: 資金效率 (明日到期 OTM Call 總成交權利金 >= $1M，Phase A 調降 30%)
+        - Gate 3: 資金效率 (DTE>=7 且 Vol/OI>=0.8x 之價外 Call 主力成交權利金 >= $1M，Phase A 調高 30%)
         - Gate 4: 跨市場驗證 (IV Rank >= 50 或期權偏斜絕對值 >= 0.05)
         """
         failed = []
 
         # Gate 1: Liquidity Gate
-        if data.market_cap_billion < 20.0 or data.avg_option_volume < 50000:
-            failed.append(
-                "流動性不足門檻：市值需 >= 20B 且日均期權成交量需 >= 50,000 口"
-            )
+        gate_1_fails = []
+        if data.market_cap_billion < 20.0:
+            gate_1_fails.append("市值需 >= 20B")
+
+        # 優先採樣微觀結構指標 RVOL_15m (取消跨時段線性外推)
+        if data.rvol_15m is not None:
+            required_rvol = 1.5 if market_phase == "Phase A" else 1.0
+            if data.rvol_15m < required_rvol:
+                phase_a_tag = (
+                    " (Phase A 開盤衝擊期要求 15m 放量 >= 1.5x SMA20)"
+                    if market_phase == "Phase A"
+                    else ""
+                )
+                gate_1_fails.append(
+                    f"15m 成交量比 (RVOL_15m: {data.rvol_15m:.2f}x) 需 >= {required_rvol:.1f}x{phase_a_tag}"
+                )
+        else:
+            # 兼容無 rvol_15m 之舊數據或測試情境
+            # Phase A 時段提高 30% 門檻防範滑價與脆弱報價
+            vol_threshold = 65000 if market_phase == "Phase A" else 50000
+            if data.avg_option_volume < vol_threshold:
+                gate_1_fails.append(f"日均期權成交量需 >= {vol_threshold:,} 口")
+
+        if gate_1_fails:
+            failed.append(f"流動性不足門檻：{' 且 '.join(gate_1_fails)}")
 
         # Gate 2: Event Risk Gate
         if data.days_until_earnings <= 3:
@@ -63,13 +84,14 @@ class NexusGammaSqueezeEngine:
             )
 
         # Gate 3: Capital Efficiency Gate
+        # Phase A 開盤衝擊期點差大、報價脆弱，流動性門檻調高 30%（嚴禁逆向放寬）
         threshold = self.gate_3_threshold
         if market_phase == "Phase A":
-            threshold *= 0.70  # 開盤前一小時 (Phase A) 門檻降低 30%
+            threshold *= 1.30
 
         if data.tomorrow_expiring_otm_calls_premium < threshold:
             failed.append(
-                f"資金效率不足：明日到期 OTM Call 總權利金為 ${data.tomorrow_expiring_otm_calls_premium:,.2f}，低於要求門檻 ${threshold:,.2f}"
+                f"資金效率不足：DTE>=7 主力 OTM Call 總權利金為 ${data.tomorrow_expiring_otm_calls_premium:,.2f}，低於要求門檻 ${threshold:,.2f}"
             )
 
         # Gate 4: Cross-Market Validation Gate
@@ -101,20 +123,7 @@ class NexusGammaSqueezeEngine:
         # 2. 驗證 4 階段戰術門檻
         gates_passed, failed_gates = self.validate_gates(data, market_phase)
 
-        # 3. SDDM 路由決策
-        # - VIX >= 25.0: 強制 SHIELD 避險
-        # - 未通過 4 階段門檻: SHIELD
-        # - 通過且 VIX < 25: SPEAR 積極進攻
-        if not is_applicable:
-            sddm_route = "WAIT"
-        elif not gates_passed:
-            sddm_route = "SHIELD"
-        elif account_state.current_vix >= 25.0:
-            sddm_route = "SHIELD"
-        else:
-            sddm_route = "SPEAR"
-
-        # 4. 財務跑道分析 (Financial Runway Analysis)
+        # 3. 財務跑道分析 (Financial Runway Analysis) - 優先於路由決策
         daily_burn_rate = account_state.monthly_burn_rate / 30.0
         # 帳戶每日 Theta 總收益 (持倉數量 * 單口每日 Theta * 100 乘數)
         projected_theta_yield = sum(
@@ -137,6 +146,7 @@ class NexusGammaSqueezeEngine:
             theta_coverage_pct = 0.0
 
         # 生成生存狀態訊息
+        is_runway_critical = financial_runway_days < 30
         if financial_runway_days >= 180:
             runway_status_msg = f"🟢 財務跑道極其安全 (生存跑道: {financial_runway_days} 天)，期權 Theta 每日覆蓋率達 {theta_coverage_pct:.1f}%，運營資金結構優良。"
         elif 90 <= financial_runway_days < 180:
@@ -144,65 +154,221 @@ class NexusGammaSqueezeEngine:
         elif 30 <= financial_runway_days < 90:
             runway_status_msg = f"🟠 財務跑道中等警戒 (生存跑道: {financial_runway_days} 天)，期權 Theta 每日覆蓋率為 {theta_coverage_pct:.1f}%，建議精簡持倉規模。"
         else:
-            runway_status_msg = f"🔴 🚨 財務跑道極度危險！僅剩 {financial_runway_days} 天，期權 Theta 覆蓋率僅 {theta_coverage_pct:.1f}%，請立即關閉高風險部位並限制主動交易。"
+            runway_status_msg = f"🔴 🚨 財務跑道極度危險！僅剩 {financial_runway_days} 天，期權 Theta 覆蓋率僅 {theta_coverage_pct:.1f}%，觸發存活熔斷，嚴禁建立期權買方部位！"
 
-        # 5. Gamma 磁吸目標價 (預估下一個整數期權行權價)
+        # 4. Gamma 磁吸目標價演算與微觀結構否決 (GEX Peak & Asymmetric Payoff)
         spot = data.spot_price
-        magnet_target = float(math.ceil(spot / 5.0) * 5.0)
-        if abs(magnet_target - spot) < 0.01:
-            magnet_target += 5.0
+        min_target_price = spot * 1.05  # 向上空間必須滿足 >= 5% 的非對稱獲利要求
+        magnet_target: Optional[float] = None
+        microstructure_veto = False
+        veto_reasons: List[str] = []
 
-        # 6. 凱利公式戰力縮放 (Kelly Position Sizing)
-        # 基準凱利百分比設為 0.25 (對應 55% 勝率, 1.5 盈虧比)
-        base_kelly = 0.25
-        vix = account_state.current_vix
-        if vix < 15.0:
-            kelly_position_scaling = base_kelly * 1.0  # 全力進攻 (All-in/Heavy)
-        elif 15.0 <= vix < 25.0:
-            kelly_position_scaling = base_kelly * 0.6  # 減速警惕 (Ready/Caution)
+        def _is_severe_sto_cap(strike: float) -> bool:
+            if not data.physical_cap_strikes:
+                return False
+            for cap in data.physical_cap_strikes:
+                try:
+                    c_strike = float(cap.get("strike", 0.0))
+                    c_ratio = float(cap.get("ratio", 0.0))
+                    c_type = str(cap.get("type", "")).upper()
+                    # Call STO 且 ratio > 1.0x OI
+                    if (
+                        abs(c_strike - strike) < 0.01
+                        and c_ratio > 1.0
+                        and ("C" in c_type or c_type == "CALL")
+                    ):
+                        return True
+                except (ValueError, TypeError):
+                    continue
+            return False
+
+        if data.gex_profile:
+            # 尋找現價上方且空間 >= 5% 的實體正 Gamma 深度節點 (GEX Peak)
+            candidate_peaks: List[Tuple[float, float]] = []
+            for k_str, gex_val in data.gex_profile.items():
+                try:
+                    k = float(k_str)
+                    g = float(gex_val)
+                    if k >= min_target_price and g > 0:
+                        candidate_peaks.append((k, g))
+                except (ValueError, TypeError):
+                    continue
+
+            # 依正 GEX 深度降序排列
+            candidate_peaks.sort(key=lambda x: x[1], reverse=True)
+
+            target_found = False
+            for cand_k, _ in candidate_peaks:
+                if _is_severe_sto_cap(cand_k):
+                    continue  # 跳過遭遇天量 STO 剛性封頂的節點
+                magnet_target = cand_k
+                target_found = True
+                break
+
+            if not target_found:
+                microstructure_veto = True
+                veto_reasons.append(
+                    "微觀結構否決：現價上方無具備實體正 Gamma 深度 (GEX Peak) 且空間 >= 5% 之安全磁吸目標（候選履約價均沉澱負 Gamma 斷層或遭遇 > 1.0x OI 之天量 STO 封頂）"
+                )
+        elif data.call_wall is not None and data.call_wall > 0:
+            if data.call_wall < min_target_price:
+                microstructure_veto = True
+                veto_reasons.append(
+                    f"空間不足否決：Call Wall (${data.call_wall:.2f}) 距現價 (${spot:.2f}) 向上空間不足 5%，不滿足非對稱獲利要求"
+                )
+            elif _is_severe_sto_cap(data.call_wall):
+                microstructure_veto = True
+                veto_reasons.append(
+                    f"微觀結構否決：Call Wall (${data.call_wall:.2f}) 遭遇 > 1.0x OI 之天量 STO 剛性物理封頂，主力築頂防守"
+                )
+            elif data.net_gex is not None and data.net_gex < 0:
+                microstructure_veto = True
+                veto_reasons.append(
+                    "微觀結構否決：標的處於負 Gamma 泥淖 (Net GEX < 0)，做市商順向拋壓阻礙上行"
+                )
+            else:
+                magnet_target = data.call_wall
         else:
-            kelly_position_scaling = (
-                base_kelly * 0.1
-            )  # 極限防守 (Dormant / 僅配置 10% 凱利權重)
+            # 降級純代數計算：仍強制滿足 >= 5% 空間
+            candidate = float(math.ceil(min_target_price / 5.0) * 5.0)
+            if candidate < min_target_price:
+                candidate += 5.0
+            magnet_target = candidate
 
-        # 7. Vanna-Adjusted Delta 對沖決策 (Hidden Delta)
-        # 計算現貨與波動率同步暴漲時，Vanna 帶來的非線性 Delta 漂移
+        # 5. SDDM 路由決策 (全局風控優先級仲裁)
+        # 優先級：未開盤 WAIT > 存活熔斷 (Runway < 30) SHIELD > 微觀否決 SHIELD > 門檻未過 SHIELD > VIX>=25 SHIELD > SPEAR
+        vix = account_state.current_vix
+        if not is_applicable:
+            sddm_route = "WAIT"
+        elif is_runway_critical:
+            # 全局風控覆蓋機制 (Global Risk Override)：強制硬鎖，阻斷所有買方進攻
+            sddm_route = "SHIELD"
+        elif microstructure_veto:
+            sddm_route = "SHIELD"
+            for vr in veto_reasons:
+                failed_gates.append(vr)
+        elif not gates_passed:
+            sddm_route = "SHIELD"
+        elif vix >= 25.0:
+            sddm_route = "SHIELD"
+        else:
+            sddm_route = "SPEAR"
+
+        # 6. 分數凱利倉位上限 (Fractional Kelly & Hard Cap)
+        # 單筆方向性期權買方倉位硬性限制在 3%~5% 內；存活跑道告急時強制歸零
+        if is_runway_critical:
+            kelly_position_scaling = 0.0
+        elif sddm_route != "SPEAR":
+            kelly_position_scaling = 0.0
+        else:
+            max_fractional_kelly = 0.05  # 5.0% 硬上限
+            if vix < 15.0:
+                kelly_position_scaling = max_fractional_kelly * 1.0  # 5.0%
+            elif 15.0 <= vix < 25.0:
+                kelly_position_scaling = max_fractional_kelly * 0.6  # 3.0%
+            else:
+                kelly_position_scaling = 0.0
+
+        # 7. Vanna-Adjusted Delta 對沖決策 (跨資產 Beta 與價格比率校準)
         portfolio_vanna = portfolio_greeks.get("vanna", 0.0)
         beta = portfolio_greeks.get("beta", 1.0)
-        # 假設盤中即時波動率波動為 +10% (0.10)
         d_vol = 0.10
         hidden_delta = portfolio_vanna * d_vol
-        hidden_delta_shares = hidden_delta * 100.0  # 換算為標的股份 Delta 當量
+        hidden_delta_shares = hidden_delta * 100.0  # 標的 Delta 股數當量
 
-        # 換算為 Beta 加權的 SPY/QQQ 對沖所需股數
-        shares_needed = -round(hidden_delta_shares * beta)
+        # 標的內部對沖 (首選)
+        internal_shares = -round(hidden_delta_shares)
 
-        if abs(shares_needed) > 0:
-            direction = "BUY 買入" if shares_needed > 0 else "SELL 賣出"
-            vanna_hedging_instruction = f"組合 Delta 偏離！偵測到 Vanna 引起隱含 Delta 漂移 {hidden_delta_shares * beta:+.2f}。支援對沖建議：建立 [{direction} {abs(shares_needed)} 單位 SPY] 以恢復 Delta 中性。"
+        # 跨資產 SPY 對沖 (次選)：Delta_TSLA * beta * (P_TSLA / P_SPY)
+        spy_spot = portfolio_greeks.get("spy_price", 0.0)
+        if spy_spot <= 0.0:
+            spy_spot = 500.0  # 基準參考價
+        price_ratio = (data.spot_price / spy_spot) if spy_spot > 0 else 1.0
+        spy_shares_needed = -round(hidden_delta_shares * beta * price_ratio)
+
+        if abs(internal_shares) > 0:
+            int_dir = "BUY 買入" if internal_shares > 0 else "SELL 賣出"
+            spy_dir = "BUY 買入" if spy_shares_needed > 0 else "SELL 賣出"
+            vanna_hedging_instruction = (
+                f"組合 Delta 偏離！偵測到 Vanna 引起隱含 Delta 漂移 {hidden_delta_shares:+.2f}。\n"
+                f" ├─ 首選標的內部對沖：建立 [{int_dir} {abs(internal_shares)} 股 {data.ticker}] 現貨/期權平衡\n"
+                f" └─ 次選跨資產 SPY 對沖 (Beta={beta:.2f}, 價格比={price_ratio:.2f})：建立 [{spy_dir} {abs(spy_shares_needed)} 單位 SPY]"
+            )
         else:
             vanna_hedging_instruction = (
                 "組合 Delta 處於中性區間，目前無需進行 Vanna 對沖調整。"
             )
 
-        # 8. 推薦動作
+        # 8. 波動率體制判定 (廢除靜態文字，IVR > 50% 強制高波洗盤環境)
+        is_high_iv = data.iv_rank > 50.0
+        notes = []
+        if is_high_iv:
+            iv_str = (
+                f" (即時 IV: {data.realtime_iv:.1%})"
+                if data.realtime_iv is not None
+                else ""
+            )
+            notes.append(
+                f"🔥 波動率體制：當前處於【高波劇烈洗盤環境】(IV Rank: {data.iv_rank:.1f}%{iv_str} > 50%)。"
+                "嚴禁裸買 OTM 期權以規避劇烈波動率回縮 (IV Crush) 殺傷，進攻時應改採垂直價差 (Bull Call Spread) 或賣方保護。"
+            )
+        elif vix >= 25.0:
+            notes.append(
+                f"⚠️ 市場恐慌指標高企 (VIX: {vix:.2f} >= 25.0)，波動率期限結構轉為逆價差，防範市場系統性尾部風險。"
+            )
+        else:
+            notes.append(
+                f"當前波動率環境相對溫和 (VIX: {vix:.2f}, IV Rank: {data.iv_rank:.1f}%)，有利於低波動期權佈局。"
+            )
+
+        if is_runway_critical:
+            notes.append(
+                f"🚨 存活風控硬鎖：您的財務存活跑道僅剩 {financial_runway_days} 天 (< 30 天)，觸發全局熔斷！"
+                "已強制阻斷所有方向性期權買方開倉訊號，嚴禁任何買方投機，請立即關閉高風險部位。"
+            )
+        elif financial_runway_days <= 60:
+            notes.append(
+                f"⚠️ 存活警戒：財務跑道剩餘 {financial_runway_days} 天，建議嚴格控管倉位並回收流動性。"
+            )
+
+        notes.append(
+            "請隨時追蹤 Spot 與 IV 變化產生的 Hidden Delta 漂移。對沖完成後，可使用 `/settle_hedge` 登錄對沖記錄。"
+        )
+        risk_mitigation_notes = " ".join(notes)
+
+        # 9. 推薦動作 (嚴格遵守風控優先級，硬鎖時遮蔽所有買方建議)
         recommended_actions = []
-        if sddm_route == "SPEAR":
+        if is_runway_critical:
+            recommended_actions.append(
+                f"🚨 【存活風控硬鎖 (Hard Lock)】生存跑道僅剩 {financial_runway_days} 天 (< 30 天)！"
+            )
+            recommended_actions.append(
+                "⛔ 全局風控覆蓋機制已啟動：強制阻斷並遮蔽所有方向性期權買方開倉訊號，嚴禁建立 OTM Call！"
+            )
+            recommended_actions.append(
+                "🛡️ 當前路由硬鎖為 SHIELD 避險模組，首要任務為關閉高風險部位、確保本金安全。"
+            )
+        elif sddm_route == "SPEAR":
             recommended_actions.append(
                 f"🏹 當前進入 SPEAR 進攻模組，標的 {data.ticker} 具備強大 Gamma 擠壓潛力。"
             )
+            target_str = f"${magnet_target:.2f}" if magnet_target is not None else "--"
+            if is_high_iv:
+                recommended_actions.append(
+                    f"🎯 預估上行磁吸目標價為 {target_str}。因處於高波環境 (IVR > 50%)，限制裸買 OTM 期權，建議改以牛市認購價差 (Bull Call Spread) 進攻。"
+                )
+            else:
+                recommended_actions.append(
+                    f"🎯 預估上行磁吸目標價為 {target_str}，建議分批建立 OTM Call。"
+                )
             recommended_actions.append(
-                f"🎯 預估上行磁吸目標價為 ${magnet_target:.2f}，建議分批建立 OTM Call。"
-            )
-            recommended_actions.append(
-                f"📊 建議進攻合約規模限制於凱利上限 {kelly_position_scaling * 100:.1f}% 內。"
+                f"📊 建議進攻合約規模限制於分數凱利上限 {kelly_position_scaling * 100:.1f}% 內（嚴守 3%~5% 絕對硬上限）。"
             )
         elif sddm_route == "SHIELD":
             recommended_actions.append("🛡️ 當前進入 SHIELD 避險模組，主動交易受限。")
-            if not gates_passed:
-                recommended_actions.append(
-                    "❌ 戰術門檻未通過，不允許盲目追高。請參考未通過指標。"
-                )
+            if microstructure_veto or not gates_passed:
+                for fg in failed_gates:
+                    recommended_actions.append(f"❌ {fg}")
             if vix >= 25.0:
                 recommended_actions.append(
                     f"⚠️ 市場 VIX 指數達 {vix:.2f} (高波動警戒區)，強烈建議暫停多頭部位，轉為買入尾盤保護性 Put。"
@@ -215,10 +381,10 @@ class NexusGammaSqueezeEngine:
                 "⏳ 目前市場未開盤或處於非交易時段，進入 WAIT 觀望模式。"
             )
 
-        # 時段專屬邏輯 (Phase-specific optimization)
+        # 時段專屬邏輯
         if market_phase == "Phase A":
             recommended_actions.append(
-                "⚡ 盤中時段 Phase A (開盤前小時)：市場定價混亂，注意滑價，流動性門檻已調降 30%。"
+                "⚡ 盤中時段 Phase A (開盤衝擊期)：市場定價混亂、滑價風險極高，流動性門檻已調高 30%（要求 15m 實體 K 棒收盤且 Volume_15m >= 1.5x SMA20），未完成右側驗證前嚴禁盲目追單！"
             )
         elif market_phase == "Phase C":
             recommended_actions.append(
@@ -228,25 +394,6 @@ class NexusGammaSqueezeEngine:
                 recommended_actions.append(
                     "⚠️ 【尾盤 SPEAR 警戒】尾盤投機買盤強烈，若要建倉，必須搭配等比例 SPY PUT 作為隔夜安全閥！"
                 )
-
-        # 9. 風控備註
-        notes = []
-        if vix >= 25.0:
-            notes.append(
-                "當前市場恐慌指標高企 (VIX >= 25.0)，波動率期限結構轉為逆價差，防範市場系統性尾部風險。"
-            )
-        else:
-            notes.append("當前波動率環境相對溫和，有利於低波動期權佈局。")
-
-        if financial_runway_days <= 30:
-            notes.append(
-                "警告：您的財務存活跑道天數極低，禁止進行任何高槓桿或買方期權投機，優先以本金安全與獲利回收為第一要務。"
-            )
-
-        notes.append(
-            "請隨時追蹤 Spot 與 IV 上漲產生的 Hidden Delta 漂移。對沖完成後，可使用 `/settle_hedge` 登錄對沖記錄。"
-        )
-        risk_mitigation_notes = " ".join(notes)
 
         return AdvancedTraderOutput(
             ticker=data.ticker,

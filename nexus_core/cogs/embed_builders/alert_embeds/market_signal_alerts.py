@@ -265,10 +265,15 @@ def create_gamma_squeeze_alert_embed(output: Any) -> discord.Embed:
     )
 
     magnet_str = f"${magnet_target:.2f}" if magnet_target is not None else "--"
+    route_str = (
+        "SPEAR (四階段門檻全數通過)"
+        if output.sddm_route == "SPEAR"
+        else f"{output.sddm_route} (風控硬鎖保護)"
+    )
     tactical_lines = [
-        f" ├─ 戰術路由: SPEAR (四階段門檻全數通過 ｜ 時段: {market_phase})",
+        f" ├─ 戰術路由: {route_str} ｜ 時段: {market_phase}",
         f" ├─ Gamma 磁吸目標價: {magnet_str}",
-        f" └─ 凱利倉位上限: {kelly_scaling * 100:.1f}%",
+        f" └─ 凱利倉位上限: {kelly_scaling * 100:.1f}% (分數凱利 3%~5% 硬上限)",
     ]
     embed.add_field(
         name="🎯 戰術路由與倉位配比",
@@ -300,17 +305,16 @@ def create_gamma_squeeze_alert_embed(output: Any) -> discord.Embed:
     if vanna_instruction:
         embed.add_field(
             name="🌀 Vanna 隱含 Delta 對沖",
-            value=f"```ansi\n └─ {vanna_instruction}\n```",
+            value=f"```ansi\n{vanna_instruction}\n```",
             inline=False,
         )
 
-    # 代理數據揭露：Gate 1 / Gate 3 的兩項輸入並非門檻字面所述的原始指標，
-    # 依 AGENTS.md「啟發式代理數據揭露」慣例於此據實標註。
+    # 代理數據揭露：據實標註 Gate 1 與 Gate 3 的微觀結構指標
     disclosure_lines = [
-        " ├─ Gate 1 期權量：本平台無多日期權成交量序列，"
-        "以「當日全鏈成交量 ÷ 交易時段已過比例」外推至收盤的預估值代理「日均量」。",
-        " └─ Gate 3 權利金：期權非每日到期，取「最近一個到期日」的價外 Call"
-        "總成交權利金，非字面上的「明日到期」。",
+        " ├─ Gate 1 即時量比：採樣 15m 實體已收盤 K 棒之 RVOL_15m (Volume / SMA20)，"
+        "取消跨時段線性外推，Phase A 要求放量 >= 1.5x。",
+        " └─ Gate 3 權利金：強制過濾 DTE 0~4 末日輪雜訊，僅採樣 DTE >= 7 且單筆"
+        "佔 OI >= 0.8x 之跨週期主力價外 Call 權利金。",
     ]
     embed.add_field(
         name="ℹ️ 門檻輸入的代理數據揭露",

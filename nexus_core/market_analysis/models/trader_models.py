@@ -4,7 +4,7 @@
 """
 
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, ConfigDict
 
@@ -43,10 +43,26 @@ class TickerMarketData(BaseModel):
     avg_option_volume: int = Field(description="日均期權成交量")
     days_until_earnings: int = Field(description="距離財報公佈天數")
     tomorrow_expiring_otm_calls_premium: float = Field(
-        description="明日到期 OTM Call 總成交權利金 (Sum of vol * price * 100)"
+        description="DTE>=7 且 Vol/OI>=0.8x 之價外 Call 主力成交權利金 (相容舊名)"
     )
     iv_rank: float = Field(description="隱含波動率百分位數 (0-100)")
     option_skew: float = Field(description="期權偏斜度 (Option Skew)")
+
+    # 微觀結構與即時風控欄位（預設為 None，保證向後相容）
+    rvol_15m: Optional[float] = Field(
+        default=None, description="15m 即時成交量比 (Volume_15m / SMA20)"
+    )
+    realtime_iv: Optional[float] = Field(
+        default=None, description="即時隱含波動率 (Realtime IV)"
+    )
+    call_wall: Optional[float] = Field(default=None, description="GEX Call Wall 履約價")
+    net_gex: Optional[float] = Field(default=None, description="標的淨 GEX 數值")
+    gex_profile: Optional[Dict[str, float]] = Field(
+        default=None, description="各履約價 Net GEX 分佈"
+    )
+    physical_cap_strikes: Optional[List[Dict[str, Any]]] = Field(
+        default=None, description="全鏈 STO 物理封頂履約價清單"
+    )
 
 
 class AdvancedTraderOutput(BaseModel):

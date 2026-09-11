@@ -87,28 +87,28 @@ def test_validate_gates_failures(squeeze_engine: Any):  # type: ignore
     assert len(failed) == 4  # Liquidity, Event, Efficiency, Cross-Market
 
 
-def test_validate_gates_phase_a_reduction(squeeze_engine: Any):  # type: ignore
-    # In Phase A, threshold is reduced to 70% ($700,000)
-    # If premium is $800,000, it should pass in Phase A but fail in Phase B
+def test_validate_gates_phase_a_threshold_increase(squeeze_engine: Any):  # type: ignore
+    # 開盤衝擊期 (Phase A) 為防範滑價與脆弱報價，門檻調高 30% 至 $1,300,000 (嚴禁逆向放寬)
+    # 若權利金為 $1,100,000，在 Phase B 通過 ($1M 門檻)，但在 Phase A 應判定不通過
     borderline_data = TickerMarketData(
         ticker="BORDER",
         spot_price=100.0,
         market_cap_billion=50.0,
-        avg_option_volume=60000,
+        avg_option_volume=70000,
         days_until_earnings=15,
-        tomorrow_expiring_otm_calls_premium=800000.0,
+        tomorrow_expiring_otm_calls_premium=1100000.0,
         iv_rank=70.0,
         option_skew=0.06,
     )
 
     passed_a, failed_a = squeeze_engine.validate_gates(borderline_data, "Phase A")
-    assert passed_a is True
-    assert len(failed_a) == 0
+    assert passed_a is False
+    assert len(failed_a) == 1
+    assert "資金效率不足" in failed_a[0]
 
     passed_b, failed_b = squeeze_engine.validate_gates(borderline_data, "Phase B")
-    assert passed_b is False
-    assert len(failed_b) == 1
-    assert "資金效率不足" in failed_b[0]
+    assert passed_b is True
+    assert len(failed_b) == 0
 
 
 def test_analyze_ticker_spear_route(  # type: ignore
@@ -130,11 +130,11 @@ def test_analyze_ticker_spear_route(  # type: ignore
     assert output.sddm_route == "SPEAR"
     assert output.is_applicable is True
     assert len(output.failed_gates) == 0
-    assert (
-        output.kelly_position_scaling == 0.25
-    )  # Base Kelly multiplier = 1.0 (VIX < 15)
+    # 分數凱利硬上限 5.0% (VIX < 15)
+    assert output.kelly_position_scaling == 0.05
     assert "SPEAR" in output.recommended_actions[0]
-    assert output.magnet_target == 175.0
+    # 現價 173.5，滿足 >= 5% 向上空間 (182.175) 且為 5 的倍數之目標價為 185.0
+    assert output.magnet_target == 185.0
 
 
 def test_analyze_ticker_shield_vix_gated(  # type: ignore
@@ -144,7 +144,7 @@ def test_analyze_ticker_shield_vix_gated(  # type: ignore
     default_holdings: Any,
     default_greeks: Any,
 ):
-    # If VIX is high, forced to SHIELD and Kelly scaled to 0.1
+    # 若 VIX 偏高 (>= 25.0)，強制 SHIELD 避險，且買方凱利倉位歸零
     default_account_state.current_vix = 28.0
     output = squeeze_engine.analyze_ticker(
         data=default_market_data,
@@ -155,7 +155,7 @@ def test_analyze_ticker_shield_vix_gated(  # type: ignore
     )
 
     assert output.sddm_route == "SHIELD"
-    assert output.kelly_position_scaling == 0.025  # base_kelly * 0.1
+    assert output.kelly_position_scaling == 0.0  # 避險模式下買方倉位硬性歸零
     assert "SHIELD" in output.recommended_actions[0]
     assert "高波動警戒區" in output.recommended_actions[1]
 
@@ -192,11 +192,11 @@ def test_vanna_hedging_instruction(  # type: ignore
     default_holdings: Any,
     default_greeks: Any,
 ):
-    # Vanna = 1.5, Beta = 1.2
+    # Vanna = 1.5, Beta = 1.2, spot = 173.5, spy = 500.0 (default)
     # d_vol = 0.10
     # hidden_delta_shares = 1.5 * 0.10 * 100 = 15
-    # shares_needed = -round(15 * 1.2) = -18
-    # Direction: SELL 18 SPY
+    # 首選標的內部對沖: SELL 15 股 AAPL
+    # 次選 SPY 對沖: 15 * 1.2 * (173.5 / 500.0) = 6.246 -> SELL 6 單位 SPY
     output = squeeze_engine.analyze_ticker(
         data=default_market_data,
         account_state=default_account_state,
@@ -205,7 +205,8 @@ def test_vanna_hedging_instruction(  # type: ignore
         market_phase="Phase B",
     )
 
-    assert "SELL 賣出 18 單位 SPY" in output.vanna_hedging_instruction
+    assert "SELL 賣出 15 股 AAPL" in output.vanna_hedging_instruction
+    assert "SELL 賣出 6 單位 SPY" in output.vanna_hedging_instruction
 
 
 def test_post_market_attribution_evolution(squeeze_engine: Any):  # type: ignore
@@ -1579,14 +1580,33 @@ async def test_ticker_market_data_uses_real_inputs() -> None:
 
     pipeline = IntradayScanPipeline(MagicMock(), NexusGammaSqueezeEngine())
 
+    from datetime import datetime as _dt, timedelta as _td
+
+    future_exp1 = (_dt.now().date() + _td(days=14)).strftime("%Y-%m-%d")
+
     chain = SimpleNamespace(
         calls=pd.DataFrame(
             [
                 # 價內：不計入
-                {"strike": 140.0, "volume": 100.0, "lastPrice": 12.0},
-                # 價外：2 筆計入
-                {"strike": 160.0, "volume": 500.0, "lastPrice": 3.0},
-                {"strike": 170.0, "volume": 200.0, "lastPrice": 1.5},
+                {
+                    "strike": 140.0,
+                    "volume": 100.0,
+                    "lastPrice": 12.0,
+                    "openInterest": 100.0,
+                },
+                # 價外：2 筆計入 (DTE >= 7 且 Vol/OI >= 0.8x)
+                {
+                    "strike": 160.0,
+                    "volume": 500.0,
+                    "lastPrice": 3.0,
+                    "openInterest": 100.0,
+                },
+                {
+                    "strike": 170.0,
+                    "volume": 200.0,
+                    "lastPrice": 1.5,
+                    "openInterest": 100.0,
+                },
             ]
         ),
         puts=pd.DataFrame([]),
@@ -1607,7 +1627,7 @@ async def test_ticker_market_data_uses_real_inputs() -> None:
     ), patch(
         "services.market_data_service.get_all_option_expiries",
         new_callable=AsyncMock,
-        return_value=["2026-06-19", "2026-06-26"],
+        return_value=[future_exp1],
     ), patch(
         "services.market_data_service.get_option_chain",
         new_callable=AsyncMock,
@@ -1618,8 +1638,8 @@ async def test_ticker_market_data_uses_real_inputs() -> None:
     assert data is not None
     # 3,400,000 百萬美元 → 3,400 十億美元
     assert data.market_cap_billion == pytest.approx(3400.0)
-    # 當日 80,000 口，交易時段才過一半 → 外推全日 160,000 口
-    assert data.avg_option_volume == 160000
+    # 當日 80,000 口，取消跨時段線性外推，真實量為 80,000 口
+    assert data.avg_option_volume == 80000
     # 只計價外：500*3*100 + 200*1.5*100 = 150,000 + 30,000
     assert data.tomorrow_expiring_otm_calls_premium == pytest.approx(180_000.0)
 
