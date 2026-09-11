@@ -30,15 +30,46 @@ def _apply_tactical_gate(
     清算指令的情境下把它靜默丟掉。
     """
     if locked:
-        tactical.action_guideline = f"{tactical.action_guideline}\n{action_guideline}"
+        if action_guideline not in tactical.action_guideline:
+            tactical.action_guideline = (
+                f"{tactical.action_guideline}\n{action_guideline}".strip()
+            )
         tactical.alert_level = "red"
         if capital_retreat_required:
             tactical.capital_retreat_required = True
         return tactical
+
+    # locked=False: 若既有 guideline 已包含具體警報/預警（如 ⚠️, 🚨, ⛔, 【軋空預警】, 負 Gamma 等），
+    # 採警語追加機制（Guideline Append），杜絕後續條件（如動能發散、IV壓抑）抹除前置高危警報（修復 ISSUE-01 / Top 3）。
+    existing_guideline = (
+        tactical.action_guideline.strip() if tactical.action_guideline else ""
+    )
+    if existing_guideline and (
+        tactical.alert_level == "red"
+        or tactical.scenario == "wait"
+        or any(
+            marker in existing_guideline
+            for marker in [
+                "⚠️",
+                "🚨",
+                "⛔",
+                "【軋空預警】",
+                "【流動性枯竭預警】",
+                "負 Gamma",
+            ]
+        )
+    ):
+        if action_guideline not in existing_guideline:
+            combined_guideline = f"{existing_guideline}\n{action_guideline}".strip()
+        else:
+            combined_guideline = existing_guideline
+    else:
+        combined_guideline = action_guideline
+
     return WatchlistTacticalPlan(
         scenario="wait",
         sddm_route=sddm_route,
-        action_guideline=action_guideline,
+        action_guideline=combined_guideline,
         dynamic_grid_step=tactical.dynamic_grid_step,
         hidden_delta_risk=0.0,
         hedge_instruction=None,
@@ -46,11 +77,7 @@ def _apply_tactical_gate(
         alert_level="red",
         # 旗標必須是 sticky 的：這些閘門會依序評估，未設此旗標的閘門
         # （結構性背離、IV 壓抑背離）若把 plan 整個重建成 False，會清掉前面
-        # 由 Skew>90 或負 Gamma 設好的退守要求。實務情境：skew_percentile=95
-        # 先設 True，同一根 K 棒又滿足 dp<-3% 且 IVR<15，IV 壓抑閘門重建後
-        # 旗標歸 False、路由也不再含「機構避險背離」/「負 Gamma」字樣，
-        # 資金退守與 is_crisis 兩道保護同時失效，反而在尾部風險當下輸出
-        # 全額買點與股數。
+        # 由 Skew>90 或負 Gamma 設好的退守要求。
         capital_retreat_required=(
             capital_retreat_required or tactical.capital_retreat_required
         ),
@@ -97,13 +124,19 @@ async def evaluate_watchlist_symbol(
         from database.market_cache import get_fundamental_cache
 
         fc = get_fundamental_cache(symbol)
-        if fc and fc.get("is_broken"):
+        fc_confidence = float(fc.get("confidence", 0.0) or 0.0) if fc else 0.0
+        # [ISS-05] 必須同時滿足 is_broken 且置信度 >= 0.75 始觸發基本面清算，防範低置信度幻覺清算
+        if fc and fc.get("is_broken") and fc_confidence >= 0.75:
             tactical.scenario = "wait"  # Override to wait to block all buys
             tactical.sddm_route = "LIQUIDATE (基本面破滅強制清算)"
-            tactical.action_guideline = f"⛔ 【LLM 護城河破滅警告】根據最新基本面分析，護城河已遭結構性破壞。\n> {fc.get('reasoning', '')}\n\n⚠️ 已觸發全域防禦閘門，強制封鎖所有買入與網格建倉策略，建議立即清算並轉倉至 CORE 資產。"
+            tactical.action_guideline = f"⛔ 【LLM 護城河破滅警告】根據最新基本面分析，護城河已遭結構性破壞（置信度: {fc_confidence:.0%}）。\n> {fc.get('reasoning', '')}\n\n⚠️ 已觸發全域防禦閘門，強制封鎖所有買入與網格建倉策略，建議立即清算並轉倉至 CORE 資產。"
             tactical.alert_level = "red"
             tactical.capital_retreat_required = True
             higher_priority_lock = True
+        elif fc and fc.get("is_broken") and fc_confidence < 0.75:
+            logger.info(
+                f"[{symbol}] 基本面護城河破滅警告因置信度不足 ({fc_confidence:.2f} < 0.75) 遭防禦閘門過濾，防止低置信度幻覺清算"
+            )
     except Exception as e:
         logger.warning(f"全域防禦閘門查詢錯誤: {e}")
 
@@ -181,20 +214,58 @@ async def evaluate_watchlist_symbol(
             await save_kv_cache(iv_rank_prev_key, metrics.iv_rank)
 
         if call_wall > 0 and put_wall > 0:
-            crossed_gamma_flip_up = (
-                gamma_flip_est > 0 and spot > gamma_flip_est and net_gex > 0
+            # 軋空物理條件 (ISSUE-2.5)：造市商處於負 Gamma (net_gex < 0) 助漲追買泥淖，
+            # 且 Call 買盤壓倒性主導 (oi_pcr <= 0.60)，搭配 IV 隨價格同步飆升 (Call Buying Mania)。
+            in_squeeze_gamma_regime = net_gex < 0 or (
+                gamma_flip_est > 0 and spot >= gamma_flip_est and net_gex <= 0
             )
-            pcr_confirms = metrics.oi_pcr is not None and metrics.oi_pcr >= 1.0
-            if crossed_gamma_flip_up and pcr_confirms and iv_rising_with_price:
+            pcr_confirms = metrics.oi_pcr is not None and metrics.oi_pcr <= 0.60
+            if in_squeeze_gamma_regime and pcr_confirms and iv_rising_with_price:
+                flip_text = (
+                    f"（站上 Gamma Flip ${gamma_flip_est:.2f}）"
+                    if gamma_flip_est > 0
+                    else ""
+                )
                 tactical.action_guideline += (
-                    f"\n🚨 【軋空預警】現價 ({spot:.2f}) 站上 Gamma Flip 估算門檻 "
-                    f"(${gamma_flip_est:.2f}) 進入正 Gamma 區間，OI PCR "
-                    f"({metrics.oi_pcr:.2f}) 顯示籌碼結構具備實質空頭供軋倉，"
+                    f"\n🚨 【軋空預警】現價 (${spot:.2f}){flip_text} 處於負 Gamma 助漲區間 (Net GEX: {net_gex:+.0f})，"
+                    f"OI PCR ({metrics.oi_pcr:.2f}) 顯示 Call 買盤壓倒性主導，"
                     f"且 IV 隨價格同步走揚 (Call Buying Mania)，"
-                    f"隨時可能觸發造市商被迫回補引發暴漲軋空。"
+                    f"造市商空頭 Delta 避險追買隨時引發 Gamma Squeeze 暴漲軋空。"
                 )
             elif spot < put_wall:
-                tactical.action_guideline += f"\n⚠️ 【流動性枯竭預警】現價 ({spot:.2f}) 跌破 Put Wall ({put_wall:.2f})，期權造市商支撐消失，存在嚴重賣壓與流動性真空風險。"
+                # [ISS-12]: 引入多棒實體確認機制與防洗盤緩衝，避免盤中微觀插針 (下影線) 假刺穿引發恐慌預警。
+                atr_15m_val = getattr(metrics, "atr_15m", None) or (
+                    metrics.atr_14 / 5.099
+                    if getattr(metrics, "atr_14", 0.0) > 0
+                    else 0.0
+                )
+                anti_washout_line = (
+                    put_wall - 1.5 * atr_15m_val if atr_15m_val > 0 else put_wall
+                )
+
+                # 若現價已深幅跌破防洗盤絕對防守線 (PutWall - 1.5*ATR15m)，或經由 15 分鐘多棒實體收盤貫穿確認
+                from market_analysis.gamma_cliff_confirmation import (
+                    is_gamma_cliff_confirmed,
+                )
+
+                is_confirmed = False
+                if spot < anti_washout_line:
+                    is_confirmed = True
+                else:
+                    try:
+                        is_confirmed = await is_gamma_cliff_confirmed(symbol, put_wall)
+                    except Exception as err:
+                        logger.warning(
+                            f"[{symbol}] Gamma cliff confirmation check failed: {err}"
+                        )
+                        is_confirmed = False
+
+                if is_confirmed:
+                    tactical.action_guideline += f"\n⚠️ 【流動性枯竭預警】現價 ({spot:.2f}) 實體貫穿確認跌破 Put Wall ({put_wall:.2f})，期權造市商支撐消失，存在嚴重賣壓與流動性真空風險。"
+                else:
+                    logger.info(
+                        f"[{symbol}] 現價 ({spot:.2f}) 雖低於 Put Wall ({put_wall:.2f})，但在防洗盤緩衝區 (${anti_washout_line:.2f}) 內且未獲 15m 實體收盤確認，過濾下影線假破位"
+                    )
 
         if put_wall > 0 and spot > 0:
             distance = (spot - put_wall) / spot
@@ -236,6 +307,9 @@ async def evaluate_watchlist_symbol(
 
     # Skew Divergence Gate (機構避險背離/尾部風險警戒)
     if metrics.skew_percentile is not None and metrics.skew_percentile > 90.0:
+        # 冷啟動保護 (ISSUE-2.2)：若樣本數不足 60 筆，抑制最高等級資金撤退，避免新標的誤觸帳戶清算
+        skew_samples = getattr(metrics, "skew_sample_size", None)
+        is_sample_mature = skew_samples is None or skew_samples >= 60
         tactical = _apply_tactical_gate(
             tactical,
             locked=higher_priority_lock,
@@ -244,7 +318,7 @@ async def evaluate_watchlist_symbol(
                 "⚠️ 機構避險背離/尾部風險警戒｜Skew 分位處於極端高位 (>90%)，顯示真金白銀大量避險。"
                 "已自動阻斷任何樂觀評級，建議立即提高現金比重或退守大盤流動性資產。"
             ),
-            capital_retreat_required=True,
+            capital_retreat_required=is_sample_mature,
         )
 
     # Momentum Vector Gate (SQZ MOM + Negative Gamma)

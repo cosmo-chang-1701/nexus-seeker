@@ -22,9 +22,12 @@ def calculate_volume_profile_from_df(
         if df_subset.empty:
             return None
 
-        num_bins = 50
-        min_price = df_subset["Low"].min()
-        max_price = df_subset["High"].max()
+        # 動態分箱與抽樣防護 (ISSUE-3.2)：
+        # 日線 20 根 K 棒分 50 箱導致過度稀疏抽樣（每箱 0.4 根）與虛假凹槽；
+        # 邊界箱無條件判為 LVN 導致點位釘死在最低/最高價。
+        num_bins = 30 if is_hourly else max(10, min(20, len(df_subset)))
+        min_price = float(df_subset["Low"].min())
+        max_price = float(df_subset["High"].max())
 
         if min_price == max_price:
             return {
@@ -41,15 +44,34 @@ def calculate_volume_profile_from_df(
             df_subset["Typical"], bins=bins, labels=False, include_lowest=True
         )
 
-        vol_profile = df_subset.groupby("Bin")["Volume"].sum()
+        vol_profile = (
+            df_subset.groupby("Bin")["Volume"]
+            .sum()
+            .reindex(range(num_bins), fill_value=0.0)
+        )
 
         if vol_profile.empty:
             return None
 
-        hvn_bin = vol_profile.idxmax()
-        lvn_bin = vol_profile.idxmin()
+        # 3-bin 移動平均平滑微觀抽樣噪聲
+        smoothed_profile = (
+            vol_profile.rolling(window=3, min_periods=1, center=True).mean().fillna(0.0)
+        )
 
         bin_width = (max_price - min_price) / num_bins
+        hvn_bin = int(smoothed_profile.idxmax())
+
+        # 排除外側 10% 價格邊界箱（或至少首尾各 1 箱），在母體內部尋找真正的流動性真空凹槽 (LVN)
+        trim_bins = max(1, int(num_bins * 0.10))
+        inner_start = trim_bins
+        inner_end = max(inner_start, num_bins - 1 - trim_bins)
+
+        if inner_end > inner_start:
+            inner_profile = smoothed_profile.iloc[inner_start : inner_end + 1]
+            lvn_bin = int(inner_profile.idxmin())
+        else:
+            lvn_bin = int(smoothed_profile.idxmin())
+
         hvn_price = min_price + (hvn_bin + 0.5) * bin_width
         lvn_price = min_price + (lvn_bin + 0.5) * bin_width
 

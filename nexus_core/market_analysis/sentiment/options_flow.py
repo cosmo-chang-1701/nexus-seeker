@@ -170,7 +170,7 @@ async def calculate_skew(symbol: str, force_live: bool = False) -> Dict[str, Any
             )
 
         chain = await market_data_service.get_option_chain(
-            symbol, target_expiry, force_live=force_live
+            symbol, target_expiry, prune_pct=0.35, force_live=force_live
         )
         if not chain:
             return _get_skew_fallback(
@@ -282,10 +282,29 @@ async def calculate_pcr(symbol: str, force_live: bool = False) -> Dict[str, Any]
         total_put_oi = 0.0
         total_call_oi = 0.0
 
-        target_expiries = expiries[:3]
+        # 指數 ETF 動態到期日與基準 (ISSUE-2.6)：
+        # SPY/QQQ/IWM 等每日皆有 0-DTE，若僅截前 3 到期日僅覆蓋 3 天，遺失主力月度對沖倉位。
+        # 指數 ETF 匯總 DTE <= 30 天的合約，且動態放寬常態避險 PCR 門檻。
+        today_dt = datetime.now().date()
+        is_index_etf = symbol.upper() in {"SPY", "QQQ", "IWM", "DIA"}
+        if is_index_etf:
+            target_expiries = [
+                exp
+                for exp in expiries
+                if 0
+                <= (datetime.strptime(exp, "%Y-%m-%d").date() - today_dt).days
+                <= 30
+            ][:8]
+            if not target_expiries:
+                target_expiries = expiries[:3]
+        else:
+            target_expiries = expiries[:3]
+
         chains = await asyncio.gather(
             *(
-                market_data_service.get_option_chain(symbol, exp, force_live=force_live)
+                market_data_service.get_option_chain(
+                    symbol, exp, prune_pct=0.35, force_live=force_live
+                )
                 for exp in target_expiries
             ),
             return_exceptions=True,
@@ -309,20 +328,41 @@ async def calculate_pcr(symbol: str, force_live: bool = False) -> Dict[str, Any]
         ):
             return _get_pcr_fallback("No option chain data retrieved")
 
-        volume_pcr = total_put_vol / total_call_vol if total_call_vol > 0 else 0.0
-        oi_pcr = total_put_oi / total_call_oi if total_call_oi > 0 else 0.0
+        if total_call_vol > 0:
+            volume_pcr = total_put_vol / total_call_vol
+        else:
+            volume_pcr = 99.9 if total_put_vol > 0 else 1.0
 
-        volume_state = "平衡"
-        if volume_pcr < 0.90:
-            volume_state = "中性偏多/看漲主導"
-        elif volume_pcr > 1.10:
-            volume_state = "🐻 偏向空頭/看空主導"
+        if total_call_oi > 0:
+            oi_pcr = total_put_oi / total_call_oi
+        else:
+            oi_pcr = 99.9 if total_put_oi > 0 else 1.0
 
-        oi_state = "結構平衡"
-        if oi_pcr < 0.90:
-            oi_state = "🐂 結構看漲/偏向多頭"
-        elif oi_pcr > 1.10:
-            oi_state = "🐻 結構防禦/偏向空頭"
+        if is_index_etf:
+            # 大盤 ETF 常態避險需求高，PCR 自然基準較高 (1.3~1.8)
+            volume_state = "平衡"
+            if volume_pcr <= 1.20:
+                volume_state = "中性偏多/看漲主導"
+            elif volume_pcr > 1.40:
+                volume_state = "🐻 偏向空頭/看空主導"
+
+            oi_state = "結構平衡"
+            if oi_pcr <= 1.20:
+                oi_state = "🐂 結構看漲/偏向多頭"
+            elif oi_pcr > 1.40:
+                oi_state = "🐻 結構防禦/偏向空頭"
+        else:
+            volume_state = "平衡"
+            if volume_pcr < 0.90:
+                volume_state = "中性偏多/看漲主導"
+            elif volume_pcr > 1.10:
+                volume_state = "🐻 偏向空頭/看空主導"
+
+            oi_state = "結構平衡"
+            if oi_pcr < 0.90:
+                oi_state = "🐂 結構看漲/偏向多頭"
+            elif oi_pcr > 1.10:
+                oi_state = "🐻 結構防禦/偏向空頭"
 
         await save_sentiment_history(symbol, "PCR", volume_pcr)
 

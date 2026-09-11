@@ -118,9 +118,9 @@ async def save_sentiment_history(symbol: str, indicator: str, value: float) -> A
 # 「分位數據缺失」分支，沉默比憑空生成極端訊號安全。
 _MIN_PERCENTILE_SAMPLES = 20
 
-# 排名視窗仍是「最近 100 列」而非固定時間視窗。這是 AGENTS.md 明列、刻意留待
-# 獨立變更處理的已知限制；此處只補上樣本數守衛與同值處理，不改動視窗定義。
-_PERCENTILE_WINDOW_ROWS = 100
+# 排名視窗擴展至最近 500 列（約 20 個交易日盤中取樣），避免 100 列 (~3.8 天)
+# 造成宏觀分位數統計失真 (ISSUE-2.1)。
+_PERCENTILE_WINDOW_ROWS = 500
 
 
 def get_indicator_percentile_with_sample_size(
@@ -142,14 +142,16 @@ def get_indicator_percentile_with_sample_size(
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT value FROM sentiment_history
+            SELECT value, date(timestamp) FROM sentiment_history
             WHERE symbol = ? AND indicator = ?
             ORDER BY timestamp DESC LIMIT ?
         """,
             (symbol, indicator, _PERCENTILE_WINDOW_ROWS),
         )
-        values = [row[0] for row in cursor.fetchall()]
+        rows = cursor.fetchall()
         conn.close()
+        values = [row[0] for row in rows]
+        unique_dates = {row[1] for row in rows if len(row) > 1 and row[1]}
     except Exception as e:
         logger.warning(f"[{symbol}] 讀取 {indicator} 歷史分位失敗: {e}")
         return None, 0
@@ -158,6 +160,14 @@ def get_indicator_percentile_with_sample_size(
     if sample_size < min_samples:
         logger.debug(
             f"[{symbol}] {indicator} 歷史樣本不足 ({sample_size} < {min_samples})，不輸出百分位"
+        )
+        return None, sample_size
+
+    # 冷啟動跨日保護 (ISSUE-2.2)：若樣本跨越的獨立交易日不足 3 天且總樣本未達 60 筆，
+    # 代表仍處於加入自選首日或次日的盤中高頻噪聲期，避免將短暫日內波動誤判為 97.5% 世紀極端。
+    if len(unique_dates) < 3 and sample_size < 60:
+        logger.debug(
+            f"[{symbol}] {indicator} 處於冷啟動積累期 (跨度 {len(unique_dates)} 天 < 3 天, 樣本 {sample_size} < 60)，不輸出統計分位"
         )
         return None, sample_size
 

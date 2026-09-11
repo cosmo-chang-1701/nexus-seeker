@@ -14,6 +14,7 @@ from typing import Any
 import logging
 import math
 import re
+import statistics
 from datetime import date
 
 from bs4 import BeautifulSoup
@@ -41,30 +42,39 @@ def _ndtr(x: float) -> float:
     return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
 
 
-def _calculate_gamma(S: float, K: float, t: float, r: float, sigma: float) -> float:
+def _calculate_gamma(
+    S: float, K: float, t: float, r: float, sigma: float, q: float = 0.0
+) -> float:
     if S <= 0 or K <= 0 or t <= 0 or sigma <= 0:
         return 0.0
     try:
-        d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * t) / (sigma * math.sqrt(t))
-        return _ndtr_prime(d1) / (S * sigma * math.sqrt(t))
+        d1 = (math.log(S / K) + (r - q + 0.5 * sigma * sigma) * t) / (
+            sigma * math.sqrt(t)
+        )
+        return (math.exp(-q * t) * _ndtr_prime(d1)) / (S * sigma * math.sqrt(t))
     except Exception:
         return 0.0
 
 
 def _calculate_delta(
-    S: float, K: float, t: float, r: float, sigma: float, is_call: bool
+    S: float, K: float, t: float, r: float, sigma: float, is_call: bool, q: float = 0.0
 ) -> float:
     if S <= 0 or K <= 0 or t <= 0 or sigma <= 0:
         return 0.0
     try:
-        d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * t) / (sigma * math.sqrt(t))
-        return _ndtr(d1) if is_call else _ndtr(d1) - 1.0
+        d1 = (math.log(S / K) + (r - q + 0.5 * sigma * sigma) * t) / (
+            sigma * math.sqrt(t)
+        )
+        if is_call:
+            return math.exp(-q * t) * _ndtr(d1)
+        else:
+            return math.exp(-q * t) * (_ndtr(d1) - 1.0)
     except Exception:
         return 0.0
 
 
 def _filter_noise_contracts(
-    chain: list[dict[str, Any]], spot: float
+    chain: list[dict[str, Any]], spot: float, r: float = 0.04, q: float = 0.0
 ) -> list[dict[str, Any]]:
     """過濾雜訊合約：先剔除 oi<=0（本就對曝險零貢獻），再對每邊
     (calls / puts) 各自嘗試以 |delta| < _GEX_MIN_DELTA_THRESHOLD 剔除
@@ -81,7 +91,7 @@ def _filter_noise_contracts(
         kept = []
         for c in contracts:
             delta = _calculate_delta(
-                spot, c["strike"], c["t"], 0.04, c["iv"], c["is_call"]
+                spot, c["strike"], c["t"], r, c["iv"], c["is_call"], q=q
             )
             if abs(delta) >= _GEX_MIN_DELTA_THRESHOLD:
                 kept.append(c)
@@ -96,7 +106,12 @@ def _filter_noise_contracts(
     return calls_filtered + puts_filtered
 
 
-async def scrape_symbol_gex_core(symbol: str, browser: Browser) -> dict[str, Any]:
+async def scrape_symbol_gex_core(
+    symbol: str,
+    browser: Browser,
+    risk_free_rate: float = 0.04,
+    dividend_yield: Any | None = None,
+) -> dict[str, Any]:
     """對已存在的 Playwright browser 實例執行單一標的的 GEX 抓取與計算。
 
     永遠回傳一個 data dict（成功時為實際計算結果，任何解析/抓取失敗時
@@ -194,9 +209,14 @@ async def scrape_symbol_gex_core(symbol: str, browser: Browser) -> dict[str, Any
                     oi = int(oi_text) if oi_text and oi_text != "-" else 0
 
                     iv_text = cols[10].replace("%", "").replace(",", "")
-                    iv = float(iv_text) / 100.0 if iv_text and iv_text != "-" else 0.20
-                    if iv <= 0:
-                        iv = 0.20
+                    try:
+                        iv_val_parsed = (
+                            float(iv_text) / 100.0
+                            if iv_text and iv_text != "-"
+                            else None
+                        )
+                    except ValueError:
+                        iv_val_parsed = None
 
                     match = re.match(
                         r"[A-Za-z]+(\d{2})(\d{2})(\d{2})[CP]", contract_name
@@ -210,13 +230,15 @@ async def scrape_symbol_gex_core(symbol: str, browser: Browser) -> dict[str, Any
                     else:
                         days_to_exp = 7
 
-                    t = max(days_to_exp, 0.5) / 365.0
+                    # 防範假牆 (ISSUE-3.4)：0-DTE / 1-DTE 合約在結算日當天 t->0 導致 Gamma 虛高膨脹，
+                    # 至少以 2.0 天作為 Gamma 定價底限，過濾即將歸零的幻影假牆 (Phantom Wall)。
+                    t = max(days_to_exp, 2.0) / 365.0
 
                     option_chain.append(
                         {
                             "strike": strike,
                             "oi": oi,
-                            "iv": iv,
+                            "iv": iv_val_parsed,
                             "t": t,
                             "is_call": is_call,
                         }
@@ -233,7 +255,40 @@ async def scrape_symbol_gex_core(symbol: str, browser: Browser) -> dict[str, Any
             )
             return fallback
 
-        option_chain = _filter_noise_contracts(option_chain, spot_price)
+        # 自適應 IV 估計 (ISSUE-3.4)：嚴禁硬編碼 0.20 導致高波/低波股 Gamma 嚴重扭曲。
+        # 提取全鏈有效 IV 中位數作為缺失合約的自適應基準。
+        valid_ivs = [
+            c["iv"] for c in option_chain if c["iv"] is not None and c["iv"] > 0.01
+        ]
+        adaptive_iv = float(statistics.median(valid_ivs)) if valid_ivs else 0.30
+        for c in option_chain:
+            if c["iv"] is None or c["iv"] <= 0.01:
+                c["iv"] = adaptive_iv
+
+        # 解析或補齊股息率 q (ISSUE-4.3)
+        effective_div_yield = 0.0
+        if dividend_yield is not None and float(dividend_yield) >= 0:
+            effective_div_yield = float(dividend_yield)
+        else:
+            try:
+                import yfinance as yf
+
+                t_obj = yf.Ticker(symbol_upper)
+                fast_div = getattr(t_obj.fast_info, "dividend_yield", None)
+                if fast_div is not None and float(fast_div) > 0:
+                    effective_div_yield = float(fast_div)
+                elif hasattr(t_obj, "info") and t_obj.info:
+                    raw_div = t_obj.info.get("dividendYield") or t_obj.info.get(
+                        "trailingAnnualDividendYield"
+                    )
+                    if raw_div:
+                        effective_div_yield = float(raw_div)
+            except Exception:
+                effective_div_yield = 0.0
+
+        option_chain = _filter_noise_contracts(
+            option_chain, spot_price, r=risk_free_rate, q=effective_div_yield
+        )
         if not option_chain:
             logger.warning(
                 f"All contracts filtered as noise for {symbol_upper}, using fallbacks."
@@ -252,8 +307,11 @@ async def scrape_symbol_gex_core(symbol: str, browser: Browser) -> dict[str, Any
             t = contract["t"]
             is_call = contract["is_call"]
 
-            gamma = _calculate_gamma(spot_price, strike, t, 0.04, iv)
-            raw_gex = oi * gamma * spot_price * spot_price
+            gamma = _calculate_gamma(
+                spot_price, strike, t, risk_free_rate, iv, q=effective_div_yield
+            )
+            # 補齊美股 100 股合約乘數 (ISSUE-4.2)：Dollar GEX = OI * 100 * Gamma * S^2
+            raw_gex = oi * 100.0 * gamma * spot_price * spot_price
 
             if is_call:
                 call_gex_by_strike[strike] = (

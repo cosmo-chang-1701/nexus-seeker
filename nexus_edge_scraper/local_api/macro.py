@@ -1,6 +1,6 @@
 """local_api：總經 GEX/流動性/FedWatch/暗池 Playwright 抓取，以及個股 GEX 端點。"""
 
-from typing import Any
+from typing import Any, Optional
 import logging
 
 from bs4 import BeautifulSoup
@@ -31,19 +31,21 @@ async def scrape_gex() -> dict[str, Any]:
     def ndtr_prime(x: float) -> float:
         return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
 
-    def calculate_gamma(S: float, K: float, t: float, r: float, sigma: float) -> float:
+    def calculate_gamma(
+        S: float, K: float, t: float, r: float, sigma: float, q: float = 0.013
+    ) -> float:
         if S <= 0 or K <= 0 or t <= 0 or sigma <= 0:
             return 0.0
         try:
-            d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * t) / (
+            d1 = (math.log(S / K) + (r - q + 0.5 * sigma * sigma) * t) / (
                 sigma * math.sqrt(t)
             )
-            return ndtr_prime(d1) / (S * sigma * math.sqrt(t))
+            return (math.exp(-q * t) * ndtr_prime(d1)) / (S * sigma * math.sqrt(t))
         except Exception:
             return 0.0
 
     def calculate_total_gex(
-        S: float, option_chain: list[dict[str, Any]], r: float = 0.04
+        S: float, option_chain: list[dict[str, Any]], r: float = 0.04, q: float = 0.013
     ) -> float:
         total_gex = 0.0
         for contract in option_chain:
@@ -53,8 +55,8 @@ async def scrape_gex() -> dict[str, Any]:
             t = contract["t"]
             is_call = contract["is_call"]
 
-            gamma = calculate_gamma(S, strike, t, r, iv)
-            gex = oi * gamma * S * S
+            gamma = calculate_gamma(S, strike, t, r, iv, q=q)
+            gex = oi * 100.0 * gamma * S * S
             if not is_call:
                 gex = -gex
             total_gex += gex
@@ -887,7 +889,11 @@ async def scrape_fedwatch() -> dict[str, Any]:
 
 
 @router.get("/api/v1/scrape/options/{symbol}/gex")
-async def scrape_symbol_gex(symbol: str) -> dict[str, Any]:
+async def scrape_symbol_gex(
+    symbol: str,
+    r: Optional[float] = None,
+    q: Optional[float] = None,
+) -> dict[str, Any]:
     """即時抓取單一標的 GEX(每次請求各自啟動一顆短命 browser)。
     實際抓取/計算邏輯已抽至 gex_scraper.scrape_symbol_gex_core，供本端點與
     背景排程 (scheduler.py) 共用。"""
@@ -899,7 +905,12 @@ async def scrape_symbol_gex(symbol: str) -> dict[str, Any]:
                 headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"]
             )
             try:
-                data = await scrape_symbol_gex_core(symbol, browser)
+                kwargs: dict[str, Any] = {}
+                if r is not None:
+                    kwargs["risk_free_rate"] = r
+                if q is not None:
+                    kwargs["dividend_yield"] = q
+                data = await scrape_symbol_gex_core(symbol, browser, **kwargs)
                 return {"status": "success", "data": data}
             finally:
                 await browser.close()

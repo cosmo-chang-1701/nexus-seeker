@@ -10,6 +10,7 @@ signal_calculator.py — 動態交易訊號計算器。
 """
 
 import logging
+import math
 from typing import Any, Dict, Mapping
 
 
@@ -240,11 +241,18 @@ def calculate_dynamic_trading_signals(
     risk_limit: float,
     has_upcoming_earnings: bool = False,
     deployed_tactical_value: float = 0.0,
+    atr_15m: float | None = None,
+    scale_atr_to_15m: bool = False,
 ) -> dict[str, Any]:
     """
     依據現價、期權偏斜 Skew 及技術指標，計算適合的買入/賣出價位與股數。
     - 未持倉標的：計算適合買入的價位與股數 (Sizing 基於 capital / risk_limit)
     - 已持倉標的：計算適合賣出的價位與股數
+
+    `atr_15m` / `scale_atr_to_15m` (修復 Top 4 / ISS-02)：
+    美股單日 390 分鐘 = 26 根 15 分鐘 K 棒。當交易員以 15 分鐘 K 線實體收盤為撤退線時，
+    防洗盤緩衝尺度應為 1.5 × ATR_15m。傳入 `atr_15m` 直接採用；或設 `scale_atr_to_15m=True`
+    依據時間平方根法則 (ATR_14 / sqrt(26)) 進行量綱折算。
 
     `deployed_tactical_value` 是目前已部署的戰術（衛星）曝險，由呼叫端以
     `compute_deployed_tactical_value()` 算好傳入。僅在資金退守閘門啟用時使用，
@@ -302,14 +310,15 @@ def calculate_dynamic_trading_signals(
 
     if not has_position:
         # === 未持倉：計算適合買入的價位與股數 ===
-        # RiskContext: 底牆危機與風控戒嚴
-        is_crisis = (
-            tactical_model.scenario == "wait" and "SHIELD" in tactical_model.sddm_route
+        # RiskContext: 底牆危機與風控戒嚴 (修復 ISS-04：納入 capital_retreat_required 絕對旗標)
+        is_crisis = tactical_model.scenario == "wait" and (
+            getattr(tactical_model, "capital_retreat_required", False)
+            or (tactical_model.sddm_route and "SHIELD" in tactical_model.sddm_route)
         )
         if is_crisis:
             result["suitable_buy_price"] = "N/A（風控鎖定，暫不推薦開倉買方策略）"
             result["buy_rationale"] = (
-                "⚠️ 底牆破位或負 Gamma 風險主導，風控戒嚴已啟動，禁止任何左側接刀。"
+                "⚠️ 底牆破位、負 Gamma 或風控戒嚴主導，禁止任何左側接刀。"
             )
         else:
             if rsi < 30:
@@ -333,10 +342,26 @@ def calculate_dynamic_trading_signals(
                 buy_price_phase3 * 0.9, min(suitable_buy, buy_price_phase1)
             )
 
-            # ATR 防洗盤動態緩衝
-            atr = getattr(metrics, "atr_14", 0.0) or 0.0
-            if atr > 0:
-                suitable_buy -= atr * 1.5
+            # ATR 防洗盤動態緩衝 (修復 Top 4 / ISS-02: 支援 15m ATR 與時間量綱折算)
+            # 美股單日 390 分鐘 = 26 根 15 分鐘 K 棒。當交易員以 15 分鐘 K 線實體收盤為撤退線時，
+            # 盤中微觀防洗盤緩衝尺度應為 1.5 × ATR_15m。若由日線折算，依隨機遊走平方根法則
+            # 除以 sqrt(26) ≈ 5.099 (見附錄 A.6)。
+            if atr_15m is not None and atr_15m > 0:
+                effective_atr = atr_15m
+                is_15m_buffer = True
+            elif (m_atr := getattr(metrics, "atr_15m", None)) is not None and m_atr > 0:
+                effective_atr = m_atr
+                is_15m_buffer = True
+            elif scale_atr_to_15m:
+                raw_atr = getattr(metrics, "atr_14", 0.0) or 0.0
+                effective_atr = raw_atr / math.sqrt(26.0) if raw_atr > 0 else 0.0
+                is_15m_buffer = True
+            else:
+                effective_atr = getattr(metrics, "atr_14", 0.0) or 0.0
+                is_15m_buffer = False
+
+            if effective_atr > 0:
+                suitable_buy -= effective_atr * 1.5
 
             # 避開整數與特定關卡
             if round(suitable_buy % 1.0, 2) in [0.00, 0.50, 0.99]:
@@ -349,11 +374,10 @@ def calculate_dynamic_trading_signals(
                 )
 
             result["suitable_buy_price"] = round(suitable_buy, 2)
-            if atr > 0:
-                # 明確揭露實際緩衝金額，而非只宣稱「已疊加」。若上游 ATR 取得失敗
-                # 而退回 0.01 佔位值，使用者會直接從這個數字看出緩衝近似於零。
+            if effective_atr > 0:
+                atr_label = "1.5×ATR₁₅ₘ" if is_15m_buffer else "1.5×ATR"
                 result["buy_rationale"] += (
-                    f" (已疊加 1.5×ATR = ${atr * 1.5:.2f} 防洗盤緩衝，"
+                    f" (已疊加 {atr_label} = ${effective_atr * 1.5:.2f} 防洗盤緩衝，"
                     "請以「15 分鐘 K 線實體跌破」作為最終撤退線)"
                 )
 
@@ -467,19 +491,35 @@ def calculate_dynamic_trading_signals(
         if avg_cost > 0.0 and tactical_model.scenario != "hard-hedge":
             suitable_sell = max(suitable_sell, avg_cost * 1.01)
 
-        # ATR 防洗盤動態緩衝 (向上)
-        atr = getattr(metrics, "atr_14", 0.0) or 0.0
-        if atr > 0:
-            suitable_sell += atr * 1.5
+        # ATR 防洗盤動態緩衝 (向上) (修復 Top 4 / ISS-02: 支援 15m ATR 與時間量綱折算)
+        if atr_15m is not None and atr_15m > 0:
+            effective_atr_sell = atr_15m
+            is_15m_sell = True
+        elif (
+            m_atr_sell := getattr(metrics, "atr_15m", None)
+        ) is not None and m_atr_sell > 0:
+            effective_atr_sell = m_atr_sell
+            is_15m_sell = True
+        elif scale_atr_to_15m:
+            raw_atr = getattr(metrics, "atr_14", 0.0) or 0.0
+            effective_atr_sell = raw_atr / math.sqrt(26.0) if raw_atr > 0 else 0.0
+            is_15m_sell = True
+        else:
+            effective_atr_sell = getattr(metrics, "atr_14", 0.0) or 0.0
+            is_15m_sell = False
+
+        if effective_atr_sell > 0:
+            suitable_sell += effective_atr_sell * 1.5
 
         # 避開整數關卡
         if round(suitable_sell % 1.0, 2) in [0.00, 0.50, 0.99]:
             suitable_sell -= 0.03
 
         result["suitable_sell_price"] = round(suitable_sell, 2)
-        if atr > 0:
+        if effective_atr_sell > 0:
+            atr_label = "1.5×ATR₁₅ₘ" if is_15m_sell else "1.5×ATR"
             result["sell_rationale"] += (
-                f" (已疊加 1.5×ATR = ${atr * 1.5:.2f} 防洗盤緩衝避開整數，"
+                f" (已疊加 {atr_label} = ${effective_atr_sell * 1.5:.2f} 防洗盤緩衝避開整數，"
                 "請以「15 分鐘 K 線實體跌破」作為最終離場確認)"
             )
 

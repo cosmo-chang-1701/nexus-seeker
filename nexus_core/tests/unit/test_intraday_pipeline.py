@@ -514,6 +514,18 @@ async def test_build_watchlist_heartbeat_embed_skips_uoa_writeback_on_fetch_fail
         "cogs.embed_builder.create_watchlist_signal_embed",
         return_value=MagicMock(),
     ), patch(
+        "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
+        new_callable=AsyncMock,
+        return_value=None,
+    ), patch(
+        "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
+        new_callable=AsyncMock,
+        return_value=None,
+    ), patch(
+        "market_analysis.sentiment_engine.SentimentEngine.get_unified_max_pain",
+        new_callable=AsyncMock,
+        return_value=None,
+    ), patch(
         # 心跳補充數據 gather 中的任一項失敗，都不應把半成品的 UOA 清單寫回快取。
         # 這裡改以 detect_uoa 觸發失敗：get_quote 已不在該 gather 內（embed 的
         # quote 參數從未被讀取，該次抓取已移除）。
@@ -528,7 +540,93 @@ async def test_build_watchlist_heartbeat_embed_skips_uoa_writeback_on_fetch_fail
             evaluation, user_context
         )
 
-    mock_save_kv_cache.assert_not_awaited()
+    uoa_calls = [
+        c
+        for c in mock_save_kv_cache.call_args_list
+        if c.args and c.args[0].startswith("uoa_")
+    ]
+    assert len(uoa_calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_build_watchlist_heartbeat_embed_isolates_uoa_failure(
+    intraday_pipeline: Any,
+) -> None:
+    """測試 ISS-03: 當 UOA 抓取失敗時，IV、PCR 與 Max Pain 不得被連帶設為 None (全滅雪崩防護)。"""
+    evaluation = SimpleNamespace(
+        metrics=SimpleNamespace(
+            symbol="MU",
+            current_price=410.5,
+            iv_rank=68.0,
+            option_skew=6.25,
+            option_skew_state="左偏保護",
+            buy_zone_status="🟡 測試買區",
+            sell_zone_status="⚪ 測試賣區",
+        ),
+        tactical=SimpleNamespace(
+            alert_level="yellow",
+            scenario="premium-harvest",
+            sddm_route="SHIELD",
+        ),
+        event_context=SimpleNamespace(summary="財報前風控"),
+        symbol_gex=None,
+    )
+    user_context = SimpleNamespace(user_id=42, capital=120000.0, risk_limit=12.0)
+    fake_iv = SimpleNamespace(iv_rank=72.0)
+    fake_pcr = {"pcr": 1.25}
+    fake_mp = {"max_pain": 415.0}
+
+    with patch(
+        "database.is_symbol_in_portfolio",
+        return_value=False,
+    ), patch(
+        "database.get_user_holdings",
+        return_value=[],
+    ), patch(
+        "market_analysis.intraday_pipeline.pipeline.derive_watchlist_option_guidance",
+        return_value="option guidance",
+    ), patch(
+        "market_analysis.intraday_pipeline.pipeline.build_watchlist_option_plan",
+        new_callable=AsyncMock,
+        return_value="option-plan",
+    ), patch(
+        "market_analysis.intraday_pipeline.build_watchlist_skew_rule_commentary",
+        return_value="rule-skew-commentary",
+    ), patch(
+        "cogs.embed_builder.create_watchlist_signal_embed",
+        return_value=MagicMock(),
+    ) as mock_create_embed, patch(
+        "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
+        new_callable=AsyncMock,
+        return_value=fake_iv,
+    ), patch(
+        "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
+        new_callable=AsyncMock,
+        return_value=fake_pcr,
+    ), patch(
+        "market_analysis.sentiment_engine.SentimentEngine.get_unified_max_pain",
+        new_callable=AsyncMock,
+        return_value=fake_mp,
+    ), patch(
+        # 模擬 UOA 失敗拋錯
+        "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("UOA 429 rate limited"),
+    ), patch(
+        "database.cache.save_kv_cache",
+        new_callable=AsyncMock,
+    ):
+        await intraday_pipeline._build_watchlist_heartbeat_embed(
+            evaluation, user_context
+        )
+
+    # 驗證即使 UOA 失敗，其餘三組數據仍完整傳遞給 embed builder，未被重置為 None
+    assert mock_create_embed.called
+    kwargs = mock_create_embed.call_args.kwargs
+    assert kwargs.get("iv_metrics") == fake_iv
+    assert kwargs.get("pcr_data") == fake_pcr
+    assert kwargs.get("max_pain_data") == fake_mp
+    assert kwargs.get("uoa_list") == []
 
 
 def _build_skew_test_metrics(**overrides: Any) -> Any:
@@ -963,9 +1061,10 @@ async def test_global_defense_gate_blocks_bullish_signals(
     # Should normally not be "wait" if it passes conditions (it might be Spear or Shield, but definitely not LIQUIDATE)
     assert "LIQUIDATE (基本面破滅強制清算)" not in res_healthy.tactical.sddm_route
 
-    # CASE 2: Thesis IS broken
+    # CASE 2: Thesis IS broken with high confidence (>= 0.75)
     mock_get_fc.return_value = {
         "is_broken": 1,
+        "confidence": 0.85,
         "reasoning": "Deteriorating margins and lost market share.",
     }
 
@@ -978,6 +1077,17 @@ async def test_global_defense_gate_blocks_bullish_signals(
     assert "LLM 護城河破滅警告" in res_broken.tactical.action_guideline
     assert "Deteriorating margins" in res_broken.tactical.action_guideline
     assert res_broken.tactical.alert_level == "red"
+
+    # CASE 3: Thesis IS broken but low confidence (< 0.75) -> Suppressed
+    mock_get_fc.return_value = {
+        "is_broken": 1,
+        "confidence": 0.60,
+        "reasoning": "Vague rumor without hard evidence.",
+    }
+
+    res_low_conf = await evaluate_watchlist_symbol("TSLA")
+    assert res_low_conf is not None
+    assert "LIQUIDATE (基本面破滅強制清算)" not in res_low_conf.tactical.sddm_route
 
 
 def _build_squeeze_test_metrics(**overrides: Any) -> Any:
@@ -1032,19 +1142,20 @@ async def test_squeeze_warning_requires_gamma_flip_pcr_and_iv_confirmation(
     mock_get_regime.return_value = "NORMAL"
     mock_get_fc.return_value = {"is_broken": 0, "reasoning": "ok"}
 
-    # gex_profile 由 90(-1M) 累加至 200(+2M)，累積值於 100~200 之間由負轉正
-    # -> estimate_symbol_gamma_flip 估算 gamma_flip = 200.0
+    # gex_profile: GEX(90)=-1M (負), GEX(150)=0.0 (非負), GEX(200)=+2M (正)
+    # 逐履約價偵測: (90,-1M)→(150,0.0): prev<0 且 0<=0 → 符號翻轉於 K=150
+    # -> estimate_symbol_gamma_flip 估算 gamma_flip = 150.0
     gex_profile = {"90": -1_000_000.0, "150": 0.0, "200": 2_000_000.0}
 
-    # CASE 1：舊條件為真 (spot > call_wall 且 net_gex < 0)，新條件應不觸發
+    # CASE 1：在正 Gamma 區間 (net_gex > 0) 造市商壓制波動，不觸發軋空預警
     mock_fetch_gex.return_value = {
-        "net_gex": -500_000.0,
+        "net_gex": 2_000_000.0,
         "call_wall": 150.0,
         "put_wall": 100.0,
-        "gex_profile": {},
+        "gex_profile": gex_profile,
     }
     mock_build_metrics.return_value = _build_squeeze_test_metrics(
-        current_price=155.0, gex_max_put_wall=100.0
+        current_price=155.0, gex_max_put_wall=100.0, oi_pcr=0.4
     )
     mock_get_kv.return_value = 40.0
 
@@ -1052,9 +1163,9 @@ async def test_squeeze_warning_requires_gamma_flip_pcr_and_iv_confirmation(
     assert res_old_condition is not None
     assert "軋空預警" not in res_old_condition.tactical.action_guideline
 
-    # CASE 2：gamma_flip 缺值 (profile 為空 -> 估算為 0.0)，fail-safe 不觸發
+    # CASE 2：處於負 Gamma 但散戶未狂買 Call (oi_pcr > 0.60)，fail-safe 不觸發
     mock_fetch_gex.return_value = {
-        "net_gex": 2_000_000.0,
+        "net_gex": -500_000.0,
         "call_wall": 150.0,
         "put_wall": 100.0,
         "gex_profile": {},
@@ -1068,15 +1179,15 @@ async def test_squeeze_warning_requires_gamma_flip_pcr_and_iv_confirmation(
     assert res_no_flip is not None
     assert "軋空預警" not in res_no_flip.tactical.action_guideline
 
-    # CASE 3：三條件皆滿足 -> 觸發軋空預警
+    # CASE 3：三條件皆滿足 (負 Gamma 區間 + Call 狂熱 oi_pcr <= 0.60 + IV 走揚) -> 觸發軋空預警
     mock_fetch_gex.return_value = {
-        "net_gex": 2_000_000.0,
+        "net_gex": -500_000.0,
         "call_wall": 190.0,
         "put_wall": 150.0,
         "gex_profile": gex_profile,
     }
     mock_build_metrics.return_value = _build_squeeze_test_metrics(
-        current_price=205.0, gex_max_put_wall=150.0, iv_rank=60.0, oi_pcr=1.2
+        current_price=205.0, gex_max_put_wall=150.0, iv_rank=60.0, oi_pcr=0.45
     )
     mock_get_kv.return_value = 40.0  # prev iv_rank (40.0) < 目前 60.0 -> IV 走揚
 

@@ -1011,9 +1011,9 @@ def build_radar_scan_embed(
                 )
 
             # 案例 3：RCAT 薄弱紙牆 (無做市商深度)
-            if pw_gex_val is not None and 0 < pw_gex_val < 500_000.0 and put_wall > 0:
+            if pw_gex_val is not None and abs(pw_gex_val) < 500_000.0 and put_wall > 0:
                 insights.append(
-                    f"• ⚠️ {sym}: 名義 PutWall (${put_wall:.2f}) 僅單薄 +{pw_gex_val / 1000:.0f}K GEX (無做市商深度)，過濾零星雜訊防假防守。"
+                    f"• ⚠️ {sym}: 名義 PutWall (${put_wall:.2f}) 僅單薄 +{abs(pw_gex_val) / 1000:.0f}K GEX (無做市商深度)，過濾零星雜訊防假防守。"
                 )
 
             # Volume Profile Level (hvn_price/lvn_price)
@@ -1056,7 +1056,7 @@ def build_radar_scan_embed(
             # 4. G-Wall / P-Wall & Neg-GEX Distance
             p_wall = float(put_wall)
             if p_wall > 0:
-                if pw_gex_val is not None and 0 < pw_gex_val < 500_000.0:
+                if pw_gex_val is not None and abs(pw_gex_val) < 500_000.0:
                     p_wall_str = f"${p_wall:.1f}(薄)"
                 else:
                     p_wall_str = f"${p_wall:.1f}"
@@ -1255,7 +1255,7 @@ def build_radar_scan_embed(
                 tactical_adv = f"🛑 跌穿LVN真空區(${lvn_p:.1f})，防無量滑步"
             elif "薄弱紙牆" in status_label or (
                 pw_gex_val is not None
-                and 0 < pw_gex_val < 500_000.0
+                and abs(pw_gex_val) < 500_000.0
                 and put_wall > 0
                 and price_val >= put_wall
             ):

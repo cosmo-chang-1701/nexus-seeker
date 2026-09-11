@@ -6,6 +6,7 @@ import logging
 import math
 import time
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import database.financials as db_financials
 from services.market_data_service._core import (
@@ -123,10 +124,12 @@ async def get_earnings_calendar(
     """取得財報日曆。"""
     client = _get_client()
     try:
+        ny_tz = ZoneInfo("America/New_York")
+        now_ny = datetime.now(ny_tz)
         if from_date is None:
-            from_date = datetime.now().strftime("%Y-%m-%d")
+            from_date = now_ny.strftime("%Y-%m-%d")
         if to_date is None:
-            to_date = (datetime.now() + timedelta(days=90)).strftime("%Y-%m-%d")
+            to_date = (now_ny + timedelta(days=90)).strftime("%Y-%m-%d")
 
         data = await _execute_api_call(
             client.earnings_calendar, _from=from_date, to=to_date, symbol=symbol

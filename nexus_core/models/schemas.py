@@ -36,6 +36,7 @@ class EnhancedWatchlistMetrics(BaseModel):
     pe_outlier_warning: str | None = Field(default=None)
     rsi_14: float = Field(default=50.0, ge=0.0, le=100.0)
     atr_14: float = Field(default=0.01, gt=0.0)
+    atr_15m: float | None = Field(default=None, gt=0.0)
     beta: float = Field(ge=-5.0, le=5.0)
     ma20: float = Field(default=1.0, gt=0.0)
     ma50: float = Field(default=1.0, gt=0.0)
@@ -59,7 +60,9 @@ class EnhancedWatchlistMetrics(BaseModel):
     pcr: float | None = Field(default=None, ge=0.0)
 
     volume_poc: float = Field(gt=0.0)
+    volume_lvn: float | None = None
     gex_max_put_wall: float | None = Field(default=None)
+    gex_max_call_wall: float | None = Field(default=None)
     vanna_sensitivity: float | None = None
     relative_strength_spy: float
     iv_source: str = "LIVE_IV"
@@ -162,6 +165,8 @@ class WatchlistOptionPlan(BaseModel):
     rationale: str = Field(min_length=1)
     stock_action: str = Field(min_length=1)
     legs: list[WatchlistOptionLeg] = Field(default_factory=list)
+    is_opex: bool = False
+    crosses_earnings: bool = False
 
 
 class WatchlistEventContext(BaseModel):
@@ -174,6 +179,7 @@ class WatchlistEventContext(BaseModel):
     macro_event: str | None = None
     macro_event_time: str | None = None
     macro_tte_hours: float | None = None
+    is_opex_week: bool = False
     risk_mode: WatchlistRiskMode = "normal"
     summary: str = Field(min_length=1)
 

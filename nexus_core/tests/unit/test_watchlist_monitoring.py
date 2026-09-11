@@ -567,17 +567,38 @@ async def test_rule3_macro_timer_cache_invalidation() -> None:
     from datetime import datetime, timedelta
     from zoneinfo import ZoneInfo
 
-    # Set event release time 1 hour in the past
-    past_time = (datetime.now(ZoneInfo("Asia/Taipei")) - timedelta(hours=1)).isoformat()
+    # Set event release time 1 hour in the past (within 2-hour post-release cooldown defense)
+    past_time_1h = (
+        datetime.now(ZoneInfo("Asia/Taipei")) - timedelta(hours=1)
+    ).isoformat()
 
-    macro_event = type(
+    macro_event_cooldown = type(
         "EconomicEvent",
         (),
-        {"event": "ISM Manufacturing PMI", "time": past_time, "tte_hours": -1.0},
+        {"event": "ISM Manufacturing PMI", "time": past_time_1h, "tte_hours": -1.0},
+    )()
+
+    context_cooldown = await build_watchlist_event_context(
+        "INTC", earnings_event=None, macro_event=macro_event_cooldown
+    )
+
+    # Within 2 hours, should maintain macro-guard during market digestion
+    assert context_cooldown.risk_mode == "macro-guard"
+    assert "消化冷卻期中" in context_cooldown.summary
+
+    # Set event release time 3 hours in the past (past 2-hour cooldown window)
+    past_time_3h = (
+        datetime.now(ZoneInfo("Asia/Taipei")) - timedelta(hours=3)
+    ).isoformat()
+
+    macro_event_past = type(
+        "EconomicEvent",
+        (),
+        {"event": "ISM Manufacturing PMI", "time": past_time_3h, "tte_hours": -3.0},
     )()
 
     context = await build_watchlist_event_context(
-        "INTC", earnings_event=None, macro_event=macro_event
+        "INTC", earnings_event=None, macro_event=macro_event_past
     )
 
     assert context.risk_mode == "normal"
@@ -1024,30 +1045,72 @@ def test_capital_retreat_flag_is_sticky_across_gates() -> None:
 
 @pytest.mark.asyncio
 async def test_symbol_earnings_tte_stays_positive_on_earnings_day() -> None:
-    """財報當日 tte_hours 不得為負，否則 event-lock 會在最需要時降級為 normal。
+    """財報當日盤中 (13:30 ET) tte_hours 不得為負，否則 event-lock 會在最需要時降級為 normal。
 
-    錨點是財報當日 00:00 ET，13:30 ET 時原始值約 -13.5；而
-    `_resolve_watchlist_event_mode()` 要求 `0 < earnings_tte_hours`。
+    盤中 13:30 ET 時 AMC (或預設) 財報距離 16:30 發布約 3.0 小時；
+    `_resolve_watchlist_event_mode()` 要求 `0 < earnings_tte_hours <= 72` 保持 event-lock。
+    而盤前 BMO 財報在 13:30 ET 時已公布 (is_released=True)，不進入 event-lock。
     """
-    from datetime import datetime
+    from datetime import datetime, time
     from market_analysis.intraday_pipeline.events import _resolve_watchlist_event_mode
     from services.calendar_service import CalendarService, ny_tz
 
     service = CalendarService()
     today = datetime.now(ny_tz).date()
+    midday_ny = datetime.combine(today, time(13, 30)).replace(tzinfo=ny_tz)
 
-    with patch(
+    # 1. 測試 AMC / 預設未知時段：盤中 13:30 應保持正數倒數 (3.0h) 並鎖定 event-lock
+    with patch("services.calendar_service.datetime") as mock_dt, patch(
         "services.calendar_service.get_cached_earnings",
         return_value={
             "earnings_date": today.strftime("%Y-%m-%d"),
             "checked_at": datetime.now().isoformat(),
         },
     ), patch("services.calendar_service.save_earnings_cache", return_value=None):
+        mock_dt.now.side_effect = (
+            lambda tz=None: midday_ny if tz is None else midday_ny.astimezone(tz)
+        )
+        mock_dt.combine = datetime.combine
+        mock_dt.min = datetime.min
+        mock_dt.strptime = datetime.strptime
+        mock_dt.fromisoformat = datetime.fromisoformat
+
         event = await service.get_symbol_earnings("NVDA")
 
     assert event is not None
-    assert event.tte_hours > 0.0
+    assert event.tte_hours == 3.0
+    assert event.is_released is False
     assert _resolve_watchlist_event_mode(event.tte_hours, None) == "event-lock"
+
+    # 2. 測試 BMO 盤前發布：盤中 13:30 已過 08:30，is_released=True，解除 event-lock
+    service_bmo = CalendarService()
+    with patch("services.calendar_service.datetime") as mock_dt, patch(
+        "services.calendar_service.get_cached_earnings",
+        return_value={
+            "earnings_date": today.strftime("%Y-%m-%d"),
+            "hour": "bmo",
+            "checked_at": datetime.now().isoformat(),
+        },
+    ), patch("services.calendar_service.save_earnings_cache", return_value=None):
+        mock_dt.now.side_effect = (
+            lambda tz=None: midday_ny if tz is None else midday_ny.astimezone(tz)
+        )
+        mock_dt.combine = datetime.combine
+        mock_dt.min = datetime.min
+        mock_dt.strptime = datetime.strptime
+        mock_dt.fromisoformat = datetime.fromisoformat
+
+        event_bmo = await service_bmo.get_symbol_earnings("NVDA")
+
+    assert event_bmo is not None
+    assert event_bmo.is_released is True
+    assert event_bmo.tte_hours == -5.0
+    assert (
+        _resolve_watchlist_event_mode(
+            event_bmo.tte_hours, None, is_earnings_released=event_bmo.is_released
+        )
+        == "normal"
+    )
 
 
 @pytest.mark.asyncio
@@ -1089,3 +1152,175 @@ async def test_option_plan_illiquid_path_builds_wait_plan() -> None:
     assert "流動性不足" in plan.strategy_name
     assert plan.suggested_contracts == 0
     assert plan.legs == []
+
+
+# ---------------------------------------------------------------------------
+# Top 3 / ISSUE-01 & ISSUE-04: 戰術閘門順序副作用（Sequential Clobbering）修復驗證
+# ---------------------------------------------------------------------------
+
+
+def test_tactical_gate_sequential_clobbering_preserves_prior_warnings() -> None:
+    """[Top 3 / ISS-01 修復驗證]
+    當前置已觸發【軋空預警】或【負 Gamma 踩踏】時，後續閘門（如動能發散、IV壓抑）
+    不得整包重建覆蓋並抹除前置高危警報，必須以追加方式（Guideline Append）保留。
+    """
+    from market_analysis.intraday_pipeline.evaluation import _apply_tactical_gate
+    from models.schemas import WatchlistTacticalPlan
+
+    # 模擬前置已累積軋空預警與負 Gamma 踩踏警告的 plan
+    prior_plan = WatchlistTacticalPlan(
+        scenario="wait",
+        sddm_route="SHIELD 網格防禦 (負 Gamma 踩踏)",
+        action_guideline=(
+            "⚠️ 負 Gamma 踩踏/波動放大區 (做市商 Delta 剛性拋壓風險全面壓倒遠期痛點磁吸)\n"
+            "🚨 【軋空預警】現價站上 Gamma Flip 進入正 Gamma 區間"
+        ),
+        dynamic_grid_step=2.0,
+        alert_level="red",
+        capital_retreat_required=True,
+    )
+
+    # 後續閘門 1：Skew Divergence
+    after_skew = _apply_tactical_gate(
+        prior_plan,
+        locked=False,
+        sddm_route="WAIT (機構避險背離/尾部風險警戒)",
+        action_guideline="⚠️ 機構避險背離/尾部風險警戒｜Skew 分位極端高位",
+        capital_retreat_required=True,
+    )
+
+    # 後續閘門 2：IV 壓抑背離
+    after_iv = _apply_tactical_gate(
+        after_skew,
+        locked=False,
+        sddm_route="WAIT (IV 壓抑背離)",
+        action_guideline="⚠️ WARNING: IV Suppression Divergence｜現價暴跌但波動率低壓",
+    )
+
+    # 驗證：前置的負 Gamma 踩踏、軋空預警與 Skew 背離全部被保留，未被 IV 壓抑覆蓋抹除
+    assert "負 Gamma 踩踏" in after_iv.action_guideline
+    assert "【軋空預警】" in after_iv.action_guideline
+    assert "機構避險背離" in after_iv.action_guideline
+    assert "IV Suppression Divergence" in after_iv.action_guideline
+    assert after_iv.alert_level == "red"
+    assert after_iv.capital_retreat_required is True
+
+
+def test_is_crisis_blocks_buy_on_capital_retreat_flag() -> None:
+    """[Top 3 / ISS-04 修復驗證]
+    當 tactical_model.capital_retreat_required 為 True 時，即使 sddm_route 為
+    "WAIT (機構避險背離...)" 而非 "SHIELD"，calculate_dynamic_trading_signals
+    亦必須視為 is_crisis，將 suitable_buy_price 標為風控鎖定，股數為 0，
+    杜絕系統一邊宣告嚴密避險一邊產出買入點位的分裂行為。
+    """
+    from market_analysis.signal_calculator import calculate_dynamic_trading_signals
+    from models.schemas import WatchlistTacticalPlan
+
+    metrics = _sample_metrics(
+        current_price=100.0, rsi_14=25.0
+    )  # 超賣，若無風控通常會買
+    tactical = WatchlistTacticalPlan(
+        scenario="wait",
+        sddm_route="WAIT (機構避險背離/尾部風險警戒)",  # 不含 "SHIELD"
+        action_guideline="⚠️ 機構避險背離",
+        dynamic_grid_step=2.0,
+        alert_level="red",
+        capital_retreat_required=True,  # 顯式資本退守旗標
+    )
+
+    signals = calculate_dynamic_trading_signals(
+        metrics,
+        tactical,
+        has_position=False,
+        capital=100000.0,
+        risk_limit=15.0,
+    )
+
+    assert signals["suitable_buy_shares"] == 0
+    assert isinstance(signals["suitable_buy_price"], str)
+    assert "風控鎖定" in signals["suitable_buy_price"]
+
+
+# ---------------------------------------------------------------------------
+# Top 4 / ISSUE-02: 防洗盤緩衝時間週期量綱校正（日線 ATR vs 15 分鐘收盤）驗證
+# ---------------------------------------------------------------------------
+
+
+def test_atr_time_scale_alignment_with_scale_flag() -> None:
+    """[Top 4 / ISS-02 修復驗證]
+    當指定 scale_atr_to_15m=True 時，日線 ATR (atr_14=5.10) 依據隨機遊走時間平方根法則
+    (美股 26 根 15m K棒，sqrt(26) ≈ 5.099) 折算為 ATR₁₅ₘ ≈ 1.00，
+    1.5×ATR 防洗盤緩衝應為 $1.50（而非未折算的 $7.65 荒謬巨幅偏差），
+    且文案明確標註 1.5×ATR₁₅ₘ。
+    """
+    from market_analysis.signal_calculator import calculate_dynamic_trading_signals
+    from models.schemas import WatchlistTacticalPlan
+
+    daily_atr = 5.0990195  # 剛好為 sqrt(26)，折算後 ATR_15m 應為 1.00
+    metrics = _sample_metrics(
+        current_price=100.0,
+        rsi_14=25.0,  # 極度超賣 -> 基準買點為 buy_price_phase1 (95.0)
+        buy_price_phase1=95.0,
+        buy_price_phase2=90.0,
+        buy_price_phase3=85.0,
+        atr_14=daily_atr,
+        option_skew=0.0,
+    )
+    tactical = WatchlistTacticalPlan(
+        scenario="premium-harvest",
+        sddm_route="SPEAR",
+        action_guideline="Normal",
+        dynamic_grid_step=2.0,
+    )
+
+    signals = calculate_dynamic_trading_signals(
+        metrics,
+        tactical,
+        has_position=False,
+        capital=100000.0,
+        risk_limit=15.0,
+        scale_atr_to_15m=True,
+    )
+
+    # 基準買點 95.0 - (1.0 * 1.5 = 1.5) = 93.50，避開整數/關卡 .50 -> 93.47
+    assert signals["suitable_buy_price"] == 93.47
+    assert "1.5×ATR₁₅ₘ = $1.50" in signals["buy_rationale"]
+    assert "15 分鐘 K 線實體跌破" in signals["buy_rationale"]
+
+
+def test_atr_time_scale_alignment_with_explicit_atr_15m() -> None:
+    """[Top 4 / ISS-02 修復驗證]
+    當呼叫端傳入專屬的 15m ATR (atr_15m=0.80) 時，優先使用真實 15m ATR，
+    緩衝為 0.80 * 1.5 = $1.20，文案標註 1.5×ATR₁₅ₘ = $1.20。
+    """
+    from market_analysis.signal_calculator import calculate_dynamic_trading_signals
+    from models.schemas import WatchlistTacticalPlan
+
+    metrics = _sample_metrics(
+        current_price=100.0,
+        rsi_14=25.0,
+        buy_price_phase1=95.0,
+        buy_price_phase2=90.0,
+        buy_price_phase3=85.0,
+        atr_14=10.0,  # 即使日線 ATR 極大 (10.0)
+        option_skew=0.0,
+    )
+    tactical = WatchlistTacticalPlan(
+        scenario="premium-harvest",
+        sddm_route="SPEAR",
+        action_guideline="Normal",
+        dynamic_grid_step=2.0,
+    )
+
+    signals = calculate_dynamic_trading_signals(
+        metrics,
+        tactical,
+        has_position=False,
+        capital=100000.0,
+        risk_limit=15.0,
+        atr_15m=0.80,  # 明確傳入 15m ATR
+    )
+
+    # 基準買點 95.0 - (0.80 * 1.5 = 1.20) = 93.80
+    assert signals["suitable_buy_price"] == 93.80
+    assert "1.5×ATR₁₅ₘ = $1.20" in signals["buy_rationale"]

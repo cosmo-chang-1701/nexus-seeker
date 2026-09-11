@@ -252,7 +252,9 @@ def create_watchlist_signal_embed(
     if metrics is not None:
         live_price = metrics.current_price
         gex_putwall = metrics.gex_max_put_wall
+        gex_callwall = getattr(metrics, "gex_max_call_wall", None)
         vol_poc = metrics.volume_poc
+        vol_lvn = getattr(metrics, "volume_lvn", None)
         skew_val = metrics.option_skew
         skew_per = metrics.skew_percentile
         skew_samples = getattr(metrics, "skew_sample_size", None)
@@ -263,11 +265,23 @@ def create_watchlist_signal_embed(
         )
         live_price = live_price_val or suitable_sell_price or 100.0
         gex_putwall = None
+        gex_callwall = None
         vol_poc = 100.0
+        vol_lvn = None
         skew_val = None
         skew_per = None
         skew_samples = None
         skew_is_fallback = False
+
+    call_wall_gex = None
+    put_wall_gex = None
+    if symbol_gex and isinstance(symbol_gex, dict):
+        if not gex_callwall:
+            gex_callwall = symbol_gex.get("call_wall")
+        if not gex_putwall:
+            gex_putwall = symbol_gex.get("put_wall")
+        call_wall_gex = symbol_gex.get("call_wall_gex")
+        put_wall_gex = symbol_gex.get("put_wall_gex")
 
     # Extract IV metrics
     earnings_loading = False
@@ -280,6 +294,7 @@ def create_watchlist_signal_embed(
             iv_metrics.current_iv * 100.0 if iv_metrics.current_iv is not None else None
         )
         iv_rank = iv_metrics.iv_rank
+        iv_percentile = getattr(iv_metrics, "iv_percentile", None)
         iv_status_raw = (
             iv_metrics.iv_status.upper() if iv_metrics.iv_status else "NORMAL"
         )
@@ -300,12 +315,15 @@ def create_watchlist_signal_embed(
     else:
         iv_val = None
         iv_rank = None
+        iv_percentile = None
         iv_status = "NORMAL"
         expected_move = None
         iv_term_status = None
         iv_term_ratio = None
 
     if metrics is not None:
+        if iv_percentile is None and hasattr(metrics, "iv_percentile"):
+            iv_percentile = metrics.iv_percentile
         if hasattr(metrics, "has_earnings_event") and metrics.has_earnings_event:
             earnings_loading = True
         if hasattr(metrics, "has_macro_event") and metrics.has_macro_event:
@@ -514,11 +532,37 @@ def create_watchlist_signal_embed(
         or skew_is_fallback
     )
 
+    gex_callwall_str = (
+        f"${gex_callwall:.2f}"
+        if gex_callwall is not None and gex_callwall > 0
+        else "N/A"
+    )
+    cw_dist = (
+        ((gex_callwall - live_price) / live_price * 100.0)
+        if gex_callwall and gex_callwall > 0 and live_price > 0
+        else None
+    )
+    cw_dist_str = f"{cw_dist:+.2f}%" if cw_dist is not None else "--%"
+    abs_cw_gex = abs(float(call_wall_gex)) if call_wall_gex is not None else None
+    cw_tag = (
+        f" [{'厚' if abs_cw_gex >= 500_000 else '薄'}]"
+        if abs_cw_gex is not None
+        else ""
+    )
+
     gex_putwall_str = (
         f"${gex_putwall:.2f}" if gex_putwall is not None and gex_putwall > 0 else "N/A"
     )
     gex_dist_str = f"{gex_dist:+.2f}%" if gex_dist is not None else "--%"
+    abs_pw_gex = abs(float(put_wall_gex)) if put_wall_gex is not None else None
+    pw_tag = (
+        f" [{'厚' if abs_pw_gex >= 500_000 else '薄'}]"
+        if abs_pw_gex is not None
+        else ""
+    )
+
     vol_poc_str = f"${vol_poc:.2f}" if vol_poc is not None else "N/A"
+    vol_lvn_str = f"${vol_lvn:.2f}" if vol_lvn is not None and vol_lvn > 0 else "N/A"
     skew_val_str = f"{skew_val:+.2f}%" if skew_val is not None else "--%"
     skew_per_str = f"{skew_per:.1f}%" if skew_per is not None else "--%"
     # 分位視窗是「最近 N 列樣本」而非固定時間視窗，把樣本數揭露出來，
@@ -526,6 +570,7 @@ def create_watchlist_signal_embed(
     skew_sample_str = f", 樣本 {skew_samples} 筆" if skew_samples is not None else ""
     iv_val_str = f"{iv_val:.1f}%" if iv_val is not None else "--%"
     iv_rank_str = f"{iv_rank:.1f}%" if iv_rank is not None else "--%"
+    iv_percentile_str = f"{iv_percentile:.1f}%" if iv_percentile is not None else "--%"
     expected_move_str = (
         f"±${expected_move:.2f}"
         if expected_move is not None and expected_move > 0
@@ -576,8 +621,9 @@ def create_watchlist_signal_embed(
     if show_market_footprints:
         has_meaningful_content = True
         footprint_lines = [
-            f" ├─ GEX PutWall (做市商底牆): {gex_putwall_str} (當前價差: {gex_dist_str})",
-            f" ├─ Vol POC (籌碼控制中心): {vol_poc_str}",
+            f" ├─ GEX CallWall (做市商頂牆): {gex_callwall_str}{cw_tag} (空間: {cw_dist_str})",
+            f" ├─ GEX PutWall (做市商底牆): {gex_putwall_str}{pw_tag} (當前價差: {gex_dist_str})",
+            f" ├─ Vol POC (籌碼控制中心): {vol_poc_str} ｜ LVN (真空區): {vol_lvn_str}",
             f" └─ Option Skew (期權偏斜): {skew_val_str} "
             f"(分位點: {skew_per_str}{skew_sample_str})",
         ]
@@ -625,7 +671,50 @@ def create_watchlist_signal_embed(
 
                 is_stale = bool(symbol_gex.get("_is_stale_cache", False))
                 stale_suffix = " [快取 / API 降級]" if is_stale else ""
-                gex_lines = [" ┌─ 履約價(Strike) ─ 曝險熱力圖 ─ [K]"]
+
+                # ISSUE-4.4: 補齊 Net GEX Regime 與 Gamma Flip 水位行
+                net_gex_raw = symbol_gex.get("net_gex")
+                try:
+                    net_gex_float = (
+                        float(net_gex_raw) if net_gex_raw is not None else None
+                    )
+                except (ValueError, TypeError):
+                    net_gex_float = None
+
+                regime_line = ""
+                if net_gex_float is not None:
+                    if abs(net_gex_float) <= 50000.0:
+                        regime_label = "⚖️ NEUTRAL_GAMMA (中性均衡)"
+                    elif net_gex_float > 50000.0:
+                        regime_label = "🟢 LONG_GAMMA (自穩定壓制波動)"
+                    else:
+                        regime_label = "🔴 SHORT_GAMMA (助漲助跌)"
+                    net_gex_sign = (
+                        "+" if net_gex_float > 0 else ("-" if net_gex_float < 0 else "")
+                    )
+                    regime_line = f"Net GEX Regime: {net_gex_sign}{abs(net_gex_float)/1000:.0f}K ({regime_label})"
+
+                from market_analysis.index_microstructure import (
+                    estimate_symbol_gamma_flip,
+                )
+
+                gamma_flip_val = estimate_symbol_gamma_flip(gex_prof, effective_c_val)
+                flip_line = ""
+                if gamma_flip_val > 0 and effective_c_val > 0:
+                    flip_buffer_pct = (
+                        (effective_c_val - gamma_flip_val) / effective_c_val * 100
+                    )
+                    flip_sign = "+" if flip_buffer_pct >= 0 else ""
+                    flip_line = f"Gamma Flip: ${gamma_flip_val:.2f} (緩衝: {flip_sign}{flip_buffer_pct:.1f}%)"
+                elif gamma_flip_val == 0.0:
+                    flip_line = "Gamma Flip: -- (無零交叉點)"
+
+                gex_lines: list[str] = []
+                if regime_line:
+                    gex_lines.append(f" ├─ {regime_line}")
+                if flip_line:
+                    gex_lines.append(f" ├─ {flip_line}")
+                gex_lines.append(" ┌─ 履約價(Strike) ─ 曝險熱力圖 ─ [K]")
                 for i, k in enumerate(reversed(display_strikes)):
                     v = _safe_gex(k)
                     bars = int((abs(v) / max_abs_gex) * 10)
@@ -665,7 +754,7 @@ def create_watchlist_signal_embed(
     if show_iv_context:
         has_meaningful_content = True
         iv_lines = [
-            f" ├─ Implied Volatility (IV): {iv_val_str} ｜ IV Rank: {iv_rank_str} ({iv_status_str})",
+            f" ├─ Implied Volatility (IV): {iv_val_str} ｜ IV Rank: {iv_rank_str} ｜ IVP: {iv_percentile_str} ({iv_status_str})",
         ]
 
         if iv_term_status and iv_term_ratio is not None:

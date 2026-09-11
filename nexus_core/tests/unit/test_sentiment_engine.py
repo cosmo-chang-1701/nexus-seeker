@@ -580,13 +580,10 @@ async def test_calculate_max_pain_incomplete_oi_fallback() -> None:
 
         result = await SentimentEngine.calculate_max_pain("AAPL")
 
-        # If it falls back to volume, it should calculate the correct Max Pain using volume.
-        # Let's verify that the max_pain returned is close to 100 or 105 (based on volume).
-        assert result["max_pain"] is not None
-        # Should print warning and use volume weight:
-        # Calls volume peak is at 100.0, Puts volume peak is at 105.0.
-        # Total volume pain will be minimized around these values.
-        assert result["max_pain"] in [100.0, 105.0]
+        # [ISS-08] Volume-weighted fallback is prohibited.
+        # Insufficient OI returns None for max_pain and marks calculation as degraded.
+        assert result["max_pain"] is None
+        assert result["is_degraded"] is True
 
 
 @pytest.mark.asyncio
@@ -912,11 +909,14 @@ async def test_calculate_max_pain_split_anomaly_and_degradation() -> None:
         result3 = await SentimentEngine.calculate_max_pain("MU", _retry=True)
         # Verify downgrading warning log is printed
         any_downgrading = any(
-            "Data integrity degraded (Valid OI too low)" in args[0]
+            "Data integrity degraded (Valid OI too low" in args[0]
             for args, _ in mock_logger_warning.call_args_list
         )
         assert any_downgrading, "Should log Data integrity degraded (Valid OI too low)"
-        assert result3["max_pain"] is not None
+        # [ISS-08] Volume fallback is prohibited. When raw calculation fails due to insufficient OI,
+        # it falls back to previous SQLite cache with is_degraded=True (never calculating Volume-weighted max pain).
+        assert result3["fallback_source"] == "SQLite"
+        assert result3["is_degraded"] is True
 
 
 @pytest.mark.asyncio
@@ -1063,11 +1063,13 @@ async def test_get_unified_max_pain_ttl_forces_recompute_even_without_price_devi
 # ---------------------------------------------------------------------------
 
 
-def _patch_percentile_rows(values: list[float]) -> Any:
+def _patch_percentile_rows(values: list[float], days: int = 5) -> Any:
     """把 get_indicator_percentile 的 SQLite 讀取換成固定的樣本列。"""
     conn = MagicMock()
     cursor = MagicMock()
-    cursor.fetchall.return_value = [(v,) for v in values]
+    cursor.fetchall.return_value = [
+        (v, f"2026-09-0{i % days + 1}") for i, v in enumerate(values)
+    ]
     conn.cursor.return_value = cursor
     return patch("database.connection.get_read_connection", return_value=conn)
 
@@ -1174,3 +1176,64 @@ async def test_calculate_skew_rejects_expiries_below_dte_floor() -> None:
 
     assert res["skew"] is None
     assert "Insufficient DTE coverage" in res["error"]
+
+
+@pytest.mark.asyncio
+async def test_calculate_pcr_zero_call_volume_reports_bearish() -> None:
+    """當看漲期權成交量為 0 而看跌期權爆量時，PCR 不得塌陷為 0.0 被判定為『看漲主導』(ISSUE-2.4)。"""
+    import pandas as pd
+    from market_analysis.sentiment_engine import SentimentEngine
+
+    class MockChain:
+        def __init__(self) -> None:
+            self.calls = pd.DataFrame({"volume": [0.0], "openInterest": [10.0]})
+            self.puts = pd.DataFrame({"volume": [5000.0], "openInterest": [100.0]})
+
+    with patch(
+        "services.market_data_service.get_all_option_expiries",
+        new_callable=AsyncMock,
+        return_value=["2026-06-19", "2026-07-17"],
+    ), patch(
+        "services.market_data_service.get_option_chain",
+        new_callable=AsyncMock,
+        return_value=MockChain(),
+    ), patch(
+        "market_analysis.sentiment.options_flow.save_sentiment_history",
+        new_callable=AsyncMock,
+    ):
+        res = await SentimentEngine.calculate_pcr("AAPL")
+
+    assert res is not None
+    assert res["volume_pcr"] == 99.9
+    assert res["state"] == "🐻 偏向空頭/看空主導"
+
+
+@pytest.mark.asyncio
+async def test_calculate_skew_and_pcr_passes_prune_pct_35() -> None:
+    """計算 Skew 與 PCR 時必須傳入 prune_pct=0.35，避免高波動 25-Delta 合約遭物理截斷 (ISSUE-2.3)。"""
+    from market_analysis.sentiment_engine import SentimentEngine
+    from datetime import datetime, timedelta
+
+    future_expiries = [
+        (datetime.now().date() + timedelta(days=30)).strftime("%Y-%m-%d"),
+        (datetime.now().date() + timedelta(days=60)).strftime("%Y-%m-%d"),
+        (datetime.now().date() + timedelta(days=90)).strftime("%Y-%m-%d"),
+    ]
+
+    with patch(
+        "services.market_data_service.get_all_option_expiries",
+        new_callable=AsyncMock,
+        return_value=future_expiries,
+    ), patch(
+        "services.market_data_service.get_option_chain",
+        new_callable=AsyncMock,
+        return_value=None,
+    ) as mock_chain:
+        await SentimentEngine.calculate_skew("TSLA")
+        assert mock_chain.call_args is not None
+        assert mock_chain.call_args.kwargs.get("prune_pct") == 0.35
+
+        mock_chain.reset_mock()
+        await SentimentEngine.calculate_pcr("TSLA")
+        assert mock_chain.call_args is not None
+        assert mock_chain.call_args.kwargs.get("prune_pct") == 0.35

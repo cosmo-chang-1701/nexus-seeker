@@ -1,7 +1,6 @@
 from typing import Any
 from .history_storage import get_last_stored_iv, save_historical_iv
 import logging
-import pandas as pd
 import numpy as np
 import sqlite3  # noqa: F401
 import time
@@ -189,16 +188,19 @@ async def _calculate_straddle_implied_em(
         if straddle_price <= 0:
             return None
 
-        # 業界標準 0.85 因子（1-sigma 近似），並依據實際 DTE 時間平移至週預期 (7 days)
-        # 修正：為了防止 DTE < 7 且包含財報等事件時被開根號錯誤放大 (Event-Jump Extrapolation)，
-        # 分母使用 max(7.0, target_dte)，即只對 DTE > 7 的區間進行壓縮，小於 7 天則保持原值。
-        # 不足的天數方差會由後續的 max(straddle_em, em_from_iv) 透過 30天期 IV 自動補足。
-        raw_em = straddle_price * 0.85
-        em = raw_em * math.sqrt(7.0 / max(7.0, target_dte))
+        # Expected Move 雙軌維度校正 (ISS-11 & 附錄 A.5)：
+        # 對齊標準 1σ 預期移動（68.3% 覆蓋率）：
+        # EM_1σ = sqrt(pi / 2) * Straddle ≈ 1.2533 * Straddle
+        # 依據時間平方根法則平移至週度 (7 天)：
+        # em = Straddle * 1.2533 * sqrt(7.0 / max(1.0, float(target_dte)))
+        scale_1sigma = math.sqrt(math.pi / 2.0)
+        em = (
+            straddle_price * scale_1sigma * math.sqrt(7.0 / max(1.0, float(target_dte)))
+        )
 
         logger.info(
-            f"[{symbol}] Straddle-Implied EM (Normalized): Call_mid=${call_mid:.2f} + "
-            f"Put_mid=${put_mid:.2f} = Straddle ${straddle_price:.2f} × 0.85 (DTE: {target_dte}) -> Weekly EM ±${em:.2f}"
+            f"[{symbol}] Straddle-Implied EM (1-sigma 7D): Call_mid=${call_mid:.2f} + "
+            f"Put_mid=${put_mid:.2f} = Straddle ${straddle_price:.2f} (DTE: {target_dte}) -> Weekly EM ±${em:.2f}"
         )
         return em  # type: ignore
 
@@ -230,9 +232,10 @@ async def _calculate_iv_term_structure(
             try:
                 exp_dt = datetime.strptime(exp, "%Y-%m-%d").date()
                 days = (exp_dt - today_dt).days
-                if 0 <= days <= 14 and not near_expiry:
+                # 期限結構取樣約束 (ISS-09)：近月強制要求 5 <= DTE <= 20，過濾 0-DTE/1-DTE 微觀噪聲與假倒掛；遠月 21 <= DTE <= 60
+                if 5 <= days <= 20 and not near_expiry:
                     near_expiry = exp
-                elif 15 <= days <= 60 and not far_expiry:
+                elif 21 <= days <= 60 and not far_expiry:
                     far_expiry = exp
             except ValueError:
                 continue
@@ -294,7 +297,9 @@ async def _calculate_iv_term_structure(
 
 
 async def fetch_and_calculate_iv_metrics(
-    symbol: str, force_refresh: bool = False
+    symbol: str,
+    force_refresh: bool = False,
+    min_history_records: int = 60,
 ) -> IVMetrics:
     """
     獲取並計算隱含波動率 (IV) 相關指標，包括 IV Rank, IV Percentile, 週預期震盪區間。
@@ -467,47 +472,47 @@ async def fetch_and_calculate_iv_metrics(
         has_macro_event = False
         event_loading_applied = False
 
+        try:
+            from database.calendar_cache import (
+                get_cached_earnings,
+                get_macro_events_between,
+            )
+
+            today_dt = datetime.now().date()
+
+            earnings = get_cached_earnings(symbol)
+            if earnings and earnings.get("earnings_date"):
+                try:
+                    earn_date = datetime.strptime(
+                        earnings["earnings_date"][:10], "%Y-%m-%d"
+                    ).date()
+                    if today_dt <= earn_date <= today_dt + timedelta(days=14):
+                        has_earnings_event = True
+                except Exception:
+                    pass
+
+            start_date_str = today_dt.strftime("%Y-%m-%d")
+            end_date_str = (today_dt + timedelta(days=14)).strftime("%Y-%m-%d")
+            macro_events = get_macro_events_between(start_date_str, end_date_str)
+            for evt in macro_events:
+                event_name = evt.get("event", "").upper()
+                if evt.get("impact", "").upper() == "HIGH" or any(
+                    term in event_name
+                    for term in [
+                        "FOMC",
+                        "INTEREST RATE",
+                        "CPI",
+                        "NFP",
+                        "FED DECISION",
+                    ]
+                ):
+                    has_macro_event = True
+                    break
+        except Exception:
+            pass
+
         # Apply Event Loading Factor (1.4x) if fallback used and event near
         if iv_source in ["STORED_IV", "HV_PROXY"]:
-            try:
-                from database.calendar_cache import (
-                    get_cached_earnings,
-                    get_macro_events_between,
-                )
-
-                today_dt = datetime.now().date()
-
-                earnings = get_cached_earnings(symbol)
-                if earnings and earnings.get("earnings_date"):
-                    try:
-                        earn_date = datetime.strptime(
-                            earnings["earnings_date"][:10], "%Y-%m-%d"
-                        ).date()
-                        if today_dt <= earn_date <= today_dt + timedelta(days=14):
-                            has_earnings_event = True
-                    except Exception:
-                        pass
-
-                start_date_str = today_dt.strftime("%Y-%m-%d")
-                end_date_str = (today_dt + timedelta(days=14)).strftime("%Y-%m-%d")
-                macro_events = get_macro_events_between(start_date_str, end_date_str)
-                for evt in macro_events:
-                    event_name = evt.get("event", "").upper()
-                    if evt.get("impact", "").upper() == "HIGH" or any(
-                        term in event_name
-                        for term in [
-                            "FOMC",
-                            "INTEREST RATE",
-                            "CPI",
-                            "NFP",
-                            "FED DECISION",
-                        ]
-                    ):
-                        has_macro_event = True
-                        break
-            except Exception:
-                pass
-
             if has_earnings_event or has_macro_event:
                 orig = current_iv
                 current_iv = current_iv * 1.4
@@ -537,48 +542,47 @@ async def fetch_and_calculate_iv_metrics(
         except Exception as e:
             logger.error(f"讀取資料庫歷史 IV 失敗: {e}")
 
-        # 5. 取得 1y K-line history 做 HV 代理
+        # 5. 取得 1y K-line history 做 HV 代理 (僅供 Expected Move fallback 使用，嚴禁混入 IV Rank)
         df_hist = await market_data_service.get_history_df(symbol, period="1y")
-        history_map = {}
         if not df_hist.empty:
             df_hist["Log_Ret"] = np.log(df_hist["Close"] / df_hist["Close"].shift(1))
             df_hist["HV_20"] = df_hist["Log_Ret"].rolling(window=20).std() * np.sqrt(
                 252
             )
-            for dt, row in df_hist.iterrows():
-                date_str = dt.strftime("%Y-%m-%d")
-                if not pd.isna(row["HV_20"]):
-                    history_map[date_str] = float(row["HV_20"])
 
-        # 6. 合併 DB 實際 IV 至 history_map
-        for date_str, db_iv in db_ivs.items():
-            history_map[date_str] = db_iv
-
-        # 確保今天的值存在
+        # 6. 計算純 IV 基準視窗 (ISS-06)
+        # 嚴格隔離 HV 與 IV：禁止將已實現歷史波動率 (HV) 混入隱含波動率 (IV) 窗口中。
+        # 由於 VRP (Variance Risk Premium) 恆正，HV 常態顯著小於 IV，混入會使 low_iv 虛低，
+        # 人為放大 IV Rank 達 20%~40%。純以 DB 歷史 IV 計算，若歷史樣本不足 60 天則標註為 None。
+        history_map = dict(db_ivs)
         history_map[today_str] = current_iv
+        pure_iv_values = list(history_map.values())
 
-        history_values = list(history_map.values())
-        if not history_values:
-            history_values = [current_iv]
+        iv_rank: float | None = None
+        iv_percentile: float | None = None
 
-        # 7. 計算 IV Rank
-        low_iv = min(history_values)
-        high_iv = max(history_values)
-        if high_iv > low_iv:
-            iv_rank = ((current_iv - low_iv) / (high_iv - low_iv)) * 100.0
+        if len(pure_iv_values) >= min_history_records:
+            low_iv = min(pure_iv_values)
+            high_iv = max(pure_iv_values)
+            if high_iv > low_iv:
+                iv_rank = ((current_iv - low_iv) / (high_iv - low_iv)) * 100.0
+            else:
+                iv_rank = 50.0
+
+            lower_count = sum(1 for iv in pure_iv_values if iv < current_iv)
+            iv_percentile = (lower_count / len(pure_iv_values)) * 100.0
+            if iv_rank is not None:
+                iv_rank = max(0.0, min(100.0, iv_rank))
+            if iv_percentile is not None:
+                iv_percentile = max(0.0, min(100.0, iv_percentile))
         else:
-            iv_rank = 50.0
+            logger.info(
+                f"[{symbol}] 歷史 IV 樣本不足 {min_history_records} 天 (當前 {len(pure_iv_values)} 筆)，IV Rank/Percentile 處於數據積累期標註為 None。"
+            )
 
-        # 8. 計算 IV Percentile
-        lower_count = sum(1 for iv in history_values if iv < current_iv)
-        iv_percentile = (lower_count / len(history_values)) * 100.0
-
-        # 9. 限制範圍 0.0 - 100.0
-        iv_rank = max(0.0, min(100.0, iv_rank))
-        iv_percentile = max(0.0, min(100.0, iv_percentile))
-
-        # Rule 4: If IV_Rank > 70%, current_iv cannot physically scale down to near-zero levels (<5%).
-        if iv_rank > 70.0 and current_iv < 0.05:
+        # Rule 4: If IV_Rank > 70%, current_iv cannot physically scale down to near-zero levels (<1.0%).
+        # [ISS-14]: 放寬超低波標的 (如短債 ETF BIL、SHY) IV 衝突門檻至 1.0% (0.01)，防範超低波正常定價被誤殺。
+        if iv_rank is not None and iv_rank > 70.0 and current_iv < 0.01:
             raise ValueError(
                 f"Conflict detected: IV Rank is high ({iv_rank:.1f}%) but Implied Volatility is suspiciously low ({current_iv * 100:.1f}%)."
             )
@@ -598,9 +602,8 @@ async def fetch_and_calculate_iv_metrics(
         )
 
         if straddle_em and straddle_em > 0:
+            # 優先採用真實期權市場定價之 Straddle 預期波動 (ISS-11)
             expected_move_weekly = straddle_em
-            if em_from_iv > 0:
-                expected_move_weekly = max(straddle_em, em_from_iv)
         elif em_from_iv > 0:
             expected_move_weekly = em_from_iv
         else:
@@ -621,8 +624,10 @@ async def fetch_and_calculate_iv_metrics(
             )
 
         # 11. 判斷狀態
-        iv_status: Literal["Low", "Normal", "High", "Extreme"]
-        if iv_rank < 30.0:
+        iv_status: Literal["Low", "Normal", "High", "Extreme"] | None
+        if iv_rank is None:
+            iv_status = "Normal"
+        elif iv_rank < 30.0:
             iv_status = "Low"
         elif iv_rank <= 70.0:
             iv_status = "Normal"

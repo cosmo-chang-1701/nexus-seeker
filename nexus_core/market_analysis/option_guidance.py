@@ -8,6 +8,7 @@ option_guidance.py — 期權策略指引與可執行期權合約計畫。
   - build_watchlist_option_plan（完整期權計畫建構）
 """
 
+from datetime import datetime
 import logging
 from typing import Any, Mapping, Optional
 
@@ -271,6 +272,56 @@ async def build_watchlist_option_plan(
     if primary_leg is None or strategy_name is None or premium_type is None:
         return None
 
+    expiry_str = str(primary_leg.get("expiry", ""))
+    is_opex = False
+    if expiry_str:
+        try:
+            exp_dt = datetime.strptime(expiry_str, "%Y-%m-%d").date()
+            if exp_dt.weekday() == 4 and 15 <= exp_dt.day <= 21:
+                is_opex = True
+        except Exception:
+            pass
+
+    # Earnings Jump Risk 跨期防護 (ISSUE-1.6)：
+    # 若合約到期日跨越已知即將公布的財報日，賣方收租暴露於巨大跳空缺口與 IV Crush，
+    # 強制阻斷裸賣方推薦並轉為嚴格 WAIT 計畫。
+    crosses_earnings = False
+    if event_context is not None and event_context.earnings_date and expiry_str:
+        try:
+            earn_dt = datetime.strptime(event_context.earnings_date, "%Y-%m-%d").date()
+            exp_dt = datetime.strptime(expiry_str, "%Y-%m-%d").date()
+            if exp_dt >= earn_dt and (
+                event_context.earnings_tte_hours is None
+                or event_context.earnings_tte_hours > 0
+            ):
+                crosses_earnings = True
+        except Exception:
+            pass
+
+    if (
+        not event_lock
+        and crosses_earnings
+        and premium_type == "credit"
+        and event_context is not None
+    ):
+        jump_reason = (
+            f"🛑 【Earnings Jump Risk 財報跳空風控】：候選合約到期日 ({expiry_str}) 跨越財報公布日 "
+            f"({event_context.earnings_date})，賣方收租暴露於巨大跳空與 IV 不對稱風險，期權計畫轉為嚴格 WAIT 狀態。"
+            f" {event_context.summary}"
+        )
+        return WatchlistOptionPlan(
+            strategy_name=f"WAIT ({strategy_name} 跨越財報日，防範跳空風險)",
+            premium_type="credit",
+            estimated_net_premium=0.0,
+            suggested_contracts=0,
+            max_risk_amount=0.0,
+            rationale=jump_reason,
+            stock_action=f"⚠️ 合約跨越財報日 ({event_context.earnings_date})，禁開賣方收租合約。",
+            legs=[],
+            is_opex=is_opex,
+            crosses_earnings=True,
+        )
+
     # Option pricing and liquidity verification (Guideline Four)
     # Formula: OTM Call Premium << |Strike - Spot|
     # Also verify contradictions where IV Rank is 0.0% but OTM Call Premium is extremely expensive
@@ -306,6 +357,8 @@ async def build_watchlist_option_plan(
             rationale="⚠️ 【期權鏈流動性不足，點差過大，拒絕路由】",
             stock_action="⚠️ 【期權鏈流動性不足，點差過大，拒絕路由】",
             legs=[],
+            is_opex=is_opex,
+            crosses_earnings=crosses_earnings,
         )
 
     legs = [
@@ -347,6 +400,9 @@ async def build_watchlist_option_plan(
         f"依據 {strategy_name} 路由，結合 IV Rank {iv_rank_text}、"
         f"Skew {skew_text} 與當前技術位階自動選約。"
     )
+    if is_opex:
+        rationale = f"🏛️ 【月度 OPEX 結算日】：合約到期日 {expiry_str} 為月度期權結算日，請注意盤中結算波動放大。\n{rationale}"
+
     if event_context is not None and event_context.risk_mode != "normal":
         rationale = f"{rationale} {event_context.summary}"
 
@@ -385,6 +441,8 @@ async def build_watchlist_option_plan(
             rationale=lock_reason,
             stock_action=stock_action,
             legs=[],
+            is_opex=is_opex,
+            crosses_earnings=crosses_earnings,
         )
     return WatchlistOptionPlan(
         strategy_name=strategy_name,
@@ -395,4 +453,6 @@ async def build_watchlist_option_plan(
         rationale=rationale,
         stock_action=stock_action,
         legs=legs,
+        is_opex=is_opex,
+        crosses_earnings=crosses_earnings,
     )

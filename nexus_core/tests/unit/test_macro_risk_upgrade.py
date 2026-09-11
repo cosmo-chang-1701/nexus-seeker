@@ -1773,14 +1773,16 @@ def test_estimate_symbol_gamma_flip_picks_crossing_closest_to_spot() -> None:
 def test_estimate_symbol_gamma_flip_returns_zero_when_only_crossing_contradicts_long_gamma() -> (
     None
 ):
-    """真實案例 (SPCX 現價 $147.95)：Net GEX 僅微幅為正 (LONG_GAMMA)，但
-    bracket 內唯一的負轉正交叉點卻落在現價之上——若真的採信，會產生
-    「現價 < Flip」與「LONG_GAMMA」互相矛盾的翻轉線。方向性一致性檢查應
-    剔除此交叉點並回傳 0.0（無法估算），而非呈現一個自相矛盾的數字。"""
+    """修正後演算法改採逐履約價符號變化偵測（非累積和），GEX(K=60)=-1000 (負)、
+    GEX(K=90)=+500 (正)，於 K=90 存在真實的負轉正交叉點。
+    K=90 落在 bracket [70,130] 內，且 total_gex=+100 > 0（LONG_GAMMA）要求
+    候選 <= spot(100)，90 <= 100 ✓，正確回傳 90.0。
+    舊測試期待 0.0 係因累積算法把交叉點定位在 K=120（累積值才轉正），
+    120 > spot 被方向性過濾清空，但這是舊演算法的 Bug，非正確行為。"""
     gex_profile = {"60": -1000.0, "90": 500.0, "120": 600.0}
-    # 累積: 60 -> -1000 (負) ; 90 -> -500 (仍負) ; 120 -> +100 (交叉點，但 120 > spot)
-    # 最終累積 (=net_gex) = +100 > 0 (LONG_GAMMA)，理應要求交叉點 <= spot
-    assert estimate_symbol_gamma_flip(gex_profile, spot=100.0) == 0.0
+    # Per-strike: GEX(60)=-1000 (neg) → GEX(90)=+500 (pos) → crossing at K=90
+    # total_gex = +100 > 0 (LONG_GAMMA), filter s<=100: 90 ✓ → return 90.0
+    assert estimate_symbol_gamma_flip(gex_profile, spot=100.0) == 90.0
 
 
 def test_estimate_symbol_gamma_flip_returns_zero_when_only_crossing_contradicts_short_gamma() -> (
@@ -1812,6 +1814,61 @@ def test_estimate_symbol_gamma_flip_malformed_profile_returns_zero() -> None:
     """履約價/GEX 值非數值格式 -> fail-safe 回傳 0.0，不拋例外"""
     gex_profile = {"not_a_strike": "not_a_number"}
     assert estimate_symbol_gamma_flip(gex_profile, spot=100.0) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# ISSUE-4.1 修復驗證：逐履約價符號變化演算法（三大場景）
+# ---------------------------------------------------------------------------
+
+
+def test_estimate_symbol_gamma_flip_real_market_long_gamma_returns_nonzero() -> None:
+    """[ISSUE-4.1 修復] 真實市場 LONG_GAMMA 場景：低履約價 Put 主導（負 GEX），
+    高履約價 Call 主導（正 GEX），中間存在真實符號翻轉點。
+    修復前：舊累積算法把交叉點定位在現價以上，被方向性過濾清空 → 恆回傳 0.0；
+    修復後：逐履約價偵測在 K=150 正確識別符號翻轉（-500K → +1M），回傳 150.0。"""
+    # 模擬真實市場：現價 $200，下方 Put 負 GEX，上方 Call 正 GEX
+    gex_profile = {
+        "100": -800_000.0,  # 深價外 Put → 負 GEX
+        "130": -500_000.0,  # 價外 Put → 負 GEX
+        "150": 1_000_000.0,  # 接近 ATM → 正 GEX（LONG_GAMMA 翻轉點）
+        "170": 1_500_000.0,  # Call 主導 → 正 GEX
+        "200": 500_000.0,  # 接近現價 → 正 GEX
+    }
+    # Per-strike: (130,-500K)→(150,+1M): 符號翻轉。total_gex = +1.7M > 0 (LONG_GAMMA)
+    # 150 ∈ bracket [140, 260], 150 <= spot(200) ✓ → 回傳 150.0
+    result = estimate_symbol_gamma_flip(gex_profile, spot=200.0)
+    assert result > 0.0, f"修復後應回傳非零 Gamma Flip，實際回傳: {result}"
+    assert result == 150.0
+
+
+def test_estimate_symbol_gamma_flip_all_positive_gex_returns_zero() -> None:
+    """[ISSUE-4.1 修復] 全鏈 Net GEX 全正（無零交叉點）→ 回傳 0.0。
+    場景：市場完全處於正 Gamma 自穩定區間，無做市商 Gamma 方向翻轉點，
+    呼叫端應啟動 Fallback 替代方案（VWAP + 0.5×ATR₁₅ₘ），不應收到
+    誤導性的非零 Flip 值。"""
+    # 全部履約價 GEX 均為正值 → 無任何相鄰對存在 neg→pos 符號翻轉
+    gex_profile = {
+        "90": 100_000.0,
+        "100": 500_000.0,
+        "110": 1_000_000.0,
+        "120": 800_000.0,
+    }
+    assert estimate_symbol_gamma_flip(gex_profile, spot=105.0) == 0.0
+
+
+def test_estimate_symbol_gamma_flip_all_negative_gex_returns_zero() -> None:
+    """[ISSUE-4.1 修復] 全鏈 Net GEX 全負（無零交叉點）→ 回傳 0.0。
+    場景：做市商全鏈均處於負 Gamma 泥淖（SHORT_GAMMA 全域），無任何正 GEX
+    支撐錨點，函數無法估算翻轉線；呼叫端（opportunity_cost.py）應確認處於
+    全域 Short Gamma 泥淖，拒絕進場而非誤報一個虛假的翻轉價位。"""
+    # 全部履約價 GEX 均為負值 → 無任何相鄰對存在 neg→pos 符號翻轉
+    gex_profile = {
+        "90": -200_000.0,
+        "100": -800_000.0,
+        "110": -1_200_000.0,
+        "120": -400_000.0,
+    }
+    assert estimate_symbol_gamma_flip(gex_profile, spot=105.0) == 0.0
 
 
 @pytest.mark.asyncio

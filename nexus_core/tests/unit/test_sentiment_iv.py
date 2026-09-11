@@ -78,7 +78,7 @@ async def test_fetch_and_calculate_iv_metrics_success() -> None:
         mock_ticker_instance.info = mock_info
         m_ticker.return_value = mock_ticker_instance
 
-        # Calculate
+        # Calculate (with default min_history_records=60, empty DB returns None for iv_rank)
         metrics = await SentimentEngine.fetch_and_calculate_iv_metrics(symbol)
 
         assert isinstance(metrics, IVMetrics)
@@ -87,9 +87,23 @@ async def test_fetch_and_calculate_iv_metrics_success() -> None:
         assert metrics.expected_move_weekly == pytest.approx(
             100.0 * 0.40 * math.sqrt(7.0 / 365.0)
         )
-        assert 0.0 <= metrics.iv_rank <= 100.0  # type: ignore
-        assert 0.0 <= metrics.iv_percentile <= 100.0  # type: ignore
-        assert metrics.iv_status in ["Low", "Normal", "High", "Extreme"]
+        assert metrics.iv_rank is None
+        assert metrics.iv_percentile is None
+        assert metrics.iv_status == "Normal"
+
+        # When min_history_records=1, can calculate rank from single record
+        _iv_cache.clear()
+        metrics_single = await SentimentEngine.fetch_and_calculate_iv_metrics(
+            symbol, min_history_records=1
+        )
+        assert (
+            metrics_single.iv_rank is not None
+            and 0.0 <= metrics_single.iv_rank <= 100.0
+        )
+        assert (
+            metrics_single.iv_percentile is not None
+            and 0.0 <= metrics_single.iv_percentile <= 100.0
+        )
 
 
 @pytest.mark.asyncio
@@ -257,7 +271,8 @@ async def test_fetch_and_calculate_iv_metrics_fallback_hv() -> None:
 
         assert metrics.current_iv > 0.0
         assert metrics.expected_move_weekly > 0.0
-        assert metrics.iv_rank >= 0.0
+        # [ISS-06] When only HV fallback is used and DB has no IV data, iv_rank is None
+        assert metrics.iv_rank is None
 
 
 @pytest.mark.asyncio
@@ -379,7 +394,9 @@ async def test_iv_rank_and_percentile_math() -> None:
         mock_ticker_instance.info = mock_info
         m_ticker.return_value = mock_ticker_instance
 
-        metrics = await SentimentEngine.fetch_and_calculate_iv_metrics(symbol)
+        metrics = await SentimentEngine.fetch_and_calculate_iv_metrics(
+            symbol, min_history_records=1
+        )
 
         assert metrics.iv_rank == pytest.approx(50.0)
         assert metrics.iv_percentile == pytest.approx(40.0)
@@ -391,7 +408,9 @@ async def test_iv_rank_and_percentile_math() -> None:
         # Status should be "Low"
         mock_ticker_instance.info = {"impliedVolatility": 0.25}
         _iv_cache.clear()
-        metrics_low = await SentimentEngine.fetch_and_calculate_iv_metrics(symbol)
+        metrics_low = await SentimentEngine.fetch_and_calculate_iv_metrics(
+            symbol, min_history_records=1
+        )
         assert metrics_low.iv_status == "Low"
 
         # Test status boundary high (70 to 90)
@@ -400,7 +419,9 @@ async def test_iv_rank_and_percentile_math() -> None:
         # Status should be "High"
         mock_ticker_instance.info = {"impliedVolatility": 0.52}
         _iv_cache.clear()
-        metrics_high = await SentimentEngine.fetch_and_calculate_iv_metrics(symbol)
+        metrics_high = await SentimentEngine.fetch_and_calculate_iv_metrics(
+            symbol, min_history_records=1
+        )
         assert metrics_high.iv_status == "High"
 
         # Test status boundary extreme (> 90)
@@ -409,7 +430,9 @@ async def test_iv_rank_and_percentile_math() -> None:
         # Status should be "Extreme"
         mock_ticker_instance.info = {"impliedVolatility": 0.58}
         _iv_cache.clear()
-        metrics_extreme = await SentimentEngine.fetch_and_calculate_iv_metrics(symbol)
+        metrics_extreme = await SentimentEngine.fetch_and_calculate_iv_metrics(
+            symbol, min_history_records=1
+        )
         assert metrics_extreme.iv_status == "Extreme"
 
     # Clean up DB
@@ -499,7 +522,9 @@ async def test_fetch_and_calculate_iv_metrics_premarket_success() -> None:
         m_hist.return_value = pd.DataFrame()  # empty to rely on DB values
 
         _iv_cache.clear()
-        metrics = await SentimentEngine.fetch_and_calculate_iv_metrics(symbol)
+        metrics = await SentimentEngine.fetch_and_calculate_iv_metrics(
+            symbol, min_history_records=1
+        )
 
         assert isinstance(metrics, IVMetrics)
         assert metrics.symbol == symbol

@@ -143,8 +143,8 @@ async def test_net_gex_and_gex_profile_unchanged_sign_convention() -> None:
     t = 7.0 / 365.0
     gamma_call = gex_scraper._calculate_gamma(100.0, 105.0, t, 0.04, 0.20)
     gamma_put = gex_scraper._calculate_gamma(100.0, 95.0, t, 0.04, 0.20)
-    expected_call_gex = 300 * gamma_call * 100.0 * 100.0
-    expected_put_gex = 400 * gamma_put * 100.0 * 100.0
+    expected_call_gex = 300 * 100.0 * gamma_call * 100.0 * 100.0
+    expected_put_gex = 400 * 100.0 * gamma_put * 100.0 * 100.0
     expected_net = expected_call_gex - expected_put_gex
 
     assert result["net_gex"] == pytest.approx(round(expected_net, 2), abs=0.05)
@@ -181,3 +181,42 @@ async def test_noise_filter_failsafe_keeps_side_when_all_contracts_are_low_delta
     )
     result = await gex_scraper.scrape_symbol_gex_core("TEST", _FakeBrowser(html))
     assert result["call_wall"] == 400.0
+
+
+def test_bsm_merton_dividend_yield_correction() -> None:
+    """ISSUE-4.3: 驗證連續股息率 q 對 Gamma 與 Delta 的校正作用。"""
+    S, K, t, r, sigma = 100.0, 100.0, 0.5, 0.04, 0.25
+    gamma_no_div = gex_scraper._calculate_gamma(S, K, t, r, sigma, q=0.0)
+    gamma_with_div = gex_scraper._calculate_gamma(S, K, t, r, sigma, q=0.03)
+
+    assert gamma_no_div > 0
+    assert gamma_with_div > 0
+    # continuous dividend discount e^(-q*t) reduces gamma for ATM options
+    assert gamma_with_div < gamma_no_div
+
+    delta_call_no_div = gex_scraper._calculate_delta(
+        S, K, t, r, sigma, is_call=True, q=0.0
+    )
+    delta_call_with_div = gex_scraper._calculate_delta(
+        S, K, t, r, sigma, is_call=True, q=0.03
+    )
+    assert delta_call_with_div < delta_call_no_div
+
+
+async def test_scrape_symbol_gex_core_with_dividend_yield() -> None:
+    """ISSUE-4.3: 驗證傳入 dividend_yield 時 GEX 計算正確代入 q。"""
+    html = _make_html(
+        spot=100.0,
+        call_rows=[_row("TESTC1", 100.0, 500, 20)],
+        put_rows=[_row("TESTP1", 100.0, 500, 20)],
+    )
+    result = await gex_scraper.scrape_symbol_gex_core(
+        "TEST", _FakeBrowser(html), risk_free_rate=0.04, dividend_yield=0.03
+    )
+    t = 7.0 / 365.0
+    gamma = gex_scraper._calculate_gamma(100.0, 100.0, t, 0.04, 0.20, q=0.03)
+    expected_gex = 500 * 100.0 * gamma * 100.0 * 100.0
+    assert expected_gex > 0
+    assert result["gex_profile"][100.0] == pytest.approx(0.0, abs=1.0)
+    assert result["call_wall"] == 100.0
+    assert result["put_wall"] == 100.0

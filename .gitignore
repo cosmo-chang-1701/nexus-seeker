@@ -67,3 +67,6 @@ desktop.ini
 *.log
 nexus_core/data/yfinance_cache/
 .antigravitycli/
+ORIGINAL_REQUEST.md
+.agents/*
+!.agents/AGENTS.md

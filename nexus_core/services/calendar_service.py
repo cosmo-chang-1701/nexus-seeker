@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import List, Optional, Union, Tuple, Any
 from zoneinfo import ZoneInfo
 
@@ -21,6 +21,8 @@ ny_tz = ZoneInfo("America/New_York")
 logger = logging.getLogger(__name__)
 
 
+# ==========================================
+# Data Models
 # ==========================================
 
 
@@ -63,6 +65,8 @@ class EarningsEvent(CalendarEvent):
     type: str = "EARNINGS"
     symbol: str
     date: str  # YYYY-MM-DD
+    hour: Optional[str] = None  # bmo, amc, dmh
+    is_released: bool = False
 
     @field_validator("date")
     @classmethod
@@ -109,10 +113,21 @@ class CalendarService:
         if not raw_ts:
             return False
         try:
-            checked_at = datetime.fromisoformat(raw_ts.replace(" ", "T"))
+            ts_str = raw_ts.replace(" ", "T")
+            if (
+                not ts_str.endswith("Z")
+                and "+" not in ts_str
+                and "-" not in ts_str[10:]
+            ):
+                # SQLite CURRENT_TIMESTAMP is UTC without timezone offset
+                ts_str += "+00:00"
+            checked_at = datetime.fromisoformat(ts_str)
         except ValueError:
             return False
-        return checked_at >= datetime.now() - timedelta(hours=max_age_hours)
+        from datetime import timezone
+
+        now_utc = datetime.now(timezone.utc)
+        return checked_at >= now_utc - timedelta(hours=max_age_hours)
 
     def _iter_month_keys(self, start_date: date, end_date: date) -> list[str]:
         cursor = date(start_date.year, start_date.month, 1)
@@ -134,30 +149,43 @@ class CalendarService:
         month_end = next_month - timedelta(days=1)
         return month_start.isoformat(), month_end.isoformat()
 
-    def _extract_next_earnings_date(
+    def _extract_next_earnings_info(
         self, entries: list[dict[str, object]] | None
-    ) -> Optional[date]:
+    ) -> tuple[Optional[date], Optional[str]]:
         if not entries:
-            return None
+            return None, None
 
         today = datetime.now(ny_tz).date()
-        parsed_dates: list[date] = []
+        parsed_entries: list[tuple[date, Optional[str]]] = []
         for entry in entries:
             raw_date = entry.get("date")
             if not raw_date or not isinstance(raw_date, str):
                 continue
             try:
-                parsed_dates.append(date.fromisoformat(raw_date))
+                d = date.fromisoformat(raw_date)
+                raw_hour = entry.get("hour")
+                h_str = (
+                    str(raw_hour).strip().lower()
+                    if raw_hour and isinstance(raw_hour, str)
+                    else None
+                )
+                parsed_entries.append((d, h_str))
             except ValueError:
                 continue
 
-        if not parsed_dates:
-            return None
+        if not parsed_entries:
+            return None, None
 
-        for item in parsed_dates:
-            if item >= today:
-                return item
-        return parsed_dates[-1]
+        for item_date, item_hour in parsed_entries:
+            if item_date >= today:
+                return item_date, item_hour
+        return parsed_entries[-1]
+
+    def _extract_next_earnings_date(
+        self, entries: list[dict[str, object]] | None
+    ) -> Optional[date]:
+        d, _ = self._extract_next_earnings_info(entries)
+        return d
 
     async def _ensure_macro_month_cached(
         self, month_key: str, force_fresh: bool = True, force_fetch: bool = False
@@ -364,35 +392,51 @@ class CalendarService:
             return []
 
     def _build_earnings_event(
-        self, symbol: str, earnings_date: date
+        self, symbol: str, earnings_date: date, hour: Optional[str] = None
     ) -> Optional[EarningsEvent]:
-        """依「現在」重新計算 tte_hours 並組出 EarningsEvent。
+        """依「現在」與財報公布時段 (bmo/amc/dmh) 重新計算 tte_hours 並組出 EarningsEvent。
 
-        `tte_hours` 本質上是時間的函式，不該被快取——`_earnings_cache` 是純 LRU
-        (`services/bounded_cache.py`)、沒有任何 TTL，過去這裡快取的是算好的
-        `EarningsEvent`，命中時直接回傳且不做新鮮度檢查，導致倒數在進程生命週期內
-        永遠凍結（心跳的「🗓️ 事件風控」會無限顯示同一個倒數，且
-        `_resolve_watchlist_event_mode` 會鎖死在 event-lock / earnings-guard）。
-        現在快取的是財報「日期」這個緩慢變動的事實，每次呼叫重算倒數。
+        Finnhub 回傳 hour 欄位：
+        - bmo: Before Market Open，錨定美東 08:30。若美東開盤後 (>= 08:30)，
+          財報已發布並定價完畢，is_released=True，解除 event-lock。
+        - amc: After Market Close，錨定美東 16:30。盤中 (09:30-16:00 ET) 維持
+          精確分鐘級倒數 (tte_hours > 0)，維持 event-lock 封鎖；16:30 後 is_released=True。
+        - dmh: During Market Hours，錨定美東 12:00。
+        - 未知/None: 盤中採保守防禦，錨定 16:30 (AMC)。
         """
-        next_dt = datetime.combine(earnings_date, datetime.min.time()).replace(
-            tzinfo=ny_tz
-        )
-        tte_hours = (next_dt - datetime.now(ny_tz)).total_seconds() / 3600
+        now = datetime.now(ny_tz)
+        today = now.date()
 
-        # 錨點是財報當日的 00:00 ET，因此在財報當天 tte_hours 整個交易時段都是
-        # 負值（13:30 ET 時約 -13.5）。而 `_resolve_watchlist_event_mode()` 要求
-        # `0 < earnings_tte_hours` 才會進入 event-lock / earnings-guard，等於在
-        # 最需要防護的當天反而降級為 normal——賣方期權的 event-lock 封鎖會失效。
-        # 過去這個問題被「快取凍結住一個陳舊但為正的倒數」意外遮住了。
-        # 財報日當天（或更晚才被查到）一律夾為極小正值，維持風控處於鎖定狀態。
-        if tte_hours <= 0.0:
-            tte_hours = 0.1
+        norm_hour = hour.strip().lower() if hour and isinstance(hour, str) else None
+        if norm_hour == "bmo":
+            target_time = time(8, 30)
+        elif norm_hour == "amc":
+            target_time = time(16, 30)
+        elif norm_hour == "dmh":
+            target_time = time(12, 0)
+        else:
+            # 未知/None 時：若為當天採保守防禦 (16:30 AMC)，未來日期錨定 00:00
+            target_time = (
+                time(16, 30) if earnings_date == today else datetime.min.time()
+            )
+
+        next_dt = datetime.combine(earnings_date, target_time).replace(tzinfo=ny_tz)
+        tte_hours = (next_dt - now).total_seconds() / 3600.0
+
+        is_released = False
+        if earnings_date < today:
+            is_released = True
+        elif earnings_date == today:
+            if now >= next_dt:
+                is_released = True
+
         try:
             return EarningsEvent(
                 symbol=symbol,
                 date=earnings_date.strftime("%Y-%m-%d"),
+                hour=norm_hour,
                 tte_hours=round(tte_hours, 1),
+                is_released=is_released,
             )
         except Exception as ve:
             logger.warning(f"Skipping malformed earnings event for {symbol}: {ve}")
@@ -403,20 +447,26 @@ class CalendarService:
         Get the next earnings date for a specific symbol.
         """
         symbol = symbol.upper()
-        # 快取內容是財報日期字串（或 None 代表「已查過、目前無財報」），
+        # 快取內容是財報日期與時段字典（或 None 代表「已查過、目前無財報」），
         # 不是算好的 EarningsEvent——原因見 _build_earnings_event 的 docstring。
         if symbol in self._earnings_cache:
-            cached_date_str = self._earnings_cache[symbol]
-            if cached_date_str is None:
+            cached_val = self._earnings_cache[symbol]
+            if cached_val is None:
                 return None
+            if isinstance(cached_val, dict):
+                cached_date_str = cached_val.get("date")
+                cached_hour = cached_val.get("hour")
+            else:
+                cached_date_str = cached_val
+                cached_hour = None
             try:
                 cached_day = datetime.strptime(str(cached_date_str), "%Y-%m-%d").date()
             except ValueError:
                 del self._earnings_cache[symbol]
             else:
-                # 財報日已過就讓快取失效，重新向上游取下一次財報日。
+                # 財報日未過（或當日）皆可重算即時倒數
                 if cached_day >= datetime.now(ny_tz).date():
-                    return self._build_earnings_event(symbol, cached_day)
+                    return self._build_earnings_event(symbol, cached_day, cached_hour)
                 del self._earnings_cache[symbol]
 
         try:
@@ -429,6 +479,7 @@ class CalendarService:
                 or not self._cold_start_complete
             ):
                 cached_date = cached.get("earnings_date")
+                cached_hour = cached.get("hour")
                 if not cached_date:
                     self._earnings_cache[symbol] = None
                     return None
@@ -438,21 +489,30 @@ class CalendarService:
                     parsed_cached = None
 
                 if parsed_cached is not None and parsed_cached >= today:
-                    self._earnings_cache[symbol] = parsed_cached.strftime("%Y-%m-%d")
-                    return self._build_earnings_event(symbol, parsed_cached)
+                    self._earnings_cache[symbol] = {
+                        "date": parsed_cached.strftime("%Y-%m-%d"),
+                        "hour": cached_hour,
+                    }
+                    return self._build_earnings_event(
+                        symbol, parsed_cached, cached_hour
+                    )
 
             raw_entries = await market_data_service.get_earnings_calendar(symbol)
-            next_date = self._extract_next_earnings_date(raw_entries)
+            next_date, next_hour = self._extract_next_earnings_info(raw_entries)
             await asyncio.to_thread(
                 save_earnings_cache,
                 symbol,
                 next_date.strftime("%Y-%m-%d") if next_date else None,
+                next_hour,
             )
 
             if next_date is not None:
-                earnings_info = self._build_earnings_event(symbol, next_date)
+                earnings_info = self._build_earnings_event(symbol, next_date, next_hour)
                 if earnings_info is not None:
-                    self._earnings_cache[symbol] = next_date.strftime("%Y-%m-%d")
+                    self._earnings_cache[symbol] = {
+                        "date": next_date.strftime("%Y-%m-%d"),
+                        "hour": next_hour,
+                    }
                     return earnings_info
             else:
                 self._earnings_cache[symbol] = None
@@ -476,7 +536,9 @@ class CalendarService:
     ) -> Optional[EconomicEvent]:
         events = await self.get_high_impact_events(days=days)
         for event in sorted(events, key=lambda item: item.tte_hours):
-            if event.tte_hours <= 0:
+            # 放寬篩選條件至 tte_hours >= -2.0 (ISSUE-1.4)：重大事件發布後 2 小時冷卻期內
+            # （如 FOMC 決策發布後鮑爾記者會與市場劇烈消化期）持續保留事件，避免風控防線過點瞬間裸奔。
+            if event.tte_hours < -2.0:
                 continue
             if max_tte_hours is not None and event.tte_hours > max_tte_hours:
                 continue

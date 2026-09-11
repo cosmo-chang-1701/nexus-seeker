@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import math
 from datetime import datetime
 from typing import Any, Dict, Optional
 
@@ -270,11 +271,21 @@ async def build_enhanced_watchlist_metrics(
     if current_price <= 0.0 and not df_stock.empty:
         current_price = float(df_stock["Close"].iloc[-1])
 
-    # 1. Vol POC (Volume Point of Control) via SQLite cache fallback
+    # 1. Vol POC (Volume Point of Control) and LVN via volume profile
     volume_poc = 0.0
+    volume_lvn = None
     if not df_stock.empty and len(df_stock) >= 60:
         try:
-            volume_poc = max(_estimate_volume_poc(df_stock), 0.01)
+            from market_analysis.volume_profile import calculate_volume_profile_from_df
+
+            vp_dict = calculate_volume_profile_from_df(
+                df_stock, days=20, is_hourly=False
+            )
+            if vp_dict:
+                volume_poc = max(vp_dict.get("hvn", 0.0), 0.01)
+                volume_lvn = vp_dict.get("lvn")
+            else:
+                volume_poc = max(_estimate_volume_poc(df_stock), 0.01)
             await save_cached_volume_poc(symbol, volume_poc)
         except Exception as e:
             logger.warning(f"Error calculating Vol POC for {symbol}: {e}")
@@ -282,8 +293,9 @@ async def build_enhanced_watchlist_metrics(
         cached_poc = get_cached_volume_poc(symbol)
         volume_poc = cached_poc if cached_poc else current_price
 
-    # 2. GEX PutWall via SQLite cache fallback
+    # 2. GEX PutWall and CallWall via SQLite cache fallback
     gex_max_put_wall = None
+    gex_max_call_wall = None
     vanna_sensitivity = None
     try:
         from market_analysis.index_microstructure import fetch_symbol_gex_metrics
@@ -291,6 +303,7 @@ async def build_enhanced_watchlist_metrics(
         gex_data = await fetch_symbol_gex_metrics(symbol)
         if gex_data:
             gex_max_put_wall = gex_data.get("put_wall", 0.0)
+            gex_max_call_wall = gex_data.get("call_wall", 0.0)
             vanna_sensitivity = 0.0
         if gex_max_put_wall is not None and gex_max_put_wall > 0.0:
             await save_cached_gex_putwall(symbol, gex_max_put_wall)
@@ -317,8 +330,10 @@ async def build_enhanced_watchlist_metrics(
     # 讓下游既有的 `if atr > 0` 分支行為維持不變（只是緩衝仍近似於零）。
     if atr_14_calc > 0.0:
         atr_14 = atr_14_calc
+        atr_15m_calc: Optional[float] = round(atr_14_calc / math.sqrt(26.0), 4)
     else:
         atr_14 = 0.01
+        atr_15m_calc = None
         logger.warning(
             f"[{symbol}] 日線 ATR(14) 資料不足或計算失敗，沿用 0.01 佔位值。"
         )
@@ -413,6 +428,7 @@ async def build_enhanced_watchlist_metrics(
         pe_outlier_warning=pe_outlier_warning,
         rsi_14=rsi_14,
         atr_14=atr_14,
+        atr_15m=atr_15m_calc,
         beta=beta,
         ma20=ma20,
         ma50=ma50,
@@ -440,7 +456,9 @@ async def build_enhanced_watchlist_metrics(
         if pcr_metrics and (pcr_val := pcr_metrics.get("pcr")) is not None
         else None,
         volume_poc=volume_poc,
+        volume_lvn=volume_lvn,
         gex_max_put_wall=gex_max_put_wall,
+        gex_max_call_wall=gex_max_call_wall,
         vanna_sensitivity=vanna_sensitivity,
         relative_strength_spy=relative_strength_spy,
         iv_source=iv_metrics.iv_source if iv_metrics else "UNAVAILABLE",

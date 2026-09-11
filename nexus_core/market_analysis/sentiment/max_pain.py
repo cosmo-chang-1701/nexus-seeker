@@ -21,17 +21,24 @@ logger = logging.getLogger(__name__)
 _MARKET_CACHE_MAX_AGE_SECONDS = 6 * 3600
 
 
-def _current_week_friday() -> date:
-    """取得本週五日期。若今天已過週五（週六/週日）或今天是週五且已收盤（美東時間 16:00 後），則取下週五。
-    若該週五是 NYSE 交易休假日，則向前調整至該週四。
+def _current_week_friday(now_dt: Optional[datetime] = None) -> date:
+    """取得結算痛點之目標週五日期。
+    [ISS-07]：若今天是週五（含盤中 0-DTE，避免痛點釘住現價退化為內含價值）或已過週五（週六/週日），
+    則向前滾動至下週五，維持前瞻性週度戰術錨點功能。週一至週四則鎖定當週五。
+    若目標週五為 NYSE 交易休假日，則向前調整至該週四。
     """
-    now_ny = datetime.now(ny_tz)
+    if now_dt is None:
+        now_ny = datetime.now(ny_tz)
+    else:
+        if now_dt.tzinfo is None:
+            now_ny = now_dt.replace(tzinfo=ny_tz)
+        else:
+            now_ny = now_dt.astimezone(ny_tz)
+
     today = now_ny.date()
     weekday = today.weekday()
-    if weekday > 4:  # Saturday or Sunday
+    if weekday >= 4:  # Friday, Saturday, or Sunday -> roll forward to next Friday
         days_ahead = 4 - weekday + 7
-    elif weekday == 4 and now_ny.hour >= 16:  # Friday after market close (16:00 ET)
-        days_ahead = 7
     else:
         days_ahead = 4 - weekday
 
@@ -50,10 +57,10 @@ def _current_week_friday() -> date:
 
 
 def _calculate_max_pain_with_weights(  # type: ignore
-    option_chain: Any, weight_key: Any = "volume", spot_price: Any = None
+    option_chain: Any, weight_key: str = "openInterest", spot_price: Any = None
 ):
     """
-    Helper function to calculate Max Pain based on custom weight key (e.g. 'volume' or 'openInterest').
+    Helper function to calculate Max Pain based on custom weight key (defaults to 'openInterest').
     """
     calls = (
         option_chain.calls.copy() if option_chain.calls is not None else pd.DataFrame()
@@ -115,28 +122,58 @@ def _calculate_max_pain_with_weights(  # type: ignore
         if not strikes:
             strikes = sorted(list(set(calls["strike"]) | set(puts["strike"])))
 
-    # Calculate pains
-    pains = []
-    for s in strikes:
-        call_sub = calls[calls["strike"] < s]
-        call_pain = (
-            (call_sub[weight_key] * (s - call_sub["strike"])).sum()
-            if not call_sub.empty
-            else 0.0
-        )
+    # Calculate pains using O(N) Prefix Sums (ISS-10 & Appendix A.3)
+    # 建立 Call / Put 的 OI 與 Strike*OI 前綴和，取代 O(N^2) 的 DataFrame 重複布林切片
+    call_oi_map: dict[float, float] = (
+        calls.groupby("strike")[weight_key].sum().to_dict()
+        if not calls.empty and "strike" in calls.columns and weight_key in calls.columns
+        else {}
+    )
+    put_oi_map: dict[float, float] = (
+        puts.groupby("strike")[weight_key].sum().to_dict()
+        if not puts.empty and "strike" in puts.columns and weight_key in puts.columns
+        else {}
+    )
 
-        put_sub = puts[puts["strike"] > s]
-        put_pain = (
-            (put_sub[weight_key] * (put_sub["strike"] - s)).sum()
-            if not put_sub.empty
-            else 0.0
-        )
+    n_strikes = len(strikes)
+    call_oi = [float(call_oi_map.get(k, 0.0)) for k in strikes]
+    call_prod = [float(k) * call_oi[i] for i, k in enumerate(strikes)]
+    put_oi = [float(put_oi_map.get(k, 0.0)) for k in strikes]
+    put_prod = [float(k) * put_oi[i] for i, k in enumerate(strikes)]
 
+    # A[m] = sum_{0..m-1} call_oi, B[m] = sum_{0..m-1} call_prod
+    # C[m] = sum_{0..m-1} put_oi,  D[m] = sum_{0..m-1} put_prod
+    A = [0.0] * (n_strikes + 1)
+    B = [0.0] * (n_strikes + 1)
+    C = [0.0] * (n_strikes + 1)
+    D = [0.0] * (n_strikes + 1)
+
+    for i in range(n_strikes):
+        A[i + 1] = A[i] + call_oi[i]
+        B[i + 1] = B[i] + call_prod[i]
+        C[i + 1] = C[i] + put_oi[i]
+        D[i + 1] = D[i] + put_prod[i]
+
+    pains: list[float] = []
+    for m in range(n_strikes):
+        k_m = strikes[m]
+        call_pain = k_m * A[m] - B[m]
+        put_pain = (D[n_strikes] - D[m + 1]) - k_m * (C[n_strikes] - C[m + 1])
         pains.append(call_pain + put_pain)
 
     if not pains:
         return 0.0
-    return strikes[pains.index(min(pains))]
+
+    min_pain = min(pains)
+    # 平原期防向下系統性偏差 (ISS-10)：若存在多個相等最小痛點履約價，選取距離現價最近者
+    candidate_indices = [
+        i for i, p in enumerate(pains) if abs(p - min_pain) <= 1e-5 or p == min_pain
+    ]
+    candidate_strikes = [strikes[i] for i in candidate_indices]
+
+    if spot_price and spot_price > 0.0:
+        return min(candidate_strikes, key=lambda s: abs(s - spot_price))
+    return candidate_strikes[len(candidate_strikes) // 2]
 
 
 async def get_unified_max_pain(
@@ -285,10 +322,12 @@ async def get_unified_max_pain(
             if "expiry" in mp_res and mp_res["expiry"]:
                 expiry = mp_res["expiry"]
         else:
+            if mp_res and isinstance(mp_res, dict):
+                is_degraded = int(mp_res.get("is_degraded", 0))
             if cache_data and cache_data.get("max_pain") is not None:
                 max_pain = cache_data.get("max_pain")
                 calculation_mode = cache_data.get("calculation_mode", "OI")
-                is_degraded = int(cache_data.get("is_degraded", 0))
+                is_degraded = 1
                 circuit_breaker_triggered = int(
                     cache_data.get("circuit_breaker_triggered", 0)
                 )
@@ -637,39 +676,37 @@ async def _calculate_max_pain_raw(
         is_degraded = 0
 
         # Align with README.md specification
+        # [ISS-08] Max Pain 成立基石在於造市商對沖未平倉合約 (OI) 的持倉義務。
+        # 當 OI 不足時直接宣告 Insufficient_OI 並拒絕退化至 Volume 權重，避免散戶追價成交量產生虛假痛點。
+        is_insufficient_oi = False
         if total_contracts > 10 and (
             valid_oi_count <= 3 or (valid_oi_count / total_contracts) < 0.02
         ):
-            logger.warning(
-                f"[{symbol}] Data integrity degraded (Valid OI too low). Downgrading to Volume-weighted Max Pain calculation."
-            )
-            # Fallback to volume-weighted calculation helper
-            max_pain = _calculate_max_pain_with_weights(
-                option_chain, weight_key="volume", spot_price=spot_price
-            )
-            max_pain_strike = max_pain
-            calculation_mode = "Volume"
-            is_degraded = 1
+            is_insufficient_oi = True
         else:
             total_oi = calls["openInterest"].sum() + puts["openInterest"].sum()
             if total_oi == 0:
-                total_vol = calls["volume"].sum() + puts["volume"].sum()
-                if total_vol > 0:
-                    max_pain_strike = _calculate_max_pain_with_weights(
-                        option_chain, weight_key="volume", spot_price=spot_price
-                    )
-                    calculation_mode = "Volume"
-                    is_degraded = 1
-                else:
-                    return {
-                        "error": "No active options contracts (OI and Volume are both 0)",
-                        "calculation_mode": "OI",
-                        "is_degraded": 0,
-                    }
-            else:
-                max_pain_strike = _calculate_max_pain_with_weights(
-                    option_chain, weight_key="openInterest", spot_price=spot_price
-                )
+                is_insufficient_oi = True
+
+        if is_insufficient_oi:
+            logger.warning(
+                f"[{symbol}] Data integrity degraded (Valid OI too low: {valid_oi_count}/{total_contracts}). Downgrading to Insufficient_OI (Volume fallback prohibited)."
+            )
+            return {
+                "symbol": symbol,
+                "max_pain": None,
+                "current_price": spot_price,
+                "distance_pct": 0.0,
+                "is_converging": False,
+                "data_status": "Insufficient_OI",
+                "error": "Insufficient OI for Max Pain calculation",
+                "calculation_mode": "OI",
+                "is_degraded": 1,
+            }
+
+        max_pain_strike = _calculate_max_pain_with_weights(
+            option_chain, weight_key="openInterest", spot_price=spot_price
+        )
 
         # 30% 偏離度異常防禦
         from services.market_data_service import (

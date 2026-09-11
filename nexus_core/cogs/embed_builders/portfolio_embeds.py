@@ -1331,12 +1331,18 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                     except (ValueError, TypeError):
                         net_gex_float = None
                     if net_gex_float is not None:
-                        regime_label = (
-                            "🟢 LONG_GAMMA (自穩定壓制波動)"
+                        # ISSUE-4.4: 增設 [-50k, +50k] 中性死區 (Neutral Deadband)，防範 0 軸微幅跳動引發頻繁閃爍
+                        if abs(net_gex_float) <= 50000.0:
+                            regime_label = "⚖️ NEUTRAL_GAMMA (中性均衡)"
+                        elif net_gex_float > 50000.0:
+                            regime_label = "🟢 LONG_GAMMA (自穩定壓制波動)"
+                        else:
+                            regime_label = "🔴 SHORT_GAMMA (助漲助跌)"
+                        net_gex_sign = (
+                            "+"
                             if net_gex_float > 0
-                            else "🔴 SHORT_GAMMA (助漲助跌)"
+                            else ("-" if net_gex_float < 0 else "")
                         )
-                        net_gex_sign = "+" if net_gex_float >= 0 else "-"
                         regime_items.append(
                             f"Net GEX Regime: {net_gex_sign}{abs(net_gex_float)/1000:.0f}K ({regime_label})"
                         )

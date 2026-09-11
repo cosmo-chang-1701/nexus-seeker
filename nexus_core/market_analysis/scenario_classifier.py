@@ -86,7 +86,7 @@ def classify_market_scenario(
     # [ Step 1: 體質檢查 ] ──現價是否 > Gamma Flip？
     if price > gamma_flip:
         # --- YES (正 Gamma/平穩) 允許進行均值回歸與逢低加碼 ---
-        is_solid_wall = pw_gex is None or pw_gex >= 500_000.0
+        is_solid_wall = pw_gex is None or abs(pw_gex) >= 500_000.0
 
         # [ 巨鯨護航共振 ]
         # 點位驗證: K棒高低點回測 PutWall (GEX 正 Gamma 牆確立且非單薄紙牆)

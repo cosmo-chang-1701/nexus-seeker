@@ -52,8 +52,9 @@ def classify_skew_state(
         if skew_val < 0 and skew_percentile <= SKEW_BULLISH_PERCENTILE:
             return SKEW_STATE_BULLISH
 
-    if skew_val > 0:
+    # ISSUE-2.7: 引入 [-0.5%, +0.5%] 零軸死區抑制微觀噪聲 (Deadband)，避免常態波動率微笑誤診為結構偏斜
+    if abs(skew_val) <= 0.5:
+        return SKEW_STATE_FLAT
+    if skew_val > 0.5:
         return SKEW_STATE_LEFT
-    if skew_val < 0:
-        return SKEW_STATE_RIGHT
-    return SKEW_STATE_FLAT
+    return SKEW_STATE_RIGHT

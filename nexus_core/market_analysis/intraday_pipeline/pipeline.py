@@ -222,7 +222,7 @@ class IntradayScanPipeline:
             if earnings_tte is not None and earnings_tte <= 7 * 24:
                 has_upcoming_earnings = True
 
-        # 計算動態買賣點現貨及對齊的期權操盤建議
+        # 計算動態買賣點現貨及對齊的期權操盤建議 (scale_atr_to_15m=True 修復 Top 4 量綱錯配)
         signals = calculate_dynamic_trading_signals(
             evaluation.metrics,
             evaluation.tactical,
@@ -233,6 +233,7 @@ class IntradayScanPipeline:
             risk_limit=user_risk_limit,
             has_upcoming_earnings=has_upcoming_earnings,
             deployed_tactical_value=deployed_tactical_value,
+            scale_atr_to_15m=True,
         )
 
         option_guidance = derive_watchlist_option_guidance(
@@ -275,23 +276,45 @@ class IntradayScanPipeline:
             if is_hedging:
                 hb_iv_metrics = None
                 hb_pcr_data = None
-                hb_uoa_list = []
+                hb_uoa_list: list[dict[str, Any]] = []
                 hb_max_pain = None
             else:
-                (
-                    hb_iv_metrics,
-                    hb_pcr_data,
-                    hb_uoa_list,
-                    hb_max_pain,
-                ) = await asyncio.gather(
+                results = await asyncio.gather(
                     SentimentEngine.fetch_and_calculate_iv_metrics(hb_symbol),
                     SentimentEngine.calculate_pcr(hb_symbol),
                     SentimentEngine.detect_uoa(hb_symbol),
                     SentimentEngine.get_unified_max_pain(hb_symbol),
+                    return_exceptions=True,
                 )
-                hb_uoa_fetched_ok = True
+                r_iv, r_pcr, r_uoa, r_mp = results
+
+                if isinstance(r_iv, BaseException):
+                    logger.warning(f"[{hb_symbol}] 心跳 IV 指標取得失敗: {r_iv}")
+                    hb_iv_metrics = None
+                else:
+                    hb_iv_metrics = r_iv
+
+                if isinstance(r_pcr, BaseException):
+                    logger.warning(f"[{hb_symbol}] 心跳 PCR 數據取得失敗: {r_pcr}")
+                    hb_pcr_data = None
+                else:
+                    hb_pcr_data = r_pcr
+
+                if isinstance(r_uoa, BaseException):
+                    logger.warning(f"[{hb_symbol}] 心跳 UOA 數據取得失敗: {r_uoa}")
+                    hb_uoa_list = []
+                    hb_uoa_fetched_ok = False
+                else:
+                    hb_uoa_list = r_uoa if isinstance(r_uoa, list) else []
+                    hb_uoa_fetched_ok = True
+
+                if isinstance(r_mp, BaseException):
+                    logger.warning(f"[{hb_symbol}] 心跳 Max Pain 取得失敗: {r_mp}")
+                    hb_max_pain = None
+                else:
+                    hb_max_pain = r_mp
         except Exception as sup_err:
-            logger.warning(f"[{hb_symbol}] 心跳補充數據取得失敗: {sup_err}")
+            logger.warning(f"[{hb_symbol}] 心跳補充數據取得非預期失敗: {sup_err}")
             hb_iv_metrics, hb_pcr_data, hb_uoa_list, hb_max_pain = (
                 None,
                 None,

@@ -767,48 +767,41 @@ async def _compute_spx_capped_from_above_signal_uncached() -> dict:
 
 def estimate_symbol_gamma_flip(gex_profile: dict, spot: float) -> float:
     """
-    個股 Gamma Flip 輕量客戶端估算（累積 GEX 曝險零交叉點）。
+    個股 Gamma Flip 輕量客戶端估算（逐履約價 Net GEX 符號變化零交叉點）。
 
     個股 GEX 端點（`fetch_symbol_gex_metrics`）目前不提供現成的 `gamma_flip`
     欄位（僅 SPY 總經端點 `/api/v1/scrape/macro/gex` 才有）。此函式複用已抓取
     的 `gex_profile`（履約價 -> GEX 曝險值）估算 Gamma Flip，不發動額外網路
-    請求：依履約價由低到高排序，逐步累加 GEX 曝險，累積值由負轉正的履約價
-    視為做市商由負轉正 Gamma 的臨界點估計值。
+    請求：依履約價由低到高排序，對相鄰履約價對掃描 **個別** Net GEX 值的符號
+    變化（`GEX(K_i) < 0 <= GEX(K_{i+1})`），找出由負轉非負的履約價
+    K_{i+1} 作為做市商由負轉正 Gamma 的臨界點估計值。
+
+    舊實作採用「全鏈累積加總後找轉正點」，但現實選擇權市場中，Put 主導的低
+    履約價讓累積值深度探底，Call 主導的高履約價才拉回正值，數學上使得累積
+    零交叉點幾乎必然落在現價之上（strike > spot）。在 LONG_GAMMA 鏈中再疊上
+    「候選點須 <= spot」的方向性過濾，唯一的候選點被清空，函數恆回傳 0.0。
+    本次修正改採逐履約價的符號變化偵測，忠實反映個別履約價的 GEX 曝險方向。
 
     這是輕量估算，非如 SPY 端點那樣與官方數據源比對的精算值。找不到交叉點
     （例如全數為正、全數為負，或 profile 為空/格式異常）一律回傳 0.0，
     由呼叫端 fail-safe 處理（視為無法確認，不應作為判斷依據）。
 
     Bracket 防禦：僅接受落在 spot ± 30%（`[spot*0.7, spot*1.3]`）區間內的
-    交叉履約價作為候選，避免深度價外雜訊合約（edge-scraper 端過濾後仍
-    可能殘留）產生偏離現價極遠的失真交叉判定被誤用為 Gamma Flip。累積和
-    本身仍涵蓋全部履約價（含 bracket 下界以下者）以確保進入 bracket 時的
-    累積基準值正確，只在「是否接受此交叉點」這一步驟做 bracket 篩選；
-    bracket 內找不到交叉點（即使 bracket 外存在交叉點）一律回傳 0.0。
-    `spot <= 0` 時無法定義合理的 bracket，退回不限制 bracket 的既有行為。
+    交叉履約價作為候選，避免深度價外雜訊合約產生偏離現價極遠的失真交叉判定
+    被誤用為 Gamma Flip。`spot <= 0` 時無法定義合理的 bracket，退回不限制
+    bracket 的行為。bracket 內找不到交叉點一律回傳 0.0。
 
-    最近交叉點選取（而非掃描到的第一個交叉點）：個股 GEX 曲線在現價附近
-    常見多次正負交錯（例如 ATM 附近的 Call/Put 曝險互相抵銷造成局部翻轉），
-    導致累積和在到達現價前就先出現一次「假交叉」，若直接回傳掃描到的第一個
-    bracket 內交叉點，會產生遠離現價的失真翻轉線。因此改為蒐集 bracket 內
-    所有負轉正交叉點，優先回傳其中離現價最近者。
+    最近交叉點選取：若 bracket 內存在多次負轉正零交叉，優先回傳其中距現價
+    最近者，避免因遠離現價的局部交叉遮蔽了真正臨近的翻轉線。
 
-    Net GEX Regime 一致性驗證（真實案例：SPCX 現價 $147.95）：累積和的
-    最終值（掃描完所有履約價後的 `cumulative`）數學上等同於呼叫端另外算出
-    的 `net_gex`（兩者皆為同一組 `signed_gex` 的加總，只是求和順序不同，
-    加法滿足交換律故結果必然相同）。當累積和沿途先深度探底、直到接近
-    bracket 邊界才勉強翻正（例如 net_gex 僅 +67K 的極微弱 LONG_GAMMA，
-    卻要一路虧到現價之上才能拉平），bracket 內可能只找得到單一交叉點，
-    且該交叉點的位置與 Net GEX Regime 慣例（`現價 > Flip` 應對應
-    LONG_GAMMA，`現價 < Flip` 應對應 SHORT_GAMMA）互相矛盾——這代表輕量
-    估算在這個快照下不可靠，而非真的存在一條遠在天邊的翻轉線。因此在
-    `spot > 0` 且累積和最終值（等同 net_gex）不為零時，額外要求候選交叉點
-    的方向必須與最終累積和正負號一致：最終值 > 0（LONG_GAMMA）只接受
-    `strike <= spot` 的候選（翻轉線在現價或現價以下）；最終值 < 0
-    （SHORT_GAMMA）只接受 `strike >= spot` 的候選。方向不一致的候選視為
-    不可信並剔除；剔除後若無候選，一律回傳 0.0（無法估算），優於呈現一個
-    自相矛盾、誤導使用者的翻轉線。最終值恰為 0（regime 本身無明確方向）
-    或 `spot <= 0` 時跳過此方向性檢查，保留既有行為。
+    Net GEX Regime 一致性驗證：以所有履約價的 Net GEX 加總（等於呼叫端的
+    `net_gex`）判定鏈的整體 Regime：
+    - LONG_GAMMA（total_gex > 0）：Flip 線理應在現價之下或等於現價，
+      只接受 `strike <= spot` 的候選；
+    - SHORT_GAMMA（total_gex < 0）：Flip 線理應在現價之上或等於現價，
+      只接受 `strike >= spot` 的候選。
+    方向不符的候選視為不可信並剔除；剔除後若無候選，回傳 0.0，優於呈現
+    自相矛盾的翻轉線。total_gex == 0 或 spot <= 0 時跳過此檢查。
     """
     if not gex_profile:
         return 0.0
@@ -824,21 +817,27 @@ def estimate_symbol_gamma_flip(gex_profile: dict, spot: float) -> float:
     else:
         bracket_low, bracket_high = float("-inf"), float("inf")
 
-    cumulative = 0.0
-    prev_cumulative: Optional[float] = None
+    # Scan adjacent pairs for per-strike Net GEX sign change (neg → non-neg).
+    # This is the correct Gamma Flip definition: the strike at which the
+    # dealer's per-strike GEX exposure flips from short to long Gamma.
     candidates: list[float] = []
+    prev_gex: Optional[float] = None
     for strike, gex in sorted_strikes:
-        cumulative += gex
-        if prev_cumulative is not None and prev_cumulative < 0 <= cumulative:
+        if prev_gex is not None and prev_gex < 0 <= gex:
             if bracket_low <= strike <= bracket_high:
                 candidates.append(strike)
-        prev_cumulative = cumulative
+        prev_gex = gex
 
-    total_gex = cumulative
+    # Compute total_gex for directional consistency check (equivalent to
+    # summing all gex values, identical to the net_gex the caller holds).
+    total_gex = sum(gex for _, gex in sorted_strikes)
+
     if spot > 0 and total_gex != 0:
         if total_gex > 0:
+            # LONG_GAMMA: flip line should be at or below spot
             candidates = [s for s in candidates if s <= spot]
         else:
+            # SHORT_GAMMA: flip line should be at or above spot
             candidates = [s for s in candidates if s >= spot]
 
     if not candidates:

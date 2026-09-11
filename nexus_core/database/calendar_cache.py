@@ -151,7 +151,7 @@ def get_cached_earnings(symbol: str) -> Optional[dict[str, Any]]:
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT symbol, earnings_date, checked_at
+            SELECT *
             FROM earnings_calendar_cache
             WHERE symbol = ?
             """,
@@ -167,21 +167,38 @@ def get_cached_earnings(symbol: str) -> Optional[dict[str, Any]]:
             conn.close()
 
 
-def save_earnings_cache(symbol: str, earnings_date: str | None) -> None:
+def save_earnings_cache(
+    symbol: str, earnings_date: str | None, hour: str | None = None
+) -> None:
     conn = None
     try:
         conn = sqlite3.connect(config.DB_NAME)
         cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO earnings_calendar_cache (symbol, earnings_date, checked_at)
-            VALUES (?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(symbol) DO UPDATE SET
-                earnings_date = excluded.earnings_date,
-                checked_at = CURRENT_TIMESTAMP
-            """,
-            (symbol.upper(), earnings_date),
-        )
+        cursor.execute("PRAGMA table_info(earnings_calendar_cache)")
+        cols = {c[1] for c in cursor.fetchall()}
+        if "hour" in cols:
+            cursor.execute(
+                """
+                INSERT INTO earnings_calendar_cache (symbol, earnings_date, hour, checked_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(symbol) DO UPDATE SET
+                    earnings_date = excluded.earnings_date,
+                    hour = excluded.hour,
+                    checked_at = CURRENT_TIMESTAMP
+                """,
+                (symbol.upper(), earnings_date, hour),
+            )
+        else:
+            cursor.execute(
+                """
+                INSERT INTO earnings_calendar_cache (symbol, earnings_date, checked_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(symbol) DO UPDATE SET
+                    earnings_date = excluded.earnings_date,
+                    checked_at = CURRENT_TIMESTAMP
+                """,
+                (symbol.upper(), earnings_date),
+            )
         conn.commit()
     except Exception as e:
         logger.error("寫入 earnings_calendar_cache 失敗 (%s): %s", symbol, e)
