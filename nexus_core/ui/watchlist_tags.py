@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any
 import discord
 import re
@@ -54,7 +55,9 @@ class WatchlistTagModal(discord.ui.Modal):
         raw_tags = self.tags_input.value
         clean_tags = sanitize_tags(raw_tags)
 
-        set_watchlist_tags(str(self.user_id), self.symbol, clean_tags)
+        await asyncio.to_thread(
+            set_watchlist_tags, str(self.user_id), self.symbol, clean_tags
+        )
 
         if self.on_success_callback:
             await self.on_success_callback(interaction)

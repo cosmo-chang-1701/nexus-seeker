@@ -233,7 +233,7 @@ class AnalystAgent(commands.Cog):
     async def dispatch_post_market_intelligence(self) -> None:
         # 1. 清除舊快取
         try:
-            purged_rows = database.purge_old_cache(days=30)
+            purged_rows = await asyncio.to_thread(database.purge_old_cache, days=30)
             logger.info(
                 f"🧹 financials_cache 清理完成，刪除 {purged_rows} 筆 30 天前資料"
             )

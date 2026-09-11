@@ -5,6 +5,7 @@ NRO 盤中市場掃描邏輯：_run_market_scan_logic、_should_send_alert、_up
 MarketScanCog 持有 signal_cooldowns 與 prev_macro_state 跨輪次狀態。
 """
 
+import asyncio
 from typing import Any, Dict
 import time as _time
 import logging
@@ -161,7 +162,8 @@ class MarketScanCog(commands.Cog):
 
                         for sig in data.get("ema_signals", []):
                             if sig.get("type") == "CROSSOVER":
-                                database.update_watchlist_alert_state(
+                                await asyncio.to_thread(
+                                    database.update_watchlist_alert_state,
                                     uid,
                                     sym,
                                     direction=sig["direction"],

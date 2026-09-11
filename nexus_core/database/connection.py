@@ -433,21 +433,34 @@ class DatabaseWriteQueue:
                 conn.commit()
             return cursor.lastrowid or cursor.rowcount or True
 
+        elif task_type == "sql_rowcount":
+            # 與 "sql" 的差別只在回傳值：忠實回傳 cursor.rowcount。
+            # "sql" 的 `lastrowid or rowcount or True` 在 DELETE/UPDATE 命中 0 筆時
+            # 會回傳 True，無法與成功區分（database/cache.py 早有註解記載此限制），
+            # 因此凡是呼叫端要用「影響筆數」做判斷的，一律走這條。
+            query, params = data
+            cursor.execute(query, params)
+            if commit:
+                conn.commit()
+            return cursor.rowcount
+
         elif task_type == "sql_batch":
             # data = (statements,)，statements 為 (query, params, is_many) 序列。
             # 整批共用一個交易、只 commit 一次，供 DELETE+executemany 這類
             # 原本必須自開連線的多語句交易使用。
             (statements,) = data
-            result: Any = True
+            rowcounts: list[int] = []
             for query, params, is_many in statements:
                 if is_many:
                     cursor.executemany(query, params)
                 else:
                     cursor.execute(query, params)
-                    result = cursor.lastrowid or cursor.rowcount or result
+                rowcounts.append(cursor.rowcount)
             if commit:
                 conn.commit()
-            return result
+            # 回傳逐語句的影響筆數，讓呼叫端能在「同一個交易內」取得例如
+            # DELETE 清除筆數這類資訊，而不必為此另開一次查詢。
+            return rowcounts
 
         else:
             raise ValueError(f"Unknown task type: {task_type}")
@@ -579,22 +592,40 @@ def _normalize_statements(
     return normalized
 
 
-def execute_write_many(statements: Sequence[tuple], commit: bool = True) -> Any:
+def execute_write_many(statements: Sequence[tuple], commit: bool = True) -> list[int]:
     """同 `execute_write`，但整批語句共用一個交易、只 commit 一次。
 
     每個 statement 為 `(query, params)` 或 `(query, seq_of_params, True)`
     （後者走 `executemany`）。供 DELETE + executemany 這類原本必須自開連線的
-    多語句交易使用。
+    多語句交易使用。回傳逐語句的 `cursor.rowcount` 清單。
     """
-    return DatabaseWriteQueue.put_task_sync(
+    result = DatabaseWriteQueue.put_task_sync(
         "sql_batch", (_normalize_statements(statements),), commit
+    )
+    return list(result)
+
+
+def execute_write_rowcount(query: str, params: tuple = (), commit: bool = True) -> int:
+    """同 `execute_write`，但回傳實際影響筆數（`cursor.rowcount`）。"""
+    return int(
+        DatabaseWriteQueue.put_task_sync("sql_rowcount", (query, params), commit)
+    )
+
+
+async def execute_write_rowcount_async(
+    query: str, params: tuple = (), commit: bool = True
+) -> int:
+    """同 `execute_write_async`，但回傳實際影響筆數（`cursor.rowcount`）。"""
+    return int(
+        await DatabaseWriteQueue.put_task("sql_rowcount", (query, params), commit)
     )
 
 
 async def execute_write_many_async(
     statements: Sequence[tuple], commit: bool = True
-) -> Any:
-    """`execute_write_many` 的 async 版本。"""
-    return await DatabaseWriteQueue.put_task(
+) -> list[int]:
+    """`execute_write_many` 的 async 版本。回傳逐語句的 `cursor.rowcount` 清單。"""
+    result = await DatabaseWriteQueue.put_task(
         "sql_batch", (_normalize_statements(statements),), commit
     )
+    return list(result)

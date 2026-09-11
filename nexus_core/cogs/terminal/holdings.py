@@ -122,7 +122,7 @@ async def add_holding_impl(
             ] = await build_dynamic_strategy_state_for_symbol(
                 symbol, dynamic_entry_regime.value
             )
-        success = manager.update_asset(existing_asset)
+        success = await asyncio.to_thread(manager.update_asset, existing_asset)
         action_text = "更新"
     else:
         # 首次登錄時記錄建倉日期，供動態轉倉引擎粗估長/短期資本利得稅率區間；
@@ -157,7 +157,7 @@ async def add_holding_impl(
             context_type=ContextType.HOLDING,
             metadata=metadata,
         )
-        success = manager.add_asset(asset)
+        success = await asyncio.to_thread(manager.add_asset, asset)
         action_text = "登錄"
 
     if success:
@@ -360,8 +360,8 @@ async def remove_holding_impl(interaction: discord.Interaction, symbol: str) -> 
     from models.asset import ContextType
 
     manager = AssetManager()
-    success = manager.delete_asset_by_symbol(
-        interaction.user.id, symbol, ContextType.HOLDING
+    success = await asyncio.to_thread(
+        manager.delete_asset_by_symbol, interaction.user.id, symbol, ContextType.HOLDING
     )
 
     if success:

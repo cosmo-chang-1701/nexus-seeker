@@ -5,13 +5,17 @@
 無法有效支援此種查詢。
 """
 
-import sqlite3
 import logging
 from enum import Enum
 from typing import List
 
-import config
 from pydantic import BaseModel, Field, field_validator
+
+from database.connection import (
+    execute_write_async,
+    execute_write_rowcount_async,
+    get_read_connection,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -72,44 +76,41 @@ async def upsert_watch(
         volume_multiplier=volume_multiplier,
     )
 
-    conn = None
+    conn = get_read_connection()
     try:
-        conn = sqlite3.connect(config.DB_NAME)
         cursor = conn.cursor()
-
         cursor.execute(
             "SELECT COUNT(*) FROM price_volume_watches WHERE user_id = ? AND symbol != ?",
             (user_id, watch.symbol),
         )
         existing_count = cursor.fetchone()[0]
-        if existing_count >= _MAX_WATCHES_PER_USER:
-            raise WatchLimitExceededError(
-                f"監測標的數量已達上限 ({_MAX_WATCHES_PER_USER} 檔)，請先移除部分監測後再新增。"
-            )
-
-        cursor.execute(
-            """
-            INSERT INTO price_volume_watches
-                (user_id, symbol, target_price, direction, volume_multiplier, updated_at)
-            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(user_id, symbol) DO UPDATE SET
-                target_price = excluded.target_price,
-                direction = excluded.direction,
-                volume_multiplier = excluded.volume_multiplier,
-                updated_at = CURRENT_TIMESTAMP
-            """,
-            (
-                user_id,
-                watch.symbol,
-                watch.target_price,
-                watch.direction.value,
-                watch.volume_multiplier,
-            ),
-        )
-        conn.commit()
     finally:
-        if conn:
-            conn.close()
+        conn.close()
+
+    if existing_count >= _MAX_WATCHES_PER_USER:
+        raise WatchLimitExceededError(
+            f"監測標的數量已達上限 ({_MAX_WATCHES_PER_USER} 檔)，請先移除部分監測後再新增。"
+        )
+
+    await execute_write_async(
+        """
+        INSERT INTO price_volume_watches
+            (user_id, symbol, target_price, direction, volume_multiplier, updated_at)
+        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(user_id, symbol) DO UPDATE SET
+            target_price = excluded.target_price,
+            direction = excluded.direction,
+            volume_multiplier = excluded.volume_multiplier,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (
+            user_id,
+            watch.symbol,
+            watch.target_price,
+            watch.direction.value,
+            watch.volume_multiplier,
+        ),
+    )
 
     return watch
 
@@ -143,7 +144,7 @@ def _query_watches(query: str, params: tuple) -> List[PriceVolumeWatch]:
     conn = None
     results: List[PriceVolumeWatch] = []
     try:
-        conn = sqlite3.connect(config.DB_NAME)
+        conn = get_read_connection()
         cursor = conn.cursor()
         cursor.execute(query, params)
         for row in cursor.fetchall():
@@ -173,24 +174,19 @@ def _query_watches(query: str, params: tuple) -> List[PriceVolumeWatch]:
 async def delete_watch(user_id: int, symbol: str) -> bool:
     """移除一筆使用者的價量監測設定，回傳是否有實際刪除到資料列。"""
     normalized_symbol = symbol.strip().upper()
-    conn = None
     try:
-        conn = sqlite3.connect(config.DB_NAME)
-        cursor = conn.cursor()
-        cursor.execute(
-            "DELETE FROM price_volume_watches WHERE user_id = ? AND symbol = ?",
-            (user_id, normalized_symbol),
+        return (
+            await execute_write_rowcount_async(
+                "DELETE FROM price_volume_watches WHERE user_id = ? AND symbol = ?",
+                (user_id, normalized_symbol),
+            )
+            > 0
         )
-        conn.commit()
-        return cursor.rowcount > 0
     except Exception as e:
         logger.error(
             f"刪除價量監測設定失敗 (uid={user_id}, symbol={normalized_symbol}): {e}"
         )
         return False
-    finally:
-        if conn:
-            conn.close()
 
 
 __all__: list[str] = [

@@ -4,7 +4,11 @@ import sqlite3
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
-import config
+from database.connection import (
+    execute_write,
+    execute_write_rowcount,
+    get_read_connection,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +28,7 @@ def get_cached_financials(
     """Read non-expired financial metrics from SQLite cache."""
     conn = None
     try:
-        conn = sqlite3.connect(config.DB_NAME)
+        conn = get_read_connection()
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -67,27 +71,24 @@ def save_financials_cache(symbol: str, data: Dict[str, Any]) -> None:
     """Upsert financial metrics into SQLite cache."""
     conn = None
     try:
-        conn = sqlite3.connect(config.DB_NAME)
-        cursor = conn.cursor()
-        payload_col = _get_payload_column(cursor)
+        conn = get_read_connection()
+        try:
+            payload_col = _get_payload_column(conn.cursor())
+        finally:
+            conn.close()
+            conn = None
 
         if payload_col == "data":
-            cursor.execute(
-                """
+            query = """
                 INSERT OR REPLACE INTO financials_cache (symbol, data, updated_at)
                 VALUES (?, ?, CURRENT_TIMESTAMP)
-                """,
-                (symbol.upper(), json.dumps(data)),
-            )
-        else:
-            cursor.execute(
                 """
+        else:
+            query = """
                 INSERT OR REPLACE INTO financials_cache (symbol, metrics, updated_at)
                 VALUES (?, ?, CURRENT_TIMESTAMP)
-                """,
-                (symbol.upper(), json.dumps(data)),
-            )
-        conn.commit()
+                """
+        execute_write(query, (symbol.upper(), json.dumps(data)))
     except Exception as e:
         logger.error("[%s] 寫入 financials_cache 失敗: %s", symbol, e)
     finally:
@@ -97,14 +98,7 @@ def save_financials_cache(symbol: str, data: Dict[str, Any]) -> None:
 
 def purge_old_cache(days: int = 30) -> int:
     """Delete expired cache rows and return number of removed rows."""
-    conn = None
-    try:
-        conn = sqlite3.connect(config.DB_NAME)
-        cursor = conn.cursor()
-        limit = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-        cursor.execute("DELETE FROM financials_cache WHERE updated_at < ?", (limit,))
-        conn.commit()
-        return cursor.rowcount
-    finally:
-        if conn:
-            conn.close()
+    limit = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    return execute_write_rowcount(
+        "DELETE FROM financials_cache WHERE updated_at < ?", (limit,)
+    )

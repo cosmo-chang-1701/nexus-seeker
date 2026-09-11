@@ -10,7 +10,7 @@ import sqlite3
 import logging
 from typing import Any, List, Optional
 
-import config
+from database.connection import execute_write_async, get_read_connection
 
 logger = logging.getLogger(__name__)
 
@@ -29,11 +29,8 @@ async def log_rollover_instruction(
     cash_impact: Optional[str] = None,
 ) -> None:
     """記錄一筆已實際推送給使用者的轉倉建議。失敗時僅記錄 log，不中斷主流程。"""
-    conn = None
     try:
-        conn = sqlite3.connect(config.DB_NAME)
-        cursor = conn.cursor()
-        cursor.execute(
+        await execute_write_async(
             """
             INSERT INTO rollover_audit_log
                 (user_id, symbol, scenario, action, sell_ratio, target_core,
@@ -51,12 +48,8 @@ async def log_rollover_instruction(
                 cash_impact,
             ),
         )
-        conn.commit()
     except Exception as e:
         logger.error(f"寫入轉倉審計紀錄失敗 (uid={user_id}, symbol={symbol}): {e}")
-    finally:
-        if conn:
-            conn.close()
 
 
 def get_rollover_audit_log(
@@ -66,7 +59,7 @@ def get_rollover_audit_log(
     conn = None
     results: List[dict[str, Any]] = []
     try:
-        conn = sqlite3.connect(config.DB_NAME)
+        conn = get_read_connection()
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute(

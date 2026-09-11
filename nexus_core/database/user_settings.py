@@ -4,6 +4,8 @@ import logging
 from dataclasses import dataclass
 import config
 
+from database.connection import execute_write_many, get_read_connection
+
 logger = logging.getLogger(__name__)
 
 
@@ -55,20 +57,7 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:  # type: ignore
     if not kwargs:
         return False
 
-    conn = None
     try:
-        conn = sqlite3.connect(config.DB_NAME)
-        cursor = conn.cursor()
-
-        # 1. 確保使用者紀錄存在
-        cursor.execute(
-            """
-            INSERT OR IGNORE INTO user_settings (user_id, capital, risk_limit)
-            VALUES (?, 100000.0, 15.0)
-        """,
-            (user_id,),
-        )
-
         # 2. 轉譯別名 (Aliases) 確保與 README/CLI 參數對齊
         if "expense" in kwargs and kwargs["expense"] is not None:
             kwargs["monthly_expense"] = kwargs.pop("expense")
@@ -138,17 +127,26 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:  # type: ignore
         sql = f"UPDATE user_settings SET {', '.join(update_pairs)} WHERE user_id = ?"
         values.append(user_id)
 
+        # 「確保使用者紀錄存在」與「更新欄位」必須同屬一個交易，否則兩者之間
+        # 可能被其他寫入插隊。走批次寫入入口，整批共用一個交易、只 commit 一次。
         # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
-        cursor.execute(sql, tuple(values))
-        conn.commit()
+        execute_write_many(
+            [
+                (
+                    """
+            INSERT OR IGNORE INTO user_settings (user_id, capital, risk_limit)
+            VALUES (?, 100000.0, 15.0)
+        """,
+                    (user_id,),
+                ),
+                (sql, tuple(values)),
+            ]
+        )
         return True
 
     except Exception as e:
         logger.error(f"執行 upsert_user_config 失敗 (User: {user_id}): {e}")
         return False
-    finally:
-        if conn:
-            conn.close()
 
 
 def calculate_auto_capital(
@@ -162,7 +160,7 @@ def calculate_auto_capital(
     """
     should_close = False
     if conn is None:
-        conn = sqlite3.connect(config.DB_NAME)
+        conn = get_read_connection()
         should_close = True
     try:
         cursor = conn.cursor()
@@ -218,7 +216,7 @@ def get_user_risk_limit(user_id: int) -> float:
     """從資料庫獲取使用者的個人化風險上限 (Base Risk Limit %)"""
     conn = None
     try:
-        conn = sqlite3.connect(config.DB_NAME)
+        conn = get_read_connection()
         cursor = conn.cursor()
         cursor.execute(
             "SELECT risk_limit FROM user_settings WHERE user_id = ?", (user_id,)
@@ -237,7 +235,7 @@ def get_all_user_ids() -> Any:
     """取得資料庫中所有出現過的使用者 ID"""
     conn = None
     try:
-        conn = sqlite3.connect(config.DB_NAME)
+        conn = get_read_connection()
         cursor = conn.cursor()
         # UNION 自動去重
         cursor.execute("""
@@ -270,7 +268,7 @@ def get_full_user_context(user_id: int) -> UserContext:
     """
     conn = None
     try:
-        conn = sqlite3.connect(config.DB_NAME)
+        conn = get_read_connection()
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 

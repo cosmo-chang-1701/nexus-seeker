@@ -365,8 +365,10 @@ class MarketScanMixin:
                                     uid, rehedge_advice
                                 )
                                 opt_data["rehedge_info"] = rehedge_advice
-                                database.upsert_user_config(
-                                    uid, last_rehedge_alert_time=now_ts
+                                await asyncio.to_thread(
+                                    database.upsert_user_config,
+                                    uid,
+                                    last_rehedge_alert_time=now_ts,
                                 )
                                 user_context.last_rehedge_alert_time = now_ts
 

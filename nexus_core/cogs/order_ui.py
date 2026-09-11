@@ -371,7 +371,8 @@ class OrderUICog(commands.Cog):
 
         # 3. 寫入資料庫
         try:
-            order_id = add_active_order(
+            order_id = await asyncio.to_thread(
+                add_active_order,
                 user_id=interaction.user.id,
                 symbol=symbol,
                 quantity=final_qty,

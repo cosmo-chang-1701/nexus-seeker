@@ -1,5 +1,6 @@
 """帳戶設定、通知偏好與 WTI 警報設定相關指令邏輯。"""
 
+import asyncio
 from typing import Any, Dict, Optional
 
 import discord
@@ -160,7 +161,9 @@ async def update_settings_impl(
                 ephemeral=True,
             )
 
-    success = database.upsert_user_config(user_id, **db_updates)
+    success = await asyncio.to_thread(
+        database.upsert_user_config, user_id, **db_updates
+    )
     if not success:
         return await interaction.followup.send(
             embed=create_error_embed("設定失敗，請稍後再試。", title="系統錯誤"),

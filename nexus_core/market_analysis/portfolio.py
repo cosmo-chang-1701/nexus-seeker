@@ -1,6 +1,7 @@
 from typing import Any
 from services import market_data_service
 from services.market_data_service import get_option_chain
+from database.connection import execute_write_many_async
 import pandas as pd
 import logging
 import asyncio
@@ -320,19 +321,22 @@ async def refresh_portfolio_greeks(
         assets_to_update = []
         unique_symbols = set()
 
-        with manager._get_conn() as conn:
+        conn = manager._get_conn()
+        try:
             cursor = conn.cursor()
             cursor.execute(query, params)
-            for row in cursor.fetchall():
-                data = dict(row)
-                data["metadata"] = (
-                    json.loads(data["metadata"]) if data["metadata"] else {}
-                )
-                from models.asset import Asset
+            rows = cursor.fetchall()
+        finally:
+            conn.close()
 
-                asset = Asset(**data)
-                assets_to_update.append(asset)
-                unique_symbols.add(asset.symbol)
+        for row in rows:
+            data = dict(row)
+            data["metadata"] = json.loads(data["metadata"]) if data["metadata"] else {}
+            from models.asset import Asset
+
+            asset = Asset(**data)
+            assets_to_update.append(asset)
+            unique_symbols.add(asset.symbol)
 
         if not unique_symbols:
             return
@@ -364,109 +368,111 @@ async def refresh_portfolio_greeks(
                     asset.metadata.get("avg_cost", 0.0)
                 )
 
-        with manager._get_conn() as conn:
-            cursor = conn.cursor()
-            for asset in assets_to_update:
-                s_info = stock_data.get(asset.symbol)
-                if not s_info or s_info["price"] <= 0:
+        # ⚠️ 這個迴圈每輪都 `await get_option_chain_mid_iv(...)`（網路請求）。
+        # 改寫前它整段跑在一個開啟的連線內，而且第一筆 UPDATE 就會開啟寫入交易，
+        # 等於在 N 次網路往返期間**持續持有 SQLite 寫入鎖**——寫入佇列的 worker
+        # 只能乾等，正是 `database is locked` 與心跳阻塞的來源之一。
+        # 現在先把結果蒐集到記憶體，最後再一次性批次寫入。
+        pending_updates: list[tuple[str, Any]] = []
+        for asset in assets_to_update:
+            s_info = stock_data.get(asset.symbol)
+            if not s_info or s_info["price"] <= 0:
+                continue
+
+            weight_factor = s_info["beta"] * (s_info["price"] / spy_price)
+
+            if asset.context_type == ContextType.TRADE:
+                trade_meta = TradeMetadata(**asset.metadata)
+                # 🚀 自動抓取目前持倉數據中的平均成本 (stock_cost)
+                trade_meta.stock_cost = holding_map.get(
+                    (asset.user_id, asset.symbol.upper()), trade_meta.stock_cost
+                )
+                mid, iv_raw, _bid, _ask = await get_option_chain_mid_iv(
+                    asset.symbol,
+                    trade_meta.expiry,
+                    trade_meta.strike,
+                    trade_meta.opt_type,
+                )
+
+                iv = iv_raw
+                if iv <= 0.001 and mid > 0:
+                    try:
+                        exp_date = datetime.strptime(
+                            trade_meta.expiry, "%Y-%m-%d"
+                        ).date()
+                        t_years = (
+                            max((exp_date - datetime.now().date()).days, 1) / 365.0
+                        )
+                        from config import RISK_FREE_RATE
+
+                        iv = implied_volatility(
+                            mid,
+                            s_info["price"],
+                            trade_meta.strike,
+                            t_years,
+                            RISK_FREE_RATE,
+                            trade_meta.opt_type[0],
+                        )
+                    except Exception:
+                        iv = iv_raw
+
+                if iv <= 0:
                     continue
 
-                weight_factor = s_info["beta"] * (s_info["price"] / spy_price)
+                t_years = (
+                    max(
+                        (
+                            datetime.strptime(trade_meta.expiry, "%Y-%m-%d").date()
+                            - datetime.now().date()
+                        ).days,
+                        1,
+                    )
+                    / 365.0
+                )
+                greeks = calculate_greeks(
+                    trade_meta.opt_type,
+                    s_info["price"],
+                    trade_meta.strike,
+                    t_years,
+                    iv,
+                    s_info["div_yield"],
+                )
 
-                if asset.context_type == ContextType.TRADE:
-                    trade_meta = TradeMetadata(**asset.metadata)
-                    # 🚀 自動抓取目前持倉數據中的平均成本 (stock_cost)
-                    trade_meta.stock_cost = holding_map.get(
-                        (asset.user_id, asset.symbol.upper()), trade_meta.stock_cost
-                    )
-                    mid, iv_raw, _bid, _ask = await get_option_chain_mid_iv(
-                        asset.symbol,
-                        trade_meta.expiry,
-                        trade_meta.strike,
-                        trade_meta.opt_type,
-                    )
+                trade_meta.weighted_delta = round(
+                    greeks["delta"] * trade_meta.quantity * 100 * weight_factor, 4
+                )
+                trade_meta.theta = round(greeks["theta"] * trade_meta.quantity * 100, 4)
+                trade_meta.gamma = round(
+                    greeks["gamma"] * trade_meta.quantity * 100 * (weight_factor**2),
+                    6,
+                )
+                trade_meta.vega = round(
+                    greeks["vega"] * trade_meta.quantity * 100 * weight_factor, 4
+                )
+                trade_meta.vanna = round(
+                    greeks["vanna"] * trade_meta.quantity * 100 * weight_factor, 4
+                )
 
-                    iv = iv_raw
-                    if iv <= 0.001 and mid > 0:
-                        try:
-                            exp_date = datetime.strptime(
-                                trade_meta.expiry, "%Y-%m-%d"
-                            ).date()
-                            t_years = (
-                                max((exp_date - datetime.now().date()).days, 1) / 365.0
-                            )
-                            from config import RISK_FREE_RATE
+                pending_updates.append((trade_meta.model_dump_json(), asset.id))
 
-                            iv = implied_volatility(
-                                mid,
-                                s_info["price"],
-                                trade_meta.strike,
-                                t_years,
-                                RISK_FREE_RATE,
-                                trade_meta.opt_type[0],
-                            )
-                        except Exception:
-                            iv = iv_raw
+            elif asset.context_type == ContextType.HOLDING:
+                holding_meta = HoldingMetadata(**asset.metadata)
+                # 現貨 Delta 為 1.0
+                holding_meta.weighted_delta = round(
+                    1.0 * holding_meta.quantity * weight_factor, 4
+                )
+                pending_updates.append((holding_meta.model_dump_json(), asset.id))
 
-                    if iv <= 0:
-                        continue
-
-                    t_years = (
-                        max(
-                            (
-                                datetime.strptime(trade_meta.expiry, "%Y-%m-%d").date()
-                                - datetime.now().date()
-                            ).days,
-                            1,
-                        )
-                        / 365.0
-                    )
-                    greeks = calculate_greeks(
-                        trade_meta.opt_type,
-                        s_info["price"],
-                        trade_meta.strike,
-                        t_years,
-                        iv,
-                        s_info["div_yield"],
-                    )
-
-                    trade_meta.weighted_delta = round(
-                        greeks["delta"] * trade_meta.quantity * 100 * weight_factor, 4
-                    )
-                    trade_meta.theta = round(
-                        greeks["theta"] * trade_meta.quantity * 100, 4
-                    )
-                    trade_meta.gamma = round(
-                        greeks["gamma"]
-                        * trade_meta.quantity
-                        * 100
-                        * (weight_factor**2),
-                        6,
-                    )
-                    trade_meta.vega = round(
-                        greeks["vega"] * trade_meta.quantity * 100 * weight_factor, 4
-                    )
-                    trade_meta.vanna = round(
-                        greeks["vanna"] * trade_meta.quantity * 100 * weight_factor, 4
-                    )
-
-                    cursor.execute(
+        if pending_updates:
+            await execute_write_many_async(
+                [
+                    (
                         "UPDATE assets SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                        (trade_meta.model_dump_json(), asset.id),
+                        pending_updates,
+                        True,
                     )
-
-                elif asset.context_type == ContextType.HOLDING:
-                    holding_meta = HoldingMetadata(**asset.metadata)
-                    # 現貨 Delta 為 1.0
-                    holding_meta.weighted_delta = round(
-                        1.0 * holding_meta.quantity * weight_factor, 4
-                    )
-                    cursor.execute(
-                        "UPDATE assets SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                        (holding_meta.model_dump_json(), asset.id),
-                    )
-
-            conn.commit()
+                ]
+            )
 
     except Exception as e:
         logger.error(f"refresh_portfolio_greeks 失敗: {e}", exc_info=True)

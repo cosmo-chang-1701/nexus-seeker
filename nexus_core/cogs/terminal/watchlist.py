@@ -66,7 +66,7 @@ async def add_watch_impl(interaction: discord.Interaction, symbol: str) -> Any:
         )
 
         try:
-            success = manager.add_asset(asset)
+            success = await asyncio.to_thread(manager.add_asset, asset)
         except WatchlistLimitExceededError as e:
             return await interaction.followup.send(
                 embed=create_error_embed(str(e), title="系統警告"), ephemeral=True
@@ -124,7 +124,7 @@ async def add_watch_impl(interaction: discord.Interaction, symbol: str) -> Any:
             metadata={},
         )
         try:
-            success = manager.add_asset(asset)
+            success = await asyncio.to_thread(manager.add_asset, asset)
         except WatchlistLimitExceededError:
             limit_hit = True
             capped.append(sym)
@@ -163,8 +163,8 @@ async def remove_watch_impl(interaction: discord.Interaction, symbol: str) -> An
     if len(symbols) == 1:
         # 單一代號：維持原有訊息文案不變 (向後相容)
         sym = symbols[0]
-        success = manager.delete_asset_by_symbol(
-            interaction.user.id, sym, ContextType.WATCH
+        success = await asyncio.to_thread(
+            manager.delete_asset_by_symbol, interaction.user.id, sym, ContextType.WATCH
         )
 
         if success:
@@ -191,8 +191,8 @@ async def remove_watch_impl(interaction: discord.Interaction, symbol: str) -> An
     removed: list[str] = []
     not_found: list[str] = []
     for sym in symbols:
-        success = manager.delete_asset_by_symbol(
-            interaction.user.id, sym, ContextType.WATCH
+        success = await asyncio.to_thread(
+            manager.delete_asset_by_symbol, interaction.user.id, sym, ContextType.WATCH
         )
         if success:
             removed.append(sym)
@@ -261,8 +261,8 @@ async def set_watch_impl(interaction: discord.Interaction, symbol: str) -> Any:
 
     manager = AssetManager()
     try:
-        cleared_count, new_symbols = manager.set_watchlist(
-            interaction.user.id, valid_symbols
+        cleared_count, new_symbols = await asyncio.to_thread(
+            manager.set_watchlist, interaction.user.id, valid_symbols
         )
     except WatchlistLimitExceededError as e:
         return await interaction.followup.send(
@@ -358,7 +358,9 @@ async def promote_watch_impl(
         "category": "SPEC",
     }
 
-    success = manager.promote_to_trade(interaction.user.id, symbol, trade_details)
+    success = await asyncio.to_thread(
+        manager.promote_to_trade, interaction.user.id, symbol, trade_details
+    )
     if success:
         from market_analysis.portfolio import refresh_portfolio_greeks
 

@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any, Dict
 import discord
 import logging
@@ -184,29 +185,35 @@ class NotificationSettingsView(discord.ui.View):
     async def on_enable_module(self, interaction: discord.Interaction) -> Any:
         module_items = TRADING_MODULES[self.current_module]["items"]
         for key in module_items.keys():
-            database.set_user_notification_setting(self.user_id, key, True)
+            await asyncio.to_thread(
+                database.set_user_notification_setting, self.user_id, key, True
+            )
         self.refresh_items()
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
     async def on_disable_module(self, interaction: discord.Interaction) -> Any:
         module_items = TRADING_MODULES[self.current_module]["items"]
         for key in module_items.keys():
-            database.set_user_notification_setting(self.user_id, key, False)
+            await asyncio.to_thread(
+                database.set_user_notification_setting, self.user_id, key, False
+            )
         self.refresh_items()
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
     async def on_preset_all_on(self, interaction: discord.Interaction) -> Any:
-        database.apply_preset_settings(self.user_id, "all_on")
+        await asyncio.to_thread(database.apply_preset_settings, self.user_id, "all_on")
         self.refresh_items()
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
     async def on_preset_focus(self, interaction: discord.Interaction) -> Any:
-        database.apply_preset_settings(self.user_id, "focus")
+        await asyncio.to_thread(database.apply_preset_settings, self.user_id, "focus")
         self.refresh_items()
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
     async def on_preset_mute_intraday(self, interaction: discord.Interaction) -> Any:
-        database.apply_preset_settings(self.user_id, "mute_intraday")
+        await asyncio.to_thread(
+            database.apply_preset_settings, self.user_id, "mute_intraday"
+        )
         self.refresh_items()
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
@@ -220,7 +227,9 @@ class NotificationSettingsView(discord.ui.View):
         key = str(select_values[0])
         settings = database.get_user_notification_settings(self.user_id)
         current_val = settings.get(key, True)
-        database.set_user_notification_setting(self.user_id, key, not current_val)
+        await asyncio.to_thread(
+            database.set_user_notification_setting, self.user_id, key, not current_val
+        )
 
         self.refresh_items()
         embed = self.build_embed()
@@ -403,7 +412,8 @@ class AccountSettingsModal(discord.ui.Modal):
                 return
             start_str = f"{sm:02d}-{sd:02d}"
             end_str = f"{em:02d}-{ed:02d}"
-            database.upsert_user_config(
+            await asyncio.to_thread(
+                database.upsert_user_config,
                 self.user_id,
                 escape_window_start=start_str,
                 escape_window_end=end_str,
@@ -482,7 +492,9 @@ class AccountSettingsModal(discord.ui.Modal):
                 return
 
         # 更新資料庫
-        success = database.upsert_user_config(self.user_id, **{self.key: val})
+        success = await asyncio.to_thread(
+            database.upsert_user_config, self.user_id, **{self.key: val}
+        )
         if not success:
             await interaction.response.send_message(
                 embed=create_error_embed(
@@ -590,7 +602,9 @@ class AccountSettingsView(discord.ui.View):
         ]:
             current_bool = getattr(ctx, key, False)
             new_val = not current_bool
-            database.upsert_user_config(self.user_id, **{key: new_val})
+            await asyncio.to_thread(
+                database.upsert_user_config, self.user_id, **{key: new_val}
+            )
 
             self.refresh_items()
             embed = self.build_embed()
@@ -700,7 +714,9 @@ class TradingStrategySelect(discord.ui.Select):
             return
 
         selected = str(select_values[0])
-        database.upsert_user_config(self.user_id, trading_strategy=selected)
+        await asyncio.to_thread(
+            database.upsert_user_config, self.user_id, trading_strategy=selected
+        )
 
         self.parent_view.refresh_items()
         embed = self.parent_view.build_embed()

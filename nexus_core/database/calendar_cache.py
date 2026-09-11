@@ -3,7 +3,7 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-import config
+from database.connection import execute_write, execute_write_many, get_read_connection
 
 logger = logging.getLogger(__name__)
 
@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 def get_macro_month_status(month_key: str) -> Optional[dict[str, Any]]:
     conn = None
     try:
-        conn = sqlite3.connect(config.DB_NAME)
+        conn = get_read_connection()
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute(
@@ -33,16 +33,17 @@ def get_macro_month_status(month_key: str) -> Optional[dict[str, Any]]:
 
 
 def replace_macro_month_events(month_key: str, events: list[dict[str, Any]]) -> None:
-    conn = None
-    try:
-        conn = sqlite3.connect(config.DB_NAME)
-        cursor = conn.cursor()
-        cursor.execute(
+    # DELETE + executemany + 月份快取戳記必須同屬一個交易，否則整月事件可能出現
+    # 「舊資料已刪、新資料未寫入」的空窗。走批次寫入入口，只 commit 一次。
+    statements: list[tuple] = [
+        (
             "DELETE FROM economic_calendar_events WHERE month_key = ?",
             (month_key,),
         )
-        if events:
-            cursor.executemany(
+    ]
+    if events:
+        statements.append(
+            (
                 """
                 INSERT INTO economic_calendar_events
                 (month_key, event, event_time, impact, country, consensus_value, fedwatch_probability, actual_value)
@@ -61,8 +62,11 @@ def replace_macro_month_events(month_key: str, events: list[dict[str, Any]]) -> 
                     )
                     for item in events
                 ],
+                True,
             )
-        cursor.execute(
+        )
+    statements.append(
+        (
             """
             INSERT INTO economic_calendar_month_cache (month_key, checked_at, event_count)
             VALUES (?, CURRENT_TIMESTAMP, ?)
@@ -72,18 +76,17 @@ def replace_macro_month_events(month_key: str, events: list[dict[str, Any]]) -> 
             """,
             (month_key, len(events)),
         )
-        conn.commit()
+    )
+    try:
+        execute_write_many(statements)
     except Exception as e:
         logger.error("寫入 economic_calendar_events 失敗 (%s): %s", month_key, e)
-    finally:
-        if conn:
-            conn.close()
 
 
 def get_macro_events_between(start_date: str, end_date: str) -> list[dict[str, Any]]:
     conn = None
     try:
-        conn = sqlite3.connect(config.DB_NAME)
+        conn = get_read_connection()
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute(
@@ -117,7 +120,7 @@ def get_latest_released_economic_event(
     最近一筆「已公布且含實際值」的紀錄。用於 CPI 等 actual-vs-expected 比對。"""
     conn = None
     try:
-        conn = sqlite3.connect(config.DB_NAME)
+        conn = get_read_connection()
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cutoff = as_of or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -146,7 +149,7 @@ def get_latest_released_economic_event(
 def get_cached_earnings(symbol: str) -> Optional[dict[str, Any]]:
     conn = None
     try:
-        conn = sqlite3.connect(config.DB_NAME)
+        conn = get_read_connection()
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute(
@@ -172,12 +175,17 @@ def save_earnings_cache(
 ) -> None:
     conn = None
     try:
-        conn = sqlite3.connect(config.DB_NAME)
-        cursor = conn.cursor()
-        cursor.execute("PRAGMA table_info(earnings_calendar_cache)")
-        cols = {c[1] for c in cursor.fetchall()}
+        conn = get_read_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA table_info(earnings_calendar_cache)")
+            cols = {c[1] for c in cursor.fetchall()}
+        finally:
+            conn.close()
+            conn = None
+
         if "hour" in cols:
-            cursor.execute(
+            execute_write(
                 """
                 INSERT INTO earnings_calendar_cache (symbol, earnings_date, hour, checked_at)
                 VALUES (?, ?, ?, CURRENT_TIMESTAMP)
@@ -189,7 +197,7 @@ def save_earnings_cache(
                 (symbol.upper(), earnings_date, hour),
             )
         else:
-            cursor.execute(
+            execute_write(
                 """
                 INSERT INTO earnings_calendar_cache (symbol, earnings_date, checked_at)
                 VALUES (?, ?, CURRENT_TIMESTAMP)
@@ -199,7 +207,6 @@ def save_earnings_cache(
                 """,
                 (symbol.upper(), earnings_date),
             )
-        conn.commit()
     except Exception as e:
         logger.error("寫入 earnings_calendar_cache 失敗 (%s): %s", symbol, e)
     finally:

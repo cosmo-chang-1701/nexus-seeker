@@ -529,7 +529,7 @@ async def test_run_fomc_escape_window_analysis_dynamic_period_labels() -> None:
         new_callable=AsyncMock,
         return_value={"vts_ratio": 1.05, "vts_state": "Backwardation"},
     ):
-        mock_cursor = mock_conn.return_value.__enter__.return_value.cursor.return_value
+        mock_cursor = mock_conn.return_value.cursor.return_value
         mock_cursor.fetchone.return_value = {"fedwatch_probability": 0.85}
 
         await agent.run_fomc_escape_window_analysis(12345)
@@ -557,7 +557,7 @@ async def test_run_fomc_escape_window_analysis_dynamic_period_labels() -> None:
         new_callable=AsyncMock,
         return_value={"vts_ratio": 0.82, "vts_state": "Contango"},
     ):
-        mock_cursor = mock_conn.return_value.__enter__.return_value.cursor.return_value
+        mock_cursor = mock_conn.return_value.cursor.return_value
         mock_cursor.fetchone.return_value = {"fedwatch_probability": 0.35}
 
         await agent.run_fomc_escape_window_analysis(12345)
@@ -581,7 +581,7 @@ async def test_run_fomc_escape_window_analysis_dynamic_period_labels() -> None:
         new_callable=AsyncMock,
         return_value={"vts_ratio": 0.92, "vts_state": "Contango"},
     ):
-        mock_cursor = mock_conn.return_value.__enter__.return_value.cursor.return_value
+        mock_cursor = mock_conn.return_value.cursor.return_value
         mock_cursor.fetchone.return_value = {"fedwatch_probability": 0.55}
 
         await agent.run_fomc_escape_window_analysis(12345)
@@ -607,7 +607,7 @@ async def test_run_fomc_escape_window_analysis_dynamic_period_labels() -> None:
         new_callable=AsyncMock,
         return_value={"vts_ratio": 0.92, "vts_state": "Contango"},
     ):
-        mock_cursor = mock_conn.return_value.__enter__.return_value.cursor.return_value
+        mock_cursor = mock_conn.return_value.cursor.return_value
         mock_cursor.fetchone.return_value = {"fedwatch_probability": 0.50}
 
         await agent.run_fomc_escape_window_analysis(12345)

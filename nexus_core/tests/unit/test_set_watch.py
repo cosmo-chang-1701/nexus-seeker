@@ -153,7 +153,15 @@ def test_set_watchlist_limit_exceeded(db_conn: Any) -> None:
 
 
 def test_set_watchlist_atomic_rollback_on_error(db_conn: Any) -> None:
-    """測試在插入標的過程發生例外時，交易自動回滾，原清單完整保留。"""
+    """測試在插入標的過程發生例外時，交易自動回滾，原清單完整保留。
+
+    set_watchlist 的 DELETE + 批次 INSERT 已改走 DatabaseWriteQueue 的 `sql_batch`
+    入口（整批共用一個交易），不再自開連線。因此這裡改為在該批次中注入一個必定
+    失敗的 INSERT，直接驗證「同一交易內先執行的 DELETE 會一併回滾」——也就是
+    批次寫入真的是單一交易，而不是逐語句各自 commit。
+    """
+    from database.connection import execute_write_many as real_execute_write_many
+
     user_id = 777006
     manager = AssetManager()
 
@@ -174,61 +182,26 @@ def test_set_watchlist_atomic_rollback_on_error(db_conn: Any) -> None:
         )
     )
 
-    original_conn_getter = manager._get_conn
+    def faulty_execute_write_many(statements: Any, commit: bool = True) -> Any:
+        broken = list(statements)
+        # statements[0] 是 DELETE，statements[1] 是批次 INSERT；
+        # 把 INSERT 換成必定失敗的語句以觸發整批回滾。
+        assert len(broken) == 2, "set_watchlist 應送出 DELETE + 批次 INSERT 兩條語句"
+        broken[1] = (
+            "INSERT INTO assets (definitely_not_a_column) VALUES (?)",
+            [(1,)],
+            True,
+        )
+        return real_execute_write_many(broken, commit)
 
-    class CursorProxy:
-        def __init__(self, real_cursor: Any) -> None:
-            self._real = real_cursor
-
-        @property
-        def rowcount(self) -> int:
-            return self._real.rowcount  # type: ignore
-
-        def execute(self, sql: str, *params: Any) -> Any:
-            if "INSERT INTO assets" in sql:
-                raise sqlite3.OperationalError("Simulated database failure")
-            return self._real.execute(sql, *params)
-
-        def fetchall(self) -> Any:
-            return self._real.fetchall()
-
-        def fetchone(self) -> Any:
-            return self._real.fetchone()
-
-    class ConnProxy:
-        def __init__(self, real_conn: Any) -> None:
-            self._real = real_conn
-
-        def cursor(self) -> Any:
-            return CursorProxy(self._real.cursor())
-
-        def commit(self) -> None:
-            self._real.commit()
-
-        def rollback(self) -> None:
-            self._real.rollback()
-
-        def close(self) -> None:
-            self._real.close()
-
-        def __enter__(self) -> Any:
-            return self
-
-        def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> Any:
-            if exc_type is not None:
-                self.rollback()
-                return False
-            self.commit()
-            return True
-
-    def faulty_conn_getter() -> Any:
-        return ConnProxy(original_conn_getter())
-
-    with patch.object(manager, "_get_conn", side_effect=faulty_conn_getter):
+    with patch(
+        "services.asset_manager.execute_write_many",
+        side_effect=faulty_execute_write_many,
+    ):
         with pytest.raises(sqlite3.OperationalError):
             manager.set_watchlist(user_id, ["NEW_FAIL"])
 
-    # 驗證原標的仍完好存在（交易回滾）
+    # 驗證原標的仍完好存在（DELETE 與失敗的 INSERT 同屬一個交易，已一併回滾）
     assets = manager.get_assets(user_id, ContextType.WATCH)
     assert {a.symbol for a in assets} == {"ORIGINAL_1", "ORIGINAL_2"}
 

@@ -1,6 +1,11 @@
 import sqlite3
 from typing import Any
-import config
+
+from database.connection import (
+    execute_write,
+    execute_write_rowcount,
+    get_read_connection,
+)
 
 
 def add_active_order(
@@ -15,40 +20,33 @@ def add_active_order(
     trailing_value: float = 0.0,
 ) -> int:
     """新增一個待成交委託單"""
-    conn = sqlite3.connect(config.DB_NAME)
-    cursor = conn.cursor()
-    try:
-        cursor.execute(
-            """
-            INSERT INTO active_orders (
-                user_id, symbol, quantity, order_type, validity, side,
-                limit_price, stop_price, trailing_value
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                user_id,
-                symbol.upper(),
-                quantity,
-                order_type.upper(),
-                validity.upper(),
-                side.upper(),
-                limit_price,
-                stop_price,
-                trailing_value,
-            ),
-        )
-        order_id = cursor.lastrowid
-        conn.commit()
-        if order_id is None:
-            raise ValueError("無法獲取待成交委託單寫入之 ID")
-        return order_id
-    finally:
-        conn.close()
+    order_id = execute_write(
+        """
+        INSERT INTO active_orders (
+            user_id, symbol, quantity, order_type, validity, side,
+            limit_price, stop_price, trailing_value
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            user_id,
+            symbol.upper(),
+            quantity,
+            order_type.upper(),
+            validity.upper(),
+            side.upper(),
+            limit_price,
+            stop_price,
+            trailing_value,
+        ),
+    )
+    if not isinstance(order_id, int):
+        raise ValueError("無法獲取待成交委託單寫入之 ID")
+    return order_id
 
 
 def get_user_active_orders(user_id: int) -> list:
     """取得特定使用者的所有待成交委託單"""
-    conn = sqlite3.connect(config.DB_NAME)
+    conn = get_read_connection()
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     try:
@@ -64,7 +62,7 @@ def get_user_active_orders(user_id: int) -> list:
 
 def get_all_active_orders() -> list:
     """取得全站所有待成交委託單"""
-    conn = sqlite3.connect(config.DB_NAME)
+    conn = get_read_connection()
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     try:
@@ -77,15 +75,10 @@ def get_all_active_orders() -> list:
 
 def delete_active_order(order_id: int) -> bool:
     """刪除委託單"""
-    conn = sqlite3.connect(config.DB_NAME)
-    cursor = conn.cursor()
-    try:
-        cursor.execute("DELETE FROM active_orders WHERE id = ?", (order_id,))
-        changes = cursor.rowcount
-        conn.commit()
-        return changes > 0
-    finally:
-        conn.close()
+    return (
+        execute_write_rowcount("DELETE FROM active_orders WHERE id = ?", (order_id,))
+        > 0
+    )
 
 
 def update_active_order_price(
@@ -95,114 +88,46 @@ def update_active_order_price(
     new_side: str | None = None,
 ) -> bool:
     """更新委託單價格 (包含 limit_price, stop_price, trailing_value 等) 與可選的數量/方向"""
-    conn = sqlite3.connect(config.DB_NAME)
-    cursor = conn.cursor()
-    try:
-        side = new_side.upper() if new_side is not None else None
+    side = new_side.upper() if new_side is not None else None
 
-        # 允許只更新方向/數量 (new_price=None)
-        if new_price is None:
-            if new_quantity is None and side is None:
-                return False
-            if new_quantity is not None and side is None:
-                cursor.execute(
-                    """
-                    UPDATE active_orders
-                    SET quantity = ?,
-                        updated_at = CURRENT_TIMESTAMP
-                    WHERE id = ?
-                    """,
-                    (new_quantity, order_id),
-                )
-            elif new_quantity is None and side is not None:
-                cursor.execute(
-                    """
-                    UPDATE active_orders
-                    SET side = ?,
-                        updated_at = CURRENT_TIMESTAMP
-                    WHERE id = ?
-                    """,
-                    (side, order_id),
-                )
-            else:
-                cursor.execute(
-                    """
-                    UPDATE active_orders
-                    SET quantity = ?,
-                        side = ?,
-                        updated_at = CURRENT_TIMESTAMP
-                    WHERE id = ?
-                    """,
-                    (new_quantity, side, order_id),
-                )
+    # 先組出單一語句與參數，再走寫入佇列。改寫前每個分支各自 cursor.execute +
+    # conn.commit()，且自開連線繞過 DatabaseWriteQueue。
+    set_clauses: list[str] = []
+    values: list[Any] = []
 
-            changes = cursor.rowcount
-            conn.commit()
-            return changes > 0
+    if new_price is not None:
+        set_clauses.extend(
+            [
+                "limit_price = CASE WHEN order_type IN ('LIMIT', 'STOP_LIMIT') THEN ? ELSE limit_price END",
+                "stop_price = CASE WHEN order_type IN ('STOP', 'STOP_LIMIT') THEN ? ELSE stop_price END",
+                "trailing_value = CASE WHEN order_type IN ('TRAILING_STOP_USD', 'TRAILING_STOP_PCT') THEN ? ELSE trailing_value END",
+            ]
+        )
+        values.extend([new_price, new_price, new_price])
 
-        if new_quantity is None and side is None:
-            cursor.execute(
-                """
-                UPDATE active_orders
-                SET limit_price = CASE WHEN order_type IN ('LIMIT', 'STOP_LIMIT') THEN ? ELSE limit_price END,
-                    stop_price = CASE WHEN order_type IN ('STOP', 'STOP_LIMIT') THEN ? ELSE stop_price END,
-                    trailing_value = CASE WHEN order_type IN ('TRAILING_STOP_USD', 'TRAILING_STOP_PCT') THEN ? ELSE trailing_value END,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-                """,
-                (new_price, new_price, new_price, order_id),
-            )
-        elif new_quantity is not None and side is None:
-            cursor.execute(
-                """
-                UPDATE active_orders
-                SET limit_price = CASE WHEN order_type IN ('LIMIT', 'STOP_LIMIT') THEN ? ELSE limit_price END,
-                    stop_price = CASE WHEN order_type IN ('STOP', 'STOP_LIMIT') THEN ? ELSE stop_price END,
-                    trailing_value = CASE WHEN order_type IN ('TRAILING_STOP_USD', 'TRAILING_STOP_PCT') THEN ? ELSE trailing_value END,
-                    quantity = ?,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-                """,
-                (new_price, new_price, new_price, new_quantity, order_id),
-            )
-        elif new_quantity is None and side is not None:
-            cursor.execute(
-                """
-                UPDATE active_orders
-                SET limit_price = CASE WHEN order_type IN ('LIMIT', 'STOP_LIMIT') THEN ? ELSE limit_price END,
-                    stop_price = CASE WHEN order_type IN ('STOP', 'STOP_LIMIT') THEN ? ELSE stop_price END,
-                    trailing_value = CASE WHEN order_type IN ('TRAILING_STOP_USD', 'TRAILING_STOP_PCT') THEN ? ELSE trailing_value END,
-                    side = ?,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-                """,
-                (new_price, new_price, new_price, side, order_id),
-            )
-        else:
-            cursor.execute(
-                """
-                UPDATE active_orders
-                SET limit_price = CASE WHEN order_type IN ('LIMIT', 'STOP_LIMIT') THEN ? ELSE limit_price END,
-                    stop_price = CASE WHEN order_type IN ('STOP', 'STOP_LIMIT') THEN ? ELSE stop_price END,
-                    trailing_value = CASE WHEN order_type IN ('TRAILING_STOP_USD', 'TRAILING_STOP_PCT') THEN ? ELSE trailing_value END,
-                    quantity = ?,
-                    side = ?,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-                """,
-                (new_price, new_price, new_price, new_quantity, side, order_id),
-            )
+    if new_quantity is not None:
+        set_clauses.append("quantity = ?")
+        values.append(new_quantity)
 
-        changes = cursor.rowcount
-        conn.commit()
-        return changes > 0
-    finally:
-        conn.close()
+    if side is not None:
+        set_clauses.append("side = ?")
+        values.append(side)
+
+    if not set_clauses:
+        # 允許只更新方向/數量 (new_price=None)，但三者全為 None 時無事可做
+        return False
+
+    set_clauses.append("updated_at = CURRENT_TIMESTAMP")
+    values.append(order_id)
+
+    query = f"UPDATE active_orders SET {', '.join(set_clauses)} WHERE id = ?"
+    # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+    return execute_write_rowcount(query, tuple(values)) > 0
 
 
 def get_active_order(order_id: int) -> dict | None:
     """取得單一待成交委託單的詳細資料"""
-    conn = sqlite3.connect(config.DB_NAME)
+    conn = get_read_connection()
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     try:
@@ -247,12 +172,4 @@ def update_active_order_fields(order_id: int, **kwargs) -> bool:  # type: ignore
     query = f"UPDATE active_orders SET {', '.join(updates)} WHERE id = ?"
     values.append(order_id)
 
-    conn = sqlite3.connect(config.DB_NAME)
-    cursor = conn.cursor()
-    try:
-        cursor.execute(query, tuple(values))  # nosemgrep
-        changes = cursor.rowcount
-        conn.commit()
-        return changes > 0
-    finally:
-        conn.close()
+    return execute_write_rowcount(query, tuple(values)) > 0  # nosemgrep

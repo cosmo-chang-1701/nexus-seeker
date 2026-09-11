@@ -1,5 +1,6 @@
 """TRADE（實單期權）資產的新增、編輯、列表、刪除與結算指令邏輯。"""
 
+import asyncio
 from typing import Any, Dict, Optional
 import logging
 from datetime import datetime
@@ -115,7 +116,7 @@ async def add_trade_impl(
             metadata=trade_details,
         )
 
-        success = manager.add_asset(asset)
+        success = await asyncio.to_thread(manager.add_asset, asset)
         if success:
             from market_analysis.portfolio import refresh_portfolio_greeks
 
@@ -209,7 +210,9 @@ async def edit_trade_impl(
             ephemeral=True,
         )
 
-    success = manager.update_asset_metadata(interaction.user.id, trade_id, updates)
+    success = await asyncio.to_thread(
+        manager.update_asset_metadata, interaction.user.id, trade_id, updates
+    )
     if success:
         from market_analysis.portfolio import refresh_portfolio_greeks
 
@@ -269,7 +272,14 @@ async def remove_trade_impl(interaction: discord.Interaction, trade_id: int) -> 
 
     manager = AssetManager()
     asset = manager.get_asset_by_id(user_id, trade_id)
-    if asset and manager.delete_asset_by_id(user_id, trade_id):
+    # 先行取出布林結果再進條件式：直接內嵌在 `and` 運算式裡會讓 mypy 以周圍
+    # 運算式的型別去推導 to_thread 的泛型回傳值，導致 arg-type 誤判。
+    deleted: bool = (
+        await asyncio.to_thread(manager.delete_asset_by_id, user_id, trade_id)
+        if asset is not None
+        else False
+    )
+    if asset is not None and deleted:
         # 🚀 刷新 Greeks
         from market_analysis.portfolio import refresh_portfolio_greeks
 
@@ -296,7 +306,9 @@ async def settle_trade_impl(
 
     manager = AssetManager()
 
-    success = manager.settle_to_holding(interaction.user.id, asset_id, execution_price)
+    success = await asyncio.to_thread(
+        manager.settle_to_holding, interaction.user.id, asset_id, execution_price
+    )
     if success:
         from market_analysis.portfolio import refresh_portfolio_greeks
 

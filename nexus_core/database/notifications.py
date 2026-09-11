@@ -1,9 +1,13 @@
 from typing import Any
-import sqlite3
 import json
 import logging
 from typing import List, Tuple, Optional
-import config
+
+from database.connection import (
+    execute_write,
+    execute_write_many,
+    get_read_connection,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -12,24 +16,17 @@ def add_pending_notification(
     user_id: int, content: Optional[str] = None, embed_dict: Optional[dict] = None
 ) -> Any:
     """將待發送通知存入資料庫"""
-    conn = None
     try:
         embed_json = json.dumps(embed_dict) if embed_dict else None
-        conn = sqlite3.connect(config.DB_NAME)
-        cursor = conn.cursor()
-        cursor.execute(
+        execute_write(
             """
             INSERT INTO pending_notifications (user_id, content, embed_json)
             VALUES (?, ?, ?)
         """,
             (user_id, content, embed_json),
         )
-        conn.commit()
     except Exception as e:
         logger.error(f"儲存待發送通知失敗: {e}")
-    finally:
-        if conn:
-            conn.close()
 
 
 def get_pending_notifications(
@@ -39,7 +36,7 @@ def get_pending_notifications(
     results = []
     conn = None
     try:
-        conn = sqlite3.connect(config.DB_NAME)
+        conn = get_read_connection()
         cursor = conn.cursor()
         cursor.execute(
             """
@@ -65,24 +62,17 @@ def get_pending_notifications(
 
 def delete_notification(notif_id: int) -> Any:
     """刪除已處理的通知"""
-    conn = None
     try:
-        conn = sqlite3.connect(config.DB_NAME)
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM pending_notifications WHERE id = ?", (notif_id,))
-        conn.commit()
+        execute_write("DELETE FROM pending_notifications WHERE id = ?", (notif_id,))
     except Exception as e:
         logger.error(f"刪除通知 {notif_id} 失敗: {e}")
-    finally:
-        if conn:
-            conn.close()
 
 
 def get_pending_count() -> int:
     """獲取剩餘待發送數量"""
     conn = None
     try:
-        conn = sqlite3.connect(config.DB_NAME)
+        conn = get_read_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM pending_notifications")
         return cursor.fetchone()[0]  # type: ignore
@@ -206,6 +196,13 @@ PRESET_PROFILES: dict[str, dict[str, bool]] = {
 }
 
 
+_UPSERT_NOTIFICATION_SETTING_SQL = """
+    INSERT INTO user_notification_settings (user_id, notification_key, enabled)
+    VALUES (?, ?, ?)
+    ON CONFLICT(user_id, notification_key) DO UPDATE SET enabled = excluded.enabled
+"""
+
+
 def _resolve_key(key: str) -> str:
     """將舊版 key 別名自動解析為新版 key"""
     return LEGACY_KEY_ALIASES.get(key, key)
@@ -216,7 +213,7 @@ def get_user_notification_settings(user_id: int) -> dict[str, bool]:
     settings = DEFAULT_NOTIFICATION_SETTINGS.copy()
     conn = None
     try:
-        conn = sqlite3.connect(config.DB_NAME)
+        conn = get_read_connection()
         cursor = conn.cursor()
         cursor.execute(
             """
@@ -245,51 +242,34 @@ def set_user_notification_setting(user_id: int, key: str, enabled: bool) -> Any:
     if resolved_key not in ALL_NOTIFICATION_KEYS:
         logger.warning(f"未知通知 key: {key} (resolved: {resolved_key})")
         return
-    conn = None
     try:
-        val = 1 if enabled else 0
-        conn = sqlite3.connect(config.DB_NAME)
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO user_notification_settings (user_id, notification_key, enabled)
-            VALUES (?, ?, ?)
-            ON CONFLICT(user_id, notification_key) DO UPDATE SET enabled = excluded.enabled
-        """,
-            (user_id, resolved_key, val),
+        execute_write(
+            _UPSERT_NOTIFICATION_SETTING_SQL,
+            (user_id, resolved_key, 1 if enabled else 0),
         )
-        conn.commit()
     except Exception as e:
         logger.error(
             f"儲存使用者通知設定失敗 (UID: {user_id}, Key: {resolved_key}): {e}"
         )
-    finally:
-        if conn:
-            conn.close()
 
 
 def set_all_user_notification_settings(user_id: int, enabled: bool) -> Any:
     """一鍵開啟或關閉所有通知項目"""
-    conn = None
     try:
         val = 1 if enabled else 0
-        conn = sqlite3.connect(config.DB_NAME)
-        cursor = conn.cursor()
-        for key in ALL_NOTIFICATION_KEYS:
-            cursor.execute(
-                """
-                INSERT INTO user_notification_settings (user_id, notification_key, enabled)
-                VALUES (?, ?, ?)
-                ON CONFLICT(user_id, notification_key) DO UPDATE SET enabled = excluded.enabled
-            """,
-                (user_id, key, val),
-            )
-        conn.commit()
+        # 整批共用一個交易（原本是逐 key execute、最後才一次 commit，語意相同），
+        # 避免一鍵切換在中途被其他寫入插隊而出現半套狀態。
+        execute_write_many(
+            [
+                (
+                    _UPSERT_NOTIFICATION_SETTING_SQL,
+                    [(user_id, key, val) for key in ALL_NOTIFICATION_KEYS],
+                    True,
+                )
+            ]
+        )
     except Exception as e:
         logger.error(f"一鍵更新所有通知設定失敗 (UID: {user_id}): {e}")
-    finally:
-        if conn:
-            conn.close()
 
 
 def apply_preset_settings(user_id: int, preset_name: str) -> dict[str, bool]:
@@ -298,26 +278,21 @@ def apply_preset_settings(user_id: int, preset_name: str) -> dict[str, bool]:
     if not preset:
         logger.warning(f"未知預設模式: {preset_name}")
         return get_user_notification_settings(user_id)
-    conn = None
     try:
-        conn = sqlite3.connect(config.DB_NAME)
-        cursor = conn.cursor()
-        for key, is_on in preset.items():
-            val = 1 if is_on else 0
-            cursor.execute(
-                """
-                INSERT INTO user_notification_settings (user_id, notification_key, enabled)
-                VALUES (?, ?, ?)
-                ON CONFLICT(user_id, notification_key) DO UPDATE SET enabled = excluded.enabled
-            """,
-                (user_id, key, val),
-            )
-        conn.commit()
+        execute_write_many(
+            [
+                (
+                    _UPSERT_NOTIFICATION_SETTING_SQL,
+                    [
+                        (user_id, key, 1 if is_on else 0)
+                        for key, is_on in preset.items()
+                    ],
+                    True,
+                )
+            ]
+        )
     except Exception as e:
         logger.error(f"套用預設模式 {preset_name} 失敗 (UID: {user_id}): {e}")
-    finally:
-        if conn:
-            conn.close()
     return get_user_notification_settings(user_id)
 
 
@@ -328,7 +303,7 @@ def is_notification_enabled(user_id: int, key: str) -> bool:
         return True
     conn = None
     try:
-        conn = sqlite3.connect(config.DB_NAME)
+        conn = get_read_connection()
         cursor = conn.cursor()
         cursor.execute(
             """

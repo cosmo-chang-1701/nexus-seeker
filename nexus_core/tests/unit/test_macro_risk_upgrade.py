@@ -1365,7 +1365,7 @@ def test_calendar_service_fedwatch_lookup() -> None:
     ):
         mock_cursor = MagicMock()
         mock_cursor.fetchone.return_value = {"fedwatch_probability": 0.85}
-        mock_conn.return_value.__enter__.return_value.cursor.return_value = mock_cursor
+        mock_conn.return_value.cursor.return_value = mock_cursor
         prob, is_fallback = calendar_service.get_latest_fedwatch_probability()
         assert prob == 0.85
         assert is_fallback is True

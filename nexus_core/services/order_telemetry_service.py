@@ -291,7 +291,9 @@ async def apply_telemetry_to_orders(
             )
 
         if abs(optimal_price - current_price) >= 0.01 or optimal_qty != original_qty:
-            update_active_order_price(order["id"], optimal_price, int(optimal_qty))
+            await asyncio.to_thread(
+                update_active_order_price, order["id"], optimal_price, int(optimal_qty)
+            )
             updated_count += 1
             qty_change_msg = ""
             if optimal_qty < original_qty:

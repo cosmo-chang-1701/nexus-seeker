@@ -304,79 +304,41 @@ async def validate_symbol(symbol: str) -> bool:
 
     # 3. 後備機制 A：當 API 因限流、盤前/週末或網路波動而失效時，比對本地資料庫中是否已有該標的之運作紀錄
     import sqlite3
-    import config
+
+    from database.connection import get_read_connection
+
+    # 逐表檢查：任一表命中即視為有效代號。個別表可能尚未建立（migration 未跑完），
+    # 故單表的 OperationalError 只跳過該表，不中斷整輪檢查。
+    _FALLBACK_TABLES = (
+        "market_cache",
+        "watchlist",
+        "portfolio",
+        "active_orders",
+        "historical_iv",
+    )
 
     try:
-        with sqlite3.connect(config.DB_NAME) as conn:
+        # 注意：sqlite3 的 context manager 只 commit/rollback，不會關閉連線，
+        # 因此這裡改用 try/finally 明確 close()。
+        conn = get_read_connection()
+        try:
             cursor = conn.cursor()
-
-            # 3.1 檢查 market_cache
-            try:
-                cursor.execute(
-                    "SELECT 1 FROM market_cache WHERE UPPER(symbol) = ? LIMIT 1",
-                    (symbol,),
-                )
-                if cursor.fetchone():
-                    logger.info(
-                        f"[{symbol}] 報價失敗，但於本地資料庫 market_cache 中尋獲紀錄，判定為有效代號"
+            for table in _FALLBACK_TABLES:
+                try:
+                    # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
+                    cursor.execute(
+                        f"SELECT 1 FROM {table} WHERE UPPER(symbol) = ? LIMIT 1",
+                        (symbol,),
                     )
-                    return True
-            except sqlite3.OperationalError:
-                pass
-
-            # 3.2 檢查 watchlist
-            try:
-                cursor.execute(
-                    "SELECT 1 FROM watchlist WHERE UPPER(symbol) = ? LIMIT 1", (symbol,)
-                )
-                if cursor.fetchone():
-                    logger.info(
-                        f"[{symbol}] 報價失敗，但於本地資料庫 watchlist 中尋獲紀錄，判定為有效代號"
-                    )
-                    return True
-            except sqlite3.OperationalError:
-                pass
-
-            # 3.3 檢查 portfolio
-            try:
-                cursor.execute(
-                    "SELECT 1 FROM portfolio WHERE UPPER(symbol) = ? LIMIT 1", (symbol,)
-                )
-                if cursor.fetchone():
-                    logger.info(
-                        f"[{symbol}] 報價失敗，但於本地資料庫 portfolio 中尋獲紀錄，判定為有效代號"
-                    )
-                    return True
-            except sqlite3.OperationalError:
-                pass
-
-            # 3.4 檢查 active_orders
-            try:
-                cursor.execute(
-                    "SELECT 1 FROM active_orders WHERE UPPER(symbol) = ? LIMIT 1",
-                    (symbol,),
-                )
-                if cursor.fetchone():
-                    logger.info(
-                        f"[{symbol}] 報價失敗，但於本地資料庫 active_orders 中尋獲紀錄，判定為有效代號"
-                    )
-                    return True
-            except sqlite3.OperationalError:
-                pass
-
-            # 3.5 檢查 historical_iv
-            try:
-                cursor.execute(
-                    "SELECT 1 FROM historical_iv WHERE UPPER(symbol) = ? LIMIT 1",
-                    (symbol,),
-                )
-                if cursor.fetchone():
-                    logger.info(
-                        f"[{symbol}] 報價失敗，但於本地資料庫 historical_iv 中尋獲紀錄，判定為有效代號"
-                    )
-                    return True
-            except sqlite3.OperationalError:
-                pass
+                    if cursor.fetchone():
+                        logger.info(
+                            f"[{symbol}] 報價失敗，但於本地資料庫 {table} 中尋獲紀錄，判定為有效代號"
+                        )
+                        return True
+                except sqlite3.OperationalError:
+                    continue
+        finally:
+            conn.close()
 
     except Exception as e:
         logger.error(f"validate_symbol 資料庫後備驗證失敗: {e}")

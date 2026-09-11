@@ -5,6 +5,7 @@ from typing import List, Optional, Union, Tuple, Any
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, field_validator
+from database.connection import get_read_connection
 from database.calendar_cache import (
     get_cached_earnings,
     get_macro_events_between,
@@ -732,7 +733,6 @@ class CalendarService:
     def get_latest_fedwatch_probability(self) -> tuple[float, bool]:
         """讀取最新 FedWatch 概率與是否為 Fallback 快取"""
         import sqlite3
-        import config
         from database.cache import get_kv_cache
 
         fallback_val = get_kv_cache("macro_fedwatch_is_fallback")
@@ -750,7 +750,10 @@ class CalendarService:
                 pass
 
         try:
-            with sqlite3.connect(config.DB_NAME) as conn:
+            # 注意：sqlite3 的 context manager 只 commit/rollback，不會關閉連線，
+            # 因此這裡改用 try/finally 明確 close()。
+            conn = get_read_connection()
+            try:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
                 cursor.execute(
@@ -767,8 +770,10 @@ class CalendarService:
                     """
                 )
                 row = cursor.fetchone()
-                if row and row["fedwatch_probability"] is not None:
-                    return float(row["fedwatch_probability"]), is_fallback
+            finally:
+                conn.close()
+            if row and row["fedwatch_probability"] is not None:
+                return float(row["fedwatch_probability"]), is_fallback
         except Exception as e:
             logger.warning(f"查詢 FedWatch 概率失敗: {e}")
 

@@ -1,7 +1,12 @@
 from typing import Any
 import sqlite3
 import json
-import config
+
+from database.connection import (
+    execute_write,
+    execute_write_many,
+    get_read_connection,
+)
 
 
 # ==========================================
@@ -21,49 +26,45 @@ def add_portfolio_record(
     gamma: float = 0.0,
     trade_category: str = "SPECULATIVE",
 ) -> Any:
-    conn = sqlite3.connect(config.DB_NAME)
-    cursor = conn.cursor()
-    try:
-        # 🚀 自動抓取目前持倉數據以取得現貨成本 (如果傳入的為 0.0)
-        if stock_cost == 0.0:
-            symbol_upper = symbol.upper()
+    # 🚀 自動抓取目前持倉數據以取得現貨成本 (如果傳入的為 0.0)
+    if stock_cost == 0.0:
+        conn = get_read_connection()
+        try:
+            cursor = conn.cursor()
             cursor.execute(
                 "SELECT metadata FROM assets WHERE user_id = ? AND symbol = ? AND context_type = 'HOLDING'",
-                (user_id, symbol_upper),
+                (user_id, symbol.upper()),
             )
             h_row = cursor.fetchone()
-            if h_row:
-                try:
-                    m_hold = json.loads(h_row[0]) if h_row[0] else {}
-                    stock_cost = float(m_hold.get("avg_cost", 0.0))
-                except Exception:
-                    pass
+        finally:
+            conn.close()
+        if h_row:
+            try:
+                m_hold = json.loads(h_row[0]) if h_row[0] else {}
+                stock_cost = float(m_hold.get("avg_cost", 0.0))
+            except Exception:
+                pass
 
-        metadata = {
-            "opt_type": opt_type,
-            "strike": strike,
-            "expiry": expiry,
-            "entry_price": entry_price,
-            "quantity": quantity,
-            "stock_cost": stock_cost,
-            "weighted_delta": weighted_delta,
-            "theta": theta,
-            "gamma": gamma,
-            "category": trade_category,
-        }
+    metadata = {
+        "opt_type": opt_type,
+        "strike": strike,
+        "expiry": expiry,
+        "entry_price": entry_price,
+        "quantity": quantity,
+        "stock_cost": stock_cost,
+        "weighted_delta": weighted_delta,
+        "theta": theta,
+        "gamma": gamma,
+        "category": trade_category,
+    }
 
-        cursor.execute(
-            """
-            INSERT INTO assets (user_id, symbol, context_type, metadata)
-            VALUES (?, ?, 'TRADE', ?)
-        """,
-            (user_id, symbol.upper(), json.dumps(metadata)),
-        )
-        trade_id = cursor.lastrowid
-        conn.commit()
-        return trade_id
-    finally:
-        conn.close()
+    return execute_write(
+        """
+        INSERT INTO assets (user_id, symbol, context_type, metadata)
+        VALUES (?, ?, 'TRADE', ?)
+    """,
+        (user_id, symbol.upper(), json.dumps(metadata)),
+    )
 
 
 def archive_expired_portfolio_records() -> None:
@@ -75,7 +76,7 @@ def archive_expired_portfolio_records() -> None:
 
     logger = logging.getLogger(__name__)
 
-    conn = sqlite3.connect(config.DB_NAME)
+    conn = get_read_connection()
     cursor = conn.cursor()
 
     try:
@@ -130,19 +131,26 @@ def archive_expired_portfolio_records() -> None:
                     logger.error(f"解析到期日失敗 for asset_id={asset_id}: {e}")
 
         if expired_ids:
-            cursor.executemany(
-                """
+            placeholders = ",".join("?" for _ in expired_ids)
+            # 存檔 INSERT 與原表 DELETE 必須同屬一個交易，否則中途失敗會造成
+            # 「已複製但未刪除」（重複）或「已刪除但未複製」（資料遺失）。
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+            execute_write_many(
+                [
+                    (
+                        """
                 INSERT INTO archived_assets (user_id, symbol, context_type, risk_weight, metadata, last_scan_id, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                expired_records,
+                        expired_records,
+                        True,
+                    ),
+                    (
+                        f"DELETE FROM assets WHERE id IN ({placeholders})",
+                        tuple(expired_ids),
+                    ),
+                ]
             )
-            placeholders = ",".join("?" for _ in expired_ids)
-            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
-            cursor.execute(
-                f"DELETE FROM assets WHERE id IN ({placeholders})", expired_ids
-            )
-            conn.commit()
             logger.info(
                 f"成功將 {len(expired_ids)} 筆已過期合約移至歷史存檔資料庫 (Archive DB)"
             )
@@ -153,9 +161,15 @@ def archive_expired_portfolio_records() -> None:
 
 
 def get_user_portfolio(user_id: Any):  # type: ignore
-    """取得特定使用者的持倉"""
-    archive_expired_portfolio_records()
-    conn = sqlite3.connect(config.DB_NAME)
+    """取得特定使用者的持倉。
+
+    ⚠️ 刻意**不**呼叫 `archive_expired_portfolio_records()`：那是一個全表掃描的
+    歸檔**寫入交易**，過去掛在這條純讀取路徑上，等於每次讀取持倉都取得一次寫入
+    鎖。心跳 (`cogs/trading/heartbeat.py`) 每 15 分鐘就會呼叫一次，是
+    `database is locked` 的主要來源之一。歸檔已改由 03:00 ET 的離峰排程負責
+    （`cogs/trading/scheduler.py::kv_cache_dedup_purge`）。
+    """
+    conn = get_read_connection()
     cursor = conn.cursor()
     try:
         # 🚀 自動抓取該用戶的所有目前持倉數據 (HOLDING)
@@ -202,9 +216,11 @@ def get_user_portfolio(user_id: Any):  # type: ignore
 
 
 def get_all_portfolio() -> Any:
-    """取得全站所有持倉 (包含 TRADE 與 HOLDING，供背景排程使用)"""
-    archive_expired_portfolio_records()
-    conn = sqlite3.connect(config.DB_NAME)
+    """取得全站所有持倉 (包含 TRADE 與 HOLDING，供背景排程使用)。
+
+    ⚠️ 同 `get_user_portfolio()`：不再觸發歸檔寫入，詳見該函式的說明。
+    """
+    conn = get_read_connection()
     cursor = conn.cursor()
     try:
         # 1. 抓取全站所有現貨持倉數據 (HOLDING)
@@ -282,7 +298,7 @@ def get_all_trade_positions() -> Any:
     有新呼叫端要在沒有先呼叫 get_all_portfolio() 的情境下使用本函式，需自行
     確保過期合約已被歸檔，否則可能把已下市/到期的合約一併抓進報價查詢。
     """
-    conn = sqlite3.connect(config.DB_NAME)
+    conn = get_read_connection()
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     try:
@@ -322,53 +338,53 @@ def get_user_portfolio_stats(user_id: Any):  # type: ignore
 
 def delete_portfolio_record(user_id: Any, trade_id: Any):  # type: ignore
     """確保使用者只能刪除自己的紀錄"""
-    conn = sqlite3.connect(config.DB_NAME)
-    cursor = conn.cursor()
+    conn = get_read_connection()
     try:
+        cursor = conn.cursor()
         cursor.execute(
             "SELECT symbol, metadata FROM assets WHERE id = ? AND user_id = ? AND context_type = 'TRADE'",
             (trade_id, user_id),
         )
         row = cursor.fetchone()
-        record = None
-        if row:
-            sym, meta_json = row
-            m = json.loads(meta_json) if meta_json else {}
-            record = (sym, m.get("strike"), m.get("opt_type"))
-            cursor.execute("DELETE FROM assets WHERE id = ?", (trade_id,))
-            conn.commit()
-        return record
     finally:
         conn.close()
+
+    if not row:
+        return None
+
+    sym, meta_json = row
+    m = json.loads(meta_json) if meta_json else {}
+    execute_write("DELETE FROM assets WHERE id = ?", (trade_id,))
+    return (sym, m.get("strike"), m.get("opt_type"))
 
 
 def update_portfolio_greeks(
     trade_id: int, weighted_delta: float, theta: float, gamma: float
 ) -> Any:
     """更新持倉紀錄的希臘字母數據"""
-    conn = sqlite3.connect(config.DB_NAME)
-    cursor = conn.cursor()
+    conn = get_read_connection()
     try:
+        cursor = conn.cursor()
         cursor.execute("SELECT metadata FROM assets WHERE id = ?", (trade_id,))
         row = cursor.fetchone()
-        if row:
-            meta = json.loads(row[0]) if row[0] else {}
-            meta["weighted_delta"] = weighted_delta
-            meta["theta"] = theta
-            meta["gamma"] = gamma
-            cursor.execute(
-                "UPDATE assets SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (json.dumps(meta), trade_id),
-            )
-        conn.commit()
-        return True
     finally:
         conn.close()
+
+    if row:
+        meta = json.loads(row[0]) if row[0] else {}
+        meta["weighted_delta"] = weighted_delta
+        meta["theta"] = theta
+        meta["gamma"] = gamma
+        execute_write(
+            "UPDATE assets SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (json.dumps(meta), trade_id),
+        )
+    return True
 
 
 def is_symbol_in_portfolio(user_id: int, symbol: str) -> bool:
     """檢查標的是否存在於使用者的活躍持倉 (TRADE) 或現貨 (HOLDING) 中"""
-    conn = sqlite3.connect(config.DB_NAME)
+    conn = get_read_connection()
     cursor = conn.cursor()
     try:
         cursor.execute(
@@ -397,24 +413,18 @@ def add_hedge_history(
     tau_applied: Any,
 ) -> None:
     """紀錄每日對沖績效與使用的 Tau 係數"""
-    conn = sqlite3.connect(config.DB_NAME)
-    cursor = conn.cursor()
-    try:
-        cursor.execute(
-            """
-            INSERT INTO hedge_history (user_id, date, alpha_pnl, hedge_pnl, effectiveness, tau_applied)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """,
-            (user_id, date, alpha_pnl, hedge_pnl, effectiveness, tau_applied),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    execute_write(
+        """
+        INSERT INTO hedge_history (user_id, date, alpha_pnl, hedge_pnl, effectiveness, tau_applied)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """,
+        (user_id, date, alpha_pnl, hedge_pnl, effectiveness, tau_applied),
+    )
 
 
 def get_hedge_history(user_id: Any, limit: Any = 7):  # type: ignore
     """獲取過去 N 天的對沖績效紀錄"""
-    conn = sqlite3.connect(config.DB_NAME)
+    conn = get_read_connection()
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     try:

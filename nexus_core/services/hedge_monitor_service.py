@@ -12,8 +12,6 @@ from market_analysis.risk_engine import (
     calculate_vega_adjusted_delta,
     calculate_hedge_instruction,
 )
-import sqlite3
-import config
 
 logger = logging.getLogger(__name__)
 
@@ -125,13 +123,19 @@ class HedgeMonitorService:
         spy_df = await market_data_service.get_history_df("SPY", "2d")
         spy_price = spy_df["Close"].iloc[-1] if not spy_df.empty else 670.0
 
-        with manager._get_conn() as conn:
+        conn = manager._get_conn()
+        try:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT context_type, metadata FROM assets WHERE user_id = ? AND context_type IN ('TRADE', 'HOLDING')",
                 (user_id,),
             )
-            for row in cursor.fetchall():
+            asset_rows = cursor.fetchall()
+        finally:
+            conn.close()
+
+        if True:
+            for row in asset_rows:
                 c_type, meta_str = row
                 meta = json.loads(meta_str)
 
@@ -203,7 +207,8 @@ class HedgeMonitorService:
             user_id, "VIX_SPIKE_HEDGE", pre_hedge_greeks, poly_snapshot
         )
 
-        alert_id = self._save_alert(
+        alert_id = await asyncio.to_thread(
+            self._save_alert,
             user_id,
             vix_level,
             stage_move,
@@ -280,19 +285,15 @@ class HedgeMonitorService:
         instr: Any,
         narration: Any,
     ):
-        conn = sqlite3.connect(config.DB_NAME)
-        cursor = conn.cursor()
-        cursor.execute(
+        from database.connection import execute_write
+
+        return execute_write(
             """
             INSERT INTO hedge_alerts (user_id, vix_level, vix_stage_move, portfolio_delta, portfolio_vega, hedge_instrument, hedge_contracts, instruction_text, narration)
             VALUES (?, ?, ?, ?, ?, 'SPY', ?, ?, ?)
         """,
             (user_id, vix, stage_move, delta, vega, hedge_qty, instr, narration),
         )
-        alert_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
-        return alert_id
 
     async def _send_discord_alert(  # type: ignore
         self,

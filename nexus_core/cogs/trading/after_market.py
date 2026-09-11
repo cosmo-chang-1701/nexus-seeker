@@ -4,6 +4,7 @@ cogs/trading/after_market.py
 盤後結算報告排程 (16:15 ET) 及共用 pipeline 邏輯。
 """
 
+import asyncio
 from typing import Any
 import logging
 from datetime import datetime, time
@@ -47,7 +48,7 @@ class AfterMarketCog(commands.Cog):
         logger.info("Starting dynamic_after_market_report maintenance task.")
 
         try:
-            purged_rows = database.purge_old_cache(days=30)
+            purged_rows = await asyncio.to_thread(database.purge_old_cache, days=30)
             logger.info(
                 f"🧹 financials_cache 清理完成，刪除 {purged_rows} 筆 30 天前資料"
             )

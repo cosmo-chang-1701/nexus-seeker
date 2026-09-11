@@ -121,6 +121,17 @@ class SchedulerCog(commands.Cog):
         except Exception as e:
             logger.error(f"kv_cache 每日去重旗標清理失敗: {e}")
 
+        # 過期合約歸檔：這是一個全表掃描的寫入交易，原本掛在
+        # database.portfolio.get_user_portfolio() / get_all_portfolio() 的開頭，
+        # 等於每次讀取持倉都取得一次寫入鎖（15 分鐘心跳每輪都會踩到）。
+        # 一天跑一次已綽綽有餘，故併入這個離峰任務。
+        try:
+            from database.portfolio import archive_expired_portfolio_records
+
+            await asyncio.to_thread(archive_expired_portfolio_records)
+        except Exception as e:
+            logger.error(f"過期合約歸檔失敗: {e}")
+
     @kv_cache_dedup_purge.before_loop
     async def before_kv_cache_dedup_purge(self) -> None:
         await self.bot.wait_until_ready()
