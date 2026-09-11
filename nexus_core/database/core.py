@@ -1,10 +1,10 @@
 from typing import Any
-import sqlite3
 import logging
 import pkgutil
 import importlib
-import config
 import re
+
+from database.connection import connect_db
 
 from database import migrations
 
@@ -50,8 +50,14 @@ MIGRATIONS = get_migrations()
 
 def run_migrations() -> None:
     """執行資料庫版本控管與遷移邏輯"""
-    conn = sqlite3.connect(config.DB_NAME)
+    # 這是程序啟動時的第一條連線，也是唯一適合設定 journal_mode 的地方：
+    # WAL 寫在資料庫檔頭、是持久設定，設定一次即對之後所有連線生效。
+    # 早期版本沒有在這裡設定，全新 volume 的首次 migration 是在
+    # rollback-journal 模式下跑的；而每條讀取連線各自重設一次 WAL 則是
+    # 熱路徑上純粹的浪費（見 database/connection.py::_apply_connection_pragmas）。
+    conn = connect_db()
     cursor = conn.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL;")
 
     # 1. 確保版控紀錄表存在
     cursor.execute("""

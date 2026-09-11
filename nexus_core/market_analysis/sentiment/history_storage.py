@@ -234,20 +234,70 @@ def get_last_stored_sentiment(symbol: str, indicator: str) -> Optional[float]:
     return None
 
 
+async def _resolve_iv_for_storage(symbol: str, iv: Any) -> Optional[float]:
+    """在**入列之前**把無效 IV 解析完畢（自癒）。
+
+    刻意放在呼叫端而非寫入 worker 內：worker 是全程序唯一且序列化的寫入者，
+    早期版本把 Fallback 2 的 `get_history_df()` 網路請求放進 worker 的
+    `_process_task`，那筆請求期間**全程序所有 `execute_write_async` 一起卡住**
+    （head-of-line blocking）。這裡先解析完，worker 只需要收一筆純 SQL 寫入。
+    """
+    import math
+
+    def _invalid(v: Any) -> bool:
+        return v is None or (isinstance(v, float) and math.isnan(v))
+
+    if not _invalid(iv):
+        return float(iv)
+
+    logger.warning(
+        f"[{symbol}] save_historical_iv 收到無效 IV ({iv})，啟動自癒 fallback。"
+    )
+
+    # Fallback 1: 前一交易日收盤 IV（沿用本模組既有的讀取函式）
+    last_iv = await asyncio.to_thread(get_last_stored_iv, symbol)
+    if not _invalid(last_iv):
+        logger.info(f"[{symbol}] Fallback 1: 沿用前一交易日收盤 IV ({last_iv})。")
+        return float(last_iv)  # type: ignore[arg-type]
+
+    # Fallback 2: 30 日歷史波動率（HV）代理
+    try:
+        from services.market_data_service import get_history_df
+        import pandas as pd
+        import numpy as np
+
+        df_temp = await get_history_df(symbol, period="1mo")
+        if not df_temp.empty and len(df_temp) >= 2:
+            log_ret = np.log(df_temp["Close"] / df_temp["Close"].shift(1))
+            hv = float(log_ret.std() * np.sqrt(252))
+            if not pd.isna(hv) and hv > 0:
+                logger.info(f"[{symbol}] Fallback 2: 以 30 日 HV ({hv}) 代理。")
+                return hv
+    except Exception as hv_err:
+        logger.error(f"[{symbol}] Fallback 2 計算失敗: {hv_err}")
+
+    return None
+
+
 async def save_historical_iv(symbol: str, iv: float, date_str: str) -> Any:
     """將每日 IV 存入 database。"""
     try:
-        from bot import NexusBot
-        from database.connection import DatabaseWriteQueue
+        from database.connection import execute_write_async
 
-        bot = NexusBot.get_instance()
-        if bot and hasattr(bot, "db_write_queue") and bot.db_write_queue:
-            await bot.db_write_queue.put_task(
-                "save_historical_iv", (symbol, iv, date_str)
+        resolved = await _resolve_iv_for_storage(symbol, iv)
+        if resolved is None:
+            logger.warning(
+                f"⚠️ [{symbol}] 所有 IV fallback 均失敗，略過寫入 historical_iv "
+                "以避免 NOT NULL 約束錯誤。"
             )
-        else:
-            await DatabaseWriteQueue.put_task(
-                "save_historical_iv", (symbol, iv, date_str)
-            )
+            return
+
+        await execute_write_async(
+            """
+            INSERT OR REPLACE INTO historical_iv (symbol, iv, date)
+            VALUES (?, ?, ?)
+            """,
+            (symbol, resolved, date_str),
+        )
     except Exception as e:
         logger.error(f"儲存歷史 IV 失敗: {e}")

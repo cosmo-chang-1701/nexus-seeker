@@ -1,5 +1,7 @@
 from typing import Any
 import asyncio
+import sqlite3
+import threading
 import pytest
 from unittest.mock import AsyncMock, patch
 import pandas as pd
@@ -184,42 +186,39 @@ async def test_historical_iv_self_healing_fallback(db_conn: Any):  # type: ignor
 @pytest.mark.asyncio
 async def test_put_task_sync_backpressure_no_deadlock(db_conn: Any) -> None:
     """驗證加上 maxsize 之後，put_task_sync 在佇列滿載時是正確地非阻塞式等待
-    （最終在有空間時成功完成），而不是像修正前那樣：worker thread 呼叫
-    call_soon_threadsafe + put_nowait()，佇列滿時 put_nowait() 拋出的
-    asyncio.QueueFull 會在 callback 內被 asyncio 預設處理器吞掉，導致
-    event.wait() 永久卡死。"""
+    （最終在有空間時成功完成），而不是永久卡死。"""
     loop = asyncio.get_running_loop()
-    hold_event = asyncio.Event()
+    hold_event = threading.Event()
     # 透過 __dict__ 取原始 classmethod 描述器再取 __func__，避開直接對已綁定的
-    # classmethod（DatabaseWriteQueue._process_task）存取 __func__ 時，mypy 對
-    # bound method 型別沒有該屬性的靜態檢查錯誤。
-    original_process_task = DatabaseWriteQueue.__dict__["_process_task"].__func__
+    # classmethod 存取 __func__ 時，mypy 對 bound method 型別沒有該屬性的靜態檢查錯誤。
+    original_process_task = DatabaseWriteQueue.__dict__["_process_task_sync"].__func__
 
-    async def slow_process_task(
+    def slow_process_task(
         cls: Any, conn: Any, task_type: str, data: tuple, commit: bool
     ) -> Any:
         if task_type == "hold":
-            # 讓 worker 卡在這裡，模擬處理緩慢導致佇列積壓的情境
-            await hold_event.wait()
+            # 讓 worker 卡在這裡，模擬處理緩慢導致佇列積壓的情境。
+            # 注意這是 threading.Event 而非 asyncio.Event——worker 已經是獨立
+            # 執行緒，不再跑在 event loop 上。
+            hold_event.wait(10.0)
             return True
-        return await original_process_task(cls, conn, task_type, data, commit)
+        return original_process_task(cls, conn, task_type, data, commit)
 
     with patch.object(
-        DatabaseWriteQueue, "_process_task", classmethod(slow_process_task)
+        DatabaseWriteQueue, "_process_task_sync", classmethod(slow_process_task)
     ):
         # maxsize=1：只要 worker 卡在第一筆任務，第二筆就會把佇列填滿。
         DatabaseWriteQueue.initialize(loop, maxsize=1)
         try:
-            # Task 1：讓 worker 從 queue.get() 拿走後卡住，佇列因此開始清空以外
-            # 都是積壓狀態。
+            # Task 1：讓 worker 從 queue.get() 拿走後卡住。
             fut_hold = asyncio.ensure_future(DatabaseWriteQueue.put_task("hold", ()))
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.1)
 
             # Task 2：worker 正忙，這筆會佔滿 maxsize=1 的佇列。
             fut_2 = asyncio.ensure_future(
                 DatabaseWriteQueue.put_task("sql", ("SELECT 1", ()))
             )
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.1)
             assert DatabaseWriteQueue._queue is not None
             assert DatabaseWriteQueue._queue.full()
 
@@ -238,15 +237,196 @@ async def test_put_task_sync_backpressure_no_deadlock(db_conn: Any) -> None:
                 "而不是立刻完成或拋錯（代表沒有真的觸發滿載路徑）"
             )
 
-            # 釋放 worker，讓積壓的任務依序被處理完，確認整條鏈最終都能完成
-            # （而不是永久掛住）。
+            # 釋放 worker，讓積壓的任務依序被處理完，確認整條鏈最終都能完成。
             hold_event.set()
             await asyncio.wait_for(fut_hold, timeout=5.0)
             await asyncio.wait_for(fut_2, timeout=5.0)
             result = await asyncio.wait_for(fut_sync, timeout=5.0)
             assert result is not None
         finally:
+            hold_event.set()
             await DatabaseWriteQueue.stop_worker()
+
+
+@pytest.mark.asyncio
+async def test_write_worker_runs_off_the_event_loop(db_conn: Any) -> None:
+    """寫入必須在專屬背景執行緒上執行，絕不能在 event loop 執行緒上。
+
+    這是 `heartbeat blocked for more than 10 seconds` 的根因回歸測試：早期版本用
+    `loop.create_task(_worker_loop())`，`cursor.execute()` 的 busy handler 會直接
+    睡在 Discord gateway 的執行緒上。
+    """
+    loop = asyncio.get_running_loop()
+    loop_thread = threading.current_thread()
+    seen: dict[str, Any] = {}
+
+    original_process_task = DatabaseWriteQueue.__dict__["_process_task_sync"].__func__
+
+    def recording_process_task(
+        cls: Any, conn: Any, task_type: str, data: tuple, commit: bool
+    ) -> Any:
+        seen["thread"] = threading.current_thread()
+        return original_process_task(cls, conn, task_type, data, commit)
+
+    with patch.object(
+        DatabaseWriteQueue, "_process_task_sync", classmethod(recording_process_task)
+    ):
+        DatabaseWriteQueue.initialize(loop)
+        try:
+            await execute_write_async(
+                "INSERT INTO kv_cache (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
+                ("off_loop_probe", "1"),
+            )
+        finally:
+            await DatabaseWriteQueue.stop_worker()
+
+    assert seen.get("thread") is not None
+    assert (
+        seen["thread"] is not loop_thread
+    ), "寫入不得在 event loop 執行緒上執行，否則 SQLite busy handler 會阻塞 Discord 心跳"
+    assert seen["thread"].name == "nexus-db-writer"
+
+
+@pytest.mark.asyncio
+async def test_write_storm_does_not_stall_the_event_loop(db_conn: Any) -> None:
+    """灌入大量寫入時，event loop 仍須保持可回應。
+
+    以一個 20ms 週期的探針量測 loop 延遲；修復前每筆寫入都在 loop 上同步
+    commit，延遲會隨寫入量線性累積。
+    """
+    loop = asyncio.get_running_loop()
+    DatabaseWriteQueue.initialize(loop)
+    max_lag = 0.0
+    stop = asyncio.Event()
+
+    async def probe() -> None:
+        nonlocal max_lag
+        while not stop.is_set():
+            t0 = loop.time()
+            await asyncio.sleep(0.02)
+            max_lag = max(max_lag, loop.time() - t0 - 0.02)
+
+    probe_task = asyncio.ensure_future(probe())
+    try:
+        await asyncio.gather(
+            *[
+                execute_write_async(
+                    "INSERT INTO kv_cache (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
+                    (f"storm_{i}", "v"),
+                )
+                for i in range(300)
+            ]
+        )
+    finally:
+        stop.set()
+        await probe_task
+        await DatabaseWriteQueue.stop_worker()
+
+    assert max_lag < 1.0, f"event loop 於寫入風暴期間停滯 {max_lag:.2f}s"
+
+
+@pytest.mark.asyncio
+async def test_write_queue_retries_on_database_locked(db_conn: Any) -> None:
+    """SQLITE_BUSY 應被退避重試吸收，而不是冒泡成 `database is locked` 給呼叫端。
+
+    藍綠部署期間兩個容器並存掛載同一個 DB volume，單一寫入佇列在該窗口內
+    必然失效，因此跨程序鎖競爭必須靠重試而非單純的 busy_timeout。
+    """
+    loop = asyncio.get_running_loop()
+    attempts = {"n": 0}
+    original_process_task = DatabaseWriteQueue.__dict__["_process_task_sync"].__func__
+
+    def flaky_process_task(
+        cls: Any, conn: Any, task_type: str, data: tuple, commit: bool
+    ) -> Any:
+        if task_type == "sql":
+            attempts["n"] += 1
+            if attempts["n"] <= 2:
+                raise sqlite3.OperationalError("database is locked")
+        return original_process_task(cls, conn, task_type, data, commit)
+
+    with patch.object(
+        DatabaseWriteQueue, "_process_task_sync", classmethod(flaky_process_task)
+    ):
+        DatabaseWriteQueue.initialize(loop)
+        try:
+            res = await execute_write_async(
+                "INSERT INTO kv_cache (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
+                ("retry_probe", "1"),
+            )
+        finally:
+            await DatabaseWriteQueue.stop_worker()
+
+    assert attempts["n"] == 3, "應該重試到第 3 次才成功"
+    assert res is True or isinstance(res, int)
+
+    conn = get_read_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT value FROM kv_cache WHERE key = ?", ("retry_probe",))
+        assert cur.fetchone() is not None
+    finally:
+        conn.close()
+
+
+@pytest.mark.asyncio
+async def test_stop_worker_drains_queued_writes(db_conn: Any) -> None:
+    """stop_worker() 必須先把佇列中尚未寫入的任務排空才退出，而不是直接取消。"""
+    loop = asyncio.get_running_loop()
+    DatabaseWriteQueue.initialize(loop)
+
+    futures = [
+        asyncio.ensure_future(
+            execute_write_async(
+                "INSERT INTO kv_cache (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
+                (f"drain_{i}", "v"),
+            )
+        )
+        for i in range(50)
+    ]
+    # 先讓這些 task 真的把任務放進佇列（ensure_future 只是排程，還沒執行過
+    # put_task 的入列動作），才能驗證 stop_worker() 是否把佇列排空。
+    await asyncio.sleep(0.05)
+    await DatabaseWriteQueue.stop_worker()
+    await asyncio.gather(*futures)
+
+    conn = get_read_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM kv_cache WHERE key LIKE 'drain_%'")
+        assert cur.fetchone()[0] == 50
+    finally:
+        conn.close()
+
+
+@pytest.mark.asyncio
+async def test_execute_write_many_async_is_one_transaction(db_conn: Any) -> None:
+    """批次寫入入口：多語句共用一個交易，支援 executemany。"""
+    from database.connection import execute_write_many_async
+
+    loop = asyncio.get_running_loop()
+    DatabaseWriteQueue.initialize(loop)
+    try:
+        await execute_write_many_async(
+            [
+                ("DELETE FROM kv_cache WHERE key LIKE ?", ("batch_%",)),
+                (
+                    "INSERT INTO kv_cache (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
+                    [(f"batch_{i}", "v") for i in range(5)],
+                    True,
+                ),
+            ]
+        )
+    finally:
+        await DatabaseWriteQueue.stop_worker()
+
+    conn = get_read_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM kv_cache WHERE key LIKE 'batch_%'")
+        assert cur.fetchone()[0] == 5
+    finally:
+        conn.close()
 
 
 @pytest.mark.asyncio
