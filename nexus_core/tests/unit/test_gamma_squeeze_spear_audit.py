@@ -391,3 +391,174 @@ def test_item7_fractional_kelly_and_hard_caps(
         market_phase="Phase B",
     )
     assert out_critical.kelly_position_scaling == 0.0  # 強制歸零
+
+
+def test_item2_universal_net_gex_negative_swamp_veto(
+    engine: NexusGammaSqueezeEngine, base_account: TraderAccountState
+) -> None:
+    """即使 gex_profile 存在遠端正 GEX 峰值，若標的整體處於實質負 Gamma (net_gex < 0)，一律觸發微觀結構否決"""
+    data = TickerMarketData(
+        ticker="TSLA",
+        spot_price=364.36,
+        market_cap_billion=1100.0,
+        avg_option_volume=90000,
+        days_until_earnings=25,
+        tomorrow_expiring_otm_calls_premium=2000000.0,
+        iv_rank=30.0,
+        option_skew=0.08,
+        net_gex=-19143083.0,  # 實質負 Gamma 泥淖
+        gex_profile={"400.0": 10000.0},  # 即使遠端有正 GEX
+    )
+    output = engine.analyze_ticker(
+        data=data,
+        account_state=base_account,
+        options_holdings=[],
+        portfolio_greeks={"vanna": 1.0, "beta": 1.5},
+        market_phase="Phase B",
+    )
+    assert output.sddm_route == "SHIELD"
+    failed_reasons = " ".join(output.failed_gates)
+    assert "負 Gamma 泥淖" in failed_reasons
+
+
+def test_item1_global_risk_override_when_market_closed(
+    engine: NexusGammaSqueezeEngine, base_market_data: TickerMarketData
+) -> None:
+    """休市 (market_phase == 'Closed') 時若存活跑道 < 30 天，全局風控優先級高於 WAIT，一律硬鎖為 SHIELD"""
+    critical_account = TraderAccountState(
+        capital=5000.0,
+        cash_reserve=1000.0,
+        monthly_burn_rate=6000.0,  # 5 days
+        current_vix=13.0,
+    )
+    output = engine.analyze_ticker(
+        data=base_market_data,
+        account_state=critical_account,
+        options_holdings=[],
+        portfolio_greeks={},
+        market_phase="Closed",
+    )
+    assert output.financial_runway_days == 5
+    assert output.sddm_route == "SHIELD"
+    assert output.kelly_position_scaling == 0.0
+    actions_text = " ".join(output.recommended_actions)
+    assert "存活風控硬鎖" in actions_text
+    assert "全局風控覆蓋機制已啟動" in actions_text
+
+
+def test_item2_fallback_candidate_blocked_by_sto_cap(
+    engine: NexusGammaSqueezeEngine, base_account: TraderAccountState
+) -> None:
+    """無 gex_profile 與 call_wall 之代數降級候選價位若遭遇 STO 剛性封頂，亦應觸發微觀結構否決"""
+    data = TickerMarketData(
+        ticker="TEST",
+        spot_price=100.0,
+        market_cap_billion=50.0,
+        avg_option_volume=60000,
+        days_until_earnings=20,
+        tomorrow_expiring_otm_calls_premium=1200000.0,
+        iv_rank=35.0,
+        option_skew=0.06,
+        # spot 100.0 -> min_target 105.0 -> candidate 105.0
+        physical_cap_strikes=[
+            {
+                "strike": 105.0,
+                "type": "CALL",
+                "action": "STO",
+                "ratio": 1.5,
+            }
+        ],
+    )
+    output = engine.analyze_ticker(
+        data=data,
+        account_state=base_account,
+        options_holdings=[],
+        portfolio_greeks={},
+        market_phase="Phase B",
+    )
+    assert output.sddm_route == "SHIELD"
+    failed_reasons = " ".join(output.failed_gates)
+    assert "微觀結構否決" in failed_reasons
+    assert "天量 STO 剛性物理封頂" in failed_reasons
+
+
+def test_item2_whale_bto_not_mistaken_for_sto_cap(
+    engine: NexusGammaSqueezeEngine, base_account: TraderAccountState
+) -> None:
+    """機構主力 BTO 買單 (action == 'BTO') 不得被誤判為 STO 剛性封頂"""
+    data = TickerMarketData(
+        ticker="TEST",
+        spot_price=100.0,
+        market_cap_billion=50.0,
+        avg_option_volume=60000,
+        days_until_earnings=20,
+        tomorrow_expiring_otm_calls_premium=1200000.0,
+        iv_rank=35.0,
+        option_skew=0.06,
+        gex_profile={"110.0": 50000.0},
+        physical_cap_strikes=[
+            {
+                "strike": 110.0,
+                "type": "CALL",
+                "action": "BTO",  # 機構買方扫單，非賣方封頂
+                "ratio": 2.5,
+            }
+        ],
+    )
+    output = engine.analyze_ticker(
+        data=data,
+        account_state=base_account,
+        options_holdings=[],
+        portfolio_greeks={},
+        market_phase="Phase B",
+    )
+    assert output.sddm_route == "SPEAR"
+    assert output.magnet_target == 110.0
+
+
+@pytest.mark.asyncio
+async def test_item5_gate3_zero_oi_blocks_retail_leak() -> None:
+    """驗證當選擇權無 openInterest (全為 0 或缺漏) 時，Gate 3 嚴格阻斷散戶雜訊，回傳 0.0 而非無條件放行"""
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from types import SimpleNamespace
+    import pandas as pd
+    from datetime import datetime as _dt, timedelta as _td
+    from market_analysis.intraday_pipeline.pipeline import IntradayScanPipeline
+
+    pipeline = IntradayScanPipeline(MagicMock(), NexusGammaSqueezeEngine())
+    future_exp = (_dt.now().date() + _td(days=10)).strftime("%Y-%m-%d")
+
+    # 散戶雜單：有 volume，但 openInterest 全為 0
+    chain_zero_oi = SimpleNamespace(
+        calls=pd.DataFrame(
+            [
+                {
+                    "strike": 110.0,
+                    "volume": 50.0,
+                    "lastPrice": 2.0,
+                    "openInterest": 0.0,
+                },
+                {
+                    "strike": 115.0,
+                    "volume": 20.0,
+                    "lastPrice": 1.0,
+                    "openInterest": 0.0,
+                },
+            ]
+        ),
+        puts=pd.DataFrame([]),
+    )
+
+    with patch(
+        "services.market_data_service.get_all_option_expiries",
+        new_callable=AsyncMock,
+        return_value=[future_exp],
+    ), patch(
+        "services.market_data_service.get_option_chain",
+        new_callable=AsyncMock,
+        return_value=chain_zero_oi,
+    ):
+        premium = await pipeline._fetch_front_expiry_otm_call_premium("TEST", 100.0)
+
+    # 必須嚴格過濾，回傳 0.0，不漏進散戶雜單
+    assert premium == 0.0

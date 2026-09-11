@@ -43,6 +43,7 @@ class IntradayScanPipeline:
         self.is_running = False
         self._task: Optional[asyncio.Task] = None
         self.scan_interval_seconds = 30 * 60  # 30 minutes
+        self._cached_spy_spot: float = 500.0
 
     def start(self) -> None:
         """啟動異步監控管道"""
@@ -481,6 +482,16 @@ class IntradayScanPipeline:
                     f"🤖 [Intraday Pipeline] 開盤心跳監測觸發。當前時段: {phase}"
                 )
 
+                # 預先抓取 SPY 現價供跨資產對沖價格比率計算
+                try:
+                    from services.market_data_service import get_quote
+
+                    spy_q = await get_quote("SPY")
+                    if spy_q and spy_q.get("c"):
+                        self._cached_spy_spot = float(spy_q["c"])
+                except Exception:
+                    pass
+
                 # 2. 獲取所有使用者資訊，執行量化分析
                 import database
 
@@ -568,12 +579,20 @@ class IntradayScanPipeline:
                             if not market_data:
                                 continue
 
-                            # 執行核心量化引擎
+                            # 執行核心量化引擎 (注入標的特定動態 Beta 與 SPY 現價)
+                            ticker_greeks = dict(portfolio_greeks)
+                            cached_entry = _WATCHLIST_METRICS_CACHE.get(ticker.upper())
+                            if cached_entry is not None:
+                                cached_m, _ = cached_entry
+                                if getattr(cached_m, "beta", None) is not None:
+                                    ticker_greeks["beta"] = float(cached_m.beta)
+                            ticker_greeks["spy_price"] = self._cached_spy_spot
+
                             engine_output = self.engine.analyze_ticker(
                                 data=market_data,
                                 account_state=account_state,
                                 options_holdings=holdings,
-                                portfolio_greeks=portfolio_greeks,
+                                portfolio_greeks=ticker_greeks,
                                 market_phase=phase,
                                 current_time=now_ny,
                             )
@@ -749,7 +768,7 @@ class IntradayScanPipeline:
                     mask = (ois > 0) & (vols >= 0.8 * ois) & (vols > 0)
                     target_otm = otm[mask]
                 else:
-                    target_otm = otm
+                    target_otm = otm.iloc[0:0]
 
                 if not target_otm.empty:
                     t_vols = target_otm["volume"].fillna(0.0).astype(float)
@@ -802,7 +821,7 @@ class IntradayScanPipeline:
             realtime_iv = None
             try:
                 iv_metrics = await SentimentEngine.fetch_and_calculate_iv_metrics(
-                    ticker
+                    ticker, force_refresh=True
                 )
                 if iv_metrics:
                     if iv_metrics.iv_rank is not None:

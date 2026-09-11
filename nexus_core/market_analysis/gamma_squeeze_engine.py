@@ -171,10 +171,12 @@ class NexusGammaSqueezeEngine:
                     c_strike = float(cap.get("strike", 0.0))
                     c_ratio = float(cap.get("ratio", 0.0))
                     c_type = str(cap.get("type", "")).upper()
+                    c_action = str(cap.get("action", "STO")).upper()
                     # Call STO 且 ratio > 1.0x OI
                     if (
                         abs(c_strike - strike) < 0.01
                         and c_ratio > 1.0
+                        and ("STO" in c_action)
                         and ("C" in c_type or c_type == "CALL")
                     ):
                         return True
@@ -182,35 +184,19 @@ class NexusGammaSqueezeEngine:
                     continue
             return False
 
-        if data.gex_profile:
-            # 尋找現價上方且空間 >= 5% 的實體正 Gamma 深度節點 (GEX Peak)
-            candidate_peaks: List[Tuple[float, float]] = []
-            for k_str, gex_val in data.gex_profile.items():
-                try:
-                    k = float(k_str)
-                    g = float(gex_val)
-                    if k >= min_target_price and g > 0:
-                        candidate_peaks.append((k, g))
-                except (ValueError, TypeError):
-                    continue
+        # 全鏈淨 GEX 檢查：若標的整體處於實質負 Gamma (Net GEX < 0)，做市商順向拋壓阻礙上行，一律否決
+        if data.net_gex is not None and data.net_gex < 0:
+            microstructure_veto = True
+            veto_reasons.append(
+                "微觀結構否決：標的處於負 Gamma 泥淖 (Net GEX < 0)，做市商順向拋壓阻礙上行"
+            )
 
-            # 依正 GEX 深度降序排列
-            candidate_peaks.sort(key=lambda x: x[1], reverse=True)
-
-            target_found = False
-            for cand_k, _ in candidate_peaks:
-                if _is_severe_sto_cap(cand_k):
-                    continue  # 跳過遭遇天量 STO 剛性封頂的節點
-                magnet_target = cand_k
-                target_found = True
-                break
-
-            if not target_found:
-                microstructure_veto = True
-                veto_reasons.append(
-                    "微觀結構否決：現價上方無具備實體正 Gamma 深度 (GEX Peak) 且空間 >= 5% 之安全磁吸目標（候選履約價均沉澱負 Gamma 斷層或遭遇 > 1.0x OI 之天量 STO 封頂）"
-                )
-        elif data.call_wall is not None and data.call_wall > 0:
+        # 若 Call Wall 空間不足 5% 或遭遇天量 STO 封頂，阻力牆壓頂，同樣予以否決
+        if (
+            not microstructure_veto
+            and data.call_wall is not None
+            and data.call_wall > 0
+        ):
             if data.call_wall < min_target_price:
                 microstructure_veto = True
                 veto_reasons.append(
@@ -221,28 +207,59 @@ class NexusGammaSqueezeEngine:
                 veto_reasons.append(
                     f"微觀結構否決：Call Wall (${data.call_wall:.2f}) 遭遇 > 1.0x OI 之天量 STO 剛性物理封頂，主力築頂防守"
                 )
-            elif data.net_gex is not None and data.net_gex < 0:
-                microstructure_veto = True
-                veto_reasons.append(
-                    "微觀結構否決：標的處於負 Gamma 泥淖 (Net GEX < 0)，做市商順向拋壓阻礙上行"
-                )
-            else:
+
+        if not microstructure_veto:
+            if data.gex_profile:
+                # 尋找現價上方且空間 >= 5% 的實體正 Gamma 深度節點 (GEX Peak)
+                candidate_peaks: List[Tuple[float, float]] = []
+                for k_str, gex_val in data.gex_profile.items():
+                    try:
+                        k = float(k_str)
+                        g = float(gex_val)
+                        if k >= min_target_price and g > 0:
+                            candidate_peaks.append((k, g))
+                    except (ValueError, TypeError):
+                        continue
+
+                # 依正 GEX 深度降序排列
+                candidate_peaks.sort(key=lambda x: x[1], reverse=True)
+
+                target_found = False
+                for cand_k, _ in candidate_peaks:
+                    if _is_severe_sto_cap(cand_k):
+                        continue  # 跳過遭遇天量 STO 剛性封頂的節點
+                    magnet_target = cand_k
+                    target_found = True
+                    break
+
+                if not target_found:
+                    microstructure_veto = True
+                    veto_reasons.append(
+                        "微觀結構否決：現價上方無具備實體正 Gamma 深度 (GEX Peak) 且空間 >= 5% 之安全磁吸目標（候選履約價均沉澱負 Gamma 斷層或遭遇 > 1.0x OI 之天量 STO 封頂）"
+                    )
+            elif data.call_wall is not None and data.call_wall > 0:
                 magnet_target = data.call_wall
-        else:
-            # 降級純代數計算：仍強制滿足 >= 5% 空間
-            candidate = float(math.ceil(min_target_price / 5.0) * 5.0)
-            if candidate < min_target_price:
-                candidate += 5.0
-            magnet_target = candidate
+            else:
+                # 降級純代數計算：仍強制滿足 >= 5% 空間
+                candidate = float(math.ceil(min_target_price / 5.0) * 5.0)
+                if candidate < min_target_price:
+                    candidate += 5.0
+                if _is_severe_sto_cap(candidate):
+                    microstructure_veto = True
+                    veto_reasons.append(
+                        f"微觀結構否決：目標價 (${candidate:.2f}) 遭遇 > 1.0x OI 之天量 STO 剛性物理封頂"
+                    )
+                else:
+                    magnet_target = candidate
 
         # 5. SDDM 路由決策 (全局風控優先級仲裁)
-        # 優先級：未開盤 WAIT > 存活熔斷 (Runway < 30) SHIELD > 微觀否決 SHIELD > 門檻未過 SHIELD > VIX>=25 SHIELD > SPEAR
+        # 優先級：存活熔斷 (Runway < 30) SHIELD > 未開盤 WAIT > 微觀否決 SHIELD > 門檻未過 SHIELD > VIX>=25 SHIELD > SPEAR
         vix = account_state.current_vix
-        if not is_applicable:
-            sddm_route = "WAIT"
-        elif is_runway_critical:
+        if is_runway_critical:
             # 全局風控覆蓋機制 (Global Risk Override)：強制硬鎖，阻斷所有買方進攻
             sddm_route = "SHIELD"
+        elif not is_applicable:
+            sddm_route = "WAIT"
         elif microstructure_veto:
             sddm_route = "SHIELD"
             for vr in veto_reasons:
