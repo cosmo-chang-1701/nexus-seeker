@@ -108,7 +108,7 @@ flowchart TD
     UserCmd(["指令: /x symbol: 標的"]) --> RenderHub["渲染 SymbolHubView (預設 Tab 1: btn_home)"]
 
     subgraph TabSwitch ["雙頁籤狀態機 (In-Place Edit)"]
-        TabHome["🌌 標的分析中心 (btn_home)<br/>15m K棒, GEX 拓撲, Greeks, 購買力"]
+        TabHome["🌌 標的分析中心 (btn_home)<br/>15m K棒, GEX 拓撲, Greeks"]
         TabSentiment["🎭 輿情社群 (btn_sentiment)<br/>Polymarket, Reddit, 即時新聞"]
     end
 

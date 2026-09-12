@@ -168,6 +168,7 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - `nexus_core/database/migrations/v062_add_fundamental_scan_state.py` — migration registering the fundamental_scan_state table, the dedup cursor (per-symbol last analyzed accession_number) used by the automated daily SEC filing scanner
 - `nexus_core/database/migrations/v068_add_trading_strategy.py` — migration adding `user_settings.trading_strategy` (交易策略模式，預設 `RIGHT_SIDE` 以維持既有行為不變)
 - `nexus_core/database/migrations/v070_split_heartbeat_symbol_deep.py` — migration backfilling `heartbeat_symbol_deep` from each user's existing `heartbeat_watchlist` value when the two heartbeat channels were split, so anyone who had muted the shared toggle is not silently re-subscribed by the new key's `True` default
+- `nexus_core/database/migrations/v072_remove_margin_buying_power.py` — migration dropping deprecated `option_buying_power` and `margin_used` manual reference columns from `user_settings`
 - `nexus_core/market_analysis/macro_calendar_translator.py` — Macro calendar 150+ translation dictionary & dynamic Fed speech parsing engine
 - `nexus_core/market_analysis/wti_analysis.py` — WTI crude oil technicals, energy correlation, and event analysis engine
 - `nexus_core/market_analysis/intraday_pipeline.py` — watchlist evaluation, option-plan logic, intraday engine helpers

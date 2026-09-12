@@ -43,7 +43,6 @@
   - UOA SWEEP/BLOCK/CROSS 分類（`_format_uoa_field()`、`watchlist_embeds.py` 心跳 UOA 表格）：由成交量整數手數形狀 + Bid/Ask 執行價位置兩套啟發式訊號組合而成，非真實 order-type tape 資料，表格下方固定附註揭露文字。
   - UOA ΔOI 欄位（`watchlist_embeds.py` 心跳 UOA 表格）：`uoa_detector` 在上游未提供實際未平倉變動時，以 `volume - open_interest` 代理推估，非真實 ΔOI；欄位標為 `ΔOI*` 並於表格下方附註揭露。
   - 🧲 共振磁吸／高階磁吸過濾（Radar Terminal `build_radar_scan_embed` 圖例、`magnetic_filters` 下拉選單描述）：`dp_poc` 是 Volume-POC/HVN 的代理指標，本平台無真實暗池數據源，固定附註揭露。
-  - 🏦 資產端保證金與購買力（Symbol Hub）：`option_buying_power`/`margin_used` 是使用者自填數值，非即時券商保證金數據，區塊開頭固定附註揭露。
   - UOA Volume/OI 比例欄位：OI 是前一交易日收盤的未平倉量，非盤中即時數據（選擇權市場結構性限制，任何資料源皆同，非本平台獨有），比例欄位分母固定使用此值，表格下方固定附註揭露文字。
   - 新增此類代理判定時，比照上述既有案例的措辭與位置（表格／圖例附近、簡短一行）加入揭露，而非省略。
 - **結構化網格與戰術意圖映射**：數據表格（如異常交易流、委託單列表、持倉明細）必須動態計算每列的最大字元寬度以對齊網格。底層原始數據流或交易類別應被映射轉換為直觀的戰術意圖描述，使終端使用者能迅速判讀意圖與支撐／阻力物理界線。

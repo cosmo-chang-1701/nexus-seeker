@@ -3482,46 +3482,26 @@ def test_create_tactical_symbol_embed_uoa_shows_sweep_block_cross_tags() -> None
     assert "⚖️ CROSS ⚖️ MIDPOINT (Cross)" in desc
 
 
-def test_create_tactical_symbol_embed_shows_margin_buying_power_reference() -> None:
-    """資產端保證金與購買力區塊：已設定購買力時應顯示現金佔比與使用率色階。"""
+def test_create_tactical_symbol_embed_does_not_contain_margin_buying_power_reference() -> (
+    None
+):
+    """資產端保證金與購買力區塊已全面移除：驗證 Embed 中不再包含該自填參考欄位。"""
     from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
 
     data = {
         "symbol": "NVDA",
         "capital": 100000.0,
         "cash_reserve": 20000.0,
-        "option_buying_power": 50000.0,
-        "margin_used": 45000.0,
     }
 
     embed = create_tactical_symbol_embed(data)
     desc = get_embed_text(embed)
 
-    assert "⚠️ 以下為使用者自填數據，非即時券商保證金/購買力數據" in desc
-    assert "可用非承諾現金: $20000.00" in desc.replace(",", "")
-    assert "期權購買力 (自填): $50000.00" in desc.replace(",", "")
-    # 45000/50000 = 90% >= 80% 門檻 -> 🔴
-    assert "保證金使用率: 90.0% 🔴 (安全提領線: 80%)" in desc
-
-
-def test_create_tactical_symbol_embed_margin_buying_power_unset_placeholder() -> None:
-    """未設定期權購買力上限時，應顯示「尚未設定」提示，不誤算除以零。"""
-    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
-
-    data = {
-        "symbol": "NVDA",
-        "capital": 0.0,
-        "cash_reserve": 0.0,
-        "option_buying_power": 0.0,
-        "margin_used": 0.0,
-    }
-
-    embed = create_tactical_symbol_embed(data)
-    desc = get_embed_text(embed)
-
-    assert "可用非承諾現金: -- (尚無總資金基準)" in desc
-    assert "期權購買力 (自填): 尚未設定 (可於 /settings 設定)" in desc
-    assert "保證金使用率: --" in desc
+    assert "資產端保證金與購買力" not in desc
+    assert "期權購買力" not in desc
+    assert "保證金使用率" not in desc
+    for f in embed.fields:
+        assert "保證金與購買力" not in (f.name or "")
 
 
 def test_create_tactical_symbol_embed_marks_live_iv_realtime() -> None:

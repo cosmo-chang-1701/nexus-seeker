@@ -444,14 +444,7 @@ class SymbolDeepDiveMixin:
                     )
                     if is_sqz:
                         result["tdpq_activated"] = True
-
         ctx = database.get_full_user_context(user_id)
-        result["option_buying_power"] = _safe_float(
-            getattr(ctx, "option_buying_power", 0.0), 0.0
-        )
-        result["margin_used"] = _safe_float(getattr(ctx, "margin_used", 0.0), 0.0)
-        result["cash_reserve"] = _safe_float(getattr(ctx, "cash_reserve", 0.0), 0.0)
-        result["capital"] = _safe_float(getattr(ctx, "capital", 0.0), 0.0)
 
         try:
             user_capital = _safe_float(getattr(ctx, "capital", 100000.0), 100000.0)
