@@ -114,7 +114,7 @@ def get_kv_cache_many(
         conn = get_read_connection()
         cursor = conn.cursor()
         placeholders = ",".join("?" for _ in unique_keys)
-        # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
+        # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
         cursor.execute(
             f"SELECT key, value, updated_at FROM kv_cache WHERE key IN ({placeholders})",
             tuple(unique_keys),
