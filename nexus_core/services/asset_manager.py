@@ -138,6 +138,8 @@ class AssetManager:
                 ),
             )
             return True
+        except RuntimeError:
+            raise
         except Exception as e:
             logger.error(f"Update asset error: {e}")
             return False
@@ -196,6 +198,8 @@ class AssetManager:
                 (metadata_json, watch_asset.id),
             )
             return True
+        except RuntimeError:
+            raise
         except Exception as e:
             logger.error(f"Promote to trade error: {e}")
             return False
@@ -240,6 +244,8 @@ class AssetManager:
                 (holding_meta.model_dump_json(), asset_id),
             )
             return True
+        except RuntimeError:
+            raise
         except Exception as e:
             logger.error(f"Settle to holding error: {e}")
             return False
@@ -288,6 +294,8 @@ class AssetManager:
                 f"Add asset unique constraint triggered (already exists): {e}"
             )
             return False
+        except RuntimeError:
+            raise
         except Exception as e:
             logger.error(f"Add asset error: {e}")
             return False

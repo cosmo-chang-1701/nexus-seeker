@@ -1231,8 +1231,11 @@ class PortfolioMonitorCog(commands.Cog):
                                 set_asset_dynamic_state,
                             )
 
-                            set_asset_dynamic_state(
-                                u_id, int(_patch_asset_id), **_state_patch
+                            await asyncio.to_thread(
+                                set_asset_dynamic_state,
+                                u_id,
+                                int(_patch_asset_id),
+                                **_state_patch,
                             )
                         # 審計軌跡：記錄本次實際推送給使用者的轉倉建議本身
                         # (系統僅提供建議、不代為執行券商下單，故無法追蹤實際

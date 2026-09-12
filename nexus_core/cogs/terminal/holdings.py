@@ -248,8 +248,12 @@ async def edit_holding_impl(
             symbol, dynamic_entry_regime.value
         )
 
-    success = manager.update_asset_metadata_by_symbol(
-        interaction.user.id, symbol, ContextType.HOLDING, updates
+    success = await asyncio.to_thread(
+        manager.update_asset_metadata_by_symbol,
+        interaction.user.id,
+        symbol,
+        ContextType.HOLDING,
+        updates,
     )
 
     if success:
