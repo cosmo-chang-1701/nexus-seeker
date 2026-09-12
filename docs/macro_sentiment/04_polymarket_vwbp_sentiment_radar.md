@@ -62,6 +62,12 @@ Polymarket 合約問句鮮少直接使用 Ticker 代號，多使用高管姓名�
 
 只要問句文本命中任一層別名，即建立該合約與標的之拓撲映射。
 
+**別名資料的自動填充解析架構（與上述比對層級為正交概念）**：上方 4 層是「文本比對哪一種別名」，`StockAliasMatrix` 另有一套獨立的「別名資料從哪裡取得」4 層快取解析架構，兩者不可混淆：
+1. **Tier 1（靜態表 `STOCK_ALIAS_MAP`）**：內建 100+ 檔美股科技/生技/能源/金融個股與大盤 ETF 的預編譯字典，0ms 查詢延遲。
+2. **Tier 2（記憶體 LRU 快取 `_dynamic_alias_cache`）**：已解析過的非內建標的直接快取於記憶體，供同一進程生命週期內瞬時複用。
+3. **Tier 3（SQLite 持久化快取 `kv_cache`，鍵值前綴 `stock_aliases_{symbol}`）**：跨服務重啟仍保留已動態解析過的別名，避免每次啟動都重新打 API。
+4. **Tier 4（Finnhub / yfinance 公司檔案自動衍生）**：對完全陌生的標的（如 `RKLB`、`ASTS`、`SOFI`），即時抓取公司檔案，透過 `clean_company_name()` 清除法律尾綴（`Inc.`、`Corp.`、`Ltd.`、`Holdings`）並保留具辨識度的雙字品牌（如 `Super Micro`、`Taiwan Semiconductor`），寫回 Tier 2/3 供後續查詢命中。
+
 ### 2.4 四維輿情共振雷達與五大情境判定矩陣
 共振雷達整合：
 - $Whale \in \{\text{Bullish}, \text{Bearish}, \text{Neutral}\}$（來自 VWBP）
@@ -170,6 +176,7 @@ flowchart TD
   - `_get_matched_poly_markets`: Polymarket 合約別名過濾與線上回退
 - `nexus_core/market_analysis/stock_alias_matrix.py`
   - `StockAliasMatrix`: 4 層拓撲別名對齊庫
+  - `_dynamic_alias_cache` / `clean_company_name`: 別名自動填充解析架構之 Tier 2 記憶體快取與公司名稱清理函式
 - `nexus_core/cogs/unified_terminal/symbol_view.py`
   - `SymbolHubView`: 雙頁籤互動視圖控制器（`btn_home` 與 `btn_sentiment`）
 - `nexus_core/cogs/embed_builders/alert_embeds/sentiment_feeds.py`

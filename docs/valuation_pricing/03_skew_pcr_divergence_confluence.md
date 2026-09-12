@@ -134,6 +134,8 @@ flowchart TD
 | `pcr_panic_upper_threshold` | $> 1.50$ | 散戶非理性恐慌殺跌門檻（結構背離比對用） | `nexus_core/market_analysis/intraday_pipeline/skew_commentary.py` |
 | `uoa_institutional_min_dte` | $\ge 7$ 天 | 判定實質機構買盤護航的最小到期日要求 | `nexus_core/cogs/embed_builders/market_embeds.py` |
 | `uoa_aligned_actions` | `["BTO CALL", "STO PUT"]` | 視為實質看多/托底的異常期權交易動作定義 | `nexus_core/cogs/trading/heartbeat.py` |
+| `_MIN_PERCENTILE_SAMPLES` | `20` 筆 | 樣本數低於此值時百分位直接回傳 `None`，而非用不足樣本假造極端值 | `nexus_core/market_analysis/sentiment/history_storage.py` |
+| `SKEW_D25` | 歷史指標命名空間 | 真 25-Delta Skew 的專屬 history key，與改版前的 `SKEW`（±5% 價平代理）樣本互不混用 | `nexus_core/market_analysis/sentiment/skew_taxonomy.py` |
 
 ---
 
@@ -161,6 +163,13 @@ elif (
 
 ### 5.3 單邊流動性與零成交量防護 (Zero Division in PCR)
 若當日買權成交量為零（$\sum V_{\text{Call}} = 0$），在計算 `Volume PCR` 時可能引發除以零錯誤。代碼在 `insights_engine.py` 與 `market_embeds.py` 中均對 `vol_pcr` 進行空值與安全轉換（`_safe_float`），當成交量為零時安全賦值為 `None`，不觸發破位順向殺盤。
+
+### 5.4 Skew 百分位的真實統計視窗與樣本邊界防護 (Real Sample Window & Edge Guards)
+§2.1 的 $\mathcal{S}_{252}$ 是理想化的年度樣本描述；`get_indicator_percentile()`（`nexus_core/market_analysis/sentiment/history_storage.py`）實際採 `SELECT ... ORDER BY timestamp DESC LIMIT 100`，而 `calculate_skew()` 的呼叫點遍布心跳與批次掃描，盤中每小時約累積 4-8 筆樣本——換算下來 **100 筆樣本約僅涵蓋 2-4 個交易日**，而非 252 個交易日的年度分佈。這代表所有鍵在此百分位上的閘門（三重合流的 $\ge 98.0\%$、$> 90.0\%$ 防洗盤、§2.3 的 85/15 背離門檻）本質上是「近幾日相對排名」而非真正的年度尾部分位；此視窗設計是刻意維持不變的（切換為固定時間窗會同時改變多個已上線閘門的觸發頻率，須獨立評估），本節僅記錄其邊界防護：
+- **最小樣本數防呆**：樣本數低於 `_MIN_PERCENTILE_SAMPLES = 20` 時回傳 `None`，而非讓單一筆歷史紀錄假造出 `0.0%` 或 `100.0%` 的極端偽訊號。
+- **中位排序處理平局 (Midrank for Ties)**：採 $(count_{<} + 0.5 \times count_{=}) / n$ 計算，避免資料源卡死、樣本全相同時被誤判為 `0.0%`（歷史極端低點）。
+- **`None` 而非虛假中性值**：歷史紀錄為空或查詢異常時回傳 `None`（呼叫端各自 fail-safe 為中性 `50.0` 或跳過極端分支），取代先前會落入 `skew_commentary` 30–70 常態抑制區間的硬編碼 `50.0` 預設值。
+- **`SKEW_D25` 命名空間隔離**：25-Delta 改版後的數值寫入獨立的 `SKEW_D25` history key，與改版前 ±5% 價平代理寫入的舊 `SKEW` 樣本永不混用比較。
 
 ---
 

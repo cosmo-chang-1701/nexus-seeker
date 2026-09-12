@@ -286,3 +286,18 @@ graph LR
   python3 scripts/verify_docs_integrity.py
   ```
 - **代碼同步維護合約**：任何對 `nexus_core` 內部具名常數、量化門檻、排程週期或資料庫結構之修改，均須同步更新對應之技術規格書，並通過 7 大自動化完整性檢查電池（Batteries），以確保量化系統的一致性與生產安全。
+
+---
+
+## 7. 平台工程與使用者體驗系統 (`docs/platform/`)
+
+本節為**補充性文件**，涵蓋非量化模型、但同樣重要的平台功能與使用者體驗系統（Discord 互動介面、排程報告、通知偏好、委託單管理等）。這些文件**不計入**上方「29 篇」核心量化規格書 SSOT，格式較自由（不強制 LaTeX／Mermaid／具名常數表三件套），但同樣要求 100% 繁體中文與有效的內部連結。
+
+| 檔案 | 核心主題 |
+|:---|:---|
+| [`platform/01_analyst_agent_reporting.md`](platform/01_analyst_agent_reporting.md) | Analyst Agent 報告排程：盤前財報／估值調整、盤後綜合風險結算、正式路徑與孤兒路徑辨識 |
+| [`platform/02_order_management_and_telemetry.md`](platform/02_order_management_and_telemetry.md) | 委託單管理資料庫與 UI、遙測定價對齊引擎三向量 |
+| [`platform/03_notification_center.md`](platform/03_notification_center.md) | 互動設定架構、4 大戰術維度 13 頻道通知偏好中心、Preset 快捷鍵 |
+| [`platform/04_calendar_translation_engine.md`](platform/04_calendar_translation_engine.md) | 事件日曆共用閘道、150+ 總經事件中英對照與聯準會官員演講解析引擎 |
+| [`platform/05_embed_architecture_and_dm_queue.md`](platform/05_embed_architecture_and_dm_queue.md) | Embed 輸出集中化規範、`NexusEmbed` 視覺一致性、持久化 DM 佇列投遞層 |
+| [`platform/06_price_volume_alert_system.md`](platform/06_price_volume_alert_system.md) | 個股 15 分鐘價量突破警報系統、K 棒完整性防呆、雙模警報支援 |
