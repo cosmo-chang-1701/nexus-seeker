@@ -21,15 +21,29 @@ DB_PATH = os.environ.get(
 )
 
 
+# scheduler.py 以 MAX_CONCURRENCY 並行、每個標的兩次 asyncio.to_thread 寫入
+# （GEX 快照 + Option Chain 快照），local_api.py 的讀取端點又同時在讀同一個檔。
+# 這個 DB 先前完全沒有啟用 WAL，仍是 rollback-journal 模式——該模式下讀取會阻塞
+# 寫入，是 `database is locked` 的典型成因。busy_timeout 與 connect(timeout=)
+# 等價，這裡顯式設定以便與 nexus_core 的連線層寫法一致。
+_BUSY_TIMEOUT_MS = 10_000
+
+
 def _get_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, timeout=10.0)
+    conn = sqlite3.connect(DB_PATH, timeout=_BUSY_TIMEOUT_MS / 1000.0)
     conn.row_factory = sqlite3.Row
+    # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
+    conn.execute(f"PRAGMA busy_timeout={int(_BUSY_TIMEOUT_MS)};")
+    conn.execute("PRAGMA synchronous=NORMAL;")
     return conn
 
 
 def init_db() -> None:
     conn = _get_connection()
     try:
+        # journal_mode 是寫在資料庫檔頭的持久設定，只需在啟動時設定一次，
+        # 不必每條連線重設（見上方說明）。
+        conn.execute("PRAGMA journal_mode=WAL;")
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS tracked_symbols (

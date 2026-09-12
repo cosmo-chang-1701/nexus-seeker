@@ -401,6 +401,24 @@ def is_symbol_in_portfolio(user_id: int, symbol: str) -> bool:
         conn.close()
 
 
+def get_all_portfolio_symbol_pairs() -> set[tuple[int, str]]:
+    """一次取回全站所有 (user_id, SYMBOL) 持倉組合（TRADE + HOLDING）。
+
+    `is_symbol_in_portfolio()` 每次呼叫都要開一條連線做一次查詢；心跳的
+    Pass 1 是 O(使用者 × 標的) 的巢狀迴圈，等於每輪開數百條連線問同一張表。
+    呼叫端改為一次取回集合後在記憶體比對。
+    """
+    conn = get_read_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT user_id, symbol FROM assets WHERE context_type IN ('TRADE', 'HOLDING')"
+        )
+        return {(int(uid), str(sym).upper()) for uid, sym in cursor.fetchall()}
+    finally:
+        conn.close()
+
+
 # ==========================================
 # 對沖歷史紀錄 (Hedge History)
 # ==========================================

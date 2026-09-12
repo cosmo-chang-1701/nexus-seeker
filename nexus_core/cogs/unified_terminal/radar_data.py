@@ -10,6 +10,56 @@ _SWR_REVALIDATE_SEM = asyncio.Semaphore(3)
 _active_swr_tasks: set[str] = set()
 
 
+class _KvSnapshot:
+    """單一標的所需 kv_cache 鍵值的一次性快照。
+
+    這條路徑原本逐 key 呼叫 `get_kv_cache()` / `get_kv_cache_with_age()`，每次都
+    connect-query-close 一條新連線；單一標的十餘條，再乘上整個 watchlist 的
+    `asyncio.gather`，等於每輪心跳在 event loop 上連開數百條 SQLite 連線。
+    改為一次批次查詢後全部走記憶體查表。
+    """
+
+    __slots__ = ("_rows",)
+
+    def __init__(self, rows: dict[str, tuple[Any, Optional[float]]]) -> None:
+        self._rows = rows
+
+    def get(self, key: str) -> Any:
+        row = self._rows.get(key)
+        return row[0] if row else None
+
+    def get_with_age(self, key: str) -> tuple[Any, Optional[float]]:
+        row = self._rows.get(key)
+        return (row[0], row[1]) if row else (None, None)
+
+
+def _radar_kv_keys(sym: str, today_str: str) -> list[str]:
+    """雷達路徑會用到的所有 kv_cache 鍵（皆可由 symbol 與日期決定）。"""
+    up = sym.upper()
+    return [
+        f"radar_terminal_{up}",
+        f"gex_metrics_{up}",
+        f"uoa_{up}",
+        f"darkpool_{up}",
+        f"dp_poc_{up}",
+        f"volume_poc_{up}",
+        f"iv_metrics_{up}_{today_str}",
+        f"month_mp_{up}",
+        f"month_max_pains_{up}",
+        f"ma20_{up}",
+    ]
+
+
+def _load_symbol_caches(sym: str, today_str: str) -> tuple[_KvSnapshot, Any, Any]:
+    """在單一 worker 執行緒內一次取齊 kv_cache / market_cache / squeeze_cache。"""
+    from database.cache import get_kv_cache_many
+    from database.market_cache import get_market_cache
+    from database.squeeze_cache import get_squeeze_cache
+
+    kv = _KvSnapshot(get_kv_cache_many(_radar_kv_keys(sym, today_str)))
+    return kv, get_market_cache(sym), get_squeeze_cache(sym)
+
+
 class RadarDataMixin:
     async def _async_revalidate_market_cache(self, sym: str, price: float) -> Any:
         try:
@@ -43,18 +93,19 @@ class RadarDataMixin:
         import time
         from services import market_data_service
         from services.market_data_service import _EDGE_SNAPSHOT_MAX_AGE_SECONDS
-        from database.market_cache import get_market_cache
-        from database.squeeze_cache import get_squeeze_cache
-        from database.cache import get_kv_cache, get_kv_cache_with_age
         from datetime import datetime, timezone
 
         quote = await market_data_service.get_quote(sym)
         price = quote.get("c", 0.0) if quote else 0.0
         current_volume = quote.get("volume", 0) if quote else 0
 
-        radar_cache = get_kv_cache(f"radar_terminal_{sym.upper()}") or {}
-        market_cache = get_market_cache(sym) or {}
-        squeeze_cache = get_squeeze_cache(sym)
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        # 所有 SQLite 讀取集中在這一次 to_thread 呼叫內完成，不佔用 event loop。
+        kv, market_cache_row, squeeze_cache = await asyncio.to_thread(
+            _load_symbol_caches, sym, today_str
+        )
+        radar_cache = kv.get(f"radar_terminal_{sym.upper()}") or {}
+        market_cache = market_cache_row or {}
 
         # Market Cache（Max Pain / 預期區間）SWR 自癒檢查：快取缺失、標記
         # is_stale，或 updated_at 已超過絕對 TTL（見 max_pain.py 的
@@ -101,7 +152,7 @@ class RadarDataMixin:
                         _active_swr_tasks.discard(k)
 
                 asyncio.create_task(_revalidate_mc(sym, price, mc_key))
-        gex_cached = get_kv_cache(f"gex_metrics_{sym.upper()}") or {}
+        gex_cached = kv.get(f"gex_metrics_{sym.upper()}") or {}
         gex_data = gex_cached.get("data", {}) if isinstance(gex_cached, dict) else {}
         # Fast path 讀取 gex_metrics_{sym} 為未經 fetch_symbol_gex_metrics() 的原始
         # kv_cache 讀取，繞過了該函式內建的新鮮度檢查；這裡直接利用信封本身已內含的
@@ -113,7 +164,7 @@ class RadarDataMixin:
         )
 
         uoa_data: list[Any] = []
-        uoa_cached, uoa_age_seconds = get_kv_cache_with_age(f"uoa_{sym.upper()}")
+        uoa_cached, uoa_age_seconds = kv.get_with_age(f"uoa_{sym.upper()}")
         if uoa_cached is not None and isinstance(uoa_cached, list):
             uoa_data = list(uoa_cached)
         elif radar_cache.get("uoa") is not None and isinstance(
@@ -201,19 +252,18 @@ class RadarDataMixin:
         if not squeeze_cache:
             squeeze_cache = {}
 
-        darkpool_cached = get_kv_cache(f"darkpool_{sym.upper()}") or {}
-        dp_poc_val, dp_poc_age_seconds = get_kv_cache_with_age(f"dp_poc_{sym.upper()}")
+        darkpool_cached = kv.get(f"darkpool_{sym.upper()}") or {}
+        dp_poc_val, dp_poc_age_seconds = kv.get_with_age(f"dp_poc_{sym.upper()}")
         if dp_poc_val is None:
             dp_poc_val = (
                 darkpool_cached.get("dp_poc")
                 or radar_cache.get("hvn_price")
-                or get_kv_cache(f"volume_poc_{sym.upper()}")
+                or kv.get(f"volume_poc_{sym.upper()}")
             )
             dp_poc_age_seconds = None
         dp_poc = float(dp_poc_val) if dp_poc_val is not None else 0.0
 
-        today_str = datetime.now().strftime("%Y-%m-%d")
-        iv_metrics = get_kv_cache(f"iv_metrics_{sym.upper()}_{today_str}") or {}
+        iv_metrics = kv.get(f"iv_metrics_{sym.upper()}_{today_str}") or {}
 
         from market_analysis.sentiment.history_storage import (
             get_last_stored_sentiment,
@@ -336,8 +386,8 @@ class RadarDataMixin:
         # 多週期 Max Pain (month_max_pains) 與 MA20 快取縫合
         month_max_pains = (
             radar_cache.get("month_max_pains")
-            or get_kv_cache(f"month_mp_{sym.upper()}")
-            or get_kv_cache(f"month_max_pains_{sym.upper()}")
+            or kv.get(f"month_mp_{sym.upper()}")
+            or kv.get(f"month_max_pains_{sym.upper()}")
             or []
         )
         if not month_max_pains and (mp_near or radar_cache.get("mp_far")):
@@ -351,7 +401,7 @@ class RadarDataMixin:
                 )
             month_max_pains = synth_mps
 
-        ma20_val = radar_cache.get("ma20") or get_kv_cache(f"ma20_{sym.upper()}")
+        ma20_val = radar_cache.get("ma20") or kv.get(f"ma20_{sym.upper()}")
 
         _mc_updated = market_cache.get("updated_at")
         _mc_age: float | None = None
@@ -459,7 +509,7 @@ class RadarDataMixin:
             "vp_data": {
                 "hvn": float(
                     radar_cache.get("hvn_price")
-                    or get_kv_cache(f"volume_poc_{sym.upper()}")
+                    or kv.get(f"volume_poc_{sym.upper()}")
                     or 0.0
                 ),
                 "lvn": float(radar_cache.get("lvn_price") or 0.0),
@@ -709,7 +759,7 @@ class RadarDataMixin:
             from database.squeeze_cache import get_squeeze_cache, save_squeeze_cache
             from market_analysis.psq_engine import analyze_psq
 
-            sc = get_squeeze_cache(sym)
+            sc = await asyncio.to_thread(get_squeeze_cache, sym)
             if sc:
                 psq_res = {
                     "is_squeezing": sc.get("is_squeezing", False),
@@ -748,15 +798,23 @@ class RadarDataMixin:
         # fast-path (_fetch_sym_radar_data_fast_raw) 完全一致的 fallback 鏈，
         # 退回本函式已算出的 Volume-POC (vp_data.hvn) 或 volume_poc_{sym} 快取，
         # 避免此路徑的 dp_poc 恆為 0.0（與 fast-path 行為不一致）。
-        from database.cache import get_kv_cache, get_kv_cache_with_age
+        from database.cache import get_kv_cache_many
 
-        dp_poc_val, dp_poc_age_seconds = get_kv_cache_with_age(f"dp_poc_{sym.upper()}")
+        up = sym.upper()
+        # 三個鍵一次批次取回（單一連線、單一查詢，且在 worker 執行緒內完成）。
+        dp_kv = _KvSnapshot(
+            await asyncio.to_thread(
+                get_kv_cache_many,
+                [f"dp_poc_{up}", f"darkpool_{up}", f"volume_poc_{up}"],
+            )
+        )
+        dp_poc_val, dp_poc_age_seconds = dp_kv.get_with_age(f"dp_poc_{up}")
         if dp_poc_val is None:
-            darkpool_cached = get_kv_cache(f"darkpool_{sym.upper()}") or {}
+            darkpool_cached = dp_kv.get(f"darkpool_{up}") or {}
             dp_poc_val = (
                 darkpool_cached.get("dp_poc")
                 or (vp_data or {}).get("hvn")
-                or get_kv_cache(f"volume_poc_{sym.upper()}")
+                or dp_kv.get(f"volume_poc_{up}")
             )
             dp_poc_age_seconds = None
         dp_poc = float(dp_poc_val) if dp_poc_val is not None else 0.0
@@ -843,7 +901,10 @@ class RadarDataMixin:
         from datetime import datetime, timezone
 
         await save_kv_cache(f"uoa_{sym.upper()}", uoa_data or [])
-        _, real_uoa_age = get_kv_cache_with_age(f"uoa_{sym.upper()}")
+        # 讀回剛寫入的 updated_at，必須是即時查詢（不可用前面的快照）。
+        _, real_uoa_age = await asyncio.to_thread(
+            get_kv_cache_with_age, f"uoa_{sym.upper()}"
+        )
         result["uoa_age_seconds"] = real_uoa_age
 
         await save_kv_cache(

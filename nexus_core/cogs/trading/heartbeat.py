@@ -16,6 +16,49 @@ import market_time
 logger = logging.getLogger(__name__)
 
 
+def _build_user_deliverable(
+    user_symbols: dict[int, list[str]],
+) -> tuple[dict[int, list[str]], set[str]]:
+    """依通知開關與 option_alert_mode 篩出每位使用者實際要推播的標的。
+
+    純同步（SQLite 讀取 + 記憶體判斷），由呼叫端以 `asyncio.to_thread` 執行。
+    """
+    user_deliverable: dict[int, list[str]] = {}
+    symbols_to_fetch: set[str] = set()
+
+    held_pairs = database.get_all_portfolio_symbol_pairs()
+
+    for uid, symbols in user_symbols.items():
+        try:
+            if not database.is_notification_enabled(uid, "heartbeat_watchlist"):
+                logger.info(f"使用者 {uid} 已關閉自選心跳訂閱，略過心跳推送。")
+                continue
+
+            user_context = database.get_full_user_context(uid)
+            option_alert_mode = int(getattr(user_context, "option_alert_mode", 1))
+
+            deliverable_symbols = []
+            for sym in symbols:
+                has_position = (int(uid), sym.upper()) in held_pairs
+                if option_alert_mode == 2 and not has_position:
+                    continue
+                deliverable_symbols.append(sym)
+
+            if not deliverable_symbols:
+                continue
+
+            user_deliverable[uid] = deliverable_symbols
+            symbols_to_fetch.update(deliverable_symbols)
+        except Exception as user_err:
+            logger.error(
+                f"❌ 用戶 {uid} 心跳前置篩選失敗: {user_err}",
+                exc_info=True,
+            )
+            continue
+
+    return user_deliverable, symbols_to_fetch
+
+
 async def dispatch_watchlist_heartbeat(
     bot: Any,
     all_watchlists: list[tuple[int, str, int]] | None = None,
@@ -24,7 +67,7 @@ async def dispatch_watchlist_heartbeat(
     from cogs.embed_builder import build_radar_scan_embed
 
     if all_watchlists is None:
-        all_watchlists = database.get_all_watchlist()
+        all_watchlists = await asyncio.to_thread(database.get_all_watchlist)
     if not all_watchlists:
         return
 
@@ -45,8 +88,9 @@ async def dispatch_watchlist_heartbeat(
     try:
         from services import edge_cache_client
 
+        all_portfolio_rows = await asyncio.to_thread(database.get_all_portfolio)
         priority_symbols = list(
-            {row[2].upper() for row in database.get_all_portfolio() if row[2]}
+            {row[2].upper() for row in all_portfolio_rows if row[2]}
         )
         await edge_cache_client.sync_watchlist_symbols(
             list(all_symbols), priority_symbols
@@ -64,35 +108,13 @@ async def dispatch_watchlist_heartbeat(
         return
 
     # --- Pass 1: 依每位使用者的通知開關與 option_alert_mode 篩選出實際要推播的標的 ---
-    user_deliverable: dict[int, list[str]] = {}
-    symbols_to_fetch: set[str] = set()
-    for uid, symbols in user_symbols.items():
-        try:
-            if not database.is_notification_enabled(uid, "heartbeat_watchlist"):
-                logger.info(f"使用者 {uid} 已關閉自選心跳訂閱，略過心跳推送。")
-                continue
-
-            user_context = database.get_full_user_context(uid)
-            option_alert_mode = int(getattr(user_context, "option_alert_mode", 1))
-
-            deliverable_symbols = []
-            for sym in symbols:
-                has_position = database.is_symbol_in_portfolio(uid, sym)
-                if option_alert_mode == 2 and not has_position:
-                    continue
-                deliverable_symbols.append(sym)
-
-            if not deliverable_symbols:
-                continue
-
-            user_deliverable[uid] = deliverable_symbols
-            symbols_to_fetch.update(deliverable_symbols)
-        except Exception as user_err:
-            logger.error(
-                f"❌ 用戶 {uid} 心跳前置篩選失敗: {user_err}",
-                exc_info=True,
-            )
-            continue
+    # 整段純 SQLite 讀取 + 判斷、沒有任何 await，因此整包丟進單一 worker 執行緒。
+    # 改寫前它是 O(使用者 × 標的) 的巢狀同步查詢直接跑在 event loop 上：每位使用者
+    # 兩次查詢、每個 (使用者, 標的) 組合再一次 is_symbol_in_portfolio()，每次都
+    # 開關一條連線。持倉判定改為一次取回 (user_id, symbol) 集合後在記憶體比對。
+    user_deliverable, symbols_to_fetch = await asyncio.to_thread(
+        _build_user_deliverable, user_symbols
+    )
 
     # --- Pass 2: 每個「去重後」的標的只實際打一次雷達數據，多位使用者共用同一標的的
     # 抓取結果不重複打 Finnhub/yfinance/Edge API，避免拖長整輪心跳佔用全域限流額度、
@@ -244,7 +266,9 @@ async def dispatch_watchlist_heartbeat(
                         cache_key = (
                             f"scenario_alert_{uid}_{symbol}_{today_str}_{scenario.name}"
                         )
-                        if not database.get_kv_cache(cache_key):
+                        if not await asyncio.to_thread(
+                            database.get_kv_cache, cache_key
+                        ):
                             alert_embed = create_scenario_alert_embed(
                                 symbol=symbol,
                                 scenario=scenario,

@@ -494,3 +494,41 @@ async def test_cache_writers_succeed_with_write_queue_active(db_conn: Any):  # t
     finally:
         await DatabaseWriteQueue.stop_worker()
         assert DatabaseWriteQueue.is_active() is False
+
+
+@pytest.mark.asyncio
+async def test_run_maintenance_executes_on_the_writer(db_conn: Any) -> None:
+    """WAL checkpoint 與 PRAGMA optimize 必須經由寫入佇列在 writer 連線上執行。
+
+    checkpoint 需要寫入權限，且必須與其他寫入序列化，因此不能自開連線。
+    專案先前完全沒有任何 wal_checkpoint / PRAGMA optimize：WAL 只在
+    auto-checkpoint 成功時才回收，而 kv_cache 每 15 分鐘大量改寫，
+    查詢規劃器卻從未取得統計資訊。
+    """
+    from database.connection import run_maintenance
+
+    loop = asyncio.get_running_loop()
+    DatabaseWriteQueue.initialize(loop)
+    try:
+        notes = await asyncio.to_thread(run_maintenance)
+    finally:
+        await DatabaseWriteQueue.stop_worker()
+
+    assert "wal_checkpoint" in notes
+    assert "optimize" in notes
+
+
+def test_run_maintenance_refuses_to_run_on_the_event_loop() -> None:
+    """維護作業是同步阻塞呼叫，從 event loop 執行緒呼叫必須被擋下。"""
+    from database.connection import run_maintenance
+
+    async def _main() -> None:
+        loop = asyncio.get_running_loop()
+        DatabaseWriteQueue.initialize(loop)
+        try:
+            with pytest.raises(RuntimeError, match="event loop thread"):
+                run_maintenance()
+        finally:
+            await DatabaseWriteQueue.stop_worker()
+
+    asyncio.run(_main())

@@ -345,9 +345,59 @@ async def test_purge_stale_kv_cache_dedup_keys_only_removes_whitelisted_old_rows
     finally:
         conn.close()
 
-    purged_prefixes = await purge_stale_kv_cache_dedup_keys(older_than_days=3)
-    assert purged_prefixes == 7  # all 7 whitelisted prefixes attempted, none error
+    # 回傳值已改為「實際清除的資料列總數」（批次寫入入口會回傳逐語句 rowcount），
+    # 不再是「嘗試過的前綴數量」。本測試只有 1 筆過期的白名單去重旗標。
+    purged_rows = await purge_stale_kv_cache_dedup_keys(older_than_days=3)
+    assert purged_rows == 1
 
     assert get_kv_cache(old_dedup_key) is None
     assert get_kv_cache(recent_dedup_key) is True
     assert get_kv_cache(old_permanent_key) == {"gamma_flip": 500.0}
+
+
+@pytest.mark.asyncio
+async def test_get_kv_cache_many_batches_reads(db_conn: Any) -> None:
+    """批次讀取須在單一連線內取回多個 key，並附帶資料年齡。
+
+    存在理由：雷達熱路徑原本逐 key 呼叫 get_kv_cache()，每次 connect-query-close
+    一條新連線；單一標的十餘條，再乘上整個 watchlist 的 gather，等於每輪心跳在
+    event loop 上連開數百條 SQLite 連線。
+    """
+    from database.cache import get_kv_cache_many, save_kv_cache
+
+    await save_kv_cache("batch_read_a", {"x": 1})
+    await save_kv_cache("batch_read_b", [1, 2, 3])
+
+    rows = get_kv_cache_many(["batch_read_a", "batch_read_b", "batch_read_missing"])
+
+    assert set(rows) == {"batch_read_a", "batch_read_b"}, "查無資料的 key 不應出現"
+    assert rows["batch_read_a"][0] == {"x": 1}
+    assert rows["batch_read_b"][0] == [1, 2, 3]
+    # 第二個元素是資料年齡（秒）；剛寫入應該非常小
+    age = rows["batch_read_a"][1]
+    assert age is not None and age < 120
+
+    assert get_kv_cache_many([]) == {}
+
+
+@pytest.mark.asyncio
+async def test_get_kv_cache_many_opens_a_single_connection(db_conn: Any) -> None:
+    """N 個 key 只能開一條連線——這正是這個函式存在的全部理由。"""
+    import database.cache as cache_mod
+    from database.cache import get_kv_cache_many, save_kv_cache
+
+    for i in range(8):
+        await save_kv_cache(f"single_conn_{i}", i)
+
+    real_get_conn = cache_mod.get_read_connection
+    calls = {"n": 0}
+
+    def counting_get_conn() -> Any:
+        calls["n"] += 1
+        return real_get_conn()
+
+    with patch.object(cache_mod, "get_read_connection", counting_get_conn):
+        rows = get_kv_cache_many([f"single_conn_{i}" for i in range(8)])
+
+    assert len(rows) == 8
+    assert calls["n"] == 1, f"8 個 key 應只開 1 條連線，實際開了 {calls['n']} 條"

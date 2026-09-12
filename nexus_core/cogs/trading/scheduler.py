@@ -114,10 +114,8 @@ class SchedulerCog(commands.Cog):
         from database.cache import purge_stale_kv_cache_dedup_keys
 
         try:
-            purged_prefixes = await purge_stale_kv_cache_dedup_keys()
-            logger.info(
-                f"🧹 [kv_cache 清理] 已清除 {purged_prefixes} 個前綴下的過期去重旗標。"
-            )
+            purged_rows = await purge_stale_kv_cache_dedup_keys()
+            logger.info(f"🧹 [kv_cache 清理] 已清除 {purged_rows} 筆過期去重旗標。")
         except Exception as e:
             logger.error(f"kv_cache 每日去重旗標清理失敗: {e}")
 
@@ -131,6 +129,16 @@ class SchedulerCog(commands.Cog):
             await asyncio.to_thread(archive_expired_portfolio_records)
         except Exception as e:
             logger.error(f"過期合約歸檔失敗: {e}")
+
+        # WAL checkpoint + 查詢計畫統計更新：WAL 檔會因長時間重疊的讀取連線而
+        # 無法自動回收，kv_cache 又每 15 分鐘大量改寫，統計資訊需定期更新。
+        try:
+            from database.connection import run_maintenance
+
+            notes = await asyncio.to_thread(run_maintenance)
+            logger.info(f"🧹 [資料庫維護] {notes}")
+        except Exception as e:
+            logger.error(f"資料庫維護作業失敗: {e}")
 
     @kv_cache_dedup_purge.before_loop
     async def before_kv_cache_dedup_purge(self) -> None:

@@ -417,11 +417,11 @@ async def test_radar_data_slow_gamma_flip_populates_portfolio_monitor(
 @pytest.mark.asyncio
 @patch("database.market_cache.get_market_cache", return_value={"max_pain": 149.0})
 @patch("database.squeeze_cache.get_squeeze_cache", return_value={})
-@patch("database.cache.get_kv_cache")
-@patch("database.cache.get_kv_cache_with_age", return_value=(None, None))
+# 雷達 fast path 的 kv_cache 讀取已改為一次批次查詢（get_kv_cache_many），
+# 不再逐 key 呼叫 get_kv_cache()／get_kv_cache_with_age()。
+@patch("database.cache.get_kv_cache_many")
 async def test_radar_data_fast_gamma_flip_populates_portfolio_monitor(
-    mock_kv_age: Any,
-    mock_get_kv: Any,
+    mock_get_kv_many: Any,
     mock_squeeze: Any,
     mock_mc: Any,
 ) -> None:
@@ -430,22 +430,25 @@ async def test_radar_data_fast_gamma_flip_populates_portfolio_monitor(
 
     mock_gex_profile = {"130": -1000.0, "140": -500.0, "148": 1000.0, "160": 2000.0}
 
-    def kv_side_effect(key: str) -> Any:
-        if key == "radar_terminal_AAPL":
-            return {
+    # get_kv_cache_many 回傳 {key: (value, age_seconds)}，查無資料的 key 不出現。
+    mock_get_kv_many.return_value = {
+        "radar_terminal_AAPL": (
+            {
                 "gamma_flip": 148.0,
                 "put_wall_strike": 140.0,
                 "call_wall_strike": 160.0,
-            }
-        if key == "gex_metrics_AAPL":
-            return {
+            },
+            None,
+        ),
+        "gex_metrics_AAPL": (
+            {
                 "gex_profile": mock_gex_profile,
                 "put_wall": 140.0,
                 "call_wall": 160.0,
-            }
-        return None
-
-    mock_get_kv.side_effect = kv_side_effect
+            },
+            None,
+        ),
+    }
 
     with patch(
         "services.market_data_service.get_quote",

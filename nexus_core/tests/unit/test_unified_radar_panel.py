@@ -584,15 +584,20 @@ async def test_fetch_sym_radar_data_fast_stitches_month_max_pains_and_ma20(
             return_value={"c": 150.0, "volume": 1000000},
         ),
         patch(
-            "database.cache.get_kv_cache",
-            side_effect=lambda key: (
-                {
-                    "ma20": 145.0,
-                    "month_max_pains": [{"expiry": "2026-08-28", "max_pain": 148.0}],
-                }
-                if "radar_terminal_NVDA" in key
-                else None
-            ),
+            # 雷達 fast path 的 kv_cache 讀取已改為一次批次查詢；
+            # 回傳格式為 {key: (value, age_seconds)}。
+            "database.cache.get_kv_cache_many",
+            return_value={
+                "radar_terminal_NVDA": (
+                    {
+                        "ma20": 145.0,
+                        "month_max_pains": [
+                            {"expiry": "2026-08-28", "max_pain": 148.0}
+                        ],
+                    },
+                    None,
+                )
+            },
         ),
         patch("database.market_cache.get_market_cache", return_value={}),
         patch(

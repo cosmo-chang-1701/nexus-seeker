@@ -606,11 +606,11 @@ async def test_dispatch_watchlist_heartbeat_honors_portfolio_only_mode() -> Any:
             capital=100000.0, risk_limit=15.0, option_alert_mode=2
         ),
     ), patch(
-        "database.is_symbol_in_portfolio",
-        side_effect=[
-            False,
-            True,
-        ],  # AAPL has no position (False), NVDA has position (True)
+        # 持倉判定已由逐 (使用者, 標的) 查詢改為一次取回集合後在記憶體比對，
+        # 避免心跳 Pass 1 在 event loop 上跑 O(使用者 × 標的) 次同步查詢。
+        # AAPL 無持倉、NVDA 有持倉。
+        "database.get_all_portfolio_symbol_pairs",
+        return_value={(1, "NVDA")},
     ), patch(
         "database.is_notification_enabled",
         return_value=True,

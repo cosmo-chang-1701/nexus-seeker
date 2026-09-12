@@ -462,6 +462,23 @@ class DatabaseWriteQueue:
             # DELETE 清除筆數這類資訊，而不必為此另開一次查詢。
             return rowcounts
 
+        elif task_type == "maintenance":
+            # 在 writer 連線上執行：checkpoint 需要寫入權限，且必須與其他寫入
+            # 序列化，因此走同一條佇列而不是自開連線。
+            notes: list[str] = []
+            try:
+                cursor.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+                row = cursor.fetchone()
+                notes.append(f"wal_checkpoint={row}")
+            except Exception as e:
+                notes.append(f"wal_checkpoint failed: {e}")
+            try:
+                cursor.execute("PRAGMA optimize;")
+                notes.append("optimize=ok")
+            except Exception as e:
+                notes.append(f"optimize failed: {e}")
+            return "; ".join(notes)
+
         else:
             raise ValueError(f"Unknown task type: {task_type}")
 
@@ -574,6 +591,19 @@ async def execute_write_async(
 ) -> Any:
     """Asynchronous entry point for all database writes."""
     return await DatabaseWriteQueue.put_task("sql", (query, params), commit)
+
+
+def run_maintenance() -> str:
+    """WAL checkpoint 與查詢計畫統計更新（離峰排程呼叫）。
+
+    專案先前完全沒有任何 `wal_checkpoint` / `PRAGMA optimize`。WAL 只有在
+    auto-checkpoint 成功時才會回收，若長時間有讀取連線重疊，WAL 檔會持續膨脹；
+    而 kv_cache 每 15 分鐘就被大量改寫，查詢規劃器卻從未取得統計資訊。
+
+    ⚠️ 必須從非 event loop 執行緒呼叫（內部走寫入佇列，由 writer 執行緒執行）。
+    """
+    result = DatabaseWriteQueue.put_task_sync("maintenance", (), False)
+    return str(result)
 
 
 def _normalize_statements(
