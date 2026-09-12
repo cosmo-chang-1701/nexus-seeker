@@ -1216,6 +1216,7 @@ Uses a dedicated SQLite table (`price_volume_watches`, PK `(user_id, symbol)`) r
 - `nexus_core/market_analysis/scenario_classifier.py` — Event-driven quantitative scenario classifier (6 market scenarios including Whale Escort Resonance)
 - `nexus_core/database/watchlist.py` — Database CRUD operations for user watchlist symbols (100% deterministic rule-based zero-LLM architecture)
 - `nexus_core/database/migrations/v039_add_notification_toggles.py` — migration registering the user_notification_settings table in SQLite
+- `nexus_core/tests/unit/test_db_write_centralization.py` — AST 掃描強制「單一寫入者」不變式：除 `database/connection.py` 與 `database/core.py` 外，不得出現 `sqlite3.connect`、`conn.commit()`，或把連線當成 context manager 使用
 - `nexus_core/tests/unit/test_left_side_entry.py` — unit tests for the left-side six-rule entry gate (per-condition pass/fail/fail-safe, candle-pattern primitive, confirmed-bar guard)
 - `nexus_core/tests/unit/test_regime_classifier.py` — unit tests for the 4-regime classifier boundaries and its fail-safe default to Regime II
 - `nexus_core/tests/unit/test_transition_engine.py` — unit tests for the four transition paths, entry-bar-low capture, and the anti_washout coordination/Track-2 universality guards
@@ -1249,13 +1250,62 @@ Uses a dedicated SQLite table (`price_volume_watches`, PK `(user_id, symbol)`) r
   `database/core.py::get_migrations()` 只收錄同時具備這三者的模組，其餘一律**無聲跳過**
   （不會 log、不會報錯）。`upgrade(cursor)` / `run(conn)` 這類函式介面不會被執行——
   `v054_add_cro_risk_settings.py` 與 `v057_fundamental_cache.py` 就是這樣從未套用過。
-- **所有資料庫寫入一律走 `await execute_write_async(...)`**（或 `DatabaseWriteQueue.put_task`），
-  讀取則維持同步的 `get_read_connection()`。同步的 `execute_write()` 僅供 CLI 與
-  worker thread（`asyncio.to_thread`）使用：從 event loop 執行緒呼叫會被
-  `DatabaseWriteQueue.put_task_sync()` 的守衛直接拋 `RuntimeError`。
-  注意這道守衛在 pytest 下**不會觸發**（測試環境佇列未啟用，走 `_execute_direct_write`
-  直寫捷徑），因此這類缺陷只在 production 顯形——寫入函式的 `except` 務必留
-  `logger.error`，否則會全靜默失效。
+
+### SQLite 連線與寫入架構（單一寫入者）
+
+**沒有任何模組可以自己開連線寫入。** 這條不變式由
+`tests/unit/test_db_write_centralization.py` 以 AST 掃描強制（比照
+`test_output_centralization.py` 的作法），白名單只有 `database/connection.py`
+與 `database/core.py`（migration 執行器）。
+
+過去這條不變式被 ~35 個函式破壞：它們各自 `sqlite3.connect(config.DB_NAME)`
+（預設 5 秒 busy timeout、無任何 PRAGMA）然後 `conn.commit()`，與寫入佇列的
+連線互搶 WAL 寫入鎖，正是 production 上 `database is locked` 的來源。
+
+- **連線一律經 `database/connection.py::connect_db()`**（`get_read_connection()`
+  是它的別名）。單一 `_BUSY_TIMEOUT_MS` 旋鈕取代先前散落的 5s / 15s / 30s 三種值。
+  `journal_mode=WAL` **只在 `run_migrations()` 設定一次**（它寫在資料庫檔頭、是
+  持久設定），不要在每條連線重設——熱路徑每秒會開關數十條連線。
+- **寫入入口**（全部在 `database/connection.py`）：
+  | 入口 | 用途 |
+  |---|---|
+  | `execute_write_async` / `execute_write` | 單一語句 |
+  | `execute_write_rowcount(_async)` | 需要「影響筆數」時。`execute_write` 回傳 `lastrowid or rowcount or True`，DELETE 命中 0 筆會回傳 `True`，無法與成功區分 |
+  | `execute_write_many(_async)` | 多語句共用一個交易、只 commit 一次；statement 為 `(query, params)` 或 `(query, seq, True)`（走 `executemany`）。回傳逐語句 rowcount |
+  | `run_maintenance()` | WAL checkpoint + `PRAGMA optimize`，由 03:00 ET 離峰排程呼叫 |
+- **寫入 worker 跑在專屬執行緒 `nexus-db-writer` 上，不是 event loop 的 task。**
+  早期版本用 `loop.create_task(_worker_loop())`，而 `_process_task` 的 `"sql"`
+  分支裡沒有任何 `await`——`cursor.execute()` / `conn.commit()` 是同步 C 呼叫，
+  一旦 SQLite 回 SQLITE_BUSY，busy handler 就在 Discord gateway 的執行緒上睡滿
+  整個 busy timeout，直接觸發「heartbeat blocked for more than N seconds」，
+  逾時後再拋 `database is locked`。**不要把任何 SQLite 呼叫搬回 event loop。**
+- **worker 內不得有網路 I/O。** 它是全程序唯一且序列化的寫入者，任何網路等待都會
+  head-of-line 卡住全程序所有 `execute_write_async`。`save_historical_iv` 的 HV
+  fallback 就是因此移到呼叫端（`history_storage.py`）先解析完才入列。
+- **不要在持有寫入交易的狀態下 `await`。** `refresh_portfolio_greeks` 曾在一個開啟
+  的連線內逐筆 `await get_option_chain_mid_iv(...)` 再於迴圈結束後 commit，等於在
+  N 次網路往返期間持續持有寫入鎖。作法：先把結果蒐集到記憶體，最後一次性批次寫入。
+- **同步寫入函式只能從非 event loop 執行緒呼叫。** `put_task_sync()` 的守衛會對
+  event loop 執行緒直接拋 `RuntimeError`；呼叫端請包 `asyncio.to_thread(...)`。
+  ⚠️ 這道守衛在 pytest 下**不會觸發**（測試環境佇列未啟用，走
+  `_execute_direct_write` 直寫捷徑），因此這類缺陷只在 production 顯形——寫入函式的
+  `except` 務必留 `logger.error`，否則會全靜默失效。AST 強制測試就是為了補上這個
+  測試環境看不見的破口。
+- **讀取也不該阻塞 event loop。** 熱路徑請把多次讀取**合併**成一次
+  `asyncio.to_thread` 呼叫，而不是每個讀取各包一次（那只是把數百次 connect 搬到
+  別的執行緒）。既有範例：`database/cache.py::get_kv_cache_many()`（單一連線、單一
+  `key IN (...)` 查詢）、`cogs/unified_terminal/radar_data.py::_load_symbol_caches()`
+  （一次取齊 kv_cache / market_cache / squeeze_cache）、
+  `database/portfolio.py::get_all_portfolio_symbol_pairs()`（取代 O(使用者 × 標的)
+  的 `is_symbol_in_portfolio()` 巢狀查詢）。
+- **讀取函式不得有寫入副作用。** `get_user_portfolio()` / `get_all_portfolio()` 曾在
+  開頭呼叫 `archive_expired_portfolio_records()`（全表掃描的歸檔寫入），等於每次讀取
+  持倉都取得一次寫入鎖，而 15 分鐘心跳每輪都會踩到。該歸檔已移至 03:00 ET 離峰排程。
+- **`with sqlite3.connect(...) as conn:` 是錯的。** sqlite3 的 context manager 只
+  commit/rollback，**不會關閉連線**。一律用 `try/finally: conn.close()`。
+- **跨程序競爭無法用佇列消除。** 藍綠部署期間會有兩個容器並存掛載同一個 DB volume，
+  因此 worker 內建 SQLITE_BUSY 的 jittered 指數退避重試；`busy_timeout` 與退避重試
+  是一等公民設計，不是備援。
 
 ### Memory / VPS safety
 
