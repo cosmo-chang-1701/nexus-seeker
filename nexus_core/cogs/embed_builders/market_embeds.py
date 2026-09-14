@@ -22,11 +22,11 @@ from cogs.embed_builders.settings_embeds import create_info_embed
 from cogs.embed_builders._core import NexusEmbed, format_cache_age_suffix
 from market_analysis.macro_calendar_translator import translate_macro_event
 
-# UOA/DP-POC kv_cache 新鮮度門檻：15 分鐘心跳週期的 2 倍緩衝。刻意獨立於 GEX 的
+# UOA kv_cache 新鮮度門檻：15 分鐘心跳週期的 2 倍緩衝。刻意獨立於 GEX 的
 # _EDGE_SNAPSHOT_MAX_AGE_SECONDS（30 分鐘 edge scraper 輪詢），兩者走不同管線。
 from services.market_data_service import _EDGE_SNAPSHOT_MAX_AGE_SECONDS
 
-_UOA_DARKPOOL_MAX_AGE_SECONDS: float = float(_EDGE_SNAPSHOT_MAX_AGE_SECONDS)
+_UOA_SNAPSHOT_MAX_AGE_SECONDS: float = float(_EDGE_SNAPSHOT_MAX_AGE_SECONDS)
 
 
 def create_max_pain_embed(symbol: str, data: Dict[str, Any]) -> discord.Embed:
@@ -489,7 +489,7 @@ def build_radar_scan_embed(
             uoa_age_seconds = r.get("uoa_age_seconds")
             uoa_is_stale = (
                 uoa_age_seconds is not None
-                and uoa_age_seconds > _UOA_DARKPOOL_MAX_AGE_SECONDS
+                and uoa_age_seconds > _UOA_SNAPSHOT_MAX_AGE_SECONDS
             )
             mp_data = r["max_pain"] or {}
 
@@ -627,15 +627,24 @@ def build_radar_scan_embed(
                     call_wall = float(val)
 
             # 動態判定共振狀態
-            dp_poc_raw = r.get("dp_poc")
-            dp_poc = float(dp_poc_raw) if dp_poc_raw is not None else 0.0
+            vpoc_raw = (
+                r.get("volume_poc")
+                if r.get("volume_poc") is not None
+                else r.get("dp_poc")
+            )
+            volume_poc = float(vpoc_raw) if vpoc_raw is not None else 0.0
             is_magnetic = False
-            if price_val > 0 and max_pain_strike > 0 and put_wall > 0 and dp_poc > 0:
+            if (
+                price_val > 0
+                and max_pain_strike > 0
+                and put_wall > 0
+                and volume_poc > 0
+            ):
                 dev = abs(price_val - max_pain_strike) / max_pain_strike
                 if (
                     dev > 0.10
                     and price_val >= put_wall
-                    and abs(dp_poc - put_wall) / put_wall < 0.01
+                    and abs(volume_poc - put_wall) / put_wall < 0.01
                 ):
                     is_magnetic = True
 
@@ -1491,8 +1500,7 @@ def build_radar_scan_embed(
             "備註: EM Pos % 代表價格處於預期波動區間之下緣(0%)或上緣(100%)。\n"
             "指標: SQZ 🟢多頭動能/🔴空頭動能。MOM 顯示數值代表處於擠壓蓄力期，需防突破或殺跌。\n"
             "風控: 🛑 離場判定鐵律：嚴守 15 分鐘實體 K 線收盤撤退線 (過濾下影線流動性獵殺)。\n"
-            "⚠️ 數據代理: 🧲 共振磁吸判定依據的暗池 POC 為 Volume-POC/HVN 代理指標估算，"
-            "非真實暗池成交數據 (本平台目前無真實暗池數據源)。"
+            "提示: 🧲 共振磁吸代表現價站穩期權 Put Wall 且 Volume-POC (HVN) 與 Put Wall 差距在 1% 內。"
         )
         embed.add_field(
             name="📋 雷達圖例與風控指引",

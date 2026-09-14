@@ -1,4 +1,4 @@
-# 成交量分佈 (Volume Profile) 與暗池 DP-POC 磁吸模型技術規格書
+# 成交量分佈 (Volume Profile) 與 1% 共振磁吸模型技術規格書
 
 ## 1. 核心哲學與適用市場環境
 
@@ -8,13 +8,11 @@
 2. **低成交量節點（Low Volume Node, LVN / 流動性真空區）**：
    代表價格在該區間快速滑動、換手極少，缺乏實質籌碼沉澱。當行情再次進入 LVN 區間時，由於缺乏掛單阻尼，價格極易發動「無量滑步」式的加速暴跌或暴漲。
 
-### 暗池 DP-POC 與 1% 共振磁吸模型
-在美股市場中，另類交易系統（Alternative Trading Systems, ATS / 暗池）佔據了超過 40% 的機構大宗交易量。機構資金為避免在公眾訂單簿（Lit Exchanges）引起價格滑價，通常在暗池建立龐大頭寸。
+### Volume-POC 與 1% 共振磁吸模型
+在美股市場微觀結構中，價格帶的成交量密集程度反映了真實籌碼的沉澱與機構換手重心。
 
-Nexus Seeker 的量化引擎將現貨籌碼分佈（Volume-POC）與做市商期權底牆（Put Wall）相結合，構建了 **1% 共振磁吸底牆模型**：
-- 當現貨籌碼控制中心（DP-POC / HVN）與期權做市商護盤底牆（Put Wall）的價位重合在 1% 誤差之內時，現貨實質籌碼防線與期權做市商對沖買盤產生**共振支撐（Magnetic Resonance Floor）**，構成全系統最高置信度的防守壁壘。
-
-*重要資料架構揭露：當前生產環境中，`nexus_edge_scraper` 未直接接入 ATS 逐筆暗池數據源，系統以 20 日 50-Bin Volume Profile HVN（或 Redis/SQLite 快取中的 `volume_poc`）作為暗池 DP-POC 之量化代理指標，所有終端呈現皆遵循此代理原則。*
+Nexus Seeker 的量化引擎將現貨籌碼分佈（Volume-POC / HVN）與做市商期權底牆（Put Wall）相結合，構建了 **1% 共振磁吸底牆模型**：
+- 當現貨籌碼控制中心（Volume-POC / HVN）與期權做市商護盤底牆（Put Wall）的價位重合在 1% 誤差之內時，現貨實質籌碼防線與期權做市商對沖買盤產生**共振支撐（Magnetic Resonance Floor）**，構成全系統最高置信度的防守壁壘。
 
 ---
 
@@ -62,9 +60,9 @@ $$
    $$
 
 ### 2.4 🧲 1% 共振磁吸底牆判定公式
-將做市商期權底牆 $\text{Put Wall}$ 與籌碼控制中心 $\text{DP-POC}$（即 $\text{HVN Price}$）進行相對偏差度量：
+將做市商期權底牆 $\text{Put Wall}$ 與籌碼控制中心 $\text{Volume-POC}$（即 $\text{HVN Price}$）進行相對偏差度量：
 $$
-\delta_{\text{resonance}} = \frac{|\text{DP-POC} - \text{PutWall}|}{\text{PutWall}}
+\delta_{\text{resonance}} = \frac{|\text{Volume-POC} - \text{PutWall}|}{\text{PutWall}}
 $$
 - **判定門檻**：
   $$
@@ -92,7 +90,7 @@ flowchart TD
     GroupSum --> FindPeaks[找出最大值 b_HVN 與最小值 b_LVN]
     FindPeaks --> CalcPrices["計算中央價格:<br/>HVN Price 與 LVN Price"]
 
-    CalcPrices --> PutWallComp{"比對做市商 Put Wall:<br/>|DP-POC - PutWall| / PutWall <= 1%?"}
+    CalcPrices --> PutWallComp{"比對做市商 Put Wall:<br/>|Volume-POC - PutWall| / PutWall <= 1%?"}
     PutWallComp -- 是 --> MarkResonance["🧲 觸發共振磁吸底牆:<br/>現貨大宗籌碼與期權底牆雙重共振"]
     PutWallComp -- 否 --> NormalProfile[輸出常規 HVN/LVN 支撐壓力位]
 
@@ -108,7 +106,7 @@ flowchart TD
 | :--- | :--- | :--- | :--- |
 | `num_bins` | `50` | Volume Profile 等寬分箱數量 | `nexus_core/market_analysis/volume_profile.py` |
 | `days` | `20` | 籌碼分佈回看之交易日天數 | `nexus_core/market_analysis/volume_profile.py` |
-| `Resonance Tolerance` | `0.01` ($1\%$) | DP-POC 與 Put Wall 判定共振之最大相對誤差 | `nexus_core/cogs/embed_builders/market_embeds.py` |
+| `Resonance Tolerance` | `0.01` ($1\%$) | Volume-POC 與 Put Wall 判定共振之最大相對誤差 | `nexus_core/cogs/embed_builders/market_embeds.py` |
 | `LVN Trap Tolerance` | `0.015` ($1.5\%$) | 停損落入 LVN 真空區之判定容差 | `nexus_core/market_analysis/dynamic_rollover/anti_washout.py` |
 
 ---
@@ -131,5 +129,5 @@ flowchart TD
   - 歷史抓取與對外入口：`calculate_volume_profile()`（第 62–78 行）
 - `nexus_core/market_analysis/dynamic_rollover/anti_washout.py`：
   - LVN 陷阱吸附演算法：`_compute_anti_washout_stop()`（第 127–142 行）
-- `nexus_core/cogs/unified_terminal/radar_data.py`：`volume_profile` 與 `volume_poc` 資料組裝（第 205–215 行）
+- `nexus_core/cogs/unified_terminal/radar_data.py`：`volume_profile` 與 `volume_poc` 資料組裝（第 250–258 行、第 500–510 行、第 780–795 行）
 - `nexus_core/cogs/embed_builders/market_embeds.py`：🧲 共振磁吸底牆渲染判定（第 630–640 行、第 1494 行）

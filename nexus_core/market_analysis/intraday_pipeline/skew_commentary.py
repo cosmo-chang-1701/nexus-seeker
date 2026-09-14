@@ -316,11 +316,12 @@ def evaluate_advanced_filters(
         # 無 UOA 資料但要求了最低 delta
         return False, []
 
-    # 4. TDP Signal
+    # 4. TDP Signal (Triple Discount Pricing: MA20, Max Pain, Volume-POC)
     ma20 = getattr(metrics, "ma20", None)
     max_pain = getattr(metrics, "max_pain", None)
     volume_poc = getattr(metrics, "volume_poc", None)
-    dp_poc = getattr(metrics, "dp_poc", None)
+    if volume_poc is None:
+        volume_poc = getattr(metrics, "dp_poc", None)
 
     is_tdp = True
     if ma20 is not None and current_price >= ma20:
@@ -329,11 +330,9 @@ def evaluate_advanced_filters(
         is_tdp = False
     if volume_poc is not None and current_price >= volume_poc:
         is_tdp = False
-    if dp_poc is not None and current_price >= dp_poc:
-        is_tdp = False
 
     # 若關鍵指標全為 None，避免誤判
-    if ma20 is None and max_pain is None and dp_poc is None:
+    if ma20 is None and max_pain is None and volume_poc is None:
         is_tdp = False
 
     if params.require_tdp_signal and not is_tdp:

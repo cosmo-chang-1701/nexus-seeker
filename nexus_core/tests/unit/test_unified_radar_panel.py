@@ -323,13 +323,14 @@ async def test_execute_unified_scan_magnetic_filters(
 
             async def fake_fetch(sym: Any):  # type: ignore
                 if sym == "AAPL":
-                    # 符合條件：dev > 0.10, price >= putwall, abs(dp_poc - putwall)/putwall < 0.01
+                    # 符合條件：dev > 0.10, price >= putwall, abs(volume_poc - putwall)/putwall < 0.01
                     return {
                         "symbol": "AAPL",
                         "quote": {"c": 115.0},
                         "max_pain": {"max_pain": 100.0},  # dev = 15.0/100 = 0.15 > 0.10
                         "gex_profile_data": {"put_wall": 110.0},  # price 115 >= 110
-                        "dp_poc": 110.5,  # abs(110.5 - 110)/110 = 0.0045 < 0.01
+                        "volume_poc": 110.5,  # abs(110.5 - 110)/110 = 0.0045 < 0.01
+                        "dp_poc": 110.5,
                     }
                 elif sym == "NVDA":
                     # 違反 min_max_pain_dev：dev <= 0.10
@@ -338,6 +339,7 @@ async def test_execute_unified_scan_magnetic_filters(
                         "quote": {"c": 105.0},
                         "max_pain": {"max_pain": 100.0},  # dev = 5/100 = 0.05 <= 0.10
                         "gex_profile_data": {"put_wall": 100.0},
+                        "volume_poc": 100.5,
                         "dp_poc": 100.5,
                     }
                 elif sym == "TSLA":
@@ -347,18 +349,72 @@ async def test_execute_unified_scan_magnetic_filters(
                         "quote": {"c": 95.0},
                         "max_pain": {"max_pain": 80.0},  # dev = 15/80 > 0.10
                         "gex_profile_data": {"put_wall": 100.0},  # price 95 < 100
+                        "volume_poc": 100.5,
                         "dp_poc": 100.5,
                     }
                 elif sym == "AMD":
-                    # 違反 require_absolute_support：dp_poc 差距 >= 1%
+                    # 違反 require_absolute_support：volume_poc 差距 >= 1%
                     return {
                         "symbol": "AMD",
                         "quote": {"c": 115.0},
                         "max_pain": {"max_pain": 100.0},  # dev = 0.15 > 0.10
                         "gex_profile_data": {"put_wall": 110.0},
-                        "dp_poc": 115.0,  # abs(115 - 110)/110 = 5/110 = 0.045 >= 0.01
+                        "volume_poc": 115.0,  # abs(115 - 110)/110 = 5/110 = 0.045 >= 0.01
+                        "dp_poc": 115.0,
                     }
                 return None
+
+            cog._fetch_sym_radar_data_fast = fake_fetch  # type: ignore
+
+            with patch(
+                "cogs.unified_terminal.batch_scan.build_radar_scan_embed"
+            ) as mock_builder:
+                mock_builder.return_value = discord.Embed(title="Radar Scan")
+                with patch(
+                    "cogs.unified_terminal.batch_scan.BatchScanPaginatedView"
+                ) as MockView:
+                    MockView.return_value = discord.ui.View()
+                    await cog.execute_unified_scan(mock_interaction, state, 12345)
+
+                    mock_builder.assert_called_once()
+                    filtered_results = mock_builder.call_args.args[0]
+                    assert len(filtered_results) == 1
+                    assert filtered_results[0]["symbol"] == "AAPL"
+
+
+@pytest.mark.asyncio
+async def test_batch_scan_magnetic_filters_backward_compatible_with_dp_poc(
+    mock_bot: Any, mock_interaction: Any
+) -> None:
+    """驗證當標的僅包含歷史 dp_poc（無 volume_poc 鍵）時，高階磁吸過濾器仍可向下相容正確比對。"""
+    from cogs.unified_terminal.cog import UnifiedTerminalCog
+
+    cog = UnifiedTerminalCog(mock_bot)
+    state: dict[str, Any] = {
+        "scope": "ALL",
+        "quant_filters": ["magnetic_filters"],
+        "params": {},
+        "selected_tag": None,
+    }
+
+    with patch("cogs.unified_terminal.cog.asyncio.to_thread") as mock_thread:
+
+        def mock_to_thread_side_effect(func: Any, *args: Any, **kwargs: Any) -> Any:
+            if "get_user_portfolio" in func.__name__:
+                return [(123, "AAPL")]
+            return [{"symbol": "AAPL"}]
+
+        mock_thread.side_effect = mock_to_thread_side_effect
+        with patch("services.asset_manager.AssetManager.get_assets", return_value=[]):
+
+            async def fake_fetch(sym: Any):  # type: ignore
+                return {
+                    "symbol": "AAPL",
+                    "quote": {"c": 115.0},
+                    "max_pain": {"max_pain": 100.0},
+                    "gex_profile_data": {"put_wall": 110.0},
+                    "dp_poc": 110.5,  # 僅提供舊版 dp_poc
+                }
 
             cog._fetch_sym_radar_data_fast = fake_fetch  # type: ignore
 
@@ -407,6 +463,7 @@ async def test_batch_scan_alpha_filters_and_pagination(
             "quote": {"c": 90.0 if is_valid else 110.0},
             "ma20": 100.0,
             "max_pain": {"max_pain": 100.0},
+            "volume_poc": 100.0,
             "dp_poc": 100.0,
             "uoa": [{"trade_type": "SWEEP", "delta": 1.5 if is_valid else 0.5}],
         }
@@ -470,6 +527,7 @@ async def test_batch_scan_reports_error_when_send_fails(
             "quote": {"c": 100.0},
             "ma20": 100.0,
             "max_pain": {"max_pain": 100.0},
+            "volume_poc": 100.0,
             "dp_poc": 100.0,
             "uoa": [],
             "skew": 0.0,

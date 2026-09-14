@@ -64,9 +64,9 @@ async def test_get_kv_cache_with_age_returns_value_and_small_age() -> None:
 
 
 async def test_get_kv_cache_with_age_preserves_arbitrary_json_value_shape() -> None:
-    await save_kv_cache("dp_poc_TESTSYM", 123.45)
+    await save_kv_cache("volume_poc_TESTSYM", 123.45)
 
-    value, age_seconds = get_kv_cache_with_age("dp_poc_TESTSYM")
+    value, age_seconds = get_kv_cache_with_age("volume_poc_TESTSYM")
     assert value == 123.45
     assert age_seconds is not None
 

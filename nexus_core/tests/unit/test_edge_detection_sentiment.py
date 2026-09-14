@@ -376,7 +376,7 @@ def test_tsla_structural_divergence_low_skew_high_pcr() -> None:
     assert "⚠️ 警告：結構性情緒背離" in edge_text
 
 
-def test_darkpool_and_iv_suppression_divergence() -> None:
+def test_price_drop_and_iv_suppression_divergence() -> None:
     """情境 6: 現價暴跌 (quote.dp < -3.0) 且 IV Rank 極低 (< 15%)
     預期觸發: '情緒背離 (現價暴跌但波動率極低)'
     """

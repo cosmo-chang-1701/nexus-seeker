@@ -106,8 +106,6 @@ class BenchmarkSuite:
             ("GET", "/api/v1/scrape/macro/gex", None),
             ("GET", "/api/v1/scrape/macro/liquidity", None),
             ("GET", "/api/v1/scrape/macro/core_metrics", None),
-            ("GET", "/api/v1/scrape/darkpool", None),
-            ("GET", "/api/v1/scrape/darkpool/NVDA", None),
             ("GET", "/api/v1/scrape/macro/fedwatch", None),
             (
                 "GET",

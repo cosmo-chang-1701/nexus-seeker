@@ -1236,6 +1236,73 @@ def test_evaluate_advanced_filters_excludes_whale_hedge_and_low_dte_uoa() -> Non
     assert passed_without_valid is False
 
 
+def test_evaluate_advanced_filters_tdp_signal_with_volume_poc() -> None:
+    """驗證 TDP 估值三擊過濾器以 volume_poc 為依歸的正確性。"""
+    from market_analysis.intraday_pipeline import evaluate_advanced_filters
+    from models.schemas import ScanParams
+
+    params = ScanParams(require_tdp_signal=True)
+
+    # 滿足條件：現價 < MA20, 現價 < Max Pain, 現價 < Volume-POC
+    metrics_pass = SimpleNamespace(
+        squeeze_status=False,
+        squeeze_momentum=0.0,
+        current_price=90.0,
+        ma20=100.0,
+        max_pain=100.0,
+        volume_poc=100.0,
+    )
+    passed, tags = evaluate_advanced_filters(metrics_pass, {}, [], params)
+    assert passed is True
+    assert "[🔵 TDP 三擊]" in tags
+
+    # 現價 >= Volume-POC -> 不符條件
+    metrics_fail_vp = SimpleNamespace(
+        squeeze_status=False,
+        squeeze_momentum=0.0,
+        current_price=105.0,
+        ma20=110.0,
+        max_pain=110.0,
+        volume_poc=100.0,
+    )
+    passed, tags = evaluate_advanced_filters(metrics_fail_vp, {}, [], params)
+    assert passed is False
+    assert "[🔵 TDP 三擊]" not in tags
+
+    # 指標全為 None 防呆
+    metrics_none = SimpleNamespace(
+        squeeze_status=False,
+        squeeze_momentum=0.0,
+        current_price=90.0,
+        ma20=None,
+        max_pain=None,
+        volume_poc=None,
+    )
+    passed, tags = evaluate_advanced_filters(metrics_none, {}, [], params)
+    assert passed is False
+
+
+def test_evaluate_advanced_filters_tdp_signal_backward_compatible_with_dp_poc() -> None:
+    """驗證當僅提供舊版 dp_poc 時，TDP 估值三擊能正確向下相容回退。"""
+    from market_analysis.intraday_pipeline import evaluate_advanced_filters
+    from models.schemas import ScanParams
+
+    params = ScanParams(require_tdp_signal=True)
+
+    # 僅有 dp_poc (無 volume_poc 屬性)
+    metrics_legacy = SimpleNamespace(
+        squeeze_status=False,
+        squeeze_momentum=0.0,
+        current_price=90.0,
+        ma20=100.0,
+        max_pain=100.0,
+        dp_poc=100.0,
+    )
+    passed, tags = evaluate_advanced_filters(metrics_legacy, {}, [], params)
+    assert passed is True
+    assert "[🔵 TDP 三擊]" in tags
+
+
 # ---------------------------------------------------------------------------
 # 心跳資料正確性回歸測試
 # ---------------------------------------------------------------------------

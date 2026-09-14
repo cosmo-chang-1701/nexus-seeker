@@ -215,7 +215,7 @@ def classify_uoa_trade(
 
     else:  # ⚖️ MIDPOINT (Cross)
         intent = (
-            f"⚖️ {ticker_tag}暗池 Crossing 在 {strike_str} 對倒 {volume_str} 口"
+            f"⚖️ {ticker_tag}大宗 Crossing 在 {strike_str} 對倒 {volume_str} 口"
             f" {opt_type_upper} (OI={oi_str})，中性策略組合或機構調倉"
         )
 

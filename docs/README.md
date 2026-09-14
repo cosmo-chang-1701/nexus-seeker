@@ -57,7 +57,7 @@ flowchart TB
         U02["做市商底牆現價物理約束定理 (K < Spot)<br/>(02_wall_physical_constraints.md)"]
         U03["個股與大盤 Gamma Flip 翻轉線估算<br/>(03_gamma_flip_estimation.md)"]
         U04["異常期權活動 (UOA) 權利金排序與進度正規化<br/>(04_uoa_notional_and_paced_ratio.md)"]
-        U05["成交量分佈 (VP) 與暗池 DP-POC 磁吸模型<br/>(05_volume_profile_and_dp_poc.md)"]
+        U05["成交量分佈 (VP) 與 Volume-POC 磁吸模型<br/>(05_volume_profile_and_dp_poc.md)"]
         U06["Gamma Squeeze 引擎與 SPEAR 進攻訊號<br/>(06_gamma_squeeze_engine_and_spear.md)"]
     end
 
@@ -132,7 +132,7 @@ flowchart TB
 | 07 | [`02_wall_physical_constraints.md`](microstructure/02_wall_physical_constraints.md) | 做市商底牆現價物理約束定理 | 支撐底牆強制限制於現價下方 ($K < \text{Spot}$), 帶符號 Call Wall 空間判定 | `market_analysis/structural_signals.py` |
 | 08 | [`03_gamma_flip_estimation.md`](microstructure/03_gamma_flip_estimation.md) | 個股與大盤 Gamma Flip 翻轉線估算模型 | 六步零交叉點演算法, $\pm 30\%$ Bracket 雜訊過濾, Regime 方向一致性校驗 | `market_analysis/index_microstructure.py` |
 | 09 | [`04_uoa_notional_and_paced_ratio.md`](microstructure/04_uoa_notional_and_paced_ratio.md) | 異常期權活動 (UOA) 權利金排序與時段正規化 | 名目價值排序 (`trade_price * vol * 100`), 時段進度正規化 `paced_ratio`, SWEEP/BLOCK/CROSS | `market_analysis/uoa_detector.py` |
-| 10 | [`05_volume_profile_and_dp_poc.md`](microstructure/05_volume_profile_and_dp_poc.md) | 成交量分佈 (VP) 與暗池 DP-POC 磁吸模型 | 20 日 50-Bin 等寬分箱演算法, HVN/LVN 識別, 1% 共振磁吸底牆 | `market_analysis/volume_profile_utils.py` |
+| 10 | [`05_volume_profile_and_dp_poc.md`](microstructure/05_volume_profile_and_dp_poc.md) | 成交量分佈 (VP) 與 Volume-POC 磁吸模型 | 20 日 50-Bin 等寬分箱演算法, HVN/LVN 識別, 1% 共振磁吸底牆 | `market_analysis/volume_profile.py` |
 | 11 | [`06_gamma_squeeze_engine_and_spear.md`](microstructure/06_gamma_squeeze_engine_and_spear.md) | Gamma Squeeze 引擎與 SPEAR 進攻訊號體系 | 四階段硬性戰術門檻 (流動性/財報/OTM 權利金/IVR), SDDM 狀態機, Vanna 隱含對沖 | `market_analysis/gamma_squeeze_engine.py` |
 
 ---
@@ -143,7 +143,7 @@ flowchart TB
 
 | 序號 | 技術規格書檔案 | 核心主題與量化突破 | 關鍵量化門檻與約束 | 核心對應程式碼 |
 |:---|:---|:---|:---|:---|
-| 12 | [`01_tdp_valuation_model.md`](valuation_pricing/01_tdp_valuation_model.md) | TDP 估值三擊與 DDP 雙重折價定價模型 | DDP 戴維斯雙擊 $P = \text{EPS} \times (P/E)$, EPS YoY $\ge 15\%$, TDP 四重折價共振 | `market_analysis/ddp_inspector.py` |
+| 12 | [`01_tdp_valuation_model.md`](valuation_pricing/01_tdp_valuation_model.md) | TDP 估值三擊與 DDP 雙重折價定價模型 | DDP 戴維斯雙擊 $P = \text{EPS} \times (P/E)$, EPS YoY $\ge 15\%$, TDP 三重折價共振 | `market_analysis/ddp_inspector.py` |
 | 13 | [`02_expected_move_and_max_pain.md`](valuation_pricing/02_expected_move_and_max_pain.md) | 預期波幅 (EM) 與多 DTE 最大痛點重力過濾體系 | ATM Straddle 0.85 經驗因子, $\max(7.0, \text{DTE})$ 分母約束, 痛點最小化損失函數 | `market_analysis/sentiment/iv_metrics.py` |
 | 14 | [`03_skew_pcr_divergence_confluence.md`](valuation_pricing/03_skew_pcr_divergence_confluence.md) | Skew 偏斜與 Volume PCR 瀑布流背離及三重結構性風險合流閘門 | Skew 252 交易日百分位數, Volume PCR $\ge 1.2$ 破位順向殺盤, 三重結構風險合流 | `market_analysis/insights_engine.py` |
 | 15 | [`04_ivr_regime_and_seller_lockout.md`](valuation_pricing/04_ivr_regime_and_seller_lockout.md) | IVR 波動率位階、做市商負 Gamma 賣方禁售與期權策略匹配閘門 | 252 日 IVR 四階矩陣, 期限結構倒掛 $\text{Term Ratio} > 1.05$, 做市商負 Gamma 賣方一票否決 | `market_analysis/ivr_strategy_gate.py` |

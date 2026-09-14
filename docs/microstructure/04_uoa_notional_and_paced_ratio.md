@@ -60,7 +60,7 @@ $$
 $$
 \text{Trade Classification} =
 \begin{cases}
-\text{⚖️ CROSS}, & \text{若 } |\text{Trade Price} - \frac{\text{Bid} + \text{Ask}}{2}| < 10^{-4} \quad (\text{暗池場外對倒印刷，優先度最高}) \\
+\text{⚖️ CROSS}, & \text{若 } |\text{Trade Price} - \frac{\text{Bid} + \text{Ask}}{2}| < 10^{-4} \quad (\text{平盤大宗對倒 Crossing，優先度最高}) \\
 \text{📦 BLOCK}, & \text{若 } \text{Volume} \ge 1,500 \land (\text{Volume} \bmod 100 == 0) \quad (\text{整百手大額區塊交易}) \\
 \text{🔥 SWEEP}, & \text{其他跨市場主動掃單 (Intermarket Sweep Order)}
 \end{cases}
@@ -89,7 +89,7 @@ flowchart TD
     FilterCandidates -- 是 --> CalcMetrics[計算 BS Greeks、名目價值與 paced_ratio]
 
     CalcMetrics --> ClassifyTrade{訂單流三分類判定}
-    ClassifyTrade -- "TradePrice == Midpoint" --> MarkCross[標記: ⚖️ CROSS 暗池對倒]
+    ClassifyTrade -- "TradePrice == Midpoint" --> MarkCross[標記: ⚖️ CROSS 平盤大宗對倒]
     ClassifyTrade -- "Vol >= 1500 且 Vol % 100 == 0" --> MarkBlock[標記: 📦 BLOCK 區塊大單]
     ClassifyTrade -- 其他 --> MarkSweep[標記: 🔥 SWEEP 跨市場掃單]
 

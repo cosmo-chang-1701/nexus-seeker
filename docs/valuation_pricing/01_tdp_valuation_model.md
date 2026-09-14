@@ -7,13 +7,13 @@
 
 反之，若在市場狂熱給予極高本益比時盲目追價，即使企業未來 EPS 維持增長，一旦成長率放緩遭遇本益比壓縮（Multiple Contraction），亦將面臨慘烈的「戴維斯雙殺」。因此，DDP 檢驗引擎嚴格要求標的必須處於「成長加速但估值極度壓抑」的低位拐點。
 
-### 1.2 TDP (Triple Discount Pricing) 籌碼與技術多重折價共振
-在現代美股微觀結構中，僅憑基本面數據無法保證短期買入時機的安全邊際。做市商流動性獵殺、暗池對倒吸籌以及期權造市商的 Gamma 泥淖，經常使具備基本面優勢的個股在發動前經歷漫長的沉澱甚至深幅洗盤。
+### 1.2 TDP (Triple Discount Pricing) 籌碼與技術三重折價共振
+在現代美股微觀結構中，僅憑基本面數據無法保證短期買入時機的安全邊際。做市商流動性獵殺以及期權造市商的 Gamma 泥淖，經常使具備基本面優勢的個股在發動前經歷漫長的沉澱甚至深幅洗盤。
 
-Nexus Seeker 的 **TDP (Triple Discount Pricing) 估值三擊模型**，將基本面安全邊際延伸至做市商微觀結構與期權籌碼面。當個股現價同時折價於**技術面均線（EMA 21 / MA 20）**、**期權最大痛點（Max Pain）**、**公開市場成交量密集核心（Volume-POC）** 以及 **機構暗池大單籌碼峰（DP-POC）** 時，形成四重折價共振。此時下行空間被多重結構性籌碼底部封死，構成極高勝率的左側均值回歸與右側反轉支撐。
+Nexus Seeker 的 **TDP (Triple Discount Pricing) 估值三擊模型**，將基本面安全邊際延伸至做市商微觀結構與期權籌碼面。當個股現價同時折價於**技術面均線（EMA 21 / MA 20）**、**期權最大痛點（Max Pain）** 與 **公開市場成交量密集核心（Volume-POC）** 時，形成三重折價共振。此時下行空間被多重結構性籌碼底部封死，構成極高勝率的左側均值回歸與右側反轉支撐。
 
 ### 1.3 TDPQ 波動率擠壓共振升級
-當標的同時通過 DDP 基本面過濾與 TDP 四重折價確認，且其微觀波動率結構正處於 PSQ (Pro Squeeze Momentum) 擠壓狀態（布林通道被完全包裹於肯特納通道內，能量極度蓄積）時，系統將其標記升級為 **`⚡ TDPQ 突破共振 (Triple Discount + Squeeze)`**。這代表「基本面爆發力 + 超跌結構支撐 + 波動率即將方向性釋放」的三位一體最強進攻型態。
+當標的同時通過 DDP 基本面過濾與 TDP 三重折價確認，且其微觀波動率結構正處於 PSQ (Pro Squeeze Momentum) 擠壓狀態（布林通道被完全包裹於肯特納通道內，能量極度蓄積）時，系統將其標記升級為 **`⚡ TDPQ 突破共振 (Triple Discount + Squeeze)`**。這代表「基本面爆發力 + 超跌結構支撐 + 波動率即將方向性釋放」的三位一體最強進攻型態。
 
 ### 1.4 適用市場環境與產業邊界
 - **最佳適用場景**：大盤處於牛市回檔期、市場震盪整理（Low Volatility / Consolidation）、或優質成長股受短期情緒衝擊導致估值非理性挫跌之時。
@@ -75,15 +75,14 @@ $$\text{RVOLBonus} = \begin{cases} 5, & \text{若 } \text{RVOL} > 1.5 \\ 0, & \t
 綜合基礎評分與各維度增益，輸出 0 至 100 區間的置信度分數：
 $$\text{Score} = \min\Big(100.0, \; 60.0 + \min(20.0, (g_{\text{EPS}} - 0.15) \times 100) + 10 \cdot \mathbf{1}_{\text{rev\_accel}} + 10 \cdot \mathbf{1}_{\text{pe\_compressed}} + \text{MarginBonus} + \text{RVOLBonus}\Big)$$
 
-### 2.3 TDP 四重折價共振量化定義
-設 $P_{\text{spot}}$ 為標的最新市場成交價。TDP 折價體系評估四大核心籌碼水位：
+### 2.3 TDP 三重折價共振量化定義
+設 $P_{\text{spot}}$ 為標的最新市場成交價。TDP 折價體系評估三大核心籌碼水位：
 1. **技術均線支撐**：$P_{\text{spot}} < \text{EMA}_{21}$（或日線 $\text{MA}_{20}$）
 2. **期權做市商痛點**：$P_{\text{spot}} < \text{Max Pain}$
-3. **公開訂單薄成交量密集核心**：$P_{\text{spot}} < \text{Volume-POC}$
-4. **機構暗池大單籌碼峰**：$P_{\text{spot}} < \text{DP-POC}$
+3. **公開訂單簿成交量密集核心**：$P_{\text{spot}} < \text{Volume-POC}$
 
 TDP 啟用布林值判定如下：
-$$\text{is\_tdp} = (P_{\text{spot}} < \text{EMA}_{21}) \land (P_{\text{spot}} < \text{Max Pain}) \land (P_{\text{spot}} < \text{Volume-POC}) \land (P_{\text{spot}} < \text{DP-POC})$$
+$$\text{is\_tdp} = (P_{\text{spot}} < \text{EMA}_{21}) \land (P_{\text{spot}} < \text{Max Pain}) \land (P_{\text{spot}} < \text{Volume-POC})$$
 
 當關鍵指標全數缺失時，系統啟用防護阻斷，強制 `is_tdp = False`。
 
@@ -99,7 +98,7 @@ flowchart TD
 
     FetchData --> EPSCheck{EPS YoY >= 15% 且 基期 EPS > 0?}
     EPSCheck -- 否 --> FailDDP[基本面不符: EPS 動能不足]
-    EPSCheck --  GridPane --> RevCheck{營收成長是否加速?}
+    EPSCheck -- 是 --> RevCheck{營收成長是否加速?}
 
     RevCheck -- 否 --> FailDDP
     RevCheck -- 是 --> PECheck{PE < 80% 5Y均值 或 週K 25%分位?}
@@ -111,9 +110,9 @@ flowchart TD
     FwdCheck -- 是 --> CalcScore[計算置信度評分 60-100]
     CalcScore --> MarkDDP[標記 is_ddp = True]
 
-    MarkDDP --> TDPCheck{"現價 < EMA21 且<br/>現價 < MaxPain 且<br/>現價 < VPOC 且<br/>現價 < DPPOC?"}
+    MarkDDP --> TDPCheck{"現價 < EMA21 且<br/>現價 < MaxPain 且<br/>現價 < VPOC?"}
     TDPCheck -- 否 --> NormalDDP[輸出: DDP 基本面低估標的]
-    TDPCheck -- 是 --> MarkTDP[標記 [🔵 TDP 三擊] 籌碼四重折價]
+    TDPCheck -- 是 --> MarkTDP[標記 [🔵 TDP 三擊] 籌碼三重折價]
 
     MarkTDP --> SQZCheck{PSQ is_squeezing 是否為 True?}
     SQZCheck -- 否 --> OutputTDP[輸出: TDP 估值三擊共振信號]
@@ -132,7 +131,7 @@ flowchart TD
 | `pe_upper_safety_cap` | $500.0$ | Trailing P/E 超過 500 倍視為極端泡沫直接剔除 | `nexus_core/market_analysis/ddp_inspector.py` |
 | `rvol_bonus_threshold` | $> 1.50$ | 20 日相對量能超越 1.5 倍給予 5 分加分 | `nexus_core/market_analysis/ddp_inspector.py` |
 | `confidence_base_score` | $60.0$ | 通過基礎四項審計的基準起步分數 | `nexus_core/market_analysis/ddp_inspector.py` |
-| `require_tdp_signal` | `True` / `False` | 終端雷達掃描時是否強制要求四重折價同時成立 | `nexus_core/market_analysis/intraday_pipeline/skew_commentary.py` |
+| `require_tdp_signal` | `True` / `False` | 終端雷達掃描時是否強制要求三重折價同時成立 | `nexus_core/market_analysis/intraday_pipeline/skew_commentary.py` |
 | `excluded_sectors` | `["Energy", "Basic Materials"]` | 嚴格排除之強週期性產業分類 | `nexus_core/market_analysis/ddp_inspector.py` |
 
 ---
@@ -152,9 +151,9 @@ if prev_y_eps_val <= 0:
 若企業無 5 年平均 P/E 資料（常見於掛牌 2 至 4 年的次新成長股），引擎不直接棄審，而是自動平滑降級至過去 3 年（156 週）週線收盤價分佈。若當前股價低於該 3 年週線之第 25 百分位，則認定估值壓縮成立，並自動以股價百分位估算出等效 P/E 供終端介面顯示。
 
 ### 5.3 TDP 缺失指標防誤判 (Incomplete Metrics Guard)
-在盤中即時雷達掃描中，若因期權鏈流動性不足或行情源中斷導致 `ma20`、`max_pain` 與 `dp_poc` 均為 `None`，若機械式比對 `current_price < metric` 會導致條件被繞過而誤判為折價成立。`skew_commentary.py:336` 設立安全閥：
+在盤中即時雷達掃描中，若因期權鏈流動性不足或行情源中斷導致 `ma20`、`max_pain` 與 `volume_poc` 均為 `None`，若機械式比對 `current_price < metric` 會導致條件被繞過而誤判為折價成立。`skew_commentary.py:336` 設立安全閥：
 ```python
-if ma20 is None and max_pain is None and dp_poc is None:
+if ma20 is None and max_pain is None and volume_poc is None:
     is_tdp = False
 ```
 強制確保在關鍵微觀籌碼指標缺失時，不輸出虛假進場信號。

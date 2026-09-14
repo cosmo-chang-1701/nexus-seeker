@@ -1,4 +1,4 @@
-"""local_api：總經 GEX/流動性/FedWatch/暗池 Playwright 抓取，以及個股 GEX 端點。"""
+"""local_api：總經 GEX/流動性/FedWatch Playwright 抓取，以及個股 GEX 端點。"""
 
 from typing import Any, Optional
 import logging

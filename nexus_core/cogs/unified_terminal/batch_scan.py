@@ -194,8 +194,12 @@ class BatchScanMixin:
                     pw_val = gex_data.get("put_wall") if gex_data else 0.0
                     putwall = float(pw_val) if pw_val is not None else 0.0
 
-                    dp_val = r.get("dp_poc")
-                    dp_poc = float(dp_val) if dp_val is not None else 0.0
+                    vp_val = (
+                        r.get("volume_poc")
+                        if r.get("volume_poc") is not None
+                        else r.get("dp_poc")
+                    )
+                    volume_poc = float(vp_val) if vp_val is not None else 0.0
 
                     min_dev = params.get("min_max_pain_dev", 0.10)
                     tolerance = params.get("abs_support_tolerance", 1.0) / 100.0
@@ -209,8 +213,8 @@ class BatchScanMixin:
                     if current_price > 0 and putwall > 0 and current_price < putwall:
                         passed = False
 
-                    if dp_poc > 0 and putwall > 0:
-                        if abs(dp_poc - putwall) / putwall >= tolerance:
+                    if volume_poc > 0 and putwall > 0:
+                        if abs(volume_poc - putwall) / putwall >= tolerance:
                             passed = False
                     else:
                         passed = False
@@ -239,11 +243,12 @@ class BatchScanMixin:
                             "momentum_value", psq_res.get("momentum", 0.0)
                         ),
                         current_price=current_price,
-                        volume_poc=None,  # volume profile may not be fully available in batch scan
+                        volume_poc=float(r.get("volume_poc") or r.get("dp_poc") or 0.0)
+                        or None,
                         gex_max_put_wall=put_wall,
                         ma20=r.get("ma20"),
                         max_pain=max_pain_val,
-                        dp_poc=r.get("dp_poc", 0.0),
+                        dp_poc=float(r.get("volume_poc") or r.get("dp_poc") or 0.0),
                     )
 
                     is_adv_passed, adv_tags = evaluate_advanced_filters(

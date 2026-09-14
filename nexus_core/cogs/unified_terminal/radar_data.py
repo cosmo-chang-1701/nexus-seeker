@@ -40,8 +40,6 @@ def _radar_kv_keys(sym: str, today_str: str) -> list[str]:
         f"radar_terminal_{up}",
         f"gex_metrics_{up}",
         f"uoa_{up}",
-        f"darkpool_{up}",
-        f"dp_poc_{up}",
         f"volume_poc_{up}",
         f"iv_metrics_{up}_{today_str}",
         f"month_mp_{up}",
@@ -252,16 +250,8 @@ class RadarDataMixin:
         if not squeeze_cache:
             squeeze_cache = {}
 
-        darkpool_cached = kv.get(f"darkpool_{sym.upper()}") or {}
-        dp_poc_val, dp_poc_age_seconds = kv.get_with_age(f"dp_poc_{sym.upper()}")
-        if dp_poc_val is None:
-            dp_poc_val = (
-                darkpool_cached.get("dp_poc")
-                or radar_cache.get("hvn_price")
-                or kv.get(f"volume_poc_{sym.upper()}")
-            )
-            dp_poc_age_seconds = None
-        dp_poc = float(dp_poc_val) if dp_poc_val is not None else 0.0
+        vpoc_val = radar_cache.get("hvn_price") or kv.get(f"volume_poc_{sym.upper()}")
+        volume_poc = float(vpoc_val) if vpoc_val is not None else 0.0
 
         iv_metrics = kv.get(f"iv_metrics_{sym.upper()}_{today_str}") or {}
 
@@ -460,8 +450,6 @@ class RadarDataMixin:
             "iv_data": iv_metrics,
             "uoa": uoa_data,
             "uoa_age_seconds": uoa_age_seconds,
-            "darkpool": darkpool_cached,
-            "dp_poc_age_seconds": dp_poc_age_seconds,
             "atr_14": atr_14,
             "ma20": float(ma20_val) if ma20_val is not None else None,
             "month_max_pains": month_max_pains,
@@ -514,7 +502,8 @@ class RadarDataMixin:
                 ),
                 "lvn": float(radar_cache.get("lvn_price") or 0.0),
             },
-            "dp_poc": dp_poc,
+            "volume_poc": volume_poc,
+            "dp_poc": volume_poc,
         }
 
     async def _fetch_sym_radar_data_slow_raw(self, sym: str) -> Any:
@@ -793,31 +782,13 @@ class RadarDataMixin:
             else None
         )
 
-        # 讀取 DP-POC (暗池共振)：nexus_edge_scraper 已無真實暗池資料源，
-        # dp_poc_{sym}/darkpool_{sym} 快取鍵在正式環境從未被寫入，此處套用與
-        # fast-path (_fetch_sym_radar_data_fast_raw) 完全一致的 fallback 鏈，
-        # 退回本函式已算出的 Volume-POC (vp_data.hvn) 或 volume_poc_{sym} 快取，
-        # 避免此路徑的 dp_poc 恆為 0.0（與 fast-path 行為不一致）。
-        from database.cache import get_kv_cache_many
+        # 讀取 Volume-POC：取已計算之 vp_data.hvn 或 volume_poc_{sym} 快取
+        from database.cache import get_kv_cache
 
         up = sym.upper()
-        # 三個鍵一次批次取回（單一連線、單一查詢，且在 worker 執行緒內完成）。
-        dp_kv = _KvSnapshot(
-            await asyncio.to_thread(
-                get_kv_cache_many,
-                [f"dp_poc_{up}", f"darkpool_{up}", f"volume_poc_{up}"],
-            )
-        )
-        dp_poc_val, dp_poc_age_seconds = dp_kv.get_with_age(f"dp_poc_{up}")
-        if dp_poc_val is None:
-            darkpool_cached = dp_kv.get(f"darkpool_{up}") or {}
-            dp_poc_val = (
-                darkpool_cached.get("dp_poc")
-                or (vp_data or {}).get("hvn")
-                or dp_kv.get(f"volume_poc_{up}")
-            )
-            dp_poc_age_seconds = None
-        dp_poc = float(dp_poc_val) if dp_poc_val is not None else 0.0
+        vpoc_cached = await asyncio.to_thread(get_kv_cache, f"volume_poc_{up}")
+        vpoc_val = (vp_data or {}).get("hvn") or vpoc_cached
+        volume_poc = float(vpoc_val) if vpoc_val is not None else 0.0
 
         # 計算 20 日均量與當前 K 棒成交量
         vol_data = {"current_volume": 0.0, "avg_volume_20": 0.0}
@@ -886,8 +857,8 @@ class RadarDataMixin:
                 else False,
             },
             "psq_result": psq_res,
-            "dp_poc": dp_poc,
-            "dp_poc_age_seconds": dp_poc_age_seconds,
+            "volume_poc": volume_poc,
+            "dp_poc": volume_poc,
             "ma20": ema_21,
             "atr_14": atr_14,
             "atr_15m": atr_15m,
@@ -906,6 +877,9 @@ class RadarDataMixin:
             get_kv_cache_with_age, f"uoa_{sym.upper()}"
         )
         result["uoa_age_seconds"] = real_uoa_age
+
+        if volume_poc > 0:
+            await save_kv_cache(f"volume_poc_{sym.upper()}", volume_poc)
 
         await save_kv_cache(
             f"radar_terminal_{sym.upper()}",

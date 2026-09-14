@@ -103,7 +103,7 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - Net GEX 拓撲、三階牆體、底牆物理約束（$K < \text{Spot}$）→ [`01_gex_topology_and_walls.md`](docs/microstructure/01_gex_topology_and_walls.md)、[`02_wall_physical_constraints.md`](docs/microstructure/02_wall_physical_constraints.md)
 - Gamma Flip 翻轉線估算、Index Microstructure 大盤 Regime（`SHORT_GAMMA_CRITICAL`）與其快取降級策略 → [`03_gamma_flip_estimation.md`](docs/microstructure/03_gamma_flip_estimation.md)
 - UOA 權利金排序、`paced_ratio` 時段正規化、SWEEP/BLOCK/CROSS 分類 → [`04_uoa_notional_and_paced_ratio.md`](docs/microstructure/04_uoa_notional_and_paced_ratio.md)
-- Volume Profile／暗池 DP-POC 代理、Gamma Squeeze Engine 與 SPEAR 進攻訊號 → [`05_volume_profile_and_dp_poc.md`](docs/microstructure/05_volume_profile_and_dp_poc.md)、[`06_gamma_squeeze_engine_and_spear.md`](docs/microstructure/06_gamma_squeeze_engine_and_spear.md)
+- Volume Profile (成交量分佈 / Volume-POC)、Gamma Squeeze Engine 與 SPEAR 進攻訊號 → [`05_volume_profile_and_dp_poc.md`](docs/microstructure/05_volume_profile_and_dp_poc.md)、[`06_gamma_squeeze_engine_and_spear.md`](docs/microstructure/06_gamma_squeeze_engine_and_spear.md)
 
 ### 定價模型與波動率策略 (`docs/valuation_pricing/`)
 - TDP 估值三擊／DDP 雙重折價定價模型 → [`01_tdp_valuation_model.md`](docs/valuation_pricing/01_tdp_valuation_model.md)

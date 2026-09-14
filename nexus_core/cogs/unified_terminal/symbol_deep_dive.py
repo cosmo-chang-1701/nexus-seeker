@@ -43,7 +43,7 @@ class SymbolDeepDiveMixin:
         視窗，不再受 3 秒互動逾時限制。因此期權鏈/GEX/IV/Max Pain/Skew/PCR/UOA
         等量化數據一律以 force_live=True 或等效的 force_refresh=True 抓取，
         略過 Edge Snapshot（最舊可能 30 分鐘）與各自的記憶體/SQLite 快取層，
-        保證回傳即時資料。現價/SPY 歷史/總經/Reddit/Polymarket/暗池/基本面
+        保證回傳即時資料。現價/SPY 歷史/總經/Reddit/Polymarket/基本面
         論點等非期權數據維持既有快取策略不變。
         """
         from market_analysis.ddp_inspector import DDPInspector

@@ -1522,6 +1522,7 @@ def test_build_radar_scan_embed_renders_field_formulas_consistently() -> None:
                 "momentum_value": 2.5,
                 "signal_direction": "🟢",
             },
+            "volume_poc": 104.0,
             "dp_poc": 104.0,
             "month_max_pains": [],
         }
@@ -1591,6 +1592,7 @@ def test_build_radar_scan_embed_rebuilds_expected_move_bounds_from_reference_pri
                 "momentum_value": 0.0,
                 "signal_direction": "⚪",
             },
+            "volume_poc": 96.0,
             "dp_poc": 96.0,
             "month_max_pains": [],
         }
@@ -1971,7 +1973,7 @@ def test_build_radar_scan_embed_triple_confluence_yields_to_higher_priority_brea
 
 
 def test_build_radar_scan_embed_all_enhanced_fields() -> None:
-    """全面驗證交易員終端雷達補足之欄位：GEX Call/Put Wall、Top UOA、STO 鎖死、暗池水泥牆、真實 Skew、SQZ 向量、防洗盤防守位。"""
+    """全面驗證交易員終端雷達補足之欄位：GEX Call/Put Wall、Top UOA、STO 鎖死、真實 Skew、SQZ 向量、防洗盤防守位。"""
     scan_results = [
         {
             "symbol": "NVDA",
@@ -2024,15 +2026,7 @@ def test_build_radar_scan_embed_all_enhanced_fields() -> None:
                 "signal_direction": "🟢",
             },
             "atr_14": 3.5,
-            "darkpool": {
-                "prints": [
-                    {
-                        "price": 220.50,
-                        "premium": 48_850_000.0,
-                        "volume": 220000,
-                    }
-                ]
-            },
+            "volume_poc": 220.50,
             "dp_poc": 220.50,
         },
         {
@@ -2078,15 +2072,7 @@ def test_build_radar_scan_embed_all_enhanced_fields() -> None:
                 "signal_direction": "🟢",
             },
             "atr_14": 2.8,
-            "darkpool": {
-                "prints": [
-                    {
-                        "price": 101.68,
-                        "premium": 48_850_000.0,
-                        "volume": 480000,
-                    }
-                ]
-            },
+            "volume_poc": 101.68,
             "dp_poc": 101.68,
         },
         {
@@ -2178,7 +2164,7 @@ def test_build_radar_scan_embed_all_enhanced_fields() -> None:
 
 
 def test_build_radar_scan_embed_10_symbols_no_field_overflow() -> None:
-    """驗證當輸入 10 檔自選標的 (Watchlist) 且包含完整 UOA、暗池與長文字戰術建議時，所有 Field Value 均嚴格 <= 1024 字元。"""
+    """驗證當輸入 10 檔自選標的 (Watchlist) 且包含完整 UOA、Volume-POC 與長文字戰術建議時，所有 Field Value 均嚴格 <= 1024 字元。"""
     symbols = [
         "NVDA",
         "AAPL",
@@ -2237,15 +2223,7 @@ def test_build_radar_scan_embed_10_symbols_no_field_overflow() -> None:
                     "signal_direction": "🟢",
                 },
                 "atr_14": 2.5 + i * 0.2,
-                "darkpool": {
-                    "prints": [
-                        {
-                            "price": 148.0 + i * 10.0,
-                            "premium": 60000000.0,
-                            "volume": 400000,
-                        }
-                    ]
-                },
+                "volume_poc": 148.0 + i * 10.0,
                 "dp_poc": 148.0 + i * 10.0,
             }
         )
