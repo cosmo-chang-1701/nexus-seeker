@@ -61,6 +61,9 @@ from .caches import (  # noqa: F401,E402
     _QUOTE_CACHE_TTL,
     _SCALAR_CACHE_SIZE,
     _SMA_CACHE_TTL,
+    _VALID_SYMBOL_CACHE_SIZE,
+    _VALID_SYMBOL_CACHE_TTL,
+    _INVALID_SYMBOL_CACHE_TTL,
     _ema_cache,
     _etf_cache,
     _history_cache,
@@ -70,6 +73,7 @@ from .caches import (  # noqa: F401,E402
     _profile_cache,
     _quote_cache,
     _sma_cache,
+    _valid_symbol_cache,
     clear_etf_cache,
     clear_ema_cache,
     clear_history_cache,
@@ -77,6 +81,7 @@ from .caches import (  # noqa: F401,E402
     clear_profile_cache,
     clear_quote_cache,
     clear_sma_cache,
+    clear_valid_symbol_cache,
     run_garbage_collection,
 )
 from .quote import (  # noqa: F401,E402
@@ -85,6 +90,7 @@ from .quote import (  # noqa: F401,E402
     _is_finnhub_quote_stale,
     _safe_yf_history,
     batch_get_quotes,
+    batch_validate_symbols,
     get_quote,
     get_yfinance_quote,
     validate_symbol,

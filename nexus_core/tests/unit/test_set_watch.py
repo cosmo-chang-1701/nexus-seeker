@@ -658,3 +658,138 @@ def test_set_watchlist_direct_fullwidth_cleaning(db_conn: Any) -> None:
 
     current = manager.get_assets(user_id, ContextType.WATCH)
     assert [a.symbol for a in current] == ["AAPL", "TSLA", "GOOG"]
+
+
+@pytest.mark.asyncio
+async def test_batch_validate_symbols_fast_path(db_conn: Any) -> None:
+    """測試 batch_validate_symbols 之資料庫快篩與快取機制（無需網路請求）。"""
+    from services.market_data_service.quote import batch_validate_symbols
+    from services.market_data_service.caches import (
+        _valid_symbol_cache,
+        clear_valid_symbol_cache,
+    )
+    import time
+
+    clear_valid_symbol_cache()
+
+    # 1. 在資料庫中預先寫入已知的標的紀錄
+    cursor = db_conn.cursor()
+    cursor.execute(
+        "CREATE TABLE IF NOT EXISTS market_cache (symbol TEXT PRIMARY KEY, max_pain REAL)"
+    )
+    cursor.execute(
+        "INSERT OR REPLACE INTO market_cache (symbol, expiry, max_pain) VALUES ('DBTEST', 'WEEKLY', 50.0)"
+    )
+    db_conn.commit()
+
+    # 2. 記憶體快取中寫入另一檔標的
+    _valid_symbol_cache["MEMTEST"] = (True, time.time() + 3600)
+
+    # 3. 測試包含非法格式、DB 已存在、快取已存在之批次驗證
+    symbols = ["DBTEST", "MEMTEST", "INVALID!@#", "TOOLONGTICKERNAME"]
+    results = await batch_validate_symbols(symbols)
+
+    assert results["DBTEST"] is True
+    assert results["MEMTEST"] is True
+    assert results["INVALID!@#"] is False
+    assert results["TOOLONGTICKERNAME"] is False
+
+
+@pytest.mark.asyncio
+async def test_set_watch_slash_executes_in_interactive_context(
+    mock_interaction: Any, db_conn: Any
+) -> None:
+    """測試 /set_watch 指令在執行驗證時標記為互動請求 (interactive context)。"""
+    from services.market_data_service._core import _is_interactive_request
+
+    bot = MagicMock()
+    bot.wait_until_ready = AsyncMock()
+    terminal = TerminalCog(bot)
+
+    observed_interactive: list[bool] = []
+
+    async def mock_batch_val(syms: list[str]) -> dict[str, bool]:
+        observed_interactive.append(_is_interactive_request.get())
+        return {s: True for s in syms}
+
+    with patch(
+        "services.market_data_service.batch_validate_symbols",
+        side_effect=mock_batch_val,
+    ):
+        await terminal.set_watch.callback(  # type: ignore
+            terminal,  # type: ignore
+            mock_interaction,
+            symbol="AAPL, NVDA",
+        )
+
+    assert len(observed_interactive) == 1
+    assert (
+        observed_interactive[0] is True
+    ), "set_watch_impl 必須在 interactive 模式下執行"
+
+
+@pytest.mark.asyncio
+async def test_batch_validate_symbols_deduplicates_and_skips_redundant_db() -> None:
+    """測試 batch_validate_symbols 在驗證未知標的时，自動去重並以 check_db=False 呼叫 validate_symbol。"""
+    from services.market_data_service.quote import batch_validate_symbols
+    from services.market_data_service.caches import clear_valid_symbol_cache
+
+    clear_valid_symbol_cache()
+
+    calls: list[tuple[str, bool]] = []
+
+    async def mock_val(sym: str, check_db: bool = True) -> bool:
+        calls.append((sym, check_db))
+        return True
+
+    with patch("services.market_data_service.validate_symbol", side_effect=mock_val):
+        with patch(
+            "services.market_data_service.quote._check_symbols_in_db",
+            return_value=set(),
+        ):
+            results = await batch_validate_symbols(["newtick", "NEWTICK", "other"])
+
+    # 驗證：重複的 clean symbol 只呼叫一次 validate_symbol，且 check_db 為 False
+    assert len(calls) == 2
+    called_syms = {c[0] for c in calls}
+    assert called_syms == {"NEWTICK", "OTHER"}
+    for _, check_db in calls:
+        assert check_db is False
+
+    # 驗證：原始 tokens 皆正確映射到結果
+    assert results["newtick"] is True
+    assert results["NEWTICK"] is True
+    assert results["other"] is True
+
+
+@pytest.mark.asyncio
+async def test_get_quote_symbol_lookup_fuzzy_mismatch_raises_symbol_not_found() -> None:
+    """測試 Finnhub symbol_lookup 模糊匹配到非目標標的時，立即拋出 SYMBOL_NOT_FOUND 而不進入 yfinance。"""
+    from services.market_data_service.quote import get_quote
+    from services.market_data_service.caches import _quote_cache
+
+    if hasattr(_quote_cache, "clear"):
+        _quote_cache.clear()
+
+    mock_client = MagicMock()
+    # quote 回傳 c=0（無即時價格）
+    mock_client.quote.return_value = {"c": 0}
+    # symbol_lookup 模糊比對到其他公司，但 symbol 完全不匹配
+    mock_client.symbol_lookup.return_value = {
+        "count": 1,
+        "result": [
+            {
+                "description": "Some Hospital Co",
+                "displaySymbol": "4017.SR",
+                "symbol": "4017.SR",
+            }
+        ],
+    }
+
+    with patch("services.market_data_service._get_client", return_value=mock_client):
+        with patch("services.market_data_service.get_yfinance_quote") as mock_yf:
+            with pytest.raises(ValueError, match="SYMBOL_NOT_FOUND"):
+                await get_quote("FAKETICKER")
+
+            # 確認未呼叫昂貴的 yfinance fallback
+            mock_yf.assert_not_called()

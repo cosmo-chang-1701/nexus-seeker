@@ -54,6 +54,15 @@ _etf_cache: Any = BoundedCache(max_size=_SCALAR_CACHE_SIZE)
 _ETF_CACHE_TTL = 86400  # 24 小時，ETF 屬性通常是靜態的
 
 # ---------------------------------------------------------------------------
+# 標的代號有效性快取 (24 小時有效快取 / 10 分鐘無效快取，大幅加速 /set_watch 與輸入驗證)
+# ---------------------------------------------------------------------------
+_VALID_SYMBOL_CACHE_SIZE = 1000
+_VALID_SYMBOL_CACHE_TTL = 86400
+_INVALID_SYMBOL_CACHE_TTL = 600
+
+_valid_symbol_cache: Any = BoundedCache(max_size=_VALID_SYMBOL_CACHE_SIZE)
+
+# ---------------------------------------------------------------------------
 # 歷史 K 線數據快取設定 (6 小時，避開盤中大量重複 API 查詢)
 # ---------------------------------------------------------------------------
 _history_cache: Any = BoundedCache(max_size=_HISTORY_CACHE_SIZE)
@@ -138,6 +147,11 @@ def clear_sma_cache() -> None:
 def clear_ema_cache() -> None:
     _ema_cache.clear()
     logger.info("Clarified EMA cache")
+
+
+def clear_valid_symbol_cache() -> None:
+    _valid_symbol_cache.clear()
+    logger.info("Clarified valid symbol cache")
 
 
 def run_garbage_collection() -> None:

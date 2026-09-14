@@ -133,12 +133,15 @@ def clean_db(db_conn: Any):  # type: ignore
             _option_chain_cache,
             _option_expiries_cache,
             _quote_cache,
+            _valid_symbol_cache,
         )
 
         _option_chain_cache.clear()
         _option_expiries_cache.clear()
         if hasattr(_quote_cache, "clear"):
             _quote_cache.clear()
+        if hasattr(_valid_symbol_cache, "clear"):
+            _valid_symbol_cache.clear()
     except Exception:
         pass
 

@@ -45,62 +45,58 @@ async def add_watch_impl(interaction: discord.Interaction, symbol: str) -> Any:
     from services.asset_manager import AssetManager, WatchlistLimitExceededError
     from models.asset import Asset, ContextType
 
-    if len(symbols) == 1:
-        # 單一代號：維持原有訊息文案不變 (向後相容)
-        sym = symbols[0]
-        if not await market_data_service.validate_symbol(sym):
-            return await interaction.followup.send(
-                embed=create_error_embed(
-                    f"**無效的標的代號**: `{sym}`。請輸入正確的美股代號。",
-                    title="系統錯誤",
-                ),
-                ephemeral=True,
+    with market_data_service.mark_interactive_request():
+        if len(symbols) == 1:
+            # 單一代號：維持原有訊息文案不變 (向後相容)
+            sym = symbols[0]
+            if not await market_data_service.validate_symbol(sym):
+                return await interaction.followup.send(
+                    embed=create_error_embed(
+                        f"**無效的標的代號**: `{sym}`。請輸入正確的美股代號。",
+                        title="系統錯誤",
+                    ),
+                    ephemeral=True,
+                )
+
+            manager = AssetManager()
+            asset = Asset(
+                user_id=interaction.user.id,
+                symbol=sym,
+                context_type=ContextType.WATCH,
+                metadata={},
             )
 
-        manager = AssetManager()
-        asset = Asset(
-            user_id=interaction.user.id,
-            symbol=sym,
-            context_type=ContextType.WATCH,
-            metadata={},
-        )
+            try:
+                success = await asyncio.to_thread(manager.add_asset, asset)
+            except WatchlistLimitExceededError as e:
+                return await interaction.followup.send(
+                    embed=create_error_embed(str(e), title="系統警告"), ephemeral=True
+                )
 
-        try:
-            success = await asyncio.to_thread(manager.add_asset, asset)
-        except WatchlistLimitExceededError as e:
-            return await interaction.followup.send(
-                embed=create_error_embed(str(e), title="系統警告"), ephemeral=True
-            )
+            if success:
+                await interaction.followup.send(
+                    embed=create_info_embed(
+                        title="操作成功",
+                        message=f"✅ **已加入觀察清單**: `{sym}`",
+                    ),
+                    ephemeral=True,
+                )
+            else:
+                await interaction.followup.send(
+                    embed=create_error_embed(
+                        f"`{sym}` 已在您的資產清單中或發生錯誤。", title="系統警告"
+                    ),
+                    ephemeral=True,
+                )
+            return
 
-        if success:
-            await interaction.followup.send(
-                embed=create_info_embed(
-                    title="操作成功",
-                    message=f"✅ **已加入觀察清單**: `{sym}`",
-                ),
-                ephemeral=True,
-            )
-        else:
-            await interaction.followup.send(
-                embed=create_error_embed(
-                    f"`{sym}` 已在您的資產清單中或發生錯誤。", title="系統警告"
-                ),
-                ephemeral=True,
-            )
-        return
+        # 多代號批次新增
+        validation_map = await market_data_service.batch_validate_symbols(symbols)
+        validation_results = [(s, validation_map.get(s, False)) for s in symbols]
 
-    # 多代號批次新增
     from cogs.embed_builders.watchlist_embeds import (
         create_bulk_watchlist_result_embed,
     )
-
-    sem = asyncio.Semaphore(3)
-
-    async def _validate(sym: str) -> tuple[str, bool]:
-        async with sem:
-            return sym, await market_data_service.validate_symbol(sym)
-
-    validation_results = await asyncio.gather(*[_validate(s) for s in symbols])
 
     manager = AssetManager()
     added: list[str] = []
@@ -224,20 +220,14 @@ async def set_watch_impl(interaction: discord.Interaction, symbol: str) -> Any:
         create_set_watchlist_result_embed,
     )
 
-    sem = asyncio.Semaphore(3)
+    with market_data_service.mark_interactive_request():
+        validation_map = await market_data_service.batch_validate_symbols(symbols)
 
-    async def _validate(sym: str) -> tuple[str, bool]:
-        async with sem:
-            try:
-                return sym, await market_data_service.validate_symbol(sym)
-            except Exception:
-                return sym, False
-
-    validation_results = await asyncio.gather(*[_validate(s) for s in symbols])
-
-    valid_symbols: list[str] = [sym for sym, is_valid in validation_results if is_valid]
+    valid_symbols: list[str] = [
+        sym for sym in symbols if validation_map.get(sym, False)
+    ]
     invalid_symbols: list[str] = [
-        sym for sym, is_valid in validation_results if not is_valid
+        sym for sym in symbols if not validation_map.get(sym, False)
     ]
 
     if not valid_symbols:
@@ -336,7 +326,9 @@ async def promote_watch_impl(
     symbol = symbol.upper()
 
     # 🚀 驗證標的合法性
-    if not await market_data_service.validate_symbol(symbol):
+    with market_data_service.mark_interactive_request():
+        is_valid = await market_data_service.validate_symbol(symbol)
+    if not is_valid:
         return await interaction.followup.send(
             embed=create_error_embed(
                 f"**無效的標的代號**: `{symbol}`。請輸入正確的美股代號。",

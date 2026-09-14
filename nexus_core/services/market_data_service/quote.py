@@ -3,6 +3,7 @@
 from typing import Any, Dict, List, Optional
 import asyncio
 import logging
+import re
 import time
 
 import pandas as pd
@@ -17,11 +18,22 @@ from services.market_data_service._core import (
 )
 from services.market_data_service.caches import (
     _FINNHUB_QUOTE_STALE_THRESHOLD_SECONDS,
+    _INVALID_SYMBOL_CACHE_TTL,
     _quote_cache,
     _QUOTE_CACHE_TTL,
+    _VALID_SYMBOL_CACHE_TTL,
+    _valid_symbol_cache,
 )
 
 logger = logging.getLogger(__name__)
+
+_TICKER_PATTERN = re.compile(r"^[\^A-Z0-9.-]{1,10}$")
+_FALLBACK_TABLES: tuple[str, ...] = (
+    "assets",
+    "market_cache",
+    "historical_iv",
+    "active_orders",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +210,7 @@ def _is_finnhub_quote_stale(data: Dict[str, Any]) -> bool:
     return age_seconds > _FINNHUB_QUOTE_STALE_THRESHOLD_SECONDS
 
 
-async def get_quote(symbol: str) -> Dict[str, Any]:
+async def get_quote(symbol: str, allow_stale: bool = False) -> Dict[str, Any]:
     """取得即時報價 (非同步)。對於指數型標的，強制轉向 yfinance。"""
     # 延遲從套件頂層 import：讓單元測試對 `services.market_data_service.X`
     # (is_finnhub_rate_limited / _get_client / _execute_api_call / get_yfinance_quote)
@@ -215,7 +227,7 @@ async def get_quote(symbol: str) -> Dict[str, Any]:
     now = time.time()
     if symbol in _quote_cache:
         val, expiry = _quote_cache[symbol]
-        if now < expiry:
+        if now < expiry or (allow_stale and val.get("c", 0) > 0):
             return val  # type: ignore
 
     async def _fetch() -> Any:
@@ -232,7 +244,7 @@ async def get_quote(symbol: str) -> Dict[str, Any]:
         try:
             data = await _execute_api_call(client.quote, symbol)
             if data and data.get("c", 0) > 0:
-                if _is_finnhub_quote_stale(data):
+                if not allow_stale and _is_finnhub_quote_stale(data):
                     logger.warning(
                         f"[{symbol}] Finnhub quote 時間戳過舊 (t={data.get('t')})，"
                         f"疑似帳號無即時報價權限，改用 yfinance fallback"
@@ -243,9 +255,23 @@ async def get_quote(symbol: str) -> Dict[str, Any]:
             # 若 Finnhub 回傳無效或報權限錯誤 (c=0 有可能是權限問題或標的不存在)
             # 快速驗證標的是否存在，避免在無效標的上耗費 yfinance 的長時間請求
             lookup = await _execute_api_call(client.symbol_lookup, symbol)
-            if lookup and lookup.get("count", 0) == 0:
-                logger.warning(f"[{symbol}] Finnhub 確認標的不存在，直接中斷")
-                raise ValueError("SYMBOL_NOT_FOUND")
+            if lookup:
+                results_list = lookup.get("result", [])
+                target_syms = {
+                    symbol,
+                    symbol.replace("-", "."),
+                    symbol.replace(".", "-"),
+                }
+                has_match = any(
+                    str(r.get("symbol", "")).upper() in target_syms
+                    or str(r.get("displaySymbol", "")).upper() in target_syms
+                    for r in results_list
+                )
+                if not has_match:
+                    logger.warning(
+                        f"[{symbol}] Finnhub 確認標的不存在 (無匹配代號)，直接中斷"
+                    )
+                    raise ValueError("SYMBOL_NOT_FOUND")
 
             # 嘗試作為 fallback 轉向 yfinance
             logger.warning(f"[{symbol}] Finnhub quote 無效，嘗試 yfinance fallback")
@@ -274,7 +300,46 @@ async def get_quote(symbol: str) -> Dict[str, Any]:
     return res  # type: ignore
 
 
-async def validate_symbol(symbol: str) -> bool:
+def _check_symbols_in_db(symbols: list[str]) -> set[str]:
+    """比對本地資料庫中是否已有該批標的之運作紀錄（快篩機制）。"""
+    if not symbols:
+        return set()
+
+    import sqlite3
+    from database.connection import get_read_connection
+
+    found: set[str] = set()
+    upper_symbols: list[str] = [s.strip().upper() for s in symbols if s]
+    if not upper_symbols:
+        return found
+
+    try:
+        conn = get_read_connection()
+        try:
+            cursor = conn.cursor()
+            placeholders = ",".join("?" for _ in upper_symbols)
+            for table in _FALLBACK_TABLES:
+                try:
+                    # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+                    cursor.execute(
+                        f"SELECT DISTINCT symbol FROM {table} WHERE symbol IN ({placeholders})",
+                        upper_symbols,
+                    )
+                    for row in cursor.fetchall():
+                        found.add(str(row[0]).upper())
+                    if len(found) == len(upper_symbols):
+                        break
+                except sqlite3.OperationalError:
+                    continue
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.error(f"validate_symbol 資料庫後備驗證失敗: {e}")
+
+    return found
+
+
+async def validate_symbol(symbol: str, check_db: bool = True) -> bool:
     """驗證標的代號是否有效 (具備即時報價、本地資料庫對比及格式後備機制)。"""
     if not symbol:
         return False
@@ -282,68 +347,130 @@ async def validate_symbol(symbol: str) -> bool:
     symbol = symbol.strip().upper()
 
     # 1. 基礎格式驗證：代號長度不合理或包含非法字元直接過濾
-    import re
-
-    if not re.match(r"^[\^A-Z0-9.-]{1,10}$", symbol):
+    if not _TICKER_PATTERN.match(symbol):
         return False
 
+    now = time.time()
+
+    # 2. 記憶體快取快篩
+    if symbol in _valid_symbol_cache:
+        val, expiry = _valid_symbol_cache[symbol]
+        if now < expiry:
+            return bool(val)
+
+    if symbol in _quote_cache:
+        q, _ = _quote_cache[symbol]
+        if q and q.get("c", 0) > 0:
+            _valid_symbol_cache[symbol] = (True, now + _VALID_SYMBOL_CACHE_TTL)
+            return True
+
+    # 3. 本地資料庫優先比對（assets, market_cache, historical_iv, active_orders）
+    if check_db and symbol in _check_symbols_in_db([symbol]):
+        _valid_symbol_cache[symbol] = (True, now + _VALID_SYMBOL_CACHE_TTL)
+        return True
+
+    # 4. 嘗試獲取即時報價，若有價格大於 0 則必為有效標的
     # 延遲從套件頂層 import get_quote：讓 `patch("services.market_data_service.get_quote")`
-    # 能正確攔截這裡的內部呼叫（理由同 get_quote() 內部對 _core 函式的處理）。
+    # 能正確攔截這裡的內部呼叫。
     from services.market_data_service import get_quote as _get_quote
 
-    # 2. 嘗試獲取即時報價，若有價格大於 0 則必為有效標的
     try:
-        quote = await _get_quote(symbol)
+        quote = await _get_quote(symbol, allow_stale=True)
         if quote and quote.get("c", 0) > 0:
+            _valid_symbol_cache[symbol] = (True, now + _VALID_SYMBOL_CACHE_TTL)
             return True
     except Exception as e:
         if "SYMBOL_NOT_FOUND" in str(e):
             logger.warning(f"[{symbol}] API 回傳標的不存在，直接中斷後續動作")
+            _valid_symbol_cache[symbol] = (False, now + _INVALID_SYMBOL_CACHE_TTL)
             return False
         logger.warning(f"validate_symbol 獲取報價異常: {e}")
 
-    # 3. 後備機制 A：當 API 因限流、盤前/週末或網路波動而失效時，比對本地資料庫中是否已有該標的之運作紀錄
-    import sqlite3
-
-    from database.connection import get_read_connection
-
-    # 逐表檢查：任一表命中即視為有效代號。個別表可能尚未建立（migration 未跑完），
-    # 故單表的 OperationalError 只跳過該表，不中斷整輪檢查。
-    _FALLBACK_TABLES = (
-        "market_cache",
-        "watchlist",
-        "portfolio",
-        "active_orders",
-        "historical_iv",
-    )
-
-    try:
-        # 注意：sqlite3 的 context manager 只 commit/rollback，不會關閉連線，
-        # 因此這裡改用 try/finally 明確 close()。
-        conn = get_read_connection()
-        try:
-            cursor = conn.cursor()
-            for table in _FALLBACK_TABLES:
-                try:
-                    # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
-                    cursor.execute(
-                        f"SELECT 1 FROM {table} WHERE UPPER(symbol) = ? LIMIT 1",
-                        (symbol,),
-                    )
-                    if cursor.fetchone():
-                        logger.info(
-                            f"[{symbol}] 報價失敗，但於本地資料庫 {table} 中尋獲紀錄，判定為有效代號"
-                        )
-                        return True
-                except sqlite3.OperationalError:
-                    continue
-        finally:
-            conn.close()
-
-    except Exception as e:
-        logger.error(f"validate_symbol 資料庫後備驗證失敗: {e}")
-
+    _valid_symbol_cache[symbol] = (False, now + _INVALID_SYMBOL_CACHE_TTL)
     return False
+
+
+async def batch_validate_symbols(symbols: list[str]) -> dict[str, bool]:
+    """批次驗證標的代號是否有效（高效能快篩 + 併發降級）。
+
+    優化策略：
+    1. 格式快篩 (Regex)：無效格式立即判定為 False。
+    2. 記憶體快取篩查：若在 `_valid_symbol_cache` 或 `_quote_cache` 中有命中，直接使用快取。
+    3. 資料庫批次快篩：一次性在 assets, market_cache 等表中批次比對，大幅減少 I/O 與網路往返。
+    4. 對於未命中 DB/快取的少數未知標的，先以 clean symbol 去重，再併發執行 market_data_service.validate_symbol(check_db=False)。
+    """
+    if not symbols:
+        return {}
+
+    from services import market_data_service
+
+    results: dict[str, bool] = {}
+    clean_map: dict[str, str] = {}
+    for raw in symbols:
+        if not raw:
+            results[raw] = False
+            continue
+        s_upper = raw.strip().upper()
+        clean_map[raw] = s_upper
+        if not _TICKER_PATTERN.match(s_upper):
+            results[raw] = False
+
+    pending_raw: list[str] = [r for r in symbols if r not in results]
+    if not pending_raw:
+        return results
+
+    now = time.time()
+    # 記憶體快取檢查
+    for r in pending_raw:
+        sym = clean_map[r]
+        if sym in _valid_symbol_cache:
+            val, expiry = _valid_symbol_cache[sym]
+            if now < expiry:
+                results[r] = bool(val)
+        elif sym in _quote_cache:
+            q, _ = _quote_cache[sym]
+            if q and q.get("c", 0) > 0:
+                results[r] = True
+                _valid_symbol_cache[sym] = (True, now + _VALID_SYMBOL_CACHE_TTL)
+
+    # 本地資料庫批次快篩
+    unresolved_raw: list[str] = [r for r in pending_raw if r not in results]
+    if unresolved_raw:
+        unresolved_symbols: list[str] = [clean_map[r] for r in unresolved_raw]
+        db_found = _check_symbols_in_db(unresolved_symbols)
+        for r in unresolved_raw:
+            sym = clean_map[r]
+            if sym in db_found:
+                results[r] = True
+                _valid_symbol_cache[sym] = (True, now + _VALID_SYMBOL_CACHE_TTL)
+
+    # 仍未解析之標的（未在 DB 亦未在記憶體中，去重後走即時驗證，且略過重複之 DB 查詢）
+    remaining_raw: list[str] = [r for r in unresolved_raw if r not in results]
+    if remaining_raw:
+        unique_syms: list[str] = list({clean_map[r] for r in remaining_raw})
+        sem = asyncio.Semaphore(10)
+
+        async def _eval_one(clean_sym: str) -> tuple[str, bool]:
+            async with sem:
+                try:
+                    try:
+                        is_val = await market_data_service.validate_symbol(
+                            clean_sym, check_db=False
+                        )
+                    except TypeError:
+                        is_val = await market_data_service.validate_symbol(clean_sym)
+                    return clean_sym, is_val
+                except Exception:
+                    return clean_sym, False
+
+        resolved_pairs: list[tuple[str, bool]] = await asyncio.gather(
+            *[_eval_one(s) for s in unique_syms]
+        )
+        sym_status_map: dict[str, bool] = dict(resolved_pairs)
+        for r in remaining_raw:
+            results[r] = sym_status_map.get(clean_map[r], False)
+
+    return results
 
 
 async def batch_get_quotes(symbols: List[str]) -> Dict[str, Dict[str, Any]]:
