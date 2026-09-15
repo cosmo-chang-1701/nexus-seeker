@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import math
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -303,12 +304,20 @@ class RadarDataMixin:
             if stored_skew is not None
             else None
         )
-        if stored_skew is not None and stored_percentile is not None:
+        skew_val: Optional[float] = None
+        skew_percentile: Optional[float] = None
+        if stored_skew is not None:
             skew_val = stored_skew
-            skew_percentile = stored_percentile
+            skew_percentile = (
+                stored_percentile
+                if stored_percentile is not None
+                else radar_cache.get("skew_percentile")
+            )
         elif "skew" in radar_cache:
-            skew_val = radar_cache.get("skew", 0.0)
-            skew_percentile = radar_cache.get("skew_percentile", 50.0)
+            raw_skew = radar_cache.get("skew")
+            skew_val = float(raw_skew) if raw_skew is not None else None
+            raw_sp = radar_cache.get("skew_percentile")
+            skew_percentile = float(raw_sp) if raw_sp is not None else None
         else:
             skew_val = -0.5 if radar_cache.get("is_skew_extreme") else 0.0
             skew_percentile = 50.0
@@ -881,6 +890,23 @@ class RadarDataMixin:
         if volume_poc > 0:
             await save_kv_cache(f"volume_poc_{sym.upper()}", volume_poc)
 
+        mom_val = None
+        if isinstance(psq_res, dict):
+            mom_val = psq_res.get("momentum_value")
+            if mom_val is None:
+                mom_val = psq_res.get("momentum")
+
+        is_mom_positive = False
+        sqz_mom_val = 0.0
+        if mom_val is not None and not isinstance(mom_val, bool):
+            try:
+                parsed_mom = float(mom_val)
+                if math.isfinite(parsed_mom):
+                    sqz_mom_val = parsed_mom
+                    is_mom_positive = parsed_mom > 0
+            except (TypeError, ValueError):
+                pass
+
         await save_kv_cache(
             f"radar_terminal_{sym.upper()}",
             {
@@ -910,7 +936,7 @@ class RadarDataMixin:
                 # 分位缺失時這兩個極端旗標一律 False（fail-safe，不憑空觸發）。
                 "is_divergence": skew_percentile is not None
                 and skew_percentile > 85.0
-                and psq_res.get("momentum_value", 0.0) > 0,
+                and is_mom_positive,
                 "is_skew_extreme": skew_percentile is not None
                 and (skew_percentile > 85.0 or skew_percentile < 15.0),
                 "hvn_price": (vp_data or {}).get("hvn", 0.0),
@@ -925,7 +951,7 @@ class RadarDataMixin:
                 "iv_term_structure_status": iv_m.iv_term_structure_status
                 if iv_m
                 else None,
-                "squeeze_momentum": psq_res.get("momentum_value", 0.0),
+                "squeeze_momentum": sqz_mom_val,
                 "is_squeezing": psq_res.get("is_squeezing", False),
                 "squeeze_direction": psq_res.get("signal_direction", "⚪"),
                 "uoa": uoa_data,

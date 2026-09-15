@@ -675,6 +675,188 @@ async def test_fetch_sym_radar_data_fast_stitches_month_max_pains_and_ma20(
 
 
 @pytest.mark.asyncio
+async def test_fetch_sym_radar_data_fast_retains_stored_skew_when_percentile_none(
+    mock_bot: Any,
+) -> None:
+    """測試 Fast Track 在歷史 Skew 存在但分位數為 None（樣本不足）時，不丟棄真實偏斜值。"""
+    cog = UnifiedTerminalCog(mock_bot)
+
+    with (
+        patch(
+            "services.market_data_service.get_quote",
+            return_value={"c": 150.0, "volume": 1000000},
+        ),
+        patch(
+            "database.cache.get_kv_cache_many",
+            return_value={
+                "radar_terminal_NVDA": (
+                    {
+                        "skew": None,
+                        "skew_percentile": None,
+                    },
+                    None,
+                )
+            },
+        ),
+        patch("database.market_cache.get_market_cache", return_value={}),
+        patch("database.squeeze_cache.get_squeeze_cache", return_value={}),
+        patch(
+            "market_analysis.sentiment.history_storage.get_last_stored_sentiment",
+            return_value=-0.35,
+        ),
+        patch(
+            "market_analysis.sentiment.history_storage.get_indicator_percentile",
+            return_value=None,
+        ),
+    ):
+        data = await cog._fetch_sym_radar_data_fast_raw("NVDA")
+        assert data["symbol"] == "NVDA"
+        assert data["skew"] == -0.35
+        assert data["skew_percentile"] is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_sym_radar_data_slow_handles_none_momentum_value(
+    mock_bot: Any,
+) -> None:
+    """測試 SWR worker 在 psq_res 含有 None momentum_value 時不會觸發 None > 0 異常。"""
+    cog = UnifiedTerminalCog(mock_bot)
+    import pandas as pd
+
+    fake_df = pd.DataFrame(
+        {"Close": [100.0] * 30, "High": [105.0] * 30, "Low": [95.0] * 30}
+    )
+
+    saved_cache: dict[str, Any] = {}
+
+    async def fake_save_kv(k: str, v: Any) -> None:
+        saved_cache[k] = v
+
+    with (
+        patch(
+            "services.market_data_service.get_quote",
+            return_value={"c": 100.0, "volume": 1000},
+        ),
+        patch("services.market_data_service.get_history_df", return_value=fake_df),
+        patch(
+            "database.squeeze_cache.get_squeeze_cache",
+            return_value={"momentum": None, "direction": "⚪", "is_squeezing": False},
+        ),
+        patch(
+            "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
+            return_value={},
+        ),
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.detect_uoa_with_physical_caps",
+            return_value=([], []),
+        ),
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
+            return_value={},
+        ),
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_skew",
+            return_value={"skew": None, "skew_percentile": 90.0},
+        ),
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
+            return_value=None,
+        ),
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.get_expected_move",
+            return_value={},
+        ),
+        patch(
+            "market_analysis.volume_profile.calculate_volume_profile",
+            return_value={},
+        ),
+        patch("database.cache.save_kv_cache", side_effect=fake_save_kv),
+        patch("database.cache.get_kv_cache_with_age", return_value=(None, 0.0)),
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.get_unified_max_pain",
+            return_value={"max_pain": 100.0},
+        ),
+    ):
+        result = await cog._fetch_sym_radar_data_slow_raw("NVDA")
+        assert result["symbol"] == "NVDA"
+        assert result["psq_result"]["momentum_value"] is None
+        radar_saved = saved_cache.get("radar_terminal_NVDA", {})
+        # is_divergence requires momentum > 0, so with None it must be False without error
+        assert radar_saved.get("is_divergence") is False
+        assert radar_saved.get("squeeze_momentum") == 0.0
+
+
+@pytest.mark.asyncio
+async def test_fetch_sym_radar_data_slow_extracts_momentum_fallback_and_handles_divergence(
+    mock_bot: Any,
+) -> None:
+    """測試 SWR worker 支援 fallback 至 momentum 欄位，且在 skew_percentile > 85.0 搭配正動能時正常觸發 is_divergence。"""
+    cog = UnifiedTerminalCog(mock_bot)
+    import pandas as pd
+
+    fake_df = pd.DataFrame(
+        {"Close": [100.0] * 30, "High": [105.0] * 30, "Low": [95.0] * 30}
+    )
+
+    saved_cache: dict[str, Any] = {}
+
+    async def fake_save_kv(k: str, v: Any) -> None:
+        saved_cache[k] = v
+
+    with (
+        patch(
+            "services.market_data_service.get_quote",
+            return_value={"c": 100.0, "volume": 1000},
+        ),
+        patch("services.market_data_service.get_history_df", return_value=fake_df),
+        patch(
+            "database.squeeze_cache.get_squeeze_cache",
+            return_value={"momentum": 2.5, "direction": "🟢", "is_squeezing": True},
+        ),
+        patch(
+            "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
+            return_value={},
+        ),
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.detect_uoa_with_physical_caps",
+            return_value=([], []),
+        ),
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
+            return_value={},
+        ),
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_skew",
+            return_value={"skew": 0.5, "skew_percentile": 90.0},
+        ),
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
+            return_value=None,
+        ),
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.get_expected_move",
+            return_value={},
+        ),
+        patch(
+            "market_analysis.volume_profile.calculate_volume_profile",
+            return_value={},
+        ),
+        patch("database.cache.save_kv_cache", side_effect=fake_save_kv),
+        patch("database.cache.get_kv_cache_with_age", return_value=(None, 0.0)),
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.get_unified_max_pain",
+            return_value={"max_pain": 100.0},
+        ),
+    ):
+        result = await cog._fetch_sym_radar_data_slow_raw("NVDA")
+        assert result["symbol"] == "NVDA"
+        radar_saved = saved_cache.get("radar_terminal_NVDA", {})
+        # 90.0 > 85.0 且 momentum=2.5 > 0 -> is_divergence 應為 True
+        assert radar_saved.get("is_divergence") is True
+        assert radar_saved.get("squeeze_momentum") == 2.5
+
+
+@pytest.mark.asyncio
 async def test_exclude_martial_law_putwall_breach_and_neg_gex(
     mock_bot: Any,
     mock_interaction: Any,

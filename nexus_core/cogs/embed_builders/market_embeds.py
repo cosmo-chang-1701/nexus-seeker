@@ -478,14 +478,16 @@ def build_radar_scan_embed(
         for r in chunk:
             sym = r["symbol"]
             quote = r["quote"] or {}
-            iv_metrics = r.get("iv_metrics", {})
+            iv_metrics: Any = r.get("iv_metrics")
             is_premarket_row = False
             if iv_metrics is not None:
                 if hasattr(iv_metrics, "is_premarket"):
                     is_premarket_row = bool(iv_metrics.is_premarket)
                 elif isinstance(iv_metrics, dict):
                     is_premarket_row = bool(iv_metrics.get("is_premarket", False))
-            gex_is_stale = bool(r.get("gex_metrics", {}).get("_is_stale_cache", False))
+            raw_gex = r.get("gex_metrics")
+            gex_m_dict: dict[str, Any] = raw_gex if isinstance(raw_gex, dict) else {}
+            gex_is_stale = bool(gex_m_dict.get("_is_stale_cache", False))
             uoa_age_seconds = r.get("uoa_age_seconds")
             uoa_is_stale = (
                 uoa_age_seconds is not None
@@ -503,7 +505,7 @@ def build_radar_scan_embed(
             iv_rank_val = 0.0
             em_weekly = 0.0
             if iv_metrics:
-                if hasattr(iv_metrics, "iv_rank"):
+                if not isinstance(iv_metrics, dict) and hasattr(iv_metrics, "iv_rank"):
                     iv_rank_val = (
                         float(iv_metrics.iv_rank)
                         if iv_metrics.iv_rank is not None
@@ -524,13 +526,21 @@ def build_radar_scan_embed(
             is_fixed_income = sym.upper() in ["BOXX", "BIL", "SHV"]
             if is_fixed_income:
                 em_low = em_high = price_val
-            elif price_val > 0 and em_weekly > 0:
-                em_low = _safe_float(iv_metrics.get("expected_move_lower"))
-                em_high = _safe_float(iv_metrics.get("expected_move_upper"))
-                if em_high <= em_low:
-                    reference_price = round(
-                        float(iv_metrics.get("reference_price") or price_val), 2
+            elif price_val > 0 and em_weekly > 0 and iv_metrics is not None:
+                if isinstance(iv_metrics, dict):
+                    em_low = _safe_float(iv_metrics.get("expected_move_lower"))
+                    em_high = _safe_float(iv_metrics.get("expected_move_upper"))
+                    ref_p = iv_metrics.get("reference_price")
+                else:
+                    em_low = _safe_float(
+                        getattr(iv_metrics, "expected_move_lower", None)
                     )
+                    em_high = _safe_float(
+                        getattr(iv_metrics, "expected_move_upper", None)
+                    )
+                    ref_p = getattr(iv_metrics, "reference_price", None)
+                if em_high <= em_low:
+                    reference_price = round(float(ref_p or price_val), 2)
                     em_weekly_rounded = round(em_weekly, 2)
                     em_low = reference_price - em_weekly_rounded
                     em_high = reference_price + em_weekly_rounded
@@ -704,11 +714,11 @@ def build_radar_scan_embed(
             # 判斷 has_positive_gamma_support:
             net_gex = 0.0
             if "gex_profile_data" in r and isinstance(r["gex_profile_data"], dict):
-                net_gex = _safe_float(r.get("gex_profile_data", {}).get("net_gex"))
+                net_gex = _safe_float(r["gex_profile_data"].get("net_gex"))
             elif "gex_metrics" in r and isinstance(r["gex_metrics"], dict):
-                net_gex = _safe_float(r.get("gex_metrics", {}).get("net_gex"))
+                net_gex = _safe_float(r["gex_metrics"].get("net_gex"))
             has_positive_gamma_support = net_gex > 10_000_000
-            sqz_mom_val = _safe_float(r.get("psq_result", {}).get("momentum", 0.0))
+            sqz_mom_val = _safe_float((r.get("psq_result") or {}).get("momentum", 0.0))
             is_neg_gamma = net_gex < 0 or (
                 put_wall > 0 and price_val > 0 and price_val < put_wall
             )
@@ -729,15 +739,12 @@ def build_radar_scan_embed(
                 if r.get("put_wall_gex") is not None
                 else None
             )
+            vp_dict = r.get("vp_data")
             lvn_p = (
-                _safe_float(r.get("vp_data", {}).get("lvn"))
-                if isinstance(r.get("vp_data"), dict)
-                else 0.0
+                _safe_float(vp_dict.get("lvn")) if isinstance(vp_dict, dict) else 0.0
             )
             hvn_p = (
-                _safe_float(r.get("vp_data", {}).get("hvn"))
-                if isinstance(r.get("vp_data"), dict)
-                else 0.0
+                _safe_float(vp_dict.get("hvn")) if isinstance(vp_dict, dict) else 0.0
             )
             skew_val = _safe_float(r.get("skew"), 0.0)
             skew_percentile_val = _safe_float(r.get("skew_percentile"), 50.0)
@@ -831,7 +838,7 @@ def build_radar_scan_embed(
                     }
 
                     if data["skew_percentile"] is None:
-                        skew_val = r.get("skew", 0.0)
+                        skew_val = _safe_float(r.get("skew"), 0.0)
                         if skew_val > 0:
                             data["skew_percentile"] = 75.0
                         elif skew_val < 0:
@@ -843,7 +850,7 @@ def build_radar_scan_embed(
                     insights.append(insight_str)
 
             # 連動 SQZ MOM 擠壓蓄力 (Squeeze Momentum)
-            psq_result = r.get("psq_result", {})
+            psq_result = r.get("psq_result") or {}
             if not psq_result:
                 sqz_dir = "⚪"
                 sqz_is_squeezing = False
@@ -860,10 +867,11 @@ def build_radar_scan_embed(
                     sqz_dir = "⚪"
                 else:
                     sqz_dir = sqz_dir_raw
-                sqz_is_squeezing = psq_result.get("is_squeezing", False)
-                sqz_mom = _safe_float(
-                    psq_result.get("momentum", psq_result.get("momentum_value"))
-                )
+                sqz_is_squeezing = bool(psq_result.get("is_squeezing", False))
+                mom_field = psq_result.get("momentum")
+                if mom_field is None:
+                    mom_field = psq_result.get("momentum_value")
+                sqz_mom = _safe_float(mom_field, 0.0)
 
             # --- 新增：UOA Barrier Index (做市商實質封頂/地板) ---
             uoa_list_safe = r.get("uoa") or []
@@ -1026,16 +1034,18 @@ def build_radar_scan_embed(
                 )
 
             # Volume Profile Level (hvn_price/lvn_price)
-            radar_cache = r.get("radar_cache", {})
-            hvn = radar_cache.get("hvn_price", 0.0)
-            lvn = radar_cache.get("lvn_price", 0.0)
+            radar_cache = r.get("radar_cache")
+            if not isinstance(radar_cache, dict):
+                radar_cache = {}
+            hvn = _safe_float(radar_cache.get("hvn_price"), 0.0)
+            lvn = _safe_float(radar_cache.get("lvn_price"), 0.0)
             if lvn > 0 and abs(price_val - lvn) / lvn < 0.01:
                 insights.append(
-                    f"• 📉 {sym}: 價格接近 LVN 真空區 ()，注意突破或無支撐風險。"
+                    f"• 📉 {sym}: 價格接近 LVN 真空區 (${lvn:.2f})，注意突破或無支撐風險。"
                 )
             if hvn > 0 and abs(price_val - hvn) / hvn < 0.01:
                 insights.append(
-                    f"• 📈 {sym}: 價格接近 HVN 密集區 ()，此處為籌碼換手重要支撐/壓力。"
+                    f"• 📈 {sym}: 價格接近 HVN 密集區 (${hvn:.2f})，此處為籌碼換手重要支撐/壓力。"
                 )
 
             # ---- 產生 Markdown 行 (高 Alpha 欄位) ----
@@ -1139,10 +1149,10 @@ def build_radar_scan_embed(
                     u_k = float(u.get("strike", 0.0) or 0.0)
                     sto_parts.append(f"{u_t}${u_k:.1f}")
                 sto_str = " / ".join(sto_parts)
-            elif r.get("radar_cache", {}).get("sto_strikes"):
-                sto_str = str(r["radar_cache"]["sto_strikes"])
+            elif radar_cache.get("sto_strikes"):
+                sto_str = str(radar_cache["sto_strikes"])
             else:
-                sto_density = r.get("radar_cache", {}).get("straddle_sto_density")
+                sto_density = radar_cache.get("straddle_sto_density")
                 if sto_density is not None:
                     sto_str = f"{float(sto_density) * 100:.1f}%"
 
@@ -1209,9 +1219,12 @@ def build_radar_scan_embed(
                 radar_cache.get("physical_cap_above_spot", False)
             )
 
+            gex_prof_data_dict = r.get("gex_profile_data")
             gex_profile_gate = (
-                r.get("gex_profile_data", {}).get("gex_profile", {}) or {}
-            )
+                gex_prof_data_dict.get("gex_profile", {})
+                if isinstance(gex_prof_data_dict, dict)
+                else {}
+            ) or {}
             gamma_flip_est_gate = _estimate_gamma_flip_gate(gex_profile_gate, price_val)
             prev_iv_rank_gate = _get_kv_cache_gate(f"iv_rank_prev_{sym.upper()}")
             iv_rising_with_price_gate = (
@@ -1298,7 +1311,9 @@ def build_radar_scan_embed(
                 else:
                     tactical_adv = f"🔴 ${call_wall:.1f} 物理封頂，Sell Put 獲利落袋"
             elif put_wall > 0 and price_val < put_wall:
-                has_gex_prof = bool(r.get("gex_profile_data", {}).get("gex_profile"))
+                has_gex_prof = bool(
+                    (r.get("gex_profile_data") or {}).get("gex_profile")
+                )
                 if price_val >= anti_washout_stop and (
                     has_positive_gamma_support
                     or (iv_rank_val < 60.0 and term_structure <= 1.05)
@@ -1328,11 +1343,13 @@ def build_radar_scan_embed(
                 skew_pct_str = f"{skew_percentile_val:.0f}% ({skew_val:+.2f}%)"
             else:
                 skew_pct_str = f"{skew_percentile_val:.0f}%"
-            sqz_mom_val = _safe_float(
-                r.get("psq_result", {}).get(
-                    "momentum", r.get("psq_result", {}).get("momentum_value", 0.0)
-                )
-            )
+            psq_dict = r.get("psq_result")
+            if not isinstance(psq_dict, dict):
+                psq_dict = {}
+            mom_raw = psq_dict.get("momentum")
+            if mom_raw is None:
+                mom_raw = psq_dict.get("momentum_value", 0.0)
+            sqz_mom_val = _safe_float(mom_raw, 0.0)
             sqz_vec_str = (
                 f"{'⏱️' if sqz_is_squeezing else ''}{sqz_dir}{sqz_mom_val:+.1f}"
             )

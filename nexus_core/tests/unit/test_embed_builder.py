@@ -1300,6 +1300,67 @@ def test_build_radar_scan_embed_with_none_values() -> None:
     assert "CRASH" in get_embed_text(embed)
 
 
+def test_build_radar_scan_embed_with_none_skew_and_extreme_distance() -> None:
+    """Verify that build_radar_scan_embed handles None skew, skew_percentile,
+
+    hvn_price, and lvn_price gracefully when price deviates from Max Pain > 10%,
+    and verifies insight content is rendered without crashing.
+    """
+    scan_results = [
+        {
+            "symbol": "TEST",
+            "quote": {"c": 120.0, "dp": 2.0},
+            "max_pain": {"max_pain": 100.0, "distance_pct": 20.0},
+            "skew": None,
+            "skew_percentile": None,
+            "radar_cache": None,
+            "iv_metrics": None,
+            "gex_metrics": None,
+            "gex_profile_data": None,
+            "psq_result": None,
+        },
+    ]
+
+    embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
+    assert len(embeds) == 1
+    embed = embeds[0]
+    embed_text = get_embed_text(embed)
+    assert "TEST" in embed_text
+    # 斷言：即時聯動警示成功產生且包含偏離度事實
+    assert "20.0% 的偏差" in embed_text
+    assert "Max Pain" in embed_text
+
+
+def test_build_radar_scan_embed_volume_profile_near_hvn_and_lvn() -> None:
+    """Verify that build_radar_scan_embed correctly formats ${lvn:.2f} and ${hvn:.2f}
+
+    when spot price is within 1% of LVN and HVN levels.
+    """
+    scan_results = [
+        {
+            "symbol": "VPTEST",
+            "quote": {"c": 100.0, "dp": 1.0},
+            "max_pain": {"max_pain": 100.0, "distance_pct": 0.0},
+            "skew": 0.1,
+            "skew_percentile": 55.0,
+            "radar_cache": {
+                "hvn_price": 100.5,  # abs(100 - 100.5) / 100.5 = 0.00497 < 0.01
+                "lvn_price": 99.5,  # abs(100 - 99.5) / 99.5 = 0.00502 < 0.01
+            },
+            "iv_metrics": {"iv_rank": 30.0, "expected_move_weekly": 5.0},
+            "gex_metrics": {"put_wall": 95.0, "call_wall": 105.0, "net_gex": 1_000_000},
+            "psq_result": {"momentum": 0.5, "is_squeezing": False, "direction": "🟢"},
+        },
+    ]
+
+    embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
+    assert len(embeds) == 1
+    embed_text = get_embed_text(embeds[0])
+    assert "VPTEST" in embed_text
+    assert "LVN 真空區 ($99.50)" in embed_text
+    assert "HVN 密集區 ($100.50)" in embed_text
+
+
 def test_build_radar_scan_embed_marks_stale_max_pain_with_freshness_prefix() -> None:
     """market_cache.is_stale=True 應在標的列渲染 🕓 新鮮度前綴，並於 Real-time
     Insights 附上提示，且不與代表結構性風險的 ⚠️ 前綴混用。"""

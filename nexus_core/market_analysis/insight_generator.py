@@ -1,17 +1,30 @@
-from typing import Dict, Any
+import math
+from typing import Any
 
 
-def compute_realtime_insights(data: Dict[str, Any]) -> str:
-    sym = data.get("symbol", "UNKNOWN")
-    spot = data.get("spot", 0.0)
-    max_pain = data.get("max_pain", 0.0)
-    put_wall = data.get("put_wall", 0.0)
-    gex_status = data.get("gex_status", "UNKNOWN")
+def _clean_float(val: Any, default: float = 0.0) -> float:
+    if val is None or isinstance(val, bool):
+        return default
+    try:
+        res = float(val)
+        return res if math.isfinite(res) else default
+    except (TypeError, ValueError):
+        return default
+
+
+def compute_realtime_insights(data: dict[str, Any]) -> str:
+    if not isinstance(data, dict):
+        return ""
+    sym = data.get("symbol") or "UNKNOWN"
+    spot = _clean_float(data.get("spot"), 0.0)
+    max_pain = _clean_float(data.get("max_pain"), 0.0)
+    put_wall = _clean_float(data.get("put_wall"), 0.0)
+    gex_status = data.get("gex_status") or "UNKNOWN"
 
     # Optional fields for deeper analysis if present
-    uoa_calls_vol = data.get("uoa_calls_vol", 0.0)
-    uoa_puts_vol = data.get("uoa_puts_vol", 0.0)
-    skew_percentile = data.get("skew_percentile", 50.0)
+    uoa_calls_vol = _clean_float(data.get("uoa_calls_vol"), 0.0)
+    uoa_puts_vol = _clean_float(data.get("uoa_puts_vol"), 0.0)
+    skew_percentile = _clean_float(data.get("skew_percentile"), 50.0)
 
     if max_pain > 0 and spot > 0:
         dist_pct = (spot - max_pain) / max_pain * 100
@@ -61,7 +74,7 @@ def compute_realtime_insights(data: Dict[str, Any]) -> str:
         dev_fact = f"，股價距離 Max Pain 有 {dist_pct:.1f}% 的偏差，面臨向上動能衰退與拉回修正壓力"
 
     # 3. 實盤防禦指引
-    iv_rank = data.get("iv_rank", 50.0)
+    iv_rank = _clean_float(data.get("iv_rank"), 50.0)
 
     if iv_rank < 15.0:
         if dist_pct < 0:
