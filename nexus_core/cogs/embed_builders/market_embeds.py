@@ -419,26 +419,28 @@ def build_radar_scan_embed(
                 ted_spread = None
 
             if gex_flip is not None or ted_spread is not None:
-                gex_str = (
-                    f"SPY 零 Gamma 線 (GEX Flip): \u001b[1;35m{gex_flip:.2f}\u001b[0m"
-                    if gex_flip is not None
-                    else ""
-                )
-                ted_alert = (
-                    "\u001b[1;31m⚠️ 流動性警戒\u001b[0m"
-                    if ted_spread is not None and float(ted_spread) > 0.5
-                    else ""
-                )
-                ted_color = (
-                    "\u001b[1;31m"
-                    if ted_spread is not None and float(ted_spread) > 0.5
-                    else "\u001b[1;36m"
-                )
-                ted_str = (
-                    f"TED Spread (流動性指標): {ted_color}{ted_spread:.2f}\u001b[0m {ted_alert}"
-                    if ted_spread is not None
-                    else ""
-                )
+                if gex_flip is not None and float(gex_flip) > 0:
+                    gex_str = f"SPY 零 Gamma 線 (GEX Flip): \u001b[1;35m{float(gex_flip):.2f}\u001b[0m"
+                elif gex_flip is not None:
+                    gex_str = (
+                        "SPY 零 Gamma 線 (GEX Flip): \u001b[1;31m獲取數據失敗\u001b[0m"
+                    )
+                else:
+                    gex_str = ""
+
+                if ted_spread is not None and float(ted_spread) > 0:
+                    ted_val = float(ted_spread)
+                    ted_alert = (
+                        "\u001b[1;31m⚠️ 流動性警戒\u001b[0m" if ted_val > 0.5 else ""
+                    )
+                    ted_color = "\u001b[1;31m" if ted_val > 0.5 else "\u001b[1;36m"
+                    ted_str = f"TED Spread (流動性指標): {ted_color}{ted_val:.2f}\u001b[0m {ted_alert}"
+                elif ted_spread is not None:
+                    ted_str = (
+                        "TED Spread (流動性指標): \u001b[1;31m獲取數據失敗\u001b[0m"
+                    )
+                else:
+                    ted_str = ""
                 macro_parts = [p for p in (gex_str, ted_str) if p]
                 if macro_parts:
                     macro_ansi_header.append(" 🌍 雷達：宏觀數據發布與流動性枯竭警告")
@@ -1556,19 +1558,19 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
     )
 
     # 2. 格式化數值
-    spx = macro_data.get("spx") or 0.0
-    vix = macro_data.get("vix") or 0.0
-    us10y = macro_data.get("us10y") or 0.0
-    gamma_flip_line = macro_data.get("gamma_flip_line") or 0.0
-    wti = macro_data.get("wti") or 0.0
-    rrp = macro_data.get("rrp") or 0.0
-    fed_balance = macro_data.get("fed_balance") or 0.0
+    spx = macro_data.get("spx")
+    vix = macro_data.get("vix")
+    us10y = macro_data.get("us10y")
+    gamma_flip_line = macro_data.get("gamma_flip_line")
+    wti = macro_data.get("wti")
+    rrp = macro_data.get("rrp")
+    fed_balance = macro_data.get("fed_balance")
     cpi_nfp_calendar = macro_data.get("cpi_nfp_calendar") or "暫無數據"
-    fear_greed = macro_data.get("fear_greed") or 50.0
-    uer = macro_data.get("uer") or 0.0
-    sahm_rule = macro_data.get("sahm_rule") or 0.0
+    fear_greed = macro_data.get("fear_greed")
+    uer = macro_data.get("uer")
+    sahm_rule = macro_data.get("sahm_rule")
     payout_threshold = macro_data.get("payout_threshold") or 13000.0
-    rrp_change_30d = macro_data.get("rrp_change_30d") or 0.0
+    rrp_change_30d = macro_data.get("rrp_change_30d")
 
     # 狀態標記
     gex_is_fallback = macro_data.get("gex_is_fallback", False)
@@ -1708,11 +1710,32 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
             escape_win_status = "正常窗口"
 
     # 3. 建立 ANSI 面板內容 (精簡緊湊，無重複標題)
+    spx_val_str = (
+        f"\u001b[1;32m{float(spx):,.2f}\u001b[0m"
+        if (spx is not None and float(spx) > 0)
+        else "\u001b[1;31m獲取數據失敗\u001b[0m"
+    )
+    vix_val_str = (
+        f"\u001b[1;33m{float(vix):.2f}\u001b[0m"
+        if (vix is not None and float(vix) > 0)
+        else "\u001b[1;31m獲取數據失敗\u001b[0m"
+    )
+    us10y_val_str = (
+        f"\u001b[1;36m{float(us10y):.2f}%\u001b[0m"
+        if (us10y is not None and float(us10y) > 0)
+        else "\u001b[1;31m獲取數據失敗\u001b[0m"
+    )
+    flip_val_str = (
+        f"\u001b[1;35m{float(gamma_flip_line):,.2f}\u001b[0m{gex_suffix}"
+        if (gamma_flip_line is not None and float(gamma_flip_line) > 0)
+        else "\u001b[1;31m獲取數據失敗\u001b[0m"
+    )
+
     core_lines = [
-        f" ├─ S&P 500 Index (SPX): \u001b[1;32m{spx:,.2f}\u001b[0m",
-        f" ├─ 恐慌指數 (VIX): \u001b[1;33m{vix:.2f}\u001b[0m",
-        f" ├─ 10年期美債收益率 (US10Y): \u001b[1;36m{us10y:.2f}%\u001b[0m",
-        f" └─ 零 Gamma 翻轉線 (GEX Flip): \u001b[1;35m{gamma_flip_line:,.2f}\u001b[0m{gex_suffix}",
+        f" ├─ S&P 500 Index (SPX): {spx_val_str}",
+        f" ├─ 恐慌指數 (VIX): {vix_val_str}",
+        f" ├─ 10年期美債收益率 (US10Y): {us10y_val_str}",
+        f" └─ 零 Gamma 翻轉線 (GEX Flip): {flip_val_str}",
     ]
     core_panel = "```ansi\n" + "\n".join(core_lines) + "\n```"
 
@@ -1724,14 +1747,50 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
     ]
     risk_panel = "```ansi\n" + "\n".join(risk_lines) + "\n```"
 
+    wti_val_str = (
+        f"\u001b[1;33m${float(wti):.2f}\u001b[0m"
+        if (wti is not None and float(wti) > 0)
+        else "\u001b[1;31m獲取數據失敗\u001b[0m"
+    )
+    rrp_change_str = (
+        f" (30天變動: \u001b[1;35m{float(rrp_change_30d):+.1f}%\u001b[0m)"
+        if rrp_change_30d is not None
+        else ""
+    )
+    rrp_val_str = (
+        f"\u001b[1;36m${float(rrp):,.1f}B\u001b[0m{rrp_change_str}"
+        if (rrp is not None and float(rrp) > 0)
+        else "\u001b[1;31m獲取數據失敗\u001b[0m"
+    )
+    fed_bal_str = (
+        f"\u001b[1;32m${float(fed_balance):.2f}T\u001b[0m"
+        if (fed_balance is not None and float(fed_balance) > 0)
+        else "\u001b[1;31m獲取數據失敗\u001b[0m"
+    )
+    fg_val_str = (
+        f"\u001b[1;36m{float(fear_greed):.1f}\u001b[0m"
+        if (fear_greed is not None and float(fear_greed) > 0)
+        else "\u001b[1;31m獲取數據失敗\u001b[0m"
+    )
+    sahm_str = (
+        f" (薩姆規則值: \u001b[1;31m{float(sahm_rule):.2f}\u001b[0m)"
+        if sahm_rule is not None
+        else ""
+    )
+    uer_val_str = (
+        f"\u001b[1;33m{float(uer):.1f}%\u001b[0m{sahm_str}"
+        if (uer is not None and float(uer) > 0)
+        else "\u001b[1;31m獲取數據失敗\u001b[0m"
+    )
+
     macro_lines = [
-        f" ├─ WTI 原油價格: \u001b[1;33m${wti:.2f}\u001b[0m",
-        f" ├─ 聯準會逆回購 (RRP): \u001b[1;36m${rrp:,.1f}B\u001b[0m (30天變動: \u001b[1;35m{rrp_change_30d:+.1f}%\u001b[0m)",
-        f" ├─ 聯準會資產負債表: \u001b[1;32m${fed_balance:.2f}T\u001b[0m",
+        f" ├─ WTI 原油價格: {wti_val_str}",
+        f" ├─ 聯準會逆回購 (RRP): {rrp_val_str}",
+        f" ├─ 聯準會資產負債表: {fed_bal_str}",
         f" ├─ FOMC 利率定價 (FedWatch): {fedwatch_desc}",
         f" ├─ CPI 年增率 (實際 vs 預期): {cpi_desc}",
-        f" ├─ CNN 恐懼與貪婪指數: \u001b[1;36m{fear_greed:.1f}\u001b[0m",
-        f" └─ 美國失業率 (UER): \u001b[1;33m{uer:.1f}%\u001b[0m (薩姆規則值: \u001b[1;31m{sahm_rule:.2f}\u001b[0m)",
+        f" ├─ CNN 恐懼與貪婪指數: {fg_val_str}",
+        f" └─ 美國失業率 (UER): {uer_val_str}",
         "",
         " ⚠️ FedWatch 資料源: 主要取自 Atlanta Fed 選擇權隱含機率分佈 (非 CME 期貨線性反推)，"
         "方法論與 CME 官網 FedWatch 工具不同，數字可能存在落差。",

@@ -38,29 +38,45 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
             return_exceptions=True,
         )
 
-        def _parse(res: Any, key: Any, fallback: Any):  # type: ignore
+        def _parse(res: Any, key: Any, fallback: Any = None):  # type: ignore
             if isinstance(res, dict) and res.get("c", 0) > 0:
                 val = res["c"]
                 asyncio.create_task(save_kv_cache(key, val))
                 return val
-            return get_kv_cache(key) or fallback
+            cached = get_kv_cache(key)
+            if cached is not None:
+                return cached
+            return fallback
 
-        spx = _parse(results[0], "macro_spx", 5150.0)
-        vix = _parse(results[1], "macro_vix", 18.0)
-        us10y = _parse(results[2], "macro_us10y", 4.25)
-        wti = _parse(results[3], "macro_wti", 75.0)
-        spy_spot = _parse(results[4], "macro_spy_spot", (spx / 10.0) if spx else 510.0)
+        spx = _parse(results[0], "macro_spx")
+        vix = _parse(results[1], "macro_vix")
+        us10y = _parse(results[2], "macro_us10y")
+        wti = _parse(results[3], "macro_wti")
+        spy_spot = _parse(results[4], "macro_spy_spot")
+
+        # 數值 cross-check 與衍生：
+        # 若 SPX 抓取失敗但 SPY 現貨即時取得，使用 SPY * 10 衍生 SPX；反之亦然
+        if spx is None and spy_spot is not None and float(spy_spot) > 0:
+            spx = round(float(spy_spot) * 10.0, 2)
+            asyncio.create_task(save_kv_cache("macro_spx", spx))
+        elif spy_spot is None and spx is not None and float(spx) > 0:
+            spy_spot = round(float(spx) / 10.0, 2)
+            asyncio.create_task(save_kv_cache("macro_spy_spot", spy_spot))
 
     except Exception:
-        spx = get_kv_cache("macro_spx") or 5150.0
-        vix = get_kv_cache("macro_vix") or 18.0
-        us10y = get_kv_cache("macro_us10y") or 4.25
-        wti = get_kv_cache("macro_wti") or 75.0
-        spy_spot = get_kv_cache("macro_spy_spot") or ((spx / 10.0) if spx else 510.0)
+        spx = get_kv_cache("macro_spx")
+        vix = get_kv_cache("macro_vix")
+        us10y = get_kv_cache("macro_us10y")
+        wti = get_kv_cache("macro_wti")
+        spy_spot = get_kv_cache("macro_spy_spot")
+        if spx is None and spy_spot is not None and float(spy_spot) > 0:
+            spx = round(float(spy_spot) * 10.0, 2)
+        elif spy_spot is None and spx is not None and float(spx) > 0:
+            spy_spot = round(float(spx) / 10.0, 2)
 
     # Normalize US10Y if needed
-    if us10y > 10.0:
-        us10y = us10y / 10.0
+    if us10y is not None and float(us10y) > 10.0:
+        us10y = float(us10y) / 10.0
 
     rrp = get_kv_cache("macro_rrp")
     fed_balance = get_kv_cache("macro_fed_balance")
@@ -111,40 +127,72 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
             from market_analysis.index_microstructure import fetch_core_macro_metrics
 
             core_data = await fetch_core_macro_metrics()
-            rrp = core_data.get("rrp") or 420.5
-            fed_balance = core_data.get("fed_balance") or 7.25
-            fear_greed = core_data.get("fear_greed") or 48.0
-            uer = core_data.get("uer") or 4.0
-            sahm_rule = core_data.get("sahm_rule") or 0.35
-            rrp_change_30d = core_data.get("rrp_change_30d") or 5.0
+            rrp = rrp or core_data.get("rrp")
+            fed_balance = fed_balance or core_data.get("fed_balance")
+            fear_greed = fear_greed or core_data.get("fear_greed")
+            uer = uer or core_data.get("uer")
+            sahm_rule = sahm_rule or core_data.get("sahm_rule")
+            rrp_change_30d = rrp_change_30d or core_data.get("rrp_change_30d")
         except Exception:
             pass
-
-    rrp = rrp or 420.5
-    fed_balance = fed_balance or 7.25
-    fear_greed = fear_greed or 48.0
-    uer = uer or 4.0
-    sahm_rule = sahm_rule or 0.35
-    rrp_change_30d = rrp_change_30d or 5.0
 
     if not gamma_flip_line or not spy_gamma_flip:
         try:
-            from market_analysis.index_microstructure import fetch_gex_metrics
+            from market_analysis.index_microstructure import (
+                fetch_gex_metrics,
+                fetch_symbol_gex_metrics,
+                estimate_symbol_gamma_flip,
+            )
 
-            gex_data = await fetch_gex_metrics()
-            raw_flip = float(gex_data.get("gamma_flip") or 515.0)
-            if not spy_gamma_flip:
-                spy_gamma_flip = raw_flip
-            if not gamma_flip_line:
-                gamma_flip_line = raw_flip * 10.0
+            gex_data = await fetch_gex_metrics(allow_empty=True)
+            raw_flip = (
+                gex_data.get("gamma_flip") if isinstance(gex_data, dict) else None
+            )
+
+            # 若 macro GEX 無法取得或為空，嘗試透過 SPY 即時個股期權計算
+            if not raw_flip or (
+                gex_data.get("spy_spot") == 510.0 and raw_flip == 515.0
+            ):
+                try:
+                    spy_gex = await fetch_symbol_gex_metrics("SPY", force_live=False)
+                    spot_calc = float(spy_gex.get("spot", 0.0) or 0.0)
+                    if spot_calc > 0:
+                        calc_flip = estimate_symbol_gamma_flip(
+                            spy_gex.get("gex_profile", {}), spot_calc
+                        )
+                        if calc_flip > 0:
+                            raw_flip = calc_flip
+                            if not spy_spot:
+                                spy_spot = spot_calc
+                except Exception:
+                    pass
+
+            if raw_flip and float(raw_flip) > 0 and float(raw_flip) != 515.0:
+                raw_flip_val = float(raw_flip)
+                if not spy_gamma_flip:
+                    spy_gamma_flip = raw_flip_val
+                if not gamma_flip_line:
+                    gamma_flip_line = raw_flip_val * 10.0
         except Exception:
             pass
 
-    gamma_flip_line = float(gamma_flip_line or 5180.0)
-    spy_gamma_flip = float(
-        spy_gamma_flip
-        if spy_gamma_flip is not None
-        else (gamma_flip_line / 10.0 if gamma_flip_line else 515.0)
+    gamma_flip_line = (
+        float(gamma_flip_line)
+        if gamma_flip_line is not None and float(gamma_flip_line) > 0
+        else (
+            float(spy_gamma_flip) * 10.0
+            if spy_gamma_flip is not None and float(spy_gamma_flip) > 0
+            else None
+        )
+    )
+    spy_gamma_flip = (
+        float(spy_gamma_flip)
+        if spy_gamma_flip is not None and float(spy_gamma_flip) > 0
+        else (
+            float(gamma_flip_line) / 10.0
+            if gamma_flip_line is not None and float(gamma_flip_line) > 0
+            else None
+        )
     )
 
     # 此處刻意不直接沿用上方 fetch_gex_metrics() 回傳值的 `_is_stale_cache`
@@ -164,21 +212,47 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
     except (ValueError, TypeError):
         vts_val = None
 
+    vix_val_safe = float(vix) if vix is not None else 18.0
     is_backwardation = (
-        (vts_val >= 1.0) if (vts_val is not None and vts_val > 0.0) else (vix > 25.0)
+        (vts_val >= 1.0)
+        if (vts_val is not None and vts_val > 0.0)
+        else (vix_val_safe > 25.0)
     )
 
     # 零 Gamma 踩踏 Regime 判定
     # 評估 SPY 現貨價相對於 SPY Gamma Flip（與 index_microstructure.get_market_regime 一致，消除 10x basis 失真）
     is_negative_gamma_spy = (
-        (spy_spot < spy_gamma_flip)
-        if (spy_spot > 0.0 and spy_gamma_flip > 0.0)
-        else (spx < gamma_flip_line if (spx > 0.0 and gamma_flip_line > 0.0) else False)
+        (float(spy_spot) < float(spy_gamma_flip))
+        if (
+            spy_spot is not None
+            and spy_gamma_flip is not None
+            and float(spy_spot) > 0.0
+            and float(spy_gamma_flip) > 0.0
+        )
+        else (
+            float(spx) < float(gamma_flip_line)
+            if (
+                spx is not None
+                and gamma_flip_line is not None
+                and float(spx) > 0.0
+                and float(gamma_flip_line) > 0.0
+            )
+            else False
+        )
     )
-    short_gamma_critical = is_negative_gamma_spy and (vix > 20.0) and is_backwardation
+    short_gamma_critical = (
+        is_negative_gamma_spy
+        and (vix is not None and float(vix) > 20.0)
+        and is_backwardation
+    )
 
     # 衰退警告 RECESSION_WARNING
-    recession_warning = (sahm_rule >= 0.5) or (us10y > 4.5 and vix > 20.0)
+    recession_warning = (sahm_rule is not None and float(sahm_rule) >= 0.5) or (
+        us10y is not None
+        and vix is not None
+        and float(us10y) > 4.5
+        and float(vix) > 20.0
+    )
 
     payout_threshold = get_safety_payout_threshold()
 
@@ -209,8 +283,8 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         escape_win_status,
     ) = evaluate_escape_window_regime(
         prob=fedwatch_prob,
-        cpi_dev=float(cpi_dev),
-        wti=float(wti),
+        cpi_dev=float(cpi_dev) if cpi_dev is not None else 0.0,
+        wti=float(wti) if (wti is not None and float(wti) > 0) else 75.0,
         vts_ratio=float(vts_val) if (vts_val is not None and vts_val > 0) else 0.88,
         is_negative_gamma=short_gamma_critical or is_negative_gamma_spy,
     )

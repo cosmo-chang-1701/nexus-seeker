@@ -71,8 +71,12 @@ def invalidate_spx_capped_from_above_signal_cache() -> None:
     _spx_capped_signal_cache_expiry = 0.0
 
 
-async def fetch_gex_metrics() -> Dict[str, float]:
-    """呼叫邊緣爬蟲獲取大盤的 Gamma Flip Line 與 Put Wall 價位。"""
+async def fetch_gex_metrics(allow_empty: bool = False) -> Dict[str, float]:
+    """呼叫邊緣爬蟲獲取大盤的 Gamma Flip Line 與 Put Wall 價位。
+
+    :param allow_empty: 若為 True，在無有效即時資料且無歷史快取時回傳空 dict {}，
+                       供「大盤與總經數據更新」避免使用硬編碼預設值。
+    """
     import time
     import asyncio
     from database.cache import save_kv_cache, get_kv_cache
@@ -87,7 +91,15 @@ async def fetch_gex_metrics() -> Dict[str, float]:
             logger.warning(f"讀取 macro GEX 快取失敗: {e}")
             cached_obj = None
         if isinstance(cached_obj, dict) and isinstance(cached_obj.get("data"), dict):
-            return {**cached_obj["data"], "_is_stale_cache": True}
+            cached_data = cached_obj["data"]
+            # 排除陳舊硬編碼預設值
+            if not (
+                cached_data.get("spy_spot") == 510.0
+                and cached_data.get("gamma_flip") == 515.0
+            ):
+                return {**cached_data, "_is_stale_cache": True}
+        if allow_empty:
+            return {}
         return fallback
 
     if not getattr(config, "TUNNEL_URL", ""):
@@ -98,24 +110,39 @@ async def fetch_gex_metrics() -> Dict[str, float]:
             res = await client.get(f"{config.TUNNEL_URL}/api/v1/scrape/macro/gex")
             if res.status_code == 200:
                 data = res.json()
-                if data.get("status") == "success":
+                if data.get("status") == "success" and isinstance(
+                    data.get("data"), dict
+                ):
                     gex_data = data["data"]
-                    await save_kv_cache(
-                        "macro_spy_spot", gex_data.get("spy_spot", 510.0)
+                    is_fake_fallback = bool(
+                        gex_data.get("is_fallback")
+                        or (
+                            gex_data.get("spy_spot") == 510.0
+                            and gex_data.get("gamma_flip") == 515.0
+                        )
+                        or float(gex_data.get("spy_spot", 0.0)) <= 0.0
                     )
-                    await save_kv_cache(
-                        "macro_spy_gamma_flip",
-                        gex_data.get("gamma_flip", 515.0),
-                    )
-                    await save_kv_cache(
-                        "macro_gamma_flip_line",
-                        gex_data.get("gamma_flip", 515.0) * 10.0,
-                    )
-                    await save_kv_cache("macro_gex_is_fallback", 0)
-                    await save_kv_cache(
-                        cache_key, {"data": gex_data, "timestamp": time.time()}
-                    )
-                    return gex_data  # type: ignore
+                    if not is_fake_fallback:
+                        await save_kv_cache(
+                            "macro_spy_spot", gex_data.get("spy_spot", 510.0)
+                        )
+                        await save_kv_cache(
+                            "macro_spy_gamma_flip",
+                            gex_data.get("gamma_flip", 515.0),
+                        )
+                        await save_kv_cache(
+                            "macro_gamma_flip_line",
+                            gex_data.get("gamma_flip", 515.0) * 10.0,
+                        )
+                        await save_kv_cache("macro_gex_is_fallback", 0)
+                        await save_kv_cache(
+                            cache_key, {"data": gex_data, "timestamp": time.time()}
+                        )
+                        return gex_data  # type: ignore
+                    else:
+                        logger.warning(
+                            "Tunnel Scraper 回傳靜態預設值 fallback，拒絕作為即時數據採用"
+                        )
     except Exception as e:
         logger.warning(f"無法從 Tunnel Scraper 獲取 GEX 數據: {e}")
     await save_kv_cache("macro_gex_is_fallback", 1)

@@ -470,12 +470,19 @@ def force_macro_update(ctx: Any) -> None:
                     "macro_vts_ratio", vts_data.get("vts_ratio")
                 )
 
-            gex_stale_tag = (
-                " ⚠️ [使用快取資料]" if gex_data.get("_is_stale_cache") else ""
-            )
-            rprint(
-                f"[bold green]✅ GEX, 流動性, VTS與核心總經數據更新完成。[/bold green] (SPY: {gex_data.get('spy_spot')}, Flip: {gex_data.get('gamma_flip')}, TED Spread: {liq_data.get('ted_spread') if not isinstance(liq_data, Exception) else 'Error'}, RRP: {core_data.get('rrp') if not isinstance(core_data, Exception) else 'Error'}){gex_stale_tag}"
-            )
+            if (
+                isinstance(gex_data, dict)
+                and gex_data.get("spy_spot")
+                and not gex_data.get("is_fallback")
+            ):
+                gex_stale_tag = (
+                    " ⚠️ [使用快取資料]" if gex_data.get("_is_stale_cache") else ""
+                )
+                rprint(
+                    f"[bold green]✅ GEX, 流動性, VTS與核心總經數據更新完成。[/bold green] (SPY: {gex_data.get('spy_spot')}, Flip: {gex_data.get('gamma_flip')}, TED Spread: {liq_data.get('ted_spread') if not isinstance(liq_data, Exception) else 'Error'}, RRP: {core_data.get('rrp') if not isinstance(core_data, Exception) else 'Error'}){gex_stale_tag}"
+                )
+            else:
+                rprint("[bold red]❌ GEX 數據獲取失敗: 完全無數據[/bold red]")
         except Exception as e:
             rprint(f"[bold red]❌ GEX & 流動性數據更新失敗: {e}[/bold red]")
 

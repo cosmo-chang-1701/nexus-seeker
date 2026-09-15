@@ -213,9 +213,25 @@ class SchedulerCog(commands.Cog):
             if is_spx_valid:
                 await database.save_kv_cache("macro_spx", spx_val)
             else:
-                logger.warning(
-                    f"🕒 [SPX 數據異常] 報價 {spx_val} 超出合理範圍 [3000.0, 15000.0]，跳過更新 macro_spx 快取"
-                )
+                cached_spx = database.get_kv_cache("macro_spx")
+                if cached_spx:
+                    try:
+                        cached_spx_val = float(cached_spx)
+                        if (
+                            3000.0 <= cached_spx_val <= 15000.0
+                            and cached_spx_val != 5150.0
+                        ):
+                            spx_val = cached_spx_val
+                            is_spx_valid = True
+                            logger.info(
+                                f"🕒 [SPX 快取回退] 即時報價異常，使用 SQLite 歷史快取 SPX: {spx_val}"
+                            )
+                    except (ValueError, TypeError):
+                        pass
+                if not is_spx_valid:
+                    logger.warning(
+                        f"🕒 [SPX 數據異常] 報價 {spx_val} 超出合理範圍 [3000.0, 15000.0]，跳過更新 macro_spx 快取"
+                    )
             if is_vix_valid:
                 await database.save_kv_cache("macro_vix", vix_val)
             if tnx_val > 0.0:

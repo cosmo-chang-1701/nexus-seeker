@@ -201,3 +201,31 @@ def test_cli_force_macro_update_marks_stale_cache() -> None:
         result = runner.invoke(cli, ["admin", "force-macro-update"])
         assert result.exit_code == 0
         assert "使用快取資料" in result.output
+
+
+def test_cli_force_macro_update_handles_complete_failure() -> None:
+    """測試 force-macro-update 指令在 GEX 數據完全無數據時，直接顯示失敗而非使用預設值"""
+    with patch("database.init_db"), patch(
+        "market_analysis.index_microstructure.fetch_gex_metrics", new_callable=AsyncMock
+    ) as mock_fetch, patch(
+        "market_analysis.index_microstructure.fetch_liquidity_metrics",
+        new_callable=AsyncMock,
+    ) as mock_fetch_liq, patch(
+        "services.market_data_service.get_vix_term_structure",
+        new_callable=AsyncMock,
+    ) as mock_fetch_vts, patch(
+        "market_analysis.index_microstructure.fetch_core_macro_metrics",
+        new_callable=AsyncMock,
+    ) as mock_fetch_core, patch(
+        "services.calendar_service.calendar_service.update_fedwatch_probability",
+        new_callable=AsyncMock,
+    ):
+        mock_fetch.return_value = {}
+        mock_fetch_liq.return_value = {"ted_spread": 0.15}
+        mock_fetch_vts.return_value = {"vts_ratio": 1.05}
+        mock_fetch_core.return_value = {"rrp": 420.5}
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["admin", "force-macro-update"])
+        assert result.exit_code == 0
+        assert "GEX 數據獲取失敗: 完全無數據" in result.output

@@ -151,11 +151,15 @@ class AdminCommandsCog(commands.Cog):
 
         # 1. Update GEX and Liquidity
         try:
-            from market_analysis.index_microstructure import fetch_liquidity_metrics
+            from market_analysis.index_microstructure import (
+                fetch_liquidity_metrics,
+                fetch_symbol_gex_metrics,
+                estimate_symbol_gamma_flip,
+            )
             import typing
 
             results = await asyncio.gather(
-                fetch_gex_metrics(),
+                fetch_gex_metrics(allow_empty=True),
                 fetch_liquidity_metrics(),
                 return_exceptions=True,
             )
@@ -163,21 +167,88 @@ class AdminCommandsCog(commands.Cog):
             liq_data = typing.cast(typing.Any, results[1])
 
             if isinstance(gex_data, Exception):
-                raise gex_data
+                gex_data = {}
 
-            ted_spread: float | str = "Error"
-            if not isinstance(liq_data, Exception):
-                assert isinstance(liq_data, dict)
-                ted_spread = liq_data.get("ted_spread", 0.0)
-
-            assert isinstance(gex_data, dict)
-            gex_is_stale = bool(gex_data.get("_is_stale_cache", False))
-            gex_stale_tag = " ⚠️ [使用快取資料]" if gex_is_stale else ""
-            gex_info = (
-                f"SPY: ${gex_data.get('spy_spot', 0.0):.2f} / "
-                f"Flip: {gex_data.get('gamma_flip', 0.0):.2f} / "
-                f"TED Spread: {ted_spread}{gex_stale_tag}"
+            # 若 macro GEX 無法取得、為空或為未驗證的即時預設值，嘗試透過 SPY 即時個股期權計算
+            is_stale_cache = bool(
+                isinstance(gex_data, dict) and gex_data.get("_is_stale_cache")
             )
+            is_invalid_gex = (
+                not isinstance(gex_data, dict)
+                or not gex_data.get("spy_spot")
+                or (
+                    not is_stale_cache
+                    and gex_data.get("spy_spot") == 510.0
+                    and gex_data.get("gamma_flip") == 515.0
+                )
+            )
+            if is_invalid_gex:
+                try:
+                    spy_gex = await fetch_symbol_gex_metrics("SPY", force_live=True)
+                    spot = float(spy_gex.get("spot", 0.0) or 0.0)
+                    if spot > 0:
+                        flip = estimate_symbol_gamma_flip(
+                            spy_gex.get("gex_profile", {}), spot
+                        )
+                        put_wall = float(spy_gex.get("put_wall", 0.0) or 0.0)
+                        if flip > 0:
+                            gex_data = {
+                                "spy_spot": round(spot, 2),
+                                "gamma_flip": round(flip, 2),
+                                "put_wall": round(put_wall, 2),
+                            }
+                            import time
+                            from database.cache import save_kv_cache
+
+                            await save_kv_cache("macro_spy_spot", gex_data["spy_spot"])
+                            await save_kv_cache(
+                                "macro_spy_gamma_flip", gex_data["gamma_flip"]
+                            )
+                            await save_kv_cache(
+                                "macro_gamma_flip_line", gex_data["gamma_flip"] * 10.0
+                            )
+                            await save_kv_cache("macro_gex_is_fallback", 0)
+                            await save_kv_cache(
+                                "macro_gex_metrics_cache",
+                                {"data": gex_data, "timestamp": time.time()},
+                            )
+                except Exception as e:
+                    logger.warning(f"SPY 個股端點即時計算 GEX 失敗: {e}")
+
+            ted_spread: float | str = "獲取數據失敗"
+            if not isinstance(liq_data, Exception) and isinstance(liq_data, dict):
+                ted_val = liq_data.get("ted_spread")
+                if ted_val is not None:
+                    ted_spread = float(ted_val)
+
+            has_valid_gex = (
+                isinstance(gex_data, dict)
+                and bool(gex_data.get("spy_spot"))
+                and (
+                    is_stale_cache
+                    or not (
+                        gex_data.get("spy_spot") == 510.0
+                        and gex_data.get("gamma_flip") == 515.0
+                    )
+                )
+            )
+
+            if has_valid_gex:
+                gex_is_stale = bool(gex_data.get("_is_stale_cache", False))
+                gex_stale_tag = " ⚠️ [使用快取資料]" if gex_is_stale else ""
+                ted_display = (
+                    f"{ted_spread:.2f}"
+                    if isinstance(ted_spread, float)
+                    else str(ted_spread)
+                )
+                gex_info = (
+                    f"SPY: ${gex_data.get('spy_spot', 0.0):.2f} / "
+                    f"Flip: {gex_data.get('gamma_flip', 0.0):.2f} / "
+                    f"TED Spread: {ted_display}{gex_stale_tag}"
+                )
+            else:
+                gex_info = "獲取數據失敗"
+                errors.append("GEX & 流動性爬取失敗: 獲取數據失敗")
 
             # get_market_regime() 快取的組成輸入 (GEX/流動性) 剛被強制刷新，
             # 需一併清除其記憶體快取，避免管理員手動刷新後市況判讀仍停留在
@@ -188,6 +259,7 @@ class AdminCommandsCog(commands.Cog):
 
             invalidate_market_regime_cache()
         except Exception as e:
+            gex_info = "獲取數據失敗"
             errors.append(f"GEX & 流動性爬取失敗: {e}")
 
         # 2. Update FedWatch
@@ -206,9 +278,11 @@ class AdminCommandsCog(commands.Cog):
 
         if errors:
             err_msg = "\n".join(errors)
+            gex_line = f"\n- **GEX**: {gex_info}" if gex_info else ""
             await interaction.followup.send(
                 embed=create_error_embed(
-                    f"⚠️ 部分大盤總經數據更新失敗：\n{err_msg}", title="更新部分失敗"
+                    f"⚠️ 部分大盤總經數據更新失敗：\n{err_msg}{gex_line}",
+                    title="更新部分失敗",
                 ),
                 ephemeral=True,
             )

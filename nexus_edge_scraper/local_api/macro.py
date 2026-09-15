@@ -85,7 +85,12 @@ async def scrape_gex() -> dict[str, Any]:
     from datetime import date
 
     # Standard fallback values
-    fallback = {"spy_spot": 510.0, "gamma_flip": 515.0, "put_wall": 505.0}
+    fallback = {
+        "spy_spot": 510.0,
+        "gamma_flip": 515.0,
+        "put_wall": 505.0,
+        "is_fallback": True,
+    }
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(

@@ -2171,3 +2171,158 @@ async def test_fetch_gex_metrics_falls_back_to_static_constant_without_cache() -
 
         assert result == {"spy_spot": 510.0, "gamma_flip": 515.0, "put_wall": 505.0}
         assert "_is_stale_cache" not in result
+
+
+@pytest.mark.asyncio
+async def test_fetch_gex_metrics_allow_empty_when_no_cache() -> None:
+    """當 allow_empty=True 且無任何快取時，抓取失敗應回傳空 dict {}，而非使用 510/515 硬編碼預設值。"""
+    import httpx
+    from unittest.mock import AsyncMock
+    from market_analysis.index_microstructure import fetch_gex_metrics
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(side_effect=httpx.ReadTimeout("timeout"))
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with (
+        patch("database.cache.get_kv_cache", return_value=None),
+        patch("database.cache.save_kv_cache", new_callable=AsyncMock),
+        patch("config.TUNNEL_URL", "http://mock-tunnel"),
+        patch("httpx.AsyncClient", return_value=mock_client),
+    ):
+        result = await fetch_gex_metrics(allow_empty=True)
+        assert result == {}
+
+
+@pytest.mark.asyncio
+async def test_fetch_gex_metrics_rejects_scraper_fake_fallback() -> None:
+    """當 Tunnel Scraper 回傳假的靜態預設值 fallback 時，應拒絕作為即時數據，
+    並回退至上次成功的快取結果。"""
+    from unittest.mock import AsyncMock, MagicMock
+    from market_analysis.index_microstructure import fetch_gex_metrics
+
+    last_known_good = {
+        "data": {"spy_spot": 760.0, "gamma_flip": 765.0, "put_wall": 750.0},
+        "timestamp": 1234567890.0,
+    }
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "status": "success",
+        "data": {
+            "spy_spot": 510.0,
+            "gamma_flip": 515.0,
+            "put_wall": 505.0,
+            "is_fallback": True,
+        },
+    }
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=mock_resp)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with (
+        patch("database.cache.get_kv_cache", return_value=last_known_good),
+        patch("database.cache.save_kv_cache", new_callable=AsyncMock),
+        patch("config.TUNNEL_URL", "http://mock-tunnel"),
+        patch("httpx.AsyncClient", return_value=mock_client),
+    ):
+        result = await fetch_gex_metrics()
+        assert result["spy_spot"] == 760.0
+        assert result["gamma_flip"] == 765.0
+        assert result.get("_is_stale_cache") is True
+
+
+@pytest.mark.asyncio
+async def test_macro_overview_data_cross_derivation_spx_spy() -> None:
+    """驗證 SPX 與 SPY 現貨價同量級 cross-derivation (~7600s vs ~760s)，
+    消除 SPX 7620 與 GEX Flip 5150 的歷史脫節問題。"""
+    from cogs.unified_terminal.utils import get_macro_overview_data
+
+    with (
+        patch("cogs.unified_terminal.utils.is_memory_safe", return_value=True),
+        patch("database.get_kv_cache") as mock_kv,
+        patch("services.market_data_service.get_quote") as mock_quote,
+        patch("cogs.unified_terminal.utils._macro_overview_cache", {}),
+    ):
+        # 模擬 SPX 抓取失敗，但 SPY 即時報價為 762.50
+        def _get_quote_side_effect(symbol: str) -> Any:
+            if symbol == "SPY":
+                return {"c": 762.50}
+            return None
+
+        mock_quote.side_effect = _get_quote_side_effect
+        mock_kv.return_value = None
+
+        with (
+            patch(
+                "market_analysis.index_microstructure.fetch_gex_metrics",
+                new_callable=AsyncMock,
+            ) as mock_gex,
+            patch(
+                "market_analysis.index_microstructure.fetch_core_macro_metrics",
+                new_callable=AsyncMock,
+            ) as mock_core,
+            patch("database.cache.save_kv_cache", new_callable=AsyncMock),
+        ):
+            mock_gex.return_value = {
+                "spy_spot": 762.50,
+                "gamma_flip": 765.0,
+                "put_wall": 755.0,
+            }
+            mock_core.return_value = {}
+
+            data = await get_macro_overview_data(12345)
+            # SPX 應由 SPY * 10 衍生為 7625.0，而非預設值 5150.0
+            assert data["spx"] == 7625.0
+            assert data["spy_spot"] == 762.50
+            assert data["spy_gamma_flip"] == 765.0
+            assert data["gamma_flip_line"] == 7650.0
+
+
+@pytest.mark.asyncio
+async def test_macro_embed_displays_fetch_failed_when_completely_no_data() -> None:
+    """驗證當大盤與總經數據完全無數據時，直接顯示『獲取數據失敗』，
+    不使用任何硬編碼預設值。"""
+    from cogs.unified_terminal.utils import get_macro_overview_data
+    from cogs.embed_builders.market_embeds import build_market_macro_overview_embed
+
+    with (
+        patch("cogs.unified_terminal.utils.is_memory_safe", return_value=True),
+        patch("database.get_kv_cache", return_value=None),
+        patch("services.market_data_service.get_quote", return_value=None),
+        patch("cogs.unified_terminal.utils._macro_overview_cache", {}),
+        patch(
+            "market_analysis.index_microstructure.fetch_gex_metrics",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch(
+            "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
+            new_callable=AsyncMock,
+            side_effect=Exception("Failed"),
+        ),
+        patch(
+            "market_analysis.index_microstructure.fetch_core_macro_metrics",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+    ):
+        data = await get_macro_overview_data(123456)
+        assert data["spx"] is None
+        assert data["gamma_flip_line"] is None
+        assert data["spy_gamma_flip"] is None
+
+        # 驗證 build_market_macro_overview_embed 渲染顯示獲取數據失敗
+        embed = build_market_macro_overview_embed(data)
+        # 尋找描述或欄位中是否包含「獲取數據失敗」
+        found_failure = False
+        if embed.description and "獲取數據失敗" in embed.description:
+            found_failure = True
+        for field in embed.fields:
+            if field.value and "獲取數據失敗" in field.value:
+                found_failure = True
+                break
+        assert found_failure is True
