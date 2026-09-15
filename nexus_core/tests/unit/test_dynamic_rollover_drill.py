@@ -529,7 +529,13 @@ async def test_drill_scenario_2c_nvda_structural_breakdown_retreat_to_voo(
     new_callable=AsyncMock,
     return_value=True,
 )
+@patch(
+    "market_analysis.dynamic_rollover.margin_defense.confirm_inverse_hedge_spot_momentum",
+    new_callable=AsyncMock,
+    return_value=False,
+)
 async def test_drill_scenario_2d_systemic_margin_defense_retreat_to_boxx(
+    mock_inverse_confirm: AsyncMock,
     mock_cliff: AsyncMock,
     mock_user_ctx: MagicMock,
     mock_regime: AsyncMock,
